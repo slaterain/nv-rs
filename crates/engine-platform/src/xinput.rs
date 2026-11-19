@@ -13,7 +13,9 @@
 //!
 //! Without a source (the engine crates' tests, a repeatable run) every user answers "not
 //! connected", as a Windows machine with no pad does. The host puts the system's pads in
-//! ([`use_system_pads`]): on Windows the system's own XInput DLL, its answers passed through.
+//! ([`use_system_pads`]): on Windows the system's own XInput DLL, its answers passed through, and
+//! after its pads the PlayStation pads read as HID devices ([`hid`], [`sony`]), each turned into
+//! XInput's state by position ([`layout`]); the game's four users run over both ([`Chain`]).
 //!
 //! Measured on Windows 11 (`xinput1_3.dll`, `xinput1_4.dll`, `xinput9_1_0.dll`, 64-bit, no pad,
 //! 2026-11-18): a user with no pad answers `ERROR_DEVICE_NOT_CONNECTED` to both calls and the
@@ -27,6 +29,15 @@ use std::time::{Duration, Instant};
 
 #[cfg(windows)]
 mod win32;
+
+pub mod chain;
+pub mod hid;
+#[cfg(windows)]
+mod hid_win;
+pub mod layout;
+pub mod sony;
+
+pub use chain::{Chain, PadList};
 
 /// Result codes (winerror.h): `ERROR_SUCCESS`, `ERROR_BAD_ARGUMENTS`, `ERROR_DEVICE_NOT_CONNECTED`.
 pub const ERROR_SUCCESS: u32 = 0;
@@ -132,12 +143,13 @@ pub fn set_source(e: &mut Engine, source: Option<Box<dyn PadSource>>) {
 }
 
 /// Puts the system's own pads behind the game's XInput in `e` and answers the line for the log
-/// saying which. On Windows: the system's XInput DLL ([`win32::open`]), through
-/// [`install_system`]. Linux and macOS: none yet (every user "not connected").
+/// saying which. On Windows: the system's XInput DLL ([`win32::open`]) and the PlayStation pads read
+/// as HID devices ([`hid_win::start`]), through [`install_system`]. Linux and macOS: none yet
+/// (every user "not connected").
 pub fn use_system_pads(e: &mut Engine) -> String {
     #[cfg(windows)]
     {
-        install_system(e, win32::open())
+        install_system(e, win32::open(), vec![Box::new(hid_win::start())])
     }
     #[cfg(not(windows))]
     {
@@ -146,38 +158,52 @@ pub fn use_system_pads(e: &mut Engine) -> String {
     }
 }
 
-/// Puts the system's XInput `opened` (its source and its DLL's name) behind the game's XInput in
-/// `e`, behind the empty-slot throttle ([`Throttled`]), and answers the log line; `None`: no pad.
-pub fn install_system<S: PadSource + 'static>(e: &mut Engine, opened: Option<(S, &str)>) -> String {
-    match opened {
-        Some((source, dll)) => {
-            set_source(e, Some(Box::new(Throttled::new(source))));
-            format!(
-                "nv-rs: game pads through {dll} (the game's own Controls settings turn the pad and \
-                 its vibration off)"
-            )
-        }
-        None => {
-            set_source(e, None);
+/// Puts the system's XInput `opened` (its source and its DLL's name), behind the empty-slot
+/// throttle ([`Throttled`]), and the other `lists` of pads (the PlayStation pads) behind the
+/// game's XInput in `e`, the game's users over all of them ([`Chain`]), and answers the log line.
+pub fn install_system<S: PadSource + 'static>(
+    e: &mut Engine,
+    opened: Option<(S, &str)>,
+    lists: Vec<Box<dyn PadList>>,
+) -> String {
+    let others = if lists.is_empty() {
+        ""
+    } else {
+        " and PlayStation pads through HID"
+    };
+    let line = match &opened {
+        Some((_, dll)) => format!(
+            "nv-rs: game pads through {dll}{others} (the game's own Controls settings turn the \
+             pad and its vibration off)"
+        ),
+        None => format!(
             "nv-rs: game pads: no XInput DLL in the system folder (xinput1_3, xinput1_4, \
-             xinput9_1_0), so no pad"
-                .to_string()
-        }
-    }
+             xinput9_1_0){others}"
+        ),
+    };
+    let xinput = opened.map(|(source, _)| Throttled::new(source));
+    set_source(e, Some(Box::new(Chain::new(xinput, lists))));
+    line
 }
 
-/// How long an empty slot answers "not connected" without asking the system again.
+/// About how long an empty slot answers "not connected" without asking the system again.
 pub const EMPTY_RECHECK: Duration = Duration::from_secs(1);
+/// How far apart the four users' rechecks lie: with no pad at all, the game's reads (which ask
+/// for all four users) reach the system for at most one slot at a time (review of #783).
+pub const STAGGER: Duration = Duration::from_millis(250);
 
-/// A source whose empty slots are asked again at most once every [`EMPTY_RECHECK`]: in between,
+/// A source whose empty slots are asked again about once every [`EMPTY_RECHECK`]: in between,
 /// both calls for that user answer `ERROR_DEVICE_NOT_CONNECTED` and leave the state as it is (what
 /// the system answers for an empty slot, measured). Only `XInputGetState`'s answers decide, and a
 /// slot is held back only from a "not connected" that follows another (or comes first): a pad that
 /// misses one answer is asked again at the next call, as a second without it is felt (review of
-/// #781), and a pad pulled out costs one more ask. A connected pad is asked every time.
+/// #781), and a pad pulled out costs one more ask. Each user's rechecks keep to its own times,
+/// [`STAGGER`] apart from the others' ([`next_recheck`]). A connected pad is asked every time.
 pub struct Throttled<S> {
     inner: S,
     slots: [Slot; USERS as usize],
+    /// The time the rechecks are counted from: the first call's.
+    origin: Option<Instant>,
 }
 
 /// What [`Throttled`] keeps of one user's slot.
@@ -185,8 +211,24 @@ pub struct Throttled<S> {
 struct Slot {
     /// Its last `XInputGetState` answered a pad.
     connected: bool,
-    /// Since when it is held back as empty.
-    empty_since: Option<Instant>,
+    /// Until when it is held back as empty.
+    empty_until: Option<Instant>,
+}
+
+/// User `user`'s next recheck of an empty slot after `now`: the first of its times (`origin`, plus
+/// `user` times [`STAGGER`], plus a whole number of [`EMPTY_RECHECK`]s) that is at least an
+/// [`EMPTY_RECHECK`] less one [`STAGGER`] after `now`. So each slot is asked again after 0.75 to
+/// 1.75 seconds, and no two users' rechecks fall in the same quarter second.
+pub fn next_recheck(origin: Instant, user: u32, now: Instant) -> Instant {
+    let phase = origin + STAGGER * user;
+    let earliest = now + EMPTY_RECHECK - STAGGER;
+    if earliest <= phase {
+        return phase;
+    }
+    let periods = (earliest - phase)
+        .as_nanos()
+        .div_ceil(EMPTY_RECHECK.as_nanos());
+    phase + EMPTY_RECHECK * periods as u32
 }
 
 impl<S: PadSource> Throttled<S> {
@@ -194,25 +236,27 @@ impl<S: PadSource> Throttled<S> {
         Throttled {
             inner,
             slots: [Slot::default(); USERS as usize],
+            origin: None,
         }
     }
 
     /// Whether `user`'s slot is still held back as empty at `now`.
     fn known_empty(&self, user: u32, now: Instant) -> bool {
         self.slots[user as usize]
-            .empty_since
-            .is_some_and(|since| now.saturating_duration_since(since) < EMPTY_RECHECK)
+            .empty_until
+            .is_some_and(|until| now < until)
     }
 
     /// [`PadSource::get_state`] at the time `now`.
     pub fn get_state_at(&mut self, user: u32, state: &mut [u8; 16], now: Instant) -> u32 {
+        let origin = *self.origin.get_or_insert(now);
         if self.known_empty(user, now) {
             return ERROR_DEVICE_NOT_CONNECTED;
         }
         let result = self.inner.get_state(user, state);
         let slot = &mut self.slots[user as usize];
         let connected = result != ERROR_DEVICE_NOT_CONNECTED;
-        slot.empty_since = (!connected && !slot.connected).then_some(now);
+        slot.empty_until = (!connected && !slot.connected).then(|| next_recheck(origin, user, now));
         slot.connected = connected;
         result
     }

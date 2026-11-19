@@ -328,16 +328,64 @@ fn an_empty_slot_is_asked_again_once_a_second() {
         );
     }
     assert_eq!(asked(&fake), 12);
+    // Held from 2002 to user 0's next recheck time, 3000 ([`next_recheck`]).
     assert_eq!(
-        source.get_state_at(0, &mut state, at(3001)),
+        source.get_state_at(0, &mut state, at(2999)),
         ERROR_DEVICE_NOT_CONNECTED
     );
     assert_eq!(asked(&fake), 12);
     assert_eq!(
-        source.get_state_at(0, &mut state, at(3002)),
+        source.get_state_at(0, &mut state, at(3000)),
         ERROR_DEVICE_NOT_CONNECTED
     );
     assert_eq!(asked(&fake), 13);
+}
+
+/// With no pad at all the game's reads ask for all four users each frame (`Chain`): after the
+/// first frame each frame reaches the system for at most one slot, and each slot is asked again
+/// 0.75 to 1.75 seconds after its last ask (review of #783).
+#[test]
+fn empty_slots_are_rechecked_one_at_a_time() {
+    let fake = Fake::default();
+    let mut source = Throttled::new(fake.clone());
+    let start = Instant::now();
+    let mut state = [0xaa; 16];
+    let calls = || fake.0.lock().unwrap().calls.clone();
+    let mut asks: Vec<(u64, u32)> = Vec::new();
+    for frame in 0..=375u64 {
+        let ms = frame * 16;
+        let before = calls().len();
+        for user in 0..USERS {
+            assert_eq!(
+                source.get_state_at(user, &mut state, start + Duration::from_millis(ms)),
+                ERROR_DEVICE_NOT_CONNECTED
+            );
+        }
+        let now = calls();
+        let new = &now[before..];
+        if frame == 0 {
+            assert_eq!(new.len(), 4);
+        } else {
+            assert!(new.len() <= 1, "frame {frame}: {new:?}");
+        }
+        asks.extend(new.iter().map(|&(_, user)| (ms, user)));
+    }
+    for user in 0..USERS {
+        let times: Vec<u64> = asks.iter().filter(|a| a.1 == user).map(|a| a.0).collect();
+        assert!(times.len() >= 4, "user {user}: {times:?}");
+        for pair in times.windows(2) {
+            let gap = pair[1] - pair[0];
+            assert!((750..=1766).contains(&gap), "user {user}: {times:?}");
+        }
+    }
+    assert_eq!(
+        next_recheck(start, 0, start),
+        start + Duration::from_secs(1)
+    );
+    assert_eq!(
+        next_recheck(start, 3, start),
+        start + Duration::from_millis(750)
+    );
 }
 
 /// A connected pad that misses one answer is read at the very next call (review of #781: a
@@ -373,12 +421,13 @@ fn a_pad_that_misses_one_answer_is_read_at_the_next_call() {
 }
 
 /// The system's XInput goes in behind the throttle (`install_system`, which the Windows start
-/// uses): three quick reads and three rumbles of an empty slot ask the system once.
+/// uses): the game's users run over all four of its users, each asked once while they are
+/// empty, however many reads and rumbles come in quick succession.
 #[test]
 fn the_system_goes_in_behind_the_throttle() {
     let (mut e, state, vibration) = engine();
     let fake = Fake::default();
-    let line = install_system(&mut e, Some((fake.clone(), "xinput1_4.dll")));
+    let line = install_system(&mut e, Some((fake.clone(), "xinput1_4.dll")), Vec::new());
     assert!(line.contains("xinput1_4.dll"), "{line}");
     for _ in 0..3 {
         assert_eq!(
@@ -390,14 +439,17 @@ fn the_system_goes_in_behind_the_throttle() {
             ERROR_DEVICE_NOT_CONNECTED
         );
     }
-    assert_eq!(fake.0.lock().unwrap().calls, vec![('g', 0)]);
-    let none = install_system::<Fake>(&mut e, None);
+    assert_eq!(
+        fake.0.lock().unwrap().calls,
+        vec![('g', 0), ('g', 1), ('g', 2), ('g', 3)]
+    );
+    let none = install_system::<Fake>(&mut e, None, Vec::new());
     assert!(none.contains("no XInput DLL"), "{none}");
     assert_eq!(
         xinput_get_state(&mut e, 0, Ptr::new(state)),
         ERROR_DEVICE_NOT_CONNECTED
     );
-    assert_eq!(fake.0.lock().unwrap().calls.len(), 1);
+    assert_eq!(fake.0.lock().unwrap().calls.len(), 4);
 }
 
 /// The throttle through the import functions: the system's clock, so only "not asked again at
