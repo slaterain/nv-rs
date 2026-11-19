@@ -63,6 +63,7 @@ pub mod jip_fn_script_vars;
 pub mod jip_fn_sound;
 pub mod jip_fn_sound_playing;
 pub mod jip_fn_string;
+pub mod jip_fn_string_regex;
 pub mod jip_fn_texture_set;
 pub mod jip_fn_ui;
 pub mod jip_fn_ui_menus;
@@ -240,6 +241,8 @@ pub const ALL: &[Handlers] = &[
     jip_fn_ui::AWAITING_H02,
     // `FireWeaponEx`, with its patch H01 (`game_patches::gw`).
     jip_fn_actor_p2::AWAITING_H01,
+    // `sv_RegexMatch`, `sv_RegexSearch`, `sv_RegexReplace`.
+    jip_fn_string_regex::COMMANDS,
     // `ShowQuantityMenu`, `CloseActiveMenu` (with their DoClick seam).
     jip_fn_ui_menus::COMMANDS,
 ];
@@ -880,6 +883,8 @@ mod tests {
             "jip_fn_ui",
             // jip_fn_actor_p2::AWAITING_H01 (`FireWeaponEx`, with H01).
             "jip_fn_actor",
+            // jip_fn_string_regex (the regular expressions).
+            "jip_fn_string",
             // jip_fn_ui_menus (ShowQuantityMenu, CloseActiveMenu).
             "jip_fn_ui",
         ];
