@@ -443,16 +443,33 @@ fn monitor_of(m: &winit::monitor::MonitorHandle, primary: bool) -> crate::machin
     }
 }
 
-thread_local! {
-    /// The monitor the machine table describes ([`read_monitors`]), on the window thread.
-    static DESCRIBED: std::cell::RefCell<Option<winit::monitor::MonitorHandle>> =
-        const { std::cell::RefCell::new(None) };
+/// The monitor the machine table describes ([`read_monitors`]), for both threads: the window
+/// thread puts a borderless start on it, the game's thread fits a framed window to it and makes
+/// one that does not fit borderless over it (winit's monitor handles may be used from any thread).
+static DESCRIBED: Mutex<Option<winit::monitor::MonitorHandle>> = Mutex::new(None);
+
+/// The monitor a borderless window is put on and a framed one fitted to: the one the machine
+/// table describes (so the game's screen and its window agree), when the monitors were read;
+/// else winit's choice (the current one).
+fn described_monitor() -> Option<winit::monitor::MonitorHandle> {
+    DESCRIBED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
 }
 
-/// The monitor a borderless window is put on: the one the machine table describes, when the
-/// monitors were read; else winit's choice (the current one).
-fn described_monitor() -> Option<winit::monitor::MonitorHandle> {
-    DESCRIBED.with(|d| d.borrow().clone())
+/// Where the game's place `(x, y)` (its scaled pixels; the game's 0, 0 is the top left of the
+/// screen it was told about) is on the desktop, for a window at `scale`: the described monitor's
+/// corner plus the place. X11 puts a primary monitor where the desktop's layout has it, not
+/// always at 0, 0; Wayland lets no program place its window (the compositor chooses).
+fn on_described(x: i32, y: i32, scale: f64) -> winit::dpi::Position {
+    let corner =
+        described_monitor().map_or(winit::dpi::PhysicalPosition::new(0, 0), |m| m.position());
+    if corner == winit::dpi::PhysicalPosition::new(0, 0) {
+        return LogicalPosition::new(x, y).into();
+    }
+    let place = LogicalPosition::new(x, y).to_physical::<i32>(scale);
+    winit::dpi::PhysicalPosition::new(corner.x + place.x, corner.y + place.y).into()
 }
 
 /// Reads the monitors for [`monitors`], once, on the window thread.
@@ -471,7 +488,9 @@ fn read_monitors(event_loop: &ActiveEventLoop) {
     let described = crate::machine_table::display::described(
         handles.iter().map(|m| primary.as_ref() == Some(m)),
     );
-    DESCRIBED.with(|d| *d.borrow_mut() = described.map(|i| handles[i].clone()));
+    *DESCRIBED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = described.map(|i| handles[i].clone());
     let list: Vec<_> = handles
         .iter()
         .enumerate()
@@ -483,6 +502,20 @@ fn read_monitors(event_loop: &ActiveEventLoop) {
         Ok(list)
     });
     ready.notify_all();
+}
+
+/// Whether winit runs on Wayland (not X11, not macOS).
+fn on_wayland(event_loop: &ActiveEventLoop) -> bool {
+    #[cfg(not(target_vendor = "apple"))]
+    {
+        use winit::platform::wayland::ActiveEventLoopExtWayland;
+        event_loop.is_wayland()
+    }
+    #[cfg(target_vendor = "apple")]
+    {
+        let _ = event_loop;
+        false
+    }
 }
 
 /// The keyboard library winit needs and cannot load, if one is missing: libxkbcommon always, and
@@ -617,11 +650,12 @@ impl Layer {
         }
         let borderless = borderless();
         let frame = input::frame_of_style(request.style);
+        let scale = described_monitor().map_or(1.0, |m| m.scale_factor());
         let mut attributes = Window::default_attributes()
             .with_title(latin1(&request.title))
             .with_visible(false)
             .with_inner_size(LogicalSize::new(size.0, size.1))
-            .with_position(LogicalPosition::new(left, top))
+            .with_position(on_described(left, top, scale))
             .with_active(request.show != Showing::Background);
         if borderless {
             attributes = attributes
@@ -744,12 +778,7 @@ impl ApplicationHandler for Layer {
         self.serve(event_loop);
     }
 
-    fn window_event(
-        &mut self,
-        _event_loop: &ActiveEventLoop,
-        window: WindowId,
-        event: WindowEvent,
-    ) {
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, window: WindowId, event: WindowEvent) {
         let Some(&id) = self.tops.get(&window) else {
             return;
         };
@@ -784,6 +813,27 @@ impl ApplicationHandler for Layer {
             WindowEvent::Resized(size) => {
                 if let Some(e) = windows().get(&id) {
                     e.shown.size.resized(size);
+                }
+                // The full-screen borderless window given its monitor's size turned: Wayland read
+                // the monitor turned, so the game was told the wrong shape; said once, with the
+                // fix. Against the monitor the window is on (the described one, which it was put
+                // on, unless the compositor chose another).
+                if borderless() && on_wayland(event_loop) {
+                    let monitor = windows().get(&id).and_then(|e| {
+                        let w = &e.shown.window;
+                        w.fullscreen()?;
+                        w.current_monitor().or_else(described_monitor)
+                    });
+                    if let Some(m) = monitor {
+                        let (window, monitor) =
+                            ((size.width, size.height), (m.size().width, m.size().height));
+                        static SAID: AtomicBool = AtomicBool::new(false);
+                        if input::read_turned(window, monitor)
+                            && !SAID.swap(true, Ordering::Relaxed)
+                        {
+                            eprintln!("{}", input::turned_line(window, monitor));
+                        }
+                    }
                 }
             }
             WindowEvent::Occluded(hidden) => {
@@ -911,14 +961,56 @@ pub fn window_moved(e: &mut Engine, handle: u32, rect: [i32; 4], flags: u32) {
         }
         return;
     }
-    if flags & input::NO_MOVE == 0 {
-        w.set_outer_position(LogicalPosition::new(rect[0], rect[1]));
-    }
+    let scale = w.scale_factor();
     if flags & input::NO_SIZE == 0 {
         let border = crate::window::game_frame(e, handle).unwrap_or([0; 4]);
-        let (width, height) = input::inner_for_game_rect(rect, border);
-        shown.ask_size(LogicalSize::new(width, height));
+        let mut client = input::inner_for_game_rect(rect, border);
+        // The monitor the game was told about (the machine table's: the primary one, else the
+        // first), in the window's own scaled pixels.
+        if let Some(m) = described_monitor() {
+            let monitor = (m.size().width, m.size().height);
+            let screen = input::scaled_screen(monitor, scale);
+            match input::placement(rect, border, monitor, scale) {
+                input::Placement::Borderless => {
+                    // Framed, it would reach past the screen's edges (report 004, a Steam Deck):
+                    // the borderless window over that monitor instead, the game's picture scaled
+                    // to it.
+                    static SAID: AtomicBool = AtomicBool::new(false);
+                    if !SAID.swap(true, Ordering::Relaxed) {
+                        let outer = (rect[2].wrapping_sub(rect[0]), rect[3].wrapping_sub(rect[1]));
+                        eprintln!("{}", input::too_large_line(outer, screen, client, monitor));
+                    }
+                    super::want_borderless(true);
+                    fill_screen(w, m);
+                    return;
+                }
+                input::Placement::Framed { client: framed } => {
+                    static SAID: AtomicBool = AtomicBool::new(false);
+                    if !SAID.swap(true, Ordering::Relaxed) {
+                        eprintln!("{}", input::framed_line(framed, screen));
+                    }
+                    client = framed;
+                }
+            }
+        }
+        if flags & input::NO_MOVE == 0 {
+            w.set_outer_position(on_described(rect[0], rect[1], scale));
+        }
+        shown.ask_size(LogicalSize::new(client.0, client.1));
+    } else if flags & input::NO_MOVE == 0 {
+        w.set_outer_position(on_described(rect[0], rect[1], scale));
     }
+}
+
+/// The game's framed window made the borderless one over `monitor` (the described one), as a
+/// borderless start makes it (`Layer::make`): no frame, winit's borderless full screen on that
+/// monitor, no size held (the compositor gives the monitor's).
+fn fill_screen(w: &Window, monitor: winit::monitor::MonitorHandle) {
+    w.set_resizable(true);
+    w.set_min_inner_size(None::<LogicalSize<u32>>);
+    w.set_max_inner_size(None::<LogicalSize<u32>>);
+    w.set_decorations(false);
+    w.set_fullscreen(Some(Fullscreen::Borderless(Some(monitor))));
 }
 
 #[cfg(test)]

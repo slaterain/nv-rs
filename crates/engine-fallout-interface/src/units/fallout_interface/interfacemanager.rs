@@ -1892,7 +1892,11 @@ pub fn interface_manager_init(e: &mut Engine, this: Ptr<InterfaceManager>, load_
 /// creates the HUD main menu and marks the manager initialized.
 pub fn interface_manager_init_second(e: &mut Engine, this: Ptr<InterfaceManager>) {
     with_scope_guard(e, 0x29b, |e| {
-        e.call(FONT_MANAGER_INIT, &args![]);
+        // JIP's seam at the font manager's start (`0x70B285`; no words): answered, its own start
+        // ran in place of the game's.
+        if e.site(0x0070_b285, &[]).is_none() {
+            e.call(FONT_MANAGER_INIT, &args![]);
+        }
         let cursor = construct_new(e, OPERATOR_NEW, 0x48, |e, block| {
             tile_image_construct(e, block.cast()).cast()
         })
@@ -8948,6 +8952,36 @@ mod tests {
             "1.25 is not 1.5"
         );
         assert_eq!(e.get(m, InterfaceManager::bFirstInit), 1);
+    }
+
+    /// JIP's seam at the font manager's start (`0x70B285`): answered, the game's start is not
+    /// called; not answered, it is, once.
+    #[test]
+    fn init_second_font_manager_seam() {
+        for answered in [false, true] {
+            let (mut e, m) = init_world();
+            e.put_vtable(TILE_IMAGE_VTABLE, &[0, 0x0900_0020]);
+            recorder(&mut e, 0x0900_0020, 0);
+            echo(&mut e, TILE_CONSTRUCT);
+            let (cursor_root, _) = virtual_object(&mut e, &[(0xdc, 0x0900_0021)], 0);
+            e.set(m, InterfaceManager::pCursorRoot, cursor_root);
+            returns(&mut e, TILE_IMAGE_NODE, 0x5555);
+            returns(&mut e, HUD_MAIN_MENU_CREATE, 0x8888);
+            returns(&mut e, STRING_HOLDER_GET, 0x6666);
+            returns(&mut e, NI_POINTER_GET, 0x4040);
+            if answered {
+                e.on_site_for_test(0x0070_b285, |_, w| {
+                    assert!(w.is_empty());
+                    Some(1)
+                });
+            }
+            interface_manager_init_second(&mut e, m);
+            assert_eq!(
+                calls(&e, FONT_MANAGER_INIT).len(),
+                usize::from(!answered),
+                "answered: {answered}"
+            );
+        }
     }
 
     #[test]

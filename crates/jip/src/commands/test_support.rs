@@ -715,16 +715,3 @@ pub mod files {
         WHOLE_READS.with(|w| *w.borrow())
     }
 }
-
-/// Gives a built command list that waits for its game patch (`AWAITING_*`) its handlers, as the
-/// patch's pull request will, for the tests of the commands themselves.
-pub fn register_awaiting(e: &mut Engine, list: super::Handlers) {
-    for &(opcode, execute) in list.iter() {
-        assert_eq!(
-            crate::test_support::execute_of(e, opcode),
-            0,
-            "{opcode:04x} is registered before its patch"
-        );
-        crate::table::set_handlers(e, opcode, Some(execute), None);
-    }
-}

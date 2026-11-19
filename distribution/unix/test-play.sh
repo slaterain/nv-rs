@@ -69,7 +69,9 @@ exit "${FAKE_STATUS:-0}"
 EOF
 chmod +x "$T/program"
 export NV_RS_PROGRAM="$T/program" FAKE_FIND="$T/find.txt"
-unset NV_RS_GAME NV_RS_ANSWERS_FROM_INPUT
+# Also the profile variables, so a caller's own (the profiler's NV_PROFILE among them) cannot pass
+# or fail the profile checks.
+unset NV_RS_GAME NV_RS_ANSWERS_FROM_INPUT NV_RS_PROFILE NV_PROFILE
 run() { $SH "$PLAY" "$@"; }
 answer() { # TEXT ARGS...: play.sh with TEXT as the typed answers
     text=$1
@@ -352,13 +354,15 @@ check "26 where it is, said" 'printf "%s" "$out" | grep -qxF "The mods folder: $
 check "26 empty and just made, said" 'printf "%s" "$out" | grep -qF "It is empty (just made)"'
 check "26 built from the game and the mods folder" 'printf "%s" "$out" | grep -qxF "built: $game | $own26 | $own26/my mods"'
 check "26 plays from modgame" 'printf "%s" "$out" | grep -qF "program args: $own26/modgame"'
-check "26 mods profile" 'printf "%s" "$out" | grep -qx "NV_PROFILE=mods"'
+check "26 mods profile" 'printf "%s" "$out" | grep -qx "NV_RS_PROFILE=mods"'
+check "26 profile selector does not enable the engine profiler" '! printf "%s" "$out" | grep -q "^NV_PROFILE="'
 check "26 mods profile saves" 'printf "%s" "$out" | grep -qF "NV_SAVE_OUT=$own26/mods/Documents/My Games/FalloutNV/Saves"'
 check "26 saves offered into the mods profile" 'printf "%s" "$out" | grep -qF "Your saves from" && [ -f "$own26/mods/saves-offered.txt" ]'
 check "26 saves kept apart, said" 'printf "%s" "$out" | grep -qF "./play.sh --mods --import-saves"'
 check "26 plain play's offer not used up" '[ ! -e "$own26/saves-offered.txt" ]'
 out=$(printf '\n' | env FAKE_FIND="$T/find26.txt" NV_RS_GAME="$game" NV_RS_ANSWERS_FROM_INPUT=1 $SH "$pkg/play.sh" 2>&1)
-check "26 without --mods: the game profile" 'printf "%s" "$out" | grep -qx "NV_PROFILE=game" && printf "%s" "$out" | grep -qF "program args: $game"'
+check "26 without --mods: the game profile" 'printf "%s" "$out" | grep -qx "NV_RS_PROFILE=game" && printf "%s" "$out" | grep -qF "program args: $game"'
+check "26 without --mods: the engine profiler not enabled" '! printf "%s" "$out" | grep -q "^NV_PROFILE="'
 check "26 plain play still offers the saves" 'printf "%s" "$out" | grep -qF "Your saves from" && [ -f "$own26/saves-offered.txt" ]'
 plain="$own26/game/Documents/My Games/FalloutNV/Saves"
 mkdir -p "$plain"
