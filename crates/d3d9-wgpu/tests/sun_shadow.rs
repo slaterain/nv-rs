@@ -621,6 +621,70 @@ fn on_the_box_casts_its_shadow_away_from_the_sun() {
     }
 }
 
+/// With the card's times on (`NV_WGPU_GPU_TIMES`), the sun shadow maps are timed as their own kind
+/// ("sun shadow maps") where the driver writes timestamps between passes, so their depth passes are
+/// in the line's total. Where it times passes only they are not timed (the line says so); without
+/// timestamps, skipped.
+#[test]
+fn the_gpu_times_time_the_sun_shadow_maps() {
+    use d3d9_wgpu::gpu_times::{Kind, KINDS};
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    sun_shadow::enable_debug();
+    std::env::set_var("NV_WGPU_GPU_TIMES", "1");
+    let b = backend(1);
+    std::env::remove_var("NV_WGPU_GPU_TIMES");
+    sun_shadow::enable(false);
+    let Some(mut b) = b else {
+        return;
+    };
+    let d = b.device().expect("the device");
+    if !d.adapter_has_timestamps() {
+        eprintln!("this adapter cannot time passes: skipped");
+        return;
+    }
+    assert!(d.gpu_times_on(), "asked for, and the adapter can");
+    let inside = d.timestamp_features().1;
+    // The maps are drawn at the scene's clear from the frame before's casters: from the second
+    // frame on.
+    for n in 1..=3 {
+        frame(&mut b, true);
+        present(&mut b, n);
+    }
+    let slot = |k: Kind| KINDS.iter().position(|(x, _)| *x == k).expect("a kind");
+    let maps = slot(Kind::SunShadows);
+    let start = std::time::Instant::now();
+    let t = loop {
+        let t = b.device().and_then(|d| d.gpu_time_totals()).expect("on");
+        if t.spans[maps] >= 2 || t.zeros > 0 || start.elapsed().as_secs() >= 5 {
+            break t;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    let d = b.device().expect("the device");
+    assert_eq!(d.wgpu_errors(), 0);
+    if t.zeros > 0 {
+        // Known only of AMD's driver (raw wgpu too): the times are said to be missing.
+        let name = d.adapter_name().to_string();
+        assert!(
+            name.contains("AMD") || name.contains("Radeon"),
+            "zero timestamps on {name}, not known to give them: {t:?}"
+        );
+        eprintln!("{name} reads timestamps as zero: the times are not shown: {t:?}");
+        return;
+    }
+    if !inside {
+        assert_eq!(t.spans[maps], 0, "{t:?}");
+        eprintln!("this driver times passes only: the sun shadow maps are not timed (said)");
+        return;
+    }
+    assert!(
+        t.spans[maps] >= 2,
+        "the maps of frames 2 and 3 timed: {t:?}"
+    );
+    assert!(t.ns[maps] > 0, "the maps took time: {t:?}");
+    assert_eq!(t.left_out, 0, "every pair in order: {t:?}");
+}
+
 /// `ps_3_0` with a constant table naming `AmbientColor` (c1) and `PSLightColor` (c3):
 /// `mov r0, c3; add r0, r0, c1; mov oC0, r0`.
 fn lit_pixel_shader() -> Vec<u32> {
