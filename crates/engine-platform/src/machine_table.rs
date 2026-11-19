@@ -673,11 +673,24 @@ fn documents_too_long(documents: &str) -> bool {
     documents.len() + "\\My Games\\FalloutNV\\Saves\\".len() + 60 >= 260
 }
 
-/// The profile a run plays in: `mods` when `NV_RS_PROFILE` says so (play.sh's `--mods`: saves and
-/// settings made with mods stay apart, as the Windows launcher's `userdata\mods`), else `game`.
+/// The variable naming the profile a run plays in ([`profile`]), which Linux's and macOS's play.sh
+/// exports (`distribution/unix/play.sh`; the host's play.sh test reads its export lines, so the
+/// two names cannot part). Not `NV_PROFILE`: that is the sampling profiler's switch, a test's
+/// variable, and a play run with it set runs as a test (#763: play.sh's `NV_PROFILE=game` made
+/// every start one).
+pub const PROFILE_VARIABLE: &str = "NV_RS_PROFILE";
+
+/// The profile a run plays in: `mods` when [`PROFILE_VARIABLE`] says so (play.sh's `--mods`: saves
+/// and settings made with mods stay apart, as the Windows launcher's `userdata\mods`), else `game`.
 pub fn profile() -> &'static str {
-    match std::env::var("NV_RS_PROFILE").as_deref() {
-        Ok("mods") => "mods",
+    profile_from(std::env::var(PROFILE_VARIABLE).ok().as_deref())
+}
+
+/// [`profile`] for the variable's value: `mods` for `mods`; `game` for `game`, for none, and for
+/// anything else.
+pub fn profile_from(value: Option<&str>) -> &'static str {
+    match value {
+        Some("mods") => "mods",
         _ => "game",
     }
 }
