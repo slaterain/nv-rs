@@ -202,7 +202,7 @@ pub const ROWS: &[Row] = &[
         function: "Inlines",
         plan: "S1016.845558",
         key: "bInlinesChangesMapBuckets",
-        tweaks: None,
+        tweaks: Some(("Inlines", "bSaveLoad")),
         summary: "a save's changed-forms map gets 10,037 buckets (Engine Optimizations): shorter saves late in a playthrough; changed forms are written in another order (saves load either way)",
     },
 ];
