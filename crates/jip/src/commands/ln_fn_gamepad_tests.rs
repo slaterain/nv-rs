@@ -392,10 +392,31 @@ fn set_dead_zone_ls_and_rs() {
         all(&mut e),
         (min, f64::from(min), min, min, f64::from(min), min)
     );
-    for v in [0i16, 1, -1, i16::MAX, i16::MIN] {
+    // JIP's asm with the dead zone 0x80000000: `sub eax, dz` / `jg` (true difference above 0)
+    // and `inc eax` / `add eax, dz` / `jge` (true sum below 0), the wrapped eax times
+    // `1 / (32767 - dz)` (wrapped too: -2147450881): every push is about +-1, none is 0.
+    let d = 1.0 / -2_147_450_881.0;
+    for (v, want) in [
+        (0i16, 0.0),
+        (1, -2_147_483_647.0 * d),
+        (16_384, -2_147_467_264.0 * d),
+        (i16::MAX, -2_147_450_881.0 * d),
+        (-1, -2_147_483_648.0 * d),
+        (-2, 2_147_483_647.0 * d),
+        (i16::MIN, 2_147_450_881.0 * d),
+    ] {
         input(&mut e).pad.thumb_lx = v;
         input(&mut e).pad.thumb_rx = v;
-        assert_eq!(run(&mut e, 0x2205, &[]), stick(v, min));
-        assert_eq!(run(&mut e, 0x2207, &[]), stick(v, min));
+        assert_eq!(run(&mut e, 0x2205, &[]), want, "{v}");
+        assert_eq!(run(&mut e, 0x2207, &[]), want, "{v}");
     }
+}
+
+/// The getters' edges at an ordinary dead zone (16383): at it and one past it on both sides.
+#[test]
+fn the_sticks_edges() {
+    assert_eq!(stick(16_383, 16_383), 0.0);
+    assert_eq!(stick(16_384, 16_383), 1.0 / 16_384.0);
+    assert_eq!(stick(-16_384, 16_383), 0.0);
+    assert_eq!(stick(-16_385, 16_383), -1.0 / 16_384.0);
 }

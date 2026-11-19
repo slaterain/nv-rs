@@ -16908,11 +16908,13 @@ mod tests {
     /// `Update`'s three stick tests read the engine's dead zones (the exe's `0x1ea9` at
     /// `0x941157` and `0x941177`, `0x21f1` at `0x941197`, until JIP's `SetDeadZoneLS` and
     /// `SetDeadZoneRS` move them): the move stick's x at 8000 sets the move flag 0x8 at a left
-    /// dead zone of 8000 or below and not at 8001; the third axis (9) fully pushed gives the look
+    /// dead zone of 8000 or below and not at 8001; its forward/back (axis 8) at 8000 sets 0x1
+    /// (-8000: 0x2) at a left dead zone of 8000, not at 8001, and not at 8001 with the right
+    /// stick's at 8000 (the left one is read); the third axis (9) fully pushed gives the look
     /// speed at a right dead zone of 0x7fff or below and none above.
     #[test]
     fn update_reads_the_moved_dead_zones() {
-        let run = |left: i32, right: i32, axis_7: u32, axis_9: u32| {
+        let run8 = |left: i32, right: i32, axis_7: u32, axis_8: u32, axis_9: u32| {
             let mut e = engine();
             let this = update_world(&mut e);
             let slots: Vec<(u32, u32)> = (0..0x200).map(|i| (i * 4, 0x00b0_0000)).collect();
@@ -16925,6 +16927,7 @@ mod tests {
             e.register_double(0x00a2_3390, move |_, a| {
                 int(match a[2] {
                     7 => axis_7,
+                    8 => axis_8,
                     9 => axis_9,
                     _ => 0,
                 })
@@ -16938,10 +16941,11 @@ mod tests {
             e.set_pad_dead_zone_left(left);
             e.set_pad_dead_zone_right(right);
             player_character_update(&mut e, this, 0.5);
-            (
-                move_flags(&e) & 0x8 != 0,
-                e.global::<f32>(LOOK_SPEED_011A3B40),
-            )
+            (move_flags(&e), e.global::<f32>(LOOK_SPEED_011A3B40))
+        };
+        let run = |left: i32, right: i32, axis_7: u32, axis_9: u32| {
+            let (flags, look) = run8(left, right, axis_7, 0, axis_9);
+            (flags & 0x8 != 0, look)
         };
         assert!(run(0x1ea9, 0x21f1, 8000, 0).0);
         assert!(run(8000, 0x21f1, 8000, 0).0);
@@ -16949,6 +16953,22 @@ mod tests {
         assert_eq!(run(0x1ea9, 0x21f1, 0, 0x7fff).1, 1.0);
         assert_eq!(run(0x1ea9, 0x7fff, 0, 0x7fff).1, 1.0);
         assert_eq!(run(0x1ea9, 0x8000, 0, 0x7fff).1, 0.0);
+        // Forward and back (axis 8, the `0x941177` test): the left dead zone.
+        let minus = (-8000i32) as u32;
+        for (axis_8, flag) in [(8000u32, 0x1u32), (minus, 0x2)] {
+            assert_ne!(run8(0x1ea9, 0x21f1, 0, axis_8, 0).0 & flag, 0, "the exe's");
+            assert_ne!(run8(8000, 0x21f1, 0, axis_8, 0).0 & flag, 0, "at 8000");
+            assert_eq!(
+                run8(8001, 0x21f1, 0, axis_8, 0).0 & 0x3,
+                0,
+                "inside at 8001"
+            );
+            assert_eq!(
+                run8(8001, 8000, 0, axis_8, 0).0 & 0x3,
+                0,
+                "the right stick's 8000 is not read"
+            );
+        }
     }
 
     /// The disabled controls other than `flag`: none of them changes what pressing that button

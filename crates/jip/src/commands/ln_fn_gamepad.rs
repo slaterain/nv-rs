@@ -113,7 +113,10 @@ fn get_pressed_buttons(e: &mut Engine, w: &[u32]) -> Ret {
 /// A stick axis past its dead zone, scaled: 0 inside it; above, `(value - dz) * d`; below,
 /// `(value + 1 + dz) * d` (`d = 1 / (32767 - dz)`, JIP's `s_deadZoneLSd`/`RSd`, kept with the
 /// dead zone: `1.0 / 24918` and `1.0 / 24078` at the start); the products in doubles
-/// (`cvtsi2sd`, `mulsd`).
+/// (`cvtsi2sd`, `mulsd`). Inside or outside is decided on the true difference and sum, as JIP's
+/// `sub`/`jg` and `inc`/`add`/`jge` do (their flags count an overflow), and the wrapped 32-bit
+/// value goes into the product: so after a NaN dead zone (0x80000000) the sticks give about
+/// plus or minus 1, as JIP's.
 pub fn stick(value: i16, dead_zone: i32) -> f64 {
     let v = i32::from(value);
     let scale = 1.0 / f64::from(32767i32.wrapping_sub(dead_zone));
@@ -121,13 +124,16 @@ pub fn stick(value: i16, dead_zone: i32) -> f64 {
         return 0.0;
     }
     let past = if v > 0 {
+        if i64::from(v) - i64::from(dead_zone) <= 0 {
+            return 0.0;
+        }
         v.wrapping_sub(dead_zone)
     } else {
+        if i64::from(v) + 1 + i64::from(dead_zone) >= 0 {
+            return 0.0;
+        }
         v.wrapping_add(1).wrapping_add(dead_zone)
     };
-    if (v > 0 && past <= 0) || (v < 0 && past >= 0) {
-        return 0.0;
-    }
     f64::from(past) * scale
 }
 
