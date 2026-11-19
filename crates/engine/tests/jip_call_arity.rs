@@ -92,7 +92,13 @@ use Words::{AtLeast, N};
 
 /// One row of [`UNREAD`]: (crate, file, callee as written, the words it passes, how they were
 /// checked).
-type Row = (&'static str, &'static str, &'static str, Words, &'static str);
+type Row = (
+    &'static str,
+    &'static str,
+    &'static str,
+    Words,
+    &'static str,
+);
 
 /// The calls the reader cannot check by itself, each checked by hand ([`Row`]). A call listed
 /// twice in a file is listed twice. What "a command's words" are: the eight of `COMMAND_ARGS`
