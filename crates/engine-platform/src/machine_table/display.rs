@@ -24,7 +24,8 @@
 //!   count wgpu's adapter cannot draw with is answered as not available ([`honour_samples`]).
 //!
 //! Windows' own table is made by `scripts/d3d9-capture` from Windows' Direct3D 9 and is unchanged.
-// Only Linux and macOS use this in a run; the tests run everywhere.
+// Only Linux and macOS use this in a run (on Windows: the driver name and [`CARD`]'s alpha to
+// coverage answer, for a run wgpu draws, `super::super::d3d9`); the tests run everywhere.
 #![cfg_attr(windows, allow(dead_code))]
 
 use super::hex;
@@ -383,9 +384,34 @@ fn device_identifier(card: &Card) -> [u8; 16] {
 /// a run has drawn through `d3d9_wgpu` (on Windows, with an NVIDIA card). The capabilities this
 /// table answers ([`CARD`]) are an NVIDIA card's too. The vendor and device numbers stay the
 /// card's own: the game's level choice reads only this name (its vendor word `011f94b8`, which
-/// picks the multi-GPU probe and the alpha to coverage switch, is set from it too), and the
-/// start's log names the real card beside this name ([`driver_note`]).
+/// picks the multi-GPU probe and the alpha to coverage switch, is set from it too; no code of the
+/// exe compares the vendor or device number), and the start's log names the real card beside this
+/// name ([`driver_note`]).
+///
+/// On Windows the same name is given whenever wgpu draws (`super::super::d3d9`'s
+/// `identifier_for_game`): there the table is Windows' own Direct3D 9 capture, whose name on an AMD
+/// card ("aticfx64.dll") sent the game down the ATI path: the ATI shader package and ATI's alpha to
+/// coverage switch, with which its grass under multisampling was drawn as solid tufts (player report
+/// 005) before `d3d9_wgpu` honoured that switch too.
 pub const DRIVER_NAME_FOR_GAME: &str = "nvldumd.dll";
+
+/// The size of `D3DADAPTER_IDENTIFIER9`'s `Driver` field (`MAX_DEVICE_IDENTIFIER_STRING`), its first.
+const DRIVER_FIELD: usize = 512;
+
+/// `identifier` (a whole `D3DADAPTER_IDENTIFIER9`) with its `Driver` field [`DRIVER_NAME_FOR_GAME`],
+/// every other byte as it was.
+pub fn with_game_driver(identifier: &[u8]) -> Vec<u8> {
+    let mut b = field(DRIVER_NAME_FOR_GAME, DRIVER_FIELD);
+    b.extend_from_slice(identifier.get(DRIVER_FIELD..).unwrap_or_default());
+    b
+}
+
+/// The `Driver` field's name as the game reads it: up to its terminating zero.
+pub fn driver_name(identifier: &[u8]) -> String {
+    let field = &identifier[..identifier.len().min(DRIVER_FIELD)];
+    let end = field.iter().position(|&b| b == 0).unwrap_or(field.len());
+    String::from_utf8_lossy(&field[..end]).into_owned()
+}
 
 /// The start's log line naming the real card and the driver name the game is given.
 pub fn driver_note(card: &Card) -> String {
@@ -403,7 +429,7 @@ pub fn driver_note(card: &Card) -> String {
 /// device numbers, no subsystem or revision, [`device_identifier`], and the WHQL level (asked with
 /// flag 2: 1, a signed driver, as measured; else 0).
 pub fn identifier(card: &Card, flags: u32) -> Vec<u8> {
-    let mut b = field(DRIVER_NAME_FOR_GAME, 512);
+    let mut b = field(DRIVER_NAME_FOR_GAME, DRIVER_FIELD);
     b.extend(field(&card.name, 512));
     b.extend(field("\\\\.\\DISPLAY1", 32));
     b.extend_from_slice(&0u64.to_le_bytes());
@@ -826,6 +852,126 @@ mod tests {
         }
         // The level check itself: wgpu's name for the volunteer's card is the one that stopped.
         assert_eq!(game_shader_level("radv"), (2, false));
+    }
+
+    /// The vendor word `00b4f710` sets from the same name (`011f94b8`, with shader model 3): "ati"
+    /// 2, "nv" 1, "ig" 3, any other 0; and the alpha to coverage switch `00b98540` then sends for
+    /// "on": NVIDIA's (`D3DRS_ADAPTIVETESS_Y` 181, 'ATOC') for 1, ATI's (`D3DRS_POINTSIZE` 154,
+    /// 'A2M1') for 2, none for the others (`Renderer::Init` turns the coverage off for them).
+    fn game_vendor_word(driver: &str) -> (u32, Option<(u32, [u8; 4])>) {
+        let starts = |p: &str| {
+            driver
+                .as_bytes()
+                .get(..p.len())
+                .is_some_and(|b| b.eq_ignore_ascii_case(p.as_bytes()))
+        };
+        if starts("ati") {
+            (2, Some((154, *b"A2M1")))
+        } else if starts("nv") {
+            (1, Some((181, *b"ATOC")))
+        } else if starts("ig") {
+            (3, None)
+        } else {
+            (0, None)
+        }
+    }
+
+    /// Player report 005: on Windows the identifier is Windows' own Direct3D 9 capture, and an AMD
+    /// card's driver name ("aticfx64.dll") sent the game down the ATI path (shader level 6, the ATI
+    /// package, ATI's switch). While wgpu draws, every card's captured identifier reaches the game
+    /// with NVIDIA's driver name and every other byte as captured (the card's own name, vendor and
+    /// device numbers, device identifier, WHQL level), so the game takes the NVIDIA path: level 5
+    /// with 3.0 lighting, vendor word 1, NVIDIA's switch. With the real Direct3D 9 the capture is
+    /// given as it is.
+    #[test]
+    fn while_wgpu_draws_every_cards_capture_names_nvidias_driver() {
+        // The 32-bit Direct3D 9 drivers' names Windows reports (Intel's, NVIDIA's, AMD's), a
+        // virtual machine's and an empty one.
+        let cases: [(&str, u32, u32, (u32, bool)); 6] = [
+            ("aticfx64.dll", 0x1002, 0x150e, (6, true)),
+            ("atiumdag.dll", 0x1002, 0x7480, (6, true)),
+            ("nvldumd.dll", 0x10de, 0x2f58, (5, true)),
+            ("igdumdim32.dll", 0x8086, 0x56a0, (5, true)),
+            ("vm3dum.dll", 0x15ad, 0x0405, (2, false)),
+            ("", 0, 0, (2, false)),
+        ];
+        let word = |b: &[u8], at: usize| u32::from_le_bytes(b[at..at + 4].try_into().unwrap());
+        for (windows_driver, vendor, device, level) in cases {
+            let mut c = card();
+            c.name = format!("card {vendor:x}");
+            c.vendor = vendor;
+            c.device = device;
+            for flags in [0, 2] {
+                // As Windows' capture has it: the card's own driver name in the first field.
+                let mut captured = field(windows_driver, 512);
+                captured.extend_from_slice(&identifier(&c, flags)[512..]);
+                assert_eq!(captured.len(), 1100);
+                assert_eq!(driver_name(&captured), windows_driver);
+                assert_eq!(game_shader_level(windows_driver), level, "{windows_driver}");
+                // The real Direct3D 9: as captured.
+                assert_eq!(
+                    crate::d3d9::identifier_for_game(&captured, false),
+                    captured,
+                    "{windows_driver}: the real Direct3D 9 gets the capture as it is"
+                );
+                // wgpu: NVIDIA's name, the rest as captured.
+                let given = crate::d3d9::identifier_for_game(&captured, true);
+                assert_eq!(given.len(), 1100);
+                let driver = driver_name(&given);
+                assert_eq!(driver, "nvldumd.dll", "{windows_driver} on wgpu");
+                assert_eq!(given[..12], *b"nvldumd.dll\0");
+                assert!(given[12..512].iter().all(|&b| b == 0), "{windows_driver}");
+                assert_eq!(given[512..], captured[512..], "{windows_driver}");
+                assert_eq!((word(&given, 1064), word(&given, 1068)), (vendor, device));
+                assert_eq!(game_shader_level(&driver), (5, true), "{windows_driver}");
+                assert_eq!(
+                    game_vendor_word(&driver),
+                    (1, Some((181, *b"ATOC"))),
+                    "{windows_driver}: the NVIDIA path"
+                );
+                // The table made off Windows already says so: the same bytes.
+                assert_eq!(given, identifier(&c, flags), "{windows_driver}");
+            }
+        }
+        // Before: an AMD card's own name took the ATI path and ATI's switch.
+        assert_eq!(game_vendor_word("aticfx32.dll"), (2, Some((154, *b"A2M1"))));
+        assert_eq!(game_vendor_word("igdumdim32.dll"), (3, None));
+    }
+
+    /// While wgpu draws, NVIDIA's alpha to coverage query (`Renderer::Init`: adapter 0, HAL,
+    /// X8R8G8B8, no usage, a surface, 'ATOC') answers as the captured NVIDIA card does (available,
+    /// as off Windows), whatever the player's driver says; another format is the table's.
+    #[test]
+    fn while_wgpu_draws_nvidias_coverage_query_answers_as_the_nvidia_card() {
+        let atoc = u32::from_le_bytes(*b"ATOC");
+        let query = [0, 1, X8R8G8B8, 0, 1, atoc];
+        assert_eq!(crate::d3d9::wgpu_format_answer(&query), Some(0));
+        // The same in the card's own table, read as the layer reads it.
+        let mut e = engine_with(CARD);
+        assert_eq!(crate::d3d9::captured_format_check(&mut e, &query), Some(0));
+        // A player's table that says no (an AMD or Intel driver) does not decide it on wgpu.
+        let no = rewrite_answers(CARD, "CheckDeviceFormat", |lead, w, answer| {
+            if lead == "0 1 16 0 1" && w == "434f5441" {
+                "8876086a".to_string()
+            } else {
+                answer(w)
+            }
+        });
+        let mut e = engine_with(&no);
+        assert_eq!(
+            crate::d3d9::captured_format_check(&mut e, &query),
+            Some(0x8876_086a)
+        );
+        assert_eq!(crate::d3d9::wgpu_format_answer(&query), Some(0));
+        // Any other format, another adapter: the table's answer.
+        assert_eq!(
+            crate::d3d9::wgpu_format_answer(&[0, 1, X8R8G8B8, 0, 1, 0x15]),
+            None
+        );
+        assert_eq!(
+            crate::d3d9::wgpu_format_answer(&[1, 1, X8R8G8B8, 0, 1, atoc]),
+            None
+        );
     }
 
     /// The same through the table the game reads: the card's lines, loaded as a run loads them,

@@ -673,11 +673,35 @@ fn documents_too_long(documents: &str) -> bool {
     documents.len() + "\\My Games\\FalloutNV\\Saves\\".len() + 60 >= 260
 }
 
-/// The profile a run plays in: `mods` when `NV_PROFILE` says so (play.sh's `--mods`: saves and
-/// settings made with mods stay apart, as the Windows launcher's `userdata\mods`), else `game`.
+/// The variable naming the profile a run plays in ([`profile`]), which Linux's and macOS's play.sh
+/// exports (`distribution/unix/play.sh`; the host's play.sh test reads its export lines, so the
+/// two names cannot part). Not `NV_PROFILE`: that is the sampling profiler's switch, a test's
+/// variable, and a play run with it set runs as a test (#763: play.sh's `NV_PROFILE=game` made
+/// every start one).
+pub const PROFILE_VARIABLE: &str = "NV_RS_PROFILE";
+
+/// A variable of the process's environment, as [`profile`] and the game's folders read it.
+fn process_env(name: &str) -> Option<String> {
+    std::env::var(name).ok()
+}
+
+/// The profile a run plays in: `mods` when [`PROFILE_VARIABLE`] says so (play.sh's `--mods`: saves
+/// and settings made with mods stay apart, as the Windows launcher's `userdata\mods`), else `game`.
 pub fn profile() -> &'static str {
-    match std::env::var("NV_PROFILE").as_deref() {
-        Ok("mods") => "mods",
+    profile_with(&process_env)
+}
+
+/// [`profile`] for the environment `env` reads (a test gives its own): [`profile_from`] of
+/// [`PROFILE_VARIABLE`]'s value, and of no other variable.
+pub fn profile_with(env: &dyn Fn(&str) -> Option<String>) -> &'static str {
+    profile_from(env(PROFILE_VARIABLE).as_deref())
+}
+
+/// [`profile`] for the variable's value: `mods` for `mods`; `game` for `game`, for none, and for
+/// anything else.
+pub fn profile_from(value: Option<&str>) -> &'static str {
+    match value {
+        Some("mods") => "mods",
         _ => "game",
     }
 }
@@ -687,7 +711,15 @@ pub fn profile() -> &'static str {
 /// `game\AppData\Roaming`, `game\AppData\Local`, or `mods\...` for [`profile`] `mods`): this
 /// system's paths.
 pub fn game_folders(own: &std::path::Path) -> [std::path::PathBuf; 3] {
-    profile_folders(own, profile())
+    game_folders_with(own, &process_env)
+}
+
+/// [`game_folders`] for the environment `env` reads ([`profile_with`]).
+pub fn game_folders_with(
+    own: &std::path::Path,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> [std::path::PathBuf; 3] {
+    profile_folders(own, profile_with(env))
 }
 
 /// [`game_folders`] of the profile `profile` (`game` or `mods`), whatever this run's is.
@@ -722,8 +754,19 @@ fn on_drive_z(path: &std::path::Path) -> Result<String, String> {
 /// The `SHGetFolderPathA` lines for the Documents (5), roaming (0x1a) and local (0x1c) AppData
 /// folders inside nv-rs's own folder `own` ([`game_folders`]), as the game names them on `Z:`.
 pub fn folder_lines(own: &std::path::Path) -> Result<String, String> {
+    folder_lines_with(own, &process_env)
+}
+
+/// [`folder_lines`] for the environment `env` reads ([`game_folders_with`]).
+pub fn folder_lines_with(
+    own: &std::path::Path,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Result<String, String> {
     let mut lines = String::new();
-    for (csidl, folder) in [5u32, 0x1a, 0x1c].into_iter().zip(game_folders(own)) {
+    for (csidl, folder) in [5u32, 0x1a, 0x1c]
+        .into_iter()
+        .zip(game_folders_with(own, env))
+    {
         let game = on_drive_z(&folder)?;
         if csidl == 5 && documents_too_long(&game) {
             return Err(format!(
