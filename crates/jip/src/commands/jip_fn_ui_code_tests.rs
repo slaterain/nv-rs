@@ -8,6 +8,15 @@ use super::*;
 use crate::commands::test_support::*;
 
 const MENU: u32 = FORMS + 0x1000;
+// The recipe menu's category (`+0x64`) and recipe list box (`+0x6C`); the list's fill
+// (`00727680`), `SaveListState` (`007312E0`), `Filter` (`00729FE0`) and `RestoreListState`
+// (`0072A660`), which JIP's `RefreshRecipeMenu` calls: the exe's numbers, not the module's.
+const CATEGORY: u32 = 0x64;
+const LIST: u32 = 0x6c;
+const FILL_LIST: u32 = 0x0072_7680;
+const SAVE_LIST_STATE: u32 = 0x0073_12e0;
+const FILTER: u32 = 0x0072_9fe0;
+const RESTORE_LIST_STATE: u32 = 0x0072_a660;
 const LIST_VT: u32 = FORMS + 0x1400;
 const PLAYER_AT: u32 = FORMS + 0x2000;
 const PROC: u32 = FORMS + 0x2400;
