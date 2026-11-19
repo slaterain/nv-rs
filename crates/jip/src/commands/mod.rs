@@ -43,6 +43,8 @@ pub mod jip_fn_land_texture;
 pub mod jip_fn_light;
 pub mod jip_fn_linked_ref;
 pub mod jip_fn_marker_cmds;
+pub mod jip_fn_minimap;
+pub mod jip_fn_minimap_seams;
 pub mod jip_fn_misc_ref;
 pub mod jip_fn_misc_ref_havok;
 pub mod jip_fn_misc_ref_havok_w;
@@ -262,6 +264,8 @@ pub const ALL: &[Handlers] = &[
     jip_fn_ui_cursor::COMMANDS,
     // The recipe menu, quest messages and item filter (code bytes as seams and wraps).
     jip_fn_ui_code::COMMANDS,
+    // `InitMiniMap` (JIP MiniMap's start; its patches in `jip_fn_minimap_seams`).
+    jip_fn_minimap::COMMANDS,
 ];
 
 /// How many of JIP's commands have a handler.
@@ -302,6 +306,7 @@ pub fn install(e: &mut Engine) {
     jip_fn_camera::install(e);
     jip_fn_rock_it::install(e);
     jip_fn_ui_code::install(e);
+    jip_fn_minimap::install(e);
     for list in ALL {
         for &(opcode, execute) in list.iter() {
             crate::table::set_handlers(e, opcode, Some(execute), None);
@@ -919,6 +924,8 @@ mod tests {
             "jip_fn_ui",
             // jip_fn_ui_code (the recipe menu, quest messages, item filter).
             "jip_fn_ui",
+            // jip_fn_minimap (InitMiniMap).
+            "jip_fn_minimap",
         ];
         assert_eq!(files.len(), ALL.len(), "one file per command list");
         let mut seen = std::collections::HashSet::new();

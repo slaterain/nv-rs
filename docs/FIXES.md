@@ -1041,6 +1041,13 @@ With the switch on:
 - All 162 of the JIP game patches planned for the port (below): JIP's own always-on ones go in, its fixes follow the row
   `NV_JIP_GAME_PATCHES`. JIP's co-save section is read and applied (its script variables, linked
   references and the rest), as JIP does.
+- JIP MiniMap's start (`InitMiniMap`, from that mod's script only) and the seven code patches JIP writes
+  for it then: the small cell extent for `uGridsToLoad` up to 5, JIP's own update of the cells' seen
+  bits (the fog of war) in place of the game's, the found location's name with the minimap's markers of
+  its cell let go, flags when the quest targets or the placed marker change, and the local maps'
+  texture format reset with the renderer. `UpdateMiniMap`, which draws the map, comes next. JIP 57.30
+  writes no cache of local map pictures (its `SaveLocalMapTexture` is not called: the calls are
+  commented out), so the port writes none either.
 
 Not yet, with the switch on:
 - The 23 commands not built yet are named and found like the others but have no handler: a script
