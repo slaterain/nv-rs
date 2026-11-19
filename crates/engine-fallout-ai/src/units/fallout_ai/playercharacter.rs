@@ -18561,6 +18561,10 @@ mod tests {
             e.register(0x0099_e040, |_, _| float(1.0));
             e.register(0x004e_3d00, |_, _| float(1.0));
             e.mem.set_u8(SECOND_STICK_FLAG, u8::from(second_stick));
+            // The process's slot 0x610 (asked after the zoom with the second stick on): set, so
+            // the free camera's turn is left out.
+            let process = answering_object(&mut e, 0x026b_0000, &[(0x1a8, 0), (0x610, 1)]);
+            e.mem.set_u32(this.addr() + 0x68, process);
             e.set_pad_dead_zone_right(dead_zone);
             let flags = Ptr::<()>::new(e.mem.alloc(4));
             e.call(0x0094_45b0, &args![this, 0.5f32, false, flags, 0u32]);
