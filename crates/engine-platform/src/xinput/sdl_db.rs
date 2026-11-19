@@ -11,8 +11,13 @@
 //!
 //! A line is `GUID,name,mapping...` with the mapping's `output:input` pairs. The GUID's Windows
 //! form is SDL's DirectInput one: bus 0x0003 whenever the pad's vendor and product ids are known
-//! (whatever its real bus), the two ids, version 0; SDL compares it without the name checksum and,
-//! failing an exact match, without the version, so a pad is found by its two ids. The inputs
+//! (whatever its real bus), the two ids, version 0; SDL compares it without the version when an
+//! exact match fails, so a pad is found by its two ids. A line that also names a checksum of the
+//! pad's name (in its GUID or a `crc:` field) fits, in SDL, only the pad whose name has that
+//! checksum, and otherwise SDL falls back to a line without one; nv-rs does not work out SDL's
+//! checksum of a pad's name, so it leaves those lines out. Of the built-in 858, three such lines
+//! are left out (their pads have no plain line, so they are not read) and one whose GUID no
+//! DirectInput pad can have (bytes after the vendor id that SDL always leaves 0). The inputs
 //! count the pad's buttons, axes and hats as SDL's DirectInput code does (`dinput_order`).
 //!
 //! How each binding turns into the controls follows SDL3's `src/joystick/SDL_gamepad.c`
@@ -382,7 +387,7 @@ fn up_positive(v: i16) -> i16 {
 }
 
 /// The pad a line's GUID names, when it is in SDL's DirectInput form (bus 0x0003, the vendor and
-/// product ids, nothing else but the name checksum and the version, which a match leaves out).
+/// product ids, nothing else but the version, which a match leaves out) with no name checksum.
 pub fn key(guid: &str) -> Option<(u16, u16)> {
     if guid.len() != 32 || !guid.is_ascii() {
         return None;
@@ -393,7 +398,7 @@ pub fn key(guid: &str) -> Option<(u16, u16)> {
     }
     let word = |at: usize| u16::from_le_bytes([b[at], b[at + 1]]);
     let zero = |at: usize| word(at) == 0;
-    (word(0) == 0x0003 && zero(6) && zero(10) && zero(14)).then(|| (word(4), word(8)))
+    (word(0) == 0x0003 && zero(2) && zero(6) && zero(10) && zero(14)).then(|| (word(4), word(8)))
 }
 
 /// The pads' lines by their ids, the later of two for one pad kept.
@@ -434,6 +439,10 @@ impl Database {
                 if !named {
                     continue;
                 }
+            }
+            // A line for one pad name only (its checksum): left out, see the module's notes.
+            if rest.split(',').any(|f| f.trim().starts_with("crc:")) {
+                continue;
             }
             self.lines.insert(id, rest.to_string());
             taken += 1;
@@ -482,12 +491,15 @@ mod tests {
         }
     }
 
-    /// The built-in lines: every Windows line of the copy (858 pads; the `xinput` line names no
-    /// pad), found by their two ids.
+    /// The built-in lines: the copy's Windows lines, found by their two ids: 854 pads of its 858
+    /// GUID lines (three name a name checksum too, one has a GUID no pad can have; the `xinput`
+    /// line names no pad).
     #[test]
     fn the_built_in_lines() {
         let db = Database::windows();
-        assert_eq!(db.len(), 858);
+        assert_eq!(db.len(), 854);
+        let guid_lines = WINDOWS.lines().filter(|l| l.starts_with("0300")).count();
+        assert_eq!(guid_lines, 858);
         assert!(WINDOWS.starts_with("# SDL_GameControllerDB"));
         assert!(WINDOWS.contains("cbdb3678270cf5bf14a127934fd7ab332ecd3cbc"));
         // 8BitDo Pro 2 (2dc8:6006): its line as the copy has it.
@@ -502,11 +514,15 @@ mod tests {
             key("03000000c82d00000660000000000000"),
             Some((0x2dc8, 0x6006))
         );
-        // The name checksum and the version are left out of a match.
+        // The version is left out of a match; a name checksum fits one pad name only.
         assert_eq!(
-            key("0300abcdc82d00000660000001000000"),
+            key("03000000c82d00000660000001000000"),
             Some((0x2dc8, 0x6006))
         );
+        assert_eq!(key("0300abcdc82d00000660000000000000"), None);
+        let mut db = Database::default();
+        let crc = "03000000c82d00000660000000000000,Named,a:b0,crc:abcd,platform:Windows,";
+        assert_eq!(db.add(crc, None), 0);
         // Another bus, a driver's mark, the old DirectInput form, or not 32 hex digits: no pad.
         assert_eq!(key("05000000c82d00000660000000000000"), None);
         assert_eq!(key("03000000c82d00000660000000006800"), None);
@@ -656,13 +672,13 @@ mod tests {
         assert_eq!(db.mapping(0x2dc8, 0x6006).unwrap().name, "File");
         assert_eq!(db.mapping(0xaaaa, 0xbbbb).unwrap().name, "New");
         assert_eq!(db.mapping(0xcccc, 0xdddd), None);
-        assert_eq!(db.len(), 859);
+        assert_eq!(db.len(), 855);
         let hint = "03000000c82d00000660000000000000,Hint,a:b0";
         let db = Database::with_players_lines(Some(&dir), Some(hint));
         assert_eq!(db.mapping(0x2dc8, 0x6006).unwrap().name, "Hint");
         std::fs::remove_dir_all(&dir).unwrap();
         let db = Database::with_players_lines(Some(&dir), None);
         assert_eq!(db.mapping(0x2dc8, 0x6006).unwrap().name, "8BitDo Pro 2");
-        assert_eq!(Database::with_players_lines(None, None).len(), 858);
+        assert_eq!(Database::with_players_lines(None, None).len(), 854);
     }
 }
