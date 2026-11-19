@@ -3688,6 +3688,107 @@ fn cuts_between_finished_encoders_keep_multisampled_colour_and_depth() {
     }
 }
 
+/// The card's own times (`NV_WGPU_GPU_TIMES`) off, the default: no timing is made, so no query
+/// set, no timestamp and no command of its own.
+#[test]
+fn the_gpu_times_off_make_nothing() {
+    let Some(mut g) = Gpu::new(4, 4) else {
+        return;
+    };
+    g.run(Cmd::CreateQuery {
+        device: DEVICE,
+        query: 0x2000,
+        kind: 9,
+    });
+    g.clear(3, 0, 1.0);
+    let _ = g.count(0x2000, |g| {
+        g.cover(0.5);
+        g.cover(0.5);
+    });
+    let _ = g.pixels();
+    let d = g.b.device().expect("the device");
+    assert!(!d.gpu_times_on());
+    assert_eq!(d.gpu_time_totals(), None, "no timing, no query set");
+}
+
+/// The card's own times on: each kind of work the backend gives the card is timed in its own
+/// pairs: the game's draws (world), the occlusion count's pass, a multisampled target's resolve,
+/// and (where the driver writes timestamps between passes) the copies: an upload among the draws
+/// and the read-back. Off where the adapter has no timestamps (said, skipped); where it has them
+/// the times must be on, every pair read back in order, and the count, the submits and the
+/// batches' encoders are the same as with the times off (no pass, batch or submit added).
+#[test]
+fn the_gpu_times_on_time_each_kind_of_work() {
+    use d3d9_wgpu::gpu_times::{Kind, KINDS};
+    let run = |g: &mut Gpu| {
+        g.run(Cmd::CreateQuery {
+            device: DEVICE,
+            query: 0x2000,
+            kind: 9,
+        });
+        g.clear(3, 0, 1.0);
+        let count = g.count(0x2000, |g| {
+            g.cover(0.5);
+            g.cover(0.5);
+        });
+        let _ = g.pixels();
+        let s = g.b.device().expect("the device").submits();
+        (count, s.submits, s.encoders)
+    };
+    let off = {
+        let Some(mut g) = Gpu::new(4, 4) else {
+            return;
+        };
+        run(&mut g)
+    };
+    let Some(mut g) = Gpu::with_env(4, 4, &[("NV_WGPU_GPU_TIMES", "1")]) else {
+        return;
+    };
+    let d = g.b.device().expect("the device");
+    if !d.adapter_has_timestamps() {
+        assert!(!d.gpu_times_on());
+        eprintln!("this adapter cannot time passes: skipped");
+        return;
+    }
+    assert!(d.gpu_times_on(), "asked for, and the adapter can");
+    let on = run(&mut g);
+    assert_eq!(
+        on, off,
+        "the same count, submits and batches as with the times off"
+    );
+    let slot = |k: Kind| KINDS.iter().position(|(x, _)| *x == k).expect("a kind");
+    let start = std::time::Instant::now();
+    let t = loop {
+        let t = g.b.device().and_then(|d| d.gpu_time_totals()).expect("on");
+        if t.spans[slot(Kind::Resolves)] > 0 || t.zeros > 0 || start.elapsed().as_secs() >= 5 {
+            break t;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    assert!(t.sets_made >= 1, "{t:?}");
+    if t.zeros > 0 {
+        // A driver that reads timestamps as zero: the times are said to be missing, not shown (the
+        // line's own unit test checks that). Known only of AMD's driver (raw wgpu too); on any
+        // other it is a fault of ours.
+        let d = g.b.device().expect("the device");
+        let name = d.adapter_name().to_string();
+        assert!(
+            name.contains("AMD") || name.contains("Radeon"),
+            "zero timestamps on {name}, not known to give them: {t:?}"
+        );
+        eprintln!("{name} reads timestamps as zero: the times are not shown: {t:?}");
+        assert_eq!(d.wgpu_errors(), 0);
+        return;
+    }
+    for kind in [Kind::World, Kind::Count, Kind::Resolves] {
+        assert!(t.spans[slot(kind)] >= 1, "{kind:?} timed: {t:?}");
+    }
+    assert!(t.ns[slot(Kind::World)] > 0, "the draws took time: {t:?}");
+    assert_eq!(t.left_out, 0, "every pair in order: {t:?}");
+    assert_eq!(t.untimed, 0, "{t:?}");
+    assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
+}
+
 /// A batch of more passes than one submit can carry goes in several, in order: AMD's Windows
 /// driver refuses a submit of about 4,000 of its command buffers ("out of host memory"; Radeon
 /// 890M), and wgpu then takes the device for lost: nothing more is drawn and no query answers.

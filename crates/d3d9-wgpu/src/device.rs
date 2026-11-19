@@ -14,6 +14,7 @@ use crate::ffp;
 use crate::format::{self, d3dfmt, Format};
 use crate::frame_rate;
 use crate::fxhash::Map;
+use crate::gpu_times::{self, GpuTimes, Kind};
 use crate::loading;
 use crate::prepare;
 use crate::scene_light;
@@ -768,6 +769,12 @@ pub struct Device {
     submitter: Option<Submitter>,
     /// Draws recorded into the open encoder.
     encoder_draws: u32,
+    /// The card's own times by kind (`NV_WGPU_GPU_TIMES`, [`crate::gpu_times`]); none when off.
+    gpu_times: Option<GpuTimes>,
+    /// The open pass's timed pair and whether a clear began it; its draws (a pass that only
+    /// cleared counts as clears).
+    timed_pass: Option<(u32, bool)>,
+    pass_draws: u32,
     /// Passes begun and commands recorded straight into the open encoder ([`Device::encoder`]).
     encoder_uses: u32,
     /// The open batch's uses, its earlier encoders' too ([`Device::bound_batch`]).
@@ -1528,6 +1535,9 @@ impl Device {
             finisher,
             submitter,
             encoder_draws: 0,
+            gpu_times: None,
+            timed_pass: None,
+            pass_draws: 0,
             encoder_uses: 0,
             batch_uses: 0,
             submits: Arc::default(),
@@ -1634,6 +1644,20 @@ impl Device {
             sun_failed: HashSet::new(),
             sun_caster_layout: None,
         };
+        // The card's times when asked for (`NV_WGPU_GPU_TIMES`): none where the driver has no
+        // timestamps (said once).
+        if gpu_times::enabled() {
+            match GpuTimes::new(&d.device, &d.queue) {
+                Ok(t) => {
+                    eprintln!(
+                        "NV_D3D9 wgpu: GPU times on (NV_WGPU_GPU_TIMES): a line every 5 s{}",
+                        if t.inside() { "" } else { ", passes only" }
+                    );
+                    d.gpu_times = Some(t);
+                }
+                Err(why) => eprintln!("NV_D3D9 wgpu: {why}"),
+            }
+        }
         // The sun shadows: their maps and light list only when on for this device.
         if sun_shadow::enabled() {
             d.sun = Some(Box::new(SunState::new(&d.device)));
@@ -2209,6 +2233,25 @@ impl Device {
         }
     }
 
+    /// Whether the adapter can time passes (tests: the times are then on when asked for).
+    pub fn adapter_has_timestamps(&self) -> bool {
+        self.adapter
+            .features()
+            .contains(wgpu::Features::TIMESTAMP_QUERY)
+    }
+
+    /// Whether the card's times are on for this device (`NV_WGPU_GPU_TIMES`, tests).
+    pub fn gpu_times_on(&self) -> bool {
+        self.gpu_times.is_some()
+    }
+
+    /// The card's times so far, after the queue thread has run what it was handed (tests); none
+    /// when off.
+    pub fn gpu_time_totals(&mut self) -> Option<gpu_times::Totals> {
+        self.sync();
+        self.gpu_times.as_mut().map(GpuTimes::totals)
+    }
+
     /// How many bind groups are cached (tests).
     pub fn cached_bind_groups(&self) -> usize {
         self.groups.len()
@@ -2218,7 +2261,31 @@ impl Device {
     /// the queue thread ([`Submitter`]) the batch is handed to it whole, and this thread goes on
     /// recording the next one into a fresh register ring, UP vertices and upload stage while it is
     /// finished and submitted (in order with every other queue operation).
+    /// With the card's times on, the batch's timestamps are resolved at the end of its last
+    /// encoder and read once it is submitted ([`crate::gpu_times`]).
     fn flush(&mut self) {
+        self.end_pass();
+        let read = match self.gpu_times.take() {
+            Some(mut t) => {
+                let read = if t.pending() {
+                    t.end_batch(self.encoder())
+                } else {
+                    t.end_empty_batch();
+                    None
+                };
+                self.gpu_times = Some(t);
+                read
+            }
+            None => None,
+        };
+        self.send_batch();
+        if let Some((buffer, state)) = read {
+            self.on_queue(move |_| gpu_times::map(buffer, state));
+        }
+    }
+
+    /// [`Device::flush`]'s batch handed over (or submitted here).
+    fn send_batch(&mut self) {
         self.end_pass();
         let finishing = std::mem::take(&mut self.finishing);
         let encoder = self.encoder.take();
@@ -2438,6 +2505,7 @@ impl Device {
             let at = self.stage.len() as u64;
             self.stage.extend_from_slice(&shadow[start..end]);
             let stage = self.stage_buffer.clone();
+            let copy_span = self.span_begin(Kind::Copies);
             self.encoder().copy_buffer_to_buffer(
                 &stage,
                 at,
@@ -2445,6 +2513,7 @@ impl Device {
                 start as u64,
                 (end - start) as u64,
             );
+            self.span_end(copy_span);
             return;
         }
         if in_batch {
@@ -2542,7 +2611,9 @@ impl Device {
         let present = self.presents + 1;
         let mut watch = std::mem::take(&mut self.hdr_watch);
         let key = kept.then_some((tex.id, s.id));
+        let span = self.span_begin(Kind::Hdr);
         watch.read(&device, self.encoder(), &view, target, present, what, key);
+        self.span_end(span);
         self.hdr_watch = watch;
     }
 
@@ -2920,9 +2991,41 @@ impl Device {
         }
     }
 
+    /// A pass of `kind` timed by its own timestamps (`NV_WGPU_GPU_TIMES`, [`crate::gpu_times`]):
+    /// the query set and the pair's first index; none when the times are off.
+    fn pass_span(&mut self, kind: Kind) -> Option<(wgpu::QuerySet, u32)> {
+        self.gpu_times.as_mut()?.span(kind)
+    }
+
+    /// The start of a stretch of `kind` recorded straight into the encoder (copies, the HDR watch,
+    /// the new lighting), timed by timestamps written between passes where the driver can; none
+    /// when the times are off, a pass is open, or the driver times passes only.
+    fn span_begin(&mut self, kind: Kind) -> Option<(wgpu::QuerySet, u32)> {
+        if self.pass.is_some() {
+            return None;
+        }
+        let t = self.gpu_times.as_mut().filter(|t| t.inside())?;
+        let span = t.span(kind)?;
+        self.encoder().write_timestamp(&span.0, span.1);
+        Some(span)
+    }
+
+    /// The end of [`Device::span_begin`]'s stretch (recorded without opening a pass).
+    fn span_end(&mut self, span: Option<(wgpu::QuerySet, u32)>) {
+        if let Some((q, i)) = span {
+            debug_assert!(self.pass.is_none(), "a timed stretch left a pass open");
+            self.encoder().write_timestamp(&q, i + 1);
+        }
+    }
+
     fn end_pass(&mut self) {
         self.pass = None;
         self.pass_targets = None;
+        if let (Some((i, true)), 0, Some(t)) =
+            (self.timed_pass.take(), self.pass_draws, &mut self.gpu_times)
+        {
+            t.set_kind(i, Kind::Clears);
+        }
         if let Some(c) = self.pass_count.take() {
             self.reduce_count(&c);
         }
@@ -2965,6 +3068,7 @@ impl Device {
                 height: (t.height >> level).max(1),
                 depth_or_array_layers: layers,
             };
+            let copy_span = self.span_begin(Kind::Copies);
             self.encoder().copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &t.texture,
@@ -2980,6 +3084,7 @@ impl Device {
                 },
                 size,
             );
+            self.span_end(copy_span);
         }
         for x in [t, &copy] {
             x.batch.store(self.batch, Ordering::Relaxed);
@@ -3233,11 +3338,18 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 },
             ],
         });
+        let span = self.pass_span(Kind::Count);
         let mut pass = self
             .encoder()
             .begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("occlusion count"),
-                timestamp_writes: None,
+                timestamp_writes: span
+                    .as_ref()
+                    .map(|(q, i)| wgpu::ComputePassTimestampWrites {
+                        query_set: q,
+                        beginning_of_pass_write_index: Some(*i),
+                        end_of_pass_write_index: Some(*i + 1),
+                    }),
             });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &group, &[]);
@@ -3406,13 +3518,16 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 }),
             }
         });
+        let span = self.pass_span(Kind::World);
+        self.timed_pass = span.as_ref().map(|s| (s.1, clear.is_some()));
+        self.pass_draws = 0;
         let pass = self
             .encoder()
             .begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
                 color_attachments: colours,
                 depth_stencil_attachment: depth_attachment,
-                timestamp_writes: None,
+                timestamp_writes: span.as_ref().map(|(q, i)| render_times(q, *i)),
                 occlusion_query_set: None,
                 multiview_mask: None,
             })
@@ -4781,6 +4896,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // encoders run side by side. The next draw opens a new pass (it loads what this one
         // stored) in a new encoder.
         self.encoder_draws += 1;
+        self.pass_draws += 1;
         if self.encoder_draws >= SPLIT_DRAWS && self.finisher.is_some() {
             self.send_encoder();
         }
@@ -6012,6 +6128,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 },
             ],
         });
+        let span = self.pass_span(Kind::Copies);
         let encoder = self.encoder();
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("blit"),
@@ -6025,7 +6142,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 },
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes: span.as_ref().map(|(q, i)| render_times(q, *i)),
             occlusion_query_set: None,
             multiview_mask: None,
         });
@@ -6071,6 +6188,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     src.tex.clone().expect("a texture"),
                     dst.tex.clone().expect("a texture"),
                 );
+                let copy_span = self.span_begin(Kind::Copies);
                 self.encoder().copy_texture_to_texture(
                     wgpu::TexelCopyTextureInfo {
                         texture: &st.texture,
@@ -6090,6 +6208,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                         depth_or_array_layers: 1,
                     },
                 );
+                self.span_end(copy_span);
             } else {
                 self.warn("StretchRect of depth surfaces of different sizes is not provided");
             }
@@ -6162,6 +6281,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             self.gamma_resolve(source, target, surface);
             return;
         }
+        let span = self.pass_span(Kind::Resolves);
         let encoder = self.encoder();
         let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("resolve"),
@@ -6175,7 +6295,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 },
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes: span.as_ref().map(|(q, i)| render_times(q, *i)),
             occlusion_query_set: None,
             multiview_mask: None,
         });
@@ -6256,6 +6376,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 resource: wgpu::BindingResource::TextureView(source),
             }],
         });
+        let span = self.pass_span(Kind::Resolves);
         let encoder = self.encoder();
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("gamma resolve"),
@@ -6269,7 +6390,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 },
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes: span.as_ref().map(|(q, i)| render_times(q, *i)),
             occlusion_query_set: None,
             multiview_mask: None,
         });
@@ -6387,7 +6508,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let (buffer, bytes) = gpu.uniforms(&params, &targets);
         self.on_queue(move |q| q.write_buffer(&buffer, 0, &bytes));
         let device = self.device.clone();
+        let span = self.span_begin(Kind::Other);
         gpu.encode(&device, self.encoder(), &targets);
+        self.span_end(span);
         self.scene_light = Some(gpu);
         for t in [&colour_tex, &depth_tex] {
             t.batch.store(self.batch, Ordering::Relaxed);
@@ -7399,7 +7522,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             samples: rt.samples,
         };
         let device = self.device.clone();
+        let span = self.span_begin(Kind::Other);
         sun.gpu.encode_step(&device, self.encoder(), &targets);
+        self.span_end(span);
         for t in [&colour_tex, &depth_tex] {
             t.batch.store(self.batch, Ordering::Relaxed);
         }
@@ -8232,6 +8357,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             } else {
                 (w, h)
             };
+            let copy_span = self.span_begin(Kind::Copies);
             self.encoder().copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &s.texture,
@@ -8251,6 +8377,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     depth_or_array_layers: layers,
                 },
             );
+            self.span_end(copy_span);
         }
     }
 
@@ -8472,6 +8599,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
+        let copy_span = self.span_begin(Kind::Copies);
         self.encoder().copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,
@@ -8497,6 +8625,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 depth_or_array_layers: 1,
             },
         );
+        self.span_end(copy_span);
         self.flush();
         self.sync();
         buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
@@ -8564,6 +8693,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     && (src.width, src.height, src.format.wgpu)
                         == (dst.width, dst.height, dst.format.wgpu)
                 {
+                    let copy_span = self.span_begin(Kind::Copies);
                     self.encoder().copy_texture_to_texture(
                         wgpu::TexelCopyTextureInfo {
                             texture: &st.texture,
@@ -8591,6 +8721,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                             depth_or_array_layers: 1,
                         },
                     );
+                    self.span_end(copy_span);
                     dt.batch.store(self.batch, Ordering::Relaxed);
                 }
             }
@@ -8793,6 +8924,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.collect_sun_variants();
         self.end_pass();
         self.presents += 1;
+        if let Some(line) = self.gpu_times.as_mut().and_then(GpuTimes::frame) {
+            eprintln!("{line}");
+        }
         // The sun shadows: a frame's light list waits for the next frame's scene clear (where the
         // maps are drawn); a frame without the sun keeps nothing and leaves no camera to place by.
         if let Some(s) = &mut self.sun {
@@ -8851,6 +8985,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                 mapped_at_creation: false,
             });
+            let copy_span = self.span_begin(Kind::Copies);
             self.encoder().copy_texture_to_buffer(
                 wgpu::TexelCopyTextureInfo {
                     texture: &tex.texture,
@@ -8872,6 +9007,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     depth_or_array_layers: 1,
                 },
             );
+            self.span_end(copy_span);
             readback = Some((buffer, row, b.width, b.height, b.format));
         }
         let mut frame_texture = None;
@@ -8931,6 +9067,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                     mapped_at_creation: false,
                 });
+                let copy_span = self.span_begin(Kind::Copies);
                 self.encoder().copy_texture_to_buffer(
                     t.texture.as_image_copy(),
                     wgpu::TexelCopyBufferInfo {
@@ -8947,6 +9084,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                         depth_or_array_layers: 1,
                     },
                 );
+                self.span_end(copy_span);
                 window_shot = Some((buffer, row, cw, ch));
             }
             // The frame-rate counter last, over the game's frame and the loading screen: after
@@ -9721,6 +9859,7 @@ fn open(
     } else {
         wanted
     };
+    let wanted = wanted | gpu_times::wanted_features();
     let features = adapter.features() & wanted;
     let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("d3d9-wgpu"),
@@ -11147,6 +11286,15 @@ impl Drop for Device {
         if let Some(l) = &mut self.list {
             l.save_if_due(self.presents, true);
         }
+    }
+}
+
+/// A render pass's timestamp writes: the pair from `index` of `query` ([`crate::gpu_times`]).
+fn render_times(query: &wgpu::QuerySet, index: u32) -> wgpu::RenderPassTimestampWrites<'_> {
+    wgpu::RenderPassTimestampWrites {
+        query_set: query,
+        beginning_of_pass_write_index: Some(index),
+        end_of_pass_write_index: Some(index + 1),
     }
 }
 
