@@ -103,12 +103,10 @@ fn install_jip(e: &mut Engine) {
     install_wraps(e);
 }
 
-/// The open recipe menu (`RecipeMenu::Get`, `*011D8E90`) and its words: the tile JIP's accept
-/// hook tests (`+0x44`), the category (`+0x64`), the recipe list box (`+0x6C`).
+/// The open recipe menu (`RecipeMenu::Get`, `*011D8E90`) and the tile JIP's accept hook tests
+/// (`+0x44`).
 const RECIPE_MENU: u32 = 0x011d_8e90;
 const ACCEPT_TILE: u32 = 0x44;
-const CATEGORY: u32 = 0x64;
-const LIST: u32 = 0x6c;
 /// `kTileValue_target`; `Tile::IsTrue` (`00A01230`, thiscall: the tile, the trait).
 const TRAIT_TARGET: u32 = 0xfaf;
 const TILE_IS_TRUE: u32 = 0x00a0_1230;
@@ -167,31 +165,6 @@ const UPDATE_PLAYER_3D: u32 = 0x0095_0030;
 /// two words JIP clears (`+0x58`, `+0x60`).
 const INTERFACE_MANAGER: u32 = 0x011d_8a80;
 const CURSOR: u32 = 0x28;
-/// The recipe list's fill (`00727680`, thiscall: the menu, 0, the category), `SaveListState`
-/// (`007312E0`), `Filter` (`00729FE0`) with the exe's filter (`00728D60`, the word DoClick
-/// pushes at `0x727637`), `RestoreListState` (`0072A660`).
-const FILL_LIST: u32 = 0x0072_7680;
-const SAVE_LIST_STATE: u32 = 0x0073_12e0;
-const FILTER: u32 = 0x0072_9fe0;
-const RECIPE_FILTER: u32 = 0x0072_8d60;
-const RESTORE_LIST_STATE: u32 = 0x0072_a660;
-
-// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h: RefreshRecipeMenu (asm).
-/// The open menu's recipe list refilled in place: cleared (slot `0x1C`), filled for the menu's
-/// category, its first item highlighted (slots `0x14` and `0`), refreshed (`0x10`), its state
-/// saved, filtered as the category buttons do, and its state restored with the focus.
-fn refresh_recipe_menu(e: &mut Engine, menu: u32) {
-    let list = menu.wrapping_add(LIST);
-    e.vcall(list, 0x1c, &[]);
-    let category = e.mem.u32(menu.wrapping_add(CATEGORY));
-    e.call(FILL_LIST, &[menu, 0, category]);
-    let first = e.vcall(list, 0x14, &[0, 0]).eax;
-    e.vcall(list, 0, &[first]);
-    e.vcall(list, 0x10, &[]);
-    e.call(SAVE_LIST_STATE, &[list]);
-    e.call(FILTER, &[list, RECIPE_FILTER]);
-    e.call(RESTORE_LIST_STATE, &[list, 1]);
-}
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h: RecipeMenuCloseHook
 // (asm).
@@ -226,7 +199,8 @@ fn close(e: &mut Engine, a: &[u32]) -> Option<u32> {
     if e.vcall(process, 0x474, &[1]).eax & 0xff != 0 {
         e.call(UPDATE_PLAYER_3D, &[player]);
     }
-    refresh_recipe_menu(e, menu);
+    // JIP's `RefreshRecipeMenu`, the one translation (it reads the filter at `0x727637`).
+    super::jip_fn_ui::refresh_recipe_menu(e, menu);
     let manager = e.mem.u32(INTERFACE_MANAGER);
     let cursor = e.mem.u32(manager.wrapping_add(CURSOR));
     if cursor != 0 {

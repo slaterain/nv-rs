@@ -851,24 +851,8 @@ pub enum PointerSpeed {
     Missing(u32),
 }
 
-/// `ERROR_DEVICE_NOT_CONNECTED`.
-const ERROR_DEVICE_NOT_CONNECTED: u32 = 0x48f;
-
-// Platform: replaces XINPUT1_3.DLL XInputGetState (import by ordinal 2; `Controls::Poll`
-// `00a23010` calls it through the thunk `009f996e`)
-/// No controller is connected (the platform offers no XInput pad): `ERROR_DEVICE_NOT_CONNECTED`
-/// for every user index, the state left as it is.
-fn xinput_get_state(_e: &mut Engine, _user: u32, _state: Ptr) -> u32 {
-    ERROR_DEVICE_NOT_CONNECTED
-}
-
-// Platform: replaces XINPUT1_3.DLL XInputSetState (import by ordinal 3, slot `00fdf398`; the
-// controller rumble `00a255b0` calls it through the thunk `00ee820a`, e.g. when the player fires)
-/// No controller is connected, as for [`xinput_get_state`]: `ERROR_DEVICE_NOT_CONNECTED` for every
-/// user index (documented for a controller that is not connected), the vibration not read.
-fn xinput_set_state(_e: &mut Engine, _user: u32, _vibration: Ptr) -> u32 {
-    ERROR_DEVICE_NOT_CONNECTED
-}
+// XINPUT1_3.DLL's XInputGetState and XInputSetState: the platform layer's (`engine-platform`'s
+// `xinput`, the system's own pads).
 
 // Platform: replaces USER32.DLL GetActiveWindow (import)
 /// The game's main window ([`create_window`]), 0 before there is one.
@@ -2655,16 +2639,6 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             entry!(0, co_free_unused_libraries()).1,
         ),
         (
-            "XINPUT1_3.dll",
-            "#2",
-            entry!(0, xinput_get_state(u32, Ptr) -> u32).1,
-        ),
-        (
-            "XINPUT1_3.dll",
-            "#3",
-            entry!(0, xinput_set_state(u32, Ptr) -> u32).1,
-        ),
-        (
             k,
             "RaiseException",
             entry!(0, raise_exception(u32, u32, u32, Ptr)).1,
@@ -2807,23 +2781,6 @@ mod tests {
         assert!(DeviceRef::default().get().is_none());
         // An owned one frees its state when dropped (Miri or a leak checker would see otherwise).
         drop(DeviceRef::new(Some(Box::new(String::from("freed")))));
-    }
-
-    /// No XInput controller: reading and rumbling (the shot's vibration, `00a255b0`) both answer
-    /// `ERROR_DEVICE_NOT_CONNECTED` for every user index, without touching the game's memory.
-    #[test]
-    fn xinput_answers_no_controller_for_reads_and_rumble() {
-        let mut e = Engine::new();
-        for user in 0..4 {
-            assert_eq!(
-                xinput_get_state(&mut e, user, Ptr::new(0)),
-                ERROR_DEVICE_NOT_CONNECTED
-            );
-            assert_eq!(
-                xinput_set_state(&mut e, user, Ptr::new(0)),
-                ERROR_DEVICE_NOT_CONNECTED
-            );
-        }
     }
 
     #[test]
