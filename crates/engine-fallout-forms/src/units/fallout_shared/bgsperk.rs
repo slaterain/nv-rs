@@ -1235,7 +1235,7 @@ pub fn bgs_perk_build_description_string(e: &mut Engine, this: Ptr, buffer: Ptr,
         // `snprintf(buffer, size, "%s%s", buffer, text)` in place of `strcat_s`, so a description too
         // long for the buffer is cut to fit instead of stopping the game.
         if e.stewie(engine_core::extend::stewie::PERK_DESCRIPTION_TOO_LONG) {
-            append_cut_to_fit(e, buffer, size, text);
+            append_cut_to_fit(e, buffer.addr(), size, text);
         } else {
             e.call(STRING_APPEND, &args![buffer, size, text]);
         }
