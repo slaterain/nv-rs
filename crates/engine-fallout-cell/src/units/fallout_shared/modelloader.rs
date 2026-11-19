@@ -11725,7 +11725,7 @@ mod tests {
         let names = e.mem.alloc(0x40);
         e.mem.set_cstr(names, b"Hat");
         e.mem.set_u32(0x0118_8b98 + 4 * 2, names);
-        let mut named = vec![];
+        // Each reference keeps its name's address at +0xFC, which `GetTheName` answers.
         for (who, name) in [
             (subject, &b"Doc Mitchell"[..]),
             (sunny, b"Sunny Smiles"),
@@ -11733,14 +11733,10 @@ mod tests {
         ] {
             let text = e.mem.alloc(0x20);
             e.mem.set_cstr(text, name);
-            named.push((who.addr(), text));
+            e.mem.set_u32(who.addr() + 0xfc, text);
         }
-        e.register(REFERENCE_GET_THE_NAME, move |_, a| {
-            let (_, text) = named
-                .iter()
-                .find(|(who, _)| *who == a[0])
-                .expect("a reference of the test");
-            (*text).into_ret()
+        e.register(REFERENCE_GET_THE_NAME, |e, a| {
+            e.mem.u32(a[0] + 0xfc).into_ret()
         });
         e.register(0x0071_b160, |_, _| 0x5000u32.into_ret());
         e.register(0x0071_d0a0, |e, a| {
