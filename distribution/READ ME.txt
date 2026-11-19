@@ -119,12 +119,15 @@ The whole game runs on its translated code: the opening, the open world, quests,
 the Pip-Boy, saves and the DLCs, with the original graphics (drawn on Vulkan) and sound (through your
 own DirectX).
 Regular .esp and .esm mods work.
+Game pads work: an Xbox-style pad, or a PlayStation pad (DualSense, DualSense Edge, DualShock 4)
+by cable or Bluetooth, with rumble. The game shows Xbox button pictures: A is Cross, B is Circle,
+X is Square, Y is Triangle. The game's own Controls settings turn the pad and its vibration off.
 
 
 What doesn't yet
 ----------------
 - Mods that need xNVSE, JIP or other plugins (.dll files) don't work yet.
-- Controllers don't work yet: keyboard and mouse only.
+- Other game pads (not Xbox-style or PlayStation) don't work yet.
 - It is slower than the original. On the maintainer's PC (a laptop with an RTX 5070 Ti, at 2560x1440
   with 8x anti-aliasing), with the bug fixes on, about 103 frames a second in Doc Mitchell's house and
   about 44 in Goodsprings. The original runs at about 120 in Doc's house. Your numbers will differ.
