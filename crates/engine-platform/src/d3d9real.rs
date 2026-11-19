@@ -575,6 +575,18 @@ pub struct Input {
     pub motion: [i32; 3],
     /// The buttons held, in DirectInput's order (left, right, middle, X1, X2).
     pub buttons: [bool; 8],
+    /// Where the cursor last was over the game's window while the game's mouse is not exclusive
+    /// ([`mouse_exclusive`]): its client area's fractions across and down (0 to 1), as the window
+    /// layer read them; `None` until the cursor first moves there.
+    pub pointer: Option<[f64; 2]>,
+    /// Whether the cursor moved over the window since the last frame (each move a `WM_MOUSEMOVE`
+    /// on Windows): the host then posts one to the game's window procedure
+    /// (`crate::window::post_mouse_move`).
+    pub pointer_moved: bool,
+    /// The window became active again after it was not since the last frame: the `WM_ACTIVATE`
+    /// word (`input::reactivated`), which the host hands to the game's window procedure
+    /// (`crate::window::post_activate`).
+    pub reactivated: Option<u32>,
 }
 
 impl Default for Input {
@@ -583,8 +595,71 @@ impl Default for Input {
             keys: [false; 256],
             motion: [0; 3],
             buttons: [false; 8],
+            pointer: None,
+            pointer_moved: false,
+            reactivated: None,
         }
     }
+}
+
+/// Whether the game's DirectInput mouse is exclusive (`SetCooperativeLevel` with `DISCL_EXCLUSIVE`:
+/// the game's own choice unless `Fallout.ini`'s `[Controls] bBackground Mouse=1`, which makes it
+/// non-exclusive at the input start `00a22660`, until an activation of the game's window makes it
+/// exclusive again, `00a23c00`). Exclusive, Windows hides the cursor and holds it in the game's
+/// window, and the window layers do the same; not exclusive, the cursor stays free (the game's
+/// window procedure hides it over the client area), and the game moves its menu cursor to where
+/// the system cursor is from each `WM_MOUSEMOVE` (`00871d10`: in menu mode, with that key) rather
+/// than from the mouse's motion (`007118d0` returns early then). Exclusive until the game says
+/// otherwise.
+static MOUSE_EXCLUSIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// The game made its mouse exclusive again after it was not ([`set_mouse_exclusive`]): Windows
+/// holds the cursor for it at once; the window layers hold it at the cursor's next move over the
+/// active window (`input::cursor_action`), then this is cleared ([`take_hold_wanted`]).
+static HOLD_WANTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The game's DirectInput mouse became exclusive or not ([`MOUSE_EXCLUSIVE`]; `dinput`'s
+/// `SetCooperativeLevel` of the system mouse). Each change is said in the log once.
+pub fn set_mouse_exclusive(exclusive: bool) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let was = MOUSE_EXCLUSIVE.swap(exclusive, Relaxed);
+    static FREED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    static HELD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if was && !exclusive {
+        HOLD_WANTED.store(false, Relaxed);
+        if !FREED.swap(true, Relaxed) {
+            eprintln!(
+                "input: the game made its mouse non-exclusive (Fallout.ini's [Controls] bBackground \
+                 Mouse=1 does this): the cursor stays free over the game's window and the menus \
+                 follow it"
+            );
+        }
+    }
+    if !was && exclusive {
+        HOLD_WANTED.store(true, Relaxed);
+        if !HELD.swap(true, Relaxed) {
+            eprintln!(
+                "input: the game made its mouse exclusive again (its window was activated): the \
+                 cursor is held in the window and the menus follow the mouse's motion, as in the \
+                 original game"
+            );
+        }
+    }
+}
+
+/// Whether the game's DirectInput mouse is exclusive ([`MOUSE_EXCLUSIVE`]).
+pub fn mouse_exclusive() -> bool {
+    MOUSE_EXCLUSIVE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Whether a hold is wanted for the mouse the game made exclusive again ([`HOLD_WANTED`]).
+pub(crate) fn hold_wanted() -> bool {
+    HOLD_WANTED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The wanted hold was made ([`HOLD_WANTED`] cleared).
+pub(crate) fn take_hold_wanted() {
+    HOLD_WANTED.store(false, std::sync::atomic::Ordering::Relaxed);
 }
 
 fn input() -> &'static std::sync::Mutex<Input> {
@@ -598,12 +673,15 @@ pub fn held_keys() -> [bool; 256] {
 }
 
 /// The real window's input for this frame: the keys and buttons held, the motion since the last
-/// call (taken: it starts again from 0).
+/// call (taken: it starts again from 0), the cursor's place with whether it moved since (the move
+/// taken too), and a reactivation of the window since (taken).
 pub fn take_input() -> Input {
     match input().lock() {
         Ok(mut i) => {
             let now = *i;
             i.motion = [0; 3];
+            i.pointer_moved = false;
+            i.reactivated = None;
             now
         }
         Err(_) => Input::default(),
