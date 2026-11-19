@@ -116,13 +116,17 @@ fn world_culling(e: &mut Engine) -> u32 {
     let block = e.call(NI_ALLOC, &args![0x348u32]).u32();
     let culling = e.call(CULLING_PROCESS_CTOR, &args![block, 0u32]).u32();
     let accumulator = e
-        .call(ACCUMULATOR_CTOR, &args![culling + 0xc8, 0x63u32, 1u32, 0x2f7u32])
+        .call(
+            ACCUMULATOR_CTOR,
+            &args![culling + 0xc8, 0x63u32, 1u32, 0x2f7u32],
+        )
         .u32();
     e.mem.set_u32(accumulator + 4, 2);
     let scene = e.mem.u32(SHADOW_SCENE_NODE);
     e.mem.set_u32(accumulator + ACCUMULATOR_SCENE, scene);
     e.mem.set_u32(culling + CULLING_ACCUMULATOR, accumulator);
-    e.mem.set_u32(culling + CULLING_MODE, CULL_IGNORE_MULTI_BOUNDS);
+    e.mem
+        .set_u32(culling + CULLING_MODE, CULL_IGNORE_MULTI_BOUNDS);
     e.ext::<WorldCulling>().0 = culling;
     culling
 }
@@ -201,7 +205,9 @@ pub fn generate_rendered_ui_texture(
             .u32();
         e.mem.set_u32(culling + CULLING_ACCUMULATOR, accumulator);
         e.mem.set_u32(culling + CULLING_MODE, CULL_ALL_PASS);
-        e.ext_free::<UiCulling>().0.store(culling, Ordering::Release);
+        e.ext_free::<UiCulling>()
+            .0
+            .store(culling, Ordering::Release);
     }
     let accumulator = e.mem.u32(culling + CULLING_ACCUMULATOR);
     let ui_scene = e.mem.u32(e.mem.u32(INTERFACE_MANAGER) + 4);
@@ -339,3 +345,7 @@ pub fn update_water(e: &mut Engine, camera: u32) {
     e.mem.set_u32(WATER_SETTINGS + 0x50, second);
     e.mem.set_u32(WATER_SETTINGS, first);
 }
+
+#[cfg(test)]
+#[path = "rendered_textures_tests.rs"]
+pub(crate) mod tests;

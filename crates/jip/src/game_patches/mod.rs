@@ -118,6 +118,7 @@ pub const AREAS: &[Area] = &[
     crate::commands::jip_fn_camera::AREA,
     crate::commands::jip_fn_rock_it::AREA,
     crate::commands::jip_fn_ui_code::AREA,
+    crate::commands::jip_fn_miscellaneous_depth::AREA,
 ];
 
 /// What the game patches keep on JIP's state.
