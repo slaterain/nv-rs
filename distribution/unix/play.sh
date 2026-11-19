@@ -263,11 +263,11 @@ printf '%s\n' "$found" | awk -F '\t' '$1 == "warning" { print $2 }' | while IFS=
 done
 remembered=$own/game-folder.txt
 # The profile: saves and settings made with mods stay apart (`mods`), as on Windows. The program
-# reads NV_PROFILE for the game's Documents and AppData folders (engine-platform machine_table).
+# reads NV_RS_PROFILE for the game's Documents and AppData folders (engine-platform machine_table).
 profile=game
 [ "$opt_mods" = 0 ] || profile=mods
-NV_PROFILE=$profile
-export NV_PROFILE
+NV_RS_PROFILE=$profile
+export NV_RS_PROFILE
 # The note that the saves were offered, one a profile: a first start with mods offers them into
 # the mods profile and leaves plain play's offer as it was.
 offered=$own/saves-offered.txt
