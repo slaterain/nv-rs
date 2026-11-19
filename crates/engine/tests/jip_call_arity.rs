@@ -1,22 +1,26 @@
-//! Every call the built-in JIP LN (`crates/jip`) makes to one of the game's functions by a constant
-//! address passes as many argument words as that function's translation takes: a call with too few
-//! stops the game ("call has N argument words, needs more"), one with too many hands a later
-//! argument to nobody. Here because this crate registers every translation.
+//! Every call a built-in extender (xNVSE `crates/nvse`, JIP LN `crates/jip`, UI Organizer
+//! `crates/uio`, MCM `crates/mcm`, lStewieAl's Tweaks `crates/stewie`) makes to one of the game's
+//! functions by a constant address passes as many argument words as that function's translation
+//! takes: a call with too few stops the game ("call has N argument words, needs more"), one with
+//! too many hands a later argument to nobody. Here because this crate registers every translation.
+//! (A player's modded game stopped that way in xNVSE's lambdas, whose two list copies passed two
+//! words of three, when this test read the jip crate only.)
 //!
-//! The test reads the jip crate's source (not its tests): each `.call(NAME, &args![..])` or
-//! `.call(NAME, &[..])` whose callee is a `const NAME: u32` of the crate, the words counted from the
-//! list (one per item; two for an item written as an `f64`, `u64` or `i64` literal). Each callee's
-//! word count is probed on a fresh engine: the translation is called with 0, 1, 2, ... zero words
-//! until its argument reads stop asking for more (`entry!` reads every argument before the body
-//! runs; a nested call stops the probe before it reads its own). A callee nobody has translated is
-//! listed, not failed (a call to it stops the game whatever it passes).
+//! The test reads each crate's source (not its tests): each `.call(NAME, &args![..])` or
+//! `.call(NAME, &[..])` whose callee is a `const NAME: u32` of the crate or an address written in
+//! place (`0x005a_b930`), the words counted from the list (one per item; two for an item written as
+//! an `f64`, `u64` or `i64` literal). Each callee's word count is probed on a fresh engine: the
+//! translation is called with 0, 1, 2, ... zero words until its argument reads stop asking for more
+//! (`entry!` reads every argument before the body runs; a nested call stops the probe before it
+//! reads its own). A callee nobody has translated is listed, not failed (a call to it stops the
+//! game whatever it passes).
 //!
-//! Not covered (the sweep of 2026-11-15 checked them by hand): calls through a vtable slot
+//! Not covered (the sweep of 2026-11-15 checked jip's by hand): calls through a vtable slot
 //! (`vcall`: the target depends on the object's class), calls to an address read at run time (a
 //! hook's original, a menu's handler, a callee passed as a parameter), and word lists built
 //! elsewhere (`w`, `&words`). For those, the ignored test below probes listed translations
-//! (`NV_PROBE`), and `NV_JIP_SRC` points the main test at another copy of the source (an open pull
-//! request's branch, exported).
+//! (`NV_PROBE`), and `NV_JIP_SRC` (`NV_NVSE_SRC`, `NV_UIO_SRC`, ...) points a crate's test at
+//! another copy of its source (an open pull request's branch, exported).
 
 use engine as _;
 use engine_core::prelude::*;
@@ -25,7 +29,7 @@ use std::collections::BTreeMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
-/// One direct call in the jip crate's source.
+/// One direct call in a crate's source.
 #[derive(Debug)]
 struct Site {
     at: String,
@@ -34,16 +38,22 @@ struct Site {
     words: usize,
 }
 
-/// The jip crate's source folder; `NV_JIP_SRC=FOLDER` reads another copy instead (a sweep of an
-/// open pull request's files, exported from its branch).
-fn jip_src() -> PathBuf {
-    std::env::var_os("NV_JIP_SRC")
+/// The source folder of extender crate `name` (`jip`, `nvse`, ...); `NV_<NAME>_SRC=FOLDER`
+/// (`NV_JIP_SRC`, `NV_NVSE_SRC`, ...) reads another copy instead (a sweep of an open pull
+/// request's files, exported from its branch).
+fn crate_src(name: &str) -> PathBuf {
+    std::env::var_os(format!("NV_{}_SRC", name.to_ascii_uppercase()))
         .map(PathBuf::from)
-        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../jip/src"))
+        .unwrap_or_else(|| {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join(name)
+                .join("src")
+        })
 }
 
-/// The jip crate's source files, without its test files.
-fn sources() -> Vec<PathBuf> {
+/// A crate's source files, without its test files.
+fn sources(root: &Path) -> Vec<PathBuf> {
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
         for entry in std::fs::read_dir(dir).expect("jip source folder") {
             let path = entry.expect("folder entry").path();
@@ -58,7 +68,7 @@ fn sources() -> Vec<PathBuf> {
         }
     }
     let mut out = Vec::new();
-    walk(&jip_src(), &mut out);
+    walk(root, &mut out);
     out.sort();
     out
 }
@@ -191,14 +201,21 @@ fn consts(files: &[(String, String)]) -> BTreeMap<String, Vec<(String, u32)>> {
     out
 }
 
-/// Every direct call by a constant address, and the calls the test could not read (where, why).
-fn sites() -> (Vec<Site>, Vec<String>) {
-    let root = jip_src();
-    let files: Vec<(String, String)> = sources()
+/// An address written in place (`0x005a_b930`), or none.
+fn literal_address(text: &str) -> Option<u32> {
+    let hex = text.strip_prefix("0x")?.replace('_', "");
+    let hex = hex.strip_suffix("u32").unwrap_or(&hex);
+    u32::from_str_radix(hex, 16).ok()
+}
+
+/// Every direct call by a constant address in the crate whose source is at `root`, and the calls
+/// the test could not read (where, why).
+fn sites(root: &Path) -> (Vec<Site>, Vec<String>) {
+    let files: Vec<(String, String)> = sources(root)
         .into_iter()
         .map(|p| {
             let name = p
-                .strip_prefix(&root)
+                .strip_prefix(root)
                 .unwrap()
                 .to_string_lossy()
                 .replace('\\', "/");
@@ -236,16 +253,19 @@ fn sites() -> (Vec<Site>, Vec<String>) {
                 continue;
             }
             let callee = parts[0].rsplit("::").next().unwrap().trim().to_string();
-            if callee.is_empty()
-                || !callee
-                    .chars()
-                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+            let written = literal_address(&callee);
+            if written.is_none()
+                && (callee.is_empty()
+                    || !callee
+                        .chars()
+                        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'))
             {
                 skipped.push(format!("{where_}: callee `{}` read at run time", parts[0]));
                 continue;
             }
-            let addr = match consts.get(&callee).map(Vec::as_slice) {
-                Some(values) => match values.iter().find(|(f, _)| f == name) {
+            let addr = match (written, consts.get(&callee).map(Vec::as_slice)) {
+                (Some(at), _) => at,
+                (None, Some(values)) => match values.iter().find(|(f, _)| f == name) {
                     Some(&(_, v)) => v,
                     None if values.iter().all(|(_, v)| *v == values[0].1) => values[0].1,
                     None => {
@@ -253,7 +273,7 @@ fn sites() -> (Vec<Site>, Vec<String>) {
                         continue;
                     }
                 },
-                None => {
+                (None, None) => {
                     skipped.push(format!("{where_}: `{callee}` not a constant of the crate"));
                     continue;
                 }
@@ -295,12 +315,16 @@ fn sites() -> (Vec<Site>, Vec<String>) {
 /// The callees with a variable argument list (`cdecl`, `...`), and the words they always take: a call
 /// passes at least those (the rest follow the format or the entry point's tables; the sweep checked
 /// them by hand).
-const VARIADIC: [(u32, usize); 2] = [
+const VARIADIC: [(u32, usize); 3] = [
     // `BGSEntryPoint::HandleEntryPoint`: the entry point and the actor, then the filters and the
     // function's arguments.
     (0x005e_58f0, 2),
     // The console's formatted print: the format, then its words.
     (0x0070_3c00, 1),
+    // `ShowMessageBox`: the text, callback and options (nine words, the first button among them),
+    // then the other buttons and the closing 0 (its entry asserts the nine: xNVSE's
+    // `DisplayMessage` passes ten, `MessageBoxEx` nineteen).
+    (0x0070_3e80, 9),
 ];
 
 thread_local! {
@@ -345,14 +369,20 @@ fn arity(make: fn() -> Engine, addr: u32) -> Option<usize> {
     None
 }
 
-#[test]
-fn jip_passes_each_game_function_the_words_it_takes() {
-    let (sites, skipped) = sites();
+/// One crate's check at a time: the probe silences the process's panic hook while it runs, and
+/// two crates' checks swapping it at once could leave it silent for a failing test's message.
+static PROBING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Extender crate `name`'s direct calls (at least `at_least` of them, so a source reader that
+/// stopped finding calls fails) each pass the words their callee's translation and typed form take.
+fn check(name: &str, at_least: usize) {
+    let (sites, skipped) = sites(&crate_src(name));
     assert!(
-        sites.len() > 50,
-        "the source reader found only {} calls",
+        sites.len() >= at_least,
+        "{name}: the source reader found only {} calls",
         sites.len()
     );
+    let _turn = PROBING.lock().unwrap_or_else(|e| e.into_inner());
     let registered = Engine::new_untyped_for_test();
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
@@ -395,12 +425,41 @@ fn jip_passes_each_game_function_the_words_it_takes() {
         }
     }
     println!(
-        "{} direct calls, {} callees probed; {} not translated: {open:#?}; not read: {skipped:#?}",
+        "{name}: {} direct calls, {} callees probed; {} not translated: {open:#?}; not read: {skipped:#?}",
         sites.len(),
         probed.len(),
         open.len()
     );
-    assert!(wrong.is_empty(), "wrong word counts: {wrong:#?}");
+    assert!(wrong.is_empty(), "{name}: wrong word counts: {wrong:#?}");
+}
+
+#[test]
+fn jip_passes_each_game_function_the_words_it_takes() {
+    check("jip", 50);
+}
+
+/// xNVSE's lambdas called the game's two list copies with two words of three: a player's modded
+/// game stopped at the first inline function a script gave `ar_ForEach`.
+#[test]
+fn nvse_passes_each_game_function_the_words_it_takes() {
+    check("nvse", 50);
+}
+
+#[test]
+fn uio_passes_each_game_function_the_words_it_takes() {
+    check("uio", 1);
+}
+
+#[test]
+fn mcm_passes_each_game_function_the_words_it_takes() {
+    check("mcm", 1);
+}
+
+/// lStewieAl's Tweaks calls no game function by address yet (its rows run inside the
+/// translations): the check runs, so a call added later is read.
+#[test]
+fn stewie_passes_each_game_function_the_words_it_takes() {
+    check("stewie", 0);
 }
 
 /// A sweep's tool, not a check: `NV_PROBE=addr:words,addr:words,...` (hex addresses, the words a
@@ -410,6 +469,7 @@ fn jip_passes_each_game_function_the_words_it_takes() {
 #[ignore = "a sweep's tool: needs NV_PROBE"]
 fn listed_translations_take_the_listed_words() {
     let list = std::env::var("NV_PROBE").expect("NV_PROBE=addr:words,...");
+    let _turn = PROBING.lock().unwrap_or_else(|e| e.into_inner());
     let registered = Engine::new_untyped_for_test();
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));

@@ -80,9 +80,13 @@ fn script_constructor(e: &mut Engine, a: &[u32]) -> Ret {
     }
 }
 
-/// `CopyVarList`/`CopyRefList` (source list, destination list): the head node copied.
+/// `CopyVarList`/`CopyRefList` (source list, destination list, the destination script unread:
+/// the three words their translations take, read as `entry!` reads them, so two stop the call):
+/// the head node copied.
 fn copy_list(e: &mut Engine, a: &[u32]) -> Ret {
-    let (from, to) = (a[0], a[1]);
+    let mut i = 0;
+    let [from, to, _script]: [u32; 3] =
+        std::array::from_fn(|_| <u32 as engine_core::abi::Arg>::take(a, &mut i));
     e.mem.set_u32(to, e.mem.u32(from));
     e.mem.set_u32(to + 4, e.mem.u32(from + 4));
     Ret::default()
