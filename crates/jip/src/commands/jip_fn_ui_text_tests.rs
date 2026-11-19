@@ -665,6 +665,11 @@ fn the_numbers_flag_takes_numbers_only() {
     key(&mut e, HOME);
     type_text(&mut e, b"-");
     assert_eq!(current(&e), b"-5", "the first byte is a - already");
+    // A `-` past the first place: refused even when the text has none.
+    let (mut e, _) = shown_menu();
+    e.mem.set_u8(MENU + 0x57, 1);
+    type_text(&mut e, b"5-");
+    assert_eq!(current(&e), b"5", "a - only first");
 }
 
 /// Enter with JIP's Enter flag (2): when the OK button's `target` is true, the menu's click slot
