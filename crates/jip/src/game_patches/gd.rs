@@ -718,9 +718,12 @@ pub fn weapon_ammo(e: &Engine, weapon: u32) -> u32 {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameForms.cpp: TESObjectWEAP::GetEquippedAmmo.
 /// The ammo `actor` has loaded in `weapon` (its middle or high process's ammo entry, when its
 /// weapon entry is this weapon and the entry's form is a `TESAmmo`), else [`weapon_ammo`]. JIP
-/// first answers 0 for its Rock-It Launcher (`g_rockItLauncher`, set only by
-/// `InitRockItLauncher`, not built: null in the port, so never this weapon).
-pub fn equipped_ammo(e: &Engine, weapon: u32, actor: u32) -> u32 {
+/// first answers 0 for its Rock-It Launcher (`g_rockItLauncher`, set by `InitRockItLauncher`:
+/// [`crate::commands::jip_fn_rock_it::launcher`]).
+pub fn equipped_ammo(e: &mut Engine, weapon: u32, actor: u32) -> u32 {
+    if weapon == crate::commands::jip_fn_rock_it::launcher(e) {
+        return 0;
+    }
     if actor != 0 {
         let process = e.mem.u32(actor.wrapping_add(BASE_PROCESS));
         if process != 0 && e.mem.u8(process.wrapping_add(PROCESS_LEVEL)) <= 1 {
