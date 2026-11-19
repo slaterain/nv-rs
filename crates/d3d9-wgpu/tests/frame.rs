@@ -98,10 +98,11 @@ impl Gpu {
         Gpu::make(size, samples, None, env)
     }
 
-    /// As [`Gpu::new`], the device with its finishing and queue threads or (`false`) without, as
-    /// on a machine with fewer than four logical processors.
+    /// As [`Gpu::new`], the device with its finishing and queue threads (one finishing thread at
+    /// least, even on a machine with fewer than four logical processors: CI's macOS runner has
+    /// three) or (`false`) without, as on such a machine.
     fn with_threads(size: u32, samples: u32, threads: bool) -> Option<Gpu> {
-        Gpu::make_with(size, samples, None, &[], threads)
+        Gpu::make_with(size, samples, None, &[], threads, threads)
     }
 
     fn make(
@@ -110,7 +111,7 @@ impl Gpu {
         cache: Option<std::path::PathBuf>,
         env: &[(&str, &str)],
     ) -> Option<Gpu> {
-        Gpu::make_with(size, samples, cache, env, true)
+        Gpu::make_with(size, samples, cache, env, true, false)
     }
 
     fn make_with(
@@ -119,9 +120,11 @@ impl Gpu {
         cache: Option<std::path::PathBuf>,
         env: &[(&str, &str)],
         threads: bool,
+        force: bool,
     ) -> Option<Gpu> {
         // A failed test leaves the lock poisoned; the next one still takes its turn.
         let turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+        d3d9_wgpu::device::force_queue_threads_for_tests(force);
         for (name, value) in env {
             std::env::set_var(name, value);
         }
@@ -145,6 +148,7 @@ impl Gpu {
             std::env::remove_var(name);
         }
         d3d9_wgpu::device::queue_threads_for_tests(true);
+        d3d9_wgpu::device::force_queue_threads_for_tests(false);
         if b.device().is_none() {
             eprintln!("no GPU adapter: the frame tests are skipped");
             return None;
@@ -3703,6 +3707,24 @@ fn a_batch_of_more_passes_than_a_submit_takes_goes_in_several() {
         let Some(mut g) = Gpu::with_threads(4, 1, threads) else {
             return;
         };
+        if threads {
+            assert!(
+                g.b.device().is_some_and(|d| d.has_queue_thread()),
+                "the queue thread on, whatever the machine"
+            );
+        }
+        // Threaded, the queue thread held 20 ms a batch, so batches pile up unless each early send
+        // waits for the ones before it.
+        struct Delay;
+        impl Drop for Delay {
+            fn drop(&mut self) {
+                d3d9_wgpu::device::submit_delay_for_tests(0);
+            }
+        }
+        let _delay = threads.then(|| {
+            d3d9_wgpu::device::submit_delay_for_tests(20);
+            Delay
+        });
         for q in 0..QUERIES {
             g.run(Cmd::CreateQuery {
                 device: DEVICE,
@@ -3773,6 +3795,13 @@ fn a_batch_of_more_passes_than_a_submit_takes_goes_in_several() {
         assert!(
             s.bound_sends >= u64::from(3 * 900 / limit),
             "threads {threads}: the batch sent early as it reached the limit: {s:?}"
+        );
+        // At most about two batches' uses handed over and not yet submitted (Metal loses the
+        // device past 4,096 command buffers made and not submitted).
+        assert!(
+            s.most_pending <= 2 * u64::from(limit + 8),
+            "threads {threads}: {} uses were waiting to be submitted at once",
+            s.most_pending
         );
     }
 }
@@ -3898,6 +3927,55 @@ fn a_crowded_batch_s_encoders_go_in_one_submit_in_order() {
     check_submits(&after, "the crowded batch");
     for p in g.pixels() {
         assert_eq!(p, [0, 255, 0, 255], "the last draw's green");
+    }
+    assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
+}
+
+/// The early send comes exactly at the limit: a batch of draws that each upload their vertices (a
+/// copy and a pass each, two uses) just under [`d3d9_wgpu::device::SUBMIT_USES`] goes in one
+/// submit with no early send; one just over it makes exactly one early send.
+#[test]
+fn a_batch_just_under_the_limit_is_sent_whole_and_one_just_over_once_early() {
+    let Some(mut g) = Gpu::new(4, 1) else {
+        return;
+    };
+    let limit = d3d9_wgpu::device::SUBMIT_USES;
+    for (draws, early) in [(limit / 2 - 16, 0), (limit / 2 + 4, 1)] {
+        // What was recorded before sent first, so the batch below is the draws' alone.
+        let _ = g.pixels();
+        let before = g.b.device().expect("the device").submits();
+        g.clear(3, 0, 1.0);
+        for _ in 0..draws {
+            g.cover(0.5);
+        }
+        let _ = g.pixels();
+        let after = g.b.device().expect("the device").submits();
+        let uses = after.batch_uses - before.batch_uses;
+        assert!(
+            if early == 0 {
+                uses < u64::from(limit)
+            } else {
+                uses > u64::from(limit)
+            },
+            "{draws} draws: {uses} uses"
+        );
+        assert_eq!(
+            after.bound_sends - before.bound_sends,
+            early,
+            "{draws} draws ({uses} uses): early sends"
+        );
+        // Under: one submit. Over: the early batch's (one, or two when its last command's pass went
+        // in an encoder of its own past the limit) and the rest's.
+        let submits = after.submits - before.submits;
+        assert!(
+            if early == 0 {
+                submits == 1
+            } else {
+                (2..=3).contains(&submits)
+            },
+            "{draws} draws ({uses} uses): {submits} submits"
+        );
+        check_submits(&after, &format!("{draws} draws"));
     }
     assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
 }

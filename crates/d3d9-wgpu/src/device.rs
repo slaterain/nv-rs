@@ -1480,7 +1480,11 @@ impl Device {
         let finisher = if NO_QUEUE_THREADS_FOR_TESTS.load(Ordering::Relaxed) {
             None
         } else {
-            Finisher::for_this_machine()
+            Finisher::for_this_machine().or_else(|| {
+                FORCE_QUEUE_THREADS_FOR_TESTS
+                    .load(Ordering::Relaxed)
+                    .then(|| Finisher::new(1))
+            })
         };
         let submitter = finisher.as_ref().map(|_| Submitter::new(queue.clone()));
         let mut d = Device {
@@ -2231,9 +2235,15 @@ impl Device {
         self.submits
             .most_batch
             .fetch_max(self.batch_uses, Ordering::Relaxed);
-        self.submits
+        let handed = self
+            .submits
             .batch_uses
-            .fetch_add(u64::from(self.batch_uses), Ordering::Relaxed);
+            .fetch_add(u64::from(self.batch_uses), Ordering::Relaxed)
+            + u64::from(self.batch_uses);
+        let pending = handed.saturating_sub(self.submits.uses.load(Ordering::Relaxed));
+        self.submits
+            .most_pending
+            .fetch_max(pending, Ordering::Relaxed);
         self.encoder_draws = 0;
         self.encoder_uses = 0;
         self.batch_uses = 0;
@@ -2905,6 +2915,7 @@ impl Device {
             most_batch: load32(&s.most_batch),
             uses: load64(&s.uses),
             batch_uses: load64(&s.batch_uses),
+            most_pending: load64(&s.most_pending),
             bound_sends: load64(&s.bound_sends),
         }
     }
@@ -10697,6 +10708,19 @@ pub fn queue_threads_for_tests(on: bool) {
     NO_QUEUE_THREADS_FOR_TESTS.store(!on, Ordering::Relaxed);
 }
 
+/// Tests only: devices made while this is set have one finishing thread and the queue thread even
+/// on a machine with fewer than four logical processors (CI's runners: three on macOS), so the
+/// threaded path is tested there too.
+static FORCE_QUEUE_THREADS_FOR_TESTS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Tests only: whether devices made from now on have their finishing and queue threads whatever
+/// the machine ([`FORCE_QUEUE_THREADS_FOR_TESTS`]).
+#[doc(hidden)]
+pub fn force_queue_threads_for_tests(on: bool) {
+    FORCE_QUEUE_THREADS_FOR_TESTS.store(on, Ordering::Relaxed);
+}
+
 /// Tests only: a failure planted for once ([`plant_queue_failure_for_tests`]): the next batch job
 /// panics on the queue thread; the next encoder a finishing thread takes fails; the queue thread
 /// ends after its next job.
@@ -10788,6 +10812,9 @@ struct Submits {
     /// counted into a part).
     uses: AtomicU64,
     batch_uses: AtomicU64,
+    /// The most uses handed over and not yet submitted at a hand-over: about two batches' at most
+    /// ([`Device::bound_batch`] waits for the queue thread before an early send).
+    most_pending: AtomicU64,
     /// Batches sent early because they reached the limit ([`Device::bound_batch`]).
     bound_sends: AtomicU64,
 }
@@ -10812,6 +10839,8 @@ pub struct SubmitStats {
     /// counted into a part).
     pub uses: u64,
     pub batch_uses: u64,
+    /// The most uses handed over and not yet submitted at a hand-over.
+    pub most_pending: u64,
     /// Batches sent early because they reached the limit (none in an ordinary frame).
     pub bound_sends: u64,
 }
