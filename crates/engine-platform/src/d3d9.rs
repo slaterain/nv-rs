@@ -666,8 +666,8 @@ fn get_adapter_count(_e: &mut Engine, _this: Ptr) -> u32 {
 }
 
 /// `GetAdapterIdentifier(adapter, flags, out)`: the captured `D3DADAPTER_IDENTIFIER9` for
-/// these flags (0, or `D3DENUM_WHQL_LEVEL` 2); `D3DERR_INVALIDCALL` for another adapter or a
-/// null `out`.
+/// these flags (0, or `D3DENUM_WHQL_LEVEL` 2) as the game is given it ([`identifier_for_game`]);
+/// `D3DERR_INVALIDCALL` for another adapter or a null `out`.
 fn get_adapter_identifier(e: &mut Engine, _this: Ptr, index: u32, flags: u32, out: Ptr) -> u32 {
     if index != 0 || out.is_null() {
         return D3DERR_INVALIDCALL;
@@ -676,8 +676,69 @@ fn get_adapter_identifier(e: &mut Engine, _this: Ptr, index: u32, flags: u32, ou
         not_captured("GetAdapterIdentifier", &[index, flags]);
     };
     debug_assert_eq!(data.len(), IDENTIFIER_SIZE);
-    e.mem.write(out.addr(), &data);
+    let wgpu = super::d3d9real::wgpu_draws();
+    let given = identifier_for_game(&data, wgpu);
+    if wgpu && given != data {
+        static SAID: std::sync::Once = std::sync::Once::new();
+        SAID.call_once(|| {
+            eprintln!(
+                "NV_D3D9=wgpu: the game is told its graphics driver is {} (NVIDIA's), not {:?}: \
+                 the shader level, shader package and alpha to coverage switch every wgpu run draws \
+                 with",
+                crate::machine_table::display::DRIVER_NAME_FOR_GAME,
+                crate::machine_table::display::driver_name(&data)
+            )
+        });
+    }
+    e.mem.write(out.addr(), &given);
     hr
+}
+
+/// The identifier the game is given for the captured one (`captured`): while wgpu draws (`wgpu`),
+/// on every system and card, with NVIDIA's driver name
+/// (`machine_table::display::DRIVER_NAME_FOR_GAME`), every other byte as captured; with the real
+/// Direct3D 9 as captured (its own driver answers the switches the name picks).
+///
+/// The game reads only this name to choose its path (`00b4f710`: "ati", "nv" or "ig" first; no exe
+/// code compares the vendor or device number): the shader level and package, and its vendor word,
+/// from which `Renderer::Init` picks the multi-GPU probe and asks for NVIDIA's alpha to coverage
+/// ([`wgpu_format_answer`]) and `00b98540` picks the alpha to coverage switch it sends (NVIDIA's
+/// `D3DRS_ADAPTIVETESS_Y` 'ATOC', ATI's `D3DRS_POINTSIZE` 'A2M1'/'A2M0'). Off Windows the table is
+/// already made so (`machine_table::display::identifier`); on Windows it is Windows' own capture,
+/// whose AMD name ("aticfx32.dll") gave the ATI path, never drawn on wgpu before (player report
+/// 005: grass as solid tufts under multisampling).
+pub(crate) fn identifier_for_game(captured: &[u8], wgpu: bool) -> Vec<u8> {
+    if wgpu {
+        crate::machine_table::display::with_game_driver(captured)
+    } else {
+        captured.to_vec()
+    }
+}
+
+/// `MAKEFOURCC('A','T','O','C')`: the format `Renderer::Init` asks `CheckDeviceFormat` about
+/// (adapter 0, HAL, X8R8G8B8, no usage, a surface) on the NVIDIA path, to learn whether the driver
+/// has NVIDIA's alpha to coverage switch.
+const ATOC: u32 = u32::from_le_bytes(*b"ATOC");
+
+/// The captured NVIDIA card's answers (`machine_table::display::CARD`), read once.
+fn nvidia_card() -> &'static Adapter {
+    static CARD: std::sync::OnceLock<Adapter> = std::sync::OnceLock::new();
+    CARD.get_or_init(|| Adapter::parse(crate::machine_table::display::CARD))
+}
+
+/// What `CheckDeviceFormat` answers the game for `words` while wgpu draws, where that is not the
+/// player's own driver's answer: NVIDIA's alpha to coverage query ([`ATOC`]) as the captured
+/// NVIDIA card answers it, on every card. The game is told it runs on NVIDIA's driver
+/// ([`identifier_for_game`]) and `d3d9_wgpu` honours that switch on every card, so the query is
+/// about the device that draws, not the player's Direct3D 9 driver (an AMD or Intel one may say
+/// no, and the game would then draw its foliage without the coverage the NVIDIA path has). `None`:
+/// the table's answer.
+pub(crate) fn wgpu_format_answer(words: &[u32; 6]) -> Option<u32> {
+    if words[0] != 0 || words[5] != ATOC {
+        return None;
+    }
+    let answer = nvidia_card().check("CheckDeviceFormat", words)?;
+    Some(u32::from_str_radix(answer, 16).expect("a hex result"))
 }
 
 /// `GetAdapterModeCount(adapter, format)`: the captured count (0 for another adapter).
@@ -756,7 +817,9 @@ fn check_device_type(
     )
 }
 
-/// `CheckDeviceFormat(adapter, device type, adapter format, usage, resource type, format)`.
+/// `CheckDeviceFormat(adapter, device type, adapter format, usage, resource type, format)`: the
+/// captured answer, but NVIDIA's alpha to coverage query while wgpu draws
+/// ([`wgpu_format_answer`]).
 #[allow(clippy::too_many_arguments)]
 fn check_device_format(
     e: &mut Engine,
@@ -768,11 +831,13 @@ fn check_device_format(
     resource: u32,
     format: u32,
 ) -> u32 {
-    checked(
-        e,
-        "CheckDeviceFormat",
-        &[index, device, display, usage, resource, format],
-    )
+    let words = [index, device, display, usage, resource, format];
+    if super::d3d9real::wgpu_draws() {
+        if let Some(answer) = wgpu_format_answer(&words) {
+            return answer;
+        }
+    }
+    checked(e, "CheckDeviceFormat", &words)
 }
 
 /// `CheckDeviceMultiSampleType(adapter, device type, format, windowed, type, quality out)`:
