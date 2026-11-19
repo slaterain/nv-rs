@@ -91,10 +91,11 @@ fn setup() -> Engine {
             ..Ret::default()
         }
     });
-    // `FontInfo::Init`: the data loaded (+0x38 set) unless the path names "bad".
+    // `FontInfo::Init`: the data loaded (+0x38 set) when the bool asks for the load (`Font::Font`
+    // calls `Font::Load` only then) and the path does not name "bad".
     e.register(0x00a1_2020, |e, w| {
         let path = nvse::table::guest_text(e, w[2]);
-        let loaded = !path.windows(3).any(|p| p == b"bad");
+        let loaded = w[3] != 0 && !path.windows(3).any(|p| p == b"bad");
         e.mem
             .set_u32(w[0] + 0x38, if loaded { 0x0b0b_0000 } else { 0 });
         INITS.with(|s| s.borrow_mut().push((w[0], w[1], path, w[3])));
@@ -401,30 +402,28 @@ fn g129_makes_jips_font_manager_and_set_font_file_uses_its_map() {
     let manager = e.mem.u32(0x011f_33f8);
     assert_ne!(manager, 0);
     let made = inits();
-    let game: Vec<(u32, Vec<u8>)> = made[..8].iter().map(|i| (i.1, i.2.clone())).collect();
-    assert_eq!(
-        game,
-        (1..=8u32)
-            .map(|n| (n, format!("Fonts\\F{n}.fnt").into_bytes()))
-            .collect::<Vec<_>>()
-    );
-    for (n, init) in made[..8].iter().enumerate() {
-        assert_eq!(e.mem.u32(manager + 4 * n as u32), init.0, "font {}", n + 1);
-    }
-    assert_eq!(e.mem.u32(manager + 0x20), 0, "font 9: none");
     let font = |e: &Engine, n: u32| e.mem.u32(manager + 4 * (n - 1));
+    // Whole calls: the block (the font's slot), the number, the path, 1 (load the file: JIP's
+    // `push 1` at both calls).
+    let game: Vec<Init> = (1..=8u32)
+        .map(|n| (font(&e, n), n, format!("Fonts\\F{n}.fnt").into_bytes(), 1))
+        .collect();
+    assert_eq!(made[..8], game[..]);
+    assert_eq!(e.mem.u32(manager + 0x20), 0, "font 9: none");
     let font3 = font(&e, 3);
+    let given_back = freed();
+    assert_eq!(given_back.len(), 1, "not loaded: given back");
     assert_eq!(
-        made[8..]
-            .iter()
-            .map(|i| (i.1, i.2.clone()))
-            .collect::<Vec<_>>(),
-        vec![(10, b(b"Fonts\\X.fnt")), (12, b(b"Fonts\\bad.fnt"))],
+        made[8..],
+        [
+            (font(&e, 10), 10, b(b"Fonts\\X.fnt"), 1),
+            (given_back[0], 12, b(b"Fonts\\bad.fnt"), 1)
+        ],
         "only new paths load; the second 10, the missing file and the game font's do not"
     );
-    assert_eq!(font(&e, 10), made[8].0);
+    // JIP's sizes (`push 0x164`, `push 0x54`): the manager of 89 slots, then each `FontInfo`.
+    assert_eq!(allocations(), [vec![0x164], vec![0x54; 10]].concat());
     assert_eq!(font(&e, 11), font3, "missing: font 3");
-    assert_eq!(freed(), vec![made[9].0], "not loaded: given back");
     assert_eq!(font(&e, 12), font3);
     assert_eq!(
         font(&e, 13),
@@ -433,7 +432,7 @@ fn g129_makes_jips_font_manager_and_set_font_file_uses_its_map() {
     );
     assert_eq!(font(&e, 14), font3, "a list not .txt is not read");
     assert_eq!(font(&e, 89), font3);
-    assert_eq!(e.site(LAST_FONT.addr(), &[]), Some(89));
+    assert_eq!(e.site(LAST_FONT.addr(), &[89, manager]), Some(89));
     // `SetFontFile 1` with font 5's path: no such loose file, the kept `FontInfo` taken.
     assert_eq!(
         call_on(&mut e, 0x274c, 0, &[n(1), s(b"fonts\\f5.FNT")]),
@@ -450,4 +449,57 @@ fn g129_makes_jips_font_manager_and_set_font_file_uses_its_map() {
     assert_eq!(e.site(FONT_MANAGER_START.addr(), &[]), Some(1));
     assert_eq!(e.mem.u32(0x011f_33f8), manager);
     assert!(inits().is_empty());
+}
+
+/// G129's list edges and shared paths: list numbers below 10 (5, 9) and past 89 (90) are passed
+/// over and 89, the last, is taken (its file loaded into slot 89, `+0x160`); two game fonts whose
+/// settings name one file each load and keep their own `FontInfo`, the map keeps the first, and a
+/// list line with that path takes the map's.
+#[test]
+fn g129_list_edges_and_game_fonts_sharing_a_path() {
+    use crate::game_patches::ga::FONT_MANAGER_START;
+    let mut e = setup();
+    game_font_settings(&mut e);
+    // Font 5's setting names font 4's file.
+    let four = e.mem.u32(0x011f_3418 + 0xc * 3);
+    e.mem.set_u32(0x011f_3418 + 0xc * 4, four);
+    files::put(
+        "data\\nvse\\plugins\\xfonts\\edges.txt",
+        b"5=Fonts\\A.fnt\n9=Fonts\\A.fnt\n89=Fonts\\A.fnt\n90=Fonts\\A.fnt\n10=Fonts\\F4.fnt\n",
+    );
+    for f in ["a", "f4"] {
+        files::put(&format!("data\\fonts\\{f}.fnt"), b"x");
+    }
+    assert_eq!(e.site(FONT_MANAGER_START.addr(), &[]), Some(1));
+    let manager = e.mem.u32(0x011f_33f8);
+    let font = |e: &Engine, n: u32| e.mem.u32(manager + 4 * (n - 1));
+    let made = inits();
+    let path = b(b"Fonts\\F4.fnt");
+    assert_eq!(made.len(), 9, "the eight game fonts, then A once");
+    assert_eq!(made[3], (font(&e, 4), 4, path.clone(), 1));
+    assert_eq!(made[4], (font(&e, 5), 5, path, 1), "font 5: its own");
+    assert_ne!(font(&e, 4), font(&e, 5));
+    assert_eq!(
+        font_info(&mut e, b"fonts\\f4.fnt"),
+        font(&e, 4),
+        "the map: the first"
+    );
+    assert_eq!(
+        font(&e, 10),
+        font(&e, 4),
+        "a list line with that path: the map's"
+    );
+    assert_eq!(
+        made[8],
+        (font(&e, 89), 89, b(b"Fonts\\A.fnt"), 1),
+        "89 taken"
+    );
+    assert_eq!(e.mem.u32(manager + 0x160), made[8].0);
+    assert_eq!(e.mem.u32(manager + 0x20), 0, "9= not taken: slot 9 none");
+    let font3 = font(&e, 3);
+    for n in 11..=88 {
+        assert_eq!(font(&e, n), font3, "font {n}");
+    }
+    assert_eq!(allocations(), [vec![0x164], vec![0x54; 9]].concat());
+    assert!(freed().is_empty());
 }

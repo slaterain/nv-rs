@@ -2822,11 +2822,13 @@ pub fn set_font_manager_extended(e: &mut Engine) {
     font_infos(e).extended = true;
 }
 
-/// `FontInfo::Init` (`00A12020`, `thiscall`: the block, the font's number, its path, a bool) and
-/// a `FontInfo`'s size and its loaded data (+0x38, null when the file did not load).
-const FONT_INFO_INIT: u32 = 0x00a1_2020;
-const FONT_INFO_SIZE: u32 = 0x54;
-const FONT_INFO_BUFFER_DATA: u32 = 0x38;
+/// `FontInfo::Init` (`00A12020`, `thiscall`: the block, the font's number, its path, a bool: 1
+/// loads the file) and a `FontInfo`'s size (JIP's `static_assert(sizeof(FontInfo) == 0x54)`, the
+/// `push 0x54` of G129's start) and its loaded data (+0x38, null when the file did not load). One
+/// set for `SetFontFile` and G129 (`game_patches::ga`).
+pub(crate) const FONT_INFO_INIT: u32 = 0x00a1_2020;
+pub(crate) const FONT_INFO_SIZE: u32 = 0x54;
+pub(crate) const FONT_INFO_BUFFER_DATA: u32 = 0x38;
 /// JIP's `dataPathFull[0x100]` with `data\` in its first five bytes: the path's own room.
 const FONT_PATH_BUFFER: usize = 0x100 - 5;
 /// The game's own font manager has the fonts 1 to 8; JIP's (G129) 1 to 89.

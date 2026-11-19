@@ -60,6 +60,9 @@ pub(in super::super) const SITES: &[Entry] = &[
     // G121 (fix row): VATSMenu::DoIdle 007ec810, the target's damage threshold 0x7ECE32: JIP's
     // GetVATSTargetDTHook answers the threshold its hit damage last used.
     row(0x007e_ce32),
+    // G129's guard (nv-rs's own, a fix seam: in with the row): Font::Load 00a15320, its read of
+    // the font file 0xA154DD: at most the font data block (0x3928 bytes).
+    row(0x00a1_54dd),
     // G129: FontManager::CalculateStringDimensions 00a1b020, its last font 0xA1B032 (8 -> 89).
     row(0x00a1_b032),
     // G17 (fix row): the TileMenu destructor 00a1eff0: JIP's jump over the menu's open byte clear.

@@ -64,7 +64,10 @@
 //!   the files `Data\NVSE\plugins\xfonts\*.txt` (the first line for a number wins; a path whose
 //!   file is not under `data\` is passed over), each font not given (or not loaded) being font 3;
 //!   a font file loads once, whatever number uses it (`s_fontInfosMap`). Text is measured in any
-//!   font from 1 to 89. With JIP installed, the row on or off.
+//!   font from 1 to 89. With JIP installed, the row on or off. Two guards of nv-rs's own, in with the
+//!   row (each where the game with JIP crashes or writes past a block): a font whose slot is empty
+//!   (font 9) is measured as a font out of range, and `Font::Load` reads no more of a font file
+//!   than its 0x3928-byte data block (`0xA154DD`).
 //! - **G80** (no comment; `WriteRelJump(0x777123, RolloverWeaponHook)`): the HUD's crosshair
 //!   name of a weapon lying in the world (`HUDMainMenu::SetInfoForRef`, `00775a00`) gets a "+" at
 //!   its end when the weapon has a weapon mod on it (the reference's `ExtraWeaponModFlags`, kind
@@ -122,8 +125,12 @@ pub const MAX_MESSAGE_WIDTH: [SiteSlot; 2] = [
 /// G129's seam: the font manager's start (no words; answered: JIP's start ran in place of the
 /// game's).
 pub const FONT_MANAGER_START: SiteSlot = SiteSlot::new(Owner::Jip, 0x0070_b285);
-/// G129's seam: `CalculateStringDimensions`' last font (no words; the answer is the last font).
+/// G129's seam: `CalculateStringDimensions`' last font (words: the font asked for, the font
+/// manager; the answer is the last font, 0 refusing every font).
 pub const LAST_FONT: SiteSlot = SiteSlot::new(Owner::Jip, 0x00a1_b032);
+/// G129's guard (nv-rs's own, a fix seam: in with the row): `Font::Load`'s read of the font file
+/// (words: the file's size; the answer is the size read).
+pub const FONT_FILE_READ: SiteSlot = SiteSlot::new(Owner::Jip, 0x00a1_54dd);
 /// G21's seam: the head of the activation choice walk (words: the list node; an answer of 1
 /// passes the node over).
 pub const ACTIVATION_TEXT: SiteSlot = SiteSlot::new(Owner::Jip, 0x007a_a80f);
@@ -223,6 +230,7 @@ pub const AREA: Area = Area {
         VATS_TARGET_DT.addr(),
         MESSAGE_TIME.addr(),
         PICK_LOAD_SCREEN.addr(),
+        FONT_FILE_READ.addr(),
     ],
     fix_wraps: &[LOAD_SCREEN_CANDIDATES.addr()],
     install_fixes,
@@ -263,11 +271,9 @@ const FONT_MANAGER: u32 = 0x011f_33f8;
 const FONT_FILE_SETTINGS: u32 = 0x011f_3418;
 const FONT_FILE_SETTING_SIZE: u32 = 0xc;
 const JIP_FONT_MANAGER_SIZE: u32 = 0x164;
-/// `FontInfo::Init` (`00A12020`, `thiscall`: the block, the font's number, its path, 1), a
-/// `FontInfo`'s size and its loaded data (`+0x38`, null when the file did not load).
-const FONT_INFO_INIT: u32 = 0x00a1_2020;
-const FONT_INFO_SIZE: u32 = 0x54;
-const FONT_INFO_DATA: u32 = 0x38;
+/// A font file's data block (`FontData`, JIP's `BufferData`: `Font::Load` reads the file into
+/// one of this size).
+const FONT_DATA_SIZE: u32 = 0x3928;
 /// The game's fonts (1 to 8), JIP's extra ones (10 to 89) and the one standing in for a missing
 /// extra font (font 3).
 const GAME_FONTS: u32 = 8;
@@ -324,6 +330,7 @@ fn extra_font_paths(e: &mut Engine) -> Vec<Option<Vec<u8>>> {
 /// A new `FontInfo` for font `number` from the guest text at `text` (a game block, the game's
 /// `FontInfo::Init`, which copies the path).
 fn new_font_info(e: &mut Engine, number: u32, text: u32) -> u32 {
+    use crate::commands::jip_fn_ui::{FONT_INFO_INIT, FONT_INFO_SIZE};
     let block = crate::commands::heap_alloc(e, FONT_INFO_SIZE);
     e.call(FONT_INFO_INIT, &args![block, number, text, 1u32])
         .u32()
@@ -361,7 +368,10 @@ fn font_manager_start(e: &mut Engine, _: &[u32]) -> Option<u32> {
                     let info = crate::commands::with_guest_text(e, &path, |e, text| {
                         new_font_info(e, number, text)
                     });
-                    if e.mem.u32(info + FONT_INFO_DATA) == 0 {
+                    if e.mem
+                        .u32(info + crate::commands::jip_fn_ui::FONT_INFO_BUFFER_DATA)
+                        == 0
+                    {
                         crate::commands::heap_free(e, info);
                         default
                     } else {
@@ -381,9 +391,28 @@ fn font_manager_start(e: &mut Engine, _: &[u32]) -> Option<u32> {
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
 // (SafeWrite8(0xA1B032, 0x59)).
-/// G129, `CalculateStringDimensions`' last font: 89.
-fn last_font(_: &mut Engine, _: &[u32]) -> Option<u32> {
+/// G129, `CalculateStringDimensions`' last font: 89. nv-rs's own, with the row (the fixes): a
+/// font from 1 to 89 whose slot in the manager (`w[1]`) is empty answers 0, so that font is
+/// refused as out of range (the result is the start point). Only font 9's slot is empty (JIP
+/// leaves it so; `SetFontFile` refuses 9), and with JIP's 89 the game reads through it and
+/// crashes; with the row off the port stops there.
+fn last_font(e: &mut Engine, w: &[u32]) -> Option<u32> {
+    let (font, manager) = (w[0], w[1]);
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+        && (1..=LAST_JIP_FONT).contains(&font)
+        && e.mem.u32(manager + 4 * (font - 1)) == 0
+    {
+        return Some(0);
+    }
     Some(LAST_JIP_FONT)
+}
+
+/// G129's guard (nv-rs's own, with the row): `Font::Load` reads at most its data block
+/// ([`FONT_DATA_SIZE`]) of a font file. The game reads the whole file into that block, so a
+/// longer file (a mod's font from the `xfonts` lists or `SetFontFile`, which reach `Font::Load` at
+/// start or from a script) writes past it into the game's heap; here the rest is not read.
+fn font_file_read(_: &mut Engine, w: &[u32]) -> Option<u32> {
+    Some(w[0].min(FONT_DATA_SIZE))
 }
 
 fn install_fixes(e: &mut Engine) {
@@ -405,6 +434,7 @@ fn install_fixes(e: &mut Engine) {
     e.ext_free::<LoadScreenLists>();
     e.wrap(LOAD_SCREEN_CANDIDATES, load_screen_candidates);
     e.on_site(PICK_LOAD_SCREEN, pick_load_screen);
+    e.on_site(FONT_FILE_READ, font_file_read);
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
