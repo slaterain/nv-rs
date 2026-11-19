@@ -41,6 +41,10 @@ pub(in super::super) const SITES: &[Entry] = &[
     // result callback). JIP's `QuantityMenuCallback` reads DoClick's button id from the caller's
     // frame (`[ebp+8]`): the seam hands it over with the callback and the count.
     row(0x007a_becc),
+    // `ToggleDepthClear` (G128, JIP's own): the frame's draw after the world 00875110, its call of
+    // the renderer's depth clear `0x7148C0` at 0x8751C6 (JIP's `RendererClearBufferHook`: the call
+    // skipped while the switch is 0).
+    row(0x0087_51c6),
     // `InitRockItLauncher`: `PlayerCharacter::Update` 0093e860, the ammo switch key's weapon entry
     // test (0x940998; JIP's `PCAmmoSwitchHook`: no switch for its Rock-It Launcher).
     row(0x0094_0998),
