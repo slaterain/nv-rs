@@ -222,7 +222,6 @@ fn deferred_start_runs_gr_files_and_keeps_the_others() {
         ("gs_save.txt", Some("print saved")),
         ("gl_bad.txt", Some("bad line")),
         ("gn_empty.txt", Some("empty")),
-        ("gx_missing.txt", None),
     ]);
     init_files(&mut e);
     let c = calls();
@@ -244,13 +243,11 @@ fn deferred_start_runs_gr_files_and_keeps_the_others() {
     // Only the gr_ file ran.
     assert_eq!(runs(), ["run print start 1"]);
     // Kept: the ln_ and gs_ files, named by their files; the bad one destroyed, the empty one too;
-    // the missing one and the plain file never compiled.
+    // the plain file never compiled.
     assert!(c.contains(&"editor-id ln_mod.txt".to_string()));
     assert!(c.contains(&"editor-id gs_save.txt".to_string()));
     assert_eq!(c.iter().filter(|s| *s == "destroy 1").count(), 2);
-    assert!(!c
-        .iter()
-        .any(|s| s.contains("readme") || s.contains("missing")));
+    assert!(!c.iter().any(|s| s.contains("readme")));
     let kept: Vec<Option<RunOn>> = e
         .ext::<Jip>()
         .script_runner
@@ -794,4 +791,55 @@ fn a_snippet_running_itself_stops_at_64_with_the_fixes_row() {
     let destroys = calls().iter().filter(|c| c.starts_with("destroy")).count();
     assert_eq!(destroys, 65);
     assert_eq!(e.ext::<Jip>().script_runner.nesting, 0);
+}
+
+/// The name test: `.txt` at the end, any case.
+#[test]
+fn the_name_test_is_a_txt_ending_in_any_case() {
+    assert!(is_txt(b"GS_UPPER.TXT"));
+    assert!(is_txt(b"gl_a.Txt"));
+    assert!(is_txt(b".txt"));
+    assert!(!is_txt(b"gr_backup.txt.bak"));
+    assert!(!is_txt(b"gl_cfg.ini"));
+    assert!(!is_txt(b"txt"));
+    assert!(!is_txt(b"gl_atxt"));
+}
+
+/// Only names ending in `.txt` are taken: a `.txt.bak` or an `.ini` never compiles or runs; a
+/// `.TXT` is kept and runs, named with its own spelling (the files stand-in lists each name as it
+/// was put, as Windows does).
+#[test]
+fn only_txt_names_are_taken() {
+    let mut e = runner_engine();
+    folder(&[
+        ("gr_backup.txt.bak", Some("print backup")),
+        ("gl_cfg.ini", Some("print cfg")),
+        ("GS_UPPER.TXT", Some("print upper")),
+    ]);
+    init_files(&mut e);
+    let c = calls();
+    assert!(!c.iter().any(|s| s.contains("backup") || s.contains("cfg")));
+    assert!(c.contains(&"editor-id GS_UPPER.TXT".to_string()));
+    run(&mut e, RunOn::SaveGame, None);
+    assert_eq!(runs(), ["run print upper 0"]);
+}
+
+/// A listed file that cannot be read (here locked, and first in the listing) is passed over; the
+/// files after it still compile and run.
+#[test]
+fn a_file_that_cannot_be_read_is_passed_over() {
+    let mut e = runner_engine();
+    files::put(
+        "data\\nvse\\plugins\\scripts\\gl_alocked.txt",
+        files::LOCKED,
+    );
+    folder(&[("gl_b.txt", Some("print b")), ("gl_c.txt", Some("print c"))]);
+    init_files(&mut e);
+    let c = calls();
+    assert!(!c.iter().any(|s| s.contains("alocked")));
+    run(&mut e, RunOn::LoadGame, None);
+    // Both run (in JIP's map order, which the order test pins).
+    let mut r = runs();
+    r.sort();
+    assert_eq!(r, ["run print b 0", "run print c 0"]);
 }

@@ -3,6 +3,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use engine_core::extend::stewie;
 
 // Translated from 004f2770 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map (`thiscall`, no stack words): the address of
@@ -144,6 +145,11 @@ pub fn fn_004f2640(e: &mut Engine, form: u32) -> bool {
             // `00547110` (RET 4).
             let location = e.call(GET_WORLD_LOCATION, &args![player, location]).u32();
             let cell = e.call(LOCATION_CELL, &args![location]).u32();
+            // 004f269f: lStewieAl's Tweaks' row S0078 (`patchNullPlayerCellImposterCheck`): no
+            // cell at the player's location gives no regions, where the exe reads the null cell's.
+            if e.stewie(stewie::NULL_PLAYER_CELL_IMPOSTER_CHECK) && cell == 0 {
+                return 0;
+            }
             e.call(CELL_REGION_LIST, &args![cell, 1u32]).u32()
         });
         node = if regions == 0 {
@@ -372,6 +378,38 @@ mod n072_tests {
         assert!(!e.call(0x004f_2640, &args![0x66u32]).bool());
     }
 
+    /// lStewieAl's Tweaks' row S0078: the player has no regions and no cell is at the player's
+    /// place. The exe asks the null cell for its regions (`00547110`, whose first test reads the
+    /// cell's flags, as its stand-in here does) and stops; with the row on there are no regions
+    /// and the form is not found.
+    #[test]
+    fn s0078_no_cell_at_the_players_place() {
+        for on in [false, true] {
+            let mut e = Engine::new();
+            e.map(0x011d_e000, 0x1000);
+            lists(&mut e);
+            data_doubles(&mut e);
+            let player = e.mem.alloc(0x800);
+            e.set_global::<u32>(PLAYER, player);
+            e.register(GET_WORLD_LOCATION, |_, a| a[1].into_ret());
+            e.register(LOCATION_CELL, |_, _| 0u32.into_ret());
+            e.register_double(CELL_REGION_LIST, |e, a| {
+                u32::from(e.mem.u8(a[0] + 0x24)).into_ret()
+            });
+            e.set_stewie(stewie::NULL_PLAYER_CELL_IMPOSTER_CHECK, on);
+            e.call_log = Some(vec![]);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.call(0x004f_2640, &args![0x99u32]).bool()
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert!(!run.unwrap());
+                assert!(calls_to(&e, CELL_REGION_LIST).is_empty());
+            }
+        }
+    }
+
     #[test]
     fn fn_004f2640_falls_back_to_the_cells_regions() {
         let mut e = Engine::new();
@@ -391,5 +429,33 @@ mod n072_tests {
         assert_eq!(calls_to(&e, GET_WORLD_LOCATION)[0][0], player);
         assert_eq!(calls_to(&e, GET_WORLD_LOCATION)[0].len(), 2);
         assert_eq!(calls_to(&e, CELL_REGION_LIST), vec![vec![0x4444, 1]]);
+    }
+
+    /// lStewieAl's Tweaks' row S0078 with a cell at the player's place (ordinary input): the row
+    /// changes nothing, the same calls and the same answer as with it off (the cell's regions read
+    /// and the form found there).
+    #[test]
+    fn s0078_row_on_with_a_cell_changes_nothing() {
+        let run = |on: bool| {
+            let mut e = Engine::new();
+            e.map(0x011d_e000, 0x1000);
+            lists(&mut e);
+            data_doubles(&mut e);
+            let player = e.mem.alloc(0x800);
+            e.set_global::<u32>(PLAYER, player);
+            let region = region_with_items(&mut e, &[0x99]);
+            let holder = e.mem.alloc(12);
+            e.mem.set_u32(holder + 4, region);
+            e.register(GET_WORLD_LOCATION, |_, a| a[1].into_ret());
+            e.register(LOCATION_CELL, |_, _| 0x4444u32.into_ret());
+            e.register_double(CELL_REGION_LIST, move |_, _| holder.into_ret());
+            e.set_stewie(stewie::NULL_PLAYER_CELL_IMPOSTER_CHECK, on);
+            e.call_log = Some(vec![]);
+            let found = e.call(0x004f_2640, &args![0x99u32]).bool();
+            (found, e.call_log.take())
+        };
+        let (off, on) = (run(false), run(true));
+        assert_eq!(on, off);
+        assert!(on.0);
     }
 }
