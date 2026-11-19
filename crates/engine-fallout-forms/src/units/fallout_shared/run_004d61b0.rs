@@ -2113,6 +2113,40 @@ mod n039_tests {
         }
     }
 
+    /// Row S0199.09 with a property that has controllers (ordinary input): the same calls with the row
+    /// off and on.
+    #[test]
+    fn s0199_09_row_on_with_a_property_changes_nothing() {
+        let mut logs = vec![];
+        for on in [false, true] {
+            let mut e = Engine::new();
+            text_and_new(&mut e);
+            let _inserted = tree_double(&mut e, 0);
+            let object = leaf_object(&mut e);
+            e.register(0x0043_b230, |e, a| e.mem.u32(a[0] + 0xc).into_ret());
+            let property = e.mem.alloc(0x20);
+            e.mem.set_u32(property + 0xc, 0x0600_0300);
+            let node = e.mem.alloc(8);
+            e.mem.set_u32(node, property);
+            let list = e.mem.alloc(8);
+            e.mem.set_u32(list, node);
+            e.register_double(0x0043_0830, move |_, _| list.into_ret());
+            e.register(0x0076_b610, |_, _| false.into_ret());
+            e.register(LIST_NEXT, |e, a| {
+                let node = e.mem.u32(a[1]);
+                e.mem.set_u32(a[1], 0);
+                node.into_ret()
+            });
+            e.set_stewie(engine_core::extend::stewie::SHOW_SCENE_GRAPH_NULL, on);
+            let this = e.mem.alloc(0x30);
+            e.call_log = Some(vec![]);
+            e.call(0x004d_66d0, &args![this, 0x10u32, object]);
+            logs.push(e.call_log.take().unwrap());
+        }
+        assert_eq!(logs[0], logs[1]);
+        assert!(logs[0].iter().any(|(a, w)| *a == 0x0043_b230 && w[0] != 0));
+    }
+
     #[test]
     fn fn_004d7440_destroys_both_windows() {
         let mut e = Engine::new();
