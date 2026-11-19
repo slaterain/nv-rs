@@ -416,6 +416,8 @@ fn back_references_match_what_the_group_took() {
     assert!(matches("(a*)b\\1c", b"bc"));
     assert!(matches("(a*)b\\1c", b"aabaac"));
     assert!(!matches("(a*)b\\1c", b"aabac"));
+    // A back-reference that does not match fails the way through it (no empty match instead).
+    assert_eq!(find("(a)b\\1", b"abc"), None);
 }
 
 #[test]
@@ -432,6 +434,9 @@ fn word_boundaries() {
     assert_eq!(find("\\bfoo\\b", b"a foo b"), Some((2, 5)));
     assert_eq!(find("\\bfoo\\b", b"afoo"), None);
     assert_eq!(find("\\Boo", b"foo"), Some((1, 3)));
+    // `_` is a word byte: no boundary between `a` and `_`, one between `_` and `-`.
+    assert_eq!(find("\\b_", b"a_"), None);
+    assert_eq!(find("_\\b", b"a_-"), Some((1, 2)));
     assert!(matches("\\b", b""), "an empty text is a word boundary");
     assert_eq!(find("\\b", b"a"), Some((0, 0)));
     assert_eq!(find("\\B", b""), None);
