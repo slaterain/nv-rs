@@ -238,6 +238,8 @@ struct State {
     fvf: Option<u32>,
     /// The handles the bindings were last set from ([`Bound`]).
     bound: Bound,
+    /// ATI's alpha to coverage switch ([`A2M1`]): on after `A2M1`, off after `A2M0`.
+    a2m1: bool,
 }
 
 /// A handle no binding holds: the object at a handle may have changed since it was bound
@@ -316,7 +318,7 @@ struct PipeKey {
     /// Whether each of the shaders' samplers ([`Device::sampler_bindings`], in order) filters:
     /// with the two shaders, what the bind group's layout is made from.
     filterable: u32,
-    /// NVIDIA's alpha to coverage in place of the alpha test ([`ATOC`]).
+    /// Alpha to coverage in place of the alpha test (NVIDIA's [`ATOC`] or ATI's [`A2M1`]).
     atoc: bool,
     /// The pass has the occlusion count's target.
     count: bool,
@@ -666,7 +668,21 @@ const PIPELINE_STATES: [usize; 30] = [
 /// GREATEREQUAL and ALWAYS cover from the alpha, and NEVER, LESS, EQUAL and LESSEQUAL draw
 /// nothing. Which samples another vendor's hardware covers for an alpha is its own.
 const ATOC: u32 = u32::from_le_bytes(*b"ATOC");
-/// `D3DRS_CLIPPING` and `D3DRS_ADAPTIVETESS_Y`.
+/// `D3DRS_POINTSIZE` set to `MAKEFOURCC('A','2','M','1')` / `('A','2','M','0')`: ATI's Direct3D 9
+/// driver's switch for the same alpha to coverage, on and off. The game sends it instead of
+/// [`ATOC`] when its renderer took the ATI path (the driver's name starts "ati": vendor word 2 in
+/// its shader setup, `00b4f710`; the switch itself in `00b98540`, which sends `A2M0` + 0x1000000
+/// for on, else `A2M0`). The game turns it on only together with the alpha test (`00b9a120`,
+/// `RenderBatches` 00b99f6c, and per pass in `RenderPassImmediately` 00b99541, from the alpha
+/// property's alpha test bit), so it is taken here exactly as [`ATOC`]: coverage from the alpha
+/// while the alpha test is on and the target is multisampled, the alpha test itself off. The two
+/// values are a switch the driver keeps, not a point size: the point size keeps its value, and any
+/// other `D3DRS_POINTSIZE` value leaves the switch as it is. What ATI's own driver does with the
+/// switch on and the alpha test off is not measured here (the game never asks it).
+const A2M1: u32 = u32::from_le_bytes(*b"A2M1");
+const A2M0: u32 = u32::from_le_bytes(*b"A2M0");
+/// `D3DRS_POINTSIZE`, `D3DRS_CLIPPING` and `D3DRS_ADAPTIVETESS_Y`.
+const RS_POINTSIZE: usize = 154;
 const RS_CLIPPING: usize = 136;
 const RS_ADAPTIVETESS_Y: usize = 181;
 /// `D3DRS_SPECULARENABLE` and `D3DRS_TEXTUREFACTOR`, read by the fixed-function pixel shader
@@ -1494,6 +1510,7 @@ impl Device {
                 tss: Box::new(ffp::default_stage_states()),
                 fvf: None,
                 bound: Bound::default(),
+                a2m1: false,
             },
             encoder: None,
             finishing: Vec::new(),
@@ -2564,6 +2581,15 @@ impl Device {
     }
 
     pub(crate) fn set_render_state(&mut self, state: u32, value: u32) {
+        // ATI's alpha to coverage switch: kept apart, the point size as it was ([`A2M1`]).
+        if state as usize == RS_POINTSIZE && (value == A2M1 || value == A2M0) {
+            let on = value == A2M1;
+            if self.st.a2m1 != on {
+                self.st.a2m1 = on;
+                self.st.touch(1);
+            }
+            return;
+        }
         // A state set to the value it has changes nothing (the game sets many again each draw).
         let Some(s) = self.st.rs.get_mut(state as usize) else {
             return;
@@ -2915,9 +2941,10 @@ impl Device {
             && self.st.rs[rs::CLIPPLANEENABLE] & ((1 << wgsl::CLIP_PLANES) - 1) != 0
     }
 
-    /// Whether NVIDIA's alpha to coverage stands in for the alpha test ([`ATOC`]).
+    /// Whether alpha to coverage stands in for the alpha test: NVIDIA's switch ([`ATOC`]) or ATI's
+    /// ([`A2M1`]), the same rule for both.
     fn atoc(&mut self) -> bool {
-        self.st.rs[RS_ADAPTIVETESS_Y] == ATOC
+        (self.st.rs[RS_ADAPTIVETESS_Y] == ATOC || self.st.a2m1)
             && self.st.rs[rs::ALPHATESTENABLE] != 0
             && self.target_shape().2 > 1
     }
@@ -9336,6 +9363,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         st.dirty = [true; 2];
         st.header_dirty = [true; 2];
         st.bound = Bound::default();
+        st.a2m1 = false;
         self.ffp_f = [None, None];
         self.counting = None;
         self.groups.clear();

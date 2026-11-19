@@ -22,6 +22,7 @@ pub mod jip_fn_armor;
 pub mod jip_fn_aux_variable;
 pub mod jip_fn_body_part_data;
 pub mod jip_fn_ccc;
+pub mod jip_fn_ccc_hud;
 pub mod jip_fn_cell;
 pub mod jip_fn_class;
 pub mod jip_fn_climate;
@@ -230,6 +231,7 @@ pub const ALL: &[Handlers] = &[
     crate::game_patches::gc::formulas::COMMANDS,
     crate::game_patches::gx::COMMANDS,
     jip_fn_misc_ref_insert::COMMANDS,
+    jip_fn_ccc_hud::COMMANDS,
     // `InsertNode` and `AttachModel`, with their patches H08 and H10.
     jip_fn_misc_ref_insert::AWAITING_H08_H10,
     // `SynchronizePosition`, with its patch H13 (`game_patches::gh2`).
@@ -868,6 +870,8 @@ mod tests {
             "jip_fn_input",
             // jip_fn_misc_ref_insert (InsertNode, AttachModel, ModelHasBlock).
             "jip_fn_misc_ref",
+            // jip_fn_ccc_hud (CCCOnLoad and the commands that use what it finds).
+            "jip_fn_ccc",
             // jip_fn_misc_ref_insert::AWAITING_H08_H10 (with H08 and H10).
             "jip_fn_misc_ref",
             // jip_fn_misc_ref::AWAITING_H13 (`SynchronizePosition`, with H13).
