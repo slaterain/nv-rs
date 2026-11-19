@@ -2260,6 +2260,32 @@ fn coverage_switch_stands_in_for_the_alpha_test(
         );
         g.state(state, on);
         assert_eq!(alone(&mut g), part, "{name} {samples}x: on again");
+        // The switch between two draws of one pass, the same triangle drawn again with nothing
+        // uploaded between (a new pass or batch would make every block again anyway): the second
+        // draw follows the switch, off then on.
+        let switched = |g: &mut Gpu, to: u32| {
+            g.clear(1, 0, 1.0);
+            g.count(0x2000, |g| {
+                g.cover(0.5);
+                g.state(state, to);
+                g.run(Cmd::DrawPrimitive {
+                    device: DEVICE,
+                    kind: 4,
+                    start: 0,
+                    count: 1,
+                });
+            })
+        };
+        assert_eq!(
+            switched(&mut g, off),
+            part,
+            "{name} {samples}x: coverage, then the switch off within the pass: the alpha test"
+        );
+        assert_eq!(
+            switched(&mut g, on),
+            part,
+            "{name} {samples}x: the alpha test, then the switch on within the pass: coverage"
+        );
         // `Reset` turns it off: every state the draw needs set again, the switch not.
         reset_for_the_alpha_test(&mut g);
         assert_eq!(
