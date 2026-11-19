@@ -1031,9 +1031,18 @@ mod tests {
         );
     }
 
-    /// JIP LN NVSE's SetMoonTexture seam at `0x634B30`: asked with the moon while JIP is
-    /// installed; an answer skips the seven formatted names (JIP named them), none formats them
-    /// as the exe; the rest of the constructor runs either way.
+    thread_local! {
+        /// The words the seam's test handler was asked with.
+        static ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn asked(w: &[u32]) {
+        ASKED.with(|a| a.borrow_mut().push(w.to_vec()));
+    }
+
+    /// JIP LN NVSE's SetMoonTexture seam at `0x634B30`: asked with the moon (`this`, not a field
+    /// of it) while JIP is installed; an answer skips the seven formatted names (JIP named them),
+    /// none formats them as the exe; the rest of the constructor runs either way.
     #[test]
     fn moon_constructor_jip_names_seam() {
         use engine_core::extend::jip_patches;
@@ -1054,10 +1063,17 @@ mod tests {
             e.map(NO_UPDATE, 4);
             e.set_global(NO_UPDATE, f32::MAX);
             e.set_jip_patches(word);
+            ASKED.with(|a| a.borrow_mut().clear());
             if answer {
-                e.on_site_for_test(0x0063_4b30, |_, _| Some(0));
+                e.on_site_for_test(0x0063_4b30, |_, w| {
+                    asked(w);
+                    Some(0)
+                });
             } else {
-                e.on_site_for_test(0x0063_4b30, |_, _| None);
+                e.on_site_for_test(0x0063_4b30, |_, w| {
+                    asked(w);
+                    None
+                });
             }
             let this = e.new_object::<Moon>();
             e.call_log = Some(vec![]);
@@ -1065,6 +1081,12 @@ mod tests {
                 0x0063_4a70,
                 &args![this, 0x7000u32, 10.0f32, 20.0f32, 5.0f32, 2.0f32, 15.0f32, 128u32],
             );
+            let want = if word == 0 {
+                vec![]
+            } else {
+                vec![vec![this.addr()]]
+            };
+            assert_eq!(ASKED.with(|a| a.borrow().clone()), want, "{word:x}");
             assert_eq!(calls_to(&e, BS_STRING_FORMAT).len(), formats, "{word:x}");
             assert_eq!(e.get(this, Moon::iSize), 128);
         }

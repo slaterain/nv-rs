@@ -737,9 +737,18 @@ mod tests {
         assert_eq!(e.mem.u32(controller + 0x414) & 0x20, 0);
     }
 
-    /// JIP LN NVSE's ToggleNoZPosReset seam at `0x6295E9`: asked with the actor while JIP is
-    /// installed; 1 skips the warp (no position set), 0 warps without the point's constructor,
-    /// none as the exe.
+    thread_local! {
+        /// The words the seam's test handler was asked with.
+        static ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn asked(w: &[u32]) {
+        ASKED.with(|a| a.borrow_mut().push(w.to_vec()));
+    }
+
+    /// JIP LN NVSE's ToggleNoZPosReset seam at `0x6295E9`: asked with the actor (not the bound)
+    /// while JIP is installed; 1 skips the warp (no position set), 0 warps without the point's
+    /// constructor, none as the exe.
     #[test]
     fn warp_actor_jip_no_z_pos_reset_seam() {
         use engine_core::extend::jip_patches;
@@ -778,13 +787,34 @@ mod tests {
             e.register(0x0093_06d0, |_, _| Ret::default());
             noop(&mut e, &[0x0068_15c0]);
             e.set_jip_patches(word);
+            ASKED.with(|a| a.borrow_mut().clear());
             match answer {
-                0 => e.on_site_for_test(0x0062_95e9, |_, _| Some(0)),
-                1 => e.on_site_for_test(0x0062_95e9, |_, _| Some(1)),
-                _ => e.on_site_for_test(0x0062_95e9, |_, _| None),
+                0 => e.on_site_for_test(0x0062_95e9, |_, w| {
+                    asked(w);
+                    Some(0)
+                }),
+                1 => e.on_site_for_test(0x0062_95e9, |_, w| {
+                    asked(w);
+                    Some(1)
+                }),
+                _ => e.on_site_for_test(0x0062_95e9, |_, w| {
+                    asked(w);
+                    None
+                }),
             }
             e.call_log = Some(vec![]);
             e.call(0x0062_95e0, &args![bound, actor]);
+            let want = if word == 0 {
+                vec![]
+            } else {
+                vec![vec![actor.addr()]]
+            };
+            assert_ne!(actor.addr(), bound.addr());
+            assert_eq!(
+                ASKED.with(|a| a.borrow().clone()),
+                want,
+                "{word:x} {answer}"
+            );
             let log = e.call_log.unwrap();
             let called = |addr: u32| log.iter().filter(|(a, _)| *a == addr).count();
             assert_eq!(called(0x0020_1004) != 0, warped, "{word:x} {answer}");
