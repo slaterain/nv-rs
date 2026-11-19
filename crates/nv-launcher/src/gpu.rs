@@ -4,8 +4,11 @@
 //!
 //! The launcher has to start where the game's own renderer does not: it is where the player
 //! changes the renderer. So it asks for the plainest device there is (no features, the lowest
-//! limits, the low-power card), on Direct3D 12 or Vulkan on Windows (the platform's own API
-//! elsewhere), and failing a card, the system's software adapter. Its whole picture is drawn on
+//! limits), one API at a time, each in an instance of its own so a broken driver of the next one
+//! is never even loaded while an earlier one works ([`launcher_apis`], [`pick`]): on Windows
+//! Direct3D 12 first, then Vulkan; elsewhere the platform's own (Vulkan, Metal). A graphics card
+//! first (the one built into the processor before a separate one), and only when no API has one,
+//! the system's software adapter (Windows' WARP is always there). Its whole picture is drawn on
 //! the processor, so even the software adapter draws it at once.
 
 use std::sync::Arc;
@@ -51,40 +54,93 @@ fn block_on<F: std::future::Future>(f: F) -> F::Output {
     }
 }
 
-/// The APIs the launcher draws with on this system.
-pub fn backends() -> wgpu::Backends {
+/// The APIs the launcher draws with on this system, in the order it tries them, one instance each.
+pub fn launcher_apis() -> Vec<wgpu::Backends> {
     if cfg!(windows) {
-        wgpu::Backends::DX12 | wgpu::Backends::VULKAN
+        vec![wgpu::Backends::DX12, wgpu::Backends::VULKAN]
     } else {
-        wgpu::Backends::PRIMARY
+        vec![wgpu::Backends::PRIMARY]
     }
 }
 
-pub fn instance() -> wgpu::Instance {
-    wgpu::Instance::new(wgpu::InstanceDescriptor {
-        backends: backends(),
-        ..wgpu::InstanceDescriptor::new_without_display_handle()
-    })
+/// The adapter to take among one API's `kinds`: with `software` false a graphics card, the
+/// plainest first (built into the processor, then separate, virtual, any other); with `software`
+/// true only the system's software adapter.
+pub fn pick(kinds: &[wgpu::DeviceType], software: bool) -> Option<usize> {
+    let rank = |t: wgpu::DeviceType| match t {
+        wgpu::DeviceType::IntegratedGpu => 0,
+        wgpu::DeviceType::DiscreteGpu => 1,
+        wgpu::DeviceType::VirtualGpu => 2,
+        wgpu::DeviceType::Other => 3,
+        wgpu::DeviceType::Cpu => 4,
+    };
+    kinds
+        .iter()
+        .enumerate()
+        .filter(|(_, &t)| (t == wgpu::DeviceType::Cpu) == software)
+        .min_by_key(|(_, &t)| rank(t))
+        .map(|(i, _)| i)
+}
+
+/// The order of the tries: every API's graphics card first, then every API's software adapter.
+pub fn tries() -> Vec<(wgpu::Backends, bool)> {
+    [false, true]
+        .into_iter()
+        .flat_map(|software| launcher_apis().into_iter().map(move |api| (api, software)))
+        .collect()
+}
+
+/// The launcher's own drawing device's instance, adapter and (with `window`) the window's surface:
+/// the first of [`tries`] that has one.
+pub fn choose(
+    window: Option<Arc<winit::window::Window>>,
+) -> Result<
+    (
+        wgpu::Instance,
+        wgpu::Adapter,
+        Option<wgpu::Surface<'static>>,
+    ),
+    String,
+> {
+    let mut why = Vec::new();
+    for (backends, software) in tries() {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends,
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let surface = match &window {
+            Some(w) => match instance.create_surface(w.clone()) {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    why.push(format!("{backends:?}: {e}"));
+                    continue;
+                }
+            },
+            None => None,
+        };
+        let mut adapters: Vec<wgpu::Adapter> = block_on(instance.enumerate_adapters(backends))
+            .into_iter()
+            .filter(|a| surface.as_ref().is_none_or(|s| a.is_surface_supported(s)))
+            .collect();
+        let kinds: Vec<wgpu::DeviceType> =
+            adapters.iter().map(|a| a.get_info().device_type).collect();
+        if let Some(i) = pick(&kinds, software) {
+            return Ok((instance, adapters.swap_remove(i), surface));
+        }
+    }
+    Err(format!(
+        "no graphics adapter, not even the software one{}",
+        if why.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", why.join("; "))
+        }
+    ))
 }
 
 impl Gpu {
-    /// A device for the picture `size` (width, height), able to draw into `surface` if given.
-    pub fn new(
-        instance: &wgpu::Instance,
-        surface: Option<&wgpu::Surface<'_>>,
-        size: (u32, u32),
-    ) -> Result<Gpu, String> {
-        let ask = |fallback: bool| {
-            block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::LowPower,
-                force_fallback_adapter: fallback,
-                compatible_surface: surface,
-                apply_limit_buckets: false,
-            }))
-        };
-        let adapter = ask(false)
-            .or_else(|_| ask(true))
-            .map_err(|e| format!("no graphics adapter, not even the software one: {e}"))?;
+    /// A device on `adapter` for the picture `size` (width, height).
+    pub fn new(adapter: wgpu::Adapter, size: (u32, u32)) -> Result<Gpu, String> {
         let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("nv-launcher"),
             required_features: wgpu::Features::empty(),
@@ -407,4 +463,66 @@ pub fn fit(picture: (u32, u32), target: (u32, u32)) -> (u32, u32, u32, u32) {
         ((picture.1 as f32 * s) as u32).min(target.1),
     );
     ((target.0 - w) / 2, (target.1 - h) / 2, w, h)
+}
+
+/// The API's name as the start screen says it.
+pub fn api_name(backend: wgpu::Backend) -> &'static str {
+    match backend {
+        wgpu::Backend::Dx12 => "Direct3D 12",
+        wgpu::Backend::Metal => "Metal",
+        wgpu::Backend::Gl => "OpenGL",
+        _ => "Vulkan",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wgpu::DeviceType::{Cpu, DiscreteGpu, IntegratedGpu, Other, VirtualGpu};
+
+    /// A card first, the one built into the processor before a separate one; the software adapter
+    /// only on the software try, and never a card then.
+    #[test]
+    fn the_plainest_card_first_and_software_last() {
+        assert_eq!(pick(&[DiscreteGpu, IntegratedGpu, Cpu], false), Some(1));
+        assert_eq!(pick(&[Cpu, DiscreteGpu], false), Some(1));
+        assert_eq!(pick(&[Other, VirtualGpu], false), Some(1));
+        assert_eq!(pick(&[Cpu], false), None);
+        assert_eq!(pick(&[DiscreteGpu, Cpu], true), Some(1));
+        assert_eq!(pick(&[DiscreteGpu], true), None);
+        assert_eq!(pick(&[], false), None);
+    }
+
+    /// Every API's card is tried before any software adapter; on Windows Direct3D 12 before
+    /// Vulkan, so a broken Vulkan driver is never loaded while Direct3D 12 has a card.
+    #[test]
+    fn every_card_before_any_software_adapter() {
+        let t = tries();
+        let apis = launcher_apis();
+        assert_eq!(t.len(), apis.len() * 2);
+        assert!(t[..apis.len()].iter().all(|&(_, s)| !s));
+        assert!(t[apis.len()..].iter().all(|&(_, s)| s));
+        if cfg!(windows) {
+            assert_eq!(apis, [wgpu::Backends::DX12, wgpu::Backends::VULKAN]);
+        } else {
+            assert_eq!(apis, [wgpu::Backends::PRIMARY]);
+        }
+        assert_eq!(api_name(wgpu::Backend::Dx12), "Direct3D 12");
+        assert_eq!(api_name(wgpu::Backend::Vulkan), "Vulkan");
+        assert_eq!(api_name(wgpu::Backend::Metal), "Metal");
+    }
+
+    /// The picture keeps its shape, centred; a size close to a whole multiple takes the multiple.
+    #[test]
+    fn the_picture_keeps_its_shape() {
+        assert_eq!(fit((960, 720), (960, 720)), (0, 0, 960, 720));
+        assert_eq!(fit((960, 720), (1920, 1440)), (0, 0, 1920, 1440));
+        assert_eq!(fit((960, 720), (2000, 1440)), (40, 0, 1920, 1440));
+        let (_, y, w, h) = fit((960, 720), (800, 800));
+        assert!(
+            (799..=800).contains(&w) && (599..=600).contains(&h),
+            "{w}x{h}"
+        );
+        assert!((100..=101).contains(&y));
+    }
 }

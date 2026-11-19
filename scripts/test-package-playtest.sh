@@ -32,11 +32,12 @@ tmp=$(mktemp -d)
 trap 'rm -rf -- "$tmp"' EXIT
 trap 'exit 1' HUP INT TERM
 
-# The stand-ins: a program, and a package-check that says yes and writes down its arguments.
+# The stand-ins: the programs, and a package-check that says yes and writes down its arguments.
 mkdir -p -- "$tmp/target/release"
 printf '#!/bin/sh\necho stand-in program\n' >"$tmp/target/release/nv-viewer"
+printf '#!/bin/sh\necho stand-in launcher\n' >"$tmp/target/release/nv-rs"
 printf '#!/bin/sh\nprintf "%%s\n" "$@" >"$0.args"\nexit 0\n' >"$tmp/target/release/package-check"
-chmod 755 "$tmp/target/release/nv-viewer" "$tmp/target/release/package-check"
+chmod 755 "$tmp/target/release/nv-viewer" "$tmp/target/release/nv-rs" "$tmp/target/release/package-check"
 recorded=$tmp/target/release/package-check.args
 
 failed=0
@@ -74,7 +75,7 @@ package() {
     check "$label: its checksum file is there" [ -s "$archive.sha256" ]
     if [ -s "$archive" ]; then
         tar -tzf "$archive" >"$tmp/entries"
-        for file in play.sh app/nv-viewer BUILD.txt LICENSE LEGAL.md THIRD-PARTY-NOTICES.txt "READ ME.txt"; do
+        for file in play.sh nv-rs app/nv-viewer BUILD.txt LICENSE LEGAL.md THIRD-PARTY-NOTICES.txt "READ ME.txt"; do
             check "$label: the archive holds $file" grep -qxF -e "$name/$file" "$tmp/entries"
         done
         # Every notice of distribution/notices.txt under its own name.

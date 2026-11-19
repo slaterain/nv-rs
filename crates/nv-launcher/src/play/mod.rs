@@ -1,19 +1,21 @@
-//! Play.exe, the preview package's launcher: finds the player's game (Steam, GOG and Epic, read
-//! only, or it asks), checks it is 1.4.0.525, makes this PC's tables, keeps every file the game
-//! writes in the package's own folder and starts the game, saying plainly in a window what went
-//! wrong when something does. Nothing is ever written outside the package's folder.
+//! Play on Windows (what Play.exe did on its own until the launcher): finds the player's game
+//! (Steam, GOG and Epic, read only, or it asks), checks it is 1.4.0.525, makes this PC's tables,
+//! keeps every file the game writes in the package's own folder and starts the game, saying
+//! plainly in the launcher's terminal what went wrong when something does. Nothing is ever written
+//! outside the package's folder.
 //!
-//!   Play.exe                  plays
+//!   Play.exe                  the start screen (`> Play` plays)
 //!   Play.exe --mods           plays with the mods in the `mods` folder
 //!   Play.exe --import-saves   copies the saves from Documents\My Games\FalloutNV (read only)
+//!   Play.exe --install-mods   the mod installer, in a console window of its own
 //!   Play.exe --check          everything up to starting the game, then says what it found
 //!   --game FOLDER             the game's folder, instead of looking for it
 //!   --from FOLDER             with --import-saves: where to copy saves from
 //!
-//! Scripted tests set `NV_RS_NO_WINDOWS=1` (no window shown; every message is in
-//! `userdata\logs\launcher.log` either way), `NV_RS_REAL_DOCUMENTS=DIR` (where the player's
-//! Documents are read from), `NV_RS_NO_SHORT_PATHS=1`, `NV_RS_NO_STORES=1` (look in no store) and `NV_RS_SYSTEM_FOLDER=DIR`.
-#![windows_subsystem = "windows"]
+//! Scripted tests set `NV_RS_NO_WINDOWS=1` (no window shown, and no start screen: it plays; every
+//! message is in `userdata\logs\launcher.log` either way), `NV_RS_REAL_DOCUMENTS=DIR` (where the
+//! player's Documents are read from), `NV_RS_NO_SHORT_PATHS=1`, `NV_RS_NO_STORES=1` (look in no
+//! store) and `NV_RS_SYSTEM_FOLDER=DIR`.
 
 mod find;
 use game_profile::game_ini;
@@ -570,7 +572,7 @@ fn find_game(package: &Package, explicit: Option<&Path>) -> Result<(Game, Vec<St
             Some(why)
         }
         None => {
-            ui::info("nv-rs could not find Fallout: New Vegas on this PC. It looks in Steam, GOG and Epic.\n\nIn the next window, choose the game's folder: the one with FalloutNV.exe and a Data folder in it.");
+            ui::info("nv-rs could not find Fallout: New Vegas on this PC. It looks in Steam, GOG and Epic.\n\nNext, type the game's folder at the prompt, or drop the folder onto this window: the one with FalloutNV.exe and a Data folder in it.");
             None
         }
     };
@@ -1401,6 +1403,8 @@ fn play(
         if waiting_for_window && ui::game_window_is_there() {
             waiting_for_window = false;
             status.close();
+            // The launcher's window steps aside while the game plays.
+            crate::session::send(crate::session::Event::GameShown);
         }
         std::thread::sleep(std::time::Duration::from_millis(200));
     };
@@ -1411,11 +1415,10 @@ fn play(
     }
     let message = plain_end(&log_tail(&log_path), exit.code());
     package.log(&message);
-    let text = format!(
-        "{message}\n\nLog:\n{}\n\nOpen the logs folder?",
-        log_path.display()
-    );
-    if ui::windows_allowed() && ui::ask(&text) {
+    let text = format!("{message}\n\nLog:\n{}", log_path.display());
+    if ui::windows_allowed()
+        && crate::session::message(&text, &["Open the logs folder", "Back"]) == 0
+    {
         ui::open_folder(&package.logs);
     }
     Ok(STOP_GAME_STOPPED)
@@ -1483,17 +1486,19 @@ fn sound_notes(package: &Package, sound: &Path, check_lines: &[String]) {
     }
 }
 
-fn main() {
-    let raw: Vec<String> = std::env::args_os()
-        .skip(1)
-        .map(|a| a.to_string_lossy().into_owned())
-        .collect();
-    let options = parse_options(&raw);
-    let root = std::env::current_exe()
+/// The package's folder: the one the launcher's program is in.
+fn package_root() -> PathBuf {
+    std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(Path::to_path_buf))
-        .unwrap_or_else(|| PathBuf::from("."));
-    let package = Package::at(root);
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// One of Play.exe's actions (`raw`: its arguments; none: play), to its end: its exit code, as
+/// Play.exe ended with it. Every message and question goes to the launcher's window.
+pub fn run_play(raw: &[String]) -> i32 {
+    let options = parse_options(raw);
+    let package = Package::at(package_root());
     package.log(&format!(
         "Play.exe {:?} in {}; Windows {}; code page {}",
         raw,
@@ -1502,7 +1507,7 @@ fn main() {
         win::ansi_code_page()
     ));
     match run(&package, &options) {
-        Ok(code) => std::process::exit(code),
+        Ok(code) => code,
         Err(why) => {
             // A stop before the first write keeps the disk untouched, unless the package's place is
             // fine (nothing found, wrong version...): then the log is for the player's report.
@@ -1511,8 +1516,44 @@ fn main() {
             }
             package.log(&format!("stopped ({}): {}", why.code, why.message));
             ui::error(&why.message);
-            std::process::exit(why.code);
+            why.code
         }
+    }
+}
+
+/// What the start screen shows, and whether the launcher may keep its own file, found before
+/// anything else is written: the package's place checked as Play.exe checks it first
+/// ([`check_location`], then [`clear_for_writing`] against the game remembered or found, which is
+/// the first write and starts the log). Nothing here runs the game's program.
+pub fn place() -> crate::place::Place {
+    place_at(package_root())
+}
+
+/// [`place`] for the package at `root`.
+fn place_at(root: PathBuf) -> crate::place::Place {
+    let package = Package::at(root);
+    let game = std::fs::read_to_string(&package.remembered)
+        .ok()
+        .map(|text| PathBuf::from(text.trim()))
+        .into_iter()
+        .chain(find::candidates().into_iter().map(|(_, place)| place))
+        .find_map(|folder| Some(find::data_folder(&folder)?.parent()?.to_path_buf()));
+    let refused = check_location(&package)
+        .and_then(|()| clear_for_writing(&package, game.as_deref()))
+        .err()
+        .map(|why| why.message);
+    let profile = Profile::at(&package.userdata, "game");
+    let mods = crate::place::has_mods(&package.userdata.join("mod installs"))
+        || crate::place::has_mods(&package.root.join("mods"));
+    crate::place::Place {
+        own: package.userdata.clone(),
+        game,
+        fallout_ini: profile.fallout_ini(),
+        adapter_card: std::fs::read(package.machine.join("d3d9_adapter.tsv"))
+            .ok()
+            .and_then(|table| tables::adapter_name(&table)),
+        mods,
+        refused,
     }
 }
 
@@ -1640,6 +1681,61 @@ mod tests {
             folder_key(&link.join("not yet")),
             format!("{}\\not yet", folder_key(&real))
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The start screen's facts from a package's own files: the game remembered, the play
+    /// profile's Fallout.ini, the last adapter table's card, the mods; and a package in a
+    /// temporary folder is refused (as Play.exe refused it) with nothing written.
+    #[test]
+    fn the_start_screen_reads_the_packages_files() {
+        let dir = scratch("place");
+        let game = dir.join("Fallout New Vegas");
+        std::fs::create_dir_all(game.join("Data")).unwrap();
+        std::fs::write(game.join("Data\\FalloutNV.esm"), b"x").unwrap();
+        let root = dir.join("nv-rs");
+        let userdata = root.join("userdata");
+        std::fs::create_dir_all(userdata.join("machine")).unwrap();
+        std::fs::write(
+            userdata.join("game-folder.txt"),
+            game.to_string_lossy().as_bytes(),
+        )
+        .unwrap();
+        let p = place_at(root.clone());
+        assert_eq!(p.game.as_deref(), Some(game.as_path()));
+        assert_eq!(
+            p.fallout_ini,
+            userdata.join("game\\Documents\\My Games\\FalloutNV\\Fallout.ini")
+        );
+        assert_eq!(p.own, userdata);
+        assert_eq!(p.adapter_card, None);
+        assert!(!p.mods);
+        assert!(
+            p.refused
+                .as_deref()
+                .is_some_and(|w| w.contains("temporary folder")),
+            "{:?}",
+            p.refused
+        );
+        assert!(!userdata.join("logs").exists(), "nothing written");
+        // The adapter identifier's Description after its 512 bytes of Driver, as hex.
+        let mut hex = "00".repeat(512);
+        for b in b"Radeon Test" {
+            hex.push_str(&format!("{b:02x}"));
+        }
+        hex.push_str("00");
+        std::fs::write(
+            userdata.join("machine\\d3d9_adapter.tsv"),
+            format!("GetAdapterIdentifier\t0 0\t0\t{hex}\n"),
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("mods")).unwrap();
+        std::fs::write(root.join("mods\\READ ME.txt"), b"x").unwrap();
+        assert!(!place_at(root.clone()).mods);
+        std::fs::write(root.join("mods\\a.esp"), b"x").unwrap();
+        let p = place_at(root.clone());
+        assert!(p.mods);
+        assert_eq!(p.adapter_card.as_deref(), Some("Radeon Test"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

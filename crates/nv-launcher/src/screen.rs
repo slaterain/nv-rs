@@ -32,6 +32,8 @@ pub const HEIGHT: u32 = 720;
 pub const TYPE_RATE: f32 = 150.0;
 /// The cursor's blink, milliseconds (`computers_cursor`'s `_blink_interval`).
 pub const BLINK_MS: u64 = 400;
+/// Where the intro's text starts (`computers_intro_welcome`'s x and y).
+pub const INTRO_AT: (i32, i32) = (100, 60);
 
 /// How the terminal looks: from the player's game, or the port's own plain look before the game
 /// is found.
@@ -41,6 +43,9 @@ pub struct Look {
     pub background: Option<(u32, u32, Vec<u8>)>,
     /// The two header lines: the game's `sComputersHeader1` and `sComputersHeader2`.
     pub header: [String; 2],
+    /// The intro's lines (`sHackingIntro01`, `sComputersLogon`, `sHackingHeader2`): the game's
+    /// look only.
+    pub intro: Option<[String; 3]>,
     /// Where the look came from, for the log.
     pub from: String,
 }
@@ -78,17 +83,22 @@ impl Look {
                 "Fallout - Textures2.bsa",
             )
             .and_then(|d| crate::canvas::dds_rgba(&d));
-        let header = [
-            game.exe_setting_text("sComputersHeader1")
-                .ok_or("sComputersHeader1 is not in the game's FalloutNV.exe")?,
-            game.exe_setting_text("sComputersHeader2")
-                .ok_or("sComputersHeader2 is not in the game's FalloutNV.exe")?,
+        let text = |name: &str| {
+            game.exe_setting_text(name)
+                .ok_or(format!("{name} is not in the game's FalloutNV.exe"))
+        };
+        let header = [text("sComputersHeader1")?, text("sComputersHeader2")?];
+        let intro = [
+            text("sHackingIntro01")?,
+            text("sComputersLogon")?,
+            text("sHackingHeader2")?,
         ];
         Ok(Look {
             font,
             colour: colour.map(|c| c as f32 / 255.0),
             background,
             header,
+            intro: Some(intro),
             from: format!("the game at {}", game.folder.display()),
         })
     }
@@ -104,6 +114,7 @@ impl Look {
                 "NV-RS LAUNCHER".into(),
                 "FALLOUT: NEW VEGAS NOT FOUND YET".into(),
             ],
+            intro: None,
             from: "the port's own look".into(),
         }
     }
@@ -120,16 +131,21 @@ impl Look {
 }
 
 /// What a screen shows.
+#[derive(Clone, Debug, Default)]
 pub struct Screen {
     /// The header's third line (the game shows the terminal's server name there).
     pub title: String,
-    /// The welcome text's lines.
+    /// The welcome text's lines (each wrapped at the text's width).
     pub welcome: Vec<String>,
     /// The entries (without the prompt).
     pub entries: Vec<String>,
     pub highlighted: usize,
     /// What has been typed at the bottom prompt.
     pub typed: String,
+    /// A text longer than its room shows its end (a program's output as it comes), else its
+    /// start, moved by [`Screen::scroll`] lines.
+    pub follow_end: bool,
+    pub scroll: usize,
 }
 
 /// Where the rows are, for the mouse: the list's top, its x, width and a row's height.
@@ -147,15 +163,19 @@ pub struct Rows {
 struct Layout {
     line_height: i32,
     welcome_y: i32,
+    /// The welcome text's lines that show (a long text shows a part of itself).
+    text: std::ops::Range<usize>,
     line_y: i32,
     rows: Rows,
     prompt_y: i32,
 }
 
+/// `computers_welcome`'s `wrapwidth`.
+const WRAP: u32 = 600;
+
 /// The welcome text's lines wrapped at `computers_welcome`'s `wrapwidth` (600), at spaces; a word
-/// longer than the width stands on a line of its own.
-fn welcome_lines(look: &Look, screen: &Screen) -> Vec<String> {
-    const WRAP: u32 = 600;
+/// longer than the width (a folder's path) is broken where the width ends.
+pub fn welcome_lines(look: &Look, screen: &Screen) -> Vec<String> {
     let mut out = Vec::new();
     for line in &screen.welcome {
         let mut now = String::new();
@@ -165,11 +185,20 @@ fn welcome_lines(look: &Look, screen: &Screen) -> Vec<String> {
             } else {
                 format!("{now} {word}")
             };
-            if !now.is_empty() && look.font.width(&next) > WRAP {
-                out.push(std::mem::take(&mut now));
-                now = word.to_string();
-            } else {
+            if look.font.width(&next) <= WRAP {
                 now = next;
+                continue;
+            }
+            if !now.is_empty() {
+                out.push(std::mem::take(&mut now));
+            }
+            for c in word.chars() {
+                now.push(c);
+                if look.font.width(&now) > WRAP {
+                    now.pop();
+                    out.push(std::mem::take(&mut now));
+                    now.push(c);
+                }
             }
         }
         out.push(now);
@@ -180,10 +209,21 @@ fn welcome_lines(look: &Look, screen: &Screen) -> Vec<String> {
 fn layout(look: &Look, screen: &Screen) -> Layout {
     let lh = look.font.line_height() as i32;
     let welcome_y = 60 + lh * 3 + 20;
-    let line_y = welcome_y + lh * welcome_lines(look, screen).len() as i32 + 10;
-    let top = line_y + 2 + 10;
     let row = (lh + 20) as u32;
     let prompt_y = HEIGHT as i32 - lh - 30;
+    // The text keeps room below it for the entries (three rows at least, or as many as there
+    // are), the line and the gaps; a longer text shows the part that fits.
+    let lines = welcome_lines(look, screen).len();
+    let keep = screen.entries.len().min(3) as i32 * row as i32 + 2 + 20 + 10;
+    let room = ((prompt_y - keep - welcome_y).max(lh) / lh) as usize;
+    let visible = lines.min(room);
+    let start = if screen.follow_end {
+        lines - visible
+    } else {
+        screen.scroll.min(lines - visible)
+    };
+    let line_y = welcome_y + lh * visible as i32 + 10;
+    let top = line_y + 2 + 10;
     // As many rows as fit above the prompt, at most the game's 12; scrolled so the highlighted
     // one shows.
     let fit = (((prompt_y - 10 - top).max(0) as u32 / row) as usize).clamp(1, 12);
@@ -192,6 +232,7 @@ fn layout(look: &Look, screen: &Screen) -> Layout {
     Layout {
         line_height: lh,
         welcome_y,
+        text: start..start + visible,
         line_y,
         rows: Rows {
             top,
@@ -207,10 +248,11 @@ fn layout(look: &Look, screen: &Screen) -> Layout {
 
 /// How many characters the screen types before it is whole.
 pub fn total_chars(look: &Look, screen: &Screen) -> usize {
-    let rows = layout(look, screen).rows;
+    let l = layout(look, screen);
+    let rows = l.rows;
     look.header.iter().map(|l| l.chars().count()).sum::<usize>()
         + screen.title.chars().count()
-        + welcome_lines(look, screen)
+        + welcome_lines(look, screen)[l.text]
             .iter()
             .map(|l| l.chars().count())
             .sum::<usize>()
@@ -252,16 +294,16 @@ pub fn draw(look: &Look, screen: &Screen, shown: usize, cursor: bool) -> (Canvas
         look.font
             .draw(&mut c, centred(line), 60 + lh * i as i32, &part, text);
     }
-    // The welcome text, then the line under it, as wide as the text.
+    // The welcome text (the part that shows), then the line under it, as wide as the text.
     let mut widest = 0;
     let welcome = welcome_lines(look, screen);
-    for (i, line) in welcome.iter().enumerate() {
+    for (i, line) in welcome[l.text.clone()].iter().enumerate() {
         let part = typed(line);
         look.font
             .draw(&mut c, 100, l.welcome_y + lh * i as i32, &part, text);
         widest = widest.max(look.font.width(line));
     }
-    if !welcome.is_empty() {
+    if !l.text.is_empty() {
         c.fill(100, l.line_y, widest, 2, look.at(200.0, 255.0));
     }
     // The list.
@@ -291,6 +333,24 @@ pub fn draw(look: &Look, screen: &Screen, shown: usize, cursor: bool) -> (Canvas
     (c, l.rows)
 }
 
+/// The intro's lines as typed so far (`crate::intro`) on the screen's background, in the menu's
+/// four intro texts: `computers_intro_welcome` at (100, 60), and each of `_logon`, `_enterpw`
+/// and `_pwdisplay` at the one before's y plus twice its height (one empty line between). The
+/// prompt line and its cursor are hidden until `FinishIntro`.
+pub fn draw_intro(look: &Look, lines: &[String]) -> Canvas {
+    let mut c = Canvas::new(WIDTH, HEIGHT);
+    if let Some((w, h, px)) = &look.background {
+        c.stretch((px, *w, *h), (10, 0, WIDTH, HEIGHT), look.at(90.0, 255.0));
+    }
+    let lh = look.font.line_height() as i32;
+    let text = look.at(255.0, 255.0);
+    let (x, y) = INTRO_AT;
+    for (i, line) in lines.iter().enumerate() {
+        look.font.draw(&mut c, x, y + 2 * lh * i as i32, line, text);
+    }
+    c
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,9 +360,43 @@ mod tests {
             title: "-nv-rs-".into(),
             welcome: welcome.iter().map(|s| s.to_string()).collect(),
             entries: (0..20).map(|i| format!("Entry {i}")).collect(),
-            highlighted: 0,
-            typed: String::new(),
+            ..Default::default()
         }
+    }
+
+    /// A path with no spaces wider than the text is broken where the width ends, every letter
+    /// kept.
+    #[test]
+    fn a_long_path_is_broken_at_the_width() {
+        let look = Look::plain();
+        let path = "C:\\Games\\Steam\\steamapps\\common\\Fallout New Vegas\\Data\\FalloutNV.esm";
+        let lines = welcome_lines(&look, &screen(&[path]));
+        assert!(lines.len() >= 3, "{lines:?}");
+        assert!(lines.iter().all(|l| look.font.width(l) <= 600), "{lines:?}");
+        assert_eq!(lines.concat().replace(' ', ""), path.replace(' ', ""));
+    }
+
+    /// A text longer than its room shows its start (moved by the scroll) or, following a
+    /// program's output, its end; the entries keep their rows below it.
+    #[test]
+    fn a_long_text_shows_a_part_and_keeps_the_entries() {
+        let look = Look::plain();
+        let many: Vec<String> = (0..60).map(|i| format!("line {i}")).collect();
+        let many: Vec<&str> = many.iter().map(String::as_str).collect();
+        let mut s = screen(&many);
+        s.entries = vec!["Back".into(), "Exit".into()];
+        let l = layout(&look, &s);
+        assert_eq!(l.text.start, 0);
+        assert!(l.text.len() > 5 && l.text.len() < 60, "{:?}", l.text);
+        assert_eq!(l.rows.shown, 2);
+        let prompt = HEIGHT as i32 - look.font.line_height() as i32 - 30;
+        assert!(l.rows.top + (l.rows.row * 2) as i32 <= prompt - 10);
+        s.scroll = 1000;
+        assert_eq!(layout(&look, &s).text.end, 60);
+        s.scroll = 3;
+        assert_eq!(layout(&look, &s).text.start, 3);
+        s.follow_end = true;
+        assert_eq!(layout(&look, &s).text.end, 60);
     }
 
     /// The welcome text wraps at 600 at spaces and keeps every word; the list starts below it.

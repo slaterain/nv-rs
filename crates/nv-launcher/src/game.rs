@@ -132,12 +132,13 @@ fn ini_value<'a>(text: &'a str, section: &str, key: &str) -> Option<&'a str> {
 
 /// The terminal's game settings with text: name, the name's address and the default value's
 /// address in FalloutNV.exe 1.4.0.525 (their static initializers 00f6daa0, 00f6dad0, 00f6dc80,
-/// 00f6dc20 push them).
-const SETTINGS: [(&str, u32, u32); 4] = [
+/// 00f6dc20 and 00f6df20 push them). FalloutNV.esm has no GMST for any of them.
+const SETTINGS: [(&str, u32, u32); 5] = [
     ("sComputersHeader1", 0x0105_a540, 0x0105_a554),
     ("sComputersHeader2", 0x0105_a580, 0x0105_a594),
     ("sHackingIntro01", 0x0105_a6c8, 0x0105_a6d8),
     ("sComputersLogon", 0x0105_a680, 0x0105_a690),
+    ("sHackingHeader2", 0x0105_a930, 0x0105_a940),
 ];
 
 /// The sections of a 32-bit PE file: enough to turn addresses into file offsets.
