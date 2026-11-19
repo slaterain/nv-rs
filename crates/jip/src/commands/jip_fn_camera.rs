@@ -9,6 +9,7 @@
 //! code bytes stay as written until the game ends, as in JIP).
 
 use super::Handlers;
+use crate::game_patches::Area;
 use engine_core::extend::{Owner, SiteSlot};
 use engine_core::prelude::*;
 use nvse::commands::Read;
@@ -53,9 +54,23 @@ fn switches(e: &mut Engine) -> &CameraSwitches {
     e.ext_free::<CameraSwitches>()
 }
 
-/// The two seams' handlers and the switches' slot (made before the threads start).
+/// The switches' slot (made before the threads start).
 pub fn install(e: &mut Engine) {
     e.ext_free::<CameraSwitches>();
+}
+
+/// The two seams: in with JIP's `INSTALLED`, as JIP's other patches.
+pub const AREA: Area = Area {
+    name: "camera",
+    fix_sites: &[],
+    fix_wraps: &[],
+    install_fixes: crate::game_patches::nothing,
+    jip_sites: &[VANITY_WHEEL.addr(), CAMERA_COLLISION.addr()],
+    jip_wraps: &[],
+    install_jip,
+};
+
+fn install_jip(e: &mut Engine) {
     e.on_site(VANITY_WHEEL, vanity_wheel);
     e.on_site(CAMERA_COLLISION, camera_collision);
 }

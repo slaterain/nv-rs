@@ -4,11 +4,14 @@
 //! its own: the weapon's equipped ammo (`TESObjectWEAP::GetEquippedAmmo`, `00525980`) and its
 //! projectile (`00525A90`), both whole functions reached only by address, so wraps here; and two
 //! places in the player's code (the ammo swap's weapon entry at `0x946310`, the ammo switch key's
-//! weapon test at `0x940998`), seams in engine-fallout-ai's `playercharacter.rs`. Everything does
-//! what the exe does until the command has named the weapon. Run-wide, lock-free; never saved
-//! (JIP's global lives until the game ends).
+//! weapon test at `0x940998`), seams in engine-fallout-ai's `playercharacter.rs`. All four are
+//! put in only while JIP answers "installed" ([`AREA`]), and do what the exe does until the
+//! command has named the weapon. The wraps keep every caller: `00525980` has its row in
+//! engine-core's `data/overridable.tsv`, so no typed code calls it directly. Run-wide,
+//! lock-free; never saved (JIP's global lives until the game ends).
 
 use super::Handlers;
+use crate::game_patches::Area;
 use engine_core::extend::{Owner, SiteSlot, WrapSlot};
 use engine_core::prelude::*;
 use nvse::commands::Read;
@@ -36,9 +39,24 @@ pub fn launcher(e: &mut Engine) -> u32 {
     e.ext_free::<RockIt>().launcher.load(Ordering::Relaxed)
 }
 
-/// The wraps, the seams' handlers and the slot (made before the threads start).
+/// The slot (made before the threads start).
 pub fn install(e: &mut Engine) {
     e.ext_free::<RockIt>();
+}
+
+/// The two wraps and the two seams: in with JIP's `INSTALLED`, as JIP's other patches (with JIP
+/// not installed the game's functions are not wrapped at all).
+pub const AREA: Area = Area {
+    name: "Rock-It Launcher",
+    fix_sites: &[],
+    fix_wraps: &[],
+    install_fixes: crate::game_patches::nothing,
+    jip_sites: &[AMMO_SWAP.addr(), AMMO_SWITCH.addr()],
+    jip_wraps: &[EQUIPPED_AMMO.addr(), WEAPON_PROJECTILE.addr()],
+    install_jip,
+};
+
+fn install_jip(e: &mut Engine) {
     e.wrap(EQUIPPED_AMMO, equipped_ammo);
     e.wrap(WEAPON_PROJECTILE, weapon_projectile);
     e.on_site(AMMO_SWAP, ammo_swap);

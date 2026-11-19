@@ -16722,14 +16722,19 @@ mod tests {
 
     /// JIP LN NVSE's InitRockItLauncher seam at the ammo switch key's weapon test (`0x940998`):
     /// asked only while JIP is installed; an answer of 0 goes on to the drawn test (`008a16d0`)
-    /// without the exe's weapon entry test (the process's slot `0x148`, 0 here), 1 skips it as
-    /// the exe does without a weapon; none leaves the exe's test.
+    /// without the exe's weapon entry test (the process's slot `0x148`, a weapon entry here, so
+    /// the exe's test reaches the drawn test too), 1 skips both as the exe does without a weapon;
+    /// none leaves the exe's test. Counted: the drawn tests and the slot's calls.
     #[test]
     fn update_ammo_switch_seam() {
         use engine_core::extend::jip_patches;
+        const PROCESS_VTABLE: u32 = 0x0202_0000;
         let drawn_tests = |word: u32, answer: u32| {
             let mut e = engine();
             let this = update_world(&mut e);
+            let entry_slot = 0x00b0_0000 + (PROCESS_VTABLE & 0xf_ffff) / 0x10 + 0x148;
+            e.register(entry_slot, |_, _| int(0x0300_0100));
+            e.mem.set_u32(PROCESS_VTABLE + 0x148, entry_slot);
             e.register(0x00a2_4660, |_, a| {
                 int(u32::from(a[1] == 0x12 && a[2] == 1))
             });
@@ -16740,24 +16745,35 @@ mod tests {
                 _ => e.on_site_for_test(0x0094_0998, |_, _| None),
             }
             player_character_update(&mut e, this, 0.5);
-            called(&e, 0x008a_16d0).len()
+            (
+                called(&e, 0x008a_16d0).len(),
+                slot_calls(&e, PROCESS_VTABLE, 0x148).len(),
+            )
         };
         let exe = drawn_tests(0, 0);
+        assert!(
+            exe.0 >= 1 && exe.1 >= 1,
+            "the exe's test reaches the drawn test"
+        );
         assert_eq!(
             drawn_tests(jip_patches::FIXES, 0),
             exe,
             "not installed: not asked"
         );
-        assert_eq!(drawn_tests(jip_patches::INSTALLED, 1), exe, "skipped");
         assert_eq!(
             drawn_tests(jip_patches::INSTALLED, 2),
             exe,
             "no answer: the exe's test"
         );
         assert_eq!(
+            drawn_tests(jip_patches::INSTALLED, 1),
+            (exe.0 - 1, exe.1 - 1),
+            "skipped: no weapon entry test, no drawn test"
+        );
+        assert_eq!(
             drawn_tests(jip_patches::INSTALLED, 0),
-            exe + 1,
-            "on without the test"
+            (exe.0, exe.1 - 1),
+            "on without the weapon entry test"
         );
     }
 
@@ -18476,7 +18492,8 @@ mod tests {
 
     /// The seam at 0x945A28 (JIP's ToggleVanityWheel): asked only while JIP is installed and a
     /// zoom was read; an answer of 1 skips the zoom block (the distance kept, `00967ae0` not
-    /// asked, no look result from the zoom); 0, or JIP not installed, zooms as the exe.
+    /// asked; the look result still 1, from the zoom read); 0, or JIP not installed, zooms as the
+    /// exe.
     #[test]
     fn the_vanity_wheel_seam_skips_the_zoom() {
         use engine_core::extend::jip_patches;
@@ -18533,9 +18550,8 @@ mod tests {
                 usize::from(zooms),
                 "{word:x}"
             );
-            if zooms {
-                assert_eq!(result, 1, "{word:x} {answer}");
-            }
+            // The look result comes from the zoom read (the end's test), the wheel on or off.
+            assert_eq!(result, 1, "{word:x} {answer}");
         }
     }
 
