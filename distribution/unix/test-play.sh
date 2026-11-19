@@ -69,7 +69,9 @@ exit "${FAKE_STATUS:-0}"
 EOF
 chmod +x "$T/program"
 export NV_RS_PROGRAM="$T/program" FAKE_FIND="$T/find.txt"
-unset NV_RS_GAME NV_RS_ANSWERS_FROM_INPUT
+# Also the profile variables, so a caller's own (the profiler's NV_PROFILE among them) cannot pass
+# or fail the profile checks.
+unset NV_RS_GAME NV_RS_ANSWERS_FROM_INPUT NV_RS_PROFILE NV_PROFILE
 run() { $SH "$PLAY" "$@"; }
 answer() { # TEXT ARGS...: play.sh with TEXT as the typed answers
     text=$1
@@ -360,6 +362,7 @@ check "26 saves kept apart, said" 'printf "%s" "$out" | grep -qF "./play.sh --mo
 check "26 plain play's offer not used up" '[ ! -e "$own26/saves-offered.txt" ]'
 out=$(printf '\n' | env FAKE_FIND="$T/find26.txt" NV_RS_GAME="$game" NV_RS_ANSWERS_FROM_INPUT=1 $SH "$pkg/play.sh" 2>&1)
 check "26 without --mods: the game profile" 'printf "%s" "$out" | grep -qx "NV_RS_PROFILE=game" && printf "%s" "$out" | grep -qF "program args: $game"'
+check "26 without --mods: the engine profiler not enabled" '! printf "%s" "$out" | grep -q "^NV_PROFILE="'
 check "26 plain play still offers the saves" 'printf "%s" "$out" | grep -qF "Your saves from" && [ -f "$own26/saves-offered.txt" ]'
 plain="$own26/game/Documents/My Games/FalloutNV/Saves"
 mkdir -p "$plain"

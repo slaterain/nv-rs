@@ -39,9 +39,9 @@
 //!   `EnableImprovedRecipeMenu`, `SuppressQuestMessages`, `InitItemFilter`, `SetItemFilter` (code bytes and jumps patched into
 //!   the exe); (`ShowTextInputMenu`, `SetTextInputExtendedProps` and `SetTextInputString`, with
 //!   JIP's text input hooks, are built in `jip_fn_ui_text.rs`);
-//! - 3D and drawing: `ProjectUITile` (a rendered texture), `SetCursorPos` (the cursor's scene
-//!   node); (`AttachUIXML` and `AttachUIComponent`, a tile's node under a reference's node, are
-//!   built in `jip_fn_ui_nodes.rs`);
+//! - 3D and drawing: `ProjectUITile` (a rendered texture); (`AttachUIXML` and
+//!   `AttachUIComponent`, a tile's node under a reference's node, are built in `jip_fn_ui_nodes.rs`,
+//!   `SetCursorPos` in `jip_fn_ui_cursor.rs`);
 //!
 //! `GetMenuTargetRef` and `GetSelectedItemRef`: where JIP reads through a null pointer (the top
 //! menu's object, a highlighted perk rank with no item, a barter menu without a merchant), the
@@ -134,10 +134,9 @@ pub static COMMANDS: Handlers = &[
 /// see or click. The row's pull request adds this list to `commands::ALL`.
 pub static AWAITING_H02: Handlers = &[(0x28b5, toggle_hud_cursor)];
 
-/// `SetFontFile`, built but not registered until JIP's font manager patch (row G129) is in: without
-/// it fonts 10 to 89 could not be set (the game's manager ends after font 8) and a game font could
-/// not be put back (G129 keeps the game's eight in the map at start; their files are in the
-/// archives, not loose). The row's pull request adds this list to `commands::ALL`.
+/// `SetFontFile`, registered with JIP's font manager patch (row G129, `game_patches::ga`): with it
+/// fonts 10 to 89 can be set and a game font put back (G129 keeps the game's eight in the map at
+/// start; their files are in the archives, not loose).
 pub static AWAITING_G129: Handlers = &[(0x274c, set_font_file)];
 
 /// `IsInCharGen`, a condition (`DEFINE_CMD_COND_PLUGIN`).
@@ -320,7 +319,7 @@ const STR_ARG_BUFFER: usize = 0x4_0000;
 /// `Tile::Parents[24]` in `GetComponentFullName`: deeper tiles run past JIP's array.
 const FULL_NAME_DEPTH: u32 = 24;
 
-fn interface_manager(e: &Engine) -> u32 {
+pub(crate) fn interface_manager(e: &Engine) -> u32 {
     e.mem.u32(INTERFACE_MANAGER)
 }
 
@@ -660,7 +659,7 @@ fn top_visible_menu_id(e: &Engine) -> u32 {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.cpp: GetMenuMode.
 /// Menu mode (`currentMode > 1`) or JIP's HUD cursor mode ([`hud_cursor_mode`],
 /// `ToggleHUDCursor`).
-fn menu_mode(e: &mut Engine) -> bool {
+pub(crate) fn menu_mode(e: &mut Engine) -> bool {
     let im = interface_manager(e);
     (im != 0 && e.mem.u32(im + IM_CURRENT_MODE) > 1) || hud_cursor_mode(e)
 }
@@ -2828,11 +2827,13 @@ pub(crate) fn font_manager_extended(e: &mut Engine) -> bool {
     font_infos(e).extended
 }
 
-/// `FontInfo::Init` (`00A12020`, `thiscall`: the block, the font's number, its path, a bool) and
-/// a `FontInfo`'s size and its loaded data (+0x38, null when the file did not load).
-const FONT_INFO_INIT: u32 = 0x00a1_2020;
-const FONT_INFO_SIZE: u32 = 0x54;
-const FONT_INFO_BUFFER_DATA: u32 = 0x38;
+/// `FontInfo::Init` (`00A12020`, `thiscall`: the block, the font's number, its path, a bool: 1
+/// loads the file) and a `FontInfo`'s size (JIP's `static_assert(sizeof(FontInfo) == 0x54)`, the
+/// `push 0x54` of G129's start) and its loaded data (+0x38, null when the file did not load). One
+/// set for `SetFontFile` and G129 (`game_patches::ga`).
+pub(crate) const FONT_INFO_INIT: u32 = 0x00a1_2020;
+pub(crate) const FONT_INFO_SIZE: u32 = 0x54;
+pub(crate) const FONT_INFO_BUFFER_DATA: u32 = 0x38;
 /// JIP's `dataPathFull[0x100]` with `data\` in its first five bytes: the path's own room.
 const FONT_PATH_BUFFER: usize = 0x100 - 5;
 /// The game's own font manager has the fonts 1 to 8; JIP's (G129) 1 to 89.

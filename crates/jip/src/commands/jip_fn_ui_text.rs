@@ -207,10 +207,10 @@ const FONT_HEIGHTS: usize = 90;
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: DeferredInit (the font
 // heights).
 /// The heights of fonts 1 to 89 but 9 from the font manager's `FontInfo`s (font `n` is the
-/// manager's `n - 1`th), then 4, 6, 4 and 2 more line height for fonts 2, 3, 6 and 7. The game's
-/// manager has fonts 1 to 8 only: until JIP's font manager patch (G129) is in, the others stay 0
-/// (JIP's loop would read past the game's eight; no menu can use them). A font that did not load
-/// is left at 0.
+/// manager's `n - 1`th), then 4, 6, 4 and 2 more line height for fonts 2, 3, 6 and 7. With JIP's
+/// font manager patch (G129, `game_patches::ga`) the manager has all 89; without it only the
+/// game's 1 to 8, and the others stay 0 (JIP's loop would read past the game's eight; no menu can
+/// use them). A font that did not load is left at 0.
 pub(crate) fn deferred_init(e: &mut Engine) {
     let manager = e.mem.u32(FONT_MANAGER);
     let fonts = if super::jip_fn_ui::font_manager_extended(e) {
