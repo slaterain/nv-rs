@@ -126,6 +126,14 @@ impl Default for TestEnv {
                     Default,
                     tt::INVALID,
                 ),
+                // A game command taking a string and a number (a stand-in of the game's format).
+                cmd(
+                    "PlayFileAt",
+                    0x1104,
+                    vec![p("file", 0, false), p("value", 2, false)],
+                    Default,
+                    tt::INVALID,
+                ),
                 cmd(
                     "AddItem",
                     0x1002,

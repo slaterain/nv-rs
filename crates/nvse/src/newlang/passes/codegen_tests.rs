@@ -386,6 +386,24 @@ fn enum_arguments() {
     );
 }
 
+/// A game command's string and number arguments: each after `0xFFFF` with its own length word
+/// and its expression (`S` and the text, `B` and the byte). `crates/engine`'s test
+/// `xnvse_inline_arguments` reads these bytes back through the game's reader `005accb0`
+/// (`NEW_SYNTAX_CALL` there: keep the two the same).
+#[test]
+fn a_game_commands_string_and_number_arguments() {
+    #[rustfmt::skip]
+    let call = [
+        0x04, 0x11, 0x12, 0x00, 0x02, 0x00,
+        0xff, 0xff, 0x08, 0x00, b'S', 0x03, 0x00, b'a', b'b', b'c',
+        0xff, 0xff, 0x04, 0x00, b'B', 0x05,
+    ];
+    assert_eq!(
+        compile("name t;\nGameMode {\n  PlayFileAt(\"abc\", 5);\n}"),
+        script(&[&block(0, &call)])
+    );
+}
+
 /// `while` with `continue`: the condition's jump to the loop's end (75), the `continue` a jump
 /// back to the condition (35), and the jump back at the end of the block.
 #[test]
