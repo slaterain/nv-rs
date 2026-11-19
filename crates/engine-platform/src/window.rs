@@ -268,7 +268,7 @@ fn read_pointer_speed() -> Result<(u32, Vec<u8>), u32> {
     unsafe {
         let opened = RegOpenKeyExA(
             HKEY_CURRENT_USER,
-            b"Control Panel\Mouse\0".as_ptr(),
+            b"Control Panel\\Mouse\0".as_ptr(),
             0,
             KEY_READ,
             &mut key,
@@ -970,7 +970,13 @@ mod tests {
         use crate::PointerSpeed::{Missing, Value};
         let six = b"6\0".to_vec();
         let (speed, line) = pointer_speed_of(Ok((REG_SZ, six.clone())));
-        assert_eq!(speed, Some(Value { kind: REG_SZ, data: six }));
+        assert_eq!(
+            speed,
+            Some(Value {
+                kind: REG_SZ,
+                data: six
+            })
+        );
         assert_eq!(
             line,
             "input: Windows' pointer speed (Mouse settings) is 6: the game's menu cursor speed \
@@ -987,7 +993,10 @@ mod tests {
                 data: vec![10, 0, 0, 0]
             })
         );
-        assert!(line.contains("stored as registry type 4, not as text"), "{line}");
+        assert!(
+            line.contains("stored as registry type 4, not as text"),
+            "{line}"
+        );
         let (speed, line) = pointer_speed_of(Err(Some(2)));
         assert_eq!(speed, Some(Missing(2)));
         assert!(
@@ -1032,16 +1041,14 @@ mod tests {
         let mut speed = 0u32;
         // SAFETY: SPI_GETMOUSESPEED writes one int into `speed`.
         let ok = unsafe {
-            SystemParametersInfoW(
-                SPI_GETMOUSESPEED,
-                0,
-                (&mut speed as *mut u32).cast(),
-                0,
-            )
+            SystemParametersInfoW(SPI_GETMOUSESPEED, 0, (&mut speed as *mut u32).cast(), 0)
         };
         assert_ne!(ok, 0, "SPI_GETMOUSESPEED");
         assert_eq!(read, speed);
-        assert!(matches!(pointer_speed().0, Some(crate::PointerSpeed::Value { .. })));
+        assert!(matches!(
+            pointer_speed().0,
+            Some(crate::PointerSpeed::Value { .. })
+        ));
     }
 
     fn wide_of(text: &str) -> Vec<u16> {
