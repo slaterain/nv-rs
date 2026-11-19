@@ -815,6 +815,11 @@ pub fn script_line_script_line(e: &mut Engine, this: Ptr) -> Ptr {
 pub fn script_compiler_get_next_line(e: &mut Engine, data: Ptr, line: Ptr) -> u32 {
     let base = data.addr();
     let line = line.addr();
+    // Seam 005AF3F0 (words: the compile data, the line): answered, xNVSE's own line reader ran in
+    // place of this one (its `PatchGameCommandParser`), the answer the bytes it read.
+    if let Some(read) = e.site(0x005a_f3f0, &[base, line]) {
+        return read;
+    }
     let start = word_at(e, base, 0).wrapping_add(word_at(e, base, 4));
     let mut read = 0u32;
     let mut skipping = true;
@@ -2740,6 +2745,20 @@ pub fn script_compiler_standard_compile(
             let kind = word_at(e, entry, 4);
             let allow = e.mem.u8(PARAMETER_TYPES.wrapping_add(kind.wrapping_mul(8)));
             fn_005af310(e, Ptr::new(word));
+            // Seam 005B1C65, the parameter's word read (words: the line, the compile data, the
+            // parameters, the index): xNVSE's inline expression in parentheses. Answered 1, the
+            // parameter is compiled (the next one follows); 0, a syntax error (false).
+            match e.site(
+                0x005b_1c65,
+                &[line, data.addr(), parameters, u32::from(index as u16)],
+            ) {
+                Some(0) => return false,
+                Some(_) => {
+                    index = index.wrapping_add(1);
+                    continue;
+                }
+                None => {}
+            }
             let length = script_compiler_get_next_word(
                 e,
                 data,
@@ -3773,6 +3792,87 @@ mod n045_tests {
         assert_eq!(e.call(0x005a_f3f0, &[d, l]).u32(), 0);
         assert_eq!(errors(&e), vec![TEXT_LINE_TOO_LONG]);
         assert_eq!(e.mem.u32(l + 0x418), 0x10);
+    }
+
+    /// The seam at the line reader's entry (`0x5AF3F0`, xNVSE's own reader in its place), with
+    /// the compile data and the line as words: answered, the answer is the read and the game's
+    /// reader does not run (the line untouched); unanswered, it runs.
+    #[test]
+    fn get_next_line_seam_answered_runs_no_game_reader() {
+        use std::cell::RefCell;
+        thread_local! {
+            static WORDS: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
+        }
+        let mut e = rig();
+        let d = data(&mut e);
+        let input = text(&mut e, b"set x\r\nend");
+        e.mem.set_u32(d, input);
+        let l = line(&mut e, 0, 0, b"");
+        e.on_site_for_test(0x005a_f3f0, |_, w| {
+            WORDS.with(|s| *s.borrow_mut() = w.to_vec());
+            Some(77)
+        });
+        assert_eq!(e.call(0x005a_f3f0, &[d, l]).u32(), 77);
+        assert_eq!(WORDS.with(|s| s.borrow().clone()), vec![d, l]);
+        assert_eq!(e.mem.u32(l + 0x204), 0, "the line untouched");
+        let mut e = rig();
+        let d = data(&mut e);
+        let input = text(&mut e, b"set x\r\nend");
+        e.mem.set_u32(d, input);
+        let l = line(&mut e, 0, 0, b"");
+        assert_eq!(
+            e.call(0x005a_f3f0, &[d, l]).u32(),
+            7,
+            "unanswered: the game's"
+        );
+    }
+
+    /// The seam at each parameter's word read (`0x5B1C65`, xNVSE's inline expression), with the
+    /// line, the compile data, the parameters and the index as words: 1 goes on with the next
+    /// parameter without reading a word, 0 fails the line, no answer reads the word.
+    #[test]
+    fn standard_compile_parameter_seam() {
+        use std::cell::RefCell;
+        thread_local! {
+            static CALLS: RefCell<Vec<Vec<u32>>> = const { RefCell::new(Vec::new()) };
+        }
+        fn first_is_an_expression(e: &mut Engine, w: &[u32]) -> Option<u32> {
+            CALLS.with(|c| c.borrow_mut().push(w.to_vec()));
+            if w[3] == 0 {
+                // What xNVSE's expression leaves: its bytes written, the offset past it.
+                let line = w[0];
+                let len = e.mem.u32(line + 0x40c);
+                e.mem.write(line + 0x20c + len, &[0xff, 0xff]);
+                e.mem.set_u32(line + 0x40c, len + 2);
+                e.mem.set_u32(line + 0x208, 4);
+                Some(1)
+            } else {
+                None
+            }
+        }
+        let mut e = rig();
+        let d = data(&mut e);
+        e.mem.set_u8(PARAMETER_TYPES + 8, 1);
+        e.register(IS_AN_INTEGER, |_, _| ret(1));
+        e.register(TEXT_TO_INTEGER, |_, _| ret(42));
+        let p = parameters(&mut e, &[(1, 0), (1, 0)]);
+        e.on_site_for_test(0x005b_1c65, first_is_an_expression);
+        let l = line(&mut e, 1, 0x1000, b"(x) 42");
+        assert!(e.call(0x005b_1ba0, &[2, p, l, d]).bool());
+        assert_eq!(
+            e.mem.bytes(l + 0x20c, e.mem.u32(l + 0x40c)),
+            vec![2, 0, 0xff, 0xff, 0x6e, 42, 0, 0, 0]
+        );
+        assert_eq!(
+            CALLS.with(|c| c.borrow().clone()),
+            vec![vec![l, d, p, 0], vec![l, d, p, 1]]
+        );
+        let mut e = rig();
+        let d = data(&mut e);
+        let p = parameters(&mut e, &[(1, 0)]);
+        e.on_site_for_test(0x005b_1c65, |_, _| Some(0));
+        let l = line(&mut e, 1, 0x1000, b"(x");
+        assert!(!e.call(0x005b_1ba0, &[1, p, l, d]).bool(), "a syntax error");
     }
 
     #[test]

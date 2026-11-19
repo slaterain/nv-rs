@@ -46,6 +46,7 @@ pub mod jip_fn_marker_cmds;
 pub mod jip_fn_minimap;
 pub mod jip_fn_minimap_seams;
 pub mod jip_fn_misc_ref;
+pub mod jip_fn_misc_ref_code;
 pub mod jip_fn_misc_ref_havok;
 pub mod jip_fn_misc_ref_havok_w;
 pub mod jip_fn_misc_ref_insert;
@@ -56,6 +57,7 @@ pub mod jip_fn_misc_ref_nodes_w;
 pub mod jip_fn_miscellaneous;
 pub mod jip_fn_miscellaneous_marker;
 pub mod jip_fn_miscellaneous_scene;
+pub mod jip_fn_moon;
 pub mod jip_fn_move_cmds;
 pub mod jip_fn_package;
 pub mod jip_fn_perk;
@@ -264,6 +266,8 @@ pub const ALL: &[Handlers] = &[
     jip_fn_ui_cursor::COMMANDS,
     // The recipe menu, quest messages and item filter (code bytes as seams and wraps).
     jip_fn_ui_code::COMMANDS,
+    jip_fn_misc_ref_code::COMMANDS,
+    jip_fn_moon::COMMANDS,
     // `InitMiniMap` (JIP MiniMap's start; its patches in `jip_fn_minimap_seams`).
     jip_fn_minimap::COMMANDS,
 ];
@@ -306,6 +310,8 @@ pub fn install(e: &mut Engine) {
     jip_fn_camera::install(e);
     jip_fn_rock_it::install(e);
     jip_fn_ui_code::install(e);
+    jip_fn_misc_ref_code::install(e);
+    jip_fn_moon::install(e);
     jip_fn_minimap::install(e);
     for list in ALL {
         for &(opcode, execute) in list.iter() {
@@ -924,6 +930,10 @@ mod tests {
             "jip_fn_ui",
             // jip_fn_ui_code (the recipe menu, quest messages, item filter).
             "jip_fn_ui",
+            // jip_fn_misc_ref_code (ToggleNoZPosReset, ToggleObjectCollision).
+            "jip_fn_misc_ref",
+            // jip_fn_moon (SetMoonTexture).
+            "jip_fn_miscellaneous",
             // jip_fn_minimap (InitMiniMap).
             "jip_fn_minimap",
         ];
