@@ -2846,8 +2846,8 @@ impl Parser {
         let record = record_of(e, e.mem.u32(self.line + ln::OPCODE));
         if !validate_vanilla_arg_type(e, kind, result, record) {
             let type_str = opt_text(e, e.mem.u32(param)).unwrap_or_default();
-            let mut m = format!("Invalid expression for parameter {}. Expected ", index + 1)
-                .into_bytes();
+            let mut m =
+                format!("Invalid expression for parameter {}. Expected ", index + 1).into_bytes();
             m.extend_from_slice(&type_str);
             m.extend_from_slice(format!(" (got {}).", type_name(result)).as_bytes());
             compiler_error(e, self.line, &m);

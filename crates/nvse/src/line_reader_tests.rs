@@ -97,7 +97,11 @@ fn block_comments() {
         printed(),
         vec!["Error on line 2\n\nMismatched comment block (missing '*/' for a present '/*')"]
     );
-    assert_eq!(e.mem.u32(BUF + sb::CUR_LINE), 2, "the buffer takes the line's number");
+    assert_eq!(
+        e.mem.u32(BUF + sb::CUR_LINE),
+        2,
+        "the buffer takes the line's number"
+    );
 }
 
 /// A run of blanks outside a string is one blank (its first); inside a string it is kept.
@@ -120,10 +124,7 @@ fn a_semicolon_cuts_even_in_a_string() {
         lines(&[(1, "print \"a"), (2, "next")])
     );
     printed();
-    assert_eq!(
-        read_all(&mut e, b"print \"a;b\""),
-        lines(&[(0, "error 1")])
-    );
+    assert_eq!(read_all(&mut e, b"print \"a;b\""), lines(&[(0, "error 1")]));
     assert_eq!(
         printed(),
         vec!["Error on line 1\n\nMismatched quotes. A string literal was not closed."]
@@ -155,7 +156,10 @@ fn mismatched_parentheses() {
     printed();
     assert_eq!(read_all(&mut e, b"a )\n"), lines(&[(0, "error 1")]));
     assert_eq!(printed(), vec!["Error on line 1\n\nMismatched parenthesis"]);
-    assert_eq!(read_all(&mut e, b"x\na (b\nc"), lines(&[(1, "x"), (0, "error 1")]));
+    assert_eq!(
+        read_all(&mut e, b"x\na (b\nc"),
+        lines(&[(1, "x"), (0, "error 1")])
+    );
     assert_eq!(
         printed(),
         vec!["Error on line 2\n\nMismatched parentheses. Parentheses were not closed."]
@@ -178,7 +182,11 @@ fn the_512_character_limit() {
     let ok = read_all(&mut e, &line_of(512));
     assert_eq!(ok.len(), 1);
     assert_eq!(ok[0].1.len(), 512);
-    assert_eq!(e.mem.u32(LINE + ln::TEXT_LEN), 512, "the length's own low byte is the end");
+    assert_eq!(
+        e.mem.u32(LINE + ln::TEXT_LEN),
+        512,
+        "the length's own low byte is the end"
+    );
     printed();
     assert_eq!(read_all(&mut e, &line_of(513)), lines(&[(0, "error 16")]));
     assert_eq!(
@@ -352,7 +360,9 @@ fn the_multiple_declaration() {
     read_all(&mut e, b"float fA, Let");
     assert_eq!(
         printed(),
-        vec!["Error on line 1\n\nInvalid variable name Let: Command with that name already exists."]
+        vec![
+            "Error on line 1\n\nInvalid variable name Let: Command with that name already exists."
+        ]
     );
     state(&mut e).scripts.clear();
     read_all(&mut e, b"float fB, fC");
@@ -405,9 +415,50 @@ fn the_seams_answer() {
 #[test]
 fn the_log_line() {
     assert_eq!(
-        crate::compiler::log_line(b"Error on line 3\n\nMax script line length (512 characters) exceeded."),
+        crate::compiler::log_line(
+            b"Error on line 3\n\nMax script line length (512 characters) exceeded."
+        ),
         b"xNVSE: Error on line 3: Max script line length (512 characters) exceeded."
     );
-    assert_eq!(crate::compiler::log_line(b"  one  \r\n\r\n two\n"), b"xNVSE: one: two");
+    assert_eq!(
+        crate::compiler::log_line(b"  one  \r\n\r\n two\n"),
+        b"xNVSE: one: two"
+    );
     assert_eq!(crate::compiler::log_line(b""), b"xNVSE: ");
+}
+
+/// A compile error is also written to `nvse.log` (xNVSE's `_MESSAGE` after its `Console_Print`),
+/// through the game's file calls: the log made at its first message, each line ended `\r\n`.
+#[test]
+fn compile_errors_reach_nvse_log() {
+    use std::cell::RefCell;
+    thread_local! {
+        static LOG: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    }
+    fn eax(v: u32) -> Ret {
+        Ret {
+            eax: v,
+            ..Ret::default()
+        }
+    }
+    let mut e = engine();
+    LOG.with(|l| l.borrow_mut().clear());
+    e.register(crate::commands::array::CREATE_FILE_A, |e, a| {
+        assert_eq!(crate::table::guest_text(e, a[0]), b"nvse.log");
+        eax(0x44)
+    });
+    e.register(0x00fd_f240, |_, _| eax(0));
+    e.register(0x00fd_f0dc, |e, a| {
+        let bytes = e.mem.bytes(a[1], a[2]);
+        LOG.with(|l| l.borrow_mut().extend(bytes));
+        eax(1)
+    });
+    e.register(0x00fd_f07c, |_, _| eax(1));
+    printed();
+    read_all(&mut e, b"a )\n");
+    assert_eq!(printed(), vec!["Error on line 1\n\nMismatched parenthesis"]);
+    assert_eq!(
+        LOG.with(|l| l.borrow().clone()),
+        b"Error on line 1\r\n\r\nMismatched parenthesis\r\n"
+    );
 }

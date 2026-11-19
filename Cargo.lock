@@ -504,6 +504,7 @@ dependencies = [
  "engine-speedtree",
  "engine-typed",
  "esm",
+ "nvse",
 ]
 
 [[package]]
