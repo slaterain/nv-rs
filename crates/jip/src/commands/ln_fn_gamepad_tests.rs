@@ -364,7 +364,11 @@ fn set_dead_zone_ls_and_rs() {
         )
     };
     assert_eq!(all(&mut e), (7849, 7849.0, 7849, 8689, 8689.0, 8689));
-    assert_eq!(call(&mut e, 0x220d, &[z(0.5)]), (1, 0.0), "handled, no result");
+    assert_eq!(
+        call(&mut e, 0x220d, &[z(0.5)]),
+        (1, 0.0),
+        "handled, no result"
+    );
     assert_eq!(all(&mut e), (16383, 16383.0, 16383, 8689, 8689.0, 8689));
     assert_eq!(run(&mut e, 0x220b, &[]), 16383.0 * (1.0 / 32767.0));
     input(&mut e).pad.thumb_lx = 16384;
