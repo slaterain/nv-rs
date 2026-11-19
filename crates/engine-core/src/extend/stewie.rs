@@ -10,7 +10,7 @@
 //! rows in ranges of their own; `crates/stewie`'s table names each row once and checks that no two
 //! rows share a bit.
 
-use crate::Engine;
+use crate::{args, Engine};
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
 /// The table's words: 2,048 rows (Tweaks has 1,082 rows in `measure/stewie/PLAN.md`).
@@ -109,18 +109,92 @@ pub const CREDITS_NO_LOADED_SAVE: Row = Row::at(CRASH, 19);
 /// S0182 `HolotapeEmptySubtitleCrashFix` (`MapMenu` `0079a660` at `0x79A868` and `0x79AAEB`): a
 /// holotape's subtitle removed from an empty list.
 pub const HOLOTAPE_EMPTY_SUBTITLE: Row = Row::at(CRASH, 20);
+/// S0043 `patchFixNullWeaponOrWeaponInfoReloadLoopCrash`: `Actor::PickAnimations` (`00895110` at
+/// `0x8956EB`, the reload loop's step) with no weapon or no weapon entry, and the queued idle flags'
+/// reload (`008ba600` at `0x8BAC12`, not the player) with no weapon.
+pub const RELOAD_LOOP_NULL_WEAPON: Row = Row::at(CRASH, 21);
+/// S0150 `patchFixMissingAnimNullCheck` (`Actor::PickAnimations` at `0x89520A` and `0x895350`): no
+/// sequence in the attack slot of the actor's or the player's first-person animation.
+pub const MISSING_ANIM_NULL_CHECK: Row = Row::at(CRASH, 22);
+/// S0172 `patchFixAnimDataUpdateReloadLoopNullCheck` (`AnimData::Update` `00491180` at `0x4913C4`):
+/// the queued reload with no weapon.
+pub const ANIM_DATA_RELOAD_LOOP_NULL: Row = Row::at(CRASH, 23);
+/// S0173 `patchAnimDataUpdateCrashCheck` (`AnimData::Update` at `0x492EBD`): a movement sequence
+/// with no controlled blocks.
+pub const ANIM_DATA_MOVEMENT_SEQUENCE: Row = Row::at(CRASH, 24);
+/// S0181 `NullAnimRemoveRecurseFix` (`00496a50` at `0x496B6C`, `004f0640` at `0x4F064E`, `004f06d0`
+/// at `0x4F06E4`): an idle's add-on object that is gone, removed from the animation's controllers.
+pub const NULL_ANIM_REMOVE_RECURSE: Row = Row::at(CRASH, 25);
+/// S0186 `BipedAnimNullItemError` (`QueuedHelmet::Attach` `0043fb80` at `0x43FBE4`): a helmet's
+/// model for a biped slot that holds no item.
+pub const BIPED_ANIM_NULL_ITEM: Row = Row::at(CRASH, 26);
+/// S0202 `patchEquipAmmoOnNullBaseProcessCrashFix` (`Actor::EquipObject` `0088c830` at
+/// `0x88CDE7`): ammunition equipped on an actor with no process.
+pub const EQUIP_AMMO_NULL_PROCESS: Row = Row::at(CRASH, 27);
+/// S0027 `patchFixPipboyEquipCrash` (`Actor::EquipObject` at `0x88CDA3`, `FOPipboyManager::OnMenuOpen`
+/// `007f8010` at `0x7F8059`): the Pip-Boy reset when a Pip-Boy item is equipped.
+pub const PIPBOY_EQUIP_CRASH: Row = Row::at(CRASH, 28);
+/// S0126 `patchFixNullProjectileInCombatStateUpdateInventory` (`009993c0` at `0x99A1C8` and
+/// `0x99A1DC`): a combat weapon whose projectile is null.
+pub const COMBAT_STATE_NULL_PROJECTILE: Row = Row::at(CRASH, 29);
+/// S0127 `patchFixRecipeMenuMissingAmmoInfoNullCheck` (`007284f0` at `0x72872D`): crafting
+/// ammunition while the crafter has no ammunition entry.
+pub const RECIPE_MENU_NULL_AMMO_INFO: Row = Row::at(CRASH, 30);
+/// S0089.04 `RememberAmmoCountOnLoad` (`0095d850` at `0x95DBB4`): the player's reload with no
+/// equipped ammunition entry.
+pub const RELOAD_NULL_AMMO_ENTRY: Row = Row::at(CRASH, 31);
+/// S0089.05 `RememberAmmoCountOnLoad` (`00954610` at `0x9546EE`): the player dropping the weapon's
+/// ammunition with no equipped ammunition entry.
+pub const DROP_AMMO_NULL_ENTRY: Row = Row::at(CRASH, 32);
 /// S1016 (Engine Optimizations, `Inlines::SaveLoad`: `Write32(0x845558, 0x2735)`): the changes map's
 /// buckets 10,037, not the exe's 5,039 (`00845550`). It changes the order a save walks and writes the
 /// changed forms, so it is a fixes row.
 pub const CHANGES_MAP_BUCKETS: Row = Row::at(FIXES, 0);
 
-/// The table: one bit a row.
+/// Tweaks' messages it prints once a run ([`Engine::stewie_once`]).
+pub mod once {
+    /// S0173's "Failed to resolve movement sequence" line.
+    pub const MOVEMENT_SEQUENCE: u32 = 0;
+}
+
+/// `ConsoleManager_GetSingleton` (`0071b160`, with true) and `ConsoleManager::Print` (`0071d0a0`,
+/// `thiscall`: a format and a `va_list`): what Tweaks' `Console_Print` (xNVSE's) calls.
+const CONSOLE_INSTANCE: u32 = 0x0071_b160;
+const CONSOLE_PRINT: u32 = 0x0071_d0a0;
+
+/// Tweaks' `Console_Print(format, ...)`: the console's print with `format` and a `va_list` of
+/// `words` (each a number or a guest string's address the format reads), both on the guest stack.
+/// Nothing when there is no console.
+pub fn console_print(e: &mut Engine, format: &[u8], words: &[u32]) {
+    let console = e.call(CONSOLE_INSTANCE, &args![1u32]).u32();
+    if console == 0 {
+        return;
+    }
+    let text = (format.len() as u32 + 1).next_multiple_of(4);
+    e.with_stack(text + 4 * words.len() as u32, |e, block| {
+        let at = block.addr();
+        for (i, b) in format.iter().enumerate() {
+            e.mem.set_u8(at + i as u32, *b);
+        }
+        e.mem.set_u8(at + format.len() as u32, 0);
+        let list = at + text;
+        for (i, word) in words.iter().enumerate() {
+            e.mem.set_u32(list + 4 * i as u32, *word);
+        }
+        e.call(CONSOLE_PRINT, &args![console, at, list]);
+    });
+}
+
+/// The table: one bit a row, and the once-a-run messages' flags.
 #[derive(Debug)]
-pub(crate) struct Bits([AtomicU64; WORDS]);
+pub(crate) struct Bits([AtomicU64; WORDS], AtomicU64);
 
 impl Default for Bits {
     fn default() -> Self {
-        Bits(std::array::from_fn(|_| AtomicU64::new(0)))
+        Bits(
+            std::array::from_fn(|_| AtomicU64::new(0)),
+            AtomicU64::new(0),
+        )
     }
 }
 
@@ -143,6 +217,14 @@ impl Engine {
         } else {
             word.fetch_and(!bit, Relaxed);
         }
+    }
+
+    /// For a message Tweaks prints once a run (its `static bool hasShownError`): true the first
+    /// time `message` ([`once`]) is asked in this game (every thread's engine shares the flags),
+    /// false after.
+    pub fn stewie_once(&self, message: u32) -> bool {
+        let bit = 1u64 << message;
+        self.extend.stewie.1.fetch_or(bit, Relaxed) & bit == 0
     }
 
     /// Every row off.
@@ -191,5 +273,54 @@ mod tests {
     #[test]
     fn the_groups_fit_the_table_in_order() {
         assert_eq!(Row::at(OTHER_TWEAKS, 1023).index(), WORDS * 64 - 1);
+    }
+
+    #[test]
+    fn a_once_message_is_once_a_game_on_every_threads_engine() {
+        let e = Engine::new();
+        let thread = e.extend.for_thread();
+        assert!(e.stewie_once(once::MOVEMENT_SEQUENCE));
+        assert!(!e.stewie_once(once::MOVEMENT_SEQUENCE));
+        assert_eq!(thread.stewie.1.load(Relaxed), 1);
+        // Clearing the rows leaves the messages as they are, and a new game starts with none shown.
+        e.clear_stewie();
+        assert!(!e.stewie_once(once::MOVEMENT_SEQUENCE));
+        assert!(Engine::new().stewie_once(once::MOVEMENT_SEQUENCE));
+    }
+
+    #[test]
+    fn the_console_print_hands_the_format_and_its_words_to_the_console() {
+        use crate::abi::Ret;
+        use std::sync::Mutex;
+        static SEEN: Mutex<Vec<(Vec<u8>, Vec<u32>)>> = Mutex::new(Vec::new());
+        let mut e = Engine::new();
+        e.register(CONSOLE_INSTANCE, |_, a| {
+            assert_eq!(a[0], 1);
+            Ret {
+                eax: 0x4000,
+                ..Ret::default()
+            }
+        });
+        e.register(CONSOLE_PRINT, |e, a| {
+            assert_eq!(a[0], 0x4000);
+            let mut text = vec![];
+            let mut at = a[1];
+            while e.mem.u8(at) != 0 {
+                text.push(e.mem.u8(at));
+                at += 1;
+            }
+            let words = (0..2).map(|i| e.mem.u32(a[2] + 4 * i)).collect();
+            SEEN.lock().unwrap().push((text, words));
+            Ret::default()
+        });
+        console_print(&mut e, b"Failed %s (%08X)", &[0x1234, 0xbeef]);
+        assert_eq!(
+            SEEN.lock().unwrap().as_slice(),
+            [(b"Failed %s (%08X)".to_vec(), vec![0x1234, 0xbeef])]
+        );
+        // No console: nothing printed.
+        e.register(CONSOLE_INSTANCE, |_, _| Ret::default());
+        console_print(&mut e, b"x", &[]);
+        assert_eq!(SEEN.lock().unwrap().len(), 1);
     }
 }

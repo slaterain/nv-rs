@@ -3578,6 +3578,12 @@ fn process_of(e: &Engine, this: Ptr<Actor>) -> Ptr {
 /// `0x4d` with no automatic shot delay it is blended out.
 /// `group_animation` is the animation `GetAnimGroup` gets (null for the
 /// actor's own).
+///
+/// With no sequence in slot 4 the exe still asks about the looping group and,
+/// for a group of type `0x4a` or `0x4d` with no shot delay, reads the null
+/// sequence's state. lStewieAl's Tweaks' row S0150
+/// (`patchFixMissingAnimNullCheck`: the jumps at `0x89520A` and `0x895350`
+/// aimed past the block) skips the check for no sequence.
 fn blend_out_mismatched_attack(
     e: &mut Engine,
     this: Ptr<Actor>,
@@ -3587,6 +3593,9 @@ fn blend_out_mismatched_attack(
     let sequence = e
         .call(ANIMATION_GET_SEQUENCE, &args![animation, 4u32])
         .ptr::<()>();
+    if sequence.is_null() && e.stewie(engine_core::extend::stewie::MISSING_ANIM_NULL_CHECK) {
+        return;
+    }
     let mut check_looping_group = true;
     if !sequence.is_null() {
         let transform = e
@@ -3770,7 +3779,13 @@ pub fn actor_pick_animations(e: &mut Engine, this: Ptr<Actor>, arg_2: f32, arg_3
                                 .ptr::<()>();
                             let time =
                                 e.call(ANIM_GROUP_GET_TIME, &args![transform, 1u32]).f32() as f64;
-                            if time <= loop_time {
+                            // lStewieAl's Tweaks' row S0043 (`OnReloadLoopAnimationHook` at
+                            // `0x8956EB`): with no weapon or no weapon entry the step ends here,
+                            // as at the switch's end, instead of reading them.
+                            let missing = e
+                                .stewie(engine_core::extend::stewie::RELOAD_LOOP_NULL_WEAPON)
+                                && (weapon_form.is_null() || weapon_item.is_null());
+                            if time <= loop_time && !missing {
                                 let mod_active = e
                                     .call(
                                         ITEM_CHANGE_HAS_MOD_EFFECT_ACTIVE,
@@ -16581,9 +16596,18 @@ mod tests {
         assert_eq!(call_count(&e, ANIMATION_GET_SEQUENCE), 0);
     }
 
+    /// lStewieAl's Tweaks' row S0150 with ordinary input: run with the row off, then on; the row
+    /// changes nothing (the same calls and answers).
     #[test]
     fn walking_forward_picks_the_walk_group_and_scales_its_speed() {
+        for on in [false, true] {
+            walking_forward_picks_the_walk_group_and_scales_its_speed_row(on);
+        }
+    }
+
+    fn walking_forward_picks_the_walk_group_and_scales_its_speed_row(on: bool) {
         let mut e = engine();
+        e.set_stewie(engine_core::extend::stewie::MISSING_ANIM_NULL_CHECK, on);
         let (actor, animation, _) = pick_setup(&mut e);
         stub(&mut e, ACTOR_ANIM_FLAGS, 0x0101);
         stub_float(&mut e, ACTOR_GET_WALK_SPEED, 150.0);
@@ -16700,6 +16724,151 @@ mod tests {
             calls_to(&e, ACTOR_SET_ANIM_ACTION)[0],
             vec![actor.addr(), 0xffff_ffff, 0]
         );
+    }
+
+    /// lStewieAl's Tweaks' row S0150: no sequence in the attack slot (4) of the animation, while
+    /// the slot's group is of type 0x4a and the process has no shot delay: the exe goes on to read
+    /// the missing sequence's state (`008041a0` reads +0x44, as its stand-in here does) and stops;
+    /// with the row on the check ends at once.
+    #[test]
+    fn s0150_no_sequence_in_the_attack_slot() {
+        for on in [false, true] {
+            let mut e = engine();
+            let (actor, animation, process) = pick_setup(&mut e);
+            stub(&mut e, ANIMATION_GET_SEQUENCE, 0);
+            stub(&mut e, ANIM_GROUP_GET_TYPE, 0x4a);
+            set_slot(
+                &mut e,
+                process,
+                PROCESS_SLOT_AUTOMATIC_SHOT_DELAY,
+                float_ret(0.0),
+            );
+            stub_with(&mut e, SEQUENCE_GET_GENERIC_LOCATION, |e, a| {
+                ret(e.mem.u32(a[0] + 0x44))
+            });
+            e.set_stewie(engine_core::extend::stewie::MISSING_ANIM_NULL_CHECK, on);
+            e.call_log = Some(vec![]);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                blend_out_mismatched_attack(&mut e, actor, animation, Ptr::NULL);
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert_eq!(call_count(&e, ANIM_GROUP_GET_TYPE), 0);
+                assert_eq!(call_count(&e, SEQUENCE_GET_GENERIC_LOCATION), 0);
+            }
+        }
+    }
+
+    /// Row S0150 with a sequence in the attack slot (ordinary input): the looping group's check
+    /// runs as with the row off: a group of type 0x4a with no shot delay and a finished sequence
+    /// is blended out.
+    #[test]
+    fn s0150_row_on_with_an_attack_sequence_changes_nothing() {
+        let mut logs = vec![];
+        for on in [false, true] {
+            let mut e = engine();
+            let (actor, animation, process) = pick_setup(&mut e);
+            stub(&mut e, ANIM_GROUP_GET_TYPE, 0x4a);
+            set_slot(
+                &mut e,
+                process,
+                PROCESS_SLOT_AUTOMATIC_SHOT_DELAY,
+                float_ret(0.0),
+            );
+            stub(&mut e, SEQUENCE_GET_GENERIC_LOCATION, 1);
+            e.set_stewie(engine_core::extend::stewie::MISSING_ANIM_NULL_CHECK, on);
+            e.call_log = Some(vec![]);
+            blend_out_mismatched_attack(&mut e, actor, animation, Ptr::NULL);
+            assert_eq!(
+                calls_to(&e, ANIMATION_BLEND_OUT),
+                vec![vec![animation.addr(), 4, 0]],
+                "row {on}"
+            );
+            logs.push(e.call_log.take().unwrap().len());
+        }
+        assert_eq!(logs[0], logs[1]);
+    }
+
+    /// An actor whose process has queued the reload loop (action 0x11) with its sequence
+    /// finished, the loop's time reached, and `entry` as its weapon entry; the entry's
+    /// `HasModEffectActive` reads the entry (+0) and the weapon's `GetAttackAnim` the form's byte
+    /// at +0x103, as the exe's do.
+    fn reload_loop_setup(e: &mut Engine, entry: u32) -> Ptr<Actor> {
+        let (actor, _, process) = pick_setup(e);
+        set_slot(e, process, 0x3e4, ret(0x11));
+        set_slot(e, process, 0x3e8, ret(0x6500));
+        set_slot(e, process, 0x148, ret(entry));
+        stub(e, SEQUENCE_GET_GENERIC_LOCATION, 1);
+        stub_with(e, ITEM_CHANGE_HAS_MOD_EFFECT_ACTIVE, |e, a| {
+            let _extra_lists = e.mem.u32(a[0]);
+            ret(0)
+        });
+        stub_with(e, WEAPON_GET_ATTACK_ANIM, |e, a| {
+            ret(u32::from(e.mem.u8(a[0] + 0x103)) + 0xb1)
+        });
+        // The entry's form (`0044ddc0`: its word at +8).
+        stub_with(e, 0x0044_ddc0, |e, a| ret(e.mem.u32(a[0] + 8)));
+        actor
+    }
+
+    /// lStewieAl's Tweaks' row S0043 (`0x8956EB`): the reload loop's step with no weapon entry,
+    /// and with an entry whose form is gone: the exe reads the missing one and stops; with the row
+    /// on the step ends there (no attack group asked, the reload loop not set).
+    #[test]
+    fn s0043_the_reload_loop_with_no_weapon() {
+        for with_entry in [false, true] {
+            for on in [false, true] {
+                let mut e = engine();
+                let entry = if with_entry { e.mem.alloc(0x20) } else { 0 };
+                let actor = reload_loop_setup(&mut e, entry);
+                e.set_stewie(engine_core::extend::stewie::RELOAD_LOOP_NULL_WEAPON, on);
+                e.call_log = Some(vec![]);
+                let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    actor_pick_animations(&mut e, actor, 1.0, 1.0);
+                }));
+                e.call_stack.clear();
+                assert_eq!(run.is_ok(), on, "entry {with_entry} row {on}");
+                if on {
+                    assert_eq!(call_count(&e, WEAPON_GET_ATTACK_ANIM), 0);
+                    assert!(calls_to(&e, ACTOR_SET_ANIM_ACTION)
+                        .iter()
+                        .all(|c| c[1] != 0x11));
+                }
+            }
+        }
+    }
+
+    /// Row S0043 with a weapon (ordinary input): the same calls with the row off and on; the
+    /// reload loop's group is asked and action 0x11 set.
+    #[test]
+    fn s0043_row_on_with_a_weapon_changes_nothing() {
+        let mut logs = vec![];
+        for on in [false, true] {
+            let mut e = engine();
+            let entry = e.mem.alloc(0x20);
+            let weapon = e.mem.alloc(0x200);
+            e.mem.set_u32(entry + 8, weapon);
+            e.mem.set_u8(weapon + 0x103, 3);
+            let actor = reload_loop_setup(&mut e, entry);
+            e.set_stewie(engine_core::extend::stewie::RELOAD_LOOP_NULL_WEAPON, on);
+            e.call_log = Some(vec![]);
+            actor_pick_animations(&mut e, actor, 1.0, 1.0);
+            assert_eq!(calls_to(&e, WEAPON_GET_ATTACK_ANIM), vec![vec![weapon, 0]]);
+            assert!(calls_to(&e, ACTOR_SET_ANIM_ACTION)
+                .iter()
+                .any(|c| c[1] == 0x11));
+            // The calls into the exe (the stand-in slots' own addresses differ between engines).
+            let exe: Vec<(u32, Vec<u32>)> = e
+                .call_log
+                .take()
+                .unwrap()
+                .into_iter()
+                .filter(|(a, _)| *a < 0x0200_0000)
+                .collect();
+            logs.push(exe);
+        }
+        assert_eq!(logs[0], logs[1]);
     }
 
     #[test]

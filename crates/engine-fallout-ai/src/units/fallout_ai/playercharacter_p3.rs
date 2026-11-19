@@ -695,7 +695,10 @@ pub fn fn_0095d850(
         return false;
     }
     let change = process_slot(e, this, 0x14c, &args![]);
-    if typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, change)) != 0 {
+    // lStewieAl's Tweaks' row S0089.04 (`RememberAmmoCountOnLoad` at `0x95DBB4`): no equipped
+    // ammunition entry counts as an empty one instead of being read.
+    let no_entry = change == 0 && e.stewie(engine_core::extend::stewie::RELOAD_NULL_AMMO_ENTRY);
+    if !no_entry && typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, change)) != 0 {
         if equipped_before == 0 {
             return false;
         }
@@ -9236,6 +9239,79 @@ mod tests {
             "the equipped change differs from the replacement, so a new one is installed"
         );
         assert_eq!(calls_to(&log, ACTOR_QUEUE_EQUIP_OBJECT)[0][1], replacement);
+    }
+
+    /// The player re-equipping the ammunition `held` it already has (mode 0), whose process's
+    /// ammunition entry (slot 0x14c) is there when first asked and `later` after: the first
+    /// answer has `held` as its form, so no entry is installed.
+    fn reload_entry_world(e: &mut Engine, later: Option<u32>) -> (Ptr<PlayerCharacter>, u32) {
+        let held = 0x5000_1000;
+        let (player, change) = equip_world(e, held, 2, 5, 0);
+        let asked = std::rc::Rc::new(std::cell::Cell::new(0u32));
+        e.register_double(SLOT_B, move |_, _| {
+            asked.set(asked.get() + 1);
+            int(if asked.get() == 1 {
+                change
+            } else {
+                later.unwrap_or(change)
+            })
+        });
+        add_slot(e, player.addr(), 0x340, SLOT_E);
+        answer(e, SLOT_E, 0);
+        (player, held)
+    }
+
+    /// lStewieAl's Tweaks' row S0089.04 (`0x95DBB4`): the ammunition entry is gone by the time its
+    /// count is read: the exe reads +4 of nothing and stops; with the row on the missing entry
+    /// counts as empty and the equip goes on. (In Tweaks this guard pairs with its S0089.03, which
+    /// skips the exe's install of an entry here; the port keeps the install, so the entry is
+    /// normally there.)
+    #[test]
+    fn s0089_04_the_ammunition_entry_gone_when_its_count_is_read() {
+        for on in [false, true] {
+            let mut e = engine(CALLEES_0095D850);
+            let (player, held) = reload_entry_world(&mut e, Some(0));
+            e.set_stewie(engine_core::extend::stewie::RELOAD_NULL_AMMO_ENTRY, on);
+            e.call_log = Some(vec![]);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.call(
+                    0x0095_d850,
+                    &args![player, Ptr::<()>::new(held), 0u32, 0u32],
+                )
+                .bool()
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert!(run.unwrap());
+                let log = e.call_log.take().unwrap();
+                assert_eq!(calls_to(&log, SET_BYTE_AT_4)[0], vec![held, 0x29]);
+            }
+        }
+    }
+
+    /// Row S0089.04 with the entry there (ordinary input): the same calls and answer with the row
+    /// off and on (the entry's count 5: the same count already equipped, nothing to do).
+    #[test]
+    fn s0089_04_row_on_with_the_entry_changes_nothing() {
+        let mut runs = vec![];
+        for on in [false, true] {
+            let mut e = engine(CALLEES_0095D850);
+            let (player, held) = reload_entry_world(&mut e, None);
+            e.set_stewie(engine_core::extend::stewie::RELOAD_NULL_AMMO_ENTRY, on);
+            let mut answer = false;
+            let log = logged(&mut e, |e| {
+                answer = e
+                    .call(
+                        0x0095_d850,
+                        &args![player, Ptr::<()>::new(held), 0u32, 0u32],
+                    )
+                    .bool();
+            });
+            runs.push((answer, log));
+        }
+        assert_eq!(runs[0], runs[1]);
+        assert!(!runs[1].0);
     }
 
     #[test]
