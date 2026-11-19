@@ -679,6 +679,7 @@ fn get_adapter_identifier(e: &mut Engine, _this: Ptr, index: u32, flags: u32, ou
     let wgpu = super::d3d9real::wgpu_draws();
     let given = identifier_for_game(&data, wgpu);
     if wgpu && given != data {
+        NVIDIA_NAME_GIVEN.store(true, std::sync::atomic::Ordering::Relaxed);
         static SAID: std::sync::Once = std::sync::Once::new();
         SAID.call_once(|| {
             eprintln!(
@@ -692,6 +693,19 @@ fn get_adapter_identifier(e: &mut Engine, _this: Ptr, index: u32, flags: u32, ou
     }
     e.mem.write(out.addr(), &given);
     hr
+}
+
+/// Set once the game has been given NVIDIA's driver name in place of the captured one
+/// ([`identifier_for_game`]).
+static NVIDIA_NAME_GIVEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the game has been given NVIDIA's driver name for wgpu: the game chose its path from it,
+/// so where the real Direct3D 9 takes over after wgpu could not make the device
+/// (`super::d3d9real`'s `CreateDevice` fallback, Windows only) the log says the game keeps
+/// NVIDIA's path on the card's own driver.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn nvidia_name_given() -> bool {
+    NVIDIA_NAME_GIVEN.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// The identifier the game is given for the captured one (`captured`): while wgpu draws (`wgpu`),
@@ -1052,6 +1066,70 @@ GetCPInfo	4e4	1	010000003f000000000000000000000000000000
         assert_eq!(e.vcall(d3d, 4, &[]).u32(), 2);
         assert_eq!(e.vcall(d3d, 4 * 2, &[]).u32(), 1);
         assert_eq!(e.vcall(d3d, 4 * 2, &[]).u32(), 0);
+    }
+
+    /// TEST DATA, not a capture: [`test_table`] as an AMD card's Windows capture would have it
+    /// (the 64-bit driver name `aticfx64.dll`, AMD's vendor number), with NVIDIA's alpha to
+    /// coverage query answered "not available", as an AMD or Intel driver may answer it.
+    fn amd_table() -> (String, Vec<u8>) {
+        let hex = |b: &[u8]| -> String { b.iter().map(|x| format!("{x:02x}")).collect() };
+        let mut identifier = vec![0u8; IDENTIFIER_SIZE];
+        identifier[..12].copy_from_slice(b"aticfx64.dll");
+        identifier[512..540].copy_from_slice(b"AMD Radeon(TM) 890M Graphics");
+        identifier[1064..1068].copy_from_slice(&0x1002u32.to_le_bytes());
+        identifier[1068..1072].copy_from_slice(&0x150eu32.to_le_bytes());
+        let base = test_table();
+        let line = format!("GetAdapterIdentifier\t0 0\t0\t{}", hex(&identifier));
+        let table = base
+            .lines()
+            .filter(|l| !l.starts_with("GetAdapterIdentifier"))
+            .chain([
+                line.as_str(),
+                "Domain\td2\t434f5441",
+                "CheckDeviceFormat\t0 1 16 0 1\t8876086a\t434f5441=8876086a\td2",
+            ])
+            .collect::<Vec<_>>()
+            .join("\n");
+        (table, identifier)
+    }
+
+    /// Player report 005 through the game's own calls (`IDirect3D9` slots 5 and 10) on an AMD
+    /// card's table: while wgpu draws the game reads NVIDIA's driver name with every other byte as
+    /// captured, and NVIDIA's 'ATOC' query answers available, as the NVIDIA card does; with the
+    /// real Direct3D 9 the capture and its answer as they are.
+    #[test]
+    fn the_game_reads_nvidias_name_and_coverage_answer_only_while_wgpu_draws() {
+        let (table, captured) = amd_table();
+        let atoc = [0, 1, 0x16, 0, 1, ATOC];
+        for wgpu in [true, false] {
+            super::super::d3d9real::TEST_WGPU_DRAWS.with(|t| t.set(Some(wgpu)));
+            let mut e = Engine::new();
+            load_adapter_table(&mut e, &table);
+            let create = proc_address(&mut e, b"Direct3DCreate9").unwrap();
+            let d3d = e.call(create, &[D3D_SDK_VERSION]).u32();
+            let out = e.mem.alloc(IDENTIFIER_SIZE as u32);
+            assert_eq!(e.vcall(d3d, 4 * 5, &[0, 0, out]).u32(), D3D_OK);
+            let got = e.mem.bytes(out, IDENTIFIER_SIZE as u32);
+            let answer = e.vcall(d3d, 4 * 10, &atoc).u32();
+            if wgpu {
+                let mut name = b"nvldumd.dll".to_vec();
+                name.resize(512, 0);
+                assert_eq!(got[..512], name[..], "wgpu: NVIDIA's driver name");
+                assert_eq!(
+                    got[512..],
+                    captured[512..],
+                    "wgpu: every other byte as captured"
+                );
+                assert_eq!(answer, D3D_OK, "wgpu: 'ATOC' as the NVIDIA card answers");
+            } else {
+                assert_eq!(got, captured, "the real Direct3D 9: the capture");
+                assert_eq!(
+                    answer, D3DERR_NOTAVAILABLE,
+                    "the real Direct3D 9: the table's answer"
+                );
+            }
+        }
+        super::super::d3d9real::TEST_WGPU_DRAWS.with(|t| t.set(None));
     }
 
     #[test]

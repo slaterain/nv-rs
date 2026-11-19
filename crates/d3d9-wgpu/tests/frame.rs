@@ -2233,7 +2233,83 @@ fn coverage_switch_stands_in_for_the_alpha_test(
             16 * samples,
             "{name} {samples}x: switch off, the grass's alpha test passes it whole"
         );
+        if samples == 1 {
+            continue;
+        }
+        // The switch alone, with no other state changed between the draws (nothing else to make
+        // the draw's pipeline again): on, off and on again with the alpha test on throughout.
+        g.state(ALPHAFUNC, 5);
+        g.state(ALPHAREF, 0x80);
+        g.colour([1.0, 1.0, 1.0, 0.25]);
+        let alone = |g: &mut Gpu| {
+            g.clear(1, 0, 1.0);
+            g.count(0x2000, |g| g.cover(0.5))
+        };
+        assert_eq!(alone(&mut g), 0, "{name} {samples}x: off, 0.25 > 0.5");
+        g.state(state, on);
+        let part = alone(&mut g);
+        assert!(
+            part > 0 && part < 16 * samples,
+            "{name} {samples}x: the switch alone turned on: {part} samples"
+        );
+        g.state(state, off);
+        assert_eq!(
+            alone(&mut g),
+            0,
+            "{name} {samples}x: the switch alone turned off: the alpha test again"
+        );
+        g.state(state, on);
+        assert_eq!(alone(&mut g), part, "{name} {samples}x: on again");
+        // `Reset` turns it off: every state the draw needs set again, the switch not.
+        reset_for_the_alpha_test(&mut g);
+        assert_eq!(
+            alone(&mut g),
+            0,
+            "{name} {samples}x: after Reset the switch is off"
+        );
     }
+}
+
+/// `Reset` of the 4x4 test device, then what [`coverage_switch_stands_in_for_the_alpha_test`]'s
+/// draws need again (Reset returns every state and binding to its default): the multisampled
+/// target and its depth, the shaders, the declaration, no culling or depth, the alpha test
+/// (GREATER, reference 0x80) and the alpha 0.25.
+fn reset_for_the_alpha_test(g: &mut Gpu) {
+    let present = words(&[4, 4, A8R8G8B8, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0]);
+    g.run(Cmd::Reset {
+        device: DEVICE,
+        window: 0,
+        present: Data::Bytes(&present),
+        back_buffers: Data::Bytes(&words(&[BACK])),
+        depth_stencil: 0,
+    });
+    g.run(Cmd::SetRenderTarget {
+        device: DEVICE,
+        index: 0,
+        surface: RT,
+    });
+    g.run(Cmd::SetDepthStencilSurface {
+        device: DEVICE,
+        surface: DS,
+    });
+    for (pixel, shader) in [(false, VS), (true, PS)] {
+        g.run(Cmd::SetShader {
+            device: DEVICE,
+            pixel,
+            shader,
+        });
+    }
+    g.run(Cmd::SetVertexDeclaration {
+        device: DEVICE,
+        declaration: DECL,
+    });
+    g.state(CULLMODE, 1);
+    g.state(ZENABLE, 0);
+    g.state(ZWRITEENABLE, 0);
+    g.state(ALPHATESTENABLE, 1);
+    g.state(ALPHAFUNC, 5);
+    g.state(ALPHAREF, 0x80);
+    g.colour([1.0, 1.0, 1.0, 0.25]);
 }
 
 /// The alpha test compares as the reference machine's (measured on the real Direct3D 9 here,

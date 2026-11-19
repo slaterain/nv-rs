@@ -337,9 +337,12 @@ elsewhere only as far as Windows and drivers behave the same:
   AMD and Intel too, is given NVIDIA's driver name (`nvldumd.dll`) on every system, so the game takes the
   NVIDIA shader package and alpha to coverage switch the shipped pipeline list was made with (on a PC without
   NVIDIA's driver its NvAPI probe finds no `nvapi.dll` and ends); the log's start says so in one line. With the
-  real Direct3D 9 the driver's own name decides: on an AMD card the game asks for the player's 32-bit
-  `ATIMGPUD.dll` and, with Eyefinity on, ADL; this 64-bit process can't load them, so they answer as missing:
-  one GPU, no Eyefinity. AMD and Intel on the real Direct3D 9 have only been run as an edited table (the
+  real Direct3D 9 asked for (or as the fallback where wgpu finds no card) the driver's own name decides. Where wgpu
+  finds a card but cannot make the game's device, the real Direct3D 9 takes over after the game was told NVIDIA's
+  name: the game keeps NVIDIA's path on the card's own driver, which may not honour NVIDIA's alpha to coverage
+  switch, and the log says so in one line. With the driver's own name, on an AMD card the game asks for the
+  player's 32-bit `ATIMGPUD.dll` and, with Eyefinity on, ADL; this 64-bit process can't load them, so they answer
+  as missing: one GPU, no Eyefinity. AMD and Intel on the real Direct3D 9 have only been run as an edited table (the
   driver's name changed, no nvapi) on this PC's NVIDIA card, so the game's vendor paths ran, but no AMD or
   Intel driver answered.
 - The first settings on a PC where the game's launcher never ran: its detection isn't translated (it is a separate

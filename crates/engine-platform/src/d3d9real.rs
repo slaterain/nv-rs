@@ -274,7 +274,18 @@ pub fn run_on_main_thread(game: Box<dyn FnOnce() + Send>) -> ! {
 /// textures are then made on wgpu, in the formats `d3d9_wgpu::format` provides, so the textures
 /// D3DX makes leave out the rest (`super::d3dx`). With `real,wgpu` the real one draws.
 pub fn wgpu_draws() -> bool {
+    #[cfg(test)]
+    if let Some(draws) = TEST_WGPU_DRAWS.with(std::cell::Cell::get) {
+        return draws;
+    }
     backends() == Some(Backends::Wgpu) && !DRAWING_REAL.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests: what [`wgpu_draws`] answers on this thread (`None`: the backends' own answer), so the
+    /// calls that answer the game differently while wgpu draws are tested both ways.
+    pub(crate) static TEST_WGPU_DRAWS: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
 /// The backends' words for the layer's lines (`NV_D3D9=real: ...`, as in play): the one drawing.
@@ -1181,6 +1192,16 @@ pub fn device_created(
         #[cfg(windows)]
         {
             eprintln!("NV_D3D9=wgpu: wgpu could not make the game's device: the real Direct3D 9 draws instead");
+            if super::d3d9::nvidia_name_given() {
+                // The game chose its path from that name already (`super::d3d9`'s
+                // `identifier_for_game`); this card's own driver now answers its switches.
+                eprintln!(
+                    "NV_D3D9=real: the game was already told NVIDIA's driver name (for wgpu), so it \
+                     keeps NVIDIA's path on this card's own Direct3D 9: NVIDIA's shader package and \
+                     alpha to coverage switch, which another vendor's driver may not honour (foliage \
+                     under antialiasing can then look different)"
+                );
+            }
             // The wgpu stream is let go first (its render thread ends, its record is written
             // out), then the real one takes over.
             real(e).stream = None;
