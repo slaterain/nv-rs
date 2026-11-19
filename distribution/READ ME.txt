@@ -119,12 +119,21 @@ The whole game runs on its translated code: the opening, the open world, quests,
 the Pip-Boy, saves and the DLCs, with the original graphics (drawn on Vulkan) and sound (through your
 own DirectX).
 Regular .esp and .esm mods work.
+Game pads work: an Xbox-style pad, or a PlayStation pad (DualSense, DualSense Edge, DualShock 4)
+by cable or Bluetooth, with rumble. The game shows Xbox button pictures: A is Cross, B is Circle,
+X is Square, Y is Triangle, Back is Create (Share on a DualShock 4) and Start is Options. The PS
+button and the touchpad do nothing.
+While a pad is connected, the game takes its controls from the pad, not from the keyboard and
+mouse, as the original does with an Xbox pad. That includes a PlayStation pad that is only plugged
+in to charge. To play with keyboard and mouse while a pad is connected, turn off "360 Controller"
+under Controls in the game's Settings menu; "Vibration" there turns rumble off.
 
 
 What doesn't yet
 ----------------
 - Mods that need xNVSE, JIP or other plugins (.dll files) don't work yet.
-- Controllers don't work yet: keyboard and mouse only.
+- Other game pads (any pad that is not Xbox-style and not one of those three PlayStation pads,
+  such as a DualShock 3 or a Switch Pro pad) don't work yet.
 - It is slower than the original. On the maintainer's PC (a laptop with an RTX 5070 Ti, at 2560x1440
   with 8x anti-aliasing), with the bug fixes on, about 103 frames a second in Doc Mitchell's house and
   about 44 in Goodsprings. The original runs at about 120 in Doc's house. Your numbers will differ.
@@ -136,6 +145,9 @@ What doesn't yet
 - Not tested yet, because they have only one PC to run on: other graphics cards (AMD, Intel, older
   NVIDIA), sound set to anything but 7.1 or stereo, GOG and Epic copies, languages other than English,
   Windows 10. GOG, Epic and some regional copies may be refused, with a message that says so.
+- PlayStation pads (DualSense, DualSense Edge, DualShock 4, by cable or Bluetooth) are built from
+  their published layouts and have not been tried with a real pad yet, nor with Steam Input or
+  DS4Windows running alongside. Please tell us how yours does.
 
 
 Problems at the start
