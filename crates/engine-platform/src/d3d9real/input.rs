@@ -510,6 +510,8 @@ pub(super) fn frame_of_style(style: u32) -> Frame {
 
 /// A monitor of `size` real pixels at the system's `scale` (2.0: two real pixels to a scaled one)
 /// in the system's scaled pixels, the ones a framed window is sized and placed in.
+// Used by the Linux and macOS window layer (`winit_window.rs`); tested everywhere.
+#[cfg_attr(windows, allow(dead_code))]
 pub(super) fn scaled_screen(size: (u32, u32), scale: f64) -> (f64, f64) {
     let scale = if scale.is_finite() && scale > 0.0 {
         scale
@@ -524,11 +526,15 @@ pub(super) fn scaled_screen(size: (u32, u32), scale: f64) -> (f64, f64) {
 /// `screen` scaled pixels. A window as wide or as tall as the screen does not: with its frame it
 /// would reach past the screen's edges (a Steam Deck's 1280 by 800 game on its 1280 by 800
 /// screen, report 004), so the window layer shows it borderless over the screen instead.
+// Used by the Linux and macOS window layer (`winit_window.rs`); tested everywhere.
+#[cfg_attr(windows, allow(dead_code))]
 pub(super) fn fits_screen(outer: (i32, i32), screen: (f64, f64)) -> bool {
     f64::from(outer.0) <= screen.0 && f64::from(outer.1) <= screen.1
 }
 
 /// The log line when the game's framed window does not fit its screen ([`fits_screen`]).
+// Used by the Linux and macOS window layer (`winit_window.rs`); tested everywhere.
+#[cfg_attr(windows, allow(dead_code))]
 pub(super) fn too_large_line(outer: (i32, i32), screen: (f64, f64)) -> String {
     format!(
         "the game's window: {}x{} with its frame does not fit the screen ({}x{} in the system's \
@@ -541,6 +547,8 @@ pub(super) fn too_large_line(outer: (i32, i32), screen: (f64, f64)) -> String {
 }
 
 /// The log line for the game's framed window that fits its screen: its client area and the screen.
+// Used by the Linux and macOS window layer (`winit_window.rs`); tested everywhere.
+#[cfg_attr(windows, allow(dead_code))]
 pub(super) fn framed_line(client: (u32, u32), screen: (f64, f64)) -> String {
     format!(
         "the game's window: framed, its client area {}x{} on a screen of {}x{} in the system's \
@@ -557,12 +565,16 @@ pub(super) fn framed_line(client: (u32, u32), screen: (f64, f64)) -> String {
 /// output's mode before its turn and winit 0.30 gives no turn, so a screen made upright and turned
 /// to lie wide (a handheld's built-in one: the Steam Deck's 800 by 1280 panel shown at 1280 by 800)
 /// reads upright, and the game was told an upright screen.
+// Used by the Linux and macOS window layer (`winit_window.rs`); tested everywhere.
+#[cfg_attr(windows, allow(dead_code))]
 pub(super) fn read_turned(window: (u32, u32), monitor: (u32, u32)) -> bool {
     window != monitor && window == (monitor.1, monitor.0)
 }
 
 /// The log line when the monitor was read turned ([`read_turned`]): what the game's own settings
 /// need for a picture of the screen's shape.
+// Used by the Linux and macOS window layer (`winit_window.rs`); tested everywhere.
+#[cfg_attr(windows, allow(dead_code))]
 pub(super) fn turned_line(window: (u32, u32), monitor: (u32, u32)) -> String {
     format!(
         "the screen reads {}x{}, but the borderless window over it is {}x{}: this system reports \
@@ -841,6 +853,66 @@ mod tests {
         point_into(&mut i, [0.25, 0.75]);
         point_into(&mut i, [0.5, 0.5]);
         assert_eq!((i.pointer, i.pointer_moved), (Some([0.5, 0.5]), true));
+    }
+
+    /// Report 004 (a Steam Deck): the game's framed window at the screen's own size cannot fit with
+    /// its frame. A window fits when its rectangle with the game's frame (Windows' 16 by 39 for its
+    /// style) is within the screen in the system's scaled pixels: 1280 by 720 on 1920 by 1080 does,
+    /// 1280 by 800 on the Deck's 1280 by 800 does not (wider and taller with the frame), nor on a
+    /// screen read turned (800 by 1280), nor 1920 by 1080 on a 2560 by 1440 screen scaled to 150%
+    /// (1707 by 960). The monitor's size in scaled pixels; a scale that is not a number is 1.
+    #[test]
+    fn a_framed_window_fits_its_screen_only_with_its_frame() {
+        let frame = |w: i32, h: i32| (w + 16, h + 39);
+        assert_eq!(scaled_screen((2560, 1440), 1.5), (2560.0 / 1.5, 960.0));
+        assert_eq!(scaled_screen((1280, 800), 1.0), (1280.0, 800.0));
+        assert_eq!(scaled_screen((1280, 800), 0.0), (1280.0, 800.0));
+        assert_eq!(scaled_screen((1280, 800), f64::NAN), (1280.0, 800.0));
+        assert!(fits_screen(frame(1280, 720), (1920.0, 1080.0)));
+        assert!(fits_screen(frame(1904, 1041), (1920.0, 1080.0)), "exactly");
+        assert!(!fits_screen(frame(1280, 800), (1280.0, 800.0)), "the Deck");
+        assert!(
+            !fits_screen(frame(1280, 800), (800.0, 1280.0)),
+            "read turned"
+        );
+        assert!(!fits_screen(
+            frame(1920, 1080),
+            scaled_screen((2560, 1440), 1.5)
+        ));
+        assert!(
+            !fits_screen(frame(1280, 720), (1280.0, 1080.0)),
+            "too wide only"
+        );
+        assert_eq!(
+            too_large_line((1296, 839), (1280.0, 800.0)),
+            "the game's window: 1296x839 with its frame does not fit the screen (1280x800 in the \
+             system's scaled pixels): shown borderless over the screen instead, the game's picture \
+             scaled to it"
+        );
+        assert_eq!(
+            framed_line((1280, 720), (1706.67, 960.0)),
+            "the game's window: framed, its client area 1280x720 on a screen of 1707x960 in the \
+             system's scaled pixels"
+        );
+    }
+
+    /// A screen read turned (Wayland gives a turned output's mode before its turn: the Deck's
+    /// panel reads 800 by 1280) shows when the borderless window over it is given the two sizes
+    /// swapped; the same size, another size, or a square screen is no turn. The line names the
+    /// game's settings for a picture of the screen's shape.
+    #[test]
+    fn a_screen_read_turned_shows_in_the_borderless_windows_size() {
+        assert!(read_turned((1280, 800), (800, 1280)));
+        assert!(!read_turned((1280, 800), (1280, 800)));
+        assert!(!read_turned((1920, 1080), (800, 1280)));
+        assert!(!read_turned((1000, 1000), (1000, 1000)), "square");
+        let line = turned_line((1280, 800), (800, 1280));
+        assert!(line.starts_with(
+            "the screen reads 800x1280, but the borderless window over it is 1280x800"
+        ));
+        assert!(line.ends_with(
+            "iSize W and iSize H: set them to 1280 and 800 for a picture of the screen's shape"
+        ));
     }
 
     /// A `WM_MOUSEMOVE`'s `lParam`: x low, y high, each a signed word (a place left of and above

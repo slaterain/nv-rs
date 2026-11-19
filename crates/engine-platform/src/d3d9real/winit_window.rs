@@ -785,6 +785,20 @@ impl ApplicationHandler for Layer {
                 if let Some(e) = windows().get(&id) {
                     e.shown.size.resized(size);
                 }
+                // The borderless window given the monitor's size turned: the monitor was read
+                // turned (Wayland), so the game was told the wrong shape; said once, with the fix.
+                if borderless() {
+                    if let Some(m) = described_monitor() {
+                        let (window, monitor) =
+                            ((size.width, size.height), (m.size().width, m.size().height));
+                        static SAID: AtomicBool = AtomicBool::new(false);
+                        if input::read_turned(window, monitor)
+                            && !SAID.swap(true, Ordering::Relaxed)
+                        {
+                            eprintln!("{}", input::turned_line(window, monitor));
+                        }
+                    }
+                }
             }
             WindowEvent::Occluded(hidden) => {
                 if let Some(e) = windows().get(&id) {
@@ -911,14 +925,54 @@ pub fn window_moved(e: &mut Engine, handle: u32, rect: [i32; 4], flags: u32) {
         }
         return;
     }
-    if flags & input::NO_MOVE == 0 {
-        w.set_outer_position(LogicalPosition::new(rect[0], rect[1]));
-    }
     if flags & input::NO_SIZE == 0 {
         let border = crate::window::game_frame(e, handle).unwrap_or([0; 4]);
         let (width, height) = input::inner_for_game_rect(rect, border);
+        let outer = (rect[2].wrapping_sub(rect[0]), rect[3].wrapping_sub(rect[1]));
+        if let Some(screen) = described_screen() {
+            static SAID: AtomicBool = AtomicBool::new(false);
+            if !input::fits_screen(outer, screen) {
+                // Framed, it would reach past the screen's edges (report 004, a Steam Deck): the
+                // borderless window over the screen instead, the game's picture scaled to it.
+                if !SAID.swap(true, Ordering::Relaxed) {
+                    eprintln!("{}", input::too_large_line(outer, screen));
+                }
+                super::want_borderless(true);
+                fill_screen(w);
+                return;
+            }
+            if !SAID.swap(true, Ordering::Relaxed) {
+                eprintln!("{}", input::framed_line((width, height), screen));
+            }
+        }
+        if flags & input::NO_MOVE == 0 {
+            w.set_outer_position(LogicalPosition::new(rect[0], rect[1]));
+        }
         shown.ask_size(LogicalSize::new(width, height));
+    } else if flags & input::NO_MOVE == 0 {
+        w.set_outer_position(LogicalPosition::new(rect[0], rect[1]));
     }
+}
+
+/// The screen the game was told about (the machine table's described monitor: the primary one,
+/// else the first) in the system's scaled pixels, the ones a framed window is made in; `None`
+/// when the monitors were not read.
+fn described_screen() -> Option<(f64, f64)> {
+    let list = monitors().ok()?;
+    let at = crate::machine_table::display::described(list.iter().map(|m| m.primary))?;
+    let m = &list[at];
+    Some(input::scaled_screen(m.size, m.scale))
+}
+
+/// The game's framed window made the borderless one over its monitor, as a borderless start makes
+/// it (`Layer::make`): no frame, winit's borderless full screen, no size held (the compositor
+/// gives the monitor's).
+fn fill_screen(w: &Window) {
+    w.set_resizable(true);
+    w.set_min_inner_size(None::<LogicalSize<u32>>);
+    w.set_max_inner_size(None::<LogicalSize<u32>>);
+    w.set_decorations(false);
+    w.set_fullscreen(Some(Fullscreen::Borderless(None)));
 }
 
 #[cfg(test)]
