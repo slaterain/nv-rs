@@ -2441,6 +2441,19 @@ fn jip_disposable_weapon(e: &mut Engine, weapon: u32) -> bool {
     e.call(FORM_004C0BF0, &args![weapon]).bool()
 }
 
+/// After crafting ammunition (`0x728718`): the crafter's equipped ammunition entry (its
+/// process's slot 0x14c) gets its count cleared (`006ecd40` with 0). lStewieAl's Tweaks' row
+/// S0127 (`patchFixRecipeMenuMissingAmmoInfoNullCheck` at `0x72872D`): with no entry there is
+/// nothing to clear, where the exe writes into the missing one.
+fn clear_crafter_ammo_count(e: &mut Engine, crafter: u32) {
+    let process = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, crafter));
+    let target = e.vcall(process, 0x14c, &args![]).u32();
+    if target == 0 && e.stewie(engine_core::extend::stewie::RECIPE_MENU_NULL_AMMO_INFO) {
+        return;
+    }
+    e.call(NODE_SET_NEXT, &args![target, 0u32]);
+}
+
 // Translated from 007284f0 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 007284f0 - the C++ exception frame (FS:[0] chain, unwind states 0 to 2 around the TESContainer and BSString locals) is not translated.
 /// Unnamed (`cdecl`, a count; the quantity menu's callback for the recipe menu): makes the
@@ -2527,9 +2540,7 @@ pub fn fn_007284f0(e: &mut Engine, count: i32) {
                 ],
             );
             if was_ammo {
-                let process = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, crafter));
-                let target = e.vcall(process, 0x14c, &args![]).u32();
-                e.call(NODE_SET_NEXT, &args![target, 0u32]);
+                clear_crafter_ammo_count(e, crafter);
             }
         }
         node = node_next(e, node);
@@ -3501,6 +3512,48 @@ mod n057_tests {
             .filter(|(a, _)| *a == addr)
             .map(|(_, words)| words.clone())
             .collect()
+    }
+
+    /// lStewieAl's Tweaks' row S0127: after crafting ammunition, the crafter's process has no
+    /// ammunition entry (slot 0x14c answers 0): the exe clears the count of nothing (`006ecd40`
+    /// writes +4, as its stand-in here does) and stops; with the row on nothing is cleared. With
+    /// an entry its count is cleared, the row off or on.
+    #[test]
+    fn s0127_crafted_ammunition_with_no_ammunition_entry() {
+        for with_entry in [false, true] {
+            for on in [false, true] {
+                let mut e = Engine::new();
+                let entry = if with_entry { e.mem.alloc(0x10) } else { 0 };
+                if with_entry {
+                    e.mem.set_u32(entry + 4, 30);
+                }
+                let vtable = e.mem.alloc(0x200);
+                e.mem.set_u32(vtable + 0x14c, 0x0ff0_014c);
+                e.register_double(0x0ff0_014c, move |_, _| entry.into_ret());
+                let process = e.mem.alloc(0x40);
+                e.mem.set_u32(process, vtable);
+                let crafter = e.mem.alloc(0x100);
+                e.mem.set_u32(crafter + 0x68, process);
+                e.register(0x008d_8520, |e, a| e.mem.u32(a[0] + 0x68).into_ret());
+                e.register(NODE_SET_NEXT, |e, a| {
+                    e.mem.set_u32(a[0] + 4, a[1]);
+                    Ret::default()
+                });
+                e.set_stewie(engine_core::extend::stewie::RECIPE_MENU_NULL_AMMO_INFO, on);
+                e.call_log = Some(vec![]);
+                let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    clear_crafter_ammo_count(&mut e, crafter);
+                }));
+                e.call_stack.clear();
+                assert_eq!(run.is_ok(), with_entry || on, "entry {with_entry} row {on}");
+                if with_entry {
+                    assert_eq!(calls_to(&e, NODE_SET_NEXT), [vec![entry, 0]]);
+                    assert_eq!(e.mem.u32(entry + 4), 0);
+                } else if on {
+                    assert!(calls_to(&e, NODE_SET_NEXT).is_empty());
+                }
+            }
+        }
     }
 
     fn answer(e: &mut Engine, addr: u32, eax: u32) {
