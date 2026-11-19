@@ -770,7 +770,9 @@ pub struct Device {
     encoder_draws: u32,
     /// Passes begun and commands recorded straight into the open encoder ([`Device::encoder`]).
     encoder_uses: u32,
-    /// The submits the batches went in and the most uses one of them took ([`submit_in_parts`]).
+    /// The open batch's uses, its earlier encoders' too ([`Device::bound_batch`]).
+    batch_uses: u32,
+    /// What the batches' submits carried ([`submit_in_parts`]).
     submits: Arc<Submits>,
     pass: Option<wgpu::RenderPass<'static>>,
     pass_targets: Option<Targets>,
@@ -1523,6 +1525,7 @@ impl Device {
             submitter,
             encoder_draws: 0,
             encoder_uses: 0,
+            batch_uses: 0,
             submits: Arc::default(),
             pass: None,
             pass_targets: None,
@@ -2222,12 +2225,18 @@ impl Device {
             .collect();
         let finishing: Vec<Finishing> = finishing.into_iter().map(|f| f.0).collect();
         let parts = submit_parts(&uses);
-        if parts.len() > 1 {
-            // Once a run: whether the game's frames come near the limit.
-            self.warn("a batch had more passes than one submit takes and went in several");
-        }
+        self.submits
+            .encoders
+            .fetch_add(uses.len() as u64, Ordering::Relaxed);
+        self.submits
+            .most_batch
+            .fetch_max(self.batch_uses, Ordering::Relaxed);
+        self.submits
+            .batch_uses
+            .fetch_add(u64::from(self.batch_uses), Ordering::Relaxed);
         self.encoder_draws = 0;
         self.encoder_uses = 0;
+        self.batch_uses = 0;
         self.batch += 1;
         self.st.dirty = [true; 2];
         let Some(s) = &self.submitter else {
@@ -2836,6 +2845,7 @@ impl Device {
             self.cut_encoder();
         }
         self.encoder_uses += 1;
+        self.batch_uses += 1;
         self.encoder.get_or_insert_with(|| {
             self.device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None })
@@ -2862,15 +2872,39 @@ impl Device {
         self.encoder_uses = 0;
     }
 
-    /// The submits the batches have gone in, and the most [`Device::encoder`] uses one took
-    /// (tests: [`SUBMIT_USES`] at most). The queue thread's count once it has done its work.
-    pub fn submits(&self) -> (u64, u32) {
+    /// Before each command ([`crate::WgpuBackend`]): a batch that has taken [`SUBMIT_USES`] is
+    /// sent now, between two of the game's commands (where nothing of one is half recorded: an
+    /// upload has not taken its place in the stage yet), after the queue thread has submitted every
+    /// batch before it. So no more than about two batches' command buffers are ever made and not yet
+    /// submitted, on any backend (Metal loses the device past 4,096 of those), and the submit
+    /// split ([`submit_parts`]) only takes the last command's few uses past the limit.
+    pub(crate) fn bound_batch(&mut self) {
+        if self.batch_uses >= SUBMIT_USES {
+            self.sync();
+            self.flush();
+            // Once a run: whether the game's frames ever come near the limit.
+            self.warn("a batch had more passes than one submit takes and was sent early");
+        }
+    }
+
+    /// What the batches' submits carried so far ([`SubmitStats`], tests): the queue thread's
+    /// counts once it has done its work.
+    pub fn submits(&self) -> SubmitStats {
         self.sync();
         let s = &self.submits;
-        (
-            s.made.load(Ordering::Relaxed),
-            s.most.load(Ordering::Relaxed),
-        )
+        let load32 = |a: &AtomicU32| a.load(Ordering::Relaxed);
+        let load64 = |a: &AtomicU64| a.load(Ordering::Relaxed);
+        SubmitStats {
+            submits: load64(&s.made),
+            most_uses: load32(&s.most_uses),
+            most_buffers: load32(&s.most_buffers),
+            most_planned: load32(&s.most_planned),
+            buffers: load64(&s.buffers),
+            encoders: load64(&s.encoders),
+            most_batch: load32(&s.most_batch),
+            uses: load64(&s.uses),
+            batch_uses: load64(&s.batch_uses),
+        }
     }
 
     fn end_pass(&mut self) {
@@ -10702,8 +10736,11 @@ const SPLIT_DRAWS: u32 = 256;
 /// vertices, inside one occlusion query: a copy, a pass and the count's pass each, 4,507 command
 /// buffers in one submit). Why 512: that measured edge. 512 uses are at most about 1,100 command
 /// buffers (855 in that test), under a third of the 3,506 that went, with room for the few passes
-/// some uses make (the sun's shadow maps) and wgpu's own; a batch that takes more is sent in more
-/// submits, in order.
+/// some uses make (the sun's shadow maps) and wgpu's own. A batch is sent once it has taken 512
+/// uses, between two of the game's commands ([`Device::bound_batch`]), so that only about two
+/// batches' command buffers ever wait made and not submitted (Metal loses the device past 4,096 of
+/// those); the few uses its last command takes past the limit go in a submit of their own
+/// ([`submit_parts`]), in order.
 pub const SUBMIT_USES: u32 = 512;
 
 /// The uses an encoder takes before it goes with the batch's earlier ones ([`Device::encoder`]):
@@ -10729,15 +10766,52 @@ fn submit_parts(uses: &[u32]) -> Vec<(usize, u32)> {
     parts
 }
 
-/// The submits the batches have gone in, and the most uses one took ([`Device::submits`]).
+/// What the batches' submits carried ([`Device::submits`]): counted where each submit is made,
+/// from the command buffers it really got.
 #[derive(Default)]
 struct Submits {
+    /// Submits made.
     made: AtomicU64,
-    most: std::sync::atomic::AtomicU32,
+    /// The most uses one submit took.
+    most_uses: AtomicU32,
+    /// The most command buffers one submit got, and the most its part planned.
+    most_buffers: AtomicU32,
+    most_planned: AtomicU32,
+    /// Command buffers submitted, and the encoders the batches handed over.
+    buffers: AtomicU64,
+    encoders: AtomicU64,
+    /// The most uses one batch took before it was sent ([`Device::bound_batch`]).
+    most_batch: AtomicU32,
+    /// The uses the submits took, and the uses the batches took (the same when every use was
+    /// counted into a part).
+    uses: AtomicU64,
+    batch_uses: AtomicU64,
+}
+
+/// What the batches' submits carried so far ([`Device::submits`], tests).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SubmitStats {
+    /// Submits made.
+    pub submits: u64,
+    /// The most uses one submit took ([`SUBMIT_USES`] at most).
+    pub most_uses: u32,
+    /// The most command buffers one submit got, and the most its part planned.
+    pub most_buffers: u32,
+    pub most_planned: u32,
+    /// Command buffers submitted, and the encoders the batches handed over (the same when none
+    /// was lost).
+    pub buffers: u64,
+    pub encoders: u64,
+    /// The most uses one batch took before it was sent.
+    pub most_batch: u32,
+    /// The uses the submits took, and the uses the batches took (the same when every use was
+    /// counted into a part).
+    pub uses: u64,
+    pub batch_uses: u64,
 }
 
 /// `buffers` submitted in order, each part's number of them at a time ([`submit_parts`]), counted
-/// in `submits`.
+/// in `submits` from what each submit really got.
 fn submit_in_parts(
     queue: &wgpu::Queue,
     buffers: Vec<wgpu::CommandBuffer>,
@@ -10746,10 +10820,22 @@ fn submit_in_parts(
 ) {
     let mut buffers = buffers.into_iter();
     for &(n, uses) in parts {
-        queue.submit(buffers.by_ref().take(n));
+        let part: Vec<wgpu::CommandBuffer> = buffers.by_ref().take(n).collect();
+        let got = part.len();
+        queue.submit(part);
         submits.made.fetch_add(1, Ordering::Relaxed);
-        submits.most.fetch_max(uses, Ordering::Relaxed);
+        submits.most_uses.fetch_max(uses, Ordering::Relaxed);
+        submits
+            .most_buffers
+            .fetch_max(got as u32, Ordering::Relaxed);
+        submits.most_planned.fetch_max(n as u32, Ordering::Relaxed);
+        submits.buffers.fetch_add(got as u64, Ordering::Relaxed);
+        submits.uses.fetch_add(u64::from(uses), Ordering::Relaxed);
     }
+    debug_assert!(
+        buffers.next().is_none(),
+        "a command buffer left out of the submits"
+    );
 }
 
 /// An earlier encoder of the batch: finished, or on its way from a finishing thread.

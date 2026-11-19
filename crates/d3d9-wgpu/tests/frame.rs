@@ -3750,18 +3750,147 @@ fn a_batch_of_more_passes_than_a_submit_takes_goes_in_several() {
         }
         let d = g.b.device().expect("the device");
         assert_eq!(d.wgpu_errors(), 0, "threads {threads}");
-        let (submits, most) = d.submits();
+        let s = d.submits();
         let limit = d3d9_wgpu::device::SUBMIT_USES;
         assert!(
-            most <= limit,
-            "threads {threads}: a submit took {most} uses, more than {limit}"
+            s.most_uses <= limit,
+            "threads {threads}: a submit took {} uses, more than {limit}",
+            s.most_uses
         );
         // Three uses a draw (the copy, the pass, the count's pass).
         assert!(
-            submits > u64::from(3 * 900 / limit),
-            "threads {threads}: {submits} submits"
+            s.submits > u64::from(3 * 900 / limit),
+            "threads {threads}: {s:?}"
+        );
+        check_submits(&s, &format!("threads {threads}"));
+        // The batch was sent as it reached the limit (one command's few uses past it), so its
+        // command buffers never waited unsubmitted all together.
+        assert!(
+            s.most_batch <= limit + 8,
+            "threads {threads}: a batch took {} uses before it was sent",
+            s.most_batch
         );
     }
+}
+
+/// What every submit carried was what its part planned, and no command buffer was lost: counted
+/// from the buffers each submit really got ([`d3d9_wgpu::device::SubmitStats`]).
+fn check_submits(s: &d3d9_wgpu::device::SubmitStats, what: &str) {
+    assert!(
+        s.most_buffers <= s.most_planned,
+        "{what}: a submit got {} command buffers, its part planned at most {}",
+        s.most_buffers,
+        s.most_planned
+    );
+    assert_eq!(
+        s.buffers, s.encoders,
+        "{what}: every encoder handed over was submitted, once"
+    );
+    assert_eq!(
+        s.uses, s.batch_uses,
+        "{what}: every use of the batches was counted into a submit"
+    );
+}
+
+/// The crowded frame's way: one batch of many draws in few passes, its encoders cut every 256
+/// draws (each with few uses) and ALL of them sent in ONE submit, in order. 640 draws in one
+/// occlusion query, their triangles uploaded before the batch (no upload between draws: only the
+/// colour changes), each nearer than every draw before it under a LESS depth test: the query
+/// counts every draw only if each encoder's draws ran after the encoder's before. The last draw's
+/// colour is left, the batch went in exactly one submit, and that submit got two or more command
+/// buffers, all that the batch's encoders made.
+#[test]
+fn a_crowded_batch_s_encoders_go_in_one_submit_in_order() {
+    const DRAWS: u32 = 640;
+    const LADDER: u32 = 0x3100;
+    let Some(mut g) = Gpu::with_threads(4, 1, true) else {
+        return;
+    };
+    let d = g.b.device().expect("the device");
+    assert!(
+        d.has_queue_thread(),
+        "the queue thread (and finishing threads) on"
+    );
+    let tris: Vec<f32> = (0..DRAWS)
+        .flat_map(|i| {
+            let z = 1.0 - (i + 1) as f32 / 1024.0;
+            [-3.0, -3.0, z, 1.0, -3.0, 9.0, z, 1.0, 9.0, -3.0, z, 1.0]
+        })
+        .collect();
+    let bytes = floats(&tris);
+    g.run(Cmd::CreateBuffer {
+        device: DEVICE,
+        buffer: LADDER,
+        index: false,
+        length: bytes.len() as u32,
+        usage: 0,
+        format: 0,
+        pool: 1,
+    });
+    g.run(Cmd::UploadBuffer {
+        buffer: LADDER,
+        offset: 0,
+        flags: 0,
+        data: Data::Bytes(&bytes),
+    });
+    g.run(Cmd::SetStreamSource {
+        device: DEVICE,
+        stream: 0,
+        buffer: LADDER,
+        offset: 0,
+        stride: 16,
+    });
+    g.run(Cmd::CreateQuery {
+        device: DEVICE,
+        query: 0x2000,
+        kind: 9,
+    });
+    // LESS.
+    g.state(ZFUNC, 2);
+    // The set-up sent first (a read-back sends the batch), so the batch below is the draws'.
+    let _ = g.pixels();
+    let before = g.b.device().expect("the device").submits();
+    g.clear(3, 0, 1.0);
+    let count = g.count(0x2000, |g| {
+        for i in 0..DRAWS {
+            g.colour(if i == DRAWS - 1 {
+                [0.0, 1.0, 0.0, 1.0]
+            } else {
+                [1.0, 0.0, 0.0, 1.0]
+            });
+            g.run(Cmd::DrawPrimitive {
+                device: DEVICE,
+                kind: 4,
+                start: 3 * i,
+                count: 1,
+            });
+        }
+    });
+    let after = g.b.device().expect("the device").submits();
+    assert_eq!(
+        count,
+        DRAWS * 16,
+        "every draw nearer than the ones before passed"
+    );
+    assert_eq!(
+        after.submits,
+        before.submits + 1,
+        "the batch went in one submit: {before:?} -> {after:?}"
+    );
+    assert!(
+        after.most_buffers >= 2,
+        "the submit got the batch's encoders, two or more: {after:?}"
+    );
+    assert_eq!(
+        after.encoders - before.encoders,
+        after.buffers - before.buffers,
+        "every encoder of the batch was submitted"
+    );
+    check_submits(&after, "the crowded batch");
+    for p in g.pixels() {
+        assert_eq!(p, [0, 255, 0, 255], "the last draw's green");
+    }
+    assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
 }
 
 /// The vertex buffer of [`dynamic_state_scene`]: every shape in it once, uploaded before the
