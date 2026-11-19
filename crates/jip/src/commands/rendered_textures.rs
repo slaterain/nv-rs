@@ -27,8 +27,9 @@ const SHADOW_SCENE_NODE: u32 = 0x011f_91c8;
 const INTERFACE_MANAGER: u32 = 0x011d_8a80;
 /// The game calls: a rendered texture (`thiscall` on the manager: 0, width, height, format, six
 /// 0s), the frame begun with its clear (`cdecl`: flags, the texture's render target group), the
-/// accumulate and draw passes (`cdecl`: camera, scene or accumulator, culling process), the frame
-/// ended; `Ni_Alloc` (`cdecl` size), the culling process (`thiscall`: 0) and the shader
+/// accumulate pass (`cdecl`: camera, scene, culling process) and the draw pass (`cdecl`: camera,
+/// accumulator; JIP leaves the culling process on the stack after them, which it does not read),
+/// the frame ended; `Ni_Alloc` (`cdecl` size), the culling process (`thiscall`: 0) and the shader
 /// accumulator (`thiscall`: 3 words) constructors.
 const CREATE_RENDERED_TEXTURE: u32 = 0x00b6_d170;
 const BEGIN_FRAME: u32 = 0x00b6_b8d0;
@@ -156,7 +157,7 @@ pub fn generate_rendered_texture(e: &mut Engine, camera: u32, params: TexturePar
     let group = e.mem.u32(texture + TEXTURE_TARGET_GROUP);
     e.call(BEGIN_FRAME, &args![CLEAR_ALL, group]);
     e.call(CULL_SCENE, &args![camera, scene, culling]);
-    e.call(DRAW_SCENE, &args![camera, accumulator, culling]);
+    e.call(DRAW_SCENE, &args![camera, accumulator]);
     e.call(END_FRAME, &args![]);
     e.mem.set_u8(scene + SCENE_RENDERING_TEXTURE, 0);
     e.mem.set_u32(mask_at, old_mask);
@@ -229,7 +230,7 @@ pub fn generate_rendered_ui_texture(
     let was_hidden = flags & 1;
     e.mem.set_u8(node + NODE_FLAGS, flags & 0xfe);
     e.call(CULL_SCENE, &args![camera, node, culling]);
-    e.call(DRAW_SCENE, &args![camera, accumulator, culling]);
+    e.call(DRAW_SCENE, &args![camera, accumulator]);
     e.call(END_FRAME, &args![]);
     let flags = e.mem.u8(node + NODE_FLAGS);
     e.mem.set_u8(node + NODE_FLAGS, flags | was_hidden);

@@ -68,7 +68,7 @@ fn project_ui_tile_draws_the_interface_into_the_texture() {
     let mut cull = vec![UI_CAMERA_AT, ui_root, culling, 0, 0];
     cull.extend(port);
     cull.push(0x30);
-    let mut draw = vec![UI_CAMERA_AT, accumulator, culling, 0, 0];
+    let mut draw = vec![UI_CAMERA_AT, accumulator, 0, 0];
     draw.extend(port);
     assert_eq!(
         calls(),

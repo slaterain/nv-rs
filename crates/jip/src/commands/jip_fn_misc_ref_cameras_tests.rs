@@ -254,7 +254,7 @@ fn project_draws_into_the_blocks_texture() {
             (ACCUMULATOR_CTOR, vec![accumulator, 0x63, 1, 0x2f7]),
             (BEGIN_FRAME, vec![7, GROUP]),
             (CULL_SCENE, vec![camera, SCENE_AT, culling, 1, MASK]),
-            (DRAW_SCENE, vec![camera, accumulator, culling, 1, MASK]),
+            (DRAW_SCENE, vec![camera, accumulator, 1, MASK]),
             (END_FRAME, vec![]),
             (TEXTURE_DELETE, vec![OLD_AT]),
             (RENDERED_DELETE, vec![RENDERED_AT]),
