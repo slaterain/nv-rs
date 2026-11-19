@@ -116,7 +116,9 @@ fn engine() -> Engine {
     }
     e.register(PREPARE_MESSAGE, |_, a| ret(a[0]));
     e.register(ISALNUM, |_, a| {
-        ret(u32::from((a[0] as u8).is_ascii_alphanumeric() && a[0] < 0x80))
+        ret(u32::from(
+            (a[0] as u8).is_ascii_alphanumeric() && a[0] < 0x80,
+        ))
     });
     e.register(ISALPHA, |_, a| {
         ret(u32::from((a[0] as u8).is_ascii_alphabetic() && a[0] < 0x80))
@@ -212,7 +214,11 @@ fn a_plugin_commands_parenthesised_arguments_compile_and_read_back() {
     parameters(&mut e, &[STRING, FLOAT]);
     let (ok, output, errors) = compile(&mut e, PLUGIN_COMMAND, 2, "\"key\" (1 + 2)");
     assert!(ok && errors.is_empty(), "{output:x?} {errors:x?}");
-    assert_eq!(&output[..7], b"\x02\x00\x03\x00key", "the string as the game writes it");
+    assert_eq!(
+        &output[..7],
+        b"\x02\x00\x03\x00key",
+        "the string as the game writes it"
+    );
     assert_eq!(&output[7..9], &[0xff, 0xff], "xNVSE's expression");
     assert_eq!(
         read_back(&mut e, PLUGIN_COMMAND, &output),

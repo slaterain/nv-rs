@@ -543,7 +543,11 @@ fn the_parameter_seam_answers() {
         (None, vec![]),
         "the last game opcode"
     );
-    assert_eq!(ask(&mut e, 0x1400, "(1 + 2)").0, Some(1), "the first extender opcode");
+    assert_eq!(
+        ask(&mut e, 0x1400, "(1 + 2)").0,
+        Some(1),
+        "the first extender opcode"
+    );
 }
 
 /// The shorthand's room: a `let` of 511 bytes fits the line (its length 511); one of 512 is
