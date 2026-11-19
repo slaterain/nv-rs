@@ -2546,7 +2546,7 @@ fn update_queued_reload(e: &mut Engine, this: Ptr<Animation>, actor: Ptr) {
                     // The game calls `004938c0` with null here too.
                     0
                 };
-                if e.call(PROCESS_FLAG_BYTE, &args![owner]).bool() {
+                if reload_loop_flag(e, owner) {
                     has_item = true;
                 }
             }
@@ -2648,6 +2648,59 @@ fn update_root_with_time(e: &mut Engine, this: Ptr<Animation>, time: f32, first_
         let root = ni_pointer_get(e, this.addr() + Animation::pAnimRoot.off);
         e.call(NODE_UPDATE, &args![root, data]);
     });
+}
+
+/// The queued reload's question at `0x4913C4`: `004938c0(weapon)`, the weapon's reload-loop byte
+/// (+0x384). The exe asks it even with no weapon. lStewieAl's Tweaks' row S0172
+/// (`IsReloadLoopNullCheck`) answers false for no weapon.
+fn reload_loop_flag(e: &mut Engine, weapon: u32) -> bool {
+    if e.stewie(engine_core::extend::stewie::ANIM_DATA_RELOAD_LOOP_NULL) && weapon == 0 {
+        return false;
+    }
+    e.call(PROCESS_FLAG_BYTE, &args![weapon]).bool()
+}
+
+/// `numControlledBlocks` and `m_pkAccumRootName` of an `NiControllerSequence`; its name is at +8.
+const SEQUENCE_BLOCK_COUNT: u32 = 0x0c;
+const SEQUENCE_ACCUM_ROOT_NAME: u32 = 0x5c;
+const SEQUENCE_NAME: u32 = 0x08;
+
+/// The movement sequence's first interpolator at `0x492EBD`: `004937a0(sequence, 0)`, which reads
+/// the first entry of the controlled blocks whether or not there is one. lStewieAl's Tweaks' row
+/// S0173 (`AnimDataUpdateGetNthControlledBlock`) answers null for a sequence with no controlled
+/// blocks, and the first time in a game prints `Failed to resolve movement sequence for: <the
+/// accumulation root's name> - <the sequence's name>` in the console (written into 0x80 bytes, as
+/// Tweaks' `snprintf` does, then printed as `%s`).
+fn movement_interpolator(e: &mut Engine, sequence: u32) -> u32 {
+    use engine_core::extend::stewie;
+    if e.stewie(stewie::ANIM_DATA_MOVEMENT_SEQUENCE)
+        && e.mem.u32(sequence + SEQUENCE_BLOCK_COUNT) == 0
+    {
+        if e.stewie_once(stewie::once::MOVEMENT_SEQUENCE) {
+            let text = |e: &Engine, at: u32| {
+                if at == 0 {
+                    b"(null)".to_vec()
+                } else {
+                    e.mem.cstr(at)
+                }
+            };
+            let mut line = b"Failed to resolve movement sequence for: ".to_vec();
+            line.extend(text(e, e.mem.u32(sequence + SEQUENCE_ACCUM_ROOT_NAME)));
+            line.extend_from_slice(b" - ");
+            line.extend(text(e, e.mem.u32(sequence + SEQUENCE_NAME)));
+            line.truncate(0x7f);
+            e.with_stack(0x80, |e, buffer| {
+                for (i, b) in line.iter().enumerate() {
+                    e.mem.set_u8(buffer.addr() + i as u32, *b);
+                }
+                e.mem.set_u8(buffer.addr() + line.len() as u32, 0);
+                stewie::console_print(e, b"%s", &[buffer.addr()]);
+            });
+        }
+        return 0;
+    }
+    e.call(SEQUENCE_INTERPOLATOR_AT, &args![sequence, 0u32])
+        .u32()
 }
 
 // Translated from 00491180 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3213,7 +3266,7 @@ fn update_movement_and_notes(
                 if blend != 0 {
                     let priority = fn_00493750(e, Ptr::new(blend));
                     let first = e.mem.u32(current_sequence_at(this, 1));
-                    let target = e.call(SEQUENCE_INTERPOLATOR_AT, &args![first, 0u32]).u32();
+                    let target = movement_interpolator(e, first);
                     // The cast's result is stored in a local that is never read.
                     e.call(DYNAMIC_CAST, &args![RTTI_CAST_TARGET, target]);
                     let root_name = object_name(e, accum_root);
@@ -5448,7 +5501,12 @@ pub fn fn_00496a50(e: &mut Engine, idle: Ptr<AnimIdle>) {
             let animation = e.vcall(actor.addr(), SLOT_ACTOR_ANIMATION, &args![]).u32();
             if animation != 0 {
                 let add_on = ni_pointer_get(e, slot);
-                e.call(ANIMATION_ADD_ON_REMOVED, &args![animation, add_on]);
+                // lStewieAl's Tweaks' row S0181 (`OnAnimDataRemoveNode`, `0x496B6C`): an add-on
+                // that is already gone is not removed from the animation's controllers.
+                if !(e.stewie(engine_core::extend::stewie::NULL_ANIM_REMOVE_RECURSE) && add_on == 0)
+                {
+                    e.call(ANIMATION_ADD_ON_REMOVED, &args![animation, add_on]);
+                }
             }
         }
         if e.call(TASK_QUEUE_ACTIVE, &args![]).bool() {
@@ -12631,6 +12689,236 @@ mod tests {
         assert_eq!(e.mem.u16(this.addr() + 0x122), 0xff);
     }
 
+    /// The console's two calls Tweaks' `Console_Print` makes (`0071b160`, `0071d0a0`): each line
+    /// printed is kept, formatted as `%s` with its one word (the only form these rows print).
+    fn console_lines(e: &mut Engine) {
+        CONSOLE_LINES.with(|l| l.borrow_mut().clear());
+        e.register(0x0071_b160, |_, _| ret(0x5000));
+        e.register(0x0071_d0a0, |e, a| {
+            assert_eq!(e.mem.cstr(a[1]), b"%s");
+            let line = e.mem.cstr(e.mem.u32(a[2]));
+            CONSOLE_LINES.with(|l| l.borrow_mut().push(line));
+            Ret::default()
+        });
+    }
+
+    thread_local! {
+        static CONSOLE_LINES: std::cell::RefCell<Vec<Vec<u8>>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn printed() -> Vec<Vec<u8>> {
+        CONSOLE_LINES.with(|l| l.borrow().clone())
+    }
+
+    /// An `Update` with a queued reload for the player, whose process answers `equipped` for its
+    /// weapon entry (slot 0x148); the weapon's form is the entry's word at +8.
+    fn queued_reload_fixture(equipped: u32) -> (Engine, Ptr<Animation>) {
+        let (mut e, this) = update_fixture();
+        let vtable = e.mem.u32(PLAYER);
+        e.register(0x00f4_04b0, |_, _| Ret::default());
+        e.mem.set_u32(vtable + 0x4b0, 0x00f4_04b0);
+        e.register_double(0x00f4_0148, move |_, _| ret(equipped));
+        let process = object_with_vtable(&mut e, 0x100, &[(0x148, 0x00f4_0148)]);
+        e.mem.set_u32(PLAYER + 0x68, process);
+        e.mem.set_u16(this.addr() + 0x122, 0x01ff);
+        e.mem.set_i32(this.addr() + 0x6c, 1);
+        e.set(this, Animation::pActorRef, Ptr::new(ACTOR));
+        e.register(ACTOR_IS_WEAPON_DRAWN, |_, _| ret(1));
+        e.register(ACTOR_SET_ANIM_ACTION, |_, _| Ret::default());
+        // `004938c0` reads the weapon's byte at +0x384, as the exe's does.
+        e.register(PROCESS_FLAG_BYTE, |e, a| {
+            ret(u32::from(e.mem.u8(a[0] + 0x384)))
+        });
+        (e, this)
+    }
+
+    /// lStewieAl's Tweaks' row S0172: a queued reload for an actor whose process has no weapon
+    /// entry asks `004938c0` about no weapon, which reads +0x384 of the null page and stops with the
+    /// row off; with it on the weapon counts as no reload loop and the actor gets action 9.
+    #[test]
+    fn s0172_a_queued_reload_with_no_weapon() {
+        for on in [false, true] {
+            let (mut e, this) = queued_reload_fixture(0);
+            e.set_stewie(engine_core::extend::stewie::ANIM_DATA_RELOAD_LOOP_NULL, on);
+            start_log(&mut e);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                update(&mut e, this, PLAYER, 0.1, -1.0);
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                let log = end_log(&mut e);
+                assert_eq!(arguments_of(&log, ACTOR_SET_ANIM_ACTION), [[PLAYER, 9, 0]]);
+                assert!(arguments_of(&log, PROCESS_FLAG_BYTE).is_empty());
+            }
+        }
+    }
+
+    /// Row S0172 with a weapon (ordinary input): the row changes nothing; a reload-loop weapon
+    /// gives action 0x11, another one 9, with the row off and on.
+    #[test]
+    fn s0172_row_on_with_a_weapon_changes_nothing() {
+        for looping in [0u8, 1] {
+            let mut results = vec![];
+            for on in [false, true] {
+                let weapon = 0x3000_2000u32;
+                let entry = 0x3000_2800u32;
+                let (mut e, this) = queued_reload_fixture(entry);
+                e.map(weapon, 0x1000);
+                e.mem.set_u32(entry + 8, weapon);
+                e.mem.set_u8(weapon + 0x384, looping);
+                e.set_stewie(engine_core::extend::stewie::ANIM_DATA_RELOAD_LOOP_NULL, on);
+                start_log(&mut e);
+                update(&mut e, this, PLAYER, 0.1, -1.0);
+                results.push(end_log(&mut e));
+            }
+            assert_eq!(results[0], results[1], "loop byte {looping}");
+            let action = if looping == 1 { 0x11 } else { 9 };
+            assert_eq!(
+                arguments_of(&results[1], ACTOR_SET_ANIM_ACTION),
+                [[PLAYER, action, 0]]
+            );
+            assert_eq!(
+                arguments_of(&results[1], PROCESS_FLAG_BYTE),
+                [[0x3000_2000]]
+            );
+        }
+    }
+
+    /// A sequence with `blocks` controlled blocks (16-byte entries, the first's interpolator
+    /// 0x7700) and the accumulation root's and its own names.
+    fn movement_sequence(e: &mut Engine, blocks: u32) -> u32 {
+        let sequence = e.mem.alloc(0x80);
+        e.mem.set_u32(sequence + 0x0c, blocks);
+        if blocks != 0 {
+            let array = e.mem.alloc(16 * blocks);
+            e.mem.set_u32(array, 0x7700);
+            e.mem.set_u32(sequence + 0x14, array);
+        }
+        let root = cstring(e, "Bip01 NonAccum");
+        let name = cstring(e, "mtforward");
+        e.mem.set_u32(sequence + 0x5c, root);
+        e.mem.set_u32(sequence + 0x08, name);
+        // `004937a0(sequence, index)`: the entry's first word, read as the exe reads it.
+        e.register(SEQUENCE_INTERPOLATOR_AT, |e, a| {
+            let array = e.mem.u32(a[0] + 0x14);
+            ret(e.mem.u32(array + 16 * a[1]))
+        });
+        sequence
+    }
+
+    /// lStewieAl's Tweaks' row S0173: the movement sequence of `Update`'s accumulation step with no
+    /// controlled blocks: the exe reads the first entry of its missing array and stops; with the
+    /// row on there is no interpolator, and the console says which sequence, once a game.
+    #[test]
+    fn s0173_a_movement_sequence_with_no_controlled_blocks() {
+        for on in [false, true] {
+            let mut e = engine_two();
+            console_lines(&mut e);
+            let sequence = movement_sequence(&mut e, 0);
+            e.set_stewie(engine_core::extend::stewie::ANIM_DATA_MOVEMENT_SEQUENCE, on);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                movement_interpolator(&mut e, sequence)
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert_eq!(run.unwrap(), 0);
+                assert_eq!(
+                    printed(),
+                    [
+                        b"Failed to resolve movement sequence for: Bip01 NonAccum - mtforward"
+                            .to_vec()
+                    ]
+                );
+                // Once a game: the second time nothing is printed.
+                assert_eq!(movement_interpolator(&mut e, sequence), 0);
+                assert_eq!(printed().len(), 1);
+            }
+        }
+    }
+
+    /// Row S0173: Tweaks writes the line into 0x80 bytes (127 characters and the end), and a
+    /// missing name prints as `(null)`.
+    #[test]
+    fn s0173_the_line_is_cut_at_127_characters() {
+        let mut e = engine_two();
+        console_lines(&mut e);
+        let sequence = movement_sequence(&mut e, 0);
+        let long = cstring(&mut e, &"x".repeat(200));
+        e.mem.set_u32(sequence + 0x5c, long);
+        e.set_stewie(
+            engine_core::extend::stewie::ANIM_DATA_MOVEMENT_SEQUENCE,
+            true,
+        );
+        movement_interpolator(&mut e, sequence);
+        let line = printed().remove(0);
+        assert_eq!(line.len(), 127);
+        assert!(line.starts_with(b"Failed to resolve movement sequence for: xxx"));
+        let mut e = engine_two();
+        console_lines(&mut e);
+        let sequence = movement_sequence(&mut e, 0);
+        e.mem.set_u32(sequence + 0x08, 0);
+        e.set_stewie(
+            engine_core::extend::stewie::ANIM_DATA_MOVEMENT_SEQUENCE,
+            true,
+        );
+        movement_interpolator(&mut e, sequence);
+        assert_eq!(
+            printed(),
+            [b"Failed to resolve movement sequence for: Bip01 NonAccum - (null)".to_vec()]
+        );
+    }
+
+    /// Row S0173 with controlled blocks (ordinary input): the same interpolator with the row off
+    /// and on, and nothing printed.
+    #[test]
+    fn s0173_row_on_with_controlled_blocks_changes_nothing() {
+        for on in [false, true] {
+            let mut e = engine_two();
+            console_lines(&mut e);
+            let sequence = movement_sequence(&mut e, 2);
+            e.set_stewie(engine_core::extend::stewie::ANIM_DATA_MOVEMENT_SEQUENCE, on);
+            assert_eq!(movement_interpolator(&mut e, sequence), 0x7700, "row {on}");
+            assert!(printed().is_empty());
+        }
+    }
+
+    /// lStewieAl's Tweaks' row S0181 (`0x496B6C`): the add-on is gone by the time the animation is
+    /// told about it (here the task queue's attach drops it): the exe hands the null object on,
+    /// and the controllers' walk asks it for its vtable and stops; with the row on the animation
+    /// is not told and the detach goes on.
+    #[test]
+    fn s0181_an_add_on_gone_before_the_animation_is_told() {
+        for on in [false, true] {
+            let (mut e, idle, _, _) = detach_fixture(true, true);
+            e.register(TASK_QUEUE_ACTIVE, |_, _| ret(1));
+            e.register(TASK_QUEUE_ATTACH, |e, a| {
+                // The idle's add-on slot is cleared: the attach let go of the object.
+                let idle = e.mem.u32(0x2000_0010);
+                assert_eq!(e.mem.u32(idle + 0x24), a[1]);
+                e.mem.set_u32(idle + 0x24, 0);
+                Ret::default()
+            });
+            e.mem.set_u32(0x2000_0010, idle.addr());
+            e.register(ANIMATION_ADD_ON_REMOVED, |e, a| ret(e.mem.u32(a[1])));
+            e.set_stewie(engine_core::extend::stewie::NULL_ANIM_REMOVE_RECURSE, on);
+            start_log(&mut e);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.call(0x0049_6a50, &args![idle]);
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                let log = end_log(&mut e);
+                assert!(arguments_of(&log, ANIMATION_ADD_ON_REMOVED).is_empty());
+                assert_eq!(arguments_of(&log, TASK_QUEUE_DETACH), [[0x5100, 0]]);
+                assert_eq!(e.get(idle, AnimIdle::pActor).addr(), 0);
+            }
+        }
+    }
+
     #[test]
     fn update_counts_down_the_replay_delays_and_frees_the_expired_ones() {
         let (mut e, this) = update_fixture();
@@ -13773,9 +14061,18 @@ mod tests {
         (e, idle, object, parent)
     }
 
+    /// lStewieAl's Tweaks' row S0181 with ordinary input: run with the row off, then on; the row
+    /// changes nothing (the same calls and answers).
     #[test]
     fn detaching_an_idle_removes_its_add_on_through_the_scene() {
+        for on in [false, true] {
+            detaching_an_idle_removes_its_add_on_through_the_scene_row(on);
+        }
+    }
+
+    fn detaching_an_idle_removes_its_add_on_through_the_scene_row(on: bool) {
         let (mut e, idle, object, parent) = detach_fixture(true, true);
+        e.set_stewie(engine_core::extend::stewie::NULL_ANIM_REMOVE_RECURSE, on);
         let actor = e.get(idle, AnimIdle::pActor).addr();
         let a = idle.addr();
         start_log(&mut e);
