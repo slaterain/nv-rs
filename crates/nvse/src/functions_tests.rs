@@ -97,6 +97,35 @@ fn nothing(_: &mut Engine, _: &[u32]) -> Ret {
     Ret::default()
 }
 
+/// The game's `CopyVarList` and `CopyRefList` (`005ab930`, `005ab7f0`).
+const COPY_VAR_LIST: u32 = 0x005a_b930;
+const COPY_REF_LIST: u32 = 0x005a_b7f0;
+/// Where the copies' stand-ins note the words of their last call: three words each, then the
+/// number of words passed.
+const COPIED_VARS: u32 = AREA + 0x7e80;
+const COPIED_REFS: u32 = AREA + 0x7e90;
+
+/// A copy's stand-in that takes its words as the translation does (`entry!` with three words:
+/// source list, destination list, destination script): fewer stop the call with the game's
+/// message, as in a run (player report: an inline function given to `ar_ForEach`).
+fn copy_words(e: &mut Engine, a: &[u32], note: u32) -> Ret {
+    let mut i = 0;
+    let words: [u32; 3] = std::array::from_fn(|_| <u32 as engine_core::abi::Arg>::take(a, &mut i));
+    for (k, w) in words.iter().enumerate() {
+        e.mem.set_u32(note + 4 * k as u32, *w);
+    }
+    e.mem.set_u32(note + 12, a.len() as u32);
+    Ret::default()
+}
+
+fn copy_var_list(e: &mut Engine, a: &[u32]) -> Ret {
+    copy_words(e, a, COPIED_VARS)
+}
+
+fn copy_ref_list(e: &mut Engine, a: &[u32]) -> Ret {
+    copy_words(e, a, COPIED_REFS)
+}
+
 /// `Script`'s constructor: the fake vtable and the script form type.
 fn script_constructor(e: &mut Engine, a: &[u32]) -> Ret {
     e.mem.set_u32(a[0], VTABLE);
@@ -159,9 +188,9 @@ fn setup() -> Engine {
     e.register(EVENT_LIST_DESTROY, destroy_event_list);
     e.register(SCRIPT_EXECUTE, execute);
     e.register(0x005a_a0f0, script_constructor);
-    for addr in [0x005a_b930, 0x005a_b7f0, 0x0046_4d30] {
-        e.register(addr, nothing);
-    }
+    e.register(COPY_VAR_LIST, copy_var_list);
+    e.register(COPY_REF_LIST, copy_ref_list);
+    e.register(0x0046_4d30, nothing);
     e.register(SET_FORM_ID_FN, set_form_id);
     e.mem.set_u32(VTABLE + 0x128, SET_FORM_ID_FN);
     // The block type table's entry 0x0D.
@@ -425,4 +454,55 @@ fn lambdas_become_scripts_on_their_parent_list() {
     // The parent list goes: the lambda has none any more.
     crate::lambda::mark_parent_deleted(&mut e, LIST);
     assert_eq!(crate::lambda::parent_event_list(&e, lambda), 0);
+}
+
+/// A player's report (a modded game stopped near Vault 22: "call has 2 argument words, needs
+/// more", in `005ab930` called from `ar_ForEach`'s handler): a mod's script gives `ar_ForEach` an
+/// inline function (`ar_ForEach aItems ({iter} => ...)`, an `F` token as its second argument).
+/// Evaluating it makes the lambda's script, whose variable and reference lists the game's
+/// `CopyVarList` and `CopyRefList` copy from the parent's, each given the three words its
+/// translation takes (the stand-ins take them as `entry!` does: two stop the call). The command
+/// then walks the array and answers 1; the same position makes no second lambda.
+#[test]
+fn ar_for_each_with_an_inline_function_makes_its_lambda_with_the_games_words() {
+    let mut e = setup();
+    add_local(&mut e, 2, "x", 4.0);
+    let items = crate::vars::create_array(&mut e, crate::vars::KEY_NUMBER, true, 5);
+    for (i, v) in [1.0, 2.0].into_iter().enumerate() {
+        crate::vars::set_element(
+            &mut e,
+            items,
+            &crate::vars::Key::Number(i as f64),
+            crate::vars::Value::Number(v),
+        );
+    }
+    add_local(&mut e, 3, "items", f64::from(items));
+    // The inline function: scn, Begin Function (no parameters), SetFunctionValue x * 2, End.
+    let sfv = [vec![1u8], expression(&[var(0, 2), num(2.0), vec![16]])].concat();
+    let mut lambda_data = vec![0x1d, 0, 0, 0, 0x10, 0, 8, 0, 0x0d, 0, 0, 0, 0, 0, 1, 0];
+    lambda_data.extend_from_slice(&(OP_SET_FUNCTION_VALUE as u16).to_le_bytes());
+    lambda_data.extend_from_slice(&(sfv.len() as u16).to_le_bytes());
+    lambda_data.extend(sfv);
+    lambda_data.extend([0x11, 0, 0, 0]);
+    let mut f = vec![b'F'];
+    f.extend_from_slice(&(lambda_data.len() as u32).to_le_bytes());
+    f.extend(lambda_data);
+    let for_each = [vec![2u8], expression(&[var(3, 3)]), expression(&[f])].concat();
+    assert_eq!(run(&mut e, 0x1630, &for_each), 1.0, "ar_ForEach ran");
+    let lambda = lookup(&mut e, &[0x0500_0d01]).eax;
+    assert!(crate::lambda::is_lambda(&e, lambda), "the lambda was made");
+    for (note, list) in [(COPIED_VARS, 0x4c), (COPIED_REFS, 0x44)] {
+        assert_eq!(e.mem.u32(note + 12), 3, "{list:#x}: the exe's three words");
+        assert_eq!(
+            [e.mem.u32(note), e.mem.u32(note + 4), e.mem.u32(note + 8)],
+            [SCRIPT + list, lambda + list, lambda],
+            "{list:#x}: source list, destination list, destination script"
+        );
+    }
+    assert_eq!(run(&mut e, 0x1630, &for_each), 1.0);
+    assert_eq!(
+        lookup(&mut e, &[0x0500_0d02]).eax,
+        0,
+        "one lambda per position and owner"
+    );
 }
