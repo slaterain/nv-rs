@@ -1130,7 +1130,7 @@ mod tests {
         let bytes: Vec<u8> = if inline {
             vec![0xff, 0xff, 4, 0, b'B', 5]
         } else {
-            [&[b'z'][..], &2.5f64.to_le_bytes()].concat()
+            [&b"z"[..], &2.5f64.to_le_bytes()].concat()
         };
         e.mem.set_u16(at, 0x1004);
         e.mem.set_u16(at + 2, bytes.len() as u16 + 2);
@@ -1172,12 +1172,24 @@ mod tests {
     fn a_game_line_with_an_expression_is_read_again_by_xnvses_reader() {
         let mut e = reader_engine();
         float_line(&mut e, DATA, true);
-        assert_eq!(read_outer(&mut e), (1, 0x777, 1, -1.0), "the row off: the exe's");
+        assert_eq!(
+            read_outer(&mut e),
+            (1, 0x777, 1, -1.0),
+            "the row off: the exe's"
+        );
         set_game_inline(&mut e, true);
         assert!(game_inline(&mut e));
-        assert_eq!(read_outer(&mut e), (1, 4 + 2 + 6, 1, 5.0), "xNVSE's, from the start");
+        assert_eq!(
+            read_outer(&mut e),
+            (1, 4 + 2 + 6, 1, 5.0),
+            "xNVSE's, from the start"
+        );
         float_line(&mut e, DATA, false);
-        assert_eq!(read_outer(&mut e), (1, 0x777, 2, -1.0), "a plain line: the exe's");
+        assert_eq!(
+            read_outer(&mut e),
+            (1, 0x777, 2, -1.0),
+            "a plain line: the exe's"
+        );
     }
 
     /// The mark is each call's own. A read nested in a plain one meets an expression: it is read
@@ -1191,14 +1203,22 @@ mod tests {
         float_line(&mut e, DATA2, true);
         e.mem.set_u32(NEST, DATA2);
         e.mem.set_f32(OUT + 0x40, -1.0);
-        assert_eq!(read_outer(&mut e), (1, 0x777, 1, -1.0), "the outer: the exe's");
+        assert_eq!(
+            read_outer(&mut e),
+            (1, 0x777, 1, -1.0),
+            "the outer: the exe's"
+        );
         assert_eq!(e.mem.f32(OUT + 0x40), 5.0, "the nested: xNVSE's");
         assert_eq!(e.mem.u32(NEST_OFFSET), 4 + 2 + 6);
         assert_eq!(e.mem.u32(NEST_ANSWER), 1);
         float_line(&mut e, DATA, true);
         float_line(&mut e, DATA2, false);
         e.mem.set_u32(NEST, DATA2);
-        assert_eq!(read_outer(&mut e), (1, 4 + 2 + 6, 2, 5.0), "the outer: xNVSE's");
+        assert_eq!(
+            read_outer(&mut e),
+            (1, 4 + 2 + 6, 2, 5.0),
+            "the outer: xNVSE's"
+        );
         assert_eq!(e.mem.u32(NEST_OFFSET), 0x777, "the nested: the exe's");
     }
 }

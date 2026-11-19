@@ -7680,10 +7680,16 @@ mod tests {
             locals.addr(),
             &cells
         ));
-        assert_eq!(ASKED.with(|a| a.borrow().clone()), vec![], "plain: never asked");
+        assert_eq!(
+            ASKED.with(|a| a.borrow().clone()),
+            vec![],
+            "plain: never asked"
+        );
         // A string, then an inline expression where the float stands.
         let parameters = parameter_list(&mut e, &[0, 2, 1]);
-        let bytes = [3, 0, 3, 0, b'x', b'y', b'z', 0xff, 0xff, 2, 0, b'B', 1, b'n', 1, 0, 0, 0];
+        let bytes = [
+            3, 0, 3, 0, b'x', b'y', b'z', 0xff, 0xff, 2, 0, b'B', 1, b'n', 1, 0, 0, 0,
+        ];
         let (code, offset) = code_with(&mut e, &bytes);
         let cells: Vec<u32> = (0..3).map(|_| e.mem.alloc(8)).collect();
         assert!(!parse(
@@ -7700,7 +7706,11 @@ mod tests {
             vec![(code, offset, 7)],
             "asked once, at the expression"
         );
-        assert_eq!(e.mem.cstr(cells[0]), b"xyz".to_vec(), "the string before it stored");
+        assert_eq!(
+            e.mem.cstr(cells[0]),
+            b"xyz".to_vec(),
+            "the string before it stored"
+        );
         assert_eq!(e.mem.u32(offset), 7, "the offset left at the expression");
     }
 

@@ -354,8 +354,7 @@ fn without_the_row_a_game_commands_parenthesised_arguments_are_the_games_words()
     let (ok, output, errors) = compile(&mut e, GAME_COMMAND, 2, "\"abc\" (1 + 2)");
     assert!(ok && errors.is_empty(), "{output:x?} {errors:x?}");
     assert_eq!(
-        output,
-        b"\x01\x00\x03\x00abc",
+        output, b"\x01\x00\x03\x00abc",
         "the optional argument dropped"
     );
     parameters(&mut e, &[STRING, FLOAT], 2);
