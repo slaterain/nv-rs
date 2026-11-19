@@ -7,11 +7,11 @@
 //! is a call by address (the search's compares, the hash's characters, the map's slots); here they
 //! are Rust calls, with the same answers, calls into the rest of the game and memory.
 //!
-//! Lowered in the start-up profile of 2026-11-10 (`measure/stewie-eo/now1118/prof-load0-w2.tsv`,
-//! frames 0..122, the main menu's load): the string hash 31.5 ms self, `bsearch` 23.5, the map's
-//! `SetAt` 23.5, the sorted find 6.3, `AddReaction` 6.3, the compare 4.8.
+//! Their self time in a profiled start-up of 2026-11-10 (frames 0 to 122, the main menu's load;
+//! `measure/stewie-eo`, private): the string hash 31.5 ms, `bsearch` 23.5, the map's `SetAt` 23.5,
+//! the sorted find 6.3, `AddReaction` 6.3, the compare 4.8.
 //!
-//! Lowered as the exe does it, not as Tweaks does: Tweaks' `AddReaction` skips a reaction already
+//! Typed as the exe does it, not as Tweaks does: Tweaks' `AddReaction` skips a reaction already
 //! anywhere in the list (the exe checks only the last node) and its compare is unsigned (the exe's
 //! is signed); both would change what the game does in a case the exe's code allows.
 
@@ -95,12 +95,10 @@ fn id_of(e: &Engine, value: u32) -> i32 {
     e.mem.i32(value.wrapping_add(VALUE_ID))
 }
 
-// Typed from 00a01160
-/// The compare `GetValue`, `GetOrCreateValue` and the sorted array functions use: both arguments
-/// point to a pointer to a trait value; -1, 0 or 1 by the signed trait ids.
-pub fn compare_values(e: &mut Engine, first: Ptr, second: Ptr) -> i32 {
-    let a = id_of(e, e.mem.u32(first.addr()));
-    let b = id_of(e, e.mem.u32(second.addr()));
+/// -1, 0 or 1 by the signed trait ids of the values the two slots point to.
+fn order_of_ids(e: &Engine, first: u32, second: u32) -> i32 {
+    let a = id_of(e, e.mem.u32(first));
+    let b = id_of(e, e.mem.u32(second));
     match a.cmp(&b) {
         std::cmp::Ordering::Less => -1,
         std::cmp::Ordering::Greater => 1,
@@ -108,14 +106,18 @@ pub fn compare_values(e: &mut Engine, first: Ptr, second: Ptr) -> i32 {
     }
 }
 
-/// The compare at `compare` called on (`key`, `element`): a Rust call for the trait compare.
+// Typed from 00a01160
+/// The compare `GetValue`, `GetOrCreateValue` and the sorted array functions use: both arguments
+/// point to a pointer to a trait value; -1, 0 or 1 by the signed trait ids.
+pub fn compare_values(e: &mut Engine, first: Ptr, second: Ptr) -> i32 {
+    order_of_ids(e, first.addr(), second.addr())
+}
+
+/// The compare at `compare` called on (`key`, `element`): the trait compare's work in place (no
+/// call), any other by address.
 fn compare_at(e: &mut Engine, compare: u32, key: u32, element: u32) -> i32 {
     if compare == COMPARE_VALUES {
-        typed_call!(
-            super::FAMILY,
-            0x00a0_1160,
-            compare_values(e, Ptr::new(key), Ptr::new(element))
-        )
+        order_of_ids(e, key, element)
     } else {
         e.call(compare, &args![key, element]).i32()
     }
@@ -125,7 +127,8 @@ fn compare_at(e: &mut Engine, compare: u32, key: u32, element: u32) -> i32 {
 /// `BSSimpleArray<Tile::Value *, 8>::SortedFind(&key, compare)` (Xbox PDB): the C runtime's
 /// `bsearch` of the key in the buffer (4-byte elements); the element's index or -1. With the trait
 /// compare the search is `bsearch`'s own walk (`00ec716d`: the same middles, the same element for
-/// the same answers) with the compare a Rust call; with any other compare it is `bsearch` itself.
+/// the same answers) with the compare's work done in place; with any other compare it is `bsearch`
+/// itself.
 pub fn sorted_find(e: &mut Engine, this: Ptr, key: u32, compare: u32) -> i32 {
     let array = this.addr();
     let buffer = e.mem.u32(array.wrapping_add(ARRAY_BUFFER));
@@ -145,7 +148,7 @@ pub fn sorted_find(e: &mut Engine, this: Ptr, key: u32, compare: u32) -> i32 {
 }
 
 /// `bsearch` (`00ec716d`) over 4-byte elements from a non-null `base`: while the low element is at
-/// or below the high one, with no half left a count of 0 answers 0 and a count of 1 compares the low
+/// or below the high one: with no half left a count of 0 answers 0, a count of 1 compares the low
 /// element; otherwise the middle is `half` elements up for an odd count and `half - 1` for an even
 /// one, 0 answers it, a negative answer keeps the part below it and a positive one the part above.
 fn search(e: &mut Engine, key: u32, base: u32, num: u32, compare: u32) -> u32 {
@@ -243,12 +246,11 @@ fn find_value_index(e: &mut Engine, tile: u32, key: u32) -> i32 {
 /// The trait at `index` of the tile's array.
 fn value_at(e: &Engine, tile: u32, index: i32) -> u32 {
     let buffer = e.mem.u32(tile + TILE_TRAITS + ARRAY_BUFFER);
-    e.mem
-        .u32(buffer.wrapping_add_signed(index.wrapping_mul(4)))
+    e.mem.u32(buffer.wrapping_add_signed(index.wrapping_mul(4)))
 }
 
 // Typed from 00a00e90
-/// `Tile::GetValueQ` (Xbox PDB): the trait value with id `trait_id`, or null; a linear search of the
+/// `Tile::GetValueQ` (Xbox PDB): the trait value with id `trait_id` or null; a linear search of the
 /// sorted trait array under the critical section.
 pub fn get_value_q(e: &mut Engine, this: Ptr, trait_id: i32) -> Ptr {
     let tile = this.addr();
@@ -289,7 +291,7 @@ pub fn get_value(e: &mut Engine, this: Ptr, trait_id: i32) -> Ptr {
 }
 
 // Typed from 00a01000
-/// `Tile::GetOrCreateValue` (Xbox PDB): the trait value with id `trait_id`; when the tile has none a
+/// `Tile::GetOrCreateValue` (Xbox PDB): the trait value with id `trait_id`; if the tile has none a
 /// new one (0x14 bytes, unset, then given the id and this tile) is allocated and put in its sorted
 /// place.
 pub fn get_or_create_value(e: &mut Engine, this: Ptr, trait_id: i32) -> Ptr {
@@ -341,19 +343,16 @@ pub fn string_hash(e: &mut Engine, this: Ptr, key: Ptr) -> u32 {
         if character == 0 {
             break;
         }
-        let widened = u32::from_ne_bytes(i32::from(character as i8).to_ne_bytes());
-        let lowered = typed_call!(
-            crt::FAMILY,
-            0x00ec_67aa,
-            crt::string::tolower(e, widened)
-        );
-        let lowered = i32::from(lowered as u8 as i8);
+        let widened = u32::from_ne_bytes(i32::from(i8::from_ne_bytes([character])).to_ne_bytes());
+        let lowered = typed_call!(crt::FAMILY, 0x00ec_67aa, crt::string::tolower(e, widened));
+        let lowered = i32::from(i8::from_ne_bytes([crt::low_byte(lowered)]));
         hash = hash
             .wrapping_mul(33)
             .wrapping_add(u32::from_ne_bytes(lowered.to_ne_bytes()));
         at = at.wrapping_add(1);
     }
-    hash % e.mem.u32(this.addr() + 4)
+    hash.checked_rem(e.mem.u32(this.addr() + 4))
+        .expect("hash map without buckets (division by zero in the game)")
 }
 
 // Typed from 00a0d180
@@ -376,11 +375,17 @@ pub fn int_hash(e: &mut Engine, this: Ptr, key: u32) -> u32 {
         .expect("hash map without buckets (division by zero in the game)")
 }
 
+// Typed from 00ae8dc0
+/// An integer map's key compare: the two keys are equal.
+pub fn int_keys_equal(_e: &mut Engine, _this: u32, key: u32, other: u32) -> bool {
+    key == other
+}
+
 // Typed from 00a0c6c0
 /// A pointer map's `SetAt(key, value)` (the reaction map's and the integer maps'): the key's bucket
 /// (slot +4), then its chain searched with the key compare (slot +8); a match gets the new value,
 /// else a node is made (slot +0x14), filled (slot +0xc), linked at the head of its bucket, and the
-/// count at +0xc grows. The integer maps' own hash and compare are Rust calls; other slots are asked
+/// count at +0xc grows. The integer maps' own hash and compare are Rust calls, other slots asked
 /// as the exe asks.
 pub fn map_set_at(e: &mut Engine, this: Ptr, key: u32, value: u32) {
     let map = this.addr();
@@ -396,7 +401,11 @@ pub fn map_set_at(e: &mut Engine, this: Ptr, key: u32, value: u32) {
     while node != 0 {
         let node_key = e.mem.u32(node + 4);
         let equal = if direct_equal {
-            key == node_key
+            typed_call!(
+                super::FAMILY,
+                0x00ae_8dc0,
+                int_keys_equal(e, map, key, node_key)
+            )
         } else {
             e.vcall(map, MAP_SLOT_KEYS_EQUAL, &args![key, node_key])
                 .bool()
@@ -436,7 +445,7 @@ fn set_reactions(e: &mut Engine, value: u32, list: u32) {
 
 // Typed from 00a0a130
 /// `Tile::AddReaction` (Xbox PDB, `cdecl`): records in the reaction map that `owner` depends on
-/// `value`. A reaction node (owner, next) is made; when `value` has no list yet the node becomes its
+/// `value`. A reaction node (owner, next) is made; if `value` has no list yet the node becomes its
 /// list, otherwise it goes behind the list's last node, unless that last node already names `owner`
 /// (then the node is freed).
 pub fn add_reaction(e: &mut Engine, value: Ptr, owner: Ptr) {
