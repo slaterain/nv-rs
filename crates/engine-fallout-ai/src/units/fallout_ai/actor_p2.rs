@@ -5670,6 +5670,9 @@ const PLAYER_POISON_CHOICE: u32 = 0x0095_e6f0;
 const GET_PIPBOY: u32 = 0x0070_5990;
 /// `ECX` = pipboy: refreshes it.
 const PIPBOY_REFRESH: u32 = 0x007f_a990;
+/// The Pip-Boy manager's "reset me" byte: set by the script command (`005db4c0`), cleared by the
+/// refresh itself.
+const PIPBOY_RESET_PENDING: u32 = 0x16c;
 /// `ECX` = save/load object: tests bit 2 of the word at +0x244.
 const SAVE_LOAD_BIT_2_TEST: u32 = 0x0042_ce10;
 /// `ECX` = sound handle storage: construct (`SOUND_HANDLE_INIT`), release
@@ -6014,8 +6017,13 @@ pub fn actor_equip_object(
             equip_step = true;
         }
         FORM_TYPE_0X1A => equip_step = true,
-        FORM_TYPE_AMMO => {
+        FORM_TYPE_AMMO => 'ammo: {
             let process = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, this));
+            // lStewieAl's Tweaks' row S0202 (`patchEquipAmmoOnNullBaseProcessCrashFix` at
+            // `0x88CDE7`): an actor with no process equips no ammunition (the switch's end).
+            if process == 0 && e.stewie(engine_core::extend::stewie::EQUIP_AMMO_NULL_PROCESS) {
+                break 'ammo;
+            }
             let held = e.vcall(process, PROCESS_VSLOT_ITEM, &args![]).u32();
             let held_form = if held == 0 {
                 0
@@ -6144,7 +6152,15 @@ pub fn actor_equip_object(
                 {
                     let pipboy = e.call(GET_PIPBOY, &args![]).u32();
                     if pipboy != 0 {
-                        e.call(PIPBOY_REFRESH, &args![pipboy]);
+                        if e.stewie(engine_core::extend::stewie::PIPBOY_EQUIP_CRASH) {
+                            // lStewieAl's Tweaks' row S0027 (`SetPipboyManagerShouldReset` at
+                            // `0x88CDA3`): not now, inside the equip; the reset byte asks for it,
+                            // and the main loop's AI tasks (`0086f77f`) or the Pip-Boy's opening
+                            // (`FOPipboyManager::OnMenuOpen`) reset it, whichever comes first.
+                            e.mem.set_u8(pipboy + PIPBOY_RESET_PENDING, 1);
+                        } else {
+                            e.call(PIPBOY_REFRESH, &args![pipboy]);
+                        }
                     }
                 }
             }
@@ -13350,6 +13366,59 @@ mod tests {
         assert_eq!(*refreshed.borrow(), vec![vec![0x3030]]);
     }
 
+    /// lStewieAl's Tweaks' row S0202 (`0x88CDE7`): ammunition equipped on an actor with no
+    /// process: the exe asks the missing process for its weapon (the null page holds no vtable)
+    /// and stops; with the row on nothing is equipped and the equip ends as for any other item.
+    #[test]
+    fn s0202_ammunition_on_an_actor_with_no_process() {
+        for on in [false, true] {
+            let mut e = engine3();
+            let (actor, item) = equip_world(&mut e, 0x29);
+            assert_eq!(e.mem.u32(actor.addr() + 0x68), 0);
+            let notified = record(&mut e, AMMO_NOTIFY, Ret::default());
+            let built = record(&mut e, ITEM_CHANGE_CONSTRUCT, eax(0x8808));
+            double(&mut e, AMMO_NOTIFY_LEVEL, eax(1));
+            e.set_stewie(engine_core::extend::stewie::EQUIP_AMMO_NULL_PROCESS, on);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                equip(&mut e, actor, item, 2, 0, [0, 0, 0]);
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert!(notified.borrow().is_empty());
+                assert!(built.borrow().is_empty());
+            }
+        }
+    }
+
+    /// lStewieAl's Tweaks' row S0027 (`0x88CDA3`): armour filling the Pip-Boy slot does not reset
+    /// the Pip-Boy manager in the middle of the equip; with the row on it sets the manager's reset
+    /// byte (+0x16C) for the main loop's AI tasks or the Pip-Boy's opening to act on. Off: the
+    /// reset now, the byte untouched.
+    #[test]
+    fn s0027_the_pipboy_reset_is_asked_for_not_done() {
+        for on in [false, true] {
+            let mut e = engine3();
+            let (actor, item) = equip_world(&mut e, 0x18);
+            double(&mut e, BIPED_MODEL_OF, eax(0x4040));
+            e.register(BIPED_FILLS_SLOT, |_, a| {
+                eax((a[0] == 0x4040 && a[1] == 6) as u32)
+            });
+            let pipboy = e.mem.alloc(0x170);
+            double(&mut e, GET_PIPBOY, eax(pipboy));
+            let refreshed = record(&mut e, PIPBOY_REFRESH, Ret::default());
+            e.set_stewie(engine_core::extend::stewie::PIPBOY_EQUIP_CRASH, on);
+            equip(&mut e, actor, item, 1, 0, [0, 0, 0]);
+            if on {
+                assert!(refreshed.borrow().is_empty());
+                assert_eq!(e.mem.u8(pipboy + PIPBOY_RESET_PENDING), 1);
+            } else {
+                assert_eq!(*refreshed.borrow(), vec![vec![pipboy]]);
+                assert_eq!(e.mem.u8(pipboy + PIPBOY_RESET_PENDING), 0);
+            }
+        }
+    }
+
     #[test]
     fn broken_armor_is_refused_and_leaves_the_use_flag_alone() {
         let mut e = engine3();
@@ -13574,9 +13643,18 @@ mod tests {
         assert_eq!(flags.borrow().len(), 2);
     }
 
+    /// lStewieAl's Tweaks' row S0202 with ordinary input: run with the row off, then on; the row
+    /// changes nothing (the same calls and answers).
     #[test]
     fn ammo_is_swapped_through_an_item_change() {
+        for on in [false, true] {
+            ammo_is_swapped_through_an_item_change_row(on);
+        }
+    }
+
+    fn ammo_is_swapped_through_an_item_change_row(on: bool) {
         let mut e = engine3();
+        e.set_stewie(engine_core::extend::stewie::EQUIP_AMMO_NULL_PROCESS, on);
         let (actor, item) = equip_world(&mut e, 0x29);
         let process = with_process(&mut e, actor);
         let held = e.mem.alloc(0x20);

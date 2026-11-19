@@ -20,6 +20,10 @@
 //!   ask for every actor when a reference goes away (Stewie's Engine Optimizations, measure/stewie-eo).
 //! - [`saveload`]: the clean-up of expired cells' data that every save runs first (`0084ab20`), its
 //!   expiry queue a native hash map (Stewie's Engine Optimizations, item 2).
+//! - [`tile`]: the menus' tile values (the sorted trait array's find and insert, `GetValue`,
+//!   `GetOrCreateValue`), the reaction map's `AddReaction` and `ClearActions`, the pointer maps' `SetAt`
+//!   and the menu string map's and integer maps' hash and compare, which the map lookup calls
+//!   directly (Stewie's Engine Optimizations, item 7: menus open faster).
 //!
 //! Stage 1: the objects stay in guest memory where the game made them. Each function stays
 //! registered at its exe address; a call inside the family, or into another family, is a
@@ -51,6 +55,7 @@ pub mod math;
 pub mod refs;
 pub mod saveload;
 pub mod scene;
+pub mod tile;
 
 use layout::{LightLock, RefObject};
 
@@ -187,6 +192,20 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0084_b930, saveload::queue_hash(Ptr, u32, u32) -> u32),
         entry!(0x0084_b950, saveload::queue_keys_equal(Ptr, u32, u32, u32, u32) -> bool),
         entry!(0x0084_b7c0, saveload::queue_insert(Ptr, u32, u32, u32)),
+        // The menus' tile values and their reaction map (Engine Optimizations, item 7).
+        entry!(0x00a0_1160, tile::compare_values(Ptr, Ptr) -> i32),
+        entry!(0x00a0_cb90, tile::sorted_find(Ptr, u32, u32) -> i32),
+        entry!(0x00a0_caf0, tile::sorted_insert(Ptr, u32, u32)),
+        entry!(0x00a0_0e90, tile::get_value_q(Ptr, i32) -> Ptr),
+        entry!(0x00a0_0f30, tile::get_value(Ptr, i32) -> Ptr),
+        entry!(0x00a0_1000, tile::get_or_create_value(Ptr, i32) -> Ptr),
+        entry!(0x00a0_d1b0, tile::string_hash(Ptr, Ptr) -> u32),
+        entry!(0x00a0_d180, tile::string_keys_equal(Ptr, Ptr, Ptr) -> bool),
+        entry!(0x00a0_d260, tile::int_hash(Ptr, u32) -> u32),
+        entry!(0x00ae_8dc0, tile::int_keys_equal(u32, u32, u32) -> bool),
+        entry!(0x00a0_c6c0, tile::map_set_at(Ptr, u32, u32)),
+        entry!(0x00a0_a130, tile::add_reaction(Ptr, Ptr)),
+        entry!(0x00a0_9200, tile::clear_actions(Ptr)),
         entry!(0x0085_3130, refs::map_lookup(Ptr, u32, Ptr<u32>) -> u8),
         // The same function at a second address: instruction for instruction the same body.
         entry!(0x00a1_e380, refs::map_lookup(Ptr, u32, Ptr<u32>) -> u8),
