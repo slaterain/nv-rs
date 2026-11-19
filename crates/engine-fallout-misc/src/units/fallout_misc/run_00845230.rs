@@ -183,8 +183,16 @@ pub fn fn_008453a0(e: &mut Engine, this: Ptr, capacity: u32, count: u32) {
 /// row `NV_JIP_GAME_PATCHES`; `SafeWrite16(0x845558, 0x7D63)`; its row and handler are group GF's)
 /// makes it `0x7D63`: the seam answers the count. With the word's `FIXES` bit clear: one load, then
 /// the exe's `0x13AF`.
+/// lStewieAl's Engine Optimizations writes `0x2735` there (`Inlines::SaveLoad`, the row
+/// S1016.845558, `bInlinesChangesMapBuckets`; Tweaks' own switch `[Inlines] bSaveLoad`). Tweaks
+/// writes it in its handler of xNVSE's PostPostLoad message, after JIP's write at PostLoad,
+/// whatever order the DLLs load in: its 32-bit `0x2735` replaces JIP's 16-bit `0x7D63`, so with
+/// both the row's 10,037 wins.
 #[inline]
 fn bucket_count(e: &mut Engine) -> u32 {
+    if e.stewie(engine_core::extend::stewie::CHANGES_MAP_BUCKETS) {
+        return 0x2735;
+    }
     if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
         if let Some(count) = e.site(0x0084_5558, &[]) {
             return count;
@@ -471,5 +479,41 @@ mod tests {
         }
         assert_eq!(run(jip_patches::FIXES, true), 0x7d63);
         assert_eq!(run(jip_patches::FIXES, false), 0x13af);
+    }
+
+    /// lStewieAl's Engine Optimizations row S1016.845558: on, 10,037 buckets whatever JIP's G45 says
+    /// (Tweaks writes after JIP); off, as above.
+    #[test]
+    fn the_engine_optimizations_row_gives_10037_buckets() {
+        use engine_core::extend::{jip_patches, stewie};
+        for (bits, answers) in [
+            (0, false),
+            (jip_patches::FIXES, true),
+            (jip_patches::FIXES, false),
+        ] {
+            for on in [false, true] {
+                let mut e = Engine::new();
+                e.register(BASE_CONSTRUCTOR, |_, _| Ret::default());
+                e.set_jip_patches(bits);
+                if answers {
+                    e.on_site_for_test(0x0084_5558, |_, _| Some(0x7d63));
+                } else {
+                    e.on_site_for_test(0x0084_5558, |_, _| None);
+                }
+                e.set_stewie(stewie::CHANGES_MAP_BUCKETS, on);
+                let this = e.mem.alloc(16);
+                e.call_log = Some(vec![]);
+                e.call(0x00845550, &args![this]);
+                let log = e.call_log.take().unwrap();
+                let expected = if on {
+                    0x2735
+                } else if answers {
+                    0x7d63
+                } else {
+                    0x13af
+                };
+                assert_eq!(log[1].1[1], expected, "{bits:08x} {answers} row {on}");
+            }
+        }
     }
 }

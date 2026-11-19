@@ -276,6 +276,34 @@ fn a_row_with_a_tweaks_key_obeys_it() {
     assert!(!rows::on(&row, &off_by_key, &Settings::new(&[], false)));
 }
 
+/// Engine Optimizations' row S1016.845558 follows Tweaks' own switch for its block,
+/// `[Inlines] bSaveLoad` (`settings.h`: `g_bInlineSaveLoad`, on in Tweaks' code and in VNV): on by
+/// default, off when the player's INI sets it to 0, and off by its own key too.
+#[test]
+fn the_changes_map_row_obeys_tweaks_inlines_save_load() {
+    let row = rows::ROWS
+        .iter()
+        .find(|r| r.plan == "S1016.845558")
+        .unwrap();
+    assert_eq!(row.tweaks, Some(("Inlines", "bSaveLoad")));
+    let keys = rows::Keys::default();
+    assert!(
+        rows::on(row, &keys, &Settings::new(&[], false)),
+        "VNV's value"
+    );
+    assert!(
+        rows::on(row, &keys, &Settings::new(&[], true)),
+        "Tweaks' code default"
+    );
+    let off = Settings::new(&[("p", b"[Inlines]\nbSaveLoad=0")], false);
+    assert!(!rows::on(row, &keys, &off));
+    let off_by_key = rows::Keys {
+        rows: vec![("bInlinesChangesMapBuckets", false)],
+        ..Default::default()
+    };
+    assert!(!rows::on(row, &off_by_key, &Settings::new(&[], false)));
+}
+
 /// KERNEL32's import slots the game's file read goes through (`nvse::saveload::read_file`), which
 /// the install reads Tweaks' INI with when no platform answers the mods' files seam.
 const CREATE_FILE_A: u32 = 0x00fd_f088;
@@ -378,7 +406,7 @@ fn the_start_lines_name_what_was_read() {
         start_lines(false, &settings, &keys, on.len()),
         [
             "lStewieAl's Tweaks: no Data\\NVSE\\Plugins\\nvse_stewie_tweaks.ini: VNV's values",
-            "lStewieAl's Tweaks: 21 of its 21 rows built are on",
+            "lStewieAl's Tweaks: 22 of its 22 rows built are on",
         ]
     );
     let (settings, on) = settings_and_rows(Some(b"[Tweaks]\nbBetterAutoWalk=1\n"), &[], &keys);
@@ -771,12 +799,12 @@ fn the_install_reads_the_overlay_folder_in_order() {
     MOD_FILES.with(|m| *m.borrow_mut() = None);
 }
 
-/// Each row's plan number, off key and bit, pinned (crash groups A and B): a key swapped with
+/// Each row's plan number, off key and bit, pinned (crash groups A and B, Engine Optimizations' rows): a key swapped with
 /// another row's, or two bits swapped, fails here. After the install, each key at 0 clears exactly
 /// its own bit.
 #[test]
 fn each_rows_plan_number_key_and_bit_are_pinned() {
-    use engine_core::extend::stewie::{Row, CRASH};
+    use engine_core::extend::stewie::{Row, CRASH, FIXES};
     let pinned: &[(&'static str, &'static str, Row)] = &[
         (
             "S0022.14",
@@ -847,6 +875,11 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
             Row::at(CRASH, 20),
         ),
         ("S0881", "bFixSavingNullCellCrash", Row::at(CRASH, 10)),
+        (
+            "S1016.845558",
+            "bInlinesChangesMapBuckets",
+            Row::at(FIXES, 0),
+        ),
     ];
     let table: Vec<(&str, &str, Row)> = rows::ROWS.iter().map(|r| (r.plan, r.key, r.bit)).collect();
     assert_eq!(table, pinned);

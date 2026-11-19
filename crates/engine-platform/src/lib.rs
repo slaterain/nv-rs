@@ -584,6 +584,11 @@ fn layer_imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             entry!(0, window::dispatch_message_a(Ptr) -> u32).1,
         ),
         (
+            "USER32.dll",
+            "DefWindowProcA",
+            entry!(0, window::def_window_proc_a(u32, u32, u32, u32) -> u32).1,
+        ),
+        (
             k,
             "GetPrivateProfileIntA",
             entry!(0, ini::get_private_profile_int_a(Ptr, Ptr, u32, Ptr) -> u32).1,
@@ -1053,9 +1058,10 @@ mod tests {
             );
         }
         // The 195 of the table before the layer moved out of `engine-core` (6 are Windows only),
-        // `GlobalMemoryStatus(Ex)`, and `MultiByteToWideChar` and `LCMapStringW`.
+        // `GlobalMemoryStatus(Ex)`, `MultiByteToWideChar` and `LCMapStringW`, and `DefWindowProcA`
+        // (the game's `WM_MOUSEMOVE`, `window::post_mouse_move`).
         // Off Windows also the two shader profile getters (`d3dx::profiles`).
-        assert_eq!(table.len(), if cfg!(windows) { 199 } else { 195 });
+        assert_eq!(table.len(), if cfg!(windows) { 200 } else { 196 });
     }
 
     /// Not a check: the rows of `engine-core`'s `allocations_per_operation_of_the_kernel` whose

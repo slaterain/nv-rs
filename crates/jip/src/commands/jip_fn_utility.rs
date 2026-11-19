@@ -138,7 +138,7 @@ pub fn lookup_mod_by_name(e: &Engine, name: &[u8]) -> u32 {
 }
 
 /// `DataHandler::GetModIndex`: the file's index (`ModInfo::modIndex`, +0x40C), 0xFF for none.
-fn mod_index(e: &Engine, name: &[u8]) -> u32 {
+pub(crate) fn mod_index(e: &Engine, name: &[u8]) -> u32 {
     match lookup_mod_by_name(e, name) {
         0 => 0xff,
         info => u32::from(e.mem.u8(info + 0x40c)),
