@@ -16938,6 +16938,15 @@ mod tests {
             });
             e.set_global(AXIS_DIVISOR, 1.0f64);
             e.set_global(LOOK_SCALE, 1.0f64);
+            // The forward/back weight (`STICK_SCALE_SETTING`) 1, so a forward push counts.
+            e.mem.set_f32(0x0300_0010, 1.0);
+            e.register(SETTING_FLOAT_GETTER, |_, a| {
+                int(if a[0] == STICK_SCALE_SETTING {
+                    0x0300_0010
+                } else {
+                    0x0300_0000
+                })
+            });
             e.set_pad_dead_zone_left(left);
             e.set_pad_dead_zone_right(right);
             player_character_update(&mut e, this, 0.5);
