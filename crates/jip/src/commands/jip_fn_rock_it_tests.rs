@@ -1,7 +1,7 @@
 //! `InitRockItLauncher`, called by its opcode, and the two wraps and two seams it turns on.
 //! Expectations from JIP's bodies (`Cmd_InitRockItLauncher_Execute`, `GetWeaponProjectileHook`,
 //! `RILAmmoFixHook`, `PCAmmoSwitchHook`, `TESObjectWEAP::GetEquippedAmmo`), the exe's two
-//! functions as stand-ins answering 0x5A5A.
+//! functions as stand-ins answering from their two words (so a wrap that changes them shows).
 
 use super::*;
 use crate::commands::test_support::*;
@@ -10,14 +10,28 @@ const LAUNCHER: u32 = FORMS + 0x1000;
 const RIFLE: u32 = FORMS + 0x1400;
 const AMMO: u32 = FORMS + 0x1800;
 const ENTRY: u32 = FORMS + 0x1c00;
+const ACTOR: u32 = FORMS + 0x2000;
+
+/// What the stand-ins of the exe's two functions answer for their words.
+fn ammo_of(w: &[u32]) -> u32 {
+    w[0] ^ w[1].rotate_left(8)
+}
+fn projectile_of(w: &[u32]) -> u32 {
+    w[0] ^ w[1].rotate_left(16)
+}
 
 /// JIP installed over stand-ins of the two weapon functions, forms in memory, the HUD's page
 /// mapped.
 fn world() -> Engine {
+    world_as(true)
+}
+
+/// [`world`] with JIP answering "installed" or not.
+fn world_as(installed: bool) -> Engine {
     let mut e = crate::test_support::engine();
-    e.register(EQUIPPED_AMMO.addr(), |_, _| eax(0x5a5a));
-    e.register(WEAPON_PROJECTILE.addr(), |_, _| eax(0x5a5a));
-    crate::install_as(&mut e, true);
+    e.register(EQUIPPED_AMMO.addr(), |_, w| eax(ammo_of(w)));
+    e.register(WEAPON_PROJECTILE.addr(), |_, w| eax(projectile_of(w)));
+    crate::install_as(&mut e, installed);
     e.map(FORMS, 0x10_0000);
     if !e.mem.is_mapped(0x011d_9000) {
         e.map(0x011d_9000, 0x1000);
@@ -37,11 +51,19 @@ fn world() -> Engine {
     e
 }
 
+/// Before InitRockItLauncher both wraps hand the exe's functions the caller's two words and give
+/// back their answer; the seams do not answer.
 #[test]
 fn before_the_command_everything_is_the_exes() {
     let mut e = world();
-    assert_eq!(e.call(EQUIPPED_AMMO.addr(), &[RIFLE, 0]).eax, 0x5a5a);
-    assert_eq!(e.call(WEAPON_PROJECTILE.addr(), &[RIFLE, 0]).eax, 0x5a5a);
+    assert_eq!(e.wraps_at(EQUIPPED_AMMO.addr()), vec![Owner::Jip]);
+    assert_eq!(e.wraps_at(WEAPON_PROJECTILE.addr()), vec![Owner::Jip]);
+    let words = [RIFLE, ACTOR];
+    assert_eq!(e.call(EQUIPPED_AMMO.addr(), &words).eax, ammo_of(&words));
+    assert_eq!(
+        e.call(WEAPON_PROJECTILE.addr(), &words).eax,
+        projectile_of(&words)
+    );
     e.mem.set_u32(ENTRY + 8, LAUNCHER);
     assert_eq!(e.site(AMMO_SWAP.addr(), &[ENTRY]), None);
     assert_eq!(e.site(AMMO_SWITCH.addr(), &[]), None);
@@ -90,4 +112,29 @@ fn the_launcher_has_no_ammo() {
     assert_eq!(e.site(AMMO_SWITCH.addr(), &[]), Some(0));
     e.mem.set_u32(HUD_WEAPON, 0);
     assert_eq!(e.site(AMMO_SWITCH.addr(), &[]), Some(0), "no weapon: on");
+}
+
+/// With JIP answering "not installed" nothing is put in (the wraps, the two seams and the camera's
+/// two), and the exe's functions answer directly.
+#[test]
+fn not_installed_nothing_is_put_in() {
+    let mut e = world_as(false);
+    for wrap in [EQUIPPED_AMMO, WEAPON_PROJECTILE] {
+        assert!(e.wraps_at(wrap.addr()).is_empty(), "{:08x}", wrap.addr());
+    }
+    for site in [
+        AMMO_SWAP,
+        AMMO_SWITCH,
+        super::super::jip_fn_camera::VANITY_WHEEL,
+        super::super::jip_fn_camera::CAMERA_COLLISION,
+    ] {
+        assert!(e.site_owners(site.addr()).is_empty(), "{:08x}", site.addr());
+        assert_eq!(e.site(site.addr(), &[ENTRY]), None);
+    }
+    let words = [RIFLE, ACTOR];
+    assert_eq!(e.call(EQUIPPED_AMMO.addr(), &words).eax, ammo_of(&words));
+    assert_eq!(
+        e.call(WEAPON_PROJECTILE.addr(), &words).eax,
+        projectile_of(&words)
+    );
 }
