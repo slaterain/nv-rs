@@ -259,7 +259,7 @@ fn sorted_find_moving_compare_diff() {
                 e.mem.write(new, &words);
                 e.mem.set_u32(array + 4, new);
             }
-            let id = |e: &Engine, slot: u32| e.mem.i32(e.mem.u32(e.mem.u32(slot)));
+            let id = |e: &Engine, slot: u32| e.mem.i32(e.mem.u32(slot));
             ret(id(e, a[0]).cmp(&id(e, a[1])) as i32 as u32)
         });
         let key = e.mem.alloc(0x14);

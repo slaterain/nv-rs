@@ -133,8 +133,9 @@ terms, whose notice must be kept:
 - `crates/stewie` builds lStewieAl's Tweaks 10.05 (lStewieAl) in with its author's permission,
   with Viva New Vegas' INI values for it (ModdingLinked, MIT licence); see
   [crates/stewie/NOTICE](crates/stewie/NOTICE).
-- These notices, and those above, are in every Linux and macOS package's licenses folder
-  (distribution/notices.txt lists them, and the package is refused when one is missing).
+- These notices, and those above, are in every package's licenses folder, Windows', Linux's and
+  macOS' (distribution/notices.txt lists them, every package script copies that list, and the
+  package is refused when one is missing).
 - `vendor/wgpu-hal` is wgpu-hal 30.0.1 (gfx-rs developers, MIT or Apache-2.0), kept in the
   repository with the changes [vendor/README.md](vendor/README.md) lists. Its licence files
   are beside it, and each changed file says so in its first line.

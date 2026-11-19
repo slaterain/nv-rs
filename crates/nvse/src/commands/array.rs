@@ -1092,7 +1092,7 @@ fn ar_dump_id(e: &mut Engine, w: &[u32]) -> Ret {
 /// KERNEL32's import slots the game's own file code calls (`CreateFileA`, `SetFilePointer`,
 /// `WriteFile`, `CloseHandle`): what goes through them reaches only where the platform's file
 /// layer lets it.
-const CREATE_FILE_A: u32 = 0x00fd_f088;
+pub(crate) const CREATE_FILE_A: u32 = 0x00fd_f088;
 const SET_FILE_POINTER: u32 = 0x00fd_f240;
 const WRITE_FILE: u32 = 0x00fd_f0dc;
 const CLOSE_HANDLE: u32 = 0x00fd_f07c;

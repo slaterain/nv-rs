@@ -44,6 +44,7 @@ pub mod jip_fn_light;
 pub mod jip_fn_linked_ref;
 pub mod jip_fn_marker_cmds;
 pub mod jip_fn_misc_ref;
+pub mod jip_fn_misc_ref_code;
 pub mod jip_fn_misc_ref_havok;
 pub mod jip_fn_misc_ref_havok_w;
 pub mod jip_fn_misc_ref_insert;
@@ -54,6 +55,7 @@ pub mod jip_fn_misc_ref_nodes_w;
 pub mod jip_fn_miscellaneous;
 pub mod jip_fn_miscellaneous_marker;
 pub mod jip_fn_miscellaneous_scene;
+pub mod jip_fn_moon;
 pub mod jip_fn_move_cmds;
 pub mod jip_fn_package;
 pub mod jip_fn_perk;
@@ -262,6 +264,8 @@ pub const ALL: &[Handlers] = &[
     jip_fn_ui_cursor::COMMANDS,
     // The recipe menu, quest messages and item filter (code bytes as seams and wraps).
     jip_fn_ui_code::COMMANDS,
+    jip_fn_misc_ref_code::COMMANDS,
+    jip_fn_moon::COMMANDS,
 ];
 
 /// How many of JIP's commands have a handler.
@@ -302,6 +306,8 @@ pub fn install(e: &mut Engine) {
     jip_fn_camera::install(e);
     jip_fn_rock_it::install(e);
     jip_fn_ui_code::install(e);
+    jip_fn_misc_ref_code::install(e);
+    jip_fn_moon::install(e);
     for list in ALL {
         for &(opcode, execute) in list.iter() {
             crate::table::set_handlers(e, opcode, Some(execute), None);
@@ -919,6 +925,10 @@ mod tests {
             "jip_fn_ui",
             // jip_fn_ui_code (the recipe menu, quest messages, item filter).
             "jip_fn_ui",
+            // jip_fn_misc_ref_code (ToggleNoZPosReset, ToggleObjectCollision).
+            "jip_fn_misc_ref",
+            // jip_fn_moon (SetMoonTexture).
+            "jip_fn_miscellaneous",
         ];
         assert_eq!(files.len(), ALL.len(), "one file per command list");
         let mut seen = std::collections::HashSet::new();
