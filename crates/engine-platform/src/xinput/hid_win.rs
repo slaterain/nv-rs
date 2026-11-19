@@ -6,7 +6,7 @@
 //! opened again while it stays plugged in.
 
 use super::hid::{HidPads, Opened};
-use super::sony::{self, Model, Rumble};
+use super::sony::{self, Model};
 use std::collections::HashSet;
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
@@ -19,8 +19,6 @@ const HID_INTERFACE: windows::core::GUID =
 const SHARE_READ_WRITE: u32 = 0x1 | 0x2;
 /// How often the device list is looked through for new pads.
 const LOOK_EVERY: Duration = Duration::from_secs(2);
-/// The HID usage of a gamepad (Generic Desktop page 1, usage 5).
-const GAMEPAD: (u16, u16) = (0x01, 0x05);
 
 /// Starts the thread that looks for PlayStation pads; the pads it finds join the answer.
 pub fn start() -> HidPads {
@@ -154,10 +152,14 @@ fn look_for_pads(pads: &HidPads, not_pads: &mut HashSet<String>) {
         let Some(device) = probe(&path) else {
             continue;
         };
-        let model = sony::model(device.vendor, device.product);
-        let Some(model) =
-            model.filter(|_| device.usage == GAMEPAD && device.input > 0 && device.output > 0)
-        else {
+        let pad = sony::found(
+            device.vendor,
+            device.product,
+            device.usage,
+            device.input,
+            device.output,
+        );
+        let Some(pad) = pad else {
             not_pads.insert(path);
             continue;
         };
@@ -171,26 +173,25 @@ fn look_for_pads(pads: &HidPads, not_pads: &mut HashSet<String>) {
         let (Ok(reader), Ok(writer)) = (open(), open()) else {
             continue;
         };
-        let rumble = read_features(&reader, model, device.feature);
+        let features = read_features(&reader, pad.model, device.feature);
         let _ = pads.add(Opened {
             path: path.clone(),
-            model,
-            link: sony::link(device.input),
+            model: pad.model,
+            link: pad.link,
             reader,
-            input_length: device.input,
+            input_length: pad.input_length,
             writer,
-            output_length: device.output,
-            rumble,
+            output_length: pad.output_length,
+            rumble: sony::rumble_from_features(device.product, &features),
         });
     }
 }
 
-/// Reads the pad's feature reports ([`sony::feature_reports`]) and answers how a DualSense runs
-/// its motors (its firmware's way).
-fn read_features(file: &std::fs::File, model: Model, feature_length: usize) -> Rumble {
+/// The pad's feature reports ([`sony::feature_reports`]) as read, the ones the pad answered.
+fn read_features(file: &std::fs::File, model: Model, feature_length: usize) -> Vec<Vec<u8>> {
     use windows::Win32::Devices::HumanInterfaceDevice::HidD_GetFeature;
     use windows::Win32::Foundation::HANDLE;
-    let mut firmware = 0;
+    let mut read = Vec::new();
     for &id in sony::feature_reports(model) {
         // Windows takes a buffer of the longest feature report's length, the id in its first byte.
         let mut buffer = vec![0u8; feature_length.max(64)];
@@ -204,12 +205,10 @@ fn read_features(file: &std::fs::File, model: Model, feature_length: usize) -> R
             )
         };
         if ok.as_bool() {
-            if let Some(version) = sony::firmware_version(&buffer) {
-                firmware = version;
-            }
+            read.push(buffer);
         }
     }
-    sony::rumble_for(firmware)
+    read
 }
 
 #[cfg(test)]

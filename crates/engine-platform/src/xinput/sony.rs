@@ -5,10 +5,10 @@
 //! light. Pure code, the same on every system: the HID reader ([`super::hid`]) hands it the
 //! reports.
 //!
-//! The report layouts are the community's open descriptions of the pads, checked between two
-//! independent sources: SDL's controller code (zlib licence, `SDL_hidapi_ps5.c` and
-//! `SDL_hidapi_ps4.c`) and pydualsense (MIT). Nothing is taken from code under the GPL. Not yet
-//! tried with a real pad.
+//! The report layouts follow SDL3's HIDAPI drivers field for field (zlib licence:
+//! `src/joystick/hidapi/SDL_hidapi_ps5.c` for the DualSense, `SDL_hidapi_ps4.c` for the
+//! DualShock 4 and the adapter), read against pydualsense (MIT) as a second source. Nothing is
+//! taken from code under the GPL. Not yet tried with a real pad.
 //! - DualSense over USB, input report 0x01 (64 bytes): from byte 1 the left stick's x and y, the
 //!   right stick's x and y (0 to 255, 128 the middle, y growing downward), the left and right
 //!   trigger (0 to 255), a counter, then the button bytes: the hat (low four bits: 0 up, then
@@ -19,18 +19,24 @@
 //!   the DualShock 4's.
 //! - DualShock 4 over USB, input report 0x01 (64 bytes): from byte 1 the four stick bytes, then
 //!   the hat and face buttons and L1 to R3 as above (Share for Create), PS and the touchpad's
-//!   click, then the left and right trigger. Over Bluetooth the same comes two bytes later in the
-//!   reports 0x11 to 0x19 (once an output report has been sent), or in the short report 0x01.
+//!   click, then the left and right trigger; byte 31's bit 0x04 says no pad is there (Sony's
+//!   wireless adapter with its pad off or not paired). Over Bluetooth the same comes two bytes
+//!   later in the reports 0x11 to 0x19 (once an output report has been sent), when byte 1's bit
+//!   0x80 says they carry the pad's state, or in the short report 0x01.
+//! - Bluetooth input reports 0x31 and 0x11 to 0x19 end their first 78 bytes with a CRC-32 over the
+//!   byte 0xA1 and the 74 before it; a report whose CRC does not match is not read.
 //! - Output: the DualSense's report 0x02 over USB (48 bytes), 0x31 over Bluetooth (78 bytes: a
 //!   sequence byte and 0x10, the same 47 bytes, a CRC-32 at the end); the DualShock 4's 0x05 over
 //!   USB (32 bytes), 0x11 over Bluetooth (78 bytes: 0xC0 with the report interval, then the same
-//!   bytes two later, the CRC-32). The Bluetooth CRC-32 (zlib's) runs over the byte 0xA2 and the
+//!   bytes two later, the CRC-32). The output CRC-32 (zlib's) runs over the byte 0xA2 and the
 //!   report's first 74.
 
 use super::layout::{axis_byte, axis_byte_down, Controls};
 
 /// Sony's USB vendor id.
 pub const SONY: u16 = 0x054c;
+/// The DualSense Edge's product id.
+pub const DUALSENSE_EDGE: u16 = 0x0df2;
 
 /// Which pad.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,7 +57,7 @@ pub enum Link {
 /// (0x0BA0).
 pub fn model(vendor: u16, product: u16) -> Option<Model> {
     match (vendor, product) {
-        (SONY, 0x0ce6 | 0x0df2) => Some(Model::DualSense),
+        (SONY, 0x0ce6 | DUALSENSE_EDGE) => Some(Model::DualSense),
         (SONY, 0x05c4 | 0x09cc | 0x0ba0) => Some(Model::DualShock4),
         _ => None,
     }
@@ -65,6 +71,37 @@ pub fn link(input_report_length: usize) -> Link {
     } else {
         Link::Bluetooth
     }
+}
+
+/// The HID usage of a gamepad (Generic Desktop page 1, usage 5).
+pub const GAMEPAD: (u16, u16) = (0x01, 0x05);
+
+/// A HID device found that is a pad of these: which, how connected, and its longest input and
+/// output report (each report the system reads or writes is that long).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Found {
+    pub model: Model,
+    pub link: Link,
+    pub input_length: usize,
+    pub output_length: usize,
+}
+
+/// The pad a HID device is, from what it says about itself (vendor and product id, its top usage,
+/// its longest input and output report); `None` for any other device.
+pub fn found(
+    vendor: u16,
+    product: u16,
+    usage: (u16, u16),
+    input: usize,
+    output: usize,
+) -> Option<Found> {
+    let model = model(vendor, product)?;
+    (usage == GAMEPAD && input > 0 && output > 0).then_some(Found {
+        model,
+        link: link(input),
+        input_length: input,
+        output_length: output,
+    })
 }
 
 /// The feature reports read from a pad when it is opened. The DualSense's serial number (0x09)
@@ -84,22 +121,33 @@ pub fn firmware_version(report: &[u8]) -> Option<u16> {
         .then(|| u16::from_le_bytes([report[44], report[45]]))
 }
 
-/// How a DualSense runs its haptic motors as two rumble motors: firmware before 0x0224 the older
-/// way (at half the values, to match an Xbox pad's strength); later firmware and an unknown one
-/// (0, as a Bluetooth pad may answer) the newer way.
+/// How a DualSense runs its haptic motors as two rumble motors: the older way (at half the values,
+/// to match an Xbox pad's strength) or the newer way.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Rumble {
     Older,
     Newer,
 }
 
-/// [`Rumble`] for a firmware version (0: unknown).
-pub fn rumble_for(firmware: u16) -> Rumble {
-    if firmware != 0 && firmware < 0x0224 {
-        Rumble::Older
-    } else {
+/// [`Rumble`] for the pad `product` with firmware `firmware` (0: not known), as SDL3 chooses: the
+/// DualSense Edge always the newer way; another pad the newer way from firmware 0x0224, the older
+/// way before it and when the firmware is not known (the way every DualSense takes).
+pub fn rumble_for(product: u16, firmware: u16) -> Rumble {
+    if product == DUALSENSE_EDGE || firmware >= 0x0224 {
         Rumble::Newer
+    } else {
+        Rumble::Older
     }
+}
+
+/// [`rumble_for`] the pad `product` from the feature reports read from it (the first 0x20 one
+/// that holds a firmware version; none: not known).
+pub fn rumble_from_features(product: u16, reports: &[Vec<u8>]) -> Rumble {
+    let firmware = reports
+        .iter()
+        .find_map(|r| firmware_version(r))
+        .unwrap_or(0);
+    rumble_for(product, firmware)
 }
 
 /// Where the parts of a report are: the first stick byte, then the DualSense's order (triggers
@@ -112,13 +160,39 @@ enum Layout {
     Buttons(usize),
 }
 
-/// The controls one input report holds, `None` for a report of another kind or one too short.
+/// Whether a Bluetooth input report's first 78 bytes end with the CRC-32 of the byte 0xA1 and the
+/// 74 before it.
+pub fn input_crc_ok(report: &[u8]) -> bool {
+    report.len() >= 78
+        && crc32(&[&[0xa1], &report[..74]]).to_le_bytes()
+            == [report[74], report[75], report[76], report[77]]
+}
+
+/// Whether `report` says no pad is there: a DualShock 4's 64-byte USB report 0x01 with byte 31's
+/// bit 0x04 set, as Sony's wireless adapter sends with its pad off or not paired.
+pub fn no_pad(model: Model, link: Link, report: &[u8]) -> bool {
+    model == Model::DualShock4
+        && link == Link::Usb
+        && report.len() >= 64
+        && report[0] == 0x01
+        && report[31] & 0x04 != 0
+}
+
+/// The controls one input report holds, `None` for a report of another kind, one too short, one
+/// that says no pad is there ([`no_pad`]), or a Bluetooth report that fails its checks.
 pub fn read(model: Model, link: Link, report: &[u8]) -> Option<Controls> {
+    if no_pad(model, link, report) {
+        return None;
+    }
     let layout = match (model, link, *report.first()?) {
         (Model::DualSense, Link::Usb, 0x01) => Layout::Triggers(1),
-        (Model::DualSense, Link::Bluetooth, 0x31) => Layout::Triggers(2),
+        (Model::DualSense, Link::Bluetooth, 0x31) if input_crc_ok(report) => Layout::Triggers(2),
         (Model::DualShock4, Link::Usb, 0x01) => Layout::Buttons(1),
-        (Model::DualShock4, Link::Bluetooth, 0x11..=0x19) => Layout::Buttons(3),
+        (Model::DualShock4, Link::Bluetooth, 0x11..=0x19)
+            if report.get(1).is_some_and(|b| b & 0x80 != 0) && input_crc_ok(report) =>
+        {
+            Layout::Buttons(3)
+        }
         (_, Link::Bluetooth, 0x01) => Layout::Buttons(1),
         _ => return None,
     };
@@ -164,10 +238,11 @@ const PLAYER_ONE_LIGHT: u8 = 0x04;
 /// CRC) with the interval of the pad's input reports, 4 ms, the rate it reports at over USB.
 const DS4_BLUETOOTH_HEADER: u8 = 0xc0 | 4;
 
-/// The DualSense's report that ends its light bar's start-up pattern (a fade out), sent once
-/// before the first [`output`] so that the colour set after it holds (over Bluetooth the pad plays
-/// a pattern when it connects and keeps its own colour otherwise; over USB it does no harm). Only
-/// the light-bar set-up flag (byte 38's 0x02) and its "fade out" (byte 41's 0x02) are set.
+/// A DualSense report sent once before the first [`output`]: it asks the pad to fade out the light
+/// pattern it plays when it starts, after which the light bar keeps the colour the output reports
+/// give it (over Bluetooth the pad otherwise holds its own pattern; over USB the report changes
+/// nothing). Only two bits are set: "this report sets the light bar up" (byte 38, 0x02) and "fade
+/// it out" (byte 41, 0x02).
 pub fn light_setup(link: Link, sequence: u8) -> Vec<u8> {
     let mut common = [0u8; 47];
     common[38] = 0x02;
@@ -288,6 +363,14 @@ pub fn crc32(parts: &[&[u8]]) -> u32 {
     !crc
 }
 
+/// A Bluetooth input report sealed as a pad sends it: the CRC-32 of 0xA1 and its first 74 bytes
+/// in bytes 74 to 77 (tests build their reports with it).
+#[cfg(test)]
+pub(crate) fn seal_input(report: &mut [u8]) {
+    let crc = crc32(&[&[0xa1], &report[..74]]);
+    report[74..78].copy_from_slice(&crc.to_le_bytes());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,6 +399,48 @@ mod tests {
         );
     }
 
+    /// The devices as each pad reports itself (review of #783): the DualSense's 64-byte input and
+    /// 48-byte output over USB, 78 and 547 over Bluetooth; the DualShock 4's 64 and 32 over USB
+    /// (the adapter's too), 547 and 547 over Bluetooth. Another usage, another vendor, or no
+    /// reports, is no pad.
+    #[test]
+    fn a_found_device_is_wired_by_its_own_report_lengths() {
+        let f = |product, input, output| found(SONY, product, GAMEPAD, input, output);
+        let want = |model, link, input_length, output_length| {
+            Some(Found {
+                model,
+                link,
+                input_length,
+                output_length,
+            })
+        };
+        assert_eq!(f(0x0ce6, 64, 48), want(Model::DualSense, Link::Usb, 64, 48));
+        assert_eq!(
+            f(0x0ce6, 78, 547),
+            want(Model::DualSense, Link::Bluetooth, 78, 547)
+        );
+        assert_eq!(
+            f(0x09cc, 64, 32),
+            want(Model::DualShock4, Link::Usb, 64, 32)
+        );
+        assert_eq!(
+            f(0x0ba0, 64, 32),
+            want(Model::DualShock4, Link::Usb, 64, 32)
+        );
+        assert_eq!(
+            f(0x05c4, 547, 547),
+            want(Model::DualShock4, Link::Bluetooth, 547, 547)
+        );
+        assert_eq!(
+            found(SONY, 0x0ce6, (0x01, 0x02), 64, 48),
+            None,
+            "a mouse's usage"
+        );
+        assert_eq!(found(0x045e, 0x0ce6, GAMEPAD, 64, 48), None);
+        assert_eq!(f(0x0ce6, 0, 48), None);
+        assert_eq!(f(0x0ce6, 64, 0), None);
+    }
+
     /// A DualSense USB report: sticks (left at the far left and top, right in the middle), the
     /// triggers, Cross and Triangle, the hat to the right, R1, Options and L3, PS and the touchpad.
     fn dualsense_usb() -> Vec<u8> {
@@ -329,6 +454,16 @@ mod tests {
         r[9] = 0x02 | 0x20 | 0x40;
         r[10] = 0x01 | 0x02;
         r
+    }
+
+    /// `usb`'s report over Bluetooth: one byte later in a sealed 78-byte 0x31.
+    fn dualsense_bt(usb: &[u8]) -> Vec<u8> {
+        let mut bt = vec![0u8; 78];
+        bt[0] = 0x31;
+        bt[1] = 0x5a;
+        bt[2..65].copy_from_slice(&usb[1..64]);
+        seal_input(&mut bt);
+        bt
     }
 
     fn want_dualsense(state: PadState) {
@@ -357,10 +492,7 @@ mod tests {
     fn a_dualsense_report_over_usb_and_bluetooth() {
         let usb = dualsense_usb();
         want_dualsense(read(Model::DualSense, Link::Usb, &usb).unwrap().state(0));
-        let mut bt = vec![0u8; 78];
-        bt[0] = 0x31;
-        bt[1] = 0x5a;
-        bt[2..65].copy_from_slice(&usb[1..64]);
+        let bt = dualsense_bt(&usb);
         want_dualsense(
             read(Model::DualSense, Link::Bluetooth, &bt)
                 .unwrap()
@@ -376,6 +508,24 @@ mod tests {
         let mut feature = usb.clone();
         feature[0] = 0x20;
         assert!(read(Model::DualSense, Link::Usb, &feature).is_none());
+        // A DualSense's byte 31 is its own data, not the adapter's "no pad".
+        let mut busy = usb.clone();
+        busy[31] = 0xff;
+        assert!(read(Model::DualSense, Link::Usb, &busy).is_some());
+    }
+
+    /// A Bluetooth report whose CRC does not match is not read (review of #783: SDL3 drops them).
+    #[test]
+    fn a_bluetooth_report_with_a_wrong_crc_is_not_read() {
+        let mut bt = dualsense_bt(&dualsense_usb());
+        assert!(input_crc_ok(&bt));
+        bt[10] ^= 0x01;
+        assert!(!input_crc_ok(&bt));
+        assert!(read(Model::DualSense, Link::Bluetooth, &bt).is_none());
+        let mut crc = dualsense_bt(&dualsense_usb());
+        crc[77] ^= 0x80;
+        assert!(read(Model::DualSense, Link::Bluetooth, &crc).is_none());
+        assert!(!input_crc_ok(&crc[..77]));
     }
 
     /// Each button bit of the DualSense's two button bytes is its own control: Square, Cross,
@@ -411,11 +561,9 @@ mod tests {
         }
     }
 
-    /// The DualShock 4's layout (buttons before the triggers), over USB, over Bluetooth (two bytes
-    /// later, in each of the reports 0x11 to 0x19) and in the short Bluetooth report both pads
-    /// send first.
-    #[test]
-    fn a_dualshock4_report_and_the_short_bluetooth_one() {
+    /// A DualShock 4 USB report: sticks, X Circle and the hat left, L1 Share R3, PS and the
+    /// touchpad and bits above them, the triggers.
+    fn dualshock4_usb() -> Vec<u8> {
         let mut usb = vec![0u8; 64];
         usb[0] = 0x01;
         usb[1..5].copy_from_slice(&[255, 255, 0, 64]);
@@ -424,40 +572,87 @@ mod tests {
         usb[7] = 0x01 | 0x02 | 0xfc;
         usb[8] = 1;
         usb[9] = 2;
-        let want = |c: Controls| {
-            let s = c.state(0);
-            assert_eq!(
-                s.buttons,
-                buttons::X
-                    | buttons::B
-                    | buttons::DPAD_LEFT
-                    | buttons::LEFT_SHOULDER
-                    | buttons::BACK
-                    | buttons::RIGHT_THUMB
-            );
-            assert_eq!(
-                (s.thumb_lx, s.thumb_ly, s.thumb_rx, s.thumb_ry),
-                (32767, -32768, -32768, 16384)
-            );
-            assert_eq!((s.left_trigger, s.right_trigger), (1, 2));
-        };
-        want(read(Model::DualShock4, Link::Usb, &usb).unwrap());
+        usb
+    }
+
+    fn want_dualshock4(c: Controls) {
+        let s = c.state(0);
+        assert_eq!(
+            s.buttons,
+            buttons::X
+                | buttons::B
+                | buttons::DPAD_LEFT
+                | buttons::LEFT_SHOULDER
+                | buttons::BACK
+                | buttons::RIGHT_THUMB
+        );
+        assert_eq!(
+            (s.thumb_lx, s.thumb_ly, s.thumb_rx, s.thumb_ry),
+            (32767, -32768, -32768, 16384)
+        );
+        assert_eq!((s.left_trigger, s.right_trigger), (1, 2));
+    }
+
+    /// `usb`'s report over Bluetooth as report `id`: two bytes later, byte 1 saying it carries the
+    /// pad's state, sealed.
+    fn dualshock4_bt(usb: &[u8], id: u8) -> Vec<u8> {
+        let mut bt = vec![0u8; 547];
+        bt[0] = id;
+        bt[1] = 0xc0;
+        bt[3..66].copy_from_slice(&usb[1..64]);
+        seal_input(&mut bt);
+        bt
+    }
+
+    /// The DualShock 4's layout (buttons before the triggers), over USB, over Bluetooth (two bytes
+    /// later, in each of the reports 0x11 to 0x19, when they carry the pad's state) and in the
+    /// short Bluetooth report both pads send first.
+    #[test]
+    fn a_dualshock4_report_and_the_short_bluetooth_one() {
+        let usb = dualshock4_usb();
+        want_dualshock4(read(Model::DualShock4, Link::Usb, &usb).unwrap());
         for id in 0x11..=0x19 {
-            let mut bt = vec![0u8; 547];
-            bt[0] = id;
-            bt[1] = 0xc0;
-            bt[3..66].copy_from_slice(&usb[1..64]);
-            want(read(Model::DualShock4, Link::Bluetooth, &bt).unwrap());
+            let bt = dualshock4_bt(&usb, id);
+            want_dualshock4(read(Model::DualShock4, Link::Bluetooth, &bt).unwrap());
         }
         let short = &usb[..10];
-        want(read(Model::DualShock4, Link::Bluetooth, short).unwrap());
-        want(read(Model::DualSense, Link::Bluetooth, short).unwrap());
+        want_dualshock4(read(Model::DualShock4, Link::Bluetooth, short).unwrap());
+        want_dualshock4(read(Model::DualSense, Link::Bluetooth, short).unwrap());
         assert!(read(Model::DualShock4, Link::Usb, &usb[..9]).is_none());
-        let mut other = usb.clone();
-        other[0] = 0x1a;
+        let mut other = dualshock4_bt(&usb, 0x1a);
         assert!(read(Model::DualShock4, Link::Bluetooth, &other).is_none());
-        other[0] = 0x11;
+        other = dualshock4_bt(&usb, 0x11);
         assert!(read(Model::DualShock4, Link::Usb, &other).is_none());
+        // Without the "pad state" bit, or with a wrong CRC, not read (review of #783).
+        let mut no_state = dualshock4_bt(&usb, 0x11);
+        no_state[1] = 0x40;
+        seal_input(&mut no_state);
+        assert!(read(Model::DualShock4, Link::Bluetooth, &no_state).is_none());
+        let mut bad = dualshock4_bt(&usb, 0x11);
+        bad[20] ^= 0x10;
+        assert!(read(Model::DualShock4, Link::Bluetooth, &bad).is_none());
+    }
+
+    /// Sony's wireless adapter with no pad behind it (review of #783: its reports would be a pad,
+    /// and the game would stop reading the keyboard and mouse): a DualShock 4's 64-byte USB report
+    /// with byte 31's bit 0x04 set is "no pad", not controls; with the bit clear it is a reading.
+    #[test]
+    fn the_adapter_without_its_pad_is_no_pad() {
+        let mut usb = dualshock4_usb();
+        assert!(!no_pad(Model::DualShock4, Link::Usb, &usb));
+        usb[31] = 0x04;
+        assert!(no_pad(Model::DualShock4, Link::Usb, &usb));
+        assert!(read(Model::DualShock4, Link::Usb, &usb).is_none());
+        usb[31] = 0xfb;
+        assert!(!no_pad(Model::DualShock4, Link::Usb, &usb));
+        assert!(read(Model::DualShock4, Link::Usb, &usb).is_some());
+        usb[31] = 0x04;
+        assert!(
+            !no_pad(Model::DualSense, Link::Usb, &usb),
+            "a DualSense's byte 31"
+        );
+        assert!(!no_pad(Model::DualShock4, Link::Bluetooth, &usb));
+        assert!(!no_pad(Model::DualShock4, Link::Usb, &usb[..63]));
     }
 
     /// The hat's "let go" (8) is no d-pad.
@@ -530,6 +725,9 @@ mod tests {
         assert_eq!(&bt[74..], &crc.to_le_bytes());
     }
 
+    /// The rumble kind, as SDL3 chooses (review of #783): the DualSense Edge always the newer way;
+    /// another DualSense from firmware 0x0224, the older way before it and when the firmware is
+    /// not known; read from the feature reports' 0x20.
     #[test]
     fn the_dualsense_firmware_decides_the_rumble() {
         let mut report = vec![0u8; 64];
@@ -539,13 +737,39 @@ mod tests {
         assert_eq!(firmware_version(&report), Some(0x0224));
         assert_eq!(firmware_version(&report[..46]), Some(0x0224));
         assert_eq!(firmware_version(&report[..45]), None);
+        let plain = 0x0ce6;
+        assert_eq!(rumble_for(plain, 0x0224), Rumble::Newer);
+        assert_eq!(rumble_for(plain, 0x0300), Rumble::Newer);
+        assert_eq!(rumble_for(plain, 0x0223), Rumble::Older);
+        assert_eq!(rumble_for(plain, 1), Rumble::Older);
+        assert_eq!(
+            rumble_for(plain, 0),
+            Rumble::Older,
+            "not known: the safe way"
+        );
+        assert_eq!(rumble_for(DUALSENSE_EDGE, 0), Rumble::Newer);
+        assert_eq!(rumble_for(DUALSENSE_EDGE, 0x0100), Rumble::Newer);
+        let serial = vec![0x09u8; 20];
+        let mut old = report.clone();
+        old[44..46].copy_from_slice(&0x0110u16.to_le_bytes());
+        assert_eq!(
+            rumble_from_features(plain, &[serial.clone(), report.clone()]),
+            Rumble::Newer
+        );
+        assert_eq!(
+            rumble_from_features(plain, &[serial.clone(), old]),
+            Rumble::Older
+        );
+        assert_eq!(
+            rumble_from_features(plain, std::slice::from_ref(&serial)),
+            Rumble::Older
+        );
+        assert_eq!(
+            rumble_from_features(DUALSENSE_EDGE, &[serial]),
+            Rumble::Newer
+        );
         report[0] = 0x05;
         assert_eq!(firmware_version(&report), None);
-        assert_eq!(rumble_for(0x0224), Rumble::Newer);
-        assert_eq!(rumble_for(0x0300), Rumble::Newer);
-        assert_eq!(rumble_for(0x0223), Rumble::Older);
-        assert_eq!(rumble_for(1), Rumble::Older);
-        assert_eq!(rumble_for(0), Rumble::Newer);
         assert_eq!(feature_reports(Model::DualSense), &[0x09, 0x20]);
         assert_eq!(feature_reports(Model::DualShock4), &[0x02, 0x05]);
     }

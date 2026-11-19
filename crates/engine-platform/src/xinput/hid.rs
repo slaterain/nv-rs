@@ -4,13 +4,25 @@
 //! and a writer thread for it. The reader turns each input report into the pad's [`Controls`]; the
 //! writer sends the output report whenever the motor speeds the game asks for change, and once at
 //! the start (after the DualSense's light set-up), which sets the light bar steady. The game's
-//! thread only reads and writes the shared state: no device call on it.
+//! thread only reads and writes the shared state, and reads the clock: no device call on it.
+//!
+//! A pad reads as not connected while Sony's wireless adapter says no pad is behind it, and a
+//! Bluetooth pad also once it has been silent for [`SILENCE`] (out of battery or range: its last
+//! reading would hold a stick held). The writer then sends it one report, as SDL3 does, and a
+//! write that fails ends the pad. A pad's reader runs until its read fails; until then its device
+//! is not opened again, so one device never has two readers.
 
 use super::layout::Controls;
 use super::sony::{self, Link, Model, Rumble};
 use super::{PadList, ERROR_DEVICE_NOT_CONNECTED, ERROR_SUCCESS};
 use std::io::{Read, Write};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
+
+/// How long a Bluetooth pad may send nothing before it reads as not connected.
+pub const SILENCE: Duration = Duration::from_millis(500);
+/// How often the writer looks whether its pad has gone silent.
+const WATCH: Duration = Duration::from_millis(100);
 
 /// One pad and what the game and its threads share about it.
 struct Pad {
@@ -19,22 +31,36 @@ struct Pad {
     id: u64,
     /// The system's name for the device (its path), to know it again when looking for pads.
     path: String,
-    /// The last reading, `None` before the first report.
+    link: Link,
+    /// The last reading, `None` before the first report and while the adapter says no pad.
     controls: Option<Controls>,
     /// The XInput packet number: one more at each change of `controls`.
     packet: u32,
+    /// When the last report with a reading came.
+    last_report: Option<Instant>,
     /// The motor speeds the game asked for last (XInput's left, right), and those sent.
     wanted: (u16, u16),
     sent: Option<(u16, u16)>,
+    /// The writer has sent its one report for this silence (the next reading clears it).
+    probed: bool,
     /// The reader saw the pad go (pulled out, switched off) or the writer could not write: its
     /// threads end and the next look for pads forgets it.
     gone: bool,
+    /// Its reader thread still runs (it ends when its read fails).
+    reading: bool,
 }
 
 impl Pad {
-    /// Whether the game sees the pad: it has sent a reading and has not gone.
-    fn readable(&self) -> bool {
-        !self.gone && self.controls.is_some()
+    /// Whether no reading has come for [`SILENCE`] at `now`.
+    fn silent_at(&self, now: Instant) -> bool {
+        self.last_report
+            .map_or(true, |t| now.saturating_duration_since(t) >= SILENCE)
+    }
+
+    /// Whether the game sees the pad at `now`: it has a reading, has not gone, and over Bluetooth
+    /// has not gone silent.
+    fn readable_at(&self, now: Instant) -> bool {
+        !self.gone && self.controls.is_some() && (self.link == Link::Usb || !self.silent_at(now))
     }
 }
 
@@ -99,19 +125,20 @@ impl HidPads {
         HidPads::default()
     }
 
-    /// Whether the pad at `path` is one of these and has not gone; the paths are compared without
-    /// regard to case, as Windows' are.
+    /// Whether the device at `path` is one of these whose reader still runs (a pad that has gone
+    /// keeps its path until its reader ends, so the device is not opened twice); the paths are
+    /// compared without regard to case, as Windows' are.
     pub fn knows(&self, path: &str) -> bool {
         self.shared
             .list()
             .pads
             .iter()
-            .any(|p| !p.gone && p.path.eq_ignore_ascii_case(path))
+            .any(|p| p.reading && p.path.eq_ignore_ascii_case(path))
     }
 
-    /// Forgets the pads that have gone.
+    /// Forgets the pads that have gone and whose readers have ended.
     pub fn forget_gone(&self) {
-        self.shared.list().pads.retain(|p| !p.gone);
+        self.shared.list().pads.retain(|p| !p.gone || p.reading);
     }
 
     /// Runs the pad `opened`: its reader and writer threads start.
@@ -137,11 +164,15 @@ impl HidPads {
             list.pads.push(Pad {
                 id,
                 path,
+                link,
                 controls: None,
                 packet: 0,
+                last_report: None,
                 wanted: (0, 0),
                 sent: None,
+                probed: false,
                 gone: false,
+                reading: true,
             });
             id
         };
@@ -151,6 +182,9 @@ impl HidPads {
             .spawn(move || read_pad(&s, id, reader, model, link, input_length));
         if let Err(e) = read {
             self.shared.end(id);
+            if let Some(pad) = self.shared.list().pads.iter_mut().find(|p| p.id == id) {
+                pad.reading = false;
+            }
             return Err(e);
         }
         let s = self.shared.clone();
@@ -163,21 +197,27 @@ impl HidPads {
         }
         Ok(())
     }
-}
 
-impl PadList for HidPads {
-    fn count(&mut self) -> usize {
+    /// [`PadList::count`] at `now`.
+    fn count_at(&self, now: Instant) -> usize {
         self.shared
             .list()
             .pads
             .iter()
-            .filter(|p| p.readable())
+            .filter(|p| p.readable_at(now))
             .count()
+    }
+}
+
+impl PadList for HidPads {
+    fn count(&mut self) -> usize {
+        self.count_at(Instant::now())
     }
 
     fn get_state(&mut self, n: usize, state: &mut [u8; 16]) -> u32 {
+        let now = Instant::now();
         let list = self.shared.list();
-        match list.pads.iter().filter(|p| p.readable()).nth(n) {
+        match list.pads.iter().filter(|p| p.readable_at(now)).nth(n) {
             Some(pad) => {
                 *state = pad
                     .controls
@@ -191,8 +231,9 @@ impl PadList for HidPads {
     }
 
     fn set_state(&mut self, n: usize, left: u16, right: u16) -> u32 {
+        let now = Instant::now();
         let mut list = self.shared.list();
-        match list.pads.iter_mut().filter(|p| p.readable()).nth(n) {
+        match list.pads.iter_mut().filter(|p| p.readable_at(now)).nth(n) {
             Some(pad) => {
                 if pad.wanted != (left, right) {
                     pad.wanted = (left, right);
@@ -206,7 +247,7 @@ impl PadList for HidPads {
 }
 
 /// The reader: each input report read into the pad's controls until the pad goes (a failed or
-/// empty read, or the writer ended it).
+/// empty read, or the writer ended it); then its device may be opened again.
 fn read_pad(
     shared: &Shared,
     id: u64,
@@ -220,23 +261,32 @@ fn read_pad(
         let read = file.read(&mut buffer);
         let mut list = shared.list();
         let Some(pad) = list.live(id) else {
-            return;
+            break;
         };
         match read {
             Ok(n) if n > 0 => {
-                if let Some(controls) = sony::read(model, link, &buffer[..n]) {
+                let report = &buffer[..n];
+                if sony::no_pad(model, link, report) {
+                    // Sony's adapter with no pad behind it: no pad until a reading comes.
+                    pad.controls = None;
+                } else if let Some(controls) = sony::read(model, link, report) {
                     if pad.controls != Some(controls) {
                         pad.controls = Some(controls);
                         pad.packet = pad.packet.wrapping_add(1);
                     }
+                    pad.last_report = Some(Instant::now());
+                    pad.probed = false;
                 }
             }
             _ => {
                 pad.gone = true;
                 shared.changed.notify_all();
-                return;
+                break;
             }
         }
+    }
+    if let Some(pad) = shared.list().pads.iter_mut().find(|p| p.id == id) {
+        pad.reading = false;
     }
 }
 
@@ -247,8 +297,9 @@ fn send(file: &mut impl Write, mut report: Vec<u8>, length: usize, sequence: &mu
     file.write_all(&report).is_ok()
 }
 
-/// The writer: the DualSense's light set-up first, then the output report at the start and
-/// whenever the wanted speeds change. A failed write ends the pad.
+/// The writer: the DualSense's light set-up first, then the output report at the start, whenever
+/// the wanted speeds change, and once when a Bluetooth pad goes silent. A failed write ends the
+/// pad.
 fn write_pad(
     shared: &Shared,
     id: u64,
@@ -277,7 +328,19 @@ fn write_pad(
                     pad.sent = Some(pad.wanted);
                     break pad.wanted;
                 }
-                list = shared.changed.wait(list).unwrap_or_else(|p| p.into_inner());
+                if link == Link::Bluetooth
+                    && !pad.probed
+                    && pad.last_report.is_some()
+                    && pad.silent_at(Instant::now())
+                {
+                    pad.probed = true;
+                    break pad.wanted;
+                }
+                list = shared
+                    .changed
+                    .wait_timeout(list, WATCH)
+                    .unwrap_or_else(|p| p.into_inner())
+                    .0;
             }
         };
         let report = sony::output(model, link, left, right, sequence, rumble);
@@ -293,10 +356,9 @@ mod tests {
     use super::*;
     use crate::xinput::{buttons, PadState};
     use std::sync::mpsc;
-    use std::time::{Duration, Instant};
 
     /// A pad's reading end: the reports sent down the channel, one a read; the channel closed is
-    /// the pad pulled out (a failed read).
+    /// the pad pulled out (a failed read). Nothing sent is a pad gone silent (the read blocks).
     struct FakeReader(mpsc::Receiver<Vec<u8>>);
 
     impl Read for FakeReader {
@@ -355,6 +417,16 @@ mod tests {
         r
     }
 
+    /// A DualSense's sealed Bluetooth report, the left stick at `left_x`.
+    fn bt_dualsense_report(left_x: u8) -> Vec<u8> {
+        let mut bt = vec![0u8; 78];
+        bt[0] = 0x31;
+        bt[2..6].copy_from_slice(&[left_x, 128, 128, 128]);
+        bt[9] = 0x08;
+        sony::seal_input(&mut bt);
+        bt
+    }
+
     fn add(
         pads: &HidPads,
         path: &str,
@@ -389,7 +461,8 @@ mod tests {
     }
 
     /// A pad is not connected before its first report; then each changed report is a new packet
-    /// with its controls, an unchanged one the same packet; pulled out, it is gone.
+    /// with its controls, an unchanged one the same packet; pulled out, it is gone, and its path
+    /// is forgotten once its reader has ended.
     #[test]
     fn a_pad_reads_and_goes() {
         let mut pads = HidPads::new();
@@ -432,23 +505,29 @@ mod tests {
 
         drop(tx);
         wait_for(|| pads.count() == 0);
-        assert!(!pads.knows(r"\\?\HID#PAD1"));
+        wait_for(|| !pads.knows(r"\\?\HID#PAD1"));
         assert_eq!(pads.get_state(0, &mut bytes), ERROR_DEVICE_NOT_CONNECTED);
         pads.forget_gone();
         assert!(pads.shared.list().pads.is_empty());
     }
 
     /// The game's motor speeds reach the pad once per change, the Bluetooth reports numbered in
-    /// turn and padded to the output length; asking for the same speeds again sends nothing.
+    /// turn and padded to the output length; asking for the same speeds again sends nothing. The
+    /// pad keeps reporting all along, so it is never silent.
     #[test]
     fn rumble_is_sent_when_it_changes() {
         let mut pads = HidPads::new();
         let (tx, writer) = add(&pads, "bt", Model::DualSense, Link::Bluetooth, (78, 80));
-        let mut bt = vec![0u8; 78];
-        bt[0] = 0x31;
-        bt[2..6].copy_from_slice(&[128; 4]);
-        bt[9] = 0x08;
-        tx.send(bt).unwrap();
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let feeding = {
+            let (tx, done) = (tx.clone(), done.clone());
+            std::thread::spawn(move || {
+                while !done.load(std::sync::atomic::Ordering::Relaxed) {
+                    let _ = tx.send(bt_dualsense_report(128));
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            })
+        };
         wait_for(|| pads.count() == 1);
         wait_for(|| writer.written().len() == 2);
         assert_eq!(pads.set_state(0, 0xffff, 0x8000), ERROR_SUCCESS);
@@ -457,6 +536,8 @@ mod tests {
         assert_eq!(pads.set_state(0, 0, 0), ERROR_SUCCESS);
         wait_for(|| writer.written().len() == 4);
         std::thread::sleep(Duration::from_millis(50));
+        done.store(true, std::sync::atomic::Ordering::Relaxed);
+        feeding.join().unwrap();
         let written = writer.written();
         assert_eq!(written.len(), 4);
         let padded = |mut r: Vec<u8>| {
@@ -477,9 +558,11 @@ mod tests {
         assert_eq!(written[1], run(0, 0, 1));
         assert_eq!(written[2], run(0xffff, 0x8000, 2));
         assert_eq!(written[3], run(0, 0, 3));
+        drop(tx);
     }
 
-    /// A write that fails ends the pad, as a failed read does.
+    /// A write that fails ends the pad, as a failed read does; its device's path stays known
+    /// (no second reader) until its reader ends.
     #[test]
     fn a_failed_write_ends_the_pad() {
         let mut pads = HidPads::new();
@@ -490,8 +573,13 @@ mod tests {
         *writer.fail.lock().unwrap() = true;
         assert_eq!(pads.set_state(0, 5000, 0), ERROR_SUCCESS);
         wait_for(|| pads.count() == 0);
-        assert!(!pads.knows("usb"));
+        assert!(pads.knows("usb"), "its reader still runs");
+        pads.forget_gone();
+        assert_eq!(pads.shared.list().pads.len(), 1);
         drop(tx);
+        wait_for(|| !pads.knows("usb"));
+        pads.forget_gone();
+        assert!(pads.shared.list().pads.is_empty());
     }
 
     /// Two pads are the list's first and second, in the order found; the first one gone, the
@@ -513,6 +601,7 @@ mod tests {
         drop(one);
         wait_for(|| pads.count() == 1);
         assert_eq!(state(&mut pads, 0).1.thumb_lx, 32767);
+        wait_for(|| !pads.knows("one"));
         pads.forget_gone();
         let (again, _w3) = add_dualsense(&pads, "one");
         again.send(usb_dualsense_report(false, 0)).unwrap();
@@ -541,5 +630,72 @@ mod tests {
             )]
         );
         drop(tx);
+    }
+
+    /// Sony's wireless adapter (review of #783): with no pad behind it the pad is not connected
+    /// (the game then reads the keyboard and mouse), whether it had a reading before or not; a
+    /// reading brings it back.
+    #[test]
+    fn the_adapter_without_its_pad_reads_as_no_pad() {
+        let mut pads = HidPads::new();
+        let (tx, _writer) = add(&pads, "adapter", Model::DualShock4, Link::Usb, (64, 32));
+        let reading = || {
+            let mut r = vec![0u8; 64];
+            r[0] = 0x01;
+            r[1..5].copy_from_slice(&[128; 4]);
+            r[5] = 0x08;
+            r
+        };
+        let mut nobody = reading();
+        nobody[31] = 0x04;
+        tx.send(nobody.clone()).unwrap();
+        std::thread::sleep(Duration::from_millis(30));
+        assert_eq!(pads.count(), 0);
+        tx.send(reading()).unwrap();
+        wait_for(|| pads.count() == 1);
+        tx.send(nobody).unwrap();
+        wait_for(|| pads.count() == 0);
+        let mut bytes = [0xaa; 16];
+        assert_eq!(pads.get_state(0, &mut bytes), ERROR_DEVICE_NOT_CONNECTED);
+        tx.send(reading()).unwrap();
+        wait_for(|| pads.count() == 1);
+        assert!(pads.knows("adapter"));
+        drop(tx);
+    }
+
+    /// A Bluetooth pad that goes silent (review of #783: its held stick stayed held) reads as not
+    /// connected once [`SILENCE`] has passed, and the writer sends it one report; a reading brings
+    /// it back. Silent again with its writes failing, that report ends it. A USB pad is not timed.
+    #[test]
+    fn a_silent_bluetooth_pad_reads_as_gone_and_is_asked_once() {
+        let mut pads = HidPads::new();
+        let (tx, writer) = add(&pads, "bt", Model::DualSense, Link::Bluetooth, (78, 78));
+        tx.send(bt_dualsense_report(0)).unwrap();
+        wait_for(|| pads.count() == 1);
+        assert_eq!(state(&mut pads, 0).1.thumb_lx, -32768);
+        wait_for(|| writer.written().len() == 2);
+        // Silent: not connected after SILENCE, and one report sent to ask.
+        wait_for(|| pads.count() == 0);
+        wait_for(|| writer.written().len() == 3);
+        std::thread::sleep(SILENCE + WATCH * 3);
+        assert_eq!(writer.written().len(), 3, "one report a silence");
+        assert_eq!(
+            writer.written()[2],
+            sony::output(Model::DualSense, Link::Bluetooth, 0, 0, 2, Rumble::Newer)
+        );
+        tx.send(bt_dualsense_report(128)).unwrap();
+        wait_for(|| pads.count() == 1);
+        *writer.fail.lock().unwrap() = true;
+        wait_for(|| pads.shared.list().pads[0].gone);
+        assert!(pads.knows("bt"), "its reader still runs");
+        drop(tx);
+        wait_for(|| !pads.knows("bt"));
+        // Over USB, silence is no sign: the pad stays.
+        let (usb, _w) = add_dualsense(&pads, "usb");
+        usb.send(usb_dualsense_report(false, 128)).unwrap();
+        wait_for(|| pads.count() == 1);
+        std::thread::sleep(SILENCE + WATCH);
+        assert_eq!(pads.count(), 1);
+        drop(usb);
     }
 }

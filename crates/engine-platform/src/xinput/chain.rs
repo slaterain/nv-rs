@@ -21,10 +21,12 @@ pub trait PadList: Send {
 pub struct Chain<X> {
     xinput: Option<X>,
     lists: Vec<Box<dyn PadList>>,
+    /// Where each user's last rumble went.
+    rumbled: [Option<Place>; USERS as usize],
 }
 
 /// Where a user's pad is.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Place {
     XInput(u32),
     List(usize, usize),
@@ -33,7 +35,11 @@ enum Place {
 
 impl<X: PadSource> Chain<X> {
     pub fn new(xinput: Option<X>, lists: Vec<Box<dyn PadList>>) -> Chain<X> {
-        Chain { xinput, lists }
+        Chain {
+            xinput,
+            lists,
+            rumbled: [None; USERS as usize],
+        }
     }
 
     /// The pad that is the game's `user`; `state` gets the XInput pad's state on the way (and is
@@ -74,7 +80,19 @@ impl<X: PadSource> PadSource for Chain<X> {
 
     fn set_state(&mut self, user: u32, vibration: &[u8; 4]) -> u32 {
         let mut scratch = [0u8; 16];
-        match self.find(user, &mut scratch) {
+        let place = self.find(user, &mut scratch);
+        // A list's pad that is no longer this user (an Xbox pad plugged in before it took the
+        // place) has its motors stopped: the game's stop now goes to the other pad (review of
+        // #783).
+        if let Some(slot) = self.rumbled.get_mut(user as usize) {
+            if let Some(Place::List(i, n)) = *slot {
+                if place != Place::List(i, n) {
+                    self.lists[i].set_state(n, 0, 0);
+                }
+            }
+            *slot = Some(place);
+        }
+        match place {
             Place::XInput(u) => match self.xinput.as_mut() {
                 Some(x) => x.set_state(u, vibration),
                 None => ERROR_DEVICE_NOT_CONNECTED,
@@ -240,6 +258,49 @@ mod tests {
         assert_eq!(*xset.lock().unwrap(), [(2, v(1))]);
         assert_eq!(*logs[0].lock().unwrap(), [(0, 2, 0x200)]);
         assert_eq!(*logs[1].lock().unwrap(), [(0, 3, 0x300), (1, 4, 0x400)]);
+    }
+
+    /// A PlayStation pad rumbling as user 0 when an Xbox pad comes in before it (review of #783):
+    /// the game's stop goes to the Xbox pad, and the PlayStation pad's motors are stopped too.
+    #[test]
+    fn a_pad_that_stops_being_the_user_stops_rumbling() {
+        let xinput_on = Arc::new(Mutex::new(false));
+        let xset: Log<(u32, [u8; 4])> = Log::default();
+        /// XInput whose user 0 comes and goes.
+        struct Toggle(Arc<Mutex<bool>>, Log<(u32, [u8; 4])>);
+        impl PadSource for Toggle {
+            fn get_state(&mut self, user: u32, state: &mut [u8; 16]) -> u32 {
+                if user == 0 && *self.0.lock().unwrap() {
+                    *state = [1; 16];
+                    ERROR_SUCCESS
+                } else {
+                    ERROR_DEVICE_NOT_CONNECTED
+                }
+            }
+            fn set_state(&mut self, user: u32, vibration: &[u8; 4]) -> u32 {
+                self.1.lock().unwrap().push((user, *vibration));
+                ERROR_SUCCESS
+            }
+        }
+        let list_set = Log::default();
+        let list = FakeList {
+            count: 1,
+            base: 200,
+            set: list_set.clone(),
+        };
+        let mut c = Chain::new(
+            Some(Toggle(xinput_on.clone(), xset.clone())),
+            vec![Box::new(list) as Box<dyn PadList>],
+        );
+        assert_eq!(c.set_state(0, &[0, 0xff, 0, 0x80]), ERROR_SUCCESS);
+        assert_eq!(*list_set.lock().unwrap(), [(0, 0xff00, 0x8000)]);
+        *xinput_on.lock().unwrap() = true;
+        assert_eq!(c.set_state(0, &[0; 4]), ERROR_SUCCESS);
+        assert_eq!(*xset.lock().unwrap(), [(0, [0; 4])]);
+        assert_eq!(*list_set.lock().unwrap(), [(0, 0xff00, 0x8000), (0, 0, 0)]);
+        // Still the Xbox pad's: nothing more to the PlayStation pad.
+        assert_eq!(c.set_state(0, &[0; 4]), ERROR_SUCCESS);
+        assert_eq!(list_set.lock().unwrap().len(), 2);
     }
 
     #[test]
