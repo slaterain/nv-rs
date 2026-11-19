@@ -5670,9 +5670,8 @@ const PLAYER_POISON_CHOICE: u32 = 0x0095_e6f0;
 const GET_PIPBOY: u32 = 0x0070_5990;
 /// `ECX` = pipboy: refreshes it.
 const PIPBOY_REFRESH: u32 = 0x007f_a990;
-/// The Pip-Boy manager's "reset me" byte: set by the script command (`005db4c0`), cleared by the
-/// refresh itself.
-const PIPBOY_RESET_PENDING: u32 = 0x16c;
+/// The Pip-Boy manager's "reset me" byte (one definition, beside row S0027).
+use engine_core::extend::stewie::PIPBOY_RESET_PENDING;
 /// `ECX` = save/load object: tests bit 2 of the word at +0x244.
 const SAVE_LOAD_BIT_2_TEST: u32 = 0x0042_ce10;
 /// `ECX` = sound handle storage: construct (`SOUND_HANDLE_INIT`), release
@@ -13377,6 +13376,7 @@ mod tests {
             assert_eq!(e.mem.u32(actor.addr() + 0x68), 0);
             let notified = record(&mut e, AMMO_NOTIFY, Ret::default());
             let built = record(&mut e, ITEM_CHANGE_CONSTRUCT, eax(0x8808));
+            let flags = record(&mut e, SET_ACTION_FLAG, Ret::default());
             double(&mut e, AMMO_NOTIFY_LEVEL, eax(1));
             e.set_stewie(engine_core::extend::stewie::EQUIP_AMMO_NULL_PROCESS, on);
             let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -13387,6 +13387,15 @@ mod tests {
             if on {
                 assert!(notified.borrow().is_empty());
                 assert!(built.borrow().is_empty());
+                // The switch's common end (`0x88D1D6`): the use flags of the actor (with the
+                // equip's extra list, none here) and of the item (with the actor's list).
+                assert_eq!(
+                    *flags.borrow(),
+                    vec![
+                        vec![actor.addr(), 0, 2],
+                        vec![item.addr(), actor.addr() + 0x44, 2]
+                    ]
+                );
             }
         }
     }
@@ -13397,6 +13406,9 @@ mod tests {
     /// reset now, the byte untouched.
     #[test]
     fn s0027_the_pipboy_reset_is_asked_for_not_done() {
+        // FOPipboyManager +0x16C: the byte the script command (`005db4c0`) sets and the main
+        // loop's AI tasks (`0086f840`) read; one definition, beside the row.
+        assert_eq!(PIPBOY_RESET_PENDING, 0x16c);
         for on in [false, true] {
             let mut e = engine3();
             let (actor, item) = equip_world(&mut e, 0x18);
@@ -13411,10 +13423,10 @@ mod tests {
             equip(&mut e, actor, item, 1, 0, [0, 0, 0]);
             if on {
                 assert!(refreshed.borrow().is_empty());
-                assert_eq!(e.mem.u8(pipboy + PIPBOY_RESET_PENDING), 1);
+                assert_eq!(e.mem.u8(pipboy + 0x16c), 1);
             } else {
                 assert_eq!(*refreshed.borrow(), vec![vec![pipboy]]);
-                assert_eq!(e.mem.u8(pipboy + PIPBOY_RESET_PENDING), 0);
+                assert_eq!(e.mem.u8(pipboy + 0x16c), 0);
             }
         }
     }
