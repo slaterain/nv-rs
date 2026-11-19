@@ -90,12 +90,15 @@ impl Words {
 
 use Words::{AtLeast, N};
 
-/// The calls the reader cannot check by itself, each checked by hand: (crate, file, callee as
-/// written, the words it passes, how they were checked). A call listed twice in a file is listed
-/// twice. What "a command's words" are: the eight of `COMMAND_ARGS` (`paramInfo`, `scriptData`,
-/// `thisObj`, `containingObj`, `scriptObj`, `eventList`, `result`, `opcodeOffsetPtr`), which the
-/// game's script runner passes to every command's routine.
-const UNREAD: &[(&str, &str, &str, Words, &str)] = &[
+/// One row of [`UNREAD`]: (crate, file, callee as written, the words it passes, how they were
+/// checked).
+type Row = (&'static str, &'static str, &'static str, Words, &'static str);
+
+/// The calls the reader cannot check by itself, each checked by hand ([`Row`]). A call listed
+/// twice in a file is listed twice. What "a command's words" are: the eight of `COMMAND_ARGS`
+/// (`paramInfo`, `scriptData`, `thisObj`, `containingObj`, `scriptObj`, `eventList`, `result`,
+/// `opcodeOffsetPtr`), which the game's script runner passes to every command's routine.
+const UNREAD: &[Row] = &[
     // JIP LN.
     (
         "jip",
@@ -1310,7 +1313,7 @@ static PROBING: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// Pairs crate `name`'s unread calls with [`UNREAD`]'s rows: the problems (an unlisted call, a
 /// listed one that is gone or passes other words) and the pairs.
 fn match_unread<'a>(name: &str, unread: &'a [Unread]) -> (Vec<String>, Vec<(&'a Unread, Words)>) {
-    let mut rows: Vec<(&(&str, &str, &str, Words, &str), bool)> = UNREAD
+    let mut rows: Vec<(&Row, bool)> = UNREAD
         .iter()
         .filter(|r| r.0 == name)
         .map(|r| (r, false))
@@ -1318,7 +1321,7 @@ fn match_unread<'a>(name: &str, unread: &'a [Unread]) -> (Vec<String>, Vec<(&'a 
     let mut problems = Vec::new();
     let mut pairs = Vec::new();
     for u in unread {
-        let same = |r: &(&str, &str, &str, Words, &str)| r.1 == u.file && r.2 == u.callee;
+        let same = |r: &Row| r.1 == u.file && r.2 == u.callee;
         let pick = rows
             .iter()
             .position(|(r, used)| !used && same(r) && u.words.map_or(true, |n| r.3.takes(n)))
