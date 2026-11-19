@@ -2427,73 +2427,104 @@ bSunShadowsCharacters=0
     /// Linux's and macOS's play.sh, read here (`distribution/unix/play.sh`).
     const PLAY_SH: &str = include_str!("../../../distribution/unix/play.sh");
 
-    /// The names play.sh exports: every name on its `export` lines (`export A B`, `export A=x`).
-    fn play_sh_exports(script: &str) -> Vec<&str> {
-        script
-            .lines()
-            .filter_map(|line| line.trim().strip_prefix("export "))
-            .flat_map(str::split_whitespace)
-            .map(|word| word.split('=').next().unwrap_or(word))
-            .collect()
+    /// What play.sh exports, in one pass over its lines: each name of an `export` line with its
+    /// value, the one on that line (`export A=x`) or else the last `A=x` line before it (`export
+    /// A B`), as written. A name exported with no value given is an error, not a guess.
+    fn play_sh_exports(script: &str) -> Result<Vec<(&str, &str)>, String> {
+        let shell_name = |n: &str| {
+            !n.is_empty()
+                && n.bytes()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == b'_')
+        };
+        let mut given: Vec<(&str, &str)> = Vec::new();
+        let mut exported = Vec::new();
+        for line in script.lines().map(str::trim) {
+            if line.starts_with('#') {
+                continue;
+            }
+            if let Some(names) = line.strip_prefix("export ") {
+                for word in names.split_whitespace() {
+                    let pair = match word.split_once('=') {
+                        Some(pair) => pair,
+                        None => given
+                            .iter()
+                            .rev()
+                            .find(|(n, _)| *n == word)
+                            .map(|&(_, v)| (word, v))
+                            .ok_or_else(|| format!("play.sh exports {word} with no value"))?,
+                    };
+                    exported.push(pair);
+                }
+            } else if let Some((name, value)) = line.split_once('=') {
+                if shell_name(name) {
+                    given.push((name, value));
+                }
+            }
+        }
+        Ok(exported)
     }
 
-    /// The value play.sh gives `name` (its `name=value` line, as written), or `1`.
-    fn play_sh_value<'a>(script: &'a str, name: &str) -> &'a str {
-        script
-            .lines()
-            .filter_map(|line| line.trim().strip_prefix(name)?.strip_prefix('='))
-            .next()
-            .unwrap_or("1")
-    }
-
-    /// What Linux's and macOS's play.sh exports makes a play run on Vulkan with play's defaults, as
-    /// Play.exe's does (review of #687: without NV_SETTINGS nothing drew), in both profiles. The
-    /// names are read from play.sh itself, each with the value play.sh gives it, so a variable it
-    /// adds later is covered: none may be a test's or a fix's variable (#763: play.sh exported
-    /// `NV_PROFILE`, the profiler's switch, and every start ran as a test: the player's Fallout.ini
-    /// unread, the vanilla preset, no renderer chosen). The profile goes under the name the program
-    /// reads (`engine-platform` machine_table::PROFILE_VARIABLE).
+    /// What Linux's and macOS's play.sh exports makes the same play run as Play.exe's plain one
+    /// (only `NV_SETTINGS`: Vulkan, play's threads and render thread; review of #687: without
+    /// NV_SETTINGS nothing drew), the whole choice alike, in both profiles. The variables are read
+    /// from play.sh itself with the values it gives them, and must be exactly the ones listed here,
+    /// so an export added later is looked at in this test: none may be a test's or a fix's
+    /// variable (#763: play.sh exported `NV_PROFILE`, the profiler's switch, and every start ran as
+    /// a test: the player's Fallout.ini unread, the vanilla preset, no renderer chosen). The profile
+    /// goes under the name the program reads (`engine-platform` machine_table::PROFILE_VARIABLE).
     #[test]
     fn play_sh_variables_make_a_play_run_on_vulkan() {
         use engine_platform::machine_table::{profile_from, PROFILE_VARIABLE};
-        let exported = play_sh_exports(PLAY_SH);
-        for name in [PROFILE_VARIABLE, "NV_SETTINGS", "NV_SOUND", "NV_SAVE_OUT"] {
-            assert!(exported.contains(&name), "{name} not in {exported:?}");
-        }
-        for name in &exported {
+        let exported = play_sh_exports(PLAY_SH).unwrap();
+        let mut names: Vec<&str> = exported.iter().map(|&(n, _)| n).collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            [
+                "NV_D3DX_CACHE",
+                "NV_PREFS_OUT",
+                "NV_REPORT_DIR",
+                "NV_REPORT_LOG",
+                PROFILE_VARIABLE,
+                "NV_SAVE_OUT",
+                "NV_SETTINGS",
+                "NV_SOUND",
+                "NV_WGPU_CACHE"
+            ],
+            "play.sh's exports changed: check the new one here first"
+        );
+        for name in &names {
             assert!(!TEST_VARIABLES.contains(name), "{name}: a test's variable");
             assert!(FIXES.iter().all(|f| f.env != *name), "{name}: a fix's own");
         }
+        let plain =
+            Choice::from_texts(None, None, |n: &str| (n == "NV_SETTINGS").then(String::new))
+                .unwrap();
+        assert_eq!(plain.renderer, Some(Renderer::Vulkan));
+        assert_eq!(plain.threads, PLAY_THREADS);
+        assert_eq!(plain.render_thread, PLAY_RENDER_THREAD);
         for profile in ["game", "mods"] {
-            let pairs: Vec<(&str, &str)> = exported
-                .iter()
-                .map(|&name| {
-                    if name == PROFILE_VARIABLE {
-                        (name, profile)
-                    } else {
-                        (name, play_sh_value(PLAY_SH, name))
-                    }
-                })
-                .collect();
             let env = |name: &str| {
-                pairs
+                exported
                     .iter()
                     .find(|(n, _)| *n == name)
-                    .map(|(_, v)| (*v).to_string())
+                    .map(|&(n, v)| (if n == PROFILE_VARIABLE { profile } else { v }).to_string())
             };
             assert!(is_play_run(env), "{profile}");
             let choice = Choice::from_texts(None, None, env).unwrap();
-            assert_eq!(choice.renderer, Some(Renderer::Vulkan), "{profile}");
-            assert_eq!(choice.threads, PLAY_THREADS, "{profile}");
-            assert_eq!(choice.render_thread, PLAY_RENDER_THREAD, "{profile}");
+            assert_eq!(choice, plain, "{profile}");
             assert_eq!(play_run_taken_as_test(&choice, env), None, "{profile}");
             assert_eq!(profile_from(env(PROFILE_VARIABLE).as_deref()), profile);
         }
-        assert_eq!(play_sh_value(PLAY_SH, "NV_SOUND"), "out");
+        assert!(exported.contains(&("NV_SOUND", "out")));
+        // The reader: an export's value from its own line or the last one before; a name with
+        // none is an error; comments and lower-case assignments are not values.
         assert_eq!(
-            play_sh_exports("x=1\n  export A B=2\n# export C\nexport D\n"),
-            ["A", "B", "D"]
+            play_sh_exports("X=1\nX=2\n  export A=3 X\n# export C\nlower=4\nexport D=\n"),
+            Ok(vec![("A", "3"), ("X", "2"), ("D", "")])
         );
+        assert!(play_sh_exports("export Y\n").is_err());
+        assert!(play_sh_exports("lower=1\nexport lower\n").is_err());
     }
 
     /// Vulkan is play's renderer (the maintainer, 2026-11-11): a launcher's play run with no usable

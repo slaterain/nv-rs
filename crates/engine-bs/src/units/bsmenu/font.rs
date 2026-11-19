@@ -2648,7 +2648,9 @@ pub fn fn_00a152d0(e: &mut Engine, this: Ptr<Font>) {
 /// metrics and texture coordinates (giving it the same height and top
 /// edge), then loads every texture. Then the reference count goes up by
 /// one. A missing file, more than 8 textures or a missing texture prints a
-/// message and returns without counting the reference.
+/// message and returns without counting the reference. The whole file is
+/// read: a longer one is written past the block (unless JIP's game patches'
+/// guard answers the seam at the size read).
 // Translation incomplete: 00a15320 - C++ exception unwinding (FS:[0] frame) and the /GS security cookie check (00ec408c) are not translated.
 pub fn font_load(e: &mut Engine, this: Ptr<Font>) {
     let at = e.tls() + 0x2b4;
@@ -2676,6 +2678,9 @@ pub fn font_load(e: &mut Engine, this: Ptr<Font>) {
         let data = e.call(ALLOCATE, &args![MEMORY_MANAGER, 0x3928u32]).u32();
         e.set(this, Font::pFontData, data);
         let size = e.vcall(file, 0x28, &args![]).u32();
+        // JIP's game patches' seam at the size read (`0xA154DD`; words: the file's size; nv-rs's own
+        // guard with G129's row): answered, the size read (at most the data block).
+        let size = e.site(0x00a1_54dd, &[size]).unwrap_or(size);
         let data = e.get(this, Font::pFontData);
         file_read(e, file, data, size);
         delete_file(e, file);
@@ -3881,7 +3886,12 @@ pub fn font_manager_calculate_string_dimensions(
     start: i32,
 ) -> Ptr {
     let out = result.addr();
-    if !(1..=8).contains(&font) || text == 0 {
+    // JIP's seam at the last font's test (`0xA1B032`; words: the font, the manager): answered, its
+    // answer is the last font (JIP's manager holds more than 8; 0 refuses the font).
+    let last = e
+        .site(0x00a1_b032, &[font as u32, this.addr()])
+        .map_or(8, |n| n as i32);
+    if !(1..=last).contains(&font) || text == 0 {
         for k in 0..3 {
             let v: u32 = e.global(DIMENSIONS_START + 4 * k);
             e.mem.set_u32(out + 4 * k, v);
@@ -6444,6 +6454,43 @@ mod tests {
         );
     }
 
+    /// A font file longer than the data block is read whole into the 0x3928-byte block, so the
+    /// bytes after the block are overwritten (as in the original, where they are the game's heap);
+    /// with the seam at the size read (`0xA154DD`; JIP's game patches' guard) answering 0x3928,
+    /// only the block. Loaded either way.
+    #[test]
+    fn load_reads_an_oversized_file_whole_unless_the_seam_caps_it() {
+        for capped in [false, true] {
+            let mut e = engine();
+            let content = e.mem.alloc(0x4000);
+            for i in 0x3928..0x4000 {
+                e.mem.set_u8(content + i, 0xab);
+            }
+            let file = font_file(&mut e, content, 0x4000);
+            e.register_double(FILE_FINDER_GET_FILE, move |_, _| ret(file));
+            if capped {
+                e.on_site_for_test(0x00a1_54dd, |_, w| {
+                    assert_eq!(w, [0x4000]);
+                    Some(0x3928)
+                });
+            }
+            let font: Ptr<Font> = e.new_object();
+            let name = cstr(&mut e, b"big.fnt");
+            e.set(font, Font::pFontFile, name);
+            font_load(&mut e, font);
+            let data = e.get(font, Font::pFontData);
+            assert_eq!(e.mem.block_size(data), Some(0x3928));
+            let read = if capped { 0x3928 } else { 0x4000 };
+            assert_eq!(e.mem.u32(file + 4), read, "read (capped: {capped})");
+            assert_eq!(
+                e.mem.u8(data + 0x3928) == 0xab,
+                !capped,
+                "the byte after the block (capped: {capped})"
+            );
+            assert_eq!(e.get(font, Font::iRefCount), 1);
+        }
+    }
+
     #[test]
     fn line_extraction_keeps_one_line() {
         let mut e = engine();
@@ -7034,6 +7081,53 @@ mod tests {
         assert_eq!(floats(&e, result, 3), vec![4.0, 0.0, 0.0]);
         font_manager_calculate_string_dimensions(&mut e, m, Ptr::new(result), 0, 1, 25.0, 0);
         assert_eq!(e.mem.f32(result), 4.0);
+    }
+
+    /// JIP's seam at the last font's test (`0xA1B032`; words: the font and the manager): its
+    /// answer is the last font measured, that font itself included (89 in JIP's manager of 0x164
+    /// bytes, font 89's slot at +0x160); an answer of 0 refuses even font 1. Unanswered, font 8
+    /// (+0x1C) is the last.
+    #[test]
+    fn string_dimensions_last_font_seam() {
+        use std::cell::{Cell, RefCell};
+        thread_local! {
+            static SEEN: RefCell<Vec<Vec<u32>>> = const { RefCell::new(Vec::new()) };
+            static LAST: Cell<u32> = const { Cell::new(89) };
+        }
+        let (mut e, f, m) = text_setup();
+        let result = e.mem.alloc(12);
+        let text = cstr(&mut e, b"aaa a");
+        let measure = |e: &mut Engine, manager: u32, font: i32| {
+            e.mem.set_f32(DIMENSIONS_START, 4.0);
+            let at = Ptr::new(result);
+            font_manager_calculate_string_dimensions(e, Ptr::new(manager), at, text, font, 25.0, 0);
+            floats(e, result, 3)
+        };
+        let measured = vec![20.0, 32.0, 3.0];
+        let refused = vec![4.0, 0.0, 0.0];
+        assert_eq!(
+            measure(&mut e, m.addr(), 8),
+            measured,
+            "unanswered: 8, the last"
+        );
+        assert_eq!(measure(&mut e, m.addr(), 9), refused, "unanswered: 9");
+        let jip = e.mem.alloc(0x164);
+        e.mem.set_u32(jip + 0x20, f.addr());
+        e.mem.set_u32(jip + 0x160, f.addr());
+        e.on_site_for_test(0x00a1_b032, |_, w| {
+            SEEN.with(|s| s.borrow_mut().push(w.to_vec()));
+            Some(LAST.with(Cell::get))
+        });
+        assert_eq!(measure(&mut e, jip, 9), measured, "font 9 measured");
+        assert_eq!(measure(&mut e, jip, 89), measured, "font 89, the last");
+        assert_eq!(measure(&mut e, jip, 90), refused, "past 89: refused");
+        LAST.with(|l| l.set(0));
+        e.mem.set_u32(jip, f.addr());
+        assert_eq!(measure(&mut e, jip, 1), refused, "0: font 1 refused too");
+        assert_eq!(
+            SEEN.with(RefCell::take),
+            vec![vec![9, jip], vec![89, jip], vec![90, jip], vec![1, jip]]
+        );
     }
 
     #[test]
