@@ -531,6 +531,41 @@ fn the_folders_are_nv_rs_own_on_drive_z() {
     assert!(folder_lines(std::path::Path::new(&long)).is_err());
 }
 
+/// The profile play.sh names (`NV_RS_PROFILE`, not the profiler's `NV_PROFILE`): `mods` only for
+/// `mods`; unset, `game` or anything else is `game`. Each profile's Documents, AppData folders and
+/// plugin list sit in nv-rs's own folder under its name, as `--build-mods` and the saves expect
+/// (review of #763: `--mods` must not read the `game` folders).
+#[test]
+fn the_profile_is_mods_only_when_play_sh_says_mods() {
+    assert_eq!(PROFILE_VARIABLE, "NV_RS_PROFILE");
+    assert_eq!(profile_from(Some("mods")), "mods");
+    assert_eq!(profile_from(Some("game")), "game");
+    assert_eq!(profile_from(None), "game");
+    assert_eq!(profile_from(Some("")), "game");
+    assert_eq!(profile_from(Some("Mods")), "game");
+    let own = std::path::Path::new("/home/me/.local/share/nv-rs");
+    let mods = own.join("mods");
+    assert_eq!(
+        profile_folders(own, "mods"),
+        [
+            mods.join("Documents"),
+            mods.join("AppData").join("Roaming"),
+            mods.join("AppData").join("Local"),
+        ]
+    );
+    assert_eq!(
+        plugins_txt(own, "mods"),
+        mods.join("AppData")
+            .join("Local")
+            .join("FalloutNV")
+            .join("plugins.txt")
+    );
+    assert_eq!(
+        profile_folders(own, "game")[0],
+        own.join("game").join("Documents")
+    );
+}
+
 /// The whole table reads back through the Windows table's own reader with every answer in place:
 /// the machine's part, then the display part added after it (as the host loads them).
 #[test]
