@@ -4486,7 +4486,7 @@ fn panic_message(p: Box<dyn std::any::Any + Send>) -> String {
 
 /// A failure on the queue thread comes back to the render thread with its message: a panic in a
 /// batch's job, and a finishing thread's failure (600 draws, so encoders go to the finishing
-/// threads). Each is planted, the batch handed over by a `Present` (which does not wait for it);
+/// threads; one upload among them, so the batch is sent whole at the `Present`). Each is planted, the batch handed over by a `Present` (which does not wait for it);
 /// then the next wait (`wgpu_errors`) raises it, and once raised the device goes on. Planted again,
 /// the next flush (`GetData` with `D3DGETDATA_FLUSH`) raises it after the queue thread has run the
 /// batch. Planted again and never raised (no flush or wait after it), the device is dropped
@@ -4531,9 +4531,18 @@ fn a_failure_on_the_queue_thread_is_raised_on_the_render_thread() {
             query: QUERY,
             kind: 9,
         });
+        // One upload, then the same triangle drawn again: the batch stays far under the most one
+        // submit takes, so it is handed over by the `Present` and not sent early on the way
+        // (`Device::bound_batch`, whose wait would raise the failure in the draws).
         let draws = |g: &mut Gpu| {
-            for _ in 0..600 {
-                g.cover(0.5);
+            g.cover(0.5);
+            for _ in 1..600 {
+                g.run(Cmd::DrawPrimitive {
+                    device: DEVICE,
+                    kind: 4,
+                    start: 0,
+                    count: 1,
+                });
             }
         };
         // At the next wait.
