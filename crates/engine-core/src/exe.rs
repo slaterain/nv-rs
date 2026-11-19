@@ -8,8 +8,9 @@
 //! `.rdata`, `.data`, `.tls` and `CONST` are byte-identical to the unpacked
 //! file's (checked 2026-10-09). Each section is checked against the FNV-1a
 //! 64-bit hash of version 1.4.0.525's section before it is mapped; a
-//! different build is refused, because every address in the translations
-//! belongs to 1.4.0.525.
+//! different build is refused, except the measured GOG 55068 profile below.
+//! Both profiles execute the engine's Steam-derived translations, never the
+//! installed executable's code.
 
 use crate::mem::Mem;
 use std::path::Path;
@@ -28,7 +29,7 @@ pub const SECTIONS: [(&str, u32, u32, u64); 4] = [
 
 include!("exe_hashes.rs");
 
-// The local GOG 55068 experiment uses the same mapped layout. Its code section
+// The measured GOG 55068 profile uses the same mapped layout. Its code section
 // identifies the measured build, although nv-rs executes translated Rust code.
 const GOG_SECTIONS: [(&str, u32, u32, u64); 5] = [
     (".rdata", 0x00FD_F000, RDATA_VSIZE, GOG_RDATA_HASH),
@@ -216,13 +217,14 @@ pub fn installed_exe(data_dir: &Path) -> std::path::PathBuf {
 }
 
 /// The data sections of `file` (the bytes of `exe`) after checking that it
-/// is FalloutNV.exe 1.4.0.525, the build every translated address belongs
-/// to. Any other build is refused with a message that says so.
+/// matches Steam 1.4.0.525 or the measured en-US GOG 55068 profile.
+/// Other builds are refused; both accepted builds use Steam-derived translations.
 pub fn checked_sections(exe: &Path, file: &[u8]) -> Result<Vec<Section>, String> {
     let refuse = |what: String| {
         format!(
-            "{}: {what}. nv-rs needs FalloutNV.exe version 1.4.0.525 (the build it \
-             was traced from); other builds are not supported yet.",
+            "{}: {what}. nv-rs needs FalloutNV.exe version 1.4.0.525 (Steam) or \
+             1.4.0.525(a) (GOG offline installer build 55068, en-US); \
+             other builds are not supported yet.",
             exe.display()
         )
     };
@@ -230,7 +232,7 @@ pub fn checked_sections(exe: &Path, file: &[u8]) -> Result<Vec<Section>, String>
     if let Err(steam_error) = check_profile(&secs, &SECTIONS) {
         check_profile(&secs, &GOG_SECTIONS).map_err(|gog_error| {
             refuse(format!(
-                "Steam profile: {steam_error}; local GOG 55068 profile: {gog_error}"
+                "Steam profile: {steam_error}; GOG 55068 profile: {gog_error}"
             ))
         })?;
     }
@@ -295,6 +297,65 @@ mod tests {
             changed[i].raw[0] ^= 1;
             assert!(check_profile(&changed, &expected).is_err());
         }
+    }
+
+    /// A valid PE layout is not sufficient: exercise the public acceptance
+    /// path, rather than only its hash-checking helper. No game bytes are used.
+    #[test]
+    fn checked_sections_refuses_matching_layout_with_wrong_contents() {
+        const PE: usize = 0x80;
+        const OPT: usize = 0xe0;
+        const RAW: usize = 0x400;
+        let mut file = vec![0u8; RAW + 5 * 0x200];
+        file[..2].copy_from_slice(b"MZ");
+        file[0x3c..0x40].copy_from_slice(&(PE as u32).to_le_bytes());
+        file[PE..PE + 4].copy_from_slice(b"PE\0\0");
+        file[PE + 4..PE + 6].copy_from_slice(&0x14cu16.to_le_bytes());
+        file[PE + 6..PE + 8].copy_from_slice(&5u16.to_le_bytes());
+        file[PE + 20..PE + 22].copy_from_slice(&(OPT as u16).to_le_bytes());
+        file[PE + 24..PE + 26].copy_from_slice(&0x10bu16.to_le_bytes());
+        file[PE + 52..PE + 56].copy_from_slice(&IMAGE_BASE.to_le_bytes());
+        for (i, (name, va, vsize, _)) in GOG_SECTIONS.iter().enumerate() {
+            let header = PE + 24 + OPT + i * 40;
+            let raw = RAW + i * 0x200;
+            file[header..header + name.len()].copy_from_slice(name.as_bytes());
+            file[header + 8..header + 12].copy_from_slice(&vsize.to_le_bytes());
+            file[header + 12..header + 16].copy_from_slice(&(va - IMAGE_BASE).to_le_bytes());
+            file[header + 16..header + 20].copy_from_slice(&0x200u32.to_le_bytes());
+            file[header + 20..header + 24].copy_from_slice(&(raw as u32).to_le_bytes());
+            file[raw..raw + 0x200].fill(0xa5);
+        }
+        let parsed = sections(&file).unwrap();
+        assert_eq!(parsed.len(), 5);
+        for (section, &(name, va, vsize, _)) in parsed.iter().zip(&GOG_SECTIONS) {
+            assert_eq!(
+                (section.name.as_str(), section.va, section.vsize),
+                (name, va, vsize)
+            );
+        }
+        let err = checked_sections(Path::new("synthetic.exe"), &file).unwrap_err();
+        assert!(err.contains("version 1.4.0.525"), "{err}");
+        assert!(err.contains("GOG offline installer build 55068"), "{err}");
+        assert!(err.contains("Steam profile:"), "{err}");
+        assert!(err.contains("GOG 55068 profile:"), "{err}");
+    }
+
+    #[test]
+    fn gog_profile_preserves_steam_data_layout_and_pins_text() {
+        assert_eq!(GOG_SECTIONS.len(), SECTIONS.len() + 1);
+        for (&(name, va, size, hash), &gog) in SECTIONS.iter().zip(&GOG_SECTIONS) {
+            let expected_hash = if name == ".rdata" {
+                GOG_RDATA_HASH
+            } else {
+                hash
+            };
+            assert_eq!(gog, (name, va, size, expected_hash));
+        }
+        assert_ne!(GOG_RDATA_HASH, RDATA_HASH);
+        assert_eq!(
+            GOG_SECTIONS[4],
+            (".text", 0x0040_1000, 0x00bd_d58b, GOG_TEXT_HASH)
+        );
     }
 
     /// Optional local integration: validates a real owned executable and then
