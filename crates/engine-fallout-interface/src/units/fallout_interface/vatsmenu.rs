@@ -2125,7 +2125,8 @@ pub fn vats_menu_do_idle(e: &mut Engine, this: Ptr<VatsMenu>) {
     // 007eca2a: the gamepad stick.
     if gamepad_in_use(e) {
         // The value computed from the VATS mode (0x1ea9 or 0x21f1) and the
-        // first two axis reads are never used.
+        // first two axis reads are never used (so JIP LN NVSE's `SetDeadZoneLS`, which rewrites
+        // that `0x1ea9` at `0x7ECA56`, changes nothing here).
         typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, VATS));
         e.call(AXIS_VALUE, &args![controls, 0u32, 7u32]);
         e.call(AXIS_VALUE, &args![controls, 0u32, 8u32]);
@@ -2134,20 +2135,23 @@ pub fn vats_menu_do_idle(e: &mut Engine, this: Ptr<VatsMenu>) {
             .call(AXIS_VALUE, &args![controls, 0u32, 10u32])
             .i32()
             .wrapping_neg();
-        if horizontal > 0x21f1 {
+        // The dead zone: the exe's `0x21f1` (immediates `0x7ECAAC`, `0x7ECB3A`, `0x7ECB51`; `-0x21f1`
+        // at `0x7ECAEE`) unless JIP LN NVSE's `SetDeadZoneRS` rewrote them.
+        let dead_zone = e.pad_dead_zone_right();
+        if horizontal > dead_zone {
             if e.mem.u8(m + 0x110) == 0 {
                 let time = e.call(TIMER_MILLISECONDS, &args![TIMER]).u32();
                 e.mem.set_u32(m + 0x114, time);
                 e.mem.set_u8(m + 0x110, 1);
             }
-        } else if horizontal < -0x21f1 {
+        } else if horizontal < dead_zone.wrapping_neg() {
             if e.mem.u8(m + 0x10f) == 0 {
                 let time = e.call(TIMER_MILLISECONDS, &args![TIMER]).u32();
                 e.mem.set_u32(m + 0x114, time);
                 e.mem.set_u8(m + 0x10f, 1);
             }
-        } else if e.call(ABS, &args![horizontal]).i32() < 0x21f1
-            && e.call(ABS, &args![vertical]).i32() < 0x21f1
+        } else if e.call(ABS, &args![horizontal]).i32() < dead_zone
+            && e.call(ABS, &args![vertical]).i32() < dead_zone
         {
             if fn_007f4c00(e) {
                 let menu = vats_menu(e);

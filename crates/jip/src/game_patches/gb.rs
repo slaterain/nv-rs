@@ -7,7 +7,7 @@
 //! dead zone 7849.0, after `FILD axis; FSTP; CALL 00408820` (fabs)) at its own doubles
 //! `s_deadZoneLSg` (nine: the caravan, lockpick, map and roulette menus' left stick, the free
 //! camera's move axes) and `s_deadZoneRSg` (two: the free camera's look axes), which start at
-//! 7849.0 and 8689.0 (`internal/xinput.cpp`; `SetDeadZoneLS/RS`, not built, change them). Each
+//! 7849.0 and 8689.0 (`internal/xinput.cpp`; `SetDeadZoneLS/RS` change them). Each
 //! seam answers the guest address of the double to compare with; the doubles live in the
 //! built-ins' data, made as JIP installs from [`crate::input::State`]'s dead zones.
 //!
@@ -17,11 +17,11 @@
 //! installed (8689 where the exe uses 7849). The free camera's four seams sit in group GP's
 //! `playercharacter.rs` (GP adds them); the rows and these handlers are GB's.
 //!
-//! JIP's `SetDeadZoneLS/RS` (not built) write `s_deadZoneLSg`/`s_deadZoneRSg` with the new
-//! integer and 19 immediates in the exe each: when they are built they must write the two doubles
-//! these seams answer ([`doubles`]: `e.mem.set_f64`) as well as the input state (the dead-zone
+//! JIP's `SetDeadZoneLS/RS` write `s_deadZoneLSg`/`s_deadZoneRSg` with the new integer and 19
+//! immediates in the exe each: the port's commands (`commands::ln_fn_gamepad`) write the two
+//! doubles these seams answer ([`doubles`]: `e.mem.set_f64`), the input state (the dead-zone
 //! atomics of [`crate::input::State`], the lock-free slot the gamepad conditions read) and the
-//! immediates.
+//! engine's pair the translations read for the immediates (`Engine::set_pad_dead_zone_left`).
 //!
 //! **G87, the map menu's skip of its centring** (`InitGamePatches`: `WriteRelJump(0x79DF73,
 //! RefreshMapMenuHook)`, JIP's own, `INSTALLED`). In `MapMenu::AddMapIcons` (`0079dbb0`), where
@@ -436,7 +436,7 @@ pub struct DeadZones {
 }
 
 /// JIP's `s_deadZoneLSg` and `s_deadZoneRSg`: 8 bytes each in the built-ins' data, made once with
-/// the input state's dead zones (7849 and 8689 until `SetDeadZoneLS/RS` are built).
+/// the input state's dead zones (7849 and 8689 until `SetDeadZoneLS/RS` change them).
 pub fn doubles(e: &mut Engine) -> (u32, u32) {
     let zones = e.ext_free::<DeadZones>();
     let left = zones.left.load(Ordering::Relaxed);

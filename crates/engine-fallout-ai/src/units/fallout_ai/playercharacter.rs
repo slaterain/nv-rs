@@ -4642,13 +4642,17 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
             axis_a = e.call(0x00a2_3390, &args![main_state, 0u32, 7u32]).i32();
             axis_c = e.call(0x00a2_3390, &args![main_state, 0u32, 9u32]).i32();
             axis_b = e.call(0x00a2_3390, &args![main_state, 0u32, 8u32]).i32();
-            if e.call(0x00ec_7d40, &args![axis_a]).i32() < 0x1ea9 {
+            // The dead zones: the exe's `0x1ea9` (immediates `0x941157`, `0x941177`) and `0x21f1`
+            // (`0x941197`) unless JIP LN NVSE's `SetDeadZoneLS` and `SetDeadZoneRS` rewrote them.
+            let (left_dead_zone, right_dead_zone) =
+                (e.pad_dead_zone_left(), e.pad_dead_zone_right());
+            if e.call(0x00ec_7d40, &args![axis_a]).i32() < left_dead_zone {
                 axis_a = 0;
             }
-            if e.call(0x00ec_7d40, &args![axis_b]).i32() < 0x1ea9 {
+            if e.call(0x00ec_7d40, &args![axis_b]).i32() < left_dead_zone {
                 axis_b = 0;
             }
-            if e.call(0x00ec_7d40, &args![axis_c]).i32() < 0x21f1 {
+            if e.call(0x00ec_7d40, &args![axis_c]).i32() < right_dead_zone {
                 axis_c = 0;
             }
             axis_a = axis_a.wrapping_mul(100) / 0x7fff;
@@ -8468,17 +8472,20 @@ fn apply_look_input(
     let animation = e.call(0x0095_0a60, &args![this, unflipped as u32]).u32();
     let animation_scale = e.call(0x004e_3d00, &args![animation]).f64();
     let time_step = (animation_scale * time_step as f64) as f32;
+    // The dead zone of the four stick tests below: the exe's `0x21f1` (immediates `0x9455F5`,
+    // `0x945644`, `0x9456F0`, `0x945710`) unless JIP LN NVSE's `SetDeadZoneRS` rewrote them.
+    let dead_zone = e.pad_dead_zone_right();
     e.call(0x004b_7210, &args![]);
     if e.call(0x004b_71d0, &args![]).u8() != 0 {
         if e.mem.u8(SECOND_STICK_FLAG) != 0 {
             let mut right_x = e.call(0x00a2_3390, &args![input, 0u32, 0xau32]).i32();
-            if e.call(0x00ec_7d40, &args![right_x]).i32() < 0x21f1 {
+            if e.call(0x00ec_7d40, &args![right_x]).i32() < dead_zone {
                 right_x = 0;
             }
             let response = e.global::<f64>(0x0101_ffa0);
             zoom = truncate(e, right_x as f64 * response * time_step as f64);
             yaw = e.call(0x00a2_3390, &args![input, 0u32, 9u32]).i32();
-            if e.call(0x00ec_7d40, &args![yaw]).i32() < 0x21f1 {
+            if e.call(0x00ec_7d40, &args![yaw]).i32() < dead_zone {
                 yaw = 0;
             }
             yaw /= 5;
@@ -8494,10 +8501,10 @@ fn apply_look_input(
         } else {
             yaw = e.call(0x00a2_3390, &args![input, 0u32, 9u32]).i32();
             pitch = e.call(0x00a2_3390, &args![input, 0u32, 0xau32]).i32();
-            if e.call(0x00ec_7d40, &args![yaw]).i32() < 0x21f1 {
+            if e.call(0x00ec_7d40, &args![yaw]).i32() < dead_zone {
                 yaw = 0;
             }
-            if e.call(0x00ec_7d40, &args![pitch]).i32() < 0x21f1 {
+            if e.call(0x00ec_7d40, &args![pitch]).i32() < dead_zone {
                 pitch = 0;
             }
         }

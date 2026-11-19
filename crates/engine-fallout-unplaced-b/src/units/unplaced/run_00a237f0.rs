@@ -121,9 +121,6 @@ const GAMEPAD_RIGHT_TRIGGER_PREVIOUS: u32 = 0x011f_35bf;
 /// Non-zero while a gamepad is connected and used.
 const GAMEPAD_ACTIVE: u32 = 0x011f_35c8;
 
-/// Thumb-stick threshold of the "pushed" tests (`0x1ea9`).
-const THUMB_THRESHOLD: i32 = 0x1ea9;
-
 /// `GetActiveWindow` import slot (named by the exe's import table).
 const IMPORT_GET_ACTIVE_WINDOW: u32 = 0x00fd_f2fc;
 /// The function that works out the interface language (`1` to `4`, other
@@ -417,11 +414,14 @@ pub fn fn_00a23e10(e: &mut Engine, this: Ptr<Controls>, control: i32, mode: u32)
     }
     let mut result = false;
     let mut mask = 0u32;
+    // The dead zone of the "pushed" tests: the exe's `0x1ea9` (immediates `0xA23E5E`, `0xA23E87`;
+    // `-0x1ea9` at `0xA23E73`, `0xA23E9C`) unless JIP LN NVSE's `SetDeadZoneLS` rewrote them.
+    let threshold = e.pad_dead_zone_left();
     match control {
-        0x13 => result = i32::from(e.mem.i16(GAMEPAD_THUMB_LY)) > THUMB_THRESHOLD,
-        0x14 => result = i32::from(e.mem.i16(GAMEPAD_THUMB_LY)) < -THUMB_THRESHOLD,
-        0x16 => result = i32::from(e.mem.i16(GAMEPAD_THUMB_LX)) > THUMB_THRESHOLD,
-        0x17 => result = i32::from(e.mem.i16(GAMEPAD_THUMB_LX)) < -THUMB_THRESHOLD,
+        0x13 => result = i32::from(e.mem.i16(GAMEPAD_THUMB_LY)) > threshold,
+        0x14 => result = i32::from(e.mem.i16(GAMEPAD_THUMB_LY)) < threshold.wrapping_neg(),
+        0x16 => result = i32::from(e.mem.i16(GAMEPAD_THUMB_LX)) > threshold,
+        0x17 => result = i32::from(e.mem.i16(GAMEPAD_THUMB_LX)) < threshold.wrapping_neg(),
         _ => mask = fn_00a24080(e, this.addr(), control as u32),
     }
     let trigger = match control {

@@ -2274,8 +2274,11 @@ pub fn race_sex_menu_do_idle(e: &mut Engine, this: Ptr<RaceSexMenu>) {
         race_sex_menu_set_flag(e, this, 5, false);
         race_sex_menu_set_flag(e, this, 6, false);
         let limit: i32 = e.global(AXIS_LIMIT_POSITIVE);
-        if zoom_size > 0x21f1 && zoom_size > turn_size {
-            let denominator = limit.wrapping_sub(0x21f1);
+        // The dead zone: the exe's `0x21f1` (its seven immediates `0x7AE57A` ... `0x7AE6C0`) unless
+        // JIP LN NVSE's `SetDeadZoneRS` rewrote them.
+        let dead_zone = e.pad_dead_zone_right();
+        if zoom_size > dead_zone && zoom_size > turn_size {
+            let denominator = limit.wrapping_sub(dead_zone);
             let reduced = e.call(AXIS_REDUCE, &args![zoom_size, limit as u32]).i32();
             let numerator = denominator.wrapping_sub(limit.wrapping_sub(reduced));
             // 7ae5c2..7ae5f2: FILD, FMUL double, FIDIV, FILD qword (the elapsed time, exact),
@@ -2292,14 +2295,14 @@ pub fn race_sex_menu_do_idle(e: &mut Engine, this: Ptr<RaceSexMenu>) {
             let moved = race_sex_menu_zoom_player(e, this, step, 0);
             race_sex_menu_set_flag(e, this, 6, moved != 0);
         } else {
-            if turn_size > 0x21f1 && turn_size > zoom_size {
+            if turn_size > dead_zone && turn_size > zoom_size {
                 let ratio = if turn > 0 {
-                    let denominator = limit.wrapping_sub(0x21f1);
-                    (turn.wrapping_sub(0x21f1) as f64 / denominator as f64) as f32
+                    let denominator = limit.wrapping_sub(dead_zone);
+                    (turn.wrapping_sub(dead_zone) as f64 / denominator as f64) as f32
                 } else {
                     let negative_limit: i32 = e.global(AXIS_LIMIT_NEGATIVE);
-                    let denominator = negative_limit.wrapping_add(0x21f1);
-                    (turn.wrapping_neg().wrapping_sub(0x21f1) as f64 / denominator as f64) as f32
+                    let denominator = negative_limit.wrapping_add(dead_zone);
+                    (turn.wrapping_neg().wrapping_sub(dead_zone) as f64 / denominator as f64) as f32
                 };
                 // 7ae6d5..7ae6fc: FLD float, FMUL double, FILD qword, FMULP, FDIV double, FSTP
                 // float.
@@ -2451,7 +2454,9 @@ pub fn race_sex_menu_do_gamepad(
         let inside = if button == 4 || button == 3 {
             false
         } else {
-            e.call(ABSOLUTE_VALUE, &args![stick]).i32() < 0x1ea9
+            // The dead zone: the exe's `0x1ea9` (immediate `0x7AED31`) unless JIP LN NVSE's
+            // `SetDeadZoneLS` rewrote it.
+            e.call(ABSOLUTE_VALUE, &args![stick]).i32() < e.pad_dead_zone_left()
         };
         race_sex_menu_set_flag(e, this, 4, inside);
     }

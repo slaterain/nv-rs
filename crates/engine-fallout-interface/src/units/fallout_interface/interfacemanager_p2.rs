@@ -110,8 +110,6 @@ const PAD_TRIGGER_OLD_LEFT: u32 = 0x011d_8a5a;
 const PAD_TRIGGER_OLD_RIGHT: u32 = 0x011d_8a5b;
 const PAD_TRIGGER_NEW_LEFT: u32 = 0x011d_8a72;
 const PAD_TRIGGER_NEW_RIGHT: u32 = 0x011d_8a73;
-/// Dead zone of the stick axes (`0x1ea9`).
-const STICK_THRESHOLD: i32 = 0x1ea9;
 
 /// Number of entries of the tutorial message table (`0x29`).
 const TUTORIAL_MESSAGE_COUNT: i32 = 0x29;
@@ -521,23 +519,26 @@ pub fn interface_manager_check_menu_button(e: &mut Engine, button: i32, analog: 
     let mut old_pushed = false;
     let mut new_pushed = false;
     if analog != 0 {
+        // The dead zone, the exe's `0x1ea9` in its eight immediates (`0x717B90` ... `0x717C2A`,
+        // `-0x1ea9` at the four negative ones) unless JIP LN NVSE's `SetDeadZoneLS` rewrote them.
+        let threshold = e.pad_dead_zone_left();
         let axis = |e: &Engine, address: u32| i32::from(e.mem.i16(address));
         match mask {
             1 => {
-                old_pushed = axis(e, PAD_AXIS_OLD_Y) > STICK_THRESHOLD;
-                new_pushed = axis(e, PAD_AXIS_NEW_Y) > STICK_THRESHOLD;
+                old_pushed = axis(e, PAD_AXIS_OLD_Y) > threshold;
+                new_pushed = axis(e, PAD_AXIS_NEW_Y) > threshold;
             }
             2 => {
-                old_pushed = axis(e, PAD_AXIS_OLD_Y) < -STICK_THRESHOLD;
-                new_pushed = axis(e, PAD_AXIS_NEW_Y) < -STICK_THRESHOLD;
+                old_pushed = axis(e, PAD_AXIS_OLD_Y) < threshold.wrapping_neg();
+                new_pushed = axis(e, PAD_AXIS_NEW_Y) < threshold.wrapping_neg();
             }
             4 => {
-                old_pushed = axis(e, PAD_AXIS_OLD_X) < -STICK_THRESHOLD;
-                new_pushed = axis(e, PAD_AXIS_NEW_X) < -STICK_THRESHOLD;
+                old_pushed = axis(e, PAD_AXIS_OLD_X) < threshold.wrapping_neg();
+                new_pushed = axis(e, PAD_AXIS_NEW_X) < threshold.wrapping_neg();
             }
             8 => {
-                old_pushed = axis(e, PAD_AXIS_OLD_X) > STICK_THRESHOLD;
-                new_pushed = axis(e, PAD_AXIS_NEW_X) > STICK_THRESHOLD;
+                old_pushed = axis(e, PAD_AXIS_OLD_X) > threshold;
+                new_pushed = axis(e, PAD_AXIS_NEW_X) > threshold;
             }
             _ => {}
         }

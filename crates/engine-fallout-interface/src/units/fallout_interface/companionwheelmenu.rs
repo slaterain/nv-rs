@@ -741,11 +741,14 @@ pub fn companion_wheel_menu_do_idle(e: &mut Engine, this: Ptr<CompanionWheelMenu
     };
     // The code starts the stick's x and y at 0.0 and goes on only after reading them (FILD
     // of the words, FSTP to floats).
+    // The dead zone: the exe's `0x1ea9` (immediates `0x755552`, `0x755569`) unless JIP LN NVSE's
+    // `SetDeadZoneLS` rewrote them.
     let moved = manager_ready(e) && manager_ready(e) && {
+        let threshold = e.pad_dead_zone_left();
         let first = i32::from(e.mem.u16(STICK_Y) as i16);
-        e.call(ABS, &args![first]).i32() > 0x1ea9 || {
+        e.call(ABS, &args![first]).i32() > threshold || {
             let second = i32::from(e.mem.u16(STICK_OTHER) as i16);
-            e.call(ABS, &args![second]).i32() > 0x1ea9
+            e.call(ABS, &args![second]).i32() > threshold
         }
     };
     if !moved {

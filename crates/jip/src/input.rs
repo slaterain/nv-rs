@@ -282,6 +282,16 @@ pub fn dead_zone_rs(e: &mut Engine) -> i32 {
     slot(e).dead_zone_rs.load(Relaxed)
 }
 
+/// Sets `s_deadZoneLS` (`SetDeadZoneLS`).
+pub fn set_dead_zone_ls(e: &mut Engine, value: i32) {
+    slot(e).dead_zone_ls.store(value, Relaxed);
+}
+
+/// Sets `s_deadZoneRS` (`SetDeadZoneRS`).
+pub fn set_dead_zone_rs(e: &mut Engine, value: i32) {
+    slot(e).dead_zone_rs.store(value, Relaxed);
+}
+
 /// A plain copy of the state, for the tests: [`state`] gives one that is written back whole when
 /// it goes (`state(&mut e).mods.button_skip = 0;`).
 #[cfg(any(test, feature = "test-support"))]
@@ -551,9 +561,9 @@ pub fn xi_control_pressed(e: &Engine, pad: &Pad, control: u32, dead_zone: i32) -
         ctrl::LT => pad.left_trigger != 0,
         ctrl::RT => pad.right_trigger != 0,
         ctrl::LS_UP => i32::from(pad.thumb_ly) > dead_zone,
-        ctrl::LS_DOWN => i32::from(pad.thumb_ly) < -dead_zone,
+        ctrl::LS_DOWN => i32::from(pad.thumb_ly) < dead_zone.wrapping_neg(),
         ctrl::LS_RIGHT => i32::from(pad.thumb_lx) > dead_zone,
-        ctrl::LS_LEFT => i32::from(pad.thumb_lx) < -dead_zone,
+        ctrl::LS_LEFT => i32::from(pad.thumb_lx) < dead_zone.wrapping_neg(),
         _ => false,
     }
 }

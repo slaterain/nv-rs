@@ -2076,8 +2076,11 @@ pub fn fn_007d52a0(e: &mut Engine, this: Ptr<StartMenu>) -> bool {
         let axis_b = e
             .call(GAMEPAD_AXIS_VALUE, &args![controls_object, 0u32, 0xau32])
             .i32();
-        let over_a = e.call(ABSOLUTE_VALUE, &args![axis_a]).i32() > 0x21f1;
-        if over_a || e.call(ABSOLUTE_VALUE, &args![axis_b]).i32() > 0x21f1 {
+        // The dead zone: the exe's `0x21f1` (immediates `0x7D57C0`, `0x7D57D3`) unless JIP LN NVSE's
+        // `SetDeadZoneRS` rewrote them.
+        let dead_zone = e.pad_dead_zone_right();
+        let over_a = e.call(ABSOLUTE_VALUE, &args![axis_a]).i32() > dead_zone;
+        if over_a || e.call(ABSOLUTE_VALUE, &args![axis_b]).i32() > dead_zone {
             e.call(PLAY_MENU_SOUND, &args![0xau32]);
             show_message_with_icon(e, SETTING_011D3108);
         }
