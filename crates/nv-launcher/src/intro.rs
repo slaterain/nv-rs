@@ -2,11 +2,11 @@
 //! lead's pick, DESIGN.md: "on the very first start only, skipped by any key"), typed as
 //! `ComputersMenu::DisplayIntro` 00758ad0 types it into its intro text (the menu's tile at +0x4c):
 //!
-//! 1. `sHackingIntro01` ("WELCOME TO ROBCO INDUSTRIES (TM) TERMLINK") at 1000 /
+//! 1. `sHackingIntro01` (the welcome line) at 1000 /
 //!    `iComputersDisplayRateMenus` milliseconds a character (150: 6 ms);
-//! 2. `"%s%s"` of the prompt `"> "` (01072118) and `sComputersLogon` ("LOGON ADMIN") at 1000 /
+//! 2. `"%s%s"` of the prompt `"> "` (01072118) and `sComputersLogon` (the logon line) at 1000 /
 //!    `iHackingInputRate` (20: 50 ms), as if typed;
-//! 3. `sHackingHeader2` ("ENTER PASSWORD NOW") at the menus' rate;
+//! 3. `sHackingHeader2` (the password line) at the menus' rate;
 //! 4. the prompt and the password as stars, at the input rate: `BGSTerminal::GetHackMiniGameValue`
 //!    00501270 stars, `(random & 1) + lock level * 2 + 4` (at most 12). The launcher's terminal has
 //!    no lock of its own; it types the count of the game's lowest level (0): 4 or 5.
@@ -86,9 +86,9 @@ mod tests {
 
     fn intro() -> Intro {
         Intro::new(
-            "WELCOME TO ROBCO INDUSTRIES (TM) TERMLINK",
-            "LOGON ADMIN",
-            "ENTER PASSWORD NOW",
+            "HELLO FROM A MADE UP TERMINAL FOR TESTING",
+            "SIGN IN NOW",
+            "TYPE YOUR WORD NOW",
             false,
         )
     }
@@ -100,7 +100,7 @@ mod tests {
         assert_eq!(ms_per_char(20), 50);
         assert_eq!(ms_per_char(0), 1000);
         let i = intro();
-        assert_eq!(i.lines[1], ("> LOGON ADMIN".to_string(), 50));
+        assert_eq!(i.lines[1], ("> SIGN IN NOW".to_string(), 50));
         assert_eq!(i.lines[3].0, "> ****");
         assert_eq!(Intro::new("a", "b", "c", true).lines[3].0, "> *****");
         // 41 + 18 characters at 6 ms, 13 + 6 at 50 ms.
@@ -113,13 +113,13 @@ mod tests {
     fn the_lines_are_typed_in_order() {
         let i = intro();
         assert_eq!(i.typed(0), [""]);
-        assert_eq!(i.typed(6 * 7), ["WELCOME"]);
+        assert_eq!(i.typed(6 * 5), ["HELLO"]);
         let first = 41 * 6;
         assert_eq!(
             i.typed(first)[..2],
-            ["WELCOME TO ROBCO INDUSTRIES (TM) TERMLINK", ""]
+            ["HELLO FROM A MADE UP TERMINAL FOR TESTING", ""]
         );
-        assert_eq!(i.typed(first + 50 * 3)[1], "> L");
+        assert_eq!(i.typed(first + 50 * 3)[1], "> S");
         let all = i.typed(i.typing_ms());
         assert_eq!(all.len(), 4);
         assert_eq!(all[3], "> ****");

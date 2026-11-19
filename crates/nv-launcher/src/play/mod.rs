@@ -23,6 +23,7 @@ mod mods;
 use game_profile::settings;
 mod tables;
 mod ui;
+pub use ui::answer_in_boxes;
 mod win;
 
 use settings::{migrated_name, Settings};
@@ -1093,12 +1094,14 @@ fn run(package: &Package, options: &Options) -> Result<i32, Stop> {
     if options.install {
         return install_mods(package, options);
     }
-    if win::another_is_running() {
+    // One game at a time: held for this run only (it ends with the game), so the launcher's
+    // next Play after a refusal or a stop plays again.
+    let Some(_one) = win::claim(win::PLAY_CLAIM) else {
         return stop(
             STOP_LOCATION,
             "nv-rs is already running. Only one game at a time.",
         );
-    }
+    };
     let status = ui::Status::show("Looking for Fallout: New Vegas...");
     let result = play(package, options, &profile, &status);
     status.close();
@@ -1116,6 +1119,10 @@ fn play(
     clear_for_writing(package, Some(&game.folder))?;
     for line in &check_lines {
         package.log(line);
+    }
+    // The launcher's intro, shown at this start, is noted only now (its own file in userdata).
+    if let Err(e) = crate::place::note_intro_if_shown(&package.userdata) {
+        package.log(&format!("launcher.ini: {e}"));
     }
     let _ = std::fs::write(
         &package.remembered,
@@ -1416,6 +1423,7 @@ fn play(
     let message = plain_end(&log_tail(&log_path), exit.code());
     package.log(&message);
     let text = format!("{message}\n\nLog:\n{}", log_path.display());
+    crate::session::set_stop_code(STOP_GAME_STOPPED);
     if ui::windows_allowed()
         && crate::session::message(&text, &["Open the logs folder", "Back"]) == 0
     {
@@ -1497,6 +1505,8 @@ fn package_root() -> PathBuf {
 /// One of Play.exe's actions (`raw`: its arguments; none: play), to its end: its exit code, as
 /// Play.exe ended with it. Every message and question goes to the launcher's window.
 pub fn run_play(raw: &[String]) -> i32 {
+    // A new run: no stop code of an earlier one.
+    crate::session::set_stop_code(i32::MIN);
     let options = parse_options(raw);
     let package = Package::at(package_root());
     package.log(&format!(
@@ -1515,6 +1525,7 @@ pub fn run_play(raw: &[String]) -> i32 {
                 let _ = clear_for_writing(&package, None);
             }
             package.log(&format!("stopped ({}): {}", why.code, why.message));
+            crate::session::set_stop_code(why.code);
             ui::error(&why.message);
             why.code
         }
@@ -1523,8 +1534,8 @@ pub fn run_play(raw: &[String]) -> i32 {
 
 /// What the start screen shows, and whether the launcher may keep its own file, found before
 /// anything else is written: the package's place checked as Play.exe checks it first
-/// ([`check_location`], then [`clear_for_writing`] against the game remembered or found, which is
-/// the first write and starts the log). Nothing here runs the game's program.
+/// ([`check_location`], then whether the package is in the game remembered or found). Nothing is
+/// written and nothing here runs the game's program.
 pub fn place() -> crate::place::Place {
     place_at(package_root())
 }
@@ -1538,10 +1549,22 @@ fn place_at(root: PathBuf) -> crate::place::Place {
         .into_iter()
         .chain(find::candidates().into_iter().map(|(_, place)| place))
         .find_map(|folder| Some(find::data_folder(&folder)?.parent()?.to_path_buf()));
+    // The checks only, none of them a write: the first write (the folder test, the log) waits for
+    // Play's own `clear_for_writing` with the game's folder it found, so a refusal there still
+    // leaves the disk untouched.
     let refused = check_location(&package)
-        .and_then(|()| clear_for_writing(&package, game.as_deref()))
+        .and_then(|()| match &game {
+            Some(game) if inside_game(&package.root, game) => stop(
+                STOP_LOCATION,
+                format!(
+                    "nv-rs is inside your game's folder. It must never write there, so it won't run from there.\n\nMove the whole nv-rs folder somewhere else, for example C:\\Games\\nv-rs, and start Play.exe again.\n\nThis folder was:\n{}",
+                    package.root.display()
+                ),
+            ),
+            _ => Ok(()),
+        })
         .err()
-        .map(|why| why.message);
+        .map(|why| (why.message, why.code));
     let profile = Profile::at(&package.userdata, "game");
     let mods = crate::place::has_mods(&package.userdata.join("mod installs"))
         || crate::place::has_mods(&package.root.join("mods"));
@@ -1684,6 +1707,21 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// One game at a time is claimed for a run only: while a run holds it, another claim (this
+    /// process's next Play, or another Play.exe) is refused; once the run is over, Play may play
+    /// again, twice in one process.
+    #[test]
+    fn one_game_at_a_time_is_held_for_a_run_only() {
+        let name = format!("Local\\nv-rs-test-claim-{}", std::process::id());
+        let first = win::claim(&name).expect("free at first");
+        assert!(win::claim(&name).is_none(), "held while a run lasts");
+        drop(first);
+        let second = win::claim(&name).expect("free again after the run");
+        assert!(win::claim(&name).is_none());
+        drop(second);
+        assert!(win::claim(&name).is_some(), "free after the second run");
+    }
+
     /// The start screen's facts from a package's own files: the game remembered, the play
     /// profile's Fallout.ini, the last adapter table's card, the mods; and a package in a
     /// temporary folder is refused (as Play.exe refused it) with nothing written.
@@ -1712,8 +1750,8 @@ mod tests {
         assert!(!p.mods);
         assert!(
             p.refused
-                .as_deref()
-                .is_some_and(|w| w.contains("temporary folder")),
+                .as_ref()
+                .is_some_and(|(w, code)| w.contains("temporary folder") && *code == STOP_LOCATION),
             "{:?}",
             p.refused
         );

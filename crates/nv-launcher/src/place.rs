@@ -19,8 +19,35 @@ pub struct Place {
     pub adapter_card: Option<String>,
     /// Mods are installed, or put in the mods folder by hand.
     pub mods: bool,
-    /// Why nv-rs must not write in its own folder, in the player's words (`None`: it may).
-    pub refused: Option<String>,
+    /// Why nv-rs must not write in its own folder, in the player's words, and Play.exe's stop
+    /// code for it (`None`: it may).
+    pub refused: Option<(String, i32)>,
+}
+
+/// The intro was shown at this start and is still to be noted: on Windows only once Play has
+/// passed its own first-write checks with the game's folder (nothing is written into the package
+/// before), elsewhere at once into nv-rs's own folder when that may be written.
+static INTRO_TO_NOTE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The intro was shown (or skipped): noted at once ([`note_intro_shown`]) where `now` (Linux and
+/// macOS, the own folder not refused), else kept until Play's checks pass
+/// ([`note_intro_if_shown`]).
+pub fn intro_seen(own: &Path, now: bool) -> std::io::Result<()> {
+    if now {
+        note_intro_shown(own)
+    } else {
+        INTRO_TO_NOTE.store(true, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+/// Play's first write has passed its checks: the intro seen at this start is noted now.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn note_intro_if_shown(own: &Path) -> std::io::Result<()> {
+    if INTRO_TO_NOTE.swap(false, std::sync::atomic::Ordering::Relaxed) {
+        note_intro_shown(own)?;
+    }
+    Ok(())
 }
 
 /// Whether the mods folder `dir` holds anything but its READ ME.
@@ -83,9 +110,10 @@ pub fn place() -> Place {
             fallout_ini: PathBuf::new(),
             adapter_card: None,
             mods: false,
-            refused: Some(
+            refused: Some((
                 "HOME is not set to a full path, so nv-rs has no folder of its own".into(),
-            ),
+                1,
+            )),
         },
     }
 }
@@ -97,7 +125,8 @@ pub fn place() -> Place {
 pub fn place_from(home: &game_folders::Home, named: Option<PathBuf>) -> Place {
     use game_folders as gf;
     let own = gf::own_folder(home);
-    let refused = gf::own_folder_refusal(home, &gf::never_written(home));
+    // play.sh stops with status 1 on the same refusal.
+    let refused = gf::own_folder_refusal(home, &gf::never_written(home)).map(|why| (why, 1));
     let remembered = std::fs::read(own.join("game-folder.txt"))
         .ok()
         .map(|b| {

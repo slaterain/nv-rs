@@ -39,13 +39,28 @@ pub enum Event {
     Output(String),
     /// The work has ended with this exit code.
     Ended(i32),
-    /// The graphics card the game will draw with, for the start screen: its name and API, or
-    /// `None` when none was found (or the question did not finish).
-    Card(Option<(String, String)>),
+    /// The graphics card the game will draw with, for the start screen.
+    Card(crate::app::Card),
 }
 
 /// The window's end of the channel: set once, when the window is made.
 static WINDOW: OnceLock<Box<dyn Fn(Event) -> bool + Send + Sync>> = OnceLock::new();
+
+/// The stop code Play ends with once the question it asks now is answered (none: `i32::MIN`), so
+/// a window closed during that question ends the launcher with Play.exe's code.
+static STOP_CODE: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(i32::MIN);
+
+/// Play is about to ask its last question before it ends with `code`.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn set_stop_code(code: i32) {
+    STOP_CODE.store(code, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The stop code Play has named, if any.
+pub fn stop_code() -> Option<i32> {
+    let code = STOP_CODE.load(std::sync::atomic::Ordering::Relaxed);
+    (code != i32::MIN).then_some(code)
+}
 
 /// From now on events go to `deliver` (the window's event loop; false when it has gone).
 pub fn connect(deliver: impl Fn(Event) -> bool + Send + Sync + 'static) {
@@ -139,6 +154,17 @@ mod tests {
         );
         assert_eq!(typed_folder("file://localhost/x%2"), PathBuf::from("/x%2"));
         assert_eq!(typed_folder("plain"), PathBuf::from("plain"));
+    }
+
+    /// The stop code Play names before its last question is kept until a new run clears it.
+    #[test]
+    fn the_stop_code_is_kept_until_cleared() {
+        set_stop_code(i32::MIN);
+        assert_eq!(stop_code(), None);
+        set_stop_code(7);
+        assert_eq!(stop_code(), Some(7));
+        set_stop_code(i32::MIN);
+        assert_eq!(stop_code(), None);
     }
 
     /// Without a window every question gets the first entry and no folder, as Play.exe's message

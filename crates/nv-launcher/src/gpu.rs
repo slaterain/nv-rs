@@ -63,10 +63,10 @@ pub fn launcher_apis() -> Vec<wgpu::Backends> {
     }
 }
 
-/// The adapter to take among one API's `kinds`: with `software` false a graphics card, the
-/// plainest first (built into the processor, then separate, virtual, any other); with `software`
-/// true only the system's software adapter.
-pub fn pick(kinds: &[wgpu::DeviceType], software: bool) -> Option<usize> {
+/// The adapters to try among one API's `kinds`, in order: with `software` false the graphics
+/// cards, the plainest first (built into the processor, then separate, virtual, any other); with
+/// `software` true only the system's software adapter.
+pub fn order(kinds: &[wgpu::DeviceType], software: bool) -> Vec<usize> {
     let rank = |t: wgpu::DeviceType| match t {
         wgpu::DeviceType::IntegratedGpu => 0,
         wgpu::DeviceType::DiscreteGpu => 1,
@@ -74,12 +74,17 @@ pub fn pick(kinds: &[wgpu::DeviceType], software: bool) -> Option<usize> {
         wgpu::DeviceType::Other => 3,
         wgpu::DeviceType::Cpu => 4,
     };
-    kinds
-        .iter()
-        .enumerate()
-        .filter(|(_, &t)| (t == wgpu::DeviceType::Cpu) == software)
-        .min_by_key(|(_, &t)| rank(t))
-        .map(|(i, _)| i)
+    let mut out: Vec<usize> = (0..kinds.len())
+        .filter(|&i| (kinds[i] == wgpu::DeviceType::Cpu) == software)
+        .collect();
+    out.sort_by_key(|&i| rank(kinds[i]));
+    out
+}
+
+/// The first adapter [`order`] tries (the tests' shorthand).
+#[cfg(test)]
+fn pick(kinds: &[wgpu::DeviceType], software: bool) -> Option<usize> {
+    order(kinds, software).first().copied()
 }
 
 /// The order of the tries: every API's graphics card first, then every API's software adapter.
@@ -90,18 +95,21 @@ pub fn tries() -> Vec<(wgpu::Backends, bool)> {
         .collect()
 }
 
-/// The launcher's own drawing device's instance, adapter and (with `window`) the window's surface:
-/// the first of [`tries`] that has one.
+/// The launcher's own drawing, ready: its API's instance (kept as long as the device), the
+/// device, and the window's surface configured for it.
+pub struct Drawing {
+    pub instance: wgpu::Instance,
+    pub gpu: Gpu,
+    pub surface: Option<(wgpu::Surface<'static>, wgpu::SurfaceConfiguration)>,
+}
+
+/// The first adapter of [`tries`] (and of [`order`] in each) that makes a device and, with
+/// `window` (its size `size`), a surface configuration: an adapter that is listed but cannot
+/// make either is passed over for the next one, down to the software adapter.
 pub fn choose(
     window: Option<Arc<winit::window::Window>>,
-) -> Result<
-    (
-        wgpu::Instance,
-        wgpu::Adapter,
-        Option<wgpu::Surface<'static>>,
-    ),
-    String,
-> {
+    size: (u32, u32),
+) -> Result<Drawing, String> {
     let mut why = Vec::new();
     for (backends, software) in tries() {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -118,18 +126,59 @@ pub fn choose(
             },
             None => None,
         };
-        let mut adapters: Vec<wgpu::Adapter> = block_on(instance.enumerate_adapters(backends))
-            .into_iter()
-            .filter(|a| surface.as_ref().is_none_or(|s| a.is_surface_supported(s)))
+        let mut adapters: Vec<Option<wgpu::Adapter>> =
+            block_on(instance.enumerate_adapters(backends))
+                .into_iter()
+                .filter(|a| surface.as_ref().is_none_or(|s| a.is_surface_supported(s)))
+                .map(Some)
+                .collect();
+        let kinds: Vec<wgpu::DeviceType> = adapters
+            .iter()
+            .flatten()
+            .map(|a| a.get_info().device_type)
             .collect();
-        let kinds: Vec<wgpu::DeviceType> =
-            adapters.iter().map(|a| a.get_info().device_type).collect();
-        if let Some(i) = pick(&kinds, software) {
-            return Ok((instance, adapters.swap_remove(i), surface));
+        for i in order(&kinds, software) {
+            let Some(adapter) = adapters[i].take() else {
+                continue;
+            };
+            let name = adapter.get_info().name;
+            let gpu = match Gpu::new(adapter, (crate::screen::WIDTH, crate::screen::HEIGHT)) {
+                Ok(g) => g,
+                Err(e) => {
+                    why.push(format!("{name}: {e}"));
+                    continue;
+                }
+            };
+            let Some(s) = &surface else {
+                return Ok(Drawing {
+                    instance,
+                    gpu,
+                    surface: None,
+                });
+            };
+            let Some(mut config) = s.get_default_config(&gpu.adapter, size.0.max(1), size.1.max(1))
+            else {
+                why.push(format!(
+                    "{name}: the window's surface does not work with it"
+                ));
+                continue;
+            };
+            // The game's menus blend in the stored values: a format without the sRGB step keeps
+            // them.
+            let caps = s.get_capabilities(&gpu.adapter);
+            if let Some(f) = caps.formats.iter().find(|f| !f.is_srgb()) {
+                config.format = *f;
+            }
+            s.configure(&gpu.device, &config);
+            return Ok(Drawing {
+                instance,
+                gpu,
+                surface: surface.map(|s| (s, config)),
+            });
         }
     }
     Err(format!(
-        "no graphics adapter, not even the software one{}",
+        "no graphics device draws it, not even the software one{}",
         if why.is_empty() {
             String::new()
         } else {
@@ -491,6 +540,13 @@ mod tests {
         assert_eq!(pick(&[DiscreteGpu, Cpu], true), Some(1));
         assert_eq!(pick(&[DiscreteGpu], true), None);
         assert_eq!(pick(&[], false), None);
+        // Every card is tried in that order (one that cannot make a device or a surface is
+        // passed over for the next), the software adapter on its own try.
+        assert_eq!(
+            order(&[DiscreteGpu, Cpu, IntegratedGpu, Other, VirtualGpu], false),
+            [2, 0, 4, 3]
+        );
+        assert_eq!(order(&[DiscreteGpu, Cpu], true), [1]);
     }
 
     /// Every API's card is tried before any software adapter; on Windows Direct3D 12 before

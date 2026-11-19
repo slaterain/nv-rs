@@ -2,7 +2,8 @@
 //! them, the highlight moved with the arrow keys or the mouse, Enter or a click to choose; what is
 //! typed goes to the prompt. Play runs on a thread of its own and asks the window through
 //! [`crate::session`]; the window steps aside while the game plays and comes back when it ends
-//! badly (a good end closes the launcher).
+//! badly (a good end closes the launcher). The picture is drawn again only when something on it
+//! changes: a typed character, the cursor's blink, an input.
 
 use crate::gpu::{self, Gpu};
 use crate::intro::Intro;
@@ -56,11 +57,13 @@ fn profile_files(fallout_ini: &Path) -> settings::Files {
     }
 }
 
-/// The game's card as far as it is known.
+/// The game's card as far as it is known: still asking, the answer (a card and its API, or no
+/// card at all), or no answer (the question hung or crashed in the graphics driver).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Card {
     Asking,
     Known(Option<(String, String)>),
+    NoAnswer,
 }
 
 /// The start screen's entries: Play, Play with mods (when there are mods), Exit.
@@ -102,6 +105,13 @@ pub fn start_screen(place: &Place, card: &Card) -> Screen {
                         "Renderer: Direct3D 9 (no Vulkan card)".into()
                     }
                     Card::Known(None) => "Renderer: no graphics card found".into(),
+                    // The game still starts on Vulkan; its driver may be what hangs.
+                    Card::NoAnswer if cfg!(windows) => {
+                        "Renderer: Vulkan (its driver did not answer; Settings.cmd's Renderer \
+                         can choose Direct3D 9)"
+                            .into()
+                    }
+                    Card::NoAnswer => "Renderer: Vulkan (its driver did not answer)".into(),
                 }
             });
         }
@@ -159,9 +169,88 @@ pub fn back_entry(entries: &[String]) -> Option<usize> {
     )
 }
 
+/// The first window's size, in the monitor's logical units: the terminal's 4:3 shape at most
+/// 960 by 720, and no more than 88% of the monitor's height and 90% of its width (a scaled
+/// laptop screen is often under 800 high), so the prompt at the bottom shows.
+pub fn first_size(monitor: Option<(f64, f64)>) -> (f64, f64) {
+    let (w, h) = (f64::from(screen::WIDTH), f64::from(screen::HEIGHT));
+    let Some((mw, mh)) = monitor.filter(|&(mw, mh)| mw > 0.0 && mh > 0.0) else {
+        return (w, h);
+    };
+    let height = h.min(mh * 0.88).min(mw * 0.9 * 3.0 / 4.0);
+    ((height * 4.0 / 3.0).floor(), height.floor())
+}
+
+/// The kinds of screen, for what Enter and Esc do there.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Kind {
+    Intro,
+    Start,
+    Refused,
+    Waiting,
+    Message,
+    Folder,
+    /// play.sh's output while it runs (typing answers its questions).
+    Output,
+    /// play.sh has ended badly: Back or Exit.
+    Ended,
+}
+
+/// What a choice does.
+#[derive(Debug, PartialEq)]
+pub enum Act {
+    EndIntro,
+    Play { mods: bool, game: Option<PathBuf> },
+    Exit,
+    Answer(usize),
+    Folder(Option<PathBuf>),
+    TypeLine(String),
+    BackToStart,
+    Nothing,
+}
+
+/// Enter on a screen of `kind` with `typed` at the prompt and the entry `chosen` (its index and
+/// text) highlighted.
+pub fn on_enter(kind: Kind, typed: &str, chosen: usize, entry: &str) -> Act {
+    let typed_folder = (!typed.trim().is_empty()).then(|| session::typed_folder(typed));
+    match kind {
+        Kind::Intro => Act::EndIntro,
+        Kind::Start if typed_folder.is_some() => Act::Play {
+            mods: false,
+            game: typed_folder,
+        },
+        Kind::Start if entry == PLAY => Act::Play {
+            mods: false,
+            game: None,
+        },
+        Kind::Start if entry == PLAY_WITH_MODS => Act::Play {
+            mods: true,
+            game: None,
+        },
+        Kind::Start | Kind::Refused | Kind::Ended if entry == EXIT => Act::Exit,
+        Kind::Ended => Act::BackToStart,
+        Kind::Start | Kind::Refused | Kind::Waiting => Act::Nothing,
+        Kind::Message => Act::Answer(chosen),
+        Kind::Folder => Act::Folder(typed_folder),
+        Kind::Output => Act::TypeLine(typed.to_string()),
+    }
+}
+
+/// Esc on a screen of `kind`: its Back, No or Exit ([`back_entry`]), whatever is typed at the
+/// prompt (typed text is never sent by Esc).
+pub fn on_escape(kind: Kind, entries: &[String]) -> Act {
+    if kind == Kind::Waiting || kind == Kind::Output {
+        return Act::Nothing;
+    }
+    match back_entry(entries) {
+        Some(i) => on_enter(kind, "", i, &entries[i]),
+        None => Act::Nothing,
+    }
+}
+
 /// What the window shows now.
 enum Mode {
-    /// The game's intro (the first start only), started at the instant.
+    /// The game's intro (the first start only).
     Intro(Intro),
     Start,
     /// Play's waiting screen, with the step's line.
@@ -174,6 +263,21 @@ enum Mode {
     Output(Option<i32>),
     /// nv-rs may not write in its own folder: only Exit.
     Refused,
+}
+
+impl Mode {
+    fn kind(&self) -> Kind {
+        match self {
+            Mode::Intro(_) => Kind::Intro,
+            Mode::Start => Kind::Start,
+            Mode::Waiting => Kind::Waiting,
+            Mode::Message(_) => Kind::Message,
+            Mode::Folder(_) => Kind::Folder,
+            Mode::Output(None) => Kind::Output,
+            Mode::Output(Some(_)) => Kind::Ended,
+            Mode::Refused => Kind::Refused,
+        }
+    }
 }
 
 struct App {
@@ -198,6 +302,8 @@ struct App {
     /// play.sh's output so far, in lines (the last one may be a question without its line break).
     output: Vec<String>,
     hidden: bool,
+    /// What the last drawn picture showed ([`App::frame_key`]): drawn again only when it changes.
+    drawn: Option<(usize, bool)>,
     /// The window could not be made or drawn in ([`cannot_draw`] said why).
     no_window: bool,
     exit_code: i32,
@@ -239,38 +345,58 @@ pub fn play_arguments(mods: bool, game: Option<&Path>) -> Vec<OsString> {
 }
 
 /// Asks this program, in a process of its own, for the game's card (`--game-card`), within
-/// [`CARD_LIMIT`].
-fn ask_game_card() -> Option<(String, String)> {
+/// [`CARD_LIMIT`]: its answer, or [`Card::NoAnswer`] when it hung or ended without one.
+fn ask_game_card() -> Card {
     use std::io::Read;
-    let exe = std::env::current_exe().ok()?;
-    let mut child = std::process::Command::new(exe)
+    let Ok(exe) = std::env::current_exe() else {
+        return Card::NoAnswer;
+    };
+    let Ok(mut child) = std::process::Command::new(exe)
         .arg("--game-card")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
-        .ok()?;
-    let mut out = child.stdout.take()?;
+    else {
+        return Card::NoAnswer;
+    };
+    let Some(mut out) = child.stdout.take() else {
+        return Card::NoAnswer;
+    };
     let reader = std::thread::spawn(move || {
         let mut s = String::new();
         let _ = out.read_to_string(&mut s);
         s
     });
     let start = Instant::now();
-    loop {
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(_)) => break,
+            Ok(Some(status)) => break status,
             Ok(None) if start.elapsed() < CARD_LIMIT => {
                 std::thread::sleep(Duration::from_millis(25))
             }
             _ => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return None;
+                return Card::NoAnswer;
             }
         }
+    };
+    let text = reader.join().unwrap_or_default();
+    card_answer(status.success(), &text)
+}
+
+/// `--game-card`'s answer: a line with the card's name and API, an empty line for no card;
+/// anything else, or a program that did not end well (a crash in the driver), no answer.
+pub fn card_answer(ended_well: bool, text: &str) -> Card {
+    if !ended_well {
+        return Card::NoAnswer;
     }
-    card_from_line(&reader.join().ok()?)
+    match card_from_line(text) {
+        Some(card) => Card::Known(Some(card)),
+        None if text.trim().is_empty() => Card::Known(None),
+        None => Card::NoAnswer,
+    }
 }
 
 /// `--game-card`'s line: the card's name and its API.
@@ -288,6 +414,27 @@ impl App {
         }
     }
 
+    fn cursor_on(&self) -> bool {
+        (self.started.elapsed().as_millis() as u64 / screen::BLINK_MS).is_multiple_of(2)
+    }
+
+    /// What the picture shows now, to know when it must be drawn again: the characters typed so
+    /// far (the intro's, or the screen's up to its whole text) and the cursor's blink.
+    fn frame_key(&self) -> (usize, bool) {
+        match &self.mode {
+            Mode::Intro(intro) => {
+                let ms = self.started.elapsed().as_millis() as u64;
+                let typed: usize = intro.typed(ms).iter().map(|l| l.chars().count()).sum();
+                (typed + usize::from(ms >= intro.total_ms()), false)
+            }
+            _ => (
+                self.shown()
+                    .min(screen::total_chars(&self.look, &self.screen)),
+                self.cursor_on(),
+            ),
+        }
+    }
+
     /// Shows `screen`, typed in from its start (`typed`) or whole at once.
     fn show(&mut self, mode: Mode, screen: Screen, typed: bool) {
         self.mode = mode;
@@ -296,6 +443,7 @@ impl App {
         self.finished = !typed;
         if self.hidden {
             if let Some(w) = &self.window {
+                w.set_minimized(false);
                 w.set_visible(true);
                 w.focus_window();
             }
@@ -311,7 +459,9 @@ impl App {
     }
 
     fn show_start(&mut self) {
-        if let Some(why) = self.place.refused.clone() {
+        if let Some((why, code)) = self.place.refused.clone() {
+            // Play.exe's stop code for the refusal, as it ended with it.
+            self.exit_code = code;
             let s = message_screen(&why, &[EXIT.to_string()]);
             self.show(Mode::Refused, s, true);
             return;
@@ -324,12 +474,7 @@ impl App {
     fn play(&mut self, mods: bool, game: Option<PathBuf>) {
         let args = play_arguments(mods, game.as_deref());
         self.output.clear();
-        let waiting = Screen {
-            title: "-nv-rs-".into(),
-            welcome: vec!["Getting ready...".into()],
-            ..Default::default()
-        };
-        self.show(Mode::Waiting, waiting, false);
+        self.back_to_waiting();
         start_work(args);
     }
 
@@ -338,8 +483,8 @@ impl App {
             return;
         }
         let shown = self.shown();
-        let cursor =
-            (self.started.elapsed().as_millis() as u64 / screen::BLINK_MS).is_multiple_of(2);
+        let cursor = self.cursor_on();
+        let key = self.frame_key();
         let (Some(surface), Some(config), Some(gpu)) = (&self.surface, &self.config, &mut self.gpu)
         else {
             return;
@@ -360,6 +505,7 @@ impl App {
             | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 surface.configure(&gpu.device, config);
+                self.drawn = None;
                 return;
             }
             _ => return,
@@ -375,6 +521,7 @@ impl App {
         );
         gpu.queue.submit([encoder.finish()]);
         gpu.queue.present(frame);
+        self.drawn = Some(key);
         let intro_over = match &self.mode {
             Mode::Intro(intro) => {
                 Some(self.started.elapsed().as_millis() as u64 >= intro.total_ms())
@@ -392,11 +539,12 @@ impl App {
         }
     }
 
-    /// The intro is over (or skipped): it is noted in the launcher's own file, then the start
-    /// screen is typed (`FinishIntro`).
+    /// The intro is over (or skipped): noted in the launcher's own file (on Windows once Play has
+    /// passed its first-write checks, so nothing is written into the package before), then the
+    /// start screen is typed (`FinishIntro`).
     fn end_intro(&mut self) {
         if self.place.refused.is_none() {
-            if let Err(e) = place::note_intro_shown(&self.place.own) {
+            if let Err(e) = place::intro_seen(&self.place.own, cfg!(not(windows))) {
                 eprintln!("launcher.ini: {e}");
             }
         }
@@ -421,57 +569,56 @@ impl App {
 
     /// Whether what is typed goes to the prompt on this screen.
     fn takes_typing(&self) -> bool {
-        matches!(
-            self.mode,
-            Mode::Start | Mode::Folder(_) | Mode::Output(None)
-        )
+        matches!(self.mode.kind(), Kind::Start | Kind::Folder | Kind::Output)
     }
 
-    /// The highlighted entry chosen (or, with something typed, the typed line).
+    /// Does what a choice does.
+    fn act(&mut self, act: Act, event_loop: &ActiveEventLoop) {
+        match act {
+            Act::EndIntro => self.end_intro(),
+            Act::Play { mods, game } => self.play(mods, game),
+            Act::Exit => event_loop.exit(),
+            Act::Answer(i) => {
+                if let Mode::Message(reply) = &mut self.mode {
+                    if let Some(r) = reply.take() {
+                        let _ = r.send(i);
+                    }
+                }
+                self.back_to_waiting();
+            }
+            Act::Folder(answer) => {
+                if let Mode::Folder(reply) = &mut self.mode {
+                    if let Some(r) = reply.take() {
+                        let _ = r.send(answer);
+                    }
+                }
+                self.back_to_waiting();
+            }
+            Act::TypeLine(line) => {
+                crate::play_unix::type_line(&line);
+                self.add_output(&format!("{line}\n"));
+            }
+            Act::BackToStart => self.show_start(),
+            Act::Nothing => {}
+        }
+    }
+
+    /// Enter: the highlighted entry chosen (or, with something typed, the typed line).
     fn choose(&mut self, event_loop: &ActiveEventLoop) {
         let typed = std::mem::take(&mut self.screen.typed);
         let chosen = self.screen.highlighted;
         let entry = self.screen.entries.get(chosen).cloned().unwrap_or_default();
-        match &mut self.mode {
-            Mode::Intro(_) => self.end_intro(),
-            Mode::Start if !typed.trim().is_empty() => {
-                self.play(false, Some(session::typed_folder(&typed)))
-            }
-            Mode::Start if entry == PLAY => self.play(false, None),
-            Mode::Start if entry == PLAY_WITH_MODS => self.play(true, None),
-            Mode::Start | Mode::Refused if entry == EXIT => event_loop.exit(),
-            Mode::Start | Mode::Refused | Mode::Waiting => {}
-            Mode::Message(reply) => {
-                if let Some(r) = reply.take() {
-                    let _ = r.send(chosen);
-                }
-                self.back_to_waiting();
-            }
-            Mode::Folder(reply) => {
-                let answer = (!typed.trim().is_empty()).then(|| session::typed_folder(&typed));
-                if let Some(r) = reply.take() {
-                    let _ = r.send(answer);
-                }
-                self.back_to_waiting();
-            }
-            Mode::Output(None) => {
-                crate::play_unix::type_line(&typed);
-                self.add_output(&format!("{typed}\n"));
-            }
-            Mode::Output(Some(_)) if entry == EXIT => event_loop.exit(),
-            Mode::Output(Some(_)) => self.show_start(),
-        }
+        let act = on_enter(self.mode.kind(), &typed, chosen, &entry);
+        self.act(act, event_loop);
     }
 
-    /// Esc: the screen's way back (its Back or No entry, else its last one).
+    /// Esc: the screen's way back, whatever is typed.
     fn back(&mut self, event_loop: &ActiveEventLoop) {
-        if self.screen.entries.is_empty() || matches!(self.mode, Mode::Waiting) {
-            return;
+        let act = on_escape(self.mode.kind(), &self.screen.entries);
+        if act != Act::Nothing {
+            self.screen.typed.clear();
         }
-        if let Some(i) = back_entry(&self.screen.entries) {
-            self.screen.highlighted = i;
-            self.choose(event_loop);
-        }
+        self.act(act, event_loop);
     }
 
     /// After an answer, the waiting screen until Play says more.
@@ -502,13 +649,40 @@ impl App {
         if ended.is_some() {
             s.entries = vec!["Back".into(), EXIT.into()];
         }
-        self.mode = Mode::Output(ended);
-        self.screen = s;
-        self.finished = true;
         if self.hidden && ended.is_some() {
-            self.show(Mode::Output(ended), self.screen.clone(), false);
+            self.show(Mode::Output(ended), s, false);
+        } else {
+            self.mode = Mode::Output(ended);
+            self.screen = s;
+            self.finished = true;
         }
         self.request_redraw();
+    }
+
+    /// The game's window is there: the launcher's steps aside (hidden; on Wayland, where a
+    /// program cannot hide its window, minimised).
+    fn step_aside(&mut self, event_loop: &ActiveEventLoop) {
+        if let Some(w) = &self.window {
+            w.set_visible(false);
+            if on_wayland(event_loop) {
+                w.set_minimized(true);
+            }
+        }
+        self.hidden = true;
+    }
+}
+
+/// Whether winit runs on Wayland (not X11, Windows or macOS).
+fn on_wayland(event_loop: &ActiveEventLoop) -> bool {
+    #[cfg(all(not(windows), not(target_vendor = "apple")))]
+    {
+        use winit::platform::wayland::ActiveEventLoopExtWayland;
+        event_loop.is_wayland()
+    }
+    #[cfg(any(windows, target_vendor = "apple"))]
+    {
+        let _ = event_loop;
+        false
     }
 }
 
@@ -517,9 +691,14 @@ impl winit::application::ApplicationHandler<Event> for App {
         if self.window.is_some() {
             return;
         }
+        let monitor = event_loop.primary_monitor().map(|m| {
+            let size = m.size().to_logical::<f64>(m.scale_factor());
+            (size.width, size.height)
+        });
+        let (w, h) = first_size(monitor);
         let attributes = winit::window::Window::default_attributes()
             .with_title("nv-rs")
-            .with_inner_size(winit::dpi::LogicalSize::new(screen::WIDTH, screen::HEIGHT))
+            .with_inner_size(winit::dpi::LogicalSize::new(w, h))
             .with_min_inner_size(winit::dpi::LogicalSize::new(
                 screen::WIDTH / 2,
                 screen::HEIGHT / 2,
@@ -527,56 +706,34 @@ impl winit::application::ApplicationHandler<Event> for App {
         let window = match event_loop.create_window(attributes) {
             Ok(w) => Arc::new(w),
             Err(e) => {
-                cannot_draw(&format!("the window could not be made: {e}"));
-                self.no_window = true;
-                event_loop.exit();
-                return;
-            }
-        };
-        let (adapter, surface) = match gpu::choose(Some(window.clone())) {
-            Ok((instance, adapter, Some(surface))) => {
-                self.instance = Some(instance);
-                (adapter, surface)
-            }
-            Ok(_) => unreachable!("a window always gets a surface"),
-            Err(e) => {
-                cannot_draw(&e);
+                cannot_draw(&format!("the window could not be made: {e}"), &self.place);
                 self.no_window = true;
                 event_loop.exit();
                 return;
             }
         };
         let size = window.inner_size();
-        let g = match Gpu::new(adapter, (screen::WIDTH, screen::HEIGHT)) {
-            Ok(g) => g,
+        let drawing = match gpu::choose(Some(window.clone()), (size.width, size.height)) {
+            Ok(d) => d,
             Err(e) => {
-                cannot_draw(&e);
+                cannot_draw(&e, &self.place);
                 self.no_window = true;
                 event_loop.exit();
                 return;
             }
         };
-        let Some(mut config) =
-            surface.get_default_config(&g.adapter, size.width.max(1), size.height.max(1))
-        else {
-            cannot_draw(&format!(
-                "the window's drawing surface does not work with {}",
-                g.describe()
-            ));
-            self.no_window = true;
-            event_loop.exit();
-            return;
+        eprintln!(
+            "drawing with {}; look: {}",
+            drawing.gpu.describe(),
+            self.look.from
+        );
+        let Some((surface, config)) = drawing.surface else {
+            unreachable!("a window's drawing always has its surface");
         };
-        // The game's menus blend in the stored values: a format without the sRGB step keeps them.
-        let caps = surface.get_capabilities(&g.adapter);
-        if let Some(f) = caps.formats.iter().find(|f| !f.is_srgb()) {
-            config.format = *f;
-        }
-        surface.configure(&g.device, &config);
-        eprintln!("drawing with {}; look: {}", g.describe(), self.look.from);
+        self.instance = Some(drawing.instance);
         self.config = Some(config);
         self.surface = Some(surface);
-        self.gpu = Some(g);
+        self.gpu = Some(drawing.gpu);
         self.window = Some(window);
         let proxy = std::sync::Mutex::new(self.proxy.clone());
         session::connect(move |e| proxy.lock().is_ok_and(|p| p.send_event(e).is_ok()));
@@ -618,12 +775,7 @@ impl winit::application::ApplicationHandler<Event> for App {
                 self.show(Mode::Waiting, s, true);
             }
             Event::StatusDone => {}
-            Event::GameShown => {
-                if let Some(w) = &self.window {
-                    w.set_visible(false);
-                }
-                self.hidden = true;
-            }
+            Event::GameShown => self.step_aside(event_loop),
             Event::Message {
                 text,
                 entries,
@@ -659,7 +811,7 @@ impl winit::application::ApplicationHandler<Event> for App {
                 }
             }
             Event::Card(card) => {
-                self.card = Card::Known(card);
+                self.card = card;
                 if matches!(self.mode, Mode::Start) {
                     let keep = (self.screen.highlighted, self.screen.typed.clone());
                     self.screen = start_screen(&self.place, &self.card);
@@ -679,9 +831,12 @@ impl winit::application::ApplicationHandler<Event> for App {
         use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
         use winit::keyboard::{Key, NamedKey};
         match event {
-            // The work behind the window (Play's steps) ends with it; a game already started
-            // plays on.
-            WindowEvent::CloseRequested => std::process::exit(self.exit_code),
+            // The work behind the window (Play's steps) ends with it, with the stop code of a
+            // question it is asking (Play.exe's), else the last one; a game already started plays
+            // on.
+            WindowEvent::CloseRequested => {
+                std::process::exit(session::stop_code().unwrap_or(self.exit_code))
+            }
             WindowEvent::Resized(size) => {
                 if let (Some(surface), Some(config), Some(g)) =
                     (&self.surface, &mut self.config, &self.gpu)
@@ -690,22 +845,19 @@ impl winit::application::ApplicationHandler<Event> for App {
                     config.height = size.height.max(1);
                     surface.configure(&g.device, config);
                 }
+                self.drawn = None;
+                self.request_redraw();
             }
             WindowEvent::RedrawRequested => self.redraw(),
-            WindowEvent::DroppedFile(path) => match &mut self.mode {
-                Mode::Start => self.play(false, Some(path)),
-                Mode::Folder(reply) => {
-                    if let Some(r) = reply.take() {
-                        let _ = r.send(Some(path));
-                    }
-                    self.back_to_waiting();
+            WindowEvent::DroppedFile(path) => {
+                match &mut self.mode {
+                    Mode::Start => self.play(false, Some(path)),
+                    Mode::Folder(_) => self.act(Act::Folder(Some(path)), event_loop),
+                    Mode::Output(None) => self.screen.typed = path.to_string_lossy().into_owned(),
+                    _ => {}
                 }
-                Mode::Output(None) => {
-                    self.screen.typed = path.to_string_lossy().into_owned();
-                    self.request_redraw();
-                }
-                _ => {}
-            },
+                self.request_redraw();
+            }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 if matches!(self.mode, Mode::Intro(_)) {
                     // Any key skips the intro.
@@ -792,8 +944,8 @@ impl winit::application::ApplicationHandler<Event> for App {
             event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
             return;
         }
-        // Typing: a frame every character (the menus' 6 ms) until the text is in; then only the
-        // cursor's blink.
+        // Typing: wake every character (the menus' 6 ms) until the text is in; then only at the
+        // cursor's next blink. Drawn again only when what shows has changed.
         let typing = !self.finished || matches!(self.mode, Mode::Intro(_));
         let next = if typing {
             Instant::now()
@@ -803,17 +955,21 @@ impl winit::application::ApplicationHandler<Event> for App {
             Instant::now() + Duration::from_millis(screen::BLINK_MS - ms % screen::BLINK_MS)
         };
         event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(next));
-        self.request_redraw();
+        if self.drawn != Some(self.frame_key()) {
+            self.request_redraw();
+        }
     }
 }
 
 /// Nothing can draw the launcher's window: said where the player can read it (a message box of
-/// Windows', else the terminal it was started from), with the way around it.
-fn cannot_draw(why: &str) {
+/// Windows'; else the terminal it was started from, and without a terminal the launcher's log in
+/// nv-rs's own folder), with what happens next.
+fn cannot_draw(why: &str, place: &Place) {
     let text = format!(
         "nv-rs's launcher cannot draw its window: {why}.\n\n{}",
         if cfg!(windows) {
-            "Update the graphics driver and start Play.exe again; Play.exe --check names what it finds."
+            "Play goes on without it, in Windows' own message boxes. Updating the graphics \
+             driver may bring the window back."
         } else {
             "It goes on in the terminal instead: play.sh, as ./play.sh starts it."
         }
@@ -821,6 +977,7 @@ fn cannot_draw(why: &str) {
     eprintln!("{text}");
     #[cfg(windows)]
     {
+        let _ = place;
         #[link(name = "user32")]
         extern "system" {
             fn MessageBoxW(
@@ -832,8 +989,26 @@ fn cannot_draw(why: &str) {
         }
         let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
         let (t, title) = (wide(&text), wide("nv-rs"));
-        // SAFETY: both strings live through the call; no owner window. 0x10: MB_ICONERROR.
-        unsafe { MessageBoxW(std::ptr::null_mut(), t.as_ptr(), title.as_ptr(), 0x10) };
+        // SAFETY: both strings live through the call; no owner window. 0x30: MB_ICONWARNING.
+        unsafe { MessageBoxW(std::ptr::null_mut(), t.as_ptr(), title.as_ptr(), 0x30) };
+    }
+    #[cfg(not(windows))]
+    {
+        use std::io::IsTerminal;
+        if !std::io::stderr().is_terminal() && place.refused.is_none() {
+            let logs = place.own.join("logs");
+            let written = std::fs::create_dir_all(&logs).and_then(|()| {
+                use std::io::Write;
+                let mut f = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(logs.join("launcher.log"))?;
+                writeln!(f, "{text}")
+            });
+            if let Err(e) = written {
+                eprintln!("{}: {e}", logs.display());
+            }
+        }
     }
 }
 
@@ -852,33 +1027,39 @@ fn missing_keyboard_library() -> Option<&'static str> {
     None
 }
 
-/// No window: Windows has said so in its message box; Linux and macOS go on in the terminal
-/// (play.sh with the same arguments).
+/// No window: Play goes on without it. Windows: Play's steps with Windows' own message boxes and
+/// folder picker, as Play.exe asked; Linux and macOS: play.sh in the terminal, with the same
+/// arguments.
 fn without_window(raw: &[String]) -> i32 {
-    if cfg!(windows) {
-        1
-    } else {
+    #[cfg(windows)]
+    {
+        crate::play::answer_in_boxes();
+        crate::play::run_play(raw)
+    }
+    #[cfg(not(windows))]
+    {
         crate::without_window(raw)
     }
 }
 
 /// The window, until the player leaves or the game ends well: the exit code.
 pub fn run(raw: Vec<String>) -> i32 {
+    let place = place::place();
     #[cfg(all(not(windows), not(target_vendor = "apple")))]
     if let Some(library) = missing_keyboard_library() {
-        cannot_draw(&format!(
-            "the keyboard library {library} is missing (install libxkbcommon)"
-        ));
+        cannot_draw(
+            &format!("the keyboard library {library} is missing (install libxkbcommon)"),
+            &place,
+        );
         return without_window(&raw);
     }
     let event_loop = match EventLoop::<Event>::with_user_event().build() {
         Ok(l) => l,
         Err(e) => {
-            cannot_draw(&format!("no window system: {e}"));
+            cannot_draw(&format!("no window system: {e}"), &place);
             return without_window(&raw);
         }
     };
-    let place = place::place();
     let look = look_of(place.game.as_deref(), &place.fallout_ini, false);
     let mut app = App {
         look,
@@ -899,6 +1080,7 @@ pub fn run(raw: Vec<String>) -> i32 {
         action: (!raw.is_empty()).then(|| raw.iter().map(OsString::from).collect()),
         output: Vec::new(),
         hidden: false,
+        drawn: None,
         no_window: false,
         exit_code: 0,
     };
@@ -927,9 +1109,8 @@ pub fn capture(c: &crate::Capture) -> Result<(), String> {
         refused: None,
     };
     let look = look_of(place.game.as_deref(), &fallout_ini, c.plain);
-    let (_, adapter, _) = gpu::choose(None)?;
+    let mut drawing = gpu::choose(None, (0, 0))?;
     let picture = (screen::WIDTH, screen::HEIGHT);
-    let mut g = Gpu::new(adapter, picture)?;
     let canvas = match (c.intro_at, &look.intro) {
         (Some(ms), Some([welcome, logon, header])) => {
             let intro = Intro::new(welcome, logon, header, false);
@@ -943,6 +1124,7 @@ pub fn capture(c: &crate::Capture) -> Result<(), String> {
             screen::draw(&look, &s, usize::MAX, true).0
         }
     };
+    let g = &mut drawing.gpu;
     g.upload(&canvas.pixels, picture);
     let rgba = g.capture(picture, c.size)?;
     std::fs::write(&c.file, crate::png::encode(c.size.0, c.size.1, &rgba))
@@ -988,7 +1170,8 @@ mod tests {
     }
 
     /// The renderer line names the game's renderer and card, never the launcher's own device: the
-    /// card asked for once known, the adapter table's card on the real Direct3D 9.
+    /// card asked for once known, the adapter table's card on the real Direct3D 9; a question that
+    /// did not answer never claims Direct3D 9 (the game still starts on Vulkan).
     #[test]
     fn the_renderer_line_names_the_games_card() {
         let p = place(Some("/g/x"), false);
@@ -1003,6 +1186,11 @@ mod tests {
         );
         let none = start_screen(&p, &Card::Known(None)).welcome[1].clone();
         assert!(none.starts_with("Renderer: "), "{none}");
+        let silent = start_screen(&p, &Card::NoAnswer).welcome[1].clone();
+        assert!(
+            silent.starts_with("Renderer: Vulkan (its driver did not answer"),
+            "{silent}"
+        );
         // The real Direct3D 9, chosen in the profile: the adapter table's card.
         let dir = std::env::temp_dir().join(format!("nv-launcher-renderer-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -1024,9 +1212,10 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// `--game-card`'s line is read back; an empty or broken one is no card.
+    /// `--game-card`'s answer has three outcomes: a card, no card (an empty line), no answer (a
+    /// program that crashed, or a line that is not an answer).
     #[test]
-    fn the_card_line_is_read_back() {
+    fn the_card_question_has_three_answers() {
         assert_eq!(
             card_from_line("NVIDIA GeForce RTX 5070 Ti Laptop GPU\tVulkan\n"),
             Some((
@@ -1034,9 +1223,16 @@ mod tests {
                 "Vulkan".into()
             ))
         );
-        assert_eq!(card_from_line("\n"), None);
-        assert_eq!(card_from_line(""), None);
         assert_eq!(card_from_line("\tVulkan"), None);
+        assert_eq!(
+            card_answer(true, "Card\tDirect3D 12\n"),
+            Card::Known(Some(("Card".into(), "Direct3D 12".into())))
+        );
+        assert_eq!(card_answer(true, "\n"), Card::Known(None));
+        assert_eq!(card_answer(true, ""), Card::Known(None));
+        assert_eq!(card_answer(false, ""), Card::NoAnswer);
+        assert_eq!(card_answer(false, "Card\tVulkan\n"), Card::NoAnswer);
+        assert_eq!(card_answer(true, "garbage"), Card::NoAnswer);
     }
 
     /// play.sh's output shows as a terminal shows it: a question without its line break waits on
@@ -1074,6 +1270,76 @@ mod tests {
         assert_eq!(back_entry(&e(&["Play", "Exit"])), Some(1));
         assert_eq!(back_entry(&e(&["OK"])), Some(0));
         assert_eq!(back_entry(&[]), None);
+    }
+
+    /// Enter sends what is typed (a folder from the start screen or at the folder prompt); Esc
+    /// never does: on the start screen it is Exit, at the folder prompt Back (no folder), on a
+    /// question No, whatever is typed.
+    #[test]
+    fn enter_sends_the_typed_folder_and_escape_never_does() {
+        let e = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let start = e(&[PLAY, EXIT]);
+        assert_eq!(
+            on_enter(Kind::Start, " \"/g/Fallout New Vegas\" ", 0, PLAY),
+            Act::Play {
+                mods: false,
+                game: Some(PathBuf::from("/g/Fallout New Vegas"))
+            }
+        );
+        assert_eq!(
+            on_enter(Kind::Start, "", 0, PLAY),
+            Act::Play {
+                mods: false,
+                game: None
+            }
+        );
+        assert_eq!(
+            on_enter(Kind::Start, "", 1, PLAY_WITH_MODS),
+            Act::Play {
+                mods: true,
+                game: None
+            }
+        );
+        assert_eq!(on_escape(Kind::Start, &start), Act::Exit);
+        let folder = e(&["Back"]);
+        assert_eq!(
+            on_enter(Kind::Folder, "/g", 0, "Back"),
+            Act::Folder(Some(PathBuf::from("/g")))
+        );
+        assert_eq!(on_enter(Kind::Folder, "", 0, "Back"), Act::Folder(None));
+        assert_eq!(on_escape(Kind::Folder, &folder), Act::Folder(None));
+        assert_eq!(on_escape(Kind::Message, &e(&["Yes", "No"])), Act::Answer(1));
+        assert_eq!(on_escape(Kind::Refused, &e(&[EXIT])), Act::Exit);
+        assert_eq!(
+            on_escape(Kind::Ended, &e(&["Back", EXIT])),
+            Act::BackToStart
+        );
+        assert_eq!(on_escape(Kind::Waiting, &[]), Act::Nothing);
+        assert_eq!(on_escape(Kind::Output, &[]), Act::Nothing);
+        assert_eq!(
+            on_enter(Kind::Output, "yes", 0, ""),
+            Act::TypeLine("yes".into())
+        );
+    }
+
+    /// The first window keeps the terminal's 4:3 shape, at most 960 by 720, and fits a small or
+    /// scaled screen with room to spare.
+    #[test]
+    fn the_first_window_fits_the_screen() {
+        assert_eq!(first_size(None), (960.0, 720.0));
+        assert_eq!(first_size(Some((2560.0, 1440.0))), (960.0, 720.0));
+        // A 1920x1080 laptop at 150%: 1280 by 720 logical.
+        let (w, h) = first_size(Some((1280.0, 720.0)));
+        assert!(
+            h <= 720.0 * 0.88 && (w / h - 4.0 / 3.0).abs() < 0.01,
+            "{w}x{h}"
+        );
+        // A narrow screen: the width decides.
+        let (w, h) = first_size(Some((800.0, 1280.0)));
+        assert!(
+            w <= 800.0 * 0.9 && (w / h - 4.0 / 3.0).abs() < 0.01,
+            "{w}x{h}"
+        );
     }
 
     /// Play's arguments: `--mods` for Play with mods, `--game FOLDER` for a typed or dropped

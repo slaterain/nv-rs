@@ -83,6 +83,9 @@ Start
    nv-rs) opens nv-rs's launcher, a window in the look of the game's own terminals. Its > Play
    runs play.sh for you and shows what it says; type its answers at the launcher's prompt, or
    drop a folder onto its window. Without a window it goes on in the terminal, as ./play.sh.
+   On Wayland its window cannot hide while you play: it is minimised instead. When no window
+   can be made at all, it says why in the terminal it was started from, or, double-clicked,
+   in nv-rs's own folder's logs/launcher.log.
 
 The first start finds your game (or asks for its folder: type it, paste it, or drag the folder
 into the terminal) and remembers it. If you played the game through Steam's Proton, it offers to
