@@ -157,6 +157,36 @@ fn set_light_flag_sets_clears_and_marks() {
         "a negative bit is past 31"
     );
     assert_eq!(marked(&e, lights.0), 0);
+    // Not a light: nothing written, nothing marked.
+    e.mem.set_u8(LIGHT + 4, 0x1f);
+    call(&mut e, 0x2645, &[r(1), n(1), n(1)]);
+    assert_eq!(e.mem.u32(LIGHT + 0xa8), 0x8000_0008);
+    assert_eq!(marked(&e, lights.0), 0);
+}
+
+/// Every listed light made from the form is marked, wherever it is in the list (another form's
+/// light, the form's, a third form's, the form's again).
+#[test]
+fn the_mark_reaches_every_light_of_the_form() {
+    let mut e = setup();
+    let lights: Vec<u32> = (0..4).map(|i| FORMS + 0x8000 + 0x200 * i).collect();
+    let forms = [FORMS + 0x2000, LIGHT, FORMS + 0x2400, LIGHT];
+    for (&l, f) in lights.iter().zip(forms) {
+        e.mem.set_u32(l + 0xe8, f);
+    }
+    e.ext_free::<crate::game_patches::gl::lights::ActivePointLights>()
+        .0
+        .lock()
+        .unwrap()
+        .extend(lights.iter().copied());
+    let marks = |e: &Engine| -> Vec<u8> { lights.iter().map(|&l| marked(e, l)).collect() };
+    call(&mut e, 0x2645, &[r(1), n(2), n(1)]);
+    assert_eq!(marks(&e), vec![0, 1, 0, 1], "SetLightFlag");
+    for &l in &lights {
+        e.mem.set_u8(l + 0x9e, 0);
+    }
+    call(&mut e, 0x2643, &[r(1), n(0), z(100.0)]);
+    assert_eq!(marks(&e), vec![0, 1, 0, 1], "SetLightTraitNumeric");
 }
 
 /// The getters answer what the setters wrote at once.

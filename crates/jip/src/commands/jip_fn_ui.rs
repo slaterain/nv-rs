@@ -39,9 +39,9 @@
 //!   `EnableImprovedRecipeMenu`, `SuppressQuestMessages`, `InitItemFilter`, `SetItemFilter` (code bytes and jumps patched into
 //!   the exe), `ShowTextInputMenu`, `SetTextInputExtendedProps`, `SetTextInputString` (the text
 //!   input hooks, `TextInputClose`);
-//! - 3D and drawing: `ProjectUITile` (a rendered texture), `SetCursorPos` (the cursor's scene
-//!   node); (`AttachUIXML` and `AttachUIComponent`, a tile's node under a reference's node, are
-//!   built in `jip_fn_ui_nodes.rs`);
+//! - 3D and drawing: `ProjectUITile` (a rendered texture); (`AttachUIXML` and
+//!   `AttachUIComponent`, a tile's node under a reference's node, are built in `jip_fn_ui_nodes.rs`,
+//!   `SetCursorPos` in `jip_fn_ui_cursor.rs`);
 //!
 //! `GetMenuTargetRef` and `GetSelectedItemRef`: where JIP reads through a null pointer (the top
 //! menu's object, a highlighted perk rank with no item, a barter menu without a merchant), the

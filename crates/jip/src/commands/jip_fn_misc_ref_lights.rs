@@ -15,7 +15,9 @@
 //! The light is one of JIP's (listed in `s_activePtLights`, `game_patches::gl::lights`): JIP's
 //! animated-lights step (H12, in with JIP installed) sets it from its form, puts it into the scene's
 //! lights at its next pass and frees it once it is out of the model and let go. JIP 57.30 keeps no
-//! record of it: when the reference's 3D is made again the light is gone, as in JIP.
+//! record of which reference has it: when the reference's 3D is made again the light is gone, and
+//! before a game loads and at the exit to the main menu every light with the script mark is taken
+//! off its node (`gl::lights::pre_load`, JIP's pre-load housekeeping), as in JIP.
 //!
 //! Threads: on the script's thread, as JIP's (no lock: JIP takes none); the list has its own lock.
 

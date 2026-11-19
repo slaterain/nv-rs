@@ -804,6 +804,30 @@ const POINT_LIGHT_CREATE: u32 = 0x00a7_d6e0;
 const ADD_OBJECT_SLOT: u32 = 0xdc;
 /// A light form's flags byte (+0xA8) bit "off by default".
 const OFF_BY_DEFAULT: u8 = 0x20;
+/// `NiNode::RemoveObject` (vtable +0xE8: the child) and JIP's mark of a script's light
+/// (`extraFlags` +0x9F bit 0x80, `AttachLight`'s).
+const REMOVE_OBJECT_SLOT: u32 = 0xe8;
+const SCRIPT_LIGHT: u8 = 0x80;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/serialization.h:
+// DoPreLoadGameHousekeeping (the lights' step, between the waits and the swapped LOD blocks).
+/// Before a game loads and at the exit to the main menu: every listed light with the script mark
+/// that has a parent (+0x18) is taken out of it (`RemoveObject`), so no light a script attached
+/// stays on a model the loaded game does not know it on. The list stays as it is: the
+/// animated-lights step frees each light once nothing holds it ([`animated_lights`]). A copy of
+/// the list is walked, the lock not held across the game's calls.
+pub fn pre_load(e: &mut Engine) {
+    let lights = lights_list(e).clone();
+    for light in lights {
+        if e.mem.u8(light.wrapping_add(EXTRA_FLAGS)) & SCRIPT_LIGHT == 0 {
+            continue;
+        }
+        let parent = e.mem.u32(light.wrapping_add(PARENT));
+        if parent != 0 {
+            e.vcall(parent, REMOVE_OBJECT_SLOT, &args![light]);
+        }
+    }
+}
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_light.h: MarkLightModified
 // (asm).

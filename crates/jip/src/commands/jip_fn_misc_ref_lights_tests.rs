@@ -6,8 +6,9 @@
 
 use super::super::nif_nodes::tests::*;
 use crate::commands::test_support::{call_on, calls, form, r, s, set_ref, z, CALLS, FORMS};
-use crate::game_patches::gl::lights::{active_point_lights, POINT_LIGHT_VTABLE};
+use crate::game_patches::gl::lights::{active_point_lights, ActivePointLights, POINT_LIGHT_VTABLE};
 use engine_core::prelude::*;
+use nvse::plugins::{dispatch, msg};
 
 const ATTACH: u32 = 0x2879;
 const REMOVE: u32 = 0x287a;
@@ -260,4 +261,60 @@ fn an_attached_light_is_removed_again() {
     set_children(&mut e, lamp, &[light]);
     remove(&mut e, refr, b"Lamp");
     assert_eq!(calls(), vec![(REMOVE_OBJECT, vec![lamp, light])]);
+}
+
+/// `GetNode2` takes only a node: a geometry block of that name is no place for a light.
+#[test]
+fn a_geometry_block_is_not_a_node() {
+    let (mut e, refr, lamp) = setup();
+    let shade = shape(&mut e, b"Shade");
+    set_children(&mut e, lamp, &[shade]);
+    assert_eq!(attach(&mut e, refr, b"Shade", 1, &[]), 0.0);
+    assert!(calls().is_empty(), "{:x?}", calls());
+    remove(&mut e, refr, b"Shade");
+    assert!(calls().is_empty());
+    assert!(active_point_lights(&mut e).is_empty());
+}
+
+/// Before a game loads and at the exit to the main menu (JIP's `DoPreLoadGameHousekeeping`):
+/// every listed light with the script mark and a parent comes off it (`RemoveObject`); a listed
+/// light without the mark and a marked one without a parent are left; the list stays as it is.
+#[test]
+fn script_lights_come_off_their_nodes_before_a_load() {
+    for kind in [msg::PRE_LOAD_GAME, msg::EXIT_TO_MAIN_MENU] {
+        let (mut e, refr, lamp) = setup();
+        // The other housekeeping steps read the player (`*011DEA3C`): this reference stands in.
+        if !e.mem.is_mapped(0x011d_e000) {
+            e.map(0x011d_e000, 0x1000);
+        }
+        e.mem.set_u32(0x011d_ea3c, refr);
+        attach(&mut e, refr, b"Lamp", 1, &[]);
+        let (_, attached) = added();
+        set_children(&mut e, lamp, &[attached]);
+        let plain = object(&mut e, POINT_LIGHT_VTABLE, Some(b"Plain"));
+        let orphan = object(&mut e, POINT_LIGHT_VTABLE, Some(b"Orphan"));
+        e.mem.set_u8(orphan + EXTRA, 0x80);
+        let _holder = node(&mut e, b"Holder", &[plain]);
+        e.ext_free::<ActivePointLights>()
+            .0
+            .lock()
+            .unwrap()
+            .extend([plain, orphan]);
+        clear();
+        dispatch(&mut e, kind, 0, 0);
+        let removed: Vec<_> = calls()
+            .into_iter()
+            .filter(|c| c.0 == REMOVE_OBJECT)
+            .collect();
+        assert_eq!(
+            removed,
+            vec![(REMOVE_OBJECT, vec![lamp, attached])],
+            "{kind}"
+        );
+        assert_eq!(
+            active_point_lights(&mut e),
+            vec![attached, plain, orphan],
+            "{kind}: the list stays"
+        );
+    }
 }
