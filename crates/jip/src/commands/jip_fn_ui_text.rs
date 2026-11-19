@@ -372,13 +372,10 @@ fn set_string(e: &mut Engine, tile: u32, id: u32, text: &[u8]) {
     }
 }
 
-/// `cvtss2si`: rounded to the nearest (ties to even), `0x80000000` when it does not fit.
+/// `cvtss2si`: rounded to the nearest (ties to even), `0x80000000` when it does not fit (the same
+/// as the FPU's `FISTP` in its default mode).
 fn cvtss2si(v: f32) -> i32 {
-    if v.is_nan() || !(-2_147_483_648.0..2_147_483_648.0).contains(&v) {
-        i32::MIN
-    } else {
-        v.round_ties_even() as i32
-    }
+    engine_core::x87::fistp(f64::from(v))
 }
 
 // ---- ShowTextInputMenu ----
