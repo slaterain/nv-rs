@@ -58,8 +58,22 @@ pub fn fn_006270f0(e: &mut Engine, this: Ptr<LoadedAreaBound>) {
 // Translated from 006295e0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `LoadedAreaBound::WarpActor` (Xbox PDB): finds and applies a warp point.
 pub fn loaded_area_bound_warp_actor(e: &mut Engine, this: Ptr<LoadedAreaBound>, actor: Ptr) {
+    // Seam (JIP LN NVSE's ToggleNoZPosReset: 20 bytes at `0x6295E9` in place of the point's
+    // constructor call, written the first time it is turned on): words: the actor; an answer of
+    // 1 (the actor's JIP flag `+0x5F` bit 0x10) skips the warp, 0 goes on without the
+    // constructor. Asked only while JIP is installed.
+    let jip = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        e.site(0x0062_95e9, &[actor.addr()])
+    } else {
+        None
+    };
+    if jip.is_some_and(|answer| answer != 0) {
+        return;
+    }
     e.with_stack(12, |e, point| {
-        typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, point));
+        if jip.is_none() {
+            typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, point));
+        }
         // The pending `point` push belongs to FindWarpLocation: slot 0x1f4
         // has no stack arguments.
         let actor_point = e.vcall(actor.addr(), 0x1f4, &[]).u32();
@@ -721,6 +735,97 @@ mod tests {
             vec![actor.addr()]
         );
         assert_eq!(e.mem.u32(controller + 0x414) & 0x20, 0);
+    }
+
+    thread_local! {
+        /// The words the seam's test handler was asked with.
+        static ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn asked(w: &[u32]) {
+        ASKED.with(|a| a.borrow_mut().push(w.to_vec()));
+    }
+
+    /// JIP LN NVSE's ToggleNoZPosReset seam at `0x6295E9`: asked with the actor (not the bound)
+    /// while JIP is installed; 1 skips the warp (no position set), 0 warps without the point's
+    /// constructor, none as the exe.
+    #[test]
+    fn warp_actor_jip_no_z_pos_reset_seam() {
+        use engine_core::extend::jip_patches;
+        // The point constructor's calls: the exe's count, one fewer when JIP's code runs.
+        let mut exe = 0;
+        for (word, answer, warped, constructed) in [
+            (0, 1, true, true),
+            (jip_patches::INSTALLED, 1, false, false),
+            (jip_patches::INSTALLED, 0, true, false),
+            (jip_patches::INSTALLED, 2, true, true),
+        ] {
+            let mut e = Engine::new();
+            let bound: Ptr<LoadedAreaBound> = e.new_object();
+            let actor: Ptr = Ptr::new(e.mem.alloc(4));
+            let actor_point = e.mem.alloc(12);
+            e.mem.set_u32(actor.addr(), 0x0020_0000);
+            e.map(0x0020_0000, 0x1000);
+            for (slot, target) in [
+                (0x1f4, 0x0020_1000),
+                (0x2a8, 0x0020_1004),
+                (0x100, 0x0020_1008),
+                (0x138, 0x0020_100c),
+            ] {
+                e.mem.set_u32(0x0020_0000 + slot, target);
+            }
+            e.register_double(0x0020_1000, move |_, _| Ret {
+                eax: actor_point,
+                ..Ret::default()
+            });
+            e.register(0x0020_1004, |_, _| Ret::default());
+            e.register(0x0020_1008, |_, _| Ret::default());
+            e.register(0x0020_100c, |_, _| Ret::default());
+            e.register(0x0054_ddd0, |_, _| Ret::default());
+            e.register(0x006d_97b0, |_, _| Ret::default());
+            e.register(0x0054_cfd0, |_, _| Ret::default());
+            e.register(0x0093_06d0, |_, _| Ret::default());
+            noop(&mut e, &[0x0068_15c0]);
+            e.set_jip_patches(word);
+            ASKED.with(|a| a.borrow_mut().clear());
+            match answer {
+                0 => e.on_site_for_test(0x0062_95e9, |_, w| {
+                    asked(w);
+                    Some(0)
+                }),
+                1 => e.on_site_for_test(0x0062_95e9, |_, w| {
+                    asked(w);
+                    Some(1)
+                }),
+                _ => e.on_site_for_test(0x0062_95e9, |_, w| {
+                    asked(w);
+                    None
+                }),
+            }
+            e.call_log = Some(vec![]);
+            e.call(0x0062_95e0, &args![bound, actor]);
+            let want = if word == 0 {
+                vec![]
+            } else {
+                vec![vec![actor.addr()]]
+            };
+            assert_ne!(actor.addr(), bound.addr());
+            assert_eq!(
+                ASKED.with(|a| a.borrow().clone()),
+                want,
+                "{word:x} {answer}"
+            );
+            let log = e.call_log.unwrap();
+            let called = |addr: u32| log.iter().filter(|(a, _)| *a == addr).count();
+            assert_eq!(called(0x0020_1004) != 0, warped, "{word:x} {answer}");
+            let points = called(0x0068_15c0);
+            if word == 0 {
+                exe = points;
+            } else if warped {
+                let want = if constructed { exe } else { exe - 1 };
+                assert_eq!(points, want, "{word:x} {answer}");
+            }
+        }
     }
 
     #[test]

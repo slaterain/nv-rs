@@ -452,6 +452,55 @@ fn the_system_goes_in_behind_the_throttle() {
     assert_eq!(fake.0.lock().unwrap().calls.len(), 4);
 }
 
+/// A system without XInput (Linux): the lists alone behind the game's two calls
+/// (`install_lists`), the list's first pad user 0 and its rumble the game's two speeds.
+#[test]
+fn lists_alone_behind_the_imports() {
+    /// One pad, its packet 9; the speeds asked for kept.
+    struct One(Arc<Mutex<Vec<(usize, u16, u16)>>>);
+    impl PadList for One {
+        fn count(&mut self) -> usize {
+            1
+        }
+        fn get_state(&mut self, n: usize, state: &mut [u8; 16]) -> u32 {
+            if n != 0 {
+                return ERROR_DEVICE_NOT_CONNECTED;
+            }
+            *state = PadState {
+                packet: 9,
+                buttons: buttons::A,
+                ..PadState::default()
+            }
+            .to_bytes();
+            ERROR_SUCCESS
+        }
+        fn set_state(&mut self, n: usize, left: u16, right: u16) -> u32 {
+            self.0.lock().unwrap().push((n, left, right));
+            ERROR_SUCCESS
+        }
+    }
+    let (mut e, state, vibration) = engine();
+    let set = Arc::new(Mutex::new(Vec::new()));
+    install_lists(&mut e, vec![Box::new(One(set.clone()))]);
+    assert_eq!(xinput_get_state(&mut e, 0, Ptr::new(state)), ERROR_SUCCESS);
+    let one = PadState {
+        packet: 9,
+        buttons: buttons::A,
+        ..PadState::default()
+    };
+    assert_eq!(e.mem.bytes(state, 16), one.to_bytes().to_vec());
+    assert_eq!(
+        xinput_get_state(&mut e, 1, Ptr::new(state)),
+        ERROR_DEVICE_NOT_CONNECTED
+    );
+    e.mem.write(vibration, &[0x34, 0x12, 0x78, 0x56]);
+    assert_eq!(
+        xinput_set_state(&mut e, 0, Ptr::new(vibration)),
+        ERROR_SUCCESS
+    );
+    assert_eq!(*set.lock().unwrap(), [(0, 0x1234, 0x5678)]);
+}
+
 /// The throttle through the import functions: the system's clock, so only "not asked again at
 /// once" is checked here.
 #[test]
