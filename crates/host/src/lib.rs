@@ -1294,10 +1294,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         match stop {
             Err(err) => assert_eq!(super::error_status(&err), super::NOT_PROVIDED_STATUS),
-            Ok(()) => assert!(cfg!(any(
-                target_arch = "x86_64",
-                all(target_arch = "aarch64", target_os = "macos")
-            ))),
+            Ok(()) => {
+                // Held in a binding: a `cfg!` asserted directly is a constant to clippy where it
+                // is true (macOS on Apple silicon: `assertions_on_constants`).
+                let provided = cfg!(any(
+                    target_arch = "x86_64",
+                    all(target_arch = "aarch64", target_os = "macos")
+                ));
+                assert!(provided, "the start went on where nothing is built");
+            }
         }
         assert_eq!(super::NOT_PROVIDED_STATUS, 69);
         assert_eq!(super::error_status("FalloutNV.exe: not found"), 1);
