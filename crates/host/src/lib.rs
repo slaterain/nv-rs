@@ -221,6 +221,14 @@ impl Host {
         } else {
             engine.start_real_clock();
         }
+        // Windows' pointer speed, which the game's menu cursor follows (it reads it at its input
+        // start): the player's own on Windows, only read; off Windows, and in a repeatable run (a
+        // test, the same on every machine), Windows' default 10. One line.
+        if repeatable.is_none() {
+            let (speed, line) = engine_platform::window::pointer_speed();
+            engine.kernel.pointer_speed = speed;
+            eprintln!("{line}");
+        }
         // How the game's threads run (`engine::thread_host::Scheme`), in `NV_THREADS`'s words
         // (`fixes::Choice::threads`: a test without `NV_THREADS` always runs them stepped). In
         // play by default real, side by side (started before the C runtime, below).

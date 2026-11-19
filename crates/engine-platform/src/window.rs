@@ -168,6 +168,99 @@ fn user_name(var: impl Fn(&str) -> Option<String>) -> String {
         .unwrap_or_default()
 }
 
+/// Windows' pointer speed for the game's menu cursor (`engine_core`'s `Kernel::pointer_speed`,
+/// which the game reads as `HKCU\Control Panel\Mouse` `MouseSensitivity` at its input start), with
+/// the log line saying it: on Windows the player's own, read once (only read: nothing is written);
+/// elsewhere `None`, the 10 a plain Windows machine starts with.
+pub fn pointer_speed() -> (Option<Vec<u8>>, String) {
+    #[cfg(windows)]
+    let read = read_pointer_speed();
+    #[cfg(not(windows))]
+    let read = Err(None);
+    pointer_speed_of(read)
+}
+
+/// [`pointer_speed`]'s answer and line for what the read gave: the value's text (without its
+/// zero), or why there is none (Windows' error code; `None`: not Windows). A value that is not a
+/// whole number from 1 to 20 is still the game's (it reads it with `atol`), and the line says so.
+fn pointer_speed_of(read: Result<Vec<u8>, Option<u32>>) -> (Option<Vec<u8>>, String) {
+    const FOLLOWS: &str = "the game's menu cursor speed follows it, as in the original";
+    match read {
+        Ok(text) => {
+            let shown = String::from_utf8_lossy(&text).into_owned();
+            let usual = shown
+                .trim()
+                .parse::<u32>()
+                .is_ok_and(|v| (1..=20).contains(&v));
+            let note = if usual {
+                ""
+            } else {
+                " (not a speed from 1 to 20: the game reads it as Windows holds it)"
+            };
+            (
+                Some(text),
+                format!(
+                    "input: Windows' pointer speed (Mouse settings) is {shown}{note}: {FOLLOWS}"
+                ),
+            )
+        }
+        Err(Some(code)) => (
+            None,
+            format!(
+                "input: Windows' pointer speed could not be read (error {code}): the menus' cursor \
+                 takes Windows' default, 10"
+            ),
+        ),
+        Err(None) => (
+            None,
+            "input: the menus' cursor takes Windows' default pointer speed, 10, as a Windows \
+             machine has it"
+                .to_string(),
+        ),
+    }
+}
+
+/// `HKCU\Control Panel\Mouse` `MouseSensitivity` as text (`RegGetValueA`, a string value only):
+/// its bytes without the zero, or Windows' error code.
+#[cfg(windows)]
+fn read_pointer_speed() -> Result<Vec<u8>, Option<u32>> {
+    #[link(name = "advapi32")]
+    extern "system" {
+        fn RegGetValueA(
+            key: isize,
+            sub_key: *const u8,
+            value: *const u8,
+            flags: u32,
+            kind: *mut u32,
+            data: *mut u8,
+            size: *mut u32,
+        ) -> i32;
+    }
+    const HKEY_CURRENT_USER: isize = 0x8000_0001_u32 as i32 as isize;
+    const RRF_RT_REG_SZ: u32 = 2;
+    let mut data = [0u8; 64];
+    let mut size = data.len() as u32;
+    // SAFETY: the key and value names are zero-terminated, the buffer and its size are this
+    // function's own, and the call only reads the registry.
+    let status = unsafe {
+        RegGetValueA(
+            HKEY_CURRENT_USER,
+            b"Control Panel\\Mouse\0".as_ptr(),
+            b"MouseSensitivity\0".as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            data.as_mut_ptr(),
+            &mut size,
+        )
+    };
+    if status != 0 {
+        return Err(Some(status as u32));
+    }
+    let text = &data[..(size as usize).min(data.len())];
+    let end = text.iter().position(|&b| b == 0).unwrap_or(text.len());
+    Ok(text[..end].to_vec())
+}
+
 // Platform: replaces STEAM_API.DLL SteamAPI_Init (import)
 /// `SteamAPI_Init()`: false, the answer when no Steam client runs: the Steam client is not
 /// provided, and the game's own code goes on without it (`006ff690` keeps the false at +0x3c of
@@ -831,6 +924,34 @@ mod tests {
             "unix"
         );
         assert_eq!(user_name(vars(&[])), "");
+    }
+
+    /// The pointer speed's answer and line: the player's own value as Windows holds it (report
+    /// 006: the menus' cursor was faster than in the original, which follows it), an odd value
+    /// kept and said, a failed read or another system the default 10 (no value).
+    #[test]
+    fn the_pointer_speed_is_the_players_own_or_windows_default() {
+        let (speed, line) = pointer_speed_of(Ok(b"6".to_vec()));
+        assert_eq!(speed.as_deref(), Some(&b"6"[..]));
+        assert_eq!(
+            line,
+            "input: Windows' pointer speed (Mouse settings) is 6: the game's menu cursor speed \
+             follows it, as in the original"
+        );
+        let (speed, line) = pointer_speed_of(Ok(b"fast".to_vec()));
+        assert_eq!(speed.as_deref(), Some(&b"fast"[..]));
+        assert!(line.contains("is fast (not a speed from 1 to 20"), "{line}");
+        let (speed, line) = pointer_speed_of(Err(Some(2)));
+        assert_eq!(speed, None);
+        assert!(line.contains("could not be read (error 2)"), "{line}");
+        let (speed, line) = pointer_speed_of(Err(None));
+        assert_eq!(speed, None);
+        assert!(
+            line.ends_with("pointer speed, 10, as a Windows machine has it"),
+            "{line}"
+        );
+        // On this system the read itself answers a value or a reason, never stopping.
+        let _ = pointer_speed();
     }
 
     fn wide_of(text: &str) -> Vec<u16> {
