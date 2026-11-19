@@ -815,6 +815,11 @@ pub fn script_line_script_line(e: &mut Engine, this: Ptr) -> Ptr {
 pub fn script_compiler_get_next_line(e: &mut Engine, data: Ptr, line: Ptr) -> u32 {
     let base = data.addr();
     let line = line.addr();
+    // Seam 005AF3F0 (words: the compile data, the line): answered, xNVSE's own line reader ran in
+    // place of this one (its `PatchGameCommandParser`), the answer the bytes it read.
+    if let Some(read) = e.site(0x005a_f3f0, &[base, line]) {
+        return read;
+    }
     let start = word_at(e, base, 0).wrapping_add(word_at(e, base, 4));
     let mut read = 0u32;
     let mut skipping = true;
@@ -2740,6 +2745,20 @@ pub fn script_compiler_standard_compile(
             let kind = word_at(e, entry, 4);
             let allow = e.mem.u8(PARAMETER_TYPES.wrapping_add(kind.wrapping_mul(8)));
             fn_005af310(e, Ptr::new(word));
+            // Seam 005B1C65, the parameter's word read (words: the line, the compile data, the
+            // parameters, the index): xNVSE's inline expression in parentheses. Answered 1, the
+            // parameter is compiled (the next one follows); 0, a syntax error (false).
+            match e.site(
+                0x005b_1c65,
+                &[line, data.addr(), parameters, u32::from(index as u16)],
+            ) {
+                Some(0) => return false,
+                Some(_) => {
+                    index = index.wrapping_add(1);
+                    continue;
+                }
+                None => {}
+            }
             let length = script_compiler_get_next_word(
                 e,
                 data,
