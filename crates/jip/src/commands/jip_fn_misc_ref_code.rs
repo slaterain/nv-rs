@@ -6,12 +6,14 @@
 //!
 //! `ToggleNoZPosReset` rewrites two pieces of the game's code the first time it is turned on;
 //! the port has a seam at each (engine-fallout-unplaced-a's `run_006286f0.rs` at `0x629006`,
-//! engine-fallout-env's `loadedareabound.rs` at `0x6295E9`), asked while JIP is installed,
-//! answering nothing until then. `ToggleObjectCollision` changes no code: JIP's attach of a
-//! queued reference (group GP's `queued_reference`) turns a marked reference's collision off
-//! again after its 3D loads ([`toggle_collision`]).
+//! engine-fallout-env's `loadedareabound.rs` at `0x6295E9`), put in only while JIP answers
+//! "installed" ([`AREA`]), answering nothing until the command has run.
+//! `ToggleObjectCollision` changes no code: JIP's attach of a queued reference (group GP's
+//! `queued_reference`) turns a marked reference's collision off again after its 3D loads
+//! ([`toggle_collision`]).
 
 use super::Handlers;
+use crate::game_patches::Area;
 use engine_core::extend::{Owner, SiteSlot};
 use engine_core::prelude::*;
 use nvse::commands::Read;
@@ -44,9 +46,23 @@ fn written(e: &mut Engine) -> bool {
     e.ext_free::<NoZPosReset>().written.load(Ordering::Relaxed)
 }
 
-/// The two seams' handlers and the slot (made before the threads start).
+/// The slot (made before the threads start).
 pub fn install(e: &mut Engine) {
     e.ext_free::<NoZPosReset>();
+}
+
+/// The two seams: in with JIP's `INSTALLED`, as JIP's other patches.
+pub const AREA: Area = Area {
+    name: "no height reset",
+    fix_sites: &[],
+    fix_wraps: &[],
+    install_fixes: crate::game_patches::nothing,
+    jip_sites: &[AREA_RESET.addr(), WARP_ACTOR.addr()],
+    jip_wraps: &[],
+    install_jip,
+};
+
+fn install_jip(e: &mut Engine) {
     e.on_site(AREA_RESET, area_reset);
     e.on_site(WARP_ACTOR, warp_actor);
 }

@@ -7,6 +7,7 @@
 //! session starts with the game's moon).
 
 use super::Handlers;
+use crate::game_patches::Area;
 use engine_core::extend::{Owner, SiteSlot};
 use engine_core::prelude::*;
 use nvse::commands::Read;
@@ -47,9 +48,23 @@ fn textures(e: &mut Engine) -> &MoonTextures {
     e.ext_free::<MoonTextures>()
 }
 
-/// The seam's handler and the slot (made before the threads start).
+/// The slot (made before the threads start).
 pub fn install(e: &mut Engine) {
     e.ext_free::<MoonTextures>();
+}
+
+/// The moon's seam: in with JIP's `INSTALLED`, as JIP's other patches.
+pub const AREA: Area = Area {
+    name: "moon textures",
+    fix_sites: &[],
+    fix_wraps: &[],
+    install_fixes: crate::game_patches::nothing,
+    jip_sites: &[MOON_NAMES.addr()],
+    jip_wraps: &[],
+    install_jip,
+};
+
+fn install_jip(e: &mut Engine) {
     e.on_site(MOON_NAMES, moon_names);
 }
 
