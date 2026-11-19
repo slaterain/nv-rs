@@ -47,6 +47,7 @@ pub mod jip_fn_misc_ref;
 pub mod jip_fn_misc_ref_havok;
 pub mod jip_fn_misc_ref_havok_w;
 pub mod jip_fn_misc_ref_insert;
+pub mod jip_fn_misc_ref_lights;
 pub mod jip_fn_misc_ref_lines;
 pub mod jip_fn_misc_ref_nodes;
 pub mod jip_fn_misc_ref_nodes_w;
@@ -68,6 +69,7 @@ pub mod jip_fn_string;
 pub mod jip_fn_texture_set;
 pub mod jip_fn_ui;
 pub mod jip_fn_ui_code;
+pub mod jip_fn_ui_cursor;
 pub mod jip_fn_ui_menus;
 pub mod jip_fn_ui_nodes;
 pub mod jip_fn_utility;
@@ -241,6 +243,8 @@ pub const ALL: &[Handlers] = &[
     jip_fn_misc_ref::AWAITING_H13,
     // `ToggleHUDCursor`, with its patch H02 (`game_patches::gp`).
     jip_fn_ui::AWAITING_H02,
+    // `SetFontFile`, with its patch G129 (`game_patches::ga`).
+    jip_fn_ui::AWAITING_G129,
     // `FireWeaponEx`, with its patch H01 (`game_patches::gw`).
     jip_fn_actor_p2::AWAITING_H01,
     // `ShowQuantityMenu`, `CloseActiveMenu` (with their DoClick seam).
@@ -249,6 +253,10 @@ pub const ALL: &[Handlers] = &[
     jip_fn_camera::INPUT_COMMANDS,
     jip_fn_camera::MISC_COMMANDS,
     jip_fn_rock_it::COMMANDS,
+    // `AttachLight`, `RemoveLight`.
+    jip_fn_misc_ref_lights::COMMANDS,
+    // `SetCursorPos`.
+    jip_fn_ui_cursor::COMMANDS,
     jip_fn_ui_code::COMMANDS,
 ];
 
@@ -889,6 +897,8 @@ mod tests {
             "jip_fn_misc_ref",
             // jip_fn_ui::AWAITING_H02 (`ToggleHUDCursor`, with H02).
             "jip_fn_ui",
+            // jip_fn_ui::AWAITING_G129 (`SetFontFile`, with G129).
+            "jip_fn_ui",
             // jip_fn_actor_p2::AWAITING_H01 (`FireWeaponEx`, with H01).
             "jip_fn_actor",
             // jip_fn_ui_menus (ShowQuantityMenu, CloseActiveMenu).
@@ -897,6 +907,10 @@ mod tests {
             "jip_fn_input",
             "jip_fn_miscellaneous",
             "jip_fn_miscellaneous",
+            // jip_fn_misc_ref_lights (AttachLight, RemoveLight).
+            "jip_fn_misc_ref",
+            // jip_fn_ui_cursor (SetCursorPos).
+            "jip_fn_ui",
             // jip_fn_ui_code (the recipe menu, quest messages, item filter).
             "jip_fn_ui",
         ];
@@ -964,8 +978,8 @@ mod tests {
             nvse::table::guest_text(&e, e.mem.u32(record)),
             b"GetClimateSunTexture"
         );
-        // SetLightTraitNumeric is not built: no handler.
-        assert_eq!(execute(&e, 0x2643), 0);
+        // InitMiniMap is not built (it waits for the drawing track): no handler.
+        assert_eq!(execute(&e, 0x2873), 0);
     }
 
     /// Answering "not installed" (players' state until step 3.10), every opcode built here is as
