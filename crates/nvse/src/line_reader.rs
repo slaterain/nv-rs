@@ -16,7 +16,14 @@
 //!   can declare them.
 //! - A parenthesised argument of a command of the game's format (`InlineExpressionHook` at
 //!   `005B1C65`, `StandardCompile`'s word read of each parameter): an xNVSE expression
-//!   ([`crate::compiler::handle_parameter_parenthesis`]).
+//!   ([`crate::compiler::handle_parameter_parenthesis`]), for an extender's command (opcode
+//!   `0x1400` up: JIP's and the other plugins' commands of the game's format). One gap: for the
+//!   game's own commands the port does not answer (the game's word read runs, as without the
+//!   patch), because their arguments are read at run time by the exe's reader (`005ACCB0`), which
+//!   cannot read the expression's `0xFFFF`. xNVSE's entry jump sends every opcode to its own
+//!   reader; in the port that waits for the fix row `xnvse.extract_args` (`crate::args`), and
+//!   until then such a line is refused at compile time as before, rather than compiled into bytes
+//!   the exe's reader would misread (a string's length read as -1).
 //!
 //! Each is a seam in the translated compiler (`engine-fallout-script`'s `tesscriptcompiler.rs`),
 //! answered here, so the port's xNVSE reads a run-time script as xNVSE 6.4.9 does on every system.
@@ -67,9 +74,14 @@ fn word(w: &[u32], i: usize) -> u32 {
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Hooks_Editor.cpp: InlineExpressionHook.
 /// `005B1C65`, words (the line, the script buffer, the parameters, the index): a parameter in
 /// parentheses is compiled as an expression (answer 1: the next parameter follows) or was wrong
-/// (answer 0: the compile of the line fails); anything else is the game's word (no answer).
+/// (answer 0: the compile of the line fails); anything else is the game's word (no answer). Only
+/// for an extender's opcode (the line's `+0x410`, `0x1400` up); for the game's own commands no
+/// answer (the module's note: their run-time reader is the exe's).
 fn parameter_word(e: &mut Engine, w: &[u32]) -> Option<u32> {
     let (line, buf, params, index) = (word(w, 0), word(w, 1), word(w, 2), word(w, 3));
+    if e.mem.u32(line + ln::OPCODE) < crate::args::FIRST_EXTENDER_OPCODE {
+        return None;
+    }
     match compiler::handle_parameter_parenthesis(e, line, buf, params, index) {
         compiler::Paren::NoParam => None,
         compiler::Paren::Success => Some(1),

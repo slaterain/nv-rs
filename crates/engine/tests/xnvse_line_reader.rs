@@ -114,11 +114,13 @@ fn one_blank_per_run(text: &[u8]) -> Vec<u8> {
     out
 }
 
-const SCRIPTS: [&[u8]; 4] = [
+const SCRIPTS: [&[u8]; 6] = [
     b"scn VMS01Script\r\n\r\nshort DoOnce\r\nfloat\tfTimer\r\nref\t\trTarget\r\n\r\nbegin GameMode\r\n\r\n\tif DoOnce == 0\r\n\t\tset fTimer to fTimer + GetSecondsPassed ; count up\r\n\t\tif fTimer >= 5\r\n\t\t\tplayer.additem Caps001 10\r\n\t\t\tShowMessage VMS01Msg\r\n\t\t\tset DoOnce to 1\r\n\t\tendif\r\n\tendif\r\n\r\nend\r\n\r\nbegin OnActivate\r\n\tif IsActionRef player == 1\r\n\t\tActivate\r\n\tendif\r\nend\r\n",
     b"ScriptName NoLineEnd\r\n; only notes here\r\n;\r\n   ; and here\r\nshort  x\r\nbegin  OnLoad\r\n  set x   to  x + 1\r\nend",
     b"scn Strings\r\nbegin GameMode\r\n\tMessageBoxEx \"Two  spaces  kept\"\r\n\tPrintToConsole \"a\tb\"\r\n\tif 1 ; x\r\n\tendif ;\r\nend\r\n\r\n\r\n",
     b"scn Q\r\n\r\n\r\nbegin\tMenuMode 1007\r\n\tset x to GetGameSetting fJumpHeightMin\r\n\t\r\n \t \r\nend\r\n",
+    b"scn Paren\r\nshort a\r\nshort b\r\nfloat f\r\nbegin GameMode\r\n\tif (GetDead == 0) && (IsInCombat == 1)\r\n\t\tset f to ((a + b) * 2)\r\n\tendif\r\n\tif ((a == 1) || (b == 2)) && (f > 0)\r\n\t\tset a to (b)\r\n\tendif\r\nend\r\n",
+    b"scn ParenRuns\r\nbegin OnLoad\r\n\tset  f  to  ( ( a + 1 )  *  ( b - 1 ) ) ; nested, blank runs\r\nend",
 ];
 
 /// Each script read by both readers: the same lines, numbers and text (blank runs aside), the

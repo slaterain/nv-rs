@@ -289,6 +289,7 @@ fn the_assignment_shorthand_at_its_edges() {
         ("_x1 = 2", Some("let _x1 :=  2")),
         (".x = 5", None),
         ("int x = 5", Some("let int x :=  5")),
+        ("int\tx = 5", Some("let int x :=  5")),
         ("Int x = 5", Some("let int x :=  5")),
         ("reference r = player", Some("let reference r :=  player")),
         ("int  x = 5", Some("let int x :=  5")),
@@ -461,5 +462,108 @@ fn compile_errors_reach_nvse_log() {
     assert_eq!(
         LOG.with(|l| l.borrow().clone()),
         b"Error on line 1\r\n\r\nMismatched parenthesis\r\n"
+    );
+}
+
+// ---- the review round (REVIEW-792): nested parentheses, the seam's glue, the macro room ----
+
+/// Nested and repeated parentheses: `if ((a) && (b))` is one line; a group held over three line
+/// feeds is one line and the next is numbered after them; a lambda whose body has `if (x)` on its
+/// own line is one line up to its `end)`.
+#[test]
+fn nested_parentheses_through_the_reader() {
+    let mut e = engine();
+    assert_eq!(
+        read_all(&mut e, b"if ((a) && (b))\nnext"),
+        lines(&[(1, "if ((a) && (b))"), (2, "next")])
+    );
+    assert_eq!(
+        read_all(&mut e, b"x ((a\n(b)\n)\nc)\nd"),
+        lines(&[(1, "x ((a\n(b)\n)\nc)"), (5, "d")])
+    );
+    assert_eq!(
+        read_all(
+            &mut e,
+            b"SetEventHandler \"OnHit\" (begin function {ref r}\nif (r)\nPrint \"hi\"\nendif\nend)\nnext"
+        ),
+        lines(&[
+            (
+                1,
+                "SetEventHandler \"OnHit\" (begin function {ref r}\nif (r)\nPrint \"hi\"\nendif\nend)"
+            ),
+            (6, "next"),
+        ])
+    );
+}
+
+/// A parameter list of one float parameter at `at` (xNVSE's `ParamInfo`: the name, the type, the
+/// optional flag).
+fn one_float_parameter(e: &mut Engine, at: u32) -> u32 {
+    e.mem.write(at + 0x40, b"value\0");
+    e.mem.set_u32(at, at + 0x40);
+    e.mem.set_u32(at + 4, 2);
+    e.mem.set_u32(at + 8, 0);
+    at
+}
+
+/// `StandardCompile`'s seam as the translation asks it (words: the line, the script buffer, the
+/// parameters, the index): for an extender's command (`0x1400` up) a `(` compiles the expression
+/// (1, `0xFFFF` and the expression in the output), an unclosed one is an error (0), a plain word
+/// is the game's (none); for the game's own commands nothing is answered.
+#[test]
+fn the_parameter_seam_answers() {
+    let mut e = engine();
+    install(&mut e);
+    let params = one_float_parameter(&mut e, TEXT_AT + 0x2000);
+    let ask = |e: &mut Engine, opcode: u32, text: &str| {
+        e.mem.write(LINE, &[0; ln::STRUCT as usize]);
+        e.mem.set_u32(LINE + ln::NUMBER, 3);
+        e.mem.write(LINE + ln::TEXT, text.as_bytes());
+        e.mem.set_u32(LINE + ln::TEXT_LEN, text.len() as u32);
+        e.mem.set_u32(LINE + ln::OPCODE, opcode);
+        let answer = e.site(PARAMETER_WORD.addr(), &[LINE, BUF, params, 0]);
+        let len = e.mem.u32(LINE + ln::DATA_LEN).min(ln::SIZE);
+        (answer, e.mem.bytes(LINE + ln::DATA, len))
+    };
+    let (answer, bytes) = ask(&mut e, 0x2200, "(1 + 2)");
+    assert_eq!(answer, Some(1), "{:?}", printed());
+    assert_eq!(&bytes[..2], &[0xff, 0xff], "the expression's mark");
+    assert!(bytes.len() > 4);
+    assert_eq!(ask(&mut e, 0x2200, "5"), (None, vec![]));
+    printed();
+    assert_eq!(ask(&mut e, 0x2200, "(1 + 2").0, Some(0));
+    assert_eq!(printed(), vec!["Error line 3\n\nMismatched brackets."]);
+    assert_eq!(
+        ask(&mut e, 0x1004, "(1 + 2)"),
+        (None, vec![]),
+        "a game command's"
+    );
+    assert_eq!(
+        ask(&mut e, 0x13ff, "(1 + 2)"),
+        (None, vec![]),
+        "the last game opcode"
+    );
+    assert_eq!(ask(&mut e, 0x1400, "(1 + 2)").0, Some(1), "the first extender opcode");
+}
+
+/// The shorthand's room: a `let` of 511 bytes fits the line (its length 511); one of 512 is
+/// refused (the port's own difference: xNVSE's `strcpy_s` would end the game there).
+#[test]
+fn the_shorthand_room_at_511_and_512() {
+    let mut e = engine();
+    let line_of = |ones: usize| {
+        let mut t = b"x = ".to_vec();
+        t.extend(std::iter::repeat_n(b'1', ones));
+        t
+    };
+    let read = read_all(&mut e, &line_of(501));
+    assert_eq!(read.len(), 1);
+    assert_eq!(read[0].1.len(), 511);
+    assert_eq!(e.mem.u32(LINE + ln::TEXT_LEN), 511);
+    printed();
+    assert_eq!(read_all(&mut e, &line_of(502)), lines(&[]));
+    assert_eq!(
+        printed(),
+        vec!["Line length limit reached, could not translate macro."]
     );
 }
