@@ -22,9 +22,9 @@ use crate::Nvse;
 use engine_core::prelude::*;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-/// `FormHeap_Allocate`, `Script`'s constructor and size, `CopyVarList`, `CopyRefList`,
-/// `DataHandler::DisableAssignFormIDs`, `GetNextFreeFormID`, `LookupFormByID`, and
-/// `ScriptEventList`'s constructor and size.
+/// `FormHeap_Allocate`, `Script`'s constructor and size, `CopyVarList` and `CopyRefList` (three
+/// words each: [`new_script`]), `DataHandler::DisableAssignFormIDs`, `GetNextFreeFormID`,
+/// `LookupFormByID`, and `ScriptEventList`'s constructor and size.
 const FORM_HEAP_ALLOCATE: u32 = 0x0040_1000;
 const SCRIPT_CONSTRUCTOR: u32 = 0x005a_a0f0;
 const SCRIPT_SIZE: u32 = 0x54;
@@ -170,8 +170,13 @@ pub(crate) fn new_script(e: &mut Engine, data: u32, len: u32, parent: u32) -> u3
     e.call(DISABLE_ASSIGN_FORM_IDS, &args![handler, 0u32]);
     e.mem.set_u32(lambda + 0x30, data);
     e.mem.set_u32(lambda + 0x20, len);
-    e.call(COPY_VAR_LIST, &args![parent + 0x4c, lambda + 0x4c]);
-    e.call(COPY_REF_LIST, &args![parent + 0x44, lambda + 0x44]);
+    // xNVSE calls the two copies with two arguments, which the exe's cdecl code takes. The
+    // translations take the three words the exe's own callers push (`005aa4b2`, `005ab00b`:
+    // source list, destination list, destination script; `ADD ESP,0xC`), the third unread: two
+    // stopped the game at the first lambda made (player report, an inline function given to
+    // `ar_ForEach`).
+    e.call(COPY_VAR_LIST, &args![parent + 0x4c, lambda + 0x4c, lambda]);
+    e.call(COPY_REF_LIST, &args![parent + 0x44, lambda + 0x44, lambda]);
     for at in [0x1c, 0x24, 0x18] {
         let v = e.mem.u32(parent + at);
         e.mem.set_u32(lambda + at, v);
