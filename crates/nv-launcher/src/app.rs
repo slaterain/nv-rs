@@ -1265,6 +1265,8 @@ mod tests {
     fn escape_takes_back_or_no_else_the_last_entry() {
         let e = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(back_entry(&e(&["Yes", "No"])), Some(1));
+        // No is taken wherever it stands (not only as the last entry).
+        assert_eq!(back_entry(&e(&["No", "Yes"])), Some(0));
         assert_eq!(back_entry(&e(&["Back", "Exit"])), Some(0));
         assert_eq!(back_entry(&e(&["Open the logs folder", "Back"])), Some(1));
         assert_eq!(back_entry(&e(&["Play", "Exit"])), Some(1));
