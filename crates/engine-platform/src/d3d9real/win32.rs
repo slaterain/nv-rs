@@ -81,9 +81,9 @@ extern "system" fn window_procedure(
         // client area there pulled the cursor below the title bar, the move loop followed it,
         // and the window slid down the screen (playtest, 2026-10-30). The rule for both mice is
         // `input::cursor_action`. An activation after a deactivation also goes to the game's
-        // window procedure (`activated`).
+        // window procedure (`window_activated`).
         WM_ACTIVATE if wparam.0 & 0xffff != 0 => {
-            activated(wparam.0 as u32);
+            window_activated(wparam.0 as u32);
             if wparam.0 & 0xffff == WA_ACTIVE as usize {
                 follow(window, input::CursorEvent::Activated);
             }
@@ -102,7 +102,7 @@ extern "system" fn window_procedure(
         }
         // Losing the focus lets go of everything this window held.
         WM_ACTIVATE => {
-            deactivated();
+            window_deactivated();
             release_input();
         }
         WM_KILLFOCUS => release_input(),
@@ -126,14 +126,14 @@ fn release_input() {
 static WINDOW_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Whether the game's window was deactivated since it was made: from then on each activation goes
-/// to the game's window procedure too ([`activated`]).
+/// to the game's window procedure too ([`window_activated`]).
 static DEACTIVATED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// `WM_ACTIVATE` with an active state (`wparam` as Windows gives it): the window is active, and an
 /// activation that follows a deactivation is kept for the game's procedure
 /// (`input::reactivated`), which makes the game's mouse exclusive again (`00a23c00`). The first,
 /// when the window is made, is not.
-fn activated(wparam: u32) {
+fn window_activated(wparam: u32) {
     use std::sync::atomic::Ordering::Relaxed;
     WINDOW_ACTIVE.store(true, Relaxed);
     if DEACTIVATED.load(Relaxed) {
@@ -142,7 +142,7 @@ fn activated(wparam: u32) {
 }
 
 /// `WM_ACTIVATE` with `WA_INACTIVE`: another window became the active one.
-fn deactivated() {
+fn window_deactivated() {
     use std::sync::atomic::Ordering::Relaxed;
     if WINDOW_ACTIVE.swap(false, Relaxed) {
         DEACTIVATED.store(true, Relaxed);
