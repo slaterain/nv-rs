@@ -886,6 +886,10 @@ mod tests {
             !fits_screen(frame(1280, 720), (1280.0, 1080.0)),
             "too wide only"
         );
+        assert!(
+            !fits_screen(frame(1200, 780), (1280.0, 800.0)),
+            "too tall only"
+        );
         assert_eq!(
             too_large_line((1296, 839), (1280.0, 800.0)),
             "the game's window: 1296x839 with its frame does not fit the screen (1280x800 in the \
