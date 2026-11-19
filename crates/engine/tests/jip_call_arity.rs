@@ -315,12 +315,16 @@ fn sites(root: &Path) -> (Vec<Site>, Vec<String>) {
 /// The callees with a variable argument list (`cdecl`, `...`), and the words they always take: a call
 /// passes at least those (the rest follow the format or the entry point's tables; the sweep checked
 /// them by hand).
-const VARIADIC: [(u32, usize); 2] = [
+const VARIADIC: [(u32, usize); 3] = [
     // `BGSEntryPoint::HandleEntryPoint`: the entry point and the actor, then the filters and the
     // function's arguments.
     (0x005e_58f0, 2),
     // The console's formatted print: the format, then its words.
     (0x0070_3c00, 1),
+    // `ShowMessageBox`: the text, callback and options (nine words, the first button among them),
+    // then the other buttons and the closing 0 (its entry asserts the nine: xNVSE's
+    // `DisplayMessage` passes ten, `MessageBoxEx` nineteen).
+    (0x0070_3e80, 9),
 ];
 
 thread_local! {
