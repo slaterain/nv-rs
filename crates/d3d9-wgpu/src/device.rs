@@ -736,6 +736,29 @@ const BLOCK: u64 = wgsl::REGS_SIZE.div_ceil(256) * 256;
 /// The ring of uniform blocks and `DrawPrimitiveUP` vertices sent with each batch.
 const RING: u64 = 32 << 20;
 const UP_RING: u64 = 8 << 20;
+
+/// The register ring's room: [`RING`], or less for a test ([`ring_room_for_tests`]).
+fn ring_room() -> u64 {
+    match RING_ROOM_FOR_TESTS.load(Ordering::Relaxed) {
+        0 => RING,
+        n => n.min(RING),
+    }
+}
+
+/// Tests only: the register ring's room in bytes (0: [`RING`]).
+static RING_ROOM_FOR_TESTS: AtomicU64 = AtomicU64::new(0);
+
+/// Tests only: [`RING_ROOM_FOR_TESTS`] (0: the whole ring).
+#[doc(hidden)]
+pub fn ring_room_for_tests(bytes: u64) {
+    RING_ROOM_FOR_TESTS.store(bytes, Ordering::Relaxed);
+}
+
+/// The room one stage's register block takes in the ring, at most (tests).
+#[doc(hidden)]
+pub fn register_block_for_tests() -> u64 {
+    BLOCK
+}
 /// The upload stage: buffer uploads into buffers the open batch draws from, copied in among the
 /// batch's commands ([`Device::upload_buffer`]).
 const STAGE: u64 = 8 << 20;
@@ -775,6 +798,8 @@ pub struct Device {
     /// cleared counts as clears).
     timed_pass: Option<(u32, bool)>,
     pass_draws: u32,
+    /// Batches sent because the register ring was full ([`Device::make_ring_room`]).
+    ring_sends: u64,
     /// Passes begun and commands recorded straight into the open encoder ([`Device::encoder`]).
     encoder_uses: u32,
     /// The open batch's uses, its earlier encoders' too ([`Device::bound_batch`]).
@@ -1538,6 +1563,7 @@ impl Device {
             gpu_times: None,
             timed_pass: None,
             pass_draws: 0,
+            ring_sends: 0,
             encoder_uses: 0,
             batch_uses: 0,
             submits: Arc::default(),
@@ -4090,6 +4116,19 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         }
     }
 
+    /// Room in the register ring for a draw's two blocks: the batch is sent when there is not.
+    fn make_ring_room(&mut self) {
+        if self.ring.len() as u64 + 2 * BLOCK > ring_room() {
+            self.ring_sends += 1;
+            self.flush();
+        }
+    }
+
+    /// How many batches a full register ring has sent (tests).
+    pub fn ring_sends(&self) -> u64 {
+        self.ring_sends
+    }
+
     /// The uniform blocks of the next draw; `centre`: the vertex shaders' half-pixel move in clip
     /// space per unit of `w` (`1 / width`, `-1 / height` of the draw's viewport); `fregs`: the
     /// float constants the vertex and pixel shader read ([`Shader::fregs`]). Each stage's block is
@@ -4097,9 +4136,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// ones it carries), and carries only the constants up to the highest its shader reads: the
     /// bytes a shader reads are the same as with whole blocks.
     fn write_blocks(&mut self, centre: [f32; 2], fregs: [u32; 2]) {
-        if self.ring.len() as u64 + 2 * BLOCK > RING {
-            self.flush();
-        }
+        self.make_ring_room();
         let fresh = self.ring.is_empty();
         let vs_due = fresh
             || self.st.dirty[0]
@@ -4631,7 +4668,13 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             .count();
         self.stage_group(0, &group_key[vertex..], &samplers[vertex..], &copies);
         self.stage_group(1, &group_key[..vertex], &samplers[..vertex], &copies);
-        // Vertices from DrawPrimitiveUP go into the batch's ring.
+        // Vertices from DrawPrimitiveUP go into the batch's ring. The register ring's room is made
+        // first: a send for it after the bytes are placed (in [`Device::write_blocks`]) would hand
+        // them to the batch before the draw's own, and the draw would read another draw's vertices
+        // at their place.
+        if up.is_some() {
+            self.make_ring_room();
+        }
         let up_offset = if let Some((bytes, _)) = up {
             if self.up.len() + bytes.len() > UP_RING as usize {
                 self.flush();
