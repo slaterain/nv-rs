@@ -67,7 +67,6 @@ const OPERATOR_DELETE: u32 = 0x0040_1030;
 /// The expiry queue (`NiTMap<__int64,int>`): base constructor, own vtable, insert, flush, destructor.
 const EXPIRY_QUEUE_BASE_CONSTRUCT: u32 = 0x0084_b750;
 const EXPIRY_QUEUE_VTABLE: u32 = 0x0107_f494;
-const EXPIRY_QUEUE_INSERT: u32 = 0x0084_b7c0;
 const EXPIRY_QUEUE_FLUSH: u32 = 0x0043_8af0;
 const EXPIRY_QUEUE_DESTRUCT: u32 = 0x0084_b9c0;
 const SAVE_GAME_WARNING: u32 = 0x0084_5cc0;
@@ -208,7 +207,7 @@ fn body(e: &mut Engine, this: u32, queue: u32, frame: u32) {
             let (low, high) = expiry_key(e, area, x, y);
             typed_call!(
                 super::FAMILY,
-                EXPIRY_QUEUE_INSERT,
+                0x0084_b7c0,
                 queue_insert(e, Ptr::new(queue), low, high, detach_time)
             );
             expired_cells.insert((low, high), detach_time);
@@ -449,7 +448,7 @@ pub fn queue_insert(e: &mut Engine, this: Ptr, key_low: u32, key_high: u32, valu
     let index = if crate::slot_target(e, me, SLOT_HASH) == QUEUE_HASH {
         typed_call!(
             super::FAMILY,
-            QUEUE_HASH,
+            0x0084_b930,
             queue_hash(e, this, key_low, key_high)
         )
     } else {
@@ -464,7 +463,7 @@ pub fn queue_insert(e: &mut Engine, this: Ptr, key_low: u32, key_high: u32, valu
         let equal = if direct_equal {
             typed_call!(
                 super::FAMILY,
-                QUEUE_KEYS_EQUAL,
+                0x0084_b950,
                 queue_keys_equal(e, this, key_low, key_high, item_low, item_high)
             )
         } else {
