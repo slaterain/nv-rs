@@ -9,11 +9,18 @@
 //!   one start place, a runaway pattern such as `(a*)*b` on a long text): nothing catches it and the
 //!   game stops. With the row the command answers as for no match: `sv_RegexMatch` 0,
 //!   `sv_RegexSearch` the matches found before it, `sv_RegexReplace` an empty string;
-//! - `sv_RegexSearch` starts its next search where the last match ended, so a match of the empty
-//!   text (`a*` where no `a` is) is found again and again: the loop never ends and the array grows
-//!   until the game runs out of memory. With the row, after an empty match the next search starts
-//!   one byte later (as JavaScript's global search does), and one at the end of the text is the
-//!   last.
+//! - `sv_RegexSearch` searches the text after each match as a new text, starting where the match
+//!   ended, so a match of the empty text at the start of the text searched (`a*` on `b`, `$` once
+//!   the text is used up) is found there again and again: the loop never ends and the array grows
+//!   until the game runs out of memory. (An empty match further in moves the start on and is
+//!   JIP's answer: `\B` on `abc` gives two.) With the row, the next search after that empty match
+//!   starts one byte later (as JavaScript's global search does), the array takes it once (not a
+//!   second time when it is the place an empty match further in already gave), and at the end of
+//!   the text the search ends.
+//!
+//! MSVC's runaway limit is per start place (each search tries every place of its text, each with
+//! its own 10,000,000 steps), so with the row a slow pattern on a long text can still hold the game
+//! for a long time: only a start place that alone passes the limit stops the command.
 //!
 //! Off (vanilla) the port stops the game in those places with a message, as the original does.
 //!
@@ -121,6 +128,9 @@ fn sv_regex_search(e: &mut Engine, w: &[u32]) -> Ret {
         }
     };
     let mut pos = 0;
+    // Where the last empty match the array took is (from the text's start): with the row, the
+    // same place found again at the start of the next text is not taken twice.
+    let mut last_empty = None;
     loop {
         let rest = &text[pos..];
         let (start, end) = match ecma_regex::search(&re, rest, 0, 0) {
@@ -131,22 +141,33 @@ fn sv_regex_search(e: &mut Engine, w: &[u32]) -> Ret {
                 break;
             }
         };
-        append_element(e, array, &Element::Str(rest[start..end].to_vec()));
-        // JIP's next start: the text's end less the suffix's length, the match's end.
-        pos += end;
-        if start == end {
+        if end == 0 {
+            // An empty match at the start of the text searched: JIP's next text starts at the
+            // match's end, the same place, so the same search finds it again for ever (an empty
+            // match further in moves the start on, as below, and ends).
             if !fix_on(e, LIST_GUARD) {
                 panic!(
-                    "sv_RegexSearch: an empty match is found again at the same place for ever \
-                     (JIP's loop never ends): the port stops here (NV_NVSE_LIST_GUARD searches \
-                     on one byte later)"
+                    "sv_RegexSearch: an empty match at the start of the text searched is found \
+                     again there for ever (JIP's loop never ends): the port stops here \
+                     (NV_NVSE_LIST_GUARD searches on one byte later)"
                 );
+            }
+            if last_empty != Some(pos) {
+                append_element(e, array, &Element::Str(Vec::new()));
+                last_empty = Some(pos);
             }
             if pos == text.len() {
                 break;
             }
             pos += 1;
+            continue;
         }
+        append_element(e, array, &Element::Str(rest[start..end].to_vec()));
+        if start == end {
+            last_empty = Some(pos + end);
+        }
+        // JIP's next start: the text's end less the suffix's length, the match's end.
+        pos += end;
     }
     handled(true)
 }

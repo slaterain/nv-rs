@@ -100,6 +100,10 @@ try {
     foreach ($file in @('LICENSE', 'LEGAL.md')) { Copy-Item -LiteralPath (Join-Path $root $file) -Destination $stage }
     Copy-Item -LiteralPath (Join-Path $root 'crates/vorbis/LICENSE-libvorbis') -Destination (Join-Path $stage 'licenses/LICENSE-libvorbis')
     Copy-Item -LiteralPath (Join-Path $root 'crates/nvse/LICENSE-msvc-stl') -Destination (Join-Path $stage 'licenses/LICENSE-msvc-stl')
+    # JIP's notice and its regular expressions' STL licence, under the names distribution/notices.txt
+    # gives them in the Linux and macOS packages.
+    Copy-Item -LiteralPath (Join-Path $root 'crates/jip/NOTICE') -Destination (Join-Path $stage 'licenses/NOTICE-jip')
+    Copy-Item -LiteralPath (Join-Path $root 'crates/jip/LICENSE-msvc-stl') -Destination (Join-Path $stage 'licenses/LICENSE-msvc-stl-jip')
     # Text files for Notepad.
     foreach ($file in @('READ ME.txt', 'mods/READ ME.txt')) {
         $path = Join-Path $stage $file

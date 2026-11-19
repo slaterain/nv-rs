@@ -1920,12 +1920,15 @@ Microsoft C++ Standard Library, <regex> (Microsoft)
   License: Apache-2.0 WITH LLVM-exception
   Repository: https://github.com/microsoft/STL
   Used for: crates/nvse (src/commands/string.rs, regex_check), the check behind xNVSE's ValidateRegex. The STL's regex parser (the _Parser of <regex>, as MSVC 14.50 compiles it into xNVSE 6.4.9) was translated to Rust and reduced to the parse, so a pattern is refused with the same error as in xNVSE; nothing is matched.
-  Bundled license file:
+  Used for: crates/jip (src/ecma_regex.rs), the regular expressions of JIP LN NVSE's sv_RegexMatch, sv_RegexSearch and sv_RegexReplace. The STL's <regex> (the _Parser, _Builder and _Matcher classes, _Regex_search2, _Regex_replace1 and _Format_default, as MSVC 14.44 compiles them into JIP LN NVSE 57.30's jip_nvse.dll) was translated to Rust, so a pattern matches, searches and replaces as it does with JIP.
+  Bundled license files:
     LICENSE-msvc-stl
+    LICENSE-msvc-stl-jip
   Notice:
     Copyright (c) Microsoft Corporation.
     SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
     Modified: translated to Rust, reduced to the parse, made to answer as MSVC 14.50.
+    Modified (crates/jip, src/ecma_regex.rs): translated to Rust, only the char and ECMAScript paths kept, made to answer as JIP 57.30's jip_nvse.dll does (its older \D \S \W and no limit on the number of groups), with a limit of its own of 10,000 nested groups.
 
 DXVK v3.1.1 (Philip Rebohle and contributors)
   License: zlib/libpng

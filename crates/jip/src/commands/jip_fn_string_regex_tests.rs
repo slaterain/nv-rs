@@ -114,8 +114,8 @@ fn regex_search_lists_the_matches_in_turn() {
     );
 }
 
-/// With the row an empty match no longer loops for ever: the next search starts one byte later,
-/// and an empty match at the end is the last.
+/// With the row an empty match at the start of the text searched no longer loops for ever: the
+/// next search starts one byte later, and at the end of the text the search ends.
 #[test]
 fn regex_search_moves_on_after_an_empty_match() {
     let mut e = setup(true);
@@ -130,6 +130,39 @@ fn regex_search_moves_on_after_an_empty_match() {
 fn regex_search_stops_on_an_empty_match_without_the_row() {
     let mut e = setup(false);
     found(&mut e, b"baa", b"a*");
+}
+
+/// An empty match further in than the start of the text searched moves the next text's start on
+/// (JIP's `pEnd - suffix`): JIP's answer, the row on or off, with no stop.
+#[test]
+fn regex_search_keeps_jips_answer_for_an_empty_match_further_in() {
+    for guard in [true, false] {
+        let mut e = setup(guard);
+        assert_eq!(found(&mut e, b"abc", b"\\B"), strings(&[b"", b""]));
+        assert_eq!(found(&mut e, b"xc", b"(?!^)|c+"), strings(&[b"", b"c"]));
+        assert_eq!(found(&mut e, b"FooBar", b"(?!^)(?=[A-Z])"), strings(&[b""]));
+        assert_eq!(
+            found(&mut e, b"FooBBar", b"(?!^)(?=[A-Z])"),
+            strings(&[b"", b""])
+        );
+    }
+}
+
+/// With the row, an empty match further in that the next text finds again at its start (where
+/// JIP loops for ever) is in the array once. (`$` in a group: a format string starting with `$`
+/// names a string variable.)
+#[test]
+fn regex_search_takes_a_repeated_empty_place_once() {
+    let mut e = setup(true);
+    assert_eq!(found(&mut e, b"abc", b"(?:$)"), strings(&[b""]));
+    assert_eq!(found(&mut e, b"abab", b"(?=b)"), strings(&[b"", b""]));
+}
+
+#[test]
+#[should_panic(expected = "for ever")]
+fn regex_search_stops_on_a_repeated_empty_place_without_the_row() {
+    let mut e = setup(false);
+    found(&mut e, b"abab", b"(?=b)");
 }
 
 /// A runaway pattern (past MSVC's 10,000,000 steps from one place) ends the list there.

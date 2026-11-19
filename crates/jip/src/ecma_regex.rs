@@ -9,7 +9,9 @@
 //! `_Parser`, `_Builder`, `_Matcher`, `_Regex_search2`, `_Regex_replace1` and `_Format_default`
 //! templates), which is licensed under the Apache License v2.0 with LLVM Exception
 //! (Copyright (c) Microsoft Corporation; SPDX-License-Identifier: Apache-2.0 WITH
-//! LLVM-exception). Each part was compared with JIP 57.30's `jip_nvse.dll` (its `<regex>`
+//! LLVM-exception). Modified: translated to Rust, only the `char` and ECMAScript paths kept, made
+//! to answer as JIP's DLL does (the two differences below), with a limit of its own of 10,000
+//! nested groups. Each part was compared with JIP 57.30's `jip_nvse.dll` (its `<regex>`
 //! instantiations, linker 14.37) and is the same code there: the match loop, the repeat and
 //! simple-loop steps, the alternation, the word boundary and its table, the bracket test, the
 //! collating lookup, the better-match rule, the skip ahead of the search, the search driver, the
@@ -1364,12 +1366,13 @@ impl<'r, 't> Matcher<'r, 't> {
             matched0 = true;
         }
         loop {
+            // MSVC's `_Ix++ < _Max`, tested before the count goes up (the count is not read after
+            // the loop, and `{2147483647}` would take it past `i32::MAX`).
             if max != -1 {
-                let more = ix < max;
-                ix += 1;
-                if !more {
+                if ix >= max {
                     break;
                 }
+                ix += 1;
             }
             self.tgt.cur = saved_pos;
             self.tgt.grp_valid.clone_from(&st.grp_valid);

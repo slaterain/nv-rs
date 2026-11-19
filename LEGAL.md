@@ -119,6 +119,13 @@ terms, whose notice must be kept:
   licence: [crates/nvse/LICENSE-mt19937](crates/nvse/LICENSE-mt19937)).
 - `crates/jip` translates parts of JIP LN NVSE 57.30 (jazzisparis; GPL-3.0); see
   [crates/jip/NOTICE](crates/jip/NOTICE).
+- The regular expression engine of JIP's `sv_RegexMatch`, `sv_RegexSearch` and
+  `sv_RegexReplace`, `crates/jip/src/ecma_regex.rs`, is derived from the Microsoft C++ Standard
+  Library's `<regex>` (MSVC 14.44, as compiled into JIP LN NVSE 57.30's `jip_nvse.dll`),
+  translated to Rust and modified to keep only the `char` and ECMAScript paths and to answer as
+  that DLL does (Microsoft Corporation, Apache-2.0 WITH LLVM-exception). The copyright line,
+  licence and changes are in [crates/jip/LICENSE-msvc-stl](crates/jip/LICENSE-msvc-stl), and
+  the module says so in its first lines.
 - `crates/uio` translates UI Organizer 2.30 (Copyright (c) 2020 Jef, MIT licence); the notice is
   in [crates/uio/NOTICE](crates/uio/NOTICE).
 - `crates/mcm` rebuilds the NVSE plugin of The Mod Configuration Menu 1.5 (Pelinor) with its

@@ -374,6 +374,10 @@ fn quantifiers_count_as_msvc() {
     // million required repeats of an empty back-reference take one step, not twenty million.
     assert!(matches("()\\1*", b""));
     assert!(matches("()\\1{20000000}", b""));
+    // The largest count: the simple loop's count stops at it (it is not taken past `i32::MAX`,
+    // which a debug build would refuse).
+    assert!(matches("(?:){2147483647}", b""));
+    assert_eq!(find("(?:){2147483647}", b"abc"), Some((0, 0)));
 }
 
 /// A greedy loop of one simple part goes on after a match and keeps the longest overall match
