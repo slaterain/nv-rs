@@ -3684,6 +3684,74 @@ fn cuts_between_finished_encoders_keep_multisampled_colour_and_depth() {
     }
 }
 
+/// A `DrawPrimitiveUP` draw that lands where the register ring is full draws its own vertices: the
+/// batch is sent for the ring's room before the draw's bytes are placed, not after (which handed
+/// them to the batch before and left the draw reading another draw's bytes at their place in the
+/// next: stray triangles). The ring is given room for one draw's blocks, so every UP draw after a
+/// batch's first lands at a full ring: red over the whole target, then green on the left, then blue
+/// on the right in more bytes than the green draw's place had after the red's.
+#[test]
+fn an_up_draw_at_a_full_register_ring_draws_its_own_vertices() {
+    struct Room;
+    impl Drop for Room {
+        fn drop(&mut self) {
+            d3d9_wgpu::device::ring_room_for_tests(0);
+        }
+    }
+    let Some(mut g) = Gpu::new(4, 1) else {
+        return;
+    };
+    let _room = Room;
+    d3d9_wgpu::device::ring_room_for_tests(2 * d3d9_wgpu::device::register_block_for_tests() + 1);
+    let up = |g: &mut Gpu, corners: &[[f32; 2]]| {
+        let v: Vec<f32> = corners
+            .iter()
+            .flat_map(|&[x, y]| [x, y, 0.5, 1.0])
+            .collect();
+        g.run(Cmd::DrawPrimitiveUp {
+            device: DEVICE,
+            kind: 4,
+            count: corners.len() as u32 / 3,
+            stride: 16,
+            vertices: Data::Bytes(&floats(&v)),
+        });
+    };
+    // A rectangle from x0 to x1 over the whole height, as two triangles.
+    let band = |x0: f32, x1: f32| {
+        [
+            [x0, -3.0],
+            [x0, 3.0],
+            [x1, -3.0],
+            [x1, -3.0],
+            [x0, 3.0],
+            [x1, 3.0],
+        ]
+    };
+    g.clear(3, 0, 1.0);
+    let sends = g.b.device().expect("the device").ring_sends();
+    g.colour([1.0, 0.0, 0.0, 1.0]);
+    up(&mut g, &[[-3.0, -3.0], [-3.0, 9.0], [9.0, -3.0]]);
+    g.colour([0.0, 1.0, 0.0, 1.0]);
+    up(&mut g, &band(-3.0, 0.1));
+    g.colour([0.0, 0.0, 1.0, 1.0]);
+    up(&mut g, &band(0.1, 3.0));
+    let px = g.pixels();
+    let d = g.b.device().expect("the device");
+    assert!(
+        d.ring_sends() >= sends + 2,
+        "the green and the blue draw landed at a full ring"
+    );
+    for row in 0..4 {
+        assert_eq!(px[row * 4], [0, 255, 0, 255], "row {row}: the left green");
+        assert_eq!(
+            px[row * 4 + 3],
+            [255, 0, 0, 255],
+            "row {row}: the right blue"
+        );
+    }
+    assert_eq!(d.wgpu_errors(), 0);
+}
+
 /// The vertex buffer of [`dynamic_state_scene`]: every shape in it once, uploaded before the
 /// first draw, so that no upload falls between the draws (an upload can end the render pass, and
 /// with it what the command buffer is known to have set). Each shape's first vertex.
