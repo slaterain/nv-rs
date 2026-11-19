@@ -51,6 +51,12 @@
 //!   game a text too long for the buffer fails the copy (`strcpy_s`) and the game ends: above
 //!   259 characters without JIP, above 515 with it. [`corner_message_text_size`] answers the
 //!   same buffer size for `MessageExAlt`.
+//! - **G55** (JIP's own, with `MessageBoxExAlt`; `WriteRelCall(0x7A9AEE, MaxMessageWidthHook)`,
+//!   `WriteRelCall(0x7A9C45, ..)`): while a `MessageBoxExAlt` box waits for its answer, the message
+//!   menu's `max_menu_width` (`MessageMenu::LoadNextMessage`, `007a92e0`: the room for the text and
+//!   the menu's widest) is 1200 instead of the menu file's value: a long message or long button
+//!   labels wrap at, and the box is capped at, 1200 instead of the menu file's maximum (the number
+//!   of buttons is unaffected). With JIP installed, the row on or off.
 //! - **G80** (no comment; `WriteRelJump(0x777123, RolloverWeaponHook)`): the HUD's crosshair
 //!   name of a weapon lying in the world (`HUDMainMenu::SetInfoForRef`, `00775a00`) gets a "+" at
 //!   its end when the weapon has a weapon mod on it (the reference's `ExtraWeaponModFlags`, kind
@@ -99,6 +105,12 @@ pub const TRAIT_DESCRIPTION: SiteSlot = SiteSlot::new(Owner::Jip, 0x007e_6f04);
 /// G17's seam: the tile menu destructor's clear of the menu's open byte (words: the tile, its
 /// menu; any answer skips the clear).
 pub const MENU_OPEN_BYTE: SiteSlot = SiteSlot::new(Owner::Jip, 0x00a1_f035);
+/// G55's seams: the message menu's two `max_menu_width` reads (an answer is the width's float
+/// bits, read in place of the menu file's value).
+pub const MAX_MESSAGE_WIDTH: [SiteSlot; 2] = [
+    SiteSlot::new(Owner::Jip, 0x007a_9aee),
+    SiteSlot::new(Owner::Jip, 0x007a_9c45),
+];
 /// G21's seam: the head of the activation choice walk (words: the list node; an answer of 1
 /// passes the node over).
 pub const ACTIVATION_TEXT: SiteSlot = SiteSlot::new(Owner::Jip, 0x007a_a80f);
@@ -201,14 +213,28 @@ pub const AREA: Area = Area {
     ],
     fix_wraps: &[LOAD_SCREEN_CANDIDATES.addr()],
     install_fixes,
-    jip_sites: &[],
+    jip_sites: &[MAX_MESSAGE_WIDTH[0].addr(), MAX_MESSAGE_WIDTH[1].addr()],
     jip_wraps: &[],
     install_jip,
 };
 
-/// JIP installed: the default message time's slot, before the threads start.
+/// JIP installed: the default message time's slot, before the threads start; G55.
 fn install_jip(e: &mut Engine) {
     e.ext_free::<DefaultMessageTime>();
+    for site in MAX_MESSAGE_WIDTH {
+        e.on_site(site, max_message_width);
+    }
+}
+
+/// G55's width (`kMaxWidth`, 1200.0).
+const MESSAGE_BOX_MAX_WIDTH: f32 = 1200.0;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: MaxMessageWidthHook (asm).
+/// G55: while any `MessageBoxExAlt` box waits (`s_messageBoxScripts` not empty), 1200 in place of
+/// the trait (the trait not read); else not answered (the game reads it).
+fn max_message_width(e: &mut Engine, _: &[u32]) -> Option<u32> {
+    (crate::commands::jip_fn_ui::message_box_scripts_pending(e) != 0)
+        .then_some(MESSAGE_BOX_MAX_WIDTH.to_bits())
 }
 
 fn install_fixes(e: &mut Engine) {

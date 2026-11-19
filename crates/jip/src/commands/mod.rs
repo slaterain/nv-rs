@@ -64,6 +64,7 @@ pub mod jip_fn_sound_playing;
 pub mod jip_fn_string;
 pub mod jip_fn_texture_set;
 pub mod jip_fn_ui;
+pub mod jip_fn_ui_menus;
 pub mod jip_fn_ui_nodes;
 pub mod jip_fn_utility;
 pub mod jip_fn_utility_patches;
@@ -237,6 +238,8 @@ pub const ALL: &[Handlers] = &[
     jip_fn_ui::AWAITING_H02,
     // `FireWeaponEx`, with its patch H01 (`game_patches::gw`).
     jip_fn_actor_p2::AWAITING_H01,
+    // `ShowQuantityMenu`, `CloseActiveMenu` (with their DoClick seam).
+    jip_fn_ui_menus::COMMANDS,
 ];
 
 /// How many of JIP's commands have a handler.
@@ -270,6 +273,7 @@ pub fn install(e: &mut Engine) {
     e.ext_free::<jip_fn_ui::HudCursor>();
     e.ext_free::<jip_fn_ui::ItemListRefresh>();
     jip_fn_ui::install(e);
+    jip_fn_ui_menus::install(e);
     jip_fn_misc_ref_insert::install(e);
     jip_fn_misc_ref_lines::install(e);
     jip_fn_actor_p2::install(e);
@@ -872,6 +876,8 @@ mod tests {
             "jip_fn_ui",
             // jip_fn_actor_p2::AWAITING_H01 (`FireWeaponEx`, with H01).
             "jip_fn_actor",
+            // jip_fn_ui_menus (ShowQuantityMenu, CloseActiveMenu).
+            "jip_fn_ui",
         ];
         assert_eq!(files.len(), ALL.len(), "one file per command list");
         let mut seen = std::collections::HashSet::new();

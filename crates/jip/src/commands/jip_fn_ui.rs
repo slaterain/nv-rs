@@ -10,18 +10,19 @@
 //! menu XML made into tiles through the built-in UI Organizer (`InjectUIComponent`); HUD messages
 //! queued with an icon and sound and the queue cleared, the system colours, the Pip-Boy light,
 //! a text's size in a font, the open menu's item list refreshed (`RefreshItemsList`), message
-//! boxes with a callback script (`MessageBoxExAlt`). 43 of the file's 64 commands (`ToggleHUDCursor`
-//! and `SetFontFile` built: [`AWAITING_H02`], [`AWAITING_G129`]); its four menu event commands are
-//! the core track's (`ui_hooks`).
+//! boxes with a callback script (`MessageBoxExAlt`). 43 of the file's 64 commands here
+//! (`ToggleHUDCursor` and `SetFontFile` built: [`AWAITING_H02`], [`AWAITING_G129`]), two more
+//! (`ShowQuantityMenu`, `CloseActiveMenu`) in `jip_fn_ui_menus.rs`; its four menu event commands
+//! are the core track's (`ui_hooks`).
 //!
 //! `ToggleHUDCursor` keeps JIP's HUD cursor mode, which `GetMenuMode` here reads and the HUD
 //! cursor patch (H02) uses to show and run the cursor over the HUD; it is registered with that
 //! patch (on its own it would disable the left button with no cursor to click). The item list refresh is also what JIP's
 //! `RemoveMe` patch (G60) asks for at the next main loop pass ([`request_item_list_refresh`]).
 //!
-//! `MessageBoxExAlt` keeps its boxes' scripts for the box width patch (G55), which lets a box be
-//! 1,200 wide while any waits: until G55 the box is narrower than JIP's (the game's own maximum),
-//! so a long text wraps more; nothing is cut off. `SetFontFile` shares JIP's font map with its
+//! `MessageBoxExAlt` keeps its boxes' scripts, counted before the box is shown, for the box width
+//! patch G55 (`game_patches::ga`): while any waits, a box's text wraps at and its width is capped
+//! at 1,200 instead of the menu file's maximum. `SetFontFile` shares JIP's font map with its
 //! font manager patch (G129), which registers it.
 //!
 //! What JIP's tile helpers do is translated here (`nvse/GameTiles.cpp`, `nvse/GameUI.cpp` (JIP
@@ -38,8 +39,6 @@
 //!   `EnableImprovedRecipeMenu`, `SuppressQuestMessages`, `InitItemFilter`, `SetItemFilter` (code bytes and jumps patched into
 //!   the exe), `ShowTextInputMenu`, `SetTextInputExtendedProps`, `SetTextInputString` (the text
 //!   input hooks, `TextInputClose`);
-//! - a routine of JIP's the game calls back: `ShowQuantityMenu` (its callback), and
-//!   `CloseActiveMenu`, which clears what it and `MessageBoxExAlt` keep;
 //! - 3D and drawing: `ProjectUITile` (a rendered texture), `SetCursorPos` (the cursor's scene
 //!   node); (`AttachUIXML` and `AttachUIComponent`, a tile's node under a reference's node, are
 //!   built in `jip_fn_ui_nodes.rs`);
