@@ -22,6 +22,7 @@ pub mod jip_fn_armor;
 pub mod jip_fn_aux_variable;
 pub mod jip_fn_body_part_data;
 pub mod jip_fn_ccc;
+pub mod jip_fn_ccc_hud;
 pub mod jip_fn_cell;
 pub mod jip_fn_class;
 pub mod jip_fn_climate;
@@ -66,6 +67,7 @@ pub mod jip_fn_string;
 pub mod jip_fn_texture_set;
 pub mod jip_fn_ui;
 pub mod jip_fn_ui_cursor;
+pub mod jip_fn_ui_menus;
 pub mod jip_fn_ui_nodes;
 pub mod jip_fn_utility;
 pub mod jip_fn_utility_patches;
@@ -231,6 +233,7 @@ pub const ALL: &[Handlers] = &[
     crate::game_patches::gc::formulas::COMMANDS,
     crate::game_patches::gx::COMMANDS,
     jip_fn_misc_ref_insert::COMMANDS,
+    jip_fn_ccc_hud::COMMANDS,
     // `InsertNode` and `AttachModel`, with their patches H08 and H10.
     jip_fn_misc_ref_insert::AWAITING_H08_H10,
     // `SynchronizePosition`, with its patch H13 (`game_patches::gh2`).
@@ -239,6 +242,8 @@ pub const ALL: &[Handlers] = &[
     jip_fn_ui::AWAITING_H02,
     // `FireWeaponEx`, with its patch H01 (`game_patches::gw`).
     jip_fn_actor_p2::AWAITING_H01,
+    // `ShowQuantityMenu`, `CloseActiveMenu` (with their DoClick seam).
+    jip_fn_ui_menus::COMMANDS,
     // `AttachLight`, `RemoveLight`.
     jip_fn_misc_ref_lights::COMMANDS,
     // `SetCursorPos`.
@@ -276,6 +281,7 @@ pub fn install(e: &mut Engine) {
     e.ext_free::<jip_fn_ui::HudCursor>();
     e.ext_free::<jip_fn_ui::ItemListRefresh>();
     jip_fn_ui::install(e);
+    jip_fn_ui_menus::install(e);
     jip_fn_misc_ref_insert::install(e);
     jip_fn_misc_ref_lines::install(e);
     jip_fn_actor_p2::install(e);
@@ -870,6 +876,8 @@ mod tests {
             "jip_fn_input",
             // jip_fn_misc_ref_insert (InsertNode, AttachModel, ModelHasBlock).
             "jip_fn_misc_ref",
+            // jip_fn_ccc_hud (CCCOnLoad and the commands that use what it finds).
+            "jip_fn_ccc",
             // jip_fn_misc_ref_insert::AWAITING_H08_H10 (with H08 and H10).
             "jip_fn_misc_ref",
             // jip_fn_misc_ref::AWAITING_H13 (`SynchronizePosition`, with H13).
@@ -878,6 +886,8 @@ mod tests {
             "jip_fn_ui",
             // jip_fn_actor_p2::AWAITING_H01 (`FireWeaponEx`, with H01).
             "jip_fn_actor",
+            // jip_fn_ui_menus (ShowQuantityMenu, CloseActiveMenu).
+            "jip_fn_ui",
             // jip_fn_misc_ref_lights (AttachLight, RemoveLight).
             "jip_fn_misc_ref",
             // jip_fn_ui_cursor (SetCursorPos).

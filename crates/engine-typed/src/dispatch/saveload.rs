@@ -67,7 +67,6 @@ const OPERATOR_DELETE: u32 = 0x0040_1030;
 /// The expiry queue (`NiTMap<__int64,int>`): base constructor, own vtable, insert, flush, destructor.
 const EXPIRY_QUEUE_BASE_CONSTRUCT: u32 = 0x0084_b750;
 const EXPIRY_QUEUE_VTABLE: u32 = 0x0107_f494;
-const EXPIRY_QUEUE_INSERT: u32 = 0x0084_b7c0;
 const EXPIRY_QUEUE_FLUSH: u32 = 0x0043_8af0;
 const EXPIRY_QUEUE_DESTRUCT: u32 = 0x0084_b9c0;
 const SAVE_GAME_WARNING: u32 = 0x0084_5cc0;
@@ -206,7 +205,11 @@ fn body(e: &mut Engine, this: u32, queue: u32, frame: u32) {
         if detach_time != 0 && now.wrapping_sub(detach_time) > e.call(EXPIRY_LIMIT, &args![]).u32()
         {
             let (low, high) = expiry_key(e, area, x, y);
-            e.call(EXPIRY_QUEUE_INSERT, &args![queue, low, high, detach_time]);
+            typed_call!(
+                super::FAMILY,
+                0x0084_b7c0,
+                queue_insert(e, Ptr::new(queue), low, high, detach_time)
+            );
             expired_cells.insert((low, high), detach_time);
             expired += 1;
         }
@@ -394,4 +397,94 @@ fn body(e: &mut Engine, this: u32, queue: u32, frame: u32) {
             ],
         );
     }
+}
+
+// The expiry queue's own functions (`NiTMap<__int64,int>`): its hash, its key compare and its
+// insert, so the clean-up's inserts walk their chain as Rust code (no virtual call a step). A queue
+// whose vtable holds other functions there is asked through them, as the exe asks.
+
+/// The queue's item: the next item at +0, the 64-bit key at +8 and +0xc, the value at +0x10.
+const ITEM_KEY_LOW: u32 = 0x08;
+const ITEM_KEY_HIGH: u32 = 0x0c;
+const ITEM_VALUE: u32 = 0x10;
+/// The map's bucket count, bucket array and item count.
+const MAP_SIZE: u32 = 0x04;
+const MAP_TABLE: u32 = 0x08;
+const MAP_COUNT: u32 = 0x0c;
+/// The queue's vtable slots: hash, key compare, set value, new item.
+const SLOT_HASH: u32 = 0x04;
+const SLOT_EQUAL: u32 = 0x08;
+const SLOT_SET_VALUE: u32 = 0x0c;
+const SLOT_NEW_ITEM: u32 = 0x14;
+const QUEUE_HASH: u32 = 0x0084_b930;
+const QUEUE_KEYS_EQUAL: u32 = 0x0084_b950;
+
+// Typed from 0084b930
+/// `NiTMapBase<...,__int64,int>::KeyToHashIndex` (Xbox PDB): the key's low word modulo the bucket
+/// count (the high word is not read).
+pub fn queue_hash(e: &mut Engine, this: Ptr, key_low: u32, _key_high: u32) -> u32 {
+    key_low % e.mem.u32(this.addr() + MAP_SIZE)
+}
+
+// Typed from 0084b950
+/// `NiTMapBase<...,__int64,int>::IsKeysEqual` (Xbox PDB): both words of the two keys are equal.
+pub fn queue_keys_equal(
+    _e: &mut Engine,
+    _this: Ptr,
+    low_a: u32,
+    high_a: u32,
+    low_b: u32,
+    high_b: u32,
+) -> bool {
+    low_a == low_b && high_a == high_b
+}
+
+// Typed from 0084b7c0
+/// `NiTMapBase<...,__int64,int>::SetAt` shape: an item with an equal key in the key's bucket gets
+/// the new value; otherwise a new item (slot +0x14) is filled (slot +0xc), put at the head of the
+/// bucket and counted.
+pub fn queue_insert(e: &mut Engine, this: Ptr, key_low: u32, key_high: u32, value: u32) {
+    let me = this.addr();
+    let index = if crate::slot_target(e, me, SLOT_HASH) == QUEUE_HASH {
+        typed_call!(
+            super::FAMILY,
+            0x0084_b930,
+            queue_hash(e, this, key_low, key_high)
+        )
+    } else {
+        e.vcall(me, SLOT_HASH, &args![key_low, key_high]).u32()
+    };
+    let direct_equal = crate::slot_target(e, me, SLOT_EQUAL) == QUEUE_KEYS_EQUAL;
+    let table = e.mem.u32(me + MAP_TABLE);
+    let mut item = e.mem.u32(table + index * 4);
+    while item != 0 {
+        let item_low = e.mem.u32(item + ITEM_KEY_LOW);
+        let item_high = e.mem.u32(item + ITEM_KEY_HIGH);
+        let equal = if direct_equal {
+            typed_call!(
+                super::FAMILY,
+                0x0084_b950,
+                queue_keys_equal(e, this, key_low, key_high, item_low, item_high)
+            )
+        } else {
+            e.vcall(
+                me,
+                SLOT_EQUAL,
+                &args![key_low, key_high, item_low, item_high],
+            )
+            .bool()
+        };
+        if equal {
+            e.mem.set_u32(item + ITEM_VALUE, value);
+            return;
+        }
+        item = e.mem.u32(item);
+    }
+    let item = e.vcall(me, SLOT_NEW_ITEM, &args![]).u32();
+    e.vcall(me, SLOT_SET_VALUE, &args![item, key_low, key_high, value]);
+    let head = e.mem.u32(table + index * 4);
+    e.mem.set_u32(item, head);
+    e.mem.set_u32(table + index * 4, item);
+    let count = e.mem.u32(me + MAP_COUNT);
+    e.mem.set_u32(me + MAP_COUNT, count.wrapping_add(1));
 }

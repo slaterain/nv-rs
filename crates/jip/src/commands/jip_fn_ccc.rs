@@ -1,16 +1,11 @@
 //! `functions_jip/jip_fn_ccc.h` (JIP LN NVSE): the commands JIP keeps for its companion mod, JIP
-//! CC&C. 11 of its 21; the core track built `CCCSetFollowState` and `LockEquipment`
-//! (`actor_hooks.rs`).
+//! CC&C. 11 of its 21 here; `CCCOnLoad`, `CCCSetFloat`, `CCCSetString`, `CCCSetTrait`,
+//! `CCCSavedForm` and `CCCSMS` in `jip_fn_ccc_hud.rs`; the core track built `CCCSetFollowState`
+//! and `LockEquipment` (`actor_hooks.rs`).
 //!
-//! Left for later: `CCCOnLoad` reads `Data\Config\ccc_avatars.ini` and the avatar textures' folder
-//! (the file layer keeps no such reads), looks up the CC&C plugin's forms and wires 119 of the
-//! HUD's tile values (`g_HUDMainMenu`'s `JIPCCCHUDDisplay` component, whose XML the mod injects);
-//! `CCCSetFloat`, `CCCSetString` and `CCCSetTrait` write those tile values, and `CCCSavedForm` and
-//! `CCCSMS` read the forms and the mod index `CCCOnLoad` sets, so they come with it.
-//! `MoveToPosStr` moves the reference through JIP's own position marker (`s_tempPosMarker`, a
-//! reference JIP creates at its start, and the game's `MoveToMarker`): JIP's start-up objects are
-//! not built. `CCCSetEquipped` is the core track's, built in `equip_hooks.rs` (step 3.5d: the
-//! container menu, the combat style's restrictions and JIP's always-on `GetCannotWear` patch).
+//! `MoveToPosStr` is built in `jip_fn_move_cmds.rs`. `CCCSetEquipped` is the core track's, built
+//! in `equip_hooks.rs` (step 3.5d: the container menu, the combat style's restrictions and JIP's
+//! always-on `GetCannotWear` patch).
 
 use super::{assign_string, extra, Handlers};
 use crate::Jip;
@@ -97,6 +92,8 @@ const MARKER_NAME: u32 = 0x04;
 pub struct State {
     pub nccs_actors: BTreeSet<u32>,
     pub marker_grids: BTreeMap<u32, HashMap<u32, u32>>,
+    /// `CCCOnLoad`'s finds (`jip_fn_ccc_hud`).
+    pub hud: super::jip_fn_ccc_hud::Hud,
 }
 
 fn state(e: &mut Engine) -> &mut State {
@@ -130,7 +127,7 @@ fn ccc_get_distance(e: &mut Engine, w: &[u32]) -> Ret {
 // BaseExtraList::GetExtraFactionRank (asm).
 /// The reference's own rank in the faction (its `ExtraFactionChanges` list: the first entry of
 /// the faction, empty entries skipped), -1 for none.
-fn extra_faction_rank(e: &mut Engine, refr: u32, faction: u32) -> i8 {
+pub(crate) fn extra_faction_rank(e: &mut Engine, refr: u32, faction: u32) -> i8 {
     let x = extra::refr_extra(e, refr, EXTRA_FACTION_CHANGES);
     if x == 0 {
         return -1;

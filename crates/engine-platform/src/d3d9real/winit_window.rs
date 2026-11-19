@@ -30,6 +30,8 @@
 //! - The cursor is held (locked, else confined to the window, and hidden) when the window gets the
 //!   focus and on a click in it, and let go when it loses the focus: winit does not say whether the
 //!   focus came from the keyboard or from a click on the frame, which Windows' window tells apart.
+//!   A mouse the game makes non-exclusive (`bBackground Mouse=1`) is never held, only hidden over
+//!   the window, and the cursor's place there goes to the game as on Windows (`super::Input::pointer`).
 //! - The mouse's motion is winit's device motion (X11's raw motion, Wayland's relative pointer,
 //!   macOS's mouse deltas), counted only while the window has the focus, as raw input reaches only
 //!   the window in front on Windows. Fractions of a count (Wayland) carry over to the next motion.
@@ -441,16 +443,33 @@ fn monitor_of(m: &winit::monitor::MonitorHandle, primary: bool) -> crate::machin
     }
 }
 
-thread_local! {
-    /// The monitor the machine table describes ([`read_monitors`]), on the window thread.
-    static DESCRIBED: std::cell::RefCell<Option<winit::monitor::MonitorHandle>> =
-        const { std::cell::RefCell::new(None) };
+/// The monitor the machine table describes ([`read_monitors`]), for both threads: the window
+/// thread puts a borderless start on it, the game's thread fits a framed window to it and makes
+/// one that does not fit borderless over it (winit's monitor handles may be used from any thread).
+static DESCRIBED: Mutex<Option<winit::monitor::MonitorHandle>> = Mutex::new(None);
+
+/// The monitor a borderless window is put on and a framed one fitted to: the one the machine
+/// table describes (so the game's screen and its window agree), when the monitors were read;
+/// else winit's choice (the current one).
+fn described_monitor() -> Option<winit::monitor::MonitorHandle> {
+    DESCRIBED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
 }
 
-/// The monitor a borderless window is put on: the one the machine table describes, when the
-/// monitors were read; else winit's choice (the current one).
-fn described_monitor() -> Option<winit::monitor::MonitorHandle> {
-    DESCRIBED.with(|d| d.borrow().clone())
+/// Where the game's place `(x, y)` (its scaled pixels; the game's 0, 0 is the top left of the
+/// screen it was told about) is on the desktop, for a window at `scale`: the described monitor's
+/// corner plus the place. X11 puts a primary monitor where the desktop's layout has it, not
+/// always at 0, 0; Wayland lets no program place its window (the compositor chooses).
+fn on_described(x: i32, y: i32, scale: f64) -> winit::dpi::Position {
+    let corner =
+        described_monitor().map_or(winit::dpi::PhysicalPosition::new(0, 0), |m| m.position());
+    if corner == winit::dpi::PhysicalPosition::new(0, 0) {
+        return LogicalPosition::new(x, y).into();
+    }
+    let place = LogicalPosition::new(x, y).to_physical::<i32>(scale);
+    winit::dpi::PhysicalPosition::new(corner.x + place.x, corner.y + place.y).into()
 }
 
 /// Reads the monitors for [`monitors`], once, on the window thread.
@@ -469,7 +488,9 @@ fn read_monitors(event_loop: &ActiveEventLoop) {
     let described = crate::machine_table::display::described(
         handles.iter().map(|m| primary.as_ref() == Some(m)),
     );
-    DESCRIBED.with(|d| *d.borrow_mut() = described.map(|i| handles[i].clone()));
+    *DESCRIBED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = described.map(|i| handles[i].clone());
     let list: Vec<_> = handles
         .iter()
         .enumerate()
@@ -481,6 +502,20 @@ fn read_monitors(event_loop: &ActiveEventLoop) {
         Ok(list)
     });
     ready.notify_all();
+}
+
+/// Whether winit runs on Wayland (not X11, not macOS).
+fn on_wayland(event_loop: &ActiveEventLoop) -> bool {
+    #[cfg(not(target_vendor = "apple"))]
+    {
+        use winit::platform::wayland::ActiveEventLoopExtWayland;
+        event_loop.is_wayland()
+    }
+    #[cfg(target_vendor = "apple")]
+    {
+        let _ = event_loop;
+        false
+    }
 }
 
 /// The keyboard library winit needs and cannot load, if one is missing: libxkbcommon always, and
@@ -540,6 +575,7 @@ fn run_loop(requests: Receiver<Request>) {
         requests,
         tops: HashMap::new(),
         focused: false,
+        deactivated: false,
         alt: false,
         held: None,
         rest: [0.0; 3],
@@ -556,6 +592,9 @@ struct Layer {
     tops: HashMap<WindowId, RealWindow>,
     /// Whether a window of the game's has the focus.
     focused: bool,
+    /// Whether the game's window lost the focus since it was made: from then on each time it gets
+    /// it, the game's window procedure gets the activation too (`input::reactivated`).
+    deactivated: bool,
     /// Whether Alt is held.
     alt: bool,
     /// The window holding the cursor, if one does.
@@ -611,11 +650,12 @@ impl Layer {
         }
         let borderless = borderless();
         let frame = input::frame_of_style(request.style);
+        let scale = described_monitor().map_or(1.0, |m| m.scale_factor());
         let mut attributes = Window::default_attributes()
             .with_title(latin1(&request.title))
             .with_visible(false)
             .with_inner_size(LogicalSize::new(size.0, size.1))
-            .with_position(LogicalPosition::new(left, top))
+            .with_position(on_described(left, top, scale))
             .with_active(request.show != Showing::Background);
         if borderless {
             attributes = attributes
@@ -648,7 +688,8 @@ impl Layer {
 
     /// Holds the cursor in the window `id` and hides it there, as Windows does for a program whose
     /// DirectInput mouse is exclusive and in the foreground: locked where the system can, else kept
-    /// inside the window.
+    /// inside the window; only where `input::cursor_action` says (never for a mouse that is not
+    /// exclusive, as on Windows).
     fn hold(&mut self, id: RealWindow) {
         let Some(shown) = windows().get(&id).map(|e| Arc::clone(&e.shown)) else {
             return;
@@ -659,6 +700,30 @@ impl Layer {
         }
         w.set_cursor_visible(false);
         self.held = Some(id);
+    }
+
+    /// Does what `input::cursor_action` says for `event` at the window `id` (the rule the Win32
+    /// window follows too) and answers it, for the caller to keep the cursor's place.
+    fn follow(&mut self, id: RealWindow, event: input::CursorEvent) -> input::CursorAction {
+        let now = input::CursorNow {
+            exclusive: mouse_exclusive(),
+            held: self.held.is_some(),
+            active: self.focused,
+            hold_wanted: super::hold_wanted(),
+        };
+        let action = input::cursor_action(now, event);
+        if action.let_go {
+            self.let_go();
+        }
+        if action.hold {
+            super::take_hold_wanted();
+            self.hold(id);
+        } else if action.hide {
+            if let Some(e) = windows().get(&id) {
+                e.shown.window.set_cursor_visible(false);
+            }
+        }
+        action
     }
 
     /// Lets the cursor go (free, shown).
@@ -713,12 +778,7 @@ impl ApplicationHandler for Layer {
         self.serve(event_loop);
     }
 
-    fn window_event(
-        &mut self,
-        _event_loop: &ActiveEventLoop,
-        window: WindowId,
-        event: WindowEvent,
-    ) {
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, window: WindowId, event: WindowEvent) {
         let Some(&id) = self.tops.get(&window) else {
             return;
         };
@@ -727,14 +787,20 @@ impl ApplicationHandler for Layer {
             WindowEvent::CloseRequested => window_closed(),
             // Activated, its display's scale changed, shown again: wgpu asks the window for a
             // frame at once rather than at the end of a rest (`d3d9_wgpu::window_changed`).
+            // A focus that follows a loss of it is also the game's activation (`WA_ACTIVE`: winit
+            // does not say whether a click gave it), which makes its mouse exclusive again.
             WindowEvent::Focused(true) => {
                 self.focused = true;
                 d3d9_wgpu::window_changed();
-                self.hold(id);
+                if self.deactivated {
+                    input::reactivated(1);
+                }
+                self.follow(id, input::CursorEvent::Activated);
             }
             // Losing the focus lets go of everything this window held.
             WindowEvent::Focused(false) => {
                 self.focused = false;
+                self.deactivated = true;
                 input::focus_lost();
                 self.let_go();
             }
@@ -747,6 +813,27 @@ impl ApplicationHandler for Layer {
             WindowEvent::Resized(size) => {
                 if let Some(e) = windows().get(&id) {
                     e.shown.size.resized(size);
+                }
+                // The full-screen borderless window given its monitor's size turned: Wayland read
+                // the monitor turned, so the game was told the wrong shape; said once, with the
+                // fix. Against the monitor the window is on (the described one, which it was put
+                // on, unless the compositor chose another).
+                if borderless() && on_wayland(event_loop) {
+                    let monitor = windows().get(&id).and_then(|e| {
+                        let w = &e.shown.window;
+                        w.fullscreen()?;
+                        w.current_monitor().or_else(described_monitor)
+                    });
+                    if let Some(m) = monitor {
+                        let (window, monitor) =
+                            ((size.width, size.height), (m.size().width, m.size().height));
+                        static SAID: AtomicBool = AtomicBool::new(false);
+                        if input::read_turned(window, monitor)
+                            && !SAID.swap(true, Ordering::Relaxed)
+                        {
+                            eprintln!("{}", input::turned_line(window, monitor));
+                        }
+                    }
                 }
             }
             WindowEvent::Occluded(hidden) => {
@@ -780,7 +867,7 @@ impl ApplicationHandler for Layer {
                     return;
                 };
                 if down && input::holds_cursor(button) {
-                    self.hold(id);
+                    self.follow(id, input::CursorEvent::Pressed);
                 }
                 input::button(index, down);
             }
@@ -788,6 +875,21 @@ impl ApplicationHandler for Layer {
                 let wheel = input::wheel(&mut self.rest[2], scroll_of(delta));
                 if wheel != 0 {
                     input::moved(0, 0, wheel);
+                }
+            }
+            // The game's mouse not exclusive (`bBackground Mouse=1`): the cursor's place over the
+            // focused window is the game's `WM_MOUSEMOVE`, as on Windows; for an exclusive one the
+            // hold is made again once the game made it exclusive again (`input::cursor_action`).
+            WindowEvent::CursorMoved { position, .. } => {
+                if !self.follow(id, input::CursorEvent::Moved).record {
+                    return;
+                }
+                let size = windows().get(&id).map(|e| e.shown.window.inner_size());
+                if let Some(size) = size {
+                    input::pointed(
+                        (position.x, position.y),
+                        (f64::from(size.width), f64::from(size.height)),
+                    );
                 }
             }
             _ => {}
@@ -859,14 +961,56 @@ pub fn window_moved(e: &mut Engine, handle: u32, rect: [i32; 4], flags: u32) {
         }
         return;
     }
-    if flags & input::NO_MOVE == 0 {
-        w.set_outer_position(LogicalPosition::new(rect[0], rect[1]));
-    }
+    let scale = w.scale_factor();
     if flags & input::NO_SIZE == 0 {
         let border = crate::window::game_frame(e, handle).unwrap_or([0; 4]);
-        let (width, height) = input::inner_for_game_rect(rect, border);
-        shown.ask_size(LogicalSize::new(width, height));
+        let mut client = input::inner_for_game_rect(rect, border);
+        // The monitor the game was told about (the machine table's: the primary one, else the
+        // first), in the window's own scaled pixels.
+        if let Some(m) = described_monitor() {
+            let monitor = (m.size().width, m.size().height);
+            let screen = input::scaled_screen(monitor, scale);
+            match input::placement(rect, border, monitor, scale) {
+                input::Placement::Borderless => {
+                    // Framed, it would reach past the screen's edges (report 004, a Steam Deck):
+                    // the borderless window over that monitor instead, the game's picture scaled
+                    // to it.
+                    static SAID: AtomicBool = AtomicBool::new(false);
+                    if !SAID.swap(true, Ordering::Relaxed) {
+                        let outer = (rect[2].wrapping_sub(rect[0]), rect[3].wrapping_sub(rect[1]));
+                        eprintln!("{}", input::too_large_line(outer, screen, client, monitor));
+                    }
+                    super::want_borderless(true);
+                    fill_screen(w, m);
+                    return;
+                }
+                input::Placement::Framed { client: framed } => {
+                    static SAID: AtomicBool = AtomicBool::new(false);
+                    if !SAID.swap(true, Ordering::Relaxed) {
+                        eprintln!("{}", input::framed_line(framed, screen));
+                    }
+                    client = framed;
+                }
+            }
+        }
+        if flags & input::NO_MOVE == 0 {
+            w.set_outer_position(on_described(rect[0], rect[1], scale));
+        }
+        shown.ask_size(LogicalSize::new(client.0, client.1));
+    } else if flags & input::NO_MOVE == 0 {
+        w.set_outer_position(on_described(rect[0], rect[1], scale));
     }
+}
+
+/// The game's framed window made the borderless one over `monitor` (the described one), as a
+/// borderless start makes it (`Layer::make`): no frame, winit's borderless full screen on that
+/// monitor, no size held (the compositor gives the monitor's).
+fn fill_screen(w: &Window, monitor: winit::monitor::MonitorHandle) {
+    w.set_resizable(true);
+    w.set_min_inner_size(None::<LogicalSize<u32>>);
+    w.set_max_inner_size(None::<LogicalSize<u32>>);
+    w.set_decorations(false);
+    w.set_fullscreen(Some(Fullscreen::Borderless(Some(monitor))));
 }
 
 #[cfg(test)]

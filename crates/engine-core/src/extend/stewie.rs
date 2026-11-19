@@ -109,6 +109,10 @@ pub const CREDITS_NO_LOADED_SAVE: Row = Row::at(CRASH, 19);
 /// S0182 `HolotapeEmptySubtitleCrashFix` (`MapMenu` `0079a660` at `0x79A868` and `0x79AAEB`): a
 /// holotape's subtitle removed from an empty list.
 pub const HOLOTAPE_EMPTY_SUBTITLE: Row = Row::at(CRASH, 20);
+/// S1016 (Engine Optimizations, `Inlines::SaveLoad`: `Write32(0x845558, 0x2735)`): the changes map's
+/// buckets 10,037, not the exe's 5,039 (`00845550`). It changes the order a save walks and writes the
+/// changed forms, so it is a fixes row.
+pub const CHANGES_MAP_BUCKETS: Row = Row::at(FIXES, 0);
 
 /// The table: one bit a row.
 #[derive(Debug)]
