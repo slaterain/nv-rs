@@ -253,11 +253,19 @@ pub fn moon_constructor(
             SCOPE_OPEN,
             &args![scope, 0x21u32, 1u32, SOURCE_FILE, 0x32u32],
         );
-        for (offset, phase) in PHASE_NAMES {
-            e.call(
-                BS_STRING_FORMAT,
-                &args![t + offset, TEXTURE_FORMAT, prefix, phase],
-            );
+        // Seam (JIP LN NVSE's SetMoonTexture: `WriteRelJump(0x634B30, InitMoonHook)` for the
+        // length of its moon refresh): words: the moon; an answer means JIP set the eight
+        // texture names itself, in place of the seven formatted ones. Asked only while JIP is
+        // installed.
+        let jip_named = e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+            && e.site(0x0063_4b30, &[t]).is_some();
+        if !jip_named {
+            for (offset, phase) in PHASE_NAMES {
+                e.call(
+                    BS_STRING_FORMAT,
+                    &args![t + offset, TEXTURE_FORMAT, prefix, phase],
+                );
+            }
         }
         e.set(
             this,
@@ -1021,6 +1029,67 @@ mod tests {
             calls_to(&e, SCOPE_OPEN)[0][1..],
             [0x21, 1, SOURCE_FILE, 0x32]
         );
+    }
+
+    thread_local! {
+        /// The words the seam's test handler was asked with.
+        static ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn asked(w: &[u32]) {
+        ASKED.with(|a| a.borrow_mut().push(w.to_vec()));
+    }
+
+    /// JIP LN NVSE's SetMoonTexture seam at `0x634B30`: asked with the moon (`this`, not a field
+    /// of it) while JIP is installed; an answer skips the seven formatted names (JIP named them),
+    /// none formats them as the exe; the rest of the constructor runs either way.
+    #[test]
+    fn moon_constructor_jip_names_seam() {
+        use engine_core::extend::jip_patches;
+        for (word, answer, formats) in [
+            (0, true, 7),
+            (jip_patches::INSTALLED, true, 0),
+            (jip_patches::INSTALLED, false, 7),
+        ] {
+            let mut e = engine();
+            quiet(
+                &mut e,
+                &[
+                    SKY_OBJECT_CONSTRUCTOR,
+                    VECTOR_CONSTRUCTOR_ITERATOR,
+                    BS_STRING_FORMAT,
+                ],
+            );
+            e.map(NO_UPDATE, 4);
+            e.set_global(NO_UPDATE, f32::MAX);
+            e.set_jip_patches(word);
+            ASKED.with(|a| a.borrow_mut().clear());
+            if answer {
+                e.on_site_for_test(0x0063_4b30, |_, w| {
+                    asked(w);
+                    Some(0)
+                });
+            } else {
+                e.on_site_for_test(0x0063_4b30, |_, w| {
+                    asked(w);
+                    None
+                });
+            }
+            let this = e.new_object::<Moon>();
+            e.call_log = Some(vec![]);
+            e.call(
+                0x0063_4a70,
+                &args![this, 0x7000u32, 10.0f32, 20.0f32, 5.0f32, 2.0f32, 15.0f32, 128u32],
+            );
+            let want = if word == 0 {
+                vec![]
+            } else {
+                vec![vec![this.addr()]]
+            };
+            assert_eq!(ASKED.with(|a| a.borrow().clone()), want, "{word:x}");
+            assert_eq!(calls_to(&e, BS_STRING_FORMAT).len(), formats, "{word:x}");
+            assert_eq!(e.get(this, Moon::iSize), 128);
+        }
     }
 
     #[test]

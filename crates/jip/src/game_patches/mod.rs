@@ -117,6 +117,9 @@ pub const AREAS: &[Area] = &[
     crate::commands::jip_fn_ui_menus::AREA,
     crate::commands::jip_fn_camera::AREA,
     crate::commands::jip_fn_rock_it::AREA,
+    crate::commands::jip_fn_ui_code::AREA,
+    crate::commands::jip_fn_misc_ref_code::AREA,
+    crate::commands::jip_fn_moon::AREA,
     crate::commands::jip_fn_ui_text::AREA,
 ];
 
