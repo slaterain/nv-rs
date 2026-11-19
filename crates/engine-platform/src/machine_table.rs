@@ -673,10 +673,10 @@ fn documents_too_long(documents: &str) -> bool {
     documents.len() + "\\My Games\\FalloutNV\\Saves\\".len() + 60 >= 260
 }
 
-/// The profile a run plays in: `mods` when `NV_PROFILE` says so (play.sh's `--mods`: saves and
+/// The profile a run plays in: `mods` when `NV_RS_PROFILE` says so (play.sh's `--mods`: saves and
 /// settings made with mods stay apart, as the Windows launcher's `userdata\mods`), else `game`.
 pub fn profile() -> &'static str {
-    match std::env::var("NV_PROFILE").as_deref() {
+    match std::env::var("NV_RS_PROFILE").as_deref() {
         Ok("mods") => "mods",
         _ => "game",
     }
