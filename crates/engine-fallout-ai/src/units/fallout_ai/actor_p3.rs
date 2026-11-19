@@ -16760,6 +16760,36 @@ mod tests {
         }
     }
 
+    /// Row S0150 with a sequence in the attack slot (ordinary input): the looping group's check
+    /// runs as with the row off: a group of type 0x4a with no shot delay and a finished sequence
+    /// is blended out.
+    #[test]
+    fn s0150_row_on_with_an_attack_sequence_changes_nothing() {
+        let mut logs = vec![];
+        for on in [false, true] {
+            let mut e = engine();
+            let (actor, animation, process) = pick_setup(&mut e);
+            stub(&mut e, ANIM_GROUP_GET_TYPE, 0x4a);
+            set_slot(
+                &mut e,
+                process,
+                PROCESS_SLOT_AUTOMATIC_SHOT_DELAY,
+                float_ret(0.0),
+            );
+            stub(&mut e, SEQUENCE_GET_GENERIC_LOCATION, 1);
+            e.set_stewie(engine_core::extend::stewie::MISSING_ANIM_NULL_CHECK, on);
+            e.call_log = Some(vec![]);
+            blend_out_mismatched_attack(&mut e, actor, animation, Ptr::NULL);
+            assert_eq!(
+                calls_to(&e, ANIMATION_BLEND_OUT),
+                vec![vec![animation.addr(), 4, 0]],
+                "row {on}"
+            );
+            logs.push(e.call_log.take().unwrap().len());
+        }
+        assert_eq!(logs[0], logs[1]);
+    }
+
     /// An actor whose process has queued the reload loop (action 0x11) with its sequence
     /// finished, the loop's time reached, and `entry` as its weapon entry; the entry's
     /// `HasModEffectActive` reads the entry (+0) and the weapon's `GetAttackAnim` the form's byte
