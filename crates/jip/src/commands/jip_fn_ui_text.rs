@@ -212,6 +212,11 @@ const FONT_HEIGHTS: usize = 90;
 /// game's 1 to 8, and the others stay 0 (JIP's loop would read past the game's eight; no menu can
 /// use them). A font that did not load is left at 0.
 pub(crate) fn deferred_init(e: &mut Engine) {
+    // nv-rs's own: an engine without the font manager's page (a test's) keeps the heights at 0;
+    // the game always has it.
+    if !e.mem.is_mapped(FONT_MANAGER) {
+        return;
+    }
     let manager = e.mem.u32(FONT_MANAGER);
     let fonts = if super::jip_fn_ui::font_manager_extended(e) {
         FONT_HEIGHTS as u32
