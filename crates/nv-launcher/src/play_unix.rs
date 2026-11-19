@@ -24,19 +24,6 @@ pub fn script() -> Option<PathBuf> {
     Some(exe.parent()?.join("play.sh"))
 }
 
-/// play.sh's arguments for Play (with mods), and a game folder the player typed or dropped.
-pub fn arguments(mods: bool, game: Option<&Path>) -> Vec<std::ffi::OsString> {
-    let mut a = Vec::new();
-    if mods {
-        a.push("--mods".into());
-    }
-    if let Some(game) = game {
-        a.push("--game".into());
-        a.push(game.as_os_str().to_owned());
-    }
-    a
-}
-
 /// A line the player typed, to play.sh's input (its question's answer).
 pub fn type_line(text: &str) {
     if let Ok(mut input) = INPUT.lock() {
@@ -145,14 +132,5 @@ mod tests {
             "Starting the game (/games/Fallout New Vegas). Log: /x.log"
         ));
         assert!(!starts_the_game("Found your game (Steam): /games/x"));
-    }
-
-    #[test]
-    fn arguments_name_mods_and_the_game() {
-        assert!(arguments(false, None).is_empty());
-        assert_eq!(
-            arguments(true, Some(Path::new("/g"))),
-            ["--mods", "--game", "/g"].map(std::ffi::OsString::from)
-        );
     }
 }

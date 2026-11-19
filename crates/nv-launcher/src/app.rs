@@ -10,6 +10,7 @@ use crate::place::{self, Place};
 use crate::screen::{self, Look, Screen};
 use crate::session::{self, Event};
 use crate::settings;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
@@ -193,7 +194,7 @@ struct App {
     mouse: (f64, f64),
     card: Card,
     /// The action named on the command line, started as soon as the window is there.
-    action: Option<Vec<String>>,
+    action: Option<Vec<OsString>>,
     /// play.sh's output so far, in lines (the last one may be a question without its line break).
     output: Vec<String>,
     hidden: bool,
@@ -204,20 +205,37 @@ struct App {
 
 /// Starts Play's work on a thread of its own with `args` (Play.exe's, or play.sh's on Linux and
 /// macOS); it sends `Ended` with its exit code.
-fn start_work(args: Vec<String>) {
+fn start_work(args: Vec<OsString>) {
     std::thread::spawn(move || {
         #[cfg(windows)]
-        let code = crate::play::run_play(&args);
+        let code = {
+            let args: Vec<String> = args
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            crate::play::run_play(&args)
+        };
         #[cfg(not(windows))]
         let code = match crate::play_unix::script() {
-            Some(script) => {
-                let args: Vec<std::ffi::OsString> = args.into_iter().map(Into::into).collect();
-                crate::play_unix::run(&script, &args)
-            }
+            Some(script) => crate::play_unix::run(&script, &args),
             None => 127,
         };
         session::send(Event::Ended(code));
     });
+}
+
+/// Play's arguments, the same for Play.exe's steps and play.sh: `--mods` for Play with mods, and
+/// `--game FOLDER` for a folder the player typed or dropped (kept as the system's own bytes).
+pub fn play_arguments(mods: bool, game: Option<&Path>) -> Vec<OsString> {
+    let mut a = Vec::new();
+    if mods {
+        a.push("--mods".into());
+    }
+    if let Some(game) = game {
+        a.push("--game".into());
+        a.push(game.as_os_str().to_owned());
+    }
+    a
 }
 
 /// Asks this program, in a process of its own, for the game's card (`--game-card`), within
@@ -304,14 +322,7 @@ impl App {
 
     /// Play (with mods), and with a game folder typed or dropped.
     fn play(&mut self, mods: bool, game: Option<PathBuf>) {
-        let mut args = Vec::new();
-        if mods {
-            args.push("--mods".to_string());
-        }
-        if let Some(g) = game {
-            args.push("--game".to_string());
-            args.push(g.to_string_lossy().into_owned());
-        }
+        let args = play_arguments(mods, game.as_deref());
         self.output.clear();
         let waiting = Screen {
             title: "-nv-rs-".into(),
@@ -885,7 +896,7 @@ pub fn run(raw: Vec<String>) -> i32 {
         rows: None,
         mouse: (0.0, 0.0),
         card: Card::Asking,
-        action: (!raw.is_empty()).then(|| raw.clone()),
+        action: (!raw.is_empty()).then(|| raw.iter().map(OsString::from).collect()),
         output: Vec::new(),
         hidden: false,
         no_window: false,
@@ -1063,6 +1074,21 @@ mod tests {
         assert_eq!(back_entry(&e(&["Play", "Exit"])), Some(1));
         assert_eq!(back_entry(&e(&["OK"])), Some(0));
         assert_eq!(back_entry(&[]), None);
+    }
+
+    /// Play's arguments: `--mods` for Play with mods, `--game FOLDER` for a typed or dropped
+    /// folder, nothing for plain Play (Play.exe's and play.sh's own options).
+    #[test]
+    fn play_arguments_name_mods_and_the_game() {
+        assert!(play_arguments(false, None).is_empty());
+        assert_eq!(
+            play_arguments(true, Some(Path::new("/g/Fallout New Vegas"))),
+            ["--mods", "--game", "/g/Fallout New Vegas"].map(OsString::from)
+        );
+        assert_eq!(
+            play_arguments(false, Some(Path::new("x"))),
+            ["--game", "x"].map(OsString::from)
+        );
     }
 
     /// A message keeps its paragraphs as lines, its entries as given.
