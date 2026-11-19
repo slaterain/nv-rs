@@ -1052,7 +1052,9 @@ Not yet, with the switch on:
   on projectiles, muzzle flashes and explosions (G95, G96, G97) and its three null checks (G01: `00559450`,
   `0x5A8ECF`, `0xB707E0`) wait for the drawing work, and its fixed-string pool (G43) for the 64-bit
   move; what they change stays the game's own. (`ToggleDepthClear`'s patch, G128, is in with JIP: the
-  frame's depth clear before the first-person view is a seam the command's switch answers.) Left out on purpose: two patches that only make the game faster (G24, G36),
+  frame's depth clear before the first-person view is a seam the command's switch answers; a skipped clear
+  still marks the world as drawn for the new lighting and the sun shadows, so the first-person arms and
+  weapon still neither cast nor take the sun's shadows.) Left out on purpose: two patches that only make the game faster (G24, G36),
   the editor's (E1, E2), NVAC's (O15) and Enhanced Camera's, a start-up order change with no known effect
   (D02), JIP's own start-up (D08), and one xNVSE already makes (G05).
 - With real threads JIP's own data no longer makes a thread wait (its aux variables and item data have

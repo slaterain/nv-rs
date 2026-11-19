@@ -317,6 +317,9 @@ pub fn install(e: &mut Engine) {
     jip_fn_misc_ref_code::install(e);
     jip_fn_moon::install(e);
     jip_fn_miscellaneous_depth::install(e);
+    // The extra cameras' list and the interface's culling process: made now, before the threads.
+    e.ext_free::<jip_fn_misc_ref_cameras::ExtraCameras>();
+    e.ext_free::<rendered_textures::UiCulling>();
     for list in ALL {
         for &(opcode, execute) in list.iter() {
             crate::table::set_handlers(e, opcode, Some(execute), None);

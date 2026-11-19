@@ -3136,10 +3136,14 @@ pub fn fn_00875110(
             &args![guard, 0x34u32, 1u32, SOURCE_FILE_NAME, 0x221fu32],
         );
         // The depth clear (0x8751C6). JIP's `ToggleDepthClear` (G128) puts its hook on this call
-        // whenever JIP is in: the seam's answer skips it.
+        // whenever JIP is in: the seam's answer skips it. Port-added: a skipped clear still marks
+        // the world as drawn for the platform (`engine_core::world_drawn::depth_clear_skipped`;
+        // the clear is where the new lighting and the sun shadows take that mark).
         let skip_clear = e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
             && e.site(0x0087_51c6, &[]).is_some();
-        if !skip_clear {
+        if skip_clear {
+            engine_core::world_drawn::depth_clear_skipped(e);
+        } else {
             e.call(0x0071_48c0, &args![interface_arg, 0u32, 4u32]);
         }
         if renderer_color_applies(e) {
@@ -9019,13 +9023,25 @@ mod tests_second {
     }
 
     /// JIP's `ToggleDepthClear` seam (0x8751C6): asked only while JIP is installed; its answer
-    /// skips the depth clear, no answer leaves it.
+    /// skips the depth clear, no answer leaves it. A skipped clear reaches the port-added point
+    /// `engine_core::world_drawn::depth_clear_skipped` in its place, before the rest of the draw
+    /// (the colour, the first-person arms); a clear that runs does not (the clear marks it).
     #[test]
     fn frame_pass_depth_clear_asks_jips_seam() {
+        const MARK: u32 = 0x7fff_0020;
         thread_local! {
             static ASKED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
             static ANSWER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+            static ARMED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
         }
+        // Process-wide once installed: it calls only on this test's thread, while armed.
+        fn hook(e: &mut Engine) {
+            if ARMED.with(std::cell::Cell::get) {
+                e.call(MARK, &args![]);
+            }
+        }
+        engine_core::world_drawn::install_depth_clear_skipped(hook);
+        ARMED.with(|a| a.set(true));
         let cases = [
             (0, true, 1, 0),
             (engine_core::extend::jip_patches::INSTALLED, false, 1, 1),
@@ -9038,6 +9054,7 @@ mod tests_second {
             r.e.set_jip_patches(word);
             ASKED.with(|a| a.set(0));
             ANSWER.with(|a| a.set(answer));
+            r.e.register_double(MARK, |_, _| Ret::default());
             r.e.on_site_for_test(0x0087_51c6, |_, _| {
                 ASKED.with(|a| a.set(a.get() + 1));
                 ANSWER.with(|a| a.get()).then_some(0)
@@ -9049,7 +9066,14 @@ mod tests_second {
                 "{word:x} {answer}"
             );
             assert_eq!(ASKED.with(|a| a.get()), asked, "{word:x} {answer}");
+            let first = if clears == 1 { 0x0071_48c0 } else { MARK };
+            assert_eq!(
+                only(&log, &[MARK, 0x0071_48c0, SET_COLOR]),
+                [first, SET_COLOR],
+                "{word:x} {answer}"
+            );
         }
+        ARMED.with(|a| a.set(false));
     }
 
     #[test]

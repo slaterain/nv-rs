@@ -97,7 +97,9 @@ fn new_rendered_texture(e: &mut Engine, width: u32, height: u32, format: u32) ->
             &args![manager, 0u32, width, height, format, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32],
         )
         .u32();
-    counted_up(e, texture);
+    if texture != 0 {
+        counted_up(e, texture);
+    }
     texture
 }
 
@@ -139,9 +141,14 @@ fn world_culling(e: &mut Engine) -> u32 {
 /// let go). On the way: the scene's byte +0x130 set for the draw, the accumulator's render mode, the
 /// renderer's clear mask ANDed with the background mask (the accumulator's byte +0x16C its "not
 /// 0"), the frame begun with a full clear, the accumulate and draw passes, the frame ended, the
-/// mask and the byte put back.
+/// mask and the byte put back. Nothing (the slot as it was) when the game makes no texture.
 pub fn generate_rendered_texture(e: &mut Engine, camera: u32, params: TextureParams, slot: u32) {
     let texture = new_rendered_texture(e, params.width, params.height, params.format);
+    // nv-rs's own: the game made no texture (JIP goes on and calls through it): nothing drawn,
+    // the slot keeps its texture.
+    if texture == 0 {
+        return;
+    }
     let culling = world_culling(e);
     let accumulator = culling + 0xc8;
     let scene = e.mem.u32(accumulator + ACCUMULATOR_SCENE);
@@ -180,7 +187,8 @@ pub struct UiCulling(AtomicU32);
 /// renderer's clear mask 0 for the draw, the frame begun with a back buffer clear unless a scene is
 /// being drawn, the interface camera's view port the area (x, x + width, 2 * the half screen
 /// height - y, that less the height), the node shown for the draw, the passes; then the node's
-/// hidden bit, the mask and the view port put back.
+/// hidden bit, the mask and the view port put back. Nothing (the slot as it was) when the game makes
+/// no texture.
 pub fn generate_rendered_ui_texture(
     e: &mut Engine,
     node: u32,
@@ -191,6 +199,11 @@ pub fn generate_rendered_ui_texture(
     let width = cvtps2dq(area[2]);
     let height = cvtps2dq(area[3]);
     let texture = new_rendered_texture(e, width, height, A8R8G8B8);
+    // nv-rs's own, as in [`generate_rendered_texture`]: no texture (an area that rounds to 0),
+    // nothing drawn.
+    if texture == 0 {
+        return;
+    }
     let renderer = e.mem.u32(RENDERER);
     let mut culling = e.ext_free::<UiCulling>().0.load(Ordering::Acquire);
     if culling == 0 {

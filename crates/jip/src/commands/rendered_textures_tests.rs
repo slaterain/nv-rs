@@ -242,3 +242,34 @@ fn sizes_round_as_cvtps2dq() {
     assert_eq!(cvtps2dq(f32::NAN), 0x8000_0000);
     assert_eq!(cvtps2dq(3.0e9), 0x8000_0000);
 }
+
+/// No texture made (the game's `CreateRenderedTexture` answers 0, as for an area that rounds to
+/// 0): neither drawing does more than ask for it. No culling process, no frame, no passes, no
+/// replace or release; the slot keeps its texture, counted as it was.
+#[test]
+fn no_texture_made_draws_nothing() {
+    let mut e = scene_engine();
+    drawing(&mut e);
+    e.register(CREATE_RENDERED_TEXTURE, |_, w| {
+        record(CREATE_RENDERED_TEXTURE, w);
+        Ret::default()
+    });
+    let slot = object(&mut e, NI_NODE, None);
+    e.mem.set_u32(slot, OLD_AT);
+    let node = object(&mut e, NI_NODE, None);
+    let params = TextureParams {
+        width: 64,
+        height: 64,
+        format: A8R8G8B8,
+        render_mode: 0,
+        bg_color_mask: 0,
+    };
+    CALLS.with(|c| c.borrow_mut().clear());
+    generate_rendered_texture(&mut e, UI_CAMERA_AT, params, slot);
+    generate_rendered_ui_texture(&mut e, node, [0.0, 0.0, 0.4, 0.4], slot, 360.0);
+    let made: Vec<u32> = CALLS.with(|c| c.borrow().iter().map(|(f, _)| *f).collect());
+    assert_eq!(made, [CREATE_RENDERED_TEXTURE; 2]);
+    assert_eq!(e.mem.u32(slot), OLD_AT);
+    assert_eq!(e.mem.u32(OLD_AT + 4), 1);
+    assert_eq!(e.ext_free::<UiCulling>().0.load(Ordering::Acquire), 0);
+}

@@ -7,7 +7,10 @@
 //! world, `00875110`: the renderer's `ClearBuffer(nullptr, 4)`, the depth buffer) whenever JIP is
 //! in: while JIP's `s_clearDepthBuffer` is 0 the hook returns without the call. The port has no
 //! call to rewrite: the translated `00875110` asks the seam [`DEPTH_CLEAR`] there while JIP is
-//! installed, and the handler answers (the call skipped) while the switch is 0.
+//! installed, and the handler answers (the call skipped) while the switch is 0. A skipped clear still
+//! reaches the port-added point `engine_core::world_drawn::depth_clear_skipped` in its place, where
+//! the platform marks the world as drawn as it does at the clear (the new lighting's camera, the sun
+//! shadows' end of casters): nv-rs's own, since those marks have no other place.
 //!
 //! Threads: the switch is JIP's static: run-wide, lock-free, never saved (1 at start, as JIP's).
 
