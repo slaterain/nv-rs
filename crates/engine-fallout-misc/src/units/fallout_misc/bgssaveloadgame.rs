@@ -3419,19 +3419,22 @@ fn expiry_find_item(e: &mut Engine, this: Ptr, key_low: u32, key_high: u32) -> (
 /// `NiTMapBase<...,__int64,int>::SetAt` shape (the map names none): a bucket
 /// item with an equal key gets the new value; otherwise a new item (slot
 /// +0x14, `NewItem`) is filled (slot +0xc, `SetValue`), put at the head of
-/// the bucket and counted.
+/// the bucket and counted. The bucket array is read again after the two
+/// calls, for the head (`0084b872`) and for the store (`0084b883`).
 pub fn fn_0084b7c0(e: &mut Engine, this: Ptr, key_low: u32, key_high: u32, value: u32) {
-    let (buckets, index, item) = expiry_find_item(e, this, key_low, key_high);
+    let (_, index, item) = expiry_find_item(e, this, key_low, key_high);
     if item != 0 {
         e.mem.set_u32(item + EXPIRY_ITEM_VALUE, value);
         return;
     }
     let item = e.vcall(this.addr(), 0x14, &args![]).u32();
     e.vcall(this.addr(), 0xc, &args![item, key_low, key_high, value]);
+    let map = this.cast::<NiTPointerMap>();
+    let buckets = e.get(map, NiTPointerMap::m_ppkHashTable);
     let head = e.mem.u32(buckets + index * 4);
     e.mem.set_u32(item + EXPIRY_ITEM_NEXT, head);
+    let buckets = e.get(map, NiTPointerMap::m_ppkHashTable);
     e.mem.set_u32(buckets + index * 4, item);
-    let map = this.cast::<NiTPointerMap>();
     let count = e.get(map, NiTPointerMap::m_uiCount);
     e.set(map, NiTPointerMap::m_uiCount, count.wrapping_add(1));
 }

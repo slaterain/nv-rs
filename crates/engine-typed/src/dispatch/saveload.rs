@@ -482,8 +482,12 @@ pub fn queue_insert(e: &mut Engine, this: Ptr, key_low: u32, key_high: u32, valu
     }
     let item = e.vcall(me, SLOT_NEW_ITEM, &args![]).u32();
     e.vcall(me, SLOT_SET_VALUE, &args![item, key_low, key_high, value]);
+    // The exe reads the bucket array again after the two calls, for the head (`0084b872`) and
+    // again for the store (`0084b883`): a slot may have moved it.
+    let table = e.mem.u32(me + MAP_TABLE);
     let head = e.mem.u32(table + index * 4);
     e.mem.set_u32(item, head);
+    let table = e.mem.u32(me + MAP_TABLE);
     e.mem.set_u32(table + index * 4, item);
     let count = e.mem.u32(me + MAP_COUNT);
     e.mem.set_u32(me + MAP_COUNT, count.wrapping_add(1));

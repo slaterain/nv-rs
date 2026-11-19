@@ -7,8 +7,8 @@
 //! own function (`HookXInput`), which every game read of the pad goes through: `Controls::Poll`
 //! (`00a23010`) and the interface's reads. The thunk is one `jmp [00fdf394]`, the only use of
 //! that import slot, and the port registers its own forwarding of `XInputGetState` at the slot
-//! (`engine-core`'s platform layer, which today answers "no controller"; the thunk itself is
-//! reached through the port's resolver). So here JIP's hook is a wrap at the slot
+//! (the platform layer's `engine_platform::xinput`, which passes the system's own pads through;
+//! the thunk itself is reached through the port's resolver). So here JIP's hook is a wrap at the slot
 //! ([`install`]), in front of the forwarding: every game read goes through it, as through JIP's
 //! jump at the thunk, and there is no second reader of the pad. JIP calls `XInputGetStateEx` (ordinal 100, which also reports the
 //! guide button); the forwarding is plain `XInputGetState`, so the guide button is never seen and
