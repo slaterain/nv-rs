@@ -182,7 +182,7 @@ fn a_players_file_overlays_vnvs_values_key_by_key() {
 }
 
 /// The S0079 row (`bDialogSpeechNullCheck`), which the key tests use.
-const PROOF: &rows::Row = &rows::ROWS[14];
+const PROOF: &rows::Row = &rows::ROWS[19];
 
 #[test]
 fn every_row_has_its_own_bit_and_key() {
@@ -406,7 +406,7 @@ fn the_start_lines_name_what_was_read() {
         start_lines(false, &settings, &keys, on.len()),
         [
             "lStewieAl's Tweaks: no Data\\NVSE\\Plugins\\nvse_stewie_tweaks.ini: VNV's values",
-            "lStewieAl's Tweaks: 34 of its 34 rows built are on",
+            "lStewieAl's Tweaks: 43 of its 43 rows built are on",
         ]
     );
     let (settings, on) = settings_and_rows(Some(b"[Tweaks]\nbBetterAutoWalk=1\n"), &[], &keys);
@@ -807,6 +807,11 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
     use engine_core::extend::stewie::{Row, CRASH, FIXES};
     let pinned: &[(&'static str, &'static str, Row)] = &[
         (
+            "S0018",
+            "bFixUGridsCrashAndAllow3AsMinimum",
+            Row::at(CRASH, 33),
+        ),
+        (
             "S0022.14",
             "bMenuFixesInventoryUseNoItem",
             Row::at(CRASH, 11),
@@ -844,13 +849,25 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
             "bFixNullWeaponOrWeaponInfoReloadLoopCrash",
             Row::at(CRASH, 21),
         ),
+        (
+            "S0045",
+            "bFixGetItemValueCrashForModdedWeapons",
+            Row::at(CRASH, 34),
+        ),
+        ("S0049", "bFixUnresolvedRaceCrash", Row::at(CRASH, 35)),
         ("S0057", "bFixLevelGreaterThan99Crash", Row::at(CRASH, 18)),
         (
             "S0064",
             "bFixHandleMultiboundsCrashWithNullCell",
             Row::at(CRASH, 2),
         ),
+        (
+            "S0067",
+            "bFixGetWeaponDamageCrashOnThrowingWeapons",
+            Row::at(CRASH, 36),
+        ),
         ("S0068", "bFixHandleStealingCrash", Row::at(CRASH, 3)),
+        ("S0077", "bBodyPartDataNullChecks", Row::at(CRASH, 37)),
         ("S0078", "bNullPlayerCellImposterCheck", Row::at(CRASH, 4)),
         ("S0079", "bDialogSpeechNullCheck", Row::at(CRASH, 0)),
         (
@@ -862,6 +879,11 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
             "S0089.05",
             "bRememberAmmoCountOnLoadDropNoAmmoEntry",
             Row::at(CRASH, 32),
+        ),
+        (
+            "S0093.07",
+            "bPerkMenuDescriptionTypoFixTooLong",
+            Row::at(CRASH, 38),
         ),
         (
             "S0106",
@@ -909,6 +931,13 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
             Row::at(CRASH, 20),
         ),
         ("S0186", "bBipedAnimNullItemError", Row::at(CRASH, 26)),
+        ("S0199.05", "bMiscCrashFixesNpcActivate", Row::at(CRASH, 39)),
+        ("S0199.06", "bMiscCrashFixesRemoveWorn", Row::at(CRASH, 40)),
+        (
+            "S0199.09",
+            "bMiscCrashFixesShowSceneGraph",
+            Row::at(CRASH, 41),
+        ),
         (
             "S0202",
             "bEquipAmmoOnNullBaseProcessCrashFix",
