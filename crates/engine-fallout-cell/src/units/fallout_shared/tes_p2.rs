@@ -5594,6 +5594,8 @@ mod tests {
             });
             e.register(FORM_ID_GETTER, |_, a| ret(a[0] + 1));
             returns(&mut e, DATA_HANDLER_HAS_FORM, 1);
+            // `BGSSaveLoadGame::ClearFormID`, which the found cells ask for.
+            let _cleared = recording(&mut e, SAVE_LOAD_CLEAR_FORM_ID, 0);
             let loaded = recording(&mut e, 0x7000_0128, 0);
             let buffer = Ptr::<()>::new(0x7300_0000);
             let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -5635,6 +5637,8 @@ mod tests {
             });
             e.register(FORM_ID_GETTER, |_, a| ret(a[0] + 1));
             returns(&mut e, DATA_HANDLER_HAS_FORM, 1);
+            // `BGSSaveLoadGame::ClearFormID`, which the found cells ask for.
+            let _cleared = recording(&mut e, SAVE_LOAD_CLEAR_FORM_ID, 0);
             let loaded = recording(&mut e, 0x7000_0128, 0);
             e.call(0x0045_95e0, &args![tes, Ptr::<()>::new(0x7300_0000)]);
             runs.push(loaded.borrow().clone());

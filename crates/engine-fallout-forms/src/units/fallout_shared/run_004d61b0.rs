@@ -2078,17 +2078,16 @@ mod n039_tests {
 
     /// lStewieAl's Tweaks' row S0199.09 (`MiscCrashFixes`, `0x4D6AA5`): ShowSceneGraph lists an object
     /// whose property list holds an empty entry: the exe asks the missing property for its controllers
-    /// (`0043b230`, its word at +0xC) and stops; with the row the entry has none and the object is
-    /// listed as a leaf.
+    /// (`0043b230` with 0, which reads the word at +0xC: a crash in the game); with the row it does not
+    /// ask, and the object is listed as before.
     #[test]
     fn s0199_09_an_empty_entry_in_the_property_list() {
+        let mut listed = vec![];
         for on in [false, true] {
             let mut e = Engine::new();
             text_and_new(&mut e);
             let inserted = tree_double(&mut e, 0);
             let object = leaf_object(&mut e);
-            // The controllers of an object: its word at +0xC, as the exe reads it.
-            e.register(0x0043_b230, |e, a| e.mem.u32(a[0] + 0xc).into_ret());
             // One entry, holding no property.
             let node = e.mem.alloc(8);
             let list = e.mem.alloc(8);
@@ -2102,15 +2101,14 @@ mod n039_tests {
             });
             e.set_stewie(engine_core::extend::stewie::SHOW_SCENE_GRAPH_NULL, on);
             let this = e.mem.alloc(0x30);
-            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                e.call(0x004d_66d0, &args![this, 0x10u32, object]);
-            }));
-            e.call_stack.clear();
-            assert_eq!(run.is_ok(), on, "row {on}");
-            if on {
-                assert_eq!(inserted.borrow()[0].3, object);
-            }
+            e.call_log = Some(vec![]);
+            e.call(0x004d_66d0, &args![this, 0x10u32, object]);
+            let log = e.call_log.take().unwrap();
+            let asked = log.iter().any(|(a, w)| *a == 0x0043_b230 && w[0] == 0);
+            assert_eq!(asked, !on, "row {on}");
+            listed.push(inserted.borrow().clone());
         }
+        assert_eq!(listed[0], listed[1]);
     }
 
     /// Row S0199.09 with a property that has controllers (ordinary input): the same calls with the row
