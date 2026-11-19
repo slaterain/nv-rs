@@ -348,7 +348,7 @@ fn the_dead_zone_a_fraction_gives() {
 /// getter, GetLeftStickX's scale, IsControlPressed's stick test), the double group GB's D04
 /// seams answer (`s_deadZoneLSg`), and the engine's pair the game's code reads for its 19
 /// immediates; the right stick's stays. SetDeadZoneRS the same for the right stick. The result
-/// is left alone; no argument changes nothing; a NaN's 0x80000000 is kept and nothing panics.
+/// stays 0; no argument changes nothing; a NaN's 0x80000000 is kept and nothing panics.
 #[test]
 fn set_dead_zone_ls_and_rs() {
     let mut e = setup();
@@ -364,9 +364,7 @@ fn set_dead_zone_ls_and_rs() {
         )
     };
     assert_eq!(all(&mut e), (7849, 7849.0, 7849, 8689, 8689.0, 8689));
-    e.mem.set_f64(RESULT, 5.0);
-    call(&mut e, 0x220d, &[z(0.5)]);
-    assert_eq!(e.mem.f64(RESULT), 5.0, "no result");
+    assert_eq!(call(&mut e, 0x220d, &[z(0.5)]), (1, 0.0), "handled, no result");
     assert_eq!(all(&mut e), (16383, 16383.0, 16383, 8689, 8689.0, 8689));
     assert_eq!(run(&mut e, 0x220b, &[]), 16383.0 * (1.0 / 32767.0));
     input(&mut e).pad.thumb_lx = 16384;
