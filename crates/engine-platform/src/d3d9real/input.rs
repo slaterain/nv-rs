@@ -217,12 +217,146 @@ pub(super) fn moved(dx: i32, dy: i32, wheel: i32) {
     }
 }
 
+/// The cursor moved over the game's window to `at` (client pixels) of a client area `size` (width,
+/// height), while the game's mouse is not exclusive (`super::mouse_exclusive`): its place is kept,
+/// as fractions of the area ([`pointer_fraction`]), for the host's next frame, which hands it to
+/// the game's window procedure as a `WM_MOUSEMOVE` (Windows sends one for each move over the
+/// client area, `win32.rs`'s and `winit_window.rs`'s window both call this). Nothing for an empty
+/// area.
+pub(super) fn pointed(at: (f64, f64), size: (f64, f64)) {
+    let Some(fraction) = pointer_fraction(at, size) else {
+        return;
+    };
+    if let Ok(mut i) = input().lock() {
+        point_into(&mut i, fraction);
+    }
+}
+
+fn point_into(i: &mut Input, fraction: [f64; 2]) {
+    i.pointer = Some(fraction);
+    i.pointer_moved = true;
+}
+
+/// The cursor's place `at` (client pixels, the area's top left 0, 0) over a client area `size`
+/// (width, height) as fractions across and down, each kept within 0 to 1 (a place on or past the
+/// edge, as a held button's moves report, is the edge); `None` for an area of no width or height,
+/// or a place that is not a number.
+pub(super) fn pointer_fraction(at: (f64, f64), size: (f64, f64)) -> Option<[f64; 2]> {
+    let (x, y) = at;
+    let (w, h) = size;
+    if !(w > 0.0 && h > 0.0) || !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+    Some([(x / w).clamp(0.0, 1.0), (y / h).clamp(0.0, 1.0)])
+}
+
+/// A `WM_MOUSEMOVE`'s place from its `lParam`: x in the low word, y in the high word, each signed
+/// (client pixels; left of or above the client area, negative, while a held button drags on).
+pub(super) fn client_place(lparam: u32) -> (f64, f64) {
+    (
+        f64::from(lparam as u16 as i16),
+        f64::from((lparam >> 16) as u16 as i16),
+    )
+}
+
+/// The window became active again after it was not (Alt+Tab back, a click on it), `wparam` the
+/// `WM_ACTIVATE` word Windows gives it (low word `WA_ACTIVE` 1 from the keyboard or
+/// `WA_CLICKACTIVE` 2 from a click, high word set while minimised): kept for the host's next
+/// frame, which hands it to the game's window procedure (`crate::window::post_activate`; the game
+/// makes its mouse exclusive again there, `00a23c00`). The window's first activation, when it is
+/// made, is not passed on: the game's procedure ignores that one (before `Main`), and the window
+/// layers pass only activations that follow a deactivation.
+pub(super) fn reactivated(wparam: u32) {
+    if let Ok(mut i) = input().lock() {
+        i.reactivated = Some(wparam);
+    }
+}
+
 /// The focus left the window: every key and button it held is let go (`win32.rs`'s
-/// `release_input` calls this too), the motion kept for the host's next frame.
+/// `release_input` calls this too), the motion kept for the host's next frame, and a cursor place
+/// not yet taken dropped (the game takes no move while another program is active: `00871d10`
+/// asks for the active window).
 pub(super) fn focus_lost() {
     if let Ok(mut i) = input().lock() {
-        release(&mut i);
+        lose_focus(&mut i);
     }
+}
+
+fn lose_focus(i: &mut Input) {
+    release(i);
+    i.pointer_moved = false;
+}
+
+/// What happened at the game's window that the cursor follows ([`cursor_action`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CursorEvent {
+    /// The window became active from the keyboard (Windows' `WA_ACTIVE`; winit's focus).
+    Activated,
+    /// A button that holds the cursor was pressed over the client area ([`holds_cursor`]).
+    Pressed,
+    /// The window was moved or sized (the hold is made again for its new place).
+    Placed,
+    /// The cursor is over the client area (Windows asks with `WM_SETCURSOR`, `HTCLIENT`).
+    OverClient,
+    /// The cursor moved over the client area (`WM_MOUSEMOVE`; winit's `CursorMoved`).
+    Moved,
+}
+
+/// The cursor's state at the game's window, for [`cursor_action`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct CursorNow {
+    /// The game's DirectInput mouse is exclusive (`super::mouse_exclusive`).
+    pub exclusive: bool,
+    /// The window holds the cursor (kept in it, hidden).
+    pub held: bool,
+    /// The game's window is the active one.
+    pub active: bool,
+    /// The game made its mouse exclusive again after it was not (`super::hold_wanted`): Windows
+    /// holds the cursor for it at once; the window layer holds it at the cursor's next move.
+    pub hold_wanted: bool,
+}
+
+/// What a window layer does with the cursor ([`cursor_action`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct CursorAction {
+    /// Hold the cursor in the window and hide it.
+    pub hold: bool,
+    /// Let go of the hold.
+    pub let_go: bool,
+    /// Hide the cursor over the client area.
+    pub hide: bool,
+    /// Keep the cursor's place for the game's `WM_MOUSEMOVE` ([`pointed`]).
+    pub record: bool,
+}
+
+/// The one rule both window layers follow for the cursor (`win32.rs`, `winit_window.rs`).
+/// The game's mouse exclusive (its default): Windows holds and hides the cursor for it, so the
+/// window holds it on a keyboard activation and on a click in the client area (a click that
+/// activates the window elsewhere, on its title bar, leaves it free: holding it there pulled the
+/// window down the screen, playtest 2026-10-30), makes the hold again when the window moves, hides
+/// it over the client area only while held, and keeps no place. Once the game makes its mouse
+/// exclusive again after it was not (`00a23c00` at an activation), the hold is made at the next move.
+/// The game's mouse not exclusive (`bBackground Mouse=1`): the cursor is never held (a hold is let
+/// go), it is hidden over the client area as the game's own procedure hides it (`0086a0a0`,
+/// `WM_NCHITTEST`), and each move is kept for the game while its window is the active one (the
+/// game's `00871d10` takes moves only for the active window).
+pub(super) fn cursor_action(now: CursorNow, event: CursorEvent) -> CursorAction {
+    let mut a = CursorAction::default();
+    if now.exclusive {
+        match event {
+            CursorEvent::Activated | CursorEvent::Pressed => a.hold = true,
+            CursorEvent::Placed => a.hold = now.held,
+            CursorEvent::OverClient | CursorEvent::Moved => {
+                a.hold = !now.held && now.active && now.hold_wanted;
+                a.hide = now.held || a.hold;
+            }
+        }
+    } else {
+        a.let_go = now.held;
+        a.hide = event != CursorEvent::Placed;
+        a.record = event == CursorEvent::Moved && now.active;
+    }
+    a
 }
 
 fn add_motion(i: &mut Input, dx: i32, dy: i32, wheel: i32) {
@@ -620,6 +754,138 @@ mod tests {
         release(&mut i);
         assert!(i.keys.iter().all(|k| !k) && i.buttons.iter().all(|b| !b));
         assert_eq!(i.motion, [7, 3, -120]);
+    }
+
+    /// The cursor's place over the client area as fractions of it: the middle of a 1920 by 1080
+    /// area is a half each way, the edges 0 and 1, a place past an edge (a held button's moves go
+    /// on outside the window) the edge; an empty area or a place that is not a number gives none.
+    /// A place kept marks a move for the host, and a later one replaces it.
+    #[test]
+    fn the_cursor_place_is_kept_as_fractions_of_the_client_area() {
+        let area = (1920.0, 1080.0);
+        assert_eq!(pointer_fraction((960.0, 540.0), area), Some([0.5, 0.5]));
+        assert_eq!(pointer_fraction((0.0, 0.0), area), Some([0.0, 0.0]));
+        assert_eq!(pointer_fraction((1920.0, 1080.0), area), Some([1.0, 1.0]));
+        assert_eq!(pointer_fraction((-40.0, 2000.0), area), Some([0.0, 1.0]));
+        assert_eq!(pointer_fraction((480.0, 270.0), area), Some([0.25, 0.25]));
+        assert_eq!(pointer_fraction((5.0, 5.0), (0.0, 1080.0)), None);
+        assert_eq!(pointer_fraction((5.0, 5.0), (1920.0, -1.0)), None);
+        assert_eq!(pointer_fraction((f64::NAN, 5.0), area), None);
+        let mut i = Input::default();
+        assert_eq!((i.pointer, i.pointer_moved), (None, false));
+        point_into(&mut i, [0.25, 0.75]);
+        point_into(&mut i, [0.5, 0.5]);
+        assert_eq!((i.pointer, i.pointer_moved), (Some([0.5, 0.5]), true));
+    }
+
+    /// A `WM_MOUSEMOVE`'s `lParam`: x low, y high, each a signed word (a place left of and above
+    /// the area while a button drags on is negative).
+    #[test]
+    fn a_mouse_moves_place_is_x_low_and_y_high() {
+        assert_eq!(client_place((700 << 16) | 100), (100.0, 700.0));
+        assert_eq!(client_place(0xfffb_fff6), (-10.0, -5.0));
+        assert_eq!(client_place(0), (0.0, 0.0));
+    }
+
+    fn now(exclusive: bool, held: bool, active: bool, hold_wanted: bool) -> CursorNow {
+        CursorNow {
+            exclusive,
+            held,
+            active,
+            hold_wanted,
+        }
+    }
+
+    fn action(hold: bool, let_go: bool, hide: bool, record: bool) -> CursorAction {
+        CursorAction {
+            hold,
+            let_go,
+            hide,
+            record,
+        }
+    }
+
+    /// The game's mouse exclusive (its default): a keyboard activation and a click hold the
+    /// cursor; a moved or sized window holds it again only if it was held; over the client area it
+    /// is hidden only while held, and a move keeps no place for the game. After the game made its
+    /// mouse exclusive again (an activation, `00a23c00`), the next move over the active window
+    /// holds it; not while another program is active, and not once it is held.
+    #[test]
+    fn an_exclusive_mouse_holds_the_cursor_and_keeps_no_place() {
+        use CursorEvent::*;
+        let free = now(true, false, true, false);
+        let held = now(true, true, true, false);
+        assert_eq!(
+            cursor_action(free, Activated),
+            action(true, false, false, false)
+        );
+        assert_eq!(
+            cursor_action(free, Pressed),
+            action(true, false, false, false)
+        );
+        assert_eq!(
+            cursor_action(free, Placed),
+            action(false, false, false, false)
+        );
+        assert_eq!(
+            cursor_action(held, Placed),
+            action(true, false, false, false)
+        );
+        for event in [OverClient, Moved] {
+            assert_eq!(
+                cursor_action(free, event),
+                CursorAction::default(),
+                "{event:?}"
+            );
+            assert_eq!(
+                cursor_action(held, event),
+                action(false, false, true, false)
+            );
+            let wanted = now(true, false, true, true);
+            assert_eq!(
+                cursor_action(wanted, event),
+                action(true, false, true, false)
+            );
+            let elsewhere = now(true, false, false, true);
+            assert_eq!(cursor_action(elsewhere, event), CursorAction::default());
+            let held_wanted = now(true, true, true, true);
+            assert_eq!(
+                cursor_action(held_wanted, event),
+                action(false, false, true, false)
+            );
+        }
+    }
+
+    /// The game's mouse not exclusive (`bBackground Mouse=1`): the cursor is never held (a hold
+    /// is let go), it is hidden over the client area, and a move is kept for the game only while
+    /// its window is the active one.
+    #[test]
+    fn a_free_mouse_is_never_held_and_its_moves_are_kept_while_active() {
+        use CursorEvent::*;
+        for held in [false, true] {
+            for event in [Activated, Pressed, OverClient] {
+                let a = cursor_action(now(false, held, true, true), event);
+                assert_eq!(a, action(false, held, true, false), "{event:?} held {held}");
+            }
+            let placed = cursor_action(now(false, held, true, false), Placed);
+            assert_eq!(placed, action(false, held, false, false));
+            let moved = cursor_action(now(false, held, true, false), Moved);
+            assert_eq!(moved, action(false, held, true, true));
+            let elsewhere = cursor_action(now(false, held, false, false), Moved);
+            assert_eq!(elsewhere, action(false, held, true, false));
+        }
+    }
+
+    /// The focus leaving the window drops a cursor place the host has not taken yet, so a move
+    /// made while the game was active is not handed to it after another program became active.
+    #[test]
+    fn losing_the_focus_drops_a_place_not_taken() {
+        let mut i = Input::default();
+        point_into(&mut i, [0.5, 0.5]);
+        i.buttons[0] = true;
+        lose_focus(&mut i);
+        assert_eq!((i.pointer, i.pointer_moved), (Some([0.5, 0.5]), false));
+        assert!(!i.buttons[0], "the held button let go");
     }
 
     /// The client area is the game's rectangle less the frame the game added for it (Windows'
