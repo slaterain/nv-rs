@@ -249,7 +249,8 @@ pub fn dead_zone_of(fraction: f64) -> i32 {
     }
 }
 
-/// The dead zone from the command's one double, when read.
+/// The dead zone from the command's one double, when read. Without it (a line the compiler does not
+/// make) JIP's `deadzone` is left unset: the port takes 0.
 fn dead_zone_arg(e: &mut Engine, a: &CommandArgs) -> Option<i32> {
     let read = Read::of(e, a);
     read.ok.then(|| match read.args.first() {

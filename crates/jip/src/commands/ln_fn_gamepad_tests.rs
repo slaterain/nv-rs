@@ -348,7 +348,7 @@ fn the_dead_zone_a_fraction_gives() {
 /// getter, GetLeftStickX's scale, IsControlPressed's stick test), the double group GB's D04
 /// seams answer (`s_deadZoneLSg`), and the engine's pair the game's code reads for its 19
 /// immediates; the right stick's stays. SetDeadZoneRS the same for the right stick. The result
-/// stays 0; no argument changes nothing; a NaN's 0x80000000 is kept and nothing panics.
+/// stays 0; no argument reads 0; a NaN's 0x80000000 is kept and nothing panics.
 #[test]
 fn set_dead_zone_ls_and_rs() {
     let mut e = setup();
@@ -380,9 +380,10 @@ fn set_dead_zone_ls_and_rs() {
     assert_eq!(run(&mut e, 0x2207, &[]), 1.0 / 3277.0);
     run(&mut e, 0x220d, &[z(0.05)]);
     assert_eq!(all(&mut e), (3277, 3277.0, 3277, 29490, 29490.0, 29490));
-    // No argument: the read fails and nothing changes.
+    // No argument (a line the compiler does not make: the parameter is required): JIP's double is
+    // left unset; the port reads 0, so the floor's 3277.
     run(&mut e, 0x220e, &[]);
-    assert_eq!(all(&mut e).5, 29490);
+    assert_eq!(all(&mut e).5, 3277);
     // A NaN: JIP's 0x80000000 everywhere; the sticks' and the conditions' sums wrap.
     run(&mut e, 0x220d, &[z(f64::NAN)]);
     run(&mut e, 0x220e, &[z(f64::NAN)]);
