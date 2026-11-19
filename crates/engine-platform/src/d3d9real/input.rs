@@ -815,19 +815,44 @@ mod tests {
         use CursorEvent::*;
         let free = now(true, false, true, false);
         let held = now(true, true, true, false);
-        assert_eq!(cursor_action(free, Activated), action(true, false, false, false));
-        assert_eq!(cursor_action(free, Pressed), action(true, false, false, false));
-        assert_eq!(cursor_action(free, Placed), action(false, false, false, false));
-        assert_eq!(cursor_action(held, Placed), action(true, false, false, false));
+        assert_eq!(
+            cursor_action(free, Activated),
+            action(true, false, false, false)
+        );
+        assert_eq!(
+            cursor_action(free, Pressed),
+            action(true, false, false, false)
+        );
+        assert_eq!(
+            cursor_action(free, Placed),
+            action(false, false, false, false)
+        );
+        assert_eq!(
+            cursor_action(held, Placed),
+            action(true, false, false, false)
+        );
         for event in [OverClient, Moved] {
-            assert_eq!(cursor_action(free, event), CursorAction::default(), "{event:?}");
-            assert_eq!(cursor_action(held, event), action(false, false, true, false));
+            assert_eq!(
+                cursor_action(free, event),
+                CursorAction::default(),
+                "{event:?}"
+            );
+            assert_eq!(
+                cursor_action(held, event),
+                action(false, false, true, false)
+            );
             let wanted = now(true, false, true, true);
-            assert_eq!(cursor_action(wanted, event), action(true, false, true, false));
+            assert_eq!(
+                cursor_action(wanted, event),
+                action(true, false, true, false)
+            );
             let elsewhere = now(true, false, false, true);
             assert_eq!(cursor_action(elsewhere, event), CursorAction::default());
             let held_wanted = now(true, true, true, true);
-            assert_eq!(cursor_action(held_wanted, event), action(false, false, true, false));
+            assert_eq!(
+                cursor_action(held_wanted, event),
+                action(false, false, true, false)
+            );
         }
     }
 

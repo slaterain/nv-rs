@@ -1195,7 +1195,10 @@ mod tests {
         let words = state!(e).windows.queue[0];
         assert_eq!(words[..4], [main, WM_MOUSEMOVE, 0, (270 << 16) | 960]);
         assert_eq!(
-            (f64::from(words[3] & 0xffff) / 1920.0, f64::from(words[3] >> 16) / 1080.0),
+            (
+                f64::from(words[3] & 0xffff) / 1920.0,
+                f64::from(words[3] >> 16) / 1080.0
+            ),
             (0.5, 0.25)
         );
     }
@@ -1225,13 +1228,25 @@ mod tests {
         }
         let mut e = Engine::new();
         let msg = Ptr::new(e.mem.alloc(28));
-        assert_eq!(peek_with(&mut e, msg, PM_REMOVE, turn), 1, "the move, at once");
+        assert_eq!(
+            peek_with(&mut e, msg, PM_REMOVE, turn),
+            1,
+            "the move, at once"
+        );
         assert_eq!(e.mem.u32(msg.addr() + 4), WM_MOUSEMOVE);
         assert_eq!(e.mem.u32(msg.addr() + 12), (360 << 16) | 640);
-        assert_eq!(peek_with(&mut e, msg, PM_REMOVE, idle), 0, "the frame starts");
+        assert_eq!(
+            peek_with(&mut e, msg, PM_REMOVE, idle),
+            0,
+            "the frame starts"
+        );
         assert_eq!(TURNS.with(std::cell::Cell::get), 1, "no second turn");
         assert_eq!(state!(e).windows.frames, 1);
-        assert_eq!(peek_with(&mut e, msg, PM_REMOVE, idle), 0, "the next frame ends");
+        assert_eq!(
+            peek_with(&mut e, msg, PM_REMOVE, idle),
+            0,
+            "the next frame ends"
+        );
         assert_eq!(TURNS.with(std::cell::Cell::get), 2);
         assert_eq!(state!(e).windows.frames, 2);
         // A turn that posts nothing: the frame starts at once.

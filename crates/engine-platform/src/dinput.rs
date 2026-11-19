@@ -872,7 +872,10 @@ mod tests {
         assert_eq!(e.vcall(m, 0x34, &[1, 5]).u32(), DI_OK);
         assert_eq!(state!(e).input.mouse_exclusive, Some(true));
         assert!(crate::d3d9real::mouse_exclusive());
-        assert!(crate::d3d9real::hold_wanted(), "held again at the next move");
+        assert!(
+            crate::d3d9real::hold_wanted(),
+            "held again at the next move"
+        );
         crate::d3d9real::take_hold_wanted();
         assert!(!crate::d3d9real::hold_wanted());
         assert_eq!(e.vcall(m, 0x34, &[1, 6]).u32(), DI_OK);
