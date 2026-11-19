@@ -18,6 +18,8 @@
 //!   the exe's second copy of the same body (the menus' maps and the threads' scrap heaps).
 //! - [`extra`]: the extra data lookup (`00410220`) and four getters over it, which the process lists
 //!   ask for every actor when a reference goes away (Stewie's Engine Optimizations, measure/stewie-eo).
+//! - [`saveload`]: the clean-up of expired cells' data that every save runs first (`0084ab20`), its
+//!   expiry queue a native hash map (Stewie's Engine Optimizations, item 2).
 //!
 //! Stage 1: the objects stay in guest memory where the game made them. Each function stays
 //! registered at its exe address; a call inside the family, or into another family, is a
@@ -47,6 +49,7 @@ pub mod extra;
 pub mod layout;
 pub mod math;
 pub mod refs;
+pub mod saveload;
 pub mod scene;
 
 use layout::{LightLock, RefObject};
@@ -180,6 +183,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0041_9ea0, extra::head_track_target(Ptr) -> u32),
         entry!(0x0042_12b0, extra::actor_package_data(Ptr) -> u32),
         entry!(0x0041_cb70, extra::package_target(Ptr) -> u32),
+        entry!(0x0084_ab20, saveload::cleanup_expired_data(Ptr)),
         entry!(0x0085_3130, refs::map_lookup(Ptr, u32, Ptr<u32>) -> u8),
         // The same function at a second address: instruction for instruction the same body.
         entry!(0x00a1_e380, refs::map_lookup(Ptr, u32, Ptr<u32>) -> u8),
