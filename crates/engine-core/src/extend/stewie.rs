@@ -167,7 +167,7 @@ pub const PERK_DESCRIPTION_TOO_LONG: Row = Row::at(CRASH, 38);
 pub const NPC_ACTIVATE_NULL_PROCESS: Row = Row::at(CRASH, 39);
 /// S0199.06 `MiscCrashFixes` (`InventoryChanges` `004c0cf0` (`0x4C0DD4`)): taking off a worn item that may not be removed, with no actor given, no longer crashes.
 pub const REMOVE_WORN_NULL_ACTOR: Row = Row::at(CRASH, 40);
-/// S0199.09 `MiscCrashFixes` (`004d66d0` (`0x4D6AA5`); `NiAVObject::GetViewerStrings` `00a5ad00` (`0xA5B0C8`)): the console's ShowSceneGraph no longer crashes on an empty property entry.
+/// S0199.09 `MiscCrashFixes` (`004d66d0` (`0x4D6AA5`); `NiAVObject::GetViewerStrings` `00a5ad00` (`0xA5B0C8`)): an empty entry of an object's property list is skipped in its viewer strings and in ShowSceneGraph's controller test; ShowSceneGraph's tree still stops at its Properties list, as with Tweaks.
 pub const SHOW_SCENE_GRAPH_NULL: Row = Row::at(CRASH, 41);
 /// S0107.03 `MemoryLeakFixes` (`Actor::InitiateSearchForAttacker` `008ad970` (`0x8ADAEC`)): an actor searching for its attacker no longer loses 16 bytes each time.
 pub const PACKAGE_TARGET_LEAK: Row = Row::at(CRASH, 42);
