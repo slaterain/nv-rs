@@ -14,8 +14,9 @@
 //! Without a source (the engine crates' tests, a repeatable run) every user answers "not
 //! connected", as a Windows machine with no pad does. The host puts the system's pads in
 //! ([`use_system_pads`]): on Windows the system's own XInput DLL, its answers passed through, and
-//! after its pads the PlayStation pads read as HID devices ([`hid`], [`sony`]), each turned into
-//! XInput's state by position ([`layout`]); the game's four users run over both ([`Chain`]).
+//! after its pads the PlayStation pads read as HID devices ([`hid`], [`sony`]) and the other pads
+//! that SDL's controller database has a line for ([`sdl_db`], [`dinput_order`]), each turned into
+//! XInput's state by position ([`layout`]); the game's four users run over all of them ([`Chain`]).
 //!
 //! Measured on Windows 11 (`xinput1_3.dll`, `xinput1_4.dll`, `xinput9_1_0.dll`, 64-bit, no pad,
 //! 2026-11-18): a user with no pad answers `ERROR_DEVICE_NOT_CONNECTED` to both calls and the
@@ -31,10 +32,12 @@ use std::time::{Duration, Instant};
 mod win32;
 
 pub mod chain;
+pub mod dinput_order;
 pub mod hid;
 #[cfg(windows)]
 mod hid_win;
 pub mod layout;
+pub mod sdl_db;
 pub mod sony;
 
 pub use chain::{Chain, PadList};
@@ -143,13 +146,17 @@ pub fn set_source(e: &mut Engine, source: Option<Box<dyn PadSource>>) {
 }
 
 /// Puts the system's own pads behind the game's XInput in `e` and answers the line for the log
-/// saying which. On Windows: the system's XInput DLL ([`win32::open`]) and the PlayStation pads read
-/// as HID devices ([`hid_win::start`]), through [`install_system`]. Linux and macOS: none yet
-/// (every user "not connected").
+/// saying which. On Windows: the system's XInput DLL ([`win32::open`]), and the PlayStation pads
+/// and the controller database's pads read as HID devices ([`hid_win::start`], the database with
+/// the player's lines over it: [`sdl_db::Database::with_players_lines`]), through
+/// [`install_system`]. Linux and macOS: none yet (every user "not connected").
 pub fn use_system_pads(e: &mut Engine) -> String {
     #[cfg(windows)]
     {
-        install_system(e, win32::open(), vec![Box::new(hid_win::start())])
+        let hint = std::env::var("SDL_GAMECONTROLLERCONFIG").ok();
+        let folder = crate::mod_files::folder(e);
+        let db = sdl_db::Database::with_players_lines(folder.as_deref(), hint.as_deref());
+        install_system(e, win32::open(), vec![Box::new(hid_win::start(db))])
     }
     #[cfg(not(windows))]
     {
@@ -169,7 +176,7 @@ pub fn install_system<S: PadSource + 'static>(
     let others = if lists.is_empty() {
         ""
     } else {
-        " and PlayStation pads through HID"
+        " and PlayStation pads and the controller database's pads through HID"
     };
     let line = match &opened {
         Some((_, dll)) => format!(

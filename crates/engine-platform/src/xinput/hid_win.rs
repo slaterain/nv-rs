@@ -4,10 +4,20 @@
 //! that it reads the pad's feature reports ([`sony::feature_reports`]), which turns on a Bluetooth
 //! DualSense's full reports and gives its firmware's rumble. A device that is not a pad is not
 //! opened again while it stays plugged in.
+//!
+//! The other pads (a joystick's or a gamepad's top usage) that are not Xbox-style pads (those
+//! XInput reads: an `IG_` in the device's path, as SDL tells them) are read through the
+//! controller database's line for them ([`super::sdl_db`]): opened once, for reading, their
+//! inputs counted as SDL's DirectInput code counts them ([`super::dinput_order`]) from Windows'
+//! HID parser's description of the pad, each report read through that parser. A pad with no line
+//! gets one log line naming its ids and is not read: nothing is guessed. These pads get no rumble.
 
+use super::dinput_order::{self, Element, Kind, Layout};
 use super::hid::{HidPads, Opened};
+use super::layout::Controls;
+use super::sdl_db::{Database, Mapping};
 use super::sony::{self, Model};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
 use std::time::Duration;
@@ -20,8 +30,9 @@ const SHARE_READ_WRITE: u32 = 0x1 | 0x2;
 /// How often the device list is looked through for new pads.
 const LOOK_EVERY: Duration = Duration::from_secs(2);
 
-/// Starts the thread that looks for PlayStation pads; the pads it finds join the answer.
-pub fn start() -> HidPads {
+/// Starts the thread that looks for PlayStation pads and the pads `db` has lines for; the pads it
+/// finds join the answer.
+pub fn start(db: Database) -> HidPads {
     let pads = HidPads::new();
     let found = pads.clone();
     let _ = std::thread::Builder::new()
@@ -29,11 +40,251 @@ pub fn start() -> HidPads {
         .spawn(move || {
             let mut not_pads = HashSet::new();
             loop {
-                look_for_pads(&found, &mut not_pads);
+                look_for_pads(&found, &mut not_pads, &db);
                 std::thread::sleep(LOOK_EVERY);
             }
         });
     pads
+}
+
+/// The top usages DirectInput takes as game controllers: Generic Desktop's joystick, gamepad and
+/// multi-axis controller.
+fn is_game_controller(usage: (u16, u16)) -> bool {
+    matches!(usage, (0x01, 0x04) | (0x01, 0x05) | (0x01, 0x08))
+}
+
+/// Whether XInput reads the device at `path` (Windows names an Xbox-style pad's HID device with
+/// `IG_`, which SDL looks for too).
+fn xinput_reads(path: &str) -> bool {
+    path.to_ascii_uppercase().contains("IG_")
+}
+
+/// Windows' HID parser's description of a pad, freed when dropped.
+struct Preparsed(windows::Win32::Devices::HumanInterfaceDevice::PHIDP_PREPARSED_DATA);
+
+// SAFETY: the parsed description is read only, by one thread at a time (the pad's reader).
+unsafe impl Send for Preparsed {}
+
+impl Drop for Preparsed {
+    fn drop(&mut self) {
+        // SAFETY: the data HidD_GetPreparsedData gave, freed once.
+        unsafe {
+            let _ = windows::Win32::Devices::HumanInterfaceDevice::HidD_FreePreparsedData(self.0);
+        }
+    }
+}
+
+impl Preparsed {
+    fn of(file: &std::fs::File) -> Option<Preparsed> {
+        use windows::Win32::Devices::HumanInterfaceDevice::{
+            HidD_GetPreparsedData, PHIDP_PREPARSED_DATA,
+        };
+        use windows::Win32::Foundation::HANDLE;
+        let mut data = PHIDP_PREPARSED_DATA::default();
+        // SAFETY: an open HID handle; the data is freed by the drop.
+        unsafe { HidD_GetPreparsedData(HANDLE(file.as_raw_handle()), &mut data) }
+            .as_bool()
+            .then_some(Preparsed(data))
+    }
+
+    /// The pad's inputs: each usage of its input button and value capabilities.
+    fn elements(&self) -> Vec<Element> {
+        use windows::Win32::Devices::HumanInterfaceDevice::{
+            HidP_GetButtonCaps, HidP_GetCaps, HidP_GetValueCaps, HidP_Input, HIDP_BUTTON_CAPS,
+            HIDP_CAPS, HIDP_STATUS_SUCCESS, HIDP_VALUE_CAPS,
+        };
+        let mut caps = HIDP_CAPS::default();
+        // SAFETY: the parsed description.
+        if unsafe { HidP_GetCaps(self.0, &mut caps) } != HIDP_STATUS_SUCCESS {
+            return Vec::new();
+        }
+        let mut elements = Vec::new();
+        let mut n = caps.NumberInputButtonCaps;
+        let mut buttons = vec![HIDP_BUTTON_CAPS::default(); usize::from(n)];
+        // SAFETY: a buffer of `n` capabilities.
+        if n > 0
+            && unsafe { HidP_GetButtonCaps(HidP_Input, buttons.as_mut_ptr(), &mut n, self.0) }
+                == HIDP_STATUS_SUCCESS
+        {
+            for b in &buttons[..usize::from(n)] {
+                // SAFETY: the union's variant is the one `IsRange` says.
+                let (usages, first) = unsafe {
+                    if b.IsRange.as_bool() {
+                        let r = b.Anonymous.Range;
+                        (r.UsageMin..=r.UsageMax, r.DataIndexMin)
+                    } else {
+                        let u = b.Anonymous.NotRange;
+                        (u.Usage..=u.Usage, u.DataIndex)
+                    }
+                };
+                for (i, usage) in usages.enumerate() {
+                    elements.push(Element {
+                        page: b.UsagePage,
+                        usage,
+                        index: first.wrapping_add(i as u16),
+                        kind: Kind::Button,
+                    });
+                }
+            }
+        }
+        let mut n = caps.NumberInputValueCaps;
+        let mut values = vec![HIDP_VALUE_CAPS::default(); usize::from(n)];
+        // SAFETY: a buffer of `n` capabilities.
+        if n > 0
+            && unsafe { HidP_GetValueCaps(HidP_Input, values.as_mut_ptr(), &mut n, self.0) }
+                == HIDP_STATUS_SUCCESS
+        {
+            for v in &values[..usize::from(n)] {
+                // SAFETY: as above.
+                let (usages, first) = unsafe {
+                    if v.IsRange.as_bool() {
+                        let r = v.Anonymous.Range;
+                        (r.UsageMin..=r.UsageMax, r.DataIndexMin)
+                    } else {
+                        let u = v.Anonymous.NotRange;
+                        (u.Usage..=u.Usage, u.DataIndex)
+                    }
+                };
+                let (min, max) = dinput_order::logical_range(v.LogicalMin, v.LogicalMax, v.BitSize);
+                for (i, usage) in usages.enumerate() {
+                    elements.push(Element {
+                        page: v.UsagePage,
+                        usage,
+                        index: first.wrapping_add(i as u16),
+                        kind: Kind::Value {
+                            min,
+                            max,
+                            bits: v.BitSize,
+                        },
+                    });
+                }
+            }
+        }
+        elements
+    }
+}
+
+/// A pad read through its database line: its inputs as SDL counts them, their last values (a
+/// report with another report id leaves an input as it was).
+struct Mapped {
+    data: Preparsed,
+    layout: Layout,
+    mapping: Mapping,
+    pages: Vec<u16>,
+    pressed: HashSet<(u16, u16)>,
+    values: HashMap<(u16, u16), u32>,
+    usages: Vec<u16>,
+}
+
+impl Mapped {
+    fn new(file: &std::fs::File, mapping: Mapping) -> Option<Mapped> {
+        let data = Preparsed::of(file)?;
+        let layout = Layout::of(&data.elements());
+        let mut pages: Vec<u16> = layout.buttons.iter().map(|&(page, _)| page).collect();
+        pages.sort_unstable();
+        pages.dedup();
+        Some(Mapped {
+            usages: vec![0; layout.buttons.len().max(1)],
+            data,
+            layout,
+            mapping,
+            pages,
+            pressed: HashSet::new(),
+            values: HashMap::new(),
+        })
+    }
+
+    /// One input report's controls; `None` when it carries none of the pad's inputs.
+    fn read(&mut self, report: &[u8]) -> Option<Controls> {
+        use windows::Win32::Devices::HumanInterfaceDevice::{
+            HidP_GetUsageValue, HidP_GetUsages, HidP_Input, HIDP_STATUS_SUCCESS,
+        };
+        let mut report = report.to_vec();
+        let mut carried = false;
+        for &page in &self.pages {
+            let mut n = self.usages.len() as u32;
+            // SAFETY: a usage buffer of `n`; the parsed description and a whole report.
+            let status = unsafe {
+                HidP_GetUsages(
+                    HidP_Input,
+                    page,
+                    0,
+                    self.usages.as_mut_ptr(),
+                    &mut n,
+                    self.data.0,
+                    &mut report,
+                )
+            };
+            if status == HIDP_STATUS_SUCCESS {
+                carried = true;
+                self.pressed.retain(|&(p, _)| p != page);
+                for &usage in &self.usages[..(n as usize).min(self.usages.len())] {
+                    self.pressed.insert((page, usage));
+                }
+            }
+        }
+        for v in self.layout.axes.iter().chain(&self.layout.hats) {
+            let mut raw = 0u32;
+            // SAFETY: as above.
+            let status = unsafe {
+                HidP_GetUsageValue(
+                    HidP_Input,
+                    v.page,
+                    0,
+                    v.usage,
+                    &mut raw,
+                    self.data.0,
+                    &report,
+                )
+            };
+            if status == HIDP_STATUS_SUCCESS {
+                carried = true;
+                self.values.insert((v.page, v.usage), raw);
+            }
+        }
+        if !carried {
+            return None;
+        }
+        let joystick = self.layout.joystick(
+            |page, usage| self.pressed.contains(&(page, usage)),
+            |page, usage| self.values.get(&(page, usage)).copied(),
+        );
+        Some(self.mapping.controls(&joystick))
+    }
+}
+
+/// Opens and runs the pad at `path` through its line, if it is a game controller that XInput does
+/// not read and has one; `false` when it is passed over (to be looked at again only when plugged
+/// in again).
+fn add_mapped(pads: &HidPads, path: &str, device: &Device, db: &Database) -> bool {
+    if !is_game_controller(device.usage) || xinput_reads(path) {
+        return false;
+    }
+    let Some(mapping) = db.mapping(device.vendor, device.product) else {
+        eprintln!(
+            "nv-rs: game pads: the pad {:04x}:{:04x} is not read: the controller database has no \
+             line for it (one can be added in {} in the port's own folder)",
+            device.vendor,
+            device.product,
+            super::sdl_db::FILE
+        );
+        return false;
+    };
+    let Ok(reader) = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(SHARE_READ_WRITE)
+        .open(path)
+    else {
+        // Tried again at the next look.
+        return true;
+    };
+    let Some(mut mapped) = Mapped::new(&reader, mapping) else {
+        return false;
+    };
+    let _ = pads.add_mapped(path.to_string(), reader, device.input, move |report| {
+        mapped.read(report)
+    });
+    true
 }
 
 /// The paths of the HID device interfaces present (`CM_Get_Device_Interface_ListW`).
@@ -139,9 +390,10 @@ fn probe(path: &str) -> Option<Device> {
     identify(&file)
 }
 
-/// One look through the device list: each Sony pad not yet open is opened and run. `not_pads`
-/// holds the devices seen that are not pads, while they stay plugged in.
-fn look_for_pads(pads: &HidPads, not_pads: &mut HashSet<String>) {
+/// One look through the device list: each Sony pad and each pad with a database line not yet
+/// open is opened and run. `not_pads` holds the devices seen that are not read, while they stay
+/// plugged in.
+fn look_for_pads(pads: &HidPads, not_pads: &mut HashSet<String>, db: &Database) {
     pads.forget_gone();
     let paths = hid_paths();
     not_pads.retain(|p| paths.contains(p));
@@ -160,7 +412,9 @@ fn look_for_pads(pads: &HidPads, not_pads: &mut HashSet<String>) {
             device.output,
         );
         let Some(pad) = pad else {
-            not_pads.insert(path);
+            if !add_mapped(pads, &path, &device, db) {
+                not_pads.insert(path);
+            }
             continue;
         };
         let open = || {
@@ -227,7 +481,43 @@ mod tests {
         }
         let pads = HidPads::new();
         let mut not_pads = HashSet::new();
-        look_for_pads(&pads, &mut not_pads);
+        look_for_pads(&pads, &mut not_pads, &Database::windows());
         assert!(not_pads.iter().all(|p| paths.contains(p)));
+    }
+
+    #[test]
+    fn which_devices_are_game_controllers_and_which_xinputs() {
+        assert!(is_game_controller((1, 4)) && is_game_controller((1, 5)));
+        assert!(is_game_controller((1, 8)));
+        assert!(!is_game_controller((1, 2)) && !is_game_controller((1, 6)));
+        assert!(!is_game_controller((0x0c, 1)));
+        assert!(xinput_reads(r"\\?\HID#VID_045E&PID_028E&IG_00#3&1"));
+        assert!(xinput_reads(r"\\?\hid#vid_045e&pid_02ff&ig_00#a"));
+        assert!(!xinput_reads(r"\\?\HID#VID_2DC8&PID_6006#7&2"));
+    }
+
+    /// This machine's game controllers that XInput does not read: each one's description from
+    /// Windows' HID parser counted in SDL's order (whatever is plugged in; none is asserted).
+    #[test]
+    fn this_machines_game_controllers_are_described() {
+        for path in hid_paths() {
+            let Some(device) = probe(&path) else {
+                continue;
+            };
+            if !is_game_controller(device.usage) || xinput_reads(&path) {
+                continue;
+            }
+            let Ok(file) = std::fs::OpenOptions::new()
+                .access_mode(0)
+                .share_mode(SHARE_READ_WRITE)
+                .open(&path)
+            else {
+                continue;
+            };
+            if let Some(data) = Preparsed::of(&file) {
+                let layout = Layout::of(&data.elements());
+                assert!(layout.axes.len() <= 8 && layout.hats.len() <= 4);
+            }
+        }
     }
 }
