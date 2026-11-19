@@ -24,3 +24,7 @@ notices are in crates/nvse/NOTICE.
 
 The lists in `data/` are facts read from JIP's source and from its shipped DLL (jip_nvse.dll
 57.30): names, opcodes, parameter types and flags. No bytes of the DLL are included.
+
+The regular expression engine (src/ecma_regex.rs) translates the Microsoft C++ Standard
+Library's <regex> (Copyright (c) Microsoft Corporation, Apache-2.0 WITH LLVM-exception); its
+licence and what was changed are in LICENSE-msvc-stl.

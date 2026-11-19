@@ -50,6 +50,7 @@ pub mod commands;
 pub mod console;
 pub mod containers;
 pub mod cosave;
+pub mod ecma_regex;
 pub mod equip_hooks;
 pub mod game;
 pub mod game_patches;
