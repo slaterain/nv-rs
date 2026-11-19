@@ -1119,7 +1119,8 @@ mod tests {
         assert_eq!(slot, Some(four()));
         assert_eq!(line.as_deref(), Some("line"));
         let mut slot = None;
-        let line = super::take_pointer_speed(&mut slot, true, || panic!("read in a repeatable run"));
+        let line =
+            super::take_pointer_speed(&mut slot, true, || panic!("read in a repeatable run"));
         assert_eq!((slot, line), (None, None));
         let mut slot = None;
         let missing = || (Some(PointerSpeed::Missing(2)), "not set".into());
