@@ -137,8 +137,6 @@ const GET_MAX_DEPTH: u32 = 0x00a1_dfb0;
 const TILE_SET_FLOAT: u32 = 0x00a0_12d0;
 const TILE_IS_TRUE: u32 = 0x00a0_1230;
 const PREP_FOR_VISIBILITY: u32 = 0x00a1_dc20;
-/// `Tile::Value::Refresh` (`00A09410`, `thiscall`: a bool), which JIP's setters call.
-const VALUE_REFRESH: u32 = 0x00a0_9410;
 /// A tile value's number (+8).
 const VALUE_NUM: u32 = 8;
 /// The game's millisecond clock JIP reads (`*0x011F63A8`), the exe's empty text, and the OK
@@ -282,7 +280,7 @@ fn string_insert_char(e: &mut Engine, s: u32, c: u8, index: u32) {
         let fresh = heap_alloc(e, u32::from(room) + 1);
         let old = e.mem.u32(s + STR_DATA);
         if old != 0 {
-            let bytes = e.mem.read(old, u32::from(len));
+            let bytes = e.mem.bytes(old, u32::from(len));
             e.mem.write(fresh, &bytes);
             heap_free(e, old);
         }
@@ -290,7 +288,7 @@ fn string_insert_char(e: &mut Engine, s: u32, c: u8, index: u32) {
     }
     let data = e.mem.u32(s + STR_DATA);
     if index < u32::from(len) {
-        let tail = e.mem.read(data + index, u32::from(len) - index);
+        let tail = e.mem.bytes(data + index, u32::from(len) - index);
         e.mem.write(data + index + 1, &tail);
     }
     let len = len.wrapping_add(1);
@@ -314,7 +312,7 @@ fn string_erase_at(e: &mut Engine, s: u32, index: u32) {
         if after == 0 {
             e.mem.set_u8(data + u32::from(len), 0);
         } else {
-            let tail = e.mem.read(data + index + 1, after + 1);
+            let tail = e.mem.bytes(data + index + 1, after + 1);
             e.mem.write(data + index, &tail);
         }
     } else {

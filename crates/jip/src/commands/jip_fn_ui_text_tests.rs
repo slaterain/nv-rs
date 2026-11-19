@@ -103,6 +103,12 @@ fn note(addr: u32, w: &[u32]) {
     LOG.with(|l| l.borrow_mut().push((addr, w.to_vec())));
 }
 
+/// A stand-in at `A` that notes its words.
+fn noted<const A: u32>(_: &mut Engine, w: &[u32]) -> Ret {
+    note(A, w);
+    Ret::default()
+}
+
 fn alloc(size: u32) -> u32 {
     NEXT.with(|n| {
         let at = n.get();
@@ -190,20 +196,13 @@ fn setup() -> (Engine, Tiles) {
     e.mem.set_u32(CLICK_SLOT, CLICK_FN);
     e.mem.set_u32(FRAME_SLOT, EXE_FRAME);
     e.mem.set_u32(KEY_SLOT, EXE_KEY);
-    for addr in [
-        CLOSE_CONSOLE,
-        ENTER_STACK,
-        SET_FLOAT_FN,
-        PREP_FN,
-        EXE_CLOSE,
-        CLICK_FN,
-        REFRESH_FN,
-    ] {
-        e.register(addr, move |_, w| {
-            note(addr, w);
-            Ret::default()
-        });
-    }
+    e.register(CLOSE_CONSOLE, noted::<CLOSE_CONSOLE>);
+    e.register(ENTER_STACK, noted::<ENTER_STACK>);
+    e.register(SET_FLOAT_FN, noted::<SET_FLOAT_FN>);
+    e.register(PREP_FN, noted::<PREP_FN>);
+    e.register(EXE_CLOSE, noted::<EXE_CLOSE>);
+    e.register(CLICK_FN, noted::<CLICK_FN>);
+    e.register(REFRESH_FN, noted::<REFRESH_FN>);
     e.register(READ_FILE, |e, w| {
         note(READ_FILE, &[w[0]]);
         note(
@@ -268,7 +267,7 @@ fn kept(e: &Engine) -> usize {
 fn string_of(e: &Engine, at: u32) -> (Vec<u8>, u16, u16) {
     let data = e.mem.u32(at);
     let len = e.mem.u16(at + 4);
-    (e.mem.read(data, u32::from(len)), len, e.mem.u16(at + 6))
+    (e.mem.bytes(data, u32::from(len)), len, e.mem.u16(at + 6))
 }
 
 fn shown(e: &Engine) -> Vec<u8> {
@@ -586,6 +585,7 @@ fn editing_keys_move_and_erase() {
     key(&mut e, LEFT);
     key(&mut e, DELETE);
     assert_eq!((current(&e), cursor(&e)), (b"abcdeg".to_vec(), 5));
+    assert_eq!(shown(&e), b"abcde\x7fg");
     key(&mut e, RIGHT);
     assert_eq!(cursor(&e), 6);
     key(&mut e, LEFT);
@@ -769,8 +769,27 @@ fn set_text_input_string_sets_the_text() {
     assert_eq!(cursor(&e), 5);
     assert_eq!(shown(&e), b"hello|\nworld");
     assert_eq!(text(&e, t.text_v[1]), b"hello|\nworld");
+    // The cursor goes back to 0 first: the End key from there.
+    call_on(&mut e, STRING, 0, &[s(b"abc\ndef")]);
+    assert_eq!((current(&e), cursor(&e)), (b"abc\ndef".to_vec(), 3));
     call_on(&mut e, STRING, 0, &[s(b"")]);
     assert_eq!((current(&e), cursor(&e)), (vec![], 0));
+}
+
+/// A text that fills its room gets one byte more room for a character typed (JIP's
+/// `InsertChar`), its text kept.
+#[test]
+fn a_full_text_grows_by_one() {
+    let (mut e, _) = shown_menu();
+    let long = vec![b'x'; 0x401];
+    call_on(&mut e, STRING, 0, &[s(&long)]);
+    assert_eq!(string_of(&e, MENU + 0x34).2, 0x401);
+    assert_eq!(cursor(&e), 0x401);
+    type_text(&mut e, b"a");
+    let (text, len, room) = string_of(&e, MENU + 0x34);
+    assert_eq!((len, room), (0x402, 0x402));
+    assert_eq!(&text[..0x401], &long[..]);
+    assert_eq!(text[0x401], b'a');
 }
 
 /// Without JIP's hooks in (no menu shown by JIP, or its hooks out), or with no menu: both
@@ -828,7 +847,7 @@ fn other_buttons_do_nothing_and_no_text_is_empty() {
     e.site(SEAM, &[MENU, 1, 0]);
     assert_eq!(
         crate::script_call::calls(),
-        vec![(SCPT, 0, vec![EMPTY_TEXT])]
+        vec![(SCPT, 0, vec![crate::commands::test_support::EMPTY_TEXT])]
     );
 }
 
