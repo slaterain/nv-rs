@@ -3,6 +3,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use engine_core::extend::stewie;
 
 layout! {
     /// `HUDMainMenu` (Xbox PDB), 0x278 bytes. The offsets used here are
@@ -6812,6 +6813,31 @@ pub fn fn_0077c440(e: &mut Engine, value: u32) {
     });
 }
 
+/// The level-up's two level texts (`0077d24b` to `0077d2b1`): the level (`011d9e7c`) into tile
+/// +0xe8 and the next level (`011d9e78`) into tile +0xec, each printed with `"%d"` into a buffer
+/// and set as the tile's string.
+///
+/// `0077d258`, `0077d28d`: lStewieAl's Tweaks' row S0057 (`patchFixLevelGreaterThan99Crash`): the
+/// levels are printed into a 16-byte buffer (the function's other one), where the exe's 3 bytes
+/// cannot hold a level of 100 or more and the C runtime's check ends the game.
+fn xp_print_levels(e: &mut Engine, this: Ptr<HUDMainMenu>) {
+    let size = if e.stewie(stewie::LEVEL_GREATER_THAN_99) {
+        0x10_u32
+    } else {
+        3
+    };
+    e.with_stack(size.max(4), |e, buffer| {
+        let level = e.mem.u32(0x011d_9e7c);
+        e.call(0x0040_6d00, &args![buffer, size, 0x0102_0774_u32, level]);
+        let tile = xp_tile(e, this, 0xe8);
+        e.call(0x00a0_1350, &args![tile, 0xfc4_u32, buffer, 1_u32]);
+        let next = e.mem.u32(0x011d_9e78);
+        e.call(0x0040_6d00, &args![buffer, size, 0x0102_0774_u32, next]);
+        let tile = xp_tile(e, this, 0xec);
+        e.call(0x00a0_1350, &args![tile, 0xfc4_u32, buffer, 1_u32]);
+    });
+}
+
 fn xp_tile(e: &Engine, this: Ptr<HUDMainMenu>, offset: u32) -> u32 {
     e.mem.u32(this.addr() + offset)
 }
@@ -7016,16 +7042,7 @@ fn xp_animate_current(
                     required_next = e.call(0x0064_8b50, &args![next]).i32();
                     let bar = xp_tile(e, this, 0xe4);
                     hud_set_float(e, bar, 0xfa1, min);
-                    e.with_stack(4, |e, buffer| {
-                        let level = e.mem.u32(0x011d_9e7c);
-                        e.call(0x0040_6d00, &args![buffer, 3_u32, 0x0102_0774_u32, level]);
-                        let tile = xp_tile(e, this, 0xe8);
-                        e.call(0x00a0_1350, &args![tile, 0xfc4_u32, buffer, 1_u32]);
-                        let next = e.mem.u32(0x011d_9e78);
-                        e.call(0x0040_6d00, &args![buffer, 3_u32, 0x0102_0774_u32, next]);
-                        let tile = xp_tile(e, this, 0xec);
-                        e.call(0x00a0_1350, &args![tile, 0xfc4_u32, buffer, 1_u32]);
-                    });
+                    xp_print_levels(e, this);
                     if required_next < current_xp {
                         if max < min {
                             min = max;
@@ -15968,6 +15985,105 @@ mod tests {
             .map(|(_, words)| words[3])
             .collect();
         assert_eq!(formatted, vec![20, 7, 8]);
+    }
+
+    /// lStewieAl's Tweaks' row S0057: the level-up texts for level 100. The stand-in of the C
+    /// runtime's `sprintf_s` (`00406d00`) stops when the text and its terminator do not fit, as the
+    /// runtime's invalid-parameter check ends the game; with the row off the 3-byte buffer stops,
+    /// with it on both levels are printed and set.
+    #[test]
+    fn s0057_level_100_texts() {
+        for (on, level) in [(false, 100u32), (true, 100), (true, 1_000_000_000)] {
+            let mut e = Engine::new();
+            e.map(0x011d_9000, 0x1000);
+            e.mem.set_u32(0x011d_9e7c, level);
+            e.mem.set_u32(0x011d_9e78, level + 1);
+            let menu = e.new_object::<HUDMainMenu>();
+            for offset in [0xe8, 0xec] {
+                let tile = e.mem.alloc(4);
+                e.mem.set_u32(menu.addr() + offset, tile);
+            }
+            e.register_double(0x0040_6d00, move |e, words| {
+                // The buffer's size: 16 bytes with the row, the exe's 3 without; all of it written, as
+                // `sprintf_s` fills it, so a smaller buffer would be overrun.
+                assert_eq!(words[1], if on { 0x10 } else { 3 }, "the buffer's size");
+                let text = words[3].to_string();
+                assert!(
+                    text.len() < words[1] as usize,
+                    "sprintf_s: {text} does not fit {} bytes",
+                    words[1]
+                );
+                let mut bytes = text.into_bytes();
+                bytes.resize(words[1] as usize, 0);
+                e.mem.write(words[0], &bytes);
+                Ret::default()
+            });
+            e.register_double(0x00a0_1350, |_, _| Ret::default());
+            e.set_stewie(stewie::LEVEL_GREATER_THAN_99, on);
+            e.call_log = Some(vec![]);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                xp_print_levels(&mut e, menu);
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                let set = e
+                    .call_log
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .filter(|(address, _)| *address == 0x00a0_1350)
+                    .count();
+                assert_eq!(set, 2);
+            }
+        }
+    }
+
+    /// lStewieAl's Tweaks' row S0057 below level 100 (ordinary input): the two tiles get the same
+    /// texts with the row on as off (only the buffer's size, 3 or 16 bytes, differs).
+    #[test]
+    fn s0057_row_on_below_level_100_gives_the_same_texts() {
+        let run = |on: bool| {
+            let mut e = Engine::new();
+            e.map(0x011d_9000, 0x1000);
+            e.mem.set_u32(0x011d_9e7c, 5);
+            e.mem.set_u32(0x011d_9e78, 6);
+            let menu = e.new_object::<HUDMainMenu>();
+            let mut tiles = vec![];
+            for offset in [0xe8, 0xec] {
+                let tile = e.mem.alloc(4);
+                e.mem.set_u32(menu.addr() + offset, tile);
+                tiles.push(tile);
+            }
+            e.register_double(0x0040_6d00, |e, words| {
+                let text = words[3].to_string();
+                assert!(text.len() < words[1] as usize);
+                e.mem.write(words[0], text.as_bytes());
+                e.mem.set_u8(words[0] + text.len() as u32, 0);
+                Ret::default()
+            });
+            let set = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+            let seen = set.clone();
+            e.register_double(0x00a0_1350, move |e, words| {
+                let text = e.mem.cstr(words[2]).to_vec();
+                seen.borrow_mut().push((words[0], words[1], text, words[3]));
+                Ret::default()
+            });
+            e.set_stewie(stewie::LEVEL_GREATER_THAN_99, on);
+            xp_print_levels(&mut e, menu);
+            let texts = set.borrow().clone();
+            (texts, tiles)
+        };
+        let (off, on) = (run(false), run(true));
+        assert_eq!(on, off);
+        let (texts, tiles) = on;
+        assert_eq!(
+            texts,
+            vec![
+                (tiles[0], 0xfc4, b"5".to_vec(), 1),
+                (tiles[1], 0xfc4, b"6".to_vec(), 1)
+            ]
+        );
     }
 
     #[test]
