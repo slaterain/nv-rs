@@ -353,8 +353,12 @@ impl Row {
                     out.prefs = set_key(&out.prefs, "Display", "iSize H", h);
                 }
             }
-            r if r.switch().is_some() => {
-                if let Some((section, key)) = r.switch() {
+            Row::AmbientOcclusion
+            | Row::SunShadows
+            | Row::SunLightFromSky
+            | Row::SunShadowsCharacters
+            | Row::JipBuiltIn => {
+                if let Some((section, key)) = self.switch() {
                     ini(section, key, if choice == "On" { "1" } else { "0" });
                 }
             }
