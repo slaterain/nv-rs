@@ -98,12 +98,19 @@ try {
     # The licences and notices LEGAL.md asks for.
     Copy-Item -LiteralPath (Join-Path $root 'distribution/licenses') -Destination $stage -Recurse
     foreach ($file in @('LICENSE', 'LEGAL.md')) { Copy-Item -LiteralPath (Join-Path $root $file) -Destination $stage }
-    Copy-Item -LiteralPath (Join-Path $root 'crates/vorbis/LICENSE-libvorbis') -Destination (Join-Path $stage 'licenses/LICENSE-libvorbis')
-    Copy-Item -LiteralPath (Join-Path $root 'crates/nvse/LICENSE-msvc-stl') -Destination (Join-Path $stage 'licenses/LICENSE-msvc-stl')
-    # JIP's notice and its regular expressions' STL licence, under the names distribution/notices.txt
-    # gives them in the Linux and macOS packages.
-    Copy-Item -LiteralPath (Join-Path $root 'crates/jip/NOTICE') -Destination (Join-Path $stage 'licenses/NOTICE-jip')
-    Copy-Item -LiteralPath (Join-Path $root 'crates/jip/LICENSE-msvc-stl') -Destination (Join-Path $stage 'licenses/LICENSE-msvc-stl-jip')
+    # The notices of code that is not a crates.io crate: every one distribution/notices.txt lists (a
+    # file, a tab, its name in licenses/), the list the Linux and macOS script copies too, so the
+    # packages cannot drift apart; package-check --notices below refuses a package without one.
+    $noticeList = Join-Path $root 'distribution/notices.txt'
+    foreach ($line in [IO.File]::ReadAllLines($noticeList)) {
+        $line = $line.TrimEnd("`r")
+        if (!$line -or $line.StartsWith('#')) { continue }
+        $file, $named = $line -split "`t", 2
+        if (!$named) { throw "distribution/notices.txt names no file in the package for: $line" }
+        $from = Join-Path $root $file
+        if (!(Test-Path -LiteralPath $from -PathType Leaf)) { throw "The notice $file is missing." }
+        Copy-Item -LiteralPath $from -Destination (Join-Path $stage "licenses/$named")
+    }
     # Text files for Notepad.
     foreach ($file in @('READ ME.txt', 'mods/READ ME.txt')) {
         $path = Join-Path $stage $file
@@ -135,6 +142,8 @@ try {
     # Required: no run of the game's bytes longer than the C runtime's own tables (the longest seen
     # is about 2 KB) in any program.
     $checkArguments += @('--game', $Game, '--max-run', '4096')
+    # Every notice of distribution/notices.txt in licenses/ under its name.
+    $checkArguments += @('--notices', $noticeList)
     & (Join-Path $x64 'package-check.exe') @checkArguments
     if ($LASTEXITCODE) { throw 'package-check found something that must not be in the package.' }
 

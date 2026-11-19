@@ -502,8 +502,23 @@ pub fn fn_00628f90(e: &mut Engine, this: Ptr, reference: u32, out: u32) {
         let at = |n: u32| frame.addr() + 0x250 - n;
         let model = e.call(REFERENCE_MODEL_WORD, &args![reference]).u32();
         let collidable = e.call(FIND_COLLIDABLE_REF, &args![model]).u32();
-        typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, at(0x28)));
-        e.call(LOCAL_48_CONSTRUCT, &args![at(0x70)]);
+        // Seam (JIP LN NVSE's ToggleNoZPosReset: 16 bytes at `0x629006` in place of the two
+        // locals' constructor calls, written the first time it is turned on): words: the
+        // collidable reference; an answer of 1 (its JIP flag `+0x5F` bit 0x10) ends the
+        // function, 0 goes on without the two constructors. Asked only while JIP is installed.
+        let jip = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+            e.site(0x0062_9006, &[collidable])
+        } else {
+            None
+        };
+        match jip {
+            Some(0) => {}
+            Some(_) => return,
+            None => {
+                typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, at(0x28)));
+                e.call(LOCAL_48_CONSTRUCT, &args![at(0x70)]);
+            }
+        }
         e.vcall(reference, 0xf4, &args![at(0x70)]);
         e.call(LOCAL_34_CONSTRUCT, &args![at(0xa4)]);
         e.call(LOCAL_FROM_48, &args![at(0xa4), at(0x70)]);
@@ -1370,6 +1385,70 @@ mod lookahead2_tests {
         let log = e.call_log.take().unwrap();
         assert_eq!(log.len(), 2);
         assert_eq!(log[1], (REFERENCE_FLAG_TEST, vec![reference, 0x20]));
+    }
+
+    thread_local! {
+        /// The words the seam's test handler was asked with.
+        static ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn asked(w: &[u32]) {
+        ASKED.with(|a| a.borrow_mut().push(w.to_vec()));
+    }
+
+    /// JIP LN NVSE's ToggleNoZPosReset seam at `0x629006`: asked with the collidable reference (not
+    /// the reference: the rig's collidable one is another object) while JIP is installed; 1 ends
+    /// the function before the reference's data is read, 0 goes on without the two constructors,
+    /// none as the exe.
+    #[test]
+    fn jip_no_z_pos_reset_seam() {
+        use engine_core::extend::jip_patches;
+        for (word, answer, goes_on, constructed) in [
+            (0, 1, true, true),
+            (jip_patches::INSTALLED, 1, false, false),
+            (jip_patches::INSTALLED, 0, true, false),
+            (jip_patches::INSTALLED, 2, true, true),
+        ] {
+            let (mut e, reference, collidable) = rig(vec![], vec![]);
+            assert_ne!(collidable, reference);
+            ASKED.with(|a| a.borrow_mut().clear());
+            e.set_jip_patches(word);
+            match answer {
+                0 => e.on_site_for_test(0x0062_9006, |_, w| {
+                    asked(w);
+                    Some(0)
+                }),
+                1 => e.on_site_for_test(0x0062_9006, |_, w| {
+                    asked(w);
+                    Some(1)
+                }),
+                _ => e.on_site_for_test(0x0062_9006, |_, w| {
+                    asked(w);
+                    None
+                }),
+            }
+            e.call(0x0062_8f90, &args![0x9000u32, reference, 0x5500u32]);
+            let want = if word == 0 {
+                vec![]
+            } else {
+                vec![vec![collidable]]
+            };
+            assert_eq!(
+                ASKED.with(|a| a.borrow().clone()),
+                want,
+                "{word:x} {answer}"
+            );
+            assert_eq!(
+                !calls(&e, FIND_WARP_LOCATION).is_empty(),
+                goes_on,
+                "{word:x} {answer}"
+            );
+            assert_eq!(
+                !calls(&e, LOCAL_48_CONSTRUCT).is_empty(),
+                constructed,
+                "{word:x} {answer}"
+            );
+        }
     }
 
     #[test]

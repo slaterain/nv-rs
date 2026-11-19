@@ -435,6 +435,13 @@ pub const SITES: &[Entry] = &[
         owners: NVSE,
         step: "I-14",
     },
+    // ScriptCompiler::GetNextLine 005af3f0: xNVSE's line reader in its place (ParseNextLine,
+    // PatchGameCommandParser).
+    Entry {
+        addr: 0x005a_f3f0,
+        owners: NVSE,
+        step: "I-14 B14",
+    },
     // ScriptCompiler::IsValidVariableName 005afeb0: the form lookup (none with xNVSE).
     Entry {
         addr: 0x005a_fedb,
@@ -458,6 +465,13 @@ pub const SITES: &[Entry] = &[
         addr: 0x005b_19ba,
         owners: NVSE,
         step: "I-14",
+    },
+    // ScriptCompiler::StandardCompile 005b1ba0: each parameter's word read (0x5B1C65), where a
+    // `(` starts an inline expression (xNVSE's InlineExpressionHook, PatchGameCommandParser).
+    Entry {
+        addr: 0x005b_1c65,
+        owners: NVSE,
+        step: "I-14 B14",
     },
     // ScriptCompiler::StandardCompile 005b1ba0: the byte map's read for a value parameter (xNVSE
     // maps the double type to the integer and float case), and the end-of-line check (off while
@@ -2978,7 +2992,7 @@ mod tests {
         ] {
             assert!(find(SITES, Owner::Nvse, a).is_some(), "{a:08x}");
         }
-        assert_eq!(SITES.len(), 124);
+        assert_eq!(SITES.len(), 126);
         // UI Organizer's ten (UIOLoad's place, ResolveXMLFileHook's, the five hardcore zooms,
         // FinalPostParse, the operators' dispatch, the text scale), its alone.
         for a in [
@@ -3001,10 +3015,12 @@ mod tests {
             0x005a_ebb1,
             0x005a_ed78,
             0x005a_eda0,
+            0x005a_f3f0,
             0x005a_fedb,
             0x005b_0a3f,
             0x005b_0f68,
             0x005b_19ba,
+            0x005b_1c65,
             0x005b_2fa2,
             0x005b_3a8d,
         ] {
