@@ -7033,7 +7033,8 @@ pub fn fn_00a0caf0(e: &mut Engine, this: Ptr<BSSimpleArray>, value: u32, compare
 // Translated from 00a0cb90 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `BSSimpleArray<Tile::Value *, 8>::SortedFind` (Xbox PDB): `bsearch` of
 /// the key in the buffer (4-byte elements, `compare` as the comparison);
-/// answers the element's index or -1 when there is none.
+/// answers the element's index or -1 when there is none. The buffer is read again
+/// for the index, after the search.
 pub fn bs_simple_array_tile_value_sorted_find(
     e: &mut Engine,
     this: Ptr<BSSimpleArray>,
@@ -7048,6 +7049,8 @@ pub fn bs_simple_array_tile_value_sorted_find(
     if found == 0 {
         -1
     } else {
+        // `00a0cbcd`: the buffer is read again after the search.
+        let buffer = e.get(this, BSSimpleArray::pBuffer);
         (found.wrapping_sub(buffer) >> 2) as i32
     }
 }

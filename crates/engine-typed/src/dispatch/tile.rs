@@ -141,6 +141,8 @@ pub fn sorted_find(e: &mut Engine, this: Ptr, key: u32, compare: u32) -> i32 {
     if found == 0 {
         -1
     } else {
+        // The exe reads the buffer again after the search (`00a0cbcd`): a compare can move it.
+        let buffer = e.mem.u32(array.wrapping_add(ARRAY_BUFFER));
         i32::from_ne_bytes((found.wrapping_sub(buffer) >> 2).to_ne_bytes())
     }
 }
