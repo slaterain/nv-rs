@@ -374,6 +374,71 @@ pub(super) fn frame_of_style(style: u32) -> Frame {
     }
 }
 
+/// A monitor of `size` real pixels at the system's `scale` (2.0: two real pixels to a scaled one)
+/// in the system's scaled pixels, the ones a framed window is sized and placed in.
+pub(super) fn scaled_screen(size: (u32, u32), scale: f64) -> (f64, f64) {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    (f64::from(size.0) / scale, f64::from(size.1) / scale)
+}
+
+/// Whether the game's framed window, whose rectangle the game made `outer` scaled pixels (its
+/// client area and the frame the game added for it, Windows' for its style), fits a screen of
+/// `screen` scaled pixels. A window as wide or as tall as the screen does not: with its frame it
+/// would reach past the screen's edges (a Steam Deck's 1280 by 800 game on its 1280 by 800
+/// screen, report 004), so the window layer shows it borderless over the screen instead.
+pub(super) fn fits_screen(outer: (i32, i32), screen: (f64, f64)) -> bool {
+    f64::from(outer.0) <= screen.0 && f64::from(outer.1) <= screen.1
+}
+
+/// The log line when the game's framed window does not fit its screen ([`fits_screen`]).
+pub(super) fn too_large_line(outer: (i32, i32), screen: (f64, f64)) -> String {
+    format!(
+        "the game's window: {}x{} with its frame does not fit the screen ({}x{} in the system's \
+         scaled pixels): shown borderless over the screen instead, the game's picture scaled to it",
+        outer.0,
+        outer.1,
+        screen.0.round(),
+        screen.1.round()
+    )
+}
+
+/// The log line for the game's framed window that fits its screen: its client area and the screen.
+pub(super) fn framed_line(client: (u32, u32), screen: (f64, f64)) -> String {
+    format!(
+        "the game's window: framed, its client area {}x{} on a screen of {}x{} in the system's \
+         scaled pixels",
+        client.0,
+        client.1,
+        screen.0.round(),
+        screen.1.round()
+    )
+}
+
+/// Whether the borderless window, given `window` real pixels over a monitor that reads `monitor`
+/// real pixels, shows the monitor was read turned: the two sizes swapped. Wayland reports an
+/// output's mode before its turn and winit 0.30 gives no turn, so a screen made upright and turned
+/// to lie wide (a handheld's built-in one: the Steam Deck's 800 by 1280 panel shown at 1280 by 800)
+/// reads upright, and the game was told an upright screen.
+pub(super) fn read_turned(window: (u32, u32), monitor: (u32, u32)) -> bool {
+    window != monitor && window == (monitor.1, monitor.0)
+}
+
+/// The log line when the monitor was read turned ([`read_turned`]): what the game's own settings
+/// need for a picture of the screen's shape.
+pub(super) fn turned_line(window: (u32, u32), monitor: (u32, u32)) -> String {
+    format!(
+        "the screen reads {}x{}, but the borderless window over it is {}x{}: this system reports \
+         the screen turned (Wayland gives a turned screen's size before its turn). The game draws at \
+         its FalloutPrefs.ini [Display] iSize W and iSize H: set them to {} and {} for a picture of \
+         the screen's shape",
+        monitor.0, monitor.1, window.0, window.1, window.0, window.1
+    )
+}
+
 /// Runs `f` (a window layer's loop), answering the message of a panic in it instead of passing
 /// the panic on: a library the layer loads at run time that is missing, or a window system that
 /// lacks what it needs, stops winit with a panic, and the run is then ended with a line naming it.
