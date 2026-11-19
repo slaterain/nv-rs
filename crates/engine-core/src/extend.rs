@@ -202,21 +202,6 @@ pub const WRAPS: &[Entry] = &[
         owners: NVSE,
         step: "I-9",
     },
-    // TESObjectWEAP::GetCurrentAmmo 00525980 (reached by address; its own file calls it by
-    // address too): JIP LN NVSE's InitRockItLauncher (JIP's GetEquippedAmmo: none for its
-    // Rock-It Launcher).
-    Entry {
-        addr: 0x0052_5980,
-        owners: JIP,
-        step: "3.5f",
-    },
-    // The weapon's projectile for an actor 00525a90 (reached only by address): JIP LN NVSE's
-    // InitRockItLauncher (GetWeaponProjectileHook).
-    Entry {
-        addr: 0x0052_5a90,
-        owners: JIP,
-        step: "3.5f",
-    },
     // ScriptEventList::SetActionFlag: the game events of the script event masks.
     Entry {
         addr: 0x005a_c750,
@@ -259,47 +244,6 @@ pub const WRAPS: &[Entry] = &[
         addr: 0x0070_52f0,
         owners: NVSE,
         step: "I-4",
-    },
-    // The recipe menu's filter 00728d60 (reached only by address, as the list box's filter): JIP
-    // LN NVSE's InitItemFilter (`RecipeFilterHook` at its end): a recipe the filter keeps is still
-    // left out when its name lacks SetItemFilter's text.
-    Entry {
-        addr: 0x0072_8d60,
-        owners: JIP,
-        step: "3.5f",
-    },
-    // BarterMenu::FilterModeFunc 007304b0 (reached only by address): JIP LN NVSE's InitItemFilter
-    // (`ItemFilterHook`), as above for the item's form.
-    Entry {
-        addr: 0x0073_04b0,
-        owners: JIP,
-        step: "3.5f",
-    },
-    // ContainerMenu::FilterModeFunc 0075e650 (reached only by address): as above.
-    Entry {
-        addr: 0x0075_e650,
-        owners: JIP,
-        step: "3.5f",
-    },
-    // HUDMainMenu::ShowQuestName 0077a480 and ShowQuestObjective 0077a5b0 (reached only by
-    // address): JIP LN NVSE's SuppressQuestMessages (`QueueQuestMsgHook` in place of the first,
-    // a `ret` at the second, for one frame).
-    Entry {
-        addr: 0x0077_a480,
-        owners: JIP,
-        step: "3.5f",
-    },
-    Entry {
-        addr: 0x0077_a5b0,
-        owners: JIP,
-        step: "3.5f",
-    },
-    // InventoryMenu::FilterFunc 00782620 (reached only by address): JIP LN NVSE's InitItemFilter
-    // (`ItemFilterHook`).
-    Entry {
-        addr: 0x0078_2620,
-        owners: JIP,
-        step: "3.5f",
     },
     // PlayerCharacter::Reload 0095d3f0, the function the player's vtable slot 0108ae28 holds
     // (xNVSE's `MaybePreventReload` writes the slot; the exe reaches the function only through
@@ -628,27 +572,6 @@ pub const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.5c",
     },
-    // A reference's reset onto the ground 00628f90, after its collidable reference (0x629006):
-    // JIP LN NVSE's ToggleNoZPosReset (a flagged reference keeps its height).
-    Entry {
-        addr: 0x0062_9006,
-        owners: JIP,
-        step: "3.5f",
-    },
-    // LoadedAreaBound::WarpActor 006295e0, at its start (0x6295E9): JIP LN NVSE's
-    // ToggleNoZPosReset (a flagged actor is not warped).
-    Entry {
-        addr: 0x0062_95e9,
-        owners: JIP,
-        step: "3.5f",
-    },
-    // Moon::Moon 00634a70, its texture names (0x634B30): JIP LN NVSE's SetMoonTexture (InitMoonHook
-    // while its moon refresh runs).
-    Entry {
-        addr: 0x0063_4b30,
-        owners: JIP,
-        step: "3.5f",
-    },
     // Sky's weather update 0063d1d0, the transition's share: JIP LN NVSE's UpdateWeather.
     Entry {
         addr: 0x0063_d4f5,
@@ -687,39 +610,11 @@ pub const SITES: &[Entry] = &[
         owners: NVSE,
         step: "I-8",
     },
-    // RecipeMenu::DoClick 007274b0, its switch (the bound at 0x7274E1, the byte map and the
-    // table): JIP LN NVSE's EnableImprovedRecipeMenu (ids 7 and 15 to RecipeMenuAcceptHook).
-    Entry {
-        addr: 0x0072_74e1,
-        owners: JIP,
-        step: "3.5f",
-    },
-    // The count the recipe menu offers 00727920, the 100 stored first (0x727975): JIP LN NVSE's
-    // UnlockRecipeMenuQuantity and EnableImprovedRecipeMenu.
-    Entry {
-        addr: 0x0072_7975,
-        owners: JIP,
-        step: "3.5f",
-    },
-    // RecipeMenu's craft 007284f0, the item's message (0x728933): JIP LN NVSE's
-    // ToggleCraftingMessages.
-    Entry {
-        addr: 0x0072_8933,
-        owners: JIP,
-        step: "3.5f",
-    },
     // RecipeMenu's craft 007284f0: JIP LN NVSE's ItemCrafted (OnCrafting).
     Entry {
         addr: 0x0072_89ff,
         owners: JIP,
         step: "3.5a",
-    },
-    // RecipeMenu's craft 007284f0, the menu's close (0x728A0C): JIP LN NVSE's
-    // EnableImprovedRecipeMenu (RecipeMenuCloseHook: the menu stays open, its list refreshed).
-    Entry {
-        addr: 0x0072_8a0c,
-        owners: JIP,
-        step: "3.5f",
     },
     // BarterMenu::CompleteTransaction 0072fd10: OnSell, an item bought and one sold.
     Entry {
@@ -1040,40 +935,12 @@ pub const SITES: &[Entry] = &[
         owners: NVSE,
         step: "I-10",
     },
-    // PlayerCharacter::Update 0093e860, the ammo switch key's weapon entry test (0x940998): JIP
-    // LN NVSE's InitRockItLauncher (PCAmmoSwitchHook: no switch for its Rock-It Launcher).
-    Entry {
-        addr: 0x0094_0998,
-        owners: JIP,
-        step: "3.5f",
-    },
     // PlayerCharacter::Update 0093e860, the activation of the reference under the crosshair: JIP LN
     // NVSE's InteractionDisabled (its activation half; 0x775B9B is the other).
     Entry {
         addr: 0x0094_3279,
         owners: JIP,
         step: "3.5c",
-    },
-    // The player's look handling 009445b0, the zoom test (its `JNP` at 0x945A28): JIP LN NVSE's
-    // ToggleVanityWheel (`SafeWrite8(0x945A29, ..)`), the wheel's zoom skipped while it is off.
-    Entry {
-        addr: 0x0094_5a28,
-        owners: JIP,
-        step: "3.5f",
-    },
-    // PlayerCharacter::AmmoSwapHelper 009462c0, the second weapon entry call (0x946310): JIP LN
-    // NVSE's InitRockItLauncher (RILAmmoFixHook: no ammo swap for its Rock-It Launcher).
-    Entry {
-        addr: 0x0094_6310,
-        owners: JIP,
-        step: "3.5f",
-    },
-    // The player's camera distance 0094a0c0, the `JZ` after the camera pick: JIP LN NVSE's
-    // ToggleCameraCollision (`SafeWrite8(0x94A34E, ..)`), the pick's hit ignored while it is off.
-    Entry {
-        addr: 0x0094_a34e,
-        owners: JIP,
-        step: "3.5f",
     },
     // The player's cell change 0094cae0, its test call: JIP LN NVSE's PCCellChange.
     Entry {
@@ -3111,7 +2978,7 @@ mod tests {
         ] {
             assert!(find(SITES, Owner::Nvse, a).is_some(), "{a:08x}");
         }
-        assert_eq!(SITES.len(), 135);
+        assert_eq!(SITES.len(), 124);
         // UI Organizer's ten (UIOLoad's place, ResolveXMLFileHook's, the five hardcore zooms,
         // FinalPostParse, the operators' dispatch, the text scale), its alone.
         for a in [
@@ -3167,17 +3034,6 @@ mod tests {
             0x0060_678f,
             0x0066_ee72,
             0x0087_ce34,
-            0x0062_9006,
-            0x0062_95e9,
-            0x0063_4b30,
-            0x0094_0998,
-            0x0094_5a28,
-            0x0094_6310,
-            0x0094_a34e,
-            0x0072_74e1,
-            0x0072_7975,
-            0x0072_8933,
-            0x0072_8a0c,
             0x0088_c74e,
             0x0088_c87a,
             0x0089_1c86,

@@ -8,13 +8,15 @@
 //! The port has no code bytes to write. Each place JIP writes inside a function is a seam in the
 //! translation (engine-fallout-interface's `recipemenu.rs`), asked while JIP is installed; each
 //! whole function JIP replaces or jumps out of at its end, reached only by address, is a wrap,
-//! put in while JIP is installed and doing what the exe does until its command has run. The
+//! doing what the exe does until its command has run. Both are put in only while JIP answers
+//! "installed" ([`AREA`]; the rows in engine-core's `patch_rows/cmds.rs`). The
 //! handlers answer from JIP's state: whether the messages are on (JIP reads its own byte at
 //! `0x728933`), the number stored at `0x727975`, whether the improved menu is in (the byte at
 //! `0x7274E1`), whether quest messages show, and the filter's text. Run-wide; never saved (the
 //! code stays as written until the game ends, as in JIP).
 
 use super::Handlers;
+use crate::game_patches::Area;
 use engine_core::extend::{Owner, SiteSlot, WrapSlot};
 use engine_core::prelude::*;
 use nvse::commands::Read;
@@ -68,10 +70,32 @@ fn patches(e: &mut Engine) -> &RecipeMenuPatches {
     e.ext_free::<RecipeMenuPatches>()
 }
 
-/// The four seams' handlers, the six wraps and the state's slots (made before the threads
-/// start).
+/// The state's slots (made before the threads start).
 pub fn install(e: &mut Engine) {
     e.ext_free::<RecipeMenuPatches>();
+    e.ext_free::<UiCode>();
+}
+
+/// The four seams and the six wraps: in with JIP's `INSTALLED`, as JIP's other patches (with
+/// JIP not installed nothing is asked and nothing wrapped).
+pub const AREA: Area = Area {
+    name: "recipe menu, quest messages, item filter",
+    fix_sites: &[],
+    fix_wraps: &[],
+    install_fixes: crate::game_patches::nothing,
+    jip_sites: &[CLICK.addr(), MOST.addr(), MESSAGE.addr(), CLOSE.addr()],
+    jip_wraps: &[
+        RECIPE_FILTER_FUNC.addr(),
+        BARTER_FILTER_FUNC.addr(),
+        CONTAINER_FILTER_FUNC.addr(),
+        SHOW_QUEST_NAME.addr(),
+        SHOW_QUEST_OBJECTIVE.addr(),
+        INVENTORY_FILTER_FUNC.addr(),
+    ],
+    install_jip,
+};
+
+fn install_jip(e: &mut Engine) {
     e.on_site(CLICK, click);
     e.on_site(MOST, most);
     e.on_site(MESSAGE, message);
@@ -293,10 +317,8 @@ pub const BARTER_FILTER_FUNC: WrapSlot = WrapSlot::new(Owner::Jip, 0x0073_04b0);
 pub const CONTAINER_FILTER_FUNC: WrapSlot = WrapSlot::new(Owner::Jip, 0x0075_e650);
 pub const INVENTORY_FILTER_FUNC: WrapSlot = WrapSlot::new(Owner::Jip, 0x0078_2620);
 
-/// The wraps and their state's slot (made before the threads start); each wrap does what the exe
-/// does until its command has run.
+/// The wraps; each does what the exe does until its command has run.
 fn install_wraps(e: &mut Engine) {
-    e.ext_free::<UiCode>();
     e.wrap(SHOW_QUEST_NAME, show_quest_name);
     e.wrap(SHOW_QUEST_OBJECTIVE, show_quest_objective);
     e.wrap(RECIPE_FILTER_FUNC, recipe_filter);
