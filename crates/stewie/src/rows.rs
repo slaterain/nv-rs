@@ -197,6 +197,14 @@ pub const ROWS: &[Row] = &[
         tweaks: None,
         summary: "saving with a placed object that has no cell no longer crashes",
     },
+    Row {
+        bit: stewie::CHANGES_MAP_BUCKETS,
+        function: "Inlines",
+        plan: "S1016.845558",
+        key: "bInlinesChangesMapBuckets",
+        tweaks: None,
+        summary: "a save's changed-forms map gets 10,037 buckets (Engine Optimizations): shorter saves late in a playthrough; changed forms are written in another order (saves load either way)",
+    },
 ];
 
 /// The keys of `[nv-rs Stewie]` and how they turn the rows on.

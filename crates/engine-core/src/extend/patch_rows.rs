@@ -20,6 +20,7 @@
 
 use super::Entry;
 
+mod cmds;
 mod dialogue;
 mod ga;
 mod gb;
@@ -35,7 +36,7 @@ mod gs;
 mod gw;
 mod gx;
 
-/// Every file's seams: step 3.9a's, then the groups'.
+/// Every file's seams: step 3.9a's, then the groups', then the commands'.
 pub(super) const SITES: &[&[Entry]] = &[
     dialogue::SITES,
     ga::SITES,
@@ -51,6 +52,7 @@ pub(super) const SITES: &[&[Entry]] = &[
     gs::SITES,
     gw::SITES,
     gx::SITES,
+    cmds::SITES,
 ];
 
 /// Every file's wraps.
@@ -69,6 +71,7 @@ pub(super) const WRAPS: &[&[Entry]] = &[
     gs::WRAPS,
     gw::WRAPS,
     gx::WRAPS,
+    cmds::WRAPS,
 ];
 
 /// The owner list of a row here.
