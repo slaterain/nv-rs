@@ -107,8 +107,8 @@ pub fn start_screen(place: &Place, card: &Card) -> Screen {
                     Card::Known(None) => "Renderer: no graphics card found".into(),
                     // The game still starts on Vulkan; its driver may be what hangs.
                     Card::NoAnswer if cfg!(windows) => {
-                        "Renderer: Vulkan (its driver did not answer; Settings.cmd's Renderer \
-                         can choose Direct3D 9)"
+                        "Renderer: Vulkan (its driver did not answer; Settings' Renderer can \
+                         choose Direct3D 9)"
                             .into()
                     }
                     Card::NoAnswer => "Renderer: Vulkan (its driver did not answer)".into(),
@@ -120,6 +120,7 @@ pub fn start_screen(place: &Place, card: &Card) -> Screen {
     if place.mods {
         entries.push(PLAY_WITH_MODS.to_string());
     }
+    entries.push(SETTINGS.to_string());
     entries.push(EXIT.to_string());
     Screen {
         title: "-nv-rs-".into(),
@@ -369,20 +370,42 @@ pub enum Kind {
     Output,
     /// play.sh has ended badly: Back or Exit.
     Ended,
+    /// The Settings list (its rows, Testing, Back).
+    Settings,
+    /// The Testing list (its rows, Back).
+    Testing,
+    /// One row's choices (and Back).
+    Choices,
 }
 
 /// What a choice does.
 #[derive(Debug, PartialEq)]
 pub enum Act {
     EndIntro,
-    Play { mods: bool, game: Option<PathBuf> },
+    Play {
+        mods: bool,
+        game: Option<PathBuf>,
+    },
     Exit,
     Answer(usize),
     Folder(Option<PathBuf>),
     TypeLine(String),
     BackToStart,
+    OpenSettings,
+    OpenTesting,
+    /// The row at this place of the list on screen.
+    OpenChoices(usize),
+    /// The choice of the row whose choices show.
+    Save(String),
+    /// From a row's choices back to its list.
+    BackToList,
     Nothing,
 }
+
+/// The Settings list's entry that opens the Testing list, and the start screen's for Settings.
+pub const TESTING_ENTRY: &str = "Testing";
+pub const SETTINGS: &str = "Settings";
+pub const BACK: &str = "Back";
 
 /// Enter on a screen of `kind` with `typed` at the prompt and the entry `chosen` (its index and
 /// text) highlighted.
@@ -402,13 +425,55 @@ pub fn on_enter(kind: Kind, typed: &str, chosen: usize, entry: &str) -> Act {
             mods: true,
             game: None,
         },
+        Kind::Start if entry == SETTINGS => Act::OpenSettings,
         Kind::Start | Kind::Refused | Kind::Ended if entry == EXIT => Act::Exit,
         Kind::Ended => Act::BackToStart,
         Kind::Start | Kind::Refused | Kind::Waiting => Act::Nothing,
         Kind::Message => Act::Answer(chosen),
         Kind::Folder => Act::Folder(typed_folder),
         Kind::Output => Act::TypeLine(typed.to_string()),
+        Kind::Settings if entry == TESTING_ENTRY => Act::OpenTesting,
+        Kind::Settings if entry == BACK => Act::BackToStart,
+        Kind::Testing if entry == BACK => Act::OpenSettings,
+        Kind::Settings | Kind::Testing => Act::OpenChoices(chosen),
+        Kind::Choices if entry == BACK => Act::BackToList,
+        Kind::Choices => Act::Save(entry.to_string()),
     }
+}
+
+/// A choice's name without its note: "Vulkan (recommended)" is "Vulkan" in a list.
+pub fn short(choice: &str) -> &str {
+    choice.split(" (").next().unwrap_or(choice)
+}
+
+/// The Settings list's (or the Testing list's) entries for what `shown` says: each row with its
+/// value, then (the main list) Testing, then Back.
+pub fn settings_entries(
+    rows: &[settings::Row],
+    shown: &settings::Files,
+    testing: bool,
+) -> Vec<String> {
+    let mut e: Vec<String> = rows
+        .iter()
+        .map(|r| format!("{}: {}", r.label(), short(&r.current(shown))))
+        .collect();
+    if !testing {
+        e.push(TESTING_ENTRY.into());
+    }
+    e.push(BACK.into());
+    e
+}
+
+/// Left and Right on a row: the choice before or after the one it has, round the list.
+pub fn stepped_choice(choices: &[String], now: &str, forward: bool) -> Option<String> {
+    let n = choices.len();
+    let i = choices.iter().position(|c| c == now)?;
+    let next = if forward {
+        (i + 1) % n
+    } else {
+        (i + n - 1) % n
+    };
+    Some(choices[next].clone())
 }
 
 /// Esc on a screen of `kind`: its Back, No or Exit ([`back_entry`]), whatever is typed at the
@@ -438,6 +503,15 @@ enum Mode {
     Output(Option<i32>),
     /// nv-rs may not write in its own folder: only Exit.
     Refused,
+    /// The Settings list (`testing`: the Testing list).
+    Settings {
+        testing: bool,
+    },
+    /// The choices of the row at `index` of the Settings (or Testing) list.
+    Choices {
+        testing: bool,
+        index: usize,
+    },
 }
 
 impl Mode {
@@ -451,7 +525,19 @@ impl Mode {
             Mode::Output(None) => Kind::Output,
             Mode::Output(Some(_)) => Kind::Ended,
             Mode::Refused => Kind::Refused,
+            Mode::Settings { testing: false } => Kind::Settings,
+            Mode::Settings { testing: true } => Kind::Testing,
+            Mode::Choices { .. } => Kind::Choices,
         }
+    }
+}
+
+/// The rows of the Settings list, or of the Testing list.
+fn rows_of(testing: bool) -> &'static [settings::Row] {
+    if testing {
+        &settings::TESTING
+    } else {
+        &settings::ROWS
     }
 }
 
@@ -492,6 +578,8 @@ struct App {
     /// The window could not be made or drawn in ([`cannot_draw`] said why).
     no_window: bool,
     exit_code: i32,
+    /// The main monitor's size for the resolution row, as the game sees it.
+    desktop: (u32, u32),
 }
 
 /// Starts Play's work on a thread of its own with `args` (Play.exe's, or play.sh's on Linux and
@@ -900,7 +988,128 @@ impl App {
                 self.add_output(&format!("{line}\n"));
             }
             Act::BackToStart => self.show_start(),
+            Act::OpenSettings => self.show_settings(false, 0, None),
+            Act::OpenTesting => self.show_settings(true, 0, None),
+            Act::OpenChoices(index) => {
+                let testing = matches!(self.mode, Mode::Settings { testing: true });
+                if index < rows_of(testing).len() {
+                    self.show_choices(testing, index);
+                }
+            }
+            Act::Save(choice) => {
+                if let Mode::Choices { testing, index } = self.mode {
+                    self.save(testing, index, &choice);
+                }
+            }
+            Act::BackToList => {
+                if let Mode::Choices { testing, index } = self.mode {
+                    self.show_settings(testing, index, None);
+                }
+            }
             Act::Nothing => {}
+        }
+    }
+
+    /// The Settings list (or the Testing list), the row at `highlight` highlighted, with `note`
+    /// (a save that failed) above it.
+    fn show_settings(&mut self, testing: bool, highlight: usize, note: Option<String>) {
+        let profiles = crate::profiles::Profiles::at(&self.place.own);
+        let (shown, in_files) = match profiles.shown().and_then(|s| Ok((s, profiles.in_files()?))) {
+            Ok(v) => v,
+            Err(e) => {
+                let s = message_screen(
+                    &format!("nv-rs cannot read its settings: {e}"),
+                    &[BACK.to_string()],
+                );
+                self.show(Mode::Settings { testing }, s, true);
+                return;
+            }
+        };
+        let mut welcome = Vec::new();
+        if let Some(note) = note {
+            welcome.push(note);
+        }
+        welcome.push(if in_files {
+            "Saved at once, for both ways of playing (with and without mods). The game reads them at its next start.".to_string()
+        } else {
+            "Saved for Play to move into the game's own files at its next start.".to_string()
+        });
+        if testing {
+            welcome.push(
+                "Still being tried: the new lighting draws on Vulkan only; JIP LN for mods that need it."
+                    .into(),
+            );
+        }
+        let mut s = Screen {
+            title: if testing { "-Testing-" } else { "-Settings-" }.into(),
+            welcome,
+            entries: settings_entries(rows_of(testing), &shown, testing),
+            ..Default::default()
+        };
+        s.highlighted = highlight.min(s.entries.len() - 1);
+        let retype = !matches!(self.mode, Mode::Settings { .. } | Mode::Choices { .. });
+        self.show(Mode::Settings { testing }, s, retype);
+    }
+
+    /// The choices of the row at `index` of the list, the one it has highlighted.
+    fn show_choices(&mut self, testing: bool, index: usize) {
+        let row = rows_of(testing)[index];
+        let profiles = crate::profiles::Profiles::at(&self.place.own);
+        let shown = match profiles.shown() {
+            Ok(s) => s,
+            Err(e) => return self.show_settings(testing, index, Some(format!("Not read: {e}"))),
+        };
+        let now = row.current(&shown);
+        let mut entries = row.choices(&shown, self.desktop);
+        let highlighted = entries.iter().position(|c| *c == now).unwrap_or(0);
+        entries.push(BACK.into());
+        let s = Screen {
+            title: format!("-{}-", row.label()),
+            welcome: vec![format!("Now: {now}")],
+            entries,
+            highlighted,
+            ..Default::default()
+        };
+        self.show(Mode::Choices { testing, index }, s, false);
+    }
+
+    /// `choice` saved for the row at `index`, then its list again (with what went wrong when it
+    /// was not saved).
+    fn save(&mut self, testing: bool, index: usize, choice: &str) {
+        let row = rows_of(testing)[index];
+        let profiles = crate::profiles::Profiles::at(&self.place.own);
+        let note = if testing && !profiles.in_files().unwrap_or(false) {
+            // settings.ini has no lines for them: they live only in the game's own files.
+            Some("Not saved: these live in the game's own files, which Play makes ready at its first start. Play once, then choose them here.".to_string())
+        } else {
+            profiles
+                .save(row, choice)
+                .err()
+                .map(|e| format!("Not saved: {e}"))
+        };
+        self.show_settings(testing, index, note);
+    }
+
+    /// Left or Right on a row of the Settings (or Testing) list: its next or previous choice,
+    /// saved at once.
+    fn step_row(&mut self, forward: bool) {
+        let Mode::Settings { testing } = self.mode else {
+            return;
+        };
+        let index = self.screen.highlighted;
+        let Some(&row) = rows_of(testing).get(index) else {
+            return;
+        };
+        let profiles = crate::profiles::Profiles::at(&self.place.own);
+        let Ok(shown) = profiles.shown() else {
+            return;
+        };
+        if let Some(next) = stepped_choice(
+            &row.choices(&shown, self.desktop),
+            &row.current(&shown),
+            forward,
+        ) {
+            self.save(testing, index, &next);
         }
     }
 
@@ -1005,6 +1214,17 @@ impl winit::application::ApplicationHandler<Event> for App {
             let size = m.size().to_logical::<f64>(m.scale_factor());
             (size.width, size.height)
         }));
+        // The resolution row's own size: Windows' as the DPI-unaware game sees it, elsewhere the
+        // monitor's.
+        #[cfg(windows)]
+        {
+            let (dw, dh) = crate::play::desktop_size();
+            self.desktop = (dw.max(0) as u32, dh.max(0) as u32);
+        }
+        #[cfg(not(windows))]
+        if let Some(m) = &monitor {
+            self.desktop = (m.size().width, m.size().height);
+        }
         // Made hidden, then fitted into the monitor's work area with its frame (below), then shown.
         let mut attributes = winit::window::Window::default_attributes()
             .with_title("nv-rs")
@@ -1237,6 +1457,8 @@ impl winit::application::ApplicationHandler<Event> for App {
                         self.screen.scroll = self.screen.scroll.saturating_sub(5)
                     }
                     Key::Named(NamedKey::PageDown) => self.screen.scroll += 5,
+                    Key::Named(NamedKey::ArrowRight) => self.step_row(true),
+                    Key::Named(NamedKey::ArrowLeft) => self.step_row(false),
                     Key::Named(NamedKey::Enter) => self.choose(event_loop),
                     Key::Named(NamedKey::Backspace) => {
                         self.screen.typed.pop();
@@ -1474,6 +1696,7 @@ pub fn run(raw: Vec<String>) -> i32 {
         retry_at: None,
         no_window: false,
         exit_code: 0,
+        desktop: (0, 0),
     };
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("error: {e}");
@@ -1551,10 +1774,10 @@ mod tests {
     #[test]
     fn the_start_screen_offers_what_works() {
         let s = start_screen(&place(Some("/g/Fallout New Vegas"), false), &Card::Asking);
-        assert_eq!(s.entries, [PLAY, EXIT]);
+        assert_eq!(s.entries, [PLAY, SETTINGS, EXIT]);
         assert_eq!(s.welcome[0], "Game: Fallout New Vegas");
         let s = start_screen(&place(Some("/g/x"), true), &Card::Asking);
-        assert_eq!(s.entries, [PLAY, PLAY_WITH_MODS, EXIT]);
+        assert_eq!(s.entries, [PLAY, PLAY_WITH_MODS, SETTINGS, EXIT]);
         let s = start_screen(&place(None, false), &Card::Asking);
         assert!(s.welcome[0].contains("not found"), "{:?}", s.welcome);
         assert_eq!(s.welcome.len(), 1);
@@ -1854,6 +2077,46 @@ mod tests {
             play_arguments(false, Some(Path::new("x"))),
             ["--game", "x"].map(OsString::from)
         );
+    }
+
+    /// The Settings list shows each row with its value (its note left out), then Testing and
+    /// Back; the Testing list its rows and Back. Enter on a row opens its choices, on a choice
+    /// saves it; Esc goes back a list (never saving); Left and Right step round a row's choices.
+    #[test]
+    fn the_settings_lists_open_choose_and_go_back() {
+        let shown = settings::Files::default();
+        let main = settings_entries(&settings::ROWS, &shown, false);
+        assert_eq!(main.len(), 14);
+        assert_eq!(main[0], "Renderer: Vulkan");
+        assert_eq!(main[12], TESTING_ENTRY);
+        assert_eq!(main[13], BACK);
+        let testing = settings_entries(&settings::TESTING, &shown, true);
+        assert_eq!(testing.len(), settings::TESTING.len() + 1);
+        assert_eq!(testing.last().map(String::as_str), Some(BACK));
+        assert_eq!(on_enter(Kind::Start, "", 1, SETTINGS), Act::OpenSettings);
+        assert_eq!(
+            on_enter(Kind::Settings, "", 0, &main[0]),
+            Act::OpenChoices(0)
+        );
+        assert_eq!(
+            on_enter(Kind::Settings, "", 12, TESTING_ENTRY),
+            Act::OpenTesting
+        );
+        assert_eq!(on_escape(Kind::Settings, &main), Act::BackToStart);
+        assert_eq!(on_escape(Kind::Testing, &testing), Act::OpenSettings);
+        assert_eq!(
+            on_enter(Kind::Testing, "", 2, &testing[2]),
+            Act::OpenChoices(2)
+        );
+        let choices: Vec<String> = ["Off", "On", BACK].map(String::from).to_vec();
+        assert_eq!(on_enter(Kind::Choices, "", 1, "On"), Act::Save("On".into()));
+        assert_eq!(on_escape(Kind::Choices, &choices), Act::BackToList);
+        let c: Vec<String> = ["No limit", "60", "90"].map(String::from).to_vec();
+        assert_eq!(stepped_choice(&c, "60", true).as_deref(), Some("90"));
+        assert_eq!(stepped_choice(&c, "90", true).as_deref(), Some("No limit"));
+        assert_eq!(stepped_choice(&c, "No limit", false).as_deref(), Some("90"));
+        assert_eq!(stepped_choice(&c, "75", true), None);
+        assert_eq!(short("Vulkan (recommended)"), "Vulkan");
     }
 
     /// A message keeps its paragraphs as lines, its entries as given.

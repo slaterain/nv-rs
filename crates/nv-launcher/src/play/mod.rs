@@ -23,7 +23,7 @@ mod mods;
 use game_profile::settings;
 mod tables;
 mod ui;
-pub use ui::answer_in_boxes;
+pub use ui::{answer_in_boxes, desktop_size};
 mod win;
 
 use settings::{migrated_name, Settings};

@@ -28,6 +28,7 @@ mod play;
 #[cfg_attr(windows, allow(dead_code))]
 mod play_unix;
 mod png;
+mod profiles;
 mod screen;
 mod session;
 // The Settings screen's rows (its screen comes with the next pull request); the start screen

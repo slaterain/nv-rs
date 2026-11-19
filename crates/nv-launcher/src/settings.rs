@@ -37,6 +37,36 @@ pub enum Row {
     FrameRateCounter,
     GameThreads,
     DrawingThread,
+    // The Testing list (the lead's pick, DESIGN.md: its own list under Settings, so the main
+    // list stays Settings.cmd's twelve): switches still being proven, each one key of ours.
+    AmbientOcclusion,
+    SunShadows,
+    SunLightFromSky,
+    SunShadowsCharacters,
+    JipBuiltIn,
+}
+
+/// The Testing list's rows: the new lighting (Vulkan only, off by default) and JIP LN built in.
+pub const TESTING: [Row; 5] = [
+    Row::AmbientOcclusion,
+    Row::SunShadows,
+    Row::SunLightFromSky,
+    Row::SunShadowsCharacters,
+    Row::JipBuiltIn,
+];
+
+impl Row {
+    /// A Testing row's own key: its section and name in the host's table.
+    fn switch(self) -> Option<(&'static str, &'static str)> {
+        Some(match self {
+            Row::AmbientOcclusion => ("nv-rs Display", "bAmbientOcclusion"),
+            Row::SunShadows => ("nv-rs Display", "bSunShadows"),
+            Row::SunLightFromSky => ("nv-rs Display", "bSunLightFromSky"),
+            Row::SunShadowsCharacters => ("nv-rs Display", "bSunShadowsCharacters"),
+            Row::JipBuiltIn => ("nv-rs Fixes", "bJIPInstalled"),
+            _ => return None,
+        })
+    }
 }
 
 /// The rows in Settings.ps1's order.
@@ -101,6 +131,11 @@ impl Row {
             Row::FrameRateCounter => "Frame rate counter",
             Row::GameThreads => "Game threads",
             Row::DrawingThread => "Drawing thread",
+            Row::AmbientOcclusion => "Ambient occlusion (new lighting)",
+            Row::SunShadows => "Sun shadows (new lighting)",
+            Row::SunLightFromSky => "Sun light from the sun and moon",
+            Row::SunShadowsCharacters => "Characters' sun shadows",
+            Row::JipBuiltIn => "JIP LN built in",
         }
     }
 
@@ -121,6 +156,11 @@ impl Row {
             Row::FrameRateCounter => &["Hidden (F11 shows it)", "Shown (F11 hides it)"],
             Row::GameThreads => &["Side by side (recommended)", "One at a time (slower)"],
             Row::DrawingThread => &["Own thread (recommended)", "Main thread (slower)"],
+            // The Testing rows: the host table's default first.
+            r => match r.switch() {
+                Some((_, key)) if default_of(key) == "1" => &["On", "Off"],
+                _ => &["Off", "On"],
+            },
         };
         let mut list: Vec<String> = if self == Row::Resolution {
             let native = format!("{}x{}", desktop.0, desktop.1);
@@ -220,6 +260,10 @@ impl Row {
                     "Own thread (recommended)".into()
                 }
             }
+            r => match r.switch() {
+                Some((section, key)) if ours(files, section, key) == "1" => "On".into(),
+                _ => "Off".into(),
+            },
         }
     }
 
@@ -307,6 +351,11 @@ impl Row {
                 if let Some((w, h)) = choice.split_once('x') {
                     out.prefs = set_key(&out.prefs, "Display", "iSize W", w);
                     out.prefs = set_key(&out.prefs, "Display", "iSize H", h);
+                }
+            }
+            r if r.switch().is_some() => {
+                if let Some((section, key)) = r.switch() {
+                    ini(section, key, if choice == "On" { "1" } else { "0" });
                 }
             }
             Row::AntiAliasing | Row::Anisotropy => {
@@ -407,5 +456,25 @@ mod tests {
         assert_eq!(res[1], "2560x1440");
         assert_eq!(res.last().map(String::as_str), Some("1366x768"));
         assert_eq!(Row::Renderer.current(&f), "Vulkan (recommended)");
+    }
+
+    /// The Testing rows: each one key of ours, shown as the host table's default when missing
+    /// (the new lighting off, the sun light from the sky and characters' shadows on with it, JIP
+    /// off), the default offered first, and a change writes only that key.
+    #[test]
+    fn the_testing_rows_are_one_key_each() {
+        let f = files("[nv-rs Display]\r\nsRenderer=vulkan\r\n", "");
+        let shown: Vec<String> = TESTING.iter().map(|r| r.current(&f)).collect();
+        assert_eq!(shown, ["Off", "Off", "On", "On", "Off"]);
+        assert_eq!(Row::AmbientOcclusion.choices(&f, (1, 1)), ["Off", "On"]);
+        assert_eq!(Row::SunLightFromSky.choices(&f, (1, 1)), ["On", "Off"]);
+        let r = Row::SunShadows.apply(&f, "On");
+        assert_eq!(r.ini, set_key(&f.ini, "nv-rs Display", "bSunShadows", "1"));
+        assert_eq!(Row::SunShadows.current(&r), "On");
+        let r = Row::JipBuiltIn.apply(&f, "On");
+        assert_eq!(r.ini, set_key(&f.ini, "nv-rs Fixes", "bJIPInstalled", "1"));
+        assert_eq!(r.prefs, f.prefs);
+        assert_eq!(Row::SunLightFromSky.apply(&f, "On"), f);
+        assert!(TESTING.iter().all(|r| !ROWS.contains(r)));
     }
 }
