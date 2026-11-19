@@ -151,6 +151,24 @@ pub const RELOAD_NULL_AMMO_ENTRY: Row = Row::at(CRASH, 31);
 /// S0089.05 `RememberAmmoCountOnLoad` (`00954610` at `0x9546EE`): the player dropping the weapon's
 /// ammunition with no equipped ammunition entry.
 pub const DROP_AMMO_NULL_ENTRY: Row = Row::at(CRASH, 32);
+/// S0018 `fixUGridsCrashAndAllow3AsMinimum` (`TES::LoadGame` `004595e0` (`0x4596D3`); `004bc4c0` (`0x4BC501`, `0x4BC505`)): loading a save made with more grids than the game now loads no longer crashes; uGridsToLoad 3 is kept.
+pub const UGRIDS_LOAD_NULL_CELL: Row = Row::at(CRASH, 33);
+/// S0045 `patchFixGetItemValueCrashForModdedWeapons` (`ItemChange::GetItemValue` `004bd400` (`0x4BD48D`, `0x4BD4B5`, `0x4BD4DD`)): a weapon whose mod flags name a mod the weapon no longer has no longer crashes when its value is asked.
+pub const ITEM_VALUE_NULL_WEAPON_MOD: Row = Row::at(CRASH, 34);
+/// S0049 `patchFixUnresolvedRaceCrash` (`TESRaceForm::InitItem` `0048b920` (`0x48B9D9`, `0x48B9E8`, `0x48B9F1`); `00609220` (`0x60936F`)): an NPC whose race is missing (a removed plugin's) gets CaucasianVanilla instead of crashing.
+pub const UNRESOLVED_RACE: Row = Row::at(CRASH, 35);
+/// S0067 `fixGetWeaponDamageCrashOnThrowingWeapons` (`CalcWeaponDamageForDisplay` `006450f0` (`0x64529D`)): a throwing weapon's damage shown in a menu no longer crashes.
+pub const THROWING_WEAPON_AMMO_EFFECTS: Row = Row::at(CRASH, 36);
+/// S0077 `patchBodyPartDataNullChecks` (`BGSBodyPartData` `005e55e0` (`0x5E5734`); `ShowChildLimbs` `005e5750` (`0x5E58C6`)): hiding or showing limbs whose node chain runs out before the root no longer crashes.
+pub const BODY_PART_NULL_PARENT: Row = Row::at(CRASH, 37);
+/// S0093.07 `PerkMenuDescriptionTypoFix` (`BGSPerk::BuildDescriptionString` `005ebac0` (`0x5EC026`)): a perk description too long for the menu's buffer is cut to fit instead of crashing.
+pub const PERK_DESCRIPTION_TOO_LONG: Row = Row::at(CRASH, 38);
+/// S0199.05 `MiscCrashFixes` (`TESNPC::Activate` `00607990` (`0x607A7D`)): an NPC activated by something that is not an actor, or by an actor with no AI process, no longer crashes.
+pub const NPC_ACTIVATE_NULL_PROCESS: Row = Row::at(CRASH, 39);
+/// S0199.06 `MiscCrashFixes` (`InventoryChanges` `004c0cf0` (`0x4C0DD4`)): taking off a worn item that may not be removed, with no actor given, no longer crashes.
+pub const REMOVE_WORN_NULL_ACTOR: Row = Row::at(CRASH, 40);
+/// S0199.09 `MiscCrashFixes` (`004d66d0` (`0x4D6AA5`); `NiAVObject::GetViewerStrings` `00a5ad00` (`0xA5B0C8`)): the console's ShowSceneGraph no longer crashes on an empty property entry.
+pub const SHOW_SCENE_GRAPH_NULL: Row = Row::at(CRASH, 41);
 /// S1016 (Engine Optimizations, `Inlines::SaveLoad`: `Write32(0x845558, 0x2735)`): the changes map's
 /// buckets 10,037, not the exe's 5,039 (`00845550`). It changes the order a save walks and writes the
 /// changed forms, so it is a fixes row.

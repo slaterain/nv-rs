@@ -124,6 +124,8 @@ const WEAPON_GET_PROJECTILE_FLOAT: u32 = 0x0045_cd80;
 const AMMO_GET_VALUE_FROM_OBJECT: u32 = 0x004f_d3c0;
 const FUNCTION_006479E0: u32 = 0x0064_79e0;
 const FUNCTION_00923000: u32 = 0x0092_3000;
+/// `TESAmmo`'s form type (the byte at +4).
+const FORM_TYPE_AMMO: u8 = 0x29;
 const ACTOR_VALUE_GET_BY_INDEX: u32 = 0x0066_ef50;
 const ACTOR_VALUE_GET_INT_BY_INDEX: u32 = 0x0066_ef20;
 const ACTOR_GET_FLAG_566950: u32 = 0x0056_6950;
@@ -1089,7 +1091,15 @@ pub fn combat_formulas_calc_weapon_damage_for_display(
     }
     if !ammo_form.is_null() && !weapon.is_null() && ammo_form != weapon {
         // The exe tests `ammo_form` once more before this call; it is non-null here.
-        let effect = e.call(FUNCTION_00923000, &args![ammo_form]).u32();
+        // lStewieAl's Tweaks' row S0067 (`fixGetWeaponDamageCrashOnThrowingWeapons`, the call at
+        // `0x64529D`): a throwing weapon's "ammunition" is a weapon, with no effect list.
+        let effect = if e.stewie(engine_core::extend::stewie::THROWING_WEAPON_AMMO_EFFECTS)
+            && e.mem.u8(ammo_form.addr() + 4) != FORM_TYPE_AMMO
+        {
+            0
+        } else {
+            e.call(FUNCTION_00923000, &args![ammo_form]).u32()
+        };
         result = e
             .call(
                 APPLY_PERK_ENTRY_FLOAT,
@@ -3021,6 +3031,72 @@ mod tests {
             )
             .f32();
         assert_eq!(damage, expected);
+    }
+
+    /// The damage a menu shows (`006450f0`) for the gun of `calc_weapon_damage_for_a_gun_with_ammunition`
+    /// whose equipped "ammunition" is a form of type `ammo_type`, with row S0067 `on`: the ammunition's
+    /// address and the words of every perk-entry call (`APPLY_PERK_ENTRY_FLOAT`) the function made.
+    fn shown_damage_perk_calls(ammo_type: u8, on: bool) -> (u32, Vec<Vec<u32>>) {
+        let (mut e, _) = damage_world();
+        let player = object(&mut e, 0x400);
+        e.mem.set_u32(player.addr() + 0xa4, FAKE_TABLE);
+        e.set_global(PLAYER_REFERENCE, player);
+        returns_f32(&mut e, WEAPON_DAMAGE_FIGURE, 3.0);
+        e.register(HANDLE_ENTRY_POINT, |_, _| Ret::default());
+        e.set_global(SETTING_DAMAGE_SKILL_BASE, 0.25f32);
+        e.set_global(SETTING_DAMAGE_SKILL_MULT, 0.5f32);
+        let weapon = object_with_vtable(&mut e, 0x1000);
+        e.mem.set_u8(weapon.addr() + 0xf4, 3);
+        let sub_object = weapon.addr() + 0x9c;
+        e.mem.set_u32(sub_object, FAKE_TABLE + 0x1000);
+        returns_u32(&mut e, FAKE_SLOT_10, 1);
+        returns_u32(&mut e, WEAPON_GET_TYPE, 3);
+        returns_u32(&mut e, WEAPON_GET_SKILL, 0x20);
+        returns_u32(&mut e, WEAPON_GET_AMMO_OBJECT, 0x5000);
+        returns_u32(&mut e, AMMO_GET_VALUE_FROM_OBJECT, 3);
+        returns_f32(&mut e, FUNCTION_006479E0, 2.5);
+        returns_u32(&mut e, WEAPON_GET_NUM_PROJECTILES, 2);
+        returns_u32(&mut e, WEAPON_FLAG_TEST, 0);
+        // The ammunition's effect list: the word at +0xD4, as the exe's getter answers.
+        e.register(FUNCTION_00923000, |_, a| (a[0] + 0xd4).into_ret());
+        let ammo = object(&mut e, 0x200);
+        e.mem.set_u8(ammo.addr() + 4, ammo_type);
+        let applied = Rc::new(RefCell::new(Vec::new()));
+        let log = applied.clone();
+        e.register_double(APPLY_PERK_ENTRY_FLOAT, move |_, a| {
+            log.borrow_mut().push(a.to_vec());
+            f32::from_bits(a[2]).into_ret()
+        });
+        e.set_stewie(
+            engine_core::extend::stewie::THROWING_WEAPON_AMMO_EFFECTS,
+            on,
+        );
+        e.call(0x0064_50f0, &args![weapon, 1.0f32, 0u32, ammo]);
+        let calls = applied.borrow().clone();
+        (ammo.addr(), calls)
+    }
+
+    /// lStewieAl's Tweaks' row S0067 (`fixGetWeaponDamageCrashOnThrowingWeapons`, the call at
+    /// `0x64529D`): a throwing weapon's "ammunition" is a weapon (type 0x28): the exe asks the perk
+    /// entry about the effect list it reads in it (a weapon's word, which crashes in the game); with the
+    /// row the list is none.
+    #[test]
+    fn s0067_a_throwing_weapons_ammunition_has_no_effect_list() {
+        let (ammo, off) = shown_damage_perk_calls(0x28, false);
+        assert!(off.iter().any(|a| a[0] == 0 && a[1] == ammo + 0xd4));
+        let (ammo, on) = shown_damage_perk_calls(0x28, true);
+        assert!(!on.iter().any(|a| a[1] == ammo + 0xd4));
+        assert!(on.iter().any(|a| a[0] == 0 && a[1] == 0));
+    }
+
+    /// Row S0067 with real ammunition (type 0x29, ordinary input): the same perk-entry calls with the
+    /// row off and on.
+    #[test]
+    fn s0067_row_on_with_ammunition_changes_nothing() {
+        let (ammo, off) = shown_damage_perk_calls(0x29, false);
+        let (_, on) = shown_damage_perk_calls(0x29, true);
+        assert!(off.iter().any(|a| a[0] == 0 && a[1] == ammo + 0xd4));
+        assert_eq!(off, on);
     }
 
     // ---- 006450c0 and 00646230.. flag tests ---------------------------------------------------------
