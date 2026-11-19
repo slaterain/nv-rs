@@ -1,7 +1,7 @@
 //! `functions_jip/jip_fn_string.h` (JIP LN NVSE): `GetStringHash` (JIP's hash of a text, with or
 //! without case, and its split mode, which writes `GetStringHash.txt` through the core's seam
 //! `engine_core::mod_files`: in the port's own folder for mods' files, never the game folder).
-//! 1 of its commands; the others come later.
+//! The file's other three commands, the regular expressions, are in `jip_fn_string_regex.rs`.
 
 use super::jip_fn_ui::next_token;
 use super::Handlers;
