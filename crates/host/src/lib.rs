@@ -221,6 +221,12 @@ impl Host {
         } else {
             engine.start_real_clock();
         }
+        // The system's own pads behind the game's XInput (`engine_platform::xinput`), one line
+        // saying which; none in a repeatable run, which a pad plugged into the machine must not
+        // change. The game's Controls settings ("360 Controller", vibration) still decide.
+        if repeatable.is_none() {
+            eprintln!("{}", engine_platform::xinput::use_system_pads(&mut engine));
+        }
         // How the game's threads run (`engine::thread_host::Scheme`), in `NV_THREADS`'s words
         // (`fixes::Choice::threads`: a test without `NV_THREADS` always runs them stepped). In
         // play by default real, side by side (started before the C runtime, below).
