@@ -24,7 +24,8 @@ and lines are read from your installed game). Choose with the arrow keys and Ent
 > Play starts the game, > Play with mods (shown when you have mods) plays with them, > Settings
 has the window or borderless, resolution, anti-aliasing, game fixes, frame limit and more (and a
 Testing list of what is still being tried), saved at once for the next start; > Exit closes
-it. The first time it types the game's terminal intro once; any key skips it.
+it. The first time it types the game's terminal intro once; a click finishes it, as in the game, and
+so do Esc and Enter (an addition of nv-rs's). Its text types as fast as the game's terminals do.
 
 The first start finds your game (Steam, GOG, Epic, or it asks: type the game's folder in the
 launcher or paste it with Ctrl+V, or drop the folder onto its window), checks its version, reads
