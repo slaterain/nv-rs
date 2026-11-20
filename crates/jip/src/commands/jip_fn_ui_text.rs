@@ -22,6 +22,20 @@
 //! JIP's 90 heights gives 0 for both (JIP reads past its table); `CloseActiveMenu` reads the
 //! menu's script before the menu is destroyed (JIP reads it from the freed menu).
 //!
+//! With the fixes preset's size caps row (`NV_NVSE_SIZE_CAPS`, the row that caps what xNVSE's and
+//! JIP's texts and arrays would overflow): a text at 65,535 bytes takes no more characters (JIP's
+//! 16-bit length and room wrap to 0 and the next byte is written past its block), and
+//! `SetTextInputString` keeps the first 65,534 bytes of its text (so the shown text, one byte
+//! longer, fits). Off (vanilla), as JIP: the text's length kept to its low 16 bits (70,000 bytes
+//! keep 4,464) and the wrap at 65,535.
+//!
+//! With the fixes preset's missing-data guard row (`NV_NVSE_NULL_GUARD`): JIP takes its hooks out
+//! only on OK and on `CloseActiveMenu`, so a menu closed any other way (Esc, a load, another menu)
+//! leaves JIP's routines in the text edit menu's vtable for the game's own text edit menu (a JIP
+//! slip, not copied). The port keeps the menu JIP opened and its tile; once the menu its routines,
+//! seam or setters meet is another, the hooks come out and the exe's functions run. Off (vanilla),
+//! as JIP.
+//!
 //! Threads: the commands, the menu's routines and the seam run on the main thread (scripts,
 //! menus). The hook's count is the engine's shared word; the heights are this engine's.
 
@@ -34,6 +48,7 @@ use engine_core::prelude::*;
 use nvse::args::Arg;
 use nvse::commands::Read;
 use nvse::{handled, CommandArgs};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 #[rustfmt::skip]
 pub static COMMANDS: Handlers = &[
@@ -189,6 +204,18 @@ const SHOW_PARAMS: u32 = 24;
 const STRING_PARAMS: u32 = 21;
 /// JIP's `GetStrArgBuffer()`.
 const STR_ARG_BUFFER: usize = 0x4_0000;
+/// The longest text `SetTextInputString` keeps: the shown text adds the cursor's byte and its
+/// 16-bit length must not wrap.
+const MAX_SET_TEXT: usize = 0xfffe;
+
+/// The menu JIP opened, its tile and its script, while its hooks are in (0 else): the missing-data
+/// guard row's test that a menu met is still JIP's. Shared by the engines of the game's threads.
+#[derive(Default)]
+pub struct OpenedMenu {
+    menu: AtomicU32,
+    tile: AtomicU32,
+    script: AtomicU32,
+}
 
 // ---- the font heights ----
 
@@ -279,6 +306,11 @@ fn string_insert_char(e: &mut Engine, s: u32, c: u8, index: u32) {
         return;
     }
     let room = e.mem.u16(s + STR_BUF_LEN);
+    // The size caps row: at 65,535 bytes JIP's length and room would wrap to 0 and the byte go past
+    // its block. Off, as JIP.
+    if len == u16::MAX && nvse::commands::array::fix_on(e, nvse::commands::array::SIZE_CAPS) {
+        return;
+    }
     if room == len {
         let room = room.wrapping_add(1);
         e.mem.set_u16(s + STR_BUF_LEN, room);
@@ -484,6 +516,10 @@ fn show_text_edit_menu(e: &mut Engine, width: f32, height: f32, title: &[u8], sc
     nvse::lambda::save_variables(e, script);
     text_input_refresh(e, menu);
     e.call(PREP_FOR_VISIBILITY, &args![menu, 0u32]);
+    let opened = e.ext_free::<OpenedMenu>();
+    opened.menu.store(menu, Ordering::Release);
+    opened.tile.store(root, Ordering::Release);
+    opened.script.store(script, Ordering::Release);
     e.set_hook(Hook::TextInputClose, true);
     e.mem
         .set_u32(TEXT_EDIT_VTABLE + FRAME_SLOT, TEXT_INPUT_REFRESH);
@@ -495,9 +531,9 @@ fn show_text_edit_menu(e: &mut Engine, width: f32, height: f32, title: &[u8], sc
 // ---- SetTextInputExtendedProps, SetTextInputString ----
 
 /// The text edit menu while JIP's text input hooks are in, else 0.
-fn jips_menu(e: &Engine) -> u32 {
+fn jips_menu(e: &mut Engine) -> u32 {
     let menu = e.mem.u32(TEXT_EDIT_MENU);
-    if menu != 0 && e.hook_users(Hook::TextInputClose) != 0 {
+    if menu != 0 && e.hook_users(Hook::TextInputClose) != 0 && !gone_stale(e, menu) {
         menu
     } else {
         0
@@ -556,10 +592,22 @@ fn set_text_input_string(e: &mut Engine, w: &[u32]) -> Ret {
         return handled(true);
     }
     let text = formatted_in_buffer(e, &f.text, STR_ARG_BUFFER, "SetTextInputString");
-    string_set(e, menu + CURRENT_TEXT, &text);
+    set_text(e, menu, &text);
+    handled(true)
+}
+
+/// The menu's text set, the cursor at 0, then the End key handed to the menu's key slot. With the
+/// size caps row, the text's first [`MAX_SET_TEXT`] bytes, so the shown text's 16-bit length cannot
+/// wrap; off, the whole text, whose length `string_set` keeps to 16 bits, as JIP's `String::Set`.
+fn set_text(e: &mut Engine, menu: u32, text: &[u8]) {
+    let keep = if nvse::commands::array::fix_on(e, nvse::commands::array::SIZE_CAPS) {
+        text.len().min(MAX_SET_TEXT)
+    } else {
+        text.len()
+    };
+    string_set(e, menu + CURRENT_TEXT, &text[..keep]);
     e.mem.set_u32(menu + CURSOR, 0);
     e.vcall(menu, KEY_SLOT, &args![END]);
-    handled(true)
 }
 
 // ---- JIP's hooks ----
@@ -594,8 +642,12 @@ fn text_input_refresh(e: &mut Engine, menu: u32) {
     set_float(e, rect, TRAIT_USER2, num);
 }
 
-/// The routine in the frame slot (`thiscall`, the menu).
+/// The routine in the frame slot (`thiscall`, the menu); the exe's frame function for a menu that
+/// is no longer JIP's ([`gone_stale`]).
 fn text_input_refresh_routine(e: &mut Engine, w: &[u32]) -> Ret {
+    if gone_stale(e, w[0]) {
+        return e.call(EXE_FRAME, &args![w[0]]);
+    }
     text_input_refresh(e, w[0]);
     Ret::default()
 }
@@ -761,7 +813,12 @@ fn text_input_key_press(e: &mut Engine, menu: u32, key: u32) {
     text_input_refresh(e, menu);
 }
 
+/// The routine in the key slot (`thiscall`, the menu and the key); the exe's key function for a
+/// menu that is no longer JIP's ([`gone_stale`]).
 fn text_input_key_press_routine(e: &mut Engine, w: &[u32]) -> Ret {
+    if gone_stale(e, w[0]) {
+        return e.call(EXE_KEY, &args![w[0], w[1]]);
+    }
     text_input_key_press(e, w[0], w[1]);
     Ret {
         eax: 1,
@@ -789,6 +846,33 @@ pub(crate) fn unset_text_input_hooks(e: &mut Engine, script: u32) {
     e.mem.set_u32(TEXT_EDIT_VTABLE + FRAME_SLOT, EXE_FRAME);
     e.mem.set_u32(TEXT_EDIT_VTABLE + KEY_SLOT, EXE_KEY);
     e.set_hook(Hook::TextInputClose, false);
+    let opened = e.ext_free::<OpenedMenu>();
+    opened.menu.store(0, Ordering::Release);
+    opened.tile.store(0, Ordering::Release);
+    opened.script.store(0, Ordering::Release);
+}
+
+/// With the missing-data guard row on and JIP's hooks in: whether `menu` is not the menu JIP opened
+/// (another address, or JIP's address now holding another menu, by its tile): JIP's menu closed
+/// without OK or `CloseActiveMenu`. Then the hooks come out (JIP's script's lambda variables given
+/// up), so the exe's functions serve the menu met. Off, or with the hooks out: false.
+fn gone_stale(e: &mut Engine, menu: u32) -> bool {
+    if !nvse::commands::array::fix_on(e, nvse::commands::array::NULL_GUARD)
+        || e.hook_users(Hook::TextInputClose) == 0
+    {
+        return false;
+    }
+    let opened = e.ext_free::<OpenedMenu>();
+    let (jips, tile) = (
+        opened.menu.load(Ordering::Acquire),
+        opened.tile.load(Ordering::Acquire),
+    );
+    if menu == jips && menu != 0 && e.mem.u32(menu + MENU_TILE) == tile {
+        return false;
+    }
+    let script = e.ext_free::<OpenedMenu>().script.load(Ordering::Acquire);
+    unset_text_input_hooks(e, script);
+    true
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: TextInputCloseHook (asm).
@@ -799,6 +883,10 @@ pub(crate) fn unset_text_input_hooks(e: &mut Engine, script: u32) {
 /// nothing. Always answered.
 fn text_input_close_seam(e: &mut Engine, w: &[u32]) -> Option<u32> {
     let (menu, button) = (w[0], w[1]);
+    // The missing-data guard row: a menu that is no longer JIP's gets the exe's click.
+    if gone_stale(e, menu) {
+        return None;
+    }
     if button != 1 {
         return Some(0);
     }

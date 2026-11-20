@@ -79,8 +79,8 @@ The built-in xNVSE (step 3 of the pace plan, with JIP LN after it) has all 654 o
 its run-time compiler for the old script syntax and its new script language (scripts that start with `name`),
 compiled to the same bytes as xNVSE writes them (byte tests from its source's rules, read back by its decompiler),
 `CompileScript` and the function files, the documentation dumps and the console's help listing; its
-compiled-script cache file is left out as a speed cache only. JIP LN NVSE's commands are in progress (README's
-system table has the counts; batch 10 of 2026-11-14 adds the maths, utility, load screen, terminal, cell,
+compiled-script cache file is left out as a speed cache only. JIP LN NVSE has all 1,118 of its commands since 2026-11-20 (README's
+system table has the list; batch 10 of 2026-11-14 adds the maths, utility, load screen, terminal, cell,
 radio, reference and game data commands, batch 11 the actor base, equipped item, hotkey, base container and
 sound commands, batch 12 the script, gamepad, input, CC&C and equipped weapon commands and the reference data getters,
 lane A1 the first half of the actor commands: processes, combat and detection lists, leveling data, creature
