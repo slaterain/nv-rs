@@ -5262,11 +5262,15 @@ mod n054_menu_tests {
             answer(&mut e, SETTING_VALUE, zero);
             answer(&mut e, GAMEPAD_IN_USE, 0);
             e.register(MENU_RENDER_TEMPLATE, |e, _| e.mem.alloc(0x10).into_ret());
+            e.register(MAX_OF_TWO, |_, a| a[0].max(a[1]).into_ret());
             answer_st0(&mut e, TILE_SCREEN_X, 100.0);
             real_ftol(&mut e);
             stub(
                 &mut e,
                 &[
+                    TILE_GET_VALUE_Q,
+                    TILE_GET_VALUE,
+                    ANIMATING_TEXT_CONNECT,
                     MEMCPY,
                     STRING_SPRINTF,
                     WORD_AT_ZERO,

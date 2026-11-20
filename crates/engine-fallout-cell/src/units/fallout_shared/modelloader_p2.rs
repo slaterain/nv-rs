@@ -8210,6 +8210,8 @@ mod tests {
         for entry in [0x0044_36c0u32, 0x0044_3af0] {
             let (mut e, this, _, parent) = texture_setup(TEXTURE, 3, 0);
             e.set_stewie(engine_core::extend::stewie::QUEUED_TEXTURE_LOAD, true);
+            // The console's word Tweaks' warning line asks (no console: the line is queued).
+            e.map(0x011d_8000, 0x1000);
             e.map(TEXTURE, 0x1000);
             e.mem.set_u32(TEXTURE + 0x24, 0x0000_0100);
             e.mem.unmap(0, 0x1000);
