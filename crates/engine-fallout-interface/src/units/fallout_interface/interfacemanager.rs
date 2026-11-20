@@ -2469,10 +2469,10 @@ fn tile_menu_id(e: &mut Engine, tile: u32) -> i32 {
     e.call(FTOL, &args![value]).i32()
 }
 
-/// `Idle`'s test of the pointer at its eight sites that ask whether it is shown: no pad in use
-/// (`004b71d0` false), or the pad in use with `bShowMouse` set (`0070cdbf`, `0070cf27`,
-/// `0070cfbe`, `0070d41f`, `0070d5ad`, `0070d66a`, ... each `JZ` past its body when the byte
-/// is 0).
+/// `Idle`'s test whether the pointer is shown: no pad in use (`004b71d0` false), or the pad in
+/// use with `bShowMouse` set. Nine of `Idle`'s ten reads of the byte ask it (0070cc96, 0070cdbf,
+/// 0070cf27, 0070cfbe, 0070d41f, 0070d5ad, 0070d66a, 0070dfab and 0070e15a; at 0070cc96 and
+/// 0070dfab as its opposite); the tenth, 0070e964, asks [`pad_pointer_hidden`]'s.
 fn pointer_shown(e: &mut Engine, this: Ptr<InterfaceManager>) -> bool {
     !e.call(HAS_360_CONTROLLER_GETTER, &args![]).bool()
         || e.get(this, InterfaceManager::bShowMouse) != 0
@@ -3061,17 +3061,22 @@ fn translate_controls_events(e: &mut Engine, this: Ptr<InterfaceManager>, slot: 
     e.call(TRANSLATE_KEY_EVENT, &args![this, kind, code]).u32()
 }
 
+/// `Idle`'s pad menu event (0070df99 .. 0070dfc0): with a pad in use and the pointer hidden, the
+/// top pad button goes to the menus (`DoGamepadEvent(0)`); the exe `JNZ`s past it when
+/// `bShowMouse` is set.
+fn idle_pad_menu_event(e: &mut Engine, this: Ptr<InterfaceManager>) {
+    if !pointer_shown(e, this) {
+        interface_manager_do_gamepad_event(e, this, 0);
+    }
+}
+
 /// Part of `idle_menu_mode`: gamepad events, then the key events: each is
 /// translated to a menu key (`007154b0`), offered to the console, then to
 /// the frontmost menu (virtual slot `0x30`), then to the `_PCButton_<key>`
 /// child tile of the menu; keys nobody took become gamepad events
 /// (`DoGamepadEvent`).
 fn idle_gamepad_events(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut IdleState) {
-    if e.call(HAS_360_CONTROLLER_GETTER, &args![]).bool()
-        && e.get(this, InterfaceManager::bShowMouse) == 0
-    {
-        interface_manager_do_gamepad_event(e, this, 0);
-    }
+    idle_pad_menu_event(e, this);
     e.with_stack(4, |e, slot| {
         e.mem.set_u32(slot.addr(), 0);
         let mut key = translate_controls_events(e, this, slot);
@@ -14442,13 +14447,14 @@ mod tests {
         assert_eq!(run(false, 1), 4, "no pad: the Pip-Boy key let go lowers it");
     }
 
-    /// Pins `Idle`'s pointer tests to the exe's: eight sites ask whether the pointer is shown
-    /// (0070c4a0's decompiled `!pad || bShowMouse != 0`: the loading-menu cursor, the mouse
-    /// buttons, the pick, the drag, the two enter/leave tests, the menu keys, the start menu key
-    /// over the main menu), six through `pointer_shown` and two written out where the pad's
-    /// answer is kept (`idle_menu_cursor_and_focus` as its opposite, `idle_read_mouse`), and one
-    /// site, before the pipboy is lowered, asks whether it is hidden. A change to any of them is
-    /// to come with the exe's word for it.
+    /// Pins `Idle`'s pointer tests to the exe's: nine sites ask whether the pointer is shown or
+    /// its opposite (0070c4a0's decompiled `!pad || bShowMouse != 0`: the loading-menu cursor,
+    /// the mouse buttons, the pick, the drag, the two enter/leave tests, the menu keys, the start
+    /// menu key over the main menu, and the pad's menu event at 0070df99 as its opposite), seven
+    /// through `pointer_shown` and two written out where the pad's answer is kept
+    /// (`idle_menu_cursor_and_focus` as its opposite, `idle_read_mouse`); one site, before the
+    /// pipboy is lowered, asks whether it is hidden. A change to any of them is to come with the
+    /// exe's word for it.
     #[test]
     fn idle_asks_the_pointer_where_the_exe_does() {
         let source = include_str!("interfacemanager.rs");
@@ -14456,7 +14462,7 @@ mod tests {
         let end = source.find("fn idle_start_menu_key(").unwrap();
         let idle = &source[start..end];
         let count = |text: &str| idle.matches(text).count();
-        assert_eq!(count("pointer_shown(e, this)"), 6);
+        assert_eq!(count("pointer_shown(e, this)"), 7);
         assert_eq!(count("pad_pointer_hidden(e, this)"), 1);
         assert_eq!(
             count("if controller && e.get(this, InterfaceManager::bShowMouse) == 0 {"),
@@ -14466,6 +14472,28 @@ mod tests {
             count("if !controller || e.get(this, InterfaceManager::bShowMouse) != 0 {"),
             1
         );
+    }
+
+    /// The pad's menu event (0070df99, review of #797): with a pad in use and the pointer hidden
+    /// the top pad button goes to the menus (`DoGamepadEvent`'s walk of the root's menus); with
+    /// the pointer shown, or no pad, it does not.
+    #[test]
+    fn the_pad_menu_event_waits_for_a_hidden_pointer() {
+        for (pad, mouse, walked) in [(true, 0u8, true), (true, 1, false), (false, 0, false)] {
+            let (mut e, m, _) = gamepad_world();
+            returns(&mut e, HAS_360_CONTROLLER_GETTER, u32::from(pad));
+            e.set(m, InterfaceManager::bShowMouse, mouse);
+            menu_list(&mut e, m, &[0x7a00]);
+            returns(&mut e, TILE_GET_MENU, 0x7c00);
+            returns(&mut e, TILE_IS_VISIBLE, 1);
+            returns(&mut e, DO_GAMEPAD, 1);
+            idle_pad_menu_event(&mut e, m);
+            assert_eq!(
+                !calls(&e, DO_GAMEPAD).is_empty(),
+                walked,
+                "pad {pad}, mouse {mouse}"
+            );
+        }
     }
     // @@TESTS-END@@
 }
