@@ -1,6 +1,6 @@
-//! The Settings screen's rows, with no window in them: Settings.ps1's twelve rows by the same
-//! names, choices, defaults and keys (`distribution/Settings.ps1`, the census in the launcher
-//! track's notes), read from and written to the profile's own `Fallout.ini` and
+//! The Settings screen's rows, with no window in them: the twelve rows of the old Settings.cmd
+//! (its distribution/Settings.ps1) by the same names, choices, defaults and keys (the census in
+//! the launcher track's notes), read from and written to the profile's own `Fallout.ini` and
 //! `FalloutPrefs.ini` through the shared code the game's side uses (`game_profile`). A row that is
 //! changed writes only its own keys, as Settings.ps1 saves only the options changed in it; "Game's
 //! setting" writes nothing. Our keys' defaults are the host's table's (`crates/host/data/

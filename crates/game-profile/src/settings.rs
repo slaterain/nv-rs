@@ -179,7 +179,7 @@ impl Settings {
 
 /// `prefs` (a `FalloutPrefs.ini`) with these lines set in its `[Display]` section, where the game
 /// reads them, one at a time by [`crate::game_ini::set_key`]: the same rule as every other writer
-/// of Play.exe and Settings.cmd, and as Windows' own (measured, measure/ini/repeated-sections.md):
+/// of Play.exe and the Settings screen, and as Windows' own (measured, measure/ini/repeated-sections.md):
 /// only the first `[Display]` of the file, names compared without case, so a later `[Display]`
 /// the game never reads is left as it is. A missing key goes under the first `[Display]`; a
 /// missing section is added at the end. Every other byte stays, line ends included.
@@ -345,7 +345,7 @@ mod tests {
         // Nothing chosen, or an empty line: the fixes and no limit.
         assert_eq!(switches(""), Ok(pair("fixes", "0")));
         assert_eq!(switches("Preset=\nFrameLimit=\n"), Ok(pair("fixes", "0")));
-        // What Settings.cmd writes.
+        // What the Settings screen writes.
         assert_eq!(
             switches("Preset=vanilla\nFrameLimit=144\n"),
             Ok(pair("vanilla", "144"))

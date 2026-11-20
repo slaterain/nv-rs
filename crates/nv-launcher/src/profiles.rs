@@ -1,7 +1,7 @@
 //! The Settings screen's files: both ways of playing's profiles (`game`, then `mods`), each with the
 //! game's `Fallout.ini` (nv-rs's `[nv-rs ...]` sections) and `FalloutPrefs.ini`, in nv-rs's own
 //! folder (Windows: the package's `userdata`), and the older `settings.ini` stage, kept as
-//! Settings.cmd kept them (`distribution/Settings.ps1`, which this replaces):
+//! the old Settings.cmd kept them (its distribution/Settings.ps1, which this replaced):
 //!
 //! - the choices go into the files only when every profile's `Fallout.ini` has nv-rs's sections
 //!   (Play made them ready) and there is no `settings.ini`; otherwise into `settings.ini`, every
@@ -57,10 +57,16 @@ fn read(path: &Path) -> std::io::Result<String> {
 }
 
 /// `bytes` in place of `path`: written beside it first, then put in its place in one step; a
-/// read-only mark is lifted for that step and put back.
+/// read-only mark is lifted for that step and put back. A failure names the file (the screen
+/// shows it after "Not saved:").
+fn write_whole(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    replace_whole(path, bytes)
+        .map_err(|e| std::io::Error::new(e.kind(), format!("{}: {e}", path.display())))
+}
+
 // `set_readonly(false)` clears the read-only attribute (Windows) or gives the owner write (Unix).
 #[allow(clippy::permissions_set_readonly_false)]
-fn write_whole(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+fn replace_whole(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut part = path.as_os_str().to_owned();
     part.push(".part");
     let part = PathBuf::from(part);
@@ -131,6 +137,61 @@ pub fn settings_lines(files: &Files) -> Vec<(&'static str, String)> {
             pick(Row::DrawingThread, "Main thread", "0", "1"),
         ),
     ]
+}
+
+/// The screen's row and choice that a settings.ini line names (the opposite of
+/// [`settings_lines`]): the tests choose by those names, as the old Settings.cmd tests did.
+#[cfg(test)]
+pub fn choice_for(name: &str, value: &str) -> Option<(Row, String)> {
+    let two = |row: Row, yes: &str, a: &str, b: &str| {
+        Some((row, if value == yes { a } else { b }.to_string()))
+    };
+    let limit = |row: Row| {
+        Some((
+            row,
+            if value == "0" { "No limit" } else { value }.to_string(),
+        ))
+    };
+    match name {
+        "Renderer" => two(
+            Row::Renderer,
+            "d3d9",
+            "Direct3D 9 (the original's)",
+            "Vulkan (recommended)",
+        ),
+        "Borderless" => two(Row::DisplayMode, "0", "Window", "Borderless fullscreen"),
+        "Resolution" => Some((Row::Resolution, value.to_string())),
+        "AntiAliasing" => Some((Row::AntiAliasing, value.to_string())),
+        "Anisotropy" => Some((Row::Anisotropy, value.to_string())),
+        "VSync" => Some((Row::VSync, value.to_string())),
+        "Preset" => two(
+            Row::GameFixes,
+            "vanilla",
+            "Vanilla (the original game)",
+            "Fixes (recommended)",
+        ),
+        "FrameLimit" => limit(Row::FrameLimit),
+        "MenuFrameLimit" => limit(Row::MenuFrameLimit),
+        "NV_SHOW_FPS" => two(
+            Row::FrameRateCounter,
+            "1",
+            "Shown (F11 hides it)",
+            "Hidden (F11 shows it)",
+        ),
+        "NV_THREADS" => two(
+            Row::GameThreads,
+            "stepped",
+            "One at a time (slower)",
+            "Side by side (recommended)",
+        ),
+        "NV_RENDER_THREAD" => two(
+            Row::DrawingThread,
+            "0",
+            "Main thread (slower)",
+            "Own thread (recommended)",
+        ),
+        _ => None,
+    }
 }
 
 /// The names Settings.ps1 knew: a settings.ini line by another name is kept as it is.
@@ -382,9 +443,10 @@ mod tests {
         std::fs::remove_file(&ini).unwrap();
         std::fs::create_dir_all(&ini).unwrap();
         let before = std::fs::read(p.dirs[1].join("Fallout.ini")).unwrap();
-        assert!(p
+        let e = p
             .save(Row::Renderer, "Direct3D 9 (the original's)")
-            .is_err());
+            .unwrap_err();
+        assert!(e.to_string().contains("Fallout.ini"), "{e}");
         assert_eq!(
             std::fs::read(p.dirs[1].join("Fallout.ini")).unwrap(),
             before
@@ -412,5 +474,11 @@ mod tests {
         assert_eq!(get("NV_THREADS"), "real");
         assert_eq!(get("NV_RENDER_THREAD"), "1");
         assert_eq!(lines.len(), KNOWN.len());
+        // Every line names its row's choice back (the tests' way of choosing).
+        for (name, value) in &lines {
+            let (row, choice) = choice_for(name, value).unwrap();
+            assert_eq!(row.current(&files), choice, "{name}");
+        }
+        assert!(choice_for("SomethingElse", "1").is_none());
     }
 }
