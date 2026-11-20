@@ -84,3 +84,83 @@ fn s0206_a_creatures_dr_is_counted_once() {
         assert_eq!(e.mem.f32(creature + 0x1b8), total as f32);
     }
 }
+
+/// S0214 (`CombatItemCooldownFix`, `CombatProcedureUseCombatItem::Update` `009daab0`): an NPC
+/// drinks its restore item (slot 0 of the combat state's items). With the exe's defaults
+/// (`fCombatItemRestoreTimer` 30.0, `fCombatItemBuffTimer` 45.0) and the timer clock at 12.0, the
+/// restore timer is restarted at 12.0 with a cooldown of 45.0 off (the exe's switch falls through
+/// to the buff timer, `0099a840` and the timer reset `008d7f40` translated) and 30.0 on (Tweaks'
+/// routine).
+#[test]
+fn s0214_an_npcs_restore_item_waits_the_restore_timer() {
+    const RESTORE: u32 = 0x011c_fdd8;
+    const BUFF: u32 = 0x011c_f480;
+    const CLOCK: u32 = 0x011f_1bf0;
+    for (on, cooldown) in [(false, 45.0f32), (true, 30.0)] {
+        let mut e = Engine::new();
+        e.map(0x011c_f000, 0x1000);
+        e.map(0x011f_1000, 0x1000);
+        e.mem.set_f32(RESTORE + 4, 30.0);
+        e.mem.set_f32(BUFF + 4, 45.0);
+        e.mem.set_f32(CLOCK, 12.0);
+        let attacker = object(&mut e, 0x200);
+        let process = object(&mut e, 0x100);
+        e.mem.set_u32(attacker + 0x68, process);
+        // Not animating (the process's word +0x28 set): the item is used at once.
+        e.mem.set_u32(process + 0x28, 1);
+        let state = e.mem.alloc(0x22c);
+        e.mem.set_u32(state + 0x1a4, 0x66);
+        let procedure = e.mem.alloc(0x18);
+        e.mem.set_u32(procedure + 0x10, 0x66);
+        e.register_double(0x0099_6de0, move |_, _| ret(attacker));
+        e.register_double(0x0058_6150, move |_, _| ret(state));
+        e.register_double(0x008d_8520, move |_, _| ret(process));
+        e.register(0x0045_cd60, |_, _| ret(1));
+        e.register(0x0040_1170, |_, _| ret(0x2f));
+        for stand_in in [0x008c_1f80u32, 0x0097_f450, 0x009c_aae0] {
+            e.register(stand_in, |_, _| Ret::default());
+        }
+        e.set_stewie(stewie::COMBAT_ITEM_COOLDOWN, on);
+        e.call(0x009d_aab0, &args![procedure]);
+        assert_eq!(
+            (e.mem.f32(state + 0x1ac), e.mem.f32(state + 0x1b0)),
+            (12.0, cooldown),
+            "on {on}"
+        );
+        assert_eq!(
+            e.mem.u32(state + 0x1b4),
+            0,
+            "the buff slot's timer is untouched"
+        );
+    }
+}
+
+/// S0228 (`PatrolPackageFix`, `009f2a70`): a patrol package's data with no actor whose reference
+/// list was freed with the invalidated package (its buffer unmapped). Off, the exe's destructor
+/// releases the current reference (`009f2b30` translated), which reads the freed list and stops;
+/// on, Tweaks' `ClearReservedPatrolRef` skips it and the destructor finishes.
+#[test]
+fn s0228_an_invalidated_patrol_package_unloads() {
+    for on in [false, true] {
+        let mut e = Engine::new();
+        e.map(0x011c_3000, 0x1000);
+        e.mem.set_u32(0x011c_3f2c, 0x900);
+        e.register(0x0042_26e0, |_, _| Ret::default());
+        for stand_in in [0x006f_2290u32, 0x005e_04f0, 0x0067_d970] {
+            e.register(stand_in, |_, _| Ret::default());
+        }
+        let data = e.mem.alloc(0x38);
+        // `References` (+0x1C): a buffer the freed package left behind, one entry.
+        e.mem.set_u32(data + 0x20, 0x7ff0_0000);
+        e.mem.set_u32(data + 0x24, 1);
+        e.set_stewie(stewie::PATROL_PACKAGE, on);
+        let unloaded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            e.call(0x009f_2a70, &args![data]);
+        }));
+        e.call_stack.clear();
+        assert_eq!(unloaded.is_ok(), on, "on {on}");
+        if on {
+            assert_eq!(e.mem.u32(data + 4), 4, "eState");
+        }
+    }
+}
