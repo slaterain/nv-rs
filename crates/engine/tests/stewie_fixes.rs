@@ -8,6 +8,13 @@ use engine_core::extend::stewie;
 use engine_core::prelude::*;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
+// Each share's rows, in files of their own (`stewie_fixes/`), so the three agents never edit the
+// same lines.
+mod ai;
+mod forms;
+mod menus;
+mod world;
+
 fn ret(eax: u32) -> Ret {
     Ret {
         eax,

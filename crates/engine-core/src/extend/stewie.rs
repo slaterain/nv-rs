@@ -9,6 +9,23 @@
 //! The rows' numbers are fixed ranges per group ([`CRASH`], ...), so groups built side by side add
 //! rows in ranges of their own; `crates/stewie`'s table names each row once and checks that no two
 //! rows share a bit.
+//!
+//! Four agents build the rest side by side, each in files of its own (`measure/stewie`'s split by
+//! game system): the crash fixes' rows stay in this file; share 1a's new rows (the engines and the
+//! console) go in `world.rs`, share 1b's (forms, cells, scripts, saves and sound) in `forms.rs`,
+//! share 2's (AI, actors and the player) in `ai.rs`, share 3's (menus and the HUD) in `menus.rs`
+//! (beside this file), each in its own ranges of [`FIXES`] and
+//! [`VNV_TWEAKS`], made with [`Row::share`]. Every row is reached here as `stewie::NAME`.
+
+mod ai;
+mod forms;
+mod menus;
+mod world;
+
+pub use ai::*;
+pub use forms::*;
+pub use menus::*;
+pub use world::*;
 
 use crate::{args, Engine};
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
@@ -28,6 +45,13 @@ impl Row {
         Row(index)
     }
 
+    /// Row `n` of a share's range `first..end` (`world.rs`, `forms.rs`, `ai.rs`, `menus.rs`): a row past the
+    /// range's end does not compile (in a `const`).
+    pub const fn share(first: u16, end: u16, n: u16) -> Row {
+        assert!(first + n < end, "past the share's rows");
+        Row::at(first, n)
+    }
+
     /// Its bit's number in the table.
     pub const fn index(self) -> usize {
         self.0 as usize
@@ -45,6 +69,27 @@ pub const VNV_TWEAKS: u16 = 640;
 pub const OTHER_TWEAKS: u16 = 1024;
 
 const _: () = assert!(CRASH < FIXES && FIXES < VNV_TWEAKS && VNV_TWEAKS < OTHER_TWEAKS);
+// The shares' ranges follow one another and fill the fixes' and the tweaks' groups.
+const _: () = assert!(
+    WORLD_FIXES == FIXES
+        && WORLD_FIXES < WORLD_FIXES_END
+        && WORLD_FIXES_END == FORMS_FIXES
+        && FORMS_FIXES < FORMS_FIXES_END
+        && FORMS_FIXES_END == AI_FIXES
+        && AI_FIXES < AI_FIXES_END
+        && AI_FIXES_END == MENUS_FIXES
+        && MENUS_FIXES < MENUS_FIXES_END
+        && MENUS_FIXES_END == VNV_TWEAKS
+        && WORLD_TWEAKS == VNV_TWEAKS
+        && WORLD_TWEAKS < WORLD_TWEAKS_END
+        && WORLD_TWEAKS_END == FORMS_TWEAKS
+        && FORMS_TWEAKS < FORMS_TWEAKS_END
+        && FORMS_TWEAKS_END == AI_TWEAKS
+        && AI_TWEAKS < AI_TWEAKS_END
+        && AI_TWEAKS_END == MENUS_TWEAKS
+        && MENUS_TWEAKS < MENUS_TWEAKS_END
+        && MENUS_TWEAKS_END == OTHER_TWEAKS
+);
 
 /// S0079, Tweaks' `patchDialogSpeechNullCheck`: `0x935E35`, in the shared actor's clear
 /// (`00935d90`), asks `NiObjectNET::GetController` (`00a5c570`) of the speaker's 3D, which is null
