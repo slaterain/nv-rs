@@ -2665,6 +2665,19 @@ pub fn report_place_writer() {
     shot::place_writer();
 }
 
+/// Tests (the host's): an F12 report asked for, as the key asks it (without a report folder).
+#[doc(hidden)]
+pub fn report_ask_for_test() {
+    shot::ask_report();
+}
+
+/// Tests (the host's): the place the report asked for takes at a present now: none while it
+/// waits for one.
+#[doc(hidden)]
+pub fn report_take_place_for_test() -> Option<String> {
+    shot::take_report_place().ok()
+}
+
 /// Whether the F12 report asked for waits for its place (`place.txt`): the host's main loop then
 /// gives it with [`set_report_place`] between two of the game's frames.
 pub fn report_place_wanted() -> bool {
@@ -2809,8 +2822,25 @@ pub(super) mod shot {
     /// F12 on the window's thread: the next `Present` makes the report.
     pub(super) fn report_asked() {
         if report_dir().is_some() {
-            REPORT_ASKED.store(true, std::sync::atomic::Ordering::Relaxed);
+            ask_report();
         }
+    }
+
+    /// A report asked for: a place kept from an earlier one is dropped first (a place.txt must
+    /// never name where an earlier F12 was taken), then the report waits for its own.
+    pub(super) fn ask_report() {
+        PLACE.ask();
+        REPORT_ASKED.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Tests: the place the report asked for takes now (as [`report_with`] does), the report
+    /// done when it gives one.
+    pub(super) fn take_report_place() -> Result<String, ()> {
+        let place = PLACE.take();
+        if place.is_ok() {
+            REPORT_ASKED.store(false, std::sync::atomic::Ordering::Relaxed);
+        }
+        place
     }
 
     /// The place a report waits for (`place.txt`): the text the host wrote, whether a host
@@ -2839,6 +2869,15 @@ pub(super) mod shot {
         pub(super) fn writer(&self) {
             self.writer
                 .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+
+        /// A new report is asked for: a place kept from before (one that came after an earlier
+        /// report went) is dropped and the wait starts again.
+        pub(super) fn ask(&self) {
+            if let Ok(mut p) = self.place.lock() {
+                *p = None;
+            }
+            self.waited.store(0, std::sync::atomic::Ordering::Relaxed);
         }
 
         /// Whether a report is `asked` for and has no place yet.
@@ -4233,6 +4272,25 @@ mod tests {
         // The next report waits again, from its first present.
         assert!(wait.wanted(true));
         assert_eq!(wait.take(), Err(()));
+    }
+
+    /// A place that comes after its report went (the host wrote it a frame late) never goes into
+    /// the next report: asking a report drops it, and the next report waits for its own.
+    #[test]
+    fn a_place_left_over_from_one_report_is_not_given_to_the_next() {
+        let wait = shot::PlaceWait::new();
+        wait.writer();
+        wait.ask();
+        for _ in 0..shot::PLACE_WAIT {
+            assert_eq!(wait.take(), Err(()));
+        }
+        assert!(wait.take().is_ok_and(|p| p.starts_with("place not given")));
+        // The host's place for that report, late.
+        wait.set("position: 1 2 3\n".into());
+        wait.ask();
+        assert_eq!(wait.take(), Err(()), "the earlier place dropped");
+        wait.set("position: 4 5 6\n".into());
+        assert_eq!(wait.take(), Ok("position: 4 5 6\n".to_string()));
     }
 
     /// With a host and no place after [`shot::PLACE_WAIT`] presents the report goes, its place

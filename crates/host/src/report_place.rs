@@ -360,6 +360,28 @@ mod tests {
         assert_eq!(read(&mut e).expect("a player").weather, None);
     }
 
+    /// The host says it writes places on each of its frames (`note`), before any report is asked
+    /// for, so the first F12 waits for its place; the next `note` writes it and the report takes it.
+    /// (The only test in this binary that asks a report: the report's state is the process's.)
+    #[test]
+    fn note_makes_the_first_report_wait_and_gives_it_the_place() {
+        let mut e = guest();
+        player_outside(&mut e);
+        note(&mut e);
+        engine_platform::d3d9real::report_ask_for_test();
+        assert_eq!(
+            engine_platform::d3d9real::report_take_place_for_test(),
+            None,
+            "the report waits for its place"
+        );
+        note(&mut e);
+        let place = engine_platform::d3d9real::report_take_place_for_test().expect("the place");
+        assert!(
+            place.contains("position: -39000 18200 5800\n") && place.contains("game hour: 17.50\n"),
+            "{place}"
+        );
+    }
+
     #[test]
     fn the_grid_cell_counts_as_cow_does() {
         assert_eq!(grid([-39000.0, 18200.0, 0.0]), (-10, 4));
