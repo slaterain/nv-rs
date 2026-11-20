@@ -5,6 +5,12 @@ use crate::ini::{entries, long_value, strtol, values, Entry};
 use crate::settings::{table, Settings, MISSING};
 use engine_core::extend::stewie as bits;
 
+// Each share's own tests, in files of their own (`rows.rs` has the rule).
+mod ai;
+mod forms;
+mod menus;
+mod world;
+
 fn entry(section: Option<&str>, key: &str, value: &str) -> Entry {
     Entry {
         section: section.map(|s| s.as_bytes().to_vec()),
@@ -182,7 +188,7 @@ fn a_players_file_overlays_vnvs_values_key_by_key() {
 }
 
 /// The S0079 row (`bDialogSpeechNullCheck`), which the key tests use.
-const PROOF: &rows::Row = &rows::ROWS[19];
+const PROOF: &rows::Row = &rows::ROWS[22];
 
 #[test]
 fn every_row_has_its_own_bit_and_key() {
@@ -191,10 +197,12 @@ fn every_row_has_its_own_bit_and_key() {
     let settings = table();
     assert_eq!(PROOF.plan, "S0079");
     assert!(
-        rows::ROWS.windows(2).all(|w| w[0].plan < w[1].plan),
-        "in PLAN.md's order"
+        rows::LISTS
+            .iter()
+            .all(|list| list.windows(2).all(|w| w[0].plan < w[1].plan)),
+        "each list in PLAN.md's order"
     );
-    for r in rows::ROWS {
+    for r in rows::all() {
         // The key is `b` and the function's name without its `patch` prefix; a block of a
         // function of several blocks (its PLAN number has a second part) adds a word after it.
         let name = r.function.strip_prefix("patch").unwrap_or(r.function);
@@ -222,6 +230,71 @@ fn every_row_has_its_own_bit_and_key() {
             );
         }
     }
+}
+
+/// One share: its rows and its two ranges (fixes, tweaks).
+type Share = (&'static [rows::Row], [(u16, u16); 2]);
+
+/// Each share's rows keep to its own bits (`engine_core::extend::stewie`'s `world.rs`, `forms.rs`,
+/// `ai.rs`, `menus.rs`): a row put in another share's list, or numbered in another share's range, fails
+/// here; and each share's pinned list names its own rows.
+#[test]
+fn each_shares_rows_keep_to_its_own_bits() {
+    let shares: [Share; 4] = [
+        (
+            rows::world::ROWS,
+            [
+                (bits::WORLD_FIXES, bits::WORLD_FIXES_END),
+                (bits::WORLD_TWEAKS, bits::WORLD_TWEAKS_END),
+            ],
+        ),
+        (
+            rows::forms::ROWS,
+            [
+                (bits::FORMS_FIXES, bits::FORMS_FIXES_END),
+                (bits::FORMS_TWEAKS, bits::FORMS_TWEAKS_END),
+            ],
+        ),
+        (
+            rows::ai::ROWS,
+            [
+                (bits::AI_FIXES, bits::AI_FIXES_END),
+                (bits::AI_TWEAKS, bits::AI_TWEAKS_END),
+            ],
+        ),
+        (
+            rows::menus::ROWS,
+            [
+                (bits::MENUS_FIXES, bits::MENUS_FIXES_END),
+                (bits::MENUS_TWEAKS, bits::MENUS_TWEAKS_END),
+            ],
+        ),
+    ];
+    let inside = |bit: bits::Row, ranges: &[(u16, u16); 2]| {
+        ranges
+            .iter()
+            .any(|&(first, end)| (first as usize..end as usize).contains(&bit.index()))
+    };
+    for (list, ranges) in &shares {
+        for r in *list {
+            assert!(inside(r.bit, ranges), "{} outside its share's bits", r.plan);
+        }
+    }
+    // The four shares' ranges do not overlap: a bit is in one share's at most.
+    for index in 0..bits::WORDS * 64 {
+        let bit = bits::Row::at(0, index as u16);
+        let owners = shares.iter().filter(|(_, r)| inside(bit, r)).count();
+        assert!(owners <= 1, "bit {index} in two shares");
+    }
+    assert_eq!(rows::world::ROWS.len(), world::PINNED.len());
+    assert_eq!(rows::forms::ROWS.len(), forms::PINNED.len());
+    assert_eq!(rows::ai::ROWS.len(), ai::PINNED.len());
+    assert_eq!(rows::menus::ROWS.len(), menus::PINNED.len());
+    // A share's row past its range does not compile; one at its last bit does.
+    assert_eq!(
+        bits::Row::share(bits::AI_FIXES, bits::AI_FIXES_END, 169).index(),
+        469
+    );
 }
 
 /// `[nv-rs Stewie]`: a row's key turns it off (`0`) or leaves it on; a value other than 0 or 1 is
@@ -281,10 +354,7 @@ fn a_row_with_a_tweaks_key_obeys_it() {
 /// default, off when the player's INI sets it to 0, and off by its own key too.
 #[test]
 fn the_changes_map_row_obeys_tweaks_inlines_save_load() {
-    let row = rows::ROWS
-        .iter()
-        .find(|r| r.plan == "S1016.845558")
-        .unwrap();
+    let row = rows::all().find(|r| r.plan == "S1016.845558").unwrap();
     assert_eq!(row.tweaks, Some(("Inlines", "bSaveLoad")));
     let keys = rows::Keys::default();
     assert!(
@@ -369,7 +439,7 @@ fn the_install_sets_the_bits_and_lists_tweaks() {
     install(&mut e);
     assert!(on(&e));
     assert!(e.stewie(bits::DIALOG_SPEECH_NULL_CHECK));
-    assert_eq!(e.stewie_rows_on(), rows::ROWS.len() as u32);
+    assert_eq!(e.stewie_rows_on(), rows::all().count() as u32);
     let listed = nvse::plugins::built_ins(&e);
     assert_eq!(listed.len(), 1);
     assert_eq!(
@@ -406,7 +476,7 @@ fn the_start_lines_name_what_was_read() {
         start_lines(false, &settings, &keys, on.len()),
         [
             "lStewieAl's Tweaks: no Data\\NVSE\\Plugins\\nvse_stewie_tweaks.ini: VNV's values",
-            "lStewieAl's Tweaks: 50 of its 50 rows built are on",
+            "lStewieAl's Tweaks: 61 of its 61 rows built are on",
         ]
     );
     let (settings, on) = settings_and_rows(Some(b"[Tweaks]\nbBetterAutoWalk=1\n"), &[], &keys);
@@ -843,6 +913,12 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
             Row::at(CRASH, 17),
         ),
         ("S0027", "bFixPipboyEquipCrash", Row::at(CRASH, 28)),
+        (
+            "S0036",
+            "bRemoveInvalidCasinoDataChipsInSlotMachineMenu",
+            Row::at(CRASH, 49),
+        ),
+        ("S0037", "bFixNullParticleSystemsCrash", Row::at(CRASH, 55)),
         ("S0042", "bFixExplosionWaterNullCall", Row::at(CRASH, 1)),
         (
             "S0043",
@@ -854,6 +930,7 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
             "bFixGetItemValueCrashForModdedWeapons",
             Row::at(CRASH, 34),
         ),
+        ("S0048", "bFixNullFaceGenCrash", Row::at(CRASH, 56)),
         ("S0049", "bFixUnresolvedRaceCrash", Row::at(CRASH, 35)),
         ("S0057", "bFixLevelGreaterThan99Crash", Row::at(CRASH, 18)),
         (
@@ -895,6 +972,7 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
             "bMemoryLeakFixesPackageTarget",
             Row::at(CRASH, 42),
         ),
+        ("S0108", "bFixNullNifOwnerCrash", Row::at(CRASH, 57)),
         (
             "S0124",
             "bProcessActivateAddNullCheckForPackage",
@@ -947,9 +1025,39 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
         ),
         ("S0183", "bFollowerTopicUseAfterFreeFix", Row::at(CRASH, 45)),
         ("S0186", "bBipedAnimNullItemError", Row::at(CRASH, 26)),
+        (
+            "S0196.01",
+            "bRouletteMenuFixesBetListDoubleFree",
+            Row::at(CRASH, 50),
+        ),
+        (
+            "S0196.02",
+            "bRouletteMenuFixesBetsFreedOnClose",
+            Row::at(CRASH, 51),
+        ),
+        (
+            "S0196.03",
+            "bRouletteMenuFixesBetFreedOnUse",
+            Row::at(CRASH, 52),
+        ),
         ("S0199.03", "bMiscCrashFixesAmmoEntry", Row::at(CRASH, 46)),
+        (
+            "S0199.04",
+            "bMiscCrashFixesEntityActivate",
+            Row::at(CRASH, 58),
+        ),
         ("S0199.05", "bMiscCrashFixesNpcActivate", Row::at(CRASH, 39)),
         ("S0199.06", "bMiscCrashFixesRemoveWorn", Row::at(CRASH, 40)),
+        (
+            "S0199.07",
+            "bMiscCrashFixesAddReference",
+            Row::at(CRASH, 59),
+        ),
+        (
+            "S0199.08",
+            "bMiscCrashFixesCompanionStimpak",
+            Row::at(CRASH, 53),
+        ),
         (
             "S0199.09",
             "bMiscCrashFixesShowSceneGraph",
@@ -957,6 +1065,7 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
         ),
         ("S0199.10", "bMiscCrashFixesUseDoor", Row::at(CRASH, 47)),
         ("S0199.11", "bMiscCrashFixesRegenAmmo", Row::at(CRASH, 48)),
+        ("S0199.12", "bMiscCrashFixesListBoxName", Row::at(CRASH, 54)),
         (
             "S0202",
             "bEquipAmmoOnNullBaseProcessCrashFix",
@@ -969,9 +1078,17 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
             Row::at(FIXES, 0),
         ),
     ];
-    let table: Vec<(&str, &str, Row)> = rows::ROWS.iter().map(|r| (r.plan, r.key, r.bit)).collect();
+    let pinned: Vec<(&str, &str, Row)> = [
+        pinned,
+        world::PINNED,
+        forms::PINNED,
+        ai::PINNED,
+        menus::PINNED,
+    ]
+    .concat();
+    let table: Vec<(&str, &str, Row)> = rows::all().map(|r| (r.plan, r.key, r.bit)).collect();
     assert_eq!(table, pinned);
-    for (plan, key, bit) in pinned {
+    for (plan, key, bit) in &pinned {
         let mut e = engine(None);
         set_on(&mut e, true);
         set_keys(
@@ -982,8 +1099,26 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
             },
         );
         install(&mut e);
-        for (_, _, other) in pinned {
+        for (_, _, other) in &pinned {
             assert_eq!(e.stewie(*other), other != bit, "{plan}'s key at 0");
         }
     }
+}
+
+/// `Row::share` stops exactly at a share's end: the share's last bit is a row, the next one is
+/// refused.
+#[test]
+#[should_panic(expected = "past the share's rows")]
+fn a_share_row_at_its_end_is_refused() {
+    let n = std::hint::black_box(bits::AI_FIXES_END - bits::AI_FIXES);
+    let _ = bits::Row::share(bits::AI_FIXES, bits::AI_FIXES_END, n);
+}
+
+/// The last menus tweak is the table's bit 1023, the bit before the other switches' group.
+#[test]
+fn the_last_share_row_is_bit_1023() {
+    let n = std::hint::black_box(bits::MENUS_TWEAKS_END - bits::MENUS_TWEAKS - 1);
+    let last = bits::Row::share(bits::MENUS_TWEAKS, bits::MENUS_TWEAKS_END, n);
+    assert_eq!(last.index(), 1023);
+    assert_eq!(usize::from(bits::OTHER_TWEAKS), 1024);
 }

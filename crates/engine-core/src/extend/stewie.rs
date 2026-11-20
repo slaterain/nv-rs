@@ -9,6 +9,23 @@
 //! The rows' numbers are fixed ranges per group ([`CRASH`], ...), so groups built side by side add
 //! rows in ranges of their own; `crates/stewie`'s table names each row once and checks that no two
 //! rows share a bit.
+//!
+//! Four agents build the rest side by side, each in files of its own (`measure/stewie`'s split by
+//! game system): the crash fixes' rows stay in this file; share 1a's new rows (the engines and the
+//! console) go in `world.rs`, share 1b's (forms, cells, scripts, saves and sound) in `forms.rs`,
+//! share 2's (AI, actors and the player) in `ai.rs`, share 3's (menus and the HUD) in `menus.rs`
+//! (beside this file), each in its own ranges of [`FIXES`] and
+//! [`VNV_TWEAKS`], made with [`Row::share`]. Every row is reached here as `stewie::NAME`.
+
+mod ai;
+mod forms;
+mod menus;
+mod world;
+
+pub use ai::*;
+pub use forms::*;
+pub use menus::*;
+pub use world::*;
 
 use crate::{args, Engine};
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
@@ -28,6 +45,13 @@ impl Row {
         Row(index)
     }
 
+    /// Row `n` of a share's range `first..end` (`world.rs`, `forms.rs`, `ai.rs`, `menus.rs`): a row past the
+    /// range's end does not compile (in a `const`).
+    pub const fn share(first: u16, end: u16, n: u16) -> Row {
+        assert!(first + n < end, "past the share's rows");
+        Row::at(first, n)
+    }
+
     /// Its bit's number in the table.
     pub const fn index(self) -> usize {
         self.0 as usize
@@ -45,6 +69,27 @@ pub const VNV_TWEAKS: u16 = 640;
 pub const OTHER_TWEAKS: u16 = 1024;
 
 const _: () = assert!(CRASH < FIXES && FIXES < VNV_TWEAKS && VNV_TWEAKS < OTHER_TWEAKS);
+// The shares' ranges follow one another and fill the fixes' and the tweaks' groups.
+const _: () = assert!(
+    WORLD_FIXES == FIXES
+        && WORLD_FIXES < WORLD_FIXES_END
+        && WORLD_FIXES_END == FORMS_FIXES
+        && FORMS_FIXES < FORMS_FIXES_END
+        && FORMS_FIXES_END == AI_FIXES
+        && AI_FIXES < AI_FIXES_END
+        && AI_FIXES_END == MENUS_FIXES
+        && MENUS_FIXES < MENUS_FIXES_END
+        && MENUS_FIXES_END == VNV_TWEAKS
+        && WORLD_TWEAKS == VNV_TWEAKS
+        && WORLD_TWEAKS < WORLD_TWEAKS_END
+        && WORLD_TWEAKS_END == FORMS_TWEAKS
+        && FORMS_TWEAKS < FORMS_TWEAKS_END
+        && FORMS_TWEAKS_END == AI_TWEAKS
+        && AI_TWEAKS < AI_TWEAKS_END
+        && AI_TWEAKS_END == MENUS_TWEAKS
+        && MENUS_TWEAKS < MENUS_TWEAKS_END
+        && MENUS_TWEAKS_END == OTHER_TWEAKS
+);
 
 /// S0079, Tweaks' `patchDialogSpeechNullCheck`: `0x935E35`, in the shared actor's clear
 /// (`00935d90`), asks `NiObjectNET::GetController` (`00a5c570`) of the speaker's 3D, which is null
@@ -183,6 +228,28 @@ pub const AMMO_ENTRY_GONE: Row = Row::at(CRASH, 46);
 pub const USE_DOOR_NULL_DOOR: Row = Row::at(CRASH, 47);
 /// S0199.11 `MiscCrashFixes` (`PlayerCharacter::Update` `0093e860` (`0x943DE1`)): the player's regenerating ammunition with no ammunition type equipped no longer crashes.
 pub const REGEN_AMMO_NO_TYPE: Row = Row::at(CRASH, 48);
+/// S0036 `patchRemoveInvalidCasinoDataChipsInSlotMachineMenu` (`SlotMachineMenu::Create` `007c0a40` (`0x7C0AAE`), `RouletteMenu::Create` `007bbe20` (`0x7BBE72`), `BlackJackMenu::Create` `00733630` (`0x73369E`)): a casino record whose plugin is gone is removed when a gambling menu opens; the slot machines no longer refuse to open on it.
+pub const CASINO_INVALID_CHIPS: Row = Row::at(CRASH, 49);
+/// S0196.01 `RouletteMenuFixes` (`RouletteMenu` destructor `007b9020` (`0x7B93C2`)): closing the roulette table no longer empties its freed bet list a second time.
+pub const ROULETTE_BET_LIST_DOUBLE_FREE: Row = Row::at(CRASH, 50);
+/// S0196.02 `RouletteMenuFixes` (`RouletteMenu` destructor `007b9020` (`0x7B92D7`)): the bets still placed when the roulette table closes are freed.
+pub const ROULETTE_BETS_FREED_ON_CLOSE: Row = Row::at(CRASH, 51);
+/// S0196.03 `RouletteMenuFixes` (`RouletteMenu::DoIdle` `007bd2a0` (`0x7BE034`)): each roulette bet is freed once it is settled.
+pub const ROULETTE_BET_FREED_ON_USE: Row = Row::at(CRASH, 52);
+/// S0199.08 `MiscCrashFixes` (`CompanionWheelMenu::Do_UseStim` `00756490` (`0x756771`)): a stimpak given from the companion wheel is no longer also removed from the companion.
+pub const COMPANION_STIMPAK_REMOVED_TWICE: Row = Row::at(CRASH, 53);
+/// S0199.12 `MiscCrashFixes` (`ListBox::BuildFromContainer` `00719ef0` (`0x71A019`, `0x71A02D`)): an item with no name part in an inventory list no longer crashes.
+pub const LIST_BOX_NULL_NAME: Row = Row::at(CRASH, 54);
+/// S0037 `fixNullParticleSystemsCrash` (`BSMasterParticleSystem::ChildHasActiveParticles` `00c5eb90` (`0xC5EBD9`)): a particle system child with no particle data no longer crashes.
+pub const PARTICLE_SYSTEM_NULL_DATA: Row = Row::at(CRASH, 55);
+/// S0048 `patchFixNullFaceGenCrash` (`BSFaceGenModel::LoadModelMesh` `00659ce0` (`0x65A125`)): a face model with no geometry for its tri file no longer crashes.
+pub const FACE_GEN_NULL_GEOMETRY: Row = Row::at(CRASH, 56);
+/// S0108 `patchFixNullNifOwnerCrash` (`NiControllerSequence` activation `00a34f20` (`0xA34FCB`, `0xA35003`)): an animation sequence with no owner no longer crashes when it starts.
+pub const SEQUENCE_NULL_OWNER: Row = Row::at(CRASH, 57);
+/// S0199.04 `MiscCrashFixes` (`hkpEntity::activate` `00c9c1d0` (`0xC9C1DD`)): a physics body with no simulation island no longer crashes when it is woken.
+pub const HKP_ENTITY_NULL_ISLAND: Row = Row::at(CRASH, 58);
+/// S0199.07 `MiscCrashFixes` (`TESObjectCELL::AddReference` `00548230` (`0x54867C`)): a reference whose cell is gone while it is added no longer crashes.
+pub const ADD_REFERENCE_NULL_CELL: Row = Row::at(CRASH, 59);
 /// S1016 (Engine Optimizations, `Inlines::SaveLoad`: `Write32(0x845558, 0x2735)`): the changes map's
 /// buckets 10,037, not the exe's 5,039 (`00845550`). It changes the order a save walks and writes the
 /// changed forms, so it is a fixes row.

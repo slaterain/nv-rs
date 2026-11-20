@@ -1,5 +1,6 @@
-//! `userdata\settings.ini`: `Name=Value` lines Settings.cmd wrote before the player's options
-//! moved into the game's `Fallout.ini` (and wrote until Play.exe's first start). Play.exe moves
+//! `userdata\settings.ini`: `Name=Value` lines older previews' Settings.cmd wrote before the
+//! player's options moved into the game's `Fallout.ini`, and the launcher's Settings screen writes
+//! until a profile is made ready. Play.exe moves
 //! it into the profiles' files once (`game_ini.rs`) and renames it `settings.ini.migrated`.
 //! `Preset`, `FrameLimit` and `MenuFrameLimit` are checked as the game would read them
 //! ([`Settings::game_switches`]); names the launcher doesn't know are passed over.
@@ -89,7 +90,7 @@ impl Settings {
                 continue;
             }
             if let Some((name, value)) = line.split_once('=') {
-                // The last line of a name wins, its case aside, as the game and Settings.ps1 read it.
+                // The last line of a name wins, its case aside, as the game and the Settings screen read it.
                 let name = name.trim();
                 map.retain(|k: &String, _| !k.eq_ignore_ascii_case(name));
                 map.insert(name.to_string(), value.trim().to_string());
@@ -179,7 +180,7 @@ impl Settings {
 
 /// `prefs` (a `FalloutPrefs.ini`) with these lines set in its `[Display]` section, where the game
 /// reads them, one at a time by [`crate::game_ini::set_key`]: the same rule as every other writer
-/// of Play.exe and Settings.cmd, and as Windows' own (measured, measure/ini/repeated-sections.md):
+/// of Play.exe and the Settings screen, and as Windows' own (measured, measure/ini/repeated-sections.md):
 /// only the first `[Display]` of the file, names compared without case, so a later `[Display]`
 /// the game never reads is left as it is. A missing key goes under the first `[Display]`; a
 /// missing section is added at the end. Every other byte stays, line ends included.
@@ -345,7 +346,7 @@ mod tests {
         // Nothing chosen, or an empty line: the fixes and no limit.
         assert_eq!(switches(""), Ok(pair("fixes", "0")));
         assert_eq!(switches("Preset=\nFrameLimit=\n"), Ok(pair("fixes", "0")));
-        // What Settings.cmd writes.
+        // What the Settings screen writes.
         assert_eq!(
             switches("Preset=vanilla\nFrameLimit=144\n"),
             Ok(pair("vanilla", "144"))

@@ -15,8 +15,18 @@ const fn row(addr: u32) -> Entry {
     }
 }
 
-/// The commands' seams.
+/// The commands' seams (by address).
 pub(in super::super) const SITES: &[Entry] = &[
+    // `InitMiniMap` (JIP MiniMap; answered once it has run): `TES::UpdateCurrentGridCell`
+    // 00452580, the small-grid test (JIP's `SafeWrite16(0x452736, 0x7705)`: `cmp [eax], 5; ja` for
+    // `cmp [eax], 3; jnz`).
+    row(0x0045_2737),
+    // `InitMiniMap`: the game's update of the cells' seen bits 00555c20 (JIP's
+    // `SafeWrite8(0x555C20, 0xC3)`).
+    row(0x0055_5c20),
+    // `InitMiniMap`: the quest's targets 0060f110, before its first target (JIP's
+    // `SetQuestTargetsHook` jump at 0x60F13A: a flag).
+    row(0x0060_f13a),
     // `ToggleNoZPosReset`: a reference's reset onto the ground 00628f90, after its collidable
     // reference (0x629006): a flagged reference keeps its height.
     row(0x0062_9006),
@@ -37,6 +47,9 @@ pub(in super::super) const SITES: &[Entry] = &[
     // `EnableImprovedRecipeMenu`: the recipe menu's craft 007284f0, the menu's close (0x728A0C;
     // JIP's `RecipeMenuCloseHook`: the menu stays open, its list refreshed).
     row(0x0072_8a0c),
+    // `InitMiniMap`: `HUDMainMenu::UpdateCompass` 00779070, the found location's name (0x77951E;
+    // JIP's `DiscoverLocationHook`).
+    row(0x0077_951e),
     // `ShowQuantityMenu`: `QuantityMenu::DoClick` 007abe40's `CALL dword ptr [0x011DA614]` (the
     // result callback). JIP's `QuantityMenuCallback` reads DoClick's button id from the caller's
     // frame (`[ebp+8]`): the seam hands it over with the callback and the count.
@@ -48,6 +61,9 @@ pub(in super::super) const SITES: &[Entry] = &[
     // `InitRockItLauncher`: `PlayerCharacter::Update` 0093e860, the ammo switch key's weapon entry
     // test (0x940998; JIP's `PCAmmoSwitchHook`: no switch for its Rock-It Launcher).
     row(0x0094_0998),
+    // `InitMiniMap`: `PlayerCharacter::Update` 0093e860, its call of 00555c20 (0x9438F6; JIP's
+    // `UpdateCellsSeenBitsHook`).
+    row(0x0094_38f6),
     // `ToggleVanityWheel`: the player's look handling 009445b0, the zoom test (its `JNP` at
     // 0x945A28; JIP's `SafeWrite8(0x945A29, ..)`): the wheel's zoom skipped while it is off.
     row(0x0094_5a28),
@@ -57,6 +73,14 @@ pub(in super::super) const SITES: &[Entry] = &[
     // `ToggleCameraCollision`: the player's camera distance 0094a0c0, the `JZ` after the camera
     // pick (JIP's `SafeWrite8(0x94A34E, ..)`): the pick's hit ignored while it is off.
     row(0x0094_a34e),
+    // `InitMiniMap`: `PlayerCharacter::CheckForQuestTargetUpdate` 00952c30 and
+    // `SetPlayerMapMarker` 00952e60, their call of the path to the target (0x952C69, 0x952F6B;
+    // JIP's `UpdatePlacedMarkerHook`).
+    row(0x0095_2c69),
+    row(0x0095_2f6b),
+    // `InitMiniMap`: the renderer's device check 00e74c00, its reset (0xE74C3C; JIP's
+    // `RendererRecreateHook`).
+    row(0x00e7_4c3c),
 ];
 
 /// The commands' wraps.
