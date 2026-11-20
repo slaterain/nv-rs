@@ -335,6 +335,7 @@ fn a_place_on_the_world_map() {
         offset: [10.0, -10.0],
         pos_mod: [0.0; 2],
         coord: 0,
+        mk_range: 0,
     };
     let mut coord = 0;
     let p = world_map_pos_mults([5000.0, -9000.0], &d, Some(&mut coord));

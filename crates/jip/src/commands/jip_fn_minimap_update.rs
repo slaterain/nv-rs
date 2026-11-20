@@ -15,7 +15,7 @@
 //! render thread.
 
 use super::jip_fn_minimap::{
-    children, init_dimensions, init_pos_mods, mini_map, root_map_world, state, tile_set_float,
+    cell_markers_freed, children, init_dimensions, init_pos_mods, mini_map, root_map_world, state, tile_set_float,
     update_tile_scales, world_map_pos_mults, MarkerTile, MiniMapState, CHILDREN, CHILD_COUNT,
     FLAGS, GAME_FOG_PROPERTY, HUD_MAIN_MENU, INTERIOR_ZOOM, LOCAL_TRANSLATE, MOD_INDEX, REF_EXTRA,
     REF_POSITION, SHADOW_SCENE_NODE, TES, TES_GRID, TRAIT_DEPTH, TRAIT_USER0, TRAIT_USER1,
@@ -727,8 +727,12 @@ fn world_markers_update(e: &mut Engine, s: &mut MiniMapState, hud: u32, coord: u
         .copied()
         .filter(|k| !s.curr_marker_cells.contains(k))
         .collect();
+    // JIP's `FreeCellMapMarkers` on each: the state is out of its lock here, so the tiles are
+    // hidden at once.
     for coord in gone {
-        free_cell_markers(e, s, coord);
+        for visible in cell_markers_freed(s, coord) {
+            value_set_bool(e, visible, false);
+        }
     }
 }
 
