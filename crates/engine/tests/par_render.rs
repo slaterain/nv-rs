@@ -770,8 +770,51 @@ fn walk(e: &mut Engine, t: &Tree, mode: &str, helpers: usize, min_children: u32)
     std::mem::take(&mut *RECORD.lock().unwrap())
 }
 
+/// The tests here share the record and the split switch: one at a time.
+static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+
+/// The children read-ahead changes no walk: the split walk (tasks of every node with two children
+/// or more) with it on and off, and the serial walk, record the same calls and leave the same state,
+/// also with an app-culled child whose bound and vtable point at unmapped memory in a split node's
+/// empty slot (its walk reads its flags and stops; the read-ahead skips the two words).
+#[test]
+fn children_read_ahead_changes_no_walk() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    const UNMAPPED: u32 = 0xffff_0040;
+    let mut e = Engine::new();
+    let t = tree(&mut e);
+    // The root's last child is the asking multi-bound node; its one child, the node of 24, has an
+    // empty slot at 5.
+    let root_slots = e.mem.u32(t.root + 0xa0);
+    let asking = e.mem.u32(root_slots + 12);
+    let third = e.mem.u32(e.mem.u32(asking + 0xa0));
+    let third_slots = e.mem.u32(third + 0xa0);
+    assert_eq!(e.mem.u32(third_slots + 4 * 5), 0, "the node of 24's slot 5 is empty");
+    let culled = object(&mut e, 0xac, UNMAPPED, UNMAPPED, 1);
+    e.mem.set_u32(third_slots + 4 * 5, culled);
+    culling::read_ahead_set_for_tests(true);
+    let serial = walk(&mut e, &t, "off", 1, 16);
+    let serial_state = STATE_AFTER.lock().unwrap().clone();
+    for on in [true, false] {
+        culling::read_ahead_set_for_tests(on);
+        let got = walk(&mut e, &t, "on", 2, 2);
+        culling::read_ahead_set_for_tests(true);
+        assert_eq!(got, serial, "read-ahead {on}: the split walk's calls");
+        assert_eq!(
+            *STATE_AFTER.lock().unwrap(),
+            serial_state,
+            "read-ahead {on}: what the walk leaves"
+        );
+    }
+    culling::read_ahead_set_for_tests(false);
+    let off = walk(&mut e, &t, "off", 1, 16);
+    culling::read_ahead_set_for_tests(true);
+    assert_eq!(off, serial, "the serial walk without the read-ahead");
+}
+
 #[test]
 fn chunked_walks_replay_the_serial_order() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut e = Engine::new();
     let t = tree(&mut e);
     let serial = walk(&mut e, &t, "off", 1, 16);

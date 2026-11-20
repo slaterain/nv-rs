@@ -1410,7 +1410,8 @@ fn node_on_visible() {
 
 /// The read-ahead before the children are walked reads only what is mapped: an app-culled child (its walk
 /// reads its flags and stops) whose bound, vtable or both point at unmapped memory, in the slot that is
-/// empty in the scene, changes nothing and stops nothing. The node in each of its two walks.
+/// empty in the scene, changes nothing and stops nothing; nor does a node with no slot in use whose
+/// children's storage is unmapped. The node in each of its two walks, with the read-ahead on and off.
 #[test]
 fn children_read_ahead_skips_dangling_words() {
     const UNMAPPED: u32 = 0xffff_0040;
@@ -1425,14 +1426,22 @@ fn children_read_ahead_skips_dangling_words() {
         let culled = object(e, 0xac, vt, bound, culling::FLAG_APP_CULLED);
         let slots = e.mem.u32(s.node + 0xa0);
         e.mem.set_u32(slots + 8, culled);
+        if case.word(0) == 4 {
+            // No slot in use, and the children's storage at unmapped memory: the walk reads neither.
+            e.mem.set_u16(s.node + 0xa6, 0);
+            e.mem.set_u32(s.node + 0xa0, UNMAPPED);
+        }
         (s, culled)
     };
+    // With the read-ahead and without it (the same comparison with the translation both times).
+    for on in [true, false] {
+    culling::read_ahead_set_for_tests(on);
     Diff::new(entry!(
         0x00a5_dbe0,
         visible::node_on_visible(Ptr<_>, Ptr<_>)
     ))
     .common()
-    .inputs(&[Input::Of(&[0, 1, 2, 3])])
+    .inputs(&[Input::Of(&[0, 1, 2, 3, 4])])
     .setup(move |e, case| {
         let (s, _) = setup(e, case);
         vec![s.node, s.process]
@@ -1445,7 +1454,7 @@ fn children_read_ahead_skips_dangling_words() {
         visible::multibound_node_on_visible(Ptr<_>, Ptr<_>)
     ))
     .common()
-    .inputs(&[Input::Of(&[0, 1, 2, 3])])
+    .inputs(&[Input::Of(&[0, 1, 2, 3, 4])])
     .setup(move |e, case| {
         let (s, _) = setup(e, case);
         let node = e.mem.alloc(0xb4);
@@ -1459,6 +1468,8 @@ fn children_read_ahead_skips_dangling_words() {
     })
     .run()
     .assert_same();
+    }
+    culling::read_ahead_set_for_tests(true);
 }
 
 #[test]

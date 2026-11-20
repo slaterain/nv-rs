@@ -50,8 +50,17 @@ fn child(e: &Engine, node: Ptr<NiNode>, index: u32) -> Ptr<NiAVObject> {
     Ptr::new(e.mem.u32(base.index(index, 4).addr()))
 }
 
-/// The children read ahead at most (a node with more reads the first ones ahead).
-const READ_AHEAD_MAX: u32 = 256;
+/// The children read ahead at most (a node or a task with more reads the first ones ahead).
+pub(crate) const READ_AHEAD_MAX: u32 = 256;
+
+/// Whether the read-ahead runs (always, but in a test that compares the walk with and without it).
+static READ_AHEAD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// For the tests that compare the walk with and without the read-ahead: turns it on or off.
+#[doc(hidden)]
+pub fn set_read_ahead_for_tests(on: bool) {
+    READ_AHEAD.store(on, std::sync::atomic::Ordering::Relaxed);
+}
 
 /// Reads ahead what the walk of each child will read first, for every child before the first is
 /// walked: its flags word, its world bound's radius and its vtable's `OnVisible` slot. A scene's
@@ -63,6 +72,9 @@ const READ_AHEAD_MAX: u32 = 256;
 /// With real threads these are the same plain loads of the same words the walk makes a moment later.
 #[inline]
 pub(crate) fn read_ahead(e: &Engine, children: impl Iterator<Item = u32>) {
+    if !READ_AHEAD.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
     let mut seen = 0u32;
     for child in children {
         let Some(object) = (child != 0).then(|| e.mem.span(child)).flatten() else {

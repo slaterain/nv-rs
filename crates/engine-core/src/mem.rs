@@ -2647,6 +2647,21 @@ mod tests {
         assert!(m.span(0).is_none());
     }
 
+    /// A page the touch census tracks (its accesses counted on the slow path) gives no span, so a
+    /// read-ahead never reads it and the census counts only the walk's own reads; the page before it
+    /// gives none either (its next page is the tracked one).
+    #[test]
+    fn span_gives_none_on_a_page_the_touch_census_tracks() {
+        let mut m = Mem::new();
+        m.map(0x0010_0000, 0x4000);
+        m.enable_touch(TouchSpec::default());
+        assert!(m.span(0x0010_1000).is_some(), "plainly mapped");
+        m.touch_tag_range(0x0010_2000, 0x40, 0, 0);
+        assert!(m.span(0x0010_2000).is_none(), "the tracked page");
+        assert!(m.span(0x0010_1000).is_none(), "the page before it");
+        assert!(m.span(0x0010_0000).is_some(), "two pages before");
+    }
+
     #[test]
     #[should_panic(expected = "span read past its end")]
     fn span_refuses_a_read_past_its_end() {
