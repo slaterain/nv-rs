@@ -26,7 +26,8 @@ pub fn fn_008d4e80(e: &mut Engine, this: Ptr) {
 /// Row S0229's routine, Tweaks' `ResetArmorRating` (`Fixes/ArmorUpdateFix.cpp`): both armour
 /// values to -1.0, as the exe, and then, when the actor has a process (+0x68), the process's
 /// cached Damage Resistance (0x12) and Damage Threshold (0x4C) marked out of date (its virtual
-/// +0x3B0, `SetCachedActorValueOutOfDate`), so an NPC's DR and DT follow a change of armour.
+/// +0x3B0, `SetCachedActorValueOutOfDate`), so an actor's (NPC's or creature's) DR and DT follow
+/// a change of armour.
 fn reset_armor_rating(e: &mut Engine, this: u32) {
     e.mem.set_f32(this + 0x1b8, -1.0);
     e.mem.set_f32(this + 0x1bc, -1.0);
@@ -113,8 +114,10 @@ pub fn fn_008d4cc0(e: &mut Engine, this: u32) -> f32 {
 /// stored total DR (+0x1B8) while it is not below 0.0; otherwise the actor's own value for Damage
 /// Resistance (0x12) from vtable slot +0x48C (`InternalGetActorValue`, 0.0 when it does not set
 /// its flag) plus the actor-value owner's (+0xA4) damage (slot +0x14) and permanent value (slot
-/// +0x18), stored and answered. The exe's `fn_008d4cc0` also adds the base value (`0087d880`) and
-/// slot +0x10, which counts a creature's DR twice.
+/// +0x18), stored and answered. The exe's `fn_008d4cc0` totals the actor's own value when it has
+/// one (otherwise the base value, `0087d880`) plus the permanent value, slot +0x10 (temporary) and
+/// the damage: Tweaks drops the base-value fallback and slot +0x10, which counted a creature's DR
+/// twice.
 pub fn creature_get_total_armor_dr(e: &mut Engine, this: u32) -> f32 {
     let stored = e.mem.f32(this + 0x1b8);
     if stored >= 0.0 {

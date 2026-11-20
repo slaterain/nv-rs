@@ -37,8 +37,8 @@ pub const RAGDOLL_CONTROLLER_UPDATE: Row = Row::share(AI_FIXES, AI_FIXES_END, 5)
 /// S0221 `DeathAnimFix` (`008ba600` (`0x8BA6EA`)): a death animation plays even while a movement
 /// sequence is easing out.
 pub const DEATH_ANIM: Row = Row::share(AI_FIXES, AI_FIXES_END, 6);
-/// S0229 `ArmorUpdateFix` (`008d4e80`, a jump at its entry): an NPC's DR and DT follow a change of
-/// its armour.
+/// S0229 `ArmorUpdateFix` (`008d4e80`, a jump at its entry): an actor's (NPC's or creature's) DR and
+/// DT follow a change of its armour.
 pub const ARMOR_UPDATE: Row = Row::share(AI_FIXES, AI_FIXES_END, 7);
 /// S0180 `MineDisarmedLightLoadingFix` (`Projectile::LoadGame` `009c52f0` (`0x9C5723`)): a mine's
 /// light shows again after a save is loaded.

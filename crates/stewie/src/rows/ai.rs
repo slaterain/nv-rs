@@ -43,9 +43,8 @@ pub const ROWS: &[Row] = &[
         function: "CreatureDRFix",
         plan: "S0206",
         key: "bCreatureDRFix",
-        // Tweaks gates it on `[INI] bFixCreatureDoubledDR`, code default 1; rows::on reads a
-        // Tweaks key with default 0, so the key waits for a default in the shared Row.
-        tweaks: None,
+        // Tweaks installs it only when `[INI] bFixCreatureDoubledDR` (code default 1) is not 0.
+        tweaks: Some(("INI", "bFixCreatureDoubledDR")),
         summary: "changes play: a creature's Damage Resistance is counted once, not twice (creatures take more damage than in the game)",
     },
     Row {
@@ -78,6 +77,6 @@ pub const ROWS: &[Row] = &[
         plan: "S0229",
         key: "bArmorUpdateFix",
         tweaks: None,
-        summary: "changes play: an NPC's DR and DT follow a change of its armour at once",
+        summary: "changes play: an actor's (NPC's or creature's) DR and DT follow a change of its armour at once",
     },
 ];

@@ -26,7 +26,8 @@ static MARKED: AtomicU32 = AtomicU32::new(0);
 
 /// S0229 (`ArmorUpdateFix`, `008d4e80`): an NPC's armour changed. Off, its DR and DT go to -1.0 and
 /// nothing else; on, the same and its process's cached DR (0x12) and DT (0x4C) are marked out of
-/// date (process slot +0x3B0), so the NPC's DR and DT follow the new armour.
+/// date (process slot +0x3B0), so the actor's (NPC's or creature's) DR and DT follow the new
+/// armour.
 #[test]
 fn s0229_an_npcs_dr_and_dt_follow_its_armour() {
     for on in [false, true] {
