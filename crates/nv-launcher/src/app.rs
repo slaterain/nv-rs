@@ -169,17 +169,36 @@ pub fn back_entry(entries: &[String]) -> Option<usize> {
     )
 }
 
+/// How much of the monitor's height the first window may take: on Windows 80%, leaving room for
+/// its title bar and the taskbar; elsewhere 88%.
+pub const HEIGHT_SHARE: f64 = if cfg!(windows) { 0.80 } else { 0.88 };
+
 /// The first window's size, in the monitor's logical units: the terminal's 4:3 shape at most
-/// 960 by 720, and no more than 88% of the monitor's height and 90% of its width (a scaled
-/// laptop screen is often under 800 high), so the prompt at the bottom shows.
+/// 960 by 720, and no more than [`HEIGHT_SHARE`] of the monitor's height and 90% of its width (a
+/// scaled laptop screen is often under 800 high), so the prompt at the bottom shows.
 pub fn first_size(monitor: Option<(f64, f64)>) -> (f64, f64) {
     let (w, h) = (f64::from(screen::WIDTH), f64::from(screen::HEIGHT));
     let Some((mw, mh)) = monitor.filter(|&(mw, mh)| mw > 0.0 && mh > 0.0) else {
         return (w, h);
     };
-    let height = h.min(mh * 0.88).min(mw * 0.9 * 3.0 / 4.0);
+    let height = h.min(mh * HEIGHT_SHARE).min(mw * 0.9 * 3.0 / 4.0);
     ((height * 4.0 / 3.0).floor(), height.floor())
 }
+
+/// Where a window of `size` stands centred on a monitor at `origin` of `monitor`'s size (all in
+/// the same pixels).
+pub fn centred(origin: (i32, i32), monitor: (u32, u32), size: (u32, u32)) -> (i32, i32) {
+    let half = |m: u32, s: u32| (i64::from(m) - i64::from(s)).max(0) as i32 / 2;
+    (
+        origin.0 + half(monitor.0, size.0),
+        origin.1 + half(monitor.1, size.1),
+    )
+}
+
+/// How long the game must have been running before the launcher's window is minimised on
+/// Wayland (where a minimised window cannot be brought back by the program): a start that fails
+/// at once leaves it on screen.
+pub const WAYLAND_MINIMISE_AFTER: Duration = Duration::from_secs(5);
 
 /// The kinds of screen, for what Enter and Esc do there.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -302,6 +321,12 @@ struct App {
     /// play.sh's output so far, in lines (the last one may be a question without its line break).
     output: Vec<String>,
     hidden: bool,
+    /// Wayland: when the hidden window is minimised (the game has run a moment by then).
+    minimise_at: Option<Instant>,
+    /// Play's work is running (its one-game claim held).
+    working: bool,
+    /// The window was closed while Play ran: the launcher ends when Play ends.
+    closed: bool,
     /// What the last drawn picture showed ([`App::frame_key`]): drawn again only when it changes.
     drawn: Option<(usize, bool)>,
     /// The window could not be made or drawn in ([`cannot_draw`] said why).
@@ -441,13 +466,17 @@ impl App {
         self.screen = screen;
         self.started = Instant::now();
         self.finished = !typed;
-        if self.hidden {
+        if self.hidden && !self.closed {
             if let Some(w) = &self.window {
                 w.set_minimized(false);
                 w.set_visible(true);
                 w.focus_window();
+                // Where the program cannot bring its window forward (Wayland, a minimised
+                // window), the desktop at least shows that it asks for the player.
+                w.request_user_attention(Some(winit::window::UserAttentionType::Critical));
             }
             self.hidden = false;
+            self.minimise_at = None;
         }
         self.request_redraw();
     }
@@ -475,6 +504,7 @@ impl App {
         let args = play_arguments(mods, game.as_deref());
         self.output.clear();
         self.back_to_waiting();
+        self.working = true;
         start_work(args);
     }
 
@@ -660,16 +690,24 @@ impl App {
     }
 
     /// The game's window is there: the launcher's steps aside (hidden; on Wayland, where a
-    /// program cannot hide its window, minimised).
+    /// program cannot hide its window, minimised once the game has run [`WAYLAND_MINIMISE_AFTER`],
+    /// so a start that fails at once leaves it on screen).
     fn step_aside(&mut self, event_loop: &ActiveEventLoop) {
         if let Some(w) = &self.window {
             w.set_visible(false);
-            if on_wayland(event_loop) {
-                w.set_minimized(true);
-            }
+        }
+        if on_wayland(event_loop) {
+            self.minimise_at = Some(Instant::now() + WAYLAND_MINIMISE_AFTER);
         }
         self.hidden = true;
     }
+}
+
+/// The monitor the first window opens on: the primary one, else the first listed.
+fn first_monitor(event_loop: &ActiveEventLoop) -> Option<winit::monitor::MonitorHandle> {
+    event_loop
+        .primary_monitor()
+        .or_else(|| event_loop.available_monitors().next())
 }
 
 /// Whether winit runs on Wayland (not X11, Windows or macOS).
@@ -691,18 +729,29 @@ impl winit::application::ApplicationHandler<Event> for App {
         if self.window.is_some() {
             return;
         }
-        let monitor = event_loop.primary_monitor().map(|m| {
+        let monitor = first_monitor(event_loop);
+        let (w, h) = first_size(monitor.as_ref().map(|m| {
             let size = m.size().to_logical::<f64>(m.scale_factor());
             (size.width, size.height)
-        });
-        let (w, h) = first_size(monitor);
-        let attributes = winit::window::Window::default_attributes()
+        }));
+        let mut attributes = winit::window::Window::default_attributes()
             .with_title("nv-rs")
             .with_inner_size(winit::dpi::LogicalSize::new(w, h))
             .with_min_inner_size(winit::dpi::LogicalSize::new(
                 screen::WIDTH / 2,
                 screen::HEIGHT / 2,
             ));
+        // Centred on its monitor (Windows would place it at its own default spot).
+        if let Some(m) = &monitor {
+            let scale = m.scale_factor();
+            let size = ((w * scale).round() as u32, (h * scale).round() as u32);
+            let at = centred(
+                (m.position().x, m.position().y),
+                (m.size().width, m.size().height),
+                size,
+            );
+            attributes = attributes.with_position(winit::dpi::PhysicalPosition::new(at.0, at.1));
+        }
         let window = match event_loop.create_window(attributes) {
             Ok(w) => Arc::new(w),
             Err(e) => {
@@ -747,6 +796,7 @@ impl winit::application::ApplicationHandler<Event> for App {
             } else {
                 self.output.clear();
                 self.back_to_waiting();
+                self.working = true;
                 start_work(args);
             }
         } else if self.place.refused.is_none()
@@ -780,11 +830,21 @@ impl winit::application::ApplicationHandler<Event> for App {
                 text,
                 entries,
                 reply,
+                ..
             } => {
+                if self.closed {
+                    // Closed: answered as Esc answers it.
+                    let _ = reply.send(back_entry(&entries).unwrap_or(0));
+                    return;
+                }
                 let s = message_screen(&text, &entries);
                 self.show(Mode::Message(Some(reply)), s, true);
             }
             Event::Folder { text, reply } => {
+                if self.closed {
+                    let _ = reply.send(None);
+                    return;
+                }
                 let mut s = message_screen(&text, &["Back".to_string()]);
                 s.welcome.push(
                     "Type the folder below and press Enter, or drop it onto this window.".into(),
@@ -799,7 +859,9 @@ impl winit::application::ApplicationHandler<Event> for App {
             }
             Event::Ended(code) => {
                 self.exit_code = code;
-                if code == 0 {
+                self.working = false;
+                // Closed while Play ran: the launcher ends with it.
+                if code == 0 || self.closed {
                     event_loop.exit();
                 } else if matches!(self.mode, Mode::Output(_)) {
                     // play.sh's own lines say what went wrong; Back or Exit below them.
@@ -831,11 +893,26 @@ impl winit::application::ApplicationHandler<Event> for App {
         use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
         use winit::keyboard::{Key, NamedKey};
         match event {
-            // The work behind the window (Play's steps) ends with it, with the stop code of a
-            // question it is asking (Play.exe's), else the last one; a game already started plays
-            // on.
+            // With no Play running the launcher ends at once (with a refusal's stop code, else
+            // the last one). While Play runs (the game may be starting, its one-game claim held)
+            // only the window goes: a question it asks is answered as Esc answers it, later ones
+            // too, play.sh's input is closed, and the launcher ends when Play ends, with its code.
             WindowEvent::CloseRequested => {
-                std::process::exit(session::stop_code().unwrap_or(self.exit_code))
+                if !self.working {
+                    std::process::exit(session::stop_code().unwrap_or(self.exit_code));
+                }
+                if matches!(self.mode, Mode::Message(_) | Mode::Folder(_)) {
+                    self.back(event_loop);
+                }
+                self.closed = true;
+                crate::play_unix::close_input();
+                if let Some(w) = &self.window {
+                    w.set_visible(false);
+                    if on_wayland(event_loop) {
+                        w.set_minimized(true);
+                    }
+                }
+                self.hidden = true;
             }
             WindowEvent::Resized(size) => {
                 if let (Some(surface), Some(config), Some(g)) =
@@ -941,7 +1018,20 @@ impl winit::application::ApplicationHandler<Event> for App {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if self.hidden {
-            event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
+            // Wayland: minimised once the game has run a moment (WAYLAND_MINIMISE_AFTER).
+            match self.minimise_at {
+                Some(at) if Instant::now() >= at => {
+                    if let Some(w) = &self.window {
+                        w.set_minimized(true);
+                    }
+                    self.minimise_at = None;
+                    event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
+                }
+                Some(at) => {
+                    event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(at))
+                }
+                None => event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait),
+            }
             return;
         }
         // Typing: wake every character (the menus' 6 ms) until the text is in; then only at the
@@ -1080,6 +1170,9 @@ pub fn run(raw: Vec<String>) -> i32 {
         action: (!raw.is_empty()).then(|| raw.iter().map(OsString::from).collect()),
         output: Vec::new(),
         hidden: false,
+        minimise_at: None,
+        working: false,
+        closed: false,
         drawn: None,
         no_window: false,
         exit_code: 0,
@@ -1333,15 +1426,26 @@ mod tests {
         // A 1920x1080 laptop at 150%: 1280 by 720 logical.
         let (w, h) = first_size(Some((1280.0, 720.0)));
         assert!(
-            h <= 720.0 * 0.88 && (w / h - 4.0 / 3.0).abs() < 0.01,
+            h <= 720.0 * HEIGHT_SHARE && (w / h - 4.0 / 3.0).abs() < 0.01,
             "{w}x{h}"
         );
+        // Windows leaves room for the title bar and the taskbar.
+        let expect = if cfg!(windows) {
+            (768.0, 576.0)
+        } else {
+            (844.0, 633.0)
+        };
+        assert_eq!(first_size(Some((1280.0, 720.0))), expect);
         // A narrow screen: the width decides.
         let (w, h) = first_size(Some((800.0, 1280.0)));
         assert!(
             w <= 800.0 * 0.9 && (w / h - 4.0 / 3.0).abs() < 0.01,
             "{w}x{h}"
         );
+        // Centred on its monitor, a second monitor's origin included; never left of it.
+        assert_eq!(centred((0, 0), (1920, 1080), (960, 720)), (480, 180));
+        assert_eq!(centred((1920, -200), (1280, 1024), (960, 720)), (2080, -48));
+        assert_eq!(centred((0, 0), (800, 600), (960, 720)), (0, 0));
     }
 
     /// Play's arguments: `--mods` for Play with mods, `--game FOLDER` for a typed or dropped

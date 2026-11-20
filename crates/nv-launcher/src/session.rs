@@ -26,6 +26,7 @@ pub enum Event {
     GameShown,
     /// A text to read and the entries to choose from; the reply is the chosen entry's index.
     Message {
+        tone: Tone,
         text: String,
         entries: Vec<String>,
         reply: Sender<usize>,
@@ -41,6 +42,16 @@ pub enum Event {
     Ended(i32),
     /// The graphics card the game will draw with, for the start screen.
     Card(crate::app::Card),
+}
+
+/// What a message is, for Windows' message boxes when there is no window (their icon).
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub enum Tone {
+    Error,
+    Warning,
+    Info,
+    Question,
 }
 
 /// The window's end of the channel: set once, when the window is made.
@@ -76,8 +87,15 @@ pub fn send(event: Event) -> bool {
 /// window, or when it goes before the player chose, 0.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn message(text: &str, entries: &[&str]) -> usize {
+    message_as(Tone::Question, text, entries)
+}
+
+/// [`message`] with its tone.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn message_as(tone: Tone, text: &str, entries: &[&str]) -> usize {
     let (reply, answer) = channel();
     let event = Event::Message {
+        tone,
         text: text.to_string(),
         entries: entries.iter().map(|e| e.to_string()).collect(),
         reply,

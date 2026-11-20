@@ -24,6 +24,14 @@ pub fn script() -> Option<PathBuf> {
     Some(exe.parent()?.join("play.sh"))
 }
 
+/// The window was closed: play.sh's input ends, so a question it asks reads an empty answer (it
+/// stops, or leaves the saves where they are) instead of waiting for one that never comes.
+pub fn close_input() {
+    if let Ok(mut input) = INPUT.lock() {
+        *input = None;
+    }
+}
+
 /// A line the player typed, to play.sh's input (its question's answer).
 pub fn type_line(text: &str) {
     if let Ok(mut input) = INPUT.lock() {

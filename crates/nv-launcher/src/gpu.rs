@@ -87,11 +87,14 @@ fn pick(kinds: &[wgpu::DeviceType], software: bool) -> Option<usize> {
     order(kinds, software).first().copied()
 }
 
-/// The order of the tries: every API's graphics card first, then every API's software adapter.
+/// The order of the tries: on Windows Direct3D 12's card, then Direct3D 12's software adapter
+/// (WARP, always there), and only then Vulkan's card and software adapter, so a Vulkan driver is
+/// never loaded into the launcher while Direct3D 12 draws; elsewhere the platform's own API's
+/// card, then its software adapter.
 pub fn tries() -> Vec<(wgpu::Backends, bool)> {
-    [false, true]
+    launcher_apis()
         .into_iter()
-        .flat_map(|software| launcher_apis().into_iter().map(move |api| (api, software)))
+        .flat_map(|api| [(api, false), (api, true)])
         .collect()
 }
 
@@ -103,88 +106,126 @@ pub struct Drawing {
     pub surface: Option<(wgpu::Surface<'static>, wgpu::SurfaceConfiguration)>,
 }
 
+/// The first entry that works: for each of `tries`, `open` lists that API's adapters with their
+/// kinds (and what must live with them: the instance, the window's surface), and the adapters
+/// [`order`] takes are handed to `make` one at a time until one works; one that fails is passed
+/// over for the next, down to the last software adapter. `Err` carries every failure, in order.
+pub fn first_working<C, A, T>(
+    tries: &[(wgpu::Backends, bool)],
+    mut open: impl FnMut(wgpu::Backends) -> Result<(C, Vec<(A, wgpu::DeviceType)>), String>,
+    mut make: impl FnMut(&C, A) -> Result<T, String>,
+) -> Result<(C, T), Vec<String>> {
+    let mut why = Vec::new();
+    for &(backends, software) in tries {
+        let (ctx, listed) = match open(backends) {
+            Ok(v) => v,
+            Err(e) => {
+                why.push(e);
+                continue;
+            }
+        };
+        let kinds: Vec<wgpu::DeviceType> = listed.iter().map(|(_, k)| *k).collect();
+        let mut adapters: Vec<Option<A>> = listed.into_iter().map(|(a, _)| Some(a)).collect();
+        for i in order(&kinds, software) {
+            let Some(a) = adapters[i].take() else {
+                continue;
+            };
+            match make(&ctx, a) {
+                Ok(t) => return Ok((ctx, t)),
+                Err(e) => why.push(e),
+            }
+        }
+    }
+    Err(why)
+}
+
+/// `surface` configured for `gpu`'s device inside error scopes (validation, internal, out of
+/// memory, popped in reverse), so a driver that makes the device but refuses the swap chain is an
+/// error to pass over, not a panic in wgpu's default handler.
+fn configure(
+    surface: &wgpu::Surface<'_>,
+    gpu: &Gpu,
+    size: (u32, u32),
+) -> Result<wgpu::SurfaceConfiguration, String> {
+    let mut config = surface
+        .get_default_config(&gpu.adapter, size.0.max(1), size.1.max(1))
+        .ok_or("the window's surface does not work with it")?;
+    // The game's menus blend in the stored values: a format without the sRGB step keeps them.
+    let caps = surface.get_capabilities(&gpu.adapter);
+    if let Some(f) = caps.formats.iter().find(|f| !f.is_srgb()) {
+        config.format = *f;
+    }
+    let validation = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let internal = gpu.device.push_error_scope(wgpu::ErrorFilter::Internal);
+    let memory = gpu.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    surface.configure(&gpu.device, &config);
+    let errors = [
+        block_on(memory.pop()),
+        block_on(internal.pop()),
+        block_on(validation.pop()),
+    ];
+    match errors.into_iter().flatten().next() {
+        Some(e) => Err(format!("the window's surface could not be set up: {e}")),
+        None => Ok(config),
+    }
+}
+
 /// The first adapter of [`tries`] (and of [`order`] in each) that makes a device and, with
-/// `window` (its size `size`), a surface configuration: an adapter that is listed but cannot
-/// make either is passed over for the next one, down to the software adapter.
+/// `window` (its size `size`), a surface configuration ([`first_working`]).
 pub fn choose(
     window: Option<Arc<winit::window::Window>>,
     size: (u32, u32),
 ) -> Result<Drawing, String> {
-    let mut why = Vec::new();
-    for (backends, software) in tries() {
+    let open = |backends: wgpu::Backends| {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends,
             ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
         let surface = match &window {
-            Some(w) => match instance.create_surface(w.clone()) {
-                Ok(s) => Some(s),
-                Err(e) => {
-                    why.push(format!("{backends:?}: {e}"));
-                    continue;
-                }
-            },
+            Some(w) => Some(
+                instance
+                    .create_surface(w.clone())
+                    .map_err(|e| format!("{backends:?}: {e}"))?,
+            ),
             None => None,
         };
-        let mut adapters: Vec<Option<wgpu::Adapter>> =
+        let listed: Vec<(wgpu::Adapter, wgpu::DeviceType)> =
             block_on(instance.enumerate_adapters(backends))
                 .into_iter()
                 .filter(|a| surface.as_ref().is_none_or(|s| a.is_surface_supported(s)))
-                .map(Some)
+                .map(|a| {
+                    let kind = a.get_info().device_type;
+                    (a, kind)
+                })
                 .collect();
-        let kinds: Vec<wgpu::DeviceType> = adapters
-            .iter()
-            .flatten()
-            .map(|a| a.get_info().device_type)
-            .collect();
-        for i in order(&kinds, software) {
-            let Some(adapter) = adapters[i].take() else {
-                continue;
-            };
-            let name = adapter.get_info().name;
-            let gpu = match Gpu::new(adapter, (crate::screen::WIDTH, crate::screen::HEIGHT)) {
-                Ok(g) => g,
-                Err(e) => {
-                    why.push(format!("{name}: {e}"));
-                    continue;
-                }
-            };
-            let Some(s) = &surface else {
-                return Ok(Drawing {
-                    instance,
-                    gpu,
-                    surface: None,
-                });
-            };
-            let Some(mut config) = s.get_default_config(&gpu.adapter, size.0.max(1), size.1.max(1))
-            else {
-                why.push(format!(
-                    "{name}: the window's surface does not work with it"
-                ));
-                continue;
-            };
-            // The game's menus blend in the stored values: a format without the sRGB step keeps
-            // them.
-            let caps = s.get_capabilities(&gpu.adapter);
-            if let Some(f) = caps.formats.iter().find(|f| !f.is_srgb()) {
-                config.format = *f;
+        Ok(((instance, surface), listed))
+    };
+    let make = |(_, surface): &(wgpu::Instance, Option<wgpu::Surface<'static>>),
+                adapter: wgpu::Adapter| {
+        let name = adapter.get_info().name;
+        let gpu = Gpu::new(adapter, (crate::screen::WIDTH, crate::screen::HEIGHT))
+            .map_err(|e| format!("{name}: {e}"))?;
+        let config = match surface {
+            Some(s) => Some(configure(s, &gpu, size).map_err(|e| format!("{name}: {e}"))?),
+            None => None,
+        };
+        Ok((gpu, config))
+    };
+    match first_working(&tries(), open, make) {
+        Ok(((instance, surface), (gpu, config))) => Ok(Drawing {
+            instance,
+            gpu,
+            surface: surface.zip(config),
+        }),
+        Err(why) => Err(format!(
+            "no graphics device draws it, not even the software one{}",
+            if why.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", why.join("; "))
             }
-            s.configure(&gpu.device, &config);
-            return Ok(Drawing {
-                instance,
-                gpu,
-                surface: surface.map(|s| (s, config)),
-            });
-        }
+        )),
     }
-    Err(format!(
-        "no graphics device draws it, not even the software one{}",
-        if why.is_empty() {
-            String::new()
-        } else {
-            format!(" ({})", why.join("; "))
-        }
-    ))
 }
 
 impl Gpu {
@@ -199,6 +240,12 @@ impl Gpu {
             trace: Default::default(),
         }))
         .map_err(|e| format!("the graphics device could not be made: {e}"))?;
+        // For the device's whole life an error outside an error scope (a later surface set-up on
+        // a resize, a lost device) is said in the log, never wgpu's default panic: the launcher
+        // is where the player gets past a broken driver.
+        device.on_uncaptured_error(Arc::new(|e: wgpu::Error| {
+            eprintln!("the launcher's drawing: {e}");
+        }));
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("terminal"),
             entries: &[
@@ -549,23 +596,88 @@ mod tests {
         assert_eq!(order(&[DiscreteGpu, Cpu], true), [1]);
     }
 
-    /// Every API's card is tried before any software adapter; on Windows Direct3D 12 before
-    /// Vulkan, so a broken Vulkan driver is never loaded while Direct3D 12 has a card.
+    /// On Windows Direct3D 12's card, then its software adapter (WARP), and only then Vulkan's, so
+    /// Vulkan is never loaded into the launcher unless both Direct3D 12 entries fail; elsewhere the
+    /// platform's own card, then its software adapter.
     #[test]
-    fn every_card_before_any_software_adapter() {
-        let t = tries();
-        let apis = launcher_apis();
-        assert_eq!(t.len(), apis.len() * 2);
-        assert!(t[..apis.len()].iter().all(|&(_, s)| !s));
-        assert!(t[apis.len()..].iter().all(|&(_, s)| s));
+    fn direct3d_12_and_warp_before_any_vulkan() {
+        use wgpu::Backends as B;
         if cfg!(windows) {
-            assert_eq!(apis, [wgpu::Backends::DX12, wgpu::Backends::VULKAN]);
+            assert_eq!(
+                tries(),
+                [
+                    (B::DX12, false),
+                    (B::DX12, true),
+                    (B::VULKAN, false),
+                    (B::VULKAN, true)
+                ]
+            );
         } else {
-            assert_eq!(apis, [wgpu::Backends::PRIMARY]);
+            assert_eq!(tries(), [(B::PRIMARY, false), (B::PRIMARY, true)]);
         }
         assert_eq!(api_name(wgpu::Backend::Dx12), "Direct3D 12");
         assert_eq!(api_name(wgpu::Backend::Vulkan), "Vulkan");
         assert_eq!(api_name(wgpu::Backend::Metal), "Metal");
+    }
+
+    /// The first entry that works is taken: an API that cannot be opened, a card that cannot make
+    /// its device or its surface, are passed over (each said in the failures), down to the last
+    /// software adapter; with nothing working, every failure in order.
+    #[test]
+    fn a_failing_card_passes_on_to_the_next_down_to_software() {
+        use wgpu::Backends as B;
+        let order = [
+            (B::DX12, false),
+            (B::DX12, true),
+            (B::VULKAN, false),
+            (B::VULKAN, true),
+        ];
+        type Listed = Result<((), Vec<(&'static str, wgpu::DeviceType)>), String>;
+        let lists = |b: B| -> Listed {
+            match b {
+                B::DX12 => Ok(((), vec![("dx-card", DiscreteGpu), ("warp", Cpu)])),
+                B::VULKAN => Ok(((), vec![("vk-card", DiscreteGpu), ("vk-cpu", Cpu)])),
+                _ => Err("no such API".into()),
+            }
+        };
+        let works = |good: &'static [&'static str]| {
+            move |_: &(), a: &'static str| {
+                if good.contains(&a) {
+                    Ok(a)
+                } else {
+                    Err(format!("{a} failed"))
+                }
+            }
+        };
+        // Direct3D 12's card refuses its surface: WARP draws, Vulkan is never tried.
+        let mut tried = Vec::new();
+        let r = first_working(&order, lists, |c: &(), a: &'static str| {
+            tried.push(a);
+            works(&["warp", "vk-card"])(c, a)
+        });
+        assert_eq!(r.map(|(_, t)| t), Ok("warp"));
+        assert_eq!(tried, ["dx-card", "warp"]);
+        // Only the last software adapter works.
+        let r = first_working(&order, lists, works(&["vk-cpu"]));
+        assert_eq!(r.map(|(_, t)| t), Ok("vk-cpu"));
+        // An API that cannot be opened is passed over.
+        let r = first_working(
+            &[(B::METAL, false), (B::VULKAN, false)],
+            lists,
+            works(&["vk-card"]),
+        );
+        assert_eq!(r.map(|(_, t)| t), Ok("vk-card"));
+        // Nothing works: every failure, in order.
+        let r = first_working(&order, lists, works(&[]));
+        assert_eq!(
+            r.map(|(_, t)| t),
+            Err(vec![
+                "dx-card failed".to_string(),
+                "warp failed".into(),
+                "vk-card failed".into(),
+                "vk-cpu failed".into()
+            ])
+        );
     }
 
     /// The picture keeps its shape, centred; a size close to a whole multiple takes the multiple.

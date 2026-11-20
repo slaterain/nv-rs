@@ -260,11 +260,38 @@ fn player_folder_of(root: &Path, folders: &[(PathBuf, &'static str)]) -> Option<
     })
 }
 
+/// The player's own folders the package must not be in or hold (Documents, AppData, by Windows'
+/// answers and by `%USERPROFILE%`'s names).
+fn player_folders() -> Vec<(PathBuf, &'static str)> {
+    let mut folders: Vec<(PathBuf, &'static str)> = [
+        (real_documents(), "Documents"),
+        (win::known_folder(0x1a), "AppData"),
+        (win::known_folder(0x1c), "AppData"),
+    ]
+    .into_iter()
+    .filter_map(|(folder, what)| Some((folder?, what)))
+    .collect();
+    if let Some(profile) = std::env::var_os("USERPROFILE") {
+        folders.extend(profile_folders(Path::new(&profile)));
+    }
+    folders
+}
+
 /// Why the package can't run from where it is.
 fn check_location(package: &Package) -> Result<(), Stop> {
+    let temporary = std::env::var_os("TEMP").map(PathBuf::from);
+    check_location_in(package, temporary.as_deref(), &player_folders())
+}
+
+/// [`check_location`] with the temporary folder `temporary` and the player's `folders`.
+fn check_location_in(
+    package: &Package,
+    temporary: Option<&Path>,
+    folders: &[(PathBuf, &'static str)],
+) -> Result<(), Stop> {
     let root = folder_key(&package.root);
     let move_it = "Move the whole nv-rs folder somewhere else, for example C:\\Games\\nv-rs, and start Play.exe again.";
-    let temporary = std::env::var_os("TEMP").map(|t| folder_key(Path::new(&t)));
+    let temporary = temporary.map(folder_key);
     if temporary.is_some_and(|t| is_inside(&root, &t)) {
         return stop(
             STOP_LOCATION,
@@ -283,18 +310,7 @@ fn check_location(package: &Package) -> Result<(), Stop> {
             ),
         );
     }
-    let mut folders: Vec<(PathBuf, &str)> = [
-        (real_documents(), "Documents"),
-        (win::known_folder(0x1a), "AppData"),
-        (win::known_folder(0x1c), "AppData"),
-    ]
-    .into_iter()
-    .filter_map(|(folder, what)| Some((folder?, what)))
-    .collect();
-    if let Some(profile) = std::env::var_os("USERPROFILE") {
-        folders.extend(profile_folders(Path::new(&profile)));
-    }
-    if let Some(what) = player_folder_of(&package.root, &folders) {
+    if let Some(what) = player_folder_of(&package.root, folders) {
         return stop(
             STOP_LOCATION,
             format!(
@@ -573,7 +589,12 @@ fn find_game(package: &Package, explicit: Option<&Path>) -> Result<(Game, Vec<St
             Some(why)
         }
         None => {
-            ui::info("nv-rs could not find Fallout: New Vegas on this PC. It looks in Steam, GOG and Epic.\n\nNext, type the game's folder at the prompt, or drop the folder onto this window: the one with FalloutNV.exe and a Data folder in it.");
+            ui::info(if ui::in_boxes() {
+                // Windows' folder picker comes next (no launcher window).
+                "nv-rs could not find Fallout: New Vegas on this PC. It looks in Steam, GOG and Epic.\n\nIn the next window, choose the game's folder: the one with FalloutNV.exe and a Data folder in it."
+            } else {
+                "nv-rs could not find Fallout: New Vegas on this PC. It looks in Steam, GOG and Epic.\n\nNext, type the game's folder at the prompt, or drop the folder onto this window: the one with FalloutNV.exe and a Data folder in it."
+            });
             None
         }
     };
@@ -1540,8 +1561,19 @@ pub fn place() -> crate::place::Place {
     place_at(package_root())
 }
 
-/// [`place`] for the package at `root`.
+/// [`place`] for the package at `root` (the temporary folder and the player's folders as
+/// Windows says them).
 fn place_at(root: PathBuf) -> crate::place::Place {
+    let temporary = std::env::var_os("TEMP").map(PathBuf::from);
+    place_at_in(root, temporary.as_deref(), &player_folders())
+}
+
+/// [`place_at`] with the temporary folder `temporary` and the player's `folders`.
+fn place_at_in(
+    root: PathBuf,
+    temporary: Option<&Path>,
+    folders: &[(PathBuf, &'static str)],
+) -> crate::place::Place {
     let package = Package::at(root);
     let game = std::fs::read_to_string(&package.remembered)
         .ok()
@@ -1552,7 +1584,7 @@ fn place_at(root: PathBuf) -> crate::place::Place {
     // The checks only, none of them a write: the first write (the folder test, the log) waits for
     // Play's own `clear_for_writing` with the game's folder it found, so a refusal there still
     // leaves the disk untouched.
-    let refused = check_location(&package)
+    let refused = check_location_in(&package, temporary, folders)
         .and_then(|()| match &game {
             Some(game) if inside_game(&package.root, game) => stop(
                 STOP_LOCATION,
@@ -1704,6 +1736,35 @@ mod tests {
             folder_key(&link.join("not yet")),
             format!("{}\\not yet", folder_key(&real))
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A package in a fine place: the start screen's checks pass and write nothing at all (no
+    /// log, no write test, no userdata); the intro shown there is noted only when Play's own
+    /// first-write check has passed, in userdata's launcher.ini.
+    #[test]
+    fn the_start_screen_writes_nothing_and_the_intro_waits_for_play() {
+        let dir = scratch("clear");
+        let root = dir.join("nv-rs");
+        std::fs::create_dir_all(root.join("app\\tools")).unwrap();
+        std::fs::write(root.join("app\\FalloutNV.exe"), b"x").unwrap();
+        std::fs::write(root.join("app\\tools\\d3d9-capture.exe"), b"x").unwrap();
+        let p = place_at_in(root.clone(), None, &[]);
+        assert_eq!(p.refused, None);
+        let mut names: Vec<String> = std::fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["app"], "the start screen wrote into the package");
+        // The intro seen at the start screen is kept until Play's check passes.
+        crate::place::intro_seen(&p.own, false).unwrap();
+        assert!(!p.own.exists(), "the intro was noted before Play's check");
+        let package = Package::at(root.clone());
+        clear_for_writing(&package, Some(&dir.join("somewhere else"))).unwrap();
+        crate::place::note_intro_if_shown(&package.userdata).unwrap();
+        assert!(crate::place::intro_shown(&package.userdata));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
