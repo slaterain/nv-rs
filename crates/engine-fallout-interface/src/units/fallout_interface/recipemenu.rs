@@ -1883,7 +1883,7 @@ pub fn recipe_menu_do_click(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
                 let category = e.mem.u32(entry);
                 let text = e.call(STRING_TEXT, &args![category + 0x18]).u32();
                 let tile = e.mem.u32(this.addr() + 0x2c);
-                e.call(TILE_SET_STRING, &args![tile, 0xfc4u32, text, 1u32]);
+                set_category_title(e, tile, text);
             }
             let list = this.addr() + RECIPE_LIST;
             let first = e.vcall(list, 0x14, &args![0u32, 0u32]).u32();
@@ -2042,6 +2042,14 @@ fn stewie_post_refresh(e: &mut Engine, previous: u32) {
     e.call(LIST_BOX_RESTORE_POSITION, &args![list, 0u32]);
 }
 
+/// The call at `0x7275D0` (`DoClick`'s category title, `Tile::SetString` with `string` 0xFC4 and
+/// reactions). Tweaks' `bCapitalizeRecipeCategories` (on in VNV, a row of its own not built yet)
+/// replaces this call; S0200's `SetCategoryIndex` goes through it too (Tweaks calls the call's
+/// target), so that row's seam belongs here.
+fn set_category_title(e: &mut Engine, tile: u32, text: u32) {
+    e.call(TILE_SET_STRING, &args![tile, 0xfc4u32, text, 1u32]);
+}
+
 /// xNVSE's `RecipeMenu::SetCategoryIndex` (`GameUI.cpp`): below -1 becomes the category array's
 /// last (`size - 1`, the array's +8 read raw), above `size` (an unsigned compare, so `size` itself
 /// stays) becomes -1; stored in `0119fbf4`. The items title (+0x2C) gets `string` (0xFC4, with
@@ -2073,7 +2081,8 @@ fn stewie_set_category_index(e: &mut Engine, index: i32) {
     };
     let menu = me(e);
     let title = e.mem.u32(menu + 0x2c);
-    e.call(TILE_SET_STRING, &args![title, 0xfc4u32, label, 1u32]);
+    // Tweaks calls whatever the call at `0x7275D0` goes to (`GetRelJumpAddr`).
+    set_category_title(e, title, label);
     list_box_tes_recipe_filter(e, Ptr::new(menu + RECIPE_LIST), FILTER_00728D60);
 }
 
@@ -5726,6 +5735,9 @@ mod n057_tests {
         assert_eq!(calls_to(&e, TILE_SET_STRING)[0][2], EMPTY_TEXT);
     }
 
+    /// The test vtable's `FreeAllTiles` slot (+0x1C) address.
+    const FREE_ALL_TILES_SLOT: u32 = 0x0000_801c;
+
     /// Row S0200 through `fn_00728a30(1)`: off, the exe's fill (`004077e0` asked, every
     /// category's recipes, no list position kept); on, the menu's category (+0x64) passed (only
     /// its recipe listed), the data handler's recipes walked raw (+0xA0), the list's position
@@ -5758,6 +5770,9 @@ mod n057_tests {
             answer(&mut e, ITEM_TILE_007B5370, slot);
             answer(&mut e, TILE_GET_MENU, 0x5000);
             answer(&mut e, MENU_RENDER_TEMPLATE, 0x6000);
+            // The list's `FreeAllTiles` slot (+0x1C) gets an address of its own.
+            e.mem.set_u32(0x0e00_0000 + 0x1c, FREE_ALL_TILES_SLOT);
+            e.register(FREE_ALL_TILES_SLOT, |_, _| Ret::default());
             let texts = categories(&mut e, &[b"Food", b"Ammo"]);
             e.set_global(FILTER_INDEX_0119FBF4, 1u32);
             e.call_log = Some(vec![]);
@@ -5770,8 +5785,16 @@ mod n057_tests {
                 assert_eq!(formats.len(), 1, "the menu's category only");
                 assert_eq!(calls_to(&e, LIST_BOX_SAVE_LIST_STATE), [vec![list]]);
                 assert_eq!(calls_to(&e, LIST_BOX_RESTORE_POSITION), [vec![list, 0]]);
+                assert_eq!(
+                    calls_to(&e, FREE_ALL_TILES_SLOT),
+                    [vec![list]],
+                    "tiles freed once"
+                );
                 let vcalls = calls_to(&e, 0x0000_8000);
-                assert_eq!(vcalls.first(), Some(&vec![list]), "tiles freed first");
+                assert!(
+                    !vcalls.iter().any(|c| c.len() == 1),
+                    "no other slot without words: {vcalls:x?}"
+                );
                 assert!(vcalls.contains(&vec![list, COMPARE_00728C10]));
                 assert_eq!(e.global::<u32>(FILTER_INDEX_0119FBF4), 1);
                 assert_eq!(
@@ -5788,6 +5811,7 @@ mod n057_tests {
                     .filter(|a| {
                         [
                             LIST_BOX_SAVE_LIST_STATE,
+                            FREE_ALL_TILES_SLOT,
                             FORMAT,
                             QSORT,
                             LIST_BOX_RESTORE_POSITION,
@@ -5799,6 +5823,7 @@ mod n057_tests {
                     log,
                     [
                         LIST_BOX_SAVE_LIST_STATE,
+                        FREE_ALL_TILES_SLOT,
                         FORMAT,
                         QSORT,
                         LIST_BOX_RESTORE_POSITION
@@ -5810,6 +5835,7 @@ mod n057_tests {
                 assert!(calls_to(&e, LIST_BOX_SAVE_LIST_STATE).is_empty());
                 assert!(calls_to(&e, LIST_BOX_RESTORE_POSITION).is_empty());
                 assert_eq!(calls_to(&e, 0x0000_8000), [vec![list, COMPARE_00728C10]]);
+                assert!(calls_to(&e, FREE_ALL_TILES_SLOT).is_empty());
                 assert!(!calls_to(&e, TILE_SET_STRING)
                     .iter()
                     .any(|c| c[0] == 0x2000 + 0x2c - TILES));
