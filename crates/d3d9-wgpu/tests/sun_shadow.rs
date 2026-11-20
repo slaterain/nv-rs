@@ -452,7 +452,13 @@ fn hook_words() -> ([u32; 16], [u32; 16]) {
 
 /// [`hook_words`] with the sun toward `sun` (a unit vector in the world).
 fn hook_words_for(sun: [f64; 3]) -> ([u32; 16], [u32; 16]) {
+    hook_words_at(sun, [0.0; 3])
+}
+
+/// [`hook_words_for`] with the camera's place moved by `shift`.
+fn hook_words_at(sun: [f64; 3], shift: [f64; 3]) -> ([u32; 16], [u32; 16]) {
     let (pos, axes) = camera();
+    let pos: [f64; 3] = std::array::from_fn(|k| pos[k] + shift[k]);
     let view = Params {
         near: NEAR as f32,
         far: far_plane() as f32,
@@ -879,6 +885,9 @@ struct Extra {
     low_tower: bool,
     hill: bool,
     beyond: bool,
+    /// The camera's place in the frame's words moved by this (world units; the draws' matrices
+    /// stay): the maps step after it.
+    camera_shift: Option<[f64; 3]>,
 }
 
 /// What the index buffer of [`TUBES`] names.
@@ -1585,7 +1594,10 @@ fn lit_sequence_with(
     // What the tubes' index buffer holds (made with the first list).
     let mut tubes_written = Some(MixedIndexed::TwoWiresAPipe);
     for (f, e) in frames.iter().enumerate() {
-        let (view, frame) = e.sun.map_or(words_here, hook_words_for);
+        let (view, frame) = match (e.sun, e.camera_shift) {
+            (None, None) => words_here,
+            (sun, shift) => hook_words_at(sun.unwrap_or_else(to_sun), shift.unwrap_or([0.0; 3])),
+        };
         set_shaders(b, VS, LIT_PS, DECL);
         if let Some(object) = e.destroy {
             run(b, Cmd::Destroy { object });
@@ -3362,7 +3374,9 @@ fn a_far_caster_nudged_once_still_casts_later() {
 /// steps from where it stood (the centre of the map drawn before), not from the world's origin, so
 /// its texel grid turns about the ground round the camera; between turns the steps count from the
 /// same point. The sun turns 0.05 degrees a frame at 40 up (each map is past its limit within a
-/// few frames).
+/// few frames) while the camera walks 60 units a frame, so the maps step away from their anchors
+/// between turns (a camera standing still keeps every map's centre on its anchor, where the two
+/// rules agree).
 #[test]
 fn a_map_that_takes_a_new_sun_counts_its_steps_from_where_it_stood() {
     let frames: Vec<Extra> = (0..24)
@@ -3372,6 +3386,7 @@ fn a_map_that_takes_a_new_sun_counts_its_steps_from_where_it_stood() {
                 0.3 + 0.05f64.to_radians() * f64::from(f),
                 40f64.to_radians(),
             )),
+            camera_shift: Some([60.0 * f64::from(f), 45.0 * f64::from(f), 0.0]),
             ..Extra::default()
         })
         .collect();
@@ -3384,7 +3399,7 @@ fn a_map_that_takes_a_new_sun_counts_its_steps_from_where_it_stood() {
     };
     let mut before: [Option<sun_shadow::Cascade>; sun_shadow::CASCADES] =
         [None; sun_shadow::CASCADES];
-    let (mut turns, mut kept) = (0, 0);
+    let (mut turns, mut kept, mut stepped) = (0, 0, 0);
     let mut check = |f: usize, b: &mut WgpuBackend| {
         let now = b.device().expect("the device").sun_cascades_drawn();
         for (k, (was, is)) in before.iter().zip(&now).enumerate() {
@@ -3394,6 +3409,9 @@ fn a_map_that_takes_a_new_sun_counts_its_steps_from_where_it_stood() {
             if was.basis != is.basis {
                 // Took the sun: anchored at the centre of the map before.
                 let c = was.centre();
+                if c != was.anchor {
+                    stepped += 1;
+                }
                 for i in 0..3 {
                     assert!(
                         (is.anchor[i] - c[i]).abs() < 1e-6,
@@ -3411,19 +3429,24 @@ fn a_map_that_takes_a_new_sun_counts_its_steps_from_where_it_stood() {
         before = now;
     };
     lit_sequence_with(&mut b, &frames, true, &mut check);
-    eprintln!("maps that took the sun {turns}, kept it {kept}");
-    assert!(turns >= 4 && kept >= 4, "turns {turns}, kept {kept}");
+    eprintln!("maps that took the sun {turns} ({stepped} away from their anchor), kept it {kept}");
+    assert!(
+        turns >= 4 && kept >= 4 && stepped >= 2,
+        "turns {turns}, kept {kept}, away from the anchor {stepped}"
+    );
 }
 
 /// The far map keeps the same rule: when it is drawn for a turned sun it counts its steps from the
 /// centre of the far map before (the far scene, the sun turning as in
-/// `a_turning_sun_redraws_the_far_map_only_now_and_then`).
+/// `a_turning_sun_redraws_the_far_map_only_now_and_then`), the camera walking 300 units a frame so
+/// the far map steps away from its anchor between turns.
 #[test]
 fn the_far_map_takes_a_new_sun_counting_from_where_it_stood() {
     let _far = FarScene::on();
     let frames: Vec<Extra> = (0..64)
         .map(|f| Extra {
             sun: Some(low_sun(0.0, 10f64.to_radians() + 7.4e-5 * f64::from(f))),
+            camera_shift: Some([300.0 * f64::from(f), 0.0, 0.0]),
             ..far_land(true, false)
         })
         .collect();
@@ -3435,12 +3458,15 @@ fn the_far_map_takes_a_new_sun_counting_from_where_it_stood() {
         return;
     };
     let mut before: Option<sun_shadow::Cascade> = None;
-    let mut turns = 0;
+    let (mut turns, mut stepped) = (0, 0);
     let mut check = |f: usize, b: &mut WgpuBackend| {
         let now = b.device().expect("the device").sun_far_drawn();
         if let (Some(was), Some(is)) = (before, now) {
             if was.basis != is.basis {
                 let c = was.centre();
+                if c != was.anchor {
+                    stepped += 1;
+                }
                 for i in 0..3 {
                     assert!(
                         (is.anchor[i] - c[i]).abs() < 1e-6,
@@ -3454,6 +3480,6 @@ fn the_far_map_takes_a_new_sun_counting_from_where_it_stood() {
         before = now;
     };
     lit_sequence_with(&mut b, &frames, true, &mut check);
-    eprintln!("the far map took the sun {turns} times");
-    assert!(turns >= 2, "{turns}");
+    eprintln!("the far map took the sun {turns} times ({stepped} away from its anchor)");
+    assert!(turns >= 2 && stepped >= 1, "turns {turns}, away {stepped}");
 }
