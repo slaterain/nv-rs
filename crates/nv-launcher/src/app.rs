@@ -499,6 +499,25 @@ pub const TESTING_ENTRY: &str = "Testing";
 pub const SETTINGS: &str = "Settings";
 pub const BACK: &str = "Back";
 
+/// Whether typing (and so a paste) goes to the prompt on a screen of `kind`: the start screen's
+/// folder, Play's folder question and play.sh's output only; never a menu, a message or the
+/// intro.
+pub fn takes_typing(kind: Kind) -> bool {
+    matches!(kind, Kind::Start | Kind::Folder | Kind::Output)
+}
+
+/// How long a paste's answer may take: one that comes later is dropped (the player has moved on).
+pub const PASTE_WAIT: Duration = Duration::from_millis(500);
+
+/// Whether the clipboard's answer for paste `id`, arriving `now` on a screen of `kind`, is added
+/// at the prompt: it is the paste asked last (`asked`: its id, when, on what screen), within
+/// [`PASTE_WAIT`], and the screen is still of the kind it was asked on.
+pub fn accept_paste(asked: Option<(u64, Instant, Kind)>, id: u64, now: Instant, kind: Kind) -> bool {
+    asked.is_some_and(|(asked, at, on)| {
+        asked == id && now.saturating_duration_since(at) <= PASTE_WAIT && on == kind
+    })
+}
+
 /// Enter on a screen of `kind` with `typed` at the prompt and the entry `chosen` (its index and
 /// text) highlighted.
 pub fn on_enter(kind: Kind, typed: &str, chosen: usize, entry: &str) -> Act {
@@ -685,6 +704,9 @@ struct App {
     exit_code: i32,
     /// The keyboard's Ctrl, Shift, Alt and Command keys now (for the paste key).
     modifiers: winit::keyboard::ModifiersState,
+    /// Pastes asked so far (each one's id), and the one being read: its id, when, on what screen.
+    pastes: u64,
+    asked_paste: Option<(u64, Instant, Kind)>,
     /// The main monitor's size for the resolution row, as the game sees it.
     desktop: (u32, u32),
 }
@@ -1063,10 +1085,6 @@ impl App {
     }
 
     /// Whether what is typed goes to the prompt on this screen.
-    fn takes_typing(&self) -> bool {
-        matches!(self.mode.kind(), Kind::Start | Kind::Folder | Kind::Output)
-    }
-
     /// Does what a choice does.
     fn act(&mut self, act: Act, event_loop: &ActiveEventLoop) {
         match act {
@@ -1483,6 +1501,17 @@ impl winit::application::ApplicationHandler<Event> for App {
                     self.show_start();
                 }
             }
+            Event::Pasted { id, text } => {
+                if accept_paste(self.asked_paste, id, Instant::now(), self.mode.kind()) {
+                    if let Some(text) = text {
+                        self.screen.typed.push_str(&text);
+                        self.request_redraw();
+                    }
+                }
+                if self.asked_paste.is_some_and(|(asked, _, _)| asked == id) {
+                    self.asked_paste = None;
+                }
+            }
             Event::Card(card) => {
                 self.card = card;
                 if matches!(self.mode, Mode::Start) {
@@ -1575,15 +1604,25 @@ impl winit::application::ApplicationHandler<Event> for App {
                             Key::Character(s) => s.as_str(),
                             _ => "",
                         };
-                        if self.takes_typing() {
-                            let pasted = crate::paste::on_key(
-                                &mut self.screen.typed,
-                                key,
-                                self.modifiers.control_key(),
-                                self.modifiers.super_key(),
-                                &mut crate::paste::System,
-                            );
-                            if let (false, Some(text)) = (pasted, &event.text) {
+                        let physical_v = event.physical_key
+                            == winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::KeyV);
+                        let kind = self.mode.kind();
+                        let paste = crate::paste::is_paste(
+                            key,
+                            physical_v,
+                            self.modifiers.control_key(),
+                            self.modifiers.super_key(),
+                        );
+                        if takes_typing(kind) && paste {
+                            // Read on a thread of its own; its answer comes as an event.
+                            self.pastes += 1;
+                            let id = self.pastes;
+                            self.asked_paste = Some((id, Instant::now(), kind));
+                            crate::paste::read_later(move |text| {
+                                session::send(Event::Pasted { id, text });
+                            });
+                        } else if takes_typing(kind) {
+                            if let Some(text) = &event.text {
                                 self.screen
                                     .typed
                                     .extend(text.chars().filter(|c| !c.is_control()));
@@ -1801,6 +1840,8 @@ pub fn run(raw: Vec<String>) -> i32 {
         no_window: false,
         exit_code: 0,
         modifiers: winit::keyboard::ModifiersState::empty(),
+        pastes: 0,
+        asked_paste: None,
         desktop: (0, 0),
     };
     if let Err(e) = event_loop.run_app(&mut app) {
@@ -2344,6 +2385,42 @@ mod tests {
             None
         );
         assert_eq!(short("Vulkan (recommended)"), "Vulkan");
+    }
+
+    /// Typing, and so a paste, reaches the prompt on the start screen, Play's folder question and
+    /// play.sh's output only: every other kind of screen is listed and refuses it.
+    #[test]
+    fn typing_goes_to_the_prompt_screens_only() {
+        let all = [
+            Kind::Intro,
+            Kind::Start,
+            Kind::Refused,
+            Kind::Waiting,
+            Kind::Message,
+            Kind::Folder,
+            Kind::Output,
+            Kind::Ended,
+            Kind::Settings,
+            Kind::Testing,
+            Kind::Choices,
+        ];
+        let takes: Vec<Kind> = all.into_iter().filter(|k| takes_typing(*k)).collect();
+        assert_eq!(takes, [Kind::Start, Kind::Folder, Kind::Output]);
+    }
+
+    /// A paste's answer is added only for the paste asked last, within half a second, on the
+    /// same kind of screen; a late one, an older one, or one after the screen changed is dropped.
+    #[test]
+    fn a_late_or_stale_paste_is_dropped() {
+        let t0 = Instant::now();
+        let asked = Some((3, t0, Kind::Folder));
+        let at = |ms| t0 + Duration::from_millis(ms);
+        assert!(accept_paste(asked, 3, at(20), Kind::Folder));
+        assert!(accept_paste(asked, 3, at(500), Kind::Folder));
+        assert!(!accept_paste(asked, 3, at(501), Kind::Folder));
+        assert!(!accept_paste(asked, 2, at(20), Kind::Folder));
+        assert!(!accept_paste(asked, 3, at(20), Kind::Start));
+        assert!(!accept_paste(None, 3, at(20), Kind::Folder));
     }
 
     /// A message keeps its paragraphs as lines, its entries as given.
