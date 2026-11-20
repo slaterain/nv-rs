@@ -3481,6 +3481,56 @@ fn a_far_caster_nudged_once_still_casts_later() {
     assert!(later > 0.8, "{later}");
 }
 
+/// Review of #843: a far caster nudged once (paired as a move) and then out of sight (the camera
+/// gone 10,000 past it from frame 15, the tower no longer drawn) is kept as a still one is: at
+/// frame 40 the far map still holds it (it was let go as soon as it was out of view, so the far
+/// map stopped casting it from out of sight until it settled).
+#[test]
+fn a_far_caster_nudged_then_out_of_sight_is_kept() {
+    let _far = FarScene::on();
+    let frames: Vec<Extra> = (0..42)
+        .map(|f| match f {
+            0..=14 => Extra {
+                tower_shift: (f == 10).then_some(0.1),
+                ..far_land(f != 10, false)
+            },
+            _ => Extra {
+                camera_shift: Some([0.0, 30_000.0, 0.0]),
+                ..far_land(false, false)
+            },
+        })
+        .collect();
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    sun_shadow::enable(true);
+    let b = backend(1);
+    sun_shadow::enable(false);
+    let Some(mut b) = b else {
+        return;
+    };
+    let mut seen: Vec<Vec<([f64; 3], f64, bool)>> = Vec::new();
+    lit_sequence_with(&mut b, &frames, true, &mut |_, b| {
+        seen.push(b.device().map_or_else(Vec::new, |d| d.sun_far_places()));
+    });
+    // The tower's place as frame 13 left it (a frame's casters are taken as the next is drawn).
+    let near_tower =
+        |p: &&([f64; 3], f64, bool)| (p.0[1] - 20_000.0).abs() < 2_000.0 && p.1 > 300.0;
+    let tower: Vec<_> = seen[14].iter().filter(near_tower).collect();
+    eprintln!("the tower at frame 13: {tower:?}");
+    assert!(!tower.is_empty(), "{:?}", seen[14]);
+    assert!(
+        tower.iter().any(|p| p.2),
+        "moving after its nudge: {tower:?}"
+    );
+    let kept: Vec<_> = seen[41].iter().filter(near_tower).collect();
+    eprintln!("the tower at frame 40: {kept:?}");
+    assert!(
+        kept.iter().any(|k| tower
+            .iter()
+            .any(|t| (0..3).all(|i| (k.0[i] - t.0[i]).abs() < 1.0))),
+        "the nudged tower out of sight is kept: {kept:?} (was {tower:?})"
+    );
+}
+
 /// Report 012's "jittery edges", through the device: a map that takes a turned sun counts its whole
 /// steps from where it stood (the centre of the map drawn before), not from the world's origin, so
 /// its texel grid turns about the ground round the camera; between turns the steps count from the

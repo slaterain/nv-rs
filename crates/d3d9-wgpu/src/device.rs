@@ -1029,6 +1029,9 @@ struct SunState {
     /// A far caster came or went since its map was last started, and the present it was.
     far_dirty: bool,
     far_last: u64,
+    /// A far place may be moving (paired as a move since the far cache last had none): only then
+    /// is the far cache passed over for places that stood still (review of #843).
+    far_moving: bool,
     /// The vertex blocks' headers the casters use (a few: the integer and boolean registers).
     headers: Vec<Vec<u8>>,
     /// The integer and boolean registers of the last caster and their header's place.
@@ -1205,6 +1208,7 @@ impl SunState {
             far_maps: 0,
             far_dirty: false,
             far_last: 0,
+            far_moving: false,
             headers: Vec::new(),
             last_regs: None,
             moving: 0,
@@ -7953,13 +7957,17 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // up) leaves no trail of shadows in the far map, which casts it from its latest place; one
         // that stood still a while is still again (review of #817).
         let view_far = f64::from(view.far);
-        sun.far.mark_moves(
+        let far_moved = sun.far.mark_moves(
             now,
             &far_came,
             MAX_SUN_MOVING,
             sun_shadow::mover(frustum, position, axes, near, view_far),
         );
-        sun.far.settle(now, sun_shadow::SETTLE);
+        sun.far_moving |= far_moved > 0;
+        if sun.far_moving {
+            sun.far.settle(now, sun_shadow::SETTLE);
+            sun.far_moving = sun.far.iter().any(|i| i.moving);
+        }
         let mut far_changed = sun.far.iter().any(|i| i.born == now);
         for _ in sun.far.sweep(|_, i| {
             if i.seen == now {
@@ -7968,7 +7976,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             let v = in_view(i.centre);
             let inside = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() < i.radius;
             i.payload.stale()
-                || i.moved_on(now)
+                // (A moving far place merely out of view is kept as a still one: review of #843.)
+                || i.left
                 || !far_here.touches(i.centre, i.radius + 2.0 * far_step)
                 || (now - i.seen > sun_shadow::GRACE
                     && (sun_shadow::wholly_in_view(frustum, v, i.radius, near, view_far)

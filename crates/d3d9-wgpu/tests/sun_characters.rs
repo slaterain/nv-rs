@@ -808,39 +808,57 @@ fn ours_and_theirs(shot: Shot, points: &[[f64; 3]]) -> Option<Vec<(i32, i32)>> {
 /// multiply them, so at the fade's middle (ours half faded, the game's half back) a quarter of the
 /// sun comes through; before, the game's was still left out where ours had half faded: half the
 /// sun came through, a lighter patch round a far character. Under the far bar's shadow 9,250 view
-/// units out (half way through the fade, 8,500 to 10,000): at most a third of the sun, and never
-/// darker than the game's shadow alone (no doubled shadow).
+/// units out (half way through the fade, 8,500 to 10,000): between a sixth and a third of the sun;
+/// 8,875 out (a quarter of the way): about 3/16; never darker than the game's shadow alone (no
+/// doubled shadow).
 #[test]
 fn in_the_last_cascades_fade_ours_and_the_games_shadow_add_up_to_one() {
     FAR_VIEW.set(true);
-    // Its foot at y 8,860 (view depth 9,248); the upper half's shadow at x -1,650 to -3,000.
-    let p = [-2000.0, 8860.0, 0.0];
-    let shot = far_bar(8860.0, 30.0, true);
-    let Some(lit) = picture_of(
-        false,
-        true,
-        &[Shot {
-            game_shadow: false,
-            ..shot
-        }; 4],
-    ) else {
+    // The sun through ours and the game's shadow at a far bar's foot y (view depth 0.985 y + 521):
+    // the upper half's shadow at x -1,650 to -3,000.
+    let through_at = |y: f64| {
+        let p = [-2000.0, y, 0.0];
+        let shot = far_bar(y as f32, 30.0, true);
+        let lit = picture_of(
+            false,
+            true,
+            &[Shot {
+                game_shadow: false,
+                ..shot
+            }; 4],
+        )?;
+        let lit = i32::from(at(&lit[3], p));
+        let (fade, theirs) = ours_and_theirs(shot, &[p]).expect("the adapter")[0];
+        let through = f64::from(fade - theirs) / f64::from(lit - theirs);
+        eprintln!(
+            "y {y}: lit {lit}, the game's shadow {theirs}, in the fade {fade}: {through:.3} of the sun"
+        );
+        assert!(
+            lit > theirs + 60,
+            "the game's shadow is dark: {lit} {theirs}"
+        );
+        assert!(
+            fade >= theirs - 3,
+            "a doubled shadow: {fade} under {theirs}"
+        );
+        Some(through)
+    };
+    // Its foot at y 8,860 (view depth 9,248), half way: ours lets through a half, the game's a
+    // half, a quarter of the sun (review of #843: bounded from both sides, so a doubled fade or
+    // no characters' cover in the fade fails too).
+    let Some(middle) = through_at(8860.0) else {
         return;
     };
-    let lit = i32::from(at(&lit[3], p));
-    let (fade, theirs) = ours_and_theirs(shot, &[p]).expect("the adapter")[0];
-    let through = f64::from(fade - theirs) / f64::from(lit - theirs);
-    eprintln!("lit {lit}, the game's shadow {theirs}, in the fade {fade}: {through:.2} of the sun");
     assert!(
-        lit > theirs + 60,
-        "the game's shadow is dark: {lit} {theirs}"
+        middle > 1.0 / 6.0 && middle < 1.0 / 3.0,
+        "the fade's middle lets through {middle:.3} (a quarter)"
     );
+    // A quarter of the way (view depth 8,875): ours a quarter, the game's three quarters, 3/16 of
+    // the sun; a fade squared would let through about 0.14 there.
+    let quarter = through_at(8481.0).expect("the adapter");
     assert!(
-        through < 1.0 / 3.0,
-        "a lighter patch in the fade: {through:.2}"
-    );
-    assert!(
-        fade >= theirs - 3,
-        "a doubled shadow: {fade} under {theirs}"
+        quarter > 0.16 && quarter < 0.23 && quarter < middle,
+        "a quarter into the fade lets through {quarter:.3} (3/16; the middle {middle:.3})"
     );
 }
 

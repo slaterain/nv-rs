@@ -3211,7 +3211,12 @@ impl Gpu {
                     // A moving cut-out (a flag, a bush in the wind) only where its shadow can be read.
                     || (m == 1
                         && d.cutout.is_some()
-                        && !shadow_reaches_cascade(k, depth.deepest(i.centre, i.radius), cascades))
+                        && !shadow_reaches_cascade(
+                            k,
+                            depth.deepest(i.centre, i.radius),
+                            depth.sine,
+                            cascades,
+                        ))
                     || !c.touches(i.centre, i.radius)
                     || self.pipelines[d.pipe as usize].is_none()
                 {
@@ -3232,7 +3237,7 @@ impl Gpu {
         for (k, c) in cascades.iter().enumerate().take(CHAR_LAYERS) {
             for ((d, world, centre, radius), &deep) in skinned.iter().zip(&deepest) {
                 if *radius >= SKIN_MIN_TEXELS * c.texel
-                    && shadow_reaches_cascade(k, deep, cascades)
+                    && shadow_reaches_cascade(k, deep, depth.sine, cascades)
                     && c.touches(*centre, *radius)
                     && self.pipelines[d.pipe as usize].is_some()
                 {
@@ -3937,27 +3942,37 @@ pub(crate) struct ShadowDepth {
 
 impl ShadowDepth {
     /// The deepest view depth the shadow of a caster at world sphere (`centre`, `radius`) can fall
-    /// at: its far side, and as far again as its top (a diameter over its lowest point, at most
-    /// [`SHADOW_REACH`]) throws a shadow along the sun's rays.
+    /// at: its far side, and as far again as its top throws a shadow along the sun's rays, its top
+    /// counted a diameter over its lowest point and that point as much as [`SHADOW_REACH`] over the
+    /// ground the shadow falls on (a character on a roof or a cliff edge, a creature flying, a flag
+    /// on a pole: review of #843; where the caster stands is not known here).
     pub fn deepest(&self, centre: [f64; 3], radius: f64) -> f64 {
         let d: [f64; 3] = std::array::from_fn(|k| centre[k] - self.position[k]);
-        let height = (2.0 * radius).min(SHADOW_REACH);
+        let height = 2.0 * radius + SHADOW_REACH;
         dot3(self.ahead, d) + radius + height / self.sine.max(f64::from(MIN_SUN_HEIGHT))
     }
 }
 
-/// Whether a shadow no deeper than view depth `deepest` can be read from cascade `k`'s maps: the
-/// first always; any other from where the cascade before it starts to blend into it (its far end
-/// less [`BLEND`] of its depth range), less the lookups' reach of four of `k`'s texels (the
-/// characters' cover taps that far round a point). Nearer shadows are read from the cascades
-/// before it alone, so the caster is left out of `k`'s characters' layer or moving copy.
-pub fn shadow_reaches_cascade(k: usize, deepest: f64, cascades: &[Cascade; CASCADES]) -> bool {
+/// Whether a shadow no deeper than view depth `deepest` can be read from cascade `k`'s maps, with
+/// the sun's height's sine `sine`: the first always; any other from where the cascade before it
+/// starts to blend into it (its far end less [`BLEND`] of its depth range), less the lookups'
+/// reach of four of `k`'s texels (the characters' cover taps that far round a point), which
+/// stretch along the ground by 1 / sine (at least [`MIN_SUN_HEIGHT`]). Nearer shadows are read
+/// from the cascades before it alone, so the caster is left out of `k`'s characters' layer or
+/// moving copy.
+pub fn shadow_reaches_cascade(
+    k: usize,
+    deepest: f64,
+    sine: f64,
+    cascades: &[Cascade; CASCADES],
+) -> bool {
     if k == 0 {
         return true;
     }
     let before = &cascades[k - 1];
     let band = f64::from(BLEND) * f64::from(before.far - before.near);
-    deepest >= f64::from(before.far) - band - 4.0 * cascades[k].texel
+    let margin = 4.0 * cascades[k].texel / sine.max(f64::from(MIN_SUN_HEIGHT));
+    deepest >= f64::from(before.far) - band - margin
 }
 
 /// One bone's share of a skinned geometry: the bone's register offset from `Bones` (a byte of
@@ -5969,7 +5984,8 @@ mod tests {
 
     /// Review of #817: a character (or a moving cut-out) whose shadow cannot reach where a cascade
     /// is read is not drawn into it: the first cascade always; the last only from the second
-    /// last's blend band on (less four of its texels), counting the caster's far side and as far
+    /// last's blend band on (less four of its texels along the ground), counting the caster's far
+    /// side, its feet up to SHADOW_REACH over the ground (review of #843), and as far
     /// again as its height throws a shadow (a low sun throws it farther: drawn from nearer).
     #[test]
     fn a_shadow_too_near_for_a_cascade_is_not_drawn_into_it() {
@@ -5981,53 +5997,87 @@ mod tests {
             std::array::from_fn(|i| place(i, frustum(), s[i], s[i + 1], axes, position, b, None));
         let last = CASCADES - 1;
         let band = f64::from(BLEND) * f64::from(s[last] - s[last - 1]);
-        let start = f64::from(s[last]) - band - 4.0 * cascades[last].texel;
-        // A character 60 across (radius 60, 120 high) straight ahead at view depth `x`.
+        let start_at = |sine: f64| f64::from(s[last]) - band - 4.0 * cascades[last].texel / sine;
+        let start = start_at(0.8);
+        // A character 60 across (radius 60, 120 high) straight ahead at view depth `x`, its feet
+        // up to SHADOW_REACH over the ground its shadow falls on.
         let high = ShadowDepth {
             position,
             ahead: axes[2],
             sine: 0.8,
         };
-        let reach = 60.0 + 120.0 / 0.8;
+        let reach = 60.0 + (120.0 + SHADOW_REACH) / 0.8;
+        assert!(start - reach > 1.0, "{start} {reach}");
         let at = |x: f64| [x, 0.0, 100.0];
         assert!((high.deepest(at(1000.0), 60.0) - (1000.0 + reach)).abs() < 1e-9);
         assert!(!shadow_reaches_cascade(
             last,
             high.deepest(at(start - reach - 1.0), 60.0),
+            0.8,
             &cascades
         ));
         assert!(shadow_reaches_cascade(
             last,
             high.deepest(at(start - reach + 1.0), 60.0),
+            0.8,
             &cascades
         ));
         for k in 0..CASCADES {
             assert!(shadow_reaches_cascade(
                 k,
                 high.deepest(at(f64::from(s[k + 1])), 60.0),
+                0.8,
                 &cascades
             ));
         }
-        assert!(shadow_reaches_cascade(
-            0,
-            high.deepest(at(1.0), 60.0),
-            &cascades
-        ));
-        assert!(!shadow_reaches_cascade(
-            1,
-            high.deepest(at(1.0), 60.0),
-            &cascades
-        ));
+        // Every cascade but the last takes a character even at the camera.
+        for k in 0..last {
+            assert!(shadow_reaches_cascade(
+                k,
+                high.deepest(at(1.0), 60.0),
+                0.8,
+                &cascades
+            ));
+        }
+        // Review of #843: a sniper (radius 60) on a roof 600 over the street 1,000 ahead, the sun
+        // at 30 degrees behind the camera: its shadow's tip falls (600 + 120) cot 30 farther on.
+        let thirty = ShadowDepth { sine: 0.5, ..high };
+        let tip = 1000.0 + 60.0 + 720.0 * (3f64).sqrt();
+        assert!(thirty.deepest(at(1000.0), 60.0) >= tip);
+        // ... and a flag 600 up on its pole (radius 50) as deep as SHADOW_REACH lets it fall.
+        for (sine, drop) in [(0.8, 600.0), (0.5, SHADOW_REACH), (0.17, 1000.0)] {
+            let d = ShadowDepth { sine, ..high };
+            let cot = (1.0 - sine * sine).sqrt() / sine;
+            assert!(d.deepest(at(500.0), 50.0) >= 500.0 + 50.0 + (drop + 100.0) * cot);
+        }
         // A low sun: the same character nearer still reaches the last cascade.
         let low = ShadowDepth { sine: 0.1, ..high };
         assert!(shadow_reaches_cascade(
             last,
             low.deepest(at(start - reach - 1.0), 60.0),
+            0.1,
             &cascades
         ));
-        // Its height counts at most SHADOW_REACH; under the lowest sun that casts, MIN_SUN_HEIGHT.
+        // Review of #843: the lookups' four texels stretch along the ground by 1 / sine: a shadow
+        // just past the low sun's start is read from the last cascade, just before it is not.
+        let low_start = start_at(0.25);
+        assert!(low_start < start - 1.0);
+        assert!(shadow_reaches_cascade(
+            last,
+            low_start + 0.5,
+            0.25,
+            &cascades
+        ));
+        assert!(!shadow_reaches_cascade(
+            last,
+            low_start - 0.5,
+            0.25,
+            &cascades
+        ));
+        // Under the lowest sun that casts, MIN_SUN_HEIGHT.
         let flat = ShadowDepth { sine: 0.0, ..high };
         let huge = flat.deepest(at(0.0), 5000.0);
-        assert!((huge - (5000.0 + SHADOW_REACH / f64::from(MIN_SUN_HEIGHT))).abs() < 1e-6);
+        let lowest = f64::from(MIN_SUN_HEIGHT);
+        assert!((huge - (5000.0 + (10000.0 + SHADOW_REACH) / lowest)).abs() < 1e-6);
     }
 }
