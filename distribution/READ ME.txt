@@ -129,7 +129,7 @@ Game pads work: an Xbox-style pad, or a PlayStation pad (DualSense, DualSense Ed
 by cable or Bluetooth, with rumble. The game shows Xbox button pictures: A is Cross, B is Circle,
 X is Square, Y is Triangle, Back is Create (Share on a DualShock 4) and Start is Options. The PS
 button and the touchpad do nothing.
-Other pads work too, without rumble, if SDL's controller database knows them (752 models, such as
+Other pads work too, without rumble, if SDL's controller database knows them (764 models, such as
 8BitDo and Logitech pads in their DirectInput modes): their buttons are put where an Xbox pad has
 them. A pad it doesn't know, or whose line does not fit its own buttons and sticks, is named in the
 log; a line for it in SDL's own format (with platform:Windows) can go in a file called

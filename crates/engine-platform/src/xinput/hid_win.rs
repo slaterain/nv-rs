@@ -257,17 +257,29 @@ fn add_mapped(pads: &HidPads, path: &str, device: &Device, db: &Database) -> boo
     let Some(mut mapped) = Mapped::new(&reader, mapping) else {
         return false;
     };
-    // A line whose numbering does not fit the pad's own inputs is not used (review of #804).
-    if let Err(why) = mapped.layout.fits(&mapped.mapping) {
-        eprintln!(
-            "nv-rs: game pads: the pad {:04x}:{:04x} is not read: its line in the controller \
-             database does not fit it ({why}; a line for it can be added in {} in the port's own \
-             folder)",
-            device.vendor,
-            device.product,
-            super::sdl_db::FILE
-        );
-        return false;
+    // A line whose numbering does not fit the pad's own inputs is not used; an optional control
+    // naming an input the pad lacks is left out alone (review of #804).
+    match mapped.layout.fits(&mapped.mapping) {
+        Ok((fitted, notes)) => {
+            for note in notes {
+                eprintln!(
+                    "nv-rs: game pads: the pad {:04x}:{:04x}: {note}",
+                    device.vendor, device.product
+                );
+            }
+            mapped.mapping = fitted;
+        }
+        Err(why) => {
+            eprintln!(
+                "nv-rs: game pads: the pad {:04x}:{:04x} is not read: its line in the controller \
+                 database does not fit it ({why}; a line for it can be added in {} in the port's \
+                 own folder)",
+                device.vendor,
+                device.product,
+                super::sdl_db::FILE
+            );
+            return false;
+        }
     }
     let _ = pads.add_mapped(path.to_string(), reader, device.input, move |report| {
         mapped.read(report)

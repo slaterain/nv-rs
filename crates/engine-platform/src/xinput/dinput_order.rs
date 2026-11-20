@@ -160,15 +160,15 @@ impl Layout {
         pages
     }
 
-    /// Whether a database line fits this pad ([`Mapping::fits`]): the sticks must be on Generic
-    /// Desktop axes, never on a Simulation-page one.
-    pub fn fits(&self, mapping: &Mapping) -> Result<(), String> {
+    /// A database line as it fits this pad ([`Mapping::fitted`]): the sticks must be on Generic
+    /// Desktop axes, never on a Simulation-page one; `Err` when the line is not to be used.
+    pub fn fits(&self, mapping: &Mapping) -> Result<(Mapping, Vec<String>), String> {
         let desktop: Vec<bool> = self
             .axes
             .iter()
             .map(|v| v.page == GENERIC_DESKTOP)
             .collect();
-        mapping.fits(self.buttons.len(), &desktop, self.hats.len())
+        mapping.fitted(self.buttons.len(), &desktop, self.hats.len())
     }
 
     /// The pad's values, the axes then the hats, as `(page, usage)`.
@@ -698,7 +698,9 @@ mod tests {
             .collect();
         six.push(value(HAT_SWITCH, 6, 0, 7, 4));
         six.extend(buttons(7, 14));
-        assert_eq!(Layout::of(&six).fits(&m), Ok(()));
+        assert!(Layout::of(&six)
+            .fits(&m)
+            .is_ok_and(|(_, notes)| notes.is_empty()));
         let pedal = |usage: u16, index: u16| Element {
             page: SIMULATION,
             usage,
@@ -734,7 +736,7 @@ mod tests {
         );
         // The 8BitDo Pro 2's own line fits the pedals layout (its sticks on Z and Rz).
         let pro2 = Database::windows().mapping(0x2dc8, 0x6006).unwrap();
-        assert_eq!(Layout::of(&pedals).fits(&pro2), Ok(()));
+        assert!(Layout::of(&pedals).fits(&pro2).is_ok());
         let mut few = six[..7].to_vec();
         few.extend(buttons(7, 8));
         assert!(Layout::of(&few).fits(&m).unwrap_err().contains("b9"));

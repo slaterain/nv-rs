@@ -19,10 +19,10 @@
 //! by the ids alone, checksum or not. Of the built-in 858, three such lines are left out (their
 //! pads have no plain line, so they are not read), one whose GUID no DirectInput pad can have
 //! (bytes after the vendor id that SDL always leaves 0), and four for devices with no face button
-//! and no start (a foot controller, a throttle, a phone's half pad), twelve whose right stick the
-//! database's own Linux or macOS line contradicts ([`RIGHT_STICK_CONFLICTS`]), and the ids SDL
-//! takes for Xbox pads, which XInput reads: 752 pads. A line is also used only if it fits
-//! the pad found (`dinput_order::Layout::fits`). The inputs
+//! and no start (a foot controller, a throttle, a phone's half pad), and the ids SDL takes for
+//! Xbox pads, which XInput reads: 764 pads. A line is used only if it fits the pad found
+//! (`dinput_order::Layout::fits`: what it names exists and its sticks are not on pedals), so one
+//! may still be refused on a given pad. The inputs
 //! count the pad's buttons, axes and hats as SDL's DirectInput code does (`dinput_order`).
 //!
 //! How each binding turns into the controls follows SDL3's `src/joystick/SDL_gamepad.c`
@@ -284,40 +284,72 @@ impl Mapping {
         })
     }
 
-    /// Whether the line fits a pad with `buttons` buttons, `axes` axes (`true` for each one on the
+    /// The line as it fits a pad with `buttons` buttons, `axes` axes (`true` for each one on the
     /// Generic Desktop page: X, Y, Z, Rx, Ry, Rz, Wheel or a slider) and `hats` hats, as counted
-    /// for the line's platform (review of #804): every button, axis and hat the line names exists,
-    /// and the sticks' axes are Generic Desktop ones, never a pedal (a stick on a Simulation-page
-    /// axis means the line's numbering is not this pad's). `Err` says why not, for the log.
-    pub fn fits(&self, buttons: usize, axes: &[bool], hats: usize) -> Result<(), String> {
+    /// for the line's platform (review of #804). A binding of the sticks, the face buttons, start,
+    /// the shoulders or the d-pad must name an input the pad has, and a stick must be on a Generic
+    /// Desktop axis, never a pedal (a stick on a Simulation-page axis means the line's numbering is
+    /// not this pad's): otherwise `Err` says why, for the log, and the line is not used. A binding
+    /// of an optional control (back, the stick clicks, the triggers) naming an input the pad lacks
+    /// is dropped alone, each with a note for the log. (The guide button, `misc1`-`misc6`, the
+    /// paddles and the touch pad are never read: the game has no XInput control for them.)
+    pub fn fitted(
+        &self,
+        buttons: usize,
+        axes: &[bool],
+        hats: usize,
+    ) -> Result<(Mapping, Vec<String>), String> {
+        let mut kept = Vec::with_capacity(self.bindings.len());
+        let mut notes = Vec::new();
         for &(input, output) in &self.bindings {
-            match input {
+            let missing = match input {
                 Input::Button(n) if n >= buttons => {
-                    return Err(format!("it names button b{n}, the pad has {buttons}"));
+                    Some(format!("button b{n} (the pad has {buttons})"))
                 }
                 Input::Hat { hat, .. } if hat >= hats => {
-                    return Err(format!("it names hat h{hat}, the pad has {hats}"));
+                    Some(format!("hat h{hat} (the pad has {hats})"))
                 }
-                Input::Axis { axis: n, .. } => {
-                    let Some(&desktop) = axes.get(n) else {
-                        return Err(format!("it names axis a{n}, the pad has {}", axes.len()));
-                    };
-                    if let Output::Axis {
-                        axis: stick @ (Axis::LeftX | Axis::LeftY | Axis::RightX | Axis::RightY),
-                        ..
-                    } = output
-                    {
-                        if !desktop {
-                            return Err(format!(
-                                "its {stick:?} is a{n}, a pedal (Simulation page) on this pad"
-                            ));
-                        }
-                    }
+                Input::Axis { axis: n, .. } if n >= axes.len() => {
+                    Some(format!("axis a{n} (the pad has {})", axes.len()))
                 }
-                _ => {}
+                _ => None,
+            };
+            let required = match output {
+                Output::Axis { axis, .. } => {
+                    matches!(
+                        axis,
+                        Axis::LeftX | Axis::LeftY | Axis::RightX | Axis::RightY
+                    )
+                }
+                Output::Button(b) => {
+                    !matches!(b, Button::Back | Button::LeftStick | Button::RightStick)
+                }
+            };
+            if let Some(what) = missing {
+                if required {
+                    return Err(format!("it names {what} for {output:?}"));
+                }
+                notes.push(format!("its {output:?} names {what}, so it is left out"));
+                continue;
             }
+            if let (Input::Axis { axis: n, .. }, true, Output::Axis { axis, .. }) =
+                (input, required, output)
+            {
+                if !axes[n] {
+                    return Err(format!(
+                        "its {axis:?} is a{n}, a pedal (Simulation page) on this pad"
+                    ));
+                }
+            }
+            kept.push((input, output));
         }
-        Ok(())
+        Ok((
+            Mapping {
+                name: self.name.clone(),
+                bindings: kept,
+            },
+            notes,
+        ))
     }
 
     /// `SDL_GetGamepadAxis`.
@@ -463,32 +495,6 @@ pub fn key_by_ids(guid: &str) -> Option<(u16, u16)> {
     key(&format!("{}0000{}", &guid[..4], &guid[8..]))
 }
 
-/// Pads whose built-in Windows line puts the right stick on a2 and a5 while the database's own
-/// Linux or macOS line for the same ids (gilrs 0.11.2's copy, the same SDL_GameControllerDB commit)
-/// puts it on a2 and a3 (review of #804). Linux numbers ABS_X, Y, Z, RX, RY, RZ in that order, so
-/// a2/a3 there means the pad has no Rx and Ry; on Windows (`dinput_order`) a2 and a5 are Z and Rz
-/// only with Rx and Ry between them, so the Windows line cannot be this pad's numbering: read
-/// through it the right stick's vertical reads nothing, or the triggers move it. A pad read wrongly
-/// is worse than one with no line (it is named in the log, and a player's own line is still
-/// taken), so these built-in lines are left out. The rule found 13 ids; the 13th, the NVIDIA
-/// Shield (0955:7210), is in SDL's Xbox list ([`super::sdl_hints::XBOX`]), so XInput reads it and
-/// no line of the database is ever used for it. Lines with no Linux or macOS line are checked at
-/// run time instead (`Layout::fits`).
-pub const RIGHT_STICK_CONFLICTS: [(u16, u16); 12] = [
-    (0x05ac, 0x022d), // GameSir G4
-    (0x20d6, 0x89e5), // Moga 2
-    (0x20d6, 0x6271), // Moga Pro
-    (0x2dc8, 0x3810), // 8BitDo F30 Pro
-    (0x2dc8, 0x9015), // 8BitDo N30 Pro 2
-    (0x05fd, 0x262a), // InterAct HammerHead FX
-    (0x0e8f, 0x0003), // PS3 Controller
-    (0x054c, 0x0268), // PS3 Controller (Sony's)
-    (0x0f0d, 0x00aa), // Hori Real Arcade Pro S
-    (0x0f0d, 0x005e), // Hori Fighting Commander 4 PS4
-    (0x0738, 0x3180), // Mad Catz FightStick Alpha PS3
-    (0x0738, 0x8180), // Mad Catz SFV Arcade FightStick Alpha PS4
-];
-
 /// The pads' lines by their ids, the later of two for one pad kept.
 #[derive(Clone, Debug, Default)]
 pub struct Database {
@@ -498,15 +504,14 @@ pub struct Database {
 impl Database {
     /// The built-in Windows lines, less those for devices with no face button and no start (a
     /// foot controller, a throttle, a phone's half pad: review of #804), which are not pads the
-    /// game can be played with, less [`RIGHT_STICK_CONFLICTS`]'s, and less the ids SDL takes for
-    /// Xbox pads ([`super::sdl_hints::XBOX`]): XInput reads those, so their lines are never
-    /// reached (review of #804), and the database's size is the pads it can read.
+    /// game can be played with, and less the ids SDL takes for Xbox pads
+    /// ([`super::sdl_hints::XBOX`]): XInput reads those, so their lines are never reached (review
+    /// of #804), and the database's size is the pads it can read.
     pub fn windows() -> Database {
         let mut db = Database::default();
         db.add(WINDOWS, Some("Windows"));
         db.lines.retain(|id, rest| {
-            !RIGHT_STICK_CONFLICTS.contains(id)
-                && super::sdl_hints::XBOX.binary_search(id).is_err()
+            super::sdl_hints::XBOX.binary_search(id).is_err()
                 && Mapping::parse(rest).is_some_and(|m| m.is_a_pad())
         });
         db
@@ -653,14 +658,13 @@ mod tests {
         }
     }
 
-    /// The built-in lines: the copy's Windows lines, found by their two ids: 752 pads of its 858
+    /// The built-in lines: the copy's Windows lines, found by their two ids: 764 pads of its 858
     /// GUID lines (three name a name checksum too, one has a GUID no pad can have, four bind no face
-    /// button or start, twelve conflict with their Linux or macOS line, and the Xbox-type ids
-    /// XInput reads are left out; the `xinput` line names no pad).
+    /// button or start, and the Xbox-type ids XInput reads are left out; the `xinput` line names no pad).
     #[test]
     fn the_built_in_lines() {
         let db = Database::windows();
-        assert_eq!(db.len(), 752);
+        assert_eq!(db.len(), 764);
         let guid_lines = WINDOWS.lines().filter(|l| l.starts_with("0300")).count();
         assert_eq!(guid_lines, 858);
         assert!(WINDOWS.starts_with("# SDL_GameControllerDB"));
@@ -842,7 +846,7 @@ mod tests {
         assert_eq!(db.mapping(0x2dc8, 0x6006).unwrap().name, "File");
         assert_eq!(db.mapping(0xaaaa, 0xbbbb).unwrap().name, "New");
         assert_eq!(db.mapping(0xcccc, 0xdddd), None);
-        assert_eq!(db.len(), 753);
+        assert_eq!(db.len(), 765);
         assert_eq!(log.len(), 2);
         assert!(log[0].starts_with("nv-rs: game pads: 2 lines taken from "));
         assert!(log[1].contains("the line for Mac") && log[1].contains("no platform:Windows"));
@@ -857,7 +861,7 @@ mod tests {
         let (db, log) = Database::with_players_lines(Some(&dir), None);
         assert_eq!(db.mapping(0x2dc8, 0x6006).unwrap().name, "8BitDo Pro 2");
         assert!(log.is_empty(), "no file: nothing to say");
-        assert_eq!(Database::with_players_lines(None, None).0.len(), 752);
+        assert_eq!(Database::with_players_lines(None, None).0.len(), 764);
     }
 
     /// A file's text whatever its encoding mark.
@@ -891,53 +895,64 @@ mod tests {
         assert!(Mapping::parse("Pad,start:b9").unwrap().is_a_pad());
     }
 
-    /// The twelve pads whose Windows right stick the database's own Linux or macOS line
-    /// contradicts get no built-in line, though the copy has one for each; each is a pad XInput
-    /// does not read (so the database is what would read it), and a player's own line for one is
-    /// still taken. The Shield (0955:7210), which the rule also finds, is an Xbox-type id: XInput
-    /// reads it and the database has no line for it.
+    /// Lines are judged by the pad found (`dinput_order::Layout::fits`), not from other systems'
+    /// lines (review of #804, round 3): a pad whose Windows line has the right stick on a2/a5, such
+    /// as the Hori Fighting Commander 4 PS4 (0f0d:005e) or the Moga Pro (20d6:6271), keeps its
+    /// built-in line. An Xbox-type id such as the NVIDIA Shield (0955:7210) has none: XInput reads
+    /// it, so no database line is ever used for it.
     #[test]
-    fn no_built_in_line_where_the_right_stick_conflicts() {
+    fn built_in_lines_are_judged_by_the_pad_and_xbox_ids_have_none() {
         use super::super::sdl_hints::is_xinput_device;
+        let db = Database::windows();
+        for (id, name) in [((0x0f0d, 0x005e), "Hori"), ((0x20d6, 0x6271), "Moga Pro")] {
+            let m = db.mapping(id.0, id.1).expect("its built-in line");
+            assert!(m.name.contains(name), "{}", m.name);
+            assert!(!is_xinput_device(id, r"\?\hid#vid_0000", false));
+        }
+        let shield = (0x0955, 0x7210);
         let mut copy = Database::default();
         copy.add(WINDOWS, Some("Windows"));
-        let db = Database::windows();
-        for id in RIGHT_STICK_CONFLICTS {
-            let line = copy.mapping(id.0, id.1).expect("the copy's line");
-            assert!(line.is_a_pad(), "{id:04x?}");
-            assert!(
-                !is_xinput_device(id, r"\?\hid#vid_0000", false),
-                "{id:04x?}"
-            );
-            assert_eq!(db.mapping(id.0, id.1), None, "{id:04x?}");
-        }
-        let hint = "03000000d62000007162000000000000,Mine,a:b0,platform:Windows,";
-        let (db, _) = Database::with_players_lines(None, Some(hint));
-        assert_eq!(db.mapping(0x20d6, 0x6271).unwrap().name, "Mine");
-        let shield = (0x0955, 0x7210);
         assert!(copy.mapping(shield.0, shield.1).is_some());
         assert!(is_xinput_device(shield, "", false));
-        assert_eq!(Database::windows().mapping(shield.0, shield.1), None);
+        assert_eq!(db.mapping(shield.0, shield.1), None);
     }
 
-    /// A line fits a pad only if every button, hat and axis it names is there, counted from 0, and
-    /// its sticks are on Generic Desktop axes (review of #804); triggers may be on a pedal.
+    /// A line fits a pad only if every required input it names is there, counted from 0, and its
+    /// sticks are on Generic Desktop axes (review of #804); a trigger may be on a pedal.
     #[test]
     fn a_line_fits_at_the_edges() {
         let m = Mapping::parse("Edge,a:b8,dpup:h1.1,leftx:a1,lefttrigger:a2").unwrap();
-        assert_eq!(m.fits(9, &[true, true, false], 2), Ok(()));
+        let (fitted, notes) = m.fitted(9, &[true, true, false], 2).unwrap();
+        assert_eq!((fitted, notes.len()), (m.clone(), 0));
         assert!(m
-            .fits(8, &[true, true, false], 2)
+            .fitted(8, &[true, true, false], 2)
             .unwrap_err()
             .contains("b8"));
         assert!(m
-            .fits(9, &[true, true, false], 1)
+            .fitted(9, &[true, true, false], 1)
             .unwrap_err()
             .contains("h1"));
-        assert!(m.fits(9, &[true, true], 2).unwrap_err().contains("a2"));
         assert!(m
-            .fits(9, &[true, false, true], 2)
+            .fitted(9, &[true, false, true], 2)
             .unwrap_err()
             .contains("pedal"));
+    }
+
+    /// An optional control (back, a stick click, a trigger) that names an input the pad lacks is
+    /// left out alone, with a note for the log, and the rest of the line is used (review of #804,
+    /// round 3); the guide button and the paddles are never read at all.
+    #[test]
+    fn an_optional_binding_past_the_pad_is_left_out_alone() {
+        let line = "Pad,a:b0,b:b1,x:b2,y:b3,start:b4,back:b12,rightstick:b13,lefttrigger:a5,\
+                    leftx:a0,lefty:a1,guide:b20,paddle1:b21";
+        let m = Mapping::parse(line).unwrap();
+        let (fitted, notes) = m.fitted(6, &[true, true], 0).unwrap();
+        assert_eq!(notes.len(), 3, "{notes:?}");
+        assert!(notes[0].contains("Back") && notes[0].contains("b12"));
+        assert!(notes[2].contains("LeftTrigger") && notes[2].contains("a5"));
+        let all = Mapping::parse("Pad,a:b0,b:b1,x:b2,y:b3,start:b4,leftx:a0,lefty:a1").unwrap();
+        assert_eq!(fitted.bindings, all.bindings);
+        // A required one past the pad still refuses the line.
+        assert!(m.fitted(4, &[true, true], 0).unwrap_err().contains("b4"));
     }
 }
