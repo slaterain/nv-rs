@@ -37,8 +37,9 @@ Fallout: New Vegas (version 1.4.0.525; only the Steam version has been tested so
 
 It never changes your game, your saves or your settings: everything it writes stays in its own
 folder. Windows may warn because the program isn't signed. It has only been run on one PC so far:
-please report how it runs on yours (press F12 in the game). Keyboard and mouse or a game pad;
-mods that need script-extender plugins don't work yet. The download page lists the known issues.
+please report how it runs on yours (press F12 in the game to make a report). Keyboard and mouse,
+or an Xbox-style or PlayStation game pad on Windows; mods that need script-extender plugins don't
+work yet. The download page lists the known issues.
 
 ## Where it stands
 
@@ -65,13 +66,13 @@ shows what's left. Each name links to the detail in [docs/STATUS.md](docs/STATUS
 | ✅ | [**Windows preview**](docs/STATUS.md#windows-preview) | [Released](https://github.com/slaterain/nv-rs/releases); run on one PC so far. |
 | 🔨 | [**Native 64-bit code**](docs/STATUS.md#native-64-bit-code) | Started: threads on their own cores, textures and sounds kept outside the 32-bit memory. |
 | 🔨 | [**Built-in script extender: xNVSE**](docs/STATUS.md#xnvse-built-in) | All 654 of its script commands and both its script languages, with nothing to install. |
-| 🔨 | [**Built-in script extender: JIP LN:**](docs/STATUS.md#jip-ln-built-in) | All its script commands (JIP LN: 1,116 and its two version commands) and 162 game patches; off by default, for testing. |
+| 🔨 | [**Built-in script extender: JIP LN:**](docs/STATUS.md#jip-ln-built-in) | All its script commands (JIP LN: 1,116 and its two version commands) and the 162 of its game patches planned for the port; off by default, for testing. |
 | 🔨 | [**Mod Configuration Menu (MCM)**](docs/STATUS.md#mod-configuration-menu-mcm-built-in) | The commands MCM's menu needs; off until it is tried in the game. |
 | 🔨 | [**UI Organizer (UIO)**](docs/STATUS.md#ui-organizer-uio-built-in) | UI mods' HUD and menu additions; off until it is proven in the game. |
-| 🔨 | [**lStewieAl's Tweaks**](docs/STATUS.md#lstewieals-tweaks-built-in) | 105 of its fixes and tweaks, crash fixes first; on by default, each with its own off switch. |
+| 🔨 | [**lStewieAl's Tweaks**](docs/STATUS.md#lstewieals-tweaks-built-in) | 105 of its changes: 67 crash fixes and 38 other fixes and tweaks, on by default; the remaining crash fixes and tweaks come next. |
 | 🔨 | [**Mod installers (FOMOD)**](docs/STATUS.md#mod-installers-fomod) | Mods with an installer, from .zip or .7z, installed into nv-rs's own folder, never the game's. |
 | 🔨 | [**One launcher**](docs/STATUS.md#the-launcher) | `Play.exe` opens a window like the game's terminals to play and change settings; mods move in next. |
-| 🔨 | [**Modern graphics (wgpu)**](docs/STATUS.md#modern-graphics-wgpu) | The default renderer, on Vulkan, close to Direct3D 9's pictures where compared. |
+| 🔨 | [**Modern graphics (wgpu)**](docs/STATUS.md#modern-graphics-wgpu) | The default renderer, on Vulkan; in the places compared, on one NVIDIA card, its pictures nearly match Direct3D 9's, and at 8x antialiasing it is about 8% slower. |
 | 🔨 | [**Game pads**](docs/STATUS.md#game-pads) | Xbox-style pads on Windows as in the original; other pads, and Linux, not yet tried with a real pad. |
 | ⬜ | [**More platforms, co-op, VR**](docs/STATUS.md#more-platforms-co-op-vr) | Planned; co-op has no design yet. |
 
