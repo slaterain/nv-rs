@@ -5671,7 +5671,11 @@ mod tests {
         assert!(far_casts(&at(far, 1.0), ([0.0; 3], 300.0), camera));
         // A bush (radius 100, a texel and a half of the far map): the cascades only.
         assert!(!far_casts(&at(far, 1.0), ([0.0; 3], 100.0), camera));
-        assert!(!far_casts(&at(far, 1.0), ([0.0; 3], FAR_MIN_RADIUS - 1.0), camera));
+        assert!(!far_casts(
+            &at(far, 1.0),
+            ([0.0; 3], FAR_MIN_RADIUS - 1.0),
+            camera
+        ));
         assert!(far_casts(&at(far, 1.0), ([0.0; 3], FAR_MIN_RADIUS), camera));
         // The sky's dome round the camera, placed at it: neither.
         assert!(!far_casts(&at(camera, 1.0), ([0.0; 3], 50_000.0), camera));
@@ -5740,6 +5744,29 @@ mod tests {
     /// the ground slid by up to half a texel at a turn: every shadow edge in the map jumped.
     #[test]
     fn a_ground_point_keeps_its_place_in_its_texel_as_the_sun_turns_far_from_the_origin() {
+        // A farther map's ground lies farther from its centre and its turn limit is larger (its
+        // texels are larger), and the last takes the sun late (one map a frame, the nearest first):
+        // its grid turns by up to 0.2 (third) and 0.43 (last) of a texel there, as a hill's shadow
+        // moves. Each bound is shown to tell the rules apart: counted from the world's grid (the
+        // old rule) the same walk slides the ground past it in every map (review of #813).
+        let most = [0.15, 0.15, 0.3, 0.47];
+        let (worst, turns) = phase_walk(false);
+        let (old, _) = phase_walk(true);
+        eprintln!("worst slide a map {worst:.3?} of a texel, turns {turns:?}; on the world grid {old:.3?}");
+        for k in 0..CASCADES {
+            assert!(turns[k] >= 3, "map {k} took the sun {} times", turns[k]);
+            assert!(
+                worst[k] < most[k],
+                "a ground point slid {worst:?} of a texel"
+            );
+            assert!(old[k] > most[k], "the old rule within the bound: {old:?}");
+        }
+    }
+
+    /// The walk of [`a_ground_point_keeps_its_place_in_its_texel_as_the_sun_turns_far_from_the_origin`]:
+    /// the worst part of a texel a ground point slid by at a turn, and the turns, a map; with
+    /// `world_grid`, every map anchored on the world's grid (as before the anchors).
+    fn phase_walk(world_grid: bool) -> ([f64; CASCADES], [usize; CASCADES]) {
         let s = splits(view().near, FAR);
         // Looking east, level: right (south), up, ahead (east).
         let axes = [[0.0, -1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]];
@@ -5773,6 +5800,9 @@ mod tests {
                     kp.take(to_sun);
                 }
             }
+            if world_grid {
+                anchors = [None; CASCADES];
+            }
             let now = place_cascades(
                 frustum(),
                 &s,
@@ -5781,7 +5811,11 @@ mod tests {
                 &keep,
                 to_sun,
                 turned,
-                &drawn,
+                if world_grid {
+                    &[None; CASCADES]
+                } else {
+                    &drawn
+                },
                 &mut anchors,
             );
             for k in 0..CASCADES {
@@ -5811,16 +5845,48 @@ mod tests {
             }
             azimuth += steps[frame % steps.len()];
         }
-        // A farther map's ground lies farther from its centre and its turn limit is larger (its texels
-        // are larger), and the last takes the sun late (one map a frame, the nearest first): its grid
-        // turns by up to 0.2 (third) and 0.4 (last) of a texel there, as a hill's shadow moves. Counted
-        // from the origin it was any part of a texel in every map.
-        eprintln!("worst slide a map {worst:.3?} of a texel, turns {turns:?}");
-        for k in 0..CASCADES {
-            assert!(turns[k] >= 3, "map {k} took the sun {} times", turns[k]);
-            let most = [0.15, 0.15, 0.3, 0.5][k];
-            assert!(worst[k] < most, "a ground point slid {worst:?} of a texel");
+        (worst, turns)
+    }
+
+    /// The far map keeps the same rule across its turns (review of #813): ground near the camera
+    /// keeps its place in its texels, to a tenth of one, when the far map is placed for a turned
+    /// sun counting from the centre of the map before; counted from the world's grid it slides by
+    /// more at some turn, 39,000 units from the origin.
+    #[test]
+    fn the_far_map_keeps_the_ground_in_its_texels_across_a_turn() {
+        let mut azimuth = 200.0f64;
+        let (mut worst, mut old) = (0.0f64, 0.0f64);
+        let mut before = None::<Cascade>;
+        let mut grid_before = None::<Cascade>;
+        for turn in 0..12 {
+            let position = [-36000.0 + 700.0 * f64::from(turn), 16000.0, 5700.0];
+            let (a, h) = (azimuth.to_radians(), 23f64.to_radians());
+            let b = basis([h.cos() * a.cos(), h.cos() * a.sin(), h.sin()]);
+            let anchor = next_anchor(true, before.as_ref(), before.map(|c| c.anchor));
+            let now = far_place(position, b, anchor);
+            let grid = far_place(position, b, None);
+            if let (Some(was), Some(was_grid)) = (before, grid_before) {
+                for dx in [-1000.0, 0.0, 1000.0] {
+                    for dy in [-1000.0, 0.0, 1000.0] {
+                        let p = [position[0] + dx, position[1] + dy, position[2] - 170.0];
+                        for axis in 0..2 {
+                            let s = texel_place(&now, p, axis) - texel_place(&was, p, axis);
+                            worst = worst.max(sub_texel(s));
+                            let s = texel_place(&grid, p, axis) - texel_place(&was_grid, p, axis);
+                            old = old.max(sub_texel(s));
+                        }
+                    }
+                }
+            }
+            before = Some(now);
+            grid_before = Some(grid);
+            azimuth += [0.011, 0.017, 0.013][turn as usize % 3];
         }
+        eprintln!(
+            "the far map's worst slide at a turn {worst:.3} of a texel, on the world grid {old:.3}"
+        );
+        assert!(worst < 0.1, "{worst}");
+        assert!(old > 0.1, "{old}");
     }
 
     /// The anchor rule itself: kept between turns, the drawn map's centre at a turn, none before

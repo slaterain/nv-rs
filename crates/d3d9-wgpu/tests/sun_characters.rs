@@ -787,14 +787,12 @@ fn a_character_in_the_last_cascade_casts() {
         bar_scale: Some(30.0),
         ..Shot::default()
     }; 3];
-    let pictures = picture_of(false, true, &shots).map(|off| {
-        let on = picture_of(true, true, &shots).expect("the adapter");
-        (off, on)
-    });
-    FAR_VIEW.set(false);
-    let Some((off, on)) = pictures else {
+    // (The far view stays on for the asserts: `pixel` reads the camera. Each test has its own
+    // thread, so it ends with the test.)
+    let Some(off) = picture_of(false, true, &shots) else {
         return;
     };
+    let on = picture_of(true, true, &shots).expect("the adapter");
     let (on, off) = (&on[2], &off[2]);
     // Its foot at (0, 6000); the sun's way puts 3,600 units of height 2,700 toward -x.
     for x in [-700.0, -2000.0] {
@@ -1078,6 +1076,7 @@ fn a_character_not_cast_keeps_the_games_shadow_while_another_casts() {
             bar: Some(([150.0, 300.0, 0.0], [150.0, 300.0, 0.0])),
             bar_blended: true,
             game_shadow: true,
+            bar_scale: None,
         })
         .collect();
     let Some(off) = picture_of(false, true, &shots) else {
