@@ -12,11 +12,15 @@ publish = false
 name = "nv-rs"
 path = "src/main.rs"
 
-# Every dependency is already in the workspace's lock, at the versions and features the workspace
-# uses: d3d9-wgpu's wgpu, engine-platform's winit. The project's own crates read the installed
-# game's archives (bsa), the profile files (game-profile), the mods folders (mod-install) and, on
-# Linux and macOS, where the game and nv-rs's own folder are (game-folders).
+# Every dependency but arboard is already in the workspace's lock, at the versions and features the
+# workspace uses: d3d9-wgpu's wgpu, engine-platform's winit. The project's own crates read the
+# installed game's archives (bsa), the profile files (game-profile), the mods folders (mod-install)
+# and, on Linux and macOS, where the game and nv-rs's own folder are (game-folders). arboard
+# (MIT OR Apache-2.0, approved by the maintainer 2026-11-19) is the system's clipboard for pasting
+# a folder at the prompt: text only (no image support), and on Wayland through the data-control
+# protocol as well as X11.
 [dependencies]
+arboard = { version = "=3.7.0", default-features = false, features = ["wayland-data-control"] }
 bsa = { path = "../bsa" }
 game-profile = { path = "../game-profile" }
 mod-install = { path = "../mod-install" }

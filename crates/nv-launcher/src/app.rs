@@ -80,8 +80,8 @@ pub fn start_screen(place: &Place, card: &Card) -> Screen {
     let mut entries = Vec::new();
     match &place.game {
         None => welcome.push(
-            "Your game was not found yet. Type its folder below, or drop the folder onto this \
-             window, or choose Play to look for it."
+            "Your game was not found yet. Type or paste its folder below, or drop the folder \
+             onto this window, or choose Play to look for it."
                 .to_string(),
         ),
         Some(folder) => {
@@ -492,6 +492,8 @@ struct App {
     /// The window could not be made or drawn in ([`cannot_draw`] said why).
     no_window: bool,
     exit_code: i32,
+    /// The keyboard's Ctrl, Shift, Alt and Command keys now (for the paste key).
+    modifiers: winit::keyboard::ModifiersState,
 }
 
 /// Starts Play's work on a thread of its own with `args` (Play.exe's, or play.sh's on Linux and
@@ -1136,7 +1138,8 @@ impl winit::application::ApplicationHandler<Event> for App {
                 }
                 let mut s = message_screen(&text, &["Back".to_string()]);
                 s.welcome.push(
-                    "Type the folder below and press Enter, or drop it onto this window.".into(),
+                    "Type or paste the folder below and press Enter, or drop it onto this window."
+                        .into(),
                 );
                 self.show(Mode::Folder(Some(reply)), s, true);
             }
@@ -1204,6 +1207,7 @@ impl winit::application::ApplicationHandler<Event> for App {
                 self.request_redraw();
             }
             WindowEvent::RedrawRequested => self.redraw(event_loop),
+            WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
             WindowEvent::DroppedFile(path) => {
                 match &mut self.mode {
                     Mode::Start => self.play(false, Some(path)),
@@ -1243,8 +1247,22 @@ impl winit::application::ApplicationHandler<Event> for App {
                     }
                     Key::Named(NamedKey::Escape) => self.back(event_loop),
                     _ => {
+                        // Ctrl+V (Cmd+V on macOS) pastes the clipboard's line; the key types
+                        // nothing itself. Some systems give Ctrl+V as its control character.
+                        let key = match &event.logical_key {
+                            Key::Character(s) if s.as_str() == "\u{16}" => "v",
+                            Key::Character(s) => s.as_str(),
+                            _ => "",
+                        };
                         if self.takes_typing() {
-                            if let Some(text) = &event.text {
+                            let pasted = crate::paste::on_key(
+                                &mut self.screen.typed,
+                                key,
+                                self.modifiers.control_key(),
+                                self.modifiers.super_key(),
+                                &mut crate::paste::System,
+                            );
+                            if let (false, Some(text)) = (pasted, &event.text) {
                                 self.screen
                                     .typed
                                     .extend(text.chars().filter(|c| !c.is_control()));
@@ -1474,6 +1492,7 @@ pub fn run(raw: Vec<String>) -> i32 {
         retry_at: None,
         no_window: false,
         exit_code: 0,
+        modifiers: winit::keyboard::ModifiersState::empty(),
     };
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("error: {e}");
