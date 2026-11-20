@@ -50,10 +50,10 @@
 //! - `ModelHasBlock`: reads the nodes `InsertNode`/`AttachModel` record (`s_insertNodeMap`) and
 //!   loads a base form's model (`ModelLoader::LoadModel`): waits for those commands and JIP's
 //!   3D-load hooks (stage 3.9 H09/H10).
-//! - `InsertNode`, `AttachModel`, `AttachLight`, `RemoveLight`, `AttachExtraCamera`,
-//!   `ProjectExtraCamera`: JIP's per-reference lists re-applied when 3D reloads (H09/H10), its
-//!   light records and hooks (H03-H07, H12), its camera list. (`AttachLine` keeps no list: built
-//!   in `jip_fn_misc_ref_lines.rs`.)
+//! - `InsertNode`, `AttachModel`, `AttachLight`, `RemoveLight`: JIP's per-reference lists re-applied
+//!   when 3D reloads (H09/H10), its light records and hooks (H03-H07, H12). (`AttachLine` keeps no
+//!   list: built in `jip_fn_misc_ref_lines.rs`; the extra cameras and their list in
+//!   `jip_fn_misc_ref_cameras.rs`.)
 //!
 //! Safety: as `nif_nodes.rs`: every guest word read checked, every walk bounded, every address
 //! sum wrapping; a write to memory that cannot be written is skipped, and the update after it

@@ -12,7 +12,7 @@
 //!   recursive form), `RenameNifBlock`, `RemoveNifBlock`, `SetTextureTransformKey`,
 //!   `PlayAnimSequence`, `SetAnimSequenceFrequency`, `SetRefrModelPath`: the write lane.
 //! - Models, lights, lines and cameras attached into the graph (`AttachLight`, `RemoveLight`,
-//!   `InsertNode`, `AttachModel`, `AttachLine`, `AttachExtraCamera`, `ProjectExtraCamera`) and
+//!   `InsertNode`, `AttachModel`, `AttachLine`; the cameras are built in `jip_fn_misc_ref_cameras.rs`) and
 //!   `ModelHasBlock`, which also reads the nodes `InsertNode`/`AttachModel` record
 //!   (`s_insertNodeMap`) and loads a base form's model (`ModelLoader::LoadModel`): JIP's
 //!   insert-node state and its hooks.
