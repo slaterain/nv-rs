@@ -30,3 +30,24 @@ pub fn world_drawn(e: &mut Engine) {
         f(e);
     }
 }
+
+static DEPTH_CLEAR_SKIPPED: OnceLock<fn(&mut Engine)> = OnceLock::new();
+
+/// Runs `f` at [`depth_clear_skipped`] from now on, in every engine of the run (the first call
+/// wins).
+pub fn install_depth_clear_skipped(f: fn(&mut Engine)) {
+    let _ = DEPTH_CLEAR_SKIPPED.set(f);
+}
+
+/// A second port-added point: the game's depth-only clear before the first-person arms (the
+/// rest of the draw's `0x7148C0` call at `0x8751C6`) is skipped, as JIP's `ToggleDepthClear 0`
+/// asks. The clear is where the platform marks the world as drawn for the new lighting and the
+/// sun shadows (the frame's camera and sun recorded; draws after it neither cast nor take the
+/// sun's shadows), so the frame calls this in its place and the mark stays. Not installed (the
+/// lighting and the shadows off): one load and a branch.
+#[inline]
+pub fn depth_clear_skipped(e: &mut Engine) {
+    if let Some(f) = DEPTH_CLEAR_SKIPPED.get() {
+        f(e);
+    }
+}
