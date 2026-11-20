@@ -116,6 +116,63 @@ fn the_grid_around_a_cell_is_packed_by_column() {
     assert_eq!(got.to_vec(), want);
 }
 
+/// `CalcVtxAlphaBySeenData` in an interior (the player's cell flagged 1, its `ExtraSeenData`
+/// holding the sections): the 17 x 17 alphas by column, each from row 16 down to 0, from the seen
+/// levels. One bit (row 2, column 3) seen makes the four vertices around it level 1 (columns 2 and
+/// 3, rows 1 and 2) and leaves every other at level 0; the buffer is marked not dirty.
+#[test]
+fn an_interiors_vertex_alphas_by_column_from_the_last_row() {
+    let mut e = engine();
+    e.map(AREA, 0x1_0000);
+    crate::commands::test_support::extra_stand_ins(&mut e);
+    if !e.mem.is_mapped(TES) {
+        e.map(TES & !0xfff, 0x1000);
+    }
+    let tes = AREA + 0x8000;
+    e.mem.set_u32(TES, tes);
+    let section0 = int_seen(&mut e, AREA, section(0, 0), false, 0, &[0x23]);
+    let cell = AREA + 0x200;
+    e.mem.set_u8(cell + CELL_FLAGS, 1);
+    let extra = AREA + 0x300;
+    crate::commands::test_support::put_extra(
+        &mut e,
+        cell + CELL_EXTRA,
+        extra,
+        EXTRA_SEEN_DATA,
+        section0,
+    );
+    let data = AREA + 0x400;
+    let (colours, buffer) = (AREA + 0x1000, AREA + 0x500);
+    e.mem.set_u32(data + 0x28, colours);
+    e.mem.set_u32(data + 0x34, buffer);
+    e.mem.set_u32(buffer + 0x20, 1);
+    let mut s = MiniMapState {
+        pc_curr_cell: cell,
+        vertex_alpha: [0.0, 0.25, 0.5, 0.75, 1.0],
+        ..MiniMapState::default()
+    };
+    s.shape_datas[4] = data;
+    s.packed_coords[4] = pack(0, 0);
+    for i in 0..17 * 17 {
+        e.mem.set_f32(colours + 16 * i + 0xc, 9.0);
+    }
+    calc_vtx_alpha_by_seen_data(&mut e, &s, 4);
+    assert_eq!(e.mem.u32(buffer + 0x20), 0);
+    // Vertex (column c, row r) is the alpha at c * 17 + (16 - r).
+    let seen: Vec<u32> = (0..17 * 17u32)
+        .filter(|&i| e.mem.f32(colours + 16 * i + 0xc) != 0.0)
+        .collect();
+    let mut want: Vec<u32> = [(2, 1), (2, 2), (3, 1), (3, 2)]
+        .iter()
+        .map(|&(c, r)| c * 17 + (16 - r))
+        .collect();
+    want.sort_unstable();
+    assert_eq!(seen, want);
+    assert!(want
+        .iter()
+        .all(|&i| e.mem.f32(colours + 16 * i + 0xc) == 0.25));
+}
+
 /// `GetVtxAlphaPtr`: the place times 48 (truncated); shape `3 * (x >> 4) - (y >> 4) + 2`, vertex
 /// `17 * (x & 15) + (y & 15)`, its colour's alpha (+0xC, 16 bytes a colour).
 #[test]
