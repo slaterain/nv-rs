@@ -34,6 +34,8 @@ mod profiles;
 mod screen;
 mod session;
 mod settings;
+mod sound;
+mod sound_files;
 
 use std::path::PathBuf;
 

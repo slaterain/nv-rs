@@ -22,7 +22,7 @@
 //! - [`game`]: the game's classes JIP reads, as layouts.
 //! - [`console`], [`utility`]: JIP's console echo of a command's result and the text helpers it
 //!   uses.
-//! - [`commands`]: JIP's script commands built so far (step 3.6), one module per JIP source file.
+//! - [`commands`]: JIP's script commands (step 3.6), one module per JIP source file.
 //! - [`ui_hooks`]: JIP's UI hooks at their seams (step 3.5a: menu open, close, mouseover and
 //!   click events, location and crafting events, and the hooks behind its interface commands) and
 //!   the twelve commands that set the events.

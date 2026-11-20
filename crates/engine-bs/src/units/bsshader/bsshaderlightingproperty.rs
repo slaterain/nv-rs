@@ -341,7 +341,9 @@ pub fn bs_shader_lighting_property_get_numberof_active_lights(
 
 // Translated from 00b707d0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `BSShaderLightingProperty::GetNumberofActiveNonShadowLights` (Xbox PDB):
-/// the number of non-null active lights whose `bCastShadow` is 0.
+/// the number of non-null active lights whose `bCastShadow` is 0. With JIP LN NVSE's game
+/// patches in (G01, its null check at `0xB707E0`, the row `NV_JIP_GAME_PATCHES`), a light whose
+/// `+0xF8` is null is not counted; the game reads through it.
 pub fn bs_shader_lighting_property_get_numberof_active_non_shadow_lights(
     e: &mut Engine,
     this: Ptr<Lit>,
@@ -351,11 +353,26 @@ pub fn bs_shader_lighting_property_get_numberof_active_non_shadow_lights(
     while node != 0 {
         let light = e.mem.u32(node + 8);
         node = e.mem.u32(node);
-        if light != 0 && is_active(e, light) && e.mem.u8(light + 0xec) == 0 {
+        if light != 0 && is_active_checked(e, light) && e.mem.u8(light + 0xec) == 0 {
             count += 1;
         }
     }
     count
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches ("Adds NULL
+// pointer checks", SAFE_WRITE_BUF(0xB707E0, ...): `test esi, esi; jz` after `mov esi, [ecx+0xF8]`).
+/// [`is_active`] as `00b707d0` tests it: with JIP's fixes in, a null `+0xF8` is not active (the
+/// run-wide patch word, read only on that null path).
+fn is_active_checked(e: &Engine, light: u32) -> bool {
+    if e.mem.u16(light + 0x110) == 0xff {
+        return false;
+    }
+    let data = e.mem.u32(light + 0xf8);
+    if data == 0 && e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        return false;
+    }
+    e.mem.u8(data + 0x30) & 1 == 0
 }
 
 // Translated from 00b713c0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -978,6 +995,43 @@ mod tests {
         let (this, _) = property(&mut e, &lights);
         assert_eq!(e.call(0x00b7_0790, &args![this]).u32(), 2);
         assert_eq!(e.call(0x00b7_07d0, &args![this]).u32(), 1);
+    }
+
+    /// JIP LN NVSE's null check in `00b707d0` (G01, `0xB707E0`): a light whose `+0xF8` is null
+    /// is not counted with JIP's game patches in; the game reads `[0 + 0x30]` (page 0 here, its
+    /// flag clear, so it counts). The other lights count as before either way, and the index
+    /// test still comes first.
+    #[test]
+    fn a_light_without_its_data_is_not_counted_with_jips_fixes() {
+        use engine_core::extend::jip_patches::{FIXES, INSTALLED};
+        let mut e = Engine::new();
+        e.map(0, 0x1000);
+        let bare = light(&mut e, 4, false, false);
+        e.mem.set_u32(bare + 0xf8, 0);
+        let unused = light(&mut e, 0xff, false, false);
+        e.mem.set_u32(unused + 0xf8, 0);
+        let lights = [light(&mut e, 2, false, false), bare, unused];
+        let (this, _) = property(&mut e, &lights);
+        assert_eq!(
+            e.call(0x00b7_07d0, &args![this]).u32(),
+            2,
+            "the game's read"
+        );
+        e.mem.set_u8(0x30, 1);
+        assert_eq!(
+            e.call(0x00b7_07d0, &args![this]).u32(),
+            1,
+            "its flag read at 0x30"
+        );
+        e.mem.set_u8(0x30, 0);
+        e.set_jip_patches(INSTALLED | FIXES);
+        assert_eq!(e.call(0x00b7_07d0, &args![this]).u32(), 1, "JIP's check");
+        e.set_jip_patches(INSTALLED);
+        assert_eq!(
+            e.call(0x00b7_07d0, &args![this]).u32(),
+            2,
+            "JIP's own patches only"
+        );
     }
 
     #[test]

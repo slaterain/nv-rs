@@ -1,4 +1,4 @@
-//! JIP LN NVSE's script commands built so far (the plan's step 3.6), one module per JIP source
+//! JIP LN NVSE's script commands (the plan's step 3.6), one module per JIP source
 //! file (`functions_jip/jip_fn_climate.h` (JIP LN NVSE) is [`jip_fn_climate`], ...), each with
 //! its own list of handlers, and what they share: JIP's helpers for forms, strings and the
 //! game's heap. [`install`] gives each listed command its handler in JIP's table; a JIP command
@@ -832,7 +832,7 @@ mod tests {
     }
 
     /// Each module lists only commands of its own JIP source file, once each, and the count is
-    /// README's ("JIP LN: N of 1,118", read from README.md).
+    /// README's ("JIP LN: N and its two version commands", read from README.md).
     #[test]
     fn each_module_holds_its_own_file() {
         let files = [

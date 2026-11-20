@@ -44,6 +44,12 @@ pub enum Event {
     Card(crate::app::Card),
     /// The clipboard's line for the paste asked as `id` ([`crate::paste::read_later`]).
     Pasted { id: u64, text: Option<String> },
+    /// The terminal's sounds read from the player's game (`crate::sound::load`), and what was
+    /// not found, for the log.
+    Sounds {
+        banks: Vec<(crate::sound_files::Cue, crate::sound::Bank)>,
+        said: Vec<String>,
+    },
 }
 
 /// What a message is, for Windows' message boxes when there is no window (their icon).
