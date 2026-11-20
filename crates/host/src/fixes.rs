@@ -1340,7 +1340,7 @@ pub fn install(e: &mut Engine, choice: &Choice) {
 
 /// The settings file: `NV_SETTINGS` when set; else `settings.ini` beside the program or in the
 /// folder above it (a package has `app\nv-viewer.exe` under the folder with `Play.cmd`). The same
-/// file `Settings.cmd` writes.
+/// file the launcher's Settings screen writes (and older previews' Settings.cmd wrote).
 pub fn settings_file() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("NV_SETTINGS") {
         return Some(PathBuf::from(path));
@@ -1412,7 +1412,7 @@ mod tests {
 
     #[test]
     fn the_settings_file_picks_vanilla_and_the_environment_wins() {
-        let text = "# written by Settings.cmd\nBorderless=1\nPreset=Vanilla\nFrameLimit=120\n";
+        let text = "# written by the launcher\nBorderless=1\nPreset=Vanilla\nFrameLimit=120\n";
         let choice = Choice::from_parts(Some(text), no_env).unwrap();
         assert_eq!(choice.preset, Preset::Vanilla);
         assert_eq!(choice.frame_limit, 120);
