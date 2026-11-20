@@ -667,6 +667,25 @@ mod tests {
             works(&["vk-card"]),
         );
         assert_eq!(r.map(|(_, t)| t), Ok("vk-card"));
+        // Two cards in one API: the built-in one fails, the separate one is taken before any
+        // software adapter.
+        let two = |_: B| -> Listed {
+            Ok((
+                (),
+                vec![
+                    ("built-in", IntegratedGpu),
+                    ("separate", DiscreteGpu),
+                    ("warp", Cpu),
+                ],
+            ))
+        };
+        let mut tried = Vec::new();
+        let r = first_working(&order, two, |c: &(), a: &'static str| {
+            tried.push(a);
+            works(&["separate", "warp"])(c, a)
+        });
+        assert_eq!(r.map(|(_, t)| t), Ok("separate"));
+        assert_eq!(tried, ["built-in", "separate"]);
         // Nothing works: every failure, in order.
         let r = first_working(&order, lists, works(&[]));
         assert_eq!(
