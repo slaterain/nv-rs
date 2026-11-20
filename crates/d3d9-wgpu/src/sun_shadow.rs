@@ -1578,7 +1578,10 @@ impl GeoKey {
 /// kept caster's buffers had a DIFFERENT range of them drawn (an LOD block's other pieces), not only
 /// another copy of the same range at another place (a mesh shared by two objects: review of #844).
 #[derive(Default)]
-pub(crate) struct RangesDrawn(crate::fxhash::Map<([u64; 8], u64), Vec<(u32, u32, i32)>>);
+pub(crate) struct RangesDrawn(crate::fxhash::Map<([u64; 8], u64), Vec<Range>>);
+
+/// A range of a geometry's buffers: its first index, triangle count and base vertex.
+type Range = (u32, u32, i32);
 
 impl RangesDrawn {
     pub fn insert(&mut self, k: &GeoKey) {
