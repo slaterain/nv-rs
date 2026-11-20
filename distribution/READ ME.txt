@@ -31,6 +31,10 @@ only a click does, which works here too); while a screen types, the first key yo
 shows the whole text at once and does nothing else (the game has no such key); with "Frame rate
 limit in menus" set to No limit it types as at 120 frames a second (the game would follow your
 monitor); and it times the typing by its own exact clock where the game's runs in coarser steps.
+It plays the game's own terminal sounds (the fan hum, the typing, the click and the focus
+sound of its entries), read from your installed game, at your game's effects volume; Settings >
+Launcher sounds turns them off. It is silent while its window is minimised or not the one in
+front (as the game pauses), and from the moment you choose Play.
 
 The first start finds your game (Steam, GOG, Epic, or it asks: type the game's folder in the
 launcher or paste it with Ctrl+V, or drop the folder onto its window), checks its version, reads

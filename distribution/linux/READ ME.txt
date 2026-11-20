@@ -48,8 +48,9 @@ What you need
   yours has it.
 - A Linux whose C library (glibc) is as new as the build machine's or newer: see BUILD.txt. Most
   distributions from 2022 on are. The sound library ALSA (libasound.so.2: package libasound2 on
-  Debian and Ubuntu, alsa-lib on Fedora and Arch), which nearly every desktop Linux has. play.sh
-  names any system library the program needs that is missing.
+  Debian and Ubuntu, alsa-lib on Fedora and Arch), which nearly every desktop Linux has; the
+  launcher (nv-rs) needs it to start too. play.sh names any system library the program needs that
+  is missing.
 
 
 What this build can do today
@@ -84,6 +85,8 @@ Start
    runs play.sh for you and shows what it says; type its answers at the launcher's prompt, or
    drop a folder onto its window (Ctrl+V pastes at the prompt). Without a window it goes on in
    the terminal, as ./play.sh.
+   It plays the game's own terminal sounds, read from your installed game (Settings > Launcher
+   sounds turns them off).
    On Wayland its window cannot hide while you play: once the game has run a few seconds it is
    minimised. If the game stops at once, the launcher stays on screen with what went wrong; if it
    stops later, the launcher asks for your attention in the taskbar (Wayland does not let it come
