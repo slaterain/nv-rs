@@ -15,11 +15,11 @@
 //! render thread.
 
 use super::jip_fn_minimap::{
-    cell_markers_freed, children, init_dimensions, init_pos_mods, mini_map, root_map_world, state, tile_set_float,
-    update_tile_scales, world_map_pos_mults, MarkerTile, MiniMapState, CHILDREN, CHILD_COUNT,
-    FLAGS, GAME_FOG_PROPERTY, HUD_MAIN_MENU, INTERIOR_ZOOM, LOCAL_TRANSLATE, MOD_INDEX, REF_EXTRA,
-    REF_POSITION, SHADOW_SCENE_NODE, TES, TES_GRID, TRAIT_DEPTH, TRAIT_USER0, TRAIT_USER1,
-    TRAIT_USER2, VALUE_NUM,
+    cell_markers_freed, children, init_dimensions, init_pos_mods, mini_map, root_map_world, state,
+    tile_set_float, update_tile_scales, world_map_pos_mults, MarkerTile, MiniMapState, CHILDREN,
+    CHILD_COUNT, FLAGS, GAME_FOG_PROPERTY, HUD_MAIN_MENU, INTERIOR_ZOOM, LOCAL_TRANSLATE,
+    MOD_INDEX, REF_EXTRA, REF_POSITION, SHADOW_SCENE_NODE, TES, TES_GRID, TRAIT_DEPTH, TRAIT_USER0,
+    TRAIT_USER1, TRAIT_USER2, VALUE_NUM,
 };
 use super::jip_fn_minimap_fog::{
     calc_vtx_alpha_by_seen_data, do_selective_fow_update, pack_curr_grid_coords, vtx_alpha_ptr,
@@ -1012,6 +1012,13 @@ fn draw_exterior(e: &mut Engine, s: &mut MiniMapState, update_tiles: bool, nw: [
         let plane = e.mem.u32(planes + 4 * i);
         hide(e, plane);
     }
+    purge_rendered_exteriors(e, s);
+}
+
+/// Above [`CACHED_TEXTURES_MAX`] kept exterior maps, the oldest (from JIP's first texture on, in
+/// the game's texture list's order) let go down to [`CACHED_TEXTURES_MIN`], under the list's
+/// critical section; the first texture is then the one after the last let go.
+fn purge_rendered_exteriors(e: &mut Engine, s: &mut MiniMapState) {
     if s.rendered_exteriors.len() > CACHED_TEXTURES_MAX {
         let mut purge = s.rendered_exteriors.len() - CACHED_TEXTURES_MIN;
         let mut curr = s.mm_first_texture;
