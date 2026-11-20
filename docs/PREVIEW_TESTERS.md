@@ -22,7 +22,7 @@ through, that is a useful result too: tell us which.
 6. Exit Game from the menu. Start `Play.exe` again: this second start should take a moment only.
    Does Continue load your save?
 7. Optional, if you have saves of your own: run `Import my saves.cmd`, then Continue or Load one.
-8. Optional: run `Settings.cmd`, change the resolution or Window, and start again.
+8. Optional: in Play.exe, open `> Settings`, change the resolution or Window, and start again.
 9. Optional, a regular `.esp` mod: put it in the `mods` folder and start `Play with mods.cmd`.
 
 ## Special setups, if you have one

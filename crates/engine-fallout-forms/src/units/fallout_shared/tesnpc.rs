@@ -2954,18 +2954,29 @@ pub fn tesnpc_init_worn(e: &mut Engine, this: Ptr<TESNPC>, actor: Ptr, biped: Pt
 /// logged. A biped model list (`00475020`) then has each of its models
 /// added the same way. Always true.
 ///
-/// `_unused_1` is a word the exe never reads.
+/// `actor` (the actor the item is worn by, as its callers pass it) is a word the exe never
+/// reads; JIP LN's G93 does.
 pub fn tesnpc_init_worn_object(
     e: &mut Engine,
     this: Ptr<TESNPC>,
-    _unused_1: Ptr,
+    actor: Ptr,
     biped: Ptr,
     item: Ptr,
 ) -> bool {
     let female = e.get(this, TESNPC::iActorBaseFlags) & 1 != 0;
     let model = e.call(0x0048_0db0, &args![item]).u32();
     if e.call(GET_FORM_TYPE, &args![item]).u32() == 0x28 {
-        e.call(0x004a_b400, &args![biped, item, 0u32]);
+        // JIP LN's G93 (a fix row, `WriteRelJump(0x6061D9, InitWornObjectHook)`): the handler
+        // answers the mod flags of the weapon the actor holds, which the weapon slot gets in
+        // place of the exe's 0. Words: the actor, the biped,
+        // the weapon.
+        let flags = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+            e.site(0x0060_61d9, &[actor.addr(), biped.addr(), item.addr()])
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        e.call(0x004a_b400, &args![biped, item, flags]);
     } else if model != 0 {
         e.call(0x0048_0bd0, &args![model, biped, female, u32::MAX]);
     } else {
@@ -3922,7 +3933,19 @@ pub fn fn_00609220(e: &mut Engine, this: Ptr<TESNPC>, buffer: Ptr) {
         follows_race = true;
     }
     if change_flag_set(e, 0x0042_8110, buffer, 0x200_0000) {
-        let race = load_form_cast(e, buffer, TYPE_TES_RACE);
+        // lStewieAl's Tweaks' row S0049 (`patchFixUnresolvedRaceCrash`, the lookup at `0x60936F`): a
+        // race the save names that is not found is CaucasianVanilla (`0x19`), then cast as before.
+        let id = e.call(0x0086_48a0, &args![buffer]).u32();
+        let mut form = e.call(LOOKUP_FORM, &args![id]).u32();
+        if form == 0 && e.stewie(engine_core::extend::stewie::UNRESOLVED_RACE) {
+            form = e.call(LOOKUP_FORM, &args![0x19u32]).u32();
+        }
+        let race = e
+            .call(
+                RT_DYNAMIC_CAST,
+                &args![form, 0u32, TYPE_TES_FORM, TYPE_TES_RACE, 0u32],
+            )
+            .u32();
         if race
             != typed_call!(
                 leaf::FAMILY,
@@ -4864,8 +4887,19 @@ pub fn tesnpc_activate(
         if e.vcall(target_process, 0x610, &args![]).u32() != 0 {
             return false;
         }
-        let activator_process = process_of(e, activator);
-        let activator_state = e.vcall(activator_process, 0x27c, &args![]).u32();
+        // lStewieAl's Tweaks' row S0199.05 (`MiscCrashFixes`, the call at `0x607A7D`): no activating
+        // actor, or one with no process, has state 0.
+        let guarded = e.stewie(engine_core::extend::stewie::NPC_ACTIVATE_NULL_PROCESS);
+        let activator_process = if guarded && activator == 0 {
+            0
+        } else {
+            process_of(e, activator)
+        };
+        let activator_state = if guarded && activator_process == 0 {
+            0
+        } else {
+            e.vcall(activator_process, 0x27c, &args![]).u32()
+        };
         let target_state = e.vcall(target_process, 0x27c, &args![]).u32();
         let activation = Activation {
             this,
@@ -5010,7 +5044,13 @@ impl Activation {
     fn at_00607c8b(&self, e: &mut Engine) -> bool {
         let player = Self::player(e);
         let (a, t) = (self.activator, self.target);
-        if e.call(0x0056_6950, &args![t]).bool() && self.activator_ref == player {
+        // Seam: JIP's G54 answers in place of the teammate test at `0x607C8E` (words: the actor; an
+        // answer is the test's).
+        let teammate = match e.site(0x0060_7c8e, &[t]) {
+            Some(answer) => answer & 0xff != 0,
+            None => e.call(0x0056_6950, &args![t]).bool(),
+        };
+        if teammate && self.activator_ref == player {
             if e.call(0x0075_4d90, &args![t]).bool() {
                 self.queue_menu(e, 8, self.target_ref, 0, 0, 0);
             }
@@ -9730,6 +9770,46 @@ mod tests {
         assert_eq!(calls(&mut e, 0x004b_f220), vec![vec![actor]]);
     }
 
+    /// JIP LN's G93 seam at `0x6061D9` (a fix row): asked with the actor, the biped and the
+    /// weapon; its answer is the mod flags `004ab400` gets (the exe's 0); only with the fix row's
+    /// bit; no answer is the exe's 0; not asked for an item that is not a weapon.
+    #[test]
+    fn init_worn_object_asks_jip_g93_for_the_weapons_flags() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        thread_local! {
+            static SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+            static ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(Some(5)) };
+        }
+        fn handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+            SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+            ANSWER.with(|c| c.get())
+        }
+        let mut e = world();
+        let this = new_npc(&mut e);
+        let biped = e.mem.alloc(0x400);
+        let weapon = e.mem.alloc(0x20);
+        e.mem.set_u8(weapon + 4, 0x28);
+        let actor = e.mem.alloc(0x20);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0060_61d9), handler);
+        let run = |e: &mut Engine, item: u32| {
+            started(e);
+            e.call(0x0060_61b0, &args![this, actor, biped, item]);
+            calls(e, 0x004a_b400)
+        };
+        e.set_jip_patches(jip_patches::INSTALLED);
+        assert_eq!(run(&mut e, weapon), vec![vec![biped, weapon, 0]]);
+        assert!(SEEN.with(|s| s.take()).is_empty(), "only FIXES asks");
+        e.set_jip_patches(jip_patches::FIXES);
+        assert_eq!(run(&mut e, weapon), vec![vec![biped, weapon, 5]]);
+        assert_eq!(SEEN.with(|s| s.take()), vec![vec![actor, biped, weapon]]);
+        ANSWER.with(|c| c.set(None));
+        assert_eq!(run(&mut e, weapon), vec![vec![biped, weapon, 0]]);
+        SEEN.with(|s| s.take());
+        let item = e.mem.alloc(0x20);
+        run(&mut e, item);
+        assert!(SEEN.with(|s| s.take()).is_empty(), "not a weapon");
+    }
+
     #[test]
     fn init_worn_object_adds_models_by_form_type_and_walks_model_lists() {
         let mut e = world();
@@ -10954,6 +11034,61 @@ mod tests {
         assert!(calls(&mut w.e, 0x006e_cd40).is_empty());
     }
 
+    /// lStewieAl's Tweaks' row S0049 (`patchFixUnresolvedRaceCrash`, the lookup at `0x60936F`): a save
+    /// whose race id is not found: the exe sets no race (the NPC crashes later); with the row the race
+    /// is CaucasianVanilla (`0x19`). The original race's lookup is not changed.
+    #[test]
+    fn s0049_a_saved_race_that_is_not_found() {
+        for on in [false, true] {
+            let mut w = save_load_world(0x200_0000, 0);
+            let old_race = w.e.mem.alloc(0x600);
+            let caucasian = w.e.mem.alloc(0x600);
+            w.e.mem.set_f32(old_race + 0x60, 1.0);
+            w.e.mem.set_u32(w.npc.addr() + COMPONENT_RACE + 4, old_race);
+            // A height of its own: the new race's height is not read.
+            w.e.set(w.npc, TESNPC::fHeight, 1.5);
+            w.e.register_double(LOOKUP_FORM, move |_, a| {
+                ret(match a[0] {
+                    0x0dea_d000 | 0x0dea_d001 => 0,
+                    0x19 => caucasian,
+                    id => id,
+                })
+            });
+            w.e.set_stewie(engine_core::extend::stewie::UNRESOLVED_RACE, on);
+            w.ids.borrow_mut().extend([0x0dea_d000, 0x0dea_d001]);
+            started(&mut w.e);
+            w.e.call(0x0060_9220, &args![w.npc, w.buffer]);
+            let race = w.e.mem.u32(w.npc.addr() + COMPONENT_RACE + 4);
+            assert_eq!(race, if on { caucasian } else { 0 }, "row {on}");
+            assert_eq!(w.e.get(w.npc, TESNPC::pOriginalRace), Ptr::NULL);
+        }
+    }
+
+    /// Row S0049 with the saved race found (ordinary input): the same race with the row off and on.
+    #[test]
+    fn s0049_row_on_with_the_saved_race_found_changes_nothing() {
+        let mut races = vec![];
+        for on in [false, true] {
+            let mut w = save_load_world(0x200_0000, 0);
+            let old_race = w.e.mem.alloc(0x600);
+            let new_race = w.e.mem.alloc(0x600);
+            w.e.mem.set_f32(old_race + 0x60, 1.0);
+            w.e.mem.set_f32(new_race + 0x60, 2.0);
+            w.e.mem.set_u32(w.npc.addr() + COMPONENT_RACE + 4, old_race);
+            w.e.set(w.npc, TESNPC::fHeight, 1.0);
+            w.e.set_stewie(engine_core::extend::stewie::UNRESOLVED_RACE, on);
+            w.ids.borrow_mut().extend([new_race, 0x3003]);
+            started(&mut w.e);
+            w.e.call(0x0060_9220, &args![w.npc, w.buffer]);
+            races.push((
+                w.e.mem.u32(w.npc.addr() + COMPONENT_RACE + 4),
+                w.e.get(w.npc, TESNPC::fHeight),
+            ));
+            assert_eq!(races[races.len() - 1].0, new_race);
+        }
+        assert_eq!(races[0].1, races[1].1);
+    }
+
     #[test]
     fn load_applies_the_face_and_reports_what_changed() {
         // A new alternate coordinate with one changed element.
@@ -11665,6 +11800,50 @@ mod tests {
         }
     }
 
+    /// lStewieAl's Tweaks' row S0199.05 (`MiscCrashFixes`, the call at `0x607A7D`): an NPC activated by
+    /// a reference that is not an actor, and by an actor with no process: the exe asks the missing
+    /// process for its state and stops; with the row the state is 0 and the activation goes on.
+    #[test]
+    fn s0199_05_an_activator_with_no_process() {
+        for not_an_actor in [true, false] {
+            for on in [false, true] {
+                let mut w = activate_world();
+                if not_an_actor {
+                    let activator = w.activator;
+                    w.e.register_double(RT_DYNAMIC_CAST, move |_, a| {
+                        ret(if a[0] == activator { 0 } else { a[0] })
+                    });
+                } else {
+                    w.e.mem.set_u32(w.activator + 0x68, 0);
+                }
+                w.e.set_stewie(engine_core::extend::stewie::NPC_ACTIVATE_NULL_PROCESS, on);
+                started(&mut w.e);
+                let run =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| w.activate(0, 0)));
+                w.e.call_stack.clear();
+                assert_eq!(run.is_ok(), on, "not an actor {not_an_actor}, row {on}");
+                if on {
+                    assert!(calls(&mut w.e, slot(ACT_ACTIVATOR_PROCESS, 0x27c)).is_empty());
+                }
+            }
+        }
+    }
+
+    /// Row S0199.05 with an activating actor that has its process (ordinary input): the same calls and
+    /// answer with the row off and on.
+    #[test]
+    fn s0199_05_row_on_with_an_activator_process_changes_nothing() {
+        let mut runs = vec![];
+        for on in [false, true] {
+            let mut w = activate_world();
+            w.e.set_stewie(engine_core::extend::stewie::NPC_ACTIVATE_NULL_PROCESS, on);
+            started(&mut w.e);
+            let answer = w.activate(0, 0);
+            runs.push((answer, w.e.call_log.take()));
+        }
+        assert_eq!(runs[0], runs[1]);
+    }
+
     #[test]
     fn activate_refuses_what_is_not_a_live_actor_with_a_free_process() {
         // Dead or disabled (virtual 0x2e8).
@@ -11788,6 +11967,22 @@ mod tests {
         w.e.call_log = Some(vec![]);
         assert!(!w.activate(0, 0));
         assert!(calls(&mut w.e, 0x0070_9470).is_empty());
+    }
+
+    /// The seam at `0x607C8E` (JIP's G54): an answer replaces the teammate test (`00566950` is
+    /// not called); 0 keeps the companion wheel shut.
+    #[test]
+    fn activate_the_wheel_test_seam() {
+        let mut w = activate_world();
+        w.e.set_global(PLAYER_SINGLETON, w.activator);
+        returns(&mut w.e, 0x0056_6950, 1);
+        returns(&mut w.e, 0x0075_4d90, 1);
+        started(&mut w.e);
+        w.e.on_site_for_test(0x0060_7c8e, |_, _| Some(0));
+        w.e.call_log = Some(vec![]);
+        w.activate(0, 0);
+        assert!(calls(&mut w.e, 0x0056_6950).is_empty());
+        assert!(calls(&mut w.e, 0x0070_9470).iter().all(|c| c[0] != 8));
     }
 
     #[test]

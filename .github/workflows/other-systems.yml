@@ -1,16 +1,28 @@
 name: Other systems
 # Linux and macOS (Apple silicon): the play build compiles there and the unit tests run there. The game
-# does not run on either yet: the host refuses to start it there, naming what is still Windows-only.
-# Nothing here is a check of play.
+# starts on both (Linux x86-64 is played by volunteers; Apple silicon has not been started with the
+# game yet). Nothing here is a check of play.
+#
+# Since 2026-11-17 no new code is written for one system only (AGENTS.md, "Every system from the
+# start"): the Linux job therefore runs on EVERY pull request, so a change that does not build or
+# pass its tests on Linux is seen before it merges.
 #
 # Its own workflow, so CI's Windows job (ci.yml, "check") is untouched. These jobs take runners
 # from the account's shared limit (20 jobs at a time, 5 of them macOS), and the Windows job's runs
-# are long, so they run only where they cannot crowd it out during a burst of pull requests:
-# - Linux: on pushes to main, on pull requests labelled "other-systems", and by hand.
+# are long. Linux on every pull request is taken on purpose (one slot for about 20 minutes a push:
+# a large burst of pull requests can delay Windows checks, never cancel them); macOS stays on the
+# label and nightly to keep its 5 slots free:
+# - Linux: on pushes to main, on every pull request, and by hand.
 # - macOS: on pull requests labelled "other-systems", by hand, and once a night (not on every push
 #   to main: it takes about half an hour with two compilers).
-# A pull request without the label runs neither; the Windows job runs as before on every one.
-# Adding another label to a labelled pull request starts nothing.
+# A pull request without the label runs the Linux job only; the Windows job runs as before on every
+# one. A pull request that touches what differs by system (files, windows, input, sound, drawing,
+# the launcher, packaging) carries the label, so the macOS job runs too.
+# Adding another label to a labelled pull request starts nothing and cancels nothing: the run it
+# creates has both jobs skipped, and the concurrency groups are the jobs' own (below), which a job
+# joins when it is queued (GitHub's documentation: a job "is queued" into its group); a skipped job
+# is never queued. A newer push to a pull request cancels that pull request's older jobs; on main,
+# each commit and event (push, nightly, by hand) keeps its own jobs to the end.
 #
 # This workflow is not a required check. A Linux failure turns its run red. The macOS job is
 # continue-on-error for now (its job shows red, the run does not). The tests known to fail on these
@@ -26,10 +38,6 @@ on:
     - cron: '17 3 * * *'
 permissions:
   contents: read
-concurrency:
-  # The event in the group: the nightly run on main must not cancel the push run of the same commit.
-  group: other-systems-${{ github.event_name }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
-  cancel-in-progress: true
 env:
   CARGO_INCREMENTAL: 0
   CARGO_PROFILE_DEV_DEBUG: 0
@@ -39,16 +47,21 @@ jobs:
     if: >-
       (github.event_name == 'push') ||
       (github.event_name == 'workflow_dispatch') ||
-      (github.event_name == 'pull_request' &&
-       contains(github.event.pull_request.labels.*.name, 'other-systems') &&
-       (github.event.action != 'labeled' || github.event.label.name == 'other-systems'))
+      (github.event_name == 'pull_request' && github.event.action != 'labeled')
     runs-on: ubuntu-latest
+    concurrency:
+      group: other-systems-linux-${{ github.ref == 'refs/heads/main' && format('{0}-{1}', github.event_name, github.sha) || github.ref }}
+      cancel-in-progress: true
     # Measured 20 min on d358058b4 (run 43823529317, cold cache): three times that.
     timeout-minutes: 60
     env:
       CARGO_BUILD_JOBS: 4
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # The sound device's library (cpal's ALSA backend, ds-mix sound_out.rs): alsa-sys
+      # links libasound and finds it with pkg-config at build time.
+      - name: Install ALSA's development files
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev pkg-config
       - name: Install the pinned Rust tools (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -71,6 +84,24 @@ jobs:
           cargo test --locked --no-fail-fast --workspace --exclude engine || failed=1
           cargo test --locked --no-fail-fast -p engine --lib || failed=1
           exit $failed
+      # play.sh (distribution/unix) reads `nv-viewer --find`'s fields with a decoder of its own:
+      # checked here against the program's own escaping, under this runner's sh (dash) and bash,
+      # named so a run that skipped it shows; play.sh's test with the real program built above
+      # (NV_RS_REAL_PROGRAM: it takes and refuses the same game folders as the test's stand-in,
+      # and ends with its own status for the expected stop); and the package checker's own tests
+      # (a workspace of its own, scripts/package-check, which the step above does not build).
+      # play.sh's test under every shell, with the stand-in only, is its own workflow (play-sh.yml).
+      - name: Check play.sh's decoder, play.sh with the real program, and the package checker
+        if: ${{ !cancelled() }}
+        run: |
+          failed=0
+          cargo test --locked -p game-folders --lib -- --exact tests::play_sh_decodes_every_name_escape_wrote 2>&1 | tee decode.log || failed=1
+          grep -q "test result: ok. 1 passed" decode.log || failed=1
+          NV_RS_REAL_PROGRAM="$PWD/target/play/nv-viewer" SH=dash sh distribution/unix/test-play.sh 2>&1 | tee play.log || failed=1
+          grep -q "^PASS 24 " play.log || failed=1
+          grep -q "^fails: 0" play.log || failed=1
+          cargo test --locked --manifest-path scripts/package-check/Cargo.toml || failed=1
+          exit $failed
   macos:
     name: other systems (macos-latest)
     if: >-
@@ -80,6 +111,9 @@ jobs:
        contains(github.event.pull_request.labels.*.name, 'other-systems') &&
        (github.event.action != 'labeled' || github.event.label.name == 'other-systems'))
     runs-on: macos-latest
+    concurrency:
+      group: other-systems-macos-${{ github.ref == 'refs/heads/main' && format('{0}-{1}', github.event_name, github.sha) || github.ref }}
+      cancel-in-progress: true
     # Allowed to fail for now: Apple silicon's known differences are being fixed one step at a time
     # (the processor's estimates, the software x87 path, the NaN sign, Metal); a failure shows on
     # the job without turning the run red.
@@ -102,14 +136,16 @@ jobs:
         run: cargo build --locked --profile play -p nv-viewer
       # A shorter list than Linux's, for the runner's time and memory: the crates with this
       # system's own code (the memory, the clock, the files, the processor arms of the x87 helpers,
-      # Havok and D3DX, the Metal device) and the small ones. Left out for now: the engine part
-      # crates (engine-gamebryo, -bs, -speedtree, -typed, the twelve engine-fallout-*), engine,
-      # nvse, jip, uio, nvinspect, play-patch and the viewer: their test builds are the largest,
-      # and Linux runs them.
+      # Havok and D3DX, the Metal device), JIP and UIO (their quick-estimate arms: Linux's runner
+      # is x86-64, so only this job runs those arms) and the small ones. Left out for now: the
+      # engine part crates (engine-gamebryo, -bs, -speedtree, -typed, the twelve engine-fallout-*),
+      # engine, nvse, nvinspect, play-patch and the viewer: their test builds are the largest, and
+      # Linux runs them.
       - name: Test the crates
         if: ${{ !cancelled() }}
         run: >
           cargo test --locked --no-fail-fast
-          -p engine-core -p engine-platform -p engine-havok -p host
+          -p engine-core -p engine-platform -p ds-mix -p engine-havok -p host
           -p d3d9-wgpu -p d3d9-stream -p d3dx-tex -p frame-model
-          -p esm -p bsa -p fos -p mp3 -p vorbis -p bink
+          -p esm -p bsa -p fos -p mp3 -p vorbis -p bink -p game-folders
+          -p jip -p uio -p fomod -p mod-archive -p mod-install -p mod-chooser

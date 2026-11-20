@@ -129,7 +129,8 @@ fn weapon_type(e: &mut Engine, weapon: u32) -> u32 {
 /// types 10 and 11 use the projectile's damage times the setting instead
 /// (jam index 10), types 3 to 9, 12 and above 13 read the clip size
 /// (`004fe160`). The skill (`skill_override`, or the actor's weapon skill
-/// value) scales it, entry point 0 adjusts it when `use_perks`. The rate is
+/// value) scales it, entry point 0 adjusts it when `use_perks` (always with
+/// JIP LN's `uNPCPerks`, seam `0x64570F`). The rate is
 /// the clip size over the shots per second plus the reload time (jam
 /// multiplier times the clip, `006477b0`/`00645ce0`; not for types 10, 11
 /// and 13), plus the attack time (`00645cc0`) when the clip is within the
@@ -300,7 +301,13 @@ pub fn fn_00645380(
             let factor = x87_add(x87_mul(scale, x87_m32(skill)), base);
             damage = x87_store32(x87_mul(factor, x87_m32(damage)));
         }
-        if use_perks != 0 {
+        // JIP LN's O18 (`uNPCPerks`: `SafeWrite32(0x64570F, 0x401F0F)`, the test and jump
+        // nop'd): an answer runs the entry point though the caller did not ask for perks (only
+        // asked then). Words: the actor.
+        let jip_perks = use_perks == 0
+            && e.jip_patches() & engine_core::extend::jip_patches::NPC_PERKS != 0
+            && e.site(0x0064_570f, &[actor]).is_some();
+        if use_perks != 0 || jip_perks {
             damage = e.with_stack(4, |e, slot| {
                 e.mem.set_u32(slot.addr(), damage);
                 e.call(HANDLE_ENTRY_POINT, &args![0u32, actor, weapon, actor, slot]);
@@ -669,6 +676,70 @@ mod tests {
         let total = x87_store32(4.0 * (0.05f32 as f64 * 30.0 + 20.0));
         let expected = x87_store32(x87_div(f64::from(f32::from_bits(total)), x87_m32(rate)));
         assert_eq!((result as f32).to_bits(), expected);
+    }
+
+    thread_local! {
+        static O18_ASKED: std::cell::RefCell<Vec<Vec<u32>>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+        static O18_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn at_weapon_damage_perks(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        O18_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        O18_ANSWER.with(std::cell::Cell::get)
+    }
+
+    /// JIP's O18 seam at `0x64570F`: without perks asked, the entry point 0 runs only with the
+    /// switch's bit and the handler's answer; asked with the actor; with perks asked it is not
+    /// asked (the entry point runs as in the exe).
+    #[test]
+    fn jip_o18_runs_the_damage_entry_point_always() {
+        use engine_core::extend::jip_patches;
+        let run = |word: u32, answer: Option<u32>, use_perks: u8| {
+            let (mut e, actor) = engine(false);
+            let weapon = weapon(&mut e);
+            e.register(HANDLE_ENTRY_POINT, |_, _| Ret::default());
+            e.on_site_for_test(0x0064_570f, at_weapon_damage_perks);
+            O18_ASKED.with(|s| s.borrow_mut().clear());
+            O18_ANSWER.with(|c| c.set(answer));
+            e.set_jip_patches(word);
+            e.call_log = Some(vec![]);
+            e.call(
+                0x0064_5380,
+                &args![
+                    actor + 0xa4,
+                    weapon,
+                    1.0f32,
+                    use_perks,
+                    0u32,
+                    0u8,
+                    0u8,
+                    50i32,
+                    0f32,
+                    0f32,
+                    0u8,
+                    0u8,
+                    0u32
+                ],
+            );
+            let asked = O18_ASKED.with(|s| s.take());
+            let entry: Vec<u32> = calls_to(&e, HANDLE_ENTRY_POINT)
+                .iter()
+                .map(|w| w[0])
+                .collect();
+            (asked, entry, actor)
+        };
+        let off = jip_patches::INSTALLED | jip_patches::FIXES | jip_patches::NPC_WEAPON_MODS;
+        let (asked, entry, _) = run(off, Some(1), 0);
+        assert!(asked.is_empty() && entry.is_empty(), "the bit off");
+        let (asked, entry, actor) = run(jip_patches::NPC_PERKS, None, 0);
+        assert_eq!(asked, vec![vec![actor]]);
+        assert!(entry.is_empty(), "no answer: the exe's test");
+        let (_, entry, _) = run(jip_patches::NPC_PERKS, Some(1), 0);
+        assert_eq!(entry, vec![0], "an answer: the entry point 0 runs");
+        let (asked, entry, _) = run(jip_patches::NPC_PERKS, Some(1), 1);
+        assert!(asked.is_empty(), "perks asked: not asked");
+        assert_eq!(entry, vec![0]);
     }
 
     #[test]

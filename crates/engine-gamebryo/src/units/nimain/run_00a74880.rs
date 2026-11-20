@@ -50,23 +50,12 @@ pub fn fn_00a74d80(e: &mut Engine, value: u32) {
 /// `011f4a58`: the word the CPU probe keeps its last answer in.
 const FEATURE_WORD: u32 = 0x011f_4a58;
 
-/// The `CPUID` instruction on the host (`None` where the host has none: the exe's
-/// exception handlers then run).
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+/// The `CPUID` instruction on the host (`engine_core::processor::host_cpuid`: the real
+/// instruction on x86 and x86-64; on a machine without it, Apple silicon, the fixed answer of an
+/// x86-64 PC, decision 3 of the Linux and macOS track, so the probe chooses the mode such a PC
+/// gives, 6). `None` would be an instruction that faults: the exe's exception handlers then run.
 fn host_cpuid(leaf: u32) -> Option<[u32; 4]> {
-    #[cfg(target_arch = "x86")]
-    use std::arch::x86::__cpuid;
-    #[cfg(target_arch = "x86_64")]
-    use std::arch::x86_64::__cpuid;
-    // SAFETY: CPUID is available on every x86 CPU the game runs on.
-    #[allow(unused_unsafe)] // an unsafe fn on the MSRV (1.75), safe on newer toolchains
-    let answer = unsafe { __cpuid(leaf) };
-    Some([answer.eax, answer.ebx, answer.ecx, answer.edx])
-}
-
-#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
-fn host_cpuid(_leaf: u32) -> Option<[u32; 4]> {
-    None
+    engine_core::processor::host_cpuid(leaf)
 }
 
 /// The body of `00a74a10` with the `CPUID` instruction given as `cpuid(EAX)`, answering
@@ -432,6 +421,30 @@ mod probe_tests {
             assert_eq!(feature, features);
             assert_eq!(leaves, vec![0x8000_0000, 1]);
         }
+    }
+
+    /// A machine without `CPUID` is given an x86-64 PC's answer (`engine_core::processor`): the
+    /// probe takes mode 6, as on players' PCs; and leaf 1 alone (were the extended leaf
+    /// refused) would still give the PC's mode 5.
+    #[test]
+    fn the_fixed_answer_without_cpuid_gives_a_pcs_mode() {
+        let mut e = Engine::new();
+        e.map(0x011f_4000, 0x1000);
+        probe_cpu(&mut e, engine_core::processor::fixed_cpuid);
+        assert_eq!(e.mem.u32(MODE_WORD), 6);
+        let leaf_1 = engine_core::processor::fixed_cpuid(1).unwrap()[3];
+        let (mode, _, _) = probe(Some(0x7fff_ffff), None, Some(leaf_1));
+        assert_eq!(mode, 5);
+    }
+
+    /// The probe as the exe runs it, with this machine's answer: mode 6 on every x86-64 PC and,
+    /// through the fixed answer, on a machine without `CPUID`.
+    #[test]
+    fn this_machine_gives_mode_six() {
+        let mut e = Engine::new();
+        e.map(0x011f_4000, 0x1000);
+        fn_00a74a10(&mut e);
+        assert_eq!(e.mem.u32(MODE_WORD), 6);
     }
 
     #[test]

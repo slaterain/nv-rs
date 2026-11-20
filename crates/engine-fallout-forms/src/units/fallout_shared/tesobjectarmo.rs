@@ -160,7 +160,10 @@ pub fn tes_object_armo_init_item(e: &mut Engine, this: Ptr) {
     let has_list = e.mem.u8(base + 0x18c) != 0;
     if !has_list && e.mem.u32(base + 0x188) != 0 {
         let id = e.mem.u32(base + 0x188);
-        let form = e.call(LOOKUP_FORM, &args![id]).u32();
+        let form = match sound_form_seam(e, 0x0051_2f3d, id, base) {
+            Some(form) => form,
+            None => e.call(LOOKUP_FORM, &args![id]).u32(),
+        };
         e.mem.set_u32(base + 0x188, form);
     } else if has_list && e.mem.u32(base + 0x188) != 0 {
         let mut node = e.mem.u32(base + 0x188);
@@ -174,12 +177,29 @@ pub fn tes_object_armo_init_item(e: &mut Engine, this: Ptr) {
             node = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, node));
             if e.mem.u32(entry) != 0 {
                 let id = e.mem.u32(entry);
-                let form = e.call(LOOKUP_FORM, &args![id]).u32();
+                let form = match sound_form_seam(e, 0x0051_2faf, id, base) {
+                    Some(form) => form,
+                    None => e.call(LOOKUP_FORM, &args![id]).u32(),
+                };
                 e.mem.set_u32(entry, form);
             }
         }
     }
     e.call(SET_FORM_FLAG_8, &args![this, true]);
+}
+
+/// The two calls of `004839c0` in [`tes_object_armo_init_item`] (`0x512F3D`: the `TNAM` sound
+/// template's id at `+0x188`; `0x512FAF`: each `SNAM` entry's sound id): the exe looks the id up
+/// as the file wrote it. JIP LN NVSE's G57 (a fix, the row `NV_JIP_GAME_PATCHES`) calls its
+/// `InitArmorFormHook` at both (the id resolved through the armour's last file's master list
+/// first): the seam at `site` answers the form in place of the call, asked with the id and the
+/// armour. With the word's `FIXES` bit clear: one load, then none (the call).
+#[inline]
+fn sound_form_seam(e: &mut Engine, site: u32, id: u32, armour: u32) -> Option<u32> {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        return e.site(site, &[id, armour]);
+    }
+    None
 }
 
 // Translated from 00512fd0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -683,6 +703,147 @@ mod tests {
         assert_eq!(e.mem.u32(entries[2]), 0x1007);
         assert_eq!(e.mem.u32(entries[3]), 9);
         assert_eq!(e.mem.u32(this + 0x188), nodes);
+    }
+
+    /// Where G57's test handler counts its calls, keeps the words it was asked with (site,
+    /// id, armour; up to four) and reads its answer (`+0x40` 1 = some, the form is id + 0x2000).
+    const G57_ASKED: u32 = 0x0536_0000;
+
+    /// An armour ready for [`tes_object_armo_init_item`] (as in
+    /// [`init_item_resolves_the_template_or_the_list`]) with G57's two seams (JIP LN NVSE step
+    /// 3.9 GF) handled by a test handler, the word `word` and the exe's lookup answering id +
+    /// 0x1000. With `list`: the `SNAM` list of the ids 5 and 7, else the `TNAM` id 0x42.
+    fn g57_run(word: u32, answer: bool, list: bool) -> (Engine, u32, Vec<u32>) {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = Engine::new();
+        e.map(G57_ASKED, 0x1000);
+        e.mem.set_u32(G57_ASKED + 0x40, u32::from(answer));
+        e.register(FORM_FLAG_8_SET, |_, _| ret(0));
+        quiet(&mut e, &COMPONENT_INITS);
+        quiet(&mut e, &[WARNING, SET_FORM_FLAG_8]);
+        e.register(LOOKUP_FORM, |_, a| ret(a[0] + 0x1000));
+        e.register(NODE_ITEM, |_, a| ret(a[0]));
+        e.register(NODE_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        fn record(e: &mut Engine, a: &[u32], site: u32) -> Option<u32> {
+            let n = e.mem.u32(G57_ASKED);
+            e.mem.set_u32(G57_ASKED, n + 1);
+            let at = G57_ASKED + 4 + 12 * n;
+            e.mem.set_u32(at, site);
+            e.mem.set_u32(at + 4, a[0]);
+            e.mem.set_u32(at + 8, a[1]);
+            (e.mem.u32(G57_ASKED + 0x40) != 0).then(|| a[0] + 0x2000)
+        }
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0051_2f3d), |e, a| {
+            record(e, a, 0x0051_2f3d)
+        });
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0051_2faf), |e, a| {
+            record(e, a, 0x0051_2faf)
+        });
+        let this = e.mem.alloc(0x190);
+        e.mem.set_u32(this + 0x74, 1);
+        let mut entries = vec![];
+        if list {
+            e.mem.set_u8(this + 0x18c, 1);
+            let nodes = e.mem.alloc(0x10);
+            for (i, id) in [5u32, 7].iter().enumerate() {
+                let entry = e.mem.alloc(0xc);
+                e.mem.set_u32(entry, *id);
+                entries.push(entry);
+                let node = nodes + 8 * i as u32;
+                e.mem.set_u32(node, entry);
+                e.mem.set_u32(node + 4, if i == 0 { node + 8 } else { 0 });
+            }
+            e.mem.set_u32(this + 0x188, nodes);
+        } else {
+            e.mem.set_u32(this + 0x188, 0x42);
+        }
+        e.set_jip_patches(word);
+        e.call_log = Some(vec![]);
+        e.call(0x0051_2e60, &[this]);
+        (e, this, entries)
+    }
+
+    /// The words the on-tests run with: the row's bit alone, and a player's whole word (JIP's
+    /// installed bit, the row and an optional switch), so a gate that tests for equality fails.
+    const G57_ON_WORDS: [u32; 2] = [
+        engine_core::extend::jip_patches::FIXES,
+        engine_core::extend::jip_patches::INSTALLED
+            | engine_core::extend::jip_patches::FIXES
+            | engine_core::extend::jip_patches::FO3_WPN_DEGRADATION,
+    ];
+
+    /// The seam's records: (site, id, armour) per question.
+    fn g57_asked(e: &Engine) -> Vec<(u32, u32, u32)> {
+        (0..e.mem.u32(G57_ASKED))
+            .map(|n| {
+                let at = G57_ASKED + 4 + 12 * n;
+                (e.mem.u32(at), e.mem.u32(at + 4), e.mem.u32(at + 8))
+            })
+            .collect()
+    }
+
+    /// G57 off (JIP not installed, or installed with the row off): neither seam is asked; the
+    /// exe's lookup gives the template and the list's sounds.
+    #[test]
+    fn g57_seams_do_nothing_while_off() {
+        use engine_core::extend::jip_patches;
+        for word in [0, jip_patches::INSTALLED] {
+            let (mut e, this, _) = g57_run(word, true, false);
+            assert!(g57_asked(&e).is_empty(), "{word:08x}");
+            assert_eq!(e.mem.u32(this + 0x188), 0x1042);
+            let log = e.call_log.take().unwrap();
+            assert_eq!(calls_to(&log, LOOKUP_FORM), vec![vec![0x42]]);
+
+            let (mut e, _, entries) = g57_run(word, true, true);
+            assert!(g57_asked(&e).is_empty(), "{word:08x}");
+            assert_eq!(
+                (e.mem.u32(entries[0]), e.mem.u32(entries[1])),
+                (0x1005, 0x1007)
+            );
+            let log = e.call_log.take().unwrap();
+            assert_eq!(calls_to(&log, LOOKUP_FORM), vec![vec![5], vec![7]]);
+        }
+    }
+
+    /// G57 on: the template's seam (`0x512F3D`) and each list entry's seam (`0x512FAF`) are asked
+    /// with the id and the armour, and their answer is stored in place of the exe's lookup (not
+    /// called); an answer of none keeps the lookup. Each with the row's bit alone and with a
+    /// player's whole word.
+    #[test]
+    fn g57_seam_answers_replace_the_lookups() {
+        for word in G57_ON_WORDS {
+            let (mut e, this, _) = g57_run(word, true, false);
+            assert_eq!(g57_asked(&e), vec![(0x0051_2f3d, 0x42, this)], "{word:08x}");
+            assert_eq!(e.mem.u32(this + 0x188), 0x2042);
+            let log = e.call_log.take().unwrap();
+            assert!(calls_to(&log, LOOKUP_FORM).is_empty());
+
+            let (mut e, this, entries) = g57_run(word, true, true);
+            assert_eq!(
+                g57_asked(&e),
+                vec![(0x0051_2faf, 5, this), (0x0051_2faf, 7, this)],
+                "{word:08x}"
+            );
+            assert_eq!(
+                (e.mem.u32(entries[0]), e.mem.u32(entries[1])),
+                (0x2005, 0x2007)
+            );
+            let log = e.call_log.take().unwrap();
+            assert!(calls_to(&log, LOOKUP_FORM).is_empty());
+
+            let (mut e, this, _) = g57_run(word, false, false);
+            assert_eq!(g57_asked(&e).len(), 1);
+            assert_eq!(e.mem.u32(this + 0x188), 0x1042);
+            let log = e.call_log.take().unwrap();
+            assert_eq!(calls_to(&log, LOOKUP_FORM), vec![vec![0x42]]);
+
+            let (e, _, entries) = g57_run(word, false, true);
+            assert_eq!(g57_asked(&e).len(), 2);
+            assert_eq!(
+                (e.mem.u32(entries[0]), e.mem.u32(entries[1])),
+                (0x1005, 0x1007)
+            );
+        }
     }
 
     /// Doubles for `Load`: chunks popped from the end of `chunks`, word

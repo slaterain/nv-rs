@@ -19,6 +19,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use engine_core::extend::stewie;
 
 /// The interface manager singleton (a pointer to the object).
 pub(crate) const MANAGER_SINGLETON: u32 = 0x011d_8a80;
@@ -1891,7 +1892,11 @@ pub fn interface_manager_init(e: &mut Engine, this: Ptr<InterfaceManager>, load_
 /// creates the HUD main menu and marks the manager initialized.
 pub fn interface_manager_init_second(e: &mut Engine, this: Ptr<InterfaceManager>) {
     with_scope_guard(e, 0x29b, |e| {
-        e.call(FONT_MANAGER_INIT, &args![]);
+        // JIP's seam at the font manager's start (`0x70B285`; no words): answered, its own start
+        // ran in place of the game's.
+        if e.site(0x0070_b285, &[]).is_none() {
+            e.call(FONT_MANAGER_INIT, &args![]);
+        }
         let cursor = construct_new(e, OPERATOR_NEW, 0x48, |e, block| {
             tile_image_construct(e, block.cast()).cast()
         })
@@ -2464,9 +2469,21 @@ fn tile_menu_id(e: &mut Engine, tile: u32) -> i32 {
     e.call(FTOL, &args![value]).i32()
 }
 
+/// `Idle`'s test whether the pointer is shown: no pad in use (`004b71d0` false), or the pad in
+/// use with `bShowMouse` set. Nine of `Idle`'s ten reads of the byte ask it (0070cc96, 0070cdbf,
+/// 0070cf27, 0070cfbe, 0070d41f, 0070d5ad, 0070d66a, 0070dfab and 0070e15a; at 0070cc96 and
+/// 0070dfab as its opposite); the tenth, 0070e964, asks [`pad_pointer_hidden`]'s.
 fn pointer_shown(e: &mut Engine, this: Ptr<InterfaceManager>) -> bool {
     !e.call(HAS_360_CONTROLLER_GETTER, &args![]).bool()
         || e.get(this, InterfaceManager::bShowMouse) != 0
+}
+
+/// `Idle`'s other test, before it lowers the pipboy (`0070e952` .. `0070e96a`): no pad in use,
+/// or the pad in use with `bShowMouse` clear (the byte set `JNZ`s past the close). With a pad
+/// the game hides the pointer, so this is the pad's way to close the pipboy (B or Back let go).
+fn pad_pointer_hidden(e: &mut Engine, this: Ptr<InterfaceManager>) -> bool {
+    !e.call(HAS_360_CONTROLLER_GETTER, &args![]).bool()
+        || e.get(this, InterfaceManager::bShowMouse) == 0
 }
 
 /// The menu state word at `+0x24` of a menu (`0059bb30`, a plain getter the
@@ -2713,6 +2730,20 @@ fn idle_release(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut IdleSta
     }
 }
 
+/// Whether the menu under the pointer (`pOverTileMenu`) is active, at `0x70D44A` and `0x70D58D`:
+/// with lStewieAl's Tweaks' row S0022.30 (`GetMenuVisiblityStateIfActiveTile`, "fix crash when
+/// opening the console while the menus load") a menu counts as not active while there is no tile
+/// under the pointer (`pOverTileTarget`), where the exe reads the state of a menu that may already
+/// be gone.
+fn over_menu_active(e: &mut Engine, this: Ptr<InterfaceManager>, menu: u32) -> bool {
+    if e.stewie(stewie::CONSOLE_WHILE_MENUS_LOAD)
+        && e.get(this, InterfaceManager::pOverTileTarget) == 0
+    {
+        return false;
+    }
+    menu_is_active(e, menu)
+}
+
 /// The pointer moved to another tile with no button down: leaves the old
 /// tile and enters the new one (`DoLeave`, `DoEnter`, the menu virtuals).
 fn idle_enter_leave(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut IdleState) {
@@ -2721,7 +2752,7 @@ fn idle_enter_leave(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut Idl
         return;
     }
     let menu = e.get(this, InterfaceManager::pOverTileMenu);
-    if menu != 0 && menu_is_active(e, menu) {
+    if menu != 0 && over_menu_active(e, this, menu) {
         let tile = e.get(this, InterfaceManager::pOverTileTarget);
         tile_set_int(e, tile, 0xfc3, 0);
         // Is the picked tile a child of the tile being left?
@@ -2747,7 +2778,7 @@ fn idle_enter_leave(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut Idl
         e.set(this, InterfaceManager::pOverTileMenu, 0);
     }
     let menu = e.get(this, InterfaceManager::pOverTileMenu);
-    if menu != 0 && menu_is_active(e, menu) {
+    if menu != 0 && over_menu_active(e, this, menu) {
         if pointer_shown(e, this) {
             let tile = e.get(this, InterfaceManager::pOverTileTarget);
             e.set(this, InterfaceManager::pMouseOverTarget, tile);
@@ -3030,17 +3061,22 @@ fn translate_controls_events(e: &mut Engine, this: Ptr<InterfaceManager>, slot: 
     e.call(TRANSLATE_KEY_EVENT, &args![this, kind, code]).u32()
 }
 
+/// `Idle`'s pad menu event (0070df99 .. 0070dfc0): with a pad in use and the pointer hidden, the
+/// top pad button goes to the menus (`DoGamepadEvent(0)`); the exe `JNZ`s past it when
+/// `bShowMouse` is set.
+fn idle_pad_menu_event(e: &mut Engine, this: Ptr<InterfaceManager>) {
+    if !pointer_shown(e, this) {
+        interface_manager_do_gamepad_event(e, this, 0);
+    }
+}
+
 /// Part of `idle_menu_mode`: gamepad events, then the key events: each is
 /// translated to a menu key (`007154b0`), offered to the console, then to
 /// the frontmost menu (virtual slot `0x30`), then to the `_PCButton_<key>`
 /// child tile of the menu; keys nobody took become gamepad events
 /// (`DoGamepadEvent`).
 fn idle_gamepad_events(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut IdleState) {
-    if e.call(HAS_360_CONTROLLER_GETTER, &args![]).bool()
-        && e.get(this, InterfaceManager::bShowMouse) == 0
-    {
-        interface_manager_do_gamepad_event(e, this, 0);
-    }
+    idle_pad_menu_event(e, this);
     e.with_stack(4, |e, slot| {
         e.mem.set_u32(slot.addr(), 0);
         let mut key = translate_controls_events(e, this, slot);
@@ -3323,7 +3359,9 @@ fn idle_console_and_hot_keys(e: &mut Engine, this: Ptr<InterfaceManager>, state:
         let player = e.global::<u32>(PLAYER_SINGLETON);
         let anything = weapon_state != 0 || e.vcall(player, 0x22c, &args![0u32]).bool() || key_down;
         let mode_word = e.get(this, InterfaceManager::field_4bc) as i32;
-        if anything && pointer_shown(e, this) && mode_word > 0 && mode_word <= 3 {
+        // 0070e952: the pointer hidden here, not shown (a player's report: a pad never closed
+        // the pipboy while the test was the other one).
+        if anything && pad_pointer_hidden(e, this) && mode_word > 0 && mode_word <= 3 {
             fn_0070f690(e, this, 0);
             let owner = e.global::<u32>(CONTROLS_OWNER);
             let controls = e.call(CONTROLS_GET, &args![owner]).u32();
@@ -8935,6 +8973,36 @@ mod tests {
         assert_eq!(e.get(m, InterfaceManager::bFirstInit), 1);
     }
 
+    /// JIP's seam at the font manager's start (`0x70B285`): answered, the game's start is not
+    /// called; not answered, it is, once.
+    #[test]
+    fn init_second_font_manager_seam() {
+        for answered in [false, true] {
+            let (mut e, m) = init_world();
+            e.put_vtable(TILE_IMAGE_VTABLE, &[0, 0x0900_0020]);
+            recorder(&mut e, 0x0900_0020, 0);
+            echo(&mut e, TILE_CONSTRUCT);
+            let (cursor_root, _) = virtual_object(&mut e, &[(0xdc, 0x0900_0021)], 0);
+            e.set(m, InterfaceManager::pCursorRoot, cursor_root);
+            returns(&mut e, TILE_IMAGE_NODE, 0x5555);
+            returns(&mut e, HUD_MAIN_MENU_CREATE, 0x8888);
+            returns(&mut e, STRING_HOLDER_GET, 0x6666);
+            returns(&mut e, NI_POINTER_GET, 0x4040);
+            if answered {
+                e.on_site_for_test(0x0070_b285, |_, w| {
+                    assert!(w.is_empty());
+                    Some(1)
+                });
+            }
+            interface_manager_init_second(&mut e, m);
+            assert_eq!(
+                calls(&e, FONT_MANAGER_INIT).len(),
+                usize::from(!answered),
+                "answered: {answered}"
+            );
+        }
+    }
+
     #[test]
     fn init_second_creates_the_cursor_the_shadow_nodes_and_the_hud() {
         let (mut e, m) = init_world();
@@ -10720,6 +10788,24 @@ mod tests {
         e.set(m, InterfaceManager::bMouseInMotion, 0);
         fn_007118d0(&mut e, m);
         assert_eq!(e.get(m, InterfaceManager::bMouseInMotion), 0);
+    }
+
+    /// With `Fallout.ini`'s `[Controls] bBackground Mouse=1` (the controls' flag `00711e00` reads)
+    /// the menus' cursor is placed only from the window's `WM_MOUSEMOVE` (`00871d10`): the mouse's
+    /// DirectInput counts (10 right, 5 up) move nothing here, so the cursor never moves twice.
+    #[test]
+    fn with_background_mouse_the_mouse_counts_move_no_cursor() {
+        let (mut e, m) = cursor_world();
+        returns(&mut e, CONTROLS_FLAG_00711E00, 1);
+        let vectors = vector_recorder(&mut e);
+        e.mem.set_f32(m.addr() + 0x2c, 3.0);
+        e.mem.set_f32(m.addr() + 0x34, 4.0);
+        fn_007118d0(&mut e, m);
+        assert!(vectors.borrow().is_empty(), "no translation written");
+        assert_eq!(e.mem.f32(m.addr() + 0x2c), 3.0);
+        assert_eq!(e.mem.f32(m.addr() + 0x34), 4.0);
+        assert_eq!(e.get(m, InterfaceManager::bMouseInMotion), 0);
+        assert!(calls(&e, NODE_UPDATE).is_empty());
     }
 
     #[test]
@@ -12861,6 +12947,65 @@ mod tests {
         None
     }
 
+    /// lStewieAl's Tweaks' row S0022.30: the menu under the pointer is gone (its memory freed while
+    /// the menus load) and no tile is under the pointer. The exe reads the gone menu's state
+    /// (`0059bb30` reads `+0x24`, as its stand-in here does) and stops; with the row on the menu
+    /// counts as inactive and the pointer's targets are cleared.
+    #[test]
+    fn s0022_30_a_gone_menu_under_the_pointer() {
+        for on in [false, true] {
+            let (mut e, m) = focus_world();
+            returns(&mut e, HAS_360_CONTROLLER_GETTER, 0);
+            e.register_double(MENU_STATE, |e, a| e.mem.u32(a[0] + 0x24).into_ret());
+            e.set(m, InterfaceManager::pOverTileMenu, 0x0dea_d000);
+            e.set(m, InterfaceManager::pOverTileTarget, 0);
+            let mut state = IdleState {
+                picked_tile: 0x400,
+                ..IdleState::default()
+            };
+            e.set_stewie(stewie::CONSOLE_WHILE_MENUS_LOAD, on);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                idle_enter_leave(&mut e, m, &mut state);
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert_eq!(e.get(m, InterfaceManager::pOverTileMenu), 0);
+                assert_eq!(e.get(m, InterfaceManager::pOverTileTarget), 0);
+            }
+        }
+    }
+
+    /// lStewieAl's Tweaks' row S0022.30 with a tile under the pointer (ordinary input): the old
+    /// tile is left and the new one entered, row on or off, with the same calls.
+    #[test]
+    fn s0022_30_row_on_with_a_tile_under_the_pointer_changes_nothing() {
+        let run = |on: bool| {
+            let (mut e, m) = focus_world();
+            returns(&mut e, HAS_360_CONTROLLER_GETTER, 0);
+            returns(&mut e, MENU_STATE, 1);
+            e.set(m, InterfaceManager::pOverTileMenu, 0x600);
+            e.set(m, InterfaceManager::pOverTileTarget, 0x500);
+            let mut state = IdleState {
+                picked_tile: 0x400,
+                picked_menu: 0x700,
+                ..IdleState::default()
+            };
+            e.set_stewie(stewie::CONSOLE_WHILE_MENUS_LOAD, on);
+            e.call_log = Some(vec![]);
+            idle_enter_leave(&mut e, m, &mut state);
+            let targets = (
+                e.get(m, InterfaceManager::pOverTileTarget),
+                e.get(m, InterfaceManager::pOverTileMenu),
+            );
+            (targets, e)
+        };
+        let ((off_targets, off), (on_targets, on)) = (run(false), run(true));
+        assert_eq!(on.call_log, off.call_log);
+        assert_eq!((on_targets, off_targets), ((0x400, 0x700), (0x400, 0x700)));
+        assert_eq!(calls(&on, DO_ENTER).len(), 1);
+    }
+
     /// The seam before the motion test (`0x70D642`, JIP LN NVSE's MenuHandleMouseover hook):
     /// with a handler there and no user of the hook, the handler is not asked and the pointer's
     /// tile change runs as the exe's (the motion test clears the target); with a user, it is
@@ -14228,6 +14373,127 @@ mod tests {
         let frame = next_frame(&mut e, 0x84);
         interface_manager_do_gamepad_event(&mut e, m, 10);
         assert_eq!(calls(&e, TILE_GET_FIRST_REF_COPY)[0][2], frame + 0x1c);
+    }
+
+    /// `Idle`'s two tests of the pointer: shown (no pad in use, or `bShowMouse` set) at eight
+    /// sites, and hidden (no pad in use, or `bShowMouse` clear) before it lowers the pipboy.
+    #[test]
+    fn the_pointer_shown_and_hidden_tests() {
+        for (pad, mouse, shown, hidden) in [
+            (false, 0u8, true, true),
+            (false, 1, true, true),
+            (true, 0, false, true),
+            (true, 1, true, false),
+        ] {
+            let (mut e, m) = focus_world();
+            returns(&mut e, HAS_360_CONTROLLER_GETTER, u32::from(pad));
+            e.set(m, InterfaceManager::bShowMouse, mouse);
+            assert_eq!(pointer_shown(&mut e, m), shown, "pad {pad}, mouse {mouse}");
+            assert_eq!(
+                pad_pointer_hidden(&mut e, m),
+                hidden,
+                "pad {pad}, mouse {mouse}"
+            );
+        }
+    }
+
+    /// The pipboy lowered from `Idle` (0070e952 .. 0070e99a, a player's report: a pad never
+    /// closed it): with a pad in use the pointer is hidden, and B let go lowers it; with the pad
+    /// in use and the pointer shown (the console up) it stays; with no pad the Pip-Boy key let go
+    /// lowers it.
+    #[test]
+    fn the_pipboy_closes_with_a_pad() {
+        let run = |pad: bool, mouse: u8| {
+            let (mut e, m) = focus_world();
+            returns(&mut e, CONSOLE_KEY_FLAG_GET, 0);
+            // The keyboard's Pip-Boy key (control 0xE) let go; nothing else.
+            e.register_double(CONTROLS_QUERY_00A24660, |_, a| Ret {
+                eax: u32::from(a[1] == 0xe && a[2] == 2),
+                ..Ret::default()
+            });
+            returns(&mut e, CONTROLS_QUERY_00A24180, 0);
+            returns(&mut e, DEBUG_TEXT_UPDATE, 0);
+            // No menus in the per-frame loop.
+            returns(&mut e, 0x0055_9450, 0);
+            returns(&mut e, HAS_360_CONTROLLER_GETTER, u32::from(pad));
+            // The pad's B (menu button 10) let go.
+            e.register_double(CHECK_MENU_BUTTON, |_, a| Ret {
+                eax: u32::from(a[0] == 10),
+                ..Ret::default()
+            });
+            returns(&mut e, 0x0044_ddc0, 0);
+            let vtable = e.mem.alloc(0x230);
+            e.mem.set_u32(vtable + 0x22c, 0x0900_2200);
+            returns(&mut e, 0x0900_2200, 0);
+            let player = e.mem.alloc(8);
+            e.mem.set_u32(player, vtable);
+            e.set_global(PLAYER_SINGLETON, player);
+            returns(&mut e, CONTROLS_GET, 0x7700);
+            returns(&mut e, CONTROLS_CLEAR_USER_ACTIONS, 0);
+            returns(&mut e, GET_ENTER_STACK_TOP, 1);
+            returns(&mut e, IS_PIPBOY_MENU_TOPMOST, 0);
+            returns(&mut e, TUTORIAL_MANAGER_UPDATE, 0);
+            e.set(m, InterfaceManager::field_4bc, 3);
+            e.set(m, InterfaceManager::bShowMouse, mouse);
+            let mut state = IdleState {
+                controls: 0x7700,
+                ..IdleState::default()
+            };
+            idle_console_and_hot_keys(&mut e, m, &mut state);
+            e.get(m, InterfaceManager::field_4bc)
+        };
+        assert_eq!(run(true, 0), 4, "a pad: B let go lowers the pipboy");
+        assert_eq!(run(true, 1), 3, "a pad and the pointer shown: it stays");
+        assert_eq!(run(false, 1), 4, "no pad: the Pip-Boy key let go lowers it");
+    }
+
+    /// Pins `Idle`'s pointer tests to the exe's: nine sites ask whether the pointer is shown or
+    /// its opposite (0070c4a0's decompiled `!pad || bShowMouse != 0`: the loading-menu cursor,
+    /// the mouse buttons, the pick, the drag, the two enter/leave tests, the menu keys, the start
+    /// menu key over the main menu, and the pad's menu event at 0070df99 as its opposite), seven
+    /// through `pointer_shown` and two written out where the pad's answer is kept
+    /// (`idle_menu_cursor_and_focus` as its opposite, `idle_read_mouse`); one site, before the
+    /// pipboy is lowered, asks whether it is hidden. A change to any of them is to come with the
+    /// exe's word for it.
+    #[test]
+    fn idle_asks_the_pointer_where_the_exe_does() {
+        let source = include_str!("interfacemanager.rs");
+        let start = source.find("pub fn interface_manager_idle(").unwrap();
+        let end = source.find("fn idle_start_menu_key(").unwrap();
+        let idle = &source[start..end];
+        let count = |text: &str| idle.matches(text).count();
+        assert_eq!(count("pointer_shown(e, this)"), 7);
+        assert_eq!(count("pad_pointer_hidden(e, this)"), 1);
+        assert_eq!(
+            count("if controller && e.get(this, InterfaceManager::bShowMouse) == 0 {"),
+            1
+        );
+        assert_eq!(
+            count("if !controller || e.get(this, InterfaceManager::bShowMouse) != 0 {"),
+            1
+        );
+    }
+
+    /// The pad's menu event (0070df99, review of #797): with a pad in use and the pointer hidden
+    /// the top pad button goes to the menus (`DoGamepadEvent`'s walk of the root's menus); with
+    /// the pointer shown, or no pad, it does not.
+    #[test]
+    fn the_pad_menu_event_waits_for_a_hidden_pointer() {
+        for (pad, mouse, walked) in [(true, 0u8, true), (true, 1, false), (false, 0, false)] {
+            let (mut e, m, _) = gamepad_world();
+            returns(&mut e, HAS_360_CONTROLLER_GETTER, u32::from(pad));
+            e.set(m, InterfaceManager::bShowMouse, mouse);
+            menu_list(&mut e, m, &[0x7a00]);
+            returns(&mut e, TILE_GET_MENU, 0x7c00);
+            returns(&mut e, TILE_IS_VISIBLE, 1);
+            returns(&mut e, DO_GAMEPAD, 1);
+            idle_pad_menu_event(&mut e, m);
+            assert_eq!(
+                !calls(&e, DO_GAMEPAD).is_empty(),
+                walked,
+                "pad {pad}, mouse {mouse}"
+            );
+        }
     }
     // @@TESTS-END@@
 }

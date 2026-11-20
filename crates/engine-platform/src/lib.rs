@@ -80,6 +80,7 @@ macro_rules! device_ref {
 #[cfg(test)]
 pub(crate) mod alloc_count;
 pub mod bink;
+pub mod code_page;
 #[cfg(test)]
 mod crt_stdio_tests;
 pub mod d3d9;
@@ -94,25 +95,28 @@ pub mod d3dx;
 #[cfg(windows)]
 pub mod d3dxreal;
 pub mod dinput;
-pub mod ds3d;
-pub mod dsfx;
+pub use ds_mix::ds3d;
+pub use ds_mix::dsfx;
 pub mod dshow;
 pub mod dsound;
 pub mod files;
+pub mod host_paths;
 pub mod ini;
 pub mod library;
-pub mod mixer;
+pub mod machine_table;
+pub use ds_mix::mixer;
 pub mod mmio;
 pub mod mod_files;
 pub mod nls;
 pub mod nvapi;
 pub mod process;
-pub mod resampler;
-pub mod sound_out;
-pub mod speakers;
+pub use ds_mix::resampler;
+pub use ds_mix::sound_out;
+pub use ds_mix::speakers;
 pub mod time;
 pub mod vorbisfile;
 pub mod window;
+pub mod xinput;
 pub mod zone;
 
 /// This layer's state in each engine (`Kernel::platform`; made by [`LAYER`]'s `new_state`).
@@ -133,6 +137,8 @@ pub struct State {
     pub process: process::Process,
     /// Mods' own files and the port's folder that keeps them ([`mod_files`]).
     pub mod_files: mod_files::ModFiles,
+    /// The pads behind the game's XInput ([`xinput`]): none until the host puts the system's in.
+    pub pads: xinput::Pads,
 }
 
 /// What runs before the platform layer ends the process itself, which it does in one place: the
@@ -373,6 +379,17 @@ fn layer_imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             "GetAsyncKeyState",
             entry!(0, dinput::get_async_key_state(u32) -> u32).1,
         ),
+        // The game imports XInput by ordinal: 2 `XInputGetState`, 3 `XInputSetState`.
+        (
+            "XINPUT1_3.dll",
+            "#2",
+            entry!(0, xinput::xinput_get_state(u32, Ptr) -> u32).1,
+        ),
+        (
+            "XINPUT1_3.dll",
+            "#3",
+            entry!(0, xinput::xinput_set_state(u32, Ptr) -> u32).1,
+        ),
         (
             "USER32.dll",
             "GetSystemMetrics",
@@ -565,6 +582,11 @@ fn layer_imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             "USER32.dll",
             "DispatchMessageA",
             entry!(0, window::dispatch_message_a(Ptr) -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "DefWindowProcA",
+            entry!(0, window::def_window_proc_a(u32, u32, u32, u32) -> u32).1,
         ),
         (
             k,
@@ -941,11 +963,8 @@ fn layer_imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             entry!(0, dsound::co_create_instance(Ptr, u32, u32, Ptr, Ptr) -> u32).1,
         ),
         // The sound imports: end.
-    ];
-    // The code page conversions through Windows' own (`nls`; what they answer is the machine's).
-    // The shader compiler through the player's own d3dx9_38.dll (ADR-0008, Windows only).
-    #[cfg(windows)]
-    imports.extend([
+        // The code page conversions (`nls`): on Windows through Windows' own (what they answer is
+        // the machine's); elsewhere by Windows' measured tables (`code_page`).
         (
             k,
             "MultiByteToWideChar",
@@ -956,6 +975,25 @@ fn layer_imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             "LCMapStringW",
             entry!(0, nls::lc_map_string_w(u32, u32, Ptr, i32, Ptr, i32) -> u32).1,
         ),
+    ];
+    // Off Windows the two shader profile getters by the device's caps (`d3dx::profiles`); the
+    // compiler itself stays Windows only.
+    #[cfg(not(windows))]
+    imports.extend([
+        (
+            "d3dx9_38.dll",
+            "D3DXGetVertexShaderProfile",
+            entry!(0, d3dx::profiles::get_vertex_shader_profile(Ptr) -> u32).1,
+        ),
+        (
+            "d3dx9_38.dll",
+            "D3DXGetPixelShaderProfile",
+            entry!(0, d3dx::profiles::get_pixel_shader_profile(Ptr) -> u32).1,
+        ),
+    ]);
+    // The shader compiler through the player's own d3dx9_38.dll (ADR-0008, Windows only).
+    #[cfg(windows)]
+    imports.extend([
         (
             "d3dx9_38.dll",
             "D3DXCompileShader",
@@ -1020,8 +1058,10 @@ mod tests {
             );
         }
         // The 195 of the table before the layer moved out of `engine-core` (6 are Windows only),
-        // `GlobalMemoryStatus(Ex)`, and `MultiByteToWideChar` and `LCMapStringW` (Windows only).
-        assert_eq!(table.len(), if cfg!(windows) { 199 } else { 191 });
+        // `GlobalMemoryStatus(Ex)`, `MultiByteToWideChar` and `LCMapStringW`, and `DefWindowProcA`
+        // (the game's `WM_MOUSEMOVE`, `window::post_mouse_move`).
+        // Off Windows also the two shader profile getters (`d3dx::profiles`).
+        assert_eq!(table.len(), if cfg!(windows) { 200 } else { 196 });
     }
 
     /// Not a check: the rows of `engine-core`'s `allocations_per_operation_of_the_kernel` whose

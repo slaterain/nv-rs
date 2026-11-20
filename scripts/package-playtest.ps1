@@ -63,9 +63,9 @@ try {
         $rustup = if ($env:RUSTUP_HOME) { $env:RUSTUP_HOME } else { Join-Path $env:USERPROFILE '.rustup' }
         $env:CARGO_ENCODED_RUSTFLAGS = @('-C', 'target-feature=+crt-static', "--remap-path-prefix=$root=nv-rs", "--remap-path-prefix=$registry=cargo", "--remap-path-prefix=$rustup=rustup") -join [char]0x1f
         $env:CARGO_TARGET_DIR = $Target
-        cargo build --release --locked -p nv-viewer
-        if ($LASTEXITCODE) { throw 'The game program did not build.' }
-        foreach ($manifest in @('launcher', 'd3d9-capture', 'package-check')) {
+        cargo build --release --locked -p nv-viewer -p nv-launcher
+        if ($LASTEXITCODE) { throw 'The game program or the launcher did not build.' }
+        foreach ($manifest in @('d3d9-capture', 'package-check')) {
             cargo build --release --locked --manifest-path "scripts/$manifest/Cargo.toml"
             if ($LASTEXITCODE) { throw "$manifest did not build." }
         }
@@ -84,13 +84,14 @@ try {
 
     # Our own programs. app\FalloutNV.exe is nv-viewer under that name: NVIDIA's driver fixes and
     # Windows' per-program sound go by the name (docs/SOUND.md), and no link is needed.
-    Copy-Item -LiteralPath (Join-Path $x64 'Play.exe') -Destination (Join-Path $stage 'Play.exe')
+    # Play.exe is the launcher's nv-rs program under the name the package has always had.
+    Copy-Item -LiteralPath (Join-Path $x64 'nv-rs.exe') -Destination (Join-Path $stage 'Play.exe')
     Copy-Item -LiteralPath (Join-Path $x64 'nv-viewer.exe') -Destination (Join-Path $stage 'app/FalloutNV.exe')
     Copy-Item -LiteralPath (Join-Path $x64 'd3d9-capture.exe') -Destination (Join-Path $stage 'app/tools/d3d9-capture.exe')
     Copy-Item -LiteralPath (Join-Path $x86 'nvapi-capture.exe') -Destination (Join-Path $stage 'app/tools/nvapi-capture.exe')
     Copy-Item -LiteralPath (Join-Path $x86 'dsound-capture.exe') -Destination (Join-Path $stage 'app/tools/dsound-capture.exe')
-    # The launchers, the settings tool and the READ MEs.
-    foreach ($file in @('Play with mods.cmd', 'Import my saves.cmd', 'Settings.cmd', 'Settings.ps1', 'READ ME.txt', 'THIRD-PARTY-NOTICES.txt')) {
+    # The launchers and the READ MEs (settings are the launcher's own Settings screen).
+    foreach ($file in @('Play with mods.cmd', 'Install mods.cmd', 'Import my saves.cmd', 'READ ME.txt', 'THIRD-PARTY-NOTICES.txt')) {
         Copy-Item -LiteralPath (Join-Path $root "distribution/$file") -Destination $stage
     }
     New-Item -ItemType Directory -Path (Join-Path $stage 'mods') | Out-Null
@@ -98,8 +99,19 @@ try {
     # The licences and notices LEGAL.md asks for.
     Copy-Item -LiteralPath (Join-Path $root 'distribution/licenses') -Destination $stage -Recurse
     foreach ($file in @('LICENSE', 'LEGAL.md')) { Copy-Item -LiteralPath (Join-Path $root $file) -Destination $stage }
-    Copy-Item -LiteralPath (Join-Path $root 'crates/vorbis/LICENSE-libvorbis') -Destination (Join-Path $stage 'licenses/LICENSE-libvorbis')
-    Copy-Item -LiteralPath (Join-Path $root 'crates/nvse/LICENSE-msvc-stl') -Destination (Join-Path $stage 'licenses/LICENSE-msvc-stl')
+    # The notices of code that is not a crates.io crate: every one distribution/notices.txt lists (a
+    # file, a tab, its name in licenses/), the list the Linux and macOS script copies too, so the
+    # packages cannot drift apart; package-check --notices below refuses a package without one.
+    $noticeList = Join-Path $root 'distribution/notices.txt'
+    foreach ($line in [IO.File]::ReadAllLines($noticeList)) {
+        $line = $line.TrimEnd("`r")
+        if (!$line -or $line.StartsWith('#')) { continue }
+        $file, $named = $line -split "`t", 2
+        if (!$named) { throw "distribution/notices.txt names no file in the package for: $line" }
+        $from = Join-Path $root $file
+        if (!(Test-Path -LiteralPath $from -PathType Leaf)) { throw "The notice $file is missing." }
+        Copy-Item -LiteralPath $from -Destination (Join-Path $stage "licenses/$named")
+    }
     # Text files for Notepad.
     foreach ($file in @('READ ME.txt', 'mods/READ ME.txt')) {
         $path = Join-Path $stage $file
@@ -116,13 +128,23 @@ try {
     $bad = Get-ChildItem -LiteralPath $stage -Recurse -File | Where-Object { $_.Name -match $forbidden }
     if ($bad) { throw "These must not be in the package: $($bad.FullName -join ', ')" }
     # (LEGAL.md names fnv_decomp, so that one only counts in the programs.)
-    $needles = @($env:USERNAME, $env:USERPROFILE, $root) | Where-Object { $_ }
+    $needles = @(@($env:USERNAME, $env:USERPROFILE, $root) | Where-Object { $_ })
+    # The research folders and any Windows user folder, in every file: scripts/package-needles.txt,
+    # which the Linux and macOS script reads too. (The research folder's name counts with a path
+    # separator before or after it: the bare word also matched the render thread's name, nv-render,
+    # which stopped the 2026-11-16 package.)
+    $shared = @(Get-Content -LiteralPath (Join-Path $root 'scripts/package-needles.txt') |
+        ForEach-Object { $_.TrimEnd("`r") } | Where-Object { $_ -and -not $_.StartsWith('#') })
+    if ($shared.Count -eq 0) { throw 'scripts/package-needles.txt lists no needle.' }
+    $needles += $shared
     # FUN_, DAT_ and LAB_ are the names a disassembler gives code and data nobody has named.
-    $programNeedles = @('nv-re', 'build43', 'fnv_decomp', '\target\release', 'FUN_', 'DAT_', 'LAB_')
+    $programNeedles = @('fnv_decomp', '\target\release', 'FUN_', 'DAT_', 'LAB_')
     $checkArguments = @($stage) + ($needles | ForEach-Object { '--needle'; $_ }) + ($programNeedles | ForEach-Object { '--program-needle'; $_ })
     # Required: no run of the game's bytes longer than the C runtime's own tables (the longest seen
     # is about 2 KB) in any program.
     $checkArguments += @('--game', $Game, '--max-run', '4096')
+    # Every notice of distribution/notices.txt in licenses/ under its name.
+    $checkArguments += @('--notices', $noticeList)
     & (Join-Path $x64 'package-check.exe') @checkArguments
     if ($LASTEXITCODE) { throw 'package-check found something that must not be in the package.' }
 

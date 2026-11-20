@@ -79,6 +79,8 @@ fn a_callback_through_the_command() {
             call_delay: 2,
             cycle_count: 2,
             ref_id: 0x14,
+            native: None,
+            call_count: 1,
         }]
     );
     assert_eq!(sgmlc(&mut e, 0, &[]), 1.0, "one argument: the query");
@@ -238,6 +240,8 @@ fn not_installed_no_frame_work() {
         call_delay: 1,
         cycle_count: 1,
         ref_id: 0x14,
+        native: None,
+        call_count: 1,
     });
     nvse::plugins::dispatch(&mut e, nvse::plugins::msg::MAIN_GAME_LOOP, 0, 0);
     assert!(calls().is_empty());

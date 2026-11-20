@@ -395,13 +395,13 @@ pub fn hit_data_initialize_explosion_data(
     hit_data_determine_outcome(e, hit);
 }
 
-/// The minimum damage store in [`hit_data_reduce_damage`] (`0x9B6335`). JIP LN NVSE's G77 (a fix,
-/// the row `NV_JIP_GAME_PATCHES`) does the same compare and store in SSE and marks the hit
+/// The minimum damage store in [`hit_data_reduce_damage`] (`0x9B6335`). JIP LN NVSE's G77 (JIP's own:
+/// in whenever JIP is installed) does the same compare and store in SSE and marks the hit
 /// armour-penetrated (`uiFlags` bit 31): the seam is asked with the hit where the store happens.
-/// With the word's `FIXES` bit clear: one load, nothing asked.
+/// With the word's `INSTALLED` bit clear: one load, nothing asked.
 #[inline]
 fn armor_penetrated_seam(e: &mut Engine, this: Ptr<HitData>) {
-    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
         e.site(0x009b_6335, &[this.addr()]);
     }
 }
@@ -3459,18 +3459,18 @@ mod n026_tests {
             0
         );
         assert!(calls(&log, 0x009b_5a30).is_empty(), "ov3 deferred");
-        assert_eq!(pending_word(&e), 1);
+        assert_eq!(pending_word(&mut e), 1);
         let target = e.get(hit, HitData::pTarget);
         let (hit, log) = projectile_hit(&mut e, target);
         assert_eq!(calls(&log, 0x009b_5a30), vec![vec![hit.addr(), 1]]);
-        assert_eq!(pending_word(&e), 0, "taken once");
+        assert_eq!(pending_word(&mut e), 0, "taken once");
         let (_, log) = projectile_hit(&mut e, target);
         assert!(calls(&log, 0x009b_5a30).is_empty(), "ov4 deferred");
-        assert_eq!(pending_word(&e), 2);
+        assert_eq!(pending_word(&mut e), 2);
 
-        let (e, hit, log) = melee_with(unarmed_vats(), true, jip_on);
+        let (mut e, hit, log) = melee_with(unarmed_vats(), true, jip_on);
         assert!(calls(&log, 0x009b_5a30).is_empty(), "deferred to G116");
-        assert_eq!(pending_word(&e), 0, "G116 took it");
+        assert_eq!(pending_word(&mut e), 0, "G116 took it");
         assert_eq!(
             (
                 f(e.get(hit, HitData::fTargetedLimbDamage)),

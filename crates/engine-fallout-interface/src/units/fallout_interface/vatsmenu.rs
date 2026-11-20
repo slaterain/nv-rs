@@ -2026,6 +2026,24 @@ fn node_limb(e: &mut Engine, node: u32) -> u32 {
     e.mem.u32(part + 0x20)
 }
 
+/// `DoIdle`'s damage threshold of the target at `0x7ECE32` (`CALL 0x7700F0` with the player and
+/// the target; the float kept with `FSTP` as a float). JIP LN NVSE's G121 (group GA's row and
+/// handler, a fix row: `WriteRelCall(0x7ECE32, GetVATSTargetDTHook)`) answers the threshold its
+/// hit damage last used: the seam with the player and the target answers the float's bits, and
+/// no answer runs the exe's call (JIP jumps to it while it has no hit recorded). One load while
+/// JIP's fixes are not in.
+fn target_damage_threshold(e: &mut Engine, player: u32, target: u32) -> f32 {
+    let jip = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(0x007e_ce32, &[player, target])
+    } else {
+        None
+    };
+    match jip {
+        Some(bits) => f32::from_bits(bits),
+        None => e.call(DAMAGE_THRESHOLD, &args![player, target]).f64() as f32,
+    }
+}
+
 // Translated from 007ec810 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `VATSMenu::DoIdle` (Xbox PDB): the menu's frame update. Every branch
 /// of the code is kept in order; the comments name the code's blocks.
@@ -2106,46 +2124,7 @@ pub fn vats_menu_do_idle(e: &mut Engine, this: Ptr<VatsMenu>) {
 
     // 007eca2a: the gamepad stick.
     if gamepad_in_use(e) {
-        // The value computed from the VATS mode (0x1ea9 or 0x21f1) and the
-        // first two axis reads are never used.
-        typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, VATS));
-        e.call(AXIS_VALUE, &args![controls, 0u32, 7u32]);
-        e.call(AXIS_VALUE, &args![controls, 0u32, 8u32]);
-        let horizontal = e.call(AXIS_VALUE, &args![controls, 0u32, 9u32]).i32();
-        let vertical = e
-            .call(AXIS_VALUE, &args![controls, 0u32, 10u32])
-            .i32()
-            .wrapping_neg();
-        if horizontal > 0x21f1 {
-            if e.mem.u8(m + 0x110) == 0 {
-                let time = e.call(TIMER_MILLISECONDS, &args![TIMER]).u32();
-                e.mem.set_u32(m + 0x114, time);
-                e.mem.set_u8(m + 0x110, 1);
-            }
-        } else if horizontal < -0x21f1 {
-            if e.mem.u8(m + 0x10f) == 0 {
-                let time = e.call(TIMER_MILLISECONDS, &args![TIMER]).u32();
-                e.mem.set_u32(m + 0x114, time);
-                e.mem.set_u8(m + 0x10f, 1);
-            }
-        } else if e.call(ABS, &args![horizontal]).i32() < 0x21f1
-            && e.call(ABS, &args![vertical]).i32() < 0x21f1
-        {
-            if fn_007f4c00(e) {
-                let menu = vats_menu(e);
-                e.mem.set_u8(menu + 0x110, 0);
-                e.vcall(m, 0x0c, &args![3u32, 0u32]);
-            } else if e.mem.u8(m + 0x110) != 0 {
-                e.vcall(m, 0x0c, &args![3u32, 0u32]);
-            } else if fn_007f4bb0(e) {
-                let menu = vats_menu(e);
-                e.mem.set_u8(menu + 0x10f, 0);
-                e.vcall(m, 0x0c, &args![2u32, 0u32]);
-            } else if e.mem.u8(m + 0x10f) != 0 {
-                e.vcall(m, 0x0c, &args![2u32, 0u32]);
-            }
-            e.mem.set_u8(m + 0x10d, 1);
-        }
+        vats_menu_gamepad_stick(e, m, controls);
     }
 
     // 007ecc20: the target's health meter and name.
@@ -2182,7 +2161,7 @@ pub fn vats_menu_do_idle(e: &mut Engine, this: Ptr<VatsMenu>) {
         }
         let player = e.global::<u32>(PLAYER);
         let reference = e.global::<u32>(TARGET_REFERENCE);
-        let threshold = e.call(DAMAGE_THRESHOLD, &args![player, reference]).f64() as f32;
+        let threshold = target_damage_threshold(e, player, reference);
         e.with_stack(4, |e, value| {
             let value = value.addr();
             e.mem.set_f32(value, 0.0);
@@ -2665,6 +2644,57 @@ pub fn vats_menu_do_idle(e: &mut Engine, this: Ptr<VatsMenu>) {
     let damage = fn_007f48e0(e, Ptr::new(menu));
     let menu = vats_menu(e);
     e.mem.set_f32(menu + 0xfc, damage);
+}
+
+/// The block of `VATSMenu::DoIdle` from `007eca2a` to `007ecc20`, the gamepad stick (run while
+/// the gamepad is in use; see `vats_menu_do_idle`): the right stick held past its dead zone to
+/// the right (`+0x110`) or left (`+0x10F`) notes the time once; back inside it on both axes, a
+/// held direction turns the target (the menu's slot `0xC` with 3 or 2) and `+0x10D` is set.
+fn vats_menu_gamepad_stick(e: &mut Engine, m: u32, controls: u32) {
+    // The value computed from the VATS mode (0x1ea9 or 0x21f1) and the
+    // first two axis reads are never used (so JIP LN NVSE's `SetDeadZoneLS`, which rewrites
+    // that `0x1ea9` at `0x7ECA56`, changes nothing here).
+    typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, VATS));
+    e.call(AXIS_VALUE, &args![controls, 0u32, 7u32]);
+    e.call(AXIS_VALUE, &args![controls, 0u32, 8u32]);
+    let horizontal = e.call(AXIS_VALUE, &args![controls, 0u32, 9u32]).i32();
+    let vertical = e
+        .call(AXIS_VALUE, &args![controls, 0u32, 10u32])
+        .i32()
+        .wrapping_neg();
+    // The dead zone: the exe's `0x21f1` (immediates `0x7ECAAC`, `0x7ECB3A`, `0x7ECB51`; `-0x21f1`
+    // at `0x7ECAEE`) unless JIP LN NVSE's `SetDeadZoneRS` rewrote them.
+    let dead_zone = e.pad_dead_zone_right();
+    if horizontal > dead_zone {
+        if e.mem.u8(m + 0x110) == 0 {
+            let time = e.call(TIMER_MILLISECONDS, &args![TIMER]).u32();
+            e.mem.set_u32(m + 0x114, time);
+            e.mem.set_u8(m + 0x110, 1);
+        }
+    } else if horizontal < dead_zone.wrapping_neg() {
+        if e.mem.u8(m + 0x10f) == 0 {
+            let time = e.call(TIMER_MILLISECONDS, &args![TIMER]).u32();
+            e.mem.set_u32(m + 0x114, time);
+            e.mem.set_u8(m + 0x10f, 1);
+        }
+    } else if e.call(ABS, &args![horizontal]).i32() < dead_zone
+        && e.call(ABS, &args![vertical]).i32() < dead_zone
+    {
+        if fn_007f4c00(e) {
+            let menu = vats_menu(e);
+            e.mem.set_u8(menu + 0x110, 0);
+            e.vcall(m, 0x0c, &args![3u32, 0u32]);
+        } else if e.mem.u8(m + 0x110) != 0 {
+            e.vcall(m, 0x0c, &args![3u32, 0u32]);
+        } else if fn_007f4bb0(e) {
+            let menu = vats_menu(e);
+            e.mem.set_u8(menu + 0x10f, 0);
+            e.vcall(m, 0x0c, &args![2u32, 0u32]);
+        } else if e.mem.u8(m + 0x10f) != 0 {
+            e.vcall(m, 0x0c, &args![2u32, 0u32]);
+        }
+        e.mem.set_u8(m + 0x10d, 1);
+    }
 }
 
 /// The block of `VATSMenu::DoIdle` from `007edd5d`: builds and queues the
@@ -9106,6 +9136,102 @@ mod tests {
         assert!(calls(&e, SET_00800AC0).is_empty());
     }
 
+    thread_local! {
+        static G121_SEEN: std::cell::RefCell<Log> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn g121_never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("G121's seam asked without FIXES");
+    }
+
+    /// Stands for JIP's `GetVATSTargetDTHook` with a hit reckoned: 6.5.
+    fn g121_recorded(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G121_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(6.5f32.to_bits())
+    }
+
+    /// Stands for it with no hit reckoned yet: no answer.
+    fn g121_none(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G121_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        None
+    }
+
+    /// One `DoIdle` on a target in V.A.T.S. whose detailed name shows (the perk entry 0x2F
+    /// answers 1.0), the exe's threshold 2.5, with JIP's `word` and G121's `handler`: the exe's
+    /// threshold calls, the threshold the name text was formatted with, the seam's words, and
+    /// the player and the target.
+    fn g121_run(
+        word_bits: u32,
+        handler: Option<engine_core::extend::SiteFn>,
+    ) -> (Log, Option<f64>, Log, u32, u32) {
+        let mut e = engine();
+        let s = scene(&mut e);
+        e.mem.set_u32(VATS + 8, 1);
+        e.register(IS_TOP_MENU_ID, |_, _| word(1));
+        e.register(DAMAGE_THRESHOLD, |_, _| float(2.5));
+        e.register(HANDLE_ENTRY_POINT, |e, a| {
+            if a[0] == 0x2f {
+                e.mem.set_f32(a[2], 1.0);
+            }
+            Ret::default()
+        });
+        if let Some(handler) = handler {
+            e.on_site_for_test(0x007e_ce32, handler);
+        }
+        e.set_jip_patches(word_bits);
+        G121_SEEN.with(|s| s.borrow_mut().clear());
+        e.call_log = Some(vec![]);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            vats_menu_do_idle(&mut e, Ptr::new(s.menu));
+        }));
+        let shown = calls(&e, SPRINTF)
+            .into_iter()
+            .find(|w| w.get(1) == Some(&TEXT_NAME_FORMAT))
+            .map(|w| f64::from_bits(u64::from(w[6]) | u64::from(w[7]) << 32));
+        let player = e.global::<u32>(PLAYER);
+        (
+            calls(&e, DAMAGE_THRESHOLD),
+            shown,
+            G121_SEEN.with(|s| s.take()),
+            player,
+            s.reference,
+        )
+    }
+
+    /// JIP LN NVSE's G121 seam (`0x007ECE32`, `DoIdle`'s target damage threshold; group GA's
+    /// row, a fix row): with the word 0 or `INSTALLED` alone it is not asked and the exe's
+    /// threshold (2.5) is shown; with `FIXES` and no handler, or a handler with no answer (no
+    /// hit reckoned), the exe's; with an answer it is asked once with exactly the player and
+    /// the target, the exe's call is not made, and the answer (6.5) is shown.
+    #[test]
+    fn idle_jip_vats_target_dt_seam() {
+        use engine_core::extend::jip_patches;
+        for word_bits in [0, jip_patches::INSTALLED] {
+            let (exe, shown, seen, player, target) = g121_run(word_bits, Some(g121_never));
+            assert_eq!(
+                (exe, shown, seen.len()),
+                (vec![vec![player, target]], Some(2.5), 0)
+            );
+        }
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        let (exe, shown, _, player, target) = g121_run(fixes, None);
+        assert_eq!(
+            (exe, shown),
+            (vec![vec![player, target]], Some(2.5)),
+            "no handler"
+        );
+        let (exe, shown, seen, player, target) = g121_run(fixes, Some(g121_none));
+        assert_eq!(
+            (exe, shown),
+            (vec![vec![player, target]], Some(2.5)),
+            "no hit yet"
+        );
+        assert_eq!(seen, vec![vec![player, target]]);
+        let (exe, shown, seen, player, target) = g121_run(fixes, Some(g121_recorded));
+        assert_eq!((exe.len(), shown), (0, Some(6.5)), "JIP's threshold");
+        assert_eq!(seen, vec![vec![player, target]]);
+    }
+
     #[test]
     fn idle_closes_or_drops_the_fades() {
         let mut e = engine();
@@ -9125,6 +9251,49 @@ mod tests {
         vats_menu_do_idle(&mut e, Ptr::new(menu));
         assert_eq!(calls(&e, REMOVE_FADE_CONTROL).len(), 3);
         assert!(calls(&e, MENU_FADE_STATE).is_empty());
+    }
+
+    /// The gamepad stick's four dead-zone tests read the engine's right dead zone (the exe's
+    /// `0x21f1` until JIP's `SetDeadZoneRS` moves it: `0x7ECAAC`, `0x7ECAEE` negated, `0x7ECB3A`,
+    /// `0x7ECB51`): 0x2200 notes the time to the right, -0x2200 to the left; at a dead zone moved
+    /// to 0x2200 neither, and it is not inside either; inside on both axes `+0x10D` is set.
+    #[test]
+    fn the_gamepad_stick_reads_the_moved_right_dead_zone() {
+        let run = |dead_zone: i32, horizontal: i32, axis_10: i32| {
+            let mut e = engine();
+            let menu = open_menu(&mut e);
+            e.register_double(AXIS_VALUE, move |_, a| {
+                word(match a[2] {
+                    9 => horizontal as u32,
+                    10 => axis_10 as u32,
+                    _ => 0,
+                })
+            });
+            e.register(ABS, |_, a| word((a[0] as i32).unsigned_abs()));
+            e.register(TIMER_MILLISECONDS, |_, _| word(77));
+            e.set_pad_dead_zone_right(dead_zone);
+            vats_menu_gamepad_stick(&mut e, menu, 0);
+            (
+                e.mem.u8(menu + 0x110),
+                e.mem.u8(menu + 0x10f),
+                e.mem.u8(menu + 0x10d),
+            )
+        };
+        assert_eq!(run(0x21f1, 0x2200, 0), (1, 0, 0));
+        assert_eq!(run(0x21f1, -0x2200, 0), (0, 1, 0));
+        assert_eq!(run(0x2200, 0x2200, 0), (0, 0, 0), "at the moved dead zone");
+        assert_eq!(run(0x2200, -0x2200, 0), (0, 0, 0));
+        assert_eq!(
+            run(0x2201, 0x2200, 0x2200),
+            (0, 0, 1),
+            "inside on both axes"
+        );
+        assert_eq!(run(0x2201, 0x2200, -0x2200), (0, 0, 1));
+        assert_eq!(
+            run(0x21f1, 0x2000, 0x2200),
+            (0, 0, 0),
+            "the other axis outside"
+        );
     }
 
     #[test]

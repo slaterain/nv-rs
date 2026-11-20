@@ -25,6 +25,12 @@ pub(in super::super) const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.9-GC",
     },
+    // G99 (JIP's own), Actor::HitMe: the worn armour's damage, capped by SetDamageToArmorMaxPercent (DoHitArmorDamageHook).
+    Entry {
+        addr: 0x0089_d2ff,
+        owners: JIP,
+        step: "3.9-GC",
+    },
     // G98 (a fix), Actor::Kill 0089d900: the teammate test before the kill challenges (KillChallengeFixHook).
     Entry {
         addr: 0x0089_dc0e,
@@ -40,6 +46,12 @@ pub(in super::super) const SITES: &[Entry] = &[
     // G33, Actor::Kill: the player's killer kept after the progress export.
     Entry {
         addr: 0x0089_f351,
+        owners: JIP,
+        step: "3.9-GC",
+    },
+    // G126 (JIP's own), fn_008a03a0: the player's control flag test, false with ToggleNoMovementCombat (GetControlFlagHook).
+    Entry {
+        addr: 0x008a_04b2,
         owners: JIP,
         step: "3.9-GC",
     },
@@ -97,7 +109,7 @@ pub(in super::super) const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.9-GC",
     },
-    // G77 (a fix), HitData::ReduceDamage 009b5a30: the minimum damage store, with the armour-penetrated flag.
+    // G77 (JIP's own), HitData::ReduceDamage 009b5a30: the minimum damage store, with the armour-penetrated flag.
     Entry {
         addr: 0x009b_6335,
         owners: JIP,
@@ -122,6 +134,18 @@ pub(in super::super) const WRAPS: &[Entry] = &[
     // G111 + O11 (a fix): the damage a shot does to the weapon (GetDamageToWeaponHook).
     Entry {
         addr: 0x0064_6260,
+        owners: JIP,
+        step: "3.9-GC",
+    },
+    // G85 (JIP's own): CombatFormulas::CalcArmorRating, the condition factor times SetArmorConditionPenalty's (GetArmorConditionPenaltyHook).
+    Entry {
+        addr: 0x0064_6360,
+        owners: JIP,
+        step: "3.9-GC",
+    },
+    // G84 (JIP's own): a weapon's condition damage factor, times SetConditionDamagePenalty's (GetConditionDamagePenaltyHook).
+    Entry {
+        addr: 0x0064_6d00,
         owners: JIP,
         step: "3.9-GC",
     },

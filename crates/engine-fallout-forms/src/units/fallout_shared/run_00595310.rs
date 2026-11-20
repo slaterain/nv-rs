@@ -168,6 +168,10 @@ pub fn fn_00595560(e: &mut Engine, _this: Ptr, list: Ptr) -> u32 {
     })
 }
 
+/// [`fn_00595560`], which `00595600` calls through the engine (a built-in extender may replace
+/// it: JIP LN NVSE's G113, `overridable.tsv`).
+const PICK_MEDIA_SET: u32 = 0x0059_5560;
+
 /// `00595600`'s "drop the current entry": `00595cb0` on `+0x50` when it is
 /// set, then `+0x50` = 0.
 fn drop_current(e: &mut Engine, this: Ptr) {
@@ -183,7 +187,10 @@ fn drop_current(e: &mut Engine, this: Ptr) {
 /// table leaves `+0x50` alone.
 fn pick_for_kind(e: &mut Engine, this: Ptr, kind: u32, table: &[u32]) {
     if let Some(&offset) = table.get(kind as usize) {
-        let picked = fn_00595560(e, this, Ptr::new(this.addr() + offset));
+        // Through the engine: JIP LN NVSE's G113 replaces `00595560` (`PickMediaSetHook`).
+        let picked = e
+            .call(PICK_MEDIA_SET, &args![this, this.addr() + offset])
+            .u32();
         e.mem.set_u32(this.addr() + 0x50, picked);
     }
 }
@@ -246,7 +253,10 @@ pub fn fn_00595600(e: &mut Engine, this: Ptr, flag: u8) -> u8 {
     let faction = e.mem.u32(base + 0x60);
     let mut kind = if faction != 0 {
         let default_object = e.call(0x0058_db10, &args![6u32]).u32();
-        e.call(0x005f_d3b0, &args![faction, default_object]).u32()
+        match faction_reaction_seam(e, faction, default_object) {
+            Some(reaction) => reaction,
+            None => e.call(0x005f_d3b0, &args![faction, default_object]).u32(),
+        }
     } else {
         0
     };
@@ -356,7 +366,7 @@ pub fn fn_00595600(e: &mut Engine, this: Ptr, flag: u8) -> u8 {
             drop_current(e, this);
         }
         if e.global::<u32>(BLOCK_LAST_LIST_011DD378) == 0 {
-            let picked = fn_00595560(e, this, Ptr::new(base + 0xb0));
+            let picked = e.call(PICK_MEDIA_SET, &args![this, base + 0xb0]).u32();
             e.mem.set_u32(base + 0x50, picked);
         }
     }
@@ -382,6 +392,19 @@ pub fn fn_00595600(e: &mut Engine, this: Ptr, flag: u8) -> u8 {
         e.set_global(LAST_CONTROLLER_011DD374, 0u32);
     }
     e.mem.u8(base + 0x34)
+}
+
+/// The call of `005fd3b0` at `0x5956BC` in [`fn_00595600`] (the faction's modifier towards the
+/// default object 6, the word `+4` of its reaction entry). JIP LN NVSE's G110 (a fix, the row
+/// `NV_JIP_GAME_PATCHES`) calls its `GetFactionReactionHook` there (the entry's group combat
+/// reaction, `+8`): the seam at `0x5956BC` answers the word in place of the call, asked with the
+/// faction and the other form. With the word's `FIXES` bit clear: one load, then none (the call).
+#[inline]
+fn faction_reaction_seam(e: &mut Engine, faction: u32, other: u32) -> Option<u32> {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        return e.site(0x0059_56bc, &[faction, other]);
+    }
+    None
 }
 
 // Translated from 00595c80 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -914,6 +937,28 @@ mod tests {
         assert_eq!(log.len(), 3);
     }
 
+    /// `00595600` picks through the engine (`00595560`), so JIP LN NVSE's G113 wrap there
+    /// (`PickMediaSetHook`) is what picks: both picks of the update reach the address, with the
+    /// controller and the list, and the answers are what is kept.
+    #[test]
+    fn fn_00595600_picks_through_the_engine() {
+        let World { mut e, this, .. } = world(10.0);
+        let b = this.addr();
+        e.register_double(PICK_MEDIA_SET, |e, a| {
+            let picked = e.mem.alloc(0x40);
+            e.mem.set_u32(picked, a[1]);
+            picked.into_ret()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0059_5600, &args![this, 1u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, PICK_MEDIA_SET),
+            vec![vec![b, b + 0x90], vec![b, b + 0xb0]]
+        );
+        assert_eq!(e.mem.u32(e.mem.u32(b + 0x50)), b + 0xb0);
+    }
+
     #[test]
     fn fn_00595600_picks_and_starts_an_entry() {
         let World {
@@ -1000,6 +1045,89 @@ mod tests {
         assert_eq!(e.mem.u32(b + 0x44), 1);
         assert_eq!(e.mem.u32(b + 0x48), 1);
         assert_eq!(e.mem.u32(b + 0x50), first_pick);
+    }
+
+    /// Where G110's test handler writes the words it was asked with and reads its answer.
+    const G110_ASKED: u32 = 0x0535_0000;
+
+    /// [`fn_00595600`] as in [`fn_00595600_counts_faction_members`] (no member counted, so the
+    /// kind stays what the reaction says) with G110's seam (JIP LN NVSE step 3.9 GF) handled by a
+    /// test handler that answers `answer`, and the word `word`. Answers the engine, the call log
+    /// and the faction.
+    fn g110_run(word: u32, answer: Option<u32>) -> (Engine, Log, u32) {
+        use engine_core::extend::{Owner, SiteSlot};
+        let World { mut e, this, .. } = world(10.0);
+        let b = this.addr();
+        let faction = e.mem.alloc(4);
+        e.mem.set_u32(b + 0x60, faction);
+        e.map(G110_ASKED, 0x1000);
+        e.mem.set_u32(G110_ASKED + 12, u32::from(answer.is_some()));
+        e.mem.set_u32(G110_ASKED + 16, answer.unwrap_or(0));
+        e.register(0x0058_db10, |_, _| 0x99u32.into_ret());
+        // The exe's word (the entry's modifier) is 3; the handler's is another.
+        e.register(0x005f_d3b0, |_, _| 3u32.into_ret());
+        e.register(0x008b_8e90, |_, _| false.into_ret());
+        e.register(0x0080_41a0, |_, _| 2u32.into_ret());
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0059_56bc), |e, a| {
+            let asked = e.mem.u32(G110_ASKED);
+            e.mem.set_u32(G110_ASKED, asked + 1);
+            e.mem.set_u32(G110_ASKED + 4, a[0]);
+            e.mem.set_u32(G110_ASKED + 8, a[1]);
+            (e.mem.u32(G110_ASKED + 12) != 0).then(|| e.mem.u32(G110_ASKED + 16))
+        });
+        e.set_jip_patches(word);
+        e.call_log = Some(vec![]);
+        e.call(0x0059_5600, &args![this, 1u32]);
+        let log = e.call_log.take().unwrap();
+        e.mem.set_u32(G110_ASKED + 20, b);
+        (e, log, faction)
+    }
+
+    /// The words the on-tests run with: the row's bit alone, and a player's whole word (JIP's
+    /// installed bit, the row and an optional switch), so a gate that tests for equality fails.
+    const G110_ON_WORDS: [u32; 2] = [
+        engine_core::extend::jip_patches::FIXES,
+        engine_core::extend::jip_patches::INSTALLED
+            | engine_core::extend::jip_patches::FIXES
+            | engine_core::extend::jip_patches::FO3_WPN_DEGRADATION,
+    ];
+
+    /// G110 off (JIP not installed, or installed with the row off): the seam is not asked; the
+    /// exe's `005fd3b0` gives the kind.
+    #[test]
+    fn g110_seam_does_nothing_while_off() {
+        use engine_core::extend::jip_patches;
+        for word in [0, jip_patches::INSTALLED] {
+            let (e, log, faction) = g110_run(word, Some(1));
+            let b = e.mem.u32(G110_ASKED + 20);
+            assert_eq!(e.mem.u32(G110_ASKED), 0, "{word:08x}");
+            assert_eq!(calls_to(&log, 0x005f_d3b0), vec![vec![faction, 0x99]]);
+            assert_eq!(e.mem.u32(b + 0x48), 3, "{word:08x}");
+        }
+    }
+
+    /// G110 on: the seam is asked once with the faction and the default object, its answer is
+    /// the kind and the exe's call is not made; an answer of none keeps the exe's call. Each with
+    /// the row's bit alone and with a player's whole word.
+    #[test]
+    fn g110_seam_answer_replaces_the_reaction_call() {
+        for word in G110_ON_WORDS {
+            let (e, log, faction) = g110_run(word, Some(1));
+            let b = e.mem.u32(G110_ASKED + 20);
+            assert_eq!(e.mem.u32(G110_ASKED), 1, "{word:08x}");
+            assert_eq!(
+                (e.mem.u32(G110_ASKED + 4), e.mem.u32(G110_ASKED + 8)),
+                (faction, 0x99)
+            );
+            assert!(calls_to(&log, 0x005f_d3b0).is_empty(), "{word:08x}");
+            assert_eq!(e.mem.u32(b + 0x48), 1, "{word:08x}");
+
+            let (e, log, faction) = g110_run(word, None);
+            let b = e.mem.u32(G110_ASKED + 20);
+            assert_eq!(e.mem.u32(G110_ASKED), 1, "{word:08x}");
+            assert_eq!(calls_to(&log, 0x005f_d3b0), vec![vec![faction, 0x99]]);
+            assert_eq!(e.mem.u32(b + 0x48), 3, "{word:08x}");
+        }
     }
 
     #[test]

@@ -111,6 +111,77 @@ pub fn str_to_int(text: &[u8]) -> i32 {
     }
 }
 
+/// `kStrToDblConsts + 0x10` (JIP's `StrToDbl`): the scale of a fraction by how many of its nine
+/// digits were not read.
+const FRACTION_SCALE: [f64; 9] = [
+    1.0e-09, 1.0e-08, 1.0e-07, 1.0e-06, 1.0e-05, 0.0001, 0.001, 0.01, 0.1,
+];
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/utility.cpp: StrToDbl.
+/// A decimal number at the start of `text`: an optional minus sign, the integer digits (32
+/// bits, unsigned: a digit that makes the value fall below the one before answers
+/// ±4294967296), then `.` and up to nine fraction digits; the sign only when a part is not 0.
+pub fn str_to_dbl(text: &[u8]) -> f64 {
+    let mut i = 0usize;
+    let mut sign: u8 = 0;
+    if at(text, 0) == b'-' {
+        sign = 1;
+        i = 1;
+    }
+    let (mut v, mut prev) = (0u32, 0u32);
+    let mut out = 0.0f64;
+    let mut c;
+    loop {
+        c = at(text, i).wrapping_sub(b'0');
+        if c > 9 {
+            break;
+        }
+        v = v.wrapping_mul(10).wrapping_add(u32::from(c));
+        if v < prev {
+            return if sign != 0 {
+                -4294967296.0
+            } else {
+                4294967296.0
+            };
+        }
+        prev = v;
+        i += 1;
+    }
+    if v != 0 {
+        // `cvtsi2sd` reads the word signed; `jns` skips the 2^32 a set top bit needs.
+        out = f64::from(v as i32);
+        if (v as i32) < 0 {
+            out += 4294967296.0;
+        }
+        sign <<= 1;
+        v = 0;
+    }
+    // `.` less `0` is 0xFE.
+    if c == 0xfe {
+        let mut left: u8 = 9;
+        loop {
+            i += 1;
+            let d = at(text, i).wrapping_sub(b'0');
+            if d > 9 {
+                break;
+            }
+            v = v.wrapping_mul(10).wrapping_add(u32::from(d));
+            left -= 1;
+            if left == 0 {
+                break;
+            }
+        }
+        if v != 0 {
+            sign <<= 1;
+            out += f64::from(v as i32) * FRACTION_SCALE[usize::from(left)];
+        }
+    }
+    if sign & 6 != 0 {
+        out = f64::from_bits(out.to_bits() | 1 << 63);
+    }
+    out
+}
+
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/utility.cpp: IntToStr.
 /// A signed integer in decimal: a minus sign, then the digits of its magnitude (`-2147483648` too).
 pub fn int_to_str(num: i32) -> Vec<u8> {
@@ -292,5 +363,26 @@ mod tests {
         engine_core::x87::set_control_word(0x007f);
         assert_eq!(flt_to_str(value), b"7.499501");
         assert_eq!(flt_to_str(57.0 + 30.0 * 0.01), b"57.3");
+    }
+
+    /// JIP's number reading: nine fraction digits at most, the integer part's unsigned wrap, the
+    /// sign only on a non-zero part, anything after the number ignored.
+    #[test]
+    fn the_number_reading() {
+        assert_eq!(str_to_dbl(b"350"), 350.0);
+        assert_eq!(str_to_dbl(b"1.5000"), 1.5);
+        assert_eq!(str_to_dbl(b"-2.25x"), -2.25);
+        assert_eq!(str_to_dbl(b"-.5"), -0.5);
+        assert_eq!(str_to_dbl(b".123456789123"), 123_456_789.0 * 1.0e-09);
+        assert_eq!(str_to_dbl(b"0.1"), 1.0 * 0.1);
+        assert_eq!(str_to_dbl(b"3000000000"), 3_000_000_000.0);
+        assert_eq!(str_to_dbl(b"99999999999"), 4294967296.0);
+        assert_eq!(str_to_dbl(b"-99999999999"), -4294967296.0);
+        assert_eq!(str_to_dbl(b"1e5"), 1.0);
+        assert_eq!(str_to_dbl(b" 5"), 0.0);
+        // "-0" and "-" are +0: the sign needs a part that is not 0.
+        assert_eq!(str_to_dbl(b"-0").to_bits(), 0);
+        assert_eq!(str_to_dbl(b"-").to_bits(), 0);
+        assert_eq!(str_to_dbl(b""), 0.0);
     }
 }

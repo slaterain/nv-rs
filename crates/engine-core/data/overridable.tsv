@@ -17,7 +17,7 @@
 00493800	0	kNVSE
 004a0370	1	NVTF
 004a03c0	1	NVTF
-004ab400	1	JIP
+004ab400	0	JIP
 004b5d10	2	nv-rs thread races
 004bd570	2	ITR
 004bd820	1	JIP
@@ -31,6 +31,7 @@
 0050de20	0	JIP
 0050f9e0	0	JIP
 00518f00	1	ITR
+00525980	0	JIP
 00525a90	0	JIP
 00525b20	3	yUI
 005702e0	0	ITR
@@ -38,7 +39,7 @@
 005854f0	1	nv-rs cell offsets for every plugin
 0058e9d0	0	JIP
 00593870	2	script or frame function
-00595560	2	JIP
+00595560	0	JIP
 005a5e70	1	JG
 005ac1e0	1	script or frame function
 005ac750	0	script or frame function
@@ -63,7 +64,7 @@
 00623cb0	0	ITR
 00646260	0	JIP
 00646360	0	JIP
-00646d00	1	JIP
+00646d00	0	JIP
 00652140	0	nv-rs thread races
 00652160	0	nv-rs thread races
 00652190	0	nv-rs thread races
@@ -74,7 +75,7 @@
 0071d0a0	1	nv-rs thread races
 0077a480	0	JIP
 007838a0	1	nv-rs mod fit worn question
-0078ac60	2	JIP
+0078ac60	0	JIP
 007acb60	0	nv-rs facial hair by race folder
 007adce0	0	nv-rs facial hair by race folder
 007b4b50	1	nv-rs facial hair by race folder
@@ -229,13 +230,25 @@
 #> 3.9 GH2
 
 #> 3.9 GF
+004f15a0	0	JIP
 00601c30	0	JIP
 
 #> 3.9 GS
 
 #> 3.9 GW
+004f4f90	0	JIP
+005e3630	0	JIP
+00867a40	0	JIP
+00af01e0	0	JIP
+00af0290	0	JIP
 
 #> 3.9 GL
 
 #> 3.9 GX
 
+#> jip-cmds
+00728d60	0	JIP
+007304b0	0	JIP
+0075e650	0	JIP
+0077a5b0	0	JIP
+00782620	0	JIP

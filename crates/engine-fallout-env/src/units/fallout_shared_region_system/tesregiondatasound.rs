@@ -421,6 +421,7 @@ pub fn tes_region_data_sound_load_region_data_sound(
         CHUNK_RDSI => {
             e.with_stack(4, |e, id| {
                 e.call(GET_CHUNK_WORD, &args![file, id]);
+                jip_media_set_id(e, 0x004f_49ab, file, id);
                 let value = e.mem.u32(id.addr());
                 if value != 0 {
                     e.set(this, TESRegionDataSound::pMediaSetIncidentals, value);
@@ -430,6 +431,7 @@ pub fn tes_region_data_sound_load_region_data_sound(
         CHUNK_RDSB => {
             e.with_stack(4, |e, id| {
                 e.call(GET_CHUNK_WORD, &args![file, id]);
+                jip_media_set_id(e, 0x004f_49d2, file, id);
                 e.call(LIST_APPEND, &args![battle_list(this), id]);
             });
         }
@@ -474,6 +476,19 @@ pub fn tes_region_data_sound_load_region_data_sound(
         _ => return false,
     }
     true
+}
+
+/// After the `RDSI` (`site` `0x4F49AB`) or an `RDSB` (`0x4F49D2`) media set id is read. JIP LN
+/// NVSE's G113 (a fix, the row `NV_JIP_GAME_PATCHES`; `LoadMediaSetIDHook`, credited to
+/// lStewieAl and TrueCourierSix, in place of the `GetChunkData` call) also resolves the id
+/// through the plugin's masters (`AddCompileIndex`), which the exe does not: the seam is asked
+/// with the file and the id's slot (the handler resolves it; the answer is not read). With the
+/// word's `FIXES` bit clear: one load, nothing else.
+#[inline]
+fn jip_media_set_id(e: &mut Engine, site: u32, file: Ptr, id: Ptr) {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(site, &[file.addr(), id.addr()]);
+    }
 }
 
 /// One `RDSD` entry made into a new `TESRegionSound`: allocated and
@@ -1346,6 +1361,70 @@ mod tests {
         assert_eq!(
             *moved.borrow(),
             vec![(this.addr() + 0x18, 0x42), (this.addr() + 0x18, 0x42)]
+        );
+    }
+
+    /// G113's seams at `0x4F49AB` (`RDSI`) and `0x4F49D2` (`RDSB`): JIP not installed, or
+    /// installed with the row off, asks nothing (the id as read); with the row, the seam of the
+    /// chunk is asked with the file and the id's slot after the read, and what it leaves in the
+    /// slot is what is stored or appended.
+    #[test]
+    fn g113_seams_resolve_the_media_set_ids() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        /// The seams' log: the count, then (seam, file, id) for each ask.
+        const ASKED: u32 = 0x0118_0400;
+        fn asked(e: &mut Engine, site: u32, a: &[u32]) -> Option<u32> {
+            let n = e.mem.u32(ASKED);
+            e.mem.set_u32(ASKED, n + 1);
+            let at = ASKED + 4 + 12 * n;
+            e.mem.set_u32(at, site);
+            e.mem.set_u32(at + 4, a[0]);
+            e.mem.set_u32(at + 8, e.mem.u32(a[1]));
+            e.mem.set_u32(a[1], 0x0300_0077);
+            Some(0)
+        }
+        let run = |chunk: u32, word: u32| {
+            let mut e = load_engine(chunk, 0x77);
+            if !e.mem.is_mapped(ASKED) {
+                e.map(ASKED & !0xfff, 0x1000);
+            }
+            e.mem.set_u32(ASKED, 0);
+            e.set_jip_patches(word);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x004f_49ab), |e, a| {
+                asked(e, 0x004f_49ab, a)
+            });
+            e.on_site(SiteSlot::new(Owner::Jip, 0x004f_49d2), |e, a| {
+                asked(e, 0x004f_49d2, a)
+            });
+            let appended = Rc::new(RefCell::new(vec![]));
+            let seen = appended.clone();
+            e.register_double(LIST_APPEND, move |e, a| {
+                seen.borrow_mut().push(e.mem.u32(a[1]));
+                Ret::default()
+            });
+            let this = sound_data(&mut e);
+            assert!(e.call(0x004f_4860, &args![this, 0x8000u32]).bool());
+            let incidentals = e.get(this, TESRegionDataSound::pMediaSetIncidentals);
+            let asked: Vec<(u32, u32, u32)> = (0..e.mem.u32(ASKED))
+                .map(|i| {
+                    let at = ASKED + 4 + 12 * i;
+                    (e.mem.u32(at), e.mem.u32(at + 4), e.mem.u32(at + 8))
+                })
+                .collect();
+            let appended = appended.borrow().clone();
+            (incidentals, appended, asked)
+        };
+        for word in [0, jip_patches::INSTALLED] {
+            assert_eq!(run(CHUNK_RDSI, word), (0x77, vec![], vec![]), "{word:08x}");
+            assert_eq!(run(CHUNK_RDSB, word), (0, vec![0x77], vec![]), "{word:08x}");
+        }
+        assert_eq!(
+            run(CHUNK_RDSI, jip_patches::FIXES),
+            (0x0300_0077, vec![], vec![(0x004f_49ab, 0x8000, 0x77)])
+        );
+        assert_eq!(
+            run(CHUNK_RDSB, jip_patches::FIXES),
+            (0, vec![0x0300_0077], vec![(0x004f_49d2, 0x8000, 0x77)])
         );
     }
 }

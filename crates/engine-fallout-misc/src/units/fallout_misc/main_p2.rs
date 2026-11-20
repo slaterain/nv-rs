@@ -505,6 +505,9 @@ pub fn fn_00870a00(e: &mut Engine, this: Ptr, target: u32, skip_world: u8) {
         0x0087_3200,
         &args![this, accumulator, draw_world as u32, 1u32, accumulator_flag],
     );
+    // Port-added: the world is drawn (`engine_core::world_drawn`; after the world pass's call at
+    // 00870ae8). In third person too: `draw_world` is false there (the first-person node is culled).
+    engine_core::world_drawn::world_drawn(e);
     if draw_world {
         timed(Column::FirstPersonSetup, || {
             e.call(0x0087_4c10, &args![this])
@@ -615,6 +618,9 @@ pub fn fn_00870bd0(e: &mut Engine, this: Ptr, target: u32, skip_world: u8) {
         0x0087_3200,
         &args![this, accumulator, draw_world as u32, 0u32, accumulator_flag],
     );
+    // Port-added: the world is drawn (`engine_core::world_drawn`; after the world pass's call at
+    // 00870e18). In third person too: `draw_world` is false there (the first-person node is culled).
+    engine_core::world_drawn::world_drawn(e);
     if draw_world && accumulator != 0 {
         let owner = e.call(0x0043_b230, &args![accumulator]).u32();
         e.call(0x0045_0f90, &args![owner, saved_owner_flag as u32]);
@@ -3129,7 +3135,17 @@ pub fn fn_00875110(
             PROFILE_SCOPE_CTOR,
             &args![guard, 0x34u32, 1u32, SOURCE_FILE_NAME, 0x221fu32],
         );
-        e.call(0x0071_48c0, &args![interface_arg, 0u32, 4u32]);
+        // The depth clear (0x8751C6). JIP's `ToggleDepthClear` (G128) puts its hook on this call
+        // whenever JIP is in: the seam's answer skips it. Port-added: a skipped clear still marks
+        // the world as drawn for the platform (`engine_core::world_drawn::depth_clear_skipped`;
+        // the clear is where the new lighting and the sun shadows take that mark).
+        let skip_clear = e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+            && e.site(0x0087_51c6, &[]).is_some();
+        if skip_clear {
+            engine_core::world_drawn::depth_clear_skipped(e);
+        } else {
+            e.call(0x0071_48c0, &args![interface_arg, 0u32, 4u32]);
+        }
         if renderer_color_applies(e) {
             let camera = pointer_get(e, this_addr + 0xa0);
             e.call(SET_COLOR, &args![camera, CONSTANT_COLOR]);
@@ -5823,6 +5839,50 @@ mod tests {
             vec![vec![this, 0, 0x2000, 0x1000, 0]]
         );
         assert_eq!(calls_to(&log, 0x0087_6830), vec![vec![this, 1, 0x5000]]);
+    }
+
+    /// The port-added point `engine_core::world_drawn` (the new lighting's): in both world frames
+    /// once, right after the world pass (`00873200`) and before the rest of the draw (`00875110`:
+    /// the first-person arms, then the image-space step and the HUD); in third person too, where
+    /// the first-person node is culled and the rest of the draw is skipped; and when the frame skips
+    /// the first-person part for its other reasons (the skip argument), since the world pass
+    /// still runs.
+    #[test]
+    fn world_frames_reach_the_world_drawn_point_after_the_world_pass() {
+        const MARK: u32 = 0x7fff_0010;
+        thread_local! {
+            static ARMED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        }
+        // Process-wide once installed: it calls only on this test's thread, while armed.
+        fn hook(e: &mut Engine) {
+            if ARMED.with(std::cell::Cell::get) {
+                e.call(MARK, &args![]);
+            }
+        }
+        engine_core::world_drawn::install(hook);
+        ARMED.with(|a| a.set(true));
+        let watched = [0x0087_3200, MARK, 0x0087_5110];
+        for (byte_131, frame) in [(0u8, 0x0087_0bd0u32), (1, 0x0087_0a00)] {
+            // First person: the world pass, the point, the rest of the draw.
+            let (mut r, this, _) = frame_rig(byte_131);
+            r.e.register_double(MARK, |_, _| Ret::default());
+            let (_, log) = r.run(frame, &args![this, 0u32, 0u32]);
+            assert_eq!(only(&log, &watched), watched, "{frame:08x}");
+            // Third person (the first-person node culled) and the skip argument: the world pass
+            // and the point, no rest of the draw.
+            for (culled, skip) in [(1u32, 0u32), (0, 1)] {
+                let (mut r, this, _) = frame_rig(byte_131);
+                r.set(0x0045_6610, &[culled]);
+                r.e.register_double(MARK, |_, _| Ret::default());
+                let (_, log) = r.run(frame, &args![this, 0u32, skip]);
+                assert_eq!(
+                    only(&log, &watched),
+                    [0x0087_3200, MARK],
+                    "{frame:08x} culled {culled} skip {skip}"
+                );
+            }
+        }
+        ARMED.with(|a| a.set(false));
     }
 
     #[test]
@@ -8960,6 +9020,60 @@ mod tests_second {
         assert_eq!(calls_to(&log, PROFILE_SCOPE_DTOR), vec![vec![guard]]);
         // No nested scope without 005b9b00.
         assert_eq!(calls_to(&log, PROFILE_SCOPE_CTOR).len(), 1);
+    }
+
+    /// JIP's `ToggleDepthClear` seam (0x8751C6): asked only while JIP is installed; its answer
+    /// skips the depth clear, no answer leaves it. A skipped clear reaches the port-added point
+    /// `engine_core::world_drawn::depth_clear_skipped` in its place, before the rest of the draw
+    /// (the colour, the first-person arms); a clear that runs does not (the clear marks it).
+    #[test]
+    fn frame_pass_depth_clear_asks_jips_seam() {
+        const MARK: u32 = 0x7fff_0020;
+        thread_local! {
+            static ASKED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+            static ANSWER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+            static ARMED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        }
+        // Process-wide once installed: it calls only on this test's thread, while armed.
+        fn hook(e: &mut Engine) {
+            if ARMED.with(std::cell::Cell::get) {
+                e.call(MARK, &args![]);
+            }
+        }
+        engine_core::world_drawn::install_depth_clear_skipped(hook);
+        ARMED.with(|a| a.set(true));
+        let cases = [
+            (0, true, 1, 0),
+            (engine_core::extend::jip_patches::INSTALLED, false, 1, 1),
+            (engine_core::extend::jip_patches::INSTALLED, true, 0, 1),
+        ];
+        for (word, answer, clears, asked) in cases {
+            let (mut r, this) = scene_rig();
+            r.set(MEMBER_8C_B, &[0x6200]);
+            r.set(GET_MT_SYSTEM, &[0x1234]);
+            r.e.set_jip_patches(word);
+            ASKED.with(|a| a.set(0));
+            ANSWER.with(|a| a.set(answer));
+            r.e.register_double(MARK, |_, _| Ret::default());
+            r.e.on_site_for_test(0x0087_51c6, |_, _| {
+                ASKED.with(|a| a.set(a.get() + 1));
+                ANSWER.with(|a| a.get()).then_some(0)
+            });
+            let (_, log) = r.run(0x0087_5110, &args![this, 0x1000u32, 0u32, 0u32, 0x40u32]);
+            assert_eq!(
+                calls_to(&log, 0x0071_48c0).len(),
+                clears,
+                "{word:x} {answer}"
+            );
+            assert_eq!(ASKED.with(|a| a.get()), asked, "{word:x} {answer}");
+            let first = if clears == 1 { 0x0071_48c0 } else { MARK };
+            assert_eq!(
+                only(&log, &[MARK, 0x0071_48c0, SET_COLOR]),
+                [first, SET_COLOR],
+                "{word:x} {answer}"
+            );
+        }
+        ARMED.with(|a| a.set(false));
     }
 
     #[test]

@@ -8,6 +8,8 @@
 //! - With `--game` (the player's own FalloutNV.exe, or a DLL; only read, on the packager's machine):
 //!   the longest runs of bytes the program files share with it, at least [`MIN_RUN`] long, not
 //!   counting runs of one repeated byte or word. A run this long would be data copied from the game.
+//!   A run that lies wholly inside a public mathematical table both may carry ([`public_tables`]:
+//!   the CRC-32 tables, made here) is left out of the count and listed as left out.
 //!
 //!   Every `--game` file must be readable (one that isn't fails the check, it is never skipped). With
 //!   `--max-run`, a shared run longer than that fails the check too: the C runtime's own tables are
@@ -15,7 +17,8 @@
 //!
 //! Prints what it finds; status 1 when a needle is found or a shared run is over the limit, 2 when
 //! a `--game` file can't be read or the command line is wrong (a `--max-run` that isn't a number
-//! included).
+//! included), and when nothing would be checked: FOLDER missing, not a folder or without files, or
+//! `--game` given with no program in FOLDER.
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -38,6 +41,21 @@ fn files_under(folder: &Path, out: &mut Vec<PathBuf>) {
             out.push(path);
         }
     }
+}
+
+/// A program: a Windows `.exe`, or a Linux (ELF) or macOS (Mach-O, 64-bit or universal) program
+/// by its first bytes, whatever its name (they have no extension).
+fn is_program(file: &Path, data: &[u8]) -> bool {
+    let exe = file
+        .extension()
+        .is_some_and(|x| x.eq_ignore_ascii_case("exe"));
+    exe || [
+        &b"\x7fELF"[..],
+        &[0xcf, 0xfa, 0xed, 0xfe],
+        &[0xca, 0xfe, 0xba, 0xbe],
+    ]
+    .iter()
+    .any(|magic| data.starts_with(magic))
 }
 
 fn lower(b: u8) -> u8 {
@@ -73,6 +91,25 @@ fn forms(needle: &str) -> [Vec<u8>; 2] {
     [bytes, wide]
 }
 
+/// [`forms`] in the case given.
+fn exact_forms(needle: &str) -> [Vec<u8>; 2] {
+    let bytes = needle.as_bytes().to_vec();
+    let wide = bytes.iter().flat_map(|&b| [b, 0]).collect();
+    [bytes, wide]
+}
+
+/// Offsets of `needle` in `data`, in the case given.
+fn find_exact(data: &[u8], needle: &[u8]) -> Vec<usize> {
+    if needle.is_empty() {
+        return vec![];
+    }
+    data.windows(needle.len())
+        .enumerate()
+        .filter(|(_, w)| *w == needle)
+        .map(|(at, _)| at)
+        .collect()
+}
+
 fn shown(data: &[u8], at: usize) -> String {
     let from = at.saturating_sub(24);
     let to = (at + 72).min(data.len());
@@ -98,6 +135,113 @@ fn fnv(data: &[u8]) -> u64 {
 /// Whether a run is only padding: one byte or one 4-byte word repeated.
 fn is_filler(run: &[u8]) -> bool {
     run.len() >= 8 && run.iter().enumerate().all(|(i, b)| *b == run[i % 4])
+}
+
+/// Public mathematical tables a program and the game may both carry whole, made here (not read
+/// from either file): the CRC-32 lookup tables of the IEEE polynomial (reflected, `0xEDB88320`) as
+/// the common table makers lay them out. Slice-by-16, little-endian (crc32fast's `CRC32_TABLE`,
+/// which `zip` and `sevenz-rust2` bring into the game program; its first one, four and eight
+/// tables are the slice-by-1, -4 and -8 layouts), and zlib's `crc_table[8][256]` (its four
+/// little-endian slices, then the same four byte-swapped), which the game carries.
+fn public_tables() -> Vec<(&'static str, Vec<u8>)> {
+    let mut t = [[0u32; 256]; 16];
+    for (n, entry) in t[0].iter_mut().enumerate() {
+        let mut c = n as u32;
+        for _ in 0..8 {
+            c = if c & 1 != 0 {
+                0xedb8_8320 ^ (c >> 1)
+            } else {
+                c >> 1
+            };
+        }
+        *entry = c;
+    }
+    for k in 1..16 {
+        for n in 0..256 {
+            let c = t[k - 1][n];
+            t[k][n] = (c >> 8) ^ t[0][(c & 0xff) as usize];
+        }
+    }
+    let slices: Vec<u8> = t.iter().flatten().flat_map(|c| c.to_le_bytes()).collect();
+    let mut zlib: Vec<u8> = t[..4]
+        .iter()
+        .flatten()
+        .flat_map(|c| c.to_le_bytes())
+        .collect();
+    zlib.extend(
+        t[..4]
+            .iter()
+            .flatten()
+            .flat_map(|c| c.swap_bytes().to_le_bytes()),
+    );
+    vec![
+        ("the CRC-32 slice-by-16 tables", slices),
+        ("zlib's CRC-32 tables", zlib),
+    ]
+}
+
+/// The public table a shared run lies wholly inside, its zero bytes at either end aside (padding
+/// around the table, or a table's own zero first entry); `None` when it is not, or when what is
+/// left is shorter than [`MIN_RUN`] (a short piece could be inside a table by chance).
+fn public_table_of(run: &[u8], tables: &[(&'static str, Vec<u8>)]) -> Option<&'static str> {
+    let start = run.iter().position(|&b| b != 0)?;
+    let end = run.iter().rposition(|&b| b != 0)? + 1;
+    let core = &run[start..end];
+    if core.len() < MIN_RUN {
+        return None;
+    }
+    tables
+        .iter()
+        .find(|(_, table)| table.windows(core.len()).any(|w| w == core))
+        .map(|(name, _)| *name)
+}
+
+/// One program's shared runs judged: the runs counted (longest first; filler not counted), those
+/// left out as inside a public table (with the table's name), and whether the longest counted is
+/// over the `--max-run` limit.
+struct Verdict {
+    counted: Vec<(usize, usize, usize)>,
+    left_out: Vec<((usize, usize, usize), &'static str)>,
+    over: bool,
+}
+
+impl Verdict {
+    fn total(&self) -> usize {
+        self.counted.iter().map(|r| r.1).sum()
+    }
+
+    fn longest(&self) -> usize {
+        self.counted.first().map_or(0, |r| r.1)
+    }
+}
+
+/// The verdict on `runs` of `data` (from [`shared_runs`]): filler dropped, runs inside a public
+/// table left out, the rest counted against `max_run`.
+fn verdict(
+    data: &[u8],
+    runs: Vec<(usize, usize, usize)>,
+    tables: &[(&'static str, Vec<u8>)],
+    max_run: Option<usize>,
+) -> Verdict {
+    let mut counted = Vec::new();
+    let mut left_out = Vec::new();
+    for run in runs {
+        let bytes = &data[run.0..run.0 + run.1];
+        if is_filler(bytes) {
+            continue;
+        }
+        match public_table_of(bytes, tables) {
+            Some(table) => left_out.push((run, table)),
+            None => counted.push(run),
+        }
+    }
+    counted.sort_by_key(|r| std::cmp::Reverse(r.1));
+    let over = max_run.is_some_and(|limit| counted.first().is_some_and(|r| r.1 > limit));
+    Verdict {
+        counted,
+        left_out,
+        over,
+    }
 }
 
 /// The maximal runs of `data` of at least `MIN_RUN` bytes shared with the files indexed in `index`.
@@ -169,11 +313,17 @@ struct Arguments {
     folder: PathBuf,
     needles: Vec<String>,
     program_needles: Vec<String>,
+    /// `--program-needle-exact`: searched in programs in the case given (a disassembler's
+    /// `FUN_` in upper case, where a program for Linux or macOS holds `fun_` inside other bytes).
+    exact_program_needles: Vec<String>,
     games: Vec<PathBuf>,
     max_run: Option<usize>,
+    /// `--notices LIST`: every notice LIST names (`FILE<TAB>NAME` a line, `#` comments) must be
+    /// in the package as `licenses/NAME`.
+    notices: Option<PathBuf>,
 }
 
-const USAGE: &str = "usage: package-check FOLDER [--needle TEXT]... [--program-needle TEXT]... [--game FILE]... [--max-run BYTES]";
+const USAGE: &str = "usage: package-check FOLDER [--needle TEXT]... [--program-needle TEXT]... [--program-needle-exact TEXT]... [--game FILE]... [--max-run BYTES] [--notices LIST]";
 
 /// The command line after the program's name. A switch without its value, an unknown switch or a
 /// `--max-run` that isn't a number is an error: a limit that was asked for is never dropped.
@@ -194,7 +344,9 @@ fn parse_arguments(args: &[String]) -> Result<Arguments, String> {
         match arg.as_str() {
             "--needle" => out.needles.push(value?),
             "--program-needle" => out.program_needles.push(value?),
+            "--program-needle-exact" => out.exact_program_needles.push(value?),
             "--game" => out.games.push(PathBuf::from(value?)),
+            "--notices" => out.notices = Some(PathBuf::from(value?)),
             "--max-run" => {
                 let n = value?;
                 let limit = n
@@ -215,8 +367,10 @@ fn main() {
         folder,
         needles,
         program_needles,
+        exact_program_needles,
         games,
         max_run,
+        notices,
     } = match parse_arguments(&args) {
         Ok(arguments) => arguments,
         Err(why) => {
@@ -227,6 +381,19 @@ fn main() {
     let mut files = Vec::new();
     files_under(&folder, &mut files);
     files.sort();
+    // A mistyped or empty folder would otherwise pass with "0 files", unchecked.
+    if let Some(why) = folder_problem(&folder, &files) {
+        eprintln!("{why}");
+        std::process::exit(2);
+    }
+    // And `--game` must have a program to compare with the game.
+    if !games.is_empty() && !has_program(&files) {
+        eprintln!(
+            "--game: no program file in {} (a .exe, or a Linux or macOS program): nothing would be compared with the game",
+            folder.display()
+        );
+        std::process::exit(2);
+    }
     let mut bad = 0usize;
     for file in &files {
         let Ok(data) = std::fs::read(file) else {
@@ -234,9 +401,7 @@ fn main() {
             bad += 1;
             continue;
         };
-        let is_program = file
-            .extension()
-            .is_some_and(|x| x.eq_ignore_ascii_case("exe"));
+        let is_program = is_program(file, &data);
         let extra: &[String] = if is_program { &program_needles } else { &[] };
         for needle in needles.iter().chain(extra) {
             for form in forms(needle) {
@@ -244,6 +409,26 @@ fn main() {
                 if let Some(&first) = hits.first() {
                     println!(
                         "FOUND {:?} {} times in {}: ...{}...",
+                        needle,
+                        hits.len(),
+                        file.display(),
+                        shown(&data, first)
+                    );
+                    bad += hits.len();
+                }
+            }
+        }
+        let exact: &[String] = if is_program {
+            &exact_program_needles
+        } else {
+            &[]
+        };
+        for needle in exact {
+            for form in exact_forms(needle) {
+                let hits = find_exact(&data, &form);
+                if let Some(&first) = hits.first() {
+                    println!(
+                        "FOUND {:?} (this case) {} times in {}: ...{}...",
                         needle,
                         hits.len(),
                         file.display(),
@@ -289,37 +474,46 @@ fn main() {
             reference.len(),
             distinct.len()
         );
+        let tables = public_tables();
         for file in &files {
-            let extension = file
-                .extension()
-                .map(|x| x.to_string_lossy().to_ascii_lowercase());
-            if extension.as_deref() != Some("exe") {
-                continue;
-            }
             let Ok(data) = std::fs::read(file) else {
                 continue;
             };
-            let mut runs: Vec<_> = shared_runs(&data, &reference, &index)
-                .into_iter()
-                .filter(|&(at, length, _)| !is_filler(&data[at..at + length]))
-                .collect();
-            runs.sort_by_key(|r| std::cmp::Reverse(r.1));
-            let total: usize = runs.iter().map(|r| r.1).sum();
+            if !is_program(file, &data) {
+                continue;
+            }
+            let v = verdict(
+                &data,
+                shared_runs(&data, &reference, &index),
+                &tables,
+                max_run,
+            );
+            // The summary line ends with "longest N": check-unix-package.ps1 reads it so.
             println!(
                 "{}: {} bytes, shares {} runs of {MIN_RUN}+ bytes, {} bytes in all, longest {}",
                 file.display(),
                 data.len(),
-                runs.len(),
-                total,
-                runs.first().map_or(0, |r| r.1)
+                v.counted.len(),
+                v.total(),
+                v.longest()
             );
-            if let Some(limit) = max_run.filter(|&l| runs.first().is_some_and(|r| r.1 > l)) {
+            println!(
+                "{}: {} runs inside public tables, left out",
+                file.display(),
+                v.left_out.len()
+            );
+            for &((at, length, _), table) in &v.left_out {
+                println!("  left out: {length} bytes at {at:#x}, inside {table}");
+            }
+            if v.over {
                 println!(
-                    "FOUND a run shared with the game longer than {limit} bytes in {}",
+                    "FOUND a run shared with the game longer than {} bytes in {}",
+                    max_run.unwrap_or_default(),
                     file.display()
                 );
                 bad += 1;
             }
+            let runs = v.counted;
             for &(at, length, n) in runs.iter().take(25) {
                 println!(
                     "  {length} bytes at {at:#x}, with {}: {}",
@@ -329,12 +523,165 @@ fn main() {
             }
         }
     }
+    if let Some(list) = &notices {
+        match std::fs::read_to_string(list) {
+            Ok(text) => {
+                for name in missing_notices(&folder, &text) {
+                    println!(
+                        "MISSING notice licenses/{name} (listed in {})",
+                        list.display()
+                    );
+                    bad += 1;
+                }
+            }
+            Err(e) => {
+                eprintln!("--notices {}: {e}", list.display());
+                std::process::exit(2);
+            }
+        }
+    }
     std::process::exit(i32::from(bad != 0));
+}
+
+/// Why `folder` cannot be checked: it is not a folder (missing, mistyped, a file), or `files` (what
+/// was found under it) is empty. A check of nothing must never pass.
+fn folder_problem(folder: &Path, files: &[PathBuf]) -> Option<String> {
+    if !folder.is_dir() {
+        return Some(format!(
+            "{}: not a folder (missing or mistyped?): nothing was checked",
+            folder.display()
+        ));
+    }
+    files
+        .is_empty()
+        .then(|| format!("{}: no files in it: nothing was checked", folder.display()))
+}
+
+/// Whether any of `files` is a program ([`is_program`], by its name or first bytes).
+fn has_program(files: &[PathBuf]) -> bool {
+    files.iter().any(|file| {
+        let mut head = [0u8; 4];
+        let read = std::fs::File::open(file)
+            .and_then(|mut f| std::io::Read::read(&mut f, &mut head))
+            .unwrap_or(0);
+        is_program(file, &head[..read])
+    })
+}
+
+/// The names `list` (`FILE<TAB>NAME` a line, `#` comments, blank lines) gives that are not in
+/// `folder`'s `licenses` folder as files.
+fn missing_notices(folder: &Path, list: &str) -> Vec<String> {
+    list.lines()
+        .map(str::trim_end)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(|line| line.split('\t').nth(1).unwrap_or("").trim().to_string())
+        .filter(|name| name.is_empty() || !folder.join("licenses").join(name).is_file())
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Every notice the list names must be in the package's licenses folder; a line without a
+    /// name is missing too.
+    #[test]
+    fn a_notice_the_list_names_must_be_in_the_package() {
+        let dir =
+            std::env::temp_dir().join(format!("package-check-notices-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("licenses")).unwrap();
+        std::fs::write(dir.join("licenses/NOTICE-uio"), b"MIT").unwrap();
+        let list = "# comment\n\ncrates/uio/NOTICE\tNOTICE-uio\n\
+                    crates/nvse/LICENSE-algohol\tLICENSE-algohol\nno-name-here\n";
+        assert_eq!(missing_notices(&dir, list), ["LICENSE-algohol", ""]);
+        let parsed = parse_arguments(&args(&["pkg", "--notices", "n.txt"])).unwrap();
+        assert_eq!(parsed.notices, Some(PathBuf::from("n.txt")));
+        assert!(parse_arguments(&args(&["pkg", "--notices"])).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Review of #632 (round 5): a folder that does not exist, is a file, or holds no files is a
+    /// problem (status 2), not "0 files, 0 hits"; one with a file is checked.
+    #[test]
+    fn a_missing_or_empty_folder_is_not_a_pass() {
+        let dir = std::env::temp_dir().join(format!("package-check-folder-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let found = |folder: &Path| {
+            let mut files = Vec::new();
+            files_under(folder, &mut files);
+            folder_problem(folder, &files)
+        };
+        let missing = found(&dir.join("nv-rs-preview-linux-x86_64"));
+        assert!(missing.is_some_and(|w| w.contains("not a folder")));
+        std::fs::create_dir_all(dir.join("empty/sub")).unwrap();
+        let empty = found(&dir.join("empty"));
+        assert!(empty.is_some_and(|w| w.contains("no files")));
+        std::fs::write(dir.join("empty/sub/x.txt"), b"x").unwrap();
+        assert_eq!(found(&dir.join("empty")), None);
+        let file = found(&dir.join("empty/sub/x.txt"));
+        assert!(file.is_some_and(|w| w.contains("not a folder")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Review of #632 (round 5): `--game` needs a program in the folder: text files alone have
+    /// none; a Linux program (ELF, no extension) or a `.exe` is one.
+    #[test]
+    fn the_game_check_needs_a_program() {
+        let dir =
+            std::env::temp_dir().join(format!("package-check-program-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("app")).unwrap();
+        let text = dir.join("play.sh");
+        std::fs::write(&text, b"#!/bin/sh\n").unwrap();
+        let short = dir.join("app/x");
+        std::fs::write(&short, b"\x7fE").unwrap();
+        assert!(!has_program(&[text.clone(), short.clone()]));
+        let elf = dir.join("app/nv-viewer");
+        std::fs::write(&elf, b"\x7fELF\x02\x01\x01").unwrap();
+        assert!(has_program(&[text.clone(), elf]));
+        assert!(has_program(&[text, dir.join("app/Play.exe")]));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Linux's and macOS's programs (no extension) are programs by their first bytes; text is not.
+    #[test]
+    fn programs_are_known_by_extension_or_first_bytes() {
+        assert!(is_program(Path::new("app/FalloutNV.exe"), b"MZ"));
+        assert!(is_program(Path::new("app/nv-viewer"), b"\x7fELF\x02\x01"));
+        assert!(is_program(
+            Path::new("app/nv-viewer"),
+            &[0xcf, 0xfa, 0xed, 0xfe, 0x0c]
+        ));
+        assert!(is_program(
+            Path::new("app/nv-viewer"),
+            &[0xca, 0xfe, 0xba, 0xbe]
+        ));
+        assert!(!is_program(Path::new("play.sh"), b"#!/bin/sh\n"));
+        assert!(!is_program(Path::new("app/nv-viewer"), b""));
+    }
+
+    /// An exact needle finds its own case only, as bytes and as UTF-16; the usual needles any case.
+    #[test]
+    fn exact_needles_keep_their_case() {
+        let data = b"..\x66un_scripts..FUN_00401000..F\0U\0N\0_\0";
+        let hits = |needle: &str| -> Vec<usize> {
+            exact_forms(needle)
+                .iter()
+                .flat_map(|form| find_exact(data, form))
+                .collect()
+        };
+        assert_eq!(hits("FUN_"), [15, 29]);
+        assert_eq!(hits("DAT_"), Vec::<usize>::new());
+        assert_eq!(find_exact(data, b""), Vec::<usize>::new());
+        assert_eq!(find_all(data, &forms("FUN_")[0]), [2, 15]);
+        let parsed = parse_arguments(&args(&["pkg", "--program-needle-exact", "FUN_"])).unwrap();
+        assert_eq!(parsed.exact_program_needles, ["FUN_"]);
+        assert!(parse_arguments(&args(&["pkg", "--program-needle-exact"])).is_err());
+    }
 
     #[test]
     fn needles_are_found_in_either_form_and_any_case() {
@@ -346,7 +693,6 @@ mod tests {
 
     #[test]
     fn a_max_run_that_is_not_a_number_is_an_error_not_no_limit() {
-        let args = |list: &[&str]| -> Vec<String> { list.iter().map(|s| s.to_string()).collect() };
         let parsed =
             parse_arguments(&args(&["pkg", "--max-run", "4096", "--game", "g.exe"])).unwrap();
         assert_eq!(parsed.max_run, Some(4096));
@@ -408,5 +754,125 @@ mod tests {
         assert!(is_filler(&[0xcc; 64]));
         assert!(is_filler(&[1, 2, 3, 4, 1, 2, 3, 4]));
         assert!(!is_filler(&shared));
+    }
+
+    /// The CRC-32 tables are the standard ones (the check value of "123456789" is 0xCBF43926 with
+    /// the first table), and a shared run inside one, zero padding aside, is left out: the
+    /// 2026-11-19 preview's 4,101 bytes (a zero, crc32fast's first four slices, the fifth's zero
+    /// entry), each of its slices alone, zlib's byte-swapped slices; a run that is not a table's,
+    /// one that reaches past a table, and a short piece are not.
+    #[test]
+    fn runs_inside_the_crc_tables_are_left_out() {
+        let tables = public_tables();
+        let slices = &tables[0].1;
+        let zlib = &tables[1].1;
+        assert_eq!((slices.len(), zlib.len()), (16 * 1024, 8 * 1024));
+        let entry =
+            |t: &[u8], i: usize| u32::from_le_bytes(t[4 * i..4 * i + 4].try_into().unwrap());
+        assert_eq!(
+            (entry(slices, 1), entry(slices, 255)),
+            (0x7707_3096, 0x2d02_ef8d)
+        );
+        let crc = b"123456789".iter().fold(0xffff_ffffu32, |c, &b| {
+            (c >> 8) ^ entry(slices, ((c ^ u32::from(b)) & 0xff) as usize)
+        }) ^ 0xffff_ffff;
+        assert_eq!(crc, 0xcbf4_3926);
+        assert_eq!(&slices[..4096], &zlib[..4096]);
+        assert_eq!(entry(zlib, 1024 + 1), 0x7707_3096u32.swap_bytes());
+        let mut preview = vec![0u8];
+        preview.extend_from_slice(&slices[..4100]);
+        assert_eq!(preview.len(), 4101);
+        assert_eq!(
+            public_table_of(&preview, &tables),
+            Some("the CRC-32 slice-by-16 tables")
+        );
+        for k in 0..16 {
+            let slice = &slices[1024 * k..1024 * (k + 1)];
+            assert!(public_table_of(slice, &tables).is_some(), "slice {k}");
+        }
+        assert_eq!(
+            public_table_of(&zlib[4096..], &tables),
+            Some("zlib's CRC-32 tables")
+        );
+        let other: Vec<u8> = (0..5000u32).map(|i| (i * 7 % 251) as u8 | 1).collect();
+        assert_eq!(public_table_of(&other, &tables), None);
+        let mut past = slices[..4096].to_vec();
+        past.extend_from_slice(&[0x55; 16]);
+        assert_eq!(
+            public_table_of(&past, &tables),
+            None,
+            "reaches past the table"
+        );
+        let mut short = vec![0u8; 100];
+        short.extend_from_slice(&slices[4..60]);
+        short.extend_from_slice(&[0u8; 100]);
+        assert_eq!(
+            public_table_of(&short, &tables),
+            None,
+            "too little of a table"
+        );
+        assert_eq!(public_table_of(&[0u8; 200], &tables), None);
+    }
+
+    /// The runs `data` shares with `reference` (each indexed as `main` indexes the game).
+    fn shared(data: &[u8], reference: &[u8]) -> Vec<(usize, usize, usize)> {
+        let reference = vec![reference.to_vec()];
+        let mut index: HashMap<u64, Vec<(u32, u32)>> = HashMap::new();
+        let mut at = 0;
+        while at + WINDOW <= reference[0].len() {
+            let w = &reference[0][at..at + WINDOW];
+            if !is_filler(w) {
+                index.entry(fnv(w)).or_default().push((0, at as u32));
+            }
+            at += STEP;
+        }
+        shared_runs(data, &reference, &index)
+    }
+
+    /// A program and a game sharing `content` (with different bytes around it on each side).
+    fn sharing(content: &[u8]) -> (Vec<u8>, Vec<u8>) {
+        let mut game = vec![7u8; 37];
+        game.extend_from_slice(content);
+        game.extend_from_slice(&[9u8; 100]);
+        let mut program = vec![2u8; 101];
+        program.extend_from_slice(content);
+        program.extend_from_slice(&[3u8; 50]);
+        (program, game)
+    }
+
+    /// The verdict, end to end: the CRC tables alone shared (the preview's 4,101 bytes) pass with
+    /// one run left out; the tables with 5,000 more bytes after them, and 5,000 bytes alone, fail
+    /// the 4,096 limit; under the limit they pass, counted.
+    #[test]
+    fn the_verdict_leaves_out_a_table_and_counts_the_rest() {
+        let tables = public_tables();
+        let mut table = vec![0u8];
+        table.extend_from_slice(&tables[0].1[..4100]);
+        // Bytes with no repeats inside them (a repeating pattern would be found as several runs).
+        let mut x = 1u32;
+        let bytes: Vec<u8> = (0..5000)
+            .map(|_| {
+                x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                (x >> 16) as u8 | 1
+            })
+            .collect();
+        let (program, game) = sharing(&table);
+        let v = verdict(&program, shared(&program, &game), &tables, Some(4096));
+        assert_eq!(v.left_out.len(), 1);
+        assert_eq!(v.left_out[0].0 .1, 4101);
+        assert!(v.counted.is_empty() && !v.over && v.longest() == 0);
+        let mut both = table.clone();
+        both.extend_from_slice(&bytes);
+        let (program, game) = sharing(&both);
+        let v = verdict(&program, shared(&program, &game), &tables, Some(4096));
+        assert!(v.left_out.is_empty());
+        assert_eq!((v.longest(), v.over), (9101, true));
+        let (program, game) = sharing(&bytes);
+        let v = verdict(&program, shared(&program, &game), &tables, Some(4096));
+        assert_eq!((v.longest(), v.total(), v.over), (5000, 5000, true));
+        let v = verdict(&program, shared(&program, &game), &tables, Some(5000));
+        assert!(!v.over, "at the limit: passes");
+        let v = verdict(&program, shared(&program, &game), &tables, None);
+        assert!(!v.over, "no limit");
     }
 }

@@ -50,6 +50,7 @@
 use super::tesobjectrefr::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
+use engine_core::extend::stewie;
 
 /// `005d43c0`: the reference's embedded `ExtraDataList` (`this + 0x44`).
 const GET_EXTRA_LIST: u32 = 0x005d_43c0;
@@ -1943,6 +1944,14 @@ pub fn fn_00579690(e: &mut Engine, this: Ptr) -> bool {
         } else {
             result = teleport_owner_test(e, me, true);
         }
+        // JIP LN's G31 (a fix row, `WriteRelJump(0x579942, 0x579AB7)`): the door's answer is the
+        // answer; the general owner test below is passed over. Words: the reference and the
+        // door's answer; any answer of the handler takes the jump.
+        if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+            && e.site(0x0057_9942, &[me, u32::from(result)]).is_some()
+        {
+            return result;
+        }
     } else if base_form_type(e, me) == 0x27 {
         let furniture = base_form_of(e, me);
         let player = e.global::<u32>(GLOBAL_PLAYER);
@@ -2535,6 +2544,15 @@ pub fn fn_0057ab70(e: &mut Engine) {
         let reference = e.mem.u32(cursor + 4);
         let value = e.mem.u32(cursor + 8);
         if reference == 0 || value == 0 {
+            continue;
+        }
+        // 0057aba4: lStewieAl's Tweaks' row S0064 (`patchFixHandleMultiboundsCrashWithNullCell`): a
+        // reference with no parent cell (+0x40) is passed over, where the exe goes on to its cell.
+        // (Tweaks' bytes compare `[ebp+0xC]` where the exe compared the value at `[ebp-0xC]`: that
+        // is an uninitialised word of the caller's frame (this function takes no arguments), so in
+        // a frame where it happens to be 0 a game running Tweaks skips the whole queued multibound
+        // batch. The port does not copy that; the exe's value check is kept above.)
+        if e.stewie(stewie::HANDLE_MULTIBOUNDS_NULL_CELL) && e.mem.u32(reference + 0x40) == 0 {
             continue;
         }
         let same_cell = model_of(e, reference) != 0 && {
@@ -6843,6 +6861,55 @@ mod tests {
         );
     }
 
+    /// JIP LN's G31 seam at `0x579942` (a fix row): the door's own answer is the answer, the
+    /// general owner test after it passed over; only with the fix row's bit, and only for doors.
+    #[test]
+    fn fn_00579690_jip_g31_door_answer_stands() {
+        use engine_core::extend::jip_patches;
+        let mut e = engine2();
+        let owner = form(&mut e, 0x2a, 0);
+        stealing_world(&mut e, owner);
+        let door = refr(&mut e, 0x1c, &[]);
+        // An owned, unlocked door with no teleport: the door says no, the general owner test
+        // (an owned object the player does not own) says yes.
+        returns(&mut e, 0x0051_8f00, 0);
+        returns(&mut e, GET_TELEPORT_DATA, 0);
+        super::jip_seam::put(&mut e, 0x0057_9942, Some(1));
+        assert!(e.call(0x0057_9690, &args![door]).bool(), "the exe");
+        e.set_jip_patches(jip_patches::INSTALLED);
+        assert!(e.call(0x0057_9690, &args![door]).bool());
+        assert!(super::jip_seam::seen().is_empty(), "only FIXES asks");
+        e.set_jip_patches(jip_patches::FIXES);
+        assert!(
+            !e.call(0x0057_9690, &args![door]).bool(),
+            "JIP: the door's no"
+        );
+        assert_eq!(super::jip_seam::seen(), vec![vec![door, 0]]);
+        // Any answer takes the jump (JIP's is unconditional).
+        super::jip_seam::answer_with(Some(0));
+        assert!(!e.call(0x0057_9690, &args![door]).bool());
+        super::jip_seam::answer_with(None);
+        assert!(
+            e.call(0x0057_9690, &args![door]).bool(),
+            "no answer: the exe"
+        );
+        super::jip_seam::answer_with(Some(1));
+        super::jip_seam::seen();
+        // A locked door the player may not open: the door's yes is asked with 1 and stands.
+        returns(&mut e, 0x0056_9160, 0x6000);
+        returns(&mut e, 0x0050_21a0, 1);
+        assert!(e.call(0x0057_9690, &args![door]).bool());
+        assert_eq!(super::jip_seam::seen(), vec![vec![door, 1]]);
+        // The early no (0x518f00) returns before the seam, as the exe's `jmp 0x579aba`.
+        returns(&mut e, 0x0051_8f00, 1);
+        assert!(!e.call(0x0057_9690, &args![door]).bool());
+        assert!(super::jip_seam::seen().is_empty());
+        // Not a door: never asked, the general test as the exe.
+        let thing = refr(&mut e, 0x30, &[]);
+        assert!(e.call(0x0057_9690, &args![thing]).bool());
+        assert!(super::jip_seam::seen().is_empty());
+    }
+
     // ---- 00579ac0 -------------------------------------------------------
 
     /// The doubles `00579ac0` reaches for a reference without 3D whose sound
@@ -7566,6 +7633,83 @@ mod tests {
             calls_to(&log, 0x0043_8af0),
             vec![vec![OBJECT_REFERENCE_MAP]]
         );
+    }
+
+    /// lStewieAl's Tweaks' row S0064: a multibound entry whose reference has 3D but no parent
+    /// cell. The exe asks the null cell for its 3D node (`005497a0`, through `00545cb0`'s read of
+    /// the cell's `+0xc4`, as its stand-in here reads it) and stops; with the row on the entry is
+    /// passed over and the map is still emptied.
+    #[test]
+    fn s0064_multibound_reference_without_a_cell() {
+        for on in [false, true] {
+            let mut e = engine2();
+            let reference = refr(&mut e, 0x30, &[(0x1d0, SPARE_SLOT)]);
+            e.mem.set_u32(reference + 0x40, 0);
+            returns(&mut e, SPARE_SLOT, 0x9000);
+            returns(&mut e, 0x004b_9ba0, 1);
+            e.register_double(0x006b_7f20, move |e, a| {
+                e.mem.set_u32(a[1], 0);
+                e.mem.set_u32(a[2], reference);
+                e.mem.set_u32(a[3], 0x4444);
+                Ret::default()
+            });
+            e.register_double(GET_PARENT_CELL, |e, a| e.mem.u32(a[0] + 0x40).into_ret());
+            e.register_double(0x0054_97a0, |e, a| e.mem.u32(a[0] + 0xc4).into_ret());
+            stub(
+                &mut e,
+                &[0x0054_5960, 0x0056_9ae0, 0x0043_8af0, 0x0096_11e0],
+            );
+            e.set_stewie(stewie::HANDLE_MULTIBOUNDS_NULL_CELL, on);
+            start_log(&mut e);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.call(0x0057_ab70, &args![]);
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                let log = take_log(&mut e);
+                assert!(calls_to(&log, 0x0054_5960).is_empty());
+                assert!(calls_to(&log, 0x0056_9ae0).is_empty());
+                assert_eq!(calls_to(&log, 0x0043_8af0).len(), 1);
+            }
+        }
+    }
+
+    /// lStewieAl's Tweaks' row S0064 with a parent cell (ordinary input): the row changes nothing,
+    /// the same calls as with it off (the owner and the cell's object told, the map emptied; the
+    /// reference's parent cell at `+0x40`, the word Tweaks tests).
+    #[test]
+    fn s0064_row_on_with_a_cell_changes_nothing() {
+        let run = |on: bool| {
+            let mut e = engine2();
+            let slot_e8 = 0x00ff_0160;
+            let slot_dc = 0x00ff_0161;
+            stub(&mut e, &[slot_e8, slot_dc]);
+            let owner_object = object_with(&mut e, 0x40, &[(0xe8, slot_e8)]);
+            let target = object_with(&mut e, 0x40, &[(0xdc, slot_dc)]);
+            let reference = refr(&mut e, 0x30, &[(0x1d0, SPARE_SLOT)]);
+            let cell = e.mem.alloc(0x100);
+            e.mem.set_u32(reference + 0x40, cell);
+            returns(&mut e, SPARE_SLOT, 0x9000);
+            returns(&mut e, 0x004b_9ba0, 1);
+            e.register_double(0x006b_7f20, move |e, a| {
+                e.mem.set_u32(a[1], 0);
+                e.mem.set_u32(a[2], reference);
+                e.mem.set_u32(a[3], 0x4444);
+                Ret::default()
+            });
+            returns(&mut e, 0x0054_97a0, 1);
+            returns(&mut e, 0x0096_11e0, owner_object);
+            returns(&mut e, 0x0054_5960, target);
+            stub(&mut e, &[0x0056_9ae0, 0x0043_8af0]);
+            e.set_stewie(stewie::HANDLE_MULTIBOUNDS_NULL_CELL, on);
+            start_log(&mut e);
+            e.call(0x0057_ab70, &args![]);
+            (take_log(&mut e), reference)
+        };
+        let ((off, _), (on, reference)) = (run(false), run(true));
+        assert_eq!(on, off);
+        assert_eq!(calls_to(&on, 0x0056_9ae0), vec![vec![reference, 0x4444]]);
     }
 
     #[test]

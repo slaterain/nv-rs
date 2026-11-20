@@ -1,7 +1,7 @@
 //! Group GA's game patches (step 3.9: UI: HUD, messages, text, start-up INI): its handlers, wraps and slot routines. Only group
 //! GA's PR edits this file (and its own tests file beside it).
 //!
-//! Nine of JIP's always-on fixes (`InitGamePatches` and `InitJIPHooks`, JIP LN NVSE 57.30), each
+//! Twelve of JIP's always-on fixes (`InitGamePatches` and `InitJIPHooks`, JIP LN NVSE 57.30), each
 //! a fix row (in with the row `NV_JIP_GAME_PATCHES`, [`super::set_row`]):
 //! - **G08** "Increase buffer size for GetPrivateProfileString" (`SafeWrite8(0xC44405, 4)`): the
 //!   INI reader's text settings (`INISettingCollection::ReadSetting`, `00c44280`) are read with a
@@ -51,12 +51,59 @@
 //!   game a text too long for the buffer fails the copy (`strcpy_s`) and the game ends: above
 //!   259 characters without JIP, above 515 with it. [`corner_message_text_size`] answers the
 //!   same buffer size for `MessageExAlt`.
+//! - **G55** (JIP's own, with `MessageBoxExAlt`; `WriteRelCall(0x7A9AEE, MaxMessageWidthHook)`,
+//!   `WriteRelCall(0x7A9C45, ..)`): while a `MessageBoxExAlt` box waits for its answer, the message
+//!   menu's `max_menu_width` (`MessageMenu::LoadNextMessage`, `007a92e0`: the room for the text and
+//!   the menu's widest) is 1200 instead of the menu file's value: a long message or long button
+//!   labels wrap at, and the box is capped at, 1200 instead of the menu file's maximum (the number
+//!   of buttons is unaffected). With JIP installed, the row on or off.
+//! - **G129** (JIP's own, with `SetFontFile`; `WriteRelCall(0x70B285, InitFontManagerHook)`,
+//!   `SafeWrite8(0xA1B032, 0x59)`, and the `xfonts` lists read in `InitGamePatches`): the font
+//!   manager is made with 89 font slots instead of 8: fonts 1 to 8 as the game's (their files from
+//!   the `sFont_<n>_Filename` settings), font 9 none, fonts 10 to 89 from the lines `<n>=<path>` of
+//!   the files `Data\NVSE\plugins\xfonts\*.txt` (the first line for a number wins; a path whose
+//!   file is not under `data\` is passed over), each font not given (or not loaded) being font 3;
+//!   a font file loads once, whatever number uses it (`s_fontInfosMap`). Text is measured in any
+//!   font from 1 to 89. With JIP installed, the row on or off. Two guards of nv-rs's own, in with the
+//!   row (each where the game with JIP crashes or writes past a block): a font whose slot is empty
+//!   (font 9) is measured as a font out of range, and `Font::Load` reads no more of a font file
+//!   than its 0x3928-byte data block (`0xA154DD`).
+//! - **G80** (no comment; `WriteRelJump(0x777123, RolloverWeaponHook)`): the HUD's crosshair
+//!   name of a weapon lying in the world (`HUDMainMenu::SetInfoForRef`, `00775a00`) gets a "+" at
+//!   its end when the weapon has a weapon mod on it (the reference's `ExtraWeaponModFlags`, kind
+//!   0x8D, flags byte +0xC not 0), as the item lists show a modded weapon. JIP replaces the
+//!   exe's playable test there (`0x47BCF0`: flag byte +0x100 without 0x80) with its own, which
+//!   answers the same. Difference from JIP: the "+" goes in only when it fits the 0x104-byte name
+//!   buffer (`0x11D9C48`) with its end; JIP writes the two bytes past a 259-character name.
+//! - **G121** (no comment; `WriteRelCall(0x7ECE32, GetVATSTargetDTHook)`): V.A.T.S. shows the
+//!   damage threshold of the last hit JIP's hit damage (O1) worked out (any attacker, any target;
+//!   as in JIP; `s_VATSHitDT`, a negative one as 0), in place of the exe's `0x7700F0`
+//!   (`VATSMenu::DoIdle`, `007ec810`); until a hit has been reckoned that way (`-FLT_MAX`) the
+//!   exe's call runs.
+//! - **G09** (no comment; `WriteRelJump(0x70535C, QueueUIMessageHook)`): a message the game itself
+//!   queues (`QueueUIMessage`, `007052f0`; JIP's test: the caller's return address up to
+//!   `0x96A262`, the game's last caller of the 193) shows for the default message time
+//!   (`s_msgDisplayTime`, 2 seconds, set with `SetDefaultMessageTime`), not the caller's; a
+//!   plugin's message keeps its own. The port's built-in plugins mark their calls
+//!   (`Engine::mark_plugin_ui_message`; xNVSE's `MessageEx`, JIP's `MessageExAlt` and its
+//!   equip message), and the seam answers the default time for an unmarked call.
 //!
-//! Threads: every seam runs on the main thread (the UI, the INI reader); the handlers keep no
-//! state and take no slot.
+//! - **O16** `bLoadScreenFix` (switch 16, off by default; `WriteRelJump(0x78AC60,
+//!   GetSuitableLoadScreensHook)`, `WriteRelJump(0x78A79B, PickLoadScreenHook)`, the two lists made
+//!   when the switch goes on, at `DeferredInit`): the loading menu's candidates
+//!   (`LoadingMenu::BuildCandidateList`, `0078ac60`) are the screens made for the location when
+//!   any can show there, else the generic ones (no locations), not both; in the overlay mode the
+//!   generic ones with flag `0x400` only; and the second pass without the location
+//!   (`MakeLoadScreenList`, `0078a5a0`) runs only when no screen was picked at all, not whenever
+//!   fewer than the limit were and the list is not locked.
+//!
+//! Threads: every seam runs on the main thread (the UI, the INI reader) but G09's, which runs on
+//! the thread that queues the message; the handlers take no slot, and the states, G09's default
+//! time (one lock-free word the commands write on the main thread) and O16's two lists (set once
+//! at `DeferredInit`, read only after), are lock-free slots.
 
 use super::Area;
-use engine_core::extend::{Owner, SiteSlot};
+use engine_core::extend::{Owner, SiteSlot, WrapSlot};
 use engine_core::prelude::*;
 
 /// G08's seam: the text setting's buffer size in `ReadSetting` (words: the exe's size 0x100; the
@@ -69,6 +116,21 @@ pub const TRAIT_DESCRIPTION: SiteSlot = SiteSlot::new(Owner::Jip, 0x007e_6f04);
 /// G17's seam: the tile menu destructor's clear of the menu's open byte (words: the tile, its
 /// menu; any answer skips the clear).
 pub const MENU_OPEN_BYTE: SiteSlot = SiteSlot::new(Owner::Jip, 0x00a1_f035);
+/// G55's seams: the message menu's two `max_menu_width` reads (an answer is the width's float
+/// bits, read in place of the menu file's value).
+pub const MAX_MESSAGE_WIDTH: [SiteSlot; 2] = [
+    SiteSlot::new(Owner::Jip, 0x007a_9aee),
+    SiteSlot::new(Owner::Jip, 0x007a_9c45),
+];
+/// G129's seam: the font manager's start (no words; answered: JIP's start ran in place of the
+/// game's).
+pub const FONT_MANAGER_START: SiteSlot = SiteSlot::new(Owner::Jip, 0x0070_b285);
+/// G129's seam: `CalculateStringDimensions`' last font (words: the font asked for, the font
+/// manager; the answer is the last font, 0 refusing every font).
+pub const LAST_FONT: SiteSlot = SiteSlot::new(Owner::Jip, 0x00a1_b032);
+/// G129's guard (nv-rs's own, a fix seam: in with the row): `Font::Load`'s read of the font file
+/// (words: the file's size; the answer is the size read).
+pub const FONT_FILE_READ: SiteSlot = SiteSlot::new(Owner::Jip, 0x00a1_54dd);
 /// G21's seam: the head of the activation choice walk (words: the list node; an answer of 1
 /// passes the node over).
 pub const ACTIVATION_TEXT: SiteSlot = SiteSlot::new(Owner::Jip, 0x007a_a80f);
@@ -93,6 +155,49 @@ pub const CORNER_MESSAGE: [SiteSlot; 3] = [
 ];
 /// JIP's corner message text buffer: 0x203 letters and the end.
 pub const CORNER_MESSAGE_TEXT: u32 = 0x204;
+
+/// G80's seam: `SetInfoForRef`'s weapon test (words: the weapon, the reference; the answer's low
+/// byte is the test's: 1 playable, 0 not).
+pub const ROLLOVER_WEAPON: SiteSlot = SiteSlot::new(Owner::Jip, 0x0077_7123);
+/// G121's seam: `VATSMenu::DoIdle`'s target damage threshold (words: the player, the target;
+/// the answer is the threshold's bits; none runs the exe's call).
+pub const VATS_TARGET_DT: SiteSlot = SiteSlot::new(Owner::Jip, 0x007e_ce32);
+/// `kXData_ExtraWeaponModFlags`.
+const EXTRA_WEAPON_MOD_FLAGS: u32 = 0x8D;
+/// The HUD's crosshair name buffer (0x104 bytes).
+const ROLLOVER_NAME: u32 = 0x011d_9c48;
+
+/// G09's seam: `QueueUIMessage`'s display time (words: the caller's time's bits; the answer is
+/// the time's bits).
+pub const MESSAGE_TIME: SiteSlot =
+    SiteSlot::new(Owner::Jip, engine_core::extend::PLUGIN_UI_MESSAGE);
+
+/// JIP's `s_msgDisplayTime`, the float's bits: the default message time, 2.0 until
+/// `SetDefaultMessageTime` (any thread may queue a message; the commands write it on the main
+/// thread). Lock-free ([`Engine::ext_free`]), made at install before the threads start.
+pub struct DefaultMessageTime(std::sync::atomic::AtomicU32);
+
+impl Default for DefaultMessageTime {
+    fn default() -> Self {
+        DefaultMessageTime(std::sync::atomic::AtomicU32::new(2.0f32.to_bits()))
+    }
+}
+
+/// The default message time (`GetDefaultMessageTime`).
+pub fn default_message_time(e: &mut Engine) -> f32 {
+    f32::from_bits(
+        e.ext_free::<DefaultMessageTime>()
+            .0
+            .load(std::sync::atomic::Ordering::Relaxed),
+    )
+}
+
+/// Sets the default message time (`SetDefaultMessageTime`).
+pub fn set_default_message_time(e: &mut Engine, seconds: f32) {
+    e.ext_free::<DefaultMessageTime>()
+        .0
+        .store(seconds.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
 
 /// The group's fix seams in address order.
 pub const FIX_SITES: [SiteSlot; 8] = [
@@ -121,13 +226,194 @@ pub const AREA: Area = Area {
         CORNER_MESSAGE[0].addr(),
         CORNER_MESSAGE[1].addr(),
         CORNER_MESSAGE[2].addr(),
+        ROLLOVER_WEAPON.addr(),
+        VATS_TARGET_DT.addr(),
+        MESSAGE_TIME.addr(),
+        PICK_LOAD_SCREEN.addr(),
+        FONT_FILE_READ.addr(),
     ],
-    fix_wraps: &[],
+    fix_wraps: &[LOAD_SCREEN_CANDIDATES.addr()],
     install_fixes,
-    jip_sites: &[],
+    jip_sites: &[
+        FONT_MANAGER_START.addr(),
+        MAX_MESSAGE_WIDTH[0].addr(),
+        MAX_MESSAGE_WIDTH[1].addr(),
+        LAST_FONT.addr(),
+    ],
     jip_wraps: &[],
-    install_jip: super::nothing,
+    install_jip,
 };
+
+/// JIP installed: the default message time's slot, before the threads start; G55 and G129.
+fn install_jip(e: &mut Engine) {
+    e.ext_free::<DefaultMessageTime>();
+    for site in MAX_MESSAGE_WIDTH {
+        e.on_site(site, max_message_width);
+    }
+    e.on_site(FONT_MANAGER_START, font_manager_start);
+    e.on_site(LAST_FONT, last_font);
+}
+
+/// G55's width (`kMaxWidth`, 1200.0).
+const MESSAGE_BOX_MAX_WIDTH: f32 = 1200.0;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: MaxMessageWidthHook (asm).
+/// G55: while any `MessageBoxExAlt` box waits (`s_messageBoxScripts` not empty), 1200 in place of
+/// the trait (the trait not read); else not answered (the game reads it).
+fn max_message_width(e: &mut Engine, _: &[u32]) -> Option<u32> {
+    (crate::commands::jip_fn_ui::message_box_scripts_pending(e) != 0)
+        .then_some(MESSAGE_BOX_MAX_WIDTH.to_bits())
+}
+
+/// The font manager (`0x11F33F8`); the game's eight font file settings (`sFont_<n>_Filename`,
+/// 0xC apart, the text pointer at `+4`: `0x11F3418` for font 1); JIP's manager size (89 slots).
+const FONT_MANAGER: u32 = 0x011f_33f8;
+const FONT_FILE_SETTINGS: u32 = 0x011f_3418;
+const FONT_FILE_SETTING_SIZE: u32 = 0xc;
+const JIP_FONT_MANAGER_SIZE: u32 = 0x164;
+/// A font file's data block (`FontData`, JIP's `BufferData`: `Font::Load` reads the file into
+/// one of this size).
+const FONT_DATA_SIZE: u32 = 0x3928;
+/// The game's fonts (1 to 8), JIP's extra ones (10 to 89) and the one standing in for a missing
+/// extra font (font 3).
+const GAME_FONTS: u32 = 8;
+const FIRST_EXTRA_FONT: u32 = 10;
+const LAST_JIP_FONT: u32 = 89;
+const DEFAULT_EXTRA_FONT: u32 = 3;
+/// JIP's lists of extra fonts.
+const XFONTS_FOLDER: &[u8] = b"Data\\NVSE\\plugins\\xfonts";
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches (the
+// `xfonts` loop over `Data\NVSE\plugins\xfonts\*.txt`).
+/// `s_extraFontsPaths`: for fonts 10 to 89, the path the lists give (the first line for a font
+/// wins), when `data\<path>` is there. The lists are read through the mods' files seam (the
+/// port's own folder first), each with JIP's `LineIterator`; each line is `<n>=<path>`. JIP reads
+/// them while it loads, before the game starts; the port as the font manager is made, the first
+/// thing that uses them (the same files then).
+fn extra_font_paths(e: &mut Engine) -> Vec<Option<Vec<u8>>> {
+    let count = (LAST_JIP_FONT + 1 - FIRST_EXTRA_FONT) as usize;
+    let mut paths: Vec<Option<Vec<u8>>> = vec![None; count];
+    for entry in engine_core::mod_files::list(e, XFONTS_FOLDER) {
+        let name = &entry.name;
+        if entry.is_folder
+            || name.len() < 4
+            || !name[name.len() - 4..].eq_ignore_ascii_case(b".txt")
+        {
+            continue;
+        }
+        let mut file = XFONTS_FOLDER.to_vec();
+        file.push(b'\\');
+        file.extend_from_slice(name);
+        let Some(lines) = crate::commands::jip_fn_utility::file_lines(e, &file, "xfonts") else {
+            continue;
+        };
+        for line in lines {
+            let (number, path) = crate::commands::jip_fn_ui::next_token(&line, b'=');
+            if path.is_empty() {
+                continue;
+            }
+            let index =
+                (crate::utility::str_to_int(number) as u32).wrapping_sub(FIRST_EXTRA_FONT) as usize;
+            if index >= count || paths[index].is_some() {
+                continue;
+            }
+            let mut full = b"data\\".to_vec();
+            full.extend_from_slice(path);
+            if engine_core::mod_files::exists(e, &full) {
+                paths[index] = Some(path.to_vec());
+            }
+        }
+    }
+    paths
+}
+
+/// A new `FontInfo` for font `number` from the guest text at `text` (a game block, the game's
+/// `FontInfo::Init`, which copies the path).
+fn new_font_info(e: &mut Engine, number: u32, text: u32) -> u32 {
+    use crate::commands::jip_fn_ui::{FONT_INFO_INIT, FONT_INFO_SIZE};
+    let block = crate::commands::heap_alloc(e, FONT_INFO_SIZE);
+    e.call(FONT_INFO_INIT, &args![block, number, text, 1u32])
+        .u32()
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitFontManagerHook
+// (asm).
+/// G129, the font manager's start (in place of the game's `FontManager::Init`): when there is
+/// none, JIP's manager of 89 slots is made: fonts 1 to 8 loaded from the game's settings (each
+/// kept in `s_fontInfosMap` by its path; a path already there keeps its first), slot 9 none, fonts
+/// 10 to 89 from the `xfonts` lists (a path kept in the map takes its kept `FontInfo`; a new one
+/// that did not load is given back) or font 3; then the manager is set. Answers: done.
+fn font_manager_start(e: &mut Engine, _: &[u32]) -> Option<u32> {
+    use crate::commands::jip_fn_ui::{font_info, insert_font_info, set_font_manager_extended};
+    if e.mem.u32(FONT_MANAGER) != 0 {
+        return Some(1);
+    }
+    let manager = crate::commands::heap_alloc(e, JIP_FONT_MANAGER_SIZE);
+    e.mem.set_u32(manager + 4 * GAME_FONTS, 0);
+    for number in 1..=GAME_FONTS {
+        let setting = FONT_FILE_SETTINGS + FONT_FILE_SETTING_SIZE * (number - 1);
+        let text = e.mem.u32(setting);
+        let info = new_font_info(e, number, text);
+        let path = nvse::table::guest_text(e, text);
+        insert_font_info(e, &path, info);
+        e.mem.set_u32(manager + 4 * (number - 1), info);
+    }
+    let default = e.mem.u32(manager + 4 * (DEFAULT_EXTRA_FONT - 1));
+    let paths = extra_font_paths(e);
+    for (number, path) in (FIRST_EXTRA_FONT..=LAST_JIP_FONT).zip(paths) {
+        let info = match path {
+            None => default,
+            Some(path) => match font_info(e, &path) {
+                0 => {
+                    let info = crate::commands::with_guest_text(e, &path, |e, text| {
+                        new_font_info(e, number, text)
+                    });
+                    if e.mem
+                        .u32(info + crate::commands::jip_fn_ui::FONT_INFO_BUFFER_DATA)
+                        == 0
+                    {
+                        crate::commands::heap_free(e, info);
+                        default
+                    } else {
+                        insert_font_info(e, &path, info);
+                        info
+                    }
+                }
+                kept => kept,
+            },
+        };
+        e.mem.set_u32(manager + 4 * (number - 1), info);
+    }
+    e.mem.set_u32(FONT_MANAGER, manager);
+    set_font_manager_extended(e);
+    Some(1)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
+// (SafeWrite8(0xA1B032, 0x59)).
+/// G129, `CalculateStringDimensions`' last font: 89. nv-rs's own, with the row (the fixes): a
+/// font from 1 to 89 whose slot in the manager (`w[1]`) is empty answers 0, so that font is
+/// refused as out of range (the result is the start point). Only font 9's slot is empty (JIP
+/// leaves it so; `SetFontFile` refuses 9), and with JIP's 89 the game reads through it and
+/// crashes; with the row off the port stops there.
+fn last_font(e: &mut Engine, w: &[u32]) -> Option<u32> {
+    let (font, manager) = (w[0], w[1]);
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+        && (1..=LAST_JIP_FONT).contains(&font)
+        && e.mem.u32(manager + 4 * (font - 1)) == 0
+    {
+        return Some(0);
+    }
+    Some(LAST_JIP_FONT)
+}
+
+/// G129's guard (nv-rs's own, with the row): `Font::Load` reads at most its data block
+/// ([`FONT_DATA_SIZE`]) of a font file. The game reads the whole file into that block, so a
+/// longer file (a mod's font from the `xfonts` lists or `SetFontFile`, which reach `Font::Load` at
+/// start or from a script) writes past it into the game's heap; here the rest is not read.
+fn font_file_read(_: &mut Engine, w: &[u32]) -> Option<u32> {
+    Some(w[0].min(FONT_DATA_SIZE))
+}
 
 fn install_fixes(e: &mut Engine) {
     for site in CORNER_MESSAGE {
@@ -141,6 +427,14 @@ fn install_fixes(e: &mut Engine) {
     e.on_site(CHARGEN_QUEST, chargen_quest);
     e.on_site(CONSOLE_KEY, console_key);
     e.on_site(ORPHANED_TILES, clear_orphaned_tiles);
+    e.on_site(ROLLOVER_WEAPON, rollover_weapon);
+    e.on_site(VATS_TARGET_DT, vats_target_dt);
+    e.on_site(MESSAGE_TIME, message_time);
+    // O16's lists' slot, filled at `DeferredInit`.
+    e.ext_free::<LoadScreenLists>();
+    e.wrap(LOAD_SCREEN_CANDIDATES, load_screen_candidates);
+    e.on_site(PICK_LOAD_SCREEN, pick_load_screen);
+    e.on_site(FONT_FILE_READ, font_file_read);
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
@@ -266,6 +560,209 @@ pub fn corner_message_text_size(e: &mut Engine) -> u32 {
     } else {
         EXE_TEXT
     }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: RolloverWeaponHook.
+/// G80: a weapon whose flag byte +0x100 has 0x80 (not playable) answers 0 and nothing else
+/// happens. Otherwise, when the reference (`[ebp+8]`) has `ExtraWeaponModFlags` with its flags
+/// byte +0xC set, "+" is appended to the crosshair name (`0x11D9C48`), and the answer is 1.
+/// nv-rs's own: the "+" and its end go in only within the 0x104-byte buffer (a name of 0x102
+/// bytes or fewer); JIP writes them past a longer one.
+fn rollover_weapon(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let (weapon, reference) = (a[0], a[1]);
+    if e.mem.u8(weapon + 0x100) & 0x80 != 0 {
+        return Some(0);
+    }
+    let flags = crate::commands::extra::refr_extra(e, reference, EXTRA_WEAPON_MOD_FLAGS);
+    if flags != 0 && e.mem.u8(flags + 0xC) != 0 {
+        let length = e.mem.cstr(ROLLOVER_NAME).len() as u32;
+        if length + 1 < 0x104 {
+            e.mem.write(ROLLOVER_NAME + length, b"+\0");
+        }
+    }
+    Some(1)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: GetVATSTargetDTHook.
+/// G121: the threshold JIP's hit damage last used (`s_VATSHitDT`), see [`vats_dt_answer`].
+fn vats_target_dt(e: &mut Engine, _: &[u32]) -> Option<u32> {
+    vats_dt_answer(super::gc::damage::vats_hit_dt(e))
+}
+
+/// `GetVATSTargetDTHook` on the recorded threshold `dt`: `-FLT_MAX` (no hit reckoned) gives no
+/// answer (JIP jumps to the exe's `0x7700F0` with the same arguments); a float with its sign
+/// bit set gives 0.0 (`CMOVS`, so -0.0 too); any other its own bits.
+fn vats_dt_answer(dt: f32) -> Option<u32> {
+    let bits = dt.to_bits();
+    if bits == 0xFF7F_FFFF {
+        return None;
+    }
+    Some(if bits & 0x8000_0000 != 0 { 0 } else { bits })
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: QueueUIMessageHook.
+/// G09: the game's own call (not marked by a built-in plugin) shows for the default message
+/// time; a plugin's keeps the time it passed.
+fn message_time(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    if e.caller_marked(engine_core::extend::PLUGIN_UI_MESSAGE) {
+        return Some(a[0]);
+    }
+    Some(default_message_time(e).to_bits())
+}
+
+// ---- O16, bLoadScreenFix ----
+
+/// O16's wrap: `LoadingMenu::BuildCandidateList` (`0078ac60`, `thiscall`: the menu, the
+/// candidates' `BSSimpleArray`), JIP's `GetSuitableLoadScreensHook` in its place.
+pub const LOAD_SCREEN_CANDIDATES: WrapSlot = WrapSlot::new(Owner::Jip, 0x0078_ac60);
+/// O16's seam: `MakeLoadScreenList`'s list lock test before its second pass without the location
+/// (`0x78A79B`, words: the menu; the answer non-zero holds the second pass back).
+pub const PICK_LOAD_SCREEN: SiteSlot = SiteSlot::new(Owner::Jip, 0x0078_a79b);
+
+/// JIP's `s_locationLoadScreens` and `s_genericLoadScreens`: the data's load screens with and
+/// without locations, in the data handler's order, made once when the game's data is in
+/// (`DeferredInit`, where JIP turns switch 16 on). Lock-free ([`Engine::ext_free`]), made at
+/// install before the threads start.
+#[derive(Default)]
+pub struct LoadScreenLists(std::sync::OnceLock<(Vec<u32>, Vec<u32>)>);
+
+/// `g_dataHandler` and its `loadScreenList` (`+0x128`, the list `00461070` answers).
+const DATA_HANDLER: u32 = 0x011c_3f2c;
+const LOAD_SCREEN_LIST: u32 = 0x128;
+/// `TESLoadScreen`: its locations' list (`+0x2C`) and type (`+0x34`, the type's value at
+/// `+0x18`); a form's flags byte `+9` (bit 4: `0x400`).
+const LOAD_SCREEN_LOCATIONS: u32 = 0x2c;
+const LOAD_SCREEN_TYPE: u32 = 0x34;
+const LOAD_SCREEN_TYPE_VALUE: u32 = 0x18;
+const FORM_FLAGS_BYTE_9: u32 = 9;
+/// `LoadingMenu`: its flags word's high half (`+0x222`, bit 5 = `0x20`: the overlay mode), the
+/// location (`+0x1E8`), its screens' list (`+0x1D0`).
+const MENU_FLAGS_HIGH: u32 = 0x222;
+const MENU_LOCATION: u32 = 0x1e8;
+const MENU_LOAD_SCREENS: u32 = 0x1d0;
+/// The byte `0x11D8907` and `g_OSGlobals` (its byte `+2`): only type 3 screens (or none) then.
+const MENU_REPLACED: u32 = 0x011d_8907;
+const OS_GLOBALS: u32 = 0x011d_ea0c;
+/// `TESLoadScreen::CanDisplayForForm` (`005a6ec0`, `thiscall`: the location) and
+/// `BSSimpleArray::Add` (`007cb2e0`, `thiscall`: the address of the word to add); the array's
+/// size `+8`.
+const CAN_DISPLAY_FOR_FORM: u32 = 0x005a_6ec0;
+const CANDIDATES_ADD: u32 = 0x007c_b2e0;
+const CANDIDATES_SIZE: u32 = 8;
+
+fn load_screen_fix_on(e: &mut Engine) -> bool {
+    e.jip_patches() & engine_core::extend::jip_patches::LOAD_SCREEN_FIX != 0
+}
+
+/// O16's two lists while the switch is on and they are made; else none.
+fn load_screen_lists(e: &mut Engine) -> Option<(Vec<u32>, Vec<u32>)> {
+    if !load_screen_fix_on(e) {
+        return None;
+    }
+    e.ext_free::<LoadScreenLists>().0.get().cloned()
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: SetOptionalPatch case 16
+// (the lists JIP makes when the switch goes on).
+/// O16 on: the data handler's load screens sorted once into those with locations and the generic
+/// ones (no locations: the list's first item empty, JIP's `Empty()`). Null items are passed over.
+pub(crate) fn deferred_init(e: &mut Engine) {
+    if !load_screen_fix_on(e) {
+        return;
+    }
+    let handler = e.mem.u32(DATA_HANDLER);
+    if handler == 0 {
+        return;
+    }
+    let screens = crate::commands::list_items(e, Ptr::new(handler + LOAD_SCREEN_LIST));
+    let (mut location, mut generic) = (Vec::new(), Vec::new());
+    for screen in screens {
+        if screen == 0 {
+            continue;
+        }
+        if e.mem.u32(screen + LOAD_SCREEN_LOCATIONS) == 0 {
+            generic.push(screen);
+        } else {
+            location.push(screen);
+        }
+    }
+    let _ = e.ext_free::<LoadScreenLists>().0.set((location, generic));
+}
+
+/// O16: whether a screen may be added while only type 3 screens are wanted (`only_type_3`): no
+/// type, a type of value 0, or 3.
+fn type_suits(e: &mut Engine, screen: u32, only_type_3: bool) -> bool {
+    if !only_type_3 {
+        return true;
+    }
+    let kind = e.mem.u32(screen + LOAD_SCREEN_TYPE);
+    if kind == 0 {
+        return true;
+    }
+    let value = e.mem.u32(kind + LOAD_SCREEN_TYPE_VALUE);
+    value == 0 || value == 3
+}
+
+fn add_candidate(e: &mut Engine, results: u32, screen: u32) {
+    e.with_stack(4, |e, cell| {
+        e.mem.set_u32(cell.addr(), screen);
+        e.call(CANDIDATES_ADD, &args![results, cell]);
+    });
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: GetSuitableLoadScreensHook.
+/// O16's `BuildCandidateList`: the candidates emptied (size 0); in the overlay mode, or with no
+/// location, the generic screens (in the overlay mode only those with flag `0x400`); else the
+/// screens with locations that can show for the location (`CanDisplayForForm`), and the generic
+/// ones when none could. While `0x11D8907` or the OS globals' byte `+2` is set only screens of no
+/// type, type 0 or type 3 are added. With the switch off, or before the lists are made (JIP makes
+/// them in the same step that puts its hooks in, so its hook never runs without them): the next
+/// link (the exe's).
+/// Difference from JIP: with no screens with locations at all, JIP's walk (`dec edi` from 0) runs
+/// on past its list; here it adds none and goes on to the generic screens.
+fn load_screen_candidates(e: &mut Engine, w: &[u32]) -> Ret {
+    let Some((with_location, generic)) = load_screen_lists(e) else {
+        return e.call_next(LOAD_SCREEN_CANDIDATES.addr(), w);
+    };
+    let (menu, results) = (w[0], w[1]);
+    let overlay_mode = e.mem.u8(menu + MENU_FLAGS_HIGH) & 0x20 != 0;
+    let os_globals = e.mem.u32(OS_GLOBALS);
+    let only_type_3 = (e.mem.u8(MENU_REPLACED) | e.mem.u8(os_globals + 2)) != 0;
+    e.mem.set_u32(results + CANDIDATES_SIZE, 0);
+    let location = e.mem.u32(menu + MENU_LOCATION);
+    if !overlay_mode && location != 0 {
+        for screen in with_location {
+            if e.call(CAN_DISPLAY_FOR_FORM, &args![screen, location])
+                .bool()
+                && type_suits(e, screen, only_type_3)
+            {
+                add_candidate(e, results, screen);
+            }
+        }
+        if e.mem.u32(results + CANDIDATES_SIZE) != 0 {
+            return Ret::default();
+        }
+    }
+    for screen in generic {
+        if overlay_mode && e.mem.u8(screen + FORM_FLAGS_BYTE_9) & 4 == 0 {
+            continue;
+        }
+        if type_suits(e, screen, only_type_3) {
+            add_candidate(e, results, screen);
+        }
+    }
+    Ret::default()
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: PickLoadScreenHook.
+/// O16: the second pass without the location is held back while the menu's screen list has a
+/// screen (its first item set), in place of the list lock test. With the switch off, or before
+/// the lists are made (JIP's hooks go in with them): no answer.
+fn pick_load_screen(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    if !load_screen_fix_on(e) || e.ext_free::<LoadScreenLists>().0.get().is_none() {
+        return None;
+    }
+    Some(u32::from(e.mem.u32(a[0] + MENU_LOAD_SCREENS) != 0))
 }
 
 #[cfg(test)]

@@ -115,7 +115,7 @@ pub fn cvt_trunc(x: f32) -> i32 {
 }
 
 /// `RCPSS`: the processor's own estimate of `1 / x` (the instruction itself on x86_64, so the
-/// same bits as UIO's on the same processor; elsewhere the exact quotient).
+/// same bits as UIO's on the same processor; elsewhere the shared model of a PC's, engine-core `estimate`).
 #[cfg(target_arch = "x86_64")]
 pub fn rcpss(x: f32) -> f32 {
     use std::arch::x86_64::{_mm_cvtss_f32, _mm_rcp_ss, _mm_set_ss};
@@ -128,7 +128,7 @@ pub fn rcpss(x: f32) -> f32 {
 
 #[cfg(not(target_arch = "x86_64"))]
 pub fn rcpss(x: f32) -> f32 {
-    1.0 / x
+    engine_core::estimate::rcp(x)
 }
 
 /// `COMISS value, operand` as flags: (ZF, CF); an unordered pair sets both (and PF).

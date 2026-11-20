@@ -62,7 +62,9 @@ Then `multibound`: the two passes main runs over the loaded world once a frame t
 current (each object's shape reset, then tested against the camera's frustum and the occluders), proven the same way.
 The `geometry` family (the code that reads and writes the geometry data's arrays, so a later step can keep them
 outside the 32-bit space; first the renderer's packing of them, the bound, the data's setters and the morpher, then
-their load, save and release, the tangent space and the pick), is in, off until its gate.
+their load, save and release, the tangent space and the pick), is in, and on since 2026-11-16 after its gate: the
+recorded route (Doc's house and the Goodsprings street, 5,400 frames, on Vulkan) gives the same command stream byte for
+byte with it on and off, so the picture is unchanged.
 Then `animation` (on since 2026-11-11, on its tests and review): a skeleton's bones moved from their animation
 each frame, in native float maths.
 And `draw_f` (on since 2026-11-11): the small helpers the typed families call most (the larger and smaller of two numbers,
@@ -150,7 +152,7 @@ A milestone is done when all three of these hold:
 | A1: Movement and physics | Character controller, player and actor movement, camera collision, the Havok SDK and Bethesda's Havok layer, ragdolls | **Active.** Translated; running in the play build, being checked against the original |
 | A2: Animation and faces | NiAnimation, animation choice and blending, FaceGen and lip sync | Translated; running in the play build, being compared with the original |
 | A3: Audio | BSAudio, the radio and music; game threads stepped behind the thread seam | Translated; the game's own sound plays through DirectSound, measured against Windows |
-| B: Graphics | The scene graph, shaders and lighting, sky and weather, terrain and trees, effects | Translated; the game's own renderer draws through wgpu (`crates/d3d9-wgpu`) on Vulkan in play (Fallout.ini's `sRenderer`, Settings.cmd's Renderer), the real Direct3D 9 the fallback (chosen there, or by itself where wgpu cannot draw); wgpu's frames match the real Direct3D 9's (intro and menu identical; Doc's house, the race menu, the Pip-Boy and the Goodsprings street within 1% of pixels on Direct3D 12, distant textures filtered a shade differently on Vulkan; one NVIDIA card) |
+| B: Graphics | The scene graph, shaders and lighting, sky and weather, terrain and trees, effects | Translated; the game's own renderer draws through wgpu (`crates/d3d9-wgpu`) on Vulkan in play (Fallout.ini's `sRenderer`, the launcher's Settings > Renderer), the real Direct3D 9 the fallback (chosen there, or by itself where wgpu cannot draw); wgpu's frames match the real Direct3D 9's (intro and menu identical; Doc's house, the race menu, the Pip-Boy and the Goodsprings street within 1% of pixels on Direct3D 12, distant textures filtered a shade differently on Vulkan; one NVIDIA card) |
 | C: Gameplay | Actor values and combat, AI and pathfinding, quests and dialogue, menus and V.A.T.S., magic, progression, crafting, minigames, world streaming | Translated and playable through the whole game, quests and DLCs included; translation errors cause bugs and crashes (the fnv_decomp audit) |
 | D: The rest | Original saves, shut-down, video, settings, real threads, the remaining unplaced functions | Translated; saves load and are written, the open world plays; crashes from translation errors (the audit) |
 

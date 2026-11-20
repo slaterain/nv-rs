@@ -571,6 +571,7 @@ fn message_ex(e: &mut Engine, w: &[u32]) -> Ret {
     if f.ok {
         a.set_result(e, 1.0);
         with_message_buffer(e, &f.text, |e, text| {
+            let _plugin = e.mark_plugin_ui_message();
             e.call(
                 QUEUE_UI_MESSAGE,
                 &args![text, 0u32, 0u32, 0u32, 2.0f32, 0u32],

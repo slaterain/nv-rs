@@ -47,7 +47,18 @@ pub fn refused(
     profile: Option<&Path>,
     known: &[PathBuf],
 ) -> Option<&'static str> {
-    if let Some(why) = save_out::refused(dir, profile, known) {
+    refused_with(dir, game, |d| save_out::refused(d, profile, known))
+}
+
+/// [`refused`] with the save folder's rule `player` (on Windows [`save_out::refused`]; on Linux
+/// and macOS the save guard's own rule, `save_out::refused_to_write`, which takes a full path
+/// beginning with `/` and refuses the player's folders there), then the game's folder.
+pub fn refused_with(
+    dir: &Path,
+    game: &Path,
+    player: impl Fn(&Path) -> Option<&'static str>,
+) -> Option<&'static str> {
+    if let Some(why) = player(dir) {
         return Some(why);
     }
     if !game.is_absolute() {
@@ -92,13 +103,25 @@ pub fn folder_from(
     profile: Option<&Path>,
     known: &[PathBuf],
 ) -> Decision {
+    folder_from_with(mod_out, save_out, game, |d| {
+        save_out::refused(d, profile, known)
+    })
+}
+
+/// [`folder_from`] with the save folder's rule `player` ([`refused_with`]).
+pub fn folder_from_with(
+    mod_out: Option<PathBuf>,
+    save_out: Option<PathBuf>,
+    game: &Path,
+    player: impl Fn(&Path) -> Option<&'static str>,
+) -> Decision {
     let Some(dir) = chosen(mod_out, save_out) else {
         return Decision {
             folder: None,
             line: "mod files: no folder for mods' own files (NV_MOD_FILES_OUT and NV_SAVE_OUT are not set); their settings last for this session only.".to_string(),
         };
     };
-    if let Some(why) = refused(&dir, game, profile, known) {
+    if let Some(why) = refused_with(&dir, game, player) {
         return Decision {
             folder: None,
             line: format!(
@@ -114,15 +137,30 @@ pub fn folder_from(
 }
 
 /// The folder for this run, for the game whose Data folder is `data` ([`game_folder`],
-/// [`folder_from`] with the environment); its line printed.
+/// [`folder_from`] with the environment); its line printed. On Linux and macOS the save guard's
+/// rule decides ([`folder_from_with`] with `save_out::refused_to_write`: the player's folders
+/// there and the game's folder the port was started with); the first Linux start (2026-11-17)
+/// refused `/home/USER/.local/share/nv-rs/...` as "not a full path" by Windows' rule.
 pub fn folder(data: &Path) -> Option<PathBuf> {
-    let profile = std::env::var_os("USERPROFILE").map(PathBuf::from);
-    let decision = folder_from(
-        std::env::var_os("NV_MOD_FILES_OUT").map(PathBuf::from),
-        std::env::var_os("NV_SAVE_OUT").map(PathBuf::from),
+    let mod_out = std::env::var_os("NV_MOD_FILES_OUT").map(PathBuf::from);
+    let save_out = std::env::var_os("NV_SAVE_OUT").map(PathBuf::from);
+    #[cfg(windows)]
+    let decision = {
+        let profile = std::env::var_os("USERPROFILE").map(PathBuf::from);
+        folder_from(
+            mod_out,
+            save_out,
+            &game_folder(data),
+            profile.as_deref(),
+            &save_out::known_folders(),
+        )
+    };
+    #[cfg(not(windows))]
+    let decision = folder_from_with(
+        mod_out,
+        save_out,
         &game_folder(data),
-        profile.as_deref(),
-        &save_out::known_folders(),
+        save_out::refused_to_write,
     );
     println!("{}", decision.line);
     decision.folder
@@ -132,6 +170,10 @@ pub fn folder(data: &Path) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
+    // Windows only: `std::path` logic on Windows paths (`C:\...`); on other systems `C:\` is no
+    // drive and a backslash no separator. There the save guard's own rule
+    // decides instead (`a_unix_folder_beside_the_saves_is_taken`).
+    #[cfg(windows)]
     #[test]
     fn the_folder_is_named_or_beside_the_saves() {
         let saves = PathBuf::from(r"C:\nv\userdata\mods\Documents\My Games\FalloutNV\Saves");
@@ -149,6 +191,10 @@ mod tests {
 
     /// The player's folders and the game's folder are refused; the package's and scratch
     /// folders are taken.
+    // Windows only: `std::path` logic on Windows paths (`C:\...`); on other systems `C:\` is no
+    // drive and a backslash no separator. There the save guard's own rule
+    // decides instead (`a_unix_folder_beside_the_saves_is_taken`).
+    #[cfg(windows)]
     #[test]
     fn the_players_folders_and_the_game_folder_are_refused() {
         let profile = Path::new(r"C:\Users\<name>");
@@ -219,6 +265,10 @@ mod tests {
 
     /// [`folder_from`]: refused folders give none (with the line saying so), as does no variable;
     /// a good folder is taken.
+    // Windows only: `std::path` logic on Windows paths (`C:\...`); on other systems `C:\` is no
+    // drive and a backslash no separator. There the save guard's own rule
+    // decides instead (`a_unix_folder_beside_the_saves_is_taken`).
+    #[cfg(windows)]
     #[test]
     fn folder_from_answers_none_for_refused_folders() {
         let profile = Path::new(r"C:\Users\<name>");
@@ -365,7 +415,75 @@ mod tests {
         assert_ne!(e.mem.cstr(SAVE_DIR), b".\\");
     }
 
+    /// Linux and macOS: the launcher's folder beside the saves inside nv-rs's own folder (a full
+    /// path beginning with `/`, the first Linux start's, refused there as "not a full path" by
+    /// Windows' rule, 2026-11-17) is taken through the save guard's rule; the player's Documents,
+    /// the game's folder and a relative folder are refused.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_unix_folder_beside_the_saves_is_taken() {
+        use game_folders::{Guarded, System};
+        let home = Path::new("/home/USER");
+        let game = home.join(".local/share/Steam/steamapps/common/Fallout New Vegas");
+        let saves = home.join(".local/share/nv-rs/game/Documents/My Games/FalloutNV/Saves");
+        let never = [Guarded {
+            root: home.join("Documents"),
+            except: None,
+            system: System::this(),
+        }];
+        let player = |d: &Path| game_folders::refused(d, &never);
+        let d = folder_from_with(None, Some(saves), &game, player);
+        assert_eq!(
+            d.folder,
+            Some(home.join(".local/share/nv-rs/game/Documents/My Games/FalloutNV/nv-rs mod files")),
+            "{}",
+            d.line
+        );
+        assert!(d.line.contains("are kept in"), "{}", d.line);
+        for dir in [
+            home.join("Documents/My Games/FalloutNV/nv-rs mod files"),
+            game.clone(),
+            game.join("Data/Config"),
+            PathBuf::from("relative/folder"),
+        ] {
+            let d = folder_from_with(Some(dir.clone()), None, &game, player);
+            assert_eq!(d.folder, None, "{dir:?}");
+            assert!(d.line.contains("refused"), "{}", d.line);
+        }
+        // The production rule (the save guard's, with this process's HOME): a scratch folder is
+        // taken, the player's Documents is not.
+        let scratch =
+            std::env::temp_dir().join(format!("nv-mod-files-unix-{}", std::process::id()));
+        let d = folder_from_with(
+            Some(scratch.join("nv-rs mod files")),
+            None,
+            &game,
+            save_out::refused_to_write,
+        );
+        assert_eq!(
+            d.folder,
+            Some(scratch.join("nv-rs mod files")),
+            "{}",
+            d.line
+        );
+        let home = game_folders::Home::from_process().expect("HOME is a full path");
+        let d = folder_from_with(
+            Some(
+                home.home
+                    .join("Documents/My Games/FalloutNV/nv-rs mod files"),
+            ),
+            None,
+            &game,
+            save_out::refused_to_write,
+        );
+        assert_eq!(d.folder, None, "{}", d.line);
+    }
+
     /// The host gives the game's folder as Data's parent, from the full path.
+    // Windows only: `std::path` logic on Windows paths (`C:\...`); on other systems `C:\` is no
+    // drive and a backslash no separator. There the save guard's own rule
+    // decides instead (`a_unix_folder_beside_the_saves_is_taken`).
+    #[cfg(windows)]
     #[test]
     fn the_game_folder_is_datas_parent() {
         assert_eq!(

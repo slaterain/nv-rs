@@ -1,9 +1,8 @@
 //! `functions_jip/jip_fn_climate.h` (JIP LN NVSE): a climate's textures, night sky, times and
-//! weather list, and the sky's current climate. 17 of its 18 commands.
+//! weather list, and the sky's current climate. All 18 of its commands.
 //!
-//! Not built: `ForceClimate` (`0x28D8`): it only sets JIP's `s_forcedClimate`, which JIP's
-//! climate hook reads (hook sites, steps 3.5/3.9); until that hook exists nothing forces a
-//! climate, so `SetCurrentClimate`'s clearing of the forced climate has nothing to clear.
+//! `ForceClimate` (`0x28D8`) is built with the climate hook that reads what it sets (H17), in
+//! `crate::game_patches::gw`; `SetCurrentClimate` clears a forced climate that is another one.
 //!
 //! The game keeps its own copies of some of these values: the sky caches the current climate's
 //! sunrise and sunset hours (its flags `0x3F00` mark them stale, set on a climate change), so a
@@ -42,6 +41,7 @@ pub static COMMANDS: Handlers = &[
     (0x26d0, get_current_climate),
     (0x26d1, set_current_climate),
     (0x26d2, refresh_current_climate),
+    (0x28d8, crate::game_patches::gw::force_climate),
 ];
 
 /// JIP's path buffers (`char path[0x80]`).
@@ -382,12 +382,15 @@ fn get_current_climate(e: &mut Engine, w: &[u32]) -> Ret {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_climate.h:
 // Cmd_SetCurrentClimate_Execute.
 /// The sky's current climate set, nothing else (the game sees it at its next climate update).
-/// JIP first clears its forced climate when it is another one; `ForceClimate` is not built, so
-/// there is none (see the module's notes).
+/// JIP first clears its forced climate (`ForceClimate`, H17) when it is another one.
 fn set_current_climate(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     let read = Read::of(e, &a);
     if let Some(c) = climate_arg(e, &read) {
+        let forced = crate::game_patches::gw::forced(e);
+        if forced != 0 && forced != c.addr() {
+            crate::game_patches::gw::clear_forced(e);
+        }
         let s = sky(e);
         e.set(s, Sky::currClimate, c.addr());
     }

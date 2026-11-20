@@ -200,3 +200,43 @@ fn a_supported_txt_entry_end_to_end() {
         )
     );
 }
+
+#[test]
+fn a_tile_the_text_never_closes_is_named_with_its_count_and_the_text_is_unchanged() {
+    let text = r#"<menu name="M"><rect name="a"></rect></menu>"#;
+    let t = || {
+        tiles(&[
+            ("a", &["x.xml"]),
+            ("gone", &["y.xml", "z.xml"]),
+            ("", &["e.xml"]),
+        ])
+    };
+    let (out, missing) = patch_noted(text.as_bytes(), t());
+    assert_eq!(out, patch(text.as_bytes(), t()));
+    assert_eq!(missing, vec![(b"gone".to_vec(), 2, false)]);
+    // Every tile found: nothing named.
+    let (_, missing) = patch_noted(text.as_bytes(), tiles(&[("a", &["x.xml"])]));
+    assert!(missing.is_empty());
+}
+
+#[test]
+fn a_tile_opened_but_never_closed_by_uios_walk_is_told_apart_from_one_not_there() {
+    // The self-closing named tag inside JHUD opens one more tile, which JHUD's closing tag ends;
+    // the menu's closing tag then ends JHUD, so nothing is left open: put in (at the menu's end).
+    let closed = r#"<menu name="M"><rect name="JHUD"><image name="icon" a="1"/></rect></menu>"#;
+    let (_, missing) = patch_noted(closed.as_bytes(), tiles(&[("JHUD", &["x.xml"])]));
+    assert!(missing.is_empty());
+    // Without the menu around it, JHUD's end is never found: it was opened (another spelling of
+    // its name met too), "gone" never.
+    let open = r#"<rect name="jhud"><image name="icon" a="1"/></rect>"#;
+    let (out, mut missing) = patch_noted(
+        open.as_bytes(),
+        tiles(&[("JHUD", &["x.xml"]), ("gone", &["y.xml"])]),
+    );
+    assert_eq!(out, open.as_bytes());
+    missing.sort();
+    assert_eq!(
+        missing,
+        vec![(b"JHUD".to_vec(), 1, true), (b"gone".to_vec(), 1, false)]
+    );
+}

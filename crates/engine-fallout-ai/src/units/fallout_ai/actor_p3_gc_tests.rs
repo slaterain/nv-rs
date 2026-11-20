@@ -240,3 +240,154 @@ fn g119_jips_handler_runs_the_projectiles_ammo_script() {
         assert!(g119_calls(&log, WEAPON_GET_CURRENT_AMMO).is_empty());
     }
 }
+
+// ---- Part 4: G99's seam in `Actor::HitMe` (the worn armour's damage) and G126's in
+// `fn_008a03a0` (the player's control flag test).
+
+const G99_ITEM: u32 = BASE + 0x600;
+const G99_ARMOR: u32 = BASE + 0x680;
+const G99_HIT: Ptr<HitData> = Ptr::new(BASE + 0x700);
+const G99_VTABLE: u32 = BASE + 0xb00;
+const G99_DAMAGE_SLOT: u32 = 0x00c9_93c8;
+const G99_ASKED: u32 = BASE + 0xd00;
+
+/// [`ACTOR`] with a vtable whose `0x3C8` is a stand-in, a worn armour entry ([`G99_ITEM`], its
+/// form of health 150) and a hit of armour damage 70.25; the exe's calls logged. `jip`: JIP LN
+/// NVSE installed (its own patches; the row off); else a logging handler at `0x89D2FF` answering
+/// `answer`, and the word `word`.
+fn g99_world(word: u32, jip: bool, answer: Option<u32>) -> Engine {
+    let mut e = Engine::new();
+    e.map(BASE, 0x1000);
+    e.mem.set_u32(ACTOR.addr(), G99_VTABLE);
+    e.mem.set_u32(G99_VTABLE + 0x3c8, G99_DAMAGE_SLOT);
+    e.register(G99_DAMAGE_SLOT, |_, _| Ret::default());
+    e.register(ENTRY_DELETE, |_, _| Ret::default());
+    e.register(0x0095_08b0, |_, _| Ret::default());
+    e.mem.set_u32(G99_ITEM + 8, G99_ARMOR);
+    e.mem.set_u32(G99_ARMOR + 0x6c, 150);
+    e.set(G99_HIT, HitData::fArmorDamage, 70.25f32);
+    if jip {
+        jip::test_support::install_into(&mut e);
+        e.register(0x00fd_f088, |_, _| Ret {
+            eax: 0xffff_ffff,
+            ..Ret::default()
+        });
+        jip::game_patches::set_row(&mut e, false);
+    } else {
+        e.mem.set_u32(G99_ASKED + 0x10, answer.map_or(0, |a| a + 1));
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0089_d2ff), |e, a| {
+            for (i, w) in a.iter().enumerate() {
+                e.mem.set_u32(G99_ASKED + 4 * i as u32, *w);
+            }
+            e.mem.u32(G99_ASKED + 0x10).checked_sub(1)
+        });
+        e.set_jip_patches(word);
+    }
+    e
+}
+
+fn g99_run(e: &mut Engine, item: u32) -> Vec<(u32, Vec<u32>)> {
+    e.call_log = Some(vec![]);
+    damage_worn_armor(e, ACTOR, item, G99_HIT);
+    e.call_log.take().unwrap_or_default()
+}
+
+/// With JIP not installed, or only the row's bit: the seam is not asked; the actor's `0x3C8`
+/// takes `(item, 70.25, 0)`, then the entry is deleted with 1. No item: nothing.
+#[test]
+fn g99_exe_armour_damage_while_off() {
+    for word in [0, jip_patches::FIXES] {
+        let mut e = g99_world(word, false, Some(0));
+        let log = g99_run(&mut e, G99_ITEM);
+        assert_eq!(e.mem.u32(G99_ASKED), 0, "{word:08x}");
+        assert_eq!(
+            g119_calls(&log, G99_DAMAGE_SLOT),
+            vec![vec![ACTOR.addr(), G99_ITEM, 70.25f32.to_bits(), 0]]
+        );
+        assert_eq!(g119_calls(&log, ENTRY_DELETE), vec![vec![G99_ITEM, 1]]);
+        assert!(g99_run(&mut e, 0).is_empty(), "no item");
+    }
+}
+
+/// With `INSTALLED`: the seam is asked with the actor, the item and the hit; an answer skips the
+/// exe's damage and delete, no answer leaves them. No item: not asked.
+#[test]
+fn g99_seam_takes_the_span() {
+    let mut e = g99_world(jip_patches::INSTALLED, false, Some(0));
+    let log = g99_run(&mut e, G99_ITEM);
+    assert_eq!(
+        (0..3)
+            .map(|i| e.mem.u32(G99_ASKED + 4 * i))
+            .collect::<Vec<_>>(),
+        vec![ACTOR.addr(), G99_ITEM, G99_HIT.addr()]
+    );
+    assert!(g119_calls(&log, G99_DAMAGE_SLOT).is_empty());
+    assert!(g119_calls(&log, ENTRY_DELETE).is_empty());
+    let mut e = g99_world(jip_patches::INSTALLED, false, None);
+    let log = g99_run(&mut e, G99_ITEM);
+    assert_eq!(g119_calls(&log, G99_DAMAGE_SLOT).len(), 1, "no answer");
+    assert_eq!(g119_calls(&log, ENTRY_DELETE).len(), 1);
+    let mut e = g99_world(jip_patches::INSTALLED, false, Some(0));
+    g99_run(&mut e, 0);
+    assert_eq!(e.mem.u32(G99_ASKED), 0, "no item: not asked");
+}
+
+/// JIP's handler through `damage_worn_armor`: `PlayerCharacter::DamageEquipment` by address with
+/// the smaller of 70.25 and the cap (1.0) times 150, then the delete; not the actor's `0x3C8`.
+#[test]
+fn g99_jips_handler_through_the_span() {
+    let mut e = g99_world(0, true, None);
+    assert_ne!(e.jip_patches() & jip_patches::INSTALLED, 0);
+    let log = g99_run(&mut e, G99_ITEM);
+    assert!(g119_calls(&log, G99_DAMAGE_SLOT).is_empty());
+    assert_eq!(
+        g119_calls(&log, 0x0095_08b0),
+        vec![vec![ACTOR.addr(), G99_ITEM, 70.25f32.to_bits(), 0]]
+    );
+    assert_eq!(g119_calls(&log, ENTRY_DELETE), vec![vec![G99_ITEM, 1]]);
+}
+
+const G126_PLAYER: u32 = BASE + 0x800;
+
+/// G126: with the word 0 the exe's `005a03f0` answers (flag 1); with `INSTALLED` the seam's
+/// answer's low byte is the test (the call not made), no answer the exe's call.
+#[test]
+fn g126_seam_replaces_the_control_flag_call() {
+    let mut e = Engine::new();
+    e.map(BASE, 0x1000);
+    e.register(PLAYER_TEST_5A03F0, |_, a| u32::from(a[1] == 1).into_ret());
+    e.mem.set_u32(G99_ASKED + 0x10, 0);
+    e.on_site(SiteSlot::new(Owner::Jip, 0x008a_04b2), |e, a| {
+        e.mem.set_u32(G99_ASKED, a[0]);
+        e.mem.u32(G99_ASKED + 0x10).checked_sub(1)
+    });
+    e.call_log = Some(vec![]);
+    assert!(player_controls_test(&mut e, G126_PLAYER));
+    assert_eq!(e.mem.u32(G99_ASKED), 0, "word 0: not asked");
+    e.set_jip_patches(jip_patches::INSTALLED);
+    e.mem.set_u32(G99_ASKED + 0x10, 0x101);
+    assert!(!player_controls_test(&mut e, G126_PLAYER), "0x100: false");
+    assert_eq!(e.mem.u32(G99_ASKED), G126_PLAYER);
+    e.mem.set_u32(G99_ASKED + 0x10, 2);
+    assert!(player_controls_test(&mut e, G126_PLAYER));
+    let log = e.call_log.take().unwrap_or_default();
+    assert_eq!(
+        g119_calls(&log, PLAYER_TEST_5A03F0),
+        vec![vec![G126_PLAYER, 1]]
+    );
+    e.mem.set_u32(G99_ASKED + 0x10, 0);
+    assert!(
+        player_controls_test(&mut e, G126_PLAYER),
+        "no answer: the exe's"
+    );
+}
+
+/// JIP's handler: the player's `+0x680` bit 0, then false once `ToggleNoMovementCombat` is on.
+#[test]
+fn g126_jips_handler() {
+    let mut e = g99_world(0, true, None);
+    e.mem.set_u8(G126_PLAYER + 0x680, 1);
+    assert!(player_controls_test(&mut e, G126_PLAYER));
+    jip::game_patches::gc::damage::set_no_movement_combat(&mut e, true);
+    assert!(!player_controls_test(&mut e, G126_PLAYER));
+}

@@ -71,7 +71,10 @@ where
                 let send = send.clone();
                 std::thread::Builder::new()
                     .name(name.to_string())
-                    .spawn(move || work(&shared, &send))
+                    .spawn(move || {
+                        qos::thread_started();
+                        work(&shared, &send)
+                    })
                     .ok()
             })
             .collect();

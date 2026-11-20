@@ -10,7 +10,7 @@ in `scripts/`.
 | Music | `engine-platform/src/dshow.rs`, `crates/mp3` | DirectShow's filter graph and MP3 decoder | `scripts/dshow-measure` | Graph answers as measured. All 199 tracks are the same length, and 99.9748% of samples are identical |
 | Wave files | `engine-platform/src/mmio.rs` | `mmio*` | `scripts/mmio-measure` | Edge cases as measured |
 | DirectSound | `engine-platform/src/dsound.rs` | DirectSound 8 objects, cursors | `scripts/dsound-capture` | Answers and cursors as measured |
-| Mixer | `engine-platform/src/mixer.rs`, `engine-platform/src/resampler.rs`, `engine-platform/src/sound_out.rs` | DirectSound's mixer, the device | `scripts/dsmix-measure` (WASAPI loopback, `DSMIX_HOOK`, `DSMIX_SURROUND`), `scripts/dsound-oracle` (the DLLs in a test program) | 2D path, 3D stage, distortion and both resamplers bit-exact (translated from the player's DLLs); 5.1 and 7.1 devices as DirectSound places each buffer, its 2-channel stream until the first 3D buffer and the 4 ms gain ramp (measured on 8 channels) |
+| Mixer | `ds-mix/src/mixer.rs`, `ds-mix/src/resampler.rs`, `ds-mix/src/sound_out.rs` | DirectSound's mixer, the device | `scripts/dsmix-measure` (WASAPI loopback, `DSMIX_HOOK`, `DSMIX_SURROUND`), `scripts/dsound-oracle` (the DLLs in a test program) | 2D path, 3D stage, distortion and both resamplers bit-exact (translated from the player's DLLs); 5.1 and 7.1 devices as DirectSound places each buffer, its 2-channel stream until the first 3D buffer and the 4 ms gain ramp (measured on 8 channels) |
 | Voices and sounds | `engine-platform/src/vorbisfile.rs`, `crates/vorbis` | `libvorbisfile.dll`/`libvorbis.dll` (1.2.0) | `scripts/vorbis-record` | Bit-exact at 24-bit and 53-bit x87; 64-bit not provided |
 | Movie sound | `engine-platform/src/bink.rs` | Bink's DirectSound sound system | `nv-bink --sound-system`, `--wait --sound` | `BinkSetSoundSystem` answers 1 as measured; the movie track plays as a mixer voice on the clock schedule (output off by default) |
 
@@ -29,6 +29,36 @@ or fewer than two channels one file per stream, "More than two channels" below),
 lists what started when: real ms, frames recorded, game clock ms, then the event (`Play` of a
 buffer with its format, music `Render`/`Run`, the movie's track, sound file opens, `mmioOpen`
 names, Ogg opens, pace skips).
+
+**On Linux and macOS** (compiled and its tests pass on CI; never heard and not verified on a Mac:
+nothing off Windows runs on the development PC, and the game itself does not start there yet).
+The device is reached through cpal (`sound_out.rs`, its module comment has the details): ALSA on
+Linux (PipeWire's and PulseAudio's ALSA plugins included), CoreAudio's default output on macOS.
+The same mixed samples are handed to the system; what the system does after is not measured
+against Windows:
+- the rate is the device's default stream as cpal gives it. On Linux that is cpal's preference
+  (48000 Hz first), and PipeWire, PulseAudio or ALSA's plug may convert it to their own rate after
+  us; on macOS it is the device's own nominal rate;
+- the mix has two channels at most (no surround placement off Windows). On Linux the stream has
+  the mix's channels; what the system does with two channels on a larger device (the front pair
+  only, or an upmix) is not measured. On macOS the stream asked for has the device's own offered
+  channel count, the mix in the first channels and silence in the others: cpal sets the device's
+  physical format before it opens a stream, and asking for what the device already offers is the
+  request least able to change the hardware for other programs. It can still change it (for
+  example a device whose current hardware format is integer but which also lists a 32-bit float
+  one); not verified on a Mac;
+- the period is DirectSound's 10 ms on Linux where the device takes it, else the system's own;
+- the log's stream line names the device as the system gives it, the rate and channels asked, and
+  the period the system opened (and why a 10 ms request fell back). On Linux the sound thread runs
+  at normal priority, said once per run: no real-time attempt, because cpal's ALSA worker retries
+  errors at once, so a device left in a bad state would spin at real-time priority and take a
+  core from the desktop (cpal itself refuses real-time for the PipeWire and PulseAudio plugin
+  devices most desktops use). A later step may add it for hardware devices only, with a way back.
+
+**What Linux needs:** ALSA's library `libasound.so.2` (package `libasound2`, or `alsa-lib`) to start
+the program at all, sound or not: the program links it. Every desktop Linux has it. Building needs
+its development files and pkg-config (`libasound2-dev pkg-config` on Debian and Ubuntu). macOS
+needs nothing beyond the system.
 
 **Where the samples live** (ADR-0015, the bulk buffers). A secondary buffer's samples are kept
 outside the game's 32-bit memory; the game's memory holds them only while the game has the buffer
@@ -91,7 +121,7 @@ These were measured on a device without audio enhancements (Virtual Desktop Audi
 
 - A 3D buffer and a buffer with the distortion: see below (translated from the DLLs).
 
-**Resampling: DirectSound's two converters** (`engine-platform/src/resampler.rs`, translated from the
+**Resampling: DirectSound's two converters** (`ds-mix/src/resampler.rs`, translated from the
 player's `dsound.dll` and `RESAMPLEDMO.DLL`, 2026-10-28). Every game buffer has
 `DSBCAPS_CTRLFREQUENCY`, so every one gets a source-rate converter, and which one is the
 device's state:
@@ -264,7 +294,7 @@ a formula is measured from the player's own `dsdmo.dll` when the game first play
   1135 Hz, pre-lowpass cutoff 5000 Hz. The I3DL2 reverb (`00af1430`) is not registered on
   Windows 11 (captured `REGDB_E_CLASSNOTREG`), so it is never heard.
 
-### The 3D stage (`engine-platform/src/ds3d.rs`)
+### The 3D stage (`ds-mix/src/ds3d.rs`)
 
 For a stereo device (`CMultiPan3dObject`; other layouts below, "More than two channels"):
 1. **Listener frame.** The offset from the listener is turned by three angles taken from the
@@ -303,7 +333,7 @@ The 54 others are the device-period tails every capture loses (Mixer above), at 
 The old approximate law (`NEAR_SHARE`, "the power sums to a third") is gone: the third was the
 -5 dB of the distance stage and the -3 dB of an even split.
 
-### The distortion (`engine-platform/src/dsfx.rs`)
+### The distortion (`ds-mix/src/dsfx.rs`)
 
 Per sample, in `f32`: a one-pole lowpass; a waveshaper on the integer part of the value (an
 integer "float" with an exponent of 2 to 5 bits chosen by the edge); the gain; a two-state
@@ -317,8 +347,11 @@ of the rate. The effect runs at the buffer's format rate, before the volume, 3D 
 sound hears its own tail.
 
 The one table that is not a formula, the band-pass's gain correction for each edge setting
-(32 values with two decimals), is measured once from the player's `dsdmo.dll` through COM (an
-impulse on a float stream, `dsfx::edge_table`). The values measured in a 64-bit process match
+(32 values with two decimals), is a table of constants in `dsdmo.dll`'s read-only data, read by
+its coefficient code (`dsfx::EDGE_TABLE`, with the version and addresses). On Windows it is
+still measured once from the player's `dsdmo.dll` through COM (an impulse on a float stream,
+`dsfx::edge_table`), and a measurement that differs from the constants is named in the log;
+on Linux and macOS (no DLL) the constants are used. The values measured in a 64-bit process match
 the 32-bit DLL's table entry for entry (checked privately). The game's edge 0 uses entry 2.
 
 **Measured:** the four `dsmix-vd-2026-10-24` distortion captures (gain 0, -18 and -40 dB, edge 0
@@ -381,7 +414,7 @@ headset's per-app processing, keyed by the name, deterministic). Players whose W
 5.1 or 7.1 get more than two channels under any name. The port must run as `FalloutNV.exe`
 (NVIDIA's driver profile, also keyed by the name, removes the white dots), and its mixer used to
 stop at sound start on anything but two channels. It now hands Windows what DirectSound hands it
-(`engine-platform/src/speakers.rs`, `mixer.rs`, `ds3d.rs`, `dsound.rs`, `sound_out.rs`).
+(`ds-mix/src/speakers.rs`, `mixer.rs`, `ds3d.rs`, `sound_out.rs`; `engine-platform/src/dsound.rs`).
 
 **Measured** (`scripts/dsmix-measure` mode `DSMIX_SURROUND`, 2026-11-03, private results in
 `build43-scratch/measure/sound71/measure`): the tool wraps `IAudioClient` and

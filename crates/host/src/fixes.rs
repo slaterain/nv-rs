@@ -43,6 +43,8 @@ pub static FIXES: &[Fix] = &[
     JIP_COSAVE_FIXES,
     JIP_VANILLA_COMMANDS,
     JIP_GAME_PATCHES,
+    MCM,
+    STEWIE,
     UIO,
     SCRIPT_ERROR_GUARD,
     IMOD_EVENT_FORM_CHECK,
@@ -251,7 +253,7 @@ pub const JIP_INSTALLED: Fix = Fix {
     name: "JIP LN NVSE built in (for testing)",
     env: "NV_JIP_INSTALLED",
     addresses: &[],
-    summary: "for testing, off in every preset: JIP LN NVSE answers \"installed\" to mods (MCM, oHUD and others that need it), with 995 of its 1,118 commands (a script line calling one of the others fails and stops that script for the run), its hooks and 64 of its 162 game patches",
+    summary: "for testing, off in every preset: JIP LN NVSE answers \"installed\" to mods (MCM, oHUD and others that need it), with the commands built so far (a script line calling one not built yet fails and stops that script for the run), its hooks and the game patches built so far (the README and docs/FIXES.md give the counts)",
     install: install_jip_installed,
 };
 
@@ -328,17 +330,14 @@ pub const SHADER_WARM: Fix = Fix {
 };
 
 fn install_shader_warm(e: &mut Engine) {
-    #[cfg(windows)]
     engine_platform::d3d9real::want_shader_warm(e, true);
-    #[cfg(not(windows))]
-    let _ = e;
 }
 
 pub const SCRIPT_ERROR_GUARD: Fix = Fix {
     name: "script error loop guard",
     env: "NV_NVSE_ERROR_GUARD",
     addresses: &[],
-    summary: "an error inside a RuntimeScriptError handler is not sent to the handlers again",
+    summary: "an error inside a RuntimeScriptError handler is not sent to the handlers again; a JIP batch script or snippet running itself stops 64 deep",
     install: install_script_error_guard,
 };
 
@@ -441,13 +440,15 @@ fn install_script_ui_sort_paths(e: &mut Engine) {
 /// frame's start, before the controls are read, or earlier where the frame's tail reaches what the draw uses
 /// (`engine::draw_thread`, [`crate::draw_thread`]). It needs real threads with the render thread; stepped threads
 /// are its check form. `NV_DRAW_THREAD=poison` (the environment only, for checks) is on with the packet's
-/// POISON check (stepped threads only). The draw family's packet hand-off is wired; until the geometry family is on, every
-/// frame still draws on main.
+/// POISON check (stepped threads only). The draw family's packet hand-off is wired; with the geometry family on (since
+/// 2026-11-16) a frame would be posted, and the first posted job still stops the run (`00b66570` on the helper), so the
+/// row stays off in every preset and the host refuses it unless `NV_DRAW_THREAD_CHECK=1` names the drawing thread's own
+/// check work (`crate::draw_thread::refusal`).
 pub const DRAW_THREAD: Fix = Fix {
     name: "world drawn on a second thread (experimental)",
     env: "NV_DRAW_THREAD",
     addresses: &[],
-    summary: "experimental, off in every preset: the world's draw on a thread of its own beside the end of the frame; for now every frame still draws on main by default (the geometry family it needs is off until its gate; NV_TYPED=geometry)",
+    summary: "experimental, off in every preset: the world's draw on a thread of its own beside the end of the frame; refused for now (not working yet: the first posted frame stops the run), so the world is still drawn on main",
     install: install_nothing,
 };
 
@@ -469,12 +470,49 @@ fn install_uio(e: &mut Engine) {
     uio::set_on(e, true);
 }
 
+/// lStewieAl's Tweaks built in (`crates/stewie`, docs/FIXES.md "lStewieAl's Tweaks"): its engine fixes,
+/// each a row of its own with an off key in Fallout.ini's `[nv-rs Stewie]`, with VNV's values as the
+/// defaults of its settings and the player's `nvse_stewie_tweaks.ini` over them. Mods are not told
+/// it is installed until its script commands are built (`stewie::ANSWERS_INSTALLED`); then xNVSE
+/// lists it as "lStewieAl's Tweaks" 1005. On in the fixes preset, off in vanilla. The row sets a flag;
+/// `stewie::install` (after JIP and MCM, before UIO, in `install_rows_and_extenders`) reads the
+/// settings and sets the rows' bits.
+pub const STEWIE: Fix = Fix {
+    name: "lStewieAl's Tweaks built in",
+    env: "NV_STEWIE",
+    addresses: &[],
+    summary: "lStewieAl's Tweaks built in: its engine fixes (crash fixes first), each with its own off key in [nv-rs Stewie], with VNV's settings unless the player's nvse_stewie_tweaks.ini says otherwise",
+    install: install_stewie,
+};
+
+fn install_stewie(e: &mut Engine) {
+    stewie::set_on(e, true);
+}
+
+/// The Mod Configuration Menu's NVSE plugin built in (`crates/mcm`: MCM.dll 1.5, "MCM Extensions"):
+/// its nine commands at `0x21C0` up, which MCM's scripts and the menus of the mods that use it call
+/// (`GetMCMFloat`, `SetMCMFloat`, `GetModINI`, ...). Off in every preset ([`OFF_IN_EVERY_PRESET`])
+/// until the maintainer has seen it work; the intended rule after that is automatic (on when the
+/// load order has MCM), with no switch. The row sets a flag; `mcm::install` (after JIP, before
+/// UIO, in `install_rows_and_extenders`) registers the commands.
+pub const MCM: Fix = Fix {
+    name: "The Mod Configuration Menu's plugin built in",
+    env: "NV_MCM",
+    addresses: &[],
+    summary: "The Mod Configuration Menu's NVSE plugin (MCM.dll) built in: its script commands, which MCM's menu needs to show",
+    install: install_mcm,
+};
+
+fn install_mcm(e: &mut Engine) {
+    mcm::set_on(e, true);
+}
+
 /// A row whose binding [`install`] makes itself, with the choice.
 fn install_nothing(_: &mut Engine) {}
 
 /// Rows that are off in every preset until the maintainer turns them on: only their own variable or `Fallout.ini`
 /// line turns them on.
-pub const OFF_IN_EVERY_PRESET: &[&str] = &[DRAW_THREAD.env, UIO.env, JIP_INSTALLED.env];
+pub const OFF_IN_EVERY_PRESET: &[&str] = &[DRAW_THREAD.env, MCM.env, UIO.env, JIP_INSTALLED.env];
 
 /// The rows that register nothing at an exe address: the menu limit paces the uncapped step;
 /// the extender's rows set flags `crates/nvse` reads.
@@ -486,6 +524,8 @@ const NO_ADDRESS: &[&str] = &[
     JIP_COSAVE_FIXES.name,
     JIP_VANILLA_COMMANDS.name,
     JIP_GAME_PATCHES.name,
+    MCM.name,
+    STEWIE.name,
     UIO.name,
     SCRIPT_ERROR_GUARD.name,
     IMOD_EVENT_FORM_CHECK.name,
@@ -538,6 +578,46 @@ pub const PLAY_RENDERER: Renderer = Renderer::Vulkan;
 /// off, in every preset. `crates/host/data/game_ini.tsv`'s `bShowFrameRate` row is held to it by a
 /// test.
 pub const PLAY_SHOW_FRAME_RATE: bool = false;
+
+/// Whether the new lighting (ambient occlusion, port-added:
+/// `d3d9_wgpu::scene_light`, Vulkan only) is on when neither `NV_AO` nor `Fallout.ini`'s
+/// `bAmbientOcclusion` says ([`Choice::ambient_occlusion`]): off, in every preset (a new look, not
+/// a fix). `crates/host/data/game_ini.tsv`'s `bAmbientOcclusion` row is held to it by a test.
+pub const PLAY_AMBIENT_OCCLUSION: bool = false;
+
+/// Whether the sun shadows (port-added: `d3d9_wgpu::sun_shadow`, Vulkan only) are on when neither
+/// `NV_SUN_SHADOWS` nor `Fallout.ini`'s `bSunShadows` says ([`Choice::sun_shadows`]): off, in every
+/// preset (a new look, not a fix). `crates/host/data/game_ini.tsv`'s `bSunShadows` row is held to it
+/// by a test.
+pub const PLAY_SUN_SHADOWS: bool = false;
+/// Whether, with the sun shadows on, the sun light comes from the sun disc by day and the moon disc by
+/// night (port-added: `engine_fallout_env`'s `sun::LightFromSky`) when neither `NV_SUN_LIGHT_FROM_SKY`
+/// nor `Fallout.ini`'s `bSunLightFromSky` says ([`Choice::sun_light_from_sky`]): on, so the shadows,
+/// the lit sides and the sky agree; it changes nothing while the sun shadows are off.
+/// `crates/host/data/game_ini.tsv`'s `bSunLightFromSky` row is held to it by a test.
+pub const PLAY_SUN_LIGHT_FROM_SKY: bool = true;
+/// Whether, with the sun shadows on, characters (the player, NPCs, creatures, bodies: skinned
+/// draws) cast into the sun shadows, the game's own projected actor shadows then left out so each
+/// casts one shadow (port-added: `d3d9_wgpu::sun_shadow::enable_characters`), when neither
+/// `NV_SUN_SHADOWS_CHARACTERS` nor `Fallout.ini`'s `bSunShadowsCharacters` says
+/// ([`Choice::sun_shadow_characters`]): on; it changes nothing while the sun shadows are off.
+/// `crates/host/data/game_ini.tsv`'s `bSunShadowsCharacters` row is held to it by a test.
+pub const PLAY_SUN_SHADOW_CHARACTERS: bool = true;
+/// How strong the new lighting's shade is when neither `NV_AO_STRENGTH` nor `Fallout.ini`'s
+/// `fAmbientOcclusionStrength` says ([`Choice::ambient_occlusion_strength`]): the step's own
+/// default (`d3d9_wgpu::scene_light::STRENGTH`). `crates/host/data/game_ini.tsv`'s
+/// `fAmbientOcclusionStrength` row is held to it by a test.
+pub const PLAY_AMBIENT_OCCLUSION_STRENGTH: f32 = d3d9_wgpu::scene_light::STRENGTH;
+/// Whether Windows is told the game is not background work (`qos`: execution-speed throttling off,
+/// timer requests honoured, for the process and each thread the port starts) when neither
+/// `NV_NOT_BACKGROUND` nor `Fallout.ini`'s `[nv-rs Threads] bNotBackground` says
+/// ([`Choice::not_background`]): on, in every run and every preset, the original-behaviour one too
+/// (the maintainer, 2026-11-17: "on by default, no background slowdown"). A platform matter, not a
+/// game fix: it changes nothing the game sees, only how Windows schedules the program when its
+/// window is not the active one (measured 2026-11-17: a hidden run without it once ran about a
+/// third slower, every part of the frame alike). `crates/host/data/game_ini.tsv`'s `bNotBackground`
+/// row is held to it by a test.
+pub const PLAY_NOT_BACKGROUND: bool = true;
 
 /// Who draws the game ([`Choice::renderer`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -598,7 +678,7 @@ impl Preset {
 }
 
 /// What this run does, bound before the first frame ([`install`]).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Choice {
     pub preset: Preset,
     /// Frames a second at most, 0 for no limit. Only the uncapped step reads it: the original's
@@ -636,15 +716,63 @@ pub struct Choice {
     /// else, in a launcher's play run, `Fallout.ini`'s `[nv-rs Display] bShowFrameRate`; else
     /// [`PLAY_SHOW_FRAME_RATE`], off. Not part of any preset.
     pub show_frame_rate: bool,
+    /// Whether the new lighting is on (ambient occlusion,
+    /// `d3d9_wgpu::scene_light`, Vulkan only): `NV_AO` when set (`1` on, else off); else, in a
+    /// launcher's play run, `Fallout.ini`'s `[nv-rs Display] bAmbientOcclusion`; else
+    /// [`PLAY_AMBIENT_OCCLUSION`], off. Not part of any preset.
+    pub ambient_occlusion: bool,
+    /// Whether the sun shadows are on (`d3d9_wgpu::sun_shadow`, Vulkan only): `NV_SUN_SHADOWS` when
+    /// set (`1` or `debug` on, else off: `1` puts the shadows in the game's own lighting, `debug`
+    /// shows an engineers' overlay instead); else, in a launcher's play run, `Fallout.ini`'s `[nv-rs Display] bSunShadows`;
+    /// else [`PLAY_SUN_SHADOWS`], off. Not part of any preset.
+    pub sun_shadows: bool,
+    /// Whether the sun light comes from the sky's discs (`engine_fallout_env` `sun::LightFromSky`)
+    /// while the sun shadows are on: `NV_SUN_LIGHT_FROM_SKY` when set (`1` on, else off); else, in a
+    /// launcher's play run, `Fallout.ini`'s `[nv-rs Display] bSunLightFromSky`; else
+    /// [`PLAY_SUN_LIGHT_FROM_SKY`], on. Used only with [`Choice::sun_shadows`] ([`Choice::light_from_sky`]).
+    /// Not part of any preset.
+    pub sun_light_from_sky: bool,
+    /// Whether characters cast into the sun shadows (the game's own actor shadows then left out):
+    /// `NV_SUN_SHADOWS_CHARACTERS` when set (`1` on, else off); else, in a launcher's play run,
+    /// `Fallout.ini`'s `[nv-rs Display] bSunShadowsCharacters`; else
+    /// [`PLAY_SUN_SHADOW_CHARACTERS`], on. Used only with [`Choice::sun_shadows`]. Not part of any
+    /// preset.
+    pub sun_shadow_characters: bool,
+    /// How strong its shade is, from 0.1 (faint) to 1 (all of it): `NV_AO_STRENGTH` when it is a
+    /// number; else, in a launcher's play run, `Fallout.ini`'s `[nv-rs Display]
+    /// fAmbientOcclusionStrength`; else [`PLAY_AMBIENT_OCCLUSION_STRENGTH`]. Clamped to that range
+    /// (`d3d9_wgpu::scene_light::clamp_strength`). Not part of any preset.
+    pub ambient_occlusion_strength: f32,
+    /// Whether Windows is told the game is not background work (`qos::apply_at_start`):
+    /// `NV_NOT_BACKGROUND` when set (`1` on, else off); else, in a launcher's play run,
+    /// `Fallout.ini`'s `[nv-rs Threads] bNotBackground`; else [`PLAY_NOT_BACKGROUND`], on. Not part
+    /// of any preset: vanilla keeps it too.
+    pub not_background: bool,
+    /// Who decided [`Choice::not_background`] (for its start-up line): `None` the default, else the
+    /// variable or the file's key.
+    pub not_background_by: Option<&'static str>,
     /// Whether `NV_DRAW_THREAD` is `poison` (the environment only: the drawing thread with the packet's POISON check,
     /// for stepped threads; `crate::draw_thread::install` decides the draw family's capture mode from it).
     pub draw_poison: bool,
+    /// Whether `NV_DRAW_THREAD_CHECK=1` names the drawing thread's own check work (the environment only, a test's
+    /// variable): only then is the drawing-thread row not refused as "not working yet" (`crate::draw_thread::refusal`).
+    pub draw_check: bool,
     /// The one log line naming `Fallout.ini` values that could not be used
     /// ([`crate::game_ini::Keys::bad_line`]): the default stood for each.
     pub ini_note: Option<String>,
+    /// Fallout.ini's `[nv-rs Stewie]` keys (a launcher's play run only): Tweaks' rows each off by
+    /// its own key, and `bMissingKeysAsTweaks` (`stewie::rows::Keys`).
+    pub stewie: stewie::rows::Keys,
 }
 
 impl Choice {
+    /// Whether the sun light is turned to come from the sky's discs: only with the sun shadows on
+    /// and [`Choice::sun_light_from_sky`] (on by default). With the sun shadows off the game's light
+    /// is the exe's, whatever the key says.
+    pub fn light_from_sky(&self) -> bool {
+        self.sun_shadows && self.sun_light_from_sky
+    }
+
     /// The original's behaviour, whatever the environment and the settings file say: what
     /// [`crate::Host::start`] runs (stepped threads, no render thread too).
     pub fn vanilla() -> Choice {
@@ -658,8 +786,17 @@ impl Choice {
             borderless: None,
             renderer: None,
             show_frame_rate: PLAY_SHOW_FRAME_RATE,
+            ambient_occlusion: PLAY_AMBIENT_OCCLUSION,
+            sun_shadows: PLAY_SUN_SHADOWS,
+            sun_light_from_sky: PLAY_SUN_LIGHT_FROM_SKY,
+            sun_shadow_characters: PLAY_SUN_SHADOW_CHARACTERS,
+            ambient_occlusion_strength: PLAY_AMBIENT_OCCLUSION_STRENGTH,
+            not_background: PLAY_NOT_BACKGROUND,
+            not_background_by: None,
             ini_note: None,
+            stewie: stewie::rows::Keys::default(),
             draw_poison: false,
+            draw_check: false,
         }
     }
 
@@ -813,8 +950,24 @@ impl Choice {
             // The same: play's renderer, the file's choice over it; none for any other run.
             renderer: ini.renderer.or(play.then_some(PLAY_RENDERER)),
             show_frame_rate: ini.show_frame_rate.unwrap_or(PLAY_SHOW_FRAME_RATE),
+            ambient_occlusion: ini.ambient_occlusion.unwrap_or(PLAY_AMBIENT_OCCLUSION),
+            sun_shadows: ini.sun_shadows.unwrap_or(PLAY_SUN_SHADOWS),
+            sun_light_from_sky: ini.sun_light_from_sky.unwrap_or(PLAY_SUN_LIGHT_FROM_SKY),
+            sun_shadow_characters: ini
+                .sun_shadow_characters
+                .unwrap_or(PLAY_SUN_SHADOW_CHARACTERS),
+            ambient_occlusion_strength: ini.ambient_occlusion_strength.map_or(
+                PLAY_AMBIENT_OCCLUSION_STRENGTH,
+                d3d9_wgpu::scene_light::clamp_strength,
+            ),
+            not_background: ini.not_background.unwrap_or(PLAY_NOT_BACKGROUND),
+            not_background_by: ini
+                .not_background
+                .map(|_| "Fallout.ini's [nv-rs Threads] bNotBackground"),
             ini_note: ini.bad_line(),
+            stewie: ini.stewie.clone(),
             draw_poison: env(DRAW_THREAD.env).as_deref().map(str::trim) == Some("poison"),
+            draw_check: env(DRAW_THREAD_CHECK).as_deref().map(str::trim) == Some("1"),
         };
         for line in settings.unwrap_or("").lines() {
             let Some((key, value)) = line.split_once('=') else {
@@ -876,6 +1029,29 @@ impl Choice {
         }
         if let Some(value) = env("NV_SHOW_FPS").filter(|v| !v.trim().is_empty()) {
             choice.show_frame_rate = value.trim() == "1";
+        }
+        if let Some(value) = env("NV_AO").filter(|v| !v.trim().is_empty()) {
+            choice.ambient_occlusion = value.trim() == "1";
+        }
+        if let Some(value) = env("NV_SUN_SHADOWS").filter(|v| !v.trim().is_empty()) {
+            choice.sun_shadows = matches!(value.trim(), "1" | "debug");
+        }
+        if let Some(value) = env("NV_SUN_LIGHT_FROM_SKY").filter(|v| !v.trim().is_empty()) {
+            choice.sun_light_from_sky = value.trim() == "1";
+        }
+        if let Some(value) = env("NV_SUN_SHADOWS_CHARACTERS").filter(|v| !v.trim().is_empty()) {
+            choice.sun_shadow_characters = value.trim() == "1";
+        }
+        // A number, clamped; anything else leaves the strength as it is.
+        if let Some(value) = env("NV_AO_STRENGTH")
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .filter(|v| v.is_finite())
+        {
+            choice.ambient_occlusion_strength = d3d9_wgpu::scene_light::clamp_strength(value);
+        }
+        if let Some(value) = env("NV_NOT_BACKGROUND").filter(|v| !v.trim().is_empty()) {
+            choice.not_background = value.trim() == "1";
+            choice.not_background_by = Some("NV_NOT_BACKGROUND");
         }
         if test {
             choice.preset = Preset::Vanilla;
@@ -1007,7 +1183,12 @@ const TEST_VARIABLES: &[&str] = &[
     "NV_PASS_CHECK",
     "NV_TOPIC_INDEX_CHECK",
     "NV_NVSE_EVENT_LOG",
+    DRAW_THREAD_CHECK,
 ];
+
+/// `NV_DRAW_THREAD_CHECK=1`: the drawing thread's own check work, the only run that may turn the drawing-thread row on
+/// while its first posted frame still stops the run (`crate::draw_thread::refusal`). A test's variable.
+pub const DRAW_THREAD_CHECK: &str = "NV_DRAW_THREAD_CHECK";
 
 /// Whether a launcher started this run for play: `NV_SETTINGS` set (Play.exe, and the play
 /// folder's Play.cmd through apply-settings.sh). No scripted, gated or measured run sets it
@@ -1138,6 +1319,7 @@ fn parse_limit(value: &str, source: &str) -> Result<u32, String> {
 /// for the whole run.
 pub fn install(e: &mut Engine, choice: &Choice) {
     crate::uncap::set_frame_limit(choice.frame_limit);
+    stewie::set_keys(e, choice.stewie.clone());
     crate::uncap::set_menu_frame_limit(choice.bound_menu_frame_limit());
     for fix in FIXES.iter().filter(|f| choice.is_on(f)) {
         (fix.install)(e);
@@ -1158,7 +1340,7 @@ pub fn install(e: &mut Engine, choice: &Choice) {
 
 /// The settings file: `NV_SETTINGS` when set; else `settings.ini` beside the program or in the
 /// folder above it (a package has `app\nv-viewer.exe` under the folder with `Play.cmd`). The same
-/// file `Settings.cmd` writes.
+/// file the launcher's Settings screen writes (and older previews' Settings.cmd wrote).
 pub fn settings_file() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("NV_SETTINGS") {
         return Some(PathBuf::from(path));
@@ -1230,7 +1412,7 @@ mod tests {
 
     #[test]
     fn the_settings_file_picks_vanilla_and_the_environment_wins() {
-        let text = "# written by Settings.cmd\nBorderless=1\nPreset=Vanilla\nFrameLimit=120\n";
+        let text = "# written by the launcher\nBorderless=1\nPreset=Vanilla\nFrameLimit=120\n";
         let choice = Choice::from_parts(Some(text), no_env).unwrap();
         assert_eq!(choice.preset, Preset::Vanilla);
         assert_eq!(choice.frame_limit, 120);
@@ -1313,7 +1495,8 @@ mod tests {
         assert!(poison.ini_note.is_some());
     }
 
-    /// It needs the render thread with real threads; stepped threads are its check form.
+    /// With the drawing thread's own check named (`NV_DRAW_THREAD_CHECK=1`), it needs the render thread with real
+    /// threads; stepped threads are its check form.
     #[test]
     fn the_drawing_thread_needs_the_render_thread_with_real_threads() {
         let with = |pairs: &'static [(&'static str, &'static str)]| {
@@ -1321,10 +1504,14 @@ mod tests {
         };
         let real_no_render = with(&[
             ("NV_DRAW_THREAD", "1"),
+            ("NV_DRAW_THREAD_CHECK", "1"),
             ("NV_THREADS", "real"),
             ("NV_RENDER_THREAD", "0"),
         ]);
-        assert!(crate::draw_thread::refusal(&real_no_render).is_some());
+        assert_eq!(
+            crate::draw_thread::refusal(&real_no_render),
+            Some("it needs the render thread with real threads (bRenderThread=1)")
+        );
         assert!(
             real_no_render.describe().contains("(refused: "),
             "{}",
@@ -1332,13 +1519,46 @@ mod tests {
         );
         let real_render = with(&[
             ("NV_DRAW_THREAD", "1"),
+            ("NV_DRAW_THREAD_CHECK", "1"),
             ("NV_THREADS", "real"),
             ("NV_RENDER_THREAD", "1"),
         ]);
         assert_eq!(crate::draw_thread::refusal(&real_render), None);
-        let stepped = with(&[("NV_DRAW_THREAD", "1")]);
+        let stepped = with(&[("NV_DRAW_THREAD", "1"), ("NV_DRAW_THREAD_CHECK", "1")]);
         assert_eq!(stepped.threads, "stepped");
         assert_eq!(crate::draw_thread::refusal(&stepped), None);
+    }
+
+    /// While its first posted frame stops the run, the row is refused in play and in any run that does not name the
+    /// drawing thread's own check (`NV_DRAW_THREAD_CHECK=1`): a `Fallout.ini` `bWorldDrawThread=1`, the variable alone,
+    /// `poison`, real threads with the render thread. So the world is drawn on main as before.
+    #[test]
+    fn the_drawing_thread_is_refused_until_its_first_post_works() {
+        use crate::draw_thread::{refusal, NOT_WORKING_YET};
+        let play = with_ini(None, "[nv-rs Fixes]\nbWorldDrawThread=1\n", &[]);
+        assert!(play.is_on(&DRAW_THREAD));
+        assert!(!play.draw_check);
+        assert_eq!(refusal(&play), Some(NOT_WORKING_YET));
+        assert!(
+            play.describe().contains("(refused: "),
+            "{}",
+            play.describe()
+        );
+        for pairs in [
+            &[("NV_DRAW_THREAD", "1")][..],
+            &[("NV_DRAW_THREAD", "poison")],
+            &[
+                ("NV_DRAW_THREAD", "1"),
+                ("NV_THREADS", "real"),
+                ("NV_RENDER_THREAD", "1"),
+            ],
+            &[("NV_DRAW_THREAD", "1"), ("NV_DRAW_THREAD_CHECK", "0")],
+        ] {
+            let choice = Choice::from_parts(None, env_of(pairs)).unwrap();
+            assert_eq!(refusal(&choice), Some(NOT_WORKING_YET), "{pairs:?}");
+        }
+        // The check variable is a test's: a play run that names it runs as a test.
+        assert!(TEST_VARIABLES.contains(&DRAW_THREAD_CHECK));
     }
 
     /// A script that records and was never told about the preset still measures the original; to
@@ -1846,17 +2066,17 @@ mod tests {
     }
 
     /// Play.exe takes the player options' variables out in play and passes the file's choices on
-    /// in a test (scripts/launcher/src/game_ini.rs `switches`). It takes the six names from this
+    /// in a test (`switches` in crates/game-profile/src/game_ini.rs, which Play.exe uses). It takes the six names from this
     /// crate's table itself; what makes a test it keeps as a list, which must be this one. (A
     /// fix's own variable makes a test too: Play.exe reads those from the table.)
     #[test]
     fn the_launcher_knows_what_makes_a_test() {
-        let launcher = include_str!("../../../scripts/launcher/src/game_ini.rs");
+        let launcher = include_str!("../../game-profile/src/game_ini.rs");
         let list = launcher
             .split("pub const TEST_SWITCHES")
             .nth(1)
             .and_then(|rest| rest.split("];").next())
-            .expect("TEST_SWITCHES in the launcher's game_ini.rs");
+            .expect("TEST_SWITCHES in game-profile's game_ini.rs");
         let mut names: Vec<&str> = list
             .split('"')
             .skip(1)
@@ -1919,6 +2139,252 @@ mod tests {
         assert!(asked.show_frame_rate);
     }
 
+    /// The new lighting is off in every run and preset unless asked for: `bAmbientOcclusion=1` in
+    /// a launcher's play run, or `NV_AO=1` anywhere, which wins.
+    #[test]
+    fn the_new_lighting_is_off_unless_asked_for() {
+        assert!(!Choice::vanilla().ambient_occlusion);
+        for preset in ["fixes", "vanilla"] {
+            let file = format!("[nv-rs General]\nsPreset={preset}\n");
+            assert!(!with_ini(None, &file, &[]).ambient_occlusion, "{preset}");
+        }
+        assert!(!Choice::from_parts(None, no_env).unwrap().ambient_occlusion);
+        let on = "[nv-rs Display]\nbAmbientOcclusion=1\n";
+        assert!(with_ini(None, on, &[]).ambient_occlusion);
+        assert!(!with_ini(None, "[nv-rs Display]\nbAmbientOcclusion=0\n", &[]).ambient_occlusion);
+        let bad = with_ini(None, "[nv-rs Display]\nbAmbientOcclusion=yes\n", &[]);
+        assert!(!bad.ambient_occlusion);
+        assert!(bad.ini_note.unwrap().ends_with("bAmbientOcclusion=yes"));
+        // A test never reads the file; the variable decides there and over the file.
+        assert!(!with_ini(None, on, &[("NV_SHOT", "x")]).ambient_occlusion);
+        assert!(!with_ini(None, on, &[("NV_AO", "0")]).ambient_occlusion);
+        let asked = Choice::from_parts(None, env_of(&[("NV_AO", "1")])).unwrap();
+        assert!(asked.ambient_occlusion);
+    }
+
+    /// The sun shadows are off in every run and preset unless asked for: `bSunShadows=1` in a
+    /// launcher's play run, or `NV_SUN_SHADOWS=1` (or `debug`) anywhere, which wins.
+    #[test]
+    fn the_sun_shadows_are_off_unless_asked_for() {
+        assert!(!Choice::vanilla().sun_shadows);
+        for preset in ["fixes", "vanilla"] {
+            let file = format!(
+                "[nv-rs General]
+sPreset={preset}
+"
+            );
+            assert!(!with_ini(None, &file, &[]).sun_shadows, "{preset}");
+        }
+        assert!(!Choice::from_parts(None, no_env).unwrap().sun_shadows);
+        let on = "[nv-rs Display]
+bSunShadows=1
+";
+        assert!(with_ini(None, on, &[]).sun_shadows);
+        assert!(!with_ini(None, on, &[]).ambient_occlusion);
+        assert!(
+            !with_ini(
+                None,
+                "[nv-rs Display]
+bSunShadows=0
+",
+                &[]
+            )
+            .sun_shadows
+        );
+        let bad = with_ini(
+            None,
+            "[nv-rs Display]
+bSunShadows=yes
+",
+            &[],
+        );
+        assert!(!bad.sun_shadows);
+        assert!(bad.ini_note.unwrap().ends_with("bSunShadows=yes"));
+        assert!(!with_ini(None, on, &[("NV_SHOT", "x")]).sun_shadows);
+        assert!(!with_ini(None, on, &[("NV_SUN_SHADOWS", "0")]).sun_shadows);
+        let one = Choice::from_parts(None, env_of(&[("NV_SUN_SHADOWS", "1")])).unwrap();
+        assert!(one.sun_shadows && !one.ambient_occlusion);
+        let debug = Choice::from_parts(None, env_of(&[("NV_SUN_SHADOWS", "debug")])).unwrap();
+        assert!(debug.sun_shadows && !debug.ambient_occlusion);
+        let other = Choice::from_parts(None, env_of(&[("NV_SUN_SHADOWS", "yes")])).unwrap();
+        assert!(!other.sun_shadows);
+    }
+
+    /// The sun light from the sky: on whenever the sun shadows are (the key's default), never
+    /// without them; `bSunLightFromSky=0` in a launcher's play run or `NV_SUN_LIGHT_FROM_SKY=0`
+    /// anywhere keeps the game's own light under the shadows.
+    #[test]
+    fn the_light_comes_from_the_sky_only_with_the_sun_shadows() {
+        assert!(!Choice::vanilla().light_from_sky());
+        assert!(!Choice::from_parts(None, no_env).unwrap().light_from_sky());
+        let shadows = "[nv-rs Display]
+bSunShadows=1
+";
+        assert!(with_ini(None, shadows, &[]).light_from_sky());
+        let kept = "[nv-rs Display]
+bSunShadows=1
+bSunLightFromSky=0
+";
+        let kept = with_ini(None, kept, &[]);
+        assert!(kept.sun_shadows && !kept.light_from_sky());
+        // The key alone changes nothing.
+        let alone = "[nv-rs Display]
+bSunLightFromSky=1
+";
+        assert!(!with_ini(None, alone, &[]).light_from_sky());
+        assert!(!with_ini(None, shadows, &[("NV_SUN_LIGHT_FROM_SKY", "0")]).light_from_sky());
+        let both = Choice::from_parts(
+            None,
+            env_of(&[("NV_SUN_SHADOWS", "1"), ("NV_SUN_LIGHT_FROM_SKY", "1")]),
+        )
+        .unwrap();
+        assert!(both.light_from_sky());
+        let one = Choice::from_parts(None, env_of(&[("NV_SUN_SHADOWS", "1")])).unwrap();
+        assert!(one.light_from_sky());
+        let not = Choice::from_parts(
+            None,
+            env_of(&[("NV_SUN_SHADOWS", "1"), ("NV_SUN_LIGHT_FROM_SKY", "0")]),
+        )
+        .unwrap();
+        assert!(!not.light_from_sky());
+        let without = Choice::from_parts(None, env_of(&[("NV_SUN_LIGHT_FROM_SKY", "1")])).unwrap();
+        assert!(!without.light_from_sky());
+    }
+
+    /// Characters cast into the sun shadows by default; `bSunShadowsCharacters=0` in a launcher's
+    /// play run or `NV_SUN_SHADOWS_CHARACTERS` (which wins) turns them off.
+    #[test]
+    fn characters_cast_unless_switched_off() {
+        assert!(Choice::vanilla().sun_shadow_characters);
+        assert!(
+            Choice::from_parts(None, no_env)
+                .unwrap()
+                .sun_shadow_characters
+        );
+        let off = "[nv-rs Display]
+bSunShadows=1
+bSunShadowsCharacters=0
+";
+        assert!(!with_ini(None, off, &[]).sun_shadow_characters);
+        assert!(with_ini(None, off, &[("NV_SUN_SHADOWS_CHARACTERS", "1")]).sun_shadow_characters);
+        let env = Choice::from_parts(None, env_of(&[("NV_SUN_SHADOWS_CHARACTERS", "0")])).unwrap();
+        assert!(!env.sun_shadow_characters);
+    }
+
+    /// The new lighting's strength: the step's default in every run unless asked for;
+    /// `fAmbientOcclusionStrength` in a launcher's play run, `NV_AO_STRENGTH` anywhere (which wins);
+    /// both clamped to 0.1..1; a value that is no number is the default (and named in the note).
+    #[test]
+    fn the_new_lightings_strength_is_the_default_unless_asked_for() {
+        let default = d3d9_wgpu::scene_light::STRENGTH;
+        assert_eq!(PLAY_AMBIENT_OCCLUSION_STRENGTH, default);
+        assert_eq!(Choice::vanilla().ambient_occlusion_strength, default);
+        assert_eq!(
+            Choice::from_parts(None, no_env)
+                .unwrap()
+                .ambient_occlusion_strength,
+            default
+        );
+        let strength = |ini: &str, pairs: &'static [(&'static str, &'static str)]| {
+            with_ini(None, ini, pairs).ambient_occlusion_strength
+        };
+        assert_eq!(strength("[General]\nbUseThreadedAI=1\n", &[]), default);
+        let file = "[nv-rs Display]\nfAmbientOcclusionStrength=0.9\n";
+        assert_eq!(strength(file, &[]), 0.9);
+        // Clamped at both ends.
+        assert_eq!(
+            strength("[nv-rs Display]\nfAmbientOcclusionStrength=3\n", &[]),
+            1.0
+        );
+        assert_eq!(
+            strength("[nv-rs Display]\nfAmbientOcclusionStrength=0\n", &[]),
+            0.1
+        );
+        let bad = with_ini(
+            None,
+            "[nv-rs Display]\nfAmbientOcclusionStrength=strong\n",
+            &[],
+        );
+        assert_eq!(bad.ambient_occlusion_strength, default);
+        assert!(bad
+            .ini_note
+            .unwrap()
+            .ends_with("fAmbientOcclusionStrength=strong"));
+        // A test never reads the file; the variable decides there and over the file.
+        assert_eq!(strength(file, &[("NV_SHOT", "x")]), default);
+        assert_eq!(strength(file, &[("NV_AO_STRENGTH", "0.6")]), 0.6);
+        assert_eq!(strength(file, &[("NV_AO_STRENGTH", "-2")]), 0.1);
+        assert_eq!(strength(file, &[("NV_AO_STRENGTH", "x")]), 0.9);
+        let asked = Choice::from_parts(None, env_of(&[("NV_AO_STRENGTH", "0.8")])).unwrap();
+        assert_eq!(asked.ambient_occlusion_strength, 0.8);
+    }
+
+    /// Windows is told the game is not background work in every run and preset (vanilla, a test
+    /// and a play run alike) unless turned off: `bNotBackground=0` in a launcher's play run, or
+    /// `NV_NOT_BACKGROUND=0` anywhere, which wins. Its variable makes no run a test.
+    #[test]
+    fn not_background_is_on_unless_turned_off() {
+        assert!(Choice::vanilla().not_background);
+        for preset in ["fixes", "vanilla"] {
+            let file = format!("[nv-rs General]\nsPreset={preset}\n");
+            let choice = with_ini(None, &file, &[]);
+            assert!(choice.not_background, "{preset}");
+            assert_eq!(choice.not_background_by, None, "{preset}");
+        }
+        let plain = Choice::from_parts(None, no_env).unwrap();
+        assert!(plain.not_background && plain.not_background_by.is_none());
+        assert!(
+            with_ini(
+                None,
+                "[nv-rs General]\nsPreset=fixes\n",
+                &[("NV_SHOT", "x")]
+            )
+            .not_background
+        );
+        let off = "[nv-rs Threads]\nbNotBackground=0\n";
+        let by_file = with_ini(None, off, &[]);
+        assert!(!by_file.not_background);
+        assert_eq!(
+            by_file.not_background_by,
+            Some("Fallout.ini's [nv-rs Threads] bNotBackground")
+        );
+        assert!(with_ini(None, "[nv-rs Threads]\nbNotBackground=1\n", &[]).not_background);
+        let bad = with_ini(None, "[nv-rs Threads]\nbNotBackground=yes\n", &[]);
+        assert!(bad.not_background);
+        assert!(bad.ini_note.unwrap().ends_with("bNotBackground=yes"));
+        // A test never reads the file (on); the variable decides there and over the file.
+        assert!(with_ini(None, off, &[("NV_SHOT", "x")]).not_background);
+        for value in ["0", "no", "2"] {
+            let pairs: &'static [(&'static str, &'static str)] = match value {
+                "0" => &[("NV_NOT_BACKGROUND", "0")],
+                "no" => &[("NV_NOT_BACKGROUND", "no")],
+                _ => &[("NV_NOT_BACKGROUND", "2")],
+            };
+            let choice = Choice::from_parts(None, env_of(pairs)).unwrap();
+            assert!(!choice.not_background, "{value}");
+            assert_eq!(choice.not_background_by, Some("NV_NOT_BACKGROUND"));
+        }
+        let over_file = with_ini(
+            None,
+            "[nv-rs Threads]\nbNotBackground=1\n",
+            &[("NV_NOT_BACKGROUND", "0")],
+        );
+        assert!(!over_file.not_background);
+        let empty = Choice::from_parts(None, env_of(&[("NV_NOT_BACKGROUND", "")])).unwrap();
+        assert!(empty.not_background && empty.not_background_by.is_none());
+        // The variable alone is no test: a launcher's play run with it keeps play's preset and
+        // threads and says nothing about being a test.
+        let play = with_ini(None, "[General]\nx=1\n", &[("NV_NOT_BACKGROUND", "0")]);
+        assert_eq!(play.preset, Preset::Fixes);
+        assert_eq!(play.threads, PLAY_THREADS);
+        let env = |name: &str| match name {
+            "NV_SETTINGS" => Some("x".to_string()),
+            "NV_NOT_BACKGROUND" => Some("0".to_string()),
+            _ => None,
+        };
+        assert_eq!(play_run_taken_as_test(&play, env), None);
+    }
+
     /// Lowest to highest: default, preset, settings.ini (the fallback), Fallout.ini, environment.
     #[test]
     fn the_environment_beats_fallout_ini_which_beats_settings_ini() {
@@ -1956,6 +2422,109 @@ mod tests {
         assert_eq!(choice.borderless, Some(true));
         let choice = Choice::from_parts(None, env_of(&[("NV_BORDERLESS", "1")])).unwrap();
         assert_eq!(choice.borderless, Some(true));
+    }
+
+    /// Linux's and macOS's play.sh, read here (`distribution/unix/play.sh`).
+    const PLAY_SH: &str = include_str!("../../../distribution/unix/play.sh");
+
+    /// What play.sh exports, in one pass over its lines: each name of an `export` line with its
+    /// value, the one on that line (`export A=x`) or else the last `A=x` line before it (`export
+    /// A B`), as written. A name exported with no value given is an error, not a guess.
+    fn play_sh_exports(script: &str) -> Result<Vec<(&str, &str)>, String> {
+        let shell_name = |n: &str| {
+            !n.is_empty()
+                && n.bytes()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == b'_')
+        };
+        let mut given: Vec<(&str, &str)> = Vec::new();
+        let mut exported = Vec::new();
+        for line in script.lines().map(str::trim) {
+            if line.starts_with('#') {
+                continue;
+            }
+            if let Some(names) = line.strip_prefix("export ") {
+                for word in names.split_whitespace() {
+                    let pair = match word.split_once('=') {
+                        Some(pair) => pair,
+                        None => given
+                            .iter()
+                            .rev()
+                            .find(|(n, _)| *n == word)
+                            .map(|&(_, v)| (word, v))
+                            .ok_or_else(|| format!("play.sh exports {word} with no value"))?,
+                    };
+                    exported.push(pair);
+                }
+            } else if let Some((name, value)) = line.split_once('=') {
+                if shell_name(name) {
+                    given.push((name, value));
+                }
+            }
+        }
+        Ok(exported)
+    }
+
+    /// What Linux's and macOS's play.sh exports makes the same play run as Play.exe's plain one
+    /// (only `NV_SETTINGS`: Vulkan, play's threads and render thread; review of #687: without
+    /// NV_SETTINGS nothing drew), the whole choice alike, in both profiles. The variables are read
+    /// from play.sh itself with the values it gives them, and must be exactly the ones listed here,
+    /// so an export added later is looked at in this test: none may be a test's or a fix's
+    /// variable (#763: play.sh exported `NV_PROFILE`, the profiler's switch, and every start ran as
+    /// a test: the player's Fallout.ini unread, the vanilla preset, no renderer chosen). The profile
+    /// goes under the name the program reads (`engine-platform` machine_table::PROFILE_VARIABLE).
+    #[test]
+    fn play_sh_variables_make_a_play_run_on_vulkan() {
+        use engine_platform::machine_table::{profile_from, PROFILE_VARIABLE};
+        let exported = play_sh_exports(PLAY_SH).unwrap();
+        let mut names: Vec<&str> = exported.iter().map(|&(n, _)| n).collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            [
+                "NV_D3DX_CACHE",
+                "NV_PREFS_OUT",
+                "NV_REPORT_DIR",
+                "NV_REPORT_LOG",
+                PROFILE_VARIABLE,
+                "NV_SAVE_OUT",
+                "NV_SETTINGS",
+                "NV_SOUND",
+                "NV_WGPU_CACHE"
+            ],
+            "play.sh's exports changed: check the new one here first"
+        );
+        for name in &names {
+            assert!(!TEST_VARIABLES.contains(name), "{name}: a test's variable");
+            assert!(FIXES.iter().all(|f| f.env != *name), "{name}: a fix's own");
+        }
+        let plain =
+            Choice::from_texts(None, None, |n: &str| (n == "NV_SETTINGS").then(String::new))
+                .unwrap();
+        assert_eq!(plain.renderer, Some(Renderer::Vulkan));
+        assert_eq!(plain.threads, PLAY_THREADS);
+        assert_eq!(plain.render_thread, PLAY_RENDER_THREAD);
+        for profile in ["game", "mods"] {
+            let env = |name: &str| {
+                exported
+                    .iter()
+                    .find(|(n, _)| *n == name)
+                    .map(|&(n, v)| (if n == PROFILE_VARIABLE { profile } else { v }).to_string())
+            };
+            assert!(is_play_run(env), "{profile}");
+            let choice = Choice::from_texts(None, None, env).unwrap();
+            assert_eq!(choice, plain, "{profile}");
+            assert_eq!(play_run_taken_as_test(&choice, env), None, "{profile}");
+            assert_eq!(profile_from(env(PROFILE_VARIABLE).as_deref()), profile);
+        }
+        assert!(exported.contains(&("NV_SOUND", "out")));
+        // The reader: an export's value from its own line or the last one before; a name with
+        // none is an error; comments and lower-case assignments are not values.
+        assert_eq!(
+            play_sh_exports("X=1\nX=2\n  export A=3 X\n# export C\nlower=4\nexport D=\n"),
+            Ok(vec![("A", "3"), ("X", "2"), ("D", "")])
+        );
+        assert!(play_sh_exports("export Y\n").is_err());
+        assert!(play_sh_exports("lower=1\nexport lower\n").is_err());
     }
 
     /// Vulkan is play's renderer (the maintainer, 2026-11-11): a launcher's play run with no usable
@@ -2215,11 +2784,72 @@ mod tests {
         ];
         for choice in &choices {
             assert!(!choice.is_on(&JIP_INSTALLED), "{choice:?}");
+            // MCM's plugin too, until the maintainer has tried it.
+            assert!(!choice.is_on(&MCM), "{choice:?}");
         }
         assert_eq!(choices[1].preset, Preset::Fixes);
         // The other JIP rows still follow the preset.
         assert!(choices[1].is_on(&JIP_GAME_PATCHES));
         assert!(!choices[0].is_on(&JIP_GAME_PATCHES));
+    }
+
+    /// lStewieAl's Tweaks: on in the fixes preset, off in vanilla, its own line or variable over
+    /// both; `[nv-rs Stewie]`'s keys reach the choice (a play run only) and the install, and a value
+    /// other than 0 or 1 is named in the line for unusable keys.
+    #[test]
+    fn stewie_follows_the_preset_and_its_keys_reach_the_install() {
+        assert!(!Choice::vanilla().is_on(&STEWIE));
+        assert!(Choice::from_parts(None, no_env).unwrap().is_on(&STEWIE));
+        let off = with_ini(None, "[nv-rs Fixes]\nbStewieTweaks=0\n", &[]);
+        assert!(!off.is_on(&STEWIE));
+        let on = Choice::from_parts(
+            None,
+            env_of(&[("NV_STEWIE", "1"), ("NV_PRESET", "vanilla")]),
+        )
+        .unwrap();
+        assert!(on.is_on(&STEWIE));
+        let keyed = with_ini(
+            None,
+            "[nv-rs Stewie]\nbDialogSpeechNullCheck=0\nbMissingKeysAsTweaks=yes\n",
+            &[],
+        );
+        assert_eq!(keyed.stewie.rows, [("bDialogSpeechNullCheck", false)]);
+        assert!(!keyed.stewie.as_tweaks);
+        assert_eq!(
+            keyed.ini_note.as_deref(),
+            Some(
+                "Fallout.ini's nv-rs settings: not used, the default instead: bMissingKeysAsTweaks=yes"
+            )
+        );
+        // Not a play run: the keys are not read.
+        let script = Choice::from_texts(
+            None,
+            Some("[nv-rs Stewie]\nbDialogSpeechNullCheck=0\n"),
+            no_env,
+        )
+        .unwrap();
+        assert!(script.stewie.rows.is_empty());
+        // The install: the row on, its bit set unless its key is 0.
+        for (choice, bit) in [
+            (Choice::from_parts(None, no_env).unwrap(), true),
+            (keyed, false),
+            (Choice::vanilla(), false),
+        ] {
+            let mut e = Engine::new();
+            // No Tweaks INI: the game's CreateFileA (the read when no platform answers the mods'
+            // files seam) finds none.
+            e.register(0x00fd_f088, |_, _| 0xffff_ffffu32.into_ret());
+            install(&mut e, &choice);
+            stewie::install(&mut e);
+            assert_eq!(
+                e.stewie(engine_core::extend::stewie::DIALOG_SPEECH_NULL_CHECK),
+                bit
+            );
+            assert_eq!(stewie::on(&e), choice.is_on(&STEWIE));
+            // Not reported as installed in any preset while its script commands are not built:
+            // IsPluginInstalled "lStewieAl's Tweaks" answers 0.
+            assert!(nvse::commands::extender::plugin_info(&e, stewie::NAME.as_bytes()).is_none());
+        }
     }
 
     /// The switch from its variable: `1` on, `0` off, anything else a stop. Alone it makes the run

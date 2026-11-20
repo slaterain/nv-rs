@@ -249,6 +249,38 @@ fn g77_marks_the_hit_armor_penetrated() {
     assert_eq!(e.mem.u32(HIT + 0x58), 0xc512_3405);
 }
 
+/// G77 is JIP's own (as JIP writes it, with no switch): installed, its seam marks the hit with
+/// the row `NV_JIP_GAME_PATCHES` off and on alike (so `GetArmourPenetrated` reads the mark in
+/// every preset); not installed, nothing marks.
+#[test]
+fn g77_in_with_the_row_off_and_on() {
+    for row in [false, true] {
+        let mut e = world_as(true);
+        // The row's settings read: `CreateFileA` answers "no file" (JIP's defaults), and
+        // `TESTopic::GetOwnerTopic`, which 3.9a's fix wraps with the row on.
+        e.register(0x00fd_f088, |_, _| Ret {
+            eax: 0xffff_ffff,
+            ..Ret::default()
+        });
+        if !e.is_registered(0x0061_a310) {
+            e.register(0x0061_a310, |_, _| Ret::default());
+        }
+        super::super::set_row(&mut e, row);
+        assert_eq!(e.jip_patches() & jip_patches::FIXES != 0, row);
+        e.mem.set_u32(HIT + 0x58, 0x0000_0001);
+        assert_eq!(
+            e.site(ARMOR_PENETRATED.addr(), &[HIT]),
+            Some(0),
+            "row {row}"
+        );
+        assert_eq!(e.mem.u32(HIT + 0x58), 0x8000_0001, "row {row}");
+    }
+    let mut e = world_as(false);
+    e.mem.set_u32(HIT + 0x58, 1);
+    assert_eq!(e.site(ARMOR_PENETRATED.addr(), &[HIT]), None);
+    assert_eq!(e.mem.u32(HIT + 0x58), 1);
+}
+
 /// G98: a teammate, an actor with `+0x143` bit 7, an essential base: 1; else 0; no base: 0.
 #[test]
 fn g98_skips_teammates_flagged_and_essential() {

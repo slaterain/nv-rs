@@ -1763,8 +1763,18 @@ pub fn fn_009993c0(e: &mut Engine, this: Ptr<CombatState>) {
 
         if target != 0 && e.get(this, CombatState::pCombatWeapons) != 0 {
             let weapon = e.get(this, CombatState::pCombatWeapons);
-            let ammo = e.call(0x0052_5a90, &args![weapon, attacker]).u32();
-            let projectile = e.call(0x004f_d3c0, &args![ammo]).u32();
+            // lStewieAl's Tweaks' row S0126 (`patchFixNullProjectileInCombatStateUpdateInventory`):
+            // the weapon's projectile asked without the owner (`0x99A1C8`), as
+            // `TESObjectWEAP::GetCombatWeaponType` asks it, and no explosion for no projectile
+            // (`ProjectileGetExplosionNullCheck` at `0x99A1DC`).
+            let fixed = e.stewie(engine_core::extend::stewie::COMBAT_STATE_NULL_PROJECTILE);
+            let owner = if fixed { 0 } else { attacker };
+            let ammo = e.call(0x0052_5a90, &args![weapon, owner]).u32();
+            let projectile = if fixed && ammo == 0 {
+                0
+            } else {
+                e.call(0x004f_d3c0, &args![ammo]).u32()
+            };
             let radius = constant_bits(e, TWO);
             let location = e.vcall(target, 0x1f4, &args![]).u32();
             let manager: u32 = e.global(COMBAT_MANAGER);
@@ -9019,6 +9029,80 @@ mod tests {
             9_999_999.0
         );
         assert_eq!(e.get(f.state, CombatState::iHasCombatWeapon), 2);
+    }
+
+    /// An inventory update with a target and one combat weapon (0x900, forced, kind 0), whose
+    /// projectile is `projectile`; `004fd3c0` reads the projectile's explosion at +0x84, as the
+    /// exe's does.
+    fn projectile_fixture(e: &mut Engine, projectile: u32) -> Fixture {
+        let f = fixture(e, true);
+        let acquired = object(e, 0x40);
+        stub(e, SLOTS + 0x148, acquired);
+        let extra = e.mem.alloc(4);
+        e.mem.set_u32(extra, 0x77);
+        stub(e, 0x0055_9450, extra);
+        stub(e, 0x0041_8b10, 1);
+        stub(e, ARRAY_SIZE, 0x900);
+        stub(e, 0x0052_2c80, 0);
+        stub(e, 0x0052_5a90, projectile);
+        e.register_double(0x004f_d3c0, |e, a| ret(e.mem.u32(a[0] + 0x84)));
+        f
+    }
+
+    /// lStewieAl's Tweaks' row S0126: the combat weapon's projectile is null: the exe asks it for
+    /// its explosion (+0x84 of the null page) and stops; with the row on there is no explosion
+    /// (none asked), and the projectile is asked without the owner (`0x99A1C8`).
+    #[test]
+    fn s0126_a_combat_weapon_with_no_projectile() {
+        for on in [false, true] {
+            let mut e = engine();
+            let f = projectile_fixture(&mut e, 0);
+            e.set_stewie(
+                engine_core::extend::stewie::COMBAT_STATE_NULL_PROJECTILE,
+                on,
+            );
+            e.call_log = Some(vec![]);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                fn_009993c0(&mut e, f.state);
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            let asked = calls(e.call_log.as_ref().unwrap(), 0x0052_5a90);
+            assert_eq!(asked, vec![vec![0x900, if on { 0 } else { f.attacker }]]);
+            if on {
+                let log = e.call_log.take().unwrap();
+                assert!(calls(&log, 0x004f_d3c0).is_empty());
+                assert_eq!(calls(&log, 0x0099_2720)[0][2], 0, "no explosion");
+            }
+        }
+    }
+
+    /// Row S0126 with a projectile (ordinary input): the same explosion weighed, with the row off
+    /// and on; the one difference is the owner the projectile is asked with (none with the row).
+    #[test]
+    fn s0126_row_on_with_a_projectile_asks_without_the_owner() {
+        let mut logs = vec![];
+        for on in [false, true] {
+            let mut e = engine();
+            let projectile = e.mem.alloc(0x100);
+            e.mem.set_u32(projectile + 0x84, 0x4444);
+            let f = projectile_fixture(&mut e, projectile);
+            e.set_stewie(
+                engine_core::extend::stewie::COMBAT_STATE_NULL_PROJECTILE,
+                on,
+            );
+            let log = logged(&mut e, |e| fn_009993c0(e, f.state));
+            assert_eq!(calls(&log, 0x004f_d3c0), vec![vec![projectile]]);
+            assert_eq!(calls(&log, 0x0099_2720)[0][2], 0x4444);
+            let asked = calls(&log, 0x0052_5a90);
+            assert_eq!(asked, vec![vec![0x900, if on { 0 } else { f.attacker }]]);
+            logs.push(
+                log.into_iter()
+                    .filter(|(a, _)| *a != 0x0052_5a90)
+                    .collect::<Vec<_>>(),
+            );
+        }
+        assert_eq!(logs[0], logs[1]);
     }
 
     #[test]

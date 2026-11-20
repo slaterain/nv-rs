@@ -17,6 +17,8 @@ const DEVICE_LOST: u32 = 0x8876_0868;
 /// The reset the renderer runs when the device can be reset (`00e736b0`,
 /// `thiscall`, a byte; reached by a tail jump).
 const RESET_DEVICE: u32 = 0x00e7_36b0;
+/// JIP's seam at the reset's tail jump (0xE74C3C; JIP MiniMap's `RendererRecreateHook`).
+const JIP_RENDERER_RESET: u32 = 0x00e7_4c3c;
 /// The device-lost state (+0x6FC), the lost-device callbacks (+0xAF8, a
 /// `cdecl (data)` function per entry answering a byte), their data (+0xB08)
 /// and their count (+0xAFE, 16-bit).
@@ -44,6 +46,12 @@ pub fn fn_00e74c00(e: &mut Engine, this: Ptr) -> bool {
         e.vcall(device, DEVICE_SLOT_200, &args![0u32]);
     }
     if level == DEVICE_NOT_RESET {
+        // Seam (JIP MiniMap's `RendererRecreateHook`, jumped to from 0xE74C3C once `InitMiniMap`
+        // has run: the minimap's texture format reset, then the same reset): no words, no
+        // answer. Asked only while JIP is installed, on the thread that checks the device.
+        if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+            e.site(JIP_RENDERER_RESET, &[]);
+        }
         return e.call(RESET_DEVICE, &args![this]).bool();
     }
     if level != DEVICE_LOST {
@@ -224,6 +232,30 @@ mod tests {
         assert!(e.call(0x00e74c00, &args![this]).bool());
         assert_eq!(calls(&e, SLOT_200).len(), 1);
         assert_eq!(calls(&e, RESET_DEVICE), vec![vec![this]]);
+    }
+
+    /// JIP MiniMap's seam before the reset (0xE74C3C): asked only while JIP is installed and only
+    /// on the reset path; the reset runs whatever it answers.
+    #[test]
+    fn the_reset_asks_jips_seam() {
+        thread_local! {
+            static ASKED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        }
+        let (mut e, this) = setup(DEVICE_NOT_RESET);
+        e.on_site_for_test(JIP_RENDERER_RESET, |_, _| {
+            ASKED.with(|a| a.set(a.get() + 1));
+            Some(1)
+        });
+        e.call(0x00e74c00, &args![this]);
+        assert_eq!(ASKED.with(|a| a.get()), 0, "not installed");
+        e.set_jip_patches(engine_core::extend::jip_patches::INSTALLED);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00e74c00, &args![this]).bool());
+        assert_eq!(ASKED.with(|a| a.get()), 1);
+        assert_eq!(calls(&e, RESET_DEVICE), vec![vec![this]]);
+        e.mem.set_u32(0x7300_0000, 0);
+        e.call(0x00e74c00, &args![this]);
+        assert_eq!(ASKED.with(|a| a.get()), 1, "no reset: not asked");
     }
 
     #[test]

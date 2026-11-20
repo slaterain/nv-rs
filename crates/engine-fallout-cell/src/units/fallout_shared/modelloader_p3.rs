@@ -1330,7 +1330,15 @@ pub fn model_loader_load_file(
     if no_reference == 0 {
         e.call(ADD_REFERENCE, &args![model]);
     }
-    e.call(MODEL_OBJECT_3D, &args![model]).ptr()
+    let object = e.call(MODEL_OBJECT_3D, &args![model]).ptr();
+    // JIP's H06 (group GL's row and handler; `WriteRelJump(0x447155, LoadNifRetnNodeHook)`, the
+    // same reference and 3D object, then its point lights tagged by editor id set up once per
+    // model): the seam is asked with [the 3D object]; its answer is not read. One load while JIP
+    // is not installed.
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        e.site(0x0044_7155, &[object.addr()]);
+    }
+    object
 }
 
 // Translated from 00447190 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4457,6 +4465,76 @@ mod tests {
         assert!(calls_to(&e, QUEUED_MODEL_CONSTRUCT).is_empty());
     }
 
+    thread_local! {
+        /// The words H06's seam handler of a test was asked with.
+        static H06_ASKED: std::cell::RefCell<Vec<Vec<u32>>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// H06's seam at `0x447155` (JIP's `WriteRelJump(0x447155, LoadNifRetnNodeHook)`, group
+    /// GL's handler): asked only with JIP installed (whatever the fixes row), after the model's
+    /// reference and 3D object, with [the 3D object]; its answer does not change the result; the
+    /// calls are the same with and without JIP. Not asked without a model.
+    #[test]
+    fn jip_h06_seam_sees_the_loaded_object() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        fn seen(_: &mut Engine, a: &[u32]) -> Option<u32> {
+            H06_ASKED.with(|v| v.borrow_mut().push(a.to_vec()));
+            Some(0x1234)
+        }
+        for word in [
+            0,
+            jip_patches::FIXES,
+            jip_patches::INSTALLED,
+            jip_patches::INSTALLED | jip_patches::FIXES,
+        ] {
+            for model in [0x5000u32, 0] {
+                let installed = word & jip_patches::INSTALLED != 0;
+                H06_ASKED.with(|v| v.borrow_mut().clear());
+                let mut e = engine();
+                let map = lookup_map(&mut e, 0x0300_0000, model);
+                let this = e.mem.alloc(0x30);
+                e.mem.set_u32(this, map);
+                for address in [
+                    QUEUED_MODEL_CONSTRUCT,
+                    QUEUED_MODEL_SET_FLAG_20,
+                    SET_FLAG_BIT_10,
+                    QUEUED_MODEL_RUN,
+                    QUEUED_MODEL_FINISH,
+                    QUEUED_MODEL_DESTRUCT,
+                    ADD_REFERENCE,
+                ] {
+                    e.register(address, |_, _| Ret::default());
+                }
+                constant(&mut e, MODEL_REFERENCE_TOTAL, 1);
+                constant(&mut e, MODEL_OBJECT_3D, 0x6000);
+                e.set_jip_patches(word);
+                e.on_site(SiteSlot::new(Owner::Jip, 0x0044_7155), seen);
+                log(&mut e);
+                let result = e.call(
+                    0x0044_7080,
+                    &args![this, 0x400u32, 3u32, 1u8, 0u32, 1u8, 0u8],
+                );
+                let expected = if model != 0 { 0x6000 } else { 0 };
+                assert_eq!(result.u32(), expected, "{word:08x}");
+                if model != 0 {
+                    assert_eq!(calls_to(&e, ADD_REFERENCE), vec![vec![model]]);
+                    assert_eq!(calls_to(&e, MODEL_OBJECT_3D), vec![vec![model]]);
+                }
+                let asked = H06_ASKED.with(|v| v.borrow().clone());
+                assert_eq!(
+                    asked,
+                    if installed && model != 0 {
+                        vec![vec![0x6000]]
+                    } else {
+                        vec![]
+                    },
+                    "{word:08x} {model:x}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn load_file_returns_zero_without_a_model() {
         let mut e = engine();
@@ -6312,5 +6390,171 @@ mod tests {
         let mut e = engine();
         constant(&mut e, 0x0096_11e0, 7);
         assert_eq!(e.call(0x0044_91f0, &args![0x1234u32]).u32(), 7);
+    }
+
+    /// JIP's light hooks end to end (review of #700): one model with a point light H06 tied to a
+    /// light form (the root marked `0x60` in byte +0x33, the light `0x20`), held only by the model
+    /// cache, so every check of `Clone3D` 0050ee50 (the translation) would share it. With JIP
+    /// installed (its game-patches row off) two references each get their own clone (JIP's
+    /// `CreateObjectNodeHook` at `0x50EF46`); H09's attach lists each clone's light; the next
+    /// frame's step (H12) gives each its own `ShadowSceneLight`. The cached model and its light
+    /// stay as H06 left them (not listed, never lit).
+    #[test]
+    fn jip_two_references_to_a_tagged_model_each_light() {
+        use jip::game_patches::gl::lights;
+        const FLAGS_HIGH: u32 = 0x33;
+        const CHILDREN: u32 = 0xa0;
+        const CHILD_COUNT: u32 = 0xa6;
+        const PARENT: u32 = 0x18;
+        const BASE_LIGHT: u32 = 0xe8;
+        let mut e = Engine::new();
+        for page in [0x0101_2000, 0x011c_a000, 0x011f_6000, 0x011f_9000] {
+            if !e.mem.is_mapped(page) {
+                e.map(page, 0x1000);
+            }
+        }
+        e.set_global(0x0101_2060u32, 0.0f64);
+        e.set_global(0x0101_2070u32, 1.0f64);
+        jip::test_support::install_into(&mut e);
+
+        // The cached model: a node (slot +0xC the shared `return this`) holding one light.
+        let node_table = e.mem.alloc(0x10);
+        e.mem.set_u32(node_table + 0xc, 0x0068_15c0);
+        let model = e.mem.alloc(0xb0);
+        e.mem.set_u32(model, node_table);
+        e.mem.set_u32(model + 4, 1);
+        e.mem.set_u8(model + FLAGS_HIGH, 0x60);
+        let lamp = e.mem.alloc(0xcc);
+        e.mem.set_u32(lamp + 0xa0, 512);
+        e.mem.set_u32(lamp + 0xa4, 0x00ff_c080);
+        e.mem.set_f32(lamp + 0xb4, 1.0);
+        let light = e.mem.alloc(lights::POINT_LIGHT_SIZE);
+        e.mem.set_u32(light, lights::POINT_LIGHT_VTABLE);
+        e.mem.set_u32(light + 4, 1);
+        e.mem.set_u8(light + FLAGS_HIGH, 0x20);
+        e.mem.set_u32(light + BASE_LIGHT, lamp);
+        e.mem.set_u32(light + PARENT, model);
+        let children = e.mem.alloc(4);
+        e.mem.set_u32(children, light);
+        e.mem.set_u32(model + CHILDREN, children);
+        e.mem.set_u16(model + CHILD_COUNT, 1);
+
+        // The form: its model slot (+0x174) answers the cached model.
+        let form_table = e.mem.alloc(0x200);
+        e.mem.set_u32(form_table + 0x174, 0x7000_0174);
+        let form = e.mem.alloc(0x40);
+        e.mem.set_u32(form, form_table);
+        e.register_double(0x7000_0174, move |_, _| model.into_ret());
+
+        // Clone3D's callees: every share check passes (a static, no extra, no texture swap, no
+        // emittance, scale 1.0); the count is the object's +4; the clone copies the node and its
+        // light with their flags (NiAVObject's member copy), each held once.
+        fn float_one(_: &mut Engine, _: &[u32]) -> Ret {
+            Ret {
+                st0: 1.0,
+                ..Ret::default()
+            }
+        }
+        for address in [
+            0x0044_4ed0u32,
+            0x0050_d4a0,
+            0x0062_c3c0,
+            0x0044_8a80,
+            0x00a5_bdd0,
+            0x0048_b310,
+            0x0056_9410,
+            0x004a_d050,
+            0x004a_d270,
+            0x0044_0490,
+            0x0045_0f90,
+            0x0043_fa80,
+            0x0044_0460,
+            0x0096_11e0,
+        ] {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.register(0x0040_1170, |_, _| 0x20u32.into_ret());
+        e.register(0x0072_6070, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(0x0056_7400, float_one);
+        e.register(0x009c_dae0, float_one);
+        e.register(0x00a5_d2c0, |e, a| {
+            let source = a[0];
+            let copy = e.mem.alloc(0xb0);
+            for at in (0..0xb0).step_by(4) {
+                let word = e.mem.u32(source + at);
+                e.mem.set_u32(copy + at, word);
+            }
+            e.mem.set_u32(copy + 4, 0);
+            let count = e.mem.u16(source + CHILD_COUNT);
+            let children = e.mem.alloc(4 * u32::from(count));
+            for i in 0..u32::from(count) {
+                let child = e.mem.u32(e.mem.u32(source + CHILDREN) + 4 * i);
+                let twin = e.mem.alloc(lights::POINT_LIGHT_SIZE);
+                for at in (0..lights::POINT_LIGHT_SIZE).step_by(4) {
+                    let word = e.mem.u32(child + at);
+                    e.mem.set_u32(twin + at, word);
+                }
+                e.mem.set_u32(twin + 4, 1);
+                e.mem.set_u32(twin + PARENT, copy);
+                e.mem.set_u32(children + 4 * i, twin);
+            }
+            e.mem.set_u32(copy + CHILDREN, children);
+            copy.into_ret()
+        });
+
+        // H12's step: the scene node, the exe's own animated lights, the lock, a real allocation
+        // for each `ShadowSceneLight`, its constructor answering itself, the add logged.
+        let scene = e.mem.alloc(0x200);
+        e.mem.set_u32(0x011f_91c8, scene);
+        for address in [0x0045_5640u32, 0x0040_fbf0, 0x0040_fba0] {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.register(0x00aa_13e0, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(0x00b9_fda0, |_, a| a[0].into_ret());
+        let added = Rc::new(RefCell::new(Vec::new()));
+        e.register_double(0x00b5_eca0, {
+            let added = added.clone();
+            move |_, a| {
+                added.borrow_mut().push(a.to_vec());
+                Ret::default()
+            }
+        });
+
+        let mut lit = Vec::new();
+        for reference in [0x5000u32, 0x6000] {
+            let three_d = e.call(0x0050_ee50, &args![form, reference, 0u32]).u32();
+            assert_ne!(three_d, 0);
+            assert_ne!(three_d, model, "cloned, not shared ({reference:x})");
+            // H09's attach: a 3D marked `0x20000000` has its lights listed.
+            assert_ne!(e.mem.u8(three_d + FLAGS_HIGH) & 0x20, 0);
+            lights::add_point_lights(&mut e, three_d);
+            lit.push(e.mem.u32(e.mem.u32(three_d + CHILDREN)));
+        }
+        assert_ne!(lit[0], lit[1]);
+        assert_eq!(lights::active_point_lights(&mut e), lit);
+        for &own in &lit {
+            assert_eq!(e.mem.u8(own + FLAGS_HIGH), 0x60, "listed");
+            assert_eq!(e.mem.f32(own + 0xe0), 512.0, "set from its form");
+        }
+        assert_eq!(
+            e.mem.u8(light + FLAGS_HIGH),
+            0x20,
+            "the cached light not listed"
+        );
+        assert_eq!(e.mem.u32(model + 4), 1);
+
+        assert_eq!(
+            e.site(lights::ANIMATED_LIGHTS[0].addr(), &[0x0d00]),
+            Some(0)
+        );
+        let added = added.borrow().clone();
+        assert_eq!(added.len(), 2);
+        // The step walks the list from the last.
+        for (call, &own) in added.iter().zip(lit.iter().rev()) {
+            assert_eq!(call[0], scene);
+            assert_eq!(e.mem.u32(call[1] + 0xf8), own, "its own ShadowSceneLight");
+            assert_eq!(e.mem.u8(call[1] + 0xfc), 1);
+            assert_eq!(e.mem.u32(own + 4), 2);
+        }
     }
 }

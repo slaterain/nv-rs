@@ -15,7 +15,9 @@
 //! **G06, G73, G103**: JIP's ash piles. G06 (`InitGamePatches`, "Recognize custom ashpile
 //! activators", JIP's own): the eight places the exe compares a reference's base form with the
 //! two ash pile forms test the base's ash pile bit instead (the two vanilla piles get it in
-//! `DeferredInit`, `MarkActivatorAshPile` gives it to others). G73 (`AttachAshPileHook`, JIP's
+//! `DeferredInit`, `MarkActivatorAshPile` gives it to others). H15 (JIP's own, `BipedSlotVisibilityHook` at
+//! `0x4AC645`): which slots load their parts in first person, by JIP's mask (slots 2 to 6 at the start,
+//! the game's own test) that `ToggleBipedSlotVisibility` edits. G73 (`AttachAshPileHook`, JIP's
 //! own): the ash pile a death leaves can be `AttachAshPileEx`'s form. All eight G06 places are
 //! asked (`0x77765A` in group GA's `SetInfoForRef` action text, `0x95F7FE` in group GP's
 //! `fn_0095f6c0`). G73's seam at
@@ -24,6 +26,23 @@
 //! (`ClearAshPilesHook`, a fix row): the cell's reset walk deletes ash piles itself and no longer
 //! with their actor; JIP's jump there also passes over the exe's branches for form types 0x1D and
 //! 0x26 (`FLOR` and placed `INGR` references, of which the game's own plugins have none).
+//!
+//! **G31, G78, G81, G90, G106** (`InitGamePatches`, fix rows): a door's own stealing rules
+//! decide (G31); `SetScale` clamps to about 0.0001 .. 100 with no rounding (G78); removing a
+//! weapon detaches the weapon node's children instead of releasing its effects (G81); leaving an
+//! interior ends the sky's weather transition at the next main loop, JIP's own main-loop function
+//! ([`crate::main_loop::Native`], G90); the water forms' update asks JIP's map lookup and the
+//! renderer's byte `0x11F91C5` (G106). G90 runs on the main thread (the cell change) and takes
+//! JIP's slot for the main-loop list, as the script callbacks do; the others read and write game
+//! memory only.
+//!
+//! **G93** (a fix row, "Credits to carxt for tracing the weapon backpack bug"): NPCs show their
+//! weapon's modded model (`BipedAnim::SetWeaponSlot` rewritten as a wrap, and two seams that give
+//! it the NPC's weapon mod flags). **O17** (`bNPCWeaponMods`, off by default): an NPC loaded for
+//! the first time may get weapon mods by its level; the mark is cleared when its cell respawns.
+//! Both run where an actor's 3D is built or its weapon drawn (main and loader threads, the AI
+//! threads with real threads on) and read game memory and JIP's settings only (O17 draws from the
+//! game's random numbers and adds an extra data, as JIP does on those threads).
 //!
 //! Threads: G06's test reads the base's flag byte only and G73's form is a lock-free atomic, so
 //! neither takes JIP's slot (Activate, Enable/Disable and the physics island callback may run off
@@ -35,7 +54,7 @@ use super::Area;
 use crate::commands::jip_fn_aux_variable::{maps_may_hold, mark_changed, AuxMaps, AuxMods};
 use crate::cosave::{changed, has_change_data};
 use crate::world_hooks::TextBlock;
-use engine_core::extend::{Hook, Owner, SiteSlot};
+use engine_core::extend::{Hook, Owner, SiteSlot, WrapSlot};
 use engine_core::prelude::*;
 use std::collections::BTreeMap;
 
@@ -66,6 +85,23 @@ pub const ATTACH_ASH_PILE: SiteSlot = SiteSlot::new(Owner::Jip, 0x005d_bcfd);
 /// its base form; any answer means JIP's routine ran and the walk goes on at `0x54E5E6`).
 pub const DELETED_ACTOR_ASH_PILE: SiteSlot = SiteSlot::new(Owner::Jip, 0x0054_e421);
 pub const CLEAR_ASH_PILES: SiteSlot = SiteSlot::new(Owner::Jip, 0x0054_e4e1);
+/// G31's seam in `fn_00579690` (the "is it stealing" test), at the end of its door branch:
+/// words the reference and the door's answer; any answer returns the door's answer.
+pub const DOOR_ANSWER_STANDS: SiteSlot = SiteSlot::new(Owner::Jip, 0x0057_9942);
+/// G78's seam in `fn_00567490` (`SetScale`): words the scale's bits; the answer is the scale.
+pub const SET_SCALE: SiteSlot = SiteSlot::new(Owner::Jip, 0x0056_74d5);
+/// G81's seams in `RemoveWeapon` (`00571b50`): the held weapon node and the "Weapon" child, each
+/// in place of its `call 0x572160`. Words: the node.
+pub const CLEAR_WEAPON_NODE: [SiteSlot; 2] = [
+    SiteSlot::new(Owner::Jip, 0x0057_1f65),
+    SiteSlot::new(Owner::Jip, 0x0057_1fdf),
+];
+/// G90's seam in `fn_00454450` (leaving an interior), in place of `008d7dc0(this, 0)`: words the
+/// `TES`.
+pub const CLOUDS_FIX: SiteSlot = SiteSlot::new(Owner::Jip, 0x0045_4576);
+/// G106's seam in `fn_004e3d60` (the water forms' update), in place of the update map's find:
+/// words the map and the water form; the answer's low byte is "already updated".
+pub const UPDATE_WATER_TEXTURES: SiteSlot = SiteSlot::new(Owner::Jip, 0x004e_400e);
 
 /// `kHookFormFlag6_IsAshPile` (the base form's `jipFormFlags6`).
 pub const IS_ASH_PILE: u8 = 1 << 5;
@@ -86,8 +122,21 @@ pub struct AltAshPile(pub std::sync::atomic::AtomicU32);
 /// The group's rows and installers.
 pub const AREA: Area = Area {
     name: "GH2",
-    fix_sites: &[DELETED_ACTOR_ASH_PILE.addr(), CLEAR_ASH_PILES.addr()],
-    fix_wraps: &[],
+    fix_sites: &[
+        DELETED_ACTOR_ASH_PILE.addr(),
+        CLEAR_ASH_PILES.addr(),
+        DOOR_ANSWER_STANDS.addr(),
+        SET_SCALE.addr(),
+        CLEAR_WEAPON_NODE[0].addr(),
+        CLEAR_WEAPON_NODE[1].addr(),
+        CLOUDS_FIX.addr(),
+        UPDATE_WATER_TEXTURES.addr(),
+        INIT_WORN_WEAPON.addr(),
+        PICK_WEAPON_MODEL.addr(),
+        DO_ON_LOAD_ACTOR.addr(),
+        RESET_ACTOR_FLAGS_RESPAWN.addr(),
+    ],
+    fix_wraps: &[SET_WEAPON_SLOT.addr()],
     install_fixes,
     jip_sites: &[
         DESTROY_REFR.addr(),
@@ -100,6 +149,10 @@ pub const AREA: Area = Area {
         ASH_PILE_TESTS[6].addr(),
         ASH_PILE_TESTS[7].addr(),
         ATTACH_ASH_PILE.addr(),
+        BIPED_SLOT_VISIBLE.addr(),
+        SYNC_POSITION.addr(),
+        BIPED_PART_NAME.addr(),
+        ADD_ON_TRANSFORM.addr(),
     ],
     jip_wraps: &[],
     install_jip,
@@ -120,8 +173,251 @@ const MOD_INDEX: u32 = 0xf;
 const JIP_FLAGS: u32 = 0x5f;
 const FORM_TYPE: u32 = 4;
 
+/// H15's seam: the first-person slot test in `BipedAnim::LoadBipedParts` (`0x4AC645`; words: the
+/// slot; the answer: whether its part loads).
+pub const BIPED_SLOT_VISIBLE: SiteSlot = SiteSlot::new(Owner::Jip, 0x004a_c645);
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: BipedSlotVisibilityHook.
+/// H15: in first person a slot's part loads when the slot's bit is set in JIP's mask
+/// (`s_bipedSlotVisibility`, 0x7C at the start: slots 2 to 6, the game's own test), which
+/// `ToggleBipedSlotVisibility` edits. The bit is the slot's number modulo 32, as `bt` reads it.
+fn biped_slot_visible(e: &mut Engine, w: &[u32]) -> Option<u32> {
+    let mask = crate::commands::jip_fn_miscellaneous::biped_slot_visibility(e);
+    Some((mask >> (w[0] & 31)) & 1)
+}
+
+/// H13's seam: `SetLocationOnReference`'s store of the position (`0x575A7F`; words: the
+/// reference, the location; the answer: the position is written).
+pub const SYNC_POSITION: SiteSlot = SiteSlot::new(Owner::Jip, 0x0057_5a7f);
+/// A reference's rotation z (`+0x2C`), position (`+0x30`), cell (`+0x40`), loaded data (`+0x64`,
+/// its root node `+0x14`); a cell's world space (`+0xC0`); a block's name (`+8`), world rotation
+/// (`+0x68`, `+0x6C`: the first row's second and third entries) and world translation and scale
+/// (`+0x8C`); the player's id.
+const REF_ROTATION_Z: u32 = 0x2c;
+const REF_POSITION: u32 = 0x30;
+const REF_CELL: u32 = 0x40;
+const REF_LOADED: u32 = 0x64;
+const LOADED_ROOT: u32 = 0x14;
+const CELL_WORLD: u32 = 0xc0;
+const BLOCK_NAME: u32 = 8;
+const BLOCK_ROTATE_01: u32 = 0x68;
+const BLOCK_ROTATE_02: u32 = 0x6c;
+const BLOCK_TRANSLATE: u32 = 0x8c;
+
+/// A node's children (`+0xA0`, their count `+0xA6`), and the virtual slot `+0xC` a node answers
+/// with `ADDR_ReturnThis` (`006815c0`): JIP's node test.
+const NODE_CHILDREN: u32 = 0xa0;
+const NODE_CHILD_COUNT: u32 = 0xa6;
+const RETURN_THIS: u32 = 0x0068_15c0;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/netimmerse.cpp: NiNode::GetBlockByName
+// (asm).
+/// The first block below `node` whose name is the fixed string `name` (compared as pointers, as
+/// JIP compares them), depth first; 0 for none. Walks no deeper than the port's node walks do.
+fn block_by_name_ptr(e: &Engine, node: u32, name: u32, depth: u32) -> u32 {
+    if crate::commands::nif_nodes::too_deep(depth) {
+        return 0;
+    }
+    let children = e.mem.u32(node + NODE_CHILDREN);
+    let count = u32::from(e.mem.u16(node + NODE_CHILD_COUNT));
+    for i in 0..count {
+        let child = e.mem.u32(children + 4 * i);
+        if child == 0 {
+            continue;
+        }
+        if e.mem.u32(child + BLOCK_NAME) == name {
+            return child;
+        }
+        let vtable = e.mem.u32(child);
+        if e.mem.u32(vtable + 0xc) == RETURN_THIS {
+            let found = block_by_name_ptr(e, child, name, depth + 1);
+            if found != 0 {
+                return found;
+            }
+        }
+    }
+    0
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: SetRefrPositionHook.
+/// H13 (JIP's own): while `SynchronizePosition` keeps a reference, the player's position as the
+/// game sets it is the reference's node instead (its world translation, plus the command's
+/// offset), when the player and the reference are in the same cell or the same world space and
+/// the reference has its 3D; that position is also kept as where the player goes back to when
+/// synchronizing ends. With the rotate flag the player's z rotation follows the node (JIP's
+/// `ATan2` of its rotation's `+0x6C` and `+0x68`). The node is the reference's root when the
+/// command named none or the root has that name, else the first block below with it (the fixed
+/// strings compared, as JIP does: with no name given the command keeps the empty text's string,
+/// which only a block named "" matches; no such block: the location as given). Any other reference, or none kept: the location as given.
+fn sync_position(e: &mut Engine, w: &[u32]) -> Option<u32> {
+    let (me, location) = (w[0], w[1]);
+    let mut source = location;
+    let mut state = crate::commands::jip_fn_misc_ref::sync_position(e);
+    'sync: {
+        let refr = state.refr;
+        if refr == 0 || e.mem.u32(me + REF_ID) != PLAYER_ID {
+            break 'sync;
+        }
+        let (mine, theirs) = (e.mem.u32(me + REF_CELL), e.mem.u32(refr + REF_CELL));
+        if mine == 0 || theirs == 0 {
+            break 'sync;
+        }
+        if mine != theirs {
+            let world = e.mem.u32(mine + CELL_WORLD);
+            if world == 0 || e.mem.u32(theirs + CELL_WORLD) != world {
+                break 'sync;
+            }
+        }
+        let loaded = e.mem.u32(refr + REF_LOADED);
+        if loaded == 0 {
+            break 'sync;
+        }
+        let mut node = e.mem.u32(loaded + LOADED_ROOT);
+        if node == 0 {
+            break 'sync;
+        }
+        if state.node != 0 && e.mem.u32(node + BLOCK_NAME) != state.node {
+            node = block_by_name_ptr(e, node, state.node, 0);
+            if node == 0 {
+                break 'sync;
+            }
+        }
+        for i in 0..4u32 {
+            let v = e.mem.f32(node + BLOCK_TRANSLATE + 4 * i);
+            state.pos[i as usize] = v + state.mods[i as usize];
+        }
+        // Only the kept position, and only while this reference is still the one kept.
+        crate::commands::jip_fn_misc_ref::set_sync_pos_if(e, refr, state.pos);
+        source = 0;
+        if state.flags != 0 {
+            let y = e.mem.f32(node + BLOCK_ROTATE_02);
+            let x = e.mem.f32(node + BLOCK_ROTATE_01);
+            let angle = crate::commands::ln_fn_math::atan2(y, x);
+            e.mem.set_f32(me + REF_ROTATION_Z, angle);
+        }
+    }
+    if source == 0 {
+        for i in 0..3u32 {
+            e.mem
+                .set_f32(me + REF_POSITION + 4 * i, state.pos[i as usize]);
+        }
+    } else {
+        for i in 0..3u32 {
+            let v = e.mem.u32(source + 4 * i);
+            e.mem.set_u32(me + REF_POSITION + 4 * i, v);
+        }
+    }
+    Some(1)
+}
+
+/// H10's seams: a loaded biped part's naming in `LoadBipedParts` (`0x4ACCF1`; words: the form,
+/// the clone, the model's root, the slot, first person) and the add-on's transform reset in
+/// `LoadAndAttachAddOn` (`0x4AF0DE`; words: the clone, the form, the root override). Each answers:
+/// the step is done.
+pub const BIPED_PART_NAME: SiteSlot = SiteSlot::new(Owner::Jip, 0x004a_ccf1);
+pub const ADD_ON_TRANSFORM: SiteSlot = SiteSlot::new(Owner::Jip, 0x004a_f0de);
+/// The biped slots' names (`0x1188B98`, a C string each).
+const SLOT_NAMES: u32 = 0x0118_8b98;
+/// A block's name (`+8`), its flag byte `+0x33` (bit `0x20`: JIP's light hooks marked it), a
+/// node's local rotation rows and translation (`+0x34`, `+0x44`, `+0x54`: 16 bytes each as JIP
+/// writes them); `ADDR_ReturnThis` at a node's slot `+0xC`; a form's `jipFormFlags6` (`+6`).
+const NI_NAME: u32 = 8;
+const NI_FLAGS_33: u32 = 0x33;
+const NI_LOCAL_ROWS: [u32; 3] = [0x34, 0x44, 0x54];
+const IS_NODE_SLOT: u32 = 0xc;
+const ADDR_RETURN_THIS: u32 = 0x0068_15c0;
+const FORM_FLAGS_6: u32 = 6;
+const INSERT_OBJECT: u8 = crate::commands::jip_fn_misc_ref_insert::INSERT_NODE
+    | crate::commands::jip_fn_misc_ref_insert::ATTACH_MODEL;
+/// JIP's name buffer (`sprintf_s` into 0x18 bytes: at most 23 characters).
+const PART_NAME_BUFFER: usize = 0x18;
+
+/// The C string at `at` (up to its NUL).
+fn c_text(e: &Engine, at: u32) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut p = at;
+    while p != 0 {
+        let b = e.mem.u8(p);
+        if b == 0 || out.len() >= 0x100 {
+            break;
+        }
+        out.push(b);
+        p += 1;
+    }
+    out
+}
+
+/// The block's name set to the fixed string of `text` (JIP's `NiObjectNET::SetName`, as
+/// `RenameNifBlock` does it: the counts changed with `lock`-ed adds, as JIP's, since the loader
+/// threads name parts while the main thread names others).
+fn set_name(e: &mut Engine, block: u32, text: &[u8]) {
+    crate::commands::jip_fn_misc_ref_nodes_w::set_name(e, block, text);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: LoadBip01SlotHook.
+/// H10, a loaded biped part (with JIP installed, always): when the clone is a node, a form JIP's
+/// `InsertNode`/`AttachModel` marked has its entries put in (the clone first takes the model
+/// root's name, so the entries find their nodes as in the model; one count held), and in third
+/// person a clone JIP's light hooks marked gets its point lights; then the clone is named
+/// `"<slot name> <form id>"` (JIP's text, `%s %08X`, cut at 23 characters as its buffer holds;
+/// the game's own name is `"<slot name> <form name> (<form id>)"`).
+fn biped_part_name(e: &mut Engine, w: &[u32]) -> Option<u32> {
+    let (form, clone, root, slot, first_person) = (w[0], w[1], w[2], w[3], w[4] != 0);
+    let slot_name = c_text(e, e.mem.u32(SLOT_NAMES + 4 * slot));
+    let mut name = slot_name;
+    name.extend_from_slice(format!(" {:08X}", e.mem.u32(form + REF_ID)).as_bytes());
+    name.truncate(PART_NAME_BUFFER - 1);
+    let vtable = e.mem.u32(clone);
+    if e.mem.u32(vtable + IS_NODE_SLOT) == ADDR_RETURN_THIS {
+        if e.mem.u8(form + FORM_FLAGS_6) & INSERT_OBJECT != 0 {
+            // JIP's `lock inc` on the root name's count; the clone's own name is overwritten
+            // without its count given back, as JIP does.
+            let root_name = e.mem.u32(root + NI_NAME);
+            crate::commands::jip_fn_misc_ref_insert::add_ref(e, root_name);
+            e.mem.set_u32(clone + NI_NAME, root_name);
+            crate::commands::jip_fn_misc_ref_insert::do_insert_objects(e, form, 0, clone);
+        }
+        if !first_person && e.mem.u8(clone + NI_FLAGS_33) & 0x20 != 0 {
+            crate::game_patches::gl::lights::add_point_lights(e, clone);
+        }
+    }
+    set_name(e, clone, &name);
+    Some(1)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: LoadWeaponSlotHook.
+/// H10, an add-on (the weapon's model, with JIP installed, always): the clone's rotation set to the
+/// identity and its translation to 0 (JIP's three rows of `1, 0, 0, 0`, what the game's two calls
+/// set); with a form, a form JIP's `InsertNode`/`AttachModel` marked has its entries put in, and a
+/// clone JIP's light hooks marked gets its point lights unless it goes under the player's
+/// first-person node.
+fn add_on_transform(e: &mut Engine, w: &[u32]) -> Option<u32> {
+    let (clone, form, root_override) = (w[0], w[1], w[2]);
+    for row in NI_LOCAL_ROWS {
+        e.mem.set_f32(clone + row, 1.0);
+        e.mem.set_u32(clone + row + 4, 0);
+        e.mem.set_u32(clone + row + 8, 0);
+        e.mem.set_u32(clone + row + 12, 0);
+    }
+    if form != 0 {
+        if e.mem.u8(form + FORM_FLAGS_6) & INSERT_OBJECT != 0 {
+            crate::commands::jip_fn_misc_ref_insert::do_insert_objects(e, form, 0, clone);
+        }
+        if e.mem.u8(clone + NI_FLAGS_33) & 0x20 != 0
+            && root_override != crate::game_patches::gp::first_person_node(e)
+        {
+            crate::game_patches::gl::lights::add_point_lights(e, clone);
+        }
+    }
+    Some(1)
+}
+
 fn install_jip(e: &mut Engine) {
     e.on_site(DESTROY_REFR, destroy_refr);
+    e.on_site(BIPED_PART_NAME, biped_part_name);
+    e.on_site(ADD_ON_TRANSFORM, add_on_transform);
+    e.on_site(BIPED_SLOT_VISIBLE, biped_slot_visible);
+    e.on_site(SYNC_POSITION, sync_position);
     e.ext_free::<AltAshPile>();
     for site in ASH_PILE_TESTS {
         e.on_site(site, is_ash_pile);
@@ -250,6 +546,119 @@ fn clear_ref_aux_vars(mods: &mut AuxMods, id: u32) -> bool {
 fn install_fixes(e: &mut Engine) {
     e.on_site(DELETED_ACTOR_ASH_PILE, keep_deleted_actors_ash_pile);
     e.on_site(CLEAR_ASH_PILES, clear_ash_piles);
+    e.on_site(DOOR_ANSWER_STANDS, door_answer_stands);
+    e.on_site(SET_SCALE, set_scale_clamp);
+    for site in CLEAR_WEAPON_NODE {
+        e.on_site(site, clear_weapon_node);
+    }
+    e.on_site(CLOUDS_FIX, clouds_fix);
+    e.on_site(UPDATE_WATER_TEXTURES, update_water_textures);
+    e.wrap(SET_WEAPON_SLOT, set_weapon_slot);
+    e.on_site(INIT_WORN_WEAPON, init_worn_weapon);
+    e.on_site(PICK_WEAPON_MODEL, pick_weapon_model);
+    // O17's numbers into their lock-free slot before its seams can be asked.
+    let numbers = e
+        .ext::<crate::Jip>()
+        .game_patches
+        .settings
+        .weapon_mod_chance;
+    set_weapon_mod_chance(e, numbers);
+    e.on_site(DO_ON_LOAD_ACTOR, do_on_load_actor);
+    e.on_site(RESET_ACTOR_FLAGS_RESPAWN, reset_actor_flags_respawn);
+}
+
+/// G31 (`WriteRelJump(0x579942, 0x579AB7)`): using a door is stealing only when the door's own
+/// rules say so (its lock and the destination cell's owner); the general "an owned object the
+/// player does not own" test after them is passed over, so an unlocked door into a public cell
+/// is no crime.
+fn door_answer_stands(_: &mut Engine, _: &[u32]) -> Option<u32> {
+    Some(1)
+}
+
+/// `kMinScale` (`0x38D1B717`, about 0.0001) and `SS_100`.
+const MIN_SCALE_BITS: u32 = 0x38d1_b717;
+const MAX_SCALE: f32 = 100.0;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: SetScaleHook.
+/// The scale `SetScale` stores: `maxss` with about 0.0001 then `minss` with 100 (SSE: a NaN
+/// gives the second operand, so the lower bound), in place of the exe's rounding to two decimals
+/// and its 0.01 .. 10 clamps.
+fn set_scale_clamp(_: &mut Engine, a: &[u32]) -> Option<u32> {
+    let value = f32::from_bits(a[0]);
+    let min = f32::from_bits(MIN_SCALE_BITS);
+    let value = if value > min { value } else { min };
+    let value = if value < MAX_SCALE { value } else { MAX_SCALE };
+    Some(value.to_bits())
+}
+
+/// A node's children (`NiNode::m_children`): the array (`+0xA0`) and its used count (`+0xA6`).
+const CHILDREN: u32 = 0xa0;
+const CHILD_COUNT: u32 = 0xa6;
+/// The child's flag byte JIP tests (`+0x33`, bit `0x80`: the top bit of the object's flags).
+const KEEP_FLAG_BYTE: u32 = 0x33;
+/// `NiNode`'s virtual that detaches a child.
+const DETACH_CHILD: u32 = 0xe8;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: ClearWeaponNodeHook.
+/// In place of releasing the weapon node's attached effects: each child of the node, from the
+/// last to the first, that is set and lacks the keep flag is detached (the node's virtual
+/// `+0xE8`). The array and its count are read once, as JIP's registers hold them.
+fn clear_weapon_node(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let node = a[0];
+    let children = e.mem.u32(node + CHILDREN);
+    let count = e.mem.u16(node + CHILD_COUNT);
+    for i in (0..u32::from(count)).rev() {
+        let child = e.mem.u32(children + i * 4);
+        if child == 0 || e.mem.u8(child + KEEP_FLAG_BYTE) & 0x80 != 0 {
+            continue;
+        }
+        e.vcall(node, DETACH_CHILD, &args![child]);
+    }
+    Some(0)
+}
+
+/// `TES::currentInterior` and `TES::sky`.
+const TES_CURRENT_INTERIOR: u32 = 0x34;
+const TES_SKY: u32 = 0x68;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: CloudsFixHook.
+/// Leaving an interior: the interior cell cleared (as the exe's call does), and the sky's weather
+/// transition ended at the next main loop (`EndWeatherTransition` on the sky, one call), so the
+/// clouds do not show the old weather fading out.
+fn clouds_fix(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let tes = a[0];
+    e.mem.set_u32(tes + TES_CURRENT_INTERIOR, 0);
+    let sky = e.mem.u32(tes + TES_SKY);
+    crate::main_loop::add_native(e, crate::main_loop::Native::EndWeatherTransition, sky);
+    Some(0)
+}
+
+/// The renderer's byte JIP tests first (`0x11F91C5`; the exe only clears it, `00b54280`).
+const WATER_TEXTURES_HELD: u32 = 0x011f_91c5;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: UpdateWaterTexturesHook
+// and internal/Ni_types.h: NiTPtrMap::Lookup.
+/// In place of the update map's find: the renderer's byte when set; else the value the map keeps
+/// for the water form (its buckets `+8`, their count `+4`; an entry's next `+0`, key `+4`, value
+/// `+8`), 0 when it has none. A map with no buckets answers 0 (JIP would divide by zero).
+fn update_water_textures(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let (map, key) = (a[0], a[1]);
+    let held = e.mem.u8(WATER_TEXTURES_HELD);
+    if held != 0 {
+        return Some(u32::from(held));
+    }
+    let buckets = e.mem.u32(map + 4);
+    if buckets == 0 {
+        return Some(0);
+    }
+    let mut entry = e.mem.u32(e.mem.u32(map + 8) + (key % buckets) * 4);
+    while entry != 0 {
+        if e.mem.u32(entry + 4) == key {
+            return Some(e.mem.u32(entry + 8));
+        }
+        entry = e.mem.u32(entry);
+    }
+    Some(0)
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches,
@@ -348,6 +757,389 @@ fn clear_ash_piles(e: &mut Engine, a: &[u32]) -> Option<u32> {
     e.call(MARK_AS_DELETED, &args![reference]);
     Some(0)
 }
+
+// ===================== GH2 part 4: G93 (fix row) and O17 (bNPCWeaponMods) =====================
+
+/// G93's wrap: `BipedAnim::SetWeaponSlot` (`004ab400`, `thiscall`: the biped, the weapon, the mod
+/// flags), rewritten whole by JIP (`WriteRelJump(0x4AB400, SetWeaponSlotHook)`).
+pub const SET_WEAPON_SLOT: WrapSlot = WrapSlot::new(Owner::Jip, 0x004a_b400);
+/// G93's seams: `TESNPC::InitWornObject` (`006061b0`) at its weapon branch (`0x6061D9`; words: the
+/// actor, the biped, the weapon; the answer is the mod flags it passes on), and `00571760` (the
+/// reference equips an item's biped model) at `0x5719ED` (words: the reference, the actor or 0,
+/// the item, the biped or 0, the mod slots; the answer is the model part to attach, 0 for none).
+pub const INIT_WORN_WEAPON: SiteSlot = SiteSlot::new(Owner::Jip, 0x0060_61d9);
+pub const PICK_WEAPON_MODEL: SiteSlot = SiteSlot::new(Owner::Jip, 0x0057_19ed);
+/// O17's seams (`bNPCWeaponMods`): the actor's 3D set up in `fn_00451ef0` (`0x45234E`, in place of
+/// `call GetFormID` and the node lookup before `SetReferenceIDOnScenegraph`; words: the actor; the
+/// answer is the node) and the cell's reset walk `fn_0054df30` (`0x54E2A4`, in place of
+/// `call 005d43c0`; words: the actor; the answer is its extra list).
+pub const DO_ON_LOAD_ACTOR: SiteSlot = SiteSlot::new(Owner::Jip, 0x0045_234e);
+pub const RESET_ACTOR_FLAGS_RESPAWN: SiteSlot = SiteSlot::new(Owner::Jip, 0x0054_e2a4);
+
+/// `BipedAnim`: the weapon slot's form (`+0x7C`), model (`+0x80`), loaded clone (`+0x84`); the
+/// actor it belongs to (`+0x2B0`).
+const BIPED_WEAPON_FORM: u32 = 0x7c;
+const BIPED_WEAPON_MODEL: u32 = 0x80;
+const BIPED_WEAPON_CLONE: u32 = 0x84;
+const BIPED_ACTOR: u32 = 0x2b0;
+/// `BipedAnim`'s slot clear (`004aaff0`, `thiscall`: slot, 1, 0).
+const BIPED_CLEAR_SLOT: u32 = 0x004a_aff0;
+/// `BipedAnim::SetWeapon` (`004ab750`, `thiscall`: the weapon, the mod flags).
+const BIPED_SET_WEAPON: u32 = 0x004a_b750;
+/// `kModelByMod`: the weapon's third-person model by its mod flags, then its first-person object.
+const MODEL_BY_MOD: [u32; 8] = [0x3c, 0x270, 0x290, 0x2d0, 0x2b0, 0x2f0, 0x310, 0x330];
+const FIRST_PERSON_BY_MOD: [u32; 8] = [0x250, 0x254, 0x258, 0x260, 0x25c, 0x268, 0x264, 0x26c];
+/// A weapon's type byte (`eWeaponType`, `+0xF4`; 8 is the one JIP's model choice tests) and its
+/// first flags byte (`weaponFlags1`, `+0x100`).
+const WEAPON_TYPE: u32 = 0xf4;
+const WEAPON_FLAGS_1: u32 = 0x100;
+/// The player's id.
+const PLAYER_ID: u32 = 0x14;
+/// An actor's process (`+0x68`): its level (`+0x28`, a byte; 0 and 1 high and middle-high) and its
+/// weapon entry (`+0x114`).
+const ACTOR_PROCESS: u32 = 0x68;
+const PROCESS_LEVEL: u32 = 0x28;
+const PROCESS_WEAPON_INFO: u32 = 0x114;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: TESObjectWEAP::GetWeaponModel.
+/// The model part of `weapon` for the mod flags (their low three bits; a modded model with an
+/// empty path falls back to the plain one): the first-person object's model (`+0x30`) when the
+/// actor is the player, or for a weapon of type 8 with a mod; else (or with no first-person
+/// object) the third-person model. An actor of 0 is not the player (JIP would read address 0xC).
+fn weapon_model(e: &mut Engine, weapon: u32, flags: u32, actor: u32) -> u32 {
+    let mut m = (flags & 7) as usize;
+    if e.mem.u16(weapon + MODEL_BY_MOD[m] + 8) == 0 {
+        m = 0;
+    }
+    let player = actor != 0 && e.mem.u32(actor + REF_ID) == PLAYER_ID;
+    if player || (m != 0 && e.mem.u8(weapon + WEAPON_TYPE) == 8) {
+        let first = e.mem.u32(weapon + FIRST_PERSON_BY_MOD[m]);
+        if first != 0 {
+            return first + 0x30;
+        }
+    }
+    weapon + MODEL_BY_MOD[m]
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: SetWeaponSlotHook.
+/// `004ab400` rewritten: a weapon form not already loaded in the weapon slot clears the slot
+/// (`004aaff0(5, 1, 0)`), becomes its form, and its model is [`weapon_model`] for the mod flags
+/// and the biped's actor (in place of the exe's: the mod flags' model for everyone, the
+/// animation's first-person model for the player's bipeds).
+fn set_weapon_slot(e: &mut Engine, w: &[u32]) -> Ret {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES == 0 {
+        return e.call_next(SET_WEAPON_SLOT.addr(), w);
+    }
+    let (biped, weapon, flags) = (w[0], w[1], w[2] & 0xff);
+    if weapon == 0 || e.mem.u8(weapon + FORM_TYPE) != super::gh1::FORM_WEAPON {
+        return Ret::default();
+    }
+    if e.mem.u32(biped + BIPED_WEAPON_FORM) == weapon && e.mem.u32(biped + BIPED_WEAPON_CLONE) != 0
+    {
+        return Ret::default();
+    }
+    e.call(BIPED_CLEAR_SLOT, &args![biped, 5u32, 1u32, 0u32]);
+    e.mem.set_u32(biped + BIPED_WEAPON_FORM, weapon);
+    let actor = e.mem.u32(biped + BIPED_ACTOR);
+    let model = weapon_model(e, weapon, flags, actor);
+    e.mem.set_u32(biped + BIPED_WEAPON_MODEL, model);
+    Ret::default()
+}
+
+/// The mod flags of the weapon an NPC holds: its process at the high or middle-high level and
+/// its weapon entry's flags (group GH1's `GetEntryDataModFlagsHook`); 0 for none.
+fn held_weapon_mod_flags(e: &mut Engine, actor: u32) -> u32 {
+    let process = e.mem.u32(actor + ACTOR_PROCESS);
+    if process == 0 || e.mem.u8(process + PROCESS_LEVEL) > 1 {
+        return 0;
+    }
+    let info = e.mem.u32(process + PROCESS_WEAPON_INFO);
+    if info == 0 {
+        return 0;
+    }
+    u32::from(super::gh1::mod_flags(e, info))
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitWornObjectHook
+// ("Credits to carxt for tracing the weapon backpack bug").
+/// The weapon branch of `InitWornObject`: the mod flags of the weapon the actor holds (0 for an
+/// actor of 0: JIP would read address 0x68), which the exe's `0` gave.
+fn init_worn_weapon(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let actor = a[0];
+    Some(if actor == 0 {
+        0
+    } else {
+        held_weapon_mod_flags(e, actor)
+    })
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: PickWeaponModelHook.
+/// `00571760`'s choice: the mod slots it has (the player's), else for an actor that is not the
+/// player the mod flags of the weapon it holds; with a biped `BipedAnim::SetWeapon` gets the item
+/// and those flags (nothing to attach after), else the part to attach is [`weapon_model`] for the
+/// flags and the reference (none for no item: JIP would read address 0x3C).
+fn pick_weapon_model(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let (me, actor, item, biped, slots) = (a[0], a[1], a[2], a[3], a[4] & 0xff);
+    let mut flags = slots;
+    if flags == 0 && actor != 0 && e.mem.u32(actor + REF_ID) != PLAYER_ID {
+        flags = held_weapon_mod_flags(e, actor);
+    }
+    if biped != 0 {
+        e.call(BIPED_SET_WEAPON, &args![biped, item, flags]);
+        return Some(0);
+    }
+    if item == 0 {
+        return Some(0);
+    }
+    Some(weapon_model(e, item, flags, me))
+}
+
+/// An actor's render state (`+0x64`) and its node (`+0x14`); its life state (`+0x108`); JIP's
+/// flag byte `+0x143` (bit `0x10`: weapon mods dealt); `isTeammate` (`+0x18D`); its extra list
+/// (`+0x44`).
+const ACTOR_RENDER_STATE: u32 = 0x64;
+const RENDER_STATE_NODE: u32 = 0x14;
+const ACTOR_LIFE_STATE: u32 = 0x108;
+const ACTOR_JIP_FLAGS_143: u32 = 0x143;
+const WEAPON_MODS_DEALT: u8 = 0x10;
+const ACTOR_IS_TEAMMATE: u32 = 0x18d;
+const ACTOR_EXTRA_LIST: u32 = 0x44;
+/// `g_BGSSaveLoadGame` and its flags byte (`+0x244`, bit 2: a save being loaded).
+const SAVE_LOAD_GAME: u32 = 0x011d_df38;
+const SAVE_LOAD_FLAGS: u32 = 0x244;
+/// `TESActorBaseData::GetLevel` (`0047ded0`, `thiscall` on the base's `+0x30`).
+const BASE_DATA_GET_LEVEL: u32 = 0x0047_ded0;
+/// The game's random numbers (JIP's `GetRandomUInt`).
+const GET_RANDOM_INT: u32 = 0x00aa_5230;
+const GAME_RNG: u32 = 0x011c_4180;
+/// `kVtbl_ExtraWeaponModFlags` and the type.
+const VTBL_EXTRA_WEAPON_MOD_FLAGS: u32 = 0x0101_59a4;
+/// `Actor::...` (`0088db20`, `thiscall`: the weapon, 1, the extra list, 0): JIP's call after it
+/// gives a weapon its mods.
+const ACTOR_UPDATE_WEAPON: u32 = 0x0088_db20;
+/// `TESObjectWEAP::itemMod[3]` (`+0x350`).
+const WEAPON_ITEM_MODS: u32 = 0x350;
+/// `kWeaponModShuffle`.
+const WEAPON_MOD_SHUFFLE: [[u32; 3]; 6] = [
+    [1, 2, 4],
+    [1, 4, 2],
+    [2, 1, 4],
+    [2, 4, 1],
+    [4, 1, 2],
+    [4, 2, 1],
+];
+
+/// O17's three numbers (`uWMChancePerLevel`, `uWMChanceMin`, `uWMChanceMax`) as the fixes went
+/// in. Its handlers run on the loader and AI threads, so the numbers are a lock-free slot
+/// ([`Engine::ext_free`], made at install before the threads start), not JIP's shared one.
+#[derive(Default)]
+pub struct WeaponModChance([std::sync::atomic::AtomicU32; 3]);
+
+fn weapon_mod_chance(e: &mut Engine) -> [u32; 3] {
+    let n = &e.ext_free::<WeaponModChance>().0;
+    [0, 1, 2].map(|i| n[i].load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// O17's numbers put in the lock-free slot (at install, from the player's file).
+pub(super) fn set_weapon_mod_chance(e: &mut Engine, numbers: [u32; 3]) {
+    let n = &e.ext_free::<WeaponModChance>().0;
+    for (slot, value) in n.iter().zip(numbers) {
+        slot.store(value, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// JIP's three weapon mod numbers (`uWMChancePerLevel`, `uWMChanceMin`, `uWMChanceMax`) each
+/// non-zero: `SetOptionalPatch(17)` turns O17 on only then.
+pub(crate) fn weapon_mod_numbers_set(e: &mut Engine) -> bool {
+    weapon_mod_chance(e).iter().all(|&n| n != 0)
+}
+
+/// O17 on: the switch's bit and JIP's three numbers each non-zero (JIP installs nothing else).
+pub(crate) fn weapon_mods_on(e: &mut Engine) -> bool {
+    e.jip_patches() & engine_core::extend::jip_patches::NPC_WEAPON_MODS != 0
+        && weapon_mod_chance(e).iter().all(|&n| n != 0)
+}
+
+/// `ProcessManager::highActors` (the exe's `ProcessLists` at `011E0E80`, its list at `+0x80`:
+/// JIP's `GameProcess.h`; the constructor `0096d020` sets up the list head there).
+pub(crate) const HIGH_ACTORS: u32 = 0x011e_0f00;
+/// `g_thePlayer`.
+const THE_PLAYER: u32 = 0x011d_ea3c;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/serialization.h: DoLoadGameHousekeeping
+// (lines 181-195, the `s_patchInstallState.NPCWeaponMods` block).
+/// O17 after a save loads (the 3D seam passes every actor over while the save loads): the player
+/// marked dealt, then every actor of the process manager's high-actor list not marked yet is
+/// marked and, with a held weapon entry that has extra lists and not being a teammate, dealt its
+/// weapon mods ([`distribute_weapon_mods`]). As in JIP, neither the process level nor the life
+/// state is looked at here. With the switch off: nothing. Two things JIP would read at a low
+/// address: no player (JIP's `+0x140`) and an actor with no process (JIP's `+0x114`): the port
+/// passes over them.
+pub(crate) fn post_load_game(e: &mut Engine) {
+    if !weapon_mods_on(e) {
+        return;
+    }
+    let player = e.mem.u32(THE_PLAYER);
+    if player != 0 {
+        let flags = e.mem.u8(player + ACTOR_JIP_FLAGS_143);
+        e.mem
+            .set_u8(player + ACTOR_JIP_FLAGS_143, flags | WEAPON_MODS_DEALT);
+    }
+    let actors = crate::commands::list_items(e, Ptr::new(HIGH_ACTORS));
+    for actor in actors {
+        if actor == 0 {
+            continue;
+        }
+        let flags = e.mem.u8(actor + ACTOR_JIP_FLAGS_143);
+        if flags & WEAPON_MODS_DEALT != 0 {
+            continue;
+        }
+        e.mem
+            .set_u8(actor + ACTOR_JIP_FLAGS_143, flags | WEAPON_MODS_DEALT);
+        let process = e.mem.u32(actor + ACTOR_PROCESS);
+        if process == 0 {
+            continue;
+        }
+        let info = e.mem.u32(process + PROCESS_WEAPON_INFO);
+        if info != 0 && e.mem.u32(info) != 0 && e.mem.u8(actor + ACTOR_IS_TEAMMATE) == 0 {
+            distribute_weapon_mods(e, actor, info);
+        }
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: DoOnLoadActorHook (its
+// weapon mods part and, with uNPCPerks (O18), its perks part).
+/// An NPC's 3D set up: with a node (its render state's), not while a save loads, and alive: with
+/// O18 on its perks put on ([`super::ge::perks::init_npc_perks`]); with O17 on an
+/// actor at the high or middle-high level not dealt its weapon mods yet is marked dealt and, not
+/// being a teammate, has the weapon it holds given mods by chance ([`distribute_weapon_mods`]).
+/// The answer is the node `SetReferenceIDOnScenegraph` is then given (0 for none). With the
+/// two switches off: no answer (the exe's lookups).
+fn do_on_load_actor(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let (mods, perks) = (weapon_mods_on(e), crate::cosave::npc_perks_patch(e));
+    if !mods && !perks {
+        return None;
+    }
+    let actor = a[0];
+    let render = e.mem.u32(actor + ACTOR_RENDER_STATE);
+    let node = if render == 0 {
+        0
+    } else {
+        e.mem.u32(render + RENDER_STATE_NODE)
+    };
+    if node == 0 {
+        return Some(0);
+    }
+    let save_load = e.mem.u32(SAVE_LOAD_GAME);
+    if e.mem.u8(save_load + SAVE_LOAD_FLAGS) & 2 != 0 || e.mem.u32(actor + ACTOR_LIFE_STATE) != 0 {
+        return Some(node);
+    }
+    if perks {
+        super::ge::perks::init_npc_perks(e, actor);
+    }
+    if !mods {
+        return Some(node);
+    }
+    let flags = e.mem.u8(actor + ACTOR_JIP_FLAGS_143);
+    let process = e.mem.u32(actor + ACTOR_PROCESS);
+    if flags & WEAPON_MODS_DEALT != 0 || process == 0 || e.mem.u8(process + PROCESS_LEVEL) > 1 {
+        return Some(node);
+    }
+    e.mem
+        .set_u8(actor + ACTOR_JIP_FLAGS_143, flags | WEAPON_MODS_DEALT);
+    if e.mem.u8(actor + ACTOR_IS_TEAMMATE) != 0 {
+        return Some(node);
+    }
+    let info = e.mem.u32(process + PROCESS_WEAPON_INFO);
+    if info != 0 && e.mem.u32(info) != 0 {
+        distribute_weapon_mods(e, actor, info);
+    }
+    Some(node)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: ResetActorFlagsRespawnHook.
+/// The cell's reset walk respawning an actor: its "weapon mods dealt" mark cleared, then its extra
+/// list (what `005d43c0` answers). With the switch off: no answer.
+fn reset_actor_flags_respawn(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    if !weapon_mods_on(e) {
+        return None;
+    }
+    let actor = a[0];
+    let flags = e.mem.u8(actor + ACTOR_JIP_FLAGS_143);
+    e.mem
+        .set_u8(actor + ACTOR_JIP_FLAGS_143, flags & !WEAPON_MODS_DEALT);
+    Some(actor + ACTOR_EXTRA_LIST)
+}
+
+fn random_uint(e: &mut Engine, n: u32) -> u32 {
+    e.call(GET_RANDOM_INT, &args![GAME_RNG, n]).u32()
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: DistributeWeaponMods.
+/// A weapon (type 0..9, none of flags `0xA0`) with no mod flags on its first extra list yet, with
+/// mod slots in its record: the chance is the actor's level times `uWMChancePerLevel` held between
+/// `uWMChanceMin` and `uWMChanceMax`; a draw below 100 under it gives mods: the slots in a drawn
+/// order of six, the chance halved at each, a later slot dropped (or only the first kept) when
+/// the draw is no longer under it; the flags go on the list as `ExtraWeaponModFlags` and the
+/// actor's weapon is updated (`0088db20`). An entry whose list holder has no first list is passed
+/// over (JIP would read address 0).
+fn distribute_weapon_mods(e: &mut Engine, actor: u32, info: u32) {
+    let weapon = e.mem.u32(info + 8);
+    if e.mem.u8(weapon + WEAPON_TYPE) > 9 || e.mem.u8(weapon + WEAPON_FLAGS_1) & 0xa0 != 0 {
+        return;
+    }
+    let list = e.mem.u32(e.mem.u32(info));
+    if list == 0 || crate::commands::extra::has_type(e, list, super::gh1::EXTRA_WEAPON_MOD_FLAGS) {
+        return;
+    }
+    let mut mods = 0u32;
+    for i in 0..3 {
+        if e.mem.u32(weapon + WEAPON_ITEM_MODS + i * 4) != 0 {
+            mods |= 1 << i;
+        }
+    }
+    if mods == 0 {
+        return;
+    }
+    let [per_level, min, max] = weapon_mod_chance(e);
+    let base = e.mem.u32(actor + BASE);
+    let level = e.call(BASE_DATA_GET_LEVEL, &args![base + 0x30]).u32() as u16 as i16 as i32 as u32;
+    let mut chance = level.wrapping_mul(per_level);
+    if chance < min {
+        chance = min;
+    } else if chance > max {
+        chance = max;
+    }
+    let rand = random_uint(e, 100);
+    if chance <= rand {
+        return;
+    }
+    let shuffle = WEAPON_MOD_SHUFFLE[random_uint(e, 6) as usize];
+    'flags: {
+        if mods & shuffle[0] != 0 {
+            chance >>= 1;
+        }
+        if mods & shuffle[1] != 0 {
+            if chance <= rand {
+                mods = shuffle[0];
+                break 'flags;
+            }
+            chance >>= 1;
+        }
+        if mods & shuffle[2] != 0 && chance <= rand {
+            mods ^= shuffle[2];
+        }
+    }
+    let x = crate::commands::extra::create(
+        e,
+        VTBL_EXTRA_WEAPON_MOD_FLAGS,
+        super::gh1::EXTRA_WEAPON_MOD_FLAGS,
+    );
+    e.mem.set_u32(x + 0xc, mods);
+    crate::commands::extra::add_extra(e, list, x);
+    e.call(ACTOR_UPDATE_WEAPON, &args![actor, weapon, 1u32, list, 0u32]);
+}
+
 #[cfg(test)]
 #[path = "gh2_tests.rs"]
 mod tests;

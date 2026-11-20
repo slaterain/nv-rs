@@ -53,6 +53,27 @@ fn prepare(e: &mut Engine) {
     // The queued references' vtables (0x01016BA4 to 0x01016D7C), where JIP writes its attaches
     // (game_patches::gp).
     e.map(0x0101_6000, 0x1000);
+    // `TESObjectLIGH`'s vtable slots 0x01029014 / 0x01029018 and `NiPointLight`'s slot 0
+    // 0x0109DD0C, where JIP writes its editor id and destructor routines (game_patches::gl, H04
+    // and H07).
+    e.map(0x0102_9000, 0x1000);
+    e.map(0x0109_d000, 0x1000);
+    // `ConsoleManager::GetSingleton` (`0071b160`) when the test engine has none: no console, so
+    // JIP's start-up line at the deferred start prints nothing.
+    if !e.is_registered(0x0071_b160) {
+        e.register(0x0071_b160, |_, _| 0u32.into_ret());
+    }
+    // `0050de20` (a light form's animation, JIP's wrap there: group GL, H12) when the test engine
+    // has no translation of it: a marker answer (0x5a60).
+    if !e.is_registered(0x0050_de20) {
+        e.register(0x0050_de20, |_, _| 0x5a60u32.into_ret());
+    }
+    // The game's `FindFirstFileA` at its import slot (the script runner's search at the deferred
+    // start), when the test engine has none: no such folder (`INVALID_HANDLE_VALUE`), so no script
+    // file runs.
+    if !e.is_registered(0x00fd_f070) {
+        e.register(0x00fd_f070, |_, _| 0xffff_ffffu32.into_ret());
+    }
     nvse::table::install(e);
     // The platform's XInputGetState at its import slot, as the host registers it (no controller:
     // ERROR_DEVICE_NOT_CONNECTED), for JIP's wrap there.
@@ -95,9 +116,85 @@ fn prepare(e: &mut Engine) {
         e.map(0x011c_f000, 0x1000);
         e.register(0x0064_6260, |e, _| f32::into_ret(e.mem.f32(0x011c_f154)));
     }
+    // G84's and G85's wraps (`00646d00`, `00646360`), when the test engine has no translation of
+    // them: answers no test reads (JIP's wraps replace them, never handing the call on).
+    for at in [0x0064_6d00, 0x0064_6360] {
+        if !e.is_registered(at) {
+            e.register(at, |_, _| f32::into_ret(-1.0));
+        }
+    }
+    // Group GX's wraps (G59 `00ee820a`, the `XInputSetState` thunk; H20 `00a239e0`, the mouse
+    // axis read), when the test engine has no translation of them: a marker answer (0x5a5a).
+    for at in [0x00ee_820a, 0x00a2_39e0] {
+        if !e.is_registered(at) {
+            e.register(at, |_, _| Ret {
+                eax: 0x5a5a,
+                ..Ret::default()
+            });
+        }
+    }
+    // InitRockItLauncher's wraps (`00525980`, `00525a90`), when the test engine has no translation of them: a marker answer (0x5a5a).
+    for at in [0x0052_5980, 0x0052_5a90] {
+        if !e.is_registered(at) {
+            e.register(at, |_, _| Ret {
+                eax: 0x5a5a,
+                ..Ret::default()
+            });
+        }
+    }
+    // The UI code wraps (`0072_8d60`, `007304b0`, `0075e650`, `0077a480`, `0077a5b0`, `00782620`), when the test engine has no translation of them: a marker answer (0x5a5a).
+    for at in [
+        0x0072_8d60,
+        0x0073_04b0,
+        0x0075_e650,
+        0x0077_a480,
+        0x0077_a5b0,
+        0x0078_2620,
+    ] {
+        if !e.is_registered(at) {
+            e.register(at, |_, _| Ret {
+                eax: 0x5a5a,
+                ..Ret::default()
+            });
+        }
+    }
+    // H01's wrap (`008d9300`, `HighProcess::GetCurrentMuzzleFlash`) when the test engine has no
+    // translation of it: the game's, the word at `+0x3D4`.
+    if !e.is_registered(0x008d_9300) {
+        e.register(0x008d_9300, |e, a| {
+            e.mem.u32(a[0].wrapping_add(0x3d4)).into_ret()
+        });
+    }
     // O1's wrap (`009b5a30`, `HitData::ReduceDamage`): a stand-in that leaves the hit as it is.
     if !e.is_registered(0x009b_5a30) {
         e.register(0x009b_5a30, |_, _| Ret::default());
+    }
+    // O5's wrap (`00867a40`, `GameTimeGlobals::Update`) when the test engine has no translation
+    // of it: a marker answer (0x5a5a).
+    if !e.is_registered(0x0086_7a40) {
+        e.register(0x0086_7a40, |_, _| Ret {
+            eax: 0x5a5a,
+            ..Ret::default()
+        });
+    }
+    // Group GW's G113 and D05 wraps (`00595560`, `004f4f90`, `005e3630`) when the test engine has
+    // no translation of them: marker answers (0x5a5b, 0x5a5c, 0x5a5d).
+    if !e.is_registered(0x0059_5560) {
+        e.register(0x0059_5560, |_, _| 0x5a5bu32.into_ret());
+    }
+    if !e.is_registered(0x004f_4f90) {
+        e.register(0x004f_4f90, |_, _| 0x5a5cu32.into_ret());
+    }
+    if !e.is_registered(0x005e_3630) {
+        e.register(0x005e_3630, |_, _| 0x5a5du32.into_ret());
+    }
+    // G108's wraps (`00af01e0`, `00af0290`, `BSWin32GameSound`'s frequency set and read): marker
+    // answers (0x5a5e, 7.0).
+    if !e.is_registered(0x00af_01e0) {
+        e.register(0x00af_01e0, |_, _| 0x5a5eu32.into_ret());
+    }
+    if !e.is_registered(0x00af_0290) {
+        e.register(0x00af_0290, |_, _| 7.0f32.into_ret());
     }
     // Group GF: `TESNPC`'s model vtable (0x0104A1A4), whose set slot `+0x18` JIP writes (G40),
     // the two skeleton settings (0x011D2718, 0x011D3E44), and `00601c30` (G39's wrap) when the
@@ -105,6 +202,17 @@ fn prepare(e: &mut Engine) {
     // female NPC (`+0x34` bit 0 of the NPC, the model being at `+0xDC`), else the male one's.
     e.map(0x0104_a000, 0x1000);
     e.map(0x011d_2000, 0x2000);
+    // `004f15a0` (G48's wrap) when the test engine has no translation of it: the exe's, the
+    // word's low byte stored at `+4` alone, the form answered.
+    if !e.is_registered(0x004f_15a0) {
+        e.register(0x004f_15a0, |e, a| {
+            e.mem.set_u8(a[0].wrapping_add(4), a[1] as u8);
+            Ret {
+                eax: a[0],
+                ..Ret::default()
+            }
+        });
+    }
     if !e.is_registered(0x0060_1c30) {
         e.register(0x0060_1c30, |e, a| {
             let female = e.mem.u8(a[0].wrapping_sub(0xdc).wrapping_add(0x34)) & 1 != 0;
@@ -113,6 +221,14 @@ fn prepare(e: &mut Engine) {
                 ..Ret::default()
             }
         });
+    }
+    // `0050f9e0` (H22's wrap), `004ab400` (G93's), `0078ac60` (O16's) and `008bca90` (O18's) when
+    // the test engine has no translation of them: stand-ins that answer "not a marker" and do
+    // nothing (JIP's wraps replace them).
+    for addr in [0x0050_f9e0, 0x004a_b400, 0x0078_ac60, 0x008b_ca90] {
+        if !e.is_registered(addr) {
+            e.register(addr, |_, _| Ret::default());
+        }
     }
 }
 

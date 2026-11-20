@@ -85,8 +85,12 @@ pub const AREA: Area = Area {
         VOICE_FLAGS.addr(),
         REF_SOUND_FLAGS.addr(),
         MAP_SOUND_FLAGS.addr(),
+        perks::DESTROY_ACTOR.addr(),
+        perks::TEAMMATE_OWN_ENTRIES.addr(),
+        perks::WEAPON_DAMAGE_PERKS.addr(),
+        perks::KILL_EFFECT_WEAPON.addr(),
     ],
-    fix_wraps: &[],
+    fix_wraps: &[perks::SET_PLAYER_TEAMMATE.addr()],
     install_fixes,
     jip_sites: &[ACTOR_FLAGS_LOADED.addr(), TEAMMATE_ESSENTIAL.addr()],
     jip_wraps: &[],
@@ -112,6 +116,7 @@ fn install_fixes(e: &mut Engine) {
     e.on_site(VOICE_FLAGS, voice_flags);
     e.on_site(REF_SOUND_FLAGS, voice_flag_added);
     e.on_site(MAP_SOUND_FLAGS, voice_flag_added);
+    perks::install_fixes(e);
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
@@ -261,3 +266,8 @@ fn voice_flag_added(_: &mut Engine, a: &[u32]) -> Option<u32> {
 #[cfg(test)]
 #[path = "ge_tests.rs"]
 mod tests;
+
+/// O18 (`uNPCPerks`): the NPC and player perk routines, the teammate wrap and the entry point
+/// seams (`ge_perks.rs`).
+#[path = "ge_perks.rs"]
+pub mod perks;

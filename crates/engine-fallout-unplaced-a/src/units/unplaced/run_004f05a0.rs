@@ -104,6 +104,13 @@ pub fn fn_004f05c0(e: &mut Engine, this: Ptr, value: u32) {
     }
 }
 
+/// lStewieAl's Tweaks' row S0181 (`NullAnimRemoveRecurseFix`: the jumps at `0x4F064E` and
+/// `0x4F06E4` aimed at the functions' ends): the two visitors return at once for a null object,
+/// which the exe would ask for its node (vtable +0xC).
+fn null_object_skipped(e: &Engine, object: u32) -> bool {
+    e.stewie(engine_core::extend::stewie::NULL_ANIM_REMOVE_RECURSE) && object == 0
+}
+
 /// The "no index" 16-bit value (`01096320`).
 const INVALID_INDEX: u32 = 0x0109_6320;
 
@@ -115,6 +122,9 @@ const INVALID_INDEX: u32 = 0x0109_6320;
 /// even for a null object, as the exe does) answers the node; each of its
 /// children (`0043b480` the count, `0043b4a0` the child) is visited.
 pub fn fn_004f0640(e: &mut Engine, this: Ptr, object: u32) {
+    if null_object_skipped(e, object) {
+        return;
+    }
     if object != 0 {
         let index = e.call(0x0043_b3b0, &args![this, object]).u16();
         if index != e.global::<u16>(INVALID_INDEX) {
@@ -176,6 +186,9 @@ pub fn fn_004f08c0(e: &mut Engine, this: Ptr) {
 /// `00a35fc0(index, 0)` for the hand-over, then the children of the node vtable slot +0xc
 /// answers (asked even for a null object, as the exe does), each visited recursively.
 pub fn fn_004f06d0(e: &mut Engine, this: Ptr, object: u32) {
+    if null_object_skipped(e, object) {
+        return;
+    }
     if object != 0 {
         let index = e.call(0x00a3_5910, &args![this, object]).u16();
         if index != e.global::<u16>(INVALID_INDEX) {
@@ -452,10 +465,18 @@ mod tests {
         );
     }
 
+    /// With lStewieAl's Tweaks' row S0181 off and on: ordinary objects, the same calls.
     #[test]
     fn node_visit_handles_found_objects_and_recurses_into_children() {
+        for on in [false, true] {
+            node_visit_row(on);
+        }
+    }
+
+    fn node_visit_row(on: bool) {
         const IS_NODE: u32 = 0x0300_0000;
         let mut e = Engine::new();
+        e.set_stewie(engine_core::extend::stewie::NULL_ANIM_REMOVE_RECURSE, on);
         e.map(INVALID_INDEX, 4);
         e.set_global(INVALID_INDEX, 0xffffu16);
         // Object 0x100 is a node (itself) with children 0x200 and 0x300;
@@ -532,9 +553,17 @@ mod n075_tests {
             .collect()
     }
 
+    /// With lStewieAl's Tweaks' row S0181 off and on: ordinary objects, the same calls.
     #[test]
     fn fn_004f06d0_visits_the_object_and_its_children() {
+        for on in [false, true] {
+            fn_004f06d0_visit_row(on);
+        }
+    }
+
+    fn fn_004f06d0_visit_row(on: bool) {
         let mut e = Engine::new();
+        e.set_stewie(engine_core::extend::stewie::NULL_ANIM_REMOVE_RECURSE, on);
         e.map(0x0109_6000, 0x1000);
         e.set_global(INVALID_INDEX, 0xffffu16);
         // Objects: vtable slot +0xc answers the node (the object itself for the parent,
@@ -612,5 +641,27 @@ mod n075_tests {
         e.call_log = Some(vec![]);
         e.call(0x004f_0a40, &args![0x9000u32]);
         assert!(calls(&e.call_log.take().unwrap(), 0x0048_5910).is_empty());
+    }
+
+    /// lStewieAl's Tweaks' row S0181: both controller walks handed a null object (an idle's add-on
+    /// already gone) ask it for its node and stop with the row off (the null page holds no
+    /// vtable); with it on they return at once, calling nothing.
+    #[test]
+    fn s0181_the_walks_return_for_a_null_object() {
+        for walk in [0x004f_0640u32, 0x004f_06d0] {
+            for on in [false, true] {
+                let mut e = Engine::new();
+                e.set_stewie(engine_core::extend::stewie::NULL_ANIM_REMOVE_RECURSE, on);
+                e.call_log = Some(vec![]);
+                let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    e.call(walk, &args![0x9000u32, 0u32]);
+                }));
+                e.call_stack.clear();
+                assert_eq!(run.is_ok(), on, "{walk:08x} row {on}");
+                if on {
+                    assert_eq!(e.call_log.take().unwrap(), vec![(walk, vec![0x9000, 0])]);
+                }
+            }
+        }
     }
 }

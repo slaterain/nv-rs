@@ -242,6 +242,33 @@ DLL's length for every frame; 5,908 of 8,692 frames are identical to the
 DLL at 53-bit x87 precision (5,660 at 24-bit), every other sample within one
 step (the totals of the audio table above).
 
+## Drawing on Vulkan (wgpu)
+
+The tiles are the game's only draws without shaders (no draw was skipped in any play log from
+2026-11-10 to 11-16 but the movie's, 15 tiles a frame). Until 2026-11-17 the wgpu backend skipped
+every draw without both shaders, so on Vulkan the movie played its sound over a black screen; real
+Direct3D 9 drew it. `crates/d3d9-wgpu/src/ffp.rs` now carries out what Direct3D 9's fixed-function
+pipeline does for such draws: the FVF's vertex layout (`SetFVF`), pre-transformed positions (pixel
+coordinates of the target, whatever the viewport; Direct3D 9's pixel centres), and the texture
+stages (`SetTextureStageState`: operations, arguments, result register), as shader bytecode the
+converter takes like the game's. The rules and their Microsoft documentation are in that file. The
+shaders are listed in the pipeline list (`f1` lines), so their pipelines are made before play from
+the second start on. The shipped list has the shaders and the pipeline of the recorded run
+(an X8R8G8B8 target without antialiasing, the play build's states); with other settings (another
+target format, antialiasing on the movie's target) the movie's pipeline is made on the first
+movie frame of the first start, and listed for the next. A draw with the game's vertex shader
+and a layout from `SetFVF` is drawn and printed once a code (`NV_D3D9 wgpu: a draw with a
+vertex shader and the vertex layout of FVF ...`). Untransformed vertices without a
+vertex shader (fixed-function transform and lighting), bump mapping, `PREMODULATE` and generated
+or projected texture coordinates are not provided: such a draw is skipped and its layout or stage
+printed once (`NV_D3D9 wgpu: a draw ...`), so a gap shows in a player's log.
+
+The exe's other calls of `SetFVF` (Ghidra, a scan of the decrypted code for calls through the
+device's slot 0x164): the movie's tile outlines (`00ec0720`, lines with the diffuse colour), whose
+only caller (`00ec0550`) is never called; the render-state cache's `SetFVF` (`00e90ec0`, slot 0x9c)
+and its reset to `D3DFVF_XYZ` when a declaration goes (`00e90f60`), which carry no draw of their
+own.
+
 ## Not done yet
 
 - Filtering in stored bytes (a custom sprite material) would remove the

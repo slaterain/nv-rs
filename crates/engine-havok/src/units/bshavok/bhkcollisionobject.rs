@@ -351,6 +351,22 @@ pub fn bhk_collision_object_hk_to_ni_transform(e: &mut Engine, this: Ptr<BhkColl
     });
 }
 
+/// The fixed-body test at `0xC65B5B` (motion type 5, or no Havok object: `GethkWorld`, `00c87a40`,
+/// answering non-zero ends it). JIP LN NVSE's G32 (a fix, the row `NV_JIP_GAME_PATCHES`;
+/// `SafeWrite32(0xC65B47, 0x38F)` and `SAFE_WRITE_BUF(0xC65B5B, ..)`) replaces it: no Havok object
+/// ends it, and a fixed body goes on only while the collision object's bit 6 (`+0xC`) asks for
+/// the move. The seam is asked with the collision object and the Havok object, and its answer's
+/// low byte is whether it ends. With the word's `FIXES` bit clear: one load, the exe's test.
+#[inline]
+fn fixed_body_stops(e: &mut Engine, this: u32, body: u32, object: u32) -> bool {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        if let Some(answer) = e.site(0x00c6_5b5b, &[this, object]) {
+            return answer as u8 != 0;
+        }
+    }
+    e.call(GET_HK_WORLD, &args![body]).u32() != 0
+}
+
 // Translated from 00c65b00 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 00c65b00 - the /GS cookie check is not modeled.
 /// `bhkCollisionObject::NitohkTransform` (Xbox PDB): moves the Havok body to the scene-graph
@@ -387,7 +403,7 @@ pub fn bhk_collision_object_ni_to_hk_transform(e: &mut Engine, this: Ptr<BhkColl
     } else {
         5
     };
-    if motion_type == 5 && e.call(GET_HK_WORLD, &args![body]).u32() != 0 {
+    if motion_type == 5 && fixed_body_stops(e, this.addr(), body, object) {
         return;
     }
     if e.mem.u32(body + 8) == 0 {
@@ -1000,6 +1016,63 @@ mod tests {
 
     fn moved_rotation(e: &Engine) -> [f32; 4] {
         std::array::from_fn(|lane| e.mem.f32(MOVED_ROTATION + 4 * lane as u32))
+    }
+
+    /// JIP LN NVSE's G32 seam at `0xC65B5B`: with the word 0 or only `INSTALLED` not asked (a
+    /// fixed body in a world stays: `00c87a40` asked); with `FIXES` asked with the collision
+    /// object and the Havok object (0 for none), its answer's low byte ending it (no world asked;
+    /// `0x100` goes on and moves the body), no answer the exe's test. Not asked for other motion
+    /// types.
+    #[test]
+    fn g32_seam_decides_the_fixed_body_test() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        thread_local! {
+            static ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+            static ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+        }
+        fn handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+            ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+            ANSWER.with(std::cell::Cell::get)
+        }
+        let run = |word: u32, answer: Option<u32>, motion: u8, object: bool| {
+            let mut e = logged_engine();
+            let scene = scene(&mut e);
+            register_ni_to_hk_doubles(&mut e);
+            e.register(GET_HK_WORLD, |_, _| 1u32.into_ret());
+            e.on_site(SiteSlot::new(Owner::Jip, 0x00c6_5b5b), handler);
+            e.set_jip_patches(word);
+            e.mem.set_u8(scene.hk + 0xe8, motion);
+            e.mem.set_u16(scene.this + 0xc, 0x40);
+            if !object {
+                e.mem.set_u32(scene.body + 8, 0);
+            }
+            ASKED.with(|s| s.borrow_mut().clear());
+            ANSWER.with(|a| a.set(answer));
+            clear_log(&mut e);
+            e.call(0x00c6_5b00, &args![scene.this]);
+            (
+                calls_to(&e, GET_HK_WORLD).len(),
+                calls_to(&e, QUATERNION_FROM_ROTATION).len(),
+                ASKED.with(|s| s.take()),
+                scene.this,
+                scene.hk,
+            )
+        };
+        for word in [0, jip_patches::INSTALLED] {
+            let (world, moved, asked, _, _) = run(word, Some(0), 5, true);
+            assert_eq!((world, moved, asked.len()), (1, 0, 0), "{word:08x}");
+        }
+        let (world, moved, asked, this, hk) = run(jip_patches::FIXES, Some(0x100), 5, true);
+        assert_eq!((world, moved), (0, 1), "0x100: goes on");
+        assert_eq!(asked, vec![vec![this, hk]]);
+        let (world, moved, _, _, _) = run(jip_patches::FIXES, Some(1), 5, true);
+        assert_eq!((world, moved), (0, 0), "ends");
+        let (_, _, asked, this, _) = run(jip_patches::FIXES, Some(1), 2, false);
+        assert_eq!(asked, vec![vec![this, 0]], "no Havok object: asked with 0");
+        let (world, moved, _, _, _) = run(jip_patches::FIXES, None, 5, true);
+        assert_eq!((world, moved), (1, 0), "no answer: the exe's test");
+        let (world, _, asked, _, _) = run(jip_patches::FIXES, Some(1), 2, true);
+        assert_eq!((world, asked.len()), (0, 0), "another motion type");
     }
 
     #[test]

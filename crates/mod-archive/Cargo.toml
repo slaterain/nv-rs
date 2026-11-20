@@ -1,0 +1,22 @@
+[package]
+name = "mod-archive"
+version = "0.1.0"
+description = "Lists and unpacks the archives mods come in (zip, and 7z with solid blocks) on every system, for the FOMOD installer: plain-worded errors, and nothing written outside the folder it is given"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# Pure Rust readers (zip: MIT; sevenz-rust2: Apache-2.0). Reading only: zip's Deflate through
+# flate2 on zlib-rs (already in the lock) and Deflate64; 7z's LZMA, LZMA2, BCJ/BCJ2 and PPMd.
+# Left out: encryption, zstd (C code) and BZip2 (rare in mods, and its reader has a licence of its
+# own).
+zip = { version = "9.7", default-features = false, features = ["deflate-flate2-zlib-rs", "deflate64"] }
+sevenz-rust2 = { version = "0.25", default-features = false, features = ["ppmd"] }
+# Names in one Unicode normal form (NFC), so a name stored one way finds the file asked for the
+# other way ((MIT OR Apache-2.0) AND Unicode-3.0, the permissive licence of its Unicode tables).
+unicode-normalization = "0.1"
+
+[dev-dependencies]
+# The tests make their own 7z archives (the encoder; only for the tests).
+sevenz-rust2 = { version = "0.25", default-features = false, features = ["ppmd", "compress"] }

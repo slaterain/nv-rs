@@ -418,6 +418,16 @@ fn get_float(e: &mut Engine, tile: u32, id: u32) -> f32 {
     e.call(GET_FLOAT_TRAIT, &args![tile, id]).f32()
 }
 
+/// The menu tile's `max_menu_width` trait (`id`), read at `site` (`0x7A9AEE`: the room for the text;
+/// `0x7A9C45`: the menu's widest). JIP's seam there (words: the tile, the trait): answered, its
+/// answer (an `f32`'s bits) in place of the trait's value, which is then not read.
+fn max_menu_width(e: &mut Engine, site: u32, tile: u32, id: u32) -> f32 {
+    match e.site(site, &[tile, id]) {
+        Some(bits) => f32::from_bits(bits),
+        None => get_float(e, tile, id),
+    }
+}
+
 fn set_float(e: &mut Engine, tile: u32, id: u32, value: f32, flag: bool) {
     e.call(SET_FLOAT_TRAIT, &args![tile, id, value, flag]);
 }
@@ -1141,7 +1151,7 @@ pub fn message_menu_load_next_message(e: &mut Engine, this: Ptr<MessageMenu>) {
         } else {
             let id = e.call(TEXT_TO_TRAIT, &args![MAX_MENU_WIDTH_NAME]).u32();
             let menu_tile = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, this));
-            get_float(e, menu_tile, id)
+            max_menu_width(e, 0x007a_9aee, menu_tile, id)
         };
         let mut room = (room as f64 - margin_twice) as f32;
         let icon_tile = tile_of(e, menu_object(e), 2);
@@ -1179,7 +1189,7 @@ pub fn message_menu_load_next_message(e: &mut Engine, this: Ptr<MessageMenu>) {
             let menu_width = e.call(FLOAT_MAX_OF, &args![wider, list_width]).f32();
             let id = e.call(TEXT_TO_TRAIT, &args![MAX_MENU_WIDTH_NAME]).u32();
             let menu_tile = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, this));
-            let maximum = get_float(e, menu_tile, id);
+            let maximum = max_menu_width(e, 0x007a_9c45, menu_tile, id);
             let menu_width = e.call(FLOAT_MIN_OF, &args![menu_width, maximum]).f32();
             let id = e.call(TEXT_TO_TRAIT, &args![MIN_MENU_WIDTH_NAME]).u32();
             let menu_tile = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, this));
@@ -3024,6 +3034,98 @@ mod tests {
         let ints = calls(&e, SET_TRAIT_FROM_INT);
         assert!(ints.contains(&vec![0x6200, 0xfb7, 1]));
         assert_eq!(e.global::<u8>(WARNING_STATE_FLAG_0119F348), 1);
+    }
+
+    thread_local! {
+        /// The answers of the two width seams' stand-ins (room, widest) and what each was given.
+        static WIDTH_ANSWERS: std::cell::Cell<(Option<f32>, Option<f32>)> = const { std::cell::Cell::new((None, None)) };
+        static WIDTH_SEEN: std::cell::RefCell<Vec<(u32, Vec<u32>)>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// One message laid out (`load_world`, no title, no buttons, no icon: the box's content is
+    /// the message's measured width plus the two margins of 10) whose text measures `text_width`,
+    /// with the width seams answering `answers` (room, widest; `None`: no handler at all).
+    /// Returns the message tile's room (`0xfba`), the box's width (the outer tile's `0xfb1`) and
+    /// how often the menu file's `max_menu_width` was read.
+    fn lay_out_with_widths(text_width: f32, answers: Option<(f32, f32)>) -> (f32, f32, usize) {
+        fn at_room(_: &mut Engine, w: &[u32]) -> Option<u32> {
+            WIDTH_SEEN.with(|s| s.borrow_mut().push((0x007a_9aee, w.to_vec())));
+            WIDTH_ANSWERS.with(|a| a.get().0).map(f32::to_bits)
+        }
+        fn at_widest(_: &mut Engine, w: &[u32]) -> Option<u32> {
+            WIDTH_SEEN.with(|s| s.borrow_mut().push((0x007a_9c45, w.to_vec())));
+            WIDTH_ANSWERS.with(|a| a.get().1).map(f32::to_bits)
+        }
+        WIDTH_SEEN.with(|s| s.borrow_mut().clear());
+        let (mut e, m, _) = load_world(false);
+        e.register_double(CALCULATE_STRING_DIMENSIONS, move |e, a| {
+            e.mem.set_f32(a[1], text_width);
+            e.mem.set_f32(a[1] + 4, 20.0);
+            e.mem.set_f32(a[1] + 8, 3.0);
+            ret(a[1])
+        });
+        if let Some((room, widest)) = answers {
+            WIDTH_ANSWERS.with(|a| a.set((Some(room), Some(widest))));
+            e.on_site_for_test(0x007a_9aee, at_room);
+            e.on_site_for_test(0x007a_9c45, at_widest);
+        }
+        e.call(0x007a_92e0, &args![m]);
+        let set = calls(&e, SET_FLOAT_TRAIT);
+        let one = |tile: u32, id: u32| {
+            let found: Vec<f32> = set
+                .iter()
+                .filter(|w| w[0] == tile && w[1] == id)
+                .map(|w| f32::from_bits(w[2]))
+                .collect();
+            assert_eq!(found.len(), 1, "{tile:x} {id:x} set once: {found:?}");
+            found[0]
+        };
+        let reads = calls(&e, GET_FLOAT_TRAIT)
+            .iter()
+            .filter(|w| w[1] == MAX_MENU_WIDTH_NAME)
+            .count();
+        (one(0x6400, TRAIT_WIDTH), one(0x6100, TRAIT_0FB1), reads)
+    }
+
+    /// JIP's seams at the two `max_menu_width` reads (`0x7A9AEE`: the room for the text;
+    /// `0x7A9C45`: the box's widest; words: the menu tile, the trait). Not answered: the menu
+    /// file's 500 is read at each (room 480, a box of 900 capped at 500). Answered: the answer
+    /// stands for the trait, which is not read: room 1180 with 1200, a box of 900 laid out 900, one
+    /// of 1500 capped at 1200; the two seams' answers each reach only their own place.
+    #[test]
+    fn load_next_message_max_width_seams() {
+        assert_eq!(lay_out_with_widths(200.0, None), (480.0, 220.0, 2));
+        assert_eq!(
+            lay_out_with_widths(880.0, None),
+            (480.0, 500.0, 2),
+            "capped at 500"
+        );
+        assert_eq!(
+            lay_out_with_widths(200.0, Some((1200.0, 1200.0))),
+            (1180.0, 220.0, 0),
+            "answered: not read"
+        );
+        assert_eq!(
+            WIDTH_SEEN.with(|s| s.borrow().clone()),
+            vec![
+                (0x007a_9aee, vec![0x6000, MAX_MENU_WIDTH_NAME]),
+                (0x007a_9c45, vec![0x6000, MAX_MENU_WIDTH_NAME]),
+            ]
+        );
+        assert_eq!(
+            lay_out_with_widths(880.0, Some((1200.0, 1200.0))),
+            (1180.0, 900.0, 0)
+        );
+        assert_eq!(
+            lay_out_with_widths(1480.0, Some((1200.0, 1200.0))),
+            (1180.0, 1200.0, 0),
+            "capped at 1200"
+        );
+        assert_eq!(
+            lay_out_with_widths(1480.0, Some((1200.0, 1100.0))),
+            (1180.0, 1100.0, 0),
+            "each seam's answer at its own place"
+        );
     }
 
     /// 007a9648..007a9654: the list box is emptied (slot 0x1c) on every message, before its

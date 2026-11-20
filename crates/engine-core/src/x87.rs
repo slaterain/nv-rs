@@ -111,6 +111,23 @@ fn nan_result_slow(a: f64, b: f64) -> Option<f64> {
     Some(f64::from_bits(chosen | F64_QUIET))
 }
 
+/// The real indefinite as a double: the NaN an invalid operation (`inf - inf`, `0 * inf`, `0 / 0`,
+/// the root of a negative number) gives on x86, x87 and SSE alike: negative, quiet, no payload.
+pub const X87_INDEFINITE64: u64 = 0xfff8_0000_0000_0000;
+
+/// `s`, the `f64` result of an operation whose operands were not NaNs, with the NaN of an
+/// invalid operation made the x86's indefinite ([`X87_INDEFINITE64`]). On x86 the hardware
+/// already gives it (this is `s`); an ARM processor gives a positive NaN (0x7ff8...), whose sign
+/// a translation could store into a save or compare.
+#[inline(always)]
+fn invalid_is_indefinite(s: f64) -> f64 {
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    if s.is_nan() {
+        return f64::from_bits(X87_INDEFINITE64);
+    }
+    s
+}
+
 // ---- The control word ------------------------------------------------------
 
 /// The control word every game thread starts with: all exceptions masked,
@@ -447,7 +464,7 @@ pub fn x87_add(a: f64, b: f64) -> f64 {
     if let Some(nan) = nan_result(a, b) {
         return nan;
     }
-    let s = a + b;
+    let s = invalid_is_indefinite(a + b);
     match single_precision() {
         None => s,
         Some(rounding) => single_sum(a, b, s, rounding),
@@ -461,7 +478,7 @@ pub fn x87_sub(a: f64, b: f64) -> f64 {
     if let Some(nan) = nan_result(a, b) {
         return nan;
     }
-    let s = a - b;
+    let s = invalid_is_indefinite(a - b);
     match single_precision() {
         None => s,
         Some(rounding) => single_sum(a, -b, s, rounding),
@@ -478,7 +495,7 @@ pub fn x87_mul(a: f64, b: f64) -> f64 {
     if let Some(nan) = nan_result(a, b) {
         return nan;
     }
-    let s = a * b;
+    let s = invalid_is_indefinite(a * b);
     match single_precision() {
         // A zero product of nonzero operands underflowed the f64 (outside
         // the model); every other zero is exact.
@@ -515,7 +532,7 @@ pub fn x87_div(a: f64, b: f64) -> f64 {
     if let Some(nan) = nan_result(a, b) {
         return nan;
     }
-    let s = a / b;
+    let s = invalid_is_indefinite(a / b);
     match single_precision() {
         Some(rounding) if s != 0.0 && s.is_finite() => {
             if let Some(r) = single_fast(s, rounding) {
@@ -538,13 +555,13 @@ pub fn x87_div(a: f64, b: f64) -> f64 {
 
 /// x87 `FSQRT`: the square root, rounded to the precision of the control word.
 /// A NaN comes back quieted (its payload kept); a negative number other than
-/// `-0` gives the default NaN, as `f64::sqrt` does.
+/// `-0` gives the indefinite ([`X87_INDEFINITE64`]), as on x86.
 #[inline]
 pub fn x87_sqrt(value: f64) -> f64 {
     if value.is_nan() {
         return f64::from_bits(value.to_bits() | F64_QUIET);
     }
-    let s = value.sqrt();
+    let s = invalid_is_indefinite(value.sqrt());
     match single_precision() {
         Some(rounding) if s != 0.0 && s.is_finite() => {
             if let Some(r) = single_fast(s, rounding) {
@@ -756,7 +773,8 @@ pub fn fistp_chop64(value: f64) -> i64 {
 }
 
 /// The `CMPEQSS`/`RSQRTSS` pair of the Havok normalizer: the hardware
-/// estimate of `1 / sqrt(x)` on x86, exact elsewhere.
+/// estimate of `1 / sqrt(x)` on x86; elsewhere the model of the measured processor's
+/// ([`crate::estimate`]).
 #[cfg(target_arch = "x86_64")]
 pub fn rsqrt_estimate(x: f32) -> f32 {
     use std::arch::x86_64::{_mm_cvtss_f32, _mm_rsqrt_ss, _mm_set_ss};
@@ -766,7 +784,7 @@ pub fn rsqrt_estimate(x: f32) -> f32 {
 
 #[cfg(not(target_arch = "x86_64"))]
 pub fn rsqrt_estimate(x: f32) -> f32 {
-    1.0 / x.sqrt()
+    crate::estimate::rsqrt(x)
 }
 
 // ---- Transcendental and other non-arithmetic instructions ------------------
@@ -785,8 +803,9 @@ pub fn rsqrt_estimate(x: f32) -> f32 {
 // not apply to these instructions (Intel SDM vol. 1, 8.1.5.2); the rounding
 // mode does (`FRNDINT`, and the stores).
 //
-// Elsewhere (not x86_64) a portable fallback computes them with Rust's `f64`
-// functions: close, but not bit-exact (marked in `soft`).
+// Elsewhere (not x86_64) the software x87 (`x87/soft.rs`) computes them: its
+// transcendentals within a unit in the last place of a double of the FPU's, with the
+// FPU's special cases (out of range, NaNs, the indefinite).
 
 /// An x87 register's value as the FPU holds it: the 80-bit extended format as
 /// `FSTP tbyte` stores it (little-endian: the 64-bit significand with its
@@ -975,8 +994,8 @@ pub fn x87_fistp64_chop(x: X87Ext) -> i64 {
 // game thread's control word ([`control_word`]), with the extended exponent
 // range; the NaN choice is the x87's. On x86_64 the instruction runs on the
 // host's FPU like the transcendental helpers above (encoded as bytes, so the
-// operand order is the one written here); elsewhere the portable fallback
-// computes in `f64` (not bit-exact).
+// operand order is the one written here); elsewhere the software x87
+// (`x87/soft.rs`) computes them exactly, bit for bit with the FPU.
 
 /// `FADD`: `a + b`.
 #[inline]
@@ -1091,13 +1110,43 @@ pub fn x87_fld_constant(constant: X87Constant) -> X87Ext {
     imp::fld_constant(constant)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", not(feature = "soft-x87")))]
 use hw as imp;
-#[cfg(not(target_arch = "x86_64"))]
+#[cfg(any(not(target_arch = "x86_64"), feature = "soft-x87"))]
 use soft as imp;
+
+/// Whether the extended-register helpers are the software ones ([`soft`]): not on an x86-64
+/// host (unless built with the `soft-x87` feature, for testing). Tests whose expected values are
+/// the FPU's to the last bit compare within a stated tolerance then.
+pub const SOFT_X87: bool = cfg!(any(not(target_arch = "x86_64"), feature = "soft-x87"));
+
+/// How far the software transcendentals (`FSIN`, `F2XM1`, `FYL2X` and the rest, [`soft`]) may
+/// leave a double the CRT's maths stores from the FPU's: units in its last place.
+#[cfg(test)]
+pub(crate) const SOFT_TRANSCENDENTAL_ULPS: u64 = 1;
+
+/// Test support: whether the double bits `got` are the FPU's recorded `want`. With the hardware
+/// helpers, bit for bit. With the software ones ([`SOFT_X87`]) the same, except that two finite
+/// non-zero doubles of the same sign may be up to `ulps` units in the last place apart (zeros,
+/// infinities and NaNs, signs and payloads included, still exactly).
+#[cfg(test)]
+pub(crate) fn fpu_bits_match(got: u64, want: u64, ulps: u64) -> bool {
+    if got == want {
+        return true;
+    }
+    let (g, w) = (f64::from_bits(got), f64::from_bits(want));
+    SOFT_X87
+        && g.is_finite()
+        && w.is_finite()
+        && g != 0.0
+        && w != 0.0
+        && (got >> 63) == (want >> 63)
+        && (got as i64).wrapping_sub(want as i64).unsigned_abs() <= ulps
+}
 
 /// The instructions on the host's x87 (x86_64).
 #[cfg(target_arch = "x86_64")]
+#[cfg_attr(feature = "soft-x87", allow(dead_code))]
 mod hw {
     use super::X87Ext;
 
@@ -1540,227 +1589,14 @@ mod hw {
     }
 }
 
-/// Portable fallback (not x86_64): the extended format converted in software
-/// and the instructions computed with Rust's `f64` functions. NOT bit-exact
-/// with the x87: the results are the `f64` library's, a store to a float
-/// rounds twice, the rounding mode of the control word is honoured only by
-/// `FRNDINT`, and the status word reports every `FPREM`/`FPREM1` complete. It
-/// is compiled (and its conversions tested) on x86_64 too.
-#[cfg_attr(target_arch = "x86_64", allow(dead_code))]
-mod soft {
-    use super::X87Ext;
-
-    const EXT_BIAS: i32 = 16383;
-    const INTEGER_BIT: u64 = 1 << 63;
-
-    pub fn load64(value: f64) -> X87Ext {
-        let bits = value.to_bits();
-        let sign = ((bits >> 63) as u16) << 15;
-        let exponent = ((bits >> 52) & 0x7ff) as i32;
-        let fraction = bits & 0x000f_ffff_ffff_ffff;
-        match exponent {
-            0 if fraction == 0 => X87Ext::from_parts(sign, 0),
-            0 => {
-                // A double denormal is a normal extended value.
-                let shift = fraction.leading_zeros();
-                let e = -1022 - (shift as i32 - 11) + EXT_BIAS;
-                X87Ext::from_parts(sign | e as u16, fraction << shift)
-            }
-            0x7ff if fraction == 0 => X87Ext::from_parts(sign | 0x7fff, INTEGER_BIT),
-            // A NaN, quieted (bit 62 of the significand), payload kept.
-            0x7ff => X87Ext::from_parts(sign | 0x7fff, INTEGER_BIT | (1 << 62) | (fraction << 11)),
-            _ => X87Ext::from_parts(
-                sign | (exponent - 1023 + EXT_BIAS) as u16,
-                INTEGER_BIT | (fraction << 11),
-            ),
-        }
-    }
-
-    pub fn load32(bits: u32) -> X87Ext {
-        // Widened exactly with the payload kept, then quieted by `load64`.
-        load64(super::x87_m32(bits))
-    }
-
-    /// `v * 2^k` for any `k` the conversion needs, through two in-range
-    /// factors applied one after the other.
-    fn scaled(v: f64, k: i32) -> f64 {
-        let half = k / 2;
-        v * 2f64.powi(half) * 2f64.powi(k - half)
-    }
-
-    pub fn store64(x: X87Ext) -> f64 {
-        let sign_exponent = x.sign_exponent();
-        let negative = sign_exponent & 0x8000 != 0;
-        let exponent = i32::from(sign_exponent & 0x7fff);
-        let significand = x.significand();
-        let magnitude = if exponent == 0x7fff {
-            if significand << 1 == 0 {
-                f64::INFINITY
-            } else {
-                f64::from_bits(0x7ff0_0000_0000_0000 | ((significand << 1) >> 12) | (1 << 51))
-            }
-        } else {
-            // Rounded to 53 bits by the integer conversion (to nearest), then
-            // scaled (exact unless the result is a double denormal).
-            scaled(significand as f64, exponent - EXT_BIAS - 63)
-        };
-        if negative {
-            -magnitude
-        } else {
-            magnitude
-        }
-    }
-
-    pub fn store32(x: X87Ext) -> u32 {
-        super::x87_store32(store64(x))
-    }
-
-    fn unary(x: X87Ext, op: impl Fn(f64) -> f64) -> X87Ext {
-        load64(op(store64(x)))
-    }
-
-    pub fn fsin(x: X87Ext) -> X87Ext {
-        unary(x, f64::sin)
-    }
-
-    pub fn fcos(x: X87Ext) -> X87Ext {
-        unary(x, f64::cos)
-    }
-
-    pub fn fsincos(x: X87Ext) -> (X87Ext, X87Ext) {
-        // Out of range (finite, |x| >= 2^63): the stores the FPU block makes (its
-        // `settle_unpushed`).
-        if (0x3fff + 63..0x7fff).contains(&(x.sign_exponent() & 0x7fff)) {
-            return (load32(0xffc0_0000), x);
-        }
-        (fsin(x), fcos(x))
-    }
-
-    pub fn fsincos32(bits: u32) -> (u32, u32) {
-        let (sine, cosine) = fsincos(load32(bits));
-        (store32(sine), store32(cosine))
-    }
-
-    pub fn fptan(x: X87Ext) -> X87Ext {
-        unary(x, f64::tan)
-    }
-
-    pub fn fpatan(y: X87Ext, x: X87Ext) -> X87Ext {
-        load64(store64(y).atan2(store64(x)))
-    }
-
-    pub fn f2xm1(x: X87Ext) -> X87Ext {
-        unary(x, |v| (v * std::f64::consts::LN_2).exp_m1())
-    }
-
-    pub fn fyl2x(y: X87Ext, x: X87Ext) -> X87Ext {
-        load64(store64(y) * store64(x).log2())
-    }
-
-    pub fn fyl2xp1(y: X87Ext, x: X87Ext) -> X87Ext {
-        load64(store64(y) * (store64(x).ln_1p() / std::f64::consts::LN_2))
-    }
-
-    pub fn fadd(a: X87Ext, b: X87Ext) -> X87Ext {
-        load64(store64(a) + store64(b))
-    }
-
-    pub fn fsub(a: X87Ext, b: X87Ext) -> X87Ext {
-        load64(store64(a) - store64(b))
-    }
-
-    pub fn fmul(a: X87Ext, b: X87Ext) -> X87Ext {
-        load64(store64(a) * store64(b))
-    }
-
-    pub fn fdiv(a: X87Ext, b: X87Ext) -> X87Ext {
-        load64(store64(a) / store64(b))
-    }
-
-    pub fn fsqrt(a: X87Ext) -> X87Ext {
-        unary(a, f64::sqrt)
-    }
-
-    pub fn fcom(a: X87Ext, b: X87Ext) -> u16 {
-        let (a, b) = (store64(a), store64(b));
-        match a.partial_cmp(&b) {
-            Some(std::cmp::Ordering::Greater) => 0,
-            Some(std::cmp::Ordering::Less) => super::X87_STATUS_C0,
-            Some(std::cmp::Ordering::Equal) => super::X87_STATUS_C3,
-            None => super::X87_STATUS_C0 | super::X87_STATUS_C2 | super::X87_STATUS_C3,
-        }
-    }
-
-    pub fn fld_constant(constant: super::X87Constant) -> X87Ext {
-        use super::X87Constant::*;
-        load64(match constant {
-            Log2E => std::f64::consts::LOG2_E,
-            Log2Ten => std::f64::consts::LOG2_10,
-            Log10Two => std::f64::consts::LOG10_2,
-            LnTwo => std::f64::consts::LN_2,
-            Pi => std::f64::consts::PI,
-        })
-    }
-
-    pub fn fscale(x: X87Ext, scale: X87Ext) -> X87Ext {
-        let s = store64(scale).trunc();
-        load64(store64(x) * 2f64.powf(s))
-    }
-
-    pub fn frndint(x: X87Ext) -> X87Ext {
-        let v = store64(x);
-        let rounded = match super::control_word() & super::ROUNDING_CONTROL {
-            super::ROUND_DOWN => v.floor(),
-            super::ROUND_UP => v.ceil(),
-            super::ROUND_NEAREST => {
-                // Ties to even.
-                let mut r = v.round();
-                if (v - v.trunc()).abs() == 0.5 && r % 2.0 != 0.0 {
-                    r -= v.signum();
-                }
-                r
-            }
-            _ => v.trunc(),
-        };
-        load64(rounded)
-    }
-
-    pub fn fprem(x: X87Ext, y: X87Ext) -> (X87Ext, u16) {
-        (load64(store64(x) % store64(y)), 0)
-    }
-
-    pub fn fprem1(x: X87Ext, y: X87Ext) -> (X87Ext, u16) {
-        let (a, b) = (store64(x), store64(y));
-        let q = a / b;
-        let mut n = q.round();
-        if (q - q.trunc()).abs() == 0.5 && n % 2.0 != 0.0 {
-            n -= q.signum();
-        }
-        (load64(a - n * b), 0)
-    }
-
-    pub fn fistp64(x: X87Ext, word: u16) -> i64 {
-        let v = store64(x);
-        let r = match word & super::ROUNDING_CONTROL {
-            super::ROUND_DOWN => v.floor(),
-            super::ROUND_UP => v.ceil(),
-            super::ROUND_NEAREST => {
-                let mut r = v.round();
-                if (v - v.trunc()).abs() == 0.5 && r % 2.0 != 0.0 {
-                    r -= v.signum();
-                }
-                r
-            }
-            _ => v.trunc(),
-        };
-        // -2^63 is the only value of 2^63's magnitude in range.
-        if r.is_nan() || r >= 2f64.powi(63) || r < -(2f64.powi(63)) {
-            i64::MIN
-        } else {
-            r as i64
-        }
-    }
-}
+/// The instructions in software (`x87/soft.rs`): the hosts without an x87, and on x86-64 with the
+/// `soft-x87` feature so that its tests can compare it with this PC's FPU. Exact except for the
+/// transcendentals' last bits (its module comment).
+#[cfg_attr(
+    all(target_arch = "x86_64", not(feature = "soft-x87")),
+    allow(dead_code)
+)]
+mod soft;
 
 #[cfg(test)]
 mod tests {
@@ -2319,10 +2155,6 @@ mod tests {
     ];
 
     #[test]
-    #[cfg_attr(
-        target_arch = "aarch64",
-        ignore = "arm64: the software x87 path is not yet bit-exact with the FPU's recorded results (Linux and macOS track, Apple work after Linux)"
-    )]
     fn rounding_matches_the_cpu() {
         for &(word, op, a, b, want) in CPU {
             let f = f64::from_bits;
@@ -2487,10 +2319,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(
-        target_arch = "aarch64",
-        ignore = "arm64: the software x87 path is not yet bit-exact with the FPU's recorded results (Linux and macOS track, Apple work after Linux)"
-    )]
     fn transcendental_results_are_the_fpus() {
         assert_eq!(x87_fsin(ext(0.0)).store64(), 0.0);
         assert_eq!(x87_fcos(ext(0.0)).store64(), 1.0);
@@ -2546,10 +2374,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(
-        target_arch = "aarch64",
-        ignore = "arm64: the software x87 path is not yet bit-exact with the FPU's recorded results (Linux and macOS track, Apple work after Linux)"
-    )]
     fn remainders_report_the_status_word() {
         let (r, status) = x87_fprem(ext(7.0), ext(3.0));
         assert_eq!(r.store64(), 1.0);
@@ -2566,10 +2390,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(
-        target_arch = "aarch64",
-        ignore = "arm64: the software x87 path is not yet bit-exact with the FPU's recorded results (Linux and macOS track, Apple work after Linux)"
-    )]
     fn the_control_word_decides_rounding_but_not_precision() {
         // FRNDINT and the stores follow the rounding mode.
         let rounded = |word: u16, v: f64| with_word(word, || x87_frndint(ext(v)).store64());
@@ -2684,10 +2504,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(
-        target_arch = "aarch64",
-        ignore = "arm64: the software x87 path is not yet bit-exact with the FPU's recorded results (Linux and macOS track, Apple work after Linux)"
-    )]
     fn register_arithmetic_rounds_once_to_the_control_words_precision() {
         // 53-bit precision: the double result, kept in a register.
         let third = with_word(0x027f, || x87_fdiv(ext(1.0), ext(3.0)));
@@ -2764,10 +2580,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(
-        target_arch = "aarch64",
-        ignore = "arm64: the software x87 path is not yet bit-exact with the FPU's recorded results (Linux and macOS track, Apple work after Linux)"
-    )]
     fn fchs_fabs_and_the_loaded_constants() {
         assert_eq!(x87_fchs(ext(1.5)).store64(), -1.5);
         assert_eq!(x87_fabs(ext(-2.0)).store64(), 2.0);
@@ -2863,10 +2675,6 @@ mod tests {
     /// every zero, denormal, infinite and NaN sum is the FPU's, in each rounding mode at 24 bits
     /// and to nearest at 53.
     #[test]
-    #[cfg_attr(
-        target_arch = "aarch64",
-        ignore = "arm64: the software x87 path is not yet bit-exact with the FPU's recorded results (Linux and macOS track, Apple work after Linux)"
-    )]
     fn zero_and_special_sums_are_the_exact_paths_and_the_fpus() {
         for rounding in [ROUND_NEAREST, ROUND_DOWN, ROUND_UP, ROUNDING_CONTROL] {
             for (a, b) in [
@@ -2916,10 +2724,6 @@ mod tests {
     /// random, special, denormal and NaN operands, in each rounding mode at 24 bits and to
     /// nearest at 53; and its exact path is reached and agrees.
     #[test]
-    #[cfg_attr(
-        target_arch = "aarch64",
-        ignore = "arm64: the software x87 path is not yet bit-exact with the FPU's recorded results (Linux and macOS track, Apple work after Linux)"
-    )]
     fn products_are_the_fpus() {
         let values = operands(3000, 0x2545_f491_4f6c_dd1d);
         let mut compared = 0;
@@ -3020,10 +2824,6 @@ mod tests {
     /// status word `FPREM` reports, and after an operand out of range (the sine and cosine's
     /// stores, the tangent's stop) the next helpers work as before.
     #[test]
-    #[cfg_attr(
-        target_arch = "aarch64",
-        ignore = "arm64: the software x87 path is not yet bit-exact with the FPU's recorded results (Linux and macOS track, Apple work after Linux)"
-    )]
     fn the_helpers_leave_the_fpu_as_they_found_it() {
         let fresh = x87_fprem(ext(7.0), ext(3.0));
         for _ in 0..12 {

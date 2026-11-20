@@ -3578,6 +3578,12 @@ fn process_of(e: &Engine, this: Ptr<Actor>) -> Ptr {
 /// `0x4d` with no automatic shot delay it is blended out.
 /// `group_animation` is the animation `GetAnimGroup` gets (null for the
 /// actor's own).
+///
+/// With no sequence in slot 4 the exe still asks about the looping group and,
+/// for a group of type `0x4a` or `0x4d` with no shot delay, reads the null
+/// sequence's state. lStewieAl's Tweaks' row S0150
+/// (`patchFixMissingAnimNullCheck`: the jumps at `0x89520A` and `0x895350`
+/// aimed past the block) skips the check for no sequence.
 fn blend_out_mismatched_attack(
     e: &mut Engine,
     this: Ptr<Actor>,
@@ -3587,6 +3593,9 @@ fn blend_out_mismatched_attack(
     let sequence = e
         .call(ANIMATION_GET_SEQUENCE, &args![animation, 4u32])
         .ptr::<()>();
+    if sequence.is_null() && e.stewie(engine_core::extend::stewie::MISSING_ANIM_NULL_CHECK) {
+        return;
+    }
     let mut check_looping_group = true;
     if !sequence.is_null() {
         let transform = e
@@ -3770,7 +3779,13 @@ pub fn actor_pick_animations(e: &mut Engine, this: Ptr<Actor>, arg_2: f32, arg_3
                                 .ptr::<()>();
                             let time =
                                 e.call(ANIM_GROUP_GET_TIME, &args![transform, 1u32]).f32() as f64;
-                            if time <= loop_time {
+                            // lStewieAl's Tweaks' row S0043 (`OnReloadLoopAnimationHook` at
+                            // `0x8956EB`): with no weapon or no weapon entry the step ends here,
+                            // as at the switch's end, instead of reading them.
+                            let missing = e
+                                .stewie(engine_core::extend::stewie::RELOAD_LOOP_NULL_WEAPON)
+                                && (weapon_form.is_null() || weapon_item.is_null());
+                            if time <= loop_time && !missing {
                                 let mod_active = e
                                     .call(
                                         ITEM_CHANGE_HAS_MOD_EFFECT_ACTIVE,
@@ -6160,6 +6175,20 @@ pub fn fn_008a0360(e: &mut Engine, this: Ptr<Actor>) -> u32 {
     }
 }
 
+/// The player's control flag test in [`fn_008a03a0`] (`005a03f0` with flag 1, called at
+/// `0x8A04B2`: `+0x680` bit 0). JIP LN NVSE's G126 (`GetControlFlagHook`, JIP's own) replaces
+/// the call: the seam is asked with the player and its answer's low byte is the test's result
+/// (the call not made). With the word's `INSTALLED` bit clear: one load, then the exe's call.
+#[inline]
+fn player_controls_test(e: &mut Engine, player: u32) -> bool {
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        if let Some(answer) = e.site(0x008a_04b2, &[player]) {
+            return answer as u8 != 0;
+        }
+    }
+    e.call(PLAYER_TEST_5A03F0, &args![player, 1u32]).bool()
+}
+
 // Translated from 008a03a0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Keeps the actor's combat going once the screen has faded in: does
 /// nothing while the fader (number 1) is visible, for actors failing
@@ -6212,10 +6241,7 @@ pub fn fn_008a03a0(e: &mut Engine, this: Ptr<Actor>) {
         return;
     }
     let player_address = e.global::<u32>(PLAYER_CHARACTER);
-    if target == player_address
-        && e.call(PLAYER_TEST_5A03F0, &args![player_address, 1u32])
-            .bool()
-    {
+    if target == player_address && player_controls_test(e, player_address) {
         return;
     }
     if target != 0 {
@@ -12711,6 +12737,49 @@ fn ammo_impact_script_seam(e: &mut Engine, hit: Ptr<HitData>, this: Ptr<Actor>) 
         && e.site(0x0089_abdc, &[hit.addr(), this.addr()]).is_some()
 }
 
+/// The worn armour's damage in [`actor_hit_me`] (`0x89D2FF` to `0x89D362`: the actor's virtual
+/// `0x3C8` with the item and the hit's armour damage, then the item's entry deleted). JIP LN
+/// NVSE's G99 (`DoHitArmorDamageHook`, JIP's own) replaces that span: the seam is asked with the
+/// actor, the item and the hit, and an answer means JIP's ran (the damage capped by
+/// `SetDamageToArmorMaxPercent`, the entry deleted). With the word's `INSTALLED` bit clear: one
+/// load, false (the exe's calls).
+#[inline]
+fn armor_damage_seam(e: &mut Engine, this: Ptr<Actor>, item: u32, hit: Ptr<HitData>) -> bool {
+    e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+        && e.site(0x0089_d2ff, &[this.addr(), item, hit.addr()])
+            .is_some()
+}
+
+/// `0089d26f`..`0089d362`: the worn armour's damage. For an actor not protected (virtual `0x22C`
+/// with 0) whose hit does armour damage (more than 0) and that passes virtual `0x360`, a random
+/// worn armour (the head's first for limbs 1 and 2) takes the hit's armour damage (virtual
+/// `0x3C8`) and its entry is deleted; [`armor_damage_seam`] may do that part instead.
+fn hit_me_armor_damage(e: &mut Engine, this: Ptr<Actor>, hit: Ptr<HitData>, zero: f64) {
+    if !e.vcall(this.addr(), ACTOR_SLOT_22C, &args![0u32]).bool()
+        && e.get(hit, HitData::fArmorDamage) as f64 > zero
+        && e.vcall(this.addr(), ACTOR_SLOT_360, &args![]).bool()
+    {
+        let limb = e.get(hit, HitData::eDamageLimb);
+        let prefer_head = limb == 1 || limb == 2;
+        let item = actor_get_random_worn_armor(e, this, u8::from(prefer_head));
+        damage_worn_armor(e, this, item, hit);
+    }
+}
+
+/// `0089d2f6`..`0089d362`: with an armour entry, it takes the hit's armour damage (virtual
+/// `0x3C8`) and the entry is deleted, unless [`armor_damage_seam`] did that (JIP's G99).
+fn damage_worn_armor(e: &mut Engine, this: Ptr<Actor>, item: u32, hit: Ptr<HitData>) {
+    if item != 0 && !armor_damage_seam(e, this, item, hit) {
+        let damage = e.get(hit, HitData::fArmorDamage);
+        e.vcall(
+            this.addr(),
+            ACTOR_SLOT_DAMAGE_EQUIPMENT,
+            &args![item, damage, 0u32],
+        );
+        e.call(ENTRY_DELETE, &args![item, 1u32]);
+    }
+}
+
 /// `0089aafe`..`0089ac5b`: the script action flags of the aggressor and the
 /// weapon, and the script effect of the ammo.
 fn hit_me_report_attack(e: &mut Engine, s: &mut HitMe) {
@@ -13055,15 +13124,23 @@ fn hit_me_critical_effect(e: &mut Engine, s: &mut HitMe) {
 }
 
 /// `0089b43f`..`0089b6d0`: a kill of the player's bound weapon 0x22 can
-/// fire a projectile-like reference back at the target.
+/// fire a projectile-like reference back at the target (the attacker's
+/// weapon with JIP LN's `uNPCPerks`, seam `0x89B455`).
 fn hit_me_kill_effect(e: &mut Engine, s: &mut HitMe) {
     let this = s.this;
     let aggressor = s.aggressor(e);
     if aggressor == 0 {
         return;
     }
-    let mut entry_form = 0u32;
-    if s.player != 0 {
+    // JIP LN's O18 (`uNPCPerks`: `SAFE_WRITE_BUF(0x89B455, ...)`, 32 bytes): the answer is the
+    // attacker's current weapon in place of the player's. Words: the attacker.
+    let jip_weapon = if e.jip_patches() & engine_core::extend::jip_patches::NPC_PERKS != 0 {
+        e.site(0x0089_b455, &[aggressor])
+    } else {
+        None
+    };
+    let mut entry_form = jip_weapon.unwrap_or(0);
+    if jip_weapon.is_none() && s.player != 0 {
         let acquire = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, s.player));
         if acquire != 0 {
             let acquire = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, s.player));
@@ -13986,23 +14063,7 @@ fn hit_me_finish(e: &mut Engine, s: &mut HitMe) {
     {
         e.call(TRIGGER_FOLLOWER_BARK, &args![this, 3u32]);
     }
-    if !e.vcall(this.addr(), ACTOR_SLOT_22C, &args![0u32]).bool()
-        && e.get(hit, HitData::fArmorDamage) as f64 > zero
-        && e.vcall(this.addr(), ACTOR_SLOT_360, &args![]).bool()
-    {
-        let limb = e.get(hit, HitData::eDamageLimb);
-        let prefer_head = limb == 1 || limb == 2;
-        let item = actor_get_random_worn_armor(e, this, u8::from(prefer_head));
-        if item != 0 {
-            let damage = e.get(hit, HitData::fArmorDamage);
-            e.vcall(
-                this.addr(),
-                ACTOR_SLOT_DAMAGE_EQUIPMENT,
-                &args![item, damage, 0u32],
-            );
-            e.call(ENTRY_DELETE, &args![item, 1u32]);
-        }
-    }
+    hit_me_armor_damage(e, this, hit, zero);
     let mut target = aggressor;
     let source = s.source(e);
     if target == 0 && source != 0 {
@@ -16535,9 +16596,18 @@ mod tests {
         assert_eq!(call_count(&e, ANIMATION_GET_SEQUENCE), 0);
     }
 
+    /// lStewieAl's Tweaks' row S0150 with ordinary input: run with the row off, then on; the row
+    /// changes nothing (the same calls and answers).
     #[test]
     fn walking_forward_picks_the_walk_group_and_scales_its_speed() {
+        for on in [false, true] {
+            walking_forward_picks_the_walk_group_and_scales_its_speed_row(on);
+        }
+    }
+
+    fn walking_forward_picks_the_walk_group_and_scales_its_speed_row(on: bool) {
         let mut e = engine();
+        e.set_stewie(engine_core::extend::stewie::MISSING_ANIM_NULL_CHECK, on);
         let (actor, animation, _) = pick_setup(&mut e);
         stub(&mut e, ACTOR_ANIM_FLAGS, 0x0101);
         stub_float(&mut e, ACTOR_GET_WALK_SPEED, 150.0);
@@ -16654,6 +16724,151 @@ mod tests {
             calls_to(&e, ACTOR_SET_ANIM_ACTION)[0],
             vec![actor.addr(), 0xffff_ffff, 0]
         );
+    }
+
+    /// lStewieAl's Tweaks' row S0150: no sequence in the attack slot (4) of the animation, while
+    /// the slot's group is of type 0x4a and the process has no shot delay: the exe goes on to read
+    /// the missing sequence's state (`008041a0` reads +0x44, as its stand-in here does) and stops;
+    /// with the row on the check ends at once.
+    #[test]
+    fn s0150_no_sequence_in_the_attack_slot() {
+        for on in [false, true] {
+            let mut e = engine();
+            let (actor, animation, process) = pick_setup(&mut e);
+            stub(&mut e, ANIMATION_GET_SEQUENCE, 0);
+            stub(&mut e, ANIM_GROUP_GET_TYPE, 0x4a);
+            set_slot(
+                &mut e,
+                process,
+                PROCESS_SLOT_AUTOMATIC_SHOT_DELAY,
+                float_ret(0.0),
+            );
+            stub_with(&mut e, SEQUENCE_GET_GENERIC_LOCATION, |e, a| {
+                ret(e.mem.u32(a[0] + 0x44))
+            });
+            e.set_stewie(engine_core::extend::stewie::MISSING_ANIM_NULL_CHECK, on);
+            e.call_log = Some(vec![]);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                blend_out_mismatched_attack(&mut e, actor, animation, Ptr::NULL);
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert_eq!(call_count(&e, ANIM_GROUP_GET_TYPE), 0);
+                assert_eq!(call_count(&e, SEQUENCE_GET_GENERIC_LOCATION), 0);
+            }
+        }
+    }
+
+    /// Row S0150 with a sequence in the attack slot (ordinary input): the looping group's check
+    /// runs as with the row off: a group of type 0x4a with no shot delay and a finished sequence
+    /// is blended out.
+    #[test]
+    fn s0150_row_on_with_an_attack_sequence_changes_nothing() {
+        let mut logs = vec![];
+        for on in [false, true] {
+            let mut e = engine();
+            let (actor, animation, process) = pick_setup(&mut e);
+            stub(&mut e, ANIM_GROUP_GET_TYPE, 0x4a);
+            set_slot(
+                &mut e,
+                process,
+                PROCESS_SLOT_AUTOMATIC_SHOT_DELAY,
+                float_ret(0.0),
+            );
+            stub(&mut e, SEQUENCE_GET_GENERIC_LOCATION, 1);
+            e.set_stewie(engine_core::extend::stewie::MISSING_ANIM_NULL_CHECK, on);
+            e.call_log = Some(vec![]);
+            blend_out_mismatched_attack(&mut e, actor, animation, Ptr::NULL);
+            assert_eq!(
+                calls_to(&e, ANIMATION_BLEND_OUT),
+                vec![vec![animation.addr(), 4, 0]],
+                "row {on}"
+            );
+            logs.push(e.call_log.take().unwrap().len());
+        }
+        assert_eq!(logs[0], logs[1]);
+    }
+
+    /// An actor whose process has queued the reload loop (action 0x11) with its sequence
+    /// finished, the loop's time reached, and `entry` as its weapon entry; the entry's
+    /// `HasModEffectActive` reads the entry (+0) and the weapon's `GetAttackAnim` the form's byte
+    /// at +0x103, as the exe's do.
+    fn reload_loop_setup(e: &mut Engine, entry: u32) -> Ptr<Actor> {
+        let (actor, _, process) = pick_setup(e);
+        set_slot(e, process, 0x3e4, ret(0x11));
+        set_slot(e, process, 0x3e8, ret(0x6500));
+        set_slot(e, process, 0x148, ret(entry));
+        stub(e, SEQUENCE_GET_GENERIC_LOCATION, 1);
+        stub_with(e, ITEM_CHANGE_HAS_MOD_EFFECT_ACTIVE, |e, a| {
+            let _extra_lists = e.mem.u32(a[0]);
+            ret(0)
+        });
+        stub_with(e, WEAPON_GET_ATTACK_ANIM, |e, a| {
+            ret(u32::from(e.mem.u8(a[0] + 0x103)) + 0xb1)
+        });
+        // The entry's form (`0044ddc0`: its word at +8).
+        stub_with(e, 0x0044_ddc0, |e, a| ret(e.mem.u32(a[0] + 8)));
+        actor
+    }
+
+    /// lStewieAl's Tweaks' row S0043 (`0x8956EB`): the reload loop's step with no weapon entry,
+    /// and with an entry whose form is gone: the exe reads the missing one and stops; with the row
+    /// on the step ends there (no attack group asked, the reload loop not set).
+    #[test]
+    fn s0043_the_reload_loop_with_no_weapon() {
+        for with_entry in [false, true] {
+            for on in [false, true] {
+                let mut e = engine();
+                let entry = if with_entry { e.mem.alloc(0x20) } else { 0 };
+                let actor = reload_loop_setup(&mut e, entry);
+                e.set_stewie(engine_core::extend::stewie::RELOAD_LOOP_NULL_WEAPON, on);
+                e.call_log = Some(vec![]);
+                let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    actor_pick_animations(&mut e, actor, 1.0, 1.0);
+                }));
+                e.call_stack.clear();
+                assert_eq!(run.is_ok(), on, "entry {with_entry} row {on}");
+                if on {
+                    assert_eq!(call_count(&e, WEAPON_GET_ATTACK_ANIM), 0);
+                    assert!(calls_to(&e, ACTOR_SET_ANIM_ACTION)
+                        .iter()
+                        .all(|c| c[1] != 0x11));
+                }
+            }
+        }
+    }
+
+    /// Row S0043 with a weapon (ordinary input): the same calls with the row off and on; the
+    /// reload loop's group is asked and action 0x11 set.
+    #[test]
+    fn s0043_row_on_with_a_weapon_changes_nothing() {
+        let mut logs = vec![];
+        for on in [false, true] {
+            let mut e = engine();
+            let entry = e.mem.alloc(0x20);
+            let weapon = e.mem.alloc(0x200);
+            e.mem.set_u32(entry + 8, weapon);
+            e.mem.set_u8(weapon + 0x103, 3);
+            let actor = reload_loop_setup(&mut e, entry);
+            e.set_stewie(engine_core::extend::stewie::RELOAD_LOOP_NULL_WEAPON, on);
+            e.call_log = Some(vec![]);
+            actor_pick_animations(&mut e, actor, 1.0, 1.0);
+            assert_eq!(calls_to(&e, WEAPON_GET_ATTACK_ANIM), vec![vec![weapon, 0]]);
+            assert!(calls_to(&e, ACTOR_SET_ANIM_ACTION)
+                .iter()
+                .any(|c| c[1] == 0x11));
+            // The calls into the exe (the stand-in slots' own addresses differ between engines).
+            let exe: Vec<(u32, Vec<u32>)> = e
+                .call_log
+                .take()
+                .unwrap()
+                .into_iter()
+                .filter(|(a, _)| *a < 0x0200_0000)
+                .collect();
+            logs.push(exe);
+        }
+        assert_eq!(logs[0], logs[1]);
     }
 
     #[test]
@@ -23427,6 +23642,90 @@ mod tests {
         actor_set_life_state(&mut e, actor, 6);
         assert_eq!(e.get(actor, Actor::eLifeState), 6);
         assert_eq!(e.mem.u32(GC_MARK_COUNT), 1, "same state: not asked");
+    }
+
+    thread_local! {
+        static O18_KILL_ASKED: std::cell::RefCell<Vec<Vec<u32>>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+        static O18_KILL_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn at_kill_effect_weapon(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        O18_KILL_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        O18_KILL_ANSWER.with(std::cell::Cell::get)
+    }
+
+    /// JIP's O18 seam at `0x89B455`: the kill effect's weapon is the player's (none here, so the
+    /// effect is not looked at) unless the switch's bit is set and the handler answers; then the
+    /// answer is the weapon (of kind 0x22 here: the entry point 0x2E is asked for the attacker).
+    /// Asked with the attacker.
+    #[test]
+    fn hit_me_kill_effect_jip_o18_takes_the_attackers_weapon() {
+        use engine_core::extend::jip_patches;
+        let run = |word: u32, answer: Option<u32>| {
+            let mut e = engine();
+            let world = hit_world(&mut e, true);
+            stub(&mut e, WEAPON_GETTER_8D85E0, 0x22);
+            stub(&mut e, HANDLE_ENTRY_POINT, 0);
+            e.on_site_for_test(0x0089_b455, at_kill_effect_weapon);
+            O18_KILL_ASKED.with(|s| s.borrow_mut().clear());
+            O18_KILL_ANSWER.with(|c| c.set(answer));
+            e.set_jip_patches(word);
+            e.call_log = Some(vec![]);
+            let mut s = HitMe {
+                this: world.victim,
+                hit: world.hit,
+                kind: 0,
+                player: world.player.addr(),
+                ebp: 0,
+                moved: false,
+                flag_1a: false,
+                arrows: 0,
+                weapon_type: 1,
+                crippled: false,
+                kind_one: false,
+                flag_63: false,
+                flag_64: false,
+                health: 0.0,
+                fatigue: 0.0,
+                total: 0.0,
+                blocked: 0.0,
+                not_fleeing: false,
+                dead: true,
+                limb: -1,
+                cripple_roll: false,
+                torso_hit: false,
+            };
+            hit_me_kill_effect(&mut e, &mut s);
+            let asked = O18_KILL_ASKED.with(|s| s.take());
+            let forms = calls_to(&e, WEAPON_GETTER_8D85E0);
+            let entry: Vec<Vec<u32>> = calls_to(&e, HANDLE_ENTRY_POINT)
+                .iter()
+                .map(|w| w[..2].to_vec())
+                .collect();
+            (asked, forms, entry, world.player.addr())
+        };
+        let off = jip_patches::INSTALLED | jip_patches::FIXES | jip_patches::NPC_WEAPON_MODS;
+        let (asked, forms, entry, _) = run(off, Some(0x6400));
+        assert!(
+            asked.is_empty() && forms.is_empty() && entry.is_empty(),
+            "the bit off"
+        );
+        let (asked, forms, _, player) = run(jip_patches::NPC_PERKS, None);
+        assert_eq!(asked, vec![vec![player]]);
+        assert!(forms.is_empty(), "no answer: the player's weapon (none)");
+        let (_, forms, entry, player) = run(jip_patches::NPC_PERKS, Some(0x6400));
+        assert_eq!(forms, vec![vec![0x6400]]);
+        assert_eq!(
+            entry,
+            vec![vec![0x2e, player]],
+            "entry point 0x2E for the attacker"
+        );
+        let (_, forms, entry, _) = run(jip_patches::NPC_PERKS, Some(0));
+        assert!(
+            forms.is_empty() && entry.is_empty(),
+            "an answer of no weapon"
+        );
     }
 }
 

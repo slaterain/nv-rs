@@ -10,6 +10,7 @@
 //! Until 2026-11-03 this was also a hand-written reimplementation of the game drawn with Bevy;
 //! that layer was removed (docs/adr/0011-old-layer-removed.md).
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -43,6 +44,126 @@ ENVIRONMENT:
     docs/PLAYTESTING.md lists the rest (read by crates/host and crates/engine-core).
 ";
 
+/// Linux and macOS: what `play.sh` asks the program before a start.
+#[cfg(not(windows))]
+const FIND_USAGE: &str = "
+LINUX AND MACOS:
+    nv-viewer --find   print nv-rs's own folder, the game folders found (Steam, Heroic, Lutris)
+                       and the game's save folders found in Proton's and Wine's prefixes, one a
+                       line, fields split by tabs: own FOLDER / warning TEXT / game STORE FOLDER /
+                       saves FROM FOLDER; in each field every byte but ASCII letters, digits and
+                       ` /._-+,:@=~()` is written %XX (only read; nothing is written)
+    nv-viewer --build-mods GAME OWN MODS
+                       make OWN/modgame, the game folder to play with mods: GAME's files linked,
+                       the mods in OWN/mod installs and then those in MODS copied over them
+                       (play.sh --mods; the game's own folder is never written)
+";
+
+/// `--find` (Linux and macOS): [`FIND_USAGE`]'s lines (`game_folders::report`), from `HOME`.
+#[cfg(not(windows))]
+fn find() {
+    match game_folders::Home::from_process() {
+        Some(home) => print!("{}", game_folders::report(&home)),
+        None => {
+            eprintln!("error: HOME is not set to a full path, so the player's folders are unknown");
+            host::end_process(1);
+        }
+    }
+}
+
+/// `--build-mods GAME OWN LOOSE` (Linux and macOS, play.sh's `--mods`): makes `OWN/modgame`, the
+/// whole game folder to play with mods, as Play.exe makes `userdata\modgame` on Windows
+/// (`mod_install::overlay::build`): GAME's files linked, the installed mods (`OWN/mod installs`)
+/// and then the loose folder LOOSE copied over them; the plugin list goes to the mods profile's
+/// `AppData/Local/FalloutNV/plugins.txt`. Says what it did in one line; on a failure, what to do,
+/// and ends with status 1.
+#[cfg(not(windows))]
+fn build_mods(raw: &[OsString]) {
+    let [game, own, loose] = [1, 2, 3].map(|i| raw.get(i).map(PathBuf::from));
+    let (Some(game), Some(own), Some(loose)) = (game, own, loose) else {
+        eprintln!(
+            "error: --build-mods needs the game's folder, nv-rs's own folder and the mods folder"
+        );
+        host::end_process(2);
+    };
+    match build_mods_in(&game, &own, &loose) {
+        Ok(lines) => {
+            for line in lines {
+                println!("{line}");
+            }
+        }
+        Err(text) => {
+            eprintln!("{text}");
+            host::end_process(1);
+        }
+    }
+}
+
+/// `--install-mods GAME INSTALLS MODS`: the mod installer's text front end (`mod_chooser`): the
+/// mods waiting in MODS installed into INSTALLS, or removed from it; the game folder GAME only
+/// read. Started by Play.exe's `--install-mods` (Install mods.cmd, in a console window of its own)
+/// and play.sh's. Every way it ends, on every system, says "Press Enter to close." and waits for
+/// it (`mod_chooser::run_in_window`), so that window never closes before it is read.
+fn install_mods(raw: &[OsString]) {
+    let [game, installs, loose] = [1, 2, 3].map(|i| raw.get(i).map(PathBuf::from));
+    let places = match (game, installs, loose) {
+        (Some(game), Some(installs), Some(loose)) => {
+            let (major, minor, beta) = nvse::VERSION;
+            Ok(mod_chooser::Places {
+                game,
+                installs,
+                loose,
+                extenders: vec![("nvse".to_owned(), format!("{major}.{minor}.{beta}"))],
+                play_with_mods: if cfg!(windows) {
+                    "choose \"Play with mods\"".to_owned()
+                } else {
+                    "start nv-rs with ./play.sh --mods".to_owned()
+                },
+                room: mod_chooser::room_on_drive,
+            })
+        }
+        _ => Err("The mod installer was started without the folders it needs (the game's folder, the mod installs folder and the mods folder). Start it with \"Install mods\" (Windows) or ./play.sh --install-mods (Linux and macOS).".to_owned()),
+    };
+    let stdin = std::io::stdin();
+    let mut input = stdin.lock();
+    let mut out = std::io::stdout();
+    let code = mod_chooser::run_in_window(&mut input, &mut out, places);
+    if code != 0 {
+        host::end_process(code);
+    }
+}
+
+/// [`build_mods`]'s work: `OWN/modgame` made from GAME, the installed mods and LOOSE, the plugin
+/// list at the mods profile's place where the game reads it (`machine_table::plugins_txt`); the
+/// lines to say, or what went wrong in words.
+#[cfg(not(windows))]
+fn build_mods_in(game: &Path, own: &Path, loose: &Path) -> Result<Vec<String>, String> {
+    let layers = mod_install::installs::layers(&own.join("mod installs"), loose)
+        .map_err(|e| format!("error: the installed mods could not be read: {e}"))?;
+    let plugins = engine_platform::machine_table::plugins_txt(own, "mods");
+    let built = mod_install::overlay::build(game, &layers, &own.join("modgame"), &plugins)
+        .map_err(|e| e.player_text())?;
+    let mut lines = vec![format!(
+        "mods: {} mod files from {} folders; {} names made and {} removed since the last start",
+        built.mod_files,
+        layers.len(),
+        built.made,
+        built.removed
+    )];
+    for name in &built.added_plugins {
+        lines.push(format!(
+            "mods: {name} switched on after the mods folder's own plugins.txt"
+        ));
+    }
+    if built.extender_plugins {
+        lines.push(
+            "mods: some mods include plugins for script extenders (.dll files): those are not used"
+                .to_owned(),
+        );
+    }
+    Ok(lines)
+}
+
 /// The command line.
 #[derive(Debug, Default, PartialEq)]
 struct Args {
@@ -55,25 +176,27 @@ struct Args {
     ignored: Vec<String>,
 }
 
-/// `Ok(None)`: `--help`.
-fn parse(raw: &[String]) -> Result<Option<Args>, String> {
+/// `Ok(None)`: `--help`. Each argument as the system gave it (on Linux any bytes: a game folder
+/// whose name is not UTF-8 is carried as it is, never turned into text).
+fn parse(raw: &[OsString]) -> Result<Option<Args>, String> {
     let mut args = Args::default();
     let mut data = None;
     let mut i = 0;
     while i < raw.len() {
-        match raw[i].as_str() {
-            "-h" | "--help" => return Ok(None),
-            "--movement-probe" => args.movement_probe = true,
-            "--check" => args.check = true,
-            "--movement-missing" => {
+        let arg = raw[i].as_os_str();
+        match arg.to_str() {
+            Some("-h" | "--help") => return Ok(None),
+            Some("--movement-probe") => args.movement_probe = true,
+            Some("--check") => args.check = true,
+            Some("--movement-missing") => {
                 i += 1;
                 let file = raw.get(i).ok_or("--movement-missing needs a FILE")?;
                 args.movement_missing = Some(PathBuf::from(file));
             }
-            other if data.is_none() && !other.starts_with('-') => {
-                data = Some(PathBuf::from(other));
+            _ if data.is_none() && !arg.to_string_lossy().starts_with('-') => {
+                data = Some(PathBuf::from(arg));
             }
-            other => args.ignored.push(other.to_owned()),
+            _ => args.ignored.push(arg.to_string_lossy().into_owned()),
         }
         i += 1;
     }
@@ -81,11 +204,32 @@ fn parse(raw: &[String]) -> Result<Option<Args>, String> {
     Ok(Some(args))
 }
 
+/// The command line after the program's name. On Windows as before (`std::env::args`); on Linux
+/// and macOS as the system's own strings (`args_os`), so a folder name that is not UTF-8 reaches
+/// [`parse`] as it is instead of stopping the program with a panic.
+fn command_line() -> Vec<OsString> {
+    #[cfg(windows)]
+    {
+        std::env::args().skip(1).map(OsString::from).collect()
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::args_os().skip(1).collect()
+    }
+}
+
 /// The game's master file, which a Data folder holds.
 const MAIN_MASTER: &str = "FalloutNV.esm";
 
-/// The Data folder: `path` itself or its `Data`, whichever holds FalloutNV.esm (any case).
+/// The Data folder: `path` itself or its `Data`, whichever holds FalloutNV.esm (any case). Off
+/// Windows by the finder's own rule (`game_folders::data_folder`: a `Data` folder in any case,
+/// every one tried), which `--find` and play.sh use too, so a game they report is one this takes.
 fn find_data_folder(path: &Path) -> Result<PathBuf, String> {
+    #[cfg(not(windows))]
+    if let Some(data) = game_folders::data_folder(path) {
+        return Ok(data);
+    }
+    #[cfg(windows)]
     for folder in [path.to_path_buf(), path.join("Data")] {
         let has_master = std::fs::read_dir(&folder).is_ok_and(|entries| {
             entries.flatten().any(|e| {
@@ -119,6 +263,17 @@ extern "system" {
 }
 
 fn main() {
+    // macOS: winit's loop, and with it the game's window, must own the program's main thread, so
+    // the program runs on a thread of its own and the main thread is the window layer's
+    // (`host::run_on_main_thread`). Everywhere else the program runs here, as before.
+    #[cfg(target_vendor = "apple")]
+    host::run_on_main_thread(Box::new(run));
+    #[cfg(not(target_vendor = "apple"))]
+    run()
+}
+
+/// The program: its arguments, the check or the start, main's frames.
+fn run() {
     // With the game's own window (`NV_D3D9=real`, `wgpu` or `real,wgpu`, or a launcher's play
     // run, which draws by its `Fallout.ini`'s `sRenderer` without the variable) the process is
     // DPI-unaware, as FalloutNV.exe is (no `dpiAware` in its manifest): Windows scales the game's
@@ -135,11 +290,27 @@ fn main() {
             SetProcessDpiAwarenessContext(-1);
         }
     }
-    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let raw = command_line();
+    #[cfg(not(windows))]
+    if raw.first().map(OsString::as_os_str) == Some(std::ffi::OsStr::new("--find")) {
+        find();
+        return;
+    }
+    if raw.first().map(OsString::as_os_str) == Some(std::ffi::OsStr::new("--install-mods")) {
+        install_mods(&raw);
+        return;
+    }
+    #[cfg(not(windows))]
+    if raw.first().map(OsString::as_os_str) == Some(std::ffi::OsStr::new("--build-mods")) {
+        build_mods(&raw);
+        return;
+    }
     let args = match parse(&raw) {
         Ok(Some(args)) => args,
         Ok(None) => {
             print!("{USAGE}");
+            #[cfg(not(windows))]
+            print!("{FIND_USAGE}");
             return;
         }
         Err(message) => {
@@ -170,7 +341,8 @@ fn main() {
             }
             Err(e) => {
                 eprintln!("error: {e}");
-                host::end_process(1);
+                // The expected stop off Windows: its own status (play.sh: no report needed).
+                host::end_process(host::error_status(&e));
             }
         }
     }
@@ -193,7 +365,7 @@ fn main() {
         Ok(host) => host,
         Err(e) => {
             eprintln!("error: {e}");
-            host::end_process(1);
+            host::end_process(host::error_status(&e));
         }
     };
     println!("{}", game.describe());
@@ -259,8 +431,106 @@ fn main() {
 mod tests {
     use super::*;
 
-    fn strings(a: &[&str]) -> Vec<String> {
-        a.iter().map(|s| s.to_string()).collect()
+    fn strings(a: &[&str]) -> Vec<OsString> {
+        a.iter().map(OsString::from).collect()
+    }
+
+    /// The real `--build-mods` on a tiny game tree: the game's master linked, the mod's file in
+    /// place over it, and the plugin list at the mods profile's place where the game reads it.
+    #[cfg(unix)]
+    #[test]
+    fn build_mods_makes_the_mods_game_folder_and_its_plugin_list() {
+        let dir = std::env::temp_dir().join(format!("nv-viewer-build-mods-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let write = |path: &Path, bytes: &[u8]| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, bytes).unwrap();
+        };
+        let game = dir.join("game");
+        write(&game.join("FalloutNV.exe"), b"exe");
+        write(&game.join("Data").join("FalloutNV.esm"), b"esm");
+        write(&game.join("Data").join("DeadMoney.esm"), b"dm");
+        write(&game.join("Data").join("Textures").join("a.dds"), b"game's");
+        let own = dir.join("own");
+        let loose = own.join("my mods");
+        write(&loose.join("Textures").join("a.dds"), b"mod's");
+        // A plugin header with FalloutNV.esm as its only master.
+        let mut esp = b"TES4".to_vec();
+        let fields: Vec<u8> = [
+            &b"MAST\x0e\0FalloutNV.esm\0"[..],
+            &b"DATA\x08\0"[..],
+            &[0; 8],
+        ]
+        .concat();
+        esp.extend_from_slice(&(fields.len() as u32).to_le_bytes());
+        esp.extend_from_slice(&[0; 16]);
+        esp.extend_from_slice(&fields);
+        write(&loose.join("Mine.esp"), &esp);
+        let lines = build_mods_in(&game, &own, &loose).unwrap();
+        assert!(lines[0].starts_with("mods: 2 mod files"), "{lines:?}");
+        let data = own.join("modgame").join("Data");
+        assert_eq!(std::fs::read(data.join("FalloutNV.esm")).unwrap(), b"esm");
+        assert_eq!(
+            std::fs::read(data.join("Textures").join("a.dds")).unwrap(),
+            b"mod's"
+        );
+        assert_eq!(
+            std::fs::read(game.join("Data").join("Textures").join("a.dds")).unwrap(),
+            b"game's"
+        );
+        let plugins = own
+            .join("mods")
+            .join("AppData")
+            .join("Local")
+            .join("FalloutNV")
+            .join("plugins.txt");
+        assert_eq!(
+            plugins,
+            engine_platform::machine_table::plugins_txt(&own, "mods")
+        );
+        assert_eq!(
+            std::fs::read_to_string(&plugins).unwrap(),
+            "DeadMoney.esm\r\nMine.esp\r\n"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Review of #630 (round 2): a game folder whose name is not UTF-8 (Linux allows any bytes)
+    /// is carried as it is, byte for byte, and its check ends with a plain message, not a panic.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_folder_name_that_is_not_utf8_is_carried_as_it_is() {
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+        let folder = OsString::from_vec(b"/x/Fallout \xe9".to_vec());
+        let raw = vec![folder.clone(), OsString::from("--check")];
+        let args = parse(&raw).unwrap().unwrap();
+        assert_eq!(args.data.as_os_str().as_bytes(), b"/x/Fallout \xe9");
+        assert!(args.check);
+        let message = find_data_folder(&args.data).unwrap_err();
+        assert!(message.contains("FalloutNV.esm"), "{message}");
+        // An argument that is not UTF-8 and is not the folder is kept among the ignored ones.
+        let raw = vec![folder, OsString::from_vec(b"--odd\xff".to_vec())];
+        assert_eq!(parse(&raw).unwrap().unwrap().ignored.len(), 1);
+    }
+
+    /// Review of #630 (round 4): on Linux a game whose `Data` folder, master and exe were
+    /// lower-cased (copied by a tool that does that) is one `--find` reports, and the program takes
+    /// it too: its Data folder and its exe are found, by the same rule as the finder's.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_game_the_finder_reports_in_another_case_is_taken() {
+        let game = std::env::temp_dir().join(format!("nv-viewer-case-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&game);
+        std::fs::create_dir_all(game.join("data")).unwrap();
+        std::fs::write(game.join("data/falloutnv.esm"), b"not the game's file").unwrap();
+        std::fs::write(game.join("falloutnv.exe"), b"not the game's file").unwrap();
+        let reported = game_folders::game_folder(&game);
+        let data = find_data_folder(&game);
+        let exe = host::game_exe(&game.join("data"));
+        let _ = std::fs::remove_dir_all(&game);
+        assert_eq!(reported, Some(game.clone()));
+        assert_eq!(data, Ok(game.join("data")));
+        assert_eq!(exe, game.join("falloutnv.exe"));
     }
 
     /// play.sh's command line still parses: the Data folder, the old flags ignored.

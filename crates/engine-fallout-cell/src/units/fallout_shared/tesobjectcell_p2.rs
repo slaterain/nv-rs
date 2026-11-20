@@ -134,6 +134,8 @@ const FORM_LOOK_UP: u32 = 0x0048_39c0;
 const REFERENCE_GET_BASE_FORM: u32 = 0x007a_f430;
 /// The parent cell of a reference (`+0x40`).
 const REFERENCE_PARENT_CELL: u32 = 0x008d_6f30;
+/// The reference's cell (`TESObjectREFR` +0x40), which `008d6f30` answers.
+const REFERENCE_CELL: u32 = 0x40;
 /// The reference's `ExtraDataList` (`this + 0x44`).
 const REFERENCE_EXTRA_DATA_LIST: u32 = 0x005d_43c0;
 /// The reference's 3D (the loaded model node), or null.
@@ -1595,7 +1597,18 @@ pub fn tes_object_cell_add_reference(
         }
     }
     e.call(REFERENCE_ADD_LIGHT_TO_SCENE, &args![reference, 0u32]);
-    let parent = e.call(REFERENCE_PARENT_CELL, &args![reference]).ptr::<()>();
+    // lStewieAl's Tweaks' row S0199.07 (`MiscCrashFixes`, the bytes at `0x54867C`): the reference's cell
+    // is read in place (+0x40, no call to `008d6f30`) and a reference with none skips the exterior
+    // lists; the exe asks the missing cell whether it is an interior.
+    let parent = if e.stewie(engine_core::extend::stewie::ADD_REFERENCE_NULL_CELL) {
+        let cell = e.mem.u32(reference.addr() + REFERENCE_CELL);
+        if cell == 0 {
+            return;
+        }
+        Ptr::<()>::new(cell)
+    } else {
+        e.call(REFERENCE_PARENT_CELL, &args![reference]).ptr::<()>()
+    };
     if !e.call(CELL_IS_INTERIOR, &args![parent]).bool() {
         if fn_00548700(e, reference.cast()) && !list_contains(e, KIND_LIST_A, reference.addr()) {
             push_front_value(e, KIND_LIST_A, reference.addr());
@@ -5028,8 +5041,20 @@ fn drop_items(e: &mut Engine, list: u32) {
 
 /// The dropped item list of the actor, cleared by [`drop_items`] and then
 /// removed from the actor's extra data (nothing when it has none).
-fn clear_dropped_items(e: &mut Engine, actor: Ptr) {
-    let extra = reference_extra_list(e, actor);
+fn clear_dropped_items(e: &mut Engine, actor: Ptr, respawn: bool) {
+    // JIP LN's O17 (`bNPCWeaponMods`, `WriteRelCall(0x54E2A4, ResetActorFlagsRespawnHook)`, the
+    // respawn's place only): the handler clears the actor's "weapon mods dealt" mark and answers
+    // its extra list. Words: the actor.
+    let jip_list =
+        if respawn && e.jip_patches() & engine_core::extend::jip_patches::NPC_WEAPON_MODS != 0 {
+            e.site(0x0054_e2a4, &[actor.addr()])
+        } else {
+            None
+        };
+    let extra = match jip_list {
+        Some(list) => list,
+        None => reference_extra_list(e, actor),
+    };
     let list = e
         .call(EXTRA_LIST_GET_DROPPED_ITEM_LIST, &args![extra])
         .u32();
@@ -5173,7 +5198,7 @@ pub fn fn_0054df30(e: &mut Engine, this: Ptr<TESObjectCELL>) -> u8 {
         if !actor.is_null() {
             if e.call(ACTOR_TEST_87F4A0, &args![actor]).bool() {
                 e.vcall(actor.addr(), ACTOR_SLOT_324, &args![1u32, 0u32, 0u32]);
-                clear_dropped_items(e, actor);
+                clear_dropped_items(e, actor, true);
                 e.with_stack(12, |e, placed| {
                     e.vcall(actor.addr(), REFERENCE_SLOT_170, &args![placed]);
                     let mut back = false;
@@ -5225,7 +5250,7 @@ pub fn fn_0054df30(e: &mut Engine, this: Ptr<TESObjectCELL>) -> u8 {
                         }
                     }
                 }
-                clear_dropped_items(e, actor);
+                clear_dropped_items(e, actor, false);
             }
         } else {
             let base = base_form(e, item);
@@ -9045,6 +9070,49 @@ mod tests {
         w.e.mem.set_u8(w.handler + 0x61a, 1);
         w.e.call(0x0054_8230, &args![w.cell, r, 0u32]);
         assert_eq!(vcalls.borrow().len(), 1);
+    }
+
+    /// lStewieAl's Tweaks' row S0199.07: a reference whose cell is gone by the end (the light's stand-in
+    /// clears it). Row off: the exe asks the missing cell whether it is an interior (`00425fd0`'s
+    /// stand-in reads its +0x24) and stops; row on: the exterior lists are skipped. With the cell
+    /// there, the same calls row off and on but for `008d6f30`, which the row reads in place.
+    #[test]
+    fn s0199_07_a_reference_whose_cell_is_gone() {
+        let mut ordinary = vec![];
+        for on in [false, true] {
+            let mut w = world();
+            w.e.set_stewie(engine_core::extend::stewie::ADD_REFERENCE_NULL_CELL, on);
+            w.e.register(CELL_IS_INTERIOR, |e, a| {
+                u32::from(e.mem.u8(a[0] + 0x24) & 1).into_ret()
+            });
+            let (r, _, _) = placed_reference(&mut w, 0x15, false, true);
+            start_log(&mut w.e);
+            w.e.call(0x0054_8230, &args![w.cell, r, 0u32]);
+            let log = take_log(&mut w.e);
+            assert_eq!(calls_to(&log, CELL_IS_INTERIOR).len(), 1, "row {on}");
+            ordinary.push(
+                log.into_iter()
+                    .filter(|(a, _)| *a != REFERENCE_PARENT_CELL)
+                    .collect::<Vec<_>>(),
+            );
+            let (r, _, _) = placed_reference(&mut w, 0x15, false, true);
+            w.e.register(REFERENCE_ADD_LIGHT_TO_SCENE, |e, a| {
+                e.mem.set_u32(a[0] + 0x40, 0);
+                Ret::default()
+            });
+            w.e.mem.unmap(0, 0x1000);
+            start_log(&mut w.e);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                w.e.call(0x0054_8230, &args![w.cell, r, 0u32]);
+            }));
+            w.e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                let log = take_log(&mut w.e);
+                assert!(calls_to(&log, CELL_IS_INTERIOR).is_empty());
+            }
+        }
+        assert_eq!(ordinary[0], ordinary[1], "row on: the calls of the row off");
     }
 
     #[test]
@@ -13240,6 +13308,49 @@ mod tests {
             ],
         );
         c
+    }
+
+    /// JIP LN's O17 seam at `0x54E2A4` (`bNPCWeaponMods`): a respawned actor's dropped items are
+    /// looked up in the list the handler answers (in place of `005d43c0`'s); only with the
+    /// switch's bit, only for the respawn (not the deleted actor's `0x54E444`); no answer is the
+    /// exe's.
+    #[test]
+    fn long_detached_cell_asks_jip_o17_for_a_respawned_actors_list() {
+        use super::super::tesobjectrefr::jip_seam;
+        use engine_core::extend::jip_patches;
+        let mut e = detach_engine(500);
+        let c = detach_world(&mut e);
+        let refs = list_items(&e, c.addr() + 0xac);
+        let (restored, killed) = (refs[1], refs[2]);
+        let answered = e.mem.alloc(0x10);
+        jip_seam::put(&mut e, 0x0054_e2a4, Some(answered));
+        let dropped_lists = |e: &mut Engine| {
+            start_log(e);
+            e.call(0x0054_df30, &args![c]);
+            let log = take_log(e);
+            calls_to(&log, EXTRA_LIST_GET_DROPPED_ITEM_LIST)
+        };
+        e.set_jip_patches(jip_patches::FIXES | jip_patches::NPC_PERKS);
+        let exe = dropped_lists(&mut e);
+        assert!(jip_seam::seen().is_empty(), "only the switch's bit asks");
+        assert_eq!(exe[0], vec![restored + 0x44]);
+        e.set_jip_patches(jip_patches::NPC_WEAPON_MODS);
+        let jip = dropped_lists(&mut e);
+        assert_eq!(
+            jip_seam::seen(),
+            vec![vec![restored]],
+            "not the deleted actor"
+        );
+        assert_eq!(jip[0], vec![answered]);
+        assert_eq!(
+            jip[1..],
+            exe[1..],
+            "the deleted actor's lookup as the exe's"
+        );
+        assert!(exe.iter().any(|w| w[0] == killed + 0x44));
+        jip_seam::answer_with(None);
+        assert_eq!(dropped_lists(&mut e), exe);
+        jip_seam::seen();
     }
 
     #[test]

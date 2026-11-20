@@ -29,8 +29,9 @@
 //! While JIP answers "installed", a linked reference is set on its reference (`SetLinkedRefID`,
 //! `commands::jip_fn_linked_ref`), and once the game has loaded the links a command changed but
 //! the load did not set again get their defaults back; until then it is only kept.
-//! Not yet: NPC perks are not given to the actors, and the appearance undo is not applied. Until then a save holds what the
-//! co-save loaded held. What JIP would pass over unread (another record type, a version it does
+//! NPC perks are given to the actors once JIP's NPC perks patch is switched on (`uNPCPerks`,
+//! `game_patches::ge::perks`). Not yet: the appearance undo is not applied; until then a save
+//! holds what the co-save loaded held. What JIP would pass over unread (another record type, a version it does
 //! not read, the NPC perks without its NPC perks patch, `JPGF`'s bytes past its 8) is carried byte
 //! for byte to the next save, so a co-save from a real JIP installation loses nothing in nv-rs.
 //! While JIP answers "not installed" and holds nothing it writes no section, as without the DLL.
@@ -216,10 +217,254 @@ pub struct AppearanceUndo {
 }
 
 /// Perks given to an NPC (`NPCPerksInfo::perkRanks`): rank by perk, the perks by address from the
-/// lowest (JIP's sorted `Map` of `BGSPerk*`).
+/// lowest (JIP's sorted `Map` of `BGSPerk*`); and `NPCPerksInfo::entryPoints`: the guest block of
+/// the actor's 24 entry point lists (`tList` heads, 8 bytes each) the game walks, 0 while none
+/// (`game_patches::ge::perks`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NpcPerks {
     pub ranks: BTreeMap<u32, u8>,
+    pub entry_points: u32,
+}
+
+/// JIP's `s_NPCPerksInfoMap` (by actor id), behind a std `Mutex` in a lock-free slot
+/// ([`Engine::ext_free`], made at install before the threads start): the NPC perk routines in the
+/// actors' vtables (`game_patches::ge::perks`) run on whatever thread asks an actor's perk rank or
+/// entry point list. JIP keeps a pointer to the actor's entry in its extra list's padding
+/// (`extraDataList.perksInfo`, `+0x60`); here the actor's entry is found by its id, the map's key
+/// (JIP sets and clears that pointer with the entry, so the two agree). A leaf lock: no game call
+/// while it is held.
+///
+/// The two routines the game asks most (an actor's perk rank and entry point list: the movement
+/// update asks the run speed's entry point of every moving actor) read without the lock
+/// ([`npc_perks_read`]): JIP reads a pointer there. Every change through [`npc_perks`] gives the
+/// map a new version (a number no map ever had before); each thread keeps a copy of the map
+/// ([`NpcPerksSnapshot`]) and reads it without the lock while it is of the map's version, so
+/// while nothing changes a read is one atomic load and a lookup in that copy. A read that finds
+/// another version is answered from the map under the lock; a new copy is made (once, shared by
+/// the threads) only when the version is still the one the previous such read found, so a burst
+/// of changes costs reads under the lock, not a copy per change.
+pub struct NpcPerksMap {
+    map: std::sync::Mutex<UnorderedMap<u32, NpcPerks>>,
+    version: std::sync::atomic::AtomicU64,
+    /// The newest copy and the version the last read under the lock found.
+    shared: std::sync::Mutex<SharedCopy>,
+    /// Reads that took the lock ([`npc_perks_read`] when its thread's copy was not current) and
+    /// copies made.
+    #[cfg(test)]
+    pub(crate) locked_reads: std::sync::atomic::AtomicU32,
+    #[cfg(test)]
+    pub(crate) copies_made: std::sync::atomic::AtomicU32,
+}
+
+/// [`NpcPerksMap`]'s shared copy and the version its last read under the lock found (0: none).
+#[derive(Default)]
+struct SharedCopy {
+    copy: Option<std::sync::Arc<NpcPerksSnapshot>>,
+    last_seen: u64,
+}
+
+/// The next version of any [`NpcPerksMap`] (from 1; each taken once in the process).
+static NPC_PERKS_VERSIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn next_npc_perks_version() -> u64 {
+    NPC_PERKS_VERSIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+impl Default for NpcPerksMap {
+    fn default() -> Self {
+        NpcPerksMap {
+            // `s_NPCPerksInfoMap(0x80)`.
+            map: std::sync::Mutex::new(UnorderedMap::new(0x80)),
+            version: std::sync::atomic::AtomicU64::new(next_npc_perks_version()),
+            shared: std::sync::Mutex::new(SharedCopy::default()),
+            #[cfg(test)]
+            locked_reads: std::sync::atomic::AtomicU32::new(0),
+            #[cfg(test)]
+            copies_made: std::sync::atomic::AtomicU32::new(0),
+        }
+    }
+}
+
+/// One actor in [`NpcPerksSnapshot`]: its id, its entry point lists' block, its ranks by perk.
+type SnapshotEntry = (u32, u32, Vec<(u32, u8)>);
+
+/// A read-only copy of the NPC perks map at one version: by actor id from the lowest, its entry
+/// point lists' block and its ranks by perk from the lowest.
+#[derive(Debug, Default)]
+pub struct NpcPerksSnapshot {
+    version: u64,
+    entries: Vec<SnapshotEntry>,
+}
+
+impl NpcPerksSnapshot {
+    fn entry(&self, id: u32) -> Option<&SnapshotEntry> {
+        let at = self.entries.binary_search_by_key(&id, |e| e.0).ok()?;
+        self.entries.get(at)
+    }
+
+    /// The actor's entry point lists' block (0 while none), none without an entry.
+    pub fn entry_points(&self, id: u32) -> Option<u32> {
+        self.entry(id).map(|e| e.1)
+    }
+
+    /// The actor's rank of the perk, none without one.
+    pub fn rank(&self, id: u32, perk: u32) -> Option<u8> {
+        let ranks = &self.entry(id)?.2;
+        let at = ranks.binary_search_by_key(&perk, |r| r.0).ok()?;
+        ranks.get(at).map(|r| r.1)
+    }
+}
+
+/// What [`npc_perks_read`] reads: a thread's copy, or the map itself under its lock.
+pub enum NpcPerksView<'a> {
+    Copy(&'a NpcPerksSnapshot),
+    Map(&'a UnorderedMap<u32, NpcPerks>),
+}
+
+impl NpcPerksView<'_> {
+    /// The actor's entry point lists' block (0 while none), none without an entry.
+    pub fn entry_points(&self, id: u32) -> Option<u32> {
+        match self {
+            NpcPerksView::Copy(s) => s.entry_points(id),
+            NpcPerksView::Map(m) => m.get(&id).map(|p| p.entry_points),
+        }
+    }
+
+    /// The actor's rank of the perk, none without one.
+    pub fn rank(&self, id: u32, perk: u32) -> Option<u8> {
+        match self {
+            NpcPerksView::Copy(s) => s.rank(id, perk),
+            NpcPerksView::Map(m) => m.get(&id).and_then(|p| p.ranks.get(&perk).copied()),
+        }
+    }
+}
+
+impl NpcPerksMap {
+    /// A read whose thread's copy is not current, under the lock: `f` on the shared copy when it
+    /// is of the map's version; else on a new copy when the version is the one the previous such
+    /// read found (it has stayed the same since); else on the map itself, the version noted.
+    /// Answers `f`'s answer and the copy it read, if any (for the thread to keep).
+    fn locked_read<R>(
+        &self,
+        f: impl FnOnce(&NpcPerksView<'_>) -> R,
+    ) -> (R, Option<std::sync::Arc<NpcPerksSnapshot>>) {
+        let map = self
+            .map
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Under the lock: the version of what the map holds.
+        let version = self.version.load(std::sync::atomic::Ordering::Relaxed);
+        let mut shared = self
+            .shared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(s) = shared.copy.as_ref().filter(|s| s.version == version) {
+            let s = s.clone();
+            return (f(&NpcPerksView::Copy(&s)), Some(s));
+        }
+        if shared.last_seen != version {
+            shared.last_seen = version;
+            return (f(&NpcPerksView::Map(&map)), None);
+        }
+        let mut entries: Vec<SnapshotEntry> = map
+            .iter()
+            .map(|(&id, p)| {
+                let ranks = p.ranks.iter().map(|(&perk, &rank)| (perk, rank)).collect();
+                (id, p.entry_points, ranks)
+            })
+            .collect();
+        entries.sort_unstable_by_key(|e| e.0);
+        #[cfg(test)]
+        self.copies_made
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let s = std::sync::Arc::new(NpcPerksSnapshot { version, entries });
+        shared.copy = Some(s.clone());
+        (f(&NpcPerksView::Copy(&s)), Some(s))
+    }
+}
+
+/// [`npc_perks`]'s guard: the map under its lock; a change through it gives the map a new version
+/// when the guard goes (still under the lock).
+pub struct NpcPerksGuard<'a> {
+    map: std::sync::MutexGuard<'a, UnorderedMap<u32, NpcPerks>>,
+    version: &'a std::sync::atomic::AtomicU64,
+    changed: bool,
+}
+
+impl std::ops::Deref for NpcPerksGuard<'_> {
+    type Target = UnorderedMap<u32, NpcPerks>;
+    fn deref(&self) -> &Self::Target {
+        &self.map
+    }
+}
+
+impl std::ops::DerefMut for NpcPerksGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.changed = true;
+        &mut self.map
+    }
+}
+
+impl Drop for NpcPerksGuard<'_> {
+    fn drop(&mut self) {
+        // Before the map's own guard goes: a read copying the map sees this version with it.
+        if self.changed {
+            self.version.store(
+                next_npc_perks_version(),
+                std::sync::atomic::Ordering::Release,
+            );
+        }
+    }
+}
+
+/// JIP's NPC perks map ([`NpcPerksMap`]), under its lock.
+pub fn npc_perks(e: &mut Engine) -> NpcPerksGuard<'_> {
+    let m = e.ext_free::<NpcPerksMap>();
+    NpcPerksGuard {
+        map: m
+            .map
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        version: &m.version,
+        changed: false,
+    }
+}
+
+thread_local! {
+    /// This thread's copy of the NPC perks map ([`npc_perks_read`]).
+    static NPC_PERKS_READ: std::cell::RefCell<Option<std::sync::Arc<NpcPerksSnapshot>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// `f` on the NPC perks map as it is now: this thread's copy, without the map's lock, while it is
+/// of the map's version (versions are never reused, so a copy of another engine's map never
+/// passes for this one's); else under the lock ([`NpcPerksMap::locked_read`]). `f` must not call
+/// the game.
+pub fn npc_perks_read<R>(e: &mut Engine, f: impl FnOnce(&NpcPerksView<'_>) -> R) -> R {
+    let m = e.ext_free::<NpcPerksMap>();
+    let version = m.version.load(std::sync::atomic::Ordering::Acquire);
+    NPC_PERKS_READ.with(|cell| {
+        let mut copy = cell.borrow_mut();
+        if let Some(s) = copy.as_deref().filter(|s| s.version == version) {
+            return f(&NpcPerksView::Copy(s));
+        }
+        #[cfg(test)]
+        m.locked_reads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let (answer, made) = m.locked_read(f);
+        if made.is_some() {
+            *copy = made;
+        }
+        answer
+    })
+}
+
+/// The entry point blocks of every entry taken out of the map: each list emptied and the block
+/// freed (`~NPCPerksInfo`: `entryPoints->Destroy()`), outside the map's lock.
+pub fn free_entry_points(e: &mut Engine, blocks: &[u32]) {
+    for &block in blocks {
+        crate::game_patches::ge::perks::destroy_entry_points(e, block);
+    }
 }
 
 /// JIP's saved data and what decides its loads.
@@ -248,8 +493,6 @@ pub struct Saved {
     pub serialized: SerializedVars,
     /// `s_appearanceUndoMap`, by NPC (form address).
     pub appearance_undo: UnorderedMap<u32, AppearanceUndo>,
-    /// `s_NPCPerksInfoMap`, by actor id.
-    pub npc_perks: UnorderedMap<u32, NpcPerks>,
     /// nv-rs's own: the records of the last co-save loaded that JIP would pass over without
     /// reading, in their order, written back at the next save ([`load`]).
     pub carried: Vec<Chunk>,
@@ -274,7 +517,6 @@ impl Default for Saved {
             linked_ref_defaults: UnorderedMap::new(8),
             serialized: SerializedVars::default(),
             appearance_undo: UnorderedMap::new(8),
-            npc_perks: UnorderedMap::new(0x80),
             carried: Vec::new(),
             serialized_tail: Vec::new(),
             had_section: false,
@@ -345,14 +587,16 @@ pub fn set_changed(e: &mut Engine, flags: u8) {
 /// A lock-free copy of [`Saved::npc_perks_patch`] ([`Engine::ext_free`], made at install before the
 /// threads start): JIP's `HasPerk` eval (`DoGetPerkRank`) reads it on whatever thread evaluates
 /// a perk or package condition, without JIP's shared slot. Written
-/// by [`set_npc_perks_patch`], the flag's only writer (nothing in the port sets it yet: the NPC
-/// perks patch is stage 3.9's).
+/// by [`set_npc_perks_patch`], the flag's only writer, which O18's switch-on calls
+/// (`game_patches::ge::perks::switch_on`: at `DeferredInit` when `uNPCPerks` is set in
+/// `[GamePatches]`, or by `SetOptionalPatch 18 1`).
 #[derive(Default)]
 pub(crate) struct NpcPerksPatch(std::sync::atomic::AtomicBool);
 
 /// Makes the lock-free copy (at install, before the threads start).
 pub(crate) fn install_unlocked(e: &mut Engine) {
     e.ext_free::<NpcPerksPatch>();
+    e.ext_free::<NpcPerksMap>();
     e.ext_free::<ExtraData>();
     e.ext_free::<ChangedUnlocked>();
     e.ext_free::<crate::commands::jip_fn_aux_variable::AuxMaps>();
@@ -610,11 +854,19 @@ pub fn process_changed_flags(e: &mut Engine, flags: u8) {
     s.serialized = SerializedVars::default();
     crate::commands::jip_fn_miscellaneous::publish_serialized_flags(e);
     crate::commands::jip_fn_aux_variable::publish_saved(e);
-    let s = saved(e);
-    // The NPCs' perk info leaves the actors with it (step 3.3); the map empties.
+    // The NPCs' perk info leaves the actors with it (the map is by id: nothing on the actors to
+    // clear); the map empties, each entry's lists freed.
     if flags & changed::NPC_PERKS != 0 {
-        s.npc_perks.clear();
+        let blocks: Vec<u32> = {
+            let mut map = npc_perks(e);
+            let blocks = map.iter().map(|(_, p)| p.entry_points).filter(|&b| b != 0);
+            let blocks = blocks.collect();
+            map.clear();
+            blocks
+        };
+        free_entry_points(e, &blocks);
     }
+    let s = saved(e);
     // nv-rs's own: what the last co-save loaded held that nv-rs carries without reading.
     s.carried.clear();
     s.serialized_tail.clear();
@@ -1209,7 +1461,7 @@ fn load_appearance_undo(e: &mut Engine, b: &mut Bytes) -> Option<()> {
 /// count.
 fn load_npc_perks(e: &mut Engine, b: &mut Bytes) -> Option<()> {
     let count = b.u16()?;
-    saved(e).npc_perks.set_bucket_count(u32::from(count));
+    npc_perks(e).set_bucket_count(u32::from(count));
     for _ in 0..count {
         let id = resolved_ref_id(e, b.u32()?);
         let perks = b.u8()?;
@@ -1219,7 +1471,7 @@ fn load_npc_perks(e: &mut Engine, b: &mut Bytes) -> Option<()> {
             continue;
         }
         // The actor's entry is made at its first perk kept (`s_NPCPerksInfoMap()[refID]`); the
-        // actor itself gets it with step 3.3 (`extraDataList.perksInfo`).
+        // actor finds it by its id (JIP's `extraDataList.perksInfo`).
         for _ in 0..perks {
             let perk_id = resolved_ref_id(e, b.u32()?);
             let rank = b.u8()?;
@@ -1232,7 +1484,7 @@ fn load_npc_perks(e: &mut Engine, b: &mut Bytes) -> Option<()> {
                 continue;
             }
             let rank = rank.min(e.get(Ptr::<BGSPerk>::new(perk), BGSPerk::cNumRanks));
-            saved(e).npc_perks.emplace(id).ranks.insert(perk, rank);
+            npc_perks(e).emplace(id).ranks.insert(perk, rank);
         }
     }
     Some(())
@@ -1294,6 +1546,7 @@ fn holds_nothing(e: &mut Engine) -> bool {
     let player = player_base(e);
     let aux_empty = crate::commands::jip_fn_aux_variable::aux_maps(e, false).is_empty();
     let extra_empty = extra_data(e).is_empty();
+    let perks_empty = npc_perks(e).is_empty();
     let s = saved(e);
     !s.had_section
         && s.carried.is_empty()
@@ -1305,7 +1558,7 @@ fn holds_nothing(e: &mut Engine) -> bool {
         && extra_empty
         && s.linked_refs.is_empty()
         && s.appearance_undo.get(&player).is_none()
-        && (!s.npc_perks_patch || s.npc_perks.is_empty())
+        && (!s.npc_perks_patch || perks_empty)
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/serialization.h: SaveGameCallback.
@@ -1435,15 +1688,20 @@ fn save_own(e: &mut Engine, r: &mut Records) {
             r.u32(form_id(e, *part));
         }
     }
-    // `JPNP` holds only what JIP's NPC perks patch gave (step 3.9's switch), which also decides
-    // which actors' perks stay at a save (alive, a teammate or loaded, ...).
-    if s.npc_perks_patch && !s.npc_perks.is_empty() {
+    // `JPNP` holds only what JIP's NPC perks patch gave (step 3.9's switch, O18); the entries
+    // of actors gone, dead or neither a teammate, nor without the respawn flag, nor loaded are
+    // dropped first.
+    if s.npc_perks_patch {
+        drop_unsaved_npc_perks(e);
+    }
+    let perks = npc_perks(e).clone();
+    if s.npc_perks_patch && !perks.is_empty() {
         r.record(
             kind::NPC_PERKS,
             NPC_PERKS_VERSION,
-            &(s.npc_perks.len() as u16).to_le_bytes(),
+            &(perks.len() as u16).to_le_bytes(),
         );
-        for (id, info) in s.npc_perks.iter() {
+        for (id, info) in perks.iter() {
             r.u32(*id);
             r.u8(info.ranks.len() as u8);
             for (perk, rank) in &info.ranks {
@@ -1452,6 +1710,60 @@ fn save_own(e: &mut Engine, r: &mut Records) {
             }
         }
     }
+}
+
+/// An actor's life state (`+0x108`), teammate byte (`+0x18D`), base form (`+0x20`) and the
+/// base's flags (`baseData.flags`, `+0x34`; 8: respawns).
+const ACTOR_LIFE_STATE: u32 = 0x108;
+const ACTOR_IS_TEAMMATE: u32 = 0x18d;
+const REF_BASE_FORM: u32 = 0x20;
+const BASE_DATA_FLAGS: u32 = 0x34;
+const BASE_RESPAWNS: u32 = 8;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/serialization.h: SaveGameCallback (the
+// walk over `s_NPCPerksInfoMap` before `JPNP` is written).
+/// An entry stays when its id is an actor's with perks, alive (life state 0) and a teammate, or
+/// of a base without the respawn flag, or with its 3D loaded (`GetRefNiNode`); every other entry
+/// goes, its lists freed.
+fn drop_unsaved_npc_perks(e: &mut Engine) {
+    let entries: Vec<(u32, bool)> = npc_perks(e)
+        .iter()
+        .map(|(id, p)| (*id, p.ranks.is_empty()))
+        .collect();
+    let mut gone = Vec::new();
+    for (id, no_ranks) in entries {
+        let actor = lookup_form(e, id);
+        // An actor with no base form (none in the game; JIP would read address 0x34) counts as
+        // one without the respawn flag.
+        let respawns = |e: &mut Engine| {
+            let base = e.mem.u32(actor + REF_BASE_FORM);
+            base != 0 && e.mem.u32(base + BASE_DATA_FLAGS) & BASE_RESPAWNS != 0
+        };
+        let keep = actor != 0
+            && vtable_says(e, actor, VT_IS_ACTOR)
+            && !no_ranks
+            && e.mem.u32(actor + ACTOR_LIFE_STATE) == 0
+            && (e.mem.u8(actor + ACTOR_IS_TEAMMATE) != 0
+                || !respawns(e)
+                || crate::game_patches::ge::perks::ref_node(e, actor) != 0);
+        if !keep {
+            gone.push(id);
+        }
+    }
+    let blocks: Vec<u32> = {
+        let mut map = npc_perks(e);
+        let mut blocks = Vec::new();
+        for id in &gone {
+            if let Some(p) = map.get(id) {
+                if p.entry_points != 0 {
+                    blocks.push(p.entry_points);
+                }
+            }
+            map.erase(id);
+        }
+        blocks
+    };
+    free_entry_points(e, &blocks);
 }
 
 // ---- the messages (jip_nvse.cpp: NVSEMessageHandler) ----
@@ -1467,9 +1779,13 @@ fn message_text(e: &Engine, m: &Message) -> Vec<u8> {
 // frame after the load reports no change, and the actor hooks' part: the fire-weapon hook's
 // count, the ragdoll events gone; and the AI hooks' part: the combat, teleport and equipment hooks
 // off, the forced targets and detection values gone; and the world hooks' part: the informed
-// forms, the waits, the swapped LOD blocks and the model paths gone, the reference names' flags set
+// forms, the waits, the script lights off their nodes, the swapped LOD blocks and the model paths
+// gone, the reference names' flags set
 // again; and the player's killer cleared, G33's part; and the excluded combat actions gone, H16's
-// part; and the references' own map markers gone).
+// part; and the references' own map markers gone, and the synchronized position's reference).
+/// Not installed, every step leaves the game as it is: the ones that write the game's memory (G33's
+/// killer, H16's excluded actions) check that JIP answers "installed"; the others only clear JIP's
+/// own state and switch off hooks, which are empty and off while JIP is not installed.
 fn pre_load_housekeeping(e: &mut Engine) {
     let npc = player_base(e);
     saved(e).appearance_undo.erase(&npc);
@@ -1483,8 +1799,19 @@ fn pre_load_housekeeping(e: &mut Engine) {
     crate::commands::jip_fn_misc_ref::pre_load(e);
 }
 
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: DeferredInit (its console
+// line).
+/// `Console_Print("JIP LN version: %.2f", JIP_LN_VERSION)`: "JIP LN version: 57.30" on the console
+/// at the deferred start, while JIP answers "installed".
+pub(crate) fn print_version(e: &mut Engine) {
+    if e.ext::<Jip>().answers_installed {
+        let words = nvse::commands::double_words(crate::identity::version());
+        nvse::commands::console_print(e, "JIP LN version: %.2f", &words);
+    }
+}
+
 // Translated from JIP LN NVSE 57.30 (5a30ac4), jip_nvse.cpp: NVSEMessageHandler (the save,
-// load, exit and new game cases' saved data; their scripts come with JIP's script runner).
+// load, exit and new game cases: their saved data, then the script runner's files).
 /// JIP's listener for xNVSE's messages.
 pub fn listen(e: &mut Engine, m: &Message) {
     match m.kind {
@@ -1520,6 +1847,14 @@ pub fn listen(e: &mut Engine, m: &Message) {
             // `DoLoadGameHousekeeping` after a load that succeeded: its saved data's part.
             if m.data & 0xff != 0 {
                 crate::world_hooks::restore_form_flags(e);
+                // The player's teammate perks put on again (JIP's own, no switch).
+                if e.ext::<Jip>().answers_installed {
+                    crate::game_patches::ge::perks::teammate_perks_after_load(e);
+                }
+                // O17's pass over the high actors (bNPCWeaponMods), JIP's next step.
+                crate::game_patches::gh2::post_load_game(e);
+                // O18's (uNPCPerks): the high actors' perks put on.
+                crate::game_patches::ge::perks::post_load_game(e);
                 // `RestoreLinkedRefs(s_linkedRefsTemp)` with the linked references changed.
                 crate::commands::jip_fn_linked_ref::after_load(e);
                 set_changed(e, 0);
@@ -1536,19 +1871,35 @@ pub fn listen(e: &mut Engine, m: &Message) {
             s.serialized_tail.clear();
             s.had_section = false;
         }
-        // `DeferredInit` (once per run): its temporary position marker and the two vanilla ash
-        // piles marked (step 3.9 G06).
+        // `DeferredInit` (once per run): its temporary position marker, the two vanilla ash
+        // piles marked (step 3.9 G06) and group GF's part (D01's slot, G130's names dropped).
         msg::DEFERRED_INIT => {
             crate::commands::pos_marker::create(e);
             crate::game_patches::gh2::deferred_init(e);
+            // O16's lists (JIP turns the switches from 15 on here, `s_deferrSetOptional`).
+            crate::game_patches::ga::deferred_init(e);
+            // O18's switch (`uNPCPerks`; JIP's `SetOptionalPatch(18, true)` in the same loop).
+            let auto_add = e
+                .ext::<crate::Jip>()
+                .game_patches
+                .settings
+                .npc_perks_auto_add;
+            crate::game_patches::ge::perks::switch_on(e, auto_add);
+            crate::game_patches::gf::deferred_init(e);
             crate::commands::jip_fn_utility::deferred_init(e);
             crate::game_patches::gs::deferred_init(e);
+            print_version(e);
+            // The text input menu's font heights (`s_fontHeightDatas`), before D06 as in JIP.
+            crate::commands::jip_fn_ui_text::deferred_init(e);
+            // Group GB's part: Big Guns' switch (O3), name and derivation (D06).
+            crate::game_patches::gb::deferred_init(e);
         }
         msg::MAIN_GAME_LOOP => {
             // The callbacks, then the LN events when any has a handler: one look at JIP's state
             // when there is nothing to do. Sent only once JIP answers "installed" (it asks for it,
             // `nvse::plugins::listen_per_frame`); the check keeps it so if another built-in asks.
-            // (JIP's HUD cursor and item list box parts come with their UI commands.)
+            // Then the HUD cursor's end and the item list refresh G60 asked for (two lock-free
+            // reads when neither is on).
             let jip = e.ext::<Jip>();
             if !jip.answers_installed {
                 return;
@@ -1562,9 +1913,13 @@ pub fn listen(e: &mut Engine, m: &Message) {
             } else if events {
                 crate::ln_events::process(e);
             }
+            crate::commands::jip_fn_ui::main_loop(e);
         }
         _ => {}
     }
+    // The script runner's files, after each case's own steps as in JIP: compiled at the deferred
+    // start (its last step), run at the load, new game, save and exits.
+    crate::script_runner::on_message(e, m.kind, m.data);
 }
 
 #[cfg(test)]

@@ -510,8 +510,23 @@ impl Engine {
         e.register_imports(&crate::exe::imports(&file)?);
         // The process starts in the executable's folder (where Steam starts
         // the game): `GetCurrentDirectoryA` reports it.
+        // Off Windows, as the game names this system's folders: on drive Z:.
         if let Some(folder) = exe.parent() {
+            #[cfg(windows)]
             let folder = folder.to_string_lossy().replace('/', "\\");
+            // Made absolute first: drive Z:'s names all start at `/`. A folder whose names a
+            // Windows path cannot hold is refused (`exe::game_view_refused`).
+            #[cfg(not(windows))]
+            let folder = {
+                let host = std::env::current_dir()
+                    .map_err(|err| format!("{}: {err}", folder.display()))?
+                    .join(folder);
+                let host = host.to_string_lossy();
+                if let Some(why) = crate::exe::game_view_refused(&host) {
+                    return Err(why);
+                }
+                crate::exe::game_view(&host)
+            };
             e.kernel.current_directory = folder.into_bytes();
         }
         Ok(e)

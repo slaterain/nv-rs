@@ -59,43 +59,18 @@ pub fn rows() -> Vec<Row> {
 }
 
 /// The value of `key` in `section` of the INI `text`, as the game's `GetPrivateProfileStringA`
-/// finds it (`engine_platform::ini`'s reader): only in the first section of that name (a later
-/// section of the same name is not read, as Windows measured: measure/ini/repeated-sections.md),
-/// names compared without case, spaces around names and values trimmed, one pair of surrounding
-/// quotes taken off; the first match wins. A `;` line never matches.
-pub fn value<'a>(text: &'a str, section: &str, key: &str) -> Option<&'a str> {
-    let mut inside = false;
-    for line in text.lines() {
-        let line = line.trim();
-        if let Some(rest) = line.strip_prefix('[') {
-            // The first section of the name ends here: no later one is read.
-            if inside {
-                return None;
-            }
-            let name = rest.split(']').next().unwrap_or(rest);
-            inside = name.trim().eq_ignore_ascii_case(section.trim());
-            continue;
-        }
-        if !inside {
-            continue;
-        }
-        let Some((name, value)) = line.split_once('=') else {
-            continue;
-        };
-        if name.trim().eq_ignore_ascii_case(key) {
-            let value = value.trim();
-            let value = value
-                .strip_prefix('"')
-                .and_then(|v| v.strip_suffix('"'))
-                .unwrap_or(value);
-            return Some(value);
-        }
-    }
-    None
+/// finds it: the one reader of those rules, `engine_core::mod_files::ini_value` (measured on
+/// scratch files: only the first section of a name, measure/ini/repeated-sections.md; names
+/// compared without case; spaces around names and values trimmed; one pair of the same quotes,
+/// double or single, taken off, `ini3-2026-11-16.txt`; a line ends at LF or a lone CR,
+/// `ini4-2026-11-16.txt`). A `;` line never matches.
+pub fn value(text: &str, section: &str, key: &str) -> Option<String> {
+    engine_core::mod_files::ini_value(text.as_bytes(), section.as_bytes(), key.as_bytes())
+        .map(|v| String::from_utf8_lossy(&v).into_owned())
 }
 
 /// What the `[nv-rs ...]` sections set: `None` where a key is missing, empty or not usable.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Keys {
     pub preset: Option<Preset>,
     pub borderless: Option<bool>,
@@ -104,12 +79,28 @@ pub struct Keys {
     pub menu_frame_limit: Option<u32>,
     /// `bShowFrameRate`: the frame-rate counter shown from the start (`d3d9_wgpu::frame_rate`).
     pub show_frame_rate: Option<bool>,
+    /// `bAmbientOcclusion`: the new lighting (`d3d9_wgpu::scene_light`).
+    pub ambient_occlusion: Option<bool>,
+    /// `fAmbientOcclusionStrength`: how strong its shade is (a number; clamped where it is used).
+    pub ambient_occlusion_strength: Option<f32>,
+    /// `bSunShadows`: the sun shadows (`d3d9_wgpu::sun_shadow`).
+    pub sun_shadows: Option<bool>,
+    /// `bSunLightFromSky`: with the sun shadows, the sun light from the sky's discs.
+    pub sun_light_from_sky: Option<bool>,
+    /// `bSunShadowsCharacters`: with the sun shadows, characters cast (one shadow each).
+    pub sun_shadow_characters: Option<bool>,
     pub stepped_threads: Option<bool>,
     pub render_thread: Option<bool>,
+    /// `bNotBackground`: Windows told the game is not background work (`qos`).
+    pub not_background: Option<bool>,
     /// The fix rows the file turns on or off, by `crate::fixes::Fix::env`.
     pub fixes: Vec<(&'static str, bool)>,
     /// The lines whose value can't be used (`key=value`): the default stands for each.
     pub bad: Vec<String>,
+    /// `[nv-rs Stewie]`: lStewieAl's Tweaks' rows' off keys and `bMissingKeysAsTweaks`, read by the
+    /// keys `crates/stewie` names (its own table, not [`TABLE`]: a key a row, as many as Tweaks has
+    /// rows built).
+    pub stewie: stewie::rows::Keys,
 }
 
 impl Keys {
@@ -120,6 +111,7 @@ impl Keys {
             let Some(raw) = value(text, row.section, row.key) else {
                 continue;
             };
+            let raw = raw.as_str();
             // An empty value is the default, as the launcher reads an empty settings.ini line.
             if raw.is_empty() {
                 continue;
@@ -149,6 +141,27 @@ impl Keys {
                     keys.show_frame_rate = flag(raw);
                     keys.show_frame_rate.is_some()
                 }
+                "bAmbientOcclusion" => {
+                    keys.ambient_occlusion = flag(raw);
+                    keys.ambient_occlusion.is_some()
+                }
+                "fAmbientOcclusionStrength" => {
+                    keys.ambient_occlusion_strength =
+                        raw.parse::<f32>().ok().filter(|v| v.is_finite());
+                    keys.ambient_occlusion_strength.is_some()
+                }
+                "bSunShadows" => {
+                    keys.sun_shadows = flag(raw);
+                    keys.sun_shadows.is_some()
+                }
+                "bSunLightFromSky" => {
+                    keys.sun_light_from_sky = flag(raw);
+                    keys.sun_light_from_sky.is_some()
+                }
+                "bSunShadowsCharacters" => {
+                    keys.sun_shadow_characters = flag(raw);
+                    keys.sun_shadow_characters.is_some()
+                }
                 "bSteppedThreads" => {
                     keys.stepped_threads = flag(raw);
                     keys.stepped_threads.is_some()
@@ -156,6 +169,10 @@ impl Keys {
                 "bRenderThread" => {
                     keys.render_thread = flag(raw);
                     keys.render_thread.is_some()
+                }
+                "bNotBackground" => {
+                    keys.not_background = flag(raw);
+                    keys.not_background.is_some()
                 }
                 _ => {
                     let fix = FIXES.iter().find(|f| f.env == row.switch);
@@ -172,6 +189,8 @@ impl Keys {
                 keys.bad.push(format!("{}={raw}", row.key));
             }
         }
+        keys.stewie = stewie::rows::Keys::read(|key| value(text, stewie::SECTION, key));
+        keys.bad.extend(keys.stewie.bad.iter().cloned());
         keys
     }
 
@@ -196,10 +215,27 @@ fn flag(raw: &str) -> Option<bool> {
 }
 
 /// The run's `Fallout.ini`: `My Games\FalloutNV\Fallout.ini` in the Documents folder the run's
-/// adapter table gives the game (`crate::adapter_table_path`), where the game reads it.
+/// adapter table gives the game (`crate::adapter_table_text`), where the game reads it.
 /// A folder whose bytes can't be read is named once in the log ([`path_from_table`]).
 pub fn path() -> Option<PathBuf> {
-    let table = std::fs::read_to_string(crate::adapter_table_path()?).ok()?;
+    // Linux and macOS: the Documents folder is nv-rs's own (`engine_platform::machine_table::
+    // game_folders`), found without making the machine table, which this settings' reading
+    // (before the run's renderer choice) must not fix. A test's table (`NV_D3D9_ADAPTER`) names
+    // its own.
+    #[cfg(not(windows))]
+    if std::env::var_os("NV_D3D9_ADAPTER").is_none() {
+        let own = crate::own_folder()
+            .map_err(|why| eprintln!("Fallout.ini's nv-rs settings not read: {why}"))
+            .ok()?;
+        let [documents, _, _] = engine_platform::machine_table::game_folders(&own);
+        return Some(
+            documents
+                .join("My Games")
+                .join("FalloutNV")
+                .join("Fallout.ini"),
+        );
+    }
+    let table = crate::adapter_table_text()?;
     path_from_table(&table).unwrap_or_else(|why| {
         eprintln!("{why}");
         None
@@ -225,6 +261,14 @@ pub fn path_from_table(table: &str) -> Result<Option<PathBuf>, String> {
             String::from_utf8_lossy(e.as_bytes())
         )
     })?;
+    // Linux and macOS: the table names the folder as the game sees it, on drive Z:
+    // (`engine_platform::machine_table`); this system's name of it. (#633's
+    // `engine_platform::files::host_path` takes this place when it is merged.)
+    #[cfg(not(windows))]
+    let documents = match documents.strip_prefix("Z:") {
+        Some(rest) => rest.replace('\\', "/"),
+        None => documents,
+    };
     Ok(Some(
         Path::new(&documents)
             .join("My Games")
@@ -277,10 +321,16 @@ mod tests {
             assert!(row.section.starts_with("nv-rs "), "{row:?}");
             assert!(!row.section.contains(':'), "{row:?}");
             assert!(!row.comment.trim().is_empty(), "{row:?}");
-            assert!(row.key.starts_with(['b', 'i', 's']), "{row:?}");
+            assert!(row.key.starts_with(['b', 'f', 'i', 's']), "{row:?}");
             assert!(seen.insert(row.key.to_ascii_lowercase()), "{row:?}");
             if row.key.starts_with('b') {
                 assert!(flag(row.default).is_some(), "{row:?}");
+            }
+            if row.key.starts_with('f') {
+                assert!(
+                    row.default.parse::<f32>().is_ok_and(f32::is_finite),
+                    "{row:?}"
+                );
             }
         }
         assert_eq!(
@@ -295,8 +345,14 @@ mod tests {
                 "iFrameLimit",
                 "iMenuFrameLimit",
                 "bShowFrameRate",
+                "bAmbientOcclusion",
+                "fAmbientOcclusionStrength",
+                "bSunShadows",
+                "bSunLightFromSky",
+                "bSunShadowsCharacters",
                 "bSteppedThreads",
-                "bRenderThread"
+                "bRenderThread",
+                "bNotBackground"
             ]
         );
     }
@@ -319,9 +375,27 @@ mod tests {
             Some(crate::fixes::PLAY_THREADS == "stepped")
         );
         assert_eq!(keys.render_thread, Some(crate::fixes::PLAY_RENDER_THREAD));
+        assert_eq!(keys.not_background, Some(crate::fixes::PLAY_NOT_BACKGROUND));
         assert_eq!(
             keys.show_frame_rate,
             Some(crate::fixes::PLAY_SHOW_FRAME_RATE)
+        );
+        assert_eq!(
+            keys.ambient_occlusion,
+            Some(crate::fixes::PLAY_AMBIENT_OCCLUSION)
+        );
+        assert_eq!(
+            keys.ambient_occlusion_strength,
+            Some(crate::fixes::PLAY_AMBIENT_OCCLUSION_STRENGTH)
+        );
+        assert_eq!(keys.sun_shadows, Some(crate::fixes::PLAY_SUN_SHADOWS));
+        assert_eq!(
+            keys.sun_light_from_sky,
+            Some(crate::fixes::PLAY_SUN_LIGHT_FROM_SKY)
+        );
+        assert_eq!(
+            keys.sun_shadow_characters,
+            Some(crate::fixes::PLAY_SUN_SHADOW_CHARACTERS)
         );
         // The fix lines are commented out: the preset decides.
         assert!(keys.fixes.is_empty());
@@ -384,13 +458,19 @@ mod tests {
     fn values_are_found_as_the_games_reader_finds_them() {
         let text = "[nv-rs Display]\n;iFrameLimit=30\n  IFRAMELIMIT = \"60\" \niFrameLimit=90\n\
                     [General]\niFrameLimit=10\n[ NV-RS display ]\nbBorderless=1\n";
-        assert_eq!(value(text, "nv-rs Display", "iFrameLimit"), Some("60"));
+        assert_eq!(
+            value(text, "nv-rs Display", "iFrameLimit").as_deref(),
+            Some("60")
+        );
         // Only the first section of a name counts (Windows, measured 2026-11-09): the key in the
         // later `[ NV-RS display ]` is not read.
-        assert_eq!(value(text, "nv-rs Display", "bBorderless"), None);
-        assert_eq!(value(text, "General", "iFrameLimit"), Some("10"));
-        assert_eq!(value(text, "nv-rs Display", ";iFrameLimit"), Some("30"));
-        assert_eq!(value(text, "nv-rs Threads", "iFrameLimit"), None);
+        assert_eq!(value(text, "nv-rs Display", "bBorderless").as_deref(), None);
+        assert_eq!(value(text, "General", "iFrameLimit").as_deref(), Some("10"));
+        assert_eq!(
+            value(text, "nv-rs Display", ";iFrameLimit").as_deref(),
+            Some("30")
+        );
+        assert_eq!(value(text, "nv-rs Threads", "iFrameLimit").as_deref(), None);
     }
 
     /// Three more of Windows' answers (measure/ini/repeated-sections.md, scratch files): a key
@@ -399,8 +479,14 @@ mod tests {
     /// is in no section, and `[]` is a section named "".
     #[test]
     fn repeated_keys_headings_and_keys_before_any_section_read_as_windows_does() {
-        assert_eq!(value("[A]\r\nx=1\r\nx=2\r\n", "A", "x"), Some("1"));
-        assert_eq!(value("[A]\r\nX=1\r\n x =2\r\n", "A", "x"), Some("1"));
+        assert_eq!(
+            value("[A]\r\nx=1\r\nx=2\r\n", "A", "x").as_deref(),
+            Some("1")
+        );
+        assert_eq!(
+            value("[A]\r\nX=1\r\n x =2\r\n", "A", "x").as_deref(),
+            Some("1")
+        );
         for text in [
             "[A] trailing\r\nx=1\r\n",
             "[A]; note\r\nx=1\r\n",
@@ -408,12 +494,32 @@ mod tests {
             "[A\r\nx=1\r\n",
             "[A]x=9\r\nx=1\r\n",
         ] {
-            assert_eq!(value(text, "A", "x"), Some("1"), "{text:?}");
+            assert_eq!(value(text, "A", "x").as_deref(), Some("1"), "{text:?}");
         }
-        assert_eq!(value("[A]]\r\nx=1\r\n", "A]", "x"), None);
-        assert_eq!(value("x=1\r\n[A]\r\ny=2\r\n", "", "x"), None);
-        assert_eq!(value("x=1\r\n[A]\r\ny=2\r\n", "A", "x"), None);
-        assert_eq!(value("x=1\r\n[]\r\nz=3\r\n", "", "z"), Some("3"));
+        assert_eq!(value("[A]]\r\nx=1\r\n", "A]", "x").as_deref(), None);
+        assert_eq!(value("x=1\r\n[A]\r\ny=2\r\n", "", "x").as_deref(), None);
+        assert_eq!(value("x=1\r\n[A]\r\ny=2\r\n", "A", "x").as_deref(), None);
+        assert_eq!(value("x=1\r\n[]\r\nz=3\r\n", "", "z").as_deref(), Some("3"));
+    }
+
+    /// The game's reader's rules measured on 2026-11-16, read here through the core's one reader:
+    /// one pair of single quotes taken off as double ones are (`ini3-2026-11-16.txt`: `'1'` reads
+    /// 1, `"1'` stays), and a line ending at a lone CR (`ini4-2026-11-16.txt`, `STRING cr only`:
+    /// `[A]\rx=1\ry=2\r` reads y as 2).
+    #[test]
+    fn single_quotes_and_a_lone_cr_read_as_the_game_reads_them() {
+        let text = "[nv-rs Display]\r\nsRenderer='vulkan'\r\niFrameLimit=\"144'\r\n";
+        assert_eq!(
+            value(text, "nv-rs Display", "sRenderer").as_deref(),
+            Some("vulkan")
+        );
+        assert_eq!(
+            value(text, "nv-rs Display", "iFrameLimit").as_deref(),
+            Some("\"144'")
+        );
+        assert_eq!(value("[A]\rx=1\ry=2\r", "A", "y").as_deref(), Some("2"));
+        let keys = Keys::read("[nv-rs Display]\riFrameLimit='60'\r");
+        assert_eq!(keys.frame_limit, Some(60));
     }
 
     /// Windows' answers on a file with a repeated section name (measure/ini/repeated-sections.md,
@@ -422,17 +528,17 @@ mod tests {
     #[test]
     fn only_the_first_section_of_a_name_is_read() {
         let text = "[A]\r\nx=1\r\n[B]\r\nz=3\r\n[a]\r\ny=2\r\nx=9\r\n[ A ]\r\nw=6\r\n";
-        assert_eq!(value(text, "A", "x"), Some("1"));
-        assert_eq!(value(text, "A", "y"), None);
-        assert_eq!(value(text, "A", "w"), None);
-        assert_eq!(value(text, "B", "z"), Some("3"));
-        assert_eq!(value(text, " A ", "x"), Some("1"));
+        assert_eq!(value(text, "A", "x").as_deref(), Some("1"));
+        assert_eq!(value(text, "A", "y").as_deref(), None);
+        assert_eq!(value(text, "A", "w").as_deref(), None);
+        assert_eq!(value(text, "B", "z").as_deref(), Some("3"));
+        assert_eq!(value(text, " A ", "x").as_deref(), Some("1"));
         let text = "[a]\r\nx=1\r\n[A]\r\ny=2\r\n[C]\r\nq=1\r\n[C]\r\nq=2\r\nr=3\r\n";
-        assert_eq!(value(text, "A", "x"), Some("1"));
-        assert_eq!(value(text, "A", "y"), None);
-        assert_eq!(value(text, "C", "q"), Some("1"));
-        assert_eq!(value(text, "C", "r"), None);
-        assert_eq!(value("[A]\r\n[A]\r\nx=1\r\n", "A", "x"), None);
+        assert_eq!(value(text, "A", "x").as_deref(), Some("1"));
+        assert_eq!(value(text, "A", "y").as_deref(), None);
+        assert_eq!(value(text, "C", "q").as_deref(), Some("1"));
+        assert_eq!(value(text, "C", "r").as_deref(), None);
+        assert_eq!(value("[A]\r\n[A]\r\nx=1\r\n", "A", "x").as_deref(), None);
     }
 
     /// Unknown keys, original keys and notes are passed over; a value we can't use leaves the
@@ -502,5 +608,20 @@ mod tests {
         let ansi = "SHGetFolderPathA\t5 0\t0\t443a5c506c61795c4a6f73e9\n";
         let why = path_from_table(ansi).unwrap_err();
         assert!(why.contains("not read"), "{why}");
+    }
+
+    /// Linux and macOS: the table's Documents on drive Z: is this system's folder.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_documents_folder_on_drive_z_is_this_systems() {
+        let hex = |s: &str| s.bytes().map(|b| format!("{b:02x}")).collect::<String>();
+        let table = format!(
+            "SHGetFolderPathA\t5 0\t0\t{}\n",
+            hex(r"Z:\home\me\.local\share\nv-rs\game\Documents")
+        );
+        assert_eq!(
+            path_from_table(&table).unwrap().unwrap(),
+            Path::new("/home/me/.local/share/nv-rs/game/Documents/My Games/FalloutNV/Fallout.ini")
+        );
     }
 }

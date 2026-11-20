@@ -683,7 +683,10 @@ fn spawn_sampler(settings: Settings) {
     }
     *slot = std::thread::Builder::new()
         .name("nv-profile".into())
-        .spawn(move || sampler(settings))
+        .spawn(move || {
+            qos::thread_started();
+            sampler(settings)
+        })
         .ok();
 }
 

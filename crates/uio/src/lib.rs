@@ -28,6 +28,9 @@
 //! - [`zoom`]: text tiles honour `<zoom>` (`TileText::MakeNode`, `00A221F8`); the HUD's hardcore
 //!   texts no longer set one (`HUDMainMenu::Create`, five places).
 //!
+//! - [`report`]: nv-rs's own start-up report in the play log, in place of UIO's log file: the
+//!   lists read, what they add and where, and why each entry left out was left out.
+//!
 //! Left out: UIO's log files and its developer settings (`settings.ini`: `bDebugMode` and its
 //! per-file dumps, `sDoNotCache`).
 //!
@@ -45,6 +48,7 @@ pub mod parse;
 pub mod patch;
 pub mod post_parse;
 pub mod reader;
+pub mod report;
 pub mod zoom;
 
 pub use game::inject_component;
@@ -89,6 +93,11 @@ pub struct Uio {
     pub parsed: std::collections::HashMap<u32, Parsed>,
     /// The text [`inject_component`] hands to the next read (`s_externFileData`).
     pub extern_text: Option<Vec<u8>>,
+    /// The start-up report's patched files (by UIO's hash of the path: the path, its count of
+    /// additions), for the line on the first read of one ([`report::first_read_line`]).
+    pub first_read: std::collections::HashMap<u32, (Vec<u8>, usize)>,
+    /// That line was printed.
+    pub first_read_told: bool,
 }
 
 /// One file's entry in UIO's parse cache (`ParsedData`): its kept storage (0: none yet) and

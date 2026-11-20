@@ -1,0 +1,7 @@
+This crate rebuilds the NVSE plugin of The Mod Configuration Menu (MCM) 1.5 by Pelinor
+(NVSE\Plugins\MCM.dll, "MCM Extensions" version 1) in Rust, with its author's permission (the
+maintainer, 2026-11-03: every mod author gave it; disassembling plugin DLLs to match them exactly
+is allowed). The DLL ships without source; its behaviour was read from its machine code. No byte
+of the DLL and no file of the mod is included.
+
+Credits: The Mod Configuration Menu is written by Pelinor (https://www.nexusmods.com/newvegas/mods/42507).

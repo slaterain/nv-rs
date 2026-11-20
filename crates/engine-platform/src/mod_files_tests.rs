@@ -35,6 +35,7 @@ fn scratch(name: &str) -> Scratch {
 }
 
 /// Every file and folder under `root`, with each file's bytes.
+#[cfg(windows)]
 fn tree(root: &Path) -> Vec<(PathBuf, Option<Vec<u8>>)> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
@@ -70,6 +71,15 @@ fn names_outside_the_game_folder_and_devices_are_refused() {
     );
     ok(br"Data\Console.ini", br"Data\Console.ini");
     ok(br"Data\COM10.ini", br"Data\COM10.ini");
+    // `..` takes off the part before it while the name stays inside the game's folder
+    // (REVIEW-642: JIP's `..\NVSE\Plugins\x.ini` from the config folder is Data's).
+    ok(br"Data\Config\..\x.ini", br"Data\x.ini");
+    ok(
+        br"data\config\..\NVSE\Plugins\SomePlugin.ini",
+        br"data\NVSE\Plugins\SomePlugin.ini",
+    );
+    ok(br"Data\a\b\..\..\x.ini", br"Data\x.ini");
+    ok(br"c:\games\fnv\Data\..\Data\x.ini", br"Data\x.ini");
     for bad in [
         &br"..\x.ini"[..],
         br"Data\..\..\x.ini",
@@ -103,6 +113,15 @@ fn names_outside_the_game_folder_and_devices_are_refused() {
         br"Data\conout$.ini",
         br"Data\NUL .ini",
         b"Data\\COM\xb9.ini",
+        // The superscripts in UTF-8, as the file layer would read them (REVIEW-642b).
+        b"Data\\COM\xc2\xb9.ini",
+        b"Data\\lpt\xc2\xb2",
+        b"Data\\Com\xc2\xb3 .txt",
+        // A device is refused before any `..` is weighed (REVIEW-642): never opened, inside or
+        // outside, and also in a part a later `..` takes off.
+        br"..\con.ini",
+        br"Data\Config\..\..\..\nul",
+        br"Data\CON\..\x.ini",
     ] {
         assert_eq!(
             relative(&e, device),
@@ -123,6 +142,10 @@ fn names_outside_the_game_folder_and_devices_are_refused() {
 
 /// Reads look at this run's writes, then the port's folder, then the game's; a write goes to the
 /// folder and the run, never the game's folder; names outside it are written nowhere.
+// Windows only: it builds the game's names with backslashes and drive letters, which the platform's
+// file layer maps to host paths on Windows alone (`files::real_path` keeps a backslash
+// as part of a name elsewhere; starting the game there is refused today).
+#[cfg(windows)]
 #[test]
 fn reads_prefer_the_ports_folder_and_writes_never_reach_the_game() {
     let game = scratch("game");
@@ -188,6 +211,7 @@ fn reads_prefer_the_ports_folder_and_writes_never_reach_the_game() {
 /// A name the game's folder does not hold reads nothing and is not there, even when a file of
 /// that name exists on disk (`..`, the full path of a file beside the game's folder, another
 /// drive, a UNC path, the folder above).
+// Runs on every system: the refusal is name logic alone (only its last read is Windows-only).
 #[test]
 fn a_refused_name_reads_nothing() {
     let root = scratch("refused");
@@ -214,9 +238,10 @@ fn a_refused_name_reads_nothing() {
         &rooted,
     ] {
         let shown = String::from_utf8_lossy(name).into_owned();
+        // As a file that is not there (the stated rule; REVIEW-642).
         assert_eq!(
             seam::read_or_error(&e, name),
-            Err(ERROR_ACCESS_DENIED),
+            Err(ERROR_FILE_NOT_FOUND),
             "{shown}"
         );
         assert_eq!(seam::profile_string(&e, name, b"A", b"x"), None, "{shown}");
@@ -229,12 +254,17 @@ fn a_refused_name_reads_nothing() {
             String::from_utf8_lossy(folder)
         );
     }
-    // The same file through the game's folder is read.
-    std::fs::write(game.join(r"Data\in.ini"), b"[A]\r\nx=2\r\n").unwrap();
-    assert_eq!(
-        seam::profile_string(&e, br"Data\in.ini", b"A", b"x").unwrap(),
-        b"2"
-    );
+    // The same file through the game's folder is read. Windows only: the game's backslash in
+    // `Data\in.ini` is a separator for the platform's file layer on Windows alone
+    // (`files::real_path` keeps it as part of a name elsewhere).
+    #[cfg(windows)]
+    {
+        std::fs::write(game.join(r"Data\in.ini"), b"[A]\r\nx=2\r\n").unwrap();
+        assert_eq!(
+            seam::profile_string(&e, br"Data\in.ini", b"A", b"x").unwrap(),
+            b"2"
+        );
+    }
 }
 
 /// A kept file that is there but cannot be read (another program holds it) fails the read: the
@@ -304,6 +334,10 @@ fn exists_does_not_read_the_file() {
 
 /// Without a folder, writes and folders live in the run's memory: nothing on any disk (the game's
 /// folder, the process's current folder, the temporary folder), read back in the run.
+// Windows only: it builds the game's names with backslashes and drive letters, which the platform's
+// file layer maps to host paths on Windows alone (`files::real_path` keeps a backslash
+// as part of a name elsewhere; starting the game there is refused today).
+#[cfg(windows)]
 #[test]
 fn without_a_folder_nothing_touches_the_disk() {
     let game = scratch("session");
@@ -326,6 +360,10 @@ fn without_a_folder_nothing_touches_the_disk() {
 
 /// A write into an empty port folder makes the folders its name says (when the game has them)
 /// and puts the bytes on disk; a folder that exists nowhere fails as Windows does.
+// Windows only: it builds the game's names with backslashes and drive letters, which the platform's
+// file layer maps to host paths on Windows alone (`files::real_path` keeps a backslash
+// as part of a name elsewhere; starting the game there is refused today).
+#[cfg(windows)]
 #[test]
 fn a_write_into_an_empty_port_folder_makes_its_folders() {
     let game = scratch("empty-game");
@@ -358,6 +396,10 @@ fn a_write_into_an_empty_port_folder_makes_its_folders() {
 
 /// A port folder that cannot be written fails the call and changes nothing: no `.part`, no copy
 /// in memory; nor does a name that is a folder.
+// Windows only: it builds the game's names with backslashes and drive letters, which the platform's
+// file layer maps to host paths on Windows alone (`files::real_path` keeps a backslash
+// as part of a name elsewhere; starting the game there is refused today).
+#[cfg(windows)]
 #[test]
 fn a_failed_folder_write_is_a_failure() {
     let game = scratch("fail-game");
@@ -407,10 +449,47 @@ fn a_junction_out_of_the_port_folder_is_refused() {
     assert!(away_tree.is_empty(), "nothing made through the junction");
 }
 
+/// A folder of the port's folder written into once and then swapped for a junction to another
+/// folder (a scratch "game" folder here) is checked again: the next write is refused and nothing
+/// lands in that folder (REVIEW-642b: no folder is trusted for the session).
+#[cfg(windows)]
+#[test]
+fn a_folder_swapped_for_a_junction_after_a_write_is_refused() {
+    let game = scratch("swap-game");
+    let kept = scratch("swap-kept");
+    let away = scratch("swap-away");
+    std::fs::create_dir_all(game.join(r"Data\Config")).unwrap();
+    let mut e = engine(&game);
+    set_folder(&mut e, Some(kept.to_path_buf()));
+    let name = br"Data\Config\A.ini";
+    assert_eq!(seam::write_or_error(&mut e, name, b"first"), Ok(()));
+    let config = kept.join(r"Data\Config");
+    std::fs::remove_dir_all(&config).unwrap();
+    let made = std::process::Command::new("cmd")
+        .args(["/c", "mklink", "/J"])
+        .arg(&config)
+        .arg(&*away)
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "{made:?}");
+    let second = seam::write_or_error(&mut e, name, b"second");
+    let away_tree = tree(&away);
+    let _ = std::fs::remove_dir(&config);
+    assert_eq!(second, Err(ERROR_ACCESS_DENIED));
+    assert!(
+        away_tree.is_empty(),
+        "nothing written through the junction: {away_tree:?}"
+    );
+}
+
 /// MCM's `SetModINI` sequence on the real calls (`GetFileAttributesA("Data\Config\")`,
 /// `CreateDirectoryA`, `fopen("r")`, `fopen("w")` with one backspace byte,
 /// `WritePrivateProfileStringA`): with and without the game's `Data\Config`, with and without a
 /// port folder; the file Windows would make, and the game's folder untouched.
+// Windows only: it builds the game's names with backslashes and drive letters, which the platform's
+// file layer maps to host paths on Windows alone (`files::real_path` keeps a backslash
+// as part of a name elsewhere; starting the game there is refused today).
+#[cfg(windows)]
 #[test]
 fn mcms_set_mod_ini_sequence() {
     for (game_has_config, with_folder) in
@@ -449,6 +528,10 @@ fn mcms_set_mod_ini_sequence() {
 /// With real threads the seam holds the kernel lock while it reaches the platform's state: a
 /// thread that does not hold it reads through the seam, and the calls' check passes (they
 /// assert the lock in debug builds).
+// Windows only: it builds the game's names with backslashes and drive letters, which the platform's
+// file layer maps to host paths on Windows alone (`files::real_path` keeps a backslash
+// as part of a name elsewhere; starting the game there is refused today).
+#[cfg(windows)]
 #[test]
 fn the_seam_takes_the_kernel_lock() {
     let game = scratch("threads");
@@ -469,4 +552,938 @@ fn the_seam_takes_the_kernel_lock() {
             "given back"
         );
     });
+    // The writes too (REVIEW-629b): each reaches the platform's state with the lock held (its
+    // calls assert it in debug builds), and gives it back.
+    engine_core::real_threads::without_kernel_lock_mut(&mut e, |e| {
+        assert!(!engine_core::real_threads::kernel_lock_held(e));
+        assert_eq!(seam::create_directory_or_error(e, br"Data\New"), Ok(()));
+        assert_eq!(
+            seam::write_or_error(e, br"Data\New\w.ini", b"[A]\r\n"),
+            Ok(())
+        );
+        assert_eq!(
+            seam::write_profile_string(e, br"Data\New\w.ini", b"A", b"k", b"1"),
+            Ok(())
+        );
+        assert!(
+            !engine_core::real_threads::kernel_lock_held(e),
+            "given back"
+        );
+        assert_eq!(
+            seam::profile_string(e, br"Data\New\w.ini", b"A", b"k").unwrap(),
+            b"1"
+        );
+        // The section writes, each holding the lock over its read and write (REVIEW-642b: the
+        // core checks the hold between them in debug builds).
+        let w = br"Data\New\w.ini";
+        assert_eq!(
+            seam::write_profile_section(e, w, b"B", &[b"z=3".to_vec()]),
+            Ok(())
+        );
+        assert_eq!(seam::remove_profile_key(e, w, b"A", b"k"), Ok(()));
+        assert_eq!(seam::remove_profile_section(e, w, b"B"), Ok(()));
+        assert!(
+            !engine_core::real_threads::kernel_lock_held(e),
+            "given back"
+        );
+        assert_eq!(seam::read(e, w).unwrap(), b"[A]\r\n");
+    });
+}
+
+/// A name that goes through `..` and stays inside the game's folder is written under the name it
+/// resolves to, in the port's folder, and read back through either name (REVIEW-642: JIP's
+/// `..\NVSE\Plugins\x.ini` from `Data\Config`).
+// Windows only: the game's names with backslashes, which the platform's file layer maps to host
+// paths on Windows alone (`files::real_path` keeps a backslash as part of a name elsewhere).
+#[cfg(windows)]
+#[test]
+fn a_dotdot_name_inside_the_game_folder_is_written() {
+    let game = scratch("dotdot-game");
+    let kept = scratch("dotdot-kept");
+    std::fs::create_dir_all(game.join(r"Data\Config")).unwrap();
+    std::fs::create_dir_all(game.join(r"Data\NVSE\Plugins")).unwrap();
+    let before = tree(&game);
+    let mut e = engine(&game);
+    set_folder(&mut e, Some(kept.to_path_buf()));
+    let name = br"data\config\..\NVSE\Plugins\SomePlugin.ini";
+    seam::write_profile_string(&mut e, name, b"Main", b"bFoo", b"1").unwrap();
+    assert_eq!(
+        std::fs::read(kept.join(r"data\NVSE\Plugins\SomePlugin.ini")).unwrap(),
+        b"[Main]\r\nbFoo=1\r\n"
+    );
+    assert_eq!(
+        seam::profile_string(&e, br"Data\NVSE\Plugins\SomePlugin.ini", b"Main", b"bFoo").unwrap(),
+        b"1"
+    );
+    assert_eq!(
+        seam::profile_string(&e, name, b"Main", b"bFoo").unwrap(),
+        b"1"
+    );
+    assert!(seam::exists(&e, name));
+    assert_eq!(tree(&game), before, "the game's folder is as it was");
+}
+
+/// The `.part` a write goes through is made new: a plain one an earlier write left is replaced;
+/// a folder of that name refuses the write and stays; a hard link to a file elsewhere is taken
+/// away, never written through (REVIEW-642).
+// Windows only: the game's names with backslashes, which the platform's file layer maps to host
+// paths on Windows alone (`files::real_path` keeps a backslash as part of a name elsewhere).
+#[cfg(windows)]
+#[test]
+fn a_part_entry_is_never_written_through() {
+    let game = scratch("part-game");
+    let kept = scratch("part-kept");
+    let away = scratch("part-away");
+    std::fs::create_dir_all(game.join(r"Data\Config")).unwrap();
+    std::fs::create_dir_all(kept.join(r"Data\Config")).unwrap();
+    let mut e = engine(&game);
+    set_folder(&mut e, Some(kept.to_path_buf()));
+    let part = kept.join(r"Data\Config\A.ini.part");
+    // A plain one left over.
+    std::fs::write(&part, b"stale").unwrap();
+    assert_eq!(
+        seam::write_or_error(&mut e, br"Data\Config\A.ini", b"new"),
+        Ok(())
+    );
+    assert_eq!(
+        std::fs::read(kept.join(r"Data\Config\A.ini")).unwrap(),
+        b"new"
+    );
+    assert!(!part.exists());
+    // A hard link to a file elsewhere.
+    let outside = away.join("game-file.ini");
+    std::fs::write(&outside, b"keep me").unwrap();
+    std::fs::hard_link(&outside, &part).unwrap();
+    assert_eq!(
+        seam::write_or_error(&mut e, br"Data\Config\A.ini", b"newer"),
+        Ok(())
+    );
+    assert_eq!(std::fs::read(&outside).unwrap(), b"keep me");
+    assert_eq!(
+        std::fs::read(kept.join(r"Data\Config\A.ini")).unwrap(),
+        b"newer"
+    );
+    // A folder of that name.
+    std::fs::create_dir(&part).unwrap();
+    assert_eq!(
+        seam::write_or_error(&mut e, br"Data\Config\A.ini", b"x"),
+        Err(ERROR_ACCESS_DENIED)
+    );
+    assert!(part.is_dir(), "left as it is");
+    assert_eq!(
+        std::fs::read(kept.join(r"Data\Config\A.ini")).unwrap(),
+        b"newer"
+    );
+    std::fs::remove_dir(&part).unwrap();
+    // A symbolic link, where this machine lets a test make one.
+    #[cfg(windows)]
+    let linked = std::os::windows::fs::symlink_file(&outside, &part).is_ok();
+    #[cfg(not(windows))]
+    let linked = std::os::unix::fs::symlink(&outside, &part).is_ok();
+    if linked {
+        assert_eq!(
+            seam::write_or_error(&mut e, br"Data\Config\A.ini", b"x"),
+            Err(ERROR_ACCESS_DENIED)
+        );
+        assert_eq!(std::fs::read(&outside).unwrap(), b"keep me");
+        let _ = std::fs::remove_file(&part);
+    }
+}
+
+/// A write whose rename fails (another program holds the kept file without delete sharing)
+/// fails, keeps the kept bytes and leaves no `.part` behind (REVIEW-629b).
+#[cfg(windows)]
+#[test]
+fn a_failed_rename_leaves_no_part() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let game = scratch("rename-game");
+    let kept = scratch("rename-kept");
+    std::fs::create_dir_all(game.join(r"Data\Config")).unwrap();
+    std::fs::create_dir_all(kept.join(r"Data\Config")).unwrap();
+    let file = kept.join(r"Data\Config\R.ini");
+    std::fs::write(&file, b"old").unwrap();
+    let mut e = engine(&game);
+    set_folder(&mut e, Some(kept.to_path_buf()));
+    let result = {
+        // FILE_SHARE_READ | FILE_SHARE_WRITE, no FILE_SHARE_DELETE: the rename onto it fails.
+        let _held = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(3)
+            .open(&file)
+            .unwrap();
+        seam::write_or_error(&mut e, br"Data\Config\R.ini", b"new")
+    };
+    assert!(result.is_err(), "{result:?}");
+    assert_eq!(std::fs::read(&file).unwrap(), b"old");
+    assert!(!kept.join(r"Data\Config\R.ini.part").exists());
+    assert_eq!(seam::read(&e, br"Data\Config\R.ini").unwrap(), b"old");
+}
+
+/// The section calls on the real platform: a key or a section removed from a file that is not
+/// there makes it empty (measured, `ini4-2026-11-16.txt`, `DELKEY missing file` and `DELSEC
+/// missing file`); a UTF-16 LE file is changed as text and stays UTF-16 LE (`ini6-...`); a file
+/// that is only its mark gets a line end first from a key write (`ini7-...`, `bom only`) and is
+/// refused by the section writes; a file with a 0 byte that is not UTF-16 LE is never written.
+// Windows only: the game's names with backslashes, which the platform's file layer maps to host
+// paths on Windows alone (`files::real_path` keeps a backslash as part of a name elsewhere).
+#[cfg(windows)]
+#[test]
+fn section_calls_on_the_platform_and_encodings() {
+    let game = scratch("enc-game");
+    let kept = scratch("enc-kept");
+    std::fs::create_dir_all(game.join(r"Data\Config")).unwrap();
+    let mut e = engine(&game);
+    set_folder(&mut e, Some(kept.to_path_buf()));
+    let at = |n: &str| kept.join(format!(r"Data\Config\{n}"));
+    assert_eq!(
+        seam::remove_profile_key(&mut e, br"Data\Config\K.ini", b"A", b"x"),
+        Ok(())
+    );
+    assert_eq!(std::fs::read(at("K.ini")).unwrap(), b"");
+    assert_eq!(
+        seam::remove_profile_section(&mut e, br"Data\Config\S.ini", b"A"),
+        Ok(())
+    );
+    assert_eq!(std::fs::read(at("S.ini")).unwrap(), b"");
+    let u16le = |t: &str| -> Vec<u8> {
+        [0xff, 0xfe]
+            .into_iter()
+            .chain(t.encode_utf16().flat_map(|u| u.to_le_bytes()))
+            .collect()
+    };
+    std::fs::write(
+        game.join(r"Data\Config\U.ini"),
+        u16le("[A]\r\nx=1\r\ny=2\r\n[B]\r\nz=3\r\n"),
+    )
+    .unwrap();
+    let u = br"Data\Config\U.ini";
+    assert_eq!(seam::profile_string(&e, u, b"A", b"y").unwrap(), b"2");
+    assert_eq!(
+        seam::profile_section(&e, u, b"A").unwrap(),
+        [b"x=1".to_vec(), b"y=2".to_vec()]
+    );
+    seam::write_profile_string(&mut e, u, b"A", b"x", b"\xe4").unwrap();
+    assert_eq!(
+        std::fs::read(at("U.ini")).unwrap(),
+        u16le("[A]\r\nx=\u{e4}\r\ny=2\r\n[B]\r\nz=3\r\n")
+    );
+    seam::write_profile_section(&mut e, u, b"A", &[b"p=1".to_vec(), b"q=2".to_vec()]).unwrap();
+    assert_eq!(
+        std::fs::read(at("U.ini")).unwrap(),
+        u16le("[A]\r\np=1\r\nq=2\r\n[B]\r\nz=3\r\n")
+    );
+    seam::remove_profile_section(&mut e, u, b"A").unwrap();
+    assert_eq!(std::fs::read(at("U.ini")).unwrap(), u16le("[B]\r\nz=3\r\n"));
+    // Only the mark.
+    std::fs::write(game.join(r"Data\Config\M.ini"), [0xff, 0xfe]).unwrap();
+    let m = br"Data\Config\M.ini";
+    assert_eq!(
+        seam::write_profile_section(&mut e, m, b"A", &[b"x=5".to_vec()]),
+        Err(seam::ERROR_NOT_SUPPORTED)
+    );
+    seam::write_profile_string(&mut e, m, b"A", b"x", b"5").unwrap();
+    assert_eq!(
+        std::fs::read(at("M.ini")).unwrap(),
+        u16le("\r\n[A]\r\nx=5\r\n")
+    );
+    // UTF-16 BE: never written, the game's copy and the port's folder as they were.
+    let be: Vec<u8> = [0xfe, 0xff]
+        .into_iter()
+        .chain(
+            "[A]\r\nx=1\r\n"
+                .encode_utf16()
+                .flat_map(|u| u.to_be_bytes()),
+        )
+        .collect();
+    std::fs::write(game.join(r"Data\Config\BE.ini"), &be).unwrap();
+    let b = br"Data\Config\BE.ini";
+    assert_eq!(
+        seam::write_profile_string(&mut e, b, b"A", b"x", b"5"),
+        Err(seam::ERROR_NOT_SUPPORTED)
+    );
+    assert_eq!(
+        seam::remove_profile_key(&mut e, b, b"A", b"x"),
+        Err(seam::ERROR_NOT_SUPPORTED)
+    );
+    assert!(!at("BE.ini").exists());
+    assert_eq!(std::fs::read(game.join(r"Data\Config\BE.ini")).unwrap(), be);
+}
+
+// ---- REVIEW-643: appends, bounded reads, names Windows folds, `.part` names ----
+
+/// A part ending in a dot or a space (which Windows takes off) is refused in every call, so one
+/// disk file never has two names in this run's memory.
+#[test]
+fn names_windows_would_fold_are_refused() {
+    let e = engine(Path::new(r"C:\Games\FNV"));
+    for folded in [
+        &br"Data\a.txt."[..],
+        br"Data\a.txt ",
+        br"Data\a.txt. .",
+        br"Data.\a.txt",
+        br"Data \a.txt",
+        br"Data\...\a.txt",
+        br"Data\x.\..\a.txt",
+    ] {
+        assert_eq!(
+            relative(&e, folded),
+            Err(NotMine::Folded),
+            "{:?}",
+            String::from_utf8_lossy(folded)
+        );
+    }
+    assert_eq!(relative(&e, br"Data\.\a.txt").unwrap(), br"Data\a.txt");
+    assert_eq!(relative(&e, br"Data\.a").unwrap(), br"Data\.a");
+}
+
+/// Writes, appends and new folders refuse a last part ending in `.part` (any case), and without
+/// a port folder a name with a byte above 0x7F (with one, such a name is taken); reads are not
+/// refused for those.
+#[test]
+fn names_writes_refuse() {
+    let mut e = engine(Path::new(r"C:\Games\FNV"));
+    set_folder(&mut e, Some(PathBuf::from(r"C:\Kept")));
+    for accented in [&b"Data\\\xc4.txt"[..], b"Data\\\xc3\xa9t\xc3\xa9.txt"] {
+        assert_eq!(writable_as(&e, accented, false).unwrap(), accented);
+    }
+    assert!(!remembered(b"Data\\\xc4.txt"));
+    assert!(remembered(br"Data\a.txt"));
+    assert_eq!(
+        writable_as(&e, br"Data\x.txt.part", false),
+        Err(ERROR_ACCESS_DENIED)
+    );
+    set_folder(&mut e, None);
+    assert_eq!(
+        writable_as(&e, br"Data\a.txt", false).unwrap(),
+        br"Data\a.txt"
+    );
+    assert_eq!(
+        writable_as(&e, br"Data\a.part\b.txt", false).unwrap(),
+        br"Data\a.part\b.txt"
+    );
+    for bad in [
+        &b"Data\\\xc4.txt"[..],
+        b"Data\\\xc3\xa9t\xc3\xa9.txt",
+        b"\xc4\\a.txt",
+        br"Data\x.txt.part",
+        br"Data\x.TXT.Part",
+        br"Data\.part",
+        br"Data\a.txt.",
+        br"..\a.txt",
+    ] {
+        assert_eq!(
+            writable_as(&e, bad, false),
+            Err(ERROR_ACCESS_DENIED),
+            "{:?}",
+            String::from_utf8_lossy(bad)
+        );
+    }
+    assert!(relative(&e, br"Data\x.txt.part").is_ok());
+    assert!(relative(&e, b"Data\\\xc4.txt").is_ok());
+}
+
+/// Appends add only the new bytes to the port folder's copy (made once, whole, from the game's
+/// copy when the folder has none); the game's copy is never changed; this run's memory keeps no
+/// whole copy of an appended file; reads answer the disk's bytes.
+// Windows only: the game's names with backslashes, which the platform's file layer maps to host
+// paths on Windows alone (`files::real_path` keeps a backslash as part of a name elsewhere).
+#[cfg(windows)]
+#[test]
+fn appends_add_only_the_new_bytes() {
+    let game = scratch("append-game");
+    let kept = scratch("append-kept");
+    std::fs::create_dir_all(game.join("Logs")).unwrap();
+    std::fs::write(game.join(r"Logs\L.txt"), b"game").unwrap();
+    let mut e = engine(&game);
+    set_folder(&mut e, Some(kept.to_path_buf()));
+    let name = br"Logs\L.txt";
+    // The first append makes the folder's copy from the game's.
+    assert_eq!(seam::append_or_error(&mut e, name, b"\nA"), Ok(()));
+    let file = kept.join(r"Logs\L.txt");
+    assert_eq!(std::fs::read(&file).unwrap(), b"game\nA");
+    // Later ones add their bytes only: a file put in its place shows it is not rewritten from
+    // this run's memory.
+    std::fs::write(&file, b"disk").unwrap();
+    assert_eq!(seam::append_or_error(&mut e, name, b"\nB"), Ok(()));
+    assert_eq!(std::fs::read(&file).unwrap(), b"disk\nB");
+    assert!(!state_ref!(e).mod_files.written.contains_key(&key(name)));
+    assert_eq!(seam::read(&e, name).unwrap(), b"disk\nB");
+    assert_eq!(seam::read_head(&e, name, 3).unwrap(), b"dis");
+    assert!(seam::exists(&e, name));
+    assert_eq!(std::fs::read(game.join(r"Logs\L.txt")).unwrap(), b"game");
+    // After a whole write, an append still adds only its bytes, and reads agree with the disk.
+    assert_eq!(seam::write_or_error(&mut e, name, b"new"), Ok(()));
+    assert_eq!(seam::append_or_error(&mut e, name, b"+"), Ok(()));
+    assert_eq!(std::fs::read(&file).unwrap(), b"new+");
+    assert_eq!(seam::read(&e, name).unwrap(), b"new+");
+    // A file that is not there anywhere is made (`fopen("ab")`), its folder needed.
+    assert_eq!(seam::append_or_error(&mut e, br"Logs\M.txt", b"m"), Ok(()));
+    assert_eq!(std::fs::read(kept.join(r"Logs\M.txt")).unwrap(), b"m");
+    assert_eq!(
+        seam::append_or_error(&mut e, br"Nowhere\M.txt", b"m"),
+        Err(ERROR_PATH_NOT_FOUND)
+    );
+    assert!(!kept.join(r"Logs\L.txt.part").exists());
+    // Without a folder: the run's copy grows, seeded from the game's once.
+    let mut e = engine(&game);
+    assert_eq!(seam::append_or_error(&mut e, name, b"1"), Ok(()));
+    assert_eq!(seam::append_or_error(&mut e, name, b"2"), Ok(()));
+    assert_eq!(seam::read(&e, name).unwrap(), b"game12");
+    assert_eq!(std::fs::read(game.join(r"Logs\L.txt")).unwrap(), b"game");
+}
+
+/// An append is refused for every name a write is refused for, with the same code, and nothing
+/// is written anywhere.
+// Windows only: the game's names with backslashes (see above).
+#[cfg(windows)]
+#[test]
+fn appends_refuse_what_writes_refuse() {
+    let game = scratch("append-names-game");
+    let kept = scratch("append-names-kept");
+    std::fs::create_dir_all(game.join(r"Data\Config")).unwrap();
+    let before = tree(&game);
+    let mut e = engine(&game);
+    set_folder(&mut e, Some(kept.to_path_buf()));
+    let outside = game.parent().unwrap().join(format!(
+        "nv-mod-files-append-out-{}.txt",
+        std::process::id()
+    ));
+    let outside_name = outside.to_string_lossy().replace('/', "\\").into_bytes();
+    for bad in [
+        &br"..\escape.txt"[..],
+        &outside_name,
+        br"\\server\share\x.txt",
+        br"Data\CON.txt",
+        br"Data\nul",
+        br"Data\x.txt.part",
+        br"Data\a.txt.",
+        br"Data\a.txt ",
+        br"Data\Config",
+        br"Data\x.txt:stream",
+    ] {
+        let wrote = seam::write_or_error(&mut e, bad, b"x");
+        let appended = seam::append_or_error(&mut e, bad, b"x");
+        assert!(wrote.is_err(), "{:?}", String::from_utf8_lossy(bad));
+        assert_eq!(appended, wrote, "{:?}", String::from_utf8_lossy(bad));
+    }
+    assert!(!outside.exists());
+    assert!(!game.parent().unwrap().join("escape.txt").exists());
+    assert_eq!(tree(&game), before);
+    assert!(
+        tree(&kept).iter().all(|(_, bytes)| bytes.is_none()),
+        "no file made"
+    );
+}
+
+/// A folder of the port's folder appended to and then swapped for a junction to another folder
+/// is checked again: the next append is refused and nothing lands there.
+#[cfg(windows)]
+#[test]
+fn a_folder_swapped_for_a_junction_refuses_appends() {
+    let game = scratch("append-swap-game");
+    let kept = scratch("append-swap-kept");
+    let away = scratch("append-swap-away");
+    std::fs::create_dir_all(game.join(r"Data\Config")).unwrap();
+    std::fs::write(away.join("A.txt"), b"away").unwrap();
+    let mut e = engine(&game);
+    set_folder(&mut e, Some(kept.to_path_buf()));
+    let name = br"Data\Config\A.txt";
+    assert_eq!(seam::append_or_error(&mut e, name, b"first"), Ok(()));
+    assert_eq!(seam::append_or_error(&mut e, name, b"+"), Ok(()));
+    let config = kept.join(r"Data\Config");
+    std::fs::remove_dir_all(&config).unwrap();
+    let made = std::process::Command::new("cmd")
+        .args(["/c", "mklink", "/J"])
+        .arg(&config)
+        .arg(&*away)
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "{made:?}");
+    let second = seam::append_or_error(&mut e, name, b"second");
+    let away_bytes = std::fs::read(away.join("A.txt")).unwrap();
+    let away_tree = tree(&away);
+    let _ = std::fs::remove_dir(&config);
+    assert_eq!(second, Err(ERROR_ACCESS_DENIED));
+    assert_eq!(away_bytes, b"away", "nothing appended through the junction");
+    assert_eq!(away_tree.len(), 1, "nothing made there: {away_tree:?}");
+}
+
+/// A script's `x.txt.part` is never the name a write of `x.txt` goes through: the script's own
+/// is refused, and a mod's `x.txt.part` in the game's folder stays there and reads as it was
+/// after a write of `x.txt`.
+#[cfg(windows)]
+#[test]
+fn a_part_name_and_its_file_both_stay() {
+    let game = scratch("partname-game");
+    let kept = scratch("partname-kept");
+    std::fs::create_dir_all(game.join("Data")).unwrap();
+    std::fs::write(game.join(r"Data\x.txt.part"), b"mod's").unwrap();
+    let mut e = engine(&game);
+    set_folder(&mut e, Some(kept.to_path_buf()));
+    assert_eq!(
+        seam::write_or_error(&mut e, br"Data\x.txt.part", b"script"),
+        Err(ERROR_ACCESS_DENIED)
+    );
+    assert_eq!(seam::write_or_error(&mut e, br"Data\x.txt", b"x"), Ok(()));
+    assert_eq!(seam::append_or_error(&mut e, br"Data\x.txt", b"y"), Ok(()));
+    assert_eq!(seam::read(&e, br"Data\x.txt.part").unwrap(), b"mod's");
+    assert_eq!(seam::read(&e, br"Data\x.txt").unwrap(), b"xy");
+    assert_eq!(
+        std::fs::read(game.join(r"Data\x.txt.part")).unwrap(),
+        b"mod's"
+    );
+    assert!(!kept.join(r"Data\x.txt.part").exists());
+}
+
+/// Write `a.txt`, then `a.txt.` (one disk file to Windows): the second is refused, and every
+/// read agrees with the disk.
+#[cfg(windows)]
+#[test]
+fn a_folded_spelling_never_holds_other_bytes() {
+    let game = scratch("fold-game");
+    let kept = scratch("fold-kept");
+    std::fs::create_dir_all(game.join("Data")).unwrap();
+    let mut e = engine(&game);
+    set_folder(&mut e, Some(kept.to_path_buf()));
+    assert_eq!(seam::write_or_error(&mut e, br"Data\a.txt", b"one"), Ok(()));
+    for other in [&br"Data\a.txt."[..], br"Data\a.txt ", br"Data\A.TXT. "] {
+        assert_eq!(
+            seam::write_or_error(&mut e, other, b"two"),
+            Err(ERROR_ACCESS_DENIED)
+        );
+        assert_eq!(
+            seam::append_or_error(&mut e, other, b"two"),
+            Err(ERROR_ACCESS_DENIED)
+        );
+        assert_eq!(seam::read_or_error(&e, other), Err(ERROR_FILE_NOT_FOUND));
+        assert!(!seam::exists(&e, other));
+    }
+    let disk = std::fs::read(kept.join(r"Data\a.txt")).unwrap();
+    assert_eq!(disk, b"one");
+    assert_eq!(seam::read(&e, br"Data\a.txt").unwrap(), disk);
+    assert_eq!(seam::read(&e, br"data\A.TXT").unwrap(), disk);
+    assert_eq!(tree(&kept).len(), 2, "Data and a.txt only");
+}
+
+/// An accented or Cyrillic name (a mod's plugin or INI name) is written and appended to in the
+/// port's folder, and read back by another case spelling as Windows folds it: this run's memory
+/// keeps no copy of it, so the disk answers every spelling. Without a port folder it is refused.
+#[cfg(windows)]
+#[test]
+fn non_ascii_names_live_on_the_disk() {
+    let game = scratch("accent-game");
+    let kept = scratch("accent-kept");
+    std::fs::create_dir_all(game.join("Data")).unwrap();
+    std::fs::create_dir_all(game.join("Mod Logs")).unwrap();
+    std::fs::write(game.join("Data").join("Été.txt"), b"game's").unwrap();
+    let mut e = engine(&game);
+    set_folder(&mut e, Some(kept.to_path_buf()));
+    let name = "Data\\Été.txt".as_bytes();
+    let other = "data\\éTÉ.TXT".as_bytes();
+    assert_eq!(seam::read(&e, other).unwrap(), b"game's");
+    assert_eq!(seam::write_or_error(&mut e, name, b"one"), Ok(()));
+    assert!(state_ref!(e).mod_files.written.is_empty());
+    assert_eq!(seam::read(&e, other).unwrap(), b"one");
+    assert_eq!(seam::append_or_error(&mut e, other, b"+two"), Ok(()));
+    assert_eq!(
+        std::fs::read(kept.join("Data").join("Été.txt")).unwrap(),
+        b"one+two"
+    );
+    assert_eq!(seam::read(&e, name).unwrap(), b"one+two");
+    assert_eq!(seam::read_head(&e, other, 3).unwrap(), b"one");
+    assert!(seam::exists(&e, other));
+    // Cyrillic, a folder and a file in it.
+    let folder = "Mod Logs\\Мой".as_bytes();
+    assert_eq!(seam::create_directory_or_error(&mut e, folder), Ok(()));
+    assert!(state_ref!(e).mod_files.folders.is_empty());
+    assert!(seam::directory_exists(&e, "mod logs\\мОЙ".as_bytes()));
+    assert_eq!(
+        seam::append_or_error(&mut e, "Mod Logs\\Мой\\Мод.log".as_bytes(), b"x"),
+        Ok(())
+    );
+    assert_eq!(
+        seam::read(&e, "MOD LOGS\\МОЙ\\мод.LOG".as_bytes()).unwrap(),
+        b"x"
+    );
+    assert_eq!(
+        std::fs::read(game.join("Data").join("Été.txt")).unwrap(),
+        b"game's"
+    );
+    // Without a port folder: refused (the memory would be the only copy).
+    let mut e = engine(&game);
+    assert_eq!(
+        seam::write_or_error(&mut e, name, b"x"),
+        Err(ERROR_ACCESS_DENIED)
+    );
+    assert_eq!(
+        seam::append_or_error(&mut e, name, b"x"),
+        Err(ERROR_ACCESS_DENIED)
+    );
+    assert!(!seam::create_directory(&mut e, "Data\\Мой".as_bytes()));
+}
+
+/// An append adds to the same file, never a new one put in its place: a reader that holds the
+/// folder's copy open across the append (sharing read, write and delete) sees the new bytes. A
+/// write through a `.part` and a rename would leave that reader on the old, replaced file.
+#[cfg(windows)]
+#[test]
+fn an_append_grows_the_same_file() {
+    use std::io::{Read as _, Seek as _};
+    use std::os::windows::fs::OpenOptionsExt as _;
+    let game = scratch("same-game");
+    let kept = scratch("same-kept");
+    std::fs::create_dir_all(game.join("Logs")).unwrap();
+    let mut e = engine(&game);
+    set_folder(&mut e, Some(kept.to_path_buf()));
+    let name = br"Logs\S.txt";
+    assert_eq!(seam::write_or_error(&mut e, name, b"one"), Ok(()));
+    let mut held = std::fs::OpenOptions::new()
+        .read(true)
+        // FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
+        .share_mode(7)
+        .open(kept.join(r"Logs\S.txt"))
+        .unwrap();
+    assert_eq!(seam::append_or_error(&mut e, name, b"+two"), Ok(()));
+    let mut seen = Vec::new();
+    held.seek(std::io::SeekFrom::Start(0)).unwrap();
+    held.read_to_end(&mut seen).unwrap();
+    drop(held);
+    assert_eq!(seen, b"one+two", "the file held open grew");
+}
+
+/// A write that fails part way through an append is cut back: the file keeps its old length
+/// and bytes, and the write's code is the answer.
+#[test]
+fn a_failed_append_is_cut_back() {
+    let dir = scratch("cut");
+    let file = dir.join("c.txt");
+    std::fs::write(&file, b"old").unwrap();
+    let failed = append_with(&file, b"new line", |f, bytes| {
+        use std::io::Write as _;
+        f.write_all(&bytes[..3])?;
+        f.flush()?;
+        Err(std::io::Error::from_raw_os_error(112))
+    });
+    assert_eq!(failed, Err(112));
+    assert_eq!(std::fs::read(&file).unwrap(), b"old");
+    assert_eq!(append_to(&file, b"+ok"), Ok(()));
+    assert_eq!(std::fs::read(&file).unwrap(), b"old+ok");
+}
+
+/// `read_head` reads only the first bytes, from this run's write, the folder's copy or the
+/// game's, with `read`'s answers for a file that is not there or a refused name.
+#[cfg(windows)]
+#[test]
+fn bounded_reads() {
+    let game = scratch("head-game");
+    let kept = scratch("head-kept");
+    std::fs::create_dir_all(game.join("Data")).unwrap();
+    std::fs::create_dir_all(kept.join("Data")).unwrap();
+    std::fs::write(game.join(r"Data\g.txt"), b"game file").unwrap();
+    std::fs::write(kept.join(r"Data\k.txt"), b"kept file").unwrap();
+    let mut e = engine(&game);
+    set_folder(&mut e, Some(kept.to_path_buf()));
+    assert_eq!(seam::read_head(&e, br"Data\g.txt", 4).unwrap(), b"game");
+    assert_eq!(seam::read_head(&e, br"Data\k.txt", 4).unwrap(), b"kept");
+    assert_eq!(
+        seam::read_head(&e, br"Data\k.txt", 100).unwrap(),
+        b"kept file"
+    );
+    seam::write_or_error(&mut e, br"Data\w.txt", b"written").unwrap();
+    assert_eq!(seam::read_head(&e, br"Data\w.txt", 5).unwrap(), b"writt");
+    assert_eq!(
+        seam::read_head_or_error(&e, br"Data\none.txt", 5),
+        Err(ERROR_FILE_NOT_FOUND)
+    );
+    assert_eq!(
+        seam::read_head_or_error(&e, br"..\g.txt", 5),
+        Err(ERROR_FILE_NOT_FOUND)
+    );
+    assert!(seam::read_head_or_error(&e, b"Data", 5).is_err());
+}
+
+/// Off Windows, a kept copy in the port's folder is found whatever case the game names it in, as
+/// Windows finds it (#633's review: the copies were found by exact case only).
+#[cfg(not(windows))]
+#[test]
+fn a_kept_copy_is_found_whatever_case_the_game_names_it_in() {
+    let game = scratch("case-game");
+    let kept = scratch("case-kept");
+    let config = kept.join("Data").join("Config");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(config.join("MCM.ini"), b"[List]\r\nMaxWidth=200\r\n").unwrap();
+    let mut e = engine(&game);
+    set_folder(&mut e, Some(kept.to_path_buf()));
+    assert_eq!(
+        seam::profile_string(&e, br"data\CONFIG\mcm.INI", b"List", b"MaxWidth").unwrap(),
+        b"200"
+    );
+}
+
+/// Every name under `root`, with whether it is a folder (to show that a listing makes nothing).
+fn names_under(root: &Path) -> Vec<(PathBuf, bool)> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let folder = path.is_dir();
+            if folder {
+                stack.push(path.clone());
+            }
+            out.push((path, folder));
+        }
+    }
+    out.sort();
+    out
+}
+
+/// `(name, is a folder)` of a listing, for comparing.
+fn shown(listed: &[seam::Listed]) -> Vec<(String, bool)> {
+    listed
+        .iter()
+        .map(|entry| {
+            (
+                String::from_utf8_lossy(&entry.name).into_owned(),
+                entry.is_folder,
+            )
+        })
+        .collect()
+}
+
+/// A folder is listed from `read`'s places: this run's writes and made folders, the port's
+/// folder, the game's (less what the run deleted); a name in more than one once, as the first
+/// place spells it (a name this run wrote as the port's folder keeps it); names `read` could not
+/// take back left out; NTFS's order on every system; nothing written or made.
+#[test]
+fn a_folder_is_listed_from_reads_places() {
+    let game = scratch("list-game");
+    let kept = scratch("list-kept");
+    let game_list = game.join("Data").join("List");
+    let kept_list = kept.join("Data").join("List");
+    std::fs::create_dir_all(game_list.join("GameSub")).unwrap();
+    std::fs::create_dir_all(kept_list.join("KeptSub")).unwrap();
+    for name in ["Game.txt", "Both.TXT", "gone.txt", "_under.txt"] {
+        std::fs::write(game_list.join(name), b"game").unwrap();
+    }
+    for name in ["Both.txt", "Kept.ini"] {
+        std::fs::write(kept_list.join(name), b"kept").unwrap();
+    }
+    let mut e = engine(&game);
+    set_folder(&mut e, Some(kept.to_path_buf()));
+    // Written and made in this run (and so kept in the port's folder, with this spelling).
+    seam::write_or_error(&mut e, br"Data\List\Written.txt", b"w").unwrap();
+    seam::create_directory_or_error(&mut e, br"Data\List\Made").unwrap();
+    // In this run's memory alone (its key, lower case), and names `read` could not take back.
+    let mods = &mut state!(e).mod_files;
+    for k in [
+        &br"data\list\memonly.txt"[..],
+        br"data\list\what?.txt",
+        br"data\list\con.txt",
+        br"data\list\trail.",
+        br"data\list\deeper\x.txt",
+    ] {
+        mods.written.insert(k.to_vec(), b"m".to_vec());
+    }
+    // A game file the run deleted.
+    let gone = files::full_path(&e, br"Data\List\gone.txt").to_ascii_lowercase();
+    state!(e).disk.deleted.insert(gone);
+    // A file the game itself made in this run (in the run's memory, not on the disk).
+    let made = files::full_path(&e, br"Data\List\runfile.txt").to_ascii_lowercase();
+    state!(e).disk.files.insert(made, b"run".to_vec());
+    let before = (names_under(&game), names_under(&kept));
+    let want: Vec<(String, bool)> = [
+        ("Both.txt", false),
+        ("Game.txt", false),
+        ("GameSub", true),
+        ("Kept.ini", false),
+        ("KeptSub", true),
+        ("Made", true),
+        ("memonly.txt", false),
+        ("runfile.txt", false),
+        ("Written.txt", false),
+        ("_under.txt", false),
+    ]
+    .iter()
+    .map(|&(n, f)| (n.to_string(), f))
+    .collect();
+    assert_eq!(shown(&seam::list(&e, br"Data\List")), want);
+    assert_eq!(shown(&seam::list(&e, br"data/LIST/")), want);
+    assert_eq!(
+        seam::list_or_error(&e, br"Data\List").map(|l| l.len()),
+        Ok(want.len())
+    );
+    // Every listed name reads back.
+    for entry in seam::list(&e, br"Data\List")
+        .iter()
+        .filter(|l| !l.is_folder)
+    {
+        let name = [&br"Data\List\"[..], &entry.name].concat();
+        assert!(seam::read(&e, &name).is_some(), "{:?}", entry.name);
+    }
+    // A folder only the game has, and one made in this run only.
+    assert_eq!(shown(&seam::list(&e, br"Data\List\GameSub")), vec![]);
+    assert_eq!(
+        shown(&seam::list(&e, br"Data")),
+        vec![("List".to_string(), true)]
+    );
+    assert_eq!(
+        (names_under(&game), names_under(&kept)),
+        before,
+        "nothing made"
+    );
+}
+
+/// A folder that exists nowhere, a file's name, and a name `read` refuses (leaving the game's
+/// folder, a device) list nothing, and listing makes nothing.
+#[test]
+fn a_missing_or_refused_folder_lists_nothing() {
+    let root = scratch("list-refused");
+    let game = root.join("game");
+    let kept = root.join("kept");
+    std::fs::create_dir_all(game.join("Data")).unwrap();
+    std::fs::create_dir_all(&kept).unwrap();
+    std::fs::write(game.join("Data").join("file.txt"), b"x").unwrap();
+    std::fs::create_dir_all(root.join("x")).unwrap();
+    std::fs::write(root.join("x").join("outside.txt"), b"x").unwrap();
+    let mut e = engine(&game);
+    set_folder(&mut e, Some(kept.clone()));
+    let before = names_under(&root);
+    let above = root
+        .join("x")
+        .to_string_lossy()
+        .replace('/', "\\")
+        .into_bytes();
+    for name in [
+        &br"Data\Nope"[..],
+        br"Nope\Deeper",
+        br"Data\file.txt",
+        br"..\x",
+        br"Data\..\..\x",
+        br"Data\CON",
+        br"NUL",
+        br"Data\COM1\x",
+        br"Data\x.",
+        b"",
+        br"\",
+        &above,
+    ] {
+        let shown_name = String::from_utf8_lossy(name).into_owned();
+        assert_eq!(seam::list(&e, name), vec![], "{shown_name}");
+    }
+    assert_eq!(names_under(&root), before, "nothing made");
+}
+
+/// Off Windows a link counts as what it leads to, and one whose target is gone is left out.
+#[cfg(unix)]
+#[test]
+fn links_are_followed_and_broken_ones_left_out() {
+    let game = scratch("list-links");
+    let list = game.join("Data").join("List");
+    std::fs::create_dir_all(list.join("Real")).unwrap();
+    std::fs::write(list.join("real.txt"), b"x").unwrap();
+    std::os::unix::fs::symlink(list.join("Real"), list.join("ToFolder")).unwrap();
+    std::os::unix::fs::symlink(list.join("real.txt"), list.join("ToFile.txt")).unwrap();
+    std::os::unix::fs::symlink(list.join("none.txt"), list.join("Broken.txt")).unwrap();
+    let e = engine(&game);
+    assert_eq!(
+        shown(&seam::list(&e, br"Data\List")),
+        vec![
+            ("Real".to_string(), true),
+            ("real.txt".to_string(), false),
+            ("ToFile.txt".to_string(), false),
+            ("ToFolder".to_string(), true),
+        ]
+    );
+}
+
+/// Double-byte names whose second byte is `\` (`0x5C`) are listed and read back (code page 932
+/// stand-in): the forbidden characters are looked at as UTF-16, not byte by byte.
+#[test]
+fn double_byte_names_with_a_backslash_byte_are_listed() {
+    let _page = files::StandInPage::new(&files::CP932);
+    let game = scratch("list-932");
+    let list = game.join("Data").join("List");
+    std::fs::create_dir_all(&list).unwrap();
+    for name in ["a.txt", "\u{30bd}.txt", "\u{8868}.txt"] {
+        std::fs::write(list.join(name), name.as_bytes()).unwrap();
+    }
+    let e = engine(&game);
+    let listed = seam::list(&e, br"Data\List");
+    let names: Vec<&[u8]> = listed.iter().map(|l| l.name.as_slice()).collect();
+    assert_eq!(
+        names,
+        vec![&b"a.txt"[..], b"\x83\x5c.txt", b"\x95\x5c.txt"],
+        "{listed:?}"
+    );
+    for entry in &listed {
+        let name = [&br"Data\List\"[..], &entry.name].concat();
+        assert!(seam::read(&e, &name).is_some(), "{:?}", entry.name);
+    }
+}
+
+/// Names that differ only in a letter's case beyond ASCII are one name to Windows: listed once,
+/// as the first place spells it (code page 1252 stand-in).
+#[test]
+fn names_differing_in_accented_case_are_listed_once() {
+    let _page = files::StandInPage::new(&files::CP1252);
+    let game = scratch("list-1252-game");
+    let kept = scratch("list-1252-kept");
+    std::fs::create_dir_all(game.join("Data").join("List")).unwrap();
+    std::fs::create_dir_all(kept.join("Data").join("List")).unwrap();
+    std::fs::write(game.join("Data").join("List").join("\u{e9}.txt"), b"g").unwrap();
+    std::fs::write(kept.join("Data").join("List").join("\u{c9}.txt"), b"k").unwrap();
+    let mut e = engine(&game);
+    set_folder(&mut e, Some(kept.to_path_buf()));
+    assert_eq!(
+        seam::list(&e, br"Data\List"),
+        vec![seam::Listed {
+            name: b"\xc9.txt".to_vec(),
+            is_folder: false
+        }]
+    );
+}
+
+/// Off Windows, folders of the port's folder whose names differ only in case are one folder to
+/// Windows: a read finds a file in any of them, so the listing lists all of them.
+#[cfg(unix)]
+#[test]
+fn case_twin_folders_in_the_port_folder_are_listed_together() {
+    let game = scratch("list-twins-game");
+    let kept = scratch("list-twins-kept");
+    std::fs::create_dir_all(game.join("Data")).unwrap();
+    let upper = kept
+        .join("Data")
+        .join("NVSE")
+        .join("Plugins")
+        .join("Scripts");
+    let lower = kept
+        .join("data")
+        .join("nvse")
+        .join("plugins")
+        .join("scripts");
+    std::fs::create_dir_all(&upper).unwrap();
+    std::fs::create_dir_all(&lower).unwrap();
+    std::fs::write(upper.join("a.txt"), b"a").unwrap();
+    std::fs::write(lower.join("b.txt"), b"b").unwrap();
+    let mut e = engine(&game);
+    set_folder(&mut e, Some(kept.to_path_buf()));
+    let folder = br"Data\NVSE\Plugins\Scripts";
+    assert_eq!(
+        shown(&seam::list(&e, folder)),
+        vec![("a.txt".to_string(), false), ("b.txt".to_string(), false)]
+    );
+    for name in [
+        &br"Data\NVSE\Plugins\Scripts\a.txt"[..],
+        br"Data\NVSE\Plugins\Scripts\b.txt",
+    ] {
+        assert!(
+            seam::read(&e, name).is_some(),
+            "{}",
+            String::from_utf8_lossy(name)
+        );
+    }
 }

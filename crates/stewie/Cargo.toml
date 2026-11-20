@@ -1,0 +1,13 @@
+[package]
+name = "stewie"
+version = "0.1.0"
+description = "lStewieAl's Tweaks (the NVSE plugin of engine fixes and tweaks) built in: its rows, its settings and their reader"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+engine-core = { path = "../engine-core" }
+# xNVSE built in: Tweaks' place in its list of plugins (IsPluginInstalled), and the game's own
+# file calls for its INI when no platform answers the mods' files seam.
+nvse = { path = "../nvse" }

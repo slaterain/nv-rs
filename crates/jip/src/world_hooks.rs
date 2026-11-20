@@ -458,8 +458,10 @@ pub fn install(e: &mut Engine, answers_installed: bool) {
 // DoPreLoadGameHousekeeping (this step's part).
 /// Before a game loads: the informed forms lose their flags and the fast-travel and cell-change
 /// sets go (with a user of each hook); the waits go, with their owners' flags and the hook; the
-/// swapped LOD blocks go, with the hook; the references keep their names (their flag set
-/// again); the model paths go, with the hook.
+/// lights scripts attached come off their nodes (`gl::lights::pre_load`); the
+/// swapped LOD blocks go, with the hook; the extra cameras are destroyed
+/// (`jip_fn_misc_ref_cameras::pre_load`); the references keep their names (their flag set
+/// again); the model paths go, with the hook; the minimap forgets its cells (`MiniMapLoadGame`).
 pub fn pre_load(e: &mut Engine) {
     if !state(e).event_informed.is_empty() {
         let ids = std::mem::take(&mut state(e).event_informed);
@@ -497,10 +499,14 @@ pub fn pre_load(e: &mut Engine) {
         }
         clear_current_wait();
     }
+    // JIP's next step: every light a script attached (`AttachLight`) taken off its node.
+    crate::game_patches::gl::lights::pre_load(e);
     if !state(e).swap_obj_lod.is_empty() {
         state(e).swap_obj_lod.clear();
         e.set_hook(Hook::MakeObjLODPath, false);
     }
+    // JIP's next step: every extra camera (`AttachExtraCamera`) off its node and destroyed.
+    crate::commands::jip_fn_misc_ref_cameras::pre_load(e);
     let names: Vec<u32> = state(e).ref_names.keys().copied().collect();
     for reference in names {
         let flags = ref_flags(e, reference);
@@ -515,6 +521,8 @@ pub fn pre_load(e: &mut Engine) {
         }
         e.set_hook(Hook::GetModelPath, false);
     }
+    // JIP's `MiniMapLoadGame`: the minimap's cells and worlds forgotten.
+    crate::commands::jip_fn_minimap_update::load_game(e);
 }
 
 // ---- reads ----
@@ -1758,7 +1766,7 @@ const RTTI_TES_DESCRIPTION: u32 = 0x0118_38f8;
 const STR_BUFFER_SIZE: usize = 0x4_0000;
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: SetDescriptionAltText.
-fn set_description_alt_text(e: &mut Engine, description: u32, text: &[u8]) {
+pub(crate) fn set_description_alt_text(e: &mut Engine, description: u32, text: &[u8]) {
     if !text.is_empty() {
         if state(e)
             .description_changes

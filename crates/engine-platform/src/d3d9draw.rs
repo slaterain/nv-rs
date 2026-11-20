@@ -211,7 +211,6 @@ pub fn draw_cut(e: &mut Engine, device: u32) -> bool {
     super::d3d9device::copy_for_drawing(e, device);
     super::d3d9resource::copy_for_drawing(e, device);
     OPEN_CUTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    #[cfg(windows)]
     super::d3d9real::cut(e, device);
     true
 }
@@ -220,7 +219,6 @@ pub fn draw_cut(e: &mut Engine, device: u32) -> bool {
 /// follow on the backend). Nothing without an open cut.
 pub fn draw_close(e: &mut Engine) {
     let _device = engine_core::real_threads::device_guard(e);
-    #[cfg(windows)]
     super::d3d9real::close(e);
     let _ = e;
 }
@@ -234,7 +232,6 @@ pub fn draw_join(e: &mut Engine) {
     let Some(device) = side(e).device else {
         return;
     };
-    #[cfg(windows)]
     {
         super::d3d9real::close(e);
         super::d3d9real::settle(e);

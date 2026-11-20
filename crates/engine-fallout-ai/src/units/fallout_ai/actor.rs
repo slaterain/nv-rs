@@ -482,6 +482,41 @@ pub fn fn_0087d890(e: &mut Engine, this: Ptr<Actor>, add_to_process_lists: bool)
     e.set(this, Actor::iMinorCrimes, 0);
 }
 
+/// The queued follower barks (`FollowerBarks`' list, `011e0098`: a `tList` whose first node is in
+/// place, each node its item and the next node; an item starts with its actor) and the memory
+/// manager's free (`00aa4060` on `011f6238`).
+const FOLLOWER_BARKS: u32 = 0x011e_0098;
+const MEMORY_MANAGER: u32 = 0x011f_6238;
+const MEMORY_FREE: u32 = 0x00aa_4060;
+
+/// Row S0183's step, as Tweaks' `OnActorFree`: every bark naming `actor` is freed and its node taken
+/// out as Tweaks' `tList::RemoveMe` does (the next node's item and link copied in and that node
+/// freed; the last node only loses its item).
+fn forget_follower_barks(e: &mut Engine, actor: u32) {
+    let mut node = FOLLOWER_BARKS;
+    loop {
+        let item = e.mem.u32(node);
+        if item != 0 && e.mem.u32(item) == actor {
+            e.call(MEMORY_FREE, &args![MEMORY_MANAGER, item]);
+            let next = e.mem.u32(node + 4);
+            if next == 0 {
+                e.mem.set_u32(node, 0);
+                return;
+            }
+            let next_item = e.mem.u32(next);
+            let after = e.mem.u32(next + 4);
+            e.mem.set_u32(node, next_item);
+            e.mem.set_u32(node + 4, after);
+            e.call(MEMORY_FREE, &args![MEMORY_MANAGER, next]);
+        } else {
+            node = e.mem.u32(node + 4);
+            if node == 0 {
+                return;
+            }
+        }
+    }
+}
+
 // Translated from 0087dcb0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `Actor::~Actor` (Xbox PDB), the body: puts the vtables back, deletes the
 /// ragdoll controller and the penetration utility, releases the sound handle of
@@ -515,6 +550,12 @@ pub fn actor_destructor(e: &mut Engine, this: Ptr<Actor>) {
     if e.call(0x00ad_8ce0, &args![handle]).bool() {
         e.call(0x00ad_8d10, &args![handle]);
     }
+    // lStewieAl's Tweaks' row S0183 (`FollowerTopicUseAfterFreeFix`, the call at `0x87DDD0`): the
+    // follower barks queued for this actor are dropped before it goes; the exe keeps them, naming
+    // the freed actor.
+    if e.stewie(engine_core::extend::stewie::FOLLOWER_BARK_USE_AFTER_FREE) {
+        forget_follower_barks(e, this.addr());
+    }
     e.call(0x0083_5980, &args![this]);
     let target_array = e.get(this, Actor::pCurrentCombatTargetArray);
     if !target_array.is_null() {
@@ -524,7 +565,18 @@ pub fn actor_destructor(e: &mut Engine, this: Ptr<Actor>) {
     if !member_array.is_null() {
         e.vcall(member_array.addr(), 0, &args![1u32]);
     }
-    if !e.call(0x0040_77c0, &args![this]).bool() {
+    // JIP LN's O18 (`uNPCPerks`, `WriteRelCall(0x87DE3F, DestroyActorHook)`): the handler drops
+    // the actor's NPC perks; an answer stands for the deleted-flag test. Words: the actor.
+    let jip_deleted = if e.jip_patches() & engine_core::extend::jip_patches::NPC_PERKS != 0 {
+        e.site(0x0087_de3f, &[this.addr()])
+    } else {
+        None
+    };
+    let deleted = match jip_deleted {
+        Some(answer) => answer != 0,
+        None => e.call(0x0040_77c0, &args![this]).bool(),
+    };
+    if !deleted {
         let player = e.global::<u32>(PLAYER_POINTER);
         e.call(REMOVE_FROM_PLAYER_COMBAT_LIST, &args![player, this]);
         e.call(REMOVE_PERCEIVED_ACTOR, &args![player, this]);
@@ -5038,6 +5090,96 @@ mod tests {
         assert_eq!(*calls.last().unwrap(), 0x0092_ec40);
     }
 
+    /// The follower barks' list (`011e0098`: its first node in place) holding the items `items`, each
+    /// 16 bytes whose first word is its actor; the memory manager's free recorded.
+    fn follower_barks(e: &mut Engine, actors: &[u32]) -> Vec<u32> {
+        e.map(0x011e_0000, 0x1000);
+        e.register(0x00aa_4060, |_, _| Ret::default());
+        let items: Vec<u32> = actors
+            .iter()
+            .map(|actor| {
+                let item = e.mem.alloc(0x10);
+                e.mem.set_u32(item, *actor);
+                item
+            })
+            .collect();
+        let mut node = 0x011e_0098;
+        for (i, item) in items.iter().enumerate() {
+            e.mem.set_u32(node, *item);
+            if i + 1 < items.len() {
+                let next = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, next);
+                node = next;
+            }
+        }
+        items
+    }
+
+    /// The barks' items left in the list, in order.
+    fn barks_left(e: &Engine) -> Vec<u32> {
+        let mut out = vec![];
+        let mut node = 0x011e_0098;
+        while node != 0 {
+            let item = e.mem.u32(node);
+            if item != 0 {
+                out.push(item);
+            }
+            node = e.mem.u32(node + 4);
+        }
+        out
+    }
+
+    /// lStewieAl's Tweaks' row S0183 (`FollowerTopicUseAfterFreeFix`, `0x87DDD0`): an actor going away
+    /// with follower barks queued for it (first, middle and last of the list): off, the list keeps
+    /// them, naming the freed actor; on, they are freed and taken out (before the radio call), the
+    /// others' order kept.
+    #[test]
+    fn s0183_an_actor_going_away_takes_its_follower_barks() {
+        for on in [false, true] {
+            let (mut e, actor, _, _) = destructor_setup();
+            let other = e.mem.alloc(0x10);
+            let items = follower_barks(
+                &mut e,
+                &[actor.addr(), other, actor.addr(), other, actor.addr()],
+            );
+            e.set_stewie(
+                engine_core::extend::stewie::FOLLOWER_BARK_USE_AFTER_FREE,
+                on,
+            );
+            e.call_log = Some(vec![]);
+            e.call(0x0087_dcb0, &args![actor]);
+            if on {
+                assert_eq!(barks_left(&e), vec![items[1], items[3]]);
+                let calls = called(&e);
+                let freed = calls.iter().position(|a| *a == 0x00aa_4060).unwrap();
+                assert!(freed < calls.iter().position(|a| *a == 0x0083_5980).unwrap());
+            } else {
+                assert_eq!(barks_left(&e), items);
+            }
+        }
+    }
+
+    /// Row S0183 with no bark naming the actor (ordinary input): the list and the calls are the same
+    /// with the row off and on.
+    #[test]
+    fn s0183_row_on_without_its_barks_changes_nothing() {
+        let mut runs = vec![];
+        for on in [false, true] {
+            let (mut e, actor, _, _) = destructor_setup();
+            let other = e.mem.alloc(0x10);
+            let items = follower_barks(&mut e, &[other, other]);
+            e.set_stewie(
+                engine_core::extend::stewie::FOLLOWER_BARK_USE_AFTER_FREE,
+                on,
+            );
+            e.call_log = Some(vec![]);
+            e.call(0x0087_dcb0, &args![actor]);
+            assert_eq!(barks_left(&e), items);
+            runs.push(called(&e));
+        }
+        assert_eq!(runs[0], runs[1]);
+    }
+
     #[test]
     fn destructor_deletes_the_two_combat_arrays_between_00835980_and_the_shutdown_check() {
         // 0087dcb0: +0x12c at ddd8..ddfc and +0x130 at de0a..de2e, each through
@@ -5082,6 +5224,53 @@ mod tests {
         }
         // The members are still taken apart.
         assert!(calls.contains(&0x0046_ffb0) && calls.contains(&0x0092_ec40));
+    }
+
+    thread_local! {
+        static O18_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static O18_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn at_destroy_actor(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        O18_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        O18_ANSWER.with(std::cell::Cell::get)
+    }
+
+    /// JIP's DestroyActorHook at `0x87DE3F` (O18): not asked without the switch's bit (the deleted
+    /// test runs); asked with the actor; no answer runs the test, an answer stands for it.
+    #[test]
+    fn destructor_jip_npc_perks_seam() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let run = |word: u32, answer: Option<u32>| {
+            let (mut e, actor, _, _) = destructor_setup();
+            e.register(0x0040_77c0, |_, _| ret(0));
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0087_de3f), at_destroy_actor);
+            O18_ASKED.with(|s| s.borrow_mut().clear());
+            O18_ANSWER.with(|c| c.set(answer));
+            e.set_jip_patches(word);
+            e.call_log = Some(vec![]);
+            e.call(0x0087_dcb0, &args![actor]);
+            let calls = called(&e);
+            let asked = O18_ASKED.with(|s| s.take());
+            (
+                asked,
+                calls.contains(&0x0040_77c0),
+                calls.contains(&REMOVE_FROM_PLAYER_COMBAT_LIST),
+                actor.addr(),
+            )
+        };
+        let off = jip_patches::INSTALLED | jip_patches::FIXES | jip_patches::NPC_WEAPON_MODS;
+        let (asked, tested, lists, _) = run(off, Some(1));
+        assert!(asked.is_empty());
+        assert!(tested && lists);
+        let on = jip_patches::NPC_PERKS;
+        let (asked, tested, lists, actor) = run(on, None);
+        assert_eq!(asked, vec![vec![actor]]);
+        assert!(tested && lists, "no answer: the exe's test");
+        let (_, tested, lists, _) = run(on, Some(1));
+        assert!(!tested && !lists, "answer 1: deleted");
+        let (_, tested, lists, _) = run(on, Some(0));
+        assert!(!tested && lists, "answer 0: not deleted");
     }
 
     #[test]

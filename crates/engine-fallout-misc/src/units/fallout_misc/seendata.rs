@@ -279,7 +279,19 @@ pub fn fn_0087a100(e: &mut Engine, this: Ptr<IntSeenData>, x: u8, y: u8) -> Ptr<
     e.set(this, IntSeenData::cSectionX, x);
     e.set(this, IntSeenData::cSectionY, y);
     e.set(this, IntSeenData::pNextSection, 0);
+    jip_clear_fully_seen(e, this);
     this
+}
+
+/// After the `IntSeenData` constructor's stores (`0x87A12A`). JIP LN NVSE's G89 (a fix, the row
+/// `NV_JIP_GAME_PATCHES`; `SAFE_WRITE_BUF(0x87A12A, ..)`) also clears the word `+0x26` (JIP's
+/// `fullySeen`, read only by its mini-map): the seam is asked with `this` and does it. With the
+/// word's `FIXES` bit clear: one load, nothing more.
+#[inline]
+fn jip_clear_fully_seen(e: &mut Engine, this: Ptr<IntSeenData>) {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(0x0087_a12a, &[this.addr()]);
+    }
 }
 
 // Translated from 0087a140 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -910,6 +922,34 @@ mod tests {
         assert_eq!(e.mem.u8(this + 0x24), 3);
         assert_eq!(e.mem.u8(this + 0x25), 0xfe);
         assert_eq!(e.mem.u32(this + 0x28), 0);
+    }
+
+    /// JIP LN NVSE's G89 seam at `0x87A12A` (group GW, step 3.9): off (JIP not installed, or
+    /// installed with the row off), the word `+0x26` is left as it was and the seam not asked;
+    /// with the row, asked with the section after the exe's stores.
+    #[test]
+    fn g89_seam_is_asked_with_the_section() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        for (bits, asked) in [
+            (0, false),
+            (jip_patches::INSTALLED, false),
+            (jip_patches::FIXES, true),
+        ] {
+            let mut e = Engine::new();
+            let this = e.mem.alloc(0x2c);
+            e.mem.set_u16(this + 0x26, 0xabcd);
+            e.register(SEEN_DATA_CONSTRUCT, |_, a| word(a[0]));
+            e.set_jip_patches(bits);
+            // The test handler writes the section's x byte (set by then) and its address.
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0087_a12a), |e, a| {
+                let x = e.mem.u8(a[0] + 0x24);
+                e.mem.set_u16(a[0] + 0x26, u16::from(x));
+                Some(0)
+            });
+            e.call(0x0087_a100, &args![this, 3u8, 0xfeu8]);
+            let expected = if asked { 3 } else { 0xabcd };
+            assert_eq!(e.mem.u16(this + 0x26), expected, "{bits:08x}");
+        }
     }
 
     #[test]

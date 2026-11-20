@@ -77,7 +77,6 @@ fn renderer_entry(
 
 /// The run's window made the borderless one (`d3d9real::want_borderless`).
 fn choose_borderless() {
-    #[cfg(windows)]
     engine_platform::d3d9real::want_borderless(true);
 }
 

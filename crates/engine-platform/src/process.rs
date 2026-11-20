@@ -110,8 +110,30 @@ pub fn get_command_line_a(e: &mut Engine) -> u32 {
 /// The process's environment as `GetEnvironmentStringsW` lays it out (module comment): the
 /// UTF-16 units of each `NAME=value` and its zero, then the final zero.
 pub fn environment_units() -> Vec<u16> {
+    environment_units_of(std::env::vars_os())
+}
+
+/// Whether the game is shown the variable `name`. Off Windows `TZ` is left out (in any case, as
+/// the C runtime's `getenv` finds it): the game's C runtime (`__tzset_nolock`, `00ee24d6`) reads
+/// `TZ` before it asks `GetTimeZoneInformation` and parses it the MSVC way (three letters, hours,
+/// daylight time by the US rules), which a Linux or macOS value such as `Europe/Berlin` is not; a
+/// Windows PC has no `TZ`, and the machine table already answers the zone that variable names
+/// (`super::machine_table`).
+pub fn shown_to_the_game(name: &std::ffi::OsStr) -> bool {
+    cfg!(windows) || !is_tz(name)
+}
+
+/// Whether `name` is `TZ` as the C runtime's `getenv` finds it (without case).
+fn is_tz(name: &std::ffi::OsStr) -> bool {
+    name.eq_ignore_ascii_case("TZ")
+}
+
+/// [`environment_units`] of the variables `vars`.
+fn environment_units_of(
+    vars: impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) -> Vec<u16> {
     let mut units = Vec::new();
-    for (name, value) in std::env::vars_os() {
+    for (name, value) in vars.filter(|(name, _)| shown_to_the_game(name)) {
         let entry = format!("{}={}", name.to_string_lossy(), value.to_string_lossy());
         units.extend(entry.encode_utf16());
         units.push(0);
@@ -271,9 +293,17 @@ fn machine_memory() -> Option<MachineMemory> {
             avail_page_file: status.ullAvailPageFile,
         })
     }
+    // Linux and macOS: what the system reports, in Windows' fields (`super::machine_table`).
     #[cfg(not(windows))]
     {
-        None
+        let m = super::machine_table::this_memory()?;
+        Some(MachineMemory {
+            load: m.load,
+            total_phys: m.total_phys,
+            avail_phys: m.avail_phys,
+            total_page_file: m.total_page_file,
+            avail_page_file: m.avail_page_file,
+        })
     }
 }
 
@@ -405,8 +435,8 @@ mod tests {
         assert_eq!(global_memory_status_ex(&mut e, Ptr::new(AT)), 0);
         assert_eq!(e.kernel.last_error, 87);
         assert_eq!(e.mem.u64(AT + 0x28), 0x1234, "nothing written");
-        // The machine's sizes are only read on Windows so far.
-        if cfg!(windows) {
+        // The machine's sizes: Windows', Linux's and macOS's (`machine_table::this_memory`).
+        if cfg!(any(windows, target_os = "linux", target_os = "macos")) {
             e.mem.set_u32(AT, 0x40);
             assert_eq!(global_memory_status_ex(&mut e, Ptr::new(AT)), 1);
             assert_eq!(e.mem.u32(AT), 0x40);
@@ -474,6 +504,33 @@ mod tests {
         assert_eq!(free_environment_strings_w(&mut e, a), 1);
         assert_eq!(free_environment_strings_w(&mut e, b), 1);
         assert_eq!(e.kernel.last_error, 0x1234);
+    }
+
+    /// Off Windows the game is never shown `TZ` (in any case); on Windows every variable is shown
+    /// as before.
+    #[test]
+    fn the_game_is_shown_tz_only_on_windows() {
+        let vars = [
+            ("PATH", "/bin"),
+            ("TZ", "Europe/Berlin"),
+            ("tz", ":/etc/localtime"),
+        ]
+        .map(|(n, v)| (n.into(), v.into()));
+        let text = String::from_utf16(&environment_units_of(vars.into_iter())).unwrap();
+        if cfg!(windows) {
+            assert_eq!(text, "PATH=/bin\0TZ=Europe/Berlin\0tz=:/etc/localtime\0\0");
+        } else {
+            assert_eq!(text, "PATH=/bin\0\0");
+        }
+        assert!(shown_to_the_game(std::ffi::OsStr::new("TZDIR")));
+        for (name, tz) in [
+            ("TZ", true),
+            ("Tz", true),
+            ("TZDIR", false),
+            ("PATH", false),
+        ] {
+            assert_eq!(is_tz(std::ffi::OsStr::new(name)), tz, "{name}");
+        }
     }
 
     #[test]

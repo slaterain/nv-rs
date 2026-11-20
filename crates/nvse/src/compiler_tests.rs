@@ -12,9 +12,9 @@ use crate::decompile::{decompile, parses};
 use std::cell::RefCell;
 
 /// The compile's own memory: the script buffer, the line, the heap, a lambda's stand-in data.
-const AREA: u32 = 0x0500_0000;
-const BUF: u32 = AREA;
-const LINE: u32 = AREA + 0x100;
+pub(crate) const AREA: u32 = 0x0500_0000;
+pub(crate) const BUF: u32 = AREA;
+pub(crate) const LINE: u32 = AREA + 0x100;
 const BUF_TEXT: u32 = AREA + 0x800;
 const HEAP_TOP: u32 = AREA + 0xffc;
 const HEAP: u32 = AREA + 0x1000;
@@ -41,7 +41,7 @@ fn console_print(e: &mut Engine, a: &[u32]) -> Ret {
     Ret::default()
 }
 
-fn printed() -> Vec<String> {
+pub(crate) fn printed() -> Vec<String> {
     CONSOLE_LINES.with(|c| std::mem::take(&mut *c.borrow_mut()))
 }
 
@@ -130,7 +130,7 @@ const DECLARATIONS: &str =
 /// The engine: the decompiler tests' (the table, the stand-in forms, `Test` and its locals),
 /// a string variable `s` (local 4), the compile's stand-ins, and a script buffer whose lists
 /// are the script's (the head nodes copied, so what the compile appends both see).
-fn engine() -> Engine {
+pub(crate) fn engine() -> Engine {
     let mut e = decompile_engine();
     crate::decompile::tests::local(&mut e, 4, "s", 0);
     crate::decompile::tests::local(&mut e, 5, "arr", 0);
@@ -1712,4 +1712,211 @@ fn loop_continue_and_break_have_a_parameter_list_for_their_parse_words() {
         assert_eq!(e.mem.u32(params + 4), 1, "kParamType_Integer");
         assert_eq!(e.mem.u32(params + 8), 1, "optional");
     }
+}
+
+// ---- (h) a parameter in parentheses (PatchGameCommandParser's InlineExpressionHook) ----
+
+/// A command record of the game's format at `opcode` named `name`, with the parameters
+/// `(type, its name)`, all required, parsed by the game's default parser: its parameters.
+fn vanilla_record(e: &mut Engine, opcode: u32, name: &str, params: &[(u32, &str)]) -> u32 {
+    let record = record_of(e, opcode);
+    let at = AREA + 0x3_8000 + (opcode & 0xf) * 0x400;
+    let mut text_at = at + 0x200;
+    let mut put_text = |e: &mut Engine, t: &str| {
+        let here = text_at;
+        e.mem.write(here, t.as_bytes());
+        e.mem.set_u8(here + t.len() as u32, 0);
+        text_at += t.len() as u32 + 1;
+        here
+    };
+    let name_at = put_text(e, name);
+    for (i, (kind, param_name)) in params.iter().enumerate() {
+        let n = put_text(e, param_name);
+        let p = at + 12 * i as u32;
+        e.mem.set_u32(p, n);
+        e.mem.set_u32(p + 4, *kind);
+        e.mem.set_u32(p + 8, 0);
+    }
+    e.mem.set_u32(record, name_at);
+    e.mem.set_u32(record + 8, opcode);
+    e.mem.set_u16(record + 0x12, params.len() as u16);
+    e.mem.set_u32(record + 0x14, at);
+    e.mem.set_u32(record + 0x1c, 0x005b_1ba0);
+    at
+}
+
+/// The line set to `text` (offset `offset`, opcode `opcode`, no output yet) and parameter
+/// `index` parsed as `StandardCompile`'s seam asks: the answer, the output, the offset after.
+fn parenthesis(
+    e: &mut Engine,
+    opcode: u32,
+    params: u32,
+    text: &str,
+    offset: u32,
+    index: u32,
+) -> (Paren, Vec<u8>, u32) {
+    e.mem.write(LINE, &[0; ln::STRUCT as usize]);
+    e.mem.set_u32(LINE + ln::NUMBER, 7);
+    e.mem.write(LINE + ln::TEXT, text.as_bytes());
+    e.mem.set_u32(LINE + ln::TEXT_LEN, text.len() as u32);
+    e.mem.set_u32(LINE + ln::OPCODE, opcode);
+    e.mem.set_u32(LINE + ln::OFFSET, offset);
+    let answer = handle_parameter_parenthesis(e, LINE, BUF, params, index);
+    let len = e.mem.u32(LINE + ln::DATA_LEN).min(ln::SIZE);
+    (
+        answer,
+        e.mem.bytes(LINE + ln::DATA, len),
+        e.mem.u32(LINE + ln::OFFSET),
+    )
+}
+
+/// No `(` after the blanks: nothing written, the offset where it was. A `(`: `0xFFFF`, the
+/// expression as one argument, the offset past the `)`, the text as it was. The check files'
+/// `SetINIFloat "key" (expression) "file"` form: a string, a number in parentheses, a string.
+#[test]
+fn a_parameter_in_parentheses_is_an_expression() {
+    let mut e = engine();
+    let params = vanilla_record(
+        &mut e,
+        0x1004,
+        "SetIniLike",
+        &[(0x00, "key"), (0x02, "value"), (0x00, "file")],
+    );
+    let text = "\"check:x\" (x + 1) \"f\"";
+    assert_eq!(
+        parenthesis(&mut e, 0x1004, params, text, 0, 0),
+        (Paren::NoParam, vec![], 0),
+        "a string word"
+    );
+    let (answer, bytes, offset) = parenthesis(&mut e, 0x1004, params, text, 9, 1);
+    assert_eq!(answer, Paren::Success, "{:?}", printed());
+    let expression = arg(&[&v(0, 1), b"B\x01", &[op::ADD]]);
+    assert_eq!(bytes, [&[0xff, 0xff][..], &expression].concat());
+    assert_eq!(offset, 17, "past the `)`");
+    assert_eq!(
+        e.mem.bytes(LINE + ln::TEXT, text.len() as u32),
+        text.as_bytes()
+    );
+    // Nested parentheses.
+    let (answer, _, offset) = parenthesis(&mut e, 0x1004, params, " ((x) * 2) \"f\"", 0, 1);
+    assert_eq!(answer, Paren::Success, "{:?}", printed());
+    assert_eq!(offset, 10);
+}
+
+/// The vanilla rules of `ValidateArgType`: a number for a string parameter is refused with
+/// xNVSE's message; a string for a number parameter only for an `sv_` command or one of 20
+/// parameters or more; an ambiguous argument always.
+#[test]
+fn a_parenthesised_argument_is_checked_against_the_parameter() {
+    let mut e = engine();
+    let params = vanilla_record(
+        &mut e,
+        0x1004,
+        "SetIniLike",
+        &[(0x00, "key"), (0x02, "value")],
+    );
+    printed();
+    let (answer, ..) = parenthesis(&mut e, 0x1004, params, "(x + 1)", 0, 0);
+    assert_eq!(answer, Paren::SyntaxError);
+    assert_eq!(
+        printed(),
+        vec!["Error on line 7\n\nInvalid expression for parameter 1. Expected key (got Number)."]
+    );
+    let (answer, ..) = parenthesis(&mut e, 0x1004, params, "(\"abc\")", 0, 1);
+    assert_eq!(answer, Paren::SyntaxError, "a string for a float");
+    printed();
+    let sv = vanilla_record(&mut e, 0x1005, "sv_Like", &[(0x01, "id")]);
+    assert_eq!(
+        parenthesis(&mut e, 0x1005, sv, "(\"abc\")", 0, 0).0,
+        Paren::Success
+    );
+    let many: Vec<(u32, &str)> = std::iter::repeat_n((0x01, "n"), 20).collect();
+    let wide = vanilla_record(&mut e, 0x1006, "Wide", &many);
+    assert_eq!(
+        parenthesis(&mut e, 0x1006, wide, "(\"abc\")", 0, 0).0,
+        Paren::Success
+    );
+    for (kind, arg, ok) in [
+        (pt::AXIS, tt::STRING, true),
+        (pt::SEX, tt::NUMBER, false),
+        (pt::DOUBLE, tt::NUMBER, true),
+        (pt::QUEST_STAGE, tt::NUMERIC_VAR, true),
+        (pt::CRIME_TYPE, tt::STRING_VAR, true),
+        (pt::ACTOR_VALUE, tt::STRING, true),
+        (pt::ANIMATION_GROUP, tt::NUMBER, true),
+        (pt::VARIABLE_NAME, tt::AMBIGUOUS, true),
+        (pt::VARIABLE_NAME, tt::NUMBER, false),
+        (pt::FORM_TYPE, tt::FORM, false),
+        (pt::MAGIC_EFFECT, tt::FORM, true),
+        (pt::ARRAY, tt::ARRAY_VAR, true),
+        (pt::ARRAY, tt::NUMBER, false),
+        (pt::SCRIPT_VARIABLE, tt::NUMERIC_VAR, true),
+        (pt::SCRIPT_VARIABLE, tt::NUMBER, false),
+        (0x04, tt::REF, true),
+        (0x04, tt::NUMBER, false),
+    ] {
+        assert_eq!(
+            validate_vanilla_arg_type(&e, kind, arg, 0),
+            ok,
+            "{kind:#x} {arg}"
+        );
+    }
+}
+
+/// An unclosed `(` or quote inside it: xNVSE's bracket messages, a syntax error.
+#[test]
+fn a_parenthesised_argument_left_open() {
+    let mut e = engine();
+    let params = vanilla_record(&mut e, 0x1004, "SetIniLike", &[(0x02, "value")]);
+    printed();
+    assert_eq!(
+        parenthesis(&mut e, 0x1004, params, "(x + 1", 0, 0).0,
+        Paren::SyntaxError
+    );
+    assert_eq!(printed(), vec!["Error line 7\n\nMismatched brackets."]);
+    assert_eq!(
+        parenthesis(&mut e, 0x1004, params, "(\"x)", 0, 0).0,
+        Paren::SyntaxError
+    );
+    assert_eq!(printed(), vec!["Error line 7\n\nMismatched quotes."]);
+}
+
+/// The second check file's lambda as the line reader now gives it (one line, its line feeds
+/// kept): the lambda is found whole (its `end` on the third line) and handed to the game's
+/// compiler (a stand-in) with its text from `begin` to `end`.
+#[test]
+fn the_second_check_files_lambda_compiles_from_the_joined_line() {
+    thread_local! {
+        static LAMBDA_TEXT: RefCell<String> = const { RefCell::new(String::new()) };
+    }
+    fn compile_stand_in(e: &mut Engine, a: &[u32]) -> Ret {
+        let buf = a[2];
+        let text = guest_text(e, e.mem.u32(buf + sb::TEXT));
+        LAMBDA_TEXT.with(|l| *l.borrow_mut() = String::from_utf8_lossy(&text).into_owned());
+        let script = a[1];
+        let data = heap(e, &[0x10]).eax;
+        e.mem.write(data, &[0x1d, 0, 0, 0, 0xab, 0xcd]);
+        e.mem.set_u32(script + sc::DATA, data);
+        e.mem.set_u32(script + sc::DATA_LEN, 6);
+        Ret {
+            eax: 1,
+            ..Ret::default()
+        }
+    }
+    let mut e = engine();
+    e.register(0x005a_e490, |e, a| {
+        let data = heap(e, &[0x4000]).eax;
+        e.mem.set_u32(a[0] + sb::DATA, data);
+        Ret::default()
+    });
+    e.register(0x005a_e5c0, nothing);
+    e.register(0x005a_eb90, compile_stand_in);
+    e.register(0x005a_a1a0, nothing);
+    let joined = "rx := begin function {ref nvrsCell}\nSetINIFloat \"check:cellenter\" 1 \"nvrs_jipcheck\"\nend";
+    let (ok, _) = compile(&mut e, LET, joined);
+    assert!(ok, "{:?}", printed());
+    assert_eq!(
+        LAMBDA_TEXT.with(|l| l.borrow().clone()),
+        "begin function {ref nvrsCell}\nSetINIFloat \"check:cellenter\" 1 \"nvrs_jipcheck\"\nend"
+    );
 }

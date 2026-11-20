@@ -8,18 +8,23 @@
 //! state (pipelines, shader modules, samplers, bind groups) are where the speed work starts.
 
 use crate::answers::QueryAnswers;
+use crate::bright;
 use crate::cache;
+use crate::ffp;
 use crate::format::{self, d3dfmt, Format};
 use crate::frame_rate;
 use crate::fxhash::Map;
+use crate::gpu_times::{self, GpuTimes, Kind};
 use crate::loading;
 use crate::prepare;
+use crate::scene_light;
 use crate::shot::{self, Shots};
 use crate::sm::{self, wgsl, Stage};
 use crate::state::{self, rs, SamplerKey};
+use crate::sun_shadow;
 use d3d9_stream::{Handle, Rect};
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// Where the device's frames go.
@@ -44,6 +49,15 @@ pub(crate) struct Tex {
     samples: u32,
     id: u64,
     batch: AtomicU64,
+    /// The mean alpha of its smallest level as last uploaded (f32 bits; not a number until then,
+    /// or in a format not read): read with the sun shadows on only ([`sun_shadow::RIBBON_ALPHA`]).
+    alpha: AtomicU32,
+    /// The present (counted from 1) in which a pass last drew into or cleared it, a resolve or copy
+    /// last wrote it; 0 never (the draws check it).
+    written: AtomicU64,
+    /// Whether a draw sampling it before it was drawn into in that present was said (the log
+    /// says each texture once).
+    stale_said: AtomicBool,
 }
 
 /// A surface: a level (and face) of a texture, or a standalone render target or depth surface
@@ -62,9 +76,27 @@ pub(crate) struct Surf {
 }
 
 pub(crate) struct Buf {
-    buffer: wgpu::Buffer,
-    index32: bool,
-    batch: AtomicU64,
+    pub(crate) buffer: wgpu::Buffer,
+    pub(crate) index32: bool,
+    pub(crate) batch: AtomicU64,
+    /// How many times its bytes were written: the sun shadows ([`sun_shadow`]) draw a caster
+    /// again only from the bytes it was drawn with.
+    pub(crate) uploads: AtomicU64,
+    /// Its own number, never given to another buffer ([`Buf::next_id`]): what the sun shadows key
+    /// a geometry on ([`sun_shadow::GeoKey`]), so a buffer made where a freed one was is not taken
+    /// for it.
+    pub(crate) id: u64,
+    /// The game released it (or made another in its place): the sun shadows let go of what they
+    /// keep of it, however many places hold it.
+    pub(crate) released: AtomicBool,
+}
+
+impl Buf {
+    /// A new buffer's number: one more than the last.
+    pub(crate) fn next_id() -> u64 {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    }
 }
 
 pub(crate) struct Shader {
@@ -82,6 +114,17 @@ pub(crate) struct Shader {
     /// Its bytecode and the bytecode's hash, the same in every run ([`prepare::bytecode_hash`]).
     tokens: Vec<u32>,
     stable: u64,
+    /// A vertex shader's `ModelViewProj` (its first register), when its draws can cast sun
+    /// shadows ([`sun_shadow::model_view_proj`]).
+    mvp: Option<u32>,
+    /// A skinned vertex shader's registers ([`sun_shadow::skin_model_view_proj`]): with the
+    /// characters cast, its draws cast through it.
+    skin: Option<sun_shadow::Skin>,
+    /// A lit pixel shader's sun light colour register ([`wgsl::sun_register`]): its draws on the
+    /// scene take the sun shadows' variant when they are on.
+    sun: Option<u32>,
+    /// A pixel shader of a character's face (its constant table names `FaceGenMap0`).
+    face: bool,
 }
 
 /// A `D3DVERTEXELEMENT9`.
@@ -189,8 +232,15 @@ struct State {
     /// ... and their headers, everything but the float constants, need making again
     /// ([`Device::write_blocks`]): set with `dirty` by every change but a float constant's.
     header_dirty: [bool; 2],
+    /// The texture stage states (`SetTextureStageState`), for draws without a pixel shader
+    /// ([`ffp`]).
+    tss: Box<[[u32; ffp::STAGE_STATES]; ffp::STAGES]>,
+    /// The FVF code the vertex layout came from (`SetFVF`), None after a declaration.
+    fvf: Option<u32>,
     /// The handles the bindings were last set from ([`Bound`]).
     bound: Bound,
+    /// ATI's alpha to coverage switch ([`A2M1`]): on after `A2M1`, off after `A2M0`.
+    a2m1: bool,
 }
 
 /// A handle no binding holds: the object at a handle may have changed since it was bound
@@ -269,12 +319,14 @@ struct PipeKey {
     /// Whether each of the shaders' samplers ([`Device::sampler_bindings`], in order) filters:
     /// with the two shaders, what the bind group's layout is made from.
     filterable: u32,
-    /// NVIDIA's alpha to coverage in place of the alpha test ([`ATOC`]).
+    /// Alpha to coverage in place of the alpha test (NVIDIA's [`ATOC`] or ATI's [`A2M1`]).
     atoc: bool,
     /// The pass has the occlusion count's target.
     count: bool,
     /// The user clip planes' code ([`Device::clip_link`]).
     clip: wgsl::Clip,
+    /// The sun shadows' variant of the pixel shader ([`wgsl::convert_with_sun`]; never listed).
+    sun: bool,
 }
 
 /// The samplers a draw's two shaders use ([`Device::sampler_bindings`]): (binding, dimension,
@@ -442,8 +494,10 @@ pub fn save_lists_now() {
 /// four recordings of the game's Direct3D 9 calls (the intro and the main menu; Save 138's load
 /// and Doc Mitchell's house; the race menu; the Goodsprings street and a full turn there, at 4x
 /// antialiasing) replayed into this backend on Vulkan, each with an empty folder, their lists
-/// joined in that order, each entry once. It holds no game file's bytes: hashes of the game's
-/// shaders, format numbers and render-state values.
+/// joined in that order, each entry once; then the intro movie's fixed-function shaders and
+/// pipeline ([`ffp`]: a real Direct3D 9 run into the movie, replayed so on 2026-11-17). It holds
+/// no game file's bytes: hashes of the game's shaders, format numbers, render-state values and the
+/// fixed-function shaders' bytecode, which this backend writes.
 const SHIPPED_LIST: &str = include_str!("../data/pipelines.txt");
 
 impl Listed {
@@ -462,7 +516,12 @@ impl Listed {
             file.display(),
             s1 + s2
         );
-        let lines: Vec<String> = list.entries.iter().map(prepare::Entry::line).collect();
+        let lines: Vec<String> = list
+            .shaders
+            .iter()
+            .map(|t| prepare::shader_line(t))
+            .chain(list.entries.iter().map(prepare::Entry::line))
+            .collect();
         let shared = Arc::new(ListFile {
             file,
             // Written when this run adds a line (the file then holds the shipped ones too).
@@ -509,6 +568,23 @@ impl Listed {
             .push(line);
     }
 
+    /// A fixed-function shader listed (made at present `presents`), unless it is already.
+    fn add_shader(&mut self, tokens: &[u32], presents: u64) {
+        if !self.list.add_shader(tokens.to_vec()) {
+            return;
+        }
+        if !self.dirty {
+            self.first_added_at = presents;
+        }
+        self.dirty = true;
+        self.added_at = presents;
+        self.shared
+            .lines
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(prepare::shader_line(tokens));
+    }
+
     /// Writes the list 300 presents after the last new entry (or every 3600 while they keep
     /// coming; at once with `now`), on a thread of its own.
     fn save_if_due(&mut self, presents: u64, now: bool) {
@@ -543,6 +619,8 @@ struct PassBinds {
     blend: Option<u32>,
     streams: [Option<(wgpu::Buffer, u64)>; 8],
     index: Option<(wgpu::Buffer, bool)>,
+    /// The sun shadows' lookup group (3) at this offset.
+    light: Option<u32>,
 }
 
 /// The render states a pipeline is made from.
@@ -591,9 +669,27 @@ const PIPELINE_STATES: [usize; 30] = [
 /// GREATEREQUAL and ALWAYS cover from the alpha, and NEVER, LESS, EQUAL and LESSEQUAL draw
 /// nothing. Which samples another vendor's hardware covers for an alpha is its own.
 const ATOC: u32 = u32::from_le_bytes(*b"ATOC");
-/// `D3DRS_CLIPPING` and `D3DRS_ADAPTIVETESS_Y`.
+/// `D3DRS_POINTSIZE` set to `MAKEFOURCC('A','2','M','1')` / `('A','2','M','0')`: ATI's Direct3D 9
+/// driver's switch for the same alpha to coverage, on and off. The game sends it instead of
+/// [`ATOC`] when its renderer took the ATI path (the driver's name starts "ati": vendor word 2 in
+/// its shader setup, `00b4f710`; the switch itself in `00b98540`, which sends `A2M0` + 0x1000000
+/// for on, else `A2M0`). The game turns it on only together with the alpha test (`00b9a120`,
+/// `RenderBatches` 00b99f6c, and per pass in `RenderPassImmediately` 00b99541, from the alpha
+/// property's alpha test bit), so it is taken here exactly as [`ATOC`]: coverage from the alpha
+/// while the alpha test is on and the target is multisampled, the alpha test itself off. The two
+/// values are a switch the driver keeps, not a point size: the point size keeps its value, and any
+/// other `D3DRS_POINTSIZE` value leaves the switch as it is. What ATI's own driver does with the
+/// switch on and the alpha test off is not measured here (the game never asks it).
+const A2M1: u32 = u32::from_le_bytes(*b"A2M1");
+const A2M0: u32 = u32::from_le_bytes(*b"A2M0");
+/// `D3DRS_POINTSIZE`, `D3DRS_CLIPPING` and `D3DRS_ADAPTIVETESS_Y`.
+const RS_POINTSIZE: usize = 154;
 const RS_CLIPPING: usize = 136;
 const RS_ADAPTIVETESS_Y: usize = 181;
+/// `D3DRS_SPECULARENABLE` and `D3DRS_TEXTUREFACTOR`, read by the fixed-function pixel shader
+/// ([`ffp`]).
+const RS_SPECULARENABLE: usize = 29;
+const RS_TEXTUREFACTOR: usize = 60;
 /// The occlusion counts' slots: a ring (a query's count is read long before its slot comes round
 /// again).
 const COUNT_SLOTS: u32 = 4096;
@@ -640,9 +736,39 @@ const BLOCK: u64 = wgsl::REGS_SIZE.div_ceil(256) * 256;
 /// The ring of uniform blocks and `DrawPrimitiveUP` vertices sent with each batch.
 const RING: u64 = 32 << 20;
 const UP_RING: u64 = 8 << 20;
+
+/// The register ring's room: [`RING`], or less for a test ([`ring_room_for_tests`]).
+fn ring_room() -> u64 {
+    match RING_ROOM_FOR_TESTS.load(Ordering::Relaxed) {
+        0 => RING,
+        n => n.min(RING),
+    }
+}
+
+/// Tests only: the register ring's room in bytes (0: [`RING`]).
+static RING_ROOM_FOR_TESTS: AtomicU64 = AtomicU64::new(0);
+
+/// Tests only: [`RING_ROOM_FOR_TESTS`] (0: the whole ring).
+#[doc(hidden)]
+pub fn ring_room_for_tests(bytes: u64) {
+    RING_ROOM_FOR_TESTS.store(bytes, Ordering::Relaxed);
+}
+
+/// The room one stage's register block takes in the ring, at most (tests).
+#[doc(hidden)]
+pub fn register_block_for_tests() -> u64 {
+    BLOCK
+}
 /// The upload stage: buffer uploads into buffers the open batch draws from, copied in among the
 /// batch's commands ([`Device::upload_buffer`]).
 const STAGE: u64 = 8 << 20;
+/// The sun shadows' variant pipelines made on threads of their own at once, at most.
+const SUN_VARIANTS_AT_ONCE: usize = 6;
+/// The sun shadows' moving places at most (each is drawn every frame).
+const MAX_SUN_MOVING: usize = 4096;
+/// A geometry whose body was made this many times (the game wrote into its buffers between) is
+/// drawn whole from then on ([`sun_shadow::Body::of`] not split).
+const SPLIT_BODIES: u32 = 3;
 
 pub struct Device {
     pub(crate) device: wgpu::Device,
@@ -657,14 +783,29 @@ pub struct Device {
     st: State,
     encoder: Option<wgpu::CommandEncoder>,
     /// The batch's earlier encoders, in order: finished on the finishing threads (or here), their
-    /// command buffers sent with the batch before the open encoder's ([`Device::send_encoder`]).
-    finishing: Vec<Finishing>,
+    /// command buffers sent with the batch before the open encoder's ([`Device::send_encoder`]),
+    /// each with its [`Device::encoder`] uses.
+    finishing: Vec<(Finishing, u32)>,
     finisher: Option<Finisher>,
     /// The queue thread: every submit, present and queue write in order ([`Device::flush`],
     /// [`Device::on_queue`]); none where there are no finishing threads.
     submitter: Option<Submitter>,
     /// Draws recorded into the open encoder.
     encoder_draws: u32,
+    /// The card's own times by kind (`NV_WGPU_GPU_TIMES`, [`crate::gpu_times`]); none when off.
+    gpu_times: Option<GpuTimes>,
+    /// The open pass's timed pair and whether a clear began it; its draws (a pass that only
+    /// cleared counts as clears).
+    timed_pass: Option<(u32, bool)>,
+    pass_draws: u32,
+    /// Batches sent because the register ring was full ([`Device::make_ring_room`]).
+    ring_sends: u64,
+    /// Passes begun and commands recorded straight into the open encoder ([`Device::encoder`]).
+    encoder_uses: u32,
+    /// The open batch's uses, its earlier encoders' too ([`Device::bound_batch`]).
+    batch_uses: u32,
+    /// What the batches' submits carried ([`submit_in_parts`]).
+    submits: Arc<Submits>,
     pass: Option<wgpu::RenderPass<'static>>,
     pass_targets: Option<Targets>,
     batch: u64,
@@ -708,6 +849,15 @@ pub struct Device {
     /// The shaders by bytecode hash; the hashes two bytecodes share; the declarations by their
     /// elements ([`Device::create_shader`], [`Device::decl_of`]).
     shader_bytecode: Map<u64, Vec<Arc<Shader>>>,
+    /// The fixed-function shaders made so far ([`ffp`]), by what they do: a vertex shader for
+    /// each pre-transformed layout, a pixel shader for each set of texture stages (None: one the
+    /// converter refused, printed once).
+    ffp_vs: Map<ffp::VertexKey, Option<Arc<Shader>>>,
+    ffp_ps: Map<ffp::PixelKey, Option<Arc<Shader>>>,
+    /// The float constants of the stage whose shader is a fixed-function one (the vertex
+    /// shader's viewport, the pixel shader's texture factor: [`ffp::vertex_constants`],
+    /// [`ffp::pixel_constants`]), which its register block carries instead of the game's.
+    ffp_f: [Option<Vec<u8>>; 2],
     collided: HashSet<u64>,
     decls_by_elements: Map<Vec<Element>, Arc<Decl>>,
     /// The pipelines to make before play ([`prepare`]): the list, which of its entries are made
@@ -727,8 +877,11 @@ pub struct Device {
     #[allow(clippy::type_complexity)]
     gamma_resolves:
         Map<(wgpu::TextureFormat, u32, bool), (wgpu::RenderPipeline, wgpu::BindGroupLayout)>,
-    /// Depth stand-ins for targets smaller than the bound depth surface ([`Device::usable_depth`]).
-    depth_parts: Map<(u64, u32, u32), Arc<Surf>>,
+    /// Depth stand-ins for targets smaller than the bound depth surface ([`Device::usable_depth`]),
+    /// each with the present it was last drawn with: one not drawn with for [`DEPTH_PART_IDLE`]
+    /// presents is let go ([`sweep_idle`]), so a target size used once (a mod's picture of the
+    /// interface, of a camera) does not keep its stand-in's video memory.
+    depth_parts: Map<(u64, u32, u32), (Arc<Surf>, u64)>,
     #[allow(clippy::type_complexity)]
     clears: Map<
         (
@@ -762,6 +915,8 @@ pub struct Device {
     count_buffer: wgpu::Buffer,
     next_count_slot: u32,
     reduce: Map<bool, (wgpu::ComputePipeline, wgpu::BindGroupLayout)>,
+    /// The HDR watch ([`bright`]): the float targets read on one present in four, for the log.
+    hdr_watch: bright::Watch,
     /// The copies of textures a draw samples while drawing into them, by the texture's id
     /// ([`Device::copy_for_sampling`]).
     target_copies: Map<u64, Arc<Tex>>,
@@ -783,6 +938,11 @@ pub struct Device {
     errors: Arc<AtomicU64>,
     pub(crate) draws: u64,
     pub(crate) skipped: u64,
+    /// Draws' samples of render-target textures not drawn into in their present (the periodic
+    /// report).
+    stale_samples: u64,
+    /// Render-target textures said sampled before being drawn into (once each).
+    stale_textures: u64,
     /// Pipelines made on the draw that needed them (not ahead from the list).
     made_on_draws: u64,
     /// Entries the draws offered the pipeline list: each pipeline once for each plane state it
@@ -828,6 +988,293 @@ pub struct Device {
     /// `END`s (query, number) whose counts are awaited.
     pub(crate) answers: Option<Arc<QueryAnswers>>,
     awaiting: Vec<(Handle, u64)>,
+    /// The new lighting ([`scene_light`]): on for this device ([`scene_light::enabled`] when it
+    /// was made), its GPU objects once it first runs, and the present it last ran in.
+    scene_light_on: bool,
+    scene_light: Option<Box<scene_light::Gpu>>,
+    scene_light_ran: Option<u64>,
+    /// The parameters last said in the log, and `NV_AO_ALTERNATE=1` (diagnostic only).
+    scene_light_said: Option<scene_light::Params>,
+    scene_light_alternate: bool,
+    /// The sun shadows ([`sun_shadow`]): present only when on for this device
+    /// ([`sun_shadow::enabled`] when it was made).
+    sun: Option<Box<SunState>>,
+    /// The sun shadows' variant pipelines on their way ([`Device::sun_variant_ready`]) and those
+    /// that could not be made.
+    sun_pending: Map<PipeKey, std::sync::mpsc::Receiver<Option<Pipe>>>,
+    sun_failed: HashSet<PipeKey>,
+    /// The still casters' pipeline layout (the registers alone).
+    sun_caster_layout: Option<wgpu::PipelineLayout>,
+}
+
+/// A sun-shadow caster pipeline's key: vertex shader, declaration, strides, primitive type,
+/// 32-bit indices, cull mode, and for a cut-out its pixel shader and samplers' filtering.
+type PipeOf = (u64, u64, [u32; 8], u8, bool, u32, u64, u32);
+
+/// The sun shadows' state on a device that has them on ([`sun_shadow`]).
+struct SunState {
+    gpu: sun_shadow::Gpu,
+    /// This frame's casters, and those of the frames before still around the camera.
+    lists: sun_shadow::Lists,
+    cache: sun_shadow::Cache<sun_shadow::GeoKey, sun_shadow::Draw>,
+    /// The far map's casters ([`sun_shadow::far_casts`]: the land and the large objects, kept as
+    /// `cache` keeps its own) and the sun it was drawn for; how many times it was drawn since the
+    /// last line in the log.
+    far: sun_shadow::Cache<sun_shadow::GeoKey, sun_shadow::Draw>,
+    far_keep: sun_shadow::SunKeep,
+    /// The world point the far map's steps count from ([`sun_shadow::Cascade::anchor`]): its centre
+    /// when it last took a new sun (none before its first map).
+    far_anchor: Option<[f64; 3]>,
+    far_maps: u64,
+    /// A far caster came or went since its map was last started, and the present it was.
+    far_dirty: bool,
+    far_last: u64,
+    /// The vertex blocks' headers the casters use (a few: the integer and boolean registers).
+    headers: Vec<Vec<u8>>,
+    /// The integer and boolean registers of the last caster and their header's place.
+    last_regs: Option<([[u32; 4]; 16], [u32; 16], u32)>,
+    /// How many kept places move ([`sun_shadow::Instance::moving`]: drawn each frame over the still
+    /// maps), at most [`MAX_SUN_MOVING`].
+    moving: usize,
+    /// Geometries let go because the game wrote into their buffers ([`sun_shadow::GeoKey::geometry`]):
+    /// when one comes back it moves.
+    rewritten: crate::fxhash::Set<sun_shadow::GeoKey>,
+    /// Each geometry's body ([`sun_shadow::GeoKey::geometry`]: one a geometry, the last made,
+    /// [`SunBody`]). Entries of buffers the game let go are dropped when the map has doubled since
+    /// (`prune_at`); past [`sun_shadow::body_limit`] all are forgotten (not reached in play).
+    bounds: Map<sun_shadow::GeoKey, SunBody>,
+    prune_at: usize,
+    /// Each caster pipeline's place in `gpu.pipelines` by vertex shader, declaration, strides,
+    /// primitive type and index size (none: it could not be made).
+    pipes: Map<PipeOf, Option<u32>>,
+    /// The ribbon cables' coverage pipelines ([`sun_shadow::Draw::ribbon`]), by the same key.
+    ribbon_pipes: Map<PipeOf, Option<u32>>,
+    keep: [sun_shadow::SunKeep; sun_shadow::CASCADES],
+    /// Each cascade's anchor ([`sun_shadow::Cascade::anchor`]): the centre of its map when the map
+    /// last took a new sun (none before its first), so its texel grid turns about the ground round
+    /// the camera.
+    anchors: [Option<[f64; 3]>; sun_shadow::CASCADES],
+    /// The frame's camera from the new lighting's words ([`scene_light::STATE`], recorded just
+    /// before [`sun_shadow::STATE`]).
+    view: Option<scene_light::Params>,
+    /// The present the maps were last used in.
+    ran: Option<u64>,
+    /// The scene's depth surface the maps were last used on, this frame's lookup slot in the
+    /// lighting variants' ring (none: the variants are not used this frame), and the camera words
+    /// recorded at the scene's clear ([`sun_shadow::VIEW_STATE`]).
+    scene_depth: Option<u64>,
+    light: Option<u32>,
+    begin_view: Option<scene_light::Params>,
+    /// The debug step instead of the lighting variants ([`sun_shadow::debug_step`] when made).
+    debug: bool,
+    /// The present whose scene clear last brought the maps up to date ([`Device::sun_lookup`]),
+    /// the camera of the frame whose casters wait in `lists`, and whether this frame's depth-only
+    /// clear has passed (the first-person arms and weapon cast nothing).
+    processed: Option<u64>,
+    prev: Option<(scene_light::Params, sun_shadow::Frame)>,
+    closed: bool,
+    /// Since the last line in the log: frames, casters on the scene, casters kept, maps drawn,
+    /// map draws, the hook's time on this thread.
+    frames: u64,
+    casters: u64,
+    kept: u64,
+    maps: u64,
+    added: u64,
+    /// Let go: buffers written or released, too far, in view but not drawn.
+    gone: [u64; 3],
+    /// Maps drawn again because they moved (or the sun turned), or because a caster in them changed.
+    moved: [u64; sun_shadow::CASCADES],
+    touched: [u64; sun_shadow::CASCADES],
+    /// ... of those for a changed caster, how many for a moving place that settled ([`sun_shadow::SETTLE`]).
+    settled: [u64; sun_shadow::CASCADES],
+    /// Cables kept ([`sun_shadow::Body::thin`]), summed over the frames since the last line.
+    cables: u64,
+    /// Draws not kept: not opaque; (kept: cut-outs); not kept: no pipeline, no bounds, no
+    /// `ModelViewProj` (or skinned), `DrawPrimitiveUP`.
+    rejected: [u64; 6],
+    /// The frame's lookups since the last log line: given to the lit draws, ended by a colour and
+    /// depth clear of another target after the scene's, and none for want of a map.
+    lookups: [u64; 3],
+    /// The world the casters were kept in ([`Device::sun_world`]) and how often a new one made
+    /// them forgotten (for the log).
+    world: Option<u32>,
+    forgotten: u64,
+    map_draws: u64,
+    took: std::time::Duration,
+    said: u64,
+    /// A tool for finding why something casts nothing: `NV_SUN_SHADOWS_DUMP=N` lists, once, every
+    /// caster of present N and every draw not kept (why, its shader, its place) in the log.
+    dump_at: Option<u64>,
+    dump_rejects: Vec<SunReject>,
+    /// `NV_SUN_SHADOWS_TRACE=N`: the sun's direction and which maps take it, in the log for the next N
+    /// updates (how the game moves its sun, frame by frame).
+    trace: u32,
+    /// Characters cast ([`sun_shadow::characters`] when made): skinned draws are casters and the
+    /// lit variants read the game's own actor shadows as lit.
+    characters: bool,
+    /// Each skinned geometry's bones' bind-pose spheres ([`sun_shadow::skin_spheres`]) by
+    /// [`sun_shadow::GeoKey::geometry`], with the key they were read for (none: unreadable).
+    skins: Map<sun_shadow::GeoKey, SkinOf>,
+    /// This frame's characters, posed ([`sun_shadow::Skinned`]): drawn into the near maps each frame.
+    skinned: Vec<sun_shadow::Skinned>,
+    /// Characters cast since the last line in the log.
+    skinned_seen: u64,
+    /// Characters' caster pipelines on their way (made on threads of their own).
+    caster_pending: Map<PipeOf, std::sync::mpsc::Receiver<Result<wgpu::RenderPipeline, String>>>,
+    /// The characters' places (geometry, centre) of the frame before and of this one (kept for its
+    /// list), for the frame's step; and a test's allowance in place of the measured one.
+    skin_before: Vec<(sun_shadow::GeoKey, [f64; 3])>,
+    skin_now: Vec<(sun_shadow::GeoKey, [f64; 3])>,
+    allow_override: Option<f32>,
+}
+
+/// A skinned geometry's bones' spheres as last read ([`SunState::skins`]): the key they were read
+/// for, and the spheres (none: unreadable).
+type SkinOf = (sun_shadow::GeoKey, Option<Arc<Vec<sun_shadow::BoneSphere>>>);
+
+/// A geometry's body as last made ([`SunState::bounds`]).
+struct SunBody {
+    /// The key it was made for (its buffers' upload counts with it): a draw of other bytes makes a
+    /// new one in its place.
+    key: sun_shadow::GeoKey,
+    /// Its object-space bounding sphere and pieces, and the index lists made for them (none: its
+    /// positions could not be read). A body made again for new bytes has lists of its own.
+    body: Option<Arc<sun_shadow::Body>>,
+    /// How many bodies the geometry has had made: one the game keeps writing is drawn whole from
+    /// its [`SPLIT_BODIES`]th on (its pieces not worked out each frame).
+    made: u32,
+    /// The game's buffers it was made from: once one is gone, so is the geometry.
+    held: Vec<std::sync::Weak<Buf>>,
+}
+
+impl SunBody {
+    fn live(&self) -> bool {
+        self.held.iter().all(|b| {
+            b.upgrade()
+                .is_some_and(|b| !b.released.load(Ordering::Relaxed))
+        })
+    }
+}
+
+/// The least number of bodies kept before those of buffers let go are looked for.
+const SUN_PRUNE_FROM: usize = 1024;
+
+/// A draw the sun's maps did not keep, for the dump: why (the counters' order), its vertex and
+/// pixel shaders' stable hashes, its count and its `ModelViewProj` when it has one.
+type SunReject = (usize, u64, u64, u32, Option<[[f32; 4]; 4]>);
+
+impl SunState {
+    /// Whether a draw of present `now` is kept for the maps: after this frame's scene clear with the
+    /// sun ([`Device::sun_lookup`]; none indoors, at night or in menus, where the light list would
+    /// cost for nothing), before its depth-only clear.
+    fn recording(&self, now: u64) -> bool {
+        self.ran == Some(now) && !self.closed
+    }
+
+    /// Another world: the casters kept, the frame's list and its camera go, and every map is to
+    /// be drawn again before the lit draws use it.
+    fn forget_world(&mut self) {
+        self.cache = sun_shadow::Cache::default();
+        self.far = sun_shadow::Cache::default();
+        self.far_keep = sun_shadow::SunKeep::default();
+        self.far_anchor = None;
+        self.anchors = [None; sun_shadow::CASCADES];
+        self.far_dirty = false;
+        self.gpu.forget_far();
+        self.lists.clear();
+        self.prev = None;
+        self.moving = 0;
+        self.rewritten.clear();
+        self.skins.clear();
+        self.skinned.clear();
+        self.skin_before.clear();
+        self.bounds.clear();
+        self.gpu.drawn = [None; sun_shadow::CASCADES];
+        self.light = None;
+        self.forgotten += 1;
+    }
+
+    fn new(device: &wgpu::Device) -> SunState {
+        SunState {
+            gpu: sun_shadow::Gpu::new(device, sun_shadow::characters()),
+            lists: sun_shadow::Lists::default(),
+            cache: sun_shadow::Cache::default(),
+            far: sun_shadow::Cache::default(),
+            far_keep: sun_shadow::SunKeep::default(),
+            far_anchor: None,
+            far_maps: 0,
+            far_dirty: false,
+            far_last: 0,
+            headers: Vec::new(),
+            last_regs: None,
+            moving: 0,
+            rewritten: crate::fxhash::Set::default(),
+            bounds: Map::default(),
+            prune_at: SUN_PRUNE_FROM,
+            pipes: Map::default(),
+            ribbon_pipes: Map::default(),
+            keep: [sun_shadow::SunKeep::default(); sun_shadow::CASCADES],
+            anchors: [None; sun_shadow::CASCADES],
+            view: None,
+            ran: None,
+            scene_depth: None,
+            light: None,
+            begin_view: None,
+            debug: sun_shadow::debug_step(),
+            processed: None,
+            prev: None,
+            closed: false,
+            frames: 0,
+            casters: 0,
+            kept: 0,
+            maps: 0,
+            added: 0,
+            gone: [0; 3],
+            moved: [0; sun_shadow::CASCADES],
+            touched: [0; sun_shadow::CASCADES],
+            settled: [0; sun_shadow::CASCADES],
+            cables: 0,
+            rejected: [0; 6],
+            lookups: [0; 3],
+            world: None,
+            forgotten: 0,
+            map_draws: 0,
+            took: std::time::Duration::ZERO,
+            said: 0,
+            dump_at: std::env::var("NV_SUN_SHADOWS_DUMP")
+                .ok()
+                .and_then(|v| v.trim().parse().ok()),
+            dump_rejects: Vec::new(),
+            trace: std::env::var("NV_SUN_SHADOWS_TRACE")
+                .ok()
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(0),
+            characters: sun_shadow::characters(),
+            skins: Map::default(),
+            skinned: Vec::new(),
+            skinned_seen: 0,
+            caster_pending: Map::default(),
+            skin_before: Vec::new(),
+            skin_now: Vec::new(),
+            allow_override: None,
+        }
+    }
+}
+
+impl Shader {
+    /// The register a caster's sun matrix goes into: its `ModelViewProj`, or with the characters
+    /// cast a skinned shader's `SkinModelViewProj`; none: its draws cast nothing.
+    fn caster_matrix(&self, characters: bool) -> Option<u32> {
+        self.mvp
+            .or_else(|| self.skin.filter(|_| characters).map(|s| s.mvp))
+    }
+}
+
+/// Which of a lit draw's shaders take the sun shadows' lookup (vertex, pixel), given which read a
+/// sun register: the pixel shader when it does (shadowing both would take the sun away twice),
+/// else the vertex shader.
+fn sun_stages(vs: bool, ps: bool) -> (bool, bool) {
+    (vs && !ps, ps)
 }
 
 pub(crate) fn block_on<F: std::future::Future>(f: F) -> F::Output {
@@ -1079,7 +1526,11 @@ impl Device {
         let finisher = if NO_QUEUE_THREADS_FOR_TESTS.load(Ordering::Relaxed) {
             None
         } else {
-            Finisher::for_this_machine()
+            Finisher::for_this_machine().or_else(|| {
+                FORCE_QUEUE_THREADS_FOR_TESTS
+                    .load(Ordering::Relaxed)
+                    .then(|| Finisher::new(1))
+            })
         };
         let submitter = finisher.as_ref().map(|_| Submitter::new(queue.clone()));
         let mut d = Device {
@@ -1113,13 +1564,23 @@ impl Device {
                 clip: [[0; 4]; wgsl::CLIP_PLANES],
                 dirty: [true; 2],
                 header_dirty: [true; 2],
+                tss: Box::new(ffp::default_stage_states()),
+                fvf: None,
                 bound: Bound::default(),
+                a2m1: false,
             },
             encoder: None,
             finishing: Vec::new(),
             finisher,
             submitter,
             encoder_draws: 0,
+            gpu_times: None,
+            timed_pass: None,
+            pass_draws: 0,
+            ring_sends: 0,
+            encoder_uses: 0,
+            batch_uses: 0,
+            submits: Arc::default(),
             pass: None,
             pass_targets: None,
             batch: 1,
@@ -1160,6 +1621,9 @@ impl Device {
             loading: None,
             start: None,
             shader_bytecode: Map::default(),
+            ffp_vs: Map::default(),
+            ffp_ps: Map::default(),
+            ffp_f: [None, None],
             collided: HashSet::new(),
             decls_by_elements: Map::default(),
             list,
@@ -1191,6 +1655,7 @@ impl Device {
             count_buffer,
             next_count_slot: 0,
             reduce: Map::default(),
+            hdr_watch: bright::Watch::new(),
             target_copies: Map::default(),
             destroyed: HashSet::new(),
             next_id: 1,
@@ -1204,9 +1669,39 @@ impl Device {
             errors,
             draws: 0,
             skipped: 0,
+            stale_samples: 0,
+            stale_textures: 0,
             answers: None,
             awaiting: Vec::new(),
+            scene_light_on: scene_light::enabled(),
+            scene_light: None,
+            scene_light_ran: None,
+            scene_light_said: None,
+            scene_light_alternate: scene_light::enabled()
+                && std::env::var("NV_AO_ALTERNATE").is_ok_and(|v| v.trim() == "1"),
+            sun: None,
+            sun_pending: Map::default(),
+            sun_failed: HashSet::new(),
+            sun_caster_layout: None,
         };
+        // The card's times when asked for (`NV_WGPU_GPU_TIMES`): none where the driver has no
+        // timestamps (said once).
+        if gpu_times::enabled() {
+            match GpuTimes::new(&d.device, &d.queue) {
+                Ok(t) => {
+                    eprintln!(
+                        "NV_D3D9 wgpu: GPU times on (NV_WGPU_GPU_TIMES): a line every 5 s{}",
+                        if t.inside() { "" } else { ", passes only" }
+                    );
+                    d.gpu_times = Some(t);
+                }
+                Err(why) => eprintln!("NV_D3D9 wgpu: {why}"),
+            }
+        }
+        // The sun shadows: their maps and light list only when on for this device.
+        if sun_shadow::enabled() {
+            d.sun = Some(Box::new(SunState::new(&d.device)));
+        }
         d.surface = shown_in;
         // The frame-rate counter can show (F11 is taken) while a device draws the game's window.
         if d.surface.is_some() {
@@ -1217,6 +1712,16 @@ impl Device {
             "a device made to panic (tests)"
         );
         d.make_back_buffers(pp, back_buffers, depth);
+        // The fixed-function shaders the list keeps ([`ffp`]), made now as the game's are when it
+        // creates them, so the listed pipelines naming them are made before play.
+        let listed_ffp = d
+            .list
+            .as_ref()
+            .map(|l| l.list.shaders.clone())
+            .unwrap_or_default();
+        for tokens in listed_ffp {
+            d.shader_of(&tokens, false);
+        }
         // Lost while the rest was made: refused as well (the platform's Direct3D 9 draws).
         if lost.load(Ordering::Acquire) {
             return Err("the device was lost while it was made".into());
@@ -1348,6 +1853,12 @@ impl Device {
             self.sample_mask |= bit;
             self.listed_new = true;
         }
+        // The game's anti-aliasing setting, said once for each sample count (for reports).
+        if samples > 1 && !format.depth {
+            self.warn(format!(
+                "the game draws into multisampled targets: {samples} samples a pixel (its anti-aliasing setting)"
+            ));
+        }
         let layers = if cube { 6 } else { 1 };
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: None,
@@ -1363,6 +1874,10 @@ impl Device {
             // A multisampled surface is only drawn into and resolved (`StretchRect`; an 8-bit
             // colour one by a shader that reads its samples).
             usage: if samples > 1 && gamma_resolved(format.wgpu) {
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
+            } else if samples > 1 && format.depth && (self.scene_light_on || self.sun.is_some()) {
+                // The new lighting and the sun shadows read the scene's depth
+                // ([`Device::scene_light`], [`Device::sun_shadows`]).
                 wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
             } else if samples > 1 {
                 wgpu::TextureUsages::RENDER_ATTACHMENT
@@ -1396,6 +1911,9 @@ impl Device {
             samples,
             id,
             batch: AtomicU64::new(0),
+            alpha: AtomicU32::new(f32::NAN.to_bits()),
+            written: AtomicU64::new(0),
+            stale_said: AtomicBool::new(false),
         }))
     }
 
@@ -1571,21 +2089,36 @@ impl Device {
             buffer: wgpu_buffer,
             index32: index && format == 102,
             batch: AtomicU64::new(0),
+            uploads: AtomicU64::new(0),
+            id: Buf::next_id(),
+            released: AtomicBool::new(false),
         });
-        self.objects
-            .insert(buffer, Obj::Buffer(b, vec![0; size as usize]));
+        if let Some(Obj::Buffer(old, _)) = self
+            .objects
+            .insert(buffer, Obj::Buffer(b, vec![0; size as usize]))
+        {
+            old.released.store(true, Ordering::Relaxed);
+        }
     }
 
     pub(crate) fn create_shader(&mut self, shader: Handle, tokens: &[u32]) {
         self.st.bound.forget(shader);
+        if let Some(s) = self.shader_of(tokens, true) {
+            self.objects.insert(shader, Obj::Shader(s));
+        }
+    }
+
+    /// The shader object of `tokens`, made when it is new (its modules queued, listed
+    /// pipelines naming it then prepared); None for bytecode the converter cannot read
+    /// (printed). `game`: the game created it (one created after the start is counted late);
+    /// otherwise a fixed-function shader ([`ffp`]).
+    fn shader_of(&mut self, tokens: &[u32], game: bool) -> Option<Arc<Shader>> {
         // One shader object for one bytecode: a shader made again (another handle, the same
         // tokens) shares its modules and pipelines, and the list ([`prepare`]) finds it by hash.
         let stable = prepare::bytecode_hash(tokens);
         if let Some(same) = self.shader_bytecode.get(&stable) {
             if let Some(s) = same.iter().find(|s| s.tokens[..] == tokens[..]) {
-                let s = s.clone();
-                self.objects.insert(shader, Obj::Shader(s));
-                return;
+                return Some(s.clone());
             }
             // Two bytecodes, one hash: the list's entries with it are never prepared (a
             // draw still finds its own pipeline by the exact key).
@@ -1600,6 +2133,14 @@ impl Device {
                 let fregs = wgsl::float_constants_read(&program);
                 let varyings: Vec<wgsl::Semantic> = sig.inputs.iter().map(|(_, s)| *s).collect();
                 let fixed = varyings.iter().all(|s| wgsl::fixed_slot(*s).is_some());
+                let sun = wgsl::sun_register(&program);
+                let face = program.constants.iter().any(|c| c.name == "FaceGenMap0");
+                let mvp = (program.stage == Stage::Vertex && sig.samplers.is_empty())
+                    .then(|| sun_shadow::model_view_proj(&program))
+                    .flatten();
+                let skin = (program.stage == Stage::Vertex && sig.samplers.is_empty())
+                    .then(|| sun_shadow::skin_model_view_proj(&program))
+                    .flatten();
                 let s = Arc::new(Shader {
                     program,
                     sig,
@@ -1609,20 +2150,27 @@ impl Device {
                     fixed,
                     tokens: tokens.to_vec(),
                     stable,
+                    mvp,
+                    skin,
+                    sun,
+                    face,
                 });
                 self.shader_bytecode
                     .entry(stable)
                     .or_default()
                     .push(s.clone());
-                self.objects.insert(shader, Obj::Shader(s.clone()));
                 self.listed_new = true;
                 self.queue_modules(&s);
-                if self.start_done {
+                if game && self.start_done {
                     self.made.late_shaders += 1;
                     self.late_shaders += 1;
                 }
+                Some(s)
             }
-            Err(e) => self.warn(format!("a shader the converter cannot read: {e}")),
+            Err(e) => {
+                self.warn(format!("a shader the converter cannot read: {e}"));
+                None
+            }
         }
     }
 
@@ -1697,6 +2245,7 @@ impl Device {
             Some(Obj::Surface(s)) => {
                 self.destroyed.insert(s.id);
             }
+            Some(Obj::Buffer(b, _)) => b.released.store(true, Ordering::Relaxed),
             _ => {}
         }
     }
@@ -1719,6 +2268,38 @@ impl Device {
             }
         }
         self.depth_parts.retain(|k, _| !gone.contains(&k.0));
+        for &id in &gone {
+            self.hdr_watch.forget(id);
+        }
+    }
+
+    /// Whether the adapter can time passes (tests: the times are then on when asked for).
+    pub fn adapter_has_timestamps(&self) -> bool {
+        self.adapter
+            .features()
+            .contains(wgpu::Features::TIMESTAMP_QUERY)
+    }
+
+    /// Whether the device itself has the timestamp features ([`crate::gpu_times`] asks for them only
+    /// when on): `TIMESTAMP_QUERY` and `TIMESTAMP_QUERY_INSIDE_ENCODERS` (tests).
+    pub fn timestamp_features(&self) -> (bool, bool) {
+        let f = self.device.features();
+        (
+            f.contains(wgpu::Features::TIMESTAMP_QUERY),
+            f.contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS),
+        )
+    }
+
+    /// Whether the card's times are on for this device (`NV_WGPU_GPU_TIMES`, tests).
+    pub fn gpu_times_on(&self) -> bool {
+        self.gpu_times.is_some()
+    }
+
+    /// The card's times so far, after the queue thread has run what it was handed (tests); none
+    /// when off.
+    pub fn gpu_time_totals(&mut self) -> Option<gpu_times::Totals> {
+        self.sync();
+        self.gpu_times.as_mut().map(GpuTimes::totals)
     }
 
     /// How many bind groups are cached (tests).
@@ -1730,11 +2311,63 @@ impl Device {
     /// the queue thread ([`Submitter`]) the batch is handed to it whole, and this thread goes on
     /// recording the next one into a fresh register ring, UP vertices and upload stage while it is
     /// finished and submitted (in order with every other queue operation).
+    /// With the card's times on, the batch's timestamps are resolved at the end of its last
+    /// encoder and read once it is submitted ([`crate::gpu_times`]). A batch whose last encoder
+    /// already went to a finishing thread keeps its timestamps in the open set, resolved with a
+    /// later batch's: the times add no command buffer of their own.
     fn flush(&mut self) {
+        self.end_pass();
+        let read = match self.gpu_times.take() {
+            Some(mut t) => {
+                let read = if !t.pending() {
+                    t.end_empty_batch();
+                    None
+                } else if self.encoder.is_some() {
+                    t.end_batch(self.timing_encoder())
+                } else {
+                    None
+                };
+                self.gpu_times = Some(t);
+                read
+            }
+            None => None,
+        };
+        self.send_batch();
+        if let Some((buffer, state)) = read {
+            self.on_queue(move |_| gpu_times::map(buffer, state));
+        }
+    }
+
+    /// [`Device::flush`]'s batch handed over (or submitted here).
+    fn send_batch(&mut self) {
         self.end_pass();
         let finishing = std::mem::take(&mut self.finishing);
         let encoder = self.encoder.take();
+        let uses: Vec<u32> = finishing
+            .iter()
+            .map(|f| f.1)
+            .chain(encoder.as_ref().map(|_| self.encoder_uses))
+            .collect();
+        let finishing: Vec<Finishing> = finishing.into_iter().map(|f| f.0).collect();
+        let parts = submit_parts(&uses);
+        self.submits
+            .encoders
+            .fetch_add(uses.len() as u64, Ordering::Relaxed);
+        self.submits
+            .most_batch
+            .fetch_max(self.batch_uses, Ordering::Relaxed);
+        let handed = self
+            .submits
+            .batch_uses
+            .fetch_add(u64::from(self.batch_uses), Ordering::Relaxed)
+            + u64::from(self.batch_uses);
+        let pending = handed.saturating_sub(self.submits.uses.load(Ordering::Relaxed));
+        self.submits
+            .most_pending
+            .fetch_max(pending, Ordering::Relaxed);
         self.encoder_draws = 0;
+        self.encoder_uses = 0;
+        self.batch_uses = 0;
         self.batch += 1;
         self.st.dirty = [true; 2];
         let Some(s) = &self.submitter else {
@@ -1749,9 +2382,7 @@ impl Device {
                 }
             }
             let buffers = finish_batch(finishing, encoder);
-            if !buffers.is_empty() {
-                self.queue.submit(buffers);
-            }
+            submit_in_parts(&self.queue, buffers, &parts, &self.submits);
             return;
         };
         s.raise_failure();
@@ -1771,6 +2402,7 @@ impl Device {
             self.stage_buffer.clone(),
         ];
         let pool = Arc::clone(&s.pool);
+        let submits = Arc::clone(&self.submits);
         s.send(Box::new(move |queue: &wgpu::Queue| {
             let delay = SUBMIT_DELAY_FOR_TESTS.load(Ordering::Relaxed);
             if delay > 0 {
@@ -1786,10 +2418,7 @@ impl Device {
                     b.clear();
                 }
             }
-            let buffers = finish_batch(finishing, encoder);
-            if !buffers.is_empty() {
-                queue.submit(buffers);
-            }
+            submit_in_parts(queue, finish_batch(finishing, encoder), &parts, &submits);
             pool.lock().unwrap_or_else(|e| e.into_inner()).push(bytes);
         }));
     }
@@ -1845,6 +2474,17 @@ impl Device {
             return;
         }
         let bytes = format::convert(&s.format, &data[..(row * rows) as usize]);
+        // The sun shadows tell a ribbon cable's texture (mostly clear) from a fence's by the mean
+        // alpha of its smallest level (only read with them on).
+        if self.sun.is_some() && s.level + 1 == tex.levels && s.layer == 0 {
+            let mean = if s.format.opaque {
+                Some(1.0)
+            } else {
+                sun_shadow::mean_alpha(s.format.wgpu, s.width, s.height, &bytes)
+            };
+            tex.alpha
+                .store(mean.unwrap_or(f32::NAN).to_bits(), Ordering::Relaxed);
+        }
         let (row, rows) = format::uploaded_layout(&s.format, s.width, s.height);
         let (w, h) = if s.format.block {
             (s.width.div_ceil(4) * 4, s.height.div_ceil(4) * 4)
@@ -1900,6 +2540,7 @@ impl Device {
         if len == 0 {
             return;
         }
+        b.uploads.fetch_add(1, Ordering::Relaxed);
         data.copy_to(0, &mut shadow[offset as usize..offset as usize + len]);
         let start = (offset as usize) & !3;
         let end = ((offset as usize + len).div_ceil(4) * 4).min(shadow.len());
@@ -1918,6 +2559,7 @@ impl Device {
             let at = self.stage.len() as u64;
             self.stage.extend_from_slice(&shadow[start..end]);
             let stage = self.stage_buffer.clone();
+            let copy_span = self.span_begin(Kind::Copies);
             self.encoder().copy_buffer_to_buffer(
                 &stage,
                 at,
@@ -1925,6 +2567,7 @@ impl Device {
                 start as u64,
                 (end - start) as u64,
             );
+            self.span_end(copy_span);
             return;
         }
         if in_batch {
@@ -1979,11 +2622,79 @@ impl Device {
         if self.st.rt.get(index as usize).is_some_and(|r| same(r, &s)) {
             return;
         }
+        // The target the game leaves after drawing into it, for the HDR watch ([`bright`]).
+        if index == 0 {
+            if let Some(old) = self.st.rt[0].clone() {
+                if self.draws > self.hdr_watch.bound_draws {
+                    self.watch_target(&old, "drawn into, then left", true);
+                }
+            }
+            self.hdr_watch.bound_draws = self.draws;
+        }
         if let Some(slot) = self.st.rt.get_mut(index as usize) {
             *slot = s;
         }
         self.st.touch(0);
         self.st.touch(1);
+    }
+
+    /// The HDR watch's read of the single-sample surface `s`, when it wants one now ([`bright`]):
+    /// recorded in the frame's commands after the open pass, read back a few frames later. `kept`:
+    /// the surface stays (its bind group is kept); a scratch surface's is made for this read only.
+    fn watch_target(&mut self, s: &Arc<Surf>, what: &'static str, kept: bool) {
+        if !self.hdr_watch.armed {
+            return;
+        }
+        let (Some(tex), Some(view)) = (s.tex.clone(), s.view.clone()) else {
+            return;
+        };
+        if s.samples != 1 {
+            return;
+        }
+        let target = bright::Target {
+            id: tex.id,
+            width: s.width,
+            height: s.height,
+            format: s.format.wgpu,
+        };
+        if !self.hdr_watch.wants(&target, tex.texture.usage()) {
+            return;
+        }
+        self.end_pass();
+        let device = self.device.clone();
+        let present = self.presents + 1;
+        let mut watch = std::mem::take(&mut self.hdr_watch);
+        let key = kept.then_some((tex.id, s.id));
+        let span = self.span_begin(Kind::Hdr);
+        watch.read(&device, self.encoder(), &view, target, present, what, key);
+        self.span_end(span);
+        self.hdr_watch = watch;
+    }
+
+    /// Waits (at most 10 seconds) until the HDR watch's reads are back and judged; the last
+    /// judged presents' results, oldest first (tests: after a `Present`, which asks for them).
+    pub fn hdr_watch_settle(&mut self) -> Vec<(u64, Vec<(bright::Target, bright::Seen)>)> {
+        let start = std::time::Instant::now();
+        loop {
+            self.sync();
+            let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+            self.hdr_watch.collect();
+            if !self.hdr_watch.waiting() || start.elapsed().as_secs() >= 10 {
+                return self.hdr_watch.recent();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// Draws' samples of render-target textures not drawn into in their present since the last
+    /// report, and the textures said so since the device was made (tests).
+    pub fn stale_sample_counts(&self) -> (u64, u64) {
+        (self.stale_samples, self.stale_textures)
+    }
+
+    /// The HDR watch's totals since the device was made (tests).
+    pub fn hdr_watch_totals(&self) -> bright::Totals {
+        self.hdr_watch.totals
     }
 
     pub(crate) fn set_depth_stencil(&mut self, surface: Handle) {
@@ -2029,6 +2740,15 @@ impl Device {
     }
 
     pub(crate) fn set_render_state(&mut self, state: u32, value: u32) {
+        // ATI's alpha to coverage switch: kept apart, the point size as it was ([`A2M1`]).
+        if state as usize == RS_POINTSIZE && (value == A2M1 || value == A2M0) {
+            let on = value == A2M1;
+            if self.st.a2m1 != on {
+                self.st.a2m1 = on;
+                self.st.touch(1);
+            }
+            return;
+        }
         // A state set to the value it has changes nothing (the game sets many again each draw).
         let Some(s) = self.st.rs.get_mut(state as usize) else {
             return;
@@ -2126,10 +2846,47 @@ impl Device {
             return;
         }
         self.st.bound.declaration = declaration;
+        self.st.fvf = None;
         self.st.decl = match self.objects.get(&declaration) {
             Some(Obj::Decl(d)) => Some(d.clone()),
             _ => None,
         };
+    }
+
+    /// `SetFVF(fvf)`: the vertex layout becomes the one the code describes (Direct3D 9 replaces
+    /// the declaration with it, and a later `SetVertexDeclaration` replaces it again: the
+    /// binding is forgotten, so setting the same declaration again sets it). A code without a
+    /// position (0 included) leaves no layout, and a draw without one is skipped.
+    pub(crate) fn set_fvf(&mut self, fvf: u32) {
+        self.st.bound.declaration = UNKNOWN;
+        self.st.fvf = Some(fvf);
+        self.st.decl = ffp::fvf_elements(fvf).map(|elements| {
+            self.decl_of(
+                elements
+                    .into_iter()
+                    .map(|(offset, ty, usage, index)| Element {
+                        stream: 0,
+                        offset,
+                        ty,
+                        usage,
+                        index,
+                    })
+                    .collect(),
+            )
+        });
+    }
+
+    /// `SetTextureStageState(stage, state, value)`: kept for draws without a pixel shader
+    /// ([`ffp`]); stages past the eighth and unknown states are not kept.
+    pub(crate) fn set_stage_state(&mut self, stage: u32, state: u32, value: u32) {
+        if let Some(s) = self
+            .st
+            .tss
+            .get_mut(stage as usize)
+            .and_then(|s| s.get_mut(state as usize))
+        {
+            *s = value;
+        }
     }
 
     /// `Set*ShaderConstant*` (`kind`: vertex float, int, bool, then the same for the pixel stage)
@@ -2214,7 +2971,28 @@ impl Device {
 
     // Passes.
 
+    /// The open encoder, for a pass or a command recorded straight into it (one use). An encoder
+    /// that has taken [`SPLIT_USES`] goes with the batch's earlier ones first (between passes)
+    /// and a new one takes the rest, so that no submit carries more than [`SUBMIT_USES`]
+    /// ([`submit_parts`]).
     fn encoder(&mut self) -> &mut wgpu::CommandEncoder {
+        if self.encoder_uses >= SPLIT_USES && self.pass.is_none() {
+            self.cut_encoder();
+        }
+        self.encoder_uses += 1;
+        self.batch_uses += 1;
+        self.encoder.get_or_insert_with(|| {
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None })
+        })
+    }
+
+    /// The open encoder for the card's timestamps and their resolve ([`crate::gpu_times`]): not a
+    /// use, and never cut here, so the times on send no batch early ([`Device::bound_batch`]) and
+    /// cut no encoder where the times off would not. A timestamp goes in the run of commands next
+    /// to it (the copy it times) or at worst makes one more small command buffer: at most two a
+    /// timed stretch, well inside the room [`SUBMIT_USES`] leaves.
+    fn timing_encoder(&mut self) -> &mut wgpu::CommandEncoder {
         self.encoder.get_or_insert_with(|| {
             self.device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None })
@@ -2225,18 +3003,95 @@ impl Device {
     /// batch after the encoders before it ([`Device::flush`]).
     fn send_encoder(&mut self) {
         self.end_pass();
+        self.cut_encoder();
+    }
+
+    /// [`Device::send_encoder`] when no pass is open.
+    fn cut_encoder(&mut self) {
         if let Some(e) = self.encoder.take() {
-            self.finishing.push(match &self.finisher {
+            let f = match &self.finisher {
                 Some(f) => f.send(e),
                 None => Finishing::Ready(e.finish()),
-            });
+            };
+            self.finishing.push((f, self.encoder_uses));
         }
         self.encoder_draws = 0;
+        self.encoder_uses = 0;
+    }
+
+    /// Before each command ([`crate::WgpuBackend`]): a batch that has taken [`SUBMIT_USES`] is
+    /// sent now, between two of the game's commands (where nothing of one is half recorded: an
+    /// upload has not taken its place in the stage yet), after the queue thread has submitted every
+    /// batch before it. So no more than about two batches' command buffers are ever made and not yet
+    /// submitted, on any backend (Metal loses the device past 4,096 of those), and the submit
+    /// split ([`submit_parts`]) only takes the last command's few uses past the limit.
+    pub(crate) fn bound_batch(&mut self) {
+        if self.batch_uses >= SUBMIT_USES {
+            self.submits.bound_sends.fetch_add(1, Ordering::Relaxed);
+            self.sync();
+            self.flush();
+            // Once a run: whether the game's frames ever come near the limit.
+            self.warn("a batch had more passes than one submit takes and was sent early");
+        }
+    }
+
+    /// What the batches' submits carried so far ([`SubmitStats`], tests): the queue thread's
+    /// counts once it has done its work.
+    pub fn submits(&self) -> SubmitStats {
+        self.sync();
+        let s = &self.submits;
+        let load32 = |a: &AtomicU32| a.load(Ordering::Relaxed);
+        let load64 = |a: &AtomicU64| a.load(Ordering::Relaxed);
+        SubmitStats {
+            submits: load64(&s.made),
+            most_uses: load32(&s.most_uses),
+            most_buffers: load32(&s.most_buffers),
+            most_planned: load32(&s.most_planned),
+            buffers: load64(&s.buffers),
+            encoders: load64(&s.encoders),
+            most_batch: load32(&s.most_batch),
+            uses: load64(&s.uses),
+            batch_uses: load64(&s.batch_uses),
+            most_pending: load64(&s.most_pending),
+            bound_sends: load64(&s.bound_sends),
+        }
+    }
+
+    /// A pass of `kind` timed by its own timestamps (`NV_WGPU_GPU_TIMES`, [`crate::gpu_times`]):
+    /// the query set and the pair's first index; none when the times are off.
+    fn pass_span(&mut self, kind: Kind) -> Option<(wgpu::QuerySet, u32)> {
+        self.gpu_times.as_mut()?.span(kind)
+    }
+
+    /// The start of a stretch of `kind` recorded straight into the encoder (copies, the HDR watch,
+    /// the new lighting), timed by timestamps written between passes where the driver can; none
+    /// when the times are off, a pass is open, or the driver times passes only.
+    fn span_begin(&mut self, kind: Kind) -> Option<(wgpu::QuerySet, u32)> {
+        if self.pass.is_some() {
+            return None;
+        }
+        let t = self.gpu_times.as_mut().filter(|t| t.inside())?;
+        let span = t.span(kind)?;
+        self.timing_encoder().write_timestamp(&span.0, span.1);
+        Some(span)
+    }
+
+    /// The end of [`Device::span_begin`]'s stretch (recorded without opening a pass).
+    fn span_end(&mut self, span: Option<(wgpu::QuerySet, u32)>) {
+        if let Some((q, i)) = span {
+            debug_assert!(self.pass.is_none(), "a timed stretch left a pass open");
+            self.timing_encoder().write_timestamp(&q, i + 1);
+        }
     }
 
     fn end_pass(&mut self) {
         self.pass = None;
         self.pass_targets = None;
+        if let (Some((i, true)), 0, Some(t)) =
+            (self.timed_pass.take(), self.pass_draws, &mut self.gpu_times)
+        {
+            t.set_kind(i, Kind::Clears);
+        }
         if let Some(c) = self.pass_count.take() {
             self.reduce_count(&c);
         }
@@ -2279,6 +3134,7 @@ impl Device {
                 height: (t.height >> level).max(1),
                 depth_or_array_layers: layers,
             };
+            let copy_span = self.span_begin(Kind::Copies);
             self.encoder().copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &t.texture,
@@ -2294,6 +3150,7 @@ impl Device {
                 },
                 size,
             );
+            self.span_end(copy_span);
         }
         for x in [t, &copy] {
             x.batch.store(self.batch, Ordering::Relaxed);
@@ -2343,9 +3200,10 @@ impl Device {
             && self.st.rs[rs::CLIPPLANEENABLE] & ((1 << wgsl::CLIP_PLANES) - 1) != 0
     }
 
-    /// Whether NVIDIA's alpha to coverage stands in for the alpha test ([`ATOC`]).
+    /// Whether alpha to coverage stands in for the alpha test: NVIDIA's switch ([`ATOC`]) or ATI's
+    /// ([`A2M1`]), the same rule for both.
     fn atoc(&mut self) -> bool {
-        self.st.rs[RS_ADAPTIVETESS_Y] == ATOC
+        (self.st.rs[RS_ADAPTIVETESS_Y] == ATOC || self.st.a2m1)
             && self.st.rs[rs::ALPHATESTENABLE] != 0
             && self.target_shape().2 > 1
     }
@@ -2546,11 +3404,18 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 },
             ],
         });
+        let span = self.pass_span(Kind::Count);
         let mut pass = self
             .encoder()
             .begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("occlusion count"),
-                timestamp_writes: None,
+                timestamp_writes: span
+                    .as_ref()
+                    .map(|(q, i)| wgpu::ComputePassTimestampWrites {
+                        query_set: q,
+                        beginning_of_pass_write_index: Some(*i),
+                        end_of_pass_write_index: Some(*i + 1),
+                    }),
             });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &group, &[]);
@@ -2583,13 +3448,20 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             return None;
         }
         let key = (ds.id, rt.width, rt.height);
-        if let Some(s) = self.depth_parts.get(&key) {
+        let now = self.presents;
+        if let Some((s, used)) = self.depth_parts.get_mut(&key) {
+            *used = now;
             return Some(f(s));
         }
         let (format, samples) = (ds.format.d3d, ds.samples);
+        let what = format!(
+            "a {}x{} depth stand-in for a render target smaller than the {}x{} depth surface (its own contents, not the depth surface's top-left part)",
+            key.1, key.2, ds.width, ds.height
+        );
+        self.warn(what);
         let tex = self.new_texture(key.1, key.2, 1, format, false, false, samples)?;
         let s = self.level_surface(&tex, 0, 0);
-        self.depth_parts.insert(key, s.clone());
+        self.depth_parts.insert(key, (s.clone(), now));
         Some(f(&s))
     }
 
@@ -2599,6 +3471,16 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let targets = self.current_targets();
         if clear.is_none() && self.pass.is_some() && self.pass_targets.as_ref() == Some(&targets) {
             return;
+        }
+        // What it draws into is written in this present (the draws check it).
+        let now = self.presents + 1;
+        for s in self.st.rt.iter().flatten() {
+            if let Some(t) = &s.tex {
+                t.written.store(now, Ordering::Relaxed);
+            }
+        }
+        if let Some(t) = self.usable_depth_with(|d| d.tex.clone()).flatten() {
+            t.written.store(now, Ordering::Relaxed);
         }
         self.end_pass();
         if let (Some(ds), Some(rt)) = (&self.st.ds, self.st.rt.iter().flatten().next()) {
@@ -2704,13 +3586,16 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 }),
             }
         });
+        let span = self.pass_span(Kind::World);
+        self.timed_pass = span.as_ref().map(|s| (s.1, clear.is_some()));
+        self.pass_draws = 0;
         let pass = self
             .encoder()
             .begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
                 color_attachments: colours,
                 depth_stencil_attachment: depth_attachment,
-                timestamp_writes: None,
+                timestamp_writes: span.as_ref().map(|(q, i)| render_times(q, *i)),
                 occlusion_query_set: None,
                 multiview_mask: None,
             })
@@ -3273,6 +4158,19 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         }
     }
 
+    /// Room in the register ring for a draw's two blocks: the batch is sent when there is not.
+    fn make_ring_room(&mut self) {
+        if self.ring.len() as u64 + 2 * BLOCK > ring_room() {
+            self.ring_sends += 1;
+            self.flush();
+        }
+    }
+
+    /// How many batches a full register ring has sent (tests).
+    pub fn ring_sends(&self) -> u64 {
+        self.ring_sends
+    }
+
     /// The uniform blocks of the next draw; `centre`: the vertex shaders' half-pixel move in clip
     /// space per unit of `w` (`1 / width`, `-1 / height` of the draw's viewport); `fregs`: the
     /// float constants the vertex and pixel shader read ([`Shader::fregs`]). Each stage's block is
@@ -3280,9 +4178,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// ones it carries), and carries only the constants up to the highest its shader reads: the
     /// bytes a shader reads are the same as with whole blocks.
     fn write_blocks(&mut self, centre: [f32; 2], fregs: [u32; 2]) {
-        if self.ring.len() as u64 + 2 * BLOCK > RING {
-            self.flush();
-        }
+        self.make_ring_room();
         let fresh = self.ring.is_empty();
         let vs_due = fresh
             || self.st.dirty[0]
@@ -3312,8 +4208,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             if vs_head {
                 // The planes `D3DRS_CLIPPLANEENABLE` turns on (all off without `D3DRS_CLIPPING`);
                 // a plane that is off is zero, which keeps everything.
+                // Not for a fixed-function vertex shader: its vertices are pre-transformed, and
+                // the fixed-function pipeline takes the planes in world space (`SetClipPlane`),
+                // which such vertices never pass through.
                 let mut clip = [[0u32; 4]; wgsl::CLIP_PLANES];
-                if st.rs[RS_CLIPPING] != 0 {
+                if st.rs[RS_CLIPPING] != 0 && self.ffp_f[0].is_none() {
                     for (k, plane) in clip.iter_mut().enumerate() {
                         if st.rs[rs::CLIPPLANEENABLE] & (1 << k) != 0 {
                             *plane = st.clip[k];
@@ -3330,7 +4229,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             if fresh || vs_head {
                 self.blocks[0] = write_block(&mut self.ring, &self.headers[0], &[]);
             }
-            let f = &self.st.vsf[..16 * fregs[0] as usize];
+            // A fixed-function shader's constants are its own ([`Device::ffp_constants`]).
+            let f = match &self.ffp_f[0] {
+                Some(f) => &f[..16 * fregs[0] as usize],
+                None => &self.st.vsf[..16 * fregs[0] as usize],
+            };
             self.blocks[2] = write_block(&mut self.ring, &[], f);
             self.block_centre = centre;
             self.block_fregs[0] = fregs[0];
@@ -3362,7 +4265,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             if fresh || ps_head {
                 self.blocks[1] = write_block(&mut self.ring, &self.headers[1], &[]);
             }
-            let f = &self.st.psf[..16 * fregs[1] as usize];
+            let f = match &self.ffp_f[1] {
+                Some(f) => &f[..16 * fregs[1] as usize],
+                None => &self.st.psf[..16 * fregs[1] as usize],
+            };
             self.blocks[3] = write_block(&mut self.ring, &[], f);
             self.block_fregs[1] = fregs[1];
         }
@@ -3373,6 +4279,130 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             self.st.header_dirty[1] = false;
         }
         self.st.dirty = [false; 2];
+    }
+
+    /// A draw's two shaders and whether each is a fixed-function one ([`ffp`]): the game's, or
+    /// for a stage without one the fixed-function shader of the layout (pre-transformed
+    /// vertices) and of the texture stages. None for a draw the fixed-function shaders do not
+    /// cover, printed once for each layout or stage setting.
+    fn draw_shaders(&mut self, decl: &Decl) -> Option<(Arc<Shader>, Arc<Shader>, bool, bool)> {
+        let (vs, ffp_vs) = match self.st.vs.clone() {
+            Some(vs) => {
+                // The game's vertex shader with a layout from SetFVF: Direct3D 9 draws so, and so
+                // does this; said once a code, so a log shows where the game does it (the
+                // movie's FVF draws without shaders).
+                if let Some(fvf) = self.st.fvf {
+                    self.warn(format!(
+                        "a draw with a vertex shader and the vertex layout of FVF {fvf:#x} (drawn)"
+                    ));
+                }
+                (vs, false)
+            }
+            None => {
+                let elements = decl.elements.iter().map(|e| (e.usage, e.index));
+                let Some(key) = ffp::VertexKey::of(elements) else {
+                    let layout: Vec<String> = decl
+                        .elements
+                        .iter()
+                        .map(|e| format!("usage {} index {} type {}", e.usage, e.index, e.ty))
+                        .collect();
+                    self.warn(format!(
+                        "a draw of untransformed vertices without a vertex shader (the \
+                         fixed-function transform and lighting are not provided; layout: {}): \
+                         skipped",
+                        layout.join(", ")
+                    ));
+                    return None;
+                };
+                (self.ffp_vertex(key)?, true)
+            }
+        };
+        let (ps, ffp_ps) = match self.st.ps.clone() {
+            Some(ps) => (ps, false),
+            None => (self.ffp_pixel()?, true),
+        };
+        Some((vs, ps, ffp_vs, ffp_ps))
+    }
+
+    /// The fixed-function vertex shader of a pre-transformed layout, made once.
+    fn ffp_vertex(&mut self, key: ffp::VertexKey) -> Option<Arc<Shader>> {
+        if let Some(s) = self.ffp_vs.get(&key) {
+            return s.clone();
+        }
+        let s = self.ffp_shader(&ffp::vertex_tokens(key));
+        self.ffp_vs.insert(key, s.clone());
+        s
+    }
+
+    /// The fixed-function pixel shader of the texture stages as they are set, made once.
+    fn ffp_pixel(&mut self) -> Option<Arc<Shader>> {
+        let st = &self.st;
+        let key = ffp::PixelKey::of(
+            &st.tss,
+            |n| st.textures[n].as_ref().is_some_and(|t| t.cube),
+            st.rs[RS_SPECULARENABLE] != 0,
+        );
+        let key = match key {
+            Ok(key) => key,
+            Err(why) => {
+                self.warn(format!(
+                    "a draw without a pixel shader whose texture stages are not provided ({why}): \
+                     skipped"
+                ));
+                return None;
+            }
+        };
+        if let Some(s) = self.ffp_ps.get(&key) {
+            return s.clone();
+        }
+        let s = self.ffp_shader(&ffp::pixel_tokens(&key));
+        self.ffp_ps.insert(key, s.clone());
+        s
+    }
+
+    /// A fixed-function shader's object, listed (its bytecode in the pipeline list, so the next
+    /// start makes it, and the listed pipelines that name it, before play).
+    fn ffp_shader(&mut self, tokens: &[u32]) -> Option<Arc<Shader>> {
+        let s = self.shader_of(tokens, false)?;
+        let presents = self.presents;
+        if let Some(l) = &mut self.list {
+            l.add_shader(tokens, presents);
+        }
+        Some(s)
+    }
+
+    /// The register blocks of the next draw carry the fixed-function shaders' constants for the
+    /// stages that have one: `vertex` the draw's viewport (x, y, width, height, depth range),
+    /// `pixel` whether the pixel shader is one. A change marks the stage's block for writing.
+    fn ffp_constants(&mut self, vertex: Option<[f32; 6]>, pixel: bool) {
+        let bytes = |regs: &[[f32; 4]]| -> Vec<u8> {
+            let mut b = vec![0u8; 16 * wgsl::FLOAT_CONSTANTS as usize];
+            for (d, v) in b.chunks_exact_mut(4).zip(regs.iter().flatten()) {
+                d.copy_from_slice(&v.to_le_bytes());
+            }
+            b
+        };
+        let new = [
+            vertex.map(|v| bytes(&ffp::vertex_constants(v))),
+            pixel.then(|| {
+                bytes(&ffp::pixel_constants(
+                    self.st.rs[RS_TEXTUREFACTOR],
+                    &self.st.tss,
+                ))
+            }),
+        ];
+        for (k, new) in new.into_iter().enumerate() {
+            if self.ffp_f[k] == new {
+                continue;
+            }
+            // Into or out of a fixed-function shader: the header too (the clip planes).
+            if self.ffp_f[k].is_some() != new.is_some() {
+                self.st.touch(k);
+            } else {
+                self.st.dirty[k] = true;
+            }
+            self.ffp_f[k] = new;
+        }
     }
 
     fn sampler(&mut self, key: SamplerKey) -> wgpu::Sampler {
@@ -3399,18 +4429,19 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         if self.listed_new {
             self.prepare_listed();
         }
-        let (Some(vs), Some(ps)) = (self.st.vs.clone(), self.st.ps.clone()) else {
-            self.warn("a draw without both shaders (fixed function is not provided): skipped");
-            self.skipped += 1;
-            return;
-        };
         let Some(topology) = Self::topology(kind) else {
             self.warn(format!("primitive type {kind} is not provided: skipped"));
             self.skipped += 1;
             return;
         };
         let Some(decl) = self.st.decl.clone() else {
-            self.warn("a draw without a vertex declaration (FVF is not provided): skipped");
+            self.warn("a draw without a vertex declaration or FVF: skipped");
+            self.skipped += 1;
+            return;
+        };
+        // The game's shaders, or for a stage without one the fixed-function shader of the state
+        // ([`ffp`]); a fixed-function draw it does not cover is skipped (printed once a layout).
+        let Some((vs, ps, ffp_vs, ffp_ps)) = self.draw_shaders(&decl) else {
             self.skipped += 1;
             return;
         };
@@ -3442,6 +4473,18 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // The depth surface's format (wgpu's, Direct3D 9's), samples and size.
         let depth =
             self.usable_depth_with(|d| (d.format.wgpu, d.format.d3d, d.samples, d.width, d.height));
+        // The sun shadows' variant of a lit pixel shader, on the scene while this frame has the
+        // sun's lookup ([`Device::sun_lookup`]), before its depth-only clear: the first-person
+        // arms and weapon after it are drawn with their own camera, which the lookup does not
+        // know, so they are drawn as without the shadows.
+        let mut use_sun = (ps.sun.is_some() || vs.sun.is_some())
+            && self.sun.as_ref().is_some_and(|s| {
+                !s.debug
+                    && !s.closed
+                    && s.light.is_some()
+                    && s.scene_depth.is_some()
+                    && s.scene_depth == self.st.ds.as_ref().map(|d| d.id)
+            });
         let atoc = self.atoc();
         let samples = self
             .st
@@ -3452,7 +4495,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             .map(|s| s.samples)
             .or(depth.map(|d| d.2))
             .unwrap_or(1);
-        let key = PipeKey {
+        let mut key = PipeKey {
             vs: vs.id,
             ps: ps.id,
             decl: decl.id,
@@ -3471,7 +4514,51 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             atoc,
             count: self.counting.is_some(),
             clip: self.clip_link(samples),
+            sun: use_sun,
         };
+        // A variant is made on a thread of its own the first time (its shaders take the driver a
+        // while): until it is there, the draw takes the plain pipeline (no hitch, no shadow).
+        if key.sun && !self.pipelines.contains_key(&key) {
+            let sampler_keys: Vec<(u32, u8, bool)> = samplers.iter().map(|(k, _)| *k).collect();
+            if !self.sun_variant_ready(
+                &key,
+                &vs,
+                &ps,
+                &link.inputs,
+                attributes,
+                topology,
+                &sampler_keys,
+            ) {
+                key.sun = false;
+                use_sun = false;
+            }
+        }
+        // The dump tool (`NV_SUN_SHADOWS_DUMP`): every draw of that present that could take the
+        // shadowed lighting, whether it did, and its blending.
+        if (ps.sun.is_some() || vs.sun.is_some())
+            && self
+                .sun
+                .as_ref()
+                .is_some_and(|s| s.dump_at == Some(self.presents))
+        {
+            let rs = &self.st.rs;
+            eprintln!(
+                "sun dump lit draw: vs {:016x} ps {:016x} shadowed {use_sun} blend {} src {} dest {} alpha test {} type {} ps constants {}",
+                vs.stable,
+                ps.stable,
+                rs[rs::ALPHABLENDENABLE],
+                rs[rs::SRCBLEND],
+                rs[rs::DESTBLEND],
+                rs[rs::ALPHATESTENABLE],
+                kind,
+                ps.program
+                    .constants
+                    .iter()
+                    .map(|c| c.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
+        }
         // The last draw's pipeline again (most draws), else the cache's, else a new one.
         // With a list, the plane state too: one pipeline with the clip distances serves draws
         // with a plane on and with none, but an adapter without them needs one for each, so each
@@ -3509,7 +4596,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     (p, true)
                 }
             };
-            if unlisted && self.list.is_some() {
+            if unlisted && self.list.is_some() && !key.sun {
                 self.list_offers += 1;
                 let entry = prepare::Entry {
                     vs: vs.stable,
@@ -3548,6 +4635,46 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             self.skipped += 1;
             return;
         }
+        // Render-target textures it samples that nothing drew into in this present (a
+        // diagnostic, for reports: water drawn without its reflection, a target read before it
+        // is drawn), with the HDR watch's switch: counted for the periodic report, each texture
+        // said once (a flag of its own: no text made or looked up on later draws).
+        if self.hdr_watch.on() {
+            let now = self.presents + 1;
+            for &(_, slot) in samplers {
+                let Some(t) = &self.st.textures[slot] else {
+                    continue;
+                };
+                let written = t.written.load(Ordering::Relaxed);
+                // A target of 64 pixels or fewer drawn in an earlier present is the game's own
+                // carry-over (the eye adaptation's last luminance, sampled every frame).
+                if written == now
+                    || (written != 0 && t.width * t.height <= 64)
+                    || !t
+                        .texture
+                        .usage()
+                        .contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
+                {
+                    continue;
+                }
+                self.stale_samples += 1;
+                if t.stale_said.swap(true, Ordering::Relaxed) {
+                    continue;
+                }
+                self.stale_textures += 1;
+                eprintln!(
+                    "NV_D3D9 wgpu: a draw sampled a {}x{} render-target texture (format {:#x}, sampler {slot}) {}",
+                    t.width,
+                    t.height,
+                    t.format.d3d,
+                    if written == 0 {
+                        "that nothing has drawn into since it was made"
+                    } else {
+                        "drawn into in an earlier present, not this one"
+                    }
+                );
+            }
+        }
         // A texture the draw samples that is also one of its colour targets (a level or a face of
         // it): Direct3D 9 draws so, and wgpu refuses such a pass and with it the whole submit. The
         // game does it when the water displacement is set up near water: its texture-offset pass
@@ -3583,7 +4710,13 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             .count();
         self.stage_group(0, &group_key[vertex..], &samplers[vertex..], &copies);
         self.stage_group(1, &group_key[..vertex], &samplers[..vertex], &copies);
-        // Vertices from DrawPrimitiveUP go into the batch's ring.
+        // Vertices from DrawPrimitiveUP go into the batch's ring. The register ring's room is made
+        // first: a send for it after the bytes are placed (in [`Device::write_blocks`]) would hand
+        // them to the batch before the draw's own, and the draw would read another draw's vertices
+        // at their place.
+        if up.is_some() {
+            self.make_ring_room();
+        }
         let up_offset = if let Some((bytes, _)) = up {
             if self.up.len() + bytes.len() > UP_RING as usize {
                 self.flush();
@@ -3609,6 +4742,20 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let vy = v.y.min(th.saturating_sub(1));
         let vw = v.w.min(tw - vx).max(1);
         let vh = v.h.min(th - vy).max(1);
+        // A fixed-function stage's constants: the vertex shader's from this viewport (the pass's
+        // depth range below), the pixel shader's from the states.
+        let depth_range = [v.min_z.clamp(0.0, 1.0), v.max_z.clamp(0.0, 1.0)];
+        self.ffp_constants(
+            ffp_vs.then_some([
+                vx as f32,
+                vy as f32,
+                vw as f32,
+                vh as f32,
+                depth_range[0],
+                depth_range[1],
+            ]),
+            ffp_ps,
+        );
         // Direct3D 9's pixel centres: each vertex shader moves its position half a pixel right
         // and down, by this viewport's size (the converter's module documentation).
         self.write_blocks([1.0 / vw as f32, -1.0 / vh as f32], [vs.fregs, ps.fregs]);
@@ -3713,8 +4860,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             vy as f32,
             vw as f32,
             vh as f32,
-            v.min_z.clamp(0.0, 1.0),
-            v.max_z.clamp(0.0, 1.0),
+            depth_range[0],
+            depth_range[1],
         ]
         .map(f32::to_bits);
         let b = &mut self.binds;
@@ -3738,6 +4885,19 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             if b.groups[k].as_ref() != Some(group) {
                 pass.set_bind_group(1 + k as u32, group, &[]);
                 b.groups[k] = Some(group.clone());
+            }
+        }
+        // The sun shadows' lookup (group 3) for a variant's draw.
+        if use_sun {
+            if let Some((offset, group)) = self
+                .sun
+                .as_ref()
+                .and_then(|s| s.light.as_ref().map(|o| (*o, s.gpu.light_group().clone())))
+            {
+                if b.light != Some(offset) {
+                    pass.set_bind_group(3, &group, &[offset]);
+                    b.light = Some(offset);
+                }
             }
         }
         if b.viewport != Some(viewport) {
@@ -3788,12 +4948,40 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             }
             None => pass.draw(start..start + n, 0..1),
         }
+        // The sun shadows' light list ([`sun_shadow`]): off (or no sun last frame), only this test.
+        let caster = self
+            .sun
+            .as_ref()
+            .filter(|s| s.recording(self.presents))
+            .map(|s| vs.caster_matrix(s.characters));
+        if let Some(matrix) = caster {
+            if up.is_some() {
+                self.sun_reject(5, &vs, &ps, n);
+            } else if matrix.is_none() {
+                self.sun_reject(4, &vs, &ps, n);
+            }
+        }
+        if up.is_none() && caster.flatten().is_some() {
+            self.sun_record(
+                &vs,
+                &ps,
+                &decl,
+                &link,
+                strides,
+                kind,
+                indexed.then_some(index32),
+                base_vertex,
+                start,
+                n,
+            );
+        }
         self.draws += 1;
         // Every [`SPLIT_DRAWS`] draws the open encoder goes to a finishing thread: wgpu does its
         // checking and the driver's recording when an encoder is finished, and those of different
         // encoders run side by side. The next draw opens a new pass (it loads what this one
         // stored) in a new encoder.
         self.encoder_draws += 1;
+        self.pass_draws += 1;
         if self.encoder_draws >= SPLIT_DRAWS && self.finisher.is_some() {
             self.send_encoder();
         }
@@ -3862,6 +5050,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             filterable: e.filterable,
             atoc: e.atoc,
             count: e.count,
+            sun: false,
             // How the planes are cut is this adapter's ([`Device::clip_link`]: with clip distances
             // every draw takes them, planes on or off); without them, planes on or off is the
             // entry's (a list made on one API serves the other).
@@ -5024,6 +6213,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 },
             ],
         });
+        let span = self.pass_span(Kind::Copies);
         let encoder = self.encoder();
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("blit"),
@@ -5037,7 +6227,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 },
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes: span.as_ref().map(|(q, i)| render_times(q, *i)),
             occlusion_query_set: None,
             multiview_mask: None,
         });
@@ -5069,6 +6259,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let (Some(sv), Some(dv)) = (src.view.clone(), dst.view.clone()) else {
             return;
         };
+        // Written in this present (the draws' check of the targets they sample).
+        if let Some(t) = &dst.tex {
+            t.written.store(self.presents + 1, Ordering::Relaxed);
+        }
         if src.format.depth || dst.format.depth {
             if src.width == dst.width
                 && src.height == dst.height
@@ -5079,6 +6273,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     src.tex.clone().expect("a texture"),
                     dst.tex.clone().expect("a texture"),
                 );
+                let copy_span = self.span_begin(Kind::Copies);
                 self.encoder().copy_texture_to_texture(
                     wgpu::TexelCopyTextureInfo {
                         texture: &st.texture,
@@ -5098,6 +6293,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                         depth_or_array_layers: 1,
                     },
                 );
+                self.span_end(copy_span);
             } else {
                 self.warn("StretchRect of depth surfaces of different sizes is not provided");
             }
@@ -5126,6 +6322,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                         t.batch.store(self.batch, Ordering::Relaxed);
                     }
                 }
+                self.watch_target(&dst, "a multisampled target resolved into it", true);
                 return;
             }
             let Some(scratch) =
@@ -5136,6 +6333,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             let resolved = self.level_surface(&scratch, 0, 0);
             let rv = resolved.view.clone().expect("a view");
             self.resolve(&sv, &rv, &src);
+            self.watch_target(&resolved, "a multisampled target resolved", false);
             (rv, (src.width, src.height))
         } else {
             (sv, (src.width, src.height))
@@ -5155,6 +6353,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 t.batch.store(self.batch, Ordering::Relaxed);
             }
         }
+        self.watch_target(&dst, "a StretchRect destination", true);
     }
 
     /// Resolves the multisampled `source` (the view of `surface`) into `target` (same size and
@@ -5167,6 +6366,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             self.gamma_resolve(source, target, surface);
             return;
         }
+        let span = self.pass_span(Kind::Resolves);
         let encoder = self.encoder();
         let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("resolve"),
@@ -5180,7 +6380,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 },
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes: span.as_ref().map(|(q, i)| render_times(q, *i)),
             occlusion_query_set: None,
             multiview_mask: None,
         });
@@ -5261,6 +6461,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 resource: wgpu::BindingResource::TextureView(source),
             }],
         });
+        let span = self.pass_span(Kind::Resolves);
         let encoder = self.encoder();
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("gamma resolve"),
@@ -5274,13 +6475,1991 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 },
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes: span.as_ref().map(|(q, i)| render_times(q, *i)),
             occlusion_query_set: None,
             multiview_mask: None,
         });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &group, &[]);
         pass.draw(0..3, 0..1);
+    }
+
+    /// The new lighting's step ([`scene_light`]) on the bound colour target and depth surface,
+    /// `words` the frame's [`scene_light::Params`]: once a frame (the first of the frame's points:
+    /// where the world is drawn, then the depth-only clear before the arms), when this device has
+    /// it on and the two have the screen's size and one sample count (the game's scene).
+    pub(crate) fn scene_light(&mut self, words: &[u32]) {
+        // The sun shadows take the frame's camera from the same words ([`Device::sun_shadows`]).
+        if let Some(sun) = &mut self.sun {
+            sun.view = scene_light::Params::from_words(words);
+        }
+        if !self.scene_light_on || self.scene_light_ran == Some(self.presents) {
+            return;
+        }
+        // `NV_AO_ALTERNATE=1` (diagnostic only): every other frame, so two frames of one run in a
+        // row show the scene with and without it.
+        if self.scene_light_alternate && self.presents % 2 == 0 {
+            return;
+        }
+        let Some(params) = scene_light::Params::from_words(words) else {
+            self.warn("new lighting: a camera it cannot use (skipped)");
+            return;
+        };
+        let (Some(rt), Some(ds)) = (self.st.rt[0].clone(), self.st.ds.clone()) else {
+            return;
+        };
+        let (Some(colour_tex), Some(depth_tex), Some(colour)) =
+            (rt.tex.clone(), ds.tex.clone(), rt.view.clone())
+        else {
+            return;
+        };
+        // Never the back buffer: the Pip-Boy's own 3D clears its depth alone there too, after the
+        // world's (a recording of the Pip-Boy, measure/newlight/NOTES.md).
+        let back_buffer = self
+            .back_buffers
+            .iter()
+            .any(|h| self.surface_of(*h).is_some_and(|s| s.id == rt.id));
+        // The scene target is the screen's size: never a smaller one (a water reflection's, a
+        // shadow map's) still bound where the world is drawn.
+        let screen_sized = self
+            .back_buffers
+            .first()
+            .and_then(|h| self.surface_of(*h))
+            .map_or(true, |s| (s.width, s.height) == (rt.width, rt.height));
+        let fits = !back_buffer
+            && screen_sized
+            && self.st.rt[1..].iter().all(Option::is_none)
+            && rt.width == ds.width
+            && rt.height == ds.height
+            && rt.samples == ds.samples
+            && rt.width >= 64
+            && rt.height >= 64
+            && !rt.format.depth
+            && depth_tex
+                .texture
+                .usage()
+                .contains(wgpu::TextureUsages::TEXTURE_BINDING);
+        if !fits {
+            self.warn(format!(
+                "new lighting: a {}x{} target ({} samples) with a {}x{} depth surface ({} samples) (skipped)",
+                rt.width, rt.height, rt.samples, ds.width, ds.height, ds.samples
+            ));
+            return;
+        }
+        self.scene_light_ran = Some(self.presents);
+        // Said when it starts and whenever the sun term turns on or off or the sun moves (on the
+        // screen) by more than about 8 degrees: not every frame.
+        let changed = self
+            .scene_light_said
+            .map_or(true, |was: scene_light::Params| {
+                (was.shadow > 0.0) != (params.shadow > 0.0)
+                    || (params.shadow > 0.0
+                        && was
+                            .sun
+                            .iter()
+                            .zip(params.sun)
+                            .map(|(a, b)| a * b)
+                            .sum::<f32>()
+                            < 0.99)
+            });
+        if changed {
+            self.scene_light_said = Some(params);
+            let sun = if params.shadow > 0.0 {
+                format!(
+                    "sun toward ({:.2}, {:.2}, {:.2}) on screen (right, up, ahead), sun strength {:.2} (carried, not drawn)",
+                    params.sun[0], params.sun[1], params.sun[2], params.shadow
+                )
+            } else {
+                "no sun term (indoors, the sun down or dark)".to_string()
+            };
+            eprintln!(
+                "NV_D3D9 wgpu: new lighting at present {} on the {}x{} scene, {} samples: near {}, far {}, {sun}",
+                self.presents, rt.width, rt.height, rt.samples, params.near, params.far
+            );
+        }
+        self.end_pass();
+        let mut gpu = self
+            .scene_light
+            .take()
+            .unwrap_or_else(|| Box::new(scene_light::Gpu::new(&self.device)));
+        let targets = scene_light::Targets {
+            colour: &colour,
+            colour_format: rt.format.wgpu,
+            depth: &depth_tex.view,
+            samples: rt.samples,
+            width: rt.width,
+            height: rt.height,
+        };
+        let (buffer, bytes) = gpu.uniforms(&params, &targets);
+        self.on_queue(move |q| q.write_buffer(&buffer, 0, &bytes));
+        let device = self.device.clone();
+        let span = self.span_begin(Kind::Other);
+        gpu.encode(&device, self.encoder(), &targets);
+        self.span_end(span);
+        self.scene_light = Some(gpu);
+        for t in [&colour_tex, &depth_tex] {
+            t.batch.store(self.batch, Ordering::Relaxed);
+        }
+    }
+
+    /// Keeps the draw just made in the sun shadows' light list ([`sun_shadow::Caster`]) when it is
+    /// an opaque world draw that can cast: depth test and writes on, no blending, no alpha test,
+    /// triangles, a vertex shader with `ModelViewProj` ([`Shader::mvp`]) and no vertex textures,
+    /// positions the device can read for its bounds. Its depth-only pipeline is made the first
+    /// time its shader, declaration and layout are seen.
+    /// A draw not kept for the maps, for `why` (the counters' order): counted, and listed when
+    /// `NV_SUN_SHADOWS_DUMP` names this present.
+    fn sun_reject(&mut self, why: usize, vs: &Shader, ps: &Shader, count: u32) {
+        let presents = self.presents;
+        let Some(s) = self.sun.as_mut() else {
+            return;
+        };
+        s.rejected[why] += 1;
+        if s.dump_at == Some(presents) {
+            let mvp = vs.mvp.map(|m| {
+                std::array::from_fn(|r| {
+                    std::array::from_fn(|j| {
+                        let o = 16 * (m as usize + r) + 4 * j;
+                        f32::from_le_bytes(self.st.vsf[o..o + 4].try_into().expect("4 bytes"))
+                    })
+                })
+            });
+            s.dump_rejects.push((why, vs.stable, ps.stable, count, mvp));
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn sun_record(
+        &mut self,
+        vs: &Arc<Shader>,
+        ps: &Arc<Shader>,
+        decl: &Arc<Decl>,
+        link: &Arc<VertexLink>,
+        strides: [u32; 8],
+        kind: u32,
+        index32: Option<bool>,
+        base_vertex: i32,
+        start: u32,
+        count: u32,
+    ) {
+        let rs = &self.st.rs;
+        let opaque =
+            rs[rs::ZENABLE] != 0 && rs[rs::ZWRITEENABLE] != 0 && rs[rs::ALPHABLENDENABLE] == 0;
+        // Alpha-tested: a cut-out, drawn through its own pixel shader.
+        let cutout = rs[rs::ALPHATESTENABLE] != 0;
+        let cull = rs[rs::CULLMODE];
+        let characters = self.sun.as_ref().is_some_and(|s| s.characters);
+        // A character's skinned draw: posed by its bones this frame ([`sun_shadow::Skin`]).
+        let skin = if vs.mvp.is_none() { vs.skin } else { None };
+        let (Some(mvp), Some(depth), Some(topology)) = (
+            vs.caster_matrix(characters),
+            self.st.ds.as_ref().map(|d| d.id),
+            Self::topology(kind),
+        ) else {
+            return;
+        };
+        if !opaque
+            || !matches!(
+                topology,
+                wgpu::PrimitiveTopology::TriangleList | wgpu::PrimitiveTopology::TriangleStrip
+            )
+            || mvp + 4 > vs.fregs
+        {
+            self.sun_reject(0, vs, ps, count);
+            return;
+        }
+        // A character's face (its pixel shader blends the FaceGen maps): a caster only with the
+        // characters' skinned bodies (a head's shadow alone would float).
+        if ps.face && !characters {
+            self.sun_reject(4, vs, ps, count);
+            return;
+        }
+        // A character's part cast this frame only, as drawn, never kept (its body skinned, or its
+        // face): into the characters' layers. With the draw's own culling, as every caster: seen
+        // from the sun that keeps the side turned away from it (the GPU test
+        // `the_draws_own_culling_keeps_a_closed_characters_sunlit_side`; turning it round kept the
+        // sun's side, review of #726 round 2). The layer is a frame old when the lit draws read
+        // it: a character moving away from the sun then does not shade its own sunlit side.
+        let per_frame = skin.is_some() || (ps.face && characters);
+        let samplers = self.sampler_bindings(vs, ps);
+        let sampler_keys: Vec<(u32, u8, bool)> =
+            samplers.as_slice().iter().map(|(k, _)| *k).collect();
+        let filterable = sampler_keys
+            .iter()
+            .enumerate()
+            .fold(0u32, |m, (i, k)| m | (u32::from(k.2) << i));
+        let pkey = (
+            vs.id,
+            decl.id,
+            strides,
+            kind as u8,
+            index32.unwrap_or(false),
+            cull,
+            if cutout { ps.id } else { 0 },
+            if cutout { filterable } else { 0 },
+        );
+        let pipe = match self.sun.as_ref().and_then(|s| s.pipes.get(&pkey)) {
+            Some(p) => *p,
+            // A character's: made on a thread of its own the first time (no hitch when one is
+            // first seen); it casts from the frame its pipeline is there.
+            None if per_frame => {
+                let sun = self.sun.as_mut().expect("on");
+                match sun.caster_pending.get(&pkey).map(|rx| rx.try_recv()) {
+                    Some(Ok(made)) => {
+                        sun.caster_pending.remove(&pkey);
+                        let made = match made {
+                            Ok(p) => Some(p),
+                            Err(e) => {
+                                self.warn(format!(
+                                    "sun shadows: a character's caster pipeline wgpu refuses: {e}"
+                                ));
+                                None
+                            }
+                        };
+                        let sun = self.sun.as_mut().expect("on");
+                        let at = made.map(|p| {
+                            sun.gpu.pipelines.push(Some(p));
+                            (sun.gpu.pipelines.len() - 1) as u32
+                        });
+                        sun.pipes.insert(pkey, at);
+                        at
+                    }
+                    Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                        sun.caster_pending.remove(&pkey);
+                        sun.pipes.insert(pkey, None);
+                        None
+                    }
+                    Some(Err(std::sync::mpsc::TryRecvError::Empty)) => {
+                        self.sun_reject(2, vs, ps, count);
+                        return;
+                    }
+                    // At most a few on their way at once (one thread each): the rest wait a frame.
+                    None if sun.caster_pending.len() >= SUN_VARIANTS_AT_ONCE => {
+                        self.sun_reject(2, vs, ps, count);
+                        return;
+                    }
+                    None => {
+                        let job = self.sun_pipeline_job(
+                            vs,
+                            ps,
+                            link,
+                            strides,
+                            topology,
+                            pkey.4,
+                            state::cull(cull),
+                            cutout.then_some(&sampler_keys[..]),
+                            false,
+                        );
+                        let sun = self.sun.as_mut().expect("on");
+                        match job {
+                            Some(job) => {
+                                let (tx, rx) = std::sync::mpsc::channel();
+                                let spawned = std::thread::Builder::new()
+                                    .name("nv-wgpu-sun-caster".into())
+                                    .spawn(move || {
+                                        let _ = tx.send(job());
+                                    });
+                                if spawned.is_ok() {
+                                    sun.caster_pending.insert(pkey, rx);
+                                } else {
+                                    sun.pipes.insert(pkey, None);
+                                }
+                            }
+                            None => {
+                                sun.pipes.insert(pkey, None);
+                            }
+                        }
+                        self.sun_reject(2, vs, ps, count);
+                        return;
+                    }
+                }
+            }
+            None => {
+                let made = self.sun_pipeline(
+                    vs,
+                    ps,
+                    link,
+                    strides,
+                    topology,
+                    pkey.4,
+                    state::cull(cull),
+                    cutout.then_some(&sampler_keys[..]),
+                    false,
+                );
+                let sun = self.sun.as_mut().expect("on");
+                let at = made.map(|p| {
+                    sun.gpu.pipelines.push(Some(p));
+                    (sun.gpu.pipelines.len() - 1) as u32
+                });
+                sun.pipes.insert(pkey, at);
+                at
+            }
+        };
+        let Some(pipe) = pipe else {
+            self.sun_reject(2, vs, ps, count);
+            return;
+        };
+        let mut streams: [Option<(Arc<Buf>, u64, u64)>; 8] = Default::default();
+        let mut key_streams = [(0u64, 0u64, 0u64); 8];
+        for (k, a) in link.attributes.iter().enumerate() {
+            if a.is_empty() {
+                continue;
+            }
+            let Some(b) = self.st.streams[k].buffer.clone() else {
+                return;
+            };
+            let uploads = b.uploads.load(Ordering::Relaxed);
+            let offset = u64::from(self.st.streams[k].offset);
+            key_streams[k] = (b.id, offset, uploads);
+            streams[k] = Some((b, offset, uploads));
+        }
+        let index = match index32 {
+            Some(_) => match self.st.indices.clone() {
+                Some(b) => {
+                    let uploads = b.uploads.load(Ordering::Relaxed);
+                    Some((b, uploads))
+                }
+                None => return,
+            },
+            None => None,
+        };
+        let key = sun_shadow::GeoKey {
+            pipe,
+            streams: key_streams,
+            index: index.as_ref().map_or((0, 0), |(b, n)| (b.id, *n)),
+            start,
+            count,
+            base_vertex,
+        };
+        // One body a geometry: the last made, replaced when its bytes were written since.
+        let geometry = key.geometry();
+        // A character: its bones' bind-pose spheres (once a geometry), posed by this draw's bones.
+        let skinned = if let Some(skin) = skin {
+            let known = self
+                .sun
+                .as_ref()
+                .and_then(|s| s.skins.get(&geometry))
+                .filter(|(k, _)| *k == key)
+                .map(|(_, s)| s.clone());
+            let spheres = match known {
+                Some(s) => s,
+                None => {
+                    let s = self
+                        .sun_skin_spheres(decl, index32.is_some(), base_vertex, start, count)
+                        .map(Arc::new);
+                    let sun = self.sun.as_mut().expect("on");
+                    if sun.skins.len() >= sun_shadow::body_limit() {
+                        sun.skins.clear();
+                    }
+                    sun.skins.insert(geometry.clone(), (key.clone(), s.clone()));
+                    s
+                }
+            };
+            let posed = spheres.and_then(|s| {
+                sun_shadow::skin_bounds(&s, &self.st.vsf[..], skin.bones, skin.count)
+            });
+            match posed {
+                Some(b) => Some(Arc::new(sun_shadow::Body::bare(b))),
+                None => {
+                    self.sun_reject(3, vs, ps, count);
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        let (known, made) = match skinned.as_ref() {
+            Some(_) => (None, 0),
+            None => match self.sun.as_ref().and_then(|s| s.bounds.get(&geometry)) {
+                Some(e) if e.key == key => (Some(e.body.clone()), e.made),
+                Some(e) => (None, e.made),
+                None => (None, 0),
+            },
+        };
+        let body = match (known, skinned.clone()) {
+            (Some(b), _) => b,
+            (None, Some(s)) => Some(s),
+            (None, None) => {
+                let sun = self.sun.as_mut().expect("on");
+                if made == 0 && sun.bounds.len() >= sun.prune_at.min(sun_shadow::body_limit()) {
+                    // Those of buffers the game let go first; all only past the limit.
+                    sun.bounds.retain(|_, e| e.live());
+                    if sun.bounds.len() >= sun_shadow::body_limit() {
+                        sun.bounds.clear();
+                        sun_shadow::forgot_bodies();
+                    }
+                    sun.prune_at = (2 * sun.bounds.len()).max(SUN_PRUNE_FROM);
+                }
+                let made = made + 1;
+                let split = made < SPLIT_BODIES;
+                let held: Vec<std::sync::Weak<Buf>> = streams
+                    .iter()
+                    .flatten()
+                    .map(|(b, _, _)| b)
+                    .chain(index.as_ref().map(|(b, _)| b))
+                    .map(Arc::downgrade)
+                    .collect();
+                let b = self
+                    .sun_bounds(
+                        decl,
+                        index32.is_some(),
+                        topology == wgpu::PrimitiveTopology::TriangleStrip,
+                        base_vertex,
+                        start,
+                        count,
+                        split,
+                    )
+                    .map(Arc::new);
+                let sun = self.sun.as_mut().expect("on");
+                sun.bounds.insert(
+                    geometry,
+                    SunBody {
+                        key: key.clone(),
+                        body: b.clone(),
+                        made,
+                        held,
+                    },
+                );
+                b
+            }
+        };
+        let Some(body) = body else {
+            self.sun_reject(3, vs, ps, count);
+            return;
+        };
+        // A cut-out's pixel block: its alpha test as the game set it (the fixed-function test, never
+        // alpha to coverage: the map has one sample), each sampler's fill mode, its float registers;
+        // and its textures' group as the draw bound it. Its textures are read at their top level
+        // ([`sun_shadow::CUTOUT_BIAS`]): seen from the sun a thin cut-out (a cable on a strip, a
+        // fence) covers few texels, and a smaller level's blurred alpha would pass the test across
+        // the whole strip and cast it solid.
+        let cut = if cutout {
+            let st = &self.st;
+            let alpha_func = st.rs[rs::ALPHAFUNC] as f32;
+            let (above, from) = alpha_bounds(st.rs[rs::ALPHAREF] & 0xFF);
+            let mut fix = [0u32; 16];
+            let mut bias = [0f32; 16];
+            for slot in 0..16 {
+                fix[slot] = st.textures[slot].as_ref().map_or(0, |t| t.format.fix);
+                bias[slot] = sun_shadow::CUTOUT_BIAS;
+            }
+            let made = block_header(
+                &st.psi,
+                &st.psb,
+                [above, alpha_func, from, 0.0],
+                (fix, bias),
+                &[[0; 4]; wgsl::CLIP_PLANES],
+            );
+            let ps_consts: Box<[u8]> = st.psf[..16 * ps.fregs as usize].into();
+            let (Some(textures), Some(empty)) =
+                (self.last_groups[0].1.clone(), self.last_groups[1].1.clone())
+            else {
+                return;
+            };
+            let sun = self.sun.as_mut().expect("on");
+            let h = match sun.headers.iter().rposition(|h| h[..] == made[..]) {
+                Some(i) => i as u32,
+                None => {
+                    sun.headers.push(made.to_vec());
+                    (sun.headers.len() - 1) as u32
+                }
+            };
+            Some(sun_shadow::Cutout {
+                textures,
+                empty,
+                header: h,
+                consts: ps_consts,
+            })
+        } else {
+            None
+        };
+        // Its vertex block: the integer and boolean registers as drawn, no half-pixel move, no
+        // clip planes (the map is its own target); the float registers as drawn.
+        // (Made again only when those registers changed since the last caster.)
+        let consts: Box<[u8]> = self.st.vsf[..16 * vs.fregs as usize].into();
+        let (vsi, vsb) = (self.st.vsi, self.st.vsb);
+        let sun = self.sun.as_mut().expect("on");
+        let header = match sun.last_regs {
+            Some((i, b, h)) if i == vsi && b == vsb => h,
+            _ => {
+                let made = block_header(
+                    &vsi,
+                    &vsb,
+                    [0.0; 4],
+                    ([0; 16], [0.0; 16]),
+                    &[[0; 4]; wgsl::CLIP_PLANES],
+                );
+                let h = match sun.headers.iter().rposition(|h| h[..] == made[..]) {
+                    Some(i) => i as u32,
+                    None => {
+                        sun.headers.push(made.to_vec());
+                        (sun.headers.len() - 1) as u32
+                    }
+                };
+                sun.last_regs = Some((vsi, vsb, h));
+                h
+            }
+        };
+        if cutout {
+            sun.rejected[1] += 1;
+        }
+        // Cables: round ones drawn as quads at their width; a cut-out of ribbons through its own
+        // pixel shader, its texture's alpha (read at the level the map's texel calls for: the
+        // cable's share of each texel) added into the coverage maps; an opaque ribbon is a solid
+        // strip and casts as one.
+        // A cut-out of ribbons is cables only when its texture is mostly clear (a fence is not).
+        let alpha = self.st.textures[0].as_ref().map_or(f32::NAN, |t| {
+            f32::from_bits(t.alpha.load(Ordering::Relaxed))
+        });
+        // Ribbons that are no cables (opaque, or a texture too opaque) beside round cables: the
+        // round ones are still cables, the rest casts from its own list.
+        let (thin, solid_list) = match &body.thin {
+            Some(t) if t.ribbons && !(cutout && sun_shadow::ribbon_texture(alpha)) => {
+                (body.rounds.clone(), body.strips_list.clone())
+            }
+            t => (t.clone(), body.solid_list.clone()),
+        };
+        let thin = thin.filter(|_| sun_shadow::thin_maps());
+        let ribbon_header = (cutout && thin.as_ref().is_some_and(|t| t.ribbons)).then(|| {
+            let st = &self.st;
+            let (above, from) = alpha_bounds(st.rs[rs::ALPHAREF] & 0xFF);
+            let fix: [u32; 16] =
+                std::array::from_fn(|s| st.textures[s].as_ref().map_or(0, |t| t.format.fix));
+            let made = block_header(
+                &st.psi,
+                &st.psb,
+                [above, 8.0, from, 0.0],
+                (fix, [0.0; 16]),
+                &[[0; 4]; wgsl::CLIP_PLANES],
+            );
+            let sun = self.sun.as_mut().expect("on");
+            match sun.headers.iter().rposition(|h| h[..] == made[..]) {
+                Some(i) => i as u32,
+                None => {
+                    sun.headers.push(made.to_vec());
+                    (sun.headers.len() - 1) as u32
+                }
+            }
+        });
+        // The list pipeline's key (a geometry drawn from a list of the device's own).
+        let lkey = (pkey.0, pkey.1, pkey.2, 4, true, pkey.5, pkey.6, pkey.7);
+        // A geometry of ribbons and other pieces: its ribbons' triangles from a list.
+        let ribbon_list = body.ribbon_list.clone();
+        let rkey = if ribbon_list.is_some() { lkey } else { pkey };
+        let ribbon_pipe = match ribbon_header {
+            Some(_) => match self.sun.as_ref().and_then(|s| s.ribbon_pipes.get(&rkey)) {
+                Some(p) => *p,
+                None => {
+                    let (topology, index32) = if ribbon_list.is_some() {
+                        (wgpu::PrimitiveTopology::TriangleList, true)
+                    } else {
+                        (topology, pkey.4)
+                    };
+                    let made = self.sun_pipeline(
+                        vs,
+                        ps,
+                        link,
+                        strides,
+                        topology,
+                        index32,
+                        state::cull(cull),
+                        Some(&sampler_keys[..]),
+                        true,
+                    );
+                    let sun = self.sun.as_mut().expect("on");
+                    let at = made.map(|p| {
+                        sun.gpu.pipelines.push(Some(p));
+                        (sun.gpu.pipelines.len() - 1) as u32
+                    });
+                    sun.ribbon_pipes.insert(rkey, at);
+                    at
+                }
+            },
+            None => None,
+        };
+        // A ribbon whose coverage pipeline could not be made casts as a cut-out.
+        let thin = thin.filter(|t| !(cutout && t.ribbons) || ribbon_pipe.is_some());
+        // Indices as read take the draw's base vertex; a draw without indices numbered its
+        // vertices from 0.
+        let list_base = if index.is_some() { base_vertex } else { 0 };
+        let ribbon = ribbon_pipe
+            .zip(ribbon_header)
+            .map(|(pipe, header)| sun_shadow::Ribbon {
+                pipe,
+                header,
+                list: ribbon_list.map(|l| (l, list_base)),
+            });
+        // Cables taken out of a geometry that is not all cables: the rest drawn from a list of its
+        // own (an index buffer made once a geometry, a list pipeline), the game's index buffer
+        // still watched for writes.
+        let mut drawn_as = (pipe, index.clone(), start, count, base_vertex, None);
+        let mut whole = false;
+        let mut has_rest = false;
+        if let (Some(_), Some(rest)) = (&thin, solid_list) {
+            let list_pipe = match self.sun.as_ref().and_then(|s| s.pipes.get(&lkey)) {
+                Some(p) => *p,
+                None => {
+                    let made = self.sun_pipeline(
+                        vs,
+                        ps,
+                        link,
+                        strides,
+                        wgpu::PrimitiveTopology::TriangleList,
+                        true,
+                        state::cull(cull),
+                        cutout.then_some(&sampler_keys[..]),
+                        false,
+                    );
+                    let sun = self.sun.as_mut().expect("on");
+                    let at = made.map(|p| {
+                        sun.gpu.pipelines.push(Some(p));
+                        (sun.gpu.pipelines.len() - 1) as u32
+                    });
+                    sun.pipes.insert(lkey, at);
+                    at
+                }
+            };
+            match list_pipe {
+                Some(p) => {
+                    // The list was made with this body, from the bytes this key names.
+                    drawn_as = (
+                        p,
+                        Some((rest.buf, 0)),
+                        0,
+                        rest.count,
+                        list_base,
+                        index.clone(),
+                    );
+                    has_rest = true;
+                }
+                // No list pipeline: the whole geometry casts as before, cables in it.
+                None => whole = true,
+            }
+        }
+        let (pipe, index, start, count, base_vertex, watch) = drawn_as;
+        let thin = thin.filter(|_| !whole);
+        let sun = self.sun.as_mut().expect("on");
+        sun.lists.casters.push(sun_shadow::Caster {
+            key,
+            skinned: per_frame,
+            bounds: body.bounds,
+            body,
+            draw: sun_shadow::Draw {
+                pipe,
+                streams,
+                index,
+                watch,
+                rest: has_rest,
+                start,
+                count,
+                base_vertex,
+                consts,
+                mvp,
+                header,
+                cutout: cut,
+                thin,
+                ribbon,
+            },
+            depth,
+            alpha,
+        });
+    }
+
+    /// The object-space bounding sphere of a draw's positions (the declaration's `POSITION`, as
+    /// floats or half floats), read from the buffers' bytes as the device holds them; none when
+    /// they cannot be read. Its pieces too when `split` ([`sun_shadow::Body::of`]), with the index
+    /// lists they need.
+    #[allow(clippy::too_many_arguments)]
+    fn sun_bounds(
+        &self,
+        decl: &Decl,
+        indexed: bool,
+        strip: bool,
+        base_vertex: i32,
+        start: u32,
+        count: u32,
+        split: bool,
+    ) -> Option<sun_shadow::Body> {
+        let e = decl
+            .elements
+            .iter()
+            .find(|e| e.usage == 0 && e.index == 0)?;
+        let width = match e.ty {
+            2 | 3 => 4,
+            16 => 2,
+            _ => return None,
+        };
+        let k = usize::from(e.stream);
+        let stream = self.st.streams.get(k)?;
+        let held = |h: Handle, b: &Arc<Buf>| match self.objects.get(&h) {
+            Some(Obj::Buffer(x, bytes)) if Arc::ptr_eq(x, b) => Some(bytes),
+            _ => None,
+        };
+        let vertices = held(self.st.bound.streams[k].0, stream.buffer.as_ref()?)?;
+        let (offset, stride) = (stream.offset as usize, stream.stride as usize);
+        let position = |v: i64| -> Option<[f32; 3]> {
+            let at = offset + usize::try_from(v).ok()? * stride + usize::from(e.offset);
+            let b = vertices.get(at..at + 3 * width)?;
+            Some(std::array::from_fn(|c| {
+                let s = &b[c * width..(c + 1) * width];
+                if width == 4 {
+                    f32::from_le_bytes([s[0], s[1], s[2], s[3]])
+                } else {
+                    sun_shadow::half_to_f32(u16::from_le_bytes([s[0], s[1]]))
+                }
+            }))
+        };
+        if count > 1 << 22 {
+            return None;
+        }
+        // Each corner's place and its number in the draw (the index as read, or the vertex).
+        let points: Option<Vec<([f32; 3], u32)>> = if indexed {
+            let ib = self.st.indices.as_ref()?;
+            let indices = held(self.st.bound.indices, ib)?;
+            let size = if ib.index32 { 4 } else { 2 };
+            (start..start + count)
+                .map(|i| {
+                    let at = i as usize * size;
+                    let s = indices.get(at..at + size)?;
+                    let n = if size == 4 {
+                        u32::from_le_bytes([s[0], s[1], s[2], s[3]])
+                    } else {
+                        u32::from(u16::from_le_bytes([s[0], s[1]]))
+                    };
+                    Some((position(i64::from(base_vertex) + i64::from(n))?, n))
+                })
+                .collect()
+        } else {
+            (start..start + count)
+                .map(|v| Some((position(i64::from(v))?, v)))
+                .collect()
+        };
+        let points = points?;
+        // Its pieces: a cable is drawn into the thin casters' maps ([`sun_shadow::Body`]). Each
+        // triangle's corners' numbers as a list draws them (a strip's every other one turned back
+        // to its own facing).
+        let corners: Vec<[([f32; 3], u32); 3]> = if strip {
+            points
+                .windows(3)
+                .enumerate()
+                .map(|(i, w)| {
+                    if i % 2 == 0 {
+                        [w[0], w[1], w[2]]
+                    } else {
+                        [w[1], w[0], w[2]]
+                    }
+                })
+                .collect()
+        } else {
+            points.chunks_exact(3).map(|w| [w[0], w[1], w[2]]).collect()
+        };
+        let triangles: Vec<[[f32; 3]; 3]> = corners.iter().map(|t| t.map(|c| c.0)).collect();
+        let mut body = sun_shadow::Body::of(&triangles, split)?;
+        // Cables taken out of it: the rest as a list of its own; a geometry of ribbons and other
+        // pieces: its ribbons as a list of their own. Made here, with the body: a body made again
+        // for new bytes has new lists.
+        let list = |tris: &[u32], label| {
+            let mut bytes: Vec<u8> = tris
+                .iter()
+                .flat_map(|&t| corners[t as usize].map(|c| c.1))
+                .flat_map(u32::to_le_bytes)
+                .collect();
+            let count = (bytes.len() / 4) as u32;
+            bytes.resize(bytes.len().max(4), 0);
+            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: bytes.len() as u64,
+                usage: wgpu::BufferUsages::INDEX,
+                mapped_at_creation: true,
+            });
+            // (Unmappable: all zeros, every triangle degenerate: nothing drawn.)
+            if let Ok(mut m) = buffer.slice(..).get_mapped_range_mut() {
+                m.copy_from_slice(&bytes);
+            }
+            buffer.unmap();
+            sun_shadow::List {
+                buf: Arc::new(Buf {
+                    buffer,
+                    index32: true,
+                    batch: AtomicU64::new(0),
+                    uploads: AtomicU64::new(0),
+                    id: Buf::next_id(),
+                    released: AtomicBool::new(false),
+                }),
+                count,
+            }
+        };
+        body.solid_list = body
+            .solid
+            .as_ref()
+            .map(|t| list(t, "sun shadow caster without its cables"));
+        body.ribbon_list = body
+            .ribbon_tris
+            .as_ref()
+            .map(|t| list(t, "sun shadow ribbons of a caster"));
+        body.strips_list = body
+            .strips
+            .as_ref()
+            .map(|t| list(t, "sun shadow caster without its round cables"));
+        Some(body)
+    }
+
+    /// A skinned draw's bones' bind-pose spheres ([`sun_shadow::skin_spheres`]) from the device's
+    /// copy of its buffers: each vertex's `POSITION` (floats or half floats), its `BLENDINDICES`
+    /// (four bytes, `D3DCOLOR` or `UBYTE4N`) and `BLENDWEIGHT` (floats or half floats; the fourth
+    /// one minus the others, as the game's shaders take it). The bytes are in weight order for
+    /// `D3DCOLOR` (the shaders read it `.zyxw`, the colour's bytes being B, G, R, A); for any other
+    /// layout every byte of a vertex counts. None when they cannot be read.
+    fn sun_skin_spheres(
+        &self,
+        decl: &Decl,
+        indexed: bool,
+        base_vertex: i32,
+        start: u32,
+        count: u32,
+    ) -> Option<Vec<sun_shadow::BoneSphere>> {
+        if count > 1 << 22 {
+            return None;
+        }
+        let held = |h: Handle, b: &Arc<Buf>| match self.objects.get(&h) {
+            Some(Obj::Buffer(x, bytes)) if Arc::ptr_eq(x, b) => Some(bytes),
+            _ => None,
+        };
+        // An element of the declaration and the bytes, offset and stride of its stream.
+        let element = |usage: u8| -> Option<(Element, &Vec<u8>, usize, usize)> {
+            let e = *decl
+                .elements
+                .iter()
+                .find(|e| e.usage == usage && e.index == 0)?;
+            let k = usize::from(e.stream);
+            let stream = self.st.streams.get(k)?;
+            let bytes = held(self.st.bound.streams[k].0, stream.buffer.as_ref()?)?;
+            Some((e, bytes, stream.offset as usize, stream.stride as usize))
+        };
+        // Its bytes for vertex `v` (`size` of them, at most 16), copied into a fixed array.
+        let read = |(e, bytes, offset, stride): &(Element, &Vec<u8>, usize, usize),
+                    v: i64,
+                    size: usize|
+         -> Option<[u8; 16]> {
+            let at = offset + usize::try_from(v).ok()? * stride + usize::from(e.offset);
+            let b = bytes.get(at..at + size.min(16))?;
+            let mut out = [0u8; 16];
+            out[..b.len()].copy_from_slice(b);
+            Some(out)
+        };
+        // Floats (or half floats) of a type, up to four, and how many.
+        let size_of = |ty: u8| match ty {
+            0..=3 => 4 * (usize::from(ty) + 1),
+            4 | 5 | 8 | 15 => 4,
+            16 => 8,
+            _ => 0,
+        };
+        let floats = |ty: u8, b: &[u8]| -> Option<([f32; 4], usize)> {
+            let (n, w) = match ty {
+                0..=3 => (usize::from(ty) + 1, 4),
+                15 => (2, 2),
+                16 => (4, 2),
+                _ => return None,
+            };
+            let mut f = [0.0f32; 4];
+            for (c, v) in f.iter_mut().enumerate().take(n) {
+                let s = &b[c * w..(c + 1) * w];
+                *v = if w == 4 {
+                    f32::from_le_bytes([s[0], s[1], s[2], s[3]])
+                } else {
+                    sun_shadow::half_to_f32(u16::from_le_bytes([s[0], s[1]]))
+                };
+            }
+            Some((f, n))
+        };
+        let position = element(0)?;
+        let indices = element(2)?;
+        let weights = element(1);
+        if !matches!(position.0.ty, 2 | 3 | 16) || !matches!(indices.0.ty, 4 | 8) {
+            return None;
+        }
+        let in_order = indices.0.ty == 4;
+        let vertex = |v: i64| -> Option<([f32; 3], [u8; 4], [f32; 4])> {
+            let (p, _) = floats(position.0.ty, &read(&position, v, size_of(position.0.ty))?)?;
+            let i = read(&indices, v, 4)?;
+            let w = match (&weights, in_order) {
+                (Some(we), true) => {
+                    let (f, n) = floats(we.0.ty, &read(we, v, size_of(we.0.ty))?)?;
+                    let n = n.min(3);
+                    let mut w = [0.0f32; 4];
+                    w[..n].copy_from_slice(&f[..n]);
+                    w[3] = 1.0 - w[..n].iter().sum::<f32>();
+                    w
+                }
+                // Not known which byte goes with which weight: each one counts.
+                _ => [1.0; 4],
+            };
+            Some(([p[0], p[1], p[2]], [i[0], i[1], i[2], i[3]], w))
+        };
+        // The vertices the draw uses, each once (one list, sorted; no allocation a vertex).
+        let mut numbers: Vec<i64> = if indexed {
+            let ib = self.st.indices.as_ref()?;
+            let bytes = held(self.st.bound.indices, ib)?;
+            let size = if ib.index32 { 4 } else { 2 };
+            let mut n = Vec::with_capacity(count as usize);
+            for i in start..start + count {
+                let at = i as usize * size;
+                let s = bytes.get(at..at + size)?;
+                let v = if size == 4 {
+                    u32::from_le_bytes([s[0], s[1], s[2], s[3]])
+                } else {
+                    u32::from(u16::from_le_bytes([s[0], s[1]]))
+                };
+                n.push(i64::from(base_vertex) + i64::from(v));
+            }
+            n
+        } else {
+            (i64::from(start)..i64::from(start) + i64::from(count)).collect()
+        };
+        numbers.sort_unstable();
+        numbers.dedup();
+        let mut vertices = Vec::with_capacity(numbers.len());
+        for v in numbers {
+            vertices.push(vertex(v)?);
+        }
+        sun_shadow::skin_spheres(&vertices)
+    }
+
+    /// A caster's depth-only pipeline: the draw's own converted vertex shader (its module as the
+    /// draw's pipeline made it), the draw's vertex layout, no pixel shader.
+    #[allow(clippy::too_many_arguments)]
+    fn sun_pipeline(
+        &mut self,
+        vs: &Shader,
+        ps: &Shader,
+        link: &VertexLink,
+        strides: [u32; 8],
+        topology: wgpu::PrimitiveTopology,
+        index32: bool,
+        cull: Option<wgpu::Face>,
+        cutout: Option<&[(u32, u8, bool)]>,
+        coverage: bool,
+    ) -> Option<wgpu::RenderPipeline> {
+        let job = self.sun_pipeline_job(
+            vs, ps, link, strides, topology, index32, cull, cutout, coverage,
+        )?;
+        match job() {
+            Ok(p) => Some(p),
+            Err(e) => {
+                self.warn(format!("sun shadows: a caster pipeline wgpu refuses: {e}"));
+                None
+            }
+        }
+    }
+
+    /// [`Device::sun_pipeline`]'s making, to run here or on a thread of its own (a character's
+    /// caster: no hitch the first time one is seen); none when its modules are not there.
+    #[allow(clippy::too_many_arguments)]
+    fn sun_pipeline_job(
+        &mut self,
+        vs: &Shader,
+        ps: &Shader,
+        link: &VertexLink,
+        strides: [u32; 8],
+        topology: wgpu::PrimitiveTopology,
+        index32: bool,
+        cull: Option<wgpu::Face>,
+        cutout: Option<&[(u32, u8, bool)]>,
+        coverage: bool,
+    ) -> Option<impl FnOnce() -> Result<wgpu::RenderPipeline, String> + Send + 'static> {
+        let key = self.last_pipeline.as_ref().map(|(k, _, _)| k.clone())?;
+        // The modules as the draw's pipeline has them (made ahead, or here if they were not
+        // kept: the draw's pipeline can come from a library or the list).
+        let (vkey, pkey, tasks) = self.module_tasks(&key, vs, ps, &link.inputs);
+        let tasks: Vec<ModuleTask> = tasks
+            .into_iter()
+            .filter(|t| cutout.is_some() || matches!(t.key, ModKey::V(_)))
+            .collect();
+        if !tasks.is_empty() {
+            self.make_modules(tasks, 1, false, &mut |_| {});
+        }
+        let module = self.vs_modules.get(&vkey).cloned().flatten()?;
+        // A cut-out: the game's own pipeline layout (registers, its pixel and vertex samplers) and
+        // its pixel module; else the registers alone.
+        let (layout, fragment) = match cutout {
+            Some(samplers) => (
+                self.sampler_layout(samplers),
+                Some(self.ps_modules.get(&pkey).cloned().flatten()?),
+            ),
+            None => {
+                let l = self.sun_caster_layout.get_or_insert_with(|| {
+                    self.device
+                        .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                            label: Some("sun shadow caster"),
+                            bind_group_layouts: &[Some(&self.uniform_layout)],
+                            immediate_size: 0,
+                        })
+                });
+                (l.clone(), None)
+            }
+        };
+        let last = link
+            .attributes
+            .iter()
+            .rposition(|a| !a.is_empty())
+            .map_or(0, |i| i + 1);
+        let buffers: Vec<Option<(u64, Vec<wgpu::VertexAttribute>)>> = link.attributes[..last]
+            .iter()
+            .enumerate()
+            .map(|(k, a)| (!a.is_empty()).then(|| (u64::from(strides[k]), a.clone())))
+            .collect();
+        let device = self.device.clone();
+        let cache = self.pipeline_cache.as_ref().map(|c| c.cache.clone());
+        Some(move || {
+            sun_shadow::Gpu::make_pipeline(
+                &device,
+                &layout,
+                cache.as_ref(),
+                &module,
+                fragment.as_ref(),
+                &buffers,
+                topology,
+                index32,
+                cull,
+                coverage,
+            )
+        })
+    }
+
+    /// The sun shadows' debug step ([`sun_shadow::debug_step`], `NV_SUN_SHADOWS=debug`) at the
+    /// game's depth-only clear, `words` the frame's [`sun_shadow::Frame`] (after the new
+    /// lighting's camera words): the maps as last drawn looked up for each pixel of the bound
+    /// colour target and depth surface (the game's scene), laid over it. Nothing without the
+    /// debug step: the lighting variants read the maps (drawn at the scene's clear,
+    /// [`Device::sun_lookup`], so also in third person, which has no depth-only clear).
+    pub(crate) fn sun_shadows(&mut self, words: &[u32]) {
+        let Some(mut sun) = self.sun.take() else {
+            return;
+        };
+        // Draws after the depth-only clear (the first-person arms and weapon) cast nothing.
+        sun.closed = true;
+        if sun.debug {
+            self.sun_debug_step(&mut sun, words);
+        }
+        self.sun = Some(sun);
+    }
+
+    fn sun_debug_step(&mut self, sun: &mut SunState, words: &[u32]) {
+        let (Some(frame), Some(view)) = (sun_shadow::Frame::from_words(words), sun.view.take())
+        else {
+            return;
+        };
+        let (Some(rt), Some(ds)) = (self.st.rt[0].clone(), self.st.ds.clone()) else {
+            return;
+        };
+        let (Some(colour_tex), Some(depth_tex), Some(colour)) =
+            (rt.tex.clone(), ds.tex.clone(), rt.view.clone())
+        else {
+            return;
+        };
+        let fits = self.st.rt[1..].iter().all(Option::is_none)
+            && Some(ds.id) == sun.scene_depth
+            && rt.width == ds.width
+            && rt.height == ds.height
+            && rt.samples == ds.samples
+            && !rt.format.depth
+            && sun.gpu.drawn.iter().all(Option::is_some)
+            && depth_tex
+                .texture
+                .usage()
+                .contains(wgpu::TextureUsages::TEXTURE_BINDING);
+        if !fits {
+            return;
+        }
+        let frustum = [view.left, view.right, view.bottom, view.top];
+        let s = sun_shadow::splits(view.near, sun_shadow::FAR.min(view.far));
+        let axes = frame.axes();
+        let position = frame.position.map(f64::from);
+        let mut anchors = sun.anchors;
+        let cascades = sun_shadow::place_cascades(
+            frustum,
+            &s,
+            axes,
+            position,
+            &sun.keep,
+            frame.to_sun,
+            [false; sun_shadow::CASCADES],
+            &sun.gpu.drawn,
+            &mut anchors,
+        );
+        let drawn: [sun_shadow::Cascade; sun_shadow::CASCADES] =
+            std::array::from_fn(|k| sun.gpu.drawn[k].unwrap_or(cascades[k]));
+        self.end_pass();
+        let uniforms = sun.gpu.uniforms();
+        let bytes = sun_shadow::lookup_uniforms(
+            &view,
+            frame.strength,
+            &cascades,
+            &drawn,
+            sun.gpu.thin_in,
+            sun.gpu.far_lookup().0,
+            sun.gpu.far_lookup().1,
+            sun.gpu.chars_in,
+            sun.gpu.chars_allow,
+            axes,
+            position,
+            rt.samples,
+            rt.width,
+            rt.height,
+        );
+        self.on_queue(move |q| q.write_buffer(&uniforms, 0, &bytes));
+        let targets = sun_shadow::Targets {
+            colour: &colour,
+            colour_format: rt.format.wgpu,
+            depth: &depth_tex.view,
+            samples: rt.samples,
+        };
+        let device = self.device.clone();
+        let span = self.span_begin(Kind::Other);
+        sun.gpu.encode_step(&device, self.encoder(), &targets);
+        self.span_end(span);
+        for t in [&colour_tex, &depth_tex] {
+            t.batch.store(self.batch, Ordering::Relaxed);
+        }
+    }
+
+    /// The maps brought up to date from the casters the last frame drew on the scene (their
+    /// places from that frame's camera, `view` and `frame`, which drew them): into the cache
+    /// (kept, added; those gone let go), then each map that is no longer good drawn again, and the
+    /// moving casters over copies of the still maps.
+    fn sun_update(
+        &mut self,
+        sun: &mut SunState,
+        view: &scene_light::Params,
+        frame: &sun_shadow::Frame,
+        scene: u64,
+    ) {
+        let started = std::time::Instant::now();
+        let now = self.presents;
+        let frustum = [view.left, view.right, view.bottom, view.top];
+        let s = sun_shadow::splits(view.near, sun_shadow::FAR.min(view.far));
+        let axes = frame.axes();
+        let position = frame.position.map(f64::from);
+        // The sun each map is drawn for: a map takes the sun as it is once it has turned far enough
+        // to move a shadow edge in it by half a texel ([`sun_shadow::turn_limit`]), one map a frame
+        // ([`sun_shadow::sun_turns`]): the shadows glide with the sun instead of jumping.
+        let now_basis = sun_shadow::basis(sun.keep[0].direction(frame.to_sun));
+        let sine = {
+            let t = frame.to_sun.map(f64::from);
+            t[2] / (t[0] * t[0] + t[1] * t[1] + t[2] * t[2]).sqrt().max(1e-9)
+        };
+        let over: [f64; sun_shadow::CASCADES] = std::array::from_fn(|i| {
+            let texel =
+                sun_shadow::place(i, frustum, s[i], s[i + 1], axes, position, now_basis, None)
+                    .texel;
+            sun.keep[i]
+                .turn(frame.to_sun)
+                .map_or(f64::INFINITY, |t| t / sun_shadow::turn_limit(texel, sine))
+        });
+        let turned = sun_shadow::sun_turns(over);
+        for (k, keep) in sun.keep.iter_mut().enumerate() {
+            if turned[k] {
+                keep.take(frame.to_sun);
+            }
+        }
+        if sun.trace > 0 {
+            sun.trace -= 1;
+            eprintln!(
+                "NV_D3D9 wgpu: sun trace present {now}: toward ({:.6}, {:.6}, {:.6}), maps taking it {turned:?}, past their limit {:.2?}",
+                frame.to_sun[0], frame.to_sun[1], frame.to_sun[2], over
+            );
+        }
+        // A map that takes the new sun turns its texel grid about its own centre (where the camera
+        // is), not the world's origin: the ground keeps its place in its texels, so no shadow edge
+        // jumps (report 012's jittery edges; [`sun_shadow::next_anchor`]).
+        let cascades = sun_shadow::place_cascades(
+            frustum,
+            &s,
+            axes,
+            position,
+            &sun.keep,
+            frame.to_sun,
+            turned,
+            &sun.gpu.drawn,
+            &mut sun.anchors,
+        );
+        // The tool's list (`NV_SUN_SHADOWS_DUMP`), once: each caster's place from the camera (right,
+        // up, ahead), its radius and whether it casts; each draw not kept, why and where.
+        if sun.dump_at.is_some_and(|d| now > d) {
+            sun.dump_at = None;
+            let from_camera = |c: [f64; 3]| -> [f64; 3] {
+                let d = [c[0] - position[0], c[1] - position[1], c[2] - position[2]];
+                std::array::from_fn(|k| axes[k][0] * d[0] + axes[k][1] * d[1] + axes[k][2] * d[2])
+            };
+            eprintln!(
+                "NV_D3D9 wgpu: sun shadows dump at present {now}: camera {position:.0?}, sun toward {:.3?}, {} casters, {} not kept",
+                frame.to_sun,
+                sun.lists.casters.len(),
+                sun.dump_rejects.len()
+            );
+            for (n, c) in sun.lists.casters.iter().enumerate() {
+                let world = sun_shadow::world_of(&c.draw.mvp(), frustum, axes, position);
+                let centre = sun_shadow::place_point(&world, c.bounds.0);
+                let r = c.bounds.1 * sun_shadow::stretch(&world);
+                let v = from_camera(centre);
+                eprintln!(
+                    "sun dump caster {n}: at ({:.0}, {:.0}, {:.0}) r {r:.0} cut-out {} casts {} scene {} pipe {} count {} thin {:?} scale {:.2} pieces {} (width, length) {:.1?} kinds (cables, ribbons, other: count, area) {:.2?} ribbon (pipe, list) {:?} texture alpha {:.3}",
+                    v[0],
+                    v[1],
+                    v[2],
+                    c.draw.cutout.is_some(),
+                    sun_shadow::casts(&world, c.bounds, position),
+                    c.depth == scene,
+                    c.draw.pipe,
+                    c.draw.count,
+                    c.body.thin.as_ref().map(|t| t.ribbons),
+                    sun_shadow::stretch(&world),
+                    c.body.pieces,
+                    c.body.look,
+                    c.body.kinds,
+                    c.draw.ribbon.as_ref().map(|r| (r.pipe, r.list.is_some())),
+                    c.alpha,
+                );
+                // The near ones' triangles, for study (`NV_SUN_SHADOWS_DUMP_DIR`).
+                if let (Some(dir), Some(t)) = (sun_shadow::dump_dir(), &c.body.triangles) {
+                    let near = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() < 4000.0;
+                    if near && r > 100.0 {
+                        let mut s = format!(
+                            "# caster {n} at {v:.1?} from the camera, r {r:.1}, cut-out {}, world {world:?}\n",
+                            c.draw.cutout.is_some()
+                        );
+                        for tri in t.iter() {
+                            for p in tri {
+                                s += &format!("v {} {} {}\n", p[0], p[1], p[2]);
+                            }
+                        }
+                        for i in 0..t.len() {
+                            s += &format!("f {} {} {}\n", 3 * i + 1, 3 * i + 2, 3 * i + 3);
+                        }
+                        let _ = std::fs::write(format!("{dir}/caster-{n:04}.obj"), s);
+                    }
+                }
+            }
+            for (why, vs, ps, count, mvp) in std::mem::take(&mut sun.dump_rejects) {
+                let at = mvp.map(|m| {
+                    let w = sun_shadow::world_of(&m, frustum, axes, position);
+                    from_camera([w[0][3], w[1][3], w[2][3]]).map(|x| x.round())
+                });
+                eprintln!(
+                    "sun dump not kept: why {why} vs {vs:016x} ps {ps:016x} count {count} origin {at:?}"
+                );
+            }
+        }
+        // The casters on the scene into the cache.
+        let mut came = crate::fxhash::Set::<sun_shadow::GeoKey>::default();
+        // The far map where it stands now (with the sun it was last drawn for), for which far
+        // casters it takes.
+        let far_here = sun_shadow::far_place(
+            position,
+            sun_shadow::basis(sun.far_keep.direction(frame.to_sun)),
+            sun.far_anchor,
+        );
+        let far_step = far_here.step;
+        let mut added = 0usize;
+        let mut on_scene = 0u64;
+        sun.skinned.clear();
+        // The largest step a character took since the frame before (its place now against the nearest
+        // place of the same geometry then), for the characters' allowance.
+        let mut step = 0.0f64;
+        let mut skin_places = std::mem::take(&mut sun.skin_now);
+        skin_places.clear();
+        for c in std::mem::take(&mut sun.lists.casters) {
+            if c.depth != scene {
+                continue;
+            }
+            on_scene += 1;
+            let world = sun_shadow::world_of(&c.draw.mvp(), frustum, axes, position);
+            // A character, as posed in that frame: cast this frame, never kept (its next pose comes
+            // with its next draw), never in the far map.
+            if c.skinned {
+                if (!sun_shadow::characters_alternate() || now % 2 == 0)
+                    && sun_shadow::casts(&world, c.bounds, position)
+                {
+                    let centre = sun_shadow::place_point(&world, c.bounds.0);
+                    let r = c.bounds.1 * sun_shadow::stretch(&world);
+                    let g = c.key.geometry();
+                    let moved = sun
+                        .skin_before
+                        .iter()
+                        .filter(|(k, _)| *k == g)
+                        .map(|(_, p)| {
+                            let d: [f64; 3] = std::array::from_fn(|i| centre[i] - p[i]);
+                            (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
+                        })
+                        .fold(f64::INFINITY, f64::min);
+                    if moved <= sun_shadow::MOVE_REACH {
+                        step = step.max(moved);
+                    }
+                    skin_places.push((g, centre));
+                    sun.skinned.push((c.draw, world, centre, r));
+                }
+                continue;
+            }
+            let rewritten = sun.rewritten.contains(&c.key.geometry());
+            // The land and the large objects also cast into the far map (not one the game keeps
+            // writing: the far map is drawn again only now and then): those that reach across its
+            // square in the sun's space, or the square a step on (a low sun's tall casters far off
+            // shade the land in it: review of #715); let go only two steps out (no coming and going
+            // at the edge). A place is the same within a millionth of its distance from the camera
+            // (the game's matrices round so far out); one that changed is a new still place.
+            if !rewritten && sun_shadow::far_casts(&world, c.bounds, position) {
+                let centre = sun_shadow::place_point(&world, c.bounds.0);
+                let r = c.bounds.1 * sun_shadow::stretch(&world);
+                let draw = &c.draw;
+                if far_here.touches(centre, r + far_step) {
+                    let o = [
+                        world[0][3] - position[0],
+                        world[1][3] - position[1],
+                        world[2][3] - position[2],
+                    ];
+                    let slack =
+                        sun_shadow::far_slack((o[0] * o[0] + o[1] * o[1] + o[2] * o[2]).sqrt());
+                    sun.far
+                        .see_within(c.key.clone(), world, c.bounds, now, false, slack, || {
+                            draw.clone()
+                        });
+                }
+            }
+            // Not a caster: the sky's dome and clouds, and the far land's blocks (whole spheres round
+            // the camera, or larger than the maps reach): they would shade everything under them.
+            if !sun_shadow::casts(&world, c.bounds, position) {
+                sun.rejected[3] += 1;
+                continue;
+            }
+            // A geometry whose buffers the game wrote since an earlier frame (a sign's animation, a
+            // flag) comes back each frame as a new caster: it moves from the start, so it does not
+            // redraw the still maps every frame.
+            let moves = sun.moving < MAX_SUN_MOVING && rewritten;
+            sun.moving += usize::from(moves);
+            let draw = c.draw;
+            let key = c.key.clone();
+            if sun
+                .cache
+                .see(c.key, world, c.bounds, now, moves, move || draw)
+                .is_some()
+            {
+                came.insert(key);
+                added += 1;
+            }
+        }
+        // Let go: what was written or released since; a moving place's old places; what the game
+        // would have drawn (wholly in view) and has not for a few frames; what is too far to cast
+        // into any map. A place that came near a place of the same geometry drawn the frame before
+        // and not in this one moves (decided place by place, [`sun_shadow::Cache::mark_moves`]):
+        // kept out of the still maps (drawn each frame over a copy of them), so it does not redraw
+        // them.
+        // The characters' allowance this frame ([`sun_shadow::skin_allowance`]): their largest step
+        // along the sun's rays (a test may set it).
+        sun.skin_now = std::mem::replace(&mut sun.skin_before, skin_places);
+        let flat = {
+            let t = frame.to_sun.map(f64::from);
+            (t[0] * t[0] + t[1] * t[1]).sqrt()
+                / (t[0] * t[0] + t[1] * t[1] + t[2] * t[2]).sqrt().max(1e-9)
+        };
+        sun.gpu.chars_allow = sun
+            .allow_override
+            .unwrap_or_else(|| sun_shadow::skin_allowance(step, flat) as f32);
+        let reach = f64::from(sun_shadow::FAR) + cascades[sun_shadow::CASCADES - 1].half;
+        let in_view = |c: [f64; 3]| -> [f64; 3] {
+            let d = [c[0] - position[0], c[1] - position[1], c[2] - position[2]];
+            std::array::from_fn(|k| axes[k][0] * d[0] + axes[k][1] * d[1] + axes[k][2] * d[2])
+        };
+        let (near, far) = (f64::from(view.near), f64::from(s[sun_shadow::CASCADES]));
+        sun.cache.mark_moves(
+            now,
+            &came,
+            MAX_SUN_MOVING.saturating_sub(sun.moving),
+            sun_shadow::mover(frustum, position, axes, near, far),
+        );
+        // The still maps' changes: places added that do not move, moving places that have stood
+        // still a while (still again, so they cast from out of sight too), and places let go that
+        // did not move.
+        let mut still: Vec<([f64; 3], f64)> = sun
+            .cache
+            .iter()
+            .filter(|i| i.born == now && !i.moving)
+            .map(|i| (i.centre, i.radius))
+            .collect();
+        let settled = sun.cache.settle(now, sun_shadow::SETTLE);
+        still.extend(settled.iter().copied());
+        let mut why = [0u64; 3];
+        let mut written = Vec::new();
+        for (_, sphere, moving) in sun.cache.sweep(|k, i| {
+            if i.seen == now {
+                return false;
+            }
+            let v = in_view(i.centre);
+            let distance = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            let gone = [
+                i.payload.stale(),
+                distance - i.radius > reach,
+                i.moved_on(now)
+                    || (now - i.seen > sun_shadow::GRACE
+                        && sun_shadow::wholly_in_view(frustum, v, i.radius, near, far)),
+            ];
+            match gone.iter().position(|&g| g) {
+                Some(n) => {
+                    why[n] += 1;
+                    if n == 0 {
+                        written.push(k.geometry());
+                    }
+                    true
+                }
+                None => false,
+            }
+        }) {
+            if !moving {
+                still.push(sphere);
+            }
+        }
+        sun.moving = sun.cache.iter().filter(|i| i.moving).count();
+        if sun.rewritten.len() + written.len() > 4096 {
+            sun.rewritten.clear();
+        }
+        sun.rewritten.extend(written);
+        sun.added += added as u64;
+        for (s, w) in sun.gone.iter_mut().zip(why) {
+            *s += w;
+        }
+        // A still map is drawn again when it moved, the sun turned, or a still caster in it came,
+        // went or moved.
+        let mut redraw = [false; sun_shadow::CASCADES];
+        for (k, c) in cascades.iter().enumerate() {
+            let moved = !sun_shadow::still_good(sun.gpu.drawn[k].as_ref(), c, turned[k]);
+            let touched = still.iter().any(|&(p, r)| c.touches(p, r));
+            sun.moved[k] += u64::from(moved);
+            sun.touched[k] += u64::from(touched && !moved);
+            sun.settled[k] += u64::from(!moved && settled.iter().any(|&(p, r)| c.touches(p, r)));
+            redraw[k] = moved || touched;
+        }
+        // The far map's casters let go: written or released, two steps past its square, or not
+        // drawn for a while where the game would have drawn them (wholly in view; or partly, when
+        // the camera stands inside their sphere: a land block under cells loaded since). No moves
+        // are paired here (a far place that changed is a new still place, its old one goes).
+        let view_far = f64::from(view.far);
+        let mut far_changed = sun.far.iter().any(|i| i.born == now);
+        for _ in sun.far.sweep(|_, i| {
+            if i.seen == now {
+                return false;
+            }
+            let v = in_view(i.centre);
+            let inside = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() < i.radius;
+            i.payload.stale()
+                || !far_here.touches(i.centre, i.radius + 2.0 * far_step)
+                || (now - i.seen > sun_shadow::GRACE
+                    && (sun_shadow::wholly_in_view(frustum, v, i.radius, near, view_far)
+                        || (inside
+                            && sun_shadow::partly_in_view(frustum, v, i.radius, near, view_far))))
+        }) {
+            far_changed = true;
+        }
+        // Its map is drawn again when a caster in it came or went, the camera crossed a step, or
+        // the sun turned half a texel's worth for casters as tall as hills ([`sun_shadow::FAR_REACH`]);
+        // at most every [`sun_shadow::FAR_MIN_FRAMES`] frames, each redraw spread over
+        // [`sun_shadow::FAR_SLICES`] frames. With no caster, no far map.
+        sun.far_dirty |= far_changed;
+        let far_texel = 2.0 * sun_shadow::FAR_HALF / f64::from(sun_shadow::FAR_SIZE);
+        let far_limit = sun_shadow::turn_limit_at(far_texel, sine, sun_shadow::FAR_REACH);
+        let far_turn = sun.far_keep.turn(frame.to_sun);
+        let far_turned = far_turn.map_or(true, |t| t >= far_limit);
+        // Far past its limit (a wait, a sleep): drawn as soon as no redraw is on its way, whatever
+        // the frames since the last.
+        let far_overdue = far_turn.is_some_and(|t| t >= sun_shadow::FAR_OVERDUE * far_limit);
+        let far_now = sun_shadow::far_place(
+            position,
+            sun_shadow::basis(sun.far_keep.direction(frame.to_sun)),
+            sun.far_anchor,
+        );
+        if sun.far.is_empty() && sun.gpu.far_back.is_none() {
+            sun.gpu.far_drawn = None;
+        }
+        let far_due =
+            sun.gpu.far_drawn.is_none() || now >= sun.far_last + sun_shadow::FAR_MIN_FRAMES;
+        let far_redraw = !sun.far.is_empty()
+            && sun.gpu.far_back.is_none()
+            && (far_due || far_overdue)
+            && (sun.far_dirty
+                || far_turned
+                || !sun_shadow::still_good(sun.gpu.far_drawn.as_ref(), &far_now, false));
+        let far_map = if far_redraw {
+            if far_turned {
+                sun.far_keep.take(frame.to_sun);
+                // As the cascades: the grid turns about the map's own centre.
+                sun.far_anchor =
+                    sun_shadow::next_anchor(true, sun.gpu.far_drawn.as_ref(), sun.far_anchor);
+            }
+            sun.far_dirty = false;
+            sun.far_last = now;
+            let map = sun_shadow::far_place(
+                position,
+                sun_shadow::basis(sun.far_keep.direction(frame.to_sun)),
+                sun.far_anchor,
+            );
+            sun.far_anchor = Some(map.anchor);
+            map
+        } else {
+            far_now
+        };
+        sun.far_maps += u64::from(far_redraw);
+        self.end_pass();
+        // The casters' buffers are this batch's from here: an upload into one later in the batch
+        // is copied in among its commands.
+        for d in sun
+            .cache
+            .iter()
+            .chain(sun.far.iter())
+            .map(|i| &i.payload)
+            .chain(sun.skinned.iter().map(|s| &s.0))
+        {
+            for (b, _, _) in d.streams.iter().flatten() {
+                b.batch.store(self.batch, Ordering::Relaxed);
+            }
+            if let Some((b, _)) = &d.index {
+                b.batch.store(self.batch, Ordering::Relaxed);
+            }
+        }
+        let device = self.device.clone();
+        let registers = self.uniform_layout.clone();
+        let span = self.span_begin(Kind::SunShadows);
+        let (writes, drawn) = sun.gpu.draw_maps(
+            &device,
+            &registers,
+            self.encoder(),
+            &sun.cache,
+            &sun.headers,
+            &cascades,
+            redraw,
+            (&sun.far, far_redraw.then_some(&far_map)),
+            &sun.skinned,
+        );
+        self.span_end(span);
+        for (buffer, bytes) in writes {
+            self.on_queue(move |q| q.write_buffer(&buffer, 0, &bytes));
+        }
+        sun.frames += 1;
+        sun.casters += on_scene;
+        sun.skinned_seen += sun.skinned.len() as u64;
+        sun.kept += sun.cache.len() as u64;
+        sun.cables += sun
+            .cache
+            .iter()
+            .filter(|i| i.payload.thin.is_some())
+            .count() as u64;
+        sun.maps += redraw.iter().filter(|&&r| r).count() as u64;
+        sun.map_draws += u64::from(drawn);
+        sun.took += started.elapsed();
+        if self.presents >= sun.said + 300 || sun.said == 0 {
+            let n = sun.frames.max(1) as f64;
+            eprintln!(
+                "NV_D3D9 wgpu: sun shadows at present {}: {:.0} casters on the scene, {:.0} kept ({} moving), {:.2} still maps drawn a frame ({:.0} caster draws), {:.3} ms a frame on this thread; a frame {:.1} added, let go {:.1} written or released, {:.1} far, {:.1} moved or not drawn in view; still maps drawn for moving {:?}, for a changed caster {:?} times (of them for a settled place {:?}); {:.0} cables kept; draws a frame (not opaque, cut-outs kept, no pipeline, no bounds, no ModelViewProj or skinned, UP) {:?}; sun toward ({:.2}, {:.2}, {:.2}), cascades to {:?} units (texels {:?}); lookups (given, ended by another target's clear, no maps yet) {:?}; lit variants waiting, failed {:?}; casters forgotten for a new world {} times; far map: {} casters kept, drawn {:.3} times a frame; characters (skinned draws) cast {:.1} a frame (on: {})",
+                self.presents,
+                sun.casters as f64 / n,
+                sun.kept as f64 / n,
+                sun.moving,
+                sun.maps as f64 / n,
+                sun.map_draws as f64 / n,
+                sun.took.as_secs_f64() * 1000.0 / n,
+                sun.added as f64 / n,
+                sun.gone[0] as f64 / n,
+                sun.gone[1] as f64 / n,
+                sun.gone[2] as f64 / n,
+                sun.moved,
+                sun.touched,
+                sun.settled,
+                sun.cables as f64 / n,
+                sun.rejected.map(|r| r / sun.frames.max(1)),
+                frame.to_sun[0],
+                frame.to_sun[1],
+                frame.to_sun[2],
+                cascades.map(|c| c.far.round()),
+                cascades.map(|c| (c.texel * 100.0).round() / 100.0),
+                sun.lookups,
+                (self.sun_pending.len(), self.sun_failed.len()),
+                sun.forgotten,
+                sun.far.len(),
+                sun.far_maps as f64 / n,
+                sun.skinned_seen as f64 / n,
+                sun.characters,
+            );
+            sun.said = self.presents;
+            sun.frames = 0;
+            sun.casters = 0;
+            sun.kept = 0;
+            sun.maps = 0;
+            sun.map_draws = 0;
+            sun.took = std::time::Duration::ZERO;
+            sun.added = 0;
+            sun.gone = [0; 3];
+            sun.moved = [0; sun_shadow::CASCADES];
+            sun.touched = [0; sun_shadow::CASCADES];
+            sun.settled = [0; sun_shadow::CASCADES];
+            sun.cables = 0;
+            sun.rejected = [0; 6];
+            sun.lookups = [0; 3];
+            sun.far_maps = 0;
+            sun.skinned_seen = 0;
+        }
+    }
+
+    /// The sun shadows' variants made since the last frame, into the pipelines' cache, whether
+    /// their draw comes again or not (each present). A variant is waited for only by its own key,
+    /// so one whose draw never came back (a state seen for a frame: a load's fade, a menu)
+    /// held its place among the [`SUN_VARIANTS_AT_ONCE`] for good: after six such, no lit draw
+    /// got its variant again for the rest of the run (the Strip after a coc from Doc's house: no
+    /// shadow at all, runs pf-s12a/s12g/s12g2 of 2026-11-17).
+    fn collect_sun_variants(&mut self) {
+        if self.sun_pending.is_empty() {
+            return;
+        }
+        let keys: Vec<PipeKey> = self.sun_pending.keys().cloned().collect();
+        for key in keys {
+            let Some(rx) = self.sun_pending.get(&key) else {
+                continue;
+            };
+            match rx.try_recv() {
+                Ok(Some(p)) => {
+                    self.sun_pending.remove(&key);
+                    self.pipelines.insert(key, (Some(p), 0));
+                }
+                Ok(None) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.sun_pending.remove(&key);
+                    self.sun_failed.insert(key);
+                    self.warn(
+                        "sun shadows: a lit draw's variant could not be made (drawn without)",
+                    );
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+    }
+
+    /// Tests: whether characters cast ([`sun_shadow::enable_characters`] for this device alone, so
+    /// tests running side by side do not change each other's), before its first draw.
+    #[doc(hidden)]
+    pub fn set_sun_characters(&mut self, on: bool) {
+        if let Some(s) = &mut self.sun {
+            s.characters = on;
+        }
+    }
+
+    /// Tests: the characters' allowance (game units) in place of the one measured each frame
+    /// ([`sun_shadow::skin_allowance`]; none: measured).
+    #[doc(hidden)]
+    pub fn set_sun_character_allowance(&mut self, units: Option<f32>) {
+        if let Some(s) = &mut self.sun {
+            s.allow_override = units;
+        }
+    }
+
+    /// Tests: the cascades as their maps were last drawn (none before a map's first; all none with
+    /// the shadows off).
+    #[doc(hidden)]
+    pub fn sun_cascades_drawn(&self) -> [Option<sun_shadow::Cascade>; sun_shadow::CASCADES] {
+        self.sun
+            .as_ref()
+            .map_or([None; sun_shadow::CASCADES], |s| s.gpu.drawn)
+    }
+
+    /// Tests: the far map as it was last drawn (none before its first, or with the shadows off).
+    #[doc(hidden)]
+    pub fn sun_far_drawn(&self) -> Option<sun_shadow::Cascade> {
+        self.sun.as_ref().and_then(|s| s.gpu.far_drawn)
+    }
+
+    /// Tests: how many times the sun shadows' far map was drawn (0 with them off).
+    #[doc(hidden)]
+    pub fn sun_far_maps_drawn(&self) -> u64 {
+        self.sun.as_ref().map_or(0, |s| s.gpu.far_draws)
+    }
+
+    /// Waits until every sun-shadow variant on its way is made and keeps it (tests: the draws after
+    /// take the variants).
+    pub fn wait_for_sun_variants(&mut self) {
+        for (key, rx) in std::mem::take(&mut self.sun_pending) {
+            match rx.recv() {
+                Ok(Some(p)) => {
+                    self.pipelines.insert(key, (Some(p), 0));
+                }
+                _ => {
+                    self.sun_failed.insert(key);
+                }
+            }
+        }
+        // And the characters' caster pipelines on their way.
+        if let Some(sun) = &mut self.sun {
+            for (key, rx) in std::mem::take(&mut sun.caster_pending) {
+                let at = rx.recv().ok().and_then(Result::ok).map(|p| {
+                    sun.gpu.pipelines.push(Some(p));
+                    (sun.gpu.pipelines.len() - 1) as u32
+                });
+                sun.pipes.insert(key, at);
+            }
+        }
+    }
+
+    /// Whether the sun shadows' variant pipeline of `key` is ready (then it is in the pipelines'
+    /// cache). The first time it is asked for, its job is prepared here (the plain pipeline's, its
+    /// pixel shader, or its vertex shader for a vertex-lit one, converted with the sun's colour
+    /// shadowed, [`wgsl::convert_with_sun`]; a layout with the lookup's group 3) and made on a
+    /// thread of its own, a few at a time; until it is made (or if it cannot be), false.
+    #[allow(clippy::too_many_arguments)]
+    fn sun_variant_ready(
+        &mut self,
+        key: &PipeKey,
+        vs: &Shader,
+        ps: &Shader,
+        inputs: &[wgsl::Input],
+        attributes: &[Vec<wgpu::VertexAttribute>; 8],
+        topology: wgpu::PrimitiveTopology,
+        samplers: &[(u32, u8, bool)],
+    ) -> bool {
+        if self.sun_failed.contains(key) {
+            return false;
+        }
+        if let Some(rx) = self.sun_pending.get(key) {
+            return match rx.try_recv() {
+                Ok(Some(p)) => {
+                    self.sun_pending.remove(key);
+                    self.pipelines.insert(key.clone(), (Some(p), 0));
+                    true
+                }
+                Ok(None) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.sun_pending.remove(key);
+                    self.sun_failed.insert(key.clone());
+                    self.warn(
+                        "sun shadows: a lit draw's variant could not be made (drawn without)",
+                    );
+                    false
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => false,
+            };
+        }
+        if self.sun_pending.len() >= SUN_VARIANTS_AT_ONCE {
+            return false;
+        }
+        let Some(light_layout) = self.sun.as_ref().map(|s| s.gpu.light_layout.clone()) else {
+            return false;
+        };
+        let plain = PipeKey {
+            sun: false,
+            ..key.clone()
+        };
+        let (vkey, pkey, tasks) = self.module_tasks(&plain, vs, ps, inputs);
+        self.make_modules(tasks, 1, false, &mut |_| {});
+        let Some(job) = self.pipeline_job(&plain, ps, &vkey, &pkey, attributes, topology, samplers)
+        else {
+            self.sun_failed.insert(key.clone());
+            return false;
+        };
+        // One stage only: a pair whose shaders both read a sun register is shadowed in its pixel
+        // shader (shadowing both would take the sun away twice).
+        let (vs_sun, ps_sun) = sun_stages(vs.sun.is_some(), ps.sun.is_some());
+        // With the characters cast, the game's own actor shadows read as lit (one shadow each).
+        let characters = self.sun.as_ref().is_some_and(|s| s.characters);
+        let vs_source = vs_sun.then(|| {
+            wgsl::convert_with_sun(
+                &vs.program,
+                &wgsl::Link {
+                    inputs: vkey.1.clone(),
+                    centroid: wgsl::centroid_everywhere(vkey.2.len()),
+                    varyings: vkey.2.clone(),
+                    clip: vkey.3,
+                    count: false,
+                    fixed: vkey.4,
+                },
+                characters,
+                vs.skin.is_some() || ps.face,
+            )
+        });
+        let ps_source = ps_sun.then(|| {
+            wgsl::convert_with_sun(
+                &ps.program,
+                &wgsl::Link {
+                    inputs: Vec::new(),
+                    centroid: wgsl::centroid_everywhere(pkey.1.len()),
+                    varyings: pkey.1.clone(),
+                    clip: key.clip,
+                    count: key.count,
+                    fixed: ps.fixed,
+                },
+                characters,
+                vs.skin.is_some() || ps.face,
+            )
+        });
+        let device = self.device.clone();
+        let registers = self.uniform_layout.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let made = std::thread::Builder::new()
+            .name("nv-wgpu-sun-variant".into())
+            .spawn(move || {
+                let module = |source: Option<Result<String, sm::Error>>| match source {
+                    None => Ok(None),
+                    Some(Ok(s)) => create_module(&device, s).map(Some),
+                    Some(Err(e)) => Err(e.to_string()),
+                };
+                let made = (|| -> Result<Pipe, String> {
+                    let mut job = job;
+                    if let Some(m) = module(vs_source)? {
+                        job.vm = m;
+                    }
+                    if let Some(m) = module(ps_source)? {
+                        job.pm = m;
+                    }
+                    job.layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("sun shadows: a lit draw"),
+                        bind_group_layouts: &[
+                            Some(&registers),
+                            Some(&job.group_layouts[0]),
+                            Some(&job.group_layouts[1]),
+                            Some(&light_layout),
+                        ],
+                        immediate_size: 0,
+                    });
+                    let p = build_pipeline(&device, None, &job)?;
+                    Ok((p, job.group_layouts.clone()))
+                })();
+                if let Err(e) = &made {
+                    eprintln!("NV_D3D9 wgpu: sun shadows: a lit draw's variant: {e}");
+                }
+                let _ = tx.send(made.ok());
+            });
+        if made.is_err() {
+            self.sun_failed.insert(key.clone());
+            return false;
+        }
+        self.sun_pending.insert(key.clone(), rx);
+        false
+    }
+
+    /// The world the camera is in ([`sun_shadow::WORLD_STATE`], recorded at a colour and depth
+    /// clear before the camera's words): when it is another than the one the casters were kept in,
+    /// they are forgotten (and the frame's list with them), and every map is drawn again from what
+    /// the new world draws.
+    pub(crate) fn sun_world(&mut self, words: &[u32]) {
+        let Some(&world) = words.first() else {
+            return;
+        };
+        if let Some(s) = &mut self.sun {
+            if s.world.is_some_and(|w| w != world) {
+                s.forget_world();
+            }
+            s.world = Some(world);
+        }
+    }
+
+    /// The camera words recorded at the scene's clear ([`sun_shadow::VIEW_STATE`]), for
+    /// [`Device::sun_lookup`].
+    pub(crate) fn sun_begin_view(&mut self, words: &[u32]) {
+        if let Some(s) = &mut self.sun {
+            s.begin_view = scene_light::Params::from_words(words);
+        }
+    }
+
+    /// The sun shadows' lookup for this frame's lit draws ([`sun_shadow::lookup_uniforms`]):
+    /// `words` the frame's [`sun_shadow::Frame`], recorded at the scene's colour and depth clear
+    /// (after [`sun_shadow::VIEW_STATE`]'s camera words), so the draws that follow find their
+    /// pixels in the maps through this frame's camera. Written into this frame's slot of the
+    /// ring; none when there is no sun, no map drawn yet, or the target is not the scene the maps
+    /// were last used on.
+    ///
+    /// At the first such clear of a frame on the scene (the target of the back buffer's size with its
+    /// own depth surface; the water reflection's clear before it is not), the maps are first brought
+    /// up to date from the casters the frame before drew ([`Device::sun_update`]), and this
+    /// frame's draws are kept for the next until its depth-only clear (the first-person arms).
+    pub(crate) fn sun_lookup(&mut self, words: &[u32]) {
+        let Some(mut sun) = self.sun.take() else {
+            return;
+        };
+        self.sun_lookup_with(&mut sun, words);
+        self.sun = Some(sun);
+    }
+
+    fn sun_lookup_with(&mut self, sun: &mut SunState, words: &[u32]) {
+        let had = sun.light.take().is_some();
+        let (Some(frame), Some(view)) =
+            (sun_shadow::Frame::from_words(words), sun.begin_view.take())
+        else {
+            return;
+        };
+        let (Some(ds), Some(rt)) = (self.st.ds.clone(), self.st.rt[0].clone()) else {
+            return;
+        };
+        let back = self
+            .back_buffers
+            .first()
+            .and_then(|&h| self.surface_of(h))
+            .map(|s| (s.width, s.height));
+        let scene = self.st.rt[1..].iter().all(Option::is_none)
+            && back == Some((rt.width, rt.height))
+            && (ds.width, ds.height, ds.samples) == (rt.width, rt.height, rt.samples)
+            && !rt.format.depth;
+        // Another target's colour and depth clear (a reflection) after the scene's ends the lookup
+        // for the rest of the frame (counted for the log).
+        if !scene {
+            if had {
+                sun.lookups[1] += 1;
+            }
+            return;
+        }
+        if sun.processed != Some(self.presents) {
+            sun.processed = Some(self.presents);
+            if let (Some((pv, pf)), true) = (sun.prev.take(), sun.scene_depth == Some(ds.id)) {
+                self.sun_update(sun, &pv, &pf, ds.id);
+            }
+            sun.lists.clear();
+            sun.prev = Some((view, frame));
+            sun.scene_depth = Some(ds.id);
+            sun.ran = Some(self.presents);
+            sun.closed = false;
+        }
+        if sun.gpu.drawn.iter().any(Option::is_none) {
+            sun.lookups[2] += 1;
+            return;
+        }
+        sun.lookups[0] += 1;
+        let frustum = [view.left, view.right, view.bottom, view.top];
+        let s = sun_shadow::splits(view.near, sun_shadow::FAR.min(view.far));
+        let axes = frame.axes();
+        let position = frame.position.map(f64::from);
+        let mut anchors = sun.anchors;
+        let cascades = sun_shadow::place_cascades(
+            frustum,
+            &s,
+            axes,
+            position,
+            &sun.keep,
+            frame.to_sun,
+            [false; sun_shadow::CASCADES],
+            &sun.gpu.drawn,
+            &mut anchors,
+        );
+        let drawn: [sun_shadow::Cascade; sun_shadow::CASCADES] =
+            std::array::from_fn(|k| sun.gpu.drawn[k].unwrap_or(cascades[k]));
+        let bytes = sun_shadow::lookup_uniforms(
+            &view,
+            frame.strength,
+            &cascades,
+            &drawn,
+            sun.gpu.thin_in,
+            sun.gpu.far_lookup().0,
+            sun.gpu.far_lookup().1,
+            sun.gpu.chars_in,
+            sun.gpu.chars_allow,
+            axes,
+            position,
+            rt.samples,
+            rt.width,
+            rt.height,
+        );
+        let offset = (self.presents % sun_shadow::LIGHT_SLOTS) * sun_shadow::LIGHT_SLOT;
+        let ring = sun.gpu.light_ring.clone();
+        sun.light = Some(offset as u32);
+        self.on_queue(move |q| q.write_buffer(&ring, offset, &bytes));
     }
 
     pub(crate) fn update_texture(&mut self, source: Handle, destination: Handle) {
@@ -5301,6 +8480,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         }
         self.end_pass();
         let levels = (s.levels - skip).min(d.levels);
+        // Its smallest level comes from the source's (the sun shadows' mean alpha, when known).
+        if s.levels - skip == d.levels {
+            d.alpha
+                .store(s.alpha.load(Ordering::Relaxed), Ordering::Relaxed);
+        }
         let layers = if s.cube { 6 } else { 1 };
         for level in 0..levels {
             let w = (d.width >> level).max(1);
@@ -5310,6 +8494,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             } else {
                 (w, h)
             };
+            let copy_span = self.span_begin(Kind::Copies);
             self.encoder().copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &s.texture,
@@ -5329,6 +8514,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     depth_or_array_layers: layers,
                 },
             );
+            self.span_end(copy_span);
         }
     }
 
@@ -5550,6 +8736,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
+        let copy_span = self.span_begin(Kind::Copies);
         self.encoder().copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,
@@ -5575,6 +8762,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 depth_or_array_layers: 1,
             },
         );
+        self.span_end(copy_span);
         self.flush();
         self.sync();
         buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
@@ -5642,6 +8830,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     && (src.width, src.height, src.format.wgpu)
                         == (dst.width, dst.height, dst.format.wgpu)
                 {
+                    let copy_span = self.span_begin(Kind::Copies);
                     self.encoder().copy_texture_to_texture(
                         wgpu::TexelCopyTextureInfo {
                             texture: &st.texture,
@@ -5669,6 +8858,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                             depth_or_array_layers: 1,
                         },
                     );
+                    self.span_end(copy_span);
                     dt.batch.store(self.batch, Ordering::Relaxed);
                 }
             }
@@ -5816,6 +9006,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             _ => frame_rate::Overlay::new(&self.device, format),
         };
         let (device, queue) = (self.device.clone(), self.queue.clone());
+        let span = self.span_begin(Kind::Other);
         overlay.draw(
             &device,
             &queue,
@@ -5824,6 +9015,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             (width, height),
             readout,
         );
+        self.span_end(span);
         self.fps_overlay = Some(overlay);
     }
 
@@ -5868,10 +9060,28 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.last_present = Some(now);
         // Listed pipelines whose shaders the game has now made, made before its next frame.
         self.prepare_listed();
+        self.collect_sun_variants();
         self.end_pass();
         self.presents += 1;
+        if let Some(line) = self.gpu_times.as_mut().and_then(GpuTimes::frame) {
+            eprintln!("{line}");
+        }
+        // The sun shadows: a frame's light list waits for the next frame's scene clear (where the
+        // maps are drawn); a frame without the sun keeps nothing and leaves no camera to place by.
+        if let Some(s) = &mut self.sun {
+            s.light = None;
+            if s.ran != Some(self.presents - 1) {
+                s.lists.clear();
+                s.prev = None;
+            }
+        }
         self.made.end_present(self.presents);
         self.collect_modules();
+        // The HDR watch's reads that are back ([`bright`]): never waited for.
+        if self.hdr_watch.waiting() {
+            let _ = self.device.poll(wgpu::PollType::Poll);
+            self.hdr_watch.collect();
+        }
         // The start is over once the game has shown a picture (the GPU's gate already stopped
         // the screen), or at the backstop.
         if let Some(why) = self
@@ -5914,6 +9124,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                 mapped_at_creation: false,
             });
+            let copy_span = self.span_begin(Kind::Copies);
             self.encoder().copy_texture_to_buffer(
                 wgpu::TexelCopyTextureInfo {
                     texture: &tex.texture,
@@ -5935,6 +9146,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     depth_or_array_layers: 1,
                 },
             );
+            self.span_end(copy_span);
             readback = Some((buffer, row, b.width, b.height, b.format));
         }
         let mut frame_texture = None;
@@ -5994,6 +9206,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                     mapped_at_creation: false,
                 });
+                let copy_span = self.span_begin(Kind::Copies);
                 self.encoder().copy_texture_to_buffer(
                     t.texture.as_image_copy(),
                     wgpu::TexelCopyBufferInfo {
@@ -6010,6 +9223,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                         depth_or_array_layers: 1,
                     },
                 );
+                self.span_end(copy_span);
                 window_shot = Some((buffer, row, cw, ch));
             }
             // The frame-rate counter last, over the game's frame and the loading screen: after
@@ -6021,6 +9235,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             frame_texture = Some(t);
         }
         self.flush();
+        // The HDR watch's reads of this frame, mapped once their submit has run.
+        if let Some(job) = self.hdr_watch.map_to_ask() {
+            self.on_queue(move |_| job());
+        }
+        self.hdr_watch.next_present(self.presents + 1);
         let presents = self.presents;
         if let Some(map) = self
             .start
@@ -6092,8 +9311,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 }
             }
         }
-        // Bind groups of textures destroyed this frame dropped.
+        // Bind groups of textures destroyed this frame dropped; depth stand-ins idle a while too.
         self.purge_destroyed();
+        sweep_idle(&mut self.depth_parts, self.presents, DEPTH_PART_IDLE);
         // The counts the GPU has now posted for the game's threads.
         self.post_answers();
         if let Some(c) = &mut self.pipeline_cache {
@@ -6119,6 +9339,15 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     w.configures, w.refused
                 ))
             );
+            if let Some(line) = self.hdr_watch.report() {
+                eprintln!("{line}");
+            }
+            if self.stale_samples > 0 {
+                eprintln!(
+                    "NV_D3D9 wgpu: since the last report, draws sampled render-target textures not drawn into in their present {} times",
+                    std::mem::take(&mut self.stale_samples)
+                );
+            }
             self.report_made();
         }
     }
@@ -6203,6 +9432,14 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// The window's frames presented so far (tests).
     pub fn frames_shown(&self) -> u64 {
         self.frames_shown
+    }
+
+    /// Why the window's frames are not shown now (why the current stretch of them began); None when
+    /// its last frame was shown, or when no frame was asked of a window (tests).
+    pub fn frame_not_shown(&self) -> Option<crate::NoFrame> {
+        self.surface
+            .as_ref()
+            .and_then(crate::window::Window::not_shown)
     }
 
     /// Whether the frame-rate counter's drawing was made, and how many frames it was drawn into
@@ -6345,6 +9582,18 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.device.destroy();
     }
 
+    /// The depth stand-ins kept ([`Device::usable_depth`]): each one's depth surface id, size and
+    /// its own surface id (a stand-in let go and made again has a new one) (tests).
+    pub fn depth_stand_ins_for_tests(&self) -> Vec<(u64, u32, u32, u64)> {
+        let mut keys: Vec<(u64, u32, u32, u64)> = self
+            .depth_parts
+            .iter()
+            .map(|(&(ds, w, h), (s, _))| (ds, w, h, s.id))
+            .collect();
+        keys.sort_unstable();
+        keys
+    }
+
     /// The window's swap chain asked in `format` from the next frame on, on a surface made anew
     /// and never configured with `new_surface` (as after a lost one); a format the surface does not
     /// offer is refused by wgpu, as a configuration a driver refuses (tests).
@@ -6444,6 +9693,15 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     }
 
     /// The pixels of a back buffer or render target as wgpu holds them, rows packed (tests).
+    /// The wgpu usages of a surface's texture (tests: the new lighting's off path leaves the
+    /// depth surfaces as they were).
+    pub fn surface_usage(&self, surface: Handle) -> Option<wgpu::TextureUsages> {
+        self.surface_of(surface)?
+            .tex
+            .as_ref()
+            .map(|t| t.texture.usage())
+    }
+
     pub fn read_surface_pixels(&mut self, surface: Handle) -> Option<(u32, u32, Vec<u8>)> {
         let s = self.surface_of(surface)?;
         let pixels = self.read_level(&s)?;
@@ -6465,6 +9723,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         st.ds = None;
         st.rs = state::default_render_states(pp.auto_depth);
         *st.samplers = [state::default_sampler_states(); 20];
+        *st.tss = ffp::default_stage_states();
+        st.fvf = None;
         st.textures = Default::default();
         st.vs = None;
         st.ps = None;
@@ -6481,6 +9741,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         st.dirty = [true; 2];
         st.header_dirty = [true; 2];
         st.bound = Bound::default();
+        st.a2m1 = false;
+        self.ffp_f = [None, None];
         self.counting = None;
         self.groups.clear();
         self.depth_parts.clear();
@@ -6743,6 +10005,13 @@ fn open(
         | wgpu::Features::FLOAT32_BLENDABLE
         | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
         | wgpu::Features::PIPELINE_CACHE;
+    // The sun shadows clamp casters between the sun and a map's near plane (only when on).
+    let wanted = if crate::sun_shadow::enabled() {
+        wanted | wgpu::Features::DEPTH_CLIP_CONTROL
+    } else {
+        wanted
+    };
+    let wanted = wanted | gpu_times::wanted_features();
     let features = adapter.features() & wanted;
     let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("d3d9-wgpu"),
@@ -6848,6 +10117,85 @@ pub fn hardware_adapter() -> Option<String> {
     })
 }
 
+/// What the Direct3D 9 layer's machine table off Windows takes from the card ([`card_facts`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CardFacts {
+    pub name: String,
+    pub vendor: u32,
+    pub device: u32,
+    pub driver: String,
+    pub driver_info: String,
+    /// The sample counts the device will make a surface with: those [`common_sample_count`] keeps
+    /// as they are for the back buffer's format (X8R8G8B8), so every format of the multisampled
+    /// family and the occlusion count's target take them.
+    pub sample_counts: Vec<u32>,
+    /// `TEXTURE_COMPRESSION_BC`: the game's DXT textures.
+    pub bc: bool,
+    /// `FLOAT32_BLENDABLE`.
+    pub float32_blendable: bool,
+}
+
+/// The sample counts of 1 to 16 a device of these `features` keeps as asked for `target`
+/// ([`common_sample_count`], with `supported` the adapter's answer).
+fn kept_sample_counts(
+    target: wgpu::TextureFormat,
+    supported: impl Fn(wgpu::TextureFormat, u32) -> bool,
+) -> Vec<u32> {
+    (1..=16)
+        .filter(|&n| n == 1 || common_sample_count(target, n, &supported) == n)
+        .collect()
+}
+
+/// The graphics card the game's device will most likely be made on, on the APIs `NV_WGPU_BACKEND`
+/// allows: on the first API, in [`apis`]' order, that has a card, a separate card before one built
+/// into the processor, then a virtual one, then any other, as a high-performance request takes
+/// them (the device itself is chosen when the game makes it, with its window). The software
+/// adapter only when `NV_WGPU_BACKEND=software` asks for it. `None` when there is no card.
+pub fn card_facts() -> Option<CardFacts> {
+    let (tries, software) = apis(std::env::var("NV_WGPU_BACKEND").ok().as_deref());
+    let rank = |t: wgpu::DeviceType| match t {
+        wgpu::DeviceType::DiscreteGpu => 0,
+        wgpu::DeviceType::IntegratedGpu => 1,
+        wgpu::DeviceType::VirtualGpu => 2,
+        wgpu::DeviceType::Other => 3,
+        wgpu::DeviceType::Cpu => 4,
+    };
+    tries.into_iter().find_map(|backends| {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends,
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = block_on(instance.enumerate_adapters(backends))
+            .into_iter()
+            .filter(|a| software == (a.get_info().device_type == wgpu::DeviceType::Cpu))
+            .min_by_key(|a| rank(a.get_info().device_type))?;
+        let info = adapter.get_info();
+        let features = adapter.features();
+        // As the device answers it (`Device::samples_supported`): the adapter's own format
+        // features where the device takes them, else the guaranteed ones.
+        let supported = |f: wgpu::TextureFormat, n: u32| {
+            let flags =
+                if features.contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES) {
+                    adapter.get_texture_format_features(f)
+                } else {
+                    f.guaranteed_format_features(features)
+                };
+            flags.flags.sample_count_supported(n)
+        };
+        let target = format::format(22).map_or(wgpu::TextureFormat::Bgra8Unorm, |f| f.wgpu);
+        Some(CardFacts {
+            name: info.name,
+            vendor: info.vendor,
+            device: info.device,
+            driver: info.driver,
+            driver_info: info.driver_info,
+            sample_counts: kept_sample_counts(target, supported),
+            bc: features.contains(wgpu::Features::TEXTURE_COMPRESSION_BC),
+            float32_blendable: features.contains(wgpu::Features::FLOAT32_BLENDABLE),
+        })
+    })
+}
+
 /// Whether `instance` has a graphics card (not a software adapter) on `backends`.
 fn has_card(instance: &wgpu::Instance, backends: wgpu::Backends) -> bool {
     block_on(instance.enumerate_adapters(backends))
@@ -6887,12 +10235,36 @@ extern "system" {
     fn GetModuleHandleW(name: *const u16) -> isize;
 }
 
+/// Elsewhere: the surface of the window the window layer made known as `window`
+/// (`crate::window::register_window`: winit's, on X11, Wayland or macOS).
 #[cfg(not(windows))]
 pub(crate) fn surface_for(
-    _instance: &wgpu::Instance,
-    _window: isize,
+    instance: &wgpu::Instance,
+    window: isize,
 ) -> Result<wgpu::Surface<'static>, String> {
-    Err("windows of other platforms come with the window layer's port".into())
+    let w = crate::window::registered(window).ok_or("no window made known by the window layer")?;
+    // macOS: the surface on the window's Metal layer, made on the main thread with the window
+    // (this runs on the game's or the render thread, where winit gives no handle and AppKit's
+    // view may not be touched). Metal only: another API's device cannot show it. wgpu itself
+    // still reads the window's occlusion state (`occlusionState`, through the layer's view) on
+    // the thread that takes each frame (wgpu-hal metal surface.rs, acquire_texture): a Main
+    // Thread Checker report from there is expected. tests/metal_surface.rs runs this sequence
+    // off the main thread on CI's Mac.
+    #[cfg(target_vendor = "apple")]
+    if let Some(layer) = w.metal_layer() {
+        // SAFETY: the layer is a CAMetalLayer the window keeps retained (`w` holds the window
+        // during this call); wgpu's Metal surface retains it again for its own life.
+        return unsafe {
+            instance
+                .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(
+                    layer.as_ptr(),
+                ))
+                .map_err(|e| format!("create_surface on the window's Metal layer: {e}"))
+        };
+    }
+    instance
+        .create_surface(wgpu::SurfaceTarget::from(w))
+        .map_err(|e| format!("create_surface: {e}"))
 }
 
 /// A pipeline and the layouts of its two sampler groups (the pixel shader's, the vertex
@@ -7627,6 +10999,19 @@ pub fn queue_threads_for_tests(on: bool) {
     NO_QUEUE_THREADS_FOR_TESTS.store(!on, Ordering::Relaxed);
 }
 
+/// Tests only: devices made while this is set have one finishing thread and the queue thread even
+/// on a machine with fewer than four logical processors (CI's runners: three on macOS), so the
+/// threaded path is tested there too.
+static FORCE_QUEUE_THREADS_FOR_TESTS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Tests only: whether devices made from now on have their finishing and queue threads whatever
+/// the machine ([`FORCE_QUEUE_THREADS_FOR_TESTS`]).
+#[doc(hidden)]
+pub fn force_queue_threads_for_tests(on: bool) {
+    FORCE_QUEUE_THREADS_FOR_TESTS.store(on, Ordering::Relaxed);
+}
+
 /// Tests only: a failure planted for once ([`plant_queue_failure_for_tests`]): the next batch job
 /// panics on the queue thread; the next encoder a finishing thread takes fails; the queue thread
 /// ends after its next job.
@@ -7658,6 +11043,141 @@ fn worker_threads() -> usize {
 
 /// Draws an encoder takes before it goes to a finishing thread ([`Device::send_encoder`]).
 const SPLIT_DRAWS: u32 = 256;
+
+/// The most passes and commands one submit carries ([`Device::encoder`]'s uses). wgpu turns each
+/// pass into two of the driver's command buffers (its barriers, then the pass) and each run of
+/// commands between passes into one, and hands a submit's all to one `vkQueueSubmit`. AMD's
+/// Windows driver refuses one of about 4,000 command buffers with "out of host memory" (Radeon
+/// 890M, driver 24.30: 3,506 went, 4,007 did not; NVIDIA's took 4,507), and wgpu then takes the
+/// device for lost: nothing more is drawn and no query answers (900 draws that each upload their
+/// vertices, inside one occlusion query: a copy, a pass and the count's pass each, 4,507 command
+/// buffers in one submit). Why 512: that measured edge. 512 uses are at most about 1,100 command
+/// buffers (855 in that test), under a third of the 3,506 that went, with room for the few passes
+/// some uses make (the sun's shadow maps) and wgpu's own. A batch is sent once it has taken 512
+/// uses, between two of the game's commands ([`Device::bound_batch`]), so that only about two
+/// batches' command buffers ever wait made and not submitted (Metal loses the device past 4,096 of
+/// those); the few uses its last command takes past the limit go in a submit of their own
+/// ([`submit_parts`]), in order.
+pub const SUBMIT_USES: u32 = 512;
+
+/// The uses an encoder takes before it goes with the batch's earlier ones ([`Device::encoder`]):
+/// so that one encoder alone fits in a submit.
+const SPLIT_USES: u32 = SUBMIT_USES;
+
+/// The presents a depth stand-in ([`Device::usable_depth`]) is kept without a draw that uses it:
+/// about five seconds at 60 frames a second, so a size drawn every frame or every few frames (a
+/// mod's live picture of the interface or of a camera, the game's own smaller targets) keeps its
+/// stand-in, and one drawn once (each new `ProjectUITile` size) lets it go.
+const DEPTH_PART_IDLE: u64 = 300;
+
+/// The entries of `map` last used (the present in each value) more than `idle` presents before
+/// `now`, let go.
+fn sweep_idle<K, V>(map: &mut Map<K, (V, u64)>, now: u64, idle: u64)
+where
+    K: Eq + std::hash::Hash,
+{
+    map.retain(|_, (_, used)| now.saturating_sub(*used) <= idle);
+}
+
+/// How many of a batch's command buffers (taking `uses` each, in order) go in each submit, and the
+/// uses they take together: as many as take [`SUBMIT_USES`], at least one.
+fn submit_parts(uses: &[u32]) -> Vec<(usize, u32)> {
+    let mut parts = Vec::new();
+    let (mut n, mut sum) = (0, 0u32);
+    for &u in uses {
+        if n > 0 && sum.saturating_add(u) > SUBMIT_USES {
+            parts.push((n, sum));
+            (n, sum) = (0, 0);
+        }
+        n += 1;
+        sum = sum.saturating_add(u);
+    }
+    if n > 0 {
+        parts.push((n, sum));
+    }
+    parts
+}
+
+/// What the batches' submits carried ([`Device::submits`]): counted where each submit is made,
+/// from the command buffers it really got.
+#[derive(Default)]
+struct Submits {
+    /// Submits made.
+    made: AtomicU64,
+    /// The most uses one submit took.
+    most_uses: AtomicU32,
+    /// The most command buffers one submit got, and the most its part planned.
+    most_buffers: AtomicU32,
+    most_planned: AtomicU32,
+    /// Command buffers submitted, and the encoders the batches handed over.
+    buffers: AtomicU64,
+    encoders: AtomicU64,
+    /// The most uses one batch took before it was sent ([`Device::bound_batch`]).
+    most_batch: AtomicU32,
+    /// The uses the submits took, and the uses the batches took (the same when every use was
+    /// counted into a part).
+    uses: AtomicU64,
+    batch_uses: AtomicU64,
+    /// The most uses handed over and not yet submitted at a hand-over: about two batches' at most
+    /// ([`Device::bound_batch`] waits for the queue thread before an early send).
+    most_pending: AtomicU64,
+    /// Batches sent early because they reached the limit ([`Device::bound_batch`]).
+    bound_sends: AtomicU64,
+}
+
+/// What the batches' submits carried so far ([`Device::submits`], tests).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SubmitStats {
+    /// Submits made.
+    pub submits: u64,
+    /// The most uses one submit took ([`SUBMIT_USES`] at most).
+    pub most_uses: u32,
+    /// The most command buffers one submit got, and the most its part planned.
+    pub most_buffers: u32,
+    pub most_planned: u32,
+    /// Command buffers submitted, and the encoders the batches handed over (the same when none
+    /// was lost).
+    pub buffers: u64,
+    pub encoders: u64,
+    /// The most uses one batch took before it was sent.
+    pub most_batch: u32,
+    /// The uses the submits took, and the uses the batches took (the same when every use was
+    /// counted into a part).
+    pub uses: u64,
+    pub batch_uses: u64,
+    /// The most uses handed over and not yet submitted at a hand-over.
+    pub most_pending: u64,
+    /// Batches sent early because they reached the limit (none in an ordinary frame).
+    pub bound_sends: u64,
+}
+
+/// `buffers` submitted in order, each part's number of them at a time ([`submit_parts`]), counted
+/// in `submits` from what each submit really got.
+fn submit_in_parts(
+    queue: &wgpu::Queue,
+    buffers: Vec<wgpu::CommandBuffer>,
+    parts: &[(usize, u32)],
+    submits: &Submits,
+) {
+    let mut buffers = buffers.into_iter();
+    for &(n, uses) in parts {
+        let part: Vec<wgpu::CommandBuffer> = buffers.by_ref().take(n).collect();
+        let got = part.len();
+        queue.submit(part);
+        submits.made.fetch_add(1, Ordering::Relaxed);
+        submits.most_uses.fetch_max(uses, Ordering::Relaxed);
+        submits
+            .most_buffers
+            .fetch_max(got as u32, Ordering::Relaxed);
+        submits.most_planned.fetch_max(n as u32, Ordering::Relaxed);
+        submits.buffers.fetch_add(got as u64, Ordering::Relaxed);
+        submits.uses.fetch_add(u64::from(uses), Ordering::Relaxed);
+    }
+    debug_assert!(
+        buffers.next().is_none(),
+        "a command buffer left out of the submits"
+    );
+}
 
 /// An earlier encoder of the batch: finished, or on its way from a finishing thread.
 enum Finishing {
@@ -7702,24 +11222,28 @@ impl Finisher {
                 let queue = Arc::clone(&queue);
                 std::thread::Builder::new()
                     .name(format!("nv-wgpu-finish {k}"))
-                    .spawn(move || loop {
-                        let job = queue.lock().unwrap_or_else(|e| e.into_inner()).recv();
-                        let Ok((encoder, back)) = job else { break };
-                        // The render thread waits for it at the submit (a panic's message too, so
-                        // it can say why); gone (the device dropped), the buffer is dropped too.
-                        let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            if planted(PLANT_FINISHING) {
-                                panic!("a planted finishing failure (tests)");
-                            }
-                            encoder.finish()
-                        }))
-                        .map_err(|p| {
-                            p.downcast_ref::<&str>()
-                                .map(|s| s.to_string())
-                                .or_else(|| p.downcast_ref::<String>().cloned())
-                                .unwrap_or_else(|| "a panic without a message".to_string())
-                        });
-                        let _ = back.send(done);
+                    .spawn(move || {
+                        qos::thread_started();
+                        loop {
+                            let job = queue.lock().unwrap_or_else(|e| e.into_inner()).recv();
+                            let Ok((encoder, back)) = job else { break };
+                            // The render thread waits for it at the submit (a panic's message too, so
+                            // it can say why); gone (the device dropped), the buffer is dropped too.
+                            let done =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    if planted(PLANT_FINISHING) {
+                                        panic!("a planted finishing failure (tests)");
+                                    }
+                                    encoder.finish()
+                                }))
+                                .map_err(|p| {
+                                    p.downcast_ref::<&str>()
+                                        .map(|s| s.to_string())
+                                        .or_else(|| p.downcast_ref::<String>().cloned())
+                                        .unwrap_or_else(|| "a panic without a message".to_string())
+                                });
+                            let _ = back.send(done);
+                        }
                     })
                     .expect("a finishing thread starts")
             })
@@ -7811,6 +11335,7 @@ impl Submitter {
             std::thread::Builder::new()
                 .name("nv-wgpu-submit".into())
                 .spawn(move || {
+                    qos::thread_started();
                     for job in rx {
                         let done =
                             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&queue)));
@@ -7931,10 +11456,69 @@ impl Drop for Device {
     }
 }
 
+/// A render pass's timestamp writes: the pair from `index` of `query` ([`crate::gpu_times`]).
+fn render_times(query: &wgpu::QuerySet, index: u32) -> wgpu::RenderPassTimestampWrites<'_> {
+    wgpu::RenderPassTimestampWrites {
+        query_set: query,
+        beginning_of_pass_write_index: Some(index),
+        end_of_pass_write_index: Some(index + 1),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use wgpu::TextureFormat as F;
+
+    /// Depth stand-ins idle for more than [`DEPTH_PART_IDLE`] presents go, those used within it
+    /// stay (a stand-in used at the present before is kept, one used exactly the limit ago too).
+    #[test]
+    fn idle_depth_stand_ins_are_let_go() {
+        let mut map: Map<(u64, u32, u32), (&str, u64)> = Map::default();
+        map.insert((1, 64, 64), ("every frame", 999));
+        map.insert((1, 300, 200), ("at the limit", 1000 - DEPTH_PART_IDLE));
+        map.insert((1, 301, 200), ("past it", 999 - DEPTH_PART_IDLE));
+        map.insert((2, 32, 32), ("long ago", 0));
+        sweep_idle(&mut map, 1000, DEPTH_PART_IDLE);
+        let mut kept: Vec<&str> = map.values().map(|(v, _)| *v).collect();
+        kept.sort_unstable();
+        assert_eq!(kept, ["at the limit", "every frame"]);
+        // A run's first presents: nothing is older than the run.
+        map.insert((3, 8, 8), ("new", 5));
+        sweep_idle(&mut map, 5, DEPTH_PART_IDLE);
+        assert!(map.values().any(|(v, _)| *v == "new"));
+    }
+
+    /// A batch's command buffers go in as few submits as take at most [`SUBMIT_USES`] each, in
+    /// order; one buffer alone always goes (the encoder cut keeps it within the limit).
+    #[test]
+    fn a_batch_goes_in_submits_of_at_most_the_uses_the_driver_takes() {
+        let max = SUBMIT_USES;
+        assert_eq!(submit_parts(&[]), vec![]);
+        assert_eq!(submit_parts(&[3]), vec![(1, 3)]);
+        assert_eq!(submit_parts(&[max]), vec![(1, max)]);
+        assert_eq!(submit_parts(&[max, 1]), vec![(1, max), (1, 1)]);
+        assert_eq!(submit_parts(&[max - 1, 1, 1]), vec![(2, max), (1, 1)]);
+        assert_eq!(submit_parts(&[max / 2, max / 2]), vec![(2, max)]);
+        assert_eq!(
+            submit_parts(&[max / 2 + 1, max / 2]),
+            vec![(1, max / 2 + 1), (1, max / 2)]
+        );
+        assert_eq!(submit_parts(&[100; 12]), vec![(5, 500), (5, 500), (2, 200)]);
+        assert_eq!(submit_parts(&[max + 9, 2]), vec![(1, max + 9), (1, 2)]);
+        assert_eq!(submit_parts(&[0, 0, max, 0]), vec![(4, max)]);
+        assert_eq!(SPLIT_USES, SUBMIT_USES, "an encoder alone fits in a submit");
+    }
+
+    /// A lit draw is shadowed at one stage: its pixel shader when that reads the sun's colour,
+    /// else its vertex shader (grass); a pair whose shaders both read it never twice.
+    #[test]
+    fn a_lit_draw_is_shadowed_at_one_stage_the_pixel_shader_first() {
+        assert_eq!(sun_stages(true, true), (false, true));
+        assert_eq!(sun_stages(false, true), (false, true));
+        assert_eq!(sun_stages(true, false), (true, false));
+        assert_eq!(sun_stages(false, false), (false, false));
+    }
 
     /// The list records whether a plane was on, not only how the adapter cut: the clip
     /// distances every draw takes where the adapter has them write 0 with no plane on, so a list
@@ -7992,6 +11576,18 @@ mod tests {
         // The occlusion count's 16-bit target lacks 8x: 4x, so counting still joins the pass.
         let count_4x = |f: F, c: u32| !(f == COUNT_FORMAT_16 && c > 4);
         assert_eq!(common_sample_count(F::Bgra8Unorm, 8, count_4x), 4);
+    }
+
+    /// The counts the machine table answers off Windows are those the device keeps as asked: a
+    /// count only the 16-bit float target lacks is not among them; counts the formats lack too.
+    #[test]
+    fn the_counts_answered_are_the_counts_the_device_keeps() {
+        let float_4x = |f: F, c: u32| c <= 8 && !(f == F::Rgba16Float && c > 4);
+        assert_eq!(kept_sample_counts(F::Bgra8Unorm, float_4x), [1, 2, 4]);
+        let r16_2x = |f: F, c: u32| c <= 16 && !(f == F::R16Float && c > 2);
+        assert_eq!(kept_sample_counts(F::Bgra8Unorm, r16_2x), [1, 2]);
+        let all = |_: F, c: u32| [1, 2, 4, 8].contains(&c);
+        assert_eq!(kept_sample_counts(F::Bgra8Unorm, all), [1, 2, 4, 8]);
     }
 
     /// The alpha test's bounds give the alphas at which the real Direct3D 9 here changes its

@@ -435,6 +435,44 @@ fn a_flagged_reference_is_not_loaded() {
     assert_eq!(calls(&e, TES_LOAD_REFERENCE).len(), 1);
 }
 
+/// JIP's `doneFade` step: a reference ToggleObjectCollision marked (JIP's flag 0x02 at `+0x5F`)
+/// has its collision turned off again in its new 3D: the node's collision object (`+0x1C`), its
+/// world object (`+0x10`) and that one's Havok object (`+8`): the Havok object's `+0x2D` byte
+/// gains 0x40 and the world object's slot `0xC4` runs once. Without the flag nothing changes;
+/// with no loaded 3D nothing is touched.
+#[test]
+fn a_marked_reference_loses_its_collision_again_in_its_new_3d() {
+    const UPDATE: u32 = 0x00e0_0050;
+    let run = |marked: bool, has_3d: bool| {
+        let mut e = world();
+        e.register(UPDATE, |_, _| Ret::default());
+        let t = task(&mut e);
+        let havok = e.mem.alloc(0x40);
+        e.mem.set_u8(havok + 0x2d, 0x05);
+        let world_object = e.mem.alloc(0x20);
+        let world_table = vtable(&mut e, &[(0xc4, UPDATE)]);
+        e.mem.set_u32(world_object, world_table);
+        e.mem.set_u32(world_object + 8, havok);
+        let collision = e.mem.alloc(0x20);
+        e.mem.set_u32(collision + 0x10, world_object);
+        e.mem.set_u32(t.node + 0x1c, collision);
+        if marked {
+            e.mem.set_u8(t.refr + 0x5f, 0x02);
+        }
+        if !has_3d {
+            let loaded = e.mem.u32(t.refr + 0x64);
+            e.mem.set_u32(loaded + 0x14, 0);
+        }
+        queued_reference(&mut e, t.task);
+        (e.mem.u8(havok + 0x2d), calls(&e, UPDATE))
+    };
+    let (filter, updates) = run(true, true);
+    assert_eq!(filter, 0x45);
+    assert_eq!(updates.len(), 1);
+    assert_eq!(run(false, true), (0x05, vec![]));
+    assert_eq!(run(true, false), (0x05, vec![]));
+}
+
 /// No parent cell: no lock, no load, the loader told, no counts, no fade work.
 #[test]
 fn a_reference_with_no_cell_is_only_told() {
@@ -1289,4 +1327,35 @@ fn toggle_immortal_mode_switches_the_hook_and_the_hit_effects() {
     assert_eq!(immortal_mode(&mut e), 1);
     assert_eq!(e.hook_users(Hook::PlayerMinHealth), 0);
     assert_eq!(call_on(&mut e, TOGGLE_IMMORTAL_MODE, 0, &[]).1, 1.0);
+}
+
+/// H09's `doLights` (group GL's `add_point_lights`): after the load, a 3D marked `0x20000000`
+/// (byte +0x33 bit 0x20) has its point lights of JIP's listed and marked listed (bit 0x40); an
+/// unmarked 3D is not searched.
+#[test]
+fn the_attach_lists_jips_point_lights() {
+    for marked in [true, false] {
+        let mut e = world();
+        let t = task(&mut e);
+        let light = e.mem.alloc(0x110);
+        let form = e.mem.alloc(0xcc);
+        e.mem.set_u32(light, 0x0109_dd0c);
+        e.mem.set_u8(light + 0x33, 0x20);
+        e.mem.set_u32(light + 0xe8, form);
+        let children = e.mem.alloc(4);
+        e.mem.set_u32(children, light);
+        e.mem.set_u32(t.node + 0xa0, children);
+        e.mem.set_u16(t.node + 0xa6, 1);
+        if marked {
+            e.mem.set_u8(t.node + 0x33, 0x20);
+        }
+        queued_reference(&mut e, t.task);
+        let listed = super::super::gl::lights::active_point_lights(&mut e);
+        assert_eq!(listed, if marked { vec![light] } else { vec![] });
+        assert_eq!(
+            e.mem.u8(light + 0x33),
+            if marked { 0x60 } else { 0x20 },
+            "{marked}"
+        );
+    }
 }

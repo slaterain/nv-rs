@@ -567,7 +567,10 @@ fn render(e: &mut Engine, this: Ptr, out_pin: Ptr) -> u32 {
     let fed = samples.clone();
     let decode = std::thread::Builder::new()
         .name("nv-music-decode".into())
-        .spawn(move || decode_stream(decoding, &fed))
+        .spawn(move || {
+            qos::thread_started();
+            decode_stream(decoding, &fed)
+        })
         .expect("an OS thread to decode the music on");
     let g = graph(e, at);
     g.stream_bytes = total;

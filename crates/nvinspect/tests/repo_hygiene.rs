@@ -129,6 +129,37 @@ const BANNED_EXTENSIONS: &[&str] = &[
 /// Top-level directories where decompiler names are not allowed.
 const PROVENANCE_DIRS: &[&str] = &["crates", "viewer", "docs"];
 
+/// Words of the maintainer's own folders that the packages' check (`package-check`'s program
+/// needles, scripts/package-playtest.sh and .ps1) refuses in a program. A data file that a crate
+/// embeds (a `.tsv` or `.txt` under a crate's `src/` or `data/`, `include_str!`) or that a package
+/// carries (`distribution/`) ships its comment lines too, so they are refused here, before a
+/// package build finds them (2026-11-17: a code page table's comment named the measuring folder).
+const SHIPPED_DATA_WORDS: &[&str] = &["build43", "nv-re/", "nv-re\\", "/nv-re", "\\nv-re"];
+
+/// Whether `rel` is data that reaches a program or a package: not Rust source, under a crate's or
+/// the viewer's `src/` or `data/`, or under `distribution/` or `vendor/`.
+fn shipped_data(rel: &str) -> bool {
+    if rel.ends_with(".rs") {
+        return false;
+    }
+    let parts: Vec<&str> = rel.split('/').collect();
+    matches!(
+        parts.as_slice(),
+        ["distribution" | "vendor", _, ..]
+            | ["crates", _, "src" | "data", _, ..]
+            | ["viewer", "src" | "data", _, ..]
+    )
+}
+
+/// The words of [`SHIPPED_DATA_WORDS`] in `line`.
+fn shipped_data_words(line: &str) -> Vec<&'static str> {
+    SHIPPED_DATA_WORDS
+        .iter()
+        .copied()
+        .filter(|w| line.contains(w))
+        .collect()
+}
+
 /// Files above this size are not scanned (and are reported as such).
 const MAX_SCAN_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -1066,7 +1097,21 @@ fn check_text(rel: &str, bytes: &[u8]) -> Vec<(usize, String)> {
     }
     let top = rel.split('/').next().unwrap_or("");
     let provenance = rel.contains('/') && PROVENANCE_DIRS.contains(&top);
+    let shipped = shipped_data(rel);
     for (i, line) in text.lines().enumerate() {
+        if shipped {
+            let words = shipped_data_words(line);
+            if !words.is_empty() {
+                found.push((
+                    i + 1,
+                    format!(
+                        "`{}` in a file that ships in a program or package (name no folder of \
+                         this PC; the package check refuses it)",
+                        words.join("`, `")
+                    ),
+                ));
+            }
+        }
         if has_user_profile_path(line) {
             found.push((
                 i + 1,
@@ -2903,13 +2948,201 @@ fn typed_function_findings(
     found
 }
 
+/// The checkout this test checks: the one `cargo test` is run for. Cargo gives the crate's folder
+/// to the running test in `CARGO_MANIFEST_DIR`; the value compiled in is only the fallback (a
+/// run by hand). A test program built for another checkout has that other checkout's folder
+/// compiled in: on 2026-11-17 such a program checked `agents\game-ini` for a pull request made
+/// elsewhere (how it came to be run there is not known; the shared compile cache stores no test
+/// programs, so it was not that).
 fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    let crate_dir = std::env::var_os("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+    crate_dir.join("../..")
 }
 
 // ---------------------------------------------------------------------------
 // Tests.
 // ---------------------------------------------------------------------------
+
+/// Data that ships: a crate's embedded tables and the package's files, not Rust source or docs.
+/// The folder words are refused in it, and only there.
+#[test]
+fn shipped_data_names_no_folder_of_this_pc() {
+    assert!(shipped_data(
+        "crates/engine-platform/src/cp1252_measured.tsv"
+    ));
+    assert!(shipped_data("crates/engine-core/data/overridable.tsv"));
+    assert!(shipped_data("crates/d3d9-wgpu/src/shaders/clear.frag"));
+    assert!(shipped_data("viewer/src/x.txt"));
+    assert!(shipped_data("distribution/linux/READ ME.txt"));
+    assert!(shipped_data("vendor/wgpu-hal/LICENSE.MIT"));
+    assert!(!shipped_data("crates/engine-platform/src/code_page.rs"));
+    assert!(!shipped_data("crates/engine-platform/README.md"));
+    assert!(!shipped_data("crates/nvinspect/tests/x.tsv"));
+    assert!(!shipped_data("docs/MAINTAINING.md"));
+    assert!(!shipped_data("distribution"));
+    let folder = ["build", "43-scratch/measure"].concat();
+    let line = format!("# measured 2026-11-16, by {folder}/platforms/cp1252.ps1.");
+    assert_eq!(shipped_data_words(&line), vec!["build43"]);
+    assert_eq!(
+        shipped_data_words(r"C:\x\nv-re\work"),
+        vec!["nv-re\\", "\\nv-re"]
+    );
+    assert_eq!(
+        shipped_data_words("/srv/x/nv-re/work"),
+        vec!["nv-re/", "/nv-re"]
+    );
+    // The render thread's name is not the folder.
+    assert!(shipped_data_words("nv-render; nv-rs").is_empty());
+    let found = check_text(
+        "crates/engine-platform/src/cp1252_measured.tsv",
+        line.as_bytes(),
+    );
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(check_text("crates/engine-platform/src/files.rs", line.as_bytes()).is_empty());
+}
+
+/// The package scripts: Windows' and the one for Linux and macOS.
+const PACKAGE_SCRIPTS: &[&str] = &[
+    "scripts/package-playtest.ps1",
+    "scripts/package-playtest.sh",
+];
+
+/// What could keep a notice of `distribution/notices.txt` (the licence notices of code that is not
+/// a crates.io crate, `list`) out of a package: an entry without a file in the repository (`exists`)
+/// or without a plain name of its own in `licenses/`; a package script (`scripts`: path and text)
+/// that does not take its notices from the list, or does not hand the list to package-check's
+/// `--notices` (which refuses a package that lacks one of them), or copies a listed file by itself
+/// (apart from the list, where the packages could drift apart). Comment lines (`#`, in both
+/// languages) do not count as the script's code.
+fn notice_problems(
+    list: &str,
+    exists: &dyn Fn(&str) -> bool,
+    scripts: &[(&str, &str)],
+) -> Vec<String> {
+    let mut problems = Vec::new();
+    let mut names: Vec<&str> = Vec::new();
+    let mut sources: Vec<&str> = Vec::new();
+    for line in list.lines().map(str::trim_end) {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((file, name)) = line.split_once('\t') else {
+            problems.push(format!("distribution/notices.txt: no tab in {line:?}"));
+            continue;
+        };
+        if name.is_empty() || name.contains(['/', '\\', '\t']) {
+            problems.push(format!(
+                "distribution/notices.txt: {file} has no plain name in licenses/ ({name:?})"
+            ));
+        }
+        if names.contains(&name) {
+            problems.push(format!("distribution/notices.txt: {name} twice"));
+        }
+        if !exists(file) {
+            problems.push(format!(
+                "distribution/notices.txt: {file} is not a file of the repository"
+            ));
+        }
+        names.push(name);
+        sources.push(file);
+    }
+    if sources.is_empty() {
+        problems.push("distribution/notices.txt lists no notice".to_string());
+    }
+    for (path, text) in scripts {
+        let code = text
+            .lines()
+            .filter(|line| !line.trim_start().starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !code.contains("distribution/notices.txt") {
+            problems.push(format!(
+                "{path}: does not take its notices from distribution/notices.txt"
+            ));
+        }
+        if !code.contains("--notices") {
+            problems.push(format!(
+                "{path}: does not hand distribution/notices.txt to package-check --notices"
+            ));
+        }
+        for file in &sources {
+            if code.contains(file) {
+                problems.push(format!(
+                    "{path}: copies {file} by itself (it goes through distribution/notices.txt)"
+                ));
+            }
+        }
+    }
+    problems
+}
+
+/// Every package (Windows', Linux's, macOS') carries every notice `distribution/notices.txt` lists:
+/// each package script copies the whole list and hands it to package-check, which refuses a
+/// package without one; every entry names a file of the repository. A new package script must be
+/// added to [`PACKAGE_SCRIPTS`].
+#[test]
+fn every_package_carries_every_notice() {
+    let root = repo_root();
+    let list = std::fs::read_to_string(root.join("distribution/notices.txt"))
+        .expect("distribution/notices.txt");
+    let texts: Vec<(&str, String)> = PACKAGE_SCRIPTS
+        .iter()
+        .map(|path| {
+            let text = std::fs::read_to_string(root.join(path)).expect(path);
+            (*path, text)
+        })
+        .collect();
+    let scripts: Vec<(&str, &str)> = texts.iter().map(|(p, t)| (*p, t.as_str())).collect();
+    let exists = |file: &str| root.join(file).is_file();
+    let problems = notice_problems(&list, &exists, &scripts);
+    assert!(problems.is_empty(), "{problems:#?}");
+    for entry in std::fs::read_dir(root.join("scripts")).expect("scripts") {
+        let name = entry.expect("scripts entry").file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with("package-playtest") {
+            assert!(
+                PACKAGE_SCRIPTS.contains(&format!("scripts/{name}").as_str()),
+                "scripts/{name}: a package script every_package_carries_every_notice does not check"
+            );
+        }
+    }
+}
+
+/// The rule finds each way a notice could be left out.
+#[test]
+fn notice_problems_are_found() {
+    let exists = |file: &str| file != "crates/gone/NOTICE";
+    let good = "# notices\ncrates/a/NOTICE\tNOTICE-a\r\n\nvendor/v/LICENSE.MIT\tLICENSE-v.MIT\n";
+    let sh = "grep -v '^#' distribution/notices.txt | while read -r f n; do cp -- \"$f\" x; done\n\
+              set -- \"$@\" --notices distribution/notices.txt\n";
+    let ps1 =
+        "$list = Join-Path $root 'distribution/notices.txt'\n$args += @('--notices', $list)\n";
+    let scripts = [("a.sh", sh), ("b.ps1", ps1)];
+    assert!(notice_problems(good, &exists, &scripts).is_empty());
+    let bad_list = "crates/gone/NOTICE\tNOTICE-gone\ncrates/a/NOTICE\tNOTICE-a\n\
+                    crates/b/NOTICE\tNOTICE-a\ncrates/c/NOTICE\nvendor/v/LICENSE\tsub/LICENSE\n";
+    let found = notice_problems(bad_list, &exists, &scripts);
+    assert_eq!(found.len(), 4, "{found:#?}");
+    assert!(found[0].contains("crates/gone/NOTICE is not a file"));
+    assert!(found[1].contains("NOTICE-a twice"));
+    assert!(found[2].contains("no tab"));
+    assert!(found[3].contains("no plain name"));
+    assert_eq!(
+        notice_problems("# none\n", &exists, &[]),
+        vec!["distribution/notices.txt lists no notice".to_string()]
+    );
+    // The Windows script before 2026-11-19: two notices copied by hand, the list only in a comment,
+    // no --notices.
+    let old = "# the names distribution/notices.txt gives them\n\
+               Copy-Item -LiteralPath (Join-Path $root 'crates/a/NOTICE') -Destination x\n";
+    let found = notice_problems(good, &exists, &[("old.ps1", old)]);
+    assert_eq!(found.len(), 3, "{found:#?}");
+    assert!(found[0].contains("does not take its notices"));
+    assert!(found[1].contains("--notices"));
+    assert!(found[2].contains("copies crates/a/NOTICE by itself"));
+}
 
 /// The check itself: the repository as checked out has no problems.
 #[test]

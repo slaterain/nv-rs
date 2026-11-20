@@ -1146,6 +1146,12 @@ fn finish_barter_create(
     let me = barter_menu(e).addr();
     e.call(MENU_PREP_FOR_VISIBILITY, &args![me, 0u32]);
     let me = barter_menu(e);
+    // `0x72D661` (JIP LN NVSE's `InitBarterMenuHook`, G56, with the fix row on): JIP titles the
+    // vendor's tab (`SetFilterModeTitle(pTiles[8])`) before the fill; the answer is not used.
+    // One load while off.
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(0x0072_d661, &[me.addr()]);
+    }
     fn_0072dc30(e, me, 0);
     root
 }
@@ -1321,6 +1327,10 @@ pub fn barter_menu_do_click(e: &mut Engine, this: Ptr<BarterMenu>, id: i32, tile
                 } else {
                     e.call(CONSOLE_PRINT, &args![NO_ORIGINAL_REFERENCE_TEXT]);
                 }
+            } else if let Some(chosen) = jip_quantity_keys(e, remaining) {
+                // `0x72D8B4` (JIP LN NVSE's `QttSelectBarterHook`, O9): Ctrl takes one, Shift all
+                // not yet bartered, straight to the callback.
+                e.call(0x0072_f6f0, &args![chosen]);
             } else {
                 let limit = e.call(SETTING_VALUE_ADDRESS, &args![0x011d_2418u32]).u32();
                 if remaining > e.mem.i32(limit) {
@@ -1339,6 +1349,16 @@ pub fn barter_menu_do_click(e: &mut Engine, this: Ptr<BarterMenu>, id: i32, tile
         }
         _ => {}
     }
+}
+
+/// JIP LN NVSE's quantity short keys (O9, `bQttSelectShortKeys`, step 3.9 GB-4) at `0x72D8B4` with
+/// the count not yet bartered: the count to take without the quantity menu, `None` for the exe's
+/// test (and with the switch's bit clear, the only load).
+fn jip_quantity_keys(e: &mut Engine, count: i32) -> Option<u32> {
+    if e.jip_patches() & engine_core::extend::jip_patches::QTT_SELECT_SHORT_KEYS == 0 {
+        return None;
+    }
+    e.site(0x0072_d8b4, &[count as u32])
 }
 
 // Translated from 0072db40 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2094,7 +2114,12 @@ pub fn barter_menu_init_func(e: &mut Engine, tile: u32, item: u32) {
     // The frame below `EBP`: the buffer is at `EBP - 0x88`.
     e.with_stack(0x80, |e, buffer| {
         let buffer = buffer.addr();
-        if count > 1 {
+        // `0x72F33D` (JIP LN NVSE's `ConstructItemEntryNameHook`, G82, with the fix row on; JIP's
+        // bytes at `0x72F337` load the count shown first): JIP names the entry ("Name+ (count)")
+        // and the exe's block is skipped. One load while off.
+        let named = e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+            && e.site(0x0072_f33d, &[tile, item, count as u32]).is_some();
+        if !named && count > 1 {
             let name = e.call(ITEM_FULL_NAME, &args![item]).u32();
             e.call(
                 FORMAT_TEXT,
@@ -2603,6 +2628,12 @@ fn complete_transaction_body(e: &mut Engine, this: Ptr<BarterMenu>, base: u32) {
                 let vendor_caps = e.get(this, BarterMenu::iVendorCaps);
                 let bounded = e.call(BOUND_004A8F20, &args![whole, vendor_caps]).u32();
                 let handler = e.global::<u32>(DATA_HANDLER);
+                // `0x73005C` (JIP LN NVSE's `BarterSellFixHook`, G64, with the fix row on): JIP's
+                // `FixVendorCaps(handler, inventory)` runs before the call (a buyer's caps over
+                // 32,767 split into stacks); the answer is not used. One load while off.
+                if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+                    e.site(0x0073_005c, &[handler, inventory]);
+                }
                 e.call(
                     REMOVE_ITEM_BARTER_CONTAINER,
                     &args![handler, change, bounded, vendor],
@@ -4703,5 +4734,303 @@ mod n051_tests {
         answer(&mut e, ITEM_CHANGE_NUM_UNFILTERED, 4);
         e.register(slot(0x14), |_, a| (a[1] + 0x100).into_ret());
         assert_eq!(e.call(0x0073_15b0, &args![list]).u32(), 0x103);
+    }
+
+    // ---- JIP LN NVSE's game patches, group GB-3 (G56, G64) ----
+
+    use engine_core::extend::jip_patches::{FIXES, INSTALLED};
+
+    thread_local! {
+        /// The seams asked (address, words) and the log's length at each ask.
+        static ASKED: std::cell::RefCell<Vec<(u32, Vec<u32>)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+    fn asked() -> Vec<(u32, Vec<u32>)> {
+        ASKED.with(|a| a.borrow_mut().drain(..).collect())
+    }
+    fn never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("a seam asked with the fix row's bit clear")
+    }
+    /// A handler that records its ask and the calls logged so far (answers nothing, as JIP's).
+    fn recorder(e: &mut Engine, w: &[u32]) -> Option<u32> {
+        let logged = e.call_log.as_ref().map_or(0, Vec::len) as u32;
+        let mut words = w.to_vec();
+        words.push(logged);
+        ASKED.with(|a| a.borrow_mut().push((0, words)));
+        None
+    }
+
+    /// A barter menu that opens fully (the "full start" of
+    /// `create_needs_a_vendor_and_a_menu_of_the_class`).
+    fn opening(e: &mut Engine) -> Ptr<BarterMenu> {
+        let this = menu(e);
+        e.set_global(BARTER_MENU, 0u32);
+        answer(e, TILE_READ_FILE, 0x5000);
+        answer(e, TILE_GET_MENU, this.addr());
+        e.register(slot(0x34), |_, _| 0x41du32.into_ret());
+        e.register(NODE_NEXT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        answer(e, TILES_PRESENT_00796F90, 1);
+        e.register(TILE_GET_FLOAT, |_, _| st0(102.0));
+        e.register(TILE_GET_MAXIMUM_DEPTH, |_, _| st0(3.0));
+        e.register(BOUND_00647B70, |_, a| {
+            (a[0] as i32).max(a[1] as i32).into_ret()
+        });
+        e.register(BOUND_004A8F20, |_, a| {
+            (a[0] as i32).min(a[1] as i32).into_ret()
+        });
+        answer(e, TEXT_TO_TRAIT, 0x31);
+        answer(e, TILE_GET_CHILD_BY_NAME, 0x5100);
+        this
+    }
+
+    /// G56 (`0x72D661`, words: the menu): with the fix row's bit the seam is asked once, after
+    /// `PrepForVisibility` and before the first list fill (`0072dc30`); off or `INSTALLED` alone it
+    /// is not asked (a handler that panics), and the menu opens as before.
+    #[test]
+    fn jip_g56_seam_before_the_first_fill() {
+        for word in [0, INSTALLED] {
+            let mut e = engine();
+            let _ = opening(&mut e);
+            e.set_jip_patches(word);
+            e.on_site_for_test(0x0072_d661, never);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x0072_d250, &args![0x9000u32, 0i32]).u32(), 0x5000);
+            assert_eq!(calls_to(&e, LIST_FILL).len(), 2);
+        }
+        let mut e = engine();
+        let this = opening(&mut e);
+        e.set_jip_patches(INSTALLED | FIXES);
+        e.on_site_for_test(0x0072_d661, recorder);
+        asked();
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0072_d250, &args![0x9000u32, 0i32]).u32(), 0x5000);
+        let log = e.call_log.clone().unwrap();
+        let prep = log
+            .iter()
+            .position(|(a, _)| *a == MENU_PREP_FOR_VISIBILITY)
+            .unwrap() as u32;
+        let fill = log.iter().position(|(a, _)| *a == LIST_FILL).unwrap() as u32;
+        let ask = asked();
+        assert_eq!(ask.len(), 1);
+        assert_eq!(ask[0].1[0], this.addr());
+        assert!(
+            prep < ask[0].1[1] && ask[0].1[1] <= fill,
+            "{prep} {ask:?} {fill}"
+        );
+        assert_eq!(calls_to(&e, LIST_FILL).len(), 2, "the fill goes on");
+    }
+
+    /// A transaction that pays the player 25 caps (`completing_moves_the_items_and_the_caps`'s).
+    fn paying(e: &mut Engine) -> Ptr<BarterMenu> {
+        let this = menu(e);
+        e.set(this, BarterMenu::pVendorRef, 0x9000);
+        e.set(this, BarterMenu::iVendorCaps, 40);
+        e.set(this, BarterMenu::fTransactionAmount, 25.0);
+        let process = object(e);
+        answer(e, ACTOR_PROCESS, process);
+        let player = object(e);
+        e.set_global(PLAYER, player);
+        e.set_global(DATA_HANDLER, 0x0606_0000u32);
+        e.register(VALUE_00406CE0, |_, a| st0(f64::from(f32::from_bits(a[0]))));
+        e.register(FLOAT_TO_INT_00406D90, |_, a| {
+            (f32::from_bits(a[0]) as i32).into_ret()
+        });
+        e.register(BOUND_004A8F20, |_, a| {
+            (a[0] as i32).min(a[1] as i32).into_ret()
+        });
+        e.register(ABS_00EC7D40, |_, a| (a[0] as i32).wrapping_abs().into_ret());
+        answer(e, GET_INVENTORY_CHANGES, 0x8800);
+        answer(e, CAPS_FORM_004839C0, 0x0f0f);
+        this
+    }
+
+    /// G64 (`0x73005C`, words: the data handler, the buyer's inventory changes data): with the fix
+    /// row's bit the seam is asked just before the caps' `RemoveItemBarterContainer` (after the
+    /// bound), which follows unchanged; off or `INSTALLED` alone not asked; not asked either when
+    /// the player pays (no caps taken from the vendor).
+    #[test]
+    fn jip_g64_seam_before_the_vendors_caps() {
+        for word in [0, INSTALLED] {
+            let mut e = engine();
+            let this = paying(&mut e);
+            e.set_jip_patches(word);
+            e.on_site_for_test(0x0073_005c, never);
+            e.call_log = Some(vec![]);
+            e.call(0x0072_fd10, &args![this]);
+            let removed = calls_to(&e, REMOVE_ITEM_BARTER_CONTAINER);
+            assert_eq!(removed[0][2..], [25, 0x9000]);
+        }
+        let mut e = engine();
+        let this = paying(&mut e);
+        e.set_jip_patches(INSTALLED | FIXES);
+        e.on_site_for_test(0x0073_005c, recorder);
+        asked();
+        e.call_log = Some(vec![]);
+        e.call(0x0072_fd10, &args![this]);
+        let log = e.call_log.clone().unwrap();
+        let bound = log.iter().position(|(a, _)| *a == BOUND_004A8F20).unwrap() as u32;
+        let removal = log
+            .iter()
+            .position(|(a, _)| *a == REMOVE_ITEM_BARTER_CONTAINER)
+            .unwrap() as u32;
+        let ask = asked();
+        assert_eq!(ask.len(), 1);
+        assert_eq!(ask[0].1[..2], [0x0606_0000, 0x8800]);
+        assert!(
+            bound < ask[0].1[2] && ask[0].1[2] <= removal,
+            "{bound} {ask:?} {removal}"
+        );
+        assert_eq!(
+            calls_to(&e, REMOVE_ITEM_BARTER_CONTAINER)[0][..],
+            [0x0606_0000, log[removal as usize].1[1], 25, 0x9000]
+        );
+        // The player pays: no caps are taken from the vendor, the seam is not asked.
+        e.set(this, BarterMenu::fTransactionAmount, -7.0);
+        e.call_log = Some(vec![]);
+        e.call(0x0072_fd10, &args![this]);
+        assert!(asked().is_empty());
+    }
+
+    // ---- JIP LN NVSE's game patches, group GB-4 (G82, O9) ----
+
+    fn g82_name(_: &mut Engine, w: &[u32]) -> Option<u32> {
+        ASKED.with(|a| a.borrow_mut().push((0x0072_f33d, w.to_vec())));
+        Some(1)
+    }
+    fn nothing(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        None
+    }
+    /// JIP's answer stand-in: the count less 2 (4 gives 2).
+    fn keyed(_: &mut Engine, w: &[u32]) -> Option<u32> {
+        Some(w[0] - 2)
+    }
+
+    /// `InitFunc` on a stack of 3 (`init_func_labels_the_tile`'s).
+    fn barter_init(word: u32, handler: engine_core::extend::SiteFn) -> (Engine, u32) {
+        let mut e = engine();
+        let _this = menu(&mut e);
+        let it = item(&mut e, 0, 3, 0x8000);
+        e.register(ITEM_GET_VALUE, |_, _| st0(0.5));
+        e.register(FLOAT_PAIR_0040EBD0, |_, a| {
+            st0(f64::from(f32::from_bits(a[0])))
+        });
+        e.register(FLOAT_PAIR_004BD510, |_, a| {
+            st0(f64::from(f32::from_bits(a[0])))
+        });
+        answer(&mut e, ITEM_FULL_NAME, 0x7500);
+        answer(&mut e, TEXT_TO_TRAIT, 0x33);
+        e.set_global(VALUE_TRAIT, 0x34u32);
+        e.set_jip_patches(word);
+        e.on_site_for_test(0x0072_f33d, handler);
+        e.call_log = Some(vec![]);
+        e.call(0x0072_f210, &args![0x6100u32, it]);
+        (e, it)
+    }
+
+    /// G82 (`0x72F33D`, words: the tile, the stack, the count shown): with the fix row's bit and
+    /// JIP's answer the exe's "name (count)" block is skipped (only the value is formatted), the
+    /// rest runs; off or `INSTALLED` alone not asked; with the bit and no answer the exe's block.
+    #[test]
+    fn jip_g82_names_the_entry_in_place_of_the_count_block() {
+        for (word, handler) in [
+            (0, never as engine_core::extend::SiteFn),
+            (INSTALLED, never),
+            (INSTALLED | FIXES, nothing),
+        ] {
+            let (e, _) = barter_init(word, handler);
+            assert_eq!(
+                calls_to(&e, FORMAT_TEXT)[0][1..],
+                [0x80, NAME_COUNT_FORMAT, 0x7500, 3]
+            );
+        }
+        asked();
+        let (e, it) = barter_init(INSTALLED | FIXES, g82_name);
+        assert_eq!(asked(), [(0x0072_f33d, vec![0x6100, it, 3])]);
+        let formats = calls_to(&e, FORMAT_TEXT);
+        assert_eq!(formats.len(), 1);
+        assert_eq!(formats[0][2], ONE_DECIMAL_FORMAT);
+        assert_eq!(
+            calls_to(&e, TILE_SET_ITEM_00707E10),
+            vec![vec![0x6100, 0x7500]]
+        );
+    }
+
+    /// A click on an item with 4 left to barter and the quantity setting 1 (the end of
+    /// `do_click_steps_filters_leaves_and_picks_items`); the callback stood in.
+    fn barter_click(word: u32, handler: engine_core::extend::SiteFn) -> Engine {
+        let mut e = engine();
+        let this = menu(&mut e);
+        let current = item(&mut e, 0, 5, 0);
+        e.set_global(BARTER_CURRENT_ITEM, current);
+        e.set_global(ITEM_ENTERED_0119FDB0, 1u8);
+        e.register(TILE_GET_FLOAT, |_, _| st0(1.0));
+        e.register(FLOAT_TO_INT_00406D90, |_, a| {
+            (f32::from_bits(a[0]) as i32).into_ret()
+        });
+        let limit = e.mem.alloc(4);
+        e.mem.set_i32(limit, 1);
+        answer(&mut e, SETTING_VALUE_ADDRESS, limit);
+        answer(&mut e, 0x0072_f6f0, 0);
+        e.set(this, BarterMenu::plbCurrListbox, this.addr() + 0xa8);
+        e.set_jip_patches(word);
+        e.on_site_for_test(0x0072_d8b4, handler);
+        e.call_log = Some(vec![]);
+        e.call(0x0072_d770, &args![this, 0x17i32, 0x6100u32]);
+        e
+    }
+
+    /// O9 (`0x72D8B4`, words: the count left): with `bQttSelectShortKeys`' bit and JIP's answer the
+    /// answer goes straight to the callback (`0072f6f0`): no quantity menu, the setting not read.
+    /// Off or `INSTALLED | FIXES` without the switch: not asked; with the bit and no answer: the
+    /// exe's quantity menu.
+    #[test]
+    fn jip_o9_keys_take_straight_to_the_callback() {
+        use engine_core::extend::jip_patches::QTT_SELECT_SHORT_KEYS;
+        let on = INSTALLED | FIXES | QTT_SELECT_SHORT_KEYS;
+        for (word, handler) in [
+            (0, never as engine_core::extend::SiteFn),
+            (INSTALLED | FIXES, never),
+            (on, nothing),
+        ] {
+            let e = barter_click(word, handler);
+            assert_eq!(
+                calls_to(&e, QUANTITY_MENU_CREATE),
+                vec![vec![4, 0x0072_f6f0, 0x7fff_ffff]]
+            );
+            assert!(calls_to(&e, 0x0072_f6f0).is_empty());
+        }
+        let e = barter_click(on, keyed);
+        assert_eq!(calls_to(&e, 0x0072_f6f0), vec![vec![2]]);
+        assert!(calls_to(&e, QUANTITY_MENU_CREATE).is_empty());
+        assert!(calls_to(&e, SETTING_VALUE_ADDRESS).is_empty());
+    }
+
+    /// G82 on an unselected tile whose stack has a transaction entry (REVIEW-683): 5 held with 2
+    /// in the buy list shows 3, and the seam is asked with that 3 (JIP's bytes at `0x72F337`
+    /// load the shown count, not the stack's).
+    #[test]
+    fn jip_g82_is_asked_with_the_count_shown() {
+        let mut e = engine();
+        let this = menu(&mut e);
+        let it = item(&mut e, 0, 5, 0x8000);
+        let traded = item(&mut e, 0, 2, 0x8000);
+        e.mem.set_u32(this.addr() + ITEMS_TO_BUY, traded);
+        e.register(ITEM_GET_VALUE, |_, _| st0(0.5));
+        e.register(FLOAT_PAIR_0040EBD0, |_, a| {
+            st0(f64::from(f32::from_bits(a[0])))
+        });
+        e.register(FLOAT_PAIR_004BD510, |_, a| {
+            st0(f64::from(f32::from_bits(a[0])))
+        });
+        answer(&mut e, ITEM_FULL_NAME, 0x7500);
+        answer(&mut e, TEXT_TO_TRAIT, 0x33);
+        e.set_global(VALUE_TRAIT, 0x34u32);
+        e.set_jip_patches(INSTALLED | FIXES);
+        e.on_site_for_test(0x0072_f33d, g82_name);
+        asked();
+        e.call_log = Some(vec![]);
+        e.call(0x0072_f210, &args![0x6100u32, it]);
+        assert_eq!(calls_to(&e, TILE_SET_INT), vec![vec![0x6100, 0x33, 2]]);
+        assert_eq!(asked(), [(0x0072_f33d, vec![0x6100, it, 3])]);
     }
 }

@@ -116,28 +116,34 @@ pub enum Owner {
     Nvse,
     /// JIP LN NVSE built in (`crates/jip`); it runs after xNVSE, as JIP is xNVSE's plugin.
     Jip,
+    /// lStewieAl's Tweaks built in (`crates/stewie`): xNVSE loads its plugins by DLL name, so
+    /// `nvse_stewie_tweaks.dll` after `jip_nvse.dll` (and `MCM.dll`) and before `ui_organizer.dll`.
+    Stewie,
     /// UI Organizer built in (`crates/uio`): xNVSE loads its plugins by DLL name, so
     /// `ui_organizer.dll` after `jip_nvse.dll`.
     Uio,
 }
 
 impl Owner {
-    /// Its place in the order: rows, then `nvse`, then `jip`.
+    /// Its place in the order: rows, then `nvse`, then `jip`, `stewie` and `uio` (the plugins' DLL
+    /// names in order).
     const fn rank(self) -> u8 {
         match self {
             Owner::Row(_) => 0,
             Owner::Nvse => 1,
             Owner::Jip => 2,
-            Owner::Uio => 3,
+            Owner::Stewie => 3,
+            Owner::Uio => 4,
         }
     }
 
     const fn same(self, other: Owner) -> bool {
         match (self, other) {
             (Owner::Row(a), Owner::Row(b)) => same_str(a, b),
-            (Owner::Nvse, Owner::Nvse) | (Owner::Jip, Owner::Jip) | (Owner::Uio, Owner::Uio) => {
-                true
-            }
+            (Owner::Nvse, Owner::Nvse)
+            | (Owner::Jip, Owner::Jip)
+            | (Owner::Stewie, Owner::Stewie)
+            | (Owner::Uio, Owner::Uio) => true,
             _ => false,
         }
     }
@@ -404,6 +410,13 @@ pub const SITES: &[Entry] = &[
         owners: NVSE_JIP,
         step: "I-4, 3.9a",
     },
+    // ScriptCompiler::ScriptError 005aea90: the release of the formatted message (JIP's script
+    // runner reads it there while its files compile, `LogCompileError`).
+    Entry {
+        addr: 0x005a_eb66,
+        owners: JIP,
+        step: "3.10 runner",
+    },
     // ScriptCompiler::Compile 005aeb90: the start of a compile (in place of the call clearing
     // the compiled flag), the check of the referenced objects (passed while a lambda compiles),
     // and the epilogue every exit passes (the end of a compile).
@@ -421,6 +434,13 @@ pub const SITES: &[Entry] = &[
         addr: 0x005a_eda0,
         owners: NVSE,
         step: "I-14",
+    },
+    // ScriptCompiler::GetNextLine 005af3f0: xNVSE's line reader in its place (ParseNextLine,
+    // PatchGameCommandParser).
+    Entry {
+        addr: 0x005a_f3f0,
+        owners: NVSE,
+        step: "I-14 B14",
     },
     // ScriptCompiler::IsValidVariableName 005afeb0: the form lookup (none with xNVSE).
     Entry {
@@ -445,6 +465,13 @@ pub const SITES: &[Entry] = &[
         addr: 0x005b_19ba,
         owners: NVSE,
         step: "I-14",
+    },
+    // ScriptCompiler::StandardCompile 005b1ba0: each parameter's word read (0x5B1C65), where a
+    // `(` starts an inline expression (xNVSE's InlineExpressionHook, PatchGameCommandParser).
+    Entry {
+        addr: 0x005b_1c65,
+        owners: NVSE,
+        step: "I-14 B14",
     },
     // ScriptCompiler::StandardCompile 005b1ba0: the byte map's read for a value parameter (xNVSE
     // maps the double type to the integer and float case), and the end-of-line check (off while
@@ -793,6 +820,14 @@ pub const SITES: &[Entry] = &[
         owners: NVSE,
         step: "I-8",
     },
+    // TaskQueueInterface::TaskUnpackFunc 0087b990, tag 0x2B (its jump table's entry 0087CE34, the
+    // default in the exe): JIP LN NVSE's DoQueuedCmdCallHook (InitJIPHooks), its queued calls
+    // (`QueuedCmdCall`: FireWeaponEx).
+    Entry {
+        addr: 0x0087_ce34,
+        owners: JIP,
+        step: "3.5e",
+    },
     // Actor::QueueEquipObject 0088c650, after an aid item's EquipObject: JIP LN NVSE's EquipAidItem
     // (the item's use events).
     Entry {
@@ -1075,6 +1110,7 @@ const fn no_row_wraps(table: &[Entry]) {
 const _: () = no_row_wraps(WRAPS);
 
 mod patch_rows;
+pub mod stewie;
 
 /// The seams of JIP LN NVSE's game patches (step 3.9), one table per area of the game
 /// (`extend/patch_rows/`), beside [`SITES`]: each checked as [`SITES`] is, JIP's alone, and no
@@ -1364,6 +1400,42 @@ impl Default for ScriptTables {
     }
 }
 
+/// The pad sticks' dead zones as FalloutNV.exe's code reads them.
+///
+/// JIP LN NVSE's `SetDeadZoneLS` and `SetDeadZoneRS` (`functions_ln/ln_fn_gamepad.h` (JIP LN
+/// NVSE)) write a new number over 19 immediates each in the exe with `SafeWrite32`: the left
+/// stick's `0x1ea9` in `InterfaceManager::CheckMenuButton`, the companion wheel, the race menu's
+/// `DoGamepad`, the trait menu, VATS, `PlayerCharacter::Update` and the pad query `00a23e10`; the
+/// right stick's `0x21f1` in the race menu's `DoIdle`, the start menu's control remap, the trait
+/// menu, VATS, `PlayerCharacter::Update` and the player's look `009445b0` (the sites that compare
+/// below zero get the number negated, as JIP writes `-value` there). The port's translations of
+/// those functions read the two numbers here instead (as the script tables' immediates,
+/// [`ScriptTables`]): the code is unchanged and only the numbers move. Until a script sets them
+/// they are the exe's own, so with JIP not installed, or no `SetDeadZone*` call, every read gives
+/// the exe's immediate. One pair for the whole game: every real thread's engine shares it, and a
+/// reader takes each number with one load.
+#[derive(Debug)]
+pub struct PadDeadZones {
+    left: std::sync::atomic::AtomicI32,
+    right: std::sync::atomic::AtomicI32,
+}
+
+impl PadDeadZones {
+    /// The exe's left-stick dead zone (its immediates, e.g. `0x717B90`).
+    pub const EXE_LEFT: i32 = 0x1ea9;
+    /// The exe's right-stick dead zone (its immediates, e.g. `0x7AE57A`).
+    pub const EXE_RIGHT: i32 = 0x21f1;
+}
+
+impl Default for PadDeadZones {
+    fn default() -> PadDeadZones {
+        PadDeadZones {
+            left: std::sync::atomic::AtomicI32::new(PadDeadZones::EXE_LEFT),
+            right: std::sync::atomic::AtomicI32::new(PadDeadZones::EXE_RIGHT),
+        }
+    }
+}
+
 /// The extenders' state on an engine (fields of [`Engine`]).
 pub(crate) struct ExtendState {
     /// This engine's id (a shared slot's holder names it).
@@ -1384,6 +1456,12 @@ pub(crate) struct ExtendState {
     /// Which of JIP LN NVSE's game patches are on ([`jip_patches`], [`Engine::jip_patches`]), one word
     /// for the whole game, shared like [`ExtendState::controls_alt`].
     pub(crate) jip_patches: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    /// Which of lStewieAl's Tweaks' rows are on ([`stewie`], [`Engine::stewie`]): one bit a row,
+    /// one table for the whole game, shared like [`ExtendState::jip_patches`].
+    pub(crate) stewie: std::sync::Arc<stewie::Bits>,
+    /// This engine's console print passes over its loading-screen test for one line (lStewieAl's
+    /// Tweaks' S0031 warning, [`Engine::stewie_print_ungated`]); false but while it prints.
+    pub(crate) stewie_print_ungated: bool,
     /// JIP LN NVSE's hooks' user counts ([`Hook`]), one table every engine of a game shares.
     pub(crate) hooks: std::sync::Arc<HookUsers>,
     /// The caller marks set around the calls whose hooks read their return address
@@ -1391,6 +1469,8 @@ pub(crate) struct ExtendState {
     pub(crate) marks: std::sync::Arc<CallerMarks>,
     /// The caller words ([`Engine::mark_caller_word`]), shared like the marks.
     pub(crate) words: std::sync::Arc<CallerWords>,
+    /// The pad dead zones the game's code reads ([`PadDeadZones`]), shared like the marks.
+    pub(crate) pad_dead_zones: std::sync::Arc<PadDeadZones>,
     /// xNVSE's fixes of the game's own `set`/`if` expression code (`Hook_Script_Init`): the guest
     /// address of its token buffer (`s_ExpressionParserAltBuffer`, 0x500 bytes) once installed,
     /// 0 without it ([`Engine::expression_alt_buffer`]). Set before the threads start, copied to
@@ -1528,6 +1608,22 @@ impl Engine {
         self.extend.hooks.0[hook as usize].store(users, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Marks a built-in plugin's call of the game's `QueueUIMessage` (`007052f0`) on this game
+    /// thread, while JIP's fixes are in: JIP's G09 (`QueueUIMessageHook` at `0x70535C`) gives
+    /// the default message time to the game's own callers (return addresses up to `0x96A262`,
+    /// the game's last caller) and lets a plugin's call (an address in its DLL) keep its time;
+    /// the port's plugins call the function as the game's code does, so each marks its call
+    /// with this one line, and the seam reads [`Engine::caller_marked`] at
+    /// [`PLUGIN_UI_MESSAGE`]. Without the fixes: one load, nothing marked.
+    #[must_use]
+    #[inline]
+    pub fn mark_plugin_ui_message(&self) -> CallerMark {
+        if self.jip_patches() & jip_patches::FIXES == 0 {
+            return CallerMark(None);
+        }
+        self.mark_caller_now(PLUGIN_UI_MESSAGE)
+    }
+
     /// Marks the call made at `site` (a call whose callee's hook reads its return address) on this
     /// game thread, while `hook` has users; the mark goes when the guard is dropped, also when a
     /// guest exception unwinds through the call. With no user: one load, nothing marked. A
@@ -1650,6 +1746,10 @@ impl CallerMarks {
     }
 }
 
+/// The mark key of a built-in plugin's `QueueUIMessage` call ([`Engine::mark_plugin_ui_message`]):
+/// JIP's G09 site in it, `0x70535C`.
+pub const PLUGIN_UI_MESSAGE: u32 = 0x0070_535c;
+
 /// A caller mark's guard ([`Engine::mark_caller`]): drops the mark, if it is still there.
 #[derive(Debug)]
 pub struct CallerMark(Option<(std::sync::Arc<CallerMarks>, (u32, u32))>);
@@ -1688,9 +1788,12 @@ impl ExtendState {
             tables: ScriptTables::default(),
             controls_alt: Default::default(),
             jip_patches: Default::default(),
+            stewie: Default::default(),
+            stewie_print_ungated: false,
             hooks: Default::default(),
             marks: Default::default(),
             words: Default::default(),
+            pad_dead_zones: Default::default(),
             expression_alt_buffer: 0,
             uio: false,
         }
@@ -1718,9 +1821,12 @@ impl ExtendState {
             tables: self.tables,
             controls_alt: self.controls_alt.clone(),
             jip_patches: self.jip_patches.clone(),
+            stewie: self.stewie.clone(),
+            stewie_print_ungated: false,
             hooks: self.hooks.clone(),
             marks: self.marks.clone(),
             words: self.words.clone(),
+            pad_dead_zones: self.pad_dead_zones.clone(),
             expression_alt_buffer: self.expression_alt_buffer,
             uio: self.uio,
         }
@@ -2214,6 +2320,42 @@ impl Engine {
         self.extend
             .controls_alt
             .store(flags, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The left stick's dead zone the game's code compares with ([`PadDeadZones`]): the exe's
+    /// `0x1ea9` unless JIP LN NVSE's `SetDeadZoneLS` changed it. One load.
+    #[inline]
+    pub fn pad_dead_zone_left(&self) -> i32 {
+        self.extend
+            .pad_dead_zones
+            .left
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// The right stick's dead zone the game's code compares with ([`PadDeadZones`]): the exe's
+    /// `0x21f1` unless JIP LN NVSE's `SetDeadZoneRS` changed it. One load.
+    #[inline]
+    pub fn pad_dead_zone_right(&self) -> i32 {
+        self.extend
+            .pad_dead_zones
+            .right
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Sets [`Engine::pad_dead_zone_left`] (JIP LN NVSE's `SetDeadZoneLS`, for every thread).
+    pub fn set_pad_dead_zone_left(&self, value: i32) {
+        self.extend
+            .pad_dead_zones
+            .left
+            .store(value, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Sets [`Engine::pad_dead_zone_right`] (JIP LN NVSE's `SetDeadZoneRS`, for every thread).
+    pub fn set_pad_dead_zone_right(&self, value: i32) {
+        self.extend
+            .pad_dead_zones
+            .right
+            .store(value, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Which of JIP LN NVSE's game patches are on ([`jip_patches`]'s bits), 0 while JIP answers
@@ -2843,6 +2985,36 @@ mod tests {
         assert!(!e.caller_marked(0x0100), "gone with the unwinding");
     }
 
+    /// A plugin's `QueueUIMessage` mark (JIP's G09): none without JIP's fixes (the word 0 or
+    /// `INSTALLED` alone); with them, set at `0x70535C` until its guard drops, also on an
+    /// unwinding panic.
+    #[test]
+    fn plugin_ui_message_marks_only_with_the_fixes() {
+        let e = engine();
+        for word in [0, jip_patches::INSTALLED] {
+            e.set_jip_patches(word);
+            let guard = e.mark_plugin_ui_message();
+            assert!(!e.caller_marked(PLUGIN_UI_MESSAGE), "{word:#x}");
+            drop(guard);
+        }
+        e.set_jip_patches(jip_patches::INSTALLED | jip_patches::FIXES);
+        let guard = e.mark_plugin_ui_message();
+        assert_eq!(PLUGIN_UI_MESSAGE, 0x0070_535c);
+        assert!(e.caller_marked(PLUGIN_UI_MESSAGE));
+        drop(guard);
+        assert!(!e.caller_marked(PLUGIN_UI_MESSAGE), "gone with the guard");
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = e.mark_plugin_ui_message();
+            assert!(e.caller_marked(PLUGIN_UI_MESSAGE));
+            panic!("a guest exception");
+        }));
+        assert!(caught.is_err());
+        assert!(
+            !e.caller_marked(PLUGIN_UI_MESSAGE),
+            "gone with the unwinding"
+        );
+    }
+
     /// A caller word: none without a user; with one, the innermost guard's word, back to the
     /// outer one when it drops (also on an unwinding panic); per game thread.
     #[test]
@@ -2901,7 +3073,7 @@ mod tests {
         ] {
             assert!(find(SITES, Owner::Nvse, a).is_some(), "{a:08x}");
         }
-        assert_eq!(SITES.len(), 122);
+        assert_eq!(SITES.len(), 126);
         // UI Organizer's ten (UIOLoad's place, ResolveXMLFileHook's, the five hardcore zooms,
         // FinalPostParse, the operators' dispatch, the text scale), its alone.
         for a in [
@@ -2924,10 +3096,12 @@ mod tests {
             0x005a_ebb1,
             0x005a_ed78,
             0x005a_eda0,
+            0x005a_f3f0,
             0x005a_fedb,
             0x005b_0a3f,
             0x005b_0f68,
             0x005b_19ba,
+            0x005b_1c65,
             0x005b_2fa2,
             0x005b_3a8d,
         ] {
@@ -2956,6 +3130,7 @@ mod tests {
             0x0060_6540,
             0x0060_678f,
             0x0066_ee72,
+            0x0087_ce34,
             0x0088_c74e,
             0x0088_c87a,
             0x0089_1c86,
@@ -3157,6 +3332,41 @@ mod tests {
         e.set_script_tables(moved);
         assert_eq!(e.script_tables(), moved);
         assert_eq!(Engine::new().script_tables(), ScriptTables::EXE);
+    }
+
+    /// The pad dead zones are the exe's immediates (`0x1ea9` at `0x717B90` and kin, `0x21f1` at
+    /// `0x7AE57A` and kin) until set, each set alone, and one pair for every thread's engine (a
+    /// real thread's engine made before the set sees it).
+    #[test]
+    fn the_pad_dead_zones_are_the_exes_until_set_and_shared() {
+        let e = engine();
+        assert_eq!(e.pad_dead_zone_left(), 0x1ea9);
+        assert_eq!(e.pad_dead_zone_right(), 0x21f1);
+        assert_eq!(
+            (PadDeadZones::EXE_LEFT, PadDeadZones::EXE_RIGHT),
+            (7849, 8689)
+        );
+        let thread = e.extend.for_thread();
+        e.set_pad_dead_zone_left(3277);
+        assert_eq!(e.pad_dead_zone_left(), 3277);
+        assert_eq!(e.pad_dead_zone_right(), 0x21f1);
+        e.set_pad_dead_zone_right(29490);
+        assert_eq!(e.pad_dead_zone_left(), 3277);
+        assert_eq!(e.pad_dead_zone_right(), 29490);
+        let loads = |s: &ExtendState| {
+            let z = &s.pad_dead_zones;
+            (
+                z.left.load(std::sync::atomic::Ordering::Relaxed),
+                z.right.load(std::sync::atomic::Ordering::Relaxed),
+            )
+        };
+        assert_eq!(loads(&thread), (3277, 29490));
+        assert_eq!(loads(&e.extend.for_thread()), (3277, 29490));
+        let other = engine();
+        assert_eq!(
+            (other.pad_dead_zone_left(), other.pad_dead_zone_right()),
+            (0x1ea9, 0x21f1)
+        );
     }
 
     /// Two engines keep their own extension state; slots are keyed by type.

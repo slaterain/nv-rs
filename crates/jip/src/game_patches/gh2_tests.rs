@@ -806,3 +806,827 @@ fn a_publish_during_a_destroy_keeps_the_new_value_in_the_copy() {
         "the copy holds what the maps hold"
     );
 }
+
+// ---- GH2 part 3: G31, G78, G81, G90, G106 (fix rows) ----------------------------------------
+
+/// JIP installed with the fix row on (no `jip_nvse.ini`; the 3.9a fix's wrapped `GetOwnerTopic`
+/// stood in), over the stand-in area.
+fn row_on() -> Engine {
+    let mut e = world(0x15, 0x0100_0001);
+    e.register(0x00fd_f088, |_, _| Ret {
+        eax: 0xffff_ffff,
+        ..Ret::default()
+    });
+    e.register(0x0061_a310, |_, _| Ret::default());
+    super::super::set_row(&mut e, true);
+    e
+}
+
+const PART_3_SITES: [SiteSlot; 6] = [
+    DOOR_ANSWER_STANDS,
+    SET_SCALE,
+    CLEAR_WEAPON_NODE[0],
+    CLEAR_WEAPON_NODE[1],
+    CLOUDS_FIX,
+    UPDATE_WATER_TEXTURES,
+];
+
+/// The five rows' six seams: no handler while JIP is not installed or the fix row is off; the
+/// row on puts all six in.
+#[test]
+fn part_3_seams_only_with_the_row() {
+    let mut e = engine();
+    crate::install_as(&mut e, false);
+    for site in PART_3_SITES {
+        assert!(!e.site_owners(site.addr()).contains(&Owner::Jip));
+    }
+    let mut e = world(0x15, 0x0100_0001);
+    super::super::set_row(&mut e, false);
+    for site in PART_3_SITES {
+        assert_eq!(e.site(site.addr(), &[REF, 0]), None, "{:#x}", site.addr());
+    }
+    let mut e = row_on();
+    assert_eq!(e.site(DOOR_ANSWER_STANDS.addr(), &[REF, 0]), Some(1));
+    assert_eq!(
+        e.site(SET_SCALE.addr(), &[2.0f32.to_bits()]),
+        Some(2.0f32.to_bits())
+    );
+    for site in PART_3_SITES {
+        assert!(
+            e.site_owners(site.addr()).contains(&Owner::Jip),
+            "{:#x}",
+            site.addr()
+        );
+    }
+}
+
+/// G31: the door's answer stands whatever it is (JIP's jump is unconditional).
+#[test]
+fn g31_the_door_answer_always_stands() {
+    let mut e = engine();
+    for door in [0, 1] {
+        assert_eq!(door_answer_stands(&mut e, &[REF, door]), Some(1));
+    }
+}
+
+/// G78 `SetScaleHook`: `maxss` with `0x38D1B717` then `minss` with 100: the bounds kept, the
+/// values between untouched (no rounding to two decimals), a NaN the lower bound, infinities
+/// clamped, zero and negatives the lower bound.
+#[test]
+fn g78_the_scale_is_clamped_not_rounded() {
+    let mut e = engine();
+    let clamp =
+        |e: &mut Engine, v: f32| f32::from_bits(set_scale_clamp(e, &[v.to_bits()]).unwrap());
+    let min = f32::from_bits(0x38d1_b717);
+    assert!((min - 0.0001).abs() < 1e-9);
+    assert_eq!(clamp(&mut e, 1.2345), 1.2345);
+    assert_eq!(clamp(&mut e, 0.005), 0.005, "below the exe's 0.01");
+    assert_eq!(clamp(&mut e, 50.0), 50.0, "above the exe's 10");
+    assert_eq!(clamp(&mut e, 100.0), 100.0);
+    assert_eq!(clamp(&mut e, 100.5), 100.0);
+    assert_eq!(clamp(&mut e, f32::INFINITY), 100.0);
+    assert_eq!(clamp(&mut e, min), min);
+    assert_eq!(clamp(&mut e, 0.0), min);
+    assert_eq!(clamp(&mut e, -0.0), min);
+    assert_eq!(clamp(&mut e, -3.0), min);
+    assert_eq!(clamp(&mut e, f32::NEG_INFINITY), min);
+    assert_eq!(
+        clamp(&mut e, f32::NAN),
+        min,
+        "maxss gives its second operand"
+    );
+}
+
+const NODE: u32 = AREA_AT + 0x900;
+const NODE_VTABLE: u32 = AREA_AT + 0xa00;
+const CHILDREN_AT: u32 = AREA_AT + 0xc00;
+const DETACH: u32 = 0x00fe_0e80;
+
+/// A node (vtable with the detach slot `+0xE8` recorded) whose children array holds `children`
+/// (set or an empty slot, and the flag byte `+0x33`) and whose count word says `count`; the
+/// children at `AREA_AT + 0xd00 + i * 0x40`.
+fn node_world(children: &[(bool, u8)], count: u16) -> (Engine, Vec<u32>) {
+    let mut e = engine();
+    e.map(AREA_AT, 0x1000);
+    e.mem.set_u32(NODE, NODE_VTABLE);
+    e.mem.set_u32(NODE_VTABLE + 0xe8, DETACH);
+    e.register(DETACH, |_, _| Ret::default());
+    e.mem.set_u32(NODE + 0xa0, CHILDREN_AT);
+    e.mem.set_u16(NODE + 0xa6, count);
+    let mut all = Vec::new();
+    for (i, &(set, flags)) in children.iter().enumerate() {
+        let child = AREA_AT + 0xd00 + i as u32 * 0x40;
+        if set {
+            e.mem.set_u8(child + 0x33, flags);
+            e.mem.set_u32(CHILDREN_AT + i as u32 * 4, child);
+        }
+        all.push(child);
+    }
+    e.call_log = Some(vec![]);
+    (e, all)
+}
+
+fn detached(e: &Engine) -> Vec<Vec<u32>> {
+    e.call_log
+        .as_ref()
+        .unwrap()
+        .iter()
+        .filter(|c| c.0 == DETACH)
+        .map(|c| c.1.clone())
+        .collect()
+}
+
+/// G81 `ClearWeaponNodeHook`: from the last child to the first, each one set and without bit
+/// 0x80 of its byte `+0x33` is detached through the node's virtual `+0xE8`; empty slots and kept
+/// children are passed over; only the count word's number of slots is read.
+#[test]
+fn g81_the_weapon_nodes_children_are_detached_last_first() {
+    let (mut e, c) = node_world(
+        &[(true, 0), (false, 0), (true, 0x80), (true, 0x7f), (true, 0)],
+        4,
+    );
+    assert_eq!(clear_weapon_node(&mut e, &[NODE]), Some(0));
+    assert_eq!(detached(&e), vec![vec![NODE, c[3]], vec![NODE, c[0]]]);
+    let (mut e, _) = node_world(&[], 0);
+    assert_eq!(clear_weapon_node(&mut e, &[NODE]), Some(0));
+    assert!(detached(&e).is_empty(), "no children");
+}
+
+/// G90 `CloudsFixHook`: the interior cell (`TES+0x34`) cleared at once; the sky (`TES+0x68`)
+/// loses its transition weather (`+0x14`) at the next main loop, once, then the callback goes.
+#[test]
+fn g90_the_weather_transition_ends_at_the_next_main_loop() {
+    let mut e = row_on();
+    let (tes, sky) = (AREA_AT + 0x900, AREA_AT + 0xa00);
+    e.mem.set_u32(tes + 0x34, 0x1234);
+    e.mem.set_u32(tes + 0x68, sky);
+    e.mem.set_u32(sky + 0x14, 0x5678);
+    e.mem.set_u32(sky + 0x10, 0x9abc);
+    assert_eq!(e.site(CLOUDS_FIX.addr(), &[tes]), Some(0));
+    assert_eq!(e.mem.u32(tes + 0x34), 0);
+    assert_eq!(e.mem.u32(sky + 0x14), 0x5678, "not yet");
+    assert_eq!(
+        e.ext::<crate::Jip>().main_loop.callbacks.len(),
+        1,
+        "one callback"
+    );
+    nvse::plugins::dispatch(&mut e, nvse::plugins::msg::MAIN_GAME_LOOP, 0, 0);
+    assert_eq!(e.mem.u32(sky + 0x14), 0, "the transition weather cleared");
+    assert_eq!(e.mem.u32(sky + 0x10), 0x9abc, "the current weather kept");
+    assert!(e.ext::<crate::Jip>().main_loop.callbacks.is_empty(), "once");
+    e.mem.set_u32(sky + 0x14, 0x5678);
+    nvse::plugins::dispatch(&mut e, nvse::plugins::msg::MAIN_GAME_LOOP, 0, 0);
+    assert_eq!(e.mem.u32(sky + 0x14), 0x5678, "not again");
+}
+
+/// JIP's own functions in the main-loop list: a call after `call_delay` frames, `call_count`
+/// times, then gone; a null sky is left alone.
+#[test]
+fn native_main_loop_callbacks_count_their_calls() {
+    let mut e = row_on();
+    let sky = AREA_AT + 0xa00;
+    crate::main_loop::add_native(&mut e, crate::main_loop::Native::EndWeatherTransition, 0);
+    crate::main_loop::add_native(&mut e, crate::main_loop::Native::EndWeatherTransition, sky);
+    {
+        let list = &mut e.ext::<crate::Jip>().main_loop.callbacks;
+        list[1].call_count = 2;
+        list[1].call_delay = 2;
+        list[1].cycle_count = 2;
+    }
+    let cycle = |e: &mut Engine| {
+        e.mem.set_u32(sky + 0x14, 7);
+        crate::main_loop::cycle(e);
+        e.mem.u32(sky + 0x14) == 0
+    };
+    assert!(!cycle(&mut e), "frame 1 of 2");
+    assert_eq!(
+        e.ext::<crate::Jip>().main_loop.callbacks.len(),
+        1,
+        "the null sky's went after its call"
+    );
+    assert!(cycle(&mut e), "frame 2: called");
+    assert!(!cycle(&mut e));
+    assert!(cycle(&mut e), "second call");
+    assert!(e.ext::<crate::Jip>().main_loop.callbacks.is_empty());
+}
+
+const WATER_MAP: u32 = AREA_AT + 0x900;
+const WATER_BUCKETS: u32 = AREA_AT + 0xa00;
+
+/// A map of 3 buckets holding `entries` (key, value), each put at the head of its chain.
+fn water_world(entries: &[(u32, u32)]) -> Engine {
+    let mut e = engine();
+    e.map(AREA_AT, 0x1000);
+    e.map(0x011f_9000, 0x1000);
+    e.mem.set_u32(WATER_MAP + 4, 3);
+    e.mem.set_u32(WATER_MAP + 8, WATER_BUCKETS);
+    for (i, &(key, value)) in entries.iter().enumerate() {
+        let entry = AREA_AT + 0xb00 + i as u32 * 0x10;
+        let bucket = WATER_BUCKETS + (key % 3) * 4;
+        e.mem.set_u32(entry, e.mem.u32(bucket));
+        e.mem.set_u32(entry + 4, key);
+        e.mem.set_u32(entry + 8, value);
+        e.mem.set_u32(bucket, entry);
+    }
+    e
+}
+
+/// G106 `UpdateWaterTexturesHook`: the renderer's byte `0x11F91C5` when set; else the map's
+/// value for the form (a chain followed), 0 when it has none or the map has no buckets.
+#[test]
+fn g106_the_byte_then_the_maps_value() {
+    let mut e = water_world(&[(0x10, 1), (0x13, 0x200), (0x11, 5)]);
+    let ask = |e: &mut Engine, key: u32| update_water_textures(e, &[WATER_MAP, key]).unwrap();
+    assert_eq!(ask(&mut e, 0x10), 1, "second in its chain");
+    assert_eq!(ask(&mut e, 0x13), 0x200, "the whole value");
+    assert_eq!(ask(&mut e, 0x11), 5);
+    assert_eq!(ask(&mut e, 0x16), 0, "same bucket, not there");
+    assert_eq!(ask(&mut e, 0x12), 0, "empty bucket");
+    e.mem.set_u8(0x011f_91c5, 9);
+    assert_eq!(ask(&mut e, 0x12), 9, "the byte first");
+    assert_eq!(ask(&mut e, 0x13), 9);
+    e.mem.set_u8(0x011f_91c5, 0);
+    e.mem.set_u32(WATER_MAP + 4, 0);
+    assert_eq!(ask(&mut e, 0x13), 0, "no buckets");
+}
+
+// ---- GH2 part 4: G93 (fix row) and O17 (bNPCWeaponMods) --------------------------------------
+
+const P4: u32 = 0x0520_0000;
+const WEAPON: u32 = P4;
+const FIRST_PERSON: u32 = P4 + 0x800;
+const BIPED: u32 = P4 + 0xa00;
+const ACTOR: u32 = P4 + 0xe00;
+const ACTOR_BASE: u32 = P4 + 0x1100;
+const PROCESS: u32 = P4 + 0x1300;
+const INFO: u32 = P4 + 0x1400;
+const INFO_LIST_NODE: u32 = P4 + 0x1440;
+const INFO_EXTRA_LIST: u32 = P4 + 0x1480;
+const INFO_FLAGS_EXTRA: u32 = P4 + 0x14c0;
+const RENDER: u32 = P4 + 0x1500;
+const PLAYER_REF: u32 = P4 + 0x1600;
+const STUB_CLEAR_SLOT: u32 = 0x004a_aff0;
+const STUB_SET_WEAPON: u32 = 0x004a_b750;
+const STUB_LEVEL: u32 = 0x0047_ded0;
+const STUB_RNG: u32 = 0x00aa_5230;
+const STUB_UPDATE: u32 = 0x0088_db20;
+
+thread_local! {
+    static DRAWS: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The commands' engine with the extra stand-ins, a weapon (type 0x28, weapon type 2) whose
+/// modded models' paths are set for the flags in `paths` (the model's length word `+8`), an NPC
+/// (id 0x1234, base level 5) at the high process level whose weapon entry carries the mod flags
+/// `held` (0: no flags extra), a biped of that NPC, the game's draws stubbed with `draws` (taken
+/// in order) and the calls recorded.
+fn weapon_world(paths: &[u32], held: u32, draws: &[u32]) -> Engine {
+    let mut e = crate::commands::test_support::engine();
+    crate::commands::test_support::extra_stand_ins(&mut e);
+    e.map(P4, 0x2000);
+    e.mem.set_u8(WEAPON + 4, 0x28);
+    e.mem.set_u8(WEAPON + 0xf4, 2);
+    for &flags in paths {
+        e.mem.set_u16(WEAPON + MODEL_BY_MOD[flags as usize] + 8, 5);
+    }
+    e.mem.set_u32(ACTOR + 0xc, 0x1234);
+    e.mem.set_u32(ACTOR + 0x20, ACTOR_BASE);
+    e.mem.set_u32(ACTOR + 0x68, PROCESS);
+    e.mem.set_u32(PLAYER_REF + 0xc, 0x14);
+    e.mem.set_u32(PROCESS + 0x114, INFO);
+    e.mem.set_u32(INFO + 8, WEAPON);
+    e.mem.set_u32(INFO, INFO_LIST_NODE);
+    e.mem.set_u32(INFO_LIST_NODE, INFO_EXTRA_LIST);
+    if held != 0 {
+        crate::commands::test_support::put_extra(
+            &mut e,
+            INFO_EXTRA_LIST,
+            INFO_FLAGS_EXTRA,
+            0x8d,
+            held,
+        );
+    }
+    e.mem.set_u32(BIPED + 0x2b0, ACTOR);
+    for stub in [STUB_CLEAR_SLOT, STUB_SET_WEAPON, STUB_UPDATE] {
+        e.register(stub, |_, _| Ret::default());
+    }
+    e.register(STUB_LEVEL, |_, _| Ret {
+        eax: 5,
+        ..Ret::default()
+    });
+    DRAWS.with(|d| *d.borrow_mut() = draws.to_vec());
+    e.register(STUB_RNG, |_, _| Ret {
+        eax: DRAWS.with(|d| d.borrow_mut().remove(0)),
+        ..Ret::default()
+    });
+    e.call_log = Some(vec![]);
+    e
+}
+
+fn logged_calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+    e.call_log
+        .as_ref()
+        .unwrap()
+        .iter()
+        .filter(|c| c.0 == addr)
+        .map(|c| c.1.clone())
+        .collect()
+}
+
+/// G93 `GetWeaponModel`: the modded third-person model when its path is set (else the plain
+/// one, flags taken as 0); the first-person object's model for the player, and for a type 8
+/// weapon with a mod; a missing first-person object falls back to the third-person model; only the
+/// low three bits of the flags count; an actor of 0 is not the player.
+#[test]
+fn g93_the_weapon_model_by_mod_flags() {
+    let mut e = weapon_world(&[1, 5], 0, &[]);
+    assert_eq!(weapon_model(&mut e, WEAPON, 0, ACTOR), WEAPON + 0x3c);
+    assert_eq!(weapon_model(&mut e, WEAPON, 1, ACTOR), WEAPON + 0x270);
+    assert_eq!(weapon_model(&mut e, WEAPON, 5, ACTOR), WEAPON + 0x2f0);
+    assert_eq!(
+        weapon_model(&mut e, WEAPON, 9, ACTOR),
+        WEAPON + 0x270,
+        "low bits"
+    );
+    assert_eq!(
+        weapon_model(&mut e, WEAPON, 2, ACTOR),
+        WEAPON + 0x3c,
+        "no path: plain"
+    );
+    // The player: the first-person object of the (fallen back) flags.
+    assert_eq!(
+        weapon_model(&mut e, WEAPON, 2, PLAYER_REF),
+        WEAPON + 0x3c,
+        "none yet"
+    );
+    e.mem.set_u32(WEAPON + 0x250, FIRST_PERSON);
+    assert_eq!(
+        weapon_model(&mut e, WEAPON, 2, PLAYER_REF),
+        FIRST_PERSON + 0x30
+    );
+    assert_eq!(
+        weapon_model(&mut e, WEAPON, 0, 0),
+        WEAPON + 0x3c,
+        "no actor"
+    );
+    e.mem.set_u32(WEAPON + 0x254, FIRST_PERSON + 0x100);
+    assert_eq!(
+        weapon_model(&mut e, WEAPON, 1, PLAYER_REF),
+        FIRST_PERSON + 0x130
+    );
+    assert_eq!(weapon_model(&mut e, WEAPON, 1, ACTOR), WEAPON + 0x270);
+    // Type 8 with a mod: first person for anyone; without a mod: third person.
+    e.mem.set_u8(WEAPON + 0xf4, 8);
+    assert_eq!(weapon_model(&mut e, WEAPON, 1, ACTOR), FIRST_PERSON + 0x130);
+    assert_eq!(weapon_model(&mut e, WEAPON, 0, ACTOR), WEAPON + 0x3c);
+}
+
+/// G93 `SetWeaponSlotHook`: a weapon not already loaded clears slot 5, becomes the slot's form
+/// and gets [`weapon_model`]'s model for the biped's actor; a form that is not a weapon, none, or
+/// the same weapon already loaded changes nothing; with the fixes bit clear the call goes on to
+/// the exe's (nothing of JIP's done).
+#[test]
+fn g93_the_weapon_slot_takes_the_modded_model() {
+    let mut e = weapon_world(&[1], 0, &[]);
+    e.set_jip_patches(engine_core::extend::jip_patches::FIXES);
+    set_weapon_slot(&mut e, &[BIPED, WEAPON, 0x101]);
+    assert_eq!(
+        logged_calls(&e, STUB_CLEAR_SLOT),
+        vec![vec![BIPED, 5, 1, 0]]
+    );
+    assert_eq!(e.mem.u32(BIPED + 0x7c), WEAPON);
+    assert_eq!(
+        e.mem.u32(BIPED + 0x80),
+        WEAPON + 0x270,
+        "the low byte's flags"
+    );
+    // Loaded already (the clone set): nothing.
+    e.mem.set_u32(BIPED + 0x84, 1);
+    e.mem.set_u32(BIPED + 0x80, 0);
+    set_weapon_slot(&mut e, &[BIPED, WEAPON, 1]);
+    assert_eq!(e.mem.u32(BIPED + 0x80), 0);
+    assert_eq!(logged_calls(&e, STUB_CLEAR_SLOT).len(), 1);
+    // The same form with no clone: loaded again.
+    e.mem.set_u32(BIPED + 0x84, 0);
+    set_weapon_slot(&mut e, &[BIPED, WEAPON, 0]);
+    assert_eq!(e.mem.u32(BIPED + 0x80), WEAPON + 0x3c);
+    // Not a weapon, or none: nothing.
+    e.mem.set_u8(WEAPON + 4, 0x18);
+    set_weapon_slot(&mut e, &[BIPED, WEAPON, 0]);
+    set_weapon_slot(&mut e, &[BIPED, 0, 0]);
+    assert_eq!(logged_calls(&e, STUB_CLEAR_SLOT).len(), 2);
+}
+
+/// G93's flags: an NPC at the high or middle-high level gives its weapon entry's mod flags; a
+/// low process, no process, no entry or no flags give 0; `InitWornObject`'s answer is those
+/// (0 for no actor).
+#[test]
+fn g93_an_npcs_held_weapon_flags() {
+    let mut e = weapon_world(&[], 6, &[]);
+    assert_eq!(init_worn_weapon(&mut e, &[ACTOR, BIPED, WEAPON]), Some(6));
+    e.mem.set_u8(PROCESS + 0x28, 1);
+    assert_eq!(init_worn_weapon(&mut e, &[ACTOR, BIPED, WEAPON]), Some(6));
+    e.mem.set_u8(PROCESS + 0x28, 2);
+    assert_eq!(
+        init_worn_weapon(&mut e, &[ACTOR, BIPED, WEAPON]),
+        Some(0),
+        "low level"
+    );
+    e.mem.set_u8(PROCESS + 0x28, 0);
+    e.mem.set_u32(PROCESS + 0x114, 0);
+    assert_eq!(
+        init_worn_weapon(&mut e, &[ACTOR, BIPED, WEAPON]),
+        Some(0),
+        "no entry"
+    );
+    e.mem.set_u32(PROCESS + 0x114, INFO);
+    e.mem.set_u32(ACTOR + 0x68, 0);
+    assert_eq!(
+        init_worn_weapon(&mut e, &[ACTOR, BIPED, WEAPON]),
+        Some(0),
+        "no process"
+    );
+    assert_eq!(
+        init_worn_weapon(&mut e, &[0, BIPED, WEAPON]),
+        Some(0),
+        "no actor"
+    );
+    let mut e = weapon_world(&[], 0, &[]);
+    assert_eq!(
+        init_worn_weapon(&mut e, &[ACTOR, BIPED, WEAPON]),
+        Some(0),
+        "no flags"
+    );
+}
+
+/// G93 `PickWeaponModelHook`: the mod slots given (the player's) stand; else an NPC's held
+/// weapon's flags (not the player's); with a biped `SetWeapon` gets them and nothing is left to
+/// attach; without, the model part for those flags (none for no item).
+#[test]
+fn g93_the_equipped_model_is_picked_with_the_flags() {
+    let mut e = weapon_world(&[1, 2], 2, &[]);
+    assert_eq!(
+        pick_weapon_model(&mut e, &[ACTOR, ACTOR, WEAPON, BIPED, 0]),
+        Some(0)
+    );
+    assert_eq!(
+        logged_calls(&e, STUB_SET_WEAPON),
+        vec![vec![BIPED, WEAPON, 2]]
+    );
+    assert_eq!(
+        pick_weapon_model(&mut e, &[ACTOR, ACTOR, WEAPON, BIPED, 0x101]),
+        Some(0)
+    );
+    assert_eq!(
+        logged_calls(&e, STUB_SET_WEAPON)[1],
+        vec![BIPED, WEAPON, 1],
+        "slots stand"
+    );
+    assert_eq!(
+        pick_weapon_model(&mut e, &[ACTOR, ACTOR, WEAPON, 0, 0]),
+        Some(WEAPON + 0x290)
+    );
+    assert_eq!(
+        pick_weapon_model(&mut e, &[ACTOR, 0, WEAPON, 0, 0]),
+        Some(WEAPON + 0x3c),
+        "not an actor: no flags"
+    );
+    assert_eq!(
+        pick_weapon_model(&mut e, &[PLAYER_REF, PLAYER_REF, WEAPON, 0, 0]),
+        Some(WEAPON + 0x3c),
+        "the player: no held flags"
+    );
+    assert_eq!(
+        pick_weapon_model(&mut e, &[ACTOR, ACTOR, 0, 0, 0]),
+        Some(0),
+        "no item"
+    );
+    assert_eq!(logged_calls(&e, STUB_SET_WEAPON).len(), 2);
+}
+
+/// O17's world: the switch on with JIP's published numbers (2, 10, 60), the NPC loaded (a render
+/// state with a node), its weapon (two mod slots) entry with no flags yet.
+fn mods_world(draws: &[u32]) -> Engine {
+    let mut e = weapon_world(&[], 0, draws);
+    e.set_jip_patches(engine_core::extend::jip_patches::NPC_WEAPON_MODS);
+    set_weapon_mod_chance(&mut e, [2, 10, 60]);
+    e.mem.set_u32(ACTOR + 0x64, RENDER);
+    e.mem.set_u32(RENDER + 0x14, 0x7777);
+    e.mem.set_u32(WEAPON + 0x350, 0x11);
+    e.mem.set_u32(WEAPON + 0x358, 0x13);
+    e
+}
+
+fn dealt_flags(e: &mut Engine) -> Option<u32> {
+    let x = crate::commands::extra::get_by_type(e, INFO_EXTRA_LIST, 0x8d);
+    (x != 0).then(|| e.mem.u32(x + 0xc))
+}
+
+/// O17 `DoOnLoadActorHook`: the node answered; the NPC marked dealt; a draw under the chance
+/// (level 5 x 2 = 10) gives mods (here both slots: shuffle 0 = 1, 2, 4: slot 1 halves to 5, slot
+/// 2 absent, slot 4 kept with the draw 4 under 5), the flags extra added and the weapon updated;
+/// a second load deals nothing.
+#[test]
+fn o17_an_npc_is_dealt_weapon_mods_once() {
+    let mut e = mods_world(&[4, 0]);
+    assert_eq!(do_on_load_actor(&mut e, &[ACTOR]), Some(0x7777));
+    assert_eq!(e.mem.u8(ACTOR + 0x143) & 0x10, 0x10);
+    assert_eq!(dealt_flags(&mut e), Some(5));
+    assert_eq!(
+        logged_calls(&e, STUB_UPDATE),
+        vec![vec![ACTOR, WEAPON, 1, INFO_EXTRA_LIST, 0]]
+    );
+    assert_eq!(logged_calls(&e, STUB_LEVEL), vec![vec![ACTOR_BASE + 0x30]]);
+    DRAWS.with(|d| *d.borrow_mut() = vec![]);
+    assert_eq!(
+        do_on_load_actor(&mut e, &[ACTOR]),
+        Some(0x7777),
+        "dealt: no draw"
+    );
+}
+
+/// O17's draws: the chance held between min and max; a draw at or over it gives nothing (but the
+/// NPC is marked); the shuffle's halving and drops.
+#[test]
+fn o17_the_chance_and_the_shuffle() {
+    // Draw 10 = chance 10: nothing.
+    let mut e = mods_world(&[10]);
+    do_on_load_actor(&mut e, &[ACTOR]);
+    assert_eq!(dealt_flags(&mut e), None);
+    assert_eq!(e.mem.u8(ACTOR + 0x143) & 0x10, 0x10);
+    // Level 40 x 2 = 80 held to 60: draw 59 under; shuffle 4 (4, 1, 2): slot 4 halves to 30;
+    // slot 1 present, 30 <= 59: only the first kept (4).
+    let mut e = mods_world(&[59, 4]);
+    e.register(STUB_LEVEL, |_, _| Ret {
+        eax: 40,
+        ..Ret::default()
+    });
+    do_on_load_actor(&mut e, &[ACTOR]);
+    assert_eq!(dealt_flags(&mut e), Some(4));
+    // Level 1 x 2 = 2 held up to 10; draw 9; shuffle 1 (1, 4, 2): 1 halves to 5, 4 present and
+    // 5 <= 9: only the first (1).
+    let mut e = mods_world(&[9, 1]);
+    e.register(STUB_LEVEL, |_, _| Ret {
+        eax: 1,
+        ..Ret::default()
+    });
+    do_on_load_actor(&mut e, &[ACTOR]);
+    assert_eq!(dealt_flags(&mut e), Some(1));
+    // A negative level word (sign-extended) is a huge chance: held to 60. Draw 0, shuffle 5
+    // (4, 2, 1): 4 halves 60 to 30, 2 absent, 1 present and 30 > 0: kept: 5.
+    let mut e = mods_world(&[0, 5]);
+    e.register(STUB_LEVEL, |_, _| Ret {
+        eax: 0xffff,
+        ..Ret::default()
+    });
+    do_on_load_actor(&mut e, &[ACTOR]);
+    assert_eq!(dealt_flags(&mut e), Some(5));
+    // Only the level word counts (`cwde`): 0xABCD_0005 is level 5, chance 10; draw 30: nothing
+    // (the whole word would give 60, over 30).
+    let mut e = mods_world(&[30]);
+    e.register(STUB_LEVEL, |_, _| Ret {
+        eax: 0xabcd_0005,
+        ..Ret::default()
+    });
+    do_on_load_actor(&mut e, &[ACTOR]);
+    assert_eq!(dealt_flags(&mut e), None);
+    // Chance 10, draw 7, shuffle 0 (1, 2, 4): 1 halves to 5; 2 absent; 4 present with 5 <= 7:
+    // dropped: 1.
+    let mut e = mods_world(&[7, 0]);
+    do_on_load_actor(&mut e, &[ACTOR]);
+    assert_eq!(dealt_flags(&mut e), Some(1));
+}
+
+/// O17's conditions: no node (answer 0), a save loading, dead, a low process, already dealt,
+/// a teammate (marked, no draw), a weapon type over 9 or flags 0xA0, flags there already, no mod
+/// slots; and the switch off or a number 0: no answer.
+#[test]
+fn o17_who_is_dealt_mods() {
+    let mut e = mods_world(&[]);
+    e.mem.set_u32(RENDER + 0x14, 0);
+    assert_eq!(do_on_load_actor(&mut e, &[ACTOR]), Some(0));
+    assert_eq!(e.mem.u8(ACTOR + 0x143), 0);
+    let mut e = mods_world(&[]);
+    let save_load = e.mem.u32(0x011d_df38);
+    e.mem.set_u8(save_load + 0x244, 2);
+    assert_eq!(do_on_load_actor(&mut e, &[ACTOR]), Some(0x7777));
+    assert_eq!(e.mem.u8(ACTOR + 0x143), 0, "a save loading");
+    let mut e = mods_world(&[]);
+    e.mem.set_u32(ACTOR + 0x108, 2);
+    do_on_load_actor(&mut e, &[ACTOR]);
+    assert_eq!(e.mem.u8(ACTOR + 0x143), 0, "dead");
+    let mut e = mods_world(&[]);
+    e.mem.set_u8(PROCESS + 0x28, 2);
+    do_on_load_actor(&mut e, &[ACTOR]);
+    assert_eq!(e.mem.u8(ACTOR + 0x143), 0, "low process");
+    let mut e = mods_world(&[]);
+    e.mem.set_u8(ACTOR + 0x18d, 1);
+    do_on_load_actor(&mut e, &[ACTOR]);
+    assert_eq!(e.mem.u8(ACTOR + 0x143), 0x10, "a teammate is marked");
+    assert_eq!(dealt_flags(&mut e), None);
+    for (at, value) in [(0xf4u32, 10u8), (0x100, 0x20), (0x100, 0x80)] {
+        let mut e = mods_world(&[]);
+        e.mem.set_u8(WEAPON + at, value);
+        do_on_load_actor(&mut e, &[ACTOR]);
+        assert_eq!(dealt_flags(&mut e), None, "{at:#x} {value:#x}");
+        assert!(logged_calls(&e, STUB_LEVEL).is_empty());
+    }
+    let mut e = mods_world(&[]);
+    e.mem.set_u32(WEAPON + 0x350, 0);
+    e.mem.set_u32(WEAPON + 0x358, 0);
+    do_on_load_actor(&mut e, &[ACTOR]);
+    assert!(logged_calls(&e, STUB_LEVEL).is_empty(), "no mod slots");
+    let mut e = mods_world(&[]);
+    crate::commands::test_support::put_extra(&mut e, INFO_EXTRA_LIST, INFO_FLAGS_EXTRA, 0x8d, 0);
+    do_on_load_actor(&mut e, &[ACTOR]);
+    assert!(
+        logged_calls(&e, STUB_LEVEL).is_empty(),
+        "flags there already"
+    );
+    let mut e = mods_world(&[]);
+    e.mem.set_u32(INFO_LIST_NODE, 0);
+    do_on_load_actor(&mut e, &[ACTOR]);
+    assert!(logged_calls(&e, STUB_LEVEL).is_empty(), "no first list");
+    let mut e = mods_world(&[]);
+    e.set_jip_patches(engine_core::extend::jip_patches::FIXES);
+    assert_eq!(do_on_load_actor(&mut e, &[ACTOR]), None, "switch off");
+    let mut e = mods_world(&[]);
+    set_weapon_mod_chance(&mut e, [2, 0, 60]);
+    assert_eq!(do_on_load_actor(&mut e, &[ACTOR]), None, "a number 0");
+}
+
+/// O17's load pass world: [`mods_world`] with the player pointer at [`PLAYER_REF`] and the
+/// process manager's high-actor list holding a second actor already marked dealt
+/// ([`OTHER_ACTOR`], the same process and entry), then [`ACTOR`]; [`ACTOR`] dead and at the low
+/// level (the pass looks at neither).
+const OTHER_ACTOR: u32 = P4 + 0x1800;
+const HIGH_NODE: u32 = P4 + 0x1c00;
+const HIGH_ACTORS_AT: u32 = 0x011e_0f00;
+const THE_PLAYER_AT: u32 = 0x011d_ea3c;
+
+fn load_pass_world(draws: &[u32]) -> Engine {
+    let mut e = mods_world(draws);
+    e.map(0x011d_e000, 0x1000);
+    e.map(0x011e_0000, 0x1000);
+    e.mem.set_u32(THE_PLAYER_AT, PLAYER_REF);
+    // The player's teammate count (`+0xD68`, JIP's teammate perks step before O17's): none.
+    e.map((PLAYER_REF + 0xd68) & !0xfff, 0x1000);
+    e.mem.set_u32(OTHER_ACTOR + 0x68, PROCESS);
+    e.mem.set_u8(OTHER_ACTOR + 0x143, 0x90);
+    e.mem.set_u32(HIGH_ACTORS_AT, OTHER_ACTOR);
+    e.mem.set_u32(HIGH_ACTORS_AT + 4, HIGH_NODE);
+    e.mem.set_u32(HIGH_NODE, ACTOR);
+    e.mem.set_u32(ACTOR + 0x108, 2);
+    e.mem.set_u8(PROCESS + 0x28, 2);
+    // Another flag bit set on the player and the actor: the pass adds its mark, keeps the rest.
+    e.mem.set_u8(PLAYER_REF + 0x143, 0x80);
+    e.mem.set_u8(ACTOR + 0x143, 0x80);
+    e
+}
+
+/// O17 after a save loads (JIP's `DoLoadGameHousekeeping`, serialization.h 181-195), through
+/// the post-load message: the player marked; of the two high actors the one already marked is
+/// passed over, the other marked and dealt (dead and low level: JIP looks at neither); a failed
+/// load, a teammate (marked, no draw), no entry (marked) and the switch off (nothing marked). The
+/// player and the actor start with another flag bit (0x80): the mark is added, the bit kept.
+#[test]
+fn o17_a_loaded_save_deals_the_unmarked_high_actors() {
+    use nvse::plugins::{msg, Message};
+    let post_load = |e: &mut Engine, data: u32| {
+        crate::cosave::listen(
+            e,
+            &Message {
+                kind: msg::POST_LOAD_GAME,
+                data,
+                len: 0,
+            },
+        );
+    };
+    let mut e = load_pass_world(&[4, 0]);
+    post_load(&mut e, 0);
+    assert_eq!(e.mem.u8(ACTOR + 0x143), 0x80, "a failed load: nothing");
+    assert_eq!(e.mem.u8(PLAYER_REF + 0x143), 0x80);
+    post_load(&mut e, 1);
+    assert_eq!(
+        e.mem.u8(PLAYER_REF + 0x143),
+        0x90,
+        "the player marked, its other bit kept"
+    );
+    assert_eq!(e.mem.u8(ACTOR + 0x143), 0x90);
+    assert_eq!(e.mem.u8(OTHER_ACTOR + 0x143), 0x90);
+    assert_eq!(dealt_flags(&mut e), Some(5));
+    assert_eq!(
+        logged_calls(&e, STUB_UPDATE),
+        vec![vec![ACTOR, WEAPON, 1, INFO_EXTRA_LIST, 0]],
+        "only the unmarked actor is dealt"
+    );
+    // A second load: both marked, nothing drawn.
+    post_load(&mut e, 1);
+    assert_eq!(logged_calls(&e, STUB_LEVEL).len(), 1);
+    // A teammate: marked, not dealt.
+    let mut e = load_pass_world(&[]);
+    e.mem.set_u8(ACTOR + 0x18d, 1);
+    post_load(&mut e, 1);
+    assert_eq!(e.mem.u8(ACTOR + 0x143), 0x90, "a teammate is marked");
+    assert!(logged_calls(&e, STUB_LEVEL).is_empty());
+    // An entry with no extra lists: marked, not dealt.
+    let mut e = load_pass_world(&[]);
+    e.mem.set_u32(INFO, 0);
+    post_load(&mut e, 1);
+    assert_eq!(e.mem.u8(ACTOR + 0x143), 0x90, "no lists: marked");
+    assert!(logged_calls(&e, STUB_LEVEL).is_empty());
+    // No weapon entry: marked, not dealt.
+    let mut e = load_pass_world(&[]);
+    e.mem.set_u32(PROCESS + 0x114, 0);
+    post_load(&mut e, 1);
+    assert_eq!(e.mem.u8(ACTOR + 0x143), 0x90, "no entry: marked");
+    assert!(logged_calls(&e, STUB_LEVEL).is_empty());
+    // The switch off, or a number 0: nothing at all.
+    for numbers in [None, Some([2, 10, 0])] {
+        let mut e = load_pass_world(&[4, 0]);
+        match numbers {
+            None => e.set_jip_patches(engine_core::extend::jip_patches::FIXES),
+            Some(n) => set_weapon_mod_chance(&mut e, n),
+        }
+        post_load(&mut e, 1);
+        assert_eq!(e.mem.u8(PLAYER_REF + 0x143), 0x80, "{numbers:?}");
+        assert_eq!(e.mem.u8(ACTOR + 0x143), 0x80, "{numbers:?}");
+        assert!(logged_calls(&e, STUB_LEVEL).is_empty());
+    }
+}
+
+/// The fixes going in copy the player's three O17 numbers into the lock-free slot the handlers
+/// read (not JIP's shared slot).
+#[test]
+fn o17_numbers_go_into_the_lock_free_slot_at_install() {
+    let mut e = mods_world(&[]);
+    set_weapon_mod_chance(&mut e, [0, 0, 0]);
+    e.ext::<crate::Jip>()
+        .game_patches
+        .settings
+        .weapon_mod_chance = [3, 11, 70];
+    install_fixes(&mut e);
+    assert_eq!(weapon_mod_chance(&mut e), [3, 11, 70]);
+}
+
+/// O17 `ResetActorFlagsRespawnHook`: the dealt mark cleared (other bits kept), the actor's extra
+/// list answered; the switch off: no answer.
+#[test]
+fn o17_a_respawn_clears_the_mark() {
+    let mut e = mods_world(&[]);
+    e.mem.set_u8(ACTOR + 0x143, 0x13);
+    assert_eq!(
+        reset_actor_flags_respawn(&mut e, &[ACTOR]),
+        Some(ACTOR + 0x44)
+    );
+    assert_eq!(e.mem.u8(ACTOR + 0x143), 3);
+    e.set_jip_patches(0);
+    assert_eq!(reset_actor_flags_respawn(&mut e, &[ACTOR]), None);
+}
+
+/// O18's part of `DoOnLoadActorHook` (`uNPCPerks`): with the NPC perks patch on and O17 off, an
+/// actor with perks gets its lists made and the node is answered, no weapon mods dealt; a dead
+/// one is passed over; with both off no answer.
+#[test]
+fn o18_a_loaded_npc_gets_its_perks_on() {
+    let mut e = mods_world(&[]);
+    e.set_jip_patches(0);
+    assert_eq!(do_on_load_actor(&mut e, &[ACTOR]), None);
+    let block = e.mem.alloc(0xc0);
+    thread_local! { static O18_BLOCK: std::cell::Cell<u32> = const { std::cell::Cell::new(0) }; }
+    O18_BLOCK.with(|b| b.set(block));
+    e.register(0x00aa_3e40, |_, _| Ret {
+        eax: O18_BLOCK.with(std::cell::Cell::get),
+        ..Ret::default()
+    });
+    crate::cosave::set_npc_perks_patch(&mut e, true);
+    let id = e.mem.u32(ACTOR + 0xc);
+    crate::cosave::npc_perks(&mut e).emplace(id);
+    e.mem.set_u32(ACTOR + 0x108, 1);
+    assert_eq!(do_on_load_actor(&mut e, &[ACTOR]), Some(0x7777));
+    let made = |e: &mut Engine| crate::cosave::npc_perks(e).get(&id).unwrap().entry_points;
+    assert_eq!(made(&mut e), 0, "dead");
+    e.mem.set_u32(ACTOR + 0x108, 0);
+    assert_eq!(do_on_load_actor(&mut e, &[ACTOR]), Some(0x7777));
+    assert_eq!(made(&mut e), block);
+    assert_eq!(e.mem.u8(ACTOR + 0x143) & 0x10, 0, "O17 off: not dealt");
+}
+
+/// H15 with its command: the first-person slot test answers JIP's mask, 0x7C at the start (slots
+/// 2 to 6, the game's own test); `ToggleBipedSlotVisibility 10 1` shows slot 10,
+/// `ToggleBipedSlotVisibility 3 0` hides slot 3.
+#[test]
+fn h15_toggle_biped_slot_visibility_changes_the_slots_loaded() {
+    use crate::commands::test_support::{call, engine, n};
+    let mut e = engine();
+    let shown = |e: &mut Engine| -> Vec<u32> {
+        (0..20)
+            .filter(|&slot| e.site(BIPED_SLOT_VISIBLE.addr(), &[slot]) == Some(1))
+            .collect()
+    };
+    assert_eq!(shown(&mut e), [2, 3, 4, 5, 6], "the game's slots");
+    call(&mut e, 0x28c4, &[n(10), n(1)]);
+    assert_eq!(shown(&mut e), [2, 3, 4, 5, 6, 10]);
+    call(&mut e, 0x28c4, &[n(3), n(0)]);
+    assert_eq!(shown(&mut e), [2, 4, 5, 6, 10]);
+}

@@ -1,0 +1,151 @@
+nv-rs Linux preview
+===================
+
+PLEASE READ FIRST
+- Nobody on the project has played this build on Linux: the maintainers have only Windows PCs.
+  BUILD.txt in this folder says where this package was built, from which version of the source,
+  and what was checked. A package the project publishes is built by its package workflow on
+  GitHub's own Linux machines (GitHub Actions), which also runs play.sh's own tests with that
+  very program; the maintainer then checks it on Windows against the game's own FalloutNV.exe
+  (no data of the game's program in nv-rs's), and publishes that check's date and result beside
+  the download (the file ending in .CHECKED.txt). On GitHub's Linux machines, play.sh's own tests run every night and on
+  every change to play.sh, and most of the program's unit tests on every change to the project's
+  main branch.
+- What works today: finding your game, remembering it, copying your saves from Steam's Proton
+  folder into nv-rs's own folder (only when you type yes), the check of your game's version
+  (./play.sh --check), and then the start of the game itself. The program is built and its unit
+  tests pass on Linux, but it has NEVER been started with the game's files on Linux: you may be
+  the first. Any stop, any missing picture or sound, is worth a report with the log.
+- Your nv-rs saves, settings and logs live in nv-rs's own folder:
+  ~/.local/share/nv-rs (or $XDG_DATA_HOME/nv-rs when that is set).
+- nv-rs never writes to the game's folder, to Steam's folders (Proton's folder for the game, with
+  your Proton saves, included), to Wine's folders or to your Documents; your saves there are
+  only read. One limit, said plainly: if another program of yours replaced nv-rs's own Saves
+  folder with a link into one of those folders at the very moment nv-rs writes a save (a moment
+  that can last as long as a sleeping disk takes to wake), that save could be written where the
+  link leads. Nothing nv-rs does makes such a link; don't make one yourself. And nv-rs cannot see
+  a bind mount (mount --bind, bindfs) of one of those folders onto nv-rs's own folder: the same
+  folder under a second name, which only an administrator makes. Never mount one of your own save
+  folders into nv-rs's folder: copy the saves instead (play.sh offers it).
+- To report a problem: https://github.com/slaterain/nv-rs/issues with the newest game-*.log from
+  the logs folder of nv-rs's own folder, and any report from its reports folder (F12 in the game
+  makes one). Details at the end.
+
+nv-rs runs Fallout: New Vegas from your own copy of the game, on the game's code translated to
+Rust. nv-rs is an independent project. It is not affiliated with, endorsed by or sponsored by
+Bethesda, ZeniMax, Obsidian or Microsoft. This package has no game files in it.
+
+
+What you need
+-------------
+- Your own Fallout: New Vegas, version 1.4.0.525 (the last update), installed for Windows. Steam
+  for Linux installs it through Proton: install the game in Steam as usual, nv-rs finds it there
+  (also Steam from Flathub or Snap). Copies installed with Heroic (GOG, Epic) or Lutris are found
+  where those programs say they put them. Any other copy: give nv-rs the game's folder (the one
+  holding Data).
+- A 64-bit x86 PC (x86_64) with a graphics driver that has Vulkan (Mesa's RADV for AMD, ANV for
+  Intel, or NVIDIA's own driver). Run `vulkaninfo --summary` (package vulkan-tools) to see whether
+  yours has it.
+- A Linux whose C library (glibc) is as new as the build machine's or newer: see BUILD.txt. Most
+  distributions from 2022 on are. The sound library ALSA (libasound.so.2: package libasound2 on
+  Debian and Ubuntu, alsa-lib on Fedora and Arch), which nearly every desktop Linux has. play.sh
+  names any system library the program needs that is missing.
+
+
+What this build can do today
+----------------------------
+The program goes on to start the game, drawing with Vulkan, with the same play settings as the
+Windows preview. It is built and unit-tested on Linux, but it has never been started with the
+game's files there, so expect stops nobody has seen yet: you may be the first to start it. Known to
+be missing on Linux today:
+- Warnings that pop up in a window on Windows (a save that could not be copied) are only in the
+  log.
+- A mod with its own loose shader files (HLSL) stops the game where it needs them compiled.
+Each of these, and any other stop, is worth a report with the log.
+
+./play.sh --check checks your game's FalloutNV.exe (that it is version 1.4.0.525, the one nv-rs
+needs) and the code page (NV_CODE_PAGE: 1252 for English, French, German, Italian and Spanish
+games, 1250 for Polish and Czech, 1251 for Russian), and says what it found.
+
+
+Start
+-----
+1. Extract the archive in a folder of your own in your home folder (not inside the game's folder
+   or Steam's): your file manager can, or in a terminal: tar -xzf followed by the archive's name
+   (the file you downloaded, ending in .tar.gz). That makes the package's folder, which holds
+   play.sh.
+2. In a terminal, in the folder you extracted (the one holding play.sh): ./play.sh
+   (as yourself: never with sudo)
+   If ./play.sh answers "Permission denied", start it as: sh play.sh
+   It then says what is wrong (for example a drive that does not allow programs to run:
+   extract the archive into your home folder instead).
+   New in this preview, not yet tried by the team on this system: ./nv-rs (or a double-click on
+   nv-rs) opens nv-rs's launcher, a window in the look of the game's own terminals. Its > Play
+   runs play.sh for you and shows what it says; type its answers at the launcher's prompt, or
+   drop a folder onto its window (Ctrl+V pastes at the prompt). Without a window it goes on in
+   the terminal, as ./play.sh.
+   On Wayland its window cannot hide while you play: once the game has run a few seconds it is
+   minimised. If the game stops at once, the launcher stays on screen with what went wrong; if it
+   stops later, the launcher asks for your attention in the taskbar (Wayland does not let it come
+   forward by itself): open it there to read what happened. When no window
+   can be made at all, it says why in the terminal it was started from, or, double-clicked,
+   in nv-rs's own folder's logs/launcher.log.
+
+The first start finds your game (or asks for its folder: type it, paste it, or drag the folder
+into the terminal) and remembers it. If you played the game through Steam's Proton, it offers to
+COPY your saves into nv-rs's own folder: type yes to copy them. They are only read, and stay where
+they are. A save and its .nvse file are copied together.
+
+  ./play.sh                  start
+  ./play.sh --game FOLDER    use the game in FOLDER, and remember it
+  ./play.sh --forget-game    forget the remembered game folder (it asks again)
+  ./play.sh --import-saves   offer again to copy your saves from Steam's Proton folder
+  ./play.sh --check          only check your game's version and say whether it can start
+  ./play.sh --mods           play with mods: the installed ones, then those you put in the "my
+                             mods" folder in nv-rs's own folder (as they would go in Data; it
+                             says where, and its READ ME says more), over a copy of the game
+                             folder made of links in nv-rs's own folder; your game folder is
+                             never changed, and saves made with mods stay apart
+                             (--mods --import-saves copies saves into them)
+  ./play.sh --install-mods   install a mod: put its .7z, .zip or .fomod in the "my mods" folder
+                             (--mods and --install-mods say where), then
+                             answer its installer's questions (type what each line says; Enter
+                             keeps the recommended choice); it goes to nv-rs's own folder, and
+                             --mods plays with it. Also lists and removes installed mods
+
+
+Your files
+----------
+Everything nv-rs keeps is in its own folder:
+
+  ~/.local/share/nv-rs (or $XDG_DATA_HOME/nv-rs when that is set)
+
+  game-folder.txt                         the game folder it remembers
+  game/Documents/My Games/FalloutNV/Saves your nv-rs saves (normal saves of the game)
+  logs                                    what the program said, the newest 10 starts
+  reports                                 problem reports (F12 in the game)
+
+Keep that folder a plain folder: if it (or a folder in it) is a link, nv-rs refuses to write
+there and says so. To remove nv-rs, delete the folder you extracted and that folder (your nv-rs
+saves go with it).
+
+
+What doesn't work yet
+---------------------
+- Everything in "What this build can do today".
+- What the Windows preview's READ ME lists (mods with plugins, controllers), and
+  anything Linux-only nobody has seen yet.
+- Only x86_64 builds: no ARM Linux build yet.
+
+
+Reporting a problem
+-------------------
+https://github.com/slaterain/nv-rs/issues
+
+Say that it is the Linux preview, your distribution and its version, your graphics card and
+driver, and how you installed the game (Steam, Flathub or Snap Steam, Heroic, Lutris, copied).
+Attach the newest game-*.log from the logs folder above, and the report folder from reports if
+you made one with F12. Logs can show your user name in folder paths: look through them first if
+that matters to you. Never attach game files.
+
+Licence terms and notices are in LICENSE, LEGAL.md, THIRD-PARTY-NOTICES.txt and the licenses folder.

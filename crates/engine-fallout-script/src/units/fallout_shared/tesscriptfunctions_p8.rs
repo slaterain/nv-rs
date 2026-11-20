@@ -15,6 +15,7 @@
 use super::tesscriptfunctions::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
+use engine_core::extend::stewie;
 
 // ---- Callees outside this part (by exe address) ----------------------------
 
@@ -2675,7 +2676,11 @@ pub fn script_set_actor_ref_essential(e: &mut Engine, a: ScriptArgs) -> bool {
     let Some([value]) = parse_params(e, a, [0]) else {
         return false;
     };
-    if e.vcall(a.this_obj.addr(), VSLOT_IS_ACTOR, &args![]).bool() {
+    // 005dfd6a: lStewieAl's Tweaks' row S0174 (`patchFixSetActorRefEssentialNullCheck`): a call
+    // with no reference takes the "invalid actor" branch, where the exe calls the null
+    // reference's slot.
+    let no_reference = e.stewie(stewie::SET_ACTOR_REF_ESSENTIAL_NULL_CHECK) && a.this_obj.is_null();
+    if !no_reference && e.vcall(a.this_obj.addr(), VSLOT_IS_ACTOR, &args![]).bool() {
         let actor = e
             .call(
                 DYNAMIC_CAST,
@@ -6413,7 +6418,20 @@ mod tests {
     /// The test shared by the two commands that parse a flag and hand it to
     /// an actor method after the cast: `(command, method, invalid message)`.
     fn check_actor_flag_command(command_address: u32, method: u32, message: u32) {
+        check_actor_flag_command_with_stewie(command_address, method, message, false);
+    }
+
+    /// [`check_actor_flag_command`] with lStewieAl's Tweaks' row S0174 on when `row_on`.
+    fn check_actor_flag_command_with_stewie(
+        command_address: u32,
+        method: u32,
+        message: u32,
+        row_on: bool,
+    ) {
         let mut e = engine();
+        if row_on {
+            e.set_stewie(stewie::SET_ACTOR_REF_ESSENTIAL_NULL_CHECK, true);
+        }
         let this_obj = object_with(&mut e, &[(0x100, V_IS_ACTOR)]);
         let a = command(&mut e, this_obj);
         e.register(V_IS_ACTOR, |_, _| true.into_ret());
@@ -6446,9 +6464,51 @@ mod tests {
         assert!(calls(&e, V_IS_ACTOR).is_empty());
     }
 
+    /// lStewieAl's Tweaks' row S0174: `SetActorRefEssential` called with no reference. The exe
+    /// calls the null reference's "is it an actor" slot and stops; with the row on it takes the
+    /// "invalid actor" branch (its console line only with the echo flag) and succeeds.
+    #[test]
+    fn s0174_set_actor_ref_essential_without_a_reference() {
+        for on in [false, true] {
+            let mut e = engine();
+            let a = command(&mut e, 0);
+            nothing(&mut e, ACTOR_SET_ESSENTIAL);
+            parse_gives(&mut e, true, &[1]);
+            set_echo(&mut e, true);
+            e.set_stewie(stewie::SET_ACTOR_REF_ESSENTIAL_NULL_CHECK, on);
+            start_log(&mut e);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.call(0x005d_fd30, &args![a]).bool()
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert!(run.unwrap());
+                assert!(calls(&e, ACTOR_SET_ESSENTIAL).is_empty());
+                assert_eq!(
+                    calls(&e, CONSOLE_PRINT),
+                    vec![vec![MSG_SET_ESSENTIAL_INVALID]]
+                );
+            }
+        }
+    }
+
     #[test]
     fn set_actor_ref_essential_sets_the_flag_of_the_cast_actor() {
         check_actor_flag_command(0x005d_fd30, ACTOR_SET_ESSENTIAL, MSG_SET_ESSENTIAL_INVALID);
+    }
+
+    /// lStewieAl's Tweaks' row S0174 with a reference (ordinary input): the row changes nothing,
+    /// the same calls and answers as with it off, for an actor, a reference that is not one and a
+    /// parameter that does not parse.
+    #[test]
+    fn s0174_row_on_with_a_reference_changes_nothing() {
+        check_actor_flag_command_with_stewie(
+            0x005d_fd30,
+            ACTOR_SET_ESSENTIAL,
+            MSG_SET_ESSENTIAL_INVALID,
+            true,
+        );
     }
 
     #[test]

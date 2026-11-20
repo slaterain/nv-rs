@@ -5,7 +5,9 @@
 //! allies, what it detects, its followers and dropped items, its active effects' modifiers and
 //! its perk modifiers, the turn calls, a name set on a base form or a cell, the character
 //! controller's fall time, velocity, air state and the body under its feet, and the backup
-//! package away from the player, and (lane C3) the radiation an actor takes. 56 built here
+//! package away from the player or a reference (`MoveAwayFrom`, with G42's distance) and the
+//! travel to a reference (`TravelToRef`), (lane C3) the radiation an actor takes, and the
+//! companion wheel's switch (`GetWheelDisabled`, `SetWheelDisabled`). 60 built here
 //! (`ToggleDetectionFix` with its patch).
 //!
 //! Built by the core track inside its hook files (not again here): `GetCombatDisabled`,
@@ -13,11 +15,10 @@
 //! `ForceActorDetectionValue` (`ai_hooks`), `ToggleIgnoreLockedDoors` (`world_hooks`), and the
 //! five `SetOn...EventHandler` commands (`actor_hooks`).
 //!
-//! Left for later, with what each waits for:
-//! - `GetWheelDisabled`/`SetWheelDisabled` (flag 0x80, read only by the companion-wheel patch,
-//!   row G54): the flag alone changes nothing in the game until that patch exists.
-//!   (`ToggleDetectionFix` is listed here; its handler is with its patch, G53, in
-//!   `game_patches::gc`.)
+//! (`ToggleDetectionFix` is listed here; its handler is with its patch, G53, in
+//! `game_patches::gc`.) `GetWheelDisabled`/`SetWheelDisabled` keep JIP's flag [`DISABLE_WHEEL`],
+//! which only the companion-wheel patch (row G54) reads: until that patch is in, the flag is
+//! kept and answered but changes nothing in the game.
 //!
 //! An actor base (`TESActorBase`): its base data at +0x30 (`ACBS`, saved by
 //! `TESActorBaseData::Save` `0047CAC0` as 0x18 bytes from +4: flags +0x34, level +0x3C (signed
@@ -102,6 +103,10 @@ pub static COMMANDS: Handlers = &[
     (0x27b4, get_actor_velocity),
     (0x27ba, get_object_under_feet),
     (0x2781, move_away_from_player),
+    (0x288e, move_away_from),
+    (0x2891, travel_to_ref),
+    (0x2728, get_wheel_disabled),
+    (0x2729, set_wheel_disabled),
 ];
 
 #[rustfmt::skip]
@@ -1726,10 +1731,14 @@ const REFR_CELL: u32 = 0x40;
 /// For an actor not in life state 3 or 5, with a high process (level 0) not running a package of
 /// type 0x1A: a new backup package (0x8C bytes) away from `target` (its point the target's
 /// position when there is no cell), procedure 0x30, `flags` added, the process told
-/// (+0x28) and the actor put on it (+0x2F4). JIP then sets `s_moveAwayDistance` back to 300,
-/// which only its move-away patch (row G42, not built) reads: the exe's own distance is that
-/// same 300, so nothing is owed here.
+/// (+0x28) and the actor put on it (+0x2F4). Then, in every case, JIP sets `s_moveAwayDistance`
+/// (G42's, which `MoveAwayFrom` set for this package) back to 300.
 fn add_back_up_package(e: &mut Engine, actor: u32, target: u32, cell: u32, flags: u32) {
+    make_back_up_package(e, actor, target, cell, flags);
+    crate::game_patches::gd::set_move_away_distance(e, 300.0);
+}
+
+fn make_back_up_package(e: &mut Engine, actor: u32, target: u32, cell: u32, flags: u32) {
     let life = e.mem.u32(actor + LIFE_STATE);
     if life == 3 || life == 5 {
         return;
@@ -1773,6 +1782,81 @@ fn move_away_from_player(e: &mut Engine, w: &[u32]) -> Ret {
     }
     let cell = e.mem.u32(a.this_obj + REFR_CELL);
     add_back_up_package(e, a.this_obj, player, cell, CONTINUE_DURING_COMBAT);
+    handled(true)
+}
+
+/// `kPackageFlag_AlwaysRun`, `_AlwaysSneak`, `_AllowSwimming`, `_AllowFalls`; a cell's worldspace
+/// (+0xC0) and flags (+0x24, bit 0 an interior: JIP's `IsInterior`).
+const ALWAYS_RUN: u32 = 1 << 13;
+const ALWAYS_SNEAK: u32 = 1 << 17;
+const ALLOW_SWIMMING: u32 = 1 << 18;
+const ALLOW_FALLS: u32 = 1 << 19;
+const CELL_WORLD: u32 = 0xc0;
+const CELL_FLAGS: u32 = 0x24;
+
+/// The run and sneak flags a `flags` argument asks for (bit 0 run, bit 1 sneak).
+fn run_sneak(flags: u32) -> u32 {
+    let mut mask = 0;
+    if flags & 1 != 0 {
+        mask |= ALWAYS_RUN;
+    }
+    if flags & 2 != 0 {
+        mask |= ALWAYS_SNEAK;
+    }
+    mask
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_MoveAwayFrom_Execute.
+/// `actor.MoveAwayFrom target distance [flags]`: the backup distance set (G42's, which the
+/// package reads while it is made) and a backup package away from `target` in the actor's own
+/// cell, "continue during combat" with run (bit 0) and sneak (bit 1). No result.
+fn move_away_from(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if !is_actor(e, a.this_obj) {
+        return handled(true);
+    }
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let target = read.form(0);
+    crate::game_patches::gd::set_move_away_distance(e, read.float(1, 0.0));
+    let flags = CONTINUE_DURING_COMBAT | run_sneak(read.int(2, 0));
+    let cell = e.mem.u32(a.this_obj + REFR_CELL);
+    add_back_up_package(e, a.this_obj, target, cell, flags);
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_TravelToRef_Execute.
+/// `actor.TravelToRef target [flags]`: when both have a cell and are in the same interior cell or
+/// the same worldspace, a backup package with no cell (its point the target's position): may
+/// swim and fall, continues during combat, run (bit 0) and sneak (bit 1). No result.
+fn travel_to_ref(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if !is_actor(e, a.this_obj) {
+        return handled(true);
+    }
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let target = read.form(0);
+    let actor_cell = e.mem.u32(a.this_obj + REFR_CELL);
+    let target_cell = e.mem.u32(target + REFR_CELL);
+    if actor_cell == 0 || target_cell == 0 {
+        return handled(true);
+    }
+    if e.mem.u8(actor_cell + CELL_FLAGS) & 1 != 0 {
+        if actor_cell != target_cell {
+            return handled(true);
+        }
+    } else if e.mem.u32(actor_cell + CELL_WORLD) != e.mem.u32(target_cell + CELL_WORLD) {
+        return handled(true);
+    }
+    let flags = ALLOW_SWIMMING | ALLOW_FALLS | CONTINUE_DURING_COMBAT | run_sneak(read.int(1, 0));
+    add_back_up_package(e, a.this_obj, target, 0, flags);
     handled(true)
 }
 
@@ -1929,9 +2013,62 @@ fn get_object_under_feet(e: &mut Engine, w: &[u32]) -> Ret {
     handled(true)
 }
 
+// ---- the companion wheel's switch ----
+
+/// `kHookActorFlag1_DisableWheel` (`internal/hooks.h`, `1 << 7`) in the actor's `jipActorFlags1`
+/// (+0x105): the bit the companion-wheel patch (G54: `patches_game.h` tests `[ecx+0x105]`) reads.
+pub const DISABLE_WHEEL: u8 = 0x80;
+
+/// An actor's `jipActorFlags1`.
+fn wheel_flags(e: &Engine, actor: u32) -> u8 {
+    e.get(
+        Ptr::<crate::game::JipActorFlags>::new(actor),
+        crate::game::JipActorFlags::jipActorFlags1,
+    )
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_GetWheelDisabled_Execute.
+/// 1 for an actor with [`DISABLE_WHEEL`] set; else no answer.
+fn get_wheel_disabled(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if is_actor(e, a.this_obj) && wheel_flags(e, a.this_obj) & DISABLE_WHEEL != 0 {
+        a.set_result(e, 1.0);
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_SetWheelDisabled_Execute.
+/// For an actor whose argument reads: [`DISABLE_WHEEL`] flipped when the asked state (any value
+/// but 0 disables) differs from the flag's. No result.
+fn set_wheel_disabled(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if !is_actor(e, a.this_obj) {
+        return handled(true);
+    }
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let flags = wheel_flags(e, a.this_obj);
+    if (read.int(0, 0) == 0) != (flags & DISABLE_WHEEL == 0) {
+        e.set(
+            Ptr::<crate::game::JipActorFlags>::new(a.this_obj),
+            crate::game::JipActorFlags::jipActorFlags1,
+            flags ^ DISABLE_WHEEL,
+        );
+    }
+    handled(true)
+}
+
 #[cfg(test)]
 #[path = "jip_fn_actor_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "jip_fn_actor_r1_tests.rs"]
+mod r1_tests;
 
 #[cfg(test)]
 #[path = "jip_fn_actor_c3_tests.rs"]

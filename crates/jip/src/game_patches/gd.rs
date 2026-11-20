@@ -57,8 +57,8 @@
 //! +0x188, kept where JIP keeps it; the constructor sets it from JIP's map of references
 //! ([`ExcludedCombatActions`]) for its attacker (`InitCombatControllerHook`, `0x97D71F`), and the
 //! combat planner treats an action whose bit is set as not applicable
-//! (`CombatActionApplicableHook`, `0x9951B3`). Only `SetExcludedCombatActions` (not built yet:
-//! [`set_excluded_combat_actions`] is its change) sets bits; until then every word is 0 and the
+//! (`CombatActionApplicableHook`, `0x9951B3`). Only `SetExcludedCombatActions` (through
+//! [`set_excluded_combat_actions`]) sets bits; until a script calls it every word is 0 and the
 //! planner's choices are the original's. Threads: the constructor and the planner run on the AI
 //! threads; they read the map under its read lock for one lookup and the controller's own word.
 
@@ -479,7 +479,7 @@ pub fn point3_distance(e: &Engine, first: u32, second: u32) -> f32 {
 }
 
 /// `rsqrtss`: the processor's own approximation on x86-64, so the result is JIP's on the same
-/// machine; elsewhere the exact reciprocal square root (a documented difference).
+/// machine; elsewhere the shared model of a PC's (engine-core `estimate`).
 fn rsqrtss(value: f32) -> f32 {
     #[cfg(target_arch = "x86_64")]
     {
@@ -489,7 +489,7 @@ fn rsqrtss(value: f32) -> f32 {
     }
     #[cfg(not(target_arch = "x86_64"))]
     {
-        1.0 / value.sqrt()
+        engine_core::estimate::rsqrt(value)
     }
 }
 
@@ -521,7 +521,7 @@ fn mine_explode_chance(e: &mut Engine, a: &[u32]) -> Option<u32> {
 
 /// JIP's `cvtss2si` under the default rounding: to nearest, ties to even; NaN or out of range
 /// gives `0x80000000`.
-fn cvtss2si(value: f32) -> i32 {
+pub(crate) fn cvtss2si(value: f32) -> i32 {
     // `round` takes halves away from zero; an odd result of a half goes back to the even one.
     let rounded = value.round();
     let even = if (rounded - value).abs() == 0.5 && rounded % 2.0 != 0.0 {
@@ -540,6 +540,20 @@ impl Default for MoveAwayDistance {
     fn default() -> Self {
         Self(AtomicU32::new(300.0f32.to_bits()))
     }
+}
+
+/// `s_moveAwayDistance = distance` (`MoveAwayFrom` before its backup package; the package's making
+/// sets it back to 300).
+pub fn set_move_away_distance(e: &mut Engine, distance: f32) {
+    e.ext_free::<MoveAwayDistance>()
+        .0
+        .store(distance.to_bits(), Ordering::Relaxed);
+}
+
+/// G42's distance now (for tests).
+#[cfg(test)]
+pub(crate) fn move_away_distance_now(e: &mut Engine) -> f32 {
+    f32::from_bits(e.ext_free::<MoveAwayDistance>().0.load(Ordering::Relaxed))
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
@@ -581,8 +595,8 @@ const ACTION_KIND: u32 = 0x24;
 const GET_COMBAT_CONTROLLER: u32 = 0x428;
 
 /// H16's `s_excludedCombatActionsMap` (JIP's `UnorderedMap<TESObjectREFR*, UInt32>`): each
-/// reference's excluded combat actions, set by `SetExcludedCombatActions` (not built yet: the
-/// command lane calls [`set_excluded_combat_actions`]) and read when a controller is made for it.
+/// reference's excluded combat actions, set by `SetExcludedCombatActions` (through
+/// [`set_excluded_combat_actions`]) and read when a controller is made for it.
 /// One for the run: a lock-free slot ([`Engine::ext_free`]) made at install; a reader holds the
 /// read lock for one lookup, the command the write lock for one change (never across a game
 /// call). Cleared before a load ([`pre_load`]), as JIP's housekeeping does; never otherwise.
@@ -704,9 +718,12 @@ pub fn weapon_ammo(e: &Engine, weapon: u32) -> u32 {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameForms.cpp: TESObjectWEAP::GetEquippedAmmo.
 /// The ammo `actor` has loaded in `weapon` (its middle or high process's ammo entry, when its
 /// weapon entry is this weapon and the entry's form is a `TESAmmo`), else [`weapon_ammo`]. JIP
-/// first answers 0 for its Rock-It Launcher (`g_rockItLauncher`, set only by
-/// `InitRockItLauncher`, not built: null in the port, so never this weapon).
-pub fn equipped_ammo(e: &Engine, weapon: u32, actor: u32) -> u32 {
+/// first answers 0 for its Rock-It Launcher (`g_rockItLauncher`, set by `InitRockItLauncher`:
+/// [`crate::commands::jip_fn_rock_it::launcher`]).
+pub fn equipped_ammo(e: &mut Engine, weapon: u32, actor: u32) -> u32 {
+    if weapon == crate::commands::jip_fn_rock_it::launcher(e) {
+        return 0;
+    }
     if actor != 0 {
         let process = e.mem.u32(actor.wrapping_add(BASE_PROCESS));
         if process != 0 && e.mem.u8(process.wrapping_add(PROCESS_LEVEL)) <= 1 {

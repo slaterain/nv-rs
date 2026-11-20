@@ -1,0 +1,10 @@
+[package]
+name = "fomod"
+version = "0.1.0"
+description = "Reads FOMOD mod installers (fomod/ModuleConfig.xml and info.xml, every schema version met) and turns the player's choices into the list of files to copy into Data: no archive reading, no window, no game data"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# No dependencies: the launcher (Play.exe, its own lock) can take this crate without new licences.
+[dependencies]

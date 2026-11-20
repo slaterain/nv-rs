@@ -192,6 +192,7 @@ impl Ahead {
         std::thread::Builder::new()
             .name("nv-vorbis-ahead".into())
             .spawn(move || {
+                qos::thread_started();
                 if let Some(hold) = hold {
                     let _ = hold.recv();
                 }

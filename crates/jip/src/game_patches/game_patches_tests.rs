@@ -608,3 +608,30 @@ fn the_row_adds_exactly_the_fix_lists() {
     crate::install_as(&mut first, true);
     assert_eq!(snapshot(&first), after, "the host's order");
 }
+
+/// The maintainer's rule for mods' settings files: a `jip_nvse.ini` in the port's own folder beside
+/// the saves (the mods' files seam) is read before the game's; with none there, the game's.
+#[test]
+fn the_ports_folder_copy_of_the_file_comes_first() {
+    use crate::commands::test_support::files;
+    files::fresh();
+    files::put(
+        "data\\nvse\\plugins\\jip_nvse.ini",
+        b"[GamePatches]\r\nbCreatureSpreadFix=1\r\n",
+    );
+    let mut e = base();
+    FILE.with(|f| *f.borrow_mut() = Some(PUBLISHED.to_vec()));
+    crate::install_as(&mut e, true);
+    set_row(&mut e, true);
+    assert_eq!(
+        e.jip_patches(),
+        jip_patches::INSTALLED | jip_patches::FIXES | jip_patches::CREATURE_SPREAD_FIX
+    );
+    // None in the port's folder: the game's.
+    files::fresh();
+    let mut e = base();
+    FILE.with(|f| *f.borrow_mut() = Some(PUBLISHED.to_vec()));
+    crate::install_as(&mut e, true);
+    set_row(&mut e, true);
+    assert_eq!(e.ext::<Jip>().game_patches.settings.on, defaults());
+}

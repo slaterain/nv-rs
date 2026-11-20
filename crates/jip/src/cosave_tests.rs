@@ -958,7 +958,10 @@ fn npc_perks() {
         &mut w.e,
         &cosave(&[chunk(kind::NPC_PERKS, 10, data.clone())]),
     );
-    assert!(s(&mut w.e).npc_perks.is_empty(), "no patch: not read");
+    assert!(
+        crate::cosave::npc_perks(&mut w.e).is_empty(),
+        "no patch: not read"
+    );
     assert_eq!(
         written(&mut w.e),
         [chunk(kind::NPC_PERKS, 10, data.clone())],
@@ -975,6 +978,80 @@ fn npc_perks() {
         .u8(2)
         .0;
     assert_eq!(written(&mut w.e), [chunk(kind::NPC_PERKS, 10, expect)]);
+}
+
+/// O18 at a save (`SaveGameCallback`'s walk): an entry stays for an alive actor with perks that is
+/// a teammate, or of a base without the respawn flag, or loaded; a dead one, a respawning one
+/// neither a teammate nor loaded, one with no perks, or an id that is no actor goes.
+#[test]
+fn npc_perks_kept_at_a_save() {
+    let mut w = World::new();
+    let perk = w.form(0x0600_0010, PERK, false);
+    let base = w.form(0x0600_0020, 0x2a, false);
+    let actor = w.form(0x0600_0001, 0x2a, true);
+    w.e.mem.set_u32(actor + 0x20, base);
+    let kept = |w: &mut World, ranks: bool| {
+        {
+            let mut map = crate::cosave::npc_perks(&mut w.e);
+            map.clear();
+            let entry = map.emplace(0x0600_0001);
+            if ranks {
+                entry.ranks.insert(perk, 1);
+            }
+            map.emplace(0x0600_0099).ranks.insert(perk, 1);
+        }
+        drop_unsaved_npc_perks(&mut w.e);
+        let map = crate::cosave::npc_perks(&mut w.e);
+        assert!(map.get(&0x0600_0099).is_none(), "not a form");
+        map.get(&0x0600_0001).is_some()
+    };
+    assert!(kept(&mut w, true), "no respawn flag");
+    assert!(!kept(&mut w, false), "no perks");
+    w.e.mem.set_u32(base + 0x34, 8);
+    assert!(!kept(&mut w, true), "respawns, not loaded");
+    w.e.mem.set_u8(actor + 0x18d, 1);
+    assert!(kept(&mut w, true), "a teammate");
+    w.e.mem.set_u8(actor + 0x18d, 0);
+    let render = actor + 0x1c0;
+    w.e.mem.set_u32(actor + 0x64, render);
+    w.e.mem.set_u32(render + 0x14, 0x7777);
+    assert!(kept(&mut w, true), "loaded");
+    w.e.mem.set_u32(actor + 0x108, 1);
+    assert!(!kept(&mut w, true), "dead");
+}
+
+/// O18 through the save itself (`save_own`): with the patch on, a dead actor's entry and an id
+/// that is no form leave the map before `JPNP` is written, which lists only the kept actor.
+#[test]
+fn npc_perks_save_writes_only_the_kept() {
+    let mut w = World::new();
+    let perk = w.form(0x0600_0010, PERK, false);
+    let base = w.form(0x0600_0020, 0x2a, false);
+    let kept = w.form(0x0600_0001, 0x2a, true);
+    let dead = w.form(0x0600_0002, 0x2a, true);
+    for actor in [kept, dead] {
+        w.e.mem.set_u32(actor + 0x20, base);
+    }
+    w.e.mem.set_u32(dead + 0x108, 1);
+    set_npc_perks_patch(&mut w.e, true);
+    {
+        let mut map = crate::cosave::npc_perks(&mut w.e);
+        for id in [0x0600_0001, 0x0600_0002, 0x0600_0099] {
+            map.emplace(id).ranks.insert(perk, 1);
+        }
+    }
+    let expect = Out::default()
+        .u16(1)
+        .u32(0x0600_0001)
+        .u8(1)
+        .u32(0x0600_0010)
+        .u8(1)
+        .0;
+    assert_eq!(written(&mut w.e), [chunk(kind::NPC_PERKS, 10, expect)]);
+    let map = crate::cosave::npc_perks(&mut w.e);
+    assert!(map.get(&0x0600_0002).is_none(), "dead: dropped");
+    assert!(map.get(&0x0600_0099).is_none(), "not a form: dropped");
+    assert!(map.get(&0x0600_0001).is_some());
 }
 
 /// The messages: a save records its name and clears the changes; a load of another save marks
@@ -1333,21 +1410,26 @@ fn linked_references_set_when_installed() {
 }
 
 /// G33's part of the housekeeping: a load's start and leaving to the main menu clear the player's
-/// killer (`+0xC0`) through the messages, as `DoPreLoadGameHousekeeping` does.
+/// killer (`+0xC0`) through the messages, as `DoPreLoadGameHousekeeping` does, only while JIP
+/// answers "installed" (not installed, the killer stays: the game's own behaviour).
 #[test]
 fn a_load_and_the_main_menu_clear_the_players_killer() {
     let mut w = World::new();
-    for kind in [msg::PRE_LOAD_GAME, msg::EXIT_TO_MAIN_MENU] {
-        w.e.mem.set_u32(PLAYER_REF + 0xc0, 0x0500_8800);
-        listen(
-            &mut w.e,
-            &Message {
-                kind,
-                data: 0,
-                len: 0,
-            },
-        );
-        assert_eq!(w.e.mem.u32(PLAYER_REF + 0xc0), 0, "{kind}");
+    for installed in [false, true] {
+        w.e.ext::<Jip>().answers_installed = installed;
+        for kind in [msg::PRE_LOAD_GAME, msg::EXIT_TO_MAIN_MENU] {
+            w.e.mem.set_u32(PLAYER_REF + 0xc0, 0x0500_8800);
+            listen(
+                &mut w.e,
+                &Message {
+                    kind,
+                    data: 0,
+                    len: 0,
+                },
+            );
+            let left = if installed { 0 } else { 0x0500_8800 };
+            assert_eq!(w.e.mem.u32(PLAYER_REF + 0xc0), left, "{kind} {installed}");
+        }
     }
 }
 
@@ -1552,4 +1634,32 @@ fn a_load_and_the_main_menu_clear_the_excluded_combat_actions() {
         );
         assert_eq!(excluded_combat_actions(&mut w.e, PLAYER_REF), 0, "{kind}");
     }
+}
+
+/// DeferredInit's console line: the format and JIP's version as a double, while installed.
+#[test]
+fn the_version_line_at_the_deferred_start() {
+    thread_local! {
+        static PRINTED: std::cell::RefCell<Vec<(Vec<u8>, f64)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let mut w = World::new();
+    w.e.register(0x0071_b160, |_, _| Ret {
+        eax: 0x0500_0100,
+        ..Ret::default()
+    });
+    w.e.register(0x0071_d0a0, |e, a| {
+        let format = nvse::table::guest_text(e, a[1]);
+        let version = e.mem.f64(a[2]);
+        PRINTED.with(|p| p.borrow_mut().push((format, version)));
+        Ret::default()
+    });
+    print_version(&mut w.e);
+    assert!(PRINTED.with(|p| p.borrow().is_empty()), "not installed");
+    w.e.ext::<Jip>().answers_installed = true;
+    print_version(&mut w.e);
+    assert_eq!(
+        PRINTED.with(|p| p.borrow().clone()),
+        [(b"JIP LN version: %.2f".to_vec(), 57.3)]
+    );
 }

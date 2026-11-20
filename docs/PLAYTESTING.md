@@ -53,12 +53,12 @@ point the table's folders at a scratch copy of Documents; never at a player's ow
 ## Switches
 
 The game reads its switches from environment variables named `NV_...`. Players need only the
-first group, and Settings.cmd sets those. Players need none of the others: Play.exe sets what it
+first group, and the launcher's Settings sets those. Players need none of the others: Play.exe sets what it
 needs, and the rest are for testers, scripts and the maintainers.
 
 The groups, by who uses them:
 
-1. **Player settings** (Settings.cmd, or their keys in the game's `Fallout.ini`, below).
+1. **Player settings** (the launcher's Settings, or their keys in the game's `Fallout.ini`, below).
 2. **Game fixes** (one per row of [FIXES.md](FIXES.md); `Preset=` turns them all on or off, a row's own variable turns one alone, for gates and tests).
 3. **Set by Play.exe** (the launcher sets these).
 4. **Tests and diagnostics** (profiling, tracing, recording, checks, measurements).
@@ -86,12 +86,12 @@ and the host's tests check one against the other. The fix lines are written with
   starts with a UTF-8 byte order mark (Windows does not read the heading glued to the mark, and
   the player's keys must read as before). A file that has only some of the sections or keys gets
   the rest. A UTF-16 file is left as it is (launcher.log says so).
-- While a `userdata\settings.ini` exists it is the settings, for Settings.cmd and Play.exe alike:
-  Settings.cmd shows the files with its lines over them and writes it; Play.exe moves it into both
+- While a `userdata\settings.ini` exists it is the settings, for the launcher's Settings and Play alike:
+  Settings shows the files with its lines over them and writes it; Play.exe moves it into both
   profiles' files, its lines winning over what the files say, and renames it
   `settings.ini.migrated` (`.migrated.2`, ... after an earlier one). When it can't be renamed, or a
   profile's file can't take its choices, it stays and the next start does the same again.
-  Settings.cmd changes the files in place only when every profile's `Fallout.ini` has the sections
+  Settings changes the files in place only when every profile's `Fallout.ini` has the sections
   and no settings.ini exists; then it changes the lines of the options it shows in both, in place.
 - The game reads three lines of a `settings.ini` that is there (`Preset`, `FrameLimit`,
   `MenuFrameLimit`), each only when neither `Fallout.ini` nor a variable sets it. When the played
@@ -117,7 +117,7 @@ and the host's tests check one against the other. The fix lines are written with
   the run plays like the player's game, and launcher.log says which variable made it a test and
   what was passed.
 - Close the game before changing settings: the game writes its whole `FalloutPrefs.ini` when an
-  option changes in its own menu, which can undo a choice Settings.cmd saved meanwhile.
+  option changes in its own menu, which can undo a choice Settings saved meanwhile.
 
 ### 1. Player settings
 
@@ -126,14 +126,20 @@ and the host's tests check one against the other. The fix lines are written with
 | `NV_PRESET=fixes` or `vanilla` (`sPreset`; `Preset=`) | What differs from the original program: the fixes set, or the original's behaviour exactly | `fixes` |
 | `NV_FRAME_LIMIT=n` (`iFrameLimit`; `FrameLimit=`) | Frames a second at most in play (0: none) | none under `fixes`; the original's own pacing under `vanilla` |
 | `NV_MENU_FRAME_LIMIT=n` (`iMenuFrameLimit`; `MenuFrameLimit=`) | Frames a second at most in menus (0: none) | 120 |
-| `NV_SHOW_FPS=1` or `0` (`bShowFrameRate`; `NV_SHOW_FPS=`; Settings.cmd's frame rate counter) | The frame-rate counter in the window's top-right corner from the start: frames a second over about half a second and the slowest frame of about the last second. F11 in the game shows or hides it either way; while wgpu draws, the key is the counter's and never reaches the game (on the real Direct3D 9 it is the game's). Drawn by wgpu into the window's frame after its capture, so never in an F12 report or an `NV_SHOT` capture; the real Direct3D 9 has none (`crates/d3d9-wgpu/src/frame_rate.rs`) | off (hidden until F11) |
-| `NV_THREADS=stepped` (`bSteppedThreads=1`; `NV_THREADS=`; Settings.cmd's threads option) | The game's threads one at a time (the fallback, and the reference mode) instead of side by side on their own cores | side by side in play; a scripted or measured run is stepped whatever the default |
-| `NV_RENDER_THREAD=0` (`bRenderThread=0`; `NV_RENDER_THREAD=`; Settings.cmd's drawing thread option) | The real Direct3D 9 calls on the game's own threads, as the original makes them, instead of a render thread of their own | render thread in play; a scripted or measured run draws on the game's threads |
-| `NV_DRAW_THREAD=1`, `0` or `poison` (`bWorldDrawThread`, 0 or 1; no Settings.cmd line) | EXPERIMENTAL: the world's draw on a thread of its own beside the end of the frame (docs/FIXES.md, "World drawn on a second thread"); `poison` (the variable only) adds the value packet's POISON check, for stepped threads. Needs real threads with the render thread; for now every frame still draws on main by default (the geometry family it needs is off until its gate; NV_TYPED=geometry). The variable alone makes a run a test (vanilla, stepped threads) unless NV_PRESET and NV_THREADS say otherwise | off in every preset |
-| `NV_D3D9=wgpu`, `real` or `real,wgpu` (`sRenderer=vulkan` or `d3d9`; `Renderer=`; Settings.cmd's renderer) | Who draws the game's window: wgpu (`wgpu`, `sRenderer=vulkan`, `crates/d3d9-wgpu`) on Vulkan, or Direct3D 12 on a card without a Vulkan driver (`NV_WGPU_BACKEND` below); the real Direct3D 9 as the original draws (`real`, `sRenderer=d3d9`: the fallback); or the real one with wgpu drawing every frame off screen beside it (`real,wgpu`, for comparison: with `NV_SHOT` both are captured, numbered alike, wgpu's as `wgpu-frame-*.bmp`). wgpu falls back to the real Direct3D 9 by itself where it finds no graphics card or cannot make the game's device, and the log says so | wgpu on Vulkan in play (a launcher's run that is no test reads `sRenderer`; a test started through Play.exe gets the file's choice passed on); a scripted run without the variable draws nothing |
-| `NV_BORDERLESS=1` or `0` (`bBorderless`; `Borderless=`; Settings.cmd's display mode) | The game's window without a frame, filling the screen (`1`), or the window as the game makes it (`0`) | on in play (a launcher's run that is no test, the one that reads the sections above; a test started through Play.exe gets the file's choice passed on, as above); a scripted or measured run keeps a normal window |
+| `NV_SHOW_FPS=1` or `0` (`bShowFrameRate`; `NV_SHOW_FPS=`; the launcher's Settings' frame rate counter) | The frame-rate counter in the window's top-right corner from the start: frames a second over about half a second and the slowest frame of about the last second. F11 in the game shows or hides it either way; while wgpu draws, the key is the counter's and never reaches the game (on the real Direct3D 9 it is the game's). Drawn by wgpu into the window's frame after its capture, so never in an F12 report or an `NV_SHOT` capture; the real Direct3D 9 has none (`crates/d3d9-wgpu/src/frame_rate.rs`) | off (hidden until F11) |
+| `NV_AO=1` or `0` (`bAmbientOcclusion`) | New lighting (port-added, not in the original): ambient occlusion, a soft shade in corners, creases and where things meet the ground (decals and rugs on the floor are left alone). One screen-space step on the finished 3D scene before the game's image-space step, so the HUD, menus, Pip-Boy and first-person arms are never darkened. Vulkan only (the real Direct3D 9 says once that it does nothing); first and third person (also V.A.T.S., the dialogue and kill cameras by the frame draw's code); only what is on screen occludes, fades out with distance (`crates/d3d9-wgpu/src/scene_light.rs`) | off |
+| `NV_AO_STRENGTH=x` (`fAmbientOcclusionStrength`) | How strong the ambient occlusion's shade is, from 0.1 (faint) to 1.0 (all of it); a value outside is taken as the nearest end, one that is no number as the default. Used only with it on | 0.7 |
+| `NV_SUN_SHADOWS=1` or `0` (`bSunShadows`) | Sun shadows (port-added, not in the original, which has no world shadows): buildings, poles, rocks, trees' trunks, vehicles and props cast shadows on the ground and on each other, out to about 140 m; past that, the land, hills and large buildings (the game's distant land and buildings among them) still cast, coarser, out to about 900 m, blended in where the near shadows end with no line, and drawn again only when the sun has moved enough, the camera has moved about 60 m or what is far off changed (nothing while all stands still). The shadow takes away only the game's sun light, inside the game's own lighting, so shade keeps the sky's colour, lamps and signs stay bright; characters cast in place of the game's own character shadows (next rows). The shadows follow the game's sun light, so they always agree with the lit sides of objects; with `bSunLightFromSky` (on by default, next row) that light comes from the sun disc by day and the moon by night, so shadows point straight away from what is in the sky. At night the light is the moonlight, so faint moon shadows show. Shadows glide as the sun moves (no steps). Bushes, fences and other cut-out shapes cast only out to about 45 m (everything solid to about 140 m). The first-person arms and weapon are drawn as without the switch. With the new lighting (ambient occlusion) on as well, its contact shadows also follow the sun light; with this switch off they follow the sun disc as before. Characters cast too (next row). Not yet: leaves and distant trees. Cables and wires cast a faint, soft line at their real weight (a real cable's shadow is a faint smear), fainter the higher they hang; their poles cast in full; fences and other cut-outs keep their patterned shadow. A cable whose shape the game writes again and again (moving cables, if any) casts a hard line from its third write on, as before this change. Vulkan only (the real Direct3D 9 says once that it does nothing); about 1 ms a frame (`crates/d3d9-wgpu/src/sun_shadow.rs`) | off |
+| `NV_SUN_LIGHT_FROM_SKY=1` or `0` (`bSunLightFromSky`) | With the sun shadows on: the game's sun light comes from the sun disc by day and from the moon (the one the game shows) by night, so the lit sides of objects, the game's own character shadows and the sun shadows all point away from what is in the sky (port-added; the original builds its light from another place: never higher than about 45 degrees and from the north side, measured 33 degrees from the disc at 09:00, 56 at noon, 27 at 17:30). The light is the same light with the same colours, only turned. The light follows the sun disc from the moment it appears at sunrise until it is gone at sunset (in the same direction as the disc, no lower than 10 degrees above the horizon: shadows at most about 6 times as long as their objects), and the moon while the game shows it (Masser from about 19:20 to 04:40), turning with the moon as it fades in and out: the dusk turn from the fading disc to the rising moon starts at about 19:20 and ends at about 20:20, when the moon is whole, and at dawn the light turns back to the hidden sun's place between about 03:40 and 04:40. While neither shows (after the moon fades until sunrise) and under heavy cloud by day, the light comes from the hidden sun's place, which the game keeps above the horizon: it is already where the disc will appear at sunrise. The light never jumps. Indoors nothing changes. Noon shadows are short (the disc stands high) where the original's light kept them long. With the sun shadows off nothing changes, whatever this says; with the real Direct3D 9 drawing (chosen, or taken over when Vulkan cannot start) nothing changes either (`crates/engine-fallout-env/src/units/fallout_shared_sky/sun.rs`, `LightFromSky`) | on (with the sun shadows) |
+| `NV_SUN_SHADOWS_CHARACTERS=1` or `0` (`bSunShadowsCharacters`) | With the sun shadows on: characters (you in third person, people, creatures, dead bodies) cast sun and moon shadows, posed as drawn each frame (arms, legs, clothes, hats, held and slung weapons), in place of the game's own projected character shadows, so each has one shadow; out to about 43 m. Not yet: the player's body in first person (your arms and weapon cast nothing, as before), characters the game does not draw (behind the camera), and the shadow is one frame behind a moving character. `0`: characters keep the game's own shadows only, exactly as before. Nothing changes while the sun shadows are off (`crates/d3d9-wgpu/src/sun_shadow.rs`) | on |
+| `NV_THREADS=stepped` (`bSteppedThreads=1`; `NV_THREADS=`; the launcher's Settings' threads option) | The game's threads one at a time (the fallback, and the reference mode) instead of side by side on their own cores | side by side in play; a scripted or measured run is stepped whatever the default |
+| `NV_RENDER_THREAD=0` (`bRenderThread=0`; `NV_RENDER_THREAD=`; the launcher's Settings' drawing thread option) | The real Direct3D 9 calls on the game's own threads, as the original makes them, instead of a render thread of their own | render thread in play; a scripted or measured run draws on the game's threads |
+| `NV_NOT_BACKGROUND=0` (`bNotBackground=0` in `[nv-rs Threads]`; no Settings row yet) | Lets Windows decide how fast the game runs when its window is not the active one. On (the default), Windows is asked not to slow it down or move it to the slower cores: execution-speed throttling off and timer requests honoured for the process, execution-speed throttling off on each thread the port starts (`SetProcessInformation`/`SetThreadInformation` with `ProcessPowerThrottling`/`ThreadPowerThrottling`, `crates/qos`). Without it Windows lowers a window's "quality of service" when it is not in focus (visible: Medium; minimized or fully covered: Low, which on a processor with two kinds of core runs on the efficient ones); a hidden run without it once ran about a third slower. Off saves power and heat with the game in the background (laptops). A platform matter, not a game fix: on in every preset, `vanilla` too, and in tests and scripted runs; the variable makes no run a test. One start-up line says what was applied or that it is off by choice. Windows only | on, in every run and preset |
+| `NV_DRAW_THREAD=1`, `0` or `poison` (`bWorldDrawThread`, 0 or 1; no Settings row) | EXPERIMENTAL: the world's draw on a thread of its own beside the end of the frame (docs/FIXES.md, "World drawn on a second thread"); `poison` (the variable only) adds the value packet's POISON check, for stepped threads. Needs real threads with the render thread; refused for now (not working yet: the first posted frame stops the run), so the world is still drawn on main (`NV_DRAW_THREAD_CHECK=1`, a test's variable, lets the drawing thread's own checks through). The variable alone makes a run a test (vanilla, stepped threads) unless NV_PRESET and NV_THREADS say otherwise | off in every preset |
+| `NV_D3D9=wgpu`, `real` or `real,wgpu` (`sRenderer=vulkan` or `d3d9`; `Renderer=`; the launcher's Settings' renderer) | Who draws the game's window: wgpu (`wgpu`, `sRenderer=vulkan`, `crates/d3d9-wgpu`) on Vulkan, or Direct3D 12 on a card without a Vulkan driver (`NV_WGPU_BACKEND` below); the real Direct3D 9 as the original draws (`real`, `sRenderer=d3d9`: the fallback); or the real one with wgpu drawing every frame off screen beside it (`real,wgpu`, for comparison: with `NV_SHOT` both are captured, numbered alike, wgpu's as `wgpu-frame-*.bmp`). wgpu falls back to the real Direct3D 9 by itself where it finds no graphics card or cannot make the game's device, and the log says so | wgpu on Vulkan in play (a launcher's run that is no test reads `sRenderer`; a test started through Play.exe gets the file's choice passed on); a scripted run without the variable draws nothing |
+| `NV_BORDERLESS=1` or `0` (`bBorderless`; `Borderless=`; the launcher's Settings' display mode) | The game's window without a frame, filling the screen (`1`), or the window as the game makes it (`0`) | on in play (a launcher's run that is no test, the one that reads the sections above; a test started through Play.exe gets the file's choice passed on, as above); a scripted or measured run keeps a normal window |
 
-Settings.cmd's resolution, anti-aliasing, anisotropy and V-sync are the game's own keys, not switches: `iSize W`, `iSize H`, `iMultiSample` and `iMaxAnisotropy` in `FalloutPrefs.ini`, `iPresentInterval` in `Fallout.ini` (where the game reads it).
+the launcher's Settings' resolution, anti-aliasing, anisotropy and V-sync are the game's own keys, not switches: `iSize W`, `iSize H`, `iMultiSample` and `iMaxAnisotropy` in `FalloutPrefs.ini`, `iPresentInterval` in `Fallout.ini` (where the game reads it).
 
 Exclusive full screen is not offered yet. The game's own `bFull Screen=1` (`FalloutPrefs.ini`) is taken as the borderless window over the monitor, on every backend and in both presets, and the log says so once (`crates/host/src/full_screen.rs`). Play.exe writes `bFull Screen=0` whenever the borderless window is on.
 
@@ -171,6 +177,7 @@ Each also has a `[nv-rs Fixes]` key in `Fallout.ini` (`bUncap` ... `bNVSEListGua
 | `NV_JIP_COSAVE_FIX` | JIP co-save fixes | `host/fixes.rs` (flag read by `jip`) |
 | `NV_JIP_VANILLA_CMDS` | JIP vanilla commands | `host/fixes.rs` (flag read by `jip`) |
 | `NV_JIP_GAME_PATCHES` | JIP game patches | `host/fixes.rs` (flag read by `jip`) |
+| `NV_MCM` | The Mod Configuration Menu's plugin built in (off in every preset) | `host/fixes.rs` (flag read by `mcm`) |
 | `NV_UIO` | UI Organizer built in (off in every preset) | `host/fixes.rs` (flag read by `uio`) |
 | `NV_NVSE_ERROR_GUARD` | Script error loop guard | `host/fixes.rs` |
 | `NV_NVSE_IMOD_CHECK` | Image-space event form check | `host/fixes.rs` |
@@ -197,7 +204,8 @@ Play.exe sets these for every run; set them by hand only to run `nv-viewer` with
 | `NV_PREFS_OUT=FILE` | The `FalloutPrefs.ini` the game writes, copied out to FILE | stays in memory |
 | `NV_REPORT_DIR=DIR`, `NV_REPORT_LOG=FILE` | F12 in the game's window makes `DIR\NNN\` with the frame, the end of FILE and a `note.txt` for the player (`crates/engine-platform/src/d3d9real.rs`) | no F12 report |
 | `NV_SETTINGS=FILE` | The settings file | `settings.ini` beside the program or in the folder above it |
-| `NV_RS_GAME`, `NV_RS_REAL_DOCUMENTS`, `NV_RS_SYSTEM_FOLDER`, `NV_RS_NO_STORES`, `NV_RS_NO_SHORT_PATHS`, `NV_RS_NO_WINDOWS`, `NV_RS_SETTINGS_CHOOSE` | The launcher's own test hooks: the game folder, where the player's Documents are read from, the system folder, no look in game stores, no short paths, no windows shown (`scripts/launcher`; `NV_RS_NO_WINDOWS` is also read in `host/save_out.rs`, and makes Settings.ps1 save without its window, with `NV_RS_SETTINGS_CHOOSE`'s `Name=Value;...` as the choices) | the player's own folders, windows shown |
+| `NV_RS_PROFILE=game` or `mods` | Linux and macOS: the profile play.sh plays in (`./play.sh --mods`: `mods`), whose Documents and AppData folders inside nv-rs's own folder the game is given (`<own>/game/...` or `<own>/mods/...`, so saves and settings made with mods stay apart; `engine-platform` machine_table::profile). Windows' Play.exe lays out `userdata\game` and `userdata\mods` itself. Not the profiler: that is `NV_PROFILE`, a test's variable, which makes a play run a test (#763) | `game` |
+| `NV_RS_GAME`, `NV_RS_REAL_DOCUMENTS`, `NV_RS_SYSTEM_FOLDER`, `NV_RS_NO_STORES`, `NV_RS_NO_SHORT_PATHS`, `NV_RS_NO_WINDOWS` | The launcher's own test hooks: the game folder, where the player's Documents are read from, the system folder, no look in game stores, no short paths, no windows shown (`crates/nv-launcher`; `NV_RS_NO_WINDOWS` is also read in `host/save_out.rs`) | the player's own folders, windows shown |
 
 ### 4. Tests and diagnostics
 
@@ -226,6 +234,7 @@ None of these is for players.
 | `NV_WGPU_BACKEND=vulkan`, `dx12`, `gl` or `software`; `NV_WGPU_DEBUG` | wgpu backend: which graphics interface (`software`: the platform's software adapter, WARP on Windows, the one CI's runners have: for running the GPU tests there); wgpu's own debug checks. On Vulkan, NVIDIA's driver filters distant textures a shade differently from its Direct3D (its own anisotropic filtering: on the Goodsprings street 10-26% of pixels differ from Direct3D 9's by a mean under 1 of 255 levels, against under 1% of pixels on Direct3D 12; accepted) | Vulkan, then Direct3D 12 on a card without a Vulkan driver; off |
 | `NV_WGPU_DYNAMIC_RENDERING=off` | On a Vulkan 1.3 device, passes begun with render pass and framebuffer objects, as published wgpu does and as devices without Vulkan 1.3 do, instead of dynamic rendering (`vendor/wgpu-hal`, `dynamic_rendering.rs`): for checking that path, or getting round a driver's bug | dynamic rendering where the device has Vulkan 1.3 |
 | `NV_WGPU_LIBRARIES=off` | On Vulkan, every render pipeline made whole, as published wgpu makes them, instead of linked from pipeline libraries (`vendor/wgpu-hal`, `pipeline_library.rs`: the shaders compiled once each, a new combination of state only a link): for comparing the two, or getting round a driver's bug | libraries where the driver has them |
+| `NV_WGPU_GPU_TIMES=1` | A measuring aid: the graphics card's own time for each kind of work the backend gives it, from timestamps the card writes at the start and end of each pass (and between passes where the driver can), one line every 5 s in plain words: `GPU time a frame (N frames): world, occlusion count, resolves, clears, copies, HDR, sun shadow maps, other; total` (ms a frame). World is the game's own draws; occlusion count, the passes that add up a query's samples; resolves, multisampled targets resolved; clears, passes that only clear; copies, blits, copies, uploads among the draws and read-backs; HDR, the bright-pixel watch; sun shadow maps, the new lighting's sun shadow maps; other, the rest of the new lighting and the frame-rate meter. Needs the adapter's timestamp queries: without them one line says so and nothing is timed; without timestamps between passes (some Metal drivers) the copy commands, the HDR watch, the sun shadow maps and other are not timed, and the line says so. A driver whose timestamps read zero (AMD's Windows driver) gets one line saying it does not report GPU times, and no numbers. Off, nothing is asked of the driver and nothing is recorded | off |
 | **Scripted input and movement runs** | | |
 | `NV_MOVE_KEYS`*, `NV_MOVE_MOUSE`* | Scripted keys and mouse by main's frame (`crates/host/src/player_move.rs`) | none |
 | `NV_MOVE_REAL_INPUT=1`* | Real input reaches the game even with a script set | off |
@@ -270,16 +279,16 @@ The feature is settled as the default. The variable only turns it off, for a com
 ## Packages
 
 `scripts/package-playtest.ps1` builds the Windows preview: one ZIP of `Play.exe`
-(`scripts/launcher`), `app\FalloutNV.exe` (nv-viewer `--release` under that name), the table tools
+(`crates/nv-launcher`, its `nv-rs` program under that name), `app\FalloutNV.exe` (nv-viewer `--release` under that name), the table tools
 and `distribution/`. docs/MAINTAINING.md lists what is in it and why. The first one, `preview-2026-11-07.2`, is on
 GitHub Releases; the packages there from before 2026-11-03 are of the removed viewer.
 
-`Play.exe` does what the steps above do by hand, on a PC with nothing but the game:
+`Play.exe` opens the launcher's terminal window (the start screen: `> Play`, `> Play with mods` when there are mods, `> Exit`) and its Play does what the steps above do by hand, on a PC with nothing but the game; every message and question is in that window:
 
 - **The game:** `--game`, the folder it used last time, then Steam (registry, `libraryfolders.vdf`,
   `appmanifest_22380.acf`), GOG (registry), Epic (`.item` manifests) and the game's installer's
-  registry key, all read only, then a folder picker. `app\FalloutNV.exe --check` makes the same check
-  of the game's program the game's start-up makes, so a refusal is said in a window before anything runs.
+  registry key, all read only, then the folder typed at the prompt or dropped onto the window. `app\FalloutNV.exe --check` makes the same check
+  of the game's program the game's start-up makes, so a refusal is said in the launcher before anything runs.
 - **The folders:** everything in `userdata\`: the game's Documents and AppData (one set per way of
   playing, `game` and `mods`), the tables (`machine`), `logs` and `reports`; an older preview's
   `settings.ini` is moved into the two profiles' files once (`settings.ini.migrated`). The table's
@@ -312,7 +321,8 @@ elsewhere only as far as Windows and drivers behave the same:
 - The sound layer's translations of `dsound.dll`, `RESAMPLEDMO.DLL` and `dsdmo.dll` (the mixer, the
   converters, the 3D stage, the distortion) are from this Windows' builds. Only the resampler's tables
   and the distortion's edge table are read from the player's own DLLs. Another Windows' DLLs may mix
-  differently without anyone noticing; the sound would still play. Where the resampler's tables
+  differently without anyone noticing; the sound would still play (an edge table that differs from
+  the constants read from this Windows' DLL is named in the log). Where the resampler's tables
   aren't found, sound goes through DirectSound's second converter (named once in the log: not exact).
   One channel, quad, surround and the "wide" layouts follow the DLL's code only; only stereo and 7.1 ran.
 - `scripts/dsmix-measure`, `scripts/dsound-oracle`, `scripts/mmio-measure` and `scripts/dshow-measure`
@@ -321,14 +331,22 @@ elsewhere only as far as Windows and drivers behave the same:
   (tunnelling, 8.3 names, `FindFirstFile` order) and `GetPrivateProfile*` rules were measured here on
   NTFS under an English Windows (among them: in a file with a repeated section name only the first
   section of it is read or written, case and the spaces in the brackets aside, so every reader of
-  the port and Play.exe's and Settings.cmd's writes follow that; `engine-platform` `ini.rs` tests).
+  the port and Play.exe's and the launcher's Settings' writes follow that; `engine-platform` `ini.rs` tests).
   Text conversion itself asks the real Windows.
 - `d3d9-capture` covers adapter 0, and only the display modes of that moment. nvapi answers come from
   the DLL, but only an NVIDIA driver has run them.
-- An AMD card: the game asks for the player's 32-bit `ATIMGPUD.dll` and, with Eyefinity on, ADL; this 64-bit
-  process can't load them, so they answer as missing: one GPU, no Eyefinity. The game picks its vendor path
-  from the driver's name. AMD and Intel have only been run as an edited table (the driver's name changed, no
-  nvapi) on this PC's NVIDIA card, so the game's vendor paths ran, but no AMD or Intel driver answered.
+- The game picks its vendor path from the driver's name. While wgpu draws (Vulkan, the default) every card,
+  AMD and Intel too, is given NVIDIA's driver name (`nvldumd.dll`) on every system, so the game takes the
+  NVIDIA shader package and alpha to coverage switch the shipped pipeline list was made with (on a PC without
+  NVIDIA's driver its NvAPI probe finds no `nvapi.dll` and ends); the log's start says so in one line. With the
+  real Direct3D 9 asked for (or as the fallback where wgpu finds no card) the driver's own name decides. Where wgpu
+  finds a card but cannot make the game's device, the real Direct3D 9 takes over after the game was told NVIDIA's
+  name: the game keeps NVIDIA's path on the card's own driver, which may not honour NVIDIA's alpha to coverage
+  switch, and the log says so in one line. With the driver's own name, on an AMD card the game asks for the
+  player's 32-bit `ATIMGPUD.dll` and, with Eyefinity on, ADL; this 64-bit process can't load them, so they answer
+  as missing: one GPU, no Eyefinity. AMD and Intel on the real Direct3D 9 have only been run as an edited table (the
+  driver's name changed, no nvapi) on this PC's NVIDIA card, so the game's vendor paths ran, but no AMD or
+  Intel driver answered.
 - The first settings on a PC where the game's launcher never ran: its detection isn't translated (it is a separate
   program), so the High preset stands in for what it would pick.
 

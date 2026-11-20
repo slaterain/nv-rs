@@ -3,6 +3,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use engine_core::extend::stewie;
 
 layout! {
     /// `HUDMainMenu` (Xbox PDB), 0x278 bytes. The offsets used here are
@@ -744,6 +745,9 @@ fn create_ddt_and_hardcore(e: &mut Engine, icon_size: f32) {
         create_trait(e, offset, 0xfa9, 0);
     }
 }
+
+/// JIP MiniMap's seam at the compass' name of a found location (its call at 0x77951E).
+pub(crate) const JIP_DISCOVER_LOCATION: u32 = 0x0077_951e;
 
 /// UI Organizer's patches in [`create_ddt_and_hardcore`]'s hardcore texts (HUDMainMenu::Create
 /// `0076bfe0`) (`SafeWrite16(.., jmp short)` over
@@ -2028,7 +2032,22 @@ fn do_idle_fades(e: &mut Engine) {
         }
     }
     let player = e.mem.u32(0x011d_ea3c);
-    if e.call(0x0049_97b0, &args![player]).u8() != 0 {
+    // JIP LN NVSE's O14 at `0x770B0E` (bSneakBoundingBoxFix; group GX's row and handler, not in
+    // yet: `WriteRelCall(0x770B0E, SneakBoundingBoxFixHook)`, which answers whether the player is
+    // sneaking and changes the player's collision shape to match): the seam with the player
+    // answers in its low byte in place of the exe's `0x4997B0` call. One load while that switch
+    // is off; with no handler the exe's call runs.
+    let jip_sneaking =
+        if e.jip_patches() & engine_core::extend::jip_patches::SNEAK_BOUNDING_BOX_FIX != 0 {
+            e.site(0x0077_0b0e, &[player])
+        } else {
+            None
+        };
+    let sneaking = match jip_sneaking {
+        Some(answer) => answer & 0xff != 0,
+        None => e.call(0x0049_97b0, &args![player]).u8() != 0,
+    };
+    if sneaking {
         let menu = e.mem.u32(0x011d_96c0);
         hud_main_menu_update_sneak(e, Ptr::new(menu));
     } else if hud_alpha(e, 0x88) > e.global::<f64>(0x0101_2060) && fade_finished(e, 0x88) {
@@ -4445,6 +4464,24 @@ pub fn hud_main_menu_update_status_mode_ui(
     }
 }
 
+/// `SetInfoForRef`'s weapon test at `0x777123` (`MOV ECX,[EBP-0x9C]; CALL 0x47BCF0`: the weapon
+/// is playable, its flag byte +0x100 without 0x80). JIP LN NVSE's G80 (group GA's row and
+/// handler, a fix row: `WriteRelJump(0x777123, RolloverWeaponHook)`, back at `0x77712E` with the
+/// answer in AL) answers the same test and also appends "+" to the name at `0x11D9C48` for a
+/// modded weapon: the seam with the weapon and the reference answers in its low byte. One load
+/// while JIP's fixes are not in.
+fn rollover_weapon_playable(e: &mut Engine, weapon: u32, reference: Ptr) -> bool {
+    let jip = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(0x0077_7123, &[weapon, reference.addr()])
+    } else {
+        None
+    };
+    match jip {
+        Some(answer) => answer & 0xff != 0,
+        None => e.call(0x0047_bcf0, &args![weapon]).bool(),
+    }
+}
+
 // Translated from 00775a00 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `HUDMainMenu::SetInfoForRef` (Xbox PDB): updates target name, lock/action
 /// prompts, item details, button hints, and their tile visibility in PC order.
@@ -4905,7 +4942,7 @@ pub fn hud_main_menu_set_info_for_ref(
                     let name_tile = hud_field(e, 0xa8);
                     hud_set_text(e, name_tile, 0x011d_9c48);
                 } else if (ammo_form == 0 || !e.call(0x004c_94d0, &args![ammo_form]).bool())
-                    && (weapon_form == 0 || !e.call(0x0047_bcf0, &args![weapon_form]).bool())
+                    && (weapon_form == 0 || !rollover_weapon_playable(e, weapon_form, reference))
                     && (weapon_form != 0 || ammo_form != 0)
                 {
                     displayed = false;
@@ -5446,7 +5483,19 @@ pub fn hud_main_menu_update_compass(
                 let map_data = e.mem.u32(record);
                 // 00779509: the five pushed words and `location` are 0076b960's;
                 // 00438eb0 and 00403df0 take only `this` (plain RET).
-                let location = e.call(0x0043_8eb0, &args![map_data]).u32();
+                // Seam (JIP MiniMap's `DiscoverLocationHook`, written over the name call at
+                // 0x77951E by `InitMiniMap`): words: the marker data, the player's marker record;
+                // an answer is the name. Asked only while JIP is installed.
+                let jip_name = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+                {
+                    e.site(JIP_DISCOVER_LOCATION, &[map_data, record])
+                } else {
+                    None
+                };
+                let location = match jip_name {
+                    Some(name) => name,
+                    None => e.call(0x0043_8eb0, &args![map_data]).u32(),
+                };
                 let title = e.call(0x0040_3df0, &args![0x011d_2208_u32]).u32();
                 fn_0076b960(
                     e,
@@ -6779,6 +6828,31 @@ pub fn fn_0077c440(e: &mut Engine, value: u32) {
     });
 }
 
+/// The level-up's two level texts (`0077d24b` to `0077d2b1`): the level (`011d9e7c`) into tile
+/// +0xe8 and the next level (`011d9e78`) into tile +0xec, each printed with `"%d"` into a buffer
+/// and set as the tile's string.
+///
+/// `0077d258`, `0077d28d`: lStewieAl's Tweaks' row S0057 (`patchFixLevelGreaterThan99Crash`): the
+/// levels are printed into a 16-byte buffer (the function's other one), where the exe's 3 bytes
+/// cannot hold a level of 100 or more and the C runtime's check ends the game.
+fn xp_print_levels(e: &mut Engine, this: Ptr<HUDMainMenu>) {
+    let size = if e.stewie(stewie::LEVEL_GREATER_THAN_99) {
+        0x10_u32
+    } else {
+        3
+    };
+    e.with_stack(size.max(4), |e, buffer| {
+        let level = e.mem.u32(0x011d_9e7c);
+        e.call(0x0040_6d00, &args![buffer, size, 0x0102_0774_u32, level]);
+        let tile = xp_tile(e, this, 0xe8);
+        e.call(0x00a0_1350, &args![tile, 0xfc4_u32, buffer, 1_u32]);
+        let next = e.mem.u32(0x011d_9e78);
+        e.call(0x0040_6d00, &args![buffer, size, 0x0102_0774_u32, next]);
+        let tile = xp_tile(e, this, 0xec);
+        e.call(0x00a0_1350, &args![tile, 0xfc4_u32, buffer, 1_u32]);
+    });
+}
+
 fn xp_tile(e: &Engine, this: Ptr<HUDMainMenu>, offset: u32) -> u32 {
     e.mem.u32(this.addr() + offset)
 }
@@ -6983,16 +7057,7 @@ fn xp_animate_current(
                     required_next = e.call(0x0064_8b50, &args![next]).i32();
                     let bar = xp_tile(e, this, 0xe4);
                     hud_set_float(e, bar, 0xfa1, min);
-                    e.with_stack(4, |e, buffer| {
-                        let level = e.mem.u32(0x011d_9e7c);
-                        e.call(0x0040_6d00, &args![buffer, 3_u32, 0x0102_0774_u32, level]);
-                        let tile = xp_tile(e, this, 0xe8);
-                        e.call(0x00a0_1350, &args![tile, 0xfc4_u32, buffer, 1_u32]);
-                        let next = e.mem.u32(0x011d_9e78);
-                        e.call(0x0040_6d00, &args![buffer, 3_u32, 0x0102_0774_u32, next]);
-                        let tile = xp_tile(e, this, 0xec);
-                        e.call(0x00a0_1350, &args![tile, 0xfc4_u32, buffer, 1_u32]);
-                    });
+                    xp_print_levels(e, this);
                     if required_next < current_xp {
                         if max < min {
                             min = max;
@@ -12544,6 +12609,246 @@ mod tests {
     }
 
     thread_local! {
+        static O14_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static O14_EXE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    fn o14_never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("O14's seam asked without bSneakBoundingBoxFix");
+    }
+
+    /// Stands for JIP's `SneakBoundingBoxFixHook` answering "not sneaking" in its low byte (a
+    /// higher byte set, which the exe's `MOVZX ECX,AL` drops).
+    fn o14_standing(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        O14_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(0x100)
+    }
+
+    fn o14_sneaking(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        O14_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(1)
+    }
+
+    /// JIP LN NVSE's O14 seam (`0x00770B0E` in `DoIdle`'s fades, bSneakBoundingBoxFix; group
+    /// GX's row, inert until its handler): with the word 0, `INSTALLED` or the fixes alone it is
+    /// not asked and the exe's sneak test (`0x4997B0`, the player) decides; with the switch and
+    /// no handler, the exe's test; with a handler it is asked once with exactly the player, the
+    /// exe's test is not called and the answer's low byte decides whether the sneak meter is
+    /// updated (`0x7732D0`, whose first call is `0x953C50`).
+    #[test]
+    fn do_idle_fades_jip_sneak_bounding_box_seam() {
+        use engine_core::extend::jip_patches;
+        let run = |word: u32, handler: Option<engine_core::extend::SiteFn>, exe: u32| {
+            let mut e = Engine::new();
+            e.map(0x011d_9000, 0x1000);
+            e.map(0x011d_e000, 0x1000);
+            e.map(0x0101_2000, 0x1000);
+            e.mem.set_f64(0x0101_2060, 0.0);
+            let menu = e.new_object::<HUDMainMenu>();
+            e.mem.set_u32(0x011d_96c0, menu.addr());
+            e.mem.set_u32(0x011d_ea3c, 0x5050);
+            // No fade to run: every alpha below the floor, no fade finished.
+            e.register_double(0x00a0_11b0, |_, _| Ret {
+                st0: -1.0,
+                ..Ret::default()
+            });
+            e.register_double(0x00a0_7fc0, |_, _| Ret::default());
+            // The text tile does not hold its trait: no subtitle fade.
+            e.register_double(0x00a0_1860, |_, _| Ret::default());
+            e.register_double(0x00a0_1230, |_, _| Ret::default());
+            e.register_double(0x0095_3c50, |_, _| Ret::default());
+            O14_EXE.with(|c| c.set(exe));
+            e.register_double(0x0049_97b0, |_, _| Ret {
+                eax: O14_EXE.with(|c| c.get()),
+                ..Ret::default()
+            });
+            if let Some(handler) = handler {
+                e.on_site_for_test(0x0077_0b0e, handler);
+            }
+            e.set_jip_patches(word);
+            O14_SEEN.with(|s| s.borrow_mut().clear());
+            e.call_log = Some(vec![]);
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                do_idle_fades(&mut e);
+            }));
+            let log = e.call_log.take().unwrap();
+            let exe_calls: Vec<Vec<u32>> = log
+                .iter()
+                .filter(|(at, _)| *at == 0x0049_97b0)
+                .map(|(_, w)| w.clone())
+                .collect();
+            let meter = log.iter().any(|(at, _)| *at == 0x0095_3c50);
+            (exe_calls, meter, O14_SEEN.with(|s| s.take()))
+        };
+        let fix = jip_patches::INSTALLED | jip_patches::SNEAK_BOUNDING_BOX_FIX;
+        for word in [
+            0,
+            jip_patches::INSTALLED,
+            jip_patches::INSTALLED | jip_patches::FIXES,
+        ] {
+            for exe in [0, 1] {
+                let (calls, meter, seen) = run(word, Some(o14_never), exe);
+                assert_eq!(
+                    (calls, meter, seen.len()),
+                    (vec![vec![0x5050]], exe == 1, 0)
+                );
+            }
+        }
+        let (calls, meter, _) = run(fix, None, 1);
+        assert_eq!(
+            (calls, meter),
+            (vec![vec![0x5050]], true),
+            "no handler: the exe's"
+        );
+        let (calls, meter, seen) = run(fix, Some(o14_standing), 1);
+        assert_eq!((calls.len(), meter), (0, false), "low byte 0: not sneaking");
+        assert_eq!(seen, vec![vec![0x5050]]);
+        let (calls, meter, seen) = run(fix, Some(o14_sneaking), 0);
+        assert_eq!((calls.len(), meter), (0, true), "sneaking");
+        assert_eq!(seen, vec![vec![0x5050]]);
+    }
+
+    thread_local! {
+        static G80_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn g80_never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("G80's seam asked without FIXES");
+    }
+
+    /// Stands for JIP's `RolloverWeaponHook` answering "not playable" in its low byte.
+    fn g80_hidden(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G80_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(0x100)
+    }
+
+    fn g80_shown(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G80_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(1)
+    }
+
+    /// One run of `SetInfoForRef` for a weapon reference lying in the world (one of it, not an
+    /// actor, no lock, no target) with JIP's `word`, G80's `handler` and the weapon's flag byte
+    /// +0x100 `flags`: the weapon test's calls of the exe's `0x47BCF0`, whether the name tile got
+    /// the name buffer (`0x11D9C48`), the seam's words, and the weapon and the reference.
+    fn g80_run(
+        word: u32,
+        handler: Option<engine_core::extend::SiteFn>,
+        flags: u8,
+    ) -> (usize, bool, Vec<Vec<u32>>, u32, u32) {
+        let mut e = Engine::new();
+        e.map(0x011d_9000, 0x6000);
+        e.map(0x0102_f000, 0x1000);
+        e.map(0x9000, 0x1000);
+        let menu = e.new_object::<HUDMainMenu>();
+        let reference = e.mem.alloc(0x40);
+        let weapon = e.mem.alloc(0x200);
+        e.mem.set_u8(weapon + 0x100, flags);
+        e.mem.set_u32(0x011d_96c0, menu.addr());
+        e.mem.set_u32(0x011d_ea3c, 0x9000);
+        e.mem.set_u32(menu.addr() + 0xf4, 0x5000);
+        e.mem.set_u32(menu.addr() + 0xa8, 0x5100);
+        let mut slots = [0_u32; 0xb0];
+        slots[0x100 / 4] = 0x0300_4100;
+        slots[0x224 / 4] = 0x0300_4224;
+        e.put_vtable(0x0300_4000, &slots);
+        e.mem.set_u32(reference, 0x0300_4000);
+        let mut player_slots = [0_u32; 0xb0];
+        player_slots[0x2bc / 4] = 0x0300_52bc;
+        e.put_vtable(0x0300_5000, &player_slots);
+        e.mem.set_u32(0x9000, 0x0300_5000);
+        e.register_double(0x0300_52bc, |_, _| Ret::default());
+        e.register_double(0x0300_4100, |_, _| Ret::default());
+        e.register_double(0x0300_4224, |_, _| Ret::default());
+        e.register_double(0x007a_f430, move |_, _| Ret {
+            eax: weapon,
+            ..Ret::default()
+        });
+        e.register_double(0x0040_1170, |_, _| Ret {
+            eax: 0x28,
+            ..Ret::default()
+        });
+        e.register_double(0x0047_bcf0, |e, words| Ret {
+            eax: u32::from(e.mem.u8(words[0] + 0x100) & 0x80 == 0),
+            ..Ret::default()
+        });
+        for (address, value) in [
+            (0x0057_9280, 1),
+            (0x0057_9690, 1),
+            (0x00a0_11f0, 0x7788),
+            (0x005d_43c0, 0xc000),
+            (0x0041_df00, 1),
+            (0x0055_d520, 0xd000),
+            (0x0041_8770, 1),
+        ] {
+            e.register_double(address, move |_, _| Ret {
+                eax: value,
+                ..Ret::default()
+            });
+        }
+        for address in [
+            0x0056_9160,
+            0x0047_7ba0,
+            0x0096_7090,
+            0x0070_0320,
+            0x00a0_1350,
+            0x0056_8e50,
+            0x0096_6c60,
+            0x0057_b460,
+            0x0041_e310,
+            0x0095_3c20,
+        ] {
+            e.register_double(address, |_, _| Ret::default());
+        }
+        e.register_double(0x0040_6d30, |e, words| {
+            assert_eq!(words[..2], [0x011d_9c48, 0x104]);
+            e.mem.write(0x011d_9c48, b"Varmint Rifle\0");
+            Ret::default()
+        });
+        if let Some(handler) = handler {
+            e.on_site_for_test(0x0077_7123, handler);
+        }
+        e.set_jip_patches(word);
+        G80_SEEN.with(|s| s.borrow_mut().clear());
+        e.call_log = Some(vec![]);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            hud_main_menu_set_info_for_ref(&mut e, Ptr::new(reference), 0, 0)
+        }));
+        let log = e.call_log.take().unwrap();
+        let tests = log.iter().filter(|(at, _)| *at == 0x0047_bcf0).count();
+        let named = log.iter().any(|(at, words)| {
+            *at == 0x00a0_1350 && words == &args![0x5100_u32, 0xfc4_u32, 0x011d_9c48_u32, 1_u32]
+        });
+        (tests, named, G80_SEEN.with(|s| s.take()), weapon, reference)
+    }
+
+    /// JIP LN NVSE's G80 seam (`0x00777123`, `SetInfoForRef`'s weapon test; group GA's row, a
+    /// fix row): with the word 0 or `INSTALLED` alone it is not asked and the exe's test
+    /// (`0x47BCF0`, called twice: the item details and this test) decides whether the name is
+    /// shown; with `FIXES` and no handler, the exe's; with a handler it is asked once with
+    /// exactly the weapon and the reference, the exe's test runs only for the item details, and
+    /// the answer's low byte decides (0: the name is not shown; 1: it is).
+    #[test]
+    fn set_info_for_ref_jip_rollover_weapon_seam() {
+        use engine_core::extend::jip_patches;
+        for word in [0, jip_patches::INSTALLED] {
+            for (flags, shown) in [(0, true), (0x80, false)] {
+                let (tests, named, seen, _, _) = g80_run(word, Some(g80_never), flags);
+                assert_eq!((tests, named, seen.len()), (2, shown, 0));
+            }
+        }
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        let (tests, named, ..) = g80_run(fixes, None, 0x80);
+        assert_eq!((tests, named), (2, false), "no handler: the exe's");
+        let (tests, named, seen, weapon, reference) = g80_run(fixes, Some(g80_hidden), 0);
+        assert_eq!((tests, named), (1, false), "low byte 0: not shown");
+        assert_eq!(seen, vec![vec![weapon, reference]]);
+        let (tests, named, seen, weapon, reference) = g80_run(fixes, Some(g80_shown), 0x80);
+        assert_eq!((tests, named), (1, true), "low byte 1: shown");
+        assert_eq!(seen, vec![vec![weapon, reference]]);
+    }
+
+    thread_local! {
         /// The fields UI Organizer's hardcore-zoom handler was asked about.
         static UIO_ZOOMS: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
     }
@@ -13489,8 +13794,10 @@ mod tests {
         // Twice: without and with a user of JIP LN NVSE's LocationDiscover hook, whose seam
         // (`0x77955D`, after the stat) is asked only with a user, with the marker.
         for users in [0, 1] {
-            compass_landmark_run(users);
+            compass_landmark_run(users, false);
         }
+        // And with JIP MiniMap's seam at the name call (0x77951E) answering: its name, no call.
+        compass_landmark_run(0, true);
     }
 
     thread_local! {
@@ -13502,7 +13809,16 @@ mod tests {
         None
     }
 
-    fn compass_landmark_run(users: u32) {
+    thread_local! {
+        static NAME_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn name_seam(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        NAME_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(0x7300)
+    }
+
+    fn compass_landmark_run(users: u32, jip_name: bool) {
         // State+5 ([EBP-0x8f]) is written only at 00779591 (1, changed) and 007795d6
         // (0, unchanged travel marker); an unchanged non-travel marker hands 00772aa0
         // the previous marker's byte.
@@ -13513,6 +13829,11 @@ mod tests {
         );
         if users == 1 {
             e.add_hook_user(engine_core::extend::Hook::LocationDiscover, true);
+        }
+        NAME_ASKED.with(|s| s.borrow_mut().clear());
+        if jip_name {
+            e.set_jip_patches(engine_core::extend::jip_patches::INSTALLED);
+            e.on_site_for_test(JIP_DISCOVER_LOCATION, name_seam);
         }
         let marker_position = e.mem.alloc(12);
         let update = e.mem.alloc(0x324);
@@ -13606,22 +13927,34 @@ mod tests {
         let calls = e.call_log.take().unwrap();
         // 00779509: 00438eb0 and 00403df0 take only `this`; the five pushed words
         // and `location` are 0076b960's.
-        let location = calls
+        let named = calls
             .iter()
-            .position(|(address, _)| *address == 0x0043_8eb0)
-            .unwrap();
-        assert_eq!(calls[location].1, args![0x100_u32].to_vec());
-        assert_eq!(
-            calls[location + 1],
-            (0x0040_3df0, args![0x011d_2208_u32].to_vec())
-        );
-        assert_eq!(
-            calls
+            .filter(|(address, _)| *address == 0x0043_8eb0)
+            .count();
+        // The name reaches the "location discovered" message: 0076b960 copies it to
+        // update + 0x10c (JIP's name, or the game's from 00438eb0).
+        let name_copy = calls
+            .iter()
+            .find(|(address, words)| *address == 0x0040_6d30 && words[0] == update + 0x10c)
+            .expect("the name copied into the message");
+        assert_eq!(name_copy.1[2], if jip_name { 0x7300 } else { 0x7100 });
+        if jip_name {
+            assert_eq!(named, 0, "JIP's name: no call");
+            let record = e.mem.u32(nodes[0]);
+            assert_eq!(NAME_ASKED.with(|s| s.take()), vec![vec![0x100, record]]);
+        } else {
+            let location = calls
                 .iter()
-                .filter(|(address, _)| *address == 0x0043_8eb0)
-                .count(),
-            1
-        );
+                .position(|(address, _)| *address == 0x0043_8eb0)
+                .unwrap();
+            assert_eq!(calls[location].1, args![0x100_u32].to_vec());
+            assert_eq!(
+                calls[location + 1],
+                (0x0040_3df0, args![0x011d_2208_u32].to_vec())
+            );
+            assert_eq!(named, 1);
+            assert!(NAME_ASKED.with(|s| s.take()).is_empty());
+        }
         // 011d9af0 after each marker.
         assert_eq!(e.mem.u32(nodes[1] + 8), references[0]);
         assert_eq!(e.mem.u32(nodes[2] + 8), references[1]);
@@ -15695,6 +16028,105 @@ mod tests {
             .map(|(_, words)| words[3])
             .collect();
         assert_eq!(formatted, vec![20, 7, 8]);
+    }
+
+    /// lStewieAl's Tweaks' row S0057: the level-up texts for level 100. The stand-in of the C
+    /// runtime's `sprintf_s` (`00406d00`) stops when the text and its terminator do not fit, as the
+    /// runtime's invalid-parameter check ends the game; with the row off the 3-byte buffer stops,
+    /// with it on both levels are printed and set.
+    #[test]
+    fn s0057_level_100_texts() {
+        for (on, level) in [(false, 100u32), (true, 100), (true, 1_000_000_000)] {
+            let mut e = Engine::new();
+            e.map(0x011d_9000, 0x1000);
+            e.mem.set_u32(0x011d_9e7c, level);
+            e.mem.set_u32(0x011d_9e78, level + 1);
+            let menu = e.new_object::<HUDMainMenu>();
+            for offset in [0xe8, 0xec] {
+                let tile = e.mem.alloc(4);
+                e.mem.set_u32(menu.addr() + offset, tile);
+            }
+            e.register_double(0x0040_6d00, move |e, words| {
+                // The buffer's size: 16 bytes with the row, the exe's 3 without; all of it written, as
+                // `sprintf_s` fills it, so a smaller buffer would be overrun.
+                assert_eq!(words[1], if on { 0x10 } else { 3 }, "the buffer's size");
+                let text = words[3].to_string();
+                assert!(
+                    text.len() < words[1] as usize,
+                    "sprintf_s: {text} does not fit {} bytes",
+                    words[1]
+                );
+                let mut bytes = text.into_bytes();
+                bytes.resize(words[1] as usize, 0);
+                e.mem.write(words[0], &bytes);
+                Ret::default()
+            });
+            e.register_double(0x00a0_1350, |_, _| Ret::default());
+            e.set_stewie(stewie::LEVEL_GREATER_THAN_99, on);
+            e.call_log = Some(vec![]);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                xp_print_levels(&mut e, menu);
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                let set = e
+                    .call_log
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .filter(|(address, _)| *address == 0x00a0_1350)
+                    .count();
+                assert_eq!(set, 2);
+            }
+        }
+    }
+
+    /// lStewieAl's Tweaks' row S0057 below level 100 (ordinary input): the two tiles get the same
+    /// texts with the row on as off (only the buffer's size, 3 or 16 bytes, differs).
+    #[test]
+    fn s0057_row_on_below_level_100_gives_the_same_texts() {
+        let run = |on: bool| {
+            let mut e = Engine::new();
+            e.map(0x011d_9000, 0x1000);
+            e.mem.set_u32(0x011d_9e7c, 5);
+            e.mem.set_u32(0x011d_9e78, 6);
+            let menu = e.new_object::<HUDMainMenu>();
+            let mut tiles = vec![];
+            for offset in [0xe8, 0xec] {
+                let tile = e.mem.alloc(4);
+                e.mem.set_u32(menu.addr() + offset, tile);
+                tiles.push(tile);
+            }
+            e.register_double(0x0040_6d00, |e, words| {
+                let text = words[3].to_string();
+                assert!(text.len() < words[1] as usize);
+                e.mem.write(words[0], text.as_bytes());
+                e.mem.set_u8(words[0] + text.len() as u32, 0);
+                Ret::default()
+            });
+            let set = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+            let seen = set.clone();
+            e.register_double(0x00a0_1350, move |e, words| {
+                let text = e.mem.cstr(words[2]).to_vec();
+                seen.borrow_mut().push((words[0], words[1], text, words[3]));
+                Ret::default()
+            });
+            e.set_stewie(stewie::LEVEL_GREATER_THAN_99, on);
+            xp_print_levels(&mut e, menu);
+            let texts = set.borrow().clone();
+            (texts, tiles)
+        };
+        let (off, on) = (run(false), run(true));
+        assert_eq!(on, off);
+        let (texts, tiles) = on;
+        assert_eq!(
+            texts,
+            vec![
+                (tiles[0], 0xfc4, b"5".to_vec(), 1),
+                (tiles[1], 0xfc4, b"6".to_vec(), 1)
+            ]
+        );
     }
 
     #[test]

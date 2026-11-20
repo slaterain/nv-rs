@@ -1851,27 +1851,40 @@ pub fn fn_00571760(e: &mut Engine, this: Ptr<TESObjectREFR>, item: u32) {
             }
         }
     }
-    if biped != 0 {
-        e.call(0x004a_b750, &args![biped, item, slots]);
+    // JIP LN's G93 (a fix row, `WriteRelJump(0x5719ED, PickWeaponModelHook)`): the handler gives
+    // the biped the item with the mod flags of the weapon an NPC holds, or answers the model part
+    // to attach (0 for none). Words: the reference, the actor or 0, the item, the biped or 0, the
+    // mod slots.
+    let jip_part = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(0x0057_19ed, &[me, actor, item, biped, slots])
     } else {
+        None
+    };
+    let part = match jip_part {
+        Some(part) => part,
+        None if biped != 0 => {
+            e.call(0x004a_b750, &args![biped, item, slots]);
+            0
+        }
         // the biped part of the item is embedded at +0x3c
-        let part = if item != 0 { item + 0x3c } else { 0 };
-        if part != 0 {
-            e.call(0x004a_eed0, &args![item, part, 5u32, me, 0u32]);
-            let loading = e.global::<u32>(GLOBAL_LOADING_OBJECT);
-            if !e.call(0x0042_ce10, &args![loading]).bool() {
-                let mut drawn = e.call(0x008a_16d0, &args![actor]).u8();
-                if drawn == 0 && e.call(0x0046_e8c0, &args![item]).bool() {
-                    drawn = 1;
-                }
-                let process = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, actor));
-                let animation = e.vcall(actor, 0x1e4, &args![]).u32();
-                e.vcall(
-                    process,
-                    0x1cc,
-                    &args![u32::from(drawn), biped, animation, actor],
-                );
+        None if item != 0 => item + 0x3c,
+        None => 0,
+    };
+    if part != 0 {
+        e.call(0x004a_eed0, &args![item, part, 5u32, me, 0u32]);
+        let loading = e.global::<u32>(GLOBAL_LOADING_OBJECT);
+        if !e.call(0x0042_ce10, &args![loading]).bool() {
+            let mut drawn = e.call(0x008a_16d0, &args![actor]).u8();
+            if drawn == 0 && e.call(0x0046_e8c0, &args![item]).bool() {
+                drawn = 1;
             }
+            let process = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, actor));
+            let animation = e.vcall(actor, 0x1e4, &args![]).u32();
+            e.vcall(
+                process,
+                0x1cc,
+                &args![u32::from(drawn), biped, animation, actor],
+            );
         }
     }
     if actor != 0 {
@@ -1913,9 +1926,21 @@ fn list_has_named_entry(e: &mut Engine, list: u32) -> bool {
 
 /// Takes `object` out of the shadow scene node and clears its attached
 /// effects (`00b5b1c0`, `00572160`).
-fn remove_from_scene(e: &mut Engine, object: u32) {
+///
+/// `jip_site`: the address of the `call 0x572160` JIP LN's G81 (a fix row,
+/// `WriteRelCall(0x571F65 / 0x571FDF, ClearWeaponNodeHook)`) replaces there (the held weapon
+/// node, the "Weapon" child); any answer of the handler (words: the node) takes the place of the
+/// call.
+fn remove_from_scene(e: &mut Engine, object: u32, jip_site: Option<u32>) {
     let scene = e.call(0x0045_0b80, &args![0u32]).u32();
     e.call(0x00b5_b1c0, &args![scene, object]);
+    if let Some(site) = jip_site {
+        if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+            && e.site(site, &[object]).is_some()
+        {
+            return;
+        }
+    }
     fn_00572160(e, Ptr::new(object));
 }
 
@@ -2027,20 +2052,20 @@ pub fn tes_object_refr_remove_weapon(e: &mut Engine, this: Ptr<TESObjectREFR>) {
     if process != 0 {
         let held = e.vcall(process, 0x1a0, &args![0u32]).u32();
         if held != 0 {
-            remove_from_scene(e, held);
+            remove_from_scene(e, held, Some(0x0057_1f65));
         }
         if e.vcall(me, 0x21c, &args![]).bool() {
             let node = node_of(e, me);
             if node != 0 {
                 let weapon = e.call(0x004a_ae30, &args![node, 0x0101_3be8u32]).u32();
                 if weapon != 0 {
-                    remove_from_scene(e, weapon);
+                    remove_from_scene(e, weapon, Some(0x0057_1fdf));
                 }
             }
         }
         let list = e.vcall(process, 0x1a4, &args![0u32]).u32();
         if list != 0 && list_has_named_entry(e, list) {
-            remove_from_scene(e, list);
+            remove_from_scene(e, list, None);
         }
     }
     if actor != 0 {
@@ -3854,7 +3879,12 @@ pub fn tes_object_refr_set_location_on_reference(
         }
         // OBJ_REFR::Location (Xbox PDB) +0x30
         if !replaced {
-            copy_words(e, me + 0x30, loc, 3);
+            // Seam (JIP's H13, `SetRefrPositionHook` at `0x575A7F`): words: the reference, the
+            // location; an answer means the position is written already (the player kept at the
+            // synchronized node, or the location).
+            if e.site(0x0057_5a7f, &[me, loc]).is_none() {
+                copy_words(e, me + 0x30, loc, 3);
+            }
         } else {
             copy_words(e, me + 0x30, corrected, 3);
             let node = node_of(e, me);
@@ -7045,6 +7075,61 @@ mod tests {
         assert!(calls_to(&log, 0x004a_b750).is_empty());
     }
 
+    /// JIP LN's G93 seam at `0x5719ED` (a fix row): asked with the reference, the actor, the item,
+    /// the biped and the mod slots; its answer is the part attached (none for 0); only with the
+    /// fix row's bit; no answer is the exe's.
+    #[test]
+    fn equip_asks_jip_g93_for_the_part_to_attach() {
+        use engine_core::extend::jip_patches;
+        let mut s = equip_setup();
+        let (actor, item) = (s.actor, s.item);
+        returns(&mut s.e, 0x0046_e8c0, 1);
+        super::jip_seam::put(&mut s.e, 0x0057_19ed, Some(0x6a6a));
+        let attached = |e: &mut Engine| {
+            let log = logged(e, |e| {
+                e.call(0x0057_1760, &args![actor, item]);
+            });
+            calls_to(&log, 0x004a_eed0)
+        };
+        s.e.set_jip_patches(jip_patches::INSTALLED);
+        assert_eq!(
+            attached(&mut s.e),
+            vec![vec![item, item + 0x3c, 5, actor, 0]]
+        );
+        assert!(super::jip_seam::seen().is_empty(), "only FIXES asks");
+        s.e.set_jip_patches(jip_patches::FIXES);
+        assert_eq!(attached(&mut s.e), vec![vec![item, 0x6a6a, 5, actor, 0]]);
+        assert_eq!(
+            super::jip_seam::seen(),
+            vec![vec![actor, actor, item, 0, 0]]
+        );
+        super::jip_seam::answer_with(Some(0));
+        assert!(attached(&mut s.e).is_empty(), "0: nothing attached");
+        super::jip_seam::answer_with(None);
+        assert_eq!(
+            attached(&mut s.e),
+            vec![vec![item, item + 0x3c, 5, actor, 0]]
+        );
+        super::jip_seam::seen();
+        // A reference that is not an actor: asked with 0 for the actor.
+        // (The translation reads and calls through the null actor's process as the exe does:
+        // page 0 mapped with a vtable of do-nothing slots.)
+        s.e.map(0, 0x1000);
+        s.e.register(0x00fe_7000, |_, _| Ret::default());
+        s.e.mem.set_u32(0, 0x800);
+        for slot in (0..0x800).step_by(4) {
+            s.e.mem.set_u32(0x800 + slot, 0x00fe_7000);
+        }
+        let node = s.node;
+        let thing = reference(&mut s.e, false, &[(0x1e8, 0), (0x1e4, 0), (0x22c, 0)]);
+        set_node(&mut s.e, thing, node);
+        super::jip_seam::answer_with(Some(0));
+        logged(&mut s.e, |e| {
+            e.call(0x0057_1760, &args![thing, item]);
+        });
+        assert_eq!(super::jip_seam::seen(), vec![vec![thing, 0, item, 0, 0]]);
+    }
+
     #[test]
     fn equip_skips_the_animation_load_when_the_group_is_already_loaded() {
         let mut s = equip_setup();
@@ -7228,6 +7313,85 @@ mod tests {
         });
         assert_eq!(calls_to(&log, 0x00b5_b1c0), vec![vec![0x5c5c, child]]);
         assert_eq!(calls_to(&log, 0x004d_ffa0), vec![vec![child + 0x9c]]);
+    }
+
+    /// JIP LN's G81 seams at `0x571F65` (the held weapon node) and `0x571FDF` (the "Weapon"
+    /// child): an answer takes the place of the effects release `00572160`; only with the fix
+    /// row's bit; the shadow scene node still lets go of the node first.
+    #[test]
+    fn remove_weapon_jip_g81_seams_replace_the_effects_release() {
+        use engine_core::extend::jip_patches;
+        let mut s = weapon_setup(0, 0);
+        let (actor, node) = (s.actor, s.node);
+        let held = s.e.mem.alloc(0x100);
+        let vtable = s.e.mem.u32(s.process);
+        s.e.register_double(vtable + 0x1a0, move |_, _| ret(held));
+        let child = s.e.mem.alloc(0x100);
+        s.e.register_double(0x004a_ae30, move |_, a| {
+            ret(if a[0] == node && a[1] == 0x0101_3be8 {
+                child
+            } else {
+                0
+            })
+        });
+        let vtable = s.e.mem.u32(actor);
+        s.e.register(vtable + 0x21c, |_, _| ret(1));
+        super::jip_seam::put(&mut s.e, 0x0057_1f65, Some(0));
+        super::jip_seam::put(&mut s.e, 0x0057_1fdf, Some(0));
+        let run = |e: &mut Engine| {
+            logged(e, |e| {
+                e.call(0x0057_1b50, &args![actor]);
+            })
+        };
+        s.e.set_jip_patches(jip_patches::INSTALLED);
+        let log = run(&mut s.e);
+        assert_eq!(
+            calls_to(&log, 0x004d_ffa0),
+            vec![vec![held + 0x9c], vec![child + 0x9c]],
+            "the exe"
+        );
+        assert!(super::jip_seam::seen().is_empty(), "only FIXES asks");
+        s.e.set_jip_patches(jip_patches::FIXES);
+        let log = run(&mut s.e);
+        assert_eq!(super::jip_seam::seen(), vec![vec![held], vec![child]]);
+        assert!(calls_to(&log, 0x004d_ffa0).is_empty(), "both replaced");
+        assert!(calls_to(&log, 0x0065_8930).is_empty());
+        assert_eq!(
+            calls_to(&log, 0x00b5_b1c0),
+            vec![vec![0x5c5c, held], vec![0x5c5c, child]],
+            "the scene lets go first"
+        );
+        // Only the held node's answer: the child's release is the exe's.
+        super::jip_seam::only_for(Some(held));
+        let log = run(&mut s.e);
+        assert_eq!(calls_to(&log, 0x004d_ffa0), vec![vec![child + 0x9c]]);
+        super::jip_seam::answer_with(None);
+        let log = run(&mut s.e);
+        assert_eq!(calls_to(&log, 0x004d_ffa0).len(), 2, "no answer: the exe");
+        super::jip_seam::seen();
+        // Each node at its own address: with a handler at 0x571FDF only, the "Weapon" child is
+        // asked there and the held node is the exe's.
+        let mut t = weapon_setup(0, 0);
+        let t_node = t.node;
+        let vtable = t.e.mem.u32(t.process);
+        t.e.register_double(vtable + 0x1a0, move |_, _| ret(held));
+        t.e.register_double(0x004a_ae30, move |_, a| {
+            ret(if a[0] == t_node && a[1] == 0x0101_3be8 {
+                child
+            } else {
+                0
+            })
+        });
+        let actor_vtable = t.e.mem.u32(t.actor);
+        t.e.register(actor_vtable + 0x21c, |_, _| ret(1));
+        super::jip_seam::put(&mut t.e, 0x0057_1fdf, Some(0));
+        t.e.set_jip_patches(jip_patches::FIXES);
+        let actor = t.actor;
+        let log = logged(&mut t.e, |e| {
+            e.call(0x0057_1b50, &args![actor]);
+        });
+        assert_eq!(super::jip_seam::seen(), vec![vec![child]]);
+        assert_eq!(calls_to(&log, 0x004d_ffa0), vec![vec![held + 0x9c]]);
     }
 
     #[test]
@@ -9990,6 +10154,23 @@ mod tests {
         assert_eq!(e.mem.f32(refr + 0x34), 200.0);
         assert_eq!(e.mem.f32(refr + 0x38), 300.0);
         assert!(calls_to(&log, slot(&e, refr, 0x138)).is_empty());
+        assert_eq!(calls_to(&log, slot(&e, refr, 0x48)), vec![vec![refr, 2]]);
+    }
+
+    /// The seam at 0x575A7F (JIP's H13): an answer means the handler wrote the position, so the
+    /// location is not copied over it; the rest of the move goes on.
+    #[test]
+    fn set_location_leaves_the_store_to_an_answering_seam() {
+        let (mut e, refr, location) = location_setup();
+        e.on_site_for_test(0x0057_5a7f, |e, w| {
+            e.mem.set_f32(w[0] + 0x30, 7.0);
+            Some(1)
+        });
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_5830, &args![refr, location]);
+        });
+        assert_eq!(e.mem.f32(refr + 0x30), 7.0);
+        assert_eq!(e.mem.f32(refr + 0x34), 0.0);
         assert_eq!(calls_to(&log, slot(&e, refr, 0x48)), vec![vec![refr, 2]]);
     }
 

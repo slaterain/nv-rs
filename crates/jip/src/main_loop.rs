@@ -27,11 +27,13 @@ const PLAYER: u32 = 0x011d_ea3c;
 const SCRIPT: u8 = 0x11;
 const PLAYER_ID: u32 = 0x14;
 
-/// One script callback (`MainLoopCallback` with `isScript`).
+/// One callback (`MainLoopCallback`): a script's (`isScript`), or one of JIP's own functions
+/// ([`Native`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Callback {
+    /// The script (0 for one of JIP's own functions).
     pub script: u32,
-    /// `thisObj`: the reference it runs on.
+    /// `thisObj`: the reference a script runs on; a function's `this`.
     pub this_obj: u32,
     /// `bRemove`: taken out at the end of the next cycle.
     pub remove: bool,
@@ -42,6 +44,91 @@ pub struct Callback {
     pub cycle_count: u32,
     /// `args[0]`: the reference's id when added.
     pub ref_id: u32,
+    /// `cmdPtr` when it is one of JIP's own functions (`isScript` false).
+    pub native: Option<Native>,
+    /// `callCount`: the calls left of one of JIP's own functions (scripts' stay 1, unread).
+    pub call_count: u32,
+}
+
+/// JIP's own functions it puts in the list (`MainLoopAddCallback` with a function), each with
+/// its `this` ([`Callback::this_obj`]) and no arguments.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Native {
+    /// `EndWeatherTransition` (`internal/patches_game.h`, G90's `CloudsFixHook`): the sky's
+    /// `transWeather` (`+0x14`) cleared.
+    EndWeatherTransition,
+    /// `RegisterInsertObject` (`InsertNode`, `AttachModel` asked on another thread to change the
+    /// 3D now): the request kept under the callback's `this` (a key of
+    /// `commands::jip_fn_misc_ref_insert`).
+    RegisterInsertObject,
+    /// `JIPScriptRunner::RunScript` (`RunScriptSnippet` with a delay): the callback's `this` is
+    /// the script, its first argument (kept in [`Callback::ref_id`]) the calling reference.
+    RunScript,
+    /// `ToggleQuestMessages` (`SuppressQuestMessages`): quest messages shown again a frame later
+    /// (`commands::jip_fn_ui_code`).
+    ToggleQuestMessages,
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: MainLoopAddCallbackArgsEx (one
+// argument).
+/// One of JIP's own functions with one argument (`arg`, kept in [`Callback::ref_id`]), called
+/// `calls` times every `delay` frames (0 is 1), in game and menu mode alike.
+pub fn add_native_with(
+    e: &mut Engine,
+    native: Native,
+    this_obj: u32,
+    calls: u32,
+    delay: u32,
+    arg: u32,
+) {
+    let delay = delay.max(1);
+    state(e).callbacks.push(Callback {
+        script: 0,
+        this_obj,
+        remove: false,
+        flags: 0,
+        call_delay: delay,
+        cycle_count: delay,
+        ref_id: arg,
+        native: Some(native),
+        call_count: calls,
+    });
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: MainLoopAddCallback
+// (MainLoopCallback::Create with a function: one call, after one frame, no arguments).
+/// One of JIP's own functions, called once at the next cycle, in game and menu mode alike.
+pub fn add_native(e: &mut Engine, native: Native, this_obj: u32) {
+    state(e).callbacks.push(Callback {
+        script: 0,
+        this_obj,
+        remove: false,
+        flags: 0,
+        call_delay: 1,
+        cycle_count: 1,
+        ref_id: 0,
+        native: Some(native),
+        call_count: 1,
+    });
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: MainLoopCallback::Execute, with
+// the functions it is given.
+fn execute_native(e: &mut Engine, native: Native, this_obj: u32, arg: u32) {
+    match native {
+        // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h:
+        // EndWeatherTransition. A null sky (never in the game: TES makes it at start-up) is left.
+        Native::EndWeatherTransition => {
+            if this_obj != 0 {
+                e.mem.set_u32(this_obj + 0x14, 0);
+            }
+        }
+        Native::RegisterInsertObject => {
+            crate::commands::jip_fn_misc_ref_insert::run_pending(e, this_obj);
+        }
+        Native::RunScript => crate::script_runner::run_script(e, this_obj, arg),
+        Native::ToggleQuestMessages => crate::commands::jip_fn_ui_code::toggle_quest_messages(e),
+    }
 }
 
 /// `s_mainLoopCallbacks`, in the order they were added.
@@ -127,6 +214,8 @@ fn set_game_main_loop_callback(e: &mut Engine, w: &[u32]) -> Ret {
                     call_delay: delay,
                     cycle_count: delay,
                     ref_id,
+                    native: None,
+                    call_count: 1,
                 });
                 list.len() - 1
             }
@@ -144,12 +233,31 @@ fn set_game_main_loop_callback(e: &mut Engine, w: &[u32]) -> Ret {
 /// mode: `currentMode > 1`) is one of its flags, counts a frame down; at 0 its reference is
 /// checked (the player always passes; another must still be the form its id names, or the
 /// callback is marked to go) and the script is called on it with no arguments, its frames left
-/// set back to its delay. Then the marked ones go, their lambda variables given up.
+/// set back to its delay. One of JIP's own functions counts its frame down in any mode; at 0 it
+/// loses a call (none left: marked to go, else its frames set back) and is called. Then the
+/// marked ones go, a script's lambda variables given up.
 pub fn cycle(e: &mut Engine) {
     let count = state(e).callbacks.len();
     for i in 0..count {
         let c = state(e).callbacks[i].clone();
         if c.remove {
+            continue;
+        }
+        if let Some(native) = c.native {
+            let left = c.cycle_count.wrapping_sub(1);
+            state(e).callbacks[i].cycle_count = left;
+            if left != 0 {
+                continue;
+            }
+            let calls = c.call_count.wrapping_sub(1);
+            let callback = &mut state(e).callbacks[i];
+            callback.call_count = calls;
+            if calls == 0 {
+                callback.remove = true;
+            } else {
+                callback.cycle_count = c.call_delay;
+            }
+            execute_native(e, native, c.this_obj, c.ref_id);
             continue;
         }
         let manager = e.mem.u32(INTERFACE_MANAGER);
@@ -178,21 +286,35 @@ pub fn cycle(e: &mut Engine) {
         i -= 1;
         if state(e).callbacks[i].remove {
             let gone = state(e).callbacks.remove(i);
-            nvse::lambda::unsave_variables(e, gone.script);
+            if gone.native.is_none() {
+                nvse::lambda::unsave_variables(e, gone.script);
+            }
         }
     }
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/serialization.h: CleanMLCallbacks (the
 // script callbacks' part; JIP's script runner's own come with it).
-/// At a load or the exit to the main menu: the callbacks set with mode bit 8 marked to go.
+/// At a load or the exit to the main menu: a delayed `RunScriptSnippet`'s script destroyed
+/// (`Destroy`, vtable +0x10, with 1) and its callback marked to go (its calling reference may not
+/// survive the load), and the callbacks set with mode bit 8 marked to go.
 pub fn clean(e: &mut Engine) {
+    let mut snippets = Vec::new();
     for c in &mut state(e).callbacks {
-        if c.flags & 8 != 0 {
+        if c.native == Some(Native::RunScript) {
+            snippets.push(c.this_obj);
+            c.remove = true;
+        } else if c.flags & 8 != 0 {
             c.remove = true;
         }
     }
+    for script in snippets {
+        e.vcall(script, SCRIPT_DESTROY, &[1]);
+    }
 }
+
+/// `Script::Destroy` (vtable +0x10).
+const SCRIPT_DESTROY: u32 = 0x10;
 
 #[cfg(test)]
 #[path = "main_loop_tests.rs"]

@@ -1746,6 +1746,21 @@ pub fn fn_0063c480(e: &mut Engine) -> f32 {
     e.global(0x011c_7a5c)
 }
 
+/// The weather's wind speed at `site` (`0x63C4D6`, `0x63C52C`: `fn_0063c490`'s two calls of
+/// `004ed230`). JIP LN NVSE's G74 (a fix, the row `NV_JIP_GAME_PATCHES`; `GetWindSpeedHook`)
+/// replaces the call: the seam is asked with the weather and answers the speed's `f32` bits (the
+/// weather's byte `+0xE0` times `SetWindSpeedMult`'s factor). With the word's `FIXES` bit clear: one
+/// load, then the exe's call.
+#[inline]
+fn jip_wind_speed(e: &mut Engine, site: u32, weather: Ptr) -> Option<f32> {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        if let Some(bits) = e.site(site, &[weather.addr()]) {
+            return Some(f32::from_bits(bits));
+        }
+    }
+    None
+}
+
 // Translated from 0063c490 (decompiled, FalloutNV.exe 1.4.0.525)
 /// The wind: in modes 2 and 3 with a weather, `fWindSpeed` is the weather's
 /// wind speed (`004ed230`, byte 0 of its table scaled to 0..1), mixed with
@@ -1760,9 +1775,12 @@ pub fn fn_0063c490(e: &mut Engine, this: Ptr<Sky>) {
     if weather.is_null() || !(mode == 3 || mode == 2) {
         return;
     }
-    let speed = e
-        .call(WEATHER_BYTE_FRACTION, &args![weather, 0u32, 1.0f32, 0.0f32])
-        .f32();
+    let speed = match jip_wind_speed(e, 0x0063_c4d6, weather) {
+        Some(speed) => speed,
+        None => e
+            .call(WEATHER_BYTE_FRACTION, &args![weather, 0u32, 1.0f32, 0.0f32])
+            .f32(),
+    };
     e.set(this, Sky::fWindSpeed, speed);
     let last_weather = e.get(this, Sky::pLastWeather);
     if !last_weather.is_null() {
@@ -1770,12 +1788,15 @@ pub fn fn_0063c490(e: &mut Engine, this: Ptr<Sky>) {
         let scaled = (speed as f64 * percent as f64) as f32;
         e.set(this, Sky::fWindSpeed, scaled);
         let rest = 1.0 - e.get(this, Sky::fCurrentWeatherPct) as f64;
-        let last_speed = e
-            .call(
-                WEATHER_BYTE_FRACTION,
-                &args![last_weather, 0u32, 1.0f32, 0.0f32],
-            )
-            .f64();
+        let last_speed = match jip_wind_speed(e, 0x0063_c52c, last_weather) {
+            Some(speed) => f64::from(speed),
+            None => e
+                .call(
+                    WEATHER_BYTE_FRACTION,
+                    &args![last_weather, 0u32, 1.0f32, 0.0f32],
+                )
+                .f64(),
+        };
         let mixed = last_speed * rest + scaled as f64;
         e.set(this, Sky::fWindSpeed, mixed as f32);
     }
@@ -1893,6 +1914,22 @@ pub fn fn_0063c8a0(e: &mut Engine, this: Ptr, other: Ptr) -> Ptr {
     this
 }
 
+/// The climate `Sky::SetCurrentClimate` sets. JIP LN NVSE's H17 (JIP's own, `InitJIPHooks`;
+/// `SkyRefreshClimateHook` at `0x63C918`) puts the climate `ForceClimate` forced in place of the
+/// argument: the seam is asked with the argument and answers the forced climate (no answer: none
+/// forced). JIP's hook also redoes the timer scope it overwrote; the translation keeps the exe's
+/// call for that (the same thread word). With the word's `INSTALLED` bit clear: one load, then
+/// the argument.
+#[inline]
+fn jip_forced_climate(e: &mut Engine, climate: Ptr) -> Ptr {
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        if let Some(forced) = e.site(0x0063_c918, &[climate.addr()]) {
+            return Ptr::new(forced);
+        }
+    }
+    climate
+}
+
 // Translated from 0063c8f0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `Sky::SetCurrentClimate` (Xbox PDB): when `climate` is null and there is
 /// no current climate (or `force` is set), looks up the form with id `0x15f`
@@ -1903,7 +1940,7 @@ pub fn fn_0063c8a0(e: &mut Engine, this: Ptr, other: Ptr) -> Ptr {
 /// exception frame is not translated.
 pub fn sky_set_current_climate(e: &mut Engine, this: Ptr<Sky>, climate: Ptr, force: bool) {
     with_timer(e, 0x5b8, |e| {
-        let mut climate = climate;
+        let mut climate = jip_forced_climate(e, climate);
         if climate.is_null() && (e.get(this, Sky::pCurrentClimate).is_null() || force) {
             let form: Ptr = e.call(LOOKUP_FORM, &args![0x15fu32]).ptr();
             climate = e
@@ -3109,6 +3146,20 @@ pub fn fn_0063e2f0(e: &mut Engine, this: Ptr<Sky>) {
     });
 }
 
+/// The climate's texture entry the sun's glare is loaded from (`push 0` at `0x63E704`). JIP LN
+/// NVSE's G15 (a fix, the row `NV_JIP_GAME_PATCHES`; `SafeWrite8(0x63E705, 1)`, "Fix sun glare
+/// texture") makes it entry 1, the glare's own: the seam answers the pushed byte (sign-extended,
+/// as `push imm8`). With the word's `FIXES` bit clear: one load, then the exe's 0.
+#[inline]
+fn sun_glare_index(e: &mut Engine) -> i32 {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        if let Some(byte) = e.site(0x0063_e705, &[]) {
+            return i32::from(byte as u8 as i8);
+        }
+    }
+    0
+}
+
 /// The sun part of `fn_0063e2f0`.
 fn load_sun_textures_at_entry_zero(e: &mut Engine, this: Ptr<Sky>, sun: Ptr) {
     e.with_stack(8, |e, text| {
@@ -3136,7 +3187,8 @@ fn load_sun_textures_at_entry_zero(e: &mut Engine, this: Ptr<Sky>, sun: Ptr) {
             let node = fn_0063d040(e, sun);
             let property: Ptr = e.call(NODE_GET_PROPERTY, &args![node, 3u32]).ptr();
             let climate = e.get(this, Sky::pCurrentClimate);
-            let entry = fn_0063cfa0(e, climate, 0);
+            let glare = sun_glare_index(e);
+            let entry = fn_0063cfa0(e, climate, glare);
             if !entry.is_null() && e.call(TEXTURE_ENTRY_VALID, &args![entry]).u32() != 0 {
                 let mut use_default = false;
                 if e.global::<u8>(INITIAL_FLAG) == 0 {
@@ -3422,6 +3474,22 @@ fn drive_image_space(e: &mut Engine, instance: Ptr, weight: f32, form: Ptr) {
     }
 }
 
+/// The two image-space indexes of the morning (`site` `0x63F385`: the exe's 1 then 4) or the
+/// afternoon (`0x63F3F7`: 4 then 1) in `Sky::UpdateHDRValues`. JIP LN NVSE's G19 (a fix, the row
+/// `NV_JIP_GAME_PATCHES`; "High-noon fix", `SafeWrite8` at `0x63F385`, `0x63F38C`, `0x63F3F7`,
+/// `0x63F3FE`) swaps each pair, so the high-noon form weighs most at noon: the seam answers the
+/// first index in its low byte and the second in the next. With the word's `FIXES` bit clear: one
+/// load, then the exe's pair.
+#[inline]
+fn high_noon_indexes(e: &mut Engine, site: u32, exe: (u32, u32)) -> (u32, u32) {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        if let Some(pair) = e.site(site, &[]) {
+            return (pair & 0xff, (pair >> 8) & 0xff);
+        }
+    }
+    exe
+}
+
 // Translated from 0063ef20 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `Sky::UpdateHDRValues` (Xbox PDB): drives the four image-space modifier
 /// instances (`+0x11c`, `+0x120` for the current weather, `+0x124`, `+0x128`
@@ -3518,14 +3586,12 @@ pub fn sky_update_hdr_values(e: &mut Engine, this: Ptr<Sky>) {
         blend = (1.0 - distance / span as f64) as f32;
     } else if sunrise_end < hour && noon > hour {
         second = true;
-        index_first = 1;
-        index_second = 4;
+        (index_first, index_second) = high_noon_indexes(e, 0x0063_f385, (1, 4));
         let span = (noon as f64 - sunrise_end as f64) as f32;
         blend = (1.0 - (noon as f64 - hour as f64) / span as f64) as f32;
     } else if hour > noon && sunset_begin > hour {
         second = true;
-        index_first = 4;
-        index_second = 1;
+        (index_first, index_second) = high_noon_indexes(e, 0x0063_f3f7, (4, 1));
         let span = (sunset_begin as f64 - noon as f64) as f32;
         blend = (1.0 - (sunset_begin as f64 - hour as f64) / span as f64) as f32;
     } else if sunset_begin < hour && sunset_end > hour {
@@ -7060,6 +7126,183 @@ mod tests {
         assert!(log.contains(&(LOG_MASTERFILE_ERROR, vec![TRANSITION_TIMES_MESSAGE])));
         assert!(log.contains(&(WEATHER_IMAGE_SPACE_FOR_TIME, vec![0x4018, 1])));
         assert_eq!(forms_of(&log, INSTANCE_CURRENT), [1]);
+    }
+
+    // ---- JIP LN NVSE's game patches of group GW (step 3.9): G15, G19, G74, H17 ----
+
+    use engine_core::extend::{jip_patches, Owner, SiteSlot};
+
+    /// Where the GW test handlers count their calls and keep the words they were asked with.
+    const ASKED: u32 = 0x0118_0400;
+
+    fn map_asked(e: &mut Engine) {
+        if !e.mem.is_mapped(ASKED) {
+            e.map(ASKED & !0xfff, 0x1000);
+        }
+        e.mem.set_u32(ASKED, 0);
+    }
+
+    fn asked(e: &mut Engine, a: &[u32]) {
+        let n = e.mem.u32(ASKED);
+        e.mem
+            .set_u32(ASKED + 4 + 4 * n, a.first().copied().unwrap_or(0));
+        e.mem.set_u32(ASKED, n + 1);
+    }
+
+    fn asked_words(e: &Engine) -> Vec<u32> {
+        (0..e.mem.u32(ASKED))
+            .map(|i| e.mem.u32(ASKED + 4 + 4 * i))
+            .collect()
+    }
+
+    /// The words that leave each seam as the exe and ask nothing: JIP not installed, and (for the
+    /// fixes) installed with the row off; for H17 (JIP's own) the fixes bit alone.
+    const FIX_OFF: [u32; 2] = [0, jip_patches::INSTALLED];
+
+    /// G74 at `0x63C4D6` and `0x63C52C`: off, the exe's `004ed230` (0.6 and 0.2, mixed); with the
+    /// row, the seam's speeds (asked with each weather) in place of the calls.
+    #[test]
+    fn g74_seams_take_the_wind_speeds() {
+        let run = |word: u32| {
+            let mut e = wind_engine();
+            map_asked(&mut e);
+            e.set_jip_patches(word);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0063_c4d6), |e, a| {
+                asked(e, a);
+                Some(0.25f32.to_bits())
+            });
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0063_c52c), |e, a| {
+                asked(e, a);
+                Some(0.75f32.to_bits())
+            });
+            let sky = new_sky(&mut e);
+            e.set(sky, Sky::pCurrentWeather, Ptr::new(0x1000));
+            e.set(sky, Sky::pLastWeather, Ptr::new(0x2000));
+            e.set(sky, Sky::fCurrentWeatherPct, 0.5);
+            e.set(sky, Sky::eMode, 3);
+            e.call_log = Some(vec![]);
+            e.call(0x0063_c490, &args![sky]);
+            let log = e.call_log.take().unwrap();
+            (
+                e.get(sky, Sky::fWindSpeed),
+                calls_to(&log, WEATHER_BYTE_FRACTION).len(),
+                asked_words(&e),
+            )
+        };
+        for word in FIX_OFF {
+            let (speed, calls, asked) = run(word);
+            assert!((speed - 0.4).abs() < 1e-6, "{word:08x}");
+            assert_eq!((calls, asked), (2, vec![]), "{word:08x}");
+        }
+        let (speed, calls, asked) = run(jip_patches::FIXES);
+        // 0.25 * 0.5 + 0.75 * 0.5.
+        assert_eq!(speed, 0.5);
+        assert_eq!((calls, asked), (0, vec![0x1000, 0x2000]));
+    }
+
+    /// G15 at `0x63E705`: off, both sun textures from the climate's entry 0 (`+0x38`); with the
+    /// row, the glare's from the entry the seam answers (1: `+0x44`; a byte 0xFF is -1, as `push
+    /// imm8` sign-extends it).
+    #[test]
+    fn g15_seam_picks_the_glare_entry() {
+        let run = |word: u32, answer: u32| {
+            let mut e = texture_engine();
+            map_asked(&mut e);
+            e.set_jip_patches(word);
+            e.mem.set_u32(ASKED + 0x200, answer);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0063_e705), |e, a| {
+                asked(e, a);
+                Some(e.mem.u32(ASKED + 0x200))
+            });
+            let sky = new_sky(&mut e);
+            let climate = e.mem.alloc(0x80);
+            for entry in [0x18, 0x2c, 0x38, 0x44] {
+                e.mem.set_u32(climate + entry, VTABLE);
+            }
+            e.set(sky, Sky::pCurrentClimate, Ptr::new(climate));
+            let sun = e.mem.alloc(0x30);
+            e.mem.set_u32(sun + 8, 0x5100);
+            e.mem.set_u32(sun + 0xc, 0x5200);
+            e.mem.set_u32(sun + 0x14, 0x5300);
+            e.set(sky, Sky::pSun, Ptr::new(sun));
+            e.call_log = Some(vec![]);
+            e.call(0x0063_e2f0, &args![sky]);
+            let log = e.call_log.take().unwrap();
+            let entries: Vec<u32> = calls_to(&log, TEXTURE_ENTRY_VALID)
+                .iter()
+                .map(|a| a[0] - climate)
+                .collect();
+            (entries, e.mem.u32(ASKED))
+        };
+        for word in FIX_OFF {
+            assert_eq!(run(word, 1), (vec![0x38, 0x38], 0), "{word:08x}");
+        }
+        assert_eq!(run(jip_patches::FIXES, 1), (vec![0x38, 0x44], 1));
+        assert_eq!(run(jip_patches::FIXES, 0x1ff), (vec![0x38, 0x2c], 1));
+    }
+
+    /// G19 at `0x63F385` (the morning) and `0x63F3F7` (the afternoon): off, the exe's pairs (1, 4)
+    /// and (4, 1); with the row, the seam's low byte is the first form and the next byte the
+    /// second; the dawn and the dusk ask nothing.
+    #[test]
+    fn g19_seams_swap_the_noon_forms() {
+        let run = |word: u32, hour: f32| {
+            let mut e = with_data(engine());
+            map_asked(&mut e);
+            let sky = hdr_sky(&mut e, hour);
+            e.set_jip_patches(word);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0063_f385), |e, a| {
+                asked(e, &[0xf385, a.len() as u32]);
+                Some(0x0204)
+            });
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0063_f3f7), |e, a| {
+                asked(e, &[0xf3f7, a.len() as u32]);
+                Some(0x0301)
+            });
+            e.call_log = Some(vec![]);
+            e.call(0x0063_ef20, &args![sky]);
+            let log = e.call_log.take().unwrap();
+            (
+                forms_of(&log, INSTANCE_CURRENT),
+                forms_of(&log, INSTANCE_CURRENT_2),
+                asked_words(&e),
+            )
+        };
+        for word in FIX_OFF {
+            assert_eq!(run(word, 10.0), (vec![0x101], vec![0x104], vec![]));
+            assert_eq!(run(word, 15.0), (vec![0x104], vec![0x101], vec![]));
+        }
+        let on = jip_patches::FIXES;
+        assert_eq!(run(on, 10.0), (vec![0x104], vec![0x102], vec![0xf385]));
+        assert_eq!(run(on, 15.0), (vec![0x101], vec![0x103], vec![0xf3f7]));
+        assert_eq!(run(on, 6.5).2, vec![], "dawn");
+        assert_eq!(run(on, 19.0).2, vec![], "dusk");
+    }
+
+    /// H17 at `0x63C918` (JIP's own: the installed bit): off (JIP not installed, or only the fixes
+    /// bit), the argument; installed, the seam's climate replaces it (asked with the argument); no
+    /// answer keeps the argument.
+    #[test]
+    fn h17_seam_forces_the_climate() {
+        let run = |word: u32, answer: u32| {
+            let mut e = climate_engine();
+            map_asked(&mut e);
+            e.set_jip_patches(word);
+            e.mem.set_u32(ASKED + 0x200, answer);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0063_c918), |e, a| {
+                asked(e, a);
+                let forced = e.mem.u32(ASKED + 0x200);
+                (forced != 0).then_some(forced)
+            });
+            let sky = new_sky(&mut e);
+            e.call(0x0063_c8f0, &args![sky, 0x1234u32, false]);
+            (e.get(sky, Sky::pCurrentClimate).addr(), asked_words(&e))
+        };
+        for word in [0, jip_patches::FIXES] {
+            assert_eq!(run(word, 0x5678), (0x1234, vec![]), "{word:08x}");
+        }
+        assert_eq!(run(jip_patches::INSTALLED, 0x5678), (0x5678, vec![0x1234]));
+        assert_eq!(run(jip_patches::INSTALLED, 0), (0x1234, vec![0x1234]));
     }
     // @@TESTS
 }

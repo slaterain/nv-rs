@@ -1020,6 +1020,7 @@ fn spawn(id: u32, start: u32, parameter: u32) -> Link {
         .name(format!("game thread {id}"))
         .stack_size(COROUTINE_STACK)
         .spawn(move || {
+            qos::thread_started();
             let Ok(Baton(engine)) = resumed.recv() else {
                 return;
             };
@@ -1268,6 +1269,7 @@ pub fn start_main_thread(start: u32, words: Vec<u32>) -> MainThread {
         .name("game main thread".into())
         .stack_size(COROUTINE_STACK)
         .spawn(move || {
+            qos::thread_started();
             let Ok(Baton(engine)) = resumed.recv() else {
                 return;
             };

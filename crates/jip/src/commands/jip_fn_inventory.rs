@@ -872,7 +872,7 @@ fn weapon_mod_effect_value(e: &mut Engine, weapon: u32, xdata: u32, effect: u32)
 // ContChangesEntry::GetBaseHealth.
 /// An item's full health: a weapon's health plus its attached health mod's value (by the first
 /// stack), an armour's health, else 0.
-fn base_health(e: &mut Engine, item: u32, first: u32) -> f32 {
+pub(crate) fn base_health(e: &mut Engine, item: u32, first: u32) -> f32 {
     match type_of(e, item) {
         WEAPON => {
             let health = e.mem.u32(item + WEAPON_HEALTH) as i32 as f32;
@@ -1166,6 +1166,7 @@ fn show_item_message(e: &mut Engine, item: u32, text: u32) {
     let block = heap_alloc(e, MESSAGE_BUFFER as u32);
     e.mem.write(block, &message);
     e.mem.set_u8(block + message.len() as u32, 0);
+    let _plugin = e.mark_plugin_ui_message();
     e.call(
         QUEUE_UI_MESSAGE,
         &args![block, 0u32, MESSAGE_ICON, 0u32, TWO_SECONDS, 0u32],

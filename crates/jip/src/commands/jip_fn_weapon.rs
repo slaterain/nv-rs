@@ -1,13 +1,9 @@
 //! `functions_jip/jip_fn_weapon.h` (JIP LN NVSE): a weapon form's sounds, mods, reload animation,
 //! models, embedded weapon data, on-hit setting and semi-automatic delays; the equipped weapon's
-//! silencer, scope and mods, a weapon's mod slots, shots a second and the attack queue. 25 of its
-//! 26 commands. The weapon is read as an inventory object (`kParamType_ObjectID`) or any form;
-//! each command checks `IS_ID(weapon, TESObjectWEAP)` (type 0x28).
-//!
-//! Left for later: `GetCalculatedWeaponDamage` reads `s_patchInstallState.NPCPerks` (whether
-//! JIP's NPC perks patch is on, `internal/patches_game.h`: the core track's step 3.9) inside its
-//! damage chain (`ContChangesEntry::CalculateWeaponDamage`: the game's `0x644CE0`, the ammo
-//! effects and the perk entry point), so it comes with the patches.
+//! silencer, scope and mods, a weapon's mod slots, shots a second, the attack queue and the
+//! calculated damage. All 26 of its commands. The weapon is read as an inventory object
+//! (`kParamType_ObjectID`) or any form; each command checks `IS_ID(weapon, TESObjectWEAP)`
+//! (type 0x28).
 //!
 //! The weapon loader (`0051F630`) reads `DNAM` (0xCC bytes) at +0xF4 (the embedded weapon actor
 //! value byte +0x11F, on-hit +0x128, the semi-automatic delays +0x174/+0x178 (defaulted there),
@@ -51,6 +47,7 @@ pub static COMMANDS: Handlers = &[
     (0x28aa, set_weapon_model),
     (0x2924, weapon_has_mod_type),
     (0x2940, calculate_shots_per_sec),
+    (0x27ed, get_calculated_weapon_damage),
 ];
 
 #[rustfmt::skip]
@@ -413,7 +410,7 @@ const GET_ANIM_DATA: u32 = 0x1e4;
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameObjects.cpp: Actor::GetWeaponInfo (asm).
 /// The actor's equipped weapon's changes entry: its process's when the process is high or
 /// middle-high (level 0 or 1); else none.
-fn weapon_info(e: &Engine, actor: u32) -> u32 {
+pub(crate) fn weapon_info(e: &Engine, actor: u32) -> u32 {
     let process = e.mem.u32(actor + PROCESS);
     if process == 0 || e.mem.u8(process + PROCESS_LEVEL) > 1 {
         return 0;
@@ -518,7 +515,7 @@ fn equipped_weapon_silenced(e: &mut Engine, actor: u32) -> u8 {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameObjects.cpp: Actor::EquippedWeaponHasScope.
 /// For an equipped weapon with a scope (flags1 bit 4): 1 when it is not a mod's (flags2 bit
 /// 0x2000 clear), 2 when the scope mod (effect 14) is on; else 0.
-fn equipped_weapon_has_scope(e: &mut Engine, actor: u32) -> u8 {
+pub(crate) fn equipped_weapon_has_scope(e: &mut Engine, actor: u32) -> u8 {
     let info = weapon_info(e, actor);
     if info == 0 {
         return 0;
@@ -731,6 +728,189 @@ fn is_attack_queued_eval(e: &mut Engine, w: &[u32]) -> Ret {
     handled(true)
 }
 
+// ---- the calculated damage ----
+
+/// `MiddleHighProcess::ammoInfo` (+0x118); a reference's id (+0xC), base form (+0x20) and extra
+/// data list (+0x44); an actor's actor value owner (+0xA4) and teammate byte (+0x18D); `TESAmmo`'s
+/// effect list (+0xD4); the player (`*011DEA3C`).
+const AMMO_INFO: u32 = 0x118;
+const REF_ID: u32 = 0xc;
+const REF_BASE: u32 = 0x20;
+const REF_EXTRA: u32 = 0x44;
+const AV_OWNER: u32 = 0xa4;
+const IS_TEAMMATE: u32 = 0x18d;
+const AMMO_EFFECTS: u32 = 0xd4;
+const THE_PLAYER: u32 = 0x011d_ea3c;
+/// The game's weapon damage (`00644CE0`, cdecl, eight words, its float in `ST0`),
+/// `ApplyAmmoEffects` (`0059A030`), `ApplyPerkModifiers` (`005E58F0`).
+const CALC_WEAPON_DAMAGE: u32 = 0x0064_4ce0;
+const APPLY_AMMO_EFFECTS: u32 = 0x0059_a030;
+const APPLY_PERK_MODIFIERS: u32 = 0x005e_58f0;
+/// `kAmmoEffect_DamageMod`, `kPerkEntry_CalculateWeaponDamage`; the weapon mod effect JIP tests
+/// (0xC) and the exe's float it then multiplies by (`ds:01022004`, 1.3).
+const AMMO_DAMAGE_MOD: u32 = 0;
+const PERK_CALCULATE_WEAPON_DAMAGE: u32 = 0;
+const DAMAGE_MOD_EFFECT: u8 = 0xc;
+const DAMAGE_MOD_MULT: u32 = 0x0102_2004;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameExtraData.cpp:
+// ContChangesEntry::CalculateWeaponDamage (asm).
+/// The damage of the changes entry `entry` (its weapon +8) held by `owner` at `condition`: the
+/// game's weapon damage (`owner`'s actor values, the weapon, the condition, 1.0, 0, 0, the entry,
+/// whether there is ammo), the ammo's damage effects when it has any, times the exe's 1.3 when a
+/// mod of the entry carries effect 0xC, then the "calculate weapon damage" perk entry point for
+/// the player, a teammate, or anyone while JIP's NPC perks patch is installed. JIP's function
+/// returns a `float`: the value ends as one on every path (10 x 1.3 is 13.0), the steps in single
+/// precision.
+fn calculate_weapon_damage(
+    e: &mut Engine,
+    entry: u32,
+    owner: u32,
+    condition: f32,
+    ammo: u32,
+) -> f64 {
+    let weapon = e.mem.u32(entry + ENTRY_ITEM);
+    let mut value = e
+        .call(
+            CALC_WEAPON_DAMAGE,
+            &[
+                owner.wrapping_add(AV_OWNER),
+                weapon,
+                condition.to_bits(),
+                1.0f32.to_bits(),
+                0,
+                0,
+                entry,
+                u32::from(ammo != 0),
+            ],
+        )
+        .f64() as f32;
+    if ammo != 0 && e.mem.u32(ammo + AMMO_EFFECTS) != 0 {
+        value = e
+            .call(
+                APPLY_AMMO_EFFECTS,
+                &[AMMO_DAMAGE_MOD, ammo + AMMO_EFFECTS, value.to_bits()],
+            )
+            .f64() as f32;
+    }
+    if entry_has_mod(e, entry, DAMAGE_MOD_EFFECT) {
+        value *= e.mem.f32(DAMAGE_MOD_MULT);
+    }
+    if crate::cosave::npc_perks_patch(e)
+        || e.mem.u32(owner + REF_ID) == 0x14
+        || e.mem.u8(owner + IS_TEAMMATE) != 0
+    {
+        value = e.with_stack(4, |e, at| {
+            let v = at.addr();
+            e.mem.set_f32(v, value);
+            e.call(
+                APPLY_PERK_MODIFIERS,
+                &[PERK_CALCULATE_WEAPON_DAMAGE, owner, weapon, owner, v],
+            );
+            e.mem.f32(v)
+        });
+    }
+    f64::from(value)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_weapon.h:
+// Cmd_GetCalculatedWeaponDamage_Execute.
+/// `[ref.]GetCalculatedWeaponDamage [weapon]`: a weapon's damage as the game works it out for its
+/// holder. With a weapon: a stack of one with no extra data, held by the player at full condition.
+/// Without: the calling reference's weapon (its base form), held by the actor whose inventory it
+/// is in (an inventory reference; the player otherwise) with that stack's extra data, or by the
+/// player with the reference's own extra data, at its condition. The holder's process (middle or
+/// high) has its weapon entry taken away while the damage is worked out and put back after; the
+/// ammo is the one loaded when the reference is an inventory reference of the equipped weapon,
+/// else the weapon's own ammo (a form list's item), and none unless it is a `TESAmmo`.
+fn get_calculated_weapon_damage(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let mut weapon = read.form(0);
+    let mut condition = 1.0f32;
+    let mut owner = e.mem.u32(THE_PLAYER);
+    let mut inv_ref = false;
+    let mut from_ref = false;
+    let mut lists = 0u32;
+    // `ContChangesExtraList extendData`, initialised on the reference's own list when needed.
+    let value = e.with_stack(0x14, |e, frame| {
+        let entry = frame.addr();
+        let own_list = entry + 0xc;
+        if weapon == 0 {
+            if a.this_obj == 0 {
+                return None;
+            }
+            weapon = e.mem.u32(a.this_obj + REF_BASE);
+            from_ref = true;
+            if type_of(e, weapon) != form_type_ln::TES_OBJECT_WEAP {
+                return None;
+            }
+            if let Some((_, data, container)) = super::jip_fn_inventory::inv_ref_of(e, a.this_obj) {
+                inv_ref = true;
+                if container != 0 && super::is_actor(e, container) {
+                    owner = container;
+                }
+                lists = if data.entry != 0 {
+                    e.mem.u32(data.entry + ENTRY_LISTS)
+                } else {
+                    0
+                };
+            } else {
+                e.mem.set_u32(own_list, a.this_obj + REF_EXTRA);
+                e.mem.set_u32(own_list + 4, 0);
+                lists = own_list;
+            }
+        } else if type_of(e, weapon) != form_type_ln::TES_OBJECT_WEAP {
+            return None;
+        }
+        // `ContChangesEntry tempEntry(extendData, 1, weapon)`.
+        e.mem.set_u32(entry + ENTRY_LISTS, lists);
+        e.mem.set_u32(entry + 4, 1);
+        e.mem.set_u32(entry + ENTRY_ITEM, weapon);
+        if from_ref {
+            condition = crate::game_patches::gb::health_percent(e, entry) * 0.01;
+        }
+        let process = e.mem.u32(owner + PROCESS);
+        let mid_high = process != 0 && e.mem.u8(process + PROCESS_LEVEL) <= 1;
+        let mut weapon_info = 0;
+        let mut ammo = 0;
+        if mid_high {
+            weapon_info = e.mem.u32(process + WEAPON_INFO);
+            e.mem.set_u32(process + WEAPON_INFO, 0);
+            let ammo_info = e.mem.u32(process + AMMO_INFO);
+            if inv_ref
+                && weapon_info != 0
+                && ammo_info != 0
+                && e.mem.u32(weapon_info + ENTRY_ITEM) == weapon
+            {
+                ammo = e.mem.u32(ammo_info + ENTRY_ITEM);
+            }
+        }
+        if ammo == 0 {
+            ammo = crate::game_patches::gd::weapon_ammo(e, weapon);
+        }
+        if ammo != 0 && e.mem.u32(ammo) != super::forms::TES_AMMO_VTBL {
+            ammo = 0;
+        }
+        let value = calculate_weapon_damage(e, entry, owner, condition, ammo);
+        if weapon_info != 0 {
+            e.mem.set_u32(process + WEAPON_INFO, weapon_info);
+        }
+        Some(value)
+    });
+    if let Some(value) = value {
+        a.set_result(e, value);
+    }
+    handled(true)
+}
+
 #[cfg(test)]
 #[path = "jip_fn_weapon_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "jip_fn_weapon_damage_tests.rs"]
+mod damage_tests;

@@ -8,6 +8,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+qos = { path = "../qos" }
 d3d9-stream = { path = "../d3d9-stream" }
 # The icon's 256-pixel logo is a PNG: its zlib stream read with the plugin reader's decoder.
 esm = { path = "../esm" }
@@ -20,3 +21,16 @@ wgpu = { version = "=30.0.1", default-features = false, features = ["std", "park
 # Note: gpu-allocator's `windows` dependency (">=0.53, <=0.62") is locked to 0.62.2, wgpu-hal's;
 # the resolver would otherwise pick the workspace's 0.58 and wgpu-hal would not build.
 raw-window-handle = "=0.6.2"
+
+# macOS test (tests/metal_surface.rs, its own main: no test harness): a bare CAMetalLayer, and a real
+# window made with winit on the main thread with its layer made as the window layer makes it
+# (raw-window-metal). The versions the workspace already locks (wgpu-hal 30's, engine-platform's).
+[target.'cfg(target_vendor = "apple")'.dev-dependencies]
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CALayer", "CAMetalLayer"] }
+raw-window-metal = "=1.1.0"
+winit = { version = "0.30.13", default-features = false, features = ["rwh_06"] }
+
+[[test]]
+name = "metal_surface"
+path = "tests/metal_surface.rs"
+harness = false

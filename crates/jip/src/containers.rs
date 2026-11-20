@@ -40,6 +40,18 @@ pub fn str_hash_ci(text: &[u8]) -> u32 {
     h
 }
 
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/containers.cpp: StrHashCS.
+/// [`str_hash_ci`] with case: each byte as it is.
+pub fn str_hash_cs(text: &[u8]) -> u32 {
+    let mut h = STR_HASH_SEED;
+    for (i, &b) in text.iter().take_while(|&&b| b != 0).enumerate() {
+        h = h
+            .wrapping_sub(u32::from(b) << [4, 12, 20, 0][i % 4])
+            .wrapping_mul(31);
+    }
+    h
+}
+
 /// `HashKey` for a key of four bytes that is not `UINT` (`UInt32`, which JIP declares
 /// `unsigned long`, and pointers): the bits mixed.
 pub fn mixed_hash(key: u32) -> u32 {

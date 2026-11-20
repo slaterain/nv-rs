@@ -76,6 +76,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use engine_core::extend::stewie;
 
 // ---------------------------------------------------------------------------
 // Callees in other units, by address.
@@ -871,9 +872,12 @@ const RENDERER_VIEW_MATRIX_OFFSET: u32 = 0x980;
 const RENDERER_PROJECTION_MATRIX_OFFSET: u32 = 0x9c0;
 const RENDERER_DEVICE_OFFSET: u32 = 0x8b8;
 /// The render object's device (`render object + 0x288`) and its virtual at
-/// `+0xdc`, called as `(device, index, plane)` with `ECX` holding the
-/// device's vtable pointer (going by its arguments it is Direct3D 9's
-/// `SetClipPlane`, a stdcall method that ignores `ECX`).
+/// `+0xdc`: Direct3D 9's `SetClipPlane`, a stdcall method called with three
+/// words, `(device, index, plane)`. `ECX` still holds the device's vtable
+/// pointer at the call (`004ed1d9`), which the method does not read: it is
+/// not an argument (passed as a fourth, leading word until 2026-11-19, the
+/// device answered `D3DERR_INVALIDCALL` to every clip plane of the water's
+/// reflection and depth passes, play report 011).
 const RENDER_OBJECT_DEVICE_OFFSET: u32 = 0x288;
 const DEVICE_SET_CLIP_PLANE_VIRTUAL: u32 = 0xdc;
 /// The renderer device's virtual at `+0x68`, called as `(state, value, 0,
@@ -2515,10 +2519,21 @@ fn update_water_form_for_reference(e: &mut Engine, this: Ptr<TESWaterSystem>, re
     // Only the first reference of a water form in an update scrolls and
     // renders its noise.
     let update_map = address_of(this, TESWaterSystem::WaterTypeUpdateMap);
-    let already_updated = e.with_stack(1, |e, flag| {
-        e.call(WATER_TYPE_MAP_FIND, &args![update_map, water_form, flag])
-            .bool()
-    });
+    // JIP LN's G106 (a fix row, `0x4E4000` nop4 and `WriteRelCall(0x4E400E,
+    // UpdateWaterTexturesHook)`): the handler's answer takes the place of the map's find; its low
+    // byte is "already updated". Words: the map and the water form.
+    let jip_answer = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(0x004e_400e, &[update_map, water_form.addr()])
+    } else {
+        None
+    };
+    let already_updated = match jip_answer {
+        Some(answer) => answer & 0xff != 0,
+        None => e.with_stack(1, |e, flag| {
+            e.call(WATER_TYPE_MAP_FIND, &args![update_map, water_form, flag])
+                .bool()
+        }),
+    };
     if already_updated {
         return;
     }
@@ -6324,7 +6339,13 @@ fn setup_group_reflections(
                 .call(LIST_ITEM_SLOT, &args![EXPLOSIONS_LIST, position])
                 .u32();
             let explosion = e.mem.u32(slot);
-            if reference_node(e, explosion) != 0 {
+            // 004ea743: lStewieAl's Tweaks' row S0042 (`fixExplosionWaterNullCall`): an explosion
+            // whose `Get3D` slot (vtable +0x1d0) is null is passed over, where the exe calls it.
+            let null_call = e.stewie(stewie::EXPLOSION_WATER_NULL_CALL) && {
+                let vtable = e.mem.u32(explosion);
+                e.mem.u32(vtable + REFERENCE_GET_3D) == 0
+            };
+            if !null_call && reference_node(e, explosion) != 0 {
                 let found = e.with_stack(4, |e, out| {
                     e.mem.set_u32(out.addr(), explosion);
                     e.call(WADING_MAP_GET, &args![reflected_refs_map, explosion, out])
@@ -7862,18 +7883,18 @@ pub fn fn_004ed180(_e: &mut Engine) -> u32 {
 // Translated from 004ed190 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Sets the clip planes `first` to `first + count - 1` of the render object's
 /// device (`this + 0x288`) to the 16-byte planes at `array`: the device's
-/// virtual at `+0xdc` is called as `(device, index, plane)` with `ECX`
-/// holding the vtable pointer.
+/// virtual at `+0xdc` (`SetClipPlane`, stdcall) is called with the three
+/// words the exe pushes, `(device, index, plane)`.
 pub fn fn_004ed190(e: &mut Engine, this: u32, first: i32, count: i32, array: u32) {
     let mut i = 0i32;
     while i < count {
         let device = e.mem.u32(this + RENDER_OBJECT_DEVICE_OFFSET);
-        let vtable = e.mem.u32(device);
-        let target = e
-            .mem
-            .u32(vtable.wrapping_add(DEVICE_SET_CLIP_PLANE_VIRTUAL));
         let plane = array.wrapping_add((i as u32).wrapping_mul(16));
-        e.call(target, &args![vtable, device, first.wrapping_add(i), plane]);
+        e.vcall(
+            device,
+            DEVICE_SET_CLIP_PLANE_VIRTUAL,
+            &args![first.wrapping_add(i), plane],
+        );
         i += 1;
     }
 }
@@ -10201,6 +10222,51 @@ mod tests {
         assert!(s.calls(WATER_TYPE_MAP_SET).is_empty());
         // The property still shares the rendered noise texture.
         assert_eq!(s.e.mem.u32(s.property.addr() + 0x138), FORM_NOISE_TEXTURE);
+    }
+
+    /// JIP LN's G106 seam at `0x4E400E` (a fix row): the answer's low byte takes the place of
+    /// the update map's find; only with the fix row's bit; no answer is the exe's find.
+    #[test]
+    fn a_jip_g106_answer_decides_whether_the_form_was_updated() {
+        use crate::units::fallout_shared::tesobjectrefr::jip_seam;
+        use engine_core::extend::jip_patches;
+        let mut s = form_scene();
+        let (this, form) = (s.this.addr(), s.water_form);
+        jip_seam::put(&mut s.e, 0x004e_400e, Some(0x100));
+        s.e.set_jip_patches(jip_patches::INSTALLED);
+        s.update_forms();
+        assert!(jip_seam::seen().is_empty(), "only FIXES asks");
+        assert_eq!(s.calls(WATER_TYPE_MAP_FIND).len(), 1, "the exe");
+        // FIXES: asked with the map and the form; 0x100's low byte is "not updated yet".
+        let mut s = form_scene();
+        jip_seam::put(&mut s.e, 0x004e_400e, Some(0x100));
+        s.e.mem.set_u8(MAP_FIND_ANSWER, 1);
+        s.e.set_jip_patches(jip_patches::FIXES);
+        s.update_forms();
+        assert_eq!(jip_seam::seen(), vec![vec![this + 0x6c, form]]);
+        assert!(s.calls(WATER_TYPE_MAP_FIND).is_empty(), "the find replaced");
+        assert_eq!(s.calls(IMAGE_SPACE_RENDER_NOISE).len(), 1);
+        assert_eq!(
+            s.calls(WATER_TYPE_MAP_SET),
+            vec![vec![this + 0x6c, form, 1]]
+        );
+        // Low byte set: already updated, nothing scrolled or rendered.
+        let mut s = form_scene();
+        jip_seam::put(&mut s.e, 0x004e_400e, Some(1));
+        s.e.set_jip_patches(jip_patches::FIXES);
+        s.update_forms();
+        assert!(s.calls(IMAGE_SPACE_RENDER_NOISE).is_empty());
+        assert!(s.calls(WATER_TYPE_MAP_SET).is_empty());
+        assert_eq!(s.e.mem.f32(form + 0x34), 0.2);
+        // No answer: the exe's find.
+        let mut s = form_scene();
+        jip_seam::put(&mut s.e, 0x004e_400e, None);
+        s.e.mem.set_u8(MAP_FIND_ANSWER, 1);
+        s.e.set_jip_patches(jip_patches::FIXES);
+        s.update_forms();
+        assert_eq!(s.calls(WATER_TYPE_MAP_FIND).len(), 1);
+        assert!(s.calls(IMAGE_SPACE_RENDER_NOISE).is_empty());
+        jip_seam::seen();
     }
 
     #[test]
@@ -14959,6 +15025,53 @@ mod tests {
             assert!(r.dynamic_objects().is_empty());
         }
 
+        /// lStewieAl's Tweaks' row S0042 with an explosion that has 3D (ordinary input): the row
+        /// changes nothing, the same calls and the same reflected explosion as with it off.
+        #[test]
+        fn s0042_row_on_with_an_explosion_that_has_3d_changes_nothing() {
+            let run = |on: bool| {
+                let mut r = reflection();
+                r.set_flags(0);
+                let explosion = reflected_reference(&mut r.w.e);
+                fill_list(&mut r.w.e, EXPLOSIONS_LIST, &[explosion]);
+                set_setting(&mut r.w.e, SETTING_REFLECT_EXPLOSIONS, true);
+                r.w.e.set_stewie(stewie::EXPLOSION_WATER_NULL_CALL, on);
+                r.run(false);
+                let node = r.w.e.mem.u32(explosion + REF_NODE);
+                let listed = r.w.map.borrow().contains_key(&explosion);
+                (r.dynamic_objects(), node, listed, r.w.e.call_log.clone())
+            };
+            let (off, on) = (run(false), run(true));
+            assert_eq!(on, off);
+            assert_eq!(on.0, vec![on.1]);
+            assert!(on.2);
+        }
+
+        /// lStewieAl's Tweaks' row S0042: the first explosion's `Get3D` slot (vtable `+0x1d0`) is
+        /// null (an explosion being taken apart). The exe calls it and stops; with the row on the
+        /// explosion is passed over and the reflection set-up finishes.
+        #[test]
+        fn s0042_an_explosion_with_a_null_get_3d_slot() {
+            for on in [false, true] {
+                let mut r = reflection();
+                r.set_flags(0);
+                let vtable = r.w.e.mem.alloc(0x400);
+                let explosion = r.w.e.mem.alloc(0x100);
+                r.w.e.mem.set_u32(explosion, vtable);
+                fill_list(&mut r.w.e, EXPLOSIONS_LIST, &[explosion]);
+                set_setting(&mut r.w.e, SETTING_REFLECT_EXPLOSIONS, true);
+                r.w.e.set_stewie(stewie::EXPLOSION_WATER_NULL_CALL, on);
+                let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| r.run(false)));
+                r.w.e.call_stack.clear();
+                assert_eq!(run.is_ok(), on, "row {on}");
+                if on {
+                    assert!(r.dynamic_objects().is_empty());
+                    assert!(!r.w.map.borrow().contains_key(&explosion));
+                    assert_eq!(calls(&r.w.e, MT_ADD_ACCUM_TASK).len(), 1);
+                }
+            }
+        }
+
         #[test]
         fn nothing_is_set_up_without_the_water_shader_or_a_viewer() {
             let mut r = reflection();
@@ -15538,8 +15651,11 @@ mod tests {
                 let clip_planes: ClipPlanes = Rc::default();
                 let log = clip_planes.clone();
                 e.register_double(CLIP_PLANE_DOUBLE, move |e, a| {
-                    let plane = (0..4).map(|i| e.mem.f32(a[3] + 4 * i)).collect();
-                    log.borrow_mut().push((a[1], a[2], plane));
+                    // `SetClipPlane` as Direct3D 9 takes it: the device, the index and
+                    // the plane, and no word before them.
+                    assert_eq!(a.len(), 3, "SetClipPlane(device, index, plane): {a:x?}");
+                    let plane = (0..4).map(|i| e.mem.f32(a[2] + 4 * i)).collect();
+                    log.borrow_mut().push((a[0], a[1], plane));
                     Ret::default()
                 });
                 // The renderer's device: its state virtual.

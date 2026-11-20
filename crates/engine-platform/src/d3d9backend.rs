@@ -1344,6 +1344,27 @@ impl RealBackend {
                 let r = unsafe { d.SetViewport(&vp) };
                 self.answer("SetViewport", ok, hr(r));
             }
+            // The new lighting's frame parameters (`d3d9_wgpu::scene_light`): drawn by wgpu only;
+            // no Direct3D 9 transform has this number, so the real device is not called.
+            Cmd::SetTransform { state, .. } if state == d3d9_wgpu::scene_light::STATE => {
+                if self.logged.insert(("new lighting", 0, 0)) {
+                    eprintln!(
+                        "NV_D3D9=real: the new lighting (bAmbientOcclusion) is drawn on Vulkan only: it does nothing here"
+                    );
+                }
+            }
+            // The sun shadows' frame (`d3d9_wgpu::sun_shadow`): the same.
+            Cmd::SetTransform { state, .. }
+                if state == d3d9_wgpu::sun_shadow::VIEW_STATE
+                    || state == d3d9_wgpu::sun_shadow::BEGIN_STATE
+                    || state == d3d9_wgpu::sun_shadow::WORLD_STATE => {}
+            Cmd::SetTransform { state, .. } if state == d3d9_wgpu::sun_shadow::STATE => {
+                if self.logged.insert(("sun shadows", 0, 0)) {
+                    eprintln!(
+                        "NV_D3D9=real: the sun shadows (bSunShadows) are drawn on Vulkan only: they do nothing here"
+                    );
+                }
+            }
             Cmd::SetTransform { state, matrix, .. } => {
                 let m = matrix.to_words();
                 if face_check::enabled() {

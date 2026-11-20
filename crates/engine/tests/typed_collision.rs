@@ -571,6 +571,74 @@ fn collision_ni_to_hk() {
         .assert_same();
 }
 
+/// JIP LN NVSE's G32 seam at `0xC65B5B` (crates/jip `gx::FIXED_BODY`): the answer the stand-in
+/// handler gives sits at `LOG + 0x3e00` ([`NO_ANSWER`]: it declines); it logs the words it is asked
+/// with, so a seam asked with other words, or not asked, fails the comparison.
+const SEAM_ANSWER: u32 = LOG + 0x3e00;
+const NO_ANSWER: u32 = 0xffff_ffff;
+
+fn fixed_body_seam(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    log(e, 0x5b5b, a.len() as u32);
+    for w in a {
+        log(e, 0x5b5c, *w);
+    }
+    let answer = e.mem.u32(SEAM_ANSWER);
+    (answer != NO_ANSWER).then_some(answer)
+}
+
+/// The world of one G32 case, from the case's words: [the JIP patches word, the Havok object (0:
+/// none, else its motion type), the seam's answer, the Havok world set, the object's move bit]; the
+/// same handler on the seam's slot on both engines.
+fn fixed_body_world(e: &mut Engine, case: &Case) -> Vec<u32> {
+    use engine_core::extend::{Owner, SiteSlot};
+    stand_ins(e, 0);
+    e.set_jip_patches(case.word(0));
+    e.on_site(SiteSlot::new(Owner::Jip, 0x00c6_5b5b), fixed_body_seam);
+    e.mem.set_u32(SEAM_ANSWER, case.word(2));
+    set_logged_answer(e, 0x01, case.word(3));
+    let c = block(e, 0x14, &[0; 5]);
+    e.mem.set_u16(c + 0xc, case.word(4) as u16);
+    let n = node(e, case, 0, 5);
+    e.mem.set_u32(c + 8, n);
+    let b = object(e, 0x100);
+    set_answers(e, b, 0, [ONE, TWO, 0x4040_0000, 0]);
+    let motion = case.word(1);
+    if motion != 0 {
+        let h = block(e, 0x200, &[0; 128]);
+        e.mem.set_u8(h + 0xe8, motion as u8);
+        words(e, h + 0xf0, &[ONE, 0, 0, 0]);
+        words(e, h + 0x1c0, &[ONE, 0, 0, 0]);
+        e.mem.set_u32(b + 8, h);
+    }
+    e.mem.set_u32(c + 0x10, b);
+    vec![c]
+}
+
+#[test]
+fn collision_ni_to_hk_jip_fixed_body() {
+    use engine_core::extend::jip_patches::{FIXES, INSTALLED};
+    // JIP off, only the installed bit, the fixes bit, both; no Havok object, one of motion type 5,
+    // one of another type; the seam declining, answering 0, 1, 0x100 (low byte zero: goes on),
+    // 0x101; the Havok world set or not; the move bit; the node's floats.
+    Diff::new(entry!(0x00c6_5b00, body::ni_to_hk(Ptr<_>)))
+        .common()
+        .inputs(&inputs(&[
+            &[
+                Input::Of(&[0, INSTALLED, FIXES, FIXES | INSTALLED]),
+                Input::Of(&[0, 5, 1]),
+                Input::Of(&[NO_ANSWER, 0, 1, 0x100, 0x101]),
+                Input::Flag,
+                Input::Of(&[0, 0x40]),
+            ],
+            // Every combination of the words (240) with the floats fixed; the sweep varies them.
+            &[Input::F32Swept(ONE), Input::F32Swept(MINUS_ONE)],
+        ]))
+        .max_cases(256)
+        .setup(fixed_body_world)
+        .run()
+        .assert_same();
+}
+
 #[test]
 fn collision_hk_to_ni() {
     // The blend amount (0, 1, a half, NaN); the second amount zero or not; the position flag; the update

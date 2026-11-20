@@ -1424,6 +1424,10 @@ fn helpers() {
 }
 
 const COMPRESS_FN: u32 = 0x00a1_ce70;
+/// `Menu::XMLHash` and its `SetAt` / `RemoveAt`.
+const XML_HASH: u32 = 0x011f_34e0;
+const XML_SET_AT_FN: u32 = 0x00a0_c900;
+const XML_REMOVE_AT_FN: u32 = 0x00a1_e240;
 
 thread_local! {
     /// The text the built-in UIO handed to each `Tile::ReadFile` of `jip_temp.xml`.
@@ -1431,7 +1435,7 @@ thread_local! {
 }
 
 #[test]
-fn inject_component_goes_through_the_built_in_uio_only() {
+fn inject_component_with_the_uio_row_on_or_off() {
     let mut e = setup();
     tree(&mut e);
     let inject = |e: &mut Engine, path: &[u8], xml: &[u8]| call(e, 0x260a, &[s(path), s(xml)]).1;
@@ -1456,10 +1460,36 @@ fn inject_component_goes_through_the_built_in_uio_only() {
         INJECTED.with(|i| i.borrow_mut().push(text));
         eax(t(62))
     });
-    // UIO off: JIP would write `jip_temp.xml` into the game's folder; here nothing is done.
-    assert_eq!(inject(&mut e, b"InventoryMenu/Box", b"<rect/>"), 0.0);
-    assert!(calls_to(READ_FILE_FN).is_empty());
-    assert!(calls_to(COMPRESS_FN).is_empty());
+    // UIO off: JIP writes `jip_temp.xml` and reads it with `Tile::ReadFile`; here the text is
+    // cleaned by the game's `CompressAndStoreXML`, entered in `Menu::XMLHash` under that name for
+    // the one `ReadFile` (whose `GetXML` finds it there), then taken out; no file.
+    e.register(XML_SET_AT_FN, |_, w| {
+        record(XML_SET_AT_FN, w);
+        eax(0)
+    });
+    e.register(XML_REMOVE_AT_FN, |_, w| {
+        record(XML_REMOVE_AT_FN, w);
+        eax(1)
+    });
+    assert_eq!(inject(&mut e, b"InventoryMenu/Box", b"<rect/>"), 1.0);
+    let order: Vec<(u32, Vec<u32>)> = calls()
+        .into_iter()
+        .filter(|c| [COMPRESS_FN, XML_SET_AT_FN, READ_FILE_FN, XML_REMOVE_AT_FN].contains(&c.0))
+        .collect();
+    assert_eq!(order.len(), 4, "{order:x?}");
+    let name = order[0].1[0];
+    let text = order[0].1[1];
+    // (The read under `jip_temp.xml` is what made the tile: the stand-in answers only that name.)
+    assert_eq!(nvse::table::guest_text(&e, text), b"<rect/>");
+    assert_eq!(order[1].0, XML_SET_AT_FN);
+    assert_eq!(order[1].1[0], XML_HASH);
+    assert_eq!(order[1].1[1], name);
+    assert_ne!(order[1].1[2], 0, "the compressed storage");
+    assert_eq!(order[2], (READ_FILE_FN, vec![t(2), name]));
+    assert_eq!(order[3], (XML_REMOVE_AT_FN, vec![XML_HASH, name]));
+    assert!(freed().contains(&text), "the text's block given back");
+    INJECTED.with(|i| i.borrow_mut().clear());
+    CALLS.with(|c| c.borrow_mut().clear());
     // On: the text read into the tile through UIO, under `jip_temp.xml`.
     uio::set_on(&mut e, true);
     uio::install(&mut e);
@@ -2484,4 +2514,28 @@ fn world_map_pos_mults_of_a_reference() {
     e.mem.set_f64(C2_LOCALS + 0x108, 7.0);
     call(&mut e, 0x2730, &[var(1), var(2)]);
     assert_eq!(local_value(&e, 1), 7.0);
+}
+
+/// `MessageExAlt` (a plugin's call of `QueueUIMessage`) marks its call for G09 while JIP's fixes
+/// are in (so it keeps its own seconds), and only then.
+#[test]
+fn message_ex_alt_is_marked_as_a_plugins_call() {
+    use engine_core::extend::{jip_patches, PLUGIN_UI_MESSAGE};
+    thread_local! {
+        static MARKED: std::cell::RefCell<Vec<bool>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let mut e = setup();
+    e.register(QUEUE_FN, |e, _| {
+        MARKED.with(|m| m.borrow_mut().push(e.caller_marked(PLUGIN_UI_MESSAGE)));
+        eax(1)
+    });
+    for (word, marked) in [
+        (jip_patches::INSTALLED, false),
+        (jip_patches::INSTALLED | jip_patches::FIXES, true),
+    ] {
+        e.set_jip_patches(word);
+        call(&mut e, 0x2738, &[z(3.5), s(b"Hello")]);
+        assert_eq!(MARKED.with(|m| m.take()), vec![marked], "{word:#x}");
+        assert!(!e.caller_marked(PLUGIN_UI_MESSAGE), "gone after the call");
+    }
 }

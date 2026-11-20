@@ -3459,6 +3459,33 @@ fn show_text(e: &mut Engine, setting: u32, icon: u32) {
     e.call(0x0070_52f0, &args![text, 0u32, icon, 0u32, duration, 0u32]);
 }
 
+/// The round a weapon that regenerates its ammunition adds when its time is up (in
+/// `PlayerCharacter::Update`, from `0x943DBF`): an item (a 24-byte local, `00481610`) of the weapon's
+/// equipped ammunition type (`00525980`), given to the player and equipped, then the local's
+/// destructor (`00481680`).
+fn add_regenerated_round(e: &mut Engine, weapon_form: u32) {
+    e.with_stack(24, |e, object| {
+        e.call(0x0048_1610, &args![object]);
+        let player = e.global::<u32>(PLAYER_SINGLETON);
+        let first = e.call(0x0052_5980, &args![weapon_form, player]).u32();
+        // lStewieAl's Tweaks' row S0199.11 (`MiscCrashFixes`, `0x943DE1`): no equipped
+        // ammunition type, nothing to add (the jump to `0x943E25`).
+        if !(first == 0 && e.stewie(engine_core::extend::stewie::REGEN_AMMO_NO_TYPE)) {
+            e.call(0x0048_18e0, &args![object, first, 1u32, 0u32]);
+            let player = e.global::<u32>(PLAYER_SINGLETON);
+            e.call(0x0048_21a0, &args![object, player, 1u32]);
+            let player = e.global::<u32>(PLAYER_SINGLETON);
+            let second = e.call(0x0052_5980, &args![weapon_form, player]).u32();
+            let player = e.global::<u32>(PLAYER_SINGLETON);
+            e.call(
+                0x0088_c830,
+                &args![player, second, 1u32, 0u32, 1u32, 0u32, 0u32],
+            );
+        }
+        e.call(0x0048_1680, &args![object]);
+    });
+}
+
 // Translated from 0093e860 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `PlayerCharacter::Update` (Xbox PDB): the per-frame update of the player
 /// with the frame time `delta`. In order: the VATS and slow-motion
@@ -4443,10 +4470,23 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
             (ammo_timer as f64 + delta as f64) as f32,
         );
         if e.call(0x00a2_4660, &args![main_state, 0x12u32, 1u32]).u32() != 0 {
-            let process = process_of(e, this);
-            if e.vcall(process, 0x148, &args![]).u32() != 0
-                && e.call(0x008a_16d0, &args![this]).bool()
-            {
+            // Seam (JIP LN NVSE's InitRockItLauncher, `PCAmmoSwitchHook` jumped to from
+            // `0x940998` in place of the weapon entry test): no words; an answer of 1 skips the
+            // ammo switch (the HUD's weapon is JIP's Rock-It Launcher), 0 goes on without the
+            // test. Asked only while JIP is installed.
+            let jip_skip = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+                e.site(0x0094_0998, &[])
+            } else {
+                None
+            };
+            let has_weapon = match jip_skip {
+                Some(skip) => skip == 0,
+                None => {
+                    let process = process_of(e, this);
+                    e.vcall(process, 0x148, &args![]).u32() != 0
+                }
+            };
+            if has_weapon && e.call(0x008a_16d0, &args![this]).bool() {
                 let first = e.call(0x0071_7a40, &args![1u32, 0u32]).i32();
                 let second = e.call(0x0071_7a40, &args![4u32, 0u32]).i32();
                 let third = e.call(0x0071_7a40, &args![3u32, 0u32]).i32();
@@ -4629,13 +4669,17 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
             axis_a = e.call(0x00a2_3390, &args![main_state, 0u32, 7u32]).i32();
             axis_c = e.call(0x00a2_3390, &args![main_state, 0u32, 9u32]).i32();
             axis_b = e.call(0x00a2_3390, &args![main_state, 0u32, 8u32]).i32();
-            if e.call(0x00ec_7d40, &args![axis_a]).i32() < 0x1ea9 {
+            // The dead zones: the exe's `0x1ea9` (immediates `0x941157`, `0x941177`) and `0x21f1`
+            // (`0x941197`) unless JIP LN NVSE's `SetDeadZoneLS` and `SetDeadZoneRS` rewrote them.
+            let (left_dead_zone, right_dead_zone) =
+                (e.pad_dead_zone_left(), e.pad_dead_zone_right());
+            if e.call(0x00ec_7d40, &args![axis_a]).i32() < left_dead_zone {
                 axis_a = 0;
             }
-            if e.call(0x00ec_7d40, &args![axis_b]).i32() < 0x1ea9 {
+            if e.call(0x00ec_7d40, &args![axis_b]).i32() < left_dead_zone {
                 axis_b = 0;
             }
-            if e.call(0x00ec_7d40, &args![axis_c]).i32() < 0x21f1 {
+            if e.call(0x00ec_7d40, &args![axis_c]).i32() < right_dead_zone {
                 axis_c = 0;
             }
             axis_a = axis_a.wrapping_mul(100) / 0x7fff;
@@ -5718,7 +5762,14 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
                 e.call(0x009c_a1f0, &args![VATS_OBJECT]);
             }
         }
-        e.call(0x0055_5c20, &args![]);
+        // Seam (JIP MiniMap's `UpdateCellsSeenBitsHook`, written over this call at 0x9438F6 by
+        // `InitMiniMap`): no words; an answer means JIP's own update ran in place of the game's.
+        // Asked only while JIP is installed.
+        let jip_seen_bits = e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+            && e.site(0x0094_38f6, &[]).is_some();
+        if !jip_seen_bits {
+            e.call(0x0055_5c20, &args![]);
+        }
         // ---- 009438fb: tracked cell, level up, combat updates ----
         let tracked_cell = e.global::<u32>(TRACKED_CELL_011E0BB0);
         if tracked_cell == 0 || tracked_cell != e.call(0x008d_6f30, &args![this]).u32() {
@@ -5849,22 +5900,7 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
                 } else {
                     let regen = e.call(0x0094_4300, &args![this]).f64();
                     if regen <= zero {
-                        e.with_stack(24, |e, object| {
-                            e.call(0x0048_1610, &args![object]);
-                            let player = e.global::<u32>(PLAYER_SINGLETON);
-                            let first = e.call(0x0052_5980, &args![weapon_form, player]).u32();
-                            e.call(0x0048_18e0, &args![object, first, 1u32, 0u32]);
-                            let player = e.global::<u32>(PLAYER_SINGLETON);
-                            e.call(0x0048_21a0, &args![object, player, 1u32]);
-                            let player = e.global::<u32>(PLAYER_SINGLETON);
-                            let second = e.call(0x0052_5980, &args![weapon_form, player]).u32();
-                            let player = e.global::<u32>(PLAYER_SINGLETON);
-                            e.call(
-                                0x0088_c830,
-                                &args![player, second, 1u32, 0u32, 1u32, 0u32, 0u32],
-                            );
-                            e.call(0x0048_1680, &args![object]);
-                        });
+                        add_regenerated_round(e, weapon_form);
                     }
                 }
             }
@@ -6051,6 +6087,18 @@ fn new_list(e: &mut Engine) -> u32 {
         e.call(LIST_CONSTRUCT, &args![block]).u32()
     } else {
         0
+    }
+}
+
+/// The store of `bMenuModeButtonClicked` at `0x939258` (`MOV byte ptr [ECX+0xD54], 0`). JIP LN
+/// NVSE's G49 (JIP's own; `SafeWrite32(0x939258, 0xD54A183)`, making it `AND dword ptr
+/// [ECX+0xD54], 0`) clears the three bytes after it too, among them the state byte of its sneak
+/// shape (O14, `+0xD57`): the seam is asked with the player after the exe's store. With the
+/// word's `INSTALLED` bit clear: one load, nothing asked.
+#[inline]
+fn menu_mode_byte_seam(e: &mut Engine, this: Ptr<PlayerCharacter>) {
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        e.site(0x0093_9258, &[this.addr()]);
     }
 }
 
@@ -6519,6 +6567,7 @@ pub fn player_character_construct(
         e.set(this, PlayerCharacter::fPickPocketWarningTimer, timer);
         e.set(this, PlayerCharacter::pListofPercievedActors, Ptr::NULL);
         e.set(this, PlayerCharacter::bMenuModeButtonClicked, false);
+        menu_mode_byte_seam(e, this);
         e.set(this, PlayerCharacter::fMenuModeButtonTimer, 0.0);
         e.set(this, PlayerCharacter::fAmmoSwapButtonTimer, 0.0);
         e.set(this, PlayerCharacter::pIronsightsDOFInstance, Ptr::NULL);
@@ -7326,10 +7375,22 @@ pub fn player_character_ammo_swap_helper(
     if process == 0 {
         return;
     }
-    if e.vcall(process, 0x148, &args![]).u32() == 0 {
+    let first_entry = e.vcall(process, 0x148, &args![]).u32();
+    if first_entry == 0 {
         return;
     }
-    let equipped = e.vcall(process, 0x148, &args![]).u32();
+    // Seam (JIP LN NVSE's InitRockItLauncher, `RILAmmoFixHook` jumped to from `0x946310` in place
+    // of the second slot `0x148` call): words: the entry the first call gave; an answer is the
+    // entry used (0 for JIP's Rock-It Launcher: no ammo swap). Asked only while JIP is installed.
+    let jip_entry = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        e.site(0x0094_6310, &[first_entry])
+    } else {
+        None
+    };
+    let equipped = match jip_entry {
+        Some(entry) => entry,
+        None => e.vcall(process, 0x148, &args![]).u32(),
+    };
     let weapon = if equipped != 0 {
         typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, equipped))
     } else {
@@ -8430,17 +8491,20 @@ fn apply_look_input(
     let animation = e.call(0x0095_0a60, &args![this, unflipped as u32]).u32();
     let animation_scale = e.call(0x004e_3d00, &args![animation]).f64();
     let time_step = (animation_scale * time_step as f64) as f32;
+    // The dead zone of the four stick tests below: the exe's `0x21f1` (immediates `0x9455F5`,
+    // `0x945644`, `0x9456F0`, `0x945710`) unless JIP LN NVSE's `SetDeadZoneRS` rewrote them.
+    let dead_zone = e.pad_dead_zone_right();
     e.call(0x004b_7210, &args![]);
     if e.call(0x004b_71d0, &args![]).u8() != 0 {
         if e.mem.u8(SECOND_STICK_FLAG) != 0 {
             let mut right_x = e.call(0x00a2_3390, &args![input, 0u32, 0xau32]).i32();
-            if e.call(0x00ec_7d40, &args![right_x]).i32() < 0x21f1 {
+            if e.call(0x00ec_7d40, &args![right_x]).i32() < dead_zone {
                 right_x = 0;
             }
             let response = e.global::<f64>(0x0101_ffa0);
             zoom = truncate(e, right_x as f64 * response * time_step as f64);
             yaw = e.call(0x00a2_3390, &args![input, 0u32, 9u32]).i32();
-            if e.call(0x00ec_7d40, &args![yaw]).i32() < 0x21f1 {
+            if e.call(0x00ec_7d40, &args![yaw]).i32() < dead_zone {
                 yaw = 0;
             }
             yaw /= 5;
@@ -8456,10 +8520,10 @@ fn apply_look_input(
         } else {
             yaw = e.call(0x00a2_3390, &args![input, 0u32, 9u32]).i32();
             pitch = e.call(0x00a2_3390, &args![input, 0u32, 0xau32]).i32();
-            if e.call(0x00ec_7d40, &args![yaw]).i32() < 0x21f1 {
+            if e.call(0x00ec_7d40, &args![yaw]).i32() < dead_zone {
                 yaw = 0;
             }
-            if e.call(0x00ec_7d40, &args![pitch]).i32() < 0x21f1 {
+            if e.call(0x00ec_7d40, &args![pitch]).i32() < dead_zone {
                 pitch = 0;
             }
         }
@@ -8533,12 +8597,25 @@ fn apply_look_input(
     if e.mem.u8(invert) != 0 {
         pitch = pitch.wrapping_neg();
     }
-    if e.call(0x005a_03f0, &args![this, 2u32]).u8() != 0 {
+    // Seam (JIP's H02, `GetVanityDisabledHook` at `0x9459ED`): words: the player; an answer is the
+    // vanity camera test's (JIP's HUD cursor: the HUD's mouse handling run, then true).
+    let vanity_disabled = match e.site(0x0094_59ed, &[this.addr()]) {
+        Some(answer) => answer & 0xff != 0,
+        None => e.call(0x005a_03f0, &args![this, 2u32]).u8() != 0,
+    };
+    if vanity_disabled {
         yaw = 0;
         pitch = 0;
         zoom = 0;
     }
-    if zoom != 0 && e.call(0x0096_7ae0, &args![this]).u8() == 0 {
+    // Seam (JIP's ToggleVanityWheel, `SafeWrite8(0x945A29, ..)`: the zoom test's `JNP` at
+    // `0x945A28` made a `JNS`, always taken, while the wheel is off): no words; an answer of 1
+    // skips the zoom block as if no zoom were read. Asked only while JIP is installed.
+    let wheel_off = zoom != 0
+        && e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+        && e.site(0x0094_5a28, &[])
+            .is_some_and(|answer| answer & 0xff != 0);
+    if zoom != 0 && !wheel_off && e.call(0x0096_7ae0, &args![this]).u8() == 0 {
         if e.mem.u8(FREE_CAMERA_FLAG) == 0 {
             result = 1;
         }
@@ -10572,13 +10649,21 @@ fn camera_distance_in_frame(
             };
             e.call(0x0062_1370, &args![caster, shape]);
         }
-        if e.call(
-            0x0062_0bc0,
-            &args![caster, pick_direction, pick_origin, result],
-        )
-        .u8()
-            != 0
-        {
+        let hit_something = e
+            .call(
+                0x0062_0bc0,
+                &args![caster, pick_direction, pick_origin, result],
+            )
+            .u8()
+            != 0;
+        // Seam (JIP's ToggleCameraCollision, `SafeWrite8(0x94A34E, ..)`: the `JZ` after the pick
+        // made a `JMP` while collision is off): no words, asked after the pick; an answer of 1
+        // leaves the camera's distance as if nothing were hit. Asked only while JIP is installed.
+        let collision_off = hit_something
+            && e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+            && e.site(0x0094_a34e, &[])
+                .is_some_and(|answer| answer & 0xff != 0);
+        if hit_something && !collision_off {
             e.call(0x0045_78c0, &args![pick_origin, pick_direction]);
             let hit = e.call(0x0045_7990, &args![pick_origin]).f64();
             if length as f64 - hit > e.global::<f64>(0x0101_1590) {
@@ -12538,6 +12623,45 @@ mod tests {
         e.register(0x00b2_0000, |_, _| Ret::default());
         e.mem.set_u32(this.addr() + 0x68, old.addr());
         (this, old.addr())
+    }
+
+    /// JIP LN NVSE's G49 seam at `0x939258`: the constructor clears `bMenuModeButtonClicked` and
+    /// leaves the three bytes after it; with the word's `INSTALLED` bit the seam is asked with the
+    /// player after that store (a test handler clears the word as JIP's `AND dword` does); with
+    /// the word 0 or only `FIXES` it is not asked.
+    #[test]
+    fn g49_seam_after_the_menu_mode_byte() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        thread_local! {
+            static ASKED: std::cell::RefCell<Vec<(Vec<u32>, u8)>> = const { std::cell::RefCell::new(Vec::new()) };
+        }
+        fn handler(e: &mut Engine, a: &[u32]) -> Option<u32> {
+            ASKED.with(|s| s.borrow_mut().push((a.to_vec(), e.mem.u8(a[0] + 0xd54))));
+            e.mem.set_u32(a[0] + 0xd54, 0);
+            Some(0)
+        }
+        for (word, asked) in [
+            (0, false),
+            (jip_patches::FIXES, false),
+            (jip_patches::INSTALLED, true),
+        ] {
+            let mut e = engine();
+            let (this, _) = constructor_world(&mut e, 0x5000);
+            e.map(0x0000_5000, 0x1000);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0093_9258), handler);
+            e.set_jip_patches(word);
+            e.mem.set_u32(this.addr() + 0xd54, 0xffff_ffff);
+            ASKED.with(|s| s.borrow_mut().clear());
+            e.call(0x0093_8180, &args![this]);
+            let seen = ASKED.with(|s| s.take());
+            if asked {
+                assert_eq!(seen, vec![(vec![this.addr()], 0)], "after the store");
+                assert_eq!(e.mem.u32(this.addr() + 0xd54), 0);
+            } else {
+                assert!(seen.is_empty(), "{word:08x}");
+                assert_eq!(e.mem.u32(this.addr() + 0xd54), 0xffff_ff00, "{word:08x}");
+            }
+        }
     }
 
     #[test]
@@ -16615,6 +16739,63 @@ mod tests {
         }
     }
 
+    /// JIP LN NVSE's InitRockItLauncher seam at the ammo switch key's weapon test (`0x940998`):
+    /// asked only while JIP is installed; an answer of 0 goes on to the drawn test (`008a16d0`)
+    /// without the exe's weapon entry test (the process's slot `0x148`, a weapon entry here, so
+    /// the exe's test reaches the drawn test too), 1 skips both as the exe does without a weapon;
+    /// none leaves the exe's test. Counted: the drawn tests and the slot's calls.
+    #[test]
+    fn update_ammo_switch_seam() {
+        use engine_core::extend::jip_patches;
+        const PROCESS_VTABLE: u32 = 0x0202_0000;
+        let drawn_tests = |word: u32, answer: u32| {
+            let mut e = engine();
+            let this = update_world(&mut e);
+            let entry_slot = 0x00b0_0000 + (PROCESS_VTABLE & 0xf_ffff) / 0x10 + 0x148;
+            e.register(entry_slot, |_, _| int(0x0300_0100));
+            e.mem.set_u32(PROCESS_VTABLE + 0x148, entry_slot);
+            e.register(0x00a2_4660, |_, a| {
+                int(u32::from(a[1] == 0x12 && a[2] == 1))
+            });
+            e.set_jip_patches(word);
+            match answer {
+                0 => e.on_site_for_test(0x0094_0998, |_, _| Some(0)),
+                1 => e.on_site_for_test(0x0094_0998, |_, _| Some(1)),
+                _ => e.on_site_for_test(0x0094_0998, |_, _| None),
+            }
+            player_character_update(&mut e, this, 0.5);
+            (
+                called(&e, 0x008a_16d0).len(),
+                slot_calls(&e, PROCESS_VTABLE, 0x148).len(),
+            )
+        };
+        let exe = drawn_tests(0, 0);
+        assert!(
+            exe.0 >= 1 && exe.1 >= 1,
+            "the exe's test reaches the drawn test"
+        );
+        assert_eq!(
+            drawn_tests(jip_patches::FIXES, 0),
+            exe,
+            "not installed: not asked"
+        );
+        assert_eq!(
+            drawn_tests(jip_patches::INSTALLED, 2),
+            exe,
+            "no answer: the exe's test"
+        );
+        assert_eq!(
+            drawn_tests(jip_patches::INSTALLED, 1),
+            (exe.0 - 1, exe.1 - 1),
+            "skipped: no weapon entry test, no drawn test"
+        );
+        assert_eq!(
+            drawn_tests(jip_patches::INSTALLED, 0),
+            (exe.0, exe.1 - 1),
+            "on without the weapon entry test"
+        );
+    }
+
     #[test]
     fn update_counts_the_warning_timers_down_and_resets_them_when_out() {
         let mut e = engine();
@@ -16637,6 +16818,28 @@ mod tests {
             vec![vec![this.addr(), 0.25f32.to_bits()]]
         );
         assert_eq!(called(&e, 0x0055_5c20).len(), 1);
+    }
+
+    /// JIP MiniMap's seam at the seen-bits call (0x9438F6): asked only while JIP is installed; an
+    /// answer skips the game's update, none leaves it.
+    #[test]
+    fn update_asks_jips_seen_bits_seam() {
+        use engine_core::extend::jip_patches;
+        let game_calls = |word: u32, answer: bool| {
+            let mut e = engine();
+            let this = update_world(&mut e);
+            e.set_jip_patches(word);
+            if answer {
+                e.on_site_for_test(0x0094_38f6, |_, _| Some(0));
+            } else {
+                e.on_site_for_test(0x0094_38f6, |_, _| None);
+            }
+            player_character_update(&mut e, this, 0.25);
+            called(&e, 0x0055_5c20).len()
+        };
+        assert_eq!(game_calls(0, true), 1, "not installed: not asked");
+        assert_eq!(game_calls(jip_patches::INSTALLED, true), 0);
+        assert_eq!(game_calls(jip_patches::INSTALLED, false), 1);
     }
 
     #[test]
@@ -16741,6 +16944,81 @@ mod tests {
         let set = called(e, MOVER_SET_FLAGS);
         assert_eq!(set.len(), 1, "{set:?}");
         set[0][1]
+    }
+
+    /// `Update`'s three stick tests read the engine's dead zones (the exe's `0x1ea9` at
+    /// `0x941157` and `0x941177`, `0x21f1` at `0x941197`, until JIP's `SetDeadZoneLS` and
+    /// `SetDeadZoneRS` move them): the move stick's x at 8000 sets the move flag 0x8 at a left
+    /// dead zone of 8000 or below and not at 8001; its forward/back (axis 8) at 8000 sets 0x1
+    /// (-8000: 0x2) at a left dead zone of 8000, not at 8001, and not at 8001 with the right
+    /// stick's at 8000 (the left one is read); the third axis (9) fully pushed gives the look
+    /// speed at a right dead zone of 0x7fff or below and none above.
+    #[test]
+    fn update_reads_the_moved_dead_zones() {
+        let run8 = |left: i32, right: i32, axis_7: u32, axis_8: u32, axis_9: u32| {
+            let mut e = engine();
+            let this = update_world(&mut e);
+            let slots: Vec<(u32, u32)> = (0..0x200).map(|i| (i * 4, 0x00b0_0000)).collect();
+            let mover = object(&mut e, 0x0204_0000, &slots);
+            e.mem.set_u32(0x0204_000c, MOVER_SET_FLAGS);
+            e.register(MOVER_SET_FLAGS, |_, _| Ret::default());
+            e.mem.set_u32(this.addr() + 0x190, mover.addr());
+            e.register(0x004b_71d0, |_, _| int(1));
+            e.register(0x0045_7990, |_, _| float(1.0));
+            e.register_double(0x00a2_3390, move |_, a| {
+                int(match a[2] {
+                    7 => axis_7,
+                    8 => axis_8,
+                    9 => axis_9,
+                    _ => 0,
+                })
+            });
+            e.register(0x00ec_7d40, |_, a| int((a[0] as i32).unsigned_abs()));
+            e.register(0x0040_8840, |_, a| {
+                float(f64::from(f32::from_bits(a[0]).abs()))
+            });
+            e.set_global(AXIS_DIVISOR, 1.0f64);
+            e.set_global(LOOK_SCALE, 1.0f64);
+            // The forward/back weight (`STICK_SCALE_SETTING`) 1, so a forward push counts.
+            e.mem.set_f32(0x0300_0010, 1.0);
+            e.register(SETTING_FLOAT_GETTER, |_, a| {
+                int(if a[0] == STICK_SCALE_SETTING {
+                    0x0300_0010
+                } else {
+                    0x0300_0000
+                })
+            });
+            e.set_pad_dead_zone_left(left);
+            e.set_pad_dead_zone_right(right);
+            player_character_update(&mut e, this, 0.5);
+            (move_flags(&e), e.global::<f32>(LOOK_SPEED_011A3B40))
+        };
+        let run = |left: i32, right: i32, axis_7: u32, axis_9: u32| {
+            let (flags, look) = run8(left, right, axis_7, 0, axis_9);
+            (flags & 0x8 != 0, look)
+        };
+        assert!(run(0x1ea9, 0x21f1, 8000, 0).0);
+        assert!(run(8000, 0x21f1, 8000, 0).0);
+        assert!(!run(8001, 0x21f1, 8000, 0).0);
+        assert_eq!(run(0x1ea9, 0x21f1, 0, 0x7fff).1, 1.0);
+        assert_eq!(run(0x1ea9, 0x7fff, 0, 0x7fff).1, 1.0);
+        assert_eq!(run(0x1ea9, 0x8000, 0, 0x7fff).1, 0.0);
+        // Forward and back (axis 8, the `0x941177` test): the left dead zone.
+        let minus = (-8000i32) as u32;
+        for (axis_8, flag) in [(8000u32, 0x1u32), (minus, 0x2)] {
+            assert_ne!(run8(0x1ea9, 0x21f1, 0, axis_8, 0).0 & flag, 0, "the exe's");
+            assert_ne!(run8(8000, 0x21f1, 0, axis_8, 0).0 & flag, 0, "at 8000");
+            assert_eq!(
+                run8(8001, 0x21f1, 0, axis_8, 0).0 & 0x3,
+                0,
+                "inside at 8001"
+            );
+            assert_eq!(
+                run8(8001, 8000, 0, axis_8, 0).0 & 0x3,
+                0,
+                "the right stick's 8000 is not read"
+            );
+        }
     }
 
     /// The disabled controls other than `flag`: none of them changes what pressing that button
@@ -16913,6 +17191,52 @@ mod tests {
             next = node;
         }
         next
+    }
+
+    /// [`add_regenerated_round`] with the weapon's equipped ammunition type `kind` and row S0199.11
+    /// `on`: the calls it made.
+    fn regenerated_round(kind: u32, on: bool) -> Vec<(u32, Vec<u32>)> {
+        let mut e = Engine::new();
+        e.map(0x011d_e000, 0x1000);
+        e.set_global(PLAYER_SINGLETON, 0x7000_0000u32);
+        for stub in [
+            0x0048_1610,
+            0x0048_18e0,
+            0x0048_21a0,
+            0x0088_c830,
+            0x0048_1680,
+        ] {
+            e.register(stub, |_, _| Ret::default());
+        }
+        e.register_double(0x0052_5980, move |_, _| kind.into_ret());
+        e.set_stewie(engine_core::extend::stewie::REGEN_AMMO_NO_TYPE, on);
+        e.call_log = Some(vec![]);
+        add_regenerated_round(&mut e, 0x1234);
+        e.call_log.take().unwrap()
+    }
+
+    /// lStewieAl's Tweaks' row S0199.11 (`MiscCrashFixes`, `0x943DE1`): a round regenerated with no
+    /// ammunition type equipped (`00525980` answers 0): off, the exe builds an item of the missing type
+    /// and equips it (a crash in the game); on, nothing is added and the local's destructor still runs.
+    #[test]
+    fn s0199_11_a_regenerated_round_with_no_ammunition_type() {
+        let added = |log: &[(u32, Vec<u32>)]| {
+            log.iter()
+                .any(|(a, _)| *a == 0x0048_18e0 || *a == 0x0088_c830)
+        };
+        let off = regenerated_round(0, false);
+        assert!(added(&off));
+        let on = regenerated_round(0, true);
+        assert!(!added(&on));
+        assert!(on.iter().any(|(a, _)| *a == 0x0048_1680));
+    }
+
+    /// Row S0199.11 with an ammunition type (ordinary input): the same calls with the row off and on.
+    #[test]
+    fn s0199_11_row_on_with_an_ammunition_type_changes_nothing() {
+        let off = regenerated_round(0x5000, false);
+        assert_eq!(off, regenerated_round(0x5000, true));
+        assert!(off.iter().any(|(a, w)| *a == 0x0088_c830 && w[1] == 0x5000));
     }
 
     #[test]
@@ -18001,6 +18325,48 @@ mod tests {
         assert_eq!(call_addresses(&e), vec![0x0094_62c0]);
     }
 
+    /// The seam at 0x946310 (JIP's InitRockItLauncher, `RILAmmoFixHook`): asked with the first
+    /// weapon entry while JIP is installed; its answer is the entry used in place of the second
+    /// call (0: no swap at all), none leaves the exe's second call.
+    #[test]
+    fn ammo_swap_seam_gives_the_weapon_entry() {
+        use engine_core::extend::jip_patches;
+        // The second call's count: the exe's (`E`), one less with an entry answered, only the
+        // first with 0 (the swap ends there).
+        let mut exe = 0;
+        for (word, answer, swaps, fewer) in [
+            (0, 0, true, 0),
+            (jip_patches::FIXES, 0, true, 0),
+            (jip_patches::INSTALLED, 0, false, usize::MAX),
+            (jip_patches::INSTALLED, 1, true, 1),
+            (jip_patches::INSTALLED, 2, true, 0),
+        ] {
+            let mut e = engine();
+            let (this, _) = ammo_world(&mut e);
+            e.set_jip_patches(word);
+            match answer {
+                0 => e.on_site_for_test(0x0094_6310, |_, a| {
+                    assert_eq!(a, &[0x5100]);
+                    Some(0)
+                }),
+                1 => e.on_site_for_test(0x0094_6310, |_, a| Some(a[0])),
+                _ => e.on_site_for_test(0x0094_6310, |_, _| None),
+            }
+            e.call(0x0094_62c0, &args![this, true, false]);
+            let calls = slot_calls(&e, 0x0268_0000, 0x148).len();
+            if word == 0 {
+                exe = calls;
+            }
+            let want = if fewer == usize::MAX { 1 } else { exe - fewer };
+            assert_eq!(calls, want, "{word:x} {answer}");
+            assert_eq!(
+                !called(&e, 0x00b0_03ec).is_empty(),
+                swaps,
+                "{word:x} {answer}"
+            );
+        }
+    }
+
     /// Every callee of `009445b0` outside this file, and of the curve
     /// helpers it uses.
     const LOOK_CALLEES: &[u32] = &[
@@ -18164,6 +18530,32 @@ mod tests {
         assert_eq!(e.global::<f32>(LAST_HEADING), 0.0);
     }
 
+    /// The seam at 0x9459ED (JIP's H02): its answer stands for the vanity camera test, so an
+    /// answer of 1 (JIP's HUD cursor on) drops the look input: the player does not turn, and the
+    /// game's test (`005a03f0`) is not asked.
+    #[test]
+    fn the_free_look_ignores_the_input_when_the_seam_disables_it() {
+        let (mut e, this) = look_world(0);
+        e.register(0x00a2_39e0, |_, a| int(if a[1] == 1 { 100 } else { 0 }));
+        e.register(0x00ec_7d40, |_, a| int((a[0] as i32).unsigned_abs()));
+        e.register(0x0040_8860, |_, a| float(f32::from_bits(a[0]).abs() as f64));
+        e.register(0x0099_e040, |_, _| float(1.0));
+        e.register(0x004e_3d00, |_, _| float(1.0));
+        e.register(0x0045_c670, |_, _| int(0x6000));
+        e.set_global(0x011e_0a6c, 2.0f32);
+        e.set_global(0x0120_315c, 2.0f32);
+        e.on_site_for_test(0x0094_59ed, |_, _| Some(1));
+        let flags = Ptr::<()>::new(e.mem.alloc(4));
+        e.mem.set_u16(flags.addr(), 0x0001);
+        e.call(0x0094_45b0, &args![this, 0.5f32, false, flags, 0u32]);
+        assert!(called(&e, 0x0093_1d30).is_empty(), "no turn");
+        assert!(
+            called(&e, 0x005a_03f0).is_empty(),
+            "the game's test not asked"
+        );
+        assert_eq!(e.mem.u16(flags.addr()), 0x0001, "no turn flag");
+    }
+
     #[test]
     fn the_free_look_inverts_the_pitch_and_zooms_in_the_third_person() {
         let (mut e, this) = look_world(0);
@@ -18212,6 +18604,130 @@ mod tests {
             vec![vec![this.addr(), (-30.0f32).to_bits()]]
         );
         assert_eq!(result, 1);
+    }
+
+    /// The seam at 0x945A28 (JIP's ToggleVanityWheel): asked only while JIP is installed and a
+    /// zoom was read; an answer of 1 skips the zoom block (the distance kept, `00967ae0` not
+    /// asked; the look result still 1, from the zoom read); 0, or JIP not installed, zooms as the
+    /// exe.
+    #[test]
+    fn the_vanity_wheel_seam_skips_the_zoom() {
+        use engine_core::extend::jip_patches;
+        for (word, answer, zooms) in [
+            (0, 1, true),
+            (jip_patches::FIXES, 1, true),
+            (jip_patches::INSTALLED, 0, true),
+            (jip_patches::INSTALLED, 1, false),
+        ] {
+            let (mut e, this) = look_world(0);
+            e.register(0x00a2_39e0, |_, a| int(if a[1] == 3 { 120 } else { 0 }));
+            e.register(0x00ec_7d40, |_, a| int((a[0] as i32).unsigned_abs()));
+            e.register(0x0099_e040, |_, _| float(1.0));
+            e.register(0x004e_3d00, |_, _| float(1.0));
+            e.register(0x0045_c670, |_, _| int(0x6000));
+            e.set_global(0x011e_0a6c, 3.0f32);
+            e.set_global(0x0120_315c, 1.0f32);
+            e.set(this, PlayerCharacter::b3rdPerson, true);
+            e.set_global(ZOOM_DISTANCE, 100.0f32);
+            e.set_global(0x011c_dc98, 0.5f32);
+            e.set_global(0x011c_d568, 500.0f32);
+            e.set_global(0x011c_d614, 1.0f32);
+            e.set_global(0x011c_da94, 10.0f32);
+            e.register_double(0x00b0_022c, |_, _| int(1));
+            put_vtable(
+                &mut e,
+                this.addr(),
+                0x026a_0000,
+                &[
+                    (0x2bc, 0x00b0_02bc),
+                    (0x214, 0x00b0_0214),
+                    (0x2c4, 0x00b0_02c4),
+                    (0x22c, 0x00b0_022c),
+                ],
+            );
+            e.set_jip_patches(word);
+            if answer == 1 {
+                e.on_site_for_test(0x0094_5a28, |_, _| Some(1));
+            } else {
+                e.on_site_for_test(0x0094_5a28, |_, _| Some(0));
+            }
+            let flags = Ptr::<()>::new(e.mem.alloc(4));
+            let result = e
+                .call(0x0094_45b0, &args![this, 0.5f32, false, flags, 0u32])
+                .u8();
+            let distance = if zooms { 50.0 } else { 100.0 };
+            assert_eq!(
+                e.global::<f32>(ZOOM_DISTANCE),
+                distance,
+                "{word:x} {answer}"
+            );
+            assert_eq!(
+                called(&e, 0x0096_7ae0).len(),
+                usize::from(zooms),
+                "{word:x}"
+            );
+            // The look result comes from the zoom read (the end's test), the wheel on or off.
+            assert_eq!(result, 1, "{word:x} {answer}");
+        }
+    }
+
+    /// The look's four stick tests read the engine's right dead zone (the exe's `0x21f1` at
+    /// `0x9455F5`, `0x945644`, `0x9456F0`, `0x945710` until JIP's `SetDeadZoneRS` moves it): an
+    /// axis at 9000 counts at the exe's dead zone and at one moved to 9000, not at 9001. A
+    /// counted yaw or pitch has its vector measured (`00457990`); the second stick's counted zoom
+    /// reaches the zoom block (`00967ae0`).
+    #[test]
+    fn the_look_reads_the_moved_right_dead_zone() {
+        let run = |dead_zone: i32, second_stick: bool, axis_9: u32, axis_10: u32| {
+            let (mut e, this) = look_world(0);
+            e.register(0x004b_71d0, |_, _| int(1));
+            e.register_double(0x00a2_3390, move |_, a| {
+                int(match a[2] {
+                    9 => axis_9,
+                    0xa => axis_10,
+                    _ => 0,
+                })
+            });
+            e.register(0x00ec_7d40, |_, a| int((a[0] as i32).unsigned_abs()));
+            e.register(0x0045_7990, |_, _| float(1.0));
+            e.register(0x0099_e040, |_, _| float(1.0));
+            e.register(0x004e_3d00, |_, _| float(1.0));
+            e.mem.set_u8(SECOND_STICK_FLAG, u8::from(second_stick));
+            // The process's slot 0x610 (asked after the zoom with the second stick on): set, so
+            // the free camera's turn is left out.
+            let process = answering_object(&mut e, 0x026b_0000, &[(0x1a8, 0), (0x610, 1)]);
+            e.mem.set_u32(this.addr() + 0x68, process);
+            e.set_pad_dead_zone_right(dead_zone);
+            let flags = Ptr::<()>::new(e.mem.alloc(4));
+            e.call(0x0094_45b0, &args![this, 0.5f32, false, flags, 0u32]);
+            (called(&e, 0x0045_7990).len(), called(&e, 0x0096_7ae0).len())
+        };
+        let minus = (-9000i32) as u32;
+        // The first stick: the yaw (axis 9) and the pitch (axis 10), either way.
+        for (axis_9, axis_10) in [(9000, 0), (minus, 0), (0, 9000), (0, minus)] {
+            let outside = run(9001, false, axis_9, axis_10);
+            for dead_zone in [0x21f1, 9000] {
+                let past = run(dead_zone, false, axis_9, axis_10);
+                assert_eq!(past.0, outside.0 + 1, "{dead_zone} {axis_9:x} {axis_10:x}");
+            }
+        }
+        // The second stick: the zoom (axis 10), then the yaw (axis 9).
+        let outside = run(9001, true, 0, 9000);
+        for dead_zone in [0x21f1, 9000] {
+            assert_eq!(
+                run(dead_zone, true, 0, 9000).1,
+                outside.1 + 1,
+                "{dead_zone}"
+            );
+        }
+        let outside = run(9001, true, 9000, 0);
+        for dead_zone in [0x21f1, 9000] {
+            assert_eq!(
+                run(dead_zone, true, 9000, 0).0,
+                outside.0 + 1,
+                "{dead_zone}"
+            );
+        }
     }
 
     #[test]
@@ -19020,6 +19536,47 @@ mod tests {
         assert_eq!(called(&e, 0x0062_0bc0).len(), 1);
         // Without a world the caster is given the controller's shape (null here).
         assert_eq!(called(&e, 0x0062_1370), vec![vec![caster, 0]]);
+    }
+
+    /// The seam at 0x94A34E (JIP's ToggleCameraCollision): asked after a pick that hit, only
+    /// while JIP is installed; an answer of 1 leaves the distance as if nothing were hit (the
+    /// pick itself still made); 0, or JIP not installed, shortens it as the exe.
+    #[test]
+    fn the_camera_collision_seam_ignores_the_hit() {
+        use engine_core::extend::jip_patches;
+        for (word, answer, pulled_in) in [
+            (0, 1, true),
+            (jip_patches::FIXES, 1, true),
+            (jip_patches::INSTALLED, 0, true),
+            (jip_patches::INSTALLED, 1, false),
+        ] {
+            let (mut e, this) = camera_distance_world();
+            e.set_global(CAMERA_DISTANCE, 5.0f32);
+            e.set_global(0x011c_d288, 1000.0f32);
+            e.set_global(0x011c_d568, 100.0f32);
+            e.set_global(0x011c_da94, 1.0f32);
+            e.set_global(0x011e_0934, 1.0f32);
+            e.set_global(PLAYER_FADE, 1.0f32);
+            let caster = e.mem.alloc(0x40);
+            e.mem.set_u32(this.addr() + 0x21c, caster);
+            e.register(0x0062_0bc0, |_, _| int(1));
+            e.register(0x0045_7990, |_, _| float(3.0));
+            e.set_jip_patches(word);
+            if answer == 1 {
+                e.on_site_for_test(0x0094_a34e, |_, _| Some(1));
+            } else {
+                e.on_site_for_test(0x0094_a34e, |_, _| Some(0));
+            }
+            let position = move_camera(&mut e, this, [8.0, 0.0, 0.0], [0.0, 0.0, 0.0], false);
+            assert_eq!(called(&e, 0x0062_0bc0).len(), 1, "{word:x}: the pick made");
+            if pulled_in {
+                assert_eq!(e.mem.u8(CAMERA_BLOCKED), 1, "{word:x} {answer}");
+                assert_eq!(position, [2.5, 0.0, 0.0], "{word:x} {answer}");
+            } else {
+                assert_eq!(e.mem.u8(CAMERA_BLOCKED), 0, "not blocked");
+                assert_eq!(position, [8.0, 0.0, 0.0], "the camera where it was");
+            }
+        }
     }
 
     #[test]

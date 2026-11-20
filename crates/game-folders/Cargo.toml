@@ -1,0 +1,9 @@
+[package]
+name = "game-folders"
+version = "0.1.0"
+description = "Finds the player's Fallout: New Vegas and its saves on Linux and macOS (Steam, Proton, Heroic, Lutris), the folders nv-rs must never write to there, and nv-rs's own data folder"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]

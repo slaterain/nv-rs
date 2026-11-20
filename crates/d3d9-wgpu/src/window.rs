@@ -147,14 +147,18 @@ pub(crate) struct Window {
     asked: u64,
     skipped: u64,
     last_why: Option<NoFrame>,
+    /// Why the first frame of the current stretch of frames not shown was not shown (the frames
+    /// after it may only be resting: [`Backoff`]).
+    first_why: Option<NoFrame>,
     /// Configurations made, and those wgpu refused (the device's line every 600 presents).
     pub(crate) configures: u64,
     pub(crate) refused: u64,
 }
 
-/// Why no frame was shown ([`Window::frame`]).
+/// Why no frame was shown ([`Window::frame`]; tests read it through
+/// [`crate::device::Device::frame_not_shown`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum NoFrame {
+pub enum NoFrame {
     Minimised,
     NoArea,
     Resting,
@@ -235,6 +239,7 @@ impl Window {
             asked: 0,
             skipped: 0,
             last_why: None,
+            first_why: None,
             configures: 0,
             refused: 0,
         };
@@ -344,6 +349,17 @@ impl Window {
         self.hwnd
     }
 
+    /// Why the window's frames are not shown now: why the first of the current stretch of frames
+    /// not shown was not (those after it may only be resting); None when the last frame asked for
+    /// was shown (or none was asked).
+    pub(crate) fn not_shown(&self) -> Option<NoFrame> {
+        if self.skipped > 0 {
+            self.first_why
+        } else {
+            None
+        }
+    }
+
     /// The window's next frame, at its size now; `None` when it gives none now (the start and the
     /// end of a stretch of frames not shown are each one log line).
     pub(crate) fn frame(&mut self, device: &wgpu::Device) -> Option<wgpu::SurfaceTexture> {
@@ -369,6 +385,7 @@ impl Window {
                         self.asked,
                         why.says()
                     );
+                    self.first_why = Some(why);
                 }
                 self.skipped += 1;
                 self.last_why = Some(why);
@@ -505,6 +522,64 @@ impl Window {
     }
 }
 
+/// A window of a window layer other than Win32's (`engine-platform`'s winit window on Linux and
+/// macOS), as the drawing side needs it: its handles for the surface, its client area's size in
+/// real pixels, whether it is minimised (or hidden from view), and its monitor's refresh rate. On
+/// Windows the window is an `HWND` and these come from Windows itself. The size is in real
+/// (physical) pixels whatever the display's scale, so no DPI awareness is borrowed for it here
+/// ([`DpiScope`] is Windows' alone: there a thread's reads of a window depend on its awareness).
+#[cfg(not(windows))]
+pub trait GameWindow:
+    raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle + Send + Sync
+{
+    /// The client area's size in real pixels; `None` where it cannot be read.
+    fn client_size(&self) -> Option<(u32, u32)>;
+    /// Whether no frame can be seen in it (minimised, or hidden from view).
+    fn minimised(&self) -> bool;
+    /// The refresh rate of the monitor it is on, in thousandths of a hertz; `None` where the
+    /// system does not say.
+    fn refresh_millihertz(&self) -> Option<u32>;
+    /// macOS: the window's `CAMetalLayer`, made on the program's main thread when the window was
+    /// made (AppKit gives a window's view, and winit its handle, to the main thread only, while
+    /// the game's device is made on another thread). The surface is made on it; `None` elsewhere,
+    /// where the surface is made from the window's handles.
+    fn metal_layer(&self) -> Option<std::ptr::NonNull<std::ffi::c_void>> {
+        None
+    }
+}
+
+/// The windows made known by [`register_window`], by the id the game's device names them with
+/// (`D3DPRESENT_PARAMETERS.hDeviceWindow`'s real window), and the last one made known.
+#[cfg(not(windows))]
+type Registry = (
+    std::collections::HashMap<isize, std::sync::Arc<dyn GameWindow>>,
+    isize,
+);
+
+#[cfg(not(windows))]
+fn registry() -> std::sync::MutexGuard<'static, Registry> {
+    static WINDOWS: std::sync::OnceLock<std::sync::Mutex<Registry>> = std::sync::OnceLock::new();
+    WINDOWS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The window layer made `window` the real window `id` (never 0): a device on `id` shows its
+/// frames in it.
+#[cfg(not(windows))]
+pub fn register_window(id: isize, window: std::sync::Arc<dyn GameWindow>) {
+    let mut r = registry();
+    r.0.insert(id, window);
+    r.1 = id;
+}
+
+/// The window made known as `id`.
+#[cfg(not(windows))]
+pub(crate) fn registered(id: isize) -> Option<std::sync::Arc<dyn GameWindow>> {
+    registry().0.get(&id).cloned()
+}
+
 /// The client area's size of `hwnd` in the calling thread's pixels (the window's own, once
 /// [`Window::new`] gave the thread the window's DPI awareness); `None` where it cannot be read.
 #[cfg(windows)]
@@ -521,9 +596,11 @@ pub(crate) fn client_size(hwnd: isize) -> Option<(u32, u32)> {
     })
 }
 
+/// Elsewhere: the client area of the window made known as `hwnd` ([`register_window`]), in its
+/// real pixels.
 #[cfg(not(windows))]
-pub(crate) fn client_size(_hwnd: isize) -> Option<(u32, u32)> {
-    None
+pub(crate) fn client_size(hwnd: isize) -> Option<(u32, u32)> {
+    registered(hwnd)?.client_size()
 }
 
 /// The primary display's refresh interval (the borderless window covers it), 60 a second where
@@ -543,9 +620,16 @@ fn refresh_interval() -> Duration {
     Duration::from_secs_f64(1.0 / f64::from(hz))
 }
 
+/// Elsewhere: the refresh interval of the monitor the last window made known is on (the game has
+/// one), 60 a second where the system does not say.
 #[cfg(not(windows))]
 fn refresh_interval() -> Duration {
-    Duration::from_secs_f64(1.0 / 60.0)
+    let last = registry().1;
+    let millihertz = registered(last)
+        .and_then(|w| w.refresh_millihertz())
+        .filter(|&mhz| mhz > 1000)
+        .unwrap_or(60_000);
+    Duration::from_secs_f64(1000.0 / f64::from(millihertz))
 }
 
 /// Whether the window, or the top-level window it is in, is minimised.
@@ -558,9 +642,10 @@ fn minimised(hwnd: isize) -> bool {
     }
 }
 
+/// Elsewhere: whether the window made known as `hwnd` shows nothing (minimised or hidden).
 #[cfg(not(windows))]
-fn minimised(_hwnd: isize) -> bool {
-    false
+fn minimised(hwnd: isize) -> bool {
+    registered(hwnd).is_some_and(|w| w.minimised())
 }
 
 /// The calling thread in a window's DPI awareness until this is dropped, then back in its own

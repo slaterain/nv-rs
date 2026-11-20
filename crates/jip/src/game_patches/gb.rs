@@ -7,7 +7,7 @@
 //! dead zone 7849.0, after `FILD axis; FSTP; CALL 00408820` (fabs)) at its own doubles
 //! `s_deadZoneLSg` (nine: the caravan, lockpick, map and roulette menus' left stick, the free
 //! camera's move axes) and `s_deadZoneRSg` (two: the free camera's look axes), which start at
-//! 7849.0 and 8689.0 (`internal/xinput.cpp`; `SetDeadZoneLS/RS`, not built, change them). Each
+//! 7849.0 and 8689.0 (`internal/xinput.cpp`; `SetDeadZoneLS/RS` change them). Each
 //! seam answers the guest address of the double to compare with; the doubles live in the
 //! built-ins' data, made as JIP installs from [`crate::input::State`]'s dead zones.
 //!
@@ -17,18 +17,18 @@
 //! installed (8689 where the exe uses 7849). The free camera's four seams sit in group GP's
 //! `playercharacter.rs` (GP adds them); the rows and these handlers are GB's.
 //!
-//! JIP's `SetDeadZoneLS/RS` (not built) write `s_deadZoneLSg`/`s_deadZoneRSg` with the new
-//! integer and 19 immediates in the exe each: when they are built they must write the two doubles
-//! these seams answer ([`doubles`]: `e.mem.set_f64`) as well as the input state (the dead-zone
+//! JIP's `SetDeadZoneLS/RS` write `s_deadZoneLSg`/`s_deadZoneRSg` with the new integer and 19
+//! immediates in the exe each: the port's commands (`commands::ln_fn_gamepad`) write the two
+//! doubles these seams answer ([`doubles`]: `e.mem.set_f64`), the input state (the dead-zone
 //! atomics of [`crate::input::State`], the lock-free slot the gamepad conditions read) and the
-//! immediates.
+//! engine's pair the translations read for the immediates (`Engine::set_pad_dead_zone_left`).
 //!
 //! **G87, the map menu's skip of its centring** (`InitGamePatches`: `WriteRelJump(0x79DF73,
 //! RefreshMapMenuHook)`, JIP's own, `INSTALLED`). In `MapMenu::AddMapIcons` (`0079dbb0`), where
 //! the map tile is centred on the player icon (traits `0xFA1`/`0xFA2`), JIP's hook tests its flag
 //! `s_mapMenuSkipSetXY`: set, it clears it and jumps past both sets (`0x79E053`); clear, it does
 //! the exe's work. Only JIP's item-list refresh (`RefreshItemListBox`, for `RefreshItemsList` and
-//! `RemoveMe`'s G60, neither built yet) sets the flag, on the world map tab, just before it calls
+//! `RemoveMe`'s G60) sets the flag, on the world map tab, just before it calls
 //! `AddMapIcons`; [`skip_map_centring_once`] is that set.
 //!
 //! **G88, JIP's fade types 5 and 6** (`InitGamePatches`: `SafeWrite8(0xA081A8, 6)` and
@@ -38,10 +38,25 @@
 //! 5 starts over (forever), type 6 ends (its control is listed as finished). Only JIP's
 //! `SetUIFloatGradual` (built: modes 3 and 4) makes controls of these types.
 //!
+//! **GB-3, fixes of `InitGamePatches`** (in with the game-patch row `NV_JIP_GAME_PATCHES`): the
+//! recipe menu shows an item's plain value and a weight below 1 with two decimals (G13), lists
+//! ammunition's effects (G68) and tests a crafted weapon's type itself (G100); the quantity menu
+//! takes the mouse wheel (G69); the barter menu titles the vendor's tab as it opens (G56) and,
+//! before taking a vendor's caps, splits a count over 32,767 into stacks (G64).
+//!
+//! **GB-6, the repair setting and Big Guns** (in with the game-patch row): G112 sets
+//! `fRepairSkillMax` to 10 (`InitGamePatches`: `GMST_INT(fRepairSkillMax) = 0x41200000`) at
+//! [`BEFORE_MAIN`], after the exe's static initializer gave it 9 and before `Main::InitTES` loads
+//! the data files, so a plugin's `GMST` still sets it; D06 (`DeferredInit`) gives the Big Guns
+//! actor value its name and the skills' derivation (`0x643BD0`); with `bEnableBigGunsSkill` (O3,
+//! off by default, set at `DeferredInit` as JIP defers that switch) it gets the other weapon
+//! skills' flags (`0x410`) and JIP's description ([`deferred_init`]).
+//!
 //! Threads: every handler here runs where its menu code runs, on the main thread (the free
 //! camera's dead-zone seams: the main thread's player update). None takes JIP's shared slot: the
 //! dead zones and G87's flag are lock-free `ext_free` words made at JIP's install, G88 reads and
-//! writes only the fade control and its tile in guest memory.
+//! writes only the fade control and its tile in guest memory, GB-3's handlers only guest memory
+//! and the exe's functions.
 
 use super::Area;
 use engine_core::extend::{Owner, SiteSlot};
@@ -117,16 +132,300 @@ const JIP_SITES: [u32; 14] = {
     out
 };
 
+/// G100's seam: `fn_007284f0` (the recipe menu's crafting), its `CALL 0x4C0BF0` on a crafted
+/// weapon (words: the weapon).
+pub const DISPOSABLE_WEAPON: SiteSlot = SiteSlot::new(Owner::Jip, 0x0072_880d);
+/// G13's two seams in `fn_00728da0` (the recipe menu's item information): the value's
+/// `FSTP; CALL 0x647C00` (no words) and the `"%.1f"` operand of the weight's format (no words).
+pub const PLAIN_VALUE: SiteSlot = SiteSlot::new(Owner::Jip, 0x0072_8e10);
+pub const WEIGHT_FORMAT: SiteSlot = SiteSlot::new(Owner::Jip, 0x0072_9616);
+/// G68's seam: `fn_00728da0`'s effects-list test (words: the form).
+pub const AMMO_EFFECTS: SiteSlot = SiteSlot::new(Owner::Jip, 0x0072_94dc);
+/// G56's seam: `BarterMenu::Create`'s first list fill (words: the menu).
+pub const BARTER_TAB_TITLE: SiteSlot = SiteSlot::new(Owner::Jip, 0x0072_d661);
+/// G64's seam: `BarterMenu::CompleteTransaction`'s `RemoveItemBarterContainer` of the vendor's
+/// caps (words: the data handler, the buyer's inventory changes data).
+pub const VENDOR_CAPS: SiteSlot = SiteSlot::new(Owner::Jip, 0x0073_005c);
+/// G69's seam: `QuantityMenu::DoIdle`'s start (words: the menu).
+pub const QUANTITY_WHEEL: SiteSlot = SiteSlot::new(Owner::Jip, 0x007a_c179);
+/// G82's seams: the barter, container and inventory menus' `InitFunc` at their count test (words:
+/// the tile, the stack, its count). Answered: the name is set and the exe's block is skipped.
+pub const ITEM_NAMES: [SiteSlot; 3] = [
+    SiteSlot::new(Owner::Jip, 0x0072_f33d),
+    SiteSlot::new(Owner::Jip, 0x0075_d1a5),
+    SiteSlot::new(Owner::Jip, 0x0078_2876),
+];
+/// O9's seams (`bQttSelectShortKeys`): the barter, container and inventory menus' quantity test
+/// (words: the stack's count; answered: the count to take without the quantity menu), and the
+/// container's weightless-item test (`0x75BF18`, no words; answered: skipped).
+pub const QUANTITY_KEYS: [SiteSlot; 3] = [
+    SiteSlot::new(Owner::Jip, 0x0072_d8b4),
+    SiteSlot::new(Owner::Jip, 0x0075_bf97),
+    SiteSlot::new(Owner::Jip, 0x0078_0b09),
+];
+pub const WEIGHTLESS_TAKE: SiteSlot = SiteSlot::new(Owner::Jip, 0x0075_bf18);
+/// O2's seams (`bEnableFO3Repair`, off by default): the repair list's test (`0x4D4C11`, group GH1's
+/// inert seam; words: the broken item's form, the stack), `InventoryMenu::IsItemRepairable`'s
+/// full-health test (`0x7818B2`; words: the stack), the repair list's condition
+/// (`0x7B58DB`; words: the stack's and the broken item's health bits), `DoClick`'s "repair
+/// again" test (`0x7B5CED`; no words) and `RepairItem`'s condition (`0x7B5DAD`; words: the stack
+/// used).
+pub const REPAIR_LIST: SiteSlot = SiteSlot::new(Owner::Jip, 0x004d_4c11);
+pub const REPAIR_BUTTON: SiteSlot = SiteSlot::new(Owner::Jip, 0x0078_18b2);
+pub const REPAIR_LIST_VALUE: SiteSlot = SiteSlot::new(Owner::Jip, 0x007b_58db);
+pub const REPAIR_AGAIN: SiteSlot = SiteSlot::new(Owner::Jip, 0x007b_5ced);
+pub const REPAIR_ITEM: SiteSlot = SiteSlot::new(Owner::Jip, 0x007b_5dad);
+/// G112's seam: the C runtime's call of `main` (`0x00ECC46B`, `CALL 0x0086A850` in
+/// `__tmainCRTStartup`, after `__cinit`), the call xNVSE's loader takes over to load xNVSE and
+/// its plugins before `main` runs (`loader_common/IdentifyEXE.cpp`, `hookCallAddr` for 1.4.0.525;
+/// `steam_loader/main.cpp`, `OnHook`): JIP's `InitGamePatches` (its `PostLoad`) runs there. The
+/// port's `main` asks it first thing (no words).
+pub const BEFORE_MAIN: SiteSlot = SiteSlot::new(Owner::Jip, 0x00ec_c46b);
+
 /// The group's rows and installers.
 pub const AREA: Area = Area {
     name: "GB",
-    fix_sites: &[],
+    fix_sites: &[
+        DISPOSABLE_WEAPON.addr(),
+        PLAIN_VALUE.addr(),
+        AMMO_EFFECTS.addr(),
+        WEIGHT_FORMAT.addr(),
+        BARTER_TAB_TITLE.addr(),
+        VENDOR_CAPS.addr(),
+        QUANTITY_WHEEL.addr(),
+        ITEM_NAMES[0].addr(),
+        ITEM_NAMES[1].addr(),
+        ITEM_NAMES[2].addr(),
+        QUANTITY_KEYS[0].addr(),
+        QUANTITY_KEYS[1].addr(),
+        QUANTITY_KEYS[2].addr(),
+        WEIGHTLESS_TAKE.addr(),
+        REPAIR_LIST.addr(),
+        REPAIR_BUTTON.addr(),
+        REPAIR_LIST_VALUE.addr(),
+        REPAIR_AGAIN.addr(),
+        REPAIR_ITEM.addr(),
+        BEFORE_MAIN.addr(),
+    ],
     fix_wraps: &[],
-    install_fixes: super::nothing,
+    install_fixes,
     jip_sites: &JIP_SITES,
     jip_wraps: &[],
     install_jip,
 };
+
+fn install_fixes(e: &mut Engine) {
+    for slot in ITEM_NAMES {
+        e.on_site(slot, item_entry_name);
+    }
+    for slot in QUANTITY_KEYS {
+        e.on_site(slot, quantity_keys);
+    }
+    e.on_site(WEIGHTLESS_TAKE, weightless_take);
+    e.on_site(REPAIR_LIST, repair_list);
+    e.on_site(REPAIR_BUTTON, repair_button);
+    e.on_site(REPAIR_LIST_VALUE, repair_list_value);
+    e.on_site(REPAIR_AGAIN, repair_again);
+    e.on_site(REPAIR_ITEM, repair_item);
+    e.on_site(BEFORE_MAIN, repair_skill_max);
+    e.on_site(DISPOSABLE_WEAPON, disposable_weapon);
+    e.on_site(PLAIN_VALUE, plain_value);
+    e.on_site(WEIGHT_FORMAT, weight_format);
+    e.on_site(AMMO_EFFECTS, ammo_effects);
+    e.on_site(BARTER_TAB_TITLE, barter_tab_title);
+    e.on_site(VENDOR_CAPS, fix_vendor_caps);
+    e.on_site(QUANTITY_WHEEL, quantity_wheel);
+}
+
+/// A weapon's type byte (`TESObjectWEAP::eWeaponType`, +0xF4).
+const WEAPON_TYPE: u32 = 0xf4;
+/// A form's type byte (+4) and `kFormType_TESAmmo`.
+const FORM_TYPE: u32 = 4;
+const FORM_AMMO: u8 = 0x29;
+/// The exe's `"%.2f"` (`0x1030018`, read in Ghidra: `25 2e 32 66 00`).
+pub const TWO_DECIMALS: u32 = 0x0103_0018;
+/// `BarterMenu::SetFilterModeTitle` (`007301f0`, `thiscall`, `RET 4`: the tab tile) and the tile
+/// JIP passes, the menu's word at +0x48 (`pTiles[8]`).
+const SET_FILTER_MODE_TITLE: u32 = 0x0073_01f0;
+const BARTER_TAB_TILE: u32 = 0x48;
+/// `g_interfaceManager` and its mouse wheel word (+0x44, signed: up above 0).
+const INTERFACE_MANAGER: u32 = 0x011d_8a80;
+const MOUSE_WHEEL: u32 = 0x44;
+/// A menu's vtable slot +0xC (`Menu::HandleClick(id, tile)`).
+const MENU_HANDLE_CLICK: u32 = 0xc;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: IsDisposableWeaponHook.
+/// G100: the weapon's type byte, signed, above 9 (JIP's `setg`). The exe's `004c0bf0` answers
+/// types 10 to 13; the game has no weapon type above 13, so every weapon answers the same.
+fn disposable_weapon(e: &mut Engine, words: &[u32]) -> Option<u32> {
+    let weapon = *words.first()?;
+    Some(u32::from(e.mem.u8(weapon + WEAPON_TYPE) as i8 > 9))
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
+// (SAFE_WRITE_BUF(0x728E10, 8-byte NOP)).
+/// G13: the value's call is left out (1: the form's plain value is shown).
+fn plain_value(_: &mut Engine, _: &[u32]) -> Option<u32> {
+    Some(1)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
+// (SafeWrite32(0x729616, 0x1030018)).
+/// G13: the weight's format below 1, `"%.2f"`.
+fn weight_format(_: &mut Engine, _: &[u32]) -> Option<u32> {
+    Some(TWO_DECIMALS)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: RecipeMenuAmmoEffectsHook.
+/// G68: 1 for ammunition (its effects text is built from the ammo, `00503a70`, whatever the
+/// exe's effect list holds); anything else answers nothing (the exe's test).
+fn ammo_effects(e: &mut Engine, words: &[u32]) -> Option<u32> {
+    let form = *words.first()?;
+    (e.mem.u8(form + FORM_TYPE) == FORM_AMMO).then_some(1)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitBarterMenuHook.
+/// G56: `SetFilterModeTitle(pTiles[8])` before the first list fill; the translation goes on.
+fn barter_tab_title(e: &mut Engine, words: &[u32]) -> Option<u32> {
+    let menu = *words.first()?;
+    let tile = e.mem.u32(menu + BARTER_TAB_TILE);
+    e.call(SET_FILTER_MODE_TITLE, &args![menu, tile]);
+    None
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: QttMenuEnableWheelHook.
+/// G69: with the mouse wheel moved, the menu's click on button 2 (wheel up) or 1 (down), as a
+/// click on the plus or minus button; the translation goes on.
+fn quantity_wheel(e: &mut Engine, words: &[u32]) -> Option<u32> {
+    let menu = *words.first()?;
+    let manager = e.mem.u32(INTERFACE_MANAGER);
+    let wheel = e.mem.u32(manager + MOUSE_WHEEL) as i32;
+    if wheel != 0 {
+        let button = if wheel > 0 { 2u32 } else { 1 };
+        e.vcall(menu, MENU_HANDLE_CLICK, &args![button, 0u32]);
+    }
+    None
+}
+
+/// `kXData_ExtraOriginalReference` (0x20, its reference at +0xC) and `kXData_ExtraCount` (0x24, its
+/// count at +0xC), with the vtables JIP's `Create` stores (`internal/class_vtbls.h`), and
+/// `kVtbl_ExtraDataList`.
+const EXTRA_ORIGINAL_REFERENCE: u32 = 0x20;
+const EXTRA_COUNT: u32 = 0x24;
+const VTBL_ORIGINAL_REFERENCE: u32 = 0x0101_5bc4;
+const VTBL_COUNT: u32 = 0x0101_58d8;
+const VTBL_EXTRA_DATA_LIST: u32 = 0x0101_43e8;
+const EXTRA_VALUE: u32 = 0xc;
+/// `DataHandler`'s word at +0x628 (the barter container's inventory changes data, as
+/// `RemoveItemBarterContainer` reads it), the caps' form id (`g_capsItem`), a stack's limit.
+const BARTER_CHANGES: u32 = 0x628;
+const CAPS_ID: u32 = 0xf;
+const STACK_MAX: i32 = 0x7fff;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameExtraData.cpp:
+// ContChangesEntryList::FindForItem.
+/// The first entry of the list (from its head node) whose item (+8) is `item`, 0 for none.
+fn find_for_item(e: &Engine, mut node: u32, item: u32) -> u32 {
+    while node != 0 {
+        let entry = e.mem.u32(node);
+        node = e.mem.u32(node + 4);
+        if entry != 0 && e.mem.u32(entry + 8) == item {
+            return entry;
+        }
+    }
+    0
+}
+
+/// JIP's `CreateExtraType` with the word at +0xC (`ExtraOriginalReference::Create`,
+/// `ExtraCount::Create` below `SHRT_MAX`).
+fn extra_with(e: &mut Engine, vtable: u32, kind: u32, value: u32) -> u32 {
+    let extra = crate::commands::extra::create(e, vtable, kind);
+    e.mem.set_u32(extra + EXTRA_VALUE, value);
+    extra
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: BarterSellFixHook,
+// FixVendorCaps; nvse/GameBSExtraData.cpp: ExtraDataList::Create; nvse/GameTypes.h:
+// tList::Prepend.
+/// G64, before the vendor's caps are taken (words: the data handler, the buyer's inventory changes
+/// data): when the barter container holds caps with a stack list and the buyer holds more than
+/// 32,767 caps, the first stack of the barter container marked as the buyer's (its
+/// `ExtraOriginalReference`) gets at most 32,767 of them in its count extra, and new stacks of the
+/// buyer's caps (an original reference and a count of at most 32,767 each) are put at the head of
+/// the list for the rest while more than one is left. Answers nothing (the exe's call follows).
+///
+/// nv-rs's own: a data handler without the barter container's data does nothing (JIP would read
+/// through it).
+fn fix_vendor_caps(e: &mut Engine, words: &[u32]) -> Option<u32> {
+    let (&handler, &changes) = (words.first()?, words.get(1)?);
+    let barter = e.mem.u32(handler + BARTER_CHANGES);
+    if barter == 0 {
+        return None;
+    }
+    let caps = crate::cosave::lookup_form(e, CAPS_ID);
+    let entry = find_for_item(e, e.mem.u32(barter), caps);
+    if entry == 0 {
+        return None;
+    }
+    let stacks = e.mem.u32(entry);
+    if stacks == 0 {
+        return None;
+    }
+    let owner = e.mem.u32(changes + 4);
+    let held = find_for_item(e, e.mem.u32(changes), caps);
+    if held == 0 {
+        return None;
+    }
+    let mut left = e.mem.u32(held + 4) as i32;
+    if left <= STACK_MAX {
+        return None;
+    }
+    let mut node = stacks;
+    while node != 0 {
+        let list = e.mem.u32(node);
+        node = e.mem.u32(node + 4);
+        if list == 0 {
+            continue;
+        }
+        let original = crate::commands::extra::get_by_type(e, list, EXTRA_ORIGINAL_REFERENCE);
+        if original == 0 || e.mem.u32(original + EXTRA_VALUE) != owner {
+            continue;
+        }
+        let count = crate::commands::extra::get_by_type(e, list, EXTRA_COUNT);
+        if count != 0 {
+            let part = left.min(STACK_MAX);
+            e.mem.set_u32(count + EXTRA_VALUE, part as u32);
+            left -= part;
+        }
+        break;
+    }
+    while left > 1 {
+        let list = crate::commands::heap_alloc(e, 0x20);
+        for at in (0..0x20).step_by(4) {
+            e.mem.set_u32(list + at, 0);
+        }
+        e.mem.set_u32(list, VTBL_EXTRA_DATA_LIST);
+        let original = extra_with(e, VTBL_ORIGINAL_REFERENCE, EXTRA_ORIGINAL_REFERENCE, owner);
+        crate::commands::extra::add_extra(e, list, original);
+        let part = left.min(STACK_MAX);
+        left -= part;
+        let count = extra_with(e, VTBL_COUNT, EXTRA_COUNT, part as u32);
+        crate::commands::extra::add_extra(e, list, count);
+        // `tList::Prepend`: an empty head takes the list; else a new node after the head takes
+        // the head's item and the head the list.
+        let head = e.mem.u32(stacks);
+        if head == 0 {
+            e.mem.set_u32(stacks, list);
+        } else {
+            let moved = crate::commands::heap_alloc(e, 8);
+            e.mem.set_u32(moved, head);
+            e.mem.set_u32(moved + 4, e.mem.u32(stacks + 4));
+            e.mem.set_u32(stacks, list);
+            e.mem.set_u32(stacks + 4, moved);
+        }
+    }
+    None
+}
 
 /// Where JIP's two doubles are (0: not made yet). Lock-free: the seams are asked from any game
 /// thread; written once, before the threads start.
@@ -137,7 +436,7 @@ pub struct DeadZones {
 }
 
 /// JIP's `s_deadZoneLSg` and `s_deadZoneRSg`: 8 bytes each in the built-ins' data, made once with
-/// the input state's dead zones (7849 and 8689 until `SetDeadZoneLS/RS` are built).
+/// the input state's dead zones (7849 and 8689 until `SetDeadZoneLS/RS` change them).
 pub fn doubles(e: &mut Engine) -> (u32, u32) {
     let zones = e.ext_free::<DeadZones>();
     let left = zones.left.load(Ordering::Relaxed);
@@ -176,11 +475,17 @@ pub struct MapSkipCentring(AtomicBool);
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.cpp: RefreshItemListBox (its
 // `s_mapMenuSkipSetXY = true` before `AddMapIcons` on the world map tab).
 /// The next `MapMenu::AddMapIcons` leaves the map tile where it is (once). For JIP's item-list
-/// refresh (`RefreshItemsList`, G60), not built yet.
+/// refresh (`commands::jip_fn_ui::refresh_item_list_box`: `RefreshItemsList`, G60).
 pub fn skip_map_centring_once(e: &mut Engine) {
     e.ext_free::<MapSkipCentring>()
         .0
         .store(true, Ordering::Relaxed);
+}
+
+/// Whether the next `AddMapIcons` skips the centring, for the tests of its setters.
+#[cfg(test)]
+pub(crate) fn map_skip_centring_pending(e: &mut Engine) -> bool {
+    e.ext_free::<MapSkipCentring>().0.load(Ordering::Relaxed)
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: RefreshMapMenuHook.
@@ -243,6 +548,399 @@ fn right_stick(e: &mut Engine, _: &[u32]) -> Option<u32> {
     Some(e.ext_free::<DeadZones>().right.load(Ordering::Relaxed))
 }
 
+/// `kTileValue_string`, a form's full name (`TESFullName::name` of the stack's form: text +0x34,
+/// length +0x38, as JIP reads it), the `InitFunc`s' 0x80-byte name buffer.
+const TRAIT_STRING: u32 = 0xfc4;
+const FULL_NAME_TEXT: u32 = 0x34;
+const FULL_NAME_LENGTH: u32 = 0x38;
+const NAME_BUFFER: usize = 0x80;
+/// A tile value's string (+0xC) and `Tile::Value::Refresh` (`00a09410`, `thiscall`, a flag).
+const VALUE_STRING: u32 = 0xc;
+const VALUE_REFRESH: u32 = 0x00a0_9410;
+/// The keys JIP reads in xNVSE's key state (`g_DIHookCtrl`'s raw states at +0xCF, +0x44F,
+/// +0x12A, +0x17E: `KeyInfo` is 7 bytes from +4): left and right Ctrl (one), left and right Shift
+/// (all).
+const KEYS_ONE: [u32; 2] = [0x1d, 0x9d];
+const KEYS_ALL: [u32; 2] = [0x2a, 0x36];
+/// The raw-state bit of [`nvse::input::key_states`].
+const RAW_STATE: u8 = 2;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameTiles.cpp: Tile::SetString,
+// Tile::Value::SetString; internal/utility.cpp: CopyCString.
+/// The tile's value of `id` (none: nothing) gets `text`: nothing when it holds the same text
+/// (case counts); else its old text is freed, a copy on the game's heap is kept and the value
+/// refreshed.
+fn tile_set_string(e: &mut Engine, tile: u32, id: u32, text: &[u8]) {
+    let value = crate::commands::jip_fn_ui::value_of(e, tile, id);
+    if value == 0 {
+        return;
+    }
+    value_set_string(e, value, text);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameTiles.cpp: Tile::Value::SetString.
+/// The value gets `text`: nothing when it holds the same text (case counts); else its old text
+/// is freed, a copy on the game's heap is kept and the value refreshed.
+pub(crate) fn value_set_string(e: &mut Engine, value: u32, text: &[u8]) {
+    let old = e.mem.u32(value + VALUE_STRING);
+    if old != 0 {
+        if e.mem.cstr(old) == text {
+            return;
+        }
+        crate::commands::heap_free(e, old);
+        e.mem.set_u32(value + VALUE_STRING, 0);
+    }
+    let copy = crate::commands::heap_alloc(e, text.len() as u32 + 1);
+    e.mem.write(copy, text);
+    e.mem.set_u8(copy + text.len() as u32, 0);
+    e.mem.set_u32(value + VALUE_STRING, copy);
+    e.call(VALUE_REFRESH, &args![value, 1u32]);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: ConstructItemEntryNameHook.
+/// G82 (words: the tile, the stack, its count): a stack whose weapon has mods (JIP's
+/// `GetEntryDataModFlagsHook`, [`super::gh1::mod_flags`]) or of more than one gets the form's
+/// name, "+" when modded and " (count)" when more than one, as the tile's string; nothing for
+/// another stack or a form with an empty name. Answers 1 (the exe's block is skipped).
+///
+/// nv-rs's own: the text is cut to the 0x80-byte buffer's 0x7F characters (JIP copies the whole
+/// name into it).
+fn item_entry_name(e: &mut Engine, words: &[u32]) -> Option<u32> {
+    let (&tile, &item, &count) = (words.first()?, words.get(1)?, words.get(2)?);
+    let count = count as i32;
+    let plus = super::gh1::mod_flags(e, item) != 0;
+    if !plus && count <= 1 {
+        return Some(1);
+    }
+    let form = e.mem.u32(item + 8);
+    let length = u32::from(e.mem.u16(form + FULL_NAME_LENGTH));
+    if length == 0 {
+        return Some(1);
+    }
+    let mut text = e.mem.bytes(e.mem.u32(form + FULL_NAME_TEXT), length);
+    if plus {
+        text.push(b'+');
+    }
+    if count > 1 {
+        text.extend_from_slice(b" (");
+        text.extend_from_slice(&crate::utility::int_to_str(count));
+        text.push(b')');
+    }
+    text.truncate(NAME_BUFFER - 1);
+    tile_set_string(e, tile, TRAIT_STRING, &text);
+    Some(1)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: QttSelectInventoryHook,
+// QttSelectContainerHook, QttSelectBarterHook.
+/// O9 (words: the stack's count): Ctrl held answers 1, else Shift held answers the count, taken
+/// without the quantity menu; neither: nothing (the exe's test). Ctrl first, as JIP.
+fn quantity_keys(e: &mut Engine, words: &[u32]) -> Option<u32> {
+    let count = *words.first()?;
+    let held = |e: &mut Engine, keys: [u32; 2]| {
+        keys.iter()
+            .any(|&k| nvse::input::key_states(e, k) & RAW_STATE != 0)
+    };
+    if held(e, KEYS_ONE) {
+        Some(1)
+    } else if held(e, KEYS_ALL) {
+        Some(count)
+    } else {
+        None
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches (the O9
+// list's `{0x75BF18, 0x63EB, 2, 0}`, `JMP 0x75BF7D`).
+/// O9: the container's weightless-item test is skipped (1).
+fn weightless_take(_: &mut Engine, _: &[u32]) -> Option<u32> {
+    Some(1)
+}
+
+// ---- O2: Fallout 3 style repair (`bEnableFO3Repair`) ----
+
+/// The game settings JIP reads (`GMST_FLT`: the setting + 4): `fRepairSkillBase`, `fRepairSkillMax`,
+/// `fRepairScavengeMult`, `fRepairMin`, `fRepairMax`.
+const REPAIR_SKILL_BASE: u32 = 0x011d_0ff4;
+const REPAIR_SKILL_MAX: u32 = 0x011d_0190;
+const REPAIR_SCAVENGE_MULT: u32 = 0x011d_074c;
+const REPAIR_MIN: u32 = 0x011d_0884;
+const REPAIR_MAX: u32 = 0x011c_ffa4;
+/// `g_thePlayer`, its actor value owner (+0xA4), the actor value call JIP makes (`0093acb0`,
+/// `thiscall`, `RET 4`, `ST0`) and `kAVCode_Repair`.
+const PLAYER: u32 = 0x011d_ea3c;
+const ACTOR_VALUE_OWNER: u32 = 0xa4;
+const GET_ACTOR_VALUE: u32 = 0x0093_acb0;
+const AV_REPAIR: u32 = 0x27;
+/// The repair menu's broken item (`0x11DA760`) and the exe's repair list test (`0047bb50`,
+/// `cdecl`: the stack's form, the broken item's form).
+const BROKEN_ITEM: u32 = 0x011d_a760;
+const REPAIR_ITEM_TEST: u32 = 0x0047_bb50;
+/// A stack's first list's presence byte for `ExtraWeaponModFlags` (+0x19, bit 0x20: type 0x8D).
+const MOD_FLAGS_PRESENCE: u32 = 0x19;
+/// `ExtraHealth` (its value at +0xC).
+const EXTRA_HEALTH: u32 = 0x25;
+
+/// JIP's three statics (`s_pcRepairSkill`, `s_repairedItemHealth`, `s_repairedItemModded`),
+/// written by the inventory's repair button test and read by the repair menu. Lock-free (the
+/// menus run on the main thread).
+#[derive(Default)]
+pub struct RepairState {
+    skill: AtomicU32,
+    health: AtomicU32,
+    modded: AtomicBool,
+}
+
+fn repair_state(e: &mut Engine) -> &RepairState {
+    e.ext_free::<RepairState>()
+}
+
+/// SSE `minss`/`maxss`: the first operand when it is below (above) the second, else the second
+/// (so a NaN gives the second).
+fn minss(a: f32, b: f32) -> f32 {
+    if a < b {
+        a
+    } else {
+        b
+    }
+}
+fn maxss(a: f32, b: f32) -> f32 {
+    if a > b {
+        a
+    } else {
+        b
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameExtraData.cpp:
+// ContChangesEntry::GetHealthPercent.
+/// The stack's health in percent: -1 for a form whose type has a bit outside 0x38, 100 without a
+/// first list or `ExtraHealth`, else the health over the full health
+/// (`jip_fn_inventory::base_health`) times 100, at most 100 (`minss(100, ..)`).
+pub fn health_percent(e: &mut Engine, entry: u32) -> f32 {
+    let item = e.mem.u32(entry + 8);
+    let kind = e.mem.u8(item + 4);
+    if kind & 0x38 != kind {
+        return -1.0;
+    }
+    let lists = e.mem.u32(entry);
+    if lists == 0 {
+        return 100.0;
+    }
+    let list = e.mem.u32(lists);
+    if list == 0 {
+        return 100.0;
+    }
+    let x = crate::commands::extra::get_by_type(e, list, EXTRA_HEALTH);
+    if x == 0 {
+        return 100.0;
+    }
+    let health = e.mem.f32(x + EXTRA_VALUE);
+    let full = crate::commands::jip_fn_inventory::base_health(e, item, list);
+    minss(100.0, health / full * 100.0)
+}
+
+/// `cvtps2dq` under the rounding toward +infinity JIP sets (`MXCSR` 0x5FA0), then `cvtdq2ps`: the
+/// value rounded up; out of range or NaN gives the integer indefinite (-2^31).
+fn round_up(v: f32) -> f32 {
+    let up = v.ceil();
+    if up.is_nan() || !(-2_147_483_648.0..2_147_483_648.0).contains(&up) {
+        i32::MIN as f32
+    } else {
+        up as i32 as f32
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: EnableRepairButtonHook
+// (with the byte 0x77, `JA`, at 0x7818D3).
+/// O2, `IsItemRepairable`'s first test (words: the stack): keeps the stack's health in percent,
+/// rounded up, whether its first list has weapon mods, and the player's repair cap: the Repair
+/// skill (at least 0) scaled from `fRepairSkillBase * 10` to `fRepairSkillMax * 10`, at most 100.
+/// Answers 1 (the exe's further tests follow) when the cap is above the health, else 0 (not
+/// repairable).
+fn repair_button(e: &mut Engine, words: &[u32]) -> Option<u32> {
+    let entry = *words.first()?;
+    let health = round_up(health_percent(e, entry));
+    let lists = e.mem.u32(entry);
+    let modded = lists != 0 && {
+        let list = e.mem.u32(lists);
+        list != 0 && e.mem.u8(list + MOD_FLAGS_PRESENCE) & 0x20 != 0
+    };
+    let player = e.mem.u32(PLAYER);
+    let skill = e
+        .call(
+            GET_ACTOR_VALUE,
+            &args![player + ACTOR_VALUE_OWNER, AV_REPAIR],
+        )
+        .f64() as f32;
+    let skill = maxss(skill, 0.0);
+    let base = e.mem.f32(REPAIR_SKILL_BASE) * 10.0;
+    let range = 10.0f32 * e.mem.f32(REPAIR_SKILL_MAX) - base;
+    let cap = minss(skill * range * 0.01 + base, 100.0);
+    let state = repair_state(e);
+    state.health.store(health.to_bits(), Ordering::Relaxed);
+    state.modded.store(modded, Ordering::Relaxed);
+    state.skill.store(cap.to_bits(), Ordering::Relaxed);
+    Some(u32::from(cap > health))
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: PopulateRepairListHook.
+/// O2, the repair list's test (words: the broken item's form, a stack): the exe's test
+/// (`0047bb50`); a stack that passes and is of the broken item's own form, when the broken item
+/// has no weapon mods, passes only at or below the broken item's health (or unordered).
+fn repair_list(e: &mut Engine, words: &[u32]) -> Option<u32> {
+    let (&form, &entry) = (words.first()?, words.get(1)?);
+    let item = e.mem.u32(entry + 8);
+    let mut ok = e.call(REPAIR_ITEM_TEST, &args![item, form]).u8() != 0;
+    if ok && form == item && !repair_state(e).modded.load(Ordering::Relaxed) {
+        let health = health_percent(e, entry);
+        let broken = f32::from_bits(repair_state(e).health.load(Ordering::Relaxed));
+        ok = health.partial_cmp(&broken) != Some(std::cmp::Ordering::Greater);
+    }
+    Some(u32::from(ok))
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: GetRepairAmount.
+/// The condition (0 to 1) a repair reaches: with both healths in tenths and the skill cap in
+/// hundredths, `(larger + fRepairMin + smaller * fRepairScavengeMult + (fRepairMax - fRepairMin)
+/// * cap) / 10` in that order of single-precision steps, at most the cap.
+pub fn repair_amount(e: &mut Engine, to_repair: f32, used: f32) -> f32 {
+    let (a, b) = (to_repair * 0.1, used * 0.1);
+    let skill = f32::from_bits(repair_state(e).skill.load(Ordering::Relaxed)) * 0.01;
+    let scavenged = minss(a, b) * e.mem.f32(REPAIR_SCAVENGE_MULT);
+    let larger = maxss(a, b);
+    let low = e.mem.f32(REPAIR_MIN);
+    let spread = (e.mem.f32(REPAIR_MAX) - low) * skill;
+    let amount = (larger + low + scavenged + spread) * 0.1;
+    minss(amount, skill)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: SetRepairListValuesHook.
+/// O2, the repair list's condition (words: the stack's health bits, the broken item's).
+fn repair_list_value(e: &mut Engine, words: &[u32]) -> Option<u32> {
+    let (&item, &broken) = (words.first()?, words.get(1)?);
+    Some(repair_amount(e, f32::from_bits(item), f32::from_bits(broken)).to_bits())
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: DoRepairItemHook.
+/// O2, `RepairItem`'s condition (words: the stack used): from the broken item's and the stack's
+/// health in percent (JIP's `GetHealthPercent`).
+fn repair_item(e: &mut Engine, words: &[u32]) -> Option<u32> {
+    let used = *words.first()?;
+    let used = health_percent(e, used);
+    let broken = e.mem.u32(BROKEN_ITEM);
+    let broken = health_percent(e, broken);
+    Some(repair_amount(e, broken, used).to_bits())
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: RepairMenuClickHook (with
+// the byte 0x76, `JBE`, at 0x7B5D05).
+/// O2, `DoClick`'s test after a repair (no words): 1 (set the menu up again) while the broken
+/// item's health in percent plus 1 is at most the skill cap (or unordered), else 0 (close).
+fn repair_again(e: &mut Engine, _: &[u32]) -> Option<u32> {
+    let broken = e.mem.u32(BROKEN_ITEM);
+    let health = health_percent(e, broken) + 1.0;
+    let cap = f32::from_bits(repair_state(e).skill.load(Ordering::Relaxed));
+    Some(u32::from(
+        health.partial_cmp(&cap) != Some(std::cmp::Ordering::Greater),
+    ))
+}
+
+// ---- GB-6: G112 (`fRepairSkillMax`), D06 and O3 (Big Guns) ----
+
+/// `fRepairSkillMax`'s value as JIP writes it (`GMST_INT(..) = 0x41200000`: 10.0).
+pub const REPAIR_SKILL_MAX_JIP: u32 = 0x4120_0000;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
+// (`GMST_INT(fRepairSkillMax) = 0x41200000;`).
+/// G112, before `main` (no words): `fRepairSkillMax` becomes 10.0 (the exe's static initializer
+/// `00f67c30` made it 9.0). Answers nothing: `main` goes on as the exe's.
+fn repair_skill_max(e: &mut Engine, _: &[u32]) -> Option<u32> {
+    e.mem.set_u32(REPAIR_SKILL_MAX, REPAIR_SKILL_MAX_JIP);
+    None
+}
+
+/// `ActorValueInfo::Array()` (`0x11D61C8`) and `kAVCode_BigGuns`.
+const ACTOR_VALUE_INFOS: u32 = 0x011d_61c8;
+const AV_BIG_GUNS: u32 = 0x21;
+/// An `ActorValueInfo`'s `fullName.name` (`TESFullName` at +0x18, its `String` at +0x1C),
+/// `description` (`TESDescription`, +0x24), `avName` (`String`, +0x3C), `avFlags` (+0x44) and
+/// `callback4C` (the exe's `pDerivationFunction`, +0x4C).
+const AV_FULL_NAME: u32 = 0x1c;
+const AV_DESCRIPTION: u32 = 0x24;
+const AV_NAME: u32 = 0x3c;
+const AV_FLAGS: u32 = 0x44;
+const AV_DERIVATION: u32 = 0x4c;
+/// The skills' derivation (`00643bd0`: `AiFormulas::AVDeriveSkill`), as `0066efe0` registers it
+/// for Barter and Energy Weapons; the exe registers Big Guns with none (0) and flags `0x2000`.
+pub const DERIVE_SKILL: u32 = 0x0064_3bd0;
+/// O3's flags (`kAVFlag_Skill | kAVFlag_CreatureCombatSkill`, Energy Weapons' in the exe).
+pub const BIG_GUNS_SKILL_FLAGS: u32 = 0x410;
+/// JIP's `kBigGunsDescription`.
+pub const BIG_GUNS_DESCRIPTION: &[u8] = b"The Big Guns skill determines your combat effectiveness with all oversized weapons such as the Fat Man, Missile Launcher, Flamer, Minigun, Gatling Laser, etc.";
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: DeferredInit (the
+// deferred `SetOptionalPatch(3, true)`, then `avInfo->fullName.name = avInfo->avName;
+// avInfo->callback4C = (void*)0x643BD0;`) and SetOptionalPatch case 3.
+/// JIP's `DeferredInit`, group GB's part, with the game-patch row: with `bEnableBigGunsSkill` (O3)
+/// Big Guns' flags become [`BIG_GUNS_SKILL_FLAGS`] and its description JIP's text (JIP's
+/// `SetDescriptionAltText`); then (D06) its display name is its actor value name (the 8-byte
+/// `String` copied as it is, buffer shared, as JIP's assignment does) and its derivation
+/// [`DERIVE_SKILL`]. With the row off nothing changes.
+pub fn deferred_init(e: &mut Engine) {
+    use engine_core::extend::jip_patches;
+    let word = e.jip_patches();
+    if word & jip_patches::FIXES == 0 {
+        return;
+    }
+    let slot = ACTOR_VALUE_INFOS + 4 * AV_BIG_GUNS;
+    // Always mapped and filled in the game (`0066efe0` registers every actor value at start);
+    // a test engine without the exe's data has neither.
+    if !e.mem.is_mapped(slot) {
+        return;
+    }
+    let info = e.mem.u32(slot);
+    if info == 0 {
+        return;
+    }
+    if word & jip_patches::ENABLE_BIG_GUNS_SKILL != 0 {
+        e.mem.set_u32(info + AV_FLAGS, BIG_GUNS_SKILL_FLAGS);
+        crate::world_hooks::set_description_alt_text(
+            e,
+            info + AV_DESCRIPTION,
+            BIG_GUNS_DESCRIPTION,
+        );
+    }
+    for at in [0, 4] {
+        let word = e.mem.u32(info + AV_NAME + at);
+        e.mem.set_u32(info + AV_FULL_NAME + at, word);
+    }
+    e.mem.set_u32(info + AV_DERIVATION, DERIVE_SKILL);
+}
+
+/// The exe's Big Guns flags (`kAVFlag_Unknown2000`, as `0066efe0` registers it): O3 off.
+pub const BIG_GUNS_PLAIN_FLAGS: u32 = 0x2000;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: SetOptionalPatch case 3.
+/// O3 switched at run time (`SetOptionalPatch(3, on)`): Big Guns' flags [`BIG_GUNS_SKILL_FLAGS`]
+/// and JIP's description text on, [`BIG_GUNS_PLAIN_FLAGS`] and no alternative text off.
+pub fn set_big_guns_skill(e: &mut Engine, on: bool) {
+    let slot = ACTOR_VALUE_INFOS + 4 * AV_BIG_GUNS;
+    if !e.mem.is_mapped(slot) {
+        return;
+    }
+    let info = e.mem.u32(slot);
+    if info == 0 {
+        return;
+    }
+    let (flags, text): (u32, &[u8]) = if on {
+        (BIG_GUNS_SKILL_FLAGS, BIG_GUNS_DESCRIPTION)
+    } else {
+        (BIG_GUNS_PLAIN_FLAGS, b"")
+    };
+    e.mem.set_u32(info + AV_FLAGS, flags);
+    crate::world_hooks::set_description_alt_text(e, info + AV_DESCRIPTION, text);
+}
 #[cfg(test)]
 #[path = "gb_tests.rs"]
 mod tests;
