@@ -508,6 +508,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
+name = "ds-mix"
+version = "0.1.0"
+dependencies = [
+ "cpal",
+ "qos",
+]
+
+[[package]]
 name = "engine"
 version = "0.1.0"
 dependencies = [
@@ -848,10 +856,10 @@ name = "engine-platform"
 version = "0.1.0"
 dependencies = [
  "bink",
- "cpal",
  "d3d9-stream",
  "d3d9-wgpu",
  "d3dx-tex",
+ "ds-mix",
  "engine-core",
  "libc",
  "mp3",

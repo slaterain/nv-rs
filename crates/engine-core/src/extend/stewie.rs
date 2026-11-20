@@ -28,7 +28,11 @@ pub use menus::*;
 pub use world::*;
 
 use crate::{args, Engine};
-use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{
+    AtomicBool, AtomicU32, AtomicU64,
+    Ordering::{AcqRel, Acquire, Relaxed},
+};
+use std::sync::Mutex;
 
 /// The table's words: 2,048 rows (Tweaks has 1,082 rows in `measure/stewie/PLAN.md`).
 pub const WORDS: usize = 32;
@@ -250,6 +254,16 @@ pub const SEQUENCE_NULL_OWNER: Row = Row::at(CRASH, 57);
 pub const HKP_ENTITY_NULL_ISLAND: Row = Row::at(CRASH, 58);
 /// S0199.07 `MiscCrashFixes` (`TESObjectCELL::AddReference` `00548230` (`0x54867C`)): a reference whose cell is gone while it is added no longer crashes.
 pub const ADD_REFERENCE_NULL_CELL: Row = Row::at(CRASH, 59);
+/// S0107.01 `MemoryLeakFixes` (`Controls::Rumble` `00a255b0` (`0xA25603`)): the controller's vibration no longer loses 36 bytes each time.
+pub const RUMBLE_STATES_LEAK: Row = Row::at(CRASH, 60);
+/// S0107.04 `MemoryLeakFixes` (`PlayerCharacter::FocusOnActor` `00953060` (`0x953253`, `0x9532B0`)): turning to an actor's head in dialogue no longer loses 4 bytes each time.
+pub const FOCUS_SPEAKER_NAME_LEAK: Row = Row::at(CRASH, 61);
+/// S0023 `patchPrintBSXCrash` (`00c80090` (`0xC800D5`)): a model node with no first child no longer crashes the entity test; Tweaks' console line names it.
+pub const INVALID_FADE_NODE: Row = Row::at(CRASH, 62);
+/// S0031 `patchAddNifShapeNullChecks` (`00d21960` (`0xD21960`)): a rigid body whose shape is missing (a model's blocks out of order) no longer crashes; Tweaks' console line names the model.
+pub const NULL_HKP_SHAPE: Row = Row::at(CRASH, 63);
+/// S0199.02 `MiscCrashFixes` (`008b52a0` (`0x8B558C`, `0x8B5B13`, `0x8B606B`)): cutting off a limb whose node the model lacks no longer crashes.
+pub const DISMEMBER_NULL_LIMB: Row = Row::at(CRASH, 64);
 /// S1016 (Engine Optimizations, `Inlines::SaveLoad`: `Write32(0x845558, 0x2735)`): the changes map's
 /// buckets 10,037, not the exe's 5,039 (`00845550`). It changes the order a save walks and writes the
 /// changed forms, so it is a fixes row.
@@ -259,6 +273,151 @@ pub const CHANGES_MAP_BUCKETS: Row = Row::at(FIXES, 0);
 pub mod once {
     /// S0173's "Failed to resolve movement sequence" line.
     pub const MOVEMENT_SEQUENCE: u32 = 0;
+}
+
+/// Tweaks' DLL statics the game's code is handed a pointer to: guest blocks kept for the whole run
+/// ([`Engine::stewie_kept`]), one per static, made the first time a row asks.
+pub mod kept {
+    /// S0107.01's `static VibrationStates states` (0x24 bytes): the rumble effect the controller's
+    /// queue is handed each time, in place of a new block every vibration.
+    pub const RUMBLE_STATES: usize = 0;
+    /// S0107.04's `static NiFixedString strSpeaker` (4 bytes: the handle of "Bip01 Speaker").
+    pub const SPEAKER_NAME: usize = 1;
+    /// How many.
+    pub const COUNT: usize = 2;
+}
+
+/// The last thing each of Tweaks' two Havok warnings printed (its functions' statics), shared by
+/// every thread's engine.
+#[derive(Debug)]
+pub(crate) struct Prints {
+    /// `[Tweaks] bInvalidBSFadeNodePrints` (Tweaks' code default 1): S0023 prints only with it.
+    fade_prints: AtomicBool,
+    /// S0023's `BSXCrashPrint` statics: `lastRefID` and `lastMeshPath` (a guest address), 0 at
+    /// start.
+    fade_ref: AtomicU32,
+    fade_mesh: AtomicU32,
+    /// S0031's `ShowNullHkpShapeWarning` `static char lastModelName[100]`: the last name printed,
+    /// as its `snprintf` copied it (at most 99 bytes).
+    shape_model: Mutex<Vec<u8>>,
+}
+
+impl Default for Prints {
+    fn default() -> Self {
+        Prints {
+            fade_prints: AtomicBool::new(true),
+            fade_ref: AtomicU32::new(0),
+            fade_mesh: AtomicU32::new(0),
+            shape_model: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+/// `__RTDynamicCast` and the type descriptors xNVSE's `TESForm::GetModelPath` casts between.
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const RTTI_TES_FORM: u32 = 0x0118_3028;
+const RTTI_TES_MODEL: u32 = 0x0118_31e8;
+/// The model file the loader is reading (Tweaks' `*(char**)0x11F94C0`).
+const LOADING_MODEL_NAME: u32 = 0x011f_94c0;
+
+/// xNVSE's `TESForm::GetModelPath`: the form's `TESModel` (a dynamic cast) asked its path (virtual
+/// slot 5, `+0x14`: after `BaseFormComponent`'s four and `Destroy`); 0 for none or an empty text.
+fn model_path(e: &mut Engine, form: u32) -> u32 {
+    let model = e
+        .call(
+            DYNAMIC_CAST,
+            &args![form, 0u32, RTTI_TES_FORM, RTTI_TES_MODEL, 0u32],
+        )
+        .u32();
+    if model == 0 {
+        return 0;
+    }
+    let path = e.vcall(model, 0x14, &args![]).u32();
+    if path != 0 && e.mem.u8(path) != 0 {
+        path
+    } else {
+        0
+    }
+}
+
+/// S0023, Tweaks' `BSXCrashPrint(node)`, for a model node (`BSFadeNode`) the entity test found no
+/// first child of: the node's linked reference (`+0xCC`) and its form id (`+0xC`, `0xFFFFFFFF`
+/// for none); for an id other than the last one seen, while `[Tweaks] bInvalidBSFadeNodePrints`
+/// is on, "[Tweaks] Invalid BSFadeNode Detected - Linked Obj ID: %08X (%s)" with the reference's
+/// base form's (`+0x20`) model path ("<unknown mesh>" without one), unless that path is the one
+/// printed last (the same text address). The id is remembered either way. As with Tweaks only an
+/// immediate repeat is skipped: two broken references checked in turn print each time.
+pub fn invalid_fade_node_print(e: &mut Engine, node: u32) {
+    let bits = std::sync::Arc::clone(&e.extend.stewie);
+    let prints = &bits.3;
+    let linked = e.mem.u32(node + 0xcc);
+    let id = if linked != 0 {
+        e.mem.u32(linked + 0xc)
+    } else {
+        0xffff_ffff
+    };
+    if id == prints.fade_ref.load(Relaxed) {
+        return;
+    }
+    if prints.fade_prints.load(Relaxed) {
+        let mut path = 0;
+        if linked != 0 {
+            let base = e.mem.u32(linked + 0x20);
+            if base != 0 {
+                path = model_path(e, base);
+            }
+        }
+        if path == 0 || path != prints.fade_mesh.load(Relaxed) {
+            let format = b"[Tweaks] Invalid BSFadeNode Detected - Linked Obj ID: %08X (%s)";
+            if path != 0 {
+                console_print(e, format, &[id, path]);
+            } else {
+                with_text(e, b"<unknown mesh>", |e, unknown| {
+                    console_print(e, format, &[id, unknown]);
+                });
+            }
+            prints.fade_mesh.store(path, Relaxed);
+        }
+    }
+    prints.fade_ref.store(id, Relaxed);
+}
+
+/// S0031, Tweaks' `ShowNullHkpShapeWarning` (its answer is 0): the model the loader is reading
+/// ("unknown" for none or an empty name), unless it is the name printed last, goes to the console
+/// as "hkpRigidBody error: %s has a missing shape (unordered blocks?)" (formatted into Tweaks'
+/// `MAX_PATH` buffer: at most 259 bytes), with the console's loading-screen test passed over for
+/// the line, as Tweaks' byte at `0x71D0DC` does; the name is remembered as its 100-byte copy
+/// keeps it (99 bytes).
+pub fn null_hkp_shape_warning(e: &mut Engine) {
+    let at = e.mem.u32(LOADING_MODEL_NAME);
+    let mut name = Vec::new();
+    if at != 0 {
+        let mut p = at;
+        while e.mem.u8(p) != 0 {
+            name.push(e.mem.u8(p));
+            p += 1;
+        }
+    }
+    if name.is_empty() {
+        name = b"unknown".to_vec();
+    }
+    {
+        let last = e.extend.stewie.3.shape_model.lock().unwrap();
+        if *last == name {
+            return;
+        }
+    }
+    let mut line = b"hkpRigidBody error: ".to_vec();
+    line.extend_from_slice(&name);
+    line.extend_from_slice(b" has a missing shape (unordered blocks?)");
+    line.truncate(259);
+    with_text(e, &line, |e, text| {
+        e.set_stewie_print_ungated(true);
+        console_print(e, b"%s", &[text]);
+        e.set_stewie_print_ungated(false);
+    });
+    name.truncate(99);
+    *e.extend.stewie.3.shape_model.lock().unwrap() = name;
 }
 
 /// `ConsoleManager_GetSingleton` (`0071b160`, with true) and `ConsoleManager::Print` (`0071d0a0`,
@@ -289,15 +448,35 @@ pub fn console_print(e: &mut Engine, format: &[u8], words: &[u32]) {
     });
 }
 
-/// The table: one bit a row, and the once-a-run messages' flags.
+/// `text` with a 0 after it on the guest stack for `f` (its address).
+fn with_text(e: &mut Engine, text: &[u8], f: impl FnOnce(&mut Engine, u32)) {
+    e.with_stack((text.len() as u32 + 1).next_multiple_of(4), |e, block| {
+        let at = block.addr();
+        for (i, b) in text.iter().enumerate() {
+            e.mem.set_u8(at + i as u32, *b);
+        }
+        e.mem.set_u8(at + text.len() as u32, 0);
+        f(e, at);
+    });
+}
+
+/// The table: one bit a row, the once-a-run messages' flags, the kept blocks' addresses (0 until
+/// made) and the Havok warnings' last lines.
 #[derive(Debug)]
-pub(crate) struct Bits([AtomicU64; WORDS], AtomicU64);
+pub(crate) struct Bits(
+    [AtomicU64; WORDS],
+    AtomicU64,
+    [AtomicU32; kept::COUNT],
+    Prints,
+);
 
 impl Default for Bits {
     fn default() -> Self {
         Bits(
             std::array::from_fn(|_| AtomicU64::new(0)),
             AtomicU64::new(0),
+            std::array::from_fn(|_| AtomicU32::new(0)),
+            Prints::default(),
         )
     }
 }
@@ -329,6 +508,44 @@ impl Engine {
     pub fn stewie_once(&self, message: u32) -> bool {
         let bit = 1u64 << message;
         self.extend.stewie.1.fetch_or(bit, Relaxed) & bit == 0
+    }
+
+    /// The guest block of Tweaks' static `which` ([`kept`]): `size` bytes, zeroed, made the first
+    /// time it is asked and kept for the run; every thread's engine gets the same block.
+    pub fn stewie_kept(&mut self, which: usize, size: u32) -> u32 {
+        let at = self.extend.stewie.2[which].load(Acquire);
+        if at != 0 {
+            return at;
+        }
+        let block = self.mem.alloc(size);
+        match self.extend.stewie.2[which].compare_exchange(0, block, AcqRel, Acquire) {
+            Ok(_) => block,
+            Err(other) => {
+                self.mem.free(block);
+                other
+            }
+        }
+    }
+
+    /// `[Tweaks] bInvalidBSFadeNodePrints` (`crates/stewie`'s install): whether S0023 prints.
+    pub fn set_stewie_fade_node_prints(&self, on: bool) {
+        self.extend.stewie.3.fade_prints.store(on, Relaxed);
+    }
+
+    /// Whether S0023 prints ([`Engine::set_stewie_fade_node_prints`]).
+    pub fn stewie_fade_node_prints(&self) -> bool {
+        self.extend.stewie.3.fade_prints.load(Relaxed)
+    }
+
+    /// Whether the console's print passes over its loading-screen test for this line (S0031's
+    /// warning, as Tweaks' byte at `0x71D0DC` while it prints): `fn_0071d0a0` asks it.
+    pub fn stewie_print_ungated(&self) -> bool {
+        self.extend.stewie_print_ungated
+    }
+
+    /// Sets [`Engine::stewie_print_ungated`] (S0031's warning, around its one line).
+    pub fn set_stewie_print_ungated(&mut self, on: bool) {
+        self.extend.stewie_print_ungated = on;
     }
 
     /// Every row off.
@@ -426,5 +643,200 @@ mod tests {
         e.register(CONSOLE_INSTANCE, |_, _| Ret::default());
         console_print(&mut e, b"x", &[]);
         assert_eq!(SEEN.lock().unwrap().len(), 1);
+    }
+
+    /// The text at `at` up to its 0.
+    fn text(e: &Engine, mut at: u32) -> Vec<u8> {
+        let mut out = vec![];
+        while e.mem.u8(at) != 0 {
+            out.push(e.mem.u8(at));
+            at += 1;
+        }
+        out
+    }
+
+    #[test]
+    fn a_kept_block_is_made_once_zeroed_and_shared() {
+        let mut e = Engine::new();
+        let a = e.stewie_kept(kept::RUMBLE_STATES, 0x24);
+        assert_ne!(a, 0);
+        assert!((0..0x24).all(|i| e.mem.u8(a + i) == 0));
+        e.mem.set_u32(a, 7);
+        assert_eq!(
+            e.stewie_kept(kept::RUMBLE_STATES, 0x24),
+            a,
+            "the same block"
+        );
+        assert_eq!(e.mem.u32(a), 7, "not made or zeroed again");
+        let b = e.stewie_kept(kept::SPEAKER_NAME, 4);
+        assert!(b != 0 && b != a);
+        // Every thread's engine holds the same addresses.
+        let thread = e.extend.for_thread();
+        assert_eq!(thread.stewie.2[kept::RUMBLE_STATES].load(Relaxed), a);
+    }
+
+    /// S0023's print: once per linked reference, not again for the model path printed last, with
+    /// "<unknown mesh>" and id FFFFFFFF for a node with no reference, nothing with
+    /// `bInvalidBSFadeNodePrints` off (the id still remembered).
+    #[test]
+    fn the_invalid_fade_node_line_is_printed_as_tweaks_prints_it() {
+        use crate::abi::Ret;
+        static LINES: Mutex<Vec<(Vec<u8>, u32, Vec<u8>)>> = Mutex::new(Vec::new());
+        const PATH_SLOT: u32 = 0x00ff_5000;
+        let mut e = Engine::new();
+        e.register(CONSOLE_INSTANCE, |_, _| Ret {
+            eax: 0x4000,
+            ..Ret::default()
+        });
+        e.register(CONSOLE_PRINT, |e, a| {
+            let line = (text(e, a[1]), e.mem.u32(a[2]), text(e, e.mem.u32(a[2] + 4)));
+            LINES.lock().unwrap().push(line);
+            Ret::default()
+        });
+        // The cast answers the form + 0x30 as its model; the model's path is its word at +4.
+        e.register(DYNAMIC_CAST, |_, a| {
+            assert_eq!((a[2], a[3]), (RTTI_TES_FORM, RTTI_TES_MODEL));
+            Ret {
+                eax: a[0] + 0x30,
+                ..Ret::default()
+            }
+        });
+        e.register(PATH_SLOT, |e, a| Ret {
+            eax: e.mem.u32(a[0] + 4),
+            ..Ret::default()
+        });
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 0x14, PATH_SLOT);
+        let path = e.mem.alloc(16);
+        for (i, b) in b"rock.nif\0".iter().enumerate() {
+            e.mem.set_u8(path + i as u32, *b);
+        }
+        let base = e.mem.alloc(0x40);
+        e.mem.set_u32(base + 0x30, vtable);
+        e.mem.set_u32(base + 0x34, path);
+        let reference = |e: &mut Engine, id: u32| {
+            let r = e.mem.alloc(0x24);
+            e.mem.set_u32(r + 0xc, id);
+            e.mem.set_u32(r + 0x20, base);
+            r
+        };
+        let node = |e: &mut Engine, linked: u32| {
+            let n = e.mem.alloc(0xe4);
+            e.mem.set_u32(n + 0xcc, linked);
+            n
+        };
+        let format = b"[Tweaks] Invalid BSFadeNode Detected - Linked Obj ID: %08X (%s)".to_vec();
+        let first = reference(&mut e, 0x1234);
+        let a = node(&mut e, first);
+        invalid_fade_node_print(&mut e, a);
+        invalid_fade_node_print(&mut e, a);
+        assert_eq!(
+            LINES.lock().unwrap().as_slice(),
+            [(format.clone(), 0x1234, b"rock.nif".to_vec())],
+            "once for the reference"
+        );
+        // Another reference with the same model: the path printed last, no line.
+        let second = reference(&mut e, 0x5678);
+        let b = node(&mut e, second);
+        invalid_fade_node_print(&mut e, b);
+        assert_eq!(LINES.lock().unwrap().len(), 1);
+        // No reference: id FFFFFFFF and the unknown mesh.
+        let c = node(&mut e, 0);
+        invalid_fade_node_print(&mut e, c);
+        assert_eq!(
+            LINES.lock().unwrap()[1],
+            (format.clone(), 0xffff_ffff, b"<unknown mesh>".to_vec())
+        );
+        // Prints off: nothing, the id remembered (back on, the same reference prints nothing).
+        e.set_stewie_fade_node_prints(false);
+        invalid_fade_node_print(&mut e, a);
+        e.set_stewie_fade_node_prints(true);
+        invalid_fade_node_print(&mut e, a);
+        assert_eq!(LINES.lock().unwrap().len(), 2);
+        // A new id after an unknown mesh prints again with the model's path.
+        invalid_fade_node_print(&mut e, b);
+        assert_eq!(LINES.lock().unwrap()[2].1, 0x5678);
+        // Only an immediate repeat is skipped: two references with other models checked in turn
+        // (one with its own model, then a, then the first again) print each time.
+        let tree = e.mem.alloc(16);
+        for (i, ch) in b"tree.nif\0".iter().enumerate() {
+            e.mem.set_u8(tree + i as u32, *ch);
+        }
+        let other_base = e.mem.alloc(0x40);
+        e.mem.set_u32(other_base + 0x30, vtable);
+        e.mem.set_u32(other_base + 0x34, tree);
+        let third = e.mem.alloc(0x24);
+        e.mem.set_u32(third + 0xc, 0x9abc);
+        e.mem.set_u32(third + 0x20, other_base);
+        let d = node(&mut e, third);
+        for n in [d, a, d] {
+            invalid_fade_node_print(&mut e, n);
+        }
+        let lines = LINES.lock().unwrap();
+        let tail: Vec<(u32, Vec<u8>)> = lines[3..].iter().map(|l| (l.1, l.2.clone())).collect();
+        assert_eq!(
+            tail,
+            [
+                (0x9abc, b"tree.nif".to_vec()),
+                (0x1234, b"rock.nif".to_vec()),
+                (0x9abc, b"tree.nif".to_vec())
+            ]
+        );
+    }
+
+    /// S0031's warning: the loader's model name (or "unknown"), once until another model is
+    /// named, printed past the console's loading-screen test; a name of 100 bytes or more is
+    /// printed each time (Tweaks' 100-byte copy keeps 99 and never matches it).
+    #[test]
+    fn the_null_shape_warning_names_the_model_once() {
+        use crate::abi::Ret;
+        static LINES: Mutex<Vec<(Vec<u8>, bool)>> = Mutex::new(Vec::new());
+        let mut e = Engine::new();
+        e.register(CONSOLE_INSTANCE, |_, _| Ret {
+            eax: 0x4000,
+            ..Ret::default()
+        });
+        e.register(CONSOLE_PRINT, |e, a| {
+            assert_eq!(text(e, a[1]), b"%s");
+            let line = (text(e, e.mem.u32(a[2])), e.stewie_print_ungated());
+            LINES.lock().unwrap().push(line);
+            Ret::default()
+        });
+        e.mem.map(LOADING_MODEL_NAME & !0xfff, 0x1000);
+        let name = |e: &mut Engine, s: &[u8]| {
+            let at = e.mem.alloc(s.len() as u32 + 1);
+            for (i, b) in s.iter().enumerate() {
+                e.mem.set_u8(at + i as u32, *b);
+            }
+            e.mem.set_u32(LOADING_MODEL_NAME, at);
+        };
+        let line = |n: &str| {
+            format!("hkpRigidBody error: {n} has a missing shape (unordered blocks?)").into_bytes()
+        };
+        name(&mut e, b"meshes/a.nif");
+        null_hkp_shape_warning(&mut e);
+        null_hkp_shape_warning(&mut e);
+        assert_eq!(
+            LINES.lock().unwrap().as_slice(),
+            [(line("meshes/a.nif"), true)]
+        );
+        assert!(!e.stewie_print_ungated(), "gated again after the line");
+        e.mem.set_u32(LOADING_MODEL_NAME, 0);
+        null_hkp_shape_warning(&mut e);
+        null_hkp_shape_warning(&mut e);
+        name(&mut e, b"");
+        null_hkp_shape_warning(&mut e);
+        assert_eq!(LINES.lock().unwrap().len(), 2);
+        assert_eq!(LINES.lock().unwrap()[1].0, line("unknown"));
+        let long = "x".repeat(100);
+        name(&mut e, long.as_bytes());
+        null_hkp_shape_warning(&mut e);
+        null_hkp_shape_warning(&mut e);
+        assert_eq!(
+            LINES.lock().unwrap().len(),
+            4,
+            "a name of 100 bytes every time"
+        );
+        assert_eq!(LINES.lock().unwrap()[3].0, line(&long));
     }
 }
