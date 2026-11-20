@@ -325,6 +325,56 @@ pub fn retry_after(step: FrameStep, now: Instant) -> Option<Instant> {
     }
 }
 
+/// What a frame's step leaves for the next wake, for `key` (what shows now) at `now`: what was
+/// last put on screen and when a frame not drawn is tried again. A frame drawn: its key, no
+/// retry. A frame not drawn: nothing counts as drawn (so a change the key does not track is
+/// drawn too) and a retry after [`RETRY_AFTER`]. A drawing chosen again: nothing drawn, no wait.
+pub fn frame_outcome(
+    step: FrameStep,
+    key: (usize, bool),
+    now: Instant,
+) -> (Option<(usize, bool)>, Option<Instant>) {
+    match step {
+        FrameStep::Draw => (Some(key), None),
+        _ => (None, retry_after(step, now)),
+    }
+}
+
+/// What the event loop knows before it waits ([`next_wake`]).
+pub struct Waiting {
+    /// The window can show a frame ([`drawable`]: not stepped aside, not minimised, not 0x0).
+    pub can_draw: bool,
+    /// Text is still being typed in (or the intro runs): woken every character.
+    pub typing: bool,
+    /// How long the screen has shown, for the cursor's blink.
+    pub shown_ms: u64,
+    pub drawn: Option<(usize, bool)>,
+    pub key: (usize, bool),
+    pub retry_at: Option<Instant>,
+    pub now: Instant,
+}
+
+/// When the event loop wakes next (`None`: only for an event) and whether a redraw is asked now.
+/// Nothing to draw (minimised, 0x0, stepped aside): no wake, no redraw; restoring the window
+/// sends an event (its size) that draws it again. Typing: every character (the menus' 6 ms);
+/// otherwise at the cursor's next blink; a frame not drawn is tried again once its short wait is
+/// over, even with nothing else to wake for.
+pub fn next_wake(w: &Waiting) -> (Option<Instant>, bool) {
+    if !w.can_draw {
+        return (None, false);
+    }
+    let next = if w.typing {
+        w.now + Duration::from_millis(crate::intro::ms_per_char(crate::intro::DISPLAY_RATE_MENUS))
+    } else {
+        w.now + Duration::from_millis(screen::BLINK_MS - w.shown_ms % screen::BLINK_MS)
+    };
+    let next = match w.retry_at {
+        Some(at) if w.drawn != Some(w.key) => next.min(at),
+        _ => next,
+    };
+    (Some(next), wants_redraw(w.drawn, w.key, w.retry_at, w.now))
+}
+
 /// Whether a redraw is asked for `now`: what shows (`key`) is not what was last put on screen
 /// (`drawn`), and no wait after a frame not drawn (`retry_at`) is still running.
 pub fn wants_redraw(
@@ -820,11 +870,10 @@ impl App {
                 if step == FrameStep::Reconfigure {
                     surface.configure(&gpu.device, config);
                 }
-                self.retry_at = retry_after(step, Instant::now());
+                (self.drawn, self.retry_at) = frame_outcome(step, key, Instant::now());
                 return;
             }
         };
-        self.retry_at = None;
         let view = frame.texture.create_view(&Default::default());
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
         gpu.draw(
@@ -836,7 +885,7 @@ impl App {
         );
         gpu.queue.submit([encoder.finish()]);
         gpu.queue.present(frame);
-        self.drawn = Some(key);
+        (self.drawn, self.retry_at) = frame_outcome(FrameStep::Draw, key, Instant::now());
         let intro_over = match &self.mode {
             Mode::Intro(intro) => {
                 Some(self.started.elapsed().as_millis() as u64 >= intro.total_ms())
@@ -1534,30 +1583,20 @@ impl winit::application::ApplicationHandler<Event> for App {
             }
             return;
         }
-        // Minimised or 0x0: nothing to draw, no waking for the typing or the blink; restoring
-        // the window sends an event (its size) that draws it again.
-        if !self.can_draw() {
-            event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
-            return;
-        }
-        // Typing: wake every character (the menus' 6 ms) until the text is in; then only at the
-        // cursor's next blink. Drawn again only when what shows has changed.
-        let typing = !self.finished || matches!(self.mode, Mode::Intro(_));
-        let next = if typing {
-            Instant::now()
-                + Duration::from_millis(crate::intro::ms_per_char(crate::intro::DISPLAY_RATE_MENUS))
-        } else {
-            let ms = self.started.elapsed().as_millis() as u64;
-            Instant::now() + Duration::from_millis(screen::BLINK_MS - ms % screen::BLINK_MS)
-        };
-        // A frame not drawn is tried again once its short wait is over, even with nothing else
-        // to wake for.
-        let next = match self.retry_at {
-            Some(at) if self.drawn != Some(self.frame_key()) => next.min(at),
-            _ => next,
-        };
-        event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(next));
-        if wants_redraw(self.drawn, self.frame_key(), self.retry_at, Instant::now()) {
+        let (wake, redraw) = next_wake(&Waiting {
+            can_draw: self.can_draw(),
+            typing: !self.finished || matches!(self.mode, Mode::Intro(_)),
+            shown_ms: self.started.elapsed().as_millis() as u64,
+            drawn: self.drawn,
+            key: self.frame_key(),
+            retry_at: self.retry_at,
+            now: Instant::now(),
+        });
+        event_loop.set_control_flow(match wake {
+            Some(at) => winit::event_loop::ControlFlow::WaitUntil(at),
+            None => winit::event_loop::ControlFlow::Wait,
+        });
+        if redraw {
             self.request_redraw();
         }
     }
@@ -2053,6 +2092,65 @@ mod tests {
         }
         assert!(wants_redraw(None, last, None, t0));
         assert!(!wants_redraw(Some(last), last, None, t0));
+    }
+
+    /// The whole wake decision, as the event loop takes it: the intro's last frame skipped is
+    /// asked again once the wait is over (the 6 ms typing wakes in between ask nothing); a
+    /// finished screen's frame skipped wakes at the retry, not at the next blink, and is
+    /// asked again then, even when its key equals the last one drawn; a drawn screen waits for the
+    /// blink; a minimised (or stepped aside, or 0x0) window neither wakes nor draws.
+    #[test]
+    fn the_event_loop_wakes_for_a_retry_and_never_for_a_hidden_window() {
+        let t0 = Instant::now();
+        let ms = |n| Duration::from_millis(n);
+        let key = (57, false);
+        // The intro over, its last frame skipped.
+        let (drawn, retry_at) = frame_outcome(FrameStep::Skip, key, t0);
+        assert_eq!((drawn, retry_at), (None, Some(t0 + RETRY_AFTER)));
+        let at = |now, typing, shown_ms| {
+            next_wake(&Waiting {
+                can_draw: true,
+                typing,
+                shown_ms,
+                drawn,
+                key,
+                retry_at,
+                now,
+            })
+        };
+        assert_eq!(at(t0 + ms(6), true, 2006), (Some(t0 + ms(12)), false));
+        assert_eq!(
+            at(t0 + RETRY_AFTER, true, 2100),
+            (Some(t0 + RETRY_AFTER + ms(6)), true)
+        );
+        // A finished screen (the cursor blinks every 400 ms; 100 ms into it): woken at the retry.
+        assert_eq!(at(t0, false, 100), (Some(t0 + RETRY_AFTER), false));
+        assert!(at(t0 + RETRY_AFTER, false, 200).1);
+        // Drawn and unchanged: the blink, no redraw.
+        let drawn_now = next_wake(&Waiting {
+            can_draw: true,
+            typing: false,
+            shown_ms: 100,
+            drawn: Some(key),
+            key,
+            retry_at: None,
+            now: t0,
+        });
+        assert_eq!(drawn_now, (Some(t0 + ms(300)), false));
+        // A frame drawn after the retry: its key, no retry left.
+        assert_eq!(frame_outcome(FrameStep::Draw, key, t0), (Some(key), None));
+        assert_eq!(frame_outcome(FrameStep::ChooseAgain, key, t0), (None, None));
+        // Minimised: no wake, no redraw, whatever is pending.
+        let hidden = next_wake(&Waiting {
+            can_draw: false,
+            typing: true,
+            shown_ms: 0,
+            drawn: None,
+            key,
+            retry_at: None,
+            now: t0,
+        });
+        assert_eq!(hidden, (None, false));
     }
 
     /// Play's work always ends with a code: its own, or 101 when it panicked (so `Ended` is sent
