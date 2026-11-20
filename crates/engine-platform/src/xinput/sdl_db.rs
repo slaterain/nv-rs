@@ -19,7 +19,9 @@
 //! by the ids alone, checksum or not. Of the built-in 858, three such lines are left out (their
 //! pads have no plain line, so they are not read), one whose GUID no DirectInput pad can have
 //! (bytes after the vendor id that SDL always leaves 0), and four for devices with no face button
-//! and no start (a foot controller, a throttle, a phone's half pad): 850 pads. The inputs
+//! and no start (a foot controller, a throttle, a phone's half pad), and four whose triggers the
+//! line puts where `dinput_order` counts the right stick ([`TRIGGERS_BETWEEN_Z_AND_RZ`]): 846
+//! pads. The inputs
 //! count the pad's buttons, axes and hats as SDL's DirectInput code does (`dinput_order`).
 //!
 //! How each binding turns into the controls follows SDL3's `src/joystick/SDL_gamepad.c`
@@ -424,6 +426,20 @@ pub fn key_by_ids(guid: &str) -> Option<(u16, u16)> {
     key(&format!("{}0000{}", &guid[..4], &guid[8..]))
 }
 
+/// Pads whose built-in Windows line puts both trigger axes between Z and Rz, while the database's
+/// Linux and macOS lines for the same ids show the Stadia's and 8BitDo Pro 2's inputs (X, Y, Z, Rz
+/// and the Simulation page's Accelerator and Brake), which `dinput_order` counts as X, Y,
+/// Accelerator, Z, Rz, Brake: read through their line, the triggers would move the right stick. A
+/// pad read wrongly is worse than one with no line (it is named in the log, and a player's own
+/// line is still taken), so their built-in lines are left out: GameSir G4, Moga 2, Moga Pro,
+/// NVIDIA Shield.
+pub const TRIGGERS_BETWEEN_Z_AND_RZ: [(u16, u16); 4] = [
+    (0x05ac, 0x022d),
+    (0x20d6, 0x89e5),
+    (0x20d6, 0x6271),
+    (0x0955, 0x7210),
+];
+
 /// The pads' lines by their ids, the later of two for one pad kept.
 #[derive(Clone, Debug, Default)]
 pub struct Database {
@@ -433,12 +449,14 @@ pub struct Database {
 impl Database {
     /// The built-in Windows lines, less those for devices with no face button and no start (a
     /// foot controller, a throttle, a phone's half pad: review of #804), which are not pads the
-    /// game can be played with.
+    /// game can be played with, and less [`TRIGGERS_BETWEEN_Z_AND_RZ`]'s.
     pub fn windows() -> Database {
         let mut db = Database::default();
         db.add(WINDOWS, Some("Windows"));
-        db.lines
-            .retain(|_, rest| Mapping::parse(rest).is_some_and(|m| m.is_a_pad()));
+        db.lines.retain(|id, rest| {
+            !TRIGGERS_BETWEEN_Z_AND_RZ.contains(id)
+                && Mapping::parse(rest).is_some_and(|m| m.is_a_pad())
+        });
         db
     }
 
@@ -583,14 +601,13 @@ mod tests {
         }
     }
 
-    /// The built-in lines: the copy's Windows lines, found by their two ids: 850 pads of its 858
+    /// The built-in lines: the copy's Windows lines, found by their two ids: 846 pads of its 858
     /// GUID lines (three name a name checksum too, one has a GUID no pad can have, four bind no face
-    /// button or start; the `xinput`
-    /// line names no pad).
+    /// button or start, four put the triggers between Z and Rz; the `xinput` line names no pad).
     #[test]
     fn the_built_in_lines() {
         let db = Database::windows();
-        assert_eq!(db.len(), 850);
+        assert_eq!(db.len(), 846);
         let guid_lines = WINDOWS.lines().filter(|l| l.starts_with("0300")).count();
         assert_eq!(guid_lines, 858);
         assert!(WINDOWS.starts_with("# SDL_GameControllerDB"));
@@ -772,7 +789,7 @@ mod tests {
         assert_eq!(db.mapping(0x2dc8, 0x6006).unwrap().name, "File");
         assert_eq!(db.mapping(0xaaaa, 0xbbbb).unwrap().name, "New");
         assert_eq!(db.mapping(0xcccc, 0xdddd), None);
-        assert_eq!(db.len(), 851);
+        assert_eq!(db.len(), 847);
         assert_eq!(log.len(), 2);
         assert!(log[0].starts_with("nv-rs: game pads: 2 lines taken from "));
         assert!(log[1].contains("the line for Mac") && log[1].contains("no platform:Windows"));
@@ -787,7 +804,7 @@ mod tests {
         let (db, log) = Database::with_players_lines(Some(&dir), None);
         assert_eq!(db.mapping(0x2dc8, 0x6006).unwrap().name, "8BitDo Pro 2");
         assert!(log.is_empty(), "no file: nothing to say");
-        assert_eq!(Database::with_players_lines(None, None).0.len(), 850);
+        assert_eq!(Database::with_players_lines(None, None).0.len(), 846);
     }
 
     /// A file's text whatever its encoding mark.
@@ -819,5 +836,24 @@ mod tests {
         }
         assert!(!Mapping::parse("Foot,leftx:a0,lefty:a1").unwrap().is_a_pad());
         assert!(Mapping::parse("Pad,start:b9").unwrap().is_a_pad());
+    }
+
+    /// The four pads whose Windows line puts both triggers between Z and Rz get no built-in line,
+    /// though the copy has one for each; a player's own line for one is still taken.
+    #[test]
+    fn no_built_in_line_with_the_triggers_between_z_and_rz() {
+        let mut copy = Database::default();
+        copy.add(WINDOWS, Some("Windows"));
+        let db = Database::windows();
+        let names = ["GameSir G4", "Moga 2", "Moga Pro", "NVIDIA Shield"];
+        for (id, name) in TRIGGERS_BETWEEN_Z_AND_RZ.into_iter().zip(names) {
+            let line = copy.mapping(id.0, id.1).expect("the copy's line");
+            assert_eq!(line.name, name, "{id:04x?}");
+            assert!(line.is_a_pad(), "{id:04x?}");
+            assert_eq!(db.mapping(id.0, id.1), None, "{id:04x?}");
+        }
+        let hint = "03000000550900001072000000000000,Mine,a:b0,platform:Windows,";
+        let (db, _) = Database::with_players_lines(None, Some(hint));
+        assert_eq!(db.mapping(0x0955, 0x7210).unwrap().name, "Mine");
     }
 }
