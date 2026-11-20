@@ -179,6 +179,27 @@ const ENTRY_DELETE_004459E0: u32 = 0x0044_59e0;
 const ACTOR_GET_HEALTH_PERCENTAGE: u32 = 0x0089_3590;
 const GET_BODY_PART_CONDITION: u32 = 0x0064_6800;
 const ACTOR_DRINK_POTION: u32 = 0x008c_1f80;
+/// An actor's magic caster (+0x88), its virtual +0x40 (`SetCurrentSpell`), an alchemy item's magic
+/// item (+0x30) and `MagicCaster::ReleaseCast` (`00815870`, `thiscall`, one word).
+const ACTOR_MAGIC_CASTER: u32 = 0x88;
+const CASTER_SET_CURRENT_SPELL: u32 = 0x40;
+const ALCHEMY_MAGIC_ITEM: u32 = 0x30;
+const CASTER_RELEASE_CAST_00815870: u32 = 0x0081_5870;
+
+/// Row S0199.08's step, as Tweaks' `OnCompanionUseStimpak`: with a potion, the companion's caster
+/// takes the potion's magic item as its spell and releases the cast (with no form); nothing is removed.
+fn companion_use_stimpak(e: &mut Engine, companion: u32, potion: u32) {
+    if potion == 0 {
+        return;
+    }
+    let caster = companion + ACTOR_MAGIC_CASTER;
+    e.vcall(
+        caster,
+        CASTER_SET_CURRENT_SPELL,
+        &args![potion + ALCHEMY_MAGIC_ITEM],
+    );
+    e.call(CASTER_RELEASE_CAST_00815870, &args![caster, 0u32]);
+}
 const ACTOR_UPDATE_MAGIC: u32 = 0x008c_3c40;
 const ACTOR_RESTORE_ACTOR_VALUE: u32 = 0x0088_b740;
 const ACTOR_008A7760: u32 = 0x008a_7760;
@@ -1268,7 +1289,14 @@ pub fn companion_wheel_menu_do_use_stim(e: &mut Engine, this: Ptr<CompanionWheel
                 )
                 .u32();
             let companion = e.mem.u32(base + 0x68);
-            e.call(ACTOR_DRINK_POTION, &args![companion, potion, extra, 1u32]);
+            // lStewieAl's Tweaks' row S0199.08 (`MiscCrashFixes`, the call at `0x756771`): the stimpak's
+            // effect is cast without `DrinkPotion`'s removal of the item from the companion (the
+            // player's is removed below).
+            if e.stewie(engine_core::extend::stewie::COMPANION_STIMPAK_REMOVED_TWICE) {
+                companion_use_stimpak(e, companion, potion);
+            } else {
+                e.call(ACTOR_DRINK_POTION, &args![companion, potion, extra, 1u32]);
+            }
         }
         let extra = entry_extra(e, entry);
         let form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, entry));
@@ -2849,6 +2877,61 @@ mod n087_tests {
         assert_eq!(restored, vec![0x1f, 0x1d, 0x1e, 0x1b, 0x1c, 0x1a, 0x19]);
         assert_eq!(calls(&r.e, GET_BARK_TOPIC_BY_TYPE), vec![vec![0xd]]);
         assert_eq!(calls(&r.e, ENTRY_DELETE_004459E0), vec![vec![entry, 1]]);
+    }
+
+    /// lStewieAl's Tweaks' row S0199.08: a stimpak given to a hurt companion. Row off: `DrinkPotion`
+    /// (which also removes the item from the companion); row on: the companion's magic caster (+0x88)
+    /// takes the potion's magic item (+0x30) as its spell and releases the cast, nothing removed from
+    /// the companion. The player's stimpak is removed and the companion healed either way.
+    #[test]
+    fn s0199_08_the_stimpak_is_removed_once() {
+        for on in [false, true] {
+            let mut r = rig();
+            let menu = r.menu;
+            let companion = r.companion;
+            let player = r.player;
+            let entry = r.e.mem.alloc(0x10);
+            r.e.mem.set_u32(entry + 8, 0x0c70_0000);
+            r.e.mem.set_u32(companion + ACTOR_MAGIC_CASTER, VTABLE);
+            r.e.register(RT_DYNAMIC_CAST, |_, a| a[0].into_ret());
+            r.e.register(CASTER_RELEASE_CAST_00815870, |_, _| Ret::default());
+            answer(&mut r.e, GET_DEFAULT_OBJECT, 0x0c71_0000);
+            answer(&mut r.e, GET_INVENTORY_ITEM, entry);
+            answer(&mut r.e, WORD_AT_8_0044DDC0, 0x0c70_0000);
+            answer_f64(&mut r.e, ACTOR_GET_HEALTH_PERCENTAGE, 0.5);
+            answer_f64(&mut r.e, GET_BODY_PART_CONDITION, 1.0);
+            r.e.set_global(RESTORE_AMOUNT, 1000.0f32);
+            r.e.set_stewie(
+                engine_core::extend::stewie::COMPANION_STIMPAK_REMOVED_TWICE,
+                on,
+            );
+            r.e.call(0x0075_6490, &args![menu]);
+            let caster = companion + ACTOR_MAGIC_CASTER;
+            let cast: Vec<Vec<u32>> = calls(&r.e, SLOT + CASTER_SET_CURRENT_SPELL)
+                .into_iter()
+                .filter(|w| w[0] == caster)
+                .collect();
+            if on {
+                assert!(calls(&r.e, ACTOR_DRINK_POTION).is_empty());
+                assert_eq!(cast, vec![vec![caster, 0x0c70_0030]]);
+                assert_eq!(
+                    calls(&r.e, CASTER_RELEASE_CAST_00815870),
+                    vec![vec![caster, 0]]
+                );
+            } else {
+                assert_eq!(
+                    calls(&r.e, ACTOR_DRINK_POTION),
+                    vec![vec![companion, 0x0c70_0000, 0, 1]]
+                );
+                assert!(cast.is_empty());
+                assert!(calls(&r.e, CASTER_RELEASE_CAST_00815870).is_empty());
+            }
+            assert_eq!(
+                calls(&r.e, SLOT + 0x17c),
+                vec![vec![player, 0x0c70_0000, 0, 1, 0, 0, 0, 0, 0, 1, 0]]
+            );
+            assert_eq!(calls(&r.e, ACTOR_RESTORE_ACTOR_VALUE).len(), 7);
+        }
     }
 
     #[test]
