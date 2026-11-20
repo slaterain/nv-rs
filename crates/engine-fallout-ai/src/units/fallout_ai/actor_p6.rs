@@ -6121,7 +6121,7 @@ mod tests {
     /// entry count of 4 (+1 = 5, past the 3 carried): off, the exe reloads again (the weapon's
     /// reload group, action 0x11), the loop Tweaks fixes; on, the reload is not played and the best
     /// equip animation is picked instead. With 5 carried and an entry count of 3 (+1 = 4) both
-    /// reload.
+    /// reload; with 4 carried and the same count (+1 = 4, all of them) neither does.
     #[test]
     fn s0159_no_reload_past_the_rounds_carried() {
         for (on, carried, minus_one, reloads) in [
@@ -6129,6 +6129,8 @@ mod tests {
             (true, 3, 4, false),
             (false, 5, 3, true),
             (true, 5, 3, true),
+            (false, 4, 3, false),
+            (true, 4, 3, false),
         ] {
             let (mut e, actor, _) = reload_setup(0, 10, carried, minus_one);
             e.set_stewie(engine_core::extend::stewie::INFINITE_NPC_RELOADS, on);
