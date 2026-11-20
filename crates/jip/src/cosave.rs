@@ -1889,6 +1889,8 @@ pub fn listen(e: &mut Engine, m: &Message) {
             crate::commands::jip_fn_utility::deferred_init(e);
             crate::game_patches::gs::deferred_init(e);
             print_version(e);
+            // The text input menu's font heights (`s_fontHeightDatas`), before D06 as in JIP.
+            crate::commands::jip_fn_ui_text::deferred_init(e);
             // Group GB's part: Big Guns' switch (O3), name and derivation (D06).
             crate::game_patches::gb::deferred_init(e);
         }
