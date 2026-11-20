@@ -91,6 +91,8 @@ const SCRIPT_LOCALS: u32 = 0x5c;
 /// (`0059e400`), `00470470` on the first argument and `005ec500` on a
 /// matched item (one word).
 const FIRST_NODE_005D43E0: u32 = 0x005d_43e0;
+/// JIP's seam in `fn_0060f110` before its first node (JIP MiniMap's jump at 0x60F13A).
+const JIP_QUEST_TARGETS: u32 = 0x0060_f13a;
 const ITEM_TEST_005F65D0: u32 = 0x005f_65d0;
 const SUB_LIST_007D6BB0: u32 = 0x007d_6bb0;
 const ITEM_REFERENCE_006101B0: u32 = 0x0061_01b0;
@@ -321,6 +323,12 @@ pub fn fn_0060f110(e: &mut Engine, this: Ptr, target: u32, other: u32) {
     e.call(ARGUMENT_CALL_00470470, &args![target]);
     if e.call(SKIP_CHECK_0059E400, &args![this]).u32() & 0xff != 0 {
         return;
+    }
+    // Seam (JIP MiniMap's `SetQuestTargetsHook`, jumped to from 0x60F13A once `InitMiniMap` has
+    // run: JIP's flag, then the same first node): no words, no answer. Asked only while JIP is
+    // installed.
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        e.site(JIP_QUEST_TARGETS, &[]);
     }
     let mut node = e.call(FIRST_NODE_005D43E0, &args![this]).u32();
     while node != 0 {
@@ -1678,6 +1686,30 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x0060_f110, &args![this, 0u32, 0x0999_0000u32]);
         assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+        // JIP MiniMap's seam before the first node: asked only while JIP is installed, past the
+        // skip check, and the game goes on whatever it answers.
+        thread_local! {
+            static ASKED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        }
+        e.on_site_for_test(JIP_QUEST_TARGETS, |_, _| {
+            ASKED.with(|a| a.set(a.get() + 1));
+            Some(1)
+        });
+        e.mem.set_u32(this + 4, 0);
+        e.call(0x0060_f110, &args![this, 0x0555_0000u32, 0x0999_0000u32]);
+        assert_eq!(ASKED.with(|a| a.get()), 0, "not installed");
+        e.set_jip_patches(engine_core::extend::jip_patches::INSTALLED);
+        e.call_log = Some(vec![]);
+        e.call(0x0060_f110, &args![this, 0x0555_0000u32, 0x0999_0000u32]);
+        assert_eq!(ASKED.with(|a| a.get()), 1);
+        assert_eq!(
+            calls_to(&e, ITEM_CALL_005EC500).len(),
+            2,
+            "the game goes on"
+        );
+        e.mem.set_u32(this + 4, 1);
+        e.call(0x0060_f110, &args![this, 0x0555_0000u32, 0x0999_0000u32]);
+        assert_eq!(ASKED.with(|a| a.get()), 1, "skipped before the seam");
     }
 }
 

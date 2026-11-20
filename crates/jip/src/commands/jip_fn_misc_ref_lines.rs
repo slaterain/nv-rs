@@ -99,7 +99,7 @@ pub fn install(e: &mut Engine) {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h (DeferredInit):
 // s_alphaProperty.
 /// JIP's alpha property: made the first time (`NiAlphaProperty::Create`, flags 0x10ED).
-fn alpha_property(e: &mut Engine) -> u32 {
+pub(crate) fn alpha_property(e: &mut Engine) -> u32 {
     let made = e.ext_free::<AlphaProperty>().0.load(Ordering::Acquire);
     if made != 0 {
         return made;
@@ -125,7 +125,7 @@ fn alpha_property(e: &mut Engine) -> u32 {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/netimmerse.cpp: NiGeometry::AddProperty
 // (asm).
 /// `property` put first in `geometry`'s property list, counted up.
-fn add_property(e: &mut Engine, geometry: u32, property: u32) {
+pub(crate) fn add_property(e: &mut Engine, geometry: u32, property: u32) {
     refs_add(e, property, 1);
     let node = e.call(LIST_NODE_NEW, &args![geometry]).u32();
     e.mem.set_u32(node.wrapping_add(LIST_ITEM), property);
@@ -139,6 +139,14 @@ fn add_property(e: &mut Engine, geometry: u32, property: u32) {
     } else {
         e.mem.set_u32(geometry.wrapping_add(PROPERTIES_TAIL), node);
     }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/netimmerse.cpp:
+// NiAVObject::AssignGeometryProps (asm).
+/// The object's properties updated and its geometry prepared for the shaders.
+pub(crate) fn assign_geometry_props(e: &mut Engine, object: u32) {
+    e.call(ASSIGN_PROPS_1, &args![object]);
+    e.call(ASSIGN_PROPS_2, &args![object, 0u32, 0u32, 0u32]);
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/netimmerse.cpp: NiLines::Create (asm).
@@ -180,8 +188,7 @@ fn create_lines(e: &mut Engine, length: f32, colour: [f32; 4], name: &[u8]) -> u
     let block = e.call(NI_ALLOCATE, &args![NO_LIGHTING_SIZE]).u32();
     let shader = e.call(NO_LIGHTING_CONSTRUCT, &args![block]).u32();
     add_property(e, lines, shader);
-    e.call(ASSIGN_PROPS_1, &args![lines]);
-    e.call(ASSIGN_PROPS_2, &args![lines, 0u32, 0u32, 0u32]);
+    assign_geometry_props(e, lines);
     set_name(e, lines, name);
     e.mem.set_f32(lines.wrapping_add(LOCAL_SCALE), length);
     lines

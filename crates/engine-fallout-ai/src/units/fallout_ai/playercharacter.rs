@@ -5762,7 +5762,14 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
                 e.call(0x009c_a1f0, &args![VATS_OBJECT]);
             }
         }
-        e.call(0x0055_5c20, &args![]);
+        // Seam (JIP MiniMap's `UpdateCellsSeenBitsHook`, written over this call at 0x9438F6 by
+        // `InitMiniMap`): no words; an answer means JIP's own update ran in place of the game's.
+        // Asked only while JIP is installed.
+        let jip_seen_bits = e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+            && e.site(0x0094_38f6, &[]).is_some();
+        if !jip_seen_bits {
+            e.call(0x0055_5c20, &args![]);
+        }
         // ---- 009438fb: tracked cell, level up, combat updates ----
         let tracked_cell = e.global::<u32>(TRACKED_CELL_011E0BB0);
         if tracked_cell == 0 || tracked_cell != e.call(0x008d_6f30, &args![this]).u32() {
@@ -16811,6 +16818,28 @@ mod tests {
             vec![vec![this.addr(), 0.25f32.to_bits()]]
         );
         assert_eq!(called(&e, 0x0055_5c20).len(), 1);
+    }
+
+    /// JIP MiniMap's seam at the seen-bits call (0x9438F6): asked only while JIP is installed; an
+    /// answer skips the game's update, none leaves it.
+    #[test]
+    fn update_asks_jips_seen_bits_seam() {
+        use engine_core::extend::jip_patches;
+        let game_calls = |word: u32, answer: bool| {
+            let mut e = engine();
+            let this = update_world(&mut e);
+            e.set_jip_patches(word);
+            if answer {
+                e.on_site_for_test(0x0094_38f6, |_, _| Some(0));
+            } else {
+                e.on_site_for_test(0x0094_38f6, |_, _| None);
+            }
+            player_character_update(&mut e, this, 0.25);
+            called(&e, 0x0055_5c20).len()
+        };
+        assert_eq!(game_calls(0, true), 1, "not installed: not asked");
+        assert_eq!(game_calls(jip_patches::INSTALLED, true), 0);
+        assert_eq!(game_calls(jip_patches::INSTALLED, false), 1);
     }
 
     #[test]
