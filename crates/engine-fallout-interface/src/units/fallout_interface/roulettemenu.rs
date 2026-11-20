@@ -3,6 +3,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use engine_core::extend::stewie;
 
 /// The chained container's destructor body (`0046ffb0`, `thiscall`, no stack words).
 const CONTAINER_DESTRUCT: u32 = 0x0046_ffb0;
@@ -144,6 +145,9 @@ const NODE_00572160: u32 = 0x0057_2160;
 const LIST_IS_EMPTY: u32 = 0x0082_56d0;
 const LIST_FREE_NODES: u32 = 0x0047_0470;
 const LIST_DELETE: u32 = 0x0047_02f0;
+/// The list's delete-all (`0076b2a0`, `thiscall`: each item freed and the head removed), which row
+/// S0196.02 calls in place of `00470470`.
+const LIST_DELETE_ALL_0076B2A0: u32 = 0x0076_b2a0;
 const LIST_APPEND: u32 = 0x005a_e3d0;
 /// The list constructor (`0096a2d0`) and `006815c0` (`thiscall`, returns `this`).
 const LIST_CONSTRUCT: u32 = 0x0096_a2d0;
@@ -453,7 +457,13 @@ pub fn fn_007b9020(e: &mut Engine, this: Ptr<RouletteMenu>) {
     e.call(NI_POINTER_ASSIGN, &args![base + WHEEL_TEXTURE, 0u32]);
     let list = e.get(this, RouletteMenu::pBetList);
     if list != 0 && !typed_call!(leaf::FAMILY, 0x0082_56d0, leaf::both_words_zero(e, list)) {
-        e.call(LIST_FREE_NODES, &args![list]);
+        // lStewieAl's Tweaks' row S0196.02 (`RouletteMenuFixes`, the call at `0x7B92D6`): the placed
+        // bets are freed with their nodes (the list's delete-all, `0076b2a0`, in place of `00470470`).
+        if e.stewie(stewie::ROULETTE_BETS_FREED_ON_CLOSE) {
+            e.call(LIST_DELETE_ALL_0076B2A0, &args![list]);
+        } else {
+            e.call(LIST_FREE_NODES, &args![list]);
+        }
     }
     let list = e.get(this, RouletteMenu::pBetList);
     if list != 0 {
@@ -467,9 +477,13 @@ pub fn fn_007b9020(e: &mut Engine, this: Ptr<RouletteMenu>) {
         e.mem.set_u32(base + BET_GEOMETRY + 4 * index, 0);
         e.mem.set_u32(base + BET_SHADOW_GEOMETRY + 4 * index, 0);
     }
-    let list = e.get(this, RouletteMenu::pBetList);
-    if !typed_call!(leaf::FAMILY, 0x0082_56d0, leaf::both_words_zero(e, list)) {
-        e.call(LIST_FREE_NODES, &args![list]);
+    // lStewieAl's Tweaks' row S0196.01 (`RouletteMenuFixes`, the jump written at `0x7B93C2` to
+    // `0x7B93EB`): the list deleted above is not tested and emptied again.
+    if !e.stewie(stewie::ROULETTE_BET_LIST_DOUBLE_FREE) {
+        let list = e.get(this, RouletteMenu::pBetList);
+        if !typed_call!(leaf::FAMILY, 0x0082_56d0, leaf::both_words_zero(e, list)) {
+            e.call(LIST_FREE_NODES, &args![list]);
+        }
     }
     e.set(this, RouletteMenu::pBetList, 0);
     e.set_global(CASINO_DATA_011DA87C, 0u32);
@@ -1486,6 +1500,26 @@ const KEY_0084E3A0: u32 = 0x0084_e3a0;
 #[cfg(test)]
 const WORD_AT_4_00726070: u32 = 0x0072_6070;
 const LIST_REMOVE_FIRST_0063F7B0: u32 = 0x0063_f7b0;
+/// The memory manager's free (`00aa4060` on `011f6238`): Tweaks' `GameHeapFree`.
+const MEMORY_MANAGER_011F6238: u32 = 0x011f_6238;
+const MEMORY_FREE_00AA4060: u32 = 0x00aa_4060;
+
+/// Row S0196.03's step, Tweaks' `tList::DeleteHead` on a list of `[item, next]` nodes (the first in
+/// place): the first item is freed and cleared; with a next node, its item and link are copied in and
+/// that node is freed.
+fn delete_head(e: &mut Engine, list: u32) {
+    let item = e.mem.u32(list);
+    if item != 0 {
+        e.call(MEMORY_FREE_00AA4060, &args![MEMORY_MANAGER_011F6238, item]);
+        e.mem.set_u32(list, 0);
+    }
+    let next = e.mem.u32(list + 4);
+    if next != 0 {
+        e.mem.set_u32(list, e.mem.u32(next));
+        e.mem.set_u32(list + 4, e.mem.u32(next + 4));
+        e.call(MEMORY_FREE_00AA4060, &args![MEMORY_MANAGER_011F6238, next]);
+    }
+}
 
 /// The second trait id the bet and chip tiles use (`011da86c`), the "wrong bet" sound
 /// toggle (`011da900`), the spin's elapsed time (`011da904`, a `float`), the state seen on
@@ -1817,6 +1851,10 @@ pub fn roulette_menu_create(
     e.set_global(CASINO_011DA880, casino);
     let player = e.global::<u32>(PLAYER_011DEA3C);
     let mut node = e.call(CASINO_DATA_LIST_005A6260, &args![player]).u32();
+    // lStewieAl's Tweaks' row S0036 (its hook on this call, `0x7BBE72`).
+    if e.stewie(stewie::CASINO_INVALID_CHIPS) {
+        super::blackjackmenu::remove_invalid_casino_records(e, node);
+    }
     while node != 0 && node_item(e, node) != 0 {
         let casino = e.global::<u32>(CASINO_011DA880);
         let key = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, casino));
@@ -2655,7 +2693,13 @@ fn idle_payout(e: &mut Engine, this: Ptr<RouletteMenu>, other: i32) {
             winnings = (payout.wrapping_mul(amount) as i32).wrapping_add(winnings);
         }
         let list = e.get(this, RouletteMenu::pBetList);
-        e.call(LIST_REMOVE_FIRST_0063F7B0, &args![list]);
+        // lStewieAl's Tweaks' row S0196.03 (`RouletteMenuFixes`, the call at `0x7BE034`): the settled bet
+        // is freed with its node (Tweaks' `tList::DeleteHead`), where `0063f7b0` only takes the node.
+        if e.stewie(stewie::ROULETTE_BET_FREED_ON_USE) {
+            delete_head(e, list);
+        } else {
+            e.call(LIST_REMOVE_FIRST_0063F7B0, &args![list]);
+        }
     }
     winnings = winnings.wrapping_sub(e.get(this, RouletteMenu::iTotalBet));
     let chips = e.get(this, RouletteMenu::iChipCount).wrapping_add(winnings);
@@ -3847,6 +3891,59 @@ mod n058_tests {
         assert_eq!(calls_to(&e, RENDER_004A0FD0).len(), 2);
     }
 
+    /// lStewieAl's Tweaks' row S0036 in the roulette menu's `Create` (the player barred, so it stops after
+    /// the walk): a first record of a casino that is gone stays with the row off and is taken out (freed,
+    /// with its node's next) with it on; the walk finds this casino's record either way.
+    #[test]
+    fn s0036_roulette_create_takes_out_a_casino_that_is_gone() {
+        for on in [false, true] {
+            let mut e = engine();
+            world(&mut e);
+            three_d_doubles(&mut e);
+            e.set_global(CASINO_DATA_011DA87C, 0u32);
+            e.register(PLAYER_00969B80, |_, _| 1u32.into_ret());
+            e.register(KEY_0084E3A0, |_, _| 0x77u32.into_ret());
+            let empty = e.mem.alloc(4);
+            e.register_double(NAME_CHARS_00408DA0, move |_, _| empty.into_ret());
+            let gone = e.mem.alloc(0xc);
+            e.mem.set_u32(gone, 0x0a00_0001);
+            let record = e.mem.alloc(0xc);
+            e.mem.set_u32(record, 0x77);
+            let second = e.mem.alloc(8);
+            e.mem.set_u32(second, record);
+            let first = e.mem.alloc(8);
+            e.mem.set_u32(first, gone);
+            e.mem.set_u32(first + 4, second);
+            e.register_double(CASINO_DATA_LIST_005A6260, move |_, _| first.into_ret());
+            e.register(0x0048_39c0, |_, a| {
+                u32::from(a[0] != 0x0a00_0001).into_ret()
+            });
+            e.register(MEMORY_FREE_00AA4060, |_, _| Ret::default());
+            e.register(0x0071_b160, |_, _| Ret::default());
+            e.set_stewie(stewie::CASINO_INVALID_CHIPS, on);
+            let casino = e.global::<u32>(CASINO_011DA880);
+            e.call_log = Some(vec![]);
+            assert_eq!(
+                e.call(0x007b_be20, &args![casino, 5u32, 50u32, 0u32]).u32(),
+                0
+            );
+            assert_eq!(e.global::<u32>(CASINO_DATA_011DA87C), record, "row {on}");
+            let left = (e.mem.u32(first), e.mem.u32(first + 4));
+            assert_eq!(left, if on { (record, 0) } else { (gone, second) });
+            assert_eq!(
+                calls_to(&e, MEMORY_FREE_00AA4060),
+                if on {
+                    vec![
+                        vec![MEMORY_MANAGER_011F6238, gone],
+                        vec![MEMORY_MANAGER_011F6238, second],
+                    ]
+                } else {
+                    vec![]
+                }
+            );
+        }
+    }
+
     #[test]
     fn create_refuses_or_builds_the_menu() {
         let mut e = engine();
@@ -4273,6 +4370,106 @@ mod n058_tests {
         set(&mut e, menu, RouletteMenu::iResultValue, 5);
         e.call(0x007b_d2a0, &args![menu]);
         assert_eq!(get(&e, menu, RouletteMenu::iChipCount), 100);
+    }
+
+    /// lStewieAl's Tweaks' rows S0196.01 and S0196.02 when the roulette menu goes, each alone and both:
+    /// with S0196.02 the first emptying of the placed bets is the list's delete-all (`0076b2a0`, the
+    /// bets freed too), with S0196.01 the deleted list is not emptied a second time; the list is
+    /// deleted once and the menu's pointer cleared either way.
+    #[test]
+    fn s0196_01_02_the_bet_list_when_the_menu_goes() {
+        for (double_free, on_close) in [(false, false), (true, false), (false, true), (true, true)]
+        {
+            let mut e = engine();
+            let menu = world(&mut e);
+            casino_models(&mut e);
+            e.set_global(MODEL_LOADER_011C3B3C, 0x00ab_0000u32);
+            e.mem.set_u32(menu + 0x3e78, 0x00ab_1000);
+            e.register(MODEL_LOADER_0045A5E0, |_, _| Ret::default());
+            e.register(LIST_DELETE_ALL_0076B2A0, |_, _| Ret::default());
+            e.set_stewie(stewie::ROULETTE_BET_LIST_DOUBLE_FREE, double_free);
+            e.set_stewie(stewie::ROULETTE_BETS_FREED_ON_CLOSE, on_close);
+            e.call_log = Some(vec![]);
+            e.call(0x007b_8f70, &args![menu, 0u32]);
+            let rows = format!("S0196.01 {double_free}, S0196.02 {on_close}");
+            assert_eq!(
+                calls_to(&e, LIST_FREE_NODES).len(),
+                usize::from(!double_free) + usize::from(!on_close),
+                "{rows}"
+            );
+            assert_eq!(
+                calls_to(&e, LIST_DELETE_ALL_0076B2A0),
+                if on_close {
+                    vec![vec![0x00ab_1000]]
+                } else {
+                    vec![]
+                },
+                "{rows}"
+            );
+            assert_eq!(calls_to(&e, LIST_DELETE), vec![vec![0x00ab_1000, 1]]);
+            assert_eq!(e.mem.u32(menu + 0x3e78), 0);
+        }
+    }
+
+    /// lStewieAl's Tweaks' row S0196.03: two winning bets settled. Row off: each node taken
+    /// (`0063f7b0`, here as the exe's: the next node's bet and link copied in), no bet freed; row on:
+    /// each bet freed and the second node freed after its bet is copied in (Tweaks' `DeleteHead`). The
+    /// payout and the emptied list the same.
+    #[test]
+    fn s0196_03_settled_bets_are_freed() {
+        for on in [false, true] {
+            let mut e = engine();
+            let menu = world(&mut e);
+            set(&mut e, menu, RouletteMenu::eRouletteState, 3);
+            set(&mut e, menu, RouletteMenu::iChipCount, 100);
+            set(&mut e, menu, RouletteMenu::iTotalBet, 20);
+            set(&mut e, menu, RouletteMenu::iMinBet, 5);
+            set(&mut e, menu, RouletteMenu::iResultValue, 4);
+            let record = menu + 0x5c + 0x64 * 0x95;
+            e.mem.set_u32(record + 0xc, 1);
+            let first = bet_list(&mut e, menu, 10, 0x95, 3);
+            let list = e.mem.u32(menu + 0x3e78);
+            let second = e.mem.alloc(0xc);
+            e.mem.set_u32(second, 10);
+            e.mem.set_u32(second + 4, 0x95);
+            e.mem.set_u32(second + 8, 4);
+            let node = e.mem.alloc(8);
+            e.mem.set_u32(node, second);
+            e.mem.set_u32(list + 4, node);
+            e.register(LIST_REMOVE_FIRST_0063F7B0, |e, a| {
+                let next = e.mem.u32(a[0] + 4);
+                if next == 0 {
+                    e.mem.set_u32(a[0], 0);
+                } else {
+                    e.mem.set_u32(a[0], e.mem.u32(next));
+                    e.mem.set_u32(a[0] + 4, e.mem.u32(next + 4));
+                }
+                Ret::default()
+            });
+            e.register(MEMORY_FREE_00AA4060, |_, _| Ret::default());
+            let limits = e.mem.alloc(0x40);
+            e.mem.set_u32(limits + 0x28, 1000);
+            e.register_double(CASINO_LIMITS_00504E60, move |_, _| limits.into_ret());
+            e.set_stewie(stewie::ROULETTE_BET_FREED_ON_USE, on);
+            e.call_log = Some(vec![]);
+            e.call(0x007b_d2a0, &args![menu]);
+            assert_eq!(get(&e, menu, RouletteMenu::iChipCount), 120, "row {on}");
+            assert_eq!((e.mem.u32(list), e.mem.u32(list + 4)), (0, 0));
+            if on {
+                assert!(calls_to(&e, LIST_REMOVE_FIRST_0063F7B0).is_empty());
+                assert_eq!(
+                    calls_to(&e, MEMORY_FREE_00AA4060),
+                    vec![
+                        vec![MEMORY_MANAGER_011F6238, first],
+                        vec![MEMORY_MANAGER_011F6238, node],
+                        vec![MEMORY_MANAGER_011F6238, second]
+                    ]
+                );
+            } else {
+                assert_eq!(calls_to(&e, LIST_REMOVE_FIRST_0063F7B0).len(), 2);
+                assert!(calls_to(&e, MEMORY_FREE_00AA4060).is_empty());
+            }
+        }
     }
 
     #[test]
