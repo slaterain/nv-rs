@@ -1071,6 +1071,40 @@ mod tests {
         assert_eq!(LINES.lock().unwrap().len(), 2);
     }
 
+    /// Review of #842: off the main thread the line waits even with the console made (Tweaks'
+    /// `isMainThread` test), and the main loop's drain prints it once.
+    #[test]
+    fn a_line_printed_off_the_main_thread_waits_for_the_drain() {
+        use crate::abi::Ret;
+        static LINES: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
+        let mut e = Engine::new();
+        e.register(CONSOLE_INSTANCE, |_, _| Ret {
+            eax: 0x4000,
+            ..Ret::default()
+        });
+        e.register(CONSOLE_PRINT, |e, a| {
+            LINES.lock().unwrap().push(text(e, e.mem.u32(a[2])));
+            Ret::default()
+        });
+        e.mem.map(CONSOLE_SINGLETON & !0xfff, 0x1000);
+        e.mem.set_u32(CONSOLE_SINGLETON, 0x4000);
+        e.kernel.threads.current = 1;
+        assert!(!crate::thread_host::on_main(&e));
+        e.call_log = Some(vec![]);
+        console_queue_or_print(&mut e, b"from a worker");
+        assert!(e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .all(|(a, _)| *a != CONSOLE_PRINT));
+        assert!(LINES.lock().unwrap().is_empty(), "queued, not printed");
+        e.kernel.threads.current = 0;
+        print_queued(&mut e);
+        print_queued(&mut e);
+        assert_eq!(*LINES.lock().unwrap(), vec![b"from a worker".to_vec()]);
+    }
+
     /// S0050's line: the reference's id and its last file's name (`GetFile(-1)`), an empty name
     /// without a file; not again for the reference seen last; at most 255 bytes; queued before the
     /// console exists.
