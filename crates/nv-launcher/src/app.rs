@@ -107,8 +107,8 @@ pub fn start_screen(place: &Place, card: &Card) -> Screen {
                     Card::Known(None) => "Renderer: no graphics card found".into(),
                     // The game still starts on Vulkan; its driver may be what hangs.
                     Card::NoAnswer if cfg!(windows) => {
-                        "Renderer: Vulkan (its driver did not answer; Settings.cmd's Renderer \
-                         can choose Direct3D 9)"
+                        "Renderer: Vulkan (its driver did not answer; Settings' Renderer can \
+                         choose Direct3D 9)"
                             .into()
                     }
                     Card::NoAnswer => "Renderer: Vulkan (its driver did not answer)".into(),
@@ -120,6 +120,7 @@ pub fn start_screen(place: &Place, card: &Card) -> Screen {
     if place.mods {
         entries.push(PLAY_WITH_MODS.to_string());
     }
+    entries.push(SETTINGS.to_string());
     entries.push(EXIT.to_string());
     Screen {
         title: "-nv-rs-".into(),
@@ -324,6 +325,98 @@ pub fn retry_after(step: FrameStep, now: Instant) -> Option<Instant> {
     }
 }
 
+/// What a frame's step leaves for the next wake, for `key` (what shows now) at `now`: what was
+/// last put on screen and when a frame not drawn is tried again. A frame drawn: its key, no
+/// retry. A frame not drawn: nothing counts as drawn (so a change the key does not track is
+/// drawn too) and a retry after [`RETRY_AFTER`]. A drawing chosen again: nothing drawn, no wait.
+pub fn frame_outcome(
+    step: FrameStep,
+    key: (usize, bool),
+    now: Instant,
+) -> (Option<(usize, bool)>, Option<Instant>) {
+    match step {
+        FrameStep::Draw => (Some(key), None),
+        _ => (None, retry_after(step, now)),
+    }
+}
+
+/// What the event loop knows before it waits ([`next_wake`]).
+pub struct Waiting {
+    /// The window can show a frame ([`drawable`]: not stepped aside, not minimised, not 0x0).
+    pub can_draw: bool,
+    /// Text is still being typed in (or the intro runs): woken every character.
+    pub typing: bool,
+    /// How long the screen has shown, for the cursor's blink.
+    pub shown_ms: u64,
+    pub drawn: Option<(usize, bool)>,
+    pub key: (usize, bool),
+    pub retry_at: Option<Instant>,
+    pub now: Instant,
+}
+
+/// When the event loop wakes next (`None`: only for an event) and whether a redraw is asked now.
+/// Nothing to draw (minimised, 0x0, stepped aside): no wake, no redraw; restoring the window
+/// sends an event (its size) that draws it again. Typing: every character (the menus' 6 ms);
+/// otherwise at the cursor's next blink; a frame not drawn is tried again once its short wait is
+/// over, even with nothing else to wake for.
+pub fn next_wake(w: &Waiting) -> (Option<Instant>, bool) {
+    if !w.can_draw {
+        return (None, false);
+    }
+    let next = if w.typing {
+        w.now + Duration::from_millis(crate::intro::ms_per_char(crate::intro::DISPLAY_RATE_MENUS))
+    } else {
+        w.now + Duration::from_millis(screen::BLINK_MS - w.shown_ms % screen::BLINK_MS)
+    };
+    let next = match w.retry_at {
+        Some(at) if w.drawn != Some(w.key) => next.min(at),
+        _ => next,
+    };
+    (Some(next), wants_redraw(w.drawn, w.key, w.retry_at, w.now))
+}
+
+/// The redraw's bookkeeping, kept apart from the window so that what the window does with it is
+/// tested: what was last put on screen and when a frame not drawn is tried again. The redraw
+/// tells it each frame's step ([`FrameState::on_frame`]), a new screen that something else shows
+/// ([`FrameState::changed`]), and the event loop asks it when to wake ([`FrameState::wake`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FrameState {
+    pub drawn: Option<(usize, bool)>,
+    pub retry_at: Option<Instant>,
+}
+
+impl FrameState {
+    /// A frame's `step` for `key` (what shows) at `now` ([`frame_outcome`]).
+    pub fn on_frame(&mut self, step: FrameStep, key: (usize, bool), now: Instant) {
+        (self.drawn, self.retry_at) = frame_outcome(step, key, now);
+    }
+
+    /// Something else shows (a new screen, a resize): drawn at the next wake, whatever its key.
+    pub fn changed(&mut self) {
+        self.drawn = None;
+    }
+
+    /// When the event loop wakes next and whether it asks for a redraw now ([`next_wake`]).
+    pub fn wake(
+        &self,
+        can_draw: bool,
+        typing: bool,
+        shown_ms: u64,
+        key: (usize, bool),
+        now: Instant,
+    ) -> (Option<Instant>, bool) {
+        next_wake(&Waiting {
+            can_draw,
+            typing,
+            shown_ms,
+            drawn: self.drawn,
+            key,
+            retry_at: self.retry_at,
+            now,
+        })
+    }
+}
+
 /// Whether a redraw is asked for `now`: what shows (`key`) is not what was last put on screen
 /// (`drawn`), and no wait after a frame not drawn (`retry_at`) is still running.
 pub fn wants_redraw(
@@ -369,20 +462,42 @@ pub enum Kind {
     Output,
     /// play.sh has ended badly: Back or Exit.
     Ended,
+    /// The Settings list (its rows, Testing, Back).
+    Settings,
+    /// The Testing list (its rows, Back).
+    Testing,
+    /// One row's choices (and Back).
+    Choices,
 }
 
 /// What a choice does.
 #[derive(Debug, PartialEq)]
 pub enum Act {
     EndIntro,
-    Play { mods: bool, game: Option<PathBuf> },
+    Play {
+        mods: bool,
+        game: Option<PathBuf>,
+    },
     Exit,
     Answer(usize),
     Folder(Option<PathBuf>),
     TypeLine(String),
     BackToStart,
+    OpenSettings,
+    OpenTesting,
+    /// The row at this place of the list on screen.
+    OpenChoices(usize),
+    /// The choice of the row whose choices show.
+    Save(String),
+    /// From a row's choices back to its list.
+    BackToList,
     Nothing,
 }
+
+/// The Settings list's entry that opens the Testing list, and the start screen's for Settings.
+pub const TESTING_ENTRY: &str = "Testing";
+pub const SETTINGS: &str = "Settings";
+pub const BACK: &str = "Back";
 
 /// Enter on a screen of `kind` with `typed` at the prompt and the entry `chosen` (its index and
 /// text) highlighted.
@@ -402,13 +517,69 @@ pub fn on_enter(kind: Kind, typed: &str, chosen: usize, entry: &str) -> Act {
             mods: true,
             game: None,
         },
+        Kind::Start if entry == SETTINGS => Act::OpenSettings,
         Kind::Start | Kind::Refused | Kind::Ended if entry == EXIT => Act::Exit,
         Kind::Ended => Act::BackToStart,
         Kind::Start | Kind::Refused | Kind::Waiting => Act::Nothing,
         Kind::Message => Act::Answer(chosen),
         Kind::Folder => Act::Folder(typed_folder),
         Kind::Output => Act::TypeLine(typed.to_string()),
+        Kind::Settings if entry == TESTING_ENTRY => Act::OpenTesting,
+        Kind::Settings if entry == BACK => Act::BackToStart,
+        Kind::Testing if entry == BACK => Act::OpenSettings,
+        Kind::Settings | Kind::Testing => Act::OpenChoices(chosen),
+        Kind::Choices if entry == BACK => Act::BackToList,
+        Kind::Choices => Act::Save(entry.to_string()),
     }
+}
+
+/// A choice's name without its note: "Vulkan (recommended)" is "Vulkan" in a list.
+pub fn short(choice: &str) -> &str {
+    choice.split(" (").next().unwrap_or(choice)
+}
+
+/// The Settings list's (or the Testing list's) entries for what `shown` says: each row with its
+/// value, then (the main list) Testing, then Back.
+pub fn settings_entries(
+    rows: &[settings::Row],
+    shown: &settings::Files,
+    testing: bool,
+) -> Vec<String> {
+    let mut e: Vec<String> = rows
+        .iter()
+        .map(|r| format!("{}: {}", r.label(), short(&r.current(shown))))
+        .collect();
+    if !testing {
+        e.push(TESTING_ENTRY.into());
+    }
+    e.push(BACK.into());
+    e
+}
+
+/// Left and Right on a row: the choice before or after the one it has, round the list.
+/// "Game's setting" is passed over (it writes nothing, so stepping onto it would leave the row
+/// where it was and Left/Right stuck): from it, Right gives the first other choice and Left the
+/// last; from a value the list lacks, the same.
+pub fn stepped_choice(choices: &[String], now: &str, forward: bool) -> Option<String> {
+    let choices: Vec<&String> = choices
+        .iter()
+        .filter(|c| c.as_str() != settings::OWN)
+        .collect();
+    let n = choices.len();
+    let Some(i) = choices.iter().position(|c| c.as_str() == now) else {
+        let end = if forward {
+            choices.first()
+        } else {
+            choices.last()
+        };
+        return end.map(|c| (*c).clone());
+    };
+    let next = if forward {
+        (i + 1) % n
+    } else {
+        (i + n - 1) % n
+    };
+    Some(choices[next].clone())
 }
 
 /// Esc on a screen of `kind`: its Back, No or Exit ([`back_entry`]), whatever is typed at the
@@ -438,6 +609,15 @@ enum Mode {
     Output(Option<i32>),
     /// nv-rs may not write in its own folder: only Exit.
     Refused,
+    /// The Settings list (`testing`: the Testing list).
+    Settings {
+        testing: bool,
+    },
+    /// The choices of the row at `index` of the Settings (or Testing) list.
+    Choices {
+        testing: bool,
+        index: usize,
+    },
 }
 
 impl Mode {
@@ -451,7 +631,19 @@ impl Mode {
             Mode::Output(None) => Kind::Output,
             Mode::Output(Some(_)) => Kind::Ended,
             Mode::Refused => Kind::Refused,
+            Mode::Settings { testing: false } => Kind::Settings,
+            Mode::Settings { testing: true } => Kind::Testing,
+            Mode::Choices { .. } => Kind::Choices,
         }
+    }
+}
+
+/// The rows of the Settings list, or of the Testing list.
+fn rows_of(testing: bool) -> &'static [settings::Row] {
+    if testing {
+        &settings::TESTING
+    } else {
+        &settings::ROWS
     }
 }
 
@@ -483,15 +675,16 @@ struct App {
     working: bool,
     /// The window was closed while Play ran: the launcher ends when Play ends.
     closed: bool,
-    /// What the last drawn picture showed ([`App::frame_key`]): drawn again only when it changes.
-    drawn: Option<(usize, bool)>,
+    /// What the last drawn picture showed ([`App::frame_key`]) and when a frame not drawn is tried
+    /// again ([`FrameState`]).
+    frame: FrameState,
     /// When the drawing was last chosen again ([`may_choose_again`]).
     chosen_again: Vec<Instant>,
-    /// When a frame that was not drawn is tried again ([`retry_after`]).
-    retry_at: Option<Instant>,
     /// The window could not be made or drawn in ([`cannot_draw`] said why).
     no_window: bool,
     exit_code: i32,
+    /// The main monitor's size for the resolution row, as the game sees it.
+    desktop: (u32, u32),
 }
 
 /// Starts Play's work on a thread of its own with `args` (Play.exe's, or play.sh's on Linux and
@@ -629,7 +822,7 @@ impl App {
         self.started = Instant::now();
         self.finished = !typed;
         // Something else shows: drawn whatever the last key was (a new screen can have the same).
-        self.drawn = None;
+        self.frame.changed();
         if self.hidden && !self.closed {
             if let Some(w) = &self.window {
                 w.set_minimized(false);
@@ -732,11 +925,10 @@ impl App {
                 if step == FrameStep::Reconfigure {
                     surface.configure(&gpu.device, config);
                 }
-                self.retry_at = retry_after(step, Instant::now());
+                self.frame.on_frame(step, key, Instant::now());
                 return;
             }
         };
-        self.retry_at = None;
         let view = frame.texture.create_view(&Default::default());
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
         gpu.draw(
@@ -748,7 +940,7 @@ impl App {
         );
         gpu.queue.submit([encoder.finish()]);
         gpu.queue.present(frame);
-        self.drawn = Some(key);
+        self.frame.on_frame(FrameStep::Draw, key, Instant::now());
         let intro_over = match &self.mode {
             Mode::Intro(intro) => {
                 Some(self.started.elapsed().as_millis() as u64 >= intro.total_ms())
@@ -784,7 +976,7 @@ impl App {
         self.config = None;
         self.gpu = None;
         self.instance = None;
-        self.drawn = None;
+        self.frame.changed();
         let Some(window) = self.window.clone() else {
             return;
         };
@@ -900,7 +1092,123 @@ impl App {
                 self.add_output(&format!("{line}\n"));
             }
             Act::BackToStart => self.show_start(),
+            Act::OpenSettings => self.show_settings(false, 0, None),
+            Act::OpenTesting => self.show_settings(true, 0, None),
+            Act::OpenChoices(index) => {
+                let testing = matches!(self.mode, Mode::Settings { testing: true });
+                if index < rows_of(testing).len() {
+                    self.show_choices(testing, index);
+                }
+            }
+            Act::Save(choice) => {
+                if let Mode::Choices { testing, index } = self.mode {
+                    self.save(testing, index, &choice);
+                }
+            }
+            Act::BackToList => {
+                if let Mode::Choices { testing, index } = self.mode {
+                    self.show_settings(testing, index, None);
+                }
+            }
             Act::Nothing => {}
+        }
+    }
+
+    /// The Settings list (or the Testing list), the row at `highlight` highlighted, with `note`
+    /// (a save that failed) above it.
+    fn show_settings(&mut self, testing: bool, highlight: usize, note: Option<String>) {
+        let profiles = crate::profiles::Profiles::at(&self.place.own);
+        let (shown, in_files) = match profiles.shown().and_then(|s| Ok((s, profiles.in_files()?))) {
+            Ok(v) => v,
+            Err(e) => {
+                let s = message_screen(
+                    &format!("nv-rs cannot read its settings: {e}"),
+                    &[BACK.to_string()],
+                );
+                self.show(Mode::Settings { testing }, s, true);
+                return;
+            }
+        };
+        let mut welcome = Vec::new();
+        if let Some(note) = note {
+            welcome.push(note);
+        }
+        welcome.push(if in_files {
+            "Saved at once, for both ways of playing (with and without mods). The game reads them at its next start.".to_string()
+        } else {
+            "Saved for Play to move into the game's own files at its next start.".to_string()
+        });
+        if testing {
+            welcome.push(
+                "Still being tried: the new lighting draws on Vulkan only; JIP LN for mods that need it."
+                    .into(),
+            );
+        }
+        let mut s = Screen {
+            title: if testing { "-Testing-" } else { "-Settings-" }.into(),
+            welcome,
+            entries: settings_entries(rows_of(testing), &shown, testing),
+            ..Default::default()
+        };
+        s.highlighted = highlight.min(s.entries.len() - 1);
+        let retype = !matches!(self.mode, Mode::Settings { .. } | Mode::Choices { .. });
+        self.show(Mode::Settings { testing }, s, retype);
+    }
+
+    /// The choices of the row at `index` of the list, the one it has highlighted.
+    fn show_choices(&mut self, testing: bool, index: usize) {
+        let row = rows_of(testing)[index];
+        let profiles = crate::profiles::Profiles::at(&self.place.own);
+        let shown = match profiles.shown() {
+            Ok(s) => s,
+            Err(e) => return self.show_settings(testing, index, Some(format!("Not read: {e}"))),
+        };
+        let now = row.current(&shown);
+        let mut entries = row.choices(&shown, self.desktop);
+        let highlighted = entries.iter().position(|c| *c == now).unwrap_or(0);
+        entries.push(BACK.into());
+        let s = Screen {
+            title: format!("-{}-", row.label()),
+            welcome: vec![format!("Now: {now}")],
+            entries,
+            highlighted,
+            ..Default::default()
+        };
+        self.show(Mode::Choices { testing, index }, s, false);
+    }
+
+    /// `choice` saved for the row at `index`, then its list again (with what went wrong when it
+    /// was not saved).
+    fn save(&mut self, testing: bool, index: usize, choice: &str) {
+        let row = rows_of(testing)[index];
+        let profiles = crate::profiles::Profiles::at(&self.place.own);
+        let note = profiles
+            .save(row, choice)
+            .err()
+            .map(|e| format!("Not saved: {e}"));
+        self.show_settings(testing, index, note);
+    }
+
+    /// Left or Right on a row of the Settings (or Testing) list: its next or previous choice,
+    /// saved at once.
+    fn step_row(&mut self, forward: bool) {
+        let Mode::Settings { testing } = self.mode else {
+            return;
+        };
+        let index = self.screen.highlighted;
+        let Some(&row) = rows_of(testing).get(index) else {
+            return;
+        };
+        let profiles = crate::profiles::Profiles::at(&self.place.own);
+        let Ok(shown) = profiles.shown() else {
+            return;
+        };
+        if let Some(next) = stepped_choice(
+            &row.choices(&shown, self.desktop),
+            &row.current(&shown),
+            forward,
+        ) {
+            self.save(testing, index, &next);
         }
     }
 
@@ -1005,6 +1313,17 @@ impl winit::application::ApplicationHandler<Event> for App {
             let size = m.size().to_logical::<f64>(m.scale_factor());
             (size.width, size.height)
         }));
+        // The resolution row's own size: Windows' as the DPI-unaware game sees it, elsewhere the
+        // monitor's.
+        #[cfg(windows)]
+        {
+            let (dw, dh) = crate::play::desktop_size();
+            self.desktop = (dw.max(0) as u32, dh.max(0) as u32);
+        }
+        #[cfg(not(windows))]
+        if let Some(m) = &monitor {
+            self.desktop = (m.size().width, m.size().height);
+        }
         // Made hidden, then fitted into the monitor's work area with its frame (below), then shown.
         let mut attributes = winit::window::Window::default_attributes()
             .with_title("nv-rs")
@@ -1200,7 +1519,7 @@ impl winit::application::ApplicationHandler<Event> for App {
                     config.height = size.height.max(1);
                     surface.configure(&g.device, config);
                 }
-                self.drawn = None;
+                self.frame.changed();
                 self.request_redraw();
             }
             WindowEvent::RedrawRequested => self.redraw(event_loop),
@@ -1237,6 +1556,8 @@ impl winit::application::ApplicationHandler<Event> for App {
                         self.screen.scroll = self.screen.scroll.saturating_sub(5)
                     }
                     Key::Named(NamedKey::PageDown) => self.screen.scroll += 5,
+                    Key::Named(NamedKey::ArrowRight) => self.step_row(true),
+                    Key::Named(NamedKey::ArrowLeft) => self.step_row(false),
                     Key::Named(NamedKey::Enter) => self.choose(event_loop),
                     Key::Named(NamedKey::Backspace) => {
                         self.screen.typed.pop();
@@ -1312,30 +1633,18 @@ impl winit::application::ApplicationHandler<Event> for App {
             }
             return;
         }
-        // Minimised or 0x0: nothing to draw, no waking for the typing or the blink; restoring
-        // the window sends an event (its size) that draws it again.
-        if !self.can_draw() {
-            event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
-            return;
-        }
-        // Typing: wake every character (the menus' 6 ms) until the text is in; then only at the
-        // cursor's next blink. Drawn again only when what shows has changed.
-        let typing = !self.finished || matches!(self.mode, Mode::Intro(_));
-        let next = if typing {
-            Instant::now()
-                + Duration::from_millis(crate::intro::ms_per_char(crate::intro::DISPLAY_RATE_MENUS))
-        } else {
-            let ms = self.started.elapsed().as_millis() as u64;
-            Instant::now() + Duration::from_millis(screen::BLINK_MS - ms % screen::BLINK_MS)
-        };
-        // A frame not drawn is tried again once its short wait is over, even with nothing else
-        // to wake for.
-        let next = match self.retry_at {
-            Some(at) if self.drawn != Some(self.frame_key()) => next.min(at),
-            _ => next,
-        };
-        event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(next));
-        if wants_redraw(self.drawn, self.frame_key(), self.retry_at, Instant::now()) {
+        let (wake, redraw) = self.frame.wake(
+            self.can_draw(),
+            !self.finished || matches!(self.mode, Mode::Intro(_)),
+            self.started.elapsed().as_millis() as u64,
+            self.frame_key(),
+            Instant::now(),
+        );
+        event_loop.set_control_flow(match wake {
+            Some(at) => winit::event_loop::ControlFlow::WaitUntil(at),
+            None => winit::event_loop::ControlFlow::Wait,
+        });
+        if redraw {
             self.request_redraw();
         }
     }
@@ -1469,11 +1778,11 @@ pub fn run(raw: Vec<String>) -> i32 {
         minimise_at: None,
         working: false,
         closed: false,
-        drawn: None,
+        frame: FrameState::default(),
         chosen_again: Vec::new(),
-        retry_at: None,
         no_window: false,
         exit_code: 0,
+        desktop: (0, 0),
     };
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("error: {e}");
@@ -1551,10 +1860,10 @@ mod tests {
     #[test]
     fn the_start_screen_offers_what_works() {
         let s = start_screen(&place(Some("/g/Fallout New Vegas"), false), &Card::Asking);
-        assert_eq!(s.entries, [PLAY, EXIT]);
+        assert_eq!(s.entries, [PLAY, SETTINGS, EXIT]);
         assert_eq!(s.welcome[0], "Game: Fallout New Vegas");
         let s = start_screen(&place(Some("/g/x"), true), &Card::Asking);
-        assert_eq!(s.entries, [PLAY, PLAY_WITH_MODS, EXIT]);
+        assert_eq!(s.entries, [PLAY, PLAY_WITH_MODS, SETTINGS, EXIT]);
         let s = start_screen(&place(None, false), &Card::Asking);
         assert!(s.welcome[0].contains("not found"), "{:?}", s.welcome);
         assert_eq!(s.welcome.len(), 1);
@@ -1832,6 +2141,110 @@ mod tests {
         assert!(!wants_redraw(Some(last), last, None, t0));
     }
 
+    /// The redraw's bookkeeping as the window uses it, over several retry periods: a surface that
+    /// keeps skipping is asked once each wait (never in between, never left), the frame that is
+    /// drawn at last ends the retries, a new screen with the same key is drawn, a minimised
+    /// window asks nothing whatever is pending.
+    #[test]
+    fn the_frame_state_retries_each_wait_until_a_frame_is_drawn() {
+        let t0 = Instant::now();
+        let ms = |n| t0 + Duration::from_millis(n);
+        let key = (57, false);
+        let mut f = FrameState::default();
+        let mut asked = Vec::new();
+        // Every 6 ms (the intro's typing wake) for half a second; each asked redraw is skipped
+        // until 350 ms, then drawn.
+        for t in (0..500).step_by(6) {
+            let now = ms(t);
+            let (_, redraw) = f.wake(true, true, t, key, now);
+            if redraw {
+                asked.push(t);
+                let step = if t < 350 {
+                    FrameStep::Skip
+                } else {
+                    FrameStep::Draw
+                };
+                f.on_frame(step, key, now);
+            }
+        }
+        // At once, then once a retry period (the first wake at or after each wait), then drawn.
+        assert_eq!(asked, [0, 102, 204, 306, 408], "{asked:?}");
+        assert_eq!(
+            f,
+            FrameState {
+                drawn: Some(key),
+                retry_at: None
+            }
+        );
+        assert!(!f.wake(true, false, 0, key, ms(600)).1);
+        // A new screen that happens to have the same key: drawn.
+        f.changed();
+        assert!(f.wake(true, false, 0, key, ms(600)).1);
+        // Minimised: nothing asked, no wake.
+        f.on_frame(FrameStep::Skip, key, ms(600));
+        assert_eq!(f.wake(false, true, 0, key, ms(900)), (None, false));
+    }
+
+    /// The whole wake decision, as the event loop takes it: the intro's last frame skipped is
+    /// asked again once the wait is over (the 6 ms typing wakes in between ask nothing); a
+    /// finished screen's frame skipped wakes at the retry, not at the next blink, and is
+    /// asked again then, even when its key equals the last one drawn; a drawn screen waits for the
+    /// blink; a minimised (or stepped aside, or 0x0) window neither wakes nor draws.
+    #[test]
+    fn the_event_loop_wakes_for_a_retry_and_never_for_a_hidden_window() {
+        let t0 = Instant::now();
+        let ms = |n| Duration::from_millis(n);
+        let key = (57, false);
+        // The intro over, its last frame skipped.
+        let (drawn, retry_at) = frame_outcome(FrameStep::Skip, key, t0);
+        assert_eq!((drawn, retry_at), (None, Some(t0 + RETRY_AFTER)));
+        let at = |now, typing, shown_ms| {
+            next_wake(&Waiting {
+                can_draw: true,
+                typing,
+                shown_ms,
+                drawn,
+                key,
+                retry_at,
+                now,
+            })
+        };
+        assert_eq!(at(t0 + ms(6), true, 2006), (Some(t0 + ms(12)), false));
+        // The wait is over: the redraw is asked now (it then clears the retry).
+        assert_eq!(
+            at(t0 + RETRY_AFTER, true, 2100),
+            (Some(t0 + RETRY_AFTER), true)
+        );
+        // A finished screen (the cursor blinks every 400 ms; 100 ms into it): woken at the retry.
+        assert_eq!(at(t0, false, 100), (Some(t0 + RETRY_AFTER), false));
+        assert!(at(t0 + RETRY_AFTER, false, 200).1);
+        // Drawn and unchanged: the blink, no redraw.
+        let drawn_now = next_wake(&Waiting {
+            can_draw: true,
+            typing: false,
+            shown_ms: 100,
+            drawn: Some(key),
+            key,
+            retry_at: None,
+            now: t0,
+        });
+        assert_eq!(drawn_now, (Some(t0 + ms(300)), false));
+        // A frame drawn after the retry: its key, no retry left.
+        assert_eq!(frame_outcome(FrameStep::Draw, key, t0), (Some(key), None));
+        assert_eq!(frame_outcome(FrameStep::ChooseAgain, key, t0), (None, None));
+        // Minimised: no wake, no redraw, whatever is pending.
+        let hidden = next_wake(&Waiting {
+            can_draw: false,
+            typing: true,
+            shown_ms: 0,
+            drawn: None,
+            key,
+            retry_at: None,
+            now: t0,
+        });
+        assert_eq!(hidden, (None, false));
+    }
+
     /// Play's work always ends with a code: its own, or 101 when it panicked (so `Ended` is sent
     /// and a closed launcher ends).
     #[test]
@@ -1854,6 +2267,64 @@ mod tests {
             play_arguments(false, Some(Path::new("x"))),
             ["--game", "x"].map(OsString::from)
         );
+    }
+
+    /// The Settings list shows each row with its value (its note left out), then Testing and
+    /// Back; the Testing list its rows and Back. Enter on a row opens its choices, on a choice
+    /// saves it; Esc goes back a list (never saving); Left and Right step round a row's choices.
+    #[test]
+    fn the_settings_lists_open_choose_and_go_back() {
+        let shown = settings::Files::default();
+        let main = settings_entries(&settings::ROWS, &shown, false);
+        assert_eq!(main.len(), 14);
+        assert_eq!(main[0], "Renderer: Vulkan");
+        assert_eq!(main[12], TESTING_ENTRY);
+        assert_eq!(main[13], BACK);
+        let testing = settings_entries(&settings::TESTING, &shown, true);
+        assert_eq!(testing.len(), settings::TESTING.len() + 1);
+        assert_eq!(testing.last().map(String::as_str), Some(BACK));
+        assert_eq!(on_enter(Kind::Start, "", 1, SETTINGS), Act::OpenSettings);
+        assert_eq!(
+            on_enter(Kind::Settings, "", 0, &main[0]),
+            Act::OpenChoices(0)
+        );
+        assert_eq!(
+            on_enter(Kind::Settings, "", 12, TESTING_ENTRY),
+            Act::OpenTesting
+        );
+        assert_eq!(on_escape(Kind::Settings, &main), Act::BackToStart);
+        assert_eq!(on_escape(Kind::Testing, &testing), Act::OpenSettings);
+        assert_eq!(
+            on_enter(Kind::Testing, "", 2, &testing[2]),
+            Act::OpenChoices(2)
+        );
+        let choices: Vec<String> = ["Off", "On", BACK].map(String::from).to_vec();
+        assert_eq!(on_enter(Kind::Choices, "", 1, "On"), Act::Save("On".into()));
+        assert_eq!(on_escape(Kind::Choices, &choices), Act::BackToList);
+        let c: Vec<String> = ["No limit", "60", "90"].map(String::from).to_vec();
+        assert_eq!(stepped_choice(&c, "60", true).as_deref(), Some("90"));
+        assert_eq!(stepped_choice(&c, "90", true).as_deref(), Some("No limit"));
+        assert_eq!(stepped_choice(&c, "No limit", false).as_deref(), Some("90"));
+        assert_eq!(stepped_choice(&c, "75", true).as_deref(), Some("No limit"));
+        // "Game's setting" is passed over, whichever way.
+        let o: Vec<String> = [settings::OWN, "Off", "2x", "4x"]
+            .map(String::from)
+            .to_vec();
+        assert_eq!(
+            stepped_choice(&o, settings::OWN, true).as_deref(),
+            Some("Off")
+        );
+        assert_eq!(
+            stepped_choice(&o, settings::OWN, false).as_deref(),
+            Some("4x")
+        );
+        assert_eq!(stepped_choice(&o, "4x", true).as_deref(), Some("Off"));
+        assert_eq!(stepped_choice(&o, "Off", false).as_deref(), Some("4x"));
+        assert_eq!(
+            stepped_choice(&[settings::OWN.to_string()], settings::OWN, true),
+            None
+        );
+        assert_eq!(short("Vulkan (recommended)"), "Vulkan");
     }
 
     /// A message keeps its paragraphs as lines, its entries as given.
