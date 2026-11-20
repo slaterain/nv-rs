@@ -1054,6 +1054,25 @@ const TEXT_BUFFER_SIZE: u32 = 0x200;
 
 // ---- Helpers of the second batch --------------------------------------------------
 
+/// `REFR_LOCK::NumericValueToEnum` (`cdecl`) and the lock levels' game settings' table (one
+/// `Setting*` per level; a setting's text at `+4`).
+const LOCK_LEVEL_TO_ENUM: u32 = 0x0043_0b40;
+const LOCK_LEVEL_SETTINGS: u32 = 0x0118_4a98;
+
+// Translated from lStewieAl's Tweaks 10.05, Fixes/LockCommandFixes.cpp: OnLockCommandConsolePrint.
+/// Tweaks' row S0213's console line: the level's name (its game setting's text, by
+/// `NumericValueToEnum`) after the number, "Locked %s with lock level %d (%s)".
+fn lock_command_console_print(e: &mut Engine, name: u32, level: u32) {
+    let which = e.call(LOCK_LEVEL_TO_ENUM, &args![level]).u32();
+    let setting = e.mem.u32(LOCK_LEVEL_SETTINGS + which.wrapping_mul(4));
+    let text = e.mem.u32(setting + 4);
+    let format = b"Locked %s with lock level %d (%s)\0";
+    e.with_stack(format.len() as u32, |e, at| {
+        e.mem.write(at.addr(), format);
+        console_print(e, &[at.addr(), name, level, text]);
+    });
+}
+
 /// Whether the commands echo their result to the console: the byte at
 /// `+0x268` of the TLS block.
 fn echo_enabled(e: &mut Engine) -> bool {
@@ -2233,8 +2252,11 @@ pub fn script_lock_function(e: &mut Engine, a: ScriptArgs) -> bool {
             lock = e.call(ADD_LOCK, &args![this]).u32();
         }
     }
+    // lStewieAl's Tweaks' row S0213 (`LockCommandFixes`): `0x5CC08B`'s jump past the store nopped,
+    // so `Lock 0` stores level 0; `0x5CC10A`'s print names the level.
+    let lock_fixes = e.stewie(engine_core::extend::stewie::LOCK_COMMAND);
     if lock != 0 {
-        if level != 0 {
+        if level != 0 || lock_fixes {
             e.mem.set_u8(lock, level as u8);
         }
         e.call(LOCK_SET_LOCKED, &args![lock, 1u32]);
@@ -2249,7 +2271,11 @@ pub fn script_lock_function(e: &mut Engine, a: ScriptArgs) -> bool {
     }
     if echo_enabled(e) {
         let name = e.call(REFERENCE_GET_NAME, &args![this]).u32();
-        console_print(e, &[FORMAT_LOCKED, name, level]);
+        if lock_fixes {
+            lock_command_console_print(e, name, level);
+        } else {
+            console_print(e, &[FORMAT_LOCKED, name, level]);
+        }
     }
     true
 }
@@ -5644,6 +5670,53 @@ mod tests {
         assert!(run(&mut e, 0x005c_bf80, a));
         assert_eq!(calls(&e, GET_DOOR_TELEPORT_DATA).len(), 1);
         assert!(calls(&e, SET_CONNECTED_CELLS_PUBLIC).is_empty());
+    }
+
+    /// lStewieAl's Tweaks' row S0213: with the row `Lock 0` stores level 0 in the lock (the exe
+    /// keeps the old `0xff`), and the console line is Tweaks' "Locked %s with lock level %d (%s)"
+    /// with the level's setting text; a level given is stored either way.
+    #[test]
+    fn s0213_lock_zero_stores_zero_and_the_line_names_the_level() {
+        for (on, level) in [(false, 0u32), (true, 0), (true, 3)] {
+            let mut e = lock_engine();
+            let reference = lockable(&mut e, 0x10, true, 0);
+            let lock = e.mem.u32(reference + 0xd0);
+            if !e.mem.is_mapped(LOCK_LEVEL_SETTINGS) {
+                e.map(LOCK_LEVEL_SETTINGS & !0xfff, 0x1000);
+            }
+            let setting = e.mem.alloc(0x10);
+            e.mem.set_u32(setting + 4, 0x7777);
+            e.mem.set_u32(LOCK_LEVEL_SETTINGS + 2 * 4, setting);
+            e.register(LOCK_LEVEL_TO_ENUM, |_, _| 2u32.into_ret());
+            let format = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let slot = format.clone();
+            e.register_double(CONSOLE_PRINT, move |e, a| {
+                if a[0] != FORMAT_LOCKED {
+                    *slot.borrow_mut() = e.mem.cstr(a[0]);
+                }
+                Ret::default()
+            });
+            e.set_stewie(engine_core::extend::stewie::LOCK_COMMAND, on);
+            parse_gives(&mut e, true, &[level, 0]);
+            set_echo(&mut e, true);
+            let a = script(&mut e, reference);
+            start_log(&mut e);
+            assert!(run(&mut e, 0x005c_bf80, a));
+            let want = if on || level != 0 { level as u8 } else { 0xff };
+            assert_eq!(e.mem.u8(lock), want, "row {on}, level {level}");
+            let printed = calls(&e, CONSOLE_PRINT);
+            assert_eq!(printed.len(), 1);
+            if on {
+                assert_eq!(&printed[0][1..], &[0x5eed, level, 0x7777]);
+                assert_eq!(
+                    format.borrow().as_slice(),
+                    b"Locked %s with lock level %d (%s)"
+                );
+                assert_eq!(calls(&e, LOCK_LEVEL_TO_ENUM), vec![vec![level]]);
+            } else {
+                assert_eq!(printed[0], vec![FORMAT_LOCKED, 0x5eed, level]);
+            }
+        }
     }
 
     #[test]

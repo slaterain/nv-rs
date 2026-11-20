@@ -1787,7 +1787,18 @@ the interface manager, the console and the INI settings. None yet.
 #### Forms, cells, scripts, saves and sound
 
 Forms, perks, weapons, script functions, extra data, inventory changes, references, cells, models,
-saves, audio media and the radio. None yet.
+saves, audio media and the radio.
+
+| Tweaks function | Row | Off key (`[nv-rs Stewie]`) | Exe function (sites) | What changes in play |
+|---|---|---|---|---|
+| `patchPridDontDuplicateLine` | S0017 | `bPridDontDuplicateLine` | `Script::PickRefByIDFunction` `005bd410` (`0x5BD546`) | The console's `prid` picks the reference without also drawing its name as debug text on the screen (the exe works out the text's row wrongly; Tweaks replaces the print's call by `add esp, 0x20`) |
+| `patchMuteSomeCommandsUnlessCalledFromConsole` | S0056 | `bMuteSomeCommandsUnlessCalledFromConsole` | `GetVATSValue` `00594e40` (`0x5952AB`), `StopMagicShaderVisuals` `005d2130` (`0x5D21B8`, `0x5D21C7`), `PlayerSpellBook` `005b5bb0` (`0x5B5CA5`), `IsImageSpaceActive` `005de4a0` (`0x5DE5C9`, `0x5DE5D8`) | Those commands print their console line only while a console line runs (xNVSE's `IsConsoleMode`), so a mod's script calling them no longer fills the console. Tweaks' print hands on only the format and its first value; `GetVATSValue`'s line has three, so in a game running Tweaks its other two show unrelated words; the port prints the game's values |
+| `patchNoNeededCountForAddRemoveItemCommands` | S0099 | `bNoNeededCountForAddRemoveItemCommands` | the parameter table `0x118D3F0` (its optional word, written at the install); `005b4be0` (`0x5B4C0F`), `005b4e90` (`0x5B4EC6`) | `AddItem` and `RemoveItem` may leave out the count: the line compiles and moves one item, where the game refused to compile it. The table entry is the count parameter Tweaks names for these two; any other command whose parameter list shares it gets an optional count too, as with Tweaks |
+| `patchCenterOnCellAcceptFormIDs` | S0101 | `bCenterOnCellAcceptFormIDs` | `Script::CenterOnCellFunction` `005bd5e0` (`0x5BD63D`) | `CenterOnCell` (`coc`) takes a cell by its editor id as before, else the text as a hex form id (`strtoul`) when that form is a cell |
+| `ToggleNavMeshFix` | S0161 | `bToggleNavMeshFix` | `Script::ToggleNavMeshFunction` `005bcfe0` (`0x5BD030`) | `ToggleNavMesh` shows the navigation meshes: their display's root node is made ("NavMeshRootNode") and attached to the scene graph the first time, where the exe has none in a released game |
+| `TestAllCellsEnablesGodmode` | S0194 | `bTestAllCellsEnablesGodmode` | `Script::TestAllCellsFunction` `005b71b0` (`0x5B7212`) | `TestAllCells` also turns god mode on, once it has started the test |
+| `LockCommandFixes` | S0213 | `bLockCommandFixes` | `Script::LockFunction` `005cbf80` (`0x5CC08B`, `0x5CC10A`) | `Lock 0`, and a plain `Lock` with no level (its level starts at 0), set the lock to level 0 (very easy), where the exe keeps the lock's old level, as with Tweaks; the console line names the level: "Locked %s with lock level %d (%s)" with the level's game setting text |
+| `PlaceOcclusionPlaneFix` | S0236 | `bPlaceOcclusionPlaneFix` | `005bb9e0` (`0x5BBBA6`, `0x5BBBB5`, `0x5BBBE4`) | The console's `PlaceOcclusionPlane` puts the new plane in the occluder list without the `NiPointer` that freed it as the command ended (a use after free, a crash). Only removes a crash |
 
 #### AI, actors and the player
 

@@ -472,16 +472,16 @@ fn the_install_sets_the_bits_and_lists_tweaks() {
 fn the_start_lines_name_what_was_read() {
     let keys = rows::Keys::default();
     let (settings, on) = settings_and_rows(None, &[], &keys);
+    // Every row built is on with VNV's values (the count is the table's, so a share adding rows
+    // does not edit this line).
+    let built = rows::all().count();
+    assert_eq!(on.len(), built);
     assert_eq!(
         start_lines(false, &settings, &keys, on.len()),
         [
             "lStewieAl's Tweaks: no Data\\NVSE\\Plugins\\nvse_stewie_tweaks.ini: VNV's values"
                 .to_string(),
-            // Every row is on by default: the count follows the rows built (every share's list).
-            format!(
-                "lStewieAl's Tweaks: {n} of its {n} rows built are on",
-                n = rows::all().count()
-            ),
+            format!("lStewieAl's Tweaks: {built} of its {built} rows built are on"),
         ]
     );
     let (settings, on) = settings_and_rows(Some(b"[Tweaks]\nbBetterAutoWalk=1\n"), &[], &keys);
