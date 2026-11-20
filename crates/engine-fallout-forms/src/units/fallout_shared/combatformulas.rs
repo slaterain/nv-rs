@@ -938,7 +938,12 @@ pub fn combat_formulas_calc_weapon_damage(
         // `0x644EF3` and `0x644F79` and the jump at `0x644F00`): Tweaks' `OnCalcDamageGetProjectile`
         // takes the projectile from the word at +0x18 (the ammunition S0189.01 passes) in place of
         // `00525ae0`, and the second lookup reuses the first's answer.
-        let from_ammo = e.stewie(engine_core::extend::stewie::WEAPON_DAMAGE_AMMO_PROJECTILE);
+        // nv-rs's guard for that row's slip (the host's fixes row `NV_STEWIE_HIT_AMMO`, a Tweaks
+        // slip not copied): a call with no ammunition passed (a hit through
+        // `GetModifiedAttackDamage`, `GetDesirability`) keeps the game's own lookup, where Tweaks'
+        // takes the weapon's own projectile first.
+        let from_ammo = e.stewie(engine_core::extend::stewie::WEAPON_DAMAGE_AMMO_PROJECTILE)
+            && !(ammo_word == 0 && e.stewie_hit_ammo_guard());
         let first = if from_ammo {
             calc_damage_projectile(e, weapon, ammo_word, holder)
         } else {
@@ -3092,7 +3097,23 @@ mod tests {
     /// and S0189.02 (`two`) as given; `weapon_projectile` is the weapon's own (+0x118). Answers the
     /// shown damage, the projectiles whose explosion was asked, and how often `00525a90` was asked.
     fn s0189_shown(one: bool, two: bool, weapon_projectile: u32) -> (f32, Vec<u32>, usize) {
+        s0189_shown_with(one, two, weapon_projectile, 0x29, false, false)
+    }
+
+    /// [`s0189_shown`] with the entry's "ammunition" of form type `ammo_type` (a throwing weapon's is
+    /// the weapon itself, type 0x28, whose word at +0xB4 is no projectile) and, when `flagged`, a
+    /// melee weapon (type 1) with the flag at +0x100 bit 1: the display's other `CalcWeaponDamage`
+    /// call (`0x6451B6`), the flag cleared around it.
+    fn s0189_shown_with(
+        one: bool,
+        two: bool,
+        weapon_projectile: u32,
+        ammo_type: u8,
+        flagged: bool,
+        guard: bool,
+    ) -> (f32, Vec<u32>, usize) {
         let (mut e, _) = damage_world();
+        e.set_stewie_hit_ammo_guard(guard);
         let player = object(&mut e, 0x400);
         e.mem.set_u32(player.addr() + 0xa4, FAKE_TABLE);
         e.set_global(PLAYER_REFERENCE, player);
@@ -3105,12 +3126,13 @@ mod tests {
         e.set_global(SETTING_DAMAGE_SKILL_BASE, 0.25f32);
         e.set_global(SETTING_DAMAGE_SKILL_MULT, 0.5f32);
         let weapon = object_with_vtable(&mut e, 0x1000);
-        e.mem.set_u8(weapon.addr() + 0xf4, 3);
+        e.mem
+            .set_u8(weapon.addr() + 0xf4, if flagged { 1 } else { 3 });
         e.mem.set_u32(weapon.addr() + 0x118, weapon_projectile);
         let sub_object = weapon.addr() + 0x9c;
         e.mem.set_u32(sub_object, FAKE_TABLE + 0x1000);
         returns_u32(&mut e, FAKE_SLOT_10, 1);
-        returns_u32(&mut e, WEAPON_GET_TYPE, 3);
+        returns_u32(&mut e, WEAPON_GET_TYPE, if flagged { 1 } else { 3 });
         returns_u32(&mut e, WEAPON_GET_SKILL, 0x20);
         returns_u32(&mut e, WEAPON_GET_AMMO_OBJECT, 0x5000);
         e.register(AMMO_GET_VALUE_FROM_OBJECT, |_, a| {
@@ -3123,9 +3145,11 @@ mod tests {
         });
         e.register(FUNCTION_006479E0, |_, a| (a[0] as f32).into_ret());
         returns_u32(&mut e, WEAPON_GET_NUM_PROJECTILES, 2);
-        returns_u32(&mut e, WEAPON_FLAG_TEST, 0);
+        returns_u32(&mut e, WEAPON_FLAG_TEST, u32::from(flagged));
+        returns_u32(&mut e, FUNCTION_00525430, 0);
+        returns_f32(&mut e, FUNCTION_0084D030, 1.0);
         let ammo = object(&mut e, 0x200);
-        e.mem.set_u8(ammo.addr() + 4, 0x29);
+        e.mem.set_u8(ammo.addr() + 4, ammo_type);
         e.mem.set_u32(ammo.addr() + 0xb4, 0x6000);
         e.set_stewie(engine_core::extend::stewie::WEAPON_DAMAGE_DISPLAY_AMMO, one);
         e.set_stewie(
@@ -3144,6 +3168,99 @@ mod tests {
             .collect();
         let lookups = log.iter().filter(|c| c.0 == WEAPON_GET_AMMO_OBJECT).count();
         (shown, asked, lookups)
+    }
+
+    /// S0189.02's ammunition-type test: a throwing weapon's "ammunition" is the weapon itself (form
+    /// type 0x28), whose word at +0xB4 (here 0x6000) is no projectile. With both rows the explosion
+    /// is asked of the weapon's own projectile (0x7000) or, without one, of `00525a90`'s answer
+    /// (0x5000, asked once and reused), never of that word.
+    #[test]
+    fn s0189_a_throwing_weapons_own_form_is_not_read_as_ammunition() {
+        let (_, asked, lookups) = s0189_shown_with(true, true, 0, 0x28, false, false);
+        assert_eq!((asked, lookups), (vec![0x5000, 0x5000], 2));
+        let (_, asked, lookups) = s0189_shown_with(true, true, 0x7000, 0x28, false, false);
+        assert_eq!((asked, lookups), (vec![0x7000, 0x7000], 0));
+    }
+
+    /// The display's other `CalcWeaponDamage` call (`0x6451B6`): a melee weapon with the flag at
+    /// +0x100 bit 1. Off, the explosion of the equipped ammunition's projectile (0x5000); with both
+    /// rows, that of the listed ammunition's (0x6000).
+    #[test]
+    fn s0189_the_flagged_weapons_call_passes_the_ammunition_too() {
+        let (_, asked, _) = s0189_shown_with(false, false, 0, 0x29, true, false);
+        assert_eq!(asked, vec![0x5000, 0x5000]);
+        let (_, asked, _) = s0189_shown_with(true, true, 0, 0x29, true, false);
+        assert_eq!(asked, vec![0x6000, 0x6000]);
+    }
+
+    /// S0189.02 for `CalcWeaponDamage`'s other callers (`GetModifiedAttackDamage` `004bdf71`,
+    /// `GetDesirability`): the word at +0x18 is 0, the owner an actor's, the weapon has its own
+    /// projectile (0x7000, explosion value 5) and the equipped ammunition another (0x5000, value 3,
+    /// through `00525a90`). Off, the hit's damage counts the equipped ammunition's explosion, and the
+    /// same with the row and nv-rs's guard (`NV_STEWIE_HIT_AMMO`, the fixes preset); with the row
+    /// and no guard, the weapon's own, as with Tweaks (its lookup takes the weapon's projectile first
+    /// when no ammunition is passed). The guard leaves the menu's fixed figure alone.
+    #[test]
+    fn s0189_02_a_hit_counts_the_weapons_own_projectile() {
+        let mut damages = vec![];
+        for (two, guard, projectile) in [
+            (false, false, 0x5000u32),
+            (false, true, 0x5000),
+            (true, true, 0x5000),
+            (true, false, 0x7000),
+        ] {
+            let (mut e, owner) = damage_world();
+            e.set_stewie_hit_ammo_guard(guard);
+            e.set_global(SETTING_DAMAGE_SKILL_BASE, 0.25f32);
+            e.set_global(SETTING_DAMAGE_SKILL_MULT, 0.5f32);
+            let weapon = object_with_vtable(&mut e, 0x1000);
+            e.mem.set_u8(weapon.addr() + 0xf4, 3);
+            e.mem.set_u32(weapon.addr() + 0x118, 0x7000);
+            e.mem.set_u32(weapon.addr() + 0x9c, FAKE_TABLE + 0x1000);
+            returns_u32(&mut e, FAKE_SLOT_10, 1);
+            returns_u32(&mut e, WEAPON_GET_TYPE, 3);
+            returns_u32(&mut e, WEAPON_GET_SKILL, 0x20);
+            returns_u32(&mut e, WEAPON_GET_AMMO_OBJECT, 0x5000);
+            e.register(AMMO_GET_VALUE_FROM_OBJECT, |_, a| {
+                u32::from(match a[0] {
+                    0x5000 => 3u8,
+                    0x7000 => 5,
+                    _ => 9,
+                })
+                .into_ret()
+            });
+            e.register(FUNCTION_006479E0, |_, a| (a[0] as f32).into_ret());
+            returns_u32(&mut e, WEAPON_GET_NUM_PROJECTILES, 1);
+            returns_u32(&mut e, WEAPON_FLAG_TEST, 0);
+            e.set_stewie(
+                engine_core::extend::stewie::WEAPON_DAMAGE_AMMO_PROJECTILE,
+                two,
+            );
+            e.call_log = Some(vec![]);
+            let damage = e
+                .call(
+                    0x0064_4ce0,
+                    &args![owner, weapon, 1.0f32, 1.0f32, 0u32, false, 0u32, true],
+                )
+                .f32();
+            let log = e.call_log.take().unwrap();
+            let asked: Vec<u32> = log
+                .iter()
+                .filter(|c| c.0 == AMMO_GET_VALUE_FROM_OBJECT)
+                .map(|c| c.1[0])
+                .collect();
+            assert_eq!(
+                asked,
+                vec![projectile, projectile],
+                "row {two} guard {guard}"
+            );
+            damages.push(damage);
+        }
+        assert_eq!((damages[1], damages[2]), (damages[0], damages[0]));
+        assert!(damages[3] > damages[0], "{damages:?}");
+        // The guard leaves the menu's figure for a listed ammunition as the rows fix it.
+        let (_, asked, _) = s0189_shown_with(true, true, 0, 0x29, false, true);
+        assert_eq!(asked, vec![0x6000, 0x6000]);
     }
 
     /// S0189.01 and S0189.02 (`InventoryCalcWeaponDamageUseAmmoFix`): off, the shown damage takes
