@@ -61,14 +61,16 @@ impl Intro {
         }
     }
 
-    /// The lines as the text manager's queue: intro lines, each at its own rate.
-    fn queue(&self) -> Vec<Line> {
+    /// The lines as the text manager's queue: intro lines, each at its own rate; the prompt
+    /// lines (`> ` and the logon, `> ` and the stars) typed as if by a player.
+    pub fn queue(&self) -> Vec<Line> {
         self.lines
             .iter()
             .map(|(l, ms)| Line {
                 chars: l.chars().count(),
                 ms: *ms,
                 intro: true,
+                keyed: l.starts_with('>'),
             })
             .collect()
     }
@@ -100,10 +102,12 @@ impl Intro {
     }
 }
 
-/// Whether a key finishes the intro: Esc or Enter (the launcher's extra; any other key does
-/// nothing, as in the game).
-pub fn key_finishes(escape_or_enter: bool) -> bool {
-    escape_or_enter
+/// Whether a press finishes the intro: Esc or Enter, not a held key's repeat (the launcher's
+/// extra; any other key does nothing, as in the game). A click finishes it as in the game, in
+/// the window's own handler.
+pub fn key_finishes(press: crate::app::Press, repeat: bool) -> bool {
+    use crate::app::Press;
+    !repeat && matches!(press, Press::Escape | Press::Enter)
 }
 
 #[cfg(test)]
@@ -155,10 +159,23 @@ mod tests {
         assert_eq!(i.total_ms(), (i.typing_ms() as f64 + i.frame) as u64 + 2000);
     }
 
-    /// Esc or Enter finishes the intro (the launcher's extra); other keys do not.
+    /// Esc or Enter finishes the intro (the launcher's extra); other keys, and a held key's
+    /// repeats, do not.
     #[test]
     fn only_esc_or_enter_finish_the_intro() {
-        assert!(key_finishes(true));
-        assert!(!key_finishes(false));
+        use crate::app::Press;
+        assert!(key_finishes(Press::Escape, false));
+        assert!(key_finishes(Press::Enter, false));
+        assert!(!key_finishes(Press::Escape, true));
+        assert!(!key_finishes(Press::Enter, true));
+        for p in [
+            Press::Other,
+            Press::Up,
+            Press::Click,
+            Press::Modifier,
+            Press::Left,
+        ] {
+            assert!(!key_finishes(p, false), "{p:?}");
+        }
     }
 }
