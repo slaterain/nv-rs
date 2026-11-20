@@ -2812,6 +2812,30 @@ bSunShadowsCharacters=0
         assert!(!choices[0].is_on(&JIP_GAME_PATCHES));
     }
 
+    /// JohnnyGuitar's editor ids: on in the fixes preset, off in vanilla, its own key or variable over
+    /// both; installed, the built-in is on exactly when the row is.
+    #[test]
+    fn jg_editor_ids_follow_the_preset() {
+        assert!(!Choice::vanilla().is_on(&JG_EDITOR_IDS));
+        assert!(Choice::from_parts(None, no_env).unwrap().is_on(&JG_EDITOR_IDS));
+        let off = with_ini(None, "[nv-rs Fixes]
+bJGEditorIDs=0
+", &[]);
+        assert!(!off.is_on(&JG_EDITOR_IDS));
+        let on = Choice::from_parts(
+            None,
+            env_of(&[("NV_JG_EDITOR_IDS", "1"), ("NV_PRESET", "vanilla")]),
+        )
+        .unwrap();
+        assert!(on.is_on(&JG_EDITOR_IDS));
+        for choice in [Choice::from_parts(None, no_env).unwrap(), off, Choice::vanilla()] {
+            let mut e = Engine::new();
+            install(&mut e, &choice);
+            johnnyguitar::install(&mut e);
+            assert_eq!(johnnyguitar::on(&e), choice.is_on(&JG_EDITOR_IDS));
+        }
+    }
+
     /// lStewieAl's Tweaks: on in the fixes preset, off in vanilla, its own line or variable over
     /// both; `[nv-rs Stewie]`'s keys reach the choice (a play run only) and the install, and a value
     /// other than 0 or 1 is named in the line for unusable keys.

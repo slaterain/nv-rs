@@ -173,6 +173,10 @@ pub fn install(e: &mut Engine) {
     e.register(GETTER, getter);
     e.register(SETTER, setter);
     for &(vtable, _) in vtables::FORM_VTABLES.iter() {
+        // nv-rs's own: an engine without the exe's data (a test's) has no vtable there.
+        if !e.mem.is_mapped(vtable + SETTER_SLOT) {
+            continue;
+        }
         if e.mem.u32(vtable + GETTER_SLOT) == GETTER_STUB {
             e.mem.set_u32(vtable + GETTER_SLOT, GETTER);
         }
@@ -182,6 +186,9 @@ pub fn install(e: &mut Engine) {
     }
     let mut held = [0u32; 9];
     for (i, &slot) in STORING_SETTER_SLOTS.iter().enumerate() {
+        if !e.mem.is_mapped(slot) {
+            continue;
+        }
         held[i] = e.mem.u32(slot);
         let routine = WRAPPED_SETTERS + 4 * i as u32;
         e.register(routine, WRAPPED[i]);
