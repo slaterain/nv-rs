@@ -410,6 +410,14 @@ pub const SITES: &[Entry] = &[
         owners: NVSE_JIP,
         step: "I-4, 3.9a",
     },
+    // Script::ParseParameters 005accb0: each parameter's start (0x5ACD0D), asked only at 0xFFFF,
+    // xNVSE's inline expression: the read ends there for xNVSE's reader (the row
+    // `xnvse.extract_args`, OverrideWithExtractArgsEx's part for the game's opcodes).
+    Entry {
+        addr: 0x005a_cd0d,
+        owners: NVSE,
+        step: "I-4 extract_args",
+    },
     // ScriptCompiler::ScriptError 005aea90: the release of the formatted message (JIP's script
     // runner reads it there while its files compile, `LogCompileError`).
     Entry {
@@ -459,6 +467,14 @@ pub const SITES: &[Entry] = &[
         addr: 0x005b_0f68,
         owners: NVSE,
         step: "I-14",
+    },
+    // ScriptCompiler::ReplaceVariablesAndFunctions 005b1570: the call of a command's compile
+    // function on its line on the stack (0x5B17DD), whose command word (+0x410) the exe leaves
+    // unset: the command's opcode written there, for the inline-expression seam's opcode rule.
+    Entry {
+        addr: 0x005b_17dd,
+        owners: NVSE,
+        step: "I-14 extract_args",
     },
     // ScriptCompiler::GetFunction: the hashed name lookup over the extended table.
     Entry {
@@ -3067,13 +3083,14 @@ mod tests {
             0x0086_b386,
             0x0059_49d4,
             0x005a_cb9d,
+            0x005a_cd0d,
             0x005e_16c3,
             0x005e_2329,
             0x0084_7c45,
         ] {
             assert!(find(SITES, Owner::Nvse, a).is_some(), "{a:08x}");
         }
-        assert_eq!(SITES.len(), 126);
+        assert_eq!(SITES.len(), 128);
         // UI Organizer's ten (UIOLoad's place, ResolveXMLFileHook's, the five hardcore zooms,
         // FinalPostParse, the operators' dispatch, the text scale), its alone.
         for a in [
@@ -3100,6 +3117,7 @@ mod tests {
             0x005a_fedb,
             0x005b_0a3f,
             0x005b_0f68,
+            0x005b_17dd,
             0x005b_19ba,
             0x005b_1c65,
             0x005b_2fa2,
