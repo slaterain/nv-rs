@@ -12,9 +12,30 @@ const MINUS_ONE: u32 = 0x0101_2054;
 /// `fArmorThreshold` at +0x1bc, Xbox PDB names, same offsets on PC) to -1.0,
 /// the constant at `01012054`. The engine map has no name for it.
 pub fn fn_008d4e80(e: &mut Engine, this: Ptr) {
+    // lStewieAl's Tweaks' row S0229 (`ArmorUpdateFix`, `WriteRelJump(0x8D4E80,
+    // ResetArmorRating)`): Tweaks' function in place of the whole of this one.
+    if e.stewie(engine_core::extend::stewie::ARMOR_UPDATE) {
+        reset_armor_rating(e, this.addr());
+        return;
+    }
     let minus_one: f32 = e.global(MINUS_ONE);
     e.mem.set_f32(this.addr() + 0x1b8, minus_one);
     e.mem.set_f32(this.addr() + 0x1bc, minus_one);
+}
+
+/// Row S0229's routine, Tweaks' `ResetArmorRating` (`Fixes/ArmorUpdateFix.cpp`): both armour
+/// values to -1.0, as the exe, and then, when the actor has a process (+0x68), the process's
+/// cached Damage Resistance (0x12) and Damage Threshold (0x4C) marked out of date (its virtual
+/// +0x3B0, `SetCachedActorValueOutOfDate`), so an actor's (NPC's or creature's) DR and DT follow
+/// a change of armour.
+fn reset_armor_rating(e: &mut Engine, this: u32) {
+    e.mem.set_f32(this + 0x1b8, -1.0);
+    e.mem.set_f32(this + 0x1bc, -1.0);
+    let process = e.mem.u32(this + 0x68);
+    if process != 0 {
+        e.vcall(process, 0x3b0, &args![0x12u32]);
+        e.vcall(process, 0x3b0, &args![0x4cu32]);
+    }
 }
 
 /// The double 0.0 the armour values are compared with (`.rdata`).
@@ -74,12 +95,50 @@ fn computed_armour_value(e: &mut Engine, this: u32, field: u32, index: u32, slot
 /// value of vtable slot +0x48C when it sets its flag, plus the values of slots +0x18,
 /// +0x10 and +0x14 of the object at +0xA4, stores it and answers it.
 pub fn fn_008d4cc0(e: &mut Engine, this: u32) -> f32 {
+    // lStewieAl's Tweaks' row S0206 (`CreatureDRFix`, `SafeWrite32(0x10874E8,
+    // Creature__GetTotalArmorDR)`): Tweaks puts its routine in `Creature`'s vtable slot at
+    // `010874E8`, the one reference the exe has to this function (Ghidra's references to
+    // `008d4cc0`: that data word only), so taking the routine here is the same change.
+    if e.stewie(engine_core::extend::stewie::CREATURE_DR) {
+        return creature_get_total_armor_dr(e, this);
+    }
     let stored = e.mem.u32(this + 0x1b8);
     // FCOMP; TEST AH,0x1; JNZ: below or unordered recomputes.
     if x87_load32(stored) >= e.mem.f64(ZERO_DOUBLE) {
         return f32::from_bits(x87_quiet_bits(stored));
     }
     computed_armour_value(e, this, 0x1b8, 0x12, &[0x18, 0x10, 0x14])
+}
+
+/// Row S0206's routine, Tweaks' `Creature__GetTotalArmorDR` (`Fixes/CreatureDRFix.cpp`): the
+/// stored total DR (+0x1B8) while it is not below 0.0; otherwise the actor's own value for Damage
+/// Resistance (0x12) from vtable slot +0x48C (`InternalGetActorValue`, 0.0 when it does not set
+/// its flag) plus the actor-value owner's (+0xA4) damage (slot +0x14) and permanent value (slot
+/// +0x18), stored and answered. The exe's `fn_008d4cc0` totals the actor's own value when it has
+/// one (otherwise the base value, `0087d880`) plus the permanent value, slot +0x10 (temporary) and
+/// the damage: Tweaks drops the base-value fallback and slot +0x10, which counted a creature's DR
+/// twice.
+pub fn creature_get_total_armor_dr(e: &mut Engine, this: u32) -> f32 {
+    let stored = e.mem.f32(this + 0x1b8);
+    if stored >= 0.0 {
+        return stored;
+    }
+    let internal = e.with_stack(4, |e, flag| {
+        let flag = flag.addr();
+        e.mem.set_u8(flag, 0);
+        let value = e.vcall(this, 0x48c, &args![0x12u32, flag]).f32();
+        if e.mem.u8(flag) != 0 {
+            value
+        } else {
+            0.0
+        }
+    });
+    let values = this + VALUES;
+    let damage = e.vcall(values, 0x14, &args![0x12u32]).f32();
+    let permanent = e.vcall(values, 0x18, &args![0x12u32]).f32();
+    let total = damage + permanent + internal;
+    e.mem.set_f32(this + 0x1b8, total);
+    total
 }
 
 // Translated from 008d4db0 (PC disassembly, FalloutNV.exe 1.4.0.525)
@@ -288,6 +347,95 @@ mod b018_tests {
         e.mem.set_u32(this + 0x1b8, 0x7fc0_0000);
         e.mem.set_u8(this + 0x1f0, 1);
         assert_eq!(e.call(0x008d_4cc0, &[this]).f64(), 7.5);
+    }
+
+    /// lStewieAl's Tweaks' row S0206 (`CreatureDRFix`): the creature of
+    /// `fn_008d4cc0_keeps_or_recomputes_the_rating` (base 10, slot +0x18 1, +0x10 2, +0x14 0.5,
+    /// its own +0x48C 4 when flagged). The exe's function answers 13.5 (7.5 flagged); Tweaks'
+    /// routine answers damage + permanent value + its own value: 1.5 (5.5 flagged), stored the
+    /// same way, and a stored value not below 0.0 is kept. No base value or slot +0x10 is asked.
+    #[test]
+    fn s0206_a_creatures_dr_is_counted_once() {
+        let mut e = Engine::new();
+        e.map(ZERO_DOUBLE & !0xfff, 0x1000);
+        e.register(BASE_VALUE, |_, _| st0(10.0));
+        e.register(0x0090_1000, |e, a| {
+            e.mem.set_u8(a[2], e.mem.u8(a[0] + 0x1f0));
+            st0(4.0)
+        });
+        e.register(0x0091_0018, |_, _| st0(1.0));
+        e.register(0x0091_0010, |_, _| st0(2.0));
+        e.register(0x0091_0014, |_, _| st0(0.5));
+        let this = character(
+            &mut e,
+            &[(0x48c, 0x0090_1000)],
+            &[
+                (0x18, 0x0091_0018),
+                (0x10, 0x0091_0010),
+                (0x14, 0x0091_0014),
+            ],
+        );
+        e.mem.set_f32(this + 0x1b8, -1.0);
+        assert_eq!(e.call(0x008d_4cc0, &[this]).f64(), 13.5);
+        e.mem.set_f32(this + 0x1b8, -1.0);
+        e.call_log = Some(vec![]);
+        assert_eq!(creature_get_total_armor_dr(&mut e, this), 1.5);
+        assert_eq!(e.mem.f32(this + 0x1b8), 1.5);
+        assert_eq!(calls_to(&e, 0x0090_1000)[0][..2], [this, 0x12]);
+        assert_eq!(calls_to(&e, 0x0091_0014), [vec![this + VALUES, 0x12]]);
+        assert_eq!(calls_to(&e, 0x0091_0018), [vec![this + VALUES, 0x12]]);
+        assert!(calls_to(&e, BASE_VALUE).is_empty());
+        assert!(calls_to(&e, 0x0091_0010).is_empty());
+        // Kept while not below 0.0 (0.0 included).
+        e.mem.set_f32(this + 0x1b8, 0.0);
+        assert_eq!(creature_get_total_armor_dr(&mut e, this), 0.0);
+        // Flagged: its own value 4 in place of 0.
+        e.mem.set_f32(this + 0x1b8, -1.0);
+        e.mem.set_u8(this + 0x1f0, 1);
+        assert_eq!(creature_get_total_armor_dr(&mut e, this), 5.5);
+        e.mem.set_f32(this + 0x1b8, -1.0);
+        assert_eq!(e.call(0x008d_4cc0, &[this]).f64(), 7.5);
+        // With the row on, the creature's slot function answers Tweaks' value.
+        e.set_stewie(engine_core::extend::stewie::CREATURE_DR, true);
+        e.mem.set_f32(this + 0x1b8, -1.0);
+        assert_eq!(e.call(0x008d_4cc0, &[this]).f64(), 5.5);
+        e.mem.set_u8(this + 0x1f0, 0);
+        e.mem.set_f32(this + 0x1b8, -1.0);
+        assert_eq!(e.call(0x008d_4cc0, &[this]).f64(), 1.5);
+    }
+
+    /// lStewieAl's Tweaks' row S0229 (`ArmorUpdateFix`): off, both armour values go to -1.0 and
+    /// nothing else; on, the same, then the process's cached DR (0x12) and DT (0x4C) are marked out
+    /// of date (process slot +0x3B0); with no process only the values change.
+    #[test]
+    fn s0229_an_armour_change_marks_the_cached_dr_and_dt() {
+        for (on, with_process) in [(false, true), (true, true), (true, false)] {
+            let mut e = Engine::new();
+            e.map(MINUS_ONE & !0xfff, 0x1000);
+            e.set_global(MINUS_ONE, -1.0f32);
+            let this = e.mem.alloc(0x200);
+            let process = e.mem.alloc(0x40);
+            let table = e.mem.alloc(0x400);
+            e.mem.set_u32(process, table);
+            e.mem.set_u32(table + 0x3b0, 0x0092_03b0);
+            e.register(0x0092_03b0, |_, _| Ret::default());
+            if with_process {
+                e.mem.set_u32(this + 0x68, process);
+            }
+            e.mem.set_f32(this + 0x1b8, 30.0);
+            e.mem.set_f32(this + 0x1bc, 12.0);
+            e.set_stewie(engine_core::extend::stewie::ARMOR_UPDATE, on);
+            e.call_log = Some(vec![]);
+            e.call(0x008d_4e80, &[this]);
+            assert_eq!(e.mem.f32(this + 0x1b8), -1.0);
+            assert_eq!(e.mem.f32(this + 0x1bc), -1.0);
+            let marked = calls_to(&e, 0x0092_03b0);
+            if on && with_process {
+                assert_eq!(marked, [vec![process, 0x12], vec![process, 0x4c]]);
+            } else {
+                assert!(marked.is_empty());
+            }
+        }
     }
 
     #[test]
