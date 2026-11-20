@@ -877,6 +877,13 @@ struct Extra {
     /// The two boxes of one vertex and index buffer ([`SEG_VB`], [`SEG_IB`]) as two index ranges:
     /// both drawn (`Some(true)`) or the first alone (`Some(false)`).
     segments: Option<bool>,
+    /// [`SEG_VB`]'s first range alone, and (`Some(true)`) a copy of it moved 390 along x, across the
+    /// view's right edge (the same range at another place: one mesh, two objects).
+    seg_copy: Option<bool>,
+    /// [`EDGE_VB`]'s two ranges (`Some(true)`) or its first alone.
+    edge_segments: Option<bool>,
+    /// [`FAR_SEG_VB`]'s two ranges (`Some(true)`) or its first alone.
+    far_segments: Option<bool>,
     /// The tall caster far off toward a low sun ([`SUNWARD`]).
     sunward: bool,
     /// The world word (`sun_shadow::WORLD_STATE`) before the scene's words.
@@ -1129,6 +1136,14 @@ const SUNWARD: u32 = 0x16E0;
 /// high) in one vertex buffer, each its own range of one index buffer.
 const SEG_VB: u32 = 0x1700;
 const SEG_IB: u32 = 0x1710;
+/// Two boxes as two ranges again, the second (x 290 to 430) out of the view across its right edge,
+/// its sphere reaching in (review of #844).
+const EDGE_VB: u32 = 0x1720;
+const EDGE_IB: u32 = 0x1730;
+/// Two towers as two ranges in the far scene, past the cascades: one at x -2,500 to -1,500, the
+/// other at x 10,500 to 12,500 (its centre out of the view, its sphere reaching in).
+const FAR_SEG_VB: u32 = 0x1740;
+const FAR_SEG_IB: u32 = 0x1750;
 
 /// A box from (x0, y0, 0) to (x1, y1, h): its top and four sides.
 fn cuboid(x0: f32, x1: f32, y0: f32, y1: f32, h: f32) -> Vec<[f32; 3]> {
@@ -1246,6 +1261,14 @@ fn extras(b: &mut WgpuBackend) {
     buffer(b, SEG_VB, &seg);
     let ib: Vec<u8> = (0..seg.len() as u16).flat_map(u16::to_le_bytes).collect();
     bytes_buffer(b, SEG_IB, true, &ib);
+    let mut edge = cuboid(-140.0, -100.0, 80.0, 120.0, 80.0);
+    edge.extend(cuboid(290.0, 430.0, 80.0, 120.0, 80.0));
+    buffer(b, EDGE_VB, &edge);
+    bytes_buffer(b, EDGE_IB, true, &ib);
+    let mut far_seg = cuboid(-2500.0, -1500.0, 19_500.0, 20_500.0, 4000.0);
+    far_seg.extend(cuboid(10_500.0, 12_500.0, 19_000.0, 21_000.0, 4000.0));
+    buffer(b, FAR_SEG_VB, &far_seg);
+    bytes_buffer(b, FAR_SEG_IB, true, &ib);
     buffer(
         b,
         FAR_TOWER_LOW,
@@ -1705,6 +1728,25 @@ fn lit_sequence_with(
             draw_range(b, SEG_VB, SEG_IB, 0, 10);
             if both {
                 draw_range(b, SEG_VB, SEG_IB, 30, 10);
+            }
+        }
+        for (pair, vb, ib) in [
+            (e.edge_segments, EDGE_VB, EDGE_IB),
+            (e.far_segments, FAR_SEG_VB, FAR_SEG_IB),
+        ] {
+            if let Some(both) = pair {
+                draw_range(b, vb, ib, 0, 10);
+                if both {
+                    draw_range(b, vb, ib, 30, 10);
+                }
+            }
+        }
+        if let Some(copy) = e.seg_copy {
+            draw_range(b, SEG_VB, SEG_IB, 0, 10);
+            if copy {
+                set_mvp(b, model_view_proj_at(390.0, 0.0));
+                draw_range(b, SEG_VB, SEG_IB, 0, 10);
+                set_mvp(b, model_view_proj());
             }
         }
         if let Some(dx) = e.tower_shift {
@@ -3615,9 +3657,112 @@ fn a_segment_the_game_stops_drawing_while_it_draws_the_rest_of_its_buffers_goes(
         second(25)
     );
     assert!(first(4) > 0.8 && second(4) > 0.8, "both cast while drawn");
+    // Review of #844: within its grace (last drawn in frame 5) it still casts.
+    assert!(
+        second(10) > 0.8,
+        "kept through its grace: {:.2}",
+        second(10)
+    );
     assert!(first(25) > 0.8, "the range still drawn keeps its shadow");
     assert!(
         second(25) < 0.1,
         "the range no longer drawn lets its shadow go"
     );
+}
+
+/// Review of #844: a copy of the same range at another place (one mesh, two objects; the copy
+/// across the view's right edge) that the game stops drawing while it draws the other copy keeps
+/// its shadow under the old rules (not wholly in view: kept), since no OTHER range of the buffers
+/// was drawn.
+#[test]
+fn a_copy_of_a_range_the_game_stops_drawing_keeps_its_shadow() {
+    let frames: Vec<Extra> = (0..26)
+        .map(|f| Extra {
+            seg_copy: Some(f < 6),
+            ..Extra::default()
+        })
+        .collect();
+    let Some(off) = lit_sequence_picture(1, false, &frames) else {
+        return;
+    };
+    let on = lit_sequence_picture(1, true, &frames).expect("the adapter");
+    // The copy stands where the second range of the test above does (x 250 to 290).
+    let copy = |f: usize| taken_at(&off[f], &on[f], 220.0, 100.0);
+    let first = |f: usize| taken_at(&off[f], &on[f], -170.0, 100.0);
+    eprintln!("the copy {:.2} then {:.2}", copy(4), copy(25));
+    assert!(first(4) > 0.8 && copy(4) > 0.8, "both cast while drawn");
+    assert!(
+        first(25) > 0.8 && copy(25) > 0.8,
+        "the copy keeps its shadow"
+    );
+}
+
+/// Review of #844: a range the game stops drawing whose centre is out of the view but whose sphere
+/// reaches into it (the loaded cell beside the player's) goes too, past its grace; its shadow falls
+/// into the view.
+#[test]
+fn a_segment_beside_the_view_the_game_stops_drawing_goes() {
+    // The second box: x 290 to 430, centre (360, 100, 40), radius about 83.
+    let v = to_view([360.0, 100.0, 40.0]);
+    let edge = (v[0] - HALF * v[2]) / (1.0 + HALF * HALF).sqrt();
+    assert!(v[0] > HALF * v[2], "its centre out of view: {v:?}");
+    assert!(edge < 83.0, "its sphere reaching in: {edge}");
+    let frames: Vec<Extra> = (0..26)
+        .map(|f| Extra {
+            edge_segments: Some(f < 6),
+            ..Extra::default()
+        })
+        .collect();
+    let Some(off) = lit_sequence_picture(1, false, &frames) else {
+        return;
+    };
+    let on = lit_sequence_picture(1, true, &frames).expect("the adapter");
+    // Its shadow at x 230 to 430: in view at x 250.
+    let second = |f: usize| taken_at(&off[f], &on[f], 250.0, 100.0);
+    let first = |f: usize| taken_at(&off[f], &on[f], -170.0, 100.0);
+    eprintln!(
+        "beside the view: {:.2}, {:.2}, then {:.2}",
+        second(4),
+        second(10),
+        second(25)
+    );
+    assert!(first(4) > 0.8 && second(4) > 0.8, "both cast while drawn");
+    assert!(second(10) > 0.8, "kept through its grace");
+    assert!(first(25) > 0.8, "the range still drawn keeps its shadow");
+    assert!(second(25) < 0.1, "the range beside the view goes");
+}
+
+/// Review of #844: the far map lets go a range the game stops drawing while it draws the other
+/// range of its buffers, as the cascades do: two towers past the cascades (20,000 out), the second
+/// with its centre beyond the view's right edge and its sphere reaching in; once undrawn past its
+/// grace its shadow (in view, on the land at x 9,000) goes, the first's stays.
+#[test]
+fn the_far_map_lets_go_a_segment_the_game_stops_drawing() {
+    let _far = FarScene::on();
+    let v = to_view([11_500.0, 20_000.0, 2000.0]);
+    let edge = (v[0] - HALF * v[2]) / (1.0 + HALF * HALF).sqrt();
+    assert!(v[0] > HALF * v[2] && edge < 2400.0, "{v:?} {edge}");
+    let frames: Vec<Extra> = (0..44)
+        .map(|f| Extra {
+            far_segments: Some(f < 6),
+            ..far_land(false, false)
+        })
+        .collect();
+    let Some((off, _)) = far_sequence(1, false, &frames) else {
+        return;
+    };
+    let (on, _) = far_sequence(1, true, &frames).expect("the adapter");
+    let second = |f: usize| taken_at(&off[f], &on[f], 9_000.0, 20_000.0);
+    let first = |f: usize| taken_at(&off[f], &on[f], -3_000.0, 20_000.0);
+    eprintln!(
+        "far: first {:.2} then {:.2}; second {:.2} then {:.2}",
+        first(9),
+        first(43),
+        second(9),
+        second(43)
+    );
+    // (The far map is in from the fifth frame; frame 9 is within the grace of frame 5.)
+    assert!(first(9) > 0.8 && second(9) > 0.8, "both cast while drawn");
+    assert!(first(43) > 0.8, "the range still drawn keeps its shadow");
+    assert!(second(43) < 0.1, "the far map lets the undrawn range go");
 }
