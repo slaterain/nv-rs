@@ -4167,8 +4167,16 @@ mod n054_tests {
                     HEALTH_THRESHOLD_ARMOR,
                     IMAGE_X,
                     IMAGE_SIZE,
+                    DROP_LABEL_SETTING_POINTER,
+                    FULL_HEALTH,
                 ],
             );
+            // The item part's button update (`00781680`) runs too: full health 100.
+            e.mem.set_f64(FULL_HEALTH, 100.0);
+            e.register(HEALTH_ROUND, |_, a| Ret {
+                st0: f64::from(f32::from_bits(a[0])),
+                ..Ret::default()
+            });
             e.set_stewie(stewie::BOOK_AND_AMMO_HOTKEY_ICONS, on);
             let form = e.mem.alloc(0x40);
             e.mem.set_u8(form + 4, 0x19);
