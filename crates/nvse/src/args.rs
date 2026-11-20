@@ -8,9 +8,15 @@
 //! - The wrap over `005accb0` (`OverrideWithExtractArgsEx`, `Hooks_Script.cpp` (xNVSE)): xNVSE
 //!   jumps from the exe's reader to its own for every call; here that happens for an extender
 //!   opcode (`0x1400` up) in every preset, and a vanilla opcode goes on to the next link (the
-//!   exe's reader; xNVSE's once the planned fix row `xnvse.extract_args`, not built yet, is on):
-//!   the per-opcode rule of ADR-0016 §5. Vanilla content calls no extender opcode, so under
-//!   `vanilla` it reaches only the exe's reader.
+//!   exe's reader): the per-opcode rule of ADR-0016 §5. Vanilla content calls no extender
+//!   opcode, so under `vanilla` it reaches only the exe's reader.
+//! - The fix row `xnvse.extract_args` ([`set_game_inline`]): a game command's line carrying an
+//!   inline expression (`0xFFFF`: the new script language writes every argument so, xNVSE's
+//!   compilers a parenthesised one, the GECK's included) is read by xNVSE's reader, as xNVSE's
+//!   entry jump reads every line. A line without one stays the exe's read exactly: the exe's
+//!   reader asks seam `005ACD0D` only at a parameter starting `0xFFFF`, and only then does the
+//!   read start again with xNVSE's reader. Off (`vanilla`), the exe reads such a line as the game
+//!   without xNVSE does (a string's length read as -1: a copy of 4 GB, the game's crash).
 //! - [`zero_extender_result`]: the result zeroed before an extender command's handler runs, as
 //!   JIP's always-on patches do at `0x5ACB9D`, `0x5E16C3` and `0x5E2329` (`patches_game.h`
 //!   (JIP LN NVSE)) and xNVSE's evaluator does (`cmdResult = 0`); for vanilla opcodes that is
@@ -24,11 +30,100 @@
 use crate::context;
 use crate::table::record_of;
 use crate::{CommandArgs, Nvse};
-use engine_core::extend::{Owner, WrapSlot};
+use engine_core::extend::{Owner, SiteSlot, WrapSlot};
 use engine_core::prelude::*;
 
 /// `Script::ParseParameters` (`005accb0`).
 pub const PARSE_PARAMETERS: WrapSlot = WrapSlot::new(Owner::Nvse, 0x005a_ccb0);
+
+/// `005accb0`'s loop head for each parameter (`005ACD0D`), asked only at `0xFFFF` (the
+/// translation's seam): with [`set_game_inline`]'s row, the read stops there for xNVSE's reader.
+const INLINE_AT_PARAMETER: SiteSlot = SiteSlot::new(Owner::Nvse, 0x005a_cd0d);
+
+/// The row's flag and the mark of the read in progress.
+#[derive(Default)]
+pub struct State {
+    /// `xnvse.extract_args` is on.
+    game_inline: bool,
+    /// The exe's read of the current call met `0xFFFF` and stopped (saved and restored around
+    /// every call of the wrap, so a read nested inside another keeps its own).
+    inline_seen: bool,
+}
+
+fn state(e: &mut Engine) -> &mut State {
+    &mut e.ext::<Nvse>().args
+}
+
+/// The fix row `xnvse.extract_args` (docs/FIXES.md, "The script extender"): a game command's
+/// line with an inline expression is read by xNVSE's reader, and the compile writes one for a
+/// game command's parenthesised argument (`crate::line_reader`), as xNVSE does.
+pub fn set_game_inline(e: &mut Engine, on: bool) {
+    state(e).game_inline = on;
+}
+
+/// Whether [`set_game_inline`]'s row is on.
+pub fn game_inline(e: &mut Engine) -> bool {
+    state(e).game_inline
+}
+
+/// Seam `005ACD0D` (words: the data, the offset's address): with the row on, the exe's read
+/// stops at the expression (answer 1) and the wrap reads the command again with xNVSE's reader;
+/// off, no answer (the exe reads on).
+fn inline_at_parameter(e: &mut Engine, _w: &[u32]) -> Option<u32> {
+    let s = state(e);
+    if !s.game_inline {
+        return None;
+    }
+    s.inline_seen = true;
+    Some(1)
+}
+
+/// `CExpression::Eval`'s call of a compiled operand outside parse mode (`005949D4`, the
+/// translation's seam).
+const EXPRESSION_COMMAND_CALL: SiteSlot = SiteSlot::new(Owner::Nvse, 0x0059_49d4);
+/// `Script::ParseParameters`'s operand reader (`005ac7a0`).
+const READ_OPERAND: u32 = 0x005a_c7a0;
+/// `Script::data` (`+0x30`).
+const SCRIPT_DATA: u32 = 0x30;
+
+/// The opcode of the command a compiled operand token at `at` calls: `X` and the opcode, or a
+/// referenced object (`r` and its index) and then `X`; none for a variable, a global or a form.
+fn command_of_token(e: &Engine, at: u32) -> Option<u32> {
+    let at = match e.mem.u8(at) {
+        b'X' => at,
+        b'r' => at + 3,
+        _ => return None,
+    };
+    (e.mem.u8(at) == b'X').then(|| u32::from(e.mem.u16(at + 1)))
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Hooks_Script.cpp:
+// ExpressionEvalRunCommandHook.
+/// Seam `005949D4` (words: the result's address, the offset's address, the reference, the
+/// container, the script, the locals, the token's address in the expression's bytes): a command
+/// inside a `set`, `if` or `elseif` expression is read from the script's data at the token's own
+/// offset there (`*offset = token - script->data`), not from `Eval`'s copy of the token on its
+/// stack, so its arguments, their inline expressions, the lambdas known by their address and
+/// the error offsets are where they are, as xNVSE does. For an extender's command in every
+/// preset; for one of the game's with the row `xnvse.extract_args` (ADR-0016 §5's
+/// `xnvse.expression_command_call`, which that row carries); otherwise, and for a token that
+/// calls no command, the game's call on the copy (a variable reads the same either way).
+fn expression_command_call(e: &mut Engine, w: &[u32]) -> Option<u32> {
+    let &[result, offset_ptr, reference, container, script, locals, at] = w else {
+        return None;
+    };
+    if script == 0 {
+        return None;
+    }
+    let opcode = command_of_token(e, at)?;
+    if opcode < FIRST_EXTENDER_OPCODE && !state(e).game_inline {
+        return None;
+    }
+    let data = e.mem.u32(script + SCRIPT_DATA);
+    e.mem.set_u32(offset_ptr, at.wrapping_sub(data));
+    let words = args![result, data, offset_ptr, reference, container, script, locals, 0u32];
+    Some(u32::from(e.call(READ_OPERAND, &words).bool()))
+}
 
 /// The first extender opcode: from here up a change of xNVSE's or JIP's is part of the
 /// extender in every preset (ADR-0016 §5).
@@ -760,12 +855,28 @@ fn opcode_of_call(e: &Engine, data: u32, offset: u32) -> u32 {
 /// exe's reader at `005ACCD4` tests the count's sign; with its entry jump every opcode reaches
 /// `vExtractArgsEx` anyway). Vanilla content never writes a negative count, so this is extender
 /// behaviour in every preset; an ordinary count costs that one sign test.
+///
+/// With the row `xnvse.extract_args` ([`set_game_inline`]), a vanilla opcode's read that meets
+/// an inline expression (the exe's reader stops at seam `005ACD0D`) starts again from the call's
+/// offset with xNVSE's reader, which stores every output again (those the exe's read stored
+/// before the expression included) and moves the offset past the arguments; a read that meets
+/// none is the exe's, its answer and offset as they are. The mark is saved and restored around
+/// the exe's read, so a read nested inside it (a command run while it reads) keeps its own.
 fn parse_parameters(e: &mut Engine, w: &[u32]) -> Ret {
     let (params, data, offset_ptr) = (w[0], w[1], w[2]);
     let offset = e.mem.u32(offset_ptr);
     let opcode = opcode_of_call(e, data, offset);
     if opcode < FIRST_EXTENDER_OPCODE && e.mem.u16(data.wrapping_add(offset)) & 0x8000 == 0 {
-        return e.call_next(PARSE_PARAMETERS.addr(), w);
+        let s = state(e);
+        if !s.game_inline {
+            return e.call_next(PARSE_PARAMETERS.addr(), w);
+        }
+        let outer = std::mem::replace(&mut s.inline_seen, false);
+        let exe = e.call_next(PARSE_PARAMETERS.addr(), w);
+        if !std::mem::replace(&mut state(e).inline_seen, outer) {
+            return exe;
+        }
+        e.mem.set_u32(offset_ptr, offset);
     }
     let (script, event_list) = (w[5], w[6]);
     let read = v_extract_args_ex(e, params, data, offset_ptr, script, event_list, true);
@@ -781,9 +892,12 @@ pub fn zero_extender_result(e: &mut Engine, a: &[u32]) {
     }
 }
 
-/// Installs the wrap over the exe's reader.
+/// Installs the wrap over the exe's reader and the seam at its parameters (answered only with
+/// the row [`set_game_inline`]).
 pub fn install(e: &mut Engine) {
     e.wrap(PARSE_PARAMETERS, parse_parameters);
+    e.on_site(INLINE_AT_PARAMETER, inline_at_parameter);
+    e.on_site(EXPRESSION_COMMAND_CALL, expression_command_call);
     let _ = e.ext::<Nvse>();
 }
 
@@ -1022,5 +1136,201 @@ mod tests {
         assert_eq!(e.mem.f64(OUT), 3.0);
         zero_extender_result(&mut e, &[0x1400, 0, OUT]);
         assert_eq!(e.mem.f64(OUT), 0.0);
+    }
+
+    /// A second compiled line, the nested read's words and its answer.
+    const DATA2: u32 = 0x0200_0800;
+    const NEST: u32 = 0x0200_7000;
+    const NEST_OFFSET: u32 = 0x0200_7004;
+    const NEST_ANSWER: u32 = 0x0200_7008;
+    /// The exe's runs and what it took.
+    const EXE_RUNS: u32 = OUT + 0x100;
+
+    /// The exe's reader as a stand-in. When `NEST` holds a line it first reads that one through
+    /// `005accb0` (a command run while it reads). Then it takes the count (the offset moves past
+    /// it) and, at a parameter starting `0xFFFF`, asks seam `005ACD0D` as the translation does:
+    /// answered, it stops there (false). Otherwise it reads the line as the exe does here: the
+    /// offset to 0x777, one more run counted.
+    fn exe_reader(e: &mut Engine, w: &[u32]) -> Ret {
+        let nested = e.mem.u32(NEST);
+        if nested != 0 {
+            e.mem.set_u32(NEST, 0);
+            e.mem.set_u32(NEST_OFFSET, 4);
+            let words = [PARAMS, nested, NEST_OFFSET, 0, 0, SCRIPT, LIST, OUT + 0x40];
+            let answer = e.call(PARSE_PARAMETERS.addr(), &words).eax;
+            e.mem.set_u32(NEST_ANSWER, answer);
+        }
+        let (data, offset_ptr) = (w[1], w[2]);
+        let at = e.mem.u32(offset_ptr) + 2;
+        e.mem.set_u32(offset_ptr, at);
+        if e.mem.u16(data + at) == 0xffff && e.site(0x005a_cd0d, &[data, offset_ptr]).is_some() {
+            return crate::handled(false);
+        }
+        e.mem.set_u32(offset_ptr, 0x777);
+        let runs = e.mem.u32(EXE_RUNS);
+        e.mem.set_u32(EXE_RUNS, runs + 1);
+        crate::handled(true)
+    }
+
+    /// One float parameter's line at `at` for the game's opcode 0x1004: an inline expression
+    /// (`0xFFFF`, its length, the byte constant 5) or the immediate double 2.5.
+    fn float_line(e: &mut Engine, at: u32, inline: bool) {
+        let bytes: Vec<u8> = if inline {
+            vec![0xff, 0xff, 4, 0, b'B', 5]
+        } else {
+            [&b"z"[..], &2.5f64.to_le_bytes()].concat()
+        };
+        e.mem.set_u16(at, 0x1004);
+        e.mem.set_u16(at + 2, bytes.len() as u16 + 2);
+        e.mem.set_u16(at + 4, 1);
+        e.mem.write(at + 6, &bytes);
+    }
+
+    fn reader_engine() -> Engine {
+        let mut e = engine();
+        // The game's command table, where the game opcode's record is (empty here).
+        if !e.mem.is_mapped(0x0119_0000) {
+            e.map(0x0119_0000, 0x1_0000);
+        }
+        e.register(PARSE_PARAMETERS.addr(), exe_reader);
+        install(&mut e);
+        params(&mut e, &[(2, false)]);
+        e
+    }
+
+    /// The outer call's answer, its offset, the exe's runs, its float output.
+    fn read_outer(e: &mut Engine) -> (u32, u32, u32, f32) {
+        e.mem.set_u32(OFFSET, 4);
+        e.mem.set_f32(OUT, -1.0);
+        let w = [PARAMS, DATA, OFFSET, 0, 0, SCRIPT, LIST, OUT];
+        let answer = e.call(PARSE_PARAMETERS.addr(), &w).eax;
+        (
+            answer,
+            e.mem.u32(OFFSET),
+            e.mem.u32(EXE_RUNS),
+            e.mem.f32(OUT),
+        )
+    }
+
+    /// The row `xnvse.extract_args`: a game opcode's read that meets `0xFFFF` starts again from
+    /// the call's offset with xNVSE's reader (the value read, the offset past the arguments, the
+    /// exe's stop not counted as a read); a plain line is the exe's, answer and offset. Off, the
+    /// seam is not answered and the exe reads the expression's line itself.
+    #[test]
+    fn a_game_line_with_an_expression_is_read_again_by_xnvses_reader() {
+        let mut e = reader_engine();
+        float_line(&mut e, DATA, true);
+        assert_eq!(
+            read_outer(&mut e),
+            (1, 0x777, 1, -1.0),
+            "the row off: the exe's"
+        );
+        set_game_inline(&mut e, true);
+        assert!(game_inline(&mut e));
+        assert_eq!(
+            read_outer(&mut e),
+            (1, 4 + 2 + 6, 1, 5.0),
+            "xNVSE's, from the start"
+        );
+        float_line(&mut e, DATA, false);
+        assert_eq!(
+            read_outer(&mut e),
+            (1, 0x777, 2, -1.0),
+            "a plain line: the exe's"
+        );
+    }
+
+    /// The mark is each call's own. A read nested in a plain one meets an expression: it is read
+    /// again by xNVSE's reader, and the outer read stays the exe's. A plain read nested in one
+    /// that meets an expression: the outer is read again, the nested stays the exe's.
+    #[test]
+    fn a_nested_read_keeps_its_own_mark() {
+        let mut e = reader_engine();
+        set_game_inline(&mut e, true);
+        float_line(&mut e, DATA, false);
+        float_line(&mut e, DATA2, true);
+        e.mem.set_u32(NEST, DATA2);
+        e.mem.set_f32(OUT + 0x40, -1.0);
+        assert_eq!(
+            read_outer(&mut e),
+            (1, 0x777, 1, -1.0),
+            "the outer: the exe's"
+        );
+        assert_eq!(e.mem.f32(OUT + 0x40), 5.0, "the nested: xNVSE's");
+        assert_eq!(e.mem.u32(NEST_OFFSET), 4 + 2 + 6);
+        assert_eq!(e.mem.u32(NEST_ANSWER), 1);
+        float_line(&mut e, DATA, true);
+        float_line(&mut e, DATA2, false);
+        e.mem.set_u32(NEST, DATA2);
+        assert_eq!(
+            read_outer(&mut e),
+            (1, 4 + 2 + 6, 2, 5.0),
+            "the outer: xNVSE's"
+        );
+        assert_eq!(e.mem.u32(NEST_OFFSET), 0x777, "the nested: the exe's");
+    }
+
+    thread_local! {
+        static OPERAND_READS: std::cell::RefCell<Vec<(u32, u32)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// The operand reader as a stand-in: the code and the offset it was given, a result of 4.
+    fn operand_reader(e: &mut Engine, a: &[u32]) -> Ret {
+        let read = (a[1], e.mem.u32(a[2]));
+        OPERAND_READS.with(|r| r.borrow_mut().push(read));
+        e.mem.set_f64(a[0], 4.0);
+        crate::handled(true)
+    }
+
+    /// Seam `005949D4` (xNVSE's `ExpressionEvalRunCommandHook`): a command token, `X` and its
+    /// opcode or a referenced object's `r`, its index and `X`, is read from the script's data at
+    /// the token's offset there; for a plugin's opcode in every preset, for a game's with the row.
+    /// A variable's token, a game command's without the row and a call without a script are the
+    /// game's (no answer).
+    #[test]
+    fn a_command_inside_an_expression_is_read_from_the_scripts_data() {
+        let mut e = engine();
+        e.register(READ_OPERAND, operand_reader);
+        e.register(PARSE_PARAMETERS.addr(), |_, _| crate::handled(true));
+        install(&mut e);
+        e.mem.set_u32(SCRIPT + SCRIPT_DATA, DATA);
+        let ask = |e: &mut Engine, token: &[u8], script: u32| {
+            e.mem.write(DATA + 0x20, token);
+            e.mem.set_u32(OFFSET, 0);
+            let words = [OUT, OFFSET, 0x11, 0x22, script, LIST, DATA + 0x20];
+            let answer = e.site(EXPRESSION_COMMAND_CALL.addr(), &words);
+            (
+                answer,
+                OPERAND_READS.with(|r| r.borrow_mut().drain(..).collect::<Vec<_>>()),
+            )
+        };
+        assert_eq!(
+            ask(&mut e, b"X\x00\x24", SCRIPT),
+            (Some(1), vec![(DATA, 0x20)])
+        );
+        assert_eq!(e.mem.f64(OUT), 4.0);
+        assert_eq!(
+            ask(&mut e, b"r\x01\x00X\x00\x24", SCRIPT),
+            (Some(1), vec![(DATA, 0x20)])
+        );
+        assert_eq!(
+            ask(&mut e, b"X\x04\x10", SCRIPT),
+            (None, vec![]),
+            "a game command's"
+        );
+        assert_eq!(
+            ask(&mut e, b"f\x01\x00", SCRIPT),
+            (None, vec![]),
+            "a variable"
+        );
+        assert_eq!(ask(&mut e, b"X\x00\x24", 0), (None, vec![]), "no script");
+        set_game_inline(&mut e, true);
+        assert_eq!(
+            ask(&mut e, b"X\x04\x10", SCRIPT),
+            (Some(1), vec![(DATA, 0x20)]),
+            "with the row"
+        );
+        assert_eq!(ask(&mut e, b"f\x01\x00", SCRIPT), (None, vec![]));
     }
 }

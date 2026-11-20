@@ -16,24 +16,18 @@
 //!   can declare them.
 //! - A parenthesised argument of a command of the game's format (`InlineExpressionHook` at
 //!   `005B1C65`, `StandardCompile`'s word read of each parameter): an xNVSE expression
-//!   ([`crate::compiler::handle_parameter_parenthesis`]), for an extender's command (opcode
-//!   `0x1400` up: JIP's and the other plugins' commands of the game's format). For the game's own
-//!   commands the port does not answer (the game's word read runs, as without the patch), because
-//!   their arguments are read at run time by the exe's reader (`005ACCB0`), which cannot read the
-//!   expression's `0xFFFF`. xNVSE's entry jump sends every opcode to its own reader; in the port
-//!   that waits for the fix row `xnvse.extract_args` (`crate::args`). Until then, three gaps:
-//!   - A call of a game command with arguments in the new script language does not run yet, and a
-//!     string argument can crash the game. This was so before this seam: the new language's code
-//!     generation writes every argument as `0xFFFF` and an expression, which the exe's reader
-//!     misreads (a string's length read as -1). Plugins compiled with xNVSE's editor that use
-//!     parenthesised arguments on game commands carry the same bytes.
-//!   - At an optional parameter of a game command, an argument in parentheses is silently dropped
-//!     (the game's word read finds no word, so the line compiles without it and the rest of the
-//!     line); at a required one the line is refused ("missing parameter").
-//!   - A plugin command's argument in parentheses works on a statement line, not yet inside `set`,
-//!     `if` or `elseif`: there the game compiles the command on a line it builds on the stack
-//!     (`005b1570`), which leaves the opcode word (`+0x410`) unset, so the seam sees no plugin
-//!     command and the argument is refused.
+//!   ([`crate::compiler::handle_parameter_parenthesis`]). With the fix row `xnvse.extract_args`
+//!   ([`crate::args::set_game_inline`], on in `fixes`) for every command, as xNVSE: a game
+//!   command's line with an expression is then read at run time by xNVSE's reader
+//!   (`crate::args`). Without it (`vanilla`) only for an extender's command (opcode `0x1400` up:
+//!   JIP's and the other plugins' commands of the game's format): the game's own commands read
+//!   their arguments through the exe's reader (`005ACCB0`), which cannot read the expression's
+//!   `0xFFFF`, so for them the game's word read runs, as without the patch (at a required
+//!   parameter the line is refused, "missing parameter"; at an optional one the argument and the
+//!   rest of the line are dropped, as the game compiles it). A command inside `set`, `if` or
+//!   `elseif` is compiled on a line the game builds on the stack (`005b1570`), which leaves its
+//!   command word (`+0x410`) unset: seam `005B17DD` writes the opcode there first, so the rule
+//!   and the type check see the real command in both presets.
 //!
 //! Each is a seam in the translated compiler (`engine-fallout-script`'s `tesscriptcompiler.rs`),
 //! answered here, so the port's xNVSE reads a run-time script as xNVSE 6.4.9 does on every system.
@@ -51,6 +45,9 @@ use engine_core::prelude::*;
 const LINE_READER: SiteSlot = SiteSlot::new(Owner::Nvse, 0x005a_f3f0);
 /// `StandardCompile`'s word read of a parameter (`CALL 005AF5F0` at `005B1C65`).
 const PARAMETER_WORD: SiteSlot = SiteSlot::new(Owner::Nvse, 0x005b_1c65);
+/// `ReplaceVariablesAndFunctions`' call of a command's compile function on its line on the stack
+/// (`005B17DD`), whose command word (`+0x410`) the exe leaves unset.
+const NESTED_COMMAND: SiteSlot = SiteSlot::new(Owner::Nvse, 0x005b_17dd);
 /// The compiler's keyword table (`0118CB50`, 0x28-byte entries: the name, an alias, the code):
 /// the alias slots of `Long` (entry 3, code 0x13) and `Float` (entry 4, code 0x14).
 const LONG_ALIAS: u32 = 0x0118_cbcc;
@@ -69,6 +66,7 @@ pub fn install(e: &mut Engine) {
         Some(parse_next_line(e, buf, line))
     });
     e.on_site(PARAMETER_WORD, parameter_word);
+    e.on_site(NESTED_COMMAND, nested_command);
     if e.mem.is_mapped(LONG_ALIAS) && e.mem.is_mapped(FLOAT_ALIAS) {
         let string_var = crate::table::guest_str(e, b"string_var");
         let array_var = crate::table::guest_str(e, b"array_var");
@@ -84,12 +82,15 @@ fn word(w: &[u32], i: usize) -> u32 {
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Hooks_Editor.cpp: InlineExpressionHook.
 /// `005B1C65`, words (the line, the script buffer, the parameters, the index): a parameter in
 /// parentheses is compiled as an expression (answer 1: the next parameter follows) or was wrong
-/// (answer 0: the compile of the line fails); anything else is the game's word (no answer). Only
-/// for an extender's opcode (the line's `+0x410`, `0x1400` up); for the game's own commands no
-/// answer (the module's note: their run-time reader is the exe's).
+/// (answer 0: the compile of the line fails); anything else is the game's word (no answer). For
+/// every opcode with the row `xnvse.extract_args` ([`crate::args::set_game_inline`]), as xNVSE;
+/// without it only for an extender's opcode (the line's `+0x410`, `0x1400` up), as the game's
+/// own commands' run-time reader is then the exe's.
 fn parameter_word(e: &mut Engine, w: &[u32]) -> Option<u32> {
     let (line, buf, params, index) = (word(w, 0), word(w, 1), word(w, 2), word(w, 3));
-    if e.mem.u32(line + ln::OPCODE) < crate::args::FIRST_EXTENDER_OPCODE {
+    if e.mem.u32(line + ln::OPCODE) < crate::args::FIRST_EXTENDER_OPCODE
+        && !crate::args::game_inline(e)
+    {
         return None;
     }
     match compiler::handle_parameter_parenthesis(e, line, buf, params, index) {
@@ -97,6 +98,15 @@ fn parameter_word(e: &mut Engine, w: &[u32]) -> Option<u32> {
         compiler::Paren::Success => Some(1),
         compiler::Paren::SyntaxError => Some(0),
     }
+}
+
+/// `005B17DD`, words (the line on the stack, the command's opcode): the opcode written into the
+/// line's command word, which the exe leaves unset there, so a command inside `set`, `if` or
+/// `elseif` gets [`parameter_word`]'s rule and `ParseParentheses`' type check of its own command
+/// (on a statement line `CompileLine` sets it). No answer.
+fn nested_command(e: &mut Engine, w: &[u32]) -> Option<u32> {
+    e.mem.set_u32(word(w, 0) + ln::OPCODE, word(w, 1));
+    None
 }
 
 /// `ParseNextLine`'s errors (`lineError`): the next line's count dropped, the buffer's line made

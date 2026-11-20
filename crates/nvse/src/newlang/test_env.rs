@@ -37,6 +37,8 @@ pub struct TestEnv {
     pub written_vars: Option<Vec<(Vec<u8>, u8, u32)>>,
     /// The forms that are references not persistent.
     pub loose: Vec<u32>,
+    /// The row `xnvse.extract_args` (on unless a test turns it off).
+    pub game_inline: bool,
     /// The compiling script's references (name, form).
     pub refs: Vec<(Vec<u8>, u32)>,
     /// What the code generation left: the data, the editor id set, the names read.
@@ -123,6 +125,14 @@ impl Default for TestEnv {
                     "GetPos",
                     0x1006,
                     vec![p("axis", 8, false)],
+                    Default,
+                    tt::INVALID,
+                ),
+                // A game command taking a string and a number (a stand-in of the game's format).
+                cmd(
+                    "PlayFileAt",
+                    0x1104,
+                    vec![p("file", 0, false), p("value", 2, false)],
                     Default,
                     tt::INVALID,
                 ),
@@ -319,6 +329,7 @@ impl Default for TestEnv {
             script: None,
             written_vars: None,
             loose: vec![0x108],
+            game_inline: true,
             refs: Vec::new(),
             finished: None,
         }
@@ -404,6 +415,9 @@ impl Env for TestEnv {
     }
     fn command_by_opcode(&mut self, opcode: u16) -> Option<CmdInfo> {
         self.commands.iter().find(|c| c.opcode == opcode).cloned()
+    }
+    fn game_inline(&mut self) -> bool {
+        self.game_inline
     }
     fn resolve_reference(&mut self, name: &[u8], add: bool) -> Result<u16, Fail> {
         let form = if name.eq_ignore_ascii_case(b"player") {
