@@ -3298,134 +3298,140 @@ fn limb_piece(
     if parent == 0 {
         parent = limb;
     }
-    e.call(0x0047_6a80, &args![transform_b]);
-    e.call(0x0047_6a80, &args![transform_a]);
-    // The part's offset and rotation (degrees) from the body part data.
-    let offset = fn_008b6260(e, Ptr::new(part_data), Ptr::new(part_offset));
-    for word in 0..3 {
-        let value = e.mem.u32(offset.addr() + 4 * word);
-        e.mem.set_u32(transform_a + 0x24 + 4 * word, value);
-    }
-    let factor: f64 = e.global(DEGREES_TO_RADIANS);
-    let mut angles = [0.0f32; 3];
-    for (slot, source_word) in [(2usize, 2u32), (1, 1), (0, 0)] {
-        let out = angle_out + 12 * slot as u32;
-        let at = e.call(0x009f_8300, &args![part_data, out]).u32();
-        let degrees = e.mem.f32(at + 4 * source_word);
-        angles[slot] = (f64::from(degrees) * factor) as f32;
-    }
-    typed_call!(
-        leaf::FAMILY,
-        0x0041_6870,
-        leaf::point3_new(e, euler, angles[0], angles[1], angles[2])
-    );
-    let (x, y, z) = (e.mem.f32(euler), e.mem.f32(euler + 4), e.mem.f32(euler + 8));
-    e.call(0x00a5_9540, &args![transform_a, x, y, z]);
-    e.mem.set_f32(transform_a + 0x30, 1.0);
-    let parent_transform = e.call(0x0046_1130, &args![parent]).u32();
-    let composed = e
-        .call(
-            0x0062_c250,
-            &args![parent_transform, composed_part, transform_a],
-        )
-        .u32();
-    for word in 0..13 {
-        let value = e.mem.u32(composed + 4 * word);
-        e.mem.set_u32(transform_b + 4 * word, value);
-    }
-    let mut clone: u32;
-    if hide_only == 0 {
-        e.call(0x004a_d050, &args![cloning, 1.0f32]);
-        e.call(0x004a_d240, &args![cloning, 1.0f32]);
-        clone = e.call(0x00a5_d2c0, &args![limb, cloning]).u32();
-        let reference = e.call(0x0089_1350, &args![]).u32();
-        let other = e.call(0x004a_de00, &args![clone, reference]).u32();
-        let mut matched: u8 = 0;
-        if other != 0 && other != clone && e.call(0x0096_11e0, &args![other]).u32() != 0 {
-            let owner = if e.vcall(this_addr, 0x1e8, &args![]).u32() != 0 {
-                let list = e.vcall(this_addr, 0x1e8, &args![]).u32();
-                e.call(0x0040_7840, &args![list]).u32()
-            } else {
-                0
-            };
-            let head = if owner != 0 {
-                typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, owner + 0xe0))
-            } else {
-                0
-            };
-            let mut node = if head != 0 {
-                e.call(0x0050_0940, &args![head]).u32()
-            } else {
-                0
-            };
-            while node != 0 {
-                let slot = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, node));
-                if e.mem.u32(slot) == 0 || matched != 0 {
-                    break;
-                }
-                let slot = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, node));
-                let item = e.mem.u32(slot);
-                let table = e.vcall(this_addr, 0x1e8, &args![]).u32();
-                let found = e.call(0x004a_af30, &args![table, item]).u32();
-                matched = if found != 0 { e.mem.u8(found + 0xc) } else { 0 };
-                node = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, node));
-            }
-            if matched == 0 {
-                let world = e.call(0x0096_11e0, &args![other]).u32();
-                e.vcall(world, 0xe8, &args![other]);
-            }
+    // lStewieAl's Tweaks' S0199.02 (`MiscCrashFixes`, `OnDismemberHook` at `0x8B558C`): with no limb node
+    // the part's transform, the clone and its effects are passed over (the jump to `0x8B5A82`):
+    // the piece is a plain node.
+    let null_limb = limb == 0 && e.stewie(engine_core::extend::stewie::DISMEMBER_NULL_LIMB);
+    let mut clone: u32 = 0;
+    if !null_limb {
+        e.call(0x0047_6a80, &args![transform_b]);
+        e.call(0x0047_6a80, &args![transform_a]);
+        // The part's offset and rotation (degrees) from the body part data.
+        let offset = fn_008b6260(e, Ptr::new(part_data), Ptr::new(part_offset));
+        for word in 0..3 {
+            let value = e.mem.u32(offset.addr() + 4 * word);
+            e.mem.set_u32(transform_a + 0x24 + 4 * word, value);
         }
-        e.call(0x0047_6a80, &args![transform_c]);
-        e.call(0x0047_6a80, &args![transform_d]);
-        let root_transform = e.call(0x0046_1130, &args![root]).u32();
-        fn_008b42e0(e, Ptr::new(root_transform), Ptr::new(transform_c));
-        let limb_transform = e.call(0x0046_1130, &args![limb]).u32();
+        let factor: f64 = e.global(DEGREES_TO_RADIANS);
+        let mut angles = [0.0f32; 3];
+        for (slot, source_word) in [(2usize, 2u32), (1, 1), (0, 0)] {
+            let out = angle_out + 12 * slot as u32;
+            let at = e.call(0x009f_8300, &args![part_data, out]).u32();
+            let degrees = e.mem.f32(at + 4 * source_word);
+            angles[slot] = (f64::from(degrees) * factor) as f32;
+        }
+        typed_call!(
+            leaf::FAMILY,
+            0x0041_6870,
+            leaf::point3_new(e, euler, angles[0], angles[1], angles[2])
+        );
+        let (x, y, z) = (e.mem.f32(euler), e.mem.f32(euler + 4), e.mem.f32(euler + 8));
+        e.call(0x00a5_9540, &args![transform_a, x, y, z]);
+        e.mem.set_f32(transform_a + 0x30, 1.0);
+        let parent_transform = e.call(0x0046_1130, &args![parent]).u32();
         let composed = e
             .call(
                 0x0062_c250,
-                &args![transform_c, composed_limb, limb_transform],
+                &args![parent_transform, composed_part, transform_a],
             )
             .u32();
         for word in 0..13 {
             let value = e.mem.u32(composed + 4 * word);
-            e.mem.set_u32(transform_d + 4 * word, value);
+            e.mem.set_u32(transform_b + 4 * word, value);
         }
-        e.call(0x0044_0460, &args![clone, transform_d + 0x24]);
-        e.call(0x0043_fa80, &args![clone, transform_d]);
-        let scale = e.mem.f32(transform_d + 0x30);
-        e.call(0x0044_0490, &args![clone, scale]);
-        if flag_18 != 0 {
-            let effect = e.call(0x004f_b070, &args![part_data]).u32();
-            if effect != 0 {
-                let place = e.call(0x008d_6f30, &args![this]).u32();
+        if hide_only == 0 {
+            e.call(0x004a_d050, &args![cloning, 1.0f32]);
+            e.call(0x004a_d240, &args![cloning, 1.0f32]);
+            clone = e.call(0x00a5_d2c0, &args![limb, cloning]).u32();
+            let reference = e.call(0x0089_1350, &args![]).u32();
+            let other = e.call(0x004a_de00, &args![clone, reference]).u32();
+            let mut matched: u8 = 0;
+            if other != 0 && other != clone && e.call(0x0096_11e0, &args![other]).u32() != 0 {
+                let owner = if e.vcall(this_addr, 0x1e8, &args![]).u32() != 0 {
+                    let list = e.vcall(this_addr, 0x1e8, &args![]).u32();
+                    e.call(0x0040_7840, &args![list]).u32()
+                } else {
+                    0
+                };
+                let head = if owner != 0 {
+                    typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, owner + 0xe0))
+                } else {
+                    0
+                };
+                let mut node = if head != 0 {
+                    e.call(0x0050_0940, &args![head]).u32()
+                } else {
+                    0
+                };
+                while node != 0 {
+                    let slot = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, node));
+                    if e.mem.u32(slot) == 0 || matched != 0 {
+                        break;
+                    }
+                    let slot = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, node));
+                    let item = e.mem.u32(slot);
+                    let table = e.vcall(this_addr, 0x1e8, &args![]).u32();
+                    let found = e.call(0x004a_af30, &args![table, item]).u32();
+                    matched = if found != 0 { e.mem.u8(found + 0xc) } else { 0 };
+                    node = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, node));
+                }
+                if matched == 0 {
+                    let world = e.call(0x0096_11e0, &args![other]).u32();
+                    e.vcall(world, 0xe8, &args![other]);
+                }
+            }
+            e.call(0x0047_6a80, &args![transform_c]);
+            e.call(0x0047_6a80, &args![transform_d]);
+            let root_transform = e.call(0x0046_1130, &args![root]).u32();
+            fn_008b42e0(e, Ptr::new(root_transform), Ptr::new(transform_c));
+            let limb_transform = e.call(0x0046_1130, &args![limb]).u32();
+            let composed = e
+                .call(
+                    0x0062_c250,
+                    &args![transform_c, composed_limb, limb_transform],
+                )
+                .u32();
+            for word in 0..13 {
+                let value = e.mem.u32(composed + 4 * word);
+                e.mem.set_u32(transform_d + 4 * word, value);
+            }
+            e.call(0x0044_0460, &args![clone, transform_d + 0x24]);
+            e.call(0x0043_fa80, &args![clone, transform_d]);
+            let scale = e.mem.f32(transform_d + 0x30);
+            e.call(0x0044_0490, &args![clone, scale]);
+            if flag_18 != 0 {
                 let effect = e.call(0x004f_b070, &args![part_data]).u32();
-                let mut words = vec![effect, 0, 0, place];
-                for word in 0..3 {
-                    words.push(e.mem.u32(transform_b + 0x24 + 4 * word));
+                if effect != 0 {
+                    let place = e.call(0x008d_6f30, &args![this]).u32();
+                    let effect = e.call(0x004f_b070, &args![part_data]).u32();
+                    let mut words = vec![effect, 0, 0, place];
+                    for word in 0..3 {
+                        words.push(e.mem.u32(transform_b + 0x24 + 4 * word));
+                    }
+                    for word in 0..9 {
+                        words.push(e.mem.u32(transform_b + 4 * word));
+                    }
+                    e.call(0x009a_c9c0, &words);
                 }
-                for word in 0..9 {
-                    words.push(e.mem.u32(transform_b + 4 * word));
+                if e.call(0x0040_7840, &args![part_data]).u32() != 0
+                    && fn_008b6220(e, Ptr::new(part_data)) > 0
+                {
+                    let actor_scale = e.call(0x0056_7400, &args![this]).f64();
+                    let part_scale = e.call(0x0064_47b0, &args![part_data]).f64();
+                    let scale = (part_scale * actor_scale) as f32;
+                    let count = fn_008b6220(e, Ptr::new(part_data));
+                    let place = e.call(0x008d_6f30, &args![this]).u32();
+                    let object = e.call(0x0040_7840, &args![part_data]).u32();
+                    e.call(
+                        0x004f_a6f0,
+                        &args![object, place, transform_b + 0x24, u32::from(count), scale],
+                    );
                 }
-                e.call(0x009a_c9c0, &words);
             }
-            if e.call(0x0040_7840, &args![part_data]).u32() != 0
-                && fn_008b6220(e, Ptr::new(part_data)) > 0
-            {
-                let actor_scale = e.call(0x0056_7400, &args![this]).f64();
-                let part_scale = e.call(0x0064_47b0, &args![part_data]).f64();
-                let scale = (part_scale * actor_scale) as f32;
-                let count = fn_008b6220(e, Ptr::new(part_data));
-                let place = e.call(0x008d_6f30, &args![this]).u32();
-                let object = e.call(0x0040_7840, &args![part_data]).u32();
-                e.call(
-                    0x004f_a6f0,
-                    &args![object, place, transform_b + 0x24, u32::from(count), scale],
-                );
-            }
+            e.call(0x004a_d270, &args![cloning]);
+        } else {
+            clone = fn_008b3fe0(e, this, part_index, parent, transform_b, flag_18 != 0);
         }
-        e.call(0x004a_d270, &args![cloning]);
-    } else {
-        clone = fn_008b3fe0(e, this, part_index, parent, transform_b, flag_18 != 0);
     }
     if clone == 0 {
         clone = new_limb_node(e);
@@ -3435,8 +3441,14 @@ fn limb_piece(
         let process = e.get(this, Actor::pCurrentProcess).addr();
         e.vcall(process, 0x6cc, &args![part_index, handle]);
     }
-    if e.call(0x0068_38b0, &args![limb]).u32() != 0 && e.call(0x0045_3470, &args![limb]).u32() != 0
+    // S0199.02 at `0x8B5B13` (Tweaks' `GetCollisionObjectNullChecked`): no limb has no collision object.
+    let limb_collision = if limb == 0 && e.stewie(engine_core::extend::stewie::DISMEMBER_NULL_LIMB)
     {
+        0
+    } else {
+        e.call(0x0068_38b0, &args![limb]).u32()
+    };
+    if limb_collision != 0 && e.call(0x0045_3470, &args![limb]).u32() != 0 {
         let mut child_index = 0;
         while child_index < e.call(0x0043_b480, &args![limb]).u32() {
             let node = e.call(0x0043_b4a0, &args![limb, child_index]).u32();
@@ -3531,7 +3543,10 @@ fn limb_piece(
             }
         }
     }
-    e.call(0x0045_0f90, &args![limb, 1u32]);
+    // S0199.02 at `0x8B606B` (Tweaks' `SetAppCulledNullChecked`): no limb is not hidden.
+    if !(limb == 0 && e.stewie(engine_core::extend::stewie::DISMEMBER_NULL_LIMB)) {
+        e.call(0x0045_0f90, &args![limb, 1u32]);
+    }
     let process = e.get(this, Actor::pCurrentProcess).addr();
     if hide_only != 0 && process != 0 && flag_1c == 0 {
         e.vcall(
@@ -9558,6 +9573,48 @@ mod tests {
             );
         })
         .1
+    }
+
+    /// lStewieAl's Tweaks' row S0199.02: a part whose limb node the process does not have. Row
+    /// off, the exe clones the missing node, asks its collision object and hides it (each a read
+    /// through 0 in the game); row on, the transform, the clone and its effects are passed over and
+    /// the piece is a plain node (`00aa13e0` a second time), with no collision asked of the limb
+    /// and no hide call for it. With the limb there, row on makes the calls of row off.
+    #[test]
+    fn s0199_02_a_part_with_no_limb_node() {
+        let mut ordinary = vec![];
+        for on in [false, true] {
+            let mut w = limb_stage();
+            w.s.e
+                .set_stewie(engine_core::extend::stewie::DISMEMBER_NULL_LIMB, on);
+            ordinary.push(limb_piece_run(&mut w, 0, 0, 1, 0));
+            let mut w = limb_stage();
+            w.s.e
+                .set_stewie(engine_core::extend::stewie::DISMEMBER_NULL_LIMB, on);
+            w.s.answer(w.process, 0x6d0, 0);
+            let log = limb_piece_run(&mut w, 0, 0, 1, 0);
+            let cloned = args_of(&log, 0x00a5_d2c0);
+            let collision = args_of(&log, 0x0068_38b0);
+            let hidden = args_of(&log, 0x0045_0f90);
+            if on {
+                assert!(cloned.is_empty(), "no clone");
+                assert!(args_of(&log, 0x0047_6a80).is_empty(), "no transform built");
+                assert!(args_of(&log, 0x004f_b070).is_empty(), "no part effects");
+                assert_eq!(
+                    args_of(&log, 0x00aa_13e0).len(),
+                    2,
+                    "the group and a plain node"
+                );
+                assert!(collision.is_empty());
+                assert!(!hidden.contains(&vec![0, 1]));
+                assert!(w.slot_calls_on(w.group).contains(&(0xdc, vec![w.group, 1])));
+            } else {
+                assert_eq!(cloned, vec![vec![0, cloned[0][1]]]);
+                assert_eq!(collision, vec![vec![0]]);
+                assert!(hidden.contains(&vec![0, 1]));
+            }
+        }
+        assert_eq!(ordinary[0], ordinary[1], "row on: the calls of the row off");
     }
 
     #[test]
