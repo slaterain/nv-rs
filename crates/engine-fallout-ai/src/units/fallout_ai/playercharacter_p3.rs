@@ -9512,8 +9512,9 @@ mod tests {
         e.mem.set_u32(changes + 0xc, 0x4100_0000);
         e.register_double(EXTRA_GET_BY_TYPE, move |_, a| {
             int(match a[1] {
-                EXTRA_CONTAINER_CHANGES => changes,
-                EXTRA_AMMO if a[0] == first => remembered,
+                // xNVSE's kExtraData_ContainerChanges and kExtraData_Ammo, as numbers (not the seam's constants).
+                0x15 => changes,
+                0x6e if a[0] == first => remembered,
                 _ => 0,
             })
         });
@@ -9526,10 +9527,10 @@ mod tests {
             })
         });
         e.mem
-            .set_u8(MENU_VISIBILITY + INVENTORY_MENU_ID, u8::from(tab_open));
+            .set_u8(0x011f_308f + 1002, u8::from(tab_open));
         let menu = e.mem.alloc(0x100);
-        e.mem.set_u32(menu + 0x84, INVENTORY_FILTER_AMMO);
-        e.mem.set_u32(INVENTORY_MENU, menu);
+        e.mem.set_u32(menu + 0x84, 4);
+        e.mem.set_u32(0x011d_9ea4, menu);
         e.set_stewie(engine_core::extend::stewie::HOTKEY_AMMO_NEEDS_ROUNDS, on);
         let log = logged(&mut e, |e| {
             e.call(
@@ -9633,7 +9634,7 @@ mod tests {
         let changes = e.mem.alloc(0x10);
         e.mem.set_u32(changes + 0xc, 0x4100_0000);
         e.register_double(EXTRA_GET_BY_TYPE, move |_, a| {
-            int(if a[1] == EXTRA_CONTAINER_CHANGES {
+            int(if a[1] == 0x15 {
                 changes
             } else {
                 0
