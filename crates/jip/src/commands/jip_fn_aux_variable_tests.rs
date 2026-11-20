@@ -97,7 +97,7 @@ pub(crate) fn setup() -> Engine {
     for (i, f) in [REF, BASE, OTHER, ACTOR].iter().enumerate() {
         set_ref(&mut e, i as u16 + 1, *f);
     }
-    e.register(ADD_CHANGE_FN, |_, w| {
+    e.register_words(ADD_CHANGE_FN, 4, |_, w| {
         record(ADD_CHANGE_FN, w);
         Ret::default()
     });

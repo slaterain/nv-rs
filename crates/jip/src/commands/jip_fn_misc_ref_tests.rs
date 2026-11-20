@@ -397,7 +397,7 @@ mod lane_e {
                 ..Ret::default()
             }
         });
-        e.register(FLAGS_TEST_FN, |e, w| {
+        e.register_words(FLAGS_TEST_FN, 2, |e, w| {
             CALLS.with(|c| c.borrow_mut().push((FLAGS_TEST_FN, w.to_vec())));
             Ret {
                 eax: e.mem.u32(FLAGS_ANSWER),

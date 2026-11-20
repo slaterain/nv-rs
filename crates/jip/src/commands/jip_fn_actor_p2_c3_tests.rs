@@ -106,7 +106,7 @@ fn setup() -> Engine {
     answer_word!(e, DONE_PLAYING_FN, A_DONE);
     answer_word!(e, GET_IDLE_TO_PLAY_FN, A_PICK);
     answer_word!(e, PLAY_IDLE_FN, A_ZERO);
-    e.register(EVALUATE_FN, |e, w| {
+    e.register_words(EVALUATE_FN, 5, |e, w| {
         record(EVALUATE_FN, w);
         // A `bool` in `al`: the bits above it are whatever the exe left there.
         eax(0x1234_5600 | u32::from(e.mem.u8(w[0])))

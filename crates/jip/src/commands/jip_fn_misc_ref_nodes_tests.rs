@@ -21,7 +21,7 @@ const LOCALS: u32 = LIST + 0x100;
 fn setup() -> Engine {
     let mut e = scene_engine();
     e.mem.set_f32(SCALE_AT, 1.0);
-    e.register(GET_SCALE, |e, _| {
+    e.register_words(GET_SCALE, 1, |e, _| {
         let n = e.mem.u32(SCALE_CALLS);
         e.mem.set_u32(SCALE_CALLS, n + 1);
         Ret {

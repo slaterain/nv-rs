@@ -55,7 +55,7 @@ fn setup() -> Engine {
     set_ref(&mut e, R_MISC, MISC);
     e.mem.set_u32(0x011d_f1a8, QUEUE_IFACE);
     e.mem.set_u32(QUEUE_IFACE + 8, QUEUE);
-    e.register(0x0090_54a0, |e, w| {
+    e.register_words(0x0090_54a0, 2, |e, w| {
         let words: Vec<u32> = (0..8).map(|i| e.mem.u32(w[1] + 4 * i)).collect();
         record(0x0090_54a0, &[&[w[0]][..], &words[..]].concat());
         Ret::default()
@@ -140,7 +140,7 @@ fn do_fire_weapon_ex_fires_with_the_entries_cleared() {
     let mut e = setup();
     e.mem.set_u32(PROCESS + 0x114, 0xaaaa);
     e.mem.set_u32(PROCESS + 0x118, 0xbbbb);
-    e.register(0x0052_3150, |e, w| {
+    e.register_words(0x0052_3150, 2, |e, w| {
         record(
             0x0052_3150,
             &[

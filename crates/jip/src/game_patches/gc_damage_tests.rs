@@ -173,13 +173,13 @@ fn world_as(install: bool) -> Engine {
         e.mem.set_u32(LOG + 0xc, a[0]);
         Ret::default()
     });
-    e.register(FOLLOWER_BARK, |e, a| {
+    e.register_words(FOLLOWER_BARK, 2, |e, a| {
         bump(e, LOG + 0x10);
         e.mem.set_u32(LOG + 0x14, a[0]);
         e.mem.set_u32(LOG + 0x18, a[1]);
         Ret::default()
     });
-    e.register(0x0041_0220, |e, a| {
+    e.register_words(0x0041_0220, 2, |e, a| {
         e.mem.u32(a[0] + 0x200 + a[1] * 4).into_ret()
     });
     e.register(RUN_SCRIPT_EFFECT, |e, a| {

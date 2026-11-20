@@ -191,17 +191,17 @@ fn setup() -> Engine {
         LEVEL_UP_PAGE_FN,
         PURGE_FN
     );
-    e.register(READ_FILE_FN, |e, w| {
+    e.register_words(READ_FILE_FN, 2, |e, w| {
         record(READ_FILE_FN, w);
         let path = nvse::table::guest_text(e, w[1]);
         eax(if path == b"good.xml" { t(60) } else { 0 })
     });
-    e.register(RENDER_FN, |e, w| {
+    e.register_words(RENDER_FN, 4, |e, w| {
         record(RENDER_FN, w);
         let name = nvse::table::guest_text(e, w[2]);
         eax(if name == b"Template" { t(61) } else { 0 })
     });
-    e.register(LEVEL_UP_CREATE_FN, |e, w| {
+    e.register_words(LEVEL_UP_CREATE_FN, 0, |e, w| {
         record(LEVEL_UP_CREATE_FN, w);
         e.mem.set_u32(0x011d_9fdc, MENUS + 0x3000);
         eax(0)
@@ -212,7 +212,7 @@ fn setup() -> Engine {
         e.mem.set_u32(ALLOC, at + w[0].next_multiple_of(0x10));
         eax(at)
     });
-    e.register(REFR_INIT_FN, |e, w| {
+    e.register_words(REFR_INIT_FN, 1, |e, w| {
         let n = e.mem.u32(ALLOC + 4) + 1;
         e.mem.set_u32(ALLOC + 4, n);
         e.mem.set_u32(w[0] + 0xc, 0xff00_0000 + n);
@@ -760,7 +760,7 @@ fn trait_name_over_a_mebibyte_goes_cut_to_jips_buffer() {
 fn xml_name_over_a_mebibyte_goes_cut_to_jips_buffer() {
     let mut e = guarded_tree();
     // An XML file name: 127 bytes.
-    e.register(READ_FILE_FN, |e, w| {
+    e.register_words(READ_FILE_FN, 2, |e, w| {
         record(
             READ_FILE_FN,
             &[nvse::table::guest_text(e, w[1]).len() as u32],
@@ -776,7 +776,7 @@ fn xml_name_over_a_mebibyte_goes_cut_to_jips_buffer() {
 fn template_name_over_a_mebibyte_goes_cut_to_jips_buffer() {
     let mut e = guarded_tree();
     // A template's name: 255 bytes.
-    e.register(RENDER_FN, |e, w| {
+    e.register_words(RENDER_FN, 4, |e, w| {
         record(RENDER_FN, &[nvse::table::guest_text(e, w[2]).len() as u32]);
         eax(0)
     });
@@ -1165,7 +1165,7 @@ fn level_up_menu_with_points() {
     assert_eq!(calls_to(LEVEL_UP_PAGE_FN), vec![vec![m, 0]]);
     // No menu made: only the create.
     let mut e = setup();
-    e.register(LEVEL_UP_CREATE_FN, |_, w| {
+    e.register_words(LEVEL_UP_CREATE_FN, 0, |_, w| {
         record(LEVEL_UP_CREATE_FN, w);
         eax(0)
     });
@@ -1440,7 +1440,7 @@ fn inject_component_with_the_uio_row_on_or_off() {
     tree(&mut e);
     let inject = |e: &mut Engine, path: &[u8], xml: &[u8]| call(e, 0x260a, &[s(path), s(xml)]).1;
     // `Menu::CompressAndStoreXML(name, text)`: the text as the game's storage.
-    e.register(COMPRESS_FN, |e, w| {
+    e.register_words(COMPRESS_FN, 2, |e, w| {
         record(COMPRESS_FN, w);
         let text = nvse::table::guest_text(e, w[1]);
         let data = e.mem.alloc(text.len() as u32 + 1);
@@ -1450,7 +1450,7 @@ fn inject_component_with_the_uio_row_on_or_off() {
         e.mem.set_u32(storage + 4, data);
         eax(storage)
     });
-    e.register(READ_FILE_FN, |e, w| {
+    e.register_words(READ_FILE_FN, 2, |e, w| {
         record(READ_FILE_FN, w);
         let path = nvse::table::guest_text(e, w[1]);
         if path != b"jip_temp.xml" {
@@ -1463,11 +1463,11 @@ fn inject_component_with_the_uio_row_on_or_off() {
     // UIO off: JIP writes `jip_temp.xml` and reads it with `Tile::ReadFile`; here the text is
     // cleaned by the game's `CompressAndStoreXML`, entered in `Menu::XMLHash` under that name for
     // the one `ReadFile` (whose `GetXML` finds it there), then taken out; no file.
-    e.register(XML_SET_AT_FN, |_, w| {
+    e.register_words(XML_SET_AT_FN, 3, |_, w| {
         record(XML_SET_AT_FN, w);
         eax(0)
     });
-    e.register(XML_REMOVE_AT_FN, |_, w| {
+    e.register_words(XML_REMOVE_AT_FN, 2, |_, w| {
         record(XML_REMOVE_AT_FN, w);
         eax(1)
     });
@@ -1610,7 +1610,7 @@ fn colors(e: &mut Engine, n: u32) -> Vec<u32> {
         record(SET_COLOR_FN, w);
         eax(0)
     });
-    e.register(REFRESH_COLOR_FN, |_, w| {
+    e.register_words(REFRESH_COLOR_FN, 3, |_, w| {
         record(REFRESH_COLOR_FN, w);
         eax(0)
     });
@@ -1670,7 +1670,7 @@ fn pipboy(e: &mut Engine) {
     e.mem.set_u32(IM + 0x174, PIPBOY);
     e.mem.set_u32(PC + 0x88, CASTER_VT);
     e.mem.set_u32(CASTER_VT, CAST_FN);
-    e.register(IS_TARGET_FN, |e, w| {
+    e.register_words(IS_TARGET_FN, 3, |e, w| {
         record(IS_TARGET_FN, w);
         eax(0xabcd_ef00 | u32::from(e.mem.u8(SPELL + 0x80)))
     });
@@ -1678,11 +1678,11 @@ fn pipboy(e: &mut Engine) {
         record(CAST_FN, w);
         eax(0)
     });
-    e.register(DISPEL_FN, |_, w| {
+    e.register_words(DISPEL_FN, 4, |_, w| {
         record(DISPEL_FN, w);
         eax(0)
     });
-    e.register(SHOW_LIGHT_FN, |_, w| {
+    e.register_words(SHOW_LIGHT_FN, 4, |_, w| {
         record(SHOW_LIGHT_FN, w);
         eax(0)
     });
@@ -1776,7 +1776,7 @@ fn string_ui_dimensions() {
     let mut e = setup();
     c2_locals(&mut e, 3);
     e.mem.set_u32(0x011f_33f8, FONTS);
-    e.register(DIMS_FN, |e, w| {
+    e.register_words(DIMS_FN, 6, |e, w| {
         record(DIMS_FN, w);
         let text = nvse::table::guest_text(e, w[2]);
         assert_eq!(text, b"Hello");
@@ -1873,7 +1873,7 @@ fn message_tokens() {
 #[test]
 fn message_ex_alt_queues() {
     let mut e = setup();
-    e.register(QUEUE_FN, |e, w| {
+    e.register_words(QUEUE_FN, 6, |e, w| {
         record(QUEUE_FN, w);
         // The texts on the stack: the message, a text icon (not the exe's), the sound.
         let texts: Vec<Vec<u8>> = [w[0], w[2], w[3]]
@@ -1976,11 +1976,11 @@ fn c2_unreadable_arguments_and_no_interface_manager() {
     let mut e = setup();
     c2_locals(&mut e, 3);
     e.mem.set_u32(0x011f_33f8, FONTS);
-    e.register(DIMS_FN, |_, w| {
+    e.register_words(DIMS_FN, 6, |_, w| {
         record(DIMS_FN, w);
         eax(w[1])
     });
-    e.register(QUEUE_FN, |_, w| {
+    e.register_words(QUEUE_FN, 6, |_, w| {
         record(QUEUE_FN, w);
         eax(1)
     });
@@ -2525,7 +2525,7 @@ fn message_ex_alt_is_marked_as_a_plugins_call() {
         static MARKED: std::cell::RefCell<Vec<bool>> = const { std::cell::RefCell::new(Vec::new()) };
     }
     let mut e = setup();
-    e.register(QUEUE_FN, |e, _| {
+    e.register_words(QUEUE_FN, 6, |e, _| {
         MARKED.with(|m| m.borrow_mut().push(e.caller_marked(PLUGIN_UI_MESSAGE)));
         eax(1)
     });

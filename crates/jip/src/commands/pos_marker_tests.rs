@@ -15,7 +15,7 @@ fn record(addr: u32, w: &[u32]) {
 /// `TESObjectREFR`'s vtable (`0102F55C`) and returns the reference; `SetTemporary` sets flag
 /// `0x4000` in `+8`.
 fn stand_ins(e: &mut Engine) {
-    e.register(REFR_CONSTRUCTOR, |e, w| {
+    e.register_words(REFR_CONSTRUCTOR, 1, |e, w| {
         record(REFR_CONSTRUCTOR, w);
         e.mem.set_u32(w[0], 0x0102_f55c);
         e.mem.set_u32(w[0] + 8, 0);
@@ -24,7 +24,7 @@ fn stand_ins(e: &mut Engine) {
             ..Ret::default()
         }
     });
-    e.register(SET_TEMPORARY, |e, w| {
+    e.register_words(SET_TEMPORARY, 1, |e, w| {
         record(SET_TEMPORARY, w);
         let flags = e.mem.u32(w[0] + 8);
         e.mem.set_u32(w[0] + 8, flags | 0x4000);
@@ -77,7 +77,7 @@ fn not_installed_makes_no_marker() {
     let mut e = crate::test_support::engine();
     crate::install_as(&mut e, false);
     CALLS.with(|c| c.borrow_mut().clear());
-    e.register(0x00aa_3e40, |_, w| {
+    e.register_words(0x00aa_3e40, 2, |_, w| {
         record(0x00aa_3e40, w);
         Ret::default()
     });

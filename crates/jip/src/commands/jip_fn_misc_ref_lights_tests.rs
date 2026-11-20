@@ -61,11 +61,11 @@ fn setup() -> (Engine, u32, u32) {
         rec(REMOVE_OBJECT, w);
         eax(0)
     });
-    e.register(CREATE, |e, w| {
+    e.register_words(CREATE, 0, |e, w| {
         rec(CREATE, w);
         eax(object(e, POINT_LIGHT_VTABLE, None))
     });
-    e.register(ADD_STRING, |e, w| {
+    e.register_words(ADD_STRING, 1, |e, w| {
         let text = nvse::table::guest_text(e, w[0]);
         eax(fixed(e, &text))
     });
@@ -208,7 +208,7 @@ fn attach_light_needs_a_node_a_light_form_and_a_light() {
     assert!(calls().is_empty());
     assert_eq!(attach(&mut e, refr, b"Lamp", 2, &[]), 0.0, "not a light");
     assert!(calls().is_empty());
-    e.register(CREATE, |_, w| {
+    e.register_words(CREATE, 0, |_, w| {
         rec(CREATE, w);
         eax(0)
     });

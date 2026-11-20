@@ -121,7 +121,7 @@ fn g39_answers_as_jips_bytes() {
 fn g40_the_npc_model_path_is_not_stored() {
     let mut e = world_as(true);
     e.map(LOG & !0xfff, 0x1000);
-    e.register(SET_MODEL_STUB, |e, a| {
+    e.register_words(SET_MODEL_STUB, 2, |e, a| {
         e.mem.set_u32(LOG, a[0]);
         e.mem.set_u32(LOG + 4, a[1]);
         Ret {
@@ -371,12 +371,12 @@ fn answer(eax: u32) -> Ret {
 #[test]
 fn g110_answers_the_combat_reaction() {
     let mut e = part2_world();
-    e.register(0x0048_c1b0, |e, a| {
+    e.register_words(0x0048_c1b0, 2, |e, a| {
         record(e, &[a[0], a[1]]);
         answer(2)
     });
     // The exe's modifier walk (`0x48BF50`, what `0x5FD3B0` calls) answers otherwise.
-    e.register(0x0048_bf50, |_, _| answer(0x55));
+    e.register_words(0x0048_bf50, 2, |_, _| answer(0x55));
     assert_eq!(e.site(FACTION_REACTION.addr(), &[FACTION, OTHER]), Some(2));
     assert_eq!(asked(&e), vec![FACTION + 0x24, OTHER]);
     assert_eq!(faction_reaction(&mut e, &[0, OTHER]), Some(2));
@@ -637,7 +637,7 @@ fn d01_drops_the_moved_mark_in_a_flagged_cell() {
 #[test]
 fn part2_handlers_are_at_their_rows() {
     let mut e = part2_world();
-    e.register(0x0048_c1b0, |_, _| answer(9));
+    e.register_words(0x0048_c1b0, 2, |_, _| answer(9));
     form_map(&mut e, &[0x0300_0042]);
     e.register(FORM_FILE, |_, _| answer(FILE));
     e.register(RESOLVE_FORM_ID, resolve_to_mod_3);

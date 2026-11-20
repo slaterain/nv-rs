@@ -582,7 +582,7 @@ fn push_scene(e: &mut Engine) {
     e.mem.set_f32(0x011c_e664, 1.0);
     e.mem.set_f32(0x011c_f9c0, 2.0);
     e.mem.set_f32(0x011c_fa20, 3.0);
-    e.register(ACTOR_VALUE_FN, |_, w| {
+    e.register_words(ACTOR_VALUE_FN, 2, |_, w| {
         record(ACTOR_VALUE_FN, w);
         Ret {
             st0: 6.0,
@@ -956,7 +956,7 @@ fn sound_scene(e: &mut Engine) -> (u32, u32) {
     let loaded = AREA + 0x7800;
     e.mem.set_u32(loaded + 0x14, root);
     e.mem.set_u32(PLAIN + 0x64, loaded);
-    e.register(INIT_SOUND_FN, |e, w| {
+    e.register_words(INIT_SOUND_FN, 4, |e, w| {
         record(INIT_SOUND_FN, w);
         assert_eq!(
             [e.mem.u32(w[1]), e.mem.u32(w[1] + 4), e.mem.u32(w[1] + 8)],
@@ -1024,7 +1024,7 @@ fn ground_scene(e: &mut Engine) {
     set4(e, ACTOR + 0x30, [1.0, 2.0, 3.0, 0.0]);
     e.mem.set_u32(AREA + 0xf500, LAND);
     standin!(e, GET_LAND_FN, AREA + 0xf500);
-    e.register(COORD_FN, |e, w| {
+    e.register_words(COORD_FN, 4, |e, w| {
         record(COORD_FN, w);
         // The quadrant word (+0x18) and the vertex word (+0x3C): JIP takes their low byte and
         // low 16 bits.
@@ -1123,7 +1123,7 @@ fn backup_scene(e: &mut Engine) -> u32 {
     standin!(e, SLOT_28, AREA + 0xf610);
     e.mem.set_u32(ACTOR_VT + 0x2f4, SET_PACKAGE);
     standin!(e, SET_PACKAGE, AREA + 0xf610);
-    e.register(BACKUP_CTOR_FN, |e, w| {
+    e.register_words(BACKUP_CTOR_FN, 1, |e, w| {
         record(BACKUP_CTOR_FN, w);
         e.mem.set_u32(w[0] + 0x1c, 0x10);
         e.mem.set_u32(w[0] + 0x80, 0);
@@ -1237,8 +1237,10 @@ fn session_time_starts_at_the_deferred_init_message() {
     use nvse::plugins::{dispatch, msg};
     let mut e = setup();
     // The same message makes JIP's position marker: its two game calls as stand-ins.
-    e.register(super::super::pos_marker::REFR_CONSTRUCTOR, |_, w| eax(w[0]));
-    e.register(super::super::pos_marker::SET_TEMPORARY, |_, _| eax(0));
+    e.register_words(super::super::pos_marker::REFR_CONSTRUCTOR, 1, |_, w| {
+        eax(w[0])
+    });
+    e.register_words(super::super::pos_marker::SET_TEMPORARY, 1, |_, _| eax(0));
     standin!(&mut e, TICKS_FN, A_TICKS);
     e.mem.set_u32(A_TICKS, 5000);
     dispatch(&mut e, msg::DEFERRED_INIT, 0, 0);

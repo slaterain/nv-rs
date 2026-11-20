@@ -73,7 +73,7 @@ fn setup() -> Engine {
     e.register(TTC_UPDATE, |e, w| with_data(e, TTC_UPDATE, w));
     e.register(REMOVE_OBJECT, |_, w| plain(REMOVE_OBJECT, w));
     e.register(DEACTIVATE, |_, w| plain(DEACTIVATE, w));
-    e.register(ADD_STRING, |e, w| {
+    e.register_words(ADD_STRING, 1, |e, w| {
         // Records the text's bytes (up to 0x40) as words after the argument.
         let mut words = w.to_vec();
         let text: Vec<u8> = (0..0x40)
@@ -91,7 +91,7 @@ fn setup() -> Engine {
             ..Ret::default()
         }
     });
-    e.register(ACTIVATE, |e, w| {
+    e.register_words(ACTIVATE, 7, |e, w| {
         CALLS.with(|c| c.borrow_mut().push((ACTIVATE, w.to_vec())));
         Ret {
             eax: e.mem.u32(ACTIVATE_ANSWER),

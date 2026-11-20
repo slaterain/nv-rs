@@ -301,12 +301,12 @@ fn setup() -> Engine {
         );
         eax(u32::from(a == b))
     });
-    e.register(REFRESH_FN, |_, w| {
+    e.register_words(REFRESH_FN, 2, |_, w| {
         CALLS.with(|c| c.borrow_mut().push((REFRESH_FN, w.to_vec())));
         eax(0)
     });
-    e.register(0x0071_b160, |_, _| eax(CONSOLE));
-    e.register(0x0071_d0a0, |e, w| {
+    e.register_words(0x0071_b160, 1, |_, _| eax(CONSOLE));
+    e.register_words(0x0071_d0a0, 3, |e, w| {
         let line = nvse::table::guest_text(e, w[1]);
         PRINTED.with(|p| p.borrow_mut().push(line));
         eax(0)

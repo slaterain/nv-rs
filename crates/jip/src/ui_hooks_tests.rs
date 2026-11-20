@@ -343,7 +343,7 @@ fn an_actor_not_targetable() {
 #[test]
 fn a_terminals_own_model() {
     let mut e = world();
-    e.register(0x007f_fe00, |e, _| {
+    e.register_words(0x007f_fe00, 0, |e, _| {
         e.mem.set_u32(AREA + 0xf010, e.mem.u32(AREA + 0xf010) + 1);
         Ret::default()
     });

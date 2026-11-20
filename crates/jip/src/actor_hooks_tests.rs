@@ -79,7 +79,7 @@ fn world_as(installed: bool) -> Engine {
     e.mem.set_u32(NODES + 4, NODES + 8);
     e.mem.set_u32(NODES + 8, OTHER);
     e.mem.set_u32(HEAP, HEAP + 0x10);
-    e.register(0x00aa_3e40, |e, _| {
+    e.register_words(0x00aa_3e40, 2, |e, _| {
         let at = e.mem.u32(HEAP);
         e.mem.set_u32(HEAP, at + 0x80);
         Ret {

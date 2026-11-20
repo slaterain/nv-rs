@@ -56,11 +56,11 @@ fn the_time_stamp() {
         "console closed: no print"
     );
     // Console open: the text printed (as the format).
-    e.register(0x0071_b160, |_, _| Ret {
+    e.register_words(0x0071_b160, 1, |_, _| Ret {
         eax: 0x0300_f000,
         ..Ret::default()
     });
-    e.register(0x0071_d0a0, |e, w| {
+    e.register_words(0x0071_d0a0, 3, |e, w| {
         let t = nvse::table::guest_text(e, w[1]);
         CALLS.with(|c| {
             c.borrow_mut()
@@ -557,7 +557,7 @@ fn files_and_folders_found() {
     e.mem.set_u32(ARCHIVE_NODE, ARCHIVE);
     e.mem.set_u32(ARCHIVE_NODE + 4, 0);
     e.mem.set_u16(ARCHIVE + 0x180, 1);
-    e.register(HASH_PATH_FN, |e, w| {
+    e.register_words(HASH_PATH_FN, 3, |e, w| {
         let path = nvse::table::guest_text(e, w[0]);
         CALLS.with(|c| {
             c.borrow_mut()
@@ -567,7 +567,7 @@ fn files_and_folders_found() {
         e.mem.set_u32(w[2], 0x2222);
         Ret::default()
     });
-    e.register(ARCHIVE_HAS_FILE_FN, |e, w| {
+    e.register_words(ARCHIVE_HAS_FILE_FN, 6, |e, w| {
         let path = nvse::table::guest_text(e, w[5]);
         let hit = w[0] == ARCHIVE
             && e.mem.u32(w[1]) == 0x1111

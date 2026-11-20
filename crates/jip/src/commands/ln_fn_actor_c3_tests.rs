@@ -119,7 +119,7 @@ fn setup() -> Engine {
     e.register(CALL_IS_CHAR, |_, _| eax(0x101));
     e.register(CALL_NOT_CHAR, |_, _| eax(0x100));
     // `SetFlagBit(mask, set, 1)` on the base data: the flags word +4 of it changed.
-    e.register(SET_FLAG_BIT_FN, |e, w| {
+    e.register_words(SET_FLAG_BIT_FN, 4, |e, w| {
         record(SET_FLAG_BIT_FN, w);
         let f = e.mem.u32(w[0] + 4);
         e.mem.set_u32(
@@ -132,12 +132,12 @@ fn setup() -> Engine {
         );
         eax(0)
     });
-    e.register(PLAYER_SET_RACE_FN, |_, w| {
+    e.register_words(PLAYER_SET_RACE_FN, 3, |_, w| {
         record(PLAYER_SET_RACE_FN, w);
         eax(0)
     });
     // `CopyAppearance`: the copied face, hair, eyes and head parts (as the exe writes them).
-    e.register(COPY_APPEARANCE_FN, |e, w| {
+    e.register_words(COPY_APPEARANCE_FN, 2, |e, w| {
         record(COPY_APPEARANCE_FN, w);
         let dest = w[0];
         // What the destination's race is when the copy runs.
@@ -156,7 +156,7 @@ fn setup() -> Engine {
         e.mem.set_u32(dest + 0x1f0, w[1]);
         eax(0)
     });
-    e.register(RESET_3D_FN, |e, w| {
+    e.register_words(RESET_3D_FN, 1, |e, w| {
         record(RESET_3D_FN, w);
         // Whether the EGT setting is on when the reset runs.
         e.mem.set_u8(EGT_AT_RESET, e.mem.u8(EGT_AT));

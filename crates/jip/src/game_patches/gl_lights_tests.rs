@@ -65,7 +65,7 @@ fn world() -> Engine {
             Ret::default()
         });
     }
-    e.register(GET_RANDOM_INT, |_, a| {
+    e.register_words(GET_RANDOM_INT, 2, |_, a| {
         log(GET_RANDOM_INT, a);
         RANDOMS
             .with(|r| r.borrow_mut().pop().expect("a random number"))

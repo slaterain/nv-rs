@@ -102,7 +102,7 @@ pub(super) fn setup() -> Engine {
             e.map(page, 0x1000);
         }
     }
-    e.register(VALUE_REFRESH, |_, w| {
+    e.register_words(VALUE_REFRESH, 2, |_, w| {
         record(VALUE_REFRESH, w);
         eax(0)
     });
@@ -927,11 +927,11 @@ fn an_empty_grid_slot_keeps_no_old_texture() {
             e.map(page, 0x1000);
         }
     }
-    e.register(LOCK_ENTER, |_, w| {
+    e.register_words(LOCK_ENTER, 2, |_, w| {
         record(LOCK_ENTER, w);
         eax(0)
     });
-    e.register(LOCK_LEAVE, |_, w| {
+    e.register_words(LOCK_LEAVE, 1, |_, w| {
         record(LOCK_LEAVE, w);
         eax(0)
     });

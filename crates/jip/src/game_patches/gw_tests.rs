@@ -62,7 +62,7 @@ fn world(installed: bool, row: bool) -> Engine {
         ..Ret::default()
     });
     if !e.is_registered(0x0061_a310) {
-        e.register(0x0061_a310, |_, _| Ret::default());
+        e.register_words(0x0061_a310, 1, |_, _| Ret::default());
     }
     crate::install_as(&mut e, installed);
     if installed {
@@ -496,7 +496,7 @@ fn draws(e: &mut Engine, values: &[u32]) {
         e.mem.set_u32(DRAWS + 4 + 4 * i as u32, *v);
     }
     e.mem.set_u32(REC + 0x400, 0);
-    e.register(GET_RANDOM_INT, |e, a| {
+    e.register_words(GET_RANDOM_INT, 2, |e, a| {
         assert_eq!(a[0], GAME_RNG);
         record(e, REC + 0x400, &[a[1]]);
         let n = e.mem.u32(DRAWS);
@@ -526,7 +526,7 @@ fn nodes(e: &mut Engine, at: u32, items: &[u32]) -> u32 {
 fn g113_media_set_ids_are_resolved_through_the_masters() {
     let mut e = world(true, true);
     e.mem.set_u32(REC, 0);
-    e.register(ADD_COMPILE_INDEX, |e, a| {
+    e.register_words(ADD_COMPILE_INDEX, 2, |e, a| {
         record(e, REC, &[a[0], a[1]]);
         let id = e.mem.u32(a[0]);
         e.mem.set_u32(a[0], (id & 0x00ff_ffff) | 0x0300_0000);
@@ -701,7 +701,7 @@ fn sound_world(lists: bool, wavs: &[u32], oggs: &[u32]) -> Engine {
         e.mem.u32(at).into_ret()
     });
     e.mem.set_u32(REC + 0xa00, 0);
-    e.register(0x00aa_4060, |e, a| {
+    e.register_words(0x00aa_4060, 2, |e, a| {
         record(e, REC + 0xa00, &[a[1]]);
         Ret::default()
     });
@@ -825,7 +825,7 @@ fn g115_falloutcustom_ini_sets_the_ini_settings() {
     use crate::commands::test_support::files;
     files::fresh();
     let mut e = world(true, true);
-    e.register(0x00aa_3e40, |e, a| e.mem.alloc(a[1]).into_ret());
+    e.register_words(0x00aa_3e40, 2, |e, a| e.mem.alloc(a[1]).into_ret());
     let s = ini_settings(
         &mut e,
         &[

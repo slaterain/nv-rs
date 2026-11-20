@@ -735,11 +735,11 @@ fn commands_world() -> Engine {
     vanilla_records(&mut e);
     set_vanilla_commands(&mut e, true);
     crate::install_as(&mut e, true);
-    e.register(0x0071_b160, |_, _| Ret {
+    e.register_words(0x0071_b160, 1, |_, _| Ret {
         eax: CONSOLE,
         ..Ret::default()
     });
-    e.register(0x0071_d0a0, |e, a| {
+    e.register_words(0x0071_d0a0, 3, |e, a| {
         let format = String::from_utf8_lossy(&nvse::table::guest_text(e, a[1])).into_owned();
         let words = if a[2] == a[1] {
             Vec::new()
@@ -749,7 +749,7 @@ fn commands_world() -> Engine {
         LINES.with(|l| l.borrow_mut().push((format, words)));
         Ret::default()
     });
-    e.register(0x005e_1550, |e, w| e.call(w[0], &w[1..9]));
+    e.register_words(0x005e_1550, 10, |e, w| e.call(w[0], &w[1..9]));
     e
 }
 
@@ -810,6 +810,7 @@ fn run(
     let execute = crate::test_support::execute_of(e, opcode);
     let mut w = vec![execute];
     w.extend_from_slice(&words);
+    w.push(0);
     let ok = e.call(0x005e_1550, &w).eax & 0xff;
     crate::test_support::console(e, false);
     (ok, e.mem.f64(crate::test_support::RESULT))
@@ -895,7 +896,7 @@ fn get_container_command() {
         eax: AREA + 0xe000,
         ..Ret::default()
     });
-    e.register(0x0055_a2f0, |e, a| {
+    e.register_words(0x0055_a2f0, 1, |e, a| {
         e.mem.set_u32(a[0] + 0xc, 0xff00_0100);
         Ret::default()
     });
@@ -1313,6 +1314,7 @@ fn run_block_type(
     let execute = block_handler(e, kind);
     let mut w = vec![execute];
     w.extend_from_slice(&words);
+    w.push(0);
     let ok = e.call(0x005e_1550, &w).eax & 0xff;
     crate::test_support::console(e, false);
     (ok, e.mem.f64(crate::test_support::RESULT))

@@ -101,7 +101,7 @@ fn setup() -> Engine {
         CALLS.with(|c| c.borrow_mut().push((MAX_CARRY_WEIGHT, w.to_vec())));
         reply(f64::from(e.mem.f32(w[0] + 0x64)))
     });
-    e.register(0x004d_0900, |e, w| {
+    e.register_words(0x004d_0900, 2, |e, w| {
         CALLS.with(|c| c.borrow_mut().push((0x004d_0900, w.to_vec())));
         reply(f64::from(e.mem.f32(w[0] + 0x20)))
     });

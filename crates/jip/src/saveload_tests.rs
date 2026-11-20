@@ -167,14 +167,14 @@ fn engine(keep_row: bool, jg_row: bool) -> Engine {
     for page in [0x011c_3000, 0x011d_d000, 0x011d_e000, 0x011c_5000] {
         e.map(page, 0x1000);
     }
-    e.register(TOUPPER, upper);
+    e.register_words(TOUPPER, 1, upper);
     e.register(CREATE_FILE_A, create_file);
     e.register(READ_FILE, read_file);
     e.register(WRITE_FILE, write_file);
     e.register(CLOSE_HANDLE, close_handle);
     e.register(DELETE_FILE_A, nothing);
-    e.register(CRT_RENAME, nothing);
-    e.register(CONSTRUCT_SAVEGAME_PATH, save_dir);
+    e.register_words(CRT_RENAME, 2, nothing);
+    e.register_words(CONSTRUCT_SAVEGAME_PATH, 2, save_dir);
     saveload::install(&mut e);
     crate::install_as(&mut e, false);
     saveload::set_keep_other_plugins(&mut e, keep_row);

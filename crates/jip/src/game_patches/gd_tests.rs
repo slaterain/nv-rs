@@ -19,7 +19,7 @@ fn jip(installed: bool, row: bool) -> Engine {
         ..Ret::default()
     });
     // `TESTopic::GetOwnerTopic`, which 3.9a's fix wraps with the row on.
-    e.register(0x0061_a310, |_, _| Ret::default());
+    e.register_words(0x0061_a310, 1, |_, _| Ret::default());
     crate::install_as(&mut e, installed);
     set_row(&mut e, row);
     e.map(SPLIT_BEAM_SCALE & !0xfff, 0x1000);
@@ -730,7 +730,7 @@ fn part3_seams_at_jip_addresses() {
     assert_eq!(e.site(0x0098_4156, &[0x0300_0000, 7, 2, 2, 1]), Some(0));
     // G127: the roll (the entry point stub leaves 100; roll 99 explodes).
     e.register(APPLY_PERK_MODIFIERS, |_, _| Ret::default());
-    e.register(GET_RANDOM_INT, |_, _| 99u32.into_ret());
+    e.register_words(GET_RANDOM_INT, 2, |_, _| 99u32.into_ret());
     let mine = e.mem.alloc(0x100);
     assert_eq!(e.site(0x009c_3bd6, &[mine, 0x0300_0000]), Some(1));
 }
@@ -1005,7 +1005,7 @@ fn mine_explode_chance_rolls_as_jip() {
         });
         Ret::default()
     });
-    e.register(GET_RANDOM_INT, |_, a| {
+    e.register_words(GET_RANDOM_INT, 2, |_, a| {
         MINE.with(|m| {
             let mut m = m.borrow_mut();
             m.2.push(a.to_vec());

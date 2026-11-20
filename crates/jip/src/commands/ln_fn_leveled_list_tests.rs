@@ -82,11 +82,11 @@ fn setup() -> Engine {
     e.mem.set_u32(LVLC + 0x38, node(2));
     e.mem.set_u32(node(2), entry(4));
     LINES.with(|l| l.borrow_mut().clear());
-    e.register(0x0071_b160, |_, _| Ret {
+    e.register_words(0x0071_b160, 1, |_, _| Ret {
         eax: CONSOLE,
         ..Ret::default()
     });
-    e.register(0x0071_d0a0, |e, a| {
+    e.register_words(0x0071_d0a0, 3, |e, a| {
         let words: Vec<u32> = (0..6).map(|i| e.mem.u32(a[2] + 4 * i)).collect();
         let format = nvse::table::guest_text(e, a[1]);
         let first = if format.starts_with(b"%s") {

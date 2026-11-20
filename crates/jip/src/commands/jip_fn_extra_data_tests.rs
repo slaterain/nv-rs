@@ -77,7 +77,7 @@ fn rec(addr: u32, w: &[u32]) {
 /// The extra list calls as `test_support`'s, recorded there, with every list and extra they
 /// reach checked against the freed blocks; `RemoveByType` frees the extra it takes off.
 fn checked_extra_stand_ins(e: &mut Engine) {
-    e.register(GET_BY_TYPE_FN, |e, w| {
+    e.register_words(GET_BY_TYPE_FN, 2, |e, w| {
         live(w[0]);
         let mut x = e.mem.u32(w[0] + 4);
         while x != 0 && u32::from(e.mem.u8(x + 4)) != w[1] {
@@ -87,7 +87,7 @@ fn checked_extra_stand_ins(e: &mut Engine) {
         live(x);
         eax(x)
     });
-    e.register(ADD_EXTRA_FN, |e, w| {
+    e.register_words(ADD_EXTRA_FN, 2, |e, w| {
         rec(ADD_EXTRA_FN, w);
         let (list, extra) = (w[0], w[1]);
         live(list);
@@ -102,7 +102,7 @@ fn checked_extra_stand_ins(e: &mut Engine) {
         e.mem.set_u8(bits, e.mem.u8(bits) | (1 << (kind & 7)));
         eax(extra)
     });
-    e.register(REMOVE_BY_TYPE_FN, |e, w| {
+    e.register_words(REMOVE_BY_TYPE_FN, 2, |e, w| {
         rec(REMOVE_BY_TYPE_FN, w);
         let (list, kind) = (w[0], w[1]);
         live(list);
@@ -166,17 +166,17 @@ fn setup() -> Engine {
     e.mem.set_u8(FILE + 0x40c, 5);
     set_ref(&mut e, 1, FORM_A);
     keys(&mut e, &[0x1234]);
-    e.register(RANDOM_FN, |e, w| {
+    e.register_words(RANDOM_FN, 2, |e, w| {
         record(RANDOM_FN, w);
         let i = e.mem.u32(KEYS);
         e.mem.set_u32(KEYS, i + 1);
         eax(e.mem.u32(KEYS + 4 + 4 * i))
     });
-    e.register(ENTER_FN, |_, w| {
+    e.register_words(ENTER_FN, 2, |_, w| {
         record(ENTER_FN, w);
         eax(0)
     });
-    e.register(LEAVE_FN, |_, w| {
+    e.register_words(LEAVE_FN, 1, |_, w| {
         record(LEAVE_FN, w);
         eax(0)
     });
@@ -188,10 +188,10 @@ fn setup() -> Engine {
         eax(w[0])
     });
     // `toupper` and the case helper xNVSE's string tokens use.
-    e.register(0x00ec_a7f4, |_, a| {
+    e.register_words(0x00ec_a7f4, 1, |_, a| {
         eax(u32::from((a[0] as u8).to_ascii_uppercase()))
     });
-    e.register(0x0048_39c0, |_, a| eax(a[0]));
+    e.register_words(0x0048_39c0, 1, |_, a| eax(a[0]));
     e
 }
 
@@ -540,9 +540,9 @@ fn inventory(e: &mut Engine, count: i32, stack: u32) -> u32 {
         e.mem.set_u32(ALLOC, at + w[0].next_multiple_of(0x10));
         eax(at)
     });
-    e.register(0x0040_1030, |_, _| Ret::default());
+    e.register_words(0x0040_1030, 1, |_, _| Ret::default());
     // A temporary reference's id of its own, from its address.
-    e.register(0x0055_a2f0, |e, w| {
+    e.register_words(0x0055_a2f0, 1, |e, w| {
         e.mem
             .set_u32(w[0] + 0xc, 0xff00_0000 | ((w[0] >> 4) & 0xffff));
         eax(w[0])

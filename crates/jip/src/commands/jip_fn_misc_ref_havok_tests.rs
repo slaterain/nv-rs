@@ -917,7 +917,7 @@ const PICK_FRACTION: u32 = AREA + 0xe_0104;
 /// The pick records its record (0xB0 bytes) and arguments, writes the fraction, answers the
 /// object at [`PICK_ANSWER`].
 fn pick_stand_in(e: &mut Engine) {
-    e.register(h::PICK, |e, a| {
+    e.register_words(h::PICK, 3, |e, a| {
         let (tes, rec, by_cell) = (a[0], a[1], a[2]);
         e.mem.set_u32(PICK_LOG, tes);
         e.mem.set_u32(PICK_LOG + 4, by_cell & 0xff);
@@ -1157,7 +1157,7 @@ fn crosshair_ref_ex_interface_ref_or_the_pick() {
     set4(&mut e, player + 0xdd4, [10.0, 20.0, 30.0, 40.0]);
     set4(&mut e, player + 0xd58, [1.0, 2.0, 3.0, 4.0]);
     e.mem.set_u32(VIEW_LOG + 0x30, target);
-    e.register(0x0063_1d60, |e, a| {
+    e.register_words(0x0063_1d60, 6, |e, a| {
         e.mem.set_u32(VIEW_LOG, a[0]);
         for i in 0..4 {
             let w = e.mem.u32(a[1] + 4 * i);

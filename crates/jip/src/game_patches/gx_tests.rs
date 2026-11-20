@@ -48,7 +48,7 @@ fn world(installed: bool, row: bool) -> Engine {
         e.mem.set_u32(LOG + 8, a[1]);
         Ret::default()
     });
-    e.register(0x00aa_3e40, |e, _| {
+    e.register_words(0x00aa_3e40, 2, |e, _| {
         bump(e, LOG + 0x10);
         HEAP_WORD.into_ret()
     });
@@ -65,7 +65,7 @@ fn world(installed: bool, row: bool) -> Engine {
         ..Ret::default()
     });
     if !e.is_registered(0x0061_a310) {
-        e.register(0x0061_a310, |_, _| Ret::default());
+        e.register_words(0x0061_a310, 1, |_, _| Ret::default());
     }
     crate::install_as(&mut e, installed);
     if installed {

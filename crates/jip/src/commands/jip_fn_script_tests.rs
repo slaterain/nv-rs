@@ -45,14 +45,14 @@ fn setup() -> Engine {
     {
         set_ref(&mut e, i as u16 + 1, *f);
     }
-    e.register(SET_ACTION_FLAG, |e, w| {
+    e.register_words(SET_ACTION_FLAG, 3, |e, w| {
         CALLS.with(|c| c.borrow_mut().push((SET_ACTION_FLAG, w.to_vec())));
         Ret {
             eax: e.mem.u32(w[0] + 0x40),
             ..Ret::default()
         }
     });
-    e.register(SCRIPT_RUN, |_, w| {
+    e.register_words(SCRIPT_RUN, 5, |_, w| {
         CALLS.with(|c| c.borrow_mut().push((SCRIPT_RUN, w.to_vec())));
         Ret::default()
     });
@@ -212,7 +212,7 @@ fn fake_script_event_on_an_inventory_reference() {
         eax: TEMP_REF,
         ..Ret::default()
     });
-    e.register(0x0055_a2f0, |e, w| {
+    e.register_words(0x0055_a2f0, 1, |e, w| {
         e.mem.set_u32(w[0] + 0xc, 0xff00_0800);
         Ret::default()
     });

@@ -91,14 +91,14 @@ fn world(answers_installed: bool) -> Engine {
     // The vtable's two words as the exe holds them.
     e.mem.set_u32(DESTROY_SLOT, 0x0041_b680);
     e.mem.set_u32(COMPARE_SLOT, 0x0043_1ef0);
-    e.register(GET_BY_TYPE, |e, a| {
+    e.register_words(GET_BY_TYPE, 2, |e, a| {
         let found = chain(e, a[0])
             .into_iter()
             .find(|&x| u32::from(e.mem.u8(x + 4)) == a[1])
             .unwrap_or(0);
         eax(found)
     });
-    e.register(ADD_EXTRA, |e, a| {
+    e.register_words(ADD_EXTRA, 2, |e, a| {
         log(ADD_EXTRA, a);
         let (list, extra) = (a[0], a[1]);
         match chain(e, list).last() {
@@ -107,7 +107,7 @@ fn world(answers_installed: bool) -> Engine {
         }
         eax(extra)
     });
-    e.register(REMOVE_BY_TYPE, |e, a| {
+    e.register_words(REMOVE_BY_TYPE, 2, |e, a| {
         log(REMOVE_BY_TYPE, a);
         let (list, kind) = (a[0], a[1]);
         let mut previous = 0;
@@ -125,7 +125,7 @@ fn world(answers_installed: bool) -> Engine {
         }
         Ret::default()
     });
-    e.register(HEAP_ALLOCATE, |_, a| {
+    e.register_words(HEAP_ALLOCATE, 2, |_, a| {
         log(HEAP_ALLOCATE, a);
         let at = NEXT.with(|n| {
             let at = *n.borrow();
@@ -134,21 +134,21 @@ fn world(answers_installed: bool) -> Engine {
         });
         eax(at)
     });
-    e.register(HEAP_FREE, |_, a| {
+    e.register_words(HEAP_FREE, 2, |_, a| {
         log(HEAP_FREE, a);
         Ret::default()
     });
-    e.register(GET_RANDOM_INT, |_, a| {
+    e.register_words(GET_RANDOM_INT, 2, |_, a| {
         log(GET_RANDOM_INT, a);
         eax(RANDOM.with(|r| r.borrow_mut().remove(0)))
     });
-    e.register(SAVE_BUFFER_GROW, |e, a| {
+    e.register_words(SAVE_BUFFER_GROW, 1, |e, a| {
         log(SAVE_BUFFER_GROW, a);
         let size = e.mem.u32(a[0] + 8);
         e.mem.set_u32(a[0] + 8, size + 0x100);
         Ret::default()
     });
-    e.register(HEADER_REF_ID, |_, a| {
+    e.register_words(HEADER_REF_ID, 1, |_, a| {
         log(HEADER_REF_ID, a);
         eax(HEADER_ID)
     });
@@ -617,11 +617,11 @@ const COPIED: u32 = 0x0625_f000;
 fn fixes_world() -> Engine {
     let mut e = world(true);
     e.map(0x011d_e000, 0x1000);
-    e.register(ITEMS_HEALTH_FN, |_, a| {
+    e.register_words(ITEMS_HEALTH_FN, 2, |_, a| {
         log(ITEMS_HEALTH_FN, a);
         Ret::default()
     });
-    e.register(CONTAINER_LIST_COPY, |_, a| {
+    e.register_words(CONTAINER_LIST_COPY, 1, |_, a| {
         log(CONTAINER_LIST_COPY, a);
         eax(COPIED)
     });

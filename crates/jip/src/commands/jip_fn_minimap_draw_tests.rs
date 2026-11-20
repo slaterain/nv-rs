@@ -110,7 +110,7 @@ fn drawing(e: &mut Engine) {
     e.mem.set_u32(RENDERER, alloc(0x600));
     e.mem
         .set_u32(VTBL_RENDERED_TEXTURE + 4, RENDERED_TEXTURE_DELETE);
-    e.register(CREATE_RENDERED_TEXTURE, |e, w| {
+    e.register_words(CREATE_RENDERED_TEXTURE, 11, |e, w| {
         record(CREATE_RENDERED_TEXTURE, w);
         let (rendered, vtable, made) = (alloc(0x40), alloc(0x10), alloc(0x40));
         e.mem.set_u32(vtable + 4, BS_RENDERED_DELETE);
@@ -127,25 +127,25 @@ fn drawing(e: &mut Engine) {
         e.mem.set_u32(TEXTURE_LIST_TAIL, made);
         eax(rendered)
     });
-    e.register(NI_ALLOC, |_, w| {
+    e.register_words(NI_ALLOC, 1, |_, w| {
         record(NI_ALLOC, w);
         eax(alloc(w[0]))
     });
-    e.register(CULLING_PROCESS_CTOR, |_, w| eax(w[0]));
-    e.register(ACCUMULATOR_CTOR, |_, w| eax(w[0]));
-    e.register(BEGIN_FRAME, |_, w| {
+    e.register_words(CULLING_PROCESS_CTOR, 2, |_, w| eax(w[0]));
+    e.register_words(ACCUMULATOR_CTOR, 4, |_, w| eax(w[0]));
+    e.register_words(BEGIN_FRAME, 2, |_, w| {
         record(BEGIN_FRAME, w);
         eax(0)
     });
-    e.register(CULL_SCENE, |_, w| {
+    e.register_words(CULL_SCENE, 3, |_, w| {
         record(CULL_SCENE, w);
         eax(0)
     });
-    e.register(END_FRAME, |_, w| {
+    e.register_words(END_FRAME, 0, |_, w| {
         record(END_FRAME, w);
         eax(0)
     });
-    e.register(DRAW_SCENE, |e, w| {
+    e.register_words(DRAW_SCENE, 2, |e, w| {
         record(DRAW_SCENE, w);
         let scene = e.mem.u32(SHADOW_SCENE_NODE);
         let sun = e.mem.u32(scene + SCENE_SUN);
@@ -183,15 +183,15 @@ fn drawing(e: &mut Engine) {
         record(BS_RENDERED_DELETE, w);
         eax(0)
     });
-    e.register(LOCK_ENTER, |_, w| {
+    e.register_words(LOCK_ENTER, 2, |_, w| {
         record(LOCK_ENTER, w);
         eax(0)
     });
-    e.register(LOCK_LEAVE, |_, w| {
+    e.register_words(LOCK_LEAVE, 1, |_, w| {
         record(LOCK_LEAVE, w);
         eax(0)
     });
-    e.register(UPDATE_DOWNWARD_PASS, |_, w| {
+    e.register_words(UPDATE_DOWNWARD_PASS, 3, |_, w| {
         record(UPDATE_DOWNWARD_PASS, &w[..1]);
         eax(0)
     });

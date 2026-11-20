@@ -17,7 +17,7 @@ fn jip(installed: bool, row: bool) -> Engine {
         ..Ret::default()
     });
     // `TESTopic::GetOwnerTopic`, which 3.9a's fix wraps with the row on.
-    e.register(0x0061_a310, |_, _| Ret::default());
+    e.register_words(0x0061_a310, 1, |_, _| Ret::default());
     crate::install_as(&mut e, installed);
     set_row(&mut e, row);
     e

@@ -47,7 +47,7 @@ fn setup() -> Engine {
         }
     });
     // A fixed string of the text with room for its count before it.
-    e.register(ADD_STRING, |e, w| {
+    e.register_words(ADD_STRING, 1, |e, w| {
         let text: Vec<u8> = (0..0x40)
             .map(|i| e.mem.u8(w[0] + i))
             .take_while(|&b| b != 0)

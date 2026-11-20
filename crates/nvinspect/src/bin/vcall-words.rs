@@ -6,12 +6,15 @@
 //! `--unread` also lists each call the check could not read (a slot held in a variable, a list
 //! built elsewhere), with the reason; `--words ADDR` prints what the check reads for a function
 //! or a table instead.
+//!
+//! `vcall-words [--crates DIR] --stand-ins`: the test stand-ins without a word count, a warning
+//! list read from the source alone (`nvinspect::stand_ins`).
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str =
-    "usage: vcall-words --exe FILE --map FILE [--crates DIR] [--unread] [--words ADDR ..]";
+const USAGE: &str = "usage: vcall-words --exe FILE --map FILE [--crates DIR] [--unread] \
+                     [--words ADDR ..] | vcall-words [--crates DIR] --stand-ins";
 
 fn main() -> ExitCode {
     let mut exe = None;
@@ -19,10 +22,15 @@ fn main() -> ExitCode {
     let mut crates = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/.."));
     let mut words_of = Vec::new();
     let mut list_unread = false;
+    let mut stand_ins = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         if arg == "--unread" {
             list_unread = true;
+            continue;
+        }
+        if arg == "--stand-ins" {
+            stand_ins = true;
             continue;
         }
         let value = args.next().map(PathBuf::from);
@@ -42,6 +50,13 @@ fn main() -> ExitCode {
                 return ExitCode::from(2);
             }
         }
+    }
+    if stand_ins {
+        // A warning list, read from the source alone: the stand-ins without a word count.
+        for line in nvinspect::stand_ins::warnings(&nvinspect::stand_ins::census(&crates)) {
+            println!("{line}");
+        }
+        return ExitCode::SUCCESS;
     }
     let (Some(exe), Some(map)) = (exe, map) else {
         eprintln!("{USAGE}");

@@ -37,7 +37,7 @@ fn answer(v: u32) -> Ret {
 fn wsetup() -> Engine {
     let mut e = setup();
     CALLS.with(|c| c.borrow_mut().clear());
-    e.register(wm::ENTITY_ACTIVATE, |_, a| {
+    e.register_words(wm::ENTITY_ACTIVATE, 1, |_, a| {
         log(wm::ENTITY_ACTIVATE, &a[..1]);
         answer(0)
     });
@@ -60,7 +60,7 @@ fn wsetup() -> Engine {
         }
         answer(a[1])
     });
-    e.register(wm::LAND_AT, |e, a| {
+    e.register_words(wm::LAND_AT, 2, |e, a| {
         let p = [0, 4, 8, 12].map(|o| e.mem.u32(a[1] + o));
         log(wm::LAND_AT, &[a[0], p[0], p[1], p[2], p[3]]);
         answer(e.mem.u32(LAND_ANSWER))

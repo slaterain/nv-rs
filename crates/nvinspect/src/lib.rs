@@ -4,6 +4,8 @@
 //! (docs/adr/0011-old-layer-removed.md).
 //!
 //! [`vcall_words`] (the program `vcall-words`) compares the argument words of the crates' virtual
-//! calls with the vtables of the contributor's own exe.
+//! calls with the vtables of the contributor's own exe. [`stand_ins`] lists the test stand-ins
+//! that carry no word count yet (`vcall-words --stand-ins`).
 
+pub mod stand_ins;
 pub mod vcall_words;

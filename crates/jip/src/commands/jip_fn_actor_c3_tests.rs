@@ -111,7 +111,7 @@ fn setup() -> Engine {
             ..Ret::default()
         }
     });
-    e.register(CELL_WATER_FN, |e, w| {
+    e.register_words(CELL_WATER_FN, 1, |e, w| {
         record(CELL_WATER_FN, w);
         Ret {
             eax: e.mem.u32(A_CELL_WATER),

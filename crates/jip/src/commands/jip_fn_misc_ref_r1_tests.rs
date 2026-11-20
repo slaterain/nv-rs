@@ -78,13 +78,13 @@ fn setup() -> Engine {
     e.ext::<crate::Jip>().pos_marker.marker = MARKER;
     // Registered with its patch (H13, `game_patches::gh2`).
     assert_ne!(crate::test_support::execute_of(&e, OP), 0);
-    e.register(MOVE_TO_MARKER, |e, w| {
+    e.register_words(MOVE_TO_MARKER, 5, |e, w| {
         let pos = floats3(e, MARKER + 0x30);
         let cell = e.mem.u32(MARKER + 0x40);
         MOVES.with(|m| m.borrow_mut().push((w.to_vec(), cell, pos)));
         Ret::default()
     });
-    e.register(ADD_STRING, |e, w| {
+    e.register_words(ADD_STRING, 1, |e, w| {
         let text = nvse::table::guest_text(e, w[0]);
         let at = STRINGS_MADE.with(|s| {
             let mut s = s.borrow_mut();

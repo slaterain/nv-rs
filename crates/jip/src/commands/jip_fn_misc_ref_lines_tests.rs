@@ -55,38 +55,38 @@ fn setup() -> Engine {
         rec(ADD_OBJECT, w);
         eax(0)
     });
-    e.register(NI_ALLOCATE, |e, w| {
+    e.register_words(NI_ALLOCATE, 1, |e, w| {
         rec(NI_ALLOCATE, w);
         eax(object(e, 0, None))
     });
-    e.register(LINES_CONSTRUCT, |e, w| {
+    e.register_words(LINES_CONSTRUCT, 8, |e, w| {
         rec(LINES_CONSTRUCT, w);
         e.mem.set_u32(w[0], LINES_VT);
         eax(w[0])
     });
-    e.register(NO_LIGHTING_CONSTRUCT, |_, w| {
+    e.register_words(NO_LIGHTING_CONSTRUCT, 1, |_, w| {
         rec(NO_LIGHTING_CONSTRUCT, w);
         eax(w[0])
     });
-    e.register(ALPHA_CREATE, |e, w| {
+    e.register_words(ALPHA_CREATE, 0, |e, w| {
         rec(ALPHA_CREATE, w);
         let a = object(e, ALPHA_VT, None);
         e.mem.set_u16(a + 0x18, 0xec);
         eax(a)
     });
-    e.register(LIST_NODE_NEW, |e, w| {
+    e.register_words(LIST_NODE_NEW, 1, |e, w| {
         rec(LIST_NODE_NEW, w);
         eax(object(e, 0, None))
     });
-    e.register(ASSIGN_1, |_, w| {
+    e.register_words(ASSIGN_1, 1, |_, w| {
         rec(ASSIGN_1, w);
         eax(0)
     });
-    e.register(ASSIGN_2, |_, w| {
+    e.register_words(ASSIGN_2, 4, |_, w| {
         rec(ASSIGN_2, w);
         eax(0)
     });
-    e.register(ADD_STRING, |e, w| {
+    e.register_words(ADD_STRING, 1, |e, w| {
         let text = nvse::table::guest_text(e, w[0]);
         let mut words = w.to_vec();
         words.extend(text.iter().map(|&b| u32::from(b)));
@@ -97,11 +97,11 @@ fn setup() -> Engine {
         e.mem.set_u32(at - 8, 1);
         eax(at)
     });
-    e.register(CLONING_CONSTRUCT, |_, w| {
+    e.register_words(CLONING_CONSTRUCT, 2, |_, w| {
         rec(CLONING_CONSTRUCT, w);
         eax(w[0])
     });
-    e.register(CLONING_DESTRUCT, |_, w| {
+    e.register_words(CLONING_DESTRUCT, 1, |_, w| {
         rec(CLONING_DESTRUCT, w);
         eax(0)
     });

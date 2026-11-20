@@ -176,7 +176,7 @@ fn fade(e: &mut Engine, now: u32, (start, end): (f32, f32), started: u32, durati
     });
     let refreshed = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
     let seen = refreshed.clone();
-    e.register_double(VALUE_REFRESH, move |_, a| {
+    e.register_double_words(VALUE_REFRESH, 2, move |_, a| {
         seen.borrow_mut().push(a[..2].to_vec());
         Ret::default()
     });
@@ -472,7 +472,7 @@ fn g68_ammo_only() {
 #[test]
 fn g56_titles_the_tab_at_0x48() {
     let mut e = fixes_on();
-    e.register(0x0073_01f0, |_, a| {
+    e.register_words(0x0073_01f0, 2, |_, a| {
         gb3_log(0x0073_01f0, a);
         Ret::default()
     });
@@ -556,14 +556,14 @@ fn chain(e: &Engine, list: u32) -> Vec<u32> {
 /// The game's list functions stood in (`GetByType` by the type byte, `AddExtra` appends) and
 /// the heap (blocks 0x20 apart, filled with 0xAA so JIP's zeroing shows).
 fn list_world(e: &mut Engine) {
-    e.register(GET_BY_TYPE, |e, a| {
+    e.register_words(GET_BY_TYPE, 2, |e, a| {
         let found = chain(e, a[0])
             .into_iter()
             .find(|&x| u32::from(e.mem.u8(x + 4)) == a[1])
             .unwrap_or(0);
         found.into_ret()
     });
-    e.register(ADD_EXTRA, |e, a| {
+    e.register_words(ADD_EXTRA, 2, |e, a| {
         gb3_log(ADD_EXTRA, a);
         match chain(e, a[0]).last() {
             Some(&last) => e.mem.set_u32(last + 8, a[1]),
@@ -571,7 +571,7 @@ fn list_world(e: &mut Engine) {
         }
         a[1].into_ret()
     });
-    e.register(HEAP_ALLOCATE, |e, a| {
+    e.register_words(HEAP_ALLOCATE, 2, |e, a| {
         gb3_log(HEAP_ALLOCATE, a);
         let at = GB3_NEXT.with(|n| {
             let at = n.get();
@@ -825,11 +825,11 @@ const OLD_TEXT: u32 = AREA_AT + 0x6500;
 fn names_world(kind: u8, name: &[u8], old: &[u8]) -> Engine {
     let mut e = fixes_on();
     list_world(&mut e);
-    e.register(HEAP_FREE, |_, a| {
+    e.register_words(HEAP_FREE, 2, |_, a| {
         gb3_log(HEAP_FREE, a);
         Ret::default()
     });
-    e.register(VALUE_REFRESH, |_, a| {
+    e.register_words(VALUE_REFRESH, 2, |_, a| {
         gb3_log(VALUE_REFRESH, a);
         Ret::default()
     });
@@ -1041,7 +1041,7 @@ fn repair_world(e: &mut Engine, skill: f64) {
     e.mem.set_f32(0x011d_0884, 1.0);
     e.mem.set_f32(0x011c_ffa4, 3.0);
     e.mem.set_u32(0x011d_ea3c, AREA_AT + 0x7000);
-    e.register_double(ACTOR_VALUE, move |_, a| {
+    e.register_double_words(ACTOR_VALUE, 2, move |_, a| {
         gb3_log(ACTOR_VALUE, a);
         Ret {
             st0: skill,
@@ -1170,7 +1170,7 @@ fn o2_repair_amount() {
 fn o2_repair_list() {
     let mut e = fixes_on();
     repair_world(&mut e, 0.0);
-    e.register(ITEM_TEST, |e, a| {
+    e.register_words(ITEM_TEST, 2, |e, a| {
         gb3_log(ITEM_TEST, a);
         u32::from(e.mem.u8(a[0] + 0x10) == 0).into_ret()
     });

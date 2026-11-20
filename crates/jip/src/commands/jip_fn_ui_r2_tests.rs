@@ -93,7 +93,7 @@ fn setup() -> Engine {
     });
     // `FontInfo::Init`: the data loaded (+0x38 set) when the bool asks for the load (`Font::Font`
     // calls `Font::Load` only then) and the path does not name "bad".
-    e.register(0x00a1_2020, |e, w| {
+    e.register_words(0x00a1_2020, 4, |e, w| {
         let path = nvse::table::guest_text(e, w[2]);
         let loaded = w[3] != 0 && !path.windows(3).any(|p| p == b"bad");
         e.mem

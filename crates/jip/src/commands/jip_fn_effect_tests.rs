@@ -328,7 +328,7 @@ fn setup() -> Engine {
     e.mem.set_u32(MAGIC_VT + 0xec, RETURN_TRUE_FN);
     e.mem.set_u32(PLAIN_VT + 0xec, RETURN_FALSE_FN);
     e.mem.set_u32(SCRIPT + 0xc, 0x0600_0001);
-    e.register(CAST_FN, cast);
+    e.register_words(CAST_FN, 5, cast);
     e.register(RETURN_TRUE_FN, |_, _| eax(1));
     e.register(RETURN_FALSE_FN, |_, _| eax(0));
     e.register(SAYS_ACTOR_FN, |_, _| eax(1));
@@ -350,14 +350,14 @@ fn setup() -> Engine {
         record(DESTROY_FN, w);
         eax(0)
     });
-    e.register(REMOVE_FN, |_, w| {
+    e.register_words(REMOVE_FN, 2, |_, w| {
         record(REMOVE_FN, w);
         eax(0)
     });
     // The game's `MagicTarget::RemoveEffect(effect, true)`: the unlink `00905330` does (the first
     // node holding the effect; the first node takes the next node's item and link; the removed
     // node's link and item cleared before it is freed), then the effect's delete, recorded.
-    e.register(MT_REMOVE_FN, |e, w| {
+    e.register_words(MT_REMOVE_FN, 3, |e, w| {
         record(MT_REMOVE_FN, w);
         let head = e.mem.u32(w[0] + 0x700);
         let (mut node, mut prev) = (head, 0);
@@ -389,7 +389,7 @@ fn setup() -> Engine {
         record(DELETED, &[w[1]]);
         eax(0)
     });
-    e.register(DELETE_FN, |_, w| {
+    e.register_words(DELETE_FN, 2, |_, w| {
         record(DELETE_FN, w);
         eax(0)
     });

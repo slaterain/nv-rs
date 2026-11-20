@@ -337,7 +337,7 @@ fn an_array_value() {
 #[test]
 fn a_random_integer() {
     let mut e = setup();
-    e.register(0x00aa_5230, |_, w| {
+    e.register_words(0x00aa_5230, 2, |_, w| {
         assert_eq!(w[0], 0x011c_4180, "the game's generator");
         Ret {
             eax: w[1] / 2,

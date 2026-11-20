@@ -121,11 +121,11 @@ fn setup() -> Engine {
     e.mem.set_u32(node(5) + 4, node(6));
     e.mem.set_u32(node(6), O4);
     e.mem.set_u32(SCRIPT + 0xc, 0x0600_0001);
-    e.register(SET_STAGE_FN, |_, w| {
+    e.register_words(SET_STAGE_FN, 2, |_, w| {
         record(SET_STAGE_FN, w);
         eax(u32::from(w[1] != 99))
     });
-    e.register(EVALUATE_FN, |e, w| {
+    e.register_words(EVALUATE_FN, 5, |e, w| {
         record(EVALUATE_FN, w);
         e.mem.set_u8(w[3], 1);
         eax(if w[1] == REF2 {
@@ -134,14 +134,14 @@ fn setup() -> Engine {
             0xffff_ff01
         })
     });
-    e.register(REFRESH_PATH_FN, |_, w| {
+    e.register_words(REFRESH_PATH_FN, 4, |_, w| {
         // As its translation (`PlayerCharacter::BuildPathToTarget`, `thiscall`, `RET 0xC`): `this`
         // and three words.
         assert_eq!(w.len(), 4, "BuildPathToTarget takes this and three words");
         record(REFRESH_PATH_FN, w);
         eax(0)
     });
-    e.register(CONSTRUCT_FN, |e, w| {
+    e.register_words(CONSTRUCT_FN, 1, |e, w| {
         record(CONSTRUCT_FN, w);
         // As the exe's constructor: the byte, the conditions and the reference cleared.
         e.mem.set_u8(w[0], 0);
@@ -150,15 +150,15 @@ fn setup() -> Engine {
         }
         eax(w[0])
     });
-    e.register(DESTROY_FN, |_, w| {
+    e.register_words(DESTROY_FN, 2, |_, w| {
         record(DESTROY_FN, w);
         eax(0)
     });
-    e.register(REFRESH_TARGETS_FN, |_, w| {
+    e.register_words(REFRESH_TARGETS_FN, 3, |_, w| {
         record(REFRESH_TARGETS_FN, w);
         eax(0)
     });
-    e.register(FAIL_FN, |_, w| {
+    e.register_words(FAIL_FN, 2, |_, w| {
         record(FAIL_FN, w);
         eax(0)
     });

@@ -348,7 +348,7 @@ fn equipped_data() {
 fn equip_by_data() {
     let mut e = setup();
     inventory(&mut e);
-    e.register(0x0088_c650, |_, w| {
+    e.register_words(0x0088_c650, 7, |_, w| {
         CALLS.with(|c| c.borrow_mut().push((0x0088_c650, w.to_vec())));
         Ret::default()
     });
@@ -386,7 +386,7 @@ fn equip_by_data() {
 fn equip_match_rules() {
     let mut e = setup();
     inventory(&mut e);
-    e.register(0x0088_c650, |_, w| {
+    e.register_words(0x0088_c650, 7, |_, w| {
         CALLS.with(|c| c.borrow_mut().push((0x0088_c650, w.to_vec())));
         Ret::default()
     });

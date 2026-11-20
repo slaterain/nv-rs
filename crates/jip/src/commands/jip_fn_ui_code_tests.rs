@@ -94,7 +94,7 @@ fn world() -> Engine {
         record(TILE_IS_TRUE, w);
         eax(TARGET.with(|t| t.get()))
     });
-    e.register(PICK_UP_SOUND_NAME, |_, w| {
+    e.register_words(PICK_UP_SOUND_NAME, 4, |_, w| {
         record(PICK_UP_SOUND_NAME, w);
         eax(SOUND.with(|t| t.get()))
     });

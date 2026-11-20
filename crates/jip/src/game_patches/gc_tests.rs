@@ -263,7 +263,7 @@ fn g77_in_with_the_row_off_and_on() {
             ..Ret::default()
         });
         if !e.is_registered(0x0061_a310) {
-            e.register(0x0061_a310, |_, _| Ret::default());
+            e.register_words(0x0061_a310, 1, |_, _| Ret::default());
         }
         super::super::set_row(&mut e, row);
         assert_eq!(e.jip_patches() & jip_patches::FIXES != 0, row);
@@ -476,7 +476,7 @@ fn g120_material_is_the_seams_second_word() {
     e.mem.set_u32(other_weapon + 0x24c, other_set);
     e.mem.set_u32(other_set + 0x1c + 2 * 4, 0x0a22);
     e.mem.set_u32(other_set + 0x1c + 5 * 4, 0x0a55);
-    e.register_double(0x008a_1710, move |_, _| other_weapon.into_ret());
+    e.register_double_words(0x008a_1710, 1, move |_, _| other_weapon.into_ret());
     assert_eq!(hit_blood_impact(&mut e, &[HIT2, 2]), Some(0x0d22));
     assert_eq!(hit_blood_impact(&mut e, &[HIT2, 5]), Some(0x0d55));
 }

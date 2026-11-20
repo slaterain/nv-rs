@@ -330,7 +330,7 @@ fn setting_an_actors_rank() {
         CALLS.with(|c| c.borrow_mut().push((SET_FN, w.to_vec())));
         Ret::default()
     });
-    e.register(NAME_FN, |_, w| {
+    e.register_words(NAME_FN, 1, |_, w| {
         CALLS.with(|c| c.borrow_mut().push((NAME_FN, w.to_vec())));
         Ret {
             eax: ACTOR_NAME,

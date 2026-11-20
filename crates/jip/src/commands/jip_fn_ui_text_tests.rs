@@ -196,14 +196,14 @@ fn setup() -> (Engine, Tiles) {
     e.mem.set_u32(CLICK_SLOT, CLICK_FN);
     e.mem.set_u32(FRAME_SLOT, EXE_FRAME);
     e.mem.set_u32(KEY_SLOT, EXE_KEY);
-    e.register(CLOSE_CONSOLE, noted::<CLOSE_CONSOLE>);
-    e.register(ENTER_STACK, noted::<ENTER_STACK>);
-    e.register(SET_FLOAT_FN, noted::<SET_FLOAT_FN>);
-    e.register(PREP_FN, noted::<PREP_FN>);
-    e.register(EXE_CLOSE, noted::<EXE_CLOSE>);
+    e.register_words(CLOSE_CONSOLE, 0, noted::<CLOSE_CONSOLE>);
+    e.register_words(ENTER_STACK, 2, noted::<ENTER_STACK>);
+    e.register_words(SET_FLOAT_FN, 4, noted::<SET_FLOAT_FN>);
+    e.register_words(PREP_FN, 2, noted::<PREP_FN>);
+    e.register_words(EXE_CLOSE, 0, noted::<EXE_CLOSE>);
     e.register(CLICK_FN, noted::<CLICK_FN>);
-    e.register(REFRESH_FN, noted::<REFRESH_FN>);
-    e.register(READ_FILE, |e, w| {
+    e.register_words(REFRESH_FN, 2, noted::<REFRESH_FN>);
+    e.register_words(READ_FILE, 2, |e, w| {
         note(READ_FILE, &[w[0]]);
         note(
             READ_FILE,
@@ -214,14 +214,14 @@ fn setup() -> (Engine, Tiles) {
             ..Ret::default()
         }
     });
-    e.register(MAX_DEPTH, |_, w| {
+    e.register_words(MAX_DEPTH, 0, |_, w| {
         note(MAX_DEPTH, w);
         Ret {
             st0: 37.5,
             ..Ret::default()
         }
     });
-    e.register(IS_TRUE_FN, |_, w| {
+    e.register_words(IS_TRUE_FN, 2, |_, w| {
         note(IS_TRUE_FN, w);
         Ret {
             eax: IS_TRUE.with(Cell::get),

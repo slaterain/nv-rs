@@ -643,7 +643,7 @@ fn reticle_world(e: &mut Engine, cell: u32, interior: bool, hit: u32, fraction: 
     }
     e.mem.set_u32(R_PICK_HIT, hit);
     e.mem.set_f32(R_PICK_FRACTION, fraction);
-    e.register(0x0045_8440, |e, w| {
+    e.register_words(0x0045_8440, 3, |e, w| {
         ts::CALLS.with(|c| c.borrow_mut().push((0x0045_8440, w.to_vec())));
         let fraction = e.mem.f32(R_PICK_FRACTION);
         let filter = e.mem.u32(w[1] + 0x24);

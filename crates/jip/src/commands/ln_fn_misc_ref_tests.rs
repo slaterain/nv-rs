@@ -82,11 +82,11 @@ fn a_new_base_form_redoes_the_3d() {
     let (loaded, node) = (FORMS + 0x8100, FORMS + 0x8200);
     e.mem.set_u32(REFR + 0x64, loaded);
     e.mem.set_u32(loaded + 0x14, node);
-    e.register(0x0057_02e0, |_, w| {
+    e.register_words(0x0057_02e0, 3, |_, w| {
         CALLS.with(|c| c.borrow_mut().push((0x0057_02e0, w.to_vec())));
         Ret::default()
     });
-    e.register(0x0044_4850, |_, w| {
+    e.register_words(0x0044_4850, 4, |_, w| {
         CALLS.with(|c| c.borrow_mut().push((0x0044_4850, w.to_vec())));
         Ret::default()
     });
@@ -104,7 +104,7 @@ fn a_new_base_form_redoes_the_3d() {
 fn inventory_weight() {
     let mut e = setup();
     e.mem.set_u8(PC + 0x7bc, 1);
-    e.register(0x004d_0900, |e, w| {
+    e.register_words(0x004d_0900, 2, |e, w| {
         assert_eq!(
             e.mem.u8(0x011e_0898),
             1,

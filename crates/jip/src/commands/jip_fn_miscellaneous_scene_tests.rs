@@ -56,7 +56,7 @@ fn setup() -> Engine {
         record(TEX_DELETE, w);
         eax(0)
     });
-    e.register(CREATE_TEXTURE_IMAGE, |e, w| {
+    e.register_words(CREATE_TEXTURE_IMAGE, 5, |e, w| {
         // The path's text after the words; the out word set to the answer.
         let text = nvse::table::guest_text(e, w[1]);
         let mut words = w.to_vec();
@@ -66,11 +66,11 @@ fn setup() -> Engine {
         e.mem.set_u32(w[2], tex);
         eax(0)
     });
-    e.register(LOCK_ENTER, |_, w| {
+    e.register_words(LOCK_ENTER, 2, |_, w| {
         record(LOCK_ENTER, w);
         eax(0)
     });
-    e.register(LOCK_LEAVE, |_, w| {
+    e.register_words(LOCK_LEAVE, 1, |_, w| {
         record(LOCK_LEAVE, w);
         eax(0)
     });

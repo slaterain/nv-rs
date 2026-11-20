@@ -75,15 +75,15 @@ fn setup() -> Engine {
     form(&mut e, MISC, 0x1f, 0x0000_0a1f);
     set_ref(&mut e, 1, SCPT);
     set_ref(&mut e, 3, MISC);
-    e.register(QUANTITY_SHOW_MENU, |_, w| {
+    e.register_words(QUANTITY_SHOW_MENU, 3, |_, w| {
         LOG.with(|l| l.borrow_mut().push((QUANTITY_SHOW_MENU, w.to_vec())));
         Ret {
             eax: ROOT.with(|r| r.get()),
             ..Ret::default()
         }
     });
-    e.register(RENDERED_MENU_CLOSE, note::<RENDERED_MENU_CLOSE, 0>);
-    e.register(MESSAGE_MENU_CLEAR, note::<MESSAGE_MENU_CLEAR, 0>);
+    e.register_words(RENDERED_MENU_CLOSE, 1, note::<RENDERED_MENU_CLOSE, 0>);
+    e.register_words(MESSAGE_MENU_CLEAR, 0, note::<MESSAGE_MENU_CLEAR, 0>);
     e.register(TILE_DESTROY_FN, note::<TILE_DESTROY_FN, 0>);
     e.mem.set_u32(TILE_VTBL, TILE_DESTROY_FN);
     nvse::lambda::insert_for_tests(&mut e, SCPT, LIST);

@@ -266,7 +266,7 @@ fn base_items_removed() {
     assert_eq!(e.mem.u32(CONT + 0x34), 0, "below 1: the node emptied");
     assert!(freed().is_empty(), "the item itself is not freed");
     // On an actor: the form unequipped first.
-    e.register(0x0088_c790, |_, w| {
+    e.register_words(0x0088_c790, 7, |_, w| {
         CALLS.with(|c| c.borrow_mut().push((0x0088_c790, w.to_vec())));
         Ret::default()
     });

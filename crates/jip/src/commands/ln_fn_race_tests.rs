@@ -76,7 +76,7 @@ fn an_npcs_race() {
             .map(|c| c.1)
             .collect::<Vec<_>>()
     };
-    e.register(0x0060_b240, |e, w| {
+    e.register_words(0x0060_b240, 3, |e, w| {
         CALLS.with(|c| c.borrow_mut().push((0x0060_b240, w.to_vec())));
         e.mem.set_u32(w[0] + 0x110, w[1]);
         Ret::default()

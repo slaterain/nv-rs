@@ -662,18 +662,18 @@ fn o16_world_unmade(shows: &[u32], no_locations: bool) -> Engine {
     e.mem.set_u32(O16_RESULTS + 4, O16_RESULT_DATA);
     e.mem.set_u32(O16_RESULTS + 8, 5);
     SHOWS_HERE.with(|s| *s.borrow_mut() = shows.to_vec());
-    e.register(0x005a_6ec0, |_, a| Ret {
+    e.register_words(0x005a_6ec0, 2, |_, a| Ret {
         eax: u32::from(SHOWS_HERE.with(|s| s.borrow().contains(&a[0]))),
         ..Ret::default()
     });
-    e.register(0x007c_b2e0, |e, a| {
+    e.register_words(0x007c_b2e0, 2, |e, a| {
         let n = e.mem.u32(a[0] + 8);
         let data = e.mem.u32(a[0] + 4);
         e.mem.set_u32(data + 4 * n, e.mem.u32(a[1]));
         e.mem.set_u32(a[0] + 8, n + 1);
         Ret::default()
     });
-    e.register(O16_NEXT, |e, a| {
+    e.register_words(O16_NEXT, 2, |e, a| {
         e.mem.set_u32(a[1] + 8, 0x7777);
         Ret::default()
     });
@@ -846,15 +846,17 @@ fn o16_the_second_pass_only_for_an_empty_list() {
 fn o16_the_deferred_init_message_makes_the_lists() {
     let mut e = o16_world_unmade(&[], false);
     // The same message makes JIP's position marker: its game calls as stand-ins.
-    e.register(0x00aa_3e40, |_, _| Ret {
+    e.register_words(0x00aa_3e40, 2, |_, _| Ret {
         eax: AREA_AT + 0x3a00,
         ..Ret::default()
     });
-    e.register(crate::commands::pos_marker::REFR_CONSTRUCTOR, |_, w| Ret {
-        eax: w[0],
-        ..Ret::default()
+    e.register_words(crate::commands::pos_marker::REFR_CONSTRUCTOR, 1, |_, w| {
+        Ret {
+            eax: w[0],
+            ..Ret::default()
+        }
     });
-    e.register(crate::commands::pos_marker::SET_TEMPORARY, |_, _| {
+    e.register_words(crate::commands::pos_marker::SET_TEMPORARY, 1, |_, _| {
         Ret::default()
     });
     assert_eq!(e.ext_free::<LoadScreenLists>().0.get(), None);

@@ -31,14 +31,14 @@ fn setup(installed: bool) -> Engine {
     LINES.with(|l| l.borrow_mut().clear());
     let mut e = engine();
     crate::install_as(&mut e, installed);
-    e.register(0x0071_b160, |_, _| eax(CONSOLE));
-    e.register(0x0071_d0a0, |e, a| {
+    e.register_words(0x0071_b160, 1, |_, _| eax(CONSOLE));
+    e.register_words(0x0071_d0a0, 3, |e, a| {
         assert_eq!((a[0], a[1]), (CONSOLE, a[2]), "the line is its own format");
         let line = nvse::table::guest_text(e, a[1]);
         LINES.with(|l| l.borrow_mut().push(line));
         eax(0)
     });
-    e.register(0x005e_1550, evaluate_line);
+    e.register_words(0x005e_1550, 10, evaluate_line);
     e
 }
 
@@ -53,6 +53,7 @@ fn run_as_line(e: &mut Engine, opcode: u32, args: &[Vec<u8>]) -> f64 {
     let words = line(e, opcode, args);
     let mut w = vec![execute_of(e, opcode)];
     w.extend_from_slice(&words);
+    w.push(0);
     assert_eq!(e.call(0x005e_1550, &w).eax & 0xff, 1);
     e.mem.f64(RESULT)
 }

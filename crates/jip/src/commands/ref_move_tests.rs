@@ -44,7 +44,7 @@ pub fn engine() -> Engine {
     e.mem.set_u32(VTBL_ACTOR + 0x100, 0x008d_0360);
     e.mem.set_u32(VTBL_NODE + 0xc, 0x0068_15c0);
     e.mem.set_u32(REFR, VTBL_OBJECT);
-    e.register(SET_LOCATION, |e, w| {
+    e.register_words(SET_LOCATION, 2, |e, w| {
         CALLS.with(|c| c.borrow_mut().push((SET_LOCATION, w.to_vec())));
         for i in 0..3 {
             let v = e.mem.u32(w[1] + 4 * i);
@@ -52,19 +52,19 @@ pub fn engine() -> Engine {
         }
         Ret::default()
     });
-    e.register(UPDATE_DOWNWARD_PASS, |e, w| {
+    e.register_words(UPDATE_DOWNWARD_PASS, 3, |e, w| {
         let mut words = w.to_vec();
         words.extend((0..3).map(|i| e.mem.u32(w[1] + 4 * i)));
         CALLS.with(|c| c.borrow_mut().push((UPDATE_DOWNWARD_PASS, words)));
         Ret::default()
     });
-    e.register(PHANTOM_SET_POSITION, |e, w| {
+    e.register_words(PHANTOM_SET_POSITION, 3, |e, w| {
         let mut words = w.to_vec();
         words.extend((0..4).map(|i| e.mem.u32(w[1] + 4 * i)));
         CALLS.with(|c| c.borrow_mut().push((PHANTOM_SET_POSITION, words)));
         Ret::default()
     });
-    e.register(MOVE_TO_MARKER, |_, w| {
+    e.register_words(MOVE_TO_MARKER, 5, |_, w| {
         CALLS.with(|c| c.borrow_mut().push((MOVE_TO_MARKER, w.to_vec())));
         Ret::default()
     });
@@ -416,7 +416,7 @@ fn reset_collision_bounds_the_waiting_nodes() {
 fn set_pos_root_takes_the_position_the_game_set() {
     let mut e = engine();
     give_3d(&mut e);
-    e.register(SET_LOCATION, |e, w| {
+    e.register_words(SET_LOCATION, 2, |e, w| {
         CALLS.with(|c| c.borrow_mut().push((SET_LOCATION, w.to_vec())));
         for (i, v) in [11.0f32, 22.0, 33.0].into_iter().enumerate() {
             e.mem.set_f32(w[0] + 0x30 + 4 * i as u32, v);
@@ -626,7 +626,7 @@ fn rotate_around_point_turns_the_node_about_the_origin() {
         e.mem.set_f32(NODE + 0x58 + 4 * i as u32, v);
     }
     // Note the position's x as the game's function finds it.
-    e.register(SET_LOCATION, |e, w| {
+    e.register_words(SET_LOCATION, 2, |e, w| {
         CALLS.with(|c| {
             c.borrow_mut()
                 .push((SET_LOCATION, vec![w[0], w[1], e.mem.u32(w[0] + 0x30)]))

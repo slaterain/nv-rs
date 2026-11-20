@@ -100,7 +100,7 @@ fn the_noise_texture() {
 #[test]
 fn the_owner() {
     let mut e = setup();
-    e.register(0x0054_6a40, |_, w| {
+    e.register_words(0x0054_6a40, 1, |_, w| {
         assert_eq!(w[0], CELL);
         Ret {
             eax: OWNER,
@@ -109,7 +109,7 @@ fn the_owner() {
     });
     call(&mut e, 0x28ab, &[r(1)]);
     assert_eq!(form_result(&e), 0x105);
-    e.register(0x0054_6a40, |_, _| Ret::default());
+    e.register_words(0x0054_6a40, 1, |_, _| Ret::default());
     e.mem.set_f64(RESULT, 0.0);
     call(&mut e, 0x28ab, &[r(1)]);
     assert_eq!(form_result(&e), 0);

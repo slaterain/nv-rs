@@ -50,12 +50,12 @@ fn world() -> Engine {
     ENTRY_CALLS.with(|c| c.borrow_mut().clear());
     DRAWS.with(|d| d.borrow_mut().clear());
     RELOADS.with(|r| r.borrow_mut().clear());
-    e.register(0x00aa_3e40, |_, a| {
+    e.register_words(0x00aa_3e40, 2, |_, a| {
         let at = NEXT.with(|n| n.get());
         NEXT.with(|n| n.set(at + a[1].next_multiple_of(8)));
         ret(at)
     });
-    e.register(0x00aa_4060, |_, a| {
+    e.register_words(0x00aa_4060, 2, |_, a| {
         FREED.with(|f| f.borrow_mut().push(a[1]));
         ret(0)
     });
@@ -68,7 +68,7 @@ fn world() -> Engine {
         ENTRY_CALLS.with(|c| c.borrow_mut().push((0, a[0], a[1])));
         ret(0)
     });
-    e.register(crate::game_patches::gh1::GET_RANDOM_INT, |_, _| {
+    e.register_words(crate::game_patches::gh1::GET_RANDOM_INT, 2, |_, _| {
         ret(DRAWS.with(|d| {
             let mut d = d.borrow_mut();
             if d.is_empty() {
@@ -78,11 +78,11 @@ fn world() -> Engine {
             }
         }))
     });
-    e.register(0x008c_17c0, |_, a| {
+    e.register_words(0x008c_17c0, 1, |_, a| {
         RELOADS.with(|r| r.borrow_mut().push(a[0]));
         ret(0)
     });
-    e.register(0x0047_ded0, |_, _| ret(12));
+    e.register_words(0x0047_ded0, 1, |_, _| ret(12));
     e.mem.set_u32(ENTRY_VT + 0x10, GET_TYPE_AT);
     e.mem.set_u32(ENTRY_VT + 0x30, ADD_ENTRY_AT);
     e.mem.set_u32(ENTRY_VT + 0x34, REMOVE_ENTRY_AT);
@@ -603,7 +603,7 @@ fn base_set_player_teammate(_: &mut Engine, a: &[u32]) -> Ret {
 #[test]
 fn the_teammate_wrap() {
     let mut e = ability_world();
-    e.register(0x008b_ca90, base_set_player_teammate);
+    e.register_words(0x008b_ca90, 2, base_set_player_teammate);
     BASE_TEAMMATE.with(|b| b.borrow_mut().clear());
     e.wrap(SET_PLAYER_TEAMMATE, set_player_teammate);
     e.call(0x008b_ca90, &[ACTOR, 1]);
@@ -833,10 +833,10 @@ fn the_deferred_init_message_switches_it_on() {
     let mut e = world();
     e.map(0x0108_6000, 0x5000);
     // The same message makes JIP's position marker: its game calls as stand-ins.
-    e.register(crate::commands::pos_marker::REFR_CONSTRUCTOR, |_, w| {
+    e.register_words(crate::commands::pos_marker::REFR_CONSTRUCTOR, 1, |_, w| {
         ret(w[0])
     });
-    e.register(crate::commands::pos_marker::SET_TEMPORARY, |_, _| ret(0));
+    e.register_words(crate::commands::pos_marker::SET_TEMPORARY, 1, |_, _| ret(0));
     e.ext::<crate::Jip>()
         .game_patches
         .settings

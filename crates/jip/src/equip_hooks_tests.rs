@@ -171,7 +171,7 @@ fn world_as(installed: bool) -> Engine {
         eax: e.mem.u32(a[0] + 0x1d4),
         ..Ret::default()
     });
-    e.register(0x0041_0220, |_, w| Ret {
+    e.register_words(0x0041_0220, 2, |_, w| Ret {
         eax: EXTRAS.with(|x| x.borrow().get(&(w[0], w[1])).copied().unwrap_or(0)),
         ..Ret::default()
     });
@@ -492,7 +492,7 @@ fn a_companion_equips_its_non_playable_armour_in_free_slots() {
     e.mem.set_u32(BIPED + 0x2c + 5 * 0x10, item(9));
     e.mem.set_f32(CHAR + 0x1b8, 30.0);
     e.mem.set_f32(CHAR + 0x1bc, 7.0);
-    e.register_double(0x008d_2110, |e, w| {
+    e.register_double_words(0x008d_2110, 1, |e, w| {
         CALLS.with(|c| {
             c.borrow_mut().push((
                 0x008d_2110,
@@ -893,7 +893,7 @@ fn the_flag_goes_down_when_the_equip_stops() {
     let a = armor(&mut e, 1, 4, true);
     let entry = selection(&mut e, a, 1, 0);
     menu_world(&mut e, entry);
-    e.register_double(0x0088_c830, |e, _| {
+    e.register_double_words(0x0088_c830, 7, |e, _| {
         assert!(force_equip_call(e));
         panic!("a guest exception");
     });

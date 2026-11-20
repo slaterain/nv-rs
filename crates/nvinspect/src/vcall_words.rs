@@ -1259,7 +1259,7 @@ fn public_constants<'a>(text: &str, names: impl Iterator<Item = &'a String>) -> 
 
 /// The text between the bracket before `text[open..]` and its match, literals and comments
 /// skipped; `open` is the index after the opening bracket.
-fn inside(text: &str, open: usize) -> Option<&str> {
+pub(crate) fn inside(text: &str, open: usize) -> Option<&str> {
     let bytes = text.as_bytes();
     let mut depth = 1usize;
     let mut i = open;
@@ -1285,7 +1285,7 @@ fn inside(text: &str, open: usize) -> Option<&str> {
 
 /// `text` cut at its top-level commas, comments left out, each piece trimmed; an empty last piece
 /// (a trailing comma) is dropped.
-fn pieces(text: &str) -> Vec<String> {
+pub(crate) fn pieces(text: &str) -> Vec<String> {
     let bytes = text.as_bytes();
     let mut out = Vec::new();
     let mut piece = String::new();
@@ -2554,7 +2554,7 @@ fn check_groups(
 }
 
 /// Every `.rs` file under `dir`, sorted.
-fn rust_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+pub(crate) fn rust_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };

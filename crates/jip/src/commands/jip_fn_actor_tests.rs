@@ -836,11 +836,11 @@ fn ammo() {
 #[test]
 fn turning() {
     let mut e = setup();
-    e.register(0x008b_b520, |_, w| {
+    e.register_words(0x008b_b520, 5, |_, w| {
         SEEN.with(|s| s.borrow_mut().push((0x008b_b520, w.to_vec())));
         ret(0)
     });
-    e.register(0x008b_b5c0, |_, w| {
+    e.register_words(0x008b_b5c0, 3, |_, w| {
         SEEN.with(|s| s.borrow_mut().push((0x008b_b5c0, w.to_vec())));
         ret(0)
     });

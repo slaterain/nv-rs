@@ -94,7 +94,7 @@ fn a_discovered_location_frees_its_cells_markers() {
     let mut e = engine();
     patch(&mut e);
     // A value's refresh (`Tile::Value::SetBool`).
-    e.register(0x00a0_9410, |_, _| Ret::default());
+    e.register_words(0x00a0_9410, 2, |_, _| Ret::default());
     let data = FORMS + 0x100;
     let record = FORMS + 0x200;
     let marker = FORMS + 0x400;

@@ -346,11 +346,11 @@ fn search_setup(e: &mut Engine) {
     for (t, sig) in [(0x28u32, b"WEAP"), (0x06, b"GLOB"), (0x38, b"KEYF")] {
         e.mem.write(0x0101_c2ac + 8 * (120 - t), sig);
     }
-    e.register(0x0071_b160, |_, _| Ret {
+    e.register_words(0x0071_b160, 1, |_, _| Ret {
         eax: 0x0300_f000,
         ..Ret::default()
     });
-    e.register(PRINT_FN, |e, w| {
+    e.register_words(PRINT_FN, 3, |e, w| {
         let mut words = vec![w[0]];
         words.push(w[1]);
         for i in 0..4 {

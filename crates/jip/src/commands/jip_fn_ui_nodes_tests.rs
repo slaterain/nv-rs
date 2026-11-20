@@ -60,7 +60,7 @@ fn setup() -> (Engine, Scene) {
         record(ADD_OBJECT, w);
         eax(0)
     });
-    e.register(READ_FILE, |e, w| {
+    e.register_words(READ_FILE, 2, |e, w| {
         record(READ_FILE, w);
         let path = nvse::table::guest_text(e, w[1]);
         eax(match path.as_slice() {
@@ -196,7 +196,7 @@ fn attach_ui_xml_uses_the_seen_root_and_needs_the_hud() {
 #[test]
 fn attach_ui_component_attaches_with_the_uio_row_on_or_off() {
     let (mut e, sc) = setup();
-    e.register(COMPRESS, |e, w| {
+    e.register_words(COMPRESS, 2, |e, w| {
         record(COMPRESS, w);
         let text = nvse::table::guest_text(e, w[1]);
         let data = e.mem.alloc(text.len() as u32 + 1);
@@ -212,11 +212,11 @@ fn attach_ui_component_attaches_with_the_uio_row_on_or_off() {
     };
     // UIO off: JIP's own path (its `jip_temp.xml` read with `Tile::ReadFile` under the HUD's
     // tile), the text handed over through `Menu::XMLHash`, no file: the same tile attached.
-    e.register(XML_SET_AT, |_, w| {
+    e.register_words(XML_SET_AT, 3, |_, w| {
         record(XML_SET_AT, w);
         eax(0)
     });
-    e.register(XML_REMOVE_AT, |_, w| {
+    e.register_words(XML_REMOVE_AT, 2, |_, w| {
         record(XML_REMOVE_AT, w);
         eax(1)
     });

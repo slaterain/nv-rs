@@ -98,7 +98,7 @@ fn setup() -> Engine {
     e.mem.set_u32(ARMO, VTBL_ARMOR);
     e.mem.set_u32(ARMO2, VTBL_ARMOR);
     // `__RTDynamicCast` to `BGSPickupPutdownSounds`: a weapon has it at +0xE8.
-    e.register(CAST_FN, |e, w| {
+    e.register_words(CAST_FN, 5, |e, w| {
         assert_eq!((w[2], w[3]), (RTTI_TES_FORM, RTTI_PICKUP_PUTDOWN_SOUNDS));
         Ret {
             eax: if w[0] != 0 && e.mem.u8(w[0] + 4) == 0x28 {

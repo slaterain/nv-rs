@@ -87,14 +87,14 @@ pub(crate) fn drawing(e: &mut Engine) {
     e.mem.set_u32(IM_WORD, IM_AT);
     e.mem.set_u32(IM_AT + 4, UI_SCENE_AT);
     e.mem.set_u32(UI_SCENE_AT + 0xac, UI_CAMERA_AT);
-    e.register(CREATE_RENDERED_TEXTURE, |_, w| {
+    e.register_words(CREATE_RENDERED_TEXTURE, 11, |_, w| {
         record(CREATE_RENDERED_TEXTURE, w);
         Ret {
             eax: RENDERED_AT,
             ..Ret::default()
         }
     });
-    e.register(NI_ALLOC, |_, w| {
+    e.register_words(NI_ALLOC, 1, |_, w| {
         record(NI_ALLOC, w);
         Ret {
             eax: ALLOC_AT,
@@ -137,7 +137,7 @@ pub(crate) fn drawing(e: &mut Engine) {
     records!(TEXTURE_DELETE);
     pass!(CULL_SCENE);
     pass!(DRAW_SCENE);
-    e.register(WATER_UPDATE, |e, w| {
+    e.register_words(WATER_UPDATE, 3, |e, w| {
         let mut words = w.to_vec();
         words.push(u32::from(e.mem.u8(EXTRA_CAMERA)));
         words.push(e.mem.u32(WATER_WORDS));
@@ -250,7 +250,7 @@ fn sizes_round_as_cvtps2dq() {
 fn no_texture_made_draws_nothing() {
     let mut e = scene_engine();
     drawing(&mut e);
-    e.register(CREATE_RENDERED_TEXTURE, |_, w| {
+    e.register_words(CREATE_RENDERED_TEXTURE, 11, |_, w| {
         record(CREATE_RENDERED_TEXTURE, w);
         Ret::default()
     });

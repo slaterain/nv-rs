@@ -370,7 +370,7 @@ fn ash_piles_not_installed_installed_and_the_row() {
         eax: 0xffff_ffff,
         ..Ret::default()
     });
-    e.register(0x0061_a310, |_, _| Ret::default());
+    e.register_words(0x0061_a310, 1, |_, _| Ret::default());
     super::super::set_row(&mut e, true);
     assert_eq!(e.site(DELETED_ACTOR_ASH_PILE.addr(), &[REF]), Some(1));
     // Not a pile: G103's routine answers (the exe's type branches passed over), nothing deleted.
@@ -476,7 +476,7 @@ fn cleanup_world(source: u32) -> Engine {
     e.mem.set_u32(REF + 0x20, BASE_FORM);
     e.mem.set_u8(BASE_FORM + 6, IS_ASH_PILE);
     e.mem.set_u32(OTHER + 0x20, AREA_AT + 0xa00);
-    e.register(0x0057_2270, |_, _| Ret::default());
+    e.register_words(0x0057_2270, 1, |_, _| Ret::default());
     let pile_list = REF + 0x44;
     crate::commands::test_support::put_extra(&mut e, pile_list, AREA_AT + 0xb00, 0x89, source);
     crate::commands::test_support::put_extra(&mut e, OTHER + 0x44, AREA_AT + 0xb40, 0x89, REF);
@@ -817,7 +817,7 @@ fn row_on() -> Engine {
         eax: 0xffff_ffff,
         ..Ret::default()
     });
-    e.register(0x0061_a310, |_, _| Ret::default());
+    e.register_words(0x0061_a310, 1, |_, _| Ret::default());
     super::super::set_row(&mut e, true);
     e
 }
@@ -1110,12 +1110,12 @@ fn weapon_world(paths: &[u32], held: u32, draws: &[u32]) -> Engine {
     for stub in [STUB_CLEAR_SLOT, STUB_SET_WEAPON, STUB_UPDATE] {
         e.register(stub, |_, _| Ret::default());
     }
-    e.register(STUB_LEVEL, |_, _| Ret {
+    e.register_words(STUB_LEVEL, 1, |_, _| Ret {
         eax: 5,
         ..Ret::default()
     });
     DRAWS.with(|d| *d.borrow_mut() = draws.to_vec());
-    e.register(STUB_RNG, |_, _| Ret {
+    e.register_words(STUB_RNG, 2, |_, _| Ret {
         eax: DRAWS.with(|d| d.borrow_mut().remove(0)),
         ..Ret::default()
     });
@@ -1357,7 +1357,7 @@ fn o17_the_chance_and_the_shuffle() {
     // Level 40 x 2 = 80 held to 60: draw 59 under; shuffle 4 (4, 1, 2): slot 4 halves to 30;
     // slot 1 present, 30 <= 59: only the first kept (4).
     let mut e = mods_world(&[59, 4]);
-    e.register(STUB_LEVEL, |_, _| Ret {
+    e.register_words(STUB_LEVEL, 1, |_, _| Ret {
         eax: 40,
         ..Ret::default()
     });
@@ -1366,7 +1366,7 @@ fn o17_the_chance_and_the_shuffle() {
     // Level 1 x 2 = 2 held up to 10; draw 9; shuffle 1 (1, 4, 2): 1 halves to 5, 4 present and
     // 5 <= 9: only the first (1).
     let mut e = mods_world(&[9, 1]);
-    e.register(STUB_LEVEL, |_, _| Ret {
+    e.register_words(STUB_LEVEL, 1, |_, _| Ret {
         eax: 1,
         ..Ret::default()
     });
@@ -1375,7 +1375,7 @@ fn o17_the_chance_and_the_shuffle() {
     // A negative level word (sign-extended) is a huge chance: held to 60. Draw 0, shuffle 5
     // (4, 2, 1): 4 halves 60 to 30, 2 absent, 1 present and 30 > 0: kept: 5.
     let mut e = mods_world(&[0, 5]);
-    e.register(STUB_LEVEL, |_, _| Ret {
+    e.register_words(STUB_LEVEL, 1, |_, _| Ret {
         eax: 0xffff,
         ..Ret::default()
     });
@@ -1384,7 +1384,7 @@ fn o17_the_chance_and_the_shuffle() {
     // Only the level word counts (`cwde`): 0xABCD_0005 is level 5, chance 10; draw 30: nothing
     // (the whole word would give 60, over 30).
     let mut e = mods_world(&[30]);
-    e.register(STUB_LEVEL, |_, _| Ret {
+    e.register_words(STUB_LEVEL, 1, |_, _| Ret {
         eax: 0xabcd_0005,
         ..Ret::default()
     });
@@ -1595,7 +1595,7 @@ fn o18_a_loaded_npc_gets_its_perks_on() {
     let block = e.mem.alloc(0xc0);
     thread_local! { static O18_BLOCK: std::cell::Cell<u32> = const { std::cell::Cell::new(0) }; }
     O18_BLOCK.with(|b| b.set(block));
-    e.register(0x00aa_3e40, |_, _| Ret {
+    e.register_words(0x00aa_3e40, 2, |_, _| Ret {
         eax: O18_BLOCK.with(std::cell::Cell::get),
         ..Ret::default()
     });

@@ -64,7 +64,7 @@ fn base() -> Engine {
         ret(1)
     });
     e.register(CLOSE_HANDLE, |_, _| ret(1));
-    e.register(OWNER_TOPIC, |_, _| {
+    e.register_words(OWNER_TOPIC, 1, |_, _| {
         BASE_CALLS.with(|c| c.set(c.get() + 1));
         ret(TOPIC)
     });

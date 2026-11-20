@@ -61,7 +61,7 @@ fn setup() -> Engine {
     e.mem.set_u32(PROC + 0x114, INFO);
     e.mem.set_u32(INFO + 8, MISC);
     e.mem.set_u32(NPC + 0x68, NPC_PROC);
-    e.register(CALC_WEAPON_DAMAGE, |e, w| {
+    e.register_words(CALC_WEAPON_DAMAGE, 8, |e, w| {
         CALLS.with(|c| c.borrow_mut().push((CALC_WEAPON_DAMAGE, w.to_vec())));
         let process = e.mem.u32(e.mem.u32(w[0] - 0xa4 + 0x68) + 0x114);
         CALLS.with(|c| c.borrow_mut().push((INFO_SEEN, vec![process])));
@@ -92,7 +92,7 @@ fn inventory_ref(e: &mut Engine, container: u32) -> u32 {
         eax: TEMP_REF,
         ..Ret::default()
     });
-    e.register(0x0055_a2f0, |e, w| {
+    e.register_words(0x0055_a2f0, 1, |e, w| {
         e.mem.set_u32(w[0] + 0xc, 0xff00_0900);
         Ret::default()
     });

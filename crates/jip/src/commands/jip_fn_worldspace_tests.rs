@@ -181,15 +181,15 @@ fn the_climate_echoed() {
     const NAME: u32 = FORMS + 0x5800;
     let mut e = setup();
     LINES.with(|l| l.borrow_mut().clear());
-    e.register(0x0071_b160, |_, _| Ret {
+    e.register_words(0x0071_b160, 1, |_, _| Ret {
         eax: CONSOLE,
         ..Ret::default()
     });
-    e.register(0x0071_d0a0, |e, a| {
+    e.register_words(0x0071_d0a0, 3, |e, a| {
         LINES.with(|l| l.borrow_mut().push(nvse::table::guest_text(e, a[1])));
         Ret::default()
     });
-    e.register(0x005e_1550, |e, w| e.call(w[0], &w[1..9]));
+    e.register_words(0x005e_1550, 10, |e, w| e.call(w[0], &w[1..9]));
     let vtbl = FORMS + 0x6000;
     e.mem.set_u32(CLIMATE, vtbl);
     e.mem.set_u32(vtbl + 0x130, 0x0050_0000);
@@ -206,6 +206,7 @@ fn the_climate_echoed() {
         let execute = crate::test_support::execute_of(e, 0x26d3);
         let mut all = vec![execute];
         all.extend_from_slice(&words);
+        all.push(0);
         e.call(0x005e_1550, &all);
     };
     run(&mut e);

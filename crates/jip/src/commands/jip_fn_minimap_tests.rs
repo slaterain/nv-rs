@@ -235,7 +235,7 @@ fn setup() -> (Engine, Hud) {
     for f in [0x00a0_9410, 0x00a5_a040, 0x00b5_7bd0] {
         e.register(f, |_, _| eax(0));
     }
-    e.register(ADD_STRING, |_, _| eax(0x0dea_7100));
+    e.register_words(ADD_STRING, 1, |_, _| eax(0x0dea_7100));
     e.register(SHAPE_DATA_CONSTRUCT, |_, w| {
         record(SHAPE_DATA_CONSTRUCT, w);
         eax(w[0])

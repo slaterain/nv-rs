@@ -200,15 +200,15 @@ fn idle_loop_times() {
 #[test]
 fn nav_meshes() {
     let mut e = setup();
-    e.register(MANAGER_FN, |_, w| {
+    e.register_words(MANAGER_FN, 0, |_, w| {
         rec(MANAGER_FN, w);
         eax(MANAGER)
     });
-    e.register(DISABLE_FN, |_, w| {
+    e.register_words(DISABLE_FN, 2, |_, w| {
         rec(DISABLE_FN, w);
         eax(0)
     });
-    e.register(ENABLE_FN, |_, w| {
+    e.register_words(ENABLE_FN, 2, |_, w| {
         rec(ENABLE_FN, w);
         eax(0)
     });
@@ -226,7 +226,7 @@ fn nav_meshes() {
 #[test]
 fn terrain_height() {
     let mut e = setup();
-    e.register(TERRAIN_FN, |e, w| {
+    e.register_words(TERRAIN_FN, 3, |e, w| {
         rec(TERRAIN_FN, w);
         assert_eq!(e.mem.f32(w[2]), 0.0, "the result starts at 0");
         let (x, y) = (e.mem.f32(w[1]), e.mem.f32(w[1] + 4));
@@ -377,7 +377,7 @@ fn difficulty() {
 #[test]
 fn first_person() {
     let mut e = setup();
-    e.register(SET_FIRST_PERSON_FN, |_, w| {
+    e.register_words(SET_FIRST_PERSON_FN, 2, |_, w| {
         rec(SET_FIRST_PERSON_FN, w);
         eax(1)
     });
@@ -399,7 +399,7 @@ fn first_person() {
 #[test]
 fn detection_state() {
     let mut e = setup();
-    e.register(DETECTION_FN, |e, w| {
+    e.register_words(DETECTION_FN, 3, |e, w| {
         rec(DETECTION_FN, w);
         eax(e.mem.u32(FORMS + 0x7000))
     });
@@ -663,7 +663,7 @@ fn xp_rewards() {
         rec(MOD_AV_FN, w);
         eax(0)
     });
-    e.register(PRECACHE_FN, |_, w| {
+    e.register_words(PRECACHE_FN, 3, |_, w| {
         rec(PRECACHE_FN, w);
         eax(0)
     });
@@ -913,7 +913,7 @@ fn an_actor_value_name_past_the_buffer() {
 #[test]
 fn terrain_height_without_tes() {
     let mut e = setup();
-    e.register(TERRAIN_FN, |_, w| {
+    e.register_words(TERRAIN_FN, 3, |_, w| {
         rec(TERRAIN_FN, w);
         eax(1)
     });
@@ -1182,7 +1182,7 @@ fn descriptions(e: &mut Engine) {
         rec(DESC_GET_FN, w);
         eax(e.mem.u32(w[0] + 4))
     });
-    e.register(CAST_FN, |_, w| {
+    e.register_words(CAST_FN, 5, |_, w| {
         rec(CAST_FN, w);
         let yes = w[0] == DESCRIBED && w[2] == 0x0118_3028 && w[3] == 0x0118_38f8;
         eax(if yes { DESC } else { 0 })
@@ -1352,7 +1352,7 @@ fn scene(e: &mut Engine) {
     e.mem.set_u32(TES_AT + 0x34, CELL_IN);
     e.mem.set_u32(PICK_ANSWER, 0);
     e.mem.set_f32(PICK_ANSWER + 4, 0.5);
-    e.register(PICK_FN, |e, w| {
+    e.register_words(PICK_FN, 3, |e, w| {
         rec(PICK_FN, w);
         for i in 0..0x30 {
             e.mem.set_u32(PICKED + 4 * i, e.mem.u32(w[1] + 4 * i));
@@ -1540,7 +1540,7 @@ fn reticle_node() {
 fn reticle_target_limb() {
     let mut e = setup();
     scene(&mut e);
-    e.register(LIMB_FN, |_, w| {
+    e.register_words(LIMB_FN, 2, |_, w| {
         rec(LIMB_FN, w);
         eax(7)
     });
@@ -1901,12 +1901,12 @@ fn dead(e: &mut Engine, i: u32) -> (u32, u32) {
 fn clear_dead_actors_cmd() {
     let mut e = setup();
     e.mem.set_u32(VT_REFR + 0x100, 0x008d_0360);
-    e.register(KEEPS_FN, |e, w| {
+    e.register_words(KEEPS_FN, 1, |e, w| {
         rec(KEEPS_FN, w);
         // The answer is the byte in al: the upper bytes are set for every actor.
         eax(0xabcd_ef00 | u32::from(e.mem.u32(w[0] + 0x40) == 0x77))
     });
-    e.register(FADE_FN, |_, w| {
+    e.register_words(FADE_FN, 2, |_, w| {
         rec(FADE_FN, w);
         eax(0)
     });
@@ -2140,15 +2140,15 @@ fn sneak_setup() -> Engine {
         e.mem.set_u32(SNEAK_MOVER + 0x94, w[1]);
         eax(0)
     });
-    e.register(SNEAK_CHANGED_FN, |_, w| {
+    e.register_words(SNEAK_CHANGED_FN, 2, |_, w| {
         rec(SNEAK_CHANGED_FN, w);
         eax(0)
     });
-    e.register(IRON_SIGHTS_FN, |_, w| {
+    e.register_words(IRON_SIGHTS_FN, 4, |_, w| {
         rec(IRON_SIGHTS_FN, w);
         eax(0)
     });
-    e.register(BLOCK_FN, |_, w| {
+    e.register_words(BLOCK_FN, 2, |_, w| {
         rec(BLOCK_FN, w);
         eax(0)
     });

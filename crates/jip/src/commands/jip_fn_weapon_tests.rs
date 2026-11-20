@@ -590,7 +590,7 @@ mod equipped {
             eax: TEMP_REF,
             ..Ret::default()
         });
-        e.register(0x0055_a2f0, |e, w| {
+        e.register_words(0x0055_a2f0, 1, |e, w| {
             e.mem.set_u32(w[0] + 0xc, 0xff00_0900);
             Ret::default()
         });

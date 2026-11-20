@@ -66,7 +66,7 @@ fn setup() -> Engine {
     e.mem.set_u32(CONT_REF + 0x20, CONT);
     // `__RTDynamicCast` to `TESValueForm`: weapons and armour (and, for the base-form test, the
     // container) have it at +0x98.
-    e.register(CAST_FN, |e, w| {
+    e.register_words(CAST_FN, 5, |e, w| {
         assert_eq!((w[2], w[3]), (RTTI_TES_FORM, RTTI_TES_VALUE_FORM));
         let kind = e.mem.u8(w[0] + 4);
         Ret {
@@ -117,7 +117,7 @@ fn inv_ref(e: &mut Engine, item: u32, xdata: u32) -> u32 {
         eax: TEMP_REF,
         ..Ret::default()
     });
-    e.register(0x0055_a2f0, |e, w| {
+    e.register_words(0x0055_a2f0, 1, |e, w| {
         e.mem.set_u32(w[0] + 0xc, 0xff00_0800);
         Ret::default()
     });
@@ -451,8 +451,8 @@ fn ref_heap(e: &mut Engine) {
             ..Ret::default()
         }
     });
-    e.register(0x0040_1030, |_, _| Ret::default());
-    e.register(0x0055_a2f0, |e, w| {
+    e.register_words(0x0040_1030, 1, |_, _| Ret::default());
+    e.register_words(0x0055_a2f0, 1, |e, w| {
         let n = e.mem.u32(ALLOC + 4) + 1;
         e.mem.set_u32(ALLOC + 4, n);
         e.mem.set_u32(w[0] + 0xc, 0xff00_0000 + n);
@@ -779,7 +779,7 @@ fn armor_effective_dt_and_dr() {
     ref_heap(&mut e);
     // On the entry: its count and its first list (the low bit).
     // Both take the entry and JIP's 0 (`RET 4`; the translations read two words).
-    e.register(DT_FN, |e, w| {
+    e.register_words(DT_FN, 2, |e, w| {
         assert_eq!(w.len(), 2, "the entry and one word");
         assert_eq!(w[1], 0);
         Ret {
@@ -787,7 +787,7 @@ fn armor_effective_dt_and_dr() {
             ..Ret::default()
         }
     });
-    e.register(DR_FN, |e, w| {
+    e.register_words(DR_FN, 2, |e, w| {
         assert_eq!(w.len(), 2, "the entry and one word");
         assert_eq!(w[1], 0);
         Ret {
@@ -1018,18 +1018,18 @@ fn b3_clear() {
 fn b3_stand_ins(e: &mut Engine) {
     b3_clear();
     e.mem.set_u32(OBJECTS + 0x7fc, OBJECTS);
-    e.register(INIT_FN, |e, w| {
+    e.register_words(INIT_FN, 1, |e, w| {
         b3_log(INIT_FN, w);
         e.mem.set_u32(w[0], 0x0101_c130);
         e.mem.set_u32(w[0] + 4, 0);
         e.mem.set_u32(w[0] + 8, 0);
         Ret::default()
     });
-    e.register(DESTROY_FN, |_, w| {
+    e.register_words(DESTROY_FN, 1, |_, w| {
         b3_log(DESTROY_FN, w);
         Ret::default()
     });
-    e.register(ADD_FN, |e, w| {
+    e.register_words(ADD_FN, 4, |e, w| {
         b3_log(ADD_FN, w);
         let object = e.mem.u32(OBJECTS + 0x7fc);
         e.mem.set_u32(OBJECTS + 0x7fc, object + 0x10);
@@ -1056,30 +1056,30 @@ fn b3_stand_ins(e: &mut Engine) {
         }
         Ret::default()
     });
-    e.register(LEVELED_FN, |_, w| {
+    e.register_words(LEVELED_FN, 5, |_, w| {
         b3_log(LEVELED_FN, w);
         Ret::default()
     });
-    e.register(LEVEL_FN, |_, w| {
+    e.register_words(LEVEL_FN, 2, |_, w| {
         b3_log(LEVEL_FN, w);
         Ret {
             eax: 7,
             ..Ret::default()
         }
     });
-    e.register(MOVE_FN, |_, w| {
+    e.register_words(MOVE_FN, 3, |_, w| {
         b3_log(MOVE_FN, w);
         Ret::default()
     });
-    e.register(EQUIP_FN, |_, w| {
+    e.register_words(EQUIP_FN, 7, |_, w| {
         b3_log(EQUIP_FN, w);
         Ret::default()
     });
-    e.register(UNEQUIP_FN, |_, w| {
+    e.register_words(UNEQUIP_FN, 7, |_, w| {
         b3_log(UNEQUIP_FN, w);
         Ret::default()
     });
-    e.register(MESSAGE_FN, |e, w| {
+    e.register_words(MESSAGE_FN, 6, |e, w| {
         b3_log(MESSAGE_FN, w);
         let text = nvse::table::guest_text(e, w[0]);
         SHOWN.with(|c| c.borrow_mut().push(text));
@@ -1717,7 +1717,7 @@ fn b4_setup() -> Engine {
     e.mem.set_u32(ENTRY_W, WLISTS);
     put_list(&mut e, WLISTS, WNODES, &[WL1]);
     e.mem.set_u32(COPIES - 4, COPIES);
-    e.register(COPY_FN, |e, w| {
+    e.register_words(COPY_FN, 3, |e, w| {
         assert_eq!(w.len(), 3, "this, the source, the byte");
         assert_eq!(w[2], 0, "a copy, not a move");
         b3_log(COPY_FN, w);
@@ -2152,7 +2152,7 @@ fn item_message_is_marked_as_a_plugins_call() {
     inventory(&mut e);
     b3_stand_ins(&mut e);
     name_items(&mut e);
-    e.register(MESSAGE_FN, |e, _| {
+    e.register_words(MESSAGE_FN, 6, |e, _| {
         MARKED.with(|m| m.borrow_mut().push(e.caller_marked(PLUGIN_UI_MESSAGE)));
         Ret::default()
     });

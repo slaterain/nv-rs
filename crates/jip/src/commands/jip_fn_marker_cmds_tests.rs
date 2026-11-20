@@ -35,7 +35,7 @@ fn engine() -> Engine {
     for i in 0..3 {
         e.mem.set_f32(MARKER + POSITION + 4 * i, -1.0);
     }
-    e.register(PLACE_AT_ME, |e, w| {
+    e.register_words(PLACE_AT_ME, 6, |e, w| {
         CALLS.with(|c| c.borrow_mut().push((PLACE_AT_ME, w.to_vec())));
         Ret {
             eax: e.mem.u32(PLACE_ANSWER),

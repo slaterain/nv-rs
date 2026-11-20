@@ -94,7 +94,7 @@ fn setup() -> Engine {
     e.map(0x011d_e000, 0x1000);
     // No opened archive (`GetFileArchived` walks none), its path hash a stand-in.
     e.map(0x011f_8000, 0x1000);
-    e.register(0x00af_d270, |_, _| Ret::default());
+    e.register_words(0x00af_d270, 3, |_, _| Ret::default());
     // Forms: a static (bound), a reference to it with 3D, a reference made in game, a plain
     // form (not bound).
     for (f, vt, id) in [
@@ -146,7 +146,7 @@ fn setup() -> Engine {
         Ret::default()
     });
     // The string table: one count more for each ask.
-    e.register(0x00a5_b690, |e, w| {
+    e.register_words(0x00a5_b690, 1, |e, w| {
         let text = nvse::table::guest_text(e, w[0]);
         let at = make_string(e, &text);
         let c = e.mem.u32(at - 8);
@@ -157,7 +157,7 @@ fn setup() -> Engine {
         }
     });
     // `NiNode::Create`'s game half: new empty nodes 0x100 apart.
-    e.register(0x00a5_f030, |e, _| {
+    e.register_words(0x00a5_f030, 0, |e, _| {
         let n = e.mem.u32(NEW_NODES);
         e.mem.set_u32(NEW_NODES, n + 1);
         let at = NEW_NODES + 0x100 * (n + 1);
@@ -411,7 +411,7 @@ const UPDATE_FN: u32 = 0x0dea_2030;
 fn model_setup(e: &mut Engine) {
     e.mem.set_u32(0x011c_3b3c, FORMS + 0xc300);
     e.mem.set_u32(FORMS + 0xc300, FORMS + 0xc310);
-    e.register(0x0044_93d0, |e, w| {
+    e.register_words(0x0044_93d0, 3, |e, w| {
         let path = nvse::table::guest_text(e, w[1]);
         let found = path.eq_ignore_ascii_case(b"gun.nif");
         e.mem.set_u32(w[2], if found { MODEL } else { 0 });
@@ -817,7 +817,7 @@ fn model_has_block_loads_a_base_forms_model() {
     node(&mut e, LOADED_KID, b"Lid", &[]);
     node(&mut e, LOADED_ROOT, b"BoxRoot", &[LOADED_KID]);
     e.mem.set_u32(0x011c_3b3c, FORMS + 0x1_4400);
-    e.register(0x0044_7080, |e, w| {
+    e.register_words(0x0044_7080, 7, |e, w| {
         let mut words = w.to_vec();
         words[1] = 0;
         CALLS.with(|c| c.borrow_mut().push((0x0044_7080, words)));

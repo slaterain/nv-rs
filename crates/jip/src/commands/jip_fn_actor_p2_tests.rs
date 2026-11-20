@@ -637,23 +637,23 @@ fn kill_xp_through_the_game() {
     e.map(0x011d_e000, 0x1000);
     e.mem.set_u32(0x011d_ea3c, PLAYER);
     e.mem.set_u32(PLAYER + 0x7b8, 3);
-    e.register(0x0047_ded0, |_, w| {
+    e.register_words(0x0047_ded0, 1, |_, w| {
         CALLED.with(|c| c.borrow_mut().push((0x47ded0, w.to_vec())));
         // A 16-bit answer (`ushort`): the high half of eax is not part of it.
         eax(0x1234_fffe)
     });
-    e.register(0x0067_05b0, |_, w| {
+    e.register_words(0x0067_05b0, 2, |_, w| {
         CALLED.with(|c| c.borrow_mut().push((0x6705b0, w.to_vec())));
         eax(25)
     });
-    e.register(0x0064_8c80, |_, w| {
+    e.register_words(0x0064_8c80, 2, |_, w| {
         CALLED.with(|c| c.borrow_mut().push((0x648c80, w.to_vec())));
         Ret {
             st0: 37.75,
             ..Ret::default()
         }
     });
-    e.register(0x0040_6ce0, |_, w| {
+    e.register_words(0x0040_6ce0, 1, |_, w| {
         CALLED.with(|c| c.borrow_mut().push((0x406ce0, w.to_vec())));
         Ret {
             st0: f64::from(f32::from_bits(w[0]).floor()),
@@ -771,7 +771,7 @@ fn set_weapon_out_calls_the_game() {
 #[test]
 fn water_immersion() {
     let mut e = setup();
-    e.register(0x0088_5560, |_, w| {
+    e.register_words(0x0088_5560, 3, |_, w| {
         CALLED.with(|c| c.borrow_mut().push((0x885560, w.to_vec())));
         Ret {
             st0: 0.625,
@@ -983,7 +983,7 @@ fn equipped_slots_against_an_armour() {
 #[test]
 fn eaten_marks() {
     let mut e = setup();
-    e.register(0x0043_0200, |e, w| {
+    e.register_words(0x0043_0200, 1, |e, w| {
         CALLED.with(|c| c.borrow_mut().push((0x430200, w.to_vec())));
         let x = w[0];
         e.mem.set_u8(x + 4, 0x5f);

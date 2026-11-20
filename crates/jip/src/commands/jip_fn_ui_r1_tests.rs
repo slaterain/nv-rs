@@ -78,7 +78,7 @@ fn setup() -> Engine {
         LIST_VFNS[2],
         LIST_VFNS[3]
     );
-    e.register(REFRESH_FN, |_, w| {
+    e.register_words(REFRESH_FN, 2, |_, w| {
         record(REFRESH_FN, w);
         Ret::default()
     });
@@ -335,19 +335,19 @@ fn hud_stand_ins(e: &mut Engine) {
         record(CLICK_FN, w);
         Ret::default()
     });
-    e.register(0x0071_18d0, |_, w| {
+    e.register_words(0x0071_18d0, 1, |_, w| {
         record(0x0071_18d0, w);
         Ret::default()
     });
-    e.register(0x0071_26c0, |_, _| Ret {
+    e.register_words(0x0071_26c0, 2, |_, _| Ret {
         eax: HUD_TILE,
         ..Ret::default()
     });
-    e.register(0x00a0_b110, |_, w| {
+    e.register_words(0x00a0_b110, 2, |_, w| {
         record(0x00a0_b110, w);
         Ret::default()
     });
-    e.register(0x00a0_12d0, |_, w| {
+    e.register_words(0x00a0_12d0, 4, |_, w| {
         record(0x00a0_12d0, w);
         Ret::default()
     });
@@ -439,28 +439,28 @@ fn drag_stand_ins(e: &mut Engine) {
     for (id, v) in [(0xfa1, 3.0), (0xfa2, 4.0)] {
         TRAITS.with(|t| t.borrow_mut().push(((HUD_TILE, id), v)));
     }
-    e.register(0x0070_ecb0, |_, _| Ret {
+    e.register_words(0x0070_ecb0, 0, |_, _| Ret {
         st0: 2.0,
         ..Ret::default()
     });
-    e.register(0x00a0_13d0, |_, _| Ret {
+    e.register_words(0x00a0_13d0, 1, |_, _| Ret {
         st0: 10.0,
         ..Ret::default()
     });
-    e.register(0x00a0_1440, |_, _| Ret {
+    e.register_words(0x00a0_1440, 1, |_, _| Ret {
         st0: 20.0,
         ..Ret::default()
     });
-    e.register(0x00a0_11b0, |_, w| Ret {
+    e.register_words(0x00a0_11b0, 2, |_, w| Ret {
         st0: f64::from(trait_of(w[0], w[1]).unwrap_or(0.0)),
         ..Ret::default()
     });
-    e.register(0x00a0_12d0, |_, w| {
+    e.register_words(0x00a0_12d0, 4, |_, w| {
         record(0x00a0_12d0, w);
         TRAITS.with(|t| t.borrow_mut().push(((w[0], w[1]), f32::from_bits(w[2]))));
         Ret::default()
     });
-    e.register(0x00a0_1230, |_, w| Ret {
+    e.register_words(0x00a0_1230, 2, |_, w| Ret {
         eax: u32::from(trait_of(w[0], w[1]) == Some(1.0)),
         ..Ret::default()
     });

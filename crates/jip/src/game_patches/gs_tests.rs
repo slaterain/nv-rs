@@ -686,11 +686,11 @@ fn d07_runs_at_deferred_init() {
     let mut e = ccc(NAME, 0x0500_0ade, BEFORE, true, ON);
     // The temporary position marker JIP also makes at `DeferredInit`: stand-ins.
     use crate::commands::pos_marker::{REFR_CONSTRUCTOR, SET_TEMPORARY};
-    e.register(REFR_CONSTRUCTOR, |_, w| Ret {
+    e.register_words(REFR_CONSTRUCTOR, 1, |_, w| Ret {
         eax: w[0],
         ..Ret::default()
     });
-    e.register(SET_TEMPORARY, |_, _| Ret::default());
+    e.register_words(SET_TEMPORARY, 1, |_, _| Ret::default());
     dispatch(&mut e, msg::MAIN_GAME_LOOP, 0, 0);
     assert_eq!(word(&e)[1], BEFORE, "only DeferredInit");
     dispatch(&mut e, msg::DEFERRED_INIT, 0, 0);
@@ -710,7 +710,7 @@ fn g60_remove_me_refreshes_at_the_next_main_loop() {
     e.map(0x011f_3000, 0x1000);
     // The inventory menu shown (`MENU_SHOWN` 0x011F308F + its id 0x3EA).
     e.mem.set_u8(0x011f_308f + 0x3ea, 1);
-    e.register(0x0078_2a90, |_, _| {
+    e.register_words(0x0078_2a90, 0, |_, _| {
         REFRESHES.with(|r| r.set(r.get() + 1));
         Ret::default()
     });

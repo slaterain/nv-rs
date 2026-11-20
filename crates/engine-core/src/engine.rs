@@ -282,6 +282,9 @@ pub struct Engine {
     /// "call budget spent" (a diagnostic for a run that loops for ever; the host's
     /// `NV_MOVE_CALL_BUDGET`). Set with [`Engine::set_call_budget`].
     call_budget: Option<u64>,
+    /// Debug builds: the word counts test stand-ins declared ([`Engine::register_words`]).
+    #[cfg(debug_assertions)]
+    stand_in_words: AddrMap<u32, u8>,
     /// When `Some`, how many times each (caller, address) pair was called through
     /// [`Engine::call`], keyed `caller << 32 | address` (the caller is the innermost function on
     /// the call stack, 0 at a stage's top): where a long run spends its calls (the host's
@@ -473,6 +476,8 @@ impl Engine {
             trace: None,
             trace_keep: TRACE_KEEP,
             call_budget: None,
+            #[cfg(debug_assertions)]
+            stand_in_words: AddrMap::default(),
             call_counts: None,
             slice_left: 0,
             slice_len: 0,
@@ -758,7 +763,55 @@ impl Engine {
     /// ([`Engine::wrap`]) goes with what it wrapped.
     pub fn register(&mut self, addr: u32, f: AbiFn) {
         self.extend.chains.remove(&addr);
+        #[cfg(debug_assertions)]
+        self.stand_in_words.remove(&addr);
         self.put(addr, f);
+    }
+
+    /// [`Engine::register`] for a test stand-in that declares the words the exe's function at
+    /// that place takes (`this` included: `1 + n / 4` for its `RET n`). In debug builds every
+    /// call into it is held to that count, too few and too many alike, so a translation that
+    /// hands a virtual or direct call the wrong number of words fails its test instead of
+    /// passing through a stand-in that takes anything. Release builds register it as
+    /// [`Engine::register`] does (no check on the play build's call path).
+    pub fn register_words(&mut self, addr: u32, words: u8, f: AbiFn) {
+        self.register(addr, f);
+        #[cfg(debug_assertions)]
+        self.stand_in_words.insert(addr, words);
+        #[cfg(not(debug_assertions))]
+        let _ = words;
+    }
+
+    /// [`Engine::register_double`] with the word count of [`Engine::register_words`].
+    pub fn register_double_words(
+        &mut self,
+        addr: u32,
+        words: u8,
+        f: impl FnMut(&mut Engine, &[u32]) -> Ret + 'static,
+    ) {
+        self.register_double(addr, f);
+        #[cfg(debug_assertions)]
+        self.stand_in_words.insert(addr, words);
+        #[cfg(not(debug_assertions))]
+        let _ = words;
+    }
+
+    /// Debug builds: a call into a stand-in with a declared count ([`Engine::register_words`])
+    /// that hands it another number of words stops the test, naming the place, both counts and
+    /// the caller.
+    #[cfg(debug_assertions)]
+    #[cold]
+    #[inline(never)]
+    fn check_stand_in_words(&self, addr: u32, given: usize) {
+        if let Some(&words) = self.stand_in_words.get(&addr) {
+            if usize::from(words) != given {
+                let caller = self.call_stack.last().copied().unwrap_or(0);
+                panic!(
+                    "stand-in at {addr:08x} is registered with {words} words (this included), \
+                     the call gives {given} (caller {caller:08x})"
+                );
+            }
+        }
     }
 
     /// Puts `f` at `addr` and empties its slot of the call cache.
@@ -873,6 +926,8 @@ impl Engine {
             trace: None,
             trace_keep: self.trace_keep,
             call_budget: None,
+            #[cfg(debug_assertions)]
+            stand_in_words: self.stand_in_words.clone(),
             call_counts: None,
             slice_left: 0,
             slice_len: 0,
@@ -911,6 +966,8 @@ impl Engine {
         f: impl FnMut(&mut Engine, &[u32]) -> Ret + 'static,
     ) {
         self.extend.chains.remove(&addr);
+        #[cfg(debug_assertions)]
+        self.stand_in_words.remove(&addr);
         self.funcs
             .insert(addr, Callable::Double(Rc::new(RefCell::new(f))));
         self.uncache(addr);
@@ -938,6 +995,10 @@ impl Engine {
     /// every register a function uses anywhere is saved on entry).
     #[inline(always)]
     fn dispatch(&mut self, addr: u32, args: &[u32]) -> Ret {
+        #[cfg(debug_assertions)]
+        if !self.stand_in_words.is_empty() {
+            self.check_stand_in_words(addr, args.len());
+        }
         debug_assert_eq!(
             self.diagnosing(),
             self.diagnosing_each(),
@@ -2550,6 +2611,54 @@ mod tests {
                 (0x0040_3000, vec![5, 6], 11)
             ]
         );
+    }
+
+    fn stand_in(_: &mut Engine, _: &[u32]) -> crate::abi::Ret {
+        crate::abi::Ret::default()
+    }
+
+    /// The message a call that stops the test gives.
+    fn stops(e: &mut Engine, call: impl FnOnce(&mut Engine)) -> String {
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| call(e)));
+        let error = caught.expect_err("the call stops the test");
+        error.downcast_ref::<String>().cloned().unwrap_or_default()
+    }
+
+    /// A stand-in registered with its word count takes calls with that count only: one word too
+    /// few or too many stops the test, through a direct call, a virtual call and a double alike;
+    /// registering again without a count drops it.
+    #[test]
+    #[cfg(debug_assertions)]
+    fn stand_ins_with_a_count_take_only_that_count() {
+        const STAND_IN: u32 = 0x7400_0010;
+        let mut e = Engine::new();
+        e.register_words(STAND_IN, 3, stand_in);
+        e.call(STAND_IN, &[1, 2, 3]);
+        let object = e.mem.alloc(8);
+        let vtable = e.mem.alloc(8);
+        e.mem.set_u32(object, vtable);
+        e.mem.set_u32(vtable + 4, STAND_IN);
+        e.vcall(object, 4, &[1, 2]);
+        let short = stops(&mut e, |e| {
+            e.vcall(object, 4, &[1]);
+        });
+        assert!(
+            short.contains("stand-in at 74000010 is registered with 3 words")
+                && short.contains("the call gives 2"),
+            "{short}"
+        );
+        let long = stops(&mut e, |e| {
+            e.call(STAND_IN, &[1, 2, 3, 4]);
+        });
+        assert!(long.contains("the call gives 4"), "{long}");
+        e.register_double_words(0x7400_0020, 1, |_, _| crate::abi::Ret::default());
+        e.call(0x7400_0020, &[1]);
+        let double = stops(&mut e, |e| {
+            e.call(0x7400_0020, &[1, 2]);
+        });
+        assert!(double.contains("registered with 1 words"), "{double}");
+        e.register(STAND_IN, stand_in);
+        e.call(STAND_IN, &[1]);
     }
 
     /// Times calls of a registered one-line getter through [`Engine::call`] (the dispatch

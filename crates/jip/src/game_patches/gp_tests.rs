@@ -53,7 +53,7 @@ fn world() -> Engine {
         e.register(addr, |_, _| Ret::default());
     }
     // TES's load records the memory context it ran in (in the word at the task's +0x3C).
-    e.register(TES_LOAD_REFERENCE, |e, a| {
+    e.register_words(TES_LOAD_REFERENCE, 5, |e, a| {
         let context = e.tls() + TLS_MEMORY_CONTEXT;
         let seen = e.mem.u32(context);
         e.mem.set_u32(a[3] + 0x3c, seen);
@@ -518,7 +518,7 @@ fn the_lock_let_go_is_the_one_taken() {
     let t = task(&mut e);
     let other = e.mem.alloc(0x100);
     e.mem.set_u32(0x011e_0f08, other);
-    e.register(TES_LOAD_REFERENCE, |e, a| {
+    e.register_words(TES_LOAD_REFERENCE, 5, |e, a| {
         let other = e.mem.u32(0x011e_0f08);
         e.mem.set_u32(a[1] + 0x40, other);
         Ret::default()
@@ -530,7 +530,7 @@ fn the_lock_let_go_is_the_one_taken() {
 
     let mut e = world();
     let t = task(&mut e);
-    e.register(TES_LOAD_REFERENCE, |e, a| {
+    e.register_words(TES_LOAD_REFERENCE, 5, |e, a| {
         e.mem.set_u32(a[1] + 0x40, 0);
         Ret::default()
     });
@@ -713,7 +713,7 @@ fn a_marked_player_rebuilds_his_models() {
     let me = p.t.refr;
     // The mark is gone when TES loads, and the fresh first-person biped is what the second
     // ReparentWeapon gets.
-    e.register(TES_LOAD_REFERENCE, |e, a| {
+    e.register_words(TES_LOAD_REFERENCE, 5, |e, a| {
         assert_eq!(e.mem.u8(a[1] + 0x5f) & REF_FLAG_UPDATE_3D, 0);
         e.mem.set_u32(a[1] + 0x68c, 0x00d0_0011);
         e.mem.set_u32(a[1] + 0x690, 0x00d0_0012);
@@ -771,7 +771,7 @@ fn a_marked_player_rebuilds_his_models() {
 fn the_deleted_biped_and_animation_are_cleared() {
     let mut e = world();
     let p = player(&mut e);
-    e.register(TES_LOAD_REFERENCE, |e, a| {
+    e.register_words(TES_LOAD_REFERENCE, 5, |e, a| {
         assert_eq!(e.mem.u32(a[1] + 0x68c), 0, "biped cleared before the load");
         assert_eq!(
             e.mem.u32(a[1] + 0x690),

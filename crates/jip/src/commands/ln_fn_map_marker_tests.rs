@@ -34,7 +34,7 @@ fn setup() -> Engine {
     e.mem.set_u8(EXTRA + 4, 0x2c);
     e.mem.set_u32(EXTRA + 0xc, DATA);
     e.mem.set_u32(PLAIN + 0x20, OTHER_STATIC);
-    e.register(0x0041_0220, |e, w| {
+    e.register_words(0x0041_0220, 2, |e, w| {
         let mut x = e.mem.u32(w[0] + 4);
         while x != 0 && u32::from(e.mem.u8(x + 4)) != w[1] {
             x = e.mem.u32(x + 8);

@@ -120,10 +120,10 @@ fn world_as(installed: bool) -> Engine {
         ..Ret::default()
     });
     // `__RTDynamicCast`: no form here has a `TESDescription`.
-    e.register(0x00ec_43fb, |_, _| Ret::default());
+    e.register_words(0x00ec_43fb, 5, |_, _| Ret::default());
     // The game's heap (`MemoryManager::Allocate`, `::Free`): a bump allocator.
     e.mem.set_u32(HEAP, HEAP + 0x10);
-    e.register(0x00aa_3e40, |e, w| {
+    e.register_words(0x00aa_3e40, 2, |e, w| {
         let at = e.mem.u32(HEAP);
         e.mem.set_u32(HEAP, at + w[1].div_ceil(4) * 4);
         Ret {
@@ -131,7 +131,7 @@ fn world_as(installed: bool) -> Engine {
             ..Ret::default()
         }
     });
-    e.register(0x00aa_4060, |_, _| Ret::default());
+    e.register_words(0x00aa_4060, 2, |_, _| Ret::default());
     e.mem.set_u32(0x011c_54c0, FORM_MAP);
     e.mem.set_u32(FORM_MAP + 4, 1);
     e.mem.set_u32(FORM_MAP + 8, MAP_ENTRIES);
@@ -1448,7 +1448,7 @@ fn script_wait_command() {
     for addr in [0x005e_0d20u32, 0x005e_1160, 0x005e_13a0] {
         e.register(addr, |_, _| Ret::default());
     }
-    e.register(0x005e_1550, evaluate_line_stand_in);
+    e.register_words(0x005e_1550, 10, evaluate_line_stand_in);
     nvse::context::install(&mut e);
     // `scn`; Begin (0x10, size 6, type 0, block length 15 at +10); the ScriptWait line at 14
     // (opcode, length 7, one argument: `n` 3); End (0x11) at 25.

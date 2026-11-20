@@ -145,7 +145,7 @@ fn runner_engine() -> Engine {
         note(format!("destroy {}", a[1]));
         Ret::default()
     });
-    e.register(SCRIPT_EXECUTE, |e, a| {
+    e.register_words(SCRIPT_EXECUTE, 5, |e, a| {
         assert_eq!(&a[2..4], &[0, 0], "no list, no container");
         let text = text_of(a[0]);
         if a[1] == 0 {
@@ -160,7 +160,7 @@ fn runner_engine() -> Engine {
         }
         eax(1)
     });
-    e.register(CONSOLE_PRINT_FN, |e, a| {
+    e.register_words(CONSOLE_PRINT_FN, 3, |e, a| {
         let line = nvse::table::guest_text(e, e.mem.u32(a[2]));
         note(format!("console {}", String::from_utf8_lossy(&line)));
         eax(0)
@@ -645,7 +645,7 @@ fn the_callers_event_list_is_set_aside_for_the_run() {
     let list = CALLER + 0x44;
     crate::commands::test_support::put_extra(&mut e, list, XSCRIPT, 0x0d, 0);
     e.mem.set_u32(XSCRIPT + 0x10, 0xe7e7);
-    e.register(SCRIPT_EXECUTE, |e, a| {
+    e.register_words(SCRIPT_EXECUTE, 5, |e, a| {
         note(format!("events {:x}", e.mem.u32(XSCRIPT + 0x10)));
         let _ = a;
         eax(1)
@@ -737,7 +737,7 @@ fn reentering(e: &mut Engine, opcode: u32, args: Vec<Vec<u8>>) {
     DEPTH.with(|d| d.set(0));
     ANSWERS.with(|a| a.borrow_mut().clear());
     REENTER.with(|r| *r.borrow_mut() = (opcode, args));
-    e.register(SCRIPT_EXECUTE, |e, _| {
+    e.register_words(SCRIPT_EXECUTE, 5, |e, _| {
         note("run".into());
         let depth = DEPTH.with(|d| {
             d.set(d.get() + 1);

@@ -430,6 +430,8 @@ pub fn echoed(e: &mut Engine, opcode: u32, this: u32, args: &[Vec<u8>]) -> (f64,
     words[2] = this;
     let mut w = vec![crate::test_support::execute_of(e, opcode)];
     w.extend_from_slice(&words);
+    // The game passes ten words (the last two 0); the stand-in reads only eight.
+    w.push(0);
     e.call(EVALUATE_LINE_FN, &w);
     crate::test_support::console(e, false);
     let lines = ECHOES.with(|l| std::mem::take(&mut *l.borrow_mut()));

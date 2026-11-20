@@ -95,7 +95,7 @@ fn world_as(installed: bool) -> Engine {
     e.mem.set_u32(NODES, QUEST_SCRIPT);
     e.mem.set_u8(WEAPON + 4, 0x28);
     e.mem.set_u8(ARMOR + 4, 0x18);
-    e.register(0x0041_0220, |e, w| Ret {
+    e.register_words(0x0041_0220, 2, |e, w| Ret {
         eax: e.mem.u32(EXTRAS + (w[0] - 0x44 - AREA) / 0x10 + w[1] * 4),
         ..Ret::default()
     });

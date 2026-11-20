@@ -66,12 +66,12 @@ impl World {
             .set_u32(PLAYER_REF + TESObjectREFR::pObjectReference.off, PLAYER_NPC);
         e.mem.set_u32(REF_VT + VT_IS_REFERENCE, RETURN_TRUE);
         e.mem.set_u32(REF_VT + VT_IS_ACTOR, RETURN_TRUE);
-        e.register(EXTRA_GET_BY_TYPE, get_by_type);
+        e.register_words(EXTRA_GET_BY_TYPE, 2, get_by_type);
         // The scripts and event lists of `scripted`, and the game's heap (a bump stand-in) for
         // the variables a load makes in them (`Script::AddVariable`).
         e.map(SCRIPTS, 0x0001_0000);
         e.mem.set_u32(HEAP_TOP, SCRIPTS + 0x8000);
-        e.register(0x00aa_3e40, |e, w| {
+        e.register_words(0x00aa_3e40, 2, |e, w| {
             let at = e.mem.u32(HEAP_TOP);
             e.mem.set_u32(HEAP_TOP, at + w[1].next_multiple_of(8));
             Ret {
@@ -1644,11 +1644,11 @@ fn the_version_line_at_the_deferred_start() {
             const { std::cell::RefCell::new(Vec::new()) };
     }
     let mut w = World::new();
-    w.e.register(0x0071_b160, |_, _| Ret {
+    w.e.register_words(0x0071_b160, 1, |_, _| Ret {
         eax: 0x0500_0100,
         ..Ret::default()
     });
-    w.e.register(0x0071_d0a0, |e, a| {
+    w.e.register_words(0x0071_d0a0, 3, |e, a| {
         let format = nvse::table::guest_text(e, a[1]);
         let version = e.mem.f64(a[2]);
         PRINTED.with(|p| p.borrow_mut().push((format, version)));
