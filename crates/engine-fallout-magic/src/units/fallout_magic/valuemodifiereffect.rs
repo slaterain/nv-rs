@@ -176,12 +176,13 @@ fn setting_flag(e: &mut Engine, this: Ptr<ActiveEffect>, flag: u32) -> bool {
 }
 
 /// Kills `target` (`Actor::Kill` with the caster's actor and 0.0) when its
-/// health is at most 1.0 (`TEST AH,0x41; JP`: not when above or NaN).
-fn kill_when_spent(e: &mut Engine, this: Ptr<ActiveEffect>, target: u32) {
+/// health is at most `limit` (the `double` at that address: `TEST AH,0x41; JP`: not when above
+/// or NaN).
+fn kill_when_spent(e: &mut Engine, this: Ptr<ActiveEffect>, target: u32, limit: u32) {
     let health = e
         .vcall(target.wrapping_add(0xa4), 0xc, &args![HEALTH])
         .f64();
-    if health <= e.global::<f64>(ONE) {
+    if health <= e.global::<f64>(limit) {
         let killer = caster_actor(e, this);
         e.call(ACTOR_KILL, &args![target, killer, 0.0f32.to_bits()]);
     }
@@ -446,7 +447,15 @@ pub fn value_modifier_effect_start(e: &mut Engine, this: Ptr<ActiveEffect>) {
             });
         }
         if which(e, this) == 7 && x87_m32(magnitude_bits(e, this)) < e.global::<f64>(ZERO) {
-            kill_when_spent(e, this, target);
+            // lStewieAl's Tweaks' row S0205 (`EnduranceHealthRestoreFix`, `SafeWrite8(0x82C221,
+            // 0x60)`): the compare at `0x82C21F` reads the `double` 0.0 (`0x01012060`) in place of
+            // 1.0, so an Endurance drop kills only a target with no health left.
+            let limit = if e.stewie(engine_core::extend::stewie::ENDURANCE_HEALTH_RESTORE) {
+                ZERO
+            } else {
+                ONE
+            };
+            kill_when_spent(e, this, target, limit);
         }
         let magnitude = x87_quiet_bits(magnitude_bits(e, this));
         e.vcall(this.addr(), 0x64, &args![target, magnitude, 0xffff_ffffu32]);
@@ -503,7 +512,7 @@ pub fn value_modifier_effect_update(e: &mut Engine, this: Ptr<ActiveEffect>, sec
         }
     }
     if which(e, this) == 7 && x87_m32(magnitude_bits(e, this)) < e.global::<f64>(ZERO) {
-        kill_when_spent(e, this, target);
+        kill_when_spent(e, this, target, ONE);
     }
 }
 
@@ -1175,6 +1184,49 @@ mod tests {
         e.call_log = Some(vec![]);
         value_modifier_effect_start(&mut e, effect);
         assert!(calls_to(&e, ACTOR_KILL).is_empty());
+    }
+
+    /// lStewieAl's Tweaks' row S0205 (`0x82C221`): the Endurance drop of
+    /// `start_applies_now_and_kills_a_spent_target` with the target at 0.5, 1.0 and 0.0 health:
+    /// off, a target at 1.0 or less is killed (0.5 and 1.0 die); on, only one at 0.0 or less (0.0
+    /// dies, 0.5 and 1.0 live).
+    #[test]
+    fn s0205_an_endurance_drop_kills_only_at_no_health() {
+        for (on, health, killed) in [
+            (false, 0.5, true),
+            (false, 1.0, true),
+            (false, 0.0, true),
+            (true, 0.5, false),
+            (true, 1.0, false),
+            (true, 0.0, true),
+            (true, -2.0, true),
+        ] {
+            let Fixture {
+                mut e,
+                effect,
+                target,
+                flags,
+            } = fixture();
+            flags.set(2);
+            set_which(&mut e, effect, 7);
+            e.set(effect, ActiveEffect::fMagnitude, -5.0);
+            e.set(effect, ActiveEffect::pCaster, 0x99);
+            returns_float(&mut e, OWNER_SLOT_FLOAT, health);
+            returns(&mut e, ACTOR_KILL, 0);
+            e.set_stewie(engine_core::extend::stewie::ENDURANCE_HEALTH_RESTORE, on);
+            e.call_log = Some(vec![]);
+            e.call(0x0082_c000, &args![effect]);
+            let expected = if killed {
+                vec![vec![target, 0x99, 0.0f32.to_bits()]]
+            } else {
+                vec![]
+            };
+            assert_eq!(
+                calls_to(&e, ACTOR_KILL),
+                expected,
+                "on {on}, health {health}"
+            );
+        }
     }
 
     #[test]

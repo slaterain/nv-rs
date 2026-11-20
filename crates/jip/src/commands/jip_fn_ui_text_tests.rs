@@ -877,3 +877,138 @@ fn close_active_menu_takes_the_hooks_out() {
         assert_eq!(kept(&e), usize::from(!jips), "{jips}");
     }
 }
+
+// ---- review of #823: a menu closed another way, a 65,535-byte text ----
+
+/// A game text edit menu of its own (not from JIP's file), at `at`, with its own tile.
+fn game_menu(e: &mut Engine, at: u32) {
+    let (tile, _) = tile(e, &[VISIBLE], 0);
+    e.mem.set_u32(at, VTABLE);
+    e.mem.set_u32(at + 4, tile);
+    e.mem.set_u32(TEXT_EDIT_MENU, at);
+}
+
+/// JIP's menu shown, then closed without OK or `CloseActiveMenu` (the singleton cleared, as Esc or
+/// a load leaves it), then a game text edit menu opened: at `elsewhere`, or at JIP's freed address
+/// (its tile then another).
+fn closed_another_way(guard: bool, elsewhere: bool) -> (Engine, u32) {
+    let (mut e, _) = shown_menu();
+    nvse::commands::array::set_fix(&mut e, nvse::commands::array::NULL_GUARD, guard);
+    e.register(EXE_KEY, noted::<EXE_KEY>);
+    e.register(EXE_FRAME, noted::<EXE_FRAME>);
+    e.mem.set_u32(TEXT_EDIT_MENU, 0);
+    let menu = if elsewhere { alloc(0x60) } else { MENU };
+    game_menu(&mut e, menu);
+    let _ = crate::script_call::calls();
+    log();
+    (e, menu)
+}
+
+/// Review of #823 (a JIP slip not copied, the missing-data guard row): with JIP's menu closed
+/// another way, the game's own text edit menu gets the exe's key and frame functions (the words
+/// handed on), JIP's hooks come out (the exe's functions back in the slots, JIP's script's lambda
+/// variables given up, the hook off) and JIP's script is not called; the same when the game's menu
+/// is at JIP's old address. A click on its OK is not answered: the exe's click runs (it stores the
+/// text, as without JIP), and JIP's close does not.
+#[test]
+fn a_game_menu_after_jips_closed_another_way_gets_the_exes_functions() {
+    for elsewhere in [true, false] {
+        let (mut e, menu) = closed_another_way(true, elsewhere);
+        assert_eq!(e.vcall(menu, 0x30, &args![u32::from(b'a')]).u32(), 0);
+        assert_eq!(logged(EXE_KEY), vec![vec![menu, u32::from(b'a')]]);
+        assert_eq!(e.mem.u32(KEY_SLOT), EXE_KEY);
+        assert_eq!(e.mem.u32(FRAME_SLOT), EXE_FRAME);
+        assert_eq!(e.hook_users(Hook::TextInputClose), 0);
+        assert_eq!(kept(&e), 0, "JIP's script's variables given up");
+        assert!(crate::script_call::calls().is_empty());
+
+        let (mut e, menu) = closed_another_way(true, elsewhere);
+        e.vcall(menu, 0x2c, &args![]);
+        assert_eq!(logged(EXE_FRAME), vec![vec![menu]]);
+        assert_eq!(e.hook_users(Hook::TextInputClose), 0);
+
+        let (mut e, menu) = closed_another_way(true, elsewhere);
+        assert_eq!(e.site(SEAM, &[menu, 1, 0]), None, "the exe's click runs");
+        assert!(crate::script_call::calls().is_empty());
+        assert!(logged(EXE_CLOSE).is_empty());
+        assert_eq!(e.hook_users(Hook::TextInputClose), 0);
+        assert_eq!(e.mem.u32(KEY_SLOT), EXE_KEY);
+    }
+}
+
+/// The setters on a game menu after JIP's closed another way: nothing set, the hooks out (row on).
+#[test]
+fn the_setters_leave_a_game_menu_alone() {
+    let (mut e, menu) = closed_another_way(true, true);
+    call_on(&mut e, STRING, 0, &[s(b"hello")]);
+    call_on(&mut e, PROPS, 0, &[z(40.0), z(40.0), n(4)]);
+    assert_eq!(e.mem.u32(menu + 0x34), 0);
+    assert_eq!(e.mem.u16(menu + 0x48), 0);
+    assert_eq!(e.hook_users(Hook::TextInputClose), 0);
+}
+
+/// Vanilla (the row off): as JIP, its routines serve the game's menu and the hooks stay in.
+#[test]
+fn without_the_row_jips_routines_stay_in() {
+    let (mut e, menu) = closed_another_way(false, true);
+    assert_eq!(e.vcall(menu, 0x30, &args![u32::from(b'a')]).u32(), 1);
+    assert!(logged(EXE_KEY).is_empty());
+    assert_eq!(e.hook_users(Hook::TextInputClose), 1);
+    assert_eq!(e.mem.u32(KEY_SLOT), TEXT_INPUT_KEY_PRESS);
+    assert_eq!(e.site(SEAM, &[menu, 2, 0]), Some(0), "JIP's close answers");
+}
+
+/// With the row on, JIP's own menu still runs JIP's routines.
+#[test]
+fn with_the_row_jips_own_menu_keeps_its_routines() {
+    let (mut e, _) = shown_menu();
+    nvse::commands::array::set_fix(&mut e, nvse::commands::array::NULL_GUARD, true);
+    type_text(&mut e, b"Bob");
+    assert_eq!(current(&e), b"Bob");
+    assert_eq!(e.hook_users(Hook::TextInputClose), 1);
+    let _ = crate::script_call::calls();
+    assert_eq!(e.site(SEAM, &[MENU, 1, 0]), Some(0));
+    assert_eq!(crate::script_call::calls().len(), 1);
+}
+
+/// Review of #823, with the size caps row (the fixes preset): a 65,535-byte `SetTextInputString` keeps 65,534 bytes, so the shown text with
+/// its cursor is 65,535 and its room never below its length; a string at 65,535 bytes takes no
+/// more (JIP's 16-bit length and room would wrap to 0 and the byte go past its block).
+#[test]
+fn a_65535_byte_text_never_wraps_the_shown_texts_room() {
+    let (mut e, _) = shown_menu();
+    nvse::commands::array::set_fix(&mut e, nvse::commands::array::SIZE_CAPS, true);
+    let long = vec![b'x'; 0xffff];
+    // The command's text as it hands it on (a compiled line this long is past the tests' script
+    // page).
+    set_text(&mut e, MENU, &long);
+    let (_, len, room) = string_of(&e, MENU + 0x34);
+    assert_eq!((len, room), (0xfffe, 0xfffe));
+    let (shown_text, len, room) = string_of(&e, MENU + 0x3c);
+    assert_eq!(len, 0xffff);
+    assert!(room >= len);
+    assert!(
+        matches!(shown_text[0xfffe], b'|' | 0x7f),
+        "the cursor's byte last"
+    );
+    // A string full at 65,535: nothing goes in.
+    let data = e.mem.u32(MENU + 0x3c);
+    string_insert_char(&mut e, MENU + 0x3c, b'y', 0);
+    assert_eq!(string_of(&e, MENU + 0x3c).1, 0xffff);
+    assert_eq!(string_of(&e, MENU + 0x3c).2, room);
+    assert_eq!(e.mem.u32(MENU + 0x3c), data, "no new block");
+    assert_eq!(e.mem.u8(data), b'x');
+}
+
+/// Review of #830: without the size caps row (vanilla), as JIP. A 70,000-byte
+/// `SetTextInputString` keeps its length's low 16 bits, 4,464 bytes (JIP's `String::Set`), with
+/// no 65,534 cap.
+#[test]
+fn without_the_size_caps_row_a_long_text_keeps_jips_16_bits() {
+    let (mut e, _) = shown_menu();
+    let long: Vec<u8> = (0..70_000u32).map(|i| b'a' + (i % 26) as u8).collect();
+    set_text(&mut e, MENU, &long);
+    let (text, len, _) = string_of(&e, MENU + 0x34);
+    assert_eq!(len, 4_464);
+    assert_eq!(text, &long[..4_464]);
+}

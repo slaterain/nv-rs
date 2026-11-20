@@ -342,21 +342,20 @@ fn other_plugins_conditions_read_no_eval() {
     }
 }
 
-/// A JIP command not built yet fails as it does without the DLL: its record has no handler
+/// A JIP command not built fails as it does without the DLL: its record has no handler
 /// (`EvaluateLine` and the operand reader fail a line whose record has none), and xNVSE's
-/// expression evaluator does not read it as a command.
+/// expression evaluator does not read it as a command. Since `UpdateMiniMap` no JIP command is
+/// unbuilt (`commands::tests::built_commands_are_in_the_table`), so the record stands in as the
+/// table alone writes it, named and with no handlers, as every command was until it was built:
+/// `UpdateMiniMap`'s, written again by the table's install over the built one.
 #[test]
 fn an_unbuilt_command_fails() {
     let mut e = engine();
     crate::install_as(&mut e, true);
+    crate::table::install(&mut e, true);
     let unbuilt = Record::read(&e, record_of(&e, 0x2874));
     assert_eq!(guest_text(&e, unbuilt.long_name), b"UpdateMiniMap");
-    assert_eq!((unbuilt.execute, unbuilt.eval), (0, 0));
-    // Every JIP condition is built since GetRadiationLevelAlt (package C3): an unbuilt command
-    // that waits for the drawing track (UpdateMiniMap) stands for the rest.
-    let refresh = Record::read(&e, record_of(&e, 0x2874));
-    assert_eq!(guest_text(&e, refresh.long_name), b"UpdateMiniMap");
-    assert_eq!((refresh.execute, refresh.eval, refresh.flags), (0, 0, 0));
+    assert_eq!((unbuilt.execute, unbuilt.eval, unbuilt.flags), (0, 0, 0));
     let words = line(&mut e, 0x2874, &[]);
     let a = nvse::CommandArgs::new(&words);
     // An `X` token: no calling reference, the opcode, its arguments' length.

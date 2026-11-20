@@ -1,8 +1,8 @@
 //! `functions_jip/jip_fn_minimap.h` (JIP LN NVSE): `InitMiniMap`, the start of JIP MiniMap's HUD
 //! map: the tiles of its HUD menu, its nine local map shapes, the camera, light and fog it draws
 //! the local maps with, the fake water planes, every world's map markers by cell, and JIP's seven
-//! code patches for it ([`super::jip_fn_minimap_seams`]). `UpdateMiniMap` comes with its own
-//! part.
+//! code patches for it ([`super::jip_fn_minimap_seams`]). `UpdateMiniMap` is
+//! [`super::jip_fn_minimap_update`], its fog of war [`super::jip_fn_minimap_fog`].
 //!
 //! JIP 57.30 writes no local map cache: its `SaveLocalMapTexture` (`local_maps\%s.(%d,%d).dds`) is
 //! not called (its three calls in `UpdateMiniMap` are commented out), so the port has none.
@@ -43,14 +43,14 @@ pub(crate) const TES: u32 = 0x011d_ea10;
 pub(crate) const TES_GRID: u32 = 0x08;
 const TES_INTERIOR: u32 = 0x34;
 /// `g_HUDMainMenu` (`*011D96C0`) and a menu's tile (+4).
-const HUD_MAIN_MENU: u32 = 0x011d_96c0;
+pub(crate) const HUD_MAIN_MENU: u32 = 0x011d_96c0;
 const MENU_TILE: u32 = 0x04;
 /// `g_shadowSceneNode` (`*011F91C8`), the object LOD root (`*011DEA18`), the game's fog property
 /// (`*011DEB00`); the five scene nodes JIP keeps: sky, weather, terrain LOD, particle systems,
 /// grass.
-const SHADOW_SCENE_NODE: u32 = 0x011f_91c8;
+pub(crate) const SHADOW_SCENE_NODE: u32 = 0x011f_91c8;
 const OBJECT_LOD_ROOT: u32 = 0x011d_ea18;
-const GAME_FOG_PROPERTY: u32 = 0x011d_eb00;
+pub(crate) const GAME_FOG_PROPERTY: u32 = 0x011d_eb00;
 const SCENE_NODES: [u32; 5] = [
     0x011d_eb34,
     0x011d_eda4,
@@ -59,7 +59,7 @@ const SCENE_NODES: [u32; 5] = [
     0x011c_a438,
 ];
 /// A form's mod index (+0xF); a script's quest (+0x40) and a quest's delay time (+0x40).
-const MOD_INDEX: u32 = 0x0f;
+pub(crate) const MOD_INDEX: u32 = 0x0f;
 const SCRIPT_QUEST: u32 = 0x40;
 const QUEST_DELAY: u32 = 0x40;
 /// The byte of JIP MiniMap's script JIP changes (`scriptData + 0x2FE5`: `31 30 17` becomes
@@ -77,23 +77,23 @@ const TILE_NODE: u32 = 0x2c;
 const TILE_SHADER: u32 = 0x40;
 const SHADER_TEXTURE: u32 = 0x60;
 /// `kTileValue_depth`, `_zoom`, `_rotateangle`, `_user0` to `_user2`.
-const TRAIT_DEPTH: u32 = 0xfad;
+pub(crate) const TRAIT_DEPTH: u32 = 0xfad;
 const TRAIT_ZOOM: u32 = 0xfb8;
 const TRAIT_ROTATE: u32 = 0xffa;
-const TRAIT_USER0: u32 = 0x1004;
-const TRAIT_USER1: u32 = 0x1005;
-const TRAIT_USER2: u32 = 0x1006;
+pub(crate) const TRAIT_USER0: u32 = 0x1004;
+pub(crate) const TRAIT_USER1: u32 = 0x1005;
+pub(crate) const TRAIT_USER2: u32 = 0x1006;
 /// `NiAVObject`: count (+4), property list (+0x24: its first node's property +8), flags (+0x30),
 /// local translation (+0x58), local scale (+0x64), world rotation (+0x68, nine floats); a node's
 /// children (+0xA0, count +0xA6); `AddObject` (vtable +0xDC: the child, 1).
 const REF_COUNT: u32 = 0x04;
 const PROPERTY_HEAD: u32 = 0x24;
-const FLAGS: u32 = 0x30;
-const LOCAL_TRANSLATE: u32 = 0x58;
+pub(crate) const FLAGS: u32 = 0x30;
+pub(crate) const LOCAL_TRANSLATE: u32 = 0x58;
 pub(crate) const LOCAL_SCALE: u32 = 0x64;
 const WORLD_ROTATE: u32 = 0x68;
-const CHILDREN: u32 = 0xa0;
-const CHILD_COUNT: u32 = 0xa6;
+pub(crate) const CHILDREN: u32 = 0xa0;
+pub(crate) const CHILD_COUNT: u32 = 0xa6;
 const ADD_OBJECT_SLOT: u32 = 0xdc;
 /// `NiGeometry`'s alpha property (+0x9C) and data (+0xB8); `NiTriShapeData`: vertex count
 /// (+8, `u16`), vertices (+0x20), normals (+0x24), colours (+0x28), texture coordinates (+0x2C),
@@ -144,8 +144,8 @@ const CELL_OBJECTS: u32 = 0xac;
 const REF_BASE: u32 = 0x20;
 const FORM_ID: u32 = 0x0c;
 const MAP_MARKER_ID: u32 = 0x10;
-const REF_POSITION: u32 = 0x30;
-const REF_EXTRA: u32 = 0x44;
+pub(crate) const REF_POSITION: u32 = 0x30;
+pub(crate) const REF_EXTRA: u32 = 0x44;
 const EXTRA_MAP_MARKER: u32 = 0x2c;
 const EXTRA_DATA: u32 = 0x0c;
 /// The game's calls: `NiCamera::Create`, `NiDirectionalLight::Create`, `NiAlphaProperty::Create`,
@@ -166,7 +166,7 @@ const ADD_STRING: u32 = 0x00a5_b690;
 /// The node's "hidden" flag (bit 0 of +0x30).
 const HIDDEN: u8 = 1;
 /// The local maps' zoom in an interior (`kInteriorZoomMod`).
-const INTERIOR_ZOOM: f32 = 0.25;
+pub(crate) const INTERIOR_ZOOM: f32 = 0.25;
 /// `kVtbl_NiRenderedTexture`'s format the local maps are drawn in at start (`D3DFMT_X8R8G8B8`).
 const START_FORMAT: u32 = 22;
 
@@ -191,7 +191,12 @@ pub struct WorldDimensions {
     pub offset: [f32; 2],
     pub pos_mod: [f32; 2],
     pub coord: u32,
+    /// `mkRange`: the world's marker range, in cells, at zoom 1 (`UpdateMiniMap`'s).
+    pub mk_range: i32,
 }
+
+/// JIP's "no coordinate yet" (`0x7FFF7FFF`: `s_currWorldCoords`, `s_currLocalCoords` at start).
+pub(crate) const NO_COORD: u32 = 0x7fff_7fff;
 
 /// JIP MiniMap's state (JIP's statics of `jip_fn_minimap.h`) as `InitMiniMap` leaves it.
 #[derive(Default)]
@@ -238,6 +243,45 @@ pub struct MiniMapState {
     /// cell coordinate, the tiles showing that cell's markers): `UpdateMiniMap` fills them.
     pub marker_tiles: Vec<MarkerTile>,
     pub rendered_markers: HashMap<u32, Vec<usize>>,
+    /// `UpdateMiniMap`'s ([`super::jip_fn_minimap_update`]): `s_pcCurrCell`, `s_pcCurrWorld`,
+    /// `s_pcRootWorld`, `s_lastInterior` (0 again at each load, JIP's `MiniMapLoadGame`).
+    pub pc_curr_cell: u32,
+    pub pc_curr_world: u32,
+    pub pc_root_world: u32,
+    pub last_interior: u32,
+    /// `s_showFlags`, `s_currentMapMode`; `s_currWorldMarkers` (the root world's key in
+    /// `world_markers`).
+    pub show_flags: u32,
+    pub current_map_mode: u32,
+    pub curr_world_markers: Option<u32>,
+    /// `s_currWorldCoords`, `s_currLocalCoords` ([`NO_COORD`] at start), `s_cellGridCenter`;
+    /// `s_packedCellCoords` and `s_currCellGrid` (the nine cells or sections).
+    pub curr_world_coords: u32,
+    pub curr_local_coords: u32,
+    pub cell_grid_center: u32,
+    pub packed_coords: [u32; 9],
+    pub curr_cell_grid: [u32; 9],
+    /// `s_vertexAlphaLevel`: the fog's alpha by seen level.
+    pub vertex_alpha: [f32; 5],
+    /// `s_currMarkerCells`.
+    pub curr_marker_cells: std::collections::HashSet<u32>,
+    /// `s_exteriorDoorRefs` (by cell id) and `s_doorRefsList`.
+    pub exterior_door_refs: HashMap<u32, Vec<super::jip_fn_minimap_update::DoorRef>>,
+    pub door_refs_list: Vec<super::jip_fn_minimap_update::DoorRef>,
+    /// `s_hiddenObjectsInt`.
+    pub hidden_int: Vec<u32>,
+    /// `s_renderedExteriors` (by cell id), `s_renderedInterior` (by section), `s_mmFirstTexture`.
+    pub rendered_exteriors: HashMap<u32, super::jip_fn_minimap_update::RenderedEntry>,
+    pub rendered_interior: HashMap<u32, super::jip_fn_minimap_update::RenderedEntry>,
+    pub mm_first_texture: u32,
+    /// `s_mmTextureParams.renderMode` (its format is the lock-free [`MiniMap::texture_format`]).
+    pub render_mode: u32,
+    /// `s_doorMarkerTiles`, `s_questMarkers` (by reference, sorted as JIP's map), `s_activeQuest`,
+    /// `s_placedMarker`.
+    pub door_marker_tiles: Vec<super::jip_fn_minimap_update::DoorMarkerTile>,
+    pub quest_markers: BTreeMap<u32, super::jip_fn_minimap_update::QuestMarkerTile>,
+    pub active_quest: u32,
+    pub placed_marker: u32,
 }
 
 /// `MapMarkerTile`: a marker tile's visible, x, y and file name values, and whether it shows a
@@ -256,22 +300,25 @@ pub struct MarkerTile {
 /// The cell's rendered markers let go: each of its tiles not in use and hidden (`SetInUse(0)`),
 /// the cell's entry removed.
 pub(crate) fn free_cell_map_markers(e: &mut Engine, coord: u32) {
-    let hidden: Vec<u32> = {
-        let mut s = state(e);
-        let Some(list) = s.rendered_markers.remove(&coord) else {
-            return;
-        };
-        list.iter()
-            .filter_map(|&i| {
-                let tile = s.marker_tiles.get_mut(i)?;
-                tile.in_use = false;
-                Some(tile.visible)
-            })
-            .collect()
-    };
+    let hidden = cell_markers_freed(&mut state(e), coord);
     for visible in hidden {
         super::jip_fn_ui::value_set_bool(e, visible, false);
     }
+}
+
+/// [`free_cell_map_markers`] on a state in hand: the tiles marked not in use, the entry removed;
+/// their visible values, to hide (outside any lock).
+pub(crate) fn cell_markers_freed(s: &mut MiniMapState, coord: u32) -> Vec<u32> {
+    let Some(list) = s.rendered_markers.remove(&coord) else {
+        return Vec::new();
+    };
+    list.iter()
+        .filter_map(|&i| {
+            let tile = s.marker_tiles.get_mut(i)?;
+            tile.in_use = false;
+            Some(tile.visible)
+        })
+        .collect()
 }
 
 /// The state, with JIP's lock-free words beside it: the patches are in (`InitMiniMap` wrote
@@ -351,7 +398,7 @@ fn data(e: &Engine, node: u32) -> u32 {
 }
 
 /// `Tile::SetFloat(id, value)`: the value of trait `id`, when the tile has it, set.
-fn tile_set_float(e: &mut Engine, tile: u32, id: u32, num: f32) {
+pub(crate) fn tile_set_float(e: &mut Engine, tile: u32, id: u32, num: f32) {
     let value = value_of(e, tile, id);
     if value != 0 {
         value_set_float(e, value, num);
@@ -505,7 +552,7 @@ fn add_no_lighting_recurse(e: &mut Engine, node: u32) {
 }
 
 /// The node's children (its array's slots, empty ones left out).
-fn children(e: &Engine, node: u32) -> Vec<u32> {
+pub(crate) fn children(e: &Engine, node: u32) -> Vec<u32> {
     let array = e.mem.u32(node + CHILDREN);
     let count = u32::from(e.mem.u16(node + CHILD_COUNT));
     (0..count)
@@ -751,6 +798,10 @@ fn init_mini_map(e: &mut Engine, w: &[u32]) -> Ret {
         }
         replace_object(e, shape + GEOMETRY_ALPHA, alpha);
     }
+    // `UpdateMiniMap`'s statics as JIP starts them.
+    s.curr_world_coords = NO_COORD;
+    s.curr_local_coords = NO_COORD;
+    s.vertex_alpha = super::jip_fn_minimap_fog::VERTEX_ALPHA_START;
     s.zoom_current = e.mem.f32(s.local_map_zoom + VALUE_NUM);
     s.in_exterior = true;
     let tes = e.mem.u32(TES);
