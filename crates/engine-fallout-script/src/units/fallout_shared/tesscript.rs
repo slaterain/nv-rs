@@ -7712,6 +7712,28 @@ mod tests {
             "the string before it stored"
         );
         assert_eq!(e.mem.u32(offset), 7, "the offset left at the expression");
+        // An object parameter (its type's table byte 1, as `AddItem`'s item or `MoveTo`'s
+        // reference) starting `0xFFFF`: asked before its `r` marker is read, the read stopped
+        // with the offset still at the expression (the new language writes every argument so).
+        mark_reference_types(&mut e, &[0xe]);
+        let parameters = parameter_list(&mut e, &[0xe]);
+        let (object_code, object_offset) = code_with(&mut e, &[1, 0, 0xff, 0xff, 4, 0, b'B', 1]);
+        let cell = e.mem.alloc(4);
+        assert!(!parse(
+            &mut e,
+            parameters,
+            object_code,
+            object_offset,
+            this.addr(),
+            locals.addr(),
+            &[cell]
+        ));
+        assert_eq!(
+            ASKED.with(|a| a.borrow().clone()),
+            vec![(code, offset, 7), (object_code, object_offset, 2)],
+            "asked at the object parameter"
+        );
+        assert_eq!(e.mem.u32(object_offset), 2, "no marker read");
     }
 
     #[test]

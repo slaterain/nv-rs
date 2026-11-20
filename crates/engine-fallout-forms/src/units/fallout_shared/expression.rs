@@ -446,6 +446,11 @@ fn idiv(dividend: i32, divisor: i32) -> (i32, i32) {
 /// zero divisor is error 4, or with `parse` replaced by the double 1.0 (an
 /// integer operand then reads that double's low word, 0). One operand
 /// must remain (error 5 otherwise).
+///
+/// Seam `005949D4`, the compiled operand's call outside parse mode (xNVSE's
+/// `ExpressionEvalRunCommandHook`), with the token's address in the
+/// expression's own bytes: an answer is the call's result, made on the
+/// script's data (`crates/nvse`).
 #[allow(clippy::too_many_arguments)] // PC receiver plus seven stack words.
 pub fn expression_eval(
     e: &mut Engine,
@@ -590,22 +595,44 @@ pub fn expression_eval(
                                 parse as u32
                             ],
                         );
-                    } else if !e
-                        .call(
-                            0x005a_c7a0,
-                            &args![
-                                current + 8,
-                                token,
-                                offset,
-                                reference,
-                                container,
-                                script,
-                                locals,
-                                0u32
-                            ],
-                        )
-                        .bool()
-                    {
+                    } else if !{
+                        // Seam 005949D4, this call (xNVSE's `ExpressionEvalRunCommandHook`;
+                        // words: the result's address, the offset's address, the reference,
+                        // the container, the script, the locals, the token's address in the
+                        // expression's own bytes, the copy cursor less the copy less the token's
+                        // size added to them, as xNVSE reckons it): an answer is the result of
+                        // the call made on the script's data instead of the token's copy.
+                        let at = data
+                            .addr()
+                            .wrapping_add(e.mem.u32(cursor).wrapping_sub(copy).wrapping_sub(size));
+                        let words = [
+                            current + 8,
+                            offset,
+                            reference,
+                            container,
+                            script,
+                            locals,
+                            at,
+                        ];
+                        match e.site(0x0059_49d4, &words) {
+                            Some(answer) => answer != 0,
+                            None => e
+                                .call(
+                                    0x005a_c7a0,
+                                    &args![
+                                        current + 8,
+                                        token,
+                                        offset,
+                                        reference,
+                                        container,
+                                        script,
+                                        locals,
+                                        0u32
+                                    ],
+                                )
+                                .bool(),
+                        }
+                    } {
                         expression_set_error(e, this, 5);
                         return 0.0;
                     }
@@ -1234,6 +1261,46 @@ mod tests {
                 )
                 .f64();
             assert_eq!(value, 3.5);
+        }
+    }
+
+    /// Seam 005949D4 (xNVSE's `ExpressionEvalRunCommandHook`): outside parse mode a compiled
+    /// operand's call is asked first, with the result's and the offset's addresses, the context
+    /// and the token's own address in the expression's bytes (after two spaces, `data + 2`; the
+    /// second token after a space, `data + 6`); an answer is the call's result and the operand
+    /// reader is not called on the token's copy.
+    #[test]
+    fn eval_asks_the_command_call_seam_with_the_tokens_own_address() {
+        use std::cell::RefCell;
+        thread_local! {
+            static ASKED: RefCell<Vec<Vec<u32>>> = const { RefCell::new(Vec::new()) };
+        }
+        fn answer(e: &mut Engine, w: &[u32]) -> Option<u32> {
+            ASKED.with(|a| a.borrow_mut().push(w.to_vec()));
+            e.mem.set_f64(w[0], 2.5);
+            Some(1)
+        }
+        let mut e = Engine::new();
+        table_fixture(&mut e);
+        let this = expression(&mut e);
+        let bytes = b"  s\x02\x00 s\x03\x00 +";
+        let data = e.mem.alloc(16);
+        e.mem.write(data, bytes);
+        e.register_double(0x005ac7a0, |_, _| {
+            panic!("the operand reader on the token's copy")
+        });
+        e.on_site_for_test(0x0059_49d4, answer);
+        let value = e
+            .call(
+                0x00593db0,
+                &args![this, data, 0x11u32, 0x22u32, 0x33u32, 0x44u32, 11i32, 0u8],
+            )
+            .f64();
+        assert_eq!(value, 5.0);
+        let asked = ASKED.with(|a| a.borrow().clone());
+        assert_eq!(asked.len(), 2);
+        for (words, at) in asked.iter().zip([data + 2, data + 6]) {
+            assert_eq!(&words[2..], &[0x11, 0x22, 0x33, 0x44, at]);
         }
     }
 

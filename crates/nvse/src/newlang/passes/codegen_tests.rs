@@ -404,6 +404,34 @@ fn a_game_commands_string_and_number_arguments() {
     );
 }
 
+/// Without the row `xnvse.extract_args` (the port's own rule, not xNVSE's), a game command's
+/// argument that would be written as an expression is refused with one error, as the game's
+/// reader would take its `0xFFFF` as a string's length of -1; an argument written as its raw
+/// bytes (an axis) still compiles.
+#[test]
+fn without_the_row_a_game_commands_expression_argument_is_refused() {
+    let mut env = TestEnv {
+        game_inline: false,
+        ..TestEnv::default()
+    };
+    let text = "name t;\nGameMode {\n  PlayFileAt(\"abc\", 5);\n}";
+    let compiled = compile_with(&mut env, text.as_bytes(), false).expect("no crash");
+    assert!(compiled.is_none());
+    let errors = env.take_errors();
+    let refused = errors
+        .iter()
+        .filter(|m| m.contains("'PlayFileAt' takes an argument here only with the fixes preset"))
+        .count();
+    assert_eq!(refused, 1, "{errors:?}");
+    let mut env = TestEnv {
+        game_inline: false,
+        ..TestEnv::default()
+    };
+    let text = "name t;\nGameMode {\n  GetPos(X);\n}";
+    let compiled = compile_with(&mut env, text.as_bytes(), false).expect("no crash");
+    assert!(compiled.is_some(), "{:?}", env.take_errors());
+}
+
 /// `while` with `continue`: the condition's jump to the loop's end (75), the `continue` a jump
 /// back to the condition (35), and the jump back at the end of the block.
 #[test]

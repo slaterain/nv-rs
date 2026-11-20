@@ -430,9 +430,11 @@ fn with_the_row_a_game_commands_expression_is_read_by_xnvses_reader() {
 
 /// A call of a game command with a string and a number in the new script language (its bytes as
 /// `nvse`'s code generation writes them): with the row read by xNVSE's reader, "abc" and 5.
-/// Without it the exe's reader takes the first `0xFFFF` as a string's length, -1, and copies
-/// 4 GB, as the game without xNVSE's run-time half would (its crash; the copy is recorded here,
-/// not made). A mod's line compiled with xNVSE's GECK carries the same bytes.
+/// Without it the port's own compiler refuses such a call (`nvse`'s test
+/// `without_the_row_a_game_commands_expression_argument_is_refused`), so the bytes come only from
+/// a mod compiled with xNVSE's GECK: the exe's reader takes the first `0xFFFF` as a string's
+/// length, -1, and copies 4 GB, as the game without xNVSE's run-time half would (its crash; the
+/// copy is recorded here, not made).
 #[test]
 fn a_new_syntax_call_of_a_game_command_is_read_with_the_row() {
     let mut e = engine();
@@ -455,7 +457,7 @@ fn a_new_syntax_call_of_a_game_command_is_read_with_the_row() {
 
 /// A command for `ReplaceVariablesAndFunctions`: its name in the game's script table (slot
 /// `slot`, its opcode word `opcode`), and its record where the table gives that opcode's (one
-/// float parameter, compiled by `StandardCompile`).
+/// float parameter, compiled by `StandardCompile`, run by [`handler`]).
 fn table_command(e: &mut Engine, slot: u32, name: &[u8], opcode: u32) {
     let name_at = NAMES + 0x20 + 0x10 * slot;
     e.mem.write(name_at, name);
@@ -468,6 +470,7 @@ fn table_command(e: &mut Engine, slot: u32, name: &[u8], opcode: u32) {
     e.mem.set_u32(record + 8, opcode);
     e.mem.set_u16(record + 0x12, 1);
     e.mem.set_u32(record + 0x14, PARAMS);
+    e.mem.set_u32(record + 0x18, HANDLER);
     e.mem.set_u32(record + 0x1c, 0x005b_1ba0);
 }
 
@@ -524,5 +527,179 @@ fn inside_set_and_if_a_commands_expression_compiles_by_its_own_opcode() {
             assert!(e.call(0x005a_ccb0, &words).bool(), "{expression}");
             assert_eq!(e.mem.f32(OUT_FLOAT), value, "{expression} (row {row})");
         }
+    }
+}
+
+/// Where `set` and `if` lines compile and run: the compile data, a line and the `endif` after
+/// it, the script's data (the compile's output), the variable `f` and its name, an expression.
+const AREA2: u32 = 0x04a1_0000;
+const C_DATA: u32 = AREA2;
+const C_LINE: u32 = AREA2 + 0x100;
+const C_ENDIF: u32 = AREA2 + 0x600;
+const C_OUTPUT: u32 = AREA2 + 0xc00;
+const C_VAR: u32 = AREA2 + 0x1000;
+const C_VAR_NAME: u32 = AREA2 + 0x1040;
+const C_EXPR: u32 = AREA2 + 0x1100;
+/// The test commands' handler (a stand-in's address).
+const HANDLER: u32 = 0x0103_f100;
+/// The expression operators' table (`0118cad0`, 8 bytes each: the number, the precedence, the
+/// text), as the exe holds it.
+const OPERATOR_TABLE: u32 = 0x0118_cad0;
+const OPERATORS: [(u8, &[u8]); 16] = [
+    (0, b"("),
+    (0, b")"),
+    (1, b"&&"),
+    (2, b"||"),
+    (3, b"<="),
+    (3, b"<"),
+    (3, b">="),
+    (3, b">"),
+    (3, b"=="),
+    (3, b"!="),
+    (4, b"-"),
+    (4, b"+"),
+    (5, b"*"),
+    (5, b"/"),
+    (5, b"%"),
+    (6, b"~"),
+];
+
+thread_local! {
+    static CALLS: RefCell<Vec<(u32, u32)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// A command's handler as `005ac7a0` calls it (words: the parameters, the data, the reference,
+/// the container, the script, the locals, the result, the offset's address): where it was given
+/// its arguments (the data and the offset) recorded, its one float read through `005accb0` as a
+/// handler reads it, and given as the result.
+fn handler(e: &mut Engine, a: &[u32]) -> Ret {
+    let (params, data, reference, container) = (a[0], a[1], a[2], a[3]);
+    let (script, locals, result, offset) = (a[4], a[5], a[6], a[7]);
+    let at = e.mem.u32(offset);
+    CALLS.with(|c| c.borrow_mut().push((data, at)));
+    let value = e.with_stack(8, |e, out| {
+        let words = [
+            params,
+            data,
+            offset,
+            reference,
+            container,
+            script,
+            locals,
+            out.addr(),
+        ];
+        if e.call(0x005a_ccb0, &words).bool() {
+            e.mem.f32(out.addr())
+        } else {
+            f32::NAN
+        }
+    });
+    e.mem.set_f64(result, f64::from(value));
+    ret(1)
+}
+
+/// The engine for whole lines: the operators, the two commands (one float parameter), the
+/// variable `f` (a float, id 1), a compiled script whose data is the compile's output.
+fn line_engine(row: bool) -> Engine {
+    let mut e = engine();
+    if !e.mem.is_mapped(AREA2) {
+        e.map(AREA2, 0x2000);
+    }
+    nvse::args::set_game_inline(&mut e, row);
+    for (number, (precedence, text)) in OPERATORS.iter().enumerate() {
+        let entry = OPERATOR_TABLE + number as u32 * 8;
+        e.mem.set_u32(entry, number as u32);
+        e.mem.set_u8(entry + 4, *precedence);
+        e.mem.write(entry + 5, text);
+    }
+    parameters(&mut e, &[FLOAT], 1);
+    table_command(&mut e, 4, b"GameCmd", GAME_COMMAND);
+    table_command(&mut e, 5, b"PlugCmd", PLUGIN_COMMAND);
+    e.register(HANDLER, handler);
+    e.mem.write(C_VAR_NAME, b"f\0");
+    e.mem.set_u32(C_VAR, 1);
+    e.mem.set_u32(C_VAR + 0x18, C_VAR_NAME);
+    e.mem.set_u32(SCRIPT + 8, 8);
+    e.mem.set_u32(SCRIPT + 0x30, C_OUTPUT);
+    e.mem.set_u32(C_DATA + 0x20, C_OUTPUT);
+    e
+}
+
+/// One line (`opcode`, `text` after its command word, number 1, an `endif` numbered 2 after
+/// it) compiled by `CompileLine` (`005aff40`) onto the script's data: where it starts there.
+fn compile_line(e: &mut Engine, opcode: u32, text: &str) -> Option<u32> {
+    FORMATS.with(|f| f.borrow_mut().clear());
+    e.mem.set_u32(C_DATA + 0x3c, C_VAR);
+    e.mem.set_u32(C_DATA + 0x40, 0);
+    e.mem.set_u32(C_DATA + 0x50, C_ENDIF);
+    e.mem.set_u32(C_DATA + 0x54, 0);
+    e.mem.write(C_ENDIF, &[0; 0x41c]);
+    e.mem.set_u32(C_ENDIF, 2);
+    e.mem.set_u32(C_ENDIF + 0x410, 0x19);
+    e.mem.write(C_LINE, &[0; 0x41c]);
+    e.mem.set_u32(C_LINE, 1);
+    e.mem.write(C_LINE + 4, text.as_bytes());
+    e.mem.set_u32(C_LINE + 0x204, text.len() as u32);
+    e.mem.set_u32(C_LINE + 0x410, opcode);
+    let start = e.mem.u32(C_DATA + 0x24);
+    let ok = e.call(0x005a_ff40, &[0, SCRIPT, C_DATA, C_LINE]).bool();
+    ok.then_some(C_OUTPUT + start)
+}
+
+/// A compiled line's expression (`len` bytes at `at`) evaluated by `CExpression::Eval`
+/// (`00593db0`) as the script runner does.
+fn evaluate(e: &mut Engine, at: u32) -> f64 {
+    let len = u32::from(e.mem.u16(at - 2));
+    e.mem.write(C_EXPR, &[0; 0x720]);
+    e.call(0x0059_3490, &[C_EXPR]);
+    e.call(0x0059_3db0, &[C_EXPR, at, 0, 0, SCRIPT, LOCALS, len, 0])
+        .f64()
+}
+
+/// Whole `set` and `if` lines, compiled by `CompileLine` and run by `CExpression::Eval`: two
+/// `set f to PlugCmd (...)` lines and `if PlugCmd (2 * 3) == 6` give 3, 100 and true in both
+/// presets; `set f to GameCmd (1 + 2)` compiles and gives 3 with the row and is refused without
+/// it. Each command reads its arguments where they are, on the script's data at its own line's
+/// offset (seam `005949D4`: `Eval` would hand it a copy of the token on its stack, the same
+/// address for every line, and lambdas and error offsets are known by that address), and no
+/// copy of more than 64 KB is made.
+#[test]
+fn set_and_if_lines_run_their_commands_on_the_scripts_data() {
+    for row in [false, true] {
+        let mut e = line_engine(row);
+        let first = compile_line(&mut e, 0x15, " f to PlugCmd (1 + 2)");
+        let second = compile_line(&mut e, 0x15, " f to PlugCmd (10 * 10)");
+        let condition = compile_line(&mut e, 0x16, " PlugCmd (2 * 3) == 6");
+        let game = compile_line(&mut e, 0x15, " f to GameCmd (1 + 2)");
+        let (Some(first), Some(second), Some(condition)) = (first, second, condition) else {
+            panic!("row {row}: {:x?}", formats());
+        };
+        assert_eq!(game.is_some(), row, "the game's command: {:x?}", formats());
+        CALLS.with(|c| c.borrow_mut().clear());
+        // A set line: the opcode, the size, the variable (`f` and its id), the expression's
+        // length and bytes; an if line: the opcode, the size, the line count, the length.
+        assert_eq!(evaluate(&mut e, first + 4 + 3 + 2), 3.0, "row {row}");
+        assert_eq!(evaluate(&mut e, second + 4 + 3 + 2), 100.0, "row {row}");
+        assert_eq!(evaluate(&mut e, condition + 4 + 2 + 2), 1.0, "row {row}");
+        let mut opcodes = vec![PLUGIN_COMMAND; 3];
+        if let Some(game) = game {
+            assert_eq!(evaluate(&mut e, game + 4 + 3 + 2), 3.0);
+            opcodes.push(GAME_COMMAND);
+        }
+        let calls = CALLS.with(|c| c.borrow().clone());
+        assert_eq!(calls.len(), opcodes.len(), "row {row}: {calls:x?}");
+        let mut offsets = Vec::new();
+        for ((data, offset), opcode) in calls.iter().zip(&opcodes) {
+            assert_eq!(*data, C_OUTPUT, "row {row}: the script's data");
+            assert_eq!(
+                u32::from(e.mem.u16(data + offset - 4)),
+                *opcode,
+                "row {row}: the line's own command"
+            );
+            offsets.push(*offset);
+        }
+        offsets.dedup();
+        assert_eq!(offsets.len(), opcodes.len(), "each line at its own offset");
+        assert_eq!(BIG_COPIES.with(|c| c.borrow().clone()), vec![]);
     }
 }
