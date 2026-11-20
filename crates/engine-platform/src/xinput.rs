@@ -43,6 +43,7 @@ pub mod layout;
 #[cfg(target_os = "linux")]
 mod linux;
 pub mod sdl_db;
+pub mod sdl_hints;
 pub mod sony;
 
 pub use chain::{Chain, NoXInput, PadList};
@@ -161,8 +162,12 @@ pub fn use_system_pads(e: &mut Engine) -> String {
     {
         let hint = std::env::var("SDL_GAMECONTROLLERCONFIG").ok();
         let folder = crate::mod_files::folder(e);
-        let db = sdl_db::Database::with_players_lines(folder.as_deref(), hint.as_deref());
-        install_system(e, win32::open(), vec![Box::new(hid_win::start(db))])
+        let (db, log) = sdl_db::Database::with_players_lines(folder.as_deref(), hint.as_deref());
+        for line in log {
+            eprintln!("{line}");
+        }
+        let (sony, mapped) = hid_win::start(db, sdl_hints::DeviceLists::from_env());
+        install_system(e, win32::open(), pad_lists(sony, mapped))
     }
     #[cfg(target_os = "linux")]
     {
@@ -177,6 +182,16 @@ pub fn use_system_pads(e: &mut Engine) -> String {
         set_source(e, None);
         "nv-rs: game pads: not read on this system yet (keyboard and mouse)".to_string()
     }
+}
+
+/// The HID lists in the order the game's users take them: the PlayStation pads, then the
+/// controller database's, so a database pad found first never takes a PlayStation pad's user
+/// (review of #804).
+pub fn pad_lists(
+    sony: impl PadList + 'static,
+    mapped: impl PadList + 'static,
+) -> Vec<Box<dyn PadList>> {
+    vec![Box::new(sony), Box::new(mapped)]
 }
 
 /// Puts the `lists` of pads behind the game's XInput in `e`, with no XInput of the system's (a

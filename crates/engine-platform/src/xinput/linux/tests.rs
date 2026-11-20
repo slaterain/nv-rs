@@ -5,6 +5,7 @@
 use super::*;
 use crate::xinput::buttons;
 use crate::xinput::evdev::*;
+use crate::xinput::sdl_hints::{hint, ids, yes};
 
 /// The request numbers as linux/input.h and linux/uinput.h make them on x86-64 and ARM64
 /// (printed by a C program built against the kernel's headers, 6.18).

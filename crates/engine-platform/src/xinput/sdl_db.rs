@@ -15,9 +15,11 @@
 //! exact match fails, so a pad is found by its two ids. A line that also names a checksum of the
 //! pad's name (in its GUID or a `crc:` field) fits, in SDL, only the pad whose name has that
 //! checksum, and otherwise SDL falls back to a line without one; nv-rs does not work out SDL's
-//! checksum of a pad's name, so it leaves those lines out. Of the built-in 858, three such lines
-//! are left out (their pads have no plain line, so they are not read) and one whose GUID no
-//! DirectInput pad can have (bytes after the vendor id that SDL always leaves 0). The inputs
+//! checksum of a pad's name, so it leaves those built-in lines out; a player's own line is taken
+//! by the ids alone, checksum or not. Of the built-in 858, three such lines are left out (their
+//! pads have no plain line, so they are not read), one whose GUID no DirectInput pad can have
+//! (bytes after the vendor id that SDL always leaves 0), and four for devices with no face button
+//! and no start (a foot controller, a throttle, a phone's half pad): 850 pads. The inputs
 //! count the pad's buttons, axes and hats as SDL's DirectInput code does (`dinput_order`).
 //!
 //! How each binding turns into the controls follows SDL3's `src/joystick/SDL_gamepad.c`
@@ -266,6 +268,19 @@ impl Mapping {
         Some(Mapping { name, bindings })
     }
 
+    /// Whether the line binds a face button or start: a device with none is no pad the game is
+    /// played with.
+    pub fn is_a_pad(&self) -> bool {
+        self.bindings.iter().any(|&(_, output)| {
+            matches!(
+                output,
+                Output::Button(
+                    Button::South | Button::East | Button::West | Button::North | Button::Start
+                )
+            )
+        })
+    }
+
     /// `SDL_GetGamepadAxis`.
     fn axis(&self, j: &Joystick, axis: Axis) -> i32 {
         for &(input, output) in &self.bindings {
@@ -401,6 +416,14 @@ pub fn key(guid: &str) -> Option<(u16, u16)> {
     (word(0) == 0x0003 && zero(2) && zero(6) && zero(10) && zero(14)).then(|| (word(4), word(8)))
 }
 
+/// [`key`] for a player's line: the pad's ids whatever name checksum the GUID carries.
+pub fn key_by_ids(guid: &str) -> Option<(u16, u16)> {
+    if guid.len() != 32 || !guid.is_ascii() {
+        return None;
+    }
+    key(&format!("{}0000{}", &guid[..4], &guid[8..]))
+}
+
 /// The pads' lines by their ids, the later of two for one pad kept.
 #[derive(Clone, Debug, Default)]
 pub struct Database {
@@ -408,10 +431,14 @@ pub struct Database {
 }
 
 impl Database {
-    /// The built-in Windows lines.
+    /// The built-in Windows lines, less those for devices with no face button and no start (a
+    /// foot controller, a throttle, a phone's half pad: review of #804), which are not pads the
+    /// game can be played with.
     pub fn windows() -> Database {
         let mut db = Database::default();
         db.add(WINDOWS, Some("Windows"));
+        db.lines
+            .retain(|_, rest| Mapping::parse(rest).is_some_and(|m| m.is_a_pad()));
         db
     }
 
@@ -419,7 +446,18 @@ impl Database {
     /// `platform`, only the lines whose `platform:` field names it (as SDL reads a mappings file),
     /// without one every line (as SDL reads the hint). Answers how many were taken.
     pub fn add(&mut self, text: &str, platform: Option<&str>) -> usize {
-        let mut taken = 0;
+        self.add_lines(text, platform, false).taken
+    }
+
+    /// [`add`](Self::add) for the player's own lines, which are taken by the pad's ids alone,
+    /// with or without a name checksum (SDL's tools write one now): the player wrote the line for
+    /// their pad. Answers what was taken and the names of the lines another platform's.
+    pub fn add_players(&mut self, text: &str, platform: Option<&str>) -> Added {
+        self.add_lines(text, platform, true)
+    }
+
+    fn add_lines(&mut self, text: &str, platform: Option<&str>, players: bool) -> Added {
+        let mut added = Added::default();
         for line in text.lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -428,7 +466,12 @@ impl Database {
             let Some((guid, rest)) = line.split_once(',') else {
                 continue;
             };
-            let Some(id) = key(guid.trim()) else {
+            let id = if players {
+                key_by_ids(guid.trim())
+            } else {
+                key(guid.trim())
+            };
+            let Some(id) = id else {
                 continue;
             };
             if let Some(platform) = platform {
@@ -437,17 +480,20 @@ impl Database {
                     .filter_map(|f| f.trim().strip_prefix("platform:"))
                     .any(|p| p.eq_ignore_ascii_case(platform));
                 if !named {
+                    added
+                        .other_platform
+                        .push(rest.split(',').next().unwrap_or("").to_string());
                     continue;
                 }
             }
-            // A line for one pad name only (its checksum): left out, see the module's notes.
-            if rest.split(',').any(|f| f.trim().starts_with("crc:")) {
+            // A built-in line for one pad name only (its checksum): left out, see the notes.
+            if !players && rest.split(',').any(|f| f.trim().starts_with("crc:")) {
                 continue;
             }
             self.lines.insert(id, rest.to_string());
-            taken += 1;
+            added.taken += 1;
         }
-        taken
+        added
     }
 
     /// The mapping of the pad `vendor`:`product`, if it has a line.
@@ -456,17 +502,40 @@ impl Database {
     }
 
     /// The built-in lines with the player's read over them: `gamecontrollerdb.txt` in `folder`
-    /// (the port's own folder; its Windows lines), then `hint`'s lines (`SDL_GAMECONTROLLERCONFIG`'s,
-    /// all of them).
-    pub fn with_players_lines(folder: Option<&std::path::Path>, hint: Option<&str>) -> Database {
+    /// (the port's own folder; its Windows lines; UTF-8, with or without its mark, or UTF-16),
+    /// then `hint`'s lines (`SDL_GAMECONTROLLERCONFIG`'s, all of them). Answers the lines for the
+    /// log too: how many each gave, and each line of the file left out for another platform.
+    pub fn with_players_lines(
+        folder: Option<&std::path::Path>,
+        hint: Option<&str>,
+    ) -> (Database, Vec<String>) {
         let mut db = Database::windows();
-        if let Some(text) = folder.and_then(|f| std::fs::read_to_string(f.join(FILE)).ok()) {
-            db.add(&text, Some("Windows"));
+        let mut log = Vec::new();
+        if let Some(path) = folder.map(|f| f.join(FILE)) {
+            if let Ok(bytes) = std::fs::read(&path) {
+                let added = db.add_players(&text_of(&bytes), Some("Windows"));
+                log.push(format!(
+                    "nv-rs: game pads: {} lines taken from {}",
+                    added.taken,
+                    path.display()
+                ));
+                for name in added.other_platform {
+                    log.push(format!(
+                        "nv-rs: game pads: the line for {name} in {} has no platform:Windows and is \
+                         not taken",
+                        path.display()
+                    ));
+                }
+            }
         }
         if let Some(hint) = hint {
-            db.add(hint, None);
+            let added = db.add_players(hint, None);
+            log.push(format!(
+                "nv-rs: game pads: {} lines taken from SDL_GAMECONTROLLERCONFIG",
+                added.taken
+            ));
         }
-        db
+        (db, log)
     }
 
     /// How many pads have a line.
@@ -476,6 +545,29 @@ impl Database {
 
     pub fn is_empty(&self) -> bool {
         self.lines.is_empty()
+    }
+}
+
+/// What [`Database::add_players`] took: how many lines, and the names of those for another
+/// platform.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Added {
+    pub taken: usize,
+    pub other_platform: Vec<String>,
+}
+
+/// A text file's text: UTF-16 (little or big endian) after its byte order mark, else UTF-8 with
+/// or without its mark (a byte that is not UTF-8 read as the replacement character).
+pub fn text_of(bytes: &[u8]) -> String {
+    let utf16 = |rest: &[u8], word: fn([u8; 2]) -> u16| {
+        let words: Vec<u16> = rest.chunks_exact(2).map(|c| word([c[0], c[1]])).collect();
+        String::from_utf16_lossy(&words)
+    };
+    match bytes {
+        [0xff, 0xfe, rest @ ..] => utf16(rest, u16::from_le_bytes),
+        [0xfe, 0xff, rest @ ..] => utf16(rest, u16::from_be_bytes),
+        [0xef, 0xbb, 0xbf, rest @ ..] => String::from_utf8_lossy(rest).into_owned(),
+        _ => String::from_utf8_lossy(bytes).into_owned(),
     }
 }
 
@@ -491,13 +583,14 @@ mod tests {
         }
     }
 
-    /// The built-in lines: the copy's Windows lines, found by their two ids: 854 pads of its 858
-    /// GUID lines (three name a name checksum too, one has a GUID no pad can have; the `xinput`
+    /// The built-in lines: the copy's Windows lines, found by their two ids: 850 pads of its 858
+    /// GUID lines (three name a name checksum too, one has a GUID no pad can have, four bind no face
+    /// button or start; the `xinput`
     /// line names no pad).
     #[test]
     fn the_built_in_lines() {
         let db = Database::windows();
-        assert_eq!(db.len(), 854);
+        assert_eq!(db.len(), 850);
         let guid_lines = WINDOWS.lines().filter(|l| l.starts_with("0300")).count();
         assert_eq!(guid_lines, 858);
         assert!(WINDOWS.starts_with("# SDL_GameControllerDB"));
@@ -667,24 +760,64 @@ mod tests {
     fn the_players_lines() {
         let dir = std::env::temp_dir().join(format!("nv-rs-pad-db-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join(FILE),
-            "03000000c82d00000660000000000000,File,a:b0,platform:Windows,\n\
-             03000000aaaa0000bbbb000000000000,New,a:b0,platform:Windows,\n\
-             03000000cccc0000dddd000000000000,Mac,a:b0,platform:Mac OS X,\n",
-        )
-        .unwrap();
-        let db = Database::with_players_lines(Some(&dir), None);
+        // UTF-16 with its mark, as some editors save; one line with a name checksum (SDL's tools
+        // write them), one for another platform.
+        let text = "03000000c82d00000660000000000000,File,a:b0,platform:Windows,\n\
+                    0300abcdaaaa0000bbbb000000000000,New,a:b0,crc:abcd,platform:Windows,\n\
+                    03000000cccc0000dddd000000000000,Mac,a:b0,platform:Mac OS X,\n";
+        let mut bytes = vec![0xff, 0xfe];
+        bytes.extend(text.encode_utf16().flat_map(u16::to_le_bytes));
+        std::fs::write(dir.join(FILE), bytes).unwrap();
+        let (db, log) = Database::with_players_lines(Some(&dir), None);
         assert_eq!(db.mapping(0x2dc8, 0x6006).unwrap().name, "File");
         assert_eq!(db.mapping(0xaaaa, 0xbbbb).unwrap().name, "New");
         assert_eq!(db.mapping(0xcccc, 0xdddd), None);
-        assert_eq!(db.len(), 855);
+        assert_eq!(db.len(), 851);
+        assert_eq!(log.len(), 2);
+        assert!(log[0].starts_with("nv-rs: game pads: 2 lines taken from "));
+        assert!(log[1].contains("the line for Mac") && log[1].contains("no platform:Windows"));
         let hint = "03000000c82d00000660000000000000,Hint,a:b0";
-        let db = Database::with_players_lines(Some(&dir), Some(hint));
+        let (db, log) = Database::with_players_lines(Some(&dir), Some(hint));
         assert_eq!(db.mapping(0x2dc8, 0x6006).unwrap().name, "Hint");
+        assert_eq!(
+            log.last().unwrap(),
+            "nv-rs: game pads: 1 lines taken from SDL_GAMECONTROLLERCONFIG"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
-        let db = Database::with_players_lines(Some(&dir), None);
+        let (db, log) = Database::with_players_lines(Some(&dir), None);
         assert_eq!(db.mapping(0x2dc8, 0x6006).unwrap().name, "8BitDo Pro 2");
-        assert_eq!(Database::with_players_lines(None, None).len(), 854);
+        assert!(log.is_empty(), "no file: nothing to say");
+        assert_eq!(Database::with_players_lines(None, None).0.len(), 850);
+    }
+
+    /// A file's text whatever its encoding mark.
+    #[test]
+    fn text_in_its_encoding() {
+        assert_eq!(text_of(b"\xef\xbb\xbfab"), "ab");
+        assert_eq!(text_of(b"ab"), "ab");
+        assert_eq!(text_of(&[0xfe, 0xff, 0, b'a', 0, b'b']), "ab");
+        assert_eq!(text_of(&[0xff, 0xfe, b'a', 0, b'b', 0]), "ab");
+        assert_eq!(
+            key_by_ids("0300abcdc82d00000660000000000000"),
+            Some((0x2dc8, 0x6006))
+        );
+        assert_eq!(key_by_ids("short"), None);
+    }
+
+    /// Built-in lines for devices with no face button and no start are left out (review of #804):
+    /// the 3dRudder, the TWCS Throttle, the iGUGU Gamecore, the Xiaomi Black Shark (L).
+    #[test]
+    fn no_pad_without_face_buttons() {
+        let db = Database::windows();
+        for id in [
+            (0x2dfa, 0x0001),
+            (0x1d51, 0x3002),
+            (0x044f, 0xb687),
+            (0xffe0, 0x0102),
+        ] {
+            assert_eq!(db.mapping(id.0, id.1), None, "{id:04x?}");
+        }
+        assert!(!Mapping::parse("Foot,leftx:a0,lefty:a1").unwrap().is_a_pad());
+        assert!(Mapping::parse("Pad,start:b9").unwrap().is_a_pad());
     }
 }
