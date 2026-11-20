@@ -193,6 +193,7 @@ pub fn install(e: &mut Engine) {
     for row in &on {
         e.set_stewie(row.bit, true);
     }
+    rows::forms::write_data(e);
     let log = start_lines(ini.is_some(), &settings, &keys, on.len());
     for line in &log {
         eprintln!("{line}");
