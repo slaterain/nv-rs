@@ -21,9 +21,9 @@
 //!   write the root node and reset its collision), the 18 `*NifBlock*`, `GetChildBlocks`,
 //!   `GetBlockTextureSet`, `GetNifBlockParentNodes`, `GetMaterialPropertyValue`,
 //!   `SetMaterialPropertyValue`, `SetTextureTransformKey`, `Get/SetAnimSequenceFrequency`,
-//!   `PlayAnimSequence`, `AttachLight`, `RemoveLight`, `AttachLine`, `AttachExtraCamera`,
-//!   `ProjectExtraCamera`, `MoveToNode`. (`InsertNode`, `AttachModel` and `ModelHasBlock` are built
-//!   in `jip_fn_misc_ref_insert.rs`.)
+//!   `PlayAnimSequence`, `AttachLight`, `RemoveLight`, `AttachLine`, `MoveToNode`. (`InsertNode`,
+//!   `AttachModel` and `ModelHasBlock` are built in `jip_fn_misc_ref_insert.rs`, `AttachExtraCamera`
+//!   and `ProjectExtraCamera` in `jip_fn_misc_ref_cameras.rs`.)
 //! - Havok (rigid bodies, phantoms, contacts, character controllers, ray casts):
 //!   `IsMobile`, `IsGrabbable` (JIP's `NiNode::IsMovable` walks collision objects),
 //!   `GetRigidBodyMass`, `PushObject`, `GetObjectVelocity`, `Get/SetAngularVelocity`,

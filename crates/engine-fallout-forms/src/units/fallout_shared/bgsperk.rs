@@ -1231,8 +1231,28 @@ pub fn bgs_perk_build_description_string(e: &mut Engine, this: Ptr, buffer: Ptr,
         let text = e
             .vcall(base + 0x24, 0x10, &args![0u32, 0x4353_4544u32])
             .u32();
-        e.call(STRING_APPEND, &args![buffer, size, text]);
+        // lStewieAl's Tweaks' row S0093.07 (`PerkMenuDescriptionTypoFix`, the call at `0x5EC026`):
+        // `snprintf(buffer, size, "%s%s", buffer, text)` in place of `strcat_s`, so a description too
+        // long for the buffer is cut to fit instead of stopping the game.
+        if e.stewie(engine_core::extend::stewie::PERK_DESCRIPTION_TOO_LONG) {
+            append_cut_to_fit(e, buffer.addr(), size, text);
+        } else {
+            e.call(STRING_APPEND, &args![buffer, size, text]);
+        }
     });
+}
+
+/// What lStewieAl's Tweaks' `_strncat` does (`snprintf(buffer, size, "%s%s", buffer, text)`): the
+/// buffer's text and `text` joined, cut to `size - 1` bytes and ended with a 0.
+fn append_cut_to_fit(e: &mut Engine, buffer: u32, size: u32, text: u32) {
+    if size == 0 {
+        return;
+    }
+    let mut joined = e.mem.cstr(buffer);
+    joined.extend(e.mem.cstr(text));
+    joined.truncate((size - 1) as usize);
+    joined.push(0);
+    e.mem.write(buffer, &joined);
 }
 
 /// Chunk writers (cdecl): data (`TESForm::__AddChunkData`, `00485990`:
@@ -3081,6 +3101,67 @@ mod b028_description_tests {
             .into_iter()
             .filter(|c| c.0 == STRING_FORMAT || c.0 == STRING_APPEND)
             .collect()
+    }
+
+    /// `strcat_s` as the C runtime's: the joined text, or the invalid-parameter stop (a panic here) when
+    /// it does not fit. A word outside mapped memory (the exe's own strings) reads as empty.
+    fn real_append(e: &mut Engine) {
+        e.register(STRING_APPEND, |e, a| {
+            let read = |e: &Engine, at: u32| {
+                if e.mem.is_mapped(at) {
+                    e.mem.cstr(at)
+                } else {
+                    vec![]
+                }
+            };
+            let mut joined = read(e, a[0]);
+            joined.extend(read(e, a[2]));
+            assert!(
+                joined.len() < a[1] as usize,
+                "strcat_s: the text does not fit"
+            );
+            joined.push(0);
+            e.mem.write(a[0], &joined);
+            Ret::default()
+        });
+    }
+
+    /// A perk with no requirements whose description text (`0dd00000`) is `text`, built into a buffer
+    /// of `size` bytes with the row `on`: whether it ran to the end, and the buffer's text.
+    fn description_of(text: &[u8], size: u32, on: bool) -> (bool, Vec<u8>) {
+        let mut e = engine();
+        real_append(&mut e);
+        e.map(0x0dd0_0000, 0x1000);
+        e.mem.write(0x0dd0_0000, text);
+        e.mem.set_u8(0x0dd0_0000 + text.len() as u32, 0);
+        set_items(&mut e, vec![]);
+        let this = perk(&mut e, 1);
+        let buffer = e.mem.alloc(size);
+        e.set_stewie(engine_core::extend::stewie::PERK_DESCRIPTION_TOO_LONG, on);
+        let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            e.call(0x005e_bac0, &args![this, buffer, size]);
+        }));
+        e.call_stack.clear();
+        (run.is_ok(), e.mem.cstr(buffer))
+    }
+
+    /// lStewieAl's Tweaks' row S0093.07 (`PerkMenuDescriptionTypoFix`, the call at `0x5EC026`): a
+    /// description longer than the buffer: the exe's `strcat_s` stops; with the row it is cut to fit
+    /// (`size - 1` bytes and the end).
+    #[test]
+    fn s0093_07_a_description_too_long_for_the_buffer() {
+        let text = [b'x'; 0x40];
+        assert!(!description_of(&text, 0x20, false).0);
+        assert_eq!(description_of(&text, 0x20, true), (true, vec![b'x'; 0x1f]));
+    }
+
+    /// Row S0093.07 with a description that fits (ordinary input): the same text with the row off and
+    /// on.
+    #[test]
+    fn s0093_07_row_on_with_a_description_that_fits_changes_nothing() {
+        let text = b"Ammunition weighs nothing.";
+        assert_eq!(description_of(text, 0x40, false), (true, text.to_vec()));
+        assert_eq!(description_of(text, 0x40, true), (true, text.to_vec()));
     }
 
     #[test]

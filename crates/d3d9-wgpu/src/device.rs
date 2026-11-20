@@ -877,8 +877,11 @@ pub struct Device {
     #[allow(clippy::type_complexity)]
     gamma_resolves:
         Map<(wgpu::TextureFormat, u32, bool), (wgpu::RenderPipeline, wgpu::BindGroupLayout)>,
-    /// Depth stand-ins for targets smaller than the bound depth surface ([`Device::usable_depth`]).
-    depth_parts: Map<(u64, u32, u32), Arc<Surf>>,
+    /// Depth stand-ins for targets smaller than the bound depth surface ([`Device::usable_depth`]),
+    /// each with the present it was last drawn with: one not drawn with for [`DEPTH_PART_IDLE`]
+    /// presents is let go ([`sweep_idle`]), so a target size used once (a mod's picture of the
+    /// interface, of a camera) does not keep its stand-in's video memory.
+    depth_parts: Map<(u64, u32, u32), (Arc<Surf>, u64)>,
     #[allow(clippy::type_complexity)]
     clears: Map<
         (
@@ -3434,7 +3437,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             return None;
         }
         let key = (ds.id, rt.width, rt.height);
-        if let Some(s) = self.depth_parts.get(&key) {
+        let now = self.presents;
+        if let Some((s, used)) = self.depth_parts.get_mut(&key) {
+            *used = now;
             return Some(f(s));
         }
         let (format, samples) = (ds.format.d3d, ds.samples);
@@ -3445,7 +3450,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.warn(what);
         let tex = self.new_texture(key.1, key.2, 1, format, false, false, samples)?;
         let s = self.level_surface(&tex, 0, 0);
-        self.depth_parts.insert(key, s.clone());
+        self.depth_parts.insert(key, (s.clone(), now));
         Some(f(&s))
     }
 
@@ -9245,8 +9250,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 }
             }
         }
-        // Bind groups of textures destroyed this frame dropped.
+        // Bind groups of textures destroyed this frame dropped; depth stand-ins idle a while too.
         self.purge_destroyed();
+        sweep_idle(&mut self.depth_parts, self.presents, DEPTH_PART_IDLE);
         // The counts the GPU has now posted for the game's threads.
         self.post_answers();
         if let Some(c) = &mut self.pipeline_cache {
@@ -10985,6 +10991,21 @@ pub const SUBMIT_USES: u32 = 512;
 /// so that one encoder alone fits in a submit.
 const SPLIT_USES: u32 = SUBMIT_USES;
 
+/// The presents a depth stand-in ([`Device::usable_depth`]) is kept without a draw that uses it:
+/// about five seconds at 60 frames a second, so a size drawn every frame or every few frames (a
+/// mod's live picture of the interface or of a camera, the game's own smaller targets) keeps its
+/// stand-in, and one drawn once (each new `ProjectUITile` size) lets it go.
+const DEPTH_PART_IDLE: u64 = 300;
+
+/// The entries of `map` last used (the present in each value) more than `idle` presents before
+/// `now`, let go.
+fn sweep_idle<K, V>(map: &mut Map<K, (V, u64)>, now: u64, idle: u64)
+where
+    K: Eq + std::hash::Hash,
+{
+    map.retain(|_, (_, used)| now.saturating_sub(*used) <= idle);
+}
+
 /// How many of a batch's command buffers (taking `uses` each, in order) go in each submit, and the
 /// uses they take together: as many as take [`SUBMIT_USES`], at least one.
 fn submit_parts(uses: &[u32]) -> Vec<(usize, u32)> {
@@ -11375,6 +11396,25 @@ fn render_times(query: &wgpu::QuerySet, index: u32) -> wgpu::RenderPassTimestamp
 mod tests {
     use super::*;
     use wgpu::TextureFormat as F;
+
+    /// Depth stand-ins idle for more than [`DEPTH_PART_IDLE`] presents go, those used within it
+    /// stay (a stand-in used at the present before is kept, one used exactly the limit ago too).
+    #[test]
+    fn idle_depth_stand_ins_are_let_go() {
+        let mut map: Map<(u64, u32, u32), (&str, u64)> = Map::default();
+        map.insert((1, 64, 64), ("every frame", 999));
+        map.insert((1, 300, 200), ("at the limit", 1000 - DEPTH_PART_IDLE));
+        map.insert((1, 301, 200), ("past it", 999 - DEPTH_PART_IDLE));
+        map.insert((2, 32, 32), ("long ago", 0));
+        sweep_idle(&mut map, 1000, DEPTH_PART_IDLE);
+        let mut kept: Vec<&str> = map.values().map(|(v, _)| *v).collect();
+        kept.sort_unstable();
+        assert_eq!(kept, ["at the limit", "every frame"]);
+        // A run's first presents: nothing is older than the run.
+        map.insert((3, 8, 8), ("new", 5));
+        sweep_idle(&mut map, 5, DEPTH_PART_IDLE);
+        assert!(map.values().any(|(v, _)| *v == "new"));
+    }
 
     /// A batch's command buffers go in as few submits as take at most [`SUBMIT_USES`] each, in
     /// order; one buffer alone always goes (the encoder cut keeps it within the limit).

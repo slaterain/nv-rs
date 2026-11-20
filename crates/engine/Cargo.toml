@@ -40,3 +40,5 @@ engine-core = { path = "../engine-core", features = ["test-support"] }
 # The opt-in real-script run (`tests/real_scda.rs`) reads the player's
 # FalloutNV.esm.
 esm = { path = "../esm" }
+# xNVSE's run-time line reader against the game's (`tests/xnvse_line_reader.rs`).
+nvse = { path = "../nvse" }

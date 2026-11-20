@@ -654,6 +654,11 @@ fn for_parts_below(
                 break;
             }
             node = e.call(NODE_PARENT, &args![node]).u32();
+            // lStewieAl's Tweaks' row S0077 (`patchBodyPartDataNullChecks`, the jumps at `0x5E5733`
+            // and `0x5E58C5`): a walk that runs out of parents goes on to the next part.
+            if node == 0 && e.stewie(engine_core::extend::stewie::BODY_PART_NULL_PARENT) {
+                break;
+            }
         }
     }
 }
@@ -1516,6 +1521,79 @@ mod tests {
             calls_to(&e, SET_BODY_PART_ENABLED),
             vec![vec![0x4000 + object, 1, 0]]
         );
+    }
+
+    /// [`limb_doubles`] with a fourth part (index 3, node `0x2003`) whose node has no parent: the parent
+    /// getter reads a null node's word at +0x18 as the exe's does (the null page: a stop).
+    fn limb_doubles_with_a_rootless_part(e: &mut Engine, this: Ptr, children: u32) -> u32 {
+        let object = limb_doubles(e, this, children);
+        let part = body_part(e, 3);
+        e.mem.set_u32(this.addr() + 0x34 + 4 * 3, part);
+        e.mem.set_u32(part + 0x80, 0x103);
+        e.register(NODE_PARENT, |e, a| Ret {
+            eax: match a[0] {
+                0x2000 => 0x9000,
+                0x2001 => 0x3000,
+                0x2002 => 0x3001,
+                0x3001 => 0x3000,
+                0x2003 => 0,
+                node => e.mem.u32(node + 0x18),
+            },
+            ..Ret::default()
+        });
+        object
+    }
+
+    /// lStewieAl's Tweaks' row S0077 (`patchBodyPartDataNullChecks`, `0x5E5734` and `0x5E58C6`): a part
+    /// whose node's parents run out before the root or the ancestor: the exe asks the null parent for
+    /// its own and stops; with the row the part is passed over and the others are hidden (shown) as
+    /// usual.
+    #[test]
+    fn s0077_a_part_whose_parents_run_out() {
+        for (function, enabled) in [(0x005e_55e0u32, 0u32), (0x005e_5750, 1)] {
+            for on in [false, true] {
+                let mut e = Engine::new();
+                let d = body_part_data(&mut e);
+                let object = limb_doubles_with_a_rootless_part(&mut e, d, 0x55);
+                e.set_stewie(engine_core::extend::stewie::BODY_PART_NULL_PARENT, on);
+                e.call_log = Some(vec![]);
+                let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    e.call(function, &args![d, 0x3000u32, 0x9000u32, 99u32, object]);
+                }));
+                e.call_stack.clear();
+                assert_eq!(run.is_ok(), on, "{function:08x} row {on}");
+                if on {
+                    assert_eq!(
+                        calls_to(&e, SET_BODY_PART_ENABLED),
+                        vec![
+                            vec![0x4010, 1, enabled],
+                            vec![0x4011, 1, enabled],
+                            vec![0x4010, 2, enabled],
+                            vec![0x4011, 2, enabled],
+                        ]
+                    );
+                }
+            }
+        }
+    }
+
+    /// Row S0077 with every part's parents reaching the root (ordinary input): the same calls with the
+    /// row off and on.
+    #[test]
+    fn s0077_row_on_with_whole_chains_changes_nothing() {
+        for function in [0x005e_55e0u32, 0x005e_5750] {
+            let mut logs = vec![];
+            for on in [false, true] {
+                let mut e = Engine::new();
+                let d = body_part_data(&mut e);
+                let object = limb_doubles(&mut e, d, 0x55);
+                e.set_stewie(engine_core::extend::stewie::BODY_PART_NULL_PARENT, on);
+                e.call_log = Some(vec![]);
+                e.call(function, &args![d, 0x3000u32, 0x9000u32, 99u32, object]);
+                logs.push(e.call_log.take().unwrap());
+            }
+            assert_eq!(logs[0], logs[1], "{function:08x}");
+        }
     }
 
     #[test]
