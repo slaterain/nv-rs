@@ -250,8 +250,8 @@ mod tests {
     fn guest() -> Box<Engine> {
         let mut e = Box::new(Engine::new());
         e.map(0x011c_0000, 0x6_0000);
-        let mut slots = [0u32; GET_EDITOR_ID as usize / 4 + 1];
-        slots[GET_EDITOR_ID as usize / 4] = EDITOR_ID;
+        let mut slots = [0u32; 0x130 / 4 + 1];
+        slots[0x130 / 4] = EDITOR_ID;
         e.put_vtable(FORM_VTABLE, &slots);
         e.register(EDITOR_ID, |_, a| (a[0] + 0x100).into_ret());
         e
@@ -264,7 +264,7 @@ mod tests {
             e.mem.set_u32(f + o, 0);
         }
         e.mem.set_u32(f, FORM_VTABLE);
-        e.mem.set_u32(f + FORM_ID, id);
+        e.mem.set_u32(f + 0x0c, id);
         for (i, b) in name.bytes().enumerate() {
             e.mem.set_u8(f + 0x100 + i as u32, b);
         }
@@ -272,27 +272,28 @@ mod tests {
     }
 
     /// The player at the quarry spot in an exterior cell of WastelandNV at 17:30 under a clear
-    /// sky; the player's cell's pointer returned.
+    /// sky (written at the exe's own offsets and globals as numbers, so a wrong constant above
+    /// fails); the player's cell's pointer returned.
     fn player_outside(e: &mut Engine) -> u32 {
         let player = new_form(e, 0x14, "");
         for (i, v) in [-39000.0f32, 18200.0, 5800.0].iter().enumerate() {
-            e.mem.set_f32(player + POSITION + 4 * i as u32, *v);
+            e.mem.set_f32(player + 0x30 + 4 * i as u32, *v);
         }
         for (i, v) in [0.25f32, 0.0, 1.5].iter().enumerate() {
-            e.mem.set_f32(player + ROTATION + 4 * i as u32, *v);
+            e.mem.set_f32(player + 0x24 + 4 * i as u32, *v);
         }
         let world = new_form(e, 0x000d_a726, "WastelandNV");
         let cell = new_form(e, 0x000d_e4c2, "");
-        e.mem.set_u32(cell + CELL_WORLD_SPACE, world);
-        e.mem.set_u32(player + PARENT_CELL, cell);
-        e.mem.set_u32(PLAYER, player);
+        e.mem.set_u32(cell + 0xc0, world);
+        e.mem.set_u32(player + 0x40, cell);
+        e.mem.set_u32(0x011d_ea3c, player);
         let hour = new_form(e, 0x38, "GameHour");
-        e.mem.set_f32(hour + GLOBAL_VALUE, 17.5);
-        e.mem.set_u32(CALENDAR + CALENDAR_HOUR, hour);
+        e.mem.set_f32(hour + 0x24, 17.5);
+        e.mem.set_u32(0x011d_e7b8 + 0x0c, hour);
         let sky = e.mem.alloc(0x40);
         let weather = new_form(e, 0x15e, "WeatherClear");
-        e.mem.set_u32(sky + SKY_WEATHER, weather);
-        e.mem.set_u32(SKY, sky);
+        e.mem.set_u32(sky + 0x10, weather);
+        e.mem.set_u32(0x011c_cb78, sky);
         cell
     }
 
@@ -302,7 +303,7 @@ mod tests {
     #[test]
     fn the_place_is_read_from_the_games_player_cell_calendar_and_sky() {
         let mut e = guest();
-        e.mem.set_u32(PLAYER, 0);
+        e.mem.set_u32(0x011d_ea3c, 0);
         assert_eq!(read(&mut e), None, "no player yet");
         player_outside(&mut e);
         let p = read(&mut e).expect("a player");
@@ -339,23 +340,23 @@ mod tests {
     fn an_interior_a_null_cell_a_null_sky_and_no_hour_global() {
         let mut e = guest();
         let cell = player_outside(&mut e);
-        e.mem.set_u8(cell + CELL_FLAGS, 1);
+        e.mem.set_u8(cell + 0x24, 1);
         let p = read(&mut e).expect("a player");
         assert!(p.interior);
         assert_eq!(p.cell.map(|c| c.form_id), Some(0x000d_e4c2));
         assert_eq!(p.world_space, None);
-        let player = e.mem.u32(PLAYER);
-        e.mem.set_u32(player + PARENT_CELL, 0);
-        e.mem.set_u32(SKY, 0);
-        e.mem.set_u32(CALENDAR + CALENDAR_HOUR, 0);
+        let player = e.mem.u32(0x011d_ea3c);
+        e.mem.set_u32(player + 0x40, 0);
+        e.mem.set_u32(0x011c_cb78, 0);
+        e.mem.set_u32(0x011d_e7b8 + 0x0c, 0);
         let p = read(&mut e).expect("a player");
         assert_eq!((p.cell, p.interior, p.world_space), (None, false, None));
         assert_eq!(p.weather, None);
         assert_eq!(p.hour, 12.0);
         // A sky with no weather yet.
         let sky = e.mem.alloc(0x40);
-        e.mem.set_u32(sky + SKY_WEATHER, 0);
-        e.mem.set_u32(SKY, sky);
+        e.mem.set_u32(sky + 0x10, 0);
+        e.mem.set_u32(0x011c_cb78, sky);
         assert_eq!(read(&mut e).expect("a player").weather, None);
     }
 
