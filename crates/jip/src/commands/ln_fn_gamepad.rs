@@ -1,20 +1,22 @@
 //! `functions_ln/ln_fn_gamepad.h` (JIP LN NVSE): the XInput pad as JIP sees it and the changes
-//! scripts make to what the game reads. 27 of its 31 commands (the core track built
+//! scripts make to what the game reads. 29 of its 31 commands (the core track built
 //! `SetOnTriggerDownEventHandler` and `SetOnTriggerUpEventHandler`, `ui_hooks.rs`), over its pad state
 //! (`crate::input`: `s_controllerReady`, `s_gamePad` (the pad's own state before JIP's changes),
 //! `s_XIStateMods`, the dead zones).
 //!
-//! Left for later: `SetDeadZoneLS` and `SetDeadZoneRS` write the new dead zone into the game's own
-//! code (`SafeWrite32` at thirteen and eighteen immediates in the game's code,
-//! `0x717B90` ... `0xA23E9C`): the translated functions hold those numbers as constants, so each
-//! site needs a seam first. Until then the dead zones keep JIP's first values (7849 and 8689),
-//! which the getters here read.
+//! `SetDeadZoneLS` and `SetDeadZoneRS` change a stick's dead zone everywhere JIP does: its own
+//! numbers (the gamepad conditions and `IsControlPressed`), the double group GB's D04 seams point
+//! the game's `FCOMP`s at, and the 19 immediates JIP rewrites in the game's code (`SafeWrite32`,
+//! `0x717B90` ... `0xA23E9C`), which the translated functions read from the engine
+//! ([`Engine::pad_dead_zone_left`], [`Engine::pad_dead_zone_right`]). Until a call the dead zones
+//! are JIP's first values, 7849 and 8689, the exe's own.
 
 use super::Handlers;
 // JIP's pad state is in `crate::input`'s lock-free slot: the conditions below read it on any
 // thread without JIP's shared slot.
 use crate::input::{dead_zone_ls, dead_zone_rs, mods, pad, ready, update_mods, Pad};
 use engine_core::prelude::*;
+use nvse::args::Arg;
 use nvse::commands::Read;
 use nvse::{handled, CommandArgs, EvalArgs};
 
@@ -23,6 +25,8 @@ pub static COMMANDS: Handlers = &[
     (0x2203, get_controller),
     (0x220b, get_dead_zone_ls),
     (0x220c, get_dead_zone_rs),
+    (0x220d, set_dead_zone_ls),
+    (0x220e, set_dead_zone_rs),
     (0x220f, get_pressed_buttons),
     (0x2294, enable_button),
     (0x2295, disable_button),
@@ -109,21 +113,27 @@ fn get_pressed_buttons(e: &mut Engine, w: &[u32]) -> Ret {
 /// A stick axis past its dead zone, scaled: 0 inside it; above, `(value - dz) * d`; below,
 /// `(value + 1 + dz) * d` (`d = 1 / (32767 - dz)`, JIP's `s_deadZoneLSd`/`RSd`, kept with the
 /// dead zone: `1.0 / 24918` and `1.0 / 24078` at the start); the products in doubles
-/// (`cvtsi2sd`, `mulsd`).
+/// (`cvtsi2sd`, `mulsd`). Inside or outside is decided on the true difference and sum, as JIP's
+/// `sub`/`jg` and `inc`/`add`/`jge` do (their flags count an overflow), and the wrapped 32-bit
+/// value goes into the product: so after a NaN dead zone (0x80000000) the sticks give about
+/// plus or minus 1, as JIP's.
 pub fn stick(value: i16, dead_zone: i32) -> f64 {
     let v = i32::from(value);
-    let scale = 1.0 / f64::from(32767 - dead_zone);
+    let scale = 1.0 / f64::from(32767i32.wrapping_sub(dead_zone));
     if v == 0 {
         return 0.0;
     }
     let past = if v > 0 {
+        if i64::from(v) - i64::from(dead_zone) <= 0 {
+            return 0.0;
+        }
         v.wrapping_sub(dead_zone)
     } else {
+        if i64::from(v) + 1 + i64::from(dead_zone) >= 0 {
+            return 0.0;
+        }
         v.wrapping_add(1).wrapping_add(dead_zone)
     };
-    if (v > 0 && past <= 0) || (v < 0 && past >= 0) {
-        return 0.0;
-    }
     f64::from(past) * scale
 }
 
@@ -221,6 +231,70 @@ fn get_dead_zone_rs(e: &mut Engine, w: &[u32]) -> Ret {
     let dz = dead_zone_rs(e);
     a.set_result(e, f64::from(dz) * (1.0 / 32767.0));
     crate::console::print_result(e, &a);
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_ln/ln_fn_gamepad.h:
+// Cmd_SetDeadZoneLS_Execute, Cmd_SetDeadZoneRS_Execute (their shared start).
+/// The dead zone a script's fraction gives: 3277 at 0.1 or below, 29490 at 0.9 or above, else
+/// the fraction times 32767 cut toward zero (`cvttsd2si`). A NaN fails both tests, and JIP's
+/// conversion gives `0x80000000` for it (kept: the sticks then count as pushed everywhere; the
+/// sums and negations wrap as JIP's).
+pub fn dead_zone_of(fraction: f64) -> i32 {
+    if fraction <= 0.1 {
+        3277
+    } else if fraction >= 0.9 {
+        29490
+    } else {
+        let value = fraction * 32767.0;
+        if value.is_nan() {
+            i32::MIN
+        } else {
+            value as i32
+        }
+    }
+}
+
+/// The dead zone from the command's one double, when read. Without it (a line the compiler does not
+/// make) JIP's `deadzone` is left unset: the port takes 0.
+fn dead_zone_arg(e: &mut Engine, a: &CommandArgs) -> Option<i32> {
+    let read = Read::of(e, a);
+    read.ok.then(|| match read.args.first() {
+        Some(Arg::Double(v)) => dead_zone_of(*v),
+        _ => dead_zone_of(0.0),
+    })
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_ln/ln_fn_gamepad.h:
+// Cmd_SetDeadZoneLS_Execute.
+/// The left stick's dead zone set where JIP sets it: `s_deadZoneLS` (the gamepad conditions,
+/// `IsControlPressed`; JIP's `s_deadZoneLSd` is worked out from it where read, [`stick`]),
+/// `s_deadZoneLSg` (the double the game's nine left-stick `FCOMP`s compare with, group GB's D04)
+/// and the 19 immediates (13 of the number, 6 of its negation:
+/// [`Engine::set_pad_dead_zone_left`]).
+fn set_dead_zone_ls(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if let Some(value) = dead_zone_arg(e, &a) {
+        crate::input::set_dead_zone_ls(e, value);
+        let (left, _) = crate::game_patches::gb::doubles(e);
+        e.mem.set_f64(left, f64::from(value));
+        e.set_pad_dead_zone_left(value);
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_ln/ln_fn_gamepad.h:
+// Cmd_SetDeadZoneRS_Execute.
+/// The right stick's: `s_deadZoneRS`, `s_deadZoneRSg` (the free camera's two look `FCOMP`s) and
+/// the 19 immediates (18 of the number, 1 of its negation: [`Engine::set_pad_dead_zone_right`]).
+fn set_dead_zone_rs(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if let Some(value) = dead_zone_arg(e, &a) {
+        crate::input::set_dead_zone_rs(e, value);
+        let (_, right) = crate::game_patches::gb::doubles(e);
+        e.mem.set_f64(right, f64::from(value));
+        e.set_pad_dead_zone_right(value);
+    }
     handled(true)
 }
 

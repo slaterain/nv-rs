@@ -316,9 +316,11 @@ pub fn trait_select_menu_do_idle(e: &mut Engine, this: Ptr) {
     }
     if gamepad_active(e) && gamepad_active(e) {
         let x = i32::from(e.global::<u16>(STICK_X_011D8A5E) as i16);
-        let _moved_x = e.call(ABS, &args![x]).i32() > 0x1ea9;
+        // The dead zones: the exe's (immediates `0x7E7F82` and `0x7E7FAD`) unless JIP LN NVSE's
+        // `SetDeadZoneLS` and `SetDeadZoneRS` rewrote them.
+        let _moved_x = e.call(ABS, &args![x]).i32() > e.pad_dead_zone_left();
         let y = i32::from(e.global::<u16>(STICK_Y_011D8A62) as i16);
-        let _moved_y = e.call(ABS, &args![y]).i32() > 0x21f1;
+        let _moved_y = e.call(ABS, &args![y]).i32() > e.pad_dead_zone_right();
     }
     let checkmark = |e: &Engine| e.mem.u32(base + 0x6c);
     if e.mem.i32(base + CHECKED) != -1 && checkmark(e) != 0 {
