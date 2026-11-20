@@ -18,8 +18,9 @@
 //! How it reads the exe:
 //!
 //! * a *table* is a run of relocated words in a data section that each hold the start of a
-//!   function. A run is cut where code refers to an address inside it (two vtables without type
-//!   information between them lie back to back) and where a unit names an address in it;
+//!   function. A run is cut where any relocated word (in code or data) holds an address inside it
+//!   (two vtables without type information lie back to back, and a constructor stores the
+//!   second one's address);
 //! * a function *takes* `1 + n / 4` words when it returns with `RET n` (`this` in `ECX`, the rest
 //!   on the stack, which the function itself pops) and one word with a plain `RET`. A function
 //!   that only jumps to another one (a thunk, with or without an adjustment of `ECX`, or a jump at
@@ -240,7 +241,60 @@ fn stack_words_from(
     if depth > 6 {
         return None;
     }
-    let size = *functions.get(&addr)?;
+    let size = function_size(image, functions, addr)?;
+    let found = words_in(image, functions, addr, size, depth);
+    if found.is_some() {
+        return found;
+    }
+    // A map size can stop short of the function's last instructions: read up to the next
+    // function's start instead (the padding between them is skipped).
+    let next = functions.range(addr + 1..).next().map(|(&a, _)| a)?;
+    let to_next = next - addr;
+    (to_next > size && to_next - size <= 64)
+        .then(|| words_in(image, functions, addr, to_next, depth))
+        .flatten()
+}
+
+/// The size of the function at `addr`: the map's, or for an address in code between two of the
+/// map's functions (one the map does not list), the bytes up to the next one (at most 8 KiB).
+fn function_size(image: &Image, functions: &BTreeMap<u32, u32>, addr: u32) -> Option<u32> {
+    if let Some(&size) = functions.get(&addr) {
+        return Some(size);
+    }
+    let in_code = image
+        .sections
+        .iter()
+        .any(|s| s.code && addr >= s.start && addr - s.start < s.len);
+    let inside_previous = functions
+        .range(..addr)
+        .next_back()
+        .is_some_and(|(&start, &size)| addr - start < size);
+    if !in_code || inside_previous {
+        return None;
+    }
+    let next = functions.range(addr..).next().map(|(&a, _)| a)?;
+    if next - addr > 0x2000 {
+        return None;
+    }
+    // The gap may hold several functions: the first ends at the first `RET` the compiler's
+    // padding (`INT3`) follows.
+    let code = image.bytes(addr, next - addr)?;
+    let end = (0..code.len()).find_map(|i| match code[i..] {
+        [0xc3, 0xcc, ..] => Some(i + 1),
+        [0xc2, _, 0, 0xcc, ..] => Some(i + 3),
+        _ => None,
+    });
+    Some(end.map_or(next - addr, |e| e as u32))
+}
+
+/// [`stack_words_from`] for the `size` bytes at `addr`.
+fn words_in(
+    image: &Image,
+    functions: &BTreeMap<u32, u32>,
+    addr: u32,
+    size: u32,
+    depth: u32,
+) -> Option<u32> {
     let code = image.bytes(addr, size)?;
     // A thunk: `JMP target`, after `SUB ECX, n` or `ADD ECX, n` (a vtable of a second base) or
     // with nothing before it.
@@ -281,19 +335,10 @@ fn stack_words_from(
 /// The tables of the image: start address to the functions in its slots.
 ///
 /// A table is a run of relocated words in a data section, each the start of a function of
-/// `functions`. A run is cut at every address inside it that code refers to (a relocated word in
-/// a code section) and at every address of `named` (the addresses the units name).
-pub fn find_tables(
-    image: &Image,
-    functions: &BTreeMap<u32, u32>,
-    named: &BTreeSet<u32>,
-) -> BTreeMap<u32, Vec<u32>> {
-    let in_code = |va: u32| {
-        image
-            .sections
-            .iter()
-            .any(|s| s.code && va >= s.start && va - s.start < s.len)
-    };
+/// `functions`. A run is cut at every address inside it that a relocated word (in a code or a
+/// data section) holds. The units' constants do not cut: a constant may name one slot of a table
+/// (a patch of that slot) and would cut a real table in two.
+pub fn find_tables(image: &Image, functions: &BTreeMap<u32, u32>) -> BTreeMap<u32, Vec<u32>> {
     let in_data = |va: u32| {
         image
             .sections
@@ -308,7 +353,7 @@ pub fn find_tables(
             continue;
         }
         let Some(word) = image.u32(at) else { continue };
-        if !functions.contains_key(&word) {
+        if function_size(image, functions, word).is_none() {
             continue;
         }
         match runs.last_mut() {
@@ -317,11 +362,10 @@ pub fn find_tables(
         }
         last = Some(at);
     }
-    // The addresses code refers to.
+    // The addresses relocated words hold.
     let referred: HashSet<u32> = image
         .relocated
         .iter()
-        .filter(|&&at| in_code(at))
         .filter_map(|&at| image.u32(at))
         .collect();
     let mut tables = BTreeMap::new();
@@ -330,7 +374,7 @@ pub fn find_tables(
         let mut table = Vec::new();
         for (i, &target) in run.iter().enumerate() {
             let at = start + 4 * i as u32;
-            if i > 0 && (referred.contains(&at) || named.contains(&at)) {
+            if i > 0 && referred.contains(&at) {
                 tables.insert(table_start, std::mem::take(&mut table));
                 table_start = at;
             }
@@ -342,18 +386,18 @@ pub fn find_tables(
 }
 
 /// For each slot (its byte offset divided by four): the word counts the tables take there, and
-/// how many of their functions were not read.
-#[derive(Default, Debug)]
+/// the functions there that were not read.
+#[derive(Clone, Default, Debug)]
 pub struct SlotCounts {
     pub counts: Vec<BTreeSet<u32>>,
-    pub unread: Vec<u32>,
+    pub unread: Vec<BTreeSet<u32>>,
 }
 
 impl SlotCounts {
-    fn slot(&mut self, index: usize) -> (&mut BTreeSet<u32>, &mut u32) {
+    fn slot(&mut self, index: usize) -> (&mut BTreeSet<u32>, &mut BTreeSet<u32>) {
         if self.counts.len() <= index {
             self.counts.resize(index + 1, BTreeSet::new());
-            self.unread.resize(index + 1, 0);
+            self.unread.resize(index + 1, BTreeSet::new());
         }
         (&mut self.counts[index], &mut self.unread[index])
     }
@@ -394,6 +438,11 @@ pub struct Site {
     pub line: usize,
     /// The address of the function the call is in (the nearest `Translated from` above it).
     pub caller: Option<u32>,
+    /// Where the function the call is in starts in the unit's text (calls with the same scope
+    /// are in one function).
+    pub scope: usize,
+    /// Where the object's name was last bound before the call (see [`binding`]).
+    pub bound: usize,
     pub object: String,
     pub slot: u32,
     /// `this` and the list's words.
@@ -409,6 +458,21 @@ pub struct Unit {
     pub sites: Vec<Site>,
     /// Calls whose slot or list is not written in place: line and reason.
     pub unread: Vec<(usize, &'static str)>,
+    /// Calls written in two steps that hand the table they read the target from to the target
+    /// as its first word (the object, not its table, is `this`).
+    pub passes_table: Vec<Site>,
+    /// Direct calls with a constant callee and at least one word.
+    pub direct: Vec<Direct>,
+}
+
+/// A direct call `.call(CALLEE, &args![first, ..])`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Direct {
+    pub line: usize,
+    pub scope: usize,
+    pub callee: u32,
+    /// The first word as written.
+    pub first: String,
 }
 
 /// Where the unit's tests begin: the whole file for a test file, else its first
@@ -593,6 +657,23 @@ fn declared_two_words(before: &str, name: &str) -> bool {
 /// The words of one item of an argument list, as its text gives them.
 fn item_words(item: &str, before: &str) -> u32 {
     let two = ["f64", "u64", "i64"];
+    // A cast at the end decides: `x as u32` is one word whatever `x` is, `x as f64` two.
+    if let Some(at) = item.rfind(" as ") {
+        let ty = item[at + " as ".len()..].trim();
+        if ty.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            return if two.contains(&ty) { 2 } else { 1 };
+        }
+    }
+    // A read of two words that ends the item: `e.mem.f64(at)`.
+    for t in two {
+        let read = format!(".{t}(");
+        if let Some(at) = item.rfind(&read) {
+            if inside(item, at + read.len()).map(str::len) == Some(item.len() - at - read.len() - 1)
+            {
+                return 2;
+            }
+        }
+    }
     let is_float_literal = {
         let digits = item.trim_start_matches('-');
         digits.contains('.')
@@ -649,28 +730,14 @@ pub fn read_unit(path: &str, text: &str) -> Unit {
         let list = parts[2].trim_start_matches('&').trim_start();
         let list = list.strip_prefix("args!").unwrap_or(list).trim_start();
         let Some(items) = list.strip_prefix('[').and_then(|l| l.strip_suffix(']')) else {
-            unit.unread
-                .push((line, "the list is not written in place"));
+            unit.unread.push((line, "the list is not written in place"));
             continue;
         };
         if pieces(items).last().is_some_and(|p| p.contains(';')) {
             unit.unread.push((line, "the list is a repeat"));
             continue;
         }
-        // The function so far: from the nearest marker above the call.
-        let before = &text[..open];
-        let marker = before.rfind("Translated from ");
-        let caller = marker.and_then(|at| {
-            let digits: String = before[at + "Translated from ".len()..]
-                .trim_start_matches("0x")
-                .chars()
-                .take(8)
-                .collect();
-            (digits.len() == 8)
-                .then(|| u32::from_str_radix(&digits, 16).ok())
-                .flatten()
-        });
-        let function = &before[marker.unwrap_or(0)..];
+        let (caller, scope, function) = function_so_far(text, open);
         let words = 1 + pieces(items)
             .iter()
             .map(|item| item_words(item, function))
@@ -678,13 +745,203 @@ pub fn read_unit(path: &str, text: &str) -> Unit {
         unit.sites.push(Site {
             line,
             caller,
+            scope,
+            bound: binding(text, scope, open, &parts[0]),
             object: parts[0].clone(),
             slot,
             words,
             text: format!(".vcall({})", parts.join(", ")),
         });
     }
+    read_two_step_calls(text, end, &mut unit);
     unit
+}
+
+/// The function a call at `text[open]` is in, so far: the address of the nearest `Translated
+/// from` marker above it and the text from that marker on.
+fn function_so_far(text: &str, open: usize) -> (Option<u32>, usize, &str) {
+    let before = &text[..open];
+    let marker = before.rfind("Translated from ");
+    let caller = marker.and_then(|at| {
+        let digits: String = before[at + "Translated from ".len()..]
+            .trim_start_matches("0x")
+            .chars()
+            .take(8)
+            .collect();
+        (digits.len() == 8)
+            .then(|| u32::from_str_radix(&digits, 16).ok())
+            .flatten()
+    });
+    // The text is the call's own function: from the later of the marker and the last `fn `
+    // above the call (a helper after a translated function has the marker above it too).
+    let fn_start = before
+        .rfind("\nfn ")
+        .into_iter()
+        .chain(before.rfind(" fn "))
+        .max();
+    let start = marker.unwrap_or(0).max(fn_start.unwrap_or(0));
+    // A second `fn` after the marker: the call is in a helper the marker does not name.
+    let fns = before[marker.unwrap_or(0)..].matches("fn ").count();
+    let caller = if fns > 1 { None } else { caller };
+    (caller, start, &before[start..])
+}
+
+/// The expression the last `let name = ..;` (or `let name: type = ..;`) of `function` gives, its
+/// whitespace removed.
+fn last_let(function: &str, name: &str) -> Option<String> {
+    let mut found = None;
+    let mut from = 0;
+    while let Some(at) = function[from..].find("let ") {
+        let at = from + at + "let ".len();
+        from = at;
+        let rest = function[at..].trim_start();
+        let rest = rest.strip_prefix("mut ").unwrap_or(rest);
+        let Some(rest) = rest.strip_prefix(name) else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let rest = match rest.strip_prefix(':') {
+            Some(typed) => match typed.find('=') {
+                Some(eq) => &typed[eq..],
+                None => continue,
+            },
+            None => rest,
+        };
+        let Some(rest) = rest.strip_prefix('=') else {
+            continue;
+        };
+        if let Some(end) = rest.find(';') {
+            found = Some(rest[..end].split_whitespace().collect::<String>());
+        }
+    }
+    found
+}
+
+/// Where `object` was last bound (`let object =`, `let mut object:` ..) between `scope` and
+/// `open`, or `scope` when it was not: calls with the same binding are on the same object.
+fn binding(text: &str, scope: usize, open: usize, object: &str) -> usize {
+    let function = &text[scope..open];
+    let mut found = scope;
+    for prefix in ["let ", "let mut "] {
+        let pattern = format!("{prefix}{object}");
+        let mut from = 0;
+        while let Some(at) = function[from..].find(&pattern) {
+            let at = from + at;
+            from = at + pattern.len();
+            let next = function[from..].chars().next();
+            if next.is_some_and(|c| !(c.is_alphanumeric() || c == '_')) {
+                found = found.max(scope + at);
+            }
+        }
+    }
+    found
+}
+
+/// Whether `text` is a plain name.
+fn is_name(text: &str) -> bool {
+    !text.is_empty()
+        && text.chars().all(|c| c.is_alphanumeric() || c == '_')
+        && !text.starts_with(|c: char| c.is_ascii_digit())
+}
+
+/// A call written in two steps, `let table = e.mem.u32(object); let target =
+/// e.mem.u32(table + SLOT); e.call(target, &args![..])`: a virtual call whose words are the
+/// whole list (`this` included). Read as a site on `object`; one that hands `table` itself over
+/// as its first word is recorded in [`Unit::passes_table`].
+fn read_two_step_calls(text: &str, end: usize, unit: &mut Unit) {
+    let mut from = 0;
+    while from < end {
+        let Some(found) = text[from..end].find(".call(") else {
+            break;
+        };
+        let open = from + found + ".call(".len();
+        from = open;
+        let Some(call) = inside(text, open) else {
+            continue;
+        };
+        let parts = pieces(call);
+        if parts.len() != 2 {
+            continue;
+        }
+        let (caller, scope, function) = function_so_far(text, open);
+        // A direct call: its callee and first word, for the tables a callee stores.
+        let callee = number(&parts[0]).or_else(|| unit.constants.get(&parts[0]).copied());
+        if let Some(callee) = callee {
+            let list = parts[1].trim_start_matches('&').trim_start();
+            let list = list.strip_prefix("args!").unwrap_or(list).trim_start();
+            if let Some(first) = list
+                .strip_prefix('[')
+                .and_then(|l| l.strip_suffix(']'))
+                .and_then(|items| pieces(items).into_iter().next())
+            {
+                unit.direct.push(Direct {
+                    line: 1 + text[..open].matches('\n').count(),
+                    scope,
+                    callee,
+                    first,
+                });
+            }
+            continue;
+        }
+        if !is_name(&parts[0]) {
+            continue;
+        }
+        let Some(target) = last_let(function, &parts[0]) else {
+            continue;
+        };
+        let Some(read) = target
+            .strip_prefix("e.mem.u32(")
+            .and_then(|t| t.strip_suffix(')'))
+        else {
+            continue;
+        };
+        let (table, slot) = if let Some((table, slot)) = read.split_once(".wrapping_add(") {
+            (table, slot.strip_suffix(')').unwrap_or(""))
+        } else if let Some((table, slot)) = read.split_once('+') {
+            (table, slot)
+        } else {
+            continue;
+        };
+        let Some(slot) = number(slot).or_else(|| unit.constants.get(slot).copied()) else {
+            continue;
+        };
+        if !is_name(table) {
+            continue;
+        }
+        let Some(object) = last_let(function, table).and_then(|t| {
+            t.strip_prefix("e.mem.u32(")
+                .and_then(|t| t.strip_suffix(')'))
+                .map(str::to_string)
+        }) else {
+            continue;
+        };
+        // A table is read at the object's own address; a word read at an offset in it is a
+        // pointer the object keeps (a stream, whose function pointers are called with it).
+        if !is_name(object.strip_suffix(".addr()").unwrap_or(&object)) {
+            continue;
+        }
+        let list = parts[1].trim_start_matches('&').trim_start();
+        let list = list.strip_prefix("args!").unwrap_or(list).trim_start();
+        let Some(items) = list.strip_prefix('[').and_then(|l| l.strip_suffix(']')) else {
+            continue;
+        };
+        let items = pieces(items);
+        let words = items.iter().map(|item| item_words(item, function)).sum();
+        let site = Site {
+            line: 1 + text[..open].matches('\n').count(),
+            caller,
+            scope,
+            bound: binding(text, scope, open, &object),
+            object,
+            slot,
+            words,
+            text: format!(".call({})", parts.join(", ")),
+        };
+        if items.first().map(String::as_str) == Some(table) {
+            unit.passes_table.push(site.clone());
+        }
+        unit.sites.push(site);
+    }
 }
 
 /// The tables of methods the platform crate registers for a system object, read from its
@@ -730,7 +987,8 @@ pub fn platform_slots(text: &str, into: &mut SlotCounts) {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Hit {
     /// `own`: a call on `this` that none of the unit's own tables takes; `none`: a call no table
-    /// anywhere takes.
+    /// anywhere takes; `group`: calls on one object in one function that no single table takes
+    /// together (the site is the first of them).
     pub kind: &'static str,
     pub site: Site,
     /// What the tables take at the slot: for `own`, each of the unit's tables (`address=words`);
@@ -744,11 +1002,13 @@ fn is_this(object: &str) -> bool {
 }
 
 /// Checks a unit's calls. `words` is [`table_words`]' result, `anywhere` the counts of every
-/// table (the exe's and the platform's) by slot.
+/// table (the exe's and the platform's) by slot, `platform` the platform's alone.
 pub fn check_unit(
     unit: &Unit,
     words: &BTreeMap<u32, Vec<Option<u32>>>,
     anywhere: &SlotCounts,
+    platform: &SlotCounts,
+    stored: &HashMap<u32, u32>,
 ) -> Vec<Hit> {
     // The unit's own tables, by address.
     let own: BTreeMap<u32, &Vec<Option<u32>>> = unit
@@ -756,8 +1016,19 @@ pub fn check_unit(
         .values()
         .filter_map(|value| words.get(value).map(|table| (*value, table)))
         .collect();
-    let mut hits = Vec::new();
+    let mut hits: Vec<Hit> = unit
+        .passes_table
+        .iter()
+        .map(|site| Hit {
+            kind: "table",
+            site: site.clone(),
+            takes: "its first word is the table the target was read from".to_string(),
+        })
+        .collect();
     for site in &unit.sites {
+        if unit.passes_table.contains(site) {
+            continue;
+        }
         if site.slot % 4 != 0 {
             continue;
         }
@@ -786,19 +1057,157 @@ pub fn check_unit(
         if counts.is_some_and(|c| c.contains(&site.words)) {
             continue;
         }
-        let unread = anywhere.unread.get(index).copied().unwrap_or(0);
-        let takes: Vec<String> = counts
-            .into_iter()
-            .flatten()
-            .map(u32::to_string)
-            .collect();
+        let unread = anywhere.unread.get(index);
+        let takes: Vec<String> = counts.into_iter().flatten().map(u32::to_string).collect();
+        let count = unread.map_or(0, BTreeSet::len);
+        // The functions not read, when they are few: one of them is likely the callee.
+        let listed = match unread {
+            Some(set) if !set.is_empty() && set.len() <= 8 => {
+                let a: Vec<String> = set.iter().map(|a| format!("{a:08x}")).collect();
+                format!(" ({})", a.join(" "))
+            }
+            _ => String::new(),
+        };
         hits.push(Hit {
             kind: "none",
             site: site.clone(),
-            takes: format!("{{{}}} and {unread} not read", takes.join(",")),
+            takes: format!("{{{}}} and {count} not read{listed}", takes.join(",")),
         });
     }
+    hits.extend(check_groups(unit, &hits, words, platform));
+    hits.extend(check_typed(unit, &hits, words, stored));
     hits
+}
+
+/// The table a function stores at an object's start (`MOV dword ptr [reg], table`, the way a
+/// constructor or destructor sets an object's class): the last such store in its code.
+pub fn stored_table(
+    image: &Image,
+    functions: &BTreeMap<u32, u32>,
+    tables: &BTreeMap<u32, Vec<u32>>,
+    addr: u32,
+) -> Option<u32> {
+    let size = *functions.get(&addr)?;
+    let from = image.relocated.partition_point(|&at| at < addr);
+    image.relocated[from..]
+        .iter()
+        .take_while(|&&at| at < addr + size)
+        .filter(|&&at| at >= addr + 2)
+        .filter(|&&at| {
+            let op = image.bytes(at - 2, 2);
+            // C7 /0 with mod 00 and a plain register (not SIB, not an absolute address).
+            op.is_some_and(|b| b[0] == 0xc7 && b[1] & 0xf8 == 0 && !matches!(b[1], 4 | 5))
+        })
+        .filter_map(|&at| image.u32(at))
+        .filter(|value| tables.contains_key(value))
+        .last()
+}
+
+/// Calls on an object a direct call before them in the same function handed as its first word
+/// to a function that stores a table at that object's start (its constructor): the object's
+/// class is that table's (or one derived from it, whose functions take the same words).
+fn check_typed(
+    unit: &Unit,
+    hits: &[Hit],
+    words: &BTreeMap<u32, Vec<Option<u32>>>,
+    stored: &HashMap<u32, u32>,
+) -> Vec<Hit> {
+    let mut out = Vec::new();
+    for site in &unit.sites {
+        if site.slot % 4 != 0 || hits.iter().any(|h| h.site == *site) {
+            continue;
+        }
+        let typed = unit.direct.iter().rev().find(|d| {
+            d.scope == site.scope
+                && d.line <= site.line
+                && d.first == site.object
+                && stored.contains_key(&d.callee)
+        });
+        let Some(direct) = typed else { continue };
+        let table_at = stored[&direct.callee];
+        let Some(table) = words.get(&table_at) else {
+            continue;
+        };
+        let takes = match table.get((site.slot / 4) as usize) {
+            Some(Some(n)) if *n == site.words => continue,
+            Some(Some(n)) => format!("{table_at:08x}={n} (stored by {:08x})", direct.callee),
+            // Not read, or past the table's end: the stored table is a base class's (a derived
+            // constructor stores its own after calling the base one) or was cut short.
+            Some(None) | None => continue,
+        };
+        out.push(Hit {
+            kind: "typed",
+            site: site.clone(),
+            takes,
+        });
+    }
+    out
+}
+
+/// The calls on one object in one function, taken together: each alone may be what some table
+/// takes, but one object has one table, so some table must take all of them. Calls already hit
+/// and calls on `this` held to the unit's own tables are left out. A slot a table does not read
+/// counts as taking anything there; the platform's registered methods count as one table.
+fn check_groups(
+    unit: &Unit,
+    hits: &[Hit],
+    words: &BTreeMap<u32, Vec<Option<u32>>>,
+    platform: &SlotCounts,
+) -> Vec<Hit> {
+    let own_checked = |site: &Site| {
+        is_this(&site.object)
+            && unit.constants.values().any(|v| {
+                words
+                    .get(v)
+                    .and_then(|t| t.get((site.slot / 4) as usize))
+                    .is_some_and(Option::is_some)
+            })
+    };
+    let mut groups: BTreeMap<(usize, usize, &str), Vec<&Site>> = BTreeMap::new();
+    for site in &unit.sites {
+        if site.slot % 4 != 0 || own_checked(site) || hits.iter().any(|h| h.site == *site) {
+            continue;
+        }
+        groups
+            .entry((site.scope, site.bound, site.object.as_str()))
+            .or_default()
+            .push(site);
+    }
+    let mut out = Vec::new();
+    for sites in groups.values() {
+        let slots: BTreeSet<u32> = sites.iter().map(|s| s.slot).collect();
+        if slots.len() < 2 {
+            continue;
+        }
+        let table_takes = |table: &Vec<Option<u32>>| {
+            sites
+                .iter()
+                .all(|s| match table.get((s.slot / 4) as usize) {
+                    Some(Some(n)) => *n == s.words,
+                    Some(None) => true,
+                    None => false,
+                })
+        };
+        let platform_takes = sites.iter().all(|s| {
+            platform
+                .counts
+                .get((s.slot / 4) as usize)
+                .is_some_and(|c| c.contains(&s.words))
+        });
+        if platform_takes || words.values().any(table_takes) {
+            continue;
+        }
+        let calls: Vec<String> = sites
+            .iter()
+            .map(|s| format!("{}:{:#x}={}", s.line, s.slot, s.words))
+            .collect();
+        out.push(Hit {
+            kind: "group",
+            site: sites[0].clone(),
+            takes: format!("no table takes all of {}", calls.join(" ")),
+        });
+    }
+    out
 }
 
 /// Every `.rs` file under `dir`, sorted.
@@ -819,12 +1228,57 @@ fn rust_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
+/// The words (`this` and the stack words) each function of `addresses` takes as the check reads
+/// them, one line each (`address<TAB>words`, or `not read`): for checking the reading by hand.
+pub fn words_of(exe: &Path, map: &Path, addresses: &[u32]) -> Result<Vec<String>, String> {
+    let read = |p: &Path| std::fs::read(p).map_err(|e| format!("{}: {e}", p.display()));
+    let image = Image::parse(read(exe)?)?;
+    let functions = parse_map(&String::from_utf8_lossy(&read(map)?));
+    let tables = find_tables(&image, &functions);
+    Ok(addresses
+        .iter()
+        .map(|&a| {
+            let words = match stack_words(&image, &functions, a) {
+                Some(n) => (n + 1).to_string(),
+                None => "not read".to_string(),
+            };
+            // The tables that hold it, and the slot (byte offset) there.
+            let held: Vec<String> = tables
+                .iter()
+                .flat_map(|(start, slots)| {
+                    slots
+                        .iter()
+                        .enumerate()
+                        .filter(move |(_, &f)| f == a)
+                        .map(move |(i, _)| format!("{start:08x}+{:#x}", 4 * i))
+                })
+                .collect();
+            let mut line = format!("{a:08x}\t{words}\t{}", held.join(" "));
+            // A table's start: each slot's function and words.
+            if let Some(slots) = tables.get(&a) {
+                for (i, &f) in slots.iter().enumerate() {
+                    let n = stack_words(&image, &functions, f).map(|n| n + 1);
+                    let n = n.map_or_else(|| "?".to_string(), |n| n.to_string());
+                    line.push_str(&format!("\n  +{:#x}\t{f:08x}\t{n}", 4 * i));
+                }
+            }
+            line
+        })
+        .collect())
+}
+
 /// The whole check: reads the exe, the map and the crates under `crates`, and returns one line
 /// per hit (tab-separated: kind, file:line, the caller's address, slot, words passed, what the
 /// tables take, the call) and a summary.
 pub fn run(exe: &Path, map: &Path, crates: &Path) -> Result<(Vec<String>, String), String> {
     let read = |p: &Path| std::fs::read(p).map_err(|e| format!("{}: {e}", p.display()));
     let image = Image::parse(read(exe)?)?;
+    if image.relocated.is_empty() {
+        return Err(format!(
+            "{}: no base relocations (tables are read from them; the unpacked exe keeps them)",
+            exe.display()
+        ));
+    }
     let functions = parse_map(&String::from_utf8_lossy(&read(map)?));
     if functions.is_empty() {
         return Err(format!("{}: no functions read", map.display()));
@@ -832,8 +1286,7 @@ pub fn run(exe: &Path, map: &Path, crates: &Path) -> Result<(Vec<String>, String
     let mut files = Vec::new();
     rust_files(crates, &mut files);
     let mut units = Vec::new();
-    let mut named = BTreeSet::new();
-    let mut anywhere = SlotCounts::default();
+    let mut platform = SlotCounts::default();
     for path in &files {
         let Ok(text) = std::fs::read_to_string(path) else {
             continue;
@@ -844,16 +1297,16 @@ pub fn run(exe: &Path, map: &Path, crates: &Path) -> Result<(Vec<String>, String
             .to_string_lossy()
             .replace('\\', "/");
         if rel.starts_with("engine-platform/") {
-            platform_slots(&text, &mut anywhere);
+            platform_slots(&text, &mut platform);
         }
         let unit = read_unit(&rel, &text);
-        named.extend(unit.constants.values().copied());
         units.push((rel, unit));
     }
-    let tables = find_tables(&image, &functions, &named);
+    let tables = find_tables(&image, &functions);
     let words = table_words(&image, &functions, &tables);
+    let mut anywhere = platform.clone();
     let (mut slots, mut unread_slots) = (0usize, 0usize);
-    for table in words.values() {
+    for (start, table) in &words {
         for (index, taken) in table.iter().enumerate() {
             slots += 1;
             let (counts, unread) = anywhere.slot(index);
@@ -862,8 +1315,18 @@ pub fn run(exe: &Path, map: &Path, crates: &Path) -> Result<(Vec<String>, String
                     counts.insert(*n);
                 }
                 None => {
-                    *unread += 1;
+                    unread.insert(tables[start][index]);
                     unread_slots += 1;
+                }
+            }
+        }
+    }
+    let mut stored = HashMap::new();
+    for (_, unit) in &units {
+        for direct in &unit.direct {
+            if let std::collections::hash_map::Entry::Vacant(slot) = stored.entry(direct.callee) {
+                if let Some(table) = stored_table(&image, &functions, &tables, direct.callee) {
+                    slot.insert(table);
                 }
             }
         }
@@ -886,7 +1349,7 @@ pub fn run(exe: &Path, map: &Path, crates: &Path) -> Result<(Vec<String>, String
                     })
             })
             .count();
-        for hit in check_unit(unit, &words, &anywhere) {
+        for hit in check_unit(unit, &words, &anywhere, &platform, &stored) {
             let caller = hit
                 .site
                 .caller
@@ -956,7 +1419,12 @@ mod tests {
         .enumerate()
         {
             let s = table + 40 * i;
-            for (k, v) in [(8, body.len() as u32), (12, rva), (16, body.len() as u32), (20, at)] {
+            for (k, v) in [
+                (8, body.len() as u32),
+                (12, rva),
+                (16, body.len() as u32),
+                (20, at),
+            ] {
                 file[s + k..s + k + 4].copy_from_slice(&v.to_le_bytes());
             }
             file[s + 36..s + 40].copy_from_slice(&flags.to_le_bytes());
@@ -986,29 +1454,45 @@ mod tests {
     #[test]
     fn the_map_reads_addresses_and_sizes_and_skips_the_header() {
         let map = parse_map("address\tsize\tname\n00401000\t21\tx\n00401020\t10\n\nbad\tline\n");
-        assert_eq!(map.into_iter().collect::<Vec<_>>(), [(0x0040_1000, 21), (0x0040_1020, 10)]);
+        assert_eq!(
+            map.into_iter().collect::<Vec<_>>(),
+            [(0x0040_1000, 21), (0x0040_1020, 10)]
+        );
     }
 
     #[test]
     fn a_function_takes_what_its_ret_pops() {
         let (text, map) = code(&[
-            &[0x55, 0x8b, 0xec, 0x5d, 0xc2, 0x08, 0x00],       // RET 8
-            &[0xb8, 0x0d, 0x00, 0x00, 0x00, 0xc3],             // plain RET
-            &[0x5d, 0xc2, 0x04, 0x00, 0xcc, 0xcc],             // RET 4, then padding
-            &[0xe9, 0xe8, 0xff, 0xff, 0xff],                   // JMP to the first
+            &[0x55, 0x8b, 0xec, 0x5d, 0xc2, 0x08, 0x00], // RET 8
+            &[0xb8, 0x0d, 0x00, 0x00, 0x00, 0xc3],       // plain RET
+            &[0x5d, 0xc2, 0x04, 0x00, 0xcc, 0xcc],       // RET 4, then padding
+            &[0xe9, 0xe8, 0xff, 0xff, 0xff],             // JMP to the first
             &[0x83, 0xe9, 0x04, 0xe9, 0xe0, 0xff, 0xff, 0xff], // SUB ECX,4; JMP to the first
             &[0x55, 0x5d, 0xc3, 0x55, 0x5d, 0xc2, 0x04, 0x00], // two different RETs: not read
-            &[0x90, 0xe8, 0x00, 0x00, 0x00, 0x00, 0xcc],       // ends in a call: not read
-            &[0x33, 0xc0, 0xe9, 0xca, 0xff, 0xff, 0xff],       // work, then JMP to the first
+            &[0x90, 0xe8, 0x00, 0x00, 0x00, 0x00, 0xcc], // ends in a call: not read
+            &[0x33, 0xc0, 0xe9, 0xca, 0xff, 0xff, 0xff], // work, then JMP to the first
         ]);
         let image = image(&text, &[], &[]);
         let at: Vec<u32> = map.keys().copied().collect();
         let got: Vec<Option<u32>> = at.iter().map(|&a| stack_words(&image, &map, a)).collect();
         assert_eq!(
             got,
-            [Some(2), Some(0), Some(1), Some(2), Some(2), None, None, Some(2)]
+            [
+                Some(2),
+                Some(0),
+                Some(1),
+                Some(2),
+                Some(2),
+                None,
+                None,
+                Some(2)
+            ]
         );
-        assert_eq!(stack_words(&image, &map, TEXT + 1), None, "not a function start");
+        assert_eq!(
+            stack_words(&image, &map, TEXT + 1),
+            None,
+            "not a function start"
+        );
     }
 
     /// Two tables back to back: the second starts where code refers to it; a word that is not
@@ -1024,9 +1508,9 @@ mod tests {
         let rdata = words_of(&[f[0], f[1], f[2], f[1], 0x1234_5678, f[2], f[0]]);
         let relocated = [RDATA, RDATA + 4, RDATA + 8, RDATA + 12, RDATA + 20, refers];
         let image = image(&text, &rdata, &relocated);
-        let tables = find_tables(&image, &map, &BTreeSet::new());
+        let tables = find_tables(&image, &map);
         assert_eq!(
-            tables.into_iter().collect::<Vec<_>>(),
+            tables.clone().into_iter().collect::<Vec<_>>(),
             [
                 (RDATA, vec![f[0], f[1]]),
                 (RDATA + 8, vec![f[2], f[1]]),
@@ -1034,10 +1518,6 @@ mod tests {
                 (RDATA + 20, vec![f[2]]),
             ]
         );
-        // A unit that names an address inside a run cuts it there too.
-        let tables = find_tables(&image, &map, &BTreeSet::from([RDATA + 4]));
-        assert_eq!(tables[&RDATA], vec![f[0]]);
-        assert_eq!(tables[&(RDATA + 4)], vec![f[1]]);
         let words = table_words(&image, &map, &tables);
         assert_eq!(words[&(RDATA + 8)], [Some(3), Some(2)]);
     }
@@ -1098,7 +1578,9 @@ mod tests {
             ]
         );
         // A test file is not read at all.
-        assert!(read_unit("crate/src/units/x_tests.rs", UNIT).sites.is_empty());
+        assert!(read_unit("crate/src/units/x_tests.rs", UNIT)
+            .sites
+            .is_empty());
     }
 
     #[test]
@@ -1122,7 +1604,7 @@ mod tests {
         // The unit's table takes (1, 2) words; another table takes (3, 3).
         let rdata = words_of(&[f[0], f[1], 0, f[2], f[2]]);
         let image = image(&text, &rdata, &[RDATA, RDATA + 4, RDATA + 12, RDATA + 16]);
-        let tables = find_tables(&image, &map, &BTreeSet::new());
+        let tables = find_tables(&image, &map);
         let words = table_words(&image, &map, &tables);
         let mut anywhere = SlotCounts::default();
         for table in words.values() {
@@ -1143,7 +1625,13 @@ fn f() {
     e.vcall(other, 0, &args![a]);
 }",
         );
-        let hits = check_unit(&unit, &words, &anywhere);
+        let hits = check_unit(
+            &unit,
+            &words,
+            &anywhere,
+            &SlotCounts::default(),
+            &HashMap::new(),
+        );
         let got: Vec<(&str, usize, &str)> = hits
             .iter()
             .map(|h| (h.kind, h.site.line, h.takes.as_str()))
@@ -1160,6 +1648,133 @@ fn f() {
                 ("none", 8, "{2,3} and 0 not read"),
                 // Two words at slot 0: tables take one or three.
                 ("none", 9, "{1,3} and 0 not read"),
+            ]
+        );
+    }
+
+    /// A map size that stops short is read to the next function; a function the map does not
+    /// list (between two it does) ends at its first `RET` the padding follows.
+    #[test]
+    fn short_and_missing_map_functions_are_read_from_their_bytes() {
+        let (text, mut map) = code(&[
+            &[0x55, 0x5d, 0xc2, 0x04, 0x00, 0xcc], // RET 4, map size cut to 2
+            &[0xc3],
+            &[0xc2, 0x08, 0x00, 0xcc, 0xc3, 0xcc, 0xcc, 0xcc], // RET 8 + a second, unlisted
+            &[0xc3],
+        ]);
+        let f: Vec<u32> = map.keys().copied().collect();
+        map.insert(f[0], 2);
+        map.remove(&f[2]);
+        let image = image(&text, &[], &[]);
+        assert_eq!(stack_words(&image, &map, f[0]), Some(1));
+        assert_eq!(stack_words(&image, &map, f[2]), Some(2), "the first RET 8");
+        assert_eq!(
+            stack_words(&image, &map, f[0] + 1),
+            None,
+            "inside a listed function"
+        );
+    }
+
+    /// A cast at the end of an item decides its words, whatever the value's own type.
+    #[test]
+    fn a_cast_decides_an_items_words() {
+        let function = "fn f(x: f64, n: u32) {";
+        assert_eq!(item_words("x", function), 2);
+        assert_eq!(item_words("x as u32", function), 1);
+        assert_eq!(item_words("n as f64", function), 2);
+        assert_eq!(item_words("n", function), 1);
+    }
+
+    /// An exe without base relocations has no tables to read: an error, not an empty result.
+    #[test]
+    fn an_exe_without_relocations_is_refused() {
+        let (text, _) = code(&[&[0xc3]]);
+        let dir = std::env::temp_dir().join(format!("vcall-words-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("no-reloc.exe");
+        let map = dir.join("map.tsv");
+        let mut bytes = vec![0u8; 0x400];
+        bytes[0x3c] = 0x80;
+        bytes[0x80..0x84].copy_from_slice(b"PE\0\0");
+        bytes[0x94] = 0xe0;
+        bytes[0x98..0x9a].copy_from_slice(&0x10bu16.to_le_bytes());
+        bytes.extend_from_slice(&text);
+        std::fs::write(&exe, bytes).unwrap();
+        std::fs::write(&map, "00401000\t1\n").unwrap();
+        let result = run(&exe, &map, &dir);
+        std::fs::remove_file(&exe).ok();
+        std::fs::remove_file(&map).ok();
+        std::fs::remove_dir(&dir).ok();
+        assert!(result.unwrap_err().contains("no base relocations"));
+    }
+
+    /// The checks that need no table named by the unit: an object handed to its constructor
+    /// (which stores its class's table at the object's start) is held to that table; calls on
+    /// one object in one function must all fit one table; a call written in two steps must not
+    /// hand over the table it read the target from.
+    #[test]
+    fn typed_group_and_two_step_calls_are_checked() {
+        // f0 takes 1 word, f1 2; constructors A and B store tables A (1, 2) and B (2, 1).
+        let mut fns: Vec<Vec<u8>> = vec![vec![0xc3], vec![0xc2, 0x04, 0x00]];
+        for table in [RDATA, RDATA + 8] {
+            let mut ctor = vec![0xc7, 0x01];
+            ctor.extend_from_slice(&table.to_le_bytes());
+            ctor.push(0xc3);
+            fns.push(ctor);
+        }
+        let slices: Vec<&[u8]> = fns.iter().map(Vec::as_slice).collect();
+        let (text, map) = code(&slices);
+        let f: Vec<u32> = map.keys().copied().collect();
+        let rdata = words_of(&[f[0], f[1], f[1], f[0]]);
+        let relocated = [RDATA, RDATA + 4, RDATA + 8, RDATA + 12, f[2] + 2, f[3] + 2];
+        let image = image(&text, &rdata, &relocated);
+        let tables = find_tables(&image, &map);
+        assert_eq!(
+            tables.len(),
+            2,
+            "cut where constructor B refers to its table"
+        );
+        let words = table_words(&image, &map, &tables);
+        let mut anywhere = SlotCounts::default();
+        for table in words.values() {
+            for (i, n) in table.iter().enumerate() {
+                anywhere.add(i, n.unwrap());
+            }
+        }
+        let unit = read_unit(
+            "x.rs",
+            &format!(
+                "const CTOR: u32 = {:#x};
+// Translated from 00401000 (decompiled)
+fn g() {{
+    e.call(CTOR, &args![obj]);
+    e.vcall(obj, 4, &args![]);
+    e.vcall(p, 0, &args![a]);
+    e.vcall(p, 4, &args![a]);
+    let vtable = e.mem.u32(dev);
+    let target = e.mem.u32(vtable + 4);
+    e.call(target, &args![vtable, dev]);
+}}",
+                f[2]
+            ),
+        );
+        let stored: HashMap<u32, u32> = unit
+            .direct
+            .iter()
+            .filter_map(|d| Some((d.callee, stored_table(&image, &map, &tables, d.callee)?)))
+            .collect();
+        assert_eq!(stored, HashMap::from([(f[2], RDATA)]));
+        let hits = check_unit(&unit, &words, &anywhere, &SlotCounts::default(), &stored);
+        let got: Vec<(&str, usize)> = hits.iter().map(|h| (h.kind, h.site.line)).collect();
+        assert_eq!(
+            got,
+            [
+                // The two-step call hands over the table: always reported.
+                ("table", 10),
+                // p: two words at slot 0 (table B) and two at slot 4 (table A): no one table.
+                ("group", 6),
+                // obj is of table A, whose slot 4 takes two words, not one.
+                ("typed", 5),
             ]
         );
     }
