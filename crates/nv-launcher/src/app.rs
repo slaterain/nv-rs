@@ -512,7 +512,12 @@ pub const PASTE_WAIT: Duration = Duration::from_millis(500);
 /// Whether the clipboard's answer for paste `id`, arriving `now` on a screen of `kind`, is added
 /// at the prompt: it is the paste asked last (`asked`: its id, when, on what screen), within
 /// [`PASTE_WAIT`], and the screen is still of the kind it was asked on.
-pub fn accept_paste(asked: Option<(u64, Instant, Kind)>, id: u64, now: Instant, kind: Kind) -> bool {
+pub fn accept_paste(
+    asked: Option<(u64, Instant, Kind)>,
+    id: u64,
+    now: Instant,
+    kind: Kind,
+) -> bool {
     asked.is_some_and(|(asked, at, on)| {
         asked == id && now.saturating_duration_since(at) <= PASTE_WAIT && on == kind
     })

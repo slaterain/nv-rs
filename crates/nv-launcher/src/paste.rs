@@ -96,8 +96,8 @@ mod tests {
     fn a_paste_is_the_first_line_trimmed() {
         let paste = |t| pasted(&mut Fake(t));
         assert_eq!(
-            paste(Some("  C:\Games\Some Game  \r\nsecond line")).as_deref(),
-            Some("C:\Games\Some Game")
+            paste(Some("  C:\\Games\\Some Game  \r\nsecond line")).as_deref(),
+            Some("C:\\Games\\Some Game")
         );
         assert_eq!(
             paste(Some("\n\n  /home/me/game\n")).as_deref(),
@@ -113,16 +113,19 @@ mod tests {
     /// Invisible format characters never get in, and the quotes around a whole path go.
     #[test]
     fn invisible_characters_and_quotes_go() {
-        assert_eq!(line_of("\u{202A}C:\Games").as_deref(), Some("C:\Games"));
+        assert_eq!(line_of("\u{202A}C:\\Games").as_deref(), Some("C:\\Games"));
         assert_eq!(
             line_of("\u{FEFF}\u{200B}/home/me\u{2066}/game\u{2069}").as_deref(),
             Some("/home/me/game")
         );
         assert_eq!(
-            line_of("\"C:\Games\Some Game\"").as_deref(),
-            Some("C:\Games\Some Game")
+            line_of("\"C:\\Games\\Some Game\"").as_deref(),
+            Some("C:\\Games\\Some Game")
         );
-        assert_eq!(line_of(" \u{202A}\"D:\x\"\u{202C} ").as_deref(), Some("D:\x"));
+        assert_eq!(
+            line_of(" \u{202A}\"D:\\x\"\u{202C} ").as_deref(),
+            Some("D:\\x")
+        );
         // A quote inside the text is left as it is.
         assert_eq!(line_of("\"a\" \"b\"").as_deref(), Some("\"a\" \"b\""));
         assert_eq!(line_of("\u{200B}\u{FEFF}"), None);
