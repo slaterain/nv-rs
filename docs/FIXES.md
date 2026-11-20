@@ -1072,9 +1072,10 @@ With the switch on:
 
 Not yet, with the switch on:
 - JIP's game patches not in the port's plan yet (`measure/jip/PLAN-3.9-groups.md`, "Kept out"): JIP's lights
-  on projectiles, muzzle flashes and explosions (G95, G96, G97; until G95 is in, `SetProjectileLight` is built but no light shows) and its three null checks (G01: `00559450`,
-  `0x5A8ECF`, `0xB707E0`) wait for the drawing work, and its fixed-string pool (G43) for the 64-bit
-  move; what they change stays the game's own. (`ToggleDepthClear`'s patch, G128, is in with JIP: the
+  on projectiles, muzzle flashes and explosions (G95, G96, G97; until G95 is in, `SetProjectileLight` is built but no light shows)
+  wait for the drawing work, and its fixed-string pool (G43) for the 64-bit move; what they change stays the
+  game's own. (Its three null checks, G01, are in with JIP: the table below; the third place JIP lists changes
+  nothing, the game's loop already stops there.) (`ToggleDepthClear`'s patch, G128, is in with JIP: the
   frame's depth clear before the first-person view is a seam the command's switch answers; a skipped clear
   still marks the world as drawn for the new lighting and the sun shadows, so the first-person arms and
   weapon still neither cast nor take the sun's shadows.) Left out on purpose: two patches that only make the game faster (G24, G36),
@@ -1110,6 +1111,7 @@ with only notes) JIP's defaults: `bIgnoreDTDRFix`, `bProjImpactDmgFix`, `bGameDa
 |---|---|---|---|
 | "Store parent TESTopic for every TESTopicInfo" | `0061ccd0` (`0x61CD16`), `0061ceb0` (`0x61CEEE`, the port's record dropped), `0061cff0` (`0x61D041`), `0061dbd0` (`0x61E086`), `0061a310` (rewritten) | `TESTopic::GetOwnerTopic` answers the topic an info's load linked it into last, kept in a record beside the info (JIP adds a word to the info; the port keeps its size), instead of walking every topic for the first holding it; `ClearData`, the dialogue's responses, the topic conditions and JIP's dialogue topic events see that topic. Differs from the original only for an info a plugin links under two topics | 3.9a |
 | "Cmd_Execute >> *result = 0 by default" | `005ac7a0` (`0x5ACB9D`), `005e1550` (`0x5E16C3`, `0x5E2329`) | A script command's result starts at 0 before its handler runs, for every command (the original leaves the previous command's value there; xNVSE zeroes it only for its own commands), so a command that sets nothing answers 0 | 3.9a |
+| "Adds NULL pointer checks" (three `SAFE_WRITE_BUF`s: `0x559450`, `0x5A8ECF`, `0xB707E0`) | the folded "first word" getter `00559450` (the translation and its typed form, which every typed caller inlines), `005a8ea0` (`0x5A8ECF`), `BSShaderLightingProperty::GetNumberofActiveNonShadowLights` `00b707d0` (`0xB707E0`: the translation and the draw family's typed form, which the world draw runs on every renderer) | With the row on: a null object handed to the game's "first word" getter answers 0 instead of crashing the game (JIP's `test eax, eax`), and a light without its light data (a null `+0xF8`) in a lit object's light list is left out of the count of its lights instead of crashing the game (JIP's `test esi, esi`; the lit objects' shader passes count them every frame). The second place changes nothing: the game's own loop in `005a8ea0` already stops at a null item, and JIP's bytes only put the loop's one call of the next-node read (`00726070`) inline and add a null test that always passes there; the two other calls and the loop's exits stay as they are, so the port runs the game's code there (a hook on `00726070` is not reached from this loop with JIP in the real game either, so nothing a mod could rely on is lost). With JIP installed and the row off, the game's reads are unchanged (G01) | 3.9 G01 |
 
 Each group of step 3.9 (`measure/jip/PLAN-3.9-groups.md`) lists its patches under its own heading, as a table
 like 3.9a's above (JIP's comment, exe places, what a player with JIP gets, built), with JIP's credits

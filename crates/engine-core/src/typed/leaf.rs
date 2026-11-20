@@ -51,10 +51,31 @@ fn low_byte(word: u32) -> u8 {
 }
 
 // Typed from 00559450
-/// The word at +0 of whatever `this` is: a list's first element, among many others.
+/// The word at +0 of whatever `this` is: a list's first element, among many others. A null
+/// `this` takes [`word_at_0_of_null`] (JIP LN NVSE's null check there).
 #[inline(always)]
 pub fn word_at_0(e: &mut Engine, this: impl OneWord) -> u32 {
-    e.mem.u32(this.one_word())
+    let at = this.one_word();
+    if at == 0 {
+        return word_at_0_of_null(e);
+    }
+    e.mem.u32(at)
+}
+
+// From JIP LN NVSE 57.30 (5a30ac4): InitGamePatches, "Adds NULL pointer checks", its nine bytes written
+// at 0x559450.
+/// `00559450` on a null `this`: with JIP LN NVSE's game patches in (G01, the row
+/// `NV_JIP_GAME_PATCHES`: [`crate::extend::jip_patches::FIXES`], the run-wide word every thread
+/// reads) 0, as JIP's `mov eax, ecx; test eax, eax; jz; mov eax, [eax]` answers; otherwise the
+/// game's read of address 0. Out of line, so the getter's inline body stays one compare.
+#[cold]
+#[inline(never)]
+pub fn word_at_0_of_null(e: &mut Engine) -> u32 {
+    if e.jip_patches() & crate::extend::jip_patches::FIXES != 0 {
+        0
+    } else {
+        e.mem.u32(0)
+    }
 }
 
 // Typed from 00726070
@@ -448,4 +469,35 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         crate::entry!(0x00ed_2808, double_exponent(u32, u32) -> u32),
         crate::entry!(0x00e8_90c0, set_state_slot(Ptr, u32, u32, u32, u32)),
     ]
+}
+
+#[cfg(test)]
+mod null_check_tests {
+    use super::*;
+
+    /// JIP LN NVSE's null check in `00559450` (G01): a null `this` answers 0 with the game patches
+    /// row in; without it the game's read of address 0 (here page 0 holds a word to see it); a
+    /// real `this` reads its word either way.
+    #[test]
+    fn word_at_0_of_a_null_this_is_0_with_jips_fixes() {
+        let mut e = Engine::new();
+        e.map(0, 0x1000);
+        e.mem.set_u32(0, 0x5555_aaaa);
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object, 0x1234);
+        let (null, object): (Ptr, Ptr) = (Ptr::new(0), Ptr::new(object));
+        assert_eq!(word_at_0(&mut e, null), 0x5555_aaaa, "the game's read");
+        assert_eq!(word_at_0(&mut e, object), 0x1234);
+        e.set_jip_patches(crate::extend::jip_patches::INSTALLED);
+        assert_eq!(
+            word_at_0(&mut e, null),
+            0x5555_aaaa,
+            "JIP's own patches only"
+        );
+        e.set_jip_patches(
+            crate::extend::jip_patches::INSTALLED | crate::extend::jip_patches::FIXES,
+        );
+        assert_eq!(word_at_0(&mut e, null), 0, "JIP's check");
+        assert_eq!(word_at_0(&mut e, object), 0x1234);
+    }
 }

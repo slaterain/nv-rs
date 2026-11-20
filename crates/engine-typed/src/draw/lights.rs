@@ -111,22 +111,36 @@ pub fn next_active_non_shadow_light(e: &mut Engine, _property: Ptr, iterator: Pt
 // Typed from 00b707d0
 /// `BSShaderLightingProperty::GetNumberofActiveNonShadowLights` (engine map), `thiscall(property)`: how many lights
 /// of the property's list (+0x60) are present, of an index (+0x110) other than 0xff, not app-culled (their light's
-/// +0x30, bit 0) and of byte +0xec 0 (this one tests 0, where the getters skip 1).
+/// +0x30, bit 0) and of byte +0xec 0 (this one tests 0, where the getters skip 1). With JIP LN NVSE's game patches
+/// in (G01, its null check at `0xB707E0`, the row `NV_JIP_GAME_PATCHES`), a light whose `+0xf8` is null is not
+/// counted, as the translation's; the game reads through it.
 pub fn active_non_shadow_light_count(e: &mut Engine, property: Ptr) -> u32 {
     let mut node = packet::property_light_list(e, property.addr());
     let mut count = 0u32;
     while node != 0 {
         let light = packet::light_node_word(e, node, 8);
         node = packet::light_node_word(e, node, 0);
-        if light != 0
-            && packet::pass_light_half(e, light, 0x110) != 0xff
-            && packet::light_value_byte(e, packet::pass_light_word(e, light, 0xf8), 0x30) & 1 == 0
-            && packet::pass_light_byte(e, light, 0xec) == 0
-        {
-            count = count.wrapping_add(1);
+        if light != 0 && packet::pass_light_half(e, light, 0x110) != 0xff {
+            let data = packet::pass_light_word(e, light, 0xf8);
+            if (data != 0 || !light_data_null_checked(e))
+                && packet::light_value_byte(e, data, 0x30) & 1 == 0
+                && packet::pass_light_byte(e, light, 0xec) == 0
+            {
+                count = count.wrapping_add(1);
+            }
         }
     }
     count
+}
+
+// From JIP LN NVSE 57.30 (5a30ac4): InitGamePatches, "Adds NULL pointer checks", its bytes at 0xB707E0:
+// `test esi, esi; jz` after `mov esi, [ecx+0xF8]`.
+/// Whether `00b707d0` skips a light without its light data: JIP's fixes are in (the run-wide patch word, read only
+/// on that null path). Out of line, so the count's loop keeps one compare per light.
+#[cold]
+#[inline(never)]
+fn light_data_null_checked(e: &Engine) -> bool {
+    e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
 }
 
 /// A pass light's clip-plane cache (+0x1a8, six planes: 0x60 bytes) and the byte that says it is made (+0x208).
