@@ -304,6 +304,36 @@ impl Profiles {
         }
     }
 
+    /// Off Windows a shared settings.ini (from an older package, or made before the per-profile
+    /// files) would be moved by the game's first start into the profile played first only: at the
+    /// first save it is split into each profile's own file (over one that is there already, its lines
+    /// winning line by line, as play.sh and the screen let the shared file win), and then renamed aside as Play renames a moved one, so the choice reaches both.
+    fn split_shared(&self) -> std::io::Result<()> {
+        let Some(own) = &self.own_pending else {
+            return Ok(());
+        };
+        let raw = match std::fs::read(&self.pending) {
+            Ok(raw) => raw,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(naming(&self.pending, e)),
+        };
+        let mut writes = Vec::new();
+        for path in own {
+            let bytes = match std::fs::read(path) {
+                Ok(own) => bytes_of(&shared_over(&text_of(&raw), &text_of(&own))),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => raw.clone(),
+                Err(e) => return Err(naming(path, e)),
+            };
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir).map_err(|e| naming(dir, e))?;
+            }
+            writes.push((path.clone(), bytes));
+        }
+        write_all(&writes)?;
+        let moved = profile_settings::migrated_name(&self.pending);
+        std::fs::rename(&self.pending, &moved).map_err(|e| naming(&self.pending, e))
+    }
+
     /// Whether profile `i` takes a choice in its files: they have nv-rs's sections (Play, or the
     /// game's first start, made them ready) and no settings.ini waits for it.
     fn ready(&self, i: usize) -> std::io::Result<bool> {
@@ -339,6 +369,7 @@ impl Profiles {
     /// whole beside itself before any takes its place. Nothing is written when a file cannot be
     /// read.
     pub fn save(&self, row: Row, choice: &str) -> std::io::Result<()> {
+        self.split_shared()?;
         let shown = self.shown()?;
         // Windows (one shared settings.ini): while a profile is not ready, the choices go into
         // settings.ini only, and Play.exe moves them into both at its next start.
@@ -390,6 +421,11 @@ impl Profiles {
                     .map(|(name, value)| match own_row {
                         // A row set to "Game's setting" says so (the game's own file decides).
                         Some(n) if n == name && choice == OWN => format!("{name}={OWN}"),
+                        // Off Windows the game's own renderer, whatever a profile holds: the
+                        // real Direct3D 9 is a Windows API, so it is never passed on.
+                        _ if name == "Renderer" && self.own_pending.is_some() => {
+                            format!("{name}=vulkan")
+                        }
                         _ => format!("{name}={value}"),
                     }),
             );
@@ -406,6 +442,24 @@ impl Profiles {
         }
         write_all(&writes)
     }
+}
+
+/// A shared settings.ini (`shared`) laid over a profile's own (`own`): all of the shared file's
+/// lines, then the own file's lines of the names the shared file does not have (names compared
+/// without case, as the game reads them); the own file's comments go.
+fn shared_over(shared: &str, own: &str) -> String {
+    let name = |l: &str| {
+        l.split_once('=')
+            .map(|(n, _)| n.trim().to_ascii_lowercase())
+            .filter(|n| !n.starts_with('#') && !n.starts_with(';'))
+    };
+    let named: Vec<String> = shared.lines().filter_map(name).collect();
+    let mut lines: Vec<&str> = shared.lines().collect();
+    lines.extend(
+        own.lines()
+            .filter(|l| name(l).is_some_and(|n| !named.contains(&n))),
+    );
+    lines.join("\r\n") + "\r\n"
 }
 
 /// Whether `name` is one of `names`, its case aside (as the game and Settings.ps1 read them).
@@ -603,6 +657,64 @@ mod tests {
             let ini = std::fs::read_to_string(dir.join("Fallout.ini")).unwrap();
             assert!(ini.contains("iFrameLimit=120"), "{ini}");
         }
+        std::fs::remove_dir_all(&own).unwrap();
+    }
+
+    /// The off-Windows rule (each profile's own settings.ini).
+    fn per_profile(own: &Path) -> Profiles {
+        let mut p = Profiles::at(own);
+        p.own_pending = Some([own.join("game"), own.join("mods")].map(|d| d.join("settings.ini")));
+        p
+    }
+
+    /// Off Windows a d3d9 the game profile holds is never passed on: the other profile's own
+    /// settings.ini says the game's own renderer, whatever row was saved.
+    #[test]
+    fn off_windows_d3d9_is_never_copied_into_the_other_profile() {
+        let own = scratch("no-d3d9");
+        let p = per_profile(&own);
+        std::fs::create_dir_all(&p.dirs[0]).unwrap();
+        let held = SECTIONS.replace("sRenderer=vulkan", "sRenderer=d3d9");
+        std::fs::write(p.dirs[0].join("Fallout.ini"), &held).unwrap();
+        p.save(Row::FrameLimit, "60").unwrap();
+        let mods = std::fs::read_to_string(own.join("mods").join("settings.ini")).unwrap();
+        assert!(mods.contains("\r\nRenderer=vulkan\r\n"), "{mods}");
+        assert!(!mods.contains("d3d9"), "{mods}");
+        assert!(mods.contains("\r\nFrameLimit=60\r\n"), "{mods}");
+        std::fs::remove_dir_all(&own).unwrap();
+    }
+
+    /// Off Windows a shared settings.ini is split at the first save into each profile's own file
+    /// (the game's first start would move it into one profile only), the choice in both, and the
+    /// shared one renamed aside; over a profile's own file that is there already, the shared
+    /// file's lines win line by line and the own file's other lines stay.
+    #[test]
+    fn off_windows_a_shared_settings_ini_reaches_both_profiles() {
+        let own = scratch("split");
+        let p = per_profile(&own);
+        std::fs::write(&p.pending, "Preset=vanilla\r\nOther=1\r\n").unwrap();
+        p.save(Row::FrameLimit, "60").unwrap();
+        for name in ["game", "mods"] {
+            let text = std::fs::read_to_string(own.join(name).join("settings.ini")).unwrap();
+            assert!(text.contains("\r\nFrameLimit=60\r\n"), "{name}: {text}");
+            assert!(text.contains("\r\nPreset=vanilla\r\n"), "{name}: {text}");
+            assert!(text.contains("\r\nOther=1\r\n"), "{name}: {text}");
+        }
+        assert!(!p.pending.exists());
+        assert!(own.join("settings.ini.migrated").is_file());
+        // Again, with both own files there: the shared file's lines win line by line (as play.sh
+        // and the screen let it win), the own files' lines of other names stay.
+        std::fs::write(&p.pending, "preset=fixes\r\n").unwrap();
+        p.save(Row::MenuFrameLimit, "90").unwrap();
+        for name in ["game", "mods"] {
+            let text = std::fs::read_to_string(own.join(name).join("settings.ini")).unwrap();
+            assert!(text.contains("\r\nPreset=fixes\r\n"), "{name}: {text}");
+            assert!(!text.contains("vanilla"), "{name}: {text}");
+            assert!(text.contains("\r\nMenuFrameLimit=90\r\n"), "{name}: {text}");
+            assert!(text.contains("\r\nFrameLimit=60\r\n"), "{name}: {text}");
+            assert!(text.contains("\r\nOther=1\r\n"), "{name}: {text}");
+        }
+        assert!(!p.pending.exists());
         std::fs::remove_dir_all(&own).unwrap();
     }
 

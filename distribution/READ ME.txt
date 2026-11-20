@@ -27,7 +27,8 @@ Testing list of what is still being tried), saved at once for the next start; > 
 it. The first time it types the game's terminal intro once; any key skips it.
 
 The first start finds your game (Steam, GOG, Epic, or it asks: type the game's folder in the
-launcher, or drop the folder onto its window), checks its version, reads your graphics card and
+launcher or paste it with Ctrl+V, or drop the folder onto its window), checks its version, reads
+your graphics card and
 sound device (about 20 seconds; the launcher says what it is doing) and starts the game. The
 launcher steps aside while you play, and closes when the game ends; if the game stops with an
 error, it says what happened and can open the logs folder. Later starts take a moment. When your

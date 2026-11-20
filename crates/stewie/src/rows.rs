@@ -4,6 +4,18 @@
 //!
 //! A row is on when the host's row `NV_STEWIE` is on, its own key is not `0`, and Tweaks' key (if
 //! any) reads as a number other than 0 (`GetLongValue`, [`crate::settings::Settings::long`]).
+//!
+//! The rows are five lists, so the four agents building the rest side by side never edit the same
+//! lines: [`ROWS`] (the crash fixes and Engine Optimizations' first row), then share 1a's
+//! ([`world::ROWS`]: the engines and the console), share 1b's ([`forms::ROWS`]: forms, cells,
+//! scripts, saves and sound), share 2's ([`ai::ROWS`]: AI, actors and the
+//! player) and share 3's ([`menus::ROWS`]: menus and the HUD), each in its own file. [`all`] walks
+//! them in that order.
+
+pub mod ai;
+pub mod forms;
+pub mod menus;
+pub mod world;
 
 use crate::settings::Settings;
 use engine_core::extend::stewie;
@@ -25,9 +37,18 @@ pub struct Row {
     pub summary: &'static str,
 }
 
-/// Every row built, in PLAN.md's order. A row's key is `b` and Tweaks' function's name without
-/// its `patch` prefix; a row that is one block of a function holding several (`MenuFixes`) adds
-/// a word for the block after it.
+/// The four lists of rows, in [`all`]'s order.
+pub const LISTS: [&[Row]; 5] = [ROWS, world::ROWS, forms::ROWS, ai::ROWS, menus::ROWS];
+
+/// Every row built: [`ROWS`], then each share's list.
+pub fn all() -> impl Iterator<Item = &'static Row> {
+    LISTS.into_iter().flatten()
+}
+
+/// The crash fixes' rows and Engine Optimizations' first, in PLAN.md's order (each share's list
+/// is in PLAN.md's order too). A row's key is `b` and Tweaks' function's name without its `patch`
+/// prefix; a row that is one block of a function holding several (`MenuFixes`) adds a word for
+/// the block after it.
 pub const ROWS: &[Row] = &[
     Row {
         bit: stewie::UGRIDS_LOAD_NULL_CELL,
@@ -552,8 +573,7 @@ impl Keys {
             }
         };
         let as_tweaks = flag(AS_TWEAKS_KEY);
-        let rows: Vec<(&'static str, bool)> = ROWS
-            .iter()
+        let rows: Vec<(&'static str, bool)> = all()
             .filter_map(|r| flag(r.key).map(|on| (r.key, on)))
             .collect();
         keys.as_tweaks = as_tweaks.unwrap_or(false);
