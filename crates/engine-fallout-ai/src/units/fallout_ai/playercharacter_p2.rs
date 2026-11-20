@@ -4388,6 +4388,19 @@ pub fn fn_00952ff0(e: &mut Engine, this: Ptr<PlayerCharacter>, out: u32) -> u32 
     out
 }
 
+/// lStewieAl's Tweaks' S0107.04 static `strSpeaker` (`engine_core::extend::stewie::kept::SPEAKER_NAME`):
+/// the address of its 4-byte `NiFixedString`, whose handle is made the first time it is used, as
+/// Tweaks' `strSpeaker = "Bip01 Speaker"` does (`NiGlobalStringTable::AddString`, `00a5b690`, on the
+/// exe's own text `0108b3a4`, the same characters).
+fn kept_speaker_name(e: &mut Engine) -> u32 {
+    let name = e.stewie_kept(engine_core::extend::stewie::kept::SPEAKER_NAME, 4);
+    if e.mem.u32(name) == 0 {
+        let handle = e.call(0x00a5_b690, &args![SPEAKER_NODE_NAME]).u32();
+        e.mem.set_u32(name, handle);
+    }
+    name
+}
+
 // Translated from 00953060 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `PlayerCharacter::FocusOnActor` (Xbox PDB): turns the camera and the
 /// player towards the head of `actor` (dialogue). `strength` is clamped to
@@ -4474,14 +4487,28 @@ pub fn player_character_focus_on_actor(
                 let looked_up = e.call(0x004a_de00, &args![target, head_name]).u32();
                 found = e.call(0x0065_3270, &args![0x011f_4428u32, looked_up]).u32();
             }
-            let block = e.call(OPERATOR_NEW, &args![4u32]).u32();
-            let speaker_name = if block == 0 {
+            // lStewieAl's Tweaks' S0107.04 (`MemoryLeakFixes`): the 4-byte name made here each time and
+            // never freed is not made (the jump `0x953253` to `0x953282`: the name word is 0), and the
+            // lookup at `0x9532B0` is handed Tweaks' one static `NiFixedString` "Bip01 Speaker",
+            // made the first time (`NiGlobalStringTable::AddString`, `00a5b690`).
+            let kept_name = e.stewie(engine_core::extend::stewie::FOCUS_SPEAKER_NAME_LEAK);
+            let speaker_name = if kept_name {
                 0
             } else {
-                e.call(0x0043_8170, &args![block, SPEAKER_NODE_NAME]).u32()
+                let block = e.call(OPERATOR_NEW, &args![4u32]).u32();
+                if block == 0 {
+                    0
+                } else {
+                    e.call(0x0043_8170, &args![block, SPEAKER_NODE_NAME]).u32()
+                }
             };
             if found == 0 {
-                let looked_up = e.call(0x004a_de00, &args![target, speaker_name]).u32();
+                let name = if kept_name {
+                    kept_speaker_name(e)
+                } else {
+                    speaker_name
+                };
+                let looked_up = e.call(0x004a_de00, &args![target, name]).u32();
                 found = e.call(0x0065_3270, &args![0x011f_4428u32, looked_up]).u32();
             }
             if head == 0 && found == 0 {
@@ -12614,6 +12641,60 @@ mod tests {
         assert_eq!(calls_to(&e, LOG_MESSAGE).len(), 1);
         // The field of view is set from the distance (no face data).
         assert_eq!(calls_to(&e, 0x0045_7990).len(), 2);
+    }
+
+    /// lStewieAl's Tweaks' row S0107.04: row off, each focus makes a 4-byte "Bip01 Speaker" name
+    /// (`OPERATOR_NEW(4)`, `00438170`) that is never freed and looks the speaker node up with it;
+    /// row on, none is made: the lookup gets Tweaks' one kept name, whose handle is made once
+    /// (`00a5b690` on the exe's text) and kept for every later focus.
+    #[test]
+    fn s0107_04_the_speaker_name_is_one_kept_name() {
+        for on in [false, true] {
+            let mut e = engine();
+            let (player, actor) = focus_world(&mut e);
+            e.set_stewie(engine_core::extend::stewie::FOCUS_SPEAKER_NAME_LEAK, on);
+            slot(&mut e, actor, 0x1d0, eax(0x77));
+            slot(&mut e, actor, 0x1b0, eax(0));
+            double(&mut e, 0x008a_30f0, eax(0x0333));
+            e.register_double(OPERATOR_NEW, |_, a| {
+                eax(if a[0] == 4 { 0x0600_0100 } else { 0 })
+            });
+            e.register_double(0x0043_8170, |_, a| eax(a[0]));
+            e.register_double(0x00a5_b690, |_, a| {
+                assert_eq!(a[0], SPEAKER_NODE_NAME);
+                eax(0x5150)
+            });
+            start_log(&mut e);
+            player_character_focus_on_actor(&mut e, player, actor, 1.0, 0);
+            player_character_focus_on_actor(&mut e, player, actor, 1.0, 0);
+            let kept = e.stewie_kept(engine_core::extend::stewie::kept::SPEAKER_NAME, 4);
+            let names: Vec<u32> = calls_to(&e, 0x004a_de00)
+                .iter()
+                .filter(|a| a[0] == 0x77 && a[1] != 0x0333)
+                .map(|a| a[1])
+                .collect();
+            let fours = calls_to(&e, OPERATOR_NEW)
+                .iter()
+                .filter(|a| a[0] == 4)
+                .count();
+            if on {
+                assert_eq!(names, vec![kept, kept]);
+                assert_eq!(e.mem.u32(kept), 0x5150);
+                assert_eq!(fours, 0);
+                assert!(calls_to(&e, 0x0043_8170).is_empty());
+                assert_eq!(calls_to(&e, 0x00a5_b690).len(), 1, "made once");
+            } else {
+                assert_eq!(names, vec![0x0600_0100, 0x0600_0100]);
+                assert_eq!(fours, 2);
+                assert_eq!(
+                    calls_to(&e, 0x0043_8170),
+                    vec![vec![0x0600_0100, SPEAKER_NODE_NAME]; 2]
+                );
+                assert!(calls_to(&e, 0x00a5_b690).is_empty());
+            }
+            // Either way the head is still missing and logged once.
+            assert_eq!(calls_to(&e, LOG_MESSAGE).len(), 1);
+        }
     }
 
     #[test]
