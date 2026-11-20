@@ -22,6 +22,7 @@ mod font;
 mod game;
 mod gpu;
 mod intro;
+mod pacing;
 mod paste;
 mod place;
 #[cfg(windows)]
@@ -33,6 +34,8 @@ mod profiles;
 mod screen;
 mod session;
 mod settings;
+mod sound;
+mod sound_files;
 
 use std::path::PathBuf;
 

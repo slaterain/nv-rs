@@ -335,6 +335,7 @@ fn a_place_on_the_world_map() {
         offset: [10.0, -10.0],
         pos_mod: [0.0; 2],
         coord: 0,
+        mk_range: 0,
     };
     let mut coord = 0;
     let p = world_map_pos_mults([5000.0, -9000.0], &d, Some(&mut coord));
@@ -527,13 +528,18 @@ fn the_start_in_an_interior() {
     }
 }
 
-/// A world (its map: usable width, corners, scale and offsets) with a persistent cell whose
+/// The map corners (+0x88: north-west x, y, south-east x, y, in cells) a test world has unless it
+/// is given its own.
+const CORNERS: [i16; 4] = [-30, 30, 20, -25];
+
+/// A world (its map: usable width, `corners`, scale and offsets) with a persistent cell whose
 /// objects are `refs`.
 fn world_with(
     e: &mut Engine,
     parent: u32,
     flags: u16,
     usable: u32,
+    corners: [i16; 4],
     scale: [f32; 4],
     refs: &[u32],
 ) -> u32 {
@@ -543,7 +549,7 @@ fn world_with(
     e.mem.set_u16(world + 0x4e, flags);
     e.mem.set_u32(world + 0x70, parent);
     e.mem.set_u32(world + 0x80, usable);
-    for (i, v) in [-30i16, 30, 20, -25].iter().enumerate() {
+    for (i, v) in corners.iter().enumerate() {
         e.mem.set_u16(world + 0x88 + 2 * i as u32, *v as u16);
     }
     for (i, v) in scale.iter().enumerate() {
@@ -582,7 +588,8 @@ fn placed(e: &mut Engine, base_id: u32, pos: [f32; 2]) -> (u32, u32) {
 /// Every world's map markers, by root world and by cell: a child world using its parent's map
 /// (flag 4 at +0x4E) goes under the parent, its places by its own scale and offsets on the
 /// parent's map; a world with no parent and no map is passed over; a reference that is not a map
-/// marker is left out.
+/// marker is left out. The child has map corners of its own and comes first in the game's list,
+/// so its root's dimensions are the ones made first: the child's corners must not be used.
 #[test]
 fn every_worlds_map_markers_by_root_and_cell() {
     let mut e = engine();
@@ -595,15 +602,32 @@ fn every_worlds_map_markers_by_root_and_cell() {
     let (other, _) = placed(&mut e, 0x20, [0.0, 0.0]);
     let (b, b_data) = placed(&mut e, 0x10, [-5000.0, 9000.0]);
     let (c, _) = placed(&mut e, 0x10, [0.0, 0.0]);
-    let root = world_with(&mut e, 0, 0, 1000, [1.0, 0.0, 0.0, 0.0], &[a, other]);
-    let child = world_with(&mut e, root, 4, 0, [0.5, 100.0, -200.0, 0.0], &[b]);
-    let skipped = world_with(&mut e, 0, 0, 0, [1.0, 0.0, 0.0, 0.0], &[c]);
+    let root = world_with(
+        &mut e,
+        0,
+        0,
+        1000,
+        CORNERS,
+        [1.0, 0.0, 0.0, 0.0],
+        &[a, other],
+    );
+    let child_corners = [-10, 60, 45, -5];
+    let child = world_with(
+        &mut e,
+        root,
+        4,
+        0,
+        child_corners,
+        [0.5, 100.0, -200.0, 0.0],
+        &[b],
+    );
+    let skipped = world_with(&mut e, 0, 0, 0, CORNERS, [1.0, 0.0, 0.0, 0.0], &[c]);
     let handler = alloc(0x20);
     e.mem.set_u32(0x011c_3f2c, handler);
     let (n2, n3) = (alloc(8), alloc(8));
     for (node, world, next) in [
-        (handler + 0x10, root, n2),
-        (n2, child, n3),
+        (handler + 0x10, child, n2),
+        (n2, root, n3),
         (n3, skipped, 0),
     ] {
         e.mem.set_u32(node, world);
@@ -619,6 +643,10 @@ fn every_worlds_map_markers_by_root_and_cell() {
     init_pos_mods(&e, &mut dims, child);
     let pb = world_map_pos_mults([-5000.0, 9000.0], &dims, Some(&mut cb));
     assert_ne!(ca, cb);
+    // The child's own corners would put its marker elsewhere: the test tells them apart.
+    let mut own = dims;
+    init_dimensions(&e, &mut own, child);
+    assert_ne!(world_map_pos_mults([-5000.0, 9000.0], &own, None), pb);
     let cells = &got[&root];
     assert_eq!(cells.len(), 2);
     assert_eq!(

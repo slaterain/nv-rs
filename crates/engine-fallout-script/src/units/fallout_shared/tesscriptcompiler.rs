@@ -1435,6 +1435,10 @@ fn put_u16(e: &mut Engine, out: u32, count: &mut u32, value: u16) {
 /// referenced object (`'Z'` and its index; reported when unknown). Other characters are
 /// copied. Answers the output length (a 0 after it), 0 on an error. The stack cookie check is
 /// not translated.
+///
+/// Seam `005B17DD`, before the compile function's call (words: the line on the stack, the
+/// command's opcode): xNVSE's inline expressions need the line's command word (+0x410), which
+/// the exe leaves unset there.
 pub fn script_compiler_replace_variables_and_functions(
     e: &mut Engine,
     _this: Ptr,
@@ -1505,6 +1509,12 @@ pub fn script_compiler_replace_variables_and_functions(
                         e.mem.set_u32(line + 0x40c, 0);
                         let number = e.mem.u32(line_number);
                         e.mem.set_u32(line, number);
+                        // Seam 005B17DD, the compile function's call (words: the line, the
+                        // command's opcode): the exe leaves this line's command word (+0x410)
+                        // unset; the inline-expression seam (005B1C65) reads it, so `crates/nvse`
+                        // writes the opcode there. No answer is read.
+                        let opcode = e.mem.u32(word + 0x208);
+                        let _ = e.site(0x005b_17dd, &[line, opcode]);
                         let ok = e
                             .call(
                                 compile,
@@ -4116,6 +4126,45 @@ mod n045_tests {
         e.call_log = Some(vec![]);
         assert_eq!(e.call(0x005b_1570, &[0, d, number, t, out]).u32(), 0);
         assert_eq!(errors(&e), vec![TEXT_UNKNOWN_COMMAND]);
+    }
+
+    /// Seam 005B17DD: before a command's compile function runs on the line on the stack, asked
+    /// with that line (holding the rest of the text, its command word +0x410 left 0 as the exe
+    /// leaves it) and the command's opcode; what a handler writes there the compile sees.
+    #[test]
+    fn replace_variables_and_functions_names_the_nested_command() {
+        use std::cell::RefCell;
+        thread_local! {
+            static SEEN: RefCell<Vec<(u32, Vec<u8>, u32)>> = const { RefCell::new(Vec::new()) };
+        }
+        fn seen(e: &mut Engine, w: &[u32]) -> Option<u32> {
+            let entry = (w[1], e.mem.cstr(w[0] + 4), e.mem.u32(w[0] + 0x410));
+            SEEN.with(|s| s.borrow_mut().push(entry));
+            e.mem.set_u32(w[0] + 0x410, w[1]);
+            None
+        }
+        fn compile_sees(e: &mut Engine, a: &[u32]) -> Ret {
+            let entry = (0, vec![], e.mem.u32(a[2] + 0x410));
+            SEEN.with(|s| s.borrow_mut().push(entry));
+            ret(1)
+        }
+        let mut e = rig();
+        let d = data(&mut e);
+        command(&mut e, b"GetV", 0x1000);
+        let p = parameters(&mut e, &[(1, 1)]);
+        e.mem.set_u16(SCRIPT_COMMANDS + 0x12, 1);
+        e.mem.set_u32(SCRIPT_COMMANDS + 0x14, p);
+        e.mem.set_u32(SCRIPT_COMMANDS + 0x1c, 0x0103_f000);
+        e.register(0x0103_f000, compile_sees);
+        e.on_site_for_test(0x005b_17dd, seen);
+        let t = text(&mut e, b"GetV 7");
+        let out = e.mem.alloc(0x40);
+        let number = e.mem.alloc(4);
+        assert_ne!(e.call(0x005b_1570, &[0, d, number, t, out]).u32(), 0);
+        assert_eq!(
+            SEEN.with(|s| s.borrow().clone()),
+            vec![(0x1000, b" 7".to_vec(), 0), (0, vec![], 0x1000)]
+        );
     }
 
     #[test]
