@@ -5,6 +5,8 @@
 //! writer sends the output report whenever the motor speeds the game asks for change, and once at
 //! the start (after the DualSense's light set-up), which sets the light bar steady. The game's
 //! thread only reads and writes the shared state, and reads the clock: no device call on it.
+//! The controller database's pads ([`super::sdl_db`]) are read the same way through a mapping of
+//! their own ([`HidPads::add_mapped`]), with a reader and no writer.
 //!
 //! A pad reads as not connected while Sony's wireless adapter says no pad is behind it, and a
 //! Bluetooth pad also once it has been silent for [`SILENCE`] (out of battery or range: its last
@@ -157,6 +159,57 @@ impl HidPads {
             output_length,
             rumble,
         } = opened;
+        let read = move |report: &[u8]| {
+            if sony::no_pad(model, link, report) {
+                // Sony's adapter with no pad behind it: no pad until a reading comes.
+                Reading::NoPad
+            } else {
+                sony::read(model, link, report).map_or(Reading::Nothing, Reading::Controls)
+            }
+        };
+        let id = self.start_reader(path, link, reader, input_length, read)?;
+        let s = self.shared.clone();
+        let write = std::thread::Builder::new()
+            .name("nv-rs pad writer".into())
+            .spawn(move || write_pad(&s, id, writer, model, link, output_length, rumble));
+        if let Err(e) = write {
+            self.shared.end(id);
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// Runs a pad read through a mapping of its own (`read` turns each input report into its
+    /// controls: the controller database's pads, [`super::sdl_db`]): a reader thread only, so the
+    /// game's rumble reaches no motor. It never reads as silent: such pads may send a report only
+    /// when something changes.
+    pub fn add_mapped<R>(
+        &self,
+        path: String,
+        reader: R,
+        input_length: usize,
+        mut read: impl FnMut(&[u8]) -> Option<Controls> + Send + 'static,
+    ) -> std::io::Result<()>
+    where
+        R: Read + Send + 'static,
+    {
+        let read = move |report: &[u8]| read(report).map_or(Reading::Nothing, Reading::Controls);
+        self.start_reader(path, Link::Usb, reader, input_length, read)
+            .map(|_| ())
+    }
+
+    /// Adds a pad and starts its reader; answers the pad's id.
+    fn start_reader<R>(
+        &self,
+        path: String,
+        link: Link,
+        reader: R,
+        input_length: usize,
+        read: impl FnMut(&[u8]) -> Reading + Send + 'static,
+    ) -> std::io::Result<u64>
+    where
+        R: Read + Send + 'static,
+    {
         let id = {
             let mut list = self.shared.list();
             let id = list.next_id;
@@ -177,25 +230,17 @@ impl HidPads {
             id
         };
         let s = self.shared.clone();
-        let read = std::thread::Builder::new()
+        let started = std::thread::Builder::new()
             .name("nv-rs pad reader".into())
-            .spawn(move || read_pad(&s, id, reader, model, link, input_length));
-        if let Err(e) = read {
+            .spawn(move || read_pad(&s, id, reader, input_length, read));
+        if let Err(e) = started {
             self.shared.end(id);
             if let Some(pad) = self.shared.list().pads.iter_mut().find(|p| p.id == id) {
                 pad.reading = false;
             }
             return Err(e);
         }
-        let s = self.shared.clone();
-        let write = std::thread::Builder::new()
-            .name("nv-rs pad writer".into())
-            .spawn(move || write_pad(&s, id, writer, model, link, output_length, rumble));
-        if let Err(e) = write {
-            self.shared.end(id);
-            return Err(e);
-        }
-        Ok(())
+        Ok(id)
     }
 
     /// [`PadList::count`] at `now`.
@@ -246,39 +291,49 @@ impl PadList for HidPads {
     }
 }
 
-/// The reader: each input report read into the pad's controls until the pad goes (a failed or
-/// empty read, or the writer ended it); then its device may be opened again.
+/// What one input report says.
+enum Reading {
+    Controls(Controls),
+    /// No pad behind the device (Sony's adapter): none until a reading comes.
+    NoPad,
+    /// Nothing for the controls (another report).
+    Nothing,
+}
+
+/// The reader: each input report read into the pad's controls (`read`) until the pad goes (a
+/// failed or empty read, or the writer ended it); then its device may be opened again.
 fn read_pad(
     shared: &Shared,
     id: u64,
     mut file: impl Read,
-    model: Model,
-    link: Link,
     length: usize,
+    mut read: impl FnMut(&[u8]) -> Reading,
 ) {
     let mut buffer = vec![0u8; length.max(1)];
     loop {
-        let read = file.read(&mut buffer);
+        let got = file.read(&mut buffer);
+        // The report's reading before the list is locked (the mapped pads' parse calls the
+        // system's HID parser).
+        let reading = match got {
+            Ok(n) if n > 0 => Some(read(&buffer[..n])),
+            _ => None,
+        };
         let mut list = shared.list();
         let Some(pad) = list.live(id) else {
             break;
         };
-        match read {
-            Ok(n) if n > 0 => {
-                let report = &buffer[..n];
-                if sony::no_pad(model, link, report) {
-                    // Sony's adapter with no pad behind it: no pad until a reading comes.
-                    pad.controls = None;
-                } else if let Some(controls) = sony::read(model, link, report) {
-                    if pad.controls != Some(controls) {
-                        pad.controls = Some(controls);
-                        pad.packet = pad.packet.wrapping_add(1);
-                    }
-                    pad.last_report = Some(Instant::now());
-                    pad.probed = false;
+        match reading {
+            Some(Reading::NoPad) => pad.controls = None,
+            Some(Reading::Controls(controls)) => {
+                if pad.controls != Some(controls) {
+                    pad.controls = Some(controls);
+                    pad.packet = pad.packet.wrapping_add(1);
                 }
+                pad.last_report = Some(Instant::now());
+                pad.probed = false;
             }
-            _ => {
+            Some(Reading::Nothing) => {}
+            None => {
                 pad.gone = true;
                 shared.changed.notify_all();
                 break;
@@ -697,5 +752,38 @@ mod tests {
         std::thread::sleep(SILENCE + WATCH);
         assert_eq!(pads.count(), 1);
         drop(usb);
+    }
+
+    /// A pad read through its own mapping (the controller database's): its reports turned into
+    /// its controls, a new packet at each change, never silent however long it sends nothing,
+    /// the game's rumble taken and sent nowhere, gone when its read fails.
+    #[test]
+    fn a_mapped_pad() {
+        let mut pads = HidPads::new();
+        let (tx, rx) = mpsc::channel();
+        pads.add_mapped("mapped".into(), FakeReader(rx), 8, |report: &[u8]| {
+            (report[0] == 1).then(|| Controls {
+                south: report[1] != 0,
+                ..Controls::default()
+            })
+        })
+        .unwrap();
+        assert!(pads.knows("MAPPED"));
+        assert_eq!(state(&mut pads, 0).0, ERROR_DEVICE_NOT_CONNECTED);
+        tx.send(vec![1, 1]).unwrap();
+        wait_for(|| state(&mut pads, 0).0 == ERROR_SUCCESS);
+        let (_, first) = state(&mut pads, 0);
+        assert_eq!(first.buttons, buttons::A);
+        // Another report id: nothing for the controls.
+        tx.send(vec![2, 0]).unwrap();
+        tx.send(vec![1, 0]).unwrap();
+        wait_for(|| state(&mut pads, 0).1.buttons == 0);
+        assert_eq!(state(&mut pads, 0).1.packet, first.packet.wrapping_add(1));
+        std::thread::sleep(SILENCE + Duration::from_millis(100));
+        assert_eq!(state(&mut pads, 0).0, ERROR_SUCCESS, "never silent");
+        assert_eq!(pads.set_state(0, 0xffff, 0xffff), ERROR_SUCCESS);
+        drop(tx);
+        wait_for(|| pads.count() == 0);
+        wait_for(|| !pads.knows("mapped"));
     }
 }
