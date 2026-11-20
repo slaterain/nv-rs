@@ -1683,6 +1683,11 @@ fn prepare_stream(e: &mut Engine, this: Ptr, bytes_per_sample: u32) {
 /// The effect part of `Prepare` (`00aec530`).
 fn prepare_effect(e: &mut Engine, this: Ptr) {
     let base = this.addr();
+    // lStewieAl's Tweaks' S0155 (`patchNullAudioCrash`, its bytes at `0xAECF39` and `0xAED074`): with no
+    // buffer (+0x19C) the effect is passed over and `Prepare` goes on to `BSGameSound::Prepare`.
+    if field(e, this, BUFFER) == 0 && e.stewie(engine_core::extend::stewie::NULL_AUDIO) {
+        return;
+    }
     e.with_stack(0x28, |e, locals| {
         let description = locals.addr();
         let results = description + 0x20;
@@ -4336,6 +4341,59 @@ mod b035_tests {
         let log = e.call_log.take().unwrap();
         assert_eq!(calls(&log, SET_OPENED), vec![vec![base, 0]]);
         assert!(calls(&log, 0x00ae_9de0).is_empty());
+    }
+
+    /// lStewieAl's Tweaks' row S0155: a sound with the effect bit (0x80000) and no sample data, so
+    /// no buffer (+0x19C). Row off, the exe calls the missing buffer's `SetFX` (a fault here); row
+    /// on, the effect is passed over and `BSGameSound::Prepare` still runs. With a buffer, row on
+    /// makes the calls of row off.
+    #[test]
+    fn s0155_a_sound_effect_with_no_buffer() {
+        for on in [false, true] {
+            let (mut e, _) = engine();
+            e.set_stewie(engine_core::extend::stewie::NULL_AUDIO, on);
+            e.register(0x00ae_9de0, |_, _| 1u32.into_ret());
+            let (this, _) = sound(&mut e, false);
+            let base = this.addr();
+            let format = e.mem.alloc(0x12);
+            e.mem.set_u16(format + 0xe, 16);
+            e.mem.set_u32(base + WAVE_FORMAT, format);
+            e.mem.set_u32(base + DURATION, 10);
+            e.mem.set_u32(base + SOUND_TYPE_FLAGS, 0x8_0000);
+            e.mem.unmap(0, 0x1000);
+            e.call_log = Some(vec![]);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.call(0x00ae_c530, &args![this]).bool()
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.ok(), on.then_some(true), "row {on}");
+            if on {
+                let log = e.call_log.take().unwrap();
+                assert_eq!(calls(&log, 0x00ae_9de0), vec![vec![base]]);
+            }
+        }
+        // With a buffer: the same calls either way.
+        let mut seen = vec![];
+        for on in [false, true] {
+            let (mut e, _) = engine();
+            e.set_stewie(engine_core::extend::stewie::NULL_AUDIO, on);
+            e.register(0x00ae_9de0, |_, _| 1u32.into_ret());
+            let (this, _) = sound(&mut e, false);
+            let base = this.addr();
+            let format = e.mem.alloc(0x12);
+            e.mem.set_u16(format + 0xe, 16);
+            e.mem.set_u32(base + WAVE_FORMAT, format);
+            e.mem.set_u32(base + DURATION, 10);
+            e.mem.set_u32(base + SOUND_TYPE_FLAGS, 0x8_0000);
+            let buffer = object(&mut e, BUFFER_SLOTS);
+            e.mem.set_u32(base + BUFFER, buffer);
+            e.register_double(BUFFER_SLOTS + 0x5c, |_, _| 0x8000_0000u32.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x00ae_c530, &args![this]);
+            seen.push(e.call_log.take().unwrap());
+        }
+        assert_eq!(seen[0], seen[1], "row on: the calls of the row off");
+        assert_eq!(calls(&seen[1], BUFFER_SLOTS + 0x54).len(), 1);
     }
 
     #[test]
