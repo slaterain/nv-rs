@@ -62,8 +62,8 @@ pub fn word_at_0(e: &mut Engine, this: impl OneWord) -> u32 {
     e.mem.u32(at)
 }
 
-// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches ("Adds NULL
-// pointer checks", SAFE_WRITE_BUF(0x559450, "\x8B\xC1\x85\xC0\x74\x02\x8B\x00\xC3")).
+// From JIP LN NVSE 57.30 (5a30ac4): InitGamePatches, "Adds NULL pointer checks", its nine bytes written
+// at 0x559450.
 /// `00559450` on a null `this`: with JIP LN NVSE's game patches in (G01, the row
 /// `NV_JIP_GAME_PATCHES`: [`crate::extend::jip_patches::FIXES`], the run-wide word every thread
 /// reads) 0, as JIP's `mov eax, ecx; test eax, eax; jz; mov eax, [eax]` answers; otherwise the

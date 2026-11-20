@@ -133,8 +133,8 @@ pub fn active_non_shadow_light_count(e: &mut Engine, property: Ptr) -> u32 {
     count
 }
 
-// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches ("Adds NULL
-// pointer checks", SAFE_WRITE_BUF(0xB707E0, ...): `test esi, esi; jz` after `mov esi, [ecx+0xF8]`).
+// From JIP LN NVSE 57.30 (5a30ac4): InitGamePatches, "Adds NULL pointer checks", its bytes at 0xB707E0:
+// `test esi, esi; jz` after `mov esi, [ecx+0xF8]`.
 /// Whether `00b707d0` skips a light without its light data: JIP's fixes are in (the run-wide patch word, read only
 /// on that null path). Out of line, so the count's loop keeps one compare per light.
 #[cold]
