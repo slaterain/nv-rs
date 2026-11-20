@@ -846,7 +846,8 @@ pub fn fn_00644cc0(e: &mut Engine, this: Ptr) -> i8 {
 /// attack. `owner` is the attacker's `ActorValueOwner` (or null), `weapon` the weapon form
 /// (null for fists), `health_ratio` the weapon's condition (0 to 1), `scale` a multiplier,
 /// `item_change` the inventory entry (its mod effects add to the damage), `owner_is_actor`
-/// makes the ammunition lookup use the attacker. The word at `+0x18` is unused. The
+/// makes the ammunition lookup use the attacker. The word at `+0x18` is unused by the exe (row
+/// S0189.02 reads it as the ammunition, which S0189.01 passes from the display). The
 /// weapon-type switch is a jump table in `.text` (not mapped here): types -1 and 0 add the
 /// owner's value 0x38, 1, 2 and 13 its value 0x11, every other type nothing.
 #[allow(clippy::too_many_arguments)]
@@ -856,7 +857,7 @@ pub fn combat_formulas_calc_weapon_damage(
     weapon: Ptr,
     health_ratio: f32,
     scale: f32,
-    _unused_4: u32,
+    ammo_word: u32,
     flag_1c: bool,
     item_change: Ptr,
     owner_is_actor: bool,
@@ -933,9 +934,24 @@ pub fn combat_formulas_calc_weapon_damage(
     let mut ammo_bonus = 0.0f32;
     if !flag_1c && !weapon.is_null() {
         let holder = if owner_is_actor { owner } else { Ptr::NULL };
-        let first = combat_formulas_get_arm_condition(e, weapon, holder);
+        // lStewieAl's Tweaks' row S0189.02 (`InventoryCalcWeaponDamageUseAmmoFix`, the calls at
+        // `0x644EF3` and `0x644F79` and the jump at `0x644F00`): Tweaks' `OnCalcDamageGetProjectile`
+        // takes the projectile from the word at +0x18 (the ammunition S0189.01 passes) in place of
+        // `00525ae0`, and the second lookup reuses the first's answer.
+        // The callers that pass no ammunition (a hit through `GetModifiedAttackDamage`,
+        // `GetDesirability`) then get the weapon's own projectile first, as with Tweaks.
+        let from_ammo = e.stewie(engine_core::extend::stewie::WEAPON_DAMAGE_AMMO_PROJECTILE);
+        let first = if from_ammo {
+            calc_damage_projectile(e, weapon, ammo_word, holder)
+        } else {
+            combat_formulas_get_arm_condition(e, weapon, holder)
+        };
         if !first.is_null() {
-            let second = combat_formulas_get_arm_condition(e, weapon, holder);
+            let second = if from_ammo {
+                first
+            } else {
+                combat_formulas_get_arm_condition(e, weapon, holder)
+            };
             let second_value = e.call(AMMO_GET_VALUE_FROM_OBJECT, &args![second]).u32();
             if second_value != 0 {
                 let actor = if owner_is_actor {
@@ -952,7 +968,11 @@ pub fn combat_formulas_calc_weapon_damage(
                     )
                     .u8()
                 };
-                let third = combat_formulas_get_arm_condition(e, weapon, holder);
+                let third = if from_ammo {
+                    calc_damage_projectile(e, weapon, ammo_word, holder)
+                } else {
+                    combat_formulas_get_arm_condition(e, weapon, holder)
+                };
                 let third_value = e.call(AMMO_GET_VALUE_FROM_OBJECT, &args![third]).u32();
                 let factor = e.call(FUNCTION_006479E0, &args![third_value]).f64();
                 let projectiles = e
@@ -995,6 +1015,24 @@ pub fn combat_formulas_calc_weapon_damage(
         * perk_mult as f64) as f32
 }
 
+/// Row S0189.02's lookup, Tweaks' `OnCalcDamageGetProjectile` (`InventoryCalcWeaponDamageUseAmmoFix`):
+/// the projectile (+0xB4) of `ammo` when it is an ammunition form (type 0x29) that has one, else
+/// the weapon's own projectile (+0x118) when set, else `TESObjectWEAP::GetProjectile` (`00525ae0`,
+/// the holder's equipped ammunition's).
+fn calc_damage_projectile(e: &mut Engine, weapon: Ptr, ammo: u32, holder: Ptr) -> Ptr {
+    if ammo != 0 && e.mem.u8(ammo + 4) == FORM_TYPE_AMMO {
+        let projectile = e.mem.u32(ammo + 0xb4);
+        if projectile != 0 {
+            return Ptr::new(projectile);
+        }
+    }
+    let projectile = e.mem.u32(weapon.addr() + 0x118);
+    if projectile != 0 {
+        return Ptr::new(projectile);
+    }
+    combat_formulas_get_arm_condition(e, weapon, holder)
+}
+
 /// `player + 0xa4` without the null test (the exe adds the offset to the global directly).
 fn actor_value_owner_unchecked(actor: Ptr) -> Ptr {
     Ptr::new(actor.addr().wrapping_add(ACTOR_VALUE_OWNER))
@@ -1023,6 +1061,14 @@ pub fn combat_formulas_calc_weapon_damage_for_display(
 ) -> f32 {
     let holder = actor_value_owner(player(e));
     let condition_copy = x87_quiet(condition);
+    // lStewieAl's Tweaks' row S0189.01 (`InventoryCalcWeaponDamageUseAmmoFix`, the pushes at
+    // `0x6451B6` and `0x645216`): Tweaks' `OnGetWeaponDamagePushAmmoHook` passes the ammunition as
+    // `CalcWeaponDamage`'s unused word at +0x18, where the exe pushes 0.
+    let ammo_word = if e.stewie(engine_core::extend::stewie::WEAPON_DAMAGE_DISPLAY_AMMO) {
+        ammo.addr()
+    } else {
+        0
+    };
     // The damage figure's own result is overwritten below; only its call matters.
     e.call(
         WEAPON_DAMAGE_FIGURE,
@@ -1054,7 +1100,7 @@ pub fn combat_formulas_calc_weapon_damage_for_display(
             weapon,
             condition_copy,
             1.0,
-            0,
+            ammo_word,
             false,
             item_change,
             !ammo.is_null(),
@@ -1069,7 +1115,7 @@ pub fn combat_formulas_calc_weapon_damage_for_display(
             weapon,
             condition_copy,
             1.0,
-            0,
+            ammo_word,
             false,
             item_change,
             !ammo.is_null(),
@@ -2182,7 +2228,16 @@ pub fn combat_formulas_get_vats_chance_to_hit(
                     target_area = (target_area as f64 * destructible_mult as f64) as f32;
                 }
             }
-            let mut range_spread = 0.0f32;
+            // lStewieAl's Tweaks' row S0055 (`patchFixZeroSpreadZeroVATSChance`, the call at
+            // `0x64747B`): Tweaks' `VATSInitSpreadChanceHook` starts the range spread at
+            // `fVATSRangeSpreadMax` (its value at `011cfe54`) instead of 0.0, so a weapon with no
+            // spread (no circle to compare) keeps a chance instead of 0.
+            let mut range_spread = if e.stewie(engine_core::extend::stewie::ZERO_SPREAD_VATS_CHANCE)
+            {
+                x87_quiet(e.mem.f32(SETTING_VATS_RANGE_SPREAD_MAX + 4))
+            } else {
+                0.0f32
+            };
             if x87_compare(area as f64, zero) & 0x41 == 0 {
                 let spread_max = setting(e, SETTING_VATS_RANGE_SPREAD_MAX);
                 let ratio = (target_area as f64 / area as f64) as f32;
@@ -3031,6 +3086,183 @@ mod tests {
             )
             .f32();
         assert_eq!(damage, expected);
+    }
+
+    /// The damage a menu shows (`006450f0`) for a gun whose equipped ammunition's projectile is
+    /// 0x5000 (explosion value 3) while the menu entry's ammunition (type 0x29) has the projectile
+    /// 0x6000 (explosion value 7); the factor `006479e0` answers the value. Rows S0189.01 (`one`)
+    /// and S0189.02 (`two`) as given; `weapon_projectile` is the weapon's own (+0x118). Answers the
+    /// shown damage, the projectiles whose explosion was asked, and how often `00525a90` was asked.
+    fn s0189_shown(one: bool, two: bool, weapon_projectile: u32) -> (f32, Vec<u32>, usize) {
+        s0189_shown_with(one, two, weapon_projectile, 0x29, false)
+    }
+
+    /// [`s0189_shown`] with the entry's "ammunition" of form type `ammo_type` (a throwing weapon's is
+    /// the weapon itself, type 0x28, whose word at +0xB4 is no projectile) and, when `flagged`, a
+    /// melee weapon (type 1) with the flag at +0x100 bit 1: the display's other `CalcWeaponDamage`
+    /// call (`0x6451B6`), the flag cleared around it.
+    fn s0189_shown_with(
+        one: bool,
+        two: bool,
+        weapon_projectile: u32,
+        ammo_type: u8,
+        flagged: bool,
+    ) -> (f32, Vec<u32>, usize) {
+        let (mut e, _) = damage_world();
+        let player = object(&mut e, 0x400);
+        e.mem.set_u32(player.addr() + 0xa4, FAKE_TABLE);
+        e.set_global(PLAYER_REFERENCE, player);
+        returns_f32(&mut e, WEAPON_DAMAGE_FIGURE, 3.0);
+        e.register(HANDLE_ENTRY_POINT, |_, _| Ret::default());
+        e.register(APPLY_PERK_ENTRY_FLOAT, |_, a| {
+            f32::from_bits(a[2]).into_ret()
+        });
+        e.register(FUNCTION_00923000, |_, a| (a[0] + 0xd4).into_ret());
+        e.set_global(SETTING_DAMAGE_SKILL_BASE, 0.25f32);
+        e.set_global(SETTING_DAMAGE_SKILL_MULT, 0.5f32);
+        let weapon = object_with_vtable(&mut e, 0x1000);
+        e.mem
+            .set_u8(weapon.addr() + 0xf4, if flagged { 1 } else { 3 });
+        e.mem.set_u32(weapon.addr() + 0x118, weapon_projectile);
+        let sub_object = weapon.addr() + 0x9c;
+        e.mem.set_u32(sub_object, FAKE_TABLE + 0x1000);
+        returns_u32(&mut e, FAKE_SLOT_10, 1);
+        returns_u32(&mut e, WEAPON_GET_TYPE, if flagged { 1 } else { 3 });
+        returns_u32(&mut e, WEAPON_GET_SKILL, 0x20);
+        returns_u32(&mut e, WEAPON_GET_AMMO_OBJECT, 0x5000);
+        e.register(AMMO_GET_VALUE_FROM_OBJECT, |_, a| {
+            u32::from(match a[0] {
+                0x5000 => 3u8,
+                0x6000 => 7,
+                _ => 5,
+            })
+            .into_ret()
+        });
+        e.register(FUNCTION_006479E0, |_, a| (a[0] as f32).into_ret());
+        returns_u32(&mut e, WEAPON_GET_NUM_PROJECTILES, 2);
+        returns_u32(&mut e, WEAPON_FLAG_TEST, u32::from(flagged));
+        returns_u32(&mut e, FUNCTION_00525430, 0);
+        returns_f32(&mut e, FUNCTION_0084D030, 1.0);
+        let ammo = object(&mut e, 0x200);
+        e.mem.set_u8(ammo.addr() + 4, ammo_type);
+        e.mem.set_u32(ammo.addr() + 0xb4, 0x6000);
+        e.set_stewie(engine_core::extend::stewie::WEAPON_DAMAGE_DISPLAY_AMMO, one);
+        e.set_stewie(
+            engine_core::extend::stewie::WEAPON_DAMAGE_AMMO_PROJECTILE,
+            two,
+        );
+        e.call_log = Some(vec![]);
+        let shown = e
+            .call(0x0064_50f0, &args![weapon, 1.0f32, 0u32, ammo])
+            .f32();
+        let log = e.call_log.take().unwrap();
+        let asked: Vec<u32> = log
+            .iter()
+            .filter(|c| c.0 == AMMO_GET_VALUE_FROM_OBJECT)
+            .map(|c| c.1[0])
+            .collect();
+        let lookups = log.iter().filter(|c| c.0 == WEAPON_GET_AMMO_OBJECT).count();
+        (shown, asked, lookups)
+    }
+
+    /// S0189.02's ammunition-type test: a throwing weapon's "ammunition" is the weapon itself (form
+    /// type 0x28), whose word at +0xB4 (here 0x6000) is no projectile. With both rows the explosion
+    /// is asked of the weapon's own projectile (0x7000) or, without one, of `00525a90`'s answer
+    /// (0x5000, asked once and reused), never of that word.
+    #[test]
+    fn s0189_a_throwing_weapons_own_form_is_not_read_as_ammunition() {
+        let (_, asked, lookups) = s0189_shown_with(true, true, 0, 0x28, false);
+        assert_eq!((asked, lookups), (vec![0x5000, 0x5000], 2));
+        let (_, asked, lookups) = s0189_shown_with(true, true, 0x7000, 0x28, false);
+        assert_eq!((asked, lookups), (vec![0x7000, 0x7000], 0));
+    }
+
+    /// The display's other `CalcWeaponDamage` call (`0x6451B6`): a melee weapon with the flag at
+    /// +0x100 bit 1. Off, the explosion of the equipped ammunition's projectile (0x5000); with both
+    /// rows, that of the listed ammunition's (0x6000).
+    #[test]
+    fn s0189_the_flagged_weapons_call_passes_the_ammunition_too() {
+        let (_, asked, _) = s0189_shown_with(false, false, 0, 0x29, true);
+        assert_eq!(asked, vec![0x5000, 0x5000]);
+        let (_, asked, _) = s0189_shown_with(true, true, 0, 0x29, true);
+        assert_eq!(asked, vec![0x6000, 0x6000]);
+    }
+
+    /// S0189.02 for `CalcWeaponDamage`'s other callers (`GetModifiedAttackDamage` `004bdf71`,
+    /// `GetDesirability`): the word at +0x18 is 0, the owner an actor's, the weapon has its own
+    /// projectile (0x7000, explosion value 5) and the equipped ammunition another (0x5000, value 3,
+    /// through `00525a90`). Off, the hit's damage counts the equipped ammunition's explosion; with the
+    /// row, the weapon's own, as with Tweaks (its lookup takes the weapon's projectile first when no
+    /// ammunition is passed).
+    #[test]
+    fn s0189_02_a_hit_counts_the_weapons_own_projectile() {
+        let mut damages = vec![];
+        for (two, projectile) in [(false, 0x5000u32), (true, 0x7000)] {
+            let (mut e, owner) = damage_world();
+            e.set_global(SETTING_DAMAGE_SKILL_BASE, 0.25f32);
+            e.set_global(SETTING_DAMAGE_SKILL_MULT, 0.5f32);
+            let weapon = object_with_vtable(&mut e, 0x1000);
+            e.mem.set_u8(weapon.addr() + 0xf4, 3);
+            e.mem.set_u32(weapon.addr() + 0x118, 0x7000);
+            e.mem.set_u32(weapon.addr() + 0x9c, FAKE_TABLE + 0x1000);
+            returns_u32(&mut e, FAKE_SLOT_10, 1);
+            returns_u32(&mut e, WEAPON_GET_TYPE, 3);
+            returns_u32(&mut e, WEAPON_GET_SKILL, 0x20);
+            returns_u32(&mut e, WEAPON_GET_AMMO_OBJECT, 0x5000);
+            e.register(AMMO_GET_VALUE_FROM_OBJECT, |_, a| {
+                u32::from(match a[0] {
+                    0x5000 => 3u8,
+                    0x7000 => 5,
+                    _ => 9,
+                })
+                .into_ret()
+            });
+            e.register(FUNCTION_006479E0, |_, a| (a[0] as f32).into_ret());
+            returns_u32(&mut e, WEAPON_GET_NUM_PROJECTILES, 1);
+            returns_u32(&mut e, WEAPON_FLAG_TEST, 0);
+            e.set_stewie(
+                engine_core::extend::stewie::WEAPON_DAMAGE_AMMO_PROJECTILE,
+                two,
+            );
+            e.call_log = Some(vec![]);
+            let damage = e
+                .call(
+                    0x0064_4ce0,
+                    &args![owner, weapon, 1.0f32, 1.0f32, 0u32, false, 0u32, true],
+                )
+                .f32();
+            let log = e.call_log.take().unwrap();
+            let asked: Vec<u32> = log
+                .iter()
+                .filter(|c| c.0 == AMMO_GET_VALUE_FROM_OBJECT)
+                .map(|c| c.1[0])
+                .collect();
+            assert_eq!(asked, vec![projectile, projectile], "row {two}");
+            damages.push(damage);
+        }
+        assert!(damages[1] > damages[0], "{damages:?}");
+    }
+
+    /// S0189.01 and S0189.02 (`InventoryCalcWeaponDamageUseAmmoFix`): off, the shown damage takes
+    /// the explosion of the equipped ammunition's projectile (asked three times through
+    /// `00525a90`); with both rows, that of the entry's own ammunition, asked once and reused, so
+    /// a bigger explosion (7 against 3) shows a bigger figure. S0189.02 alone has no ammunition to
+    /// read and falls back to the weapon's own projectile, then to `00525a90` (twice: the reuse).
+    #[test]
+    fn s0189_the_shown_damage_uses_the_entrys_ammunition() {
+        let (off, asked, lookups) = s0189_shown(false, false, 0);
+        assert_eq!((asked, lookups), (vec![0x5000, 0x5000], 3));
+        let (on, asked, lookups) = s0189_shown(true, true, 0);
+        assert_eq!((asked, lookups), (vec![0x6000, 0x6000], 0));
+        assert!(on > off, "{on} > {off}");
+        let (one_only, asked, _) = s0189_shown(true, false, 0);
+        assert_eq!(asked, vec![0x5000, 0x5000]);
+        assert_eq!(one_only, off);
+        let (_, asked, lookups) = s0189_shown(false, true, 0x7000);
+        assert_eq!((asked, lookups), (vec![0x7000, 0x7000], 0));
+        let (two_only, asked, lookups) = s0189_shown(false, true, 0);
+        assert_eq!((asked, lookups), (vec![0x5000, 0x5000], 2));
+        assert_eq!(two_only, off);
     }
 
     /// The damage a menu shows (`006450f0`) for the gun of `calc_weapon_damage_for_a_gun_with_ammunition`
@@ -3890,6 +4122,36 @@ mod tests {
             formats,
             vec![LOG_BOUND_SIZE, LOG_SPREAD_FACTOR, LOG_TARGET_AREA]
         );
+    }
+
+    /// S0055 (`patchFixZeroSpreadZeroVATSChance`): a gun with no spread at all (its spread 0.0, so
+    /// no circle to compare with the target). Off, the range spread stays 0.0 and the chance is
+    /// 0; on, it starts at `fVATSRangeSpreadMax` (2.0, the exe's default, read from the
+    /// setting's value at +4) and the chance is 2.0 x the other factors (1 here): 2 percent.
+    /// A gun with a spread is unchanged.
+    #[test]
+    fn s0055_a_gun_with_no_spread_keeps_a_vats_chance() {
+        for (on, spread, expected) in [(false, 0.0f32, 0.0f32), (true, 0.0, 0.02)] {
+            let mut v = vats();
+            v.e.set_stewie(engine_core::extend::stewie::ZERO_SPREAD_VATS_CHANCE, on);
+            v.e.set_global(SETTING_VATS_RANGE_SPREAD_MAX + 4, 2.0f32);
+            v.e.mem.set_u8(v.weapon.addr() + 0xf4, 3);
+            returns_f32(&mut v.e, WEAPON_GET_SPREAD, spread);
+            v.e.register(FUNCTION_0057DD70, |_, a| f32::from_bits(a[0]).into_ret());
+            assert_eq!(vats_call(&mut v, false, 100.0, 60.0), expected, "on {on}");
+        }
+        let mut chances = vec![];
+        for on in [false, true] {
+            let mut v = vats();
+            v.e.set_stewie(engine_core::extend::stewie::ZERO_SPREAD_VATS_CHANCE, on);
+            v.e.set_global(SETTING_VATS_RANGE_SPREAD_MAX + 4, 2.0f32);
+            v.e.mem.set_u8(v.weapon.addr() + 0xf4, 3);
+            returns_f32(&mut v.e, WEAPON_GET_SPREAD, 10.0);
+            v.e.register(FUNCTION_0057DD70, |_, a| f32::from_bits(a[0]).into_ret());
+            chances.push(vats_call(&mut v, false, 100.0, 60.0));
+        }
+        assert_eq!(chances[0], chances[1]);
+        assert!(chances[0] > 0.0);
     }
 
     #[test]
