@@ -126,6 +126,9 @@ const TRAIT_0X1772: i32 = 0x1772;
 /// Offset of the embedded text editor.
 const EDITOR: u32 = 0x34;
 
+/// The seam at the click handler's start (JIP LN NVSE's `TextInputClose`).
+const JIP_TEXT_INPUT_CLOSE: u32 = 0x007e_66a0;
+
 layout! {
     /// The text edit menu. Tile pointers: +0x28 receives the starting text
     /// and shows the editor text, +0x2c has a game setting as its text and
@@ -330,7 +333,18 @@ pub fn fn_007e6620(e: &mut Engine, this: Ptr<TextEditMenu>, key: u32) -> bool {
 /// text in the global string at `011daed8` and closes the menu. The second
 /// word (the clicked tile, substituted from the first three tiles when 0)
 /// is not used afterwards.
-pub fn fn_007e66a0(e: &mut Engine, this: Ptr<TextEditMenu>, button: i32, _unused_1: u32) {
+///
+/// `0x7E66A0` (JIP LN NVSE's `TextInputClose`, a jump at this function's
+/// start while JIP's text input menu is open): the seam is asked first with
+/// the menu, the button and the tile, and an answer replaces the whole
+/// function. While the hook has no user: one load.
+pub fn fn_007e66a0(e: &mut Engine, this: Ptr<TextEditMenu>, button: i32, tile: u32) {
+    if e.hook_users(engine_core::extend::Hook::TextInputClose) != 0
+        && e.site(JIP_TEXT_INPUT_CLOSE, &[this.addr(), button as u32, tile])
+            .is_some()
+    {
+        return;
+    }
     if button == 1 {
         let text = e.call(EDITOR_TEXT, &args![this.addr() + EDITOR]).u32();
         e.call(STRING_ASSIGN, &args![ENTERED_TEXT, text, 0u32]);
@@ -624,6 +638,43 @@ mod tests {
         );
         assert_eq!(calls(&e, MENU_START_FADE_OUT).len(), 1);
         assert_eq!(e.global::<u32>(TEXT_EDIT_MENU), 0);
+    }
+
+    thread_local! {
+        static ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn takes_the_click(_: &mut Engine, words: &[u32]) -> Option<u32> {
+        ASKED.with(|a| a.borrow_mut().push(words.to_vec()));
+        Some(0)
+    }
+
+    /// JIP's `TextInputClose` seam (`0x7E66A0`): asked first with the menu, the button and the
+    /// tile while the hook has a user, and its answer replaces the function (no text stored, no
+    /// close); with no user it is not asked and the exe's click runs.
+    #[test]
+    fn jips_text_input_close_seam_replaces_the_click() {
+        use engine_core::extend::Hook;
+        let mut e = engine();
+        let this = menu(&mut e);
+        e.set_global(TEXT_EDIT_MENU, this.addr());
+        e.on_site_for_test(JIP_TEXT_INPUT_CLOSE, takes_the_click);
+        ASKED.with(|a| a.borrow_mut().clear());
+        e.set_hook_users(Hook::TextInputClose, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x007e_66a0, &args![this, 1i32, 0x5150u32]);
+        assert_eq!(
+            ASKED.with(|a| a.borrow().clone()),
+            vec![vec![this.addr(), 1, 0x5150]]
+        );
+        assert!(calls(&e, STRING_ASSIGN).is_empty());
+        assert_eq!(e.global::<u32>(TEXT_EDIT_MENU), this.addr());
+        e.set_hook_users(Hook::TextInputClose, 0);
+        e.call(0x007e_66a0, &args![this, 1i32, 0x5150u32]);
+        assert_eq!(ASKED.with(|a| a.borrow().len()), 1);
+        assert_eq!(calls(&e, STRING_ASSIGN).len(), 1);
+        assert_eq!(e.global::<u32>(TEXT_EDIT_MENU), 0);
+        assert_eq!(JIP_TEXT_INPUT_CLOSE, 0x007e_66a0);
     }
 
     #[test]

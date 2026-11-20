@@ -1,7 +1,7 @@
 [package]
 name = "nvinspect"
 version = "0.1.0"
-description = "The repository's checks: tests/repo_hygiene.rs (what must never be committed)"
+description = "The repository's checks: tests/repo_hygiene.rs (what must never be committed) and vcall-words (virtual calls' argument words against the contributor's own exe)"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true

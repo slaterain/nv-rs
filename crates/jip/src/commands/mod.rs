@@ -44,7 +44,9 @@ pub mod jip_fn_light;
 pub mod jip_fn_linked_ref;
 pub mod jip_fn_marker_cmds;
 pub mod jip_fn_minimap;
+pub mod jip_fn_minimap_fog;
 pub mod jip_fn_minimap_seams;
+pub mod jip_fn_minimap_update;
 pub mod jip_fn_misc_ref;
 pub mod jip_fn_misc_ref_cameras;
 pub mod jip_fn_misc_ref_code;
@@ -80,6 +82,7 @@ pub mod jip_fn_ui_cursor;
 pub mod jip_fn_ui_menus;
 pub mod jip_fn_ui_nodes;
 pub mod jip_fn_ui_project;
+pub mod jip_fn_ui_text;
 pub mod jip_fn_utility;
 pub mod jip_fn_utility_patches;
 pub mod jip_fn_water;
@@ -278,6 +281,11 @@ pub const ALL: &[Handlers] = &[
     jip_fn_miscellaneous_depth::COMMANDS,
     // `InitMiniMap` (JIP MiniMap's start; its patches in `jip_fn_minimap_seams`).
     jip_fn_minimap::COMMANDS,
+    // `UpdateMiniMap` (its fog of war in `jip_fn_minimap_fog`).
+    jip_fn_minimap_update::COMMANDS,
+    // `ShowTextInputMenu`, `SetTextInputExtendedProps`, `SetTextInputString` (with JIP's text
+    // input hooks).
+    jip_fn_ui_text::COMMANDS,
 ];
 
 /// How many of JIP's commands have a handler.
@@ -312,6 +320,7 @@ pub fn install(e: &mut Engine) {
     e.ext_free::<jip_fn_ui::ItemListRefresh>();
     jip_fn_ui::install(e);
     jip_fn_ui_menus::install(e);
+    jip_fn_ui_text::install(e);
     jip_fn_misc_ref_insert::install(e);
     jip_fn_misc_ref_lines::install(e);
     jip_fn_actor_p2::install(e);
@@ -952,6 +961,10 @@ mod tests {
             "jip_fn_miscellaneous",
             // jip_fn_minimap (InitMiniMap).
             "jip_fn_minimap",
+            // jip_fn_minimap_update (UpdateMiniMap).
+            "jip_fn_minimap",
+            // jip_fn_ui_text (ShowTextInputMenu and the two text input setters).
+            "jip_fn_ui",
         ];
         assert_eq!(files.len(), ALL.len(), "one file per command list");
         let mut seen = std::collections::HashSet::new();
@@ -1005,8 +1018,11 @@ mod tests {
         // opcode: `ui_hooks::tests::the_readme_counts_the_built_commands`.
     }
 
-    /// Answering "installed", a built command has its execute and its name in its record; an
-    /// unbuilt one has neither.
+    /// Answering "installed", a built command has its execute and its name in its record, and since
+    /// `UpdateMiniMap` every JIP command and condition is built: no slot but the empty ones is
+    /// without its handler. An unbuilt one's record (what the table alone writes, before a
+    /// command's handlers: the state every JIP command was in until it was built) has its name and
+    /// neither handler.
     #[test]
     fn built_commands_are_in_the_table() {
         let e = test_support::engine();
@@ -1017,8 +1033,28 @@ mod tests {
             nvse::table::guest_text(&e, e.mem.u32(record)),
             b"GetClimateSunTexture"
         );
-        // UpdateMiniMap is not built (it comes with the minimap's second part): no handler.
-        assert_eq!(execute(&e, 0x2874), 0);
+        for slot in crate::slots::SLOTS.iter() {
+            let record = nvse::table::record_of(&e, slot.opcode);
+            let eval = e.mem.u32(record + 0x20);
+            match slot.kind {
+                crate::table::Kind::Empty => {}
+                crate::table::Kind::ConditionOnly => assert_ne!(eval, 0, "{:04x}", slot.opcode),
+                crate::table::Kind::Condition => {
+                    assert_ne!(execute(&e, slot.opcode), 0, "{:04x}", slot.opcode);
+                    assert_ne!(eval, 0, "{:04x}", slot.opcode);
+                }
+                _ => assert_ne!(execute(&e, slot.opcode), 0, "{:04x} not built", slot.opcode),
+            }
+        }
+        let mut unbuilt = test_support::engine();
+        crate::table::install(&mut unbuilt, true);
+        assert_eq!(execute(&unbuilt, 0x2874), 0);
+        let record = nvse::table::record_of(&unbuilt, 0x2874);
+        assert_eq!(
+            nvse::table::guest_text(&unbuilt, unbuilt.mem.u32(record)),
+            b"UpdateMiniMap"
+        );
+        assert_eq!(unbuilt.mem.u32(record + 0x20), 0);
     }
 
     /// Answering "not installed" (players' state until step 3.10), every opcode built here is as

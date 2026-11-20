@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["viewer", "crates/engine", "crates/engine-core", "crates/nvse", "crates/jip", "crates/johnnyguitar", "crates/uio", "crates/stewie", "crates/mcm", "crates/engine-platform", "crates/engine-typed", "crates/engine-gamebryo", "crates/engine-bs", "crates/engine-havok", "crates/engine-speedtree", "crates/engine-fallout-facegen", "crates/engine-fallout-script", "crates/engine-fallout-pathfinding", "crates/engine-fallout-env", "crates/engine-fallout-cell", "crates/engine-fallout-forms", "crates/engine-fallout-magic", "crates/engine-fallout-interface", "crates/engine-fallout-ai", "crates/engine-fallout-unplaced-a", "crates/engine-fallout-unplaced-b", "crates/engine-fallout-misc", "crates/frame-model", "crates/d3d9-stream", "crates/qos", "crates/d3d9-wgpu", "crates/d3dx-tex", "crates/host", "crates/game-folders", "crates/fomod", "crates/mod-archive", "crates/mod-install", "crates/mod-chooser", "crates/game-profile", "crates/nv-launcher", "crates/play-patch", "crates/esm", "crates/bsa", "crates/fos", "crates/mp3", "crates/vorbis", "crates/bink", "crates/nvinspect"]
+members = ["viewer", "crates/engine", "crates/engine-core", "crates/nvse", "crates/jip", "crates/johnnyguitar", "crates/uio", "crates/stewie", "crates/mcm", "crates/engine-platform", "crates/engine-typed", "crates/engine-gamebryo", "crates/engine-bs", "crates/engine-havok", "crates/engine-speedtree", "crates/engine-fallout-facegen", "crates/engine-fallout-script", "crates/engine-fallout-pathfinding", "crates/engine-fallout-env", "crates/engine-fallout-cell", "crates/engine-fallout-forms", "crates/engine-fallout-magic", "crates/engine-fallout-interface", "crates/engine-fallout-ai", "crates/engine-fallout-unplaced-a", "crates/engine-fallout-unplaced-b", "crates/engine-fallout-misc", "crates/frame-model", "crates/d3d9-stream", "crates/qos", "crates/ds-mix", "crates/d3d9-wgpu", "crates/d3dx-tex", "crates/host", "crates/game-folders", "crates/fomod", "crates/mod-archive", "crates/mod-install", "crates/mod-chooser", "crates/game-profile", "crates/nv-launcher", "crates/play-patch", "crates/esm", "crates/bsa", "crates/fos", "crates/mp3", "crates/vorbis", "crates/bink", "crates/nvinspect"]
 # Vendored third-party crates (vendor/README.md): dependencies, not members, so the workspace's
 # fmt, clippy and tests leave their code as published.
 exclude = ["vendor"]
@@ -33,6 +33,11 @@ codegen-units = 256
 # The platform layer (engine-core's `units/platform/` until 2026-11-05): built as engine-core is,
 # incremental's units again over the release profile's one.
 [profile.play.package.engine-platform]
+opt-level = 1
+codegen-units = 256
+
+# DirectSound's mixer (engine-platform's modules until 2026-11-20): built as the platform layer is.
+[profile.play.package.ds-mix]
 opt-level = 1
 codegen-units = 256
 
@@ -120,6 +125,9 @@ opt-level = 3
 [profile.play-fast.package.engine-platform]
 opt-level = 3
 
+[profile.play-fast.package.ds-mix]
+opt-level = 3
+
 [profile.play-fast.package.engine-gamebryo]
 opt-level = 3
 
@@ -204,6 +212,9 @@ codegen-units = 1
 [profile.play-opt.package.engine-platform]
 codegen-units = 1
 
+[profile.play-opt.package.ds-mix]
+codegen-units = 1
+
 # The playtest packages (`scripts/package-playtest.ps1`) build `--release`: engine-core as one
 # code-generation unit there too, as in play-opt, the build the frame rates are measured on
 # (2026-10-30).
@@ -211,4 +222,7 @@ codegen-units = 1
 codegen-units = 1
 
 [profile.release.package.engine-platform]
+codegen-units = 1
+
+[profile.release.package.ds-mix]
 codegen-units = 1
