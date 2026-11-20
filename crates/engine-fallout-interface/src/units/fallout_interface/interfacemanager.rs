@@ -4542,7 +4542,12 @@ pub fn interface_manager_display_current_pick_ref(e: &mut Engine, this: Ptr<Inte
             e.call(SET_PICK_REF_DISPLAY, &args![this, pick]);
             e.set(this, InterfaceManager::pPickRef, pick);
             let form_id = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, pick));
-            let name = e.call(REFR_NAME, &args![pick]).u32();
+            // JohnnyGuitar NVSE's seam at the call `0x710BFC` (the editor id for a reference with
+            // no name, while its row is on).
+            let name = match e.site(0x0071_0bfc, &[pick]) {
+                Some(name) => name,
+                None => e.call(REFR_NAME, &args![pick]).u32(),
+            };
             e.call(
                 FORMAT_INTO_STRING,
                 &args![text, FORMAT_NAME_AND_ID, name, form_id],

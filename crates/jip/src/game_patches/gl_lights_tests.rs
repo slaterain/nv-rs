@@ -340,6 +340,35 @@ fn h04_set_editor_id_registers_the_form() {
     assert!(calls(MAP_NEW_NODE).is_empty());
 }
 
+/// With JohnnyGuitar's editor ids on (their row): the game's map is not touched; the name goes
+/// to their store (found by name, case-blind, by JIP's lookup too) and +0xC8 holds its copy in
+/// the game's memory, which the getter answers. An empty text stores nothing; true either way.
+#[test]
+fn h04_set_editor_id_with_johnnyguitars_editor_ids() {
+    let mut e = world();
+    let map = editor_map(&mut e, &[]);
+    let count = e.mem.u32(map + 0xc);
+    engine_core::editor_ids::store(&mut e).set_on(true);
+    let form = e.mem.alloc(LIGHT_FORM_BYTES);
+    let name = text(&mut e, "MyLamp");
+    assert_eq!(e.call(SET_EDITOR_ID_ROUTINE, &args![form, name]).u32(), 1);
+    assert!(calls(MAP_NEW_NODE).is_empty() && calls(MAP_SET).is_empty());
+    assert_eq!(e.mem.u32(map + 0xc), count, "the game's map unchanged");
+    let key = e.mem.u32(form + FORM_EDITOR_ID);
+    assert_eq!(e.mem.cstr(key), b"MyLamp");
+    assert_eq!(e.call(GET_EDITOR_ID_ROUTINE, &args![form]).u32(), key);
+    let lower = text(&mut e, "mylamp");
+    assert_eq!(editor_id_lookup_at(&mut e, lower), form);
+    assert_eq!(
+        engine_core::editor_ids::store(&mut e).lookup(b"MYLAMP"),
+        form
+    );
+    let other = e.mem.alloc(LIGHT_FORM_BYTES);
+    let empty = text(&mut e, "");
+    assert_eq!(e.call(SET_EDITOR_ID_ROUTINE, &args![other, empty]).u32(), 1);
+    assert_eq!(e.mem.u32(other + FORM_EDITOR_ID), 0);
+}
+
 // ---- H07 the destructor ----
 
 /// The destructor body always; 0x110 bytes freed with flag bit 0 for a light not of JIP's; a

@@ -76,6 +76,24 @@ fn folded(name: &[u8]) -> Box<[u8]> {
 }
 
 impl Store {
+    /// The bytes its tables take, by capacity (a hash table's slot is its key and value and one
+    /// control byte).
+    fn heap_bytes(&self) -> usize {
+        use std::mem::size_of;
+        let names: usize = self
+            .forms
+            .values()
+            .map(|n| n.list.capacity() * size_of::<Span>())
+            .sum();
+        let clash: usize = self.clash.keys().map(|k| k.len()).sum();
+        self.arena.capacity()
+            + self.forms.capacity() * (size_of::<u32>() + size_of::<Names>() + 1)
+            + names
+            + self.map.capacity() * (size_of::<u64>() + size_of::<(Span, u32)>() + 1)
+            + self.clash.capacity() * (size_of::<Box<[u8]>>() + size_of::<u32>() + 1)
+            + clash
+    }
+
     fn text(&self, s: Span) -> &[u8] {
         &self.arena[s.at as usize..(s.at + s.len) as usize]
     }
@@ -146,6 +164,9 @@ pub struct Counts {
     pub forms: usize,
     pub entries: usize,
     pub arena_bytes: usize,
+    /// What the store holds in all, by its tables' capacities (the arena, each form's names, the
+    /// map with its control bytes): the load's cost in memory.
+    pub heap_bytes: usize,
 }
 
 impl EditorIds {
@@ -311,6 +332,7 @@ impl EditorIds {
             forms: s.forms.len(),
             entries: s.map.len() + s.clash.len(),
             arena_bytes: s.arena.len(),
+            heap_bytes: s.heap_bytes(),
         }
     }
 }
@@ -344,6 +366,135 @@ pub fn guest_text(e: &mut crate::Engine, form: u32) -> u32 {
     e.mem.write(text, &name);
     e.mem.set_u8(text + name.len() as u32, 0);
     store(e).keep_guest_copy(form, text)
+}
+
+// ---- JohnnyGuitar's setter (`TESFormEx::hk_SetFormEditorID`), shared with JIP's light names ----
+
+/// A form's flags (+8: 0x4000 temporary), id (+0xC), files (+0x18, a `tList` of `ModInfo`, its
+/// name at +0x20); the game's form type name (`00440e30`, `thiscall`).
+const FORM_FLAGS: u32 = 0x08;
+const FORM_ID: u32 = 0x0c;
+const FORM_FILES: u32 = 0x18;
+const FILE_NAME: u32 = 0x20;
+const TEMPORARY: u32 = 0x4000;
+const FORM_TYPE_NAME: u32 = 0x0044_0e30;
+/// `IgnoredConflicts`: the form JIP's note calls "Obsidian's", and the name `Wilderness`.
+const IGNORED_FORM_ID: u32 = 0x18e;
+const IGNORED_NAME: &[u8] = b"Wilderness";
+/// The most conflict lines kept for the log (each is also printed when made).
+const MAX_CONFLICT_LINES: usize = 1000;
+
+/// The conflict lines this run logged (`LogEDIDConflict`), the first [`MAX_CONFLICT_LINES`].
+#[derive(Default)]
+pub struct ConflictLog(std::sync::Mutex<Vec<String>>);
+
+/// The lines logged so far.
+pub fn conflict_lines(e: &mut crate::Engine) -> Vec<String> {
+    e.ext_free::<ConflictLog>()
+        .0
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
+}
+
+// Translated from JohnnyGuitar NVSE 5.28 (c87905e), internal/JG/EditorIDRestoration.cpp:
+// TESFormEx::hk_SetFormEditorID.
+/// A form's `SetEditorID` with the store: no text or an empty one is refused; the console's
+/// `SysWindowCompileAndRun` is named `Console Command`; the name added to the form's names, and
+/// when it is new there and the form is neither temporary nor of id 0, put in the map
+/// ([`add_to_game_map`]). Whether the name was new.
+pub fn set_form_editor_id(e: &mut crate::Engine, form: u32, text: u32) -> bool {
+    if text == 0 || e.mem.u8(text) == 0 {
+        return false;
+    }
+    let mut name = e.mem.cstr(text);
+    if name == b"SysWindowCompileAndRun" {
+        name = b"Console Command".to_vec();
+    }
+    if store(e).add_name(form, &name) != SetResult::Success {
+        return false;
+    }
+    if e.mem.u32(form + FORM_FLAGS) & TEMPORARY == 0 && e.mem.u32(form + FORM_ID) != 0 {
+        add_to_game_map(e, form, &name);
+    }
+    true
+}
+
+// Translated from JohnnyGuitar NVSE 5.28 (c87905e), internal/JG/EditorIDRestoration.cpp:
+// AddToGameMap, IgnoredConflicts::IsIgnored.
+/// The name put in the map for `form`. When another form had it: unless that one is id 0x18E or
+/// the name is `Wilderness`, a conflict, logged ([`log_conflict`]), and the name taken off the
+/// other form's names; the map then names `form` either way. Nothing when it named `form` already.
+pub fn add_to_game_map(e: &mut crate::Engine, form: u32, name: &[u8]) {
+    let Some(old) = store(e).map_insert(form, name) else {
+        return;
+    };
+    if old == form {
+        return;
+    }
+    if e.mem.u32(old + FORM_ID) == IGNORED_FORM_ID || name == IGNORED_NAME {
+        return;
+    }
+    log_conflict(e, old, name, form);
+    store(e).remove_name(old, name);
+}
+
+/// A form's file name: its `n`th file (`-1`: its last), "" for none.
+fn file_name(e: &crate::Engine, form: u32, last: bool) -> String {
+    let mut node = form + FORM_FILES;
+    let mut file = 0;
+    let mut steps = 0;
+    while node != 0 && steps < 0x1000 {
+        let data = e.mem.u32(node);
+        if data != 0 {
+            file = data;
+            if !last {
+                break;
+            }
+        }
+        node = e.mem.u32(node + 4);
+        steps += 1;
+    }
+    if file == 0 {
+        return String::new();
+    }
+    String::from_utf8_lossy(&e.mem.cstr(file + FILE_NAME)).into_owned()
+}
+
+fn type_name(e: &mut crate::Engine, form: u32) -> String {
+    let text = e.call(FORM_TYPE_NAME, &[form]).u32();
+    if text == 0 {
+        String::new()
+    } else {
+        String::from_utf8_lossy(&e.mem.cstr(text)).into_owned()
+    }
+}
+
+// Translated from JohnnyGuitar NVSE 5.28 (c87905e), internal/JG/EditorIDRestoration.cpp:
+// LogEDIDConflict.
+/// One conflict line (JG's log's text: the new form's id and last file steal the name from the
+/// old one's id and first file, with both types when they differ), printed, kept for the log and
+/// counted.
+fn log_conflict(e: &mut crate::Engine, old: u32, name: &[u8], form: u32) {
+    let (file_a, file_b) = (file_name(e, form, true), file_name(e, old, false));
+    let (id_a, id_b) = (e.mem.u32(form + FORM_ID), e.mem.u32(old + FORM_ID));
+    let name = String::from_utf8_lossy(name);
+    let mut line =
+        format!("{id_a:08X} (\"{file_a}\") steals EDID \"{name}\" from {id_b:08X} (\"{file_b}\")");
+    if e.mem.u8(form + 4) != e.mem.u8(old + 4) {
+        let (from, to) = (type_name(e, old), type_name(e, form));
+        line.push_str(&format!(" + changes type from {from} to {to}"));
+    }
+    eprintln!("JohnnyGuitar's editor ids: {line}");
+    store(e).count_conflict();
+    let mut lines = e
+        .ext_free::<ConflictLog>()
+        .0
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if lines.len() < MAX_CONFLICT_LINES {
+        lines.push(line);
+    }
 }
 
 #[cfg(test)]

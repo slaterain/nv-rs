@@ -4496,6 +4496,11 @@ fn register_loaded_form(e: &mut Engine, file: Ptr) {
             e.call(SAVE_LOAD_ANNOUNCE, &args![save_load, form]);
         }
     } else {
+        // JohnnyGuitar NVSE's seam at `0x4679F8` (its jump to `0x467A84`): no insertion here
+        // while its row is on, its setter having stored the name.
+        if e.site(0x0046_79f8, &[]).is_some() {
+            return;
+        }
         let id = e.call(FILE_GET_FORM_ID, &args![file]).u32();
         let form = e.call(FORM_BY_ID, &args![id]).u32();
         if form != 0 {
@@ -8158,6 +8163,8 @@ enum GameValue {
 /// word the form is kept in (0: a local).
 struct GlobalValueForm {
     id: u32,
+    /// The call registering it with the editor id map (JohnnyGuitar NVSE's seam there).
+    site: u32,
     editor_id: u32,
     value: GameValue,
     global: u32,
@@ -8169,36 +8176,42 @@ struct GlobalValueForm {
 const GAME_VALUE_FORMS: [GlobalValueForm; 6] = [
     GlobalValueForm {
         id: 0x35,
+        site: 0x0046_ca2b,
         editor_id: 0x0101_8fac,
         value: GameValue::Memory(GAME_YEAR_VALUE),
         global: 0,
     },
     GlobalValueForm {
         id: 0x36,
+        site: 0x0046_cb0d,
         editor_id: 0x0101_8f9c,
         value: GameValue::Memory(GAME_MONTH_VALUE),
         global: 0,
     },
     GlobalValueForm {
         id: 0x37,
+        site: 0x0046_cbef,
         editor_id: 0x0101_8f90,
         value: GameValue::Memory(GAME_DAY_VALUE),
         global: 0,
     },
     GlobalValueForm {
         id: 0x38,
+        site: 0x0046_ccd1,
         editor_id: 0x0101_8f80,
         value: GameValue::Memory(GAME_HOUR_VALUE),
         global: 0,
     },
     GlobalValueForm {
         id: 0x39,
+        site: 0x0046_cdaf,
         editor_id: 0x0101_8f6c,
         value: GameValue::One,
         global: 0,
     },
     GlobalValueForm {
         id: 0x3a,
+        site: 0x0046_ce91,
         editor_id: 0x0101_8f60,
         value: GameValue::Memory(TIME_SCALE_VALUE),
         global: 0,
@@ -8357,8 +8370,11 @@ fn make_global_value_form(e: &mut Engine, this: Ptr<TESDataHandler>, spec: &Glob
     };
     fn_0046dce0(e, Ptr::new(form), value);
     add_form_to_list(e, this, GLOBAL_LIST_ACCESSOR, form, spec.global);
-    let editor_ids = e.global::<u32>(EDITOR_ID_MAP);
-    e.call(EDITOR_ID_MAP_ADD, &args![editor_ids, spec.editor_id, form]);
+    // JohnnyGuitar NVSE's seam at the call (its no-op there: its setter registered the name).
+    if e.site(spec.site, &[]).is_none() {
+        let editor_ids = e.global::<u32>(EDITOR_ID_MAP);
+        e.call(EDITOR_ID_MAP_ADD, &args![editor_ids, spec.editor_id, form]);
+    }
 }
 
 /// A form made without a lookup of a cast type: built when `FORM_BY_ID`
@@ -8543,6 +8559,7 @@ pub fn tes_data_handler_generate_default_objects(e: &mut Engine, this: Ptr<TESDa
         this,
         &GlobalValueForm {
             id: 0x63,
+            site: 0x0046_dc77,
             editor_id: 0x0101_8cb0,
             value: GameValue::Zero,
             global: PLAY_CREDITS_GLOBAL,

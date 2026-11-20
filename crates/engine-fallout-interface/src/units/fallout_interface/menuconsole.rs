@@ -1500,7 +1500,12 @@ fn idle_tag(e: &mut Engine, ebp: u32, interface: u32) {
     let text = at(ebp, frame::TAG_TEXT);
     e.call(STRING_CONSTRUCT, &args![text]);
     let form_id = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, object));
-    let name = e.call(0x0055_d520, &args![object]).u32();
+    // JohnnyGuitar NVSE's seam at the call `0x71B748` (the editor id for a reference with no
+    // name, while its row is on).
+    let name = match e.site(0x0071_b748, &[object]) {
+        Some(name) => name,
+        None => e.call(0x0055_d520, &args![object]).u32(),
+    };
     e.call(STRING_FORMAT, &args![text, TAG_FORMAT, name, form_id]);
     let key = e.vcall(object, 0x1d0, &args![]).u32();
     let mut found = e.call(0x0065_3270, &args![TAG_LOOKUP_TABLE, key]).u32();

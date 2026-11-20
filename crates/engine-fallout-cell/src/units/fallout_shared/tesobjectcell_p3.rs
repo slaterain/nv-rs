@@ -3960,7 +3960,11 @@ pub fn tes_object_cell_save_render_failure_data(e: &mut Engine, record: Ptr) {
             );
         } else {
             let world_space = e.call(CELL_GET_WORLD_SPACE, &args![cell]).u32();
-            let name_pointer = e.call(CELL_NAME_POINTER, &args![cell]).u32();
+            // JohnnyGuitar NVSE's getter seam at the call `0x558796`.
+            let name_pointer = match e.site(0x0055_8796, &[cell]) {
+                Some(name) => name,
+                None => e.call(CELL_NAME_POINTER, &args![cell]).u32(),
+            };
             if e.mem.u8(name_pointer) != 0 {
                 let cell_name = e.vcall(cell, NAME_SLOT, &[]).u32();
                 let y = e.call(CELL_GET_DATA_Y, &args![cell]).u32();

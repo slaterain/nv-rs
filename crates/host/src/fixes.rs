@@ -43,6 +43,7 @@ pub static FIXES: &[Fix] = &[
     JIP_COSAVE_FIXES,
     JIP_VANILLA_COMMANDS,
     JIP_GAME_PATCHES,
+    JG_EDITOR_IDS,
     MCM,
     STEWIE,
     UIO,
@@ -477,6 +478,23 @@ fn install_uio(e: &mut Engine) {
 /// lists it as "lStewieAl's Tweaks" 1005. On in the fixes preset, off in vanilla. The row sets a flag;
 /// `stewie::install` (after JIP and MCM, before UIO, in `install_rows_and_extenders`) reads the
 /// settings and sets the rows' bits.
+/// JohnnyGuitar NVSE's editor-id restoration built in (`crates/johnnyguitar`), a flag the crate
+/// reads at its install: every loaded form keeps the editor id its record gives it, so text
+/// compiled while the game runs (the console, script runner files, `CompileScript`, lambdas from
+/// text) finds `PlayerRef` or `Caps001` by name, as with JohnnyGuitar installed (VNV installs it).
+/// Off (vanilla): the game's own few names, as without JohnnyGuitar.
+pub const JG_EDITOR_IDS: Fix = Fix {
+    name: "JohnnyGuitar's editor ids",
+    env: "NV_JG_EDITOR_IDS",
+    addresses: &[],
+    summary: "JohnnyGuitar NVSE's editor ids built in: every form keeps its editor id, so the console, script runner files and scripts compiled from text find forms such as PlayerRef by name, as on a VNV setup",
+    install: install_jg_editor_ids,
+};
+
+fn install_jg_editor_ids(e: &mut Engine) {
+    johnnyguitar::set_on(e, true);
+}
+
 pub const STEWIE: Fix = Fix {
     name: "lStewieAl's Tweaks built in",
     env: "NV_STEWIE",
@@ -524,6 +542,7 @@ const NO_ADDRESS: &[&str] = &[
     JIP_COSAVE_FIXES.name,
     JIP_VANILLA_COMMANDS.name,
     JIP_GAME_PATCHES.name,
+    JG_EDITOR_IDS.name,
     MCM.name,
     STEWIE.name,
     UIO.name,

@@ -307,6 +307,20 @@ fn editor_id(e: &mut Engine, w: &[u32]) -> Ret {
 /// through null.
 fn set_editor_id(e: &mut Engine, w: &[u32]) -> Ret {
     let (form, text) = (w[0], w[1]);
+    // JohnnyGuitar's editor ids (their row on): the game's map is not used; the name goes to
+    // their store and its map (newest first, as JIP's insertion at the bucket's head), and +0xC8
+    // to its copy in the game's memory.
+    if engine_core::editor_ids::on(e) {
+        if text != 0 && e.mem.u8(text) != 0 {
+            let name = e.mem.cstr(text);
+            let store = engine_core::editor_ids::store(e);
+            store.add_name(form, &name);
+            store.map_insert(form, &name);
+            let key = engine_core::editor_ids::guest_text(e, form);
+            e.mem.set_u32(form.wrapping_add(FORM_EDITOR_ID), key);
+        }
+        return 1u32.into_ret();
+    }
     let map = e.mem.u32(EDITOR_IDS_MAP);
     if map == 0 {
         return 1u32.into_ret();

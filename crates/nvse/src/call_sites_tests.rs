@@ -495,3 +495,25 @@ fn a_repair_raises_on_repair_with_an_inventory_reference() {
     let entry = r.data.entry;
     assert_eq!(e.mem.u32(entry + 4), 3, "the entry's count");
 }
+
+/// A form destroyed or a reference trashed with JohnnyGuitar's editor ids on: its names leave
+/// their store and map (`JohnnyExtraData::OnRemoval`); with them off the store is not touched.
+#[test]
+fn a_gone_form_loses_its_editor_ids() {
+    for on in [true, false] {
+        let mut e = sites();
+        let store = engine_core::editor_ids::store(&mut e);
+        store.set_on(on);
+        for (form, name) in [(REF_1, &b"GoneRef"[..]), (CELL, b"GoneCell")] {
+            store.add_name(form, name);
+            store.map_insert(form, name);
+        }
+        e.site(call_sites::FORM_DESTROYED.addr(), &[CELL]);
+        e.site(call_sites::REFERENCE_TRASHED.addr(), &[REF_1]);
+        let store = engine_core::editor_ids::store(&mut e);
+        let want = |form: u32| if on { 0 } else { form };
+        assert_eq!(store.lookup(b"GoneCell"), want(CELL), "{on}");
+        assert_eq!(store.lookup(b"GoneRef"), want(REF_1), "{on}");
+        assert_eq!(store.name(REF_1).is_none(), on);
+    }
+}

@@ -12,7 +12,11 @@ fn a_forms_names_newest_last() {
     assert_eq!(s.name(0x100), None);
     assert_eq!(s.add_name(0x100, b"DocMitchell"), SetResult::Success);
     assert_eq!(s.add_name(0x100, b"DocMitchell"), SetResult::AlreadyExists);
-    assert_eq!(s.add_name(0x100, b"docmitchell"), SetResult::Success, "another text");
+    assert_eq!(
+        s.add_name(0x100, b"docmitchell"),
+        SetResult::Success,
+        "another text"
+    );
     assert_eq!(s.name(0x100).as_deref(), Some(&b"docmitchell"[..]));
     assert_eq!(s.name_len(0x100), 11);
     s.remove_name(0x100, b"docmitchell");
@@ -96,7 +100,14 @@ fn the_counts() {
     s.count_conflict();
     let c = s.counts();
     assert_eq!(
-        (c.named, c.lookups, c.conflicts, c.forms, c.entries, c.arena_bytes),
+        (
+            c.named,
+            c.lookups,
+            c.conflicts,
+            c.forms,
+            c.entries,
+            c.arena_bytes
+        ),
         (2, 1, 1, 2, 1, 6)
     );
 }
@@ -169,4 +180,45 @@ fn two_million_names() {
     );
     assert_eq!(hits, 2_000_000);
     assert_eq!((c.forms, c.entries), (2_000_000, 2_000_000));
+}
+
+/// Real threads: the loader's threads add names while the main thread looks them up, through
+/// the one store all the run's engines share (its reader-writer lock). Every name added is found
+/// afterwards, each lookup during the load answered either 0 (not yet there) or its own form.
+#[test]
+fn two_threads_name_and_look_up_at_once() {
+    let s = std::sync::Arc::new(EditorIds::default());
+    let writers: Vec<_> = (0..2u32)
+        .map(|t| {
+            let s = s.clone();
+            std::thread::spawn(move || {
+                for i in 0..20_000u32 {
+                    let form = 0x1000_0000 + t * 0x10_0000 + i;
+                    let name = format!("T{t}Form{i}");
+                    assert_eq!(s.add_name(form, name.as_bytes()), SetResult::Success);
+                    s.map_insert(form, name.as_bytes());
+                }
+            })
+        })
+        .collect();
+    let reader = {
+        let s = s.clone();
+        std::thread::spawn(move || {
+            for i in 0..20_000u32 {
+                let got = s.lookup(format!("t1form{i}").as_bytes());
+                assert!(got == 0 || got == 0x1010_0000 + i, "{i}: {got:08x}");
+            }
+        })
+    };
+    for w in writers {
+        w.join().unwrap();
+    }
+    reader.join().unwrap();
+    for t in 0..2u32 {
+        for i in (0..20_000u32).step_by(101) {
+            let name = format!("T{t}FORM{i}");
+            assert_eq!(s.lookup(name.as_bytes()), 0x1000_0000 + t * 0x10_0000 + i);
+        }
+    }
+    assert_eq!(s.counts().entries, 40_000);
 }

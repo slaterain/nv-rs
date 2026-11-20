@@ -699,6 +699,15 @@ pub(crate) fn reset_vector(e: &mut Engine, at: u32) {
     }
 }
 
+/// `00401280` on the reference (the editor id `InitItem`'s error text names), or the answer of
+/// JohnnyGuitar NVSE's getter seam at that call (`site`) while its row is on.
+fn ref_name_at(e: &mut Engine, site: u32, this: Ptr<TESObjectREFR>) -> u32 {
+    match e.site(site, &[this.addr()]) {
+        Some(name) => name,
+        None => e.call(0x0040_1280, &args![this]).u32(),
+    }
+}
+
 /// The error text `InitItem` writes when its warning count went up, in three
 /// shapes: the cell is a plain one (`00425fd0` holds), the cell has
 /// coordinates in a world, or there is no cell.
@@ -713,7 +722,8 @@ pub(crate) fn report_init_item_errors(e: &mut Engine, this: Ptr<TESObjectREFR>) 
             let cell_id = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, cell_for_id));
             let cell_name = e.vcall(cell, 0x130, &args![]).u32();
             let ref_id = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, this));
-            let ref_name = e.call(0x0040_1280, &args![this]).u32();
+            // JohnnyGuitar NVSE's getter seam at the call `0x0055_df83`.
+            let ref_name = ref_name_at(e, 0x0055_df83, this);
             let base_again = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, this));
             let base_id = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, base_again));
             let base_name = e.vcall(base, 0x130, &args![]).u32();
@@ -748,7 +758,8 @@ pub(crate) fn report_init_item_errors(e: &mut Engine, this: Ptr<TESObjectREFR>) 
         let cell_id = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, cell_for_id));
         let cell_name = e.vcall(cell, 0x130, &args![]).u32();
         let ref_id = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, this));
-        let ref_name = e.call(0x0040_1280, &args![this]).u32();
+        // JohnnyGuitar NVSE's getter seam at the call `0x0055_e076`.
+        let ref_name = ref_name_at(e, 0x0055_e076, this);
         let base_again = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, this));
         let base_id = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, base_again));
         let base_name = e.vcall(base, 0x130, &args![]).u32();
@@ -771,7 +782,8 @@ pub(crate) fn report_init_item_errors(e: &mut Engine, this: Ptr<TESObjectREFR>) 
     } else {
         let base = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, this));
         let ref_id = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, this));
-        let ref_name = e.call(0x0040_1280, &args![this]).u32();
+        // JohnnyGuitar NVSE's getter seam at the call `0x0055_e0cc`.
+        let ref_name = ref_name_at(e, 0x0055_e0cc, this);
         let base_again = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, this));
         let base_id = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, base_again));
         let base_name = e.vcall(base, 0x130, &args![]).u32();
@@ -2105,6 +2117,10 @@ pub fn fn_0055d420(e: &mut Engine, this: Ptr<TESObjectREFR>, flag: u8) {
 /// base's.
 pub fn fn_0055d480(e: &mut Engine, this: Ptr<TESObjectREFR>) -> u32 {
     if e.call(0x0047_4cb0, &args![this]).u32() != 0 {
+        // JohnnyGuitar NVSE's getter seam at the call `0x55D498`.
+        if let Some(name) = e.site(0x0055_d498, &[this.addr()]) {
+            return name;
+        }
         return e.call(0x0040_1280, &args![this]).u32();
     }
     let data = this.at(TESObjectREFR::data);
@@ -2187,7 +2203,11 @@ pub fn tes_object_refr_get_form_detailed_string(
             }
             let cell_string = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, cell_text));
             let id = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, this));
-            let head_track = e.call(0x0040_1280, &args![this]).u32();
+            // JohnnyGuitar NVSE's getter seam at the call `0x55D683`.
+            let head_track = match e.site(0x0055_d683, &[this.addr()]) {
+                Some(name) => name,
+                None => e.call(0x0040_1280, &args![this]).u32(),
+            };
             let kind = e.call(0x0044_0e30, &args![this]).u32();
             e.call(
                 STRING_FORMAT,

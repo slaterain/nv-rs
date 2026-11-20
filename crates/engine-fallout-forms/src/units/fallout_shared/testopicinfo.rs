@@ -1905,7 +1905,11 @@ pub fn tes_topic_info_get_form_detailed_string(e: &mut Engine, this: Ptr, string
             e.call(SPRINTF, &args![text_part, FORMAT_TEXT, text]);
         }
         let id = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, this));
-        let editor = e.call(FORM_TEXT_AT_401280, &args![this]).u32();
+        // JohnnyGuitar NVSE's getter seam at the call `0x61DA92`.
+        let editor = match e.site(0x0061_da92, &[this.addr()]) {
+            Some(name) => name,
+            None => e.call(FORM_TEXT_AT_401280, &args![this]).u32(),
+        };
         let kind = e.call(FORM_TEXT_AT_440E30, &args![this]).u32();
         e.call(
             STRING_PRINTF,

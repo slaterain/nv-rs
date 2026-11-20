@@ -132,10 +132,14 @@ pub fn fn_0061a040(e: &mut Engine) {
                     let topic = e.mem.u32(entry);
                     let handler = e.mem.u32(0x011c_3f2c);
                     e.call(0x0046_1780, &args![handler, topic]);
-                    let topic = e.mem.u32(entry);
-                    let name = e.mem.u32(entry + 8);
-                    let map = e.mem.u32(0x011c_54c8);
-                    e.call(0x0047_0200, &args![map, name, topic]);
+                    // JohnnyGuitar NVSE's seam at the call `0x61A243` (its no-op there, its setter
+                    // having registered the name, while its row is on).
+                    if e.site(0x0061_a243, &[]).is_none() {
+                        let topic = e.mem.u32(entry);
+                        let name = e.mem.u32(entry + 8);
+                        let map = e.mem.u32(0x011c_54c8);
+                        e.call(0x0047_0200, &args![map, name, topic]);
+                    }
                 }
                 index += 1;
             }
