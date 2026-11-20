@@ -1417,6 +1417,10 @@ fn children_read_ahead_skips_dangling_words() {
     const UNMAPPED: u32 = 0xffff_0040;
     let setup = |e: &mut Engine, case: &Case| {
         let s = scene(e);
+        assert!(
+            !e.mem.is_mapped(UNMAPPED),
+            "the dangling words point at unmapped memory"
+        );
         let (bound, vt) = match case.word(0) {
             0 => (bound_of(e, 0, 0, 0, ONE), s.node_vt),
             1 => (UNMAPPED, s.node_vt),
