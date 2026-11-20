@@ -1034,6 +1034,12 @@ pub fn path_location_resolve_nav_mesh_info(
         e.set(this, PathingLocation::usTriangle, NO_TRIANGLE);
         path_location_set_chosen_by_position(e, this, 1);
         true
+    } else if without_bounds == NOT_FOUND
+        && e.stewie(engine_core::extend::stewie::NAV_MESH_INFO_RESOLVE)
+    {
+        // lStewieAl's Tweaks' S0235 (its jump at `0x6DDB91`): no candidate without bounds either;
+        // the resolve fails (false) instead of reading the list at -1.
+        false
     } else {
         let chosen = array_pointer(e, list, without_bounds);
         set_word(e, this, NAV_MESH, chosen);
@@ -2829,6 +2835,43 @@ mod tests {
         assert!(e.call(0x006d_d6f0, &args![l, 0u32]).bool());
         assert_eq!(word(&e, l, NAV_MESH), without_bounds);
         assert_eq!(e.get(l, PathingLocation::uiFlags), 1);
+    }
+
+    /// lStewieAl's Tweaks' row S0235 at `0x6DDB91`: every candidate has bounds and all are far, so
+    /// none is without bounds (the index stays -1). Row off, the exe reads the list at -1 (a fault,
+    /// here the word before the list's data is not mapped); row on, the resolve answers false and
+    /// the location keeps its candidates and no navmesh info.
+    #[test]
+    fn s0235_resolve_with_no_candidate_without_bounds() {
+        for on in [false, true] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::NAV_MESH_INFO_RESOLVE, on);
+            // The exe's element address, wrapping as its `base + 4 * index` does.
+            e.register(ARRAY_ELEMENT, |e, a| {
+                ret(e.mem.u32(a[0] + 4).wrapping_add(a[1].wrapping_mul(4)))
+            });
+            let far = bounds(&mut e, false, [200.0, 0.0, 0.0]);
+            let only = info(&mut e, 0, 0, far);
+            let data = 0x0e00_0000;
+            e.map(data, 0x1000);
+            assert!(!e.mem.is_mapped(data - 4));
+            e.mem.set_u32(data, only);
+            let list = e.mem.alloc(0x14);
+            e.mem.set_u32(list + 4, data);
+            e.mem.set_u32(list + 8, 1);
+            let l = location(&mut e);
+            set_word(&mut e, l, NAV_MESHES, list);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.call(0x006d_d6f0, &args![l, 0u32]).bool()
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert_eq!(run.ok(), Some(false));
+                assert_eq!(word(&e, l, NAV_MESH), 0);
+                assert_eq!(word(&e, l, NAV_MESHES), list);
+            }
+        }
     }
 
     #[test]
