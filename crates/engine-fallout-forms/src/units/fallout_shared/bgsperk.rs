@@ -1473,7 +1473,47 @@ fn format_perk_condition(
         text.truncate((TWEAKS_TEXT - 0x11) as usize);
         format = put_text(e, scratch, &text);
     }
-    e.call(STRING_FORMAT, &args![buffer, size, format, name, rank]);
+    // Tweaks formats with `snprintf`, which cuts the text to fit (the exe's `vsprintf_s` would
+    // stop the game on a text too long for the work buffer, a mod's long perk name).
+    snprintf_cut(e, buffer, size, format, name, rank);
+}
+
+/// `snprintf(buffer, size, format, name, rank)` as the C runtime does it for the formats this line
+/// has: `%s` takes `name`, `%d` takes `rank` (signed), `%%` is a `%`; the text is cut to `size - 1`
+/// bytes and ended with a 0. Any other conversion is copied as it stands.
+fn snprintf_cut(e: &mut Engine, buffer: u32, size: u32, format: u32, name: u32, rank: u32) {
+    if size == 0 {
+        return;
+    }
+    let mut text = Vec::new();
+    let mut chars = e.mem.cstr(format).into_iter().peekable();
+    let mut words = [name, rank].into_iter();
+    while let Some(c) = chars.next() {
+        if c != b'%' {
+            text.push(c);
+            continue;
+        }
+        match chars.peek().copied() {
+            Some(b's') => {
+                chars.next();
+                let word = words.next().unwrap_or(0);
+                text.extend(e.mem.cstr(word));
+            }
+            Some(b'd') => {
+                chars.next();
+                let word = words.next().unwrap_or(0);
+                text.extend((word as i32).to_string().into_bytes());
+            }
+            Some(b'%') => {
+                chars.next();
+                text.push(b'%');
+            }
+            _ => text.push(c),
+        }
+    }
+    text.truncate((size - 1) as usize);
+    text.push(0);
+    e.mem.write(buffer, &text);
 }
 
 /// What lStewieAl's Tweaks' `_strncat` does (`snprintf(buffer, size, "%s%s", buffer, text)`): the

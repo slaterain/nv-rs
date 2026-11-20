@@ -399,3 +399,104 @@ fn s0093_the_rows_together() {
     assert_eq!(perk_text(&[], 1, all), format!("Req: {END}"));
     assert_eq!(perk_text(&other(), 2, all), format!("Req: Ranks 2{END}"));
 }
+
+/// The OR look-ahead (S0093.05 at `0x5EBCFB` for a value, `OnFormatPerkHandleConditions` for a
+/// perk): an OR followed only by a condition the menu does not show (karma, another function) or by
+/// nothing gets no "OR". The exe leaves the dangling " OR ".
+#[test]
+fn s0093_an_or_with_nothing_shown_after_it() {
+    let _one = LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let all = &PERK_ROWS[..6];
+    let value_then_karma = [value(5, 3, 6.0, true), value(0x17, 3, 1.0, false)];
+    assert_eq!(
+        perk_text(&value_then_karma, 1, &[]),
+        format!("Req:  STR 6 OR {END}")
+    );
+    assert_eq!(
+        perk_text(&value_then_karma, 1, &[stewie::PERK_TEXT_COMMAS]),
+        format!("Req: STR 6{END}")
+    );
+    assert_eq!(
+        perk_text(&value_then_karma, 1, all),
+        format!("Req: STR 6{END}")
+    );
+    let perk_then_other = [
+        has_perk(b"Toughness", 1, 0, 1.0, true),
+        Condition(Need::Other(0x48), 0, 1.0, false),
+    ];
+    assert_eq!(
+        perk_text(&perk_then_other, 1, all),
+        format!("Req: Toughness 1{END}")
+    );
+    let perk_alone = [has_perk(b"Toughness", 1, 0, 1.0, true)];
+    assert_eq!(
+        perk_text(&perk_alone, 1, all),
+        format!("Req: Toughness 1{END}")
+    );
+}
+
+/// S0093.06's NOT for the `!=` operator: `!= 1` (the perk missing) gets "NOT", `!= 0` (the perk
+/// had) does not.
+#[test]
+fn s0093_not_for_the_not_equal_operator() {
+    let _one = LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let all = &PERK_ROWS[..6];
+    assert_eq!(
+        perk_text(&[has_perk(b"Toughness", 1, 1, 1.0, false)], 1, all),
+        format!("Req: NOT Toughness 1{END}")
+    );
+    assert_eq!(
+        perk_text(&[has_perk(b"Toughness", 1, 1, 0.0, false)], 1, all),
+        format!("Req: Toughness 1{END}")
+    );
+}
+
+/// S0093.03's skip step: a value requirement of 0 is passed over. The exe's step of two then also
+/// passes over the condition after it ("Req: AGI 6", Toughness never read); with the rows each
+/// condition is read.
+#[test]
+fn s0093_a_zero_requirement_is_skipped_by_one() {
+    let _one = LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let conditions = [
+        value(5, 3, 0.0, false),
+        value(10, 3, 6.0, false),
+        has_perk(b"Toughness", 1, 0, 1.0, false),
+    ];
+    assert_eq!(perk_text(&conditions, 1, &[]), format!("Req: AGI 6{END}"));
+    assert_eq!(
+        perk_text(&conditions, 1, &PERK_ROWS[..6]),
+        format!("Req: AGI 6, Toughness 1{END}")
+    );
+}
+
+/// S0093.05's `AddCommaIfMissing` at the value site: a two-rank perk whose first requirement is a
+/// value gets one ", " after the ranks (S0093.06's heading already ends with one).
+#[test]
+fn s0093_one_comma_after_the_ranks() {
+    let _one = LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let strength = [value(5, 3, 6.0, false)];
+    assert_eq!(
+        perk_text(&strength, 2, &[]),
+        format!("Req: Ranks 2, STR 6{END}")
+    );
+    assert_eq!(
+        perk_text(&strength, 2, &PERK_ROWS[..6]),
+        format!("Req: Ranks 2, STR 6{END}")
+    );
+    assert_eq!(
+        perk_text(&strength, 2, &[stewie::PERK_TEXT_PERK_NOT_OR]),
+        format!("Req: Ranks 2, , STR 6{END}")
+    );
+}
+
+/// S0093.06 formats a perk requirement as Tweaks' `snprintf`: a mod's perk name of 130 characters
+/// is cut to the work buffer (0x80 bytes: 127 characters and the 0), where the exe's `vsprintf_s`
+/// would stop the game.
+#[test]
+fn s0093_a_long_perk_name_is_cut_to_fit() {
+    let _one = LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let name: &'static [u8] = Box::leak(vec![b'N'; 130].into_boxed_slice());
+    let text = perk_text(&[has_perk(name, 1, 0, 1.0, false)], 1, &PERK_ROWS[..6]);
+    let cut = String::from_utf8(name[..127].to_vec()).unwrap();
+    assert_eq!(text, format!("Req: {cut}{END}"));
+}
