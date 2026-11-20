@@ -298,6 +298,12 @@ More in [FIXES.md, "UI Organizer"](FIXES.md#ui-organizer).
   `[nv-rs Stewie]`.
 - Its settings are VNV's, with the player's `nvse_stewie_tweaks.ini` read over them.
 - One of the crash fixes, a leak, the port had already fixed.
+- The engines and the console (seven fixes): the sun's light comes from the side of the sky its disc
+  is on; blood and impact marks on bodies show the variant picked for them; things that are not
+  doors no longer count as doors for NPCs' paths; and four crashes are gone (a tree whose distant
+  LOD a plugin disabled, with Tweaks' console line naming it; a place whose navigation mesh cannot
+  be worked out; a path through a door with no way back; a switch or LOD node that updates only its
+  shown part). One Tweaks slip is not copied, under the missing-data guard row.
 - The remaining crash fixes and tweaks come next.
 
 More in [FIXES.md, "lStewieAl's Tweaks"](FIXES.md#lstewieals-tweaks).
