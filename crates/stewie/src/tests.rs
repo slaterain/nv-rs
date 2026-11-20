@@ -476,7 +476,7 @@ fn the_start_lines_name_what_was_read() {
         start_lines(false, &settings, &keys, on.len()),
         [
             "lStewieAl's Tweaks: no Data\\NVSE\\Plugins\\nvse_stewie_tweaks.ini: VNV's values",
-            "lStewieAl's Tweaks: 61 of its 61 rows built are on",
+            "lStewieAl's Tweaks: 70 of its 70 rows built are on",
         ]
     );
     let (settings, on) = settings_and_rows(Some(b"[Tweaks]\nbBetterAutoWalk=1\n"), &[], &keys);

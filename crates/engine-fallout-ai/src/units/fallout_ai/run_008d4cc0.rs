@@ -94,6 +94,13 @@ fn computed_armour_value(e: &mut Engine, this: u32, field: u32, index: u32, slot
 /// value of vtable slot +0x48C when it sets its flag, plus the values of slots +0x18,
 /// +0x10 and +0x14 of the object at +0xA4, stores it and answers it.
 pub fn fn_008d4cc0(e: &mut Engine, this: u32) -> f32 {
+    // lStewieAl's Tweaks' row S0206 (`CreatureDRFix`, `SafeWrite32(0x10874E8,
+    // Creature__GetTotalArmorDR)`): Tweaks puts its routine in `Creature`'s vtable slot at
+    // `010874E8`, the one reference the exe has to this function (Ghidra's references to
+    // `008d4cc0`: that data word only), so taking the routine here is the same change.
+    if e.stewie(engine_core::extend::stewie::CREATURE_DR) {
+        return creature_get_total_armor_dr(e, this);
+    }
     let stored = e.mem.u32(this + 0x1b8);
     // FCOMP; TEST AH,0x1; JNZ: below or unordered recomputes.
     if x87_load32(stored) >= e.mem.f64(ZERO_DOUBLE) {
@@ -101,11 +108,6 @@ pub fn fn_008d4cc0(e: &mut Engine, this: u32) -> f32 {
     }
     computed_armour_value(e, this, 0x1b8, 0x12, &[0x18, 0x10, 0x14])
 }
-
-/// The creature's vtable slot that holds `fn_008d4cc0` (`Creature`'s, at `010874E8`): lStewieAl's
-/// Tweaks' row S0206 (`CreatureDRFix`, `SafeWrite32(0x10874E8, Creature__GetTotalArmorDR)`) puts
-/// [`creature_get_total_armor_dr`] there. A character's vtable keeps the exe's function.
-pub const CREATURE_TOTAL_ARMOR_DR_SLOT: u32 = 0x0108_74e8;
 
 /// Row S0206's routine, Tweaks' `Creature__GetTotalArmorDR` (`Fixes/CreatureDRFix.cpp`): the
 /// stored total DR (+0x1B8) while it is not below 0.0; otherwise the actor's own value for Damage
@@ -390,6 +392,13 @@ mod b018_tests {
         assert_eq!(creature_get_total_armor_dr(&mut e, this), 5.5);
         e.mem.set_f32(this + 0x1b8, -1.0);
         assert_eq!(e.call(0x008d_4cc0, &[this]).f64(), 7.5);
+        // With the row on, the creature's slot function answers Tweaks' value.
+        e.set_stewie(engine_core::extend::stewie::CREATURE_DR, true);
+        e.mem.set_f32(this + 0x1b8, -1.0);
+        assert_eq!(e.call(0x008d_4cc0, &[this]).f64(), 5.5);
+        e.mem.set_u8(this + 0x1f0, 0);
+        e.mem.set_f32(this + 0x1b8, -1.0);
+        assert_eq!(e.call(0x008d_4cc0, &[this]).f64(), 1.5);
     }
 
     /// lStewieAl's Tweaks' row S0229 (`ArmorUpdateFix`): off, both armour values go to -1.0 and
