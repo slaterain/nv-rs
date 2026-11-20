@@ -268,6 +268,16 @@ pub const DISMEMBER_NULL_LIMB: Row = Row::at(CRASH, 64);
 pub const NULL_AUDIO: Row = Row::at(CRASH, 65);
 /// S0225 `SamplerStateLeakFix` (`NiD3DTextureStage::ConfigureStage` `00e7eb00`): a texture stage whose texture is unchanged but whose wrap or clamp differs from the device's is set up again instead of keeping the last material's addressing.
 pub const SAMPLER_STATE_LEAK: Row = Row::at(CRASH, 66);
+/// S0136 `patchTryCatchingQueuedTextureLoadCrash` (`QueuedTexture::Run` `0043c150` (`0x43C20A`), `004436c0` (`0x44373F`), `00443af0` (`0x443B57`)): a queued texture whose data cannot be read (already freed) counts as not loaded instead of crashing; Tweaks' console line says so once.
+pub const QUEUED_TEXTURE_LOAD: Row = Row::at(CRASH, 67);
+/// S0022.43 `MenuFixes` (`Font::MakeIconsTriShape` `00a14da0` (`0xA151D1`, `0xA15164`)): a font button with no icon texture path no longer crashes: the icon shape is hidden and the path is interface\shared\empty.dds.
+pub const FONT_ICON_NO_TEXTURE: Row = Row::at(CRASH, 68);
+/// S0022.48 `MenuFixes` (`00730950` (`0x730A00`)): the repair menu's target item is not freed while the menu is open (Tweaks' trade: that entry leaks instead of a use-after-free).
+pub const REPAIR_TARGET_KEPT: Row = Row::at(CRASH, 69);
+/// S0022.49 `MenuFixes` (`00716010` (`0x7160A2`)): a reference being freed is taken off the console's pickable references too, not only off the HUD's crosshair.
+pub const SELECTABLE_REF_FREED: Row = Row::at(CRASH, 70);
+/// S0025 `patchFixCrashWhenControllerReconnectsInHackingMenu` (`HackingMenu::MakePasswordFile` `00768aa0` (`0x7693F5`)): the hacking menu always sets its character-selection tile, so a controller connected later can pick characters.
+pub const HACKING_SELECTION_TILE: Row = Row::at(CRASH, 71);
 /// S1016 (Engine Optimizations, `Inlines::SaveLoad`: `Write32(0x845558, 0x2735)`): the changes map's
 /// buckets 10,037, not the exe's 5,039 (`00845550`). It changes the order a save walks and writes the
 /// changed forms, so it is a fixes row.
@@ -277,6 +287,8 @@ pub const CHANGES_MAP_BUCKETS: Row = Row::at(FIXES, 0);
 pub mod once {
     /// S0173's "Failed to resolve movement sequence" line.
     pub const MOVEMENT_SEQUENCE: u32 = 0;
+    /// S0136's "Prevented crash when texture failed to load" line.
+    pub const TEXTURE_LOAD: u32 = 1;
 }
 
 /// Tweaks' DLL statics the game's code is handed a pointer to: guest blocks kept for the whole run
@@ -304,6 +316,9 @@ pub(crate) struct Prints {
     /// S0031's `ShowNullHkpShapeWarning` `static char lastModelName[100]`: the last name printed,
     /// as its `snprintf` copied it (at most 99 bytes).
     shape_model: Mutex<Vec<u8>>,
+    /// Tweaks' print queue (`queuedConsoleMessages`, in its copy of xNVSE's `GameAPI.cpp`): the lines
+    /// printed off the main thread or before the console exists, printed by [`print_queued`].
+    queued: Mutex<Vec<Vec<u8>>>,
 }
 
 impl Default for Prints {
@@ -313,6 +328,7 @@ impl Default for Prints {
             fade_ref: AtomicU32::new(0),
             fade_mesh: AtomicU32::new(0),
             shape_model: Mutex::new(Vec::new()),
+            queued: Mutex::new(Vec::new()),
         }
     }
 }
@@ -450,6 +466,55 @@ pub fn console_print(e: &mut Engine, format: &[u8], words: &[u32]) {
         }
         e.call(CONSOLE_PRINT, &args![console, at, list]);
     });
+}
+
+/// The console singleton's word (`*(ConsoleManager**)0x11D8CE8`): 0 until the console exists.
+const CONSOLE_SINGLETON: u32 = 0x011d_8ce8;
+
+/// Tweaks' `ConsoleQueueOrPrint(text)` (in its copy of xNVSE's `GameAPI.cpp`): on the main thread
+/// with the console made, `Console_Print("%s", text)`; otherwise the text waits in Tweaks' queue
+/// for [`print_queued`].
+pub fn console_queue_or_print(e: &mut Engine, text: &[u8]) {
+    if e.mem.u32(CONSOLE_SINGLETON) != 0 && crate::thread_host::on_main(e) {
+        with_text(e, text, |e, at| console_print(e, b"%s", &[at]));
+    } else {
+        e.extend.stewie.3.queued.lock().unwrap().push(text.to_vec());
+    }
+}
+
+/// Tweaks' `handleQueuedNonMainThreadPrints` (its call at `0x870662`, in the main loop's idle step
+/// `00870610`): every queued line printed with "%s", the queue emptied; nothing when it is empty.
+pub fn print_queued(e: &mut Engine) {
+    let lines = std::mem::take(&mut *e.extend.stewie.3.queued.lock().unwrap());
+    for line in lines {
+        with_text(e, &line, |e, at| console_print(e, b"%s", &[at]));
+    }
+}
+
+/// S0136, Tweaks' `NiTextureQueuedLoadHook(texture)` in place of `0043c430`: the texture's data
+/// (`+0x24`), 0 without one, else the byte at the data's `+0x5B` (`unk58[3]`: the same reads as the
+/// exe's function), inside Tweaks' `__try`: a read of memory that is not there (a texture already
+/// freed) answers 0 and prints "[Tweaks] Prevented crash when texture failed to load..." once a
+/// game, through [`console_queue_or_print`] (texture loads also run on the loader's threads).
+pub fn queued_texture_state(e: &mut Engine, texture: u32) -> u32 {
+    let data_at = texture.wrapping_add(0x24);
+    if e.mem.is_mapped(data_at) {
+        let data = e.mem.u32(data_at);
+        if data == 0 {
+            return 0;
+        }
+        let byte_at = data.wrapping_add(0x5b);
+        if e.mem.is_mapped(byte_at) {
+            return u32::from(e.mem.u8(byte_at));
+        }
+    }
+    if e.stewie_once(once::TEXTURE_LOAD) {
+        console_queue_or_print(
+            e,
+            b"[Tweaks] Prevented crash when texture failed to load...",
+        );
+    }
+    0
 }
 
 /// The two sampler states S0225 compares (`0126f918`: `D3DSAMP_ADDRESSU`, `D3DSAMP_ADDRESSV`), the
@@ -938,5 +1003,50 @@ mod tests {
         // A state mapped to slot 5 or more is not one the group keeps.
         e.mem.set_u16(SAMPLER_STATE_SLOTS + 4, 5);
         assert!(!sampler_state_changed(&mut e, stage));
+    }
+
+    /// S0136's read: the texture's data byte, 0 without data, and for memory that is not there 0
+    /// with Tweaks' line once a game, queued off the main thread or before the console exists and
+    /// printed by the main loop's drain.
+    #[test]
+    fn the_queued_texture_state_reads_as_tweaks_try_does() {
+        use crate::abi::Ret;
+        static LINES: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
+        let mut e = Engine::new();
+        e.register(CONSOLE_INSTANCE, |_, _| Ret {
+            eax: 0x4000,
+            ..Ret::default()
+        });
+        e.register(CONSOLE_PRINT, |e, a| {
+            assert_eq!(text(e, a[1]), b"%s");
+            LINES.lock().unwrap().push(text(e, e.mem.u32(a[2])));
+            Ret::default()
+        });
+        e.mem.map(CONSOLE_SINGLETON & !0xfff, 0x1000);
+        let texture = e.mem.alloc(0x30);
+        assert_eq!(queued_texture_state(&mut e, texture), 0, "no data");
+        let data = e.mem.alloc(0x60);
+        e.mem.set_u32(texture + 0x24, data);
+        e.mem.set_u8(data + 0x5b, 3);
+        assert_eq!(queued_texture_state(&mut e, texture), 3);
+        assert!(LINES.lock().unwrap().is_empty());
+        // Data that is not there (a texture freed under the loader), then no texture at all: 0,
+        // and the line once, queued while the console does not exist yet.
+        e.mem.unmap(0, 0x1000);
+        e.mem.set_u32(texture + 0x24, 0x0000_0100);
+        assert_eq!(queued_texture_state(&mut e, texture), 0);
+        assert_eq!(queued_texture_state(&mut e, 0), 0);
+        assert!(LINES.lock().unwrap().is_empty(), "queued, not printed");
+        print_queued(&mut e);
+        let line = b"[Tweaks] Prevented crash when texture failed to load...".to_vec();
+        assert_eq!(*LINES.lock().unwrap(), vec![line.clone()]);
+        print_queued(&mut e);
+        assert_eq!(LINES.lock().unwrap().len(), 1, "the queue emptied");
+        // With the console made, on the main thread, a line prints at once.
+        e.mem.set_u32(CONSOLE_SINGLETON, 0x4000);
+        console_queue_or_print(&mut e, b"now");
+        assert_eq!(LINES.lock().unwrap()[1], b"now".to_vec());
+        print_queued(&mut e);
+        assert_eq!(LINES.lock().unwrap().len(), 2);
     }
 }
