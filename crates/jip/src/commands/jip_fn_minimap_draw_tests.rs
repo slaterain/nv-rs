@@ -1036,3 +1036,81 @@ fn the_fog_toggle_sets_the_shaders_and_alpha_levels() {
     }
     assert_eq!(s.vertex_alpha, [0.0, a / 4.0, a / 2.0, a * 0.75, a]);
 }
+
+/// Review of #818 (follow-up): the freed first map through the whole command. A first draw with
+/// the grid elsewhere marks no map, so JIP's first is slot 0's map. With 55 more kept maps (64
+/// in all), the grid's centre moves: every one of the nine is drawn again, each old map let go
+/// after JIP's first has moved on past it, and the purge above 60 deletes the oldest kept maps
+/// (from the first of the 55) down to 42. It never starts from or deletes a map already let go,
+/// and never one just drawn.
+#[test]
+fn a_first_map_drawn_again_through_the_whole_update() {
+    let mut e = setup();
+    let (w, mut s) = exterior_world(&mut e);
+    place_player(&mut e, &w, (0, 0), (2, 2));
+    update(&mut e, &mut s, 0, 8);
+    let id = |e: &Engine, at: (i32, i32)| e.mem.u32(w.cell(at.0, at.1).cell + CELL_ID);
+    let first = s.rendered_exteriors[&id(&e, (-1, -1))].texture;
+    assert_eq!(s.mm_first_texture, first);
+    assert!(s.rendered_exteriors.values().all(|r| r.regen_flags == 0));
+    // 55 more kept maps (cells 1 to 55) at the list's end.
+    let mut extras = Vec::new();
+    for cell_id in 1..=55u32 {
+        let t = alloc(0x40);
+        e.mem.set_u32(t, VTBL_RENDERED_TEXTURE);
+        e.mem.set_u32(t + TEXTURE_CELL, cell_id);
+        let tail = e.mem.u32(TEXTURE_LIST_TAIL);
+        e.mem.set_u32(tail + TEXTURE_NEXT, t);
+        e.mem.set_u32(t + TEXTURE_PREV, tail);
+        e.mem.set_u32(TEXTURE_LIST_TAIL, t);
+        s.rendered_exteriors.insert(
+            cell_id,
+            RenderedEntry {
+                texture: t,
+                regen_flags: 0,
+            },
+        );
+        extras.push(t);
+    }
+    let old: Vec<u32> = nine(0, 0)
+        .iter()
+        .map(|&at| s.rendered_exteriors[&id(&e, at)].texture)
+        .collect();
+    place_player(&mut e, &w, (0, 0), (0, 0));
+    forget_calls();
+    update(&mut e, &mut s, 0, 8);
+    assert_eq!(drawn().len(), 9, "every map drawn again");
+    for &t in &old {
+        assert_eq!(e.mem.u32(t), FREED, "the old maps let go");
+    }
+    let deleted: Vec<u32> = calls_to(RENDERED_TEXTURE_DELETE)
+        .into_iter()
+        .map(|w| w[0])
+        .filter(|t| !old.contains(t))
+        .collect();
+    assert_eq!(
+        deleted,
+        extras[..22],
+        "the oldest kept maps, from the first of the 55"
+    );
+    assert_eq!(s.rendered_exteriors.len(), 42);
+    assert_eq!(s.mm_first_texture, extras[22]);
+    for &at in &nine(0, 0) {
+        let t = s.rendered_exteriors[&id(&e, at)].texture;
+        assert_ne!(e.mem.u32(t), FREED, "{at:?}: the map just drawn is kept");
+        assert!(!old.contains(&t));
+    }
+}
+
+/// Review of #818 (follow-up): the underwater flag put back as it was, from 1 too: the drawing
+/// sees 1 and it is 1 after.
+#[test]
+fn the_underwater_flag_is_put_back_from_1() {
+    let mut e = setup();
+    let (w, mut s) = exterior_world(&mut e);
+    place_player(&mut e, &w, (0, 0), (0, 0));
+    e.mem.set_u8(UNDERWATER_FOG, 1);
+    update(&mut e, &mut s, 0, 8);
+    assert!(drawn().iter().all(|d| d.underwater == 1));
+    assert_eq!(e.mem.u8(UNDERWATER_FOG), 1);
+}
