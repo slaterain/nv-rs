@@ -80,6 +80,7 @@ pub mod jip_fn_ui_cursor;
 pub mod jip_fn_ui_menus;
 pub mod jip_fn_ui_nodes;
 pub mod jip_fn_ui_project;
+pub mod jip_fn_ui_text;
 pub mod jip_fn_utility;
 pub mod jip_fn_utility_patches;
 pub mod jip_fn_water;
@@ -278,6 +279,9 @@ pub const ALL: &[Handlers] = &[
     jip_fn_miscellaneous_depth::COMMANDS,
     // `InitMiniMap` (JIP MiniMap's start; its patches in `jip_fn_minimap_seams`).
     jip_fn_minimap::COMMANDS,
+    // `ShowTextInputMenu`, `SetTextInputExtendedProps`, `SetTextInputString` (with JIP's text
+    // input hooks).
+    jip_fn_ui_text::COMMANDS,
 ];
 
 /// How many of JIP's commands have a handler.
@@ -312,6 +316,7 @@ pub fn install(e: &mut Engine) {
     e.ext_free::<jip_fn_ui::ItemListRefresh>();
     jip_fn_ui::install(e);
     jip_fn_ui_menus::install(e);
+    jip_fn_ui_text::install(e);
     jip_fn_misc_ref_insert::install(e);
     jip_fn_misc_ref_lines::install(e);
     jip_fn_actor_p2::install(e);
@@ -952,6 +957,8 @@ mod tests {
             "jip_fn_miscellaneous",
             // jip_fn_minimap (InitMiniMap).
             "jip_fn_minimap",
+            // jip_fn_ui_text (ShowTextInputMenu and the two text input setters).
+            "jip_fn_ui",
         ];
         assert_eq!(files.len(), ALL.len(), "one file per command list");
         let mut seen = std::collections::HashSet::new();

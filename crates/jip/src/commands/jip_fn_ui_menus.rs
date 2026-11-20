@@ -13,8 +13,9 @@
 //! ([`QUANTITY_MENU_CALLBACK`]) and answers, so DoClick skips its own call.
 //!
 //! `CloseActiveMenu` on the text input menu: JIP also takes its text input hooks out there
-//! (`UnsetTextInputHooks`, when `TextInputClose` is in). Those hooks are not built (the text input
-//! commands wait for them), so here, as in JIP without them, nothing more happens.
+//! (`UnsetTextInputHooks`, when `TextInputClose` is in; `jip_fn_ui_text`). JIP reads the menu's
+//! script from the menu after it is destroyed (the text edit menu's word still names it); here it
+//! is read before, so freed memory is never read.
 //!
 //! Threads: both commands and the routine run on the main thread (scripts, menus). The kept
 //! script is a lock-free word made at JIP's install.
@@ -199,7 +200,8 @@ fn quantity_menu_callback_routine(e: &mut Engine, w: &[u32]) -> Ret {
 /// empty entries passed over. A menu (id 0x3E9 and up) with a tile is closed: through
 /// `FORenderedMenu::Close` when it is the rendered menu's, else its tile destroyed; the message
 /// menu then cleans up (`0x7AA480`) and `MessageBoxExAlt`'s kept scripts are given up, the
-/// quantity menu gives up `ShowQuantityMenu`'s. The Pip-Boy (id 1) is put away (mode 4, no
+/// quantity menu gives up `ShowQuantityMenu`'s, and the text edit menu, while JIP's text input
+/// hooks are in, takes them out (`UnsetTextInputHooks`). The Pip-Boy (id 1) is put away (mode 4, no
 /// callback). The entry is cleared; without `closeAll` only the first one found. No result.
 fn close_active_menu(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
@@ -219,6 +221,10 @@ fn close_active_menu(e: &mut Engine, w: &[u32]) -> Ret {
             continue;
         }
         if id >= MENU_MIN {
+            // The text input menu's script, while JIP's hooks are in: read before its menu goes.
+            let text_input = (id == super::jip_fn_ui_text::TEXT_EDIT
+                && e.hook_users(engine_core::extend::Hook::TextInputClose) != 0)
+                .then(|| super::jip_fn_ui_text::kept_script(e));
             // `g_tileMenuArray[menuID]`; an id past the last menu has no tile here (JIP would
             // read past the array).
             let tile = super::jip_fn_ui::menu_tile_by_id(e, id);
@@ -238,6 +244,8 @@ fn close_active_menu(e: &mut Engine, w: &[u32]) -> Ret {
                 if script != 0 {
                     nvse::lambda::unsave_variables(e, script);
                 }
+            } else if let Some(script) = text_input {
+                super::jip_fn_ui_text::unset_text_input_hooks(e, script);
             }
         } else if id == PIPBOY {
             e.mem.set_u32(im + IM_PIPBOY_MODE, PIPBOY_MODE_CLOSED);

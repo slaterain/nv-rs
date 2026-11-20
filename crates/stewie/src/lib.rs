@@ -193,6 +193,8 @@ pub fn install(e: &mut Engine) {
     for row in &on {
         e.set_stewie(row.bit, true);
     }
+    // Read by row S0023 (Tweaks reads it with its code default 1, not through `GET_TWEAK`).
+    e.set_stewie_fade_node_prints(settings.long("Tweaks", "bInvalidBSFadeNodePrints", 1) != 0);
     let log = start_lines(ini.is_some(), &settings, &keys, on.len());
     for line in &log {
         eprintln!("{line}");

@@ -58,7 +58,7 @@ jobs:
       CARGO_BUILD_JOBS: 4
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      # The sound device's library (cpal's ALSA backend, engine-platform sound_out.rs): alsa-sys
+      # The sound device's library (cpal's ALSA backend, ds-mix sound_out.rs): alsa-sys
       # links libasound and finds it with pkg-config at build time.
       - name: Install ALSA's development files
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev pkg-config
@@ -145,7 +145,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: >
           cargo test --locked --no-fail-fast
-          -p engine-core -p engine-platform -p engine-havok -p host
+          -p engine-core -p engine-platform -p ds-mix -p engine-havok -p host
           -p d3d9-wgpu -p d3d9-stream -p d3dx-tex -p frame-model
           -p esm -p bsa -p fos -p mp3 -p vorbis -p bink -p game-folders
           -p jip -p uio -p fomod -p mod-archive -p mod-install -p mod-chooser
