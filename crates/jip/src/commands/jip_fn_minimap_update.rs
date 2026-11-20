@@ -1561,3 +1561,7 @@ fn parent_world_of(e: &mut Engine, refr: u32) -> u32 {
 #[cfg(test)]
 #[path = "jip_fn_minimap_update_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "jip_fn_minimap_draw_tests.rs"]
+mod draw_tests;

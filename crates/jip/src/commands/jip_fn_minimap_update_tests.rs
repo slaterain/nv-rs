@@ -18,7 +18,7 @@ thread_local! {
     static NEXT: Cell<u32> = const { Cell::new(AREA + 0x1000) };
 }
 
-fn alloc(size: u32) -> u32 {
+pub(super) fn alloc(size: u32) -> u32 {
     NEXT.with(|n| {
         let at = n.get();
         n.set(at + size.next_multiple_of(0x10));
@@ -26,11 +26,11 @@ fn alloc(size: u32) -> u32 {
     })
 }
 
-fn record(f: u32, w: &[u32]) {
+pub(super) fn record(f: u32, w: &[u32]) {
     CALLS.with(|c| c.borrow_mut().push((f, w.to_vec())));
 }
 
-fn eax(v: u32) -> Ret {
+pub(super) fn eax(v: u32) -> Ret {
     Ret {
         eax: v,
         ..Ret::default()
@@ -88,7 +88,7 @@ fn text(e: &Engine, value: u32) -> Vec<u8> {
 /// The engine with the stand-ins: a value's refresh, `AddTileFromTemplate` (a new tile with
 /// [`TEMPLATE_TRAITS`], the template's name recorded), `Tile::AddValue`, the texture's deleting
 /// destructor and the two critical-section calls (recorded); the pages the update reads mapped.
-fn setup() -> Engine {
+pub(super) fn setup() -> Engine {
     let mut e = engine();
     e.map(AREA, 0x40_0000);
     for page in [
@@ -734,7 +734,7 @@ fn the_teleport_doors_of_a_cell() {
 
 /// `n` of JIP's local map textures (cell ids 1 to n) in the game's texture list, with one of the
 /// game's own (no cell id) after the first; each kept in `s` by its cell id.
-fn texture_list(e: &mut Engine, s: &mut MiniMapState, n: u32) -> Vec<u32> {
+pub(super) fn texture_list(e: &mut Engine, s: &mut MiniMapState, n: u32) -> Vec<u32> {
     let mut list = Vec::new();
     for id in 1..=n {
         let t = alloc(0x40);
