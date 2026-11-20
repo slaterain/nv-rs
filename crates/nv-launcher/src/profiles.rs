@@ -3,9 +3,11 @@
 //! folder (Windows: the package's `userdata`), and the older `settings.ini` stage, kept as
 //! the old Settings.cmd kept them (its distribution/Settings.ps1, which this replaced):
 //!
-//! - the choices go into the files only when every profile's `Fallout.ini` has nv-rs's sections
-//!   (Play made them ready) and there is no `settings.ini`; otherwise into `settings.ini`, every
-//!   option a line, which Play.exe (and, off Windows, the game's first start) moves into the files;
+//! - a choice goes into a profile's files when its `Fallout.ini` has nv-rs's sections (Play, or
+//!   the game's first start, made them ready) and no `settings.ini` waits for it; otherwise into
+//!   that `settings.ini`, every option a line, which Play.exe (and, off Windows, the game's first
+//!   start) moves into the files: the shared one while it is there, else off Windows the
+//!   profile's own (the game's first start makes only the profile it plays ready);
 //! - what the screen shows is the game profile's files, `settings.ini`'s lines over them while it
 //!   is there (as Play moves it in);
 //! - a change writes only its row's keys, in place, in both profiles, the mods profile first and
@@ -15,7 +17,7 @@
 //!   step, its read-only mark kept, so a full disk leaves every file whole; a file that cannot be
 //!   read stops the save before anything is written.
 
-use crate::settings::{Files, Row};
+use crate::settings::{Files, Row, OWN};
 use game_profile::game_ini;
 use game_profile::settings::{self as profile_settings, Settings};
 use std::path::{Path, PathBuf};
@@ -32,8 +34,12 @@ pub fn profile_dir(own: &Path, name: &str) -> PathBuf {
 pub struct Profiles {
     /// The game profile's folder, then the mods profile's.
     pub dirs: [PathBuf; 2],
-    /// `settings.ini` in nv-rs's own folder.
+    /// `settings.ini` in nv-rs's own folder: the settings for both profiles while it is there.
     pub pending: PathBuf,
+    /// Off Windows, each profile's own `settings.ini` (`<own>/<profile>/settings.ini`) for a
+    /// profile the game has not made ready yet (play.sh names it to the game for that profile's
+    /// start); on Windows `None`: Play.exe makes both profiles ready at once.
+    pub own_pending: Option<[PathBuf; 2]>,
 }
 
 fn text_of(bytes: &[u8]) -> String {
@@ -56,22 +62,64 @@ fn read(path: &Path) -> std::io::Result<String> {
     }
 }
 
-/// `bytes` in place of `path`: written beside it first, then put in its place in one step; a
-/// read-only mark is lifted for that step and put back. A failure names the file (the screen
-/// shows it after "Not saved:").
-fn write_whole(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    replace_whole(path, bytes)
-        .map_err(|e| std::io::Error::new(e.kind(), format!("{}: {e}", path.display())))
+/// The error `e` naming `path`.
+fn naming(path: &Path, e: std::io::Error) -> std::io::Error {
+    std::io::Error::new(e.kind(), format!("{}: {e}", path.display()))
 }
 
-// `set_readonly(false)` clears the read-only attribute (Windows) or gives the owner write (Unix).
-#[allow(clippy::permissions_set_readonly_false)]
-fn replace_whole(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+/// `bytes` written whole beside `path` (`NAME.part`), not yet in its place.
+fn write_part(path: &Path, bytes: &[u8]) -> std::io::Result<PathBuf> {
     let mut part = path.as_os_str().to_owned();
     part.push(".part");
     let part = PathBuf::from(part);
     let _ = std::fs::remove_file(&part);
-    std::fs::write(&part, bytes)?;
+    if let Err(e) = std::fs::write(&part, bytes) {
+        let _ = std::fs::remove_file(&part);
+        return Err(naming(path, e));
+    }
+    Ok(part)
+}
+
+/// Every file of `files` (a path and its new bytes) written whole beside itself first, and only
+/// when all of them are, each put in its place: a full disk or a refused file leaves every file
+/// as it was. A file that cannot take its place (held open by another program) stops there,
+/// named; the ones before it are in place and the rest are as they were, their `.part` files gone.
+fn write_all(files: &[(PathBuf, Vec<u8>)]) -> std::io::Result<()> {
+    let mut parts = Vec::new();
+    for (path, bytes) in files {
+        match write_part(path, bytes) {
+            Ok(part) => parts.push(part),
+            Err(e) => {
+                for part in &parts {
+                    let _ = std::fs::remove_file(part);
+                }
+                return Err(e);
+            }
+        }
+    }
+    for (i, ((path, _), part)) in files.iter().zip(&parts).enumerate() {
+        if let Err(e) = put_in_place(path, part) {
+            for part in &parts[i + 1..] {
+                let _ = std::fs::remove_file(part);
+            }
+            return Err(e);
+        }
+    }
+    Ok(())
+}
+
+/// `part` (from [`write_part`]) put in place of `path` in one step; a read-only mark is lifted
+/// for that step and put back. A failure names the file and leaves no `.part` behind.
+fn put_in_place(path: &Path, part: &Path) -> std::io::Result<()> {
+    replace_with(path, part).map_err(|e| {
+        let _ = std::fs::remove_file(part);
+        naming(path, e)
+    })
+}
+
+// `set_readonly(false)` clears the read-only attribute (Windows) or gives the owner write (Unix).
+#[allow(clippy::permissions_set_readonly_false)]
+fn replace_with(path: &Path, part: &Path) -> std::io::Result<()> {
     let read_only = std::fs::metadata(path).is_ok_and(|m| m.permissions().readonly());
     // Windows refuses to replace a read-only file; elsewhere the folder decides, and the new file
     // gets the mark below.
@@ -80,16 +128,13 @@ fn replace_whole(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         p.set_readonly(false);
         std::fs::set_permissions(path, p)?;
     }
-    let renamed = std::fs::rename(&part, path);
+    let renamed = std::fs::rename(part, path);
     if read_only {
         if let Ok(m) = std::fs::metadata(path) {
             let mut p = m.permissions();
             p.set_readonly(true);
             let _ = std::fs::set_permissions(path, p);
         }
-    }
-    if renamed.is_err() {
-        let _ = std::fs::remove_file(&part);
     }
     renamed
 }
@@ -157,7 +202,7 @@ pub fn choice_for(name: &str, value: &str) -> Option<(Row, String)> {
             Row::Renderer,
             "d3d9",
             "Direct3D 9 (the original's)",
-            "Vulkan (recommended)",
+            crate::settings::OWN_RENDERER,
         ),
         "Borderless" => two(Row::DisplayMode, "0", "Window", "Borderless fullscreen"),
         "Resolution" => Some((Row::Resolution, value.to_string())),
@@ -223,6 +268,11 @@ impl Profiles {
         Profiles {
             dirs: [profile_dir(own, "game"), profile_dir(own, "mods")],
             pending: own.join("settings.ini"),
+            // Off Windows the game's first start makes one profile ready and moves settings.ini
+            // into that one only (host first_profile), so the other keeps its own file, which
+            // play.sh names to the game for that profile's start.
+            own_pending: (!cfg!(windows))
+                .then(|| [own.join("game"), own.join("mods")].map(|d| d.join("settings.ini"))),
         }
     }
 
@@ -233,107 +283,164 @@ impl Profiles {
         })
     }
 
-    fn pending_settings(&self) -> std::io::Result<Option<(String, Settings)>> {
-        match std::fs::read(&self.pending) {
+    /// The settings.ini that profile `i` takes its choices from at its next start: the shared one
+    /// while it is there (it is the settings for both), else (off Windows) the profile's own.
+    fn pending_for(&self, i: usize) -> &Path {
+        match &self.own_pending {
+            Some(own) if !self.pending.exists() => &own[i],
+            _ => &self.pending,
+        }
+    }
+
+    fn pending_at(path: &Path) -> std::io::Result<Option<(String, Settings)>> {
+        match std::fs::read(path) {
             Ok(b) => {
                 let text = profile_settings::decode(&b);
                 let parsed = Settings::parse(&text);
                 Ok(Some((text, parsed)))
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(std::io::Error::new(
-                e.kind(),
-                format!("{}: {e}", self.pending.display()),
-            )),
+            Err(e) => Err(naming(path, e)),
         }
+    }
+
+    /// Whether profile `i` takes a choice in its files: they have nv-rs's sections (Play, or the
+    /// game's first start, made them ready) and no settings.ini waits for it.
+    fn ready(&self, i: usize) -> std::io::Result<bool> {
+        Ok(Self::pending_at(self.pending_for(i))?.is_none()
+            && game_ini::has_sections(&Self::files(&self.dirs[i])?.ini))
     }
 
     /// Whether the choices go into the files: every profile made ready, no settings.ini.
     pub fn in_files(&self) -> std::io::Result<bool> {
-        if self.pending_settings()?.is_some() {
-            return Ok(false);
-        }
-        for dir in &self.dirs {
-            if !game_ini::has_sections(&Self::files(dir)?.ini) {
-                return Ok(false);
-            }
-        }
-        Ok(true)
+        Ok(self.ready(0)? && self.ready(1)?)
     }
 
-    /// What the screen shows: the game profile's files, settings.ini's lines over them while it
-    /// is there.
+    /// What the screen shows: the game profile's files, its settings.ini's lines over them while
+    /// it is there, each line on its own (one the game cannot use is left out, the others kept).
     pub fn shown(&self) -> std::io::Result<Files> {
         let game = Self::files(&self.dirs[0])?;
-        Ok(match self.pending_settings()? {
+        Ok(match Self::pending_at(self.pending_for(0))? {
             None => game,
-            Some((_, pending)) => Files {
-                ini: game_ini::apply_choices(&game.ini, Some(&pending)).0,
-                prefs: profile_settings::apply_to_prefs(&game.prefs, &pending.prefs_lines()),
-            },
+            Some((_, pending)) => {
+                let pending = usable(&pending);
+                Files {
+                    ini: game_ini::apply_choices(&game.ini, Some(&pending)).0,
+                    prefs: profile_settings::apply_to_prefs(&game.prefs, &pending.prefs_lines()),
+                }
+            }
         })
     }
 
-    /// `row` set to `choice`: in both profiles' files, or (before Play made them ready, or while a
-    /// settings.ini is there) in settings.ini. Nothing is written when a file cannot be read.
+    /// `row` set to `choice`: in place in each profile made ready, and in the settings.ini of each
+    /// one that is not (all its options a line, the choice made, the lines of other names kept);
+    /// on Windows, while either profile is not ready, in the shared settings.ini only.
+    /// The mods profile first, the game profile (what the screen shows) last; every file written
+    /// whole beside itself before any takes its place. Nothing is written when a file cannot be
+    /// read.
     pub fn save(&self, row: Row, choice: &str) -> std::io::Result<()> {
-        if self.in_files()? {
-            // Every file read first: one that cannot be read stops the save before any write.
-            let mut each = Vec::new();
-            for dir in self.dirs.iter().rev() {
-                each.push((dir.clone(), Self::files(dir)?));
-            }
-            for (dir, files) in each {
+        let shown = self.shown()?;
+        // Windows (one shared settings.ini): while a profile is not ready, the choices go into
+        // settings.ini only, and Play.exe moves them into both at its next start.
+        let shared_only = self.own_pending.is_none() && !self.in_files()?;
+        let mut writes: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+        for i in [1, 0] {
+            if !shared_only && self.ready(i)? {
+                let dir = &self.dirs[i];
+                let files = Self::files(dir)?;
                 let new = row.apply(&files, choice);
                 if new.prefs != files.prefs && dir.join("FalloutPrefs.ini").exists() {
-                    write_whole(&dir.join("FalloutPrefs.ini"), &bytes_of(&new.prefs))?;
+                    writes.push((dir.join("FalloutPrefs.ini"), bytes_of(&new.prefs)));
                 }
                 if new.ini != files.ini {
-                    write_whole(&dir.join("Fallout.ini"), &bytes_of(&new.ini))?;
+                    writes.push((dir.join("Fallout.ini"), bytes_of(&new.ini)));
                 }
+                continue;
             }
-            return Ok(());
-        }
-        // settings.ini: every option a line, the choice made, the lines of other names kept.
-        let shown = self.shown()?;
-        let kept: Vec<String> = match self.pending_settings()? {
-            Some((text, _)) => text
-                .lines()
-                .filter(|l| {
-                    l.split_once('=').is_some_and(|(name, _)| {
-                        let name = name.trim();
-                        !name.starts_with('#')
-                            && !name.starts_with(';')
-                            && !KNOWN.contains(&name)
-                            && !DROPPED.contains(&name)
+            let path = self.pending_for(i).to_path_buf();
+            if writes.iter().any(|(p, _)| *p == path) {
+                continue;
+            }
+            let kept: Vec<String> = match Self::pending_at(&path)? {
+                Some((text, _)) => text
+                    .lines()
+                    .filter(|l| {
+                        l.split_once('=').is_some_and(|(name, _)| {
+                            let name = name.trim();
+                            !name.starts_with('#')
+                                && !name.starts_with(';')
+                                && !is_one_of(name, &KNOWN)
+                                && !is_one_of(name, &DROPPED)
+                                && !row.variable().is_some_and(|v| v.eq_ignore_ascii_case(name))
+                        })
                     })
-                })
-                .map(str::to_string)
-                .collect(),
-            None => Vec::new(),
-        };
-        let chosen = row.apply(&shown, choice);
-        let mut lines = vec![
-            "# nv-rs settings (written by nv-rs's launcher; Play moves them into the game's files)"
-                .to_string(),
-        ];
-        lines.extend(
-            settings_lines(&chosen)
-                .into_iter()
-                .map(|(name, value)| format!("{name}={value}")),
-        );
-        lines.extend(kept);
-        if let Some(dir) = self.pending.parent() {
-            std::fs::create_dir_all(dir)?;
+                    .map(str::to_string)
+                    .collect(),
+                None => Vec::new(),
+            };
+            let chosen = row.apply(&shown, choice);
+            let mut lines = vec![
+                "# nv-rs settings (written by nv-rs's launcher; Play moves them into the game's files)"
+                    .to_string(),
+            ];
+            let own_row = name_of(row);
+            lines.extend(
+                settings_lines(&chosen)
+                    .into_iter()
+                    .map(|(name, value)| match own_row {
+                        // A row set to "Game's setting" says so (the game's own file decides).
+                        Some(n) if n == name && choice == OWN => format!("{name}={OWN}"),
+                        _ => format!("{name}={value}"),
+                    }),
+            );
+            // A Testing row: its own switch, as the game reads it from settings.ini.
+            if let Some(variable) = row.variable() {
+                let on = row.current(&chosen) == "On";
+                lines.push(format!("{variable}={}", u8::from(on)));
+            }
+            lines.extend(kept);
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir).map_err(|e| naming(dir, e))?;
+            }
+            writes.push((path, (lines.join("\r\n") + "\r\n").into_bytes()));
         }
-        write_whole(&self.pending, (lines.join("\r\n") + "\r\n").as_bytes())
+        write_all(&writes)
     }
+}
+
+/// Whether `name` is one of `names`, its case aside (as the game and Settings.ps1 read them).
+fn is_one_of(name: &str, names: &[&str]) -> bool {
+    names.iter().any(|n| n.eq_ignore_ascii_case(name))
+}
+
+/// settings.ini's name for one of the twelve rows.
+fn name_of(row: Row) -> Option<&'static str> {
+    crate::settings::ROWS
+        .iter()
+        .position(|r| *r == row)
+        .map(|i| KNOWN[i])
+}
+
+/// `pending`'s lines the game can use, each on its own: one that cannot be read (a limit that is
+/// not a number, a preset that is neither) is left out and the others stay (one bad line must
+/// not turn a Vanilla choice into Fixes).
+fn usable(pending: &Settings) -> Settings {
+    Settings(
+        pending
+            .0
+            .iter()
+            .filter(|(k, v)| {
+                let one = Settings([((*k).clone(), (*v).clone())].into_iter().collect());
+                one.game_switches().is_ok()
+            })
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::OWN;
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("nv-launcher-{name}-{}", std::process::id()));
@@ -345,8 +452,11 @@ mod tests {
     const SECTIONS: &str = "[Display]\r\niPresentInterval=1\r\n[nv-rs Display]\r\n;the renderer\r\nsRenderer=vulkan\r\niFrameLimit=0\r\n[nv-rs General]\r\nsPreset=fixes\r\n";
     const PREFS: &str = "[Display]\r\niSize W=1920\r\niSize H=1080\r\niMultiSample=4\r\n";
 
+    /// Both profiles made ready, by Windows' rule (one shared settings.ini; Play.exe makes both
+    /// profiles ready at once), whatever system the tests run on.
     fn ready(own: &Path) -> Profiles {
-        let p = Profiles::at(own);
+        let mut p = Profiles::at(own);
+        p.own_pending = None;
         for dir in &p.dirs {
             std::fs::create_dir_all(dir).unwrap();
             std::fs::write(dir.join("Fallout.ini"), SECTIONS).unwrap();
@@ -362,18 +472,17 @@ mod tests {
         let own = scratch("both");
         let p = ready(&own);
         assert!(p.in_files().unwrap());
-        p.save(Row::Renderer, "Direct3D 9 (the original's)")
-            .unwrap();
+        p.save(Row::FrameLimit, "144").unwrap();
         p.save(Row::Resolution, "2560x1440").unwrap();
         for dir in &p.dirs {
             let ini = std::fs::read_to_string(dir.join("Fallout.ini")).unwrap();
-            assert_eq!(ini, SECTIONS.replace("sRenderer=vulkan", "sRenderer=d3d9"));
+            assert_eq!(ini, SECTIONS.replace("iFrameLimit=0", "iFrameLimit=144"));
             let prefs = std::fs::read_to_string(dir.join("FalloutPrefs.ini")).unwrap();
             assert_eq!(prefs, PREFS.replace("1920", "2560").replace("1080", "1440"));
             assert!(!dir.join("Fallout.ini.part").exists());
         }
         let shown = p.shown().unwrap();
-        assert_eq!(Row::Renderer.current(&shown), "Direct3D 9 (the original's)");
+        assert_eq!(Row::FrameLimit.current(&shown), "144");
         // "Game's setting" writes nothing.
         p.save(Row::AntiAliasing, OWN).unwrap();
         let prefs = std::fs::read_to_string(p.dirs[1].join("FalloutPrefs.ini")).unwrap();
@@ -443,14 +552,142 @@ mod tests {
         std::fs::remove_file(&ini).unwrap();
         std::fs::create_dir_all(&ini).unwrap();
         let before = std::fs::read(p.dirs[1].join("Fallout.ini")).unwrap();
-        let e = p
-            .save(Row::Renderer, "Direct3D 9 (the original's)")
-            .unwrap_err();
+        let e = p.save(Row::FrameLimit, "60").unwrap_err();
         assert!(e.to_string().contains("Fallout.ini"), "{e}");
         assert_eq!(
             std::fs::read(p.dirs[1].join("Fallout.ini")).unwrap(),
             before
         );
+        std::fs::remove_dir_all(&own).unwrap();
+    }
+
+    /// Off Windows only the profile the game started first is ready: a choice goes into its files
+    /// in place, and into the other profile's own settings.ini (every option a line; a Testing row
+    /// as its own switch's line), which that profile's first start moves in; nothing shared is
+    /// written. Once both are ready, both take it in place.
+    #[test]
+    fn with_only_the_game_profile_ready_the_other_keeps_its_own_file() {
+        let own = scratch("one-ready");
+        let mut p = Profiles::at(&own);
+        p.own_pending = Some([own.join("game"), own.join("mods")].map(|d| d.join("settings.ini")));
+        std::fs::create_dir_all(&p.dirs[0]).unwrap();
+        std::fs::write(p.dirs[0].join("Fallout.ini"), SECTIONS).unwrap();
+        std::fs::write(p.dirs[0].join("FalloutPrefs.ini"), PREFS).unwrap();
+        assert!(!p.in_files().unwrap());
+        p.save(Row::FrameLimit, "90").unwrap();
+        p.save(Row::AmbientOcclusion, "On").unwrap();
+        let game = std::fs::read_to_string(p.dirs[0].join("Fallout.ini")).unwrap();
+        assert!(game.contains("iFrameLimit=90"), "{game}");
+        assert!(game.contains("bAmbientOcclusion=1"), "{game}");
+        let mods = std::fs::read_to_string(own.join("mods").join("settings.ini")).unwrap();
+        assert!(mods.contains("\r\nFrameLimit=90\r\n"), "{mods}");
+        assert!(mods.contains("\r\nNV_AO=1\r\n"), "{mods}");
+        assert!(!p.pending.exists(), "no shared settings.ini");
+        assert!(!own.join("game").join("settings.ini").exists());
+        // The mods profile's file, read as the game reads it, has both choices.
+        let pending = Settings::parse(&mods);
+        let (ini, _) = game_ini::apply_choices(SECTIONS, Some(&usable(&pending)));
+        let get = |s, k| profile_settings::ini_value(&ini, s, k).map(str::to_string);
+        assert_eq!(
+            get("nv-rs Display", "bAmbientOcclusion").as_deref(),
+            Some("1")
+        );
+        assert_eq!(get("nv-rs Display", "iFrameLimit").as_deref(), Some("90"));
+        // The mods profile made ready (its first start moved the file in): in place from then on.
+        std::fs::create_dir_all(&p.dirs[1]).unwrap();
+        std::fs::write(p.dirs[1].join("Fallout.ini"), SECTIONS).unwrap();
+        std::fs::remove_file(own.join("mods").join("settings.ini")).unwrap();
+        assert!(p.in_files().unwrap());
+        p.save(Row::FrameLimit, "120").unwrap();
+        for dir in &p.dirs {
+            let ini = std::fs::read_to_string(dir.join("Fallout.ini")).unwrap();
+            assert!(ini.contains("iFrameLimit=120"), "{ini}");
+        }
+        std::fs::remove_dir_all(&own).unwrap();
+    }
+
+    /// settings.ini's names are matched without case, as the game reads them: a hand-written
+    /// `framelimit=` or `renderer=` line is replaced by the choice, not kept after it to win.
+    #[test]
+    fn settings_ini_names_are_matched_without_case() {
+        let own = scratch("case");
+        let mut p = Profiles::at(&own);
+        p.own_pending = None;
+        let hand = "framelimit=45\r\nrenderer=vulkan\r\nnv_preset=vanilla\r\nOther=1\r\n";
+        std::fs::write(&p.pending, hand).unwrap();
+        p.save(Row::FrameLimit, "60").unwrap();
+        let text = std::fs::read_to_string(&p.pending).unwrap();
+        assert!(!text.contains("framelimit=45"), "{text}");
+        assert!(!text.contains("renderer=vulkan"), "{text}");
+        assert!(!text.contains("nv_preset"), "{text}");
+        assert!(text.contains("\r\nFrameLimit=60\r\n"), "{text}");
+        assert!(text.contains("\r\nOther=1\r\n"), "{text}");
+        assert_eq!(Row::FrameLimit.current(&p.shown().unwrap()), "60");
+        std::fs::remove_dir_all(&own).unwrap();
+    }
+
+    /// One line the game cannot use (a limit that is not a number) leaves the other lines as they
+    /// are: a Vanilla choice stays Vanilla on the screen and through the next save, and the bad
+    /// line is replaced by what the screen shows.
+    #[test]
+    fn one_bad_line_does_not_drop_the_others() {
+        let own = scratch("bad-line");
+        let mut p = Profiles::at(&own);
+        p.own_pending = None;
+        let text = "Preset=vanilla\r\nFrameLimit=abc\r\nMenuFrameLimit=60\r\n";
+        std::fs::write(&p.pending, text).unwrap();
+        let shown = p.shown().unwrap();
+        assert_eq!(
+            Row::GameFixes.current(&shown),
+            "Vanilla (the original game)"
+        );
+        assert_eq!(Row::MenuFrameLimit.current(&shown), "60");
+        p.save(Row::VSync, "Off").unwrap();
+        let text = std::fs::read_to_string(&p.pending).unwrap();
+        assert!(text.contains("\r\nPreset=vanilla\r\n"), "{text}");
+        assert!(text.contains("\r\nMenuFrameLimit=60\r\n"), "{text}");
+        assert!(!text.contains("abc"), "{text}");
+        assert!(Settings::parse(&text).game_switches().is_ok(), "{text}");
+        std::fs::remove_dir_all(&own).unwrap();
+    }
+
+    /// A row set to "Game's setting" in settings.ini says so (the game's own file decides), not
+    /// the value it had.
+    #[test]
+    fn game_setting_is_written_into_settings_ini() {
+        let own = scratch("own-line");
+        let mut p = Profiles::at(&own);
+        p.own_pending = None;
+        std::fs::write(&p.pending, "AntiAliasing=4x\r\nResolution=1920x1080\r\n").unwrap();
+        p.save(Row::AntiAliasing, OWN).unwrap();
+        let text = std::fs::read_to_string(&p.pending).unwrap();
+        assert!(
+            text.contains(&format!("\r\nAntiAliasing={OWN}\r\n")),
+            "{text}"
+        );
+        assert!(text.contains("\r\nResolution=1920x1080\r\n"), "{text}");
+        assert_eq!(Row::AntiAliasing.current(&p.shown().unwrap()), OWN);
+        std::fs::remove_dir_all(&own).unwrap();
+    }
+
+    /// Every file of a save is written whole beside itself before any takes its place: when one
+    /// cannot be written, no profile has changed and no `.part` is left.
+    #[test]
+    fn a_save_that_cannot_write_one_file_changes_none() {
+        let own = scratch("all-or-none");
+        let p = ready(&own);
+        // The game profile's Fallout.ini.part is a folder: its part cannot be written.
+        std::fs::create_dir_all(p.dirs[0].join("Fallout.ini.part").join("x")).unwrap();
+        let read_all = || -> Vec<Vec<u8>> {
+            p.dirs
+                .iter()
+                .map(|d| std::fs::read(d.join("Fallout.ini")).unwrap())
+                .collect()
+        };
+        let before = read_all();
+        assert!(p.save(Row::FrameLimit, "60").is_err());
+        assert_eq!(read_all(), before);
+        assert!(!p.dirs[1].join("Fallout.ini.part").exists());
         std::fs::remove_dir_all(&own).unwrap();
     }
 

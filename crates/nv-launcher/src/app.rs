@@ -375,6 +375,48 @@ pub fn next_wake(w: &Waiting) -> (Option<Instant>, bool) {
     (Some(next), wants_redraw(w.drawn, w.key, w.retry_at, w.now))
 }
 
+/// The redraw's bookkeeping, kept apart from the window so that what the window does with it is
+/// tested: what was last put on screen and when a frame not drawn is tried again. The redraw
+/// tells it each frame's step ([`FrameState::on_frame`]), a new screen that something else shows
+/// ([`FrameState::changed`]), and the event loop asks it when to wake ([`FrameState::wake`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FrameState {
+    pub drawn: Option<(usize, bool)>,
+    pub retry_at: Option<Instant>,
+}
+
+impl FrameState {
+    /// A frame's `step` for `key` (what shows) at `now` ([`frame_outcome`]).
+    pub fn on_frame(&mut self, step: FrameStep, key: (usize, bool), now: Instant) {
+        (self.drawn, self.retry_at) = frame_outcome(step, key, now);
+    }
+
+    /// Something else shows (a new screen, a resize): drawn at the next wake, whatever its key.
+    pub fn changed(&mut self) {
+        self.drawn = None;
+    }
+
+    /// When the event loop wakes next and whether it asks for a redraw now ([`next_wake`]).
+    pub fn wake(
+        &self,
+        can_draw: bool,
+        typing: bool,
+        shown_ms: u64,
+        key: (usize, bool),
+        now: Instant,
+    ) -> (Option<Instant>, bool) {
+        next_wake(&Waiting {
+            can_draw,
+            typing,
+            shown_ms,
+            drawn: self.drawn,
+            key,
+            retry_at: self.retry_at,
+            now,
+        })
+    }
+}
+
 /// Whether a redraw is asked for `now`: what shows (`key`) is not what was last put on screen
 /// (`drawn`), and no wait after a frame not drawn (`retry_at`) is still running.
 pub fn wants_redraw(
@@ -515,9 +557,23 @@ pub fn settings_entries(
 }
 
 /// Left and Right on a row: the choice before or after the one it has, round the list.
+/// "Game's setting" is passed over (it writes nothing, so stepping onto it would leave the row
+/// where it was and Left/Right stuck): from it, Right gives the first other choice and Left the
+/// last; from a value the list lacks, the same.
 pub fn stepped_choice(choices: &[String], now: &str, forward: bool) -> Option<String> {
+    let choices: Vec<&String> = choices
+        .iter()
+        .filter(|c| c.as_str() != settings::OWN)
+        .collect();
     let n = choices.len();
-    let i = choices.iter().position(|c| c == now)?;
+    let Some(i) = choices.iter().position(|c| c.as_str() == now) else {
+        let end = if forward {
+            choices.first()
+        } else {
+            choices.last()
+        };
+        return end.map(|c| (*c).clone());
+    };
     let next = if forward {
         (i + 1) % n
     } else {
@@ -619,12 +675,11 @@ struct App {
     working: bool,
     /// The window was closed while Play ran: the launcher ends when Play ends.
     closed: bool,
-    /// What the last drawn picture showed ([`App::frame_key`]): drawn again only when it changes.
-    drawn: Option<(usize, bool)>,
+    /// What the last drawn picture showed ([`App::frame_key`]) and when a frame not drawn is tried
+    /// again ([`FrameState`]).
+    frame: FrameState,
     /// When the drawing was last chosen again ([`may_choose_again`]).
     chosen_again: Vec<Instant>,
-    /// When a frame that was not drawn is tried again ([`retry_after`]).
-    retry_at: Option<Instant>,
     /// The window could not be made or drawn in ([`cannot_draw`] said why).
     no_window: bool,
     exit_code: i32,
@@ -767,7 +822,7 @@ impl App {
         self.started = Instant::now();
         self.finished = !typed;
         // Something else shows: drawn whatever the last key was (a new screen can have the same).
-        self.drawn = None;
+        self.frame.changed();
         if self.hidden && !self.closed {
             if let Some(w) = &self.window {
                 w.set_minimized(false);
@@ -870,7 +925,7 @@ impl App {
                 if step == FrameStep::Reconfigure {
                     surface.configure(&gpu.device, config);
                 }
-                (self.drawn, self.retry_at) = frame_outcome(step, key, Instant::now());
+                self.frame.on_frame(step, key, Instant::now());
                 return;
             }
         };
@@ -885,7 +940,7 @@ impl App {
         );
         gpu.queue.submit([encoder.finish()]);
         gpu.queue.present(frame);
-        (self.drawn, self.retry_at) = frame_outcome(FrameStep::Draw, key, Instant::now());
+        self.frame.on_frame(FrameStep::Draw, key, Instant::now());
         let intro_over = match &self.mode {
             Mode::Intro(intro) => {
                 Some(self.started.elapsed().as_millis() as u64 >= intro.total_ms())
@@ -921,7 +976,7 @@ impl App {
         self.config = None;
         self.gpu = None;
         self.instance = None;
-        self.drawn = None;
+        self.frame.changed();
         let Some(window) = self.window.clone() else {
             return;
         };
@@ -1127,15 +1182,10 @@ impl App {
     fn save(&mut self, testing: bool, index: usize, choice: &str) {
         let row = rows_of(testing)[index];
         let profiles = crate::profiles::Profiles::at(&self.place.own);
-        let note = if testing && !profiles.in_files().unwrap_or(false) {
-            // settings.ini has no lines for them: they live only in the game's own files.
-            Some("Not saved: these live in the game's own files, which Play makes ready at its first start. Play once, then choose them here.".to_string())
-        } else {
-            profiles
-                .save(row, choice)
-                .err()
-                .map(|e| format!("Not saved: {e}"))
-        };
+        let note = profiles
+            .save(row, choice)
+            .err()
+            .map(|e| format!("Not saved: {e}"));
         self.show_settings(testing, index, note);
     }
 
@@ -1469,7 +1519,7 @@ impl winit::application::ApplicationHandler<Event> for App {
                     config.height = size.height.max(1);
                     surface.configure(&g.device, config);
                 }
-                self.drawn = None;
+                self.frame.changed();
                 self.request_redraw();
             }
             WindowEvent::RedrawRequested => self.redraw(event_loop),
@@ -1583,15 +1633,13 @@ impl winit::application::ApplicationHandler<Event> for App {
             }
             return;
         }
-        let (wake, redraw) = next_wake(&Waiting {
-            can_draw: self.can_draw(),
-            typing: !self.finished || matches!(self.mode, Mode::Intro(_)),
-            shown_ms: self.started.elapsed().as_millis() as u64,
-            drawn: self.drawn,
-            key: self.frame_key(),
-            retry_at: self.retry_at,
-            now: Instant::now(),
-        });
+        let (wake, redraw) = self.frame.wake(
+            self.can_draw(),
+            !self.finished || matches!(self.mode, Mode::Intro(_)),
+            self.started.elapsed().as_millis() as u64,
+            self.frame_key(),
+            Instant::now(),
+        );
         event_loop.set_control_flow(match wake {
             Some(at) => winit::event_loop::ControlFlow::WaitUntil(at),
             None => winit::event_loop::ControlFlow::Wait,
@@ -1730,9 +1778,8 @@ pub fn run(raw: Vec<String>) -> i32 {
         minimise_at: None,
         working: false,
         closed: false,
-        drawn: None,
+        frame: FrameState::default(),
         chosen_again: Vec::new(),
-        retry_at: None,
         no_window: false,
         exit_code: 0,
         desktop: (0, 0),
@@ -2094,6 +2141,50 @@ mod tests {
         assert!(!wants_redraw(Some(last), last, None, t0));
     }
 
+    /// The redraw's bookkeeping as the window uses it, over several retry periods: a surface that
+    /// keeps skipping is asked once each wait (never in between, never left), the frame that is
+    /// drawn at last ends the retries, a new screen with the same key is drawn, a minimised
+    /// window asks nothing whatever is pending.
+    #[test]
+    fn the_frame_state_retries_each_wait_until_a_frame_is_drawn() {
+        let t0 = Instant::now();
+        let ms = |n| t0 + Duration::from_millis(n);
+        let key = (57, false);
+        let mut f = FrameState::default();
+        let mut asked = Vec::new();
+        // Every 6 ms (the intro's typing wake) for half a second; each asked redraw is skipped
+        // until 350 ms, then drawn.
+        for t in (0..500).step_by(6) {
+            let now = ms(t);
+            let (_, redraw) = f.wake(true, true, t, key, now);
+            if redraw {
+                asked.push(t);
+                let step = if t < 350 {
+                    FrameStep::Skip
+                } else {
+                    FrameStep::Draw
+                };
+                f.on_frame(step, key, now);
+            }
+        }
+        // At once, then once a retry period (the first wake at or after each wait), then drawn.
+        assert_eq!(asked, [0, 102, 204, 306, 408], "{asked:?}");
+        assert_eq!(
+            f,
+            FrameState {
+                drawn: Some(key),
+                retry_at: None
+            }
+        );
+        assert!(!f.wake(true, false, 0, key, ms(600)).1);
+        // A new screen that happens to have the same key: drawn.
+        f.changed();
+        assert!(f.wake(true, false, 0, key, ms(600)).1);
+        // Minimised: nothing asked, no wake.
+        f.on_frame(FrameStep::Skip, key, ms(600));
+        assert_eq!(f.wake(false, true, 0, key, ms(900)), (None, false));
+    }
+
     /// The whole wake decision, as the event loop takes it: the intro's last frame skipped is
     /// asked again once the wait is over (the 6 ms typing wakes in between ask nothing); a
     /// finished screen's frame skipped wakes at the retry, not at the next blink, and is
@@ -2214,7 +2305,25 @@ mod tests {
         assert_eq!(stepped_choice(&c, "60", true).as_deref(), Some("90"));
         assert_eq!(stepped_choice(&c, "90", true).as_deref(), Some("No limit"));
         assert_eq!(stepped_choice(&c, "No limit", false).as_deref(), Some("90"));
-        assert_eq!(stepped_choice(&c, "75", true), None);
+        assert_eq!(stepped_choice(&c, "75", true).as_deref(), Some("No limit"));
+        // "Game's setting" is passed over, whichever way.
+        let o: Vec<String> = [settings::OWN, "Off", "2x", "4x"]
+            .map(String::from)
+            .to_vec();
+        assert_eq!(
+            stepped_choice(&o, settings::OWN, true).as_deref(),
+            Some("Off")
+        );
+        assert_eq!(
+            stepped_choice(&o, settings::OWN, false).as_deref(),
+            Some("4x")
+        );
+        assert_eq!(stepped_choice(&o, "4x", true).as_deref(), Some("Off"));
+        assert_eq!(stepped_choice(&o, "Off", false).as_deref(), Some("4x"));
+        assert_eq!(
+            stepped_choice(&[settings::OWN.to_string()], settings::OWN, true),
+            None
+        );
         assert_eq!(short("Vulkan (recommended)"), "Vulkan");
     }
 
