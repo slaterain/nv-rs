@@ -9,9 +9,30 @@
 //! The rows' numbers are fixed ranges per group ([`CRASH`], ...), so groups built side by side add
 //! rows in ranges of their own; `crates/stewie`'s table names each row once and checks that no two
 //! rows share a bit.
+//!
+//! Four agents build the rest side by side, each in files of its own (`measure/stewie`'s split by
+//! game system): the crash fixes' rows stay in this file; share 1a's new rows (the engines and the
+//! console) go in `world.rs`, share 1b's (forms, cells, scripts, saves and sound) in `forms.rs`,
+//! share 2's (AI, actors and the player) in `ai.rs`, share 3's (menus and the HUD) in `menus.rs`
+//! (beside this file), each in its own ranges of [`FIXES`] and
+//! [`VNV_TWEAKS`], made with [`Row::share`]. Every row is reached here as `stewie::NAME`.
+
+mod ai;
+mod forms;
+mod menus;
+mod world;
+
+pub use ai::*;
+pub use forms::*;
+pub use menus::*;
+pub use world::*;
 
 use crate::{args, Engine};
-use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{
+    AtomicBool, AtomicU32, AtomicU64,
+    Ordering::{AcqRel, Acquire, Relaxed},
+};
+use std::sync::Mutex;
 
 /// The table's words: 2,048 rows (Tweaks has 1,082 rows in `measure/stewie/PLAN.md`).
 pub const WORDS: usize = 32;
@@ -26,6 +47,13 @@ impl Row {
         let index = group + n;
         assert!((index as usize) < WORDS * 64, "past the table's rows");
         Row(index)
+    }
+
+    /// Row `n` of a share's range `first..end` (`world.rs`, `forms.rs`, `ai.rs`, `menus.rs`): a row past the
+    /// range's end does not compile (in a `const`).
+    pub const fn share(first: u16, end: u16, n: u16) -> Row {
+        assert!(first + n < end, "past the share's rows");
+        Row::at(first, n)
     }
 
     /// Its bit's number in the table.
@@ -45,6 +73,27 @@ pub const VNV_TWEAKS: u16 = 640;
 pub const OTHER_TWEAKS: u16 = 1024;
 
 const _: () = assert!(CRASH < FIXES && FIXES < VNV_TWEAKS && VNV_TWEAKS < OTHER_TWEAKS);
+// The shares' ranges follow one another and fill the fixes' and the tweaks' groups.
+const _: () = assert!(
+    WORLD_FIXES == FIXES
+        && WORLD_FIXES < WORLD_FIXES_END
+        && WORLD_FIXES_END == FORMS_FIXES
+        && FORMS_FIXES < FORMS_FIXES_END
+        && FORMS_FIXES_END == AI_FIXES
+        && AI_FIXES < AI_FIXES_END
+        && AI_FIXES_END == MENUS_FIXES
+        && MENUS_FIXES < MENUS_FIXES_END
+        && MENUS_FIXES_END == VNV_TWEAKS
+        && WORLD_TWEAKS == VNV_TWEAKS
+        && WORLD_TWEAKS < WORLD_TWEAKS_END
+        && WORLD_TWEAKS_END == FORMS_TWEAKS
+        && FORMS_TWEAKS < FORMS_TWEAKS_END
+        && FORMS_TWEAKS_END == AI_TWEAKS
+        && AI_TWEAKS < AI_TWEAKS_END
+        && AI_TWEAKS_END == MENUS_TWEAKS
+        && MENUS_TWEAKS < MENUS_TWEAKS_END
+        && MENUS_TWEAKS_END == OTHER_TWEAKS
+);
 
 /// S0079, Tweaks' `patchDialogSpeechNullCheck`: `0x935E35`, in the shared actor's clear
 /// (`00935d90`), asks `NiObjectNET::GetController` (`00a5c570`) of the speaker's 3D, which is null
@@ -167,8 +216,68 @@ pub const PERK_DESCRIPTION_TOO_LONG: Row = Row::at(CRASH, 38);
 pub const NPC_ACTIVATE_NULL_PROCESS: Row = Row::at(CRASH, 39);
 /// S0199.06 `MiscCrashFixes` (`InventoryChanges` `004c0cf0` (`0x4C0DD4`)): taking off a worn item that may not be removed, with no actor given, no longer crashes.
 pub const REMOVE_WORN_NULL_ACTOR: Row = Row::at(CRASH, 40);
-/// S0199.09 `MiscCrashFixes` (`004d66d0` (`0x4D6AA5`); `NiAVObject::GetViewerStrings` `00a5ad00` (`0xA5B0C8`)): the console's ShowSceneGraph no longer crashes on an empty property entry.
+/// S0199.09 `MiscCrashFixes` (`004d66d0` (`0x4D6AA5`); `NiAVObject::GetViewerStrings` `00a5ad00` (`0xA5B0C8`)): an empty entry of an object's property list is skipped in its viewer strings and in ShowSceneGraph's controller test; ShowSceneGraph's tree still stops at its Properties list, as with Tweaks.
 pub const SHOW_SCENE_GRAPH_NULL: Row = Row::at(CRASH, 41);
+/// S0107.03 `MemoryLeakFixes` (`Actor::InitiateSearchForAttacker` `008ad970` (`0x8ADAEC`)): an actor searching for its attacker no longer loses 16 bytes each time.
+pub const PACKAGE_TARGET_LEAK: Row = Row::at(CRASH, 42);
+/// S0130.01 `ContinuousBeamProjectileCrashFix` (`BeamProjectile` destructor body `00978f70` (`0x978FB5`)): an actor no longer keeps pointing at its continuous beam after the beam is gone.
+pub const BEAM_SHOOTER_POINTER: Row = Row::at(CRASH, 43);
+/// S0130.03 `ContinuousBeamProjectileCrashFix` (`ContinuousBeamProjectile` `009ab390` (`0x9AB55F`)): loading a save while an NPC fires a continuous beam no longer crashes.
+pub const BEAM_NPC_NULL_NODE: Row = Row::at(CRASH, 44);
+/// S0183 `FollowerTopicUseAfterFreeFix` (`~Actor` `0087dcb0` (`0x87DDD0`)): an actor that goes away no longer leaves a follower bark naming it.
+pub const FOLLOWER_BARK_USE_AFTER_FREE: Row = Row::at(CRASH, 45);
+/// S0199.03 `MiscCrashFixes` (`Actor::DecreaseAmmo` `008a89a0` (`0x8A8B0B`)): an actor whose ammunition entry is taken while it fires (a script on JIP's DecreaseAmmo event) no longer crashes.
+pub const AMMO_ENTRY_GONE: Row = Row::at(CRASH, 46);
+/// S0199.10 `MiscCrashFixes` (`VirtualActorPathHandler::UseDoorAtNode` `009ead90` (`0x9EAF04`)): an NPC away from a path node with no door no longer crashes.
+pub const USE_DOOR_NULL_DOOR: Row = Row::at(CRASH, 47);
+/// S0199.11 `MiscCrashFixes` (`PlayerCharacter::Update` `0093e860` (`0x943DE1`)): the player's regenerating ammunition with no ammunition type equipped no longer crashes.
+pub const REGEN_AMMO_NO_TYPE: Row = Row::at(CRASH, 48);
+/// S0036 `patchRemoveInvalidCasinoDataChipsInSlotMachineMenu` (`SlotMachineMenu::Create` `007c0a40` (`0x7C0AAE`), `RouletteMenu::Create` `007bbe20` (`0x7BBE72`), `BlackJackMenu::Create` `00733630` (`0x73369E`)): a casino record whose plugin is gone is removed when a gambling menu opens; the slot machines no longer refuse to open on it.
+pub const CASINO_INVALID_CHIPS: Row = Row::at(CRASH, 49);
+/// S0196.01 `RouletteMenuFixes` (`RouletteMenu` destructor `007b9020` (`0x7B93C2`)): closing the roulette table no longer empties its freed bet list a second time.
+pub const ROULETTE_BET_LIST_DOUBLE_FREE: Row = Row::at(CRASH, 50);
+/// S0196.02 `RouletteMenuFixes` (`RouletteMenu` destructor `007b9020` (`0x7B92D7`)): the bets still placed when the roulette table closes are freed.
+pub const ROULETTE_BETS_FREED_ON_CLOSE: Row = Row::at(CRASH, 51);
+/// S0196.03 `RouletteMenuFixes` (`RouletteMenu::DoIdle` `007bd2a0` (`0x7BE034`)): each roulette bet is freed once it is settled.
+pub const ROULETTE_BET_FREED_ON_USE: Row = Row::at(CRASH, 52);
+/// S0199.08 `MiscCrashFixes` (`CompanionWheelMenu::Do_UseStim` `00756490` (`0x756771`)): a stimpak given from the companion wheel is no longer also removed from the companion.
+pub const COMPANION_STIMPAK_REMOVED_TWICE: Row = Row::at(CRASH, 53);
+/// S0199.12 `MiscCrashFixes` (`ListBox::BuildFromContainer` `00719ef0` (`0x71A019`, `0x71A02D`)): an item with no name part in an inventory list no longer crashes.
+pub const LIST_BOX_NULL_NAME: Row = Row::at(CRASH, 54);
+/// S0037 `fixNullParticleSystemsCrash` (`BSMasterParticleSystem::ChildHasActiveParticles` `00c5eb90` (`0xC5EBD9`)): a particle system child with no particle data no longer crashes.
+pub const PARTICLE_SYSTEM_NULL_DATA: Row = Row::at(CRASH, 55);
+/// S0048 `patchFixNullFaceGenCrash` (`BSFaceGenModel::LoadModelMesh` `00659ce0` (`0x65A125`)): a face model with no geometry for its tri file no longer crashes.
+pub const FACE_GEN_NULL_GEOMETRY: Row = Row::at(CRASH, 56);
+/// S0108 `patchFixNullNifOwnerCrash` (`NiControllerSequence` activation `00a34f20` (`0xA34FCB`, `0xA35003`)): an animation sequence with no owner no longer crashes when it starts.
+pub const SEQUENCE_NULL_OWNER: Row = Row::at(CRASH, 57);
+/// S0199.04 `MiscCrashFixes` (`hkpEntity::activate` `00c9c1d0` (`0xC9C1DD`)): a physics body with no simulation island no longer crashes when it is woken.
+pub const HKP_ENTITY_NULL_ISLAND: Row = Row::at(CRASH, 58);
+/// S0199.07 `MiscCrashFixes` (`TESObjectCELL::AddReference` `00548230` (`0x54867C`)): a reference whose cell is gone while it is added no longer crashes.
+pub const ADD_REFERENCE_NULL_CELL: Row = Row::at(CRASH, 59);
+/// S0107.01 `MemoryLeakFixes` (`Controls::Rumble` `00a255b0` (`0xA25603`)): the controller's vibration no longer loses 36 bytes each time.
+pub const RUMBLE_STATES_LEAK: Row = Row::at(CRASH, 60);
+/// S0107.04 `MemoryLeakFixes` (`PlayerCharacter::FocusOnActor` `00953060` (`0x953253`, `0x9532B0`)): turning to an actor's head in dialogue no longer loses 4 bytes each time.
+pub const FOCUS_SPEAKER_NAME_LEAK: Row = Row::at(CRASH, 61);
+/// S0023 `patchPrintBSXCrash` (`00c80090` (`0xC800D5`)): a model node with no first child no longer crashes the entity test; Tweaks' console line names it.
+pub const INVALID_FADE_NODE: Row = Row::at(CRASH, 62);
+/// S0031 `patchAddNifShapeNullChecks` (`00d21960` (`0xD21960`)): a rigid body whose shape is missing (a model's blocks out of order) no longer crashes; Tweaks' console line names the model.
+pub const NULL_HKP_SHAPE: Row = Row::at(CRASH, 63);
+/// S0199.02 `MiscCrashFixes` (`008b52a0` (`0x8B558C`, `0x8B5B13`, `0x8B606B`)): cutting off a limb whose node the model lacks no longer crashes.
+pub const DISMEMBER_NULL_LIMB: Row = Row::at(CRASH, 64);
+/// S0155 `patchNullAudioCrash` (`00aec530` (`0xAECF39`, `0xAED074`)): a sound with an effect whose buffer was never made no longer crashes when it is prepared.
+pub const NULL_AUDIO: Row = Row::at(CRASH, 65);
+/// S0225 `SamplerStateLeakFix` (`NiD3DTextureStage::ConfigureStage` `00e7eb00`): a texture stage whose texture is unchanged but whose wrap or clamp differs from the device's is set up again instead of keeping the last material's addressing.
+pub const SAMPLER_STATE_LEAK: Row = Row::at(CRASH, 66);
+/// S0136 `patchTryCatchingQueuedTextureLoadCrash` (`QueuedTexture::Run` `0043c150` (`0x43C20A`), `004436c0` (`0x44373F`), `00443af0` (`0x443B57`)): a queued texture whose data cannot be read (already freed) counts as not loaded instead of crashing; Tweaks' console line says so once.
+pub const QUEUED_TEXTURE_LOAD: Row = Row::at(CRASH, 67);
+/// S0022.43 `MenuFixes` (`Font::MakeIconsTriShape` `00a14da0` (`0xA151D1`, `0xA15164`)): a font button with no icon texture path no longer crashes: the icon shape is hidden and the path is interface\shared\empty.dds.
+pub const FONT_ICON_NO_TEXTURE: Row = Row::at(CRASH, 68);
+/// S0022.48 `MenuFixes` (`00730950` (`0x730A00`)): the repair menu's target item is not freed while the menu is open (Tweaks' trade: that entry leaks instead of a use-after-free).
+pub const REPAIR_TARGET_KEPT: Row = Row::at(CRASH, 69);
+/// S0022.49 `MenuFixes` (`00716010` (`0x7160A2`)): a reference being freed is taken off the console's pickable references too, not only off the HUD's crosshair.
+pub const SELECTABLE_REF_FREED: Row = Row::at(CRASH, 70);
+/// S0025 `patchFixCrashWhenControllerReconnectsInHackingMenu` (`HackingMenu::MakePasswordFile` `00768aa0` (`0x7693F5`)): the hacking menu always sets its character-selection tile, so a controller connected later can pick characters.
+pub const HACKING_SELECTION_TILE: Row = Row::at(CRASH, 71);
 /// S1016 (Engine Optimizations, `Inlines::SaveLoad`: `Write32(0x845558, 0x2735)`): the changes map's
 /// buckets 10,037, not the exe's 5,039 (`00845550`). It changes the order a save walks and writes the
 /// changed forms, so it is a fixes row.
@@ -178,6 +287,157 @@ pub const CHANGES_MAP_BUCKETS: Row = Row::at(FIXES, 0);
 pub mod once {
     /// S0173's "Failed to resolve movement sequence" line.
     pub const MOVEMENT_SEQUENCE: u32 = 0;
+    /// S0136's "Prevented crash when texture failed to load" line.
+    pub const TEXTURE_LOAD: u32 = 1;
+}
+
+/// Tweaks' DLL statics the game's code is handed a pointer to: guest blocks kept for the whole run
+/// ([`Engine::stewie_kept`]), one per static, made the first time a row asks.
+pub mod kept {
+    /// S0107.01's `static VibrationStates states` (0x24 bytes): the rumble effect the controller's
+    /// queue is handed each time, in place of a new block every vibration.
+    pub const RUMBLE_STATES: usize = 0;
+    /// S0107.04's `static NiFixedString strSpeaker` (4 bytes: the handle of "Bip01 Speaker").
+    pub const SPEAKER_NAME: usize = 1;
+    /// How many.
+    pub const COUNT: usize = 2;
+}
+
+/// The last thing each of Tweaks' two Havok warnings printed (its functions' statics), shared by
+/// every thread's engine.
+#[derive(Debug)]
+pub(crate) struct Prints {
+    /// `[Tweaks] bInvalidBSFadeNodePrints` (Tweaks' code default 1): S0023 prints only with it.
+    fade_prints: AtomicBool,
+    /// S0023's `BSXCrashPrint` statics: `lastRefID` and `lastMeshPath` (a guest address), 0 at
+    /// start.
+    fade_ref: AtomicU32,
+    fade_mesh: AtomicU32,
+    /// S0031's `ShowNullHkpShapeWarning` `static char lastModelName[100]`: the last name printed,
+    /// as its `snprintf` copied it (at most 99 bytes).
+    shape_model: Mutex<Vec<u8>>,
+    /// Tweaks' print queue (`queuedConsoleMessages`, in its copy of xNVSE's `GameAPI.cpp`): the lines
+    /// printed off the main thread or before the console exists, printed by [`print_queued`].
+    queued: Mutex<Vec<Vec<u8>>>,
+}
+
+impl Default for Prints {
+    fn default() -> Self {
+        Prints {
+            fade_prints: AtomicBool::new(true),
+            fade_ref: AtomicU32::new(0),
+            fade_mesh: AtomicU32::new(0),
+            shape_model: Mutex::new(Vec::new()),
+            queued: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+/// `__RTDynamicCast` and the type descriptors xNVSE's `TESForm::GetModelPath` casts between.
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const RTTI_TES_FORM: u32 = 0x0118_3028;
+const RTTI_TES_MODEL: u32 = 0x0118_31e8;
+/// The model file the loader is reading (Tweaks' `*(char**)0x11F94C0`).
+const LOADING_MODEL_NAME: u32 = 0x011f_94c0;
+
+/// xNVSE's `TESForm::GetModelPath`: the form's `TESModel` (a dynamic cast) asked its path (virtual
+/// slot 5, `+0x14`: after `BaseFormComponent`'s four and `Destroy`); 0 for none or an empty text.
+fn model_path(e: &mut Engine, form: u32) -> u32 {
+    let model = e
+        .call(
+            DYNAMIC_CAST,
+            &args![form, 0u32, RTTI_TES_FORM, RTTI_TES_MODEL, 0u32],
+        )
+        .u32();
+    if model == 0 {
+        return 0;
+    }
+    let path = e.vcall(model, 0x14, &args![]).u32();
+    if path != 0 && e.mem.u8(path) != 0 {
+        path
+    } else {
+        0
+    }
+}
+
+/// S0023, Tweaks' `BSXCrashPrint(node)`, for a model node (`BSFadeNode`) the entity test found no
+/// first child of: the node's linked reference (`+0xCC`) and its form id (`+0xC`, `0xFFFFFFFF`
+/// for none); for an id other than the last one seen, while `[Tweaks] bInvalidBSFadeNodePrints`
+/// is on, "[Tweaks] Invalid BSFadeNode Detected - Linked Obj ID: %08X (%s)" with the reference's
+/// base form's (`+0x20`) model path ("<unknown mesh>" without one), unless that path is the one
+/// printed last (the same text address). The id is remembered either way. As with Tweaks only an
+/// immediate repeat is skipped: two broken references checked in turn print each time.
+pub fn invalid_fade_node_print(e: &mut Engine, node: u32) {
+    let bits = std::sync::Arc::clone(&e.extend.stewie);
+    let prints = &bits.3;
+    let linked = e.mem.u32(node + 0xcc);
+    let id = if linked != 0 {
+        e.mem.u32(linked + 0xc)
+    } else {
+        0xffff_ffff
+    };
+    if id == prints.fade_ref.load(Relaxed) {
+        return;
+    }
+    if prints.fade_prints.load(Relaxed) {
+        let mut path = 0;
+        if linked != 0 {
+            let base = e.mem.u32(linked + 0x20);
+            if base != 0 {
+                path = model_path(e, base);
+            }
+        }
+        if path == 0 || path != prints.fade_mesh.load(Relaxed) {
+            let format = b"[Tweaks] Invalid BSFadeNode Detected - Linked Obj ID: %08X (%s)";
+            if path != 0 {
+                console_print(e, format, &[id, path]);
+            } else {
+                with_text(e, b"<unknown mesh>", |e, unknown| {
+                    console_print(e, format, &[id, unknown]);
+                });
+            }
+            prints.fade_mesh.store(path, Relaxed);
+        }
+    }
+    prints.fade_ref.store(id, Relaxed);
+}
+
+/// S0031, Tweaks' `ShowNullHkpShapeWarning` (its answer is 0): the model the loader is reading
+/// ("unknown" for none or an empty name), unless it is the name printed last, goes to the console
+/// as "hkpRigidBody error: %s has a missing shape (unordered blocks?)" (formatted into Tweaks'
+/// `MAX_PATH` buffer: at most 259 bytes), with the console's loading-screen test passed over for
+/// the line, as Tweaks' byte at `0x71D0DC` does; the name is remembered as its 100-byte copy
+/// keeps it (99 bytes).
+pub fn null_hkp_shape_warning(e: &mut Engine) {
+    let at = e.mem.u32(LOADING_MODEL_NAME);
+    let mut name = Vec::new();
+    if at != 0 {
+        let mut p = at;
+        while e.mem.u8(p) != 0 {
+            name.push(e.mem.u8(p));
+            p += 1;
+        }
+    }
+    if name.is_empty() {
+        name = b"unknown".to_vec();
+    }
+    {
+        let last = e.extend.stewie.3.shape_model.lock().unwrap();
+        if *last == name {
+            return;
+        }
+    }
+    let mut line = b"hkpRigidBody error: ".to_vec();
+    line.extend_from_slice(&name);
+    line.extend_from_slice(b" has a missing shape (unordered blocks?)");
+    line.truncate(259);
+    with_text(e, &line, |e, text| {
+        e.set_stewie_print_ungated(true);
+        console_print(e, b"%s", &[text]);
+        e.set_stewie_print_ungated(false);
+    });
+    name.truncate(99);
+    *e.extend.stewie.3.shape_model.lock().unwrap() = name;
 }
 
 /// `ConsoleManager_GetSingleton` (`0071b160`, with true) and `ConsoleManager::Print` (`0071d0a0`,
@@ -208,15 +468,124 @@ pub fn console_print(e: &mut Engine, format: &[u8], words: &[u32]) {
     });
 }
 
-/// The table: one bit a row, and the once-a-run messages' flags.
+/// The console singleton's word (`*(ConsoleManager**)0x11D8CE8`): 0 until the console exists.
+const CONSOLE_SINGLETON: u32 = 0x011d_8ce8;
+
+/// Tweaks' `ConsoleQueueOrPrint(text)` (in its copy of xNVSE's `GameAPI.cpp`): on the main thread
+/// with the console made, `Console_Print("%s", text)`; otherwise the text waits in Tweaks' queue
+/// for [`print_queued`].
+pub fn console_queue_or_print(e: &mut Engine, text: &[u8]) {
+    if e.mem.u32(CONSOLE_SINGLETON) != 0 && crate::thread_host::on_main(e) {
+        with_text(e, text, |e, at| console_print(e, b"%s", &[at]));
+    } else {
+        e.extend.stewie.3.queued.lock().unwrap().push(text.to_vec());
+    }
+}
+
+/// Tweaks' `handleQueuedNonMainThreadPrints` (its call at `0x870662`, in the main loop's idle step
+/// `00870610`): every queued line printed with "%s", the queue emptied; nothing when it is empty.
+pub fn print_queued(e: &mut Engine) {
+    let lines = std::mem::take(&mut *e.extend.stewie.3.queued.lock().unwrap());
+    for line in lines {
+        with_text(e, &line, |e, at| console_print(e, b"%s", &[at]));
+    }
+}
+
+/// S0136, Tweaks' `NiTextureQueuedLoadHook(texture)` in place of `0043c430`: the texture's data
+/// (`+0x24`), 0 without one, else the byte at the data's `+0x5B` (`unk58[3]`: the same reads as the
+/// exe's function), inside Tweaks' `__try`: a read of memory that is not there (a texture already
+/// freed) answers 0 and prints "[Tweaks] Prevented crash when texture failed to load..." once a
+/// game, through [`console_queue_or_print`] (texture loads also run on the loader's threads).
+pub fn queued_texture_state(e: &mut Engine, texture: u32) -> u32 {
+    let data_at = texture.wrapping_add(0x24);
+    if e.mem.is_mapped(data_at) {
+        let data = e.mem.u32(data_at);
+        if data == 0 {
+            return 0;
+        }
+        let byte_at = data.wrapping_add(0x5b);
+        if e.mem.is_mapped(byte_at) {
+            return u32::from(e.mem.u8(byte_at));
+        }
+    }
+    if e.stewie_once(once::TEXTURE_LOAD) {
+        console_queue_or_print(
+            e,
+            b"[Tweaks] Prevented crash when texture failed to load...",
+        );
+    }
+    0
+}
+
+/// The two sampler states S0225 compares (`0126f918`: `D3DSAMP_ADDRESSU`, `D3DSAMP_ADDRESSV`), the
+/// map from a sampler state to its slot (`0126f92c`, a halfword each; 5 or more: not one the stage
+/// group keeps), the render state cache whose sampler getter Tweaks calls (`0126f99c`) and that
+/// getter's slot in its class's vtable (`010f095c`, `00e910f0`).
+const VALID_SAMPLER_STATES: u32 = 0x0126_f918;
+const SAMPLER_STATE_SLOTS: u32 = 0x0126_f92c;
+const SAMPLER_RENDER_STATE: u32 = 0x0126_f99c;
+const RENDER_STATE_GET_SAMPLER_STATE: u32 = 0x010f_095c;
+
+/// S0225, Tweaks' `CheckSamplerStateChanged(stage)`: for `ADDRESSU` and `ADDRESSV`, the value the
+/// stage's group (`NiD3DTextureStage` +0x10, `NiD3DTextureStageGroup`) holds for its stage (the
+/// current sampler array at +0x90 when +0xA4's valid byte is set, else the saved one at +0x6C when
+/// +0x80's is; neither: that state is passed over) against the render state cache's current value
+/// for the stage (+4) and state: true at the first that differs.
+pub fn sampler_state_changed(e: &mut Engine, stage: u32) -> bool {
+    let group = e.mem.u32(stage + 0x10);
+    let stage_number = e.mem.u32(stage + 4);
+    for i in 0..2 {
+        let state = e.mem.u32(VALID_SAMPLER_STATES + 4 * i);
+        let slot = u32::from(e.mem.u16(SAMPLER_STATE_SLOTS + 2 * state));
+        if slot > 4 {
+            continue;
+        }
+        let wanted = if e.mem.u8(group + 0xa4 + slot) != 0 {
+            e.mem.u32(group + 0x90 + 4 * slot)
+        } else if e.mem.u8(group + 0x80 + slot) != 0 {
+            e.mem.u32(group + 0x6c + 4 * slot)
+        } else {
+            continue;
+        };
+        let getter = e.mem.u32(RENDER_STATE_GET_SAMPLER_STATE);
+        let cache = e.mem.u32(SAMPLER_RENDER_STATE);
+        let current = e.call(getter, &args![cache, stage_number, state]).u32();
+        if current != wanted {
+            return true;
+        }
+    }
+    false
+}
+
+/// `text` with a 0 after it on the guest stack for `f` (its address).
+fn with_text(e: &mut Engine, text: &[u8], f: impl FnOnce(&mut Engine, u32)) {
+    e.with_stack((text.len() as u32 + 1).next_multiple_of(4), |e, block| {
+        let at = block.addr();
+        for (i, b) in text.iter().enumerate() {
+            e.mem.set_u8(at + i as u32, *b);
+        }
+        e.mem.set_u8(at + text.len() as u32, 0);
+        f(e, at);
+    });
+}
+
+/// The table: one bit a row, the once-a-run messages' flags, the kept blocks' addresses (0 until
+/// made) and the Havok warnings' last lines.
 #[derive(Debug)]
-pub(crate) struct Bits([AtomicU64; WORDS], AtomicU64);
+pub(crate) struct Bits(
+    [AtomicU64; WORDS],
+    AtomicU64,
+    [AtomicU32; kept::COUNT],
+    Prints,
+);
 
 impl Default for Bits {
     fn default() -> Self {
         Bits(
             std::array::from_fn(|_| AtomicU64::new(0)),
             AtomicU64::new(0),
+            std::array::from_fn(|_| AtomicU32::new(0)),
+            Prints::default(),
         )
     }
 }
@@ -248,6 +617,44 @@ impl Engine {
     pub fn stewie_once(&self, message: u32) -> bool {
         let bit = 1u64 << message;
         self.extend.stewie.1.fetch_or(bit, Relaxed) & bit == 0
+    }
+
+    /// The guest block of Tweaks' static `which` ([`kept`]): `size` bytes, zeroed, made the first
+    /// time it is asked and kept for the run; every thread's engine gets the same block.
+    pub fn stewie_kept(&mut self, which: usize, size: u32) -> u32 {
+        let at = self.extend.stewie.2[which].load(Acquire);
+        if at != 0 {
+            return at;
+        }
+        let block = self.mem.alloc(size);
+        match self.extend.stewie.2[which].compare_exchange(0, block, AcqRel, Acquire) {
+            Ok(_) => block,
+            Err(other) => {
+                self.mem.free(block);
+                other
+            }
+        }
+    }
+
+    /// `[Tweaks] bInvalidBSFadeNodePrints` (`crates/stewie`'s install): whether S0023 prints.
+    pub fn set_stewie_fade_node_prints(&self, on: bool) {
+        self.extend.stewie.3.fade_prints.store(on, Relaxed);
+    }
+
+    /// Whether S0023 prints ([`Engine::set_stewie_fade_node_prints`]).
+    pub fn stewie_fade_node_prints(&self) -> bool {
+        self.extend.stewie.3.fade_prints.load(Relaxed)
+    }
+
+    /// Whether the console's print passes over its loading-screen test for this line (S0031's
+    /// warning, as Tweaks' byte at `0x71D0DC` while it prints): `fn_0071d0a0` asks it.
+    pub fn stewie_print_ungated(&self) -> bool {
+        self.extend.stewie_print_ungated
+    }
+
+    /// Sets [`Engine::stewie_print_ungated`] (S0031's warning, around its one line).
+    pub fn set_stewie_print_ungated(&mut self, on: bool) {
+        self.extend.stewie_print_ungated = on;
     }
 
     /// Every row off.
@@ -345,5 +752,301 @@ mod tests {
         e.register(CONSOLE_INSTANCE, |_, _| Ret::default());
         console_print(&mut e, b"x", &[]);
         assert_eq!(SEEN.lock().unwrap().len(), 1);
+    }
+
+    /// The text at `at` up to its 0.
+    fn text(e: &Engine, mut at: u32) -> Vec<u8> {
+        let mut out = vec![];
+        while e.mem.u8(at) != 0 {
+            out.push(e.mem.u8(at));
+            at += 1;
+        }
+        out
+    }
+
+    #[test]
+    fn a_kept_block_is_made_once_zeroed_and_shared() {
+        let mut e = Engine::new();
+        let a = e.stewie_kept(kept::RUMBLE_STATES, 0x24);
+        assert_ne!(a, 0);
+        assert!((0..0x24).all(|i| e.mem.u8(a + i) == 0));
+        e.mem.set_u32(a, 7);
+        assert_eq!(
+            e.stewie_kept(kept::RUMBLE_STATES, 0x24),
+            a,
+            "the same block"
+        );
+        assert_eq!(e.mem.u32(a), 7, "not made or zeroed again");
+        let b = e.stewie_kept(kept::SPEAKER_NAME, 4);
+        assert!(b != 0 && b != a);
+        // Every thread's engine holds the same addresses.
+        let thread = e.extend.for_thread();
+        assert_eq!(thread.stewie.2[kept::RUMBLE_STATES].load(Relaxed), a);
+    }
+
+    /// S0023's print: once per linked reference, not again for the model path printed last, with
+    /// "<unknown mesh>" and id FFFFFFFF for a node with no reference, nothing with
+    /// `bInvalidBSFadeNodePrints` off (the id still remembered).
+    #[test]
+    fn the_invalid_fade_node_line_is_printed_as_tweaks_prints_it() {
+        use crate::abi::Ret;
+        static LINES: Mutex<Vec<(Vec<u8>, u32, Vec<u8>)>> = Mutex::new(Vec::new());
+        const PATH_SLOT: u32 = 0x00ff_5000;
+        let mut e = Engine::new();
+        e.register(CONSOLE_INSTANCE, |_, _| Ret {
+            eax: 0x4000,
+            ..Ret::default()
+        });
+        e.register(CONSOLE_PRINT, |e, a| {
+            let line = (text(e, a[1]), e.mem.u32(a[2]), text(e, e.mem.u32(a[2] + 4)));
+            LINES.lock().unwrap().push(line);
+            Ret::default()
+        });
+        // The cast answers the form + 0x30 as its model; the model's path is its word at +4.
+        e.register(DYNAMIC_CAST, |_, a| {
+            assert_eq!((a[2], a[3]), (RTTI_TES_FORM, RTTI_TES_MODEL));
+            Ret {
+                eax: a[0] + 0x30,
+                ..Ret::default()
+            }
+        });
+        e.register(PATH_SLOT, |e, a| Ret {
+            eax: e.mem.u32(a[0] + 4),
+            ..Ret::default()
+        });
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 0x14, PATH_SLOT);
+        let path = e.mem.alloc(16);
+        for (i, b) in b"rock.nif\0".iter().enumerate() {
+            e.mem.set_u8(path + i as u32, *b);
+        }
+        let base = e.mem.alloc(0x40);
+        e.mem.set_u32(base + 0x30, vtable);
+        e.mem.set_u32(base + 0x34, path);
+        let reference = |e: &mut Engine, id: u32| {
+            let r = e.mem.alloc(0x24);
+            e.mem.set_u32(r + 0xc, id);
+            e.mem.set_u32(r + 0x20, base);
+            r
+        };
+        let node = |e: &mut Engine, linked: u32| {
+            let n = e.mem.alloc(0xe4);
+            e.mem.set_u32(n + 0xcc, linked);
+            n
+        };
+        let format = b"[Tweaks] Invalid BSFadeNode Detected - Linked Obj ID: %08X (%s)".to_vec();
+        let first = reference(&mut e, 0x1234);
+        let a = node(&mut e, first);
+        invalid_fade_node_print(&mut e, a);
+        invalid_fade_node_print(&mut e, a);
+        assert_eq!(
+            LINES.lock().unwrap().as_slice(),
+            [(format.clone(), 0x1234, b"rock.nif".to_vec())],
+            "once for the reference"
+        );
+        // Another reference with the same model: the path printed last, no line.
+        let second = reference(&mut e, 0x5678);
+        let b = node(&mut e, second);
+        invalid_fade_node_print(&mut e, b);
+        assert_eq!(LINES.lock().unwrap().len(), 1);
+        // No reference: id FFFFFFFF and the unknown mesh.
+        let c = node(&mut e, 0);
+        invalid_fade_node_print(&mut e, c);
+        assert_eq!(
+            LINES.lock().unwrap()[1],
+            (format.clone(), 0xffff_ffff, b"<unknown mesh>".to_vec())
+        );
+        // Prints off: nothing, the id remembered (back on, the same reference prints nothing).
+        e.set_stewie_fade_node_prints(false);
+        invalid_fade_node_print(&mut e, a);
+        e.set_stewie_fade_node_prints(true);
+        invalid_fade_node_print(&mut e, a);
+        assert_eq!(LINES.lock().unwrap().len(), 2);
+        // A new id after an unknown mesh prints again with the model's path.
+        invalid_fade_node_print(&mut e, b);
+        assert_eq!(LINES.lock().unwrap()[2].1, 0x5678);
+        // Only an immediate repeat is skipped: two references with other models checked in turn
+        // (one with its own model, then a, then the first again) print each time.
+        let tree = e.mem.alloc(16);
+        for (i, ch) in b"tree.nif\0".iter().enumerate() {
+            e.mem.set_u8(tree + i as u32, *ch);
+        }
+        let other_base = e.mem.alloc(0x40);
+        e.mem.set_u32(other_base + 0x30, vtable);
+        e.mem.set_u32(other_base + 0x34, tree);
+        let third = e.mem.alloc(0x24);
+        e.mem.set_u32(third + 0xc, 0x9abc);
+        e.mem.set_u32(third + 0x20, other_base);
+        let d = node(&mut e, third);
+        for n in [d, a, d] {
+            invalid_fade_node_print(&mut e, n);
+        }
+        let lines = LINES.lock().unwrap();
+        let tail: Vec<(u32, Vec<u8>)> = lines[3..].iter().map(|l| (l.1, l.2.clone())).collect();
+        assert_eq!(
+            tail,
+            [
+                (0x9abc, b"tree.nif".to_vec()),
+                (0x1234, b"rock.nif".to_vec()),
+                (0x9abc, b"tree.nif".to_vec())
+            ]
+        );
+    }
+
+    /// S0031's warning: the loader's model name (or "unknown"), once until another model is
+    /// named, printed past the console's loading-screen test; a name of 100 bytes or more is
+    /// printed each time (Tweaks' 100-byte copy keeps 99 and never matches it).
+    #[test]
+    fn the_null_shape_warning_names_the_model_once() {
+        use crate::abi::Ret;
+        static LINES: Mutex<Vec<(Vec<u8>, bool)>> = Mutex::new(Vec::new());
+        let mut e = Engine::new();
+        e.register(CONSOLE_INSTANCE, |_, _| Ret {
+            eax: 0x4000,
+            ..Ret::default()
+        });
+        e.register(CONSOLE_PRINT, |e, a| {
+            assert_eq!(text(e, a[1]), b"%s");
+            let line = (text(e, e.mem.u32(a[2])), e.stewie_print_ungated());
+            LINES.lock().unwrap().push(line);
+            Ret::default()
+        });
+        e.mem.map(LOADING_MODEL_NAME & !0xfff, 0x1000);
+        let name = |e: &mut Engine, s: &[u8]| {
+            let at = e.mem.alloc(s.len() as u32 + 1);
+            for (i, b) in s.iter().enumerate() {
+                e.mem.set_u8(at + i as u32, *b);
+            }
+            e.mem.set_u32(LOADING_MODEL_NAME, at);
+        };
+        let line = |n: &str| {
+            format!("hkpRigidBody error: {n} has a missing shape (unordered blocks?)").into_bytes()
+        };
+        name(&mut e, b"meshes/a.nif");
+        null_hkp_shape_warning(&mut e);
+        null_hkp_shape_warning(&mut e);
+        assert_eq!(
+            LINES.lock().unwrap().as_slice(),
+            [(line("meshes/a.nif"), true)]
+        );
+        assert!(!e.stewie_print_ungated(), "gated again after the line");
+        e.mem.set_u32(LOADING_MODEL_NAME, 0);
+        null_hkp_shape_warning(&mut e);
+        null_hkp_shape_warning(&mut e);
+        name(&mut e, b"");
+        null_hkp_shape_warning(&mut e);
+        assert_eq!(LINES.lock().unwrap().len(), 2);
+        assert_eq!(LINES.lock().unwrap()[1].0, line("unknown"));
+        let long = "x".repeat(100);
+        name(&mut e, long.as_bytes());
+        null_hkp_shape_warning(&mut e);
+        null_hkp_shape_warning(&mut e);
+        assert_eq!(
+            LINES.lock().unwrap().len(),
+            4,
+            "a name of 100 bytes every time"
+        );
+        assert_eq!(LINES.lock().unwrap()[3].0, line(&long));
+    }
+
+    /// S0225's comparison: ADDRESSU, then ADDRESSV; the group's current value when its valid byte
+    /// is set, else its saved one, else that state is passed over; a state the slot map puts at 5
+    /// or more is passed over; true at the first that differs from the render state's.
+    #[test]
+    fn the_sampler_state_compare_reads_as_tweaks_does() {
+        use crate::abi::Ret;
+        const GETTER: u32 = 0x00ff_6000;
+        let mut e = Engine::new();
+        for (at, len) in [
+            (VALID_SAMPLER_STATES, 8u32),
+            (SAMPLER_STATE_SLOTS, 0x10),
+            (SAMPLER_RENDER_STATE, 4),
+            (RENDER_STATE_GET_SAMPLER_STATE, 4),
+        ] {
+            e.mem.map(at, len);
+        }
+        e.mem.set_u32(VALID_SAMPLER_STATES, 1);
+        e.mem.set_u32(VALID_SAMPLER_STATES + 4, 2);
+        e.mem.set_u16(SAMPLER_STATE_SLOTS + 2, 0);
+        e.mem.set_u16(SAMPLER_STATE_SLOTS + 4, 1);
+        // The render state's value for (stage, state): the word at cache + 4 * state.
+        let cache = e.mem.alloc(0x10);
+        e.mem.set_u32(SAMPLER_RENDER_STATE, cache);
+        e.mem.set_u32(RENDER_STATE_GET_SAMPLER_STATE, GETTER);
+        e.register(GETTER, |e, a| {
+            assert_eq!(a[1], 2, "the stage's number");
+            Ret {
+                eax: e.mem.u32(a[0] + 4 * a[2]),
+                ..Ret::default()
+            }
+        });
+        let group = e.mem.alloc(0xb8);
+        let stage = e.mem.alloc(0x68);
+        e.mem.set_u32(stage + 4, 2);
+        e.mem.set_u32(stage + 0x10, group);
+        // Neither state held by the group: nothing differs.
+        e.mem.set_u32(cache + 4, 7);
+        assert!(!sampler_state_changed(&mut e, stage));
+        // ADDRESSU current 7 = the device's; ADDRESSV saved 3, the device's 0: differs.
+        e.mem.set_u8(group + 0xa4, 1);
+        e.mem.set_u32(group + 0x90, 7);
+        assert!(!sampler_state_changed(&mut e, stage));
+        e.mem.set_u8(group + 0x81, 1);
+        e.mem.set_u32(group + 0x6c + 4, 3);
+        assert!(sampler_state_changed(&mut e, stage), "the second state");
+        e.mem.set_u32(cache + 8, 3);
+        assert!(!sampler_state_changed(&mut e, stage));
+        // The current value wins over the saved one.
+        e.mem.set_u8(group + 0xa5, 1);
+        e.mem.set_u32(group + 0x94, 4);
+        assert!(sampler_state_changed(&mut e, stage), "current over saved");
+        // A state mapped to slot 5 or more is not one the group keeps.
+        e.mem.set_u16(SAMPLER_STATE_SLOTS + 4, 5);
+        assert!(!sampler_state_changed(&mut e, stage));
+    }
+
+    /// S0136's read: the texture's data byte, 0 without data, and for memory that is not there 0
+    /// with Tweaks' line once a game, queued off the main thread or before the console exists and
+    /// printed by the main loop's drain.
+    #[test]
+    fn the_queued_texture_state_reads_as_tweaks_try_does() {
+        use crate::abi::Ret;
+        static LINES: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
+        let mut e = Engine::new();
+        e.register(CONSOLE_INSTANCE, |_, _| Ret {
+            eax: 0x4000,
+            ..Ret::default()
+        });
+        e.register(CONSOLE_PRINT, |e, a| {
+            assert_eq!(text(e, a[1]), b"%s");
+            LINES.lock().unwrap().push(text(e, e.mem.u32(a[2])));
+            Ret::default()
+        });
+        e.mem.map(CONSOLE_SINGLETON & !0xfff, 0x1000);
+        let texture = e.mem.alloc(0x30);
+        assert_eq!(queued_texture_state(&mut e, texture), 0, "no data");
+        let data = e.mem.alloc(0x60);
+        e.mem.set_u32(texture + 0x24, data);
+        e.mem.set_u8(data + 0x5b, 3);
+        assert_eq!(queued_texture_state(&mut e, texture), 3);
+        assert!(LINES.lock().unwrap().is_empty());
+        // Data that is not there (a texture freed under the loader), then no texture at all: 0,
+        // and the line once, queued while the console does not exist yet.
+        e.mem.unmap(0, 0x1000);
+        e.mem.set_u32(texture + 0x24, 0x0000_0100);
+        assert_eq!(queued_texture_state(&mut e, texture), 0);
+        assert_eq!(queued_texture_state(&mut e, 0), 0);
+        assert!(LINES.lock().unwrap().is_empty(), "queued, not printed");
+        print_queued(&mut e);
+        let line = b"[Tweaks] Prevented crash when texture failed to load...".to_vec();
+        assert_eq!(*LINES.lock().unwrap(), vec![line.clone()]);
+        print_queued(&mut e);
+        assert_eq!(LINES.lock().unwrap().len(), 1, "the queue emptied");
+        // With the console made, on the main thread, a line prints at once.
+        e.mem.set_u32(CONSOLE_SINGLETON, 0x4000);
+        console_queue_or_print(&mut e, b"now");
+        assert_eq!(LINES.lock().unwrap()[1], b"now".to_vec());
+        print_queued(&mut e);
+        assert_eq!(LINES.lock().unwrap().len(), 2);
     }
 }

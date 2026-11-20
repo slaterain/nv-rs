@@ -3459,6 +3459,33 @@ fn show_text(e: &mut Engine, setting: u32, icon: u32) {
     e.call(0x0070_52f0, &args![text, 0u32, icon, 0u32, duration, 0u32]);
 }
 
+/// The round a weapon that regenerates its ammunition adds when its time is up (in
+/// `PlayerCharacter::Update`, from `0x943DBF`): an item (a 24-byte local, `00481610`) of the weapon's
+/// equipped ammunition type (`00525980`), given to the player and equipped, then the local's
+/// destructor (`00481680`).
+fn add_regenerated_round(e: &mut Engine, weapon_form: u32) {
+    e.with_stack(24, |e, object| {
+        e.call(0x0048_1610, &args![object]);
+        let player = e.global::<u32>(PLAYER_SINGLETON);
+        let first = e.call(0x0052_5980, &args![weapon_form, player]).u32();
+        // lStewieAl's Tweaks' row S0199.11 (`MiscCrashFixes`, `0x943DE1`): no equipped
+        // ammunition type, nothing to add (the jump to `0x943E25`).
+        if !(first == 0 && e.stewie(engine_core::extend::stewie::REGEN_AMMO_NO_TYPE)) {
+            e.call(0x0048_18e0, &args![object, first, 1u32, 0u32]);
+            let player = e.global::<u32>(PLAYER_SINGLETON);
+            e.call(0x0048_21a0, &args![object, player, 1u32]);
+            let player = e.global::<u32>(PLAYER_SINGLETON);
+            let second = e.call(0x0052_5980, &args![weapon_form, player]).u32();
+            let player = e.global::<u32>(PLAYER_SINGLETON);
+            e.call(
+                0x0088_c830,
+                &args![player, second, 1u32, 0u32, 1u32, 0u32, 0u32],
+            );
+        }
+        e.call(0x0048_1680, &args![object]);
+    });
+}
+
 // Translated from 0093e860 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `PlayerCharacter::Update` (Xbox PDB): the per-frame update of the player
 /// with the frame time `delta`. In order: the VATS and slow-motion
@@ -4642,13 +4669,17 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
             axis_a = e.call(0x00a2_3390, &args![main_state, 0u32, 7u32]).i32();
             axis_c = e.call(0x00a2_3390, &args![main_state, 0u32, 9u32]).i32();
             axis_b = e.call(0x00a2_3390, &args![main_state, 0u32, 8u32]).i32();
-            if e.call(0x00ec_7d40, &args![axis_a]).i32() < 0x1ea9 {
+            // The dead zones: the exe's `0x1ea9` (immediates `0x941157`, `0x941177`) and `0x21f1`
+            // (`0x941197`) unless JIP LN NVSE's `SetDeadZoneLS` and `SetDeadZoneRS` rewrote them.
+            let (left_dead_zone, right_dead_zone) =
+                (e.pad_dead_zone_left(), e.pad_dead_zone_right());
+            if e.call(0x00ec_7d40, &args![axis_a]).i32() < left_dead_zone {
                 axis_a = 0;
             }
-            if e.call(0x00ec_7d40, &args![axis_b]).i32() < 0x1ea9 {
+            if e.call(0x00ec_7d40, &args![axis_b]).i32() < left_dead_zone {
                 axis_b = 0;
             }
-            if e.call(0x00ec_7d40, &args![axis_c]).i32() < 0x21f1 {
+            if e.call(0x00ec_7d40, &args![axis_c]).i32() < right_dead_zone {
                 axis_c = 0;
             }
             axis_a = axis_a.wrapping_mul(100) / 0x7fff;
@@ -5731,7 +5762,14 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
                 e.call(0x009c_a1f0, &args![VATS_OBJECT]);
             }
         }
-        e.call(0x0055_5c20, &args![]);
+        // Seam (JIP MiniMap's `UpdateCellsSeenBitsHook`, written over this call at 0x9438F6 by
+        // `InitMiniMap`): no words; an answer means JIP's own update ran in place of the game's.
+        // Asked only while JIP is installed.
+        let jip_seen_bits = e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+            && e.site(0x0094_38f6, &[]).is_some();
+        if !jip_seen_bits {
+            e.call(0x0055_5c20, &args![]);
+        }
         // ---- 009438fb: tracked cell, level up, combat updates ----
         let tracked_cell = e.global::<u32>(TRACKED_CELL_011E0BB0);
         if tracked_cell == 0 || tracked_cell != e.call(0x008d_6f30, &args![this]).u32() {
@@ -5862,22 +5900,7 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
                 } else {
                     let regen = e.call(0x0094_4300, &args![this]).f64();
                     if regen <= zero {
-                        e.with_stack(24, |e, object| {
-                            e.call(0x0048_1610, &args![object]);
-                            let player = e.global::<u32>(PLAYER_SINGLETON);
-                            let first = e.call(0x0052_5980, &args![weapon_form, player]).u32();
-                            e.call(0x0048_18e0, &args![object, first, 1u32, 0u32]);
-                            let player = e.global::<u32>(PLAYER_SINGLETON);
-                            e.call(0x0048_21a0, &args![object, player, 1u32]);
-                            let player = e.global::<u32>(PLAYER_SINGLETON);
-                            let second = e.call(0x0052_5980, &args![weapon_form, player]).u32();
-                            let player = e.global::<u32>(PLAYER_SINGLETON);
-                            e.call(
-                                0x0088_c830,
-                                &args![player, second, 1u32, 0u32, 1u32, 0u32, 0u32],
-                            );
-                            e.call(0x0048_1680, &args![object]);
-                        });
+                        add_regenerated_round(e, weapon_form);
                     }
                 }
             }
@@ -8468,17 +8491,20 @@ fn apply_look_input(
     let animation = e.call(0x0095_0a60, &args![this, unflipped as u32]).u32();
     let animation_scale = e.call(0x004e_3d00, &args![animation]).f64();
     let time_step = (animation_scale * time_step as f64) as f32;
+    // The dead zone of the four stick tests below: the exe's `0x21f1` (immediates `0x9455F5`,
+    // `0x945644`, `0x9456F0`, `0x945710`) unless JIP LN NVSE's `SetDeadZoneRS` rewrote them.
+    let dead_zone = e.pad_dead_zone_right();
     e.call(0x004b_7210, &args![]);
     if e.call(0x004b_71d0, &args![]).u8() != 0 {
         if e.mem.u8(SECOND_STICK_FLAG) != 0 {
             let mut right_x = e.call(0x00a2_3390, &args![input, 0u32, 0xau32]).i32();
-            if e.call(0x00ec_7d40, &args![right_x]).i32() < 0x21f1 {
+            if e.call(0x00ec_7d40, &args![right_x]).i32() < dead_zone {
                 right_x = 0;
             }
             let response = e.global::<f64>(0x0101_ffa0);
             zoom = truncate(e, right_x as f64 * response * time_step as f64);
             yaw = e.call(0x00a2_3390, &args![input, 0u32, 9u32]).i32();
-            if e.call(0x00ec_7d40, &args![yaw]).i32() < 0x21f1 {
+            if e.call(0x00ec_7d40, &args![yaw]).i32() < dead_zone {
                 yaw = 0;
             }
             yaw /= 5;
@@ -8494,10 +8520,10 @@ fn apply_look_input(
         } else {
             yaw = e.call(0x00a2_3390, &args![input, 0u32, 9u32]).i32();
             pitch = e.call(0x00a2_3390, &args![input, 0u32, 0xau32]).i32();
-            if e.call(0x00ec_7d40, &args![yaw]).i32() < 0x21f1 {
+            if e.call(0x00ec_7d40, &args![yaw]).i32() < dead_zone {
                 yaw = 0;
             }
-            if e.call(0x00ec_7d40, &args![pitch]).i32() < 0x21f1 {
+            if e.call(0x00ec_7d40, &args![pitch]).i32() < dead_zone {
                 pitch = 0;
             }
         }
@@ -16794,6 +16820,28 @@ mod tests {
         assert_eq!(called(&e, 0x0055_5c20).len(), 1);
     }
 
+    /// JIP MiniMap's seam at the seen-bits call (0x9438F6): asked only while JIP is installed; an
+    /// answer skips the game's update, none leaves it.
+    #[test]
+    fn update_asks_jips_seen_bits_seam() {
+        use engine_core::extend::jip_patches;
+        let game_calls = |word: u32, answer: bool| {
+            let mut e = engine();
+            let this = update_world(&mut e);
+            e.set_jip_patches(word);
+            if answer {
+                e.on_site_for_test(0x0094_38f6, |_, _| Some(0));
+            } else {
+                e.on_site_for_test(0x0094_38f6, |_, _| None);
+            }
+            player_character_update(&mut e, this, 0.25);
+            called(&e, 0x0055_5c20).len()
+        };
+        assert_eq!(game_calls(0, true), 1, "not installed: not asked");
+        assert_eq!(game_calls(jip_patches::INSTALLED, true), 0);
+        assert_eq!(game_calls(jip_patches::INSTALLED, false), 1);
+    }
+
     #[test]
     fn update_aims_a_drawn_gun_and_blocks_with_a_drawn_melee_weapon() {
         // 00941fea: the aim button raises the iron sights of a gun, blocks
@@ -16896,6 +16944,81 @@ mod tests {
         let set = called(e, MOVER_SET_FLAGS);
         assert_eq!(set.len(), 1, "{set:?}");
         set[0][1]
+    }
+
+    /// `Update`'s three stick tests read the engine's dead zones (the exe's `0x1ea9` at
+    /// `0x941157` and `0x941177`, `0x21f1` at `0x941197`, until JIP's `SetDeadZoneLS` and
+    /// `SetDeadZoneRS` move them): the move stick's x at 8000 sets the move flag 0x8 at a left
+    /// dead zone of 8000 or below and not at 8001; its forward/back (axis 8) at 8000 sets 0x1
+    /// (-8000: 0x2) at a left dead zone of 8000, not at 8001, and not at 8001 with the right
+    /// stick's at 8000 (the left one is read); the third axis (9) fully pushed gives the look
+    /// speed at a right dead zone of 0x7fff or below and none above.
+    #[test]
+    fn update_reads_the_moved_dead_zones() {
+        let run8 = |left: i32, right: i32, axis_7: u32, axis_8: u32, axis_9: u32| {
+            let mut e = engine();
+            let this = update_world(&mut e);
+            let slots: Vec<(u32, u32)> = (0..0x200).map(|i| (i * 4, 0x00b0_0000)).collect();
+            let mover = object(&mut e, 0x0204_0000, &slots);
+            e.mem.set_u32(0x0204_000c, MOVER_SET_FLAGS);
+            e.register(MOVER_SET_FLAGS, |_, _| Ret::default());
+            e.mem.set_u32(this.addr() + 0x190, mover.addr());
+            e.register(0x004b_71d0, |_, _| int(1));
+            e.register(0x0045_7990, |_, _| float(1.0));
+            e.register_double(0x00a2_3390, move |_, a| {
+                int(match a[2] {
+                    7 => axis_7,
+                    8 => axis_8,
+                    9 => axis_9,
+                    _ => 0,
+                })
+            });
+            e.register(0x00ec_7d40, |_, a| int((a[0] as i32).unsigned_abs()));
+            e.register(0x0040_8840, |_, a| {
+                float(f64::from(f32::from_bits(a[0]).abs()))
+            });
+            e.set_global(AXIS_DIVISOR, 1.0f64);
+            e.set_global(LOOK_SCALE, 1.0f64);
+            // The forward/back weight (`STICK_SCALE_SETTING`) 1, so a forward push counts.
+            e.mem.set_f32(0x0300_0010, 1.0);
+            e.register(SETTING_FLOAT_GETTER, |_, a| {
+                int(if a[0] == STICK_SCALE_SETTING {
+                    0x0300_0010
+                } else {
+                    0x0300_0000
+                })
+            });
+            e.set_pad_dead_zone_left(left);
+            e.set_pad_dead_zone_right(right);
+            player_character_update(&mut e, this, 0.5);
+            (move_flags(&e), e.global::<f32>(LOOK_SPEED_011A3B40))
+        };
+        let run = |left: i32, right: i32, axis_7: u32, axis_9: u32| {
+            let (flags, look) = run8(left, right, axis_7, 0, axis_9);
+            (flags & 0x8 != 0, look)
+        };
+        assert!(run(0x1ea9, 0x21f1, 8000, 0).0);
+        assert!(run(8000, 0x21f1, 8000, 0).0);
+        assert!(!run(8001, 0x21f1, 8000, 0).0);
+        assert_eq!(run(0x1ea9, 0x21f1, 0, 0x7fff).1, 1.0);
+        assert_eq!(run(0x1ea9, 0x7fff, 0, 0x7fff).1, 1.0);
+        assert_eq!(run(0x1ea9, 0x8000, 0, 0x7fff).1, 0.0);
+        // Forward and back (axis 8, the `0x941177` test): the left dead zone.
+        let minus = (-8000i32) as u32;
+        for (axis_8, flag) in [(8000u32, 0x1u32), (minus, 0x2)] {
+            assert_ne!(run8(0x1ea9, 0x21f1, 0, axis_8, 0).0 & flag, 0, "the exe's");
+            assert_ne!(run8(8000, 0x21f1, 0, axis_8, 0).0 & flag, 0, "at 8000");
+            assert_eq!(
+                run8(8001, 0x21f1, 0, axis_8, 0).0 & 0x3,
+                0,
+                "inside at 8001"
+            );
+            assert_eq!(
+                run8(8001, 8000, 0, axis_8, 0).0 & 0x3,
+                0,
+                "the right stick's 8000 is not read"
+            );
+        }
     }
 
     /// The disabled controls other than `flag`: none of them changes what pressing that button
@@ -17068,6 +17191,52 @@ mod tests {
             next = node;
         }
         next
+    }
+
+    /// [`add_regenerated_round`] with the weapon's equipped ammunition type `kind` and row S0199.11
+    /// `on`: the calls it made.
+    fn regenerated_round(kind: u32, on: bool) -> Vec<(u32, Vec<u32>)> {
+        let mut e = Engine::new();
+        e.map(0x011d_e000, 0x1000);
+        e.set_global(PLAYER_SINGLETON, 0x7000_0000u32);
+        for stub in [
+            0x0048_1610,
+            0x0048_18e0,
+            0x0048_21a0,
+            0x0088_c830,
+            0x0048_1680,
+        ] {
+            e.register(stub, |_, _| Ret::default());
+        }
+        e.register_double(0x0052_5980, move |_, _| kind.into_ret());
+        e.set_stewie(engine_core::extend::stewie::REGEN_AMMO_NO_TYPE, on);
+        e.call_log = Some(vec![]);
+        add_regenerated_round(&mut e, 0x1234);
+        e.call_log.take().unwrap()
+    }
+
+    /// lStewieAl's Tweaks' row S0199.11 (`MiscCrashFixes`, `0x943DE1`): a round regenerated with no
+    /// ammunition type equipped (`00525980` answers 0): off, the exe builds an item of the missing type
+    /// and equips it (a crash in the game); on, nothing is added and the local's destructor still runs.
+    #[test]
+    fn s0199_11_a_regenerated_round_with_no_ammunition_type() {
+        let added = |log: &[(u32, Vec<u32>)]| {
+            log.iter()
+                .any(|(a, _)| *a == 0x0048_18e0 || *a == 0x0088_c830)
+        };
+        let off = regenerated_round(0, false);
+        assert!(added(&off));
+        let on = regenerated_round(0, true);
+        assert!(!added(&on));
+        assert!(on.iter().any(|(a, _)| *a == 0x0048_1680));
+    }
+
+    /// Row S0199.11 with an ammunition type (ordinary input): the same calls with the row off and on.
+    #[test]
+    fn s0199_11_row_on_with_an_ammunition_type_changes_nothing() {
+        let off = regenerated_round(0x5000, false);
+        assert_eq!(off, regenerated_round(0x5000, true));
+        assert!(off.iter().any(|(a, w)| *a == 0x0088_c830 && w[1] == 0x5000));
     }
 
     #[test]
@@ -18499,6 +18668,65 @@ mod tests {
             );
             // The look result comes from the zoom read (the end's test), the wheel on or off.
             assert_eq!(result, 1, "{word:x} {answer}");
+        }
+    }
+
+    /// The look's four stick tests read the engine's right dead zone (the exe's `0x21f1` at
+    /// `0x9455F5`, `0x945644`, `0x9456F0`, `0x945710` until JIP's `SetDeadZoneRS` moves it): an
+    /// axis at 9000 counts at the exe's dead zone and at one moved to 9000, not at 9001. A
+    /// counted yaw or pitch has its vector measured (`00457990`); the second stick's counted zoom
+    /// reaches the zoom block (`00967ae0`).
+    #[test]
+    fn the_look_reads_the_moved_right_dead_zone() {
+        let run = |dead_zone: i32, second_stick: bool, axis_9: u32, axis_10: u32| {
+            let (mut e, this) = look_world(0);
+            e.register(0x004b_71d0, |_, _| int(1));
+            e.register_double(0x00a2_3390, move |_, a| {
+                int(match a[2] {
+                    9 => axis_9,
+                    0xa => axis_10,
+                    _ => 0,
+                })
+            });
+            e.register(0x00ec_7d40, |_, a| int((a[0] as i32).unsigned_abs()));
+            e.register(0x0045_7990, |_, _| float(1.0));
+            e.register(0x0099_e040, |_, _| float(1.0));
+            e.register(0x004e_3d00, |_, _| float(1.0));
+            e.mem.set_u8(SECOND_STICK_FLAG, u8::from(second_stick));
+            // The process's slot 0x610 (asked after the zoom with the second stick on): set, so
+            // the free camera's turn is left out.
+            let process = answering_object(&mut e, 0x026b_0000, &[(0x1a8, 0), (0x610, 1)]);
+            e.mem.set_u32(this.addr() + 0x68, process);
+            e.set_pad_dead_zone_right(dead_zone);
+            let flags = Ptr::<()>::new(e.mem.alloc(4));
+            e.call(0x0094_45b0, &args![this, 0.5f32, false, flags, 0u32]);
+            (called(&e, 0x0045_7990).len(), called(&e, 0x0096_7ae0).len())
+        };
+        let minus = (-9000i32) as u32;
+        // The first stick: the yaw (axis 9) and the pitch (axis 10), either way.
+        for (axis_9, axis_10) in [(9000, 0), (minus, 0), (0, 9000), (0, minus)] {
+            let outside = run(9001, false, axis_9, axis_10);
+            for dead_zone in [0x21f1, 9000] {
+                let past = run(dead_zone, false, axis_9, axis_10);
+                assert_eq!(past.0, outside.0 + 1, "{dead_zone} {axis_9:x} {axis_10:x}");
+            }
+        }
+        // The second stick: the zoom (axis 10), then the yaw (axis 9).
+        let outside = run(9001, true, 0, 9000);
+        for dead_zone in [0x21f1, 9000] {
+            assert_eq!(
+                run(dead_zone, true, 0, 9000).1,
+                outside.1 + 1,
+                "{dead_zone}"
+            );
+        }
+        let outside = run(9001, true, 9000, 0);
+        for dead_zone in [0x21f1, 9000] {
+            assert_eq!(
+                run(dead_zone, true, 9000, 0).0,
+                outside.0 + 1,
+                "{dead_zone}"
+            );
         }
     }
 

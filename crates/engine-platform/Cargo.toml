@@ -9,6 +9,11 @@ description = "The platform layer of the engine (ADR-0006): the window, Direct3D
 [dependencies]
 qos = { path = "../qos" }
 engine-core = { path = "../engine-core" }
+# DirectSound's mixer, sample-rate converters, speaker placement, 3D stage, distortion effect and
+# the sound output (mixer, resampler, speakers, ds3d, dsfx, sound_out): their own crate so that
+# programs without the engine (the launcher) play sound through the same code; re-exported in
+# lib.rs under their old names.
+ds-mix = { path = "../ds-mix" }
 # The Bink layer (bink.rs) decodes with the repository's own Bink 1 decoder.
 bink = { path = "../bink" }
 mp3 = { path = "../mp3" }
@@ -27,9 +32,10 @@ d3d9-wgpu = { path = "../d3d9-wgpu" }
 # the real window, device and resources. Win32_System_SystemInformation: the machine's memory
 # for GlobalMemoryStatus(Ex) (process.rs). Win32_Devices_HumanInterfaceDevice and
 # Win32_Devices_DeviceAndDriverInstallation: the PlayStation pads found and read as HID devices
-# (xinput/hid_win.rs).
+# (xinput/hid_win.rs); Win32_Devices_Properties: a device's filter drivers there (an XInput pad's
+# xinputhid).
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.58", features = ["Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_HumanInterfaceDevice", "Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D9", "Win32_Graphics_Gdi", "Foundation_Numerics", "Win32_System_LibraryLoader", "Win32_System_SystemInformation", "Win32_UI_HiDpi", "Win32_UI_Input", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.58", features = ["Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_HumanInterfaceDevice", "Win32_Devices_Properties", "Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D9", "Win32_Graphics_Gdi", "Foundation_Numerics", "Win32_System_LibraryLoader", "Win32_System_SystemInformation", "Win32_UI_HiDpi", "Win32_UI_Input", "Win32_UI_WindowsAndMessaging"] }
 
 # The game's window on Linux (X11, Wayland) and macOS (d3d9real/winit_window.rs), handed to wgpu
 # by its raw window handle (the version wgpu 30 takes). Not on Windows: the Win32 window is there.
@@ -40,18 +46,9 @@ windows = { version = "0.58", features = ["Win32_Devices_DeviceAndDriverInstalla
 # (Cantarell, OFL-1.1), a rasteriser and calls to desktop programs; without it such a desktop shows
 # the framed window with a plain frame and no title. The borderless window (play's default) has
 # no frame either way.
-#
-# Sound on the speakers off Windows (sound_out.rs, `mod device`): the default output device through
-# ALSA (PipeWire's and PulseAudio's ALSA plugins among them) on Linux, CoreAudio on macOS. The
-# mixer is the port's own on every system; only the device differs. No cpal features: its
-# `realtime` would do nothing on Linux as built (no D-Bus/rtkit) and is not used on macOS; the
-# Linux sound thread runs at normal priority (sound_out.rs says why). Linux links ALSA's
-# libasound.so.2 (alsa-sys): the program needs it to start. Windows keeps its own WASAPI arm
-# (no cpal there).
 [target.'cfg(not(windows))'.dependencies]
 winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"] }
 raw-window-handle = "=0.6.2"
-cpal = "0.18.2"
 
 # The keyboard library winit loads at run time (libxkbcommon, and libxkbcommon-x11 on X11), looked
 # for before the window is made, so that a missing one ends the run with a line naming it (winit

@@ -532,3 +532,36 @@ fn the_imports_are_the_layers() {
         .iter()
         .any(|(dll, n, _)| *dll == "XINPUT1_3.dll" && *n == "#2"));
 }
+
+/// The HID lists' order (review of #804): a database pad found before a PlayStation pad still
+/// leaves the PlayStation pad user 0, as its list comes first.
+#[test]
+fn the_playstation_pads_come_before_the_databases() {
+    /// One pad whose state's packet is the given number.
+    struct Pad(u32);
+    impl PadList for Pad {
+        fn count(&mut self) -> usize {
+            1
+        }
+        fn get_state(&mut self, n: usize, state: &mut [u8; 16]) -> u32 {
+            if n != 0 {
+                return ERROR_DEVICE_NOT_CONNECTED;
+            }
+            *state = PadState {
+                packet: self.0,
+                ..PadState::default()
+            }
+            .to_bytes();
+            ERROR_SUCCESS
+        }
+        fn set_state(&mut self, _: usize, _: u16, _: u16) -> u32 {
+            ERROR_SUCCESS
+        }
+    }
+    let mut chain = Chain::<NoXInput>::new(None, pad_lists(Pad(1), Pad(2)));
+    let mut state = [0u8; 16];
+    assert_eq!(chain.get_state(0, &mut state), ERROR_SUCCESS);
+    assert_eq!(PadState::from_bytes(&state).packet, 1);
+    assert_eq!(chain.get_state(1, &mut state), ERROR_SUCCESS);
+    assert_eq!(PadState::from_bytes(&state).packet, 2);
+}

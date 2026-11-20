@@ -63,6 +63,7 @@ pub mod ge;
 pub mod gf;
 pub mod gh1;
 pub mod gh2;
+pub mod gk;
 pub mod gl;
 pub mod gp;
 pub mod gs;
@@ -110,6 +111,7 @@ pub const AREAS: &[Area] = &[
     gh1::AREA,
     gh2::AREA,
     gl::AREA,
+    gk::AREA,
     gp::AREA,
     gs::AREA,
     gw::AREA,
@@ -120,6 +122,9 @@ pub const AREAS: &[Area] = &[
     crate::commands::jip_fn_ui_code::AREA,
     crate::commands::jip_fn_misc_ref_code::AREA,
     crate::commands::jip_fn_moon::AREA,
+    crate::commands::jip_fn_miscellaneous_depth::AREA,
+    crate::commands::jip_fn_minimap_seams::AREA,
+    crate::commands::jip_fn_ui_text::AREA,
 ];
 
 /// What the game patches keep on JIP's state.

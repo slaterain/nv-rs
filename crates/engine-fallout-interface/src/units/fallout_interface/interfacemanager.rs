@@ -2469,10 +2469,10 @@ fn tile_menu_id(e: &mut Engine, tile: u32) -> i32 {
     e.call(FTOL, &args![value]).i32()
 }
 
-/// `Idle`'s test of the pointer at its eight sites that ask whether it is shown: no pad in use
-/// (`004b71d0` false), or the pad in use with `bShowMouse` set (`0070cdbf`, `0070cf27`,
-/// `0070cfbe`, `0070d41f`, `0070d5ad`, `0070d66a`, ... each `JZ` past its body when the byte
-/// is 0).
+/// `Idle`'s test whether the pointer is shown: no pad in use (`004b71d0` false), or the pad in
+/// use with `bShowMouse` set. Nine of `Idle`'s ten reads of the byte ask it (0070cc96, 0070cdbf,
+/// 0070cf27, 0070cfbe, 0070d41f, 0070d5ad, 0070d66a, 0070dfab and 0070e15a; at 0070cc96 and
+/// 0070dfab as its opposite); the tenth, 0070e964, asks [`pad_pointer_hidden`]'s.
 fn pointer_shown(e: &mut Engine, this: Ptr<InterfaceManager>) -> bool {
     !e.call(HAS_360_CONTROLLER_GETTER, &args![]).bool()
         || e.get(this, InterfaceManager::bShowMouse) != 0
@@ -3061,17 +3061,22 @@ fn translate_controls_events(e: &mut Engine, this: Ptr<InterfaceManager>, slot: 
     e.call(TRANSLATE_KEY_EVENT, &args![this, kind, code]).u32()
 }
 
+/// `Idle`'s pad menu event (0070df99 .. 0070dfc0): with a pad in use and the pointer hidden, the
+/// top pad button goes to the menus (`DoGamepadEvent(0)`); the exe `JNZ`s past it when
+/// `bShowMouse` is set.
+fn idle_pad_menu_event(e: &mut Engine, this: Ptr<InterfaceManager>) {
+    if !pointer_shown(e, this) {
+        interface_manager_do_gamepad_event(e, this, 0);
+    }
+}
+
 /// Part of `idle_menu_mode`: gamepad events, then the key events: each is
 /// translated to a menu key (`007154b0`), offered to the console, then to
 /// the frontmost menu (virtual slot `0x30`), then to the `_PCButton_<key>`
 /// child tile of the menu; keys nobody took become gamepad events
 /// (`DoGamepadEvent`).
 fn idle_gamepad_events(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut IdleState) {
-    if e.call(HAS_360_CONTROLLER_GETTER, &args![]).bool()
-        && e.get(this, InterfaceManager::bShowMouse) == 0
-    {
-        interface_manager_do_gamepad_event(e, this, 0);
-    }
+    idle_pad_menu_event(e, this);
     e.with_stack(4, |e, slot| {
         e.mem.set_u32(slot.addr(), 0);
         let mut key = translate_controls_events(e, this, slot);
@@ -7199,7 +7204,52 @@ pub fn fn_00716010(e: &mut Engine, this: Ptr<InterfaceManager>, reference: u32) 
         }
     }
     e.call(HUD_FORGET_REFERENCE, &args![reference]);
+    // lStewieAl's Tweaks' S0022.49 (`MenuFixes`, `OnFreeRefRemoveFromSelectableList` at `0x7160A2`): the
+    // HUD forgets it as above, and the manager's list of the references the console can pick
+    // (`selectableRefs`, +0x70 of the manager `011d8a80`) loses it too (xNVSE's `tList::Remove`).
+    if e.stewie(engine_core::extend::stewie::SELECTABLE_REF_FREED) {
+        let manager = e.global::<u32>(0x011d_8a80);
+        remove_from_list(e, manager.wrapping_add(0x70), reference);
+    }
 }
+
+/// xNVSE's `tList::Remove(item)` (`GameTypes.h`) on the list whose first node (`[item, next]`) is at
+/// `list`: every node holding `item` goes; the first holder takes its next node's item and link and
+/// that node is freed (`RemoveMe`; with no next node it only loses its item), a later one is unlinked
+/// from the node before it and freed (`RemoveNext`). Freed with the game's heap (`GameHeapFree`).
+fn remove_from_list(e: &mut Engine, list: u32, item: u32) {
+    let mut node = list;
+    let mut previous = 0u32;
+    while node != 0 {
+        if e.mem.u32(node) != item {
+            previous = node;
+            node = e.mem.u32(node + 4);
+            continue;
+        }
+        if previous != 0 {
+            // RemoveNext on the node before: the next node after the removed one is looked at.
+            let next = e.mem.u32(node + 4);
+            e.mem.set_u32(previous + 4, next);
+            e.call(GAME_HEAP_FREE, &args![GAME_HEAP, node]);
+            node = next;
+        } else {
+            // RemoveMe: the next node's item and link copied in, that node freed; none: emptied.
+            let next = e.mem.u32(node + 4);
+            if next != 0 {
+                e.mem.set_u32(node, e.mem.u32(next));
+                e.mem.set_u32(node + 4, e.mem.u32(next + 4));
+                e.call(GAME_HEAP_FREE, &args![GAME_HEAP, next]);
+            } else {
+                e.mem.set_u32(node, 0);
+                node = 0;
+            }
+        }
+    }
+}
+
+/// `GameHeapFree` (xNVSE): `MemoryHeap::Free` (`00aa4060`) on the game's heap (`011f6238`).
+const GAME_HEAP_FREE: u32 = 0x00aa_4060;
+const GAME_HEAP: u32 = 0x011f_6238;
 
 // Translated from 007160b0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `InterfaceManager::ForceTextureRelease` (Xbox PDB): releases the
@@ -13399,6 +13449,69 @@ mod tests {
         assert_eq!(calls(&e, HUD_FORGET_REFERENCE), vec![vec![0x55]]);
     }
 
+    /// lStewieAl's Tweaks' row S0022.49: the console's pickable references (`selectableRefs`, +0x70
+    /// of the manager) [0x55, 0x66, 0x55, 0x77, 0x55] lose every 0x55 with the row ([0x66, 0x77]),
+    /// the first node taking its next node's entry, the later ones unlinked and freed; row off,
+    /// the list is left as it is. A list of only that reference is emptied in place.
+    #[test]
+    fn s0022_49_a_freed_reference_leaves_the_selectable_list() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        for on in [false, true] {
+            let mut e = world();
+            e.set_stewie(engine_core::extend::stewie::SELECTABLE_REF_FREED, on);
+            let m = manager(&mut e);
+            e.map(0x011d_8a80 & !0xfff, 0x1000);
+            e.set_global(0x011d_8a80, m.addr());
+            let freed = Rc::new(RefCell::new(Vec::new()));
+            let seen = freed.clone();
+            e.register_double(GAME_HEAP_FREE, move |_, a| {
+                assert_eq!(a[0], GAME_HEAP);
+                seen.borrow_mut().push(a[1]);
+                Ret::default()
+            });
+            let list = m.addr() + 0x70;
+            let mut node = list;
+            let entries = [0x55u32, 0x66, 0x55, 0x77, 0x55];
+            let mut nodes = vec![list];
+            for (i, entry) in entries.iter().enumerate() {
+                e.mem.set_u32(node, *entry);
+                let next = if i + 1 < entries.len() {
+                    e.mem.alloc(8)
+                } else {
+                    0
+                };
+                e.mem.set_u32(node + 4, next);
+                if next != 0 {
+                    nodes.push(next);
+                }
+                node = next;
+            }
+            fn_00716010(&mut e, m, 0x55);
+            let mut left = vec![];
+            let mut node = list;
+            while node != 0 {
+                left.push(e.mem.u32(node));
+                node = e.mem.u32(node + 4);
+            }
+            if on {
+                assert_eq!(left, vec![0x66, 0x77]);
+                // The first holder took node 1's entry (node 1 freed), then nodes 2 and 4 went.
+                assert_eq!(*freed.borrow(), vec![nodes[1], nodes[2], nodes[4]]);
+            } else {
+                assert_eq!(left, entries.to_vec());
+                assert!(freed.borrow().is_empty());
+            }
+            // Only that reference: the first node emptied in place, nothing freed.
+            e.mem.set_u32(list, 0x88);
+            e.mem.set_u32(list + 4, 0);
+            freed.borrow_mut().clear();
+            fn_00716010(&mut e, m, 0x88);
+            assert_eq!(e.mem.u32(list), if on { 0 } else { 0x88 });
+            assert!(freed.borrow().is_empty());
+        }
+    }
+
     #[test]
     fn the_textures_are_released_in_order() {
         let mut e = world();
@@ -14442,13 +14555,14 @@ mod tests {
         assert_eq!(run(false, 1), 4, "no pad: the Pip-Boy key let go lowers it");
     }
 
-    /// Pins `Idle`'s pointer tests to the exe's: eight sites ask whether the pointer is shown
-    /// (0070c4a0's decompiled `!pad || bShowMouse != 0`: the loading-menu cursor, the mouse
-    /// buttons, the pick, the drag, the two enter/leave tests, the menu keys, the start menu key
-    /// over the main menu), six through `pointer_shown` and two written out where the pad's
-    /// answer is kept (`idle_menu_cursor_and_focus` as its opposite, `idle_read_mouse`), and one
-    /// site, before the pipboy is lowered, asks whether it is hidden. A change to any of them is
-    /// to come with the exe's word for it.
+    /// Pins `Idle`'s pointer tests to the exe's: nine sites ask whether the pointer is shown or
+    /// its opposite (0070c4a0's decompiled `!pad || bShowMouse != 0`: the loading-menu cursor,
+    /// the mouse buttons, the pick, the drag, the two enter/leave tests, the menu keys, the start
+    /// menu key over the main menu, and the pad's menu event at 0070df99 as its opposite), seven
+    /// through `pointer_shown` and two written out where the pad's answer is kept
+    /// (`idle_menu_cursor_and_focus` as its opposite, `idle_read_mouse`); one site, before the
+    /// pipboy is lowered, asks whether it is hidden. A change to any of them is to come with the
+    /// exe's word for it.
     #[test]
     fn idle_asks_the_pointer_where_the_exe_does() {
         let source = include_str!("interfacemanager.rs");
@@ -14456,7 +14570,7 @@ mod tests {
         let end = source.find("fn idle_start_menu_key(").unwrap();
         let idle = &source[start..end];
         let count = |text: &str| idle.matches(text).count();
-        assert_eq!(count("pointer_shown(e, this)"), 6);
+        assert_eq!(count("pointer_shown(e, this)"), 7);
         assert_eq!(count("pad_pointer_hidden(e, this)"), 1);
         assert_eq!(
             count("if controller && e.get(this, InterfaceManager::bShowMouse) == 0 {"),
@@ -14466,6 +14580,28 @@ mod tests {
             count("if !controller || e.get(this, InterfaceManager::bShowMouse) != 0 {"),
             1
         );
+    }
+
+    /// The pad's menu event (0070df99, review of #797): with a pad in use and the pointer hidden
+    /// the top pad button goes to the menus (`DoGamepadEvent`'s walk of the root's menus); with
+    /// the pointer shown, or no pad, it does not.
+    #[test]
+    fn the_pad_menu_event_waits_for_a_hidden_pointer() {
+        for (pad, mouse, walked) in [(true, 0u8, true), (true, 1, false), (false, 0, false)] {
+            let (mut e, m, _) = gamepad_world();
+            returns(&mut e, HAS_360_CONTROLLER_GETTER, u32::from(pad));
+            e.set(m, InterfaceManager::bShowMouse, mouse);
+            menu_list(&mut e, m, &[0x7a00]);
+            returns(&mut e, TILE_GET_MENU, 0x7c00);
+            returns(&mut e, TILE_IS_VISIBLE, 1);
+            returns(&mut e, DO_GAMEPAD, 1);
+            idle_pad_menu_event(&mut e, m);
+            assert_eq!(
+                !calls(&e, DO_GAMEPAD).is_empty(),
+                walked,
+                "pad {pad}, mouse {mouse}"
+            );
+        }
     }
     // @@TESTS-END@@
 }

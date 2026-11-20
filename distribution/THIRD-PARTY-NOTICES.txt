@@ -1,6 +1,6 @@
 THIRD-PARTY NOTICES — nv-rs (nv-viewer: the Windows build, and the Linux and macOS builds)
 
-This file indexes the license texts of the 268 external packages in the repository's root Cargo.lock, which nv-viewer is built from (the build-time macro crates, every platform variant of windows-targets, the sound library cpal and the window library winit with what they use on Linux, macOS and other systems included; each program links only its own system's). Package names, versions and license expressions come from each package's Cargo.toml in the local Cargo registry; the files were copied from that exact version there. A package that ships no license file gets the standard text of its license expression (MIT with its authors as the copyright line), marked in its entry. It ends with the notices of source code the translation followed that is not a package.
+This file indexes the license texts of the 280 external packages in the repository's root Cargo.lock, which nv-viewer and the launcher (nv-rs, Play.exe) are built from (the launcher's clipboard library arboard with what it uses on each system, the build-time macro crates, every platform variant of windows-targets, the sound library cpal and the window library winit with what they use on Linux, macOS and other systems included; each program links only its own system's). Package names, versions and license expressions come from each package's Cargo.toml in the local Cargo registry; the files were copied from that exact version there. A package that ships no license file gets the standard text of its license expression (MIT with its authors as the copyright line), marked in its entry. It ends with the notices of source code the translation followed that is not a package.
 
 Files are bundled under licenses/<package>-<version>/ in release ZIPs (distribution/licenses/ in the source tree). No crate source or game assets are included.
 
@@ -51,6 +51,13 @@ android_system_properties 0.1.6
   Bundled license files:
     android_system_properties-0.1.6/LICENSE-APACHE
     android_system_properties-0.1.6/LICENSE-MIT
+
+arboard 3.7.0
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/1Password/arboard
+  Bundled license files:
+    arboard-3.7.0/LICENSE-APACHE.txt
+    arboard-3.7.0/LICENSE-MIT.txt
 
 arrayvec 0.7.8
   License expression: MIT OR Apache-2.0
@@ -191,6 +198,13 @@ cfg_aliases 0.2.2
   Bundled license files:
     cfg_aliases-0.2.2/LICENSE
     cfg_aliases-0.2.2/NOTICES.md
+
+clipboard-win 5.4.3
+  License expression: BSL-1.0
+  Repository: https://github.com/DoumanAsh/clipboard-win
+  (The package ships no license file: the text below is the Boost Software License 1.0 its license expression names, as its author's error-code package ships it.)
+  Bundled license files:
+    clipboard-win-5.4.3/LICENSE
 
 codespan-reporting 0.13.1
   License expression: Apache-2.0
@@ -359,6 +373,12 @@ errno 0.3.14
     errno-0.3.14/LICENSE-APACHE
     errno-0.3.14/LICENSE-MIT
 
+error-code 3.4.0
+  License expression: BSL-1.0
+  Repository: https://github.com/DoumanAsh/error-code
+  Bundled license files:
+    error-code-3.4.0/LICENSE
+
 find-msvc-tools 0.1.15
   License expression: MIT OR Apache-2.0
   Repository: https://github.com/rust-lang/cc-rs
@@ -366,12 +386,25 @@ find-msvc-tools 0.1.15
     find-msvc-tools-0.1.15/LICENSE-APACHE
     find-msvc-tools-0.1.15/LICENSE-MIT
 
+fixedbitset 0.5.9
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/petgraph/fixedbitset
+  Bundled license files:
+    fixedbitset-0.5.9/LICENSE-APACHE
+    fixedbitset-0.5.9/LICENSE-MIT
+
 flate2 1.1.11
   License expression: MIT OR Apache-2.0
   Repository: https://github.com/rust-lang/flate2-rs
   Bundled license files:
     flate2-1.1.11/LICENSE-APACHE
     flate2-1.1.11/LICENSE-MIT
+
+foldhash 0.1.5
+  License expression: Zlib
+  Repository: https://github.com/orlp/foldhash
+  Bundled license files:
+    foldhash-0.1.5/LICENSE
 
 foldhash 0.2.0
   License expression: Zlib
@@ -454,6 +487,13 @@ half 2.7.1
   Bundled license files:
     half-2.7.1/LICENSE-APACHE
     half-2.7.1/LICENSE-MIT
+
+hashbrown 0.15.5
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/rust-lang/hashbrown
+  Bundled license files:
+    hashbrown-0.15.5/LICENSE-APACHE
+    hashbrown-0.15.5/LICENSE-MIT
 
 hashbrown 0.16.1
   License expression: MIT OR Apache-2.0
@@ -672,6 +712,12 @@ nix 0.32.0
   Bundled license files:
     nix-0.32.0/LICENSE
 
+nom 8.0.0
+  License expression: MIT
+  Repository: https://github.com/rust-bakery/nom
+  Bundled license files:
+    nom-8.0.0/LICENSE
+
 num-derive 0.4.2
   License expression: MIT OR Apache-2.0
   Repository: https://github.com/rust-num/num-derive
@@ -729,6 +775,14 @@ objc2-app-kit 0.2.2
   (The package ships no license file: the texts below are written from its license expression; the MIT copyright line names its authors.)
   Bundled license files:
     objc2-app-kit-0.2.2/LICENSE-MIT
+
+objc2-app-kit 0.3.2
+  License expression: Zlib OR Apache-2.0 OR MIT
+  Repository: https://github.com/madsmtm/objc2
+  (The package ships no license file: the texts below are written from its license expression; the MIT copyright line names its authors.)
+  Bundled license files:
+    objc2-app-kit-0.3.2/LICENSE-APACHE
+    objc2-app-kit-0.3.2/LICENSE-MIT
 
 objc2-audio-toolbox 0.3.2
   License expression: Zlib OR Apache-2.0 OR MIT
@@ -926,6 +980,12 @@ ordered-float 4.6.0
   Bundled license files:
     ordered-float-4.6.0/LICENSE-MIT
 
+os_pipe 1.2.3
+  License expression: MIT
+  Repository: https://github.com/oconnor663/os_pipe.rs
+  Bundled license files:
+    os_pipe-1.2.3/LICENSE
+
 parking_lot 0.12.5
   License expression: MIT OR Apache-2.0
   Repository: https://github.com/Amanieu/parking_lot
@@ -946,6 +1006,13 @@ percent-encoding 2.3.2
   Bundled license files:
     percent-encoding-2.3.2/LICENSE-APACHE
     percent-encoding-2.3.2/LICENSE-MIT
+
+petgraph 0.8.3
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/petgraph/petgraph
+  Bundled license files:
+    petgraph-0.8.3/LICENSE-APACHE
+    petgraph-0.8.3/LICENSE-MIT
 
 pin-project 1.1.13
   License expression: Apache-2.0 OR MIT
@@ -1359,6 +1426,12 @@ tracing-core 0.1.36
   Repository: https://github.com/tokio-rs/tracing
   Bundled license files:
     tracing-core-0.1.36/LICENSE
+
+tree_magic_mini 3.2.2
+  License expression: MIT
+  Repository: https://github.com/mbrubeck/tree_magic/
+  Bundled license files:
+    tree_magic_mini-3.2.2/LICENSE
 
 typed-path 0.13.0
   License expression: MIT OR Apache-2.0
@@ -1805,6 +1878,13 @@ wit-bindgen 0.57.1
     wit-bindgen-0.57.1/LICENSE-APACHE
     wit-bindgen-0.57.1/LICENSE-Apache-2.0_WITH_LLVM-exception
     wit-bindgen-0.57.1/LICENSE-MIT
+
+wl-clipboard-rs 0.9.5
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/YaLTeR/wl-clipboard-rs
+  Bundled license files:
+    wl-clipboard-rs-0.9.5/LICENSE-APACHE
+    wl-clipboard-rs-0.9.5/LICENSE-MIT
 
 x11-dl 2.21.0
   License expression: MIT

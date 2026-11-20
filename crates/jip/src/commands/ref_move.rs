@@ -168,7 +168,7 @@ fn reset_walk(e: &mut Engine, node: u32) -> usize {
 
 /// `node->UpdateDownwardPass(kNiUpdateData, 0)` as JIP calls it (`00A5DD70` directly), the
 /// update data (JIP's static, zeroed by its constructor) in a frame of the stack.
-fn update_node(e: &mut Engine, node: u32) {
+pub(crate) fn update_node(e: &mut Engine, node: u32) {
     e.with_stack(0xc, |e, data| {
         let data = data.addr();
         for i in 0..3 {

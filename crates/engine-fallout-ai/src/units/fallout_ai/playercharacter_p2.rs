@@ -4201,6 +4201,19 @@ pub fn player_character_get_current_target_list(e: &mut Engine, this: Ptr<Player
     player + 0x6c4
 }
 
+/// JIP MiniMap's seams at the two calls of the path to the target (0x952C69 in
+/// `CheckForQuestTargetUpdate`, 0x952F6B in `SetPlayerMapMarker`; JIP's `UpdatePlacedMarkerHook`,
+/// written there by `InitMiniMap`: its flag, then the same call).
+pub(crate) const JIP_PLACED_MARKER_CHECK: u32 = 0x0095_2c69;
+pub(crate) const JIP_PLACED_MARKER_SET: u32 = 0x0095_2f6b;
+
+/// The seam at `site`: no words, no answer; asked only while JIP is installed.
+fn jip_placed_marker(e: &mut Engine, site: u32) {
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        e.site(site, &[]);
+    }
+}
+
 // Translated from 00952c30 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `PlayerCharacter::CheckForQuestTargetUpdate` (Xbox PDB): marks the target
 /// list dirty (`+0x206`) when `reference` is the player (after rebuilding the
@@ -4217,6 +4230,7 @@ pub fn player_character_check_for_quest_target_update(
     if reference == e.global::<u32>(PLAYER_POINTER) {
         let target = e.mem.u32(player + 0x6f4);
         if target != 0 {
+            jip_placed_marker(e, JIP_PLACED_MARKER_CHECK);
             player_character_build_path_to_target(e, this, target, player + 0x6f8, 0);
         }
         e.mem.set_u8(player + 0x206, 1);
@@ -4337,6 +4351,7 @@ pub fn player_character_set_player_map_marker(
         }
     }
     let marker = e.mem.u32(player + 0x6f4);
+    jip_placed_marker(e, JIP_PLACED_MARKER_SET);
     player_character_build_path_to_target(e, this, marker, player + 0x6f8, 0);
 }
 
@@ -4371,6 +4386,19 @@ pub fn fn_00952ff0(e: &mut Engine, this: Ptr<PlayerCharacter>, out: u32) -> u32 
         e.call(0x008a_2fa0, &args![this, out]);
     }
     out
+}
+
+/// lStewieAl's Tweaks' S0107.04 static `strSpeaker` (`engine_core::extend::stewie::kept::SPEAKER_NAME`):
+/// the address of its 4-byte `NiFixedString`, whose handle is made the first time it is used, as
+/// Tweaks' `strSpeaker = "Bip01 Speaker"` does (`NiGlobalStringTable::AddString`, `00a5b690`, on the
+/// exe's own text `0108b3a4`, the same characters).
+fn kept_speaker_name(e: &mut Engine) -> u32 {
+    let name = e.stewie_kept(engine_core::extend::stewie::kept::SPEAKER_NAME, 4);
+    if e.mem.u32(name) == 0 {
+        let handle = e.call(0x00a5_b690, &args![SPEAKER_NODE_NAME]).u32();
+        e.mem.set_u32(name, handle);
+    }
+    name
 }
 
 // Translated from 00953060 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4459,14 +4487,28 @@ pub fn player_character_focus_on_actor(
                 let looked_up = e.call(0x004a_de00, &args![target, head_name]).u32();
                 found = e.call(0x0065_3270, &args![0x011f_4428u32, looked_up]).u32();
             }
-            let block = e.call(OPERATOR_NEW, &args![4u32]).u32();
-            let speaker_name = if block == 0 {
+            // lStewieAl's Tweaks' S0107.04 (`MemoryLeakFixes`): the 4-byte name made here each time and
+            // never freed is not made (the jump `0x953253` to `0x953282`: the name word is 0), and the
+            // lookup at `0x9532B0` is handed Tweaks' one static `NiFixedString` "Bip01 Speaker",
+            // made the first time (`NiGlobalStringTable::AddString`, `00a5b690`).
+            let kept_name = e.stewie(engine_core::extend::stewie::FOCUS_SPEAKER_NAME_LEAK);
+            let speaker_name = if kept_name {
                 0
             } else {
-                e.call(0x0043_8170, &args![block, SPEAKER_NODE_NAME]).u32()
+                let block = e.call(OPERATOR_NEW, &args![4u32]).u32();
+                if block == 0 {
+                    0
+                } else {
+                    e.call(0x0043_8170, &args![block, SPEAKER_NODE_NAME]).u32()
+                }
             };
             if found == 0 {
-                let looked_up = e.call(0x004a_de00, &args![target, speaker_name]).u32();
+                let name = if kept_name {
+                    kept_speaker_name(e)
+                } else {
+                    speaker_name
+                };
+                let looked_up = e.call(0x004a_de00, &args![target, name]).u32();
                 found = e.call(0x0065_3270, &args![0x011f_4428u32, looked_up]).u32();
             }
             if head == 0 && found == 0 {
@@ -12391,6 +12433,72 @@ mod tests {
         assert_eq!(calls_to(&e, 0x006d_4f70).len(), 1);
     }
 
+    /// JIP MiniMap's seams before the two path calls (0x952C69, 0x952F6B): asked only while JIP
+    /// is installed, each at its own site; the game goes on whatever they answer. With no placed
+    /// marker (+0x6F4 = 0) the check builds no path and its seam is not asked.
+    #[test]
+    fn the_placed_marker_seams_are_asked_before_the_path() {
+        thread_local! {
+            static ASKED: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+        }
+        fn check(_: &mut Engine, _: &[u32]) -> Option<u32> {
+            ASKED.with(|a| a.borrow_mut().push(JIP_PLACED_MARKER_CHECK));
+            Some(1)
+        }
+        fn set(_: &mut Engine, _: &[u32]) -> Option<u32> {
+            ASKED.with(|a| a.borrow_mut().push(JIP_PLACED_MARKER_SET));
+            None
+        }
+        {
+            let mut e = engine();
+            list_helpers(&mut e);
+            let player = new_player(&mut e);
+            e.set_global(PLAYER_POINTER, 0x0600_5000u32);
+            e.set_global(0x011c_a248u32, 0x4141u32);
+            e.register(OPERATOR_NEW, |e, a| eax(e.mem.alloc(a[0])));
+            e.register(0x0055_a2f0, |_, a| eax(a[0]));
+            double(&mut e, FORM_TYPE_OF, eax(0x39));
+            e.set_jip_patches(engine_core::extend::jip_patches::INSTALLED);
+            e.on_site_for_test(JIP_PLACED_MARKER_CHECK, check);
+            ASKED.with(|a| a.borrow_mut().clear());
+            e.mem.set_u32(player.addr() + 0x6f4, 0);
+            start_log(&mut e);
+            player_character_check_for_quest_target_update(&mut e, player, 0x0600_5000);
+            assert!(
+                ASKED.with(|a| a.borrow().is_empty()),
+                "no marker: not asked"
+            );
+            assert!(calls_to(&e, 0x006d_4f70).is_empty());
+        }
+        for word in [0, engine_core::extend::jip_patches::INSTALLED] {
+            let mut e = engine();
+            list_helpers(&mut e);
+            let player = new_player(&mut e);
+            let p = player.addr();
+            e.set_global(PLAYER_POINTER, 0x0600_5000u32);
+            e.set_global(0x011c_a248u32, 0x4141u32);
+            e.register(OPERATOR_NEW, |e, a| eax(e.mem.alloc(a[0])));
+            e.register(0x0055_a2f0, |_, a| eax(a[0]));
+            double(&mut e, FORM_TYPE_OF, eax(0x39));
+            e.set_jip_patches(word);
+            e.on_site_for_test(JIP_PLACED_MARKER_CHECK, check);
+            e.on_site_for_test(JIP_PLACED_MARKER_SET, set);
+            ASKED.with(|a| a.borrow_mut().clear());
+            e.mem.set_u32(p + 0x6f4, 0x31);
+            start_log(&mut e);
+            player_character_check_for_quest_target_update(&mut e, player, 0x0600_5000);
+            player_character_set_player_map_marker(&mut e, player, 1.0, 2.0, 3.0, 0x66);
+            let asked = ASKED.with(|a| a.borrow().clone());
+            if word == 0 {
+                assert!(asked.is_empty(), "not installed: not asked");
+            } else {
+                assert_eq!(asked, vec![JIP_PLACED_MARKER_CHECK, JIP_PLACED_MARKER_SET]);
+            }
+            // The paths are searched either way.
+            assert_eq!(calls_to(&e, 0x006d_4f70).len(), 2, "{word:x}");
+        }
+    }
+
     #[test]
     fn the_path_to_a_target_is_built_or_cleared_again() {
         let mut e = engine();
@@ -12533,6 +12641,60 @@ mod tests {
         assert_eq!(calls_to(&e, LOG_MESSAGE).len(), 1);
         // The field of view is set from the distance (no face data).
         assert_eq!(calls_to(&e, 0x0045_7990).len(), 2);
+    }
+
+    /// lStewieAl's Tweaks' row S0107.04: row off, each focus makes a 4-byte "Bip01 Speaker" name
+    /// (`OPERATOR_NEW(4)`, `00438170`) that is never freed and looks the speaker node up with it;
+    /// row on, none is made: the lookup gets Tweaks' one kept name, whose handle is made once
+    /// (`00a5b690` on the exe's text) and kept for every later focus.
+    #[test]
+    fn s0107_04_the_speaker_name_is_one_kept_name() {
+        for on in [false, true] {
+            let mut e = engine();
+            let (player, actor) = focus_world(&mut e);
+            e.set_stewie(engine_core::extend::stewie::FOCUS_SPEAKER_NAME_LEAK, on);
+            slot(&mut e, actor, 0x1d0, eax(0x77));
+            slot(&mut e, actor, 0x1b0, eax(0));
+            double(&mut e, 0x008a_30f0, eax(0x0333));
+            e.register_double(OPERATOR_NEW, |_, a| {
+                eax(if a[0] == 4 { 0x0600_0100 } else { 0 })
+            });
+            e.register_double(0x0043_8170, |_, a| eax(a[0]));
+            e.register_double(0x00a5_b690, |_, a| {
+                assert_eq!(a[0], SPEAKER_NODE_NAME);
+                eax(0x5150)
+            });
+            start_log(&mut e);
+            player_character_focus_on_actor(&mut e, player, actor, 1.0, 0);
+            player_character_focus_on_actor(&mut e, player, actor, 1.0, 0);
+            let kept = e.stewie_kept(engine_core::extend::stewie::kept::SPEAKER_NAME, 4);
+            let names: Vec<u32> = calls_to(&e, 0x004a_de00)
+                .iter()
+                .filter(|a| a[0] == 0x77 && a[1] != 0x0333)
+                .map(|a| a[1])
+                .collect();
+            let fours = calls_to(&e, OPERATOR_NEW)
+                .iter()
+                .filter(|a| a[0] == 4)
+                .count();
+            if on {
+                assert_eq!(names, vec![kept, kept]);
+                assert_eq!(e.mem.u32(kept), 0x5150);
+                assert_eq!(fours, 0);
+                assert!(calls_to(&e, 0x0043_8170).is_empty());
+                assert_eq!(calls_to(&e, 0x00a5_b690).len(), 1, "made once");
+            } else {
+                assert_eq!(names, vec![0x0600_0100, 0x0600_0100]);
+                assert_eq!(fours, 2);
+                assert_eq!(
+                    calls_to(&e, 0x0043_8170),
+                    vec![vec![0x0600_0100, SPEAKER_NODE_NAME]; 2]
+                );
+                assert!(calls_to(&e, 0x00a5_b690).is_empty());
+            }
+            // Either way the head is still missing and logged once.
+            assert_eq!(calls_to(&e, LOG_MESSAGE).len(), 1);
+        }
     }
 
     #[test]

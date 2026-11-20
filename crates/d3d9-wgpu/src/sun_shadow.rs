@@ -8,8 +8,8 @@
 //! words [`VIEW_STATE`]) the device starts a light list of the frame's world draws ([`Caster`]): a
 //! vertex shader whose constant table names `ModelViewProj` (and no skinning matrices), depth test
 //! and depth writes on, no blending, no vertex textures, not a face. Alpha-tested draws are
-//! cut-outs ([`Cutout`]: drawn through their own pixel shader with the game's alpha test), only in
-//! the first [`CUTOUT_CASCADES`] maps. The list ends at the game's depth-only clear ([`STATE`]): the
+//! cut-outs ([`Cutout`]: drawn through their own pixel shader with the game's alpha test), in
+//! every cascade ([`CUTOUT_CASCADES`]). The list ends at the game's depth-only clear ([`STATE`]): the
 //! first-person arms and weapon after it cast nothing. At the next frame's scene clear each
 //! caster's place in the world comes back from its `ModelViewProj`, that frame's frustum (rows x,
 //! y and w) and the camera's rotation and place from the game's memory ([`world_of`], [`Frame`]).
@@ -54,7 +54,13 @@
 //! ShaderX6), and the map stays valid until the centre crosses a step. Each map keeps the sun it
 //! was drawn for ([`SunKeep`]) until the sun has turned far enough to move a shadow edge in it by
 //! half its texel ([`turn_limit`]); one map a frame takes the new sun ([`sun_turns`]), so the
-//! shadows glide with the sun instead of jumping.
+//! shadows glide with the sun instead of jumping. The steps count from a world point of the map's
+//! own ([`Cascade::anchor`]), which becomes the map's centre when it takes a new sun: the texel
+//! grid then turns about the ground the camera stands on, so a ground point keeps its place in
+//! its texel to a few hundredths of one. (Counted from the world's origin, as before 2026-11-19,
+//! every turn slid the grid by the turn times the distance to the origin: a texel or two at
+//! Quarry Junction, so every shadow edge in a map jumped up to a texel each time it took the sun,
+//! about every other frame for the nearest map: the maintainer's "jittery edges", report 012.)
 //!
 //! **How it shows.** In the game's own lighting: each lit shader gets a variant (`sm::wgsl`'s
 //! `convert_with_sun`) in which every read of the sun's light colour (the pixel shader's
@@ -385,6 +391,11 @@ pub struct Cascade {
     /// Its depth range: half its depth along the sun's rays, game units ([`DEPTH_RANGE`]; the far
     /// map's [`FAR_DEPTH`]).
     pub depth: f64,
+    /// The world point its whole steps count from: its centre along the sun's axis `k` is
+    /// `basis[k] . anchor + origin[k] * step` ([`Cascade::plane`]). Kept while the sun is, and
+    /// moved to the map's own centre ([`Cascade::centre`]) when the map takes a new sun, so the
+    /// texel grid turns about the ground round the camera, not about the world's origin.
+    pub anchor: [f64; 3],
 }
 
 /// An object's place in the world: its object space to the world, rows x, y, z (the point a
@@ -392,6 +403,22 @@ pub struct Cascade {
 pub type World = [[f64; 4]; 3];
 
 impl Cascade {
+    /// Its centre along the sun's axis `k` (game units from the world's origin): the anchor's
+    /// there plus its whole steps.
+    pub fn plane(&self, k: usize) -> f64 {
+        dot3(self.basis[k], self.anchor) + self.origin[k] as f64 * self.step
+    }
+
+    /// Its snapped centre in the world: the anchor moved by its whole steps along the sun's axes.
+    pub fn centre(&self) -> [f64; 3] {
+        std::array::from_fn(|i| {
+            self.anchor[i]
+                + (0..3)
+                    .map(|k| self.origin[k] as f64 * self.step * self.basis[k][i])
+                    .sum::<f64>()
+        })
+    }
+
     /// The matrix from the view space of a camera with `axes` (right, up, ahead) at `position` to
     /// this map's clip space: the camera's axes into the world (relative to the camera), the
     /// sun's basis, less the snapped centre (relative to the camera), scaled into clip space. A map
@@ -400,7 +427,8 @@ impl Cascade {
     pub fn view_to_light_for(&self, axes: [[f64; 3]; 3], position: [f64; 3]) -> M4 {
         let mut m = [[0.0; 4]; 4];
         for k in 0..3 {
-            let offset = dot3(self.basis[k], position) - self.origin[k] as f64 * self.step;
+            let from_anchor: [f64; 3] = std::array::from_fn(|i| position[i] - self.anchor[i]);
+            let offset = dot3(self.basis[k], from_anchor) - self.origin[k] as f64 * self.step;
             let (scale, add) = if k < 2 {
                 (1.0 / self.half, 0.0)
             } else {
@@ -418,10 +446,7 @@ impl Cascade {
     /// Whether a sphere in the world (`centre`, `radius`) can cast into this map: it overlaps the
     /// map's square across the sun's rays (at any depth along them).
     pub fn touches(&self, centre: [f64; 3], radius: f64) -> bool {
-        (0..2).all(|k| {
-            (dot3(self.basis[k], centre) - self.origin[k] as f64 * self.step).abs()
-                <= self.half + radius
-        })
+        (0..2).all(|k| (dot3(self.basis[k], centre) - self.plane(k)).abs() <= self.half + radius)
     }
 
     /// The matrix that takes an object placed at `w` in the world into this map's clip space (rows
@@ -439,7 +464,7 @@ impl Cascade {
             for j in 0..4 {
                 let v = b[0] * w[0][j] + b[1] * w[1][j] + b[2] * w[2][j];
                 let v = if j == 3 {
-                    (v - self.origin[k] as f64 * self.step) * scale + add
+                    (v - self.plane(k)) * scale + add
                 } else {
                     v * scale
                 };
@@ -458,8 +483,19 @@ fn round_radius(r: f64) -> f64 {
     ((r.ln() / step).ceil() * step).exp()
 }
 
+/// The point of the grid of whole `step`s along the sun's axes `b` (counted from the world's
+/// origin) nearest `p`: a map's first anchor, so a map that has never taken a new sun lies on the
+/// same texel grid as it did before anchors (shadow edges and cable bands as before).
+fn on_world_grid(p: [f64; 3], b: [[f64; 3]; 3], step: f64) -> [f64; 3] {
+    let n: [f64; 3] = std::array::from_fn(|k| (dot3(b[k], p) / step).round() * step);
+    std::array::from_fn(|i| (0..3).map(|k| n[k] * b[k][i]).sum())
+}
+
 /// Cascade `i` for the camera (`frustum` left, right, bottom, top; `axes` right, up, ahead in the
-/// world; `position` in the world) and the sun's basis `b`, between view depths `zn` and `zf`.
+/// world; `position` in the world) and the sun's basis `b`, between view depths `zn` and `zf`, its
+/// whole steps counted from `anchor` (none: a map drawn the first time, from the world grid point
+/// nearest its centre, [`on_world_grid`]).
+#[allow(clippy::too_many_arguments)]
 pub fn place(
     i: usize,
     frustum: [f32; 4],
@@ -468,6 +504,7 @@ pub fn place(
     axes: [[f64; 3]; 3],
     position: [f64; 3],
     b: [[f64; 3]; 3],
+    anchor: Option<[f64; 3]>,
 ) -> Cascade {
     let _ = i;
     let size = SIZE;
@@ -482,7 +519,9 @@ pub fn place(
         axes[0][k] * centre_view[0] + axes[1][k] * centre_view[1] + axes[2][k] * centre_view[2]
     });
     let world: [f64; 3] = std::array::from_fn(|k| position[k] + rel[k]);
-    let origin: [i64; 3] = std::array::from_fn(|k| (dot3(b[k], world) / step).round() as i64);
+    let anchor = anchor.unwrap_or_else(|| on_world_grid(world, b, step));
+    let from_anchor: [f64; 3] = std::array::from_fn(|k| world[k] - anchor[k]);
+    let origin: [i64; 3] = std::array::from_fn(|k| (dot3(b[k], from_anchor) / step).round() as i64);
     let mut c = Cascade {
         near: zn,
         far: zf,
@@ -495,6 +534,7 @@ pub fn place(
         basis: b,
         half,
         depth: DEPTH_RANGE,
+        anchor,
     };
     c.view_to_light = c.view_to_light_for(axes, position);
     c
@@ -624,17 +664,21 @@ pub const FAR_OVERDUE: f64 = 4.0;
 /// coarse land and large buildings drawn from the receivers' own geometry: the cascades' two
 /// texels of its 64 units lifted shadows off building feet).
 pub const FAR_SLOPE_MAX: f32 = 1.0;
-/// The far map's casters: radius at least this (a house, a rock, a land block; smaller things cast
-/// nothing a far map's texel could show) and at most this (beyond: the sky's, whatever its place).
-pub const FAR_MIN_RADIUS: f64 = 1000.0;
+/// The far map's casters: radius at least this (a tree, a rock, a house, a land block: about eight
+/// of its texels across; smaller things cast nothing a far map's texel could show) and at most this
+/// (beyond: the sky's, whatever its place).
+pub const FAR_MIN_RADIUS: f64 = 250.0;
 pub const FAR_MAX_RADIUS: f64 = 100_000.0;
 
 /// The far map for a camera at `position` and the sun's basis `b`: [`FAR_HALF`] round the camera,
-/// its centre snapped to [`FAR_STEP_TEXELS`] steps in the sun's space.
-pub fn far_place(position: [f64; 3], b: [[f64; 3]; 3]) -> Cascade {
+/// its centre snapped to [`FAR_STEP_TEXELS`] steps in the sun's space, counted from `anchor` (none:
+/// a map drawn the first time, on the world grid; as [`place`]).
+pub fn far_place(position: [f64; 3], b: [[f64; 3]; 3], anchor: Option<[f64; 3]>) -> Cascade {
     let texel = 2.0 * FAR_HALF / f64::from(FAR_SIZE);
     let step = FAR_STEP_TEXELS * texel;
-    let origin: [i64; 3] = std::array::from_fn(|k| (dot3(b[k], position) / step).round() as i64);
+    let anchor = anchor.unwrap_or_else(|| on_world_grid(position, b, step));
+    let from_anchor: [f64; 3] = std::array::from_fn(|k| position[k] - anchor[k]);
+    let origin: [i64; 3] = std::array::from_fn(|k| (dot3(b[k], from_anchor) / step).round() as i64);
     Cascade {
         near: FAR,
         far: f32::INFINITY,
@@ -647,7 +691,49 @@ pub fn far_place(position: [f64; 3], b: [[f64; 3]; 3]) -> Cascade {
         basis: b,
         half: FAR_HALF,
         depth: FAR_DEPTH,
+        anchor,
     }
+}
+
+/// The anchor a map counts its steps from this frame: when it takes a new sun (`turned`), the
+/// centre of the map drawn last (`drawn`; none drawn: none, the map anchors on the world grid,
+/// [`on_world_grid`]);
+/// else the one it `kept`. So the grid turns about the ground round the camera, and between turns
+/// it only moves by whole steps from a fixed point: a ground point keeps its place in its texel.
+pub fn next_anchor(
+    turned: bool,
+    drawn: Option<&Cascade>,
+    kept: Option<[f64; 3]>,
+) -> Option<[f64; 3]> {
+    if turned {
+        drawn.map(Cascade::centre)
+    } else {
+        kept
+    }
+}
+
+/// The cascades for a camera (`frustum`, view depths `s`, `axes`, `position`): each with the sun its
+/// map keeps (`keep`, the direction toward the sun `to_sun` before its first) and its anchor
+/// ([`next_anchor`] from `turned`, `drawn` and `anchors`, which keep the anchor each map took).
+#[allow(clippy::too_many_arguments)]
+pub fn place_cascades(
+    frustum: [f32; 4],
+    s: &[f32; CASCADES + 1],
+    axes: [[f64; 3]; 3],
+    position: [f64; 3],
+    keep: &[SunKeep; CASCADES],
+    to_sun: [f32; 3],
+    turned: [bool; CASCADES],
+    drawn: &[Option<Cascade>; CASCADES],
+    anchors: &mut [Option<[f64; 3]>; CASCADES],
+) -> [Cascade; CASCADES] {
+    std::array::from_fn(|i| {
+        let anchor = next_anchor(turned[i], drawn[i].as_ref(), anchors[i]);
+        let b = basis(keep[i].direction(to_sun));
+        let c = place(i, frustum, s[i], s[i + 1], axes, position, b, anchor);
+        anchors[i] = Some(c.anchor);
+        c
+    })
 }
 
 /// Which of the [`FAR_SLICES`] frames of a far redraw draws a geometry (by its buffers' numbers
@@ -1353,6 +1439,28 @@ pub fn wholly_in_view(
         && inside([0.0, -1.0, t])
 }
 
+/// Report 012 (a distant-object LOD block's segment kept casting where the game draws the cell
+/// itself): whether a kept caster the game has not drawn for more than [`GRACE`] frames, at
+/// `centre` and `radius` in the camera's view space, is gone although part of it may be out of
+/// sight: the game drew other ranges of its buffers this frame (`others_drawn`: its block, the
+/// segments it still shows, [`RangesDrawn::others`]) and its sphere reaches into the view up to
+/// the view's own far plane `far`, or the camera stands inside it (a segment the game turned off
+/// for a loaded cell, which is never wholly in view from there). The game culls a block's pieces
+/// one by one against the view, so a piece whose sphere reaches into it and that is not drawn was
+/// turned off, not culled (review of #844: its centre may be out of the view, the cell beside the
+/// player's, or deeper than the cascades reach).
+pub fn segment_gone(
+    frustum: [f32; 4],
+    centre: [f64; 3],
+    radius: f64,
+    near: f64,
+    far: f64,
+    others_drawn: bool,
+) -> bool {
+    let inside = dot3(centre, centre).sqrt() < radius;
+    others_drawn && (inside || partly_in_view(frustum, centre, radius, near, far))
+}
+
 /// The sun direction one cascade's map was drawn for: kept until the sun has turned far enough
 /// from it to move a shadow edge in that map by half a texel ([`turn_limit`]); then the map is
 /// drawn again with the sun as it is ([`sun_turns`] picks which maps take it in a frame).
@@ -1420,13 +1528,14 @@ pub fn sun_turns(over: [f64; CASCADES]) -> [bool; CASCADES] {
     take
 }
 
-/// Whether a map drawn for `drawn` (none: never drawn) is good for `now`: the same size, step and
-/// snapped centre with the same sun.
+/// Whether a map drawn for `drawn` (none: never drawn) is good for `now`: the same size, step,
+/// anchor and snapped centre with the same sun.
 pub fn still_good(drawn: Option<&Cascade>, now: &Cascade, sun_changed: bool) -> bool {
     match drawn {
         Some(d) => {
             !sun_changed
                 && d.origin == now.origin
+                && d.anchor.map(f64::to_bits) == now.anchor.map(f64::to_bits)
                 && d.size == now.size
                 && d.step.to_bits() == now.step.to_bits()
         }
@@ -1456,6 +1565,39 @@ impl GeoKey {
             index: (self.index.0, 0),
             ..self.clone()
         }
+    }
+
+    /// Its buffers alone (their own numbers, without offsets' upload counts, ranges or pipeline):
+    /// what an LOD block's segments share, each segment a range of the same buffers.
+    pub fn buffers(&self) -> ([u64; 8], u64) {
+        (self.streams.map(|(b, _, _)| b), self.index.0)
+    }
+}
+
+/// The ranges the game drew this frame from each pair of buffers ([`GeoKey::buffers`]): whether a
+/// kept caster's buffers had a DIFFERENT range of them drawn (an LOD block's other pieces), not only
+/// another copy of the same range at another place (a mesh shared by two objects: review of #844).
+#[derive(Default)]
+pub(crate) struct RangesDrawn(crate::fxhash::Map<([u64; 8], u64), Vec<Range>>);
+
+/// A range of a geometry's buffers: its first index, triangle count and base vertex.
+type Range = (u32, u32, i32);
+
+impl RangesDrawn {
+    pub fn insert(&mut self, k: &GeoKey) {
+        let range = (k.start, k.count, k.base_vertex);
+        let ranges = self.0.entry(k.buffers()).or_default();
+        if !ranges.contains(&range) {
+            ranges.push(range);
+        }
+    }
+
+    /// Whether a range of `k`'s buffers other than its own was drawn.
+    pub fn others(&self, k: &GeoKey) -> bool {
+        let range = (k.start, k.count, k.base_vertex);
+        self.0
+            .get(&k.buffers())
+            .is_some_and(|r| r.iter().any(|x| *x != range))
     }
 }
 
@@ -1894,7 +2036,8 @@ pub fn thin_maps() -> bool {
 /// thinner than a texel covers its real share and never draws a broken line. A ribbon's
 /// ([`Strand::ribbon`]: its cable is in its cut-out texture's alpha, which its own pipeline adds)
 /// quads carry its depth alone, over the ribbon's width, its coverage spread over [`THIN_DRAWN`]
-/// texels; drawn only where its alpha is (`alpha`: the first [`CUTOUT_CASCADES`]).
+/// texels; drawn only where its alpha is (`alpha`: in the first [`CUTOUT_CASCADES`], which are all of
+/// them: ribbon cables cast as far as the cascades reach, as round ones).
 pub fn thin_quads(
     c: &Cascade,
     w: &World,
@@ -2099,7 +2242,7 @@ fn sl_filter(k: i32, p: vec3<f32>, bias: f32) -> f32 {
 }
 
 // [`sl_filter`] reading layer `layer` of the maps through cascade `k`'s matrix (the characters'
-// layer of a near cascade, `CHAR_FIRST + k`).
+// layer of a cascade, `CHAR_FIRST + k`).
 fn sl_filter_layer(k: i32, layer: i32, p: vec3<f32>, bias: f32) -> f32 {
     let l = sl_to_map(k, p);
     let uv = vec2<f32>(l.x * 0.5 + 0.5, 0.5 - l.y * 0.5);
@@ -2119,7 +2262,7 @@ fn sl_filter_layer(k: i32, layer: i32, p: vec3<f32>, bias: f32) -> f32 {
 }
 
 // How much of a character's shadow (in its own layer, [`sl_chars_in`]) falls round view-space point
-// `p` of near cascade `k`: 1 where a character stands between it and the sun within a few texels
+// `p` of cascade `k`: 1 where a character stands between it and the sun within a few texels
 // (nine taps four texels apart), 0 where none does.
 fn sl_chars_cover_in(k: i32, p: vec3<f32>) -> f32 {
     if (!sl_chars_in(k)) {
@@ -2141,20 +2284,24 @@ fn sl_chars_cover_in(k: i32, p: vec3<f32>) -> f32 {
 }
 
 // Where the characters' own shadows replace the game's projected actor shadows at view-space point
-// `p`: their cover in its cascade, blended into the next one's over the band where the two meet
-// (none past the near cascades: the third's band blends to none).
+// `p`: their cover in its cascade, blended into the next one's over the band where the two meet;
+// in the last one it fades out with the visibility's own fade into the far map (which has no
+// characters, [`sl_visibility`]), so ours and the game's shadow add up to one shadow there.
 fn sl_chars_cover(p: vec3<f32>) -> f32 {
     let z = p.z;
-    if (SL.sun.w <= 0.0 || z <= 0.0 || z >= SL.splits.z) {
+    if (SL.sun.w <= 0.0 || z <= 0.0 || z >= SL.splits[CHAR_LAYERS - 1]) {
         return 0.0;
     }
-    var k = 2;
-    if (z < SL.splits.x) {
-        k = 0;
-    } else if (z < SL.splits.y) {
-        k = 1;
+    var k = CHAR_LAYERS - 1;
+    for (var j = CHAR_LAYERS - 2; j >= 0; j--) {
+        if (z < SL.splits[j]) {
+            k = j;
+        }
     }
     var v = sl_chars_cover_in(k, p);
+    if (k == CHAR_LAYERS - 1) {
+        return v * (1.0 - saturate((z - SL.extra.z) / (SL.splits.w - SL.extra.z)));
+    }
     let far = SL.splits[k];
     var near = SL.depth.x;
     if (k > 0) {
@@ -2163,18 +2310,14 @@ fn sl_chars_cover(p: vec3<f32>) -> f32 {
     let band = SL.extra.w * (far - near);
     let t = saturate((z - (far - band)) / band);
     if (t > 0.0) {
-        var next = 0.0;
-        if (k < 2) {
-            next = sl_chars_cover_in(k + 1, p);
-        }
-        v = mix(v, next, t);
+        v = mix(v, sl_chars_cover_in(k + 1, p), t);
     }
     return v;
 }
 
-// Whether near cascade `k` has its characters' layer this frame (`SL.misc.z`, a bit a cascade).
+// Whether cascade `k` has its characters' layer this frame (`SL.misc.z`, a bit a cascade).
 fn sl_chars_in(k: i32) -> bool {
-    return k < 3 && ((u32(SL.misc.z) >> u32(k)) & 1u) != 0u;
+    return k < CHAR_LAYERS && ((u32(SL.misc.z) >> u32(k)) & 1u) != 0u;
 }
 
 // How much of the sun the thin casters (cables) over map `k`'s point `l` take away: their
@@ -2337,7 +2480,7 @@ fn sun_visibility(frag: vec4<f32>) -> f32 {
     let p = sl_point(frag.xy - vec2<f32>(0.5), frag.z);
     // Where a character's own shadow falls this frame, the game's projected actor shadows are left
     // out (read as lit): one shadow a character. Elsewhere (a character not cast this frame, past
-    // the near cascades) they stay (review of #726, round 2).
+    // the cascades) they stay (review of #726, round 2).
     sun_chars = sl_chars_cover(p);
     var n = cross(dpdx(p), dpdy(p));
     let l = length(n);
@@ -2397,11 +2540,12 @@ fn lookup_consts(skinned: bool) -> String {
          const SUN_WIDTH: f32 = {SUN_WIDTH:?};\nconst THIN_NEAR: f32 = {THIN_NEAR:?};\n\
          const FAR_DEPTH: f32 = {:?};\nconst FAR_EDGE: f32 = {FAR_EDGE:?};\n\
          const FAR_EDGE_END: f32 = {FAR_EDGE_END:?};\nconst FAR_SLOPE_MAX: f32 = {FAR_SLOPE_MAX:?};\n\
-         const CHAR_FIRST: i32 = {};\n",
+         const CHAR_FIRST: i32 = {};\nconst CHAR_LAYERS: i32 = {};\n",
         if skinned { 1.0f32 } else { 0.0 },
         DEPTH_RANGE as f32,
         FAR_DEPTH as f32,
-        CASCADES
+        CASCADES,
+        CHAR_LAYERS
     )
 }
 
@@ -2554,9 +2698,10 @@ pub fn half_to_f32(h: u16) -> f32 {
     }
 }
 
-/// Alpha-tested casters (cut-outs) are drawn into this many cascades, the nearest: further out a
-/// fence or a bush is a few texels and would flicker.
-pub const CUTOUT_CASCADES: usize = 3;
+/// Alpha-tested casters (cut-outs: fences, bushes, trees' leaves) are drawn into this many
+/// cascades: all of them, so a tree or a fence casts as far as the cascades reach (past them, the
+/// far map takes the large ones whole).
+pub const CUTOUT_CASCADES: usize = CASCADES;
 /// The level bias a cut-out caster's textures are read with in the maps: far below any level, so
 /// the top level (the texture's own alpha, not a smaller level's average) decides what casts.
 pub const CUTOUT_BIAS: f32 = -16.0;
@@ -2630,7 +2775,7 @@ pub(crate) struct Gpu {
     pub far_old: Option<Cascade>,
     pub far_fade: u32,
     pub far_draws: u64,
-    /// The near cascades whose characters' layer holds this frame's characters (a bit each).
+    /// The cascades whose characters' layer holds this frame's characters (a bit each).
     pub chars_in: u32,
     /// Whether the maps have the characters' layers (made with the characters on).
     char_layers: bool,
@@ -2781,7 +2926,7 @@ impl Gpu {
                 .collect()
         };
         // The maps the lookups read: a layer a cascade, then the characters' layers ([`CHAR_LAYERS`]).
-        // (The characters' layers only with the characters on: 48 MB.)
+        // (The characters' layers only with the characters on: 64 MB.)
         let char_layers = if characters { CHAR_LAYERS } else { 0 };
         let live = texture("sun shadow maps", CASCADES + char_layers);
         let statics = texture("sun shadow maps (still casters)", CASCADES);
@@ -3054,7 +3199,7 @@ impl Gpu {
     /// moving casters the frame before (so a moving shadow that is gone leaves no ghost), the map
     /// the lookups read: a copy of the still map with the moving casters drawn over it.
     /// Each caster through its own pipeline with its `ModelViewProj` replaced by the map's view of
-    /// its place; alpha-tested ones (cut-outs) only in the first [`CUTOUT_CASCADES`]. `headers`:
+    /// its place; alpha-tested ones (cut-outs) in the [`CUTOUT_CASCADES`] (all). `headers`:
     /// the register blocks' headers. Returns the register ring's bytes, to be written before the
     /// encoder runs (with the thin casters' quads, [`thin_quads`]), and how many caster draws were recorded.
     #[allow(clippy::too_many_arguments)]
@@ -3069,6 +3214,7 @@ impl Gpu {
         redraw: [bool; CASCADES],
         far: (&Cache<GeoKey, Draw>, Option<&Cascade>),
         skinned: &[Skinned],
+        depth: ShadowDepth,
     ) -> (Vec<(wgpu::Buffer, Vec<u8>)>, u32) {
         // Each cascade's still and moving casters touching it, and its ribbon cables.
         let mut lists: Vec<[MapList<'_>; 4]> = (0..CASCADES)
@@ -3117,6 +3263,15 @@ impl Gpu {
                 }
                 if (m == 0 && !redraw[k])
                     || (d.cutout.is_some() && k >= CUTOUT_CASCADES)
+                    // A moving cut-out (a flag, a bush in the wind) only where its shadow can be read.
+                    || (m == 1
+                        && d.cutout.is_some()
+                        && !shadow_reaches_cascade(
+                            k,
+                            depth.deepest(i.centre, i.radius),
+                            depth.sine,
+                            cascades,
+                        ))
                     || !c.touches(i.centre, i.radius)
                     || self.pipelines[d.pipe as usize].is_none()
                 {
@@ -3126,11 +3281,18 @@ impl Gpu {
             }
         }
         // The characters (skinned casters and faces, their poses of the frame): drawn each frame into
-        // the near cascades' characters' layers ([`CHAR_LAYERS`]), cleared first, where they are
-        // larger than a blot ([`SKIN_MIN_TEXELS`]); never into the still maps or their copies.
-        for (k, c) in cascades.iter().enumerate().take(CUTOUT_CASCADES) {
-            for (d, world, centre, radius) in skinned {
+        // the cascades' characters' layers ([`CHAR_LAYERS`]), cleared first, where they are
+        // larger than a blot ([`SKIN_MIN_TEXELS`]) and where their shadows can be read
+        // ([`shadow_reaches_cascade`]: a character near the camera is not drawn again into the last
+        // cascade's square); never into the still maps or their copies.
+        let deepest: Vec<f64> = skinned
+            .iter()
+            .map(|(_, _, centre, radius)| depth.deepest(*centre, *radius))
+            .collect();
+        for (k, c) in cascades.iter().enumerate().take(CHAR_LAYERS) {
+            for ((d, world, centre, radius), &deep) in skinned.iter().zip(&deepest) {
                 if *radius >= SKIN_MIN_TEXELS * c.texel
+                    && shadow_reaches_cascade(k, deep, depth.sine, cascades)
                     && c.touches(*centre, *radius)
                     && self.pipelines[d.pipe as usize].is_some()
                 {
@@ -3173,7 +3335,8 @@ impl Gpu {
         }
         // The far map: a redraw started (`far.1`) or on its way goes on with this frame's slice of
         // its casters ([`far_slice`]) into the back map: those that cast as solid, cut-outs too (the
-        // LOD blocks), cables left out (a cable is not a texel there), nothing moving.
+        // LOD blocks), cables left out (a cable is not a texel there); a moving one from its latest
+        // place (its old ones are let go at once, as the device pairs its moves).
         let (far_cache, far_start) = far;
         self.far_fade = (self.far_fade + 1).min(FAR_FADE_FRAMES);
         if let Some(c) = far_start {
@@ -3186,7 +3349,6 @@ impl Gpu {
             for (k, i) in far_cache.iter_keyed() {
                 let d = &i.payload;
                 if far_slice(k) != slice
-                    || i.moving
                     || (d.thin.is_some() && !d.rest)
                     || !c.touches(i.centre, i.radius)
                     || self.pipelines[d.pipe as usize].is_none()
@@ -3815,9 +3977,58 @@ pub fn skin_allowance(step: f64, flat: f64) -> f64 {
     (step / flat.max(SKIN_FLAT_SUN)).clamp(SKIN_RECEIVER_BIAS, SKIN_ALLOW_MAX)
 }
 
-/// The characters' layers: one for each of the first [`CUTOUT_CASCADES`] cascades, after the
-/// cascades' own in the maps the lookups read, cleared and drawn each frame there are characters.
-pub const CHAR_LAYERS: usize = CUTOUT_CASCADES;
+/// The characters' layers: one for each cascade, after the cascades' own in the maps the lookups
+/// read, cleared and drawn each frame there are characters (a character casts as far as the
+/// cascades reach).
+pub const CHAR_LAYERS: usize = CASCADES;
+// The last characters' layer fades out with the visibility's fade into the far map (the lookup's
+// `sl_chars_cover`): that holds only while the last layer is the last cascade's.
+const _: () = assert!(CHAR_LAYERS == CASCADES);
+
+/// Where in the camera's view depth a caster's shadow can fall (the camera's place, the unit axis
+/// ahead, and the sine of the sun's height): for which cascades a character or a moving cut-out is
+/// drawn into ([`shadow_reaches_cascade`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ShadowDepth {
+    pub position: [f64; 3],
+    pub ahead: [f64; 3],
+    pub sine: f64,
+}
+
+impl ShadowDepth {
+    /// The deepest view depth the shadow of a caster at world sphere (`centre`, `radius`) can fall
+    /// at: its far side, and as far again as its top throws a shadow along the sun's rays, its top
+    /// counted a diameter over its lowest point and that point as much as [`SHADOW_REACH`] over the
+    /// ground the shadow falls on (a character on a roof or a cliff edge, a creature flying, a flag
+    /// on a pole: review of #843; where the caster stands is not known here).
+    pub fn deepest(&self, centre: [f64; 3], radius: f64) -> f64 {
+        let d: [f64; 3] = std::array::from_fn(|k| centre[k] - self.position[k]);
+        let height = 2.0 * radius + SHADOW_REACH;
+        dot3(self.ahead, d) + radius + height / self.sine.max(f64::from(MIN_SUN_HEIGHT))
+    }
+}
+
+/// Whether a shadow no deeper than view depth `deepest` can be read from cascade `k`'s maps, with
+/// the sun's height's sine `sine`: the first always; any other from where the cascade before it
+/// starts to blend into it (its far end less [`BLEND`] of its depth range), less the lookups'
+/// reach of four of `k`'s texels (the characters' cover taps that far round a point), which
+/// stretch along the ground by 1 / sine (at least [`MIN_SUN_HEIGHT`]). Nearer shadows are read
+/// from the cascades before it alone, so the caster is left out of `k`'s characters' layer or
+/// moving copy.
+pub fn shadow_reaches_cascade(
+    k: usize,
+    deepest: f64,
+    sine: f64,
+    cascades: &[Cascade; CASCADES],
+) -> bool {
+    if k == 0 {
+        return true;
+    }
+    let before = &cascades[k - 1];
+    let band = f64::from(BLEND) * f64::from(before.far - before.near);
+    let margin = 4.0 * cascades[k].texel / sine.max(f64::from(MIN_SUN_HEIGHT));
+    deepest >= f64::from(before.far) - band - margin
+}
 
 /// One bone's share of a skinned geometry: the bone's register offset from `Bones` (a byte of
 /// `BLENDINDICES` times 3) and the bind-pose sphere of the vertices it moves.
@@ -4065,10 +4276,26 @@ mod tests {
         }
     }
 
+    /// The world point the tests' maps count their steps from (as a device's map keeps one between
+    /// turns of the sun): not the origin, so the anchor's part in the sums is tested too.
+    const TEST_ANCHOR: [f64; 3] = [1234.5, -678.25, 91.0];
+
     fn cascades_of(f: &Frame, b: [[f64; 3]; 3]) -> Vec<Cascade> {
         let s = splits(view().near, FAR);
         (0..CASCADES)
-            .map(|i| place(i, frustum(), s[i], s[i + 1], f.axes(), wide(f.position), b))
+            .map(|i| {
+                let p = wide(f.position);
+                place(
+                    i,
+                    frustum(),
+                    s[i],
+                    s[i + 1],
+                    f.axes(),
+                    p,
+                    b,
+                    Some(TEST_ANCHOR),
+                )
+            })
             .collect()
     }
 
@@ -4131,7 +4358,7 @@ mod tests {
                     + axes[2][k] * centre_view[2]
             });
             for k in 0..3 {
-                let off = dot3(b[k], world) - c.origin[k] as f64 * c.step;
+                let off = dot3(b[k], world) - c.plane(k);
                 assert!(
                     off.abs() <= c.step / 2.0 + 1e-6,
                     "cascade {i} axis {k}: {off}"
@@ -4365,8 +4592,7 @@ mod tests {
         let f = Frame::from_game(&game()).unwrap();
         let b = basis(wide(f.to_sun));
         let c = cascades_of(&f, b)[0];
-        let centre: [f64; 3] =
-            std::array::from_fn(|k| (0..3).map(|j| b[j][k] * c.origin[j] as f64 * c.step).sum());
+        let centre = c.centre();
         assert!(c.touches(centre, 1.0));
         // Along the sun's ray, far toward the sun: still touches.
         let up: [f64; 3] = std::array::from_fn(|k| centre[k] - 5000.0 * b[2][k]);
@@ -5441,7 +5667,7 @@ mod tests {
         // No far map: its texel 0 (the lookups leave it out).
         assert_eq!(at(32 + 64 + 12), 0.0);
         // With one: its rows from this frame's view and its texel.
-        let far = far_place(wide(f.position), b);
+        let far = far_place(wide(f.position), b, Some(TEST_ANCHOR));
         let u = lookup_uniforms(
             &view(),
             f.strength,
@@ -5487,11 +5713,17 @@ mod tests {
     #[test]
     fn the_far_map_is_centred_on_the_camera_and_snapped() {
         let b = basis([0.6, 0.0, 0.8]);
-        let a = far_place([1000.0, 2000.0, 300.0], b);
+        let a = far_place([1000.0, 2000.0, 300.0], b, Some(TEST_ANCHOR));
         assert_eq!((a.half, a.depth, a.size), (FAR_HALF, FAR_DEPTH, FAR_SIZE));
         assert_eq!(a.step, FAR_STEP_TEXELS * a.texel);
         // A step's worth less a little: the same map; a step: another.
-        let moved = |d: f64| far_place([1000.0 + d * b[0][0], 2000.0, 300.0 + d * b[0][2]], b);
+        let moved = |d: f64| {
+            far_place(
+                [1000.0 + d * b[0][0], 2000.0, 300.0 + d * b[0][2]],
+                b,
+                Some(TEST_ANCHOR),
+            )
+        };
         assert!(still_good(Some(&a), &moved(10.0), false));
         assert!(!still_good(Some(&a), &moved(a.step), false));
         assert!(!still_good(Some(&a), &a, true));
@@ -5556,8 +5788,16 @@ mod tests {
         assert!(!casts(&at(far, 1.0), ([0.0; 3], 30_000.0), camera));
         // A house (radius 1,200): both.
         assert!(far_casts(&at(far, 1.0), ([0.0; 3], 1200.0), camera));
-        // A rock (radius 300): the cascades only.
-        assert!(!far_casts(&at(far, 1.0), ([0.0; 3], 300.0), camera));
+        // A rock or a tree (radius 300): both, a cut-out too (in [`draw_maps`]).
+        assert!(far_casts(&at(far, 1.0), ([0.0; 3], 300.0), camera));
+        // A bush (radius 100, a texel and a half of the far map): the cascades only.
+        assert!(!far_casts(&at(far, 1.0), ([0.0; 3], 100.0), camera));
+        assert!(!far_casts(
+            &at(far, 1.0),
+            ([0.0; 3], FAR_MIN_RADIUS - 1.0),
+            camera
+        ));
+        assert!(far_casts(&at(far, 1.0), ([0.0; 3], FAR_MIN_RADIUS), camera));
         // The sky's dome round the camera, placed at it: neither.
         assert!(!far_casts(&at(camera, 1.0), ([0.0; 3], 50_000.0), camera));
         // Larger than any land: not.
@@ -5603,5 +5843,373 @@ mod tests {
             None
         );
         assert_eq!(model_view_proj(&program(&[])), None);
+    }
+
+    /// A world point's place across map `c` along the sun's axis `axis`, in texels from the map's
+    /// centre.
+    fn texel_place(c: &Cascade, p: [f64; 3], axis: usize) -> f64 {
+        (dot3(c.basis[axis], p) - c.plane(axis)) / c.texel
+    }
+
+    /// The part of a texel a point slid by between two maps (whole texels, the map's whole steps,
+    /// left out): 0 to 0.5.
+    fn sub_texel(slide: f64) -> f64 {
+        (slide - slide.round()).abs()
+    }
+
+    /// Report 012's "jittery edges": far from the world's origin (Quarry Junction, about 39,000
+    /// units out) and with the camera walking 20,000 units, each map that takes a turned sun keeps
+    /// the ground round the camera in its place in its texels, to a fifth of one, as the device
+    /// places them ([`place_cascades`]: the anchor moves to the map's own centre at each turn).
+    /// Counted from the world's origin (as before), or from an anchor left where the walk began,
+    /// the ground slid by up to half a texel at a turn: every shadow edge in the map jumped.
+    #[test]
+    fn a_ground_point_keeps_its_place_in_its_texel_as_the_sun_turns_far_from_the_origin() {
+        // A farther map's ground lies farther from its centre and its turn limit is larger (its
+        // texels are larger), and the last takes the sun late (one map a frame, the nearest first):
+        // its grid turns by up to 0.2 (third) and 0.43 (last) of a texel there, as a hill's shadow
+        // moves. Each bound is shown to tell the rules apart: counted from the world's grid (the
+        // old rule) the same walk slides the ground past it in every map (review of #813).
+        let most = [0.15, 0.15, 0.3, 0.47];
+        let (worst, turns) = phase_walk(false);
+        let (old, _) = phase_walk(true);
+        eprintln!("worst slide a map {worst:.3?} of a texel, turns {turns:?}; on the world grid {old:.3?}");
+        for k in 0..CASCADES {
+            assert!(turns[k] >= 3, "map {k} took the sun {} times", turns[k]);
+            assert!(
+                worst[k] < most[k],
+                "a ground point slid {worst:?} of a texel"
+            );
+            assert!(old[k] > most[k], "the old rule within the bound: {old:?}");
+        }
+    }
+
+    /// The walk of [`a_ground_point_keeps_its_place_in_its_texel_as_the_sun_turns_far_from_the_origin`]:
+    /// the worst part of a texel a ground point slid by at a turn, and the turns, a map; with
+    /// `world_grid`, every map anchored on the world's grid (as before the anchors).
+    fn phase_walk(world_grid: bool) -> ([f64; CASCADES], [usize; CASCADES]) {
+        let s = splits(view().near, FAR);
+        // Looking east, level: right (south), up, ahead (east).
+        let axes = [[0.0, -1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]];
+        let mut keep = [SunKeep::default(); CASCADES];
+        let mut anchors = [None; CASCADES];
+        let mut drawn: [Option<Cascade>; CASCADES] = [None; CASCADES];
+        // 012's sun, 23 degrees up, turning about the vertical by uneven steps a frame (about one
+        // to two of the nearest map's turn limits).
+        let steps = [0.0021f64, 0.0037, 0.0029, 0.0051, 0.0024];
+        let mut azimuth = 200.0f64;
+        let (mut worst, mut turns) = ([0.0f64; CASCADES], [0usize; CASCADES]);
+        for frame in 0..400 {
+            let position = [-36000.0 + 50.0 * frame as f64, 16000.0, 5700.0];
+            let (a, h) = (azimuth.to_radians(), 23f64.to_radians());
+            let to_sun = [
+                (h.cos() * a.cos()) as f32,
+                (h.cos() * a.sin()) as f32,
+                h.sin() as f32,
+            ];
+            let sine = f64::from(to_sun[2]);
+            let over: [f64; CASCADES] = std::array::from_fn(|i| {
+                let b = basis(keep[i].direction(to_sun));
+                let texel = place(i, frustum(), s[i], s[i + 1], axes, position, b, None).texel;
+                keep[i]
+                    .turn(to_sun)
+                    .map_or(f64::INFINITY, |t| t / turn_limit(texel, sine))
+            });
+            let turned = sun_turns(over);
+            for (k, kp) in keep.iter_mut().enumerate() {
+                if turned[k] {
+                    kp.take(to_sun);
+                }
+            }
+            let now = place_cascades(
+                frustum(),
+                &s,
+                axes,
+                position,
+                &keep,
+                to_sun,
+                turned,
+                // No map drawn before: each turn anchors on the world's grid, and an anchor on it
+                // kept between turns is the world's grid too.
+                if world_grid {
+                    &[None; CASCADES]
+                } else {
+                    &drawn
+                },
+                &mut anchors,
+            );
+            for k in 0..CASCADES {
+                if let (true, Some(before)) = (turned[k], drawn[k].as_ref()) {
+                    // Ground points the map shows: in its slice of the view, across the view.
+                    let (zn, zf) = (f64::from(s[k]), f64::from(s[k + 1]));
+                    for f in [0.25, 0.5, 0.75] {
+                        for side in [-0.5, 0.0, 0.5] {
+                            let ahead = zn + f * (zf - zn);
+                            let p = [
+                                position[0] + ahead,
+                                position[1] + side * ahead,
+                                position[2] - 170.0,
+                            ];
+                            for axis in 0..2 {
+                                let slide =
+                                    texel_place(&now[k], p, axis) - texel_place(before, p, axis);
+                                worst[k] = worst[k].max(sub_texel(slide));
+                            }
+                        }
+                    }
+                    turns[k] += 1;
+                }
+                if !still_good(drawn[k].as_ref(), &now[k], turned[k]) {
+                    drawn[k] = Some(now[k]);
+                }
+            }
+            azimuth += steps[frame % steps.len()];
+        }
+        (worst, turns)
+    }
+
+    /// The far map keeps the same rule across its turns (review of #813): ground near the camera
+    /// keeps its place in its texels, to a tenth of one, when the far map is placed for a turned
+    /// sun counting from the centre of the map before; counted from the world's grid it slides by
+    /// more at some turn, 39,000 units from the origin.
+    #[test]
+    fn the_far_map_keeps_the_ground_in_its_texels_across_a_turn() {
+        let mut azimuth = 200.0f64;
+        let (mut worst, mut old) = (0.0f64, 0.0f64);
+        let mut before = None::<Cascade>;
+        let mut grid_before = None::<Cascade>;
+        for turn in 0..12 {
+            let position = [-36000.0 + 700.0 * f64::from(turn), 16000.0, 5700.0];
+            let (a, h) = (azimuth.to_radians(), 23f64.to_radians());
+            let b = basis([h.cos() * a.cos(), h.cos() * a.sin(), h.sin()]);
+            let anchor = next_anchor(true, before.as_ref(), before.map(|c| c.anchor));
+            let now = far_place(position, b, anchor);
+            let grid = far_place(position, b, None);
+            if let (Some(was), Some(was_grid)) = (before, grid_before) {
+                for dx in [-1000.0, 0.0, 1000.0] {
+                    for dy in [-1000.0, 0.0, 1000.0] {
+                        let p = [position[0] + dx, position[1] + dy, position[2] - 170.0];
+                        for axis in 0..2 {
+                            let s = texel_place(&now, p, axis) - texel_place(&was, p, axis);
+                            worst = worst.max(sub_texel(s));
+                            let s = texel_place(&grid, p, axis) - texel_place(&was_grid, p, axis);
+                            old = old.max(sub_texel(s));
+                        }
+                    }
+                }
+            }
+            before = Some(now);
+            grid_before = Some(grid);
+            azimuth += [0.011, 0.017, 0.013][turn as usize % 3];
+        }
+        eprintln!(
+            "the far map's worst slide at a turn {worst:.3} of a texel, on the world grid {old:.3}"
+        );
+        assert!(worst < 0.1, "{worst}");
+        assert!(old > 0.1, "{old}");
+    }
+
+    /// The anchor rule itself: kept between turns, the drawn map's centre at a turn, none before
+    /// the first map.
+    #[test]
+    fn a_map_anchors_at_its_own_centre_when_it_takes_a_new_sun() {
+        let b = basis(wide(game().to_sun.expect("a sun")));
+        let c = far_place([-36000.0, 16000.0, 5700.0], b, Some([100.0, 200.0, 300.0]));
+        assert_eq!(
+            next_anchor(false, Some(&c), Some([1.0, 2.0, 3.0])),
+            Some([1.0, 2.0, 3.0])
+        );
+        assert_eq!(
+            next_anchor(true, Some(&c), Some([1.0, 2.0, 3.0])),
+            Some(c.centre())
+        );
+        assert_eq!(next_anchor(true, None, Some([1.0, 2.0, 3.0])), None);
+        // The centre is the anchor moved by the whole steps: the plane through it along each axis.
+        let centre = c.centre();
+        for k in 0..3 {
+            assert!((dot3(c.basis[k], centre) - c.plane(k)).abs() < 1e-6);
+        }
+        // A map placed from its own centre has no steps; one counted from an anchor a step away
+        // along the sun's first axis has one.
+        let own = far_place(centre, b, Some(centre));
+        assert_eq!(own.origin, [0, 0, 0]);
+        let step_off: [f64; 3] = std::array::from_fn(|i| centre[i] - c.step * b[0][i]);
+        assert_eq!(far_place(centre, b, Some(step_off)).origin, [1, 0, 0]);
+    }
+
+    /// Report 012: a kept caster not drawn for its grace is let go although not wholly in view
+    /// only when the game drew other ranges of its buffers this frame and its sphere reaches into
+    /// the view or the camera stands inside it.
+    #[test]
+    fn a_segment_is_gone_only_while_its_buffers_are_drawn_and_it_is_round_or_before_the_camera() {
+        let f = frustum();
+        let (near, far) = (10.0, 100_000.0);
+        // Centre in view, the sphere across the right edge (x = 0.77 of the depth: 384 at 500).
+        let edge = [360.0, 0.0, 500.0];
+        assert!(!wholly_in_view(f, edge, 50.0, near, far));
+        assert!(segment_gone(f, edge, 50.0, near, far, true));
+        assert!(
+            !segment_gone(f, edge, 50.0, near, far, false),
+            "its buffers not drawn"
+        );
+        // Round the camera (behind it, the camera inside the sphere).
+        assert!(segment_gone(f, [0.0, 0.0, -100.0], 400.0, near, far, true));
+        // Review of #844: its centre out of view (the cell beside the player's), its sphere
+        // reaching in (51 from the edge's plane, radius 100): gone.
+        let beside = [450.0, 0.0, 500.0];
+        assert!(!partly_in_view(f, beside, 0.0, near, far));
+        assert!(segment_gone(f, beside, 100.0, near, far, true));
+        // ... and one ahead deeper than the cascades reach (the view's far plane counts).
+        assert!(segment_gone(
+            f,
+            [0.0, 0.0, 15_000.0],
+            2_900.0,
+            near,
+            far,
+            true
+        ));
+        // Its sphere wholly out of view and the camera outside it: kept (culled, not gone).
+        assert!(!segment_gone(
+            f,
+            [600.0, 0.0, 500.0],
+            100.0,
+            near,
+            far,
+            true
+        ));
+        assert!(!segment_gone(f, [0.0, 0.0, -500.0], 100.0, near, far, true));
+    }
+
+    /// Review of #844: a pair of buffers counts as drawing other ranges only when a different range
+    /// of it was drawn, not another copy of the same range at another place.
+    #[test]
+    fn only_a_different_range_of_the_buffers_counts_as_another_drawn() {
+        let key = |start: u32| GeoKey {
+            pipe: 1,
+            streams: [(7, 0, 3); 8],
+            index: (9, 2),
+            start,
+            count: 10,
+            base_vertex: 0,
+        };
+        let mut drawn = RangesDrawn::default();
+        drawn.insert(&key(0));
+        drawn.insert(&key(0));
+        assert!(!drawn.others(&key(0)), "a copy of the same range");
+        assert!(drawn.others(&key(30)), "another range of the same buffers");
+        let other_buffers = GeoKey {
+            index: (10, 2),
+            ..key(30)
+        };
+        assert!(!drawn.others(&other_buffers), "other buffers");
+        drawn.insert(&key(30));
+        assert!(drawn.others(&key(0)));
+        // The upload counts and the pipeline do not part a range from its buffers' others.
+        let rewritten = GeoKey {
+            pipe: 2,
+            streams: [(7, 0, 4); 8],
+            index: (9, 5),
+            ..key(60)
+        };
+        assert!(drawn.others(&rewritten));
+    }
+
+    /// Review of #817: a character (or a moving cut-out) whose shadow cannot reach where a cascade
+    /// is read is not drawn into it: the first cascade always; the last only from the second
+    /// last's blend band on (less four of its texels along the ground), counting the caster's far
+    /// side, its feet up to SHADOW_REACH over the ground (review of #843), and as far
+    /// again as its height throws a shadow (a low sun throws it farther: drawn from nearer).
+    #[test]
+    fn a_shadow_too_near_for_a_cascade_is_not_drawn_into_it() {
+        let s = splits(view().near, FAR);
+        let axes = [[0.0, -1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]];
+        let position = [0.0, 0.0, 100.0];
+        let b = basis([0.6, 0.0, 0.8]);
+        let cascades: [Cascade; CASCADES] =
+            std::array::from_fn(|i| place(i, frustum(), s[i], s[i + 1], axes, position, b, None));
+        let last = CASCADES - 1;
+        let band = f64::from(BLEND) * f64::from(s[last] - s[last - 1]);
+        let start_at = |sine: f64| f64::from(s[last]) - band - 4.0 * cascades[last].texel / sine;
+        let start = start_at(0.8);
+        // A character 60 across (radius 60, 120 high) straight ahead at view depth `x`, its feet
+        // up to SHADOW_REACH over the ground its shadow falls on.
+        let high = ShadowDepth {
+            position,
+            ahead: axes[2],
+            sine: 0.8,
+        };
+        let reach = 60.0 + (120.0 + SHADOW_REACH) / 0.8;
+        assert!(start - reach > 1.0, "{start} {reach}");
+        let at = |x: f64| [x, 0.0, 100.0];
+        assert!((high.deepest(at(1000.0), 60.0) - (1000.0 + reach)).abs() < 1e-9);
+        assert!(!shadow_reaches_cascade(
+            last,
+            high.deepest(at(start - reach - 1.0), 60.0),
+            0.8,
+            &cascades
+        ));
+        assert!(shadow_reaches_cascade(
+            last,
+            high.deepest(at(start - reach + 1.0), 60.0),
+            0.8,
+            &cascades
+        ));
+        for k in 0..CASCADES {
+            assert!(shadow_reaches_cascade(
+                k,
+                high.deepest(at(f64::from(s[k + 1])), 60.0),
+                0.8,
+                &cascades
+            ));
+        }
+        // Every cascade but the last takes a character even at the camera.
+        for k in 0..last {
+            assert!(shadow_reaches_cascade(
+                k,
+                high.deepest(at(1.0), 60.0),
+                0.8,
+                &cascades
+            ));
+        }
+        // Review of #843: a sniper (radius 60) on a roof 600 over the street 1,000 ahead, the sun
+        // at 30 degrees behind the camera: its shadow's tip falls (600 + 120) cot 30 farther on.
+        let thirty = ShadowDepth { sine: 0.5, ..high };
+        let tip = 1000.0 + 60.0 + 720.0 * (3f64).sqrt();
+        assert!(thirty.deepest(at(1000.0), 60.0) >= tip);
+        // ... and a flag 600 up on its pole (radius 50) as deep as SHADOW_REACH lets it fall.
+        for (sine, drop) in [(0.8, 600.0), (0.5, SHADOW_REACH), (0.17, 1000.0)] {
+            let d = ShadowDepth { sine, ..high };
+            let cot = (1.0 - sine * sine).sqrt() / sine;
+            assert!(d.deepest(at(500.0), 50.0) >= 500.0 + 50.0 + (drop + 100.0) * cot);
+        }
+        // A low sun: the same character nearer still reaches the last cascade.
+        let low = ShadowDepth { sine: 0.1, ..high };
+        assert!(shadow_reaches_cascade(
+            last,
+            low.deepest(at(start - reach - 1.0), 60.0),
+            0.1,
+            &cascades
+        ));
+        // Review of #843: the lookups' four texels stretch along the ground by 1 / sine: a shadow
+        // just past the low sun's start is read from the last cascade, just before it is not.
+        let low_start = start_at(0.25);
+        assert!(low_start < start - 1.0);
+        assert!(shadow_reaches_cascade(
+            last,
+            low_start + 0.5,
+            0.25,
+            &cascades
+        ));
+        assert!(!shadow_reaches_cascade(
+            last,
+            low_start - 0.5,
+            0.25,
+            &cascades
+        ));
+        // Under the lowest sun that casts, MIN_SUN_HEIGHT.
+        let flat = ShadowDepth { sine: 0.0, ..high };
+        let huge = flat.deepest(at(0.0), 5000.0);
+        let lowest = f64::from(MIN_SUN_HEIGHT);
+        assert!((huge - (5000.0 + (10000.0 + SHADOW_REACH) / lowest)).abs() < 1e-6);
     }
 }

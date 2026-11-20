@@ -37,11 +37,11 @@
 //! The rest of the file waits (each named in the lane's audit):
 //! - a hook or a code patch of JIP's: `UnlockRecipeMenuQuantity`, `ToggleCraftingMessages`,
 //!   `EnableImprovedRecipeMenu`, `SuppressQuestMessages`, `InitItemFilter`, `SetItemFilter` (code bytes and jumps patched into
-//!   the exe), `ShowTextInputMenu`, `SetTextInputExtendedProps`, `SetTextInputString` (the text
-//!   input hooks, `TextInputClose`);
-//! - 3D and drawing: `ProjectUITile` (a rendered texture); (`AttachUIXML` and
-//!   `AttachUIComponent`, a tile's node under a reference's node, are built in `jip_fn_ui_nodes.rs`,
-//!   `SetCursorPos` in `jip_fn_ui_cursor.rs`);
+//!   the exe); (`ShowTextInputMenu`, `SetTextInputExtendedProps` and `SetTextInputString`, with
+//!   JIP's text input hooks, are built in `jip_fn_ui_text.rs`);
+//! - (3D and drawing: `AttachUIXML` and `AttachUIComponent`, a tile's node under a reference's node,
+//!   are built in `jip_fn_ui_nodes.rs`, `SetCursorPos` in `jip_fn_ui_cursor.rs`, `ProjectUITile` in
+//!   `jip_fn_ui_project.rs`);
 //!
 //! `GetMenuTargetRef` and `GetSelectedItemRef`: where JIP reads through a null pointer (the top
 //! menu's object, a highlighted perk rank with no item, a barter menu without a merchant), the
@@ -507,7 +507,11 @@ fn value_float(e: &Engine, tile: u32, id: u32) -> f32 {
 /// The tile at `path` (`Menu/tile/...`; a path without a slash is the menu's own tile). With
 /// `want_value`, the path must end at a trait the tile has, and its value comes too; without, it
 /// must end at a tile. A path without a slash gives the menu's tile and no value either way.
-fn target_component(e: &mut Engine, path: &[u8], want_value: bool) -> Option<(u32, u32)> {
+pub(crate) fn target_component(
+    e: &mut Engine,
+    path: &[u8],
+    want_value: bool,
+) -> Option<(u32, u32)> {
     let Some(slash) = slash_pos(path) else {
         let tile = menu_tile(e, path);
         return (tile != 0).then_some((tile, 0));
@@ -2820,6 +2824,11 @@ pub fn insert_font_info(e: &mut Engine, path: &[u8], info: u32) -> bool {
 /// For G129: the font manager now holds JIP's 89 fonts.
 pub fn set_font_manager_extended(e: &mut Engine) {
     font_infos(e).extended = true;
+}
+
+/// Whether G129's font manager is in (fonts 10 to 89 have slots).
+pub(crate) fn font_manager_extended(e: &mut Engine) -> bool {
+    font_infos(e).extended
 }
 
 /// `FontInfo::Init` (`00A12020`, `thiscall`: the block, the font's number, its path, a bool: 1

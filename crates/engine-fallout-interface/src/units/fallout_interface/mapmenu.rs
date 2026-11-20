@@ -5,6 +5,66 @@
 use crate::prelude::*;
 use engine_core::extend::stewie;
 
+/// lStewieAl's Tweaks' rows of the map, lockpick, casino and caravan menus (share 3's first
+/// group, `measure/stewie/PLAN.md`; Tweaks' `MenuFixes::InitHooks`, `RouletteMenuFixes::InitHooks`
+/// and `CaravanDoublePayoutFix::InitHooks`): their bits (`engine_core::extend::stewie`'s share 3
+/// file, `menus.rs`), the list of this group and the controller tests Tweaks' hooks share.
+pub mod stewie_menus {
+    use engine_core::extend::stewie::Row;
+    pub use engine_core::extend::stewie::{
+        CARAVAN_PAD_NOT_WITH_CONSOLE, CARAVAN_SINGLE_PAYOUT, LOCKPICK_DEBUG_HEALTH,
+        MAP_COMPANION_LABEL_CLIPS, MAP_COMPANION_MARKERS_RESET, MAP_DRAG_NO_UNDISCOVERED_MESSAGE,
+        MAP_PAD_MARKER_WHILE_MOVING, MAP_PAD_SELECTION_CENTRED, MAP_QUEST_KEEPS_SCROLL,
+        ROULETTE_CUT_BET_VALUE, ROULETTE_ZERO_BET_TEXT, ROULETTE_ZERO_WINS,
+    };
+    use engine_core::Engine;
+
+    /// Tweaks' rows of this group in bit order (row id, bit).
+    pub const ROWS: [(&str, Row); 12] = [
+        ("S0022.09", MAP_QUEST_KEEPS_SCROLL),
+        ("S0022.13", LOCKPICK_DEBUG_HEALTH),
+        ("S0022.19", MAP_DRAG_NO_UNDISCOVERED_MESSAGE),
+        ("S0022.25", MAP_PAD_MARKER_WHILE_MOVING),
+        ("S0022.26", MAP_COMPANION_LABEL_CLIPS),
+        ("S0022.27", ROULETTE_ZERO_BET_TEXT),
+        ("S0022.31", MAP_PAD_SELECTION_CENTRED),
+        ("S0022.41", MAP_COMPANION_MARKERS_RESET),
+        ("S0022.46", CARAVAN_PAD_NOT_WITH_CONSOLE),
+        ("S0196.04", ROULETTE_ZERO_WINS),
+        ("S0196.05", ROULETTE_CUT_BET_VALUE),
+        ("S0092", CARAVAN_SINGLE_PAYOUT),
+    ];
+
+    /// `isControllerDisabled` (`011d8c50`) and `isControllerConnected` (`011d8a84`).
+    pub const CONTROLLER_DISABLED: u32 = 0x011d_8c50;
+    pub const CONTROLLER_CONNECTED: u32 = 0x011d_8a84;
+    /// The interface manager's pointer (`011d8a80`) and its `hasMouseMoved` byte (+0xED).
+    pub const INTERFACE_MANAGER: u32 = 0x011d_8a80;
+    pub const HAS_MOUSE_MOVED: u32 = 0xed;
+    /// `g_isConsoleOpen` (`011dea2e`).
+    pub const CONSOLE_OPEN: u32 = 0x011d_ea2e;
+
+    /// xNVSE's `IsControllerConnected` as Tweaks has it (`GameUI.cpp`): not disabled (the byte
+    /// is not 1) and connected. The exe's own (`004b71d0`) tests the same two bytes.
+    pub fn controller_connected(e: &Engine) -> bool {
+        e.mem.u8(CONTROLLER_DISABLED) != 1 && e.mem.u8(CONTROLLER_CONNECTED) != 0
+    }
+
+    /// xNVSE's `IsControllerConnectedOrMouseNotMoved`: the pad, or the mouse not moved since the
+    /// keys were last used (the interface manager's `hasMouseMoved`).
+    pub fn controller_or_mouse_still(e: &Engine) -> bool {
+        controller_connected(e) || {
+            let manager = e.mem.u32(INTERFACE_MANAGER);
+            e.mem.u8(manager.wrapping_add(HAS_MOUSE_MOVED)) == 0
+        }
+    }
+
+    /// Tweaks' `IsControllerModeAndNotConsoleOpen`: the pad, with the console closed.
+    pub fn controller_and_no_console(e: &Engine) -> bool {
+        controller_connected(e) && e.mem.u8(CONSOLE_OPEN) == 0
+    }
+}
+
 /// The vtable of the `BSSimpleArray` instance with RTTI name `.?AV?$BSSimpleArray@V?$BSStringT@D@@$0EAA@@` (read at the word before the vtable: its complete object locator, then the type descriptor).
 const ARRAY_VTABLE_01075530: u32 = 0x0107_5530;
 /// `007a1c30` (unnamed in the engine map): `thiscall`, `this` plus one stack word (`RET 4`). When the
@@ -1563,6 +1623,7 @@ fn run_note_conversation(e: &mut Engine, this: Ptr<MapMenu>, note: u32, handle: 
 fn do_click_marker(e: &mut Engine, this: Ptr<MapMenu>, id: i32, tile: u32) {
     let base = this.addr();
     if e.get(this, MapMenu::iCurrentPage) == 0x21 {
+        let mut dragged = false;
         let not_dragged = if e.call(FLAG_004B71D0, &args![]).bool() {
             true
         } else if e.get(this, MapMenu::pMapTile) == 0 {
@@ -1571,13 +1632,23 @@ fn do_click_marker(e: &mut Engine, this: Ptr<MapMenu>, id: i32, tile: u32) {
             let map = e.get(this, MapMenu::pMapTile);
             let x = e.call(TILE_GET_FLOAT, &args![map, 0xfa1u32]).f64();
             let start_x = x87_load32(e.mem.u32(base + 0x120));
-            equal(start_x, x) && {
+            let still = equal(start_x, x) && {
                 let map = e.get(this, MapMenu::pMapTile);
                 let y = e.call(TILE_GET_FLOAT, &args![map, 0xfa2u32]).f64();
                 let start_y = x87_load32(e.mem.u32(base + 0x124));
                 equal(start_y, y)
-            }
+            };
+            dragged = !still;
+            still
         };
+        // 0x797FCF, 0x797FFE: lStewieAl's Tweaks' row S0022.19 (`MenuFixes`, "fix
+        // 'sNoFastTravelUndiscovered' message showing if you click and drag over an undiscovered
+        // location") points both drag tests' `JP` at DoClick's end (00798348) instead of the
+        // message's test (0079819e): a dragged map ends the click. With no map tile the exe's jump
+        // to the message stays.
+        if dragged && e.stewie(stewie_menus::MAP_DRAG_NO_UNDISCOVERED_MESSAGE) {
+            return;
+        }
         if not_dragged {
             let tile_11 = map_tile(e, base, 11);
             if e.call(TILE_IS_TRUE, &args![tile_11, 0xfafu32]).bool() {
@@ -3002,12 +3073,61 @@ pub fn map_menu_do_controller_switch(e: &mut Engine, this: Ptr<MapMenu>, on: u8)
     if on == 0 {
         return;
     }
+    // 0x79A636, 0x79A652: lStewieAl's Tweaks' row S0022.31 (`MenuFixes`, "center map marker
+    // selection rectangle position") calls its `OnReconnectControllerSetMapSelectionPos` in place
+    // of both `Tile::SetFloat` calls (the floats are pushed and left unread).
+    let centred = e.stewie(stewie_menus::MAP_PAD_SELECTION_CENTRED);
     let x = float_constant(e, CONTROLLER_X_FLOAT);
     let tile = map_tile(e, this.addr(), 6);
-    e.call(TILE_SET_FLOAT, &args![tile, 0xfa1u32, x, 1u32]);
+    if centred {
+        stewie_centre_in_parent(e, tile, 0xfa1);
+    } else {
+        e.call(TILE_SET_FLOAT, &args![tile, 0xfa1u32, x, 1u32]);
+    }
     let y = float_constant(e, CONTROLLER_Y_FLOAT);
     let tile = map_tile(e, this.addr(), 6);
-    e.call(TILE_SET_FLOAT, &args![tile, 0xfa2u32, y, 1u32]);
+    if centred {
+        stewie_centre_in_parent(e, tile, 0xfa2);
+    } else {
+        e.call(TILE_SET_FLOAT, &args![tile, 0xfa2u32, y, 1u32]);
+    }
+}
+
+/// The trait ids Tweaks' centring uses: `width` (0xFB1), `height` (0xFB0), and the value actions
+/// `copy` (0x7D0), `sub` (0x7D2) and `mul` (0x7D3).
+const TRAIT_WIDTH: u32 = 0xfb1;
+const TRAIT_HEIGHT: u32 = 0xfb0;
+const ACTION_COPY: u32 = 0x7d0;
+const ACTION_SUB: u32 = 0x7d2;
+const ACTION_MUL: u32 = 0x7d3;
+
+/// lStewieAl's Tweaks' `MenuFixes::OnReconnectControllerSetMapSelectionPos` (row S0022.31) on
+/// `tile`'s `x` (0xFA1) or `y` (0xFA2): the value is taken off the reaction map and made
+/// `(parent's width - own width) * 0.5` (height for `y`) as value actions, then calculated, so the
+/// rectangle stays centred in its parent. Tweaks reads through a null value (a tile without the
+/// trait); here nothing is done then.
+fn stewie_centre_in_parent(e: &mut Engine, tile: u32, trait_id: u32) {
+    let size = if trait_id == 0xfa1 {
+        TRAIT_WIDTH
+    } else {
+        TRAIT_HEIGHT
+    };
+    let value = e.call(TILE_GET_VALUE, &args![tile, trait_id]).u32();
+    if value == 0 {
+        return;
+    }
+    e.call(VALUE_CLEAR_ACTIONS, &args![value]);
+    let parent = e.mem.u32(tile.wrapping_add(0x28));
+    e.call(
+        VALUE_ADD_ACTION_TILE,
+        &args![value, ACTION_COPY, parent, size],
+    );
+    e.call(VALUE_ADD_ACTION_TILE, &args![value, ACTION_SUB, tile, size]);
+    e.call(
+        VALUE_ADD_ACTION_FLOAT,
+        &args![value, ACTION_MUL, 0.5f32.to_bits()],
+    );
+    e.call(VALUE_CALCULATE, &args![value, 0u32]);
 }
 
 // Translated from 0079b430 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -5011,6 +5131,29 @@ fn gamepad_scroll(e: &mut Engine, scroll_bar: u32, axis_x: i32) -> bool {
 }
 
 /// `DoGamepad`'s stick part (with `00709d40`): see [`map_menu_do_gamepad`].
+/// The pad's state this frame and last frame (`XINPUT_GAMEPAD_EX` at `011f35a8` and `011f35b8`:
+/// the event count, then the buttons word at +4) and the X button's bit.
+const PAD_NOW: u32 = 0x011f_35a8;
+const PAD_BEFORE: u32 = 0x011f_35b8;
+const PAD_BUTTON_X: u16 = 0x4000;
+/// Thiscall on a tile (trait): plays the sound the trait names (`00a0b110`); `clicksound` is 0xFCB.
+const TILE_PLAY_SOUND_00A0B110: u32 = 0x00a0_b110;
+
+/// lStewieAl's Tweaks' `MenuFixes::OnMapMove` (row S0022.25): with the pad's X pressed this
+/// frame (xNVSE's `GetXIControlPressed(kXboxCtrl_BUTTON_X)`: down now, up last frame) the menu's
+/// `HandleClick` (vtable +0xC) with the X button's id 0xC and no tile, then the X button's tile
+/// (`MM_ButtonX`, +0x58) plays its click sound.
+fn stewie_map_move(e: &mut Engine, this: Ptr<MapMenu>) {
+    let now = e.mem.u16(PAD_NOW + 4);
+    let before = e.mem.u16(PAD_BEFORE + 4);
+    if now & PAD_BUTTON_X != 0 && before & PAD_BUTTON_X == 0 {
+        let base = this.addr();
+        e.vcall(base, 0xc, &args![0xcu32, 0u32]);
+        let button = e.mem.u32(base + 0x58);
+        e.call(TILE_PLAY_SOUND_00A0B110, &args![button, 0xfcbu32]);
+    }
+}
+
 fn gamepad_sticks(e: &mut Engine, this: Ptr<MapMenu>) -> bool {
     let base = this.addr();
     let mut handled = false;
@@ -5064,6 +5207,13 @@ fn gamepad_sticks(e: &mut Engine, this: Ptr<MapMenu>) -> bool {
                     let tile = e.get(this, MapMenu::pMapTile);
                     e.call(TILE_POKE, &args![tile, 0xfefu32, pan_x]);
                     handled = true;
+                    // 0x799A14: lStewieAl's Tweaks' row S0022.25 (`MenuFixes`, "allow controller
+                    // placing map markers while moving around on the map") jumps to its
+                    // `OnMapMove` after the handled flag is set: the pad's X pressed this frame
+                    // clicks the X button (DoClick id 0xC) and plays its click sound.
+                    if e.stewie(stewie_menus::MAP_PAD_MARKER_WHILE_MOVING) {
+                        stewie_map_move(e, this);
+                    }
                 } else {
                     for id in [0xfeau32, 0xfeb] {
                         let still = float_constant(e, MINUS_ONE_FLOAT);
@@ -6124,7 +6274,16 @@ pub fn map_menu_update_quests(e: &mut Engine, this: Ptr<MapMenu>) {
             .u32()
     });
     e.vcall(base, 0x10, &args![0x17u32, tile]);
-    if e.call(FLAG_004B71D0, &args![]).bool() {
+    // 0079bbd0: lStewieAl's Tweaks' row S0022.09 (`MenuFixes`, "don't reset the scroll position
+    // when selecting a quest") calls `IsControllerConnectedOrMouseNotMoved` here in place of
+    // `004b71d0`: the quest is focused (and its list scrolled to it) only with the pad or a mouse
+    // that has not moved since the keys were used.
+    let focus = if e.stewie(stewie_menus::MAP_QUEST_KEEPS_SCROLL) {
+        stewie_menus::controller_or_mouse_still(e)
+    } else {
+        e.call(FLAG_004B71D0, &args![]).bool()
+    };
+    if focus {
         let interface = e.call(INTERFACE_MANAGER, &args![]).u32();
         e.call(
             SET_CURRENT_FOCUS_TARGET,
@@ -7828,7 +7987,22 @@ fn set_label_traits(e: &mut Engine, label: u32, x: u32, y: u32, companion: u32, 
     e.call(TILE_SET_INT, &args![label, 0xfaau32, 0x26u32]);
     let depth = float_constant(e, TWO_FLOAT);
     e.call(TILE_SET_FLOAT, &args![label, 0xfadu32, depth, 1u32]);
-    e.call(TILE_SET_INT, &args![label, 0xfa3u32, 1u32]);
+    if !refresh && e.stewie(stewie_menus::MAP_COMPANION_LABEL_CLIPS) {
+        // 0x79F1D7 (AddCompanionMarkers' label): lStewieAl's Tweaks' row S0022.26 (`MenuFixes`,
+        // "set the 'clips' tilevalue for companion names on the world map") calls its
+        // `OnInitCompanionTile` in place of the int setter: `visible` set to 1.0, then `clips`
+        // (0xFAE) to 1.0, which the game sets only when the map is zoomed.
+        e.call(
+            TILE_SET_FLOAT,
+            &args![label, 0xfa3u32, 1.0f32.to_bits(), 1u32],
+        );
+        e.call(
+            TILE_SET_FLOAT,
+            &args![label, 0xfaeu32, 1.0f32.to_bits(), 1u32],
+        );
+    } else {
+        e.call(TILE_SET_INT, &args![label, 0xfa3u32, 1u32]);
+    }
     if refresh {
         e.call(TILE_SET_INT, &args![label, 0xfaeu32, 1u32]);
     }
@@ -7933,6 +8107,13 @@ fn update_companion_label(
 /// player icon's) and a label tile (`Tile::BuildTile(0x387)` under the map
 /// tile, see [`set_label_traits`], following the marker).
 pub fn map_menu_add_companion_markers(e: &mut Engine, this: Ptr<MapMenu>) {
+    // 0x79EA73: lStewieAl's Tweaks' row S0022.41 (`MenuFixes`, "ensure the triangle companion
+    // tiles get reset when refreshing the map menu") calls its `OnResetCompanionTiles` in place of
+    // the first child lookup of the loop below: the companions' marker tiles go first, then the
+    // lookup is made as the exe makes it (the loop's later lookups, `0x79EAF3`, are the exe's).
+    if e.stewie(stewie_menus::MAP_COMPANION_MARKERS_RESET) {
+        stewie_remove_companion_markers(e, this);
+    }
     remove_map_children(e, this, 0x25);
     remove_map_children(e, this, 0x26);
     let player = e.mem.u32(PLAYER_011DEA3C);
@@ -7956,6 +8137,54 @@ pub fn map_menu_add_companion_markers(e: &mut Engine, this: Ptr<MapMenu>) {
             e.call(TELEPORT_PATH_DESTRUCT, &args![path]);
         });
         node = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, node));
+    }
+}
+
+/// Cdecl (trait name): the trait's id, or none (`Tile::TraitNameToID`, `00a01860`).
+const TRAIT_NAME_TO_ID_00A01860: u32 = 0x00a0_1860;
+/// A map marker tile's `id` (`kTile_MM_LocationMarker`).
+const LOCATION_MARKER_ID: f64 = 26.0;
+
+/// lStewieAl's Tweaks' `MenuFixes::OnResetCompanionTiles` (row S0022.41) before the map tile's
+/// lookup of child 0x25: each child of the map tile whose `id` (0xFAA) is a location marker's
+/// (0x1A) and whose `_LocationName` string is `"Companion"` (case-blind) is taken out of the
+/// children list (`0057c730`), released (`009ff690`) and destroyed (vtable +0 with 1); the walk
+/// starts again from the first child after each one, as Tweaks' does. A child without the
+/// `_LocationName` value is passed over (Tweaks' `GetValueString` answers null for it).
+fn stewie_remove_companion_markers(e: &mut Engine, this: Ptr<MapMenu>) {
+    let map = e.get(this, MapMenu::pMapTile);
+    let name_trait = e
+        .call(TRAIT_NAME_TO_ID_00A01860, &args![LOCATION_NAME_TEXT])
+        .u32();
+    // The children list (`DList<Tile>` at +4): first node at +4; a node is next, prev, data.
+    let mut node = e.mem.u32(map.wrapping_add(4));
+    while node != 0 {
+        let tile = e.mem.u32(node.wrapping_add(8));
+        if tile != 0 {
+            let id = e.call(TILE_GET_FLOAT, &args![tile, 0xfaau32]).f64();
+            if equal(id, LOCATION_MARKER_ID) {
+                let value = e.call(TILE_GET_VALUE, &args![tile, name_trait]).u32();
+                let name = if value == 0 {
+                    0
+                } else {
+                    e.mem.u32(value.wrapping_add(0xc))
+                };
+                if name != 0 && e.call(STRICMP, &args![name, COMPANION_TEXT]).u32() == 0 {
+                    e.with_stack(4, |e, slot| {
+                        e.mem.set_u32(slot.addr(), tile);
+                        e.call(
+                            CHILD_LIST_REMOVE_0057C730,
+                            &args![map.wrapping_add(4), slot],
+                        );
+                    });
+                    e.call(TILE_RELEASE, &args![tile]);
+                    e.vcall(tile, 0, &args![1u32]);
+                    node = e.mem.u32(map.wrapping_add(4));
+                    continue;
+                }
+            }
+        }
+        node = e.mem.u32(node);
     }
 }
 
@@ -11891,6 +12120,7 @@ mod n056_tests {
         TILE_IS_TRUE,
         TILE_NAME_00700300,
         TILE_OBJECT_0056C7F0,
+        TILE_PLAY_SOUND_00A0B110,
         TILE_POKE,
         TILE_RELEASE,
         TILE_SET_COUNT_00715C60,
@@ -11900,6 +12130,7 @@ mod n056_tests {
         TILE_SHADER_PROPERTY_CONSTRUCT,
         TILE_TEXT_SETTER_00707E10,
         TIMER_NOW,
+        TRAIT_NAME_TO_ID_00A01860,
         VALUE_ADD_ACTION_FLOAT,
         VALUE_ADD_ACTION_TILE,
         VALUE_CALCULATE,
@@ -14503,5 +14734,515 @@ mod n056_tests {
                 ..Ret::default()
             }
         });
+    }
+
+    // lStewieAl's Tweaks' rows of this file (share 3's first group, `stewie_menus`).
+
+    use super::stewie_menus as rows;
+
+    /// The bytes Tweaks' controller tests read: `isControllerDisabled`, `isControllerConnected`,
+    /// the interface manager's `hasMouseMoved` and the console's open byte.
+    fn controls(e: &mut Engine, disabled: u8, connected: u8, mouse_moved: u8, console: u8) {
+        let manager = e.mem.alloc(0x100);
+        e.mem.set_u32(rows::INTERFACE_MANAGER, manager);
+        e.mem.set_u8(manager + rows::HAS_MOUSE_MOVED, mouse_moved);
+        e.mem.set_u8(rows::CONTROLLER_DISABLED, disabled);
+        e.mem.set_u8(rows::CONTROLLER_CONNECTED, connected);
+        e.mem.set_u8(rows::CONSOLE_OPEN, console);
+    }
+
+    /// xNVSE's `IsControllerConnected` (a disabled byte of exactly 1 says no), Tweaks'
+    /// `IsControllerConnectedOrMouseNotMoved` and `IsControllerModeAndNotConsoleOpen`.
+    #[test]
+    fn stewie_controller_tests_read_the_bytes_as_xnvse_does() {
+        for (disabled, connected, moved, console, pad, or_still, no_console) in [
+            (0, 0, 1, 0, false, false, false),
+            (0, 0, 0, 0, false, true, false),
+            (0, 1, 1, 0, true, true, true),
+            (0, 1, 1, 1, true, true, false),
+            (1, 1, 1, 0, false, false, false),
+            (1, 1, 0, 0, false, true, false),
+            (2, 1, 1, 0, true, true, true),
+        ] {
+            let mut e = engine();
+            controls(&mut e, disabled, connected, moved, console);
+            let case = (disabled, connected, moved, console);
+            assert_eq!(rows::controller_connected(&e), pad, "{case:?}");
+            assert_eq!(rows::controller_or_mouse_still(&e), or_still, "{case:?}");
+            assert_eq!(rows::controller_and_no_console(&e), no_console, "{case:?}");
+        }
+    }
+
+    /// The group's bits are share 3's first twelve fix bits (470 on), one each.
+    #[test]
+    fn stewie_menu_rows_hold_share_3s_first_bits() {
+        for (n, (name, row)) in rows::ROWS.iter().enumerate() {
+            assert_eq!(row.index(), 470 + n, "{name}");
+        }
+    }
+
+    /// `UpdateQuests` with an active quest: the focus calls and the calls of `004b71d0`.
+    fn update_quests_focus(e: &mut Engine) -> (Vec<Vec<u32>>, usize) {
+        let menu = open_menu(e, 0x100);
+        let table = e.mem.alloc(0x40);
+        for slot in [0x10u32, 0x1c, 0x20] {
+            e.mem.set_u32(table + slot, 0x0010_0000 + slot);
+            e.register(0x0010_0000 + slot, |_, _| Ret::default());
+        }
+        e.mem.set_u32(menu.addr(), table);
+        for list in [0x130u32, 0x1c0] {
+            e.mem.set_u32(menu.addr() + list, table);
+            e.mem.set_u32(menu.addr() + list + 0xc, 0x900 + list);
+            e.mem.set_u32(menu.addr() + list + 0x18, 0x0107_0000);
+        }
+        let player = e.mem.alloc(0x800);
+        e.mem.set_u32(PLAYER_011DEA3C, player);
+        returns(e, PLAYER_QUEST_005CBB50, 0x4400);
+        returns(e, LIST_BOX_GET_TILE_FOR, 0x7300);
+        e.call_log = Some(vec![]);
+        e.call(0x0079_b8e0, &args![menu]);
+        (
+            calls_to(e, SET_CURRENT_FOCUS_TARGET),
+            calls_to(e, FLAG_004B71D0).len(),
+        )
+    }
+
+    /// Row S0022.09 off: `004b71d0` decides; on: Tweaks' pad-or-still-mouse test in its place
+    /// (the exe's test is not asked), so a mouse that moved keeps the list where it is.
+    #[test]
+    fn s0022_09_quest_focus_needs_the_pad_or_a_still_mouse() {
+        let focused = vec![vec![0, 0x7300, 0xfc3, 1]];
+        for (on, flag, disabled, connected, moved, focus) in [
+            (false, 1, 0, 0, 1, true),
+            (false, 0, 0, 1, 0, false),
+            (true, 1, 0, 0, 1, false),
+            (true, 0, 0, 0, 0, true),
+            (true, 0, 0, 1, 1, true),
+            (true, 1, 1, 1, 1, false),
+        ] {
+            let mut e = engine();
+            e.set_stewie(rows::MAP_QUEST_KEEPS_SCROLL, on);
+            returns(&mut e, FLAG_004B71D0, flag);
+            controls(&mut e, disabled, connected, moved, 0);
+            let (focus_calls, flag_calls) = update_quests_focus(&mut e);
+            let case = (on, flag, disabled, connected, moved);
+            if focus {
+                assert_eq!(focus_calls, focused, "{case:?}");
+            } else {
+                assert!(focus_calls.is_empty(), "{case:?}");
+            }
+            assert_eq!(flag_calls, usize::from(!on), "{case:?}");
+        }
+    }
+
+    /// `DoClick` on a local map marker (id 0x1A) with the drag start at (1.0, 1.0) and the map
+    /// tile at `at` (both axes): whether the "undiscovered" message was shown, and the name
+    /// compares made.
+    fn click_marker(e: &mut Engine, map: u32, at: f64) -> (bool, usize) {
+        e.map(0x011d_9000, 0x1000);
+        let menu = open_menu(e, 0x7000);
+        e.set(menu, MapMenu::iCurrentPage, 0x21);
+        e.set(menu, MapMenu::pMapTile, map);
+        e.mem.set_u32(menu.addr() + 0x120, 1.0f32.to_bits());
+        e.mem.set_u32(menu.addr() + 0x124, 1.0f32.to_bits());
+        e.set_global(TWO_FLOAT, 2.0f32);
+        returns(e, FLAG_004B71D0, 0);
+        returns_float(e, TILE_GET_FLOAT, at);
+        returns(e, TILE_IS_TRUE, 0);
+        returns(e, ADD_USER_TRAIT, 0x61);
+        returns(e, TILE_GET_STRING, 0x3700);
+        returns(e, STRICMP, 1);
+        returns(e, OBJECT_FIELD_00403DF0, 0x3600);
+        e.call_log = Some(vec![]);
+        e.call(0x0079_6fd0, &args![menu, 0x1ai32, 0x7400u32]);
+        (
+            !calls_to(e, SHOW_MESSAGE_007052F0).is_empty(),
+            calls_to(e, STRICMP).len(),
+        )
+    }
+
+    /// Row S0022.19: a click dragged over an undiscovered place shows the message with the row
+    /// off and ends the click with it on; an undragged click and a menu with no map tile take the
+    /// exe's way to the message either way.
+    #[test]
+    fn s0022_19_a_dragged_click_shows_no_message() {
+        for (on, map, at, shown) in [
+            (false, 0x104, 5.0, true),
+            (true, 0x104, 5.0, false),
+            (true, 0x104, 1.0, true),
+            (true, 0, 5.0, true),
+            (false, 0x104, 1.0, true),
+        ] {
+            let mut e = engine();
+            e.set_stewie(rows::MAP_DRAG_NO_UNDISCOVERED_MESSAGE, on);
+            let (message, compares) = click_marker(&mut e, map, at);
+            let case = (on, map, at);
+            assert_eq!(message, shown, "{case:?}");
+            assert_eq!(compares, usize::from(shown), "{case:?}");
+        }
+    }
+
+    /// The pad's buttons word now and last frame (X is 0x4000).
+    fn pad_buttons(e: &mut Engine, now: u16, before: u16) {
+        e.map(0x011f_3000, 0x1000);
+        e.mem.set_u16(PAD_NOW + 4, now);
+        e.mem.set_u16(PAD_BEFORE + 4, before);
+    }
+
+    /// `DoGamepad` on the local map with the zoom axis at `zoom` and the pan axes at `pan`; the
+    /// menu's `HandleClick` (vtable +0xC) answers into the log.
+    fn gamepad_with_axes(e: &mut Engine, zoom: i32, pan: i32) -> Ptr<MapMenu> {
+        let menu = open_menu(e, 0x100);
+        let table = e.mem.alloc(0x20);
+        e.mem.set_u32(table + 0xc, 0x0010_000c);
+        e.register(0x0010_000c, |_, _| Ret::default());
+        e.mem.set_u32(menu.addr(), table);
+        gamepad_ready(e);
+        returns(e, FLAG_00709D40, 1);
+        e.set(menu, MapMenu::iCurrentPage, 0x21);
+        e.set(menu, MapMenu::pMapTile, 0x104);
+        e.set_global::<f64>(ZOOM_DEAD_ZONE_DOUBLE, 7849.0);
+        e.set_global::<f64>(PAN_DEAD_ZONE_DOUBLE, 8689.0);
+        e.set_global::<f64>(AXIS_RANGE_DOUBLE, 32767.0);
+        e.set_global::<f64>(PAN_SPEED_Y_DOUBLE, -20.0);
+        e.set_global::<f64>(PAN_SPEED_X_DOUBLE, 20.0);
+        e.register_double(INPUT_AXIS_00A23390, move |_, a| Ret {
+            eax: if a[2] == 8 { zoom as u32 } else { pan as u32 },
+            ..Ret::default()
+        });
+        e.register(MAGNITUDE_00408820, |_, a| Ret {
+            st0: f64::from(f32::from_bits(a[0])).abs(),
+            ..Ret::default()
+        });
+        menu
+    }
+
+    /// Row S0022.25: while the stick moves the map, the pad's X pressed this frame clicks the X
+    /// button (id 0xC, no tile) and plays its click sound with the row on; nothing with the row
+    /// off, with X held from last frame, with X let go, or with the stick still.
+    #[test]
+    fn s0022_25_x_places_a_marker_while_the_map_moves() {
+        for (on, now, before, pan, clicks) in [
+            (false, 0x4000u16, 0u16, 32767, false),
+            (true, 0x4000, 0, 32767, true),
+            (true, 0x4000, 0x4000, 32767, false),
+            (true, 0, 0x4000, 32767, false),
+            (true, 0x4000, 0, 0, false),
+            (true, 0x2000, 0, 32767, false),
+        ] {
+            let mut e = engine();
+            e.set_stewie(rows::MAP_PAD_MARKER_WHILE_MOVING, on);
+            pad_buttons(&mut e, now, before);
+            let menu = gamepad_with_axes(&mut e, 0, pan);
+            e.call_log = Some(vec![]);
+            e.call(0x0079_9790, &args![menu, 0i32, 0u32]);
+            let case = (on, now, before, pan);
+            if clicks {
+                assert_eq!(
+                    calls_to(&e, 0x0010_000c),
+                    vec![vec![menu.addr(), 0xc, 0]],
+                    "{case:?}"
+                );
+                assert_eq!(
+                    calls_to(&e, TILE_PLAY_SOUND_00A0B110),
+                    vec![vec![0x100 + 12, 0xfcb]],
+                    "{case:?}"
+                );
+                // The click comes after the pan's two values and before the position is shown.
+                let order = order_of(&e, &[TILE_POKE, 0x0010_000c, TILE_GET_FLOAT]);
+                assert_eq!(
+                    &order[..3],
+                    &[TILE_POKE, TILE_POKE, 0x0010_000c],
+                    "{case:?}"
+                );
+            } else {
+                assert!(calls_to(&e, 0x0010_000c).is_empty(), "{case:?}");
+                assert!(
+                    calls_to(&e, TILE_PLAY_SOUND_00A0B110).is_empty(),
+                    "{case:?}"
+                );
+            }
+        }
+    }
+
+    /// Row S0022.25 with JIP's D04 seam on the zoom axis (`0x799861`) in the same function, both
+    /// on: the zoom asks JIP's dead zone (and, inside it, does not zoom) and the pan's X click is
+    /// made; the two sit at different places of `DoGamepad` and neither changes the other.
+    #[test]
+    fn s0022_25_with_jips_d04_zoom_seam() {
+        use crate::units::fallout_interface::caravanmenu::d04_test::{handlers, seen};
+        use engine_core::extend::jip_patches::INSTALLED;
+        let mut e = engine();
+        handlers(&mut e, INSTALLED, &[0x0079_9861]);
+        e.set_stewie(rows::MAP_PAD_MARKER_WHILE_MOVING, true);
+        pad_buttons(&mut e, 0x4000, 0);
+        let menu = gamepad_with_axes(&mut e, 20000, 32767);
+        e.call_log = Some(vec![]);
+        e.call(0x0079_9790, &args![menu, 0i32, 0u32]);
+        assert_eq!(seen(), &[0x0079_9861]);
+        assert_eq!(calls_to(&e, 0x0010_000c), vec![vec![menu.addr(), 0xc, 0]]);
+        let scaled = ((20000.0f64 / 32767.0) as f32).to_bits();
+        assert!(!calls_to(&e, MAGNITUDE_00408820)
+            .iter()
+            .any(|c| c[0] == scaled));
+    }
+
+    /// Row S0022.26: the companion's label gets `visible` 1.0 and `clips` 1.0 as floats (Tweaks'
+    /// `Tile::SetFloat`) in place of the int setter's `visible`; off, the exe's int setter only.
+    #[test]
+    fn s0022_26_the_companion_label_gets_its_clips() {
+        for on in [false, true] {
+            let mut e = engine();
+            e.set_stewie(rows::MAP_COMPANION_LABEL_CLIPS, on);
+            let menu = menu_with_rectangle(&mut e);
+            e.set(menu, MapMenu::pMapTile, 0x104);
+            e.set(menu, MapMenu::iCurrentPage, 0x20);
+            companion_setup(&mut e);
+            returns(&mut e, MENU_RENDER_TEMPLATE, 0x700);
+            let label = with_vtable(&mut e, 0x40, &[(4, 0x0010_0004)]);
+            returns(&mut e, TILE_BUILD_TILE, label);
+            e.register(0x0010_0004, |_, _| Ret::default());
+            returns(&mut e, STATION_NAME_0055D520, 0x6000);
+            e.call_log = Some(vec![]);
+            e.call(0x0079_ea30, &args![menu]);
+            let ints = calls_to(&e, TILE_SET_INT);
+            let floats = calls_to(&e, TILE_SET_FLOAT);
+            let one = 1.0f32.to_bits();
+            assert_eq!(ints.contains(&vec![label, 0xfa3, 1]), !on, "row {on}");
+            assert_eq!(floats.contains(&vec![label, 0xfa3, one, 1]), on, "row {on}");
+            assert_eq!(floats.contains(&vec![label, 0xfae, one, 1]), on, "row {on}");
+            assert!(!ints.contains(&vec![label, 0xfae, 1]), "row {on}");
+            // The marker tile (0x700) is not touched by the row.
+            assert!(!floats.contains(&vec![0x700, 0xfae, one, 1]), "row {on}");
+        }
+    }
+
+    /// Row S0022.31: switching to the pad sets the rectangle's position with the row off; with it
+    /// on each of `x` and `y` becomes "(parent's width - own width) * 0.5" (height for `y`) as
+    /// value actions, calculated; a tile without the value is left alone.
+    #[test]
+    fn s0022_31_the_selection_rectangle_is_centred() {
+        for (on, value) in [(false, 0x5050u32), (true, 0x5050), (true, 0)] {
+            let mut e = engine();
+            e.set_stewie(rows::MAP_PAD_SELECTION_CENTRED, on);
+            let menu = open_menu(&mut e, 0x100);
+            let tile = e.mem.alloc(0x40);
+            e.mem.set_u32(tile + 0x28, 0x9990);
+            e.mem.set_u32(menu.addr() + 0x40, tile);
+            e.mem.set_u32(CONTROLLER_X_FLOAT, 348.0f32.to_bits());
+            e.mem.set_u32(CONTROLLER_Y_FLOAT, 170.0f32.to_bits());
+            returns(&mut e, TILE_GET_VALUE, value);
+            e.call_log = Some(vec![]);
+            e.call(0x0079_a610, &args![menu, 1u32]);
+            let case = (on, value);
+            if !on {
+                assert_eq!(
+                    calls_to(&e, TILE_SET_FLOAT),
+                    vec![
+                        vec![tile, 0xfa1, 348.0f32.to_bits(), 1],
+                        vec![tile, 0xfa2, 170.0f32.to_bits(), 1],
+                    ]
+                );
+                assert!(calls_to(&e, TILE_GET_VALUE).is_empty());
+                continue;
+            }
+            assert!(calls_to(&e, TILE_SET_FLOAT).is_empty(), "{case:?}");
+            assert_eq!(
+                calls_to(&e, TILE_GET_VALUE),
+                vec![vec![tile, 0xfa1], vec![tile, 0xfa2]],
+                "{case:?}"
+            );
+            if value == 0 {
+                assert!(calls_to(&e, VALUE_ADD_ACTION_TILE).is_empty());
+                assert!(calls_to(&e, VALUE_CALCULATE).is_empty());
+                continue;
+            }
+            assert_eq!(calls_to(&e, VALUE_CLEAR_ACTIONS), vec![vec![value]; 2]);
+            assert_eq!(
+                calls_to(&e, VALUE_ADD_ACTION_TILE),
+                vec![
+                    vec![value, 0x7d0, 0x9990, 0xfb1],
+                    vec![value, 0x7d2, tile, 0xfb1],
+                    vec![value, 0x7d0, 0x9990, 0xfb0],
+                    vec![value, 0x7d2, tile, 0xfb0],
+                ]
+            );
+            assert_eq!(
+                calls_to(&e, VALUE_ADD_ACTION_FLOAT),
+                vec![vec![value, 0x7d3, 0.5f32.to_bits()]; 2]
+            );
+            assert_eq!(calls_to(&e, VALUE_CALCULATE), vec![vec![value, 0]; 2]);
+            let order = order_of(
+                &e,
+                &[
+                    VALUE_CLEAR_ACTIONS,
+                    VALUE_ADD_ACTION_TILE,
+                    VALUE_ADD_ACTION_FLOAT,
+                    VALUE_CALCULATE,
+                ],
+            );
+            assert_eq!(
+                order[..5],
+                [
+                    VALUE_CLEAR_ACTIONS,
+                    VALUE_ADD_ACTION_TILE,
+                    VALUE_ADD_ACTION_TILE,
+                    VALUE_ADD_ACTION_FLOAT,
+                    VALUE_CALCULATE
+                ]
+            );
+        }
+    }
+
+    /// A map tile whose children list (`DList` at +4: first, last, count; a node is next, prev,
+    /// tile) holds `count` tiles, each with a vtable whose slot 0 (destroy) is `0x0010_0100`.
+    fn map_with_children(e: &mut Engine, count: usize) -> (u32, Vec<u32>) {
+        let map = e.mem.alloc(0x40);
+        let tiles: Vec<u32> = (0..count)
+            .map(|_| with_vtable(e, 0x40, &[(0, 0x0010_0100)]))
+            .collect();
+        let mut next = 0;
+        let mut last = 0;
+        for &tile in tiles.iter().rev() {
+            let node = e.mem.alloc(0xc);
+            e.mem.set_u32(node, next);
+            e.mem.set_u32(node + 8, tile);
+            if next != 0 {
+                e.mem.set_u32(next + 4, node);
+            } else {
+                last = node;
+            }
+            next = node;
+        }
+        e.mem.set_u32(map + 4, next);
+        e.mem.set_u32(map + 8, last);
+        e.mem.set_u32(map + 0xc, count as u32);
+        e.register(0x0010_0100, |_, _| Ret::default());
+        // The list removal unlinks the slot's tile.
+        e.register_double(CHILD_LIST_REMOVE_0057C730, |e, a| {
+            let tile = e.mem.u32(a[1]);
+            let mut previous = 0;
+            let mut node = e.mem.u32(a[0]);
+            while node != 0 {
+                let next = e.mem.u32(node);
+                if e.mem.u32(node + 8) == tile {
+                    if previous == 0 {
+                        e.mem.set_u32(a[0], next);
+                    } else {
+                        e.mem.set_u32(previous, next);
+                    }
+                    break;
+                }
+                previous = node;
+                node = next;
+            }
+            Ret::default()
+        });
+        (map, tiles)
+    }
+
+    /// The tiles still on `map`'s children list.
+    fn children_of(e: &Engine, map: u32) -> Vec<u32> {
+        let mut out = vec![];
+        let mut node = e.mem.u32(map + 4);
+        while node != 0 {
+            out.push(e.mem.u32(node + 8));
+            node = e.mem.u32(node);
+        }
+        out
+    }
+
+    /// Row S0022.41: before the markers are made again, the map tile's location marker tiles
+    /// (`id` 26) named "Companion" go (taken out of the list, released, destroyed), the walk
+    /// starting again after each; a marker of another name, a tile of another id and a marker
+    /// without the name value stay. Off: none of it (the name trait is not even looked up).
+    #[test]
+    fn s0022_41_the_companion_marker_tiles_are_reset() {
+        for on in [false, true] {
+            let mut e = engine();
+            e.set_stewie(rows::MAP_COMPANION_MARKERS_RESET, on);
+            let menu = open_menu(&mut e, 0x100);
+            let (map, tiles) = map_with_children(&mut e, 5);
+            e.set(menu, MapMenu::pMapTile, map);
+            let player = e.mem.alloc(0x800);
+            e.mem.set_u32(PLAYER_011DEA3C, player);
+            // Tiles 0 and 3 are companion markers, 1 another place's, 2 not a marker, 4 a marker
+            // with no name value.
+            let ids = [26.0, 26.0, 37.0, 26.0, 26.0];
+            let marker_tiles = tiles.clone();
+            e.register_double(TILE_GET_FLOAT, move |_, a| {
+                assert_eq!(a[1], 0xfaa);
+                let at = marker_tiles
+                    .iter()
+                    .position(|&t| t == a[0])
+                    .expect("a child");
+                Ret {
+                    st0: ids[at],
+                    ..Ret::default()
+                }
+            });
+            returns(&mut e, TRAIT_NAME_TO_ID_00A01860, 0x77);
+            let companion_name = 0x3800;
+            let values: Vec<u32> = (0..5)
+                .map(|i| {
+                    let value = e.mem.alloc(0x14);
+                    let name = if i == 0 || i == 3 {
+                        companion_name
+                    } else {
+                        0x3900
+                    };
+                    e.mem.set_u32(value + 0xc, name);
+                    value
+                })
+                .collect();
+            let value_tiles = tiles.clone();
+            e.register_double(TILE_GET_VALUE, move |_, a| {
+                assert_eq!(a[1], 0x77);
+                let at = value_tiles
+                    .iter()
+                    .position(|&t| t == a[0])
+                    .expect("a child");
+                Ret {
+                    eax: if at == 4 { 0 } else { values[at] },
+                    ..Ret::default()
+                }
+            });
+            e.register_double(STRICMP, move |_, a| {
+                assert_eq!(a[1], COMPANION_TEXT);
+                Ret {
+                    eax: u32::from(a[0] != companion_name),
+                    ..Ret::default()
+                }
+            });
+            e.call_log = Some(vec![]);
+            e.call(0x0079_ea30, &args![menu]);
+            if !on {
+                assert_eq!(children_of(&e, map), tiles);
+                assert!(calls_to(&e, TRAIT_NAME_TO_ID_00A01860).is_empty());
+                assert!(calls_to(&e, TILE_RELEASE).is_empty());
+                continue;
+            }
+            assert_eq!(children_of(&e, map), vec![tiles[1], tiles[2], tiles[4]]);
+            assert_eq!(
+                calls_to(&e, TRAIT_NAME_TO_ID_00A01860),
+                vec![vec![LOCATION_NAME_TEXT]]
+            );
+            assert_eq!(
+                calls_to(&e, TILE_RELEASE),
+                vec![vec![tiles[0]], vec![tiles[3]]]
+            );
+            assert_eq!(
+                calls_to(&e, 0x0010_0100),
+                vec![vec![tiles[0], 1], vec![tiles[3], 1]]
+            );
+            assert!(calls_to(&e, CHILD_LIST_REMOVE_0057C730)
+                .iter()
+                .all(|c| c[0] == map + 4));
+            // The walk starts over after each removal: tile 0; then 1, 3; then 1 (4 has no name).
+            assert_eq!(calls_to(&e, STRICMP).len(), 4);
+            // Then the exe's lookup of child 0x25 on the map tile.
+            let lookups = calls_to(&e, TILE_GET_CHILD_BY_ID);
+            assert_eq!(lookups.first(), Some(&vec![map, 0x25]));
+        }
     }
 }

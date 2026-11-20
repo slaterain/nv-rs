@@ -6341,6 +6341,49 @@ fn active_non_shadow_light_count() {
     .assert_same();
 }
 
+/// `GetNumberofActiveNonShadowLights` (`00b707d0`, typed) with JIP LN NVSE's null check (G01, `0xB707E0`): every list
+/// shape with one light (case word 2: 0 the head, 1 the second, 2 the third) given no light data (`+0xf8` null), the
+/// JIP patches word none, JIP's own only, or its fixes (case word 3), and the byte the game then reads at `0x30`
+/// (page 0, mapped here) clear or set (case word 4): the typed count skips that light exactly where the translation
+/// does.
+#[test]
+fn active_non_shadow_light_count_with_jips_null_check() {
+    use engine_core::extend::jip_patches::{FIXES, INSTALLED};
+    Diff::new(entry!(
+        0x00b7_07d0,
+        engine_typed::draw::lights::active_non_shadow_light_count(Ptr<_>)
+    ))
+    .draw_common_at(0x00b7_07d0)
+    .inputs(&[
+        Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
+        Input::Of(&[0]),
+        Input::Of(&[0, 1, 2]),
+        Input::Of(&[0, INSTALLED, INSTALLED | FIXES]),
+        Input::Of(&[0, 1]),
+    ])
+    .setup(|e, c| {
+        e.map(0, 0x1000);
+        e.mem.set_u8(0x30, c.word(4) as u8);
+        e.set_jip_patches(c.word(3));
+        let words = active_light_words(e, c);
+        let mut node = e.mem.u32(words[0] + 0x60);
+        for _ in 0..c.word(2) {
+            if node != 0 {
+                node = e.mem.u32(node);
+            }
+        }
+        if node != 0 {
+            let light = e.mem.u32(node + 8);
+            if light != 0 {
+                set(e, light + 0xf8, 0);
+            }
+        }
+        vec![words[0]]
+    })
+    .run()
+    .assert_same();
+}
+
 /// `GetNumberofActiveLights` (`00b70790`, typed): every list shape; a light of byte +0xec set still counts.
 #[test]
 fn active_light_count() {

@@ -11,6 +11,8 @@ const PLAYER_POINTER: u32 = 0x011d_ea3c;
 /// initialisation (bit 0 at `011ca214`).
 const LAST_POSITION: u32 = 0x011c_a208;
 const LAST_POSITION_INITIALIZED: u32 = 0x011c_a214;
+/// JIP's seam at this function's first byte (JIP MiniMap's `RET`).
+const JIP_SEEN_BITS_RET: u32 = 0x0055_5c20;
 /// `FLT_MAX` (`float`).
 const FLOAT_MAX: u32 = 0x0101_6970;
 /// `0.0` (`double`).
@@ -120,7 +122,15 @@ fn edge_step(e: &mut Engine, position: u32, low: u32, high: u32) -> i32 {
 /// world space updates itself and the neighbouring cells (`5875a0`) whose
 /// edge is within the seen distance of the position (up to three more,
 /// stopping at the first missing one).
+///
+/// JIP MiniMap writes a `RET` over its first byte once `InitMiniMap` has run (its own update
+/// replaces this one): the seam at the entry answers then, and nothing is done.
 pub fn fn_00555c20(e: &mut Engine) {
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+        && e.site(JIP_SEEN_BITS_RET, &[]).is_some()
+    {
+        return;
+    }
     let guard = e.global::<u32>(LAST_POSITION_INITIALIZED);
     if guard & 1 == 0 {
         e.set_global(LAST_POSITION_INITIALIZED, guard | 1);
@@ -570,6 +580,29 @@ mod tests {
         assert!(!e.call(0x0055_6850, &args![this]).bool());
         e.mem.set_u8(this + 0x25, 1);
         assert!(e.call(0x0055_6850, &args![this]).bool());
+    }
+
+    /// JIP MiniMap's `RET` (0x555C20): asked only while JIP is installed; its answer skips the
+    /// whole update (not even the first call's set-up), no answer leaves it.
+    #[test]
+    fn fn_00555c20_asks_jips_seam_first() {
+        let installed = engine_core::extend::jip_patches::INSTALLED;
+        for (word, answer, made) in [(0, true, 1), (installed, true, 0), (installed, false, 1)] {
+            let mut e = engine();
+            e.set_jip_patches(word);
+            if answer {
+                e.on_site_for_test(JIP_SEEN_BITS_RET, |_, _| Some(0));
+            } else {
+                e.on_site_for_test(JIP_SEEN_BITS_RET, |_, _| None);
+            }
+            e.call_log = Some(vec![]);
+            e.call(0x0055_5c20, &[]);
+            assert_eq!(
+                calls_to(&e, POINT_CONSTRUCT).len(),
+                made,
+                "{word:x} {answer}"
+            );
+        }
     }
 
     #[test]

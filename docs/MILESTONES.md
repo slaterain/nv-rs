@@ -79,8 +79,8 @@ The built-in xNVSE (step 3 of the pace plan, with JIP LN after it) has all 654 o
 its run-time compiler for the old script syntax and its new script language (scripts that start with `name`),
 compiled to the same bytes as xNVSE writes them (byte tests from its source's rules, read back by its decompiler),
 `CompileScript` and the function files, the documentation dumps and the console's help listing; its
-compiled-script cache file is left out as a speed cache only. JIP LN NVSE's commands are in progress (README's
-system table has the counts; batch 10 of 2026-11-14 adds the maths, utility, load screen, terminal, cell,
+compiled-script cache file is left out as a speed cache only. JIP LN NVSE has all 1,118 of its commands since 2026-11-20 (README's
+system table has the list; batch 10 of 2026-11-14 adds the maths, utility, load screen, terminal, cell,
 radio, reference and game data commands, batch 11 the actor base, equipped item, hotkey, base container and
 sound commands, batch 12 the script, gamepad, input, CC&C and equipped weapon commands and the reference data getters,
 lane A1 the first half of the actor commands: processes, combat and detection lists, leveling data, creature
@@ -149,7 +149,7 @@ A milestone is done when all three of these hold:
 | A1: Movement and physics | Character controller, player and actor movement, camera collision, the Havok SDK and Bethesda's Havok layer, ragdolls | **Active.** Translated; running in the play build, being checked against the original |
 | A2: Animation and faces | NiAnimation, animation choice and blending, FaceGen and lip sync | Translated; running in the play build, being compared with the original |
 | A3: Audio | BSAudio, the radio and music; game threads stepped behind the thread seam | Translated; the game's own sound plays through DirectSound, measured against Windows |
-| B: Graphics | The scene graph, shaders and lighting, sky and weather, terrain and trees, effects | Translated; the game's own renderer draws through wgpu (`crates/d3d9-wgpu`) on Vulkan in play (Fallout.ini's `sRenderer`, Settings.cmd's Renderer), the real Direct3D 9 the fallback (chosen there, or by itself where wgpu cannot draw); wgpu's frames match the real Direct3D 9's (intro and menu identical; Doc's house, the race menu, the Pip-Boy and the Goodsprings street within 1% of pixels on Direct3D 12, distant textures filtered a shade differently on Vulkan; one NVIDIA card) |
+| B: Graphics | The scene graph, shaders and lighting, sky and weather, terrain and trees, effects | Translated; the game's own renderer draws through wgpu (`crates/d3d9-wgpu`) on Vulkan in play (Fallout.ini's `sRenderer`, the launcher's Settings > Renderer), the real Direct3D 9 the fallback (chosen there, or by itself where wgpu cannot draw); wgpu's frames match the real Direct3D 9's (intro and menu identical; Doc's house, the race menu, the Pip-Boy and the Goodsprings street within 1% of pixels on Direct3D 12, distant textures filtered a shade differently on Vulkan; one NVIDIA card) |
 | C: Gameplay | Actor values and combat, AI and pathfinding, quests and dialogue, menus and V.A.T.S., magic, progression, crafting, minigames, world streaming | Translated and playable through the whole game, quests and DLCs included; translation errors cause bugs and crashes (the fnv_decomp audit) |
 | D: The rest | Original saves, shut-down, video, settings, real threads, the remaining unplaced functions | Translated; saves load and are written, the open world plays; crashes from translation errors (the audit) |
 
