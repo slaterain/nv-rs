@@ -23,14 +23,14 @@ Anything that compares with the original says `NV_PRESET=vanilla`. Speed gates s
 NV_UNCAP=1` as before.
 
 The game's threads are not part of the preset. In play they run side by side on their own cores
-(`fixes::PLAY_THREADS`); `bSteppedThreads=1` in `Fallout.ini`'s `[nv-rs Threads]` (Settings.cmd's
+(`fixes::PLAY_THREADS`); `bSteppedThreads=1` in `Fallout.ini`'s `[nv-rs Threads]` (the launcher's Settings,
 "Game threads": "One at a time") runs them one at a time, the fallback. A test or scripted run without
 `NV_THREADS` runs them stepped whatever play's default is (the table above).
 
 The render thread isn't part of the preset either: it changes where the real Direct3D 9 calls are
 made, not which calls or in what order. In play they are made on a render thread of their own
 (`fixes::PLAY_RENDER_THREAD`, since measure/render-thread: town +14%, the crowded main street +16%;
-#347); `bRenderThread=0` in `Fallout.ini`'s `[nv-rs Threads]` (Settings.cmd's "Drawing thread":
+#347); `bRenderThread=0` in `Fallout.ini`'s `[nv-rs Threads]` (the launcher's Settings, "Drawing thread":
 "Main thread") makes them on the game's threads, as the original does, the fallback. A test or scripted
 run without `NV_RENDER_THREAD` makes them on the game's threads whatever play's default is.
 
@@ -45,7 +45,7 @@ game in the background).
 The borderless window isn't part of the preset either. In a launcher's play run (`NV_SETTINGS` set
 and no test: the run that reads `Fallout.ini`'s sections) the game's window has no frame and fills
 the screen (`fixes::PLAY_BORDERLESS`; the maintainer, 2026-11-09); `bBorderless=0` in `Fallout.ini`
-(Settings.cmd's "Display mode": "Window") keeps the window as the game makes it. Every other run
+(the launcher's Settings, "Display mode": "Window") keeps the window as the game makes it. Every other run
 keeps that window too unless its `NV_BORDERLESS=1` says otherwise: a test, a scripted or measured
 run, and a start no launcher made. So a run in the background never covers the screen, and no
 recording or measurement changes with play's default. The default is the host's alone: its table
@@ -1781,7 +1781,7 @@ translated from them in these fixes.
 
 Step 2 of the plan (`measure/scope-1111/PLAN.md`, piece 8). **Experimental and off in every preset**: `fixes` and
 `vanilla` both leave it off (`fixes::OFF_IN_EVERY_PRESET`); only `NV_DRAW_THREAD=1` or `Fallout.ini`'s
-`[nv-rs Fixes] bWorldDrawThread=1` turns it on. Settings.cmd has no line for it (its "Drawing thread" is the render
+`[nv-rs Fixes] bWorldDrawThread=1` turns it on. The launcher's Settings has no row for it (its "Drawing thread" is the render
 thread, `bRenderThread`). `NV_DRAW_THREAD=poison` is a spelling of the variable only (the `Fallout.ini` line takes 0
 or 1, like every row): the thread with the value packet's POISON check, for tests and the gate.
 

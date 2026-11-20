@@ -3,7 +3,7 @@
 //! Play.exe puts the four `[nv-rs ...]` sections (`distribution/nv-rs-sections.ini`) into each
 //! profile's `Fallout.ini` ([`with_sections`]): the whole block once, and in a file that has only
 //! some of them the sections and keys it lacks. It moves a `settings.ini` into the files
-//! ([`apply_choices`]); after that Settings.cmd edits the files in place. In a test run, which
+//! ([`apply_choices`]); after that the launcher's Settings screen edits the files in place. In a test run, which
 //! never reads the file, it passes the file's choices to the game as variables ([`switches`]).
 //! The text is handled one character per byte, so every byte outside the lines written comes back
 //! as it was, line ends included.
@@ -430,7 +430,7 @@ pub fn set_key(text: &str, section: &str, key: &str, value: &str) -> String {
 /// `fallout_ini` (with our sections: [`with_sections`]) with the player's choices in our keys.
 ///
 /// `settings` is a `settings.ini` being moved in, when there is one. Each line it has wins over
-/// what the file says, the same rule Settings.cmd follows while that file exists; a key no line
+/// what the file says, the same rule the launcher's Settings screen follows while that file exists; a key no line
 /// names keeps the file's value. V-sync goes to `[Display] iPresentInterval`, where the original
 /// reads it.
 ///
@@ -473,14 +473,14 @@ pub fn apply_choices(fallout_ini: &str, settings: Option<&Settings>) -> (String,
             "NV_BORDERLESS" => settings
                 .borderless()
                 .map(|on| if on { "1" } else { "0" }.to_string()),
-            // Settings.cmd writes `vulkan` or `d3d9`; any other word chooses nothing here.
+            // The Settings screen writes `vulkan` or `d3d9`; any other word chooses nothing here.
             "NV_D3D9" => line("Renderer").and_then(|v| {
                 ["vulkan", "d3d9"]
                     .into_iter()
                     .find(|w| w.eq_ignore_ascii_case(v))
                     .map(str::to_string)
             }),
-            // Settings.cmd writes `stepped` or `real`; any other word chooses nothing here.
+            // The Settings screen writes `stepped` or `real`; any other word chooses nothing here.
             "NV_THREADS" => line(variable).and_then(|v| {
                 if v.eq_ignore_ascii_case("stepped") {
                     Some("1".to_string())
@@ -1001,7 +1001,7 @@ mod tests {
         let (out, _) = apply_choices(&fresh, Some(&Settings::parse("Borderless=0\n")));
         assert_eq!(out, fresh.replace("bBorderless=1", "bBorderless=0"));
         assert_ne!(out, fresh);
-        // What Settings.cmd writes for the threads side by side and the drawing thread on.
+        // What the Settings screen writes for the threads side by side and the drawing thread on.
         let side = Settings::parse("NV_THREADS=real\nNV_RENDER_THREAD=1\n");
         let stepped = "[nv-rs Threads]\r\nbSteppedThreads=1\r\nbRenderThread=0\r\n";
         let (out, unused) = apply_choices(stepped, Some(&side));
@@ -1014,7 +1014,7 @@ mod tests {
     }
 
     /// While a settings.ini exists it wins, line by line, over a file that already has the
-    /// sections: the rule Settings.cmd follows too. What it does not name stays the file's.
+    /// sections: the rule the Settings screen follows too. What it does not name stays the file's.
     #[test]
     fn settings_ini_wins_over_a_file_that_has_the_sections() {
         let had = "[nv-rs General]\r\nsPreset=fixes\r\n[nv-rs Display]\r\nbBorderless=0\r\niFrameLimit=30\r\niMenuFrameLimit=45\r\n[nv-rs Threads]\r\nbSteppedThreads=1\r\n";
@@ -1032,57 +1032,6 @@ mod tests {
         assert_eq!(apply_choices(had, None).0, had);
         let empty = "[nv-rs Display]\r\nbBorderless=\r\n";
         assert_eq!(apply_choices(empty, None).0, empty);
-    }
-
-    /// Settings.ps1 shows a file whose `bBorderless` says nothing as the game's default: its one
-    /// literal for that (`Get-Setting 'Borderless' '1'`) must be the host table's default, so a
-    /// change of the table can't leave the window showing the other mode.
-    #[test]
-    fn settings_cmd_shows_the_tables_borderless_default() {
-        let script = include_str!("../../../distribution/Settings.ps1");
-        let shown: Vec<&str> = script
-            .split("Get-Setting 'Borderless' '")
-            .skip(1)
-            .map(|rest| rest.split('\'').next().unwrap_or(""))
-            .collect();
-        let table = rows().find(|row| row.1 == "bBorderless").unwrap().3;
-        assert_eq!(
-            shown,
-            [table],
-            "Settings.ps1's default for the display mode"
-        );
-    }
-
-    /// Settings.ps1 shows a file whose `sRenderer` says nothing as the game's default: its one
-    /// literal for that (`Get-Setting 'Renderer' 'vulkan'`) must be the host table's default.
-    #[test]
-    fn settings_cmd_shows_the_tables_renderer_default() {
-        let script = include_str!("../../../distribution/Settings.ps1");
-        let shown: Vec<&str> = script
-            .split("Get-Setting 'Renderer' '")
-            .skip(1)
-            .map(|rest| rest.split('\'').next().unwrap_or(""))
-            .collect();
-        let table = rows().find(|row| row.1 == "sRenderer").unwrap().3;
-        assert_eq!(shown, [table], "Settings.ps1's default for the renderer");
-    }
-
-    /// Settings.ps1 shows a file whose `bShowFrameRate` says nothing as the game's default: its one
-    /// literal for that (`Get-Setting 'NV_SHOW_FPS' '0'`) must be the host table's default.
-    #[test]
-    fn settings_cmd_shows_the_tables_frame_rate_default() {
-        let script = include_str!("../../../distribution/Settings.ps1");
-        let shown: Vec<&str> = script
-            .split("Get-Setting 'NV_SHOW_FPS' '")
-            .skip(1)
-            .map(|rest| rest.split('\'').next().unwrap_or(""))
-            .collect();
-        let table = rows().find(|row| row.1 == "bShowFrameRate").unwrap().3;
-        assert_eq!(
-            shown,
-            [table],
-            "Settings.ps1's default for the frame rate counter"
-        );
     }
 
     /// The borderless window as the game decides it in a play run: the file's line, else the

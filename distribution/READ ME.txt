@@ -21,7 +21,9 @@ antivirus objects" below.
 
 Play.exe opens nv-rs's launcher: a window in the look of the game's own terminals (its font, colour
 and lines are read from your installed game). Choose with the arrow keys and Enter, or the mouse:
-> Play starts the game, > Play with mods (shown when you have mods) plays with them, > Exit closes
+> Play starts the game, > Play with mods (shown when you have mods) plays with them, > Settings
+has the window or borderless, resolution, anti-aliasing, game fixes, frame limit and more (and a
+Testing list of what is still being tried), saved at once for the next start; > Exit closes
 it. The first time it types the game's terminal intro once; any key skips it.
 
 The first start finds your game (Steam, GOG, Epic, or it asks: type the game's folder in the
@@ -36,10 +38,6 @@ notices and reads them again.
   Play with mods.cmd     the game with the mods in the mods folder (see mods\READ ME.txt)
   Install mods.cmd       install a mod from its archive (.7z, .zip, .fomod) put in the mods
                          folder, answering its installer's questions; also removes mods
-  Settings.cmd           window or borderless, resolution, anti-aliasing, game fixes, frame limit
-                         and more (next start). Close the game first: the game writes its own
-                         settings file again when you change an option in its menu, and that can
-                         undo a choice saved while it runs
   Import my saves.cmd    copies your saves from Documents\My Games\FalloutNV. Those stay as they are
 
 Use Exit Game in the game's menu to quit. Saves reach the disk within about 5 seconds of being made,
@@ -61,16 +59,16 @@ for you.
 
 The first start takes your settings from the game's own launcher if you have run it (it copies them,
 and your real ones stay as they are). If not, it starts on the game's High preset at your desktop's
-size. Settings.cmd and the game's own menu change them.
+size. Play.exe's Settings and the game's own menu change them.
 
 Either way the game starts in a borderless window that fills the screen. For the game's own window
-instead, choose Window under Display mode in Settings.cmd. That is bBorderless=0 in Fallout.ini's
+instead, choose Window under Display mode in Play.exe's Settings. That is bBorderless=0 in Fallout.ini's
 [nv-rs Display] section (Bug fixes, below, says where the file is). With 1, or with no such line,
 the window is borderless.
 
 Press F11 in the game to show or hide a frame-rate counter in the top-right corner: frames a second
 and, under it, the slowest frame of the last second in milliseconds (a stutter shows there). It is off
-at the start unless you choose "Shown" under Frame rate counter in Settings.cmd (bShowFrameRate=1 in
+at the start unless you choose "Shown" under Frame rate counter in Play.exe's Settings (bShowFrameRate=1 in
 the same section). It shows with the Vulkan renderer only. With Vulkan, F11 is kept for the counter:
 it cannot be bound to anything in the game's controls or by mods; with Direct3D 9 it is the game's.
 
@@ -82,10 +80,10 @@ time keeps pace with real time at high frame rates (the original runs fast there
 lands on the floor after a jump instead of hovering a little above it. Menus run at up to 120 frames a
 second (loading screens as fast as they can), and a dragged body is pulled as hard at any frame rate.
 
-To play the original game's behaviour instead, open Settings.cmd and choose "Vanilla (the original
-game)" under Game fixes. Settings.cmd can also set a frame limit (60, 120, 144 and so on) or no limit,
+To play the original game's behaviour instead, open Play.exe's Settings and choose "Vanilla (the original
+game)" under Game fixes. Settings can also set a frame limit (60, 120, 144 and so on) or no limit,
 which is the default, and a frame limit in menus (120 unless you choose another, or none). The frame
-limits only work with the fixes on. Settings.cmd keeps them in the game's own Fallout.ini, in
+limits only work with the fixes on. Settings keeps them in the game's own Fallout.ini, in
 userdata\game\Documents\My Games\FalloutNV (and the same under userdata\mods), in sections named
 [nv-rs ...] (usually at the top of the file): sPreset=fixes or vanilla, iFrameLimit=0 (no limit) or a number, iMenuFrameLimit=120,
 0 or a number. You can change them there too; a note above each line says what it does.
@@ -95,14 +93,14 @@ Game threads
 ------------
 The game's threads (the main one, the AI, loading and sound) run side by side on your processor's
 cores, as in the original. If the game misbehaves in a way it didn't with the previous preview (it
-stops, hangs, or something acts oddly), open Settings.cmd, choose "One at a time (slower)" under Game
-threads, and please tell us. Settings.cmd keeps that choice in Fallout.ini as bSteppedThreads=1;
+stops, hangs, or something acts oddly), open Play.exe's Settings, choose "One at a time (slower)" under Game
+threads, and please tell us. Settings keeps that choice in Fallout.ini as bSteppedThreads=1;
 with 0 the threads run side by side.
 
 The game's drawing is handed to a thread of its own (the original draws on its main thread), which
 makes busy places faster. If something looks wrong or the game stops in a way it didn't with the
-previous preview, open Settings.cmd, choose "Main thread (slower)" under Drawing thread, and please
-tell us. Settings.cmd keeps that choice in Fallout.ini as bRenderThread=0; with 1 the drawing has its
+previous preview, open Play.exe's Settings, choose "Main thread (slower)" under Drawing thread, and please
+tell us. Settings keeps that choice in Fallout.ini as bRenderThread=0; with 1 the drawing has its
 own thread.
 
 The game keeps its speed when its window is not the active one: nv-rs asks Windows not to slow it
@@ -115,8 +113,8 @@ Renderer
 --------
 The game draws on Vulkan (on a graphics card without Vulkan, on Direct3D 12), with the original's
 shaders and look. If something looks wrong or the game stops while drawing in a way it didn't with
-the previous preview, open Settings.cmd, choose "Direct3D 9 (the original's)" under Renderer, and
-please tell us. Settings.cmd keeps that choice in Fallout.ini as sRenderer=d3d9; with sRenderer=vulkan,
+the previous preview, open Play.exe's Settings, choose "Direct3D 9 (the original's)" under Renderer, and
+please tell us. Settings keeps that choice in Fallout.ini as sRenderer=d3d9; with sRenderer=vulkan,
 or with no such line, the game draws on Vulkan. Where neither Vulkan nor Direct3D 12 can draw, the
 game draws with Direct3D 9 by itself.
 
