@@ -151,32 +151,32 @@ fn discover_location(e: &mut Engine, w: &[u32]) -> Option<u32> {
 
 /// `g_thePlayer` (`*011DEA3C`): its cell (+0x40) and position (+0x30); the game's last seen-bits
 /// position (`011CA208`, two floats) and tracked cell (`*011E0BB0`).
-const PLAYER: u32 = 0x011d_ea3c;
-const PLAYER_CELL: u32 = 0x40;
+pub(crate) const PLAYER: u32 = 0x011d_ea3c;
+pub(crate) const PLAYER_CELL: u32 = 0x40;
 const PLAYER_POSITION: u32 = 0x30;
 const LAST_POSITION: u32 = 0x011c_a208;
 const TRACKED_CELL: u32 = 0x011e_0bb0;
 /// A cell's flags (+0x24, bit 0 interior), JIP's "all seen" flag (+0x25, bit 0), extra data
 /// (+0x28), id (+0xC); `TES`'s grid centre (+0x2C, two words); `GridCellArray`: its corner (+4,
 /// +8), size (+0xC), cells (+0x10).
-const CELL_FLAGS: u32 = 0x24;
-const CELL_SEEN_ALL: u32 = 0x25;
-const CELL_EXTRA: u32 = 0x28;
-const CELL_ID: u32 = 0x0c;
+pub(crate) const CELL_FLAGS: u32 = 0x24;
+pub(crate) const CELL_SEEN_ALL: u32 = 0x25;
+pub(crate) const CELL_EXTRA: u32 = 0x28;
+pub(crate) const CELL_ID: u32 = 0x0c;
 const TES_CENTRE: u32 = 0x2c;
 /// `kXData_ExtraSeenData`, `kXData_ExtraNorthRotation`; the extra's data (+0xC); the north
 /// rotation's angle (+0xC).
-const EXTRA_SEEN_DATA: u32 = 0x05;
+pub(crate) const EXTRA_SEEN_DATA: u32 = 0x05;
 const EXTRA_NORTH_ROTATION: u32 = 0x43;
-const EXTRA_DATA: u32 = 0x0c;
+pub(crate) const EXTRA_DATA: u32 = 0x0c;
 /// `kVtbl_ExtraSeenData`, `kVtbl_SeenData`, `kVtbl_IntSeenData`.
 const VTBL_EXTRA_SEEN_DATA: u32 = 0x0101_4294;
 const VTBL_SEEN_DATA: u32 = 0x0108_3fc4;
 const VTBL_INT_SEEN_DATA: u32 = 0x0108_3fe4;
 /// `IntSeenData`: its section (+0x24, `i16`), "all seen" byte (+0x26), next (+0x28).
-const INT_SECTION: u32 = 0x24;
-const INT_SEEN_ALL: u32 = 0x26;
-const INT_NEXT: u32 = 0x28;
+pub(crate) const INT_SECTION: u32 = 0x24;
+pub(crate) const INT_SEEN_ALL: u32 = 0x26;
+pub(crate) const INT_NEXT: u32 = 0x28;
 /// The calls: `BaseExtraList::AddExtra` (`0040FF60`), `RemoveByType` (`00410140`), the change
 /// flags (`008457B0`, `00845A80`: `thiscall` on `*BGSSaveLoadGame`, the form id and a flag),
 /// `MarkModified`'s `AddChange` (`0084A690`).
@@ -190,7 +190,7 @@ const ADD_CHANGE: u32 = 0x0084_a690;
 /// the shuffle bytes `0x80800002`, then the nine neighbour offsets (x high word, y low).
 const INTERIOR_OFFSET: i32 = 0x800;
 const MIN_MOVE_SQUARED: f32 = 6400.0;
-const NEIGHBOURS: [u32; 9] = [
+pub(crate) const NEIGHBOURS: [u32; 9] = [
     0xffff_ffff,
     0xffff_0000,
     0xffff_0001,
@@ -203,7 +203,7 @@ const NEIGHBOURS: [u32; 9] = [
 ];
 
 /// Each word's two halves added as 16-bit numbers (`paddw`).
-fn add_words(a: u32, b: u32) -> u32 {
+pub(crate) fn add_words(a: u32, b: u32) -> u32 {
     let lo = (a as u16).wrapping_add(b as u16);
     let hi = ((a >> 16) as u16).wrapping_add((b >> 16) as u16);
     (u32::from(hi) << 16) | u32::from(lo)
@@ -218,15 +218,17 @@ fn shift_words(a: u32) -> u32 {
 
 /// Two 32-bit lanes packed as `pshuflw 2` packs them: JIP's coordinate, x's low half in the high
 /// word, y's in the low.
-fn pack(x: i32, y: i32) -> u32 {
+pub(crate) fn pack(x: i32, y: i32) -> u32 {
     ((x as u32 & 0xffff) << 16) | (y as u32 & 0xffff)
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_minimap.h: GetNorthRotation
 // (asm).
 /// For an interior with a north rotation: `s_cellNorthRotation = -angle` and its sine and cosine
-/// as JIP's rotation lanes (`(sin, cos, cos, -sin)` after its shuffles); else 0.
-pub(crate) fn north_rotation(e: &mut Engine, cell: u32) {
+/// as JIP's rotation lanes (`(sin, cos, cos, -sin)` after its shuffles); else 0. The lanes it answers
+/// (JIP's `xmm0`, which `UpdateMiniMap` puts in its camera's rotation): those, or `(0, 1, 1, 0)` with
+/// no rotation.
+pub(crate) fn north_rotation(e: &mut Engine, cell: u32) -> [f32; 4] {
     let extra = if e.mem.u8(cell + CELL_FLAGS) & 1 == 0 {
         0
     } else {
@@ -234,7 +236,7 @@ pub(crate) fn north_rotation(e: &mut Engine, cell: u32) {
     };
     if extra == 0 {
         mini_map(e).north_rotation.store(0, Ordering::Release);
-        return;
+        return [0.0, 1.0, 1.0, 0.0];
     }
     let angle = -e.mem.f32(extra + EXTRA_DATA);
     let m = mini_map(e);
@@ -247,11 +249,12 @@ pub(crate) fn north_rotation(e: &mut Engine, cell: u32) {
     for (slot, v) in m.north_rotation_mods.iter().zip(lanes) {
         slot.store(v.to_bits(), Ordering::Release);
     }
+    lanes
 }
 
 /// The lanes JIP's interior code multiplies by: the position doubled per lane (`unpcklps`), times
 /// the rotation lanes, shuffled (`0x27`) and added in pairs (`haddps`).
-fn rotate_interior(e: &mut Engine, pos: [f32; 2]) -> [f32; 2] {
+pub(crate) fn rotate_interior(e: &mut Engine, pos: [f32; 2]) -> [f32; 2] {
     let m = mini_map(e);
     if m.north_rotation.load(Ordering::Acquire) == 0 {
         return pos;
@@ -290,7 +293,7 @@ pub(crate) fn fow_update_mask(x: i32, y: i32) -> u32 {
 // (asm).
 /// The loaded cell at the packed coordinate, 0 outside the grid. JIP's index is `x + (x << (size
 /// >> 1)) + y`, which is `5x + y` for the five-cell grid it is made for.
-fn cell_at_coord(e: &Engine, grid: u32, coord: u32) -> u32 {
+pub(crate) fn cell_at_coord(e: &Engine, grid: u32, coord: u32) -> u32 {
     let y = i32::from(coord as u16 as i16);
     let x = (coord as i32) >> 16;
     let size = e.mem.u32(grid + 0xc);
