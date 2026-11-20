@@ -203,8 +203,10 @@ pub fn read(e: &mut Engine) -> Option<Place> {
     })
 }
 
-/// Between two of the game's frames: when an F12 report waits for its place, it is written.
+/// Between two of the game's frames: when an F12 report waits for its place, it is written. Each
+/// call also says a host writes places, so the session's first report waits for its place too.
 pub fn note(e: &mut Engine) {
+    engine_platform::d3d9real::report_place_writer();
     if !engine_platform::d3d9real::report_place_wanted() {
         return;
     }
@@ -236,6 +238,125 @@ mod tests {
             }),
             switches: vec![("NV_AO".into(), "1".into())],
         }
+    }
+
+    use engine::prelude::*;
+
+    /// A test form's vtable and its `GetEditorID` stand-in (the name at the form's +0x100).
+    const FORM_VTABLE: u32 = 0x00d0_0000;
+    const EDITOR_ID: u32 = 0x00d8_0130;
+
+    /// An engine with the game's globals mapped and forms that name themselves.
+    fn guest() -> Box<Engine> {
+        let mut e = Box::new(Engine::new());
+        e.map(0x011c_0000, 0x6_0000);
+        let mut slots = [0u32; GET_EDITOR_ID as usize / 4 + 1];
+        slots[GET_EDITOR_ID as usize / 4] = EDITOR_ID;
+        e.put_vtable(FORM_VTABLE, &slots);
+        e.register(EDITOR_ID, |_, a| (a[0] + 0x100).into_ret());
+        e
+    }
+
+    /// A form with `id` and editor id `name` (0x200 bytes, zeroed past what is set).
+    fn new_form(e: &mut Engine, id: u32, name: &str) -> u32 {
+        let f = e.mem.alloc(0x200);
+        for o in (0..0x200).step_by(4) {
+            e.mem.set_u32(f + o, 0);
+        }
+        e.mem.set_u32(f, FORM_VTABLE);
+        e.mem.set_u32(f + FORM_ID, id);
+        for (i, b) in name.bytes().enumerate() {
+            e.mem.set_u8(f + 0x100 + i as u32, b);
+        }
+        f
+    }
+
+    /// The player at the quarry spot in an exterior cell of WastelandNV at 17:30 under a clear
+    /// sky; the player's cell's pointer returned.
+    fn player_outside(e: &mut Engine) -> u32 {
+        let player = new_form(e, 0x14, "");
+        for (i, v) in [-39000.0f32, 18200.0, 5800.0].iter().enumerate() {
+            e.mem.set_f32(player + POSITION + 4 * i as u32, *v);
+        }
+        for (i, v) in [0.25f32, 0.0, 1.5].iter().enumerate() {
+            e.mem.set_f32(player + ROTATION + 4 * i as u32, *v);
+        }
+        let world = new_form(e, 0x000d_a726, "WastelandNV");
+        let cell = new_form(e, 0x000d_e4c2, "");
+        e.mem.set_u32(cell + CELL_WORLD_SPACE, world);
+        e.mem.set_u32(player + PARENT_CELL, cell);
+        e.mem.set_u32(PLAYER, player);
+        let hour = new_form(e, 0x38, "GameHour");
+        e.mem.set_f32(hour + GLOBAL_VALUE, 17.5);
+        e.mem.set_u32(CALENDAR + CALENDAR_HOUR, hour);
+        let sky = e.mem.alloc(0x40);
+        let weather = new_form(e, 0x15e, "WeatherClear");
+        e.mem.set_u32(sky + SKY_WEATHER, weather);
+        e.mem.set_u32(SKY, sky);
+        cell
+    }
+
+    /// The game's own memory read as `place.txt` names it: the player's position and angles at
+    /// their offsets, the parent cell and its worldspace, the calendar's hour global, the sky's
+    /// weather, each by editor id and form id.
+    #[test]
+    fn the_place_is_read_from_the_games_player_cell_calendar_and_sky() {
+        let mut e = guest();
+        e.mem.set_u32(PLAYER, 0);
+        assert_eq!(read(&mut e), None, "no player yet");
+        player_outside(&mut e);
+        let p = read(&mut e).expect("a player");
+        assert_eq!(p.position, [-39000.0, 18200.0, 5800.0]);
+        assert_eq!(p.rotation, [0.25, 0.0, 1.5]);
+        assert!(!p.interior);
+        assert_eq!(
+            p.cell,
+            Some(Named {
+                editor_id: String::new(),
+                form_id: 0x000d_e4c2
+            })
+        );
+        assert_eq!(
+            p.world_space,
+            Some(Named {
+                editor_id: "WastelandNV".into(),
+                form_id: 0x000d_a726
+            })
+        );
+        assert_eq!(p.hour, 17.5);
+        assert_eq!(
+            p.weather,
+            Some(Named {
+                editor_id: "WeatherClear".into(),
+                form_id: 0x15e
+            })
+        );
+    }
+
+    /// An interior (the cell's flag bit 0) names its cell and no worldspace, whatever its
+    /// worldspace word holds; no cell, no sky and no hour global read as none, none and noon.
+    #[test]
+    fn an_interior_a_null_cell_a_null_sky_and_no_hour_global() {
+        let mut e = guest();
+        let cell = player_outside(&mut e);
+        e.mem.set_u8(cell + CELL_FLAGS, 1);
+        let p = read(&mut e).expect("a player");
+        assert!(p.interior);
+        assert_eq!(p.cell.map(|c| c.form_id), Some(0x000d_e4c2));
+        assert_eq!(p.world_space, None);
+        let player = e.mem.u32(PLAYER);
+        e.mem.set_u32(player + PARENT_CELL, 0);
+        e.mem.set_u32(SKY, 0);
+        e.mem.set_u32(CALENDAR + CALENDAR_HOUR, 0);
+        let p = read(&mut e).expect("a player");
+        assert_eq!((p.cell, p.interior, p.world_space), (None, false, None));
+        assert_eq!(p.weather, None);
+        assert_eq!(p.hour, 12.0);
+        // A sky with no weather yet.
+        let sky = e.mem.alloc(0x40);
+        e.mem.set_u32(sky + SKY_WEATHER, 0);
+        e.mem.set_u32(SKY, sky);
+        assert_eq!(read(&mut e).expect("a player").weather, None);
     }
 
     #[test]

@@ -2659,6 +2659,12 @@ pub fn texture_set_lod(e: &mut Engine, texture: u32, lod: u32, model: u32) {
 // takes them only at those presents (counted from 1), so a short stretch can be taken every frame.
 // Nothing is read or made when `NV_SHOT` is unset; the game's state and the model are not touched.
 // ---------------------------------------------------------------------------------------------
+/// A host writes the place of every F12 report (`place.txt`): called each of its frames, so a
+/// report waits for the place from the session's first F12 on.
+pub fn report_place_writer() {
+    shot::place_writer();
+}
+
 /// Whether the F12 report asked for waits for its place (`place.txt`): the host's main loop then
 /// gives it with [`set_report_place`] between two of the game's frames.
 pub fn report_place_wanted() -> bool {
@@ -2807,45 +2813,86 @@ pub(super) mod shot {
         }
     }
 
-    /// Where the game is, as the host wrote it for the report asked for (`place.txt`); taken by
-    /// the report.
-    static PLACE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
-    /// Whether a host writes the place ([`set_place`] has been called once): a report then waits
-    /// a few presents for it.
-    static PLACE_WRITER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    /// The presents a report has waited for its place.
-    static PLACE_WAITED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    /// The place a report waits for (`place.txt`): the text the host wrote, whether a host
+    /// writes places at all, and the presents the report asked for has waited.
+    pub(super) struct PlaceWait {
+        place: std::sync::Mutex<Option<String>>,
+        writer: std::sync::atomic::AtomicBool,
+        waited: std::sync::atomic::AtomicU32,
+    }
+
     /// The presents a report waits for its place at most (the host writes it between two of the
     /// game's frames).
     pub(super) const PLACE_WAIT: u32 = 8;
 
+    impl PlaceWait {
+        pub(super) const fn new() -> PlaceWait {
+            PlaceWait {
+                place: std::sync::Mutex::new(None),
+                writer: std::sync::atomic::AtomicBool::new(false),
+                waited: std::sync::atomic::AtomicU32::new(0),
+            }
+        }
+
+        /// A host writes the place for every report ([`PlaceWait::set`] when one waits): said
+        /// each of its frames, from its first on, so even the session's first F12 waits for it.
+        pub(super) fn writer(&self) {
+            self.writer
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+
+        /// Whether a report is `asked` for and has no place yet.
+        pub(super) fn wanted(&self, asked: bool) -> bool {
+            asked && self.place.lock().is_ok_and(|p| p.is_none())
+        }
+
+        /// The place for the report asked for (plain lines).
+        pub(super) fn set(&self, text: String) {
+            self.writer();
+            if let Ok(mut p) = self.place.lock() {
+                *p = Some(text);
+            }
+        }
+
+        /// The place to write now, or `Err(())` when the report should wait a present more for
+        /// it. With a host and no place after [`PLACE_WAIT`] presents, or with no host, the text
+        /// says why there is none.
+        pub(super) fn take(&self) -> Result<String, ()> {
+            use std::sync::atomic::Ordering::Relaxed;
+            let place = self.place.lock().ok().and_then(|mut p| p.take());
+            let waited = self.waited.load(Relaxed);
+            let writer = self.writer.load(Relaxed);
+            if place.is_none() && writer && waited < PLACE_WAIT {
+                self.waited.store(waited + 1, Relaxed);
+                return Err(());
+            }
+            self.waited.store(0, Relaxed);
+            Ok(place.unwrap_or_else(|| {
+                if writer {
+                    format!("place not given within {PLACE_WAIT} presents\n")
+                } else {
+                    "no place: nothing in this program writes it\n".to_string()
+                }
+            }))
+        }
+    }
+
+    /// The place of the report asked for.
+    static PLACE: PlaceWait = PlaceWait::new();
+
+    /// A host writes the place of every report (called each of its frames).
+    pub(super) fn place_writer() {
+        PLACE.writer();
+    }
+
     /// Whether a report is asked for and has no place yet (the host's main loop then writes it).
     pub(super) fn place_wanted() -> bool {
-        REPORT_ASKED.load(std::sync::atomic::Ordering::Relaxed)
-            && PLACE.lock().is_ok_and(|p| p.is_none())
+        PLACE.wanted(REPORT_ASKED.load(std::sync::atomic::Ordering::Relaxed))
     }
 
     /// The place for the report asked for (plain lines).
     pub(super) fn set_place(text: String) {
-        PLACE_WRITER.store(true, std::sync::atomic::Ordering::Relaxed);
-        if let Ok(mut p) = PLACE.lock() {
-            *p = Some(text);
-        }
-    }
-
-    /// The place to write now, or `Err(())` when the report should wait a present more for it.
-    fn take_place() -> Result<Option<String>, ()> {
-        let place = PLACE.lock().ok().and_then(|mut p| p.take());
-        let waited = PLACE_WAITED.load(std::sync::atomic::Ordering::Relaxed);
-        if place.is_none()
-            && PLACE_WRITER.load(std::sync::atomic::Ordering::Relaxed)
-            && waited < PLACE_WAIT
-        {
-            PLACE_WAITED.store(waited + 1, std::sync::atomic::Ordering::Relaxed);
-            return Err(());
-        }
-        PLACE_WAITED.store(0, std::sync::atomic::Ordering::Relaxed);
-        Ok(place)
+        PLACE.set(text);
     }
 
     /// The first unused numbered folder under `dir`, made (`001`, `002`, ...).
@@ -2907,8 +2954,8 @@ pub(super) mod shot {
             return;
         }
         // The place (`place.txt`): the host writes it between the game's frames; a few presents'
-        // wait for it, then the report goes without.
-        let Ok(place) = take_place() else {
+        // wait for it, then the report says why it has none.
+        let Ok(place) = PLACE.take() else {
             return;
         };
         REPORT_ASKED.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -2937,10 +2984,8 @@ pub(super) mod shot {
             folder.join("note.txt"),
             "Write here what went wrong and what you did just before it:\r\n\r\n",
         );
-        if let Some(place) = &place {
-            let _ = std::fs::write(folder.join("place.txt"), place.replace('\n', "\r\n"));
-            eprintln!("F12: place: {}", place.trim_end().replace('\n', "; "));
-        }
+        let _ = std::fs::write(folder.join("place.txt"), place.replace('\n', "\r\n"));
+        eprintln!("F12: place: {}", place.trim_end().replace('\n', "; "));
         eprintln!("F12: report in {}", folder.display());
         #[cfg(windows)]
         #[link(name = "user32")]
@@ -4170,6 +4215,49 @@ mod tests {
             assert_eq!(Showing::of(Some(other), false), Showing::Activated);
             assert_eq!(Showing::of(Some(other), true), Showing::Background);
         }
+    }
+
+    /// The session's first F12 waits for its place: the host said it writes places (each of its
+    /// frames, before any place was written), so a report asked for at a present before the
+    /// host's next frame is held back, and the place the host then writes goes into it.
+    #[test]
+    fn the_first_report_of_a_session_waits_for_its_place() {
+        let wait = shot::PlaceWait::new();
+        wait.writer();
+        assert!(wait.wanted(true));
+        assert!(!wait.wanted(false));
+        assert_eq!(wait.take(), Err(()), "held back for the place");
+        wait.set("position: 1 2 3\n".into());
+        assert!(!wait.wanted(true));
+        assert_eq!(wait.take(), Ok("position: 1 2 3\n".to_string()));
+        // The next report waits again, from its first present.
+        assert!(wait.wanted(true));
+        assert_eq!(wait.take(), Err(()));
+    }
+
+    /// With a host and no place after [`shot::PLACE_WAIT`] presents the report goes, its place
+    /// saying why there is none; with no host it goes at once, saying so.
+    #[test]
+    fn a_report_whose_place_never_comes_says_why() {
+        let wait = shot::PlaceWait::new();
+        wait.writer();
+        for _ in 0..shot::PLACE_WAIT {
+            assert_eq!(wait.take(), Err(()));
+        }
+        assert_eq!(
+            wait.take(),
+            Ok(format!(
+                "place not given within {} presents\n",
+                shot::PLACE_WAIT
+            ))
+        );
+        // The count starts again for the next report.
+        assert_eq!(wait.take(), Err(()));
+        let none = shot::PlaceWait::new();
+        assert_eq!(
+            none.take(),
+            Ok("no place: nothing in this program writes it\n".to_string())
+        );
     }
 
     /// An F12 report's `log-start.txt`: the log's first bytes, cut back to a whole line.
