@@ -7158,6 +7158,48 @@ mod tests {
         }
     }
 
+    /// The game's own explosion update (`009ae5d0`), with the explosion in a cell, reaches the G97 seam at
+    /// `0x9AE68C`: with JIP's fixes and an answer, the game's fade `009b1320` does not run (it reads the light
+    /// member first, `00559450`); otherwise it runs once.
+    #[test]
+    fn g97_the_explosions_update_asks_the_seam() {
+        use engine_core::extend::jip_patches;
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        for (word, answer, asked, faded) in [
+            (0, Some(0), false, true),
+            (jip_patches::INSTALLED, Some(0), false, true),
+            (fixes, Some(0), true, false),
+            (fixes, None, true, true),
+        ] {
+            let mut e = list_engine();
+            e.on_site_for_test(0x009a_e68c, at_g97);
+            G97_ASKED.with(|s| s.borrow_mut().clear());
+            G97_ANSWER.with(|c| c.set(answer));
+            e.set_jip_patches(word);
+            // Not the first frame; build time above the age (no build step); no radiation; not expired.
+            e.mem.set_u32(0x10e4, 1);
+            e.mem.set_f32(0x1090, 1.0);
+            e.register_double(0x0051_b8e0, |_, _| 0.0f32.into_ret());
+            e.register(0x0050_7e10, |_, _| 4.0f32.into_ret());
+            e.register(0x008d_6f30, |_, _| 0x3000u32.into_ret());
+            e.register(0x0041_81e0, |_, _| 0x3100u32.into_ret());
+            e.register(0x004e_3cc0, |_, _| 5.0f32.into_ret());
+            e.register(0x008d_01e0, |_, _| 0.0f32.into_ret());
+            e.register_double(0x0055_9450, |_, _| 0u32.into_ret());
+            fn_009ae5d0(&mut e, Ptr::new(0x1000), 0);
+            let want = if asked { vec![vec![0x1000]] } else { vec![] };
+            assert_eq!(G97_ASKED.with(|s| s.take()), want, "{word:x} {answer:?}");
+            let reads = e
+                .call_log
+                .as_ref()
+                .unwrap()
+                .iter()
+                .filter(|(a, _)| *a == 0x0055_9450)
+                .count();
+            assert_eq!(reads, usize::from(faded), "{word:x} {answer:?}");
+        }
+    }
+
     #[test]
     fn light_fade_passes_computed_factor_through_both_clamps() {
         for light in [0u32, 0x2000] {
