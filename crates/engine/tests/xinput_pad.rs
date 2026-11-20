@@ -28,11 +28,18 @@ const STRENGTH_SCALE: u32 = 0x0102_17d0;
 
 /// The system's pads, stood in: user 0's pad or none, and the vibrations sent.
 #[derive(Clone, Default)]
-struct Pads(Arc<Mutex<(Option<PadState>, Vec<(u32, [u8; 4])>)>>);
+struct Pads(Arc<Mutex<Seen>>);
+
+/// User 0's pad (or none) and the vibrations sent to it (user and the four bytes).
+#[derive(Default)]
+struct Seen {
+    pad: Option<PadState>,
+    sent: Vec<(u32, [u8; 4])>,
+}
 
 impl PadSource for Pads {
     fn get_state(&mut self, user: u32, state: &mut [u8; 16]) -> u32 {
-        match (user, self.0.lock().unwrap().0) {
+        match (user, self.0.lock().unwrap().pad) {
             (0, Some(pad)) => {
                 *state = pad.to_bytes();
                 xinput::ERROR_SUCCESS
@@ -43,8 +50,8 @@ impl PadSource for Pads {
 
     fn set_state(&mut self, user: u32, vibration: &[u8; 4]) -> u32 {
         let mut pads = self.0.lock().unwrap();
-        if user == 0 && pads.0.is_some() {
-            pads.1.push((user, *vibration));
+        if user == 0 && pads.pad.is_some() {
+            pads.sent.push((user, *vibration));
             xinput::ERROR_SUCCESS
         } else {
             xinput::ERROR_DEVICE_NOT_CONNECTED
@@ -92,13 +99,13 @@ fn controls_poll_reads_the_pad_as_the_system_gives_it() {
     let pads = Pads::default();
     let (mut e, controls) = engine(&pads);
     e.mem.write(PAD_STATE, &[0x55; 16]);
-    pads.0.lock().unwrap().0 = Some(pad(1));
+    pads.0.lock().unwrap().pad = Some(pad(1));
     e.call(CONTROLS_POLL, &args![controls]);
     assert_eq!(e.mem.bytes(PAD_STATE, 16), pad(1).to_bytes().to_vec());
     assert_eq!(e.mem.bytes(PAD_LAST, 16), vec![0x55; 16]);
     assert_eq!(e.mem.u8(PAD_CONNECTED), 1);
 
-    pads.0.lock().unwrap().0 = Some(pad(2));
+    pads.0.lock().unwrap().pad = Some(pad(2));
     e.call(CONTROLS_POLL, &args![controls]);
     assert_eq!(e.mem.bytes(PAD_STATE, 16), pad(2).to_bytes().to_vec());
     assert_eq!(e.mem.bytes(PAD_LAST, 16), pad(1).to_bytes().to_vec());
@@ -109,12 +116,12 @@ fn controls_poll_reads_the_pad_as_the_system_gives_it() {
     assert_eq!(e.mem.u8(PAD_CONNECTED), 0);
     e.mem.set_u8(controls, 0);
 
-    pads.0.lock().unwrap().0 = None;
+    pads.0.lock().unwrap().pad = None;
     e.call(CONTROLS_POLL, &args![controls]);
     assert_eq!(e.mem.u8(PAD_CONNECTED), 0);
     assert_eq!(e.mem.bytes(PAD_STATE, 16), pad(2).to_bytes().to_vec());
 
-    pads.0.lock().unwrap().0 = Some(pad(3));
+    pads.0.lock().unwrap().pad = Some(pad(3));
     e.call(CONTROLS_POLL, &args![controls]);
     assert_eq!(e.mem.u8(PAD_CONNECTED), 1);
     assert_eq!(e.mem.bytes(PAD_STATE, 16), pad(3).to_bytes().to_vec());
@@ -126,7 +133,7 @@ fn controls_poll_reads_the_pad_as_the_system_gives_it() {
 fn the_games_rumble_and_its_stop_reach_the_pad() {
     let pads = Pads::default();
     let (mut e, controls) = engine(&pads);
-    pads.0.lock().unwrap().0 = Some(pad(1));
+    pads.0.lock().unwrap().pad = Some(pad(1));
     e.mem.set_u8(controls + RUMBLE_ENABLED, 1);
     let queue = e.mem.alloc(0x40);
     e.mem.write(queue, &[0; 0x40]);
@@ -159,7 +166,7 @@ fn the_games_rumble_and_its_stop_reach_the_pad() {
     );
     e.call(RUMBLE_STOP, &args![controls]);
     assert_eq!(
-        pads.0.lock().unwrap().1,
+        pads.0.lock().unwrap().sent,
         vec![(0, [0xff, 0x7f, 0xff, 0x3f]), (0, [0, 0, 0, 0])]
     );
 }
