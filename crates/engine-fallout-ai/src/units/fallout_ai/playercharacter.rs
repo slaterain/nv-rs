@@ -3459,6 +3459,33 @@ fn show_text(e: &mut Engine, setting: u32, icon: u32) {
     e.call(0x0070_52f0, &args![text, 0u32, icon, 0u32, duration, 0u32]);
 }
 
+/// The round a weapon that regenerates its ammunition adds when its time is up (in
+/// `PlayerCharacter::Update`, from `0x943DBF`): an item (a 24-byte local, `00481610`) of the weapon's
+/// equipped ammunition type (`00525980`), given to the player and equipped, then the local's
+/// destructor (`00481680`).
+fn add_regenerated_round(e: &mut Engine, weapon_form: u32) {
+    e.with_stack(24, |e, object| {
+        e.call(0x0048_1610, &args![object]);
+        let player = e.global::<u32>(PLAYER_SINGLETON);
+        let first = e.call(0x0052_5980, &args![weapon_form, player]).u32();
+        // lStewieAl's Tweaks' row S0199.11 (`MiscCrashFixes`, `0x943DE1`): no equipped
+        // ammunition type, nothing to add (the jump to `0x943E25`).
+        if !(first == 0 && e.stewie(engine_core::extend::stewie::REGEN_AMMO_NO_TYPE)) {
+            e.call(0x0048_18e0, &args![object, first, 1u32, 0u32]);
+            let player = e.global::<u32>(PLAYER_SINGLETON);
+            e.call(0x0048_21a0, &args![object, player, 1u32]);
+            let player = e.global::<u32>(PLAYER_SINGLETON);
+            let second = e.call(0x0052_5980, &args![weapon_form, player]).u32();
+            let player = e.global::<u32>(PLAYER_SINGLETON);
+            e.call(
+                0x0088_c830,
+                &args![player, second, 1u32, 0u32, 1u32, 0u32, 0u32],
+            );
+        }
+        e.call(0x0048_1680, &args![object]);
+    });
+}
+
 // Translated from 0093e860 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `PlayerCharacter::Update` (Xbox PDB): the per-frame update of the player
 /// with the frame time `delta`. In order: the VATS and slow-motion
@@ -5862,22 +5889,7 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
                 } else {
                     let regen = e.call(0x0094_4300, &args![this]).f64();
                     if regen <= zero {
-                        e.with_stack(24, |e, object| {
-                            e.call(0x0048_1610, &args![object]);
-                            let player = e.global::<u32>(PLAYER_SINGLETON);
-                            let first = e.call(0x0052_5980, &args![weapon_form, player]).u32();
-                            e.call(0x0048_18e0, &args![object, first, 1u32, 0u32]);
-                            let player = e.global::<u32>(PLAYER_SINGLETON);
-                            e.call(0x0048_21a0, &args![object, player, 1u32]);
-                            let player = e.global::<u32>(PLAYER_SINGLETON);
-                            let second = e.call(0x0052_5980, &args![weapon_form, player]).u32();
-                            let player = e.global::<u32>(PLAYER_SINGLETON);
-                            e.call(
-                                0x0088_c830,
-                                &args![player, second, 1u32, 0u32, 1u32, 0u32, 0u32],
-                            );
-                            e.call(0x0048_1680, &args![object]);
-                        });
+                        add_regenerated_round(e, weapon_form);
                     }
                 }
             }
@@ -17068,6 +17080,52 @@ mod tests {
             next = node;
         }
         next
+    }
+
+    /// [`add_regenerated_round`] with the weapon's equipped ammunition type `kind` and row S0199.11
+    /// `on`: the calls it made.
+    fn regenerated_round(kind: u32, on: bool) -> Vec<(u32, Vec<u32>)> {
+        let mut e = Engine::new();
+        e.map(0x011d_e000, 0x1000);
+        e.set_global(PLAYER_SINGLETON, 0x7000_0000u32);
+        for stub in [
+            0x0048_1610,
+            0x0048_18e0,
+            0x0048_21a0,
+            0x0088_c830,
+            0x0048_1680,
+        ] {
+            e.register(stub, |_, _| Ret::default());
+        }
+        e.register_double(0x0052_5980, move |_, _| kind.into_ret());
+        e.set_stewie(engine_core::extend::stewie::REGEN_AMMO_NO_TYPE, on);
+        e.call_log = Some(vec![]);
+        add_regenerated_round(&mut e, 0x1234);
+        e.call_log.take().unwrap()
+    }
+
+    /// lStewieAl's Tweaks' row S0199.11 (`MiscCrashFixes`, `0x943DE1`): a round regenerated with no
+    /// ammunition type equipped (`00525980` answers 0): off, the exe builds an item of the missing type
+    /// and equips it (a crash in the game); on, nothing is added and the local's destructor still runs.
+    #[test]
+    fn s0199_11_a_regenerated_round_with_no_ammunition_type() {
+        let added = |log: &[(u32, Vec<u32>)]| {
+            log.iter()
+                .any(|(a, _)| *a == 0x0048_18e0 || *a == 0x0088_c830)
+        };
+        let off = regenerated_round(0, false);
+        assert!(added(&off));
+        let on = regenerated_round(0, true);
+        assert!(!added(&on));
+        assert!(on.iter().any(|(a, _)| *a == 0x0048_1680));
+    }
+
+    /// Row S0199.11 with an ammunition type (ordinary input): the same calls with the row off and on.
+    #[test]
+    fn s0199_11_row_on_with_an_ammunition_type_changes_nothing() {
+        let off = regenerated_round(0x5000, false);
+        assert_eq!(off, regenerated_round(0x5000, true));
+        assert!(off.iter().any(|(a, w)| *a == 0x0088_c830 && w[1] == 0x5000));
     }
 
     #[test]

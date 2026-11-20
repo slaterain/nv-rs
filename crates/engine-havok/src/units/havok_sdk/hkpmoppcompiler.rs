@@ -104,9 +104,10 @@ fn grow_words(e: &mut Engine, allocator: u32, array: u32, wanted: i32) {
 // Translated from 00dd4cb0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpMoppCompiler::compile` (Xbox PDB), `RET 0xC` with `(mediator, buffer, buffer_size)`:
 /// builds a code generator sized for the mediator's primitives (`slot 0x10`) plus the word at
-/// `+0xC`, the settings (a copy of the six words at `+0x20`) and the default assembler, tells
-/// the mediator and the assembler about each other, takes the scratch memory from `buffer`
-/// when it is given and big enough for `00dd4b80` (otherwise from `easyAlloc`), splits the
+/// `+0xC`, the settings (a copy of the six words at `+0x20`) and the default assembler, hands
+/// the mediator the assembler's splitting directions (array and count), takes the scratch
+/// memory from `buffer` when it is given and big enough for `00dd4b80` (otherwise from
+/// `easyAlloc`), splits the
 /// primitives into a tree with the default splitter and stores the root at `+0`, and frees
 /// the scratch memory it allocated. Then it compiles the code: with no list of
 /// sub-generators at `+4` this is the generator's `compileCode`; with one, the prefix sums of
@@ -147,9 +148,14 @@ pub fn hkp_mopp_compiler_compile(
         );
         let user = e.mem.u32(me + 4);
         e.mem.set_u32(assembler + 0x14, user);
-        let first = e.vcall(assembler, 0xc, &args![]).u32();
-        let second = e.vcall(assembler, 0x10, &args![first]).u32();
-        e.vcall(p, 0xc, &args![second]);
+        // 00dd4d20..00dd4d49: the assembler's slot 0xC (the number of splitting directions,
+        // `00e09620`) and slot 0x10 (their array, `00e09630`) take no arguments (plain `RET`);
+        // the count is pushed first and stays on the stack across the second call, then the
+        // array is pushed, so the mediator's `setSplittingPlaneDirections` (slot 0xC, `RET 8`)
+        // gets `(directions, count)`.
+        let count = e.vcall(assembler, 0xc, &args![]).u32();
+        let directions = e.vcall(assembler, 0x10, &args![]).u32();
+        e.vcall(p, 0xc, &args![directions, count]);
         let required = e.call(REQUIRED_SIZE, &args![this, p]).u32() as i32;
         let scratch = if buffer == 0 || buffer_size < required {
             let router = e.call(MEMORY_ROUTER, &args![]).u32();
@@ -379,6 +385,18 @@ mod a06_tests {
     const ASSEMBLER_BLOCK: u32 = 0x0900_0607;
     const ASSEMBLER_FINISH: u32 = 0x0900_0608;
     const PIECE_DELETE: u32 = 0x0900_0609;
+    const SOURCE_COUNT: u32 = 0x0900_060a;
+    const SOURCE_FIRST_KEY: u32 = 0x0900_060b;
+    /// The address the assembler stand-in keeps at `+0x40` as its array of splitting directions
+    /// (only passed on, never read).
+    const DIRECTIONS: u32 = 0x0abc_0040;
+    /// The real assembler's slots 0xC (the direction count, 13) and 0x10 (the array at `+0x40`).
+    const REAL_DIRECTION_COUNT: u32 = 0x00e0_9620;
+    const REAL_DIRECTIONS: u32 = 0x00e0_9630;
+    /// The real mediators' `setSplittingPlaneDirections` (both `RET 8`): the plain one, which does
+    /// nothing, and the cached one, which walks its source's shapes.
+    const REAL_SET_DIRECTIONS: u32 = 0x00dd_51e0;
+    const REAL_CACHED_SET_DIRECTIONS: u32 = 0x00dd_5cd0;
 
     fn push(log: &Log, row: Vec<u32>) {
         log.borrow_mut().push(row);
@@ -465,15 +483,25 @@ mod a06_tests {
         e.mem.set_u32(assembler_vtable + 0x18, ASSEMBLER_FINISH);
         e.register_double(ASSEMBLER_CONSTRUCTOR, move |e, a| {
             e.mem.set_u32(a[0], assembler_vtable);
+            e.mem.set_u32(a[0] + 0x40, DIRECTIONS);
             Ret::default()
         });
-        e.register_double(ASSEMBLER_KIND, |_, _| Ret {
-            eax: 0xd,
-            ..Ret::default()
+        // The two direction slots log how many words they were called with (only `this`).
+        let sink = Rc::clone(&log);
+        e.register_double(ASSEMBLER_KIND, move |_, a| {
+            push(&sink, vec![17, a.len() as u32]);
+            Ret {
+                eax: 0xd,
+                ..Ret::default()
+            }
         });
-        e.register_double(ASSEMBLER_BLOCK, |_, a| Ret {
-            eax: a[1] + 0x100,
-            ..Ret::default()
+        let sink = Rc::clone(&log);
+        e.register_double(ASSEMBLER_BLOCK, move |e, a| {
+            push(&sink, vec![18, a.len() as u32]);
+            Ret {
+                eax: e.mem.u32(a[0] + 0x40),
+                ..Ret::default()
+            }
         });
         let sink = Rc::clone(&log);
         e.register_double(ASSEMBLER_FINISH, move |_, a| {
@@ -499,14 +527,19 @@ mod a06_tests {
         (e, log, allocator)
     }
 
-    /// A mediator whose slots 0x10 (count), 0xC (accept the block id, logged) and 0x14
-    /// (receive the scratch memory, logged) are stand-ins.
+    /// A mediator whose slots 0x10 (count), 0xC (accept the splitting directions: every word
+    /// after `this` is logged) and 0x14 (receive the scratch memory, logged) are stand-ins.
     fn mediator(e: &mut Engine, log: &Log, count: u32) -> u32 {
+        mediator_with(e, log, count, MEDIATOR_ACCEPT)
+    }
+
+    /// The same mediator with `set_directions` in its slot 0xC.
+    fn mediator_with(e: &mut Engine, log: &Log, count: u32, set_directions: u32) -> u32 {
         let vtable = e.mem.alloc(0x20);
-        e.mem.set_u32(vtable + 0xc, MEDIATOR_ACCEPT);
+        e.mem.set_u32(vtable + 0xc, set_directions);
         e.mem.set_u32(vtable + 0x10, MEDIATOR_COUNT);
         e.mem.set_u32(vtable + 0x14, MEDIATOR_SCRATCH);
-        let object = e.mem.alloc(0x10);
+        let object = e.mem.alloc(0x20);
         e.mem.set_u32(object, vtable);
         e.register_double(MEDIATOR_COUNT, move |_, _| Ret {
             eax: count,
@@ -514,7 +547,9 @@ mod a06_tests {
         });
         let sink = Rc::clone(log);
         e.register_double(MEDIATOR_ACCEPT, move |_, a| {
-            push(&sink, vec![11, a[1]]);
+            let mut row = vec![11];
+            row.extend_from_slice(&a[1..]);
+            push(&sink, row);
             Ret::default()
         });
         let sink = Rc::clone(log);
@@ -596,7 +631,11 @@ mod a06_tests {
             vec![
                 vec![5, 84],
                 vec![6, this + 0x20],
-                vec![11, 0x10d],
+                // The assembler's two direction slots get `this` alone; the mediator gets the
+                // array first and the count second.
+                vec![17, 1],
+                vec![18, 1],
+                vec![11, DIRECTIONS, 0xd],
                 vec![12, buffer],
                 vec![13, p, this + 8],
                 vec![10],
@@ -753,5 +792,93 @@ mod a06_tests {
         // the code's vector.
         assert!(log.iter().any(|r| r[0] == 2 && r[2] == 12));
         assert!(log.contains(&vec![7, 0x4242, got + 0x10]));
+    }
+
+    /// Replaces the assembler stand-in by one whose direction slots are the real translations
+    /// (`00e09620`, `00e09630`), reached through the registered entries; slot 0x18 stays logged.
+    fn real_direction_slots(e: &mut Engine) {
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 0xc, REAL_DIRECTION_COUNT);
+        e.mem.set_u32(vtable + 0x10, REAL_DIRECTIONS);
+        e.mem.set_u32(vtable + 0x18, ASSEMBLER_FINISH);
+        e.register_double(ASSEMBLER_CONSTRUCTOR, move |e, a| {
+            e.mem.set_u32(a[0], vtable);
+            e.mem.set_u32(a[0] + 0x40, DIRECTIONS);
+            Ret::default()
+        });
+    }
+
+    /// Runs `compile` without sub-generators over `mediator` with a buffer big enough for the
+    /// scratch memory; returns the compiler and the code object the stand-in generator hands out.
+    fn compile_over(e: &mut Engine, mediator: u32) -> (u32, u32) {
+        let this = e.mem.alloc(0x80);
+        e.mem.set_u32(this + 0xc, 1);
+        e.register_double(REQUIRED_SIZE, |_, _| Ret {
+            eax: 0x100,
+            ..Ret::default()
+        });
+        e.register_double(SPLITTER_BUILD_TREE, |_, _| Ret {
+            eax: 0x5151,
+            ..Ret::default()
+        });
+        let code = e.mem.alloc(0x40);
+        e.register_double(GENERATOR_COMPILE_CODE, move |_, _| Ret {
+            eax: code,
+            ..Ret::default()
+        });
+        let buffer = e.mem.alloc(0x200);
+        let got = e
+            .call(0x00dd4cb0, &args![this, mediator, buffer, 0x200u32])
+            .u32();
+        assert_eq!(got, code);
+        assert_eq!(e.mem.u32(this), 0x5151);
+        (this, code)
+    }
+
+    /// A player's modded game stopped here while a loader thread built a collision tree for a
+    /// mesh that had none ("call has 2 argument words, needs more" in the mediator's
+    /// `setSplittingPlaneDirections`): through the real entries, both mediators `00d54cd0` can
+    /// build get their two words and the compilation runs to its end.
+    #[test]
+    fn compile_reaches_both_real_mediators_set_directions_with_both_words() {
+        for set_directions in [REAL_SET_DIRECTIONS, REAL_CACHED_SET_DIRECTIONS] {
+            let (mut e, log, _allocator) = rig();
+            real_direction_slots(&mut e);
+            let p = mediator_with(&mut e, &log, 2, set_directions);
+            // The cached mediator walks the shapes of its source at +0x14: here none.
+            let source_vtable = e.mem.alloc(0x20);
+            e.mem.set_u32(source_vtable + 4, SOURCE_COUNT);
+            e.mem.set_u32(source_vtable + 8, SOURCE_FIRST_KEY);
+            let source = e.mem.alloc(8);
+            e.mem.set_u32(source, source_vtable);
+            e.mem.set_u32(p + 0x14, source);
+            e.register_double(SOURCE_COUNT, |_, _| Ret::default());
+            let sink = Rc::clone(&log);
+            e.register_double(SOURCE_FIRST_KEY, move |_, _| {
+                push(&sink, vec![19]);
+                Ret::default()
+            });
+            let (_this, code) = compile_over(&mut e, p);
+            let log = log.borrow();
+            assert!(log.contains(&vec![7, 0x5151, code + 0x10]));
+            // Only the cached mediator asks its source for the first key.
+            assert_eq!(
+                log.contains(&vec![19]),
+                set_directions == REAL_CACHED_SET_DIRECTIONS
+            );
+        }
+    }
+
+    /// The order of the two words: the real assembler's array (its word `+0x40`) first, then its
+    /// direction count, 13.
+    #[test]
+    fn compile_hands_the_mediator_the_real_assemblers_array_then_its_count() {
+        let (mut e, log, _allocator) = rig();
+        real_direction_slots(&mut e);
+        let p = mediator(&mut e, &log, 2);
+        compile_over(&mut e, p);
+        let log = log.borrow();
+        let handed: Vec<&Vec<u32>> = log.iter().filter(|row| row[0] == 11).collect();
+        assert_eq!(handed, vec![&vec![11, DIRECTIONS, 13]]);
     }
 }
