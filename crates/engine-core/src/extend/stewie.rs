@@ -319,16 +319,12 @@ pub(crate) struct Prints {
     /// Tweaks' print queue (`queuedConsoleMessages`, in its copy of xNVSE's `GameAPI.cpp`): the lines
     /// printed off the main thread or before the console exists, printed by [`print_queued`].
     queued: Mutex<Vec<Vec<u8>>>,
-    /// nv-rs's guard for S0189.02's slip (the host's fixes row `NV_STEWIE_HIT_AMMO`): with it a
-    /// `CalcWeaponDamage` called with no ammunition keeps the game's own projectile lookup.
-    hit_ammo_guard: AtomicBool,
 }
 
 impl Default for Prints {
     fn default() -> Self {
         Prints {
             fade_prints: AtomicBool::new(true),
-            hit_ammo_guard: AtomicBool::new(false),
             fade_ref: AtomicU32::new(0),
             fade_mesh: AtomicU32::new(0),
             shape_model: Mutex::new(Vec::new()),
@@ -643,17 +639,6 @@ impl Engine {
     /// `[Tweaks] bInvalidBSFadeNodePrints` (`crates/stewie`'s install): whether S0023 prints.
     pub fn set_stewie_fade_node_prints(&self, on: bool) {
         self.extend.stewie.3.fade_prints.store(on, Relaxed);
-    }
-
-    /// nv-rs's guard for Tweaks' S0189.02 slip (the host's fixes row `NV_STEWIE_HIT_AMMO`, on in the
-    /// fixes preset): a hit's damage and NPCs' weapon choice keep the game's own ammunition lookup.
-    pub fn set_stewie_hit_ammo_guard(&self, on: bool) {
-        self.extend.stewie.3.hit_ammo_guard.store(on, Relaxed);
-    }
-
-    /// Whether [`Engine::set_stewie_hit_ammo_guard`] is on.
-    pub fn stewie_hit_ammo_guard(&self) -> bool {
-        self.extend.stewie.3.hit_ammo_guard.load(Relaxed)
     }
 
     /// Whether S0023 prints ([`Engine::set_stewie_fade_node_prints`]).

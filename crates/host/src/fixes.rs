@@ -45,7 +45,6 @@ pub static FIXES: &[Fix] = &[
     JIP_GAME_PATCHES,
     MCM,
     STEWIE,
-    STEWIE_HIT_AMMO,
     UIO,
     SCRIPT_ERROR_GUARD,
     IMOD_EVENT_FORM_CHECK,
@@ -509,23 +508,6 @@ fn install_stewie(e: &mut Engine) {
     stewie::set_on(e, true);
 }
 
-/// nv-rs's guard for a Tweaks slip (S0189.02, `InventoryCalcWeaponDamageUseAmmoFix`): Tweaks' lookup in
-/// `CalcWeaponDamage` also serves the callers that pass no ammunition (a hit through
-/// `GetModifiedAttackDamage`, NPCs' `GetDesirability`), so they count the explosion of the weapon's
-/// own projectile instead of the loaded ammunition's. With this row those callers keep the game's own
-/// lookup and only the menu's figure for a listed ammunition is fixed; off, exactly Tweaks.
-pub const STEWIE_HIT_AMMO: Fix = Fix {
-    name: "Tweaks' hit ammunition slip not copied",
-    env: "NV_STEWIE_HIT_AMMO",
-    addresses: &[],
-    summary: "with lStewieAl's Tweaks' S0189.02, a hit's damage and NPCs' choice of weapon still count the loaded ammunition's explosion as in the original game (Tweaks counts the weapon's default round's instead: an anti-materiel rifle hit with explosive rounds at Guns 50, 209 against Tweaks' 121); the menu's figure for a listed ammunition stays fixed",
-    install: install_stewie_hit_ammo,
-};
-
-fn install_stewie_hit_ammo(e: &mut Engine) {
-    e.set_stewie_hit_ammo_guard(true);
-}
-
 /// The Mod Configuration Menu's NVSE plugin built in (`crates/mcm`: MCM.dll 1.5, "MCM Extensions"):
 /// its nine commands at `0x21C0` up, which MCM's scripts and the menus of the mods that use it call
 /// (`GetMCMFloat`, `SetMCMFloat`, `GetModINI`, ...). Off in every preset ([`OFF_IN_EVERY_PRESET`])
@@ -563,7 +545,6 @@ const NO_ADDRESS: &[&str] = &[
     JIP_GAME_PATCHES.name,
     MCM.name,
     STEWIE.name,
-    STEWIE_HIT_AMMO.name,
     UIO.name,
     SCRIPT_ERROR_GUARD.name,
     IMOD_EVENT_FORM_CHECK.name,
@@ -2839,22 +2820,6 @@ bSunShadowsCharacters=0
         // The other JIP rows still follow the preset.
         assert!(choices[1].is_on(&JIP_GAME_PATCHES));
         assert!(!choices[0].is_on(&JIP_GAME_PATCHES));
-    }
-
-    /// nv-rs's guard for Tweaks' S0189.02 slip: on in the fixes preset, off in vanilla, its own
-    /// Fallout.ini line over both, and its install turns the engine's guard on.
-    #[test]
-    fn the_hit_ammunition_guard_follows_the_preset_and_sets_the_engines_guard() {
-        assert!(!Choice::vanilla().is_on(&STEWIE_HIT_AMMO));
-        assert!(Choice::from_parts(None, no_env)
-            .unwrap()
-            .is_on(&STEWIE_HIT_AMMO));
-        let off = with_ini(None, "[nv-rs Fixes]\nbStewieHitAmmoGuard=0\n", &[]);
-        assert!(!off.is_on(&STEWIE_HIT_AMMO));
-        let mut e = Engine::new();
-        assert!(!e.stewie_hit_ammo_guard());
-        (STEWIE_HIT_AMMO.install)(&mut e);
-        assert!(e.stewie_hit_ammo_guard());
     }
 
     /// lStewieAl's Tweaks: on in the fixes preset, off in vanilla, its own line or variable over

@@ -116,7 +116,7 @@ pub const ROWS: &[Row] = &[
         plan: "S0189.02",
         key: "bInventoryCalcWeaponDamageUseAmmoFixProjectile",
         tweaks: None,
-        summary: "changes play: a weapon's shown damage counts the explosion of the listed ammunition's projectile (a gun of damage 20 listed with a round exploding for 25, Guns 50: 22 shown before, 49.5 now); and every hit's damage and NPCs' choice of weapon count the explosion of the weapon's own projectile instead of the loaded ammunition's (in the game's data the .50 MG explosive round, the 40 mm and 25 mm grenade variants, the missile hive and the Fat Man variants; an anti-materiel rifle hit with explosive rounds at Guns 50: 209 before, 121 with the row), as with Tweaks alone; nv-rs's guard NV_STEWIE_HIT_AMMO (the fixes preset) keeps hits and NPCs' choices as in the original game",
+        summary: "changes play: a weapon's shown damage counts the explosion of the listed ammunition's projectile (a gun of damage 20 listed with a round exploding for 25, Guns 50: 22 shown before, 49.5 now); and every hit's damage and NPCs' choice of weapon count the explosion of the weapon's own projectile instead of the loaded ammunition's (in the game's data the .50 MG explosive round, the 40 mm and 25 mm grenade variants, the missile hive and the Fat Man variants; an anti-materiel rifle hit with explosive rounds at Guns 50: 209 before, 121 with the row), as Tweaks does",
     },
     Row {
         bit: stewie::DIALOGUE_ACTIVATE_NO_PACKAGE,

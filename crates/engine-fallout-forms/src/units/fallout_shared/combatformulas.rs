@@ -938,12 +938,9 @@ pub fn combat_formulas_calc_weapon_damage(
         // `0x644EF3` and `0x644F79` and the jump at `0x644F00`): Tweaks' `OnCalcDamageGetProjectile`
         // takes the projectile from the word at +0x18 (the ammunition S0189.01 passes) in place of
         // `00525ae0`, and the second lookup reuses the first's answer.
-        // nv-rs's guard for that row's slip (the host's fixes row `NV_STEWIE_HIT_AMMO`, a Tweaks
-        // slip not copied): a call with no ammunition passed (a hit through
-        // `GetModifiedAttackDamage`, `GetDesirability`) keeps the game's own lookup, where Tweaks'
-        // takes the weapon's own projectile first.
-        let from_ammo = e.stewie(engine_core::extend::stewie::WEAPON_DAMAGE_AMMO_PROJECTILE)
-            && !(ammo_word == 0 && e.stewie_hit_ammo_guard());
+        // The callers that pass no ammunition (a hit through `GetModifiedAttackDamage`,
+        // `GetDesirability`) then get the weapon's own projectile first, as with Tweaks.
+        let from_ammo = e.stewie(engine_core::extend::stewie::WEAPON_DAMAGE_AMMO_PROJECTILE);
         let first = if from_ammo {
             calc_damage_projectile(e, weapon, ammo_word, holder)
         } else {
@@ -2818,7 +2815,7 @@ mod tests {
         };
         assert_eq!(call(&mut e, true, true), 110.0);
         assert_eq!(call(&mut e, false, true), 55.0);
-        assert_eq!(call(&mut e, false, false), 27.5);
+        assert_eq!(call(&mut e, false), 27.5);
     }
 
     // ---- 00644680 ---------------------------------------------------------------------------------
@@ -3097,7 +3094,7 @@ mod tests {
     /// and S0189.02 (`two`) as given; `weapon_projectile` is the weapon's own (+0x118). Answers the
     /// shown damage, the projectiles whose explosion was asked, and how often `00525a90` was asked.
     fn s0189_shown(one: bool, two: bool, weapon_projectile: u32) -> (f32, Vec<u32>, usize) {
-        s0189_shown_with(one, two, weapon_projectile, 0x29, false, false)
+        s0189_shown_with(one, two, weapon_projectile, 0x29, false)
     }
 
     /// [`s0189_shown`] with the entry's "ammunition" of form type `ammo_type` (a throwing weapon's is
@@ -3110,10 +3107,8 @@ mod tests {
         weapon_projectile: u32,
         ammo_type: u8,
         flagged: bool,
-        guard: bool,
     ) -> (f32, Vec<u32>, usize) {
         let (mut e, _) = damage_world();
-        e.set_stewie_hit_ammo_guard(guard);
         let player = object(&mut e, 0x400);
         e.mem.set_u32(player.addr() + 0xa4, FAKE_TABLE);
         e.set_global(PLAYER_REFERENCE, player);
@@ -3176,9 +3171,9 @@ mod tests {
     /// (0x5000, asked once and reused), never of that word.
     #[test]
     fn s0189_a_throwing_weapons_own_form_is_not_read_as_ammunition() {
-        let (_, asked, lookups) = s0189_shown_with(true, true, 0, 0x28, false, false);
+        let (_, asked, lookups) = s0189_shown_with(true, true, 0, 0x28, false);
         assert_eq!((asked, lookups), (vec![0x5000, 0x5000], 2));
-        let (_, asked, lookups) = s0189_shown_with(true, true, 0x7000, 0x28, false, false);
+        let (_, asked, lookups) = s0189_shown_with(true, true, 0x7000, 0x28, false);
         assert_eq!((asked, lookups), (vec![0x7000, 0x7000], 0));
     }
 
@@ -3187,30 +3182,23 @@ mod tests {
     /// rows, that of the listed ammunition's (0x6000).
     #[test]
     fn s0189_the_flagged_weapons_call_passes_the_ammunition_too() {
-        let (_, asked, _) = s0189_shown_with(false, false, 0, 0x29, true, false);
+        let (_, asked, _) = s0189_shown_with(false, false, 0, 0x29, true);
         assert_eq!(asked, vec![0x5000, 0x5000]);
-        let (_, asked, _) = s0189_shown_with(true, true, 0, 0x29, true, false);
+        let (_, asked, _) = s0189_shown_with(true, true, 0, 0x29, true);
         assert_eq!(asked, vec![0x6000, 0x6000]);
     }
 
     /// S0189.02 for `CalcWeaponDamage`'s other callers (`GetModifiedAttackDamage` `004bdf71`,
     /// `GetDesirability`): the word at +0x18 is 0, the owner an actor's, the weapon has its own
     /// projectile (0x7000, explosion value 5) and the equipped ammunition another (0x5000, value 3,
-    /// through `00525a90`). Off, the hit's damage counts the equipped ammunition's explosion, and the
-    /// same with the row and nv-rs's guard (`NV_STEWIE_HIT_AMMO`, the fixes preset); with the row
-    /// and no guard, the weapon's own, as with Tweaks (its lookup takes the weapon's projectile first
-    /// when no ammunition is passed). The guard leaves the menu's fixed figure alone.
+    /// through `00525a90`). Off, the hit's damage counts the equipped ammunition's explosion; with the
+    /// row, the weapon's own, as with Tweaks (its lookup takes the weapon's projectile first when no
+    /// ammunition is passed).
     #[test]
     fn s0189_02_a_hit_counts_the_weapons_own_projectile() {
         let mut damages = vec![];
-        for (two, guard, projectile) in [
-            (false, false, 0x5000u32),
-            (false, true, 0x5000),
-            (true, true, 0x5000),
-            (true, false, 0x7000),
-        ] {
+        for (two, projectile) in [(false, 0x5000u32), (true, 0x7000)] {
             let (mut e, owner) = damage_world();
-            e.set_stewie_hit_ammo_guard(guard);
             e.set_global(SETTING_DAMAGE_SKILL_BASE, 0.25f32);
             e.set_global(SETTING_DAMAGE_SKILL_MULT, 0.5f32);
             let weapon = object_with_vtable(&mut e, 0x1000);
@@ -3249,18 +3237,10 @@ mod tests {
                 .filter(|c| c.0 == AMMO_GET_VALUE_FROM_OBJECT)
                 .map(|c| c.1[0])
                 .collect();
-            assert_eq!(
-                asked,
-                vec![projectile, projectile],
-                "row {two} guard {guard}"
-            );
+            assert_eq!(asked, vec![projectile, projectile], "row {two}");
             damages.push(damage);
         }
-        assert_eq!((damages[1], damages[2]), (damages[0], damages[0]));
-        assert!(damages[3] > damages[0], "{damages:?}");
-        // The guard leaves the menu's figure for a listed ammunition as the rows fix it.
-        let (_, asked, _) = s0189_shown_with(true, true, 0, 0x29, false, true);
-        assert_eq!(asked, vec![0x6000, 0x6000]);
+        assert!(damages[1] > damages[0], "{damages:?}");
     }
 
     /// S0189.01 and S0189.02 (`InventoryCalcWeaponDamageUseAmmoFix`): off, the shown damage takes

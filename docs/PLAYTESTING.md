@@ -179,7 +179,6 @@ Each also has a `[nv-rs Fixes]` key in `Fallout.ini` (`bUncap` ... `bNVSEListGua
 | `NV_JIP_GAME_PATCHES` | JIP game patches | `host/fixes.rs` (flag read by `jip`) |
 | `NV_MCM` | The Mod Configuration Menu's plugin built in (off in every preset) | `host/fixes.rs` (flag read by `mcm`) |
 | `NV_UIO` | UI Organizer built in (off in every preset) | `host/fixes.rs` (flag read by `uio`) |
-| `NV_STEWIE_HIT_AMMO` | Tweaks' hit ammunition slip not copied | `host/fixes.rs` (flag read by the S0189.02 row) |
 | `NV_NVSE_ERROR_GUARD` | Script error loop guard | `host/fixes.rs` |
 | `NV_NVSE_IMOD_CHECK` | Image-space event form check | `host/fixes.rs` |
 | `NV_NVSE_INVREF_CHECK` | Script reference checks | `host/fixes.rs` |
