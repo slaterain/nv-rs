@@ -461,7 +461,7 @@ pub fn install(e: &mut Engine, answers_installed: bool) {
 /// lights scripts attached come off their nodes (`gl::lights::pre_load`); the
 /// swapped LOD blocks go, with the hook; the extra cameras are destroyed
 /// (`jip_fn_misc_ref_cameras::pre_load`); the references keep their names (their flag set
-/// again); the model paths go, with the hook.
+/// again); the model paths go, with the hook; the minimap forgets its cells (`MiniMapLoadGame`).
 pub fn pre_load(e: &mut Engine) {
     if !state(e).event_informed.is_empty() {
         let ids = std::mem::take(&mut state(e).event_informed);
@@ -521,6 +521,8 @@ pub fn pre_load(e: &mut Engine) {
         }
         e.set_hook(Hook::GetModelPath, false);
     }
+    // JIP's `MiniMapLoadGame`: the minimap's cells and worlds forgotten.
+    crate::commands::jip_fn_minimap_update::load_game(e);
 }
 
 // ---- reads ----

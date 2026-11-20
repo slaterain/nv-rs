@@ -3,6 +3,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::units::fallout_interface::mapmenu::stewie_menus;
 
 /// The vtable of the `BSSimpleArray` instance with RTTI name `.?AV?$BSSimpleArray@PAVNiAVObject@@$0EAA@@` (read at the word before the vtable: its complete object locator, then the type descriptor).
 const ARRAY_VTABLE_01071AEC: u32 = 0x0107_1aec;
@@ -3290,6 +3291,267 @@ const WORD_AT_0X20: u32 = 0x007a_f430;
 /// `Actor::GetGoldAmount` (`this` only).
 const ACTOR_GOLD: u32 = 0x0089_1d70;
 
+/// The game heap (`011f6238`) and its allocate (`00aa3e40`: `this`, size): xNVSE's `GameHeapAlloc`.
+const GAME_HEAP: u32 = 0x011f_6238;
+const HEAP_ALLOCATE_00AA3E40: u32 = 0x00aa_3e40;
+/// `ExtraContainerChanges::EntryData`'s destroy (`004459e0`: `this`, 1): xNVSE's `Destroy`.
+const ENTRY_DATA_DESTROY_004459E0: u32 = 0x0044_59e0;
+/// `__RTDynamicCast` (`00ec43fb`, cdecl) and the RTTI of `TESForm` (`01183028`) and `TESFullName`
+/// (`01183158`): xNVSE's `DYNAMIC_CAST(form, TESForm, TESFullName)`.
+const DYNAMIC_CAST_00EC43FB: u32 = 0x00ec_43fb;
+const RTTI_TES_FORM: u32 = 0x0118_3028;
+const RTTI_TES_FULL_NAME: u32 = 0x0118_3158;
+/// `BaseExtraList::GetByType` (`00410220`: the list at a reference's +0x44, the type; 0x15 the
+/// container changes) and `ExtraContainerChanges::Data`'s count of an item (`004c8f30`).
+const EXTRA_GET_BY_TYPE_00410220: u32 = 0x0041_0220;
+const CHANGES_ITEM_COUNT_004C8F30: u32 = 0x004c_8f30;
+/// Stdcall (item, 0, 1): the item's pick-up sound name (`008adcf0`).
+const PICK_UP_SOUND_008ADCF0: u32 = 0x008a_dcf0;
+/// `QueueUIMessage` (`007052f0`, cdecl: text, icon type, icon path, sound, seconds, instant).
+const QUEUE_UI_MESSAGE_007052F0: u32 = 0x0070_52f0;
+/// The gift box icon `"glow_message_giftbox"` path Tweaks shows (`0101c140`).
+const GIFT_BOX_ICON_0101C140: u32 = 0x0101_c140;
+/// The game settings `sAddItemtoInventory` (`011d4e7c`) and `sPlural` (`011d3114`); a string
+/// setting's text pointer is at +4.
+const ADD_ITEM_SETTING: u32 = 0x011d_4e7c;
+const PLURAL_SETTING: u32 = 0x011d_3114;
+/// The data handler's barter container changes (`vendorContainer`, +0x628).
+const VENDOR_CONTAINER: u32 = 0x628;
+/// A reference's slots `RemoveItem` (+0x17C) and `AddItem` (+0x190), and its base form (+0x20).
+const SLOT_REMOVE_ITEM: u32 = 0x17c;
+const SLOT_ADD_ITEM: u32 = 0x190;
+/// Tweaks' `bHideCapsAddedMessages` (`[Tweaks]`): 0 in the code, the VNV INI and the VNV Extended
+/// INI. The setting reaches this crate with the Tweaks settings table; until then it reads as 0.
+const HIDE_CAPS_ADDED_MESSAGES: bool = false;
+
+/// A C string in guest memory, up to `limit` bytes.
+fn guest_text(e: &Engine, at: u32, limit: usize) -> Vec<u8> {
+    let mut text = vec![];
+    if at == 0 {
+        return text;
+    }
+    while text.len() < limit {
+        let byte = e.mem.u8(at + text.len() as u32);
+        if byte == 0 {
+            break;
+        }
+        text.push(byte);
+    }
+    text
+}
+
+/// xNVSE's `TESForm::GetTheName` as Tweaks calls it on an inventory item: a reference's base form
+/// (vtable +0xF0, `GetIsReference`; the base at +0x20), then its `TESFullName` (the dynamic cast)
+/// and that name's text when it has one, else `""`. (xNVSE's cell branch is not reached: Tweaks
+/// asks it only for the item types of [`stewie_payout_message`].)
+fn stewie_the_name(e: &mut Engine, form: u32) -> Vec<u8> {
+    let mut base = form;
+    if e.vcall(form, 0xf0, &args![]).bool() && e.mem.u32(form + 0x20) != 0 {
+        base = e.mem.u32(form + 0x20);
+    }
+    let full_name = e
+        .call(
+            DYNAMIC_CAST_00EC43FB,
+            &args![base, 0u32, RTTI_TES_FORM, RTTI_TES_FULL_NAME, 0u32],
+        )
+        .u32();
+    if full_name == 0 {
+        return vec![];
+    }
+    let data = e.mem.u32(full_name + 4);
+    if data == 0 || e.mem.u16(full_name + 8) == 0 {
+        return vec![];
+    }
+    guest_text(e, data, 0x1000)
+}
+
+/// lStewieAl's Tweaks' `CaravanDoublePayoutFix::TESContainer__QueueUIMessage_` (row S0092): for an
+/// inventory item (armour, book, light, misc, weapon, ammo, key, aid, recipe, weapon mod, casino
+/// chips, caravan card or caravan money) and a count other than 0, the corner message
+/// `"<name> <sAddItemtoInventory>"` (one) or `"<count> <name><sPlural> <sAddItemtoInventory>"`
+/// (`snprintf` into 260 bytes), with the gift box icon, the item's pick-up sound and 2 seconds.
+fn stewie_payout_message(e: &mut Engine, item: u32, count: i32) {
+    if item == 0 || count == 0 {
+        return;
+    }
+    let kind = e.mem.u8(item + 4);
+    if !matches!(
+        kind,
+        0x18 | 0x19 | 0x1e | 0x1f | 0x28 | 0x29 | 0x2e | 0x2f | 0x32 | 0x67 | 0x6c | 0x73 | 0x74
+    ) {
+        return;
+    }
+    let name = stewie_the_name(e, item);
+    let added = e.mem.u32(ADD_ITEM_SETTING + 4);
+    let added = guest_text(e, added, 0x1000);
+    let mut text = if count == 1 {
+        [name.as_slice(), b" ", added.as_slice()].concat()
+    } else {
+        let plural = e.mem.u32(PLURAL_SETTING + 4);
+        let plural = guest_text(e, plural, 0x1000);
+        [
+            count.to_string().as_bytes(),
+            b" ",
+            name.as_slice(),
+            plural.as_slice(),
+            b" ",
+            added.as_slice(),
+        ]
+        .concat()
+    };
+    text.truncate(259);
+    text.push(0);
+    let sound = e
+        .call(PICK_UP_SOUND_008ADCF0, &args![item, 0u32, 1u32])
+        .u32();
+    e.with_stack(0x104, |e, buffer| {
+        for (i, byte) in text.iter().enumerate() {
+            e.mem.set_u8(buffer.addr() + i as u32, *byte);
+        }
+        e.call(
+            QUEUE_UI_MESSAGE_007052F0,
+            &args![
+                buffer,
+                0u32,
+                GIFT_BOX_ICON_0101C140,
+                sound,
+                2.0f32.to_bits(),
+                0u32
+            ],
+        );
+    });
+}
+
+/// lStewieAl's Tweaks' `CaravanDoublePayoutFix::TESContainer__QueueUIMessage` (row S0092), called
+/// at `0x74CDB2` in place of the stack container's `MoveAllItems` (`004821a0`): only the message
+/// for the container's last entry (its count and form); the items are not moved there, since
+/// `RemoveItemBarterContainer` gives them to the player after.
+fn stewie_container_message(e: &mut Engine, container: u32) {
+    // `formCountList` at +4 (`tList`: data, next); its last node's data.
+    let mut node = container + 4;
+    while e.mem.u32(node + 4) != 0 {
+        node = e.mem.u32(node + 4);
+    }
+    let entry = e.mem.u32(node);
+    if entry == 0 {
+        return;
+    }
+    let count = e.mem.i32(entry);
+    let item = e.mem.u32(entry + 4);
+    stewie_payout_message(e, item, count);
+}
+
+/// xNVSE's `TESObjectREFR::GetItemCount` (Tweaks calls it on the challenger): the reference's
+/// container changes (extra data 0x15 of its list at +0x44, its data at +0xC), then the count of
+/// `form` (`004c8f30`), or for a form list (type 0x55) the sum over its forms (list at +0x18);
+/// 0 without container changes.
+fn stewie_item_count(e: &mut Engine, reference: u32, form: u32) -> i32 {
+    let extra = e
+        .call(
+            EXTRA_GET_BY_TYPE_00410220,
+            &args![reference + 0x44, 0x15u32],
+        )
+        .u32();
+    if extra == 0 {
+        return 0;
+    }
+    let data = e.mem.u32(extra + 0xc);
+    if data == 0 {
+        return 0;
+    }
+    if e.mem.u8(form + 4) != 0x55 {
+        return e
+            .call(CHANGES_ITEM_COUNT_004C8F30, &args![data, form])
+            .i32();
+    }
+    let mut total = 0i32;
+    let mut node = form + 0x18;
+    while node != 0 {
+        let item = e.mem.u32(node);
+        if item != 0 {
+            let count = e
+                .call(CHANGES_ITEM_COUNT_004C8F30, &args![data, item])
+                .i32();
+            total = total.wrapping_add(count);
+        }
+        node = e.mem.u32(node + 4);
+    }
+    total
+}
+
+/// lStewieAl's Tweaks' `CaravanDoublePayoutFix::CaravanWinAwardCaps` (row S0092), jumped to at
+/// `0x74CE21` in place of the exe's caps payment after a won game (the exe goes on at the
+/// function's end, `0x74D177`): a heap entry for the caps (xNVSE's `EntryData::Create(caps, 0)`:
+/// 0xC bytes and an empty 8-byte extra data list), the "caps added" message (unless
+/// `bHideCapsAddedMessages`), then the caps from the barter container (`RemoveItemBarterContainer`
+/// with the challenger's base form) as far as it holds them and the rest from the challenger
+/// (`RemoveItem` to the player) as far as it has them, the remainder added to the player
+/// (`AddItem`); the entry destroyed.
+fn stewie_award_caps(e: &mut Engine, this: Ptr<CaravanMenu>, caps_to_earn: i32) {
+    let menu = this.addr();
+    let caps = e.call(FORM_BY_ID, &args![CAPS_FORM_ID]).u32();
+    let entry = e
+        .call(HEAP_ALLOCATE_00AA3E40, &args![GAME_HEAP, 0xcu32])
+        .u32();
+    let list = e
+        .call(HEAP_ALLOCATE_00AA3E40, &args![GAME_HEAP, 8u32])
+        .u32();
+    e.mem.set_u32(list, 0);
+    e.mem.set_u32(list + 4, 0);
+    e.mem.set_u32(entry, list);
+    e.mem.set_u32(entry + 8, caps);
+    e.mem.set_u32(entry + 4, 0);
+    if !HIDE_CAPS_ADDED_MESSAGES {
+        stewie_payout_message(e, caps, caps_to_earn);
+    }
+    let handler = e.global::<u32>(DATA_HANDLER);
+    let vendor = e.mem.u32(handler + VENDOR_CONTAINER);
+    let in_container = e.call(GET_GOLD_AMOUNT, &args![vendor]).i32();
+    let challenger = word_at(e, menu, CHALLENGER);
+    let base = e.mem.u32(challenger + 0x20);
+    if caps_to_earn <= in_container {
+        e.call(
+            REMOVE_BARTER_ITEM,
+            &args![handler, entry, caps_to_earn as u32, base],
+        );
+    } else {
+        e.call(
+            REMOVE_BARTER_ITEM,
+            &args![handler, entry, in_container as u32, base],
+        );
+        let rest = caps_to_earn.wrapping_sub(in_container);
+        let challenger = word_at(e, menu, CHALLENGER);
+        let theirs = stewie_item_count(e, challenger, caps);
+        let player = e.global::<u32>(PLAYER);
+        let taken = if theirs >= rest { rest } else { theirs };
+        e.vcall(
+            challenger,
+            SLOT_REMOVE_ITEM,
+            &args![
+                caps,
+                0u32,
+                taken as u32,
+                0u32,
+                0u32,
+                player,
+                0u32,
+                0u32,
+                1u32,
+                0u32
+            ],
+        );
+        if theirs < rest {
+            let player = e.global::<u32>(PLAYER);
+            e.vcall(
+                player,
+                SLOT_ADD_ITEM,
+                &args![caps, 0u32, rest.wrapping_sub(theirs) as u32],
+            );
+        }
+    }
+    e.call(ENTRY_DATA_DESTROY_004459E0, &args![entry, 1u32]);
+}
+
 /// The money entries of an inventory-change list (form type 0x74, positive
 /// count): calls `pay(form, count, entry, value)` with each entry's count
 /// lowered to `remaining / value` when it would pay more than `remaining`,
@@ -3372,7 +3634,14 @@ pub fn fn_0074cc70(e: &mut Engine, this: Ptr<CaravanMenu>, won: u8) {
                 e.call(ENTRY_INIT, &args![entry]);
                 e.call(ENTRY_FILL, &args![entry, form, count, 0u32]);
                 let player = e.global::<u32>(PLAYER);
-                e.call(ENTRY_SET_ACTOR, &args![entry, player, 0u32]);
+                // 0x74CDB2: lStewieAl's Tweaks' row S0092 (`CaravanDoublePayoutFix`, "only print
+                // the ui message for moving them, since the items are transferred in a later
+                // call") shows the message in place of moving the items to the player.
+                if e.stewie(stewie_menus::CARAVAN_SINGLE_PAYOUT) {
+                    stewie_container_message(e, entry.addr());
+                } else {
+                    e.call(ENTRY_SET_ACTOR, &args![entry, player, 0u32]);
+                }
                 let challenger = word_at(e, menu, CHALLENGER);
                 let owner = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, challenger));
                 let data = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, node));
@@ -3382,7 +3651,10 @@ pub fn fn_0074cc70(e: &mut Engine, this: Ptr<CaravanMenu>, won: u8) {
                 e.call(ENTRY_DESTROY, &args![entry]);
             });
         });
-        if remaining != 0 {
+        if remaining != 0 && e.stewie(stewie_menus::CARAVAN_SINGLE_PAYOUT) {
+            // 0x74CE21: lStewieAl's Tweaks' row S0092 pays the rest in caps its own way (once).
+            stewie_award_caps(e, this, remaining);
+        } else if remaining != 0 {
             e.with_stack(0x18, |e, frame| {
                 let entry = frame.addr();
                 let change = frame.addr() + 0xc;
@@ -6845,7 +7117,17 @@ fn do_idle_frame(e: &mut Engine, this: Ptr<CaravanMenu>, ebp: u32) {
         y_bits: 0,
     };
     e.call(INTERFACE_SINGLETON, &args![]);
-    if e.call(KEYS_BLOCKED_004B71D0, &args![]).bool() {
+    // 0x741683: lStewieAl's Tweaks' row S0022.46 (`MenuFixes`, "prevent controller moving caravan
+    // selection while console is open") calls its `IsControllerModeAndNotConsoleOpen` in place of
+    // `004b71d0`: the stick is not read while the console is open. JIP LN NVSE's D04 dead zone
+    // seams (`0x7416D6`, `0x741705`) sit inside this test, so with both rows on JIP's dead zone is
+    // asked only while the console is closed.
+    let pad = if e.stewie(stewie_menus::CARAVAN_PAD_NOT_WITH_CONSOLE) {
+        stewie_menus::controller_and_no_console(e)
+    } else {
+        e.call(KEYS_BLOCKED_004B71D0, &args![]).bool()
+    };
+    if pad {
         let owner = e.global::<u32>(CONTROLS_OWNER);
         let controls = e.call(CONTROLS_INSTANCE, &args![owner]).u32();
         input.x = e
@@ -11616,5 +11898,314 @@ mod n052_tests {
             e.get(this, CaravanMenu::iFlags) & (CAF_DESTROY_TRACK | CAF_SELECT_TRACK),
             0
         );
+    }
+
+    /// The bytes Tweaks' `IsControllerModeAndNotConsoleOpen` reads: `isControllerDisabled`,
+    /// `isControllerConnected` and the console's open byte.
+    fn stewie_controls(e: &mut Engine, connected: u8, console: u8) {
+        e.map(0x011d_8000, 0x1000);
+        e.map(0x011d_e000, 0x1000);
+        e.mem.set_u8(stewie_menus::CONTROLLER_DISABLED, 0);
+        e.mem.set_u8(stewie_menus::CONTROLLER_CONNECTED, connected);
+        e.mem.set_u8(stewie_menus::CONSOLE_OPEN, console);
+    }
+
+    /// `DoIdle` in the deck menu with the stick's x at 20000: whether the stick was read, and
+    /// whether `004b71d0` was asked.
+    fn caravan_stick_read(e: &mut Engine, this: Ptr<CaravanMenu>) -> (bool, bool) {
+        e.set(this, CaravanMenu::eActiveMenu, 1);
+        idle_at(e, this, 0, 0.0);
+        e.register(CONTROLS_AXIS_00A23390, |_, a| {
+            ret(if a[2] == 7 { 20000 } else { 0 })
+        });
+        e.register(FLOAT_MAGNITUDE_00408820, |_, a| {
+            ret_f(f64::from(f32::from_bits(a[0]).abs()))
+        });
+        e.register(FLOAT_MAGNITUDE_00408840, |_, a| {
+            ret_f(f64::from(f32::from_bits(a[0]).abs()))
+        });
+        e.register(GET_FLOAT_TRAIT, |_, _| ret_f(7.0));
+        let menu = this.addr();
+        let deck: Vec<u32> = (0..13).map(|_| card(e, 1, 1, 0)).collect();
+        fill_array(e, menu + DECK_ARRAY, &deck);
+        e.mem.set_u32(menu + SELECTION_DELAY, 0.5f32.to_bits());
+        e.mem.set_u32(menu + PENDING_KEY, KEY_UP);
+        do_idle(e, this);
+        (
+            !calls_to(e, CONTROLS_AXIS_00A23390).is_empty(),
+            !calls_to(e, KEYS_BLOCKED_004B71D0).is_empty(),
+        )
+    }
+
+    /// Row S0022.46: off, `004b71d0` decides whether the stick is read; on, the pad must be
+    /// connected and the console closed (the exe's test is not asked).
+    #[test]
+    fn s0022_46_the_stick_is_not_read_with_the_console_open() {
+        for (on, keys, connected, console, read) in [
+            (false, 1, 1, 1, true),
+            (false, 0, 1, 0, false),
+            (true, 0, 1, 0, true),
+            (true, 1, 1, 1, false),
+            (true, 1, 0, 0, false),
+        ] {
+            let (mut e, this) = idle_engine();
+            e.set_stewie(stewie_menus::CARAVAN_PAD_NOT_WITH_CONSOLE, on);
+            stewie_controls(&mut e, connected, console);
+            e.register_double(KEYS_BLOCKED_004B71D0, move |_, _| ret(keys));
+            let case = (on, keys, connected, console);
+            let (stick, asked) = caravan_stick_read(&mut e, this);
+            assert_eq!(stick, read, "{case:?}");
+            // (`004b71d0` is asked elsewhere in DoIdle too, so only the row-off run is checked.)
+            if !on {
+                assert!(asked, "{case:?}");
+            }
+        }
+    }
+
+    /// Row S0022.46 with JIP's D04 seams (`0x7416D6`, `0x741705`), which sit inside the test the
+    /// row replaces, both on: with the console closed JIP's two dead zones are asked as without
+    /// the row; with it open the stick is not read and JIP is not asked.
+    #[test]
+    fn s0022_46_with_jips_d04_seams() {
+        use super::d04_test::{handlers, seen};
+        use engine_core::extend::jip_patches::INSTALLED;
+        let sites = [0x0074_16d6, 0x0074_1705];
+        for (console, expected) in [(0, &sites[..]), (1, &[][..])] {
+            let (mut e, this) = idle_engine();
+            handlers(&mut e, INSTALLED, &sites);
+            e.set_stewie(stewie_menus::CARAVAN_PAD_NOT_WITH_CONSOLE, true);
+            stewie_controls(&mut e, 1, console);
+            let (stick, _) = caravan_stick_read(&mut e, this);
+            assert_eq!(stick, console == 0, "console {console}");
+            assert_eq!(seen(), expected, "console {console}");
+        }
+    }
+
+    /// An inventory form of type `kind` named `name` for Tweaks' message: vtable +0xF0
+    /// (`GetIsReference`) answers 0; the dynamic cast to `TESFullName` answers a name struct
+    /// (text at +4, length at +8) registered in `names`.
+    fn named_form(e: &mut Engine, kind: u8, name: &str, names: &mut Vec<(u32, u32)>) -> u32 {
+        let table = e.mem.alloc(0x100);
+        e.mem.set_u32(table + 0xf0, 0x00d0_10f0);
+        e.register(0x00d0_10f0, |_, _| ret(0));
+        let form = e.mem.alloc(0x40);
+        e.mem.set_u32(form, table);
+        e.mem.set_u8(form + 4, kind);
+        let text = e.mem.alloc(0x40);
+        for (i, byte) in name.bytes().enumerate() {
+            e.mem.set_u8(text + i as u32, byte);
+        }
+        let full_name = e.mem.alloc(0x10);
+        e.mem.set_u32(full_name + 4, text);
+        e.mem.set_u16(full_name + 8, name.len() as u16);
+        names.push((form, full_name));
+        form
+    }
+
+    /// A guest C string with `text`.
+    fn guest_c_string(e: &mut Engine, text: &str) -> u32 {
+        let at = e.mem.alloc(0x40);
+        for (i, byte) in text.bytes().enumerate() {
+            e.mem.set_u8(at + i as u32, byte);
+        }
+        at
+    }
+
+    /// A won caravan game with an ante of 50: one money entry of 3 bills worth 20 each (two pay
+    /// 40), so 10 is left to pay in caps; the barter container holds `in_container` caps and the
+    /// challenger `theirs`. Answers the messages' texts (with their other words) and the engine.
+    fn won_payout(
+        on: bool,
+        in_container: u32,
+        theirs: u32,
+    ) -> (Engine, Vec<(String, Vec<u32>)>, [u32; 5]) {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let mut e = engine();
+        e.set_stewie(stewie_menus::CARAVAN_SINGLE_PAYOUT, on);
+        e.map(0x011d_3000, 0x2000);
+        let (this, player) = setup(&mut e);
+        let menu = this.addr();
+        let challenger = object_with_vtable(&mut e);
+        e.mem.set_u32(challenger + 0x20, 0x2020);
+        e.mem.set_u32(menu + CHALLENGER, challenger);
+        let vtable = e.mem.u32(challenger);
+        e.mem.set_u32(player, vtable);
+        e.mem.set_u32(menu + ANTE, 50);
+        let handler = e.mem.alloc(0x700);
+        e.set_global(DATA_HANDLER, handler);
+        let changes = e.mem.alloc(4);
+        e.mem.set_u32(handler + 0x628, changes);
+        let mut names = vec![];
+        let bill = named_form(&mut e, 0x74, "Bill", &mut names);
+        let caps = named_form(&mut e, 0x1f, "Bottle Cap", &mut names);
+        let node = e.mem.alloc(8);
+        let entry = e.mem.alloc(0xc);
+        e.mem.set_u32(changes, node);
+        e.mem.set_u32(node, entry);
+        e.mem.set_u32(entry + 4, 3);
+        e.mem.set_u32(entry + 8, bill);
+        e.register(FORM_TYPE, |_, _| ret(0x74));
+        e.register(GET_FORM_VALUE, |_, _| ret(20));
+        e.register_double(FORM_BY_ID, move |_, _| ret(caps));
+        e.register_double(GET_GOLD_AMOUNT, move |_, _| ret(in_container));
+        e.register(WORD_AT_0X20, |e, a| ret(e.mem.u32(a[0] + 0x20)));
+        // The stack container's fill keeps its form and count as its one entry (+4 data, +8 next).
+        e.register(ENTRY_FILL, |e, a| {
+            let count = e.mem.alloc(0xc);
+            e.mem.set_u32(count, a[2]);
+            e.mem.set_u32(count + 4, a[1]);
+            e.mem.set_u32(a[0] + 4, count);
+            e.mem.set_u32(a[0] + 8, 0);
+            Ret::default()
+        });
+        e.register_double(DYNAMIC_CAST_00EC43FB, move |_, a| {
+            assert_eq!(a[1..], [0, RTTI_TES_FORM, RTTI_TES_FULL_NAME, 0]);
+            ret(names
+                .iter()
+                .find(|(f, _)| *f == a[0])
+                .map_or(0, |(_, n)| *n))
+        });
+        let added = guest_c_string(&mut e, "added");
+        e.mem.set_u32(ADD_ITEM_SETTING + 4, added);
+        let plural = guest_c_string(&mut e, "s");
+        e.mem.set_u32(PLURAL_SETTING + 4, plural);
+        e.register(PICK_UP_SOUND_008ADCF0, |_, _| ret(0x5150));
+        e.register(HEAP_ALLOCATE_00AA3E40, |e, a| ret(e.mem.alloc(a[1])));
+        let extra = e.mem.alloc(0x10);
+        e.mem.set_u32(extra + 0xc, 0x4c4c);
+        e.register_double(EXTRA_GET_BY_TYPE_00410220, move |_, a| {
+            assert_eq!(a[1], 0x15);
+            ret(extra)
+        });
+        e.register_double(CHANGES_ITEM_COUNT_004C8F30, move |_, a| {
+            assert_eq!(a[0], 0x4c4c);
+            ret(theirs)
+        });
+        e.register(ENTRY_DATA_DESTROY_004459E0, |_, _| Ret::default());
+        let texts: Rc<RefCell<Vec<(String, Vec<u32>)>>> = Rc::default();
+        let seen = texts.clone();
+        e.register_double(QUEUE_UI_MESSAGE_007052F0, move |e, a| {
+            let text: String = guest_text(e, a[0], 0x200)
+                .into_iter()
+                .map(char::from)
+                .collect();
+            seen.borrow_mut().push((text, a[1..6].to_vec()));
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0074_cc70, &args![this, 1u8]);
+        let messages = texts.borrow().clone();
+        (e, messages, [handler, player, challenger, caps, entry])
+    }
+
+    /// Row S0092 off: the exe's won payout, the money moved to the player (`004821a0`) and given
+    /// again from the barter container, the caps paid the exe's way, no message of Tweaks'.
+    #[test]
+    fn s0092_off_the_exe_pays_twice() {
+        let (e, messages, [handler, player, _, _, entry]) = won_payout(false, 5, 3);
+        assert!(messages.is_empty());
+        let moved = calls_to(&e, ENTRY_SET_ACTOR);
+        assert_eq!(moved.len(), 2, "the money and the caps moved to the player");
+        assert!(moved.iter().all(|c| c[1] == player));
+        assert_eq!(
+            calls_to(&e, REMOVE_BARTER_ITEM)[0],
+            vec![handler, entry, 2, 0x2020]
+        );
+        assert!(calls_to(&e, HEAP_ALLOCATE_00AA3E40).is_empty());
+    }
+
+    /// Row S0092 on, the barter container short of caps (5 of 10) and the challenger short too
+    /// (3): the money's message in place of its move, then Tweaks' caps award: the message, 5
+    /// from the container, the challenger's 3 to the player, the last 2 added to the player, the
+    /// heap entry destroyed. Nothing is moved by `004821a0`.
+    #[test]
+    fn s0092_on_pays_once_with_messages() {
+        let (e, messages, [handler, player, challenger, caps, _]) = won_payout(true, 5, 3);
+        assert!(calls_to(&e, ENTRY_SET_ACTOR).is_empty());
+        let words = vec![0, GIFT_BOX_ICON_0101C140, 0x5150, 2.0f32.to_bits(), 0];
+        assert_eq!(
+            messages,
+            vec![
+                ("2 Bills added".to_string(), words.clone()),
+                ("10 Bottle Caps added".to_string(), words),
+            ]
+        );
+        let allocations = calls_to(&e, HEAP_ALLOCATE_00AA3E40);
+        assert_eq!(allocations, vec![vec![GAME_HEAP, 0xc], vec![GAME_HEAP, 8]]);
+        let removed = calls_to(&e, REMOVE_BARTER_ITEM);
+        assert_eq!(removed.len(), 2);
+        let caps_entry = removed[1][1];
+        assert_eq!(removed[1], vec![handler, caps_entry, 5, 0x2020]);
+        assert_eq!(e.mem.u32(caps_entry + 4), 0);
+        assert_eq!(e.mem.u32(caps_entry + 8), caps);
+        let list = e.mem.u32(caps_entry);
+        assert_eq!((e.mem.u32(list), e.mem.u32(list + 4)), (0, 0));
+        assert_eq!(
+            calls_to(&e, 0x00d0_017c),
+            vec![vec![challenger, caps, 0, 3, 0, 0, player, 0, 0, 1, 0]]
+        );
+        assert_eq!(calls_to(&e, 0x00d0_0190), vec![vec![player, caps, 0, 2]]);
+        assert_eq!(
+            calls_to(&e, ENTRY_DATA_DESTROY_004459E0),
+            vec![vec![caps_entry, 1]]
+        );
+    }
+
+    /// Row S0092 on: the challenger holding enough gives the rest (5) to the player, nothing is
+    /// added; a barter container holding all 10 pays them alone.
+    #[test]
+    fn s0092_on_takes_the_rest_from_whoever_has_it() {
+        let (e, _, [handler, player, challenger, caps, _]) = won_payout(true, 5, 9);
+        assert_eq!(
+            calls_to(&e, 0x00d0_017c),
+            vec![vec![challenger, caps, 0, 5, 0, 0, player, 0, 0, 1, 0]]
+        );
+        assert!(calls_to(&e, 0x00d0_0190).is_empty());
+        let (e, _, [handler2, ..]) = won_payout(true, 10, 0);
+        let removed = calls_to(&e, REMOVE_BARTER_ITEM);
+        assert_eq!(removed[1][..1], [handler2]);
+        assert_eq!(removed[1][2], 10);
+        assert!(calls_to(&e, 0x00d0_017c).is_empty());
+        assert!(calls_to(&e, EXTRA_GET_BY_TYPE_00410220).is_empty());
+        let _ = handler;
+    }
+
+    /// Tweaks' message leaves out forms that are not inventory items and a count of 0, and says
+    /// one item without a count or plural.
+    #[test]
+    fn s0092_message_types_and_counts() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let mut e = engine();
+        e.map(0x011d_3000, 0x2000);
+        let mut names = vec![];
+        let weapon = named_form(&mut e, 0x28, "Varmint Rifle", &mut names);
+        let npc = named_form(&mut e, 0x2a, "Benny", &mut names);
+        e.register_double(DYNAMIC_CAST_00EC43FB, move |_, a| {
+            ret(names
+                .iter()
+                .find(|(f, _)| *f == a[0])
+                .map_or(0, |(_, n)| *n))
+        });
+        let added = guest_c_string(&mut e, "added");
+        e.mem.set_u32(ADD_ITEM_SETTING + 4, added);
+        e.register(PICK_UP_SOUND_008ADCF0, |_, _| ret(0x5150));
+        let texts: Rc<RefCell<Vec<String>>> = Rc::default();
+        let seen = texts.clone();
+        e.register_double(QUEUE_UI_MESSAGE_007052F0, move |e, a| {
+            seen.borrow_mut().push(
+                guest_text(e, a[0], 0x200)
+                    .into_iter()
+                    .map(char::from)
+                    .collect(),
+            );
+            Ret::default()
+        });
+        stewie_payout_message(&mut e, weapon, 1);
+        stewie_payout_message(&mut e, weapon, 0);
+        stewie_payout_message(&mut e, npc, 2);
+        stewie_payout_message(&mut e, 0, 2);
+        assert_eq!(*texts.borrow(), vec!["Varmint Rifle added".to_string()]);
     }
 }

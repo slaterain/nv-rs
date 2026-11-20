@@ -1045,9 +1045,18 @@ With the switch on:
   for it then: the small cell extent for `uGridsToLoad` up to 5, JIP's own update of the cells' seen
   bits (the fog of war) in place of the game's, the found location's name with the minimap's markers of
   its cell let go, flags when the quest targets or the placed marker change, and the local maps'
-  texture format reset with the renderer. `UpdateMiniMap`, which draws the map, comes next. JIP 57.30
-  writes no cache of local map pictures (its `SaveLocalMapTexture` is not called: the calls are
-  commented out), so the port writes none either.
+  texture format reset with the renderer. `UpdateMiniMap` draws the map as JIP does: the zoom, the
+  world map's markers by cell around the player, the nine local maps (the cells around the player, or
+  an interior's sections) drawn into JIP's own textures and kept (at most 60, then the oldest let go
+  down to 42), the fog of war over them, the door and quest markers, and the player's marker turned.
+  JIP 57.30 writes no cache of local map pictures (its `SaveLocalMapTexture` is not called: the calls
+  are commented out), so the port writes none either. Three JIP slips are not copied: JIP keeps
+  pointers to its world marker tiles while the list holding them can grow and move, so a cell's markers
+  could point at freed memory (the port keeps their places in the list); a kept map drawn again frees
+  its old texture while JIP's "first map" can still point at it, so the clean-up above 60 maps could
+  start from freed memory and delete the newest maps (the port moves "first" on before the old texture
+  goes); and a local map slot with no cell keeps its old texture, which the clean-up or a colour change
+  may have deleted (the port clears it, as `InitMiniMap` leaves it).
 
 Not yet, with the switch on:
 - The 23 commands not built yet are named and found like the others but have no handler: a script
@@ -1772,12 +1781,39 @@ saves, audio media and the radio. None yet.
 #### AI, actors and the player
 
 Actors, their AI processes, combat, packages, projectiles, the player character, animation and the
-model loader. None yet.
+model loader.
+
+| Row (Tweaks' function) | PLAN | Key in `[nv-rs Stewie]` | Exe places | What a player gets |
+|---|---|---|---|---|
+| `patchFixCrippledLimbAnimsNotUpdatingIfLimbsFixed` | S0147 | `bFixCrippledLimbAnimsNotUpdatingIfLimbsFixed` | `Actor::MobilityConditionModifiedCallback` `008b9830` (`0x8B9950`) | When a leg's crippled state changes, the walk is chosen again (crippled while either leg is), so healing a crippled leg brings the normal walk back, where the exe's choice kept the limp |
+| `patchFixInfiniteNPCLoopingReloads` | S0159 | `bFixInfiniteNPCLoopingReloads` | `008ba600` (`0x8BAB65`) | An NPC whose reload would load more rounds than it carries does not reload again, where the exe's equality test let it reload in a loop |
+| `MineDisarmedLightLoadingFix` | S0180 | `bMineDisarmedLightLoadingFix` | `Projectile::LoadGame` `009c52f0` (`0x9C5723`) | Loading a save runs the projectile's light update (`009b46c0`) before its impact byte is read, so a mine's light (its `##LightOn` block) shows correctly again |
+| `EnduranceHealthRestoreFix` | S0205 | `bEnduranceHealthRestoreFix` | `ValueModifierEffect::Start` `0082c000` (`0x82C221`); `Actor::EnduranceModifiedCallback` `008b9ea0` (`0x8B9EFC`) | An Endurance drop kills an actor only at 0 health or less, where the exe kills at 1 or less, and an Endurance drop no longer restores health. Changes play |
+| `CreatureDRFix` | S0206 | `bCreatureDRFix` | `Creature`'s vtable slot `010874E8` (`008d4cc0`, its only reference) | A creature's total DR is its Damage Resistance's damage value plus its permanent value (plus its own value when it has one). The exe totals its own value when it has one (otherwise the base value) plus the permanent value, the temporary one and the damage, counting a creature's DR twice: a creature with no value of its own, base 10, permanent 1, temporary 2 and damage 0.5 goes from 13.5 to 1.5, one with its own value 4 from 7.5 to 5.5. Changes play: creatures take more damage than in the game. Also follows Tweaks' own `[INI] bFixCreatureDoubledDR` (main INI only, code default 1): off when the player's Tweaks INI sets it to 0 |
+| `NonHitscanProjectileSplashFix` | S0207 | `bNonHitscanProjectileSplashFix` | `009bf370` (`0x9BF461`) | A projectile that is not hitscan sets its direction as the exe does and then gives its physics body the character controller's velocity, so water sees it move (splashes) |
+| `RagdollControllerUpdateFix` | S0217 | `bRagdollControllerUpdateFix` | `008bcdf0` (`0x8BCED5`) | The player's ragdoll update keeps "wanted" in first person, so the leg IK is no longer reset when switching views |
+| `DeathAnimFix` | S0221 | `bDeathAnimFix` | `008ba600` (`0x8BA6EA`) | Before the death group (0xe0) is played, the animation's group 1 is cleared (`Animation::ClearGroup(1, 0.0)`), so the death animation plays even while a movement animation is easing out, where the exe's play gives up |
+| `ArmorUpdateFix` | S0229 | `bArmorUpdateFix` | `008d4e80` (a jump at its entry) | When an actor's (NPC's or creature's) armour changes, its total DR and DT are reset as the exe does, and its AI process's cached DR and DT are also marked out of date, so they follow the new armour at once (for the player the recompute gives the same value). Changes play: NPCs' and creatures' DR and DT keep up with their armour |
 
 #### Menus and the HUD
 
 Every menu but the interface manager's and the console's, the HUD, tiles, fonts and the
-controller's input. None yet.
+controller's input.
+
+| Row (Tweaks' function) | PLAN | Key in `[nv-rs Stewie]` | Exe places | What a player gets |
+|---|---|---|---|---|
+| `MenuFixes` (quest scroll) | S0022.09 | `bMenuFixesQuestScroll` | `MapMenu::UpdateQuests` `0079b8e0` (`0x79BBD0`) | Selecting a quest on the Pip-Boy map keeps the quest list's scroll position when the mouse has moved (the quest is focused only with the pad or a mouse that has not moved since the keys were used) |
+| `MenuFixes` (debug lock pick) | S0022.13 | `bMenuFixesDebugLockPickHealth` | `LockPickMenu::Create` `0078db00` (`0x78DEC2`) | The debug lock pick menu's caption shows the pick's real health (`PICK HEALTH: 37%`) instead of always 100% |
+| `MenuFixes` (map drag) | S0022.19 | `bMenuFixesMapDragUndiscovered` | `MapMenu::DoClick` `00796fd0` (`0x797FCF`, `0x797FFE`) | Clicking and dragging the local map over an undiscovered place no longer shows `sNoFastTravelUndiscovered` |
+| `MenuFixes` (pad markers) | S0022.25 | `bMenuFixesMapPadMarker` | `MapMenu::DoGamepad` `00799790` (`0x799A14`) | The pad's X places a map marker while the stick moves the map. JIP LN NVSE's dead zone seam in the same function (`0x799861`, D04) acts as before |
+| `MenuFixes` (companion labels) | S0022.26 | `bMenuFixesCompanionLabelClips` | `MapMenu::AddCompanionMarkers` `0079ea30` (`0x79F1D7`) | Companion names on the world map are clipped to the map when first made (the game set it only on a zoom) |
+| `MenuFixes` (roulette texts) | S0022.27 | `bMenuFixesRouletteZeroBetText` | `RouletteMenu::PrepareBetTiles` `007b9c40` (`0x7BA10F`, `0x7BA208`, `0x7BA2CB`) | The three roulette bets that include 0 or 00 with other numbers show the bet's caption first, then their numbers |
+| `MenuFixes` (pad selection box) | S0022.31 | `bMenuFixesMapPadSelectionCentred` | `MapMenu::DoControllerSwitch` `0079a610` (`0x79A636`, `0x79A652`) | Switching to the pad centres the map's marker selection box in its parent (nothing for a box without the value, where Tweaks reads through a null pointer) |
+| `MenuFixes` (companion markers) | S0022.41 | `bMenuFixesCompanionMarkersReset` | `MapMenu::AddCompanionMarkers` (`0x79EA73`) | Companion marker triangles left on the map are taken off before the markers are made again |
+| `MenuFixes` (caravan and console) | S0022.46 | `bMenuFixesCaravanPadConsole` | `CaravanMenu::DoIdle` `00741500` (`0x741683`) | The pad does not move the caravan selection while the console is open. JIP LN NVSE's dead zone seams inside that test (`0x7416D6`, `0x741705`, D04) are asked only while the console is closed |
+| `CaravanDoublePayoutFix` | S0092 | `bCaravanDoublePayoutFix` | the caravan payout `0074cc70` (`0x74CDB2`, `0x74CE21`) | **Changes payouts.** A won caravan game pays the ante once: the game moved the bills and caps to the player and then gave them again from the barter container. Now the barter container's caps come first, then the challenger's (to the player), the rest is added to the player, and a corner message says each payment. Tweaks' `bHideCapsAddedMessages` (0 in VNV) reads as 0 here until its own row (S0884) is built |
+| `RouletteMenuFixes` (zero) | S0196.04 | `bRouletteMenuFixesZeroWins` | `RouletteMenu::DoIdle` `007bd2a0` (`0x7BDCE4`) | **Changes payouts.** A roulette bet on a tile that includes 0 (bet tiles 0, 24, 48, 72, 145, 146) wins when the ball lands on 0; the game lost it |
+| `RouletteMenuFixes` (cut bet) | S0196.05 | `bRouletteMenuFixesCutBetValue` | `RouletteMenu::DoIdle` (`0x7BEB9B`, `0x7BEBBD`) | A bet cut down to the chips left updates the bet's number, not the `sCurrentBet` caption |
 
 ## Credits
 

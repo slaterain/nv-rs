@@ -35,6 +35,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::units::fallout_interface::mapmenu::stewie_menus;
 
 /// `LockPickMenu`'s class id (`GetClass`, `0078e080`).
 const LOCK_PICK_MENU_CLASS: u32 = 0x3f6;
@@ -602,6 +603,32 @@ fn resize_root(e: &mut Engine, root: u32) {
     }
 }
 
+/// lStewieAl's Tweaks' `MenuFixes::OnDebugLockPickHealthDisplayInit` (row S0022.13, "fix the
+/// debug lockpick menu always starting showing 100% pick health instead of the actual health"),
+/// called at `0x78DEC2` in place of the debug caption's `Tile::SetString`: the caption becomes
+/// `"PICK HEALTH: %d%%"` (`snprintf` into 0x20 bytes) with the open menu's pick health times 100
+/// cut to a whole number (`int(pinHealth * 100)`: a float product, truncated; a value out of
+/// range gives the CPU's 0x80000000), set as `string` (0xFC4) with the tile's reactions updated.
+fn stewie_debug_pick_health(e: &mut Engine, tile: u32) {
+    let menu: u32 = e.global(LOCK_PICK_MENU_ME);
+    let health = f32::from_bits(e.mem.u32(menu + PICK_HEALTH));
+    let percent = health * 100.0;
+    let shown = if (-2_147_483_648.0..2_147_483_648.0).contains(&percent) {
+        percent as i32
+    } else {
+        i32::MIN
+    };
+    let mut text = format!("PICK HEALTH: {shown}%").into_bytes();
+    text.truncate(0x1f);
+    text.push(0);
+    e.with_stack(0x20, |e, buffer| {
+        for (i, byte) in text.iter().enumerate() {
+            e.mem.set_u8(buffer.addr() + i as u32, *byte);
+        }
+        e.call(TILE_SET_STRING, &args![tile, 0xfc4u32, buffer, 1u32]);
+    });
+}
+
 // Translated from 0078db00 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 0078db00 - the C++ exception-unwinding frame (FS:[0]) that releases the sound handle when a call throws, and the /GS stack cookie check (00ec408c), are not translated
 /// `LockPickMenu::Create` (Xbox PDB), `cdecl (target, level, flag)`: the
@@ -731,7 +758,11 @@ fn create_contents(e: &mut Engine, root: u32, target: u32, level: u32, flag: u32
     e.call(TILE_SET_STRING, &args![tile, value_trait, level_name, 1u32]);
     let menu = me(e);
     let tile = tile_at(e, menu, 12);
-    e.call(TILE_SET_STRING, &args![tile, 0xfc4u32, TEXT_74418, 1u32]);
+    if e.stewie(stewie_menus::LOCKPICK_DEBUG_HEALTH) {
+        stewie_debug_pick_health(e, tile);
+    } else {
+        e.call(TILE_SET_STRING, &args![tile, 0xfc4u32, TEXT_74418, 1u32]);
+    }
     let value_trait: u32 = e.global(USER_TRAIT_VALUE);
     let menu = me(e);
     let tile = tile_at(e, menu, 1);
@@ -3887,5 +3918,71 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x0079_0330, &args![this, 4u32, 0u32]);
         assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    /// Row S0022.13: the debug caption (tile 12) is the menu's pick health as Tweaks prints it
+    /// (`"PICK HEALTH: %d%%"`, the float times 100 cut to a whole number) with the row on; off,
+    /// the exe's fixed text (`01074418`, the 100% one).
+    #[test]
+    fn s0022_13_the_debug_caption_shows_the_pick_health() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        for (on, health, shown) in [
+            (false, 0.375f32, None),
+            (true, 0.375, Some("PICK HEALTH: 37%")),
+            (true, 1.0, Some("PICK HEALTH: 100%")),
+            (true, 0.999, Some("PICK HEALTH: 99%")),
+            (true, 0.0, Some("PICK HEALTH: 0%")),
+            (true, -0.5, Some("PICK HEALTH: -50%")),
+            (true, f32::NAN, Some("PICK HEALTH: -2147483648%")),
+            (true, 1e30, Some("PICK HEALTH: -2147483648%")),
+        ] {
+            let mut e = world();
+            e.set_stewie(stewie_menus::LOCKPICK_DEBUG_HEALTH, on);
+            let this = menu(&mut e);
+            e.mem.set_u32(this + PICK_HEALTH, health.to_bits());
+            e.register(TILE_READ_FILE, |_, _| ret(0x6000));
+            e.register_double(TILE_GET_MENU, move |_, _| ret(this));
+            e.register(CLAMP_LOW_647B70, |_, a| ret(a[0]));
+            e.register(CLAMP_HIGH_4A8F20, |_, a| ret(a[0]));
+            e.register(COMPARE_STRINGS, |_, _| ret(1));
+            e.register(TILE_GET_CHILD_BY_NAME, |_, a| ret(a[1] & 0xffff));
+            e.register(GET_FORCE_LOCK_CHANCE, |_, _| ret(33));
+            let texts: Rc<RefCell<Vec<(Vec<u32>, String)>>> = Rc::default();
+            let seen = texts.clone();
+            e.register_double(TILE_SET_STRING, move |e, a| {
+                let mut text = String::new();
+                let mut at = a[2];
+                if at == 0 {
+                    return Ret::default();
+                }
+                while text.len() < 0x40 && e.mem.u8(at) != 0 {
+                    text.push(char::from(e.mem.u8(at)));
+                    at += 1;
+                }
+                seen.borrow_mut().push((a[..4].to_vec(), text));
+                Ret::default()
+            });
+            e.call_log = Some(vec![]);
+            e.call(0x0078_db00, &args![0u32, 3u32, 0x101u32]);
+            let tile_12 = 0x9000 + 0x10 * 12;
+            let caption: Vec<_> = texts
+                .borrow()
+                .iter()
+                .filter(|(words, _)| words[0] == tile_12)
+                .cloned()
+                .collect();
+            assert_eq!(caption.len(), 1, "row {on}, {health}");
+            let (words, text) = &caption[0];
+            assert_eq!(words[1], 0xfc4, "row {on}, {health}");
+            assert_eq!(words[3], 1, "row {on}, {health}");
+            match shown {
+                None => assert_eq!(words[2], TEXT_74418),
+                Some(wanted) => {
+                    assert_ne!(words[2], TEXT_74418);
+                    assert_eq!(text, wanted, "{health}");
+                }
+            }
+        }
     }
 }
