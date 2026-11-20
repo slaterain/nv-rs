@@ -46,13 +46,16 @@ pub enum Point {
     WaitIn,
     /// `WaitForThreads` returned.
     WaitOut,
+    /// The host took the frame's marks (`host::hitch_log::take_stages`, after main's frame handed the engine back):
+    /// the game's tail after `WaitForThreads` ends here, the host's own time between two frames starts.
+    Host,
 }
 
 /// How many points there are.
-pub const POINTS: usize = 10;
+pub const POINTS: usize = 11;
 
 /// The stages: (column, the point that starts it, the point that ends it).
-pub const SEGMENTS: [(Column, Point, Point); 13] = [
+pub const SEGMENTS: [(Column, Point, Point); 15] = [
     (Column::U, Point::Idle, Point::SwapIn),
     (Column::S1, Point::SwapIn, Point::DrawIn),
     (Column::R, Point::DrawIn, Point::DrawOut),
@@ -66,6 +69,8 @@ pub const SEGMENTS: [(Column, Point, Point); 13] = [
     (Column::P2, Point::WaitOut, Point::Idle),
     (Column::CutToIdle, Point::Cut, Point::Idle),
     (Column::DrawEndToIdle, Point::DrawEnd, Point::Idle),
+    (Column::GameTail, Point::WaitOut, Point::Host),
+    (Column::HostGap, Point::Host, Point::Idle),
 ];
 
 /// The joins of the drawing thread with a column of their own (exe addresses of the functions whose entry joins,
@@ -111,6 +116,10 @@ pub enum Column {
     P2,
     CutToIdle,
     DrawEndToIdle,
+    /// The game's frame after `WaitForThreads` until the host took the marks.
+    GameTail,
+    /// The host's time between two of main's frames (from its take to the next `OnIdle`).
+    HostGap,
     // Steps (scopes).
     WorldPass,
     WorldDrawFirst,
@@ -165,6 +174,8 @@ pub const NAMES: [&str; COLUMNS] = [
     "st_p2",
     "st_cut_to_idle",
     "st_draw_end_to_idle",
+    "st_game_tail",
+    "st_host_gap",
     "world_pass_00873200",
     "world_draw_00b6ba20",
     "world_draw_00b6b930",

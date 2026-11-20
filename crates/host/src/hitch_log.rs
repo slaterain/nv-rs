@@ -206,8 +206,9 @@ pub struct Frame {
     pub menu: bool,
     pub place: String,
     /// The stages (ms): update, before the draw, the draw before the world, the world draw, after it, Present (the
-    /// swap's tail), after Present (main's waits for its threads included).
-    pub stages: Option<[f64; 7]>,
+    /// swap's tail), after Present (main's waits for its threads included), the game's tail after `WaitForThreads`,
+    /// the host's time between the last frame and this one.
+    pub stages: Option<[f64; 9]>,
     pub game: Vec<u64>,
     pub stream: Vec<u64>,
     pub longest_wait: (u64, WaitKind, u32),
@@ -217,7 +218,7 @@ pub struct Frame {
     pub longest_left_out: f64,
 }
 
-const STAGE_NAMES: [&str; 8] = [
+const STAGE_NAMES: [&str; 10] = [
     "update",
     "before draw",
     "culling and set-up",
@@ -225,11 +226,13 @@ const STAGE_NAMES: [&str; 8] = [
     "after world",
     "present",
     "after present",
-    "time between frames",
+    "frame tail",
+    "host between frames",
+    "unmeasured",
 ];
 
 /// The stages (ms) from the stage marks' take (µs per column).
-pub fn stages_of(v: &[(f64, u64)]) -> [f64; 7] {
+pub fn stages_of(v: &[(f64, u64)]) -> [f64; 9] {
     let us = |c: Column| v.get(c as usize).map_or(0.0, |x| x.0);
     [
         us(Column::U),
@@ -239,6 +242,8 @@ pub fn stages_of(v: &[(f64, u64)]) -> [f64; 7] {
         us(Column::PassTail) + us(Column::AfterPass),
         us(Column::S2),
         us(Column::P1) + us(Column::W),
+        us(Column::GameTail),
+        us(Column::HostGap),
     ]
     .map(|x| x / 1000.0)
 }
@@ -246,7 +251,12 @@ pub fn stages_of(v: &[(f64, u64)]) -> [f64; 7] {
 /// The stage marks of the frame just ended (taken once a frame for the hitch log and the frame log), when the
 /// points are timed.
 pub fn take_stages() -> Option<[(f64, u64); engine_core::stage_time::COLUMNS]> {
-    engine_core::stage_time::points_on().then(engine_core::stage_time::take)
+    if !engine_core::stage_time::points_on() {
+        return None;
+    }
+    // The game's frame tail ends and the host's time between frames starts here.
+    engine_core::stage_time::point(engine_core::stage_time::Point::Host);
+    Some(engine_core::stage_time::take())
 }
 
 /// Whether a frame is judged, and whether it is the first after a load: a frame that ends on a loading screen, in
@@ -368,11 +378,11 @@ impl Frame {
         self.stream.get(c as usize).copied().unwrap_or(0)
     }
 
-    /// The stages with the time between the game's frames (the frame less the stages: the host's work between two
-    /// of main's frames, the hand-back, and the part of main's frame after `WaitForThreads`).
-    fn stages8(&self, st: [f64; 7]) -> [f64; 8] {
-        let between = (self.ms - st.iter().sum::<f64>()).max(0.0);
-        std::array::from_fn(|i| if i < 7 { st[i] } else { between })
+    /// The stages with what they leave unmeasured (the frame less the stages: the clock's grain, and a frame whose
+    /// points were not all passed, such as a load's).
+    fn stages_all(&self, st: [f64; 9]) -> [f64; 10] {
+        let rest = (self.ms - st.iter().sum::<f64>()).max(0.0);
+        std::array::from_fn(|i| if i < 9 { st[i] } else { rest })
     }
 
     /// Main's wait for the render thread (ns): in Present, for replies, for room in the queue.
@@ -539,17 +549,21 @@ impl Frame {
         if self.g(Count::Saves) == 0 && explained < excess / 2.0 {
             if let Some(st) = self.stages {
                 let (i, m) = self
-                    .stages8(st)
+                    .stages_all(st)
                     .into_iter()
                     .enumerate()
                     .max_by(|a, b| a.1.total_cmp(&b.1))
-                    .expect("eight stages");
+                    .expect("ten stages");
                 let none = if strong.is_empty() {
                     " with no one-off work counted"
                 } else {
                     ""
                 };
-                out.push(format!("the {} took {m:.0} ms{none}", STAGE_NAMES[i]));
+                out.push(if i == 9 {
+                    format!("{m:.0} ms fell outside the measured stages{none}")
+                } else {
+                    format!("the {} took {m:.0} ms{none}", STAGE_NAMES[i])
+                });
             }
         }
         if out.is_empty() {
@@ -579,7 +593,7 @@ impl Frame {
         if let Some(st) = self.stages {
             let parts: Vec<String> = STAGE_NAMES
                 .iter()
-                .zip(self.stages8(st))
+                .zip(self.stages_all(st))
                 .map(|(n, m)| format!("{n} {m:.1}"))
                 .collect();
             l += &format!("; stages ms: {}", parts.join(", "));
@@ -1149,7 +1163,7 @@ mod tests {
             frame: 15431,
             secs: 312.4,
             place: "GoodspringsWorld? WastelandNV (0x000da726) grid (-19, 1)".into(),
-            stages: Some([40.1, 0.2, 3.1, 6.0, 1.2, 2.3, 11.0]),
+            stages: Some([40.1, 0.2, 3.1, 6.0, 1.2, 2.3, 11.0, 0.0, 0.0]),
             game: vec![0; COUNTS],
             stream: vec![0; engine_platform::stream_hitch::COUNTS],
             ..Frame::default()
@@ -1205,10 +1219,16 @@ mod tests {
         let mut f = frame();
         f.ms = 30.0;
         f.typical = 10.0;
-        f.stages = Some([2.0, 0.0, 1.0, 1.0, 0.5, 0.2, 0.3]);
+        f.stages = Some([2.0, 0.0, 1.0, 1.0, 0.5, 0.2, 0.3, 0.0, 0.0]);
         assert_eq!(
             f.cause(),
-            "the time between frames took 25 ms with no one-off work counted"
+            "25 ms fell outside the measured stages with no one-off work counted"
+        );
+        // The host's own time between two frames.
+        f.stages = Some([2.0, 0.0, 1.0, 1.0, 0.5, 0.2, 0.3, 0.5, 24.0]);
+        assert_eq!(
+            f.cause(),
+            "the host between frames took 24 ms with no one-off work counted"
         );
 
         let mut f = frame();
