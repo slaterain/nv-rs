@@ -680,6 +680,7 @@ fn walk_chunk(e: &mut Engine, children: &[u32], process: u32) -> Vec<Entry> {
         }
     }
     let take = Take;
+    super::visible::read_ahead(e, children.iter().copied());
     for &child in children {
         if child != 0 {
             typed_call!(
