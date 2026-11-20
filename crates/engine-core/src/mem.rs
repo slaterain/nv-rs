@@ -2636,10 +2636,10 @@ mod tests {
         let mut m = Mem::new();
         m.map(0x0010_0000, 0x3000);
         m.set_u32(0x0010_0ffe, 0x1122_3344);
-        m.set_u32(0x0010_1ff0, 0x5566_7788);
+        m.set_u32(0x0010_1e00, 0x5566_7788);
         let s = m.span(0x0010_0f00).expect("both pages mapped");
         assert_eq!(s.u32(0xfe), 0x1122_3344, "across the page's end");
-        assert_eq!(s.u32(0x10f0), 0x5566_7788, "in the next page");
+        assert_eq!(s.u32(0xf00), 0x5566_7788, "in the next page");
         assert_eq!(s.u32(SPAN - 4), m.u32(0x0010_0f00 + SPAN - 4));
         // The last mapped page (the next one is not), an unmapped page, address 0.
         assert!(m.span(0x0010_2000).is_none());
