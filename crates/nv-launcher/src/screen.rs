@@ -249,8 +249,10 @@ fn layout(look: &Look, screen: &Screen) -> Layout {
 }
 
 /// The lines the screen types, in the order the game's text manager types them: the two header
-/// lines, the title (the header's third line), the welcome text's lines that show, then each
-/// entry that shows as `"> "` and its text.
+/// lines, the title (the header's third line), the welcome text's lines that show, each entry
+/// that shows as `"> "` and its text, and last the prompt `"> "` (`FinishIntro` 00758d30 puts the
+/// header at the queue's front, after the screen's own items, and the prompt, 01072118, at its
+/// end).
 pub fn line_texts(look: &Look, screen: &Screen) -> Vec<String> {
     let l = layout(look, screen);
     let rows = l.rows;
@@ -265,8 +267,12 @@ pub fn line_texts(look: &Look, screen: &Screen) -> Vec<String> {
             .iter()
             .map(|e| format!("> {e}")),
     );
+    out.push(PROMPT.to_string());
     out
 }
+
+/// The prompt at the bottom, before what is typed there.
+pub const PROMPT: &str = "> ";
 
 /// Where the first entry's line is in [`line_texts`].
 pub fn first_entry_line(look: &Look, screen: &Screen) -> usize {
@@ -281,26 +287,24 @@ pub fn total_chars(look: &Look, screen: &Screen) -> usize {
         .sum()
 }
 
-/// Whether entry `i` can be highlighted and chosen with `shown` characters of each line
-/// ([`line_texts`]) typed (None: all): in the game an entry's tile shows when its line starts
-/// typing (`AnimatingTextManager::Update`), so it can be chosen while it types; one scrolled
-/// out of view counts once the whole screen has typed.
-pub fn entry_started(look: &Look, screen: &Screen, shown: Option<&[usize]>, i: usize) -> bool {
-    if i >= screen.entries.len() {
-        return false;
-    }
+/// Whether the screen's entries can be highlighted and chosen with `shown` characters of each
+/// line ([`line_texts`]) typed (None: all): only once every line is in. In the game each entry's
+/// tile is made disabled (007586e0: `_enabled` 0 right after the tile is made) and shows as its
+/// line types; `DoIdle` 00758470 enables them all (007596a0) only when the text queue is empty.
+pub fn entries_live(look: &Look, screen: &Screen, shown: Option<&[usize]>) -> bool {
     let Some(shown) = shown else {
         return true;
     };
-    let rows = layout(look, screen).rows;
-    if (rows.first..rows.first + rows.shown).contains(&i) {
-        let at = first_entry_line(look, screen) + i - rows.first;
-        return shown.get(at).is_some_and(|&n| n > 0);
-    }
-    line_texts(look, screen)
-        .iter()
-        .zip(shown)
-        .all(|(t, &n)| n >= t.chars().count())
+    all_in(&line_texts(look, screen), shown)
+}
+
+/// Whether every line of `texts` has typed all its characters (`shown` of each).
+pub fn all_in(texts: &[String], shown: &[usize]) -> bool {
+    texts.len() <= shown.len()
+        && texts
+            .iter()
+            .zip(shown)
+            .all(|(t, &n)| n >= t.chars().count())
 }
 
 /// The screen drawn with `look`, `shown` characters of each of its lines typed so far
@@ -311,6 +315,8 @@ pub fn draw(look: &Look, screen: &Screen, shown: Option<&[usize]>, cursor: bool)
         // `computers_background`: x 10, the screen's size, brightness 90, alpha 255.
         c.stretch((px, *w, *h), (10, 0, WIDTH, HEIGHT), look.at(90.0, 255.0));
     }
+    // The focus (the highlight box) only on live entries: the game's are disabled while it types.
+    let live = entries_live(look, screen, shown);
     let l = layout(look, screen);
     let lh = l.line_height;
     let text = look.at(255.0, 255.0);
@@ -355,9 +361,8 @@ pub fn draw(look: &Look, screen: &Screen, shown: Option<&[usize]>, cursor: bool)
         let i = r.first + k;
         let ry = r.top + r.row as i32 * k as i32;
         let part = typed(&format!("> {entry}"));
-        // The highlight box follows the focus, on an entry whose line has started (its tile
-        // shows then).
-        let colour = if i == screen.highlighted && !part.is_empty() {
+        // The highlight box follows the focus, once the entries are live.
+        let colour = if i == screen.highlighted && live {
             c.fill(r.x, ry, r.width, r.row - 1, look.at(128.0, 224.0));
             [0.0, 5.0 / 255.0, 0.0, 1.0]
         } else {
@@ -365,10 +370,17 @@ pub fn draw(look: &Look, screen: &Screen, shown: Option<&[usize]>, cursor: bool)
         };
         look.font.draw(&mut c, r.x, ry + 15, &part, colour);
     }
-    // The prompt and the cursor.
-    let prompt = format!("> {}", screen.typed);
+    // The prompt (typed last on the first screen), what is typed after it, and the cursor once
+    // the prompt is in.
+    let part = typed(PROMPT);
+    let prompt_in = part.len() == PROMPT.len();
+    let prompt = if prompt_in {
+        format!("{PROMPT}{}", screen.typed)
+    } else {
+        part
+    };
     look.font.draw(&mut c, 100, l.prompt_y, &prompt, text);
-    if cursor {
+    if cursor && prompt_in {
         let x = 100 + look.font.width(&prompt) as i32;
         c.fill(x, l.prompt_y + (lh - 17) / 2, 17, 17, text);
     }

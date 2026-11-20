@@ -8,15 +8,27 @@
 //!   depends on the frame rate: two characters a frame at 60 frames a second, one at 120.
 //! - When a line is done, the next one starts on the next frame's update (the line's done flag
 //!   is read at the top of the update), and types its first character there.
-//! - In the intro only (the menu's intro state 0, +0xb0), a line that starts sets a wait of 500
-//!   ms (011d93d4): nothing types until it has passed.
+//! - In the intro only (the menu's intro state 0, +0xb0), a line that ends sets a wait of 500 ms
+//!   (011d93d4, written only at 0075998d, after the done line is taken off the queue): nothing
+//!   types until it has passed. The first line has no wait before it (the queue's first line is
+//!   not done, so the update types it on the first frame): the waits come between lines.
 //!
 //! Every screen after the intro types at 1000 / `iComputersDisplayRateMenus` milliseconds a
-//! character (the terminal display function 007586e0: 6 ms for the default 150); the intro's lines at their own rates
-//! (`crate::intro`). The frames are the game's in menus: the player's "Frame rate limit in
-//! menus" (`[nv-rs Display] iMenuFrameLimit`, default 120). With no limit the launcher counts
-//! 120 frames a second: the game would then follow the monitor, which the launcher does not
-//! guess at (our choice, not the game's).
+//! character (the terminal display function 007586e0: 6 ms for the default 150); the intro's
+//! lines at their own rates (`crate::intro`). The frames are the game's in menus: the player's
+//! "Frame rate limit in menus" (`[nv-rs Display] iMenuFrameLimit`, default 120). With no limit
+//! the launcher counts 120 frames a second: the game would then follow the monitor, which the
+//! launcher does not guess at (our choice, not the game's).
+//!
+//! The launcher's simplifications, not the game's (none of them shows unless the machine stalls):
+//! - The game's clock is `GetTickCount` (00457fe0), wall time in coarse steps (about 16 ms on
+//!   most Windows machines); here the clock is the frame's exact time in whole milliseconds, so
+//!   the speeds per frame rate are this model's.
+//! - The model works the queue out from the screen's start over ideal frames. After a stall the
+//!   game types the current line's backlog in one frame and then one line a frame; the launcher
+//!   catches up on every line at once.
+//! - The game queues a screen's welcome text as one item; the launcher queues each of its wrapped
+//!   lines that shows as its own line (each starting a frame after the one before).
 
 /// One line of the queue: its characters, its milliseconds a character, and whether it is an
 /// intro line (500 ms before it types).
@@ -27,7 +39,7 @@ pub struct Line {
     pub intro: bool,
 }
 
-/// The intro's wait before each of its lines types (011d93d4 = now + 500).
+/// The intro's wait after each of its lines ends (011d93d4 = now + 500).
 pub const INTRO_LINE_WAIT_MS: f64 = 500.0;
 
 /// The frames a second the launcher counts for "No limit" (see the module's text).
@@ -62,6 +74,8 @@ pub fn typed(lines: &[Line], frame: f64, t: f64) -> (Vec<usize>, Option<f64>) {
         }
         // The done line gives way to the next one, which starts on this update.
         if current.is_none() || done {
+            // A line taken off the queue (not the first one's start).
+            let popped = current.is_some();
             let next = current.map_or(0, |c| c + 1);
             if next >= lines.len() {
                 return (out, Some(done_at));
@@ -69,7 +83,7 @@ pub fn typed(lines: &[Line], frame: f64, t: f64) -> (Vec<usize>, Option<f64>) {
             current = Some(next);
             done = false;
             due = None;
-            if lines[next].intro {
+            if popped && lines[next].intro {
                 wait = now + INTRO_LINE_WAIT_MS;
                 continue;
             }
@@ -138,23 +152,31 @@ mod tests {
         assert_eq!(typed(&l, f, 4.5 * f).1, None);
     }
 
-    /// An intro line waits 500 ms before it types; the next one waits again from its own start.
+    /// The intro's first line types at once; after each line ends the next waits 500 ms from the
+    /// frame that takes the done line off the queue.
     #[test]
-    fn the_intro_waits_before_each_line() {
+    fn the_intro_waits_between_lines() {
         let intro = |chars| Line {
             chars,
             ms: 6,
             intro: true,
         };
-        let l = [intro(2), intro(2)];
+        let l = [intro(2), intro(2), intro(1)];
         let f = frame_ms(120);
-        assert_eq!(typed_chars(&l, f, 499.0), 0);
-        // The first frame after 500 ms (frame 61, 508 ms) types the first character.
-        assert_eq!(typed(&l, f, 61.0 * f).0, [1, 0]);
-        assert_eq!(typed(&l, f, 62.0 * f).0, [2, 0]);
-        // The second line starts on frame 63 and types from frame 63 + 61.
-        assert_eq!(typed(&l, f, 123.0 * f).0, [2, 0]);
-        assert_eq!(typed(&l, f, 124.0 * f).0, [2, 1]);
+        // No wait before the first line: its first character on frame 0, the second on frame 1.
+        assert_eq!(typed(&l, f, 0.0).0, [1, 0, 0]);
+        assert_eq!(typed(&l, f, f).0, [2, 0, 0]);
+        // Frame 2 (16 ms) takes it off and waits to 516 ms: frame 62 (516 ms) still waits, frame
+        // 63 (525 ms) types.
+        assert_eq!(typed(&l, f, 62.0 * f).0, [2, 0, 0]);
+        assert_eq!(typed(&l, f, 63.0 * f).0, [2, 1, 0]);
+        assert_eq!(typed(&l, f, 64.0 * f).0, [2, 2, 0]);
+        // Frame 65 (541 ms) takes the second off: the third types after 1041 ms, on frame 126.
+        assert_eq!(typed(&l, f, 125.0 * f).0, [2, 2, 0]);
+        assert_eq!(typed(&l, f, 126.0 * f).0, [2, 2, 1]);
+        // The last line's end has no wait after it: done on frame 126, the queue empty on 127.
+        assert_eq!(typed(&l, f, 126.0 * f).1, None);
+        assert_eq!(typed(&l, f, 127.0 * f).1, Some((126.0 * f).floor()));
     }
 
     /// A line of the intro's input rate (50 ms) types one character each 50 ms and a frame.

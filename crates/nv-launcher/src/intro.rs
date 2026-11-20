@@ -11,8 +11,9 @@
 //!    00501270 stars, `(random & 1) + lock level * 2 + 4` (at most 12). The launcher's terminal has
 //!    no lock of its own; it types the count of the game's lowest level (0): 4 or 5.
 //!
-//! Each line waits 500 ms before it types (the intro state of `AnimatingTextManager::Update`,
-//! `crate::pacing`), and the lines type on the game's frame clock. Then `DoIdle` 00758490, on the
+//! The first line types at once; after each line ends the next waits 500 ms (the intro state of
+//! `AnimatingTextManager::Update`, `crate::pacing`): three waits between the four lines. The lines
+//! type on the game's frame clock. Then `DoIdle` 00758490, on the
 //! frame after the last line is done, waits 2000 ms, and `FinishIntro` 00758d30 clears the text
 //! and types the terminal's own screen (the start screen). The division is the game's, in whole
 //! milliseconds; a rate of 0 is 1000 ms, as there.
@@ -134,23 +135,23 @@ mod tests {
         );
     }
 
-    /// Each line waits 500 ms before it types; the lines come one after the other, and the start
-    /// screen follows 2000 ms (and a frame) after the last character.
+    /// The first line types at once, the others each after a 500 ms wait; the lines come one
+    /// after the other, and the start screen follows 2000 ms (and a frame) after the last
+    /// character.
     #[test]
-    fn the_lines_wait_then_type_in_order() {
+    fn the_lines_type_in_order_with_waits_between() {
         let i = intro();
-        assert_eq!(i.typed(0), [""]);
-        assert_eq!(i.typed(499), [""]);
-        // The first frame after 500 ms (508 ms at 120 a second) types the first character, then
-        // one a frame (541 ms is the fifth frame).
-        assert_eq!(i.typed(508), ["H"]);
-        assert_eq!(i.typed(541), ["HELLO"]);
+        // The first frame types the first character, then one a frame (33 ms is the fifth frame).
+        assert_eq!(i.typed(0), ["H"]);
+        assert_eq!(i.typed(33), ["HELLO"]);
         let all = i.typed(i.typing_ms());
         assert_eq!(all.len(), 4);
         assert_eq!(all[3], "> ****");
         assert_eq!(i.typed(u64::MAX / 2), all);
-        // Four waits of 500 ms at least, and the lines' characters.
-        assert!(i.typing_ms() > 4 * 500 + 59 * 6 + 19 * 50);
+        // Three waits of 500 ms, and the lines' characters: more than these, less than four waits.
+        let chars = 41 * 6 + 13 * 50 + 18 * 6 + 6 * 50;
+        assert!(i.typing_ms() > 3 * 500 + chars, "{}", i.typing_ms());
+        assert!(i.typing_ms() < 4 * 500 + chars, "{}", i.typing_ms());
         assert_eq!(i.total_ms(), (i.typing_ms() as f64 + i.frame) as u64 + 2000);
     }
 

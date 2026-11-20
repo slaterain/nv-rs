@@ -545,9 +545,12 @@ pub fn typed_lines(
     frame: f64,
     t: f64,
 ) -> Vec<usize> {
+    // The prompt, the last line, types once with the header (`FinishIntro`).
+    let prompt = texts.len().saturating_sub(1).max(3);
     let whole = |i: usize| match i {
         0 | 1 => at_once.header,
         2 => at_once.title,
+        i if i == prompt => at_once.header,
         i if i < first_entry => at_once.welcome,
         _ => false,
     };
@@ -594,18 +597,108 @@ pub fn may_choose(typed: &str, has_entries: bool, highlighted_started: bool) -> 
 }
 
 /// The player's "Frame rate limit in menus" in frames a second (0: no limit), which the game's
-/// terminal types on ([`pacing`]); its default when the profile has none.
-pub fn menu_frame_limit(fallout_ini: &Path) -> u32 {
-    frame_limit_of(&settings::Row::MenuFrameLimit.current(&profile_files(fallout_ini)))
+/// terminal types on ([`pacing`]), as the Settings screen shows it (a change saved for Play to
+/// move into the game's files counts already); the play profile's own file when that cannot be
+/// read; the row's default when neither has it.
+pub fn menu_frame_limit(own: &Path, fallout_ini: &Path) -> u32 {
+    let files = crate::profiles::Profiles::at(own)
+        .shown()
+        .unwrap_or_else(|_| profile_files(fallout_ini));
+    frame_limit_of(&settings::Row::MenuFrameLimit.current(&files))
 }
 
-/// The menu frame limit row's value as frames a second: "No limit" 0, else its number (120 when
-/// it reads as nothing else, the row's default).
+/// The most frames a second the typing counts: a larger limit set by hand counts as this (the
+/// model steps through every frame of a screen, so a limit of billions would hold the window).
+pub const MOST_FRAMES: u32 = 1000;
+
+/// The menu frame limit row's value as frames a second: "No limit" (or 0) 0, else its number, at
+/// most [`MOST_FRAMES`] (120 when it reads as nothing else, the row's default).
 pub fn frame_limit_of(value: &str) -> u32 {
     if value == "No limit" {
         0
     } else {
-        value.trim().parse().unwrap_or(120)
+        value.trim().parse::<u32>().unwrap_or(120).min(MOST_FRAMES)
+    }
+}
+
+/// A key (or a click) as the window's handler tells them apart.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Press {
+    Up,
+    Down,
+    PageUp,
+    PageDown,
+    Left,
+    Right,
+    Enter,
+    Escape,
+    Backspace,
+    /// The left mouse button on the window.
+    Click,
+    /// Shift, Ctrl, Alt or the system key alone.
+    Modifier,
+    /// Any other key: a character for the prompt, the paste key.
+    Other,
+}
+
+/// The [`Press`] of a key as winit names it.
+pub fn press_of(key: &winit::keyboard::Key) -> Press {
+    use winit::keyboard::{Key, NamedKey as N};
+    match key {
+        Key::Named(N::ArrowUp) => Press::Up,
+        Key::Named(N::ArrowDown) | Key::Named(N::Tab) => Press::Down,
+        Key::Named(N::PageUp) => Press::PageUp,
+        Key::Named(N::PageDown) => Press::PageDown,
+        Key::Named(N::ArrowLeft) => Press::Left,
+        Key::Named(N::ArrowRight) => Press::Right,
+        Key::Named(N::Enter) => Press::Enter,
+        Key::Named(N::Escape) => Press::Escape,
+        Key::Named(N::Backspace) => Press::Backspace,
+        Key::Named(N::Shift | N::Control | N::Alt | N::AltGraph | N::Super | N::Meta) => {
+            Press::Modifier
+        }
+        _ => Press::Other,
+    }
+}
+
+/// What a press does on a screen that is not the intro.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum KeyAct {
+    /// The screen's text shows whole at once (the launcher's shortcut, [`press_finishes_typing`]).
+    FinishTyping,
+    Act(Press),
+    Nothing,
+}
+
+/// The launcher's own shortcut, not the game's (its terminal has no key for it): while a screen
+/// types, the first press of a key (not a modifier alone, not a held key's repeat) or a click
+/// shows the whole text at once and does nothing else. Without it a player would wait about 3 s
+/// on Settings each time. Removing it is this one rule: [`key_act`] then gives [`gated`]'s answer.
+pub fn press_finishes_typing(press: Press, repeat: bool, typing: bool) -> bool {
+    typing && !repeat && press != Press::Modifier
+}
+
+/// The game's rule for a press (`repeat`: a held key's auto-repeat) while the screen types or
+/// not: the entries are disabled until every line is in, so moving the focus, choosing, Esc's way
+/// back and Left/Right on a row wait; a held key's repeat never chooses, goes back or steps a row
+/// (Esc held to skip the intro would else go on to Exit); typing at the prompt always goes.
+pub fn gated(press: Press, repeat: bool, typing: bool) -> KeyAct {
+    use Press::*;
+    let acts = matches!(press, Enter | Escape | Left | Right | Click);
+    let needs_live = acts || matches!(press, Up | Down);
+    if (repeat && acts) || (typing && needs_live) || press == Modifier {
+        KeyAct::Nothing
+    } else {
+        KeyAct::Act(press)
+    }
+}
+
+/// The key handler's decision (the window's only one): [`press_finishes_typing`], else [`gated`].
+pub fn key_act(press: Press, repeat: bool, typing: bool) -> KeyAct {
+    if press_finishes_typing(press, repeat, typing) {
+        KeyAct::FinishTyping
+    } else {
+        gated(press, repeat, typing)
     }
 }
 
@@ -986,9 +1079,20 @@ impl App {
         ))
     }
 
-    /// Whether entry `i` can be highlighted and chosen now ([`screen::entry_started`]).
-    fn entry_started(&self, i: usize) -> bool {
-        screen::entry_started(&self.look, &self.screen, self.shown().as_deref(), i)
+    /// Whether the entries can be highlighted and chosen now ([`screen::entries_live`]).
+    fn entries_live(&self) -> bool {
+        screen::entries_live(&self.look, &self.screen, self.shown().as_deref())
+    }
+
+    /// Whether the screen is still typing (the intro aside).
+    fn typing(&self) -> bool {
+        !self.entries_live()
+    }
+
+    /// The launcher's shortcut ([`press_finishes_typing`]): the screen's text whole at once.
+    fn finish_typing(&mut self) {
+        self.finished = true;
+        self.request_redraw();
     }
 
     fn cursor_on(&self) -> bool {
@@ -1022,7 +1126,8 @@ impl App {
         self.shown_at_once =
             shown_at_once(self.last_shown.as_ref(), &screen.title, &screen.welcome);
         self.last_shown = (!intro).then(|| (screen.title.clone(), screen.welcome.clone()));
-        self.frame_ms = pacing::frame_ms(menu_frame_limit(&self.place.fallout_ini));
+        self.frame_ms =
+            pacing::frame_ms(menu_frame_limit(&self.place.own, &self.place.fallout_ini));
         self.mode = mode;
         self.screen = screen;
         // Another prompt: a paste asked at the last one is dropped when it comes.
@@ -1426,7 +1531,7 @@ impl App {
         if !may_choose(
             &self.screen.typed,
             !self.screen.entries.is_empty(),
-            self.entry_started(chosen),
+            self.entries_live() && chosen < self.screen.entries.len(),
         ) {
             return;
         }
@@ -1638,7 +1743,7 @@ impl winit::application::ApplicationHandler<Event> for App {
                 &logon,
                 &header,
                 odd,
-                pacing::frame_ms(menu_frame_limit(&self.place.fallout_ini)),
+                pacing::frame_ms(menu_frame_limit(&self.place.own, &self.place.fallout_ini)),
             );
             self.show(Mode::Intro(intro), Screen::default(), true);
         } else {
@@ -1770,41 +1875,42 @@ impl winit::application::ApplicationHandler<Event> for App {
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 if matches!(self.mode, Mode::Intro(_)) {
                     // Esc or Enter finishes the intro (the launcher's extra; the game takes a
-                    // click on the background); other keys do nothing there.
+                    // click on the background); other keys, and a held key's repeats, do nothing.
                     let esc_or_enter = matches!(
                         event.logical_key,
                         Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Enter)
                     );
-                    if crate::intro::key_finishes(esc_or_enter) {
+                    if crate::intro::key_finishes(esc_or_enter && !event.repeat) {
                         self.end_intro();
                     }
                     return;
                 }
-                // No key finishes the typing (the game's terminal has none); the entries whose
-                // lines have started can be moved to and chosen while it types.
-                let started = (0..self.screen.entries.len())
-                    .take_while(|&i| self.entry_started(i))
-                    .count();
-                match &event.logical_key {
-                    Key::Named(NamedKey::ArrowUp) => {
-                        self.screen.highlighted = step_focus(self.screen.highlighted, started, true)
+                let press = press_of(&event.logical_key);
+                let act = key_act(press, event.repeat, self.typing());
+                let press = match act {
+                    KeyAct::FinishTyping => return self.finish_typing(),
+                    KeyAct::Nothing => return,
+                    KeyAct::Act(p) => p,
+                };
+                let count = self.screen.entries.len();
+                match press {
+                    Press::Up => {
+                        self.screen.highlighted = step_focus(self.screen.highlighted, count, true)
                     }
-                    Key::Named(NamedKey::ArrowDown) | Key::Named(NamedKey::Tab) => {
-                        self.screen.highlighted =
-                            step_focus(self.screen.highlighted, started, false)
+                    Press::Down => {
+                        self.screen.highlighted = step_focus(self.screen.highlighted, count, false)
                     }
-                    Key::Named(NamedKey::PageUp) => {
-                        self.screen.scroll = self.screen.scroll.saturating_sub(5)
-                    }
-                    Key::Named(NamedKey::PageDown) => self.screen.scroll += 5,
-                    Key::Named(NamedKey::ArrowRight) => self.step_row(true),
-                    Key::Named(NamedKey::ArrowLeft) => self.step_row(false),
-                    Key::Named(NamedKey::Enter) => self.choose(event_loop),
-                    Key::Named(NamedKey::Backspace) => {
+                    Press::PageUp => self.screen.scroll = self.screen.scroll.saturating_sub(5),
+                    Press::PageDown => self.screen.scroll += 5,
+                    Press::Right => self.step_row(true),
+                    Press::Left => self.step_row(false),
+                    Press::Enter => self.choose(event_loop),
+                    Press::Backspace => {
                         self.screen.typed.pop();
                     }
-                    Key::Named(NamedKey::Escape) => self.back(event_loop),
-                    _ => {
+                    Press::Escape => self.back(event_loop),
+                    Press::Click | Press::Modifier => {}
+                    Press::Other => {
                         // Ctrl+V (Cmd+V on macOS) pastes the clipboard's line; the key types
                         // nothing itself. Some systems give Ctrl+V as its control character.
                         let key = match &event.logical_key {
@@ -1841,7 +1947,9 @@ impl winit::application::ApplicationHandler<Event> for App {
             WindowEvent::CursorMoved { position, .. } => {
                 self.mouse = (position.x, position.y);
                 if let Some(i) = self.row_at(self.mouse) {
-                    if self.entry_started(i) && self.screen.highlighted != i {
+                    // The focus moves only onto live entries (the game's are disabled while
+                    // it types).
+                    if self.entries_live() && self.screen.highlighted != i {
                         self.screen.highlighted = i;
                         self.request_redraw();
                     }
@@ -1868,11 +1976,17 @@ impl winit::application::ApplicationHandler<Event> for App {
                     // A click on the terminal's background finishes the intro (`DoClick` 00757f70,
                     // tile 13); the background is the whole window.
                     self.end_intro();
-                } else if let Some(i) = self.row_at(self.mouse) {
-                    // An entry is chosen as soon as its line has started, typed or not.
-                    if self.entry_started(i) {
-                        self.screen.highlighted = i;
-                        self.choose(event_loop);
+                } else {
+                    match key_act(Press::Click, false, self.typing()) {
+                        KeyAct::FinishTyping => self.finish_typing(),
+                        KeyAct::Act(_) => {
+                            // A live entry under the mouse is chosen.
+                            if let Some(i) = self.row_at(self.mouse) {
+                                self.screen.highlighted = i;
+                                self.choose(event_loop);
+                            }
+                        }
+                        KeyAct::Nothing => {}
                     }
                 }
                 self.request_redraw();
@@ -2677,10 +2791,10 @@ mod tests {
     }
 
     /// Lines shown at once are whole from the start; the others type in order on the frame
-    /// clock, the entries always among them.
+    /// clock, the entries always among them, the prompt last on the first screen only.
     #[test]
     fn typed_lines_skip_what_shows_at_once() {
-        let texts: Vec<String> = ["AB", "CD", "-t-", "wel", "> x", "> yz"]
+        let texts: Vec<String> = ["AB", "CD", "-t-", "wel", "> x", "> yz", "> "]
             .iter()
             .map(|s| s.to_string())
             .collect();
@@ -2690,21 +2804,32 @@ mod tests {
             title: true,
             welcome: true,
         };
-        // Only the entries type: one character a frame at 120 frames a second.
-        assert_eq!(typed_lines(&texts, 4, at_once, f, 0.0), [2, 2, 3, 3, 1, 0]);
+        // Only the entries type: one character a frame at 120 frames a second; the prompt whole.
+        assert_eq!(
+            typed_lines(&texts, 4, at_once, f, 0.0),
+            [2, 2, 3, 3, 1, 0, 2]
+        );
         assert_eq!(
             typed_lines(&texts, 4, at_once, f, 2.0 * f),
-            [2, 2, 3, 3, 3, 0]
+            [2, 2, 3, 3, 3, 0, 2]
         );
         // The next line starts the frame after.
         assert_eq!(
             typed_lines(&texts, 4, at_once, f, 3.0 * f),
-            [2, 2, 3, 3, 3, 1]
+            [2, 2, 3, 3, 3, 1, 2]
         );
-        // Nothing at once: the header types first.
+        // Nothing at once (the first screen): the header types first, the prompt last.
         assert_eq!(
             typed_lines(&texts, 4, AtOnce::default(), f, 0.0),
-            [1, 0, 0, 0, 0, 0]
+            [1, 0, 0, 0, 0, 0, 0]
+        );
+        let first = AtOnce::default();
+        // 2 + 2 + 3 + 3 + 3 + 4 characters, one a frame, and a frame between lines (6 starts).
+        let before_prompt = typed_lines(&texts, 4, first, f, 16.0 * f);
+        assert_eq!(before_prompt, [2, 2, 3, 3, 3, 4, 0]);
+        assert_eq!(
+            typed_lines(&texts, 4, first, f, 17.0 * f),
+            [2, 2, 3, 3, 3, 4, 1]
         );
         // A title that changed types although the header does not.
         let title_only = AtOnce {
@@ -2714,23 +2839,21 @@ mod tests {
         };
         assert_eq!(
             typed_lines(&texts, 4, title_only, f, 0.0),
-            [2, 2, 1, 3, 0, 0]
+            [2, 2, 1, 3, 0, 0, 2]
         );
     }
 
-    /// The focus moves among the entries whose lines have started, wrapping among them; Enter
-    /// chooses nothing until the highlighted entry has started (a typed line always goes).
+    /// The focus wraps among the entries; Enter chooses an entry only once they are live (a typed
+    /// line always goes).
     #[test]
-    fn the_focus_and_enter_only_reach_started_entries() {
+    fn the_focus_wraps_and_enter_waits_for_live_entries() {
         assert_eq!(step_focus(0, 0, false), 0);
         assert_eq!(step_focus(0, 0, true), 0);
         assert_eq!(step_focus(0, 1, false), 0);
         assert_eq!(step_focus(0, 2, false), 1);
         assert_eq!(step_focus(1, 2, false), 0);
         assert_eq!(step_focus(0, 3, true), 2);
-        // A focus on an entry not started yet comes back to the last started one first.
         assert_eq!(step_focus(5, 2, false), 0);
-        assert_eq!(step_focus(5, 2, true), 0);
         assert_eq!(step_focus(4, 3, true), 1);
         assert!(!may_choose("", true, false));
         assert!(may_choose("", true, true));
@@ -2738,31 +2861,113 @@ mod tests {
         assert!(may_choose("", false, false));
     }
 
-    /// An entry can be chosen as soon as its line has started typing, and not before.
+    /// The entries show as their lines type but are live (highlighted, chosen) only once every
+    /// line of the screen is in, the prompt too, as the game enables its tiles when its text
+    /// queue is empty.
     #[test]
-    fn an_entry_can_be_chosen_while_it_types() {
+    fn entries_are_live_only_once_the_whole_screen_is_in() {
         let look = Look::plain();
         let s = pacing_test_screen();
         let first = screen::first_entry_line(&look, &s);
         let texts = screen::line_texts(&look, &s);
-        let mut shown: Vec<usize> = texts.iter().map(|t| t.chars().count()).collect();
-        shown[first] = 0;
-        shown[first + 1] = 0;
-        assert!(!screen::entry_started(&look, &s, Some(&shown), 0));
+        assert_eq!(texts.last().map(String::as_str), Some(screen::PROMPT));
+        let whole: Vec<usize> = texts.iter().map(|t| t.chars().count()).collect();
+        assert!(screen::entries_live(&look, &s, Some(&whole)));
+        assert!(screen::entries_live(&look, &s, None));
+        let mut shown = whole.clone();
         shown[first] = 1;
-        assert!(screen::entry_started(&look, &s, Some(&shown), 0));
-        assert!(!screen::entry_started(&look, &s, Some(&shown), 1));
-        assert!(screen::entry_started(&look, &s, None, 1));
-        assert!(!screen::entry_started(&look, &s, None, 2));
+        assert!(!screen::entries_live(&look, &s, Some(&shown)));
+        // The entries all in, the prompt not yet.
+        let mut shown = whole.clone();
+        *shown.last_mut().unwrap() = 1;
+        assert!(!screen::entries_live(&look, &s, Some(&shown)));
+        assert!(!screen::entries_live(
+            &look,
+            &s,
+            Some(&whole[..whole.len() - 1])
+        ));
     }
 
-    /// The menu frame limit row's values as frames a second.
+    /// The menu frame limit row's values as frames a second, a hand-set huge one held at
+    /// [`MOST_FRAMES`] (the model steps through every frame).
     #[test]
     fn the_menu_frame_limit_reads_as_frames_a_second() {
         assert_eq!(frame_limit_of("No limit"), 0);
+        assert_eq!(frame_limit_of("0"), 0);
         assert_eq!(frame_limit_of("144"), 144);
         assert_eq!(frame_limit_of("120"), 120);
         assert_eq!(frame_limit_of("odd"), 120);
+        assert_eq!(frame_limit_of("4294967295"), MOST_FRAMES);
+        assert_eq!(frame_limit_of("1001"), MOST_FRAMES);
+        assert_eq!(frame_limit_of("1000"), 1000);
+        // The typing model with the largest limit still answers at once for a long screen.
+        let lines = [pacing::Line {
+            chars: 400,
+            ms: 6,
+            intro: false,
+        }];
+        let f = pacing::frame_ms(frame_limit_of("4294967295"));
+        assert_eq!(pacing::typed(&lines, f, 60_000.0).0, [400]);
+    }
+
+    /// The key handler's decision: while a screen types, the first press of a key (not a
+    /// modifier) only finishes the typing (the launcher's shortcut), and no key that acts does
+    /// anything else; held keys' repeats never act (Enter, Esc, Left/Right); a whole screen takes
+    /// every key.
+    #[test]
+    fn while_typing_a_press_only_finishes_it_and_repeats_never_act() {
+        use Press::*;
+        for p in [
+            Escape, Enter, Left, Right, Up, Down, Click, Other, Backspace,
+        ] {
+            assert_eq!(key_act(p, false, true), KeyAct::FinishTyping, "{p:?}");
+        }
+        assert_eq!(key_act(Modifier, false, true), KeyAct::Nothing);
+        // A held key's repeat during typing: Esc, Enter, Left/Right and the focus do nothing.
+        for p in [Escape, Enter, Left, Right, Up, Down, Click] {
+            assert_eq!(key_act(p, true, true), KeyAct::Nothing, "{p:?}");
+        }
+        // Esc held past the intro: its repeats on the start screen never give Exit, typed or not.
+        assert_eq!(key_act(Escape, true, false), KeyAct::Nothing);
+        assert_eq!(key_act(Enter, true, false), KeyAct::Nothing);
+        assert_eq!(key_act(Left, true, false), KeyAct::Nothing);
+        assert_eq!(key_act(Right, true, false), KeyAct::Nothing);
+        // Repeats that only move or type still do once the screen is whole.
+        assert_eq!(key_act(Down, true, false), KeyAct::Act(Down));
+        assert_eq!(key_act(Backspace, true, false), KeyAct::Act(Backspace));
+        assert_eq!(key_act(Other, true, false), KeyAct::Act(Other));
+        for p in [Escape, Enter, Left, Right, Up, Down, Click] {
+            assert_eq!(key_act(p, false, false), KeyAct::Act(p), "{p:?}");
+        }
+    }
+
+    /// winit's keys as the handler tells them apart: modifiers alone never finish the typing.
+    #[test]
+    fn keys_are_told_apart_as_the_handler_needs() {
+        use winit::keyboard::{Key, NamedKey as N};
+        assert_eq!(press_of(&Key::Named(N::Escape)), Press::Escape);
+        assert_eq!(press_of(&Key::Named(N::Enter)), Press::Enter);
+        assert_eq!(press_of(&Key::Named(N::Tab)), Press::Down);
+        assert_eq!(press_of(&Key::Named(N::ArrowLeft)), Press::Left);
+        assert_eq!(press_of(&Key::Named(N::Control)), Press::Modifier);
+        assert_eq!(press_of(&Key::Named(N::Shift)), Press::Modifier);
+        assert_eq!(press_of(&Key::Character("v".into())), Press::Other);
+    }
+
+    /// Without the launcher's shortcut (the game's rule alone) the keys that act wait while a
+    /// screen types, and typing at the prompt goes on.
+    #[test]
+    fn the_games_rule_alone_holds_the_keys_that_act_while_typing() {
+        use Press::*;
+        for p in [Escape, Enter, Left, Right, Up, Down, Click] {
+            assert_eq!(gated(p, false, true), KeyAct::Nothing, "{p:?}");
+        }
+        assert_eq!(gated(Other, false, true), KeyAct::Act(Other));
+        assert_eq!(gated(Backspace, true, true), KeyAct::Act(Backspace));
+        assert!(press_finishes_typing(Enter, false, true));
+        assert!(!press_finishes_typing(Enter, true, true));
+        assert!(!press_finishes_typing(Enter, false, false));
+        assert!(!press_finishes_typing(Modifier, false, true));
     }
 
     /// A paste asked at one prompt never lands in the next prompt of the same kind: once Enter,
