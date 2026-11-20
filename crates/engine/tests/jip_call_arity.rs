@@ -1423,9 +1423,11 @@ const IMPORT_SLOTS: [(u32, &str, &str); 15] = [
 fn unknown_callee(at: &str, callee: &str, addr: u32) -> Option<String> {
     match IMPORT_SLOTS.iter().find(|s| s.0 == addr) {
         Some(&(_, dll, name)) => {
+            // The core's own stand-ins and the platform layer's (`engine-platform`, which the program links).
             let provided = engine_core::units::platform::imports()
-                .iter()
-                .any(|(d, n, _)| d.eq_ignore_ascii_case(dll) && *n == name);
+                .into_iter()
+                .chain(engine_platform::imports())
+                .any(|(d, n, _)| d.eq_ignore_ascii_case(dll) && n == name);
             (!provided).then(|| {
                 format!("{at}: {callee} ({addr:08x}) is the import slot of {dll} {name}, which the platform does not provide")
             })

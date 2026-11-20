@@ -243,7 +243,6 @@ fn fully_seen(e: &mut Engine, a: &[u32]) -> Option<u32> {
 /// entry or 0), which answers as JIP's own `BaseExtraList::GetByType` (JIP's code, nvse/GameBSExtraData.cpp: the
 /// type's presence bit, then the list walked under the extra data lock). The `0x0040A320` in JIP's header comment
 /// is not that function in 1.4.0.525 (it is inside `0040a300`): a call there stopped the game at an NPC's first shot.
-
 const RETURN_TRUE: u32 = 0x008d_0360;
 const IS_ACTOR_SLOT: u32 = 0x100;
 const PROCESS: u32 = 0x68;
