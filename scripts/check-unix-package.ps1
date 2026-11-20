@@ -2,7 +2,7 @@
 Checks a Linux or macOS preview package that GitHub Actions built (.github/workflows/preview-packages.yml)
 on the maintainer's Windows PC, before it is published, and writes the text published beside it.
 The archive itself is never changed: it is published byte for byte as GitHub built it, so the Unix
-permissions inside it (play.sh and app/nv-viewer executable) stay exactly as they were made on Linux or
+permissions inside it (play.sh, nv-rs and app/nv-viewer executable) stay exactly as they were made on Linux or
 macOS, and its .sha256 stays valid. (Re-packing on Windows would lose them: NTFS keeps no Unix modes.)
 
   ./scripts/check-unix-package.ps1 -Archive <downloaded>\nv-rs-preview-linux-x86_64-test.tar.gz -Game '<game folder>\FalloutNV.exe'
@@ -11,15 +11,15 @@ What it checks, each one a refusal (status 1, nothing written) when it fails:
 1. The archive's SHA256 is the one in the .sha256 file beside it (as the workflow uploaded both).
 2. The archive's own list (read before extracting): only plain files and folders (no links), every
    name under "<base>/", no "..", no two names equal when case is ignored.
-3. It holds one package folder, <base>, with play.sh, app/nv-viewer and BUILD.txt; app/nv-viewer's
-   SHA256 is the one BUILD.txt names; and READ ME.txt, whose first paragraph under "What this build
+3. It holds one package folder, <base>, with play.sh, nv-rs, app/nv-viewer and BUILD.txt; the programs'
+   SHA256s are the ones BUILD.txt names; and READ ME.txt, whose first paragraph under "What this build
    can do today" (each system's own words) ends CHECKED.txt.
 4. BUILD.txt names a run of slaterain/nv-rs from refs/heads/main, and GitHub itself (gh, signed in)
    says that run is the package workflow, started by hand, on main, at BUILD.txt's commit, and that
    it succeeded; this checkout's origin is slaterain/nv-rs and the commit is on its main (git fetch,
    then git merge-base --is-ancestor), so the published source link holds.
 5. package-check --game <FalloutNV.exe> --max-run 4096 on the extracted folder ends with status 0,
-   read as many files as the archive lists, and names app/nv-viewer with its longest run shared with
+   read as many files as the archive lists, and names app/nv-viewer and nv-rs with their longest runs shared with
    the game (no data of the game's program in it).
 Then it writes <archive name without .tar.gz>.CHECKED.txt beside the archive: which run built it, from
 which commit, the check's date and result lines. That file is published beside the archive and its
@@ -106,24 +106,29 @@ try {
     $tops = @(Get-ChildItem -LiteralPath $work -Force)
     if ($tops.Count -ne 1 -or -not $tops[0].PSIsContainer -or $tops[0].Name -ne $base) { Refuse "the archive must hold exactly one package folder, $base" }
     $package = $tops[0].FullName
-    foreach ($file in @('play.sh', 'app\nv-viewer', 'BUILD.txt')) {
+    foreach ($file in @('play.sh', 'nv-rs', 'app\nv-viewer', 'BUILD.txt')) {
         if (-not (Test-Path -LiteralPath (Join-Path $package $file) -PathType Leaf)) { Refuse "the package has no $file" }
     }
     $build = Get-Content -LiteralPath (Join-Path $package 'BUILD.txt')
     $title = $build[0]
     $commit = ''
     $programSum = ''
+    $launcherSum = ''
     $run = ''
     $runUrl = ''
     $runRef = ''
     foreach ($line in $build) {
         if ($line -match '^Source commit: ([0-9a-f]{40})$') { $commit = $Matches[1] }
         if ($line -match '^app/nv-viewer SHA256: ([0-9a-f]{64})$') { $programSum = $Matches[1] }
+        if ($line -match '^nv-rs SHA256: ([0-9a-f]{64})$') { $launcherSum = $Matches[1] }
         if ($line -match '^Built by GitHub Actions, run (\S+), from (\S+); ') { $run = $line; $runUrl = $Matches[1]; $runRef = $Matches[2] }
     }
     if ($commit -eq '') { Refuse "BUILD.txt names no source commit" }
     $programActual = (Get-FileHash -LiteralPath (Join-Path $package 'app\nv-viewer') -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($programSum -ne $programActual) { Refuse "app/nv-viewer's SHA256 is $programActual, BUILD.txt says '$programSum'" }
+    # The launcher (nv-rs) the same way.
+    $launcherActual = (Get-FileHash -LiteralPath (Join-Path $package 'nv-rs') -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($launcherSum -ne $launcherActual) { Refuse "nv-rs's SHA256 is $launcherActual, BUILD.txt says '$launcherSum'" }
     # What this build does, for CHECKED.txt's last paragraph: the first paragraph of the package's own
     # READ ME under "What this build can do today" (each system's READ ME says it for that system,
     # so the published text cannot say something else).
@@ -190,11 +195,18 @@ try {
     if (-not $programLine) { Refuse "package-check's output names no app/nv-viewer: the program was not compared with the game" }
     $null = $programLine -match $programPattern
     if ([int]$Matches[1] -gt 4096) { Refuse "the longest run shared with the game is over 4096 bytes" }
+    # The launcher is a program too, and compared with the game the same way.
+    $launcherPattern = '(^|[\\/])nv-rs: [0-9]+ bytes, shares .* longest ([0-9]+)$'
+    $launcherLine = $output | Where-Object { $_ -match $launcherPattern } | Select-Object -First 1
+    if (-not $launcherLine) { Refuse "package-check's output names no nv-rs: the launcher was not compared with the game" }
+    $null = $launcherLine -match $launcherPattern
+    if ([int]$Matches[2] -gt 4096) { Refuse "the launcher's longest run shared with the game is over 4096 bytes" }
     $filesLine = $output | Where-Object { $_ -match '^[0-9]+ files, [0-9]+ needles: 0 hits$' } | Select-Object -First 1
     if (-not $filesLine) { Refuse "package-check's output has no '0 hits' line" }
     $null = $filesLine -match '^([0-9]+) files'
     if ([int]$Matches[1] -ne $listedFiles) { Refuse "package-check read $($Matches[1]) files, the archive lists $listedFiles" }
     $programLine = $programLine.Replace($package, $base)
+    $launcherLine = $launcherLine.Replace($package, $base)
 }
 finally {
     Remove-Item -LiteralPath $work -Recurse -Force
@@ -211,9 +223,10 @@ $text = @(
     "",
     "Checked on $date on the maintainer's Windows PC with package-check --game --max-run 4096 against",
     "the game's own FalloutNV.exe (only read, not in the package): no data of the game's program is in",
-    "the package's program. Its result:",
+    "the package's programs. Its result:",
     "  $filesLine",
     "  $programLine",
+    "  $launcherLine",
     "",
     "What this build can do today (from the package's READ ME):"
 ) + $canDo
