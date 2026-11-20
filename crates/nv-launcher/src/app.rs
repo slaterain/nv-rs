@@ -2119,9 +2119,10 @@ mod tests {
             })
         };
         assert_eq!(at(t0 + ms(6), true, 2006), (Some(t0 + ms(12)), false));
+        // The wait is over: the redraw is asked now (it then clears the retry).
         assert_eq!(
             at(t0 + RETRY_AFTER, true, 2100),
-            (Some(t0 + RETRY_AFTER + ms(6)), true)
+            (Some(t0 + RETRY_AFTER), true)
         );
         // A finished screen (the cursor blinks every 400 ms; 100 ms into it): woken at the retry.
         assert_eq!(at(t0, false, 100), (Some(t0 + RETRY_AFTER), false));
