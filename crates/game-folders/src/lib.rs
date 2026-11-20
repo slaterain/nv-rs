@@ -3,7 +3,7 @@
 //!
 //! Everything here is a plain function over a [`Home`] (the home folder and the XDG variables), so
 //! the tests run on made-up folder trees on any system. Nothing here writes anything: the stores'
-//! files and the game's folders are only read. On Windows the launcher (`scripts/launcher`,
+//! files and the game's folders are only read. On Windows the launcher (`crates/nv-launcher`, `play/`
 //! `find.rs`) finds the game through the registry instead; this crate is not used there.
 //!
 //! Where a Linux player's game is (docs: the Linux/macOS census, "Run-time matters"):

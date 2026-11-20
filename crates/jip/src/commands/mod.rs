@@ -43,6 +43,8 @@ pub mod jip_fn_land_texture;
 pub mod jip_fn_light;
 pub mod jip_fn_linked_ref;
 pub mod jip_fn_marker_cmds;
+pub mod jip_fn_minimap;
+pub mod jip_fn_minimap_seams;
 pub mod jip_fn_misc_ref;
 pub mod jip_fn_misc_ref_cameras;
 pub mod jip_fn_misc_ref_code;
@@ -274,6 +276,8 @@ pub const ALL: &[Handlers] = &[
     jip_fn_misc_ref_cameras::COMMANDS,
     jip_fn_ui_project::COMMANDS,
     jip_fn_miscellaneous_depth::COMMANDS,
+    // `InitMiniMap` (JIP MiniMap's start; its patches in `jip_fn_minimap_seams`).
+    jip_fn_minimap::COMMANDS,
 ];
 
 /// How many of JIP's commands have a handler.
@@ -320,6 +324,7 @@ pub fn install(e: &mut Engine) {
     // The extra cameras' list and the interface's culling process: made now, before the threads.
     e.ext_free::<jip_fn_misc_ref_cameras::ExtraCameras>();
     e.ext_free::<rendered_textures::UiCulling>();
+    jip_fn_minimap::install(e);
     for list in ALL {
         for &(opcode, execute) in list.iter() {
             crate::table::set_handlers(e, opcode, Some(execute), None);
@@ -945,6 +950,8 @@ mod tests {
             "jip_fn_misc_ref",
             "jip_fn_ui",
             "jip_fn_miscellaneous",
+            // jip_fn_minimap (InitMiniMap).
+            "jip_fn_minimap",
         ];
         assert_eq!(files.len(), ALL.len(), "one file per command list");
         let mut seen = std::collections::HashSet::new();
@@ -1010,8 +1017,8 @@ mod tests {
             nvse::table::guest_text(&e, e.mem.u32(record)),
             b"GetClimateSunTexture"
         );
-        // InitMiniMap is not built (it waits for the drawing track): no handler.
-        assert_eq!(execute(&e, 0x2873), 0);
+        // UpdateMiniMap is not built (it comes with the minimap's second part): no handler.
+        assert_eq!(execute(&e, 0x2874), 0);
     }
 
     /// Answering "not installed" (players' state until step 3.10), every opcode built here is as

@@ -2076,8 +2076,11 @@ pub fn fn_007d52a0(e: &mut Engine, this: Ptr<StartMenu>) -> bool {
         let axis_b = e
             .call(GAMEPAD_AXIS_VALUE, &args![controls_object, 0u32, 0xau32])
             .i32();
-        let over_a = e.call(ABSOLUTE_VALUE, &args![axis_a]).i32() > 0x21f1;
-        if over_a || e.call(ABSOLUTE_VALUE, &args![axis_b]).i32() > 0x21f1 {
+        // The dead zone: the exe's `0x21f1` (immediates `0x7D57C0`, `0x7D57D3`) unless JIP LN NVSE's
+        // `SetDeadZoneRS` rewrote them.
+        let dead_zone = e.pad_dead_zone_right();
+        let over_a = e.call(ABSOLUTE_VALUE, &args![axis_a]).i32() > dead_zone;
+        if over_a || e.call(ABSOLUTE_VALUE, &args![axis_b]).i32() > dead_zone {
             e.call(PLAY_MENU_SOUND, &args![0xau32]);
             show_message_with_icon(e, SETTING_011D3108);
         }
@@ -6327,6 +6330,17 @@ mod tests {
         e.call_log = Some(Vec::new());
         assert!(fn_007d52a0(&mut e, menu));
         assert!(calls(&e, SHOW_MESSAGE).is_empty());
+        // The right dead zone moved (JIP's SetDeadZoneRS, immediates 0x7D57C0 and 0x7D57D3): below
+        // it 0x21f1 counts, on either axis; at it, it does not.
+        for (moved, axis, shown) in [(0x21f0, 9, 1), (0x21f0, 0xa, 1), (0x21f1, 9, 0)] {
+            e.set_pad_dead_zone_right(moved);
+            e.register_double(GAMEPAD_AXIS_VALUE, move |_, a| {
+                ret(if a[2] == axis { 0x21f1 } else { 0 })
+            });
+            e.call_log = Some(Vec::new());
+            assert!(fn_007d52a0(&mut e, menu));
+            assert_eq!(calls(&e, SHOW_MESSAGE).len(), shown, "{moved:x} {axis}");
+        }
     }
 
     #[test]

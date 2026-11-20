@@ -24,7 +24,7 @@
 //!
 //! Not yet: Tweaks' eight script commands (opcodes `0x2132` up), its co-save records (kept for the
 //! next save by the co-save row while its section is not read here) and every row not in
-//! [`rows::ROWS`].
+//! [`rows::all`].
 
 pub mod ini;
 pub mod rows;
@@ -167,8 +167,7 @@ pub fn settings_and_rows(
     let mut files: Vec<(&str, &[u8])> = ini.map(|b| (name.as_str(), b)).into_iter().collect();
     files.extend(overlays.iter().map(|(n, b)| (n.as_str(), b.as_slice())));
     let settings = settings::Settings::with_main(&files, ini.is_some(), keys.as_tweaks);
-    let on = rows::ROWS
-        .iter()
+    let on = rows::all()
         .filter(|r| rows::on(r, keys, &settings))
         .collect();
     (settings, on)
@@ -229,7 +228,7 @@ pub fn start_lines(
     }
     lines.push(format!(
         "lStewieAl's Tweaks: {rows_on} of its {} rows built are on",
-        rows::ROWS.len()
+        rows::all().count()
     ));
     lines
 }

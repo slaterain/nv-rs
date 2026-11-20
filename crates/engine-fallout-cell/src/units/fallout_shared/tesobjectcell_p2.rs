@@ -134,6 +134,8 @@ const FORM_LOOK_UP: u32 = 0x0048_39c0;
 const REFERENCE_GET_BASE_FORM: u32 = 0x007a_f430;
 /// The parent cell of a reference (`+0x40`).
 const REFERENCE_PARENT_CELL: u32 = 0x008d_6f30;
+/// The reference's cell (`TESObjectREFR` +0x40), which `008d6f30` answers.
+const REFERENCE_CELL: u32 = 0x40;
 /// The reference's `ExtraDataList` (`this + 0x44`).
 const REFERENCE_EXTRA_DATA_LIST: u32 = 0x005d_43c0;
 /// The reference's 3D (the loaded model node), or null.
@@ -1595,7 +1597,18 @@ pub fn tes_object_cell_add_reference(
         }
     }
     e.call(REFERENCE_ADD_LIGHT_TO_SCENE, &args![reference, 0u32]);
-    let parent = e.call(REFERENCE_PARENT_CELL, &args![reference]).ptr::<()>();
+    // lStewieAl's Tweaks' row S0199.07 (`MiscCrashFixes`, the bytes at `0x54867C`): the reference's cell
+    // is read in place (+0x40, no call to `008d6f30`) and a reference with none skips the exterior
+    // lists; the exe asks the missing cell whether it is an interior.
+    let parent = if e.stewie(engine_core::extend::stewie::ADD_REFERENCE_NULL_CELL) {
+        let cell = e.mem.u32(reference.addr() + REFERENCE_CELL);
+        if cell == 0 {
+            return;
+        }
+        Ptr::<()>::new(cell)
+    } else {
+        e.call(REFERENCE_PARENT_CELL, &args![reference]).ptr::<()>()
+    };
     if !e.call(CELL_IS_INTERIOR, &args![parent]).bool() {
         if fn_00548700(e, reference.cast()) && !list_contains(e, KIND_LIST_A, reference.addr()) {
             push_front_value(e, KIND_LIST_A, reference.addr());
@@ -9057,6 +9070,49 @@ mod tests {
         w.e.mem.set_u8(w.handler + 0x61a, 1);
         w.e.call(0x0054_8230, &args![w.cell, r, 0u32]);
         assert_eq!(vcalls.borrow().len(), 1);
+    }
+
+    /// lStewieAl's Tweaks' row S0199.07: a reference whose cell is gone by the end (the light's stand-in
+    /// clears it). Row off: the exe asks the missing cell whether it is an interior (`00425fd0`'s
+    /// stand-in reads its +0x24) and stops; row on: the exterior lists are skipped. With the cell
+    /// there, the same calls row off and on but for `008d6f30`, which the row reads in place.
+    #[test]
+    fn s0199_07_a_reference_whose_cell_is_gone() {
+        let mut ordinary = vec![];
+        for on in [false, true] {
+            let mut w = world();
+            w.e.set_stewie(engine_core::extend::stewie::ADD_REFERENCE_NULL_CELL, on);
+            w.e.register(CELL_IS_INTERIOR, |e, a| {
+                u32::from(e.mem.u8(a[0] + 0x24) & 1).into_ret()
+            });
+            let (r, _, _) = placed_reference(&mut w, 0x15, false, true);
+            start_log(&mut w.e);
+            w.e.call(0x0054_8230, &args![w.cell, r, 0u32]);
+            let log = take_log(&mut w.e);
+            assert_eq!(calls_to(&log, CELL_IS_INTERIOR).len(), 1, "row {on}");
+            ordinary.push(
+                log.into_iter()
+                    .filter(|(a, _)| *a != REFERENCE_PARENT_CELL)
+                    .collect::<Vec<_>>(),
+            );
+            let (r, _, _) = placed_reference(&mut w, 0x15, false, true);
+            w.e.register(REFERENCE_ADD_LIGHT_TO_SCENE, |e, a| {
+                e.mem.set_u32(a[0] + 0x40, 0);
+                Ret::default()
+            });
+            w.e.mem.unmap(0, 0x1000);
+            start_log(&mut w.e);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                w.e.call(0x0054_8230, &args![w.cell, r, 0u32]);
+            }));
+            w.e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                let log = take_log(&mut w.e);
+                assert!(calls_to(&log, CELL_IS_INTERIOR).is_empty());
+            }
+        }
+        assert_eq!(ordinary[0], ordinary[1], "row on: the calls of the row off");
     }
 
     #[test]
