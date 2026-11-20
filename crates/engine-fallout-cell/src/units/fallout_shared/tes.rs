@@ -8942,37 +8942,40 @@ mod tests {
     }
 
     /// JIP MiniMap's seam at the small-grid test (0x452737): asked with the setting only while JIP
-    /// is installed; its answer picks the extent (3072 for 1), no answer leaves the game's test.
+    /// is installed; its answer picks the extent (3072 for 1, 4096 for 0 even with the setting at
+    /// 3, where the game's own test gives 3072), no answer leaves the game's test.
     #[test]
     fn grid_update_asks_jips_small_grid_seam() {
         thread_local! {
             static ASKED: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+            static ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
         }
         let installed = engine_core::extend::jip_patches::INSTALLED;
-        for (word, answer, extent) in [
-            (0, true, 4096.0),
-            (installed, true, 3072.0),
-            (installed, false, 4096.0),
+        for (word, answer, grids, extent) in [
+            (0, Some(1), 5, 4096.0),
+            (installed, Some(1), 5, 3072.0),
+            (installed, None, 5, 4096.0),
+            (installed, None, 3, 3072.0),
+            (installed, Some(0), 3, 4096.0),
+            (installed, Some(0), 7, 4096.0),
         ] {
-            let (mut e, tes, _, _) = update_engine(5);
+            let (mut e, tes, _, _) = update_engine(grids);
             e.set_jip_patches(word);
             ASKED.with(|a| a.borrow_mut().clear());
-            if answer {
-                e.on_site_for_test(JIP_SMALL_GRID_TEST, |_, w| {
-                    ASKED.with(|a| a.borrow_mut().push(w[0]));
-                    Some(1)
-                });
-            } else {
-                e.on_site_for_test(JIP_SMALL_GRID_TEST, |_, w| {
-                    ASKED.with(|a| a.borrow_mut().push(w[0]));
-                    None
-                });
-            }
+            ANSWER.with(|a| a.set(answer));
+            e.on_site_for_test(JIP_SMALL_GRID_TEST, |_, w| {
+                ASKED.with(|a| a.borrow_mut().push(w[0]));
+                ANSWER.with(std::cell::Cell::get)
+            });
             let pos = position(&mut e, 10.0 * 4096.0 + 2048.0, 20.0 * 4096.0 + 2048.0);
             e.call(0x0045_2580, &args![tes, pos, 0u8]);
-            assert_eq!(e.get(tes, TES::fCell_delta_x), extent, "{word:x} {answer}");
+            assert_eq!(
+                e.get(tes, TES::fCell_delta_x),
+                extent,
+                "{word:x} {answer:?} {grids}"
+            );
             let asked = ASKED.with(|a| a.borrow().clone());
-            assert_eq!(asked, if word == 0 { vec![] } else { vec![5] });
+            assert_eq!(asked, if word == 0 { vec![] } else { vec![grids] });
         }
     }
 

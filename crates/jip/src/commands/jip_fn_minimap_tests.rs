@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::commands::test_support::{
-    calls, calls_to, engine, game_globals, loaded_mod, CALLS, FORMS,
+    calls, calls_to, engine, extra_stand_ins, game_globals, loaded_mod, put_extra, CALLS, FORMS,
 };
 use crate::test_support::{call, DATA, SCRIPT};
 use std::cell::Cell;
@@ -505,4 +505,136 @@ fn the_fake_water_planes() {
     assert_eq!(e.mem.u8(last + 0x30) & 1, 1);
     assert_eq!(e.mem.f32(last + 0x58), 10240.0);
     assert_eq!(e.mem.f32(last + 0x5c), -2048.0);
+}
+
+/// In an interior at the start (`TES` +0x34 set): the zoom starts 0.25 higher (0.75), not in an
+/// exterior, the zoom value set to it and the shapes' scale `(0.5 + 0.75) * scale`.
+#[test]
+fn the_start_in_an_interior() {
+    let (mut e, h) = setup();
+    let tes = alloc(0x40);
+    e.mem.set_u32(TES, tes);
+    e.mem.set_u32(tes + 0x34, alloc(0x10));
+    run(&mut e);
+    let s = state(&mut e);
+    assert_eq!(s.zoom_current, 0.75);
+    assert!(!s.in_exterior);
+    let shapes = s.shapes;
+    drop(s);
+    assert_eq!(e.mem.f32(h.local_zoom + 8), 0.75);
+    for shape in shapes {
+        assert_eq!(e.mem.f32(shape + 0x64), (0.5 + 0.75) * 2.0);
+    }
+}
+
+/// A world (its map: usable width, corners, scale and offsets) with a persistent cell whose
+/// objects are `refs`.
+fn world_with(
+    e: &mut Engine,
+    parent: u32,
+    flags: u16,
+    usable: u32,
+    scale: [f32; 4],
+    refs: &[u32],
+) -> u32 {
+    let world = alloc(0xc0);
+    let cell = alloc(0xc0);
+    e.mem.set_u32(world + 0x34, cell);
+    e.mem.set_u16(world + 0x4e, flags);
+    e.mem.set_u32(world + 0x70, parent);
+    e.mem.set_u32(world + 0x80, usable);
+    for (i, v) in [-30i16, 30, 20, -25].iter().enumerate() {
+        e.mem.set_u16(world + 0x88 + 2 * i as u32, *v as u16);
+    }
+    for (i, v) in scale.iter().enumerate() {
+        e.mem.set_f32(world + 0x90 + 4 * i as u32, *v);
+    }
+    for (i, v) in [-1000.0f32, -2000.0, 3000.0, 4000.0].iter().enumerate() {
+        e.mem.set_f32(world + 0xa0 + 4 * i as u32, *v);
+    }
+    let mut node = cell + 0xac;
+    for (i, &r) in refs.iter().enumerate() {
+        e.mem.set_u32(node, r);
+        let next = if i + 1 < refs.len() { alloc(8) } else { 0 };
+        e.mem.set_u32(node + 4, next);
+        node = next;
+    }
+    world
+}
+
+/// A reference at `pos` whose base has the form id `base_id`; a map marker's data in its extra
+/// list (`ExtraMapMarker`) when it is one.
+fn placed(e: &mut Engine, base_id: u32, pos: [f32; 2]) -> (u32, u32) {
+    let refr = alloc(0x60);
+    let base = alloc(0x20);
+    e.mem.set_u32(base + 0xc, base_id);
+    e.mem.set_u32(refr + 0x20, base);
+    e.mem.set_f32(refr + 0x30, pos[0]);
+    e.mem.set_f32(refr + 0x34, pos[1]);
+    let data = alloc(0x10);
+    if base_id == 0x10 {
+        let extra = alloc(0x10);
+        put_extra(e, refr + 0x44, extra, 0x2c, data);
+    }
+    (refr, data)
+}
+
+/// Every world's map markers, by root world and by cell: a child world using its parent's map
+/// (flag 4 at +0x4E) goes under the parent, its places by its own scale and offsets on the
+/// parent's map; a world with no parent and no map is passed over; a reference that is not a map
+/// marker is left out.
+#[test]
+fn every_worlds_map_markers_by_root_and_cell() {
+    let mut e = engine();
+    e.map(AREA, 0x40_0000);
+    if !e.mem.is_mapped(0x011c_3000) {
+        e.map(0x011c_3000, 0x1000);
+    }
+    extra_stand_ins(&mut e);
+    let (a, a_data) = placed(&mut e, 0x10, [1000.0, 2000.0]);
+    let (other, _) = placed(&mut e, 0x20, [0.0, 0.0]);
+    let (b, b_data) = placed(&mut e, 0x10, [-5000.0, 9000.0]);
+    let (c, _) = placed(&mut e, 0x10, [0.0, 0.0]);
+    let root = world_with(&mut e, 0, 0, 1000, [1.0, 0.0, 0.0, 0.0], &[a, other]);
+    let child = world_with(&mut e, root, 4, 0, [0.5, 100.0, -200.0, 0.0], &[b]);
+    let skipped = world_with(&mut e, 0, 0, 0, [1.0, 0.0, 0.0, 0.0], &[c]);
+    let handler = alloc(0x20);
+    e.mem.set_u32(0x011c_3f2c, handler);
+    let (n2, n3) = (alloc(8), alloc(8));
+    for (node, world, next) in [
+        (handler + 0x10, root, n2),
+        (n2, child, n3),
+        (n3, skipped, 0),
+    ] {
+        e.mem.set_u32(node, world);
+        e.mem.set_u32(node + 4, next);
+    }
+    let got = world_markers(&mut e);
+    assert_eq!(got.keys().copied().collect::<Vec<_>>(), [root]);
+    let mut dims = WorldDimensions::default();
+    init_pos_mods(&e, &mut dims, root);
+    init_dimensions(&e, &mut dims, root);
+    let (mut ca, mut cb) = (0, 0);
+    let pa = world_map_pos_mults([1000.0, 2000.0], &dims, Some(&mut ca));
+    init_pos_mods(&e, &mut dims, child);
+    let pb = world_map_pos_mults([-5000.0, 9000.0], &dims, Some(&mut cb));
+    assert_ne!(ca, cb);
+    let cells = &got[&root];
+    assert_eq!(cells.len(), 2);
+    assert_eq!(
+        cells[&ca],
+        [MarkerInfo {
+            refr: a,
+            data: a_data,
+            pos: pa
+        }]
+    );
+    assert_eq!(
+        cells[&cb],
+        [MarkerInfo {
+            refr: b,
+            data: b_data,
+            pos: pb
+        }]
+    );
 }

@@ -353,3 +353,145 @@ fn small_moves_in_the_same_cell_wait() {
     answer(&mut e, SEEN_BITS_CALL, &[]);
     assert_eq!(calls_to(ADD_EXTRA).len(), 2);
 }
+
+/// The player in an interior cell (flags bit 0) at `pos`, the tracked cell another (so the north
+/// is read), with `angle` the cell's `ExtraNorthRotation`; the cell.
+fn seen_interior(e: &mut Engine, pos: [f32; 2], angle: Option<f32>) -> u32 {
+    extra_stand_ins(e);
+    for page in [0x011d_e000, 0x011c_a000, 0x011e_0000] {
+        if !e.mem.is_mapped(page) {
+            e.map(page, 0x1000);
+        }
+    }
+    let player = FORMS + 0x5000;
+    let cell = FORMS + 0x7000;
+    e.mem.set_u32(PLAYER, player);
+    e.mem.set_u32(player + PLAYER_CELL, cell);
+    e.mem.set_u8(cell + CELL_FLAGS, 1);
+    e.mem.set_u32(cell + CELL_ID, 0x200);
+    e.mem.set_u32(TRACKED_CELL, FORMS + 0x7400);
+    e.mem.set_f32(player + PLAYER_POSITION, pos[0]);
+    e.mem.set_f32(player + PLAYER_POSITION + 4, pos[1]);
+    if let Some(a) = angle {
+        put_extra(
+            e,
+            cell + CELL_EXTRA,
+            FORMS + 0x7800,
+            EXTRA_NORTH_ROTATION,
+            a.to_bits(),
+        );
+    }
+    cell
+}
+
+/// The interior's sections from its seen data, in their list's order: number and address.
+fn sections(e: &mut Engine, cell: u32) -> Vec<(u16, u32)> {
+    let extra = super::super::extra::get_by_type(e, cell + CELL_EXTRA, EXTRA_SEEN_DATA);
+    let mut d = e.mem.u32(extra + EXTRA_DATA);
+    let mut out = Vec::new();
+    while d != 0 {
+        out.push((e.mem.u16(d + INT_SECTION), d));
+        d = e.mem.u32(d + INT_NEXT);
+    }
+    out
+}
+
+fn int_bits(e: &Engine, seen: u32) -> Vec<u32> {
+    (0..256)
+        .filter(|b| e.mem.u32(seen + 4 + 4 * (b >> 5)) >> (b & 31) & 1 == 1)
+        .collect()
+}
+
+/// Inside, with no north rotation: the place less 0x800 each way (100, 5000 gives -1948, 2952:
+/// section x -1, y 0), JIP's mask from it (bits 4 and 5: this section and y + 1), the sections
+/// made after the cell's own seen data by their number `(y & 0xFF) << 8 | (x & 0xFF)` (0x00FF,
+/// 0x01FF), the brush's centre bit (column 12, row 9) in the first and its one edge bit (column
+/// 0, row 9) in the next.
+#[test]
+fn the_seen_bits_inside() {
+    let mut e = engine();
+    patch(&mut e);
+    let cell = seen_interior(&mut e, [100.0, 5000.0], None);
+    assert_eq!(answer(&mut e, SEEN_BITS_CALL, &[]), Some(0));
+    assert_eq!(mini_map(&mut e).north_rotation.load(Ordering::Acquire), 0);
+    let found = sections(&mut e, cell);
+    let numbers: Vec<u16> = found.iter().map(|s| s.0).collect();
+    assert_eq!(numbers, [0xffff, 0x00ff, 0x01ff]);
+    assert!(int_bits(&e, found[1].1).contains(&0xc9));
+    assert_eq!(int_bits(&e, found[2].1), [0x09]);
+    assert!(
+        int_bits(&e, found[0].1).is_empty(),
+        "the cell's own seen data"
+    );
+    assert_eq!(e.mem.u8(found[1].1 + INT_SEEN_ALL), 0);
+}
+
+/// With a north rotation (0.5): `s_cellNorthRotation` the angle's negation, the lanes (sin, cos,
+/// cos, -sin) of it; the place turned by it (x cos - y sin, x sin + y cos) before the 0x800, so its
+/// section and the brush's centre follow the turned place.
+#[test]
+fn the_seen_bits_inside_follow_the_cells_north() {
+    let mut e = engine();
+    patch(&mut e);
+    let cell = seen_interior(&mut e, [100.0, 5000.0], Some(0.5));
+    answer(&mut e, SEEN_BITS_CALL, &[]);
+    let m = mini_map(&mut e);
+    assert_eq!(
+        m.north_rotation.load(Ordering::Acquire),
+        (-0.5f32).to_bits()
+    );
+    let r: Vec<f32> = m
+        .north_rotation_mods
+        .iter()
+        .map(|v| f32::from_bits(v.load(Ordering::Acquire)))
+        .collect();
+    assert!((r[0] - (-0.5f32).sin()).abs() < 1e-4, "{r:?}");
+    assert!((r[1] - (-0.5f32).cos()).abs() < 1e-4, "{r:?}");
+    assert_eq!((r[2], r[3]), (r[1], -r[0]));
+    let (x, y) = (100.0f32, 5000.0f32);
+    let turned = [x * r[1] - y * r[0], x * r[0] + y * r[1]];
+    let cvt = crate::game_patches::gd::cvtss2si;
+    let (px, py) = (cvt(turned[0]) - 0x800, cvt(turned[1]) - 0x800);
+    let (sx, sy) = (px >> 12, py >> 12);
+    let number = ((sy as u16 & 0xff) << 8) | (sx as u16 & 0xff);
+    let row = -((sx.wrapping_shl(12) - px) >> 8);
+    let column = -((sy.wrapping_shl(12) - py) >> 8);
+    let found = sections(&mut e, cell);
+    let section = found
+        .iter()
+        .find(|s| s.0 == number)
+        .expect("the turned place's section");
+    assert!(int_bits(&e, section.1).contains(&((column as u32) << 4 | row as u32)));
+}
+
+/// A section whose last bit the brush sets is marked all seen (+0x26); the next sections are made
+/// after the ones the cell has.
+#[test]
+fn an_interior_section_filled_is_marked_all_seen() {
+    let mut e = engine();
+    patch(&mut e);
+    let cell = seen_interior(&mut e, [100.0, 5000.0], None);
+    let root = FORMS + 0x9000;
+    let next = FORMS + 0x9100;
+    for (d, section, link) in [(root, 0xffffu16, next), (next, 0x01ff, 0)] {
+        e.mem.set_u32(d, 0x0108_3fe4);
+        e.mem.set_u16(d + INT_SECTION, section);
+        e.mem.set_u8(d + INT_SEEN_ALL, 0);
+        e.mem.set_u32(d + INT_NEXT, link);
+    }
+    for i in 0..8 {
+        e.mem.set_u32(next + 4 + 4 * i, u32::MAX);
+    }
+    e.mem.set_u32(next + 4, !(1 << 9));
+    put_extra(
+        &mut e,
+        cell + CELL_EXTRA,
+        FORMS + 0x9200,
+        EXTRA_SEEN_DATA,
+        root,
+    );
+    answer(&mut e, SEEN_BITS_CALL, &[]);
+    assert_eq!(e.mem.u8(next + INT_SEEN_ALL), 1);
+    let numbers: Vec<u16> = sections(&mut e, cell).iter().map(|s| s.0).collect();
+    assert_eq!(numbers, [0xffff, 0x01ff, 0x00ff]);
+}
