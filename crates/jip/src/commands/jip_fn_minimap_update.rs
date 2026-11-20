@@ -470,7 +470,7 @@ fn update(e: &mut Engine, s: &mut MiniMapState, update_type: u32, show_flags: u3
             } else {
                 INTERIOR_ZOOM
             };
-            s.zoom_current = change + s.zoom_current;
+            s.zoom_current += change;
             update_tile_scales(e, s, s.zoom_current);
         }
     }
@@ -510,17 +510,16 @@ fn update(e: &mut Engine, s: &mut MiniMapState, update_type: u32, show_flags: u3
     }
 
     if world_map {
-        let object;
-        if parent_world != 0 {
-            object = player;
+        let object = if parent_world != 0 {
+            player
         } else {
             parent_world = e.mem.u32(e.mem.u32(TES) + TES_WORLD);
             let door = e.mem.u32(player + LAST_EXTERIOR_DOOR);
             if parent_world == 0 || door == 0 {
                 return;
             }
-            object = door;
-        }
+            door
+        };
         if s.pc_curr_world != parent_world {
             s.pc_curr_world = parent_world;
             let mut dims = s.root_dims;
@@ -847,11 +846,11 @@ fn exterior(
                     continue;
                 }
                 let id = e.mem.u32(cell + CELL_ID);
-                if !s.exterior_door_refs.contains_key(&id) {
-                    let doors = teleport_doors(e, cell);
-                    s.exterior_door_refs.insert(id, doors);
-                }
-                let list = s.exterior_door_refs[&id].clone();
+                let list = s
+                    .exterior_door_refs
+                    .entry(id)
+                    .or_insert_with(|| teleport_doors(e, cell))
+                    .clone();
                 s.door_refs_list.extend(list);
             }
         }
@@ -962,12 +961,11 @@ fn draw_exterior(e: &mut Engine, s: &mut MiniMapState, update_tiles: bool, nw: [
     e.mem.set_u8(UNDERWATER_FOG, 1);
     e.mem.set_u8(LIGHTING_PASSES, 0x3c);
     s.render_mode = RENDER_NORMAL;
-    for i in 0..9 {
+    for (i, &mask) in SELECT_UPDATE.iter().enumerate() {
         let cell = s.curr_cell_grid[i];
         if cell == 0 {
             continue;
         }
-        let mask = SELECT_UPDATE[i];
         let id = e.mem.u32(cell + CELL_ID);
         if let Some(mut entry) = s.rendered_exteriors.get(&id).copied() {
             if update_tiles {
@@ -1106,8 +1104,9 @@ fn generate_local_map_exterior(e: &mut Engine, s: &MiniMapState, cell: u32, slot
     let land_data = e.mem.u32(cell + CELL_LAND);
     if land_data != 0 {
         let heights = e.mem.u32(land_data + 0x28);
-        // `comiss 65536, [ecx+0x18]; jb`: the land's top at most 65536 (not a NaN).
-        if heights != 0 && !(z < e.mem.f32(heights + 0x18)) && !e.mem.f32(heights + 0x18).is_nan() {
+        // `comiss 65536, [ecx+0x18]; jb doneZ`: on when +0x18 is at most 65536 (a NaN jumps:
+        // `>=` is false for it); the height then +0x1C plus 16384.
+        if heights != 0 && z >= e.mem.f32(heights + 0x18) {
             z = e.mem.f32(heights + 0x1c) + 16384.0;
         }
     }
@@ -1353,6 +1352,8 @@ fn door_markers(
 /// 0, 0) (`movq` of `PS_V3_One`), `movmskps`, `xor 0xC`: inside only when 0 <= x < 1 and 0 <= y < 1
 /// (a NaN is outside).
 pub(crate) fn off_bounds(place: [f32; 2]) -> bool {
+    // `cmpnltps` itself: "not less than", true for a NaN (which `>=` would not be).
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
     let nlt = |a: f32, b: f32| !(a < b);
     let mask = u32::from(nlt(place[0], 1.0))
         | u32::from(nlt(place[1], 1.0)) << 1
@@ -1451,16 +1452,17 @@ fn quest_markers(
                 {
                     continue;
                 }
-                if !s.quest_markers.contains_key(&object) {
+                if let std::collections::btree_map::Entry::Vacant(slot) =
+                    s.quest_markers.entry(object)
+                {
                     let tile = add_tile_from_template(e, hud, rect, b"MiniMapQuestMarkerTemplate");
-                    let marker = QuestMarkerTile {
+                    slot.insert(QuestMarkerTile {
                         pos: 0x7f7f_ffff,
                         x: value_of(e, tile, TRAIT_USER0),
                         y: value_of(e, tile, TRAIT_USER1),
-                    };
+                    });
                     tile_set_float(e, tile, TRAIT_DEPTH, depth as f32);
                     depth += 1;
-                    s.quest_markers.insert(object, marker);
                 }
                 if done_placed {
                     let x = s.quest_markers[&object].x;
