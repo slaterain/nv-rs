@@ -250,6 +250,13 @@ const UNREAD: &[Row] = &[
     ),
     (
         "jip",
+        "commands/rendered_textures.rs",
+        "delete",
+        N(1),
+        "a vtable slot (the deleting destructor, `NiReleaseObject`) taking only `this`",
+    ),
+    (
+        "jip",
         "game_patches/gx.rs",
         "delete",
         N(1),

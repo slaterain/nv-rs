@@ -43,11 +43,11 @@
 //! reads: until that patch is in, the word is kept and answered and the game is unchanged.
 //!
 //! Deferred (each waits for what is named; no stand-ins):
-//! - `ToggleDepthClear` (G128): the drawing track's patch that reads what it sets.
 //! - `SetMoonTexture`, `ToggleCameraCollision`, `InitRockItLauncher`: they patch the game's code.
 //!
 //! `SwapTextureEx` and `GetLightAmountAtPoint` are built in `jip_fn_miscellaneous_scene.rs`,
-//! `SetInternalMarker` in `jip_fn_miscellaneous_marker.rs`.
+//! `SetInternalMarker` in `jip_fn_miscellaneous_marker.rs`, `ToggleDepthClear` (with its patch G128) in
+//! `jip_fn_miscellaneous_depth.rs`.
 
 use super::arrays::{self, Element};
 use super::havok_refs as h;

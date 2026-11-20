@@ -82,7 +82,31 @@ pub fn fn_00978f40(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
 /// (`0045cec0`), then the `Projectile` destructor body (`009bc470`).
 pub fn fn_00978f70(e: &mut Engine, this: Ptr) {
     e.call(POINTER_RELEASE, &args![this.addr() + BEAM_POINTER]);
+    // lStewieAl's Tweaks' row S0130.01 (`ContinuousBeamProjectileCrashFix`, the call at `0x978FB5`):
+    // a beam going away is taken from its shooter's continuous beam (+0x1A0) when it is that beam;
+    // the exe leaves the actor pointing at the freed beam.
+    if e.stewie(engine_core::extend::stewie::BEAM_SHOOTER_POINTER) {
+        forget_shooters_beam(e, this.addr());
+    }
     e.call(0x009b_c470, &args![this]);
+}
+
+/// A projectile's shooter (+0xFC), an actor's continuous beam (+0x1A0), and the function an actor's
+/// vtable holds at +0x100 (`IsActor`): `ReturnTrue` (`008d0360`), which Tweaks' `IS_ACTOR` compares.
+const PROJECTILE_SHOOTER: u32 = 0xfc;
+const ACTOR_CONTINUOUS_BEAM: u32 = 0x1a0;
+const RETURN_TRUE: u32 = 0x008d_0360;
+
+/// Row S0130.01's step: the shooter of `beam`, when it is an actor (its vtable's +0x100 is
+/// `ReturnTrue`, read and not called, as Tweaks reads it) whose continuous beam is `beam`, has none.
+fn forget_shooters_beam(e: &mut Engine, beam: u32) {
+    let shooter = e.mem.u32(beam + PROJECTILE_SHOOTER);
+    if shooter != 0
+        && e.mem.u32(e.mem.u32(shooter) + 0x100) == RETURN_TRUE
+        && e.mem.u32(shooter + ACTOR_CONTINUOUS_BEAM) == beam
+    {
+        e.mem.set_u32(shooter + ACTOR_CONTINUOUS_BEAM, 0);
+    }
 }
 
 /// The common end of the two `BeamProjectile` constructors: the vtables,
@@ -354,6 +378,52 @@ mod n028_tests {
         assert_eq!(calls_to(&e, 0x0040_1030), vec![vec![0x9000]]);
         e.call(0x0097_8f40, &[0x9000, 0]);
         assert_eq!(calls_to(&e, 0x0040_1030).len(), 1);
+    }
+
+    /// A beam (0x160 bytes) whose shooter (+0xFC) is `shooter`, and an actor whose vtable's +0x100 is
+    /// `is_actor` (`ReturnTrue` for an actor) holding `held` as its continuous beam (+0x1A0).
+    fn beam_and_shooter(e: &mut Engine, is_actor: u32) -> (u32, u32) {
+        let table = e.mem.alloc(0x200);
+        e.mem.set_u32(table + 0x100, is_actor);
+        let shooter = e.mem.alloc(0x200);
+        e.mem.set_u32(shooter, table);
+        let beam = e.mem.alloc(0x160);
+        e.mem.set_u32(beam + 0xfc, shooter);
+        (beam, shooter)
+    }
+
+    /// lStewieAl's Tweaks' row S0130.01 (`ContinuousBeamProjectileCrashFix`, `0x978FB5`): a beam going
+    /// away while its shooter, an actor, holds it as its continuous beam: off, the actor keeps the freed
+    /// beam (the exe's use after free); on, it holds none.
+    #[test]
+    fn s0130_01_the_shooter_lets_go_of_a_beam_that_goes_away() {
+        for on in [false, true] {
+            let mut e = Engine::new();
+            stub_all(&mut e, &[POINTER_RELEASE, 0x009b_c470]);
+            let (beam, shooter) = beam_and_shooter(&mut e, 0x008d_0360);
+            e.mem.set_u32(shooter + 0x1a0, beam);
+            e.set_stewie(engine_core::extend::stewie::BEAM_SHOOTER_POINTER, on);
+            e.call(0x0097_8f70, &[beam]);
+            assert_eq!(e.mem.u32(shooter + 0x1a0), if on { 0 } else { beam });
+        }
+    }
+
+    /// Row S0130.01 with ordinary input: a shooter holding another beam, and one that is no actor
+    /// (its +0x100 is another function), keep their word with the row off and on.
+    #[test]
+    fn s0130_01_row_on_with_another_beam_or_no_actor_changes_nothing() {
+        for (is_actor, other_beam) in [(0x008d_0360u32, true), (0x0012_3450, false)] {
+            for on in [false, true] {
+                let mut e = Engine::new();
+                stub_all(&mut e, &[POINTER_RELEASE, 0x009b_c470]);
+                let (beam, shooter) = beam_and_shooter(&mut e, is_actor);
+                let held = if other_beam { e.mem.alloc(0x160) } else { beam };
+                e.mem.set_u32(shooter + 0x1a0, held);
+                e.set_stewie(engine_core::extend::stewie::BEAM_SHOOTER_POINTER, on);
+                e.call(0x0097_8f70, &[beam]);
+                assert_eq!(e.mem.u32(shooter + 0x1a0), held, "row {on}");
+            }
+        }
     }
 
     #[test]
