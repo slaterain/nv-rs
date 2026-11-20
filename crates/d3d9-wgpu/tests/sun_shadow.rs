@@ -890,6 +890,8 @@ struct Extra {
     /// The cut-out ([`CUT`]) made this many times larger round the world origin (drawn instead of
     /// `cutout`).
     cutout_scale: Option<f32>,
+    /// ... and moved by this along x (in its matrix) after the scaling.
+    cutout_shift: Option<f32>,
     /// The camera's place in the frame's words moved by this (world units; the draws' matrices
     /// stay): the maps step after it.
     camera_shift: Option<[f64; 3]>,
@@ -1853,7 +1855,14 @@ fn lit_sequence_with(
         }
         if e.cutout || e.cutout_scale.is_some() {
             if let Some(s) = e.cutout_scale {
-                set_mvp(b, model_view_proj_scaled(s));
+                let mut m = model_view_proj_scaled(s);
+                if let Some(dx) = e.cutout_shift {
+                    // (The first column is already scaled by s.)
+                    for row in m.iter_mut() {
+                        row[3] += row[0] * dx / s;
+                    }
+                }
+                set_mvp(b, m);
             }
             set_shaders(b, CUT_VS, CUT_PS, CUT_DECL);
             run(
@@ -2140,6 +2149,43 @@ fn a_cut_out_in_the_last_cascade_casts_its_alpha_tests_shape() {
         let (y, z) = (40.0 * y, 40.0 * z);
         let t = taken_at(&off[7], &on[7], -0.75 * z, y);
         eprintln!("the far cut-out at ({y}, {z}): {t}");
+        if opaque {
+            assert!(t > 0.8, "({y}, {z}) opaque: {t}");
+        } else {
+            assert!(t < 0.1, "({y}, {z}) clear: {t}");
+        }
+    }
+}
+
+/// Review of #817: a moving cut-out far out (the far checker stepping 20 units a frame, a bush in
+/// the wind in the last cascade) still casts there while it moves: the moving cut-outs are left out
+/// of a cascade only where their shadow cannot reach it, never for being past the first.
+#[test]
+fn a_moving_cut_out_in_the_last_cascade_casts_while_it_moves() {
+    let _far = FarScene::on();
+    let shift = |f: usize| 20.0 * f as f32;
+    let frames: Vec<Extra> = (0..16)
+        .map(|f| Extra {
+            cutout_scale: Some(40.0),
+            cutout_shift: Some(shift(f)),
+            ..far_land(false, false)
+        })
+        .collect();
+    let Some((off, _)) = far_sequence(1, false, &frames) else {
+        return;
+    };
+    let (on, _) = far_sequence(1, true, &frames).expect("the adapter");
+    let last = frames.len() - 1;
+    let dx = f64::from(shift(last));
+    for (y, z, opaque) in [
+        (125.0, 45.0, true),
+        (175.0, 15.0, true),
+        (175.0, 45.0, false),
+        (125.0, 15.0, false),
+    ] {
+        let (y, z) = (40.0 * y, 40.0 * z);
+        let t = taken_at(&off[last], &on[last], -0.75 * z + dx, y);
+        eprintln!("the moving far cut-out at ({y}, {z}): {t}");
         if opaque {
             assert!(t > 0.8, "({y}, {z}) opaque: {t}");
         } else {
