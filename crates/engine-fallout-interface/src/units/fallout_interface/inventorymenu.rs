@@ -1064,6 +1064,22 @@ const WEAPON_TYPE_BADGE: u32 = 0x0066_ea20;
 /// (Xbox PDB, cdecl).
 const GET_EQUIP_TYPE: u32 = 0x0047_9430;
 const GET_EQUIP_TYPE_ICON: u32 = 0x0047_9540;
+
+/// The hotkey icon's equip type for `form`: `BGSEquipType::GetEquipType`'s answer, or with
+/// lStewieAl's Tweaks' S0070 on (`patchFixBookAndAmmoHotkeyIcons`'s `GetEquipTypeIconAidForBooks`,
+/// called at `0x78149C` here and at `0x701861` in the hotkey wheel), for `kNone` (-1) a book
+/// (the form's type byte 0x19) gets `kChems` (10) and ammunition (0x29) `kBigGuns` (0).
+pub(crate) fn equip_type_for_hotkey_icon(e: &mut Engine, form: u32) -> u32 {
+    let equip_type = e.call(GET_EQUIP_TYPE, &args![form]).u32();
+    if equip_type != u32::MAX || !e.stewie(stewie::BOOK_AND_AMMO_HOTKEY_ICONS) {
+        return equip_type;
+    }
+    match e.mem.u8(form + 4) {
+        0x19 => 10,
+        0x29 => 0,
+        _ => equip_type,
+    }
+}
 /// `strcpy_s` and `strcat_s` (cdecl: buffer, size, text) and `strlen`.
 const STRCPY_S: u32 = 0x0040_6d30;
 const STRCAT_S: u32 = 0x0040_6d50;
@@ -1249,7 +1265,8 @@ fn enter_item(e: &mut Engine, this: Ptr<InventoryMenu>) {
             0x0044_ddc0,
             leaf::word_at_8(e, current_item(e))
         );
-        let equip_type = e.call(GET_EQUIP_TYPE, &args![object]).u32();
+        // `0x78149C` (lStewieAl's Tweaks' S0070 calls `GetEquipTypeIconAidForBooks` there).
+        let equip_type = equip_type_for_hotkey_icon(e, object);
         let icon = e.call(GET_EQUIP_TYPE_ICON, &args![equip_type]).u32();
         e.call(STRCAT_S, &args![path, 0x104u32, icon]);
         let equip_tile = |e: &mut Engine| {
@@ -1554,6 +1571,17 @@ pub fn inventory_menu_do_gamepad(
             handled = true;
         }
         0xf => {
+            // The switch's slot at `0x7823B0` (lStewieAl's Tweaks' S0022.34 points it at
+            // `OnWeaponModMenuOpenMenuKeyPress`): with the mod button's (+0x74) `target`
+            // (0xFA7) equal to 0.0 (`FLDZ; FCOMPP; TEST AH,0x44; JNP`), nothing is clicked and
+            // the answer is 1 (`0x78239D`).
+            if e.stewie(stewie::WEAPON_MOD_MENU_NEEDS_TARGET) {
+                let button = tile_at(e, base, 0x74);
+                let target = e.call(GET_FLOAT_TRAIT, &args![button, 0xfa7u32]).f64();
+                if target == 0.0 {
+                    return true;
+                }
+            }
             e.vcall(base, 0xc, &args![0x13u32, 0u32]);
             handled = true;
         }
@@ -4033,5 +4061,70 @@ mod n054_tests {
         assert!(calls_to(&e, FORM_TYPE).is_empty(), "nothing further");
         let (_, ok) = repairable(on, o2_allow, 99.9);
         assert!(ok, "the exe's further tests: below 100, a stack of 2");
+    }
+
+    /// Row S0022.34: the pad's button 15 (Page Up's too) clicks the mod menu button (`DoClick`
+    /// 0x13, vtable +0xc) and answers handled. With the row on and the mod button's (+0x74)
+    /// `target` (0xFA7) at 0.0 (or -0.0) nothing is clicked and it still answers handled; any
+    /// other value (a NaN too: `FCOMPP` unordered) clicks. Off: always the click, `target` never
+    /// read.
+    #[test]
+    fn s0022_34_the_mod_menu_needs_a_usable_button() {
+        for (on, target, clicks) in [
+            (false, 0.0f64, true),
+            (true, 0.0, false),
+            (true, -0.0, false),
+            (true, 1.0, true),
+            (true, f64::NAN, true),
+        ] {
+            let mut e = Engine::new();
+            let this = menu(&mut e);
+            e.set_stewie(stewie::WEAPON_MOD_MENU_NEEDS_TARGET, on);
+            answer(&mut e, IS_TOP_MENU_ID, 1);
+            stub(&mut e, &[GET_PIPBOY, 0x00c0_000c]);
+            answer(&mut e, PIPBOY_READY, 1);
+            answer(&mut e, MENU_TEST_00709D40, 0);
+            answer_st0(&mut e, GET_FLOAT_TRAIT, target);
+            e.call_log = Some(vec![]);
+            assert!(e.call(0x0078_2190, &args![this, 0xfi32, 0u32]).bool());
+            let clicked = calls_to(&e, 0x00c0_000c);
+            if clicks {
+                assert_eq!(clicked, [vec![this.addr(), 0x13, 0]], "row {on} {target}");
+            } else {
+                assert!(clicked.is_empty(), "row {on} {target}");
+            }
+            let read = calls_to(&e, GET_FLOAT_TRAIT);
+            if on {
+                assert_eq!(read, [vec![0x100 + 0x74 - 0x28, 0xfa7]]);
+            } else {
+                assert!(read.is_empty());
+            }
+        }
+    }
+
+    /// Row S0070 (the inventory's `0x78149C` and the wheel's `0x701861` share it): with no equip
+    /// type (-1) and the row on, a book (type 0x19) is `kChems` (10) and ammunition (0x29)
+    /// `kBigGuns` (0); anything else, a form with an equip type, or the row off: `GetEquipType`'s
+    /// answer, asked once.
+    #[test]
+    fn s0070_equip_type_for_books_and_ammo() {
+        for (on, equip_type, kind, wanted) in [
+            (false, u32::MAX, 0x19u8, u32::MAX),
+            (false, u32::MAX, 0x29, u32::MAX),
+            (true, u32::MAX, 0x19, 10),
+            (true, u32::MAX, 0x29, 0),
+            (true, u32::MAX, 0x1f, u32::MAX),
+            (true, 3, 0x19, 3),
+            (true, 3, 0x29, 3),
+        ] {
+            let mut e = Engine::new();
+            e.set_stewie(stewie::BOOK_AND_AMMO_HOTKEY_ICONS, on);
+            answer(&mut e, GET_EQUIP_TYPE, equip_type);
+            let form = e.mem.alloc(0x10);
+            e.mem.set_u8(form + 4, kind);
+            e.call_log = Some(vec![]);
+            assert_eq!(equip_type_for_hotkey_icon(&mut e, form), wanted);
+            assert_eq!(calls_to(&e, GET_EQUIP_TYPE), [vec![form]]);
+        }
     }
 }
