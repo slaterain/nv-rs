@@ -30,6 +30,7 @@ mod ge;
 mod gf;
 mod gh1;
 mod gh2;
+mod gk;
 mod gl;
 mod gp;
 mod gs;
@@ -48,6 +49,7 @@ pub(super) const SITES: &[&[Entry]] = &[
     gh1::SITES,
     gh2::SITES,
     gl::SITES,
+    gk::SITES,
     gp::SITES,
     gs::SITES,
     gw::SITES,
@@ -67,6 +69,7 @@ pub(super) const WRAPS: &[&[Entry]] = &[
     gh1::WRAPS,
     gh2::WRAPS,
     gl::WRAPS,
+    gk::WRAPS,
     gp::WRAPS,
     gs::WRAPS,
     gw::WRAPS,
