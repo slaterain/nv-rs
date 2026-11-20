@@ -54,7 +54,13 @@
 //! ShaderX6), and the map stays valid until the centre crosses a step. Each map keeps the sun it
 //! was drawn for ([`SunKeep`]) until the sun has turned far enough to move a shadow edge in it by
 //! half its texel ([`turn_limit`]); one map a frame takes the new sun ([`sun_turns`]), so the
-//! shadows glide with the sun instead of jumping.
+//! shadows glide with the sun instead of jumping. The steps count from a world point of the map's
+//! own ([`Cascade::anchor`]), which becomes the map's centre when it takes a new sun: the texel
+//! grid then turns about the ground the camera stands on, so a ground point keeps its place in
+//! its texel to a few hundredths of one. (Counted from the world's origin, as before 2026-11-19,
+//! every turn slid the grid by the turn times the distance to the origin: a texel or two at
+//! Quarry Junction, so every shadow edge in a map jumped up to a texel each time it took the sun,
+//! about every other frame for the nearest map: the maintainer's "jittery edges", report 012.)
 //!
 //! **How it shows.** In the game's own lighting: each lit shader gets a variant (`sm::wgsl`'s
 //! `convert_with_sun`) in which every read of the sun's light colour (the pixel shader's
@@ -385,6 +391,11 @@ pub struct Cascade {
     /// Its depth range: half its depth along the sun's rays, game units ([`DEPTH_RANGE`]; the far
     /// map's [`FAR_DEPTH`]).
     pub depth: f64,
+    /// The world point its whole steps count from: its centre along the sun's axis `k` is
+    /// `basis[k] . anchor + origin[k] * step` ([`Cascade::plane`]). Kept while the sun is, and
+    /// moved to the map's own centre ([`Cascade::centre`]) when the map takes a new sun, so the
+    /// texel grid turns about the ground round the camera, not about the world's origin.
+    pub anchor: [f64; 3],
 }
 
 /// An object's place in the world: its object space to the world, rows x, y, z (the point a
@@ -392,6 +403,22 @@ pub struct Cascade {
 pub type World = [[f64; 4]; 3];
 
 impl Cascade {
+    /// Its centre along the sun's axis `k` (game units from the world's origin): the anchor's
+    /// there plus its whole steps.
+    pub fn plane(&self, k: usize) -> f64 {
+        dot3(self.basis[k], self.anchor) + self.origin[k] as f64 * self.step
+    }
+
+    /// Its snapped centre in the world: the anchor moved by its whole steps along the sun's axes.
+    pub fn centre(&self) -> [f64; 3] {
+        std::array::from_fn(|i| {
+            self.anchor[i]
+                + (0..3)
+                    .map(|k| self.origin[k] as f64 * self.step * self.basis[k][i])
+                    .sum::<f64>()
+        })
+    }
+
     /// The matrix from the view space of a camera with `axes` (right, up, ahead) at `position` to
     /// this map's clip space: the camera's axes into the world (relative to the camera), the
     /// sun's basis, less the snapped centre (relative to the camera), scaled into clip space. A map
@@ -400,7 +427,8 @@ impl Cascade {
     pub fn view_to_light_for(&self, axes: [[f64; 3]; 3], position: [f64; 3]) -> M4 {
         let mut m = [[0.0; 4]; 4];
         for k in 0..3 {
-            let offset = dot3(self.basis[k], position) - self.origin[k] as f64 * self.step;
+            let from_anchor: [f64; 3] = std::array::from_fn(|i| position[i] - self.anchor[i]);
+            let offset = dot3(self.basis[k], from_anchor) - self.origin[k] as f64 * self.step;
             let (scale, add) = if k < 2 {
                 (1.0 / self.half, 0.0)
             } else {
@@ -418,10 +446,7 @@ impl Cascade {
     /// Whether a sphere in the world (`centre`, `radius`) can cast into this map: it overlaps the
     /// map's square across the sun's rays (at any depth along them).
     pub fn touches(&self, centre: [f64; 3], radius: f64) -> bool {
-        (0..2).all(|k| {
-            (dot3(self.basis[k], centre) - self.origin[k] as f64 * self.step).abs()
-                <= self.half + radius
-        })
+        (0..2).all(|k| (dot3(self.basis[k], centre) - self.plane(k)).abs() <= self.half + radius)
     }
 
     /// The matrix that takes an object placed at `w` in the world into this map's clip space (rows
@@ -439,7 +464,7 @@ impl Cascade {
             for j in 0..4 {
                 let v = b[0] * w[0][j] + b[1] * w[1][j] + b[2] * w[2][j];
                 let v = if j == 3 {
-                    (v - self.origin[k] as f64 * self.step) * scale + add
+                    (v - self.plane(k)) * scale + add
                 } else {
                     v * scale
                 };
@@ -458,8 +483,19 @@ fn round_radius(r: f64) -> f64 {
     ((r.ln() / step).ceil() * step).exp()
 }
 
+/// The point of the grid of whole `step`s along the sun's axes `b` (counted from the world's
+/// origin) nearest `p`: a map's first anchor, so a map that has never taken a new sun lies on the
+/// same texel grid as it did before anchors (shadow edges and cable bands as before).
+fn on_world_grid(p: [f64; 3], b: [[f64; 3]; 3], step: f64) -> [f64; 3] {
+    let n: [f64; 3] = std::array::from_fn(|k| (dot3(b[k], p) / step).round() * step);
+    std::array::from_fn(|i| (0..3).map(|k| n[k] * b[k][i]).sum())
+}
+
 /// Cascade `i` for the camera (`frustum` left, right, bottom, top; `axes` right, up, ahead in the
-/// world; `position` in the world) and the sun's basis `b`, between view depths `zn` and `zf`.
+/// world; `position` in the world) and the sun's basis `b`, between view depths `zn` and `zf`, its
+/// whole steps counted from `anchor` (none: a map drawn the first time, from the world grid point
+/// nearest its centre, [`on_world_grid`]).
+#[allow(clippy::too_many_arguments)]
 pub fn place(
     i: usize,
     frustum: [f32; 4],
@@ -468,6 +504,7 @@ pub fn place(
     axes: [[f64; 3]; 3],
     position: [f64; 3],
     b: [[f64; 3]; 3],
+    anchor: Option<[f64; 3]>,
 ) -> Cascade {
     let _ = i;
     let size = SIZE;
@@ -482,7 +519,9 @@ pub fn place(
         axes[0][k] * centre_view[0] + axes[1][k] * centre_view[1] + axes[2][k] * centre_view[2]
     });
     let world: [f64; 3] = std::array::from_fn(|k| position[k] + rel[k]);
-    let origin: [i64; 3] = std::array::from_fn(|k| (dot3(b[k], world) / step).round() as i64);
+    let anchor = anchor.unwrap_or_else(|| on_world_grid(world, b, step));
+    let from_anchor: [f64; 3] = std::array::from_fn(|k| world[k] - anchor[k]);
+    let origin: [i64; 3] = std::array::from_fn(|k| (dot3(b[k], from_anchor) / step).round() as i64);
     let mut c = Cascade {
         near: zn,
         far: zf,
@@ -495,6 +534,7 @@ pub fn place(
         basis: b,
         half,
         depth: DEPTH_RANGE,
+        anchor,
     };
     c.view_to_light = c.view_to_light_for(axes, position);
     c
@@ -630,11 +670,14 @@ pub const FAR_MIN_RADIUS: f64 = 1000.0;
 pub const FAR_MAX_RADIUS: f64 = 100_000.0;
 
 /// The far map for a camera at `position` and the sun's basis `b`: [`FAR_HALF`] round the camera,
-/// its centre snapped to [`FAR_STEP_TEXELS`] steps in the sun's space.
-pub fn far_place(position: [f64; 3], b: [[f64; 3]; 3]) -> Cascade {
+/// its centre snapped to [`FAR_STEP_TEXELS`] steps in the sun's space, counted from `anchor` (none:
+/// a map drawn the first time, on the world grid; as [`place`]).
+pub fn far_place(position: [f64; 3], b: [[f64; 3]; 3], anchor: Option<[f64; 3]>) -> Cascade {
     let texel = 2.0 * FAR_HALF / f64::from(FAR_SIZE);
     let step = FAR_STEP_TEXELS * texel;
-    let origin: [i64; 3] = std::array::from_fn(|k| (dot3(b[k], position) / step).round() as i64);
+    let anchor = anchor.unwrap_or_else(|| on_world_grid(position, b, step));
+    let from_anchor: [f64; 3] = std::array::from_fn(|k| position[k] - anchor[k]);
+    let origin: [i64; 3] = std::array::from_fn(|k| (dot3(b[k], from_anchor) / step).round() as i64);
     Cascade {
         near: FAR,
         far: f32::INFINITY,
@@ -647,7 +690,49 @@ pub fn far_place(position: [f64; 3], b: [[f64; 3]; 3]) -> Cascade {
         basis: b,
         half: FAR_HALF,
         depth: FAR_DEPTH,
+        anchor,
     }
+}
+
+/// The anchor a map counts its steps from this frame: when it takes a new sun (`turned`), the
+/// centre of the map drawn last (`drawn`; none drawn: none, the map anchors on the world grid,
+/// [`on_world_grid`]);
+/// else the one it `kept`. So the grid turns about the ground round the camera, and between turns
+/// it only moves by whole steps from a fixed point: a ground point keeps its place in its texel.
+pub fn next_anchor(
+    turned: bool,
+    drawn: Option<&Cascade>,
+    kept: Option<[f64; 3]>,
+) -> Option<[f64; 3]> {
+    if turned {
+        drawn.map(Cascade::centre)
+    } else {
+        kept
+    }
+}
+
+/// The cascades for a camera (`frustum`, view depths `s`, `axes`, `position`): each with the sun its
+/// map keeps (`keep`, the direction toward the sun `to_sun` before its first) and its anchor
+/// ([`next_anchor`] from `turned`, `drawn` and `anchors`, which keep the anchor each map took).
+#[allow(clippy::too_many_arguments)]
+pub fn place_cascades(
+    frustum: [f32; 4],
+    s: &[f32; CASCADES + 1],
+    axes: [[f64; 3]; 3],
+    position: [f64; 3],
+    keep: &[SunKeep; CASCADES],
+    to_sun: [f32; 3],
+    turned: [bool; CASCADES],
+    drawn: &[Option<Cascade>; CASCADES],
+    anchors: &mut [Option<[f64; 3]>; CASCADES],
+) -> [Cascade; CASCADES] {
+    std::array::from_fn(|i| {
+        let anchor = next_anchor(turned[i], drawn[i].as_ref(), anchors[i]);
+        let b = basis(keep[i].direction(to_sun));
+        let c = place(i, frustum, s[i], s[i + 1], axes, position, b, anchor);
+        anchors[i] = Some(c.anchor);
+        c
+    })
 }
 
 /// Which of the [`FAR_SLICES`] frames of a far redraw draws a geometry (by its buffers' numbers
@@ -1420,13 +1505,14 @@ pub fn sun_turns(over: [f64; CASCADES]) -> [bool; CASCADES] {
     take
 }
 
-/// Whether a map drawn for `drawn` (none: never drawn) is good for `now`: the same size, step and
-/// snapped centre with the same sun.
+/// Whether a map drawn for `drawn` (none: never drawn) is good for `now`: the same size, step,
+/// anchor and snapped centre with the same sun.
 pub fn still_good(drawn: Option<&Cascade>, now: &Cascade, sun_changed: bool) -> bool {
     match drawn {
         Some(d) => {
             !sun_changed
                 && d.origin == now.origin
+                && d.anchor.map(f64::to_bits) == now.anchor.map(f64::to_bits)
                 && d.size == now.size
                 && d.step.to_bits() == now.step.to_bits()
         }
@@ -4065,10 +4151,26 @@ mod tests {
         }
     }
 
+    /// The world point the tests' maps count their steps from (as a device's map keeps one between
+    /// turns of the sun): not the origin, so the anchor's part in the sums is tested too.
+    const TEST_ANCHOR: [f64; 3] = [1234.5, -678.25, 91.0];
+
     fn cascades_of(f: &Frame, b: [[f64; 3]; 3]) -> Vec<Cascade> {
         let s = splits(view().near, FAR);
         (0..CASCADES)
-            .map(|i| place(i, frustum(), s[i], s[i + 1], f.axes(), wide(f.position), b))
+            .map(|i| {
+                let p = wide(f.position);
+                place(
+                    i,
+                    frustum(),
+                    s[i],
+                    s[i + 1],
+                    f.axes(),
+                    p,
+                    b,
+                    Some(TEST_ANCHOR),
+                )
+            })
             .collect()
     }
 
@@ -4131,7 +4233,7 @@ mod tests {
                     + axes[2][k] * centre_view[2]
             });
             for k in 0..3 {
-                let off = dot3(b[k], world) - c.origin[k] as f64 * c.step;
+                let off = dot3(b[k], world) - c.plane(k);
                 assert!(
                     off.abs() <= c.step / 2.0 + 1e-6,
                     "cascade {i} axis {k}: {off}"
@@ -4365,8 +4467,7 @@ mod tests {
         let f = Frame::from_game(&game()).unwrap();
         let b = basis(wide(f.to_sun));
         let c = cascades_of(&f, b)[0];
-        let centre: [f64; 3] =
-            std::array::from_fn(|k| (0..3).map(|j| b[j][k] * c.origin[j] as f64 * c.step).sum());
+        let centre = c.centre();
         assert!(c.touches(centre, 1.0));
         // Along the sun's ray, far toward the sun: still touches.
         let up: [f64; 3] = std::array::from_fn(|k| centre[k] - 5000.0 * b[2][k]);
@@ -5441,7 +5542,7 @@ mod tests {
         // No far map: its texel 0 (the lookups leave it out).
         assert_eq!(at(32 + 64 + 12), 0.0);
         // With one: its rows from this frame's view and its texel.
-        let far = far_place(wide(f.position), b);
+        let far = far_place(wide(f.position), b, Some(TEST_ANCHOR));
         let u = lookup_uniforms(
             &view(),
             f.strength,
@@ -5487,11 +5588,17 @@ mod tests {
     #[test]
     fn the_far_map_is_centred_on_the_camera_and_snapped() {
         let b = basis([0.6, 0.0, 0.8]);
-        let a = far_place([1000.0, 2000.0, 300.0], b);
+        let a = far_place([1000.0, 2000.0, 300.0], b, Some(TEST_ANCHOR));
         assert_eq!((a.half, a.depth, a.size), (FAR_HALF, FAR_DEPTH, FAR_SIZE));
         assert_eq!(a.step, FAR_STEP_TEXELS * a.texel);
         // A step's worth less a little: the same map; a step: another.
-        let moved = |d: f64| far_place([1000.0 + d * b[0][0], 2000.0, 300.0 + d * b[0][2]], b);
+        let moved = |d: f64| {
+            far_place(
+                [1000.0 + d * b[0][0], 2000.0, 300.0 + d * b[0][2]],
+                b,
+                Some(TEST_ANCHOR),
+            )
+        };
         assert!(still_good(Some(&a), &moved(10.0), false));
         assert!(!still_good(Some(&a), &moved(a.step), false));
         assert!(!still_good(Some(&a), &a, true));
@@ -5603,5 +5710,136 @@ mod tests {
             None
         );
         assert_eq!(model_view_proj(&program(&[])), None);
+    }
+
+    /// A world point's place across map `c` along the sun's axis `axis`, in texels from the map's
+    /// centre.
+    fn texel_place(c: &Cascade, p: [f64; 3], axis: usize) -> f64 {
+        (dot3(c.basis[axis], p) - c.plane(axis)) / c.texel
+    }
+
+    /// The part of a texel a point slid by between two maps (whole texels, the map's whole steps,
+    /// left out): 0 to 0.5.
+    fn sub_texel(slide: f64) -> f64 {
+        (slide - slide.round()).abs()
+    }
+
+    /// Report 012's "jittery edges": far from the world's origin (Quarry Junction, about 39,000
+    /// units out) and with the camera walking 20,000 units, each map that takes a turned sun keeps
+    /// the ground round the camera in its place in its texels, to a fifth of one, as the device
+    /// places them ([`place_cascades`]: the anchor moves to the map's own centre at each turn).
+    /// Counted from the world's origin (as before), or from an anchor left where the walk began,
+    /// the ground slid by up to half a texel at a turn: every shadow edge in the map jumped.
+    #[test]
+    fn a_ground_point_keeps_its_place_in_its_texel_as_the_sun_turns_far_from_the_origin() {
+        let s = splits(view().near, FAR);
+        // Looking east, level: right (south), up, ahead (east).
+        let axes = [[0.0, -1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]];
+        let mut keep = [SunKeep::default(); CASCADES];
+        let mut anchors = [None; CASCADES];
+        let mut drawn: [Option<Cascade>; CASCADES] = [None; CASCADES];
+        // 012's sun, 23 degrees up, turning about the vertical by uneven steps a frame (about one
+        // to two of the nearest map's turn limits).
+        let steps = [0.0021f64, 0.0037, 0.0029, 0.0051, 0.0024];
+        let mut azimuth = 200.0f64;
+        let (mut worst, mut turns) = ([0.0f64; CASCADES], [0usize; CASCADES]);
+        for frame in 0..400 {
+            let position = [-36000.0 + 50.0 * frame as f64, 16000.0, 5700.0];
+            let (a, h) = (azimuth.to_radians(), 23f64.to_radians());
+            let to_sun = [
+                (h.cos() * a.cos()) as f32,
+                (h.cos() * a.sin()) as f32,
+                h.sin() as f32,
+            ];
+            let sine = f64::from(to_sun[2]);
+            let over: [f64; CASCADES] = std::array::from_fn(|i| {
+                let b = basis(keep[i].direction(to_sun));
+                let texel = place(i, frustum(), s[i], s[i + 1], axes, position, b, None).texel;
+                keep[i]
+                    .turn(to_sun)
+                    .map_or(f64::INFINITY, |t| t / turn_limit(texel, sine))
+            });
+            let turned = sun_turns(over);
+            for (k, kp) in keep.iter_mut().enumerate() {
+                if turned[k] {
+                    kp.take(to_sun);
+                }
+            }
+            let now = place_cascades(
+                frustum(),
+                &s,
+                axes,
+                position,
+                &keep,
+                to_sun,
+                turned,
+                &drawn,
+                &mut anchors,
+            );
+            for k in 0..CASCADES {
+                if let (true, Some(before)) = (turned[k], drawn[k].as_ref()) {
+                    // Ground points the map shows: in its slice of the view, across the view.
+                    let (zn, zf) = (f64::from(s[k]), f64::from(s[k + 1]));
+                    for f in [0.25, 0.5, 0.75] {
+                        for side in [-0.5, 0.0, 0.5] {
+                            let ahead = zn + f * (zf - zn);
+                            let p = [
+                                position[0] + ahead,
+                                position[1] + side * ahead,
+                                position[2] - 170.0,
+                            ];
+                            for axis in 0..2 {
+                                let slide =
+                                    texel_place(&now[k], p, axis) - texel_place(before, p, axis);
+                                worst[k] = worst[k].max(sub_texel(slide));
+                            }
+                        }
+                    }
+                    turns[k] += 1;
+                }
+                if !still_good(drawn[k].as_ref(), &now[k], turned[k]) {
+                    drawn[k] = Some(now[k]);
+                }
+            }
+            azimuth += steps[frame % steps.len()];
+        }
+        // A farther map's ground lies farther from its centre and its turn limit is larger (its texels
+        // are larger), and the last takes the sun late (one map a frame, the nearest first): its grid
+        // turns by up to 0.2 (third) and 0.4 (last) of a texel there, as a hill's shadow moves. Counted
+        // from the origin it was any part of a texel in every map.
+        eprintln!("worst slide a map {worst:.3?} of a texel, turns {turns:?}");
+        for k in 0..CASCADES {
+            assert!(turns[k] >= 3, "map {k} took the sun {} times", turns[k]);
+            let most = [0.15, 0.15, 0.3, 0.5][k];
+            assert!(worst[k] < most, "a ground point slid {worst:?} of a texel");
+        }
+    }
+
+    /// The anchor rule itself: kept between turns, the drawn map's centre at a turn, none before
+    /// the first map.
+    #[test]
+    fn a_map_anchors_at_its_own_centre_when_it_takes_a_new_sun() {
+        let b = basis(wide(game().to_sun.expect("a sun")));
+        let c = far_place([-36000.0, 16000.0, 5700.0], b, Some([100.0, 200.0, 300.0]));
+        assert_eq!(
+            next_anchor(false, Some(&c), Some([1.0, 2.0, 3.0])),
+            Some([1.0, 2.0, 3.0])
+        );
+        assert_eq!(
+            next_anchor(true, Some(&c), Some([1.0, 2.0, 3.0])),
+            Some(c.centre())
+        );
+        assert_eq!(next_anchor(true, None, Some([1.0, 2.0, 3.0])), None);
+        // The centre is the anchor moved by the whole steps: the plane through it along each axis.
+        let centre = c.centre();
+        for k in 0..3 {
+            assert!((dot3(c.basis[k], centre) - c.plane(k)).abs() < 1e-6);
+        }
+        // A map placed from its own centre has no steps; one counted from an anchor a step away
+        // along the sun's first axis has one.
+        let own = far_place(centre, b, Some(centre));
+        assert_eq!(own.origin, [0, 0, 0]);
+        let step_off: [f64; 3] = std::array::from_fn(|i| centre[i] - c.step * b[0][i]);
+        assert_eq!(far_place(centre, b, Some(step_off)).origin, [1, 0, 0]);
     }
 }
