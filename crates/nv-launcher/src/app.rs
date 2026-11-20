@@ -304,6 +304,52 @@ pub fn frame_step(lost: bool, got: Got) -> FrameStep {
     }
 }
 
+/// Whether the window can show a frame: not stepped aside (`hidden`), not minimised, not of no
+/// size. Otherwise nothing is drawn or asked for (a surface that stays outdated would else be
+/// asked again nonstop beside the game).
+pub fn drawable(hidden: bool, minimised: bool, size: (u32, u32)) -> bool {
+    !hidden && !minimised && size.0 > 0 && size.1 > 0
+}
+
+/// How long after a frame that was not drawn (its surface set up again, or skipped) the next try
+/// waits: never nonstop, and never left for good (the intro's last picture, a message that came
+/// in the same moment, must still be drawn).
+pub const RETRY_AFTER: Duration = Duration::from_millis(100);
+
+/// When a frame not drawn at `now` is tried again: at once only after a drawing chosen again.
+pub fn retry_after(step: FrameStep, now: Instant) -> Option<Instant> {
+    match step {
+        FrameStep::Draw | FrameStep::ChooseAgain => None,
+        FrameStep::Reconfigure | FrameStep::Skip => Some(now + RETRY_AFTER),
+    }
+}
+
+/// Whether a redraw is asked for `now`: what shows (`key`) is not what was last put on screen
+/// (`drawn`), and no wait after a frame not drawn (`retry_at`) is still running.
+pub fn wants_redraw(
+    drawn: Option<(usize, bool)>,
+    key: (usize, bool),
+    retry_at: Option<Instant>,
+    now: Instant,
+) -> bool {
+    drawn != Some(key) && retry_at.is_none_or(|at| now >= at)
+}
+
+/// The span within which the drawing is chosen again at most [`CHOOSE_AGAIN_LIMIT`] times.
+pub const CHOOSE_AGAIN_SPAN: Duration = Duration::from_secs(1);
+/// How often within [`CHOOSE_AGAIN_SPAN`] the drawing may be chosen again.
+pub const CHOOSE_AGAIN_LIMIT: usize = 2;
+
+/// Whether the drawing may be chosen again `now`, given when it was (`recent`): a driver that
+/// loses each new device at once goes to the no-window way instead of a loop.
+pub fn may_choose_again(recent: &[Instant], now: Instant) -> bool {
+    recent
+        .iter()
+        .filter(|t| now.duration_since(**t) < CHOOSE_AGAIN_SPAN)
+        .count()
+        < CHOOSE_AGAIN_LIMIT
+}
+
 /// Play's work, `work`, run so that its end is always known: a panic in it ends as Rust's
 /// panic code (101), so `Ended` is sent and a closed launcher still ends.
 pub fn work_code(work: impl FnOnce() -> i32) -> i32 {
@@ -439,6 +485,10 @@ struct App {
     closed: bool,
     /// What the last drawn picture showed ([`App::frame_key`]): drawn again only when it changes.
     drawn: Option<(usize, bool)>,
+    /// When the drawing was last chosen again ([`may_choose_again`]).
+    chosen_again: Vec<Instant>,
+    /// When a frame that was not drawn is tried again ([`retry_after`]).
+    retry_at: Option<Instant>,
     /// The window could not be made or drawn in ([`cannot_draw`] said why).
     no_window: bool,
     exit_code: i32,
@@ -578,6 +628,8 @@ impl App {
         self.screen = screen;
         self.started = Instant::now();
         self.finished = !typed;
+        // Something else shows: drawn whatever the last key was (a new screen can have the same).
+        self.drawn = None;
         if self.hidden && !self.closed {
             if let Some(w) = &self.window {
                 w.set_minimized(false);
@@ -620,8 +672,21 @@ impl App {
         start_work(args);
     }
 
+    /// Whether the window can show a frame now ([`drawable`]).
+    fn can_draw(&self) -> bool {
+        let Some(w) = &self.window else {
+            return false;
+        };
+        let size = w.inner_size();
+        drawable(
+            self.hidden,
+            w.is_minimized().unwrap_or(false),
+            (size.width, size.height),
+        )
+    }
+
     fn redraw(&mut self, event_loop: &ActiveEventLoop) {
-        if self.hidden {
+        if !self.can_draw() {
             return;
         }
         // A device the driver lost is never drawn on (wgpu would fail the frame): chosen again.
@@ -655,23 +720,23 @@ impl App {
             T::Occluded => (Got::Occluded, None),
             T::Validation => (Got::Validation, None),
         };
-        let frame = match (frame_step(gpu.is_lost(), got), frame) {
+        let step = frame_step(gpu.is_lost(), got);
+        let frame = match (step, frame) {
             (FrameStep::Draw, Some(f)) => f,
-            (FrameStep::Reconfigure, _) => {
-                surface.configure(&gpu.device, config);
-                self.drawn = None;
-                self.request_redraw();
-                return;
-            }
             (FrameStep::ChooseAgain, _) => {
                 return self.choose_again(event_loop, &format!("its window surface: {got:?}"))
             }
-            // Tried again at the next redraw.
+            // Not drawn now: tried again after a short wait ([`retry_after`]), never at once in a
+            // loop and never left undrawn (the intro's last picture has no later change).
             _ => {
-                self.drawn = None;
+                if step == FrameStep::Reconfigure {
+                    surface.configure(&gpu.device, config);
+                }
+                self.retry_at = retry_after(step, Instant::now());
                 return;
             }
         };
+        self.retry_at = None;
         let view = frame.texture.create_view(&Default::default());
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
         gpu.draw(
@@ -703,8 +768,17 @@ impl App {
 
     /// The drawing stopped while the launcher runs (`why`, said in the log): the device and the
     /// surface dropped and chosen again for the window as at the start ([`gpu::choose`]); if
-    /// nothing draws now, the launcher goes on without its window ([`App::no_drawing`]).
+    /// nothing draws now, or the drawing was already chosen again twice within a second
+    /// ([`may_choose_again`]: a driver that keeps losing it), the launcher goes on without its
+    /// window ([`App::no_drawing`]).
     fn choose_again(&mut self, event_loop: &ActiveEventLoop, why: &str) {
+        let now = Instant::now();
+        if !may_choose_again(&self.chosen_again, now) {
+            return self.no_drawing(event_loop, &format!("{why}, again and again"));
+        }
+        self.chosen_again
+            .retain(|t| now.duration_since(*t) < CHOOSE_AGAIN_SPAN);
+        self.chosen_again.push(now);
         eprintln!("the launcher's drawing stopped ({why}): choosing its device again");
         self.surface = None;
         self.config = None;
@@ -1238,6 +1312,12 @@ impl winit::application::ApplicationHandler<Event> for App {
             }
             return;
         }
+        // Minimised or 0x0: nothing to draw, no waking for the typing or the blink; restoring
+        // the window sends an event (its size) that draws it again.
+        if !self.can_draw() {
+            event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
+            return;
+        }
         // Typing: wake every character (the menus' 6 ms) until the text is in; then only at the
         // cursor's next blink. Drawn again only when what shows has changed.
         let typing = !self.finished || matches!(self.mode, Mode::Intro(_));
@@ -1248,8 +1328,14 @@ impl winit::application::ApplicationHandler<Event> for App {
             let ms = self.started.elapsed().as_millis() as u64;
             Instant::now() + Duration::from_millis(screen::BLINK_MS - ms % screen::BLINK_MS)
         };
+        // A frame not drawn is tried again once its short wait is over, even with nothing else
+        // to wake for.
+        let next = match self.retry_at {
+            Some(at) if self.drawn != Some(self.frame_key()) => next.min(at),
+            _ => next,
+        };
         event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(next));
-        if self.drawn != Some(self.frame_key()) {
+        if wants_redraw(self.drawn, self.frame_key(), self.retry_at, Instant::now()) {
             self.request_redraw();
         }
     }
@@ -1384,6 +1470,8 @@ pub fn run(raw: Vec<String>) -> i32 {
         working: false,
         closed: false,
         drawn: None,
+        chosen_again: Vec::new(),
+        retry_at: None,
         no_window: false,
         exit_code: 0,
     };
@@ -1695,6 +1783,53 @@ mod tests {
         assert_eq!(frame_step(true, Got::Outdated), FrameStep::ChooseAgain);
         assert_eq!(frame_step(false, Got::Timeout), FrameStep::Skip);
         assert_eq!(frame_step(false, Got::Occluded), FrameStep::Skip);
+    }
+
+    /// No redraw loop: a window stepped aside, minimised or of no size is not drawn; a frame set
+    /// up again or skipped is tried again after a short wait, not at once; a drawing chosen again
+    /// twice within a second is not chosen a third time.
+    #[test]
+    fn a_surface_that_stays_outdated_is_not_asked_again_nonstop() {
+        assert!(drawable(false, false, (960, 720)));
+        assert!(!drawable(true, false, (960, 720)));
+        assert!(!drawable(false, true, (960, 720)));
+        assert!(!drawable(false, false, (0, 0)));
+        assert!(!drawable(false, false, (960, 0)));
+        let t0 = Instant::now();
+        let ms = |n| t0 + Duration::from_millis(n);
+        assert_eq!(retry_after(FrameStep::Draw, t0), None);
+        assert_eq!(retry_after(FrameStep::ChooseAgain, t0), None);
+        for step in [FrameStep::Reconfigure, FrameStep::Skip] {
+            let at = retry_after(step, t0);
+            assert_eq!(at, Some(t0 + RETRY_AFTER));
+            // Not at once (the 6 ms typing wake does not ask again)...
+            assert!(!wants_redraw(None, (12, true), at, ms(6)));
+        }
+        assert!(may_choose_again(&[], t0));
+        assert!(may_choose_again(&[t0], ms(100)));
+        assert!(!may_choose_again(&[t0, ms(100)], ms(200)));
+        // A second later the budget is there again.
+        assert!(may_choose_again(&[t0, ms(100)], ms(1150)));
+    }
+
+    /// The intro's last picture (its key never changes again: no blink, nothing more typed) whose
+    /// frame came back out of date or skipped is still drawn once the short wait is over, so the
+    /// intro ends; so is a new screen with the same key as the last one drawn. Nothing changed
+    /// and drawn: no redraw.
+    #[test]
+    fn a_frame_not_drawn_is_drawn_after_its_wait_even_with_no_later_change() {
+        let t0 = Instant::now();
+        let last = (57, false);
+        for step in [FrameStep::Reconfigure, FrameStep::Skip] {
+            let at = retry_after(step, t0);
+            assert!(wants_redraw(None, last, at, t0 + RETRY_AFTER), "{step:?}");
+            assert!(
+                wants_redraw(None, last, at, t0 + Duration::from_secs(5)),
+                "{step:?}"
+            );
+        }
+        assert!(wants_redraw(None, last, None, t0));
+        assert!(!wants_redraw(Some(last), last, None, t0));
     }
 
     /// Play's work always ends with a code: its own, or 101 when it panicked (so `Ended` is sent
