@@ -951,7 +951,7 @@ pub struct Ctx {
     /// sleep ([`World::suspend_flags`]).
     suspend: std::sync::Arc<AtomicBool>,
     /// The platform functions behind the kernel lock, by address: what [`locked_call`] runs.
-    locked: AddrMap<u32, AbiFn>,
+    locked: Locked,
     /// How many of [`World::late`] this engine has taken.
     late_seen: usize,
     /// Events and semaphores this thread looked up, by handle (`None`: not one), while
@@ -959,6 +959,72 @@ pub struct Ctx {
     sync_cache: AddrMap<u32, Option<std::sync::Arc<sync::Object>>>,
     sync_seen: u64,
     world: &'static World,
+}
+
+/// The functions behind the kernel and device locks ([`Ctx::locked`]), by address; those in the layer's device
+/// ranges (`units::platform::layer_device_calls`) also by their place there, so [`device_call`] (once for every
+/// Direct3D call the game makes, about 16,000 a frame in a crowded street) finds its function by an index instead
+/// of a hash look-up.
+#[derive(Clone, Default)]
+struct Locked {
+    by_addr: AddrMap<u32, AbiFn>,
+    /// By the byte offset into the device ranges, laid end to end ([`device_slot`]).
+    device: Vec<Option<AbiFn>>,
+}
+
+impl Locked {
+    fn insert(&mut self, addr: u32, f: AbiFn) {
+        self.insert_in(crate::units::platform::layer_device_calls(), addr, f);
+    }
+
+    /// [`Locked::insert`] with `ranges` as the device ranges.
+    fn insert_in(&mut self, ranges: &[std::ops::Range<u32>], addr: u32, f: AbiFn) {
+        self.by_addr.insert(addr, f);
+        if let Some(slot) = device_slot_in(ranges, addr) {
+            if self.device.len() <= slot {
+                self.device.resize(slot + 1, None);
+            }
+            self.device[slot] = Some(f);
+        }
+    }
+
+    fn get(&self, addr: u32) -> Option<AbiFn> {
+        self.by_addr.get(&addr).copied()
+    }
+
+    /// [`Locked::get`] for a device function: by its slot when it has one, else by address.
+    #[inline]
+    fn device(&self, addr: u32) -> Option<AbiFn> {
+        self.device_in(crate::units::platform::layer_device_calls(), addr)
+    }
+
+    /// [`Locked::device`] with `ranges` as the device ranges.
+    #[inline]
+    fn device_in(&self, ranges: &[std::ops::Range<u32>], addr: u32) -> Option<AbiFn> {
+        match device_slot_in(ranges, addr) {
+            Some(slot) => self.device.get(slot).copied().flatten(),
+            None => self.get(addr),
+        }
+    }
+}
+
+/// `addr`'s byte offset into the layer's device ranges laid end to end, `None` outside them.
+#[inline]
+fn device_slot(addr: u32) -> Option<usize> {
+    device_slot_in(crate::units::platform::layer_device_calls(), addr)
+}
+
+/// [`device_slot`] in `ranges`.
+#[inline]
+fn device_slot_in(ranges: &[std::ops::Range<u32>], addr: u32) -> Option<usize> {
+    let mut base = 0usize;
+    for r in ranges {
+        if r.contains(&addr) {
+            return Some(base + (addr - r.start) as usize);
+        }
+        base += r.len();
+    }
+    None
 }
 
 impl Ctx {
@@ -1130,7 +1196,7 @@ pub fn start(e: &mut Engine) -> Result<(), String> {
     if real_sync {
         sync::adopt(world, e);
     }
-    let mut locked = AddrMap::default();
+    let mut locked = Locked::default();
     let mut addrs = e.registered_addrs();
     addrs.sort_unstable();
     for addr in addrs {
@@ -1345,9 +1411,9 @@ fn locked_call(e: &mut Engine, args: &[u32]) -> Ret {
     }
     let (f, mine) = {
         let r = e.real.as_ref().expect("checked above");
-        let f = *r
+        let f = r
             .locked
-            .get(&addr)
+            .get(addr)
             .unwrap_or_else(|| panic!("{addr:08x}: no locked platform function"));
         (f, r.last_error)
     };
@@ -1372,9 +1438,7 @@ impl Drop for Held {
 /// Whether the platform function at `addr` runs under the device lock ([`device_call`]): one of
 /// the layer's `device_calls`.
 fn device_addr(addr: u32) -> bool {
-    crate::units::platform::layer_device_calls()
-        .iter()
-        .any(|r| r.contains(&addr))
+    device_slot(addr).is_some()
 }
 
 /// A platform function of the Direct3D 9 device or one of its objects: under the device lock,
@@ -1403,12 +1467,12 @@ fn device_call(e: &mut Engine, args: &[u32]) -> Ret {
     if world.late_count.load(Ordering::Acquire) != e.real.as_ref().map_or(0, |r| r.late_seen) {
         sync_registered(e);
     }
-    let f = *e
+    let f = e
         .real
         .as_ref()
         .expect("checked above")
         .locked
-        .get(&addr)
+        .device(addr)
         .unwrap_or_else(|| panic!("{addr:08x}: no device platform function"));
     f(e, args)
 }
@@ -3302,6 +3366,74 @@ fn draw_stopped(world: &'static World, e: &Engine, payload: &(dyn std::any::Any 
 mod tests {
     use super::*;
     use crate::args;
+
+    /// A device function's slot is its byte offset into the ranges laid end to end: every address
+    /// of each range has its own slot, the second range's follow the first's, and an address
+    /// outside them (just before, at an end, between) has none.
+    #[test]
+    fn device_slots_number_the_ranges_end_to_end() {
+        let ranges = [0x1000..0x1010, 0x2000..0x2008];
+        assert_eq!(device_slot_in(&ranges, 0x1000), Some(0));
+        assert_eq!(device_slot_in(&ranges, 0x100f), Some(15));
+        assert_eq!(device_slot_in(&ranges, 0x2000), Some(16));
+        assert_eq!(device_slot_in(&ranges, 0x2007), Some(23));
+        for outside in [0x0fff, 0x1010, 0x1fff, 0x2008, 0] {
+            assert_eq!(device_slot_in(&ranges, outside), None, "{outside:#x}");
+        }
+        let all: std::collections::BTreeSet<usize> = ranges
+            .iter()
+            .flat_map(|r| r.clone())
+            .filter_map(|a| device_slot_in(&ranges, a))
+            .collect();
+        assert_eq!(all.len(), 24);
+        assert_eq!(device_slot_in(&[], 0x1000), None);
+    }
+
+    /// Without the layer's ranges (this crate's tests) a device function is found by its address,
+    /// and a later registration at the same address replaces the earlier for both look-ups.
+    #[test]
+    fn locked_functions_are_found_by_address_without_the_layer() {
+        fn one(_: &mut Engine, _: &[u32]) -> Ret {
+            Ret {
+                eax: 1,
+                ..Ret::default()
+            }
+        }
+        fn two(_: &mut Engine, _: &[u32]) -> Ret {
+            Ret {
+                eax: 2,
+                ..Ret::default()
+            }
+        }
+        let mut l = Locked::default();
+        assert!(l.device(0x5000).is_none() && l.get(0x5000).is_none());
+        l.insert(0x5000, one);
+        let mut e = Engine::new();
+        assert_eq!(l.device(0x5000).expect("found")(&mut e, &[]).u32(), 1);
+        l.insert(0x5000, two);
+        assert_eq!(l.device(0x5000).expect("found")(&mut e, &[]).u32(), 2);
+        assert_eq!(l.get(0x5000).expect("found")(&mut e, &[]).u32(), 2);
+        assert!(l.device(0x5004).is_none());
+        // With device ranges: found by slot, each address its own, the latest registration kept,
+        // and the same function as by address.
+        let ranges = [0x5000..0x5100, 0x9000..0x9010];
+        let mut l = Locked::default();
+        l.insert_in(&ranges, 0x5004, one);
+        l.insert_in(&ranges, 0x9008, two);
+        let call = |f: Option<AbiFn>, e: &mut Engine| f.expect("found")(e, &[]).u32();
+        assert_eq!(call(l.device_in(&ranges, 0x5004), &mut e), 1);
+        assert_eq!(call(l.device_in(&ranges, 0x9008), &mut e), 2);
+        assert!(l.device_in(&ranges, 0x5008).is_none(), "not registered");
+        assert!(l.device_in(&ranges, 0x9004).is_none(), "not registered");
+        l.insert_in(&ranges, 0x5004, two);
+        assert_eq!(call(l.device_in(&ranges, 0x5004), &mut e), 2);
+        assert_eq!(call(l.get(0x5004), &mut e), 2);
+        assert_eq!(
+            call(l.clone().device_in(&ranges, 0x9008), &mut e),
+            2,
+            "a thread's copy"
+        );
+    }
 
     /// Import slots of a test engine, by name (the order of `units::platform::imports`).
     fn engine_with_imports() -> (Engine, impl Fn(&str) -> u32) {
