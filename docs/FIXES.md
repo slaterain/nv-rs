@@ -1750,6 +1750,30 @@ and tweaks every VNV player runs, is being built in as `crates/stewie` (`measure
 | `patchFixSavingNullCellCrash` | S0881 | `bFixSavingNullCellCrash` | `SaveInitialData` `0084eb80` (`0x84EE1B`) | Saving with a placed (created) reference that has neither worldspace nor cell no longer crashes: its location's id is saved as 0 (Tweaks' `GetRefIDNullChecked`). Only removes a crash |
 | `Inlines::SaveLoad` (Engine Optimizations) | S1016.845558 | `bInlinesChangesMapBuckets` | `00845550` (`0x845558`) | A save's map of changed forms gets 10,037 buckets, not 5,039: a late playthrough has tens of thousands of changed forms, and every save and load looks each up. The map is walked bucket by bucket when a save writes the changed forms, so they are written in another order; a load finds each by its id, so a save made either way loads either way. With JIP's G45 too (32,099 buckets), this row's count wins, as in a game with both: Tweaks writes its value in its handler of xNVSE's PostPostLoad message, after JIP's write at PostLoad, whatever order the DLLs load in. Tweaks' own switch for the block, `[Inlines] bSaveLoad` in its INI, turns the row off too. Changes the order of the records in a save, nothing a player sees |
 
+The rows still to come are built by four agents side by side, each in files of its own, so each
+adds its rows in its own table below (in PLAN.md's order) and the table above keeps the crash fixes
+and Engine Optimizations' first row.
+
+#### The engines and the console
+
+Havok, Gamebryo, the environment, magic, pathing, face-gen, the engine files no other table holds,
+the interface manager, the console and the INI settings. None yet.
+
+#### Forms, cells, scripts, saves and sound
+
+Forms, perks, weapons, script functions, extra data, inventory changes, references, cells, models,
+saves, audio media and the radio. None yet.
+
+#### AI, actors and the player
+
+Actors, their AI processes, combat, packages, projectiles, the player character, animation and the
+model loader. None yet.
+
+#### Menus and the HUD
+
+Every menu but the interface manager's and the console's, the HUD, tiles, fonts and the
+controller's input. None yet.
+
 ## Credits
 
 Written with the fix plugins' knowledge, by their authors' permission (2026-11-03); no code is
