@@ -20,9 +20,14 @@
 //! nv-rs's own: where JIP reads through a null pointer (no menu from the file, a menu without a
 //! tile, `CloseActiveMenu` with the hook on and no menu), nothing more happens; a font number past
 //! JIP's 90 heights gives 0 for both (JIP reads past its table); `CloseActiveMenu` reads the
-//! menu's script before the menu is destroyed (JIP reads it from the freed menu). A shown text of
-//! 65,535 bytes takes no more characters (JIP's 16-bit length and room wrap and the next one is
-//! written past its block), and `SetTextInputString` keeps the first 65,534 bytes of its text.
+//! menu's script before the menu is destroyed (JIP reads it from the freed menu).
+//!
+//! With the fixes preset's size caps row (`NV_NVSE_SIZE_CAPS`, the row that caps what xNVSE's and
+//! JIP's texts and arrays would overflow): a text at 65,535 bytes takes no more characters (JIP's
+//! 16-bit length and room wrap to 0 and the next byte is written past its block), and
+//! `SetTextInputString` keeps the first 65,534 bytes of its text (so the shown text, one byte
+//! longer, fits). Off (vanilla), as JIP: the text's length kept to its low 16 bits (70,000 bytes
+//! keep 4,464) and the wrap at 65,535.
 //!
 //! With the fixes preset's missing-data guard row (`NV_NVSE_NULL_GUARD`): JIP takes its hooks out
 //! only on OK and on `CloseActiveMenu`, so a menu closed any other way (Esc, a load, another menu)
@@ -301,9 +306,9 @@ fn string_insert_char(e: &mut Engine, s: u32, c: u8, index: u32) {
         return;
     }
     let room = e.mem.u16(s + STR_BUF_LEN);
-    // nv-rs's own: at 65,535 bytes JIP's length and room would wrap to 0 and the byte go past its
-    // block.
-    if len == u16::MAX {
+    // The size caps row: at 65,535 bytes JIP's length and room would wrap to 0 and the byte go past
+    // its block. Off, as JIP.
+    if len == u16::MAX && nvse::commands::array::fix_on(e, nvse::commands::array::SIZE_CAPS) {
         return;
     }
     if room == len {
@@ -591,15 +596,16 @@ fn set_text_input_string(e: &mut Engine, w: &[u32]) -> Ret {
     handled(true)
 }
 
-/// The menu's text set (its first [`MAX_SET_TEXT`] bytes: nv-rs's own, so the shown text's
-/// 16-bit length cannot wrap as JIP's does), the cursor at 0, then the End key handed to the
-/// menu's key slot.
+/// The menu's text set, the cursor at 0, then the End key handed to the menu's key slot. With the
+/// size caps row, the text's first [`MAX_SET_TEXT`] bytes, so the shown text's 16-bit length cannot
+/// wrap; off, the whole text, whose length `string_set` keeps to 16 bits, as JIP's `String::Set`.
 fn set_text(e: &mut Engine, menu: u32, text: &[u8]) {
-    string_set(
-        e,
-        menu + CURRENT_TEXT,
-        &text[..text.len().min(MAX_SET_TEXT)],
-    );
+    let keep = if nvse::commands::array::fix_on(e, nvse::commands::array::SIZE_CAPS) {
+        text.len().min(MAX_SET_TEXT)
+    } else {
+        text.len()
+    };
+    string_set(e, menu + CURRENT_TEXT, &text[..keep]);
     e.mem.set_u32(menu + CURSOR, 0);
     e.vcall(menu, KEY_SLOT, &args![END]);
 }

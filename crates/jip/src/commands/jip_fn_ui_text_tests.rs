@@ -971,12 +971,13 @@ fn with_the_row_jips_own_menu_keeps_its_routines() {
     assert_eq!(crate::script_call::calls().len(), 1);
 }
 
-/// Review of #823: a 65,535-byte `SetTextInputString` keeps 65,534 bytes, so the shown text with
+/// Review of #823, with the size caps row (the fixes preset): a 65,535-byte `SetTextInputString` keeps 65,534 bytes, so the shown text with
 /// its cursor is 65,535 and its room never below its length; a string at 65,535 bytes takes no
 /// more (JIP's 16-bit length and room would wrap to 0 and the byte go past its block).
 #[test]
 fn a_65535_byte_text_never_wraps_the_shown_texts_room() {
     let (mut e, _) = shown_menu();
+    nvse::commands::array::set_fix(&mut e, nvse::commands::array::SIZE_CAPS, true);
     let long = vec![b'x'; 0xffff];
     // The command's text as it hands it on (a compiled line this long is past the tests' script
     // page).
@@ -997,4 +998,17 @@ fn a_65535_byte_text_never_wraps_the_shown_texts_room() {
     assert_eq!(string_of(&e, MENU + 0x3c).2, room);
     assert_eq!(e.mem.u32(MENU + 0x3c), data, "no new block");
     assert_eq!(e.mem.u8(data), b'x');
+}
+
+/// Review of #830: without the size caps row (vanilla), as JIP. A 70,000-byte
+/// `SetTextInputString` keeps its length's low 16 bits, 4,464 bytes (JIP's `String::Set`), with
+/// no 65,534 cap.
+#[test]
+fn without_the_size_caps_row_a_long_text_keeps_jips_16_bits() {
+    let (mut e, _) = shown_menu();
+    let long: Vec<u8> = (0..70_000u32).map(|i| b'a' + (i % 26) as u8).collect();
+    set_text(&mut e, MENU, &long);
+    let (text, len, _) = string_of(&e, MENU + 0x34);
+    assert_eq!(len, 4_464);
+    assert_eq!(text, &long[..4_464]);
 }

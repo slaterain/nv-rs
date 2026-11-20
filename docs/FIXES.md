@@ -1,4 +1,4 @@
-# The fixes preset
+ Also JIP LN NVSE's text input menu: a game text edit menu met after JIP's closed without OK gets the exe's own functions back (a JIP slip; see "JIP LN NVSE switched on for testing"). Below |# The fixes preset JIP LN NVSE's text input menu too: a `SetTextInputString` text keeps 65,534 bytes and a full one takes no more characters (JIP's 16-bit length wraps and writes past its block; off, as JIP: the length's low 16 bits); see "JIP LN NVSE switched on for testing". Below |
 
 A player who changes nothing gets the `fixes` set; `vanilla` is what FalloutNV.exe 1.4.0.525 does, and
 every comparison with the original, gate and recording runs on it (the maintainer, 2026-11-02;
@@ -1062,9 +1062,10 @@ With the switch on:
   a load, another menu) the game's own text edit menu (naming a character, a sign) gets JIP's routines
   and JIP's script. A JIP slip, not copied with the missing-data guard row (`NV_NVSE_NULL_GUARD`, the
   fixes preset): a menu that is not the one JIP opened gets the exe's own key, frame and click, and
-  JIP's hooks come out; off (vanilla), as JIP. In every preset a 65,535-byte `SetTextInputString`
-  keeps 65,534 bytes and a full text takes no more characters (JIP's 16-bit length wraps and writes
-  past its block).
+  JIP's hooks come out; off (vanilla), as JIP. With the size caps row (`NV_NVSE_SIZE_CAPS`) a
+  65,535-byte `SetTextInputString` keeps 65,534 bytes and a full text takes no more characters (JIP's
+  16-bit length wraps and writes past its block); off, as JIP (a longer text keeps its length's low 16
+  bits: 70,000 bytes keep 4,464).
 
 Not yet, with the switch on:
 - The 23 commands not built yet are named and found like the others but have no handler: a script
