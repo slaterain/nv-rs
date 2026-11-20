@@ -2659,6 +2659,18 @@ pub fn texture_set_lod(e: &mut Engine, texture: u32, lod: u32, model: u32) {
 // takes them only at those presents (counted from 1), so a short stretch can be taken every frame.
 // Nothing is read or made when `NV_SHOT` is unset; the game's state and the model are not touched.
 // ---------------------------------------------------------------------------------------------
+/// Whether the F12 report asked for waits for its place (`place.txt`): the host's main loop then
+/// gives it with [`set_report_place`] between two of the game's frames.
+pub fn report_place_wanted() -> bool {
+    shot::place_wanted()
+}
+
+/// The place for the F12 report asked for, as plain lines (`place.txt` in the report's folder,
+/// and one line in the log).
+pub fn set_report_place(text: String) {
+    shot::set_place(text);
+}
+
 pub(super) mod shot {
     // Off Windows only the tests read most of this: the capture reads the real Direct3D 9.
     #![cfg_attr(not(windows), allow(dead_code))]
@@ -2795,6 +2807,47 @@ pub(super) mod shot {
         }
     }
 
+    /// Where the game is, as the host wrote it for the report asked for (`place.txt`); taken by
+    /// the report.
+    static PLACE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+    /// Whether a host writes the place ([`set_place`] has been called once): a report then waits
+    /// a few presents for it.
+    static PLACE_WRITER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    /// The presents a report has waited for its place.
+    static PLACE_WAITED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    /// The presents a report waits for its place at most (the host writes it between two of the
+    /// game's frames).
+    pub(super) const PLACE_WAIT: u32 = 8;
+
+    /// Whether a report is asked for and has no place yet (the host's main loop then writes it).
+    pub(super) fn place_wanted() -> bool {
+        REPORT_ASKED.load(std::sync::atomic::Ordering::Relaxed)
+            && PLACE.lock().is_ok_and(|p| p.is_none())
+    }
+
+    /// The place for the report asked for (plain lines).
+    pub(super) fn set_place(text: String) {
+        PLACE_WRITER.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Ok(mut p) = PLACE.lock() {
+            *p = Some(text);
+        }
+    }
+
+    /// The place to write now, or `Err(())` when the report should wait a present more for it.
+    fn take_place() -> Result<Option<String>, ()> {
+        let place = PLACE.lock().ok().and_then(|mut p| p.take());
+        let waited = PLACE_WAITED.load(std::sync::atomic::Ordering::Relaxed);
+        if place.is_none()
+            && PLACE_WRITER.load(std::sync::atomic::Ordering::Relaxed)
+            && waited < PLACE_WAIT
+        {
+            PLACE_WAITED.store(waited + 1, std::sync::atomic::Ordering::Relaxed);
+            return Err(());
+        }
+        PLACE_WAITED.store(0, std::sync::atomic::Ordering::Relaxed);
+        Ok(place)
+    }
+
     /// The first unused numbered folder under `dir`, made (`001`, `002`, ...).
     pub(super) fn new_report_folder(dir: &std::path::Path) -> Option<PathBuf> {
         std::fs::create_dir_all(dir).ok()?;
@@ -2850,9 +2903,15 @@ pub(super) mod shot {
     /// [`report_at_present`] for any backend: `picture` gives the frame's pixels (rows top
     /// first, B, G, R, X), called only when a report was asked for.
     pub(crate) fn report_with(picture: impl FnOnce() -> Result<(u32, u32, Vec<u8>), String>) {
-        if !REPORT_ASKED.swap(false, std::sync::atomic::Ordering::Relaxed) {
+        if !REPORT_ASKED.load(std::sync::atomic::Ordering::Relaxed) {
             return;
         }
+        // The place (`place.txt`): the host writes it between the game's frames; a few presents'
+        // wait for it, then the report goes without.
+        let Ok(place) = take_place() else {
+            return;
+        };
+        REPORT_ASKED.store(false, std::sync::atomic::Ordering::Relaxed);
         let Some(folder) = report_dir().and_then(|dir| new_report_folder(dir)) else {
             eprintln!("F12: the report's folder could not be made");
             return;
@@ -2878,6 +2937,10 @@ pub(super) mod shot {
             folder.join("note.txt"),
             "Write here what went wrong and what you did just before it:\r\n\r\n",
         );
+        if let Some(place) = &place {
+            let _ = std::fs::write(folder.join("place.txt"), place.replace('\n', "\r\n"));
+            eprintln!("F12: place: {}", place.trim_end().replace('\n', "; "));
+        }
         eprintln!("F12: report in {}", folder.display());
         #[cfg(windows)]
         #[link(name = "user32")]
