@@ -1435,39 +1435,39 @@ fn children_read_ahead_skips_dangling_words() {
     };
     // With the read-ahead and without it (the same comparison with the translation both times).
     for on in [true, false] {
-    culling::read_ahead_set_for_tests(on);
-    Diff::new(entry!(
-        0x00a5_dbe0,
-        visible::node_on_visible(Ptr<_>, Ptr<_>)
-    ))
-    .common()
-    .inputs(&[Input::Of(&[0, 1, 2, 3, 4])])
-    .setup(move |e, case| {
-        let (s, _) = setup(e, case);
-        vec![s.node, s.process]
-    })
-    .run()
-    .assert_same();
-    // The same node as a multi-bound node's base (no multi-bound: its children walked in mode 0).
-    Diff::new(entry!(
-        0x00c4_6f60,
-        visible::multibound_node_on_visible(Ptr<_>, Ptr<_>)
-    ))
-    .common()
-    .inputs(&[Input::Of(&[0, 1, 2, 3, 4])])
-    .setup(move |e, case| {
-        let (s, _) = setup(e, case);
-        let node = e.mem.alloc(0xb4);
-        let bytes = e.mem.bytes(s.node, 0xac).to_vec();
-        for (i, b) in bytes.iter().enumerate() {
-            e.mem.set_u8(node + i as u32, *b);
-        }
-        e.mem.set_u32(node + 0xac, 0);
-        e.mem.set_u32(node + 0xb0, 0);
-        vec![node, s.process]
-    })
-    .run()
-    .assert_same();
+        culling::read_ahead_set_for_tests(on);
+        Diff::new(entry!(
+            0x00a5_dbe0,
+            visible::node_on_visible(Ptr<_>, Ptr<_>)
+        ))
+        .common()
+        .inputs(&[Input::Of(&[0, 1, 2, 3, 4])])
+        .setup(move |e, case| {
+            let (s, _) = setup(e, case);
+            vec![s.node, s.process]
+        })
+        .run()
+        .assert_same();
+        // The same node as a multi-bound node's base (no multi-bound: its children walked in mode 0).
+        Diff::new(entry!(
+            0x00c4_6f60,
+            visible::multibound_node_on_visible(Ptr<_>, Ptr<_>)
+        ))
+        .common()
+        .inputs(&[Input::Of(&[0, 1, 2, 3, 4])])
+        .setup(move |e, case| {
+            let (s, _) = setup(e, case);
+            let node = e.mem.alloc(0xb4);
+            let bytes = e.mem.bytes(s.node, 0xac).to_vec();
+            for (i, b) in bytes.iter().enumerate() {
+                e.mem.set_u8(node + i as u32, *b);
+            }
+            e.mem.set_u32(node + 0xac, 0);
+            e.mem.set_u32(node + 0xb0, 0);
+            vec![node, s.process]
+        })
+        .run()
+        .assert_same();
     }
     culling::read_ahead_set_for_tests(true);
 }

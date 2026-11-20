@@ -779,7 +779,9 @@ static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 /// empty slot (its walk reads its flags and stops; the read-ahead skips the two words).
 #[test]
 fn children_read_ahead_changes_no_walk() {
-    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     const UNMAPPED: u32 = 0xffff_0040;
     let mut e = Engine::new();
     let t = tree(&mut e);
@@ -789,7 +791,11 @@ fn children_read_ahead_changes_no_walk() {
     let asking = e.mem.u32(root_slots + 12);
     let third = e.mem.u32(e.mem.u32(asking + 0xa0));
     let third_slots = e.mem.u32(third + 0xa0);
-    assert_eq!(e.mem.u32(third_slots + 4 * 5), 0, "the node of 24's slot 5 is empty");
+    assert_eq!(
+        e.mem.u32(third_slots + 4 * 5),
+        0,
+        "the node of 24's slot 5 is empty"
+    );
     let culled = object(&mut e, 0xac, UNMAPPED, UNMAPPED, 1);
     e.mem.set_u32(third_slots + 4 * 5, culled);
     culling::read_ahead_set_for_tests(true);
@@ -814,7 +820,9 @@ fn children_read_ahead_changes_no_walk() {
 
 #[test]
 fn chunked_walks_replay_the_serial_order() {
-    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut e = Engine::new();
     let t = tree(&mut e);
     let serial = walk(&mut e, &t, "off", 1, 16);
