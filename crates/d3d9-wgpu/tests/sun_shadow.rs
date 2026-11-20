@@ -874,6 +874,8 @@ struct Extra {
     wall: bool,
     /// The far scene's tower moved by this along x (in its matrix) instead of drawn in place.
     tower_shift: Option<f32>,
+    /// The far scene's small caster ([`FAR_SMALL`]) moved by this along x (in its matrix).
+    small_shift: Option<f32>,
     /// The tall caster far off toward a low sun ([`SUNWARD`]).
     sunward: bool,
     /// The world word (`sun_shadow::WORLD_STATE`) before the scene's words.
@@ -888,6 +890,8 @@ struct Extra {
     /// The cut-out ([`CUT`]) made this many times larger round the world origin (drawn instead of
     /// `cutout`).
     cutout_scale: Option<f32>,
+    /// ... and moved by this along x (in its matrix) after the scaling.
+    cutout_shift: Option<f32>,
     /// The camera's place in the frame's words moved by this (world units; the draws' matrices
     /// stay): the maps step after it.
     camera_shift: Option<[f64; 3]>,
@@ -1122,6 +1126,9 @@ const BEYOND: u32 = 0x16D0;
 /// its radius): with the sun 10 degrees up toward +y its shadow runs back to about y 70000, inside
 /// the far map.
 const SUNWARD: u32 = 0x16E0;
+/// A far caster of radius about 327 (300 by 300, 500 high, at (2000, 20000)): past the cascades'
+/// reach, in the far map alone.
+const FAR_SMALL: u32 = 0x16F0;
 
 /// A box from (x0, y0, 0) to (x1, y1, h): its top and four sides.
 fn cuboid(x0: f32, x1: f32, y0: f32, y1: f32, h: f32) -> Vec<[f32; 3]> {
@@ -1234,6 +1241,11 @@ fn extras(b: &mut WgpuBackend) {
         &cuboid(1500.0, 2500.0, 19_500.0, 20_500.0, 4000.0),
     );
     buffer(b, WALL, &cuboid(1400.0, 1600.0, 5000.0, 14_000.0, 1000.0));
+    buffer(
+        b,
+        FAR_SMALL,
+        &cuboid(1850.0, 2150.0, 19_850.0, 20_150.0, 500.0),
+    );
     buffer(
         b,
         FAR_TOWER_LOW,
@@ -1660,6 +1672,11 @@ fn lit_sequence_with(
             draw(b, TOWER, 10);
             set_mvp(b, model_view_proj());
         }
+        if let Some(dx) = e.small_shift {
+            set_mvp(b, model_view_proj_at(dx, 0.0));
+            draw(b, FAR_SMALL, 10);
+            set_mvp(b, model_view_proj());
+        }
         if e.sunward {
             draw(b, SUNWARD, 10);
         }
@@ -1838,7 +1855,14 @@ fn lit_sequence_with(
         }
         if e.cutout || e.cutout_scale.is_some() {
             if let Some(s) = e.cutout_scale {
-                set_mvp(b, model_view_proj_scaled(s));
+                let mut m = model_view_proj_scaled(s);
+                if let Some(dx) = e.cutout_shift {
+                    // (The first column is already scaled by s.)
+                    for row in m.iter_mut() {
+                        row[3] += row[0] * dx / s;
+                    }
+                }
+                set_mvp(b, m);
             }
             set_shaders(b, CUT_VS, CUT_PS, CUT_DECL);
             run(
@@ -2125,6 +2149,43 @@ fn a_cut_out_in_the_last_cascade_casts_its_alpha_tests_shape() {
         let (y, z) = (40.0 * y, 40.0 * z);
         let t = taken_at(&off[7], &on[7], -0.75 * z, y);
         eprintln!("the far cut-out at ({y}, {z}): {t}");
+        if opaque {
+            assert!(t > 0.8, "({y}, {z}) opaque: {t}");
+        } else {
+            assert!(t < 0.1, "({y}, {z}) clear: {t}");
+        }
+    }
+}
+
+/// Review of #817: a moving cut-out far out (the far checker stepping 20 units a frame, a bush in
+/// the wind in the last cascade) still casts there while it moves: the moving cut-outs are left out
+/// of a cascade only where their shadow cannot reach it, never for being past the first.
+#[test]
+fn a_moving_cut_out_in_the_last_cascade_casts_while_it_moves() {
+    let _far = FarScene::on();
+    let shift = |f: usize| 20.0 * f as f32;
+    let frames: Vec<Extra> = (0..16)
+        .map(|f| Extra {
+            cutout_scale: Some(40.0),
+            cutout_shift: Some(shift(f)),
+            ..far_land(false, false)
+        })
+        .collect();
+    let Some((off, _)) = far_sequence(1, false, &frames) else {
+        return;
+    };
+    let (on, _) = far_sequence(1, true, &frames).expect("the adapter");
+    let last = frames.len() - 1;
+    let dx = f64::from(shift(last));
+    for (y, z, opaque) in [
+        (125.0, 45.0, true),
+        (175.0, 15.0, true),
+        (175.0, 45.0, false),
+        (125.0, 15.0, false),
+    ] {
+        let (y, z) = (40.0 * y, 40.0 * z);
+        let t = taken_at(&off[last], &on[last], -0.75 * z + dx, y);
+        eprintln!("the moving far cut-out at ({y}, {z}): {t}");
         if opaque {
             assert!(t > 0.8, "({y}, {z}) opaque: {t}");
         } else {
@@ -3420,6 +3481,56 @@ fn a_far_caster_nudged_once_still_casts_later() {
     assert!(later > 0.8, "{later}");
 }
 
+/// Review of #843: a far caster nudged once (paired as a move) and then out of sight (the camera
+/// gone 10,000 past it from frame 15, the tower no longer drawn) is kept as a still one is: at
+/// frame 40 the far map still holds it (it was let go as soon as it was out of view, so the far
+/// map stopped casting it from out of sight until it settled).
+#[test]
+fn a_far_caster_nudged_then_out_of_sight_is_kept() {
+    let _far = FarScene::on();
+    let frames: Vec<Extra> = (0..42)
+        .map(|f| match f {
+            0..=14 => Extra {
+                tower_shift: (f == 10).then_some(0.1),
+                ..far_land(f != 10, false)
+            },
+            _ => Extra {
+                camera_shift: Some([0.0, 30_000.0, 0.0]),
+                ..far_land(false, false)
+            },
+        })
+        .collect();
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    sun_shadow::enable(true);
+    let b = backend(1);
+    sun_shadow::enable(false);
+    let Some(mut b) = b else {
+        return;
+    };
+    let mut seen: Vec<Vec<([f64; 3], f64, bool)>> = Vec::new();
+    lit_sequence_with(&mut b, &frames, true, &mut |_, b| {
+        seen.push(b.device().map_or_else(Vec::new, |d| d.sun_far_places()));
+    });
+    // The tower's place as frame 13 left it (a frame's casters are taken as the next is drawn).
+    let near_tower =
+        |p: &&([f64; 3], f64, bool)| (p.0[1] - 20_000.0).abs() < 2_000.0 && p.1 > 300.0;
+    let tower: Vec<_> = seen[14].iter().filter(near_tower).collect();
+    eprintln!("the tower at frame 13: {tower:?}");
+    assert!(!tower.is_empty(), "{:?}", seen[14]);
+    assert!(
+        tower.iter().any(|p| p.2),
+        "moving after its nudge: {tower:?}"
+    );
+    let kept: Vec<_> = seen[41].iter().filter(near_tower).collect();
+    eprintln!("the tower at frame 40: {kept:?}");
+    assert!(
+        kept.iter().any(|k| tower
+            .iter()
+            .any(|t| (0..3).all(|i| (k.0[i] - t.0[i]).abs() < 1.0))),
+        "the nudged tower out of sight is kept: {kept:?} (was {tower:?})"
+    );
+}
+
 /// Report 012's "jittery edges", through the device: a map that takes a turned sun counts its whole
 /// steps from where it stood (the centre of the map drawn before), not from the world's origin, so
 /// its texel grid turns about the ground round the camera; between turns the steps count from the
@@ -3532,4 +3643,55 @@ fn the_far_map_takes_a_new_sun_counting_from_where_it_stood() {
     lit_sequence_with(&mut b, &frames, true, &mut check);
     eprintln!("the far map took the sun {turns} times ({stepped} away from its anchor)");
     assert!(turns >= 2 && stepped >= 1, "turns {turns}, away {stepped}");
+}
+
+/// Review of #817: a far caster that moves (radius about 327, past the cascades' reach, stepping
+/// 200 units a frame) leaves only its latest place in the far map: each old place goes at once
+/// (paired as the cascades' moves), not after its grace, so no trail of shadows; once it stands
+/// still a while its one place is still again.
+#[test]
+fn a_far_caster_stepping_across_frames_keeps_only_its_latest_place() {
+    let _far = FarScene::on();
+    let shift = |f: usize| 200.0 * f.min(5) as f32;
+    let frames: Vec<Extra> = (0..44)
+        .map(|f| Extra {
+            small_shift: Some(shift(f)),
+            ..far_land(false, false)
+        })
+        .collect();
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    sun_shadow::enable(true);
+    let b = backend(1);
+    sun_shadow::enable(false);
+    let Some(mut b) = b else {
+        return;
+    };
+    let mut seen: Vec<Vec<([f64; 3], f64, bool)>> = Vec::new();
+    lit_sequence_with(&mut b, &frames, true, &mut |_, b| {
+        let places = b.device().map_or_else(Vec::new, |d| d.sun_far_places());
+        eprintln!(
+            "far places: {:?}",
+            places
+                .iter()
+                .map(|p| (p.0[0].round(), p.1.round(), p.2))
+                .collect::<Vec<_>>()
+        );
+        seen.push(
+            places
+                .into_iter()
+                .filter(|p| p.1 > 300.0 && p.1 < 400.0)
+                .collect(),
+        );
+    });
+    // (A frame's casters are taken as the next frame is drawn: after frame f, frame f - 1's place.)
+    for (f, places) in seen.iter().enumerate().skip(1) {
+        assert_eq!(places.len(), 1, "frame {f}: {places:?}");
+        let x = 2000.0 + f64::from(shift(f - 1));
+        assert!(
+            (places[0].0[0] - x).abs() < 1.0,
+            "frame {f}: {places:?} (at x {x})"
+        );
+    }
+    assert!(seen[2][0].2, "moving while it steps: {:?}", seen[2]);
+    assert!(!seen[43][0].2, "still again: {:?}", seen[43]);
 }
