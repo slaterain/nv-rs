@@ -4,7 +4,7 @@
 //! a plain-word guess of the main cause. An F12 report carries the session's lines (`hitches.txt`). Nothing in the
 //! game changes, or when it runs: the log only reads counters and memory between two of main's frames.
 //!
-//! **A hitch** is a frame of at least [`FLOOR_MS`] (8 ms) and at least twice the typical frame (the median of the
+//! **A hitch** is a frame of at least [`FLOOR_MS`] (8 ms; 6 ms where the typical frame is under 4 ms, above 250 fps) and at least twice the typical frame (the median of the
 //! last [`WINDOW`] frames that were not loading screens). Twice the typical frame is the goal's own test (a frame
 //! twice as long as those around it is a visible jump at any frame rate); the 8 ms floor keeps out the doubling of
 //! a 3 ms frame, which no screen shows, while a 10-15 ms frame in a 5 ms stream (the 200 fps target on a fast
@@ -33,6 +33,10 @@ use std::time::Instant;
 
 /// A frame shorter than this is never a hitch (ms).
 pub const FLOOR_MS: f64 = 8.0;
+/// The floor where the typical frame is under [`FAST_MS`] (above 250 fps: a small interior): a 6 ms frame there is
+/// a jump of three frames or more, which a fast screen shows.
+pub const FAST_FLOOR_MS: f64 = 6.0;
+pub const FAST_MS: f64 = 4.0;
 /// A hitch at least this long is called big (ms).
 pub const BIG_MS: f64 = 16.0;
 /// A frame that showed more than this many presents showed the loading screen's frames (a normal frame shows one).
@@ -76,8 +80,9 @@ impl Detector {
     /// A frame of `ms` that was not a loading screen: the typical frame before it when it is a hitch, then it joins
     /// the frames the median is taken over.
     pub fn frame(&mut self, ms: f64) -> Option<f64> {
-        let hitch = (self.ring.len() >= WARM && ms >= FLOOR_MS && ms >= 2.0 * self.median)
-            .then_some(self.median);
+        let hitch =
+            (self.ring.len() >= WARM && ms >= floor(self.median) && ms >= 2.0 * self.median)
+                .then_some(self.median);
         if self.ring.len() < WINDOW {
             self.ring.push(ms);
         } else {
@@ -95,6 +100,15 @@ impl Detector {
     /// The typical frame now (ms; 0 before any frame).
     pub fn typical(&self) -> f64 {
         self.median
+    }
+}
+
+/// The shortest hitch where the typical frame is `median` ms.
+fn floor(median: f64) -> f64 {
+    if median < FAST_MS {
+        FAST_FLOOR_MS
+    } else {
+        FLOOR_MS
     }
 }
 
@@ -865,8 +879,23 @@ mod tests {
         assert_eq!(d.frame(10.0), Some(5.0));
         let mut d = Detector::default();
         warm(&mut d, 3.4, 40);
-        assert_eq!(d.frame(7.9), None, "under the floor");
-        assert_eq!(d.frame(8.0), Some(3.4));
+        assert_eq!(d.frame(6.7), None, "under twice the typical");
+        assert_eq!(d.frame(6.8), Some(3.4));
+        let mut d = Detector::default();
+        warm(&mut d, 2.5, 40);
+        assert_eq!(d.frame(5.9), None, "under the fast floor");
+        assert_eq!(d.frame(6.0), Some(2.5));
+        let mut d = Detector::default();
+        warm(&mut d, 3.9, 40);
+        assert_eq!(
+            d.frame(7.9),
+            Some(3.9),
+            "a typical frame under 4 ms: the 6 ms floor"
+        );
+        let mut d = Detector::default();
+        warm(&mut d, 4.0, 40);
+        assert_eq!(d.frame(7.9), None, "4 ms and over: the 8 ms floor");
+        assert_eq!(d.frame(8.0), Some(4.0));
         let mut d = Detector::default();
         warm(&mut d, 12.0, 40);
         assert_eq!(d.frame(23.9), None);

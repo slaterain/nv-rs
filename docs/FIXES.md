@@ -86,7 +86,7 @@ carried out (`shown`, `shown_qpc`), and that frame's time from its poll to its P
 percentile since the last one.
 
 The hitch log (on in every run; `NV_HITCH_LOG=0` turns it off; `crates/host/src/hitch_log.rs`) writes one `hitch:`
-line for each frame of at least 8 ms and twice the median of the last 128 frames that were not loading screens
+line for each frame of at least 8 ms (6 ms where the median is under 4 ms) and twice the median of the last 128 frames that were not loading screens
 (at most 20 lines in any 10 s): the frame against the typical one (`big` from 16 ms), the player's cell, the
 frame's stages (`NV_STAGE_TIME`'s points, timed with the log on: about ten clock reads a frame), the one-off work
 counted in it (files opened and bytes read on main, main's waits for other threads, locks, the render thread and

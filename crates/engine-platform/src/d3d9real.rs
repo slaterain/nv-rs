@@ -2961,7 +2961,7 @@ pub(super) mod shot {
             .map(|h| (h.0.iter().cloned().collect::<Vec<_>>(), h.1))
             .unwrap_or_default();
         let mut out = format!(
-            "Frames this session that took at least 8 ms and twice the typical frame ({all} in all{}; at most 20 \
+            "Frames this session that took at least 8 ms (6 ms above 250 fps) and twice the typical frame ({all} in all{}; at most 20 \
              written in any 10 s), oldest first.\r\n",
             if all > lines.len() as u64 {
                 format!(", the last {} here", lines.len())
