@@ -475,8 +475,13 @@ fn the_start_lines_name_what_was_read() {
     assert_eq!(
         start_lines(false, &settings, &keys, on.len()),
         [
-            "lStewieAl's Tweaks: no Data\\NVSE\\Plugins\\nvse_stewie_tweaks.ini: VNV's values",
-            "lStewieAl's Tweaks: 61 of its 61 rows built are on",
+            "lStewieAl's Tweaks: no Data\\NVSE\\Plugins\\nvse_stewie_tweaks.ini: VNV's values"
+                .to_string(),
+            // Every row is on by default: the count follows the rows built (every share's list).
+            format!(
+                "lStewieAl's Tweaks: {n} of its {n} rows built are on",
+                n = rows::all().count()
+            ),
         ]
     );
     let (settings, on) = settings_and_rows(Some(b"[Tweaks]\nbBetterAutoWalk=1\n"), &[], &keys);
