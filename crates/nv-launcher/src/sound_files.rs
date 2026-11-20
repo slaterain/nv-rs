@@ -58,6 +58,9 @@ pub struct Record {
     pub attenuation: u16,
 }
 
+/// The largest SOUN record read (FalloutNV.esm's are a few hundred bytes).
+pub const MOST_RECORD: u32 = 64 * 1024;
+
 /// The record's sound loops (its flag 0x10, `005e39b0`).
 pub const LOOP: u32 = 0x10;
 
@@ -85,6 +88,14 @@ pub fn soun_records<R: Read + Seek>(
         while left >= 24 {
             let (kind, size, _, flags) = header(file)?;
             left -= 24;
+            // A record larger than what is left of the group, or than any SOUN record could be,
+            // is a damaged file: nothing more is read from it (no allocation of its size).
+            if u64::from(size) > left || size > MOST_RECORD {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("a record of {size} bytes in a SOUN group of {left} left"),
+                ));
+            }
             let mut data = vec![0u8; size as usize];
             file.read_exact(&mut data)?;
             left = left.saturating_sub(u64::from(size));
@@ -484,5 +495,22 @@ mod tests {
         for _ in 0..100 {
             assert!(loop_start(&mut r, &clip) < 1000);
         }
+    }
+
+    /// A damaged plugin whose SOUN record claims more bytes than its group holds, or more than
+    /// any SOUN record could be: refused before anything of that size is made, no panic.
+    #[test]
+    fn an_oversized_record_is_refused_before_it_is_read() {
+        let head = unit(b"TES4", [0; 4], &sub(b"HEDR", &[0; 12]), false);
+        let mut huge = unit(b"SOUN", [0; 4], &[0; 8], false);
+        huge[4..8].copy_from_slice(&0x7fff_fff0u32.to_le_bytes());
+        let mut esm = head.clone();
+        esm.extend(unit(b"GRUP", *b"SOUN", &huge, true));
+        assert!(soun_records(&mut std::io::Cursor::new(esm), &["x"]).is_err());
+        // Inside its group, but larger than a SOUN record can be.
+        let big = unit(b"SOUN", [0; 4], &vec![0; MOST_RECORD as usize + 1], false);
+        let mut esm = head;
+        esm.extend(unit(b"GRUP", *b"SOUN", &big, true));
+        assert!(soun_records(&mut std::io::Cursor::new(esm), &["x"]).is_err());
     }
 }

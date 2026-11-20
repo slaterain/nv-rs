@@ -1253,18 +1253,17 @@ impl App {
     /// before the work (which starts the game) begins.
     fn start_play(&mut self, args: Vec<OsString>) {
         let mut args = Some(args);
-        for step in sound::PLAY_ORDER {
-            match step {
-                sound::PlayStep::StopSounds => self.sounds.stop(),
-                sound::PlayStep::ReleaseDevice => self.sounds.release(),
-                sound::PlayStep::StartWork => {
-                    self.working = true;
-                    if let Some(a) = args.take() {
-                        start_work(a);
-                    }
+        let sounds = self.sounds.clone();
+        sound::play_in_order(
+            || sounds.stop(),
+            || sounds.release(),
+            || {
+                if let Some(a) = args.take() {
+                    start_work(a);
                 }
-            }
-        }
+            },
+        );
+        self.working = true;
     }
 
     /// Whether the window can show a frame now ([`drawable`]).
@@ -1543,11 +1542,12 @@ impl App {
             .unwrap_or(false);
         let shown = self.window.is_some() && !self.hidden && !minimised;
         if sound::heard(self.sounds_on, shown, self.focused, self.working) {
-            if let Some(line) = self.sounds.open() {
-                self.log(&line);
-            }
-        } else if self.sounds.is_open() {
-            self.sounds.release();
+            self.sounds.open();
+        } else {
+            self.sounds.release_later();
+        }
+        for line in self.sounds.take_lines() {
+            self.log(&line);
         }
     }
 
@@ -1579,14 +1579,17 @@ impl App {
                 )
             }
         };
-        for (_, beat) in pacing::beats(&queue, frame, from, t) {
+        // Each at its own time; after a stall the older ones are dropped ([`pacing::scheduled`]).
+        let beats = pacing::beats(&queue, frame, from, t);
+        for (delay, beat) in pacing::scheduled(&beats, t) {
             match beat {
+                // The kept sounds play only when not playing: at once.
                 pacing::Beat::Scroll => self.sounds.play(Cue::Scroll),
                 pacing::Beat::Enter => self.sounds.play(Cue::Enter),
                 pacing::Beat::Singles { n, ms } => {
                     for i in 0..n {
-                        self.sounds
-                            .play_after(Cue::Single, ms * i as u64 / n as u64);
+                        let at = delay + ms * i as u64 / n as u64;
+                        self.sounds.play_after(Cue::Single, at);
                     }
                 }
             }
@@ -2022,6 +2025,7 @@ impl winit::application::ApplicationHandler<Event> for App {
                 for line in said {
                     self.log(&line);
                 }
+                self.sounds.release_later();
                 self.sounds = sound::Sounds::new(banks);
                 self.update_sound();
             }

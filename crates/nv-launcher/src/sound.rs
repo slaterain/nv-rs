@@ -68,12 +68,21 @@ pub struct Mix {
     frames: u64,
     rand: Rand,
     last_pick: Vec<(Cue, usize)>,
+    /// The files of the sounds kept by one handle, picked once ([`Sounds::with_opener`]).
+    fixed: Vec<(Cue, usize)>,
     scratch: Vec<f32>,
 }
 
 impl Mix {
-    /// A mix at the device's `rate` on `layout` of `banks`; `seed` the random numbers' start.
-    pub fn new(rate: u32, layout: Layout, banks: Vec<(Cue, Bank)>, seed: u32) -> Option<Mix> {
+    /// A mix at the stream's `rate` on its `layout` of `banks`; `seed` the random numbers'
+    /// start; `fixed` the files picked once for the sounds kept by one handle.
+    pub fn new(
+        rate: u32,
+        layout: Layout,
+        banks: Vec<(Cue, Bank)>,
+        seed: u32,
+        fixed: Vec<(Cue, usize)>,
+    ) -> Option<Mix> {
         Some(Mix {
             rate,
             place: Place::new(layout)?,
@@ -83,28 +92,40 @@ impl Mix {
             frames: 0,
             rand: Rand(seed),
             last_pick: Vec::new(),
+            fixed,
             scratch: Vec::new(),
         })
     }
 
-    /// A new voice of `cue` (a folder's file picked as the game picks it), or None without it.
+    /// The file `cue` plays next: its handle's own for a sound kept by one handle (picked once),
+    /// else a folder's picked as the game picks it (never the last one twice running).
+    fn pick_for(&mut self, cue: Cue, count: usize) -> Option<usize> {
+        if let Some(&(_, i)) = self.fixed.iter().find(|(c, _)| *c == cue) {
+            return (i < count).then_some(i);
+        }
+        if count <= 1 {
+            return (count == 1).then_some(0);
+        }
+        let last = self.last_pick.iter().find(|(c, _)| *c == cue).map(|p| p.1);
+        let i = pick(&mut self.rand, count, last)?;
+        self.last_pick.retain(|(c, _)| *c != cue);
+        self.last_pick.push((cue, i));
+        Some(i)
+    }
+
+    /// A new voice of `cue`, or None without it.
     fn voice(&mut self, cue: Cue) -> Option<Playing> {
-        let bank = self.banks.iter().find(|(c, _)| *c == cue)?.1.clone();
-        let i = if bank.clips.len() > 1 {
-            let last = self.last_pick.iter().find(|(c, _)| *c == cue).map(|p| p.1);
-            let i = pick(&mut self.rand, bank.clips.len(), last)?;
-            self.last_pick.retain(|(c, _)| *c != cue);
-            self.last_pick.push((cue, i));
-            i
-        } else {
-            0
-        };
+        let b = self.banks.iter().position(|(c, _)| *c == cue)?;
+        let i = self.pick_for(cue, self.banks[b].1.clips.len())?;
+        let bank = &self.banks[b].1;
+        let (volume, looping) = (bank.volume, bank.looping);
         let clip = bank.clips.get(i)?;
         let mut v = Voice::new(clip.data.clone(), clip.channels, clip.bits);
         (v.rate, v.device) = (clip.rate, self.rate);
-        v.volume = bank.volume;
-        v.looping = bank.looping;
-        let at = if bank.looping {
+        v.volume = volume;
+        v.looping = looping;
+        let frames = clip.frames();
+        let at = if looping {
             loop_start(&mut self.rand, clip)
         } else {
             0
@@ -113,7 +134,7 @@ impl Mix {
         Some(Playing {
             cue,
             voice: v,
-            frames: clip.frames(),
+            frames,
         })
     }
 
@@ -193,13 +214,17 @@ impl Mix {
     }
 }
 
-/// The output's source: the mix behind a lock the window's thread also takes.
-struct Shared(Arc<Mutex<Mix>>);
+/// The output's source: the mix behind a lock the window's thread also takes; silence until the
+/// mix is made for the stream that was opened ([`Sounds::open`]).
+struct Shared(Arc<Mutex<Option<Mix>>>);
 
 impl Source for Shared {
     fn render(&mut self, _rate: u32, channels: u16, out: &mut [f32]) {
         match self.0.lock() {
-            Ok(mut m) => m.render(channels, out),
+            Ok(mut m) => match m.as_mut() {
+                Some(m) => m.render(channels, out),
+                None => out.fill(0.0),
+            },
             Err(_) => out.fill(0.0),
         }
     }
@@ -215,12 +240,28 @@ pub enum PlayStep {
     StartWork,
 }
 
-/// [`PlayStep`]s in the order `App::play` does them.
+/// [`PlayStep`]s in the order [`play_in_order`] does them.
 pub const PLAY_ORDER: [PlayStep; 3] = [
     PlayStep::StopSounds,
     PlayStep::ReleaseDevice,
     PlayStep::StartWork,
 ];
+
+/// Play's start: `stop`, `release` and `start_work` called in [`PLAY_ORDER`] (`App::start_play`
+/// passes the sounds' stop and release, which waits for the device to be let go, and the work).
+pub fn play_in_order(
+    mut stop: impl FnMut(),
+    mut release: impl FnMut(),
+    mut start_work: impl FnMut(),
+) {
+    for step in PLAY_ORDER {
+        match step {
+            PlayStep::StopSounds => stop(),
+            PlayStep::ReleaseDevice => release(),
+            PlayStep::StartWork => start_work(),
+        }
+    }
+}
 
 /// Whether the terminal is heard now: its sounds on (Settings), the window shown and focused (the
 /// game stops running, and sounding, when its window loses focus: our reading of that for the
@@ -229,71 +270,148 @@ pub fn heard(on: bool, shown: bool, focused: bool, working: bool) -> bool {
     on && shown && focused && !working
 }
 
-/// The terminal's sound: its banks (read once), the device while it is heard, and the mix.
-pub struct Sounds {
-    banks: Vec<(Cue, Bank)>,
-    open: Option<(Output, Arc<Mutex<Mix>>)>,
+/// How a stream is opened: `sound_out::start` on the default device in its mix format as it is
+/// at that moment (the tests' opener hands back an idle stream of a made-up format).
+pub type Opener =
+    Arc<dyn Fn(Arc<Mutex<dyn Source>>) -> Result<Output, sound_out::Refused> + Send + Sync>;
+
+/// The device while it is open, and the opening under way.
+#[derive(Default)]
+struct State {
+    open: Option<(Output, Arc<Mutex<Option<Mix>>>)>,
+    opening: Option<std::thread::JoinHandle<()>>,
+    /// Still wanted when the opening ends (false: a release came first, the stream is let go).
+    wanted: bool,
     /// The device would not open: not tried again (said once).
     refused: bool,
+    /// Lines for the launcher's log, taken by the window ([`Sounds::take_lines`]).
+    said: Vec<String>,
+}
+
+/// The terminal's sound: its banks (read once), the files of the sounds the terminal keeps one
+/// handle for (picked once, [`Sounds::with_opener`]), and the device while it is heard. Opening
+/// and letting go of the device never hold the window's thread ([`Sounds::open`],
+/// [`Sounds::release_later`]) except at Play's start, which waits for it ([`Sounds::release`]).
+#[derive(Clone)]
+pub struct Sounds {
+    banks: Arc<Vec<(Cue, Bank)>>,
+    fixed: Vec<(Cue, usize)>,
+    seed: u32,
+    opener: Opener,
+    state: Arc<Mutex<State>>,
 }
 
 impl Sounds {
-    /// From `banks` (none: silent).
+    /// From `banks` (none: silent), on the default device.
     pub fn new(banks: Vec<(Cue, Bank)>) -> Sounds {
+        let opener: Opener = Arc::new(|source| sound_out::start(source, None));
+        Sounds::with_opener(banks, opener, clock_seed())
+    }
+
+    /// From `banks` with `opener` and the random numbers' start `seed`. A sound the terminal
+    /// keeps one handle for has its file picked once, here, for the launcher's run: the game
+    /// picks a handle's file when the handle is made (`GetSoundHandleByName`, in
+    /// `ComputersMenu`'s constructor) and plays that one each time; a new handle (each typed
+    /// character's) picks again.
+    pub fn with_opener(banks: Vec<(Cue, Bank)>, opener: Opener, seed: u32) -> Sounds {
+        let mut rand = Rand(seed);
+        let fixed = banks
+            .iter()
+            .filter(|(c, b)| kept(*c) && b.clips.len() > 1)
+            .filter_map(|(c, b)| Some((*c, pick(&mut rand, b.clips.len(), None)?)))
+            .collect();
         Sounds {
-            banks,
-            open: None,
-            refused: false,
+            banks: Arc::new(banks),
+            fixed,
+            seed: rand.next(),
+            opener,
+            state: Arc::new(Mutex::new(State::default())),
         }
     }
 
-    /// Opens the device if it is not open (and the banks are there): the hum starts. A line for
-    /// the log when it would not open.
-    pub fn open(&mut self) -> Option<String> {
-        if self.open.is_some() || self.refused || self.banks.is_empty() {
-            return None;
+    fn lock(&self) -> std::sync::MutexGuard<'_, State> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Opens the device, if it is not open or opening (and the banks are there), on a thread of
+    /// its own: the stream in the device's mix format as it is now, then the mix made for the
+    /// stream that opened (its rate and layout, whatever an earlier device's were), then the hum.
+    pub fn open(&self) {
+        let mut s = self.lock();
+        s.wanted = true;
+        if s.open.is_some() || s.opening.is_some() || s.refused || self.banks.is_empty() {
+            return;
         }
-        let Some((rate, layout)) = sound_out::device_mix() else {
-            self.refused = true;
-            return Some("sounds: no sound device: the launcher is silent".into());
-        };
-        let seed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(1, |d| d.subsec_nanos() ^ d.as_secs() as u32);
-        let Some(mix) = Mix::new(rate, layout, self.banks.clone(), seed) else {
-            self.refused = true;
-            return Some(format!(
-                "sounds: {}: the launcher is silent",
-                sound_out::not_provided(layout)
-            ));
-        };
-        let mix = Arc::new(Mutex::new(mix));
-        let source: Arc<Mutex<dyn Source>> = Arc::new(Mutex::new(Shared(mix.clone())));
-        match sound_out::start(source, None) {
-            Ok(out) => {
-                if let Ok(mut m) = mix.lock() {
-                    m.play(Cue::Hum);
+        let (me, banks, fixed) = (self.clone(), self.banks.clone(), self.fixed.clone());
+        let seed = self.seed ^ clock_seed();
+        s.opening = Some(std::thread::spawn(move || {
+            let slot: Arc<Mutex<Option<Mix>>> = Arc::new(Mutex::new(None));
+            let source: Arc<Mutex<dyn Source>> = Arc::new(Mutex::new(Shared(slot.clone())));
+            let opened = (me.opener)(source);
+            let mut s = me.lock();
+            s.opening = None;
+            match opened {
+                Ok(out) => match Mix::new(out.rate, out.layout, (*banks).clone(), seed, fixed) {
+                    Some(mut m) => {
+                        m.play(Cue::Hum);
+                        *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(m);
+                        if s.wanted {
+                            s.open = Some((out, slot));
+                        } else {
+                            drop(s);
+                            drop(out);
+                        }
+                    }
+                    None => {
+                        s.refused = true;
+                        s.said.push(format!(
+                            "sounds: {}: the launcher is silent",
+                            sound_out::not_provided(out.layout)
+                        ));
+                    }
+                },
+                Err(e) => {
+                    s.refused = true;
+                    s.said.push(format!(
+                        "sounds: the sound device would not open ({e:?}): the launcher is silent"
+                    ));
                 }
-                self.open = Some((out, mix));
-                None
             }
-            Err(e) => {
-                self.refused = true;
-                Some(format!(
-                    "sounds: the sound device would not open ({e:?}): the launcher is silent"
-                ))
-            }
+        }));
+    }
+
+    /// Stops everything and lets the device go, waiting until it is (an opening under way ends
+    /// first and lets its stream go itself): Play's start.
+    pub fn release(&self) {
+        let (opening, open) = {
+            let mut s = self.lock();
+            s.wanted = false;
+            (s.opening.take(), s.open.take())
+        };
+        if let Some(t) = opening {
+            let _ = t.join();
+        }
+        if let Some(open) = open {
+            let_go(open);
         }
     }
 
-    /// Stops everything and lets the device go (the output's thread ends).
-    pub fn release(&mut self) {
-        if let Some((out, mix)) = self.open.take() {
-            if let Ok(mut m) = mix.lock() {
-                m.stop();
-            }
-            drop(out);
+    /// The device let go on a thread of its own (the window does not wait for the sound system):
+    /// the window minimised or not in front, the sounds turned off.
+    pub fn release_later(&self) {
+        let open = {
+            let mut s = self.lock();
+            s.wanted = false;
+            s.open.take()
+        };
+        if let Some(open) = open {
+            std::thread::spawn(move || let_go(open));
         }
+    }
+
+    /// The lines for the log said since the last call.
+    pub fn take_lines(&self) -> Vec<String> {
+        std::mem::take(&mut self.lock().said)
     }
 
     /// Everything stops at once; the device stays open.
@@ -301,15 +419,16 @@ impl Sounds {
         self.with(Mix::stop);
     }
 
-    /// Whether the device is open.
+    /// Whether the device is open (an opening under way is not).
     pub fn is_open(&self) -> bool {
-        self.open.is_some()
+        self.lock().open.is_some()
     }
 
     fn with(&self, f: impl FnOnce(&mut Mix)) {
-        if let Some((_, mix)) = &self.open {
-            if let Ok(mut m) = mix.lock() {
-                f(&mut m);
+        let mix = self.lock().open.as_ref().map(|(_, m)| m.clone());
+        if let Some(mix) = mix {
+            if let Some(m) = mix.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+                f(m);
             }
         }
     }
@@ -321,6 +440,38 @@ impl Sounds {
     pub fn play_after(&self, cue: Cue, delay_ms: u64) {
         self.with(|m| m.play_after(cue, delay_ms));
     }
+
+    /// The tests' wait for an opening under way.
+    #[cfg(test)]
+    fn opened(&self) {
+        let t = self.lock().opening.take();
+        if let Some(t) = t {
+            let _ = t.join();
+        }
+    }
+
+    /// The open mix's rate and channels (the tests').
+    #[cfg(test)]
+    fn mix_format(&self) -> Option<(u32, u16)> {
+        let mut r = None;
+        self.with(|m| r = Some((m.rate, m.place.layout.channels)));
+        r
+    }
+}
+
+/// An open stream let go: everything stopped, then the output (its thread ends).
+fn let_go((out, mix): (Output, Arc<Mutex<Option<Mix>>>)) {
+    if let Some(m) = mix.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        m.stop();
+    }
+    drop(out);
+}
+
+/// A seed from the clock.
+fn clock_seed() -> u32 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(1, |d| d.subsec_nanos() ^ d.as_secs() as u32)
 }
 
 /// The archive that holds the game's sounds.
@@ -428,6 +579,7 @@ mod tests {
                 (Cue::Hum, bank(4800, 0, true)),
             ],
             1,
+            Vec::new(),
         )
     }
 
@@ -532,13 +684,68 @@ mod tests {
         assert!(wide.chunks(4).any(|f| f[0] != 0.0));
     }
 
-    /// The device is let go before Play's work (which starts the game) begins; the terminal is
-    /// heard only with its sounds on, its window shown and focused, and no Play work running.
+    /// Sounds whose opener hands back an idle stream at `rate` on `layout` (no device).
+    fn sounds_on(rate: u32, layout: Layout, banks: Vec<(Cue, Bank)>) -> Sounds {
+        let opener: Opener = Arc::new(move |_source| Ok(Output::idle(rate, layout)));
+        Sounds::with_opener(banks, opener, 7)
+    }
+
+    /// The mix is made for the stream that opened, at its rate and on its layout, whatever the
+    /// device was before: opened at 44100 Hz on four channels, then again at 48000 on two (a
+    /// headset plugged in while the launcher ran), each mix follows its own stream (REVIEW-834).
     #[test]
-    fn the_device_goes_before_the_game_starts_and_is_heard_only_when_shown() {
-        let at = |s| PLAY_ORDER.iter().position(|&p| p == s).unwrap();
-        assert!(at(PlayStep::StopSounds) < at(PlayStep::ReleaseDevice));
-        assert!(at(PlayStep::ReleaseDevice) < at(PlayStep::StartWork));
+    fn the_mix_follows_the_stream_that_opened() {
+        ds_mix::resampler::tables();
+        let quad = Layout {
+            channels: 4,
+            mask: 0x33,
+        };
+        let banks = vec![(Cue::Hum, bank(4800, 0, true))];
+        let s = sounds_on(44100, quad, banks.clone());
+        s.open();
+        s.opened();
+        assert!(s.is_open());
+        assert_eq!(s.mix_format(), Some((44100, 4)));
+        s.release();
+        assert!(!s.is_open());
+        let s = sounds_on(48000, Layout::STEREO, banks);
+        s.open();
+        s.opened();
+        assert_eq!(s.mix_format(), Some((48000, 2)));
+    }
+
+    /// Play's start stops the sounds and lets the device go before the work that starts the game
+    /// begins: at that moment the device is no longer open.
+    #[test]
+    fn the_device_is_let_go_before_the_game_starts() {
+        let s = sounds_on(48000, Layout::STEREO, vec![(Cue::Hum, bank(4800, 0, true))]);
+        s.open();
+        s.opened();
+        assert!(s.is_open());
+        let steps = std::cell::RefCell::new(Vec::new());
+        play_in_order(
+            || steps.borrow_mut().push("stop"),
+            || {
+                s.release();
+                steps.borrow_mut().push("release");
+            },
+            || {
+                assert!(!s.is_open(), "the device is still open as the game starts");
+                steps.borrow_mut().push("start");
+            },
+        );
+        assert_eq!(*steps.borrow(), ["stop", "release", "start"]);
+        // A release while an opening is under way waits for it; nothing stays open.
+        let s = sounds_on(48000, Layout::STEREO, vec![(Cue::Hum, bank(4800, 0, true))]);
+        s.open();
+        s.release();
+        assert!(!s.is_open());
+    }
+
+    /// The terminal is heard only with its sounds on, its window shown and focused, and no Play
+    /// work running.
+    #[test]
+    fn the_terminal_is_heard_only_when_shown_and_in_front() {
         assert!(heard(true, true, true, false));
         assert!(!heard(false, true, true, false));
         assert!(!heard(true, false, true, false));
@@ -546,11 +753,44 @@ mod tests {
         assert!(!heard(true, true, true, true));
     }
 
+    /// The "enter" sound is kept by one handle: its file is picked once and every play uses it;
+    /// a typed character's sound picks again each time (REVIEW-834).
+    #[test]
+    fn the_enter_sound_keeps_its_file_and_a_character_picks_anew() {
+        let three = |frames: [usize; 3]| Bank {
+            clips: frames.iter().map(|&n| clip(n, 48000)).collect(),
+            volume: 0,
+            looping: false,
+        };
+        let banks = vec![
+            (Cue::Enter, three([100, 200, 300])),
+            (Cue::Single, three([110, 220, 330])),
+        ];
+        let s = sounds_on(48000, Layout::STEREO, banks.clone());
+        assert_eq!(s.fixed.len(), 1);
+        assert_eq!(s.fixed[0].0, Cue::Enter);
+        let Some(mut m) = Mix::new(48000, Layout::STEREO, banks, 3, s.fixed.clone()) else {
+            return;
+        };
+        let mut enter = Vec::new();
+        let mut single = Vec::new();
+        for _ in 0..6 {
+            m.stop();
+            m.play(Cue::Enter);
+            enter.push(m.playing[0].frames);
+            m.play(Cue::Single);
+            single.push(m.playing[0].frames);
+        }
+        assert!(enter.iter().all(|&f| f == enter[0]), "{enter:?}");
+        assert!(single.windows(2).all(|w| w[0] != w[1]), "{single:?}");
+    }
+
     /// No banks (no game, no files): nothing opens, nothing plays, no panic.
     #[test]
     fn without_its_files_the_terminal_is_silent() {
-        let mut s = Sounds::new(Vec::new());
-        assert_eq!(s.open(), None);
+        let s = Sounds::new(Vec::new());
+        s.open();
+        s.opened();
         assert!(!s.is_open());
         s.play(Cue::Hum);
         s.release();
@@ -596,8 +836,10 @@ mod tests {
             .unwrap_or(65);
         sound_out::mute_device();
         let (banks, _) = load(std::path::Path::new(&game), Volumes::default());
-        let mut s = Sounds::new(banks);
-        assert_eq!(s.open(), None);
+        let s = Sounds::new(banks);
+        s.open();
+        s.opened();
+        assert!(s.is_open(), "{:?}", s.take_lines());
         println!("hum playing, muted, for {hold} s");
         std::thread::sleep(std::time::Duration::from_secs(hold));
         s.release();

@@ -88,6 +88,24 @@ pub fn beats(lines: &[Line], frame: f64, from: f64, t: f64) -> Vec<(f64, Beat)> 
     out
 }
 
+/// Beats older than this (ms) when they are played are dropped: the window stalled.
+pub const STALE_MS: f64 = 100.0;
+
+/// The beats `beats` (each with its frame's time) to play at `t`, each with how many
+/// milliseconds from now: those from the last [`STALE_MS`] only (after a stall the older ones
+/// are dropped, not bunched into one burst), each kept at its own time from the oldest one
+/// played (which plays now).
+pub fn scheduled(beats: &[(f64, Beat)], t: f64) -> Vec<(u64, Beat)> {
+    let fresh: Vec<&(f64, Beat)> = beats.iter().filter(|(b, _)| *b > t - STALE_MS).collect();
+    let Some(&&(first, _)) = fresh.first() else {
+        return Vec::new();
+    };
+    fresh
+        .into_iter()
+        .map(|&(b, beat)| ((b - first).max(0.0) as u64, beat))
+        .collect()
+}
+
 /// The queue frame by frame up to `t` ([`typed`]'s answer), each frame's [`Beat`] handed to `beat`.
 fn walk(
     lines: &[Line],
@@ -312,5 +330,22 @@ mod tests {
                 ((f60).floor(), Beat::Singles { n: 2, ms: 6 }),
             ]
         );
+    }
+
+    /// Each beat keeps its own time from the oldest one played; after a stall, beats older than
+    /// 100 ms are dropped rather than bunched into one burst.
+    #[test]
+    fn beats_keep_their_times_and_a_stall_drops_the_old_ones() {
+        let s = |n| Beat::Singles { n, ms: 50 };
+        let beats = [(0.0, s(1)), (8.0, Beat::Scroll), (16.0, s(2))];
+        assert_eq!(
+            scheduled(&beats, 20.0),
+            [(0, s(1)), (8, Beat::Scroll), (16, s(2))]
+        );
+        // At 1000 ms (a stall): all of them older than 100 ms, nothing plays.
+        assert!(scheduled(&beats, 1000.0).is_empty());
+        // At 105 ms: the first is too old; the others keep their spacing from the oldest kept.
+        assert_eq!(scheduled(&beats, 105.0), [(0, Beat::Scroll), (8, s(2))]);
+        assert!(scheduled(&[], 5.0).is_empty());
     }
 }
