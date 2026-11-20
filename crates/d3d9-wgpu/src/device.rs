@@ -7768,11 +7768,14 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let mut step = 0.0f64;
         let mut skin_places = std::mem::take(&mut sun.skin_now);
         skin_places.clear();
+        // The buffers the game drew from this frame (report 012: an LOD block's segments).
+        let mut buffers_drawn = crate::fxhash::Set::<([u64; 8], u64)>::default();
         for c in std::mem::take(&mut sun.lists.casters) {
             if c.depth != scene {
                 continue;
             }
             on_scene += 1;
+            buffers_drawn.insert(c.key.buffers());
             let world = sun_shadow::world_of(&c.draw.mvp(), frustum, axes, position);
             // A character, as posed in that frame: cast this frame, never kept (its next pose comes
             // with its next draw), never in the far map.
@@ -7848,7 +7851,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             }
         }
         // Let go: what was written or released since; a moving place's old places; what the game
-        // would have drawn (wholly in view) and has not for a few frames; what is too far to cast
+        // would have drawn (wholly in view) and has not for a few frames, or a range of buffers the
+        // game still draws from whose centre is in view or round the camera (report 012: an LOD
+        // block's piece turned off for a loaded cell, [`sun_shadow::segment_gone`]); what is too far to cast
         // into any map. A place that came near a place of the same geometry drawn the frame before
         // and not in this one moves (decided place by place, [`sun_shadow::Cache::mark_moves`]):
         // kept out of the still maps (drawn each frame over a copy of them), so it does not redraw
@@ -7900,7 +7905,15 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 distance - i.radius > reach,
                 i.moved_on(now)
                     || (now - i.seen > sun_shadow::GRACE
-                        && sun_shadow::wholly_in_view(frustum, v, i.radius, near, far)),
+                        && (sun_shadow::wholly_in_view(frustum, v, i.radius, near, far)
+                            || sun_shadow::segment_gone(
+                                frustum,
+                                v,
+                                i.radius,
+                                near,
+                                far,
+                                buffers_drawn.contains(&k.buffers()),
+                            ))),
             ];
             match gone.iter().position(|&g| g) {
                 Some(n) => {

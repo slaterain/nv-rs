@@ -874,6 +874,9 @@ struct Extra {
     wall: bool,
     /// The far scene's tower moved by this along x (in its matrix) instead of drawn in place.
     tower_shift: Option<f32>,
+    /// The two boxes of one vertex and index buffer ([`SEG_VB`], [`SEG_IB`]) as two index ranges:
+    /// both drawn (`Some(true)`) or the first alone (`Some(false)`).
+    segments: Option<bool>,
     /// The tall caster far off toward a low sun ([`SUNWARD`]).
     sunward: bool,
     /// The world word (`sun_shadow::WORLD_STATE`) before the scene's words.
@@ -1122,6 +1125,10 @@ const BEYOND: u32 = 0x16D0;
 /// its radius): with the sun 10 degrees up toward +y its shadow runs back to about y 70000, inside
 /// the far map.
 const SUNWARD: u32 = 0x16E0;
+/// Report 012's LOD block in small: two boxes (x -140 to -100 and 250 to 290, y 80 to 120, 80
+/// high) in one vertex buffer, each its own range of one index buffer.
+const SEG_VB: u32 = 0x1700;
+const SEG_IB: u32 = 0x1710;
 
 /// A box from (x0, y0, 0) to (x1, y1, h): its top and four sides.
 fn cuboid(x0: f32, x1: f32, y0: f32, y1: f32, h: f32) -> Vec<[f32; 3]> {
@@ -1234,6 +1241,11 @@ fn extras(b: &mut WgpuBackend) {
         &cuboid(1500.0, 2500.0, 19_500.0, 20_500.0, 4000.0),
     );
     buffer(b, WALL, &cuboid(1400.0, 1600.0, 5000.0, 14_000.0, 1000.0));
+    let mut seg = cuboid(-140.0, -100.0, 80.0, 120.0, 80.0);
+    seg.extend(cuboid(250.0, 290.0, 80.0, 120.0, 80.0));
+    buffer(b, SEG_VB, &seg);
+    let ib: Vec<u8> = (0..seg.len() as u16).flat_map(u16::to_le_bytes).collect();
+    bytes_buffer(b, SEG_IB, true, &ib);
     buffer(
         b,
         FAR_TOWER_LOW,
@@ -1585,6 +1597,40 @@ fn draw_indexed(b: &mut WgpuBackend, vb: u32, ib: u32, kind: u32, base: i32, cou
     );
 }
 
+/// Draws `count` triangles of index buffer `ib` from index `start` over vertex buffer `vb`
+/// (positions, 16 bytes a vertex; [`SEG_VB`]'s 60 vertices).
+fn draw_range(b: &mut WgpuBackend, vb: u32, ib: u32, start: u32, count: u32) {
+    run(
+        b,
+        Cmd::SetStreamSource {
+            device: DEVICE,
+            stream: 0,
+            buffer: vb,
+            offset: 0,
+            stride: 16,
+        },
+    );
+    run(
+        b,
+        Cmd::SetIndices {
+            device: DEVICE,
+            buffer: ib,
+        },
+    );
+    run(
+        b,
+        Cmd::DrawIndexedPrimitive {
+            device: DEVICE,
+            kind: 4,
+            base_vertex: 0,
+            min_index: 0,
+            vertices: 60,
+            start_index: start,
+            count,
+        },
+    );
+}
+
 const ALPHATESTENABLE: u32 = 15;
 const ALPHAREF: u32 = 24;
 const ALPHAFUNC: u32 = 25;
@@ -1654,6 +1700,12 @@ fn lit_sequence_with(
         }
         if e.tower {
             draw(b, TOWER, 10);
+        }
+        if let Some(both) = e.segments {
+            draw_range(b, SEG_VB, SEG_IB, 0, 10);
+            if both {
+                draw_range(b, SEG_VB, SEG_IB, 30, 10);
+            }
         }
         if let Some(dx) = e.tower_shift {
             set_mvp(b, model_view_proj_at(dx, 0.0));
@@ -3532,4 +3584,40 @@ fn the_far_map_takes_a_new_sun_counting_from_where_it_stood() {
     lit_sequence_with(&mut b, &frames, true, &mut check);
     eprintln!("the far map took the sun {turns} times ({stepped} away from its anchor)");
     assert!(turns >= 2 && stepped >= 1, "turns {turns}, away {stepped}");
+}
+
+/// Report 012 (an LOD block's segment the game turned off kept casting): one vertex and index buffer
+/// holding two boxes as two index ranges, both drawn, then only the first. The second stands across
+/// the view's right edge (its centre in view, so never wholly in view); once the game draws the
+/// buffers' other range but not its own for more than its grace, it is let go and its shadow goes,
+/// while the first box's stays.
+#[test]
+fn a_segment_the_game_stops_drawing_while_it_draws_the_rest_of_its_buffers_goes() {
+    let frames: Vec<Extra> = (0..26)
+        .map(|f| Extra {
+            segments: Some(f < 6),
+            ..Extra::default()
+        })
+        .collect();
+    let Some(off) = lit_sequence_picture(1, false, &frames) else {
+        return;
+    };
+    let on = lit_sequence_picture(1, true, &frames).expect("the adapter");
+    // The first box (x -140 to -100, y 80 to 120, 80 high) throws 60 toward -x: its shadow at
+    // x -200 to -140 beside it; the second (x 250 to 290) at x 190 to 250.
+    let first = |f: usize| taken_at(&off[f], &on[f], -170.0, 100.0);
+    let second = |f: usize| taken_at(&off[f], &on[f], 220.0, 100.0);
+    eprintln!(
+        "first box {:.2} then {:.2}; second box {:.2} then {:.2}",
+        first(4),
+        first(25),
+        second(4),
+        second(25)
+    );
+    assert!(first(4) > 0.8 && second(4) > 0.8, "both cast while drawn");
+    assert!(first(25) > 0.8, "the range still drawn keeps its shadow");
+    assert!(
+        second(25) < 0.1,
+        "the range no longer drawn lets its shadow go"
+    );
 }

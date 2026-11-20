@@ -1439,6 +1439,24 @@ pub fn wholly_in_view(
         && inside([0.0, -1.0, t])
 }
 
+/// Report 012 (a distant-object LOD block's segment kept casting where the game draws the cell
+/// itself): whether a kept caster the game has not drawn for more than [`GRACE`] frames, at
+/// `centre` and `radius` in the camera's view space, is gone although part of it may be out of
+/// sight: the game drew other ranges of its buffers this frame (`buffers_drawn`: its block, the
+/// segments it still shows) and its centre is in the view or the camera stands inside it (a
+/// segment the game turned off for a loaded cell, which is never wholly in view from there).
+pub fn segment_gone(
+    frustum: [f32; 4],
+    centre: [f64; 3],
+    radius: f64,
+    near: f64,
+    far: f64,
+    buffers_drawn: bool,
+) -> bool {
+    let inside = dot3(centre, centre).sqrt() < radius;
+    buffers_drawn && (inside || partly_in_view(frustum, centre, 0.0, near, far))
+}
+
 /// The sun direction one cascade's map was drawn for: kept until the sun has turned far enough
 /// from it to move a shadow edge in that map by half a texel ([`turn_limit`]); then the map is
 /// drawn again with the sun as it is ([`sun_turns`] picks which maps take it in a frame).
@@ -1543,6 +1561,12 @@ impl GeoKey {
             index: (self.index.0, 0),
             ..self.clone()
         }
+    }
+
+    /// Its buffers alone (their own numbers, without offsets' upload counts, ranges or pipeline):
+    /// what an LOD block's segments share, each segment a range of the same buffers.
+    pub fn buffers(&self) -> ([u64; 8], u64) {
+        (self.streams.map(|(b, _, _)| b), self.index.0)
     }
 }
 
@@ -5914,5 +5938,34 @@ mod tests {
         assert_eq!(own.origin, [0, 0, 0]);
         let step_off: [f64; 3] = std::array::from_fn(|i| centre[i] - c.step * b[0][i]);
         assert_eq!(far_place(centre, b, Some(step_off)).origin, [1, 0, 0]);
+    }
+
+    /// Report 012: a kept caster not drawn for its grace is let go although not wholly in view
+    /// only when the game drew other ranges of its buffers this frame and its centre is in view
+    /// or the camera stands inside it.
+    #[test]
+    fn a_segment_is_gone_only_while_its_buffers_are_drawn_and_it_is_round_or_before_the_camera() {
+        let f = frustum();
+        let (near, far) = (10.0, 10_000.0);
+        // Centre in view, the sphere across the right edge (x = 0.77 of the depth: 384 at 500).
+        let edge = [360.0, 0.0, 500.0];
+        assert!(!wholly_in_view(f, edge, 50.0, near, far));
+        assert!(segment_gone(f, edge, 50.0, near, far, true));
+        assert!(
+            !segment_gone(f, edge, 50.0, near, far, false),
+            "its buffers not drawn"
+        );
+        // Round the camera (behind it, the camera inside the sphere).
+        assert!(segment_gone(f, [0.0, 0.0, -100.0], 400.0, near, far, true));
+        // Its centre out of view and the camera outside it: kept (it may be culled, not gone).
+        assert!(!segment_gone(
+            f,
+            [450.0, 0.0, 500.0],
+            100.0,
+            near,
+            far,
+            true
+        ));
+        assert!(!segment_gone(f, [0.0, 0.0, -500.0], 100.0, near, far, true));
     }
 }
