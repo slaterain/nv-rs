@@ -6,7 +6,7 @@ efficient runtime, mod support and an architecture that supports VR.
 
 Read `docs/MILESTONES.md` first. Read only relevant source and reference
 sections. For research work, `docs/METHODOLOGY.md` describes the method and
-`research/*/README.md` the tools. `README.md` documents features and commands, `docs/README.md` indexes the docs.
+`research/*/README.md` the tools. `README.md` is the short front page (one line per system), `docs/STATUS.md` the detail behind each line, `docs/README.md` indexes the docs.
 The earlier instructions (`docs/ENGINE_REFERENCE.md`) were removed with the hand-written
 layer on 2026-11-03 (ADR-0011; `docs/history/README.md`).
 
@@ -33,8 +33,8 @@ layer on 2026-11-03 (ADR-0011; `docs/history/README.md`).
 - Derive behavior and values from game files, compiled shaders, Ghidra or
   recordings. No stand-ins or invented behavior; leave unsupported features
   out. Label unresolved guesses in code and topic findings.
-- README's JIP counts (commands built, game patches built) and the matching count lines in
-  `docs/FIXES.md` are brought up to date by the lead once per batch of merges (maintainer,
+- README's JIP counts (commands built, game patches built), the matching lines in
+  `docs/STATUS.md` and the count lines in `docs/FIXES.md` are brought up to date by the lead once per batch of merges (maintainer,
   2026-11-16). A pull request that adds JIP commands or patches leaves those numbers as main
   has them: every pull request editing the one line made each merge a conflict for the next.
   The count test covers the README's command count only: it refuses a README that says more

@@ -1094,11 +1094,10 @@ With the switch on:
   bits: 70,000 bytes keep 4,464).
 
 Not yet, with the switch on:
-- JIP's game patches not in the port's plan yet (`measure/jip/PLAN-3.9-groups.md`, "Kept out"): JIP's lights
-  on projectiles, muzzle flashes and explosions (G95, G96, G97; until G95 is in, `SetProjectileLight` is built but no light shows)
-  wait for the drawing work, and its fixed-string pool (G43) for the 64-bit move; what they change stays the
-  game's own. (Its three null checks, G01, are in with JIP: the table below; the third place JIP lists changes
-  nothing, the game's loop already stops there.) (`ToggleDepthClear`'s patch, G128, is in with JIP: the
+- JIP's game patches not in the port's plan yet (`measure/jip/PLAN-3.9-groups.md`, "Kept out"): its fixed-string pool
+  (G43) waits for the 64-bit move; what it changes stays the game's own. (Its three null checks, G01, and its
+  lights on projectiles, muzzle flashes and explosions, G95 to G97, are in with JIP: the tables below; the
+  third place of the null checks changes nothing, the game's loop already stops there.) (`ToggleDepthClear`'s patch, G128, is in with JIP: the
   frame's depth clear before the first-person view is a seam the command's switch answers; a skipped clear
   still marks the world as drawn for the new lighting and the sun shadows, so the first-person arms and
   weapon still neither cast nor take the sun's shadows.) Left out on purpose: two patches that only make the game faster (G24, G36),
@@ -1573,6 +1572,16 @@ Built in GL with its command (#736): H23 (`CastSpellHook`, `0x815EE6`, JIP's own
 of `+0x18`, so a touch spell a script casts lands at once, without the casting animation's step. Tagged lights in worn or held models (armour, weapons and other biped slot models whose
 meshes carry `LIGH_EDID` lights) are listed by group GH2's H10 (`LoadBip01SlotHook` at `0x4ACCF1`, in third
 person; `LoadWeaponSlotHook` at `0x4AF0DE`, unless the weapon goes under the player's first-person node).
+
+#### GK: lights in combat
+
+All fix rows (in with the row `NV_JIP_GAME_PATCHES`, off in vanilla); with JIP installed and the row off, each place runs the exe's code unchanged.
+
+| JIP's comment | Exe places | What a player with JIP gets | Built |
+|---|---|---|---|
+| (none; `AddProjectileLightHook` at `0x9BDC92`, `RemoveProjectileLightHook` at `0x9BC6D9`) | the projectile's start in the world `009bda10` (`0x9BDC92`, its call of the light maker `009c3d90`), `Projectile`'s destructor `009bc470` (`0x9BC6D9`, its call of `009c3e10`) | Shots whose projectile record has a light glow and light what they pass: a point light made from that light record (its colour, radius and fade; flickering and pulsing as JIP animates lights, group GL) rides on the projectile, on its model's `AttachLight` node when it has one, else on its root, and goes when the projectile goes. In the game the projectile's light is made with the projectile reference's radius, which is 0 for a projectile (`TESObjectREFR::GetRadius` `00568cb0` gives a radius only to lights and two marker forms), so it lights nothing (read in the exe, not seen in the game). Which shots glow is the data's: every projectile record that names a light (in the game's files or a mod's), and every record a script gives one with `SetProjectileLight`, which this patch makes visible. A projectile flagged deleted or disabled (form flags `0x20`, `0x800`) gets none. Cost: each lit projectile adds a dynamic scene light while it flies, with no cap, as in JIP, so a crowded energy-weapon fight may cost frame rate; it is measured once before JIP is turned on in any preset (G95) | 3.9 GK |
+| (none; `SetMuzzleFlashFadeHook` at `0x9BB906`) | `MuzzleFlash::UpdateLight` `009bb8a0` (`0x9BB906`) | A muzzle flash's light shines at its light record's own fade (brightness) while the flash shows, instead of always 1.0; off, it is 0 as in the game. A record with fade 1.0 looks as before; one at 0.5 half as bright, one at 2.0 twice. nv-rs's guard, with the missing-data guard row (`NV_NVSE_NULL_GUARD`, the fixes preset): a flash whose projectile record or muzzle flash light a script took away gets the game's 1.0; with that row off, as JIP (it reads through null and crashes). As JIP, only the light's brightness is written (the game's setter also counts the light's change number) (G96) | 3.9 GK |
+| (none; `SetExplosionLightFadeHook` at `0x9AE68C`) | the explosion's update `009ae5d0` (`0x9AE68C`, its call of `009b1320`) | An explosion's light starts at its light record's own fade (brightness) and fades out over the first half of the explosion's life as in the game (`1 - 2 x age / life`, held between 0 and 1), instead of starting at 1.0 whatever the record says. nv-rs's guard, with the missing-data guard row (`NV_NVSE_NULL_GUARD`): an explosion whose record's light a script took away gets the game's fade; with that row off, as JIP (it reads through null). As JIP, in `float`s and only the brightness written (G97) | 3.9 GK |
 
 #### GX: Havok, pad rumble, mouse
 
