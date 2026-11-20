@@ -1781,7 +1781,19 @@ saves, audio media and the radio. None yet.
 #### AI, actors and the player
 
 Actors, their AI processes, combat, packages, projectiles, the player character, animation and the
-model loader. None yet.
+model loader.
+
+| Row (Tweaks' function) | PLAN | Key in `[nv-rs Stewie]` | Exe places | What a player gets |
+|---|---|---|---|---|
+| `patchFixCrippledLimbAnimsNotUpdatingIfLimbsFixed` | S0147 | `bFixCrippledLimbAnimsNotUpdatingIfLimbsFixed` | `Actor::MobilityConditionModifiedCallback` `008b9830` (`0x8B9950`) | When a leg's crippled state changes, the walk is chosen again (crippled while either leg is), so healing a crippled leg brings the normal walk back, where the exe's choice kept the limp |
+| `patchFixInfiniteNPCLoopingReloads` | S0159 | `bFixInfiniteNPCLoopingReloads` | `008ba600` (`0x8BAB65`) | An NPC whose reload would load more rounds than it carries does not reload again, where the exe's equality test let it reload in a loop |
+| `MineDisarmedLightLoadingFix` | S0180 | `bMineDisarmedLightLoadingFix` | `Projectile::LoadGame` `009c52f0` (`0x9C5723`) | Loading a save runs the projectile's light update (`009b46c0`) before its impact byte is read, so a mine's light (its `##LightOn` block) shows correctly again |
+| `EnduranceHealthRestoreFix` | S0205 | `bEnduranceHealthRestoreFix` | `ValueModifierEffect::Start` `0082c000` (`0x82C221`); `Actor::EnduranceModifiedCallback` `008b9ea0` (`0x8B9EFC`) | An Endurance drop kills an actor only at 0 health or less, where the exe kills at 1 or less, and an Endurance drop no longer restores health. Changes play |
+| `CreatureDRFix` | S0206 | `bCreatureDRFix` | `Creature`'s vtable slot `010874E8` (`008d4cc0`, its only reference) | A creature's total DR is its Damage Resistance's damage value plus its permanent value (plus its own value when it has one). The exe totals its own value when it has one (otherwise the base value) plus the permanent value, the temporary one and the damage, counting a creature's DR twice: a creature with no value of its own, base 10, permanent 1, temporary 2 and damage 0.5 goes from 13.5 to 1.5, one with its own value 4 from 7.5 to 5.5. Changes play: creatures take more damage than in the game. Also follows Tweaks' own `[INI] bFixCreatureDoubledDR` (main INI only, code default 1): off when the player's Tweaks INI sets it to 0 |
+| `NonHitscanProjectileSplashFix` | S0207 | `bNonHitscanProjectileSplashFix` | `009bf370` (`0x9BF461`) | A projectile that is not hitscan sets its direction as the exe does and then gives its physics body the character controller's velocity, so water sees it move (splashes) |
+| `RagdollControllerUpdateFix` | S0217 | `bRagdollControllerUpdateFix` | `008bcdf0` (`0x8BCED5`) | The player's ragdoll update keeps "wanted" in first person, so the leg IK is no longer reset when switching views |
+| `DeathAnimFix` | S0221 | `bDeathAnimFix` | `008ba600` (`0x8BA6EA`) | Before the death group (0xe0) is played, the animation's group 1 is cleared (`Animation::ClearGroup(1, 0.0)`), so the death animation plays even while a movement animation is easing out, where the exe's play gives up |
+| `ArmorUpdateFix` | S0229 | `bArmorUpdateFix` | `008d4e80` (a jump at its entry) | When an actor's (NPC's or creature's) armour changes, its total DR and DT are reset as the exe does, and its AI process's cached DR and DT are also marked out of date, so they follow the new armour at once (for the player the recompute gives the same value). Changes play: NPCs' and creatures' DR and DT keep up with their armour |
 
 #### Menus and the HUD
 
