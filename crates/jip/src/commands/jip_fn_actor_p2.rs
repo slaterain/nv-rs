@@ -2022,7 +2022,8 @@ const PLAYER_BIPED_1ST: u32 = 0x68c;
 const PLAYER_NODE_1ST: u32 = 0x694;
 /// The weapon's flags (+0x100: bit 0x10 the weapon is re-equipped) and its scope model
 /// (`targetNIF`, +0x1E8); the HUD's scope refreshes (`0077F270`, `0077F2F0` with the model);
-/// a process's weapon entry (+0x114) and `QueueEquipItem` (vtable +0x178).
+/// a process's weapon entry (+0x114) and `QueueEquipItem` (vtable +0x178, the game's
+/// `MiddleHighProcess::AddQueuedItem`: `this` and eleven words).
 const WEAPON_FLAGS1: u32 = 0x100;
 const WEAPON_TARGET_NIF: u32 = 0x1e8;
 const HUD_WEAPON_REFRESH: u32 = 0x0077_f270;
@@ -2106,10 +2107,16 @@ fn reload_equipped_models(e: &mut Engine, w: &[u32]) -> Ret {
         if info != 0 && e.mem.u32(info + 8) == weapon {
             let extend = e.mem.u32(info);
             let first = if extend != 0 { e.mem.u32(extend) } else { 0 };
+            // The slot is `MiddleHighProcess::AddQueuedItem` (`00915950`, `RET 0x2c`): eleven
+            // stack words, where JIP's header declares ten (it has no word for the eighth, which
+            // the game does not read). JIP's ten values land on the game's first ten words; the
+            // eleventh (play the equip sound) is whatever lies above them in JIP's own frame, so
+            // it is given as 0, the `playSound` false JIP means. With ten the game stopped here
+            // ("call has 11 argument words, needs more").
             e.vcall(
                 process,
                 VT_QUEUE_EQUIP_ITEM,
-                &[character, 1, weapon, 1, first, 1, 0, 1, 0, 0],
+                &[character, 1, weapon, 1, first, 1, 0, 1, 0, 0, 0],
             );
         }
     }

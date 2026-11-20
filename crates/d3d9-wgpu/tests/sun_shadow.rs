@@ -885,6 +885,9 @@ struct Extra {
     low_tower: bool,
     hill: bool,
     beyond: bool,
+    /// The cut-out ([`CUT`]) made this many times larger round the world origin (drawn instead of
+    /// `cutout`).
+    cutout_scale: Option<f32>,
     /// The camera's place in the frame's words moved by this (world units; the draws' matrices
     /// stay): the maps step after it.
     camera_shift: Option<[f64; 3]>,
@@ -1158,6 +1161,17 @@ fn model_view_proj_at(x: f32, y: f32) -> [[f32; 4]; 4] {
     let mut m = model_view_proj();
     for row in m.iter_mut() {
         row[3] += row[0] * x + row[1] * y;
+    }
+    m
+}
+
+/// The camera's `ModelViewProj` with the object scaled by `s` round the world origin first.
+fn model_view_proj_scaled(s: f32) -> [[f32; 4]; 4] {
+    let mut m = model_view_proj();
+    for row in m.iter_mut() {
+        for v in row.iter_mut().take(3) {
+            *v *= s;
+        }
     }
     m
 }
@@ -1822,7 +1836,10 @@ fn lit_sequence_with(
                 strip_indices() - 2,
             );
         }
-        if e.cutout {
+        if e.cutout || e.cutout_scale.is_some() {
+            if let Some(s) = e.cutout_scale {
+                set_mvp(b, model_view_proj_scaled(s));
+            }
             set_shaders(b, CUT_VS, CUT_PS, CUT_DECL);
             run(
                 b,
@@ -1856,6 +1873,7 @@ fn lit_sequence_with(
             );
             state(b, ALPHATESTENABLE, 0);
             set_shaders(b, VS, LIT_PS, DECL);
+            set_mvp(b, model_view_proj());
         }
         if words {
             for (state, m) in [(scene_light::STATE, view), (sun_shadow::STATE, frame)] {
@@ -2079,6 +2097,38 @@ fn a_cut_out_casts_its_alpha_tests_shape() {
             } else {
                 assert_eq!(at(on, p), at(off, p), "({y}, {z}) clear ({samples})");
             }
+        }
+    }
+}
+
+/// Cut-outs cast in every cascade (the maintainer: shadows from everything): the checker cut-out
+/// made forty times larger in the far scene stands 4,000 to 8,000 units out, in the last cascade;
+/// its opaque squares shade the land and its clear ones let the sun through, as near the camera.
+#[test]
+fn a_cut_out_in_the_last_cascade_casts_its_alpha_tests_shape() {
+    let _far = FarScene::on();
+    let frames = [Extra {
+        cutout_scale: Some(40.0),
+        ..far_land(false, false)
+    }; 8];
+    let Some((off, _)) = far_sequence(1, false, &frames) else {
+        return;
+    };
+    let (on, _) = far_sequence(1, true, &frames).expect("the adapter");
+    // A point (y, z) of the square throws its shadow to (-0.75 z, y) on the ground.
+    for (y, z, opaque) in [
+        (125.0, 45.0, true),
+        (175.0, 15.0, true),
+        (175.0, 45.0, false),
+        (125.0, 15.0, false),
+    ] {
+        let (y, z) = (40.0 * y, 40.0 * z);
+        let t = taken_at(&off[7], &on[7], -0.75 * z, y);
+        eprintln!("the far cut-out at ({y}, {z}): {t}");
+        if opaque {
+            assert!(t > 0.8, "({y}, {z}) opaque: {t}");
+        } else {
+            assert!(t < 0.1, "({y}, {z}) clear: {t}");
         }
     }
 }

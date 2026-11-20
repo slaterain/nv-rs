@@ -42,6 +42,8 @@ pub enum Event {
     Ended(i32),
     /// The graphics card the game will draw with, for the start screen.
     Card(crate::app::Card),
+    /// The clipboard's line for the paste asked as `id` ([`crate::paste::read_later`]).
+    Pasted { id: u64, text: Option<String> },
 }
 
 /// What a message is, for Windows' message boxes when there is no window (their icon).

@@ -1686,6 +1686,76 @@ fn stewie_passes_each_game_function_the_words_it_takes() {
     check("stewie");
 }
 
+/// Virtual calls of the extenders whose target the exe fixes, whatever the object's class (every
+/// class that can be there has the same function in the slot): crate, file, the slot constant as
+/// the call writes it, the function in that slot, and which one it is. Each call there passes a
+/// `&[..]` list of `u32` words.
+const VCALLS: &[(&str, &str, &str, u32, &str)] = &[(
+    "jip",
+    "commands/jip_fn_actor_p2.rs",
+    "VT_QUEUE_EQUIP_ITEM",
+    0x0091_5950,
+    "ReloadEquippedModels' QueueEquipItem: slot 0x178 of the middle-high and high processes' \
+     vtables, MiddleHighProcess::AddQueuedItem (RET 0x2c, `this` and eleven words)",
+)];
+
+/// JIP's `ReloadEquippedModels` gave the process's `QueueEquipItem` ten words where the game's
+/// function takes eleven (JIP's header has none for the eighth, unread one): re-equipping a
+/// weapon that way stopped the game. Each [`VCALLS`] call is read from its crate's source and its
+/// words held to the registered translation's, probed as above.
+#[test]
+fn extenders_virtual_calls_with_a_fixed_target_pass_its_words() {
+    let _turn = PROBING.lock().unwrap_or_else(|e| e.into_inner());
+    let registered = Engine::new_untyped_for_test();
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let mut wrong = Vec::new();
+    for &(name, file, slot, target, what) in VCALLS {
+        let files = files_of(&crate_src(name));
+        let Some((_, code)) = files.iter().find(|(f, _)| f == file) else {
+            wrong.push(format!("{name}: no file {file}"));
+            continue;
+        };
+        let takes = if registered.is_registered(target) {
+            arity(Engine::new_untyped_for_test, target)
+        } else {
+            None
+        };
+        let mut found = 0;
+        let mut from = 0;
+        while let Some(at) = code[from..].find(".vcall(") {
+            let open = from + at + ".vcall".len();
+            from = open + 1;
+            let Some(parts) = call_args(code, open).map(items) else {
+                continue;
+            };
+            if parts.len() != 3 || parts[1] != slot {
+                continue;
+            }
+            found += 1;
+            let Some(list) = parts[2]
+                .strip_prefix("&[")
+                .and_then(|l| l.strip_suffix(']'))
+            else {
+                wrong.push(format!("{name} {file} {slot}: not a `&[..]` list"));
+                continue;
+            };
+            let words = 1 + items(list).len();
+            if takes != Some(words) {
+                wrong.push(format!(
+                    "{name} {file} {slot} ({what}): passes {words} words, {target:08x} takes \
+                     {takes:?}"
+                ));
+            }
+        }
+        if found == 0 {
+            wrong.push(format!("{name} {file}: no `.vcall` at {slot}"));
+        }
+    }
+    std::panic::set_hook(previous);
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
 /// The reader's own rules, on made-up source.
 #[test]
 fn the_reader_counts_words_by_type_and_lists_what_it_cannot_read() {

@@ -26,6 +26,8 @@ const LIT_PS: u32 = 0x1320;
 const DECL: u32 = 0x1400;
 const SKIN_DECL: u32 = 0x1401;
 const GROUND: u32 = 0x1500;
+/// The far view's ground: x -8,000 to 8,000, y 0 to 20,000.
+const FAR_GROUND: u32 = 0x1501;
 const BAR: u32 = 0x1510;
 /// A rigid box where a head would be (60 to 120 high at (0, 150)), its face pixel shader, the
 /// pixel shader with the game's actor shadow (s6), and the black texture bound there.
@@ -71,6 +73,15 @@ fn run(b: &mut WgpuBackend, cmd: Cmd<Data<'_>>) {
 /// The camera: at (0, -400, 300), looking toward +y and 35 degrees down; its axes (right, up,
 /// ahead).
 fn camera() -> ([f64; 3], [[f64; 3]; 3]) {
+    if FAR_VIEW.get() {
+        // At (0, 0, 3000), looking toward +y and 10 degrees down: the ground 4,000 to 9,000 units
+        // ahead, in the last cascade.
+        let (s, c) = 10f64.to_radians().sin_cos();
+        return (
+            [0.0, 0.0, 3000.0],
+            [[1.0, 0.0, 0.0], [0.0, s, c], [0.0, c, -s]],
+        );
+    }
     let (s, c) = 35f64.to_radians().sin_cos();
     (
         [0.0, -400.0, 300.0],
@@ -91,6 +102,8 @@ thread_local! {
     static CULL: std::cell::Cell<u32> = const { std::cell::Cell::new(1) };
     /// The characters' allowance a test sets (game units; none: measured).
     static ALLOW: std::cell::Cell<Option<f32>> = const { std::cell::Cell::new(None) };
+    /// The far view ([`camera`]): the camera high over the far ground ([`FAR_GROUND`]).
+    static FAR_VIEW: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
@@ -418,6 +431,12 @@ fn backend() -> Option<WgpuBackend> {
         .flat_map(|p| [p[0], p[1], 0.0, 1.0])
         .collect();
     bytes_buffer(&mut b, GROUND, &floats(&ground));
+    let (g0, g1, h0, h1) = (-8000.0f32, 8000.0, 0.0, 20_000.0);
+    let far: Vec<f32> = [[g0, h0], [g1, h0], [g1, h1], [g0, h0], [g1, h1], [g0, h1]]
+        .iter()
+        .flat_map(|p| [p[0], p[1], 0.0, 1.0])
+        .collect();
+    bytes_buffer(&mut b, FAR_GROUND, &floats(&far));
     let mut bar = Vec::new();
     bar_part(0.0, JOINT, 0, &mut bar);
     bar_part(JOINT, TOP, 1, &mut bar);
@@ -629,6 +648,8 @@ struct Shot {
     /// The bar drawn blended (fading in or out: the game blends such a character), so it casts
     /// nothing of ours.
     bar_blended: bool,
+    /// The bar's bones scaled by this round the origin (before their moves).
+    bar_scale: Option<f32>,
 }
 
 /// Frames as `shots` say, with the words when `words`; each frame's pixels.
@@ -655,11 +676,20 @@ fn frames_of(b: &mut WgpuBackend, shots: &[Shot], words: bool) -> Vec<Vec<[u8; 4
         constants(b, 0, 0, &mvp);
         constants(b, 3, 1, &[0.2, 0.2, 0.2, 1.0]);
         constants(b, 3, 3, &[0.6, 0.6, 0.6, 0.0]);
-        draw(b, GROUND, 16, 2);
+        draw(b, if FAR_VIEW.get() { FAR_GROUND } else { GROUND }, 16, 2);
         if let Some((s0, s1)) = shot.bar {
             set(b, SKIN_VS, SKIN_DECL);
             constants(b, 0, 0, &mvp);
-            constants(b, 0, 4, &bones_two(s0, s1));
+            let mut bones = bones_two(s0, s1);
+            if let Some(scale) = shot.bar_scale {
+                // Each bone's rotation part (the rows' first three) scaled round the origin.
+                for (i, v) in bones.iter_mut().enumerate() {
+                    if i % 4 != 3 {
+                        *v *= scale;
+                    }
+                }
+            }
+            constants(b, 0, 4, &bones);
             state(b, 22, CULL.get());
             state(b, 27, u32::from(shot.bar_blended));
             constants(b, 3, 3, &[0.5, 0.5, 0.5, 0.0]);
@@ -744,6 +774,64 @@ fn dark(on: &[[u8; 4]], off: &[[u8; 4]], p: [f64; 3]) -> bool {
 /// bone 1 moved it by `y` along y: a point in the middle of it.
 fn upper_shadow(y: f64) -> [f64; 3] {
     [-75.0, f64::from(BAR_Y) + y, 0.0]
+}
+
+/// One shadow a character in the last cascade too: just past the tip of the far bar's shadow (see
+/// [`a_character_in_the_last_cascade_casts`]) the game's actor shadow (black everywhere) gives way
+/// to ours, as near the camera.
+#[test]
+fn in_the_last_cascade_the_games_actor_shadow_gives_way_to_the_characters() {
+    FAR_VIEW.set(true);
+    let shots = [Shot {
+        bar: Some(([0.0, 1500.0, 0.0], [0.0, 1500.0, 0.0])),
+        bar_scale: Some(30.0),
+        game_shadow: true,
+        ..Shot::default()
+    }; 4];
+    let Some(_) = picture_of(false, true, &shots) else {
+        return;
+    };
+    let ours = picture_of(true, true, &shots).expect("the adapter");
+    let theirs = picture_of(true, false, &shots).expect("the adapter");
+    // The tip at x -3,000 (3,600 high, 300 to each side); the pixels just past it (a pixel is about
+    // 25 units here).
+    let most = (0..6)
+        .map(|i| {
+            let p = [-3005.0 - 5.0 * f64::from(i), 6000.0, 0.0];
+            i32::from(at(&ours[3], p)) - i32::from(at(&theirs[3], p))
+        })
+        .max()
+        .expect("points");
+    assert!(most > 20, "the game's shadow left out under ours: {most}");
+}
+
+/// Characters cast in every cascade (the maintainer: shadows from everything): in the far view the
+/// bar, thirty times its size and 6,000 units out (the last cascade), shades the ground along its
+/// shadow, both halves; beside it the ground stays lit.
+#[test]
+fn a_character_in_the_last_cascade_casts() {
+    FAR_VIEW.set(true);
+    let shots = [Shot {
+        bar: Some(([0.0, 1500.0, 0.0], [0.0, 1500.0, 0.0])),
+        bar_scale: Some(30.0),
+        ..Shot::default()
+    }; 3];
+    // (The far view stays on for the asserts: `pixel` reads the camera. Each test has its own
+    // thread, so it ends with the test.)
+    let Some(off) = picture_of(false, true, &shots) else {
+        return;
+    };
+    let on = picture_of(true, true, &shots).expect("the adapter");
+    let (on, off) = (&on[2], &off[2]);
+    // Its foot at (0, 6000); the sun's way puts 3,600 units of height 2,700 toward -x.
+    for x in [-700.0, -2000.0] {
+        assert!(dark(on, off, [x, 6000.0, 0.0]), "its shadow at x {x}");
+    }
+    assert_eq!(
+        at(on, [-700.0, 7500.0, 0.0]),
+        at(off, [-700.0, 7500.0, 0.0]),
+        "beside its shadow"
+    );
 }
 
 /// A bar bent by its second bone casts where its bones put it: the upper half's shadow is beside
@@ -1017,6 +1105,7 @@ fn a_character_not_cast_keeps_the_games_shadow_while_another_casts() {
             bar: Some(([150.0, 300.0, 0.0], [150.0, 300.0, 0.0])),
             bar_blended: true,
             game_shadow: true,
+            bar_scale: None,
         })
         .collect();
     let Some(off) = picture_of(false, true, &shots) else {
