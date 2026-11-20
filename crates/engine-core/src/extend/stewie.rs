@@ -345,7 +345,8 @@ fn model_path(e: &mut Engine, form: u32) -> u32 {
 /// for none); for an id other than the last one seen, while `[Tweaks] bInvalidBSFadeNodePrints`
 /// is on, "[Tweaks] Invalid BSFadeNode Detected - Linked Obj ID: %08X (%s)" with the reference's
 /// base form's (`+0x20`) model path ("<unknown mesh>" without one), unless that path is the one
-/// printed last (the same text address). The id is remembered either way.
+/// printed last (the same text address). The id is remembered either way. As with Tweaks only an
+/// immediate repeat is skipped: two broken references checked in turn print each time.
 pub fn invalid_fade_node_print(e: &mut Engine, node: u32) {
     let bits = std::sync::Arc::clone(&e.extend.stewie);
     let prints = &bits.3;
@@ -755,6 +756,32 @@ mod tests {
         // A new id after an unknown mesh prints again with the model's path.
         invalid_fade_node_print(&mut e, b);
         assert_eq!(LINES.lock().unwrap()[2].1, 0x5678);
+        // Only an immediate repeat is skipped: two references with other models checked in turn
+        // (one with its own model, then a, then the first again) print each time.
+        let tree = e.mem.alloc(16);
+        for (i, ch) in b"tree.nif\0".iter().enumerate() {
+            e.mem.set_u8(tree + i as u32, *ch);
+        }
+        let other_base = e.mem.alloc(0x40);
+        e.mem.set_u32(other_base + 0x30, vtable);
+        e.mem.set_u32(other_base + 0x34, tree);
+        let third = e.mem.alloc(0x24);
+        e.mem.set_u32(third + 0xc, 0x9abc);
+        e.mem.set_u32(third + 0x20, other_base);
+        let d = node(&mut e, third);
+        for n in [d, a, d] {
+            invalid_fade_node_print(&mut e, n);
+        }
+        let lines = LINES.lock().unwrap();
+        let tail: Vec<(u32, Vec<u8>)> = lines[3..].iter().map(|l| (l.1, l.2.clone())).collect();
+        assert_eq!(
+            tail,
+            [
+                (0x9abc, b"tree.nif".to_vec()),
+                (0x1234, b"rock.nif".to_vec()),
+                (0x9abc, b"tree.nif".to_vec())
+            ]
+        );
     }
 
     /// S0031's warning: the loader's model name (or "unknown"), once until another model is
