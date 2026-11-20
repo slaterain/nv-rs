@@ -192,11 +192,12 @@ fn constant(e: &mut Engine, addr: u32, value: f64) {
 /// through the translated `00403e20`, the spread through `00524b80` and the gun tests through
 /// `004c0bf0` and `004c0c60`. Off, no spread means no circle, the range factor stays 0.0 and the
 /// chance is 0%; on, it starts at `fVATSRangeSpreadMax`: 2 x 1 x 1 = 2%, answered as 0.02. A gun
-/// with a spread (1.0) gets the same chance both ways.
+/// with a spread of 5 degrees (its range factor about 1.46, under the cap) gets the same chance both
+/// ways.
 #[test]
 fn s0055_a_zero_spread_gun_has_a_vats_chance() {
     let mut spread_chances = vec![];
-    for (on, min_spread) in [(false, 0.0f32), (true, 0.0), (false, 1.0), (true, 1.0)] {
+    for (on, min_spread) in [(false, 0.0f32), (true, 0.0), (false, 5.0), (true, 5.0)] {
         let mut e = Engine::new();
         constant(&mut e, 0x0101_2060, 0.0);
         constant(&mut e, 0x0101_2070, 1.0);
@@ -234,7 +235,10 @@ fn s0055_a_zero_spread_gun_has_a_vats_chance() {
         }
     }
     assert_eq!(spread_chances[0], spread_chances[1]);
-    assert!(spread_chances[0] > 0.02, "{spread_chances:?}");
+    assert!(
+        spread_chances[0] > 0.0 && spread_chances[0] < 0.02,
+        "{spread_chances:?}"
+    );
 }
 
 static EQUIPPED: AtomicU32 = AtomicU32::new(0);
