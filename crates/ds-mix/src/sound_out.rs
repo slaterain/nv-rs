@@ -54,9 +54,18 @@
 //! - Reports ([`Watch`], [`react`]): ALSA's xruns are counted as underruns once frames were given;
 //!   CoreAudio's processor overloads are counted under their own name; a device that stops
 //!   answering is named once and the stream is then silent and not pulled (as the WASAPI arm
-//!   does); a changed default device is said and the stream plays on (cpal 0.18.2: CoreAudio's
-//!   default output unit has already moved it; ALSA reports none). Lines said "once" are once per
-//!   run ([`Said`]).
+//!   does), and marked lost for its owner ([`Output::lost`]), who opens a new one on the default
+//!   device; a changed default device is said and the stream plays on (cpal 0.18.2: CoreAudio's
+//!   default output unit has already moved it, converting the rate if it must; ALSA reports none,
+//!   and PipeWire or PulseAudio move a stream of their `default` device themselves). Lines said
+//!   "once" are once per run ([`Said`]).
+//!
+//! **A lost device** ([`Output::lost`]). On Windows the stream is lost when its endpoint stops
+//! answering (unplugged, disabled, its format changed) or another endpoint becomes the default
+//! (asked once a second, [`DEFAULT_CHECK`]: a headset plugged in, a choice in Sound settings).
+//! Off Windows when the system says the device is gone. The owner (the game's DirectSound layer,
+//! the launcher) then lets it go and opens a new stream on the default device in its own format,
+//! trying again at most once a second while none opens ([`try_again`]). Nothing of the mix changes.
 //! - Linux needs ALSA's library (`libasound.so.2`) to start at all, sound or not (cpal links it).
 
 pub use super::speakers::Layout;
@@ -74,9 +83,11 @@ pub trait Source: Send {
     }
 }
 
-/// A running output: the thread and its stop flag.
+/// A running output: the thread, its stop flag, and whether its device was lost.
 pub struct Output {
     stop: Arc<AtomicBool>,
+    /// Set once by the stream's thread when its device is lost ([`Output::lost`]).
+    lost: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
     /// The stream's rate, and its channels and speakers.
     pub rate: u32,
@@ -101,11 +112,44 @@ impl Output {
     pub fn idle(rate: u32, layout: Layout) -> Output {
         Output {
             stop: Arc::new(AtomicBool::new(false)),
+            lost: Arc::new(AtomicBool::new(false)),
             thread: None,
             rate,
             layout,
         }
     }
+
+    /// Whether the stream's device was lost: it stopped answering (unplugged, disabled) or, on
+    /// Windows, is no longer the default output device ([`DEFAULT_CHECK`]). From then on the
+    /// stream gives the device nothing; its owner lets it go and opens a new one with [`start`]
+    /// (macOS's default output unit follows a new default device by itself and is not lost then).
+    pub fn lost(&self) -> bool {
+        self.lost.load(Ordering::Relaxed)
+    }
+
+    /// Marks the stream lost, as its thread does: a stand-in's (the tests' idle streams).
+    pub fn mark_lost(&self) {
+        self.lost.store(true, Ordering::Relaxed);
+    }
+}
+
+/// How often the Windows stream asks which device is the default now: a stream opened on the
+/// default device whose default changed to another (a headset plugged in, a choice in Sound
+/// settings) counts as lost, so its owner opens a new one there. Our reading of DirectSound on
+/// Windows 10 and 11, which moves a default-device stream to the new default (not measured).
+pub const DEFAULT_CHECK: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Whether the default device moved off the endpoint a stream was opened on (`ours`, its id):
+/// another device is the default `now`. With no id for ours, or no default device now (the
+/// stream's own device then stops answering by itself, or plays on), it has not.
+pub fn default_moved<T: PartialEq>(ours: Option<&[T]>, now: Option<&[T]>) -> bool {
+    matches!((ours, now), (Some(a), Some(b)) if a != b)
+}
+
+/// Whether an owner whose stream was lost tries to open one now: the first try at once, then at
+/// most once per [`DEFAULT_CHECK`] while no device answers.
+pub fn try_again(last: Option<std::time::Instant>, now: std::time::Instant) -> bool {
+    last.is_none_or(|t| now.saturating_duration_since(t) >= DEFAULT_CHECK)
 }
 
 impl Drop for Output {
@@ -127,25 +171,32 @@ pub fn device_rate() -> Option<u32> {
 }
 
 /// The default output device's mix rate and layout (its shared-mode format; off Windows
-/// [`mix_of`] its default stream), asked once on a thread of its own; `None` when there is no
-/// device (off Windows also when its stream is not provided: the reason is said once).
+/// [`mix_of`] its default stream), asked on a thread of its own the first time and kept until
+/// [`device_mix_again`]; `None` when there is no device (off Windows also when its stream is not
+/// provided: the reason is said).
 pub fn device_mix() -> Option<(u32, Layout)> {
-    #[cfg(windows)]
-    {
-        static MIX: std::sync::OnceLock<Option<(u32, Layout)>> = std::sync::OnceLock::new();
-        *MIX.get_or_init(|| {
-            std::thread::spawn(|| unsafe { wasapi::mix_format() })
-                .join()
-                .ok()
-                .flatten()
-        })
-    }
-    #[cfg(not(windows))]
-    {
-        static MIX: std::sync::OnceLock<Option<(u32, Layout)>> = std::sync::OnceLock::new();
-        *MIX.get_or_init(|| std::thread::spawn(device::mix).join().ok().flatten())
+    let kept = *MIX.lock().unwrap_or_else(|e| e.into_inner());
+    match kept {
+        Some(mix) => mix,
+        None => device_mix_again(),
     }
 }
+
+/// [`device_mix`] asked of the system again (the default device changed) and kept.
+pub fn device_mix_again() -> Option<(u32, Layout)> {
+    #[cfg(windows)]
+    let mix = std::thread::spawn(|| unsafe { wasapi::mix_format() })
+        .join()
+        .ok()
+        .flatten();
+    #[cfg(not(windows))]
+    let mix = std::thread::spawn(device::mix).join().ok().flatten();
+    *MIX.lock().unwrap_or_else(|e| e.into_inner()) = Some(mix);
+    mix
+}
+
+/// [`device_mix`]'s answer, once asked.
+static MIX: Mutex<Option<Option<(u32, Layout)>>> = Mutex::new(None);
 
 /// The system off Windows whose rules the stream follows (cpal's backend there).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -579,7 +630,7 @@ impl Watch {
                 self.lost = true;
                 Reaction::Lose(format!(
                     "sound: the sound device stopped answering ({why}: unplugged or disabled?); \
-                     this stream is not heard any more"
+                     this stream is let go and one is opened on the default device"
                 ))
             }
             Event::Changed => Reaction::Say(
@@ -792,8 +843,10 @@ mod device {
         mix_channels: u16,
         channels: u16,
         period_frames: Option<u32>,
+        lost: &Arc<AtomicBool>,
     ) -> Result<cpal::Stream, cpal::Error> {
         let gate = Arc::new(Gate::default());
+        let lost = lost.clone();
         let mut watch = Watch::default();
         let (gate_cb, source_cb) = (gate.clone(), source.clone());
         let mut scratch: Vec<f32> = Vec::new();
@@ -816,6 +869,10 @@ mod device {
             if let Some(line) = react(r, &gate, &*source_err) {
                 eprintln!("{line}");
             }
+            // The owner is told ([`Output::lost`]) and opens a new stream.
+            if gate.lost.load(Ordering::Relaxed) {
+                lost.store(true, Ordering::Relaxed);
+            }
         };
         let config = cpal::StreamConfig {
             channels,
@@ -834,6 +891,7 @@ mod device {
     fn open(
         source: Arc<Mutex<dyn Source>>,
         want: Option<Layout>,
+        lost: &Arc<AtomicBool>,
     ) -> Result<(cpal::Stream, u32, Layout), Refused> {
         let (device, offer) = default_device().ok_or(Refused::NoDevice)?;
         let p = plan(offer, &ranges(&device), SYSTEM, want)?;
@@ -842,15 +900,26 @@ mod device {
             asked: p.period,
             ..Periods::default()
         };
+        let build_with = |period: Option<u32>| {
+            build(
+                &device,
+                &source,
+                p.rate,
+                mix_channels,
+                p.channels,
+                period,
+                lost,
+            )
+        };
         let built = match p.period {
-            Some(n) => match build(&device, &source, p.rate, mix_channels, p.channels, Some(n)) {
+            Some(n) => match build_with(Some(n)) {
                 Ok(s) => Ok(s),
                 Err(e) => {
                     periods.fell_back = Some(e.to_string());
-                    build(&device, &source, p.rate, mix_channels, p.channels, None)
+                    build_with(None)
                 }
             },
-            None => build(&device, &source, p.rate, mix_channels, p.channels, None),
+            None => build_with(None),
         };
         let stream = built.map_err(|e| refused(kind_of(e.kind()), p.layout, p.mix, offer))?;
         periods.opened = stream.buffer_size().ok();
@@ -875,9 +944,11 @@ mod device {
         let stop = Arc::new(AtomicBool::new(false));
         let (tx, rx) = std::sync::mpsc::channel();
         let flag = stop.clone();
+        let lost = Arc::new(AtomicBool::new(false));
+        let lost_thread = lost.clone();
         let thread = std::thread::Builder::new()
             .name("nv sound out".into())
-            .spawn(move || match open(source, want) {
+            .spawn(move || match open(source, want, &lost_thread) {
                 Ok((stream, rate, layout)) => {
                     let _ = tx.send(Ok((rate, layout)));
                     hold(&flag, std::time::Duration::from_millis(200));
@@ -891,6 +962,7 @@ mod device {
         let (rate, layout) = rx.recv().map_err(|_| Refused::NoDevice)??;
         Ok(Output {
             stop,
+            lost,
             thread: Some(thread),
             rate,
             layout,
@@ -1059,7 +1131,8 @@ mod wasapi {
         std::slice::from_raw_parts(fmt, 18 + extra).to_vec()
     }
 
-    /// The device's client, render client, event, buffer size, rate and layout.
+    /// The device's client, render client, event, buffer size, rate and layout, and the
+    /// endpoint's id (`IMMDevice::GetId`; none when Windows gave none).
     struct Device {
         client: *mut Obj,
         render: *mut Obj,
@@ -1067,6 +1140,49 @@ mod wasapi {
         frames: u32,
         rate: u32,
         layout: Layout,
+        id: Option<Vec<u16>>,
+    }
+
+    /// An endpoint's id (`IMMDevice::GetId`, slot 5), copied.
+    unsafe fn id_of(dev: *mut Obj) -> Option<Vec<u16>> {
+        let mut text: *mut u16 = std::ptr::null_mut();
+        let w = std::mem::size_of::<usize>();
+        if slot::<Fn1>(dev, 5 * w)(dev, &mut text as *mut _ as usize) != 0 || text.is_null() {
+            return None;
+        }
+        let mut n = 0;
+        while *text.add(n) != 0 {
+            n += 1;
+        }
+        let id = std::slice::from_raw_parts(text, n).to_vec();
+        CoTaskMemFree(text as *mut c_void);
+        Some(id)
+    }
+
+    /// The id of the default output endpoint now (`GetDefaultAudioEndpoint(eRender, eConsole)`,
+    /// as [`open`] asks it); none when there is no default device. On a thread with COM.
+    unsafe fn default_id() -> Option<Vec<u16>> {
+        let mut en: *mut Obj = std::ptr::null_mut();
+        let r = CoCreateInstance(
+            &guid("bcde0395-e52f-467c-8e3d-c4579291692e"),
+            std::ptr::null_mut(),
+            0x17,
+            &guid("a95664d2-9614-4f35-a746-de8db63617e6"),
+            &mut en,
+        );
+        if r != 0 {
+            return None;
+        }
+        let w = std::mem::size_of::<usize>();
+        let mut dev: *mut Obj = std::ptr::null_mut();
+        let r = slot::<Fn3>(en, 4 * w)(en, 0, 0, &mut dev as *mut _ as usize);
+        slot::<Fn0>(en, 2 * w)(en);
+        if r != 0 || dev.is_null() {
+            return None;
+        }
+        let id = id_of(dev);
+        slot::<Fn0>(dev, 2 * w)(dev);
+        id
     }
 
     unsafe fn open(want: Option<Layout>) -> Result<Device, Refused> {
@@ -1103,6 +1219,7 @@ mod wasapi {
             0,
             &mut client as *mut _ as usize,
         );
+        let id = id_of(dev);
         slot::<Fn0>(dev, 2 * w)(dev);
         if r != 0 {
             return Err(Refused::NoDevice);
@@ -1190,6 +1307,7 @@ mod wasapi {
             frames,
             rate,
             layout,
+            id,
         })
     }
 
@@ -1197,6 +1315,8 @@ mod wasapi {
         let stop = Arc::new(AtomicBool::new(false));
         let (tx, rx) = std::sync::mpsc::channel();
         let flag = stop.clone();
+        let lost = Arc::new(AtomicBool::new(false));
+        let lost_thread = lost.clone();
         let thread = std::thread::Builder::new()
             .name("nv sound out".into())
             .spawn(move || unsafe {
@@ -1205,7 +1325,7 @@ mod wasapi {
                 match open(want) {
                     Ok(d) => {
                         let _ = tx.send(Ok((d.rate, d.layout)));
-                        run(&d, &source, &flag);
+                        run(&d, &source, &flag, &lost_thread);
                     }
                     Err(why) => {
                         let _ = tx.send(Err(why));
@@ -1220,13 +1340,19 @@ mod wasapi {
         let (rate, layout) = rx.recv().map_err(|_| Refused::NoDevice)??;
         Ok(Output {
             stop,
+            lost,
             thread: Some(thread),
             rate,
             layout,
         })
     }
 
-    unsafe fn run(d: &Device, source: &Arc<Mutex<dyn Source>>, stop: &AtomicBool) {
+    unsafe fn run(
+        d: &Device,
+        source: &Arc<Mutex<dyn Source>>,
+        stop: &AtomicBool,
+        lost_out: &AtomicBool,
+    ) {
         let w = std::mem::size_of::<usize>();
         let channels = d.layout.channels;
         let mut scratch = vec![0f32; d.frames as usize * usize::from(channels)];
@@ -1234,22 +1360,38 @@ mod wasapi {
         // Underruns: a wake that finds the device with nothing left to play, after the first
         // frames were given (the stream starts empty).
         let (mut given, mut starved, mut lost) = (false, 0u64, false);
+        let mut checked = std::time::Instant::now();
         while !stop.load(Ordering::Relaxed) {
+            // Once a second (right after a refill): is our endpoint still the default one?
+            if !lost && checked.elapsed() >= DEFAULT_CHECK {
+                checked = std::time::Instant::now();
+                if default_moved(d.id.as_deref(), default_id().as_deref()) {
+                    lost = true;
+                    lost_out.store(true, Ordering::Relaxed);
+                    eprintln!(
+                        "sound: the default sound device changed; this stream is let go and one \
+                         is opened on the new default device"
+                    );
+                }
+            }
             WaitForSingleObject(d.event, 200);
+            if lost {
+                continue;
+            }
             let mut padding = 0u32;
             let hr = slot::<Fn1>(d.client, 6 * w)(d.client, &mut padding as *mut _ as usize);
             if hr != 0 {
-                // The device no longer answers (unplugged, disabled, or the default device
-                // changed: AUDCLNT_E_DEVICE_INVALIDATED): not an underrun. Named once; nothing
-                // is given to it while it does not answer (the stream is not opened again).
-                if !lost {
-                    lost = true;
-                    eprintln!(
-                        "sound: the sound device stopped answering (GetCurrentPadding {hr:#010x}: \
-                         unplugged, disabled or no longer the default?); this stream is not heard \
-                         while it does not answer"
-                    );
-                }
+                // The device no longer answers (unplugged, disabled, its format changed:
+                // AUDCLNT_E_DEVICE_INVALIDATED): not an underrun. Named once; nothing is given
+                // to it from then on, and the owner is told ([`Output::lost`]), who opens a new
+                // stream on the default device.
+                lost = true;
+                lost_out.store(true, Ordering::Relaxed);
+                eprintln!(
+                    "sound: the sound device stopped answering (GetCurrentPadding {hr:#010x}: \
+                     unplugged or disabled?); this stream is let go and one is opened on the \
+                     default device"
+                );
                 continue;
             }
             if given && padding == 0 {
@@ -1304,6 +1446,42 @@ mod tests {
 
     fn offer(rate: u32, channels: u16) -> Offer {
         Offer { rate, channels }
+    }
+
+    /// A stream is lost only when marked (its thread's, or a stand-in's), and stays so.
+    #[test]
+    fn a_stream_is_lost_once_marked() {
+        let o = Output::idle(48000, Layout::STEREO);
+        assert!(!o.lost());
+        o.mark_lost();
+        assert!(o.lost());
+        assert!(o.lost());
+    }
+
+    /// The default moved off our endpoint only when both ids are known and differ.
+    #[test]
+    fn the_default_moved_only_to_another_known_device() {
+        let (a, b) = (&[1u16, 2][..], &[1u16, 3][..]);
+        assert!(!default_moved(Some(a), Some(a)));
+        assert!(default_moved(Some(a), Some(b)));
+        assert!(!default_moved(None, Some(b)));
+        assert!(!default_moved(Some(a), None));
+        assert!(!default_moved::<u16>(None, None));
+    }
+
+    /// A lost stream's owner tries at once, then at most once a second.
+    #[test]
+    fn a_new_stream_is_tried_at_once_then_once_a_second() {
+        let t = std::time::Instant::now();
+        assert!(try_again(None, t));
+        assert!(!try_again(Some(t), t));
+        assert!(!try_again(
+            Some(t),
+            t + DEFAULT_CHECK - std::time::Duration::from_millis(1)
+        ));
+        assert!(try_again(Some(t), t + DEFAULT_CHECK));
+        // A clock read before the last try (another thread's) waits, it does not panic.
+        assert!(!try_again(Some(t + DEFAULT_CHECK), t));
     }
 
     /// Linux: the device's own rate and channels decide the mix: one or two channels as offered

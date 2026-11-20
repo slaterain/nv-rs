@@ -916,6 +916,16 @@ pub struct Sound {
     /// `same-layout`: the buffers found written through an old lock's address after their
     /// unlock (each named once).
     written_after_unlock: BTreeSet<u32>,
+    /// The output's device was lost and no stream is open since ([`follow_device`]).
+    lost: Option<Lost>,
+}
+
+/// The output's device lost ([`follow_device`]): when a new stream was last tried, and whether
+/// a failed try was said (said once until one opens).
+#[derive(Debug, Default, Clone, Copy)]
+struct Lost {
+    tried: Option<std::time::Instant>,
+    said: bool,
 }
 
 /// Where a secondary buffer keeps its samples (ADR-0015, the bulk buffers): `NV_DSOUND_BUFFERS`.
@@ -1340,6 +1350,24 @@ impl Pace {
             mixed: 0,
         }
     }
+
+    /// The stream was opened again at `new` Hz (it was at `old`): the frames mixed so far are
+    /// counted at the new rate, so the clock's place in them is kept ([`follow_device`]).
+    fn rescale(&mut self, old: u32, new: u32) {
+        if old != 0 && old != new {
+            self.mixed = (u128::from(self.mixed) * u128::from(new) / u128::from(old)) as u64;
+        }
+    }
+
+    /// The same place on the clock, for another stream.
+    fn copy(&self) -> Pace {
+        Pace {
+            game_us: self.game_us,
+            at: self.at,
+            start_us: self.start_us,
+            mixed: self.mixed,
+        }
+    }
 }
 
 /// The game's device's stream, every voice's on a two-channel endpoint (the tests' output).
@@ -1394,6 +1422,23 @@ pub fn want_output(e: &mut Engine, record: Option<std::path::PathBuf>, device_pa
     state!(e).sound.record = record;
 }
 
+/// The game's device's layout on an endpoint that mixes `mix`: it follows its buffers
+/// (`super::speakers`); buffers made before (none when the output starts with the device; every
+/// buffer when a new device is opened, [`follow_device`]) count as made now.
+fn device_of(e: &Engine, mix: Layout) -> DeviceLayout {
+    let mut device = DeviceLayout::new(mix);
+    for b in state_ref!(e).sound.buffers.values() {
+        if b.flags & DSBCAPS_PRIMARYBUFFER == 0 {
+            let channels = u16::from_le_bytes([b.format[2], b.format[3]]);
+            device.made(
+                Layout::of_mix(channels, None),
+                b.flags & DSBCAPS_CTRL3D != 0,
+            );
+        }
+    }
+    device
+}
+
 /// Starts playing the game's sound on the player's default device; false when there is no
 /// device (or not on Windows). Buffers made before keep playing silently until their next
 /// `Play`.
@@ -1416,18 +1461,7 @@ pub fn start_output(e: &mut Engine) -> bool {
         );
         return false;
     }
-    // The game's device's layout follows its buffers (`super::speakers`); buffers made before
-    // (none: the output starts with the device) count as made now.
-    let mut device = DeviceLayout::new(mix);
-    for b in state!(e).sound.buffers.values() {
-        if b.flags & DSBCAPS_PRIMARYBUFFER == 0 {
-            let channels = u16::from_le_bytes([b.format[2], b.format[3]]);
-            device.made(
-                Layout::of_mix(channels, None),
-                b.flags & DSBCAPS_CTRL3D != 0,
-            );
-        }
-    }
+    let mut device = device_of(e, mix);
     let split = mix != Layout::STEREO;
     let voices = Arc::new(Mutex::new(Voices {
         split,
@@ -1435,7 +1469,13 @@ pub fn start_output(e: &mut Engine) -> bool {
     }));
     // `NV_REPEATABLE`: a device of the virtual clock's, at the endpoint's rate ([`repeatable_pull`]).
     let idle = e.repeatable.then_some(mix_rate);
-    let output = match open_stream(&voices, Which::Game, &mut device, idle) {
+    let output = match open_stream(
+        &voices,
+        Which::Game,
+        &mut device,
+        idle,
+        &mut super::sound_out::start,
+    ) {
         Ok(o) => o,
         Err(Refused::Format(why)) => {
             eprintln!("sound: {why}; the game's sound is not heard");
@@ -1451,7 +1491,13 @@ pub fn start_output(e: &mut Engine) -> bool {
     let mut own_device = DeviceLayout::new(mix);
     own_device.made(Layout::STEREO, false);
     let own_output = if split {
-        match open_stream(&voices, Which::Own, &mut own_device, idle) {
+        match open_stream(
+            &voices,
+            Which::Own,
+            &mut own_device,
+            idle,
+            &mut super::sound_out::start,
+        ) {
             Ok(o) => Some(o),
             Err(_) => {
                 eprintln!("sound: no stream for the movies' and the music's sound; not heard");
@@ -1549,6 +1595,7 @@ fn open_stream(
     which: Which,
     device: &mut DeviceLayout,
     idle: Option<u32>,
+    start: &mut Start<'_>,
 ) -> Result<super::sound_out::Output, super::sound_out::Refused> {
     // `NV_REPEATABLE`'s device takes the layout asked for, as this machine's endpoint does
     // (measured as `FalloutNV.exe`: the two-channel stream on the eight-channel endpoint).
@@ -1559,13 +1606,173 @@ fn open_stream(
         voices: voices.clone(),
         which,
     }));
-    match super::sound_out::start(source.clone(), Some(device.current())) {
+    match start(source.clone(), Some(device.current())) {
         Err(super::sound_out::Refused::Layout) => {
             device.lock();
-            super::sound_out::start(source, Some(device.current()))
+            start(source, Some(device.current()))
         }
         r => r,
     }
+}
+
+/// How a stream is opened: `super::sound_out::start` on the default device (the tests' a
+/// stand-in of theirs).
+type Start<'a> = dyn FnMut(
+        Arc<Mutex<dyn super::sound_out::Source>>,
+        Option<Layout>,
+    ) -> Result<super::sound_out::Output, super::sound_out::Refused>
+    + 'a;
+
+/// Follows a lost output device (`super::sound_out::Output::lost`: it stopped answering or, on
+/// Windows, another device became the default; macOS's own unit follows a new default by itself
+/// and is not lost then). Called at every sound call ([`tick`]): one flag read while nothing is
+/// lost. On a loss the streams are let go (their threads end off the game's thread) and new ones
+/// opened on the default device as it is now, in its own format, by the rules of the first open
+/// ([`start_output`]): the game's device's layout made again from every buffer, the platform
+/// layers' own stream on an endpoint that is not two channels. Every voice takes the new rate and
+/// each playing one is connected again where it is (`super::mixer::Voice::reconnect`); each
+/// stream starts with one period of silence, and the game's clock (`Pace`) is kept, so what
+/// played on through the gap is skipped, not heard late. No device answering: tried again at
+/// most once a second ([`super::sound_out::try_again`]), said once. A line on stderr each time.
+pub fn follow_device(e: &mut Engine) {
+    if state_ref!(e).sound.virtual_out.is_some() {
+        return;
+    }
+    let now = std::time::Instant::now();
+    follow_device_with(
+        e,
+        now,
+        &mut super::sound_out::device_mix_again,
+        &mut super::sound_out::start,
+    );
+}
+
+/// [`follow_device`] at `now`, with the device's mix asked by `mix_now` and streams opened by
+/// `start`.
+fn follow_device_with(
+    e: &mut Engine,
+    now: std::time::Instant,
+    mix_now: &mut dyn FnMut() -> Option<(u32, Layout)>,
+    start: &mut Start<'_>,
+) {
+    use super::sound_out::Output;
+    let gone = |o: &Option<Output>| o.as_ref().is_some_and(Output::lost);
+    let sound = &mut state!(e).sound;
+    let Some(m) = sound.mix.as_mut() else {
+        return;
+    };
+    if sound.lost.is_none() {
+        if !gone(&m.output) && !gone(&m._own_output) {
+            return;
+        }
+        // The old streams' threads end on a thread of their own: a lost Windows stream waits up
+        // to 200 ms for an event that no longer comes.
+        let old = (m.output.take(), m._own_output.take());
+        std::thread::spawn(move || drop(old));
+        eprintln!(
+            "sound: the output device was lost; opening the game's sound on the default device"
+        );
+        sound.lost = Some(Lost::default());
+    }
+    let mut lost = sound.lost.expect("lost");
+    if !super::sound_out::try_again(lost.tried, now) {
+        return;
+    }
+    lost.tried = Some(now);
+    state!(e).sound.lost = Some(lost);
+    let fail = |e: &mut Engine, why: String| {
+        let l = state!(e).sound.lost.as_mut().expect("lost");
+        if !l.said {
+            l.said = true;
+            eprintln!("sound: {why}; the game's sound is not heard (trying again each second)");
+        }
+    };
+    let mix = match mix_now() {
+        Some((rate, mix)) if mix.provided() => (rate, mix),
+        Some((_, mix)) => return fail(e, super::sound_out::not_provided(mix)),
+        None => return fail(e, "no output device".to_string()),
+    };
+    let (rate, mix) = mix;
+    let split = mix != Layout::STEREO;
+    let mut device = device_of(e, mix);
+    let mut own_device = DeviceLayout::new(mix);
+    own_device.made(Layout::STEREO, false);
+    let voices = state_ref!(e)
+        .sound
+        .mix
+        .as_ref()
+        .expect("the mix")
+        .voices
+        .clone();
+    let output = match open_stream(&voices, Which::Game, &mut device, None, start) {
+        Ok(o) => o,
+        Err(why) => {
+            return fail(
+                e,
+                format!("the new device's stream would not open ({why:?})"),
+            )
+        }
+    };
+    let own_output = if split {
+        match open_stream(&voices, Which::Own, &mut own_device, None, start) {
+            Ok(o) => Some(o),
+            Err(_) => {
+                eprintln!("sound: no stream for the movies' and the music's sound; not heard");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let (game, own) = (device.current(), own_device.current());
+    let (Some(game_place), Some(own_place)) = (Place::new(game), Place::new(own)) else {
+        return fail(e, format!("no matrix for the device's layout {game:?}"));
+    };
+    // The streams may come back at another rate than the mix asked (they never do on Windows);
+    // the voices follow the game's stream's.
+    let rate = if output.rate != 0 { output.rate } else { rate };
+    let m = state!(e).sound.mix.as_mut().expect("the mix");
+    let old_rate = m.rate;
+    {
+        let mut guard = voices.lock().expect("the voices");
+        let v = &mut *guard;
+        v.split = split;
+        v.game.place = game_place;
+        v.own.place = own_place;
+        // One period of silence at each stream's start, as at the lock.
+        v.game.silence = (rate / 100) as usize;
+        v.own.silence = (rate / 100) as usize;
+        for p in [&mut v.game.pace, &mut v.own.pace].into_iter().flatten() {
+            p.rescale(old_rate, rate);
+        }
+        if split && v.own.pace.is_none() {
+            v.own.pace = v.game.pace.as_ref().map(Pace::copy);
+        }
+        for voice in v.all.values_mut() {
+            voice.device = rate;
+        }
+        for at in v.playing.iter() {
+            if let Some(voice) = v.all.get_mut(at) {
+                voice.reconnect();
+            }
+        }
+        // A recording is of one stream format: it ends at the change, said in its log.
+        if let Some(mut r) = v.record.take() {
+            r.note("the output device changed: the recording ends here");
+            r.finish();
+        }
+    }
+    m.rate = rate;
+    m.output = Some(output);
+    m._own_output = own_output;
+    state!(e).sound.layout = Some(device);
+    state!(e).sound.lost = None;
+    eprintln!(
+        "sound: output on the new default device, {rate} Hz, {} channels (speaker mask {:#x}); \
+         the game's device {} channels",
+        mix.channels, mix.mask, game.channels
+    );
+    refresh_3d(e);
 }
 
 /// Writes `what` to the recording's log, when the output is recorded, with the game's clock
@@ -1673,6 +1880,7 @@ pub fn tick(e: &mut Engine) {
     if state!(e).sound.mix.is_none() {
         return;
     }
+    follow_device(e);
     let now = e.clock_now_us();
     if let Some(m) = &state!(e).sound.mix {
         let mut v = m.voices.lock().expect("the voices");
@@ -6906,6 +7114,115 @@ mod tests {
             Ok(Output::idle(44100, Layout::STEREO))
         });
         assert!(state!(e).sound.mix.as_ref().unwrap().output.is_none());
+    }
+
+    /// A lost output device (stand-in streams marked lost; nothing is heard): the streams are let
+    /// go and new ones opened on the default device as it is now, at its rate; every voice takes
+    /// that rate, the one playing goes on after a period of silence, and the device's lines say
+    /// so. No device answering: tried again no sooner than a second later.
+    #[test]
+    fn a_lost_device_is_followed_to_the_new_default() {
+        use super::super::sound_out::{Output, Refused, DEFAULT_CHECK};
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        hear_by_hand(&mut e, 48000);
+        let data = signal_seeded(9600, 1, 16, 11);
+        let a = made(&mut e, ds, 0x2e0, false, 1, 48000, 16, &data);
+        e.vcall(a, 0x30, &[0, 0, 1]);
+        let _ = mixed(&e, 480);
+        let t = std::time::Instant::now();
+        let mut asked = 0;
+        let mut opened = Vec::new();
+        // Nothing lost: nothing asked.
+        state!(e).sound.mix.as_mut().unwrap().output = Some(Output::idle(48000, Layout::STEREO));
+        follow_device_with(
+            &mut e,
+            t,
+            &mut || {
+                asked += 1;
+                None
+            },
+            &mut |_, _| Err(Refused::NoDevice),
+        );
+        assert_eq!(asked, 0);
+        // Lost, and no device answers: said, tried again a second later only.
+        state!(e)
+            .sound
+            .mix
+            .as_ref()
+            .unwrap()
+            .output
+            .as_ref()
+            .unwrap()
+            .mark_lost();
+        for at in [t, t + DEFAULT_CHECK / 2] {
+            follow_device_with(
+                &mut e,
+                at,
+                &mut || {
+                    asked += 1;
+                    None
+                },
+                &mut |_, _| Err(Refused::NoDevice),
+            );
+        }
+        assert_eq!(asked, 1, "tried once within the second");
+        assert!(state!(e).sound.mix.as_ref().unwrap().output.is_none());
+        assert!(state!(e).sound.lost.is_some_and(|l| l.said));
+        assert!(
+            mixed(&e, 480).iter().any(|&x| x != 0.0),
+            "the voices are kept"
+        );
+        // A second later a device answers at 44100 Hz.
+        follow_device_with(
+            &mut e,
+            t + DEFAULT_CHECK,
+            &mut || {
+                asked += 1;
+                Some((44100, Layout::STEREO))
+            },
+            &mut |_, want| {
+                opened.push(want);
+                Ok(Output::idle(44100, want.unwrap_or(Layout::STEREO)))
+            },
+        );
+        assert_eq!(asked, 2);
+        assert_eq!(opened, [Some(Layout::STEREO)]);
+        assert!(state!(e).sound.lost.is_none());
+        let m = state!(e).sound.mix.as_ref().unwrap();
+        assert_eq!(m.rate, 44100);
+        assert!(m.output.as_ref().is_some_and(|o| !o.lost()));
+        assert!(m
+            .voices
+            .lock()
+            .unwrap()
+            .all
+            .values()
+            .all(|v| v.device == 44100));
+        assert_eq!(device_rate(&e), 44100);
+        let out = mixed(&e, 441 + 441);
+        assert!(
+            out[..2 * 441].iter().all(|&x| x == 0.0),
+            "a period of silence"
+        );
+        assert!(
+            out[2 * 441..].iter().any(|&x| x != 0.0),
+            "the voice goes on"
+        );
+    }
+
+    /// The pace's frames mixed are counted again at a new rate: the clock's place is kept.
+    #[test]
+    fn the_pace_keeps_its_place_at_a_new_rate() {
+        let mut p = Pace::new(0);
+        p.mixed = 48000;
+        p.rescale(48000, 44100);
+        assert_eq!(p.mixed, 44100);
+        p.rescale(44100, 44100);
+        assert_eq!(p.mixed, 44100);
+        p.rescale(0, 48000);
+        assert_eq!(p.mixed, 44100);
+        assert_eq!(p.copy().mixed, 44100);
     }
 
     /// `GetSpeakerConfig` answers from the endpoint's mix format (measured: 8 for 0x63F,

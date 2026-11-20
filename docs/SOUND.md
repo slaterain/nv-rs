@@ -606,6 +606,33 @@ are tested only against it (`speakers.rs`, `dsound.rs` tests).
   original's 2D buffers after its first (read only).
 - The game itself was not run as `FalloutNV.exe`: when it makes its first 3D buffer.
 
+## When the output device changes
+
+Device handling only: nothing of the mix, the converters, 3D or the distortion changes.
+- The stream says it is lost (`ds-mix` `Output::lost`). On Windows that happens when its endpoint
+  stops answering (unplugged, disabled, its format changed) or when another endpoint becomes the
+  default, which is checked once a second (`DEFAULT_CHECK`; a headset plugged in, a choice in
+  Sound settings). On Linux it happens when cpal reports the device gone. PipeWire and
+  PulseAudio usually move a stream of ALSA's `default` device by themselves. On macOS CoreAudio's
+  default output unit follows a new default device by itself and converts the rate if it must;
+  the port says so and leaves it be.
+- The game: `dsound::follow_device`, at every sound call (one flag read while nothing is lost).
+  It lets the streams go (their threads end off the game's thread) and opens new ones on the
+  default device in its own format, by the first open's rules: the game's device's layout made
+  again from every buffer, and the platform layers' own stream on an endpoint that is not two
+  channels. Every voice takes the new rate, and each playing one is reconnected where it is
+  (`Voice::reconnect`). Each stream starts with one period of silence. The clock (`Pace`) is
+  kept, counted at the new rate, so what played on through the gap is skipped rather than heard
+  late. If no device answers, it tries again at most once a second and says so once.
+  `NV_SOUND_RECORD` ends at the change, as its log says.
+- The launcher: its window looks at least once a second while the sounds are open, lets a lost
+  stream go and opens one on the default device. The hum starts again at a random place, as at
+  every open.
+- The original: DirectSound 8 on the default device, which Windows 10 and 11 move to a new
+  default by themselves (our reading; not measured against `FalloutNV.exe`).
+- Not verified: an actual device change on this machine (manual checks only, written for the
+  maintainer), Linux and macOS (compiled, untested).
+
 ## Vorbis
 
 `scripts/vorbis-record` drives the player's `libvorbisfile.dll` the way the game
