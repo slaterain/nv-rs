@@ -2707,6 +2707,18 @@ pub fn note_report_hitch(line: String) {
     shot::note_hitch(line);
 }
 
+/// The session's hitch totals for the report's `hitches.txt` (hitches, big ones, left out of the log by its cap), or
+/// none when the log is off (`NV_HITCH_LOG=0`).
+pub fn set_report_hitch_totals(totals: Option<(u64, u64, u64)>) {
+    shot::set_hitch_totals(totals);
+}
+
+/// The Presents submitted so far (the hitch log's loading-screen test, each frame): the stream's own count, read
+/// without the render thread's queue lock. None before the backend's stream.
+pub fn present_count(e: &mut Engine) -> Option<u32> {
+    real(e).stream.as_ref().map(|s| s.presents())
+}
+
 pub(super) mod shot {
     // Off Windows only the tests read most of this: the capture reads the real Direct3D 9.
     #![cfg_attr(not(windows), allow(dead_code))]
@@ -2954,15 +2966,29 @@ pub(super) mod shot {
         }
     }
 
-    /// `hitches.txt`'s text (Windows line ends): what the lines are, then the session's lines, oldest first.
+    /// The session's totals from the host's hitch log: (hitches, big ones, left out by the cap); none: the log off.
+    static HITCH_TOTALS: Mutex<Option<(u64, u64, u64)>> = Mutex::new(None);
+
+    pub(super) fn set_hitch_totals(totals: Option<(u64, u64, u64)>) {
+        if let Ok(mut t) = HITCH_TOTALS.lock() {
+            *t = totals;
+        }
+    }
+
+    /// `hitches.txt`'s text (Windows line ends): what the lines are and the session's totals, then the session's
+    /// lines, oldest first; with the log off, that it was off.
     pub(super) fn hitches_text() -> String {
+        let Some((hitches, big, left_out)) = HITCH_TOTALS.lock().ok().and_then(|t| *t) else {
+            return "The hitch log was off in this session (NV_HITCH_LOG=0).\r\n".to_string();
+        };
         let (lines, all) = HITCHES
             .lock()
             .map(|h| (h.0.iter().cloned().collect::<Vec<_>>(), h.1))
             .unwrap_or_default();
         let mut out = format!(
-            "Frames this session that took at least 8 ms (6 ms above 250 fps) and twice the typical frame ({all} in all{}; at most 20 \
-             written in any 10 s), oldest first.\r\n",
+            "Frames this session that took at least 8 ms (6 ms above 250 fps) and twice the typical frame: {hitches} \
+             in all, {big} of them 16 ms or more, {left_out} not written (at most 20 lines in any 10 s; a frame of \
+             16 ms or more is always written). {all} lines{}, oldest first.\r\n",
             if all > lines.len() as u64 {
                 format!(", the last {} here", lines.len())
             } else {
@@ -4380,11 +4406,23 @@ mod tests {
     /// there were in all. (The only test that notes hitch lines: they are the process's.)
     #[test]
     fn the_report_carries_the_session_s_last_1000_hitch_lines() {
-        assert!(shot::hitches_text().contains("(0 in all;"));
+        // The log off: the file says so.
+        shot::set_hitch_totals(None);
+        assert_eq!(
+            shot::hitches_text(),
+            "The hitch log was off in this session (NV_HITCH_LOG=0).
+"
+        );
+        shot::set_hitch_totals(Some((0, 0, 0)));
+        assert!(shot::hitches_text().contains(": 0 in all, 0 of them 16 ms or more, 0 not written"));
         shot::note_hitch("hitch: first".into());
+        // The totals are the host's (the hitches the cap left out count too), the lines those written.
+        shot::set_hitch_totals(Some((7, 2, 6)));
         let t = shot::hitches_text();
         assert!(
-            t.contains("(1 in all;") && t.ends_with("\r\nhitch: first\r\n"),
+            t.contains(": 7 in all, 2 of them 16 ms or more, 6 not written")
+                && t.contains(" 1 lines, oldest first")
+                && t.ends_with("\r\nhitch: first\r\n"),
             "{t}"
         );
         for i in 0..shot::HITCHES_KEPT + 1 {
@@ -4398,7 +4436,7 @@ mod tests {
             "the header and the last 1000"
         );
         assert!(
-            lines[0].contains("(1002 in all, the last 1000 here;"),
+            lines[0].contains("1002 lines, the last 1000 here, oldest first"),
             "{}",
             lines[0]
         );

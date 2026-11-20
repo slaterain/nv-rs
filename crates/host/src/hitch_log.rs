@@ -56,6 +56,23 @@ const PLAYER: u32 = 0x011d_ea3c;
 const PARENT_CELL: u32 = 0x40;
 const POSITION: u32 = 0x30;
 
+/// The recent frames a lasting change of rate is told by, and how many of them past the threshold make one.
+const RECENT: usize = 8;
+const LASTING: usize = 4;
+
+/// What a frame is, against the typical frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Verdict {
+    /// Not a hitch (or not judged yet).
+    Normal,
+    /// A hitch: the typical frame before it.
+    Hitch(f64),
+    /// [`LASTING`] of the last [`RECENT`] frames were past the threshold: not single jumps but a new rate (a new
+    /// scene after a load, the window losing focus, a slow stretch). The typical frame starts again from the recent
+    /// frames: (the typical frame before, the new one).
+    Slowed(f64, f64),
+}
+
 /// The typical frame and the hitch test.
 #[derive(Clone)]
 pub struct Detector {
@@ -63,6 +80,8 @@ pub struct Detector {
     at: usize,
     median: f64,
     since: u32,
+    /// The last [`RECENT`] frames and whether each was past the threshold.
+    recent: VecDeque<(f64, bool)>,
 }
 
 impl Default for Detector {
@@ -72,17 +91,34 @@ impl Default for Detector {
             at: 0,
             median: 0.0,
             since: MEDIAN_EVERY,
+            recent: VecDeque::with_capacity(RECENT + 1),
         }
     }
 }
 
 impl Detector {
-    /// A frame of `ms` that was not a loading screen: the typical frame before it when it is a hitch, then it joins
-    /// the frames the median is taken over.
-    pub fn frame(&mut self, ms: f64) -> Option<f64> {
-        let hitch =
-            (self.ring.len() >= WARM && ms >= floor(self.median) && ms >= 2.0 * self.median)
-                .then_some(self.median);
+    /// A frame of `ms` that was not a loading screen: whether it is a hitch against the typical frame before it (or
+    /// the start of a new rate), then it joins the frames the median is taken over.
+    pub fn frame(&mut self, ms: f64) -> Verdict {
+        let over = self.ring.len() >= WARM && ms >= floor(self.median) && ms >= 2.0 * self.median;
+        self.recent.push_back((ms, over));
+        if self.recent.len() > RECENT {
+            self.recent.pop_front();
+        }
+        if over && self.recent.iter().filter(|r| r.1).count() >= LASTING {
+            let before = self.median;
+            self.ring = self.recent.iter().map(|r| r.0).collect();
+            self.recent.clear();
+            self.at = 0;
+            self.since = 0;
+            self.median = median(&self.ring);
+            return Verdict::Slowed(before, self.median);
+        }
+        let verdict = if over {
+            Verdict::Hitch(self.median)
+        } else {
+            Verdict::Normal
+        };
         if self.ring.len() < WINDOW {
             self.ring.push(ms);
         } else {
@@ -94,7 +130,7 @@ impl Detector {
             self.since = 0;
             self.median = median(&self.ring);
         }
-        hitch
+        verdict
     }
 
     /// The typical frame now (ms; 0 before any frame).
@@ -123,16 +159,21 @@ fn median(values: &[f64]) -> f64 {
     *m
 }
 
-/// At most [`BURST`] lines in any [`BURST_SECS`]: the times of the last lines written, and those left out since.
+/// At most [`BURST`] lines in any [`BURST_SECS`], a big frame ([`BIG_MS`] or more) always: the times of the last
+/// lines written, the lines left out since the last written one, and how many were left out in the session.
 #[derive(Default)]
 pub struct Cap {
     written: VecDeque<f64>,
     left_out: u64,
+    /// The longest frame left out since the last line written (ms).
+    longest: f64,
+    pub left_out_in_all: u64,
 }
 
 impl Cap {
-    /// Whether a line at `secs` (session seconds) is written; `Some(n)` with the lines left out before it.
-    pub fn admit(&mut self, secs: f64) -> Option<u64> {
+    /// Whether a line for a frame of `ms` at `secs` (session seconds) is written: `Some((n, longest))` with the lines
+    /// left out before it and the longest of them (ms). A big frame is always written.
+    pub fn admit(&mut self, secs: f64, ms: f64) -> Option<(u64, f64)> {
         while self
             .written
             .front()
@@ -140,12 +181,17 @@ impl Cap {
         {
             self.written.pop_front();
         }
-        if self.written.len() >= BURST {
+        if self.written.len() >= BURST && ms < BIG_MS {
             self.left_out += 1;
+            self.left_out_in_all += 1;
+            self.longest = self.longest.max(ms);
             return None;
         }
         self.written.push_back(secs);
-        Some(std::mem::take(&mut self.left_out))
+        Some((
+            std::mem::take(&mut self.left_out),
+            std::mem::take(&mut self.longest),
+        ))
     }
 }
 
@@ -167,6 +213,8 @@ pub struct Frame {
     pub longest_wait: (u64, WaitKind, u32),
     pub largest_read: (u64, String),
     pub left_out: u64,
+    /// The longest of those left out (ms).
+    pub longest_left_out: f64,
 }
 
 const STAGE_NAMES: [&str; 8] = [
@@ -209,6 +257,64 @@ pub fn take_stages() -> Option<[(f64, u64); engine_core::stage_time::COLUMNS]> {
 pub fn judge(loading_screen: bool, loads: u64, presents: u32, was_loading: bool) -> (bool, bool) {
     let loading = loading_screen || loads > 0 || presents > LOADING_PRESENTS;
     (!loading, was_loading && !loading)
+}
+
+/// What one of main's frames showed, as the hitch log tells it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Shown {
+    /// The frame ends on the game's own loading screen (`uncap::screen`).
+    pub loading_screen: bool,
+    /// It ends in a menu (the console, the Pip-Boy, a dialogue, the main menu).
+    pub menu: bool,
+    /// Games loaded in it.
+    pub loads: u64,
+    /// Presents submitted in it.
+    pub presents: u32,
+}
+
+/// The hitch test of a run's frames, play and menus apart (a menu runs at its own frame limit): the pure part of
+/// [`HitchLog::record`].
+#[derive(Clone, Default)]
+pub struct Judge {
+    play: Detector,
+    menu: Detector,
+    was_loading: bool,
+    was_menu: bool,
+}
+
+/// What [`Judge::frame`] tells of a judged frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Judged {
+    pub verdict: Verdict,
+    pub after_load: bool,
+    pub menu: bool,
+}
+
+impl Judge {
+    /// A frame of `ms` (none for the run's first) that showed `shown`: none when it is not judged (a loading screen
+    /// or a load in it, the run's first frame). A frame is judged against the kind the frame before it showed, so the
+    /// frame that opens a menu is judged against play and the frames after it against the menu's.
+    pub fn frame(&mut self, ms: Option<f64>, shown: Shown) -> Option<Judged> {
+        let (judged, after_load) = judge(
+            shown.loading_screen,
+            shown.loads,
+            shown.presents,
+            self.was_loading,
+        );
+        self.was_loading = !judged;
+        let ms = ms.filter(|_| judged)?;
+        let was_menu = std::mem::replace(&mut self.was_menu, shown.menu);
+        let detector = if was_menu {
+            &mut self.menu
+        } else {
+            &mut self.play
+        };
+        Some(Judged {
+            verdict: detector.frame(ms),
+            after_load,
+            menu: shown.menu,
+        })
+    }
 }
 
 /// What main waited for, in words.
@@ -361,6 +467,17 @@ impl Frame {
                     "read {} from disk on the main thread ({:.0} ms{largest})",
                     bytes(self.g(Count::BytesReadMain)),
                     ms(read)
+                ),
+            ));
+        }
+        // Main's own sleeps (the frame limiter's, the game's): a frame they lengthen is said so.
+        let slept = self.g(Count::SleepNs);
+        if slept > 0 {
+            said.push((
+                ms(slept),
+                format!(
+                    "main slept {:.0} ms (a frame limit or the game's own wait)",
+                    ms(slept)
                 ),
             ));
         }
@@ -677,39 +794,18 @@ impl Frame {
         l += &format!("; likely cause: {}", self.cause());
         if self.left_out > 0 {
             l += &format!(
-                " ({} hitches before this one not written: too many in 10 s)",
-                self.left_out
+                " ({} hitches before this one not written: too many in 10 s; the longest {:.1} ms)",
+                self.left_out, self.longest_left_out
             );
         }
         l
     }
 }
 
-/// The player's cell as the line names it, kept while the cell stays the same.
-struct Place {
-    cell: u32,
-    name: String,
-}
-
-impl Default for Place {
-    /// No cell named yet (not even 'no cell').
-    fn default() -> Place {
-        Place {
-            cell: u32::MAX,
-            name: String::new(),
-        }
-    }
-}
-
 /// The hitch log of a run.
 pub struct HitchLog {
-    /// The typical frame in play and in menus, apart: a menu runs at its own frame limit (`MenuFrameLimit`), so a
-    /// menu frame is judged against menu frames and a play frame against play frames.
-    play: Detector,
-    menu: Detector,
+    judge: Judge,
     cap: Cap,
-    /// The frame before showed a menu.
-    was_menu: bool,
     /// A measured run (`NV_FRAME_LOG`): every hitch is written, none left out.
     uncapped: bool,
     /// The presents submitted so far.
@@ -717,10 +813,8 @@ pub struct HitchLog {
     last: Option<Instant>,
     start: Instant,
     frame: u64,
-    was_loading: bool,
     game: [u64; COUNTS],
     stream: [u64; engine_platform::stream_hitch::COUNTS],
-    place: Place,
     /// Hitches this session: all, and the big ones.
     pub hitches: u64,
     pub big: u64,
@@ -733,28 +827,28 @@ impl HitchLog {
         engine_core::hitch::set_on(!off);
         engine_core::stage_time::set_points(!off);
         if off {
+            engine_platform::d3d9real::set_report_hitch_totals(None);
             return None;
         }
+        engine_platform::d3d9real::set_report_hitch_totals(Some((0, 0, 0)));
         Some(HitchLog {
-            play: Detector::default(),
-            menu: Detector::default(),
+            judge: Judge::default(),
             cap: Cap::default(),
             uncapped: std::env::var_os("NV_FRAME_LOG").is_some(),
             presents: 0,
-            was_menu: false,
             last: None,
             start: Instant::now(),
             frame: 0,
-            was_loading: false,
             game: engine_core::hitch::snapshot(),
             stream: engine_platform::stream_hitch::snapshot(),
-            place: Place::default(),
             hitches: 0,
             big: 0,
         })
     }
 
-    /// After one of main's frames: `stages` the stage marks' take of this frame (none when nothing took them).
+    /// After one of main's frames: `stages` the stage marks' take of this frame (none when nothing took them). Reads
+    /// counters and guest memory only: no guest code runs here, so a recorded or repeatable run is the same with the
+    /// log on or off.
     pub fn record(&mut self, e: &mut Engine, stages: Option<&[(f64, u64)]>) {
         let now = Instant::now();
         let frame_ms = self.last.map(|t| now.duration_since(t).as_secs_f64() * 1e3);
@@ -774,167 +868,278 @@ impl HitchLog {
         let longest_wait = engine_core::hitch::take_longest_wait();
         let largest_read = engine_core::hitch::take_largest_read();
         let screen = crate::uncap::screen(e);
-        // A game loaded in the frame (from a menu: no loading screen is up) counts as a loading screen too.
-        let presents = engine_platform::d3d9real::presents(e).map_or(0, |p| p.0);
-        let shown = presents.wrapping_sub(self.presents);
+        let presents = engine_platform::d3d9real::present_count(e).unwrap_or(0);
+        let shown = Shown {
+            loading_screen: screen == crate::uncap::Screen::Loading,
+            menu: screen == crate::uncap::Screen::Menu,
+            loads: game[Count::Loads as usize],
+            presents: presents.wrapping_sub(self.presents),
+        };
         self.presents = presents;
-        let (judged, after_load) = judge(
-            screen == crate::uncap::Screen::Loading,
-            game[Count::Loads as usize],
-            shown,
-            self.was_loading,
-        );
-        self.was_loading = !judged;
-        let (Some(ms), true) = (frame_ms, judged) else {
+        let Some(judged) = self.judge.frame(frame_ms, shown) else {
             return;
         };
-        let menu = screen == crate::uncap::Screen::Menu;
-        // Judged by what the frame before showed: the frame that opens a menu (the Pip-Boy, the console) is play's
-        // frame, the frames after it run at the menu's limit.
-        let was_menu = std::mem::replace(&mut self.was_menu, menu);
-        let detector = if was_menu {
-            &mut self.menu
-        } else {
-            &mut self.play
-        };
-        let Some(typical) = detector.frame(ms) else {
-            return;
+        let ms = frame_ms.unwrap_or(0.0);
+        let secs = now.duration_since(self.start).as_secs_f64();
+        let typical = match judged.verdict {
+            Verdict::Normal => return,
+            Verdict::Slowed(from, to) => {
+                let line = format!(
+                    "hitch log: frames slowed at frame {frame} ({secs:.1} s): the typical frame went from {from:.1} to \
+                     {to:.1} ms (a new scene, the window out of focus or a slow stretch), measured again from here"
+                );
+                eprintln!("{line}");
+                engine_platform::d3d9real::note_report_hitch(line);
+                return;
+            }
+            Verdict::Hitch(typical) => typical,
         };
         self.hitches += 1;
         if ms >= BIG_MS {
             self.big += 1;
         }
-        let secs = now.duration_since(self.start).as_secs_f64();
-        let left_out = if self.uncapped {
-            0
+        let admitted = if self.uncapped {
+            Some((0, 0.0))
         } else {
-            let Some(n) = self.cap.admit(secs) else {
-                return;
-            };
-            n
+            self.cap.admit(secs, ms)
+        };
+        engine_platform::d3d9real::set_report_hitch_totals(Some((
+            self.hitches,
+            self.big,
+            self.cap.left_out_in_all,
+        )));
+        let Some((left_out, longest_left_out)) = admitted else {
+            return;
         };
         let f = Frame {
             ms,
             typical,
             frame,
             secs,
-            after_load,
-            menu,
-            place: self.place(e),
+            after_load: judged.after_load,
+            menu: judged.menu,
+            place: place(e),
             stages: stages.map(stages_of),
             game: game.to_vec(),
             stream,
             longest_wait,
             largest_read,
             left_out,
+            longest_left_out,
         };
         let line = f.line();
         eprintln!("{line}");
         engine_platform::d3d9real::note_report_hitch(line);
     }
+}
 
-    /// Where the player is: the cell (editor id looked up only when it changed) and, outside, the grid cell.
-    fn place(&mut self, e: &mut Engine) -> String {
-        let player = e.mem.u32(PLAYER);
-        if player == 0 {
-            return "no player yet".into();
-        }
-        let cell = e.mem.u32(player + PARENT_CELL);
-        if cell != self.place.cell {
-            self.place = Place {
-                cell,
-                name: crate::report_place::cell_name(e, cell),
-            };
-        }
-        let position = [0, 4, 8].map(|o| e.mem.f32(player + POSITION + o));
-        let (gx, gy) = crate::report_place::grid(position);
-        if self.place.name.starts_with("interior ") {
-            self.place.name.clone()
-        } else {
-            format!("{} grid ({gx}, {gy})", self.place.name)
-        }
+/// Where the player is, read from guest memory only (no guest code runs: the names are the forms' full names, as
+/// `TESFullName` keeps them): an interior's name and form id, or outside the worldspace's and the grid cell.
+fn place(e: &Engine) -> String {
+    let player = e.mem.u32(PLAYER);
+    if player == 0 {
+        return "no player yet".into();
     }
+    let cell = e.mem.u32(player + PARENT_CELL);
+    let position = [0, 4, 8].map(|o| e.mem.f32(player + POSITION + o));
+    crate::report_place::cell_place(e, cell, position)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use Verdict::{Hitch, Normal};
 
     fn warm(d: &mut Detector, ms: f64, n: usize) {
         for _ in 0..n {
-            assert_eq!(d.frame(ms), None);
+            assert_eq!(d.frame(ms), Normal);
         }
     }
 
-    /// A frame of twice the typical one and at least 8 ms is a hitch; one just under either is not; the first
-    /// frames (no typical frame yet) are never judged.
+    /// A frame of twice the typical one and at least 8 ms (6 ms under a 4 ms typical frame) is a hitch; one just
+    /// under either is not; the first frames (no typical frame yet) are never judged.
     #[test]
     fn a_hitch_is_twice_the_typical_frame_and_at_least_8_ms() {
         let mut d = Detector::default();
-        assert_eq!(d.frame(100.0), None, "nothing judged before the warm-up");
+        assert_eq!(d.frame(100.0), Normal, "nothing judged before the warm-up");
         let mut d = Detector::default();
         warm(&mut d, 5.0, 40);
         assert_eq!(d.typical(), 5.0);
-        assert_eq!(d.frame(9.9), None, "under twice the typical");
-        assert_eq!(d.frame(10.0), Some(5.0));
+        assert_eq!(d.frame(9.9), Normal, "under twice the typical");
+        assert_eq!(d.frame(10.0), Hitch(5.0));
         let mut d = Detector::default();
         warm(&mut d, 3.4, 40);
-        assert_eq!(d.frame(6.7), None, "under twice the typical");
-        assert_eq!(d.frame(6.8), Some(3.4));
+        assert_eq!(d.frame(6.7), Normal, "under twice the typical");
+        assert_eq!(d.frame(6.8), Hitch(3.4));
         let mut d = Detector::default();
         warm(&mut d, 2.5, 40);
-        assert_eq!(d.frame(5.9), None, "under the fast floor");
-        assert_eq!(d.frame(6.0), Some(2.5));
+        assert_eq!(d.frame(5.9), Normal, "under the fast floor");
+        assert_eq!(d.frame(6.0), Hitch(2.5));
         let mut d = Detector::default();
         warm(&mut d, 3.9, 40);
         assert_eq!(
             d.frame(7.9),
-            Some(3.9),
+            Hitch(3.9),
             "a typical frame under 4 ms: the 6 ms floor"
         );
         let mut d = Detector::default();
         warm(&mut d, 4.0, 40);
-        assert_eq!(d.frame(7.9), None, "4 ms and over: the 8 ms floor");
-        assert_eq!(d.frame(8.0), Some(4.0));
+        assert_eq!(d.frame(7.9), Normal, "4 ms and over: the 8 ms floor");
+        assert_eq!(d.frame(8.0), Hitch(4.0));
         let mut d = Detector::default();
         warm(&mut d, 12.0, 40);
-        assert_eq!(d.frame(23.9), None);
-        assert_eq!(d.frame(24.0), Some(12.0));
+        assert_eq!(d.frame(23.9), Normal);
+        assert_eq!(d.frame(24.0), Hitch(12.0));
     }
 
-    /// The typical frame follows the last 128 frames (the median, so a few long ones do not move it), and is
+    /// The typical frame follows the last 128 frames (the median, so single long frames do not move it), and is
     /// worked out again every 16 frames.
     #[test]
     fn the_typical_frame_is_the_median_of_the_last_128() {
         let mut d = Detector::default();
         warm(&mut d, 5.0, 128);
         for _ in 0..10 {
-            d.frame(60.0);
+            assert_eq!(
+                d.frame(60.0),
+                Hitch(5.0),
+                "single long frames, each a hitch"
+            );
+            warm(&mut d, 5.0, 9);
         }
-        assert_eq!(d.typical(), 5.0, "a few long frames do not move it");
+        assert_eq!(d.typical(), 5.0, "they do not move it");
         for _ in 0..128 {
-            d.frame(20.0);
+            d.frame(9.0);
         }
-        assert_eq!(d.typical(), 20.0, "the window moved on");
-        assert_eq!(d.frame(39.0), None);
-        assert_eq!(d.frame(40.0), Some(20.0));
+        assert_eq!(d.typical(), 9.0, "the window moved on");
+        assert_eq!(d.frame(17.9), Normal);
+        assert_eq!(d.frame(18.0), Hitch(9.0));
         assert_eq!(median(&[3.0, 1.0, 2.0, 10.0]), 3.0);
         assert_eq!(median(&[]), 0.0);
     }
 
-    /// At most 20 lines in any 10 s; the first line after a burst says how many were left out.
+    /// A lasting change of rate (an 8 ms interior, then a 20 ms exterior; an alt-tab) is a few hitches and then a
+    /// new typical frame, not a hitch every frame until the window moves on.
     #[test]
-    fn the_cap_writes_20_lines_in_10_s_and_counts_the_rest() {
+    fn a_lasting_change_of_rate_is_a_few_lines_then_a_new_typical_frame() {
+        let mut d = Detector::default();
+        warm(&mut d, 5.0, 200);
+        let verdicts: Vec<Verdict> = (0..200).map(|_| d.frame(20.0)).collect();
+        let hitches = verdicts.iter().filter(|v| matches!(v, Hitch(_))).count();
+        assert_eq!(hitches, LASTING - 1, "{verdicts:?}");
+        assert_eq!(verdicts[LASTING - 1], Verdict::Slowed(5.0, 20.0));
+        assert!(verdicts[LASTING..].iter().all(|v| *v == Normal));
+        assert_eq!(d.typical(), 20.0);
+        // Judged again on the new rate: a jump from 20 ms is a hitch.
+        assert_eq!(d.frame(45.0), Hitch(20.0));
+        // Back to 5 ms: faster frames are never hitches.
+        let verdicts: Vec<Verdict> = (0..200).map(|_| d.frame(5.0)).collect();
+        assert!(verdicts.iter().all(|v| *v == Normal));
+        assert_eq!(d.typical(), 5.0);
+        // A stutter now and then (one in eight frames) stays a hitch each time.
+        for _ in 0..20 {
+            assert_eq!(d.frame(30.0), Hitch(5.0));
+            warm(&mut d, 5.0, 7);
+        }
+    }
+
+    /// At most 20 lines in any 10 s; the first line after a burst says how many were left out and the longest of
+    /// them; a big frame (16 ms or more) is always written, even after a full window.
+    #[test]
+    fn the_cap_writes_20_lines_in_10_s_and_every_big_frame() {
         let mut c = Cap::default();
         for i in 0..20 {
-            assert_eq!(c.admit(i as f64 * 0.1), Some(0));
+            assert_eq!(c.admit(i as f64 * 0.1, 9.0), Some((0, 0.0)));
         }
-        assert_eq!(c.admit(2.0), None);
-        assert_eq!(c.admit(5.0), None);
-        // 10 s after the first line it leaves the window: one more fits.
-        assert_eq!(c.admit(10.0), Some(2));
-        assert_eq!(c.admit(10.05), None);
-        assert_eq!(c.admit(30.0), Some(1));
+        assert_eq!(c.admit(2.0, 9.5), None);
+        assert_eq!(c.admit(5.0, 12.0), None);
+        // A 300 ms freeze after the window is full: written, with the two left out before it.
+        assert_eq!(c.admit(5.5, 300.0), Some((2, 12.0)));
+        assert_eq!(c.admit(6.0, 15.9), None);
+        assert_eq!(c.admit(6.1, 16.0), Some((1, 15.9)));
+        // 10 s after the first lines they leave the window: small ones fit again.
+        assert_eq!(c.admit(11.0, 9.0), Some((0, 0.0)));
+        assert_eq!(c.left_out_in_all, 3);
+    }
+
+    fn shown(menu: bool) -> Shown {
+        Shown {
+            loading_screen: false,
+            menu,
+            loads: 0,
+            presents: 1,
+        }
+    }
+
+    /// The menu/play split and the loads, as `HitchLog::record` drives them.
+    #[test]
+    fn play_menus_and_loads_are_judged_apart() {
+        let mut j = Judge::default();
+        assert_eq!(j.frame(None, shown(false)), None, "the run's first frame");
+        let verdict = |r: Option<Judged>| r.map(|r| r.verdict);
+        for _ in 0..100 {
+            assert_eq!(verdict(j.frame(Some(5.0), shown(false))), Some(Normal));
+        }
+        // The frame that opens a menu is judged against play.
+        assert_eq!(verdict(j.frame(Some(30.0), shown(true))), Some(Hitch(5.0)));
+        // The menu at its own limit (120 fps), then a 12 ms and a 30 ms menu frame: judged against the menu.
+        for _ in 0..100 {
+            assert_eq!(verdict(j.frame(Some(8.3), shown(true))), Some(Normal));
+        }
+        assert_eq!(verdict(j.frame(Some(12.0), shown(true))), Some(Normal));
+        assert_eq!(verdict(j.frame(Some(30.0), shown(true))), Some(Hitch(8.3)));
+        // Back to play: the frame that closes the menu is the menu's, the next ones play's.
+        assert_eq!(verdict(j.frame(Some(5.0), shown(false))), Some(Normal));
+        assert_eq!(verdict(j.frame(Some(10.0), shown(false))), Some(Hitch(5.0)));
+        // A load (the loading screen's frames inside a frame, a loading screen, a game loaded): not judged, and
+        // neither typical frame moves; the frame after it is judged and marked.
+        let loading = Shown {
+            presents: 14,
+            ..shown(false)
+        };
+        assert_eq!(j.frame(Some(1500.0), loading), None);
+        let screen = Shown {
+            loading_screen: true,
+            ..shown(false)
+        };
+        assert_eq!(j.frame(Some(900.0), screen), None);
+        let after = j.frame(Some(30.0), shown(false)).expect("judged");
+        assert_eq!((after.verdict, after.after_load), (Hitch(5.0), true));
+        let next = j.frame(Some(5.0), shown(false)).expect("judged");
+        assert!(!next.after_load);
+        let load = Shown {
+            loads: 1,
+            ..shown(true)
+        };
+        assert_eq!(
+            j.frame(Some(2000.0), load),
+            None,
+            "a game loaded from a menu"
+        );
+        assert!(j.frame(Some(5.0), shown(false)).expect("judged").after_load);
+    }
+
+    /// A loading screen or a load in the frame is not judged; the next frame is, as the first after a load.
+    #[test]
+    fn loads_are_not_judged_and_the_frame_after_one_is() {
+        assert_eq!(judge(false, 0, 1, false), (true, false));
+        assert_eq!(judge(true, 0, 1, false), (false, false));
+        assert_eq!(
+            judge(false, 1, 1, false),
+            (false, false),
+            "a load from a menu"
+        );
+        assert_eq!(
+            judge(false, 0, 2, false),
+            (true, false),
+            "two presents: not yet a loading screen"
+        );
+        assert_eq!(
+            judge(false, 0, 14, false),
+            (false, false),
+            "a coc: the loading screen's frames"
+        );
+        assert_eq!(judge(false, 0, 1, true), (true, true));
+        assert_eq!(judge(true, 0, 1, true), (false, false));
     }
 
     fn frame() -> Frame {
@@ -1056,30 +1261,6 @@ mod tests {
             "{l}"
         );
         assert!(!l.contains("stages"), "{l}");
-    }
-
-    /// A loading screen or a load in the frame is not judged; the next frame is, as the first after a load.
-    #[test]
-    fn loads_are_not_judged_and_the_frame_after_one_is() {
-        assert_eq!(judge(false, 0, 1, false), (true, false));
-        assert_eq!(judge(true, 0, 1, false), (false, false));
-        assert_eq!(
-            judge(false, 1, 1, false),
-            (false, false),
-            "a load from a menu"
-        );
-        assert_eq!(
-            judge(false, 0, 2, false),
-            (true, false),
-            "two presents: not yet a loading screen"
-        );
-        assert_eq!(
-            judge(false, 0, 14, false),
-            (false, false),
-            "a coc: the loading screen's frames"
-        );
-        assert_eq!(judge(false, 0, 1, true), (true, true));
-        assert_eq!(judge(true, 0, 1, true), (false, false));
     }
 
     #[test]

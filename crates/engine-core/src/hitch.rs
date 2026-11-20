@@ -84,6 +84,30 @@ pub const COUNTS: usize = Count::ScriptCompiles as usize + 1;
 const ZERO: AtomicU64 = AtomicU64::new(0);
 static COUNTERS: [AtomicU64; COUNTS] = [ZERO; COUNTS];
 
+/// A counter on a cache line of its own: the heap's counts change on every block from any thread, so they share
+/// no line with each other or with the rest.
+#[repr(align(64))]
+struct Line(AtomicU64);
+
+/// The heap's four counts ([`heap`]), in [`Count::AllocsMain`]'s order: allocs main, frees main, allocs other,
+/// frees other.
+static HEAP: [Line; 4] = [
+    Line(AtomicU64::new(0)),
+    Line(AtomicU64::new(0)),
+    Line(AtomicU64::new(0)),
+    Line(AtomicU64::new(0)),
+];
+
+/// Count `i`'s counter: the heap's four live in [`HEAP`].
+fn counter(i: usize) -> &'static AtomicU64 {
+    let first = Count::AllocsMain as usize;
+    if (first..first + 4).contains(&i) {
+        &HEAP[i - first].0
+    } else {
+        &COUNTERS[i]
+    }
+}
+
 /// The longest wait main made since the last [`take_longest_wait`]: ns, kind ([`WaitKind`] as a number) and the game
 /// function that waited (the caller of the import, 0 none). Main only writes it, so the three need not be one step.
 static LONGEST_NS: AtomicU64 = AtomicU64::new(0);
@@ -111,7 +135,7 @@ pub fn set_on(on: bool) {
 /// Adds `n` to `c`.
 #[inline]
 pub fn add(c: Count, n: u64) {
-    COUNTERS[c as usize].fetch_add(n, Relaxed);
+    counter(c as usize).fetch_add(n, Relaxed);
 }
 
 /// Adds 1 to `c`.
@@ -130,19 +154,17 @@ pub fn side(main: Count, other: Count) -> Count {
     }
 }
 
-/// A heap block allocated (`free` false) or freed, counted under the heap's lock (a plain load and store: the lock
-/// lets one thread at a time here).
+/// A heap block allocated (`free` false) or freed: one relaxed add on a cache line of its own ([`HEAP`]); nothing
+/// with the log off.
 #[inline]
 pub fn heap(free: bool) {
+    if !on() {
+        return;
+    }
     let other = crate::real_threads::on_other_game_thread();
-    let c = match (free, other) {
-        (false, false) => Count::AllocsMain,
-        (true, false) => Count::FreesMain,
-        (false, true) => Count::AllocsOther,
-        (true, true) => Count::FreesOther,
-    };
-    let a = &COUNTERS[c as usize];
-    a.store(a.load(Relaxed).wrapping_add(1), Relaxed);
+    HEAP[usize::from(other) * 2 + usize::from(free)]
+        .0
+        .fetch_add(1, Relaxed);
 }
 
 /// What main waited for.
@@ -236,7 +258,7 @@ pub fn take_largest_read() -> (u64, String) {
 
 /// Every count now (the host subtracts the one before).
 pub fn snapshot() -> [u64; COUNTS] {
-    std::array::from_fn(|i| COUNTERS[i].load(Relaxed))
+    std::array::from_fn(|i| counter(i).load(Relaxed))
 }
 
 /// The frame's counts: `now` minus `before`, count by count.
@@ -279,22 +301,29 @@ mod tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let _ = take_longest_wait();
         let before = snapshot();
-        main_wait(WaitKind::Object, 0x00c3_dfa0, 30_000_000);
-        main_wait(WaitKind::Section, 0x00e7_ea00, 5_000_000);
-        main_wait(WaitKind::Sleep, 0x0086_e650, 90_000_000);
-        main_wait(WaitKind::Present, 0, 2_000_000);
-        main_wait(WaitKind::None, 0, 99_000_000);
+        // The real-thread tests beside this one wait too (milliseconds at most): times of hours here, so only this
+        // test's waits can be the longest, and the counts compared as at least.
+        const HOUR: u64 = 3_600_000_000_000;
+        main_wait(WaitKind::Object, 0x00c3_dfa0, 3 * HOUR);
+        main_wait(WaitKind::Section, 0x00e7_ea00, HOUR);
+        main_wait(WaitKind::Sleep, 0x0086_e650, 9 * HOUR);
+        main_wait(WaitKind::Present, 0, 2 * HOUR);
+        main_wait(WaitKind::None, 0, 99 * HOUR);
         let d = since(&snapshot(), &before);
-        assert_eq!(d[Count::ObjectWaitNs as usize], 30_000_000);
-        assert_eq!(d[Count::ObjectWaits as usize], 1);
-        assert_eq!(d[Count::SectionWaits as usize], 1);
-        assert_eq!(d[Count::SleepNs as usize], 90_000_000);
-        assert_eq!(d[Count::PresentWaitNs as usize], 2_000_000);
+        assert!((3 * HOUR..4 * HOUR).contains(&d[Count::ObjectWaitNs as usize]));
+        assert!(d[Count::ObjectWaits as usize] >= 1);
+        assert!(d[Count::SectionWaits as usize] >= 1);
+        assert!((9 * HOUR..10 * HOUR).contains(&d[Count::SleepNs as usize]));
+        assert!((2 * HOUR..3 * HOUR).contains(&d[Count::PresentWaitNs as usize]));
         assert_eq!(
             take_longest_wait(),
-            (30_000_000, WaitKind::Object, 0x00c3_dfa0)
+            (3 * HOUR, WaitKind::Object, 0x00c3_dfa0),
+            "the longest, a sleep and a none left out"
         );
-        assert_eq!(take_longest_wait(), (0, WaitKind::None, 0));
+        assert!(
+            take_longest_wait().0 < HOUR,
+            "taken: none of this test's waits left"
+        );
     }
 
     /// The largest read is kept with its name, a smaller one after it does not replace it, and a take empties it.
@@ -327,6 +356,28 @@ mod tests {
         assert_eq!(
             side(Count::FilesOpenedMain, Count::FilesOpenedOther),
             Count::FilesOpenedMain
+        );
+    }
+
+    /// The per-event cost of the heap's count with two threads counting at once (`--ignored`, release: `cargo test
+    /// --release -p engine-core --lib heap_count_costs -- --ignored --nocapture`).
+    #[test]
+    #[ignore]
+    fn heap_count_costs_nanoseconds() {
+        let n = 20_000_000u32;
+        let t = std::time::Instant::now();
+        std::thread::scope(|s| {
+            for _ in 0..2 {
+                s.spawn(|| {
+                    for i in 0..n {
+                        heap(i & 1 == 0);
+                    }
+                });
+            }
+        });
+        println!(
+            "{:.2} ns a counted block (two threads at once)",
+            t.elapsed().as_secs_f64() * 1e9 / f64::from(n)
         );
     }
 
