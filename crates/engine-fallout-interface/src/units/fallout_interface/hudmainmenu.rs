@@ -746,6 +746,9 @@ fn create_ddt_and_hardcore(e: &mut Engine, icon_size: f32) {
     }
 }
 
+/// JIP MiniMap's seam at the compass' name of a found location (its call at 0x77951E).
+pub(crate) const JIP_DISCOVER_LOCATION: u32 = 0x0077_951e;
+
 /// UI Organizer's patches in [`create_ddt_and_hardcore`]'s hardcore texts (HUDMainMenu::Create
 /// `0076bfe0`) (`SafeWrite16(.., jmp short)` over
 /// each `SetFloat(zoom)`), by the tile's field in the menu: seams of `crates/uio`, read only
@@ -5480,7 +5483,19 @@ pub fn hud_main_menu_update_compass(
                 let map_data = e.mem.u32(record);
                 // 00779509: the five pushed words and `location` are 0076b960's;
                 // 00438eb0 and 00403df0 take only `this` (plain RET).
-                let location = e.call(0x0043_8eb0, &args![map_data]).u32();
+                // Seam (JIP MiniMap's `DiscoverLocationHook`, written over the name call at
+                // 0x77951E by `InitMiniMap`): words: the marker data, the player's marker record;
+                // an answer is the name. Asked only while JIP is installed.
+                let jip_name = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+                {
+                    e.site(JIP_DISCOVER_LOCATION, &[map_data, record])
+                } else {
+                    None
+                };
+                let location = match jip_name {
+                    Some(name) => name,
+                    None => e.call(0x0043_8eb0, &args![map_data]).u32(),
+                };
                 let title = e.call(0x0040_3df0, &args![0x011d_2208_u32]).u32();
                 fn_0076b960(
                     e,
@@ -13779,8 +13794,10 @@ mod tests {
         // Twice: without and with a user of JIP LN NVSE's LocationDiscover hook, whose seam
         // (`0x77955D`, after the stat) is asked only with a user, with the marker.
         for users in [0, 1] {
-            compass_landmark_run(users);
+            compass_landmark_run(users, false);
         }
+        // And with JIP MiniMap's seam at the name call (0x77951E) answering: its name, no call.
+        compass_landmark_run(0, true);
     }
 
     thread_local! {
@@ -13792,7 +13809,16 @@ mod tests {
         None
     }
 
-    fn compass_landmark_run(users: u32) {
+    thread_local! {
+        static NAME_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn name_seam(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        NAME_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(0x7300)
+    }
+
+    fn compass_landmark_run(users: u32, jip_name: bool) {
         // State+5 ([EBP-0x8f]) is written only at 00779591 (1, changed) and 007795d6
         // (0, unchanged travel marker); an unchanged non-travel marker hands 00772aa0
         // the previous marker's byte.
@@ -13803,6 +13829,11 @@ mod tests {
         );
         if users == 1 {
             e.add_hook_user(engine_core::extend::Hook::LocationDiscover, true);
+        }
+        NAME_ASKED.with(|s| s.borrow_mut().clear());
+        if jip_name {
+            e.set_jip_patches(engine_core::extend::jip_patches::INSTALLED);
+            e.on_site_for_test(JIP_DISCOVER_LOCATION, name_seam);
         }
         let marker_position = e.mem.alloc(12);
         let update = e.mem.alloc(0x324);
@@ -13896,22 +13927,34 @@ mod tests {
         let calls = e.call_log.take().unwrap();
         // 00779509: 00438eb0 and 00403df0 take only `this`; the five pushed words
         // and `location` are 0076b960's.
-        let location = calls
+        let named = calls
             .iter()
-            .position(|(address, _)| *address == 0x0043_8eb0)
-            .unwrap();
-        assert_eq!(calls[location].1, args![0x100_u32].to_vec());
-        assert_eq!(
-            calls[location + 1],
-            (0x0040_3df0, args![0x011d_2208_u32].to_vec())
-        );
-        assert_eq!(
-            calls
+            .filter(|(address, _)| *address == 0x0043_8eb0)
+            .count();
+        // The name reaches the "location discovered" message: 0076b960 copies it to
+        // update + 0x10c (JIP's name, or the game's from 00438eb0).
+        let name_copy = calls
+            .iter()
+            .find(|(address, words)| *address == 0x0040_6d30 && words[0] == update + 0x10c)
+            .expect("the name copied into the message");
+        assert_eq!(name_copy.1[2], if jip_name { 0x7300 } else { 0x7100 });
+        if jip_name {
+            assert_eq!(named, 0, "JIP's name: no call");
+            let record = e.mem.u32(nodes[0]);
+            assert_eq!(NAME_ASKED.with(|s| s.take()), vec![vec![0x100, record]]);
+        } else {
+            let location = calls
                 .iter()
-                .filter(|(address, _)| *address == 0x0043_8eb0)
-                .count(),
-            1
-        );
+                .position(|(address, _)| *address == 0x0043_8eb0)
+                .unwrap();
+            assert_eq!(calls[location].1, args![0x100_u32].to_vec());
+            assert_eq!(
+                calls[location + 1],
+                (0x0040_3df0, args![0x011d_2208_u32].to_vec())
+            );
+            assert_eq!(named, 1);
+            assert!(NAME_ASKED.with(|s| s.take()).is_empty());
+        }
         // 011d9af0 after each marker.
         assert_eq!(e.mem.u32(nodes[1] + 8), references[0]);
         assert_eq!(e.mem.u32(nodes[2] + 8), references[1]);

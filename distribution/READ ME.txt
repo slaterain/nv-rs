@@ -19,19 +19,26 @@ Start
 Windows will probably warn you, because the program is new and not signed. See "If Windows or your
 antivirus objects" below.
 
-The first start finds your game (Steam, GOG, Epic, or it asks), checks its version, reads your
-graphics card and sound device (about 20 seconds; a small window says what it is doing) and starts
-the game. Later starts take a moment. When your graphics card, drivers, monitors, sound device,
-Windows language or Windows version change, nv-rs notices and reads them again.
+Play.exe opens nv-rs's launcher: a window in the look of the game's own terminals (its font, colour
+and lines are read from your installed game). Choose with the arrow keys and Enter, or the mouse:
+> Play starts the game, > Play with mods (shown when you have mods) plays with them, > Settings
+has the window or borderless, resolution, anti-aliasing, game fixes, frame limit and more (and a
+Testing list of what is still being tried), saved at once for the next start; > Exit closes
+it. The first time it types the game's terminal intro once; any key skips it.
 
-  Play.exe               the game
+The first start finds your game (Steam, GOG, Epic, or it asks: type the game's folder in the
+launcher or paste it with Ctrl+V, or drop the folder onto its window), checks its version, reads
+your graphics card and
+sound device (about 20 seconds; the launcher says what it is doing) and starts the game. The
+launcher steps aside while you play, and closes when the game ends; if the game stops with an
+error, it says what happened and can open the logs folder. Later starts take a moment. When your
+graphics card, drivers, monitors, sound device, Windows language or Windows version change, nv-rs
+notices and reads them again.
+
+  Play.exe               the launcher (above)
   Play with mods.cmd     the game with the mods in the mods folder (see mods\READ ME.txt)
   Install mods.cmd       install a mod from its archive (.7z, .zip, .fomod) put in the mods
                          folder, answering its installer's questions; also removes mods
-  Settings.cmd           window or borderless, resolution, anti-aliasing, game fixes, frame limit
-                         and more (next start). Close the game first: the game writes its own
-                         settings file again when you change an option in its menu, and that can
-                         undo a choice saved while it runs
   Import my saves.cmd    copies your saves from Documents\My Games\FalloutNV. Those stay as they are
 
 Use Exit Game in the game's menu to quit. Saves reach the disk within about 5 seconds of being made,
@@ -53,16 +60,16 @@ for you.
 
 The first start takes your settings from the game's own launcher if you have run it (it copies them,
 and your real ones stay as they are). If not, it starts on the game's High preset at your desktop's
-size. Settings.cmd and the game's own menu change them.
+size. Play.exe's Settings and the game's own menu change them.
 
 Either way the game starts in a borderless window that fills the screen. For the game's own window
-instead, choose Window under Display mode in Settings.cmd. That is bBorderless=0 in Fallout.ini's
+instead, choose Window under Display mode in Play.exe's Settings. That is bBorderless=0 in Fallout.ini's
 [nv-rs Display] section (Bug fixes, below, says where the file is). With 1, or with no such line,
 the window is borderless.
 
 Press F11 in the game to show or hide a frame-rate counter in the top-right corner: frames a second
 and, under it, the slowest frame of the last second in milliseconds (a stutter shows there). It is off
-at the start unless you choose "Shown" under Frame rate counter in Settings.cmd (bShowFrameRate=1 in
+at the start unless you choose "Shown" under Frame rate counter in Play.exe's Settings (bShowFrameRate=1 in
 the same section). It shows with the Vulkan renderer only. With Vulkan, F11 is kept for the counter:
 it cannot be bound to anything in the game's controls or by mods; with Direct3D 9 it is the game's.
 
@@ -74,10 +81,10 @@ time keeps pace with real time at high frame rates (the original runs fast there
 lands on the floor after a jump instead of hovering a little above it. Menus run at up to 120 frames a
 second (loading screens as fast as they can), and a dragged body is pulled as hard at any frame rate.
 
-To play the original game's behaviour instead, open Settings.cmd and choose "Vanilla (the original
-game)" under Game fixes. Settings.cmd can also set a frame limit (60, 120, 144 and so on) or no limit,
+To play the original game's behaviour instead, open Play.exe's Settings and choose "Vanilla (the original
+game)" under Game fixes. Settings can also set a frame limit (60, 120, 144 and so on) or no limit,
 which is the default, and a frame limit in menus (120 unless you choose another, or none). The frame
-limits only work with the fixes on. Settings.cmd keeps them in the game's own Fallout.ini, in
+limits only work with the fixes on. Settings keeps them in the game's own Fallout.ini, in
 userdata\game\Documents\My Games\FalloutNV (and the same under userdata\mods), in sections named
 [nv-rs ...] (usually at the top of the file): sPreset=fixes or vanilla, iFrameLimit=0 (no limit) or a number, iMenuFrameLimit=120,
 0 or a number. You can change them there too; a note above each line says what it does.
@@ -87,14 +94,14 @@ Game threads
 ------------
 The game's threads (the main one, the AI, loading and sound) run side by side on your processor's
 cores, as in the original. If the game misbehaves in a way it didn't with the previous preview (it
-stops, hangs, or something acts oddly), open Settings.cmd, choose "One at a time (slower)" under Game
-threads, and please tell us. Settings.cmd keeps that choice in Fallout.ini as bSteppedThreads=1;
+stops, hangs, or something acts oddly), open Play.exe's Settings, choose "One at a time (slower)" under Game
+threads, and please tell us. Settings keeps that choice in Fallout.ini as bSteppedThreads=1;
 with 0 the threads run side by side.
 
 The game's drawing is handed to a thread of its own (the original draws on its main thread), which
 makes busy places faster. If something looks wrong or the game stops in a way it didn't with the
-previous preview, open Settings.cmd, choose "Main thread (slower)" under Drawing thread, and please
-tell us. Settings.cmd keeps that choice in Fallout.ini as bRenderThread=0; with 1 the drawing has its
+previous preview, open Play.exe's Settings, choose "Main thread (slower)" under Drawing thread, and please
+tell us. Settings keeps that choice in Fallout.ini as bRenderThread=0; with 1 the drawing has its
 own thread.
 
 The game keeps its speed when its window is not the active one: nv-rs asks Windows not to slow it
@@ -107,8 +114,8 @@ Renderer
 --------
 The game draws on Vulkan (on a graphics card without Vulkan, on Direct3D 12), with the original's
 shaders and look. If something looks wrong or the game stops while drawing in a way it didn't with
-the previous preview, open Settings.cmd, choose "Direct3D 9 (the original's)" under Renderer, and
-please tell us. Settings.cmd keeps that choice in Fallout.ini as sRenderer=d3d9; with sRenderer=vulkan,
+the previous preview, open Play.exe's Settings, choose "Direct3D 9 (the original's)" under Renderer, and
+please tell us. Settings keeps that choice in Fallout.ini as sRenderer=d3d9; with sRenderer=vulkan,
 or with no such line, the game draws on Vulkan. Where neither Vulkan nor Direct3D 12 can draw, the
 game draws with Direct3D 9 by itself.
 
@@ -123,6 +130,15 @@ Game pads work: an Xbox-style pad, or a PlayStation pad (DualSense, DualSense Ed
 by cable or Bluetooth, with rumble. The game shows Xbox button pictures: A is Cross, B is Circle,
 X is Square, Y is Triangle, Back is Create (Share on a DualShock 4) and Start is Options. The PS
 button and the touchpad do nothing.
+Other pads work too, without rumble, if SDL's controller database knows them (764 models, such as
+8BitDo and Logitech pads in their DirectInput modes): their buttons are put where an Xbox pad has
+them. A pad it doesn't know, or whose line does not fit its own buttons and sticks, is named in the
+log; a line for it in SDL's own format (with platform:Windows) can go in a file called
+gamecontrollerdb.txt in the "nv-rs mod files" folder beside your Saves folder, and the log then
+says how many lines it took from there. A pad SDL counts as Xbox-style is read through XInput as
+an Xbox pad, and a line for it is not used. To keep nv-rs from reading a pad at all, name it in
+the SDL_GAMECONTROLLER_IGNORE_DEVICES variable as SDL games take it (0xVVVV/0xPPPP, its vendor and
+product ids, several separated by commas).
 While a pad is connected, the game takes its controls from the pad, not from the keyboard and
 mouse, as the original does with an Xbox pad. That includes a PlayStation pad that is only plugged
 in to charge. To play with keyboard and mouse while a pad is connected, turn off "360 Controller"
@@ -132,8 +148,8 @@ under Controls in the game's Settings menu; "Vibration" there turns rumble off.
 What doesn't yet
 ----------------
 - Mods that need xNVSE, JIP or other plugins (.dll files) don't work yet.
-- Other game pads (any pad that is not Xbox-style and not one of those three PlayStation pads,
-  such as a DualShock 3 or a Switch Pro pad) don't work yet.
+- Game pads that are not Xbox-style, not one of those three PlayStation pads and not in SDL's
+  controller database don't work yet, unless you add a line for them (above).
 - It is slower than the original. On the maintainer's PC (a laptop with an RTX 5070 Ti, at 2560x1440
   with 8x anti-aliasing), with the bug fixes on, about 103 frames a second in Doc Mitchell's house and
   about 44 in Goodsprings. The original runs at about 120 in Doc's house. Your numbers will differ.
@@ -147,7 +163,11 @@ What doesn't yet
   Windows 10. GOG, Epic and some regional copies may be refused, with a message that says so.
 - PlayStation pads (DualSense, DualSense Edge, DualShock 4, by cable or Bluetooth) are built from
   their published layouts and have not been tried with a real pad yet, nor with Steam Input or
-  DS4Windows running alongside. Please tell us how yours does.
+  DS4Windows running alongside. Nor have the pads read through SDL's controller database. Please
+  tell us how yours does.
+- A database pad connected by Bluetooth that drops out (out of range, out of battery) keeps its last
+  sticks and buttons until Windows takes the device away, as such pads may send nothing while
+  nothing changes.
 
 
 Problems at the start

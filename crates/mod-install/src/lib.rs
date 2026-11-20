@@ -18,7 +18,7 @@
 //!   and a name is only ever removed and made again, so nothing is written through to the game's
 //!   own file. It also writes the plugin list.
 //!
-//! Play.exe (Windows, `scripts/launcher`) makes the game folder through [`overlay::build`]
+//! Play.exe (Windows, `crates/nv-launcher`) makes the game folder through [`overlay::build`]
 //! (play.sh's `--mods` on Linux and macOS will, in the pull request after this one); the mod
 //! chooser installs and removes through
 //! [`installs`]. Nothing here reads an archive or shows anything: `crates/mod-archive` unpacks,

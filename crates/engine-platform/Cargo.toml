@@ -27,9 +27,10 @@ d3d9-wgpu = { path = "../d3d9-wgpu" }
 # the real window, device and resources. Win32_System_SystemInformation: the machine's memory
 # for GlobalMemoryStatus(Ex) (process.rs). Win32_Devices_HumanInterfaceDevice and
 # Win32_Devices_DeviceAndDriverInstallation: the PlayStation pads found and read as HID devices
-# (xinput/hid_win.rs).
+# (xinput/hid_win.rs); Win32_Devices_Properties: a device's filter drivers there (an XInput pad's
+# xinputhid).
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.58", features = ["Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_HumanInterfaceDevice", "Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D9", "Win32_Graphics_Gdi", "Foundation_Numerics", "Win32_System_LibraryLoader", "Win32_System_SystemInformation", "Win32_UI_HiDpi", "Win32_UI_Input", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.58", features = ["Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_HumanInterfaceDevice", "Win32_Devices_Properties", "Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D9", "Win32_Graphics_Gdi", "Foundation_Numerics", "Win32_System_LibraryLoader", "Win32_System_SystemInformation", "Win32_UI_HiDpi", "Win32_UI_Input", "Win32_UI_WindowsAndMessaging"] }
 
 # The game's window on Linux (X11, Wayland) and macOS (d3d9real/winit_window.rs), handed to wgpu
 # by its raw window handle (the version wgpu 30 takes). Not on Windows: the Win32 window is there.

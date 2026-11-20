@@ -1,19 +1,21 @@
-//! Play.exe, the preview package's launcher: finds the player's game (Steam, GOG and Epic, read
-//! only, or it asks), checks it is 1.4.0.525, makes this PC's tables, keeps every file the game
-//! writes in the package's own folder and starts the game, saying plainly in a window what went
-//! wrong when something does. Nothing is ever written outside the package's folder.
+//! Play on Windows (what Play.exe did on its own until the launcher): finds the player's game
+//! (Steam, GOG and Epic, read only, or it asks), checks it is 1.4.0.525, makes this PC's tables,
+//! keeps every file the game writes in the package's own folder and starts the game, saying
+//! plainly in the launcher's terminal what went wrong when something does. Nothing is ever written
+//! outside the package's folder.
 //!
-//!   Play.exe                  plays
+//!   Play.exe                  the start screen (`> Play` plays)
 //!   Play.exe --mods           plays with the mods in the `mods` folder
 //!   Play.exe --import-saves   copies the saves from Documents\My Games\FalloutNV (read only)
+//!   Play.exe --install-mods   the mod installer, in a console window of its own
 //!   Play.exe --check          everything up to starting the game, then says what it found
 //!   --game FOLDER             the game's folder, instead of looking for it
 //!   --from FOLDER             with --import-saves: where to copy saves from
 //!
-//! Scripted tests set `NV_RS_NO_WINDOWS=1` (no window shown; every message is in
-//! `userdata\logs\launcher.log` either way), `NV_RS_REAL_DOCUMENTS=DIR` (where the player's
-//! Documents are read from), `NV_RS_NO_SHORT_PATHS=1`, `NV_RS_NO_STORES=1` (look in no store) and `NV_RS_SYSTEM_FOLDER=DIR`.
-#![windows_subsystem = "windows"]
+//! Scripted tests set `NV_RS_NO_WINDOWS=1` (no window shown, and no start screen: it plays; every
+//! message is in `userdata\logs\launcher.log` either way), `NV_RS_REAL_DOCUMENTS=DIR` (where the
+//! player's Documents are read from), `NV_RS_NO_SHORT_PATHS=1`, `NV_RS_NO_STORES=1` (look in no
+//! store) and `NV_RS_SYSTEM_FOLDER=DIR`.
 
 mod find;
 use game_profile::game_ini;
@@ -21,6 +23,7 @@ mod mods;
 use game_profile::settings;
 mod tables;
 mod ui;
+pub use ui::{answer_in_boxes, desktop_size};
 mod win;
 
 use settings::{migrated_name, Settings};
@@ -257,11 +260,38 @@ fn player_folder_of(root: &Path, folders: &[(PathBuf, &'static str)]) -> Option<
     })
 }
 
+/// The player's own folders the package must not be in or hold (Documents, AppData, by Windows'
+/// answers and by `%USERPROFILE%`'s names).
+fn player_folders() -> Vec<(PathBuf, &'static str)> {
+    let mut folders: Vec<(PathBuf, &'static str)> = [
+        (real_documents(), "Documents"),
+        (win::known_folder(0x1a), "AppData"),
+        (win::known_folder(0x1c), "AppData"),
+    ]
+    .into_iter()
+    .filter_map(|(folder, what)| Some((folder?, what)))
+    .collect();
+    if let Some(profile) = std::env::var_os("USERPROFILE") {
+        folders.extend(profile_folders(Path::new(&profile)));
+    }
+    folders
+}
+
 /// Why the package can't run from where it is.
 fn check_location(package: &Package) -> Result<(), Stop> {
+    let temporary = std::env::var_os("TEMP").map(PathBuf::from);
+    check_location_in(package, temporary.as_deref(), &player_folders())
+}
+
+/// [`check_location`] with the temporary folder `temporary` and the player's `folders`.
+fn check_location_in(
+    package: &Package,
+    temporary: Option<&Path>,
+    folders: &[(PathBuf, &'static str)],
+) -> Result<(), Stop> {
     let root = folder_key(&package.root);
     let move_it = "Move the whole nv-rs folder somewhere else, for example C:\\Games\\nv-rs, and start Play.exe again.";
-    let temporary = std::env::var_os("TEMP").map(|t| folder_key(Path::new(&t)));
+    let temporary = temporary.map(folder_key);
     if temporary.is_some_and(|t| is_inside(&root, &t)) {
         return stop(
             STOP_LOCATION,
@@ -280,18 +310,7 @@ fn check_location(package: &Package) -> Result<(), Stop> {
             ),
         );
     }
-    let mut folders: Vec<(PathBuf, &str)> = [
-        (real_documents(), "Documents"),
-        (win::known_folder(0x1a), "AppData"),
-        (win::known_folder(0x1c), "AppData"),
-    ]
-    .into_iter()
-    .filter_map(|(folder, what)| Some((folder?, what)))
-    .collect();
-    if let Some(profile) = std::env::var_os("USERPROFILE") {
-        folders.extend(profile_folders(Path::new(&profile)));
-    }
-    if let Some(what) = player_folder_of(&package.root, &folders) {
+    if let Some(what) = player_folder_of(&package.root, folders) {
         return stop(
             STOP_LOCATION,
             format!(
@@ -570,7 +589,12 @@ fn find_game(package: &Package, explicit: Option<&Path>) -> Result<(Game, Vec<St
             Some(why)
         }
         None => {
-            ui::info("nv-rs could not find Fallout: New Vegas on this PC. It looks in Steam, GOG and Epic.\n\nIn the next window, choose the game's folder: the one with FalloutNV.exe and a Data folder in it.");
+            ui::info(if ui::in_boxes() {
+                // Windows' folder picker comes next (no launcher window).
+                "nv-rs could not find Fallout: New Vegas on this PC. It looks in Steam, GOG and Epic.\n\nIn the next window, choose the game's folder: the one with FalloutNV.exe and a Data folder in it."
+            } else {
+                "nv-rs could not find Fallout: New Vegas on this PC. It looks in Steam, GOG and Epic.\n\nNext, type the game's folder at the prompt, or drop the folder onto this window: the one with FalloutNV.exe and a Data folder in it."
+            });
             None
         }
     };
@@ -780,10 +804,10 @@ fn prepare_profile(
     Ok(prepared)
 }
 
-/// Both profiles' files made ready ([`prepare_profile`]), so Settings.cmd finds them to edit; a
+/// Both profiles' files made ready ([`prepare_profile`]), so the Settings screen finds them to edit; a
 /// `settings.ini` goes into both and is renamed `settings.ini.migrated` ([`migrated_name`]).
 ///
-/// While a `settings.ini` exists it is the settings for both tools: Settings.cmd reads and
+/// While a `settings.ini` exists it is the settings for both: the Settings screen reads and
 /// writes it, and its lines win here over what the files say. So when it can't be renamed, or a
 /// profile's file couldn't take our sections, it stays, the log says so, and the next start
 /// moves it in again: the same result every time.
@@ -811,7 +835,7 @@ fn prepare_files(
         settings.game_switches().map_err(|why| Stop {
             code: STOP_SETTINGS,
             message: format!(
-                "nv-rs's settings have a line it can't use: {why}.\n\nOpen Settings.cmd, choose again and click Save. The file is:\n{}",
+                "nv-rs's settings have a line it can't use: {why}.\n\nChoose Settings on Play.exe's start screen and choose again there. The file is:\n{}",
                 package.settings.display()
             ),
         })?;
@@ -859,7 +883,7 @@ fn prepare_files(
     }
     if !all_seeded {
         package.log(
-            "settings.ini stays where it is: a Fallout.ini could not take its choices (said above). Settings.cmd keeps reading and writing settings.ini, and Play.exe moves it in again at the next start",
+            "settings.ini stays where it is: a Fallout.ini could not take its choices (said above). The Settings screen keeps reading and writing settings.ini, and Play.exe moves it in again at the next start",
         );
         return Ok(());
     }
@@ -873,7 +897,7 @@ fn prepare_files(
             "settings.ini's choices are now in the game's Fallout.ini and FalloutPrefs.ini; the old file is {name}"
         )),
         Err(e) => package.log(&format!(
-            "settings.ini's choices are in the game's Fallout.ini and FalloutPrefs.ini, but the file could not be renamed to {name} ({e}). It stays the settings while it is there: Settings.cmd keeps reading and writing it, and Play.exe moves it in again at every start, over what the game's files say. Close whatever has it open, or remove it"
+            "settings.ini's choices are in the game's Fallout.ini and FalloutPrefs.ini, but the file could not be renamed to {name} ({e}). It stays the settings while it is there: the Settings screen keeps reading and writing it, and Play.exe moves it in again at every start, over what the game's files say. Close whatever has it open, or remove it"
         )),
     }
     Ok(())
@@ -922,7 +946,7 @@ fn plain_end(tail: &str, status: Option<i32>) -> String {
     {
         "The game asked your graphics card something this PC's table has no answer for, so it stopped. That is a gap in nv-rs, and your report is what fills it."
     } else if has("CreateDevice answered") {
-        "Your graphics card refused the game's display settings. Try Settings.cmd: Window, a lower resolution, anti-aliasing off."
+        "Your graphics card refused the game's display settings. Try Settings on Play.exe's start screen: Display mode Window, a lower resolution, anti-aliasing off."
     } else if has("the game's window") && has("not provided") {
         "The game asked Windows for something nv-rs doesn't provide yet."
     } else {
@@ -930,7 +954,7 @@ fn plain_end(tail: &str, status: Option<i32>) -> String {
     };
     // Drawn on Vulkan (wgpu): the original's Direct3D 9 is one setting away.
     let renderer = if has("NV_D3D9=wgpu: drawing with") || has("NV_D3D9 wgpu: the game's device") {
-        "\n\nIt was drawn on Vulkan. If it stops again there, Settings.cmd's Renderer \"Direct3D 9\" draws the game as the original does."
+        "\n\nIt was drawn on Vulkan. If it stops again there, Settings: Renderer \"Direct3D 9\" on Play.exe's start screen draws the game as the original does."
     } else {
         ""
     };
@@ -1091,16 +1115,29 @@ fn run(package: &Package, options: &Options) -> Result<i32, Stop> {
     if options.install {
         return install_mods(package, options);
     }
-    if win::another_is_running() {
+    // One game at a time: held for this run only (it ends with the game), so the launcher's
+    // next Play after a refusal or a stop plays again.
+    let Some(_one) = win::claim(win::PLAY_CLAIM) else {
         return stop(
             STOP_LOCATION,
             "nv-rs is already running. Only one game at a time.",
         );
-    }
+    };
     let status = ui::Status::show("Looking for Fallout: New Vegas...");
     let result = play(package, options, &profile, &status);
     status.close();
     result
+}
+
+/// The first write of a Play run: the game's folder is known and the package is not in it
+/// ([`clear_for_writing`]); only then is the launcher's intro, shown at this start, noted (its
+/// own file in userdata).
+fn first_write(package: &Package, game_folder: &Path) -> Result<(), Stop> {
+    clear_for_writing(package, Some(game_folder))?;
+    if let Err(e) = crate::place::note_intro_if_shown(&package.userdata) {
+        package.log(&format!("launcher.ini: {e}"));
+    }
+    Ok(())
 }
 
 fn play(
@@ -1110,8 +1147,7 @@ fn play(
     status: &ui::Status,
 ) -> Result<i32, Stop> {
     let (mut game, check_lines) = find_game(package, options.game.as_deref())?;
-    // The first write of the run: the game's folder is known and the package is not in it.
-    clear_for_writing(package, Some(&game.folder))?;
+    first_write(package, &game.folder)?;
     for line in &check_lines {
         package.log(line);
     }
@@ -1288,7 +1324,7 @@ fn play(
         message: format!("{}: {e}", profile.table.display()),
     })?;
 
-    // Both ways of playing get their files, so Settings.cmd can edit them; the profile not played
+    // Both ways of playing get their files, so the Settings screen can edit them; the profile not played
     // takes the game's own folder's defaults (the mods install's are the same files).
     let other = Profile::at(
         &package.userdata,
@@ -1401,6 +1437,8 @@ fn play(
         if waiting_for_window && ui::game_window_is_there() {
             waiting_for_window = false;
             status.close();
+            // The launcher's window steps aside while the game plays.
+            crate::session::send(crate::session::Event::GameShown);
         }
         std::thread::sleep(std::time::Duration::from_millis(200));
     };
@@ -1411,11 +1449,11 @@ fn play(
     }
     let message = plain_end(&log_tail(&log_path), exit.code());
     package.log(&message);
-    let text = format!(
-        "{message}\n\nLog:\n{}\n\nOpen the logs folder?",
-        log_path.display()
-    );
-    if ui::windows_allowed() && ui::ask(&text) {
+    let text = format!("{message}\n\nLog:\n{}", log_path.display());
+    crate::session::set_stop_code(STOP_GAME_STOPPED);
+    if ui::windows_allowed()
+        && crate::session::message(&text, &["Open the logs folder", "Back"]) == 0
+    {
         ui::open_folder(&package.logs);
     }
     Ok(STOP_GAME_STOPPED)
@@ -1483,17 +1521,21 @@ fn sound_notes(package: &Package, sound: &Path, check_lines: &[String]) {
     }
 }
 
-fn main() {
-    let raw: Vec<String> = std::env::args_os()
-        .skip(1)
-        .map(|a| a.to_string_lossy().into_owned())
-        .collect();
-    let options = parse_options(&raw);
-    let root = std::env::current_exe()
+/// The package's folder: the one the launcher's program is in.
+fn package_root() -> PathBuf {
+    std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(Path::to_path_buf))
-        .unwrap_or_else(|| PathBuf::from("."));
-    let package = Package::at(root);
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// One of Play.exe's actions (`raw`: its arguments; none: play), to its end: its exit code, as
+/// Play.exe ended with it. Every message and question goes to the launcher's window.
+pub fn run_play(raw: &[String]) -> i32 {
+    // A new run: no stop code of an earlier one.
+    crate::session::set_stop_code(i32::MIN);
+    let options = parse_options(raw);
+    let package = Package::at(package_root());
     package.log(&format!(
         "Play.exe {:?} in {}; Windows {}; code page {}",
         raw,
@@ -1502,7 +1544,7 @@ fn main() {
         win::ansi_code_page()
     ));
     match run(&package, &options) {
-        Ok(code) => std::process::exit(code),
+        Ok(code) => code,
         Err(why) => {
             // A stop before the first write keeps the disk untouched, unless the package's place is
             // fine (nothing found, wrong version...): then the log is for the player's report.
@@ -1510,9 +1552,69 @@ fn main() {
                 let _ = clear_for_writing(&package, None);
             }
             package.log(&format!("stopped ({}): {}", why.code, why.message));
+            crate::session::set_stop_code(why.code);
             ui::error(&why.message);
-            std::process::exit(why.code);
+            why.code
         }
+    }
+}
+
+/// What the start screen shows, and whether the launcher may keep its own file, found before
+/// anything else is written: the package's place checked as Play.exe checks it first
+/// ([`check_location`], then whether the package is in the game remembered or found). Nothing is
+/// written and nothing here runs the game's program.
+pub fn place() -> crate::place::Place {
+    place_at(package_root())
+}
+
+/// [`place`] for the package at `root` (the temporary folder and the player's folders as
+/// Windows says them).
+fn place_at(root: PathBuf) -> crate::place::Place {
+    let temporary = std::env::var_os("TEMP").map(PathBuf::from);
+    place_at_in(root, temporary.as_deref(), &player_folders())
+}
+
+/// [`place_at`] with the temporary folder `temporary` and the player's `folders`.
+fn place_at_in(
+    root: PathBuf,
+    temporary: Option<&Path>,
+    folders: &[(PathBuf, &'static str)],
+) -> crate::place::Place {
+    let package = Package::at(root);
+    let game = std::fs::read_to_string(&package.remembered)
+        .ok()
+        .map(|text| PathBuf::from(text.trim()))
+        .into_iter()
+        .chain(find::candidates().into_iter().map(|(_, place)| place))
+        .find_map(|folder| Some(find::data_folder(&folder)?.parent()?.to_path_buf()));
+    // The checks only, none of them a write: the first write (the folder test, the log) waits for
+    // Play's own `clear_for_writing` with the game's folder it found, so a refusal there still
+    // leaves the disk untouched.
+    let refused = check_location_in(&package, temporary, folders)
+        .and_then(|()| match &game {
+            Some(game) if inside_game(&package.root, game) => stop(
+                STOP_LOCATION,
+                format!(
+                    "nv-rs is inside your game's folder. It must never write there, so it won't run from there.\n\nMove the whole nv-rs folder somewhere else, for example C:\\Games\\nv-rs, and start Play.exe again.\n\nThis folder was:\n{}",
+                    package.root.display()
+                ),
+            ),
+            _ => Ok(()),
+        })
+        .err()
+        .map(|why| (why.message, why.code));
+    let profile = Profile::at(&package.userdata, "game");
+    let mods = crate::place::has_mods(&package.userdata.join("mod installs"))
+        || crate::place::has_mods(&package.root.join("mods"));
+    crate::place::Place {
+        own: package.userdata.clone(),
+        game,
+        fallout_ini: profile.fallout_ini(),
+        adapter_card: std::fs::read(package.machine.join("d3d9_adapter.tsv"))
+            .ok()
+            .and_then(|table| tables::adapter_name(&table)),
+        mods,
+        refused,
     }
 }
 
@@ -1554,7 +1656,7 @@ mod tests {
             "NV_D3D9=real: CreateDevice answered 0x8876086a: nothing is forwarded",
             None
         )
-        .contains("Settings.cmd"));
+        .contains("Settings on Play.exe's start screen: Display mode Window"));
         assert!(plain_end("", None).contains("the log is empty"));
         // Drawn on Vulkan: the fallback renderer is named; on the real Direct3D 9 it is not.
         let vulkan =
@@ -1640,6 +1742,105 @@ mod tests {
             folder_key(&link.join("not yet")),
             format!("{}\\not yet", folder_key(&real))
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A package in a fine place: the start screen's checks pass and write nothing at all (no
+    /// log, no write test, no userdata); the intro shown there is noted only when Play's own
+    /// first-write check has passed, in userdata's launcher.ini.
+    #[test]
+    fn the_start_screen_writes_nothing_and_the_intro_waits_for_play() {
+        let dir = scratch("clear");
+        let root = dir.join("nv-rs");
+        std::fs::create_dir_all(root.join("app\\tools")).unwrap();
+        std::fs::write(root.join("app\\FalloutNV.exe"), b"x").unwrap();
+        std::fs::write(root.join("app\\tools\\d3d9-capture.exe"), b"x").unwrap();
+        let p = place_at_in(root.clone(), None, &[]);
+        assert_eq!(p.refused, None);
+        let mut names: Vec<String> = std::fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["app"], "the start screen wrote into the package");
+        // The intro ended at the start screen, as the window ends it: kept until Play's check
+        // passes, then noted by Play's own first write.
+        crate::place::intro_ended(&p.own, false).unwrap();
+        assert!(!p.own.exists(), "the intro was noted before Play's check");
+        let package = Package::at(root.clone());
+        first_write(&package, &dir.join("somewhere else")).unwrap();
+        assert!(crate::place::intro_shown(&package.userdata));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// One game at a time is claimed for a run only: while a run holds it, another claim (this
+    /// process's next Play, or another Play.exe) is refused; once the run is over, Play may play
+    /// again, twice in one process.
+    #[test]
+    fn one_game_at_a_time_is_held_for_a_run_only() {
+        let name = format!("Local\\nv-rs-test-claim-{}", std::process::id());
+        let first = win::claim(&name).expect("free at first");
+        assert!(win::claim(&name).is_none(), "held while a run lasts");
+        drop(first);
+        let second = win::claim(&name).expect("free again after the run");
+        assert!(win::claim(&name).is_none());
+        drop(second);
+        assert!(win::claim(&name).is_some(), "free after the second run");
+    }
+
+    /// The start screen's facts from a package's own files: the game remembered, the play
+    /// profile's Fallout.ini, the last adapter table's card, the mods; and a package in a
+    /// temporary folder is refused (as Play.exe refused it) with nothing written.
+    #[test]
+    fn the_start_screen_reads_the_packages_files() {
+        let dir = scratch("place");
+        let game = dir.join("Fallout New Vegas");
+        std::fs::create_dir_all(game.join("Data")).unwrap();
+        std::fs::write(game.join("Data\\FalloutNV.esm"), b"x").unwrap();
+        let root = dir.join("nv-rs");
+        let userdata = root.join("userdata");
+        std::fs::create_dir_all(userdata.join("machine")).unwrap();
+        std::fs::write(
+            userdata.join("game-folder.txt"),
+            game.to_string_lossy().as_bytes(),
+        )
+        .unwrap();
+        let p = place_at(root.clone());
+        assert_eq!(p.game.as_deref(), Some(game.as_path()));
+        assert_eq!(
+            p.fallout_ini,
+            userdata.join("game\\Documents\\My Games\\FalloutNV\\Fallout.ini")
+        );
+        assert_eq!(p.own, userdata);
+        assert_eq!(p.adapter_card, None);
+        assert!(!p.mods);
+        assert!(
+            p.refused
+                .as_ref()
+                .is_some_and(|(w, code)| w.contains("temporary folder") && *code == STOP_LOCATION),
+            "{:?}",
+            p.refused
+        );
+        assert!(!userdata.join("logs").exists(), "nothing written");
+        // The adapter identifier's Description after its 512 bytes of Driver, as hex.
+        let mut hex = "00".repeat(512);
+        for b in b"Radeon Test" {
+            hex.push_str(&format!("{b:02x}"));
+        }
+        hex.push_str("00");
+        std::fs::write(
+            userdata.join("machine\\d3d9_adapter.tsv"),
+            format!("GetAdapterIdentifier\t0 0\t0\t{hex}\n"),
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("mods")).unwrap();
+        std::fs::write(root.join("mods\\READ ME.txt"), b"x").unwrap();
+        assert!(!place_at(root.clone()).mods);
+        std::fs::write(root.join("mods\\a.esp"), b"x").unwrap();
+        let p = place_at(root.clone());
+        assert!(p.mods);
+        assert_eq!(p.adapter_card.as_deref(), Some("Radeon Test"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1861,7 +2062,7 @@ mod tests {
 
     /// A `bBorderless` line that chooses nothing (empty, or a word the game can't use) is the
     /// game's default, borderless, as the host reads it: Play.exe leaves the line as it is and
-    /// keeps the game's own full-screen mode off for it, as for 1; Settings.cmd shows it as
+    /// keeps the game's own full-screen mode off for it, as for 1; the Settings screen shows it as
     /// borderless, so saving that changes no byte, and choosing Window writes 0, which then stays
     /// and gets no such push.
     #[test]
@@ -1877,10 +2078,10 @@ mod tests {
                 assert_eq!(text_of(&files.ini(profile)), ini);
                 assert!(files.prefs(profile).contains("bFull Screen=0"), "{name}");
             }
-            settings_window(&files, "");
-            settings_window(&files, "Borderless=1");
+            save_as_shown(&files);
+            settings_screen(&files, "Borderless=1");
             assert_eq!(text_of(&files.ini(0)), ini, "{name}");
-            settings_window(&files, "Borderless=0");
+            settings_screen(&files, "Borderless=0");
             let chosen = text_of(&files.ini(0));
             assert_eq!(
                 chosen,
@@ -1964,12 +2165,12 @@ mod tests {
         assert_eq!((files.ini(0), files.ini(1), files.prefs(0)), before);
     }
 
-    /// A profile from before the sections (the published preview's), and Settings.cmd opened
+    /// A profile from before the sections (the published preview's), and the Settings screen opened
     /// before Play.exe: it must not write a key into that Fallout.ini, which Play.exe would then
     /// take for one that has the sections. It writes settings.ini, and Play.exe puts the whole
     /// block and the choices into both profiles.
     #[test]
-    fn settings_cmd_on_a_file_from_before_the_sections_leaves_it_to_play_exe() {
+    fn settings_screen_on_a_file_from_before_the_sections_leaves_it_to_play_exe() {
         let files = Files::new("old-profile", None);
         let [game, _] = files.profiles();
         game.make().unwrap();
@@ -1977,7 +2178,7 @@ mod tests {
         let old_prefs = "[Display]\r\niSize W=800\r\niSize H=600\r\n";
         std::fs::write(game.fallout_ini(), old_ini).unwrap();
         std::fs::write(&game.prefs, old_prefs).unwrap();
-        settings_window(&files, "FrameLimit=60");
+        settings_screen(&files, "FrameLimit=60");
         assert_eq!(files.ini(0), old_ini);
         assert_eq!(files.prefs(0), old_prefs);
         let written = std::fs::read_to_string(&files.package.settings).unwrap();
@@ -2000,8 +2201,8 @@ mod tests {
             assert!(files.prefs(profile).contains("bFull Screen=0"));
         }
         assert!(!files.package.settings.exists());
-        // From here on Settings.cmd edits the files.
-        settings_window(&files, "FrameLimit=90");
+        // From here on the Settings screen edits the files.
+        settings_screen(&files, "FrameLimit=90");
         assert!(!files.package.settings.exists());
         for profile in 0..2 {
             let ini = text_of(&files.ini(profile));
@@ -2161,8 +2362,8 @@ mod tests {
     }
 
     /// A file of the player's with the sections (Play.exe made it ready) and a settings.ini put
-    /// back beside it: while settings.ini is there it is the settings, for Settings.cmd and for
-    /// Play.exe alike. Settings.cmd shows the files with settings.ini's lines over them and writes
+    /// back beside it: while settings.ini is there it is the settings, for the Settings screen and for
+    /// Play.exe alike. The Settings screen shows the files with settings.ini's lines over them and writes
     /// settings.ini; Play.exe moves it in, its lines winning, a key no line names keeping the
     /// file's value.
     #[test]
@@ -2178,8 +2379,8 @@ mod tests {
         }
         std::fs::write(&files.package.settings, "FrameLimit=60\r\nBorderless=0\r\n").unwrap();
         let before = (files.ini(0), files.ini(1));
-        // Settings.cmd, saving what it shows: settings.ini over the files, into settings.ini.
-        settings_window(&files, "");
+        // The Settings screen, saving what it shows: settings.ini over the files, into settings.ini.
+        save_as_shown(&files);
         assert_eq!(
             (files.ini(0), files.ini(1)),
             before,
@@ -2243,9 +2444,9 @@ mod tests {
         };
         assert_eq!(frame_limit(0).as_deref(), Some("60"));
         assert_eq!(frame_limit(1).as_deref(), Some("60"));
-        // Settings.cmd, meanwhile, writes settings.ini, not the files.
+        // The Settings screen, meanwhile, writes settings.ini, not the files.
         drop(held);
-        settings_window(&files, "MenuFrameLimit=90");
+        settings_screen(&files, "MenuFrameLimit=90");
         let written = std::fs::read_to_string(&files.package.settings).unwrap();
         assert!(
             written.contains("\r\nFrameLimit=60\r\n")
@@ -2388,13 +2589,13 @@ mod tests {
         assert!(line.ends_with("kept as they were: NV_THREADS"), "{line}");
     }
 
-    /// Settings.ps1 on the three shapes measured last (measure/ini/repeated-sections.md): a key
+    /// The Settings screen on the three shapes measured last (measure/ini/repeated-sections.md): a key
     /// before any heading (in no section: not read, not written), a heading with text after its
     /// `]` (still `[Display]`) and a key twice in that section (the first line is the one read
     /// and written). It shows what Windows reads and writes as `set_key` does; FalloutPrefs.ini's
-    /// resolution goes into its first `[Display]` the same way, from Play.exe and Settings.cmd.
+    /// resolution goes into its first `[Display]` the same way, from Play.exe and the Settings screen.
     #[test]
-    fn settings_cmd_reads_and_writes_as_windows_on_odd_lines() {
+    fn settings_screen_reads_and_writes_as_windows_on_odd_lines() {
         let files = Files::new("settings-odd", None);
         files.start().unwrap();
         let [game, mods] = files.profiles();
@@ -2416,9 +2617,9 @@ mod tests {
             std::fs::write(&profile.prefs, prefs).unwrap();
         }
         // The window shows V-sync On (the first line): choosing On writes nothing.
-        settings_window(&files, "VSync=On");
+        settings_screen(&files, "VSync=On");
         assert_eq!(text_of(&files.ini(0)), ini);
-        settings_window(&files, "VSync=Off;Resolution=1920x1080");
+        settings_screen(&files, "VSync=Off;Resolution=1920x1080");
         let want = game_ini::set_key(&ini, "Display", "iPresentInterval", "0");
         assert!(want.starts_with("iPresentInterval=0\r\n"));
         assert!(want.contains("[Display] ; tweaks\r\niPresentInterval=0\r\nipresentinterval=0\r\n"));
@@ -2444,11 +2645,11 @@ mod tests {
         );
     }
 
-    /// Settings.ps1 on a file with a repeated `[Display]` section (a hand-edited file): it shows
+    /// The Settings screen on a file with a repeated `[Display]` section (a hand-edited file): it shows
     /// and changes the first section's key only, as Windows reads and writes it, the same lines as
     /// `set_key`; the later section stays byte for byte.
     #[test]
-    fn settings_cmd_uses_the_first_section_of_a_repeated_name() {
+    fn settings_screen_uses_the_first_section_of_a_repeated_name() {
         let files = Files::new("settings-repeated", None);
         files.start().unwrap();
         let [game, mods] = files.profiles();
@@ -2464,13 +2665,13 @@ mod tests {
         for profile in [&game, &mods] {
             std::fs::write(profile.fallout_ini(), bytes_of(&ini)).unwrap();
         }
-        settings_window(&files, "");
+        save_as_shown(&files);
         assert_eq!(
             text_of(&files.ini(0)),
             ini,
             "nothing chosen, nothing written"
         );
-        settings_window(&files, "VSync=Off");
+        settings_screen(&files, "VSync=Off");
         let want = game_ini::set_key(&ini, "Display", "iPresentInterval", "0");
         assert!(want.ends_with("\r\n[Display]\r\niPresentInterval=0\r\n"));
         assert_eq!(
@@ -2482,11 +2683,11 @@ mod tests {
         }
     }
 
-    /// Settings.ps1 on a file it must change in place whatever its shape: LF line ends, a byte
+    /// The Settings screen on a file it must change in place whatever its shape: LF line ends, a byte
     /// that is not UTF-8, a key the player commented out and no `[Display]` section. Its lines are
-    /// the ones Play.exe's own `set_key` makes, in Settings.ps1's order; every other byte stays.
+    /// the ones Play.exe's own `set_key` makes, in the screen's order; every other byte stays.
     #[test]
-    fn settings_cmd_edits_any_shape_of_file_as_play_exe_would() {
+    fn settings_screen_edits_any_shape_of_file_as_play_exe_would() {
         let files = Files::new("settings-shapes", None);
         files.start().unwrap();
         let [game, mods] = files.profiles();
@@ -2496,7 +2697,7 @@ mod tests {
             std::fs::write(profile.fallout_ini(), bytes_of(&ini)).unwrap();
         }
         let prefs_before = (files.prefs(0), files.prefs(1));
-        settings_window(&files, "VSync=Off;FrameLimit=60;NV_RENDER_THREAD=0");
+        settings_screen(&files, "VSync=Off;FrameLimit=60;NV_RENDER_THREAD=0");
         let mut want = ini.clone();
         for (section, key, value) in [
             ("Display", "iPresentInterval", "0"),
@@ -2531,11 +2732,10 @@ mod tests {
             .share_mode(1 | 2)
             .open(game.fallout_ini())
             .unwrap();
-        let (saved, errors) = run_settings(&files, "FrameLimit=60");
-        assert!(!saved, "the script ends with a failure");
-        assert!(errors.contains("The settings were not saved."), "{errors}");
-        // The path's own ASCII end: the scratch folder above it may have letters the error
-        // stream's code page shows otherwise.
+        let errors = choose_settings(&files, "FrameLimit=60")
+            .unwrap_err()
+            .to_string();
+        // The screen's "Not saved:" note names the file.
         assert!(
             errors.contains("game\\Documents\\My Games\\FalloutNV\\Fallout.ini"),
             "{errors}"
@@ -2547,7 +2747,7 @@ mod tests {
             part.push(".part");
             assert!(!Path::new(&part).exists(), "no .part left");
         }
-        settings_window(&files, "FrameLimit=60");
+        settings_screen(&files, "FrameLimit=60");
         for profile in 0..2 {
             assert_eq!(
                 settings::ini_value(
@@ -2563,7 +2763,7 @@ mod tests {
     /// The played profile's Fallout.ini can't take our sections (UTF-16 here; or there was
     /// nothing to make it from): settings.ini stays, its unused lines are named, the game's own
     /// full-screen mode is kept off by settings.ini's choice, and the game gets the player's
-    /// choices as variables, the defaults for what settings.ini doesn't say. Settings.cmd keeps
+    /// choices as variables, the defaults for what settings.ini doesn't say. The Settings screen keeps
     /// writing settings.ini for it.
     #[test]
     fn a_profile_without_the_sections_gets_the_choices_as_variables() {
@@ -2632,9 +2832,9 @@ mod tests {
         .collect();
         want.sort();
         assert_eq!(got, want);
-        // Settings.cmd: Window chosen goes into settings.ini, and the next start keeps the game's
+        // The Settings screen: Window chosen goes into settings.ini, and the next start keeps the game's
         // full-screen mode as the game's files say (no push).
-        settings_window(&files, "Borderless=0");
+        settings_screen(&files, "Borderless=0");
         assert_eq!(files.ini(0), player);
         let written = std::fs::read_to_string(&files.package.settings).unwrap();
         assert!(
@@ -2646,10 +2846,10 @@ mod tests {
         assert!(!files.prefs(0).contains("bFull Screen"));
     }
 
-    /// Settings.cmd's Renderer: Direct3D 9 chosen goes into both profiles' `sRenderer`, Vulkan back
+    /// The Settings screen's Renderer: Direct3D 9 chosen goes into both profiles' `sRenderer`, Vulkan back
     /// again; the generated sections start at the game's default, Vulkan.
     #[test]
-    fn settings_cmd_sets_the_renderer() {
+    fn settings_screen_sets_the_renderer() {
         let files = Files::new("settings-renderer", None);
         files.start().unwrap();
         let renderer = |files: &Files, profile| {
@@ -2662,7 +2862,7 @@ mod tests {
             ("Renderer=vulkan", "vulkan"),
         ] {
             if !choose.is_empty() {
-                settings_window(&files, choose);
+                settings_screen(&files, choose);
             }
             for profile in 0..2 {
                 assert_eq!(renderer(&files, profile).as_deref(), Some(want), "{choose}");
@@ -2670,17 +2870,17 @@ mod tests {
         }
     }
 
-    /// Settings.cmd edits the files in place only when every profile's Fallout.ini has our
+    /// The Settings screen edits the files in place only when every profile's Fallout.ini has our
     /// sections: with the mods profile's file missing it writes settings.ini, and Play.exe puts
     /// the choice into both profiles, not its defaults into one.
     #[test]
-    fn settings_cmd_edits_the_files_only_when_every_profile_has_the_sections() {
+    fn settings_screen_edits_the_files_only_when_every_profile_has_the_sections() {
         let files = Files::new("one-profile", None);
         files.start().unwrap();
         let [_, mods] = files.profiles();
         std::fs::remove_file(mods.fallout_ini()).unwrap();
         let game_before = files.ini(0);
-        settings_window(&files, "FrameLimit=90");
+        settings_screen(&files, "FrameLimit=90");
         assert_eq!(files.ini(0), game_before, "not edited in place");
         assert!(std::fs::read_to_string(&files.package.settings)
             .unwrap()
@@ -2699,11 +2899,11 @@ mod tests {
         assert!(!files.package.settings.exists());
     }
 
-    /// A file Settings.cmd can't read stops it with the message, before it writes anything: it
-    /// must not take the file for one without the settings and save defaults over the player's
-    /// choices.
+    /// A file the Settings screen can't read stops the save with the file named, before anything
+    /// is written: it must not take the file for one without the settings and save defaults over
+    /// the player's choices.
     #[test]
-    fn a_file_settings_cmd_cannot_read_stops_it_before_anything_is_written() {
+    fn a_file_the_settings_screen_cannot_read_stops_it_before_anything_is_written() {
         use std::os::windows::fs::OpenOptionsExt;
         let files = Files::new("settings-unreadable", None);
         files.start().unwrap();
@@ -2714,10 +2914,14 @@ mod tests {
             .share_mode(0)
             .open(game.fallout_ini())
             .unwrap();
-        let (saved, errors) = run_settings(&files, "FrameLimit=60");
+        let errors = choose_settings(&files, "FrameLimit=60")
+            .unwrap_err()
+            .to_string();
         drop(held);
-        assert!(!saved);
-        assert!(errors.contains("The settings were not saved."), "{errors}");
+        assert!(
+            errors.contains("game\\Documents\\My Games\\FalloutNV\\Fallout.ini"),
+            "{errors}"
+        );
         assert!(!files.package.settings.exists(), "no settings.ini written");
         assert_eq!(
             (files.ini(0), files.ini(1), files.prefs(0), files.prefs(1)),
@@ -2725,84 +2929,37 @@ mod tests {
         );
     }
 
-    /// distribution/Settings.ps1 run in the scratch package with no window (`NV_RS_NO_WINDOWS`),
-    /// `choose` its choices (`NV_RS_SETTINGS_CHOOSE`): how it ended and what it wrote to its
-    /// error stream.
-    fn run_settings(files: &Files, choose: &str) -> (bool, String) {
-        let script = files.package.root.join("Settings.ps1");
-        std::fs::create_dir_all(&files.package.root).unwrap();
-        std::fs::copy(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../distribution/Settings.ps1"),
-            &script,
-        )
-        .unwrap();
-        let mut command = Command::new("powershell");
-        command
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-            ])
-            .arg(&script)
-            .env("NV_RS_NO_WINDOWS", "1")
-            .env("NV_RS_SETTINGS_CHOOSE", choose);
-        // A PowerShell that hangs fails the test instead of holding it (and CI) for hours.
-        let out = match run_limited(&mut command, Duration::from_secs(120)) {
-            Limited::Done(out) => out,
-            Limited::TimedOut => panic!("Settings.ps1 did not end within 2 minutes"),
-            Limited::Failed(e) => panic!("Windows PowerShell could not start: {e}"),
-        };
-        let said = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        (out.status.success(), own_errors(&said))
-    }
-
-    /// What a PowerShell script itself wrote to the error stream. On a PC where Windows
-    /// PowerShell has not run before, PowerShell's own "Preparing modules for first use" progress
-    /// arrives there too, as a CLIXML document with no error record in it: that is not the
-    /// script's: that block is taken out and the rest kept. A block with an error record stays.
-    fn own_errors(said: &str) -> String {
-        let Some(rest) = said.strip_prefix("#< CLIXML") else {
-            return said.to_string();
-        };
-        let end = rest
-            .find("</Objs>")
-            .map_or(rest.len(), |at| at + "</Objs>".len());
-        if rest[..end].contains("S=\"Error\"") {
-            return said.to_string();
+    /// The launcher's Settings screen ([`crate::profiles`], which the old Settings.cmd tests moved to)
+    /// choosing `choose` in the scratch package: settings.ini's names and values, `;` between
+    /// them, each saved at once as the screen saves it. The first save that fails ends it.
+    fn choose_settings(files: &Files, choose: &str) -> std::io::Result<()> {
+        let profiles = crate::profiles::Profiles::at(&files.package.userdata);
+        for pair in choose.split(';').filter(|p| !p.is_empty()) {
+            let (name, value) = pair.split_once('=').unwrap();
+            let (row, choice) = crate::profiles::choice_for(name, value).unwrap();
+            profiles.save(row, &choice)?;
         }
-        rest[end..].trim().to_string()
+        Ok(())
     }
 
-    /// [`run_settings`], which must save without a word.
-    fn settings_window(files: &Files, choose: &str) {
-        let (saved, errors) = run_settings(files, choose);
-        assert!(saved && errors.is_empty(), "{errors}");
+    /// [`choose_settings`], which must save.
+    fn settings_screen(files: &Files, choose: &str) {
+        choose_settings(files, choose).unwrap();
     }
 
-    #[test]
-    fn powershells_own_progress_is_not_a_script_error() {
-        let progress = "#< CLIXML\r\n<Objs Version=\"1.1.0.1\" xmlns=\"http://schemas.microsoft.com/powershell/2004/04\"><Obj S=\"progress\" RefId=\"0\"><TN RefId=\"0\"><T>System.Management.Automation.PSCustomObject</T></TN><MS><I64 N=\"SourceId\">1</I64><PR N=\"Record\"><AV>Preparing modules for first use.</AV></PR></MS></Obj></Objs>";
-        assert_eq!(own_errors(progress), "");
-        let error = "#< CLIXML\r\n<Objs><S S=\"Error\">boom</S></Objs>";
-        assert_eq!(own_errors(error), error);
-        assert_eq!(
-            own_errors("The settings were not saved."),
-            "The settings were not saved."
-        );
-        assert_eq!(own_errors(""), "");
-        // The script's own words after the block are kept.
-        assert_eq!(
-            own_errors(&format!("{progress}\r\nThe settings were not saved.")),
-            "The settings were not saved."
-        );
+    /// Every row of the Settings screen chosen as it shows it (saving what it shows).
+    fn save_as_shown(files: &Files) {
+        let profiles = crate::profiles::Profiles::at(&files.package.userdata);
+        let shown = profiles.shown().unwrap();
+        for row in crate::settings::ROWS {
+            profiles.save(row, &row.current(&shown)).unwrap();
+        }
     }
 
     #[test]
-    fn settings_cmd_before_the_first_start_writes_settings_ini_for_play_exe_to_move() {
+    fn settings_screen_before_the_first_start_writes_settings_ini_for_play_exe_to_move() {
         let files = Files::new("settings-first", None);
-        settings_window(
+        settings_screen(
             &files,
             "Preset=vanilla;FrameLimit=60;NV_RENDER_THREAD=0;NV_SHOW_FPS=1",
         );
@@ -2832,14 +2989,14 @@ mod tests {
     }
 
     #[test]
-    fn settings_cmd_changes_only_its_own_lines_in_both_profiles() {
+    fn settings_screen_changes_only_its_own_lines_in_both_profiles() {
         let files = Files::new("settings-files", None);
         files.start().unwrap();
         let [game, mods] = files.profiles();
         // Saving what it shows changes no byte.
         let before: Vec<(Vec<u8>, String)> =
             (0..2).map(|p| (files.ini(p), files.prefs(p))).collect();
-        settings_window(&files, "");
+        save_as_shown(&files);
         let after: Vec<(Vec<u8>, String)> =
             (0..2).map(|p| (files.ini(p), files.prefs(p))).collect();
         assert_eq!(after, before);
@@ -2848,7 +3005,7 @@ mod tests {
         let mut p = std::fs::metadata(mods.fallout_ini()).unwrap().permissions();
         p.set_readonly(true);
         std::fs::set_permissions(mods.fallout_ini(), p).unwrap();
-        settings_window(
+        settings_screen(
             &files,
             "Borderless=0;Preset=vanilla;FrameLimit=144;VSync=Off;Resolution=1280x720;AntiAliasing=Off;NV_SHOW_FPS=1;NV_THREADS=stepped",
         );
