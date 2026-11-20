@@ -6830,8 +6830,8 @@ pub(crate) const VECTOR_SCALE: u32 = 0x00439180;
 pub(crate) const WEAPON_FORM_GROUP_KIND: u32 = 0x0051f610;
 /// Word holding the weapon node name.
 pub(crate) const WEAPON_NODE_NAME: u32 = 0x01188b78;
-/// Player weapon flag setter (name unconfirmed).
-pub(crate) const WEAPON_PLAYER_FLAG: u32 = 0x00524d10;
+/// The player's third-person byte (+0x64B, `is3rdPerson` in xNVSE's headers), `thiscall`.
+pub(crate) const PLAYER_IS_THIRD_PERSON: u32 = 0x00524d10;
 /// Sound form of a weapon (name unconfirmed).
 pub(crate) const WEAPON_SOUND_FORM: u32 = 0x00522500;
 /// Sound record of a sound form `(buffer)` (name unconfirmed).
@@ -10738,7 +10738,7 @@ fn node_group(e: &mut Engine, node: u32) -> i32 {
 /// [`middle_high_process_force_weapon_drawn_sheathed`]: the sound handle
 /// kept in the actor's extra list is created when missing (flags from the
 /// weapon's sound `005e39b0`, 0x240000 for the player or 0 for others,
-/// 0x40000 flipped when `00524d10` of the player is true), then started
+/// 0x40000 flipped while the player is in third person, `00524d10`), then started
 /// when drawing (unless playing) or stopped when sheathing (if playing)
 /// and stored back (`ExtraDataList::SetWeaponIdleSound`).
 fn weapon_idle_sound(e: &mut Engine, draw: u8, weapon: u32, actor: u32) {
@@ -10773,10 +10773,11 @@ fn weapon_idle_sound(e: &mut Engine, draw: u8, weapon: u32, actor: u32) {
             };
             // lStewieAl's Tweaks' row S0039 (`fixWeaponIdleSoundsHavingInfiniteRange`,
             // `SafeWrite16(0x923820, 0x1CEB)`): a jump over this test, so the 0x40000 flag is
-            // never flipped on (for an NPC's sound it was, while `00524d10` of the player held).
+            // never flipped: an NPC's sound no longer gets it while the player is in third person
+            // (`00524d10`, the player's byte +0x64B), and the player's own sound keeps it there.
             if !e.stewie(engine_core::extend::stewie::WEAPON_IDLE_SOUND_RANGE) {
                 let player = e.global::<u32>(PLAYER);
-                if e.call(WEAPON_PLAYER_FLAG, &args![player]).bool() {
+                if e.call(PLAYER_IS_THIRD_PERSON, &args![player]).bool() {
                     flags ^= 0x0004_0000;
                 }
             }
@@ -12290,7 +12291,7 @@ mod tests {
         WEAPON_FORM_00522470,
         WEAPON_FORM_005224C0,
         WEAPON_FORM_GROUP_KIND,
-        WEAPON_PLAYER_FLAG,
+        PLAYER_IS_THIRD_PERSON,
         WEAPON_SOUND_FORM,
         WEAPON_SOUND_RECORD,
         WORD_14,
@@ -15616,9 +15617,10 @@ mod tests {
     }
 
     /// S0039 (`fixWeaponIdleSoundsHavingInfiniteRange`): the flags a new weapon idle sound is
-    /// made with (the sound's own 0x10, 2, and 0x240000 for the player), while `00524d10` of the
-    /// player holds. Off, 0x40000 is flipped: an NPC's sound gets it (heard at any distance) and
-    /// the player's loses it; on, it is never flipped and the test is not asked.
+    /// made with (the sound's own 0x10, 2, and 0x240000 for the player), while the player is in
+    /// third person (`00524d10`, its byte +0x64B). Off, 0x40000 is flipped: an NPC's sound gets it
+    /// (heard at any distance) and the player's own loses it (placed in the world); on, it is never
+    /// flipped (the player's own sound plays as in first person) and the test is not asked.
     #[test]
     fn s0039_an_npcs_weapon_idle_sound_keeps_its_range() {
         for (on, is_player, player_flag, flags) in [
@@ -15638,7 +15640,9 @@ mod tests {
             e.register(WEAPON_SOUND_FORM, |_, _| ret(0x5600));
             e.register(AUDIO_MAP_00511840, |_, _| ret(0x5700));
             e.register(SOUND_BASE_FLAGS, |_, _| ret(0x10));
-            e.register_double(WEAPON_PLAYER_FLAG, move |_, _| ret(u32::from(player_flag)));
+            e.register_double(PLAYER_IS_THIRD_PERSON, move |_, _| {
+                ret(u32::from(player_flag))
+            });
             weapon_idle_sound(&mut e, 1, 0x7000, a);
             let made = calls(&e, AUDIO_GET_SOUND_HANDLE_BY_FILENAME);
             assert_eq!(made.len(), 1);
@@ -15646,7 +15650,7 @@ mod tests {
                 made[0][3], flags,
                 "on {on} player {is_player} flag {player_flag}"
             );
-            let asked = calls(&e, WEAPON_PLAYER_FLAG);
+            let asked = calls(&e, PLAYER_IS_THIRD_PERSON);
             assert_eq!(asked.len(), usize::from(!on));
             assert_eq!(count(&e, SOUND_HANDLE_PLAY), 1);
         }

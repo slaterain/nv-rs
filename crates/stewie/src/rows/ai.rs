@@ -12,7 +12,7 @@ pub const ROWS: &[Row] = &[
         plan: "S0039",
         key: "bFixWeaponIdleSoundsHavingInfiniteRange",
         tweaks: None,
-        summary: "NPCs' weapon idle sounds (a minigun's spin, a flamer's pilot light) are no longer heard from any distance while you are in first person",
+        summary: "while you are in third person, NPCs' weapon idle sounds (a minigun's spin, a flamer's pilot light) are no longer heard from any distance, and your own weapon's idle sound plays as in first person instead of placed in the world",
     },
     Row {
         bit: stewie::SPECTATOR_THREAT_WEAPON_TYPE,

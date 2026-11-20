@@ -50,7 +50,8 @@ pub const AGRO_RADIUS_HOLSTER: Row = Row::share(AI_FIXES, AI_FIXES_END, 9);
 /// crash when the actor has no package.
 pub const DIALOGUE_ACTIVATE_NO_PACKAGE: Row = Row::share(AI_FIXES, AI_FIXES_END, 10);
 /// S0039 `fixWeaponIdleSoundsHavingInfiniteRange` (`MiddleHighProcess::ForceWeaponDrawnSheathed`
-/// `009231d0` (`0x923820`)): an NPC's weapon idle sound is no longer heard from anywhere.
+/// `009231d0` (`0x923820`)): in third person an NPC's weapon idle sound is no longer heard from
+/// anywhere, and the player's own plays as in first person.
 pub const WEAPON_IDLE_SOUND_RANGE: Row = Row::share(AI_FIXES, AI_FIXES_END, 11);
 /// S0171 `KnockDownHandGripFix` (`MiddleHighProcess::UpdateKnockState` `00920150` (`0x920A91`)):
 /// getting up from a knockdown queues the hand-grip idle.
