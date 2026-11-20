@@ -27,19 +27,42 @@
 //!   its end) takes what that one takes. Where the last instruction is neither, the count is not
 //!   read and the slot says so.
 //!
-//! The two checks:
+//! The checks (the first word of each output line):
 //!
 //! * **own**: a call on `this` in a unit that names vtables (a `const NAME: u32` whose value is
 //!   the start of a table): the words must be what one of those tables takes at that slot;
 //! * **none**: any other call: reported only when no table in the exe (and no table of methods the
 //!   platform crate registers for a system object, such as the Direct3D device) takes that many
-//!   words at that slot.
+//!   words at that slot;
+//! * **group**: calls on one object (one binding of its name) in one function that no single
+//!   table takes together;
+//! * **typed**: a call on an object that a direct call earlier in the function handed, as its
+//!   first word, to a function storing a table at the object's start (its constructor): held to
+//!   that table;
+//! * **table**: a call written in two steps (`let t = e.mem.u32(obj); let f = e.mem.u32(t +
+//!   SLOT); e.call(f, ..)`) whose first word is `t`, the table, where the object belongs;
+//! * **unread** (with `--unread`): a `.vcall` whose slot is not a number or a constant of the
+//!   unit, or whose list is not written in place, with the reason.
 //!
 //! An item of an `args![..]` list counts as two words when its text says so (an `f64`, `u64` or
-//! `i64` literal, cast, conversion, `let` or parameter; a float literal without a suffix), else
-//! as one. A hit is a place to look at in the exe, not a verdict: an `f64` the text does not show,
-//! a slot whose function is variadic, or a `this` of a class the unit does not name all read as
-//! hits.
+//! `i64` literal; a cast to one at the item's end; a read `.f64(..)`, `.u64(..)` or `.i64(..)`
+//! ending the item; a path `f64::..`; `.st0`; a float literal without a suffix; a plain name
+//! declared with one of those types in the function's text, as a parameter or as a `let` with a
+//! type annotation), else as one. A hit is a place to look at in the exe, not a verdict: an `f64`
+//! the text does not show, a slot whose function is variadic, or a `this` of a class the unit
+//! does not name all read as hits.
+//!
+//! What a clean run does not prove:
+//!
+//! * calls whose slot is a variable are not checked (`--unread` lists them); a wrapper that takes
+//!   the slot as a parameter is one such call, so its callers' slots are not checked;
+//! * two-step calls in any shape other than the one above are not read at all;
+//! * slots that are not a multiple of 4 are skipped;
+//! * a value whose words the text does not show (a two-word `f64` in a name of unknown type, a
+//!   16-byte value) counts as one word: that can hide a call with too many words as well as make
+//!   a false hit;
+//! * **none** compares with every table at that slot: it finds only counts that no class takes
+//!   there, so most wrong counts on an object of unknown class pass it.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
@@ -171,7 +194,10 @@ pub fn parse_map(text: &str) -> BTreeMap<u32, u32> {
             u32::from_str_radix(address.trim(), 16),
             size.trim().parse::<u32>(),
         ) {
-            map.insert(address, size);
+            // An empty entry, or one running past the address space, is no function.
+            if size > 0 && address.checked_add(size).is_some() {
+                map.insert(address, size);
+            }
         }
     }
     map
@@ -184,11 +210,23 @@ fn ret_at_end(code: &[u8]) -> Option<u32> {
         end -= 1;
     }
     let code = &code[..end];
-    match *code {
-        [.., 0xc2, low, 0] if low % 4 == 0 && low <= 0x60 => Some(u32::from(low) / 4),
-        [.., 0xc3] => Some(0),
-        _ => None,
+    let words = match *code {
+        [.., 0xc2, low, 0] if low % 4 == 0 && low <= 0x60 => u32::from(low) / 4,
+        [.., 0xc3] => 0,
+        _ => return None,
+    };
+    // The bytes may be the operand of a jump that ends the function instead: `EB C3` (a short
+    // jump, also `7x` and `E3`, whose one-byte operand is the last byte) or `E9 xx C2 08 00` (a
+    // near jump, also `0F 8x`, whose four-byte operand ends the code). Not read then.
+    let short = |b: u8| b == 0xeb || b == 0xe3 || (0x70..=0x7f).contains(&b);
+    let last_is_short_operand = code.last() == Some(&0xc3) && end >= 2 && short(code[end - 2]);
+    let near_operand = end >= 5
+        && (code[end - 5] == 0xe9
+            || (end >= 6 && code[end - 6] == 0x0f && code[end - 5] & 0xf0 == 0x80));
+    if last_is_short_operand || near_operand {
+        return None;
     }
+    Some(words)
 }
 
 /// The stack words every `RET` after an epilogue instruction in `code` pops (`POP` of a saved
@@ -248,7 +286,10 @@ fn stack_words_from(
     }
     // A map size can stop short of the function's last instructions: read up to the next
     // function's start instead (the padding between them is skipped).
-    let next = functions.range(addr + 1..).next().map(|(&a, _)| a)?;
+    let next = functions
+        .range(addr.saturating_add(1)..)
+        .next()
+        .map(|(&a, _)| a)?;
     let to_next = next - addr;
     (to_next > size && to_next - size <= 64)
         .then(|| words_in(image, functions, addr, to_next, depth))
@@ -455,14 +496,18 @@ pub struct Site {
 #[derive(Default, Debug)]
 pub struct Unit {
     pub constants: HashMap<String, u32>,
+    /// The constants declared `pub` (another file can import them).
+    pub public: HashSet<String>,
     pub sites: Vec<Site>,
-    /// Calls whose slot or list is not written in place: line and reason.
-    pub unread: Vec<(usize, &'static str)>,
+    /// Calls whose slot or list is not written in place: line, reason and the call on one line.
+    pub unread: Vec<(usize, &'static str, String)>,
     /// Calls written in two steps that hand the table they read the target from to the target
     /// as its first word (the object, not its table, is `this`).
     pub passes_table: Vec<Site>,
     /// Direct calls with a constant callee and at least one word.
     pub direct: Vec<Direct>,
+    /// `.vcall`s whose slot the unit's constants do not give.
+    pub pending: Vec<Pending>,
 }
 
 /// A direct call `.call(CALLEE, &args![first, ..])`.
@@ -486,7 +531,14 @@ fn test_start(path: &str, text: &str) -> usize {
     while let Some(found) = text[from..].find("#[cfg(test)]") {
         let at = from + found;
         let rest = text[at + "#[cfg(test)]".len()..].trim_start();
-        let rest = rest.strip_prefix("pub ").unwrap_or(rest).trim_start();
+        // `pub mod`, `pub(crate) mod`, `pub(super) mod` ..
+        let rest = match rest.strip_prefix("pub") {
+            Some(after) if after.starts_with('(') => after
+                .find(')')
+                .map_or(rest, |close| after[close + 1..].trim_start()),
+            Some(after) if after.starts_with(' ') => after.trim_start(),
+            _ => rest,
+        };
         if let Some(rest) = rest.strip_prefix("mod ") {
             let name_end = rest
                 .find(|c: char| !c.is_alphanumeric() && c != '_')
@@ -500,17 +552,176 @@ fn test_start(path: &str, text: &str) -> usize {
     text.len()
 }
 
-/// A `u32` literal: hex or decimal, with underscores and an optional `u32` suffix.
+/// A `u32` literal: hex or decimal, with underscores and an optional `u32` or `usize` suffix.
 fn number(text: &str) -> Option<u32> {
     let text = text.trim();
-    let text = text.strip_suffix("u32").unwrap_or(text).replace('_', "");
+    let text = text.strip_suffix("u32").unwrap_or(text);
+    let text = text.strip_suffix("usize").unwrap_or(text).replace('_', "");
     match text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
         Some(hex) => u32::from_str_radix(hex, 16).ok(),
         None => text.parse().ok(),
     }
 }
 
-/// Every `const NAME: u32 = literal;` of `text`.
+/// The value of a constant expression: numbers and names of `consts` joined by `+` and `*`
+/// (with brackets and a trailing `as u32` / `as usize`), as a slot is often written
+/// (`4 * 12`, `BASE_SLOT + 8`).
+fn eval(expr: &str, consts: &dyn Lookup) -> Option<u32> {
+    let mut expr = expr.trim();
+    for cast in [" as u32", " as usize"] {
+        expr = expr.strip_suffix(cast).unwrap_or(expr).trim();
+    }
+    if let Some(inner) = expr.strip_prefix('(').and_then(|e| e.strip_suffix(')')) {
+        if inside(expr, 1).map(str::len) == Some(inner.len()) {
+            return eval(inner, consts);
+        }
+    }
+    let split = |text: &str, op: u8| -> Vec<String> {
+        let mut parts = Vec::new();
+        let (mut depth, mut start) = (0i32, 0);
+        for (i, b) in text.bytes().enumerate() {
+            match b {
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                _ if b == op && depth == 0 => {
+                    parts.push(text[start..i].to_string());
+                    start = i + 1;
+                }
+                _ => {}
+            }
+        }
+        parts.push(text[start..].to_string());
+        parts
+    };
+    let sum = split(expr, b'+');
+    if sum.len() > 1 {
+        return sum
+            .iter()
+            .try_fold(0u32, |a, t| a.checked_add(eval(t, consts)?));
+    }
+    let product = split(expr, b'*');
+    if product.len() > 1 {
+        return product
+            .iter()
+            .try_fold(1u32, |a, t| a.checked_mul(eval(t, consts)?));
+    }
+    // A path (`slot::DRAW`, `crate::vtable::IS_ACTOR`) names the constant by its last part.
+    let name = expr.rsplit("::").next().unwrap_or(expr);
+    number(expr).or_else(|| consts.value(name))
+}
+
+/// The last `for PATTERN in [..]` of `function` whose pattern binds `name` (alone or in a
+/// tuple): where it is, and the value of `name` in each item of the list, as written.
+fn for_values(function: &str, name: &str) -> Option<(usize, Vec<String>)> {
+    let mut from = function.len();
+    while let Some(at) = function[..from].rfind("for ") {
+        from = at;
+        let rest = &function[at + "for ".len()..];
+        let Some(in_at) = rest.find(" in ") else {
+            continue;
+        };
+        let pattern = rest[..in_at].trim();
+        let list = rest[in_at + " in ".len()..].trim_start();
+        let position =
+            if let Some(tuple) = pattern.strip_prefix('(').and_then(|p| p.strip_suffix(')')) {
+                pieces(tuple).iter().position(|p| p == name)
+            } else if pattern == name {
+                None
+            } else {
+                continue;
+            };
+        if pattern.starts_with('(') && position.is_none() {
+            continue;
+        }
+        let items = list.strip_prefix('[').and_then(|l| inside(l, 0))?;
+        let values = pieces(items)
+            .into_iter()
+            .map(|item| match position {
+                Some(k) => item
+                    .strip_prefix('(')
+                    .and_then(|t| t.strip_suffix(')'))
+                    .and_then(|t| pieces(t).into_iter().nth(k))
+                    .unwrap_or_default(),
+                None => item,
+            })
+            .collect();
+        return Some((at, values));
+    }
+    None
+}
+
+/// The slots an expression can give: its value; each value of a `for`'s list (`[A|B|C]`, from
+/// [`for_values`]); both arms' of `if .. { A } else { B }`; every arm's of a `match` whose arms
+/// are all constants.
+fn slot_values(expr: &str, consts: &dyn Lookup) -> Vec<u32> {
+    if let Some(value) = eval(expr, consts) {
+        return vec![value];
+    }
+    if let Some(list) = expr.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+        let values: Option<Vec<u32>> = list.split('|').map(|v| eval(v, consts)).collect();
+        return values.unwrap_or_default();
+    }
+    if let Some(rest) = expr.trim().strip_prefix("match") {
+        let Some(open) = rest.find('{') else {
+            return Vec::new();
+        };
+        let Some(arms) = inside(rest, open + 1) else {
+            return Vec::new();
+        };
+        let values: Option<Vec<u32>> = pieces(arms)
+            .iter()
+            .map(|arm| arm.split_once("=>").and_then(|(_, v)| eval(v, consts)))
+            .collect();
+        return values.unwrap_or_default();
+    }
+    // `if` with or without the space (a `let`'s expression is read with its spaces removed).
+    let expr = expr.trim();
+    let Some(rest) = expr.strip_prefix("if").filter(|_| expr.contains("else")) else {
+        return Vec::new();
+    };
+    let Some(open) = rest.find('{') else {
+        return Vec::new();
+    };
+    let Some(first) = inside(rest, open + 1) else {
+        return Vec::new();
+    };
+    let after = rest[open + 1 + first.len() + 1..].trim_start();
+    let Some(second) = after
+        .strip_prefix("else")
+        .map(str::trim_start)
+        .and_then(|a| a.strip_prefix('{'))
+        .and_then(|a| inside(a, 0))
+    else {
+        return Vec::new();
+    };
+    match (eval(first, consts), eval(second, consts)) {
+        (Some(a), Some(b)) => vec![a, b],
+        _ => Vec::new(),
+    }
+}
+
+/// Names to values for [`eval`]: one map, or a unit's own constants before the whole tree's.
+trait Lookup {
+    fn value(&self, name: &str) -> Option<u32>;
+}
+
+impl Lookup for HashMap<String, u32> {
+    fn value(&self, name: &str) -> Option<u32> {
+        self.get(name).copied()
+    }
+}
+
+/// Maps asked in order, the first that has the name answering.
+struct Chain<'a>(Vec<&'a HashMap<String, u32>>);
+
+impl Lookup for Chain<'_> {
+    fn value(&self, name: &str) -> Option<u32> {
+        self.0.iter().find_map(|map| map.get(name)).copied()
+    }
+}
+
+/// Every `const NAME: TYPE = expression;` of `text` with an integer type and a value [`eval`]
+/// reads (from literals and the constants before it).
 fn constants(text: &str) -> HashMap<String, u32> {
     let mut out = HashMap::new();
     let mut from = 0;
@@ -523,18 +734,38 @@ fn constants(text: &str) -> HashMap<String, u32> {
         if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
             continue;
         }
-        let Some(after) = rest[colon + 1..].trim_start().strip_prefix("u32") else {
+        let ty = rest[colon + 1..].trim_start();
+        let Some(after) = ["u32", "usize", "i32", "u16", "u8"]
+            .iter()
+            .find_map(|t| ty.strip_prefix(t))
+        else {
             continue;
         };
         let Some(after) = after.trim_start().strip_prefix('=') else {
             continue;
         };
         let Some(end) = after.find(';') else { continue };
-        if let Some(value) = number(&after[..end]) {
+        if let Some(value) = eval(&after[..end], &out) {
             out.insert(name.to_string(), value);
         }
     }
     out
+}
+
+/// The names of `constants` declared `pub` (`pub(crate)` ..) in `text`: the ones other files of
+/// the crate can import.
+fn public_constants(text: &str, constants: &HashMap<String, u32>) -> HashSet<String> {
+    constants
+        .keys()
+        .filter(|name| {
+            let pattern = format!("const {name}:");
+            text.match_indices(&pattern).any(|(at, _)| {
+                let line_start = text[..at].rfind('\n').map_or(0, |i| i + 1);
+                text[line_start..at].trim_start().starts_with("pub")
+            })
+        })
+        .cloned()
+        .collect()
 }
 
 /// The text between the bracket before `text[open..]` and its match, strings skipped; `open` is
@@ -700,10 +931,14 @@ fn item_words(item: &str, before: &str) -> u32 {
 
 /// Reads a unit: its constants and every `.vcall(object, slot, list)` before its tests.
 pub fn read_unit(path: &str, text: &str) -> Unit {
-    let constants = constants(text);
     let end = test_start(path, text);
+    // The tests' constants are left out: stand-ins' made-up addresses would clash with the
+    // names the code uses.
+    let constants = constants(&text[..end]);
+    let public = public_constants(&text[..end], &constants);
     let mut unit = Unit {
         constants,
+        public,
         ..Unit::default()
     };
     let mut from = 0;
@@ -713,28 +948,30 @@ pub fn read_unit(path: &str, text: &str) -> Unit {
         };
         let open = from + found + ".vcall(".len();
         from = open;
+        // A call in a comment (a doc's example) is no call.
+        let line_start = text[..open].rfind('\n').map_or(0, |i| i + 1);
+        if text[line_start..open].contains("//") {
+            continue;
+        }
         let line = 1 + text[..open].matches('\n').count();
         let Some(call) = inside(text, open) else {
             continue;
         };
         let parts = pieces(call);
+        let shown = format!(".vcall({})", parts.join(", "));
         if parts.len() != 3 {
-            unit.unread.push((line, "not (object, slot, list)"));
+            unit.unread.push((line, "not (object, slot, list)", shown));
             continue;
         }
-        let slot = number(&parts[1]).or_else(|| unit.constants.get(&parts[1]).copied());
-        let Some(slot) = slot else {
-            unit.unread.push((line, "the slot is not a number"));
-            continue;
-        };
         let list = parts[2].trim_start_matches('&').trim_start();
         let list = list.strip_prefix("args!").unwrap_or(list).trim_start();
         let Some(items) = list.strip_prefix('[').and_then(|l| l.strip_suffix(']')) else {
-            unit.unread.push((line, "the list is not written in place"));
+            unit.unread
+                .push((line, "the list is not written in place", shown));
             continue;
         };
         if pieces(items).last().is_some_and(|p| p.contains(';')) {
-            unit.unread.push((line, "the list is a repeat"));
+            unit.unread.push((line, "the list is a repeat", shown));
             continue;
         }
         let (caller, scope, function) = function_so_far(text, open);
@@ -742,19 +979,202 @@ pub fn read_unit(path: &str, text: &str) -> Unit {
             .iter()
             .map(|item| item_words(item, function))
             .sum::<u32>();
-        unit.sites.push(Site {
+        let mut site = Site {
             line,
             caller,
             scope,
             bound: binding(text, scope, open, &parts[0]),
             object: parts[0].clone(),
-            slot,
+            slot: 0,
             words,
-            text: format!(".vcall({})", parts.join(", ")),
-        });
+            text: shown,
+        };
+        // A slot in a name bound in the function: by a `let` (that `let`'s expression), or by a
+        // `for` over a list written in place (each of its values), whichever is nearer.
+        let mut slot = parts[1].clone();
+        let name = slot.trim_start_matches('*').to_string();
+        if is_name(&name) {
+            let let_at = ["let ", "let mut "]
+                .iter()
+                .filter_map(|p| function.rfind(&format!("{p}{name}")))
+                .max();
+            match for_values(function, &name) {
+                Some((at, values)) if let_at.map_or(true, |l| at > l) => {
+                    slot = format!("[{}]", values.join("|"));
+                }
+                _ => {
+                    if let Some(bound) = last_let(function, &name) {
+                        slot = bound;
+                    }
+                }
+            }
+        }
+        match eval(&slot, &unit.constants) {
+            Some(value) => {
+                site.slot = value;
+                unit.sites.push(site);
+            }
+            // Resolved later: by the whole tree's constants, or at a wrapper's callers.
+            None => unit.pending.push(Pending {
+                site,
+                slot,
+                wrapper: wrapper_of(text, scope, open, &parts[1], &parts[0]),
+            }),
+        }
     }
     read_two_step_calls(text, end, &mut unit);
     unit
+}
+
+/// A call inside a function that takes its slot as a parameter (`slot` or `4 * slot`): the
+/// function's name, the parameter's index (counting `e`), the factor, and the index of the
+/// parameter that is the call's object, if it is one.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Wrapper {
+    pub name: String,
+    pub index: usize,
+    pub factor: u32,
+    pub object: Option<usize>,
+    /// Declared `pub` (callers in the whole crate), else only its own file calls it (files often
+    /// have private helpers of the same name).
+    pub public: bool,
+}
+
+/// A `.vcall` whose slot the unit's own constants do not give.
+#[derive(Clone, Debug)]
+pub struct Pending {
+    pub site: Site,
+    /// The slot as written.
+    pub slot: String,
+    pub wrapper: Option<Wrapper>,
+}
+
+/// The parameters of the function whose text starts at `text[scope..]`: its name, the parameter
+/// names in order, and whether it is `pub`.
+fn signature(text: &str, scope: usize) -> Option<(String, Vec<String>, bool)> {
+    let head = &text[scope..];
+    let fn_at = head.find("fn ")?;
+    let line_start = text[..scope + fn_at].rfind('\n').map_or(0, |i| i + 1);
+    let public = text[line_start..scope + fn_at]
+        .trim_start()
+        .starts_with("pub");
+    let at = fn_at + "fn ".len();
+    let rest = &head[at..];
+    let name_end = rest.find(|c: char| !(c.is_alphanumeric() || c == '_'))?;
+    let name = rest[..name_end].to_string();
+    let open = rest.find('(')? + 1;
+    // Generic arguments (`Field<T, u32>`) hold commas: left out before the parameters are cut.
+    let mut params = String::new();
+    let mut depth = 0usize;
+    for c in inside(rest, open)?.chars() {
+        match c {
+            '<' => depth += 1,
+            '>' if depth > 0 => depth -= 1,
+            _ if depth == 0 => params.push(c),
+            _ => {}
+        }
+    }
+    let names = pieces(&params)
+        .iter()
+        .map(|p| {
+            let p = p.trim_start_matches("mut ");
+            p.split(':').next().unwrap_or("").trim().to_string()
+        })
+        .collect();
+    Some((name, names, public))
+}
+
+/// The closure a call at `text[open]` is in, when `name` is one of its parameters: `let CLOSURE
+/// = |e: &mut Engine, slot: u32, ..| ..` above the call in the function at `scope`; its name and
+/// parameter names.
+fn closure_of(text: &str, scope: usize, open: usize, name: &str) -> Option<(String, Vec<String>)> {
+    let function = &text[scope..open];
+    let mut from = function.len();
+    while let Some(at) = function[..from].rfind(" = |") {
+        from = at;
+        let params_start = at + " = |".len();
+        let Some(close) = function[params_start..].find('|') else {
+            continue;
+        };
+        let params: Vec<String> = pieces(&function[params_start..params_start + close])
+            .iter()
+            .map(|p| p.split(':').next().unwrap_or("").trim().to_string())
+            .collect();
+        if !params.iter().any(|p| p == name) {
+            continue;
+        }
+        let head = function[..at].trim_end();
+        let head = head.rsplit("let ").next()?.trim();
+        let head = head.strip_prefix("mut ").unwrap_or(head);
+        return is_name(head).then(|| (head.to_string(), params));
+    }
+    None
+}
+
+/// [`Wrapper`] for a call whose slot is written `slot` (`4 * slot`, `slot * 4`) with `slot` a
+/// parameter of the closure the call is in (see [`closure_of`]), or else of the function at
+/// `scope`.
+fn wrapper_of(text: &str, scope: usize, open: usize, slot: &str, object: &str) -> Option<Wrapper> {
+    let slot = slot.trim();
+    let (name, factor) = if let Some(n) = slot.strip_prefix("4 *") {
+        (n.trim(), 4)
+    } else if let Some(n) = slot.strip_suffix("* 4") {
+        (n.trim(), 4)
+    } else {
+        (slot, 1)
+    };
+    let name = name.strip_suffix(" as u32").unwrap_or(name).trim();
+    if !is_name(name) {
+        return None;
+    }
+    // A closure is called only in its own function, so only its own file.
+    let (function, params, public) = match closure_of(text, scope, open, name) {
+        Some((closure, params)) => (closure, params, false),
+        None => signature(text, scope)?,
+    };
+    let index = params.iter().position(|p| p == name)?;
+    let object = object.strip_suffix(".addr()").unwrap_or(object);
+    Some(Wrapper {
+        name: function,
+        index,
+        factor,
+        object: params.iter().position(|p| p == object),
+        public,
+    })
+}
+
+/// The calls in `text` before `end` of the functions named in `names` (not their definitions,
+/// not in comments): each call's name, position and argument texts.
+fn named_calls<'a>(
+    text: &str,
+    end: usize,
+    names: &HashSet<&'a str>,
+) -> Vec<(&'a str, usize, Vec<String>)> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    for open in 0..end.min(bytes.len()) {
+        if bytes[open] != b'(' {
+            continue;
+        }
+        let mut at = open;
+        while at > 0 && (bytes[at - 1].is_ascii_alphanumeric() || bytes[at - 1] == b'_') {
+            at -= 1;
+        }
+        let Some(&name) = names.get(&text[at..open]) else {
+            continue;
+        };
+        if text[..at].ends_with("fn ") {
+            continue;
+        }
+        let line_start = text[..at].rfind('\n').map_or(0, |i| i + 1);
+        if text[line_start..at].contains("//") {
+            continue;
+        }
+        if let Some(args) = inside(text, open + 1) {
+            out.push((name, at, pieces(args)));
+        }
+    }
+    out
 }
 
 /// The function a call at `text[open]` is in, so far: the address of the nearest `Translated
@@ -1091,7 +1511,7 @@ pub fn stored_table(
     let from = image.relocated.partition_point(|&at| at < addr);
     image.relocated[from..]
         .iter()
-        .take_while(|&&at| at < addr + size)
+        .take_while(|&&at| at < addr.saturating_add(size))
         .filter(|&&at| at >= addr + 2)
         .filter(|&&at| {
             let op = image.bytes(at - 2, 2);
@@ -1267,10 +1687,173 @@ pub fn words_of(exe: &Path, map: &Path, addresses: &[u32]) -> Result<Vec<String>
         .collect())
 }
 
+/// Gives the pending calls their slots: by the constants of the whole tree (a name every unit
+/// that defines it gives the same value), else, for a call in a wrapper that takes the slot as a
+/// parameter, at each of the wrapper's callers in the same crate (a site there, with the
+/// wrapper's words and the caller's object when the wrapper's object is a parameter too). What
+/// stays unread goes to [`Unit::unread`]. Returns the number of wrappers.
+fn resolve_pending(units: &mut [(String, Unit)], texts: &[String]) -> usize {
+    // A name's value where every definition agrees: among the crate's `pub` constants (the ones
+    // a file can import), else all of the crate's, else the whole tree's.
+    fn unique<'a>(units: impl Iterator<Item = &'a Unit>, public: bool) -> HashMap<String, u32> {
+        let mut all: HashMap<String, Option<u32>> = HashMap::new();
+        for unit in units {
+            for (name, &value) in &unit.constants {
+                if public && !unit.public.contains(name) {
+                    continue;
+                }
+                all.entry(name.clone())
+                    .and_modify(|v| {
+                        if *v != Some(value) {
+                            *v = None;
+                        }
+                    })
+                    .or_insert(Some(value));
+            }
+        }
+        all.into_iter().filter_map(|(k, v)| Some((k, v?))).collect()
+    }
+    let crate_of = |rel: &str| rel.split('/').next().unwrap_or("").to_string();
+    let global = unique(units.iter().map(|(_, u)| u), false);
+    let crate_names: BTreeSet<String> = units.iter().map(|(r, _)| crate_of(r)).collect();
+    let by_crate: HashMap<String, [HashMap<String, u32>; 2]> = crate_names
+        .into_iter()
+        .map(|c| {
+            let of_crate = || {
+                units
+                    .iter()
+                    .filter(|(r, _)| crate_of(r) == c)
+                    .map(|(_, u)| u)
+            };
+            let maps = [unique(of_crate(), true), unique(of_crate(), false)];
+            (c, maps)
+        })
+        .collect();
+    let empty = [HashMap::new(), HashMap::new()];
+    let mut wrappers = Vec::new();
+    for (rel, unit) in units.iter_mut() {
+        if unit.pending.is_empty() {
+            continue;
+        }
+        let pending_calls = std::mem::take(&mut unit.pending);
+        for pending in pending_calls {
+            let [public, all] = by_crate.get(&crate_of(rel)).unwrap_or(&empty);
+            let consts = Chain(vec![&unit.constants, public, all, &global]);
+            let slots = slot_values(&pending.slot, &consts);
+            if !slots.is_empty() {
+                for slot in slots {
+                    let mut site = pending.site.clone();
+                    site.slot = slot;
+                    unit.sites.push(site);
+                }
+            } else if let Some(wrapper) = pending.wrapper {
+                let krate = rel.split('/').next().unwrap_or("").to_string();
+                wrappers.push((krate, rel.clone(), pending.site, wrapper));
+            } else {
+                let site = pending.site;
+                unit.unread
+                    .push((site.line, "the slot is not a number", site.text));
+            }
+        }
+    }
+    let mut added: Vec<(usize, Site)> = Vec::new();
+    let mut unread: Vec<(usize, (usize, &'static str, String))> = Vec::new();
+    let mut summaries: Vec<(String, Site, usize, usize)> = Vec::new();
+    // Where each wrapper's name is called, file by file: one pass over each text.
+    let names: HashSet<&str> = wrappers.iter().map(|w| w.3.name.as_str()).collect();
+    // (file, wrapper name) to its calls there: position and argument texts.
+    type Calls = Vec<(usize, Vec<String>)>;
+    let mut called: HashMap<(usize, &str), Calls> = HashMap::new();
+    if !names.is_empty() {
+        for (i, (rel, _)) in units.iter().enumerate() {
+            let text = &texts[i];
+            for (name, at, args) in named_calls(text, test_start(rel, text), &names) {
+                called.entry((i, name)).or_default().push((at, args));
+            }
+        }
+    }
+    for (krate, rel, site, wrapper) in &wrappers {
+        let (mut read, mut not) = (0, 0);
+        for (i, (caller_rel, unit)) in units.iter().enumerate() {
+            let reaches = if wrapper.public {
+                caller_rel.split('/').next() == Some(krate.as_str())
+            } else {
+                caller_rel == rel
+            };
+            if !reaches {
+                continue;
+            }
+            let Some(calls) = called.get(&(i, wrapper.name.as_str())) else {
+                continue;
+            };
+            let text = &texts[i];
+            let [public, all] = by_crate.get(&crate_of(caller_rel)).unwrap_or(&empty);
+            let consts = Chain(vec![&unit.constants, public, all, &global]);
+            for (at, args) in calls.iter().cloned() {
+                let line = 1 + text[..at].matches('\n').count();
+                let shown = format!("{}({}) -> {}", wrapper.name, args.join(", "), site.text);
+                let value = args.get(wrapper.index).and_then(|a| eval(a, &consts));
+                let Some(value) = value.and_then(|v| v.checked_mul(wrapper.factor)) else {
+                    not += 1;
+                    unread.push((i, (line, "a wrapper's slot is not a number here", shown)));
+                    continue;
+                };
+                read += 1;
+                let object = wrapper
+                    .object
+                    .and_then(|o| args.get(o).cloned())
+                    .unwrap_or_else(|| site.object.clone());
+                added.push((
+                    i,
+                    Site {
+                        line,
+                        caller: None,
+                        scope: at,
+                        bound: at,
+                        object,
+                        slot: value,
+                        words: site.words,
+                        text: shown,
+                    },
+                ));
+            }
+        }
+        summaries.push((rel.clone(), site.clone(), read, not));
+    }
+    for (i, site) in added {
+        units[i].1.sites.push(site);
+    }
+    for (i, entry) in unread {
+        units[i].1.unread.push(entry);
+    }
+    for (rel, site, read, not) in summaries {
+        if let Some((_, unit)) = units.iter_mut().find(|(r, _)| *r == rel) {
+            let reason = if read == 0 && not == 0 {
+                "a wrapper's slot, and no caller found"
+            } else {
+                "a wrapper's slot: checked at its callers"
+            };
+            unit.unread.push((
+                site.line,
+                reason,
+                format!("{} ({read} callers read, {not} not)", site.text),
+            ));
+        }
+    }
+    wrappers.len()
+}
+
 /// The whole check: reads the exe, the map and the crates under `crates`, and returns one line
 /// per hit (tab-separated: kind, file:line, the caller's address, slot, words passed, what the
-/// tables take, the call) and a summary.
-pub fn run(exe: &Path, map: &Path, crates: &Path) -> Result<(Vec<String>, String), String> {
+/// tables take, the call) and a summary. With `list_unread`, also one line per call it could not
+/// read (`unread`, file:line, three empty columns, the reason, the call); the summary's hit count
+/// leaves them out.
+pub fn run(
+    exe: &Path,
+    map: &Path,
+    crates: &Path,
+    list_unread: bool,
+) -> Result<(Vec<String>, String), String> {
     let read = |p: &Path| std::fs::read(p).map_err(|e| format!("{}: {e}", p.display()));
     let image = Image::parse(read(exe)?)?;
     if image.relocated.is_empty() {
@@ -1286,6 +1869,7 @@ pub fn run(exe: &Path, map: &Path, crates: &Path) -> Result<(Vec<String>, String
     let mut files = Vec::new();
     rust_files(crates, &mut files);
     let mut units = Vec::new();
+    let mut texts = Vec::new();
     let mut platform = SlotCounts::default();
     for path in &files {
         let Ok(text) = std::fs::read_to_string(path) else {
@@ -1301,7 +1885,9 @@ pub fn run(exe: &Path, map: &Path, crates: &Path) -> Result<(Vec<String>, String
         }
         let unit = read_unit(&rel, &text);
         units.push((rel, unit));
+        texts.push(text);
     }
+    let wrappers = resolve_pending(&mut units, &texts);
     let tables = find_tables(&image, &functions);
     let words = table_words(&image, &functions, &tables);
     let mut anywhere = platform.clone();
@@ -1336,6 +1922,11 @@ pub fn run(exe: &Path, map: &Path, crates: &Path) -> Result<(Vec<String>, String
     for (rel, unit) in &units {
         sites += unit.sites.len();
         unread += unit.unread.len();
+        if list_unread {
+            for (line, reason, call) in &unit.unread {
+                lines.push(format!("unread\t{rel}:{line}\t\t\t\t{reason}\t{call}"));
+            }
+        }
         own_checked += unit
             .sites
             .iter()
@@ -1362,11 +1953,12 @@ pub fn run(exe: &Path, map: &Path, crates: &Path) -> Result<(Vec<String>, String
     }
     let summary = format!(
         "{} tables with {slots} slots ({unread_slots} not read) from {} relocated words; \
-         {sites} virtual calls read ({own_checked} against the unit's own tables), {unread} not \
-         read (slot or list not written in place); {} hits",
+         {sites} virtual calls read ({own_checked} against the unit's own tables; their slots \
+         given at the callers of {wrappers} wrappers included), {unread} not read (`--unread` \
+         lists them; the wrappers among them); {} hits",
         tables.len(),
         image.relocated.len(),
-        lines.len()
+        lines.iter().filter(|l| !l.starts_with("unread\t")).count()
     );
     Ok((lines, summary))
 }
@@ -1382,6 +1974,11 @@ mod tests {
     /// A PE image with a code section at `TEXT`, a data section at `RDATA` and base relocations
     /// for the addresses `relocated`.
     fn image(text: &[u8], rdata: &[u8], relocated: &[u32]) -> Image {
+        Image::parse(image_bytes(text, rdata, relocated)).expect("the image parses")
+    }
+
+    /// The file [`image`] parses.
+    fn image_bytes(text: &[u8], rdata: &[u8], relocated: &[u32]) -> Vec<u8> {
         let mut reloc = Vec::new();
         for page in [0x1000u32, 0x2000] {
             let entries: Vec<u16> = relocated
@@ -1433,7 +2030,7 @@ mod tests {
         file.extend_from_slice(text);
         file.extend_from_slice(rdata);
         file.extend_from_slice(&reloc);
-        Image::parse(file).expect("the image parses")
+        file
     }
 
     /// Code laid out function by function: returns the bytes and the map (address to size).
@@ -1457,6 +2054,28 @@ mod tests {
         assert_eq!(
             map.into_iter().collect::<Vec<_>>(),
             [(0x0040_1000, 21), (0x0040_1020, 10)]
+        );
+        // An empty entry and one running past the address space are left out.
+        let map = parse_map("00401000\t0\nffffff00\t4096\nfffffff0\t15\n");
+        assert_eq!(map.into_iter().collect::<Vec<_>>(), [(0xffff_fff0, 15)]);
+    }
+
+    /// A `RET`'s bytes that are really a jump's operand at the end are not read as a `RET`.
+    #[test]
+    fn a_ret_inside_a_jumps_operand_is_not_a_ret() {
+        assert_eq!(ret_at_end(&[0x90, 0xc3]), Some(0));
+        assert_eq!(ret_at_end(&[0x5d, 0xc2, 0x08, 0x00, 0xcc]), Some(2));
+        assert_eq!(ret_at_end(&[0x33, 0xc0, 0xeb, 0xc3]), None, "EB C3");
+        assert_eq!(ret_at_end(&[0x74, 0xc3]), None, "JZ short");
+        assert_eq!(
+            ret_at_end(&[0x90, 0xe9, 0x10, 0xc2, 0x08, 0x00]),
+            None,
+            "E9 xx C2 08 00"
+        );
+        assert_eq!(
+            ret_at_end(&[0x0f, 0x84, 0x10, 0x20, 0x30, 0xc3]),
+            None,
+            "JZ near"
         );
     }
 
@@ -1571,16 +2190,162 @@ mod tests {
         let reasons: Vec<&str> = unit.unread.iter().map(|u| u.1).collect();
         assert_eq!(
             reasons,
-            [
-                "the slot is not a number",
-                "the list is not written in place",
-                "the list is a repeat"
-            ]
+            ["the list is not written in place", "the list is a repeat"]
         );
+        // A slot in a variable waits for the whole tree's constants (or a wrapper's callers).
+        let pending: Vec<(usize, &str)> = unit
+            .pending
+            .iter()
+            .map(|p| (p.site.line, p.slot.as_str()))
+            .collect();
+        assert_eq!(pending, [(18, "slot")]);
+        // A `pub(crate) mod tests` is a test module too.
+        let crate_tests = "fn f() {}\n#[cfg(test)]\npub(crate) mod tests {\n    fn t(e: &mut Engine) { e.vcall(1, 0, &args![1]); }\n}";
+        assert!(read_unit("x.rs", crate_tests).sites.is_empty());
         // A test file is not read at all.
         assert!(read_unit("crate/src/units/x_tests.rs", UNIT)
             .sites
             .is_empty());
+    }
+
+    /// A slot written as constant arithmetic is read; a slot taken from the function's parameter
+    /// is checked at the wrapper's callers in the same crate, with their objects; a slot that is
+    /// neither stays unread and is listed.
+    #[test]
+    fn slots_from_arithmetic_and_wrappers_are_read() {
+        let consts = HashMap::from([("BASE".to_string(), 0x40u32)]);
+        assert_eq!(eval("4 * 12", &consts), Some(48));
+        assert_eq!(eval("BASE + 4 * 2", &consts), Some(0x48));
+        assert_eq!(eval("(BASE + 8) as u32", &consts), Some(0x48));
+        assert_eq!(eval("slot", &consts), None);
+        assert_eq!(eval("crate::vtable::BASE", &consts), Some(0x40));
+        assert_eq!(slot_values("if x { 4 } else { BASE }", &consts), [4, 0x40]);
+        assert_eq!(slot_values("ifx==2{8}else{0xc}", &consts), [8, 0xc]);
+        assert!(slot_values("if x { 4 } else { y }", &consts).is_empty());
+        // A slot bound by a `let` in the function is read through it.
+        let unit = read_unit(
+            "x.rs",
+            "fn f(e: &mut Engine, o: u32, up: bool) {
+    let slot = if up { 0x10 } else { 0x14 };
+    e.vcall(o, slot, &args![]);
+}",
+        );
+        assert_eq!(unit.pending[0].slot, "ifup{0x10}else{0x14}");
+        // A `for` over a list written in place, alone or in a tuple; a `match` of constants.
+        let unit = read_unit(
+            "x.rs",
+            "fn f(e: &mut Engine, o: u32, k: u32) {
+    for slot in [0x10u32, BASE] {
+        e.vcall(o, slot, &args![]);
+    }
+    for (at, slot) in [(0, 0x20u32), (4, 0x24)] {
+        e.vcall(o, slot, &args![at]);
+    }
+    let slot = match k { 1 => 0x30, _ => 0x34 };
+    e.vcall(o, slot, &args![]);
+}",
+        );
+        let got: Vec<Vec<u32>> = unit
+            .pending
+            .iter()
+            .map(|p| slot_values(&p.slot, &consts))
+            .collect();
+        assert_eq!(got, [vec![0x10, 0x40], vec![0x20, 0x24], vec![0x30, 0x34]]);
+        // A closure that takes the slot is a wrapper its own file calls.
+        let closure = "fn f(e: &mut Engine, o: u32) {
+    let one = |e: &mut Engine, slot: u32| {
+        e.vcall(o, slot, &args![1u32]);
+    };
+    one(e, 0x7d0);
+}";
+        let unit = read_unit("k/d.rs", closure);
+        assert_eq!(
+            unit.pending[0].wrapper,
+            Some(Wrapper {
+                name: "one".to_string(),
+                index: 1,
+                factor: 1,
+                object: None,
+                public: false,
+            })
+        );
+        let mut units = vec![("k/d.rs".to_string(), unit)];
+        resolve_pending(&mut units, &[closure.to_string()]);
+        let sites: Vec<(usize, u32, u32)> = units[0]
+            .1
+            .sites
+            .iter()
+            .map(|s| (s.line, s.slot, s.words))
+            .collect();
+        assert_eq!(sites, [(5, 0x7d0, 2)]);
+        let wrapper = "pub fn set(e: &mut Engine, device: u32, slot: u32, value: u32) {
+    e.vcall(device, 4 * slot, &args![value]);
+}
+fn other(e: &mut Engine, x: u32) {
+    let s = e.mem.u32(x);
+    e.vcall(x, s, &args![]);
+}";
+        let caller = "const SLOT_SIX: u32 = 6;
+fn user(e: &mut Engine, d: u32, n: u32) {
+    set(e, d, SLOT_SIX, 1);
+    set(e, d, 2 + 1, 1);
+    set(e, d, n, 1);
+}";
+        let mut units = vec![
+            ("k/a.rs".to_string(), read_unit("k/a.rs", wrapper)),
+            ("k/b.rs".to_string(), read_unit("k/b.rs", caller)),
+            ("other/c.rs".to_string(), read_unit("other/c.rs", caller)),
+        ];
+        let texts = [wrapper.to_string(), caller.to_string(), caller.to_string()];
+        assert_eq!(
+            units[0].1.pending[0].wrapper,
+            Some(Wrapper {
+                name: "set".to_string(),
+                index: 2,
+                factor: 4,
+                object: Some(1),
+                public: true,
+            })
+        );
+        assert_eq!(resolve_pending(&mut units, &texts), 1);
+        let got: Vec<(usize, &str, u32, u32)> = units[1]
+            .1
+            .sites
+            .iter()
+            .map(|s| (s.line, s.object.as_str(), s.slot, s.words))
+            .collect();
+        assert_eq!(got, [(3, "d", 24, 2), (4, "d", 12, 2)]);
+        let reasons = |u: &Unit| u.unread.iter().map(|r| (r.0, r.1)).collect::<Vec<_>>();
+        assert_eq!(
+            reasons(&units[1].1),
+            [(5, "a wrapper's slot is not a number here")]
+        );
+        assert_eq!(
+            reasons(&units[0].1),
+            [
+                (6, "the slot is not a number"),
+                (2, "a wrapper's slot: checked at its callers")
+            ]
+        );
+        assert!(
+            units[2].1.sites.is_empty(),
+            "another crate's `set` is not this one"
+        );
+        // A private wrapper is called only from its own file: a same-named call elsewhere in
+        // the crate is another function.
+        let private =
+            "fn put(e: &mut Engine, o: u32, slot: u32) {\n    e.vcall(o, slot, &args![]);\n}";
+        let elsewhere = "fn g(e: &mut Engine, d: u32) {\n    put(e, d, 9);\n}";
+        let mut units = vec![
+            ("k/p.rs".to_string(), read_unit("k/p.rs", private)),
+            ("k/q.rs".to_string(), read_unit("k/q.rs", elsewhere)),
+        ];
+        resolve_pending(&mut units, &[private.to_string(), elsewhere.to_string()]);
+        assert!(units[1].1.sites.is_empty());
+        assert_eq!(
+            reasons(&units[0].1),
+            [(2, "a wrapper's slot, and no caller found")]
+        );
     }
 
     #[test]
@@ -1685,9 +2450,10 @@ fn f() {
         assert_eq!(item_words("n", function), 1);
     }
 
-    /// An exe without base relocations has no tables to read: an error, not an empty result.
+    /// The whole check on files: an exe without base relocations has no tables to read (an
+    /// error, not an empty result); a call it cannot read is listed when asked.
     #[test]
-    fn an_exe_without_relocations_is_refused() {
+    fn the_whole_check_refuses_an_exe_without_relocations_and_lists_unread_calls() {
         let (text, _) = code(&[&[0xc3]]);
         let dir = std::env::temp_dir().join(format!("vcall-words-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -1701,11 +2467,37 @@ fn f() {
         bytes.extend_from_slice(&text);
         std::fs::write(&exe, bytes).unwrap();
         std::fs::write(&map, "00401000\t1\n").unwrap();
-        let result = run(&exe, &map, &dir);
+        let result = run(&exe, &map, &dir, false);
+        assert!(result.unwrap_err().contains("no base relocations"));
+        // With relocations: a call whose slot is not read is listed with `--unread` (and only
+        // then), and is not a hit.
+        let (text, functions) = code(&[&[0xc3], &[0xc2, 0x04, 0x00]]);
+        let f: Vec<u32> = functions.keys().copied().collect();
+        let bytes = image_bytes(&text, &words_of(&[f[0], f[1]]), &[RDATA, RDATA + 4]);
+        std::fs::write(&exe, bytes).unwrap();
+        std::fs::write(&map, "00401000\t1\n00401001\t3\n").unwrap();
+        let crates = dir.join("crates");
+        std::fs::create_dir_all(crates.join("k")).unwrap();
+        let unit = crates.join("k").join("a.rs");
+        std::fs::write(
+            &unit,
+            "fn f(e: &mut Engine, o: u32, s: u32) {\n    let t = e.mem.u32(s);\n    e.vcall(o, t, &args![]);\n}\n",
+        )
+        .unwrap();
+        let quiet = run(&exe, &map, &crates, false).unwrap();
+        let listed = run(&exe, &map, &crates, true).unwrap();
+        std::fs::remove_file(&unit).ok();
+        std::fs::remove_dir(crates.join("k")).ok();
+        std::fs::remove_dir(&crates).ok();
         std::fs::remove_file(&exe).ok();
         std::fs::remove_file(&map).ok();
         std::fs::remove_dir(&dir).ok();
-        assert!(result.unwrap_err().contains("no base relocations"));
+        assert!(quiet.0.is_empty());
+        assert_eq!(
+            listed.0,
+            ["unread\tk/a.rs:3\t\t\t\tthe slot is not a number\t.vcall(o, t, &args![])"]
+        );
+        assert!(listed.1.ends_with("0 hits"), "{}", listed.1);
     }
 
     /// The checks that need no table named by the unit: an object handed to its constructor
