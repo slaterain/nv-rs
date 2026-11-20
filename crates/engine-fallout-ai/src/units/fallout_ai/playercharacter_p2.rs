@@ -4201,6 +4201,19 @@ pub fn player_character_get_current_target_list(e: &mut Engine, this: Ptr<Player
     player + 0x6c4
 }
 
+/// JIP MiniMap's seams at the two calls of the path to the target (0x952C69 in
+/// `CheckForQuestTargetUpdate`, 0x952F6B in `SetPlayerMapMarker`; JIP's `UpdatePlacedMarkerHook`,
+/// written there by `InitMiniMap`: its flag, then the same call).
+pub(crate) const JIP_PLACED_MARKER_CHECK: u32 = 0x0095_2c69;
+pub(crate) const JIP_PLACED_MARKER_SET: u32 = 0x0095_2f6b;
+
+/// The seam at `site`: no words, no answer; asked only while JIP is installed.
+fn jip_placed_marker(e: &mut Engine, site: u32) {
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        e.site(site, &[]);
+    }
+}
+
 // Translated from 00952c30 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `PlayerCharacter::CheckForQuestTargetUpdate` (Xbox PDB): marks the target
 /// list dirty (`+0x206`) when `reference` is the player (after rebuilding the
@@ -4217,6 +4230,7 @@ pub fn player_character_check_for_quest_target_update(
     if reference == e.global::<u32>(PLAYER_POINTER) {
         let target = e.mem.u32(player + 0x6f4);
         if target != 0 {
+            jip_placed_marker(e, JIP_PLACED_MARKER_CHECK);
             player_character_build_path_to_target(e, this, target, player + 0x6f8, 0);
         }
         e.mem.set_u8(player + 0x206, 1);
@@ -4337,6 +4351,7 @@ pub fn player_character_set_player_map_marker(
         }
     }
     let marker = e.mem.u32(player + 0x6f4);
+    jip_placed_marker(e, JIP_PLACED_MARKER_SET);
     player_character_build_path_to_target(e, this, marker, player + 0x6f8, 0);
 }
 
@@ -12389,6 +12404,72 @@ mod tests {
         assert_eq!(e.mem.u8(p + 0x206), 0);
         assert_eq!(calls_to(&e, 0x0060_f110).len(), 1);
         assert_eq!(calls_to(&e, 0x006d_4f70).len(), 1);
+    }
+
+    /// JIP MiniMap's seams before the two path calls (0x952C69, 0x952F6B): asked only while JIP
+    /// is installed, each at its own site; the game goes on whatever they answer. With no placed
+    /// marker (+0x6F4 = 0) the check builds no path and its seam is not asked.
+    #[test]
+    fn the_placed_marker_seams_are_asked_before_the_path() {
+        thread_local! {
+            static ASKED: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+        }
+        fn check(_: &mut Engine, _: &[u32]) -> Option<u32> {
+            ASKED.with(|a| a.borrow_mut().push(JIP_PLACED_MARKER_CHECK));
+            Some(1)
+        }
+        fn set(_: &mut Engine, _: &[u32]) -> Option<u32> {
+            ASKED.with(|a| a.borrow_mut().push(JIP_PLACED_MARKER_SET));
+            None
+        }
+        {
+            let mut e = engine();
+            list_helpers(&mut e);
+            let player = new_player(&mut e);
+            e.set_global(PLAYER_POINTER, 0x0600_5000u32);
+            e.set_global(0x011c_a248u32, 0x4141u32);
+            e.register(OPERATOR_NEW, |e, a| eax(e.mem.alloc(a[0])));
+            e.register(0x0055_a2f0, |_, a| eax(a[0]));
+            double(&mut e, FORM_TYPE_OF, eax(0x39));
+            e.set_jip_patches(engine_core::extend::jip_patches::INSTALLED);
+            e.on_site_for_test(JIP_PLACED_MARKER_CHECK, check);
+            ASKED.with(|a| a.borrow_mut().clear());
+            e.mem.set_u32(player.addr() + 0x6f4, 0);
+            start_log(&mut e);
+            player_character_check_for_quest_target_update(&mut e, player, 0x0600_5000);
+            assert!(
+                ASKED.with(|a| a.borrow().is_empty()),
+                "no marker: not asked"
+            );
+            assert!(calls_to(&e, 0x006d_4f70).is_empty());
+        }
+        for word in [0, engine_core::extend::jip_patches::INSTALLED] {
+            let mut e = engine();
+            list_helpers(&mut e);
+            let player = new_player(&mut e);
+            let p = player.addr();
+            e.set_global(PLAYER_POINTER, 0x0600_5000u32);
+            e.set_global(0x011c_a248u32, 0x4141u32);
+            e.register(OPERATOR_NEW, |e, a| eax(e.mem.alloc(a[0])));
+            e.register(0x0055_a2f0, |_, a| eax(a[0]));
+            double(&mut e, FORM_TYPE_OF, eax(0x39));
+            e.set_jip_patches(word);
+            e.on_site_for_test(JIP_PLACED_MARKER_CHECK, check);
+            e.on_site_for_test(JIP_PLACED_MARKER_SET, set);
+            ASKED.with(|a| a.borrow_mut().clear());
+            e.mem.set_u32(p + 0x6f4, 0x31);
+            start_log(&mut e);
+            player_character_check_for_quest_target_update(&mut e, player, 0x0600_5000);
+            player_character_set_player_map_marker(&mut e, player, 1.0, 2.0, 3.0, 0x66);
+            let asked = ASKED.with(|a| a.borrow().clone());
+            if word == 0 {
+                assert!(asked.is_empty(), "not installed: not asked");
+            } else {
+                assert_eq!(asked, vec![JIP_PLACED_MARKER_CHECK, JIP_PLACED_MARKER_SET]);
+            }
+            // The paths are searched either way.
+            assert_eq!(calls_to(&e, 0x006d_4f70).len(), 2, "{word:x}");
+        }
     }
 
     #[test]

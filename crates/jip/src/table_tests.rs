@@ -349,24 +349,24 @@ fn other_plugins_conditions_read_no_eval() {
 fn an_unbuilt_command_fails() {
     let mut e = engine();
     crate::install_as(&mut e, true);
-    let unbuilt = Record::read(&e, record_of(&e, 0x2873));
-    assert_eq!(guest_text(&e, unbuilt.long_name), b"InitMiniMap");
+    let unbuilt = Record::read(&e, record_of(&e, 0x2874));
+    assert_eq!(guest_text(&e, unbuilt.long_name), b"UpdateMiniMap");
     assert_eq!((unbuilt.execute, unbuilt.eval), (0, 0));
     // Every JIP condition is built since GetRadiationLevelAlt (package C3): an unbuilt command
-    // that waits for the drawing track (InitMiniMap) stands for the rest.
-    let refresh = Record::read(&e, record_of(&e, 0x2873));
-    assert_eq!(guest_text(&e, refresh.long_name), b"InitMiniMap");
+    // that waits for the drawing track (UpdateMiniMap) stands for the rest.
+    let refresh = Record::read(&e, record_of(&e, 0x2874));
+    assert_eq!(guest_text(&e, refresh.long_name), b"UpdateMiniMap");
     assert_eq!((refresh.execute, refresh.eval, refresh.flags), (0, 0, 0));
-    let words = line(&mut e, 0x2873, &[]);
+    let words = line(&mut e, 0x2874, &[]);
     let a = nvse::CommandArgs::new(&words);
     // An `X` token: no calling reference, the opcode, its arguments' length.
     let at = DATA + 4;
-    for (i, b) in [b'X', 0, 0, 0x73, 0x28, 2, 0].iter().enumerate() {
+    for (i, b) in [b'X', 0, 0, 0x74, 0x28, 2, 0].iter().enumerate() {
         e.mem.set_u8(at + i as u32, *b);
     }
     let mut ev = nvse::expr::Eval::new(&e, &a);
     assert!(ev.read_one_token(&mut e).is_none());
-    assert_eq!(ev.errors, ["Failed to resolve command with opcode 2873"]);
+    assert_eq!(ev.errors, ["Failed to resolve command with opcode 2874"]);
 }
 
 /// Answering "installed", an empty slot is `NONE` and runs `kEmptyCommand`'s execute, the exe's

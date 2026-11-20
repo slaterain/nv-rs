@@ -579,8 +579,20 @@ fn load_tri(e: &mut Engine, this: Ptr<BSFaceGenModel>, path: u32, kind: i32) {
     let mesh = |e: &Engine| e.get(this, BSFaceGenModel::pMeshData);
     let matches = read && {
         let data = mesh(e);
-        let geometry = pointer_get(e, data + 0x10);
-        let vertices = e.call(GEOMETRY_VERTEX_COUNT, &args![geometry]).u16() as u32;
+        // lStewieAl's Tweaks' row S0048 (`patchFixNullFaceGenCrash`, the bytes at `0x65A125`): the
+        // geometry is read in place (no call to `00559450`) and a missing one has 0 vertices; the
+        // exe asks the missing geometry for its count.
+        let vertices = if e.stewie(engine_core::extend::stewie::FACE_GEN_NULL_GEOMETRY) {
+            let geometry = e.mem.u32(data + 0x10);
+            if geometry == 0 {
+                0
+            } else {
+                e.call(GEOMETRY_VERTEX_COUNT, &args![geometry]).u16() as u32
+            }
+        } else {
+            let geometry = pointer_get(e, data + 0x10);
+            e.call(GEOMETRY_VERTEX_COUNT, &args![geometry]).u16() as u32
+        };
         vertices == fff_tri_file_data_s_num_model_vtx(e, Ptr::new(tri))
     };
     e.call(TRI_STREAM_DESTRUCT, &args![stream]);
@@ -2565,6 +2577,45 @@ mod tests {
         assert_eq!(calls(&l.e, TRI_STREAM_DESTRUCT).len(), 1);
         // The tri data is deleted.
         assert_eq!(calls(&l.e, OPERATOR_DELETE).len(), 1);
+    }
+
+    /// lStewieAl's Tweaks' row S0048: kind 0 with two children, neither named as asked, so no geometry
+    /// is picked, then a tri file that reads. Row off: the exe asks the missing geometry for its vertex
+    /// count (the count's stand-in reads the geometry's data, +0xB8, as `00456650` does) and stops; row
+    /// on: a missing geometry has 0 vertices, the tri file does not match and no morph data is made.
+    /// With a geometry, the same morph data row off and on.
+    #[test]
+    fn s0048_a_tri_file_with_no_geometry() {
+        for on in [false, true] {
+            let mut l = load_rig(&[0x999, 0x888]);
+            tri_rig(&mut l, 3, 3, 1);
+            l.e.register(GEOMETRY_VERTEX_COUNT, |e, a| {
+                answer(e.mem.u32(a[0] + 0xb8) & 0xffff)
+            });
+            l.e.mem.unmap(0, 0x1000);
+            l.e.set_stewie(engine_core::extend::stewie::FACE_GEN_NULL_GEOMETRY, on);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                load(&mut l, 0x4440, 0x5550, 0, 0)
+            }));
+            l.e.call_stack.clear();
+            assert_eq!(run.ok(), on.then_some(true), "row {on}");
+            if on {
+                assert_eq!(picked(&l), 0);
+                let mesh = l.e.mem.u32(l.model + 8);
+                assert_eq!(l.e.mem.u32(mesh + 0x1c), 0);
+                assert!(calls(&l.e, GEOMETRY_VERTEX_COUNT).is_empty());
+            }
+            let mut l = load_rig(&[0x999]);
+            tri_rig(&mut l, 3, 3, 1);
+            l.e.set_stewie(engine_core::extend::stewie::FACE_GEN_NULL_GEOMETRY, on);
+            assert!(load(&mut l, 0x4440, 0x5550, 0, 0));
+            let mesh = l.e.mem.u32(l.model + 8);
+            assert_eq!(l.e.mem.u32(mesh + 0x1c) & 3, 1, "row {on}");
+            assert_eq!(
+                calls(&l.e, GEOMETRY_VERTEX_COUNT),
+                vec![vec![l.children[0]]]
+            );
+        }
     }
 
     #[test]
