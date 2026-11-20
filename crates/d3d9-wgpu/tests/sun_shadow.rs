@@ -874,6 +874,8 @@ struct Extra {
     wall: bool,
     /// The far scene's tower moved by this along x (in its matrix) instead of drawn in place.
     tower_shift: Option<f32>,
+    /// The far scene's small caster ([`FAR_SMALL`]) moved by this along x (in its matrix).
+    small_shift: Option<f32>,
     /// The tall caster far off toward a low sun ([`SUNWARD`]).
     sunward: bool,
     /// The world word (`sun_shadow::WORLD_STATE`) before the scene's words.
@@ -1122,6 +1124,9 @@ const BEYOND: u32 = 0x16D0;
 /// its radius): with the sun 10 degrees up toward +y its shadow runs back to about y 70000, inside
 /// the far map.
 const SUNWARD: u32 = 0x16E0;
+/// A far caster of radius about 327 (300 by 300, 500 high, at (2000, 20000)): past the cascades'
+/// reach, in the far map alone.
+const FAR_SMALL: u32 = 0x16F0;
 
 /// A box from (x0, y0, 0) to (x1, y1, h): its top and four sides.
 fn cuboid(x0: f32, x1: f32, y0: f32, y1: f32, h: f32) -> Vec<[f32; 3]> {
@@ -1234,6 +1239,11 @@ fn extras(b: &mut WgpuBackend) {
         &cuboid(1500.0, 2500.0, 19_500.0, 20_500.0, 4000.0),
     );
     buffer(b, WALL, &cuboid(1400.0, 1600.0, 5000.0, 14_000.0, 1000.0));
+    buffer(
+        b,
+        FAR_SMALL,
+        &cuboid(1850.0, 2150.0, 19_850.0, 20_150.0, 500.0),
+    );
     buffer(
         b,
         FAR_TOWER_LOW,
@@ -1658,6 +1668,11 @@ fn lit_sequence_with(
         if let Some(dx) = e.tower_shift {
             set_mvp(b, model_view_proj_at(dx, 0.0));
             draw(b, TOWER, 10);
+            set_mvp(b, model_view_proj());
+        }
+        if let Some(dx) = e.small_shift {
+            set_mvp(b, model_view_proj_at(dx, 0.0));
+            draw(b, FAR_SMALL, 10);
             set_mvp(b, model_view_proj());
         }
         if e.sunward {
@@ -3532,4 +3547,47 @@ fn the_far_map_takes_a_new_sun_counting_from_where_it_stood() {
     lit_sequence_with(&mut b, &frames, true, &mut check);
     eprintln!("the far map took the sun {turns} times ({stepped} away from its anchor)");
     assert!(turns >= 2 && stepped >= 1, "turns {turns}, away {stepped}");
+}
+
+/// Review of #817: a far caster that moves (radius about 327, past the cascades' reach, stepping
+/// 200 units a frame) leaves only its latest place in the far map: each old place goes at once
+/// (paired as the cascades' moves), not after its grace, so no trail of shadows; once it stands
+/// still a while its one place is still again.
+#[test]
+fn a_far_caster_stepping_across_frames_keeps_only_its_latest_place() {
+    let _far = FarScene::on();
+    let shift = |f: usize| 200.0 * f.min(5) as f32;
+    let frames: Vec<Extra> = (0..44)
+        .map(|f| Extra {
+            small_shift: Some(shift(f)),
+            ..far_land(false, false)
+        })
+        .collect();
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    sun_shadow::enable(true);
+    let b = backend(1);
+    sun_shadow::enable(false);
+    let Some(mut b) = b else {
+        return;
+    };
+    let mut seen: Vec<Vec<([f64; 3], f64, bool)>> = Vec::new();
+    lit_sequence_with(&mut b, &frames, true, &mut |_, b| {
+        let places = b.device().map_or_else(Vec::new, |d| d.sun_far_places());
+        seen.push(
+            places
+                .into_iter()
+                .filter(|p| p.1 > 300.0 && p.1 < 400.0)
+                .collect(),
+        );
+    });
+    for (f, places) in seen.iter().enumerate() {
+        assert_eq!(places.len(), 1, "frame {f}: {places:?}");
+        let x = 2000.0 + f64::from(shift(f));
+        assert!(
+            (places[0].0[0] - x).abs() < 1.0,
+            "frame {f}: {places:?} (at x {x})"
+        );
+    }
+    assert!(seen[2][0].2, "moving while it steps: {:?}", seen[2]);
+    assert!(!seen[43][0].2, "still again: {:?}", seen[43]);
 }
