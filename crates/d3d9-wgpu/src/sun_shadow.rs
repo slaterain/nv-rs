@@ -5803,13 +5803,14 @@ mod tests {
             }
             azimuth += steps[frame % steps.len()];
         }
-        // The last map's ground lies thousands of units from its centre, and it takes the sun late
-        // (one map a frame, the nearest first): its texel grid turns by up to 0.3 to 0.4 of a texel
-        // there, as a hill's shadow moves; counted from the origin it was any part of a texel.
+        // A farther map's ground lies farther from its centre and its turn limit is larger (its texels
+        // are larger), and the last takes the sun late (one map a frame, the nearest first): its grid
+        // turns by up to 0.2 (third) and 0.4 (last) of a texel there, as a hill's shadow moves. Counted
+        // from the origin it was any part of a texel in every map.
         eprintln!("worst slide a map {worst:.3?} of a texel, turns {turns:?}");
         for k in 0..CASCADES {
             assert!(turns[k] >= 3, "map {k} took the sun {} times", turns[k]);
-            let most = if k + 1 < CASCADES { 0.2 } else { 0.5 };
+            let most = [0.15, 0.15, 0.3, 0.5][k];
             assert!(worst[k] < most, "a ground point slid {worst:?} of a texel");
         }
     }
