@@ -703,3 +703,152 @@ fn set_and_if_lines_run_their_commands_on_the_scripts_data() {
         assert_eq!(BIG_COPIES.with(|c| c.borrow().clone()), vec![]);
     }
 }
+
+/// `kParamType_AnyForm`: any form, a lambda's script included.
+const ANY_FORM: u32 = 0x3d;
+/// What a lambda's compile and its script at run time need, stood in: the heap's block for the
+/// script buffer's data, `ScriptBuffer`'s constructor and destructor, `Script`'s constructor and
+/// destructor (a test vtable whose `SetFormID` at `+0x128` stores the id), the console manager
+/// (its first word the compiler `Script::Compile` runs on), the game's compile of the lambda's
+/// text (`005aeb90`), `DisableAssignFormIDs`, `CopyVarList`, `CopyRefList` and the form lookup
+/// (no form has an id here).
+const BUFFER_CONSTRUCTOR: u32 = 0x005a_e490;
+const BUFFER_DESTRUCTOR: u32 = 0x005a_e5c0;
+const SCRIPT_CONSTRUCTOR: u32 = 0x005a_a0f0;
+const SCRIPT_DESTRUCTOR: u32 = 0x005a_a1a0;
+const CONSOLE_MANAGER: u32 = 0x0071_b160;
+const SCRIPT_COMPILE: u32 = 0x005a_eb90;
+const DISABLE_ASSIGN_FORM_IDS: u32 = 0x0046_4d30;
+const COPY_VAR_LIST: u32 = 0x005a_b930;
+const COPY_REF_LIST: u32 = 0x005a_b7f0;
+const LOOKUP_FORM: u32 = 0x0048_39c0;
+const FORM_HEAP_ALLOCATE: u32 = 0x0040_1000;
+/// The test's own: the scripts' vtable and its `SetFormID`, the console manager and its compiler
+/// word, the lambdas' compiled data (16 bytes each), the handler of the command taking a form.
+const LAMBDA_VTABLE: u32 = AREA2 + 0x1a00;
+const SET_FORM_ID: u32 = 0x0103_f200;
+const MANAGER: u32 = AREA2 + 0x1c00;
+const LAMBDA_DATA: u32 = AREA2 + 0x1d00;
+const FORM_HANDLER: u32 = 0x0103_f300;
+
+thread_local! {
+    static LAMBDAS: RefCell<u32> = const { RefCell::new(0) };
+}
+
+/// The game's compile of a lambda's text, stood in: `begin function {} SetFunctionValue N end`
+/// compiles to a script whose data is `scn` and the number `N` (the data `005aeb90` would write
+/// is not needed here, only that each lambda's is its own).
+fn compile_lambda(e: &mut Engine, a: &[u32]) -> Ret {
+    let (script, buf) = (a[1], a[2]);
+    let source = String::from_utf8_lossy(&text(e, e.mem.u32(buf))).into_owned();
+    let value: u8 = source
+        .split_once("SetFunctionValue ")
+        .and_then(|(_, rest)| rest.split_whitespace().next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(0);
+    let n = LAMBDAS.with(|l| {
+        let n = *l.borrow();
+        *l.borrow_mut() = n + 1;
+        n
+    });
+    let data = LAMBDA_DATA + 0x10 * n;
+    e.mem.write(data, &[0x1d, 0, 0, 0, value, 0xab]);
+    e.mem.set_u32(script + 0x30, data);
+    e.mem.set_u32(script + 0x20, 6);
+    ret(1)
+}
+
+/// The command taking one form as `005ac7a0` calls it: the form read through `005accb0` (the
+/// lambda's script, from xNVSE's reader), the number in its data given as the result.
+fn form_handler(e: &mut Engine, a: &[u32]) -> Ret {
+    let (params, data, reference, container) = (a[0], a[1], a[2], a[3]);
+    let (script, locals, result, offset) = (a[4], a[5], a[6], a[7]);
+    let value = e.with_stack(8, |e, out| {
+        e.mem.set_u32(out.addr(), 0);
+        let words = [
+            params,
+            data,
+            offset,
+            reference,
+            container,
+            script,
+            locals,
+            out.addr(),
+        ];
+        if !e.call(0x005a_ccb0, &words).bool() {
+            return f64::NAN;
+        }
+        let form = e.mem.u32(out.addr());
+        if form == 0 {
+            return f64::NAN;
+        }
+        f64::from(e.mem.u8(e.mem.u32(form + 0x30) + 4))
+    });
+    e.mem.set_f64(result, value);
+    ret(1)
+}
+
+/// The engine for lines whose command takes a lambda: [`line_engine`], `PlugCmd` taking one form
+/// (`kParamType_AnyForm`) run by [`form_handler`], and the stand-ins above.
+fn lambda_engine(row: bool) -> Engine {
+    let mut e = line_engine(row);
+    LAMBDAS.with(|l| *l.borrow_mut() = 0);
+    parameters(&mut e, &[ANY_FORM], 1);
+    let record = e.script_tables().record(PLUGIN_COMMAND);
+    e.mem.set_u32(record + 0x18, FORM_HANDLER);
+    e.register(FORM_HANDLER, form_handler);
+    e.register(BUFFER_CONSTRUCTOR, |e, a| {
+        let data = e.call(FORM_HEAP_ALLOCATE, &[0x4000]).u32();
+        e.mem.set_u32(a[0] + 0x20, data);
+        ret(a[0])
+    });
+    e.register(SCRIPT_CONSTRUCTOR, |e, a| {
+        e.mem.write(a[0], &[0; 0x54]);
+        e.mem.set_u32(a[0], LAMBDA_VTABLE);
+        e.mem.set_u8(a[0] + 4, 0x11);
+        ret(a[0])
+    });
+    e.mem.set_u32(LAMBDA_VTABLE + 0x128, SET_FORM_ID);
+    e.register(SET_FORM_ID, |e, a| {
+        e.mem.set_u32(a[0] + 0xc, a[1]);
+        Ret::default()
+    });
+    e.mem.set_u32(MANAGER, MANAGER + 0x10);
+    e.register(CONSOLE_MANAGER, |_, _| ret(MANAGER));
+    e.register(SCRIPT_COMPILE, compile_lambda);
+    for quiet in [
+        BUFFER_DESTRUCTOR,
+        SCRIPT_DESTRUCTOR,
+        DISABLE_ASSIGN_FORM_IDS,
+        COPY_VAR_LIST,
+        COPY_REF_LIST,
+        LOOKUP_FORM,
+    ] {
+        e.register(quiet, nothing);
+    }
+    e
+}
+
+/// Two `set` lines whose command's argument is a different lambda (`SetFunctionValue 1` and `2`),
+/// compiled by `CompileLine` and run by `CExpression::Eval`: the command gets each line's own
+/// lambda (1, then 2), in both presets. Lambdas are known by their token's address and their
+/// position on the script's data, so a command handed the copy of its token on `Eval`'s stack
+/// (seam `005949D4` gone) would get the first line's lambda on the second line.
+#[test]
+fn two_lines_with_different_lambdas_get_their_own() {
+    for row in [false, true] {
+        let mut e = lambda_engine(row);
+        let lines: Vec<u32> = [1, 2]
+            .iter()
+            .map(|n| {
+                let text = format!(" f to PlugCmd (begin function {{}} SetFunctionValue {n} end)");
+                compile_line(&mut e, 0x15, &text)
+                    .unwrap_or_else(|| panic!("row {row}, lambda {n}: {:x?}", formats()))
+            })
+            .collect();
+        for (line, want) in lines.iter().zip([1.0, 2.0]) {
+            assert_eq!(evaluate(&mut e, line + 4 + 3 + 2), want, "row {row}");
+        }
+        assert_eq!(BIG_COPIES.with(|c| c.borrow().clone()), vec![]);
+    }
+}
