@@ -1050,9 +1050,13 @@ With the switch on:
   an interior's sections) drawn into JIP's own textures and kept (at most 60, then the oldest let go
   down to 42), the fog of war over them, the door and quest markers, and the player's marker turned.
   JIP 57.30 writes no cache of local map pictures (its `SaveLocalMapTexture` is not called: the calls
-  are commented out), so the port writes none either. One JIP slip is not copied: JIP keeps pointers
-  to its world marker tiles while the list holding them can grow and move, so a cell's markers could
-  point at freed memory; the port keeps their places in the list instead.
+  are commented out), so the port writes none either. Three JIP slips are not copied: JIP keeps
+  pointers to its world marker tiles while the list holding them can grow and move, so a cell's markers
+  could point at freed memory (the port keeps their places in the list); a kept map drawn again frees
+  its old texture while JIP's "first map" can still point at it, so the clean-up above 60 maps could
+  start from freed memory and delete the newest maps (the port moves "first" on before the old texture
+  goes); and a local map slot with no cell keeps its old texture, which the clean-up or a colour change
+  may have deleted (the port clears it, as `InitMiniMap` leaves it).
 
 Not yet, with the switch on:
 - The 23 commands not built yet are named and found like the others but have no handler: a script

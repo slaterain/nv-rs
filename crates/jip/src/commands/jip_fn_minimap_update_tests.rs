@@ -849,3 +849,143 @@ fn door_markers_outside_the_map_are_left_out() {
     assert!(off_bounds([f32::NAN, 0.5]));
     assert!(!off_bounds([-0.0, 0.5]), "-0 is not below 0");
 }
+
+/// Review round 1: a kept map drawn again while it is JIP's first texture. The draw releases the
+/// old texture (here: unlinked, its next word gone); JIP's first moves on to the next of its maps
+/// first, so a purge above 60 deletes the oldest (cells 2 to 20) and never the map just drawn.
+#[test]
+fn a_kept_first_map_drawn_again_moves_the_first_on() {
+    let mut e = setup();
+    let mut s = MiniMapState::default();
+    let list = texture_list(&mut e, &mut s, 61);
+    let (old, second) = (list[0], list[2]);
+    assert_eq!(s.mm_first_texture, old);
+    let new = alloc(0x40);
+    CALLS.with(|c| c.borrow_mut().clear());
+    let made = redraw_kept(&mut e, &mut s, old, |e, _, slot| {
+        assert_eq!(*slot, old);
+        // The new texture goes to the list's end; the old one is freed.
+        e.mem.set_u32(new, VTBL_RENDERED_TEXTURE);
+        e.mem.set_u32(new + TEXTURE_CELL, 1);
+        let tail = e.mem.u32(TEXTURE_LIST_TAIL);
+        e.mem.set_u32(tail + TEXTURE_NEXT, new);
+        e.mem.set_u32(new + TEXTURE_PREV, tail);
+        e.mem.set_u32(TEXTURE_LIST_TAIL, new);
+        e.mem.set_u32(old + TEXTURE_NEXT, 0);
+        *slot = new;
+    });
+    assert_eq!(made, new);
+    assert_eq!(s.mm_first_texture, second, "moved on before the release");
+    let order: Vec<u32> = calls().into_iter().map(|c| c.0).collect();
+    assert_eq!(order, [ENTER_CRITICAL_SECTION, LEAVE_CRITICAL_SECTION]);
+    s.rendered_exteriors.insert(
+        1,
+        RenderedEntry {
+            texture: new,
+            regen_flags: 0,
+        },
+    );
+    CALLS.with(|c| c.borrow_mut().clear());
+    purge_rendered_exteriors(&mut e, &mut s);
+    let deleted: Vec<u32> = calls_to(RENDERED_TEXTURE_DELETE)
+        .into_iter()
+        .map(|w| w[0])
+        .collect();
+    assert_eq!(deleted.len(), 19);
+    assert!(!deleted.contains(&new) && !deleted.contains(&old));
+    assert_eq!(deleted[0], second);
+    assert_eq!(
+        s.rendered_exteriors[&1].texture, new,
+        "the map just drawn is kept"
+    );
+
+    // Not JIP's first: nothing moves, no lock.
+    let mut s = MiniMapState::default();
+    let list = texture_list(&mut e, &mut s, 3);
+    CALLS.with(|c| c.borrow_mut().clear());
+    redraw_kept(&mut e, &mut s, list[2], |_, _, slot| *slot = 0x0dea_5000);
+    assert_eq!(s.mm_first_texture, list[0]);
+    assert!(calls().is_empty());
+    // The only map, drawn again: the first is the new one.
+    let mut s = MiniMapState::default();
+    let one = texture_list(&mut e, &mut s, 1)[0];
+    e.mem.set_u32(one + TEXTURE_NEXT, 0);
+    redraw_kept(&mut e, &mut s, one, |_, _, slot| *slot = 0x0dea_6000);
+    assert_eq!(s.mm_first_texture, 0x0dea_6000);
+}
+
+/// Review round 1: the exterior's drawing with every grid slot empty (no cell loaded there). Each
+/// slot's texture is cleared, not left on a map the purge or a format change may have deleted
+/// (JIP leaves it); around the loop the sun's light and the scene's fog are JIP's, then put back,
+/// with the underwater flag, under the scene lights' lock entered and left once; outside a full
+/// update the extra node is hidden for the draw and shown after; the water planes end hidden.
+#[test]
+fn an_empty_grid_slot_keeps_no_old_texture() {
+    let mut e = setup();
+    for page in [0x011f_9000, 0x011d_8000] {
+        if !e.mem.is_mapped(page) {
+            e.map(page, 0x1000);
+        }
+    }
+    e.register(LOCK_ENTER, |_, w| {
+        record(LOCK_ENTER, w);
+        eax(0)
+    });
+    e.register(LOCK_LEAVE, |_, w| {
+        record(LOCK_LEAVE, w);
+        eax(0)
+    });
+    let (scene, sun, tes) = (alloc(0x140), alloc(0x100), alloc(0x40));
+    e.mem.set_u32(SHADOW_SCENE_NODE, scene);
+    e.mem.set_u32(scene + SCENE_SUN, sun);
+    e.mem.set_u32(TES, tes);
+    e.mem.set_u32(tes + TES_LIGHT, 0x0dea_7001);
+    e.mem.set_u32(GAME_FOG_PROPERTY, 0x0dea_7002);
+    e.mem.set_u32(sun + LIGHT_LIGHT, 0x0dea_7001);
+    e.mem.set_u32(scene + SCENE_FOG, 0x0dea_7002);
+    e.mem.set_u8(UNDERWATER_FOG, 0);
+    let extra = alloc(0x40);
+    e.mem.set_u32(EXTRA_HIDDEN_NODE, extra);
+    let planes = alloc(0x40);
+    let children = alloc(8);
+    let plane = alloc(0x40);
+    e.mem.set_u32(children, plane);
+    e.mem.set_u32(planes + CHILDREN, children);
+    e.mem.set_u16(planes + CHILD_COUNT, 1);
+    let mut s = MiniMapState {
+        light: 0x0dea_7101,
+        fog: 0x0dea_7102,
+        water_planes: planes,
+        ..MiniMapState::default()
+    };
+    for (i, prop) in s.shader_props.iter_mut().enumerate() {
+        *prop = alloc(0x80);
+        e.mem
+            .set_u32(*prop + SHADER_TEXTURE, 0x0dea_8000 + i as u32);
+    }
+    CALLS.with(|c| c.borrow_mut().clear());
+    draw_exterior(&mut e, &mut s, false, [0.0, 0.0]);
+    for prop in s.shader_props {
+        assert_eq!(e.mem.u32(prop + SHADER_TEXTURE), 0);
+    }
+    assert_eq!(e.mem.u32(sun + LIGHT_LIGHT), 0x0dea_7001);
+    assert_eq!(e.mem.u32(scene + SCENE_FOG), 0x0dea_7002);
+    assert_eq!(e.mem.u8(UNDERWATER_FOG), 0);
+    assert_eq!(
+        e.mem.u32(extra + FLAGS) & 1,
+        0,
+        "the extra node shown again"
+    );
+    assert_eq!(e.mem.u32(plane + FLAGS) & 1, 1, "the water planes hidden");
+    let lock: Vec<(u32, Vec<u32>)> = calls()
+        .into_iter()
+        .filter(|c| c.0 == LOCK_ENTER || c.0 == LOCK_LEAVE)
+        .collect();
+    assert_eq!(
+        lock,
+        [
+            (LOCK_ENTER, vec![SCENE_LIGHTS_LOCK, 0]),
+            (LOCK_LEAVE, vec![SCENE_LIGHTS_LOCK])
+        ]
+    );
+}

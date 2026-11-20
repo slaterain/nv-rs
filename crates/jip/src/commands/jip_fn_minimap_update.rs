@@ -964,6 +964,9 @@ fn draw_exterior(e: &mut Engine, s: &mut MiniMapState, update_tiles: bool, nw: [
     for (i, &mask) in SELECT_UPDATE.iter().enumerate() {
         let cell = s.curr_cell_grid[i];
         if cell == 0 {
+            // JIP leaves the slot's texture as it was (`continue`): a map the purge or a format
+            // change has deleted since. The port clears it, as `InitMiniMap` leaves it (FIXES).
+            e.mem.set_u32(s.shader_props[i] + SHADER_TEXTURE, 0);
             continue;
         }
         let id = e.mem.u32(cell + CELL_ID);
@@ -974,7 +977,9 @@ fn draw_exterior(e: &mut Engine, s: &mut MiniMapState, update_tiles: bool, nw: [
                 }
             } else if entry.regen_flags & mask != mask {
                 entry.regen_flags |= mask;
-                generate_local_map_exterior(e, s, cell, &mut entry.texture);
+                entry.texture = redraw_kept(e, s, entry.texture, |e, s, slot| {
+                    generate_local_map_exterior(e, s, cell, slot)
+                });
                 s.rendered_exteriors.insert(id, entry);
             }
         } else {
@@ -1037,6 +1042,31 @@ fn purge_rendered_exteriors(e: &mut Engine, s: &mut MiniMapState) {
         s.mm_first_texture = curr;
         e.call(LEAVE_CRITICAL_SECTION, &args![TEXTURE_LIST_LOCK]);
     }
+}
+
+/// A kept exterior map drawn again (`draw` makes the new texture in the slot and releases the old
+/// one, whose only owner was the entry): answers the new texture. JIP keeps `s_mmFirstTexture` on
+/// the old one, so a later purge would start from freed memory; the port moves it on to the next
+/// of JIP's maps first (or to the new one when there is none), under the list's lock, as a move to
+/// the list's end does (a JIP slip not copied, FIXES).
+fn redraw_kept(
+    e: &mut Engine,
+    s: &mut MiniMapState,
+    old: u32,
+    draw: impl FnOnce(&mut Engine, &mut MiniMapState, &mut u32),
+) -> u32 {
+    let was_first = old != 0 && old == s.mm_first_texture;
+    if was_first {
+        e.call(ENTER_CRITICAL_SECTION, &args![TEXTURE_LIST_LOCK]);
+        s.mm_first_texture = find_next_mm_texture(e, old);
+        e.call(LEAVE_CRITICAL_SECTION, &args![TEXTURE_LIST_LOCK]);
+    }
+    let mut texture = old;
+    draw(e, s, &mut texture);
+    if was_first && s.mm_first_texture == 0 {
+        s.mm_first_texture = texture;
+    }
+    texture
 }
 
 /// A kept local map moved to the end of the game's texture list (its first one moved on first),

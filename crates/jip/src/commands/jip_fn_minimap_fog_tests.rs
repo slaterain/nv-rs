@@ -196,3 +196,150 @@ fn a_place_finds_its_vertex_alpha() {
         0x0700_0000 + 15 * 16 + 0xc
     );
 }
+
+/// A 5 x 5 grid of the loaded exterior cells centred on (0, 0) (`GridCellArray`: corner +4/+8,
+/// size +0xC, cells +0x10), and its cells: each with a `SeenData` of `bits`, or seen whole (JIP's
+/// flag +0x25 bit 0), or none.
+enum Seen<'a> {
+    Bits(&'a [u32]),
+    Whole,
+}
+
+fn grid(e: &mut Engine, cells: &[((i32, i32), Seen)]) -> u32 {
+    crate::commands::test_support::extra_stand_ins(e);
+    let grid = AREA + 0x4000;
+    let array = AREA + 0x4100;
+    e.mem.set_u32(grid + 4, 0);
+    e.mem.set_u32(grid + 8, 0);
+    e.mem.set_u32(grid + 0xc, 5);
+    e.mem.set_u32(grid + 0x10, array);
+    for (n, ((x, y), seen_as)) in cells.iter().enumerate() {
+        let cell = AREA + 0x5000 + 0x400 * n as u32;
+        let (gx, gy) = ((x + 2) as u32, (y + 2) as u32);
+        e.mem.set_u32(array + 4 * (gy + gx + (gx << 2)), cell);
+        match seen_as {
+            Seen::Whole => e.mem.set_u8(cell + CELL_SEEN_ALL, 1),
+            Seen::Bits(bits) => {
+                let data = seen(e, cell + 0x100, 0x0108_3fc4, bits);
+                crate::commands::test_support::put_extra(
+                    e,
+                    cell + CELL_EXTRA,
+                    cell + 0x80,
+                    EXTRA_SEEN_DATA,
+                    data,
+                );
+            }
+        }
+    }
+    grid
+}
+
+/// Review round 1: an exterior vertex's level from the grid's cells. Inside the cell: its four
+/// bits, or 1 + 3 seen whole (JIP's sentinel 1, never read as seen data). The last row: its own
+/// two bits, then the next cell up's (+y) first row, 2 when that one is seen whole, none when it
+/// is absent. The last column: the same from the next cell across (+x). The corner: one bit of
+/// each of the three next cells, 1 for one seen whole.
+#[test]
+fn an_exterior_vertex_reads_the_grids_cells() {
+    let level = |cells: &[((i32, i32), Seen)], column: u32, row: u32| {
+        let mut e = engine();
+        e.map(AREA, 0x1_0000);
+        let g = grid(&mut e, cells);
+        section_seen_level(&mut e, g, packed(column, row), pack(0, 0))
+    };
+    let own = |bits| ((0, 0), Seen::Bits(bits));
+    assert_eq!(level(&[own(&[0x23, 0x24])], 3, 2), 2);
+    assert_eq!(level(&[((0, 0), Seen::Whole)], 3, 2), 4, "1 + 3");
+    assert_eq!(level(&[], 3, 2), 0, "no cell");
+    // The last row: own 0xF3 and 0xF4; the cell up (0, 1).
+    assert_eq!(level(&[own(&[0xf3, 0xf4])], 3, 15), 2);
+    assert_eq!(
+        level(&[own(&[0xf3, 0xf4]), ((0, 1), Seen::Whole)], 3, 15),
+        4
+    );
+    assert_eq!(
+        level(&[own(&[0xf3, 0xf4]), ((0, 1), Seen::Bits(&[0x3]))], 3, 15),
+        3
+    );
+    assert_eq!(
+        level(&[own(&[0xf3]), ((1, 0), Seen::Whole)], 3, 15),
+        1,
+        "not the cell across"
+    );
+    assert_eq!(
+        level(&[((0, 0), Seen::Whole), ((0, 1), Seen::Whole)], 3, 15),
+        4
+    );
+    // The last column: own 0x2F and 0x3F; the cell across (1, 0).
+    assert_eq!(
+        level(&[own(&[0x2f, 0x3f]), ((1, 0), Seen::Whole)], 15, 2),
+        4
+    );
+    assert_eq!(
+        level(&[own(&[0x2f, 0x3f]), ((1, 0), Seen::Bits(&[0x20]))], 15, 2),
+        3
+    );
+    assert_eq!(
+        level(&[own(&[0x2f]), ((0, 1), Seen::Whole)], 15, 2),
+        1,
+        "not the cell up"
+    );
+    // The corner: own 0xFF; (0, 1) bit 0xF, (1, 0) bit 0xF0, (1, 1) bit 0.
+    assert_eq!(level(&[own(&[0xff])], 15, 15), 1);
+    assert_eq!(
+        level(
+            &[
+                own(&[0xff]),
+                ((0, 1), Seen::Bits(&[0xf])),
+                ((1, 0), Seen::Bits(&[0xf0])),
+                ((1, 1), Seen::Bits(&[0]))
+            ],
+            15,
+            15
+        ),
+        4
+    );
+    assert_eq!(
+        level(
+            &[
+                own(&[]),
+                ((0, 1), Seen::Whole),
+                ((1, 0), Seen::Whole),
+                ((1, 1), Seen::Whole)
+            ],
+            15,
+            15
+        ),
+        3,
+        "one each at the corner"
+    );
+}
+
+/// Review round 1: in an exterior the vertex alphas come from the TES grid's cells (TES +0x8),
+/// not from the player's cell's extra data: a centre cell seen whole makes an inner vertex level 4.
+#[test]
+fn an_exteriors_vertex_alphas_come_from_the_grid() {
+    let mut e = engine();
+    e.map(AREA, 0x1_0000);
+    if !e.mem.is_mapped(TES) {
+        e.map(TES & !0xfff, 0x1000);
+    }
+    let g = grid(&mut e, &[((0, 0), Seen::Whole)]);
+    let tes = AREA + 0x8000;
+    e.mem.set_u32(TES, tes);
+    e.mem.set_u32(tes + TES_GRID, g);
+    let cell = AREA + 0x9000;
+    let data = AREA + 0x9400;
+    let colours = AREA + 0xa000;
+    e.mem.set_u32(data + 0x28, colours);
+    let mut s = MiniMapState {
+        pc_curr_cell: cell,
+        vertex_alpha: [0.0, 0.25, 0.5, 0.75, 1.0],
+        ..MiniMapState::default()
+    };
+    s.shape_datas[4] = data;
+    s.packed_coords[4] = pack(0, 0);
+    calc_vtx_alpha_by_seen_data(&mut e, &s, 4);
+    // Vertex (column 2, row 2): its alpha at 2 * 17 + (16 - 2).
+    assert_eq!(e.mem.f32(colours + 16 * (2 * 17 + 14) + 0xc), 1.0);
+}
