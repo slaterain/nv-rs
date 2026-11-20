@@ -236,6 +236,14 @@ const UNREAD: &[Row] = &[
     ),
     (
         "jip",
+        "commands/jip_fn_ui_text.rs",
+        "click",
+        N(3),
+        "the text edit menu's click slot (JIP's `call dword ptr ds:0x1070040`): the menu, \
+         button 1 and the OK tile",
+    ),
+    (
+        "jip",
         "commands/jip_fn_utility.rs",
         "e.mem.u32(vtbl + 4)",
         N(2),
