@@ -311,14 +311,28 @@ pub fn drawable(hidden: bool, minimised: bool, size: (u32, u32)) -> bool {
     !hidden && !minimised && size.0 > 0 && size.1 > 0
 }
 
-/// What counts as drawn after a frame's step, for `key` (what shows now): a frame drawn, or one
-/// not drawn now (set up again, or skipped), is not tried again until what shows changes or the
-/// window does; only a drawing chosen again draws at once.
-pub fn drawn_after(step: FrameStep, key: (usize, bool)) -> Option<(usize, bool)> {
+/// How long after a frame that was not drawn (its surface set up again, or skipped) the next try
+/// waits: never nonstop, and never left for good (the intro's last picture, a message that came
+/// in the same moment, must still be drawn).
+pub const RETRY_AFTER: Duration = Duration::from_millis(100);
+
+/// When a frame not drawn at `now` is tried again: at once only after a drawing chosen again.
+pub fn retry_after(step: FrameStep, now: Instant) -> Option<Instant> {
     match step {
-        FrameStep::ChooseAgain => None,
-        FrameStep::Draw | FrameStep::Reconfigure | FrameStep::Skip => Some(key),
+        FrameStep::Draw | FrameStep::ChooseAgain => None,
+        FrameStep::Reconfigure | FrameStep::Skip => Some(now + RETRY_AFTER),
     }
+}
+
+/// Whether a redraw is asked for `now`: what shows (`key`) is not what was last put on screen
+/// (`drawn`), and no wait after a frame not drawn (`retry_at`) is still running.
+pub fn wants_redraw(
+    drawn: Option<(usize, bool)>,
+    key: (usize, bool),
+    retry_at: Option<Instant>,
+    now: Instant,
+) -> bool {
+    drawn != Some(key) && retry_at.is_none_or(|at| now >= at)
 }
 
 /// The span within which the drawing is chosen again at most [`CHOOSE_AGAIN_LIMIT`] times.
@@ -473,6 +487,8 @@ struct App {
     drawn: Option<(usize, bool)>,
     /// When the drawing was last chosen again ([`may_choose_again`]).
     chosen_again: Vec<Instant>,
+    /// When a frame that was not drawn is tried again ([`retry_after`]).
+    retry_at: Option<Instant>,
     /// The window could not be made or drawn in ([`cannot_draw`] said why).
     no_window: bool,
     exit_code: i32,
@@ -612,6 +628,8 @@ impl App {
         self.screen = screen;
         self.started = Instant::now();
         self.finished = !typed;
+        // Something else shows: drawn whatever the last key was (a new screen can have the same).
+        self.drawn = None;
         if self.hidden && !self.closed {
             if let Some(w) = &self.window {
                 w.set_minimized(false);
@@ -708,16 +726,17 @@ impl App {
             (FrameStep::ChooseAgain, _) => {
                 return self.choose_again(event_loop, &format!("its window surface: {got:?}"))
             }
-            // Not drawn now: tried again when what shows changes next (a typed character, the
-            // cursor's blink) or the window changes, never at once in a loop ([`drawn_after`]).
+            // Not drawn now: tried again after a short wait ([`retry_after`]), never at once in a
+            // loop and never left undrawn (the intro's last picture has no later change).
             _ => {
                 if step == FrameStep::Reconfigure {
                     surface.configure(&gpu.device, config);
                 }
-                self.drawn = drawn_after(step, key);
+                self.retry_at = retry_after(step, Instant::now());
                 return;
             }
         };
+        self.retry_at = None;
         let view = frame.texture.create_view(&Default::default());
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
         gpu.draw(
@@ -1309,8 +1328,14 @@ impl winit::application::ApplicationHandler<Event> for App {
             let ms = self.started.elapsed().as_millis() as u64;
             Instant::now() + Duration::from_millis(screen::BLINK_MS - ms % screen::BLINK_MS)
         };
+        // A frame not drawn is tried again once its short wait is over, even with nothing else
+        // to wake for.
+        let next = match self.retry_at {
+            Some(at) if self.drawn != Some(self.frame_key()) => next.min(at),
+            _ => next,
+        };
         event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(next));
-        if self.drawn != Some(self.frame_key()) {
+        if wants_redraw(self.drawn, self.frame_key(), self.retry_at, Instant::now()) {
             self.request_redraw();
         }
     }
@@ -1446,6 +1471,7 @@ pub fn run(raw: Vec<String>) -> i32 {
         closed: false,
         drawn: None,
         chosen_again: Vec::new(),
+        retry_at: None,
         no_window: false,
         exit_code: 0,
     };
@@ -1760,8 +1786,8 @@ mod tests {
     }
 
     /// No redraw loop: a window stepped aside, minimised or of no size is not drawn; a frame set
-    /// up again or skipped counts as drawn until what shows changes (no retry at once); a
-    /// drawing chosen again twice within a second is not chosen a third time.
+    /// up again or skipped is tried again after a short wait, not at once; a drawing chosen again
+    /// twice within a second is not chosen a third time.
     #[test]
     fn a_surface_that_stays_outdated_is_not_asked_again_nonstop() {
         assert!(drawable(false, false, (960, 720)));
@@ -1769,18 +1795,41 @@ mod tests {
         assert!(!drawable(false, true, (960, 720)));
         assert!(!drawable(false, false, (0, 0)));
         assert!(!drawable(false, false, (960, 0)));
-        let key = (12, true);
-        assert_eq!(drawn_after(FrameStep::Draw, key), Some(key));
-        assert_eq!(drawn_after(FrameStep::Reconfigure, key), Some(key));
-        assert_eq!(drawn_after(FrameStep::Skip, key), Some(key));
-        assert_eq!(drawn_after(FrameStep::ChooseAgain, key), None);
         let t0 = Instant::now();
         let ms = |n| t0 + Duration::from_millis(n);
+        assert_eq!(retry_after(FrameStep::Draw, t0), None);
+        assert_eq!(retry_after(FrameStep::ChooseAgain, t0), None);
+        for step in [FrameStep::Reconfigure, FrameStep::Skip] {
+            let at = retry_after(step, t0);
+            assert_eq!(at, Some(t0 + RETRY_AFTER));
+            // Not at once (the 6 ms typing wake does not ask again)...
+            assert!(!wants_redraw(None, (12, true), at, ms(6)));
+        }
         assert!(may_choose_again(&[], t0));
         assert!(may_choose_again(&[t0], ms(100)));
         assert!(!may_choose_again(&[t0, ms(100)], ms(200)));
         // A second later the budget is there again.
         assert!(may_choose_again(&[t0, ms(100)], ms(1150)));
+    }
+
+    /// The intro's last picture (its key never changes again: no blink, nothing more typed) whose
+    /// frame came back out of date or skipped is still drawn once the short wait is over, so the
+    /// intro ends; so is a new screen with the same key as the last one drawn. Nothing changed
+    /// and drawn: no redraw.
+    #[test]
+    fn a_frame_not_drawn_is_drawn_after_its_wait_even_with_no_later_change() {
+        let t0 = Instant::now();
+        let last = (57, false);
+        for step in [FrameStep::Reconfigure, FrameStep::Skip] {
+            let at = retry_after(step, t0);
+            assert!(wants_redraw(None, last, at, t0 + RETRY_AFTER), "{step:?}");
+            assert!(
+                wants_redraw(None, last, at, t0 + Duration::from_secs(5)),
+                "{step:?}"
+            );
+        }
+        assert!(wants_redraw(None, last, None, t0));
+        assert!(!wants_redraw(Some(last), last, None, t0));
     }
 
     /// Play's work always ends with a code: its own, or 101 when it panicked (so `Ended` is sent
