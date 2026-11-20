@@ -306,8 +306,8 @@ impl Profiles {
 
     /// Off Windows a shared settings.ini (from an older package, or made before the per-profile
     /// files) would be moved by the game's first start into the profile played first only: at the
-    /// first save it is split into each profile's own file (one that has its own already keeps
-    /// it), and then renamed aside as Play renames a moved one, so the choice reaches both.
+    /// first save it is split into each profile's own file (over one that is there already, its lines
+    /// winning line by line, as play.sh and the screen let the shared file win), and then renamed aside as Play renames a moved one, so the choice reaches both.
     fn split_shared(&self) -> std::io::Result<()> {
         let Some(own) = &self.own_pending else {
             return Ok(());
@@ -319,12 +319,15 @@ impl Profiles {
         };
         let mut writes = Vec::new();
         for path in own {
-            if !path.exists() {
-                if let Some(dir) = path.parent() {
-                    std::fs::create_dir_all(dir).map_err(|e| naming(dir, e))?;
-                }
-                writes.push((path.clone(), raw.clone()));
+            let bytes = match std::fs::read(path) {
+                Ok(own) => bytes_of(&shared_over(&text_of(&raw), &text_of(&own))),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => raw.clone(),
+                Err(e) => return Err(naming(path, e)),
+            };
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir).map_err(|e| naming(dir, e))?;
             }
+            writes.push((path.clone(), bytes));
         }
         write_all(&writes)?;
         let moved = profile_settings::migrated_name(&self.pending);
@@ -439,6 +442,24 @@ impl Profiles {
         }
         write_all(&writes)
     }
+}
+
+/// A shared settings.ini (`shared`) laid over a profile's own (`own`): all of the shared file's
+/// lines, then the own file's lines of the names the shared file does not have (names compared
+/// without case, as the game reads them); the own file's comments go.
+fn shared_over(shared: &str, own: &str) -> String {
+    let name = |l: &str| {
+        l.split_once('=')
+            .map(|(n, _)| n.trim().to_ascii_lowercase())
+            .filter(|n| !n.starts_with('#') && !n.starts_with(';'))
+    };
+    let named: Vec<String> = shared.lines().filter_map(name).collect();
+    let mut lines: Vec<&str> = shared.lines().collect();
+    lines.extend(
+        own.lines()
+            .filter(|l| name(l).is_some_and(|n| !named.contains(&n))),
+    );
+    lines.join("\r\n") + "\r\n"
 }
 
 /// Whether `name` is one of `names`, its case aside (as the game and Settings.ps1 read them).
@@ -665,7 +686,8 @@ mod tests {
 
     /// Off Windows a shared settings.ini is split at the first save into each profile's own file
     /// (the game's first start would move it into one profile only), the choice in both, and the
-    /// shared one renamed aside; a profile's own file that was there already is kept.
+    /// shared one renamed aside; over a profile's own file that is there already, the shared
+    /// file's lines win line by line and the own file's other lines stay.
     #[test]
     fn off_windows_a_shared_settings_ini_reaches_both_profiles() {
         let own = scratch("split");
@@ -680,12 +702,19 @@ mod tests {
         }
         assert!(!p.pending.exists());
         assert!(own.join("settings.ini.migrated").is_file());
-        // Again, with the mods profile's own file there: the shared one does not replace it.
-        std::fs::write(&p.pending, "Preset=fixes\r\n").unwrap();
+        // Again, with both own files there: the shared file's lines win line by line (as play.sh
+        // and the screen let it win), the own files' lines of other names stay.
+        std::fs::write(&p.pending, "preset=fixes\r\n").unwrap();
         p.save(Row::MenuFrameLimit, "90").unwrap();
-        let mods = std::fs::read_to_string(own.join("mods").join("settings.ini")).unwrap();
-        assert!(mods.contains("\r\nPreset=vanilla\r\n"), "{mods}");
-        assert!(mods.contains("\r\nMenuFrameLimit=90\r\n"), "{mods}");
+        for name in ["game", "mods"] {
+            let text = std::fs::read_to_string(own.join(name).join("settings.ini")).unwrap();
+            assert!(text.contains("\r\nPreset=fixes\r\n"), "{name}: {text}");
+            assert!(!text.contains("vanilla"), "{name}: {text}");
+            assert!(text.contains("\r\nMenuFrameLimit=90\r\n"), "{name}: {text}");
+            assert!(text.contains("\r\nFrameLimit=60\r\n"), "{name}: {text}");
+            assert!(text.contains("\r\nOther=1\r\n"), "{name}: {text}");
+        }
+        assert!(!p.pending.exists());
         std::fs::remove_dir_all(&own).unwrap();
     }
 
