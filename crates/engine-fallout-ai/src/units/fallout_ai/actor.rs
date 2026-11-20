@@ -482,6 +482,41 @@ pub fn fn_0087d890(e: &mut Engine, this: Ptr<Actor>, add_to_process_lists: bool)
     e.set(this, Actor::iMinorCrimes, 0);
 }
 
+/// The queued follower barks (`FollowerBarks`' list, `011e0098`: a `tList` whose first node is in
+/// place, each node its item and the next node; an item starts with its actor) and the memory
+/// manager's free (`00aa4060` on `011f6238`).
+const FOLLOWER_BARKS: u32 = 0x011e_0098;
+const MEMORY_MANAGER: u32 = 0x011f_6238;
+const MEMORY_FREE: u32 = 0x00aa_4060;
+
+/// Row S0183's step, as Tweaks' `OnActorFree`: every bark naming `actor` is freed and its node taken
+/// out as Tweaks' `tList::RemoveMe` does (the next node's item and link copied in and that node
+/// freed; the last node only loses its item).
+fn forget_follower_barks(e: &mut Engine, actor: u32) {
+    let mut node = FOLLOWER_BARKS;
+    loop {
+        let item = e.mem.u32(node);
+        if item != 0 && e.mem.u32(item) == actor {
+            e.call(MEMORY_FREE, &args![MEMORY_MANAGER, item]);
+            let next = e.mem.u32(node + 4);
+            if next == 0 {
+                e.mem.set_u32(node, 0);
+                return;
+            }
+            let next_item = e.mem.u32(next);
+            let after = e.mem.u32(next + 4);
+            e.mem.set_u32(node, next_item);
+            e.mem.set_u32(node + 4, after);
+            e.call(MEMORY_FREE, &args![MEMORY_MANAGER, next]);
+        } else {
+            node = e.mem.u32(node + 4);
+            if node == 0 {
+                return;
+            }
+        }
+    }
+}
+
 // Translated from 0087dcb0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `Actor::~Actor` (Xbox PDB), the body: puts the vtables back, deletes the
 /// ragdoll controller and the penetration utility, releases the sound handle of
@@ -514,6 +549,12 @@ pub fn actor_destructor(e: &mut Engine, this: Ptr<Actor>) {
     e.call(0x0041_8890, &args![list, handle]);
     if e.call(0x00ad_8ce0, &args![handle]).bool() {
         e.call(0x00ad_8d10, &args![handle]);
+    }
+    // lStewieAl's Tweaks' row S0183 (`FollowerTopicUseAfterFreeFix`, the call at `0x87DDD0`): the
+    // follower barks queued for this actor are dropped before it goes; the exe keeps them, naming
+    // the freed actor.
+    if e.stewie(engine_core::extend::stewie::FOLLOWER_BARK_USE_AFTER_FREE) {
+        forget_follower_barks(e, this.addr());
     }
     e.call(0x0083_5980, &args![this]);
     let target_array = e.get(this, Actor::pCurrentCombatTargetArray);
@@ -5047,6 +5088,96 @@ mod tests {
         assert!(pos(0x0093_7030) < pos(0x0082_2a80));
         assert!(pos(0x0082_2a80) < pos(0x0081_53b0));
         assert_eq!(*calls.last().unwrap(), 0x0092_ec40);
+    }
+
+    /// The follower barks' list (`011e0098`: its first node in place) holding the items `items`, each
+    /// 16 bytes whose first word is its actor; the memory manager's free recorded.
+    fn follower_barks(e: &mut Engine, actors: &[u32]) -> Vec<u32> {
+        e.map(0x011e_0000, 0x1000);
+        e.register(0x00aa_4060, |_, _| Ret::default());
+        let items: Vec<u32> = actors
+            .iter()
+            .map(|actor| {
+                let item = e.mem.alloc(0x10);
+                e.mem.set_u32(item, *actor);
+                item
+            })
+            .collect();
+        let mut node = 0x011e_0098;
+        for (i, item) in items.iter().enumerate() {
+            e.mem.set_u32(node, *item);
+            if i + 1 < items.len() {
+                let next = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, next);
+                node = next;
+            }
+        }
+        items
+    }
+
+    /// The barks' items left in the list, in order.
+    fn barks_left(e: &Engine) -> Vec<u32> {
+        let mut out = vec![];
+        let mut node = 0x011e_0098;
+        while node != 0 {
+            let item = e.mem.u32(node);
+            if item != 0 {
+                out.push(item);
+            }
+            node = e.mem.u32(node + 4);
+        }
+        out
+    }
+
+    /// lStewieAl's Tweaks' row S0183 (`FollowerTopicUseAfterFreeFix`, `0x87DDD0`): an actor going away
+    /// with follower barks queued for it (first, middle and last of the list): off, the list keeps
+    /// them, naming the freed actor; on, they are freed and taken out (before the radio call), the
+    /// others' order kept.
+    #[test]
+    fn s0183_an_actor_going_away_takes_its_follower_barks() {
+        for on in [false, true] {
+            let (mut e, actor, _, _) = destructor_setup();
+            let other = e.mem.alloc(0x10);
+            let items = follower_barks(
+                &mut e,
+                &[actor.addr(), other, actor.addr(), other, actor.addr()],
+            );
+            e.set_stewie(
+                engine_core::extend::stewie::FOLLOWER_BARK_USE_AFTER_FREE,
+                on,
+            );
+            e.call_log = Some(vec![]);
+            e.call(0x0087_dcb0, &args![actor]);
+            if on {
+                assert_eq!(barks_left(&e), vec![items[1], items[3]]);
+                let calls = called(&e);
+                let freed = calls.iter().position(|a| *a == 0x00aa_4060).unwrap();
+                assert!(freed < calls.iter().position(|a| *a == 0x0083_5980).unwrap());
+            } else {
+                assert_eq!(barks_left(&e), items);
+            }
+        }
+    }
+
+    /// Row S0183 with no bark naming the actor (ordinary input): the list and the calls are the same
+    /// with the row off and on.
+    #[test]
+    fn s0183_row_on_without_its_barks_changes_nothing() {
+        let mut runs = vec![];
+        for on in [false, true] {
+            let (mut e, actor, _, _) = destructor_setup();
+            let other = e.mem.alloc(0x10);
+            let items = follower_barks(&mut e, &[other, other]);
+            e.set_stewie(
+                engine_core::extend::stewie::FOLLOWER_BARK_USE_AFTER_FREE,
+                on,
+            );
+            e.call_log = Some(vec![]);
+            e.call(0x0087_dcb0, &args![actor]);
+            assert_eq!(barks_left(&e), items);
+            runs.push(called(&e));
+        }
+        assert_eq!(runs[0], runs[1]);
     }
 
     #[test]

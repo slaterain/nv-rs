@@ -182,7 +182,12 @@ pub fn fn_009ab390(e: &mut Engine, this: Ptr, time: f32) {
                 e.mem.set_u32(angle_x, x87_store32(-pitch));
             } else {
                 let matrix = e.call(TRANSFORM, &args![node]).u32();
-                e.call(0x00a5_9400, &args![matrix, angle_z, angle_x, ebp - 0x30]);
+                // lStewieAl's Tweaks' row S0130.03 (`ContinuousBeamProjectileCrashFix`, the call at
+                // `0x9AB55F`): an NPC's beam whose node is not there yet (a save just loaded) reads no
+                // rotation (the node's at +0x68 is then 0x68).
+                if !(matrix == 0x68 && e.stewie(engine_core::extend::stewie::BEAM_NPC_NULL_NODE)) {
+                    e.call(0x00a5_9400, &args![matrix, angle_z, angle_x, ebp - 0x30]);
+                }
             }
             let mut skip_spread = false;
             let package = if shooter != 0 {
@@ -482,6 +487,11 @@ mod tests {
     }
 
     fn update(world: Beam) -> (u32, Engine, Logged) {
+        update_with(world, |_| {})
+    }
+
+    /// [`update`] with `tweak` run on the engine just before the call.
+    fn update_with(world: Beam, tweak: impl FnOnce(&mut Engine)) -> (u32, Engine, Logged) {
         let mut e = Engine::new();
         for (address, value) in [
             (MIN_LIFE, 0.01f64),
@@ -620,6 +630,7 @@ mod tests {
                 SET_VALUE_005BFBD0,
             ],
         );
+        tweak(&mut e);
         e.call_log = Some(vec![]);
         e.call(0x009a_b390, &args![this, 0x7f80_0001u32]);
         let log = e.call_log.take().unwrap();
@@ -694,6 +705,55 @@ mod tests {
             vec![vec![0x0abc_0000, 3.0f32.to_bits()]]
         );
         assert_eq!(calls(&log, 0x009b_f470), vec![vec![this, 1, 0]]);
+    }
+
+    /// An NPC's beam (as in `update_aims_another_shooter_from_its_node`) whose shooter has no node yet
+    /// (a save just loaded): its rotation is the node's at +0x68, so 0x68.
+    fn update_without_a_node(on: bool) -> Logged {
+        let world = Beam {
+            dead: false,
+            player: false,
+            counts: true,
+            package: 0x0e10_0000,
+            flag_1000: false,
+            iron_sights: true,
+        };
+        let (_, _, log) = update_with(world, |e| {
+            e.register(0x0b00_020c, |_, _| 0u32.into_ret());
+            e.register(TRANSFORM, |_, a| (a[0] + 0x68).into_ret());
+            e.set_stewie(engine_core::extend::stewie::BEAM_NPC_NULL_NODE, on);
+        });
+        log
+    }
+
+    /// lStewieAl's Tweaks' row S0130.03 (`ContinuousBeamProjectileCrashFix`, `0x9AB55F`): off, the exe
+    /// reads the rotation of the missing node (`00a59400` with 0x68: a crash in the game); on, it is
+    /// not read.
+    #[test]
+    fn s0130_03_an_npc_beam_with_no_node_yet() {
+        let off = update_without_a_node(false);
+        assert_eq!(calls(&off, 0x00a5_9400)[0][0], 0x68);
+        let on = update_without_a_node(true);
+        assert!(calls(&on, 0x00a5_9400).is_empty());
+    }
+
+    /// Row S0130.03 with the node there (ordinary input): the same calls with the row off and on.
+    #[test]
+    fn s0130_03_row_on_with_a_node_changes_nothing() {
+        let world = || Beam {
+            dead: false,
+            player: false,
+            counts: true,
+            package: 0x0e10_0000,
+            flag_1000: false,
+            iron_sights: true,
+        };
+        let (_, _, off) = update_with(world(), |_| {});
+        let (_, _, on) = update_with(world(), |e| {
+            e.set_stewie(engine_core::extend::stewie::BEAM_NPC_NULL_NODE, true);
+        });
+        assert_eq!(off, on);
+        assert_eq!(calls(&on, 0x00a5_9400)[0][0], 0x0c00_0010);
     }
 
     #[test]
