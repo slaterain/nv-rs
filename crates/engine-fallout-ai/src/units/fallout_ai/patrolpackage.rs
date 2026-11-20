@@ -123,7 +123,13 @@ pub fn fn_009f2a70(e: &mut Engine, this: Ptr<PatrolActorPackageData>) {
     e.mem.set_u32(this.addr(), 0x0109_3418);
     let data_handler = e.mem.u32(0x011c_3f2c);
     if !e.call(0x0042_26e0, &args![data_handler]).bool() {
-        fn_009f2b30(e, this);
+        // lStewieAl's Tweaks' row S0228 (`PatrolPackageFix`, the call at `0x9F2ABB`): Tweaks'
+        // `ClearReservedPatrolRef` releases the reference only when `pActor` is set.
+        if !e.stewie(engine_core::extend::stewie::PATROL_PACKAGE)
+            || e.get(this, PatrolActorPackageData::pActor) != 0
+        {
+            fn_009f2b30(e, this);
+        }
     }
     e.call(ARRAY_SET_SIZE, &args![references(this), 0u32, 1u32]);
     e.set(this, PatrolActorPackageData::eState, 4);
@@ -919,6 +925,41 @@ mod b035_tests {
         assert_eq!(e.get(this, PatrolActorPackageData::pActor), 0);
         assert_eq!(calls(&log, 0x005e_04f0), vec![vec![this.addr() + 0x1c]]);
         assert_eq!(calls(&log, 0x0067_d970), vec![vec![this.addr()]]);
+    }
+
+    /// S0228 (`PatrolPackageFix`): a patrol package's data with no actor (an invalidated package
+    /// on load). Off, the destructor still releases the reference, as the exe; on, Tweaks'
+    /// `ClearReservedPatrolRef` skips it; with an actor both release it. The rest runs either way.
+    #[test]
+    fn s0228_no_reference_released_without_an_actor() {
+        for (on, actor, released) in [
+            (false, 0u32, 1usize),
+            (true, 0, 0),
+            (true, 0x50, 1),
+            (false, 0x50, 1),
+        ] {
+            let mut e = Engine::new();
+            array_doubles(&mut e);
+            extra_doubles(&mut e, vec![]);
+            e.map(0x011c_3000, 0x1000);
+            e.mem.set_u32(0x011c_3f2c, 0x900);
+            e.register(0x0042_26e0, |_, _| false.into_ret());
+            quiet(&mut e, &[0x005e_04f0, 0x0067_d970]);
+            e.set_stewie(engine_core::extend::stewie::PATROL_PACKAGE, on);
+            let this = patrol(&mut e, &[0x100]);
+            e.set(this, PatrolActorPackageData::pActor, actor);
+            e.call_log = Some(vec![]);
+            e.call(0x009f_2a70, &args![this]);
+            let log = e.call_log.take().unwrap();
+            assert_eq!(
+                calls(&log, SET_PATROL_REF_USER).len(),
+                released,
+                "on {on} actor {actor:#x}"
+            );
+            assert_eq!(e.get(this, PatrolActorPackageData::eState), 4);
+            assert_eq!(e.mem.u32(this.addr() + REFERENCES + 8), 0);
+            assert_eq!(calls(&log, 0x0067_d970), vec![vec![this.addr()]]);
+        }
     }
 
     #[test]

@@ -351,16 +351,17 @@ impl Sounds {
             let mut s = me.lock();
             s.opening = None;
             match opened {
+                // No longer wanted (a release came while it opened): the stream is let go before
+                // any mix is made, so not a moment of the hum is heard (REVIEW-834b).
+                Ok(out) if !s.wanted => {
+                    drop(s);
+                    drop(out);
+                }
                 Ok(out) => match Mix::new(out.rate, out.layout, (*banks).clone(), seed, fixed) {
                     Some(mut m) => {
                         m.play(Cue::Hum);
                         *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(m);
-                        if s.wanted {
-                            s.open = Some((out, slot));
-                        } else {
-                            drop(s);
-                            drop(out);
-                        }
+                        s.open = Some((out, slot));
                     }
                     None => {
                         s.refused = true;
@@ -735,11 +736,66 @@ mod tests {
             },
         );
         assert_eq!(*steps.borrow(), ["stop", "release", "start"]);
-        // A release while an opening is under way waits for it; nothing stays open.
-        let s = sounds_on(48000, Layout::STEREO, vec![(Cue::Hum, bank(4800, 0, true))]);
+        // A release while an opening is under way waits for it (REVIEW-834b): the opener takes
+        // a moment and says it has returned just before it does; by the time release() returns,
+        // and when the work starts, it has, and nothing stays open.
+        let returned = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let r = returned.clone();
+        let opener: Opener = Arc::new(move |_source| {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            r.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(Output::idle(48000, Layout::STEREO))
+        });
+        let s = Sounds::with_opener(vec![(Cue::Hum, bank(4800, 0, true))], opener, 7);
+        let done = || returned.load(std::sync::atomic::Ordering::SeqCst);
         s.open();
-        s.release();
+        play_in_order(
+            || s.stop(),
+            || {
+                s.release();
+                assert!(done(), "release() returned before the opening ended");
+            },
+            || {
+                assert!(done(), "the work started before the opening ended");
+                assert!(!s.is_open(), "the device is still open as the game starts");
+            },
+        );
         assert!(!s.is_open());
+    }
+
+    /// An opening that ends after the sound was no longer wanted (the window lost focus while
+    /// the device opened) lets its stream go without a moment of the hum: the stream, while it
+    /// lived, was given only silence (REVIEW-834b).
+    #[test]
+    fn an_opening_no_longer_wanted_sounds_nothing() {
+        ds_mix::resampler::tables();
+        type Kept = Arc<Mutex<Option<Arc<Mutex<dyn Source>>>>>;
+        let kept: Kept = Arc::new(Mutex::new(None));
+        let gate = Arc::new(std::sync::Barrier::new(2));
+        let (k, g) = (kept.clone(), gate.clone());
+        let opener: Opener = Arc::new(move |source| {
+            *k.lock().unwrap() = Some(source);
+            g.wait();
+            Ok(Output::idle(48000, Layout::STEREO))
+        });
+        let s = Sounds::with_opener(vec![(Cue::Hum, bank(4800, 0, true))], opener, 7);
+        s.open();
+        s.release_later();
+        gate.wait();
+        s.opened();
+        assert!(!s.is_open());
+        let source = kept.lock().unwrap().take().expect("the opener was called");
+        let mut out = vec![1f32; 2 * 4800];
+        source.lock().unwrap().render(48000, 2, &mut out);
+        assert!(out.iter().all(|&x| x == 0.0), "the hum sounded");
+        // Wanted again: it opens and the hum is given to the stream.
+        s.open();
+        gate.wait();
+        s.opened();
+        assert!(s.is_open());
+        let source = kept.lock().unwrap().take().expect("the opener was called");
+        source.lock().unwrap().render(48000, 2, &mut out);
+        assert!(out.iter().any(|&x| x != 0.0), "the hum did not start");
     }
 
     /// The terminal is heard only with its sounds on, its window shown and focused, and no Play

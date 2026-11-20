@@ -43,3 +43,28 @@ pub const ARMOR_UPDATE: Row = Row::share(AI_FIXES, AI_FIXES_END, 7);
 /// S0180 `MineDisarmedLightLoadingFix` (`Projectile::LoadGame` `009c52f0` (`0x9C5723`)): a mine's
 /// light shows again after a save is loaded.
 pub const MINE_DISARMED_LIGHT_LOADING: Row = Row::share(AI_FIXES, AI_FIXES_END, 8);
+/// S0137 `patchPreventAgroRadiusBreachedNPCsHolsteringWeapons` (`HighProcess::Update` `008eeec0`
+/// (`0x8F037C`)): an actor whose guard warning radius was crossed keeps its weapon out.
+pub const AGRO_RADIUS_HOLSTER: Row = Row::share(AI_FIXES, AI_FIXES_END, 9);
+/// S0199.01 `MiscCrashFixes` (`HighProcess::ProcessDialogueActivate` `008e8600` (`0x8E941C`)): no
+/// crash when the actor has no package.
+pub const DIALOGUE_ACTIVATE_NO_PACKAGE: Row = Row::share(AI_FIXES, AI_FIXES_END, 10);
+/// S0039 `fixWeaponIdleSoundsHavingInfiniteRange` (`MiddleHighProcess::ForceWeaponDrawnSheathed`
+/// `009231d0` (`0x923820`)): in third person an NPC's weapon idle sound is no longer heard from
+/// anywhere, and the player's own plays as in first person.
+pub const WEAPON_IDLE_SOUND_RANGE: Row = Row::share(AI_FIXES, AI_FIXES_END, 11);
+/// S0171 `KnockDownHandGripFix` (`MiddleHighProcess::UpdateKnockState` `00920150` (`0x920A91`)):
+/// getting up from a knockdown queues the hand-grip idle.
+pub const KNOCKDOWN_HAND_GRIP: Row = Row::share(AI_FIXES, AI_FIXES_END, 12);
+/// S0146 `NPCThrowingAnimFix` (`CombatProcedureAttackGrenade::Update` `009cafe0` (`0x9CB337`)): an
+/// NPC's throw plays the weapon's own attack animation.
+pub const NPC_THROWING_ANIM: Row = Row::share(AI_FIXES, AI_FIXES_END, 13);
+/// S0214 `CombatItemCooldownFix` (`CombatProcedureUseCombatItem::Update` `009daab0` (`0x9DAB61`)):
+/// an NPC's restore item waits `fCombatItemRestoreTimer`, not `fCombatItemBuffTimer`.
+pub const COMBAT_ITEM_COOLDOWN: Row = Row::share(AI_FIXES, AI_FIXES_END, 14);
+/// S0228 `PatrolPackageFix` (`009f2a70` (`0x9F2ABB`)): no crash loading a patrol package with no
+/// actor.
+pub const PATROL_PACKAGE: Row = Row::share(AI_FIXES, AI_FIXES_END, 15);
+/// S0133 `patchFixSpectatorThreatInfoUsingWrongWeaponType` (`009f6d50` (`0x9F6E76`)): a
+/// spectator's threat reads the weapon's combat type.
+pub const SPECTATOR_THREAT_WEAPON_TYPE: Row = Row::share(AI_FIXES, AI_FIXES_END, 16);

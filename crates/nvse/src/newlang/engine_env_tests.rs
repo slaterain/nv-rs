@@ -23,6 +23,9 @@ thread_local! {
 pub(crate) fn engine() -> Engine {
     let mut e = decompile_engine();
     e.map(AREA, 0x1_0000);
+    // The fixes preset's row `xnvse.extract_args` (a game command's argument compiles as xNVSE
+    // writes it); without it the type check refuses one.
+    crate::args::set_game_inline(&mut e, true);
     e.register(0x00ec_a7f4, |_, a| Ret {
         eax: u32::from((a[0] as u8).to_ascii_uppercase()),
         ..Ret::default()
