@@ -5680,6 +5680,10 @@ pub(crate) mod tests {
         assert_eq!(e.vcall(device, 4 * 94, &[60, data, 2]).u32(), D3D_OK);
         // Registers set before, then a range reaching one never set: it goes.
         assert_eq!(e.vcall(device, 4 * 94, &[61, data, 2]).u32(), D3D_OK);
+        // A register never set, set to zeros (what the model's empty store holds): it goes, then not again.
+        let zeros = e.mem.alloc(16);
+        assert_eq!(e.vcall(device, 4 * 94, &[70, zeros, 1]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 94, &[70, zeros, 1]).u32(), D3D_OK);
         test_finish(&mut s.e);
         let log: Vec<String> = calls
             .take()
@@ -5695,6 +5699,7 @@ pub(crate) mod tests {
                 "vertex_constant_f(60, [3f800000 3f800001 3f800002 3f800003 3f800004 3f800005 3f800006 3f800007], 2)",
                 "vertex_constant_f(60, [3f800000 3f800001 3f800002 3f800003 3f800004 40000000 3f800006 3f800007], 2)",
                 "vertex_constant_f(61, [3f800000 3f800001 3f800002 3f800003 3f800004 40000000 3f800006 3f800007], 2)",
+                "vertex_constant_f(70, [00000000 00000000 00000000 00000000], 1)",
             ]
         );
         // The model holds what the game set, whatever was sent.
