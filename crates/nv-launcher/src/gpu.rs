@@ -5,12 +5,16 @@
 //! The launcher has to start where the game's own renderer does not: it is where the player
 //! changes the renderer. So it asks for the plainest device there is (no features, the lowest
 //! limits), one API at a time, each in an instance of its own so a broken driver of the next one
-//! is never even loaded while an earlier one works ([`launcher_apis`], [`pick`]): on Windows
-//! Direct3D 12 first, then Vulkan; elsewhere the platform's own (Vulkan, Metal). A graphics card
-//! first (the one built into the processor before a separate one), and only when no API has one,
-//! the system's software adapter (Windows' WARP is always there). Its whole picture is drawn on
-//! the processor, so even the software adapter draws it at once.
+//! is never even loaded while an earlier one works ([`tries`]): on Windows Direct3D 12's cards,
+//! then Direct3D 12's software adapter (WARP, always there), and only then Vulkan's cards and its
+//! software adapter; elsewhere the platform's own API (Vulkan, Metal), its cards, then its
+//! software adapter. Among one API's cards the one built into the processor first, then a
+//! separate one ([`order`]); a card whose device or window surface cannot be set up, or whose
+//! device is lost while that is done, is passed over for the next ([`first_working`]). A device
+//! lost later, while the launcher runs, is chosen again the same way (`app.rs`). Its whole
+//! picture is drawn on the processor, so even the software adapter draws it at once.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 const SHADER: &str = "
@@ -40,6 +44,10 @@ pub struct Gpu {
     picture: wgpu::Texture,
     nearest: wgpu::BindGroup,
     smooth: wgpu::BindGroup,
+    /// Set when the driver loses the device ([`counts_as_lost`]): wgpu files some swap-chain
+    /// failures that way (inside `configure`, outside any error scope), and a driver can lose it
+    /// at any later time too.
+    lost: Arc<AtomicBool>,
 }
 
 /// wgpu's futures are ready once polled after their work: no executor needed.
@@ -164,10 +172,28 @@ fn configure(
         block_on(internal.pop()),
         block_on(validation.pop()),
     ];
-    match errors.into_iter().flatten().next() {
+    surface_result(
+        errors.into_iter().flatten().next().map(|e| e.to_string()),
+        gpu.is_lost(),
+    )
+    .map(|()| config)
+}
+
+/// What a surface set-up came to: an error a scope caught, or the device lost while it was done
+/// (wgpu files a swap chain the driver refuses in some of its steps as a lost device, which no
+/// scope sees: the card is passed over all the same, or its first frame would fail).
+fn surface_result(caught: Option<String>, lost: bool) -> Result<(), String> {
+    match caught {
         Some(e) => Err(format!("the window's surface could not be set up: {e}")),
-        None => Ok(config),
+        None if lost => Err("the window's surface could not be set up: the device was lost".into()),
+        None => Ok(()),
     }
+}
+
+/// Whether a device-lost report means the device is gone: a driver's loss (`Unknown`), not the
+/// launcher's own `destroy`.
+pub fn counts_as_lost(reason: wgpu::DeviceLostReason) -> bool {
+    reason == wgpu::DeviceLostReason::Unknown
 }
 
 /// The first adapter of [`tries`] (and of [`order`] in each) that makes a device and, with
@@ -241,11 +267,23 @@ impl Gpu {
         }))
         .map_err(|e| format!("the graphics device could not be made: {e}"))?;
         // For the device's whole life an error outside an error scope (a later surface set-up on
-        // a resize, a lost device) is said in the log, never wgpu's default panic: the launcher
-        // is where the player gets past a broken driver.
+        // a resize) is said in the log, never wgpu's default panic: the launcher is where the
+        // player gets past a broken driver. A lost device is not such an error: see below.
         device.on_uncaptured_error(Arc::new(|e: wgpu::Error| {
             eprintln!("the launcher's drawing: {e}");
         }));
+        // A lost device is marked (and said in the log), so the launcher chooses again instead of
+        // drawing on it: inside `configure` (wgpu calls this at once there) and at any later time.
+        let lost = Arc::new(AtomicBool::new(false));
+        {
+            let lost = lost.clone();
+            device.set_device_lost_callback(move |reason, message| {
+                if counts_as_lost(reason) {
+                    lost.store(true, Ordering::SeqCst);
+                    eprintln!("the launcher's drawing: its device was lost: {message}");
+                }
+            });
+        }
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("terminal"),
             entries: &[
@@ -320,7 +358,13 @@ impl Gpu {
             picture,
             nearest,
             smooth,
+            lost,
         })
+    }
+
+    /// Whether the driver has lost the device ([`counts_as_lost`]).
+    pub fn is_lost(&self) -> bool {
+        self.lost.load(Ordering::SeqCst)
     }
 
     /// The adapter's name and API, for the log.
@@ -697,6 +741,21 @@ mod tests {
                 "vk-cpu failed".into()
             ])
         );
+    }
+
+    /// A surface set-up that a scope caught, or during which the device was lost, passes the card
+    /// over; only a clean one keeps it. A driver's loss counts, the launcher's own `destroy` not.
+    #[test]
+    fn a_device_lost_while_the_surface_is_set_up_passes_the_card_over() {
+        assert_eq!(surface_result(None, false), Ok(()));
+        assert!(surface_result(None, true)
+            .unwrap_err()
+            .contains("the device was lost"));
+        assert!(surface_result(Some("refused".into()), false)
+            .unwrap_err()
+            .contains("refused"));
+        assert!(counts_as_lost(wgpu::DeviceLostReason::Unknown));
+        assert!(!counts_as_lost(wgpu::DeviceLostReason::Destroyed));
     }
 
     /// The picture keeps its shape, centred; a size close to a whole multiple takes the multiple.

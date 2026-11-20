@@ -1129,6 +1129,17 @@ fn run(package: &Package, options: &Options) -> Result<i32, Stop> {
     result
 }
 
+/// The first write of a Play run: the game's folder is known and the package is not in it
+/// ([`clear_for_writing`]); only then is the launcher's intro, shown at this start, noted (its
+/// own file in userdata).
+fn first_write(package: &Package, game_folder: &Path) -> Result<(), Stop> {
+    clear_for_writing(package, Some(game_folder))?;
+    if let Err(e) = crate::place::note_intro_if_shown(&package.userdata) {
+        package.log(&format!("launcher.ini: {e}"));
+    }
+    Ok(())
+}
+
 fn play(
     package: &Package,
     options: &Options,
@@ -1136,14 +1147,9 @@ fn play(
     status: &ui::Status,
 ) -> Result<i32, Stop> {
     let (mut game, check_lines) = find_game(package, options.game.as_deref())?;
-    // The first write of the run: the game's folder is known and the package is not in it.
-    clear_for_writing(package, Some(&game.folder))?;
+    first_write(package, &game.folder)?;
     for line in &check_lines {
         package.log(line);
-    }
-    // The launcher's intro, shown at this start, is noted only now (its own file in userdata).
-    if let Err(e) = crate::place::note_intro_if_shown(&package.userdata) {
-        package.log(&format!("launcher.ini: {e}"));
     }
     let _ = std::fs::write(
         &package.remembered,
@@ -1758,12 +1764,12 @@ mod tests {
             .collect();
         names.sort();
         assert_eq!(names, ["app"], "the start screen wrote into the package");
-        // The intro seen at the start screen is kept until Play's check passes.
-        crate::place::intro_seen(&p.own, false).unwrap();
+        // The intro ended at the start screen, as the window ends it: kept until Play's check
+        // passes, then noted by Play's own first write.
+        crate::place::intro_ended(&p.own, false).unwrap();
         assert!(!p.own.exists(), "the intro was noted before Play's check");
         let package = Package::at(root.clone());
-        clear_for_writing(&package, Some(&dir.join("somewhere else"))).unwrap();
-        crate::place::note_intro_if_shown(&package.userdata).unwrap();
+        first_write(&package, &dir.join("somewhere else")).unwrap();
         assert!(crate::place::intro_shown(&package.userdata));
         let _ = std::fs::remove_dir_all(&dir);
     }

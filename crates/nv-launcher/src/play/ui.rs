@@ -222,6 +222,9 @@ fn status_thread(first: &str) {
     let (title, label, text) = (wide_str(TITLE), wide_str("STATIC"), wide_str(first));
     // SAFETY: the strings live for this whole function, and the loop keeps the window alive.
     unsafe {
+        // Drawn as Play.exe (DPI-unaware) drew it, Windows scaling it, though winit made the
+        // process aware: this thread (only the status window's) stays unaware for its life.
+        SetThreadDpiAwarenessContext(DPI_UNAWARE);
         let instance = GetModuleHandleW(std::ptr::null());
         let class = WndClassW {
             style: 0,

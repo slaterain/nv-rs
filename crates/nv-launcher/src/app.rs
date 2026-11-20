@@ -195,10 +195,120 @@ pub fn centred(origin: (i32, i32), monitor: (u32, u32), size: (u32, u32)) -> (i3
     )
 }
 
+/// The first window inside a monitor's work area `work` (x, y, width, height, without the taskbar,
+/// in physical pixels): its inner size `inner` made smaller (its 4:3 shape kept) until it fits
+/// with its frame `frame` (the title bar and borders), and its OUTER rectangle centred there.
+/// Returns the inner size and the outer rectangle's position.
+pub fn fit_in(
+    work: (i32, i32, u32, u32),
+    frame: (u32, u32),
+    inner: (u32, u32),
+) -> ((u32, u32), (i32, i32)) {
+    let room = (
+        work.2.saturating_sub(frame.0).max(1),
+        work.3.saturating_sub(frame.1).max(1),
+    );
+    let (mut w, mut h) = inner;
+    if h > room.1 {
+        (w, h) = (room.1 * 4 / 3, room.1);
+    }
+    if w > room.0 {
+        (w, h) = (room.0, room.0 * 3 / 4);
+    }
+    let at = centred(
+        (work.0, work.1),
+        (work.2, work.3),
+        (w + frame.0, h + frame.1),
+    );
+    ((w, h), at)
+}
+
+/// The monitor's work area (x, y, width, height in physical pixels): on Windows without the
+/// taskbar; elsewhere the whole monitor (the window manager keeps its own panels clear).
+fn work_area(m: &winit::monitor::MonitorHandle) -> (i32, i32, u32, u32) {
+    let whole = (
+        m.position().x,
+        m.position().y,
+        m.size().width,
+        m.size().height,
+    );
+    #[cfg(windows)]
+    {
+        use winit::platform::windows::MonitorHandleExtWindows;
+        #[repr(C)]
+        struct MonitorInfo {
+            size: u32,
+            monitor: [i32; 4],
+            work: [i32; 4],
+            flags: u32,
+        }
+        #[link(name = "user32")]
+        extern "system" {
+            fn GetMonitorInfoW(monitor: isize, info: *mut MonitorInfo) -> i32;
+        }
+        let mut info = MonitorInfo {
+            size: std::mem::size_of::<MonitorInfo>() as u32,
+            monitor: [0; 4],
+            work: [0; 4],
+            flags: 0,
+        };
+        // SAFETY: `info` is a MONITORINFO with its size set, alive through the call.
+        if unsafe { GetMonitorInfoW(m.hmonitor(), &mut info) } != 0 {
+            let [l, t, r, b] = info.work;
+            if r > l && b > t {
+                return (l, t, (r - l) as u32, (b - t) as u32);
+            }
+        }
+    }
+    whole
+}
+
 /// How long the game must have been running before the launcher's window is minimised on
 /// Wayland (where a minimised window cannot be brought back by the program): a start that fails
 /// at once leaves it on screen.
 pub const WAYLAND_MINIMISE_AFTER: Duration = Duration::from_secs(5);
+
+/// What the window's surface gave for a frame (wgpu's answer without the texture).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Got {
+    Texture,
+    Outdated,
+    Lost,
+    Timeout,
+    Occluded,
+    Validation,
+}
+
+/// What a redraw does next.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FrameStep {
+    Draw,
+    /// The surface set up again for the window, and drawn at the next redraw.
+    Reconfigure,
+    /// Nothing this time; the next redraw tries again.
+    Skip,
+    /// The device or the surface is gone: the drawing chosen again ([`gpu::choose`]), else the
+    /// launcher goes on without its window.
+    ChooseAgain,
+}
+
+/// The next step for a frame the surface answered `got`, with the device `lost` or not: a lost
+/// device or surface is never drawn on, whatever the surface said.
+pub fn frame_step(lost: bool, got: Got) -> FrameStep {
+    match got {
+        _ if lost => FrameStep::ChooseAgain,
+        Got::Texture => FrameStep::Draw,
+        Got::Outdated => FrameStep::Reconfigure,
+        Got::Lost | Got::Validation => FrameStep::ChooseAgain,
+        Got::Timeout | Got::Occluded => FrameStep::Skip,
+    }
+}
+
+/// Play's work, `work`, run so that its end is always known: a panic in it ends as Rust's
+/// panic code (101), so `Ended` is sent and a closed launcher still ends.
+pub fn work_code(work: impl FnOnce() -> i32) -> i32 {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).unwrap_or(101)
+}
 
 /// The kinds of screen, for what Enter and Esc do there.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -335,22 +445,24 @@ struct App {
 }
 
 /// Starts Play's work on a thread of its own with `args` (Play.exe's, or play.sh's on Linux and
-/// macOS); it sends `Ended` with its exit code.
+/// macOS); it always sends `Ended` with its exit code ([`work_code`]: 101 after a panic).
 fn start_work(args: Vec<OsString>) {
     std::thread::spawn(move || {
-        #[cfg(windows)]
-        let code = {
-            let args: Vec<String> = args
-                .iter()
-                .map(|a| a.to_string_lossy().into_owned())
-                .collect();
-            crate::play::run_play(&args)
-        };
-        #[cfg(not(windows))]
-        let code = match crate::play_unix::script() {
-            Some(script) => crate::play_unix::run(&script, &args),
-            None => 127,
-        };
+        let code = work_code(move || {
+            #[cfg(windows)]
+            {
+                let args: Vec<String> = args
+                    .iter()
+                    .map(|a| a.to_string_lossy().into_owned())
+                    .collect();
+                crate::play::run_play(&args)
+            }
+            #[cfg(not(windows))]
+            match crate::play_unix::script() {
+                Some(script) => crate::play_unix::run(&script, &args),
+                None => 127,
+            }
+        });
         session::send(Event::Ended(code));
     });
 }
@@ -508,9 +620,13 @@ impl App {
         start_work(args);
     }
 
-    fn redraw(&mut self) {
+    fn redraw(&mut self, event_loop: &ActiveEventLoop) {
         if self.hidden {
             return;
+        }
+        // A device the driver lost is never drawn on (wgpu would fail the frame): chosen again.
+        if self.gpu.as_ref().is_some_and(Gpu::is_lost) {
+            return self.choose_again(event_loop, "its device was lost");
         }
         let shown = self.shown();
         let cursor = self.cursor_on();
@@ -530,15 +646,31 @@ impl App {
         };
         let picture = (screen::WIDTH, screen::HEIGHT);
         gpu.upload(&canvas.pixels, picture);
-        let frame = match surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(f)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+        use wgpu::CurrentSurfaceTexture as T;
+        let (got, frame) = match surface.get_current_texture() {
+            T::Success(f) | T::Suboptimal(f) => (Got::Texture, Some(f)),
+            T::Outdated => (Got::Outdated, None),
+            T::Lost => (Got::Lost, None),
+            T::Timeout => (Got::Timeout, None),
+            T::Occluded => (Got::Occluded, None),
+            T::Validation => (Got::Validation, None),
+        };
+        let frame = match (frame_step(gpu.is_lost(), got), frame) {
+            (FrameStep::Draw, Some(f)) => f,
+            (FrameStep::Reconfigure, _) => {
                 surface.configure(&gpu.device, config);
+                self.drawn = None;
+                self.request_redraw();
+                return;
+            }
+            (FrameStep::ChooseAgain, _) => {
+                return self.choose_again(event_loop, &format!("its window surface: {got:?}"))
+            }
+            // Tried again at the next redraw.
+            _ => {
                 self.drawn = None;
                 return;
             }
-            _ => return,
         };
         let view = frame.texture.create_view(&Default::default());
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
@@ -569,14 +701,79 @@ impl App {
         }
     }
 
+    /// The drawing stopped while the launcher runs (`why`, said in the log): the device and the
+    /// surface dropped and chosen again for the window as at the start ([`gpu::choose`]); if
+    /// nothing draws now, the launcher goes on without its window ([`App::no_drawing`]).
+    fn choose_again(&mut self, event_loop: &ActiveEventLoop, why: &str) {
+        eprintln!("the launcher's drawing stopped ({why}): choosing its device again");
+        self.surface = None;
+        self.config = None;
+        self.gpu = None;
+        self.instance = None;
+        self.drawn = None;
+        let Some(window) = self.window.clone() else {
+            return;
+        };
+        let size = window.inner_size();
+        match gpu::choose(Some(window), (size.width, size.height)) {
+            Ok(drawing) => {
+                eprintln!("drawing with {}", drawing.gpu.describe());
+                let Some((surface, config)) = drawing.surface else {
+                    unreachable!("a window's drawing always has its surface");
+                };
+                self.instance = Some(drawing.instance);
+                self.surface = Some(surface);
+                self.config = Some(config);
+                self.gpu = Some(drawing.gpu);
+                self.request_redraw();
+            }
+            Err(e) => self.no_drawing(event_loop, &e),
+        }
+    }
+
+    /// Nothing draws the window any more. With no Play running: said as at the start, and Play
+    /// goes on without the window (Windows' message boxes; play.sh in the terminal). While Play
+    /// runs: said, and the window goes as a close takes it ([`App::close_while_working`]).
+    fn no_drawing(&mut self, event_loop: &ActiveEventLoop, why: &str) {
+        if self.working {
+            cannot_draw_then(
+                why,
+                &self.place,
+                "Play goes on without it: its questions are answered as Esc answers them, and \
+                 nv-rs ends when Play ends.",
+            );
+            self.close_while_working(event_loop);
+        } else {
+            cannot_draw(why, &self.place);
+            self.no_window = true;
+            event_loop.exit();
+        }
+    }
+
+    /// The window goes while Play runs (the game may be starting, its one-game claim held): a
+    /// question it asks is answered as Esc answers it, later ones too, play.sh's input is closed,
+    /// and the launcher ends when Play ends, with its code.
+    fn close_while_working(&mut self, event_loop: &ActiveEventLoop) {
+        if matches!(self.mode, Mode::Message(_) | Mode::Folder(_)) {
+            self.back(event_loop);
+        }
+        self.closed = true;
+        crate::play_unix::close_input();
+        if let Some(w) = &self.window {
+            w.set_visible(false);
+            if on_wayland(event_loop) {
+                w.set_minimized(true);
+            }
+        }
+        self.hidden = true;
+    }
+
     /// The intro is over (or skipped): noted in the launcher's own file (on Windows once Play has
     /// passed its first-write checks, so nothing is written into the package before), then the
     /// start screen is typed (`FinishIntro`).
     fn end_intro(&mut self) {
-        if self.place.refused.is_none() {
-            if let Err(e) = place::intro_seen(&self.place.own, cfg!(not(windows))) {
-                eprintln!("launcher.ini: {e}");
-            }
+        if let Err(e) = place::intro_ended(&self.place.own, self.place.refused.is_some()) {
+            eprintln!("launcher.ini: {e}");
         }
         self.show_start();
     }
@@ -734,8 +931,10 @@ impl winit::application::ApplicationHandler<Event> for App {
             let size = m.size().to_logical::<f64>(m.scale_factor());
             (size.width, size.height)
         }));
+        // Made hidden, then fitted into the monitor's work area with its frame (below), then shown.
         let mut attributes = winit::window::Window::default_attributes()
             .with_title("nv-rs")
+            .with_visible(false)
             .with_inner_size(winit::dpi::LogicalSize::new(w, h))
             .with_min_inner_size(winit::dpi::LogicalSize::new(
                 screen::WIDTH / 2,
@@ -761,6 +960,21 @@ impl winit::application::ApplicationHandler<Event> for App {
                 return;
             }
         };
+        // The whole window (its title bar and borders too) inside the work area, centred there:
+        // the frame is known only now that the window is made.
+        if let Some(m) = &monitor {
+            let (inner, outer) = (window.inner_size(), window.outer_size());
+            let frame = (
+                outer.width.saturating_sub(inner.width),
+                outer.height.saturating_sub(inner.height),
+            );
+            let (fitted, at) = fit_in(work_area(m), frame, (inner.width, inner.height));
+            if fitted != (inner.width, inner.height) {
+                let _ =
+                    window.request_inner_size(winit::dpi::PhysicalSize::new(fitted.0, fitted.1));
+            }
+            window.set_outer_position(winit::dpi::PhysicalPosition::new(at.0, at.1));
+        }
         let size = window.inner_size();
         let drawing = match gpu::choose(Some(window.clone()), (size.width, size.height)) {
             Ok(d) => d,
@@ -783,6 +997,7 @@ impl winit::application::ApplicationHandler<Event> for App {
         self.config = Some(config);
         self.surface = Some(surface);
         self.gpu = Some(drawing.gpu);
+        window.set_visible(true);
         self.window = Some(window);
         let proxy = std::sync::Mutex::new(self.proxy.clone());
         session::connect(move |e| proxy.lock().is_ok_and(|p| p.send_event(e).is_ok()));
@@ -901,18 +1116,7 @@ impl winit::application::ApplicationHandler<Event> for App {
                 if !self.working {
                     std::process::exit(session::stop_code().unwrap_or(self.exit_code));
                 }
-                if matches!(self.mode, Mode::Message(_) | Mode::Folder(_)) {
-                    self.back(event_loop);
-                }
-                self.closed = true;
-                crate::play_unix::close_input();
-                if let Some(w) = &self.window {
-                    w.set_visible(false);
-                    if on_wayland(event_loop) {
-                        w.set_minimized(true);
-                    }
-                }
-                self.hidden = true;
+                self.close_while_working(event_loop);
             }
             WindowEvent::Resized(size) => {
                 if let (Some(surface), Some(config), Some(g)) =
@@ -925,7 +1129,7 @@ impl winit::application::ApplicationHandler<Event> for App {
                 self.drawn = None;
                 self.request_redraw();
             }
-            WindowEvent::RedrawRequested => self.redraw(),
+            WindowEvent::RedrawRequested => self.redraw(event_loop),
             WindowEvent::DroppedFile(path) => {
                 match &mut self.mode {
                     Mode::Start => self.play(false, Some(path)),
@@ -1055,15 +1259,21 @@ impl winit::application::ApplicationHandler<Event> for App {
 /// Windows'; else the terminal it was started from, and without a terminal the launcher's log in
 /// nv-rs's own folder), with what happens next.
 fn cannot_draw(why: &str, place: &Place) {
-    let text = format!(
-        "nv-rs's launcher cannot draw its window: {why}.\n\n{}",
+    cannot_draw_then(
+        why,
+        place,
         if cfg!(windows) {
             "Play goes on without it, in Windows' own message boxes. Updating the graphics \
              driver may bring the window back."
         } else {
             "It goes on in the terminal instead: play.sh, as ./play.sh starts it."
-        }
+        },
     );
+}
+
+/// [`cannot_draw`] with `next` saying what happens next.
+fn cannot_draw_then(why: &str, place: &Place, next: &str) {
+    let text = format!("nv-rs's launcher cannot draw its window: {why}.\n\n{next}");
     eprintln!("{text}");
     #[cfg(windows)]
     {
@@ -1446,6 +1656,54 @@ mod tests {
         assert_eq!(centred((0, 0), (1920, 1080), (960, 720)), (480, 180));
         assert_eq!(centred((1920, -200), (1280, 1024), (960, 720)), (2080, -48));
         assert_eq!(centred((0, 0), (800, 600), (960, 720)), (0, 0));
+    }
+
+    /// The whole window, frame included, inside the work area: a 1080p screen at 150% (work area
+    /// 1032 high above a 48-pixel taskbar, a 59-pixel title bar) keeps its bottom above the
+    /// taskbar, the outer rectangle centred in the work area; a window that fits keeps its size.
+    #[test]
+    fn the_whole_window_fits_the_work_area() {
+        let ((w, h), (x, y)) = fit_in((0, 0, 1920, 1032), (16, 59), (1440, 1080));
+        assert_eq!((w, h), (1297, 973));
+        assert!(y >= 0 && y as u32 + h + 59 <= 1032, "{y} {h}");
+        assert_eq!(x, (1920 - (w as i32 + 16)) / 2);
+        assert_eq!(
+            fit_in((0, 0, 1920, 1032), (16, 39), (960, 720)),
+            ((960, 720), (472, 136))
+        );
+        // A work area that does not start at 0 (a taskbar at the top, a second monitor).
+        assert_eq!(
+            fit_in((1920, 40, 1280, 984), (0, 0), (960, 720)),
+            ((960, 720), (2080, 172))
+        );
+        // Narrow: the width limits it, the shape kept.
+        assert_eq!(
+            fit_in((0, 0, 800, 1200), (0, 0), (960, 720)),
+            ((800, 600), (0, 300))
+        );
+    }
+
+    /// A frame's next step: a lost device or surface is chosen again (whatever the surface
+    /// said), an outdated one set up again, a busy or hidden one skipped.
+    #[test]
+    fn a_lost_device_is_chosen_again_never_drawn_on() {
+        assert_eq!(frame_step(false, Got::Texture), FrameStep::Draw);
+        assert_eq!(frame_step(true, Got::Texture), FrameStep::ChooseAgain);
+        assert_eq!(frame_step(false, Got::Lost), FrameStep::ChooseAgain);
+        assert_eq!(frame_step(false, Got::Validation), FrameStep::ChooseAgain);
+        assert_eq!(frame_step(false, Got::Outdated), FrameStep::Reconfigure);
+        assert_eq!(frame_step(true, Got::Outdated), FrameStep::ChooseAgain);
+        assert_eq!(frame_step(false, Got::Timeout), FrameStep::Skip);
+        assert_eq!(frame_step(false, Got::Occluded), FrameStep::Skip);
+    }
+
+    /// Play's work always ends with a code: its own, or 101 when it panicked (so `Ended` is sent
+    /// and a closed launcher ends).
+    #[test]
+    fn plays_work_always_ends_with_a_code() {
+        assert_eq!(work_code(|| 3), 3);
+        // (The panic's own message is printed: the hook is the whole test run's.)
+        assert_eq!(work_code(|| panic!("made-up failure")), 101);
     }
 
     /// Play's arguments: `--mods` for Play with mods, `--game FOLDER` for a typed or dropped

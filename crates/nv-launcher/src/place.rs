@@ -41,6 +41,16 @@ pub fn intro_seen(own: &Path, now: bool) -> std::io::Result<()> {
     }
 }
 
+/// The intro is over at the start screen (the window's `end_intro`): nothing where nv-rs may not
+/// write in its own folder (`refused`); else noted at once on Linux and macOS, and on Windows kept
+/// for Play's first write (the package gets nothing before Play's own checks).
+pub fn intro_ended(own: &Path, refused: bool) -> std::io::Result<()> {
+    if refused {
+        return Ok(());
+    }
+    intro_seen(own, cfg!(not(windows)))
+}
+
 /// Play's first write has passed its checks: the intro seen at this start is noted now.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn note_intro_if_shown(own: &Path) -> std::io::Result<()> {
