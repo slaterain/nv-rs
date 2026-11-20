@@ -12,6 +12,7 @@ extern "system" {
     fn GetLocalTime(time: *mut [u16; 8]);
     fn CreateMutexW(security: *const c_void, owner: i32, name: *const u16) -> *mut c_void;
     fn GetLastError() -> u32;
+    fn CloseHandle(handle: *mut c_void) -> i32;
 }
 #[link(name = "advapi32")]
 extern "system" {
@@ -123,13 +124,34 @@ pub fn now() -> (String, String) {
     )
 }
 
-/// True when another copy of the launcher already runs. The mutex lives as long as this process.
-pub fn another_is_running() -> bool {
-    let name = wide_str("Local\\nv-rs-preview-launcher");
-    // SAFETY: the name lives through the call; the handle is kept open on purpose.
+/// The one-game-at-a-time claim of Play: the named mutex, held while this value lives (one Play
+/// run), so the launcher's next Play, and another Play.exe once this run is over, may play again.
+pub struct OneAtATime(*mut c_void);
+
+impl Drop for OneAtATime {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            // SAFETY: the handle is this value's own, open since `claim`.
+            unsafe { CloseHandle(self.0) };
+        }
+    }
+}
+
+/// The name Play claims (Play.exe's).
+pub const PLAY_CLAIM: &str = "Local\\nv-rs-preview-launcher";
+
+/// Claims `name` for one run: `None` while a run holds it already (this process's or another's).
+pub fn claim(name: &str) -> Option<OneAtATime> {
+    let name = wide_str(name);
+    // SAFETY: the name lives through the call; a handle that is not kept is closed at once.
     unsafe {
         let handle = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
-        !handle.is_null() && GetLastError() == 183
+        if !handle.is_null() && GetLastError() == 183 {
+            CloseHandle(handle);
+            return None;
+        }
+        // (No handle at all, out of handles: Play.exe went on then too.)
+        Some(OneAtATime(handle))
     }
 }
 

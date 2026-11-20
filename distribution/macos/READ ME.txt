@@ -89,6 +89,10 @@ Start
    If ./play.sh answers "Permission denied", start it as: sh play.sh
    It then says what is wrong (for example a drive that does not allow programs to run: move
    the package's folder into your home folder instead).
+   New in this preview, not yet tried by the team on this system: ./nv-rs (or a double-click on
+   nv-rs) opens nv-rs's launcher, a window in the look of the game's own terminals. Its > Play
+   runs play.sh for you and shows what it says; type its answers at the launcher's prompt, or
+   drop a folder onto its window. Without a window it goes on in the terminal, as ./play.sh.
 
 The first start asks for your game's folder: type it, or drag the folder from Finder into the
 Terminal window, and press Enter. nv-rs remembers it.
