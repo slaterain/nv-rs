@@ -179,6 +179,32 @@ pub fn take_stages() -> Option<[(f64, u64); engine_core::stage_time::COLUMNS]> {
     engine_core::stage_time::points_on().then(engine_core::stage_time::take)
 }
 
+/// Whether a frame is judged, and whether it is the first after a load: a frame that ends on a loading screen, or in
+/// which a game was loaded (`loads`; from a menu no loading screen is up), is not judged nor counted in the median;
+/// the first frame after one (`was_loading`) is.
+pub fn judge(loading_screen: bool, loads: u64, was_loading: bool) -> (bool, bool) {
+    let loading = loading_screen || loads > 0;
+    (!loading, was_loading && !loading)
+}
+
+/// What main waited for, in words.
+fn wait_words(k: WaitKind) -> &'static str {
+    match k {
+        WaitKind::None => "nothing",
+        WaitKind::KernelLock => "the kernel lock",
+        WaitKind::DeviceLock => "the device lock",
+        WaitKind::Section => "a lock another game thread held",
+        WaitKind::Object => "another game thread",
+        WaitKind::Sleep => "a sleep",
+        WaitKind::Present => "Present",
+        WaitKind::Reply => "a render-thread reply",
+        WaitKind::QueueFull => "room in the render queue",
+    }
+}
+
+/// A wait under this (ns) is left out of the line: too short to matter.
+const TENTH_MS: u64 = 100_000;
+
 fn ms(ns: u64) -> f64 {
     ns as f64 / 1e6
 }
@@ -438,7 +464,7 @@ impl Frame {
             format!("{} read by other threads", bytes(g(Count::BytesReadOther))),
         );
         put(
-            g(Count::ObjectWaits),
+            g(Count::ObjectWaitNs) / TENTH_MS,
             format!(
                 "main waited for other threads {:.1} ms ({}x)",
                 ms(g(Count::ObjectWaitNs)),
@@ -446,7 +472,7 @@ impl Frame {
             ),
         );
         put(
-            g(Count::SectionWaits),
+            g(Count::SectionWaitNs) / TENTH_MS,
             format!(
                 "for locks they held {:.1} ms ({}x)",
                 ms(g(Count::SectionWaitNs)),
@@ -454,7 +480,7 @@ impl Frame {
             ),
         );
         put(
-            g(Count::KernelWaits),
+            g(Count::KernelWaitNs) / TENTH_MS,
             format!(
                 "for the kernel lock {:.1} ms ({}x)",
                 ms(g(Count::KernelWaitNs)),
@@ -462,7 +488,7 @@ impl Frame {
             ),
         );
         put(
-            g(Count::DeviceWaits),
+            g(Count::DeviceWaitNs) / TENTH_MS,
             format!(
                 "for the device lock {:.1} ms ({}x)",
                 ms(g(Count::DeviceWaitNs)),
@@ -470,7 +496,7 @@ impl Frame {
             ),
         );
         put(
-            g(Count::Sleeps),
+            g(Count::SleepNs) / TENTH_MS,
             format!(
                 "slept {:.1} ms ({}x)",
                 ms(g(Count::SleepNs)),
@@ -479,11 +505,11 @@ impl Frame {
         );
         let (wns, wkind, wsite) = self.longest_wait;
         put(
-            wns,
+            wns / TENTH_MS,
             format!(
-                "longest wait {:.1} ms ({:?}{})",
+                "longest wait {:.1} ms (for {}{})",
                 ms(wns),
-                wkind,
+                wait_words(wkind),
                 if wsite != 0 {
                     format!(" at {wsite:08x}")
                 } else {
@@ -492,11 +518,11 @@ impl Frame {
             ),
         );
         put(
-            self.s(S::PresentWaitNs),
+            self.s(S::PresentWaitNs) / TENTH_MS,
             format!("waited in Present {:.1} ms", ms(self.s(S::PresentWaitNs))),
         );
         put(
-            self.s(S::ReplyWaits),
+            self.s(S::ReplyWaitNs) / TENTH_MS,
             format!(
                 "for render-thread replies {:.1} ms ({}x)",
                 ms(self.s(S::ReplyWaitNs)),
@@ -504,7 +530,7 @@ impl Frame {
             ),
         );
         put(
-            self.s(S::QueueFullNs),
+            self.s(S::QueueFullNs) / TENTH_MS,
             format!(
                 "for room in the render queue {:.1} ms",
                 ms(self.s(S::QueueFullNs))
@@ -611,10 +637,19 @@ impl Frame {
 }
 
 /// The player's cell as the line names it, kept while the cell stays the same.
-#[derive(Default)]
 struct Place {
     cell: u32,
     name: String,
+}
+
+impl Default for Place {
+    /// No cell named yet (not even 'no cell').
+    fn default() -> Place {
+        Place {
+            cell: u32::MAX,
+            name: String::new(),
+        }
+    }
 }
 
 /// The hitch log of a run.
@@ -677,11 +712,13 @@ impl HitchLog {
         let longest_wait = engine_core::hitch::take_longest_wait();
         let largest_read = engine_core::hitch::take_largest_read();
         let screen = crate::uncap::screen(e);
-        let loading = screen == crate::uncap::Screen::Loading;
-        let after_load = self.was_loading && !loading;
-        // A loading screen is not judged (nor counted in the median); the first frame after one is.
-        let judged = !loading;
-        self.was_loading = loading;
+        // A game loaded in the frame (from a menu: no loading screen is up) counts as a loading screen too.
+        let (judged, after_load) = judge(
+            screen == crate::uncap::Screen::Loading,
+            game[Count::Loads as usize],
+            self.was_loading,
+        );
+        self.was_loading = !judged;
         let (Some(ms), true) = (frame_ms, judged) else {
             return;
         };
@@ -915,6 +952,16 @@ mod tests {
             "{l}"
         );
         assert!(!l.contains("stages"), "{l}");
+    }
+
+    /// A loading screen or a load in the frame is not judged; the next frame is, as the first after a load.
+    #[test]
+    fn loads_are_not_judged_and_the_frame_after_one_is() {
+        assert_eq!(judge(false, 0, false), (true, false));
+        assert_eq!(judge(true, 0, false), (false, false));
+        assert_eq!(judge(false, 1, false), (false, false), "a load from a menu");
+        assert_eq!(judge(false, 0, true), (true, true));
+        assert_eq!(judge(true, 0, true), (false, false));
     }
 
     #[test]
