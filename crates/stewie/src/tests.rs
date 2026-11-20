@@ -188,7 +188,7 @@ fn a_players_file_overlays_vnvs_values_key_by_key() {
 }
 
 /// The S0079 row (`bDialogSpeechNullCheck`), which the key tests use.
-const PROOF: &rows::Row = &rows::ROWS[22];
+const PROOF: &rows::Row = &rows::ROWS[24];
 
 #[test]
 fn every_row_has_its_own_bit_and_key() {
@@ -475,8 +475,13 @@ fn the_start_lines_name_what_was_read() {
     assert_eq!(
         start_lines(false, &settings, &keys, on.len()),
         [
-            "lStewieAl's Tweaks: no Data\\NVSE\\Plugins\\nvse_stewie_tweaks.ini: VNV's values",
-            "lStewieAl's Tweaks: 61 of its 61 rows built are on",
+            "lStewieAl's Tweaks: no Data\\NVSE\\Plugins\\nvse_stewie_tweaks.ini: VNV's values"
+                .to_string(),
+            // Every row is on by default: the count follows the rows built (every share's list).
+            format!(
+                "lStewieAl's Tweaks: {n} of its {n} rows built are on",
+                n = rows::all().count()
+            ),
         ]
     );
     let (settings, on) = settings_and_rows(Some(b"[Tweaks]\nbBetterAutoWalk=1\n"), &[], &keys);
@@ -504,6 +509,21 @@ fn the_install_reads_the_players_ini() {
         (state.settings.read[0].keys, state.settings.read[0].changed),
         (1, 1)
     );
+}
+
+/// Row S0023's line obeys `[Tweaks] bInvalidBSFadeNodePrints` (on in Tweaks' code; VNV's INI does
+/// not list it): on without a file, off when the player's file sets it to 0.
+#[test]
+fn the_fade_node_line_obeys_its_tweaks_key() {
+    let mut e = engine(None);
+    set_on(&mut e, true);
+    install(&mut e);
+    assert!(e.stewie_fade_node_prints());
+    let mut e = engine(Some(b"[Tweaks]\r\nbInvalidBSFadeNodePrints=0\r\n"));
+    set_on(&mut e, true);
+    install(&mut e);
+    assert!(!e.stewie_fade_node_prints());
+    assert!(e.stewie(bits::INVALID_FADE_NODE), "the fix stays on");
 }
 
 fn listed(name: &str, is_folder: bool) -> engine_core::mod_files::Listed {
@@ -912,7 +932,9 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
             "bMenuFixesTileLabelNullName",
             Row::at(CRASH, 17),
         ),
+        ("S0023", "bPrintBSXCrash", Row::at(CRASH, 62)),
         ("S0027", "bFixPipboyEquipCrash", Row::at(CRASH, 28)),
+        ("S0031", "bAddNifShapeNullChecks", Row::at(CRASH, 63)),
         (
             "S0036",
             "bRemoveInvalidCasinoDataChipsInSlotMachineMenu",
@@ -967,10 +989,16 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
             "bFixNullHitLocationNodeExplosionCrash",
             Row::at(CRASH, 5),
         ),
+        ("S0107.01", "bMemoryLeakFixesRumble", Row::at(CRASH, 60)),
         (
             "S0107.03",
             "bMemoryLeakFixesPackageTarget",
             Row::at(CRASH, 42),
+        ),
+        (
+            "S0107.04",
+            "bMemoryLeakFixesFocusSpeaker",
+            Row::at(CRASH, 61),
         ),
         ("S0108", "bFixNullNifOwnerCrash", Row::at(CRASH, 57)),
         (
@@ -1039,6 +1067,11 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
             "S0196.03",
             "bRouletteMenuFixesBetFreedOnUse",
             Row::at(CRASH, 52),
+        ),
+        (
+            "S0199.02",
+            "bMiscCrashFixesDismemberLimb",
+            Row::at(CRASH, 64),
         ),
         ("S0199.03", "bMiscCrashFixesAmmoEntry", Row::at(CRASH, 46)),
         (
