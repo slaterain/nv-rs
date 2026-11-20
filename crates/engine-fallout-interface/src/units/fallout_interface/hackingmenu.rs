@@ -2704,6 +2704,14 @@ fn place_words(e: &mut Engine, this: Ptr<HackingMenu>, buffer: u32, garbage_coun
     }
 }
 
+/// Whether the file's first character becomes the selection: a gamepad in use (`004b71d0`), or
+/// always with lStewieAl's Tweaks' S0025 (`patchFixCrashWhenControllerReconnectsInHackingMenu`: the
+/// jump at `0x7693F5` taken out, the test still made).
+fn selection_follows_the_gamepad(e: &mut Engine) -> bool {
+    let gamepad = e.call(GAMEPAD_IN_USE, &args![]).bool();
+    gamepad || e.stewie(engine_core::extend::stewie::HACKING_SELECTION_TILE)
+}
+
 /// Makes the file's terminal lines from the buffer (the tail of
 /// [`hacking_menu_make_password_file`]).
 fn write_file_lines(
@@ -2748,7 +2756,7 @@ fn write_file_lines(
         let tile = e.mem.u32(e.mem.u32(slot).wrapping_add(0x2c));
         e.call(TILE_SET_INT_FROM_VALUE, &args![tile, 0x1004u32, row]);
         e.call(INTERFACE_SINGLETON, &args![]);
-        if e.call(GAMEPAD_IN_USE, &args![]).bool() && column == 0 && row == 0 {
+        if selection_follows_the_gamepad(e) && column == 0 && row == 0 {
             let tile = e.mem.u32(e.mem.u32(slot).wrapping_add(0x2c));
             e.set(this, HackingMenu::pOverTile, tile);
             let over = e.get(this, HackingMenu::pOverTile);
@@ -5209,6 +5217,29 @@ mod n054_menu_tests {
         assert_eq!(sets.len(), 14);
         assert_eq!(sets[0], vec![0x600, 0xfa3, 1]);
         assert_eq!(calls_to(&e, GAME_TIME).len(), 15);
+    }
+
+    /// lStewieAl's Tweaks' row S0025: the file's first character is the selection with a gamepad
+    /// either way; without one only with the row; the gamepad test is made each time.
+    #[test]
+    fn s0025_the_first_character_is_the_selection_without_a_gamepad() {
+        for (on, pad, wanted) in [
+            (false, 1, true),
+            (false, 0, false),
+            (true, 0, true),
+            (true, 1, true),
+        ] {
+            let mut e = Engine::new();
+            e.set_stewie(engine_core::extend::stewie::HACKING_SELECTION_TILE, on);
+            answer(&mut e, GAMEPAD_IN_USE, pad);
+            e.call_log = Some(vec![]);
+            assert_eq!(
+                selection_follows_the_gamepad(&mut e),
+                wanted,
+                "row {on}, pad {pad}"
+            );
+            assert_eq!(calls_to(&e, GAMEPAD_IN_USE).len(), 1, "the test still made");
+        }
     }
 
     #[test]
