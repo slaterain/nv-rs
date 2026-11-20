@@ -130,6 +130,15 @@ Game pads work: an Xbox-style pad, or a PlayStation pad (DualSense, DualSense Ed
 by cable or Bluetooth, with rumble. The game shows Xbox button pictures: A is Cross, B is Circle,
 X is Square, Y is Triangle, Back is Create (Share on a DualShock 4) and Start is Options. The PS
 button and the touchpad do nothing.
+Other pads work too, without rumble, if SDL's controller database knows them (764 models, such as
+8BitDo and Logitech pads in their DirectInput modes): their buttons are put where an Xbox pad has
+them. A pad it doesn't know, or whose line does not fit its own buttons and sticks, is named in the
+log; a line for it in SDL's own format (with platform:Windows) can go in a file called
+gamecontrollerdb.txt in the "nv-rs mod files" folder beside your Saves folder, and the log then
+says how many lines it took from there. A pad SDL counts as Xbox-style is read through XInput as
+an Xbox pad, and a line for it is not used. To keep nv-rs from reading a pad at all, name it in
+the SDL_GAMECONTROLLER_IGNORE_DEVICES variable as SDL games take it (0xVVVV/0xPPPP, its vendor and
+product ids, several separated by commas).
 While a pad is connected, the game takes its controls from the pad, not from the keyboard and
 mouse, as the original does with an Xbox pad. That includes a PlayStation pad that is only plugged
 in to charge. To play with keyboard and mouse while a pad is connected, turn off "360 Controller"
@@ -139,8 +148,8 @@ under Controls in the game's Settings menu; "Vibration" there turns rumble off.
 What doesn't yet
 ----------------
 - Mods that need xNVSE, JIP or other plugins (.dll files) don't work yet.
-- Other game pads (any pad that is not Xbox-style and not one of those three PlayStation pads,
-  such as a DualShock 3 or a Switch Pro pad) don't work yet.
+- Game pads that are not Xbox-style, not one of those three PlayStation pads and not in SDL's
+  controller database don't work yet, unless you add a line for them (above).
 - It is slower than the original. On the maintainer's PC (a laptop with an RTX 5070 Ti, at 2560x1440
   with 8x anti-aliasing), with the bug fixes on, about 103 frames a second in Doc Mitchell's house and
   about 44 in Goodsprings. The original runs at about 120 in Doc's house. Your numbers will differ.
@@ -154,7 +163,11 @@ What doesn't yet
   Windows 10. GOG, Epic and some regional copies may be refused, with a message that says so.
 - PlayStation pads (DualSense, DualSense Edge, DualShock 4, by cable or Bluetooth) are built from
   their published layouts and have not been tried with a real pad yet, nor with Steam Input or
-  DS4Windows running alongside. Please tell us how yours does.
+  DS4Windows running alongside. Nor have the pads read through SDL's controller database. Please
+  tell us how yours does.
+- A database pad connected by Bluetooth that drops out (out of range, out of battery) keeps its last
+  sticks and buttons until Windows takes the device away, as such pads may send nothing while
+  nothing changes.
 
 
 Problems at the start

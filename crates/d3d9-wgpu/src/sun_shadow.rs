@@ -8,8 +8,8 @@
 //! words [`VIEW_STATE`]) the device starts a light list of the frame's world draws ([`Caster`]): a
 //! vertex shader whose constant table names `ModelViewProj` (and no skinning matrices), depth test
 //! and depth writes on, no blending, no vertex textures, not a face. Alpha-tested draws are
-//! cut-outs ([`Cutout`]: drawn through their own pixel shader with the game's alpha test), only in
-//! the first [`CUTOUT_CASCADES`] maps. The list ends at the game's depth-only clear ([`STATE`]): the
+//! cut-outs ([`Cutout`]: drawn through their own pixel shader with the game's alpha test), in
+//! every cascade ([`CUTOUT_CASCADES`]). The list ends at the game's depth-only clear ([`STATE`]): the
 //! first-person arms and weapon after it cast nothing. At the next frame's scene clear each
 //! caster's place in the world comes back from its `ModelViewProj`, that frame's frustum (rows x,
 //! y and w) and the camera's rotation and place from the game's memory ([`world_of`], [`Frame`]).
@@ -664,9 +664,10 @@ pub const FAR_OVERDUE: f64 = 4.0;
 /// coarse land and large buildings drawn from the receivers' own geometry: the cascades' two
 /// texels of its 64 units lifted shadows off building feet).
 pub const FAR_SLOPE_MAX: f32 = 1.0;
-/// The far map's casters: radius at least this (a house, a rock, a land block; smaller things cast
-/// nothing a far map's texel could show) and at most this (beyond: the sky's, whatever its place).
-pub const FAR_MIN_RADIUS: f64 = 1000.0;
+/// The far map's casters: radius at least this (a tree, a rock, a house, a land block: about eight
+/// of its texels across; smaller things cast nothing a far map's texel could show) and at most this
+/// (beyond: the sky's, whatever its place).
+pub const FAR_MIN_RADIUS: f64 = 250.0;
 pub const FAR_MAX_RADIUS: f64 = 100_000.0;
 
 /// The far map for a camera at `position` and the sun's basis `b`: [`FAR_HALF`] round the camera,
@@ -2185,7 +2186,7 @@ fn sl_filter(k: i32, p: vec3<f32>, bias: f32) -> f32 {
 }
 
 // [`sl_filter`] reading layer `layer` of the maps through cascade `k`'s matrix (the characters'
-// layer of a near cascade, `CHAR_FIRST + k`).
+// layer of a cascade, `CHAR_FIRST + k`).
 fn sl_filter_layer(k: i32, layer: i32, p: vec3<f32>, bias: f32) -> f32 {
     let l = sl_to_map(k, p);
     let uv = vec2<f32>(l.x * 0.5 + 0.5, 0.5 - l.y * 0.5);
@@ -2205,7 +2206,7 @@ fn sl_filter_layer(k: i32, layer: i32, p: vec3<f32>, bias: f32) -> f32 {
 }
 
 // How much of a character's shadow (in its own layer, [`sl_chars_in`]) falls round view-space point
-// `p` of near cascade `k`: 1 where a character stands between it and the sun within a few texels
+// `p` of cascade `k`: 1 where a character stands between it and the sun within a few texels
 // (nine taps four texels apart), 0 where none does.
 fn sl_chars_cover_in(k: i32, p: vec3<f32>) -> f32 {
     if (!sl_chars_in(k)) {
@@ -2228,17 +2229,17 @@ fn sl_chars_cover_in(k: i32, p: vec3<f32>) -> f32 {
 
 // Where the characters' own shadows replace the game's projected actor shadows at view-space point
 // `p`: their cover in its cascade, blended into the next one's over the band where the two meet
-// (none past the near cascades: the third's band blends to none).
+// (none past the cascades: the last one's band blends to none).
 fn sl_chars_cover(p: vec3<f32>) -> f32 {
     let z = p.z;
-    if (SL.sun.w <= 0.0 || z <= 0.0 || z >= SL.splits.z) {
+    if (SL.sun.w <= 0.0 || z <= 0.0 || z >= SL.splits[CHAR_LAYERS - 1]) {
         return 0.0;
     }
-    var k = 2;
-    if (z < SL.splits.x) {
-        k = 0;
-    } else if (z < SL.splits.y) {
-        k = 1;
+    var k = CHAR_LAYERS - 1;
+    for (var j = CHAR_LAYERS - 2; j >= 0; j--) {
+        if (z < SL.splits[j]) {
+            k = j;
+        }
     }
     var v = sl_chars_cover_in(k, p);
     let far = SL.splits[k];
@@ -2250,7 +2251,7 @@ fn sl_chars_cover(p: vec3<f32>) -> f32 {
     let t = saturate((z - (far - band)) / band);
     if (t > 0.0) {
         var next = 0.0;
-        if (k < 2) {
+        if (k < CHAR_LAYERS - 1) {
             next = sl_chars_cover_in(k + 1, p);
         }
         v = mix(v, next, t);
@@ -2258,9 +2259,9 @@ fn sl_chars_cover(p: vec3<f32>) -> f32 {
     return v;
 }
 
-// Whether near cascade `k` has its characters' layer this frame (`SL.misc.z`, a bit a cascade).
+// Whether cascade `k` has its characters' layer this frame (`SL.misc.z`, a bit a cascade).
 fn sl_chars_in(k: i32) -> bool {
-    return k < 3 && ((u32(SL.misc.z) >> u32(k)) & 1u) != 0u;
+    return k < CHAR_LAYERS && ((u32(SL.misc.z) >> u32(k)) & 1u) != 0u;
 }
 
 // How much of the sun the thin casters (cables) over map `k`'s point `l` take away: their
@@ -2423,7 +2424,7 @@ fn sun_visibility(frag: vec4<f32>) -> f32 {
     let p = sl_point(frag.xy - vec2<f32>(0.5), frag.z);
     // Where a character's own shadow falls this frame, the game's projected actor shadows are left
     // out (read as lit): one shadow a character. Elsewhere (a character not cast this frame, past
-    // the near cascades) they stay (review of #726, round 2).
+    // the cascades) they stay (review of #726, round 2).
     sun_chars = sl_chars_cover(p);
     var n = cross(dpdx(p), dpdy(p));
     let l = length(n);
@@ -2483,11 +2484,12 @@ fn lookup_consts(skinned: bool) -> String {
          const SUN_WIDTH: f32 = {SUN_WIDTH:?};\nconst THIN_NEAR: f32 = {THIN_NEAR:?};\n\
          const FAR_DEPTH: f32 = {:?};\nconst FAR_EDGE: f32 = {FAR_EDGE:?};\n\
          const FAR_EDGE_END: f32 = {FAR_EDGE_END:?};\nconst FAR_SLOPE_MAX: f32 = {FAR_SLOPE_MAX:?};\n\
-         const CHAR_FIRST: i32 = {};\n",
+         const CHAR_FIRST: i32 = {};\nconst CHAR_LAYERS: i32 = {};\n",
         if skinned { 1.0f32 } else { 0.0 },
         DEPTH_RANGE as f32,
         FAR_DEPTH as f32,
-        CASCADES
+        CASCADES,
+        CHAR_LAYERS
     )
 }
 
@@ -2640,9 +2642,10 @@ pub fn half_to_f32(h: u16) -> f32 {
     }
 }
 
-/// Alpha-tested casters (cut-outs) are drawn into this many cascades, the nearest: further out a
-/// fence or a bush is a few texels and would flicker.
-pub const CUTOUT_CASCADES: usize = 3;
+/// Alpha-tested casters (cut-outs: fences, bushes, trees' leaves) are drawn into this many
+/// cascades: all of them, so a tree or a fence casts as far as the cascades reach (past them, the
+/// far map takes the large ones whole).
+pub const CUTOUT_CASCADES: usize = CASCADES;
 /// The level bias a cut-out caster's textures are read with in the maps: far below any level, so
 /// the top level (the texture's own alpha, not a smaller level's average) decides what casts.
 pub const CUTOUT_BIAS: f32 = -16.0;
@@ -2716,7 +2719,7 @@ pub(crate) struct Gpu {
     pub far_old: Option<Cascade>,
     pub far_fade: u32,
     pub far_draws: u64,
-    /// The near cascades whose characters' layer holds this frame's characters (a bit each).
+    /// The cascades whose characters' layer holds this frame's characters (a bit each).
     pub chars_in: u32,
     /// Whether the maps have the characters' layers (made with the characters on).
     char_layers: bool,
@@ -2867,7 +2870,7 @@ impl Gpu {
                 .collect()
         };
         // The maps the lookups read: a layer a cascade, then the characters' layers ([`CHAR_LAYERS`]).
-        // (The characters' layers only with the characters on: 48 MB.)
+        // (The characters' layers only with the characters on: 64 MB.)
         let char_layers = if characters { CHAR_LAYERS } else { 0 };
         let live = texture("sun shadow maps", CASCADES + char_layers);
         let statics = texture("sun shadow maps (still casters)", CASCADES);
@@ -3140,7 +3143,7 @@ impl Gpu {
     /// moving casters the frame before (so a moving shadow that is gone leaves no ghost), the map
     /// the lookups read: a copy of the still map with the moving casters drawn over it.
     /// Each caster through its own pipeline with its `ModelViewProj` replaced by the map's view of
-    /// its place; alpha-tested ones (cut-outs) only in the first [`CUTOUT_CASCADES`]. `headers`:
+    /// its place; alpha-tested ones (cut-outs) in the [`CUTOUT_CASCADES`] (all). `headers`:
     /// the register blocks' headers. Returns the register ring's bytes, to be written before the
     /// encoder runs (with the thin casters' quads, [`thin_quads`]), and how many caster draws were recorded.
     #[allow(clippy::too_many_arguments)]
@@ -3212,9 +3215,9 @@ impl Gpu {
             }
         }
         // The characters (skinned casters and faces, their poses of the frame): drawn each frame into
-        // the near cascades' characters' layers ([`CHAR_LAYERS`]), cleared first, where they are
+        // the cascades' characters' layers ([`CHAR_LAYERS`]), cleared first, where they are
         // larger than a blot ([`SKIN_MIN_TEXELS`]); never into the still maps or their copies.
-        for (k, c) in cascades.iter().enumerate().take(CUTOUT_CASCADES) {
+        for (k, c) in cascades.iter().enumerate().take(CHAR_LAYERS) {
             for (d, world, centre, radius) in skinned {
                 if *radius >= SKIN_MIN_TEXELS * c.texel
                     && c.touches(*centre, *radius)
@@ -3901,9 +3904,10 @@ pub fn skin_allowance(step: f64, flat: f64) -> f64 {
     (step / flat.max(SKIN_FLAT_SUN)).clamp(SKIN_RECEIVER_BIAS, SKIN_ALLOW_MAX)
 }
 
-/// The characters' layers: one for each of the first [`CUTOUT_CASCADES`] cascades, after the
-/// cascades' own in the maps the lookups read, cleared and drawn each frame there are characters.
-pub const CHAR_LAYERS: usize = CUTOUT_CASCADES;
+/// The characters' layers: one for each cascade, after the cascades' own in the maps the lookups
+/// read, cleared and drawn each frame there are characters (a character casts as far as the
+/// cascades reach).
+pub const CHAR_LAYERS: usize = CASCADES;
 
 /// One bone's share of a skinned geometry: the bone's register offset from `Bones` (a byte of
 /// `BLENDINDICES` times 3) and the bind-pose sphere of the vertices it moves.
@@ -5663,8 +5667,16 @@ mod tests {
         assert!(!casts(&at(far, 1.0), ([0.0; 3], 30_000.0), camera));
         // A house (radius 1,200): both.
         assert!(far_casts(&at(far, 1.0), ([0.0; 3], 1200.0), camera));
-        // A rock (radius 300): the cascades only.
-        assert!(!far_casts(&at(far, 1.0), ([0.0; 3], 300.0), camera));
+        // A rock or a tree (radius 300): both, a cut-out too (in [`draw_maps`]).
+        assert!(far_casts(&at(far, 1.0), ([0.0; 3], 300.0), camera));
+        // A bush (radius 100, a texel and a half of the far map): the cascades only.
+        assert!(!far_casts(&at(far, 1.0), ([0.0; 3], 100.0), camera));
+        assert!(!far_casts(
+            &at(far, 1.0),
+            ([0.0; 3], FAR_MIN_RADIUS - 1.0),
+            camera
+        ));
+        assert!(far_casts(&at(far, 1.0), ([0.0; 3], FAR_MIN_RADIUS), camera));
         // The sky's dome round the camera, placed at it: neither.
         assert!(!far_casts(&at(camera, 1.0), ([0.0; 3], 50_000.0), camera));
         // Larger than any land: not.
@@ -5732,6 +5744,29 @@ mod tests {
     /// the ground slid by up to half a texel at a turn: every shadow edge in the map jumped.
     #[test]
     fn a_ground_point_keeps_its_place_in_its_texel_as_the_sun_turns_far_from_the_origin() {
+        // A farther map's ground lies farther from its centre and its turn limit is larger (its
+        // texels are larger), and the last takes the sun late (one map a frame, the nearest first):
+        // its grid turns by up to 0.2 (third) and 0.43 (last) of a texel there, as a hill's shadow
+        // moves. Each bound is shown to tell the rules apart: counted from the world's grid (the
+        // old rule) the same walk slides the ground past it in every map (review of #813).
+        let most = [0.15, 0.15, 0.3, 0.47];
+        let (worst, turns) = phase_walk(false);
+        let (old, _) = phase_walk(true);
+        eprintln!("worst slide a map {worst:.3?} of a texel, turns {turns:?}; on the world grid {old:.3?}");
+        for k in 0..CASCADES {
+            assert!(turns[k] >= 3, "map {k} took the sun {} times", turns[k]);
+            assert!(
+                worst[k] < most[k],
+                "a ground point slid {worst:?} of a texel"
+            );
+            assert!(old[k] > most[k], "the old rule within the bound: {old:?}");
+        }
+    }
+
+    /// The walk of [`a_ground_point_keeps_its_place_in_its_texel_as_the_sun_turns_far_from_the_origin`]:
+    /// the worst part of a texel a ground point slid by at a turn, and the turns, a map; with
+    /// `world_grid`, every map anchored on the world's grid (as before the anchors).
+    fn phase_walk(world_grid: bool) -> ([f64; CASCADES], [usize; CASCADES]) {
         let s = splits(view().near, FAR);
         // Looking east, level: right (south), up, ahead (east).
         let axes = [[0.0, -1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]];
@@ -5773,7 +5808,13 @@ mod tests {
                 &keep,
                 to_sun,
                 turned,
-                &drawn,
+                // No map drawn before: each turn anchors on the world's grid, and an anchor on it
+                // kept between turns is the world's grid too.
+                if world_grid {
+                    &[None; CASCADES]
+                } else {
+                    &drawn
+                },
                 &mut anchors,
             );
             for k in 0..CASCADES {
@@ -5803,16 +5844,48 @@ mod tests {
             }
             azimuth += steps[frame % steps.len()];
         }
-        // A farther map's ground lies farther from its centre and its turn limit is larger (its texels
-        // are larger), and the last takes the sun late (one map a frame, the nearest first): its grid
-        // turns by up to 0.2 (third) and 0.4 (last) of a texel there, as a hill's shadow moves. Counted
-        // from the origin it was any part of a texel in every map.
-        eprintln!("worst slide a map {worst:.3?} of a texel, turns {turns:?}");
-        for k in 0..CASCADES {
-            assert!(turns[k] >= 3, "map {k} took the sun {} times", turns[k]);
-            let most = [0.15, 0.15, 0.3, 0.5][k];
-            assert!(worst[k] < most, "a ground point slid {worst:?} of a texel");
+        (worst, turns)
+    }
+
+    /// The far map keeps the same rule across its turns (review of #813): ground near the camera
+    /// keeps its place in its texels, to a tenth of one, when the far map is placed for a turned
+    /// sun counting from the centre of the map before; counted from the world's grid it slides by
+    /// more at some turn, 39,000 units from the origin.
+    #[test]
+    fn the_far_map_keeps_the_ground_in_its_texels_across_a_turn() {
+        let mut azimuth = 200.0f64;
+        let (mut worst, mut old) = (0.0f64, 0.0f64);
+        let mut before = None::<Cascade>;
+        let mut grid_before = None::<Cascade>;
+        for turn in 0..12 {
+            let position = [-36000.0 + 700.0 * f64::from(turn), 16000.0, 5700.0];
+            let (a, h) = (azimuth.to_radians(), 23f64.to_radians());
+            let b = basis([h.cos() * a.cos(), h.cos() * a.sin(), h.sin()]);
+            let anchor = next_anchor(true, before.as_ref(), before.map(|c| c.anchor));
+            let now = far_place(position, b, anchor);
+            let grid = far_place(position, b, None);
+            if let (Some(was), Some(was_grid)) = (before, grid_before) {
+                for dx in [-1000.0, 0.0, 1000.0] {
+                    for dy in [-1000.0, 0.0, 1000.0] {
+                        let p = [position[0] + dx, position[1] + dy, position[2] - 170.0];
+                        for axis in 0..2 {
+                            let s = texel_place(&now, p, axis) - texel_place(&was, p, axis);
+                            worst = worst.max(sub_texel(s));
+                            let s = texel_place(&grid, p, axis) - texel_place(&was_grid, p, axis);
+                            old = old.max(sub_texel(s));
+                        }
+                    }
+                }
+            }
+            before = Some(now);
+            grid_before = Some(grid);
+            azimuth += [0.011, 0.017, 0.013][turn as usize % 3];
         }
+        eprintln!(
+            "the far map's worst slide at a turn {worst:.3} of a texel, on the world grid {old:.3}"
+        );
+        assert!(worst < 0.1, "{worst}");
+        assert!(old > 0.1, "{old}");
     }
 
     /// The anchor rule itself: kept between turns, the drawn map's centre at a turn, none before
