@@ -232,12 +232,15 @@ fn every_row_has_its_own_bit_and_key() {
     }
 }
 
+/// One share: its rows and its two ranges (fixes, tweaks).
+type Share = (&'static [rows::Row], [(u16, u16); 2]);
+
 /// Each share's rows keep to its own bits (`engine_core::extend::stewie`'s `world.rs`, `forms.rs`,
 /// `ai.rs`, `menus.rs`): a row put in another share's list, or numbered in another share's range, fails
 /// here; and each share's pinned list names its own rows.
 #[test]
 fn each_shares_rows_keep_to_its_own_bits() {
-    let shares: [(&[rows::Row], [(u16, u16); 2]); 4] = [
+    let shares: [Share; 4] = [
         (
             rows::world::ROWS,
             [
@@ -1100,4 +1103,22 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
             assert_eq!(e.stewie(*other), other != bit, "{plan}'s key at 0");
         }
     }
+}
+
+/// `Row::share` stops exactly at a share's end: the share's last bit is a row, the next one is
+/// refused.
+#[test]
+#[should_panic(expected = "past the share's rows")]
+fn a_share_row_at_its_end_is_refused() {
+    let n = std::hint::black_box(bits::AI_FIXES_END - bits::AI_FIXES);
+    let _ = bits::Row::share(bits::AI_FIXES, bits::AI_FIXES_END, n);
+}
+
+/// The last menus tweak is the table's bit 1023, the bit before the other switches' group.
+#[test]
+fn the_last_share_row_is_bit_1023() {
+    let n = std::hint::black_box(bits::MENUS_TWEAKS_END - bits::MENUS_TWEAKS - 1);
+    let last = bits::Row::share(bits::MENUS_TWEAKS, bits::MENUS_TWEAKS_END, n);
+    assert_eq!(last.index(), 1023);
+    assert_eq!(usize::from(bits::OTHER_TWEAKS), 1024);
 }
