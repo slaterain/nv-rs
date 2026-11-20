@@ -49,7 +49,7 @@ const PERSISTENT_CELL: u32 = 0x0c;
 /// JIP's float constants (`internal/utility.h`, `kPackedValues`): the standard constants have
 /// exactly their bits (`0x3FC90FDB`, `0x40490FDB`, `0x40C90FDB`; `kFlt2dPI` `0x3F22F983`), pinned
 /// in the tests.
-const FLT_PI_D2: f32 = std::f32::consts::FRAC_PI_2;
+pub(crate) const FLT_PI_D2: f32 = std::f32::consts::FRAC_PI_2;
 const FLT_PI: f32 = std::f32::consts::PI;
 const FLT_PI_X2: f32 = std::f32::consts::TAU;
 const FLT_EPSILON: f32 = f32::EPSILON;
