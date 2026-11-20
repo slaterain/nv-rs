@@ -872,9 +872,12 @@ const RENDERER_VIEW_MATRIX_OFFSET: u32 = 0x980;
 const RENDERER_PROJECTION_MATRIX_OFFSET: u32 = 0x9c0;
 const RENDERER_DEVICE_OFFSET: u32 = 0x8b8;
 /// The render object's device (`render object + 0x288`) and its virtual at
-/// `+0xdc`, called as `(device, index, plane)` with `ECX` holding the
-/// device's vtable pointer (going by its arguments it is Direct3D 9's
-/// `SetClipPlane`, a stdcall method that ignores `ECX`).
+/// `+0xdc`: Direct3D 9's `SetClipPlane`, a stdcall method called with three
+/// words, `(device, index, plane)`. `ECX` still holds the device's vtable
+/// pointer at the call (`004ed1d9`), which the method does not read: it is
+/// not an argument (passed as a fourth, leading word until 2026-11-19, the
+/// device answered `D3DERR_INVALIDCALL` to every clip plane of the water's
+/// reflection and depth passes, play report 011).
 const RENDER_OBJECT_DEVICE_OFFSET: u32 = 0x288;
 const DEVICE_SET_CLIP_PLANE_VIRTUAL: u32 = 0xdc;
 /// The renderer device's virtual at `+0x68`, called as `(state, value, 0,
@@ -7880,18 +7883,18 @@ pub fn fn_004ed180(_e: &mut Engine) -> u32 {
 // Translated from 004ed190 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Sets the clip planes `first` to `first + count - 1` of the render object's
 /// device (`this + 0x288`) to the 16-byte planes at `array`: the device's
-/// virtual at `+0xdc` is called as `(device, index, plane)` with `ECX`
-/// holding the vtable pointer.
+/// virtual at `+0xdc` (`SetClipPlane`, stdcall) is called with the three
+/// words the exe pushes, `(device, index, plane)`.
 pub fn fn_004ed190(e: &mut Engine, this: u32, first: i32, count: i32, array: u32) {
     let mut i = 0i32;
     while i < count {
         let device = e.mem.u32(this + RENDER_OBJECT_DEVICE_OFFSET);
-        let vtable = e.mem.u32(device);
-        let target = e
-            .mem
-            .u32(vtable.wrapping_add(DEVICE_SET_CLIP_PLANE_VIRTUAL));
         let plane = array.wrapping_add((i as u32).wrapping_mul(16));
-        e.call(target, &args![vtable, device, first.wrapping_add(i), plane]);
+        e.vcall(
+            device,
+            DEVICE_SET_CLIP_PLANE_VIRTUAL,
+            &args![first.wrapping_add(i), plane],
+        );
         i += 1;
     }
 }
@@ -15648,8 +15651,11 @@ mod tests {
                 let clip_planes: ClipPlanes = Rc::default();
                 let log = clip_planes.clone();
                 e.register_double(CLIP_PLANE_DOUBLE, move |e, a| {
-                    let plane = (0..4).map(|i| e.mem.f32(a[3] + 4 * i)).collect();
-                    log.borrow_mut().push((a[1], a[2], plane));
+                    // `SetClipPlane` as Direct3D 9 takes it: the device, the index and
+                    // the plane, and no word before them.
+                    assert_eq!(a.len(), 3, "SetClipPlane(device, index, plane): {a:x?}");
+                    let plane = (0..4).map(|i| e.mem.f32(a[2] + 4 * i)).collect();
+                    log.borrow_mut().push((a[0], a[1], plane));
                     Ret::default()
                 });
                 // The renderer's device: its state virtual.
