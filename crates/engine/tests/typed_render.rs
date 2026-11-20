@@ -368,6 +368,58 @@ fn bind() {
         .assert_same();
 }
 
+/// The sampler getter's stand-in (lStewieAl's Tweaks' S0225 reads it through `010f095c`): the
+/// word at `cache + 4 * state`.
+const SAMPLER_GETTER: u32 = 0x00ff_7000;
+
+/// lStewieAl's Tweaks' row S0225 on: the texture already bound, the stage group's ADDRESSU current
+/// or saved or neither, and the render state cache answering the same value or another; the typed
+/// stage binds as the translation does.
+#[test]
+fn bind_with_the_sampler_state_row() {
+    Diff::new(entry!(0x00e7_eb00, stage::bind(Ptr<_>, u8) -> bool))
+        .common(false)
+        .inputs(&[
+            Input::Of(&[0, 1, 2]),
+            Input::Of(&[3, 5]),
+            Input::Of(TWO_WAYS),
+        ])
+        .translation_calls_plainly(&[0x00e7_ea00, 0x00e7_e940, 0x00e7_df90])
+        .setup(|e, c| {
+            e.set_stewie(engine_core::extend::stewie::SAMPLER_STATE_LEAK, true);
+            let w = world(e, false);
+            set(e, SHADOWED + 4, w.texture);
+            set(e, APPLY_STATES_ANSWER, c.word(2));
+            // The exe's tables and words S0225 reads (mapped as the game's image would have them).
+            e.map(0x0126_f000, 0x1000);
+            e.map(0x010f_0000, 0x1000);
+            set(e, 0x0126_f918, 1);
+            set(e, 0x0126_f91c, 2);
+            // State 1 is slot 0, state 2 slot 1 (halfwords at 0126f92c + 2 * state).
+            set(e, 0x0126_f92c, 0);
+            set(e, 0x0126_f930, 1);
+            let group = e.mem.u32(w.stage + 0x10);
+            match c.word(0) {
+                1 => e.mem.set_u8(group + 0xa4, 1),
+                2 => e.mem.set_u8(group + 0x80, 1),
+                _ => {}
+            }
+            set(e, group + 0x90, 3);
+            set(e, group + 0x6c, 3);
+            let cache = e.mem.alloc(0x10);
+            set(e, cache + 4, c.word(1));
+            set(e, 0x0126_f99c, cache);
+            set(e, 0x010f_095c, SAMPLER_GETTER);
+            e.register_double(SAMPLER_GETTER, |e, a| engine_core::abi::Ret {
+                eax: e.mem.u32(a[0] + 4 * a[2]),
+                ..Default::default()
+            });
+            vec![w.stage, 0]
+        })
+        .run()
+        .assert_same();
+}
+
 #[test]
 fn apply() {
     for real_shader in [true, false] {

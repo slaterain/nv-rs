@@ -650,6 +650,28 @@ pub(crate) const FN_0057D0A0: u32 = 0x0057_d0a0;
 // Cell tests and the `TES` singleton (`GLOBAL_0011DEA10`).
 /// `TES::TestAllCells` (Xbox PDB), `thiscall` (`cell count or -1`).
 pub(crate) const TES_TEST_ALL_CELLS: u32 = 0x0045_56d0;
+/// `bGodmode` (the byte Tweaks' row S0194 sets).
+const GOD_MODE: u32 = 0x011e_07ba;
+
+/// The console's "open" byte and the running thread's TLS byte set while a console line runs
+/// (`+0x268`), as xNVSE's `IsConsoleMode` reads them.
+const CONSOLE_OPEN: u32 = 0x011d_ea2e;
+const TLS_CONSOLE_LINE: u32 = 0x268;
+
+// Translated from lStewieAl's Tweaks 10.05, main.h: ConsolePrintIfConsoleCommandRunner (with
+// nvse/GameAPI.cpp's IsConsoleMode).
+/// Whether a print Tweaks' row S0056 gates goes out: always without the row; with it only in
+/// console mode (the console open and the running thread's console-line byte set).
+pub(crate) fn stewie_print_allowed(e: &mut Engine) -> bool {
+    if !e.stewie(engine_core::extend::stewie::PRINTS_ONLY_FROM_CONSOLE) {
+        return true;
+    }
+    if e.mem.u8(CONSOLE_OPEN) == 0 {
+        return false;
+    }
+    let tls = e.tls();
+    tls != 0 && e.mem.u8(tls + TLS_CONSOLE_LINE) != 0
+}
 /// `thiscall` on the `TES`: `bRunningCellTests` or `bRunningCellTests2`
 /// (`+0x51`, `+0x52`).
 pub(crate) const TES_IS_RUNNING_CELL_TESTS: u32 = 0x0045_1530;
@@ -1317,7 +1339,10 @@ pub fn script_get_in_zone_function(e: &mut Engine, a: ScriptArgs) -> bool {
 /// slots `0x100` and `0x218` and is not the player finally gets `00606540(base
 /// form, reference, result of slot 0x1e8, 1)`.
 pub fn fn_005b4be0(e: &mut Engine, a: ScriptArgs) -> bool {
-    let Some([form, count, flag]) = a.parse_into(e, [0, 0, 0]) else {
+    // lStewieAl's Tweaks' row S0099 (`patchNoNeededCountForAddRemoveItemCommands`, the byte at
+    // `0x5B4C0F`): the count starts at 1, so a line without one adds one.
+    let unset = u32::from(e.stewie(engine_core::extend::stewie::ADD_REMOVE_ITEM_COUNT_OPTIONAL));
+    let Some([form, count, flag]) = a.parse_into(e, [0, unset, 0]) else {
         return false;
     };
     if a.this_obj.is_null() {
@@ -1414,7 +1439,9 @@ fn jip_every_item_health(e: &mut Engine) -> bool {
 /// and, for the player, the on-screen message
 /// ([`player_removed_message`]) and the interface refresh `00704af0`.
 pub fn fn_005b4e90(e: &mut Engine, a: ScriptArgs) -> bool {
-    let Some([form, count, silent]) = a.parse_into(e, [0, 0, 0]) else {
+    // lStewieAl's Tweaks' row S0099 (the byte at `0x5B4EC6`): the count starts at 1.
+    let unset = u32::from(e.stewie(engine_core::extend::stewie::ADD_REMOVE_ITEM_COUNT_OPTIONAL));
+    let Some([form, count, silent]) = a.parse_into(e, [0, unset, 0]) else {
         return false;
     };
     if a.this_obj.is_null() || form == 0 {
@@ -1912,7 +1939,10 @@ pub fn script_player_spell_book(e: &mut Engine) -> bool {
         }
         node = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, node));
     }
-    console_print(e, &args![MSG_SPELLS_ADDED, added]);
+    // lStewieAl's Tweaks' row S0056 (`0x5B5CA5`): printed only from the console.
+    if stewie_print_allowed(e) {
+        console_print(e, &args![MSG_SPELLS_ADDED, added]);
+    }
     true
 }
 
@@ -2614,6 +2644,11 @@ pub fn script_test_all_cells_function(e: &mut Engine, a: ScriptArgs) -> bool {
     let tes = e.global::<u32>(GLOBAL_0011DEA10);
     e.call(TES_TEST_ALL_CELLS, &args![tes, count]);
     let tes = e.global::<u32>(GLOBAL_0011DEA10);
+    // lStewieAl's Tweaks' row S0194 (`TestAllCellsEnablesGodmode`, its `OnTestAllCells` at
+    // `0x5B7212`): god mode on, then the test's state asked as the exe asks it.
+    if e.stewie(engine_core::extend::stewie::TEST_ALL_CELLS_GODMODE) {
+        e.set_global(GOD_MODE, 1u8);
+    }
     let state = if e.call(TES_IS_RUNNING_CELL_TESTS, &args![tes]).bool() {
         TEXT_RUNNING
     } else {
@@ -5373,6 +5408,16 @@ pub fn fn_005bb9e0(e: &mut Engine, a: ScriptArgs) -> bool {
                 } else {
                     0
                 };
+                // lStewieAl's Tweaks' row S0236 (`PlaceOcclusionPlaneFix`, the nops at
+                // `0x5BBBA6`, `0x5BBBB5`, `0x5BBBE4`): no `NiPointer`; the new plane (the word
+                // pushed for the pointer's constructor) goes into the list as it is, and nothing
+                // releases it.
+                if e.stewie(engine_core::extend::stewie::OCCLUSION_PLANE_KEPT) {
+                    let owner = e.call(FN_00450B80, &args![0u32]).u32();
+                    let list = e.call(FN_00454B30, &args![owner]).u32();
+                    e.call(FN_00C5AE70, &args![list, created]);
+                    return;
+                }
                 e.with_stack(4, |e, held| {
                     e.call(NI_POINTER_INIT, &args![held, created]);
                     let object = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, held));
@@ -11919,6 +11964,157 @@ mod tests {
         assert!(e.call(0x005b_c310, &args![script(other)]).bool());
         assert!(e.call(0x005b_c310, &args![script(0)]).bool());
         assert!(calls(&e, HEAD_TRACK_TARGET_EXTRA).is_empty());
+    }
+
+    // ---- lStewieAl's Tweaks' share 1b rows ----
+
+    /// Row S0099: a `RemoveItem` line that gives no count removes 0 (the exe's start value) with
+    /// the row off and 1 with it on; a count given is used either way.
+    #[test]
+    fn s0099_remove_item_without_a_count_removes_one() {
+        for (on, outs, want) in [
+            (false, vec![0u32], 0u32),
+            (true, vec![0], 1),
+            (true, vec![0, 3], 3),
+        ] {
+            let mut e = remove_item_engine();
+            let item = object_with(&mut e, &[(0xe4, V_TRUE)]);
+            let this_obj = object_with(&mut e, &[(0x17c, V_RECORD)]);
+            e.set_stewie(
+                engine_core::extend::stewie::ADD_REMOVE_ITEM_COUNT_OPTIONAL,
+                on,
+            );
+            let mut outs = outs;
+            outs[0] = item;
+            parse_gives(&mut e, true, &outs);
+            start_log(&mut e);
+            assert!(e.call(0x005b_4e90, &args![script(this_obj)]).bool());
+            assert_eq!(calls(&e, V_RECORD)[0][3], want, "row {on}, {outs:?}");
+        }
+    }
+
+    /// Row S0099: `AddItem`'s count starts at 1 with the row (the exe's 0 without), as the parser
+    /// finds it before it writes a count.
+    #[test]
+    fn s0099_add_item_count_starts_at_one() {
+        for on in [false, true] {
+            let mut e = engine();
+            let seen = std::rc::Rc::new(std::cell::Cell::new(u32::MAX));
+            let slot = seen.clone();
+            e.register_double(PARSE_PARAMETERS, move |e, a| {
+                slot.set(e.mem.u32(a[8]));
+                false.into_ret()
+            });
+            e.set_stewie(
+                engine_core::extend::stewie::ADD_REMOVE_ITEM_COUNT_OPTIONAL,
+                on,
+            );
+            assert!(!e.call(0x005b_4be0, &args![script(0x1234)]).bool());
+            assert_eq!(seen.get(), u32::from(on), "row {on}");
+        }
+    }
+
+    /// Row S0194: `TestAllCells` sets god mode with the row, before it asks whether the test runs;
+    /// without the row the byte is left alone.
+    #[test]
+    fn s0194_test_all_cells_turns_god_mode_on() {
+        for on in [false, true] {
+            let mut e = engine_b();
+            e.set_global(GLOBAL_0011DEA10, 0x7000u32);
+            e.set_global(GOD_MODE, 0u8);
+            accept(&mut e, &[TES_TEST_ALL_CELLS, CONSOLE_PRINT]);
+            let at_ask = std::rc::Rc::new(std::cell::Cell::new(9u8));
+            let slot = at_ask.clone();
+            e.register_double(TES_IS_RUNNING_CELL_TESTS, move |e, _| {
+                slot.set(e.global::<u8>(GOD_MODE));
+                true.into_ret()
+            });
+            e.set_stewie(engine_core::extend::stewie::TEST_ALL_CELLS_GODMODE, on);
+            parse_gives(&mut e, true, &[0]);
+            assert!(e.call(0x005b_71b0, &args![script(0)]).bool());
+            assert_eq!(at_ask.get(), u8::from(on), "row {on}");
+            assert_eq!(e.global::<u8>(GOD_MODE), u8::from(on), "row {on}");
+        }
+    }
+
+    /// Row S0056: `PlayerSpellBook`'s line prints without the row; with it only while a console
+    /// line runs (the console open and the thread's console byte set).
+    #[test]
+    fn s0056_player_spell_book_prints_only_from_the_console() {
+        for (on, open, line, want) in [
+            (false, false, false, true),
+            (true, false, false, false),
+            (true, true, false, false),
+            (true, false, true, false),
+            (true, true, true, true),
+        ] {
+            let mut e = engine();
+            e.set_global(DATA_HANDLER, 0x5000u32);
+            e.register(DATA_HANDLER_SPELLS, |_, _| 0u32.into_ret());
+            accept(&mut e, &[CONSOLE_PRINT]);
+            e.set_global(CONSOLE_OPEN, u8::from(open));
+            let tls = e.tls();
+            e.mem.set_u8(tls + TLS_CONSOLE_LINE, u8::from(line));
+            e.set_stewie(engine_core::extend::stewie::PRINTS_ONLY_FROM_CONSOLE, on);
+            start_log(&mut e);
+            assert!(e.call(0x005b_5bb0, &args![]).bool());
+            assert_eq!(printed(&e).len(), usize::from(want), "{on} {open} {line}");
+        }
+    }
+
+    /// Row S0236: the plane `PlaceOcclusionPlane` makes is put in the occluder list through a
+    /// `NiPointer` (made and released, the exe's use after free) without the row, and as it is,
+    /// with no pointer, with the row.
+    #[test]
+    fn s0236_the_new_plane_goes_into_the_list_without_a_pointer() {
+        for on in [false, true] {
+            let mut e = engine_b();
+            if !e.mem.is_mapped(F32_0101B268) {
+                e.map(F32_0101B268 & !0xfff, 0x1000);
+            }
+            let owner = e.mem.alloc(0x400);
+            let list = e.mem.alloc(0x40);
+            let source = e.mem.alloc(0x40);
+            let plane = e.mem.alloc(0x100);
+            e.register_double(FN_00450B80, move |_, _| owner.into_ret());
+            e.register_double(FN_00454B30, move |_, _| list.into_ret());
+            e.register(FN_0045C670, |_, _| 0x6100u32.into_ret());
+            e.register(FN_006629F0, |_, _| 0x6200u32.into_ret());
+            e.register_double(FN_00461130, move |_, _| source.into_ret());
+            e.register(NI_MATRIX_MULTIPLY, |_, a| a[1].into_ret());
+            e.register_double(NI_ALLOC, move |_, _| plane.into_ret());
+            e.register(FN_004A5FF0, |_, a| a[0].into_ret());
+            accept(
+                &mut e,
+                &[
+                    NI_POINT2_CONSTRUCT,
+                    NI_MATRIX_FROM_Z_ANGLE,
+                    NI_POINTER_INIT,
+                    NI_POINTER_DESTRUCT,
+                    FN_00C5AE70,
+                ],
+            );
+            e.set_stewie(engine_core::extend::stewie::OCCLUSION_PLANE_KEPT, on);
+            parse_gives(&mut e, true, &[2.0f32.to_bits(), 3.0f32.to_bits()]);
+            start_log(&mut e);
+            assert!(e.call(0x005b_b9e0, &args![script(0)]).bool());
+            assert_eq!(
+                calls(&e, NI_POINTER_INIT).len(),
+                usize::from(!on),
+                "row {on}"
+            );
+            assert_eq!(
+                calls(&e, NI_POINTER_DESTRUCT).len(),
+                usize::from(!on),
+                "row {on}"
+            );
+            let added = calls(&e, FN_00C5AE70);
+            assert_eq!(added.len(), 1, "row {on}");
+            assert_eq!(added[0][0], list, "row {on}");
+            if on {
+                assert_eq!(added[0][1], plane);
+            }
+        }
     }
 }
 

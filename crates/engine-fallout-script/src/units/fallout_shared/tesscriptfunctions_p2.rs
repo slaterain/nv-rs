@@ -459,6 +459,48 @@ fn nav_mesh_render(e: &mut Engine) -> u32 {
     e.call(NAV_MESH_RENDER, &args![]).u32()
 }
 
+/// The word `NAV_MESH_RENDER` (`00552ba0`) answers; the navigation mesh display's root node; the
+/// scene graph singleton (`SceneGraph::GetSingleton`).
+const NAV_MESH_RENDER_SINGLETON: u32 = 0x011d_6e2c;
+const NAV_MESH_ROOT_NODE: u32 = 0x011d_6e5c;
+const SCENE_GRAPH: u32 = 0x011d_eb7c;
+/// `NiNode`'s constructor through its creator (`stdcall`, no arguments), `NiGlobalStringTable::
+/// AddString` and `DecRefCount` (`cdecl`), `NiNode::AttachChild`'s vtable slot (`00a5ed10` in
+/// `NiNode`'s and `SceneGraph`'s tables).
+const NI_NODE_CREATE: u32 = 0x00a5_f030;
+const STRING_TABLE_ADD: u32 = 0x00a5_b690;
+const STRING_TABLE_RELEASE: u32 = 0x0043_81d0;
+const VSLOT_ATTACH_CHILD: u32 = 0xdc;
+
+// Translated from lStewieAl's Tweaks 10.05, Fixes/ToggleNavMeshFix.cpp: SetRootDrawNode (with
+// Internal/netimmerse.cpp's NiNode::Create and NiFixedString::operator=).
+/// With no root node: a new `NiNode` named "NavMeshRootNode" (its name `+8` a global string, the
+/// old one released), kept with one more reference (`+4`), and attached to the scene graph
+/// (`AttachChild(node, true)`).
+fn nav_mesh_set_root_draw_node(e: &mut Engine) {
+    if e.global::<u32>(NAV_MESH_ROOT_NODE) != 0 {
+        return;
+    }
+    let scene_graph = e.global::<u32>(SCENE_GRAPH);
+    let node = e.call(NI_NODE_CREATE, &args![]).u32();
+    let name = b"NavMeshRootNode\0";
+    e.with_stack(name.len() as u32, |e, at| {
+        e.mem.write(at.addr(), name);
+        let old = e.mem.u32(node + 8);
+        if old != at.addr() {
+            let handle = e.call(STRING_TABLE_ADD, &args![at.addr()]).u32();
+            e.mem.set_u32(node + 8, handle);
+            if old != 0 {
+                e.call(STRING_TABLE_RELEASE, &args![old]);
+            }
+        }
+    });
+    e.set_global(NAV_MESH_ROOT_NODE, node);
+    let count = e.mem.u32(node + 4);
+    e.mem.set_u32(node + 4, count.wrapping_add(1));
+    e.vcall(scene_graph, VSLOT_ATTACH_CHILD, &args![node, 1u32]);
+}
+
 fn nav_mesh_set_draw(e: &mut Engine, draw: bool) {
     let render = nav_mesh_render(e);
     e.call(NAV_MESH_RENDER_SET_DRAW, &args![render, draw]);
@@ -726,7 +768,15 @@ pub fn script_toggle_nav_mesh_function(e: &mut Engine, a: ScriptArgs) -> bool {
     if mode > 6 {
         mode = 4;
     }
-    let render = nav_mesh_render(e);
+    // lStewieAl's Tweaks' row S0161 (`ToggleNavMeshFix`, its `OnToggleNavMesh` at `0x5BD030`):
+    // the display's root node made when missing, then the render singleton read as the exe's
+    // getter reads it.
+    let render = if e.stewie(engine_core::extend::stewie::NAV_MESH_ROOT_NODE) {
+        nav_mesh_set_root_draw_node(e);
+        e.global::<u32>(NAV_MESH_RENDER_SINGLETON)
+    } else {
+        nav_mesh_render(e)
+    };
     let mut drawing = e.call(NAV_MESH_RENDER_IS_DRAWING, &args![render]).u8();
     if mode == 4 {
         mode = (drawing == 0) as u32;
@@ -909,20 +959,24 @@ pub fn script_pick_ref_by_id_function(e: &mut Engine, a: ScriptArgs) -> bool {
     let colour: f32 = e.global(FLOAT_MINUS_ONE);
     let text = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, string));
     let debug_text = e.call(DEBUG_TEXT_INSTANCE, &args![1u32]).u32();
-    e.call(
-        DEBUG_TEXT_PRINT,
-        &args![
-            debug_text,
-            text,
-            column,
-            row,
-            2u32,
-            0xffff_ffffu32,
-            colour,
-            0u32,
-            0u32
-        ],
-    );
+    // lStewieAl's Tweaks' row S0017 (`patchPridDontDuplicateLine`, `0x5BD546`): the print's call
+    // becomes `add esp, 0x20`, so no debug text is drawn.
+    if !e.stewie(engine_core::extend::stewie::PRID_NO_DEBUG_TEXT) {
+        e.call(
+            DEBUG_TEXT_PRINT,
+            &args![
+                debug_text,
+                text,
+                column,
+                row,
+                2u32,
+                0xffff_ffffu32,
+                colour,
+                0u32,
+                0u32
+            ],
+        );
+    }
     e.call(PICK_REFERENCE, &args![reference]);
     e.call(BS_STRING_DESTRUCT, &args![string]);
     e.mem.free(string);
@@ -964,10 +1018,91 @@ pub fn script_center_on_cell_function(e: &mut Engine, a: ScriptArgs) -> bool {
     if ok {
         e.call(CLOSE_CONSOLE, &args![]);
         let player = e.global::<u32>(PLAYER);
-        e.call(CENTER_ON_CELL, &args![player, name, 0u32]);
+        // lStewieAl's Tweaks' row S0101 (`patchCenterOnCellAcceptFormIDs`, its `CenterOnCellHook`
+        // at `0x5BD63D`): the cell by its editor id, else the name read as a hex form id.
+        let cell = if e.stewie(engine_core::extend::stewie::CENTER_ON_CELL_FORM_ID) {
+            center_on_cell_hook_cell(e, name)
+        } else {
+            0
+        };
+        e.call(CENTER_ON_CELL, &args![player, name, cell]);
     }
     e.mem.free(name);
     ok
+}
+
+/// `DataHandler::GetCellByName` (`thiscall`) and `LookupFormByID`.
+const DATA_HANDLER_CELL_BY_NAME: u32 = 0x0046_1ae0;
+const LOOKUP_FORM_BY_ID: u32 = 0x0048_39c0;
+/// `kFormType_TESObjectCELL`.
+const FORM_TYPE_CELL: u8 = 0x39;
+
+// Translated from lStewieAl's Tweaks 10.05, main.h: CenterOnCellHook.
+/// The cell `CenterOnCellHook` hands the player's `CenterOnCell`: `DataHandler::GetCellByName`
+/// with `name`; failing that, `strtoul(name, nullptr, 16)` when not 0, looked up as a form id
+/// and kept only when it is a cell (its type byte `+4`).
+fn center_on_cell_hook_cell(e: &mut Engine, name: u32) -> u32 {
+    let handler = e.global::<u32>(DATA_HANDLER);
+    let cell = e
+        .call(DATA_HANDLER_CELL_BY_NAME, &args![handler, name])
+        .u32();
+    if cell != 0 {
+        return cell;
+    }
+    let id = strtoul_hex(&e.mem.cstr(name));
+    if id == 0 {
+        return 0;
+    }
+    let form = e.call(LOOKUP_FORM_BY_ID, &args![id]).u32();
+    if form != 0 && e.mem.u8(form + 4) == FORM_TYPE_CELL {
+        form
+    } else {
+        0
+    }
+}
+
+/// The C runtime's `strtoul(text, nullptr, 16)`: blanks skipped, an optional sign, an optional
+/// `0x`/`0X`, then hex digits; a value past 32 bits gives `ULONG_MAX`, a `-` negates the value
+/// read (modulo 2^32); no digits give 0.
+fn strtoul_hex(text: &[u8]) -> u32 {
+    let mut i = 0;
+    while i < text.len() && matches!(text[i], b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r') {
+        i += 1;
+    }
+    let negative = match text.get(i) {
+        Some(b'-') => {
+            i += 1;
+            true
+        }
+        Some(b'+') => {
+            i += 1;
+            false
+        }
+        _ => false,
+    };
+    if text.get(i) == Some(&b'0')
+        && matches!(text.get(i + 1), Some(b'x' | b'X'))
+        && text.get(i + 2).is_some_and(u8::is_ascii_hexdigit)
+    {
+        i += 2;
+    }
+    let mut value: u64 = 0;
+    let mut overflow = false;
+    while let Some(digit) = text.get(i).and_then(|c| (*c as char).to_digit(16)) {
+        value = value * 16 + u64::from(digit);
+        if value > u64::from(u32::MAX) {
+            overflow = true;
+            value = u64::from(u32::MAX);
+        }
+        i += 1;
+    }
+    if overflow {
+        u32::MAX
+    } else if negative {
+        (value as u32).wrapping_neg()
+    } else {
+        value as u32
+    }
 }
 
 /// The tail the two exterior commands share: loads (or creates) the cell at
@@ -6576,6 +6711,148 @@ mod tests {
         start_log(&mut e);
         assert!(!run(&mut e, 0x005b_d5e0, script(0)));
         assert!(calls(&e, CENTER_ON_CELL).is_empty());
+    }
+
+    /// lStewieAl's Tweaks' row S0101: the cell `CenterOnCell` hands on, by the name typed: the
+    /// exe's 0 with the row off; with it the cell of that editor id, else the hex form id's form
+    /// when it is a cell (type `0x39`), else 0.
+    #[test]
+    fn s0101_center_on_cell_takes_a_hex_form_id() {
+        let run_with = |on: bool, typed: &'static str, by_name: u32, form_type: u8| {
+            let mut e = engine();
+            accept(&mut e, &[CLOSE_CONSOLE, CENTER_ON_CELL]);
+            e.set_global(PLAYER, 0x3333u32);
+            e.set_global(DATA_HANDLER, 0x4000u32);
+            e.set_stewie(engine_core::extend::stewie::CENTER_ON_CELL_FORM_ID, on);
+            let cell = e.mem.alloc(0x40);
+            e.mem.set_u8(cell + 4, form_type);
+            e.register_double(DATA_HANDLER_CELL_BY_NAME, move |e, a| {
+                assert_eq!(a[0], 0x4000);
+                assert_eq!(e.mem.cstr(a[1]), typed.as_bytes());
+                by_name.into_ret()
+            });
+            e.register_double(LOOKUP_FORM_BY_ID, move |_, a| {
+                if a[0] == 0x0001_2a3b {
+                    cell.into_ret()
+                } else {
+                    0u32.into_ret()
+                }
+            });
+            parse_with(&mut e, true, move |e, a| {
+                e.mem.set_cstr(a[7], typed.as_bytes())
+            });
+            start_log(&mut e);
+            assert!(run(&mut e, 0x005b_d5e0, script(0)));
+            let given = calls(&e, CENTER_ON_CELL)[0][2];
+            let looked_up = calls(&e, LOOKUP_FORM_BY_ID).len();
+            (given, cell, looked_up)
+        };
+        assert_eq!(run_with(false, "12A3B", 0, 0x39).0, 0);
+        assert_eq!(run_with(true, "GoodspringsExt", 0x7777, 0x39).0, 0x7777);
+        let (given, cell, _) = run_with(true, "12A3B", 0, 0x39);
+        assert_eq!(given, cell);
+        let (given, cell, _) = run_with(true, " 0x12a3b", 0, 0x39);
+        assert_eq!(given, cell);
+        assert_eq!(run_with(true, "12A3B", 0, 0x3a).0, 0, "not a cell");
+        let (given, _, looked_up) = run_with(true, "Nowhere", 0, 0x39);
+        assert_eq!((given, looked_up), (0, 0), "no hex digits: no lookup");
+    }
+
+    /// `strtoul(text, nullptr, 16)` as the C runtime reads it.
+    #[test]
+    fn s0101_strtoul_hex_reads_as_the_c_runtime() {
+        assert_eq!(strtoul_hex(b"1A2b"), 0x1a2b);
+        assert_eq!(strtoul_hex(b"  \t0X1f zz"), 0x1f);
+        assert_eq!(strtoul_hex(b"0x"), 0);
+        assert_eq!(strtoul_hex(b"+10"), 0x10);
+        assert_eq!(strtoul_hex(b"-1"), u32::MAX);
+        assert_eq!(strtoul_hex(b"123456789"), u32::MAX);
+        assert_eq!(strtoul_hex(b"-123456789"), u32::MAX);
+        assert_eq!(strtoul_hex(b"FFFFFFFF"), u32::MAX);
+        // Far past 32 bits: the maximum, which a minus does not negate.
+        assert_eq!(strtoul_hex(b"11111111111111111"), u32::MAX);
+        assert_eq!(strtoul_hex(b"-11111111111111111"), u32::MAX);
+        assert_eq!(strtoul_hex(b"g1"), 0);
+        assert_eq!(strtoul_hex(b""), 0);
+    }
+
+    /// lStewieAl's Tweaks' row S0017: `prid` draws its debug text with the row off, not with it; the
+    /// reference is picked either way.
+    #[test]
+    fn s0017_prid_draws_no_debug_text_with_the_row() {
+        for on in [false, true] {
+            let mut e = engine();
+            let form = pick_engine(&mut e, 0x3a);
+            e.set_stewie(engine_core::extend::stewie::PRID_NO_DEBUG_TEXT, on);
+            parse_gives(&mut e, true, &[form]);
+            start_log(&mut e);
+            assert!(run(&mut e, 0x005b_d410, script(0)));
+            assert_eq!(
+                calls(&e, DEBUG_TEXT_PRINT).len(),
+                usize::from(!on),
+                "row {on}"
+            );
+            assert_eq!(calls(&e, PICK_REFERENCE), vec![vec![form]], "row {on}");
+            assert_eq!(calls(&e, BS_STRING_DESTRUCT).len(), 1, "row {on}");
+        }
+    }
+
+    /// lStewieAl's Tweaks' row S0161: with the row and no root node, `ToggleNavMesh` makes one
+    /// named "NavMeshRootNode", keeps a reference to it and attaches it to the scene graph (once);
+    /// the render singleton is read from `0x11D6E2C`. With the row off nothing is made.
+    #[test]
+    fn s0161_toggle_nav_mesh_makes_its_root_node() {
+        for on in [false, true] {
+            let mut e = engine();
+            let node = e.mem.alloc(0x100);
+            let render = e.mem.alloc(0x40);
+            e.set_global(NAV_MESH_RENDER_SINGLETON, render);
+            e.set_global(NAV_MESH_ROOT_NODE, 0u32);
+            const ATTACH: u32 = 0x0900_0200;
+            let attached = Rc::new(RefCell::new(Vec::new()));
+            let seen = attached.clone();
+            e.register_double(ATTACH, move |_, a| {
+                seen.borrow_mut().push((a[0], a[1], a[2]));
+                Ret::default()
+            });
+            let scene_graph = object_with(&mut e, &[(VSLOT_ATTACH_CHILD, ATTACH)]);
+            e.set_global(SCENE_GRAPH, scene_graph);
+            e.register_double(NI_NODE_CREATE, move |_, _| node.into_ret());
+            e.register(STRING_TABLE_ADD, |e, a| {
+                assert_eq!(e.mem.cstr(a[0]), b"NavMeshRootNode");
+                0x7100u32.into_ret()
+            });
+            accept(&mut e, &[STRING_TABLE_RELEASE]);
+            // The exe's getter answers the word at `0x11D6E2C`, as the row reads it.
+            e.register(NAV_MESH_RENDER, |e, _| {
+                e.global::<u32>(NAV_MESH_RENDER_SINGLETON).into_ret()
+            });
+            e.register(NAV_MESH_RENDER_IS_DRAWING, |_, _| 1u32.into_ret());
+            accept(&mut e, &[NAV_MESH_RENDER_SET_DRAW]);
+            e.set_stewie(engine_core::extend::stewie::NAV_MESH_ROOT_NODE, on);
+            for _ in 0..2 {
+                // No mode: 4, drawing on, so the display is turned off (mode 0).
+                parse_gives(&mut e, true, &[]);
+                start_log(&mut e);
+                assert!(run(&mut e, 0x005b_cfe0, script(0)), "row {on}");
+                assert_eq!(calls(&e, NAV_MESH_RENDER_IS_DRAWING), vec![vec![render]]);
+                assert_eq!(calls(&e, NAV_MESH_RENDER_SET_DRAW), vec![vec![render, 0]]);
+                assert_eq!(calls(&e, NAV_MESH_RENDER).len(), usize::from(!on) + 1);
+            }
+            if on {
+                assert_eq!(e.global::<u32>(NAV_MESH_ROOT_NODE), node);
+                assert_eq!(e.mem.u32(node + 8), 0x7100, "the name");
+                assert_eq!(e.mem.u32(node + 4), 1, "one reference kept");
+                assert_eq!(
+                    *attached.borrow(),
+                    vec![(scene_graph, node, 1)],
+                    "attached once"
+                );
+            } else {
+                assert_eq!(e.global::<u32>(NAV_MESH_ROOT_NODE), 0);
+                assert!(attached.borrow().is_empty());
+            }
+        }
     }
 
     /// Doubles for the world space and cell functions the exterior commands
