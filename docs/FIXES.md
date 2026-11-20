@@ -1048,6 +1048,14 @@ With the switch on:
   texture format reset with the renderer. `UpdateMiniMap`, which draws the map, comes next. JIP 57.30
   writes no cache of local map pictures (its `SaveLocalMapTexture` is not called: the calls are
   commented out), so the port writes none either.
+- JIP's text input menu (`ShowTextInputMenu`): JIP takes its typing and OK hooks out of the game's text
+  edit menu only when its OK is clicked or `CloseActiveMenu` closes it, so after any other close (Esc,
+  a load, another menu) the game's own text edit menu (naming a character, a sign) gets JIP's routines
+  and JIP's script. A JIP slip, not copied with the missing-data guard row (`NV_NVSE_NULL_GUARD`, the
+  fixes preset): a menu that is not the one JIP opened gets the exe's own key, frame and click, and
+  JIP's hooks come out; off (vanilla), as JIP. In every preset a 65,535-byte `SetTextInputString`
+  keeps 65,534 bytes and a full text takes no more characters (JIP's 16-bit length wraps and writes
+  past its block).
 
 Not yet, with the switch on:
 - The 23 commands not built yet are named and found like the others but have no handler: a script
