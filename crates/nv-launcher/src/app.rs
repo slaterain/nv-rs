@@ -12,6 +12,8 @@ use crate::place::{self, Place};
 use crate::screen::{self, Look, Screen};
 use crate::session::{self, Event};
 use crate::settings;
+use crate::sound;
+use crate::sound_files::Cue;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
@@ -492,8 +494,33 @@ pub enum Act {
     Save(String),
     /// From a row's choices back to its list.
     BackToList,
+    /// The Settings list's "Launcher sounds" row: on to off, or off to on.
+    ToggleSounds,
     Nothing,
 }
+
+/// Whether the prompt is still the one a paste was asked at after `act`: only when nothing was
+/// done. Anything else took it (Enter typed its line, Esc or a choice left it), so a paste still
+/// being read is dropped when it comes.
+pub fn prompt_kept(act: &Act) -> bool {
+    *act == Act::Nothing
+}
+
+/// The sounds of a choice: an entry chosen (Enter or a click, nothing typed at the prompt) plays
+/// its tile's click sound and the terminal's "enter" (`Tile::PlayTileSound` 00a0b110 with the
+/// list template's `clicksound`, and `DoClick` 00757f70); a typed line, the launcher's own use of
+/// the prompt, plays none.
+pub fn choice_sounds(typed: &str, entry: Option<&str>) -> &'static [crate::sound_files::Cue] {
+    use crate::sound_files::Cue;
+    if typed.trim().is_empty() && entry.is_some() {
+        &[Cue::Ok, Cue::Enter]
+    } else {
+        &[]
+    }
+}
+
+/// The Settings list's row for the terminal's sounds (the launcher's own setting).
+pub const SOUNDS_ROW: &str = "Launcher sounds";
 
 /// The Settings list's entry that opens the Testing list, and the start screen's for Settings.
 pub const TESTING_ENTRY: &str = "Testing";
@@ -535,6 +562,39 @@ pub fn shown_at_once(
     }
 }
 
+/// Which of a screen's lines (`texts`, the entries from `first_entry`) show whole at once
+/// ([`AtOnce`]).
+fn whole_lines(texts: &[String], first_entry: usize, at_once: AtOnce) -> Vec<bool> {
+    // The prompt, the last line, types once with the header (`FinishIntro`).
+    let prompt = texts.len().saturating_sub(1).max(3);
+    (0..texts.len())
+        .map(|i| match i {
+            0 | 1 => at_once.header,
+            2 => at_once.title,
+            i if i == prompt => at_once.header,
+            i if i < first_entry => at_once.welcome,
+            _ => false,
+        })
+        .collect()
+}
+
+/// The text manager's queue for a screen: its lines that type ([`whole_lines`] the others), in
+/// order, 6 ms a character.
+pub fn screen_queue(texts: &[String], first_entry: usize, at_once: AtOnce) -> Vec<pacing::Line> {
+    let whole = whole_lines(texts, first_entry, at_once);
+    texts
+        .iter()
+        .zip(&whole)
+        .filter(|(_, &w)| !w)
+        .map(|(t, _)| pacing::Line {
+            chars: t.chars().count(),
+            ms: screen::MS_PER_CHAR,
+            intro: false,
+            keyed: false,
+        })
+        .collect()
+}
+
 /// The characters typed of each of a screen's lines (`texts`, the entries from `first_entry`)
 /// `t` milliseconds after it showed, frames `frame` milliseconds apart: the lines [`AtOnce`]
 /// whole, the rest in order on the game's clock ([`pacing::typed`], 6 ms a character).
@@ -545,29 +605,16 @@ pub fn typed_lines(
     frame: f64,
     t: f64,
 ) -> Vec<usize> {
-    // The prompt, the last line, types once with the header (`FinishIntro`).
-    let prompt = texts.len().saturating_sub(1).max(3);
-    let whole = |i: usize| match i {
-        0 | 1 => at_once.header,
-        2 => at_once.title,
-        i if i == prompt => at_once.header,
-        i if i < first_entry => at_once.welcome,
-        _ => false,
-    };
-    let queue: Vec<pacing::Line> = (0..texts.len())
-        .filter(|&i| !whole(i))
-        .map(|i| pacing::Line {
-            chars: texts[i].chars().count(),
-            ms: screen::MS_PER_CHAR,
-            intro: false,
-        })
-        .collect();
+    let whole = whole_lines(texts, first_entry, at_once);
+    let queue = screen_queue(texts, first_entry, at_once);
     let (mut typed, _) = pacing::typed(&queue, frame, t);
     typed.reverse();
-    (0..texts.len())
-        .map(|i| {
-            if whole(i) {
-                texts[i].chars().count()
+    texts
+        .iter()
+        .zip(&whole)
+        .map(|(text, &w)| {
+            if w {
+                text.chars().count()
             } else {
                 typed.pop().unwrap_or(0)
             }
@@ -680,12 +727,13 @@ pub fn press_finishes_typing(press: Press, repeat: bool, typing: bool) -> bool {
 
 /// The game's rule for a press (`repeat`: a held key's auto-repeat) while the screen types or
 /// not: the entries are disabled until every line is in, so moving the focus, choosing, Esc's way
-/// back and Left/Right on a row wait; a held key's repeat never chooses, goes back or steps a row
-/// (Esc held to skip the intro would else go on to Exit); typing at the prompt always goes.
+/// back and Left/Right on a row wait; a held key's repeat never chooses or goes back (Esc held to
+/// skip the intro would else go on to Exit), while a held Left or Right steps a row on, once the
+/// screen is whole; typing at the prompt always goes.
 pub fn gated(press: Press, repeat: bool, typing: bool) -> KeyAct {
     use Press::*;
-    let acts = matches!(press, Enter | Escape | Left | Right | Click);
-    let needs_live = acts || matches!(press, Up | Down);
+    let acts = matches!(press, Enter | Escape | Click);
+    let needs_live = acts || matches!(press, Up | Down | Left | Right);
     if (repeat && acts) || (typing && needs_live) || press == Modifier {
         KeyAct::Nothing
     } else {
@@ -693,9 +741,14 @@ pub fn gated(press: Press, repeat: bool, typing: bool) -> KeyAct {
     }
 }
 
-/// The key handler's decision (the window's only one): [`press_finishes_typing`], else [`gated`].
-pub fn key_act(press: Press, repeat: bool, typing: bool) -> KeyAct {
-    if press_finishes_typing(press, repeat, typing) {
+/// The key handler's decision (the window's only one): nothing for the repeats of the key whose
+/// press finished the typing, until it is let go (`finisher`: this press is such a repeat), so a
+/// held key that finished the typing does not go on to act; else [`press_finishes_typing`], else
+/// [`gated`].
+pub fn key_act(press: Press, repeat: bool, typing: bool, finisher: bool) -> KeyAct {
+    if repeat && finisher {
+        KeyAct::Nothing
+    } else if press_finishes_typing(press, repeat, typing) {
         KeyAct::FinishTyping
     } else {
         gated(press, repeat, typing)
@@ -792,6 +845,7 @@ pub fn on_enter(kind: Kind, typed: &str, chosen: usize, entry: &str) -> Act {
         Kind::Folder => Act::Folder(typed_folder),
         Kind::Output => Act::TypeLine(typed.to_string()),
         Kind::Settings if entry == TESTING_ENTRY => Act::OpenTesting,
+        Kind::Settings if entry.starts_with(SOUNDS_ROW) => Act::ToggleSounds,
         Kind::Settings if entry == BACK => Act::BackToStart,
         Kind::Testing if entry == BACK => Act::OpenSettings,
         Kind::Settings | Kind::Testing => Act::OpenChoices(chosen),
@@ -806,21 +860,29 @@ pub fn short(choice: &str) -> &str {
 }
 
 /// The Settings list's (or the Testing list's) entries for what `shown` says: each row with its
-/// value, then (the main list) Testing, then Back.
+/// value, then (the main list) the launcher's sounds (`sounds`: on or off) and Testing, then
+/// Back.
 pub fn settings_entries(
     rows: &[settings::Row],
     shown: &settings::Files,
     testing: bool,
+    sounds: bool,
 ) -> Vec<String> {
     let mut e: Vec<String> = rows
         .iter()
         .map(|r| format!("{}: {}", r.label(), short(&r.current(shown))))
         .collect();
     if !testing {
+        e.push(sounds_entry(sounds));
         e.push(TESTING_ENTRY.into());
     }
     e.push(BACK.into());
     e
+}
+
+/// The sounds row as the list shows it.
+pub fn sounds_entry(on: bool) -> String {
+    format!("{SOUNDS_ROW}: {}", if on { "On" } else { "Off" })
 }
 
 /// Left and Right on a row: the choice before or after the one it has, round the list.
@@ -961,6 +1023,15 @@ struct App {
     pastes: Pastes,
     /// The main monitor's size for the resolution row, as the game sees it.
     desktop: (u32, u32),
+    /// The terminal's sounds (`crate::sound`), whether they are on (Settings), whether the
+    /// window has the focus, and the time (ms after the screen showed) up to which the text
+    /// manager's beats have been played.
+    sounds: crate::sound::Sounds,
+    sounds_on: bool,
+    focused: bool,
+    beats_to: f64,
+    /// The key whose press finished the typing (or the intro), while it is held.
+    finisher: Option<winit::keyboard::PhysicalKey>,
 }
 
 /// Starts Play's work on a thread of its own with `args` (Play.exe's, or play.sh's on Linux and
@@ -1133,6 +1204,7 @@ impl App {
         // Another prompt: a paste asked at the last one is dropped when it comes.
         self.pastes.forget();
         self.started = Instant::now();
+        self.beats_to = -1.0;
         self.finished = !typed;
         // Something else shows: drawn whatever the last key was (a new screen can have the same).
         self.frame.changed();
@@ -1174,8 +1246,24 @@ impl App {
         let args = play_arguments(mods, game.as_deref());
         self.output.clear();
         self.back_to_waiting();
+        self.start_play(args);
+    }
+
+    /// Play's work started in [`sound::PLAY_ORDER`]: the sounds stopped and the device let go
+    /// before the work (which starts the game) begins.
+    fn start_play(&mut self, args: Vec<OsString>) {
+        let mut args = Some(args);
+        let sounds = self.sounds.clone();
+        sound::play_in_order(
+            || sounds.stop(),
+            || sounds.release(),
+            || {
+                if let Some(a) = args.take() {
+                    start_work(a);
+                }
+            },
+        );
         self.working = true;
-        start_work(args);
     }
 
     /// Whether the window can show a frame now ([`drawable`]).
@@ -1423,7 +1511,96 @@ impl App {
                     self.show_settings(testing, index, None);
                 }
             }
+            Act::ToggleSounds => self.toggle_sounds(),
             Act::Nothing => {}
+        }
+    }
+
+    /// The terminal's sounds turned off (all stops, the device let go) or on, kept in the
+    /// launcher's own file; the Settings list again on the row (with why it was not kept).
+    fn toggle_sounds(&mut self) {
+        let on = !self.sounds_on;
+        let note = if self.place.refused.is_some() {
+            Some("Not saved: nv-rs may not write in its own folder".to_string())
+        } else {
+            crate::place::set_sounds(&self.place.own, on)
+                .err()
+                .map(|e| format!("Not saved: {e}"))
+        };
+        self.sounds_on = on;
+        self.update_sound();
+        self.show_settings(false, settings::ROWS.len(), note);
+    }
+
+    /// The device open (and the hum playing) while the terminal is heard ([`sound::heard`]),
+    /// else let go; a line for the log when it would not open.
+    fn update_sound(&mut self) {
+        let minimised = self
+            .window
+            .as_ref()
+            .and_then(|w| w.is_minimized())
+            .unwrap_or(false);
+        let shown = self.window.is_some() && !self.hidden && !minimised;
+        if sound::heard(self.sounds_on, shown, self.focused, self.working) {
+            self.sounds.open();
+        } else {
+            self.sounds.release_later();
+        }
+        for line in self.sounds.take_lines() {
+            self.log(&line);
+        }
+    }
+
+    /// A line for the launcher's log ([`place::log_line`]).
+    fn log(&self, text: &str) {
+        let now = cfg!(not(windows)) && self.place.refused.is_none();
+        place::log_line(&self.place.own, now, text);
+    }
+
+    /// The text manager's sound beats since the last call ([`pacing::beats`]), played: the
+    /// intro's, or the screen's while it types. A screen finished at once (the launcher's press)
+    /// has no more: what plays ends as it does when the queue empties, and the characters it
+    /// skipped make no sound.
+    fn play_beats(&mut self) {
+        let t = self.started.elapsed().as_secs_f64() * 1000.0;
+        let from = std::mem::replace(&mut self.beats_to, t);
+        if !self.sounds.is_open() {
+            return;
+        }
+        let (queue, frame) = match &self.mode {
+            Mode::Intro(intro) => (intro.queue(), intro.frame),
+            _ if self.finished => return,
+            _ => {
+                let texts = screen::line_texts(&self.look, &self.screen);
+                let first = screen::first_entry_line(&self.look, &self.screen);
+                (
+                    screen_queue(&texts, first, self.shown_at_once),
+                    self.frame_ms,
+                )
+            }
+        };
+        // Each at its own time; after a stall the older ones are dropped ([`pacing::scheduled`]).
+        let beats = pacing::beats(&queue, frame, from, t);
+        for (delay, beat) in pacing::scheduled(&beats, t) {
+            match beat {
+                // The kept sounds play only when not playing: at once.
+                pacing::Beat::Scroll => self.sounds.play(Cue::Scroll),
+                pacing::Beat::Enter => self.sounds.play(Cue::Enter),
+                pacing::Beat::Singles { n, ms } => {
+                    for i in 0..n {
+                        let at = delay + ms * i as u64 / n as u64;
+                        self.sounds.play_after(Cue::Single, at);
+                    }
+                }
+            }
+        }
+    }
+
+    /// The focus moved to entry `i` (from the mouse or the arrows): its sound when it is another.
+    fn focus(&mut self, i: usize) {
+        if self.screen.highlighted != i {
+            self.screen.highlighted = i;
+            self.sounds.play(Cue::Focus);
         }
     }
 
@@ -1460,7 +1637,7 @@ impl App {
         let mut s = Screen {
             title: if testing { "-Testing-" } else { "-Settings-" }.into(),
             welcome,
-            entries: settings_entries(rows_of(testing), &shown, testing),
+            entries: settings_entries(rows_of(testing), &shown, testing, self.sounds_on),
             ..Default::default()
         };
         s.highlighted = highlight.min(s.entries.len() - 1);
@@ -1509,6 +1686,10 @@ impl App {
             return;
         };
         let index = self.screen.highlighted;
+        // The sounds row has two choices: either way flips it.
+        if !testing && index == settings::ROWS.len() {
+            return self.toggle_sounds();
+        }
         let Some(&row) = rows_of(testing).get(index) else {
             return;
         };
@@ -1536,19 +1717,30 @@ impl App {
             return;
         }
         let typed = std::mem::take(&mut self.screen.typed);
-        // The prompt is taken: a paste still being read is not for what comes next.
-        self.pastes.forget();
-        let entry = self.screen.entries.get(chosen).cloned().unwrap_or_default();
-        let act = on_enter(self.mode.kind(), &typed, chosen, &entry);
+        let entry = self.screen.entries.get(chosen).cloned();
+        for &cue in choice_sounds(&typed, entry.as_deref()) {
+            self.sounds.play(cue);
+        }
+        let act = on_enter(
+            self.mode.kind(),
+            &typed,
+            chosen,
+            entry.as_deref().unwrap_or(""),
+        );
+        // The prompt is taken (Enter typed its line, or a choice left it): a paste still being
+        // read is not for what comes next.
+        if !prompt_kept(&act) {
+            self.pastes.forget();
+        }
         self.act(act, event_loop);
     }
 
     /// Esc: the screen's way back, whatever is typed.
     fn back(&mut self, event_loop: &ActiveEventLoop) {
         let act = on_escape(self.mode.kind(), &self.screen.entries);
-        if act != Act::Nothing {
+        // Every way back shows another screen, which drops a paste still being read (`show`).
+        if !prompt_kept(&act) {
             self.screen.typed.clear();
-            self.pastes.forget();
         }
         self.act(act, event_loop);
     }
@@ -1721,14 +1913,24 @@ impl winit::application::ApplicationHandler<Event> for App {
         std::thread::spawn(|| {
             session::send(Event::Card(ask_game_card()));
         });
+        // The terminal's sounds, read from the player's game (when it is there).
+        if let Some(game) = self.place.game.clone() {
+            let files = profile_files(&self.place.fallout_ini);
+            std::thread::spawn(move || {
+                let v = crate::sound_files::Volumes::from_files(&files.ini, &files.prefs);
+                let (banks, said) = sound::load(&game, v);
+                session::send(Event::Sounds { banks, said });
+            });
+        } else {
+            self.log("sounds: the game was not found yet: the launcher is silent");
+        }
         if let Some(args) = self.action.take() {
             if self.place.refused.is_some() {
                 self.show_start();
             } else {
                 self.output.clear();
                 self.back_to_waiting();
-                self.working = true;
-                start_work(args);
+                self.start_play(args);
             }
         } else if self.place.refused.is_none()
             && self.look.intro.is_some()
@@ -1819,6 +2021,14 @@ impl winit::application::ApplicationHandler<Event> for App {
                     }
                 }
             }
+            Event::Sounds { banks, said } => {
+                for line in said {
+                    self.log(&line);
+                }
+                self.sounds.release_later();
+                self.sounds = sound::Sounds::new(banks);
+                self.update_sound();
+            }
             Event::Card(card) => {
                 self.card = card;
                 if matches!(self.mode, Mode::Start) {
@@ -1838,7 +2048,7 @@ impl winit::application::ApplicationHandler<Event> for App {
         event: winit::event::WindowEvent,
     ) {
         use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
-        use winit::keyboard::{Key, NamedKey};
+        use winit::keyboard::Key;
         match event {
             // With no Play running the launcher ends at once (with a refusal's stop code, else
             // the last one). While Play runs (the game may be starting, its one-game claim held)
@@ -1863,6 +2073,11 @@ impl winit::application::ApplicationHandler<Event> for App {
             }
             WindowEvent::RedrawRequested => self.redraw(event_loop),
             WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
+            // The game stops running, and sounding, without the focus: so does the terminal's sound.
+            WindowEvent::Focused(f) => {
+                self.focused = f;
+                self.update_sound();
+            }
             WindowEvent::DroppedFile(path) => {
                 match &mut self.mode {
                     Mode::Start => self.play(false, Some(path)),
@@ -1872,34 +2087,38 @@ impl winit::application::ApplicationHandler<Event> for App {
                 }
                 self.request_redraw();
             }
+            // The key whose press finished the typing is let go: its repeats are over.
+            WindowEvent::KeyboardInput { event, .. }
+                if event.state == ElementState::Released
+                    && self.finisher == Some(event.physical_key) =>
+            {
+                self.finisher = None;
+            }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+                let press = press_of(&event.logical_key);
                 if matches!(self.mode, Mode::Intro(_)) {
                     // Esc or Enter finishes the intro (the launcher's extra; the game takes a
                     // click on the background); other keys, and a held key's repeats, do nothing.
-                    let esc_or_enter = matches!(
-                        event.logical_key,
-                        Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Enter)
-                    );
-                    if crate::intro::key_finishes(esc_or_enter && !event.repeat) {
+                    if crate::intro::key_finishes(press, event.repeat) {
+                        self.finisher = Some(event.physical_key);
                         self.end_intro();
                     }
                     return;
                 }
-                let press = press_of(&event.logical_key);
-                let act = key_act(press, event.repeat, self.typing());
+                let finisher = self.finisher == Some(event.physical_key);
+                let act = key_act(press, event.repeat, self.typing(), finisher);
                 let press = match act {
-                    KeyAct::FinishTyping => return self.finish_typing(),
+                    KeyAct::FinishTyping => {
+                        self.finisher = Some(event.physical_key);
+                        return self.finish_typing();
+                    }
                     KeyAct::Nothing => return,
                     KeyAct::Act(p) => p,
                 };
                 let count = self.screen.entries.len();
                 match press {
-                    Press::Up => {
-                        self.screen.highlighted = step_focus(self.screen.highlighted, count, true)
-                    }
-                    Press::Down => {
-                        self.screen.highlighted = step_focus(self.screen.highlighted, count, false)
-                    }
+                    Press::Up => self.focus(step_focus(self.screen.highlighted, count, true)),
+                    Press::Down => self.focus(step_focus(self.screen.highlighted, count, false)),
                     Press::PageUp => self.screen.scroll = self.screen.scroll.saturating_sub(5),
                     Press::PageDown => self.screen.scroll += 5,
                     Press::Right => self.step_row(true),
@@ -1950,7 +2169,7 @@ impl winit::application::ApplicationHandler<Event> for App {
                     // The focus moves only onto live entries (the game's are disabled while
                     // it types).
                     if self.entries_live() && self.screen.highlighted != i {
-                        self.screen.highlighted = i;
+                        self.focus(i);
                         self.request_redraw();
                     }
                 }
@@ -1977,7 +2196,7 @@ impl winit::application::ApplicationHandler<Event> for App {
                     // tile 13); the background is the whole window.
                     self.end_intro();
                 } else {
-                    match key_act(Press::Click, false, self.typing()) {
+                    match key_act(Press::Click, false, self.typing(), false) {
                         KeyAct::FinishTyping => self.finish_typing(),
                         KeyAct::Act(_) => {
                             // A live entry under the mouse is chosen.
@@ -1996,6 +2215,8 @@ impl winit::application::ApplicationHandler<Event> for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.update_sound();
+        self.play_beats();
         if self.hidden {
             // Wayland: minimised once the game has run a moment (WAYLAND_MINIMISE_AFTER).
             match self.minimise_at {
@@ -2120,6 +2341,7 @@ fn without_window(raw: &[String]) -> i32 {
 /// The window, until the player leaves or the game ends well: the exit code.
 pub fn run(raw: Vec<String>) -> i32 {
     let place = place::place();
+    let app_own = place.own.clone();
     #[cfg(all(not(windows), not(target_vendor = "apple")))]
     if let Some(library) = missing_keyboard_library() {
         cannot_draw(
@@ -2168,6 +2390,11 @@ pub fn run(raw: Vec<String>) -> i32 {
         modifiers: winit::keyboard::ModifiersState::empty(),
         pastes: Pastes::default(),
         desktop: (0, 0),
+        sounds: sound::Sounds::new(Vec::new()),
+        sounds_on: place::sounds_on(&app_own),
+        focused: true,
+        beats_to: -1.0,
+        finisher: None,
     };
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("error: {e}");
@@ -2660,12 +2887,22 @@ mod tests {
     #[test]
     fn the_settings_lists_open_choose_and_go_back() {
         let shown = settings::Files::default();
-        let main = settings_entries(&settings::ROWS, &shown, false);
-        assert_eq!(main.len(), 14);
+        let main = settings_entries(&settings::ROWS, &shown, false, true);
+        assert_eq!(main.len(), 15);
         assert_eq!(main[0], "Renderer: Vulkan");
-        assert_eq!(main[12], TESTING_ENTRY);
-        assert_eq!(main[13], BACK);
-        let testing = settings_entries(&settings::TESTING, &shown, true);
+        assert_eq!(main[12], "Launcher sounds: On");
+        assert_eq!(main[13], TESTING_ENTRY);
+        assert_eq!(main[14], BACK);
+        assert_eq!(
+            settings_entries(&settings::ROWS, &shown, false, false)[12],
+            "Launcher sounds: Off"
+        );
+        // Enter on the sounds row turns them on or off at once.
+        assert_eq!(
+            on_enter(Kind::Settings, "", 12, &main[12]),
+            Act::ToggleSounds
+        );
+        let testing = settings_entries(&settings::TESTING, &shown, true, true);
         assert_eq!(testing.len(), settings::TESTING.len() + 1);
         assert_eq!(testing.last().map(String::as_str), Some(BACK));
         assert_eq!(on_enter(Kind::Start, "", 1, SETTINGS), Act::OpenSettings);
@@ -2674,7 +2911,7 @@ mod tests {
             Act::OpenChoices(0)
         );
         assert_eq!(
-            on_enter(Kind::Settings, "", 12, TESTING_ENTRY),
+            on_enter(Kind::Settings, "", 13, TESTING_ENTRY),
             Act::OpenTesting
         );
         assert_eq!(on_escape(Kind::Settings, &main), Act::BackToStart);
@@ -2905,6 +3142,7 @@ mod tests {
             chars: 400,
             ms: 6,
             intro: false,
+            keyed: false,
         }];
         let f = pacing::frame_ms(frame_limit_of("4294967295"));
         assert_eq!(pacing::typed(&lines, f, 60_000.0).0, [400]);
@@ -2912,33 +3150,47 @@ mod tests {
 
     /// The key handler's decision: while a screen types, the first press of a key (not a
     /// modifier) only finishes the typing (the launcher's shortcut), and no key that acts does
-    /// anything else; held keys' repeats never act (Enter, Esc, Left/Right); a whole screen takes
-    /// every key.
+    /// anything else; held keys' repeats never choose or go back (Enter, Esc), while a held Left or
+    /// Right steps on once the screen is whole; the key that finished the typing does nothing more
+    /// while it is held; a whole screen takes every key.
     #[test]
     fn while_typing_a_press_only_finishes_it_and_repeats_never_act() {
         use Press::*;
         for p in [
             Escape, Enter, Left, Right, Up, Down, Click, Other, Backspace,
         ] {
-            assert_eq!(key_act(p, false, true), KeyAct::FinishTyping, "{p:?}");
+            assert_eq!(
+                key_act(p, false, true, false),
+                KeyAct::FinishTyping,
+                "{p:?}"
+            );
         }
-        assert_eq!(key_act(Modifier, false, true), KeyAct::Nothing);
+        assert_eq!(key_act(Modifier, false, true, false), KeyAct::Nothing);
         // A held key's repeat during typing: Esc, Enter, Left/Right and the focus do nothing.
         for p in [Escape, Enter, Left, Right, Up, Down, Click] {
-            assert_eq!(key_act(p, true, true), KeyAct::Nothing, "{p:?}");
+            assert_eq!(key_act(p, true, true, false), KeyAct::Nothing, "{p:?}");
         }
         // Esc held past the intro: its repeats on the start screen never give Exit, typed or not.
-        assert_eq!(key_act(Escape, true, false), KeyAct::Nothing);
-        assert_eq!(key_act(Enter, true, false), KeyAct::Nothing);
-        assert_eq!(key_act(Left, true, false), KeyAct::Nothing);
-        assert_eq!(key_act(Right, true, false), KeyAct::Nothing);
+        assert_eq!(key_act(Escape, true, false, false), KeyAct::Nothing);
+        assert_eq!(key_act(Enter, true, false, false), KeyAct::Nothing);
+        assert_eq!(key_act(Left, true, false, false), KeyAct::Act(Left));
+        assert_eq!(key_act(Right, true, false, false), KeyAct::Act(Right));
         // Repeats that only move or type still do once the screen is whole.
-        assert_eq!(key_act(Down, true, false), KeyAct::Act(Down));
-        assert_eq!(key_act(Backspace, true, false), KeyAct::Act(Backspace));
-        assert_eq!(key_act(Other, true, false), KeyAct::Act(Other));
+        assert_eq!(key_act(Down, true, false, false), KeyAct::Act(Down));
+        assert_eq!(
+            key_act(Backspace, true, false, false),
+            KeyAct::Act(Backspace)
+        );
+        assert_eq!(key_act(Other, true, false, false), KeyAct::Act(Other));
         for p in [Escape, Enter, Left, Right, Up, Down, Click] {
-            assert_eq!(key_act(p, false, false), KeyAct::Act(p), "{p:?}");
+            assert_eq!(key_act(p, false, false, false), KeyAct::Act(p), "{p:?}");
         }
+        // The held key that finished the typing: its repeats do nothing until it is let go, even
+        // those that would act on the whole screen; a new press of it acts.
+        for p in [Left, Right, Down, Other, Backspace] {
+            assert_eq!(key_act(p, true, false, true), KeyAct::Nothing, "{p:?}");
+        }
+        assert_eq!(key_act(Right, false, false, true), KeyAct::Act(Right));
     }
 
     /// winit's keys as the handler tells them apart: modifiers alone never finish the typing.
@@ -3006,5 +3258,55 @@ mod tests {
         let s = message_screen("a\n\nb", &["Yes".into(), "No".into()]);
         assert_eq!(s.welcome, ["a", "", "b"]);
         assert_eq!(s.entries, ["Yes", "No"]);
+    }
+
+    /// Enter at play.sh's empty output prompt types its (empty) line: the prompt is taken, so a
+    /// paste asked there just before is dropped when it comes (REVIEW-822); only doing nothing
+    /// keeps the prompt.
+    #[test]
+    fn a_paste_asked_before_enter_at_an_empty_prompt_is_dropped() {
+        let t0 = Instant::now();
+        let mut p = Pastes::default();
+        let id = p.ask(t0, Kind::Output, "");
+        let act = on_enter(Kind::Output, "", 0, "");
+        assert_eq!(act, Act::TypeLine(String::new()));
+        assert!(!prompt_kept(&act));
+        // What `choose` does with it.
+        if !prompt_kept(&act) {
+            p.forget();
+        }
+        assert!(!p.answer(id, t0 + Duration::from_millis(5), Kind::Output, ""));
+        assert!(prompt_kept(&Act::Nothing));
+        assert!(!prompt_kept(&Act::BackToStart));
+    }
+
+    /// Choosing an entry plays its tile's click and the terminal's "enter"; a typed line, or no
+    /// entry, plays nothing.
+    #[test]
+    fn choosing_an_entry_clicks_and_enters() {
+        use crate::sound_files::Cue;
+        assert_eq!(choice_sounds("", Some("Play")), [Cue::Ok, Cue::Enter]);
+        assert_eq!(choice_sounds("  ", Some("Play")), [Cue::Ok, Cue::Enter]);
+        assert!(choice_sounds("C:/made/up", Some("Play")).is_empty());
+        assert!(choice_sounds("", None).is_empty());
+    }
+
+    /// The screen's sound queue is the lines that type: on a later screen the header, title,
+    /// welcome text shown before and the prompt are not in it, the entries are.
+    #[test]
+    fn the_sound_queue_is_the_lines_that_type() {
+        let texts: Vec<String> = ["AB", "CD", "-t-", "wel", "> x", "> "]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let later = AtOnce {
+            header: true,
+            title: true,
+            welcome: true,
+        };
+        let q = screen_queue(&texts, 4, later);
+        assert_eq!(q.iter().map(|l| l.chars).collect::<Vec<_>>(), [3]);
+        assert!(q.iter().all(|l| !l.intro && !l.keyed));
+        assert_eq!(screen_queue(&texts, 4, AtOnce::default()).len(), 6);
     }
 }

@@ -32,6 +32,51 @@ impl Game {
         })
     }
 
+    /// [`Game::read`] with the archive already open (`archive`; None: loose files only).
+    pub fn read_in(&self, path: &str, archive: Option<&bsa::Archive>) -> Option<Vec<u8>> {
+        self.loose(path).or_else(|| {
+            let bsa = archive?;
+            bsa.read(bsa.find(path)?).ok()
+        })
+    }
+
+    /// The files of the Data folder `folder` (a Data-relative path) whose names end in `ext`
+    /// (lower case), as Data-relative paths: the loose ones first (by name), then the archive's
+    /// that are not loose (in its order). The game's own list is its file finder's
+    /// (`FileFinder::BuildFileList`); which file is picked is random either way.
+    pub fn list(&self, folder: &str, ext: &str, archive: Option<&bsa::Archive>) -> Vec<String> {
+        let folder = bsa::normalize_path(folder)
+            .trim_end_matches('\\')
+            .to_string();
+        let mut names: Vec<String> = Vec::new();
+        let mut at = Some(self.data.clone());
+        for part in folder.split('\\').filter(|p| !p.is_empty()) {
+            at = at.and_then(|a| child(&a, part));
+        }
+        if let Some(entries) = at.and_then(|dir| std::fs::read_dir(dir).ok()) {
+            for e in entries.flatten() {
+                let name = e.file_name().to_string_lossy().to_ascii_lowercase();
+                if name.ends_with(ext) && e.path().is_file() {
+                    names.push(name);
+                }
+            }
+        }
+        names.sort();
+        if let Some(bsa) = archive {
+            if let Some(f) = bsa.folders().iter().find(|f| f.name == folder) {
+                for e in &bsa.files()[f.files.clone()] {
+                    if e.name.ends_with(ext) && !names.contains(&e.name) {
+                        names.push(e.name.clone());
+                    }
+                }
+            }
+        }
+        names
+            .into_iter()
+            .map(|n| format!("{folder}\\{n}"))
+            .collect()
+    }
+
     fn loose(&self, path: &str) -> Option<Vec<u8>> {
         let mut at = self.data.clone();
         for part in path.split(['\\', '/']) {
