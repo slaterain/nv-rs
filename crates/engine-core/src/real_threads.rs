@@ -1079,15 +1079,20 @@ impl Ctx {
         let buffers =
             moved.filter(|m| m.buffers.retired_bytes() >= crate::typed::moved::RECLAIM_AT);
         if mem.deferred_pages() >= HAND_BACK_AT || buffers.is_some() {
-            let started = lock_stats().map(|_| std::time::Instant::now());
+            let started = (lock_stats().is_some() || crate::hitch::on()).then(std::time::Instant::now);
             w.barrier(|| {
                 mem.hand_back_deferred();
                 if let Some(m) = buffers {
                     m.buffers.reclaim();
                 }
             });
-            if let (Some(s), Some(t)) = (lock_stats(), started) {
-                s.barrier.add(t.elapsed());
+            if let Some(t) = started {
+                let d = t.elapsed();
+                if let Some(s) = lock_stats() {
+                    s.barrier.add(d);
+                }
+                // The hitch log: the hand-back at the frame's end, with every game thread stopped.
+                crate::hitch::add(crate::hitch::Count::HandBackNs, d.as_nanos().min(u128::from(u64::MAX)) as u64);
             }
         }
         guard(&w.stopped).clone()

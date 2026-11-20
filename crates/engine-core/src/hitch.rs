@@ -68,7 +68,9 @@ pub enum Count {
     CellsAttached,
     CellsDetached,
     CellsUnloaded,
-    /// Saves (`00847df0`) and loads (`008503b0`) begun.
+    /// The frame's end handed freed memory back with every game thread stopped at a safe point (ns).
+    HandBackNs,
+    /// Saves (`008503b0`, BGSSaveLoadManager::SaveGame) and loads (`00847df0`, BGSSaveLoadGame::LoadGame) begun.
     Saves,
     Loads,
     /// Scripts compiled (each compile builds a `ScriptCompileData`, `005ae490`): the console's lines, mods' scripts.

@@ -9,10 +9,15 @@
 //! twice as long as those around it is a visible jump at any frame rate); the 8 ms floor keeps out the doubling of
 //! a 3 ms frame, which no screen shows, while a 10-15 ms frame in a 5 ms stream (the 200 fps target on a fast
 //! screen) is still caught. Lines of [`BIG_MS`] (16 ms, a whole 60 Hz refresh) or more say `big`. Loading-screen
-//! frames are neither judged nor counted in the median; the first frame after one is judged and its line says so.
+//! frames are neither judged nor counted in the median; the first frame after one is judged and its line says so. Play
+//! and menus keep a typical frame each (a menu runs at its own frame limit); a frame is judged against the kind the
+//! frame before it showed, so the frame that opens the Pip-Boy is judged against play. A loading screen is the
+//! game's own (`uncap::screen`), a game loaded in the frame, or the loading screen's frames shown inside one of
+//! main's frames (a `coc`, a door, fast travel: more than two presents in the frame).
 //! At most [`BURST`] lines are written in any [`BURST_SECS`] seconds; the next line written says how many were not.
+//! A measured run (`NV_FRAME_LOG` set) writes every one.
 //!
-//! **What it costs** (measured in `a_normal_frame_costs_microseconds`, release build): a frame that is not a hitch
+//! **What it costs** (`a_normal_frame_costs_microseconds`: about 1.9 microseconds in a debug build): a frame that is not a hitch
 //! takes two counter snapshots (about 60 relaxed loads), the stage marks' take and a median every 16 frames over
 //! 128 values: a few microseconds. The counters cost one relaxed add at each counted event (heap blocks: a plain
 //! load and store under the heap's lock) and, for waits and reads, a clock read pair around a call that already
@@ -30,6 +35,8 @@ use std::time::Instant;
 pub const FLOOR_MS: f64 = 8.0;
 /// A hitch at least this long is called big (ms).
 pub const BIG_MS: f64 = 16.0;
+/// A frame that showed more than this many presents showed the loading screen's frames (a normal frame shows one).
+pub const LOADING_PRESENTS: u32 = 2;
 /// The frames the typical frame is the median of.
 pub const WINDOW: usize = 128;
 /// How often the median is worked out again (frames).
@@ -148,7 +155,7 @@ pub struct Frame {
     pub left_out: u64,
 }
 
-const STAGE_NAMES: [&str; 7] = [
+const STAGE_NAMES: [&str; 8] = [
     "update",
     "before draw",
     "culling and set-up",
@@ -156,6 +163,7 @@ const STAGE_NAMES: [&str; 7] = [
     "after world",
     "present",
     "after present",
+    "between frames",
 ];
 
 /// The stages (ms) from the stage marks' take (µs per column).
@@ -179,11 +187,13 @@ pub fn take_stages() -> Option<[(f64, u64); engine_core::stage_time::COLUMNS]> {
     engine_core::stage_time::points_on().then(engine_core::stage_time::take)
 }
 
-/// Whether a frame is judged, and whether it is the first after a load: a frame that ends on a loading screen, or in
-/// which a game was loaded (`loads`; from a menu no loading screen is up), is not judged nor counted in the median;
-/// the first frame after one (`was_loading`) is.
-pub fn judge(loading_screen: bool, loads: u64, was_loading: bool) -> (bool, bool) {
-    let loading = loading_screen || loads > 0;
+/// Whether a frame is judged, and whether it is the first after a load: a frame that ends on a loading screen, in
+/// which a game was loaded (`loads`; from a menu no loading screen is up), or in which the loading screen's own frames
+/// were shown (`presents` above [`LOADING_PRESENTS`]: a `coc`, a door or fast travel loads inside one of main's frames
+/// while the loading screen draws) is not judged nor counted in the median; the first frame after one
+/// (`was_loading`) is.
+pub fn judge(loading_screen: bool, loads: u64, presents: u32, was_loading: bool) -> (bool, bool) {
+    let loading = loading_screen || loads > 0 || presents > LOADING_PRESENTS;
     (!loading, was_loading && !loading)
 }
 
@@ -236,6 +246,13 @@ impl Frame {
     }
     fn s(&self, c: engine_platform::stream_hitch::Count) -> u64 {
         self.stream.get(c as usize).copied().unwrap_or(0)
+    }
+
+    /// The stages with the time between the game's frames (the frame less the stages: the host's work between two
+    /// of main's frames, the hand-back, and the part of main's frame after `WaitForThreads`).
+    fn stages8(&self, st: [f64; 7]) -> [f64; 8] {
+        let between = (self.ms - st.iter().sum::<f64>()).max(0.0);
+        std::array::from_fn(|i| if i < 7 { st[i] } else { between })
     }
 
     /// Main's wait for the render thread (ns): in Present, for replies, for room in the queue.
@@ -380,11 +397,12 @@ impl Frame {
         // Less than half explained (a save says enough): the stage that took the time.
         if self.g(Count::Saves) == 0 && explained < excess / 2.0 {
             if let Some(st) = self.stages {
-                let (i, m) = st
-                    .iter()
+                let (i, m) = self
+                    .stages8(st)
+                    .into_iter()
                     .enumerate()
-                    .max_by(|a, b| a.1.total_cmp(b.1))
-                    .expect("seven stages");
+                    .max_by(|a, b| a.1.total_cmp(&b.1))
+                    .expect("eight stages");
                 let none = if strong.is_empty() {
                     " with no one-off work counted"
                 } else {
@@ -420,7 +438,7 @@ impl Frame {
         if let Some(st) = self.stages {
             let parts: Vec<String> = STAGE_NAMES
                 .iter()
-                .zip(st)
+                .zip(self.stages8(st))
                 .map(|(n, m)| format!("{n} {m:.1}"))
                 .collect();
             l += &format!("; stages ms: {}", parts.join(", "));
@@ -654,8 +672,17 @@ impl Default for Place {
 
 /// The hitch log of a run.
 pub struct HitchLog {
-    detector: Detector,
+    /// The typical frame in play and in menus, apart: a menu runs at its own frame limit (`MenuFrameLimit`), so a
+    /// menu frame is judged against menu frames and a play frame against play frames.
+    play: Detector,
+    menu: Detector,
     cap: Cap,
+    /// The frame before showed a menu.
+    was_menu: bool,
+    /// A measured run (`NV_FRAME_LOG`): every hitch is written, none left out.
+    uncapped: bool,
+    /// The presents submitted so far.
+    presents: u32,
     last: Option<Instant>,
     start: Instant,
     frame: u64,
@@ -678,8 +705,12 @@ impl HitchLog {
             return None;
         }
         Some(HitchLog {
-            detector: Detector::default(),
+            play: Detector::default(),
+            menu: Detector::default(),
             cap: Cap::default(),
+            uncapped: std::env::var_os("NV_FRAME_LOG").is_some(),
+            presents: 0,
+            was_menu: false,
             last: None,
             start: Instant::now(),
             frame: 0,
@@ -713,16 +744,29 @@ impl HitchLog {
         let largest_read = engine_core::hitch::take_largest_read();
         let screen = crate::uncap::screen(e);
         // A game loaded in the frame (from a menu: no loading screen is up) counts as a loading screen too.
+        let presents = engine_platform::d3d9real::presents(e).map_or(0, |p| p.0);
+        let shown = presents.wrapping_sub(self.presents);
+        self.presents = presents;
         let (judged, after_load) = judge(
             screen == crate::uncap::Screen::Loading,
             game[Count::Loads as usize],
+            shown,
             self.was_loading,
         );
         self.was_loading = !judged;
         let (Some(ms), true) = (frame_ms, judged) else {
             return;
         };
-        let Some(typical) = self.detector.frame(ms) else {
+        let menu = screen == crate::uncap::Screen::Menu;
+        // Judged by what the frame before showed: the frame that opens a menu (the Pip-Boy, the console) is play's
+        // frame, the frames after it run at the menu's limit.
+        let was_menu = std::mem::replace(&mut self.was_menu, menu);
+        let detector = if was_menu {
+            &mut self.menu
+        } else {
+            &mut self.play
+        };
+        let Some(typical) = detector.frame(ms) else {
             return;
         };
         self.hitches += 1;
@@ -730,8 +774,13 @@ impl HitchLog {
             self.big += 1;
         }
         let secs = now.duration_since(self.start).as_secs_f64();
-        let Some(left_out) = self.cap.admit(secs) else {
-            return;
+        let left_out = if self.uncapped {
+            0
+        } else {
+            let Some(n) = self.cap.admit(secs) else {
+                return;
+            };
+            n
         };
         let f = Frame {
             ms,
@@ -739,7 +788,7 @@ impl HitchLog {
             frame,
             secs,
             after_load,
-            menu: screen == crate::uncap::Screen::Menu,
+            menu,
             place: self.place(e),
             stages: stages.map(stages_of),
             game: game.to_vec(),
@@ -957,11 +1006,25 @@ mod tests {
     /// A loading screen or a load in the frame is not judged; the next frame is, as the first after a load.
     #[test]
     fn loads_are_not_judged_and_the_frame_after_one_is() {
-        assert_eq!(judge(false, 0, false), (true, false));
-        assert_eq!(judge(true, 0, false), (false, false));
-        assert_eq!(judge(false, 1, false), (false, false), "a load from a menu");
-        assert_eq!(judge(false, 0, true), (true, true));
-        assert_eq!(judge(true, 0, true), (false, false));
+        assert_eq!(judge(false, 0, 1, false), (true, false));
+        assert_eq!(judge(true, 0, 1, false), (false, false));
+        assert_eq!(
+            judge(false, 1, 1, false),
+            (false, false),
+            "a load from a menu"
+        );
+        assert_eq!(
+            judge(false, 0, 2, false),
+            (true, false),
+            "two presents: not yet a loading screen"
+        );
+        assert_eq!(
+            judge(false, 0, 14, false),
+            (false, false),
+            "a coc: the loading screen's frames"
+        );
+        assert_eq!(judge(false, 0, 1, true), (true, true));
+        assert_eq!(judge(true, 0, 1, true), (false, false));
     }
 
     #[test]
