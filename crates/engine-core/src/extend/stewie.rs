@@ -264,6 +264,10 @@ pub const INVALID_FADE_NODE: Row = Row::at(CRASH, 62);
 pub const NULL_HKP_SHAPE: Row = Row::at(CRASH, 63);
 /// S0199.02 `MiscCrashFixes` (`008b52a0` (`0x8B558C`, `0x8B5B13`, `0x8B606B`)): cutting off a limb whose node the model lacks no longer crashes.
 pub const DISMEMBER_NULL_LIMB: Row = Row::at(CRASH, 64);
+/// S0155 `patchNullAudioCrash` (`00aec530` (`0xAECF39`, `0xAED074`)): a sound with an effect whose buffer was never made no longer crashes when it is prepared.
+pub const NULL_AUDIO: Row = Row::at(CRASH, 65);
+/// S0225 `SamplerStateLeakFix` (`NiD3DTextureStage::ConfigureStage` `00e7eb00`): a texture stage whose texture is unchanged but whose wrap or clamp differs from the device's is set up again instead of keeping the last material's addressing.
+pub const SAMPLER_STATE_LEAK: Row = Row::at(CRASH, 66);
 /// S1016 (Engine Optimizations, `Inlines::SaveLoad`: `Write32(0x845558, 0x2735)`): the changes map's
 /// buckets 10,037, not the exe's 5,039 (`00845550`). It changes the order a save walks and writes the
 /// changed forms, so it is a fixes row.
@@ -446,6 +450,46 @@ pub fn console_print(e: &mut Engine, format: &[u8], words: &[u32]) {
         }
         e.call(CONSOLE_PRINT, &args![console, at, list]);
     });
+}
+
+/// The two sampler states S0225 compares (`0126f918`: `D3DSAMP_ADDRESSU`, `D3DSAMP_ADDRESSV`), the
+/// map from a sampler state to its slot (`0126f92c`, a halfword each; 5 or more: not one the stage
+/// group keeps), the render state cache whose sampler getter Tweaks calls (`0126f99c`) and that
+/// getter's slot in its class's vtable (`010f095c`, `00e910f0`).
+const VALID_SAMPLER_STATES: u32 = 0x0126_f918;
+const SAMPLER_STATE_SLOTS: u32 = 0x0126_f92c;
+const SAMPLER_RENDER_STATE: u32 = 0x0126_f99c;
+const RENDER_STATE_GET_SAMPLER_STATE: u32 = 0x010f_095c;
+
+/// S0225, Tweaks' `CheckSamplerStateChanged(stage)`: for `ADDRESSU` and `ADDRESSV`, the value the
+/// stage's group (`NiD3DTextureStage` +0x10, `NiD3DTextureStageGroup`) holds for its stage (the
+/// current sampler array at +0x90 when +0xA4's valid byte is set, else the saved one at +0x6C when
+/// +0x80's is; neither: that state is passed over) against the render state cache's current value
+/// for the stage (+4) and state: true at the first that differs.
+pub fn sampler_state_changed(e: &mut Engine, stage: u32) -> bool {
+    let group = e.mem.u32(stage + 0x10);
+    let stage_number = e.mem.u32(stage + 4);
+    for i in 0..2 {
+        let state = e.mem.u32(VALID_SAMPLER_STATES + 4 * i);
+        let slot = u32::from(e.mem.u16(SAMPLER_STATE_SLOTS + 2 * state));
+        if slot > 4 {
+            continue;
+        }
+        let wanted = if e.mem.u8(group + 0xa4 + slot) != 0 {
+            e.mem.u32(group + 0x90 + 4 * slot)
+        } else if e.mem.u8(group + 0x80 + slot) != 0 {
+            e.mem.u32(group + 0x6c + 4 * slot)
+        } else {
+            continue;
+        };
+        let getter = e.mem.u32(RENDER_STATE_GET_SAMPLER_STATE);
+        let cache = e.mem.u32(SAMPLER_RENDER_STATE);
+        let current = e.call(getter, &args![cache, stage_number, state]).u32();
+        if current != wanted {
+            return true;
+        }
+    }
+    false
 }
 
 /// `text` with a 0 after it on the guest stack for `f` (its address).
@@ -838,5 +882,61 @@ mod tests {
             "a name of 100 bytes every time"
         );
         assert_eq!(LINES.lock().unwrap()[3].0, line(&long));
+    }
+
+    /// S0225's comparison: ADDRESSU, then ADDRESSV; the group's current value when its valid byte
+    /// is set, else its saved one, else that state is passed over; a state the slot map puts at 5
+    /// or more is passed over; true at the first that differs from the render state's.
+    #[test]
+    fn the_sampler_state_compare_reads_as_tweaks_does() {
+        use crate::abi::Ret;
+        const GETTER: u32 = 0x00ff_6000;
+        let mut e = Engine::new();
+        for (at, len) in [
+            (VALID_SAMPLER_STATES, 8u32),
+            (SAMPLER_STATE_SLOTS, 0x10),
+            (SAMPLER_RENDER_STATE, 4),
+            (RENDER_STATE_GET_SAMPLER_STATE, 4),
+        ] {
+            e.mem.map(at, len);
+        }
+        e.mem.set_u32(VALID_SAMPLER_STATES, 1);
+        e.mem.set_u32(VALID_SAMPLER_STATES + 4, 2);
+        e.mem.set_u16(SAMPLER_STATE_SLOTS + 2, 0);
+        e.mem.set_u16(SAMPLER_STATE_SLOTS + 4, 1);
+        // The render state's value for (stage, state): the word at cache + 4 * state.
+        let cache = e.mem.alloc(0x10);
+        e.mem.set_u32(SAMPLER_RENDER_STATE, cache);
+        e.mem.set_u32(RENDER_STATE_GET_SAMPLER_STATE, GETTER);
+        e.register(GETTER, |e, a| {
+            assert_eq!(a[1], 2, "the stage's number");
+            Ret {
+                eax: e.mem.u32(a[0] + 4 * a[2]),
+                ..Ret::default()
+            }
+        });
+        let group = e.mem.alloc(0xb8);
+        let stage = e.mem.alloc(0x68);
+        e.mem.set_u32(stage + 4, 2);
+        e.mem.set_u32(stage + 0x10, group);
+        // Neither state held by the group: nothing differs.
+        e.mem.set_u32(cache + 4, 7);
+        assert!(!sampler_state_changed(&mut e, stage));
+        // ADDRESSU current 7 = the device's; ADDRESSV saved 3, the device's 0: differs.
+        e.mem.set_u8(group + 0xa4, 1);
+        e.mem.set_u32(group + 0x90, 7);
+        assert!(!sampler_state_changed(&mut e, stage));
+        e.mem.set_u8(group + 0x81, 1);
+        e.mem.set_u32(group + 0x6c + 4, 3);
+        assert!(sampler_state_changed(&mut e, stage), "the second state");
+        e.mem.set_u32(cache + 8, 3);
+        assert!(!sampler_state_changed(&mut e, stage));
+        // The current value wins over the saved one.
+        e.mem.set_u8(group + 0xa5, 1);
+        e.mem.set_u32(group + 0x94, 4);
+        assert!(sampler_state_changed(&mut e, stage), "current over saved");
+        // A state mapped to slot 5 or more is not one the group keeps.
+        e.mem.set_u16(SAMPLER_STATE_SLOTS + 4, 5);
+        assert!(!sampler_state_changed(&mut e, stage));
     }
 }
