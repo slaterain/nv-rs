@@ -26,6 +26,7 @@
 use super::chain::PadList;
 use super::evdev::{self, Axes, Range, Step};
 use super::layout::Controls;
+use super::sdl_hints::SteamLists;
 use super::{ERROR_DEVICE_NOT_CONNECTED, ERROR_SUCCESS};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -89,44 +90,7 @@ fn absinfo(fd: i32, code: u16) -> Option<libc::input_absinfo> {
     (r >= 0).then_some(info)
 }
 
-/// The pads Steam leaves out of the games it starts, as SDL reads the two lists
-/// (`SDL_GAMECONTROLLER_IGNORE_DEVICES` and `..._EXCEPT`): each a list of `0xVVVV/0xPPPP` vendor
-/// and product ids, or `@` and a file's path, the list being the file's text.
-/// `allow_virtual`: `SDL_GAMECONTROLLER_ALLOW_STEAM_VIRTUAL_GAMEPAD`, which Steam sets for the
-/// games it starts.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct SteamLists {
-    pub ignore: Vec<(u16, u16)>,
-    pub except: Vec<(u16, u16)>,
-    pub allow_virtual: bool,
-}
-
 impl SteamLists {
-    fn from_env() -> SteamLists {
-        SteamLists {
-            ignore: hint(std::env::var("SDL_GAMECONTROLLER_IGNORE_DEVICES").ok()),
-            except: hint(std::env::var("SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT").ok()),
-            allow_virtual: yes(
-                std::env::var("SDL_GAMECONTROLLER_ALLOW_STEAM_VIRTUAL_GAMEPAD")
-                    .ok()
-                    .as_deref(),
-                false,
-            ),
-        }
-    }
-
-    /// Whether the pad `id` is left out: never Steam's virtual pad; with an except list (one with
-    /// an id in it), every pad not in it; otherwise the pads in the ignore list.
-    pub fn leave_out(&self, id: (u16, u16)) -> bool {
-        if id == evdev::STEAM_VIRTUAL {
-            return false;
-        }
-        if !self.except.is_empty() {
-            return !self.except.contains(&id);
-        }
-        self.ignore.contains(&id)
-    }
-
     /// Where a pad `id` comes among the users.
     fn rank(&self, id: (u16, u16)) -> Rank {
         match (id == evdev::STEAM_VIRTUAL, self.allow_virtual) {
@@ -137,15 +101,6 @@ impl SteamLists {
     }
 }
 
-/// A variable's yes or no by SDL's rules (`SDL_GetStringBoolean`): unset or empty is `default`; a
-/// value starting with `0`, or `false` in any case, is no; anything else yes.
-pub fn yes(value: Option<&str>, default: bool) -> bool {
-    match value {
-        None | Some("") => default,
-        Some(v) => !(v.starts_with('0') || v.eq_ignore_ascii_case("false")),
-    }
-}
-
 /// Where a pad comes among the users: Steam's virtual pad first when Steam started the game, the
 /// other pads, then Steam's virtual pad when it did not.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -153,38 +108,6 @@ pub enum Rank {
     SteamFirst,
     Pad,
     SteamLast,
-}
-
-/// A list's text, or the file `@path` names.
-fn hint(value: Option<String>) -> Vec<(u16, u16)> {
-    match value {
-        Some(v) => match v.strip_prefix('@') {
-            Some(path) => std::fs::read_to_string(path)
-                .map(|text| ids(&text))
-                .unwrap_or_default(),
-            None => ids(&v),
-        },
-        None => Vec::new(),
-    }
-}
-
-/// The ids in a list's text as SDL finds them: each number written after `0x`, in hexadecimal,
-/// taken in pairs (vendor, product), whatever lies between.
-fn ids(text: &str) -> Vec<(u16, u16)> {
-    let mut numbers = Vec::new();
-    let mut rest = text;
-    while let Some(at) = rest.find("0x") {
-        rest = &rest[at + 2..];
-        let end = rest
-            .find(|c: char| !c.is_ascii_hexdigit())
-            .unwrap_or(rest.len());
-        numbers.push(u32::from_str_radix(&rest[..end], 16).unwrap_or(0));
-        rest = &rest[end..];
-    }
-    numbers
-        .chunks_exact(2)
-        .filter_map(|pair| Some((u16::try_from(pair[0]).ok()?, u16::try_from(pair[1]).ok()?)))
-        .collect()
 }
 
 /// The kernel driver of the event device `node` (`event7`'s: `<sys>/event7/device/device/driver`,
