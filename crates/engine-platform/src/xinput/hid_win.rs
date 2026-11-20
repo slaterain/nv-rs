@@ -16,7 +16,7 @@ use super::dinput_order::{self, Element, Kind, Layout, Readings};
 use super::hid::{HidPads, Opened};
 use super::layout::Controls;
 use super::sdl_db::{Database, Mapping};
-use super::sdl_hints::{self, DeviceLists};
+use super::sdl_hints::{self, DeviceLists, Joins};
 use super::sony::{self, Model};
 use std::collections::HashSet;
 use std::os::windows::fs::OpenOptionsExt;
@@ -226,21 +226,16 @@ impl Mapped {
                 (status == HIDP_STATUS_SUCCESS).then_some(raw),
             ));
         }
-        let joystick = self.readings.report(&self.layout, &pages, &values)?;
+        let id = report.first().copied().unwrap_or(0);
+        let joystick = self.readings.report(&self.layout, id, &pages, &values)?;
         Some(self.mapping.controls(&joystick))
     }
 }
 
 /// Opens and runs the pad at `path` through its line, if it is a game controller that XInput does
-/// not read and has one; `false` when it is passed over (to be looked at again only when plugged
-/// in again).
+/// not read and has one ([`sdl_hints::joins`] said so); `false` when it is passed over (to be
+/// looked at again only when plugged in again).
 fn add_mapped(pads: &HidPads, path: &str, device: &Device, db: &Database) -> bool {
-    let id = (device.vendor, device.product);
-    if !is_game_controller(device.usage)
-        || sdl_hints::is_xinput_device(id, path, has_xinputhid_filter(path))
-    {
-        return false;
-    }
     let Some(mapping) = db.mapping(device.vendor, device.product) else {
         eprintln!(
             "nv-rs: game pads: the pad {:04x}:{:04x} is not read: the controller database has no \
@@ -262,6 +257,18 @@ fn add_mapped(pads: &HidPads, path: &str, device: &Device, db: &Database) -> boo
     let Some(mut mapped) = Mapped::new(&reader, mapping) else {
         return false;
     };
+    // A line whose numbering does not fit the pad's own inputs is not used (review of #804).
+    if let Err(why) = mapped.layout.fits(&mapped.mapping) {
+        eprintln!(
+            "nv-rs: game pads: the pad {:04x}:{:04x} is not read: its line in the controller \
+             database does not fit it ({why}; a line for it can be added in {} in the port's own \
+             folder)",
+            device.vendor,
+            device.product,
+            super::sdl_db::FILE
+        );
+        return false;
+    }
     let _ = pads.add_mapped(path.to_string(), reader, device.input, move |report| {
         mapped.read(report)
     });
@@ -457,11 +464,7 @@ fn look_for_pads(
         let Some(device) = probe(&path) else {
             continue;
         };
-        // SDL's lists (and Steam's) leave the device out, a PlayStation pad among them.
-        if lists.leave_out((device.vendor, device.product)) {
-            not_pads.insert(path);
-            continue;
-        }
+        let id = (device.vendor, device.product);
         let pad = sony::found(
             device.vendor,
             device.product,
@@ -469,11 +472,25 @@ fn look_for_pads(
             device.input,
             device.output,
         );
-        let Some(pad) = pad else {
-            if !add_mapped(mapped, &path, &device, db) {
-                not_pads.insert(path);
+        let joins = sdl_hints::joins(
+            id,
+            pad.is_some(),
+            is_game_controller(device.usage),
+            || sdl_hints::is_xinput_device(id, &path, has_xinputhid_filter(&path)),
+            lists,
+        );
+        let pad = match (joins, pad) {
+            (Joins::Sony, Some(pad)) => pad,
+            (Joins::Database, _) => {
+                if !add_mapped(mapped, &path, &device, db) {
+                    not_pads.insert(path);
+                }
+                continue;
             }
-            continue;
+            _ => {
+                not_pads.insert(path);
+                continue;
+            }
         };
         let open = || {
             std::fs::OpenOptions::new()

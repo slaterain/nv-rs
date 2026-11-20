@@ -274,6 +274,41 @@ pub fn is_xinput_device(id: (u16, u16), path: &str, xinputhid: bool) -> bool {
         || id == STEAM_VIRTUAL
 }
 
+/// Which of the system's HID pad lists a device joins ([`joins`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Joins {
+    /// The PlayStation pads read by nv-rs itself (the first list after XInput's own pads).
+    Sony,
+    /// The pads read through the controller database (after the PlayStation pads), if its line
+    /// is there and fits.
+    Database,
+    /// Neither: left out by SDL's or Steam's lists, not a game controller, or read by XInput.
+    Neither,
+}
+
+/// Which list a probed HID device joins, in the finder's order (review of #804): SDL's and
+/// Steam's lists leave it out first, a PlayStation pad then goes to its own list (so it stays
+/// ahead of any database pad), and a game controller (`game_controller`: its top usage is a
+/// joystick, gamepad or multi-axis controller) that XInput does not read (`xinput`, asked only
+/// then) is a database pad.
+pub fn joins(
+    id: (u16, u16),
+    sony: bool,
+    game_controller: bool,
+    xinput: impl FnOnce() -> bool,
+    lists: &DeviceLists,
+) -> Joins {
+    if lists.leave_out(id) {
+        Joins::Neither
+    } else if sony {
+        Joins::Sony
+    } else if !game_controller || xinput() {
+        Joins::Neither
+    } else {
+        Joins::Database
+    }
+}
+
 /// The ids SDL3's `src/joystick/controller_list.h` (Valve, zlib) gives an Xbox 360, Xbox One or
 /// Xbox Elite type, sorted.
 pub const XBOX: &[(u16, u16)] = &[
@@ -752,5 +787,38 @@ mod tests {
         assert!(is_xinput_device(STEAM_VIRTUAL, path, false));
         assert!(XBOX.windows(2).all(|w| w[0] < w[1]), "sorted, each once");
         assert_eq!(XBOX.len(), 391);
+    }
+
+    /// Which list a probed device joins (review of #804): SDL's lists first, then a PlayStation pad
+    /// to its own list (ahead of any database pad), then a game controller XInput does not read to
+    /// the database's; XInput is asked only for a game controller that is not a PlayStation pad.
+    #[test]
+    fn which_list_a_device_joins() {
+        let none = lists(&[]);
+        let never = || -> bool { panic!("XInput asked") };
+        let dualsense = (0x054c, 0x0ce6);
+        assert_eq!(joins(dualsense, true, true, never, &none), Joins::Sony);
+        assert_eq!(
+            joins((0x2dc8, 0x6006), false, true, || false, &none),
+            Joins::Database
+        );
+        assert_eq!(
+            joins((0x2dc8, 0x6006), false, true, || true, &none),
+            Joins::Neither
+        );
+        assert_eq!(
+            joins((0x2dc8, 0x6006), false, false, never, &none),
+            Joins::Neither
+        );
+        // Left out by SDL's lists, a PlayStation pad among them, before anything is asked.
+        let ignored = lists(&[("SDL_GAMECONTROLLER_IGNORE_DEVICES", "0x054c/0x0ce6")]);
+        assert_eq!(
+            joins(dualsense, true, true, never, &ignored),
+            Joins::Neither
+        );
+        assert_eq!(
+            joins((0x0b05, 0x18e3), false, true, never, &none),
+            Joins::Neither
+        );
     }
 }

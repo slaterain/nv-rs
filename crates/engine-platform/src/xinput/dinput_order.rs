@@ -12,21 +12,22 @@
 //! tables and, for the Simulation page, Wine's DirectInput as #804's review gives it; it is not
 //! read from DirectInput itself (no such pad here to compare). Generic Desktop's X, Y, Z, Rx, Ry
 //! and Rz (0x30 to 0x35) are those axes; the Simulation page's Steering takes X's place,
-//! Accelerator Y's, and Brake and Rudder Rz's (after the Generic Desktop axis of that place, when
-//! there is one); Generic Desktop's Slider, Dial and Wheel (0x36 to 0x38) and the Simulation
-//! page's Throttle are sliders; the Hat switch (0x39) is a hat; every one-bit input is a button;
+//! Accelerator Y's, and Brake and Rudder Rz's, and Generic Desktop's Wheel (0x38) Z's (each after
+//! the Generic Desktop axis of that place, when there is one); Generic Desktop's Slider and Dial
+//! (0x36, 0x37) and the Simulation page's Throttle are sliders; the Hat switch (0x39) is a hat; every one-bit input is a button;
 //! other values are none. Windows' HID parser numbers each input of a pad (its data index) in the
 //! order its report descriptor gives them; the buttons, and the sliders and hats among
 //! themselves, are counted in that order. An axis is scaled from its logical range onto -32768 to
 //! 32767, a hat's value onto its circle (a value outside its range is the middle).
 
-use super::sdl_db::{Joystick, HAT_DOWN, HAT_LEFT, HAT_RIGHT, HAT_UP};
+use super::sdl_db::{Joystick, Mapping, HAT_DOWN, HAT_LEFT, HAT_RIGHT, HAT_UP};
 
 /// HID usage pages and Generic Desktop usages (HID Usage Tables).
 pub const GENERIC_DESKTOP: u16 = 0x01;
 pub const X: u16 = 0x30;
 pub const RZ: u16 = 0x35;
 pub const SLIDER: u16 = 0x36;
+pub const DIAL: u16 = 0x37;
 pub const WHEEL: u16 = 0x38;
 pub const HAT_SWITCH: u16 = 0x39;
 /// The Simulation Controls page and the usages DirectInput gives axis places (as Wine's DirectInput,
@@ -103,7 +104,9 @@ impl Layout {
                         (SIMULATION, STEERING) => axes.push((0, rank, value)),
                         (SIMULATION, ACCELERATOR) => axes.push((1, rank, value)),
                         (SIMULATION, BRAKE | RUDDER) => axes.push((5, rank, value)),
-                        (GENERIC_DESKTOP, SLIDER..=WHEEL) | (SIMULATION, THROTTLE)
+                        // Wine's DirectInput gives Generic Desktop's Wheel Z's place, after Z itself.
+                        (GENERIC_DESKTOP, WHEEL) => axes.push((2, 1, value)),
+                        (GENERIC_DESKTOP, SLIDER..=DIAL) | (SIMULATION, THROTTLE)
                             if sliders < 2 =>
                         {
                             axes.push((6 + sliders, rank, value));
@@ -157,6 +160,17 @@ impl Layout {
         pages
     }
 
+    /// Whether a database line fits this pad ([`Mapping::fits`]): the sticks must be on Generic
+    /// Desktop axes, never on a Simulation-page one.
+    pub fn fits(&self, mapping: &Mapping) -> Result<(), String> {
+        let desktop: Vec<bool> = self
+            .axes
+            .iter()
+            .map(|v| v.page == GENERIC_DESKTOP)
+            .collect();
+        mapping.fits(self.buttons.len(), &desktop, self.hats.len())
+    }
+
     /// The pad's values, the axes then the hats, as `(page, usage)`.
     pub fn value_ids(&self) -> Vec<(u16, u16)> {
         self.axes
@@ -168,22 +182,27 @@ impl Layout {
 }
 
 /// What a pad's input reports have said, kept from one report to the next: the buttons held on
-/// each page a report carried, and each value's last reading. Windows' HID parser answers "not in
-/// this report" for the pages and values another report id carries; those keep what they had.
+/// each page a report carried, by the report's id, and each value's last reading. Windows' HID
+/// parser answers "not in this report" for the pages and values another report id carries; those
+/// keep what they had, and a page whose buttons two report ids share is released only by the id
+/// that holds them.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Readings {
-    pressed: std::collections::BTreeSet<(u16, u16)>,
+    /// (report id, page, usage).
+    pressed: std::collections::BTreeSet<(u8, u16, u16)>,
     values: std::collections::BTreeMap<(u16, u16), u32>,
 }
 
 impl Readings {
-    /// One report: `pages` each button page with the usages it holds down, `None` when the report
-    /// does not carry the page; `values` each value with its raw reading, `None` when the report
-    /// does not carry it. Answers the pad's state after it, `None` when the report carried none of
-    /// the pad's inputs (nothing for the controls).
+    /// One report with id `report_id` (its first byte; 0 for a pad without ids): `pages` each
+    /// button page with the usages it holds down, `None` when the report does not carry the page;
+    /// `values` each value with its raw reading, `None` when the report does not carry it. Answers
+    /// the pad's state after it, `None` when the report carried none of the pad's inputs (nothing
+    /// for the controls).
     pub fn report(
         &mut self,
         layout: &Layout,
+        report_id: u8,
         pages: &[(u16, Option<Vec<u16>>)],
         values: &[((u16, u16), Option<u32>)],
     ) -> Option<Joystick> {
@@ -191,9 +210,10 @@ impl Readings {
         for (page, held) in pages {
             if let Some(held) = held {
                 carried = true;
-                self.pressed.retain(|&(p, _)| p != *page);
+                self.pressed
+                    .retain(|&(id, p, _)| !(id == report_id && p == *page));
                 for &usage in held {
-                    self.pressed.insert((*page, usage));
+                    self.pressed.insert((report_id, *page, usage));
                 }
             }
         }
@@ -205,7 +225,11 @@ impl Readings {
         }
         carried.then(|| {
             layout.joystick(
-                |page, usage| self.pressed.contains(&(page, usage)),
+                |page, usage| {
+                    self.pressed
+                        .iter()
+                        .any(|&(_, p, u)| p == page && u == usage)
+                },
                 |page, usage| self.values.get(&(page, usage)).copied(),
             )
         })
@@ -357,8 +381,8 @@ mod tests {
     }
 
     /// The axes in DIJOYSTATE2's order whatever the descriptor's (Rz, then Y, Z, X here), sliders
-    /// after them in their own order (two at most), other usages left out; hats and buttons in
-    /// the descriptor's order.
+    /// after them in their own order (two at most), a wheel after Z, other usages left out; hats
+    /// and buttons in the descriptor's order.
     #[test]
     fn the_order_of_directinputs_state() {
         let elements = vec![
@@ -368,7 +392,7 @@ mod tests {
             value(0x32, 3, 0, 255, 8),
             value(0x36, 4, 0, 255, 8), // Slider: the second slider
             value(0x30, 5, 0, 255, 8),
-            value(0x38, 6, 0, 255, 8), // Wheel: a third slider, left out
+            value(0x38, 6, 0, 255, 8), // Wheel: at Z's place, after Z (Wine's DirectInput)
             value(0x40, 7, 0, 255, 8), // Vx: not an axis SDL takes
             value(HAT_SWITCH, 9, 0, 7, 4),
             value(HAT_SWITCH, 8, 0, 3, 2),
@@ -394,7 +418,7 @@ mod tests {
         });
         let layout = Layout::of(&with_buttons);
         let usages: Vec<u16> = layout.axes.iter().map(|v| v.usage).collect();
-        assert_eq!(usages, [0x30, 0x31, 0xc4, 0x32, 0x35, 0x37, 0x36]);
+        assert_eq!(usages, [0x30, 0x31, 0xc4, 0x32, 0x38, 0x35, 0x37, 0x36]);
         let hats: Vec<i32> = layout.hats.iter().map(|v| v.max).collect();
         assert_eq!(hats, [3, 7]);
         assert_eq!(layout.buttons, [(0x0c, 0x223), (BUTTONS, 1), (BUTTONS, 2)]);
@@ -573,6 +597,7 @@ mod tests {
         let j = r
             .report(
                 &layout,
+                0,
                 &[(BUTTONS, Some(vec![1, 3]))],
                 &[(x, Some(255)), (hat, Some(2))],
             )
@@ -583,6 +608,7 @@ mod tests {
         let j = r
             .report(
                 &layout,
+                0,
                 &[(BUTTONS, Some(vec![3]))],
                 &[(x, None), (hat, None)],
             )
@@ -591,12 +617,12 @@ mod tests {
         assert_eq!((j.axes[0], j.hats[0]), (32767, HAT_RIGHT), "values kept");
         // Another report id: nothing carried, nothing changes.
         assert_eq!(
-            r.report(&layout, &[(BUTTONS, None)], &[(x, None), (hat, None)]),
+            r.report(&layout, 0, &[(BUTTONS, None)], &[(x, None), (hat, None)]),
             None
         );
         // Values only.
         let j = r
-            .report(&layout, &[(BUTTONS, None)], &[(x, Some(0)), (hat, None)])
+            .report(&layout, 0, &[(BUTTONS, None)], &[(x, Some(0)), (hat, None)])
             .unwrap();
         assert_eq!(j.buttons, [false, false, true, false], "buttons kept");
         assert_eq!((j.axes[0], j.hats[0]), (-32768, HAT_RIGHT));
@@ -605,10 +631,118 @@ mod tests {
         let j = fresh
             .report(
                 &layout,
+                0,
                 &[(BUTTONS, Some(vec![]))],
                 &[(x, None), (hat, None)],
             )
             .unwrap();
         assert_eq!((j.axes[0], j.hats[0]), (0, 0));
+    }
+
+    /// Generic Desktop's Wheel takes Z's place, after Z (Wine's DirectInput; review of #804), not a
+    /// slider's; Slider and Dial stay sliders.
+    #[test]
+    fn a_wheel_is_at_zs_place() {
+        let elements = vec![
+            value(0x36, 0, 0, 255, 8),
+            value(WHEEL, 1, 0, 255, 8),
+            value(0x35, 2, 0, 255, 8),
+            value(0x32, 3, 0, 255, 8),
+            value(DIAL, 4, 0, 255, 8),
+            value(0x30, 5, 0, 255, 8),
+        ];
+        let usages: Vec<u16> = Layout::of(&elements).axes.iter().map(|v| v.usage).collect();
+        assert_eq!(usages, [0x30, 0x32, WHEEL, 0x35, 0x36, DIAL]);
+    }
+
+    /// Two report ids that both carry Button-page usages (review of #804): a report of one id
+    /// releases only what that id held, not the other id's buttons.
+    #[test]
+    fn two_report_ids_sharing_the_button_page() {
+        let layout = Layout::of(&buttons(0, 4));
+        let mut r = Readings::default();
+        let j = r
+            .report(&layout, 1, &[(BUTTONS, Some(vec![1]))], &[])
+            .unwrap();
+        assert_eq!(j.buttons, [true, false, false, false]);
+        // Id 2 holds button 3 and says nothing of button 1.
+        let j = r
+            .report(&layout, 2, &[(BUTTONS, Some(vec![3]))], &[])
+            .unwrap();
+        assert_eq!(j.buttons, [true, false, true, false]);
+        // Id 2 lets go of its button; id 1's stays down until id 1 says otherwise.
+        let j = r
+            .report(&layout, 2, &[(BUTTONS, Some(vec![]))], &[])
+            .unwrap();
+        assert_eq!(j.buttons, [true, false, false, false]);
+        let j = r
+            .report(&layout, 1, &[(BUTTONS, Some(vec![]))], &[])
+            .unwrap();
+        assert_eq!(j.buttons, [false; 4]);
+    }
+
+    /// A line is used only if it fits the pad (review of #804): a PS4-style layout with six Generic
+    /// Desktop axes (X, Y, Z, Rx, Ry, Rz) fits a line with the right stick on a2/a5; the same line
+    /// on X, Y, Z, Rz plus Accelerator and Brake (X, Y, Accelerator, Z, Rz, Brake) puts the right
+    /// stick on a pedal and does not fit; on four axes alone a5 does not exist; a button or hat
+    /// past the pad's does not fit either.
+    #[test]
+    fn a_line_fits_the_pads_own_inputs_or_is_not_used() {
+        let line = "PS4-style,a:b1,b:b2,x:b0,y:b3,start:b9,leftx:a0,lefty:a1,rightx:a2,righty:a5,\
+                    lefttrigger:a3,righttrigger:a4,dpup:h0.1";
+        let m = Mapping::parse(line).unwrap();
+        let mut six: Vec<Element> = [0x30, 0x31, 0x32, 0x33, 0x34, 0x35]
+            .iter()
+            .enumerate()
+            .map(|(i, &u)| value(u, i as u16, 0, 255, 8))
+            .collect();
+        six.push(value(HAT_SWITCH, 6, 0, 7, 4));
+        six.extend(buttons(7, 14));
+        assert_eq!(Layout::of(&six).fits(&m), Ok(()));
+        let pedal = |usage: u16, index: u16| Element {
+            page: SIMULATION,
+            usage,
+            index,
+            kind: Kind::Value {
+                min: 0,
+                max: 255,
+                bits: 8,
+            },
+        };
+        let mut pedals = vec![
+            value(0x30, 0, 0, 255, 8),
+            value(0x31, 1, 0, 255, 8),
+            value(0x32, 2, 0, 255, 8),
+            value(0x35, 3, 0, 255, 8),
+            pedal(BRAKE, 4),
+            pedal(ACCELERATOR, 5),
+            value(HAT_SWITCH, 6, 0, 7, 4),
+        ];
+        pedals.extend(buttons(7, 16));
+        let why = Layout::of(&pedals).fits(&m).unwrap_err();
+        assert!(
+            why.contains("RightX is a2") && why.contains("pedal"),
+            "{why}"
+        );
+        let mut four: Vec<Element> = pedals[..4].to_vec();
+        four.push(value(HAT_SWITCH, 6, 0, 7, 4));
+        four.extend(buttons(7, 14));
+        let why = Layout::of(&four).fits(&m).unwrap_err();
+        assert!(
+            why.contains("a3") || why.contains("a4") || why.contains("a5"),
+            "{why}"
+        );
+        // The 8BitDo Pro 2's own line fits the pedals layout (its sticks on Z and Rz).
+        let pro2 = Database::windows().mapping(0x2dc8, 0x6006).unwrap();
+        assert_eq!(Layout::of(&pedals).fits(&pro2), Ok(()));
+        let mut few = six[..7].to_vec();
+        few.extend(buttons(7, 8));
+        assert!(Layout::of(&few).fits(&m).unwrap_err().contains("b9"));
+        let no_hat: Vec<Element> = six
+            .iter()
+            .copied()
+            .filter(|e| e.usage != HAT_SWITCH || e.page != GENERIC_DESKTOP)
+            .collect();
+        assert!(Layout::of(&no_hat).fits(&m).unwrap_err().contains("h0"));
     }
 }
