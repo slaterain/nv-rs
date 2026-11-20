@@ -2591,7 +2591,26 @@ pub fn font_make_icons_tri_shape(e: &mut Engine, this: Ptr<Font>) -> u32 {
     });
     let data = e.mem.u32(shape + 0xb8);
     e.call(NI_GEOMETRY_DATA_SET_CONSISTENCY, &args![data, 0x4000u32]);
-    let property = attach_tile_shader(e, shape);
+    // lStewieAl's Tweaks' S0022.43 (`MenuFixes`, `FormatTextIconShapePath_Geometry` at `0xA15164`,
+    // the property's attach): a font with no icon atlas name gets its icon shape hidden (culled:
+    // `m_flags` +0x30 bit 0, Tweaks' `SetVisible(false)`) before the property is attached.
+    let no_atlas = e.stewie(engine_core::extend::stewie::FONT_ICON_NO_TEXTURE)
+        && e.mem.u32(this.addr() + 0x3c) == 0;
+    let property = if no_atlas {
+        let block = e.call(NI_NEW, &args![0xb0u32]).u32();
+        let property = if block != 0 {
+            e.call(TILE_SHADER_PROPERTY_CONSTRUCTOR, &args![block, 0u32])
+                .u32()
+        } else {
+            0
+        };
+        let flags = e.mem.u32(shape + 0x30);
+        e.mem.set_u32(shape + 0x30, flags | 1);
+        e.call(NI_AV_OBJECT_ATTACH_PROPERTY, &args![shape, property]);
+        property
+    } else {
+        attach_tile_shader(e, shape)
+    };
     for k in 0..4 {
         let v: u32 = e.global(ICON_SHADER_COLOR + 4 * k);
         e.mem.set_u32(property + 0x68 + 4 * k, v);
@@ -2601,7 +2620,18 @@ pub fn font_make_icons_tri_shape(e: &mut Engine, this: Ptr<Font>) -> u32 {
         let name = buffers.addr();
         let path = name + 0x104;
         let atlas = e.mem.u32(this.addr() + 0x3c);
-        e.call(STRNCPY_S, &args![name, 0x104u32, atlas, 0x103u32]);
+        // S0022.43 at `0xA151D1` (Tweaks' `FormatTextIconShapePath`): no atlas name copies
+        // "interface\shared\empty.dds" instead.
+        if atlas == 0 && e.stewie(engine_core::extend::stewie::FONT_ICON_NO_TEXTURE) {
+            let empty = b"interface\\shared\\empty.dds\0";
+            let size = (empty.len() as u32).next_multiple_of(4);
+            e.with_stack(size, |e, text| {
+                e.mem.write(text.addr(), empty);
+                e.call(STRNCPY_S, &args![name, 0x104u32, text.addr(), 0x103u32]);
+            });
+        } else {
+            e.call(STRNCPY_S, &args![name, 0x104u32, atlas, 0x103u32]);
+        }
         e.call(FORMAT_S, &args![path, 0x104u32, TEXTURES_PATH_FORMAT, name]);
         let handle = e.call(NI_FIXED_STRING_CREATE, &args![path]).u32();
         release_after_use(e, handle, |e, local| {
@@ -6349,6 +6379,54 @@ mod tests {
             vec![vec![shape, 0, 0]]
         );
         assert_eq!(calls(&e, INTERLOCKED_DECREMENT).len(), 2);
+    }
+
+    /// lStewieAl's Tweaks' row S0022.43: a font with no icon atlas name, row on: the icon shape is
+    /// culled before its property is attached and the texture path is the shared empty texture;
+    /// with an atlas name, row on builds the shape as row off does (not culled, the atlas path).
+    #[test]
+    fn s0022_43_a_font_with_no_icon_atlas() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        for with_atlas in [false, true] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::FONT_ICON_NO_TEXTURE, true);
+            geometry(&mut e);
+            let names = Rc::new(RefCell::new(Vec::new()));
+            let seen = names.clone();
+            e.register_double(NI_FIXED_STRING_CREATE, move |e, a| {
+                seen.borrow_mut().push(e.mem.cstr(a[0]));
+                ret(0x1234)
+            });
+            let culled_at_attach = Rc::new(RefCell::new(Vec::new()));
+            let seen = culled_at_attach.clone();
+            e.register_double(NI_AV_OBJECT_ATTACH_PROPERTY, move |e, a| {
+                seen.borrow_mut().push(e.mem.u32(a[0] + 0x30) & 1);
+                Ret::default()
+            });
+            set_text_at(&mut e, INTERFACE_TEXT_ICONS_NAME, b"Interface: TextIcons");
+            set_text_at(&mut e, TEXTURES_PATH_FORMAT, b"Data\\Textures\\%s");
+            let font = font(&mut e);
+            e.mem.set_u32(font.addr() + 0x4c, 2);
+            if with_atlas {
+                let atlas = cstr(&mut e, b"ui\\icons.dds");
+                e.mem.set_u32(font.addr() + 0x3c, atlas);
+            }
+            let shape = font_make_icons_tri_shape(&mut e, font);
+            let path = if with_atlas {
+                b"Data\\Textures\\ui\\icons.dds".to_vec()
+            } else {
+                b"Data\\Textures\\interface\\shared\\empty.dds".to_vec()
+            };
+            assert_eq!(names.borrow()[1], path, "atlas {with_atlas}");
+            let culled = u32::from(!with_atlas);
+            assert_eq!(
+                *culled_at_attach.borrow(),
+                vec![culled],
+                "hidden before the attach"
+            );
+            assert_eq!(e.mem.u32(shape + 0x30) & 1, culled);
+        }
     }
 
     #[test]
