@@ -163,7 +163,7 @@ const STAGE_NAMES: [&str; 8] = [
     "after world",
     "present",
     "after present",
-    "between frames",
+    "time between frames",
 ];
 
 /// The stages (ms) from the stage marks' take (µs per column).
@@ -347,6 +347,16 @@ impl Frame {
                     "read {} from disk on the main thread ({:.0} ms{largest})",
                     bytes(self.g(Count::BytesReadMain)),
                     ms(read)
+                ),
+            ));
+        }
+        let hand_back = self.g(Count::HandBackNs);
+        if hand_back > 0 {
+            said.push((
+                ms(hand_back),
+                format!(
+                    "handed freed memory back with every game thread stopped ({:.0} ms)",
+                    ms(hand_back)
                 ),
             ));
         }
@@ -633,6 +643,13 @@ impl Frame {
         put(
             g(Count::CellsUnloaded),
             format!("{} cells unloaded", g(Count::CellsUnloaded)),
+        );
+        put(
+            g(Count::HandBackNs) / TENTH_MS,
+            format!(
+                "memory handed back at the frame's end {:.1} ms",
+                ms(g(Count::HandBackNs))
+            ),
         );
         put(g(Count::Saves), "a save".to_string());
         put(g(Count::Loads), "a load".to_string());
@@ -950,6 +967,15 @@ mod tests {
         );
         f.stages = None;
         assert_eq!(f.cause(), "no one-off work counted");
+        // The time outside the stages (the host between two of main's frames) named when it is the most.
+        let mut f = frame();
+        f.ms = 30.0;
+        f.typical = 10.0;
+        f.stages = Some([2.0, 0.0, 1.0, 1.0, 0.5, 0.2, 0.3]);
+        assert_eq!(
+            f.cause(),
+            "the time between frames took 25 ms with no one-off work counted"
+        );
 
         let mut f = frame();
         f.game[Count::ReadNsMain as usize] = 30_000_000;
