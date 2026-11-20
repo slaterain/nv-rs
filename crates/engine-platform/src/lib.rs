@@ -38,6 +38,8 @@
 use crate::prelude::*;
 
 // The core's model and the core of the platform layer, as the files reached them in `engine-core`.
+/// The drawing side's hitch counts (`d3d9_stream::hitch`), for the host's hitch log.
+pub use d3d9_stream::hitch as stream_hitch;
 pub use engine_core::units::platform::*;
 pub use engine_core::{abi, exe, mem, prelude, ptr, queue_check, sse, thread_host, types, x87};
 pub use engine_core::{args, entry, layout};

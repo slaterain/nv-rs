@@ -148,6 +148,19 @@ fn form(e: &mut Engine, form: u32) -> Option<Named> {
     })
 }
 
+/// The cell at `cell` as the hitch log names it (`crate::hitch_log`): `interior EDID (0x...)`, or outside the
+/// worldspace (`WastelandNV (0x...)`, the grid added by the caller); `no cell` for a null pointer.
+pub fn cell_name(e: &mut Engine, cell: u32) -> String {
+    if cell == 0 {
+        return "no cell".into();
+    }
+    if e.mem.u8(cell + CELL_FLAGS) & 1 != 0 {
+        return format!("interior {}", named(&form(e, cell)));
+    }
+    let world = e.mem.u32(cell + CELL_WORLD_SPACE);
+    named(&form(e, world))
+}
+
 /// The place read from the game (none before there is a player).
 pub fn read(e: &mut Engine) -> Option<Place> {
     let player = e.mem.u32(PLAYER);
@@ -380,6 +393,21 @@ mod tests {
             place.contains("position: -39000 18200 5800\n") && place.contains("game hour: 17.50\n"),
             "{place}"
         );
+    }
+
+    /// The hitch log's cell name: an exterior by its worldspace, an interior by its own editor id.
+    #[test]
+    fn the_hitch_log_names_the_worldspace_or_the_interior() {
+        let mut e = guest();
+        let cell = player_outside(&mut e);
+        assert_eq!(cell_name(&mut e, cell), "WastelandNV (0x000da726)");
+        let room = new_form(&mut e, 0x0010_4c1c, "GSDocMitchellHouse");
+        e.mem.set_u8(room + 0x24, 1);
+        assert_eq!(
+            cell_name(&mut e, room),
+            "interior GSDocMitchellHouse (0x00104c1c)"
+        );
+        assert_eq!(cell_name(&mut e, 0), "no cell");
     }
 
     #[test]

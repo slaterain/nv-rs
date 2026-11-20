@@ -157,6 +157,26 @@ fn role() -> usize {
     usize::from(GAME_THREAD.with(Cell::get))
 }
 
+/// Whether the running OS thread runs a game thread other than main (the hitch log's counters, `crate::hitch`).
+#[inline]
+pub fn on_other_game_thread() -> bool {
+    GAME_THREAD.with(Cell::get)
+}
+
+/// Whether a wait here is timed: `NV_LOCK_STATS` is on, or the hitch log counts main's waits (this is main).
+#[inline]
+fn timed_wait() -> bool {
+    lock_stats().is_some() || (crate::hitch::on() && role() == 0)
+}
+
+/// Main waited `d` for `kind` at `site` (the hitch log's counts; nothing for another game thread or with it off).
+#[inline]
+fn hitch_wait(kind: crate::hitch::WaitKind, site: u32, d: Duration) {
+    if role() == 0 && crate::hitch::on() {
+        crate::hitch::main_wait(kind, site, d.as_nanos().min(u128::from(u64::MAX)) as u64);
+    }
+}
+
 /// One kind of wait in [`LockStats`]: the time, how many and the longest, since the last frame.
 #[derive(Default)]
 struct WaitSum {
@@ -435,11 +455,21 @@ impl KernelLock {
     /// wait is counted ([`LockStats`]).
     #[cold]
     fn acquire(&self, me: u64) {
-        let started = lock_stats().map(|_| std::time::Instant::now());
+        let started = timed_wait().then(std::time::Instant::now);
         self.acquire_here(me);
-        if let (Some(s), Some(t)) = (lock_stats(), started) {
-            let sums = if self.device { &s.device } else { &s.kernel };
-            sums[role()].add(t.elapsed());
+        if let Some(t) = started {
+            let d = t.elapsed();
+            if let Some(s) = lock_stats() {
+                let sums = if self.device { &s.device } else { &s.kernel };
+                sums[role()].add(d);
+            }
+            use crate::hitch::WaitKind;
+            let kind = if self.device {
+                WaitKind::DeviceLock
+            } else {
+                WaitKind::KernelLock
+            };
+            hitch_wait(kind, 0, d);
         }
     }
 
@@ -1859,7 +1889,8 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
     });
     let held = w.kernel.release_all();
     let was = w.leave_guest();
-    let started = lock_stats().map(|_| std::time::Instant::now());
+    let started = timed_wait().then(std::time::Instant::now);
+    let site = if started.is_some() { wait_site(e) } else { 0 };
     // Counted, then listed, then the owner word tried: a leave that frees it after the count sees
     // the count and wakes the listed (`leave_critical_section`), so no wake is missed.
     waiting.fetch_add(1, Ordering::SeqCst);
@@ -1906,8 +1937,12 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
     if stop.is_none() {
         e.mem.set_u32(count_at, 1);
     }
-    if let (Some(stats), Some(t)) = (lock_stats(), started) {
-        stats.section[role()].add(t.elapsed());
+    if let Some(t) = started {
+        let d = t.elapsed();
+        if let Some(stats) = lock_stats() {
+            stats.section[role()].add(d);
+        }
+        hitch_wait(crate::hitch::WaitKind::Section, site, d);
     }
     if was {
         w.enter_guest();
@@ -2067,11 +2102,15 @@ fn try_enter_section_in_table(e: &mut Engine, section: Ptr) -> i32 {
 // Real threads: replaces KERNEL32.DLL Sleep (import)
 /// Sleeps for real (`Sleep(0)` gives the rest of the time slice up); a safe point.
 fn sleep(e: &mut Engine, ms: u32) {
-    let started = lock_stats().map(|_| std::time::Instant::now());
+    let started = timed_wait().then(std::time::Instant::now);
     real_sleep(ctx(e).world, ms);
-    if let (Some(stats), Some(t)) = (lock_stats(), started) {
-        let (kind, arg) = if role() == 0 { (0, ms) } else { (2, ctx(e).id) };
-        stats.wait_at(kind, wait_site(e), arg, t.elapsed());
+    if let Some(t) = started {
+        let d = t.elapsed();
+        if let Some(stats) = lock_stats() {
+            let (kind, arg) = if role() == 0 { (0, ms) } else { (2, ctx(e).id) };
+            stats.wait_at(kind, wait_site(e), arg, d);
+        }
+        hitch_wait(crate::hitch::WaitKind::Sleep, wait_site(e), d);
     }
     park_here(e);
     main_stop_check(e);
@@ -2247,7 +2286,7 @@ impl ThreadHost for Real {
             }
             if !waiting {
                 waiting = true;
-                started = lock_stats().map(|_| std::time::Instant::now());
+                started = timed_wait().then(std::time::Instant::now);
                 note_state(e, || {
                     let list: Vec<String> = handles.iter().map(|h| format!("{h:x}")).collect();
                     format!(
@@ -2289,14 +2328,18 @@ impl ThreadHost for Real {
             guard(&w.waiters).retain(|o| !std::sync::Arc::ptr_eq(o, &me));
             w.waiters_n.fetch_sub(1, Ordering::SeqCst);
         }
-        if let (Some(stats), Some(t)) = (lock_stats(), started) {
-            stats.object[role()].add(t.elapsed());
-            let (kind, arg) = if role() == 0 {
-                (1, handles.first().copied().unwrap_or(0))
-            } else {
-                (3, ctx(e).id)
-            };
-            stats.wait_at(kind, wait_site(e), arg, t.elapsed());
+        if let Some(t) = started {
+            let d = t.elapsed();
+            if let Some(stats) = lock_stats() {
+                stats.object[role()].add(d);
+                let (kind, arg) = if role() == 0 {
+                    (1, handles.first().copied().unwrap_or(0))
+                } else {
+                    (3, ctx(e).id)
+                };
+                stats.wait_at(kind, wait_site(e), arg, d);
+            }
+            hitch_wait(crate::hitch::WaitKind::Object, wait_site(e), d);
         }
         if waiting {
             note_state(e, String::new);
