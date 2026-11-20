@@ -74,11 +74,11 @@ fn run(b: &mut WgpuBackend, cmd: Cmd<Data<'_>>) {
 /// ahead).
 fn camera() -> ([f64; 3], [[f64; 3]; 3]) {
     if FAR_VIEW.get() {
-        // At (0, 0, 3000), looking toward +y and 10 degrees down: the ground 4,000 to 9,000 units
-        // ahead, in the last cascade.
+        // At (0, 0, 3000) (or the height a test sets), looking toward +y and 10 degrees down: the
+        // ground 4,000 to 9,000 units ahead, in the last cascade (from 1,000 up: from 1,400 on).
         let (s, c) = 10f64.to_radians().sin_cos();
         return (
-            [0.0, 0.0, 3000.0],
+            [0.0, 0.0, FAR_HEIGHT.get()],
             [[1.0, 0.0, 0.0], [0.0, s, c], [0.0, c, -s]],
         );
     }
@@ -104,6 +104,8 @@ thread_local! {
     static ALLOW: std::cell::Cell<Option<f32>> = const { std::cell::Cell::new(None) };
     /// The far view ([`camera`]): the camera high over the far ground ([`FAR_GROUND`]).
     static FAR_VIEW: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The far view's camera height.
+    static FAR_HEIGHT: std::cell::Cell<f64> = const { std::cell::Cell::new(3000.0) };
 }
 
 fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
@@ -774,6 +776,133 @@ fn dark(on: &[[u8; 4]], off: &[[u8; 4]], p: [f64; 3]) -> bool {
 /// bone 1 moved it by `y` along y: a point in the middle of it.
 fn upper_shadow(y: f64) -> [f64; 3] {
     [-75.0, f64::from(BAR_Y) + y, 0.0]
+}
+
+/// The far view's bar `scale` times its size with its foot at `y` (both bones moved there).
+fn far_bar(y: f32, scale: f32, game_shadow: bool) -> Shot {
+    let shift = [0.0, y - BAR_Y * scale, 0.0];
+    Shot {
+        bar: Some((shift, shift)),
+        bar_scale: Some(scale),
+        game_shadow,
+        ..Shot::default()
+    }
+}
+
+/// The ground's red at `points` in the last of four frames of `shot`, with the characters casting
+/// (ours) and without (the game's actor shadow alone), the sun shadows on.
+fn ours_and_theirs(shot: Shot, points: &[[f64; 3]]) -> Option<Vec<(i32, i32)>> {
+    let shots = [shot; 4];
+    let ours = picture_of(true, true, &shots)?;
+    let theirs = picture_of(true, false, &shots).expect("the adapter");
+    Some(
+        points
+            .iter()
+            .map(|&p| (i32::from(at(&ours[3], p)), i32::from(at(&theirs[3], p))))
+            .collect(),
+    )
+}
+
+/// Review of #817: where the last cascade fades into the far map (which has no characters), the
+/// game's actor shadow comes back as ours fades. Both are full shadows here, and the lit shaders
+/// multiply them, so at the fade's middle (ours half faded, the game's half back) a quarter of the
+/// sun comes through; before, the game's was still left out where ours had half faded: half the
+/// sun came through, a lighter patch round a far character. Under the far bar's shadow 9,250 view
+/// units out (half way through the fade, 8,500 to 10,000): between a sixth and a third of the sun;
+/// 8,875 out (a quarter of the way): about 3/16; never darker than the game's shadow alone (no
+/// doubled shadow).
+#[test]
+fn in_the_last_cascades_fade_ours_and_the_games_shadow_add_up_to_one() {
+    FAR_VIEW.set(true);
+    // The sun through ours and the game's shadow at a far bar's foot y (view depth 0.985 y + 521):
+    // the upper half's shadow at x -1,650 to -3,000.
+    let through_at = |y: f64| {
+        let p = [-2000.0, y, 0.0];
+        let shot = far_bar(y as f32, 30.0, true);
+        let lit = picture_of(
+            false,
+            true,
+            &[Shot {
+                game_shadow: false,
+                ..shot
+            }; 4],
+        )?;
+        let lit = i32::from(at(&lit[3], p));
+        let (fade, theirs) = ours_and_theirs(shot, &[p]).expect("the adapter")[0];
+        let through = f64::from(fade - theirs) / f64::from(lit - theirs);
+        eprintln!(
+            "y {y}: lit {lit}, the game's shadow {theirs}, in the fade {fade}: {through:.3} of the sun"
+        );
+        assert!(
+            lit > theirs + 60,
+            "the game's shadow is dark: {lit} {theirs}"
+        );
+        assert!(
+            fade >= theirs - 3,
+            "a doubled shadow: {fade} under {theirs}"
+        );
+        Some(through)
+    };
+    // Its foot at y 8,860 (view depth 9,248), half way: ours lets through a half, the game's a
+    // half, a quarter of the sun (review of #843: bounded from both sides, so a doubled fade or
+    // no characters' cover in the fade fails too).
+    let Some(middle) = through_at(8860.0) else {
+        return;
+    };
+    assert!(
+        middle > 1.0 / 6.0 && middle < 1.0 / 3.0,
+        "the fade's middle lets through {middle:.3} (a quarter)"
+    );
+    // A quarter of the way (view depth 8,875): ours a quarter, the game's three quarters, 3/16 of
+    // the sun; a fade squared would let through about 0.14 there.
+    let quarter = through_at(8481.0).expect("the adapter");
+    assert!(
+        quarter > 0.16 && quarter < 0.23 && quarter < middle,
+        "a quarter into the fade lets through {quarter:.3} (3/16; the middle {middle:.3})"
+    );
+}
+
+/// Review of #817: between the third and the last cascade the characters' cover blends from one
+/// layer into the next, so ours replaces the game's actor shadow the same way before the band, in
+/// it and past it (no doubled darkening where the game's shadow would come back, no gap), seen
+/// just past the tip of the bar's shadow, where the cover reaches a few texels beyond ours. The
+/// far view from 1,000
+/// up (view depth 0.985 y + 174); the bar five times its size (100 across, x -50 to 50), its foot
+/// before the band, in its middle and past it; its 600 of height throws 450 toward -x: the tip at
+/// x -500.
+#[test]
+fn the_characters_cover_blends_between_the_third_and_last_cascade() {
+    FAR_VIEW.set(true);
+    FAR_HEIGHT.set(1000.0);
+    let s = sun_shadow::splits(NEAR as f32, FAR as f32);
+    let (end, before) = (f64::from(s[3]), f64::from(s[2]));
+    let band = f64::from(sun_shadow::BLEND) * (end - before);
+    let mut most = Vec::new();
+    for depth in [end - band - 120.0, end - band / 2.0, end + 120.0] {
+        let y = (depth - 1000.0 * 10f64.to_radians().sin()) / 10f64.to_radians().cos();
+        let past: Vec<[f64; 3]> = (0..8)
+            .map(|i| [-502.0 - 2.0 * f64::from(i), y, 0.0])
+            .collect();
+        let Some(v) = ours_and_theirs(far_bar(y as f32, 5.0, true), &past) else {
+            return;
+        };
+        eprintln!("view depth {depth:.0} (y {y:.0}): ours and the game's past the tip {v:?}");
+        most.push(v.iter().map(|(o, t)| o - t).max().expect("points"));
+    }
+    // The cover reaches four texels past our shadow, and the last cascade's texels are about five
+    // times the third's: just past the tip the game's shadow is left out there and not before the
+    // band. In the band the two layers' covers blend: between the two (half way at its middle), not
+    // the third's alone (the cover blending to none: the game's shadow back) nor the last's.
+    let (lo, hi) = (most[0], most[2]);
+    assert!(
+        hi > lo + 60,
+        "the last layer's cover past the tip: {most:?}"
+    );
+    let quarter = (hi - lo) / 4;
+    assert!(
+        most[1] > lo + quarter && most[1] < hi - quarter,
+        "the cover blended in the band: {most:?}"
+    );
 }
 
 /// One shadow a character in the last cascade too: just past the tip of the far bar's shadow (see
