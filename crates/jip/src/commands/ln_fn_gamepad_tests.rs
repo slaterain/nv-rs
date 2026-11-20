@@ -320,3 +320,103 @@ fn the_conditions_answer_while_another_engine_holds_jips_state() {
     );
     engine_core::extend::release_held_for_test();
 }
+
+/// SetDeadZoneLS/RS's number from the script's fraction, as JIP works it out: 3277 at 0.1 or
+/// below, 29490 at 0.9 or above, else the fraction times 32767 cut toward zero (so just above
+/// 0.1 gives 3276, below the floor's 3277); a NaN fails both tests and converts to 0x80000000.
+#[test]
+fn the_dead_zone_a_fraction_gives() {
+    for (fraction, want) in [
+        (-1.0, 3277),
+        (0.0, 3277),
+        (0.1, 3277),
+        (0.100_000_1, 3276),
+        (0.25, 8191),
+        (0.5, 16383),
+        (0.899_999, 29490),
+        (0.9, 29490),
+        (2.0, 29490),
+        (f64::INFINITY, 29490),
+        (f64::NEG_INFINITY, 3277),
+    ] {
+        assert_eq!(dead_zone_of(fraction), want, "{fraction}");
+    }
+    assert_eq!(dead_zone_of(f64::NAN), i32::MIN);
+}
+
+/// SetDeadZoneLS writes the left stick's dead zone everywhere JIP does: its own number (the
+/// getter, GetLeftStickX's scale, IsControlPressed's stick test), the double group GB's D04
+/// seams answer (`s_deadZoneLSg`), and the engine's pair the game's code reads for its 19
+/// immediates; the right stick's stays. SetDeadZoneRS the same for the right stick. The result
+/// stays 0; no argument reads 0; a NaN's 0x80000000 is kept and nothing panics.
+#[test]
+fn set_dead_zone_ls_and_rs() {
+    let mut e = setup();
+    let (left, right) = crate::game_patches::gb::doubles(&mut e);
+    let all = |e: &mut Engine| {
+        (
+            crate::input::dead_zone_ls(e),
+            e.mem.f64(left),
+            e.pad_dead_zone_left(),
+            crate::input::dead_zone_rs(e),
+            e.mem.f64(right),
+            e.pad_dead_zone_right(),
+        )
+    };
+    assert_eq!(all(&mut e), (7849, 7849.0, 7849, 8689, 8689.0, 8689));
+    assert_eq!(
+        call(&mut e, 0x220d, &[z(0.5)]),
+        (1, 0.0),
+        "handled, no result"
+    );
+    assert_eq!(all(&mut e), (16383, 16383.0, 16383, 8689, 8689.0, 8689));
+    assert_eq!(run(&mut e, 0x220b, &[]), 16383.0 * (1.0 / 32767.0));
+    input(&mut e).pad.thumb_lx = 16384;
+    assert_eq!(run(&mut e, 0x2205, &[]), 1.0 / 16384.0);
+    assert_eq!(run(&mut e, 0x2206, &[]), 0.0);
+    run(&mut e, 0x220e, &[z(0.95)]);
+    assert_eq!(all(&mut e), (16383, 16383.0, 16383, 29490, 29490.0, 29490));
+    input(&mut e).pad.thumb_rx = 29491;
+    assert_eq!(run(&mut e, 0x2207, &[]), 1.0 / 3277.0);
+    run(&mut e, 0x220d, &[z(0.05)]);
+    assert_eq!(all(&mut e), (3277, 3277.0, 3277, 29490, 29490.0, 29490));
+    // No argument (a line the compiler does not make: the parameter is required): JIP's double is
+    // left unset; the port reads 0, so the floor's 3277.
+    run(&mut e, 0x220e, &[]);
+    assert_eq!(all(&mut e).5, 3277);
+    // A NaN: JIP's 0x80000000 everywhere; the sticks' and the conditions' sums wrap.
+    run(&mut e, 0x220d, &[z(f64::NAN)]);
+    run(&mut e, 0x220e, &[z(f64::NAN)]);
+    let min = i32::MIN;
+    assert_eq!(
+        all(&mut e),
+        (min, f64::from(min), min, min, f64::from(min), min)
+    );
+    // JIP's asm with the dead zone 0x80000000: `sub eax, dz` / `jg` (true difference above 0)
+    // and `inc eax` / `add eax, dz` / `jge` (true sum below 0), the wrapped eax times
+    // `1 / (32767 - dz)` (wrapped too: -2147450881): every push is about +-1, none is 0.
+    let d = 1.0 / -2_147_450_881.0;
+    for (v, want) in [
+        (0i16, 0.0),
+        (1, -2_147_483_647.0 * d),
+        (16_384, -2_147_467_264.0 * d),
+        (i16::MAX, -2_147_450_881.0 * d),
+        (-1, -2_147_483_648.0 * d),
+        (-2, 2_147_483_647.0 * d),
+        (i16::MIN, 2_147_450_881.0 * d),
+    ] {
+        input(&mut e).pad.thumb_lx = v;
+        input(&mut e).pad.thumb_rx = v;
+        assert_eq!(run(&mut e, 0x2205, &[]), want, "{v}");
+        assert_eq!(run(&mut e, 0x2207, &[]), want, "{v}");
+    }
+}
+
+/// The getters' edges at an ordinary dead zone (16383): at it and one past it on both sides.
+#[test]
+fn the_sticks_edges() {
+    assert_eq!(stick(16_383, 16_383), 0.0);
+    assert_eq!(stick(16_384, 16_383), 1.0 / 16_384.0);
+    assert_eq!(stick(-16_384, 16_383), 0.0);
+    assert_eq!(stick(-16_385, 16_383), -1.0 / 16_384.0);
+}

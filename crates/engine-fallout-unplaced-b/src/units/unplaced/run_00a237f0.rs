@@ -121,9 +121,6 @@ const GAMEPAD_RIGHT_TRIGGER_PREVIOUS: u32 = 0x011f_35bf;
 /// Non-zero while a gamepad is connected and used.
 const GAMEPAD_ACTIVE: u32 = 0x011f_35c8;
 
-/// Thumb-stick threshold of the "pushed" tests (`0x1ea9`).
-const THUMB_THRESHOLD: i32 = 0x1ea9;
-
 /// `GetActiveWindow` import slot (named by the exe's import table).
 const IMPORT_GET_ACTIVE_WINDOW: u32 = 0x00fd_f2fc;
 /// The function that works out the interface language (`1` to `4`, other
@@ -417,11 +414,14 @@ pub fn fn_00a23e10(e: &mut Engine, this: Ptr<Controls>, control: i32, mode: u32)
     }
     let mut result = false;
     let mut mask = 0u32;
+    // The dead zone of the "pushed" tests: the exe's `0x1ea9` (immediates `0xA23E5E`, `0xA23E87`;
+    // `-0x1ea9` at `0xA23E73`, `0xA23E9C`) unless JIP LN NVSE's `SetDeadZoneLS` rewrote them.
+    let threshold = e.pad_dead_zone_left();
     match control {
-        0x13 => result = i32::from(e.mem.i16(GAMEPAD_THUMB_LY)) > THUMB_THRESHOLD,
-        0x14 => result = i32::from(e.mem.i16(GAMEPAD_THUMB_LY)) < -THUMB_THRESHOLD,
-        0x16 => result = i32::from(e.mem.i16(GAMEPAD_THUMB_LX)) > THUMB_THRESHOLD,
-        0x17 => result = i32::from(e.mem.i16(GAMEPAD_THUMB_LX)) < -THUMB_THRESHOLD,
+        0x13 => result = i32::from(e.mem.i16(GAMEPAD_THUMB_LY)) > threshold,
+        0x14 => result = i32::from(e.mem.i16(GAMEPAD_THUMB_LY)) < threshold.wrapping_neg(),
+        0x16 => result = i32::from(e.mem.i16(GAMEPAD_THUMB_LX)) > threshold,
+        0x17 => result = i32::from(e.mem.i16(GAMEPAD_THUMB_LX)) < threshold.wrapping_neg(),
         _ => mask = fn_00a24080(e, this.addr(), control as u32),
     }
     let trigger = match control {
@@ -1381,6 +1381,31 @@ mod tests {
         assert_eq!(e.mem.u16(GAMEPAD_BUTTONS), 0x11);
         fn_00a23d40(&mut e, this, 0xf);
         assert_eq!(e.mem.u16(GAMEPAD_BUTTONS), 0x111);
+    }
+
+    /// The four "pushed" tests read the engine's left dead zone (the exe's `0x1ea9` at
+    /// `0xA23E5E`, `0xA23E87`, its negation at `0xA23E73`, `0xA23E9C`, until JIP's
+    /// `SetDeadZoneLS` moves it): moved to 0x3000, 0x3000 is not pushed either way and 0x3001 is.
+    #[test]
+    fn gamepad_queries_read_the_moved_dead_zone() {
+        let mut e = engine();
+        let this = controls(&mut e);
+        gamepad(&mut e);
+        e.set_pad_dead_zone_left(0x3000);
+        for (control, at, sign) in [
+            (0x13, GAMEPAD_THUMB_LY, 1i32),
+            (0x14, GAMEPAD_THUMB_LY, -1),
+            (0x16, GAMEPAD_THUMB_LX, 1),
+            (0x17, GAMEPAD_THUMB_LX, -1),
+        ] {
+            e.mem.set_u16(at, (sign * 0x2000) as u16);
+            assert!(!fn_00a23e10(&mut e, this, control, 0), "{control:x}");
+            e.mem.set_u16(at, (sign * 0x3000) as u16);
+            assert!(!fn_00a23e10(&mut e, this, control, 0), "{control:x}");
+            e.mem.set_u16(at, (sign * 0x3001) as u16);
+            assert!(fn_00a23e10(&mut e, this, control, 0), "{control:x}");
+            e.mem.set_u16(at, 0);
+        }
     }
 
     #[test]
