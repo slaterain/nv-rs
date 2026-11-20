@@ -3829,6 +3829,29 @@ mod tests {
         assert_eq!(e.kernel.last_error, ERROR_INVALID_HANDLE);
     }
 
+    /// The hitch log's counts (`engine_core::hitch`): a file opened, and the bytes a read gave, on main's side (this
+    /// thread is no other game thread). (Other tests open files meanwhile: at least.)
+    #[test]
+    fn opens_and_reads_count_for_the_hitch_log() {
+        use engine_core::hitch::{since, snapshot, Count};
+        let (mut e, name) = engine();
+        let rw = GENERIC_READ | GENERIC_WRITE;
+        let before = snapshot();
+        let h = create_file_a(&mut e, Ptr::new(name), rw, 0, 0, OPEN_ALWAYS, 0, 0);
+        let buffer = e.mem.alloc(0x2000);
+        let count = e.mem.alloc(4);
+        write_file(&mut e, h, Ptr::new(buffer), 0x1800, Ptr::new(count), 0);
+        set_file_pointer(&mut e, h, 0, Ptr::new(0), 0);
+        assert_eq!(
+            read_file(&mut e, h, Ptr::new(buffer), 0x1000, Ptr::new(count), 0),
+            1
+        );
+        let d = since(&snapshot(), &before);
+        assert!(d[Count::FilesOpenedMain as usize] >= 1);
+        assert!(d[Count::BytesReadMain as usize] >= 0x1000);
+        super::super::close_handle(&mut e, h);
+    }
+
     #[test]
     fn a_read_only_handle_refuses_writes() {
         let (mut e, name) = engine();

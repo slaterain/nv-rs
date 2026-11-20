@@ -229,7 +229,7 @@ impl Frame {
                 format!(" (at {s:08x})")
             }
         };
-        let (wait_ns, wait_kind, wait_site) = self.longest_wait;
+        let (_, wait_kind, wait_site) = self.longest_wait;
         let object = self.g(Count::ObjectWaitNs);
         if object > 0 {
             let at = if wait_kind == WaitKind::Object {
