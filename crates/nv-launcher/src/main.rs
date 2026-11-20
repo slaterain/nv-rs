@@ -22,17 +22,16 @@ mod font;
 mod game;
 mod gpu;
 mod intro;
+mod paste;
 mod place;
 #[cfg(windows)]
 mod play;
 #[cfg_attr(windows, allow(dead_code))]
 mod play_unix;
 mod png;
+mod profiles;
 mod screen;
 mod session;
-// The Settings screen's rows (its screen comes with the next pull request); the start screen
-// reads the renderer row.
-#[allow(dead_code)]
 mod settings;
 
 use std::path::PathBuf;

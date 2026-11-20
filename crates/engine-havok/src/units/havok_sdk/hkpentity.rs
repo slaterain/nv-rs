@@ -353,6 +353,12 @@ pub fn hkp_entity_set_cached_shape_data(e: &mut Engine, this: Ptr, world: Ptr, s
 pub fn hkp_entity_activate(e: &mut Engine, this: Ptr) {
     let me = this.addr();
     let island = e.mem.u32(me + ENTITY_ISLAND);
+    // lStewieAl's Tweaks' row S0199.04 (`MiscCrashFixes`, the jump at `0xC9C1DC` retargeted to the
+    // return): an entity with no simulation island is not activated; the exe goes on to activate the
+    // missing island.
+    if island == 0 && e.stewie(engine_core::extend::stewie::HKP_ENTITY_NULL_ISLAND) {
+        return;
+    }
     if island != 0 && (e.mem.u8(island + 0x26) >> 2) & 3 != 0 {
         return;
     }
@@ -1554,6 +1560,37 @@ mod tests {
         e.mem.set_u32(scene.entity + 0x10, scene.shape);
         e.call(0x00c9_c040, &args![scene.entity, scene.world, scene.shape]);
         assert_eq!(calls_to(&log, ENTITY_BATCH_RECALC_AABB).len(), 1);
+    }
+
+    /// lStewieAl's Tweaks' row S0199.04: an entity with a world and no simulation island. Row off: the
+    /// island is activated through the world (with 0, which the util then reads); row on: nothing
+    /// happens. With an island, the same calls row off and on.
+    #[test]
+    fn s0199_04_an_entity_with_no_island() {
+        let mut ordinary = vec![];
+        for on in [false, true] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::HKP_ENTITY_NULL_ISLAND, on);
+            let entity = e.mem.alloc(0x220);
+            let world = e.mem.alloc(0x400);
+            e.mem.set_u32(entity + 8, world);
+            let log = new_log();
+            record(&mut e, &log, ACTIVATE_ISLAND, 0);
+            record(&mut e, &log, MOTION_SET_DEACTIVATION_FLAGS, 0);
+            e.call(0x00c9_c1d0, &args![entity]);
+            if on {
+                assert!(log.borrow().is_empty());
+            } else {
+                assert_eq!(calls_to(&log, ACTIVATE_ISLAND), vec![vec![world, 0]]);
+            }
+            let island = e.mem.alloc(0x40);
+            e.mem.set_u32(entity + ENTITY_ISLAND, island);
+            log.borrow_mut().clear();
+            e.call(0x00c9_c1d0, &args![entity]);
+            assert_eq!(calls_to(&log, ACTIVATE_ISLAND), vec![vec![world, island]]);
+            ordinary.push(log.borrow().clone());
+        }
+        assert_eq!(ordinary[0], ordinary[1], "row on: the calls of the row off");
     }
 
     #[test]

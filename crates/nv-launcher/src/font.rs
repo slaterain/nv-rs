@@ -209,7 +209,12 @@ impl Font {
                 ..
             } => {
                 let mut pen = x as f32;
+                // Nothing is drawn past the canvas's right edge: a long line stops there.
+                let edge = canvas.width as f32;
                 for c in text.chars() {
+                    if pen >= edge {
+                        break;
+                    }
                     let l = &letters[byte_of(c) as usize];
                     pen += l.leading;
                     let (cx, cy, cw, ch) = l.cell;
@@ -234,6 +239,9 @@ impl Font {
                 let s = *scale as i32;
                 for (col, c) in text.chars().enumerate() {
                     let left = x + col as i32 * PIXEL_CELL.0 as i32 * s;
+                    if left >= canvas.width as i32 {
+                        break;
+                    }
                     for (gy, bits) in glyphs.glyph(c).iter().enumerate() {
                         for gx in 0..5 {
                             if bits & (1 << (4 - gx)) == 0 {

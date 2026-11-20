@@ -4,6 +4,18 @@
 //!
 //! A row is on when the host's row `NV_STEWIE` is on, its own key is not `0`, and Tweaks' key (if
 //! any) reads as a number other than 0 (`GetLongValue`, [`crate::settings::Settings::long`]).
+//!
+//! The rows are five lists, so the four agents building the rest side by side never edit the same
+//! lines: [`ROWS`] (the crash fixes and Engine Optimizations' first row), then share 1a's
+//! ([`world::ROWS`]: the engines and the console), share 1b's ([`forms::ROWS`]: forms, cells,
+//! scripts, saves and sound), share 2's ([`ai::ROWS`]: AI, actors and the
+//! player) and share 3's ([`menus::ROWS`]: menus and the HUD), each in its own file. [`all`] walks
+//! them in that order.
+
+pub mod ai;
+pub mod forms;
+pub mod menus;
+pub mod world;
 
 use crate::settings::Settings;
 use engine_core::extend::stewie;
@@ -25,9 +37,18 @@ pub struct Row {
     pub summary: &'static str,
 }
 
-/// Every row built, in PLAN.md's order. A row's key is `b` and Tweaks' function's name without
-/// its `patch` prefix; a row that is one block of a function holding several (`MenuFixes`) adds
-/// a word for the block after it.
+/// The four lists of rows, in [`all`]'s order.
+pub const LISTS: [&[Row]; 5] = [ROWS, world::ROWS, forms::ROWS, ai::ROWS, menus::ROWS];
+
+/// Every row built: [`ROWS`], then each share's list.
+pub fn all() -> impl Iterator<Item = &'static Row> {
+    LISTS.into_iter().flatten()
+}
+
+/// The crash fixes' rows and Engine Optimizations' first, in PLAN.md's order (each share's list
+/// is in PLAN.md's order too). A row's key is `b` and Tweaks' function's name without its `patch`
+/// prefix; a row that is one block of a function holding several (`MenuFixes`) adds a word for
+/// the block after it.
 pub const ROWS: &[Row] = &[
     Row {
         bit: stewie::UGRIDS_LOAD_NULL_CELL,
@@ -102,6 +123,22 @@ pub const ROWS: &[Row] = &[
         summary: "equipping a Pip-Boy item no longer crashes: the Pip-Boy is reset a moment later (the next frame, or when it opens), not in the middle of the equip",
     },
     Row {
+        bit: stewie::CASINO_INVALID_CHIPS,
+        function: "patchRemoveInvalidCasinoDataChipsInSlotMachineMenu",
+        plan: "S0036",
+        key: "bRemoveInvalidCasinoDataChipsInSlotMachineMenu",
+        tweaks: None,
+        summary: "a casino record whose plugin is gone is removed when a gambling menu opens; the slot machines no longer refuse to open on it",
+    },
+    Row {
+        bit: stewie::PARTICLE_SYSTEM_NULL_DATA,
+        function: "fixNullParticleSystemsCrash",
+        plan: "S0037",
+        key: "bFixNullParticleSystemsCrash",
+        tweaks: None,
+        summary: "a particle system child with no particle data no longer crashes",
+    },
+    Row {
         bit: stewie::EXPLOSION_WATER_NULL_CALL,
         function: "fixExplosionWaterNullCall",
         plan: "S0042",
@@ -124,6 +161,14 @@ pub const ROWS: &[Row] = &[
         key: "bFixGetItemValueCrashForModdedWeapons",
         tweaks: None,
         summary: "a weapon whose mod flags name a mod the weapon no longer has no longer crashes when its value is asked",
+    },
+    Row {
+        bit: stewie::FACE_GEN_NULL_GEOMETRY,
+        function: "patchFixNullFaceGenCrash",
+        plan: "S0048",
+        key: "bFixNullFaceGenCrash",
+        tweaks: None,
+        summary: "a face model with no geometry for its tri file no longer crashes",
     },
     Row {
         bit: stewie::UNRESOLVED_RACE,
@@ -228,6 +273,14 @@ pub const ROWS: &[Row] = &[
         key: "bMemoryLeakFixesPackageTarget",
         tweaks: None,
         summary: "an actor searching for its attacker no longer loses 16 bytes each time",
+    },
+    Row {
+        bit: stewie::SEQUENCE_NULL_OWNER,
+        function: "patchFixNullNifOwnerCrash",
+        plan: "S0108",
+        key: "bFixNullNifOwnerCrash",
+        tweaks: None,
+        summary: "an animation sequence with no owner no longer crashes when it starts",
     },
     Row {
         bit: stewie::PROCESS_ACTIVATE_NULL_PACKAGE,
@@ -358,12 +411,44 @@ pub const ROWS: &[Row] = &[
         summary: "a helmet whose item is gone is not attached instead of crashing; the console names the slot and the actor",
     },
     Row {
+        bit: stewie::ROULETTE_BET_LIST_DOUBLE_FREE,
+        function: "RouletteMenuFixes",
+        plan: "S0196.01",
+        key: "bRouletteMenuFixesBetListDoubleFree",
+        tweaks: None,
+        summary: "closing the roulette table no longer empties its freed bet list a second time",
+    },
+    Row {
+        bit: stewie::ROULETTE_BETS_FREED_ON_CLOSE,
+        function: "RouletteMenuFixes",
+        plan: "S0196.02",
+        key: "bRouletteMenuFixesBetsFreedOnClose",
+        tweaks: None,
+        summary: "the bets still placed when the roulette table closes are freed",
+    },
+    Row {
+        bit: stewie::ROULETTE_BET_FREED_ON_USE,
+        function: "RouletteMenuFixes",
+        plan: "S0196.03",
+        key: "bRouletteMenuFixesBetFreedOnUse",
+        tweaks: None,
+        summary: "each roulette bet is freed once it is settled",
+    },
+    Row {
         bit: stewie::AMMO_ENTRY_GONE,
         function: "MiscCrashFixes",
         plan: "S0199.03",
         key: "bMiscCrashFixesAmmoEntry",
         tweaks: None,
         summary: "an actor whose ammunition entry is taken while it fires (a script on JIP's DecreaseAmmo event) no longer crashes",
+    },
+    Row {
+        bit: stewie::HKP_ENTITY_NULL_ISLAND,
+        function: "MiscCrashFixes",
+        plan: "S0199.04",
+        key: "bMiscCrashFixesEntityActivate",
+        tweaks: None,
+        summary: "a physics body with no simulation island no longer crashes when it is woken",
     },
     Row {
         bit: stewie::NPC_ACTIVATE_NULL_PROCESS,
@@ -380,6 +465,22 @@ pub const ROWS: &[Row] = &[
         key: "bMiscCrashFixesRemoveWorn",
         tweaks: None,
         summary: "taking off a worn item that may not be removed, with no actor given, no longer crashes",
+    },
+    Row {
+        bit: stewie::ADD_REFERENCE_NULL_CELL,
+        function: "MiscCrashFixes",
+        plan: "S0199.07",
+        key: "bMiscCrashFixesAddReference",
+        tweaks: None,
+        summary: "a reference whose cell is gone while it is added no longer crashes",
+    },
+    Row {
+        bit: stewie::COMPANION_STIMPAK_REMOVED_TWICE,
+        function: "MiscCrashFixes",
+        plan: "S0199.08",
+        key: "bMiscCrashFixesCompanionStimpak",
+        tweaks: None,
+        summary: "a stimpak given from the companion wheel is no longer also removed from the companion",
     },
     Row {
         bit: stewie::SHOW_SCENE_GRAPH_NULL,
@@ -404,6 +505,14 @@ pub const ROWS: &[Row] = &[
         key: "bMiscCrashFixesRegenAmmo",
         tweaks: None,
         summary: "the player's regenerating ammunition with no ammunition type equipped no longer crashes",
+    },
+    Row {
+        bit: stewie::LIST_BOX_NULL_NAME,
+        function: "MiscCrashFixes",
+        plan: "S0199.12",
+        key: "bMiscCrashFixesListBoxName",
+        tweaks: None,
+        summary: "an item with no name part in an inventory list no longer crashes",
     },
     Row {
         bit: stewie::EQUIP_AMMO_NULL_PROCESS,
@@ -464,8 +573,7 @@ impl Keys {
             }
         };
         let as_tweaks = flag(AS_TWEAKS_KEY);
-        let rows: Vec<(&'static str, bool)> = ROWS
-            .iter()
+        let rows: Vec<(&'static str, bool)> = all()
             .filter_map(|r| flag(r.key).map(|on| (r.key, on)))
             .collect();
         keys.as_tweaks = as_tweaks.unwrap_or(false);
