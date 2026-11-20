@@ -534,6 +534,8 @@ pub struct Unit {
     pub public: HashSet<String>,
     /// `.vcall(`s left out as test code (a test file, or a `#[cfg(test)]` item's span).
     pub left_out: usize,
+    /// What became of each `.vcall(` of the game code (by the position after its bracket).
+    pub outcome: BTreeMap<usize, Outcome>,
     pub sites: Vec<Site>,
     /// Calls whose slot or list is not written in place: line, reason and the call on one line.
     pub unread: Vec<(usize, &'static str, String)>,
@@ -544,6 +546,17 @@ pub struct Unit {
     pub direct: Vec<Direct>,
     /// `.vcall`s whose slot the unit's constants do not give.
     pub pending: Vec<Pending>,
+}
+
+/// What became of one `.vcall(`: read (a site, or a wrapper's call read at its callers), listed
+/// unread, waiting for the tree's constants or a wrapper's callers, or dropped without a word
+/// (a gap in the reader: the summary says so).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    Read,
+    Unread,
+    Pending,
+    Dropped,
 }
 
 /// A direct call `.call(CALLEE, &args![first, ..])`.
@@ -921,13 +934,23 @@ fn enclosing_block(text: &str, at: usize) -> Option<(usize, usize)> {
 /// The game code of a file: its text with the test code blanked (all of it for a test file),
 /// and the number of `.vcall(`s left out.
 pub fn game_code(path: &str, text: &str, mounted_for_tests: bool) -> (String, usize) {
-    let calls = |t: &str| t.matches(".vcall(").count();
+    let calls = vcall_positions(text);
     if mounted_for_tests || test_file(path) {
-        return (blank(text, &[(0, text.len())]), calls(text));
+        return (blank(text, &[(0, text.len())]), calls.len());
     }
     let (spans, _, _) = test_spans(text);
-    let left_out = spans.iter().map(|&(s, e)| calls(&text[s..e])).sum();
+    let left_out = calls.iter().filter(|&&at| in_spans(&spans, at)).count();
     (blank(text, &spans), left_out)
+}
+
+/// Where each `.vcall(` of `text` outside literals and comments is: every one is read, listed
+/// unread or left out as test code (the summary counts them).
+pub fn vcall_positions(text: &str) -> Vec<usize> {
+    let literals = literal_spans(text);
+    text.match_indices(".vcall(")
+        .map(|(at, _)| at)
+        .filter(|&at| !in_spans(&literals, at))
+        .collect()
 }
 
 /// A `u32` literal: hex or decimal, with underscores and an optional `u32` or `usize` suffix.
@@ -1594,6 +1617,11 @@ pub struct Wrapper {
     pub public: bool,
     /// A method (`self` first): called as `x.name(..)` or `Type::name(x, ..)`.
     pub method: bool,
+    /// Its parameters (`self` left out): a call of the name with another count is another
+    /// function, or a form the check does not read.
+    pub params: usize,
+    /// A closure (called only in the function that binds it).
+    pub closure: bool,
 }
 
 /// A `.vcall` whose slot the unit's own constants do not give, or whose list is a parameter.
@@ -1606,6 +1634,8 @@ pub struct Pending {
     pub local: Names,
     /// The list is handed on from a parameter (the wrapper's `list`).
     pub forwards_list: bool,
+    /// Where the call is (its [`Unit::outcome`] key).
+    pub at: usize,
     pub wrapper: Option<Wrapper>,
 }
 
@@ -1731,10 +1761,14 @@ fn wrapper_of(
         return None;
     }
     // A closure is called only in its own function, so only its own file.
-    let (function, params, public, method, body) = match closure_of(text, scope, open, &wanted) {
-        Some((closure, params, body)) => (closure, params, false, false, body),
-        None => signature(text, scope)?,
-    };
+    let (function, params, public, method, body, closure) =
+        match closure_of(text, scope, open, &wanted) {
+            Some((closure, params, body)) => (closure, params, false, false, body, true),
+            None => {
+                let (name, params, public, method, body) = signature(text, scope)?;
+                (name, params, public, method, body, false)
+            }
+        };
     let region = &text[body.min(open)..open];
     let param = |name: &str| {
         params
@@ -1756,6 +1790,8 @@ fn wrapper_of(
         object: param(object),
         public,
         method,
+        params: params.len(),
+        closure,
     })
 }
 
@@ -2068,19 +2104,48 @@ fn read_code(code: &str) -> Unit {
         if in_spans(&literals, from - ".vcall(".len()) {
             continue;
         }
+        let before = (unit.sites.len(), unit.pending.len(), unit.unread.len());
+        read_vcall(code, open, &own, &mut unit);
+        let outcome = if unit.sites.len() > before.0 {
+            Outcome::Read
+        } else if unit.pending.len() > before.1 {
+            Outcome::Pending
+        } else if unit.unread.len() > before.2 {
+            Outcome::Unread
+        } else {
+            Outcome::Dropped
+        };
+        unit.outcome.insert(open, outcome);
+    }
+    unit.constants = own.values;
+    unit.opaque = own.opaque;
+    read_two_step_calls(code, &mut unit);
+    unit
+}
+
+/// Reads the `.vcall(` whose arguments start at `code[open]` into `unit`: one or more sites,
+/// pending calls, or an unread line.
+fn read_vcall(code: &str, open: usize, own: &Names, unit: &mut Unit) {
+    {
         let line = 1 + code[..open].matches('\n').count();
         let Some(call) = inside(code, open) else {
-            continue;
+            let rest = code[open..].lines().next().unwrap_or("");
+            unit.unread.push((
+                line,
+                "the call's brackets are not closed",
+                format!(".vcall({rest}"),
+            ));
+            return;
         };
         let parts = pieces(call);
         let shown = format!(".vcall({})", parts.join(", "));
         if parts.len() != 3 {
             unit.unread.push((line, "not (object, slot, list)", shown));
-            continue;
+            return;
         }
         let (caller, scope, function) = function_so_far(code, open);
-        let local = local_constants(function, &own);
-        let consts = Chain(vec![&local, &own]);
+        let local = local_constants(function, own);
+        let consts = Chain(vec![&local, own]);
         let (mut counts, list_name) = match list_of(&parts[2], function, &consts) {
             List::Words(n) => (vec![n], None),
             List::Name(name) => (Vec::new(), Some(name)),
@@ -2089,7 +2154,7 @@ fn read_code(code: &str) -> Unit {
                 None => {
                     unit.unread
                         .push((line, "the list is not written in place", shown));
-                    continue;
+                    return;
                 }
             },
         };
@@ -2117,7 +2182,7 @@ fn read_code(code: &str) -> Unit {
                         "the slot's name is bound in a block that ends before the call, or changed",
                         site.text,
                     ));
-                    continue;
+                    return;
                 }
             }
         }
@@ -2142,7 +2207,7 @@ fn read_code(code: &str) -> Unit {
             } else {
                 unit.unread
                     .push((line, "the list is not written in place", site.text));
-                continue;
+                return;
             }
         }
         if let Some(w) = wrapper.as_mut().filter(|_| !forwards) {
@@ -2163,15 +2228,12 @@ fn read_code(code: &str) -> Unit {
                     slot: slot.clone(),
                     local: local.clone(),
                     forwards_list: forwards,
+                    at: open,
                     wrapper: wrapper.clone(),
                 }),
             }
         }
     }
-    unit.constants = own.values;
-    unit.opaque = own.opaque;
-    read_two_step_calls(code, &mut unit);
-    unit
 }
 
 /// A call written in two steps, `let table = e.mem.u32(object); let target =
@@ -2620,6 +2682,102 @@ pub struct WrapperCount {
     /// The wrappers' callers read (each a site per slot), and not read.
     pub read: usize,
     pub not: usize,
+    /// Calls of a wrapper's name that are plainly another function (defined by the caller's
+    /// file, or neither reaching the wrapper nor fitting its parameters).
+    pub other: usize,
+}
+
+/// The `.vcall(`s of the source outside literals and comments, and what became of them: read
+/// (a site, or a wrapper's call read at its callers), listed unread, left out as test code. A
+/// call none of these took is a gap in the reader.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CallCount {
+    pub total: usize,
+    pub read: usize,
+    pub unread: usize,
+    pub left_out: usize,
+}
+
+impl CallCount {
+    /// The calls none of the three took.
+    pub fn gap(&self) -> usize {
+        self.total
+            .saturating_sub(self.read + self.unread + self.left_out)
+    }
+}
+
+impl std::fmt::Display for CallCount {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} `.vcall(`s in the source: {} read, {} not read, {} left out as test code",
+            self.total, self.read, self.unread, self.left_out
+        )?;
+        match self.gap() {
+            0 if self.read + self.unread + self.left_out == self.total => Ok(()),
+            0 => write!(f, " (MORE than the source: a reader fault)"),
+            n => write!(f, " ({n} NOT ACCOUNTED FOR: a gap in the reader)"),
+        }
+    }
+}
+
+/// [`CallCount`] of read units, `total` the `.vcall(`s of their sources ([`vcall_positions`]).
+pub fn call_count(units: &[(String, Unit)], total: usize) -> CallCount {
+    let mut count = CallCount {
+        total,
+        ..CallCount::default()
+    };
+    for (_, unit) in units {
+        count.left_out += unit.left_out;
+        for outcome in unit.outcome.values() {
+            match outcome {
+                Outcome::Read => count.read += 1,
+                Outcome::Unread => count.unread += 1,
+                Outcome::Pending | Outcome::Dropped => {}
+            }
+        }
+    }
+    count
+}
+
+/// The folder of the modules a file declares (`a/` for `a.rs`, its own folder for `mod.rs`,
+/// `lib.rs`, `main.rs`).
+fn module_dir(rel: &str) -> String {
+    let (dir, file) = rel.rsplit_once('/').unwrap_or(("", rel));
+    let stem = file.strip_suffix(".rs").unwrap_or(file);
+    match (matches!(stem, "mod" | "lib" | "main"), dir.is_empty()) {
+        (true, _) => dir.to_string(),
+        (false, true) => stem.to_string(),
+        (false, false) => format!("{dir}/{stem}"),
+    }
+}
+
+/// Whether the file `rel` is a module below the file `parent` (it sees `parent`'s private
+/// items, as `super::name`).
+fn below(rel: &str, parent: &str) -> bool {
+    let dir = module_dir(parent);
+    rel != parent && (dir.is_empty() || rel.starts_with(&format!("{dir}/")))
+}
+
+/// How many functions or closures named `name` `code` defines.
+fn definitions(code: &str, name: &str) -> usize {
+    let functions = [format!("fn {name}("), format!("fn {name}<")]
+        .iter()
+        .map(|p| code.matches(p.as_str()).count())
+        .sum::<usize>();
+    let closures = ["let ", "let mut "]
+        .iter()
+        .map(|l| {
+            code.match_indices(&format!("{l}{name}"))
+                .filter(|(at, m)| {
+                    let rest = code[at + m.len()..].trim_start();
+                    let rest = rest.strip_prefix('=').map(str::trim_start);
+                    rest.is_some_and(|r| r.starts_with('|') || r.starts_with("move"))
+                })
+                .count()
+        })
+        .sum::<usize>();
+    functions + closures
 }
 
 /// Wrappers handed on from caller to caller at most this deep.
@@ -2682,6 +2840,7 @@ fn resolve_pending(units: &mut [(String, Unit)], codes: &[String]) -> WrapperCou
     let mut added: Vec<(usize, Site)> = Vec::new();
     let mut unread: Vec<(usize, (usize, &'static str, String))> = Vec::new();
     let mut level: Vec<(usize, Site, Wrapper)> = Vec::new();
+    let mut outcomes: Vec<(usize, usize, Outcome)> = Vec::new();
     let pending: Vec<(usize, Vec<Pending>)> = units
         .iter_mut()
         .enumerate()
@@ -2696,16 +2855,20 @@ fn resolve_pending(units: &mut [(String, Unit)], codes: &[String]) -> WrapperCou
             let slots = slot_values(&pending.slot, &consts);
             let reason = slot_reason(&pending.slot, &consts, false);
             let site = pending.site;
+            // A wrapper's call counts as read: its callers are checked (each one not read is
+            // listed there).
+            let mut outcome = Outcome::Read;
             match pending.wrapper {
                 Some(mut wrapper) if pending.forwards_list => {
-                    if wrapper.slot.is_none() {
-                        if slots.is_empty() {
-                            unread.push((i, (site.line, reason, site.text)));
-                            continue;
+                    if wrapper.slot.is_none() && slots.is_empty() {
+                        unread.push((i, (site.line, reason, site.text)));
+                        outcome = Outcome::Unread;
+                    } else {
+                        if wrapper.slot.is_none() {
+                            wrapper.fixed = slots;
                         }
-                        wrapper.fixed = slots;
+                        level.push((i, site, wrapper));
                     }
-                    level.push((i, site, wrapper));
                 }
                 wrapper => {
                     if !slots.is_empty() {
@@ -2718,9 +2881,11 @@ fn resolve_pending(units: &mut [(String, Unit)], codes: &[String]) -> WrapperCou
                         level.push((i, site, wrapper));
                     } else {
                         unread.push((i, (site.line, reason, site.text)));
+                        outcome = Outcome::Unread;
                     }
                 }
             }
+            outcomes.push((i, pending.at, outcome));
         }
     }
     let mut count = WrapperCount::default();
@@ -2757,30 +2922,52 @@ fn resolve_pending(units: &mut [(String, Unit)], codes: &[String]) -> WrapperCou
             for (i, at, args, kind) in &called[&wrapper.name] {
                 let (i, at) = (*i, *at);
                 let (caller_rel, unit) = &units[i];
-                let reaches = if wrapper.public {
-                    crate_of(caller_rel) == krate
-                } else {
-                    i == wi
-                };
                 // A method's receiver is not among the arguments of `x.name(..)` and is the first
-                // of `Type::name(x, ..)`; a free function is not called as `x.name(..)`.
+                // of `Type::name(x, ..)`; Rust calls no free function as `x.name(..)` and no
+                // method as `name(..)`, so those are other functions.
                 let shift = match (wrapper.method, kind) {
                     (true, CallKind::Method) | (false, CallKind::Plain | CallKind::Path) => 0,
                     (true, CallKind::Path) => 1,
                     _ => continue,
                 };
-                if !reaches {
+                let code = &codes[i];
+                let line = 1 + code[..at].matches('\n').count();
+                let shown = format!("{}({}) -> {}", wrapper.name, args.join(", "), site.text);
+                // A `pub` function is seen in its crate; a private one in its file and the
+                // modules below it (`super::name(..)`); a closure in its own file.
+                let reaches = if wrapper.public {
+                    crate_of(caller_rel) == krate
+                } else {
+                    i == wi || (!wrapper.closure && below(caller_rel, &units[wi].0))
+                };
+                let fits = args.len() == wrapper.params + shift;
+                if !reaches || !fits {
+                    // Plainly another function of that name: one the caller's file defines
+                    // itself (a second one in the wrapper's own file), or a call that neither
+                    // reaches the wrapper nor fits it.
+                    let others = definitions(code, &wrapper.name) > usize::from(i == wi);
+                    if others || (!reaches && !fits) {
+                        count.other += 1;
+                    } else {
+                        not += 1;
+                        unread.push((
+                            i,
+                            (
+                                line,
+                                "a wrapper's caller in another file or crate, or called in \
+                                 another form",
+                                shown,
+                            ),
+                        ));
+                    }
                     continue;
                 }
                 let arg = |k: usize| args.get(k + shift).map_or("", String::as_str);
-                let code = &codes[i];
                 let (caller, scope, function) = function_so_far(code, at);
                 let own = Own(unit);
                 let local = local_constants(function, &own);
                 let [public, all] = by_crate.get(&crate_of(caller_rel)).unwrap_or(&empty);
                 let consts = Chain(vec![&local, &own, public, all, &global]);
-                let line = 1 + code[..at].matches('\n').count();
-                let shown = format!("{}({}) -> {}", wrapper.name, args.join(", "), site.text);
                 let mut not_read = |reason: &'static str, shown: String| {
                     unread.push((i, (line, reason, shown)));
                 };
@@ -2929,6 +3116,13 @@ fn resolve_pending(units: &mut [(String, Unit)], codes: &[String]) -> WrapperCou
     for (i, site) in added {
         units[i].1.sites.push(site);
     }
+    // A call with several pending counts is read when one of them is.
+    for (i, at, outcome) in outcomes {
+        let entry = units[i].1.outcome.entry(at).or_insert(outcome);
+        if *entry == Outcome::Pending || outcome == Outcome::Read {
+            *entry = outcome;
+        }
+    }
     for (i, entry) in unread {
         units[i].1.unread.push(entry);
     }
@@ -3001,9 +3195,11 @@ pub fn run(
     let mut codes = Vec::new();
     let mut platform = SlotCounts::default();
     let mut test_files = 0usize;
+    let mut total_calls = 0usize;
     for (rel, text) in sources {
         let mounted = test_paths.contains(&rel) || test_dirs.iter().any(|d| rel.starts_with(d));
         test_files += usize::from(mounted || test_file(&rel));
+        total_calls += vcall_positions(&text).len();
         let (code, left_out) = game_code(&rel, &text, mounted);
         drop(text);
         if rel.starts_with("engine-platform/") {
@@ -3082,18 +3278,22 @@ pub fn run(
         }
     }
     let by_kind: Vec<String> = kinds.iter().map(|(k, n)| format!("{n} {k}")).collect();
+    let calls = call_count(&units, total_calls);
     let summary = format!(
         "{} tables with {slots} slots ({unread_slots} not read) from {} relocated words; \
          {sites} virtual calls read ({own_checked} against the unit's own tables; {} wrappers, \
          {} of them handed their list, whose callers gave {} calls read and {} not), {unread} \
          not read (`--unread` lists them, one line per wrapper and per caller not read); \
-         {left_out} calls left out as test code ({test_files} test files); {} hits ({})",
+         {left_out} calls left out as test code ({test_files} test files); {} calls of \
+         wrappers' names that are plainly other functions; {}; {} hits ({})",
         tables.len(),
         image.relocated.len(),
         wrappers.wrappers,
         wrappers.lists,
         wrappers.read,
         wrappers.not,
+        wrappers.other,
+        calls,
         lines.iter().filter(|l| !l.starts_with("unread\t")).count(),
         by_kind.join(", ")
     );
@@ -3450,6 +3650,8 @@ mod tests {
                 object: None,
                 public: false,
                 method: false,
+                params: 2,
+                closure: true,
             })
         );
         let mut units = vec![("k/d.rs".to_string(), unit)];
@@ -3490,6 +3692,8 @@ fn user(e: &mut Engine, d: u32, n: u32) {
                 object: Some(1),
                 public: true,
                 method: false,
+                params: 4,
+                closure: false,
             })
         );
         assert_eq!(resolve_pending(&mut units, &texts).wrappers, 1);
@@ -3516,8 +3720,14 @@ fn user(e: &mut Engine, d: u32, n: u32) {
             units[2].1.sites.is_empty(),
             "another crate's `set` is not this one"
         );
-        // A private wrapper is called only from its own file: a same-named call elsewhere in
-        // the crate is another function.
+        // Another crate's calls of `set` are not read as this one's, but they are listed.
+        let elsewhere = "a wrapper's caller in another file or crate, or called in another form";
+        assert_eq!(
+            reasons(&units[2].1),
+            [(3, elsewhere), (4, elsewhere), (5, elsewhere)]
+        );
+        // A private wrapper is seen only in its own file (and the modules below it): a
+        // same-named call in a sibling file is not read, and is listed.
         let private =
             "fn put(e: &mut Engine, o: u32, slot: u32) {\n    e.vcall(o, slot, &args![]);\n}";
         let elsewhere = "fn g(e: &mut Engine, d: u32) {\n    put(e, d, 9);\n}";
@@ -3527,6 +3737,16 @@ fn user(e: &mut Engine, d: u32, n: u32) {
         ];
         resolve_pending(&mut units, &[private.to_string(), elsewhere.to_string()]);
         assert!(units[1].1.sites.is_empty());
+        assert_eq!(
+            reasons(&units[1].1),
+            [(
+                2,
+                "a wrapper's caller in another file or crate, or called in another form"
+            )]
+        );
+        // With no caller of its name anywhere, the wrapper says so.
+        let mut units = vec![("k/p.rs".to_string(), read_unit("k/p.rs", private))];
+        resolve_pending(&mut units, &[private.to_string()]);
         assert_eq!(
             reasons(&units[0].1),
             [(2, "a wrapper's slot, and no caller found")]
@@ -3936,6 +4156,8 @@ fn on_user(e: &mut Engine, this: Ptr) {
                 object: None,
                 public: false,
                 method: false,
+                params: 5,
+                closure: false,
             })
         );
         let count = resolve_pending(&mut units, &[text.to_string()]);
@@ -3945,7 +4167,8 @@ fn on_user(e: &mut Engine, this: Ptr) {
                 wrappers: 2,
                 lists: 2,
                 read: 5,
-                not: 1
+                not: 1,
+                other: 0,
             }
         );
         let sites: Vec<(usize, u32, u32)> = units[0]
@@ -4158,5 +4381,117 @@ fn d(e: &mut Engine, o: u32) {
         let consts = HashMap::from([("A".to_string(), 4u32)]);
         assert!(slot_values("match k { 1 => 4, _ => y }", &consts).is_empty());
         assert_eq!(slot_values("match k { 1 => 4, _ => A }", &consts), [4, 4]);
+    }
+
+    /// A wrapper's caller the check reads (a private wrapper called from a module below it
+    /// through `super::`), and the ones it lists: a caller in a file the wrapper is not seen
+    /// from, a call that does not fit the wrapper's parameters. A file with its own function
+    /// of that name calls that one.
+    #[test]
+    fn wrapper_callers_elsewhere_are_read_or_listed() {
+        let files = [
+            (
+                "k/src/a.rs",
+                "fn com(e: &mut Engine, this: u32, slot: u32, words: &[u32]) -> u32 {\n    e.vcall(this, slot, words).u32()\n}\n",
+            ),
+            (
+                "k/src/a/child.rs",
+                "fn g(e: &mut Engine, o: u32, a: u32) {\n    super::com(e, o, 0x4c, &[a]);\n}\n",
+            ),
+            (
+                "k/src/b.rs",
+                "fn h(e: &mut Engine, o: u32) {\n    com(e, o, 0x4c, &[1]);\n}\n",
+            ),
+            (
+                "k/src/c.rs",
+                "fn com(e: &mut Engine) {}\nfn i(e: &mut Engine, o: u32) {\n    com(e, o, 0x4c, &[1]);\n}\n",
+            ),
+            (
+                "k/src/a/form.rs",
+                "fn j(e: &mut Engine, o: u32) {\n    super::com(e, o);\n}\n",
+            ),
+        ];
+        let mut units: Vec<(String, Unit)> = files
+            .iter()
+            .map(|(rel, text)| (rel.to_string(), read_unit(rel, text)))
+            .collect();
+        let texts: Vec<String> = files.iter().map(|(_, t)| t.to_string()).collect();
+        let count = resolve_pending(&mut units, &texts);
+        assert_eq!((count.read, count.not, count.other), (1, 2, 1));
+        // The child's call, one word short of anything at slot 0x4c: read, and a hit.
+        let child: Vec<(usize, u32, u32)> = units[1]
+            .1
+            .sites
+            .iter()
+            .map(|s| (s.line, s.slot, s.words))
+            .collect();
+        assert_eq!(child, [(2, 0x4c, 2)]);
+        let (words, anywhere) = one_table();
+        let hits = check_unit(
+            &units[1].1,
+            &words,
+            &anywhere,
+            &SlotCounts::default(),
+            &HashMap::new(),
+        );
+        assert_eq!(hits.len(), 1);
+        let listed = |u: &Unit| u.unread.iter().map(|r| (r.0, r.1)).collect::<Vec<_>>();
+        let elsewhere = "a wrapper's caller in another file or crate, or called in another form";
+        assert_eq!(listed(&units[2].1), [(2, elsewhere)]);
+        assert!(listed(&units[3].1).is_empty() && units[3].1.sites.is_empty());
+        assert_eq!(listed(&units[4].1), [(2, elsewhere)]);
+    }
+
+    /// Every `.vcall(` of the source outside literals is read, listed unread or left out as
+    /// test code: the three add up to the total, so a call dropped without a word shows as a
+    /// gap. A call whose brackets do not close is listed.
+    #[test]
+    fn every_call_is_read_listed_or_left_out() {
+        let text = "fn w(e: &mut Engine, o: u32, slot: u32) {
+    e.vcall(o, slot, &args![]);
+}
+fn f(e: &mut Engine, o: u32, s: u32) {
+    w(e, o, 8);
+    e.vcall(o, 4, &args![]);
+    let t = e.mem.u32(s);
+    e.vcall(o, t, &args![]);
+    let x = \".vcall(o, 0, &[])\";
+    e.vcall(o, 4, &args![1, 2, 3]);
+}
+#[cfg(test)]
+mod tests {
+    fn t(e: &mut Engine) { e.vcall(1, 0, &args![]); }
+}
+fn broken(e: &mut Engine) { e.vcall(1, 0, &args![2 }
+";
+        let (code, left_out) = game_code("k/x.rs", text, false);
+        let mut unit = read_code(&code);
+        unit.left_out = left_out;
+        let mut units = vec![("k/x.rs".to_string(), unit)];
+        resolve_pending(&mut units, &[code]);
+        let count = call_count(&units, vcall_positions(text).len());
+        assert_eq!(
+            count,
+            CallCount {
+                total: 6,
+                read: 3,
+                unread: 2,
+                left_out: 1
+            }
+        );
+        assert_eq!(count.gap(), 0);
+        assert!(!count.to_string().contains("NOT ACCOUNTED"), "{count}");
+        let reasons: Vec<&str> = units[0].1.unread.iter().map(|r| r.1).collect();
+        assert!(
+            reasons.contains(&"the call's brackets are not closed"),
+            "{reasons:?}"
+        );
+        // A call no path took is a gap, and the summary says so.
+        if let Some(outcome) = units[0].1.outcome.values_mut().next() {
+            *outcome = Outcome::Dropped;
+        }
+        let count = call_count(&units, 6);
+        assert_eq!(count.gap(), 1);
+        assert!(count.to_string().contains("1 NOT ACCOUNTED FOR"), "{count}");
     }
 }
