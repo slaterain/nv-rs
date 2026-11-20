@@ -5,6 +5,9 @@
 
 use engine_core::world_drawn::{depth_clear_skipped_installed, world_drawn_installed};
 
+// A program of its own: no engine crates above the core (it makes no engine).
+engine_core::assemble!();
+
 #[test]
 fn the_sun_shadows_install_the_skipped_clears_point() {
     assert!(!depth_clear_skipped_installed());
