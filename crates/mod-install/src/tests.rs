@@ -1088,16 +1088,18 @@ fn only_fsops_changes_the_disk() {
         }
         sources.push((name, std::fs::read_to_string(&path).unwrap(), &[]));
     }
-    // The `--install-mods` code of nv-rs's program and of Play.exe (Windows): only the function
-    // that starts the chooser. Play.exe's starts nv-rs's program, so it may name `Command::new`.
+    // The `--install-mods` code of nv-rs's program and of Play.exe (Windows; the launcher's
+    // play/mod.rs): only the function that starts the chooser. Play.exe's starts nv-rs's
+    // program, so it may name `Command::new`.
     let root = crate_dir.join("..").join("..");
     for (file, allowed) in [
         (root.join("viewer").join("src").join("main.rs"), &[][..]),
         (
-            root.join("scripts")
-                .join("launcher")
+            root.join("crates")
+                .join("nv-launcher")
                 .join("src")
-                .join("main.rs"),
+                .join("play")
+                .join("mod.rs"),
             &["Command::new"][..],
         ),
     ] {

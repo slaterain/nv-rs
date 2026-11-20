@@ -11,7 +11,7 @@
 # moves settings.ini into both profiles' files at its next start, its lines over what the files say,
 # and renames it settings.ini.migrated.
 #
-# Test hooks (scripts/launcher's tests): NV_RS_NO_WINDOWS=1 saves without showing the window, and
+# Test hooks (crates/nv-launcher's tests): NV_RS_NO_WINDOWS=1 saves without showing the window, and
 # NV_RS_SETTINGS_CHOOSE="Name=Value;Name=Value" (settings.ini's names) are the choices made.
 
 # No progress records: with its output redirected, Windows PowerShell writes them to the error stream.
@@ -57,7 +57,7 @@ function Get-IniValue($text, $section, $key) {
 }
 
 # Whether a Fallout.ini's text has one of nv-rs's sections, as Play.exe looks for them
-# (scripts/launcher game_ini.rs has_sections).
+# (game_profile game_ini.rs has_sections).
 $ours = @('nv-rs General', 'nv-rs Display', 'nv-rs Threads', 'nv-rs Fixes')
 function Test-Sections($text) {
     foreach ($line in ($text -split "`n")) {
@@ -67,7 +67,7 @@ function Test-Sections($text) {
     $false
 }
 
-# The text with key=value in section, as Play.exe sets it (scripts/launcher game_ini.rs set_key): the
+# The text with key=value in section, as Play.exe sets it (game_profile game_ini.rs set_key): the
 # key's value replaced where it stands; else a ;key= line of the section turned into the key; else the
 # line added under the section's heading; else the section added at the end. Line ends stay.
 function Set-IniKey($text, $section, $key, $value) {
@@ -242,7 +242,7 @@ function New-Combo($items, $selected) {
 # Who draws the game: Vulkan (wgpu; Direct3D 12 on a card without Vulkan), the default, or the original's
 # Direct3D 9, the fallback if a game draws wrongly or stops on Vulkan. A file with no sRenderer line (or one that
 # chooses nothing) shows the game's default. This 'vulkan' is the host table's default for sRenderer
-# (crates/host/data/game_ini.tsv): scripts/launcher's test settings_cmd_shows_the_tables_renderer_default
+# (crates/host/data/game_ini.tsv): crates/nv-launcher's test settings_cmd_shows_the_tables_renderer_default
 # compares the two.
 $vulkan = 'Vulkan (recommended)'
 $d3d9 = 'Direct3D 9 (the original''s)'
@@ -250,7 +250,7 @@ $rd = New-Combo @($vulkan, $d3d9) $(if ((Get-Setting 'Renderer' 'vulkan').Trim()
 Add-Row 'Renderer' $rd
 # A file with no bBorderless line (or one that chooses nothing) starts as the game's default does,
 # borderless, so that is what is shown. This '1' is the host table's default for bBorderless
-# (crates/host/data/game_ini.tsv): scripts/launcher's test
+# (crates/host/data/game_ini.tsv): crates/nv-launcher's test
 # settings_cmd_shows_the_tables_borderless_default compares the two.
 $mode = New-Combo @('Borderless fullscreen', 'Window') $(if ((Get-Setting 'Borderless' '1') -eq '0') { 'Window' } else { 'Borderless fullscreen' })
 Add-Row 'Display mode' $mode
@@ -274,7 +274,7 @@ $ml = New-Combo @('No limit', '30', '60', '90', '120', '144', '165', '240') $(if
 Add-Row 'Frame rate limit in menus' $ml
 # The frame-rate counter in the top-right corner from the start, or hidden (the default); F11 in the
 # game shows or hides it either way (Vulkan only). This '0' is the host table's default for bShowFrameRate
-# (crates/host/data/game_ini.tsv): scripts/launcher's test settings_cmd_shows_the_tables_frame_rate_default
+# (crates/host/data/game_ini.tsv): crates/nv-launcher's test settings_cmd_shows_the_tables_frame_rate_default
 # compares the two.
 $fpsHidden = 'Hidden (F11 shows it)'
 $fpsShown = 'Shown (F11 hides it)'

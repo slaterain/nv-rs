@@ -205,7 +205,7 @@ Play.exe sets these for every run; set them by hand only to run `nv-viewer` with
 | `NV_REPORT_DIR=DIR`, `NV_REPORT_LOG=FILE` | F12 in the game's window makes `DIR\NNN\` with the frame, the end of FILE and a `note.txt` for the player (`crates/engine-platform/src/d3d9real.rs`) | no F12 report |
 | `NV_SETTINGS=FILE` | The settings file | `settings.ini` beside the program or in the folder above it |
 | `NV_RS_PROFILE=game` or `mods` | Linux and macOS: the profile play.sh plays in (`./play.sh --mods`: `mods`), whose Documents and AppData folders inside nv-rs's own folder the game is given (`<own>/game/...` or `<own>/mods/...`, so saves and settings made with mods stay apart; `engine-platform` machine_table::profile). Windows' Play.exe lays out `userdata\game` and `userdata\mods` itself. Not the profiler: that is `NV_PROFILE`, a test's variable, which makes a play run a test (#763) | `game` |
-| `NV_RS_GAME`, `NV_RS_REAL_DOCUMENTS`, `NV_RS_SYSTEM_FOLDER`, `NV_RS_NO_STORES`, `NV_RS_NO_SHORT_PATHS`, `NV_RS_NO_WINDOWS`, `NV_RS_SETTINGS_CHOOSE` | The launcher's own test hooks: the game folder, where the player's Documents are read from, the system folder, no look in game stores, no short paths, no windows shown (`scripts/launcher`; `NV_RS_NO_WINDOWS` is also read in `host/save_out.rs`, and makes Settings.ps1 save without its window, with `NV_RS_SETTINGS_CHOOSE`'s `Name=Value;...` as the choices) | the player's own folders, windows shown |
+| `NV_RS_GAME`, `NV_RS_REAL_DOCUMENTS`, `NV_RS_SYSTEM_FOLDER`, `NV_RS_NO_STORES`, `NV_RS_NO_SHORT_PATHS`, `NV_RS_NO_WINDOWS`, `NV_RS_SETTINGS_CHOOSE` | The launcher's own test hooks: the game folder, where the player's Documents are read from, the system folder, no look in game stores, no short paths, no windows shown (`crates/nv-launcher`; `NV_RS_NO_WINDOWS` is also read in `host/save_out.rs`, and makes Settings.ps1 save without its window, with `NV_RS_SETTINGS_CHOOSE`'s `Name=Value;...` as the choices) | the player's own folders, windows shown |
 
 ### 4. Tests and diagnostics
 
@@ -279,16 +279,16 @@ The feature is settled as the default. The variable only turns it off, for a com
 ## Packages
 
 `scripts/package-playtest.ps1` builds the Windows preview: one ZIP of `Play.exe`
-(`scripts/launcher`), `app\FalloutNV.exe` (nv-viewer `--release` under that name), the table tools
+(`crates/nv-launcher`, its `nv-rs` program under that name), `app\FalloutNV.exe` (nv-viewer `--release` under that name), the table tools
 and `distribution/`. docs/MAINTAINING.md lists what is in it and why. The first one, `preview-2026-11-07.2`, is on
 GitHub Releases; the packages there from before 2026-11-03 are of the removed viewer.
 
-`Play.exe` does what the steps above do by hand, on a PC with nothing but the game:
+`Play.exe` opens the launcher's terminal window (the start screen: `> Play`, `> Play with mods` when there are mods, `> Exit`) and its Play does what the steps above do by hand, on a PC with nothing but the game; every message and question is in that window:
 
 - **The game:** `--game`, the folder it used last time, then Steam (registry, `libraryfolders.vdf`,
   `appmanifest_22380.acf`), GOG (registry), Epic (`.item` manifests) and the game's installer's
-  registry key, all read only, then a folder picker. `app\FalloutNV.exe --check` makes the same check
-  of the game's program the game's start-up makes, so a refusal is said in a window before anything runs.
+  registry key, all read only, then the folder typed at the prompt or dropped onto the window. `app\FalloutNV.exe --check` makes the same check
+  of the game's program the game's start-up makes, so a refusal is said in the launcher before anything runs.
 - **The folders:** everything in `userdata\`: the game's Documents and AppData (one set per way of
   playing, `game` and `mods`), the tables (`machine`), `logs` and `reports`; an older preview's
   `settings.ini` is moved into the two profiles' files once (`settings.ini.migrated`). The table's
