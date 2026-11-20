@@ -1033,6 +1033,7 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
         ),
         ("S0140", "bFixPatrolMissingNullCheck", Row::at(CRASH, 7)),
         ("S0150", "bFixMissingAnimNullCheck", Row::at(CRASH, 22)),
+        ("S0155", "bNullAudioCrash", Row::at(CRASH, 65)),
         ("S0169", "bFixRareNullTeleportDoorCrash", Row::at(CRASH, 8)),
         (
             "S0172",
@@ -1104,6 +1105,7 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
             "bEquipAmmoOnNullBaseProcessCrashFix",
             Row::at(CRASH, 27),
         ),
+        ("S0225", "bSamplerStateLeakFix", Row::at(CRASH, 66)),
         ("S0881", "bFixSavingNullCellCrash", Row::at(CRASH, 10)),
         (
             "S1016.845558",

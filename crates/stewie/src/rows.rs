@@ -379,6 +379,14 @@ pub const ROWS: &[Row] = &[
         summary: "an actor, or the player's first-person view, with no attack animation playing no longer crashes",
     },
     Row {
+        bit: stewie::NULL_AUDIO,
+        function: "patchNullAudioCrash",
+        plan: "S0155",
+        key: "bNullAudioCrash",
+        tweaks: None,
+        summary: "a sound with an effect whose buffer was never made no longer crashes when it is prepared",
+    },
+    Row {
         bit: stewie::RARE_NULL_TELEPORT_DOOR,
         function: "patchFixRareNullTeleportDoorCrash",
         plan: "S0169",
@@ -561,6 +569,14 @@ pub const ROWS: &[Row] = &[
         key: "bEquipAmmoOnNullBaseProcessCrashFix",
         tweaks: None,
         summary: "equipping ammunition on an actor with no AI process no longer crashes",
+    },
+    Row {
+        bit: stewie::SAMPLER_STATE_LEAK,
+        function: "SamplerStateLeakFix",
+        plan: "S0225",
+        key: "bSamplerStateLeakFix",
+        tweaks: None,
+        summary: "a texture reused by a material that wants other wrap or clamp settings is set up again instead of keeping the last material's addressing",
     },
     Row {
         bit: stewie::SAVING_NULL_CELL,
