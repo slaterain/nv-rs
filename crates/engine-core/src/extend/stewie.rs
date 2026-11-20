@@ -167,8 +167,22 @@ pub const PERK_DESCRIPTION_TOO_LONG: Row = Row::at(CRASH, 38);
 pub const NPC_ACTIVATE_NULL_PROCESS: Row = Row::at(CRASH, 39);
 /// S0199.06 `MiscCrashFixes` (`InventoryChanges` `004c0cf0` (`0x4C0DD4`)): taking off a worn item that may not be removed, with no actor given, no longer crashes.
 pub const REMOVE_WORN_NULL_ACTOR: Row = Row::at(CRASH, 40);
-/// S0199.09 `MiscCrashFixes` (`004d66d0` (`0x4D6AA5`); `NiAVObject::GetViewerStrings` `00a5ad00` (`0xA5B0C8`)): the console's ShowSceneGraph no longer crashes on an empty property entry.
+/// S0199.09 `MiscCrashFixes` (`004d66d0` (`0x4D6AA5`); `NiAVObject::GetViewerStrings` `00a5ad00` (`0xA5B0C8`)): an empty entry of an object's property list is skipped in its viewer strings and in ShowSceneGraph's controller test; ShowSceneGraph's tree still stops at its Properties list, as with Tweaks.
 pub const SHOW_SCENE_GRAPH_NULL: Row = Row::at(CRASH, 41);
+/// S0107.03 `MemoryLeakFixes` (`Actor::InitiateSearchForAttacker` `008ad970` (`0x8ADAEC`)): an actor searching for its attacker no longer loses 16 bytes each time.
+pub const PACKAGE_TARGET_LEAK: Row = Row::at(CRASH, 42);
+/// S0130.01 `ContinuousBeamProjectileCrashFix` (`BeamProjectile` destructor body `00978f70` (`0x978FB5`)): an actor no longer keeps pointing at its continuous beam after the beam is gone.
+pub const BEAM_SHOOTER_POINTER: Row = Row::at(CRASH, 43);
+/// S0130.03 `ContinuousBeamProjectileCrashFix` (`ContinuousBeamProjectile` `009ab390` (`0x9AB55F`)): loading a save while an NPC fires a continuous beam no longer crashes.
+pub const BEAM_NPC_NULL_NODE: Row = Row::at(CRASH, 44);
+/// S0183 `FollowerTopicUseAfterFreeFix` (`~Actor` `0087dcb0` (`0x87DDD0`)): an actor that goes away no longer leaves a follower bark naming it.
+pub const FOLLOWER_BARK_USE_AFTER_FREE: Row = Row::at(CRASH, 45);
+/// S0199.03 `MiscCrashFixes` (`Actor::DecreaseAmmo` `008a89a0` (`0x8A8B0B`)): an actor whose ammunition entry is taken while it fires (a script on JIP's DecreaseAmmo event) no longer crashes.
+pub const AMMO_ENTRY_GONE: Row = Row::at(CRASH, 46);
+/// S0199.10 `MiscCrashFixes` (`VirtualActorPathHandler::UseDoorAtNode` `009ead90` (`0x9EAF04`)): an NPC away from a path node with no door no longer crashes.
+pub const USE_DOOR_NULL_DOOR: Row = Row::at(CRASH, 47);
+/// S0199.11 `MiscCrashFixes` (`PlayerCharacter::Update` `0093e860` (`0x943DE1`)): the player's regenerating ammunition with no ammunition type equipped no longer crashes.
+pub const REGEN_AMMO_NO_TYPE: Row = Row::at(CRASH, 48);
 /// S1016 (Engine Optimizations, `Inlines::SaveLoad`: `Write32(0x845558, 0x2735)`): the changes map's
 /// buckets 10,037, not the exe's 5,039 (`00845550`). It changes the order a save walks and writes the
 /// changed forms, so it is a fixes row.

@@ -46,7 +46,7 @@ What the ZIP holds, and why each is allowed:
 
 | File | What | Why it may ship |
 | --- | --- | --- |
-| `Play.exe` | The launcher (`scripts/launcher`) | Our code, GPL |
+| `Play.exe` | The launcher (`crates/nv-launcher`, its `nv-rs` program under that name) | Our code, GPL |
 | `app\FalloutNV.exe` | `nv-viewer` under that name | Our build. LEGAL.md covers the translated code; `package-check` looks for data of the game's own program in it, and its report goes with the release notes |
 | `app\tools\d3d9-capture.exe`, `nvapi-capture.exe`, `dsound-capture.exe` | The table tools (`scripts/`) | Our code, GPL. They read the player's Windows and drivers, on the player's PC |
 | `Play with mods.cmd`, `Import my saves.cmd`, `Settings.cmd`, `Settings.ps1` | Launchers and the settings tool | Our text |

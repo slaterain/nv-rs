@@ -822,8 +822,8 @@ static SCENE_LIGHT_STRENGTH: std::sync::atomic::AtomicU32 = std::sync::atomic::A
 /// `d3d9_wgpu::scene_light::STRENGTH_RANGE`). The frame's camera and sun, as `read` finds them in
 /// the game, are recorded for the backend where the world is drawn and nothing after it yet: at
 /// the frame draw's port-added point ([`engine_core::world_drawn`], first and third person) and at
-/// each depth-only `Clear` (the game's, before its first-person arms; the device runs the step
-/// once a frame, at the first). Never called while off: nothing is then read or recorded.
+/// each depth-only `Clear` (the game's, before its first-person arms, or the point in its place
+/// when JIP skips it; the device runs the step once a frame, at the first). Never called while off: nothing is then read or recorded.
 pub fn want_scene_light(read: fn(&Engine) -> Option<SceneView>, strength: f32) {
     d3d9_wgpu::scene_light::enable(true);
     SCENE_LIGHT_STRENGTH.store(
@@ -832,6 +832,7 @@ pub fn want_scene_light(read: fn(&Engine) -> Option<SceneView>, strength: f32) {
     );
     let _ = SCENE_LIGHT.set(read);
     engine_core::world_drawn::install(world_drawn);
+    engine_core::world_drawn::install_depth_clear_skipped(depth_clear_skipped);
 }
 
 /// The frame draw's port-added point ([`engine_core::world_drawn`], installed by
@@ -839,6 +840,54 @@ pub fn want_scene_light(read: fn(&Engine) -> Option<SceneView>, strength: f32) {
 fn world_drawn(e: &mut Engine) {
     if let Some(read) = SCENE_LIGHT.get().copied() {
         world_drawn_lit(e, read);
+    }
+}
+
+/// The depth-only clear skipped (`engine_core::world_drawn::depth_clear_skipped`: JIP's
+/// `ToggleDepthClear 0`; installed by [`want_scene_light`] and [`want_sun_shadows`]): the marks
+/// the clear gives ([`world_drawn_marks`]) on the game's device, under the device lock, so the
+/// first-person arms and weapon after it still neither cast nor take the sun's shadows.
+fn depth_clear_skipped(e: &mut Engine) {
+    if let Some(read) = SCENE_LIGHT.get().copied() {
+        depth_clear_skipped_lit(e, read);
+    }
+}
+
+/// [`depth_clear_skipped`] with the reader `read` (none before the game has its device or a
+/// stream for it, as at the clear).
+fn depth_clear_skipped_lit(e: &mut Engine, read: fn(&Engine) -> Option<SceneView>) {
+    let _device = engine_core::real_threads::device_guard(e);
+    let Some(this) = real(e).devices.first().map(|(d, _)| *d) else {
+        return;
+    };
+    if stream_of(real(e), this).is_none() {
+        return;
+    }
+    world_drawn_marks(e, this, read);
+}
+
+/// What the game's depth-only clear marks (the world drawn, the first-person arms next): the
+/// frame's camera and sun for the new lighting, then with the sun shadows on
+/// ([`want_sun_shadows`]) the camera's rotation and place and the sun, after the frustum (none
+/// without a sun); draws after it (the first-person arms and weapon) neither cast nor take the
+/// shadows.
+fn world_drawn_marks(e: &mut Engine, this: u32, read: fn(&Engine) -> Option<SceneView>) {
+    record_scene_light(e, this, read);
+    let sun = read(e)
+        .as_ref()
+        .filter(|_| d3d9_wgpu::sun_shadow::enabled())
+        .and_then(d3d9_wgpu::sun_shadow::Frame::from_game);
+    if let Some(f) = sun {
+        let m = f.to_words();
+        record(
+            e,
+            this,
+            Cmd::SetTransform {
+                device: this,
+                state: d3d9_wgpu::sun_shadow::STATE,
+                matrix: Data::from_words(&m),
+            },
+        );
     }
 }
 
@@ -879,12 +928,14 @@ fn record_scene_light(e: &mut Engine, this: u32, read: fn(&Engine) -> Option<Sce
 
 /// Turns the sun shadows on (`d3d9_wgpu::sun_shadow`; the run's choice,
 /// `host::fixes::Choice::sun_shadows`), before the game makes its device: at each depth-only
-/// `Clear` the frame's camera (the new lighting's words) and then its rotation, place and sun, as
+/// `Clear` (or the frame's point in its place when JIP skips it,
+/// `engine_core::world_drawn::depth_clear_skipped`) the frame's camera (the new lighting's words) and then its rotation, place and sun, as
 /// `read` finds them in the game, are recorded for the backend. Never called while off: nothing is
 /// then read or recorded for them.
 pub fn want_sun_shadows(read: fn(&Engine) -> Option<SceneView>) {
     d3d9_wgpu::sun_shadow::enable(true);
     let _ = SCENE_LIGHT.set(read);
+    engine_core::world_drawn::install_depth_clear_skipped(depth_clear_skipped);
 }
 
 /// `CreateWindowExA` made the modelled window `handle` (a child of `parent` when that is not
@@ -1414,26 +1465,7 @@ fn clear_lit(
     // arms. With the new lighting on, the frame's camera and sun first.
     if flags == 2 {
         if let Some(read) = light {
-            record_scene_light(e, this, read);
-            // The sun shadows ([`want_sun_shadows`]): the camera's rotation and place and the sun,
-            // after the frustum above (none without a sun); draws after it (the first-person arms
-            // and weapon) neither cast nor take the shadows.
-            let sun = read(e)
-                .as_ref()
-                .filter(|_| d3d9_wgpu::sun_shadow::enabled())
-                .and_then(d3d9_wgpu::sun_shadow::Frame::from_game);
-            if let Some(f) = sun {
-                let m = f.to_words();
-                record(
-                    e,
-                    this,
-                    Cmd::SetTransform {
-                        device: this,
-                        state: d3d9_wgpu::sun_shadow::STATE,
-                        matrix: Data::from_words(&m),
-                    },
-                );
-            }
+            world_drawn_marks(e, this, read);
         }
     }
     // A colour and depth clear (the scene's, before the world is drawn; the water reflection's too):
@@ -3804,6 +3836,7 @@ mod tests {
             )))));
             r.devices.push((DEVICE, None));
         }
+        let _switch = SUN_SWITCH.lock().unwrap_or_else(|p| p.into_inner());
         d3d9_wgpu::sun_shadow::enable(true);
         clear_lit(&mut e, DEVICE, 0, 0, 3, 0, 0, 0, 0, Some(sunny));
         d3d9_wgpu::sun_shadow::enable(false);
@@ -3819,6 +3852,78 @@ mod tests {
             ]
         );
         assert_eq!(got[0].1, d3d9_wgpu::sun_shadow::world_words(0x0013_b308));
+    }
+
+    /// The sun shadows' switch is the run's: the tests that turn it on hold this.
+    static SUN_SWITCH: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// JIP's `ToggleDepthClear 0` skips the game's depth-only clear; the frame then reaches
+    /// `engine_core::world_drawn::depth_clear_skipped` in its place, whose hook records the same
+    /// marks as the clear, in the same order and with the same words: the new lighting's camera,
+    /// then the sun shadows' frame (`d3d9_wgpu::sun_shadow::STATE`, on which the device closes the
+    /// frame's casters: the first-person arms and weapon drawn after it neither cast nor take the
+    /// shadows); only the clear itself is missing. The sun shadows off: the camera only. Nothing
+    /// before the game has its device; never asked for in this binary: the point records nothing.
+    #[test]
+    fn a_skipped_depth_clear_still_marks_the_world_drawn() {
+        const DEVICE: u32 = 0x1000;
+        type Seen = std::sync::Arc<std::sync::Mutex<Vec<(u32, Vec<u32>)>>>;
+        struct Words(Seen);
+        impl d3d9_stream::Backend for Words {
+            fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+                let seen = match &cmd {
+                    Cmd::SetTransform { state, matrix, .. } => (*state, matrix.to_words().to_vec()),
+                    Cmd::Clear { flags, .. } => (*flags, Vec::new()),
+                    _ => (0, Vec::new()),
+                };
+                self.0.lock().unwrap().push(seen);
+                Reply::None
+            }
+        }
+        fn sunny(_: &Engine) -> Option<SceneView> {
+            Some(SceneView {
+                frustum: [-0.7, 0.7, 0.4, -0.4, 5.0, 5000.0],
+                ortho: false,
+                rotate: [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                position: [100.0, 200.0, 300.0],
+                to_sun: Some([0.2, -0.1, 0.9]),
+                sun_colour: [1.0, 0.9, 0.8],
+                interior: false,
+                world: 0x0013_b308,
+            })
+        }
+        // The switch held for the whole test: its off case too reads the run's switch.
+        let _switch = SUN_SWITCH.lock().unwrap_or_else(|p| p.into_inner());
+        let seen: Seen = std::sync::Arc::default();
+        let mut e = Engine::new();
+        real(&mut e).stream = Some(Stream::direct(Box::new(Words(std::sync::Arc::clone(
+            &seen,
+        )))));
+        let take = || std::mem::take(&mut *seen.lock().unwrap());
+        // No device yet: nothing.
+        depth_clear_skipped_lit(&mut e, sunny);
+        assert!(take().is_empty());
+        real(&mut e).devices.push((DEVICE, None));
+        let light = d3d9_wgpu::scene_light::STATE;
+        let sun = d3d9_wgpu::sun_shadow::STATE;
+        d3d9_wgpu::sun_shadow::enable(true);
+        clear_lit(&mut e, DEVICE, 0, 0, 2, 0, 0, 0, 0, Some(sunny));
+        let cleared = take();
+        depth_clear_skipped_lit(&mut e, sunny);
+        let skipped = take();
+        d3d9_wgpu::sun_shadow::enable(false);
+        let states = |got: &[(u32, Vec<u32>)]| got.iter().map(|(s, _)| *s).collect::<Vec<_>>();
+        assert_eq!(states(&cleared), [light, sun, 2]);
+        assert_eq!(states(&skipped), [light, sun]);
+        assert_eq!(skipped[..], cleared[..2]);
+        // The sun shadows off: the camera only, as at the clear.
+        depth_clear_skipped_lit(&mut e, sunny);
+        assert_eq!(states(&take()), [light]);
+        // Never asked for in this binary: the point records nothing.
+        assert!(SCENE_LIGHT.get().is_none());
+        engine_core::world_drawn::depth_clear_skipped(&mut e);
+        depth_clear_skipped(&mut e);
+        assert!(take().is_empty());
     }
 
     /// The frame draw's point where the world is drawn (`engine_core::world_drawn`, first and

@@ -2,7 +2,7 @@
 //! (review of #687): the game's `Fallout.ini` with nv-rs's own sections and the player's pending
 //! choices, and `FalloutPrefs.ini` from the game's High preset at the desktop's size, borderless,
 //! naming the card. The same steps and the same code as Play.exe's `prepare_profile`
-//! (`scripts/launcher` main.rs; the sections and lines from the shared `game_profile` crate), with
+//! (`crates/nv-launcher` play/mod.rs; the sections and lines from the shared `game_profile` crate), with
 //! one difference: Play.exe first copies the player's own Windows files from their `My Games`; off
 //! Windows the starting point is the game's `Fallout_default.ini` and `high.ini` (only read from
 //! the game's folder). Both files live in nv-rs's own folder (the game's Documents there,
