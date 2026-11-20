@@ -300,6 +300,10 @@ impl Env for EngineEnv<'_> {
         (at != 0).then(|| self.cmd_info(u32::from(opcode), at))
     }
 
+    fn game_inline(&mut self) -> bool {
+        crate::args::game_inline(self.e)
+    }
+
     fn form_by_name(&mut self, name: &[u8]) -> u32 {
         compiler::form_by_editor_id(self.e, name)
     }

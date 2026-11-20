@@ -7,6 +7,38 @@ use engine_core::extend::stewie;
 /// Share 2's rows built.
 pub const ROWS: &[Row] = &[
     Row {
+        bit: stewie::WEAPON_IDLE_SOUND_RANGE,
+        function: "fixWeaponIdleSoundsHavingInfiniteRange",
+        plan: "S0039",
+        key: "bFixWeaponIdleSoundsHavingInfiniteRange",
+        tweaks: None,
+        summary: "while you are in third person, NPCs' weapon idle sounds (a minigun's spin, a flamer's pilot light) are no longer heard from any distance, and your own weapon's idle sound plays as in first person instead of placed in the world",
+    },
+    Row {
+        bit: stewie::SPECTATOR_THREAT_WEAPON_TYPE,
+        function: "patchFixSpectatorThreatInfoUsingWrongWeaponType",
+        plan: "S0133",
+        key: "bFixSpectatorThreatInfoUsingWrongWeaponType",
+        tweaks: None,
+        summary: "bystanders watching a fight judge its threat by the weapon's combat type, not its plain type",
+    },
+    Row {
+        bit: stewie::AGRO_RADIUS_HOLSTER,
+        function: "patchPreventAgroRadiusBreachedNPCsHolsteringWeapons",
+        plan: "S0137",
+        key: "bPreventAgroRadiusBreachedNPCsHolsteringWeapons",
+        tweaks: None,
+        summary: "a guard warning you off its area keeps its weapon out instead of holstering it while it warns",
+    },
+    Row {
+        bit: stewie::NPC_THROWING_ANIM,
+        function: "NPCThrowingAnimFix",
+        plan: "S0146",
+        key: "bNPCThrowingAnimFix",
+        tweaks: None,
+        summary: "an NPC's throw plays the thrown weapon's own attack animation instead of always the generic throw",
+    },
+    Row {
         bit: stewie::CRIPPLED_LIMB_ANIMS,
         function: "patchFixCrippledLimbAnimsNotUpdatingIfLimbsFixed",
         plan: "S0147",
@@ -23,12 +55,28 @@ pub const ROWS: &[Row] = &[
         summary: "an NPC with fewer rounds than its reload would load no longer reloads over and over",
     },
     Row {
+        bit: stewie::KNOCKDOWN_HAND_GRIP,
+        function: "KnockDownHandGripFix",
+        plan: "S0171",
+        key: "bKnockDownHandGripFix",
+        tweaks: None,
+        summary: "an actor getting up from a knockdown plays the hand-grip idle again, so its hands hold the weapon properly",
+    },
+    Row {
         bit: stewie::MINE_DISARMED_LIGHT_LOADING,
         function: "MineDisarmedLightLoadingFix",
         plan: "S0180",
         key: "bMineDisarmedLightLoadingFix",
         tweaks: None,
         summary: "a mine's light shows correctly again after a save is loaded",
+    },
+    Row {
+        bit: stewie::DIALOGUE_ACTIVATE_NO_PACKAGE,
+        function: "MiscCrashFixes",
+        plan: "S0199.01",
+        key: "bMiscCrashFixesDialogueNoPackage",
+        tweaks: None,
+        summary: "a conversation whose target has no package left no longer crashes",
     },
     Row {
         bit: stewie::ENDURANCE_HEALTH_RESTORE,
@@ -56,6 +104,14 @@ pub const ROWS: &[Row] = &[
         summary: "projectiles that are not hitscan (grenades, missiles, slow bullets) move their physics body too, so they splash water",
     },
     Row {
+        bit: stewie::COMBAT_ITEM_COOLDOWN,
+        function: "CombatItemCooldownFix",
+        plan: "S0214",
+        key: "bCombatItemCooldownFix",
+        tweaks: None,
+        summary: "changes play: an NPC waits fCombatItemRestoreTimer (30 s at the exe's default) before its next healing item, not fCombatItemBuffTimer (45 s)",
+    },
+    Row {
         bit: stewie::RAGDOLL_CONTROLLER_UPDATE,
         function: "RagdollControllerUpdateFix",
         plan: "S0217",
@@ -70,6 +126,14 @@ pub const ROWS: &[Row] = &[
         key: "bDeathAnimFix",
         tweaks: None,
         summary: "a death animation plays even while a movement animation is easing out",
+    },
+    Row {
+        bit: stewie::PATROL_PACKAGE,
+        function: "PatrolPackageFix",
+        plan: "S0228",
+        key: "bPatrolPackageFix",
+        tweaks: None,
+        summary: "loading a patrol package whose actor is gone no longer crashes",
     },
     Row {
         bit: stewie::ARMOR_UPDATE,

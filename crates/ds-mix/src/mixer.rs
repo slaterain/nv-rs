@@ -1871,4 +1871,91 @@ mod tests {
         assert!(failed.is_empty(), "no match: {failed:?}");
         assert!(checked > 0, "no captures");
     }
+
+    /// A 3D voice (its multipliers from the 3D stage, `ds3d::hear`, moved halfway) and a voice
+    /// with the distortion effect (`dsfx::Chain`, the measured edge table), with a plain one,
+    /// mixed on two channels and, through DirectSound's general kernel, on 7.1: one hash of each
+    /// mix's bits. Pinned on the code as moved into this crate (REVIEW-828's nit: the first hash
+    /// has neither stage nor a layout but two channels).
+    fn stages_hash(layout: Layout) -> u64 {
+        use super::super::ds3d::{hear, Listener, Source};
+        use super::super::dsfx::{Chain, Coefficients, Distortion, EDGE_TABLE};
+        let listener = Listener {
+            position: [0.0; 3],
+            velocity: [0.0; 3],
+            front: [0.0, 0.0, 1.0],
+            top: [0.0, 1.0, 0.0],
+            distance_factor: 1.0,
+            rolloff: 1.0,
+            doppler: 1.0,
+        };
+        let source = |x: f32| Source {
+            position: [x, 0.0, 3.0],
+            velocity: [0.0; 3],
+            min: 1.0,
+            max: 100.0,
+            mute_at_max: false,
+            volume: -300,
+            frequency: 22050,
+        };
+        let place = Place::new(layout).expect("the layout's matrices");
+        let mut three_d = Voice::new(signal(22050), 1, 16);
+        (three_d.rate, three_d.device, three_d.looping) = (22050, 48000, true);
+        three_d.spatial = Some(hear(&source(-2.0), &listener, layout).gains);
+        three_d.start(0);
+        let mut fx = Voice::new(signal(30000), 1, 16);
+        (fx.rate, fx.device, fx.looping) = (44100, 48000, true);
+        let d = Distortion::new(Coefficients::new(
+            44100,
+            [-18.2, 15.0, 2400.0, 2400.0, 8000.0],
+            &EDGE_TABLE,
+        ));
+        let mut chain = Chain::new(fx.data.clone(), d, 1, 16);
+        chain.start(&mut fx.data, 0);
+        fx.fx = Some(Box::new(chain));
+        fx.start(0);
+        let mut plain = Voice::new(signal(9000), 1, 16);
+        (plain.rate, plain.device, plain.volume, plain.pan) = (32000, 48000, -600, 1200);
+        plain.start(0);
+        let width = usize::from(layout.channels);
+        let mut out = vec![0f32; width * 700];
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        let mut heard = false;
+        for piece in 0..69 {
+            if piece == 34 {
+                three_d.spatial = Some(hear(&source(2.5), &listener, layout).gains);
+            }
+            out.fill(0.0);
+            let mut covered = 0;
+            for v in [&mut plain, &mut fx, &mut three_d] {
+                covered = covered.max(render_voice_on(v, &mut out, &place, covered));
+            }
+            heard |= out.iter().any(|&s| s != 0.0);
+            bits_hash(&mut hash, &out);
+        }
+        // The 3D voice was heard, and the effect changed its voice's samples.
+        assert!(heard && three_d.spatial.is_some_and(|g| g.iter().any(|&x| x > 0.0)));
+        assert_ne!(fx.data, signal(30000));
+        hash
+    }
+
+    /// The 3D stage, the distortion and DirectSound's 7.1 kernel give the bits they gave when the
+    /// mixer moved into this crate (`cargo test -p ds-mix --lib stages`).
+    #[test]
+    fn the_stages_mix_bits_are_unchanged() {
+        if super::super::resampler::tables().is_none() {
+            return; // no RESAMPLEDMO.DLL on this machine
+        }
+        let stereo = stages_hash(Layout::STEREO);
+        let surround = stages_hash(Layout {
+            channels: 8,
+            mask: 0x63f,
+        });
+        println!("stages hash {stereo:016x} {surround:016x}");
+        assert_eq!((stereo, surround), (STEREO_HASH, SURROUND_HASH));
+    }
+
+    /// [`stages_hash`]'s pinned values (two channels, and 7.1).
+    const STEREO_HASH: u64 = 0xf162_0e51_73b9_603a;
+    const SURROUND_HASH: u64 = 0x046d_14c8_79f0_4116;
 }

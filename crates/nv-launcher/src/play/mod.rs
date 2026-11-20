@@ -1137,6 +1137,10 @@ fn first_write(package: &Package, game_folder: &Path) -> Result<(), Stop> {
     if let Err(e) = crate::place::note_intro_if_shown(&package.userdata) {
         package.log(&format!("launcher.ini: {e}"));
     }
+    // The window's lines kept until now (the terminal's sounds, say).
+    for line in crate::place::take_held_lines() {
+        package.log(&line);
+    }
     Ok(())
 }
 

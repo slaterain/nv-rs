@@ -18,10 +18,12 @@ path = "src/main.rs"
 # and, on Linux and macOS, where the game and nv-rs's own folder are (game-folders). arboard
 # (MIT OR Apache-2.0, approved by the maintainer 2026-11-19) is the system's clipboard for pasting
 # a folder at the prompt: text only (no image support), and on Wayland through the data-control
-# protocol as well as X11.
+# protocol as well as X11. The terminal's sounds play through ds-mix, the game's own DirectSound
+# mixer and output (cpal off Windows, already in the lock).
 [dependencies]
 arboard = { version = "=3.7.0", default-features = false, features = ["wayland-data-control"] }
 bsa = { path = "../bsa" }
+ds-mix = { path = "../ds-mix" }
 game-profile = { path = "../game-profile" }
 mod-install = { path = "../mod-install" }
 game-folders = { path = "../game-folders" }

@@ -89,6 +89,27 @@ pub fn intro_shown(own: &Path) -> bool {
 /// Notes that the intro was shown, keeping the file's other lines. Never through a link, and only
 /// into a folder nv-rs may write ([`Place::refused`] is checked by the caller).
 pub fn note_intro_shown(own: &Path) -> std::io::Result<()> {
+    set_launcher_key(own, "bIntroShown", "1")
+}
+
+/// Whether the terminal's sounds are on (`bSounds` in the launcher's own file): on unless it says
+/// 0.
+pub fn sounds_on(own: &Path) -> bool {
+    std::fs::read(launcher_ini(own)).map_or(true, |bytes| {
+        let text: String = bytes.iter().map(|&b| b as char).collect();
+        game_profile::settings::ini_value(&text, "Launcher", "bSounds")
+            .is_none_or(|v| v.trim() != "0")
+    })
+}
+
+/// Turns the terminal's sounds on or off in the launcher's own file.
+pub fn set_sounds(own: &Path, on: bool) -> std::io::Result<()> {
+    set_launcher_key(own, "bSounds", if on { "1" } else { "0" })
+}
+
+/// Sets `key` in the launcher's own file's `[Launcher]` section, keeping its other lines; never
+/// through a link; written beside it and moved over it.
+fn set_launcher_key(own: &Path, key: &str, value: &str) -> std::io::Result<()> {
     let file = launcher_ini(own);
     if std::fs::symlink_metadata(&file).is_ok_and(|m| m.file_type().is_symlink()) {
         return Err(std::io::Error::other("the launcher's file is a link"));
@@ -98,7 +119,7 @@ pub fn note_intro_shown(own: &Path) -> std::io::Result<()> {
         .iter()
         .map(|&b| b as char)
         .collect();
-    let text = game_profile::game_ini::set_key(&old, "Launcher", "bIntroShown", "1");
+    let text = game_profile::game_ini::set_key(&old, "Launcher", key, value);
     std::fs::create_dir_all(own)?;
     let part = own.join("launcher.ini.part");
     let _ = std::fs::remove_file(&part);
@@ -107,6 +128,44 @@ pub fn note_intro_shown(own: &Path) -> std::io::Result<()> {
         text.chars().map(|c| c as u32 as u8).collect::<Vec<u8>>(),
     )?;
     std::fs::rename(&part, &file)
+}
+
+/// The window's lines for the launcher's log kept until it may be written (Windows: Play's first
+/// write, as the intro's note waits for it).
+static HELD_LINES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// A line of the window's for the launcher's log (`logs/launcher.log` in nv-rs's own folder),
+/// also on stderr: written at once where `now` (Linux and macOS, the own folder not refused),
+/// else kept for Play's first write ([`take_held_lines`]).
+pub fn log_line(own: &Path, now: bool, text: &str) {
+    eprintln!("{text}");
+    if !now {
+        if let Ok(mut held) = HELD_LINES.lock() {
+            held.push(text.to_string());
+        }
+        return;
+    }
+    let logs = own.join("logs");
+    let written = std::fs::create_dir_all(&logs).and_then(|()| {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(logs.join("launcher.log"))?;
+        writeln!(f, "{text}")
+    });
+    if let Err(e) = written {
+        eprintln!("{}: {e}", logs.display());
+    }
+}
+
+/// The lines [`log_line`] kept, taken.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn take_held_lines() -> Vec<String> {
+    HELD_LINES
+        .lock()
+        .map(|mut h| std::mem::take(&mut *h))
+        .unwrap_or_default()
 }
 
 /// Linux and macOS: nv-rs's own folder and the game, as play.sh finds them.
@@ -190,6 +249,30 @@ mod tests {
         let text = std::fs::read_to_string(launcher_ini(&dir)).unwrap();
         assert!(text.contains("sOther=x"), "{text}");
         assert!(!dir.join("launcher.ini.part").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The sounds are on until the launcher's file says 0; turning them off and on keeps its other
+    /// lines.
+    #[test]
+    fn the_sounds_are_on_until_turned_off() {
+        let dir = std::env::temp_dir().join(format!("nv-launcher-sounds-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(sounds_on(&dir));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            launcher_ini(&dir),
+            "[Launcher]
+bIntroShown=1
+",
+        )
+        .unwrap();
+        assert!(sounds_on(&dir));
+        set_sounds(&dir, false).unwrap();
+        assert!(!sounds_on(&dir));
+        assert!(intro_shown(&dir));
+        set_sounds(&dir, true).unwrap();
+        assert!(sounds_on(&dir));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -81,7 +81,13 @@ pub fn bind(e: &mut Engine, this: Ptr<TextureStage>, force: u8) -> bool {
     let stage = e.get(this, TextureStage::m_uiStage);
     let texture = e.get(this, TextureStage::m_pkTexture);
     let shadow = SHADOWED_TEXTURES.wrapping_add(stage.wrapping_mul(4));
-    if force == 0 && texture == e.global::<u32>(shadow) {
+    // lStewieAl's Tweaks' S0225 (`SamplerStateLeakFix`): as in the translation, the early answer also
+    // needs the stage's wrap and clamp to be the device's already.
+    if force == 0
+        && texture == e.global::<u32>(shadow)
+        && !(e.stewie(engine_core::extend::stewie::SAMPLER_STATE_LEAK)
+            && engine_core::extend::stewie::sampler_state_changed(e, this.addr()))
+    {
         return true;
     }
     e.set_global(shadow, texture);
