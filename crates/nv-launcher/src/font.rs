@@ -198,8 +198,11 @@ impl Font {
         text.chars().map(|c| self.advance(c)).sum::<f32>().ceil() as u32
     }
 
-    /// `text` drawn with its line's top at (`x`, `y`) in `colour` (straight RGBA, 0 to 1).
-    pub fn draw(&self, canvas: &mut Canvas, x: i32, y: i32, text: &str, colour: [f32; 4]) {
+    /// `text` drawn with its line's top at (`x`, `y`) in `colour` (straight RGBA, 0 to 1): how
+    /// many of its characters were drawn (a line reaching past the canvas's right edge stops
+    /// there).
+    pub fn draw(&self, canvas: &mut Canvas, x: i32, y: i32, text: &str, colour: [f32; 4]) -> usize {
+        let mut drawn = 0;
         match self {
             Font::Game {
                 base_line,
@@ -233,6 +236,7 @@ impl Font {
                         }
                     }
                     pen += l.width + if l.width > 0.0 { l.spacing } else { 0.0 };
+                    drawn += 1;
                 }
             }
             Font::Pixel { scale, glyphs } => {
@@ -256,9 +260,11 @@ impl Font {
                             );
                         }
                     }
+                    drawn += 1;
                 }
             }
         }
+        drawn
     }
 }
 
@@ -290,5 +296,80 @@ mod tests {
         }
         // Outside printable ASCII: the box.
         assert_eq!(g.glyph('\u{e9}')[0], 0b11111);
+    }
+
+    /// A made-up game font: every letter a solid 4 by 4 square of an 8 by 8 texture, 4 wide with
+    /// 1 of spacing (5 a character), its top on the line's top.
+    fn square_font() -> Font {
+        let mut fnt = vec![0u8; 0x128 + 256 * 0x38];
+        fnt[0..4].copy_from_slice(&16f32.to_le_bytes());
+        for i in 0..256 {
+            let at = 0x128 + i * 0x38;
+            let mut put =
+                |o: usize, v: f32| fnt[at + o..at + o + 4].copy_from_slice(&v.to_le_bytes());
+            // Corners: top left (0, 0), top right, bottom left, bottom right (0.5, 0.5).
+            for (k, v) in [0.0, 0.0, 0.5, 0.0, 0.0, 0.5, 0.5, 0.5]
+                .into_iter()
+                .enumerate()
+            {
+                put(4 + 4 * k, v);
+            }
+            put(0x24, 4.0);
+            put(0x28, 4.0);
+            put(0x2c, 0.0);
+            put(0x30, 1.0);
+            put(0x34, 16.0);
+        }
+        let mut tex = Vec::new();
+        tex.extend(8u32.to_le_bytes());
+        tex.extend(8u32.to_le_bytes());
+        tex.extend([255u8; 8 * 8 * 4]);
+        Font::game(&fnt, &tex).expect("the made-up font reads")
+    }
+
+    /// Whether the pixel at (`x`, `y`) was drawn on (the canvas starts black; text is white).
+    fn lit(c: &Canvas, x: u32, y: u32) -> bool {
+        c.pixels[((y * c.width + x) * 4) as usize] != 0
+    }
+
+    /// Both fonts stop a line at the canvas's right edge: the characters starting before it are
+    /// drawn (the last one up to the edge), the rest are not, nothing is written past the canvas
+    /// and nothing panics.
+    #[test]
+    fn a_line_wider_than_the_canvas_stops_at_its_right_edge() {
+        let white = [1.0; 4];
+        let text = "MMMMMMMMMM";
+
+        // The game's font, 5 a character: on 23 pixels the letters at 0, 5, 10, 15 and 20.
+        let font = square_font();
+        let mut c = Canvas::new(23, 8);
+        assert_eq!(font.draw(&mut c, 0, 0, text, white), 5);
+        assert_eq!(c.pixels.len(), 23 * 8 * 4);
+        for x in [0, 3, 20, 22] {
+            assert!(lit(&c, x, 0), "x {x}");
+        }
+        assert!(!lit(&c, 4, 0), "the spacing");
+        // Started further in: fewer letters reach the canvas.
+        let mut c = Canvas::new(23, 8);
+        assert_eq!(font.draw(&mut c, 12, 0, text, white), 3);
+        assert!(lit(&c, 22, 0) && !lit(&c, 11, 0));
+
+        // The port's font, 18 a character: on 40 pixels the letters at 0, 18 and 36.
+        let font = Font::pixel();
+        let mut c = Canvas::new(40, font.line_height());
+        assert_eq!(font.draw(&mut c, 0, 0, text, white), 3);
+        assert_eq!(c.pixels.len(), (40 * font.line_height() * 4) as usize);
+        // M's left column is lit from its top row: at 0, 18 and 36 (three pixels wide).
+        for x in [0, 18, 36, 38] {
+            assert!(lit(&c, x, 0), "x {x}");
+        }
+        // M's right column, 12 into its cell: the second letter's is drawn (the last one's, at
+        // 48, is past the edge, where the canvas keeps nothing).
+        assert!(lit(&c, 18 + 12, 0));
+
+        // A line wholly past the edge draws nothing.
+        let mut c = Canvas::new(23, 8);
+        assert_eq!(square_font().draw(&mut c, 23, 0, text, white), 0);
+        assert!(c.pixels.as_chunks::<4>().0.iter().all(|p| p[0] == 0));
     }
 }

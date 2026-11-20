@@ -43,6 +43,13 @@ const SHAPE_BUFFER_SIZE: u32 = 0x200;
 /// function's result for it, compared as a byte. The result is the largest of those bytes
 /// (unsigned) plus one, as the whole register (so up to 256).
 pub fn fn_00d21960(e: &mut Engine, object: Ptr) -> u32 {
+    // lStewieAl's Tweaks' S0031 (`patchAddNifShapeNullChecks`, `hkpShapeNullCheck` at the entry): no
+    // object (a rigid body's missing shape) answers 0, with Tweaks' console line for the model
+    // being read (`ShowNullHkpShapeWarning`; the callers read only `AL`).
+    if object.addr() == 0 && e.stewie(engine_core::extend::stewie::NULL_HKP_SHAPE) {
+        engine_core::extend::stewie::null_hkp_shape_warning(e);
+        return 0;
+    }
     let iterator = e.vcall(object.addr(), 0x10, &args![]).u32();
     if iterator == 0 {
         return 0;
@@ -407,5 +414,51 @@ mod havok_a04_tests {
         let one = iterator(&mut e, in_buffer, &[0]);
         let root = object(&mut e, object_vtable, one);
         assert_eq!(e.call(0x00d2_1960, &args![root]).u32(), 1);
+    }
+
+    /// lStewieAl's Tweaks' row S0031: a child the iterator answers as none (a rigid body whose
+    /// shape is missing). Row off, the exe calls through it (a fault here); row on, it counts 0
+    /// and Tweaks' console line names the model being loaded, once for that model, printed past
+    /// the console's loading-screen test.
+    #[test]
+    fn s0031_a_missing_shape_is_depth_0_with_a_line() {
+        use std::sync::Mutex;
+        static LINES: Mutex<Vec<(Vec<u8>, bool)>> = Mutex::new(Vec::new());
+        for on in [false, true] {
+            let mut e = Engine::new();
+            e.set_stewie(engine_core::extend::stewie::NULL_HKP_SHAPE, on);
+            let (object_vtable, iterator_vtable) = build(&mut e);
+            e.register(0x0071_b160, |_, _| 0x4000u32.into_ret());
+            e.register(0x0071_d0a0, |e, a| {
+                LINES
+                    .lock()
+                    .unwrap()
+                    .push((e.mem.bytes(e.mem.u32(a[2]), 65), e.stewie_print_ungated()));
+                Ret::default()
+            });
+            e.map(0x011f_9000, 0x1000);
+            let name = e.mem.alloc(8);
+            e.mem.write(name, b"a.nif\0");
+            e.mem.set_u32(0x011f_94c0, name);
+            let leaf = object(&mut e, object_vtable, 0);
+            let top = iterator(&mut e, iterator_vtable, &[leaf, 0]);
+            let root = object(&mut e, object_vtable, top);
+            e.mem.unmap(0, 0x1000);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.call(0x00d2_1960, &args![root]).u32()
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.ok(), on.then_some(1), "row {on}");
+            if on {
+                e.call(0x00d2_1960, &args![root]);
+                let lines = LINES.lock().unwrap();
+                assert_eq!(lines.len(), 1, "once for the model");
+                assert_eq!(
+                    lines[0].0,
+                    b"hkpRigidBody error: a.nif has a missing shape (unordered blocks?)".to_vec()
+                );
+                assert!(lines[0].1, "past the loading-screen test");
+            }
+        }
     }
 }

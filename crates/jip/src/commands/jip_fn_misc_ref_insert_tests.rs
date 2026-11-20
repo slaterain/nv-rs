@@ -739,8 +739,11 @@ fn the_players_weapon_slot_reloads_both_views_and_reequips() {
     );
     assert_eq!(
         of(QUEUE_EQUIP_FN),
-        vec![vec![PPROCESS, PCHAR, 1, PWEAPON, 1, PXDATA, 1, 0, 1, 0, 0]],
-        "equipped again: the actor, true, the weapon, 1, its first list, true, false, true, 0, false"
+        vec![vec![
+            PPROCESS, PCHAR, 1, PWEAPON, 1, PXDATA, 1, 0, 1, 0, 0, 0
+        ]],
+        "equipped again: the actor, true, the weapon, 1, its first list, true, false, the unread \
+         word, false, false, no sound (the game's eleven words)"
     );
     for slot in [0u32, 3, 6] {
         let n = SLOT_NODES + 0x40 * slot;

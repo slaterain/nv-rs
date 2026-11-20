@@ -1142,9 +1142,18 @@ pub fn projectile_load_game(e: &mut Engine, this: Ptr<Projectile>, buffer: Ptr) 
         }
     }
     if i32::from(e.vcall(buffer.addr(), 0, &args![]).u8()) >= 0x10 {
+        // lStewieAl's Tweaks' row S0180 (`MineDisarmedLightLoadingFix`, the call at `0x9C5723`):
+        // Tweaks' `OnProjectileLoadGame` first runs `009b46c0` on the projectile (its
+        // `##LightOn` block shown again), then the exe's load of the byte.
+        if e.stewie(engine_core::extend::stewie::MINE_DISARMED_LIGHT_LOADING) {
+            e.call(MINE_LIGHT_UPDATE, &args![base]);
+        }
         e.call(LOAD_BYTES, &args![buffer, base + 0x90, 1u32]);
     }
 }
+
+/// `009b46c0` (`thiscall`, the projectile): what row S0180 runs before the impact byte is loaded.
+const MINE_LIGHT_UPDATE: u32 = 0x009b_46c0;
 
 /// The form of a loaded form id word, cast to a reference: `__RTDynamicCast(
 /// 004839c0(form), 0, TESForm, TESObjectREFR, 0)`, or 0 for none.
@@ -2576,8 +2585,79 @@ pub fn fn_009bf370(e: &mut Engine, this: Ptr<Projectile>, delta: f32, x: u32, y:
         copy_point(e, new, position);
         let result = e.call(0x0043_9ef0, &args![new, difference, old]).u32();
         let [dx, dy, dz] = point_words(e, result);
+        // lStewieAl's Tweaks' row S0207 (`NonHitscanProjectileSplashFix`, the call at
+        // `0x9BF461`): Tweaks' `Projectile__SetVector` in place of `009c4e60`.
+        if e.stewie(engine_core::extend::stewie::NON_HITSCAN_PROJECTILE_SPLASH) {
+            projectile_set_vector_with_velocity(e, this.addr(), [dx, dy, dz], true);
+            return;
+        }
         e.call(0x009c_4e60, &args![this, dx, dy, dz, 1u32]);
     });
+}
+
+/// `bhkUtilFunctions::FindCollisionObject` (`00c802d0`, `cdecl`, one word).
+const FIND_COLLISION_OBJECT: u32 = 0x00c8_02d0;
+/// `bhkWorldObject::SetLinearVelocity` (`00561690`, `thiscall`, a `hkVector4*`).
+const SET_LINEAR_VELOCITY: u32 = 0x0056_1690;
+/// The character controller's `OutVelocity` (`hkVector4`, Xbox PDB: `bhkCharacterController`
+/// +0x4F0).
+const CONTROLLER_OUT_VELOCITY: u32 = 0x4f0;
+
+/// Row S0207's routine, Tweaks' `Projectile__SetVector` (`Fixes/NonHitscanProjectileSplashFix.cpp`):
+/// the movement direction (+0x104) set to `vector` and unitized as Tweaks' `NiPoint3::Unitize`
+/// (`float` maths: a length at most 1e-6 gives 0 and a zero vector), its length added to the
+/// distance travelled (+0x110) with `update_distance`; then, when the projectile has a character
+/// controller (its process +0x68, slot +0x28C), a 3D (slot +0x1D0), a collision object on it and
+/// that object's world object (+0x10) with a rigid body (slot +0x40), the world object's linear
+/// velocity is set to the controller's `OutVelocity`. So a projectile that is not hitscan moves its
+/// rigid body too, and water sees it (splashes).
+fn projectile_set_vector_with_velocity(
+    e: &mut Engine,
+    this: u32,
+    vector: [u32; 3],
+    update_distance: bool,
+) {
+    let direction = this + MOVEMENT_DIRECTION;
+    let [x, y, z] = vector.map(f32::from_bits);
+    let length = (x * x + y * y + z * z).sqrt();
+    let (unit, length) = if length > 1e-6 {
+        let recip = 1.0 / length;
+        ([x * recip, y * recip, z * recip], length)
+    } else {
+        ([0.0; 3], 0.0)
+    };
+    for (i, value) in unit.iter().enumerate() {
+        e.mem.set_f32(direction + 4 * i as u32, *value);
+    }
+    if update_distance {
+        let moved = this + 0x110;
+        let total = length + e.mem.f32(moved);
+        e.mem.set_f32(moved, total);
+    }
+    let process = e.mem.u32(this + 0x68);
+    if process == 0 {
+        return;
+    }
+    let controller = e.vcall(process, 0x28c, &args![]).u32();
+    if controller == 0 {
+        return;
+    }
+    let root = e.vcall(this, 0x1d0, &args![]).u32();
+    if root == 0 {
+        return;
+    }
+    let collision = e.call(FIND_COLLISION_OBJECT, &args![root]).u32();
+    if collision == 0 {
+        return;
+    }
+    let world_object = e.mem.u32(collision + 0x10);
+    if world_object == 0 || e.vcall(world_object, 0x40, &args![]).u32() == 0 {
+        return;
+    }
+    e.call(
+        SET_LINEAR_VELOCITY,
+        &args![world_object, controller + CONTROLLER_OUT_VELOCITY],
+    );
 }
 
 /// Sets a debug colour (`NiColorA` constructor `00414430`: r, g, b, a) in a
@@ -7264,6 +7344,91 @@ mod tests {
         );
     }
 
+    /// The step of `moves_and_reports_the_step` (a difference of (1, 2, 3)) with row S0207 `on`;
+    /// the projectile has a process with a character controller, a 3D, a collision object and a
+    /// world object with a rigid body when `physics`. Answers the projectile, the controller and
+    /// the world object.
+    fn step_with_row(e: &mut Engine, on: bool, physics: bool) -> (Ptr<Projectile>, u32, u32) {
+        point_subtract(e);
+        let this = projectile(e);
+        let before = e.mem.alloc(0xC);
+        let after = e.mem.alloc(0xC);
+        set_point(e, before, [1.0, 1.0, 1.0]);
+        set_point(e, after, [2.0, 3.0, 4.0]);
+        sequence(e, 0x7E00_0050, vec![before, after]);
+        set_slot(e, this.addr(), 0x1F4, 0x7E00_0050);
+        e.mem.set_f32(this.addr() + 0x110, 10.0);
+        let controller = e.mem.alloc(0x600);
+        let world = object(e, 0x20);
+        if physics {
+            let process = object(e, 0x40);
+            stub(e, 0x7E00_0060, controller);
+            set_slot(e, process, 0x28c, 0x7E00_0060);
+            e.mem.set_u32(this.addr() + 0x68, process);
+            stub(e, 0x7E00_0070, 0x5000);
+            set_slot(e, this.addr(), 0x1d0, 0x7E00_0070);
+            let collision = e.mem.alloc(0x20);
+            e.mem.set_u32(collision + 0x10, world);
+            stub(e, FIND_COLLISION_OBJECT, collision);
+            stub(e, 0x7E00_0080, 0x6000);
+            set_slot(e, world, 0x40, 0x7E00_0080);
+        }
+        stub(e, SET_LINEAR_VELOCITY, 0);
+        e.set_stewie(
+            engine_core::extend::stewie::NON_HITSCAN_PROJECTILE_SPLASH,
+            on,
+        );
+        fn_009bf370(e, this, 0.5, 7, 8, 9);
+        (this, controller, world)
+    }
+
+    /// lStewieAl's Tweaks' row S0207 (`0x9BF461`): on, Tweaks' `Projectile__SetVector` in place of
+    /// `009c4e60`: the direction is (1, 2, 3) unitized, its length (sqrt 14) added to the distance
+    /// travelled (10), and the world object's linear velocity set to the controller's
+    /// `OutVelocity` (+0x4F0). Off, the exe's call (as `moves_and_reports_the_step`) and no
+    /// velocity.
+    #[test]
+    fn s0207_a_projectile_moves_its_rigid_body() {
+        let mut e = engine();
+        let (this, controller, world) = step_with_row(&mut e, true, true);
+        assert!(calls(&e, 0x009c_4e60).is_empty());
+        let length = 14.0f32.sqrt();
+        let direction: Vec<f32> = (0..3)
+            .map(|i| e.mem.f32(this.addr() + MOVEMENT_DIRECTION + 4 * i))
+            .collect();
+        // Tweaks multiplies by the reciprocal.
+        let recip = 1.0 / length;
+        assert_eq!(direction, [recip, 2.0 * recip, 3.0 * recip]);
+        assert_eq!(e.mem.f32(this.addr() + 0x110), length + 10.0);
+        assert_eq!(
+            calls(&e, SET_LINEAR_VELOCITY),
+            [vec![world, controller + CONTROLLER_OUT_VELOCITY]]
+        );
+        assert_eq!(calls(&e, FIND_COLLISION_OBJECT), [vec![0x5000]]);
+        let mut e = engine();
+        let (this, _, _) = step_with_row(&mut e, false, true);
+        assert_eq!(calls(&e, 0x009c_4e60)[0][0], this.addr());
+        assert!(calls(&e, SET_LINEAR_VELOCITY).is_empty());
+    }
+
+    /// Row S0207 with no process (no character controller): the direction and the distance only;
+    /// a zero step gives a zero direction and adds nothing.
+    #[test]
+    fn s0207_without_a_controller_only_the_direction() {
+        let mut e = engine();
+        let (this, _, _) = step_with_row(&mut e, true, false);
+        assert!(e.mem.f32(this.addr() + MOVEMENT_DIRECTION) > 0.0);
+        assert!(calls(&e, SET_LINEAR_VELOCITY).is_empty());
+        assert!(calls(&e, FIND_COLLISION_OBJECT).is_empty());
+        let mut e = engine();
+        let this = projectile(&mut e);
+        e.mem.set_f32(this.addr() + 0x110, 10.0);
+        e.mem.set_f32(this.addr() + MOVEMENT_DIRECTION, 5.0);
+        projectile_set_vector_with_velocity(&mut e, this.addr(), [0; 3], true);
+        assert_eq!(e.mem.f32(this.addr() + MOVEMENT_DIRECTION), 0.0);
+        assert_eq!(e.mem.f32(this.addr() + 0x110), 10.0);
+    }
+
     #[test]
     fn add_impact_records_the_hit_and_adds_a_water_ripple() {
         let mut e = engine();
@@ -9055,6 +9220,58 @@ mod n026_tests {
                 calls(&log, ASSIGN_ACTOR_CAUSE),
                 vec![vec![this.addr() + ACTOR_CAUSE, u32::MAX ^ 0x1000]]
             );
+        }
+    }
+
+    /// lStewieAl's Tweaks' row S0180 (`0x9C5723`): a version 0x10 save: on, `009b46c0` runs on the
+    /// projectile just before the impact byte (+0x90) is loaded, so a mine's light is set again;
+    /// off, it is not called. A save older than 0x10 reaches neither, with the row on.
+    #[test]
+    fn s0180_a_loaded_mine_sets_its_light_first() {
+        for (version, on, lit) in [
+            (0x10u32, false, false),
+            (0x10, true, true),
+            (0xd, true, false),
+        ] {
+            let mut e = Engine::new();
+            lists(&mut e);
+            let this = projectile(&mut e, &[(0x1d0, word(0))]);
+            let buffer = buffer(&mut e, version);
+            quiet(
+                &mut e,
+                &[
+                    0x0093_2a00,
+                    LOAD_BYTES,
+                    0x0086_48e0,
+                    0x0086_4a20,
+                    ASSIGN_ACTOR_CAUSE,
+                    MINE_LIGHT_UPDATE,
+                ],
+            );
+            e.register(0x0086_48a0, |_, _| word(0));
+            e.register(CAST_SOURCE_004839C0, |_, _| word(0));
+            e.register(RT_DYNAMIC_CAST, |_, _| word(0));
+            e.register(0x0066_e330, |_, _| word(0));
+            e.register(0x0086_4a60, |_, _| word(0));
+            e.set_stewie(engine_core::extend::stewie::MINE_DISARMED_LIGHT_LOADING, on);
+            e.call_log = Some(vec![]);
+            e.call(0x009c_52f0, &args![this, buffer]);
+            let log = e.call_log.take().unwrap();
+            let lights = calls(&log, MINE_LIGHT_UPDATE);
+            if lit {
+                assert_eq!(lights, [vec![this.addr()]]);
+                // Just before the impact byte's load, the last call.
+                let tail: Vec<_> = log
+                    .iter()
+                    .rev()
+                    .take(2)
+                    .map(|(a, w)| (*a, w.get(1).copied()))
+                    .collect();
+                assert_eq!(tail[0], (LOAD_BYTES, Some(this.addr() + 0x90)));
+                assert_eq!(tail[1].0, MINE_LIGHT_UPDATE);
+            } else {
+                assert!(lights.is_empty(), "version {version:x}, on {on}");
+            }
         }
     }
 

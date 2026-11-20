@@ -1475,6 +1475,9 @@ pub(crate) struct ExtendState {
     /// Which of lStewieAl's Tweaks' rows are on ([`stewie`], [`Engine::stewie`]): one bit a row,
     /// one table for the whole game, shared like [`ExtendState::jip_patches`].
     pub(crate) stewie: std::sync::Arc<stewie::Bits>,
+    /// This engine's console print passes over its loading-screen test for one line (lStewieAl's
+    /// Tweaks' S0031 warning, [`Engine::stewie_print_ungated`]); false but while it prints.
+    pub(crate) stewie_print_ungated: bool,
     /// JIP LN NVSE's hooks' user counts ([`Hook`]), one table every engine of a game shares.
     pub(crate) hooks: std::sync::Arc<HookUsers>,
     /// The caller marks set around the calls whose hooks read their return address
@@ -1802,6 +1805,7 @@ impl ExtendState {
             controls_alt: Default::default(),
             jip_patches: Default::default(),
             stewie: Default::default(),
+            stewie_print_ungated: false,
             hooks: Default::default(),
             marks: Default::default(),
             words: Default::default(),
@@ -1834,6 +1838,7 @@ impl ExtendState {
             controls_alt: self.controls_alt.clone(),
             jip_patches: self.jip_patches.clone(),
             stewie: self.stewie.clone(),
+            stewie_print_ungated: false,
             hooks: self.hooks.clone(),
             marks: self.marks.clone(),
             words: self.words.clone(),

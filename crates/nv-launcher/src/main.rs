@@ -22,6 +22,7 @@ mod font;
 mod game;
 mod gpu;
 mod intro;
+mod pacing;
 mod paste;
 mod place;
 #[cfg(windows)]
