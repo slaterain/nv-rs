@@ -39,9 +39,9 @@ pub const PRINTS_ONLY_FROM_CONSOLE: Row = fix(1);
 /// mesh display's root node (`0x11D6E5C`) is made ("NavMeshRootNode") and put under the scene
 /// graph when it is missing, so `ToggleNavMesh` draws the meshes.
 pub const NAV_MESH_ROOT_NODE: Row = fix(2);
-/// S0213 `LockCommandFixes` (`Script::LockFunction` `005cbf80`, `0x5CC08B`, `0x5CC10A`): `Lock 0`
-/// sets the lock level 0 (very easy) instead of keeping the old level, and the console line names
-/// the level ("Locked %s with lock level %d (%s)").
+/// S0213 `LockCommandFixes` (`Script::LockFunction` `005cbf80`, `0x5CC08B`, `0x5CC10A`): `Lock 0`,
+/// and a plain `Lock` with no level, set the lock level 0 (very easy) instead of keeping the old
+/// level, and the console line names the level ("Locked %s with lock level %d (%s)").
 pub const LOCK_COMMAND: Row = fix(3);
 /// S0236 `PlaceOcclusionPlaneFix` (`005bb9e0`, `0x5BBBA6`, `0x5BBBB5`, `0x5BBBE4`): the plane
 /// `PlaceOcclusionPlane` makes goes into the occluder list without the `NiPointer` that freed it at

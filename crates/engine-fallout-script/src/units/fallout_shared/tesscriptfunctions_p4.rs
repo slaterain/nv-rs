@@ -1054,8 +1054,6 @@ const TEXT_BUFFER_SIZE: u32 = 0x200;
 
 // ---- Helpers of the second batch --------------------------------------------------
 
-/// Whether the commands echo their result to the console: the byte at
-/// `+0x268` of the TLS block.
 /// `REFR_LOCK::NumericValueToEnum` (`cdecl`) and the lock levels' game settings' table (one
 /// `Setting*` per level; a setting's text at `+4`).
 const LOCK_LEVEL_TO_ENUM: u32 = 0x0043_0b40;
@@ -1075,6 +1073,8 @@ fn lock_command_console_print(e: &mut Engine, name: u32, level: u32) {
     });
 }
 
+/// Whether the commands echo their result to the console: the byte at
+/// `+0x268` of the TLS block.
 fn echo_enabled(e: &mut Engine) -> bool {
     let tls = e.tls();
     e.mem.u8(tls + TLS_ECHO) != 0

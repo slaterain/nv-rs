@@ -61,7 +61,7 @@ pub const ROWS: &[Row] = &[
         plan: "S0213",
         key: "bLockCommandFixes",
         tweaks: None,
-        summary: "Lock 0 sets the lock to very easy instead of keeping its level, and the console line names the level",
+        summary: "Lock 0, and a plain Lock with no level, set the lock to very easy instead of keeping its level; the console line names the level",
     },
     Row {
         bit: stewie::OCCLUSION_PLANE_KEPT,

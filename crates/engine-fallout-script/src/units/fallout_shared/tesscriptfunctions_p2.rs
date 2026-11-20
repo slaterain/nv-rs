@@ -6769,6 +6769,9 @@ mod tests {
         assert_eq!(strtoul_hex(b"123456789"), u32::MAX);
         assert_eq!(strtoul_hex(b"-123456789"), u32::MAX);
         assert_eq!(strtoul_hex(b"FFFFFFFF"), u32::MAX);
+        // Far past 32 bits: the maximum, which a minus does not negate.
+        assert_eq!(strtoul_hex(b"11111111111111111"), u32::MAX);
+        assert_eq!(strtoul_hex(b"-11111111111111111"), u32::MAX);
         assert_eq!(strtoul_hex(b"g1"), 0);
         assert_eq!(strtoul_hex(b""), 0);
     }
@@ -6820,17 +6823,21 @@ mod tests {
                 0x7100u32.into_ret()
             });
             accept(&mut e, &[STRING_TABLE_RELEASE]);
-            e.register_double(NAV_MESH_RENDER, move |_, _| render.into_ret());
+            // The exe's getter answers the word at `0x11D6E2C`, as the row reads it.
+            e.register(NAV_MESH_RENDER, |e, _| {
+                e.global::<u32>(NAV_MESH_RENDER_SINGLETON).into_ret()
+            });
             e.register(NAV_MESH_RENDER_IS_DRAWING, |_, _| 1u32.into_ret());
             accept(&mut e, &[NAV_MESH_RENDER_SET_DRAW]);
             e.set_stewie(engine_core::extend::stewie::NAV_MESH_ROOT_NODE, on);
             for _ in 0..2 {
-                parse_gives(&mut e, true, &[0]);
+                // No mode: 4, drawing on, so the display is turned off (mode 0).
+                parse_gives(&mut e, true, &[]);
                 start_log(&mut e);
-                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    run(&mut e, 0x005b_cfe0, script(0))
-                }));
-                e.call_stack.clear();
+                assert!(run(&mut e, 0x005b_cfe0, script(0)), "row {on}");
+                assert_eq!(calls(&e, NAV_MESH_RENDER_IS_DRAWING), vec![vec![render]]);
+                assert_eq!(calls(&e, NAV_MESH_RENDER_SET_DRAW), vec![vec![render, 0]]);
+                assert_eq!(calls(&e, NAV_MESH_RENDER).len(), usize::from(!on) + 1);
             }
             if on {
                 assert_eq!(e.global::<u32>(NAV_MESH_ROOT_NODE), node);
