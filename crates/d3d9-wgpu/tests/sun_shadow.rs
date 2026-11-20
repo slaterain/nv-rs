@@ -1569,6 +1569,16 @@ const ALPHAFUNC: u32 = 25;
 /// Lit frames, one for each of `frames` (each with the words the platform records when `words`),
 /// the ground and what the frame's [`Extra`] says; each frame's pixels.
 fn lit_sequence(b: &mut WgpuBackend, frames: &[Extra], words: bool) -> Vec<Vec<[u8; 4]>> {
+    lit_sequence_with(b, frames, words, &mut |_, _| {})
+}
+
+/// [`lit_sequence`], with `after(f, b)` after frame `f` is presented.
+fn lit_sequence_with(
+    b: &mut WgpuBackend,
+    frames: &[Extra],
+    words: bool,
+    after: &mut dyn FnMut(usize, &mut WgpuBackend),
+) -> Vec<Vec<[u8; 4]>> {
     extras(b);
     let words_here = hook_words();
     let mut out = Vec::new();
@@ -1864,6 +1874,7 @@ fn lit_sequence(b: &mut WgpuBackend, frames: &[Extra], words: bool) -> Vec<Vec<[
         if let Some(d) = b.device() {
             d.wait_for_sun_variants();
         }
+        after(f, b);
     }
     out
 }
@@ -3345,4 +3356,104 @@ fn a_far_caster_nudged_once_still_casts_later() {
     let later = taken_at(&off[49], &on[49], -500.0, 20_000.0);
     eprintln!("the tower nudged once, 39 frames later: {later}");
     assert!(later > 0.8, "{later}");
+}
+
+/// Report 012's "jittery edges", through the device: a map that takes a turned sun counts its whole
+/// steps from where it stood (the centre of the map drawn before), not from the world's origin, so
+/// its texel grid turns about the ground round the camera; between turns the steps count from the
+/// same point. The sun turns 0.05 degrees a frame at 40 up (each map is past its limit within a
+/// few frames).
+#[test]
+fn a_map_that_takes_a_new_sun_counts_its_steps_from_where_it_stood() {
+    let frames: Vec<Extra> = (0..24)
+        .map(|f| Extra {
+            still_box: true,
+            sun: Some(low_sun(
+                0.3 + 0.05f64.to_radians() * f64::from(f),
+                40f64.to_radians(),
+            )),
+            ..Extra::default()
+        })
+        .collect();
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    sun_shadow::enable(true);
+    let b = backend(1);
+    sun_shadow::enable(false);
+    let Some(mut b) = b else {
+        return;
+    };
+    let mut before: [Option<sun_shadow::Cascade>; sun_shadow::CASCADES] =
+        [None; sun_shadow::CASCADES];
+    let (mut turns, mut kept) = (0, 0);
+    let mut check = |f: usize, b: &mut WgpuBackend| {
+        let now = b.device().expect("the device").sun_cascades_drawn();
+        for (k, (was, is)) in before.iter().zip(&now).enumerate() {
+            let (Some(was), Some(is)) = (was, is) else {
+                continue;
+            };
+            if was.basis != is.basis {
+                // Took the sun: anchored at the centre of the map before.
+                let c = was.centre();
+                for i in 0..3 {
+                    assert!(
+                        (is.anchor[i] - c[i]).abs() < 1e-6,
+                        "frame {f} map {k}: anchor {:?}, centre before {c:?}",
+                        is.anchor
+                    );
+                }
+                turns += 1;
+            } else {
+                // Kept its sun: the same anchor.
+                assert_eq!(is.anchor, was.anchor, "frame {f} map {k}");
+                kept += 1;
+            }
+        }
+        before = now;
+    };
+    lit_sequence_with(&mut b, &frames, true, &mut check);
+    eprintln!("maps that took the sun {turns}, kept it {kept}");
+    assert!(turns >= 4 && kept >= 4, "turns {turns}, kept {kept}");
+}
+
+/// The far map keeps the same rule: when it is drawn for a turned sun it counts its steps from the
+/// centre of the far map before (the far scene, the sun turning as in
+/// `a_turning_sun_redraws_the_far_map_only_now_and_then`).
+#[test]
+fn the_far_map_takes_a_new_sun_counting_from_where_it_stood() {
+    let _far = FarScene::on();
+    let frames: Vec<Extra> = (0..64)
+        .map(|f| Extra {
+            sun: Some(low_sun(0.0, 10f64.to_radians() + 7.4e-5 * f64::from(f))),
+            ..far_land(true, false)
+        })
+        .collect();
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    sun_shadow::enable(true);
+    let b = backend(1);
+    sun_shadow::enable(false);
+    let Some(mut b) = b else {
+        return;
+    };
+    let mut before: Option<sun_shadow::Cascade> = None;
+    let mut turns = 0;
+    let mut check = |f: usize, b: &mut WgpuBackend| {
+        let now = b.device().expect("the device").sun_far_drawn();
+        if let (Some(was), Some(is)) = (before, now) {
+            if was.basis != is.basis {
+                let c = was.centre();
+                for i in 0..3 {
+                    assert!(
+                        (is.anchor[i] - c[i]).abs() < 1e-6,
+                        "frame {f}: far anchor {:?}, centre before {c:?}",
+                        is.anchor
+                    );
+                }
+                turns += 1;
+            }
+        }
+        before = now;
+    };
+    lit_sequence_with(&mut b, &frames, true, &mut check);
+    eprintln!("the far map took the sun {turns} times");
+    assert!(turns >= 2, "{turns}");
 }
