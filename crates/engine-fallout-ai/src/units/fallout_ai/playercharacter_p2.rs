@@ -12407,7 +12407,8 @@ mod tests {
     }
 
     /// JIP MiniMap's seams before the two path calls (0x952C69, 0x952F6B): asked only while JIP
-    /// is installed, each at its own site; the game goes on whatever they answer.
+    /// is installed, each at its own site; the game goes on whatever they answer. With no placed
+    /// marker (+0x6F4 = 0) the check builds no path and its seam is not asked.
     #[test]
     fn the_placed_marker_seams_are_asked_before_the_path() {
         thread_local! {
@@ -12420,6 +12421,27 @@ mod tests {
         fn set(_: &mut Engine, _: &[u32]) -> Option<u32> {
             ASKED.with(|a| a.borrow_mut().push(JIP_PLACED_MARKER_SET));
             None
+        }
+        {
+            let mut e = engine();
+            list_helpers(&mut e);
+            let player = new_player(&mut e);
+            e.set_global(PLAYER_POINTER, 0x0600_5000u32);
+            e.set_global(0x011c_a248u32, 0x4141u32);
+            e.register(OPERATOR_NEW, |e, a| eax(e.mem.alloc(a[0])));
+            e.register(0x0055_a2f0, |_, a| eax(a[0]));
+            double(&mut e, FORM_TYPE_OF, eax(0x39));
+            e.set_jip_patches(engine_core::extend::jip_patches::INSTALLED);
+            e.on_site_for_test(JIP_PLACED_MARKER_CHECK, check);
+            ASKED.with(|a| a.borrow_mut().clear());
+            e.mem.set_u32(player.addr() + 0x6f4, 0);
+            start_log(&mut e);
+            player_character_check_for_quest_target_update(&mut e, player, 0x0600_5000);
+            assert!(
+                ASKED.with(|a| a.borrow().is_empty()),
+                "no marker: not asked"
+            );
+            assert!(calls_to(&e, 0x006d_4f70).is_empty());
         }
         for word in [0, engine_core::extend::jip_patches::INSTALLED] {
             let mut e = engine();

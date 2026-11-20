@@ -13931,6 +13931,13 @@ mod tests {
             .iter()
             .filter(|(address, _)| *address == 0x0043_8eb0)
             .count();
+        // The name reaches the "location discovered" message: 0076b960 copies it to
+        // update + 0x10c (JIP's name, or the game's from 00438eb0).
+        let name_copy = calls
+            .iter()
+            .find(|(address, words)| *address == 0x0040_6d30 && words[0] == update + 0x10c)
+            .expect("the name copied into the message");
+        assert_eq!(name_copy.1[2], if jip_name { 0x7300 } else { 0x7100 });
         if jip_name {
             assert_eq!(named, 0, "JIP's name: no call");
             let record = e.mem.u32(nodes[0]);

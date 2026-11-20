@@ -497,7 +497,7 @@ fi
 mkdir -p -- "$saves" "$own/logs" "$own/reports" "$own/machine" || fail "could not make nv-rs's folders in $own"
 stamp=$(date +%Y-%m-%d_%H-%M-%S)
 log=$own/logs/game-$stamp.log
-# The play run's variables, as Windows' Play.exe passes them (scripts/launcher main.rs): NV_SOUND,
+# The play run's variables, as Windows' Play.exe passes them (crates/nv-launcher play/mod.rs): NV_SOUND,
 # NV_SAVE_OUT, NV_PREFS_OUT, NV_REPORT_DIR, NV_REPORT_LOG, NV_WGPU_CACHE, NV_D3DX_CACHE and
 # NV_SETTINGS. NV_SETTINGS makes the run a play run (host fixes::is_play_run): the play defaults
 # then hold (the fixes preset, real threads, the render thread, the borderless window, drawing on

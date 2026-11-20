@@ -110,8 +110,6 @@ const PAD_TRIGGER_OLD_LEFT: u32 = 0x011d_8a5a;
 const PAD_TRIGGER_OLD_RIGHT: u32 = 0x011d_8a5b;
 const PAD_TRIGGER_NEW_LEFT: u32 = 0x011d_8a72;
 const PAD_TRIGGER_NEW_RIGHT: u32 = 0x011d_8a73;
-/// Dead zone of the stick axes (`0x1ea9`).
-const STICK_THRESHOLD: i32 = 0x1ea9;
 
 /// Number of entries of the tutorial message table (`0x29`).
 const TUTORIAL_MESSAGE_COUNT: i32 = 0x29;
@@ -521,23 +519,26 @@ pub fn interface_manager_check_menu_button(e: &mut Engine, button: i32, analog: 
     let mut old_pushed = false;
     let mut new_pushed = false;
     if analog != 0 {
+        // The dead zone, the exe's `0x1ea9` in its eight immediates (`0x717B90` ... `0x717C2A`,
+        // `-0x1ea9` at the four negative ones) unless JIP LN NVSE's `SetDeadZoneLS` rewrote them.
+        let threshold = e.pad_dead_zone_left();
         let axis = |e: &Engine, address: u32| i32::from(e.mem.i16(address));
         match mask {
             1 => {
-                old_pushed = axis(e, PAD_AXIS_OLD_Y) > STICK_THRESHOLD;
-                new_pushed = axis(e, PAD_AXIS_NEW_Y) > STICK_THRESHOLD;
+                old_pushed = axis(e, PAD_AXIS_OLD_Y) > threshold;
+                new_pushed = axis(e, PAD_AXIS_NEW_Y) > threshold;
             }
             2 => {
-                old_pushed = axis(e, PAD_AXIS_OLD_Y) < -STICK_THRESHOLD;
-                new_pushed = axis(e, PAD_AXIS_NEW_Y) < -STICK_THRESHOLD;
+                old_pushed = axis(e, PAD_AXIS_OLD_Y) < threshold.wrapping_neg();
+                new_pushed = axis(e, PAD_AXIS_NEW_Y) < threshold.wrapping_neg();
             }
             4 => {
-                old_pushed = axis(e, PAD_AXIS_OLD_X) < -STICK_THRESHOLD;
-                new_pushed = axis(e, PAD_AXIS_NEW_X) < -STICK_THRESHOLD;
+                old_pushed = axis(e, PAD_AXIS_OLD_X) < threshold.wrapping_neg();
+                new_pushed = axis(e, PAD_AXIS_NEW_X) < threshold.wrapping_neg();
             }
             8 => {
-                old_pushed = axis(e, PAD_AXIS_OLD_X) > STICK_THRESHOLD;
-                new_pushed = axis(e, PAD_AXIS_NEW_X) > STICK_THRESHOLD;
+                old_pushed = axis(e, PAD_AXIS_OLD_X) > threshold;
+                new_pushed = axis(e, PAD_AXIS_NEW_X) > threshold;
             }
             _ => {}
         }
@@ -2699,6 +2700,47 @@ mod tests {
         e.mem.set_i16(PAD_AXIS_NEW_Y, 0x7000);
         e.mem.set_u16(PAD_BUTTONS_NEW, 0);
         assert_eq!(e.call(0x0071_7a40, &args![5u32, 1u32]).i32(), -1);
+    }
+
+    /// The eight stick tests compare with the engine's left dead zone (the exe's `0x1ea9` until
+    /// JIP's `SetDeadZoneLS` moves it: its immediates at `0x717B90` ... `0x717C2A`): moved to
+    /// 0x3000, a push of 0x2000 or 0x3000 in each direction no longer counts, one of 0x3001 does
+    /// (the four negative tests take the negation).
+    #[test]
+    fn check_menu_button_reads_the_moved_dead_zone() {
+        let mut e = button_engine(false);
+        let push = |e: &mut Engine, x: i16, y: i16| {
+            for at in [PAD_AXIS_OLD_X, PAD_AXIS_NEW_X] {
+                e.mem.set_i16(at, x);
+            }
+            for at in [PAD_AXIS_OLD_Y, PAD_AXIS_NEW_Y] {
+                e.mem.set_i16(at, y);
+            }
+        };
+        let cases = |by: i16| [(1u32, 0, by), (2, 0, -by), (4, -by, 0), (3, by, 0)];
+        for (button, x, y) in cases(0x2000) {
+            push(&mut e, x, y);
+            assert_eq!(e.call(0x0071_7a40, &args![button, 1u32]).i32(), 0);
+        }
+        e.set_pad_dead_zone_left(0x3000);
+        for by in [0x2000, 0x3000] {
+            for (button, x, y) in cases(by) {
+                push(&mut e, x, y);
+                assert_eq!(
+                    e.call(0x0071_7a40, &args![button, 1u32]).i32(),
+                    -1,
+                    "{button} {by:x}"
+                );
+            }
+        }
+        for (button, x, y) in cases(0x3001) {
+            push(&mut e, x, y);
+            assert_eq!(
+                e.call(0x0071_7a40, &args![button, 1u32]).i32(),
+                0,
+                "{button}"
+            );
+        }
     }
 
     #[test]

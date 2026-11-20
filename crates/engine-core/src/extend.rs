@@ -1400,6 +1400,42 @@ impl Default for ScriptTables {
     }
 }
 
+/// The pad sticks' dead zones as FalloutNV.exe's code reads them.
+///
+/// JIP LN NVSE's `SetDeadZoneLS` and `SetDeadZoneRS` (`functions_ln/ln_fn_gamepad.h` (JIP LN
+/// NVSE)) write a new number over 19 immediates each in the exe with `SafeWrite32`: the left
+/// stick's `0x1ea9` in `InterfaceManager::CheckMenuButton`, the companion wheel, the race menu's
+/// `DoGamepad`, the trait menu, VATS, `PlayerCharacter::Update` and the pad query `00a23e10`; the
+/// right stick's `0x21f1` in the race menu's `DoIdle`, the start menu's control remap, the trait
+/// menu, VATS, `PlayerCharacter::Update` and the player's look `009445b0` (the sites that compare
+/// below zero get the number negated, as JIP writes `-value` there). The port's translations of
+/// those functions read the two numbers here instead (as the script tables' immediates,
+/// [`ScriptTables`]): the code is unchanged and only the numbers move. Until a script sets them
+/// they are the exe's own, so with JIP not installed, or no `SetDeadZone*` call, every read gives
+/// the exe's immediate. One pair for the whole game: every real thread's engine shares it, and a
+/// reader takes each number with one load.
+#[derive(Debug)]
+pub struct PadDeadZones {
+    left: std::sync::atomic::AtomicI32,
+    right: std::sync::atomic::AtomicI32,
+}
+
+impl PadDeadZones {
+    /// The exe's left-stick dead zone (its immediates, e.g. `0x717B90`).
+    pub const EXE_LEFT: i32 = 0x1ea9;
+    /// The exe's right-stick dead zone (its immediates, e.g. `0x7AE57A`).
+    pub const EXE_RIGHT: i32 = 0x21f1;
+}
+
+impl Default for PadDeadZones {
+    fn default() -> PadDeadZones {
+        PadDeadZones {
+            left: std::sync::atomic::AtomicI32::new(PadDeadZones::EXE_LEFT),
+            right: std::sync::atomic::AtomicI32::new(PadDeadZones::EXE_RIGHT),
+        }
+    }
+}
+
 /// The extenders' state on an engine (fields of [`Engine`]).
 pub(crate) struct ExtendState {
     /// This engine's id (a shared slot's holder names it).
@@ -1430,6 +1466,8 @@ pub(crate) struct ExtendState {
     pub(crate) marks: std::sync::Arc<CallerMarks>,
     /// The caller words ([`Engine::mark_caller_word`]), shared like the marks.
     pub(crate) words: std::sync::Arc<CallerWords>,
+    /// The pad dead zones the game's code reads ([`PadDeadZones`]), shared like the marks.
+    pub(crate) pad_dead_zones: std::sync::Arc<PadDeadZones>,
     /// xNVSE's fixes of the game's own `set`/`if` expression code (`Hook_Script_Init`): the guest
     /// address of its token buffer (`s_ExpressionParserAltBuffer`, 0x500 bytes) once installed,
     /// 0 without it ([`Engine::expression_alt_buffer`]). Set before the threads start, copied to
@@ -1751,6 +1789,7 @@ impl ExtendState {
             hooks: Default::default(),
             marks: Default::default(),
             words: Default::default(),
+            pad_dead_zones: Default::default(),
             expression_alt_buffer: 0,
             uio: false,
         }
@@ -1782,6 +1821,7 @@ impl ExtendState {
             hooks: self.hooks.clone(),
             marks: self.marks.clone(),
             words: self.words.clone(),
+            pad_dead_zones: self.pad_dead_zones.clone(),
             expression_alt_buffer: self.expression_alt_buffer,
             uio: self.uio,
         }
@@ -2275,6 +2315,42 @@ impl Engine {
         self.extend
             .controls_alt
             .store(flags, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The left stick's dead zone the game's code compares with ([`PadDeadZones`]): the exe's
+    /// `0x1ea9` unless JIP LN NVSE's `SetDeadZoneLS` changed it. One load.
+    #[inline]
+    pub fn pad_dead_zone_left(&self) -> i32 {
+        self.extend
+            .pad_dead_zones
+            .left
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// The right stick's dead zone the game's code compares with ([`PadDeadZones`]): the exe's
+    /// `0x21f1` unless JIP LN NVSE's `SetDeadZoneRS` changed it. One load.
+    #[inline]
+    pub fn pad_dead_zone_right(&self) -> i32 {
+        self.extend
+            .pad_dead_zones
+            .right
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Sets [`Engine::pad_dead_zone_left`] (JIP LN NVSE's `SetDeadZoneLS`, for every thread).
+    pub fn set_pad_dead_zone_left(&self, value: i32) {
+        self.extend
+            .pad_dead_zones
+            .left
+            .store(value, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Sets [`Engine::pad_dead_zone_right`] (JIP LN NVSE's `SetDeadZoneRS`, for every thread).
+    pub fn set_pad_dead_zone_right(&self, value: i32) {
+        self.extend
+            .pad_dead_zones
+            .right
+            .store(value, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Which of JIP LN NVSE's game patches are on ([`jip_patches`]'s bits), 0 while JIP answers
@@ -3251,6 +3327,41 @@ mod tests {
         e.set_script_tables(moved);
         assert_eq!(e.script_tables(), moved);
         assert_eq!(Engine::new().script_tables(), ScriptTables::EXE);
+    }
+
+    /// The pad dead zones are the exe's immediates (`0x1ea9` at `0x717B90` and kin, `0x21f1` at
+    /// `0x7AE57A` and kin) until set, each set alone, and one pair for every thread's engine (a
+    /// real thread's engine made before the set sees it).
+    #[test]
+    fn the_pad_dead_zones_are_the_exes_until_set_and_shared() {
+        let e = engine();
+        assert_eq!(e.pad_dead_zone_left(), 0x1ea9);
+        assert_eq!(e.pad_dead_zone_right(), 0x21f1);
+        assert_eq!(
+            (PadDeadZones::EXE_LEFT, PadDeadZones::EXE_RIGHT),
+            (7849, 8689)
+        );
+        let thread = e.extend.for_thread();
+        e.set_pad_dead_zone_left(3277);
+        assert_eq!(e.pad_dead_zone_left(), 3277);
+        assert_eq!(e.pad_dead_zone_right(), 0x21f1);
+        e.set_pad_dead_zone_right(29490);
+        assert_eq!(e.pad_dead_zone_left(), 3277);
+        assert_eq!(e.pad_dead_zone_right(), 29490);
+        let loads = |s: &ExtendState| {
+            let z = &s.pad_dead_zones;
+            (
+                z.left.load(std::sync::atomic::Ordering::Relaxed),
+                z.right.load(std::sync::atomic::Ordering::Relaxed),
+            )
+        };
+        assert_eq!(loads(&thread), (3277, 29490));
+        assert_eq!(loads(&e.extend.for_thread()), (3277, 29490));
+        let other = engine();
+        assert_eq!(
+            (other.pad_dead_zone_left(), other.pad_dead_zone_right()),
+            (0x1ea9, 0x21f1)
+        );
     }
 
     /// Two engines keep their own extension state; slots are keyed by type.

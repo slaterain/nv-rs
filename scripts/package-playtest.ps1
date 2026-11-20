@@ -63,9 +63,9 @@ try {
         $rustup = if ($env:RUSTUP_HOME) { $env:RUSTUP_HOME } else { Join-Path $env:USERPROFILE '.rustup' }
         $env:CARGO_ENCODED_RUSTFLAGS = @('-C', 'target-feature=+crt-static', "--remap-path-prefix=$root=nv-rs", "--remap-path-prefix=$registry=cargo", "--remap-path-prefix=$rustup=rustup") -join [char]0x1f
         $env:CARGO_TARGET_DIR = $Target
-        cargo build --release --locked -p nv-viewer
-        if ($LASTEXITCODE) { throw 'The game program did not build.' }
-        foreach ($manifest in @('launcher', 'd3d9-capture', 'package-check')) {
+        cargo build --release --locked -p nv-viewer -p nv-launcher
+        if ($LASTEXITCODE) { throw 'The game program or the launcher did not build.' }
+        foreach ($manifest in @('d3d9-capture', 'package-check')) {
             cargo build --release --locked --manifest-path "scripts/$manifest/Cargo.toml"
             if ($LASTEXITCODE) { throw "$manifest did not build." }
         }
@@ -84,7 +84,8 @@ try {
 
     # Our own programs. app\FalloutNV.exe is nv-viewer under that name: NVIDIA's driver fixes and
     # Windows' per-program sound go by the name (docs/SOUND.md), and no link is needed.
-    Copy-Item -LiteralPath (Join-Path $x64 'Play.exe') -Destination (Join-Path $stage 'Play.exe')
+    # Play.exe is the launcher's nv-rs program under the name the package has always had.
+    Copy-Item -LiteralPath (Join-Path $x64 'nv-rs.exe') -Destination (Join-Path $stage 'Play.exe')
     Copy-Item -LiteralPath (Join-Path $x64 'nv-viewer.exe') -Destination (Join-Path $stage 'app/FalloutNV.exe')
     Copy-Item -LiteralPath (Join-Path $x64 'd3d9-capture.exe') -Destination (Join-Path $stage 'app/tools/d3d9-capture.exe')
     Copy-Item -LiteralPath (Join-Path $x86 'nvapi-capture.exe') -Destination (Join-Path $stage 'app/tools/nvapi-capture.exe')

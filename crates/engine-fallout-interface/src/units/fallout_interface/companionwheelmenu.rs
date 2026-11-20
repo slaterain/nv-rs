@@ -741,11 +741,14 @@ pub fn companion_wheel_menu_do_idle(e: &mut Engine, this: Ptr<CompanionWheelMenu
     };
     // The code starts the stick's x and y at 0.0 and goes on only after reading them (FILD
     // of the words, FSTP to floats).
+    // The dead zone: the exe's `0x1ea9` (immediates `0x755552`, `0x755569`) unless JIP LN NVSE's
+    // `SetDeadZoneLS` rewrote them.
     let moved = manager_ready(e) && manager_ready(e) && {
+        let threshold = e.pad_dead_zone_left();
         let first = i32::from(e.mem.u16(STICK_Y) as i16);
-        e.call(ABS, &args![first]).i32() > 0x1ea9 || {
+        e.call(ABS, &args![first]).i32() > threshold || {
             let second = i32::from(e.mem.u16(STICK_OTHER) as i16);
-            e.call(ABS, &args![second]).i32() > 0x1ea9
+            e.call(ABS, &args![second]).i32() > threshold
         }
     };
     if !moved {
@@ -2532,6 +2535,40 @@ mod n087_tests {
         let quotient = (-1000.0f32 / 20000.0f32).to_bits();
         assert_eq!(calls(&r.e, MATH_005DC330), vec![vec![quotient]]);
         assert_eq!(calls(&r.e, RT_DYNAMIC_CAST).len(), 16);
+    }
+
+    /// The stick test compares with the engine's left dead zone (the exe's `0x1ea9` until JIP's
+    /// `SetDeadZoneLS` moves it: immediates `0x755552`, `0x755569`): moved to 20000, a stick at
+    /// -20000 and 1000 gives no angle; at 19999 it does again, from the first word or the second.
+    #[test]
+    fn do_idle_reads_the_moved_dead_zone() {
+        for (dead_zone, y, x, turns) in [
+            (20000, -20000i16, 1000i16, false),
+            (19999, -20000, 1000, true),
+            (19999, 100, -20000, true),
+            (20000, 100, -20000, false),
+        ] {
+            let mut r = rig();
+            let menu = r.menu;
+            tiles(&mut r);
+            answer(&mut r.e, IS_TOP_MENU_ID, 1);
+            answer(&mut r.e, INTERFACE_TEST_004B71D0, 1);
+            answer(&mut r.e, INTERFACE_MANAGER, 0x0c00_0000);
+            r.e.map(0x0c00_0000, 0x100);
+            r.e.register(ABS, |_, a| (a[0] as i32).wrapping_abs().into_ret());
+            r.e.mem.set_u16(STICK_Y, y as u16);
+            r.e.mem.set_u16(STICK_OTHER, x as u16);
+            r.e.register(MATH_005DC330, |_, a| {
+                f64::from(f32::from_bits(a[0])).into_ret()
+            });
+            r.e.set_pad_dead_zone_left(dead_zone);
+            r.e.call(0x0075_5480, &args![menu]);
+            assert_eq!(
+                calls(&r.e, RT_DYNAMIC_CAST).len(),
+                if turns { 16 } else { 0 },
+                "{dead_zone} {y} {x}"
+            );
+        }
     }
 
     #[test]
