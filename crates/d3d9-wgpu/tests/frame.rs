@@ -5448,7 +5448,8 @@ fn a_declaration_set_again_after_an_fvf_is_the_layout_again() {
 /// A depth stand-in (a colour target smaller than the bound depth surface) is kept while a draw
 /// uses it and let go once idle for more than 300 presents: on a 256 x 256 depth surface, a 64 x 64
 /// target cleared once and a 128 x 128 one cleared every frame give two stand-ins, and after 302
-/// presents only the 128 x 128 one is left, for the same depth surface.
+/// presents only the 128 x 128 one is left, for the same depth surface, and it is the stand-in made
+/// at the first frame (not one let go and made again).
 #[test]
 fn idle_depth_stand_ins_go_and_used_ones_stay() {
     let Some(mut g) = Gpu::new(256, 1) else {
@@ -5512,5 +5513,9 @@ fn idle_depth_stand_ins_go_and_used_ones_stay() {
     assert_eq!(left.len(), 1, "{left:?}");
     assert_eq!((left[0].1, left[0].2), (128, 128));
     assert_eq!(left[0].0, first[1].0, "the same depth surface");
+    assert_eq!(
+        left[0].3, first[1].3,
+        "the stand-in drawn with every frame is the one made at the first, never let go"
+    );
     assert_eq!(g.b.device().expect("the device").wgpu_errors(), 0);
 }

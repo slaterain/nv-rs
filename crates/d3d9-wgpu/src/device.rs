@@ -9521,10 +9521,14 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.device.destroy();
     }
 
-    /// The depth stand-ins kept ([`Device::usable_depth`]): each one's depth surface id and size
-    /// (tests).
-    pub fn depth_stand_ins_for_tests(&self) -> Vec<(u64, u32, u32)> {
-        let mut keys: Vec<(u64, u32, u32)> = self.depth_parts.keys().copied().collect();
+    /// The depth stand-ins kept ([`Device::usable_depth`]): each one's depth surface id, size and
+    /// its own surface id (a stand-in let go and made again has a new one) (tests).
+    pub fn depth_stand_ins_for_tests(&self) -> Vec<(u64, u32, u32, u64)> {
+        let mut keys: Vec<(u64, u32, u32, u64)> = self
+            .depth_parts
+            .iter()
+            .map(|(&(ds, w, h), (s, _))| (ds, w, h, s.id))
+            .collect();
         keys.sort_unstable();
         keys
     }
