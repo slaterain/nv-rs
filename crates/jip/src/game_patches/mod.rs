@@ -63,6 +63,7 @@ pub mod ge;
 pub mod gf;
 pub mod gh1;
 pub mod gh2;
+pub mod gk;
 pub mod gl;
 pub mod gp;
 pub mod gs;
@@ -110,6 +111,7 @@ pub const AREAS: &[Area] = &[
     gh1::AREA,
     gh2::AREA,
     gl::AREA,
+    gk::AREA,
     gp::AREA,
     gs::AREA,
     gw::AREA,

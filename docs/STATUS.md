@@ -246,15 +246,19 @@ JIP answers "installed". They include:
   JIP's HUD cursor, message boxes a script shows with `MessageBoxExAlt` (up to 1200 wide), and
   mods' own fonts (89 fonts instead of 8).
 - **Guards of nv-rs's own** (fixes preset): text in the empty font 9 measures as nothing where the
-  game would crash, and a font file is read no further than the game's font data block.
+  game would crash, and a font file is read no further than the game's font data block; a muzzle
+  flash or an explosion whose light record a script took away keeps the game's brightness (the
+  missing-data guard row) where JIP reads through nothing.
 - **JIP's null checks:** two are in (a null object given to the game's "first word" getter, a
   light without its data in a lit object's light count); the third place JIP lists changes
   nothing, as the game's own loop already stops there.
+- **JIP's lights in combat:** shots whose projectile record names a light glow and light what
+  they pass (`SetProjectileLight`'s light included), and a muzzle flash's and an explosion's
+  light shine at the light record's own brightness. Each lit shot adds a light while it flies,
+  with no cap, as in JIP.
 
 Not yet:
 
-- JIP's lights on projectiles (so `SetProjectileLight`'s light does not show yet), muzzle flashes
-  and explosions: they wait for the drawing work.
 - Its fixed-string pool: it waits for the 64-bit move.
 
 Left out on purpose: two patches that only make the game faster; the editor's, NVAC's and Enhanced
