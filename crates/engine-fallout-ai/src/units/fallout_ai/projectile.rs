@@ -278,6 +278,30 @@ pub fn fn_009c3e10(e: &mut Engine, this: Ptr<Projectile>) {
     e.call(ASSIGN_NI_POINTER, &args![slot, 0u32]);
 }
 
+/// The projectile's start in the world (`009bda10`) at `0x9BDC92`: its light made (`009c3d90`, by address). JIP LN
+/// NVSE's G95 (group GK's row and handler, a fix row: the call becomes `AddProjectileLightHook`) answers the seam
+/// with the projectile and makes one of JIP's point lights instead; one load while JIP's fixes are not in.
+fn make_light(e: &mut Engine, this: Ptr<Projectile>) {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+        && e.site(0x009b_dc92, &[this.addr()]).is_some()
+    {
+        return;
+    }
+    e.call(0x009c_3d90, &args![this]);
+}
+
+/// The projectile's destructor (`009bc470`) at `0x9BC6D9`: its light removed (`009c3e10`, by address). JIP LN
+/// NVSE's G95 (group GK's row and handler, a fix row: the call becomes `RemoveProjectileLightHook`) answers the seam
+/// with the projectile and takes JIP's light off its node instead; one load while JIP's fixes are not in.
+fn remove_light(e: &mut Engine, this: Ptr<Projectile>) {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+        && e.site(0x009b_c6d9, &[this.addr()]).is_some()
+    {
+        return;
+    }
+    e.call(0x009c_3e10, &args![this]);
+}
+
 // Translated from 009c3e60 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Fades the projectile's light with its alpha (the engine map has no
 /// name): with `spLight` set and flag 0x20, the light gets (`0050dd20`)
@@ -2193,7 +2217,7 @@ pub fn fn_009bc470(e: &mut Engine, this: Ptr<Projectile>) {
             &args![base, 0u32, 1u32, 0u32, 0u32, 0u32, 0u32, 0u32, 1u32, 0u32],
         );
     }
-    e.call(0x009c_3e10, &args![this]);
+    remove_light(e, this);
     let list = this.byte_add(IMPACT_LIST);
     while !typed_call!(leaf::FAMILY, 0x0082_56d0, leaf::both_words_zero(e, list)) {
         let head = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, list));
@@ -3447,7 +3471,7 @@ pub fn fn_009bda10(e: &mut Engine, this: Ptr<Projectile>) {
         let cell = e.call(0x008d_6f30, &args![this]).u32();
         e.call(0x0054_8230, &args![cell, this, 0u32]);
     }
-    e.call(0x009c_3d90, &args![this]);
+    make_light(e, this);
     if !loaded {
         fn_009c2ff0(e, this);
     }
@@ -8385,6 +8409,140 @@ mod tests {
         e.call_log = Some(vec![]);
         fn_009c3d90(&mut e, this);
         assert!(calls(&e, GEN_DYNAMIC).is_empty());
+    }
+
+    thread_local! {
+        static G95_ASKED: std::cell::RefCell<Vec<(u32, Vec<u32>)>> = const { std::cell::RefCell::new(Vec::new()) };
+        static G95_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn at_g95_add(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G95_ASKED.with(|s| s.borrow_mut().push((0x009b_dc92, a.to_vec())));
+        G95_ANSWER.with(|c| c.get())
+    }
+
+    fn at_g95_remove(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G95_ASKED.with(|s| s.borrow_mut().push((0x009b_c6d9, a.to_vec())));
+        G95_ANSWER.with(|c| c.get())
+    }
+
+    /// JIP LN NVSE's G95 seams at `0x9BDC92` and `0x9BC6D9`: not asked while JIP is not installed or installed
+    /// without its fixes (the game's light maker and remover run, by address); with its fixes asked with the
+    /// projectile, an answer taking the call's place and no answer letting the game's call run.
+    #[test]
+    fn g95_seams_replace_the_light_calls_only_with_jips_fixes() {
+        use engine_core::extend::jip_patches;
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        for (word, answer, asked, called) in [
+            (0, Some(0), false, true),
+            (jip_patches::INSTALLED, Some(0), false, true),
+            (fixes, Some(0), true, false),
+            (fixes, None, true, true),
+        ] {
+            let mut e = engine();
+            e.on_site_for_test(0x009b_dc92, at_g95_add);
+            e.on_site_for_test(0x009b_c6d9, at_g95_remove);
+            G95_ASKED.with(|s| s.borrow_mut().clear());
+            G95_ANSWER.with(|c| c.set(answer));
+            e.set_jip_patches(word);
+            let this = projectile(&mut e);
+            make_light(&mut e, this);
+            remove_light(&mut e, this);
+            let want: Vec<(u32, Vec<u32>)> = if asked {
+                vec![
+                    (0x009b_dc92, vec![this.addr()]),
+                    (0x009b_c6d9, vec![this.addr()]),
+                ]
+            } else {
+                vec![]
+            };
+            assert_eq!(G95_ASKED.with(|s| s.take()), want, "{word:x} {answer:?}");
+            let made = calls(&e, 0x009c_3d90);
+            let removed = calls(&e, 0x009c_3e10);
+            if called {
+                assert_eq!(made, vec![vec![this.addr()]], "{word:x} {answer:?}");
+                assert_eq!(removed, vec![vec![this.addr()]], "{word:x} {answer:?}");
+            } else {
+                assert!(made.is_empty() && removed.is_empty(), "{word:x}");
+            }
+        }
+    }
+
+    /// The four cases of the G95 seams' tests: the JIP word, the handler's answer, whether the seam is asked and
+    /// whether the game's own call behind it runs.
+    fn g95_cases() -> [(u32, Option<u32>, bool, bool); 4] {
+        use engine_core::extend::jip_patches;
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        [
+            (0, Some(0), false, true),
+            (jip_patches::INSTALLED, Some(0), false, true),
+            (fixes, Some(0), true, false),
+            (fixes, None, true, true),
+        ]
+    }
+
+    /// The game's own projectile start (`009bda10`) reaches the G95 add seam at `0x9BDC92`: with JIP's fixes and
+    /// an answer, the game's light maker `009c3d90` is not called; otherwise it is, once, with the projectile.
+    #[test]
+    fn g95_the_projectiles_start_asks_the_add_seam() {
+        for (word, answer, asked, called) in g95_cases() {
+            let mut e = engine();
+            e.on_site_for_test(0x009b_dc92, at_g95_add);
+            e.on_site_for_test(0x009b_c6d9, at_g95_remove);
+            G95_ASKED.with(|s| s.borrow_mut().clear());
+            G95_ANSWER.with(|c| c.set(answer));
+            e.set_jip_patches(word);
+            let this = projectile(&mut e);
+            stub(&mut e, 0x0042_ce10, 1);
+            stub(&mut e, 0x004f_d400, 0x9999);
+            stub(&mut e, 0x008d_7510, 0x1234);
+            stub_float(&mut e, 0x009a_7c40, 500.0);
+            stub_float(&mut e, 0x0064_4790, 7.0);
+            fn_009bda10(&mut e, this);
+            let want = if asked {
+                vec![(0x009b_dc92, vec![this.addr()])]
+            } else {
+                vec![]
+            };
+            assert_eq!(G95_ASKED.with(|s| s.take()), want, "{word:x} {answer:?}");
+            let made = calls(&e, 0x009c_3d90);
+            if called {
+                assert_eq!(made, vec![vec![this.addr()]], "{word:x} {answer:?}");
+            } else {
+                assert!(made.is_empty(), "{word:x}");
+            }
+        }
+    }
+
+    /// The game's own projectile destructor (`009bc470`) reaches the G95 remove seam at `0x9BC6D9`: with JIP's
+    /// fixes and an answer, the game's light remover `009c3e10` is not called (JIP's light leaves its node through
+    /// the seam); otherwise it is, once, with the projectile.
+    #[test]
+    fn g95_the_projectiles_destructor_asks_the_remove_seam() {
+        for (word, answer, asked, called) in g95_cases() {
+            let mut e = engine();
+            quiet_destructor_callees(&mut e);
+            e.on_site_for_test(0x009b_dc92, at_g95_add);
+            e.on_site_for_test(0x009b_c6d9, at_g95_remove);
+            G95_ASKED.with(|s| s.borrow_mut().clear());
+            G95_ANSWER.with(|c| c.set(answer));
+            e.set_jip_patches(word);
+            let this = projectile(&mut e);
+            stub(&mut e, GET_BASE_OBJECT, 0x6000);
+            fn_009bc470(&mut e, this);
+            let want = if asked {
+                vec![(0x009b_c6d9, vec![this.addr()])]
+            } else {
+                vec![]
+            };
+            assert_eq!(G95_ASKED.with(|s| s.take()), want, "{word:x} {answer:?}");
+            let removed = calls(&e, 0x009c_3e10);
+            if called {
+                assert_eq!(removed, vec![vec![this.addr()]], "{word:x} {answer:?}");
+            } else {
+                assert!(removed.is_empty(), "{word:x}");
+            }
+        }
     }
 
     #[test]
