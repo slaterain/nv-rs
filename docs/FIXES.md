@@ -1777,7 +1777,22 @@ model loader. None yet.
 #### Menus and the HUD
 
 Every menu but the interface manager's and the console's, the HUD, tiles, fonts and the
-controller's input. None yet.
+controller's input.
+
+| Row (Tweaks' function) | PLAN | Key in `[nv-rs Stewie]` | Exe places | What a player gets |
+|---|---|---|---|---|
+| `MenuFixes` (quest scroll) | S0022.09 | `bMenuFixesQuestScroll` | `MapMenu::UpdateQuests` `0079b8e0` (`0x79BBD0`) | Selecting a quest on the Pip-Boy map keeps the quest list's scroll position when the mouse has moved (the quest is focused only with the pad or a mouse that has not moved since the keys were used) |
+| `MenuFixes` (debug lock pick) | S0022.13 | `bMenuFixesDebugLockPickHealth` | `LockPickMenu::Create` `0078db00` (`0x78DEC2`) | The debug lock pick menu's caption shows the pick's real health (`PICK HEALTH: 37%`) instead of always 100% |
+| `MenuFixes` (map drag) | S0022.19 | `bMenuFixesMapDragUndiscovered` | `MapMenu::DoClick` `00796fd0` (`0x797FCF`, `0x797FFE`) | Clicking and dragging the local map over an undiscovered place no longer shows `sNoFastTravelUndiscovered` |
+| `MenuFixes` (pad markers) | S0022.25 | `bMenuFixesMapPadMarker` | `MapMenu::DoGamepad` `00799790` (`0x799A14`) | The pad's X places a map marker while the stick moves the map. JIP LN NVSE's dead zone seam in the same function (`0x799861`, D04) acts as before |
+| `MenuFixes` (companion labels) | S0022.26 | `bMenuFixesCompanionLabelClips` | `MapMenu::AddCompanionMarkers` `0079ea30` (`0x79F1D7`) | Companion names on the world map are clipped to the map when first made (the game set it only on a zoom) |
+| `MenuFixes` (roulette texts) | S0022.27 | `bMenuFixesRouletteZeroBetText` | `RouletteMenu::PrepareBetTiles` `007b9c40` (`0x7BA10F`, `0x7BA208`, `0x7BA2CB`) | The three roulette bets that include 0 or 00 with other numbers show the bet's caption first, then their numbers |
+| `MenuFixes` (pad selection box) | S0022.31 | `bMenuFixesMapPadSelectionCentred` | `MapMenu::DoControllerSwitch` `0079a610` (`0x79A636`, `0x79A652`) | Switching to the pad centres the map's marker selection box in its parent (nothing for a box without the value, where Tweaks reads through a null pointer) |
+| `MenuFixes` (companion markers) | S0022.41 | `bMenuFixesCompanionMarkersReset` | `MapMenu::AddCompanionMarkers` (`0x79EA73`) | Companion marker triangles left on the map are taken off before the markers are made again |
+| `MenuFixes` (caravan and console) | S0022.46 | `bMenuFixesCaravanPadConsole` | `CaravanMenu::DoIdle` `00741500` (`0x741683`) | The pad does not move the caravan selection while the console is open. JIP LN NVSE's dead zone seams inside that test (`0x7416D6`, `0x741705`, D04) are asked only while the console is closed |
+| `CaravanDoublePayoutFix` | S0092 | `bCaravanDoublePayoutFix` | the caravan payout `0074cc70` (`0x74CDB2`, `0x74CE21`) | **Changes payouts.** A won caravan game pays the ante once: the game moved the bills and caps to the player and then gave them again from the barter container. Now the barter container's caps come first, then the challenger's (to the player), the rest is added to the player, and a corner message says each payment. Tweaks' `bHideCapsAddedMessages` (0 in VNV) reads as 0 here until its own row (S0884) is built |
+| `RouletteMenuFixes` (zero) | S0196.04 | `bRouletteMenuFixesZeroWins` | `RouletteMenu::DoIdle` `007bd2a0` (`0x7BDCE4`) | **Changes payouts.** A roulette bet on a tile that includes 0 (bet tiles 0, 24, 48, 72, 145, 146) wins when the ball lands on 0; the game lost it |
+| `RouletteMenuFixes` (cut bet) | S0196.05 | `bRouletteMenuFixesCutBetValue` | `RouletteMenu::DoIdle` (`0x7BEB9B`, `0x7BEBBD`) | A bet cut down to the chips left updates the bet's number, not the `sCurrentBet` caption |
 
 ## Credits
 
