@@ -121,7 +121,7 @@ fn s0236_place_occlusion_plane_keeps_its_plane() {
 /// `BGSPerk::BuildDescriptionString` (`005ebac0`, `thiscall`: the perk, the buffer, its size).
 const BUILD_DESCRIPTION: u32 = 0x005e_bac0;
 /// The exe's strings the line is made of (as FalloutNV.exe 1.4.0.525 holds them).
-const EXE_TEXTS: [(u32, &[u8]); 12] = [
+const EXE_TEXTS: [(u32, &[u8]); 13] = [
     (0x0101_2630, b", "),
     (0x0101_2648, b"\n"),
     (0x0101_9f08, b"%s"),
@@ -133,6 +133,7 @@ const EXE_TEXTS: [(u32, &[u8]); 12] = [
     (0x0104_701c, b"%s%s%d, "),
     (0x0104_7028, b" %s%s%d %s "),
     (0x0104_7034, b" < "),
+    (0x0104_7038, b"%s: "),
     (0x0104_7040, b"%s: %s %d"),
 ];
 /// The settings the line names (a `Setting`'s text at `+4`): the requirements, the ranks, "OR"
@@ -147,6 +148,8 @@ const SETTINGS: [(u32, &[u8]); 4] = [
 const ACTOR_VALUE_INFOS: u32 = 0x011d_61c8;
 /// The description's text getter (the perk's `TESDescription` at `+0x24`, vtable slot `+0x10`).
 const DESCRIPTION_TEXT: u32 = 0x00ff_6000;
+/// The C runtime's `vsprintf_s`.
+const VSPRINTF_S: u32 = 0x00ec_6bb5;
 /// The `PerkMenuDescriptionTypoFix` rows, S0093.01 to .06, then .07.
 const PERK_ROWS: [stewie::Row; 7] = [
     stewie::PERK_TEXT_NO_DASHES,
@@ -216,7 +219,7 @@ fn perk_text(conditions: &[Condition], ranks: u8, on: &[stewie::Row]) -> String 
     e.mem.set_u32(vtable + 0x10, DESCRIPTION_TEXT);
     e.mem.set_u32(perk + 0x24, vtable);
     let description = text_at(&mut e, b"Text.");
-    e.register(DESCRIPTION_TEXT, move |_, _| ret(description));
+    e.register_double(DESCRIPTION_TEXT, move |_, _| ret(description));
     e.mem.set_u8(perk + 0x39, ranks);
     e.mem.set_u8(perk + 0x3a, 2);
     // The condition list (`tList`: the data word, the next node), its head in the perk at `+0x40`.
@@ -246,6 +249,32 @@ fn perk_text(conditions: &[Condition], ranks: u8, on: &[stewie::Row]) -> String 
         }
         e.mem.set_u32(node, c);
     }
+    // The C runtime's `vsprintf_s` (`00ec6bb5`: buffer, size, format, argument list), which the
+    // string format (`00406d00`, translated) calls: its own body reaches the thread data and the
+    // open `GetLastError` import, so it stands in for the two conversions the line uses, `%s` and
+    // `%d`.
+    e.register(VSPRINTF_S, |e, a| {
+        let (buffer, size, format, mut next) = (a[0], a[1], a[2], a[3]);
+        let mut text = Vec::new();
+        let mut chars = e.mem.cstr(format).into_iter();
+        while let Some(c) = chars.next() {
+            if c != b'%' {
+                text.push(c);
+                continue;
+            }
+            let word = e.mem.u32(next);
+            next += 4;
+            match chars.next() {
+                Some(b's') => text.extend(e.mem.cstr(word)),
+                Some(b'd') => text.extend((word as i32).to_string().into_bytes()),
+                other => panic!("conversion {other:?} not stood in"),
+            }
+        }
+        assert!((text.len() as u32) < size, "vsprintf_s overflow");
+        e.mem.write(buffer, &text);
+        e.mem.set_u8(buffer + text.len() as u32, 0);
+        ret(text.len() as u32)
+    });
     for row in PERK_ROWS {
         e.set_stewie(row, on.contains(&row));
     }
