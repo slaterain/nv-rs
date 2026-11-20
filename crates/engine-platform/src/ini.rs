@@ -225,7 +225,7 @@ mod tests {
     /// reads it (measured on scratch files, 2026-11-09, measure/ini/DESIGN.md): a heading glued
     /// to the mark is no heading, so the keys under it are in no section and not found, and the
     /// sections after it read as usual. Play.exe puts nv-rs's block at the end of such a file
-    /// (scripts/launcher `game_ini::with_sections`), where it changes none of the player's keys.
+    /// (the launcher, crates/nv-launcher: `game_ini::with_sections`), where it changes none of the player's keys.
     #[test]
     fn a_heading_glued_to_a_byte_order_mark_is_no_heading() {
         let marked = b"\xef\xbb\xbf[General]\r\nsA=1\r\nsB=two\r\n[Display]\r\nfB=2\r\n\
