@@ -1045,9 +1045,18 @@ With the switch on:
   for it then: the small cell extent for `uGridsToLoad` up to 5, JIP's own update of the cells' seen
   bits (the fog of war) in place of the game's, the found location's name with the minimap's markers of
   its cell let go, flags when the quest targets or the placed marker change, and the local maps'
-  texture format reset with the renderer. `UpdateMiniMap`, which draws the map, comes next. JIP 57.30
-  writes no cache of local map pictures (its `SaveLocalMapTexture` is not called: the calls are
-  commented out), so the port writes none either.
+  texture format reset with the renderer. `UpdateMiniMap` draws the map as JIP does: the zoom, the
+  world map's markers by cell around the player, the nine local maps (the cells around the player, or
+  an interior's sections) drawn into JIP's own textures and kept (at most 60, then the oldest let go
+  down to 42), the fog of war over them, the door and quest markers, and the player's marker turned.
+  JIP 57.30 writes no cache of local map pictures (its `SaveLocalMapTexture` is not called: the calls
+  are commented out), so the port writes none either. Three JIP slips are not copied: JIP keeps
+  pointers to its world marker tiles while the list holding them can grow and move, so a cell's markers
+  could point at freed memory (the port keeps their places in the list); a kept map drawn again frees
+  its old texture while JIP's "first map" can still point at it, so the clean-up above 60 maps could
+  start from freed memory and delete the newest maps (the port moves "first" on before the old texture
+  goes); and a local map slot with no cell keeps its old texture, which the clean-up or a colour change
+  may have deleted (the port clears it, as `InitMiniMap` leaves it).
 
 Not yet, with the switch on:
 - The 23 commands not built yet are named and found like the others but have no handler: a script
