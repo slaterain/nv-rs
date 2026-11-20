@@ -6,7 +6,7 @@
 //!   tool fails, the last good table is used and the log says so.
 //! - The sound table takes about 20 s, so it is made again only when Windows' build or the default
 //!   sound device changed.
-use crate::win;
+use super::win;
 use std::io::Read;
 use std::os::windows::process::CommandExt;
 use std::path::Path;

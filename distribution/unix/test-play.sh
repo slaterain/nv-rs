@@ -117,6 +117,14 @@ else
     check "1 no play settings where the start stops" '! printf "%s" "$out" | grep -q "^NV_SETTINGS="'
 fi
 check "1 log written" '[ "$(ls "$own/logs" | grep -c "^game-.*\.log$")" = 1 ]'
+# 1b. A profile's own settings.ini (the launcher's Settings screen, before that profile was made
+# ready) is the one named, while there is no shared one.
+if case "$(uname -s) $(uname -m)" in *" x86_64" | "Darwin arm64") true ;; *) false ;; esac; then
+    mkdir -p "$own/game" && printf 'FrameLimit=60\n' >"$own/game/settings.ini"
+    out=$(run </dev/null 2>&1)
+    check "1b the profile's own settings" 'printf "%s" "$out" | grep -qxF "NV_SETTINGS=$own/game/settings.ini"'
+    rm -f "$own/game/settings.ini"
+fi
 
 # 2. Answers given: Enter (and "no") leave the saves, and mark the question asked.
 out=$(answer '\n' 2>&1); st=$?

@@ -1,6 +1,6 @@
 //! Finding the player's game: Steam, GOG and Epic installs, read only. The parsers are plain
 //! functions over text, so they are tested without those stores on this PC.
-use crate::win;
+use super::win;
 use std::path::{Path, PathBuf};
 
 /// Steam's app ids of Fallout: New Vegas (the main one and the one sold in some regions).

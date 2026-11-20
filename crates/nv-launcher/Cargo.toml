@@ -1,0 +1,31 @@
+[package]
+name = "nv-launcher"
+version = "0.1.0"
+description = "nv-rs's one launcher, themed like the game's own terminal: the start screen and Play (Play.exe on Windows, nv-rs on Linux and macOS)"
+edition.workspace = true
+license.workspace = true
+rust-version = "1.88"
+publish = false
+
+# The program the player double-clicks: `nv-rs`; the Windows package names it Play.exe, as before.
+[[bin]]
+name = "nv-rs"
+path = "src/main.rs"
+
+# Every dependency is already in the workspace's lock, at the versions and features the workspace
+# uses: d3d9-wgpu's wgpu, engine-platform's winit. The project's own crates read the installed
+# game's archives (bsa), the profile files (game-profile), the mods folders (mod-install) and, on
+# Linux and macOS, where the game and nv-rs's own folder are (game-folders).
+[dependencies]
+bsa = { path = "../bsa" }
+game-profile = { path = "../game-profile" }
+mod-install = { path = "../mod-install" }
+game-folders = { path = "../game-folders" }
+wgpu = { version = "=30.0.1", default-features = false, features = ["std", "parking_lot", "wgsl", "dx12", "vulkan", "metal"] }
+winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"] }
+
+# The keyboard library winit loads at run time on Linux (libxkbcommon, and libxkbcommon-x11 on
+# X11), looked for before the window is made, as engine-platform does: without it winit stops its
+# thread with a panic, and the launcher goes on in the terminal instead.
+[target.'cfg(all(not(windows), not(target_vendor = "apple")))'.dependencies]
+xkbcommon-dl = { version = "0.4.2", features = ["x11"] }

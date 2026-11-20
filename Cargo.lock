@@ -1426,6 +1426,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "nv-launcher"
+version = "0.1.0"
+dependencies = [
+ "bsa",
+ "game-folders",
+ "game-profile",
+ "mod-install",
+ "wgpu",
+ "winit",
+ "xkbcommon-dl",
+]
+
+[[package]]
 name = "nv-viewer"
 version = "0.1.0"
 dependencies = [

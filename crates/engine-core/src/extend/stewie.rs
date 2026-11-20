@@ -183,6 +183,28 @@ pub const AMMO_ENTRY_GONE: Row = Row::at(CRASH, 46);
 pub const USE_DOOR_NULL_DOOR: Row = Row::at(CRASH, 47);
 /// S0199.11 `MiscCrashFixes` (`PlayerCharacter::Update` `0093e860` (`0x943DE1`)): the player's regenerating ammunition with no ammunition type equipped no longer crashes.
 pub const REGEN_AMMO_NO_TYPE: Row = Row::at(CRASH, 48);
+/// S0036 `patchRemoveInvalidCasinoDataChipsInSlotMachineMenu` (`SlotMachineMenu::Create` `007c0a40` (`0x7C0AAE`), `RouletteMenu::Create` `007bbe20` (`0x7BBE72`), `BlackJackMenu::Create` `00733630` (`0x73369E`)): a casino record whose plugin is gone is removed when a gambling menu opens; the slot machines no longer refuse to open on it.
+pub const CASINO_INVALID_CHIPS: Row = Row::at(CRASH, 49);
+/// S0196.01 `RouletteMenuFixes` (`RouletteMenu` destructor `007b9020` (`0x7B93C2`)): closing the roulette table no longer empties its freed bet list a second time.
+pub const ROULETTE_BET_LIST_DOUBLE_FREE: Row = Row::at(CRASH, 50);
+/// S0196.02 `RouletteMenuFixes` (`RouletteMenu` destructor `007b9020` (`0x7B92D7`)): the bets still placed when the roulette table closes are freed.
+pub const ROULETTE_BETS_FREED_ON_CLOSE: Row = Row::at(CRASH, 51);
+/// S0196.03 `RouletteMenuFixes` (`RouletteMenu::DoIdle` `007bd2a0` (`0x7BE034`)): each roulette bet is freed once it is settled.
+pub const ROULETTE_BET_FREED_ON_USE: Row = Row::at(CRASH, 52);
+/// S0199.08 `MiscCrashFixes` (`CompanionWheelMenu::Do_UseStim` `00756490` (`0x756771`)): a stimpak given from the companion wheel is no longer also removed from the companion.
+pub const COMPANION_STIMPAK_REMOVED_TWICE: Row = Row::at(CRASH, 53);
+/// S0199.12 `MiscCrashFixes` (`ListBox::BuildFromContainer` `00719ef0` (`0x71A019`, `0x71A02D`)): an item with no name part in an inventory list no longer crashes.
+pub const LIST_BOX_NULL_NAME: Row = Row::at(CRASH, 54);
+/// S0037 `fixNullParticleSystemsCrash` (`BSMasterParticleSystem::ChildHasActiveParticles` `00c5eb90` (`0xC5EBD9`)): a particle system child with no particle data no longer crashes.
+pub const PARTICLE_SYSTEM_NULL_DATA: Row = Row::at(CRASH, 55);
+/// S0048 `patchFixNullFaceGenCrash` (`BSFaceGenModel::LoadModelMesh` `00659ce0` (`0x65A125`)): a face model with no geometry for its tri file no longer crashes.
+pub const FACE_GEN_NULL_GEOMETRY: Row = Row::at(CRASH, 56);
+/// S0108 `patchFixNullNifOwnerCrash` (`NiControllerSequence` activation `00a34f20` (`0xA34FCB`, `0xA35003`)): an animation sequence with no owner no longer crashes when it starts.
+pub const SEQUENCE_NULL_OWNER: Row = Row::at(CRASH, 57);
+/// S0199.04 `MiscCrashFixes` (`hkpEntity::activate` `00c9c1d0` (`0xC9C1DD`)): a physics body with no simulation island no longer crashes when it is woken.
+pub const HKP_ENTITY_NULL_ISLAND: Row = Row::at(CRASH, 58);
+/// S0199.07 `MiscCrashFixes` (`TESObjectCELL::AddReference` `00548230` (`0x54867C`)): a reference whose cell is gone while it is added no longer crashes.
+pub const ADD_REFERENCE_NULL_CELL: Row = Row::at(CRASH, 59);
 /// S1016 (Engine Optimizations, `Inlines::SaveLoad`: `Write32(0x845558, 0x2735)`): the changes map's
 /// buckets 10,037, not the exe's 5,039 (`00845550`). It changes the order a save walks and writes the
 /// changed forms, so it is a fixes row.

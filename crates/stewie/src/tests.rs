@@ -182,7 +182,7 @@ fn a_players_file_overlays_vnvs_values_key_by_key() {
 }
 
 /// The S0079 row (`bDialogSpeechNullCheck`), which the key tests use.
-const PROOF: &rows::Row = &rows::ROWS[19];
+const PROOF: &rows::Row = &rows::ROWS[22];
 
 #[test]
 fn every_row_has_its_own_bit_and_key() {
@@ -406,7 +406,7 @@ fn the_start_lines_name_what_was_read() {
         start_lines(false, &settings, &keys, on.len()),
         [
             "lStewieAl's Tweaks: no Data\\NVSE\\Plugins\\nvse_stewie_tweaks.ini: VNV's values",
-            "lStewieAl's Tweaks: 50 of its 50 rows built are on",
+            "lStewieAl's Tweaks: 61 of its 61 rows built are on",
         ]
     );
     let (settings, on) = settings_and_rows(Some(b"[Tweaks]\nbBetterAutoWalk=1\n"), &[], &keys);
@@ -843,6 +843,12 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
             Row::at(CRASH, 17),
         ),
         ("S0027", "bFixPipboyEquipCrash", Row::at(CRASH, 28)),
+        (
+            "S0036",
+            "bRemoveInvalidCasinoDataChipsInSlotMachineMenu",
+            Row::at(CRASH, 49),
+        ),
+        ("S0037", "bFixNullParticleSystemsCrash", Row::at(CRASH, 55)),
         ("S0042", "bFixExplosionWaterNullCall", Row::at(CRASH, 1)),
         (
             "S0043",
@@ -854,6 +860,7 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
             "bFixGetItemValueCrashForModdedWeapons",
             Row::at(CRASH, 34),
         ),
+        ("S0048", "bFixNullFaceGenCrash", Row::at(CRASH, 56)),
         ("S0049", "bFixUnresolvedRaceCrash", Row::at(CRASH, 35)),
         ("S0057", "bFixLevelGreaterThan99Crash", Row::at(CRASH, 18)),
         (
@@ -895,6 +902,7 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
             "bMemoryLeakFixesPackageTarget",
             Row::at(CRASH, 42),
         ),
+        ("S0108", "bFixNullNifOwnerCrash", Row::at(CRASH, 57)),
         (
             "S0124",
             "bProcessActivateAddNullCheckForPackage",
@@ -947,9 +955,39 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
         ),
         ("S0183", "bFollowerTopicUseAfterFreeFix", Row::at(CRASH, 45)),
         ("S0186", "bBipedAnimNullItemError", Row::at(CRASH, 26)),
+        (
+            "S0196.01",
+            "bRouletteMenuFixesBetListDoubleFree",
+            Row::at(CRASH, 50),
+        ),
+        (
+            "S0196.02",
+            "bRouletteMenuFixesBetsFreedOnClose",
+            Row::at(CRASH, 51),
+        ),
+        (
+            "S0196.03",
+            "bRouletteMenuFixesBetFreedOnUse",
+            Row::at(CRASH, 52),
+        ),
         ("S0199.03", "bMiscCrashFixesAmmoEntry", Row::at(CRASH, 46)),
+        (
+            "S0199.04",
+            "bMiscCrashFixesEntityActivate",
+            Row::at(CRASH, 58),
+        ),
         ("S0199.05", "bMiscCrashFixesNpcActivate", Row::at(CRASH, 39)),
         ("S0199.06", "bMiscCrashFixesRemoveWorn", Row::at(CRASH, 40)),
+        (
+            "S0199.07",
+            "bMiscCrashFixesAddReference",
+            Row::at(CRASH, 59),
+        ),
+        (
+            "S0199.08",
+            "bMiscCrashFixesCompanionStimpak",
+            Row::at(CRASH, 53),
+        ),
         (
             "S0199.09",
             "bMiscCrashFixesShowSceneGraph",
@@ -957,6 +995,7 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
         ),
         ("S0199.10", "bMiscCrashFixesUseDoor", Row::at(CRASH, 47)),
         ("S0199.11", "bMiscCrashFixesRegenAmmo", Row::at(CRASH, 48)),
+        ("S0199.12", "bMiscCrashFixesListBoxName", Row::at(CRASH, 54)),
         (
             "S0202",
             "bEquipAmmoOnNullBaseProcessCrashFix",
