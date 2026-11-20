@@ -259,6 +259,8 @@ pub struct Nvse {
     pub controls: commands::controls::State,
     /// The run-time compiler's state between calls (I-14).
     pub compiler: compiler::State,
+    /// The argument reader's row and mark (`xnvse.extract_args`).
+    pub args: args::State,
     /// The compile entry's unnamed-script count and the cached function files (I-14).
     pub compile_script: compile_script::State,
     /// Whether this run made `nvse.log` yet.

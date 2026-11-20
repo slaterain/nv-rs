@@ -509,7 +509,8 @@ fn one_float_parameter(e: &mut Engine, at: u32) -> u32 {
 /// `StandardCompile`'s seam as the translation asks it (words: the line, the script buffer, the
 /// parameters, the index): for an extender's command (`0x1400` up) a `(` compiles the expression
 /// (1, `0xFFFF` and the expression in the output), an unclosed one is an error (0), a plain word
-/// is the game's (none); for the game's own commands nothing is answered.
+/// is the game's (none); for the game's own commands nothing is answered, unless the row
+/// `xnvse.extract_args` is on.
 #[test]
 fn the_parameter_seam_answers() {
     let mut e = engine();
@@ -548,6 +549,26 @@ fn the_parameter_seam_answers() {
         Some(1),
         "the first extender opcode"
     );
+    // With the row `xnvse.extract_args`, every command's, as xNVSE (an unset command word too).
+    crate::args::set_game_inline(&mut e, true);
+    for opcode in [0x1004, 0x13ff, 0x10, 0] {
+        let (answer, bytes) = ask(&mut e, opcode, "(1 + 2)");
+        assert_eq!(answer, Some(1), "{opcode:#x}: {:?}", printed());
+        assert_eq!(&bytes[..2], &[0xff, 0xff], "{opcode:#x}");
+    }
+    assert_eq!(ask(&mut e, 0x1004, "5"), (None, vec![]), "a plain word");
+}
+
+/// `005B17DD` (words: the line `ReplaceVariablesAndFunctions` built on the stack, the command's
+/// opcode): the opcode written into the line's command word, which the exe leaves unset; no
+/// answer.
+#[test]
+fn the_nested_command_gets_its_opcode() {
+    let mut e = engine();
+    install(&mut e);
+    e.mem.write(LINE, &[0; ln::STRUCT as usize]);
+    assert_eq!(e.site(NESTED_COMMAND.addr(), &[LINE, 0x2400]), None);
+    assert_eq!(e.mem.u32(LINE + ln::OPCODE), 0x2400);
 }
 
 /// The shorthand's room: a `let` of 511 bytes fits the line (its length 511); one of 512 is
