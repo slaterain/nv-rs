@@ -3573,6 +3573,13 @@ fn a_far_caster_stepping_across_frames_keeps_only_its_latest_place() {
     let mut seen: Vec<Vec<([f64; 3], f64, bool)>> = Vec::new();
     lit_sequence_with(&mut b, &frames, true, &mut |_, b| {
         let places = b.device().map_or_else(Vec::new, |d| d.sun_far_places());
+        eprintln!(
+            "far places: {:?}",
+            places
+                .iter()
+                .map(|p| (p.0[0].round(), p.1.round(), p.2))
+                .collect::<Vec<_>>()
+        );
         seen.push(
             places
                 .into_iter()
@@ -3580,9 +3587,10 @@ fn a_far_caster_stepping_across_frames_keeps_only_its_latest_place() {
                 .collect(),
         );
     });
-    for (f, places) in seen.iter().enumerate() {
+    // (A frame's casters are taken as the next frame is drawn: after frame f, frame f - 1's place.)
+    for (f, places) in seen.iter().enumerate().skip(1) {
         assert_eq!(places.len(), 1, "frame {f}: {places:?}");
-        let x = 2000.0 + f64::from(shift(f));
+        let x = 2000.0 + f64::from(shift(f - 1));
         assert!(
             (places[0].0[0] - x).abs() < 1.0,
             "frame {f}: {places:?} (at x {x})"
