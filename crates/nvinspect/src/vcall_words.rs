@@ -1795,11 +1795,13 @@ fn wrapper_of(
     })
 }
 
-/// How a function is called: `name(..)`, `x.name(..)` or `Path::name(..)`.
+/// How a function is called: `name(..)`, `x.name(..)`, `self::name(..)` / `Self::name(..)` (a
+/// path to the caller's own module or type), or another `path::name(..)`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum CallKind {
     Plain,
     Method,
+    SelfPath,
     Path,
 }
 
@@ -1835,6 +1837,11 @@ fn named_calls<'a>(
         }
         let kind = if text[..at].ends_with('.') {
             CallKind::Method
+        } else if [b"self::", b"Self::"].iter().any(|p| {
+            text.as_bytes()[..at].ends_with(*p)
+                && !text[..at - p.len()].ends_with(|c: char| c.is_alphanumeric() || c == '_')
+        }) {
+            CallKind::SelfPath
         } else if text[..at].ends_with("::") {
             CallKind::Path
         } else {
@@ -2696,6 +2703,30 @@ pub struct CallCount {
     pub read: usize,
     pub unread: usize,
     pub left_out: usize,
+    /// The text `.vcall(` counted without the lexer, and the ones the lexer put in strings and
+    /// in comments: `total` is the rest, so a span the lexer swallows by mistake shows here.
+    pub raw: usize,
+    pub in_strings: usize,
+    pub in_comments: usize,
+}
+
+/// The text `.vcall(` in `text`: all of them, and how many the lexer finds inside a string or
+/// a character literal and inside a comment ([`vcall_positions`] counts the others).
+pub fn vcall_raw(text: &str) -> (usize, usize, usize) {
+    let literals = literal_spans(text);
+    let (mut raw, mut strings, mut comments) = (0, 0, 0);
+    for (at, _) in text.match_indices(".vcall(") {
+        raw += 1;
+        let k = literals.partition_point(|&(start, _)| start <= at);
+        if k > 0 && at < literals[k - 1].1 {
+            if text.as_bytes()[literals[k - 1].0] == b'/' {
+                comments += 1;
+            } else {
+                strings += 1;
+            }
+        }
+    }
+    (raw, strings, comments)
 }
 
 impl CallCount {
@@ -2710,8 +2741,15 @@ impl std::fmt::Display for CallCount {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} `.vcall(`s in the source: {} read, {} not read, {} left out as test code",
-            self.total, self.read, self.unread, self.left_out
+            "{} `.vcall(`s in the source ({} in the raw text, {} of them in strings and {} in \
+             comments): {} read, {} not read, {} left out as test code",
+            self.total,
+            self.raw,
+            self.in_strings,
+            self.in_comments,
+            self.read,
+            self.unread,
+            self.left_out
         )?;
         match self.gap() {
             0 if self.read + self.unread + self.left_out == self.total => Ok(()),
@@ -2757,6 +2795,18 @@ fn module_dir(rel: &str) -> String {
 fn below(rel: &str, parent: &str) -> bool {
     let dir = module_dir(parent);
     rel != parent && (dir.is_empty() || rel.starts_with(&format!("{dir}/")))
+}
+
+/// The code of file `i` with its comments blanked (kept in `cache`): a commented-out function
+/// is no definition.
+fn uncommented<'a>(cache: &'a mut HashMap<usize, String>, i: usize, code: &str) -> &'a str {
+    cache.entry(i).or_insert_with(|| {
+        let comments: Vec<(usize, usize)> = literal_spans(code)
+            .into_iter()
+            .filter(|&(s, _)| code.as_bytes()[s] == b'/')
+            .collect();
+        blank(code, &comments)
+    })
 }
 
 /// How many functions or closures named `name` `code` defines.
@@ -2893,6 +2943,8 @@ fn resolve_pending(units: &mut [(String, Unit)], codes: &[String]) -> WrapperCou
     // Where each wrapper's name is called: file, position, argument texts and kind.
     type Calls = Vec<(usize, usize, Vec<String>, CallKind)>;
     let mut called: HashMap<String, Calls> = HashMap::new();
+    // Each caller file's code with its comments blanked, made when first needed.
+    let mut stripped: HashMap<usize, String> = HashMap::new();
     let mut depth = 0;
     while !level.is_empty() {
         let new: BTreeSet<String> = level
@@ -2926,8 +2978,9 @@ fn resolve_pending(units: &mut [(String, Unit)], codes: &[String]) -> WrapperCou
                 // of `Type::name(x, ..)`; Rust calls no free function as `x.name(..)` and no
                 // method as `name(..)`, so those are other functions.
                 let shift = match (wrapper.method, kind) {
-                    (true, CallKind::Method) | (false, CallKind::Plain | CallKind::Path) => 0,
-                    (true, CallKind::Path) => 1,
+                    (true, CallKind::Method)
+                    | (false, CallKind::Plain | CallKind::SelfPath | CallKind::Path) => 0,
+                    (true, CallKind::SelfPath | CallKind::Path) => 1,
                     _ => continue,
                 };
                 let code = &codes[i];
@@ -2943,9 +2996,14 @@ fn resolve_pending(units: &mut [(String, Unit)], codes: &[String]) -> WrapperCou
                 let fits = args.len() == wrapper.params + shift;
                 if !reaches || !fits {
                     // Plainly another function of that name: one the caller's file defines
-                    // itself (a second one in the wrapper's own file), or a call that neither
-                    // reaches the wrapper nor fits it.
-                    let others = definitions(code, &wrapper.name) > usize::from(i == wi);
+                    // itself (a second one in the wrapper's own file) called without a path
+                    // or through `self::` / `Self::` (a path into another module or crate is
+                    // that module's function), or a call that neither reaches the wrapper nor
+                    // fits it.
+                    let own_form = matches!(kind, CallKind::Plain | CallKind::SelfPath);
+                    let others = own_form
+                        && definitions(uncommented(&mut stripped, i, code), &wrapper.name)
+                            > usize::from(i == wi);
                     if others || (!reaches && !fits) {
                         count.other += 1;
                     } else {
@@ -3196,10 +3254,13 @@ pub fn run(
     let mut platform = SlotCounts::default();
     let mut test_files = 0usize;
     let mut total_calls = 0usize;
+    let mut raw = (0usize, 0usize, 0usize);
     for (rel, text) in sources {
         let mounted = test_paths.contains(&rel) || test_dirs.iter().any(|d| rel.starts_with(d));
         test_files += usize::from(mounted || test_file(&rel));
         total_calls += vcall_positions(&text).len();
+        let (r, s, c) = vcall_raw(&text);
+        raw = (raw.0 + r, raw.1 + s, raw.2 + c);
         let (code, left_out) = game_code(&rel, &text, mounted);
         drop(text);
         if rel.starts_with("engine-platform/") {
@@ -3278,7 +3339,8 @@ pub fn run(
         }
     }
     let by_kind: Vec<String> = kinds.iter().map(|(k, n)| format!("{n} {k}")).collect();
-    let calls = call_count(&units, total_calls);
+    let mut calls = call_count(&units, total_calls);
+    (calls.raw, calls.in_strings, calls.in_comments) = raw;
     let summary = format!(
         "{} tables with {slots} slots ({unread_slots} not read) from {} relocated words; \
          {sites} virtual calls read ({own_checked} against the unit's own tables; {} wrappers, \
@@ -4383,6 +4445,39 @@ fn d(e: &mut Engine, o: u32) {
         assert_eq!(slot_values("match k { 1 => 4, _ => A }", &consts), [4, 4]);
     }
 
+    /// A call with a path into another module or crate (`k::a::com(..)`) is that module's
+    /// function even where the caller's file defines one of the name; a definition in a
+    /// comment is none.
+    #[test]
+    fn a_path_into_another_module_is_not_the_callers_own_function() {
+        let files = [
+            (
+                "k/src/a.rs",
+                "pub fn com(e: &mut Engine, this: u32, slot: u32, words: &[u32]) -> u32 {\n    e.vcall(this, slot, words).u32()\n}\n",
+            ),
+            (
+                "m/src/x.rs",
+                "fn com(e: &mut Engine) {}\nfn g(e: &mut Engine, o: u32) {\n    k::a::com(e, o, 0x4c, &[1]);\n    com(e, o, 0x4c, &[1]);\n    self::com(e, o, 0x4c, &[1]);\n}\n",
+            ),
+            (
+                "m/src/y.rs",
+                "// fn com(e: &mut Engine) {}\nfn h(e: &mut Engine, o: u32) {\n    com(e, o, 0x4c, &[1]);\n}\n",
+            ),
+        ];
+        let mut units: Vec<(String, Unit)> = files
+            .iter()
+            .map(|(rel, text)| (rel.to_string(), read_unit(rel, text)))
+            .collect();
+        let texts: Vec<String> = files.iter().map(|(_, t)| t.to_string()).collect();
+        let count = resolve_pending(&mut units, &texts);
+        let listed = |u: &Unit| u.unread.iter().map(|r| r.0).collect::<Vec<_>>();
+        // `k::a::com` is listed; the plain and the `self::` call are the file's own `com`.
+        assert_eq!(listed(&units[1].1), [3]);
+        // A commented-out function is no definition: the call is listed.
+        assert_eq!(listed(&units[2].1), [3]);
+        assert_eq!((count.not, count.other), (2, 2));
+    }
+
     /// A wrapper's caller the check reads (a private wrapper called from a module below it
     /// through `super::`), and the ones it lists: a caller in a file the wrapper is not seen
     /// from, a call that does not fit the wrapper's parameters. A file with its own function
@@ -4458,12 +4553,22 @@ fn f(e: &mut Engine, o: u32, s: u32) {
     let x = \".vcall(o, 0, &[])\";
     e.vcall(o, 4, &args![1, 2, 3]);
 }
+fn g<'a>(e: &mut Engine, o: &'a u32) {
+    let r = r#\"e.vcall(o, 0, &[\"])\"#; e.vcall(*o, 8, &args![]);
+    let q = '\"'; e.vcall(*o, 0xc, &args![]);
+    /* outer /* inner */ e.vcall(o, 0, &[]); */ e.vcall(*o, 0x10, &args![]);
+    let l: &'a u32 = o; e.vcall(*l, 0x14, &args![]);
+}
 #[cfg(test)]
 mod tests {
     fn t(e: &mut Engine) { e.vcall(1, 0, &args![]); }
 }
 fn broken(e: &mut Engine) { e.vcall(1, 0, &args![2 }
 ";
+        // The lexer's strings and comments, counted apart from the raw text: a raw string with
+        // a quote in it, a quote character, a nested block comment and a lifetime, each beside
+        // a real call that must still be read.
+        assert_eq!(vcall_raw(text), (13, 2, 1));
         let (code, left_out) = game_code("k/x.rs", text, false);
         let mut unit = read_code(&code);
         unit.left_out = left_out;
@@ -4473,12 +4578,21 @@ fn broken(e: &mut Engine) { e.vcall(1, 0, &args![2 }
         assert_eq!(
             count,
             CallCount {
-                total: 6,
-                read: 3,
+                total: 10,
+                read: 7,
                 unread: 2,
-                left_out: 1
+                left_out: 1,
+                ..CallCount::default()
             }
         );
+        let slots: Vec<u32> = units[0]
+            .1
+            .sites
+            .iter()
+            .filter(|s| s.line >= 13)
+            .map(|s| s.slot)
+            .collect();
+        assert_eq!(slots, [8, 0xc, 0x10, 0x14]);
         assert_eq!(count.gap(), 0);
         assert!(!count.to_string().contains("NOT ACCOUNTED"), "{count}");
         let reasons: Vec<&str> = units[0].1.unread.iter().map(|r| r.1).collect();
@@ -4490,7 +4604,7 @@ fn broken(e: &mut Engine) { e.vcall(1, 0, &args![2 }
         if let Some(outcome) = units[0].1.outcome.values_mut().next() {
             *outcome = Outcome::Dropped;
         }
-        let count = call_count(&units, 6);
+        let count = call_count(&units, 10);
         assert_eq!(count.gap(), 1);
         assert!(count.to_string().contains("1 NOT ACCOUNTED FOR"), "{count}");
     }
