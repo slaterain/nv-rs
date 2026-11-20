@@ -776,6 +776,35 @@ fn upper_shadow(y: f64) -> [f64; 3] {
     [-75.0, f64::from(BAR_Y) + y, 0.0]
 }
 
+/// One shadow a character in the last cascade too: just past the tip of the far bar's shadow (see
+/// [`a_character_in_the_last_cascade_casts`]) the game's actor shadow (black everywhere) gives way
+/// to ours, as near the camera.
+#[test]
+fn in_the_last_cascade_the_games_actor_shadow_gives_way_to_the_characters() {
+    FAR_VIEW.set(true);
+    let shots = [Shot {
+        bar: Some(([0.0, 1500.0, 0.0], [0.0, 1500.0, 0.0])),
+        bar_scale: Some(30.0),
+        game_shadow: true,
+        ..Shot::default()
+    }; 4];
+    let Some(_) = picture_of(false, true, &shots) else {
+        return;
+    };
+    let ours = picture_of(true, true, &shots).expect("the adapter");
+    let theirs = picture_of(true, false, &shots).expect("the adapter");
+    // The tip at x -3,000 (3,600 high, 300 to each side); the pixels just past it (a pixel is about
+    // 25 units here).
+    let most = (0..6)
+        .map(|i| {
+            let p = [-3005.0 - 5.0 * f64::from(i), 6000.0, 0.0];
+            i32::from(at(&ours[3], p)) - i32::from(at(&theirs[3], p))
+        })
+        .max()
+        .expect("points");
+    assert!(most > 20, "the game's shadow left out under ours: {most}");
+}
+
 /// Characters cast in every cascade (the maintainer: shadows from everything): in the far view the
 /// bar, thirty times its size and 6,000 units out (the last cascade), shades the ground along its
 /// shadow, both halves; beside it the ground stays lit.

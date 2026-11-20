@@ -5800,9 +5800,6 @@ mod tests {
                     kp.take(to_sun);
                 }
             }
-            if world_grid {
-                anchors = [None; CASCADES];
-            }
             let now = place_cascades(
                 frustum(),
                 &s,
@@ -5811,6 +5808,8 @@ mod tests {
                 &keep,
                 to_sun,
                 turned,
+                // No map drawn before: each turn anchors on the world's grid, and an anchor on it
+                // kept between turns is the world's grid too.
                 if world_grid {
                     &[None; CASCADES]
                 } else {
