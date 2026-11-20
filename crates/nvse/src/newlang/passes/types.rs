@@ -843,6 +843,7 @@ impl<'a> TypeChecker<'a> {
         let default_parse = cmd.parse == Parse::Default;
         let mut arg_idx = 0usize;
         let mut param_idx = 0usize;
+        let mut refused = false;
         loop {
             let args = self.call_parts(id)?.2;
             if param_idx >= cmd.params.len() || arg_idx >= args.len() {
@@ -873,6 +874,24 @@ impl<'a> TypeChecker<'a> {
                 } else {
                     let r = self.visit_expr(arg);
                     self.wrap(r)?;
+                    // The port's own refusal (not xNVSE's): this argument is written as an
+                    // expression (`0xFFFF`), which a game command (below `0x1400`) reads only with
+                    // the row `xnvse.extract_args`; without it the game's reader would take the
+                    // `0xFFFF` as a string's length of -1 and copy 4 GB.
+                    if default_parse
+                        && !refused
+                        && u32::from(cmd.opcode) < crate::args::FIRST_EXTENDER_OPCODE
+                        && !self.env.game_inline()
+                    {
+                        refused = true;
+                        let m = cat(&[
+                            b"Command '",
+                            &name,
+                            b"' takes an argument here only with the fixes preset (its row xnvse.extract_args).",
+                        ]);
+                        let r = self.error_expr(arg, &m);
+                        self.wrap(r)?;
+                    }
                 }
                 if let Some(i) = ident_arg {
                     if self.ty(arg) == tt::FORM

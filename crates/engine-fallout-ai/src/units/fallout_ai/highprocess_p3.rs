@@ -10242,7 +10242,19 @@ fn dialogue_created_conversation(
                 let run_once = e
                     .vcall(target_process, SLOT_GET_RUN_ONCE_PACKAGE, &args![])
                     .u32();
-                if e.call(PACKAGE_PROCEDURE_TYPE, &args![run_once]).u32() == 0xa {
+                // lStewieAl's Tweaks' row S0199.01 (`MiscCrashFixes`, the call at `0x8E941C`):
+                // Tweaks' `TESPackage_GetTypeNullChecked` answers 0 for no package, where the
+                // exe reads the type through the null package.
+                let kind = if e.stewie(engine_core::extend::stewie::DIALOGUE_ACTIVATE_NO_PACKAGE) {
+                    if run_once == 0 {
+                        0
+                    } else {
+                        e.mem.u32(run_once + 0x18)
+                    }
+                } else {
+                    e.call(PACKAGE_PROCEDURE_TYPE, &args![run_once]).u32()
+                };
+                if kind == 0xa {
                     e.vcall(
                         target_process,
                         SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING,
@@ -16085,7 +16097,14 @@ fn update_weapon_state(
             }
         }
     } else if mobile != player
-        && !e.call(ACTOR_CREATURE_LIKE, &args![mobile]).bool()
+        // lStewieAl's Tweaks' row S0137 (`patchPreventAgroRadiusBreachedNPCsHolsteringWeapons`,
+        // the call at `0x8F037C`): Tweaks' `ActorInCombatOrPatrolRadiusBreached` in place of
+        // `0049_3bb0` (the in-combat byte).
+        && !(if e.stewie(engine_core::extend::stewie::AGRO_RADIUS_HOLSTER) {
+            actor_in_combat_or_guard_radius_breached(e, mobile)
+        } else {
+            e.call(ACTOR_CREATURE_LIKE, &args![mobile]).bool()
+        })
         && e.vcall(process, SLOT_GET_WEAPON_DRAWN, &args![]).bool()
         && e.vcall(process, SLOT_GET_WANT_WEAPON_DRAWN, &args![])
             .bool()
@@ -16093,6 +16112,44 @@ fn update_weapon_state(
         e.call(ACTOR_DRAW_WEAPON, &args![mobile, 0u32]);
         e.vcall(process, SLOT_SET_WANT_WEAPON_DRAWN, &args![0u32]);
     }
+}
+
+/// `TESPackage::type` (a `char` at +0x20): Guard.
+const PACKAGE_TYPE_GUARD: i8 = 0xe;
+/// `BaseProcess::GetRunOncePackageData` (vtable +0x270).
+const SLOT_GET_RUN_ONCE_PACKAGE_DATA: u32 = 0x270;
+
+/// Row S0137's test, Tweaks' `ActorInCombatOrPatrolRadiusBreached` (`main.h`): the actor's
+/// in-combat byte (+0x104), else `Actor::IsGuardRadiusBreached` (Tweaks' `GameObjects.cpp`): with
+/// a process (+0x68), the guard data of a running package (`GetRunningPackage`, +0x27C) of type
+/// Guard (the process' current package data, +0x8), replaced by the run-once package data
+/// (`GetRunOncePackageData`, +0x270) when the run-once package (+0x20C) is a Guard package; true
+/// when there is such data and its warning timer (+0x10) is above 0.0.
+fn actor_in_combat_or_guard_radius_breached(e: &mut Engine, actor: u32) -> bool {
+    if e.mem.u8(actor + 0x104) != 0 {
+        return true;
+    }
+    let process = e.mem.u32(actor + 0x68);
+    if process == 0 {
+        return false;
+    }
+    let is_guard = |e: &mut Engine, package: u32| {
+        package != 0 && e.mem.u8(package + 0x20) as i8 == PACKAGE_TYPE_GUARD
+    };
+    let mut data = 0;
+    let running = e
+        .vcall(process, SLOT_GET_PACKAGE_THAT_IS_RUNNING, &args![])
+        .u32();
+    if is_guard(e, running) {
+        data = e.mem.u32(process + 0x8);
+    }
+    let run_once = e.vcall(process, SLOT_GET_RUN_ONCE_PACKAGE, &args![]).u32();
+    if is_guard(e, run_once) {
+        data = e
+            .vcall(process, SLOT_GET_RUN_ONCE_PACKAGE_DATA, &args![])
+            .u32();
+    }
+    data != 0 && e.mem.f32(data + 0x10) > 0.0
 }
 
 /// The awake-and-aware timer of `Update` (`fAwarePlayerTimer`, +0x34c) with
@@ -25478,6 +25535,81 @@ mod tests {
         );
     }
 
+    /// S0199.01 (`MiscCrashFixes`, `0x8E941C`): a conversation (procedure 0xa) whose target's
+    /// process had no run-once package gets one added; the type of the run-once package read
+    /// after that is asked through `009611e0` by the exe, also when the package is still none
+    /// (the exe then reads through a null pointer). On, Tweaks' null-checked getter answers 0 for
+    /// none and reads `+0x18` itself for a package, so a dialogue package (0xa) still advances
+    /// the target's procedure.
+    #[test]
+    fn s0199_01_the_run_once_type_is_null_checked() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+        for (on, second) in [(false, false), (true, false), (false, true), (true, true)] {
+            let mut e = Engine::new();
+            let (p, actor, _player, package, target_of, _started_by) =
+                conversation_world(&mut e, true);
+            e.set_stewie(
+                engine_core::extend::stewie::DIALOGUE_ACTIVATE_NO_PACKAGE,
+                on,
+            );
+            give_vtable(
+                &mut e,
+                p.addr(),
+                PROCESS_TABLE,
+                &[(SLOT_PROCESS_ACTIVATE, 1)],
+            );
+            e.register_double(PACKAGE_PROCEDURE_TYPE, |e, a| {
+                ret(if a[0] == 0 { 0 } else { e.mem.u32(a[0] + 0x18) })
+            });
+            e.mem.set_u32(package + 0x18, 0xa);
+            let run_once = e.mem.alloc(0x20);
+            e.mem.set_u32(run_once + 0x18, 0xa);
+            // The target's process: no run-once package at first, then `run_once` if `second`.
+            let asked = Rc::new(Cell::new(0u32));
+            let count = asked.clone();
+            e.register_double(
+                slot_target(0x7500_0000, SLOT_GET_RUN_ONCE_PACKAGE),
+                move |_, _| {
+                    count.set(count.get() + 1);
+                    ret(if second && count.get() > 1 {
+                        run_once
+                    } else {
+                        0
+                    })
+                },
+            );
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x008e8600, &args![p, actor]).u32() & 0xff, 1);
+            assert_eq!(asked.get(), 2, "on {on} second {second}");
+            assert_eq!(
+                calls_to(&e, slot_target(0x7600_0000, ACTOR_SLOT_ADD_PACKAGE)),
+                vec![vec![target_of, package, 1, 1]]
+            );
+            let typed: Vec<u32> = calls_to(&e, PACKAGE_PROCEDURE_TYPE)
+                .into_iter()
+                .map(|a| a[0])
+                .filter(|&a| a != package)
+                .collect();
+            let expected = match (on, second) {
+                (true, _) => vec![],
+                (false, false) => vec![0],
+                (false, true) => vec![run_once],
+            };
+            assert_eq!(typed, expected, "on {on} second {second}");
+            let own_process = e.call(ACTOR_PROCESS, &args![target_of]).u32();
+            let advanced = calls_to(
+                &e,
+                slot_target(0x7500_0000, SLOT_ADD_TO_PROCEDURE_INDEX_RUNNING),
+            );
+            if second {
+                assert_eq!(advanced, vec![vec![own_process, target_of, 2]]);
+            } else {
+                assert!(advanced.is_empty());
+            }
+        }
+    }
+
     #[test]
     fn test_process_steal_runs_and_undoes_the_move_mode() {
         let mut e = Engine::new();
@@ -29022,6 +29154,109 @@ mod tests {
             calls_to(&e, process_slot(SLOT_SET_WANT_WEAPON_DRAWN)),
             vec![vec![p.addr(), 0]]
         );
+    }
+
+    /// S0137 (`patchPreventAgroRadiusBreachedNPCsHolsteringWeapons`): an NPC with its weapon
+    /// drawn and wanted, no alert and no package that wants it. Off, it holsters unless its
+    /// in-combat byte is set; on, it also keeps the weapon while a Guard package's warning timer
+    /// runs (the running package's data, or the run-once package's data when that is a Guard
+    /// package, which wins).
+    #[test]
+    fn s0137_a_guard_warning_keeps_the_weapon_out() {
+        struct Case {
+            on: bool,
+            combat: u8,
+            running_guard: bool,
+            running_timer: f32,
+            run_once_guard: Option<f32>,
+            has_process: bool,
+            holsters: bool,
+        }
+        let case = |on, combat, running_guard, running_timer, run_once_guard, holsters| Case {
+            on,
+            combat,
+            running_guard,
+            running_timer,
+            run_once_guard,
+            has_process: true,
+            holsters,
+        };
+        let cases = [
+            case(false, 0, true, 5.0, None, true),
+            case(true, 0, true, 5.0, None, false),
+            case(true, 0, true, 0.0, None, true),
+            case(true, 0, false, 5.0, None, true),
+            case(false, 1, false, 0.0, None, false),
+            case(true, 1, false, 0.0, None, false),
+            case(true, 0, false, 0.0, Some(2.0), false),
+            case(true, 0, true, 5.0, Some(0.0), true),
+            case(false, 0, false, 0.0, Some(2.0), true),
+            Case {
+                has_process: false,
+                ..case(true, 0, true, 5.0, None, true)
+            },
+        ];
+        for (n, c) in cases.iter().enumerate() {
+            let mut e = Engine::new();
+            let player = e.mem.alloc(0x10);
+            global_word(&mut e, PLAYER_POINTER, player);
+            e.set_stewie(engine_core::extend::stewie::AGRO_RADIUS_HOLSTER, c.on);
+            let package = |e: &mut Engine, guard: bool| {
+                let package = e.mem.alloc(0x40);
+                e.mem.set_u8(package + 0x20, if guard { 0xe } else { 0xd });
+                package
+            };
+            let guard_data = |e: &mut Engine, timer: f32| {
+                let data = e.mem.alloc(0x14);
+                e.mem.set_f32(data + 0x10, timer);
+                data
+            };
+            let running = package(&mut e, c.running_guard);
+            let (run_once, run_once_data) = match c.run_once_guard {
+                Some(timer) => (package(&mut e, true), guard_data(&mut e, timer)),
+                None => (0, 0),
+            };
+            let p = block(&mut e);
+            give_vtable(
+                &mut e,
+                p.addr(),
+                PROCESS_TABLE,
+                &[
+                    (SLOT_IS_RUNNING_RUN_ONCE, 0),
+                    (SLOT_GET_ALERT, 0),
+                    (SLOT_GET_WEAPON_DRAWN, 1),
+                    (SLOT_GET_WANT_WEAPON_DRAWN, 1),
+                    (SLOT_SET_WANT_WEAPON_DRAWN, 0),
+                    (SLOT_GET_PACKAGE_THAT_IS_RUNNING, running),
+                    (SLOT_GET_RUN_ONCE_PACKAGE, run_once),
+                    (SLOT_GET_RUN_ONCE_PACKAGE_DATA, run_once_data),
+                ],
+            );
+            let data = guard_data(&mut e, c.running_timer);
+            e.mem.set_u32(p.addr() + 0x8, data);
+            let actor = e.mem.alloc(0x200);
+            e.mem.set_u8(actor + 0x104, c.combat);
+            if c.has_process {
+                e.mem.set_u32(actor + 0x68, p.addr());
+            }
+            e.register_double(ACTOR_CREATURE_LIKE, |e, a| {
+                ret(u32::from(e.mem.u8(a[0] + 0x104)))
+            });
+            stub(&mut e, &[PACKAGE_FLAG_800000, ACTOR_DRAW_WEAPON]);
+            e.call_log = Some(vec![]);
+            update_weapon_state(&mut e, p, actor, 0, 0);
+            let holstered = calls_to(&e, ACTOR_DRAW_WEAPON) == vec![vec![actor, 0]];
+            assert_eq!(holstered, c.holsters, "case {n}");
+            assert_eq!(
+                calls_to(&e, process_slot(SLOT_SET_WANT_WEAPON_DRAWN)).len(),
+                usize::from(c.holsters),
+                "case {n}"
+            );
+            // Off, Tweaks' test is never asked.
+            if !c.on {
+                assert!(calls_to(&e, process_slot(SLOT_GET_RUN_ONCE_PACKAGE_DATA)).is_empty());
+            }
+        }
     }
 
     #[test]

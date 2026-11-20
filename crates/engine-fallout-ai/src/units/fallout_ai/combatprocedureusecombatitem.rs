@@ -121,7 +121,14 @@ pub fn combat_procedure_use_combat_item_update(e: &mut Engine, this: Ptr) {
         }
     }
     let item = e.mem.u32(me + USE_ITEM);
-    e.call(0x0099_a840, &args![state, item]);
+    // lStewieAl's Tweaks' row S0214 (`CombatItemCooldownFix`, the call at `0x9DAB61`): Tweaks'
+    // routine restarts a restore item's timer with `fCombatItemRestoreTimer`, where the exe's
+    // `0099a840` gives it `fCombatItemBuffTimer`.
+    if e.stewie(engine_core::extend::stewie::COMBAT_ITEM_COOLDOWN) {
+        super::combatstate::combat_state_set_restore_and_buff_item_timers(e, Ptr::new(state), item);
+    } else {
+        e.call(0x0099_a840, &args![state, item]);
+    }
     let item = e.mem.u32(me + USE_ITEM);
     if e.call(0x0040_1170, &args![item]).u32() == 0x2f {
         let item = e.mem.u32(me + USE_ITEM);
@@ -376,6 +383,58 @@ mod n025_tests {
         assert_eq!(e.mem.u32(this + 0x10), 0x201 + TES_BOUND_OBJECT_TYPE);
         assert_eq!(calls(&log, 0x0086_4980), vec![vec![0x8000, this + 0x14, 1]]);
         assert_eq!(calls(&log, 0x0045_34f0), vec![vec![this, 0x8000]]);
+    }
+
+    /// S0214's seam: off, using the item restarts its timer through the exe's `0099a840`; on,
+    /// through Tweaks' routine, which gives the restore slot `fCombatItemRestoreTimer`.
+    #[test]
+    fn s0214_using_a_restore_item_takes_tweaks_timer() {
+        use crate::units::fallout_ai::combatstate::{
+            COMBAT_ITEM_BUFF_TIMER, COMBAT_ITEM_RESTORE_TIMER,
+        };
+        for on in [false, true] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::COMBAT_ITEM_COOLDOWN, on);
+            let this = e.mem.alloc(0x18);
+            e.mem.set_u32(this + 4, 0x700);
+            e.mem.set_u32(this + 0x10, 0x66);
+            e.mem.set_u8(this + 0x14, 1);
+            let attacker = e.mem.alloc(0x10);
+            e.mem.set_u32(attacker, VTABLE);
+            let state = e.mem.alloc(0x22c);
+            e.mem.set_u32(state + 0x1a4, 0x66);
+            for (at, value) in [
+                (COMBAT_ITEM_RESTORE_TIMER + 4, 30.0f32),
+                (COMBAT_ITEM_BUFF_TIMER + 4, 45.0),
+                (0x011f_1bf0, 7.0),
+            ] {
+                if !e.mem.is_mapped(at) {
+                    e.map(at & !0xfff, 0x1000);
+                }
+                e.mem.set_f32(at, value);
+            }
+            stub(&mut e, GET_ATTACKER, attacker);
+            stub(&mut e, 0x0058_6150, state);
+            stub(&mut e, ACTOR_PROCESS, 0xa00);
+            stub(&mut e, SLOTS + 0x1e4, 0xb00);
+            stub(&mut e, 0x0049_85f0, 1);
+            stub(&mut e, 0x0040_1170, 0x2f);
+            let log = logged(&mut e, |e| {
+                e.call(0x009d_aab0, &args![this]);
+            });
+            if on {
+                assert!(calls(&log, 0x0099_a840).is_empty());
+                assert_eq!(
+                    (e.mem.f32(state + 0x1ac), e.mem.f32(state + 0x1b0)),
+                    (7.0, 30.0)
+                );
+            } else {
+                assert_eq!(calls(&log, 0x0099_a840), vec![vec![state, 0x66]]);
+                assert_eq!(e.mem.u32(state + 0x1b0), 0);
+            }
+            assert_eq!(calls(&log, 0x008c_1f80), vec![vec![attacker, 0x66, 0, 1]]);
+            assert_eq!(calls(&log, PROCEDURE_DONE), vec![vec![this]]);
+        }
     }
 
     #[test]
