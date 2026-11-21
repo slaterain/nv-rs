@@ -6,7 +6,7 @@
 //! about `n * n` list steps per shadow light. Here the walk keeps its place in the list
 //! ([`NodeLights`]) and answers the same light for each index.
 //!
-//! **Floats.** Main thread only. Every operation keeps the exe's x87 steps through the exact helpers
+//! **Floats.** The shadow preparation runs on the main thread. Every operation keeps the exe's x87 steps through the exact helpers
 //! (each stored where the exe stores it), as the translation does; the square root of a stored float,
 //! stored again as a float, is `f32::sqrt` (one correctly rounded root, as `_CIsqrt` then the store).
 
