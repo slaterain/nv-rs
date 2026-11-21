@@ -611,20 +611,26 @@ are tested only against it (`speakers.rs`, `dsound.rs` tests).
 Device handling only: nothing of the mix, the converters, 3D or the distortion changes.
 - The stream says it is lost (`ds-mix` `Output::lost`). On Windows that happens when its endpoint
   stops answering (unplugged, disabled, its format changed) or when another endpoint becomes the
-  default, which is checked once a second (`DEFAULT_CHECK`; a headset plugged in, a choice in
-  Sound settings). On Linux it happens when cpal reports the device gone. PipeWire and
+  default, which a watch thread of the stream's own checks once a second (`DEFAULT_CHECK`; a
+  headset plugged in, a choice in Sound settings), never the time-critical output thread. On Linux it happens when cpal reports the device gone. PipeWire and
   PulseAudio usually move a stream of ALSA's `default` device by themselves. On macOS CoreAudio's
   default output unit follows a new default device by itself and converts the rate if it must;
   the port says so and leaves it be.
 - The game: `dsound::follow_device`, at every sound call (one flag read while nothing is lost).
-  It lets the streams go (their threads end off the game's thread) and opens new ones on the
-  default device in its own format, by the first open's rules: the game's device's layout made
-  again from every buffer, and the platform layers' own stream on an endpoint that is not two
-  channels. Every voice takes the new rate, and each playing one is reconnected where it is
-  (`Voice::reconnect`). Each stream starts with one period of silence. The clock (`Pace`) is
-  kept, counted at the new rate, so what played on through the gap is skipped rather than heard
-  late. If no device answers, it tries again at most once a second and says so once.
-  `NV_SOUND_RECORD` ends at the change, as its log says.
+  It parks both streams (nothing is mixed; the voices and the clock wait) and lets them go (their
+  threads end off the game's thread). A helper thread, at most once a second, asks for the
+  default device's format and opens new streams there by the first open's rules: the game's
+  device's layout made again from every buffer, and the platform layers' own stream on an
+  endpoint that is not two channels. The game's thread never waits for the system. The new
+  streams give silence until, at the next sound call and under the voices' lock, they are put in
+  place: each playing voice is moved past the gap by arithmetic (as far as the game's clock ran
+  beyond what was mixed; round its loop, or to its end), every voice takes the new rate, each
+  playing one is reconnected (`Voice::reconnect`), each stream starts with one period of
+  silence, and the clock's pace (`Pace`) starts again from now. So the gap is skipped, never
+  mixed in one go or heard late. With the device's own pace (`NV_SOUND=device`) nothing says how
+  long the gap was and the voices go on where they were. If no device answers, it says so once.
+  A game started with no device at all stays silent (no retry). `NV_SOUND_RECORD` ends at the
+  change, as its log says.
 - The launcher: its window looks at least once a second while the sounds are open, lets a lost
   stream go and opens one on the default device. The hum starts again at a random place, as at
   every open.

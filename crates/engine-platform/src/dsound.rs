@@ -918,14 +918,67 @@ pub struct Sound {
     written_after_unlock: BTreeSet<u32>,
     /// The output's device was lost and no stream is open since ([`follow_device`]).
     lost: Option<Lost>,
+    /// How the device is asked about and its streams opened when one is lost (the tests' stand-ins).
+    device_seam: DeviceSeam,
 }
 
-/// The output's device lost ([`follow_device`]): when a new stream was last tried, and whether
-/// a failed try was said (said once until one opens).
-#[derive(Debug, Default, Clone, Copy)]
+/// The output's device lost ([`follow_device`]): when a new stream was last tried, whether a
+/// failed try was said (said once until one opens), and the try under way on its helper thread.
+#[derive(Debug, Default)]
 struct Lost {
     tried: Option<std::time::Instant>,
     said: bool,
+    opening: Option<std::sync::mpsc::Receiver<Result<Opened, String>>>,
+}
+
+/// New streams opened on the default device by [`open_on_default`], for [`follow_device`] to
+/// put in place.
+struct Opened {
+    rate: u32,
+    mix: Layout,
+    device: DeviceLayout,
+    own_device: DeviceLayout,
+    output: super::sound_out::Output,
+    own_output: Option<super::sound_out::Output>,
+}
+
+impl std::fmt::Debug for Opened {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Opened {{ rate: {}, mix: {:?} }}", self.rate, self.mix)
+    }
+}
+
+/// `super::sound_out::start`'s shape: a stream opened for a source in a layout (none: the mix
+/// format's).
+type StartFn = fn(
+    Arc<Mutex<dyn super::sound_out::Source>>,
+    Option<Layout>,
+) -> Result<super::sound_out::Output, super::sound_out::Refused>;
+
+/// How [`follow_device`] asks for the default device's mix format and opens a stream there:
+/// `super::sound_out`'s own, on a helper thread (the tests give stand-ins, run in place).
+#[derive(Clone, Copy)]
+struct DeviceSeam {
+    mix_now: fn() -> Option<(u32, Layout)>,
+    start: StartFn,
+    /// Run the try on the calling thread (the tests) instead of a helper thread.
+    in_place: bool,
+}
+
+impl Default for DeviceSeam {
+    fn default() -> DeviceSeam {
+        DeviceSeam {
+            mix_now: super::sound_out::device_mix_again,
+            start: super::sound_out::start,
+            in_place: false,
+        }
+    }
+}
+
+impl std::fmt::Debug for DeviceSeam {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DeviceSeam {{ in_place: {} }}", self.in_place)
+    }
 }
 
 /// Where a secondary buffer keeps its samples (ADR-0015, the bulk buffers): `NV_DSOUND_BUFFERS`.
@@ -1045,6 +1098,9 @@ struct Out {
     /// of it (measured at the lock: DirectSound's first packet of a new stream is 480 frames of
     /// silence, and the voices go on after it from where they were).
     silence: usize,
+    /// Its device was lost and the new one is not set up yet ([`follow_device`]): a stream
+    /// opened meanwhile gets silence and nothing is mixed (the voices and the pace wait).
+    parked: bool,
 }
 
 /// A recording of what the mixer sends to the device: a WAV file per stream (32-bit float, the
@@ -1275,6 +1331,9 @@ impl Voices {
         if channels != self.out(which).place.layout.channels || channels == 0 {
             return;
         }
+        if self.out(which).parked {
+            return;
+        }
         let width = usize::from(channels);
         let quiet = self.out(which).silence.min(out.len() / width);
         self.out(which).silence -= quiet;
@@ -1351,22 +1410,27 @@ impl Pace {
         }
     }
 
-    /// The stream was opened again at `new` Hz (it was at `old`): the frames mixed so far are
-    /// counted at the new rate, so the clock's place in them is kept ([`follow_device`]).
-    fn rescale(&mut self, old: u32, new: u32) {
-        if old != 0 && old != new {
-            self.mixed = (u128::from(self.mixed) * u128::from(new) / u128::from(old)) as u64;
-        }
+    /// The game's clock now, as this pace reads it (the clock last read, and the time since).
+    fn game_now(&self) -> u64 {
+        self.game_us + self.at.elapsed().as_micros() as u64
     }
 
-    /// The same place on the clock, for another stream.
-    fn copy(&self) -> Pace {
-        Pace {
-            game_us: self.game_us,
-            at: self.at,
-            start_us: self.start_us,
-            mixed: self.mixed,
+    /// How far (µs) the clock has run beyond what was mixed at `rate` Hz: after a lost device,
+    /// the gap the voices are moved past ([`follow_device`]).
+    fn behind_us(&self, rate: u32) -> u64 {
+        if rate == 0 {
+            return 0;
         }
+        let mixed_us = (u128::from(self.mixed) * 1_000_000 / u128::from(rate)) as u64;
+        self.game_now()
+            .saturating_sub(self.start_us)
+            .saturating_sub(mixed_us)
+    }
+
+    /// A pace starting again at the clock's place now: nothing to catch up (a new stream after a
+    /// lost device, whose gap the voices were moved past by arithmetic, not by mixing it).
+    fn anchored(&self) -> Pace {
+        Pace::new(self.game_now())
     }
 }
 
@@ -1426,15 +1490,31 @@ pub fn want_output(e: &mut Engine, record: Option<std::path::PathBuf>, device_pa
 /// (`super::speakers`); buffers made before (none when the output starts with the device; every
 /// buffer when a new device is opened, [`follow_device`]) count as made now.
 fn device_of(e: &Engine, mix: Layout) -> DeviceLayout {
-    let mut device = DeviceLayout::new(mix);
-    for b in state_ref!(e).sound.buffers.values() {
-        if b.flags & DSBCAPS_PRIMARYBUFFER == 0 {
+    device_from(mix, &buffers_made(e))
+}
+
+/// Each secondary buffer's layout and whether it is 3D, as [`device_of`] counts them.
+fn buffers_made(e: &Engine) -> Vec<(Layout, bool)> {
+    state_ref!(e)
+        .sound
+        .buffers
+        .values()
+        .filter(|b| b.flags & DSBCAPS_PRIMARYBUFFER == 0)
+        .map(|b| {
             let channels = u16::from_le_bytes([b.format[2], b.format[3]]);
-            device.made(
+            (
                 Layout::of_mix(channels, None),
                 b.flags & DSBCAPS_CTRL3D != 0,
-            );
-        }
+            )
+        })
+        .collect()
+}
+
+/// [`device_of`] from the buffers' layouts `made`.
+fn device_from(mix: Layout, made: &[(Layout, bool)]) -> DeviceLayout {
+    let mut device = DeviceLayout::new(mix);
+    for &(layout, three_d) in made {
+        device.made(layout, three_d);
     }
     device
 }
@@ -1626,35 +1706,30 @@ type Start<'a> = dyn FnMut(
 /// Follows a lost output device (`super::sound_out::Output::lost`: it stopped answering or, on
 /// Windows, another device became the default; macOS's own unit follows a new default by itself
 /// and is not lost then). Called at every sound call ([`tick`]): one flag read while nothing is
-/// lost. On a loss the streams are let go (their threads end off the game's thread) and new ones
-/// opened on the default device as it is now, in its own format, by the rules of the first open
+/// lost.
+///
+/// On a loss both streams are parked under the voices' lock (`Out::parked`: nothing is mixed, the
+/// voices and the clock wait) and let go (their threads end off the game's thread). Then, at most
+/// once a second ([`super::sound_out::try_again`]), a helper thread asks for the default device's
+/// mix format and opens new streams there in its own format, by the rules of the first open
 /// ([`start_output`]): the game's device's layout made again from every buffer, the platform
-/// layers' own stream on an endpoint that is not two channels. Every voice takes the new rate and
-/// each playing one is connected again where it is (`super::mixer::Voice::reconnect`); each
-/// stream starts with one period of silence, and the game's clock (`Pace`) is kept, so what
-/// played on through the gap is skipped, not heard late. No device answering: tried again at
-/// most once a second ([`super::sound_out::try_again`]), said once. A line on stderr each time.
+/// layers' own stream on an endpoint that is not two channels ([`open_on_default`]). The game's
+/// thread never waits for the system: it looks for the helper's answer at the next sound call.
+/// The new streams give silence until they are put in place ([`put_in_place`]), under the lock:
+/// each playing voice moved past the gap by arithmetic (as far as the game's clock ran beyond
+/// what was mixed), every voice at the new rate, playing ones connected again, one period of
+/// silence, and the clock's pace started again from now, so what played on through the gap is
+/// skipped, never mixed or heard late. No device answering: said once. A line on stderr each
+/// time.
 pub fn follow_device(e: &mut Engine) {
     if state_ref!(e).sound.virtual_out.is_some() {
         return;
     }
-    let now = std::time::Instant::now();
-    follow_device_with(
-        e,
-        now,
-        &mut super::sound_out::device_mix_again,
-        &mut super::sound_out::start,
-    );
+    follow_device_at(e, std::time::Instant::now());
 }
 
-/// [`follow_device`] at `now`, with the device's mix asked by `mix_now` and streams opened by
-/// `start`.
-fn follow_device_with(
-    e: &mut Engine,
-    now: std::time::Instant,
-    mix_now: &mut dyn FnMut() -> Option<(u32, Layout)>,
-    start: &mut Start<'_>,
-) {
+/// [`follow_device`] at `now`.
+fn follow_device_at(e: &mut Engine, now: std::time::Instant) {
     use super::sound_out::Output;
     let gone = |o: &Option<Output>| o.as_ref().is_some_and(Output::lost);
     let sound = &mut state!(e).sound;
@@ -1665,6 +1740,11 @@ fn follow_device_with(
         if !gone(&m.output) && !gone(&m._own_output) {
             return;
         }
+        {
+            let mut v = m.voices.lock().expect("the voices");
+            v.game.parked = true;
+            v.own.parked = true;
+        }
         // The old streams' threads end on a thread of their own: a lost Windows stream waits up
         // to 200 ms for an event that no longer comes.
         let old = (m.output.take(), m._own_output.take());
@@ -1674,47 +1754,78 @@ fn follow_device_with(
         );
         sound.lost = Some(Lost::default());
     }
-    let mut lost = sound.lost.expect("lost");
+    let seam = sound.device_seam;
+    let lost = sound.lost.as_mut().expect("lost");
+    if let Some(rx) = &lost.opening {
+        match rx.try_recv() {
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                lost.opening = None;
+                return fail_to_open(e, "the sound device could not be opened".to_string());
+            }
+            Ok(Err(why)) => {
+                lost.opening = None;
+                return fail_to_open(e, why);
+            }
+            Ok(Ok(opened)) => {
+                lost.opening = None;
+                return put_in_place(e, opened);
+            }
+        }
+    }
     if !super::sound_out::try_again(lost.tried, now) {
         return;
     }
     lost.tried = Some(now);
-    state!(e).sound.lost = Some(lost);
-    let fail = |e: &mut Engine, why: String| {
-        let l = state!(e).sound.lost.as_mut().expect("lost");
+    let voices = m.voices.clone();
+    let made = buffers_made(e);
+    let (tx, rx) = std::sync::mpsc::channel();
+    if seam.in_place {
+        let _ = tx.send(open_on_default(&seam, &voices, &made));
+    } else {
+        std::thread::spawn(move || {
+            let _ = tx.send(open_on_default(&seam, &voices, &made));
+        });
+    }
+    state!(e).sound.lost.as_mut().expect("lost").opening = Some(rx);
+    // In place (the tests), the answer is there now.
+    if seam.in_place {
+        follow_device_at(e, now);
+    }
+}
+
+/// A try that opened nothing: said once until a device opens.
+fn fail_to_open(e: &mut Engine, why: String) {
+    if let Some(l) = state!(e).sound.lost.as_mut() {
         if !l.said {
             l.said = true;
             eprintln!("sound: {why}; the game's sound is not heard (trying again each second)");
         }
-    };
-    let mix = match mix_now() {
+    }
+}
+
+/// The helper's work: the default device's mix format, then the game's stream (and on an
+/// endpoint that is not two channels the platform layers' own) opened there, as [`start_output`]
+/// opens them, the game's device's layout made from the buffers' layouts `made`. The streams
+/// give silence until [`put_in_place`] (their outs are parked).
+fn open_on_default(
+    seam: &DeviceSeam,
+    voices: &Arc<Mutex<Voices>>,
+    made: &[(Layout, bool)],
+) -> Result<Opened, String> {
+    let (rate, mix) = match (seam.mix_now)() {
         Some((rate, mix)) if mix.provided() => (rate, mix),
-        Some((_, mix)) => return fail(e, super::sound_out::not_provided(mix)),
-        None => return fail(e, "no output device".to_string()),
+        Some((_, mix)) => return Err(super::sound_out::not_provided(mix)),
+        None => return Err("no output device".to_string()),
     };
-    let (rate, mix) = mix;
-    let split = mix != Layout::STEREO;
-    let mut device = device_of(e, mix);
+    let mut start = seam.start;
+    let mut device = device_from(mix, made);
+    let output = open_stream(voices, Which::Game, &mut device, None, &mut start)
+        .map_err(|why| format!("the new device's stream would not open ({why:?})"))?;
     let mut own_device = DeviceLayout::new(mix);
     own_device.made(Layout::STEREO, false);
-    let voices = state_ref!(e)
-        .sound
-        .mix
-        .as_ref()
-        .expect("the mix")
-        .voices
-        .clone();
-    let output = match open_stream(&voices, Which::Game, &mut device, None, start) {
-        Ok(o) => o,
-        Err(why) => {
-            return fail(
-                e,
-                format!("the new device's stream would not open ({why:?})"),
-            )
-        }
-    };
-    let own_output = if split {
-        match open_stream(&voices, Which::Own, &mut own_device, None, start) {
+    let own_output = if mix != Layout::STEREO {
+        match open_stream(voices, Which::Own, &mut own_device, None, &mut start) {
             Ok(o) => Some(o),
             Err(_) => {
                 eprintln!("sound: no stream for the movies' and the music's sound; not heard");
@@ -1724,29 +1835,81 @@ fn follow_device_with(
     } else {
         None
     };
-    let (game, own) = (device.current(), own_device.current());
-    let (Some(game_place), Some(own_place)) = (Place::new(game), Place::new(own)) else {
-        return fail(e, format!("no matrix for the device's layout {game:?}"));
-    };
     // The streams may come back at another rate than the mix asked (they never do on Windows);
     // the voices follow the game's stream's.
     let rate = if output.rate != 0 { output.rate } else { rate };
+    Ok(Opened {
+        rate,
+        mix,
+        device,
+        own_device,
+        output,
+        own_output,
+    })
+}
+
+/// How far a playing voice goes in `us` microseconds: its own frequency's frames (the device's
+/// rate `rate` for a voice at the device's rate), round its loop, or to its end (then it has
+/// ended, as the mixer ends it).
+fn move_past(voice: &mut super::mixer::Voice, us: u64, rate: u32) {
+    let Some(at) = voice.position else {
+        return;
+    };
+    let hz = if voice.rate != 0 { voice.rate } else { rate };
+    let step = (u128::from(us) * u128::from(hz) / 1_000_000) as usize;
+    if step == 0 {
+        return;
+    }
+    let width = usize::from(voice.channels) * usize::from(voice.bits) / 8;
+    let frames = voice.data.len().checked_div(width).unwrap_or(0);
+    let next = at.saturating_add(step);
+    let next = if next < frames {
+        next
+    } else if voice.looping && frames > 0 {
+        next % frames
+    } else {
+        voice.position = None;
+        return;
+    };
+    // As `SetCurrentPosition` moves a playing voice.
+    if let Some(fx) = voice.fx.as_mut() {
+        fx.start(&mut voice.data, next);
+    }
+    voice.move_to(next);
+}
+
+/// The helper's new streams put in place, under the voices' lock (so neither stream mixes a
+/// frame before it is done): each playing voice moved past the gap (how far the game's clock ran
+/// beyond what its stream had mixed, [`Pace::behind_us`]; with the device's own pace,
+/// `NV_SOUND=device`, nothing is known and the voices go on where they were), every voice at the
+/// new rate, playing ones connected again, one period of silence, the places of the new layout,
+/// and the paces started again from now. Then the streams, the layout and the line.
+fn put_in_place(e: &mut Engine, o: Opened) {
+    let (game, own) = (o.device.current(), o.own_device.current());
+    let (Some(game_place), Some(own_place)) = (Place::new(game), Place::new(own)) else {
+        // The streams are let go (off this thread) and tried again in a second.
+        std::thread::spawn(move || drop((o.output, o.own_output)));
+        return fail_to_open(e, format!("no matrix for the device's layout {game:?}"));
+    };
+    let split = o.mix != Layout::STEREO;
+    let rate = o.rate;
     let m = state!(e).sound.mix.as_mut().expect("the mix");
     let old_rate = m.rate;
     {
-        let mut guard = voices.lock().expect("the voices");
+        let mut guard = m.voices.lock().expect("the voices");
         let v = &mut *guard;
-        v.split = split;
-        v.game.place = game_place;
-        v.own.place = own_place;
-        // One period of silence at each stream's start, as at the lock.
-        v.game.silence = (rate / 100) as usize;
-        v.own.silence = (rate / 100) as usize;
-        for p in [&mut v.game.pace, &mut v.own.pace].into_iter().flatten() {
-            p.rescale(old_rate, rate);
-        }
-        if split && v.own.pace.is_none() {
-            v.own.pace = v.game.pace.as_ref().map(Pace::copy);
+        let behind = |out: &Out| out.pace.as_ref().map_or(0, |p| p.behind_us(old_rate));
+        let (game_gap, own_gap) = (behind(&v.game), behind(&v.own));
+        let was_split = v.split;
+        for at in v.playing.iter() {
+            if let Some(voice) = v.all.get_mut(at) {
+                let gap = if was_split && voice.stream {
+                    own_gap
+                } else {
+                    game_gap
+                };
+                move_past(voice, gap, old_rate);
+            }
         }
         for voice in v.all.values_mut() {
             voice.device = rate;
@@ -1756,21 +1919,35 @@ fn follow_device_with(
                 voice.reconnect();
             }
         }
+        v.split = split;
+        v.game.place = game_place;
+        v.own.place = own_place;
+        // One period of silence at each stream's start, as at the lock.
+        v.game.silence = (rate / 100) as usize;
+        v.own.silence = (rate / 100) as usize;
+        v.game.pace = v.game.pace.as_ref().map(Pace::anchored);
+        v.own.pace = match (&v.own.pace, &v.game.pace) {
+            (Some(p), _) => Some(p.anchored()),
+            (None, Some(p)) if split => Some(p.anchored()),
+            _ => None,
+        };
         // A recording is of one stream format: it ends at the change, said in its log.
         if let Some(mut r) = v.record.take() {
             r.note("the output device changed: the recording ends here");
             r.finish();
         }
+        v.game.parked = false;
+        v.own.parked = false;
     }
     m.rate = rate;
-    m.output = Some(output);
-    m._own_output = own_output;
-    state!(e).sound.layout = Some(device);
+    m.output = Some(o.output);
+    m._own_output = o.own_output;
+    state!(e).sound.layout = Some(o.device);
     state!(e).sound.lost = None;
     eprintln!(
         "sound: output on the new default device, {rate} Hz, {} channels (speaker mask {:#x}); \
          the game's device {} channels",
-        mix.channels, mix.mask, game.channels
+        o.mix.channels, o.mix.mask, game.channels
     );
     refresh_3d(e);
 }
@@ -7116,13 +7293,64 @@ mod tests {
         assert!(state!(e).sound.mix.as_ref().unwrap().output.is_none());
     }
 
-    /// A lost output device (stand-in streams marked lost; nothing is heard): the streams are let
-    /// go and new ones opened on the default device as it is now, at its rate; every voice takes
-    /// that rate, the one playing goes on after a period of silence, and the device's lines say
-    /// so. No device answering: tried again no sooner than a second later.
+    thread_local! {
+        /// The stand-in device ([`stand_in`]): its answer (rate and mix), how often it was
+        /// asked, the layouts opened, and whether a new stream pulled any sound before it was put
+        /// in place.
+        static DEVICE: std::cell::Cell<Option<(u32, Layout)>> = const { std::cell::Cell::new(None) };
+        static ASKED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        static OPENED: std::cell::RefCell<Vec<Option<Layout>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static PULLED_SOUND: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    fn stand_in_mix() -> Option<(u32, Layout)> {
+        ASKED.with(|a| a.set(a.get() + 1));
+        DEVICE.with(|d| d.get())
+    }
+
+    /// Opens a stand-in stream (nothing is heard) and, as a device does at once, pulls a period
+    /// from it: that must be silence until the stream is put in place.
+    fn stand_in_start(
+        source: Arc<Mutex<dyn super::super::sound_out::Source>>,
+        want: Option<Layout>,
+    ) -> Result<super::super::sound_out::Output, super::super::sound_out::Refused> {
+        use super::super::sound_out::{Output, Refused};
+        OPENED.with(|o| o.borrow_mut().push(want));
+        let Some((rate, _)) = DEVICE.with(|d| d.get()) else {
+            return Err(Refused::NoDevice);
+        };
+        let layout = want.unwrap_or(Layout::STEREO);
+        let mut period = vec![0f32; (rate / 100) as usize * usize::from(layout.channels)];
+        source
+            .lock()
+            .unwrap()
+            .render(rate, layout.channels, &mut period);
+        if period.iter().any(|&x| x != 0.0) {
+            PULLED_SOUND.with(|p| p.set(true));
+        }
+        Ok(Output::idle(rate, layout))
+    }
+
+    /// The stand-in device for `e`, answering `device`, tried in place.
+    fn stand_in(e: &mut Engine, device: Option<(u32, Layout)>) {
+        DEVICE.with(|d| d.set(device));
+        state!(e).sound.device_seam = DeviceSeam {
+            mix_now: stand_in_mix,
+            start: stand_in_start,
+            in_place: true,
+        };
+    }
+
+    /// A lost output device (stand-in streams marked lost; nothing is heard): the streams are
+    /// parked and let go; no device answering: said once, tried again no sooner than a second
+    /// later; then new ones opened on the default device at its rate, giving silence until they
+    /// are put in place; every voice at that rate, the playing one moved past the gap (how far
+    /// the game's clock ran beyond what was mixed), the pace started again from now (nothing
+    /// left to catch up: the first period mixes one period, not the gap), a period of silence,
+    /// and the voice goes on.
     #[test]
     fn a_lost_device_is_followed_to_the_new_default() {
-        use super::super::sound_out::{Output, Refused, DEFAULT_CHECK};
+        use super::super::sound_out::{Output, DEFAULT_CHECK};
         let mut e = engine();
         let ds = start_up(&mut e);
         hear_by_hand(&mut e, 48000);
@@ -7130,99 +7358,129 @@ mod tests {
         let a = made(&mut e, ds, 0x2e0, false, 1, 48000, 16, &data);
         e.vcall(a, 0x30, &[0, 0, 1]);
         let _ = mixed(&e, 480);
+        stand_in(&mut e, None);
         let t = std::time::Instant::now();
-        let mut asked = 0;
-        let mut opened = Vec::new();
         // Nothing lost: nothing asked.
         state!(e).sound.mix.as_mut().unwrap().output = Some(Output::idle(48000, Layout::STEREO));
-        follow_device_with(
-            &mut e,
-            t,
-            &mut || {
-                asked += 1;
-                None
-            },
-            &mut |_, _| Err(Refused::NoDevice),
-        );
-        assert_eq!(asked, 0);
-        // Lost, and no device answers: said, tried again a second later only.
-        state!(e)
-            .sound
-            .mix
-            .as_ref()
-            .unwrap()
-            .output
-            .as_ref()
-            .unwrap()
-            .mark_lost();
+        follow_device_at(&mut e, t);
+        assert_eq!(ASKED.with(|a| a.get()), 0);
+        // Lost, and no device answers: parked, said, tried again a second later only.
+        let m = state!(e).sound.mix.as_ref().unwrap();
+        m.output.as_ref().unwrap().mark_lost();
         for at in [t, t + DEFAULT_CHECK / 2] {
-            follow_device_with(
-                &mut e,
-                at,
-                &mut || {
-                    asked += 1;
-                    None
-                },
-                &mut |_, _| Err(Refused::NoDevice),
-            );
+            follow_device_at(&mut e, at);
         }
-        assert_eq!(asked, 1, "tried once within the second");
+        assert_eq!(ASKED.with(|a| a.get()), 1, "tried once within the second");
         assert!(state!(e).sound.mix.as_ref().unwrap().output.is_none());
-        assert!(state!(e).sound.lost.is_some_and(|l| l.said));
-        assert!(
-            mixed(&e, 480).iter().any(|&x| x != 0.0),
-            "the voices are kept"
-        );
+        assert!(state!(e).sound.lost.as_ref().is_some_and(|l| l.said));
+        let voices = state!(e).sound.mix.as_ref().unwrap().voices.clone();
+        assert!(voices.lock().unwrap().game.parked);
+        // The game's clock ran 1.5 s beyond what was mixed: 2.5 s since the pace's start, 1 s
+        // (48000 frames) mixed.
+        let before = voices.lock().unwrap().all[&a].position.unwrap();
+        {
+            let mut v = voices.lock().unwrap();
+            let mut p = Pace::new(10_000_000);
+            p.start_us = 10_000_000 - 2_500_000;
+            p.mixed = 48000;
+            v.game.pace = Some(p);
+        }
         // A second later a device answers at 44100 Hz.
-        follow_device_with(
-            &mut e,
-            t + DEFAULT_CHECK,
-            &mut || {
-                asked += 1;
-                Some((44100, Layout::STEREO))
-            },
-            &mut |_, want| {
-                opened.push(want);
-                Ok(Output::idle(44100, want.unwrap_or(Layout::STEREO)))
-            },
+        stand_in(&mut e, Some((44100, Layout::STEREO)));
+        follow_device_at(&mut e, t + DEFAULT_CHECK);
+        assert_eq!(ASKED.with(|a| a.get()), 2);
+        assert_eq!(OPENED.with(|o| o.borrow().clone()), [Some(Layout::STEREO)]);
+        assert!(
+            !PULLED_SOUND.with(|p| p.get()),
+            "a new stream gives silence until it is put in place"
         );
-        assert_eq!(asked, 2);
-        assert_eq!(opened, [Some(Layout::STEREO)]);
         assert!(state!(e).sound.lost.is_none());
         let m = state!(e).sound.mix.as_ref().unwrap();
         assert_eq!(m.rate, 44100);
         assert!(m.output.as_ref().is_some_and(|o| !o.lost()));
-        assert!(m
-            .voices
+        {
+            let v = voices.lock().unwrap();
+            assert!(!v.game.parked);
+            assert!(v.all.values().all(|v| v.device == 44100));
+            // 1.5 s at the voice's 48000 Hz is 72000 frames: 7.5 times round its 9600-frame
+            // loop, so 4800 on from where it was (and a few more for the test's own time).
+            let after = v.all[&a].position.unwrap();
+            let moved = (after + 9600 - before) % 9600;
+            assert!((4800..4800 + 960).contains(&moved), "moved {moved}");
+            let p = v.game.pace.as_ref().unwrap();
+            assert_eq!(p.mixed, 0);
+            assert!(p.behind_us(44100) < 100_000, "nothing left to catch up");
+        }
+        assert_eq!(device_rate(&e), 44100);
+        // The device's first period after the gap: one period of silence, nothing skipped.
+        let mut first = vec![0f32; 2 * 441];
+        voices
             .lock()
             .unwrap()
-            .all
-            .values()
-            .all(|v| v.device == 44100));
-        assert_eq!(device_rate(&e), 44100);
-        let out = mixed(&e, 441 + 441);
+            .render_stream(Which::Game, 44100, 2, &mut first);
+        assert!(first.iter().all(|&x| x == 0.0), "a period of silence");
         assert!(
-            out[..2 * 441].iter().all(|&x| x == 0.0),
-            "a period of silence"
+            voices.lock().unwrap().game.pace.as_ref().unwrap().mixed <= 441,
+            "the first period mixed no gap"
         );
-        assert!(
-            out[2 * 441..].iter().any(|&x| x != 0.0),
-            "the voice goes on"
-        );
+        let mut next = vec![0f32; 2 * 441];
+        voices
+            .lock()
+            .unwrap()
+            .render_stream(Which::Game, 44100, 2, &mut next);
+        assert!(next.iter().any(|&x| x != 0.0), "the voice goes on");
     }
 
-    /// The pace's frames mixed are counted again at a new rate: the clock's place is kept.
+    /// The game's sound calls look for a lost device ([`tick`] calls [`follow_device`]).
     #[test]
-    fn the_pace_keeps_its_place_at_a_new_rate() {
-        let mut p = Pace::new(0);
+    fn every_sound_call_looks_for_a_lost_device() {
+        use super::super::sound_out::Output;
+        let mut e = engine();
+        let _ds = start_up(&mut e);
+        hear_by_hand(&mut e, 48000);
+        stand_in(&mut e, Some((44100, Layout::STEREO)));
+        let m = state!(e).sound.mix.as_mut().unwrap();
+        m.output = Some(Output::idle(48000, Layout::STEREO));
+        m.output.as_ref().unwrap().mark_lost();
+        tick(&mut e);
+        assert!(state!(e).sound.lost.is_none());
+        assert_eq!(state!(e).sound.mix.as_ref().unwrap().rate, 44100);
+    }
+
+    /// A pace's gap: how far the clock ran beyond what was mixed at a rate; one started again
+    /// from now has none.
+    #[test]
+    fn a_pace_knows_its_gap_and_starts_again_without_one() {
+        let mut p = Pace::new(5_000_000);
+        p.start_us = 3_000_000;
         p.mixed = 48000;
-        p.rescale(48000, 44100);
-        assert_eq!(p.mixed, 44100);
-        p.rescale(44100, 44100);
-        assert_eq!(p.mixed, 44100);
-        p.rescale(0, 48000);
-        assert_eq!(p.mixed, 44100);
-        assert_eq!(p.copy().mixed, 44100);
+        let gap = p.behind_us(48000);
+        assert!((1_000_000..1_050_000).contains(&gap), "{gap}");
+        assert_eq!(p.behind_us(0), 0);
+        let q = p.anchored();
+        assert_eq!(q.mixed, 0);
+        assert!(q.behind_us(48000) < 50_000);
+    }
+
+    /// A playing voice moved past a gap: round its loop, or to its end and stopped there; a voice
+    /// at the device's rate moves by that rate.
+    #[test]
+    fn a_voice_moves_past_a_gap() {
+        let mut v = super::super::mixer::Voice::new(vec![0; 2 * 1000], 1, 16);
+        v.rate = 1000;
+        v.looping = true;
+        v.start(100);
+        move_past(&mut v, 2_500_000, 48000);
+        assert_eq!(v.position, Some(600));
+        v.looping = false;
+        move_past(&mut v, 300_000, 48000);
+        assert_eq!(v.position, Some(900));
+        move_past(&mut v, 200_000, 48000);
+        assert_eq!(v.position, None, "ended");
+        let mut w = super::super::mixer::Voice::new(vec![0; 2 * 48000], 1, 16);
+        w.start(0);
+        move_past(&mut w, 500_000, 48000);
+        assert_eq!(w.position, Some(24000));
     }
 
     /// `GetSpeakerConfig` answers from the endpoint's mix format (measured: 8 for 0x63F,

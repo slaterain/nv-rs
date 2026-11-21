@@ -1328,7 +1328,18 @@ mod wasapi {
                 match open(want) {
                     Ok(d) => {
                         let _ = tx.send(Ok((d.rate, d.layout)));
+                        // The default device is asked about on a thread of its own, never on
+                        // this time-critical one.
+                        let watch = d.id.clone().map(|id| {
+                            let (stop, lost) = (flag.clone(), lost_thread.clone());
+                            std::thread::Builder::new()
+                                .name("nv sound watch".into())
+                                .spawn(move || watch_default(&id, &stop, &lost))
+                        });
                         run(&d, &source, &flag, &lost_thread);
+                        if let Some(Ok(w)) = watch {
+                            let _ = w.join();
+                        }
                     }
                     Err(why) => {
                         let _ = tx.send(Err(why));
@@ -1350,6 +1361,33 @@ mod wasapi {
         })
     }
 
+    /// Once a second ([`DEFAULT_CHECK`]), on a thread of its own with COM: is the stream's
+    /// endpoint (`ours`) still the default one? When another became the default the stream is
+    /// marked lost (its owner opens one there) and the watch ends; it ends too when the stream
+    /// stops (looked at every 100 ms) or is lost otherwise.
+    fn watch_default(ours: &[u16], stop: &AtomicBool, lost: &AtomicBool) {
+        unsafe {
+            CoInitializeEx(std::ptr::null_mut(), 0);
+        }
+        let step = std::time::Duration::from_millis(100);
+        let mut waited = std::time::Duration::ZERO;
+        while !stop.load(Ordering::Relaxed) && !lost.load(Ordering::Relaxed) {
+            std::thread::sleep(step);
+            waited += step;
+            if waited < DEFAULT_CHECK {
+                continue;
+            }
+            waited = std::time::Duration::ZERO;
+            if default_moved(Some(ours), unsafe { default_id() }.as_deref()) {
+                lost.store(true, Ordering::Relaxed);
+                eprintln!(
+                    "sound: the default sound device changed; this stream is let go and one is \
+                     opened on the new default device"
+                );
+            }
+        }
+    }
+
     unsafe fn run(
         d: &Device,
         source: &Arc<Mutex<dyn Source>>,
@@ -1363,21 +1401,10 @@ mod wasapi {
         // Underruns: a wake that finds the device with nothing left to play, after the first
         // frames were given (the stream starts empty).
         let (mut given, mut starved, mut lost) = (false, 0u64, false);
-        let mut checked = std::time::Instant::now();
         while !stop.load(Ordering::Relaxed) {
-            // Once a second (right after a refill): is our endpoint still the default one?
-            if !lost && checked.elapsed() >= DEFAULT_CHECK {
-                checked = std::time::Instant::now();
-                if default_moved(d.id.as_deref(), default_id().as_deref()) {
-                    lost = true;
-                    lost_out.store(true, Ordering::Relaxed);
-                    eprintln!(
-                        "sound: the default sound device changed; this stream is let go and one \
-                         is opened on the new default device"
-                    );
-                }
-            }
             WaitForSingleObject(d.event, 200);
+            // Marked lost by the watch ([`watch_default`]) or below: nothing more is given.
+            lost |= lost_out.load(Ordering::Relaxed);
             if lost {
                 continue;
             }
