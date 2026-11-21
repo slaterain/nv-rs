@@ -2875,6 +2875,13 @@ impl Device {
             if fix(&t) != fix(&self.st.textures[slot]) {
                 self.st.touch(usize::from(slot < 16));
             }
+            // A draw without a pixel shader takes a fixed-function one made for its stages'
+            // texture kinds ([`ffp::PixelKey`]: cube or not): a change of kind is a change of the
+            // draw's shader, not only of its groups ([`DrawRecord`]).
+            let cube = |t: &Option<Arc<Tex>>| t.as_ref().is_some_and(|t| t.cube);
+            if cube(&t) != cube(&self.st.textures[slot]) {
+                self.state_gen += 1;
+            }
             self.st.textures[slot] = t;
             self.st.bound.textures[slot] = texture;
         }

@@ -442,3 +442,50 @@ impl Backend for WgpuBackend {
         self.device.as_mut().is_some_and(device::Device::idle)
     }
 }
+
+/// A recording (`NV_D3D9_RECORD`'s file, [`d3d9_stream::wire`]) replayed into an offscreen
+/// backend with the draw records on or off ([`device::Device::set_draw_records`]): each draw's
+/// digest of what it gave wgpu ([`device::Device::record_draw_digests`]) with the number of the
+/// Present it came before, for the draws before Presents `from` to `to` (all commands are
+/// carried out). The proof that the records change nothing: the same list with them off and on
+/// (`examples/replay_digests.rs`, and the frame tests on their own recording). None without a
+/// GPU adapter.
+pub fn replay_draw_digests(
+    bytes: &[u8],
+    records: bool,
+    from: u64,
+    to: u64,
+    cache: Option<std::path::PathBuf>,
+) -> Result<Option<Vec<(u64, u64)>>, d3d9_stream::wire::WireError> {
+    let mut b = WgpuBackend::new(Output::Offscreen);
+    if let Some(dir) = cache {
+        b = b.with_cache_dir(dir);
+    }
+    let mut set = false;
+    let mut present = 0u64;
+    let mut out = Vec::new();
+    for c in d3d9_stream::wire::commands(bytes)? {
+        let c = c?;
+        let p = matches!(c, Cmd::Present { .. });
+        b.execute(c);
+        match b.device() {
+            Some(d) => {
+                if !set {
+                    d.set_draw_records(records);
+                    d.record_draw_digests(true);
+                    set = true;
+                }
+                let digests = d.take_draw_digests();
+                if present >= from && present < to {
+                    out.extend(digests.into_iter().map(|x| (x, present)));
+                }
+            }
+            None if set => return Ok(None),
+            None => {}
+        }
+        if p {
+            present += 1;
+        }
+    }
+    Ok(set.then_some(out))
+}
