@@ -25,7 +25,10 @@
 //! **Floats.** The bound tests' distances, on the main thread only ([`Threads::Main`]): native `f32`,
 //! each operation and store the exe's in its order (the main thread's 24-bit precision rounds every
 //! step to a float, as plain `f32` does), the square root `FSQRT`-like `f32::sqrt` in place of the
-//! CRT's `_CIsqrt` (its result is stored to a float at once: one correctly rounded root).
+//! CRT's `_CIsqrt` (its result is stored to a float at once: one correctly rounded root). The
+//! family is declared [`Threads::Main`] for them. The light sort is also reached on the loading
+//! thread (the render passes): it and the other slow-loop members keep the exact x87 helpers, right
+//! under either control word, and their Diff tests run both.
 
 use crate::image;
 use engine_core::ptr::Ptr;
@@ -47,6 +50,10 @@ pub static LIGHTS: Family = Family {
     name: "lights",
     id: FAMILY,
     past_gate: true,
+    // The walk's members (plain `f32`) run on the main thread only: the light passes and the
+    // shadow preparation. The light sort (`resort`) is also reached from the render passes on the
+    // loading thread, so it keeps the exact x87 helpers, which are right under either control
+    // word, and its Diff test runs both; the weighted and dominant members keep them too.
     threads: Threads::Main,
     stage2: false,
     funcs,
