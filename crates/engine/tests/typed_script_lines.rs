@@ -343,7 +343,6 @@ impl Common for Diff {
             .family(&scripts::SCRIPTS)
             .family(&crt::CRT)
             .family(&leaf::LEAVES)
-            .translation_calls_plainly(&[0x005a_c4f0, 0x005a_9140])
             .allow_nan_payloads()
     }
 }
