@@ -459,7 +459,14 @@ fn stream_of(r: &mut Real, this: u32) -> Option<Sink<'_>> {
 /// Records `cmd`, a call on the modelled device `this`, when the backend has its device.
 #[inline]
 fn record(e: &mut Engine, this: u32, cmd: Cmd<Data<'_>>) {
-    if let Some(mut s) = stream_of(real(e), this) {
+    record_in(real(e), this, cmd);
+}
+
+/// [`record`] for a model function that holds the backend's state already (`super::d3d9device`'s
+/// state sets in one pass): the same look-up of the device and the same sink.
+#[inline]
+pub(super) fn record_in(r: &mut Real, this: u32, cmd: Cmd<Data<'_>>) {
+    if let Some(mut s) = stream_of(r, this) {
         s.submit(cmd);
     }
 }
