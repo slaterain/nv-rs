@@ -558,6 +558,59 @@ mod tests {
         assert_eq!(r.inputs, [(0x4000, vec![5, 5]), (0x5002, vec![3, 4, 0])]);
     }
 
+    /// A draw kept and replayed: the first draw runs the body and keeps what it wrote and read; the next, with the
+    /// same input, replays the write without the body; a changed input builds again; `check` runs the body on a
+    /// hit and counts a body that now does something else.
+    #[test]
+    fn a_kept_draw_is_replayed_while_its_inputs_stay() {
+        let mut e = Engine::new();
+        let block = e.mem.alloc(0x100);
+        let (input, out, scratch) = (block, block + 0x10, block + 0x20);
+        e.mem.set_u32(input, 5);
+        reset_for_tests();
+        set_mode_for_tests(Some(Mode::On));
+        let runs = Cell::new(0u32);
+        let extra = Cell::new(0u32);
+        let body = |e: &mut Engine| {
+            runs.set(runs.get() + 1);
+            let value = capture::word(e, input, 0);
+            // The body's own write, then its read: not an input.
+            e.mem.set_u32(scratch, 1);
+            let _ = capture::word(e, scratch, 0);
+            e.mem.set_u32(out, value + 1 + extra.get());
+        };
+        let key = (0x10, 1, 0x20, 0x30);
+        draw(&mut e, key, body);
+        assert_eq!((runs.get(), e.mem.u32(out)), (1, 6));
+        e.mem.set_u32(out, 0);
+        e.mem.set_u32(scratch, 9);
+        draw(&mut e, key, body);
+        assert_eq!(runs.get(), 1, "replayed, not run");
+        assert_eq!(
+            (e.mem.u32(out), e.mem.u32(scratch)),
+            (6, 1),
+            "the writes replayed"
+        );
+        e.mem.set_u32(input, 7);
+        draw(&mut e, key, body);
+        assert_eq!(
+            (runs.get(), e.mem.u32(out)),
+            (2, 8),
+            "an input changed: built again"
+        );
+        // Check: the body runs on a hit; a body that writes something else now is counted.
+        set_mode_for_tests(Some(Mode::Check));
+        extra.set(1);
+        draw(&mut e, key, body);
+        assert_eq!((runs.get(), e.mem.u32(out)), (3, 9));
+        let s = summary_now();
+        assert!(s.contains("1 replayed"), "{s}");
+        assert!(s.contains("1 checked, 1 differed"), "{s}");
+        assert!(s.contains("inputs changed 1"), "{s}");
+        set_mode_for_tests(None);
+        reset_for_tests();
+    }
+
     /// The check mode's report names the first op that differs, or the lengths.
     #[test]
     fn the_first_difference_is_named() {
