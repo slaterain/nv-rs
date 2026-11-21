@@ -114,6 +114,14 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b9_7fa0, state::set_alpha_blend_enable(u8, u32)),
         entry!(0x00b9_8380, state::set_color_write(u32, u32)),
         entry!(0x00b9_8070, state::set_stencil_enable(u8, u32)),
+        entry!(0x00b9_8480, state::set_fill_mode(u8, u32)),
+        entry!(
+            0x00b9_80c0,
+            state::set_stencil_operations(u32, u32, u32, u32)
+        ),
+        entry!(0x00b9_8180, state::set_stencil_function(u32, u32, u32, u32)),
+        entry!(0x00b9_8230, state::set_stencil_write_mask(u32, u32)),
+        entry!(0x00b9_83d0, state::set_color_writes(u32, u32, u32, u32)),
         entry!(
             0x00b9_8280,
             state::set_clip_planes(u8, u8, u8, u8, u8, u8, u32)

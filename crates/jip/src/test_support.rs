@@ -40,6 +40,14 @@ pub fn install_into_as(e: &mut Engine, answers_installed: bool) {
 
 /// What [`engine`] does to a new engine.
 fn prepare(e: &mut Engine) {
+    // JIP's deferred start calls the process lists' time refresh (00970d50): a stand-in that
+    // does nothing unless the engine already has one (an engine crate's translation, or a
+    // test's recording stand-in).
+    if !e.is_registered(crate::cosave::PROCESS_LISTS_REFRESH_TIME) {
+        e.register(crate::cosave::PROCESS_LISTS_REFRESH_TIME, |_, _| {
+            Ret::default()
+        });
+    }
     e.map(0x0118_e000, 0x9000);
     e.map(CONSOLE_OPEN & !0xfff, 0x1000);
     e.map(DATA, 0x1_0000);

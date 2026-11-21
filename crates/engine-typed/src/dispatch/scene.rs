@@ -338,7 +338,8 @@ pub fn update_transform_and_bounds(e: &mut Engine, this: Ptr<NiNode>, data: u32)
 /// the geometry's (`+0x9c`), then each controller's `OnPreDisplay` (vtable +0xa8), along `+0x30`.
 pub fn geometry_render_immediate(e: &mut Engine, this: Ptr, renderer: Ptr) {
     let base = this.addr();
-    e.mem.set_u32(renderer.addr() + 0xc, base + 0x9c);
+    // The renderer's current property state: the drawing side's own (`draw::statics::RENDERER_BLOCKS`).
+    crate::draw::capture::set_word(e, renderer.addr(), 0xc, base + 0x9c);
     let mut controller = e.mem.u32(base + 0xc);
     while controller != 0 {
         e.vcall(controller, 0xa8, &args![]);

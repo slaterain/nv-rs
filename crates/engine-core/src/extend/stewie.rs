@@ -302,11 +302,15 @@ pub mod kept {
     /// S0089.01's `int g_savedAmmoCount` (4 bytes): the player's saved count of loaded rounds plus
     /// one (0: none, Tweaks' -1), read by S0089.07.
     pub const SAVED_AMMO_COUNT: usize = 2;
+    /// S0022.07's `static bool debounce` (1 byte: the remap was already waiting last frame).
+    pub const REMAP_DEBOUNCE: usize = 3;
+    /// S0883's `static char buf[0x200]`: the settings save failure's text.
+    pub const SAVE_SETTINGS_ERROR: usize = 4;
     /// S0204's `Actor* pLastKilledActor` (4 bytes): the actor the console's `kill` last killed for
     /// the player, until `Actor::Kill` reaches its experience step for it.
-    pub const LAST_KILL_COMMAND_ACTOR: usize = 3;
+    pub const LAST_KILL_COMMAND_ACTOR: usize = 5;
     /// How many.
-    pub const COUNT: usize = 4;
+    pub const COUNT: usize = 6;
 }
 
 /// The last thing each of Tweaks' warnings printed (its functions' statics), its print queue and
@@ -662,7 +666,8 @@ impl Engine {
 
     /// The missing-data guard row's part in Tweaks' rows (the host turns it on with
     /// `NV_NVSE_NULL_GUARD`, every thread's engine shares it): where a row copies a Tweaks slip
-    /// that reads data that is not there (S0237's unchecked child index), the guard passes over the
+    /// that reads data that is not there (S0237's unchecked child index; S0216's convex list key
+    /// equal to the child count and a list's missing child), the guard passes over the
     /// missing data. Off, every row is exactly Tweaks.
     pub fn set_stewie_slip_guard(&self, on: bool) {
         self.extend.stewie.3.slip_guard.store(on, Relaxed);

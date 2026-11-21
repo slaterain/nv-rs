@@ -9,3 +9,14 @@ const TLS_VSIZE: u32 = 0x0000_02c5;
 const TLS_HASH: u64 = 0xd7c1_ecde_8c74_8cf7;
 const CONST_VSIZE: u32 = 0x0000_001f;
 const CONST_HASH: u64 = 0x3de1_acd7_29c9_f219;
+
+// Local experimental profile, measured 2026-11-19 from the user's unmodified
+// GOG offline installer 1.4.0.525(a) (55068), en-US. Executable SHA256:
+// 89e7020487e80f20ddc92ea641c4433b2c6839a82f45a076e414d167d11dd0fe.
+// All mapped addresses and virtual sizes match Steam. .data, .tls and CONST
+// are byte-identical by the reference hashes above. In .rdata, replacing the
+// single DLL name GalaxyWrp.dll with steam_api.dll restores RDATA_HASH exactly.
+// Require
+// this build's .text too: accepting its data does not prove gameplay parity.
+const GOG_RDATA_HASH: u64 = 0x2a79_b64d_203d_51a4;
+const GOG_TEXT_HASH: u64 = 0xca78_cfed_09a4_90f7;

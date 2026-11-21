@@ -565,7 +565,20 @@ and next active lights with and without the shadow lights, `00b70590`, `00b70600
 counts, `00b70790`, `00b707d0`), a pass light's clip-plane store (`00b71ad0`) and the shadow scene node's camera
 position (`00b71b40`); the shadow light shader's fog upload (`00b7c3a0`), pixel entries (`00b7c510`), light ambient
 (`00b7c580`) and colour (`00b7c600`) and land values (`00b7ad80`); the tall grass's fog (`00baa430`); the SpeedTree
-branch shader (its slot 0x7c `00bd4ba0` and its fog slot `00c1a310`). Each reads the frame only through
+branch shader (its pass choice `00bd4030`, its slots 0x78 `00bd4890` and 0x7c `00bd4ba0` and its fog slot `00c1a310`).
+Then every slot the batch renderer calls on the shader classes the world draw meets: the pass choices (slot 0xf0: the
+SpeedTree leaves `00bb1b20`, the tall grass `00baa3f0`, the sky `00b884e0`, the water `00b81760`, lighting 3.0 `00bbe020`,
+the shadow light shader's two subclasses `00bcce40` and `00bcfd20`), the textures (slot 0x78: the leaves `00bb26d0`, the
+first subclass `00bce500`; slot 0xf8: the tall grass `00bac8d0`, the subclasses `00bcc590` and `00bce800`, with the stage
+setters they reach `00b7c150`, `00b7c170`, `00b7c1f0`, `00b7c230`), the partitions (slot 0x64: no-lighting `00bc8f20`,
+lighting 3.0 `00bbd000`), the blending (slot 0x80: no-lighting `00bc8ed0`, lighting 3.0 `00bbc5c0`), the geometry ends
+(slot 0x8c: no-lighting `00bc8d90`, sky `00b8a1a0`, water `00b86b80`, lighting 3.0 `00bbeef0`), the water's pass constants
+(`00b81d60`), lighting 3.0's stage slots (`00c0cd80`, `00c0cf10`, `00c0bc90`) its pass for a pass type (`00c0abd0`) and pair stages (`00c0bbd0`), the leaves' lights `00bb1960`, camera rows
+`00bb1a90` and scene lights `00b71360`, a shader's slot 0x94 (`00e80590`), the other lock releases the passes' restore
+calls (`00714a80`, `00714ac0`, `00714b00`, `00714b20`, `00714b50`, `00714b80`, `00714bf0`, `004eb510`, `004ecb40`,
+`00b985f0`) and the setters they reach (fill mode `00b98480`, stencil operations `00b980c0`, function `00b98180` and write
+mask `00b98230`, colour writes 1 to 3 `00b983d0`). With these every listed shader class is clean (`draw::statics::CLASSES`),
+so in play the cut takes the draw's own state into the frame's copy. The pair of shadow textures (`011f95e4`, `011f95e8`) is a frame value: the cut takes and holds it. Each reads the frame only through
 `draw::packet` and writes its constants, render states and counters through `draw::own` (each file's "Group C"
 section), with what is filled at load read in place (the shaders' own words, the passes' contents, the exe's
 constants).
@@ -659,7 +672,12 @@ cut, to find the geometry it lights: `ShadowSceneLight::AddObject` (`00ba0110`),
 (`00b9f5b0`) and by its radius (`00b9f6a0`), the add of a lit geometry to the light's list (`00b9f480`) and the two bound
 tests (`00b9bbb0`, `00b9dae0`). Main thread only ([`Threads::Main`]); the bound tests' distances are native `f32` in the
 exe's order, the square root `f32::sqrt` in place of the CRT's. About 0.2 ms a frame in the lit, crowded street (the
-profile of 2026-11-11). Its tests are `crates/engine/tests/typed_lights.rs`. On by the native-code rule.
+profile of 2026-11-11). Since 2026-11-21 also the light lists' slow loops with the same answers in linear work: the
+lighting property's light sort `ResortLights` (`00b70390`, each light's luminance worked out once instead of at every
+comparison), the shadow light's weighted placement (`00b9d150`) and the dominant light direction at the camera
+(`00b5bca0`), whose walks over the scene node's lights keep their place instead of starting from the list's head for
+each light. Those three keep the exact x87 helpers (the sort also runs on the loading thread) and are tested under both
+control words. Its tests are `crates/engine/tests/typed_lights.rs`. On by the native-code rule.
 And `scripts` (same crate, id 11): what every running script line goes through for its values, every mod's scripts
 included. The expression evaluator `CExpression` (the constructor `00593490`, the conversion to postfix `00593500`,
 the tokenizer `00593870`, `Eval` `00593db0`, its error `005934d0` and its two stacks `00594b60` to `00594d40`), the
@@ -672,6 +690,15 @@ calls of it now go by address too), as do `atol`, `atof`, the commands' handlers
 rounded to 24 bits on the main thread as its x87 precision rounds. Its tests are `crates/engine/tests/typed_scripts.rs`
 (generated expressions over every operator and operand kind, parse mode, xNVSE's buffer and command call, JIP's
 operators). On by the native-code rule.
+And `save` (same crate, id 16): the work of a save's one frame (a quicksave is one frame of about 100 ms in the port),
+first the form id map every form reference a save writes goes through: an id's save index got or added (`00846c90`)
+and resolved back (`00846d20`), the word maps' `SetAt` (`00844700`) with the new item (`00844a70`, `006f99e0`) and
+`SetValue` (`00863840`) their vtable holds, the created-id test (`00469860`), the three-byte index
+(`BGSNumericIDIndex`: `0084eaf0`, `00853500`, `00853570`) and the save buffer's two `SaveFormID`s (`00865db0`,
+`00865df0`). The map's lookup (`00853130`) is the dispatch family's. The buffer's append (`00865570`) and the
+allocator stay called by address, as does any map whose vtable holds other functions. Threads: both (`SetAt` is
+every word map's insert, the AI's combat maps included); integer work only. Its tests are
+`crates/engine/tests/typed_save.rs`. On by the native-code rule.
 And `geometry` (same crate, id 23): the code that reads and writes `NiGeometryData`'s arrays (positions, normals
 with the binormals and tangents after them, colours, texture coordinates), typed so that stage 2 can keep those
 arrays outside the 32-bit space (about 23 to 40 MB of the guest heap on the census route, and what mesh mods grow).

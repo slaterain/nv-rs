@@ -459,7 +459,14 @@ fn stream_of(r: &mut Real, this: u32) -> Option<Sink<'_>> {
 /// Records `cmd`, a call on the modelled device `this`, when the backend has its device.
 #[inline]
 fn record(e: &mut Engine, this: u32, cmd: Cmd<Data<'_>>) {
-    if let Some(mut s) = stream_of(real(e), this) {
+    record_in(real(e), this, cmd);
+}
+
+/// [`record`] for a model function that holds the backend's state already (`super::d3d9device`'s
+/// state sets in one pass): the same look-up of the device and the same sink.
+#[inline]
+pub(super) fn record_in(r: &mut Real, this: u32, cmd: Cmd<Data<'_>>) {
+    if let Some(mut s) = stream_of(r, this) {
         s.submit(cmd);
     }
 }
@@ -1784,6 +1791,7 @@ pub fn texture_created(
     let Some(mut s) = stream_of(r, this) else {
         return;
     };
+    engine_core::hitch::one(engine_core::hitch::Count::Textures);
     s.submit(Cmd::CreateTexture {
         device: this,
         texture,
@@ -1815,6 +1823,7 @@ pub fn cube_created(
     let Some(mut s) = stream_of(r, this) else {
         return;
     };
+    engine_core::hitch::one(engine_core::hitch::Count::Textures);
     s.submit(Cmd::CreateCubeTexture {
         device: this,
         texture,
@@ -1847,6 +1856,7 @@ pub fn surface_created(
     let Some(mut s) = stream_of(r, this) else {
         return;
     };
+    engine_core::hitch::one(engine_core::hitch::Count::Surfaces);
     s.submit(Cmd::CreateSurface {
         device: this,
         surface,
@@ -1930,6 +1940,10 @@ pub fn surface_unlocked(
         return false;
     };
     let read = |offset: u32, into: &mut [u8]| read_rows(mem, bits, pitch, row, offset, into);
+    engine_core::hitch::add(
+        engine_core::hitch::Count::TextureBytes,
+        u64::from(row) * u64::from(rows),
+    );
     s.submit(Cmd::UploadSurface {
         surface,
         row,
@@ -1964,6 +1978,7 @@ pub fn buffer_created(
     let Some(mut s) = stream_of(r, this) else {
         return;
     };
+    engine_core::hitch::one(engine_core::hitch::Count::Buffers);
     s.submit(Cmd::CreateBuffer {
         device: this,
         buffer,
@@ -2014,6 +2029,7 @@ pub fn buffer_unlocked(e: &mut Engine, buffer: u32, bits: u32, length: u32, mode
     let Some(mut s) = sink(r) else { return };
     let size = if size == 0 { length - offset } else { size };
     let read = |at: u32, into: &mut [u8]| mem.read(bits + offset + at, into);
+    engine_core::hitch::add(engine_core::hitch::Count::BufferBytes, u64::from(size));
     s.submit(Cmd::UploadBuffer {
         buffer,
         offset,
@@ -2035,6 +2051,7 @@ pub fn shader_created(e: &mut Engine, this: u32, shader: u32, pixel: bool, token
     // The tokens end with the end token: whole words (a stray tail padded, as the real call
     // reads words).
     let words = as_words(tokens);
+    engine_core::hitch::one(engine_core::hitch::Count::Shaders);
     s.submit(Cmd::CreateShader {
         device: this,
         shader,
@@ -2605,6 +2622,7 @@ pub fn offscreen_created(
     let Some(mut s) = stream_of(r, this) else {
         return;
     };
+    engine_core::hitch::one(engine_core::hitch::Count::Surfaces);
     s.submit(Cmd::CreateOffscreenSurface {
         device: this,
         surface,
@@ -2720,6 +2738,24 @@ pub fn report_place_wanted() -> bool {
 /// and one line in the log).
 pub fn set_report_place(text: String) {
     shot::set_place(text);
+}
+
+/// A hitch log line of this session (the host's `hitch_log`): kept for the F12 report's `hitches.txt` (the last
+/// [`shot::HITCHES_KEPT`]).
+pub fn note_report_hitch(line: String) {
+    shot::note_hitch(line);
+}
+
+/// The session's hitch totals for the report's `hitches.txt` (hitches, big ones, left out of the log by its cap), or
+/// none when the log is off (`NV_HITCH_LOG=0`).
+pub fn set_report_hitch_totals(totals: Option<(u64, u64, u64)>) {
+    shot::set_hitch_totals(totals);
+}
+
+/// The Presents submitted so far (the hitch log's loading-screen test, each frame): the stream's own count, read
+/// without the render thread's queue lock. None before the backend's stream.
+pub fn present_count(e: &mut Engine) -> Option<u32> {
+    real(e).stream.as_ref().map(|s| s.presents())
 }
 
 pub(super) mod shot {
@@ -2951,6 +2987,60 @@ pub(super) mod shot {
     /// The place of the report asked for.
     static PLACE: PlaceWait = PlaceWait::new();
 
+    /// The hitch lines a report carries at most (the session's last ones).
+    pub(crate) const HITCHES_KEPT: usize = 1000;
+
+    /// The session's hitch lines (the last [`HITCHES_KEPT`]) and how many there were in all.
+    static HITCHES: Mutex<(std::collections::VecDeque<String>, u64)> =
+        Mutex::new((std::collections::VecDeque::new(), 0));
+
+    /// A hitch line of the session, kept for the next report.
+    pub(super) fn note_hitch(line: String) {
+        if let Ok(mut h) = HITCHES.lock() {
+            if h.0.len() >= HITCHES_KEPT {
+                h.0.pop_front();
+            }
+            h.0.push_back(line);
+            h.1 += 1;
+        }
+    }
+
+    /// The session's totals from the host's hitch log: (hitches, big ones, left out by the cap); none: the log off.
+    static HITCH_TOTALS: Mutex<Option<(u64, u64, u64)>> = Mutex::new(None);
+
+    pub(super) fn set_hitch_totals(totals: Option<(u64, u64, u64)>) {
+        if let Ok(mut t) = HITCH_TOTALS.lock() {
+            *t = totals;
+        }
+    }
+
+    /// `hitches.txt`'s text (Windows line ends): what the lines are and the session's totals, then the session's
+    /// lines, oldest first; with the log off, that it was off.
+    pub(super) fn hitches_text() -> String {
+        let Some((hitches, big, left_out)) = HITCH_TOTALS.lock().ok().and_then(|t| *t) else {
+            return "The hitch log was off in this session (NV_HITCH_LOG=0).\r\n".to_string();
+        };
+        let (lines, all) = HITCHES
+            .lock()
+            .map(|h| (h.0.iter().cloned().collect::<Vec<_>>(), h.1))
+            .unwrap_or_default();
+        let mut out = format!(
+            "Frames this session that took at least 8 ms (6 ms above 250 fps) and twice the typical frame: {hitches} \
+             in all, {big} of them 16 ms or more, {left_out} not written (at most 20 lines in any 10 s; a frame of \
+             16 ms or more is always written). {all} lines{}, oldest first.\r\n",
+            if all > lines.len() as u64 {
+                format!(", the last {} here", lines.len())
+            } else {
+                String::new()
+            }
+        );
+        for l in lines {
+            out += &l;
+            out += "\r\n";
+        }
+        out
+    }
+
     /// A host writes the place of every report (called each of its frames).
     pub(super) fn place_writer() {
         PLACE.writer();
@@ -3056,6 +3146,7 @@ pub(super) mod shot {
             "Write here what went wrong and what you did just before it:\r\n\r\n",
         );
         let _ = std::fs::write(folder.join("place.txt"), place.replace('\n', "\r\n"));
+        let _ = std::fs::write(folder.join("hitches.txt"), hitches_text());
         eprintln!("F12: place: {}", place.trim_end().replace('\n', "; "));
         eprintln!("F12: report in {}", folder.display());
         #[cfg(windows)]
@@ -4347,6 +4438,50 @@ mod tests {
         assert_eq!(
             none.take(),
             Ok("no place: nothing in this program writes it\n".to_string())
+        );
+    }
+
+    /// An F12 report's `hitches.txt`: the session's hitch lines, oldest first, the last 1000 of them, with how many
+    /// there were in all. (The only test that notes hitch lines: they are the process's.)
+    #[test]
+    fn the_report_carries_the_session_s_last_1000_hitch_lines() {
+        // The log off: the file says so.
+        shot::set_hitch_totals(None);
+        assert_eq!(
+            shot::hitches_text(),
+            "The hitch log was off in this session (NV_HITCH_LOG=0).\r\n"
+        );
+        shot::set_hitch_totals(Some((0, 0, 0)));
+        assert!(shot::hitches_text().contains(": 0 in all, 0 of them 16 ms or more, 0 not written"));
+        shot::note_hitch("hitch: first".into());
+        // The totals are the host's (the hitches the cap left out count too), the lines those written.
+        shot::set_hitch_totals(Some((7, 2, 6)));
+        let t = shot::hitches_text();
+        assert!(
+            t.contains(": 7 in all, 2 of them 16 ms or more, 6 not written")
+                && t.contains(" 1 lines, oldest first")
+                && t.ends_with("\r\nhitch: first\r\n"),
+            "{t}"
+        );
+        for i in 0..shot::HITCHES_KEPT + 1 {
+            shot::note_hitch(format!("hitch: {i}"));
+        }
+        let t = shot::hitches_text();
+        let lines: Vec<&str> = t.split("\r\n").filter(|l| !l.is_empty()).collect();
+        assert_eq!(
+            lines.len(),
+            shot::HITCHES_KEPT + 1,
+            "the header and the last 1000"
+        );
+        assert!(
+            lines[0].contains("1002 lines, the last 1000 here, oldest first"),
+            "{}",
+            lines[0]
+        );
+        assert_eq!(lines[1], "hitch: 1");
+        assert_eq!(
+            lines[shot::HITCHES_KEPT],
+            format!("hitch: {}", shot::HITCHES_KEPT)
         );
     }
 

@@ -947,7 +947,10 @@ impl Threaded {
                 .reply
                 .take()
                 .expect("the reply waited for");
-            self.stats.reply(name, t.elapsed());
+            let d = t.elapsed();
+            self.stats.reply(name, d);
+            crate::hitch::add_time(crate::hitch::Count::ReplyWaitNs, d);
+            crate::hitch::add(crate::hitch::Count::ReplyWaits, 1);
             reply
         } else if present {
             self.presents += 1;
@@ -960,7 +963,9 @@ impl Threaded {
             }
             let t = Instant::now();
             drop(self.wait(|q| q.presents_done >= need));
-            self.stats.present.add(t.elapsed());
+            let d = t.elapsed();
+            self.stats.present.add(d);
+            crate::hitch::add_time(crate::hitch::Count::PresentWaitNs, d);
             self.stats.frame(&self.shared);
             Reply::None
         } else {
@@ -1014,7 +1019,9 @@ impl Threaded {
             );
             let t = Instant::now();
             drop(self.wait(|q| q.queued_bytes <= bytes && q.chunks.len() <= chunks));
-            self.stats.full.add(t.elapsed());
+            let d = t.elapsed();
+            self.stats.full.add(d);
+            crate::hitch::add_time(crate::hitch::Count::QueueFullNs, d);
         }
     }
 
