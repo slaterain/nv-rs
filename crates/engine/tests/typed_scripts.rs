@@ -422,7 +422,7 @@ fn jip_operator(e: &mut Engine, w: &[u32]) -> Option<u32> {
     Some(1)
 }
 
-/// What every `Eval` comparison names: the families, the plain calls, the NaN payloads.
+/// What every `Eval` comparison names: the families and the NaN payloads.
 trait Common {
     fn common(self) -> Diff;
 }
@@ -432,14 +432,9 @@ impl Common for Diff {
         self.family(&scripts::SCRIPTS)
             .family(&crt::CRT)
             .family(&leaf::LEAVES)
-            .translation_calls_plainly(PLAIN)
             .allow_nan_payloads()
     }
 }
-
-/// What the translations of the operand reader and the referenced object lookup call as plain Rust
-/// calls (the lookups of their own unit), which the typed ones call through the family.
-const PLAIN: &[u32] = &[0x005a_c4f0, 0x005a_9140];
 
 /// Every operator on two doubles, a double and an integer, and two integers that cannot fault.
 const BINARY: &[&str] = &[
@@ -1081,7 +1076,6 @@ fn scripts_read_operand() {
     .family(&scripts::SCRIPTS)
     .family(&crt::CRT)
     .family(&leaf::LEAVES)
-    .translation_calls_plainly(PLAIN)
     .inputs(&[
         Input::Of(operands),
         Input::Flag,
@@ -1143,7 +1137,6 @@ fn scripts_referenced_object() {
     .family(&scripts::SCRIPTS)
     .family(&crt::CRT)
     .family(&leaf::LEAVES)
-    .translation_calls_plainly(&[0x005a_9140])
     .inputs(&[
         Input::Of(&[0, 1, 2, 3, 4, 5, 6]),
         Input::Flag,

@@ -367,3 +367,111 @@ fn constants_with(e: &mut Engine, this: Ptr, state: Ptr, geometry: u32, world: u
         e.vcall(target, 0x24, &args![other]);
     }
 }
+
+// Typed from 00bc8f20
+/// The no-lighting shader's partition set-up (slot 0x64), `thiscall(shader, eight words: an unread word, the skin
+/// instance, the partition, three unread words, the world transform, an unread word)` (not a Ghidra function: typed
+/// from its bytes): only with a partition, the renderer's bone matrices for the skin with the world transform (3
+/// registers a bone, the world left out), then the current pass's constants (+0x5c) get the partition's bones
+/// through their slot 0x78: the shader's bone entry (+0x180), the skin's buffer (+0x28), the partition's 16-bit
+/// count (+0x20), the skin's word +0x20 and the partition's bone indices (+4). Answers 0.
+#[allow(clippy::too_many_arguments)]
+pub fn bone_setup(
+    e: &mut Engine,
+    this: Ptr,
+    _unused_0: u32,
+    skin: u32,
+    partition: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    world: u32,
+    _unused_7: u32,
+) -> u32 {
+    if partition == 0 {
+        return 0;
+    }
+    let renderer = e.global::<u32>(packet::RENDERER);
+    typed_call!(
+        super::FAMILY,
+        0x00e6_fe30,
+        super::skin::bone_matrices(
+            e,
+            Ptr::new(renderer),
+            Ptr::new(skin),
+            Ptr::new(world),
+            0u8,
+            3u32,
+            1u8
+        )
+    );
+    let indices = e.global::<u32>(partition.wrapping_add(4));
+    let constants = e.global::<u32>(packet::current_pass(e).wrapping_add(0x5c));
+    let rows = e.global::<u32>(skin.wrapping_add(0x20));
+    let count = u32::from(e.global::<u16>(partition.wrapping_add(0x20)));
+    let matrices = e.global::<u32>(skin.wrapping_add(0x28));
+    let entry = e.global::<u32>(this.addr().wrapping_add(0x180));
+    e.vcall(
+        constants,
+        0x78,
+        &args![entry, matrices, count, rows, indices],
+    );
+    0
+}
+
+// Typed from 00bc8ed0
+/// The no-lighting shader's blending (slot 0x80), `thiscall(shader, state)` (not a Ghidra function): in the pass
+/// types 0x4a to 0x51, unless the state's alpha property (property 0) has bit 0 of its flags, blending on
+/// (`00b97fa0(1, 0)`) with the blend 6, 7 (`00b97ff0(6, 7, 0)`); otherwise the shared blending of the state
+/// (`00be1ff0`, the shader family's). The batch renderer reads no answer.
+pub fn blending(e: &mut Engine, this: Ptr, state: Ptr) {
+    let pass_type = packet::rendering_pass_type(e);
+    let alpha = packet::state_property(e, state.addr(), 0);
+    let flagged = alpha != 0 && packet::ni_property_flags(e, alpha) & 1 != 0;
+    if !flagged && pass_type.wrapping_sub(0x4a) <= 7 {
+        typed_call!(
+            shader::FAMILY,
+            0x00b9_7fa0,
+            state::set_alpha_blend_enable(e, 1u8, 0)
+        );
+        typed_call!(shader::FAMILY, 0x00b9_7ff0, state::set_blend(e, 6, 7, 0));
+        return;
+    }
+    typed_call!(
+        shader::FAMILY,
+        0x00be_1ff0,
+        accumulator::set_blend_of(e, this.addr(), state.addr())
+    );
+}
+
+// Typed from 00bc8d90
+/// The no-lighting shader's geometry end (slot 0x8c), `thiscall(shader, state)` (the shader not read; not a Ghidra
+/// function): the set-up's states put back: wireframe off (`00b98480(0, 0)`) when the state's shader property has
+/// bit 0x10000 of its flags +0x24; depth writes on (`SetZWriteEnable(1, 0)`) without bit 0 of +0x24, the depth test
+/// on (`00b97de0(1, 0)`) without bit 31 of its flags +0x20 (both read with no null check, as the exe); the stencil
+/// test off (`00b98070(0, 0)`) when the state's property 4 has bit 0 of its flags.
+pub fn geometry_done(e: &mut Engine, _this: Ptr, state: Ptr) {
+    let block = state.addr();
+    let property = packet::state_property(e, block, 3);
+    if property != 0 && packet::property_flags_24(e, property) & 0x1_0000 != 0 {
+        typed_call!(shader::FAMILY, 0x00b9_8480, state::set_fill_mode(e, 0u8, 0));
+    }
+    if packet::property_flags_24(e, property) & 1 == 0 {
+        typed_call!(
+            shader::FAMILY,
+            0x00b9_7e30,
+            state::set_z_write_enable(e, 1u8, 0)
+        );
+    }
+    if packet::property_flags(e, property) & 0x8000_0000 == 0 {
+        typed_call!(shader::FAMILY, 0x00b9_7de0, state::set_z_enable(e, 1u8, 0));
+    }
+    let other = packet::state_property(e, block, 4);
+    if other != 0 && packet::ni_property_flags(e, other) & 1 != 0 {
+        typed_call!(
+            shader::FAMILY,
+            0x00b9_8070,
+            state::set_stencil_enable(e, 0u8, 0)
+        );
+    }
+}

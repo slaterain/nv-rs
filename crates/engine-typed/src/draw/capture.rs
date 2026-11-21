@@ -154,16 +154,42 @@ struct Packet {
     own_bytes: Vec<u8>,
     own_cut: Vec<u8>,
     own_main: Vec<u8>,
+    /// The own words that are counted pointers ([`own_counted`]): the drawing side's holds move their objects' counts
+    /// at the join, in the serial order ([`end`]).
+    counted: Vec<u32>,
+    /// The object [`Packet::find`] looked up last and its first range (`NONE`: none): the draw reads an object's
+    /// fields one after another, so most look-ups skip the map.
+    last_object: Cell<(u32, u32)>,
+    /// The own block [`Packet::own_at`] found last, tried first.
+    last_own: Cell<u32>,
+    /// The own blocks' indices in the order of their addresses ([`Packet::own_at`]'s search).
+    own_by_lo: Vec<u32>,
 }
 
 impl Packet {
     /// Where the own bytes of `[addr, addr + len)` start, when one own block holds them all.
     #[inline(always)]
     fn own_at(&self, addr: u32, len: u32) -> Option<usize> {
-        self.own.iter().find_map(|b| {
-            (addr >= b.lo && addr.checked_add(len).is_some_and(|end| end <= b.hi))
-                .then(|| (b.at + (addr - b.lo)) as usize)
-        })
+        let holds =
+            |b: &OwnBlock| addr >= b.lo && addr.checked_add(len).is_some_and(|end| end <= b.hi);
+        let last = self.last_own.get() as usize;
+        if let Some(b) = self.own.get(last) {
+            if holds(b) {
+                return Some((b.at + (addr - b.lo)) as usize);
+            }
+        }
+        // The blocks are apart from each other, so the one that could hold `addr` is the last starting at or
+        // before it, found by halving over their order by address.
+        let k = self
+            .own_by_lo
+            .partition_point(|&i| self.own[i as usize].lo <= addr);
+        let i = *self.own_by_lo.get(k.checked_sub(1)?)?;
+        let b = &self.own[i as usize];
+        if !holds(b) {
+            return None;
+        }
+        self.last_own.set(i);
+        Some((b.at + (addr - b.lo)) as usize)
     }
 
     /// Whether the accessors read this packet for `e`: its run, and not paused.
@@ -175,7 +201,14 @@ impl Packet {
     /// The range of `object` that holds `[offset, offset + len)`, if one does.
     #[inline(always)]
     fn find(&self, object: u32, offset: u32, len: u32) -> Option<Range> {
-        let mut index = *self.objects.get(&object)?;
+        let (last, first) = self.last_object.get();
+        let mut index = if last == object && first != NONE {
+            first
+        } else {
+            let first = *self.objects.get(&object)?;
+            self.last_object.set((object, first));
+            first
+        };
         while index != NONE {
             let r = self.ranges[index as usize];
             if offset >= r.from && offset.checked_add(len).is_some_and(|end| end <= r.to) {
@@ -240,10 +273,29 @@ fn missed(object: u32, offset: u32, poison: bool) {
 
 thread_local! {
     static PACKET: RefCell<Option<Packet>> = const { RefCell::new(None) };
+    /// True whenever [`PACKET`] holds a packet on this thread (it may stay true a moment longer, never shorter):
+    /// lets the read accessors of a thread with no packet (main while the drawing side draws) go straight to
+    /// guest memory, without the packet's borrow and look-ups on every read ([`held`]).
+    static HOLDS: Cell<bool> = const { Cell::new(false) };
+    /// The last write [`mark`] noted on this thread, with the packet generation it was noted in: the same
+    /// write again in the same generation is not pushed twice.
+    static LAST_MARK: Cell<(u64, usize, u32, u32)> = const { Cell::new((0, 0, 0, 0)) };
 }
 
 /// How many threads hold an open packet: the accessors' one check while none does.
 static OPEN: AtomicUsize = AtomicUsize::new(0);
+
+/// Counts the packets opened ([`begin`]), so a mark noted for an earlier packet is never taken as noted for a
+/// later one.
+static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// Whether this thread may hold an open packet: the read accessors' first test. False on every thread while no
+/// packet is open, and on a thread that holds none (main while the drawing side draws), whose reads are guest
+/// memory's either way.
+#[inline(always)]
+fn held() -> bool {
+    OPEN.load(Relaxed) != 0 && HOLDS.with(Cell::get)
+}
 
 fn run(e: &Engine) -> usize {
     e.kernel.id()
@@ -278,10 +330,16 @@ pub fn begin(e: &Engine) -> bool {
             own_bytes: Vec::new(),
             own_cut: Vec::new(),
             own_main: Vec::new(),
+            counted: Vec::new(),
+            last_object: Cell::new((0, NONE)),
+            last_own: Cell::new(0),
+            own_by_lo: Vec::new(),
         });
+        HOLDS.with(|h| h.set(true));
         true
     });
     if opened {
+        GENERATION.fetch_add(1, Relaxed);
         // Main's writes noted before this cut belong to no packet.
         drop(take_marks(run(e)));
         OPEN.fetch_add(1, Relaxed);
@@ -303,9 +361,32 @@ pub fn take(e: &Engine, object: u32, from: u32, to: u32) {
         if p.run != run(e) || p.scribble.is_some() {
             return;
         }
+        let first = p.objects.get(&object).copied().unwrap_or(NONE);
+        // The common case, an object not taken before: one part, read straight into the packet's bytes.
+        if first == NONE {
+            let at = p.bytes.len();
+            p.bytes.resize(at + (to - from) as usize, 0);
+            if e.mem
+                .try_read(object.wrapping_add(from), &mut p.bytes[at..])
+                .is_err()
+            {
+                p.bytes.truncate(at);
+                return;
+            }
+            let index = u32::try_from(p.ranges.len()).expect("the packet stays under 4 GB");
+            p.ranges.push(Range {
+                from,
+                to,
+                at: u32::try_from(at).expect("the packet stays under 4 GB"),
+                next: NONE,
+            });
+            p.order.push((object, index));
+            p.objects.insert(object, index);
+            p.last_object.set((0, NONE));
+            return;
+        }
         // The parts of [from, to) no range of the object holds.
         let mut parts = vec![(from, to)];
-        let first = p.objects.get(&object).copied().unwrap_or(NONE);
         let mut index = first;
         while index != NONE {
             let r = p.ranges[index as usize];
@@ -326,13 +407,17 @@ pub fn take(e: &Engine, object: u32, from: u32, to: u32) {
         }
         let mut head = first;
         for (a, b) in parts {
-            let mut copy = vec![0u8; (b - a) as usize];
             // A range not mapped is not taken (a read of it through the packet is a miss).
-            if e.mem.try_read(object.wrapping_add(a), &mut copy).is_err() {
+            let start = p.bytes.len();
+            p.bytes.resize(start + (b - a) as usize, 0);
+            if e.mem
+                .try_read(object.wrapping_add(a), &mut p.bytes[start..])
+                .is_err()
+            {
+                p.bytes.truncate(start);
                 continue;
             }
-            let at = u32::try_from(p.bytes.len()).expect("the packet stays under 4 GB");
-            p.bytes.extend_from_slice(&copy);
+            let at = u32::try_from(start).expect("the packet stays under 4 GB");
             let index = u32::try_from(p.ranges.len()).expect("the packet stays under 4 GB");
             p.ranges.push(Range {
                 from: a,
@@ -345,6 +430,8 @@ pub fn take(e: &Engine, object: u32, from: u32, to: u32) {
         }
         if head != NONE {
             p.objects.insert(object, head);
+            // The object's first range is a new one now: the look-up cache must not keep the old head.
+            p.last_object.set((0, NONE));
         }
     });
 }
@@ -370,34 +457,68 @@ pub fn own(e: &Engine, object: u32, from: u32, to: u32) {
         if p.run != run(e) || p.scribble.is_some() {
             return;
         }
-        let mut parts = vec![(lo, hi)];
-        for b in &p.own {
-            parts = parts
-                .into_iter()
-                .flat_map(|(a, z)| {
-                    let mut left = Vec::with_capacity(2);
-                    if a < b.lo.min(z) {
-                        left.push((a, b.lo.min(z)));
+        // The parts of [lo, hi) no block holds: the gaps between the blocks that meet it. The blocks are apart
+        // and in address order (`own_by_lo`), so those are the run starting at the first that ends after `lo`.
+        let mut parts: Vec<(u32, u32)> = Vec::new();
+        let mut a = lo;
+        let mut k = p.own_by_lo.partition_point(|&i| p.own[i as usize].hi <= lo);
+        while a < hi {
+            match p.own_by_lo.get(k).map(|&i| p.own[i as usize]) {
+                Some(b) if b.lo < hi => {
+                    if a < b.lo {
+                        parts.push((a, b.lo));
                     }
-                    if b.hi.max(a) < z {
-                        left.push((b.hi.max(a), z));
-                    }
-                    left
-                })
-                .collect();
+                    a = a.max(b.hi);
+                    k += 1;
+                }
+                _ => {
+                    parts.push((a, hi));
+                    break;
+                }
+            }
         }
         for (a, z) in parts {
-            let mut copy = vec![0u8; (z - a) as usize];
-            if e.mem.try_read(a, &mut copy).is_err() {
+            let at = p.own_bytes.len();
+            p.own_bytes.resize(at + (z - a) as usize, 0);
+            if e.mem.try_read(a, &mut p.own_bytes[at..]).is_err() {
+                p.own_bytes.truncate(at);
                 continue;
             }
-            let at = u32::try_from(p.own_bytes.len()).expect("the packet stays under 4 GB");
-            p.own_bytes.extend_from_slice(&copy);
-            p.own_cut.extend_from_slice(&copy);
+            let (bytes, cut) = (&p.own_bytes, &mut p.own_cut);
+            cut.extend_from_slice(&bytes[at..]);
+            let index = u32::try_from(p.own.len()).expect("the packet stays under 4 GB");
+            let k = p.own_by_lo.partition_point(|&i| p.own[i as usize].lo < a);
+            p.own_by_lo.insert(k, index);
+            let at = u32::try_from(at).expect("the packet stays under 4 GB");
             p.own.push(OwnBlock { lo: a, hi: z, at });
         }
     });
 }
+/// Marks the own word at `addr` (taken already, [`own`]) as a counted pointer: the drawing side's holds of it leave
+/// the counts to the join ([`end`]). Nothing without an open packet for `e`'s run.
+pub fn own_counted(e: &Engine, addr: u32) {
+    PACKET.with(|p| {
+        if let Some(p) = p.borrow_mut().as_mut() {
+            if p.run == run(e) && p.own_at(addr, 4).is_some() && !p.counted.contains(&addr) {
+                p.counted.push(addr);
+            }
+        }
+    });
+}
+
+/// Notes that main decided the own state's bytes `[addr, addr + len)` after the cut although it wrote nothing there (a
+/// hold of the object already held): the join keeps main's value for them, as a write would. Nothing on the thread
+/// whose packet serves `e`, or while no packet is open.
+pub fn note_write(e: &Engine, addr: u32, len: u32) {
+    if !active() {
+        return;
+    }
+    let mine = PACKET.with(|p| p.borrow().as_ref().is_some_and(|p| p.serves(e)));
+    if !mine {
+        mark(run(e), addr, len);
+    }
+}
+
 /// Whether this thread's open packet owns all of `[addr, addr + len)` in one own block (for the checks).
 pub fn owns(e: &Engine, addr: u32, len: u32) -> bool {
     PACKET.with(|p| {
@@ -553,6 +674,11 @@ static MARKS: std::sync::Mutex<Vec<(usize, u32, u32)>> = std::sync::Mutex::new(V
 /// Notes a write main made at `[addr, addr + len)` while a packet is open (see [`MARKS`]).
 #[cold]
 fn mark(run: usize, addr: u32, len: u32) {
+    // The same write again (a setter in a loop) adds nothing to the set the join reads: skip the lock.
+    let noted = (GENERATION.load(Relaxed), run, addr, len);
+    if LAST_MARK.with(|m| m.replace(noted)) == noted {
+        return;
+    }
     MARKS
         .lock()
         .unwrap_or_else(|p| p.into_inner())
@@ -617,6 +743,7 @@ pub fn end(e: &mut Engine) -> Report {
     let Some(packet) = packet else {
         return Report::default();
     };
+    HOLDS.with(|h| h.set(false));
     OPEN.fetch_sub(1, Relaxed);
     let mut written = packet.written;
     if let Some(scribble) = packet.scribble {
@@ -634,6 +761,7 @@ pub fn end(e: &mut Engine) -> Report {
         }
     }
     let mut kept_main = 0;
+    let mut kept = vec![false; packet.own_bytes.len()];
     for b in &packet.own {
         let len = (b.hi - b.lo) as usize;
         let at = b.at as usize;
@@ -644,11 +772,29 @@ pub fn end(e: &mut Engine) -> Report {
         for (i, byte) in live.iter_mut().enumerate() {
             if marked[at + i] || *byte != cut[i] {
                 kept_main += 1;
+                kept[at + i] = true;
             } else {
                 *byte = draw[i];
             }
         }
         e.mem.write(b.lo, &live);
+    }
+    // The counted own words ([`own_counted`]): the drawing side's holds left the counts alone (a hold on main meanwhile
+    // let the cut's object go too); where the join takes the drawing side's object, its counts move now as the draw's
+    // own hold would have moved them in the serial order: the cut's object let go, the drawn one held. Where main held
+    // another (or the same, noted), main's holds already moved them as in the serial order.
+    for &addr in &packet.counted {
+        let Some(at) = packet.own_at(addr, 4) else {
+            continue;
+        };
+        if kept[at..at + 4].iter().any(|&k| k) {
+            continue;
+        }
+        let word = |b: &[u8]| u32::from_le_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]]);
+        let (cut, draw) = (word(&packet.own_cut), word(&packet.own_bytes));
+        if cut != draw {
+            super::own::move_count(e, cut, draw);
+        }
     }
     for object in &packet.held {
         typed_call!(
@@ -679,6 +825,7 @@ pub fn detach(e: &Engine) -> Option<Detached> {
     PACKET.with(|p| {
         let mut p = p.borrow_mut();
         if p.as_ref().is_some_and(|p| p.run == run(e)) {
+            HOLDS.with(|h| h.set(false));
             p.take().map(|p| Detached(Box::new(p)))
         } else {
             None
@@ -694,6 +841,7 @@ pub fn attach(packet: Detached) -> Result<(), Detached> {
             return Err(packet);
         }
         *p = Some(*packet.0);
+        HOLDS.with(|h| h.set(true));
         Ok(())
     })
 }
@@ -720,7 +868,7 @@ fn copied<const N: usize>(e: &Engine, object: u32, offset: u32) -> Option<[u8; N
 /// The word at `object + offset`: the packet's copy while one is open, else guest memory's.
 #[inline(always)]
 pub fn word(e: &Engine, object: u32, offset: u32) -> u32 {
-    if OPEN.load(Relaxed) != 0 {
+    if held() {
         if let Some(bytes) = copied::<4>(e, object, offset) {
             return u32::from_le_bytes(bytes);
         }
@@ -731,7 +879,7 @@ pub fn word(e: &Engine, object: u32, offset: u32) -> u32 {
 /// The 16-bit half at `object + offset`, as [`word`].
 #[inline(always)]
 pub fn half(e: &Engine, object: u32, offset: u32) -> u16 {
-    if OPEN.load(Relaxed) != 0 {
+    if held() {
         if let Some(bytes) = copied::<2>(e, object, offset) {
             return u16::from_le_bytes(bytes);
         }
@@ -742,7 +890,7 @@ pub fn half(e: &Engine, object: u32, offset: u32) -> u16 {
 /// The byte at `object + offset`, as [`word`].
 #[inline(always)]
 pub fn byte(e: &Engine, object: u32, offset: u32) -> u8 {
-    if OPEN.load(Relaxed) != 0 {
+    if held() {
         if let Some([b]) = copied::<1>(e, object, offset) {
             return b;
         }
@@ -753,7 +901,7 @@ pub fn byte(e: &Engine, object: u32, offset: u32) -> u8 {
 /// `N` words from `object + offset` on, as [`word`] (one look-up for all of them).
 #[inline(always)]
 pub fn words<const N: usize>(e: &Engine, object: u32, offset: u32) -> [u32; N] {
-    if OPEN.load(Relaxed) != 0 {
+    if held() {
         let held = PACKET.with(|p| {
             let p = p.borrow();
             let p = p.as_ref()?;
@@ -857,7 +1005,7 @@ impl OwnValue for bool {
 /// it ([`own`]), else guest memory (own state the cut has not taken is guest memory's, as without a packet).
 #[inline(always)]
 pub fn own_at<T: OwnValue>(e: &Engine, addr: u32) -> T {
-    if active() {
+    if held() {
         if let Some(v) = own_lookup::<T>(e, addr) {
             return v;
         }
@@ -928,16 +1076,8 @@ pub fn own_image<R>(
     if !active() || len == 0 {
         return f(e, addr);
     }
-    let held = PACKET.with(|p| {
-        let p = p.borrow();
-        let p = p.as_ref()?;
-        if !p.serves(e) {
-            return None;
-        }
-        let at = p.own_at(addr, len)?;
-        Some(p.own_bytes[at..at + len as usize].to_vec())
-    });
-    let Some(bytes) = held else {
+    let held = own_place(e, addr, len);
+    let Some(at) = held else {
         let id = run(e);
         let mine = PACKET.with(|p| p.borrow().as_ref().is_some_and(|p| p.serves(e)));
         if !mine {
@@ -946,21 +1086,86 @@ pub fn own_image<R>(
         return f(e, addr);
     };
     let size = (len + 3) & !3;
+    let n = len as usize;
     e.with_stack(size, |e, block| {
         let block = block.addr();
-        e.mem.write(block, &bytes);
+        // Straight from the packet's bytes to the image and back: no copy in between. The own blocks only grow
+        // at their end while the packet is open, so `at` still names these bytes after `f`.
+        PACKET.with(|p| {
+            if let Some(p) = p.borrow().as_ref() {
+                e.mem.write(block, &p.own_bytes[at..at + n]);
+            }
+        });
         let r = f(e, block);
-        let mut back = vec![0u8; len as usize];
-        e.mem.read(block, &mut back);
         PACKET.with(|p| {
             if let Some(p) = p.borrow_mut().as_mut() {
-                if let Some(at) = p.own_at(addr, len) {
-                    p.own_bytes[at..at + len as usize].copy_from_slice(&back);
+                if p.own_bytes.len() >= at + n {
+                    e.mem.read(block, &mut p.own_bytes[at..at + n]);
                 }
             }
         });
         r
     })
+}
+
+/// Where this thread's packet holds the own bytes `[addr, addr + len)`, if it serves `e` and one block holds them.
+#[inline(always)]
+fn own_place(e: &Engine, addr: u32, len: u32) -> Option<usize> {
+    PACKET.with(|p| {
+        let p = p.borrow();
+        let p = p.as_ref()?;
+        if !p.serves(e) {
+            return None;
+        }
+        p.own_at(addr, len)
+    })
+}
+
+/// Runs `f` with an address that stands for the own state's bytes `[addr, addr + len)` for reading only: while this
+/// thread's packet owns them all, a guest-stack image of them (nothing is copied back); else `addr` itself, and
+/// nothing is noted (a read is no write of main's). For a helper handed a pointer it only reads through (a matrix
+/// product's operand, a point a rotation reads).
+pub fn own_image_read<R>(
+    e: &mut Engine,
+    addr: u32,
+    len: u32,
+    f: impl FnOnce(&mut Engine, u32) -> R,
+) -> R {
+    if !held() || len == 0 {
+        return f(e, addr);
+    }
+    let Some(at) = own_place(e, addr, len) else {
+        return f(e, addr);
+    };
+    let n = len as usize;
+    e.with_stack((len + 3) & !3, |e, block| {
+        let block = block.addr();
+        PACKET.with(|p| {
+            if let Some(p) = p.borrow().as_ref() {
+                e.mem.write(block, &p.own_bytes[at..at + n]);
+            }
+        });
+        f(e, block)
+    })
+}
+
+/// The own state's bytes `[addr, addr + len)` as the draw reads them ([`own_at`] byte by byte, one look-up).
+pub fn own_bytes(e: &Engine, addr: u32, len: u32) -> Vec<u8> {
+    if held() {
+        let held = PACKET.with(|p| {
+            let p = p.borrow();
+            let p = p.as_ref()?;
+            if !p.serves(e) {
+                return None;
+            }
+            let at = p.own_at(addr, len)?;
+            Some(p.own_bytes[at..at + len as usize].to_vec())
+        });
+        if let Some(bytes) = held {
+            return bytes;
+        }
+    }
+    e.mem.bytes(addr, len)
 }
 
 /// A field of the draw's own state through a typed pointer, as [`own_at`].
@@ -1010,7 +1215,7 @@ pub struct Span {
 /// The [`Span`] of `object`'s offsets `[from, to)`. Without an open packet it reads guest memory; with one that
 /// does not hold the whole range, a miss is counted and it reads guest memory.
 pub fn span(e: &Engine, object: u32, from: u32, to: u32) -> Span {
-    let copy = if OPEN.load(Relaxed) == 0 || object == 0 || from >= to {
+    let copy = if !held() || object == 0 || from >= to {
         None
     } else {
         PACKET.with(|p| {
@@ -1075,7 +1280,7 @@ pub fn image<R>(
     to: u32,
     f: impl FnOnce(&mut Engine, u32) -> R,
 ) -> R {
-    if OPEN.load(Relaxed) == 0 || from >= to {
+    if !held() || from >= to {
         return f(e, object);
     }
     let held = PACKET.with(|p| {
@@ -1342,6 +1547,64 @@ mod tests {
         set_own_at(&mut e, at, c);
         end(&mut e);
         assert_eq!(e.mem.u32(at), c);
+    }
+
+    /// The look-up caches: a read between two takes of one object (the second puts a new first range in front)
+    /// still finds both ranges, two objects read in turn each answer their own copy, and a thread holding no
+    /// packet reads guest memory while another's is open.
+    #[test]
+    fn the_look_up_caches_follow_new_ranges_and_objects() {
+        let mut e = Engine::new();
+        let at = block(&mut e, 4);
+        let other = block(&mut e, 4);
+        assert!(begin(&e));
+        take(&e, at, 0, 4);
+        assert_eq!(word(&e, at, 0), 1);
+        take(&e, at, 8, 12);
+        take(&e, other, 0, 16);
+        e.mem.set_u32(at, 0x11);
+        e.mem.set_u32(at + 8, 0x33);
+        e.mem.set_u32(other + 4, 0x22);
+        assert_eq!(
+            [
+                word(&e, at, 8),
+                word(&e, other, 4),
+                word(&e, at, 0),
+                word(&e, other, 4)
+            ],
+            [3, 2, 1, 2]
+        );
+        // A miss on the cached object's other offsets is still a miss.
+        assert_eq!(word(&e, at, 4), 2);
+        let packet = detach(&e).expect("open");
+        assert!(active());
+        assert!(!held());
+        assert_eq!(word(&e, at, 0), 0x11);
+        assert!(attach(packet).is_ok());
+        assert!(held());
+        assert_eq!(word(&e, at, 0), 1);
+        let report = end(&mut e);
+        assert_eq!(report.misses, 1);
+        assert!(!held());
+    }
+
+    /// Main's repeated writes are noted once, and noted again in the next packet: each join keeps main's value.
+    #[test]
+    fn a_repeated_write_by_main_is_noted_in_every_packet() {
+        let mut e = Engine::new();
+        let at = block(&mut e, 1);
+        for round in 0..2u32 {
+            assert!(begin(&e));
+            own(&e, at, 0, 4);
+            set_own_at(&mut e, at, 0xd0 + round);
+            let packet = detach(&e).expect("open");
+            set_own_at(&mut e, at, 0x50);
+            set_own_at(&mut e, at, 0x50);
+            assert!(attach(packet).is_ok());
+            let report = end(&mut e);
+            assert_eq!(e.mem.u32(at), 0x50, "round {round}");
+            assert_eq!(report.kept_main, 4, "round {round}");
+        }
     }
 
     /// Between the halves the own state is main's: what runs there reads guest memory (main's values, the scribble
