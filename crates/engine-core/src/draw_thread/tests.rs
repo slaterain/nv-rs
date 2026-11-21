@@ -434,3 +434,52 @@ fn the_jobs_clock_readings_move_mains_clock() {
     assert_eq!(clock_at_post(&real), None);
     assert_eq!(clock_moved(&helper, None, from), None);
 }
+
+/// A join after main's frame end (OnIdle) puts the job's readings before the frame end's padding, as serially: the
+/// padding absorbs them while the frame stays within its target, and past it the clock and the frame's mark move on by
+/// what is over (so the next frame end pads from there). A join with no frame end since the post is a plain move.
+#[test]
+fn a_join_after_the_frame_end_puts_the_draws_readings_before_its_padding() {
+    let read = |e: &mut Engine, n: u64| {
+        for _ in 0..n {
+            e.clock_now_ms();
+        }
+    };
+    // (draw readings, main's readings before the frame end, main's readings after it before the join)
+    for (draw, before, after) in [
+        (3u64, 10u64, 4u64),
+        (16_000, 1_000, 7),
+        (20_000, 10, 2),
+        (5, 17_000, 3),
+    ] {
+        let mut serial = Engine::new();
+        serial.start_repeatable_clock();
+        read(&mut serial, draw + before);
+        serial.repeatable_frame_end();
+        read(&mut serial, after);
+
+        let mut main = Engine::new();
+        main.start_repeatable_clock();
+        let ends = main.repeatable_frame_ends();
+        read(&mut main, before);
+        main.repeatable_frame_end();
+        read(&mut main, after);
+        main.advance_clock_for_join(draw, ends);
+        assert_eq!(
+            main.clock_peek_us(),
+            serial.clock_peek_us(),
+            "draw {draw}, before {before}, after {after}"
+        );
+        // The next frame end pads to the same target on both.
+        serial.repeatable_frame_end();
+        main.repeatable_frame_end();
+        assert_eq!(main.clock_peek_us(), serial.clock_peek_us());
+    }
+    // No frame end since the post: a plain move.
+    let mut main = Engine::new();
+    main.start_repeatable_clock();
+    let ends = main.repeatable_frame_ends();
+    let at = main.clock_peek_us();
+    main.advance_clock_for_join(5, ends);
+    assert_eq!(main.clock_peek_us(), at + 5);
+}

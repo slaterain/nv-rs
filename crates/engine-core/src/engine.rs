@@ -254,6 +254,10 @@ pub struct Engine {
     /// With [`Engine::repeatable`]: the clock at the end of main's last frame
     /// ([`Engine::repeatable_frame_end`]).
     repeatable_mark_us: u64,
+    /// With [`Engine::repeatable`]: how many frame ends [`Engine::repeatable_frame_end`] has counted, and the clock
+    /// at the last one before its padding (the drawing thread's join, [`Engine::advance_clock_for_join`]).
+    repeatable_frame_ends: u64,
+    repeatable_unpadded_us: u64,
     /// The Windows kernel objects the platform imports hand out (events,
     /// semaphores, threads, `VirtualAlloc` regions; `units/platform.rs`).
     pub kernel: crate::units::platform::KernelRef,
@@ -469,6 +473,8 @@ impl Engine {
             real_clock: None,
             repeatable: false,
             repeatable_mark_us: 0,
+            repeatable_frame_ends: 0,
+            repeatable_unpadded_us: 0,
             kernel: Default::default(),
             device: Default::default(),
             call_stack: Vec::new(),
@@ -675,6 +681,31 @@ impl Engine {
             self.advance_clock_us(target - now);
         }
         self.repeatable_mark_us = now.max(target);
+        self.repeatable_frame_ends += 1;
+        self.repeatable_unpadded_us = now;
+    }
+
+    /// How many frame ends [`Engine::repeatable_frame_end`] has counted (the drawing thread notes it at a post).
+    pub fn repeatable_frame_ends(&self) -> u64 {
+        self.repeatable_frame_ends
+    }
+
+    /// The drawing thread's join (virtual clock only): main's clock moves on by `us`, the readings the job made on
+    /// the helper, as if they had been made on main before its frame end, where the serial order has them. With no
+    /// frame end since the post (`ends_at_post` is still the count) that is a plain move by `us`. After a frame end
+    /// the readings belong before its padding: the frame then ends at the unpadded time + `us`, so the padding
+    /// absorbs them while that is within the frame's target and the clock stays; past the target the clock and the
+    /// frame's mark move on by what is over it. Main's readings between the frame end and the join stay on top.
+    pub fn advance_clock_for_join(&mut self, us: u64, ends_at_post: u64) {
+        if self.repeatable_frame_ends == ends_at_post {
+            self.advance_clock_us(us);
+            return;
+        }
+        let serial_end = self.repeatable_unpadded_us + us;
+        if serial_end > self.repeatable_mark_us {
+            self.advance_clock_us(serial_end - self.repeatable_mark_us);
+            self.repeatable_mark_us = serial_end;
+        }
     }
 
     /// The clock in microseconds as it reads now, without moving it (for callers that only
@@ -870,6 +901,8 @@ impl Engine {
             real_clock: self.real_clock,
             repeatable: self.repeatable,
             repeatable_mark_us: self.repeatable_mark_us,
+            repeatable_frame_ends: self.repeatable_frame_ends,
+            repeatable_unpadded_us: self.repeatable_unpadded_us,
             kernel: self.kernel.alias(),
             device: self.device.alias(),
             call_stack: Vec::with_capacity(256),

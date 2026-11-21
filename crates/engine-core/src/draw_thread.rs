@@ -96,13 +96,20 @@ struct Slot {
     /// With the virtual clock (`Engine::repeatable`): how far the job's own clock readings moved the clock (microseconds),
     /// which main's clock moves on by at the join ([`clock_at_post`]).
     clock_moved_us: Option<u64>,
+    /// Main's frame ends counted at the post (`Engine::repeatable_frame_ends`): a join after a frame end puts the job's
+    /// readings before that frame end's padding (`Engine::advance_clock_for_join`).
+    frame_ends_at_post: u64,
 }
 
 /// The virtual clock (`NV_REPEATABLE`, the stepped checks) is one per process in the game's eyes, as Windows' is: a
 /// reading on the drawing helper must move main's clock as the same reading on main would. So the job starts from main's
 /// clock at the post, and main's clock moves on at the join by what the job's readings moved the helper's (main's own
 /// readings meanwhile moved main's). Serially the draw's readings come before the tail's, so the tail after the join reads
-/// the same times as without the thread. With the real clock every engine reads the real time and nothing is handed.
+/// the same times as without the thread; a join after main's frame end (OnIdle) puts them before that frame end's
+/// padding, where the serial order has them (`Engine::advance_clock_for_join`). A reading main takes in the tail BEFORE
+/// the join still reads the draw's readings fewer microseconds than serially (the draw has not run yet when stepped):
+/// what remains of the difference, for the stepped check to show. With the real clock every engine reads the real time
+/// and nothing is handed.
 fn clock_at_post(e: &Engine) -> Option<(u32, u32)> {
     e.repeatable.then_some((e.clock_ms, e.clock_us))
 }
@@ -394,12 +401,17 @@ fn finish_posted(e: &mut Engine, at: u32) {
     let start = Instant::now();
     let joined =
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (hooks.device_finish)(e)));
-    let (back, job_ns, clock_moved) = {
+    let (back, job_ns, clock_moved, ends_at_post) = {
         let mut s = lock_slot(&slot);
-        (s.back.take(), s.job_ns, s.clock_moved_us.take())
+        (
+            s.back.take(),
+            s.job_ns,
+            s.clock_moved_us.take(),
+            s.frame_ends_at_post,
+        )
     };
     if let Some(us) = clock_moved {
-        e.advance_clock_us(us);
+        e.advance_clock_for_join(us, ends_at_post);
     }
     let mut close_ns = None;
     if joined.is_ok() {
@@ -541,6 +553,7 @@ fn first_half_on(e: &mut Engine, camera: u32, accumulator: u32, third: u32, over
         back: None,
         job_ns: None,
         clock_moved_us: None,
+        frame_ends_at_post: e.repeatable_frame_ends(),
     }));
     let job_slot = slot.clone();
     let clock = clock_at_post(e);

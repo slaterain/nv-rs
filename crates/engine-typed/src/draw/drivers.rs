@@ -529,3 +529,107 @@ pub fn clear_active_lists(e: &mut Engine, acc: Ptr<BSShaderAccumulator>) {
         i += 1;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::capture;
+    use super::*;
+    use std::cell::Cell;
+
+    /// The stand-in accumulator's finish (its slot 0xac).
+    const FINISH: u32 = 0x0400_1000;
+
+    thread_local! {
+        /// What the finish saw: (the copied state on the engine, the own word it read).
+        static SEEN: Cell<Option<(bool, u32)>> = const { Cell::new(None) };
+        /// The stand-in accumulator.
+        static ACC: Cell<u32> = const { Cell::new(0) };
+    }
+
+    /// An accumulator whose slot 0xac is [`FINISH`] (which stops when the accumulator's word +4 is set), and a block
+    /// of four words 1..4 for the packet.
+    fn world(e: &mut Engine) -> (Ptr<BSShaderAccumulator>, u32) {
+        let vtable = e.mem.alloc(0x100);
+        e.mem.set_u32(vtable + SLOT_FINISH, FINISH);
+        let acc = e.mem.alloc(0x200);
+        e.mem.set_u32(acc, vtable);
+        ACC.with(|a| a.set(acc));
+        e.register(FINISH, |e, _| {
+            let acc = ACC.with(Cell::get);
+            let block = e.mem.u32(acc + 8);
+            SEEN.with(|s| s.set(Some((e.own_view.is_some(), capture::own_word(e, block, 0)))));
+            if e.mem.u32(acc + 4) != 0 {
+                panic!("the half stopped");
+            }
+            engine_core::abi::Ret::default()
+        });
+        let block = e.mem.alloc(16);
+        for i in 0..4 {
+            e.mem.set_u32(block + 4 * i, i + 1);
+        }
+        e.mem.set_u32(acc + 8, block);
+        (Ptr::new(acc), block)
+    }
+
+    /// The second half with a packet open (paused at the first half's end, as `world_draw_first` leaves it): the half
+    /// draws from the copied state served on the engine, which is off the engine again after it, and the packet is
+    /// closed (the join). Without a packet (a serial frame) nothing is served.
+    #[test]
+    fn the_second_half_serves_the_copy_and_takes_it_back() {
+        let mut e = Engine::new();
+        let (acc, block) = world(&mut e);
+        assert!(capture::begin(&e));
+        capture::own(&e, block, 0, 8);
+        capture::set_word(&mut e, block, 0, 0x55);
+        capture::pause(&mut e);
+        assert!(e.own_view.is_none(), "between the halves: nothing served");
+        world_draw_second(&mut e, 0x6000, acc, 1);
+        assert_eq!(
+            SEEN.with(Cell::take),
+            Some((true, 0x55)),
+            "drawn from the copy"
+        );
+        assert!(e.own_view.is_none(), "taken back at the half's end");
+        assert!(!capture::is_open(&e), "the join closed the packet");
+        assert_eq!(e.mem.u32(block), 0x55, "the draw's own word put back");
+
+        world_draw_second(&mut e, 0x6000, acc, 1);
+        assert_eq!(
+            SEEN.with(Cell::take),
+            Some((false, 0x55)),
+            "a serial frame: guest memory"
+        );
+        assert!(e.own_view.is_none());
+    }
+
+    /// A stop in the half with the copy served (POISON or not): the view comes back off the engine, the packet is
+    /// closed and nothing scribbled is left in guest memory.
+    #[test]
+    fn a_stop_in_the_half_takes_the_copy_back_and_closes_the_packet() {
+        for scribble in [None, Some(capture::SCRIBBLE)] {
+            let mut e = Engine::new();
+            let (acc, block) = world(&mut e);
+            e.mem.set_u32(acc.addr() + 4, 1);
+            assert!(capture::begin(&e));
+            capture::own(&e, block, 0, 8);
+            capture::take(&e, block, 8, 12);
+            if let Some(s) = scribble {
+                capture::poison(&mut e, s);
+            }
+            capture::pause(&mut e);
+            let stop = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                world_draw_second(&mut e, 0x6000, acc, 1);
+            }));
+            assert!(stop.is_err(), "the stop comes back");
+            assert_eq!(SEEN.with(Cell::take), Some((true, 1)), "{scribble:?}");
+            assert!(e.own_view.is_none(), "{scribble:?}: the copy taken back");
+            assert!(!capture::is_open(&e), "{scribble:?}: the packet closed");
+            assert_eq!(
+                [e.mem.u32(block + 4), e.mem.u32(block + 8)],
+                [2, 3],
+                "{scribble:?}: nothing scribbled left"
+            );
+            e.call_stack.clear();
+        }
+    }
+}

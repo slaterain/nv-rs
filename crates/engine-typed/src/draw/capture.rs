@@ -369,13 +369,47 @@ pub fn serve(e: &mut Engine) {
     });
     if let Some(v) = view {
         e.own_view = Some(v);
+        SERVING.with(|s| s.set(true));
     }
+}
+
+thread_local! {
+    /// This thread put the view on its engine ([`serve`]) and has not taken it back. Stepped game threads share one
+    /// engine and take turns on it, so another game thread running while a half is served must not see the draw's copy:
+    /// the accessors take the view only on the thread that served it ([`served`]).
+    static SERVING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The engine's served view ([`serve`]) when this thread served it; `None` on any other thread (it reads guest
+/// memory, as before the half began).
+#[inline(always)]
+fn served(view: &Option<Box<OwnView>>) -> Option<&OwnView> {
+    let v = view.as_deref()?;
+    SERVING.with(Cell::get).then_some(v)
+}
+
+/// [`served`], to write the draw's own state.
+#[inline(always)]
+fn served_mut(view: &mut Option<Box<OwnView>>) -> Option<&mut OwnView> {
+    let v = view.as_deref_mut()?;
+    SERVING.with(Cell::get).then_some(v)
+}
+
+/// Whether `e` holds a view this thread served ([`served`]).
+#[inline(always)]
+fn viewing(e: &Engine) -> bool {
+    e.own_view.is_some() && SERVING.with(Cell::get)
 }
 
 /// The half has ended (or pauses, or joins): what [`serve`] put on `e` goes back into this thread's packet, the
 /// view's reads and misses added to the packet's. Nothing when `e` holds none. A view whose packet is gone (a stop
 /// that closed it elsewhere) is dropped.
 pub fn unserve(e: &mut Engine) {
+    // Only the thread that served it takes it back (its packet is this thread's).
+    if !viewing(e) {
+        return;
+    }
+    SERVING.with(|s| s.set(false));
     let Some(mut v) = e.own_view.take() else {
         return;
     };
@@ -574,7 +608,7 @@ pub fn note_write(e: &Engine, addr: u32, len: u32) {
 
 /// Whether this thread's open packet owns all of `[addr, addr + len)` in one own block (for the checks).
 pub fn owns(e: &Engine, addr: u32, len: u32) -> bool {
-    if let Some(v) = e.own_view.as_deref() {
+    if let Some(v) = served(&e.own_view) {
         return v.own_at(addr, len).is_some();
     }
     PACKET.with(|p| {
@@ -919,7 +953,7 @@ fn copied<const N: usize>(e: &Engine, object: u32, offset: u32) -> Option<[u8; N
     if object == 0 {
         return None;
     }
-    if let Some(v) = e.own_view.as_deref() {
+    if let Some(v) = served(&e.own_view) {
         let mut out = [0u8; N];
         if v.read_into(object, offset, &mut out) {
             return Some(out);
@@ -941,7 +975,7 @@ fn copied<const N: usize>(e: &Engine, object: u32, offset: u32) -> Option<[u8; N
 /// The word at `object + offset`: the packet's copy while one is open, else guest memory's.
 #[inline(always)]
 pub fn word(e: &Engine, object: u32, offset: u32) -> u32 {
-    if e.own_view.is_some() || held() {
+    if viewing(e) || held() {
         if let Some(bytes) = copied::<4>(e, object, offset) {
             return u32::from_le_bytes(bytes);
         }
@@ -952,7 +986,7 @@ pub fn word(e: &Engine, object: u32, offset: u32) -> u32 {
 /// The 16-bit half at `object + offset`, as [`word`].
 #[inline(always)]
 pub fn half(e: &Engine, object: u32, offset: u32) -> u16 {
-    if e.own_view.is_some() || held() {
+    if viewing(e) || held() {
         if let Some(bytes) = copied::<2>(e, object, offset) {
             return u16::from_le_bytes(bytes);
         }
@@ -963,7 +997,7 @@ pub fn half(e: &Engine, object: u32, offset: u32) -> u16 {
 /// The byte at `object + offset`, as [`word`].
 #[inline(always)]
 pub fn byte(e: &Engine, object: u32, offset: u32) -> u8 {
-    if e.own_view.is_some() || held() {
+    if viewing(e) || held() {
         if let Some([b]) = copied::<1>(e, object, offset) {
             return b;
         }
@@ -974,7 +1008,7 @@ pub fn byte(e: &Engine, object: u32, offset: u32) -> u8 {
 /// `N` words from `object + offset` on, as [`word`] (one look-up for all of them).
 #[inline(always)]
 pub fn words<const N: usize>(e: &Engine, object: u32, offset: u32) -> [u32; N] {
-    if let Some(v) = e.own_view.as_deref() {
+    if let Some(v) = served(&e.own_view) {
         let len = u32::try_from(4 * N).unwrap_or(u32::MAX);
         if let Some(r) = v.find(object, offset, len) {
             v.reads.set(v.reads.get() + 1);
@@ -1104,7 +1138,7 @@ impl OwnValue for bool {
 /// it ([`own`]), else guest memory (own state the cut has not taken is guest memory's, as without a packet).
 #[inline(always)]
 pub fn own_at<T: OwnValue>(e: &Engine, addr: u32) -> T {
-    if let Some(v) = e.own_view.as_deref() {
+    if let Some(v) = served(&e.own_view) {
         if let Some(at) = v.own_at(addr, T::L) {
             return T::from_bytes(&v.own_bytes[at..at + T::N]);
         }
@@ -1134,7 +1168,7 @@ fn own_lookup<T: OwnValue>(e: &Engine, addr: u32) -> Option<T> {
 /// open is noted for the join's rule ([`end`]).
 #[inline(always)]
 pub fn set_own_at<T: OwnValue>(e: &mut Engine, addr: u32, value: T) {
-    if let Some(v) = e.own_view.as_deref_mut() {
+    if let Some(v) = served_mut(&mut e.own_view) {
         // The drawing side: its own state in the view; anything else is guest memory, not noted (it is no write of
         // main's).
         if let Some(at) = v.own_at(addr, T::L) {
@@ -1186,19 +1220,19 @@ pub fn own_image<R>(
     if !active() || len == 0 {
         return f(e, addr);
     }
-    if e.own_view.is_some() {
-        let Some(at) = e.own_view.as_deref().and_then(|v| v.own_at(addr, len)) else {
+    if viewing(e) {
+        let Some(at) = served(&e.own_view).and_then(|v| v.own_at(addr, len)) else {
             // The drawing side's pointer outside its own state: guest memory, nothing noted.
             return f(e, addr);
         };
         let n = len as usize;
         return e.with_stack((len + 3) & !3, |e, block| {
             let block = block.addr();
-            if let Some(v) = e.own_view.as_deref() {
+            if let Some(v) = served(&e.own_view) {
                 e.mem.write(block, &v.own_bytes[at..at + n]);
             }
             let r = f(e, block);
-            if let Some(v) = e.own_view.as_deref_mut() {
+            if let Some(v) = served_mut(&mut e.own_view) {
                 if v.own_bytes.len() >= at + n {
                     e.mem.read(block, &mut v.own_bytes[at..at + n]);
                 }
@@ -1264,14 +1298,14 @@ pub fn own_image_read<R>(
     if len == 0 {
         return f(e, addr);
     }
-    if e.own_view.is_some() {
-        let Some(at) = e.own_view.as_deref().and_then(|v| v.own_at(addr, len)) else {
+    if viewing(e) {
+        let Some(at) = served(&e.own_view).and_then(|v| v.own_at(addr, len)) else {
             return f(e, addr);
         };
         let n = len as usize;
         return e.with_stack((len + 3) & !3, |e, block| {
             let block = block.addr();
-            if let Some(v) = e.own_view.as_deref() {
+            if let Some(v) = served(&e.own_view) {
                 e.mem.write(block, &v.own_bytes[at..at + n]);
             }
             f(e, block)
@@ -1297,7 +1331,7 @@ pub fn own_image_read<R>(
 
 /// The own state's bytes `[addr, addr + len)` as the draw reads them ([`own_at`] byte by byte, one look-up).
 pub fn own_bytes(e: &Engine, addr: u32, len: u32) -> Vec<u8> {
-    if let Some(v) = e.own_view.as_deref() {
+    if let Some(v) = served(&e.own_view) {
         if let Some(at) = v.own_at(addr, len) {
             return v.own_bytes[at..at + len as usize].to_vec();
         }
@@ -1367,7 +1401,7 @@ pub struct Span {
 pub fn span(e: &Engine, object: u32, from: u32, to: u32) -> Span {
     let copy = if object == 0 || from >= to {
         None
-    } else if let Some(v) = e.own_view.as_deref() {
+    } else if let Some(v) = served(&e.own_view) {
         let mut bytes = vec![0u8; (to - from) as usize];
         if v.read_into(object, from, &mut bytes) {
             Some(bytes)
@@ -1443,7 +1477,7 @@ pub fn image<R>(
     if from >= to {
         return f(e, object);
     }
-    let held = if let Some(v) = e.own_view.as_deref() {
+    let held = if let Some(v) = served(&e.own_view) {
         let mut bytes = vec![0u8; (to - from) as usize];
         if v.read_into(object, from, &mut bytes) {
             Some(bytes)
@@ -1704,6 +1738,29 @@ mod tests {
             assert_eq!(read, 0x1234_5678);
             if scribble.is_none() {
                 assert_eq!([e.mem.u32(at), e.mem.u32(at + 4)], [1, 2]);
+                // Another game thread on the same engine while the half is served (stepped threads take turns on
+                // one engine): it reads guest memory and cannot take the view (its writes are main's, noted as
+                // main's writes are: `own_store`).
+                let back = std::thread::spawn(move || {
+                    assert_eq!(own_word(&e, at, 0), 1, "another thread: guest memory");
+                    assert_eq!(own_bytes(&e, at, 4), vec![1, 0, 0, 0]);
+                    assert!(!owns(&e, at, 8), "another thread owns nothing");
+                    unserve(&mut e);
+                    assert!(
+                        e.own_view.is_some(),
+                        "only the serving thread takes the view back"
+                    );
+                    e
+                })
+                .join()
+                .unwrap();
+                assert_eq!(
+                    own_word(&back, at, 0),
+                    0x55,
+                    "the serving thread: the draw's"
+                );
+                assert_eq!(own_word(&back, at, 4), 0x1234_5678);
+                e = back;
             }
             pause(&mut e);
             assert!(e.own_view.is_none(), "a pause takes the view back");
