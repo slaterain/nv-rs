@@ -5113,9 +5113,16 @@ mod tests {
         for word in [0, jip_patches::FIXES] {
             assert_eq!(run(word, taken), (refresh.clone(), vec![]), "{word:08x}");
         }
-        for word in [jip_patches::INSTALLED, jip_patches::INSTALLED | jip_patches::FIXES] {
+        for word in [
+            jip_patches::INSTALLED,
+            jip_patches::INSTALLED | jip_patches::FIXES,
+        ] {
             assert_eq!(run(word, taken), (vec![], vec![vec![]]), "{word:08x}");
-            assert_eq!(run(word, kept), (refresh.clone(), vec![vec![]]), "{word:08x}");
+            assert_eq!(
+                run(word, kept),
+                (refresh.clone(), vec![vec![]]),
+                "{word:08x}"
+            );
         }
     }
 
