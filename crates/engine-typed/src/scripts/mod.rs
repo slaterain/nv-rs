@@ -22,7 +22,8 @@
 //! AI threads (the package and combat scripts the middle-high process runs there), so the row says
 //! [`Threads::Both`]. The values are doubles; an arithmetic step is native `f64` maths, rounded to
 //! a float's 24 bits on the main thread (its x87 precision), as the exe's `FADD`, `FSUB`, `FMUL`
-//! and `FDIV` round there; logic, comparisons and integers are exact.
+//! and `FDIV` round there (the exact x87 step only for a result below 2^-1000, where the x87's
+//! wider exponent matters); logic, comparisons and integers are exact.
 
 use engine_core::ptr::Ptr;
 use engine_core::typed::{Family, FamilyId, Threads};
@@ -33,7 +34,7 @@ pub mod numbers;
 pub mod value;
 
 /// This family's bit: what each `typed_call!` of it names.
-pub const FAMILY: FamilyId = FamilyId::new(26);
+pub const FAMILY: FamilyId = FamilyId::new(11);
 
 /// `NV_TYPED=scripts`. Native code, so on by its differential tests and planted mutants (the
 /// native-code rule of 2026-11-11) unless `NV_TYPED` says otherwise.

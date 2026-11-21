@@ -103,7 +103,8 @@ fn take_u8(e: &Engine, code: u32, offset: u32) -> u8 {
 pub fn get_variable(e: &mut Engine, this: Ptr, id: u32, script: Ptr) -> f64 {
     let tls = e.tls();
     let mut variable = 0u32;
-    if e.mem.u32(tls + TLS_LAST_LOCALS) == this.addr() && e.mem.u32(tls + TLS_LAST_VARIABLE_ID) == id
+    if e.mem.u32(tls + TLS_LAST_LOCALS) == this.addr()
+        && e.mem.u32(tls + TLS_LAST_VARIABLE_ID) == id
     {
         variable = e.mem.u32(tls + TLS_LAST_VARIABLE);
     }

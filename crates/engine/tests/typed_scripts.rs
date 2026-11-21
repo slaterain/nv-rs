@@ -84,7 +84,9 @@ fn ret_f(st0: f64) -> Ret {
 
 /// A decimal parser over the guest text (`atol`'s and `atof`'s stand-ins).
 fn text_of(e: &Engine, at: u32) -> String {
-    String::from_utf8_lossy(&e.mem.cstr(at)).trim_start().to_string()
+    String::from_utf8_lossy(&e.mem.cstr(at))
+        .trim_start()
+        .to_string()
 }
 
 fn number_end(text: &str, point: bool) -> usize {
@@ -154,12 +156,24 @@ fn world(e: &mut Engine) {
             0
         })
     });
-    e.register(FORM_TYPE_OF, |e, a| ret(u32::from(e.mem.u8(a[0] + 4))));
+    e.register(FORM_TYPE_OF, |e, a| {
+        ret(if a[0] == 0 {
+            0
+        } else {
+            u32::from(e.mem.u8(a[0] + 4))
+        })
+    });
     e.register(FORM_FLAG_BIT_3, |e, a| ret((e.mem.u32(a[0] + 8) >> 3) & 1));
     e.register(GLOBAL_VALUE_OF, |e, a| {
-        ret_f(f64::from(f32::from_bits(e.mem.u32(a[0] + 0x24))))
+        ret_f(if a[0] == 0 {
+            0.0
+        } else {
+            f64::from(f32::from_bits(e.mem.u32(a[0] + 0x24)))
+        })
     });
-    e.register(QUEST_SCRIPT_LOCALS, |e, _| ret(e.mem.u32(ANSWER_QUEST_LOCALS)));
+    e.register(QUEST_SCRIPT_LOCALS, |e, _| {
+        ret(e.mem.u32(ANSWER_QUEST_LOCALS))
+    });
     e.register(REFERENCE_SCRIPT_VARIABLES, |e, _| {
         ret(e.mem.u32(ANSWER_REF_VARS))
     });
@@ -167,7 +181,9 @@ fn world(e: &mut Engine) {
         ret(e.mem.u32(ANSWER_EXTRA))
     });
     e.register(INVENTORY_ITEM_OF, |e, _| ret(e.mem.u32(ANSWER_ITEM)));
-    e.register(ITEM_SCRIPT_LOCALS, |e, _| ret(e.mem.u32(ANSWER_ITEM_LOCALS)));
+    e.register(ITEM_SCRIPT_LOCALS, |e, _| {
+        ret(e.mem.u32(ANSWER_ITEM_LOCALS))
+    });
     e.register(RELEASE_ITEM, |_, _| ret(0));
     e.register(GET_FUNCTION_DEFINITION, |e, a| {
         ret(if a[0] == e.mem.u32(DEFINITION_FOR) {
@@ -413,14 +429,45 @@ fn eval_diff() -> Diff {
     .family(&scripts::SCRIPTS)
     .family(&crt::CRT)
     .family(&leaf::LEAVES)
+    .translation_calls_plainly(PLAIN)
     .allow_nan_payloads()
 }
 
+/// What the translations of the operand reader and the referenced object lookup call as plain Rust
+/// calls (the lookups of their own unit), which the typed ones call through the family.
+const PLAIN: &[u32] = &[0x005a_c4f0, 0x005a_9140];
+
 /// Every operator on two doubles, a double and an integer, and two integers that cannot fault.
 const BINARY: &[&str] = &[
-    "A B &&", "A B ||", "A B <=", "A B <", "A B >=", "A B >", "A B ==", "A B !=", "A B -", "A B +",
-    "A B *", "A B /", "A ~", "A I +", "I A -", "A I *", "I A /", "A I <", "I A ==", "I A &&",
-    "A B + I *", "A B ~ -", "A B * B /", "I J +", "I J -", "I J *", "I J <", "I J ==", "I ~",
+    "A B &&",
+    "A B ||",
+    "A B <=",
+    "A B <",
+    "A B >=",
+    "A B >",
+    "A B ==",
+    "A B !=",
+    "A B -",
+    "A B +",
+    "A B *",
+    "A B /",
+    "A ~",
+    "A I +",
+    "I A -",
+    "A I *",
+    "I A /",
+    "A I <",
+    "I A ==",
+    "I A &&",
+    "A B + I *",
+    "A B ~ -",
+    "A B * B /",
+    "I J +",
+    "I J -",
+    "I J *",
+    "I J <",
+    "I J ==",
+    "I ~",
 ];
 
 #[test]
@@ -441,7 +488,15 @@ fn scripts_eval_operators_on_doubles_and_integers() {
         .setup(|e, case| {
             world(e);
             let bytes = postfix(BINARY[case.word(0) as usize], case, [1, 2], [3, 4]);
-            eval_words(e, &bytes, [0, 0, 0, 1], case.word(5))
+            {
+                let w = script_world(e, 0);
+                eval_words(
+                    e,
+                    &bytes,
+                    [0x0070_0000, 0, w.script, w.locals],
+                    case.word(5),
+                )
+            }
         })
         .run()
         .assert_same();
@@ -507,12 +562,7 @@ fn scripts_eval_texts_errors_and_extenders() {
     let templates: Vec<u32> = (0..TEXTS.len() as u32).collect();
     let templates: &'static [u32] = templates.leak();
     eval_diff()
-        .inputs(&[
-            Input::Of(templates),
-            Input::Flag,
-            Input::Flag,
-            Input::Flag,
-        ])
+        .inputs(&[Input::Of(templates), Input::Flag, Input::Flag, Input::Flag])
         .max_cases(512)
         .expect_stops(|case| text_stops(TEXTS[case.word(0) as usize], case.word(1) != 0))
         .setup(|e, case| {
@@ -528,7 +578,15 @@ fn scripts_eval_texts_errors_and_extenders() {
             if bytes.is_empty() {
                 bytes.push(b' ');
             }
-            eval_words(e, &bytes, [0, 0, 0, 1], case.word(1))
+            {
+                let w = script_world(e, 0);
+                eval_words(
+                    e,
+                    &bytes,
+                    [0x0070_0000, 0, w.script, w.locals],
+                    case.word(1),
+                )
+            }
         })
         .run()
         .assert_same();
@@ -723,8 +781,14 @@ fn scripts_construct_and_error() {
         .run()
         .assert_same();
     for (addr, f) in [
-        entry!(0x0059_4b60, expression::operator_stack_construct(Ptr<_>) -> Ptr<_>),
-        entry!(0x0059_4c60, expression::operand_stack_construct(Ptr<_>) -> Ptr<_>),
+        entry!(
+            0x0059_4b60,
+            expression::operator_stack_construct(Ptr<_>) -> Ptr<_>
+        ),
+        entry!(
+            0x0059_4c60,
+            expression::operand_stack_construct(Ptr<_>) -> Ptr<_>
+        ),
     ] {
         Diff::new((addr, f))
             .family(&scripts::SCRIPTS)
@@ -828,16 +892,19 @@ fn scripts_operand_stack() {
     })
     .run()
     .assert_same();
-    Diff::new(entry!(0x0059_4cd0, expression::operand_pop(Ptr<_>, Ptr<_>) -> Ptr<_>))
-        .family(&scripts::SCRIPTS)
-        .inputs(&[Input::Of(&[0, 1, 0x1e])])
-        .setup(|e, case| {
-            let stack = operand_stack(e, case.word(0));
-            let out = e.mem.alloc(0x10);
-            vec![stack, out]
-        })
-        .run()
-        .assert_same();
+    Diff::new(entry!(
+        0x0059_4cd0,
+        expression::operand_pop(Ptr<_>, Ptr<_>) -> Ptr<_>
+    ))
+    .family(&scripts::SCRIPTS)
+    .inputs(&[Input::Of(&[0, 1, 0x1e])])
+    .setup(|e, case| {
+        let stack = operand_stack(e, case.word(0));
+        let out = e.mem.alloc(0x10);
+        vec![stack, out]
+    })
+    .run()
+    .assert_same();
 }
 
 #[test]
@@ -902,6 +969,7 @@ fn scripts_read_operand() {
     .family(&scripts::SCRIPTS)
     .family(&crt::CRT)
     .family(&leaf::LEAVES)
+    .translation_calls_plainly(PLAIN)
     .inputs(&[
         Input::Of(operands),
         Input::Flag,
@@ -919,7 +987,10 @@ fn scripts_read_operand() {
         e.mem.set_u32(ANSWER_HANDLER, case.word(4));
         // The reference's owner: an inventory (with or without the item) or its own variables.
         let item = if case.word(3) == 2 { 0 } else { 0x0080_0000 };
-        e.mem.set_u32(ANSWER_EXTRA, if case.word(3) != 0 { 0x0081_0000 } else { 0 });
+        e.mem.set_u32(
+            ANSWER_EXTRA,
+            if case.word(3) != 0 { 0x0081_0000 } else { 0 },
+        );
         e.mem.set_u32(ANSWER_ITEM, item);
         command(
             e,
@@ -936,7 +1007,16 @@ fn scripts_read_operand() {
         let out = e.mem.alloc(8);
         e.mem.set_u64(out, 0x1111_2222_3333_4444);
         let locals = if case.word(1) != 0 { w.locals } else { 0 };
-        vec![out, code, offset, 0x0070_0000, 0, w.script, locals, case.word(7)]
+        vec![
+            out,
+            code,
+            offset,
+            0x0070_0000,
+            0,
+            w.script,
+            locals,
+            case.word(7),
+        ]
     })
     .run()
     .assert_same();
@@ -951,6 +1031,7 @@ fn scripts_referenced_object() {
     .family(&scripts::SCRIPTS)
     .family(&crt::CRT)
     .family(&leaf::LEAVES)
+    .translation_calls_plainly(&[0x005a_9140])
     .inputs(&[
         Input::Of(&[0, 1, 2, 3, 4, 5, 6]),
         Input::Flag,
@@ -1037,7 +1118,10 @@ fn scripts_get_variable() {
 /// Every expression of the compiled scripts' `if`, `elseif` and `set` lines (opcodes 0x16, 0x18,
 /// 0x15): its bytes after the 16-bit length.
 fn expressions_of(code: &[u8], out: &mut Vec<Vec<u8>>) {
-    let word = |at: usize| code.get(at..at + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize);
+    let word = |at: usize| {
+        code.get(at..at + 2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]) as usize)
+    };
     let mut at = 0;
     while let (Some(opcode), Some(length)) = (word(at), word(at + 2)) {
         let body = at + 4;

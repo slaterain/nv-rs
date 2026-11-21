@@ -15,6 +15,7 @@ use crate::crt;
 use crate::native::float_precision;
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
+use engine_core::x87;
 use engine_core::{args, typed_call, Engine};
 
 /// Offsets inside `CExpression`.
@@ -148,6 +149,15 @@ fn at_precision(value: f64, float: bool) -> f64 {
     f64::from_bits((kept + u64::from(up)) << 29)
 }
 
+/// Whether a result lies at the bottom of the double range (below 2^-1000, zero included), where
+/// the main thread's x87 arithmetic, with its wider exponent, rounds the exact value to 24 bits
+/// before the double store: there the exact x87 step is taken. No script value a player meets is
+/// that small; the cost is one compare.
+#[inline]
+fn near_bottom(value: f64) -> bool {
+    value.abs() < f64::from_bits(0x0170_0000_0000_0000)
+}
+
 // ---- The stacks ---------------------------------------------------------------------------------
 
 #[inline]
@@ -162,8 +172,7 @@ fn push_operator(e: &Engine, stack: u32, value: u32) {
 fn pop_operator(e: &Engine, stack: u32) -> u32 {
     let index = e.mem.u32(stack + OPERATOR_INDEX);
     let value = e.mem.u32(stack.wrapping_add(index.wrapping_mul(4)));
-    e.mem
-        .set_u32(stack + OPERATOR_INDEX, index.wrapping_sub(1));
+    e.mem.set_u32(stack + OPERATOR_INDEX, index.wrapping_sub(1));
     value
 }
 
@@ -188,8 +197,7 @@ fn push_operand(e: &Engine, stack: u32, operand: Operand) {
 fn pop_operand(e: &Engine, stack: u32) -> Operand {
     let index = e.mem.u32(stack + OPERAND_INDEX);
     let operand = Operand::read(e, stack.wrapping_add(index.wrapping_mul(0x10)));
-    e.mem
-        .set_u32(stack + OPERAND_INDEX, index.wrapping_sub(1));
+    e.mem.set_u32(stack + OPERAND_INDEX, index.wrapping_sub(1));
     operand
 }
 
@@ -273,11 +281,7 @@ pub fn operand_stack_construct(e: &mut Engine, this: Ptr) -> Ptr {
 pub fn construct(e: &mut Engine, this: Ptr) -> Ptr {
     let operators = Ptr::new(this.addr() + OPERATORS);
     let operands = Ptr::new(this.addr() + OPERANDS);
-    typed_call!(
-        FAMILY,
-        0x0059_4b60,
-        operator_stack_construct(e, operators)
-    );
+    typed_call!(FAMILY, 0x0059_4b60, operator_stack_construct(e, operators));
     typed_call!(FAMILY, 0x0059_4c60, operand_stack_construct(e, operands));
     e.mem.set_u32(this.addr() + ERROR, 0);
     this
@@ -287,9 +291,7 @@ pub fn construct(e: &mut Engine, this: Ptr) -> Ptr {
 #[inline]
 fn fail(e: &mut Engine, this: u32, code: u32) {
     e.mem.set_u32(this + ERROR, code);
-    let name = e
-        .mem
-        .u32(ERROR_NAMES.wrapping_add(code.wrapping_mul(4)));
+    let name = e.mem.u32(ERROR_NAMES.wrapping_add(code.wrapping_mul(4)));
     typed_call!(leaf::FAMILY, 0x0040_fbe0, leaf::nothing(e); words PERCENT_S, name);
 }
 
@@ -312,7 +314,15 @@ fn copy(e: &mut Engine, to: u32, from: u32, size: u32) {
 
 /// The tokenizer, by address.
 #[inline]
-fn token_at(e: &mut Engine, this: u32, cursor: u32, out: u32, kind: u32, parse: u8, spaces: u32) -> u32 {
+fn token_at(
+    e: &mut Engine,
+    this: u32,
+    cursor: u32,
+    out: u32,
+    kind: u32,
+    parse: u8,
+    spaces: u32,
+) -> u32 {
     e.call(
         NEXT_TOKEN,
         &args![this, cursor, out, kind, u32::from(parse != 0), spaces],
@@ -672,7 +682,15 @@ fn binary(
                 11 => l + r,
                 _ => l * r,
             };
-            Some(Value::Float(at_precision(v, float)))
+            Some(Value::Float(if float && near_bottom(v) {
+                match operator {
+                    10 => x87::x87_sub(l, r),
+                    11 => x87::x87_add(l, r),
+                    _ => x87::x87_mul(l, r),
+                }
+            } else {
+                at_precision(v, float)
+            }))
         }
         13 | 14 => {
             if !right.truth() {
@@ -689,7 +707,15 @@ fn binary(
                 return Some(Value::Int(if divide { quotient } else { remainder }));
             }
             let value = match (left.is_float(), right.is_float(), divide) {
-                (_, _, true) => at_precision(left.value() / right.value(), float),
+                (_, _, true) => {
+                    let (l, r) = (left.value(), right.value());
+                    let v = l / r;
+                    if float && near_bottom(v) {
+                        x87::x87_div(l, r)
+                    } else {
+                        at_precision(v, float)
+                    }
+                }
                 (false, true, false) => {
                     let divisor = to_int(e, right.float());
                     f64::from(idiv(left.int(), divisor).1)
@@ -849,7 +875,11 @@ pub fn eval(
                 result.write(e, current);
                 push_operand(e, operands, result);
             } else {
-                if typed_call!(FAMILY, 0x004b_1230, numbers::is_an_integer(e, Ptr::new(token))) {
+                if typed_call!(
+                    FAMILY,
+                    0x004b_1230,
+                    numbers::is_an_integer(e, Ptr::new(token))
+                ) {
                     e.mem.set_u8(current, 0);
                     let value = e.call(ATOL, &args![token]).u32();
                     e.mem.set_u32(current + 8, value);
@@ -881,9 +911,9 @@ pub fn eval(
                         // offset's address, the reference, the container, the script, the locals,
                         // the token's address in the expression's own bytes): an answer is the
                         // read's result, made on the script's data instead of the token's copy.
-                        let at = data
-                            .addr()
-                            .wrapping_add(e.mem.u32(cursor).wrapping_sub(copied).wrapping_sub(size));
+                        let at = data.addr().wrapping_add(
+                            e.mem.u32(cursor).wrapping_sub(copied).wrapping_sub(size),
+                        );
                         let words = [
                             current + 8,
                             offset,
