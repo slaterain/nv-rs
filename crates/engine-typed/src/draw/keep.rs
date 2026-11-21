@@ -21,7 +21,7 @@
 //! packet is open (stage 1 of the records).
 
 use super::capture;
-use engine_core::mem::STORE_LOG_MARK;
+use engine_core::mem::{STORE_LOG_MARK, STORE_LOG_QUIET};
 use engine_core::real_threads::{self as rt, DeviceCall};
 use engine_core::Engine;
 use std::cell::{Cell, RefCell};
@@ -405,6 +405,13 @@ fn assemble(
                         }
                     }
                 }
+                // A write inside a kept call: made again by the call, so no op; but what it wrote is the set-up's own.
+                STORE_LOG_QUIET if bytes.len() == 8 => {
+                    let addr = index(&bytes[..4]) as u32;
+                    for i in 0..index(&bytes[4..]) as u32 {
+                        written.insert(addr.wrapping_add(i));
+                    }
+                }
                 _ => {}
             }
             continue;
@@ -607,12 +614,18 @@ mod tests {
             m(MARK_LEAF, 0),
             (0x6000, vec![9]),
             m(MARK_READ, 3),
+            (
+                STORE_LOG_MARK + STORE_LOG_QUIET,
+                vec![0, 0x70, 0, 0, 4, 0, 0, 0],
+            ),
+            m(MARK_READ, 4),
         ];
         let reads = vec![
             (0x4000, vec![5, 5]),
             (0x5000, vec![1, 2, 3, 4]),
             (0x4000, vec![6, 6]),
             (0x5002, vec![3, 4, 0]),
+            (0x7001, vec![1, 1]),
         ];
         let r = assemble(log, &[call.clone()], &[leaf], &reads);
         assert_eq!(

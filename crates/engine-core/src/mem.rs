@@ -616,6 +616,10 @@ pub struct Fault(pub u32);
 /// game never maps, so no write the log notes is there.
 pub const STORE_LOG_MARK: u32 = 0xffff_fff0;
 
+/// The mark kind of a write made while the store log was paused ([`Mem::store_log_pause`]): its bytes are the
+/// address and the length, little-endian (where it wrote, not what).
+pub const STORE_LOG_QUIET: u32 = 0xf;
+
 /// The store log's state ([`Mem::store_log_begin`]).
 struct StoreLog {
     /// Pauses in force ([`Mem::store_log_pause`]): nothing is noted while above 0.
@@ -629,11 +633,15 @@ struct StoreLog {
 
 impl StoreLog {
     fn note(&mut self, addr: u32, bytes: &[u8]) {
-        if self.paused > 0 {
-            return;
-        }
         let end = u64::from(addr) + bytes.len() as u64;
         if addr >= self.skip.0 && end <= u64::from(self.skip.1) {
+            return;
+        }
+        if self.paused > 0 {
+            // Paused: only where it wrote, as a mark ([`STORE_LOG_QUIET`]).
+            let mut at = addr.to_le_bytes().to_vec();
+            at.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+            self.writes.push((STORE_LOG_MARK + STORE_LOG_QUIET, at));
             return;
         }
         if let Some((at, run)) = self.writes.last_mut() {
@@ -1725,7 +1733,8 @@ impl Mem {
     /// Starts the store log: from now on every write of guest memory through this view (stores of
     /// every width, [`Mem::write`], [`Mem::zero`], `map`) is noted in order, except into
     /// `[skip_from, skip_to)` (the caller's own scratch, as a thread's stack for locals below its
-    /// top) and while paused ([`Mem::store_log_pause`]). Interlocked words and frees are not noted.
+    /// top); while paused ([`Mem::store_log_pause`]) only where, as a [`STORE_LOG_QUIET`] mark. Interlocked
+    /// words and frees are not noted.
     /// A tool of the kept draw records (the typed draw code), off in normal runs.
     pub fn store_log_begin(&mut self, skip_from: u32, skip_to: u32) {
         self.store_log = Some(Box::new(Mutex::new(StoreLog {
@@ -2838,7 +2847,7 @@ mod tests {
     }
 
     /// The store log: stores of every width and bulk writes noted in order with their bytes, runs
-    /// that continue each other joined, the skipped range and paused stretches left out; at its end
+    /// that continue each other joined, the skipped range left out, a paused write noted by place only; at its end
     /// the one flag every store tests is off again.
     #[test]
     fn the_store_log_notes_writes_in_order() {
@@ -2865,6 +2874,10 @@ mod tests {
                 (0x10100, vec![0x44, 0x33, 0x22, 0x11, 0x66, 0x55]),
                 (STORE_LOG_MARK + 1, vec![7, 0, 0, 0]),
                 (0x11000, vec![7]),
+                (
+                    STORE_LOG_MARK + STORE_LOG_QUIET,
+                    vec![0, 2, 1, 0, 4, 0, 0, 0]
+                ),
                 (0x11010, vec![1, 2, 3]),
                 (0x11020, vec![0, 0]),
             ]
