@@ -57,6 +57,12 @@ pub(in super::super) const SITES: &[Entry] = &[
     // (`InterfaceManager::DisplayCurrentPickRef` 00710ad0, `MenuConsole::Idle` 0071b210).
     row(0x0071_0bfc),
     row(0x0071_b748),
+    // JohnnyEvents.cpp (59049a0): OnRenderGameModeUpdate and
+    // OnRenderRenderedMenuUpdate, immediately before their calls of 008706b0.
+    row(0x0087_0244),
+    row(0x0087_02a9),
+    // OnRenderGamePreUpdate: before the dialog check 007050d0 in the player update.
+    row(0x0094_3748),
 ];
 
 /// The wraps.

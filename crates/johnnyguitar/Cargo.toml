@@ -14,3 +14,5 @@ nvse = { path = "../nvse" }
 [dev-dependencies]
 # A second engine sharing one's slots, as a real thread's engine does (`share_slots_for_test`).
 engine-core = { path = "../engine-core", features = ["test-support"] }
+# Observe real lambda captures in render-event lifecycle tests.
+nvse = { path = "../nvse", features = ["test-support"] }

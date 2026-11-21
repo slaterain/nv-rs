@@ -26,12 +26,15 @@
 //!
 //! It is a fixes row ("JohnnyGuitar's editor ids", `NV_JG_EDITOR_IDS`, on in the fixes preset,
 //! off in vanilla). Off, nothing here is installed and every site runs the exe's path.
-//! Four gameplay commands are available in `commands`; the remaining 404 are not built.
+//! Ten gameplay commands are available in `commands`; the remaining 398 are not built.
 //! JohnnyGuitar is not listed as installed: a mod that checks
 //! for it is told it is absent.
 
 pub mod commands;
+mod gameplay_commands;
+mod render;
 pub mod vtables;
+mod weapon_dps;
 
 // The unit tests' own program: no other crate's functions are linked in.
 #[cfg(test)]
@@ -185,6 +188,10 @@ pub fn install(e: &mut Engine) {
     editor_ids::store(e);
     e.ext_free::<editor_ids::ConflictLog>();
     e.ext_free::<StoringSetters>();
+    // Render-event commands work independently of editor-ID restoration. The
+    // incomplete plugin remains unlisted; this record only supplies its listener.
+    nvse::plugins::register(e, plugin());
+    e.share_ext::<JohnnyGuitar>();
     if !e.ext::<JohnnyGuitar>().on {
         return;
     }
@@ -229,9 +236,6 @@ pub fn install(e: &mut Engine) {
     e.wrap(NAME_LENGTH, name_length);
     e.wrap(FORM_BY_NAME, form_by_name);
     e.ext::<JohnnyGuitar>().installed = true;
-    nvse::plugins::register(e, plugin());
-    // The game's state, not one engine's: real threads' engines share it.
-    e.share_ext::<JohnnyGuitar>();
 }
 
 // ---- the routines ----
@@ -355,7 +359,11 @@ fn temporary_site(e: &mut Engine, w: &[u32]) -> Option<u32> {
 /// takes in memory), and, after conflicts, JG's console line ("mod", or "slop" one time in a
 /// thousand, by the game's random number).
 fn listener(e: &mut Engine, m: &nvse::plugins::Message) {
-    if m.kind != nvse::plugins::msg::DEFERRED_INIT {
+    if m.kind == nvse::plugins::msg::MAIN_GAME_LOOP {
+        render::tick(e);
+        return;
+    }
+    if m.kind != nvse::plugins::msg::DEFERRED_INIT || !on(e) {
         return;
     }
     eprintln!("{}", load_line(e));

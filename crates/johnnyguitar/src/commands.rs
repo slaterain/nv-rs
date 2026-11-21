@@ -21,6 +21,14 @@ const FLOATS: &[Param] = &[
 ];
 const FORM: &[Param] = &[param("form", 0x3d, false)];
 const THEFT: &[Param] = &[param("target", 4, false), param("int", 1, true)];
+const ITEM: &[Param] = &[param("item", 3, true)];
+const MENU: &[Param] = &[param("int", 1, true)];
+const RENDER: &[Param] = &[
+    param("setOrRemove", 1, false),
+    param("Script", 0x3d, false),
+    param("flags", 1, true),
+    param("optionalFlags", 1, true),
+];
 
 pub fn install(e: &mut Engine) {
     table::grow_to(e, 0x31e1);
@@ -41,6 +49,54 @@ pub fn install(e: &mut Engine) {
             false,
             Returns::Default,
             get_faction_flags,
+        ),
+        (
+            0x3103,
+            "GetBaseEffectAV",
+            FORM,
+            false,
+            Returns::Default,
+            crate::gameplay_commands::base_effect_av,
+        ),
+        (
+            0x3104,
+            "GetBaseEffectArchetype",
+            FORM,
+            false,
+            Returns::Default,
+            crate::gameplay_commands::base_effect_archetype,
+        ),
+        (
+            0x3109,
+            "TogglePipBoy",
+            MENU,
+            false,
+            Returns::Default,
+            crate::gameplay_commands::toggle_pipboy,
+        ),
+        (
+            0x310a,
+            "GetCalculatedWeaponDPS",
+            ITEM,
+            false,
+            Returns::Default,
+            crate::weapon_dps::execute,
+        ),
+        (
+            0x319f,
+            "SetJohnnyOnRenderUpdateEventHandler",
+            RENDER,
+            false,
+            Returns::Default,
+            crate::render::command,
+        ),
+        (
+            0x31a5,
+            "IsCrimeOrEnemy",
+            &[][..],
+            true,
+            Returns::Default,
+            crate::gameplay_commands::is_crime_or_enemy,
         ),
         (
             0x3199,
@@ -66,7 +122,11 @@ pub fn install(e: &mut Engine) {
             op,
             &PluginRecord {
                 name,
-                short: "",
+                short: if op == 0x319f {
+                    "SetOnRenderUpdateEventHandler"
+                } else {
+                    ""
+                },
                 needs_ref,
                 param_count: params.len() as u16,
                 params: p,
@@ -78,6 +138,7 @@ pub fn install(e: &mut Engine) {
             },
         );
     }
+    crate::render::install(e);
 }
 
 fn clamp(e: &mut Engine, words: &[u32]) -> Ret {

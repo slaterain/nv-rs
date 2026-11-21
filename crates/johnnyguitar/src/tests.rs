@@ -233,9 +233,10 @@ fn every_site() -> Vec<SiteSlot> {
     all
 }
 
-/// The lead's first addition: with the row off nothing is installed. Every vtable slot is as the
+/// With the editor-ID row off, every editor-ID vtable slot is as the
 /// exe has it, no seam answers (the translation runs the exe's code), the two functions are not
-/// wrapped (the exe's run), the store is off and JG is not in xNVSE's list.
+/// wrapped (the exe's run), and the store is off. The command/event listener remains
+/// registered, but the incomplete plugin is absent to mods.
 #[test]
 fn off_every_site_is_the_exes_path() {
     let mut e = engine(false);
@@ -276,7 +277,9 @@ fn off_every_site_is_the_exes_path() {
     );
     assert!(!editor_ids::on(&mut e));
     assert!(!on(&e));
-    assert!(nvse::plugins::built_ins(&e).is_empty());
+    let plugins = nvse::plugins::built_ins(&e);
+    assert_eq!(plugins.len(), 1);
+    assert_eq!((plugins[0].name, plugins[0].listed), (NAME, false));
 }
 
 /// On: JG's getter and setter in each listed class's slot that is still the stub, and only

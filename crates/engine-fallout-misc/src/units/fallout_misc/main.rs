@@ -3738,6 +3738,9 @@ pub fn fn_0086ff70(e: &mut Engine, this: Ptr) {
                 }
             }
         }
+        // JohnnyGuitar's render event is specific to this call site, not every
+        // call of 008706b0 (JohnnyEvents.cpp, 59049a0).
+        e.site(0x0087_0244, &args![me, 0u32, 0u32, 0u32]);
         e.call(0x0087_06b0, &args![me, 0u32, 0u32, 0u32]);
     } else {
         let rendered = e.call(0x0070_79b0, &args![]).u8() != 0;
@@ -3768,6 +3771,7 @@ pub fn fn_0086ff70(e: &mut Engine, this: Ptr) {
             }
         } else if e.vcall(player, 0x1d0, &args![]).u32() != 0 {
             let rendered = e.call(0x0070_79b0, &args![]).u8() as u32;
+            e.site(0x0087_02a9, &args![me, 0u32, rendered, 0u32]);
             e.call(0x0087_06b0, &args![me, 0u32, rendered, 0u32]);
         }
     }
@@ -9104,6 +9108,14 @@ mod tests {
             let player = object_with_vtable(&mut e, &[(0x1d0, YES)]);
             e.set_global(PLAYER_OBJECT, player);
             e.set_global(TES_OBJECT, 0x6100u32);
+            e.on_site_for_test(0x0087_0244, |e, words| {
+                e.call_log
+                    .as_mut()
+                    .unwrap()
+                    .push((0x0087_0244, words.to_vec()));
+                None
+            });
+            e.on_site_for_test(0x0087_02a9, |_, _| panic!("menu render event in game path"));
             e.call_log = Some(vec![]);
             e.call(0x0086_ff70, &args![main]);
             let log = take_log(&mut e);
@@ -9112,6 +9124,9 @@ mod tests {
                 vec![vec![main.addr(), 0, 0, 0]]
             );
             assert!(calls_to(&log, 0x0087_1a50).is_empty());
+            let site = log.iter().position(|(a, _)| *a == 0x0087_0244).unwrap();
+            assert_eq!(log[site].1, vec![main.addr(), 0, 0, 0]);
+            assert_eq!(log[site + 1].0, 0x0087_06b0);
         }
 
         #[test]
@@ -9207,6 +9222,14 @@ mod tests {
             // rendered-menu test is passed on.
             e.set_global(SCENE_FLAG_29, 1u8);
             e.register(0x0070_79b0, |_, _| 1u32.into_ret());
+            e.on_site_for_test(0x0087_02a9, |e, words| {
+                e.call_log
+                    .as_mut()
+                    .unwrap()
+                    .push((0x0087_02a9, words.to_vec()));
+                None
+            });
+            e.on_site_for_test(0x0087_0244, |_, _| panic!("game render event in menu path"));
             e.call_log = Some(vec![]);
             e.call(0x0086_ff70, &args![main]);
             let log = take_log(&mut e);
@@ -9214,6 +9237,9 @@ mod tests {
                 calls_to(&log, 0x0087_06b0),
                 vec![vec![main.addr(), 0, 1, 0]]
             );
+            let site = log.iter().position(|(a, _)| *a == 0x0087_02a9).unwrap();
+            assert_eq!(log[site].1, vec![main.addr(), 0, 1, 0]);
+            assert_eq!(log[site + 1].0, 0x0087_06b0);
         }
 
         #[test]

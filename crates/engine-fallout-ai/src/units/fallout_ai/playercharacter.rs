@@ -5700,6 +5700,9 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
         e.call(0x0089_50f0, &args![animation_first_person, value]);
         let value = e.call(0x0050_8070, &args![animation_third_person]).f32();
         e.call(0x004c_0c90, &args![animation_first_person, value]);
+        // JohnnyGuitar's game-pre render event precedes this dialog check;
+        // its callback must not replace the original boolean (59049a0).
+        e.site(0x0094_3748, &args![]);
         if !e.call(0x0070_50d0, &args![]).bool() {
             e.call(0x0095_de30, &args![this, delta]);
         }
@@ -21887,9 +21890,28 @@ mod tests {
         if s.muzzle_flash {
             answer(&mut e, 0x0202_0000, 0x6b8);
         }
+        e.on_site_for_test(0x0094_3748, |e, words| {
+            assert!(words.is_empty());
+            e.call_log.as_mut().unwrap().push((0x0094_3748, vec![]));
+            None
+        });
         e.call_log = Some(vec![]);
         player_character_update(&mut e, this, 0.5);
         call_addresses(&e)
+    }
+
+    #[test]
+    fn render_pre_event_precedes_dialog_check_and_preserves_its_result() {
+        use frame_model::player::PlayerState;
+        for in_dialogue in [false, true] {
+            let calls = update_calls(&PlayerState {
+                in_dialogue,
+                ..Default::default()
+            });
+            let site = calls.iter().position(|a| *a == 0x0094_3748).unwrap();
+            assert_eq!(calls[site + 1], 0x0070_50d0);
+            assert_eq!(calls.contains(&0x0095_de30), !in_dialogue);
+        }
     }
 
     /// The calls `Update` makes follow `frame_model::player::UPDATE` for

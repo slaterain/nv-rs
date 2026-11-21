@@ -16,6 +16,12 @@ Config/form API candidate (2026-11-22): six commands used directly by Agua Fria
 plus GetFactionFlags implemented with focused registered-handler tests; MCM Extender and full mod runtime validation
 remain open ([scope and evidence](AGUA_FRIA.md)).
 
+JohnnyGuitar API candidate (2026-11-22): six commands/events used by the loot
+menu and weapon wheel implemented on top of the Agua Fria slice; focused command
+and seam tests and play build pass. The synthetic audit decodes 45 of 52 JAM
+blocks. Next: distinguish remaining fixture failures from missing APIs and test selective UI/gameplay
+configuration ([scope and provenance](JAM.md)).
+
 ## Direction (maintainer, 2026-11-04; [ADR-0012](adr/0012-modern-64-bit-engine.md))
 
 The game looks and plays exactly like the original; what players do not see or
