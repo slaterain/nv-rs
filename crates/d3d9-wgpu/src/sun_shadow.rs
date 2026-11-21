@@ -1439,6 +1439,28 @@ pub fn wholly_in_view(
         && inside([0.0, -1.0, t])
 }
 
+/// Report 012 (a distant-object LOD block's segment kept casting where the game draws the cell
+/// itself): whether a kept caster the game has not drawn for more than [`GRACE`] frames, at
+/// `centre` and `radius` in the camera's view space, is gone although part of it may be out of
+/// sight: the game drew other ranges of its buffers this frame (`others_drawn`: its block, the
+/// segments it still shows, [`RangesDrawn::others`]) and its sphere reaches into the view up to
+/// the view's own far plane `far`, or the camera stands inside it (a segment the game turned off
+/// for a loaded cell, which is never wholly in view from there). The game culls a block's pieces
+/// one by one against the view, so a piece whose sphere reaches into it and that is not drawn was
+/// turned off, not culled (review of #844: its centre may be out of the view, the cell beside the
+/// player's, or deeper than the cascades reach).
+pub fn segment_gone(
+    frustum: [f32; 4],
+    centre: [f64; 3],
+    radius: f64,
+    near: f64,
+    far: f64,
+    others_drawn: bool,
+) -> bool {
+    let inside = dot3(centre, centre).sqrt() < radius;
+    others_drawn && (inside || partly_in_view(frustum, centre, radius, near, far))
+}
+
 /// The sun direction one cascade's map was drawn for: kept until the sun has turned far enough
 /// from it to move a shadow edge in that map by half a texel ([`turn_limit`]); then the map is
 /// drawn again with the sun as it is ([`sun_turns`] picks which maps take it in a frame).
@@ -1543,6 +1565,39 @@ impl GeoKey {
             index: (self.index.0, 0),
             ..self.clone()
         }
+    }
+
+    /// Its buffers alone (their own numbers, without offsets' upload counts, ranges or pipeline):
+    /// what an LOD block's segments share, each segment a range of the same buffers.
+    pub fn buffers(&self) -> ([u64; 8], u64) {
+        (self.streams.map(|(b, _, _)| b), self.index.0)
+    }
+}
+
+/// The ranges the game drew this frame from each pair of buffers ([`GeoKey::buffers`]): whether a
+/// kept caster's buffers had a DIFFERENT range of them drawn (an LOD block's other pieces), not only
+/// another copy of the same range at another place (a mesh shared by two objects: review of #844).
+#[derive(Default)]
+pub(crate) struct RangesDrawn(crate::fxhash::Map<([u64; 8], u64), Vec<Range>>);
+
+/// A range of a geometry's buffers: its first index, triangle count and base vertex.
+type Range = (u32, u32, i32);
+
+impl RangesDrawn {
+    pub fn insert(&mut self, k: &GeoKey) {
+        let range = (k.start, k.count, k.base_vertex);
+        let ranges = self.0.entry(k.buffers()).or_default();
+        if !ranges.contains(&range) {
+            ranges.push(range);
+        }
+    }
+
+    /// Whether a range of `k`'s buffers other than its own was drawn.
+    pub fn others(&self, k: &GeoKey) -> bool {
+        let range = (k.start, k.count, k.base_vertex);
+        self.0
+            .get(&k.buffers())
+            .is_some_and(|r| r.iter().any(|x| *x != range))
     }
 }
 
@@ -1981,7 +2036,8 @@ pub fn thin_maps() -> bool {
 /// thinner than a texel covers its real share and never draws a broken line. A ribbon's
 /// ([`Strand::ribbon`]: its cable is in its cut-out texture's alpha, which its own pipeline adds)
 /// quads carry its depth alone, over the ribbon's width, its coverage spread over [`THIN_DRAWN`]
-/// texels; drawn only where its alpha is (`alpha`: the first [`CUTOUT_CASCADES`]).
+/// texels; drawn only where its alpha is (`alpha`: in the first [`CUTOUT_CASCADES`], which are all of
+/// them: ribbon cables cast as far as the cascades reach, as round ones).
 pub fn thin_quads(
     c: &Cascade,
     w: &World,
@@ -2228,8 +2284,9 @@ fn sl_chars_cover_in(k: i32, p: vec3<f32>) -> f32 {
 }
 
 // Where the characters' own shadows replace the game's projected actor shadows at view-space point
-// `p`: their cover in its cascade, blended into the next one's over the band where the two meet
-// (none past the cascades: the last one's band blends to none).
+// `p`: their cover in its cascade, blended into the next one's over the band where the two meet;
+// in the last one it fades out with the visibility's own fade into the far map (which has no
+// characters, [`sl_visibility`]), so ours and the game's shadow add up to one shadow there.
 fn sl_chars_cover(p: vec3<f32>) -> f32 {
     let z = p.z;
     if (SL.sun.w <= 0.0 || z <= 0.0 || z >= SL.splits[CHAR_LAYERS - 1]) {
@@ -2242,6 +2299,9 @@ fn sl_chars_cover(p: vec3<f32>) -> f32 {
         }
     }
     var v = sl_chars_cover_in(k, p);
+    if (k == CHAR_LAYERS - 1) {
+        return v * (1.0 - saturate((z - SL.extra.z) / (SL.splits.w - SL.extra.z)));
+    }
     let far = SL.splits[k];
     var near = SL.depth.x;
     if (k > 0) {
@@ -2250,11 +2310,7 @@ fn sl_chars_cover(p: vec3<f32>) -> f32 {
     let band = SL.extra.w * (far - near);
     let t = saturate((z - (far - band)) / band);
     if (t > 0.0) {
-        var next = 0.0;
-        if (k < CHAR_LAYERS - 1) {
-            next = sl_chars_cover_in(k + 1, p);
-        }
-        v = mix(v, next, t);
+        v = mix(v, sl_chars_cover_in(k + 1, p), t);
     }
     return v;
 }
@@ -3158,6 +3214,7 @@ impl Gpu {
         redraw: [bool; CASCADES],
         far: (&Cache<GeoKey, Draw>, Option<&Cascade>),
         skinned: &[Skinned],
+        depth: ShadowDepth,
     ) -> (Vec<(wgpu::Buffer, Vec<u8>)>, u32) {
         // Each cascade's still and moving casters touching it, and its ribbon cables.
         let mut lists: Vec<[MapList<'_>; 4]> = (0..CASCADES)
@@ -3206,6 +3263,15 @@ impl Gpu {
                 }
                 if (m == 0 && !redraw[k])
                     || (d.cutout.is_some() && k >= CUTOUT_CASCADES)
+                    // A moving cut-out (a flag, a bush in the wind) only where its shadow can be read.
+                    || (m == 1
+                        && d.cutout.is_some()
+                        && !shadow_reaches_cascade(
+                            k,
+                            depth.deepest(i.centre, i.radius),
+                            depth.sine,
+                            cascades,
+                        ))
                     || !c.touches(i.centre, i.radius)
                     || self.pipelines[d.pipe as usize].is_none()
                 {
@@ -3216,10 +3282,17 @@ impl Gpu {
         }
         // The characters (skinned casters and faces, their poses of the frame): drawn each frame into
         // the cascades' characters' layers ([`CHAR_LAYERS`]), cleared first, where they are
-        // larger than a blot ([`SKIN_MIN_TEXELS`]); never into the still maps or their copies.
+        // larger than a blot ([`SKIN_MIN_TEXELS`]) and where their shadows can be read
+        // ([`shadow_reaches_cascade`]: a character near the camera is not drawn again into the last
+        // cascade's square); never into the still maps or their copies.
+        let deepest: Vec<f64> = skinned
+            .iter()
+            .map(|(_, _, centre, radius)| depth.deepest(*centre, *radius))
+            .collect();
         for (k, c) in cascades.iter().enumerate().take(CHAR_LAYERS) {
-            for (d, world, centre, radius) in skinned {
+            for ((d, world, centre, radius), &deep) in skinned.iter().zip(&deepest) {
                 if *radius >= SKIN_MIN_TEXELS * c.texel
+                    && shadow_reaches_cascade(k, deep, depth.sine, cascades)
                     && c.touches(*centre, *radius)
                     && self.pipelines[d.pipe as usize].is_some()
                 {
@@ -3262,7 +3335,8 @@ impl Gpu {
         }
         // The far map: a redraw started (`far.1`) or on its way goes on with this frame's slice of
         // its casters ([`far_slice`]) into the back map: those that cast as solid, cut-outs too (the
-        // LOD blocks), cables left out (a cable is not a texel there), nothing moving.
+        // LOD blocks), cables left out (a cable is not a texel there); a moving one from its latest
+        // place (its old ones are let go at once, as the device pairs its moves).
         let (far_cache, far_start) = far;
         self.far_fade = (self.far_fade + 1).min(FAR_FADE_FRAMES);
         if let Some(c) = far_start {
@@ -3275,7 +3349,6 @@ impl Gpu {
             for (k, i) in far_cache.iter_keyed() {
                 let d = &i.payload;
                 if far_slice(k) != slice
-                    || i.moving
                     || (d.thin.is_some() && !d.rest)
                     || !c.touches(i.centre, i.radius)
                     || self.pipelines[d.pipe as usize].is_none()
@@ -3908,6 +3981,54 @@ pub fn skin_allowance(step: f64, flat: f64) -> f64 {
 /// read, cleared and drawn each frame there are characters (a character casts as far as the
 /// cascades reach).
 pub const CHAR_LAYERS: usize = CASCADES;
+// The last characters' layer fades out with the visibility's fade into the far map (the lookup's
+// `sl_chars_cover`): that holds only while the last layer is the last cascade's.
+const _: () = assert!(CHAR_LAYERS == CASCADES);
+
+/// Where in the camera's view depth a caster's shadow can fall (the camera's place, the unit axis
+/// ahead, and the sine of the sun's height): for which cascades a character or a moving cut-out is
+/// drawn into ([`shadow_reaches_cascade`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ShadowDepth {
+    pub position: [f64; 3],
+    pub ahead: [f64; 3],
+    pub sine: f64,
+}
+
+impl ShadowDepth {
+    /// The deepest view depth the shadow of a caster at world sphere (`centre`, `radius`) can fall
+    /// at: its far side, and as far again as its top throws a shadow along the sun's rays, its top
+    /// counted a diameter over its lowest point and that point as much as [`SHADOW_REACH`] over the
+    /// ground the shadow falls on (a character on a roof or a cliff edge, a creature flying, a flag
+    /// on a pole: review of #843; where the caster stands is not known here).
+    pub fn deepest(&self, centre: [f64; 3], radius: f64) -> f64 {
+        let d: [f64; 3] = std::array::from_fn(|k| centre[k] - self.position[k]);
+        let height = 2.0 * radius + SHADOW_REACH;
+        dot3(self.ahead, d) + radius + height / self.sine.max(f64::from(MIN_SUN_HEIGHT))
+    }
+}
+
+/// Whether a shadow no deeper than view depth `deepest` can be read from cascade `k`'s maps, with
+/// the sun's height's sine `sine`: the first always; any other from where the cascade before it
+/// starts to blend into it (its far end less [`BLEND`] of its depth range), less the lookups'
+/// reach of four of `k`'s texels (the characters' cover taps that far round a point), which
+/// stretch along the ground by 1 / sine (at least [`MIN_SUN_HEIGHT`]). Nearer shadows are read
+/// from the cascades before it alone, so the caster is left out of `k`'s characters' layer or
+/// moving copy.
+pub fn shadow_reaches_cascade(
+    k: usize,
+    deepest: f64,
+    sine: f64,
+    cascades: &[Cascade; CASCADES],
+) -> bool {
+    if k == 0 {
+        return true;
+    }
+    let before = &cascades[k - 1];
+    let band = f64::from(BLEND) * f64::from(before.far - before.near);
+    let margin = 4.0 * cascades[k].texel / sine.max(f64::from(MIN_SUN_HEIGHT));
+    deepest >= f64::from(before.far) - band - margin
+}
 
 /// One bone's share of a skinned geometry: the bone's register offset from `Bones` (a byte of
 /// `BLENDINDICES` times 3) and the bind-pose sphere of the vertices it moves.
@@ -5914,5 +6035,181 @@ mod tests {
         assert_eq!(own.origin, [0, 0, 0]);
         let step_off: [f64; 3] = std::array::from_fn(|i| centre[i] - c.step * b[0][i]);
         assert_eq!(far_place(centre, b, Some(step_off)).origin, [1, 0, 0]);
+    }
+
+    /// Report 012: a kept caster not drawn for its grace is let go although not wholly in view
+    /// only when the game drew other ranges of its buffers this frame and its sphere reaches into
+    /// the view or the camera stands inside it.
+    #[test]
+    fn a_segment_is_gone_only_while_its_buffers_are_drawn_and_it_is_round_or_before_the_camera() {
+        let f = frustum();
+        let (near, far) = (10.0, 100_000.0);
+        // Centre in view, the sphere across the right edge (x = 0.77 of the depth: 384 at 500).
+        let edge = [360.0, 0.0, 500.0];
+        assert!(!wholly_in_view(f, edge, 50.0, near, far));
+        assert!(segment_gone(f, edge, 50.0, near, far, true));
+        assert!(
+            !segment_gone(f, edge, 50.0, near, far, false),
+            "its buffers not drawn"
+        );
+        // Round the camera (behind it, the camera inside the sphere).
+        assert!(segment_gone(f, [0.0, 0.0, -100.0], 400.0, near, far, true));
+        // Review of #844: its centre out of view (the cell beside the player's), its sphere
+        // reaching in (51 from the edge's plane, radius 100): gone.
+        let beside = [450.0, 0.0, 500.0];
+        assert!(!partly_in_view(f, beside, 0.0, near, far));
+        assert!(segment_gone(f, beside, 100.0, near, far, true));
+        // ... and one ahead deeper than the cascades reach (the view's far plane counts).
+        assert!(segment_gone(
+            f,
+            [0.0, 0.0, 15_000.0],
+            2_900.0,
+            near,
+            far,
+            true
+        ));
+        // Its sphere wholly out of view and the camera outside it: kept (culled, not gone).
+        assert!(!segment_gone(
+            f,
+            [600.0, 0.0, 500.0],
+            100.0,
+            near,
+            far,
+            true
+        ));
+        assert!(!segment_gone(f, [0.0, 0.0, -500.0], 100.0, near, far, true));
+    }
+
+    /// Review of #844: a pair of buffers counts as drawing other ranges only when a different range
+    /// of it was drawn, not another copy of the same range at another place.
+    #[test]
+    fn only_a_different_range_of_the_buffers_counts_as_another_drawn() {
+        let key = |start: u32| GeoKey {
+            pipe: 1,
+            streams: [(7, 0, 3); 8],
+            index: (9, 2),
+            start,
+            count: 10,
+            base_vertex: 0,
+        };
+        let mut drawn = RangesDrawn::default();
+        drawn.insert(&key(0));
+        drawn.insert(&key(0));
+        assert!(!drawn.others(&key(0)), "a copy of the same range");
+        assert!(drawn.others(&key(30)), "another range of the same buffers");
+        let other_buffers = GeoKey {
+            index: (10, 2),
+            ..key(30)
+        };
+        assert!(!drawn.others(&other_buffers), "other buffers");
+        drawn.insert(&key(30));
+        assert!(drawn.others(&key(0)));
+        // The upload counts and the pipeline do not part a range from its buffers' others.
+        let rewritten = GeoKey {
+            pipe: 2,
+            streams: [(7, 0, 4); 8],
+            index: (9, 5),
+            ..key(60)
+        };
+        assert!(drawn.others(&rewritten));
+    }
+
+    /// Review of #817: a character (or a moving cut-out) whose shadow cannot reach where a cascade
+    /// is read is not drawn into it: the first cascade always; the last only from the second
+    /// last's blend band on (less four of its texels along the ground), counting the caster's far
+    /// side, its feet up to SHADOW_REACH over the ground (review of #843), and as far
+    /// again as its height throws a shadow (a low sun throws it farther: drawn from nearer).
+    #[test]
+    fn a_shadow_too_near_for_a_cascade_is_not_drawn_into_it() {
+        let s = splits(view().near, FAR);
+        let axes = [[0.0, -1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]];
+        let position = [0.0, 0.0, 100.0];
+        let b = basis([0.6, 0.0, 0.8]);
+        let cascades: [Cascade; CASCADES] =
+            std::array::from_fn(|i| place(i, frustum(), s[i], s[i + 1], axes, position, b, None));
+        let last = CASCADES - 1;
+        let band = f64::from(BLEND) * f64::from(s[last] - s[last - 1]);
+        let start_at = |sine: f64| f64::from(s[last]) - band - 4.0 * cascades[last].texel / sine;
+        let start = start_at(0.8);
+        // A character 60 across (radius 60, 120 high) straight ahead at view depth `x`, its feet
+        // up to SHADOW_REACH over the ground its shadow falls on.
+        let high = ShadowDepth {
+            position,
+            ahead: axes[2],
+            sine: 0.8,
+        };
+        let reach = 60.0 + (120.0 + SHADOW_REACH) / 0.8;
+        assert!(start - reach > 1.0, "{start} {reach}");
+        let at = |x: f64| [x, 0.0, 100.0];
+        assert!((high.deepest(at(1000.0), 60.0) - (1000.0 + reach)).abs() < 1e-9);
+        assert!(!shadow_reaches_cascade(
+            last,
+            high.deepest(at(start - reach - 1.0), 60.0),
+            0.8,
+            &cascades
+        ));
+        assert!(shadow_reaches_cascade(
+            last,
+            high.deepest(at(start - reach + 1.0), 60.0),
+            0.8,
+            &cascades
+        ));
+        for k in 0..CASCADES {
+            assert!(shadow_reaches_cascade(
+                k,
+                high.deepest(at(f64::from(s[k + 1])), 60.0),
+                0.8,
+                &cascades
+            ));
+        }
+        // Every cascade but the last takes a character even at the camera.
+        for k in 0..last {
+            assert!(shadow_reaches_cascade(
+                k,
+                high.deepest(at(1.0), 60.0),
+                0.8,
+                &cascades
+            ));
+        }
+        // Review of #843: a sniper (radius 60) on a roof 600 over the street 1,000 ahead, the sun
+        // at 30 degrees behind the camera: its shadow's tip falls (600 + 120) cot 30 farther on.
+        let thirty = ShadowDepth { sine: 0.5, ..high };
+        let tip = 1000.0 + 60.0 + 720.0 * (3f64).sqrt();
+        assert!(thirty.deepest(at(1000.0), 60.0) >= tip);
+        // ... and a flag 600 up on its pole (radius 50) as deep as SHADOW_REACH lets it fall.
+        for (sine, drop) in [(0.8, 600.0), (0.5, SHADOW_REACH), (0.17, 1000.0)] {
+            let d = ShadowDepth { sine, ..high };
+            let cot = (1.0 - sine * sine).sqrt() / sine;
+            assert!(d.deepest(at(500.0), 50.0) >= 500.0 + 50.0 + (drop + 100.0) * cot);
+        }
+        // A low sun: the same character nearer still reaches the last cascade.
+        let low = ShadowDepth { sine: 0.1, ..high };
+        assert!(shadow_reaches_cascade(
+            last,
+            low.deepest(at(start - reach - 1.0), 60.0),
+            0.1,
+            &cascades
+        ));
+        // Review of #843: the lookups' four texels stretch along the ground by 1 / sine: a shadow
+        // just past the low sun's start is read from the last cascade, just before it is not.
+        let low_start = start_at(0.25);
+        assert!(low_start < start - 1.0);
+        assert!(shadow_reaches_cascade(
+            last,
+            low_start + 0.5,
+            0.25,
+            &cascades
+        ));
+        assert!(!shadow_reaches_cascade(
+            last,
+            low_start - 0.5,
+            0.25,
+            &cascades
+        ));
+        // Under the lowest sun that casts, MIN_SUN_HEIGHT.
+        let flat = ShadowDepth { sine: 0.0, ..high };
+        let huge = flat.deepest(at(0.0), 5000.0);
+        let lowest = f64::from(MIN_SUN_HEIGHT);
+        assert!((huge - (5000.0 + (10000.0 + SHADOW_REACH) / lowest)).abs() < 1e-6);
     }
 }

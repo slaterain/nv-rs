@@ -164,3 +164,161 @@ fn s0228_an_invalidated_patrol_package_unloads() {
         }
     }
 }
+
+/// Maps the exe page holding `addr` unless it is mapped already.
+fn page(e: &mut Engine, addr: u32) {
+    if !e.mem.is_mapped(addr) {
+        e.map(addr & !0xfff, 0x1000);
+    }
+}
+
+/// Sets a float game setting's value (the word at +4 that the translated `00403e20` answers).
+fn game_setting(e: &mut Engine, setting: u32, value: f32) {
+    page(e, setting);
+    e.mem.set_f32(setting + 4, value);
+}
+
+/// Sets one of the exe's double constants to the value the exe holds.
+fn constant(e: &mut Engine, addr: u32, value: f64) {
+    page(e, addr);
+    e.set_global(addr, value);
+}
+
+/// S0055 (`patchFixZeroSpreadZeroVATSChance`, `CombatFormulas::GetVATSChanceToHit` `00646f70`):
+/// a gun (type 3) whose minimum spread is 0.0, aimed at a body part whose own factor is 1, 100
+/// units away, the part's bound 60. The exe's settings at their defaults (read from the exe's
+/// setting constructors): `fVATSScreenPercentFactor` 1.0, `fVATSSpreadMult` 1.0,
+/// `fVATSHitChanceMult` 1.0, `fVATSRangeSpreadMax` 2.0, `fVATSMaxChance` 95.0; their values come
+/// through the translated `00403e20`, the spread through `00524b80` and the gun tests through
+/// `004c0bf0` and `004c0c60`. Off, no spread means no circle, the range factor stays 0.0 and the
+/// chance is 0%; on, it starts at `fVATSRangeSpreadMax`: 2 x 1 x 1 = 2%, answered as 0.02. A gun
+/// with a spread of 5 degrees (its range factor about 1.46, under the cap) gets the same chance both
+/// ways.
+#[test]
+fn s0055_a_zero_spread_gun_has_a_vats_chance() {
+    let mut spread_chances = vec![];
+    for (on, min_spread) in [(false, 0.0f32), (true, 0.0), (false, 5.0), (true, 5.0)] {
+        let mut e = Engine::new();
+        constant(&mut e, 0x0101_2060, 0.0);
+        constant(&mut e, 0x0101_2070, 1.0);
+        constant(&mut e, 0x0101_7a40, 100.0);
+        constant(&mut e, 0x0101_ff40, f64::from_bits(0x4009_21fb_6000_0000));
+        constant(&mut e, 0x0102_1928, 3.0);
+        constant(&mut e, 0x0102_3128, f64::from_bits(0x3f91_df46_a000_0000));
+        page(&mut e, 0x0101_6410);
+        e.set_global(0x0101_6410, 100.0f32);
+        game_setting(&mut e, 0x011c_fab0, 1.0); // fVATSScreenPercentFactor
+        game_setting(&mut e, 0x011c_fe08, 1.0); // fVATSSpreadMult
+        game_setting(&mut e, 0x011c_f504, 1.0); // fVATSHitChanceMult
+        game_setting(&mut e, 0x011c_fe50, 2.0); // fVATSRangeSpreadMax
+        game_setting(&mut e, 0x011c_e10c, 95.0); // fVATSMaxChance
+        let shooter = object(&mut e, 0x200);
+        let target = object(&mut e, 0x200);
+        // The target is no actor (slot +0x100) and no grenade (slot +0x224).
+        e.register(SLOT_FNS + 0x100, |_, _| ret(0));
+        e.register(SLOT_FNS + 0x224, |_, _| ret(0));
+        let weapon = e.mem.alloc(0x200);
+        e.mem.set_u8(weapon + 0xf4, 3);
+        e.mem.set_f32(weapon + 0x104, min_spread);
+        // The shooter has no ammunition equipped (`00525980`), so no projectile to ask.
+        e.register(0x0052_5980, |_, _| ret(0));
+        e.set_stewie(stewie::ZERO_SPREAD_VATS_CHANCE, on);
+        let words = args![
+            shooter, target, weapon, 0u32, 0u32, 0.0f32, 0u32, 0u32, 1.0f32, 100.0f32, 60.0f32,
+            0u32
+        ];
+        let chance = e.call(0x0064_6f70, &words).f32();
+        if min_spread == 0.0 {
+            assert_eq!(chance, if on { 0.02 } else { 0.0 }, "on {on}");
+        } else {
+            spread_chances.push(chance);
+        }
+    }
+    assert_eq!(spread_chances[0], spread_chances[1]);
+    assert!(
+        spread_chances[0] > 0.0 && spread_chances[0] < 0.02,
+        "{spread_chances:?}"
+    );
+}
+
+static EQUIPPED: AtomicU32 = AtomicU32::new(0);
+
+/// S0189.01 and S0189.02 (`InventoryCalcWeaponDamageUseAmmoFix`, `CalcWeaponDamageForDisplay`
+/// `006450f0` and `CalcWeaponDamage` `00644ce0`): the damage a menu shows for a gun (type 3,
+/// damage 20, one projectile) listed with an ammunition whose projectile explodes for 25, while
+/// the player (Guns 50) has a plain round equipped (its projectile has no explosion). The exe's
+/// settings at their defaults: `fDamageWeaponMult` 1.0, `fDamageSkillBase` 0.2,
+/// `fDamageSkillMult` 1.8, `fDamageGunWeapCondMult` 1.0, `fDamageGunWeapCondBase` 0.0; full
+/// condition. The projectile lookups (`00525ae0`, `00525a90`, `008d80e0`), the explosion
+/// (`004fd3c0`, `006479e0`, `006a78f0`), the projectile count (`00525b20`) and the condition
+/// factor (`00646d00`) run translated. Off, the shown damage takes the equipped round's
+/// projectile: 20 x 1.1 = 22; with both rows the listed ammunition's: (20 + 25) x 1.1 = 49.5.
+/// Either row alone shows 22: S0189.01 passes the ammunition nobody reads, S0189.02 gets none.
+#[test]
+fn s0189_the_shown_damage_counts_the_listed_ammunitions_explosion() {
+    let mut shown = vec![];
+    for (one, two) in [(false, false), (true, true), (true, false), (false, true)] {
+        let mut e = Engine::new();
+        constant(&mut e, 0x0101_2060, 0.0);
+        constant(&mut e, 0x0101_2070, 1.0);
+        constant(&mut e, 0x0101_6408, f64::from_bits(0x3f84_7ae1_4000_0000));
+        constant(&mut e, 0x0101_de30, 0.75);
+        constant(&mut e, 0x0105_1680, f64::from_bits(0x3fe5_70a3_e000_0000));
+        e.set_global(0x0101_6410, 100.0f32);
+        game_setting(&mut e, 0x011c_e2c0, 1.0); // fDamageWeaponMult
+        game_setting(&mut e, 0x011c_ece8, f32::from_bits(0x3e4c_cccd)); // fDamageSkillBase 0.2
+        game_setting(&mut e, 0x011c_f350, f32::from_bits(0x3fe6_6666)); // fDamageSkillMult 1.8
+        game_setting(&mut e, 0x011c_f264, 1.0); // fDamageGunWeapCondMult
+        game_setting(&mut e, 0x011c_fb5c, 0.0); // fDamageGunWeapCondBase
+        let player = object(&mut e, 0x400);
+        page(&mut e, 0x011d_ea3c);
+        e.mem.set_u32(0x011d_ea3c, player);
+        // A gun: type 3, skill (+0x15C) Guns, damage 20 (its damage form's slot +0x10), one
+        // projectile (+0x11E), flags clear.
+        let weapon = e.mem.alloc(0x200);
+        e.mem.set_u8(weapon + 0xf4, 3);
+        e.mem.set_u32(weapon + 0x15c, 0x29);
+        e.mem.set_u8(weapon + 0x11e, 1);
+        let damage_form = object(&mut e, 0x10);
+        let damage_vtable = e.mem.u32(damage_form);
+        e.mem.set_u32(weapon + 0x9c, damage_vtable);
+        e.register(SLOT_FNS + 0x10, |_, _| ret(20));
+        // The equipped round (`00525980`): its projectile (+0xB4) has no explosion (+0x84).
+        let plain = e.mem.alloc(0x100);
+        let equipped = e.mem.alloc(0x100);
+        e.mem.set_u8(equipped + 4, 0x29);
+        e.mem.set_u32(equipped + 0xb4, plain);
+        EQUIPPED.store(equipped, Relaxed);
+        e.register(0x0052_5980, |_, _| ret(EQUIPPED.load(Relaxed)));
+        // The listed ammunition (type 0x29): its projectile's explosion does 25 (+0x78).
+        let explosion = e.mem.alloc(0x100);
+        e.mem.set_f32(explosion + 0x78, 25.0);
+        let exploding = e.mem.alloc(0x100);
+        e.mem.set_u32(exploding + 0x84, explosion);
+        let listed = e.mem.alloc(0x100);
+        e.mem.set_u8(listed + 4, 0x29);
+        e.mem.set_u32(listed + 0xb4, exploding);
+        // The player's Guns skill (`0066ef50`) is 50.
+        e.register(0x0066_ef50, |_, _| st0(50.0));
+        // Not the actor cast (the perk and teammate factors stay 1), no ammunition effects, no
+        // perks; the damage figure's own result is not used.
+        e.register(0x00ec_43fb, |_, _| ret(0));
+        e.register(0x0064_5380, |_, _| Ret::default());
+        e.register(0x0092_3000, |_, _| ret(0));
+        e.register(0x0059_a030, |_, a| st0(f64::from(f32::from_bits(a[2]))));
+        e.register(0x005e_58f0, |_, _| Ret::default());
+        e.set_stewie(stewie::WEAPON_DAMAGE_DISPLAY_AMMO, one);
+        e.set_stewie(stewie::WEAPON_DAMAGE_AMMO_PROJECTILE, two);
+        let words = args![weapon, 1.0f32, 0u32, listed];
+        shown.push(e.call(0x0064_50f0, &words).f32());
+    }
+    let factor = (50.0f64 * f64::from_bits(0x3f84_7ae1_4000_0000) * f64::from(1.8f32)
+        + f64::from(0.2f32)) as f32;
+    let off = (20.0 * f64::from(factor)) as f32;
+    let on = (45.0 * f64::from(factor)) as f32;
+    assert_eq!(shown, vec![off, on, off, off]);
+    assert!(
+        (off - 22.0).abs() < 1e-4 && (on - 49.5).abs() < 1e-4,
+        "{off} {on}"
+    );
+}

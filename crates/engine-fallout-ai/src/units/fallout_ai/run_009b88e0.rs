@@ -343,6 +343,19 @@ const POINT3_CONSTRUCT: u32 = 0x0041_6870;
 /// `0x011f2018` and its guard bit (bit 0 of `0x011f201c`).
 const STATIC_FLOAT: u32 = 0x011f_2018;
 const STATIC_GUARD: u32 = 0x011f_201c;
+
+/// The impale depth `fn_009b90b0` reads at `0x9B9624` and `0x9B9AE1`: the copy cached once in
+/// [`STATIC_FLOAT`]. lStewieAl's Tweaks' row S0074 (`patchFixCombatMissileDepthGamesettings`,
+/// `SafeWrite32` at `0x9B9626` and `0x9B9AE3`): those two reads take
+/// `fCombatMissileImpaleDepth`'s own value (the setting at `011ce1e8`, value at +4) instead, so a
+/// change of the setting after the first projectile counts.
+fn impale_depth_word(e: &mut Engine) -> u32 {
+    if e.stewie(engine_core::extend::stewie::COMBAT_MISSILE_DEPTH_SETTINGS) {
+        e.mem.u32(SETTING_011CE1E8 + 4)
+    } else {
+        e.mem.u32(STATIC_FLOAT)
+    }
+}
 /// `0042ce10` (unnamed, `extradatalist.cpp`): `thiscall` on the object at `0x011ddf38`; a
 /// `bool`.
 const VATS_OWNER: u32 = 0x011d_df38;
@@ -985,7 +998,7 @@ fn fn_009b90b0_cut(e: &mut Engine, this: Ptr, in_vats: bool) -> CutEnd {
             let words = e.mem.bytes(product, 0x34);
             e.mem.write(placed, &words);
             let height = x87_load32(e.mem.u32(placed + 0x28));
-            let lowered = x87_sub(height, x87_m32(e.mem.u32(STATIC_FLOAT)));
+            let lowered = x87_sub(height, x87_m32(impale_depth_word(e)));
             e.mem.set_u32(placed + 0x28, x87_store32(lowered));
             let first = e.call(CHILD_AT, &args![skin, 0u32]).u32();
             e.call(SET_LOCAL_TRANSLATE, &args![first, placed + 0x24]);
@@ -1176,7 +1189,7 @@ fn hinge_and_test(
     let transform = e.call(WORLD_TRANSFORM, &args![own_node]).u32();
     let words = e.mem.bytes(transform, 0x34);
     e.mem.write(node_transform, &words);
-    let drop = x87_quiet_bits(e.mem.u32(STATIC_FLOAT));
+    let drop = x87_quiet_bits(impale_depth_word(e));
     let pivot = e
         .call(POINT_FROM_004A0BD0, &args![PIVOT_POINT, at(0x73c)])
         .u32();
@@ -2031,8 +2044,96 @@ mod n029_tests {
         assert_eq!(scaled[..2], [512.0f32.to_bits(), 1024.0f32.to_bits()]);
     }
 
+    /// S0074 (`patchFixCombatMissileDepthGamesettings`): the cut limb is placed lowered by the
+    /// impale depth. The copy cached at the first projectile is 3.0 and `fCombatMissileImpaleDepth`
+    /// is now 5.0 (a mod or script changed it). Off, the limb is lowered by the cached 3.0; on, by
+    /// the setting's own 5.0, so it sits 2.0 lower. With the game's own data both are the same.
+    #[test]
+    fn s0074_the_impale_depth_follows_the_setting() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+        let mut placed_z = [0.0f32; 2];
+        for (index, on) in [false, true].into_iter().enumerate() {
+            let mut e = Engine::new();
+            cut_doubles(&mut e);
+            let s = scene(&mut e);
+            e.mem.set_u32(0x7e00, s.this);
+            e.mem.set_u32(STATIC_GUARD, 1);
+            e.mem.set_f32(STATIC_FLOAT, 3.0);
+            e.mem.set_f32(SETTING_011CE1E8 + 4, 5.0);
+            e.set_stewie(
+                engine_core::extend::stewie::COMBAT_MISSILE_DEPTH_SETTINGS,
+                on,
+            );
+            // The clone's skin has a first child (`0045bc00`), so the limb is placed.
+            e.register(CHILD_PRESENT, |_, _| ret(1));
+            e.register(WORLD_TRANSFORM, |_, a| ret(a[0] + 0x68));
+            e.register(TRANSFORM_MULTIPLY, |_, a| ret(a[2]));
+            stub(&mut e, &[TRANSFORM_CONSTRUCT, TRANSFORM_INVERT]);
+            let seen = Rc::new(Cell::new(f32::NAN));
+            let record = seen.clone();
+            e.register_double(SET_LOCAL_TRANSLATE, move |e, a| {
+                if a[1] != ZERO_POINT {
+                    record.set(e.mem.f32(a[1] + 4));
+                }
+                Ret::default()
+            });
+            e.call_log = Some(vec![]);
+            e.call(0x009b_90b0, &args![s.this]);
+            assert_eq!(e.mem.f32(STATIC_FLOAT), 3.0, "the cache is kept either way");
+            placed_z[index] = seen.get();
+        }
+        assert!(placed_z[0].is_finite(), "the limb was placed");
+        assert_eq!(placed_z[0] - placed_z[1], 2.0);
+    }
+
+    /// S0074 (`patchFixCombatMissileDepthGamesettings`, `0x9B9AE3`): the hinge's pivot is moved by
+    /// the impale depth (`POINT_SCALED`'s factor). The copy cached at the first projectile is 3.0
+    /// and `fCombatMissileImpaleDepth` is now 5.0: off the pivot moves by 3.0, on by 5.0.
+    #[test]
+    fn s0074_the_hinge_pivot_follows_the_impale_setting() {
+        for (on, depth) in [(false, 3.0f32), (true, 5.0)] {
+            let e = hinge_run(|e| {
+                e.mem.set_u32(STATIC_GUARD, 1);
+                e.mem.set_f32(STATIC_FLOAT, 3.0);
+                e.mem.set_f32(SETTING_011CE1E8 + 4, 5.0);
+                e.set_stewie(
+                    engine_core::extend::stewie::COMBAT_MISSILE_DEPTH_SETTINGS,
+                    on,
+                );
+            })
+            .0;
+            let factors: Vec<u32> = calls(&e, POINT_SCALED).iter().map(|c| c[2]).collect();
+            assert!(factors.contains(&depth.to_bits()), "on {on}: {factors:x?}");
+            let other = if on { 3.0f32 } else { 5.0 };
+            assert!(!factors.contains(&other.to_bits()), "on {on}: {factors:x?}");
+        }
+    }
+
     #[test]
     fn fn_009b90b0_hinges_a_limb_that_sticks() {
+        let (e, s, hit_body) = hinge_run(|_| {});
+        let added = calls(&e, ADD_ACT_CON);
+        assert_eq!(added.len(), 1);
+        assert_eq!(added[0][0], hit_body);
+        assert_eq!(e.mem.u32(added[0][1]), HINGE_VTABLE);
+        assert_eq!(calls(&e, ADD_ACT_CON_TO_WORLD)[0][0], hit_body);
+        let converted = calls(&e, CONVERT_004AE750);
+        assert_eq!(converted[..2], [vec![hit_body], vec![0x6100]]);
+        // Stuck: the controller's key on the limb, the projectile follows it.
+        assert_eq!(
+            calls(&e, SET_COLLISION_KEY),
+            vec![vec![s.clone, 0x99, 1, 1]]
+        );
+        assert_eq!(calls(&e, SET_CONTROLLER_POSITION)[0][0], 0x6600);
+        assert_eq!(e.mem.u8(s.this + 0x90), 0);
+        assert!(calls(&e, ADD_VELOCITY).is_empty());
+        assert_eq!(calls(&e, HINGE_CINFO_DESTRUCT).len(), 1);
+    }
+
+    /// A limb cut and hinged to what the ray hit (`fn_009b90b0_hinges_a_limb_that_sticks`'s world),
+    /// `setup` run just before the call; answers the engine, the scene and the hit body.
+    fn hinge_run(setup: impl FnOnce(&mut Engine)) -> (Engine, Scene, u32) {
         let mut e = Engine::new();
         cut_doubles(&mut e);
         let s = scene(&mut e);
@@ -2099,24 +2200,10 @@ mod n029_tests {
                 ADD_ACT_CON_TO_WORLD,
             ],
         );
+        setup(&mut e);
         e.call_log = Some(vec![]);
         e.call(0x009b_90b0, &args![s.this]);
-        let added = calls(&e, ADD_ACT_CON);
-        assert_eq!(added.len(), 1);
-        assert_eq!(added[0][0], hit_body);
-        assert_eq!(e.mem.u32(added[0][1]), HINGE_VTABLE);
-        assert_eq!(calls(&e, ADD_ACT_CON_TO_WORLD)[0][0], hit_body);
-        let converted = calls(&e, CONVERT_004AE750);
-        assert_eq!(converted[..2], [vec![hit_body], vec![0x6100]]);
-        // Stuck: the controller's key on the limb, the projectile follows it.
-        assert_eq!(
-            calls(&e, SET_COLLISION_KEY),
-            vec![vec![s.clone, 0x99, 1, 1]]
-        );
-        assert_eq!(calls(&e, SET_CONTROLLER_POSITION)[0][0], 0x6600);
-        assert_eq!(e.mem.u8(s.this + 0x90), 0);
-        assert!(calls(&e, ADD_VELOCITY).is_empty());
-        assert_eq!(calls(&e, HINGE_CINFO_DESTRUCT).len(), 1);
+        (e, s, hit_body)
     }
 
     #[test]
