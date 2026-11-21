@@ -214,6 +214,23 @@ pub struct Resources {
     /// The last `Set*ShaderConstant*` the model took set every register to the words it already
     /// held (each set before): its forwarding may leave it out (`super::d3d9device::skip_repeats`).
     constants_repeat: bool,
+    /// Whether constant sets take the model and the forwarding in one pass
+    /// ([`set_constants_one_pass`]): on unless `NV_D3D9_ONE_PASS=0`, read at the first set; tests
+    /// set it ([`one_pass_for_tests`]).
+    one_pass: Option<bool>,
+}
+
+/// `NV_D3D9_ONE_PASS`: on unless `0`.
+fn one_pass_wanted() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("NV_D3D9_ONE_PASS").map_or(true, |v| v != "0"))
+}
+
+/// Tests: whether `e`'s constant sets take one pass ([`set_constants_one_pass`]), in place of
+/// `NV_D3D9_ONE_PASS`.
+#[cfg(test)]
+pub(crate) fn one_pass_for_tests(e: &mut Engine, on: bool) {
+    resources(e).one_pass = Some(on);
 }
 
 fn resources(e: &mut Engine) -> &mut Resources {
@@ -1276,6 +1293,98 @@ fn set_constants(e: &mut Engine, this: Ptr, kind: u8, start: u32, data: Ptr, cou
     D3D_OK
 }
 
+/// A forwarded `Set*ShaderConstant{F,I,B}` ([`set_constants`], then the repeat test and
+/// `super::d3d9real::set_constants`) in one pass over the device's state: the bindings found
+/// once, the registers read into them and compared as there, and the command made from the
+/// registers just stored, with no second look-up of the bindings, the repeat switch or the
+/// stream. The same model state, answer and command as the two steps. `None` (nothing done)
+/// when the switch is off or the range lies on an unmapped page (the two steps then run, and a
+/// fault stops the run with the bindings as they were).
+#[inline]
+fn set_constants_one_pass(
+    e: &mut Engine,
+    this: Ptr,
+    kind: u8,
+    start: u32,
+    data: Ptr,
+    count: u32,
+) -> Option<u32> {
+    let held = crate::device_held(e);
+    let mem = &e.mem;
+    let crate::d3d9::DeviceState {
+        device_objects,
+        real,
+        ..
+    } = crate::device_mut(&mut e.device, held);
+    if !*device_objects
+        .resources
+        .one_pass
+        .get_or_insert_with(one_pass_wanted)
+    {
+        return None;
+    }
+    if data.is_null() || u64::from(start) + u64::from(count) > u64::from(registers(kind)) {
+        // The model refuses it: nothing changes and nothing is sent.
+        return Some(D3DERR_INVALIDCALL);
+    }
+    let words = if kind % 3 == 2 { 1 } else { 4 };
+    let first = usize::from(kind) * CONSTANT_SLOTS + start as usize;
+    let last = data
+        .addr()
+        .checked_add((4 * words * count).saturating_sub(1));
+    if !last.is_some_and(|last| mem.is_mapped(data.addr()) && mem.is_mapped(last)) {
+        return None;
+    }
+    // Read before the bindings are borrowed: `NV_D3D9_REPEATS` taken at the first set either way.
+    let skip = super::d3d9device::skip_repeats_in(device_objects);
+    super::d3d9draw::main_set_constants(&mut device_objects.draw, first, count as usize);
+    let b = bindings_in(
+        side_list(&device_objects.draw, &mut device_objects.resources),
+        this.addr(),
+    );
+    if b.constants.is_empty() {
+        b.constants = vec![[0; 4]; 6 * CONSTANT_SLOTS];
+        b.constants_set = vec![0; 6 * CONSTANT_SLOTS / 64];
+    }
+    let at = data.addr();
+    let mut same = all_set(&b.constants_set, first, count as usize);
+    let registers = &mut b.constants[first..first + count as usize];
+    if words == 4 {
+        for (i, value) in registers.iter_mut().enumerate() {
+            let at = at + 16 * i as u32;
+            let new = [
+                mem.u32(at),
+                mem.u32(at + 4),
+                mem.u32(at + 8),
+                mem.u32(at + 12),
+            ];
+            same &= *value == new;
+            *value = new;
+        }
+    } else {
+        for (i, value) in registers.iter_mut().enumerate() {
+            let new = [mem.u32(at + 4 * i as u32), 0, 0, 0];
+            same &= *value == new;
+            *value = new;
+        }
+    }
+    for slot in first..first + count as usize {
+        b.constants_set[slot / 64] |= 1 << (slot % 64);
+    }
+    // The two steps' `constants_repeat` is taken by the forwarding at once: it stays false here.
+    if !(same && skip) {
+        super::d3d9real::submit_constants(
+            real,
+            this.addr(),
+            kind,
+            start,
+            count,
+            &b.constants[first..first + count as usize],
+        );
+    }
+    Some(D3D_OK)
+}
+
 /// Whether every register `first..first + count` was set before (its bit in `set`).
 fn all_set(set: &[u64], first: usize, count: usize) -> bool {
     (first..first + count).all(|slot| {
@@ -1579,6 +1688,9 @@ pub(super) fn fwd_set_pixel_shader(e: &mut Engine, this: Ptr, shader: u32) -> u3
 macro_rules! forwarded_constants {
     ($($name:ident = $set:ident, $kind:expr;)*) => {$(
         pub(super) fn $name(e: &mut Engine, this: Ptr, start: u32, data: Ptr, count: u32) -> u32 {
+            if let Some(model) = set_constants_one_pass(e, this, $kind, start, data, count) {
+                return model;
+            }
             let model = $set(e, this, start, data, count);
             // Registers set again to the words they hold are not passed on: in a crowded street
             // about half the frame's 6,500 constant sets (measured 2026-11-20).

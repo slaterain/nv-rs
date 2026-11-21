@@ -554,14 +554,18 @@ pub(super) use forwarded;
 /// Direct3D 9 makes such a set a no-op: the draws see the same state.
 #[inline]
 pub(super) fn skip_repeats(e: &mut Engine) -> bool {
+    skip_repeats_in(&mut device!(e).device_objects)
+}
+
+/// [`skip_repeats`] for code that holds the devices' objects already (`super::d3d9resource`'s
+/// constant sets in one pass).
+#[inline]
+pub(super) fn skip_repeats_in(objects: &mut Objects) -> bool {
     static KEEP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    let keep = *device!(e)
-        .device_objects
-        .keep_repeats
-        .get_or_insert_with(|| {
-            *KEEP.get_or_init(|| std::env::var("NV_D3D9_REPEATS").is_ok_and(|v| v == "keep"))
-        });
-    !keep && !super::d3d9draw::cut_open_here(e)
+    let keep = *objects.keep_repeats.get_or_insert_with(|| {
+        *KEEP.get_or_init(|| std::env::var("NV_D3D9_REPEATS").is_ok_and(|v| v == "keep"))
+    });
+    !keep && !super::d3d9draw::cut_open_in(&objects.draw)
 }
 
 /// Tests: whether states set again to the value they hold still reach the backend on `e`
@@ -5708,6 +5712,210 @@ pub(crate) mod tests {
         assert_eq!(s.e.mem.u32(out), 1);
         assert_eq!(s.e.vcall(device, 4 * 95, &[60, out, 1]).u32(), D3D_OK);
         assert_eq!(s.e.mem.u32(out + 4), 0x3f80_0001);
+    }
+
+    /// What one engine did over [`constant_sets_run`]: each call's answer, the stream's commands
+    /// as the wire encodes them, and every constant register as the device's bindings hold it.
+    type ConstantsRun = (Vec<u32>, Vec<u8>, Vec<Vec<u32>>);
+
+    /// Drives a device through `steps` generated calls (seed `seed`): constant sets of all six
+    /// kinds (ranges in and past the registers, null data, exact repeats, ranges that partly
+    /// repeat), the data's words changed now and then, render states between them, and drawing cuts
+    /// with sets from both sides; the constant sets in one pass (`NV_D3D9_ONE_PASS`) as `one_pass`
+    /// says, repeats kept as `keep`.
+    fn constant_sets_run(one_pass: bool, keep: bool, seed: u64, steps: u32) -> ConstantsRun {
+        use super::super::d3d9draw::{as_drawing_side, draw_cut, draw_join};
+        use super::super::d3d9resource::{binding, one_pass_for_tests};
+        use d3d9_stream::{Backend, Cmd, Data, Reply, Stream};
+        struct Wire(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl Backend for Wire {
+            fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+                d3d9_stream::wire::encode(&cmd, &mut self.0.lock().unwrap());
+                Reply::None
+            }
+        }
+        let (mut e, dev) = texture_device(Store::Host);
+        let wire = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        super::super::d3d9real::test_stream(
+            &mut e,
+            dev,
+            Stream::direct(Box::new(Wire(wire.clone()))),
+        );
+        keep_repeats(&mut e, keep);
+        one_pass_for_tests(&mut e, one_pass);
+        // xorshift64*: the same calls for both engines.
+        let mut state = seed | 1;
+        let mut next = move |n: u32| -> u32 {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            ((state.wrapping_mul(0x2545_f491_4f6c_dd1d) >> 32) % u64::from(n.max(1))) as u32
+        };
+        const SLOTS: [u32; 6] = [94, 96, 98, 109, 111, 113];
+        const REGISTERS: [u32; 6] = [256, 16, 16, 224, 16, 16];
+        const VALUES: [u32; 5] = [0, 0x3f80_0000, 0x4000_0000, 0xbf80_0000, 7];
+        let block = e.mem.alloc(4096 + 1024);
+        for i in 0..(4096 + 1024) / 4 {
+            e.mem.set_u32(block + 4 * i, VALUES[next(5) as usize]);
+        }
+        let mut answers = Vec::new();
+        let mut last = None;
+        let mut in_cut = false;
+        for _ in 0..steps {
+            let pick = next(100);
+            let call = match pick {
+                0..=69 => {
+                    let k = next(6) as usize;
+                    let start = next(REGISTERS[k] + 2);
+                    let count = if next(50) == 0 { REGISTERS[k] } else { next(9) };
+                    let data = if next(40) == 0 {
+                        0
+                    } else {
+                        block + 4 * next(256)
+                    };
+                    Some((SLOTS[k], [start, data, count]))
+                }
+                70..=84 => {
+                    for _ in 0..1 + next(4) {
+                        e.mem
+                            .set_u32(block + 4 * next(1024 + 256), VALUES[next(5) as usize]);
+                    }
+                    None
+                }
+                85..=91 => {
+                    let (state, value) = (next(200), next(3));
+                    answers.push(e.vcall(dev, 4 * 57, &[state, value]).u32());
+                    None
+                }
+                92..=96 => last,
+                _ => {
+                    if in_cut {
+                        draw_join(&mut e);
+                    } else {
+                        assert!(draw_cut(&mut e, dev));
+                    }
+                    in_cut = !in_cut;
+                    None
+                }
+            };
+            if let Some((slot, args)) = call {
+                let answer = if in_cut && next(2) == 0 {
+                    as_drawing_side(|| e.vcall(dev, 4 * slot, &args).u32())
+                } else {
+                    e.vcall(dev, 4 * slot, &args).u32()
+                };
+                answers.push(answer);
+                last = Some((slot, args));
+            }
+        }
+        if in_cut {
+            draw_join(&mut e);
+        }
+        let mut registers = Vec::new();
+        for (k, count) in REGISTERS.iter().enumerate() {
+            for r in 0..*count {
+                registers.push(binding(&mut e, dev, &format!("constant {k} {r}")));
+            }
+        }
+        let bytes = wire.lock().unwrap().clone();
+        (answers, bytes, registers)
+    }
+
+    /// The constant sets in one pass (`NV_D3D9_ONE_PASS`, on by default) against the model then
+    /// the forwarding as two steps, over generated calls with repeats left out and kept: the same
+    /// answers, the same commands to the backend byte for byte, and the same registers in the
+    /// model.
+    #[test]
+    fn constant_sets_in_one_pass_match_the_two_steps() {
+        for keep in [false, true] {
+            for seed in [1, 0x9e37_79b9_7f4a_7c15, 0x00c0_ffee] {
+                let two = constant_sets_run(false, keep, seed, 3000);
+                let one = constant_sets_run(true, keep, seed, 3000);
+                assert_eq!(one.0, two.0, "answers, keep {keep}, seed {seed:#x}");
+                assert_eq!(one.2, two.2, "registers, keep {keep}, seed {seed:#x}");
+                assert!(
+                    one.1 == two.1,
+                    "the stream's bytes differ (keep {keep}, seed {seed:#x}): {} against {}",
+                    one.1.len(),
+                    two.1.len()
+                );
+                // The run reached what it is for: sets sent, sets left out, sets refused.
+                assert!(two.1.len() > 10_000, "{}", two.1.len());
+                assert!(two.0.contains(&D3DERR_INVALIDCALL));
+            }
+        }
+    }
+
+    /// One constant set in one pass, by hand: sent once, left out when repeated, sent again when a
+    /// word changes; refused (nothing sent, nothing kept) past the registers.
+    #[test]
+    fn a_constant_set_in_one_pass_sends_what_the_two_steps_send() {
+        use super::super::d3d9resource::{binding, one_pass_for_tests};
+        use d3d9_stream::{Backend, Cmd, Data, Reply, Stream};
+        type Sent = std::sync::Arc<std::sync::Mutex<Vec<(u8, u32, u32, Vec<u32>)>>>;
+        struct Log(Sent);
+        impl Backend for Log {
+            fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+                if let Cmd::SetConstants {
+                    kind,
+                    start,
+                    count,
+                    data,
+                    ..
+                } = cmd
+                {
+                    let words = data
+                        .bytes()
+                        .chunks(4)
+                        .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+                        .collect();
+                    self.0.lock().unwrap().push((kind, start, count, words));
+                }
+                Reply::None
+            }
+        }
+        let (mut e, dev) = texture_device(Store::Host);
+        let sent: Sent = Default::default();
+        super::super::d3d9real::test_stream(
+            &mut e,
+            dev,
+            Stream::direct(Box::new(Log(sent.clone()))),
+        );
+        keep_repeats(&mut e, false);
+        one_pass_for_tests(&mut e, true);
+        let data = e.mem.alloc(32);
+        for i in 0..8 {
+            e.mem.set_u32(data + 4 * i, 0x3f80_0000 + i);
+        }
+        assert_eq!(e.vcall(dev, 4 * 109, &[3, data, 2]).u32(), D3D_OK);
+        assert_eq!(e.vcall(dev, 4 * 109, &[3, data, 2]).u32(), D3D_OK);
+        e.mem.set_u32(data + 4, 9);
+        assert_eq!(e.vcall(dev, 4 * 109, &[3, data, 2]).u32(), D3D_OK);
+        // Booleans: one word a register, packed.
+        assert_eq!(e.vcall(dev, 4 * 113, &[14, data, 2]).u32(), D3D_OK);
+        // Past the pixel float registers (224): refused.
+        assert_eq!(
+            e.vcall(dev, 4 * 109, &[223, data, 2]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(e.vcall(dev, 4 * 109, &[0, 0, 1]).u32(), D3DERR_INVALIDCALL);
+        let first: Vec<u32> = (0..8).map(|i| 0x3f80_0000 + i).collect();
+        let mut changed = first.clone();
+        changed[1] = 9;
+        assert_eq!(
+            *sent.lock().unwrap(),
+            [
+                (3, 3, 2, first),
+                (3, 3, 2, changed),
+                (5, 14, 2, vec![0x3f80_0000, 9]),
+            ]
+        );
+        assert_eq!(
+            binding(&mut e, dev, "constant 3 4"),
+            [0x3f80_0004, 0x3f80_0005, 0x3f80_0006, 0x3f80_0007, 1]
+        );
+        assert_eq!(binding(&mut e, dev, "constant 5 15"), [9, 0, 0, 0, 1]);
+        assert_eq!(binding(&mut e, dev, "constant 3 223"), [0, 0, 0, 0, 0]);
     }
 
     /// The scene's device state as the game can read it back: each getter's answer and the
