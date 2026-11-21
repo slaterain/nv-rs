@@ -254,6 +254,7 @@ fn empty_list_with(e: &mut Engine, this: Ptr, list_of: u32, delete: impl Fn(&mut
 /// script, sets the name to the empty string `01011584` and clears the last error. Returns
 /// `this`. The exception frame is not translated.
 pub fn script_compile_data_script_compile_data(e: &mut Engine, this: Ptr) -> Ptr {
+    engine_core::hitch::one(engine_core::hitch::Count::ScriptCompiles);
     let base = this.addr();
     e.call(STRING_CONSTRUCT, &args![base.wrapping_add(0xc)]);
     e.call(LIST_CONSTRUCT, &args![base.wrapping_add(0x3c)]);
