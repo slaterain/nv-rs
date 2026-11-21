@@ -1149,12 +1149,18 @@ mod queue {
         }
     }
 
-    fn common(d: Diff) -> Diff {
-        d.family(&lights::LIGHTS)
-            .family(&leaf::LEAVES)
-            .ignore_calls(&[0x00ec_6040])
-            .max_calls(50_000)
-            .float_sweep(64)
+    trait QueueCommon {
+        fn queue_common(self) -> Diff;
+    }
+
+    impl QueueCommon for Diff {
+        fn queue_common(self) -> Diff {
+            self.family(&lights::LIGHTS)
+                .family(&leaf::LEAVES)
+                .ignore_calls(&[0x00ec_6040])
+                .max_calls(50_000)
+                .float_sweep(64)
+        }
     }
 
     #[test]
@@ -1162,130 +1168,150 @@ mod queue {
         // The object (a geometry, or a tree pattern); its parent's kind; the skip and collect
         // flags; the number of lights and their pattern; the multibound cast's answer; floats for
         // the lights' and the object's places.
-        common(Diff::new(
-            entry!(0x00b5_dac0, queue::update_start(u32, u32, u32, u32) -> u8),
-        ))
-        .inputs(&[
-            Input::Of(&[0, 1, 4, 5]),
-            Input::Of(&[0, 1, 2, 3]),
-            Input::Flag,
-            Input::Flag,
-            Input::Of(&[3, 0, 1, 7]),
-            Input::Of(&[0, 1, 2]),
-            Input::Flag,
-            Input::F32,
-            Input::F32Swept(ONE),
-        ])
-        .max_cases(400)
-        .setup(|e, case| {
-            queue_stand_ins(e);
-            let lights = lights_of(e, case, case.word(4) as usize, case.word(5) as usize, 7);
-            let node = scene_node(e, &lights);
-            let object = queued_object(e, case, case.word(0), 7);
-            let p = parent(e, case.word(1), &lights);
-            e.mem.set_u32(object + 0x18, p);
-            // The multibound cast: none, or the node itself with its first child indexed.
-            if case.word(6) == 1 && case.word(0) != 0 {
-                set_logged_answer(e, 0x13, object);
-                let first = e.mem.u32(e.mem.u32(object + 0xa0));
-                set_logged_answer(e, 0x14, first);
+        Diff::new(entry!(0x00b5_dac0, queue::update_start(u32, u32, u32, u32) -> u8))
+            .queue_common()
+            .inputs(&[
+                Input::Of(&[0, 1, 4, 5]),
+                Input::Of(&[0, 1, 2, 3]),
+                Input::Flag,
+                Input::Flag,
+                Input::Of(&[3, 0, 1, 7]),
+                Input::Of(&[0, 1, 2]),
+                Input::Flag,
+                Input::F32,
+                Input::F32Swept(ONE),
+            ])
+            .max_cases(400)
+            .setup(|e, case| {
+                queue_stand_ins(e);
+                let lights = lights_of(e, case, case.word(4) as usize, case.word(5) as usize, 7);
+                let node = scene_node(e, &lights);
+                let object = queued_object(e, case, case.word(0), 7);
+                let p = parent(e, case.word(1), &lights);
+                e.mem.set_u32(object + 0x18, p);
+                // The multibound cast: none, or the node itself with its first child indexed.
+                if case.word(6) == 1 && case.word(0) != 0 {
+                    set_logged_answer(e, 0x13, object);
+                    let first = e.mem.u32(e.mem.u32(object + 0xa0));
+                    set_logged_answer(e, 0x14, first);
+                }
+                vec![object, node, case.word(2), case.word(3)]
+            })
+            .run()
+            .assert_same();
+    }
+
+    /// The inputs of the per-geometry update and its walk: a null node (the accumulator's, or the
+    /// pointer's); the property's kind (as made, none, -1, 13); the candidates' kind; the number of
+    /// lights; the tree pattern; floats.
+    const GEOMETRY_INPUTS: [Input; 7] = [
+        Input::Flag,
+        Input::Of(&[1, 0, 0xffff_ffff, 13]),
+        Input::Of(&[0, 1, 2]),
+        Input::Of(&[3, 0, 5]),
+        Input::Of(&[0, 1, 4, 5]),
+        Input::F32,
+        Input::F32Swept(ONE),
+    ];
+
+    /// The world of a per-geometry case: the geometry (`tree_pattern` 0) or a tree; answers the
+    /// call's words.
+    fn geometry_case(e: &mut Engine, case: &Case, tree_pattern: u32) -> Vec<u32> {
+        queue_stand_ins(e);
+        let lights = lights_of(e, case, case.word(3) as usize, 1, 5);
+        let node = scene_node(e, &lights);
+        let accumulator = block(e, 0x200, &[]);
+        e.mem.set_u32(
+            accumulator + 0x194,
+            if case.word(0) == 1 { 0 } else { node },
+        );
+        set_logged_answer(e, 0x12, accumulator);
+        let object = queued_object(e, case, tree_pattern, 5);
+        if tree_pattern == 0 {
+            match case.word(1) {
+                0 => e.mem.set_u32(object + 0xa8, 0),
+                1 => {}
+                kind => {
+                    let p = e.mem.u32(object + 0xa8);
+                    e.mem.set_u32(p + 0x1c, kind);
+                }
             }
-            vec![object, node, case.word(2), case.word(3)]
-        })
-        .run()
-        .assert_same();
+        }
+        let rooms = if case.word(2) == 1 {
+            parent(e, 1, &lights)
+        } else {
+            0
+        };
+        let others = if case.word(2) == 2 {
+            parent(e, 2, &lights)
+        } else {
+            0
+        };
+        let given = if case.word(0) == 1 { 0 } else { node };
+        vec![object, given, 0, rooms, others]
     }
 
     #[test]
-    fn lights_update_geometry_and_lists() {
-        // `UpdateQueuedObjectLighting` and `UpdateQueuedObjectLightingList` with their overloads 2:
-        // which one; a null node (the accumulator's, or the pointer's); the property's kind (none,
-        // -1, 1, 13); the candidates' kind; the number of lights.
-        for (address, f) in [
-            entry!(0x00b5_b260, queue::update_geometry(u32, u32, u32, u32, u32) -> u8),
-            entry!(0x00b5_c490, queue::update_tree(u32, u32, u32, u32, u32) -> u8),
-        ] {
-            common(Diff::new((address, f)))
-                .inputs(&[
-                    Input::Flag,
-                    Input::Of(&[1, 0, 0xffff_ffff, 13]),
-                    Input::Of(&[0, 1, 2]),
-                    Input::Of(&[3, 0, 5]),
-                    Input::Of(&[0, 1, 4, 5]),
-                    Input::F32,
-                    Input::F32Swept(ONE),
-                ])
-                .max_cases(300)
-                .setup(move |e, case| {
-                    queue_stand_ins(e);
-                    let lights = lights_of(e, case, case.word(3) as usize, 1, 5);
-                    let node = scene_node(e, &lights);
-                    let accumulator = block(e, 0x200, &[]);
-                    e.mem.set_u32(
-                        accumulator + 0x194,
-                        if case.word(0) == 1 { 0 } else { node },
-                    );
-                    set_logged_answer(e, 0x12, accumulator);
-                    let object = if address == 0x00b5_b260 {
-                        queued_object(e, case, 0, 5)
-                    } else {
-                        queued_object(e, case, case.word(4), 5)
-                    };
-                    if address == 0x00b5_b260 {
-                        match case.word(1) {
-                            0 => e.mem.set_u32(object + 0xa8, 0),
-                            1 => {}
-                            kind => {
-                                let p = e.mem.u32(object + 0xa8);
-                                e.mem.set_u32(p + 0x1c, kind);
-                            }
-                        }
-                    }
-                    let rooms = if case.word(2) == 1 {
-                        parent(e, 1, &lights)
-                    } else {
-                        0
-                    };
-                    let others = if case.word(2) == 2 {
-                        parent(e, 2, &lights)
-                    } else {
-                        0
-                    };
-                    let given = if case.word(0) == 1 { 0 } else { node };
-                    vec![object, given, 0, rooms, others]
-                })
-                .run()
-                .assert_same();
-        }
-        for (address, f) in [
-            entry!(0x00b5_b410, queue::update_geometry_list(u32, u32, u32, u32) -> u8),
-            entry!(0x00b5_c5c0, queue::update_tree_list(u32, u32, u32, u32) -> u8),
-        ] {
-            common(Diff::new((address, f)))
-                .inputs(&[
-                    Input::Of(&[0, 1, 4, 5]),
-                    Input::Of(&[3, 0, 1, 6]),
-                    Input::F32,
-                    Input::F32Swept(ONE),
-                ])
-                .max_cases(100)
-                .setup(move |e, case| {
-                    queue_stand_ins(e);
-                    let lights = lights_of(e, case, case.word(1) as usize, 0, 2);
-                    let mut zero_ended = lights.clone();
-                    zero_ended.push(0);
-                    let array = block(e, 4 * zero_ended.len() as u32, &zero_ended);
-                    let pattern = if address == 0x00b5_b410 {
-                        0
-                    } else {
-                        case.word(0)
-                    };
-                    let object = queued_object(e, case, pattern, 2);
-                    vec![object, 0, array, 0]
-                })
-                .run()
-                .assert_same();
-        }
+    fn lights_update_geometry() {
+        Diff::new(entry!(0x00b5_b260, queue::update_geometry(u32, u32, u32, u32, u32) -> u8))
+            .queue_common()
+            .inputs(&GEOMETRY_INPUTS)
+            .max_cases(300)
+            .setup(|e, case| geometry_case(e, case, 0))
+            .run()
+            .assert_same();
+    }
+
+    #[test]
+    fn lights_update_tree() {
+        Diff::new(entry!(0x00b5_c490, queue::update_tree(u32, u32, u32, u32, u32) -> u8))
+            .queue_common()
+            .inputs(&GEOMETRY_INPUTS)
+            .max_cases(300)
+            .setup(|e, case| geometry_case(e, case, case.word(4)))
+            .run()
+            .assert_same();
+    }
+
+    /// The world of a lamp-array case: the zero-ended array of 0, 1, 3 or 6 lamps and the geometry
+    /// (`tree_pattern` 0) or a tree; answers the call's words.
+    fn list_case(e: &mut Engine, case: &Case, tree_pattern: u32) -> Vec<u32> {
+        queue_stand_ins(e);
+        let lights = lights_of(e, case, case.word(1) as usize, 0, 2);
+        let mut zero_ended = lights.clone();
+        zero_ended.push(0);
+        let array = block(e, 4 * zero_ended.len() as u32, &zero_ended);
+        let object = queued_object(e, case, tree_pattern, 2);
+        vec![object, 0, array, 0]
+    }
+
+    const LIST_INPUTS: [Input; 4] = [
+        Input::Of(&[0, 1, 4, 5]),
+        Input::Of(&[3, 0, 1, 6]),
+        Input::F32,
+        Input::F32Swept(ONE),
+    ];
+
+    #[test]
+    fn lights_update_geometry_list() {
+        Diff::new(entry!(0x00b5_b410, queue::update_geometry_list(u32, u32, u32, u32) -> u8))
+            .queue_common()
+            .inputs(&LIST_INPUTS)
+            .max_cases(100)
+            .setup(|e, case| list_case(e, case, 0))
+            .run()
+            .assert_same();
+    }
+
+    #[test]
+    fn lights_update_tree_list() {
+        Diff::new(entry!(0x00b5_c5c0, queue::update_tree_list(u32, u32, u32, u32) -> u8))
+            .queue_common()
+            .inputs(&LIST_INPUTS)
+            .max_cases(100)
+            .setup(|e, case| list_case(e, case, case.word(0)))
+            .run()
+            .assert_same();
     }
 
     /// The light table (`NV_LIGHT_TABLE`) on and off give the same memory after a drain (every
@@ -1398,7 +1424,8 @@ mod queue {
 
     #[test]
     fn lights_queue_drain() {
-        common(Diff::new(entry!(0x00b5_fd60, queue::drain(Ptr<_>))))
+        Diff::new(entry!(0x00b5_fd60, queue::drain(Ptr<_>)))
+            .queue_common()
             .inputs(&[
                 Input::Of(&[0, 1, 2]),
                 Input::Of(&[0, 1, 2]),
