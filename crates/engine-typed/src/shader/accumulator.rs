@@ -642,6 +642,16 @@ fn set_vertex_constants(e: &mut Engine, register: u32, data: u32, count: u32) {
 /// ([`set_world_transform`], not sent); its world times view, transposed, goes to vertex constants 0
 /// to 3.
 pub fn set_world_view_constants(e: &mut Engine, this: u32, _unused: u32, transform: u32) {
+    if crate::draw::keep::building() {
+        let call = crate::draw::keep::Leaf::WorldView { this, transform };
+        return crate::draw::keep::leaf(e, call, |e| world_view_constants_now(e, this, transform));
+    }
+    world_view_constants_now(e, this, transform);
+}
+
+/// [`set_world_view_constants`]'s work (a kept draw record makes the call again with the frame's camera).
+#[inline(always)]
+fn world_view_constants_now(e: &mut Engine, this: u32, transform: u32) {
     let renderer = Ptr::<NiDX9Renderer>::new(e.global::<u32>(this.wrapping_add(0x18)));
     typed_call!(
         FAMILY,

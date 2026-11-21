@@ -5817,8 +5817,9 @@ pub fn device_set_pixel_constants(
 
 /// A device call the typed draw code made while this thread's recorder was on
 /// ([`device_record_begin`]): the device, the slot (byte offset), the words, and for a call that
-/// passes a structure by address (constants, a matrix, a plane, a viewport) the bytes there as
-/// they were at the call and which word held the address. [`device_replay`] makes it again.
+/// passes a structure by address (constants, a matrix, a plane, a viewport) from the caller's stack
+/// for locals the bytes there as they were at the call and which word held the address (one
+/// elsewhere is read again at replay). [`device_replay`] makes it again.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeviceCall {
     pub this: u32,
@@ -5899,8 +5900,12 @@ fn note_device_call(e: &Engine, this: u32, slot: u32, args: &[u32]) {
 #[cold]
 #[inline(never)]
 fn note_device_call_slow(e: &Engine, this: u32, slot: u32, args: &[u32]) {
+    // A structure on the caller's stack for locals is gone by replay time: its bytes are kept. One elsewhere (the
+    // shader statics, an object) is read again where it is at replay, as the call would read it then.
     let (data_arg, data) = match pointer_arg(slot, args) {
-        Some((i, len)) if args.get(i).is_some_and(|&p| p != 0) && len <= 0x4000 => {
+        Some((i, len))
+            if args.get(i).is_some_and(|&p| p != 0 && e.in_locals(p)) && len <= 0x4000 =>
+        {
             let mut bytes = vec![0u8; len as usize];
             if e.mem.try_read(args[i], &mut bytes).is_err() {
                 bytes.clear();

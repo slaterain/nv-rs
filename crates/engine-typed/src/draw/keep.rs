@@ -8,6 +8,9 @@
 //! ([`super::capture`]: everything the rest of the frame may change, by #574's census) with the bytes read. The
 //! next time, when none of those inputs and none of the geometry's and its properties' own bytes changed, the record
 //! is replayed: its writes, setter calls and device calls, in order, without the set-up's work.
+//! The constant set-ups that follow the camera (world x view x projection, the eye position, the lights' vectors) are
+//! kept as calls too and run again on every replay with the frame's camera, sun and lights; what they read is not
+//! an input. So a kept draw breaks only when the geometry's own inputs change, not when the camera moves.
 //!
 //! What a player sees is the same: a record is used only when every input it read is the same, and it does what the
 //! set-up did. With `check`, every replay is also checked: the set-up runs as always and what it did is compared
@@ -56,7 +59,10 @@ pub fn set_mode_for_tests(mode: Option<Mode>) {
     TEST_MODE.with(|m| m.set(mode));
 }
 
-/// A state cache setter's call, as a record keeps it (`super::super::shader::state`'s leaf setters).
+/// A call a record keeps as a call, made again on replay: a state cache setter's (`super::super::shader::state`'s
+/// leaf setters: the cache decides again what the device gets), or a constant set-up that depends on the camera
+/// (`super::super::shader::accumulator::set_world_view_constants`, `super::super::shader::geometry::eye_pos` and
+/// `lights`: they run again with the camera, sun and lights of the frame, so a kept draw survives a moving camera).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Leaf {
     RenderState {
@@ -99,6 +105,23 @@ pub enum Leaf {
         this: u32,
         declaration: u32,
         keep: u8,
+    },
+    WorldView {
+        this: u32,
+        transform: u32,
+    },
+    EyePos {
+        pass_type: u32,
+        object: u32,
+        matrix: [u32; 16],
+    },
+    Lights {
+        property: u32,
+        rendering: u32,
+        matrix: [u32; 16],
+        scale_object: u32,
+        pass_type: u32,
+        flag: u32,
     },
 }
 
@@ -212,7 +235,10 @@ fn statics(e: &Engine, key: Key) -> Vec<u8> {
         (geometry, 0xc0),
         (state, 0x14),
         (word(state), 0x20),
-        (word(state.wrapping_add(0xc)), 0x100),
+        // The shader property but its per-frame values (+0x24 to +0x38: the second flags, alpha, fade and the distance
+        // from the camera), which the set-up reads through the accessors where it uses them.
+        (word(state.wrapping_add(0xc)), 0x24),
+        (word(state.wrapping_add(0xc)).wrapping_add(0x38), 0xc8),
         (word(state.wrapping_add(0x10)), 0x20),
         (shader, 0x80),
     ];
@@ -448,6 +474,30 @@ fn replay_leaf(e: &mut Engine, leaf: Leaf) {
             declaration,
             keep,
         } => state::set_declaration(e, Ptr::new(this), declaration, keep),
+        Leaf::WorldView { this, transform } => {
+            crate::shader::accumulator::set_world_view_constants(e, this, 0, transform);
+        }
+        Leaf::EyePos {
+            pass_type,
+            object,
+            matrix,
+        } => crate::shader::geometry::eye_pos(e, pass_type, Ptr::new(object), matrix),
+        Leaf::Lights {
+            property,
+            rendering,
+            matrix,
+            scale_object,
+            pass_type,
+            flag,
+        } => crate::shader::geometry::lights(
+            e,
+            Ptr::new(property),
+            Ptr::new(rendering),
+            matrix,
+            Ptr::new(scale_object),
+            pass_type,
+            flag,
+        ),
     }
 }
 

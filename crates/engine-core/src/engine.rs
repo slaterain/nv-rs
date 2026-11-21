@@ -1474,6 +1474,17 @@ impl Engine {
         }
     }
 
+    /// Whether `addr` lies in the running thread's stack for locals (a [`Engine::with_stack`] local's
+    /// place, live or gone; block check off).
+    pub fn in_locals(&self, addr: u32) -> bool {
+        let (base, _) = self.locals_below();
+        let size = match self.placed_stack {
+            Some((placed, size)) if placed == base => size,
+            _ => GUEST_STACK_SIZE,
+        };
+        base != 0 && addr >= base && u64::from(addr) < u64::from(base) + u64::from(size)
+    }
+
     /// The address the next [`Engine::with_stack`] of `size` bytes on the running thread takes
     /// (block check off), for tests that need to know a local's address beforehand.
     pub fn next_stack_local(&mut self, size: u32) -> u32 {

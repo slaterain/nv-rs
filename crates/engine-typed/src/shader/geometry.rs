@@ -542,6 +542,20 @@ pub fn eye_pos_words(e: &mut Engine, words: &[u32]) -> Ret {
 /// transformed by the matrix (`D3DXVec3TransformCoord`) goes to `011fd894` with the object's
 /// +0x30.
 pub fn eye_pos(e: &mut Engine, pass_type: u32, object: Ptr, matrix: [u32; 16]) {
+    if crate::draw::keep::building() {
+        let call = crate::draw::keep::Leaf::EyePos {
+            pass_type,
+            object: object.addr(),
+            matrix,
+        };
+        return crate::draw::keep::leaf(e, call, |e| eye_pos_now(e, pass_type, object, matrix));
+    }
+    eye_pos_now(e, pass_type, object, matrix);
+}
+
+/// [`eye_pos`]'s work (a kept draw record makes the call again with the frame's eye).
+#[inline(always)]
+fn eye_pos_now(e: &mut Engine, pass_type: u32, object: Ptr, matrix: [u32; 16]) {
     if !entry_enabled(e, VERTEX_ENTRIES + 4 * 9) && !entry_enabled(e, PIXEL_ENTRIES + 4 * 5) {
         return;
     }
@@ -889,6 +903,49 @@ pub fn lights_words(e: &mut Engine, words: &[u32]) -> Ret {
 /// active point light (`GetFirstActiveLight`) row 1 becomes (0.5, 0.5, 0.5, 1.0) in shader mode 10,
 /// else a copy of row 0.
 pub fn lights(
+    e: &mut Engine,
+    property: Ptr,
+    rendering: Ptr,
+    matrix: [u32; 16],
+    scale_object: Ptr,
+    pass_type: u32,
+    flag: u32,
+) {
+    if crate::draw::keep::building() {
+        let call = crate::draw::keep::Leaf::Lights {
+            property: property.addr(),
+            rendering: rendering.addr(),
+            matrix,
+            scale_object: scale_object.addr(),
+            pass_type,
+            flag,
+        };
+        return crate::draw::keep::leaf(e, call, |e| {
+            lights_now(
+                e,
+                property,
+                rendering,
+                matrix,
+                scale_object,
+                pass_type,
+                flag,
+            );
+        });
+    }
+    lights_now(
+        e,
+        property,
+        rendering,
+        matrix,
+        scale_object,
+        pass_type,
+        flag,
+    );
+}
+
+/// [`lights`]'s work (a kept draw record makes the call again with the frame's camera and lights).
+#[inline(always)]
+fn lights_now(
     e: &mut Engine,
     property: Ptr,
     rendering: Ptr,
