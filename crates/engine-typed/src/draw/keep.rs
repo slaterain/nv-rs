@@ -461,8 +461,9 @@ fn replay(e: &mut Engine, key: Key) {
 }
 
 fn replay_leaf(e: &mut Engine, leaf: Leaf) {
-    use crate::shader::state;
+    use crate::shader::{state, FAMILY as SHADER};
     use engine_core::ptr::Ptr;
+    use engine_core::typed_call;
     match leaf {
         Leaf::RenderState {
             this,
@@ -470,39 +471,71 @@ fn replay_leaf(e: &mut Engine, leaf: Leaf) {
             value,
             unused,
             lock,
-        } => state::set_render_state(e, Ptr::new(this), s, value, unused, lock),
+        } => typed_call!(
+            SHADER,
+            0x00e8_8780,
+            state::set_render_state(e, Ptr::new(this), s, value, unused, lock)
+        ),
         Leaf::StageState {
             this,
             stage,
             state: s,
             value,
             unused,
-        } => state::set_stage_state(e, Ptr::new(this), stage, s, value, unused),
+        } => typed_call!(
+            SHADER,
+            0x00e8_8930,
+            state::set_stage_state(e, Ptr::new(this), stage, s, value, unused)
+        ),
         Leaf::SamplerState {
             this,
             stage,
             state: s,
             value,
             unused,
-        } => state::set_sampler_state(e, Ptr::new(this), stage, s, value, unused),
+        } => typed_call!(
+            SHADER,
+            0x00e9_10a0,
+            state::set_sampler_state(e, Ptr::new(this), stage, s, value, unused)
+        ),
         Leaf::Texture {
             this,
             stage,
             texture,
-        } => state::set_texture(e, Ptr::new(this), stage, texture),
+        } => typed_call!(
+            SHADER,
+            0x00e8_8a20,
+            state::set_texture(e, Ptr::new(this), stage, texture)
+        ),
         Leaf::VertexShader { this, shader, keep } => {
-            state::set_vertex_shader(e, Ptr::new(this), shader, keep);
+            typed_call!(
+                SHADER,
+                0x00e9_0e00,
+                state::set_vertex_shader(e, Ptr::new(this), shader, keep)
+            );
         }
         Leaf::PixelShader { this, shader, keep } => {
-            state::set_pixel_shader(e, Ptr::new(this), shader, keep);
+            typed_call!(
+                SHADER,
+                0x00e8_8870,
+                state::set_pixel_shader(e, Ptr::new(this), shader, keep)
+            );
         }
         Leaf::Declaration {
             this,
             declaration,
             keep,
-        } => state::set_declaration(e, Ptr::new(this), declaration, keep),
+        } => typed_call!(
+            SHADER,
+            0x00e9_0fc0,
+            state::set_declaration(e, Ptr::new(this), declaration, keep)
+        ),
         Leaf::WorldView { this, transform } => {
-            crate::shader::accumulator::set_world_view_constants(e, this, 0, transform);
+            typed_call!(
+                SHADER,
+                0x00b7_c750,
+                crate::shader::accumulator::set_world_view_constants(e, this, 0u32, transform)
+            );
         }
         Leaf::EyePos {
             pass_type,
@@ -526,20 +559,24 @@ fn replay_leaf(e: &mut Engine, leaf: Leaf) {
             flag,
         ),
         Leaf::Defined(w) => {
-            super::defined::set_defined_constant(
-                e,
-                Ptr::new(w[0]),
-                w[1],
-                w[2],
-                w[3],
-                w[4],
-                w[5],
-                w[6],
-                w[7],
-                w[8],
-                w[9],
-                w[10],
-                w[11],
+            let _: u32 = typed_call!(
+                super::FAMILY,
+                0x00e8_3db0,
+                super::defined::set_defined_constant(
+                    e,
+                    Ptr::new(w[0]),
+                    w[1],
+                    w[2],
+                    w[3],
+                    w[4],
+                    w[5],
+                    w[6],
+                    w[7],
+                    w[8],
+                    w[9],
+                    w[10],
+                    w[11],
+                )
             );
         }
     }
@@ -685,7 +722,7 @@ mod tests {
         e.mem.set_u32(out, 0);
         e.mem.set_u32(scratch, 9);
         draw(&mut e, key, body);
-        assert_eq!(runs.get(), 1, "replayed, not run");
+        assert_eq!(runs.get(), 1, "replayed, not run: {}", summary_now());
         assert_eq!(
             (e.mem.u32(out), e.mem.u32(scratch)),
             (6, 1),
