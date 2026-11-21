@@ -1689,7 +1689,7 @@ pub fn lists_out(e: &mut Engine, addrs: Option<&[u32]>) -> Vec<u32> {
         return Vec::new();
     }
     let mut out: Vec<(u32, u32)> = Vec::new();
-    let pick = |a: &u32| addrs.is_none_or(|s| s.contains(a));
+    let pick = |a: &u32| addrs.map_or(true, |s| s.contains(a));
     if let Some(v) = served_mut(&mut e.own_view) {
         out = v
             .lists
