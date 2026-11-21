@@ -647,7 +647,7 @@ mod tests {
         assert!(capture::begin(&e));
         capture::own(&e, block, 0, 8);
         capture::set_word(&mut e, block, 0, 0x66);
-        let packet = capture::detach(&mut e).expect("a packet to hand over");
+        let packet = capture::detach(&e).expect("a packet to hand over");
         assert!(cut::adopt(&mut e, packet).is_ok());
         capture::pause(&mut e);
         let stop = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
