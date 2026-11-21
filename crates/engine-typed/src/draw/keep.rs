@@ -8,9 +8,9 @@
 //! ([`super::capture`]: everything the rest of the frame may change, by #574's census) with the bytes read. The
 //! next time, when none of those inputs and none of the geometry's and its properties' own bytes changed, the record
 //! is replayed: its writes, setter calls and device calls, in order, without the set-up's work.
-//! The constant set-ups that follow the camera (world x view x projection, the eye position, the lights' vectors) are
-//! kept as calls too and run again on every replay with the frame's camera, sun and lights; what they read is not
-//! an input. So a kept draw breaks only when the geometry's own inputs change, not when the camera moves.
+//! The constant set-ups that follow the camera or the game time (world x view x projection, the eye position, the
+//! lights' vectors, the constant maps' defined constants, the vertex entries 15, 16 and 21) are kept as calls too and
+//! run again on every replay with the frame's camera, sun, lights and time; what they read is not an input. So a kept draw breaks only when the geometry's own inputs change, not when the camera moves.
 //!
 //! What a player sees is the same: a record is used only when every input it read is the same, and it does what the
 //! set-up did. With `check`, every replay is also checked: the set-up runs as always and what it did is compared
@@ -122,6 +122,21 @@ pub enum Leaf {
         scale_object: u32,
         pass_type: u32,
         flag: u32,
+    },
+    /// The vertex entries that follow the game time or the camera (`super::super::shader::geometry`'s 15, 16 and 21).
+    Entry15 {
+        this: u32,
+        object: u32,
+    },
+    Entry16 {
+        this: u32,
+        unused: u32,
+    },
+    Entry21 {
+        this: u32,
+        pass_type: u32,
+        first: u32,
+        second: u32,
     },
     /// A constant map's defined constant (`super::defined::set_defined_constant`): its twelve words.
     Defined([u32; 12]),
@@ -565,6 +580,32 @@ fn replay_leaf(e: &mut Engine, leaf: Leaf) {
             Ptr::new(scale_object),
             pass_type,
             flag,
+        ),
+        Leaf::Entry15 { this, object } => typed_call!(
+            SHADER,
+            0x00b7_90d0,
+            crate::shader::geometry::vertex_entry_15(e, Ptr::new(this), Ptr::new(object))
+        ),
+        Leaf::Entry16 { this, unused } => typed_call!(
+            SHADER,
+            0x00b7_9100,
+            crate::shader::geometry::vertex_entry_16(e, Ptr::new(this), unused)
+        ),
+        Leaf::Entry21 {
+            this,
+            pass_type,
+            first,
+            second,
+        } => typed_call!(
+            SHADER,
+            0x00b7_91f0,
+            crate::shader::geometry::vertex_entry_21(
+                e,
+                Ptr::new(this),
+                pass_type,
+                Ptr::new(first),
+                Ptr::new(second)
+            )
         ),
         Leaf::Defined(w) => {
             let _: u32 = typed_call!(
