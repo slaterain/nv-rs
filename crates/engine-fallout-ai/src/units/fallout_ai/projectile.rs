@@ -278,6 +278,30 @@ pub fn fn_009c3e10(e: &mut Engine, this: Ptr<Projectile>) {
     e.call(ASSIGN_NI_POINTER, &args![slot, 0u32]);
 }
 
+/// The projectile's start in the world (`009bda10`) at `0x9BDC92`: its light made (`009c3d90`, by address). JIP LN
+/// NVSE's G95 (group GK's row and handler, a fix row: the call becomes `AddProjectileLightHook`) answers the seam
+/// with the projectile and makes one of JIP's point lights instead; one load while JIP's fixes are not in.
+fn make_light(e: &mut Engine, this: Ptr<Projectile>) {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+        && e.site(0x009b_dc92, &[this.addr()]).is_some()
+    {
+        return;
+    }
+    e.call(0x009c_3d90, &args![this]);
+}
+
+/// The projectile's destructor (`009bc470`) at `0x9BC6D9`: its light removed (`009c3e10`, by address). JIP LN
+/// NVSE's G95 (group GK's row and handler, a fix row: the call becomes `RemoveProjectileLightHook`) answers the seam
+/// with the projectile and takes JIP's light off its node instead; one load while JIP's fixes are not in.
+fn remove_light(e: &mut Engine, this: Ptr<Projectile>) {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+        && e.site(0x009b_c6d9, &[this.addr()]).is_some()
+    {
+        return;
+    }
+    e.call(0x009c_3e10, &args![this]);
+}
+
 // Translated from 009c3e60 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Fades the projectile's light with its alpha (the engine map has no
 /// name): with `spLight` set and flag 0x20, the light gets (`0050dd20`)
@@ -1142,9 +1166,18 @@ pub fn projectile_load_game(e: &mut Engine, this: Ptr<Projectile>, buffer: Ptr) 
         }
     }
     if i32::from(e.vcall(buffer.addr(), 0, &args![]).u8()) >= 0x10 {
+        // lStewieAl's Tweaks' row S0180 (`MineDisarmedLightLoadingFix`, the call at `0x9C5723`):
+        // Tweaks' `OnProjectileLoadGame` first runs `009b46c0` on the projectile (its
+        // `##LightOn` block shown again), then the exe's load of the byte.
+        if e.stewie(engine_core::extend::stewie::MINE_DISARMED_LIGHT_LOADING) {
+            e.call(MINE_LIGHT_UPDATE, &args![base]);
+        }
         e.call(LOAD_BYTES, &args![buffer, base + 0x90, 1u32]);
     }
 }
+
+/// `009b46c0` (`thiscall`, the projectile): what row S0180 runs before the impact byte is loaded.
+const MINE_LIGHT_UPDATE: u32 = 0x009b_46c0;
 
 /// The form of a loaded form id word, cast to a reference: `__RTDynamicCast(
 /// 004839c0(form), 0, TESForm, TESObjectREFR, 0)`, or 0 for none.
@@ -2184,7 +2217,7 @@ pub fn fn_009bc470(e: &mut Engine, this: Ptr<Projectile>) {
             &args![base, 0u32, 1u32, 0u32, 0u32, 0u32, 0u32, 0u32, 1u32, 0u32],
         );
     }
-    e.call(0x009c_3e10, &args![this]);
+    remove_light(e, this);
     let list = this.byte_add(IMPACT_LIST);
     while !typed_call!(leaf::FAMILY, 0x0082_56d0, leaf::both_words_zero(e, list)) {
         let head = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, list));
@@ -2576,8 +2609,79 @@ pub fn fn_009bf370(e: &mut Engine, this: Ptr<Projectile>, delta: f32, x: u32, y:
         copy_point(e, new, position);
         let result = e.call(0x0043_9ef0, &args![new, difference, old]).u32();
         let [dx, dy, dz] = point_words(e, result);
+        // lStewieAl's Tweaks' row S0207 (`NonHitscanProjectileSplashFix`, the call at
+        // `0x9BF461`): Tweaks' `Projectile__SetVector` in place of `009c4e60`.
+        if e.stewie(engine_core::extend::stewie::NON_HITSCAN_PROJECTILE_SPLASH) {
+            projectile_set_vector_with_velocity(e, this.addr(), [dx, dy, dz], true);
+            return;
+        }
         e.call(0x009c_4e60, &args![this, dx, dy, dz, 1u32]);
     });
+}
+
+/// `bhkUtilFunctions::FindCollisionObject` (`00c802d0`, `cdecl`, one word).
+const FIND_COLLISION_OBJECT: u32 = 0x00c8_02d0;
+/// `bhkWorldObject::SetLinearVelocity` (`00561690`, `thiscall`, a `hkVector4*`).
+const SET_LINEAR_VELOCITY: u32 = 0x0056_1690;
+/// The character controller's `OutVelocity` (`hkVector4`, Xbox PDB: `bhkCharacterController`
+/// +0x4F0).
+const CONTROLLER_OUT_VELOCITY: u32 = 0x4f0;
+
+/// Row S0207's routine, Tweaks' `Projectile__SetVector` (`Fixes/NonHitscanProjectileSplashFix.cpp`):
+/// the movement direction (+0x104) set to `vector` and unitized as Tweaks' `NiPoint3::Unitize`
+/// (`float` maths: a length at most 1e-6 gives 0 and a zero vector), its length added to the
+/// distance travelled (+0x110) with `update_distance`; then, when the projectile has a character
+/// controller (its process +0x68, slot +0x28C), a 3D (slot +0x1D0), a collision object on it and
+/// that object's world object (+0x10) with a rigid body (slot +0x40), the world object's linear
+/// velocity is set to the controller's `OutVelocity`. So a projectile that is not hitscan moves its
+/// rigid body too, and water sees it (splashes).
+fn projectile_set_vector_with_velocity(
+    e: &mut Engine,
+    this: u32,
+    vector: [u32; 3],
+    update_distance: bool,
+) {
+    let direction = this + MOVEMENT_DIRECTION;
+    let [x, y, z] = vector.map(f32::from_bits);
+    let length = (x * x + y * y + z * z).sqrt();
+    let (unit, length) = if length > 1e-6 {
+        let recip = 1.0 / length;
+        ([x * recip, y * recip, z * recip], length)
+    } else {
+        ([0.0; 3], 0.0)
+    };
+    for (i, value) in unit.iter().enumerate() {
+        e.mem.set_f32(direction + 4 * i as u32, *value);
+    }
+    if update_distance {
+        let moved = this + 0x110;
+        let total = length + e.mem.f32(moved);
+        e.mem.set_f32(moved, total);
+    }
+    let process = e.mem.u32(this + 0x68);
+    if process == 0 {
+        return;
+    }
+    let controller = e.vcall(process, 0x28c, &args![]).u32();
+    if controller == 0 {
+        return;
+    }
+    let root = e.vcall(this, 0x1d0, &args![]).u32();
+    if root == 0 {
+        return;
+    }
+    let collision = e.call(FIND_COLLISION_OBJECT, &args![root]).u32();
+    if collision == 0 {
+        return;
+    }
+    let world_object = e.mem.u32(collision + 0x10);
+    if world_object == 0 || e.vcall(world_object, 0x40, &args![]).u32() == 0 {
+        return;
+    }
+    e.call(
+        SET_LINEAR_VELOCITY,
+        &args![world_object, controller + CONTROLLER_OUT_VELOCITY],
+    );
 }
 
 /// Sets a debug colour (`NiColorA` constructor `00414430`: r, g, b, a) in a
@@ -3367,7 +3471,7 @@ pub fn fn_009bda10(e: &mut Engine, this: Ptr<Projectile>) {
         let cell = e.call(0x008d_6f30, &args![this]).u32();
         e.call(0x0054_8230, &args![cell, this, 0u32]);
     }
-    e.call(0x009c_3d90, &args![this]);
+    make_light(e, this);
     if !loaded {
         fn_009c2ff0(e, this);
     }
@@ -7264,6 +7368,91 @@ mod tests {
         );
     }
 
+    /// The step of `moves_and_reports_the_step` (a difference of (1, 2, 3)) with row S0207 `on`;
+    /// the projectile has a process with a character controller, a 3D, a collision object and a
+    /// world object with a rigid body when `physics`. Answers the projectile, the controller and
+    /// the world object.
+    fn step_with_row(e: &mut Engine, on: bool, physics: bool) -> (Ptr<Projectile>, u32, u32) {
+        point_subtract(e);
+        let this = projectile(e);
+        let before = e.mem.alloc(0xC);
+        let after = e.mem.alloc(0xC);
+        set_point(e, before, [1.0, 1.0, 1.0]);
+        set_point(e, after, [2.0, 3.0, 4.0]);
+        sequence(e, 0x7E00_0050, vec![before, after]);
+        set_slot(e, this.addr(), 0x1F4, 0x7E00_0050);
+        e.mem.set_f32(this.addr() + 0x110, 10.0);
+        let controller = e.mem.alloc(0x600);
+        let world = object(e, 0x20);
+        if physics {
+            let process = object(e, 0x40);
+            stub(e, 0x7E00_0060, controller);
+            set_slot(e, process, 0x28c, 0x7E00_0060);
+            e.mem.set_u32(this.addr() + 0x68, process);
+            stub(e, 0x7E00_0070, 0x5000);
+            set_slot(e, this.addr(), 0x1d0, 0x7E00_0070);
+            let collision = e.mem.alloc(0x20);
+            e.mem.set_u32(collision + 0x10, world);
+            stub(e, FIND_COLLISION_OBJECT, collision);
+            stub(e, 0x7E00_0080, 0x6000);
+            set_slot(e, world, 0x40, 0x7E00_0080);
+        }
+        stub(e, SET_LINEAR_VELOCITY, 0);
+        e.set_stewie(
+            engine_core::extend::stewie::NON_HITSCAN_PROJECTILE_SPLASH,
+            on,
+        );
+        fn_009bf370(e, this, 0.5, 7, 8, 9);
+        (this, controller, world)
+    }
+
+    /// lStewieAl's Tweaks' row S0207 (`0x9BF461`): on, Tweaks' `Projectile__SetVector` in place of
+    /// `009c4e60`: the direction is (1, 2, 3) unitized, its length (sqrt 14) added to the distance
+    /// travelled (10), and the world object's linear velocity set to the controller's
+    /// `OutVelocity` (+0x4F0). Off, the exe's call (as `moves_and_reports_the_step`) and no
+    /// velocity.
+    #[test]
+    fn s0207_a_projectile_moves_its_rigid_body() {
+        let mut e = engine();
+        let (this, controller, world) = step_with_row(&mut e, true, true);
+        assert!(calls(&e, 0x009c_4e60).is_empty());
+        let length = 14.0f32.sqrt();
+        let direction: Vec<f32> = (0..3)
+            .map(|i| e.mem.f32(this.addr() + MOVEMENT_DIRECTION + 4 * i))
+            .collect();
+        // Tweaks multiplies by the reciprocal.
+        let recip = 1.0 / length;
+        assert_eq!(direction, [recip, 2.0 * recip, 3.0 * recip]);
+        assert_eq!(e.mem.f32(this.addr() + 0x110), length + 10.0);
+        assert_eq!(
+            calls(&e, SET_LINEAR_VELOCITY),
+            [vec![world, controller + CONTROLLER_OUT_VELOCITY]]
+        );
+        assert_eq!(calls(&e, FIND_COLLISION_OBJECT), [vec![0x5000]]);
+        let mut e = engine();
+        let (this, _, _) = step_with_row(&mut e, false, true);
+        assert_eq!(calls(&e, 0x009c_4e60)[0][0], this.addr());
+        assert!(calls(&e, SET_LINEAR_VELOCITY).is_empty());
+    }
+
+    /// Row S0207 with no process (no character controller): the direction and the distance only;
+    /// a zero step gives a zero direction and adds nothing.
+    #[test]
+    fn s0207_without_a_controller_only_the_direction() {
+        let mut e = engine();
+        let (this, _, _) = step_with_row(&mut e, true, false);
+        assert!(e.mem.f32(this.addr() + MOVEMENT_DIRECTION) > 0.0);
+        assert!(calls(&e, SET_LINEAR_VELOCITY).is_empty());
+        assert!(calls(&e, FIND_COLLISION_OBJECT).is_empty());
+        let mut e = engine();
+        let this = projectile(&mut e);
+        e.mem.set_f32(this.addr() + 0x110, 10.0);
+        e.mem.set_f32(this.addr() + MOVEMENT_DIRECTION, 5.0);
+        projectile_set_vector_with_velocity(&mut e, this.addr(), [0; 3], true);
+        assert_eq!(e.mem.f32(this.addr() + MOVEMENT_DIRECTION), 0.0);
+        assert_eq!(e.mem.f32(this.addr() + 0x110), 10.0);
+    }
+
     #[test]
     fn add_impact_records_the_hit_and_adds_a_water_ripple() {
         let mut e = engine();
@@ -8222,6 +8411,140 @@ mod tests {
         assert!(calls(&e, GEN_DYNAMIC).is_empty());
     }
 
+    thread_local! {
+        static G95_ASKED: std::cell::RefCell<Vec<(u32, Vec<u32>)>> = const { std::cell::RefCell::new(Vec::new()) };
+        static G95_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn at_g95_add(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G95_ASKED.with(|s| s.borrow_mut().push((0x009b_dc92, a.to_vec())));
+        G95_ANSWER.with(|c| c.get())
+    }
+
+    fn at_g95_remove(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G95_ASKED.with(|s| s.borrow_mut().push((0x009b_c6d9, a.to_vec())));
+        G95_ANSWER.with(|c| c.get())
+    }
+
+    /// JIP LN NVSE's G95 seams at `0x9BDC92` and `0x9BC6D9`: not asked while JIP is not installed or installed
+    /// without its fixes (the game's light maker and remover run, by address); with its fixes asked with the
+    /// projectile, an answer taking the call's place and no answer letting the game's call run.
+    #[test]
+    fn g95_seams_replace_the_light_calls_only_with_jips_fixes() {
+        use engine_core::extend::jip_patches;
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        for (word, answer, asked, called) in [
+            (0, Some(0), false, true),
+            (jip_patches::INSTALLED, Some(0), false, true),
+            (fixes, Some(0), true, false),
+            (fixes, None, true, true),
+        ] {
+            let mut e = engine();
+            e.on_site_for_test(0x009b_dc92, at_g95_add);
+            e.on_site_for_test(0x009b_c6d9, at_g95_remove);
+            G95_ASKED.with(|s| s.borrow_mut().clear());
+            G95_ANSWER.with(|c| c.set(answer));
+            e.set_jip_patches(word);
+            let this = projectile(&mut e);
+            make_light(&mut e, this);
+            remove_light(&mut e, this);
+            let want: Vec<(u32, Vec<u32>)> = if asked {
+                vec![
+                    (0x009b_dc92, vec![this.addr()]),
+                    (0x009b_c6d9, vec![this.addr()]),
+                ]
+            } else {
+                vec![]
+            };
+            assert_eq!(G95_ASKED.with(|s| s.take()), want, "{word:x} {answer:?}");
+            let made = calls(&e, 0x009c_3d90);
+            let removed = calls(&e, 0x009c_3e10);
+            if called {
+                assert_eq!(made, vec![vec![this.addr()]], "{word:x} {answer:?}");
+                assert_eq!(removed, vec![vec![this.addr()]], "{word:x} {answer:?}");
+            } else {
+                assert!(made.is_empty() && removed.is_empty(), "{word:x}");
+            }
+        }
+    }
+
+    /// The four cases of the G95 seams' tests: the JIP word, the handler's answer, whether the seam is asked and
+    /// whether the game's own call behind it runs.
+    fn g95_cases() -> [(u32, Option<u32>, bool, bool); 4] {
+        use engine_core::extend::jip_patches;
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        [
+            (0, Some(0), false, true),
+            (jip_patches::INSTALLED, Some(0), false, true),
+            (fixes, Some(0), true, false),
+            (fixes, None, true, true),
+        ]
+    }
+
+    /// The game's own projectile start (`009bda10`) reaches the G95 add seam at `0x9BDC92`: with JIP's fixes and
+    /// an answer, the game's light maker `009c3d90` is not called; otherwise it is, once, with the projectile.
+    #[test]
+    fn g95_the_projectiles_start_asks_the_add_seam() {
+        for (word, answer, asked, called) in g95_cases() {
+            let mut e = engine();
+            e.on_site_for_test(0x009b_dc92, at_g95_add);
+            e.on_site_for_test(0x009b_c6d9, at_g95_remove);
+            G95_ASKED.with(|s| s.borrow_mut().clear());
+            G95_ANSWER.with(|c| c.set(answer));
+            e.set_jip_patches(word);
+            let this = projectile(&mut e);
+            stub(&mut e, 0x0042_ce10, 1);
+            stub(&mut e, 0x004f_d400, 0x9999);
+            stub(&mut e, 0x008d_7510, 0x1234);
+            stub_float(&mut e, 0x009a_7c40, 500.0);
+            stub_float(&mut e, 0x0064_4790, 7.0);
+            fn_009bda10(&mut e, this);
+            let want = if asked {
+                vec![(0x009b_dc92, vec![this.addr()])]
+            } else {
+                vec![]
+            };
+            assert_eq!(G95_ASKED.with(|s| s.take()), want, "{word:x} {answer:?}");
+            let made = calls(&e, 0x009c_3d90);
+            if called {
+                assert_eq!(made, vec![vec![this.addr()]], "{word:x} {answer:?}");
+            } else {
+                assert!(made.is_empty(), "{word:x}");
+            }
+        }
+    }
+
+    /// The game's own projectile destructor (`009bc470`) reaches the G95 remove seam at `0x9BC6D9`: with JIP's
+    /// fixes and an answer, the game's light remover `009c3e10` is not called (JIP's light leaves its node through
+    /// the seam); otherwise it is, once, with the projectile.
+    #[test]
+    fn g95_the_projectiles_destructor_asks_the_remove_seam() {
+        for (word, answer, asked, called) in g95_cases() {
+            let mut e = engine();
+            quiet_destructor_callees(&mut e);
+            e.on_site_for_test(0x009b_dc92, at_g95_add);
+            e.on_site_for_test(0x009b_c6d9, at_g95_remove);
+            G95_ASKED.with(|s| s.borrow_mut().clear());
+            G95_ANSWER.with(|c| c.set(answer));
+            e.set_jip_patches(word);
+            let this = projectile(&mut e);
+            stub(&mut e, GET_BASE_OBJECT, 0x6000);
+            fn_009bc470(&mut e, this);
+            let want = if asked {
+                vec![(0x009b_c6d9, vec![this.addr()])]
+            } else {
+                vec![]
+            };
+            assert_eq!(G95_ASKED.with(|s| s.take()), want, "{word:x} {answer:?}");
+            let removed = calls(&e, 0x009c_3e10);
+            if called {
+                assert_eq!(removed, vec![vec![this.addr()]], "{word:x} {answer:?}");
+            } else {
+                assert!(removed.is_empty(), "{word:x}");
+            }
+        }
+    }
+
     #[test]
     fn light_is_removed_from_the_scene_and_cleared() {
         let mut e = engine();
@@ -9055,6 +9378,58 @@ mod n026_tests {
                 calls(&log, ASSIGN_ACTOR_CAUSE),
                 vec![vec![this.addr() + ACTOR_CAUSE, u32::MAX ^ 0x1000]]
             );
+        }
+    }
+
+    /// lStewieAl's Tweaks' row S0180 (`0x9C5723`): a version 0x10 save: on, `009b46c0` runs on the
+    /// projectile just before the impact byte (+0x90) is loaded, so a mine's light is set again;
+    /// off, it is not called. A save older than 0x10 reaches neither, with the row on.
+    #[test]
+    fn s0180_a_loaded_mine_sets_its_light_first() {
+        for (version, on, lit) in [
+            (0x10u32, false, false),
+            (0x10, true, true),
+            (0xd, true, false),
+        ] {
+            let mut e = Engine::new();
+            lists(&mut e);
+            let this = projectile(&mut e, &[(0x1d0, word(0))]);
+            let buffer = buffer(&mut e, version);
+            quiet(
+                &mut e,
+                &[
+                    0x0093_2a00,
+                    LOAD_BYTES,
+                    0x0086_48e0,
+                    0x0086_4a20,
+                    ASSIGN_ACTOR_CAUSE,
+                    MINE_LIGHT_UPDATE,
+                ],
+            );
+            e.register(0x0086_48a0, |_, _| word(0));
+            e.register(CAST_SOURCE_004839C0, |_, _| word(0));
+            e.register(RT_DYNAMIC_CAST, |_, _| word(0));
+            e.register(0x0066_e330, |_, _| word(0));
+            e.register(0x0086_4a60, |_, _| word(0));
+            e.set_stewie(engine_core::extend::stewie::MINE_DISARMED_LIGHT_LOADING, on);
+            e.call_log = Some(vec![]);
+            e.call(0x009c_52f0, &args![this, buffer]);
+            let log = e.call_log.take().unwrap();
+            let lights = calls(&log, MINE_LIGHT_UPDATE);
+            if lit {
+                assert_eq!(lights, [vec![this.addr()]]);
+                // Just before the impact byte's load, the last call.
+                let tail: Vec<_> = log
+                    .iter()
+                    .rev()
+                    .take(2)
+                    .map(|(a, w)| (*a, w.get(1).copied()))
+                    .collect();
+                assert_eq!(tail[0], (LOAD_BYTES, Some(this.addr() + 0x90)));
+                assert_eq!(tail[1].0, MINE_LIGHT_UPDATE);
+            } else {
+                assert!(lights.is_empty(), "version {version:x}, on {on}");
+            }
         }
     }
 

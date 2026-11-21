@@ -6830,8 +6830,8 @@ pub(crate) const VECTOR_SCALE: u32 = 0x00439180;
 pub(crate) const WEAPON_FORM_GROUP_KIND: u32 = 0x0051f610;
 /// Word holding the weapon node name.
 pub(crate) const WEAPON_NODE_NAME: u32 = 0x01188b78;
-/// Player weapon flag setter (name unconfirmed).
-pub(crate) const WEAPON_PLAYER_FLAG: u32 = 0x00524d10;
+/// The player's third-person byte (+0x64B, `is3rdPerson` in xNVSE's headers), `thiscall`.
+pub(crate) const PLAYER_IS_THIRD_PERSON: u32 = 0x00524d10;
 /// Sound form of a weapon (name unconfirmed).
 pub(crate) const WEAPON_SOUND_FORM: u32 = 0x00522500;
 /// Sound record of a sound form `(buffer)` (name unconfirmed).
@@ -8967,6 +8967,13 @@ fn knock_state_idle_playing(e: &mut Engine, p: u32, actor: u32, animation: u32) 
         e.call(RAGDOLL_ENABLE_ANIM, &args![ragdoll]);
     }
     e.call(ACTOR_SET_HAVOK_WEAPON, &args![actor]);
+    // lStewieAl's Tweaks' row S0171 (`KnockDownHandGripFix`, the call at `0x920A91`): after it,
+    // Tweaks' `OnGetUpPlayHandGrip` queues the hand-grip idle (`kIdleFlag_HandGrip`, 0x100) on
+    // the actor's process (+0x68, `SetQueuedIdleFlags`, slot +0x614).
+    if e.stewie(engine_core::extend::stewie::KNOCKDOWN_HAND_GRIP) {
+        let process = word(e, actor, 0x68);
+        e.vcall(process, 0x614, &args![0x100u32]);
+    }
     release_weapon_nodes(e, p, actor);
 }
 
@@ -10731,7 +10738,7 @@ fn node_group(e: &mut Engine, node: u32) -> i32 {
 /// [`middle_high_process_force_weapon_drawn_sheathed`]: the sound handle
 /// kept in the actor's extra list is created when missing (flags from the
 /// weapon's sound `005e39b0`, 0x240000 for the player or 0 for others,
-/// 0x40000 flipped when `00524d10` of the player is true), then started
+/// 0x40000 flipped while the player is in third person, `00524d10`), then started
 /// when drawing (unless playing) or stopped when sheathing (if playing)
 /// and stored back (`ExtraDataList::SetWeaponIdleSound`).
 fn weapon_idle_sound(e: &mut Engine, draw: u8, weapon: u32, actor: u32) {
@@ -10764,9 +10771,15 @@ fn weapon_idle_sound(e: &mut Engine, draw: u8, weapon: u32, actor: u32) {
             } else {
                 0x0024_0000
             };
-            let player = e.global::<u32>(PLAYER);
-            if e.call(WEAPON_PLAYER_FLAG, &args![player]).bool() {
-                flags ^= 0x0004_0000;
+            // lStewieAl's Tweaks' row S0039 (`fixWeaponIdleSoundsHavingInfiniteRange`,
+            // `SafeWrite16(0x923820, 0x1CEB)`): a jump over this test, so the 0x40000 flag is
+            // never flipped: an NPC's sound no longer gets it while the player is in third person
+            // (`00524d10`, the player's byte +0x64B), and the player's own sound keeps it there.
+            if !e.stewie(engine_core::extend::stewie::WEAPON_IDLE_SOUND_RANGE) {
+                let player = e.global::<u32>(PLAYER);
+                if e.call(PLAYER_IS_THIRD_PERSON, &args![player]).bool() {
+                    flags ^= 0x0004_0000;
+                }
             }
             let sound_form = e.call(WEAPON_SOUND_FORM, &args![weapon]).u32();
             let named_form = e.call(WEAPON_SOUND_FORM, &args![weapon]).u32();
@@ -12278,7 +12291,7 @@ mod tests {
         WEAPON_FORM_00522470,
         WEAPON_FORM_005224C0,
         WEAPON_FORM_GROUP_KIND,
-        WEAPON_PLAYER_FLAG,
+        PLAYER_IS_THIRD_PERSON,
         WEAPON_SOUND_FORM,
         WEAPON_SOUND_RECORD,
         WORD_14,
@@ -15101,6 +15114,41 @@ mod tests {
         assert_eq!(calls(&e, ACTOR_SET_CHASE_BIP), vec![vec![a, 0]]);
     }
 
+    /// S0171 (`KnockDownHandGripFix`): the get-up idle of a knockdown is done. Off, the Havok
+    /// weapon is set and nothing is queued, as the exe; on, right after it the actor's process
+    /// (+0x68) queues the hand-grip idle (slot +0x614 with 0x100). An idle still playing does
+    /// neither.
+    #[test]
+    fn s0171_getting_up_queues_the_hand_grip_idle() {
+        for (on, done) in [(false, true), (true, true), (true, false)] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::KNOCKDOWN_HAND_GRIP, on);
+            let p = process(&mut e);
+            let a = actor(&mut e);
+            e.mem.set_u32(a + 0x68, p.addr());
+            e.mem.set_u8(p.addr() + 0x13c, 7);
+            e.register_double(SPECIAL_IDLE_DONE_PLAYING, move |_, _| ret(u32::from(done)));
+            knock_state_idle_playing(&mut e, p.addr(), a, 0x4400);
+            let queued = calls(&e, PROCESS_SLOTS + 0x614);
+            if on && done {
+                assert_eq!(queued, vec![vec![p.addr(), 0x100]]);
+                let order: Vec<u32> = e
+                    .call_log
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .map(|c| c.0)
+                    .filter(|&c| c == ACTOR_SET_HAVOK_WEAPON || c == PROCESS_SLOTS + 0x614)
+                    .collect();
+                assert_eq!(order, [ACTOR_SET_HAVOK_WEAPON, PROCESS_SLOTS + 0x614]);
+            } else {
+                assert!(queued.is_empty(), "on {on} done {done}");
+            }
+            assert_eq!(count(&e, ACTOR_SET_HAVOK_WEAPON), usize::from(done));
+            assert_eq!(e.mem.u8(p.addr() + 0x13c), if done { 0 } else { 7 });
+        }
+    }
+
     #[test]
     fn process_get_up_without_animation_is_false() {
         let mut e = engine();
@@ -15566,6 +15614,46 @@ mod tests {
         assert_eq!(count(&e, SOUND_HANDLE_PLAY), 1);
         assert_eq!(count(&e, SOUND_HANDLE_STOP), 0);
         assert_eq!(count(&e, EXTRA_SET_WEAPON_IDLE_SOUND), 1);
+    }
+
+    /// S0039 (`fixWeaponIdleSoundsHavingInfiniteRange`): the flags a new weapon idle sound is
+    /// made with (the sound's own 0x10, 2, and 0x240000 for the player), while the player is in
+    /// third person (`00524d10`, its byte +0x64B). Off, 0x40000 is flipped: an NPC's sound gets it
+    /// (heard at any distance) and the player's own loses it (placed in the world); on, it is never
+    /// flipped (the player's own sound plays as in first person) and the test is not asked.
+    #[test]
+    fn s0039_an_npcs_weapon_idle_sound_keeps_its_range() {
+        for (on, is_player, player_flag, flags) in [
+            (false, false, true, 0x0004_0012u32),
+            (true, false, true, 0x12),
+            (false, true, true, 0x0020_0012),
+            (true, true, true, 0x0024_0012),
+            (false, false, false, 0x12),
+            (false, true, false, 0x0024_0012),
+        ] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::WEAPON_IDLE_SOUND_RANGE, on);
+            // An actor (its vtable 0x05010000 is made here) and the player sharing that vtable.
+            let other = actor(&mut e);
+            e.mem.set_u32(TEST_PLAYER, 0x0501_0000);
+            let a = if is_player { TEST_PLAYER } else { other };
+            e.register(WEAPON_SOUND_FORM, |_, _| ret(0x5600));
+            e.register(AUDIO_MAP_00511840, |_, _| ret(0x5700));
+            e.register(SOUND_BASE_FLAGS, |_, _| ret(0x10));
+            e.register_double(PLAYER_IS_THIRD_PERSON, move |_, _| {
+                ret(u32::from(player_flag))
+            });
+            weapon_idle_sound(&mut e, 1, 0x7000, a);
+            let made = calls(&e, AUDIO_GET_SOUND_HANDLE_BY_FILENAME);
+            assert_eq!(made.len(), 1);
+            assert_eq!(
+                made[0][3], flags,
+                "on {on} player {is_player} flag {player_flag}"
+            );
+            let asked = calls(&e, PLAYER_IS_THIRD_PERSON);
+            assert_eq!(asked.len(), usize::from(!on));
+            assert_eq!(count(&e, SOUND_HANDLE_PLAY), 1);
+        }
     }
 
     #[test]

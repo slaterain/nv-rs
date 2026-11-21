@@ -21,8 +21,9 @@
 //! call is not "fixed" to a guess). Each callee's word count is probed on a fresh engine: the translation is
 //! called with 0, 1, 2, ... zero words until its argument reads stop asking for more (`entry!`
 //! reads every argument before the body runs, an entry that asserts its count says so, and a
-//! nested call stops the probe before it reads its own). A callee nobody has translated is listed,
-//! not failed (a call to it stops the game whatever it passes), but its calls must agree.
+//! nested call stops the probe before it reads its own). A callee nobody has translated
+//! or registered fails unless it is one of the exe's import slots listed in [`IMPORT_SLOTS`] (a call
+//! anywhere else stops the game whatever it passes); an import slot's calls must agree.
 //!
 //! The calls the reader cannot check by itself are listed in [`UNREAD`] with their words checked
 //! by hand: calls through a vtable slot (the target depends on the object's class), calls to an
@@ -236,6 +237,14 @@ const UNREAD: &[Row] = &[
     ),
     (
         "jip",
+        "commands/jip_fn_ui_text.rs",
+        "click",
+        N(3),
+        "the text edit menu's click slot (JIP's `call dword ptr ds:0x1070040`): the menu, \
+         button 1 and the OK tile",
+    ),
+    (
+        "jip",
         "commands/jip_fn_utility.rs",
         "e.mem.u32(vtbl + 4)",
         N(2),
@@ -247,6 +256,13 @@ const UNREAD: &[Row] = &[
         "equal",
         N(3),
         "the editor-id map's compare routine from its vtable: the map and two keys",
+    ),
+    (
+        "jip",
+        "commands/rendered_textures.rs",
+        "delete",
+        N(1),
+        "a vtable slot (the deleting destructor, `NiReleaseObject`) taking only `this`",
     ),
     (
         "jip",
@@ -1377,6 +1393,53 @@ fn sites(root: &Path, types: &Types) -> Reading {
     r
 }
 
+/// The exe's import slots the extenders call (`e.call(slot, ..)` as the game calls `[slot]`): the
+/// slot, the DLL and the function. Only these may be called without a translation here: the
+/// platform registers them when it reads the exe's import table, which this test does not load.
+/// Each name must be one the platform provides. Any other callee nobody translated or registered
+/// is not the start of a function the engine knows, and a call there stops the game ("open
+/// function ...: not translated yet"): JIP's G94 called `0x0040A320`, an address from a header
+/// comment that is inside `0040a300` in 1.4.0.525, and stopped the game at an NPC's first shot.
+const IMPORT_SLOTS: [(u32, &str, &str); 15] = [
+    (0x00fd_f05c, "KERNEL32.dll", "EnterCriticalSection"),
+    (0x00fd_f060, "KERNEL32.dll", "GetTickCount"),
+    (0x00fd_f064, "KERNEL32.dll", "FindClose"),
+    (0x00fd_f068, "KERNEL32.dll", "FindNextFileA"),
+    (0x00fd_f070, "KERNEL32.dll", "FindFirstFileA"),
+    (0x00fd_f07c, "KERNEL32.dll", "CloseHandle"),
+    (0x00fd_f080, "KERNEL32.dll", "ReadFile"),
+    (0x00fd_f088, "KERNEL32.dll", "CreateFileA"),
+    (0x00fd_f0b8, "KERNEL32.dll", "CreateDirectoryA"),
+    (0x00fd_f0d4, "KERNEL32.dll", "DeleteFileA"),
+    (0x00fd_f0d8, "KERNEL32.dll", "GetLocalTime"),
+    (0x00fd_f0dc, "KERNEL32.dll", "WriteFile"),
+    (0x00fd_f100, "KERNEL32.dll", "LeaveCriticalSection"),
+    (0x00fd_f160, "KERNEL32.dll", "GetFileAttributesA"),
+    (0x00fd_f240, "KERNEL32.dll", "SetFilePointer"),
+];
+
+/// The problem with a call to `addr`, a callee nobody translated or registered: none for a listed
+/// import slot the platform provides.
+fn unknown_callee(at: &str, callee: &str, addr: u32) -> Option<String> {
+    match IMPORT_SLOTS.iter().find(|s| s.0 == addr) {
+        Some(&(_, dll, name)) => {
+            // The core's own stand-ins and the platform layer's (`engine-platform`), which an engine's
+            // making installs first.
+            drop(Engine::new_untyped_for_test());
+            let provided = engine_core::units::platform::imports()
+                .iter()
+                .any(|(d, n, _)| d.eq_ignore_ascii_case(dll) && *n == name);
+            (!provided).then(|| {
+                format!("{at}: {callee} ({addr:08x}) is the import slot of {dll} {name}, which the platform does not provide")
+            })
+        }
+        None => Some(format!(
+            "{at}: {callee} ({addr:08x}) is not the start of a function the engine translates or \
+             registers, nor a listed import slot: a call there stops the game"
+        )),
+    }
+}
+
 /// The callees with a variable argument list (`cdecl`, `...`): the words they always take, and
 /// whether the list ends with a 0. A call passes at least those (the rest follow the format or
 /// the entry point's tables; the sweep checked them by hand).
@@ -1579,6 +1642,7 @@ fn check(name: &str) {
             None => {
                 open.push(format!("{} {} ({:08x})", s.at, s.callee, s.addr));
                 untranslated.entry(s.addr).or_default().push(s);
+                wrong.extend(unknown_callee(&s.at, &s.callee, s.addr));
             }
             Some(&(translated, typed)) => {
                 for (form, n) in [("translation", translated), ("typed form", typed)] {
@@ -1623,6 +1687,7 @@ fn check(name: &str) {
         }
         let Some(&(translated, typed)) = probed.get(&addr) else {
             open.push(format!("{} {} ({addr:08x})", u.at, u.callee));
+            wrong.extend(unknown_callee(&u.at, &u.callee, addr));
             continue;
         };
         for (form, n) in [("translation", translated), ("typed form", typed)] {
@@ -1677,6 +1742,88 @@ fn mcm_passes_each_game_function_the_words_it_takes() {
 #[test]
 fn stewie_passes_each_game_function_the_words_it_takes() {
     check("stewie");
+}
+
+/// The rule for callees nobody translated: G94's old `0x0040A320` (inside `0040a300`) fails, every
+/// listed import slot is one the platform provides, and the game's `BaseExtraList::GetExtraData`
+/// that G94 calls now is translated.
+#[test]
+fn a_callee_must_be_a_translated_function_or_a_listed_import() {
+    assert!(unknown_callee("gw.rs", "GET_BY_TYPE", 0x0040_a320).is_some());
+    for (slot, dll, name) in IMPORT_SLOTS {
+        assert_eq!(unknown_callee("x", name, slot), None, "{dll} {name}");
+    }
+    assert!(Engine::new_untyped_for_test().is_registered(0x0041_0220));
+}
+
+/// Virtual calls of the extenders whose target the exe fixes, whatever the object's class (every
+/// class that can be there has the same function in the slot): crate, file, the slot constant as
+/// the call writes it, the function in that slot, and which one it is. Each call there passes a
+/// `&[..]` list of `u32` words.
+const VCALLS: &[(&str, &str, &str, u32, &str)] = &[(
+    "jip",
+    "commands/jip_fn_actor_p2.rs",
+    "VT_QUEUE_EQUIP_ITEM",
+    0x0091_5950,
+    "ReloadEquippedModels' QueueEquipItem: slot 0x178 of the middle-high and high processes' \
+     vtables, MiddleHighProcess::AddQueuedItem (RET 0x2c, `this` and eleven words)",
+)];
+
+/// JIP's `ReloadEquippedModels` gave the process's `QueueEquipItem` ten words where the game's
+/// function takes eleven (JIP's header has none for the eighth, unread one): re-equipping a
+/// weapon that way stopped the game. Each [`VCALLS`] call is read from its crate's source and its
+/// words held to the registered translation's, probed as above.
+#[test]
+fn extenders_virtual_calls_with_a_fixed_target_pass_its_words() {
+    let _turn = PROBING.lock().unwrap_or_else(|e| e.into_inner());
+    let registered = Engine::new_untyped_for_test();
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let mut wrong = Vec::new();
+    for &(name, file, slot, target, what) in VCALLS {
+        let files = files_of(&crate_src(name));
+        let Some((_, code)) = files.iter().find(|(f, _)| f == file) else {
+            wrong.push(format!("{name}: no file {file}"));
+            continue;
+        };
+        let takes = if registered.is_registered(target) {
+            arity(Engine::new_untyped_for_test, target)
+        } else {
+            None
+        };
+        let mut found = 0;
+        let mut from = 0;
+        while let Some(at) = code[from..].find(".vcall(") {
+            let open = from + at + ".vcall".len();
+            from = open + 1;
+            let Some(parts) = call_args(code, open).map(items) else {
+                continue;
+            };
+            if parts.len() != 3 || parts[1] != slot {
+                continue;
+            }
+            found += 1;
+            let Some(list) = parts[2]
+                .strip_prefix("&[")
+                .and_then(|l| l.strip_suffix(']'))
+            else {
+                wrong.push(format!("{name} {file} {slot}: not a `&[..]` list"));
+                continue;
+            };
+            let words = 1 + items(list).len();
+            if takes != Some(words) {
+                wrong.push(format!(
+                    "{name} {file} {slot} ({what}): passes {words} words, {target:08x} takes \
+                     {takes:?}"
+                ));
+            }
+        }
+        if found == 0 {
+            wrong.push(format!("{name} {file}: no `.vcall` at {slot}"));
+        }
+    }
+    std::panic::set_hook(previous);
+    assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
 /// The reader's own rules, on made-up source.

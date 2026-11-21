@@ -340,7 +340,11 @@ pub fn bs_master_particle_system_child_has_active_particles(
         let child = e.mem.u32(elements.wrapping_add(index.wrapping_mul(4)));
         if child != 0 {
             let data = e.mem.u32(child + 0xb8);
-            if e.vcall(data, 0x90, &args![]).u16() > 0 {
+            // lStewieAl's Tweaks' row S0037 (`fixNullParticleSystemsCrash`, the bytes at `0xC5EBD9`): a
+            // child with no +0xB8 object is passed over; the exe calls through the missing object.
+            let skip =
+                data == 0 && e.stewie(engine_core::extend::stewie::PARTICLE_SYSTEM_NULL_DATA);
+            if !skip && e.vcall(data, 0x90, &args![]).u16() > 0 {
                 return true;
             }
         }
@@ -1163,6 +1167,34 @@ mod master_tests {
         assert!(e.call(0x00c5_eb90, &args![this]).bool());
         child(&mut e, this, 0xffff_0000);
         assert!(!e.call(0x00c5_eb90, &args![this]).bool());
+    }
+
+    /// lStewieAl's Tweaks' row S0037: a first child with no +0xB8 object, then one answering 3. Row off:
+    /// the exe calls through the missing object (a fault here); row on: it is passed over and the
+    /// second answers. With every object there, the same answers and calls row off and on.
+    #[test]
+    fn s0037_a_child_with_no_particle_object() {
+        let mut ordinary = vec![];
+        for on in [false, true] {
+            let mut e = Engine::new();
+            e.set_stewie(engine_core::extend::stewie::PARTICLE_SYSTEM_NULL_DATA, on);
+            let this = system(&mut e);
+            child(&mut e, this, 3);
+            e.call_log = Some(vec![]);
+            assert!(e.call(0x00c5_eb90, &args![this]).bool());
+            ordinary.push(e.call_log.take().unwrap_or_default());
+            let array = Ptr::<NiTArray>::new(this.addr() + CHILD_PARTICLES);
+            let elements = e.get(array, NiTArray::m_pBase);
+            let empty = e.mem.alloc(0xc0);
+            e.mem.set_u32(elements, empty);
+            e.mem.unmap(0, 0x1000);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.call(0x00c5_eb90, &args![this]).bool()
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.ok(), on.then_some(true), "row {on}");
+        }
+        assert_eq!(ordinary[0], ordinary[1], "row on: the calls of the row off");
     }
 
     #[test]

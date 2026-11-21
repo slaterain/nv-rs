@@ -2124,46 +2124,7 @@ pub fn vats_menu_do_idle(e: &mut Engine, this: Ptr<VatsMenu>) {
 
     // 007eca2a: the gamepad stick.
     if gamepad_in_use(e) {
-        // The value computed from the VATS mode (0x1ea9 or 0x21f1) and the
-        // first two axis reads are never used.
-        typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, VATS));
-        e.call(AXIS_VALUE, &args![controls, 0u32, 7u32]);
-        e.call(AXIS_VALUE, &args![controls, 0u32, 8u32]);
-        let horizontal = e.call(AXIS_VALUE, &args![controls, 0u32, 9u32]).i32();
-        let vertical = e
-            .call(AXIS_VALUE, &args![controls, 0u32, 10u32])
-            .i32()
-            .wrapping_neg();
-        if horizontal > 0x21f1 {
-            if e.mem.u8(m + 0x110) == 0 {
-                let time = e.call(TIMER_MILLISECONDS, &args![TIMER]).u32();
-                e.mem.set_u32(m + 0x114, time);
-                e.mem.set_u8(m + 0x110, 1);
-            }
-        } else if horizontal < -0x21f1 {
-            if e.mem.u8(m + 0x10f) == 0 {
-                let time = e.call(TIMER_MILLISECONDS, &args![TIMER]).u32();
-                e.mem.set_u32(m + 0x114, time);
-                e.mem.set_u8(m + 0x10f, 1);
-            }
-        } else if e.call(ABS, &args![horizontal]).i32() < 0x21f1
-            && e.call(ABS, &args![vertical]).i32() < 0x21f1
-        {
-            if fn_007f4c00(e) {
-                let menu = vats_menu(e);
-                e.mem.set_u8(menu + 0x110, 0);
-                e.vcall(m, 0x0c, &args![3u32, 0u32]);
-            } else if e.mem.u8(m + 0x110) != 0 {
-                e.vcall(m, 0x0c, &args![3u32, 0u32]);
-            } else if fn_007f4bb0(e) {
-                let menu = vats_menu(e);
-                e.mem.set_u8(menu + 0x10f, 0);
-                e.vcall(m, 0x0c, &args![2u32, 0u32]);
-            } else if e.mem.u8(m + 0x10f) != 0 {
-                e.vcall(m, 0x0c, &args![2u32, 0u32]);
-            }
-            e.mem.set_u8(m + 0x10d, 1);
-        }
+        vats_menu_gamepad_stick(e, m, controls);
     }
 
     // 007ecc20: the target's health meter and name.
@@ -2683,6 +2644,57 @@ pub fn vats_menu_do_idle(e: &mut Engine, this: Ptr<VatsMenu>) {
     let damage = fn_007f48e0(e, Ptr::new(menu));
     let menu = vats_menu(e);
     e.mem.set_f32(menu + 0xfc, damage);
+}
+
+/// The block of `VATSMenu::DoIdle` from `007eca2a` to `007ecc20`, the gamepad stick (run while
+/// the gamepad is in use; see `vats_menu_do_idle`): the right stick held past its dead zone to
+/// the right (`+0x110`) or left (`+0x10F`) notes the time once; back inside it on both axes, a
+/// held direction turns the target (the menu's slot `0xC` with 3 or 2) and `+0x10D` is set.
+fn vats_menu_gamepad_stick(e: &mut Engine, m: u32, controls: u32) {
+    // The value computed from the VATS mode (0x1ea9 or 0x21f1) and the
+    // first two axis reads are never used (so JIP LN NVSE's `SetDeadZoneLS`, which rewrites
+    // that `0x1ea9` at `0x7ECA56`, changes nothing here).
+    typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, VATS));
+    e.call(AXIS_VALUE, &args![controls, 0u32, 7u32]);
+    e.call(AXIS_VALUE, &args![controls, 0u32, 8u32]);
+    let horizontal = e.call(AXIS_VALUE, &args![controls, 0u32, 9u32]).i32();
+    let vertical = e
+        .call(AXIS_VALUE, &args![controls, 0u32, 10u32])
+        .i32()
+        .wrapping_neg();
+    // The dead zone: the exe's `0x21f1` (immediates `0x7ECAAC`, `0x7ECB3A`, `0x7ECB51`; `-0x21f1`
+    // at `0x7ECAEE`) unless JIP LN NVSE's `SetDeadZoneRS` rewrote them.
+    let dead_zone = e.pad_dead_zone_right();
+    if horizontal > dead_zone {
+        if e.mem.u8(m + 0x110) == 0 {
+            let time = e.call(TIMER_MILLISECONDS, &args![TIMER]).u32();
+            e.mem.set_u32(m + 0x114, time);
+            e.mem.set_u8(m + 0x110, 1);
+        }
+    } else if horizontal < dead_zone.wrapping_neg() {
+        if e.mem.u8(m + 0x10f) == 0 {
+            let time = e.call(TIMER_MILLISECONDS, &args![TIMER]).u32();
+            e.mem.set_u32(m + 0x114, time);
+            e.mem.set_u8(m + 0x10f, 1);
+        }
+    } else if e.call(ABS, &args![horizontal]).i32() < dead_zone
+        && e.call(ABS, &args![vertical]).i32() < dead_zone
+    {
+        if fn_007f4c00(e) {
+            let menu = vats_menu(e);
+            e.mem.set_u8(menu + 0x110, 0);
+            e.vcall(m, 0x0c, &args![3u32, 0u32]);
+        } else if e.mem.u8(m + 0x110) != 0 {
+            e.vcall(m, 0x0c, &args![3u32, 0u32]);
+        } else if fn_007f4bb0(e) {
+            let menu = vats_menu(e);
+            e.mem.set_u8(menu + 0x10f, 0);
+            e.vcall(m, 0x0c, &args![2u32, 0u32]);
+        } else if e.mem.u8(m + 0x10f) != 0 {
+            e.vcall(m, 0x0c, &args![2u32, 0u32]);
+        }
+        e.mem.set_u8(m + 0x10d, 1);
+    }
 }
 
 /// The block of `VATSMenu::DoIdle` from `007edd5d`: builds and queues the
@@ -9239,6 +9251,49 @@ mod tests {
         vats_menu_do_idle(&mut e, Ptr::new(menu));
         assert_eq!(calls(&e, REMOVE_FADE_CONTROL).len(), 3);
         assert!(calls(&e, MENU_FADE_STATE).is_empty());
+    }
+
+    /// The gamepad stick's four dead-zone tests read the engine's right dead zone (the exe's
+    /// `0x21f1` until JIP's `SetDeadZoneRS` moves it: `0x7ECAAC`, `0x7ECAEE` negated, `0x7ECB3A`,
+    /// `0x7ECB51`): 0x2200 notes the time to the right, -0x2200 to the left; at a dead zone moved
+    /// to 0x2200 neither, and it is not inside either; inside on both axes `+0x10D` is set.
+    #[test]
+    fn the_gamepad_stick_reads_the_moved_right_dead_zone() {
+        let run = |dead_zone: i32, horizontal: i32, axis_10: i32| {
+            let mut e = engine();
+            let menu = open_menu(&mut e);
+            e.register_double(AXIS_VALUE, move |_, a| {
+                word(match a[2] {
+                    9 => horizontal as u32,
+                    10 => axis_10 as u32,
+                    _ => 0,
+                })
+            });
+            e.register(ABS, |_, a| word((a[0] as i32).unsigned_abs()));
+            e.register(TIMER_MILLISECONDS, |_, _| word(77));
+            e.set_pad_dead_zone_right(dead_zone);
+            vats_menu_gamepad_stick(&mut e, menu, 0);
+            (
+                e.mem.u8(menu + 0x110),
+                e.mem.u8(menu + 0x10f),
+                e.mem.u8(menu + 0x10d),
+            )
+        };
+        assert_eq!(run(0x21f1, 0x2200, 0), (1, 0, 0));
+        assert_eq!(run(0x21f1, -0x2200, 0), (0, 1, 0));
+        assert_eq!(run(0x2200, 0x2200, 0), (0, 0, 0), "at the moved dead zone");
+        assert_eq!(run(0x2200, -0x2200, 0), (0, 0, 0));
+        assert_eq!(
+            run(0x2201, 0x2200, 0x2200),
+            (0, 0, 1),
+            "inside on both axes"
+        );
+        assert_eq!(run(0x2201, 0x2200, -0x2200), (0, 0, 1));
+        assert_eq!(
+            run(0x21f1, 0x2000, 0x2200),
+            (0, 0, 0),
+            "the other axis outside"
+        );
     }
 
     #[test]

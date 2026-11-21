@@ -379,9 +379,19 @@ fn update_moving(e: &mut Engine, this: Ptr, time_bits: u32, zero: f64) {
             e.call(SET_LOCATION_ON_REFERENCE, &args![this, hit.wrapping_add(4)]);
         }
     }
+    // lStewieAl's Tweaks' row S0211 (`ThrowableRotationFix`, the call at `0x9B8552`): Tweaks'
+    // `Projectile__Sync3DWithReference` drops the arc reorientation for a projectile whose base
+    // (`baseForm`, +0x20) has the rotation flag (`BGSProjectile` flags +0x60, 0x800).
+    let mut reorient = !stopped;
+    if e.stewie(engine_core::extend::stewie::THROWABLE_ROTATION) {
+        let base_form = e.mem.u32(this.addr() + 0x20);
+        if e.mem.u16(base_form + 0x60) & 0x800 != 0 {
+            reorient = false;
+        }
+    }
     e.call(
         SYNC_3D_WITH_REFERENCE,
-        &args![this, u32::from(far_from_target), u32::from(!stopped)],
+        &args![this, u32::from(far_from_target), u32::from(reorient)],
     );
     if node_3d(e, this) != 0 {
         let node = node_3d(e, this);
@@ -685,6 +695,42 @@ mod b025_tests {
             calls_to(&e, CHECK_EXPLOSION),
             vec![vec![this, 0.5f32.to_bits()]]
         );
+    }
+
+    /// S0211 (`ThrowableRotationFix`): a moving projectile far from its target syncs its 3D with
+    /// the arc reorientation on (1). On, a projectile whose base has the rotation flag (0x800 in
+    /// the flags at +0x60: a spinning throwing knife or hatchet) syncs without it (0); one without
+    /// the flag, and every projectile off, keeps it.
+    #[test]
+    fn s0211_a_spinning_throwable_is_not_turned_along_its_arc() {
+        for (on, flags, reorient) in [
+            (false, 0x0800u16, 1u32),
+            (true, 0x0800, 0),
+            (true, 0x0801, 0),
+            (true, 0x0001, 1),
+            (false, 0x0001, 1),
+        ] {
+            let (mut e, this) = engine();
+            e.set_stewie(engine_core::extend::stewie::THROWABLE_ROTATION, on);
+            let node = e.mem.alloc(0x60);
+            e.mem.set_u32(KNOBS + 0x30, node);
+            e.mem.set_u32(KNOBS + 0x34, 0x8000);
+            e.mem.set_u32(KNOBS + 0x38, 1);
+            e.mem.set_f64(KNOBS + 0x20, 4.0);
+            e.mem.set_f32(this + 0x15c, 1.0);
+            let hit = e.mem.alloc(0x30);
+            e.mem.set_u32(this + 0x88, hit);
+            let base = e.mem.alloc(0x80);
+            e.mem.set_u16(base + 0x60, flags);
+            e.mem.set_u32(this + 0x20, base);
+            e.call_log = Some(vec![]);
+            e.call(0x009b_8030, &args![this, 0.5f32]);
+            assert_eq!(
+                calls_to(&e, SYNC_3D_WITH_REFERENCE),
+                vec![vec![this, 1, reorient]],
+                "on {on} flags {flags:#x}"
+            );
+        }
     }
 
     #[test]

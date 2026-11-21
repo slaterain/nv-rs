@@ -815,6 +815,11 @@ pub fn script_line_script_line(e: &mut Engine, this: Ptr) -> Ptr {
 pub fn script_compiler_get_next_line(e: &mut Engine, data: Ptr, line: Ptr) -> u32 {
     let base = data.addr();
     let line = line.addr();
+    // Seam 005AF3F0 (words: the compile data, the line): answered, xNVSE's own line reader ran in
+    // place of this one (its `PatchGameCommandParser`), the answer the bytes it read.
+    if let Some(read) = e.site(0x005a_f3f0, &[base, line]) {
+        return read;
+    }
     let start = word_at(e, base, 0).wrapping_add(word_at(e, base, 4));
     let mut read = 0u32;
     let mut skipping = true;
@@ -1430,6 +1435,10 @@ fn put_u16(e: &mut Engine, out: u32, count: &mut u32, value: u16) {
 /// referenced object (`'Z'` and its index; reported when unknown). Other characters are
 /// copied. Answers the output length (a 0 after it), 0 on an error. The stack cookie check is
 /// not translated.
+///
+/// Seam `005B17DD`, before the compile function's call (words: the line on the stack, the
+/// command's opcode): xNVSE's inline expressions need the line's command word (+0x410), which
+/// the exe leaves unset there.
 pub fn script_compiler_replace_variables_and_functions(
     e: &mut Engine,
     _this: Ptr,
@@ -1500,6 +1509,12 @@ pub fn script_compiler_replace_variables_and_functions(
                         e.mem.set_u32(line + 0x40c, 0);
                         let number = e.mem.u32(line_number);
                         e.mem.set_u32(line, number);
+                        // Seam 005B17DD, the compile function's call (words: the line, the
+                        // command's opcode): the exe leaves this line's command word (+0x410)
+                        // unset; the inline-expression seam (005B1C65) reads it, so `crates/nvse`
+                        // writes the opcode there. No answer is read.
+                        let opcode = e.mem.u32(word + 0x208);
+                        let _ = e.site(0x005b_17dd, &[line, opcode]);
                         let ok = e
                             .call(
                                 compile,
@@ -2740,6 +2755,20 @@ pub fn script_compiler_standard_compile(
             let kind = word_at(e, entry, 4);
             let allow = e.mem.u8(PARAMETER_TYPES.wrapping_add(kind.wrapping_mul(8)));
             fn_005af310(e, Ptr::new(word));
+            // Seam 005B1C65, the parameter's word read (words: the line, the compile data, the
+            // parameters, the index): xNVSE's inline expression in parentheses. Answered 1, the
+            // parameter is compiled (the next one follows); 0, a syntax error (false).
+            match e.site(
+                0x005b_1c65,
+                &[line, data.addr(), parameters, u32::from(index as u16)],
+            ) {
+                Some(0) => return false,
+                Some(_) => {
+                    index = index.wrapping_add(1);
+                    continue;
+                }
+                None => {}
+            }
             let length = script_compiler_get_next_word(
                 e,
                 data,
@@ -3775,6 +3804,87 @@ mod n045_tests {
         assert_eq!(e.mem.u32(l + 0x418), 0x10);
     }
 
+    /// The seam at the line reader's entry (`0x5AF3F0`, xNVSE's own reader in its place), with
+    /// the compile data and the line as words: answered, the answer is the read and the game's
+    /// reader does not run (the line untouched); unanswered, it runs.
+    #[test]
+    fn get_next_line_seam_answered_runs_no_game_reader() {
+        use std::cell::RefCell;
+        thread_local! {
+            static WORDS: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
+        }
+        let mut e = rig();
+        let d = data(&mut e);
+        let input = text(&mut e, b"set x\r\nend");
+        e.mem.set_u32(d, input);
+        let l = line(&mut e, 0, 0, b"");
+        e.on_site_for_test(0x005a_f3f0, |_, w| {
+            WORDS.with(|s| *s.borrow_mut() = w.to_vec());
+            Some(77)
+        });
+        assert_eq!(e.call(0x005a_f3f0, &[d, l]).u32(), 77);
+        assert_eq!(WORDS.with(|s| s.borrow().clone()), vec![d, l]);
+        assert_eq!(e.mem.u32(l + 0x204), 0, "the line untouched");
+        let mut e = rig();
+        let d = data(&mut e);
+        let input = text(&mut e, b"set x\r\nend");
+        e.mem.set_u32(d, input);
+        let l = line(&mut e, 0, 0, b"");
+        assert_eq!(
+            e.call(0x005a_f3f0, &[d, l]).u32(),
+            7,
+            "unanswered: the game's"
+        );
+    }
+
+    /// The seam at each parameter's word read (`0x5B1C65`, xNVSE's inline expression), with the
+    /// line, the compile data, the parameters and the index as words: 1 goes on with the next
+    /// parameter without reading a word, 0 fails the line, no answer reads the word.
+    #[test]
+    fn standard_compile_parameter_seam() {
+        use std::cell::RefCell;
+        thread_local! {
+            static CALLS: RefCell<Vec<Vec<u32>>> = const { RefCell::new(Vec::new()) };
+        }
+        fn first_is_an_expression(e: &mut Engine, w: &[u32]) -> Option<u32> {
+            CALLS.with(|c| c.borrow_mut().push(w.to_vec()));
+            if w[3] == 0 {
+                // What xNVSE's expression leaves: its bytes written, the offset past it.
+                let line = w[0];
+                let len = e.mem.u32(line + 0x40c);
+                e.mem.write(line + 0x20c + len, &[0xff, 0xff]);
+                e.mem.set_u32(line + 0x40c, len + 2);
+                e.mem.set_u32(line + 0x208, 4);
+                Some(1)
+            } else {
+                None
+            }
+        }
+        let mut e = rig();
+        let d = data(&mut e);
+        e.mem.set_u8(PARAMETER_TYPES + 8, 1);
+        e.register(IS_AN_INTEGER, |_, _| ret(1));
+        e.register(TEXT_TO_INTEGER, |_, _| ret(42));
+        let p = parameters(&mut e, &[(1, 0), (1, 0)]);
+        e.on_site_for_test(0x005b_1c65, first_is_an_expression);
+        let l = line(&mut e, 1, 0x1000, b"(x) 42");
+        assert!(e.call(0x005b_1ba0, &[2, p, l, d]).bool());
+        assert_eq!(
+            e.mem.bytes(l + 0x20c, e.mem.u32(l + 0x40c)),
+            vec![2, 0, 0xff, 0xff, 0x6e, 42, 0, 0, 0]
+        );
+        assert_eq!(
+            CALLS.with(|c| c.borrow().clone()),
+            vec![vec![l, d, p, 0], vec![l, d, p, 1]]
+        );
+        let mut e = rig();
+        let d = data(&mut e);
+        let p = parameters(&mut e, &[(1, 0)]);
+        e.on_site_for_test(0x005b_1c65, |_, _| Some(0));
+        let l = line(&mut e, 1, 0x1000, b"(x");
+        assert!(!e.call(0x005b_1ba0, &[1, p, l, d]).bool(), "a syntax error");
+    }
+
     #[test]
     fn get_next_word_reads_plain_quoted_and_reference_words() {
         let mut e = rig();
@@ -4016,6 +4126,45 @@ mod n045_tests {
         e.call_log = Some(vec![]);
         assert_eq!(e.call(0x005b_1570, &[0, d, number, t, out]).u32(), 0);
         assert_eq!(errors(&e), vec![TEXT_UNKNOWN_COMMAND]);
+    }
+
+    /// Seam 005B17DD: before a command's compile function runs on the line on the stack, asked
+    /// with that line (holding the rest of the text, its command word +0x410 left 0 as the exe
+    /// leaves it) and the command's opcode; what a handler writes there the compile sees.
+    #[test]
+    fn replace_variables_and_functions_names_the_nested_command() {
+        use std::cell::RefCell;
+        thread_local! {
+            static SEEN: RefCell<Vec<(u32, Vec<u8>, u32)>> = const { RefCell::new(Vec::new()) };
+        }
+        fn seen(e: &mut Engine, w: &[u32]) -> Option<u32> {
+            let entry = (w[1], e.mem.cstr(w[0] + 4), e.mem.u32(w[0] + 0x410));
+            SEEN.with(|s| s.borrow_mut().push(entry));
+            e.mem.set_u32(w[0] + 0x410, w[1]);
+            None
+        }
+        fn compile_sees(e: &mut Engine, a: &[u32]) -> Ret {
+            let entry = (0, vec![], e.mem.u32(a[2] + 0x410));
+            SEEN.with(|s| s.borrow_mut().push(entry));
+            ret(1)
+        }
+        let mut e = rig();
+        let d = data(&mut e);
+        command(&mut e, b"GetV", 0x1000);
+        let p = parameters(&mut e, &[(1, 1)]);
+        e.mem.set_u16(SCRIPT_COMMANDS + 0x12, 1);
+        e.mem.set_u32(SCRIPT_COMMANDS + 0x14, p);
+        e.mem.set_u32(SCRIPT_COMMANDS + 0x1c, 0x0103_f000);
+        e.register(0x0103_f000, compile_sees);
+        e.on_site_for_test(0x005b_17dd, seen);
+        let t = text(&mut e, b"GetV 7");
+        let out = e.mem.alloc(0x40);
+        let number = e.mem.alloc(4);
+        assert_ne!(e.call(0x005b_1570, &[0, d, number, t, out]).u32(), 0);
+        assert_eq!(
+            SEEN.with(|s| s.borrow().clone()),
+            vec![(0x1000, b" 7".to_vec(), 0), (0, vec![], 0x1000)]
+        );
     }
 
     #[test]

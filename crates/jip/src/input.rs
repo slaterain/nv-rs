@@ -7,8 +7,8 @@
 //! own function (`HookXInput`), which every game read of the pad goes through: `Controls::Poll`
 //! (`00a23010`) and the interface's reads. The thunk is one `jmp [00fdf394]`, the only use of
 //! that import slot, and the port registers its own forwarding of `XInputGetState` at the slot
-//! (`engine-core`'s platform layer, which today answers "no controller"; the thunk itself is
-//! reached through the port's resolver). So here JIP's hook is a wrap at the slot
+//! (the platform layer's `engine_platform::xinput`, which passes the system's own pads through;
+//! the thunk itself is reached through the port's resolver). So here JIP's hook is a wrap at the slot
 //! ([`install`]), in front of the forwarding: every game read goes through it, as through JIP's
 //! jump at the thunk, and there is no second reader of the pad. JIP calls `XInputGetStateEx` (ordinal 100, which also reports the
 //! guide button); the forwarding is plain `XInputGetState`, so the guide button is never seen and
@@ -282,6 +282,16 @@ pub fn dead_zone_rs(e: &mut Engine) -> i32 {
     slot(e).dead_zone_rs.load(Relaxed)
 }
 
+/// Sets `s_deadZoneLS` (`SetDeadZoneLS`).
+pub fn set_dead_zone_ls(e: &mut Engine, value: i32) {
+    slot(e).dead_zone_ls.store(value, Relaxed);
+}
+
+/// Sets `s_deadZoneRS` (`SetDeadZoneRS`).
+pub fn set_dead_zone_rs(e: &mut Engine, value: i32) {
+    slot(e).dead_zone_rs.store(value, Relaxed);
+}
+
 /// A plain copy of the state, for the tests: [`state`] gives one that is written back whole when
 /// it goes (`state(&mut e).mods.button_skip = 0;`).
 #[cfg(any(test, feature = "test-support"))]
@@ -551,9 +561,9 @@ pub fn xi_control_pressed(e: &Engine, pad: &Pad, control: u32, dead_zone: i32) -
         ctrl::LT => pad.left_trigger != 0,
         ctrl::RT => pad.right_trigger != 0,
         ctrl::LS_UP => i32::from(pad.thumb_ly) > dead_zone,
-        ctrl::LS_DOWN => i32::from(pad.thumb_ly) < -dead_zone,
+        ctrl::LS_DOWN => i32::from(pad.thumb_ly) < dead_zone.wrapping_neg(),
         ctrl::LS_RIGHT => i32::from(pad.thumb_lx) > dead_zone,
-        ctrl::LS_LEFT => i32::from(pad.thumb_lx) < -dead_zone,
+        ctrl::LS_LEFT => i32::from(pad.thumb_lx) < dead_zone.wrapping_neg(),
         _ => false,
     }
 }

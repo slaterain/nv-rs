@@ -96,6 +96,9 @@ pub trait Env {
     fn script_type(&mut self) -> Option<u16>;
     /// `g_scriptCommands.GetByOpcode(opcode)`.
     fn command_by_opcode(&mut self, opcode: u16) -> Option<CmdInfo>;
+    /// Whether the fix row `xnvse.extract_args` is on (the port's, not xNVSE's: without it a game
+    /// command's argument written as an expression is refused, as the game's reader cannot read it).
+    fn game_inline(&mut self) -> bool;
     /// `Compiler::ResolveObjReference(name, add)`: the form `name` names (`player`: the player's
     /// reference); a reference that is not persistent is a `std::runtime_error` nothing catches.
     /// Its index among the compiling script's references (from 1), added at the end when new

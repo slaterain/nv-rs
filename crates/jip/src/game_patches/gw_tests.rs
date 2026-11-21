@@ -39,7 +39,9 @@ fn world(installed: bool, row: bool) -> Engine {
             e.map(page, 0x1000);
         }
     }
-    e.register(GET_BY_TYPE, |e, a| {
+    // The game's own `BaseExtraList::GetExtraData`, by its address (not the handler's constant), so a wrong address
+    // in the handler reaches nothing here, as it stopped the game.
+    e.register(0x0041_0220, |e, a| {
         let n = e.mem.u32(LOG);
         e.mem.set_u32(LOG, n + 1);
         e.mem.set_u32(LOG + 4, a[0]);

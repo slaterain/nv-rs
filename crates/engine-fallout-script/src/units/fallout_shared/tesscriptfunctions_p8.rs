@@ -2070,7 +2070,10 @@ pub fn script_is_image_space_active_function(e: &mut Engine, a: ScriptArgs) -> b
     } else {
         MSG_IMAGE_SPACE_ACTIVE
     };
-    e.call(CONSOLE_PRINT, &args![text]);
+    // lStewieAl's Tweaks' row S0056 (`0x5DE5C9`, `0x5DE5D8`): printed only from the console.
+    if stewie_print_allowed(e) {
+        e.call(CONSOLE_PRINT, &args![text]);
+    }
     true
 }
 
@@ -5388,6 +5391,34 @@ mod tests {
         assert_eq!(calls(&e, CONSOLE_PRINT), vec![vec![MSG_IMAGE_SPACE_ACTIVE]]);
         // The two outputs: the world space (0) and a 1.0 float.
         assert_eq!(calls(&e, PARSE_PARAMETERS)[0].len(), 9);
+    }
+
+    /// lStewieAl's Tweaks' row S0056: with the row the line prints only while a console line runs;
+    /// the result is the same either way.
+    #[test]
+    fn s0056_is_image_space_active_prints_only_from_the_console() {
+        for (on, line, want) in [(false, false, 1), (true, false, 0), (true, true, 1)] {
+            let mut e = engine();
+            let a = command(&mut e, 0);
+            image_space_list(&mut e, &[Some(Some(9))]);
+            parse_gives(&mut e, true, &[9]);
+            let open = 0x011d_ea2e;
+            if !e.mem.is_mapped(open) {
+                e.map(open & !0xfff, 0x1000);
+            }
+            e.mem.set_u8(open, 1);
+            let tls = e.tls();
+            e.mem.set_u8(tls + 0x268, u8::from(line));
+            e.set_stewie(stewie::PRINTS_ONLY_FROM_CONSOLE, on);
+            start_log(&mut e);
+            assert!(e.call(0x005d_e4a0, &args![a]).bool());
+            assert_eq!(e.mem.f64(a.result.addr()), 1.0);
+            assert_eq!(
+                calls(&e, CONSOLE_PRINT).len(),
+                want,
+                "row {on}, line {line}"
+            );
+        }
     }
 
     #[test]

@@ -95,8 +95,8 @@ pub mod d3dx;
 #[cfg(windows)]
 pub mod d3dxreal;
 pub mod dinput;
-pub mod ds3d;
-pub mod dsfx;
+pub use ds_mix::ds3d;
+pub use ds_mix::dsfx;
 pub mod dshow;
 pub mod dsound;
 pub mod files;
@@ -104,18 +104,19 @@ pub mod host_paths;
 pub mod ini;
 pub mod library;
 pub mod machine_table;
-pub mod mixer;
+pub use ds_mix::mixer;
 pub mod mmio;
 pub mod mod_files;
 pub mod nls;
 pub mod nvapi;
 pub mod process;
-pub mod resampler;
-pub mod sound_out;
-pub mod speakers;
+pub use ds_mix::resampler;
+pub use ds_mix::sound_out;
+pub use ds_mix::speakers;
 pub mod time;
 pub mod vorbisfile;
 pub mod window;
+pub mod xinput;
 pub mod zone;
 
 /// This layer's state in each engine (`Kernel::platform`; made by [`LAYER`]'s `new_state`).
@@ -136,6 +137,8 @@ pub struct State {
     pub process: process::Process,
     /// Mods' own files and the port's folder that keeps them ([`mod_files`]).
     pub mod_files: mod_files::ModFiles,
+    /// The pads behind the game's XInput ([`xinput`]): none until the host puts the system's in.
+    pub pads: xinput::Pads,
 }
 
 /// What runs before the platform layer ends the process itself, which it does in one place: the
@@ -375,6 +378,17 @@ fn layer_imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             "USER32.dll",
             "GetAsyncKeyState",
             entry!(0, dinput::get_async_key_state(u32) -> u32).1,
+        ),
+        // The game imports XInput by ordinal: 2 `XInputGetState`, 3 `XInputSetState`.
+        (
+            "XINPUT1_3.dll",
+            "#2",
+            entry!(0, xinput::xinput_get_state(u32, Ptr) -> u32).1,
+        ),
+        (
+            "XINPUT1_3.dll",
+            "#3",
+            entry!(0, xinput::xinput_set_state(u32, Ptr) -> u32).1,
         ),
         (
             "USER32.dll",

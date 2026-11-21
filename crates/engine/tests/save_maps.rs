@@ -94,9 +94,15 @@ thread_local! {
 const WORLD: u32 = 0x000d_a726;
 const SLOT_FNS: u32 = 0x00fe_0000;
 
+/// A place's float inside grid square `square` (the square's i32 bits): 100 units in from its
+/// corner, so below zero too the place rounds and shifts back to its square.
+fn in_square(square: u32) -> f32 {
+    (square as i32 as f32) * 4096.0 + 100.0
+}
+
 /// A form object: vtable with every slot at `SLOT_FNS + slot`, type at +4, id at +0xc, the detach
-/// time at +0x20, grid x and y at +0x24 and +0x28, a place at +0x2c (floats in that grid square)
-/// and its worldspace at +0x30.
+/// time at +0x20, grid x and y at +0x24 and +0x28 (i32 bits), a place at +0x2c (floats in that grid
+/// square) and its worldspace at +0x30.
 fn form(e: &mut Engine, vtable: u32, id: u32, f: Form, world: u32) -> u32 {
     let o = e.mem.alloc(0x40);
     e.mem.set_u32(o, vtable);
@@ -106,8 +112,8 @@ fn form(e: &mut Engine, vtable: u32, id: u32, f: Form, world: u32) -> u32 {
     e.mem.set_u32(o + 0x24, f.x);
     e.mem.set_u32(o + 0x28, f.y);
     let place = e.mem.alloc(12);
-    e.mem.set_f32(place, (f.x as f32) * 4096.0 + 100.0);
-    e.mem.set_f32(place + 4, (f.y as f32) * 4096.0 + 100.0);
+    e.mem.set_f32(place, in_square(f.x));
+    e.mem.set_f32(place + 4, in_square(f.y));
     e.mem.set_u32(o + 0x2c, place);
     e.mem.set_u32(o + 0x30, world);
     o
@@ -273,16 +279,27 @@ fn cleanup_world(e: &mut Engine, w: World) -> u32 {
         e.mem.set_u32(change + 4, block);
     };
     let side = (w.cells as f64).sqrt().ceil() as u32;
+    // Cell `c`'s grid square (i32 bits). About half of the Mojave's grid is below zero: x runs
+    // from -side/2 in every row and the expired cells' rows straddle y = 0, so expired cells and
+    // their unexpired neighbours, with references, lie on both sides of zero (packed keys with the
+    // top bit of either half set).
+    let rows_expired = w.expired.div_ceil(side);
+    let grid = move |c: u32| -> (u32, u32) {
+        let x = (c % side) as i32 - (side / 2) as i32;
+        let y = (c / side) as i32 - (rows_expired / 2) as i32;
+        (x as u32, y as u32)
+    };
     let mut cells_made = vec![];
     let world_of = |c: u32| worlds[(c % w.worlds) as usize];
     for c in 0..w.cells {
         let id = 0x0010_0000 + c;
         let detached = if c < w.expired { 1_000 } else { 99_990 };
+        let (x, y) = grid(c);
         let f = Form {
             kind: 0x39,
             detached,
-            x: c % side,
-            y: c / side,
+            x,
+            y,
         };
         let cell = form(e, vtable, id, f, world_of(c));
         if c >= w.buffered && c < w.buffered + w.interior {
@@ -310,11 +327,12 @@ fn cleanup_world(e: &mut Engine, w: World) -> u32 {
         } else {
             (w.expired + r % (w.cells - w.expired), 4)
         };
+        let (x, y) = grid(c);
         let f = Form {
             kind: 0x3a,
             detached: 0,
-            x: c % side,
-            y: c / side,
+            x,
+            y,
         };
         let reference = form(e, vtable, id, f, world_of(c));
         // Placed by its parent cell: always in an interior cell, every other one in an exterior cell
@@ -326,8 +344,8 @@ fn cleanup_world(e: &mut Engine, w: World) -> u32 {
         let change = add(e, id, flags);
         if r < w.buffered {
             let area = WORLD + c % w.worlds;
-            let x = ((f.x as f32) * 4096.0 + 100.0).to_bits();
-            let y = ((f.y as f32) * 4096.0 + 100.0).to_bits();
+            let x = in_square(f.x).to_bits();
+            let y = in_square(f.y).to_bits();
             stored(e, change, 0x3a, &[area, 0, 0, 0, 0, x, y]);
         } else {
             forms.insert(id, reference);
@@ -350,7 +368,7 @@ fn cleanup_world(e: &mut Engine, w: World) -> u32 {
         // both key words.
         let first_exterior = w.buffered + w.interior;
         for c in first_exterior..w.expired.min(first_exterior + 6) {
-            let (x, y) = (c % side, c / side);
+            let (x, y) = grid(c);
             let id = 0x0011_0000 + c;
             let world = worlds[((c + 1) % w.worlds) as usize];
             let f = Form {
@@ -369,7 +387,12 @@ fn cleanup_world(e: &mut Engine, w: World) -> u32 {
                 forms.insert(rid, r);
             }
         }
-        // An unexpired exterior cell at grid (0, 0) of the next worldspace (cell 0 is in the first).
+        // An unexpired exterior cell at grid (0, 0) (packed key 0) of the worldspace after that of
+        // the cell there (`origin_cell`: expired in every world the tests make; an interior one in
+        // the Diff's larger world).
+        let origin_cell = (rows_expired / 2) * side + side / 2;
+        assert_eq!(grid(origin_cell), (0, 0));
+        let origin_world = worlds[((origin_cell + 1) % w.worlds) as usize];
         let origin = form(
             e,
             vtable,
@@ -380,11 +403,11 @@ fn cleanup_world(e: &mut Engine, w: World) -> u32 {
                 x: 0,
                 y: 0,
             },
-            worlds[1 % w.worlds as usize],
+            origin_world,
         );
         add(e, 0x0011_ffff, 0x4000_0000);
         forms.insert(0x0011_ffff, origin);
-        let r = reference_at(e, 0x0021_ffff, 0, 0, worlds[1 % w.worlds as usize], 0);
+        let r = reference_at(e, 0x0021_ffff, 0, 0, origin_world, 0);
         add(e, 0x0021_ffff, 4);
         forms.insert(0x0021_ffff, r);
         // An interior cell that has not expired, with references placed by it (flags 4 and 0xc)
@@ -415,9 +438,9 @@ fn cleanup_world(e: &mut Engine, w: World) -> u32 {
         // Created references (0xff ids) in an expired exterior cell, live and stored, flags 4 and
         // 0xc: the exe passes over them.
         let c = first_exterior;
-        let (x, y) = (c % side, c / side);
-        let fx = ((x as f32) * 4096.0 + 100.0).to_bits();
-        let fy = ((y as f32) * 4096.0 + 100.0).to_bits();
+        let (x, y) = grid(c);
+        let fx = in_square(x).to_bits();
+        let fy = in_square(y).to_bits();
         for (k, flags) in [4u32, 0xc].into_iter().enumerate() {
             let rid = 0xff00_1000 + k as u32;
             let r = reference_at(e, rid, x, y, world_of(c), 0);
@@ -588,6 +611,24 @@ fn typed_cleanup_expired_data_matches_the_translation() {
         150,
         "one insert per expired cell"
     );
+    // Expired cells below and above zero on both axes: packed keys (x in the high half, y in the
+    // low) with the top bit of either half set and clear.
+    let halves: Vec<(u32, u32)> = exe_log
+        .iter()
+        .filter(|(a, _)| *a == 0x0084_b7c0)
+        .map(|(_, w)| (w[2] >> 16, w[2] & 0xffff))
+        .collect();
+    for (axis, half) in [("x", 0), ("y", 1)] {
+        let of = |h: &(u32, u32)| if half == 0 { h.0 } else { h.1 };
+        assert!(
+            halves.iter().any(|h| of(h) >= 0x8000),
+            "an expired cell with {axis} below zero"
+        );
+        assert!(
+            halves.iter().any(|h| (1..0x8000).contains(&of(h))),
+            "an expired cell with {axis} above zero"
+        );
+    }
     // 0x0013_0000 (detached at 0) and 0x0013_0001 (no form) ask no expiry limit.
     assert_eq!(
         count(&exe_log, 0x0052_6100),
@@ -704,10 +745,24 @@ fn cleanup_expired_data_diff() {
     .assert_same();
 }
 
+/// The queue items' high words: small ones and ones with the top bit set (a packed key whose x is
+/// below zero).
+const ITEM_HIGHS: [u32; 6] = [0, 1, 0xffff_0003, 0x8000_0000, 4, 0xffff_ffff];
+
+/// The other slots' hash: the bucket after the exe's (`(low + 1) % size`), an answer the exe's
+/// `0084b930` never gives.
+fn other_hash(low: u32, size: u32) -> u32 {
+    low.wrapping_add(1) % size
+}
+
 /// A queue as the clean-up builds it (the exe's base constructor's layout: vtable, bucket count,
-/// bucket array, item count) of `size` buckets, holding six items keyed (0x1000 + i % 3, i), value
-/// 50 + i; with `own_slots` its vtable's hash and key compare are other functions (stand-ins that
-/// answer as the exe's do), so the insert asks them as the exe asks.
+/// bucket array, item count) of `size` buckets, holding six items keyed (0x1000 + i % 3,
+/// `ITEM_HIGHS[i]`), value 50 + i, each in the bucket the queue's hash gives. With `own_slots` its
+/// vtable's hash, key compare and set value are other functions whose answers the exe's never give:
+/// the hash picks the next bucket, the compare matches on the high words only (so (0x1000, 1)
+/// equals (0x1001, 1)), and the set value, after the exe's, moves the bucket array to a new block
+/// (zeroing the old one), as a plugin's rehashing map might. The insert must use those answers and
+/// read the bucket array again after its calls, as the exe does (`0084b872`, `0084b883`).
 fn queue_world(e: &mut Engine, size: u32, own_slots: bool) -> u32 {
     heap(e);
     let vtable = e.mem.alloc(0x20);
@@ -715,7 +770,7 @@ fn queue_world(e: &mut Engine, size: u32, own_slots: bool) -> u32 {
         0x0084_b540u32,
         if own_slots { 0x00fd_0004 } else { 0x0084_b930 },
         if own_slots { 0x00fd_0008 } else { 0x0084_b950 },
-        0x0084_b990,
+        if own_slots { 0x00fd_000c } else { 0x0084_b990 },
         0x0045_34f0,
         0x0084_ba50,
         0x0084_ba70,
@@ -723,9 +778,21 @@ fn queue_world(e: &mut Engine, size: u32, own_slots: bool) -> u32 {
     for (i, s) in slots.iter().enumerate() {
         e.mem.set_u32(vtable + 4 * i as u32, *s);
     }
-    e.register(0x00fd_0004, |e, a| ret(a[1] % e.mem.u32(a[0] + 4)));
-    e.register(0x00fd_0008, |_, a| {
-        ret(u32::from(a[1] == a[3] && a[2] == a[4]))
+    e.register(0x00fd_0004, |e, a| {
+        ret(other_hash(a[1], e.mem.u32(a[0] + 4)))
+    });
+    e.register(0x00fd_0008, |_, a| ret(u32::from(a[2] == a[4])));
+    e.register(0x00fd_000c, |e, a| {
+        e.call(0x0084_b990, &args![a[0], a[1], a[2], a[3], a[4]]);
+        let me = a[0];
+        let bytes = e.mem.u32(me + 4) * 4;
+        let old = e.mem.u32(me + 8);
+        let moved = e.mem.alloc(bytes);
+        let buckets = e.mem.bytes(old, bytes);
+        e.mem.write(moved, &buckets);
+        e.mem.write(old, &vec![0u8; bytes as usize]);
+        e.mem.set_u32(me + 8, moved);
+        Ret::default()
     });
     let queue = e.mem.alloc(0x10);
     let table = e.mem.alloc(size * 4);
@@ -733,9 +800,14 @@ fn queue_world(e: &mut Engine, size: u32, own_slots: bool) -> u32 {
     e.mem.set_u32(queue + 4, size);
     e.mem.set_u32(queue + 8, table);
     for i in 0..6u32 {
-        let (low, high) = (0x1000 + i % 3, i);
+        let (low, high) = (0x1000 + i % 3, ITEM_HIGHS[i as usize]);
         let item = e.mem.alloc(0x18);
-        let bucket = table + (low % size) * 4;
+        let index = if own_slots {
+            other_hash(low, size)
+        } else {
+            low % size
+        };
+        let bucket = table + index * 4;
         let head = e.mem.u32(bucket);
         e.mem.set_u32(item, head);
         e.mem.set_u32(item + 8, low);
@@ -749,7 +821,7 @@ fn queue_world(e: &mut Engine, size: u32, own_slots: bool) -> u32 {
 
 /// The queue's typed insert, hash and key compare against their translations: keys already there
 /// (their value replaced) and new ones (an item made, filled, put at its bucket's head, counted), one
-/// bucket for all and several, the exe's slots and other ones.
+/// bucket for all and several, high words with the top bit set, the exe's slots and other ones.
 #[test]
 fn expiry_queue_functions_diff() {
     use engine_core::typed::diff::{Diff, Input};
@@ -764,8 +836,8 @@ fn expiry_queue_functions_diff() {
     .inputs(&[
         Input::Of(&[1, 3, 37]),
         Input::Of(&[0, 1]),
-        Input::Of(&[0x1000, 0x1001, 0x2000]),
-        Input::Of(&[0, 1, 4, 99]),
+        Input::Of(&[0x1000, 0x1001, 0x1002, 0x2000, u32::MAX]),
+        Input::Of(&[0, 1, 4, 99, 0xffff_0003, 0x8000_0000, 0xffff_ffff]),
     ])
     .setup(|e, case| {
         let queue = queue_world(e, case.word(0), case.word(1) == 1);
@@ -780,8 +852,8 @@ fn expiry_queue_functions_diff() {
     .family(&dispatch::DISPATCH)
     .inputs(&[
         Input::Of(&[1, 37, 4999]),
-        Input::Of(&[0, 36, 37, 0xda726, u32::MAX]),
-        Input::Of(&[0, 7]),
+        Input::Of(&[0, 36, 37, 0xda726, 0x8000_0000, u32::MAX]),
+        Input::Of(&[0, 7, 0x8000_0000, 0xffff_ffff]),
     ])
     .setup(|e, case| {
         let queue = e.mem.alloc(0x10);
@@ -790,16 +862,19 @@ fn expiry_queue_functions_diff() {
     })
     .run()
     .assert_same();
+    const WORDS: &[u32] = &[0, 1, 0xffff_0003, 0x8000_0000, 0xffff_ffff];
     Diff::new(engine_core::entry!(
         0x0084_b950,
         dispatch::saveload::queue_keys_equal(Ptr<_>, u32, u32, u32, u32) -> bool
     ))
     .family(&dispatch::DISPATCH)
+    // All 625 combinations (the default cap samples above 512).
+    .max_cases(625)
     .inputs(&[
-        Input::Of(&[0, 1]),
-        Input::Of(&[0, 1]),
-        Input::Of(&[0, 1]),
-        Input::Of(&[0, 1]),
+        Input::Of(WORDS),
+        Input::Of(WORDS),
+        Input::Of(WORDS),
+        Input::Of(WORDS),
     ])
     .setup(|e, case| {
         let queue = e.mem.alloc(0x10);

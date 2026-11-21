@@ -1,6 +1,6 @@
 #!/bin/sh
-# Builds a Linux or macOS preview package: one .tar.gz a player can extract and start with
-# ./play.sh, without building anything. The file list below is the whole package: nothing else can
+# Builds a Linux or macOS preview package: one .tar.gz a player can extract and start with ./nv-rs
+# (the launcher) or ./play.sh, without building anything. The file list below is the whole package: nothing else can
 # get in, and it holds no game files, no saves, no reports, no machine tables, no debug files. The
 # same rules as the Windows package (scripts/package-playtest.ps1).
 #
@@ -115,6 +115,9 @@ crates=$(mktemp) || fail "no temporary file"
 cargo tree --locked --target "$triple" -p nv-viewer -e normal --prefix none --format '{p}' >"$crates" ||
     fail "cargo tree did not list the program's crates"
 [ -s "$crates" ] || fail "cargo tree listed no crates for the program"
+# The launcher's crates too (nv-rs, crates/nv-launcher).
+cargo tree --locked --target "$triple" -p nv-launcher -e normal --prefix none --format '{p}' >>"$crates" ||
+    fail "cargo tree did not list the launcher's crates"
 licences=0
 sh scripts/package-licences.sh "$crates" || licences=1
 rm -f -- "$crates"
@@ -132,12 +135,13 @@ if [ "$use_built" = 0 ]; then
     export RUSTFLAGS
     CARGO_TARGET_DIR=$target
     export CARGO_TARGET_DIR
-    cargo build --locked --profile "$profile" -p nv-viewer || fail "the game program did not build"
+    cargo build --locked --profile "$profile" -p nv-viewer -p nv-launcher || fail "the game program or the launcher did not build"
     unset RUSTFLAGS
     cargo build --release --locked --manifest-path scripts/package-check/Cargo.toml || fail "package-check did not build"
 fi
 [ -f "$checker" ] || checker=$checker.exe
 [ -f "$programs/nv-viewer" ] || fail "no program at $programs/nv-viewer (build it, or leave out --use-built)"
+[ -f "$programs/nv-rs" ] || fail "no launcher at $programs/nv-rs (build it, or leave out --use-built)"
 [ -f "$checker" ] || fail "no package-check at $target/release (build it, or leave out --use-built)"
 
 name=nv-rs-preview-$system
@@ -150,8 +154,10 @@ if [ -e "$stage" ] || [ -e "$archive" ]; then
 fi
 mkdir -p -- "$stage/app" "$stage/licenses"
 
-# Our own program and the start script.
+# Our own programs and the start script: the launcher (nv-rs, the terminal window; it runs play.sh)
+# beside play.sh (the plain-terminal way in), the game program in app.
 cp -- "$programs/nv-viewer" "$stage/app/nv-viewer"
+cp -- "$programs/nv-rs" "$stage/nv-rs"
 cp -- distribution/unix/play.sh "$stage/play.sh"
 # The READ ME play.sh --mods puts in the mods folder it makes in nv-rs's own folder.
 cp -- "distribution/unix/mods READ ME.txt" "$stage/app/mods READ ME.txt"
@@ -185,7 +191,7 @@ for file in "$stage/READ ME.txt" "$stage/play.sh" "$stage/app/libraries.txt" "$s
 done
 find "$stage" -type d -exec chmod 755 {} +
 find "$stage" -type f -exec chmod 644 {} +
-chmod 755 "$stage/play.sh" "$stage/app/nv-viewer"
+chmod 755 "$stage/play.sh" "$stage/nv-rs" "$stage/app/nv-viewer"
 
 # What the program needs of the system it starts on.
 case $system in
@@ -199,6 +205,7 @@ macos-*)
     ;;
 esac
 sha=$(sha256 "$stage/app/nv-viewer" | cut -d ' ' -f 1)
+launcher_sha=$(sha256 "$stage/nv-rs" | cut -d ' ' -f 1)
 # The source link in every mode: any archive that gets out names its source.
 source="Source: https://github.com/slaterain/nv-rs/tree/$commit"
 # Without the game (every GitHub build): said as it is, with what happens before publishing.
@@ -216,7 +223,8 @@ if [ -n "$game" ]; then
 fi
 {
     printf '%s\n' "nv-rs $system preview $version" "Source commit: $commit" \
-        "app/nv-viewer SHA256: $sha" "Platform: $system ($triple), Cargo profile $profile" "$needs" \
+        "app/nv-viewer SHA256: $sha" "nv-rs SHA256: $launcher_sha" \
+        "Platform: $system ($triple), Cargo profile $profile" "$needs" \
         "$built" "$checked." "$source"
     [ -z "$notes" ] || printf '\n%s' "$notes"
 } >"$stage/BUILD.txt"
@@ -295,7 +303,7 @@ unlisted=$(cd -- "$out" && find "$name" -type f | while IFS= read -r file; do
     grep -qxF -e "$file" "$listing" || printf '%s ' "$file"
 done)
 [ -z "$unlisted" ] || { rm -f -- "$listing"; fail_archive "the archive lacks: $unlisted"; }
-for file in "$name/play.sh" "$name/app/nv-viewer"; do
+for file in "$name/play.sh" "$name/nv-rs" "$name/app/nv-viewer"; do
     grep -qxF -e "$file" "$listing" || { rm -f -- "$listing"; fail_archive "the archive has no $file"; }
 done
 rm -f -- "$listing"

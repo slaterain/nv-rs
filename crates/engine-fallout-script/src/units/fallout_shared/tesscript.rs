@@ -3407,6 +3407,14 @@ fn parse_reference_parameter(
 /// `r` marker or a rejected object answers false (an unimplemented
 /// referenced-object type is logged first); true when every parameter was
 /// read.
+///
+/// Seam `005ACD0D`, the loop's head for each parameter (words: the data, the
+/// address of the offset), asked only when the parameter's first two bytes
+/// are `0xFFFF` (xNVSE's inline expression, which the exe's read cannot take;
+/// no plain parameter starts so: no marker byte is `0xFF`, a string's length
+/// is at most 0x200, the 16-bit codes come from short tables). An answer ends
+/// the read (false) for the caller to read the command again (xNVSE's
+/// reader, `crates/nvse`'s wrap); without `0xFFFF` the read is the exe's.
 #[allow(clippy::too_many_arguments)]
 pub fn script_parse_parameters(
     e: &mut Engine,
@@ -3426,6 +3434,11 @@ pub fn script_parse_parameters(
     let count = take_i16(e, code, offset);
     let mut index: i16 = 0;
     while index < count {
+        if e.mem.u16(code.wrapping_add(e.mem.u32(offset))) == 0xffff
+            && e.site(0x005a_cd0d, &[code, offset]).is_some()
+        {
+            return false;
+        }
         let entry = parameters.wrapping_add((index as i32).wrapping_mul(12) as u32);
         let parameter = e.mem.u32(entry.wrapping_add(4));
         let is_reference = e
@@ -7623,6 +7636,104 @@ mod tests {
         assert_eq!(e.mem.u8(cells[5]), 0x34);
         assert_eq!(e.mem.i32(cells[6]), -9);
         assert_eq!(e.mem.u32(offset) as usize, bytes.len());
+    }
+
+    /// Seam `005ACD0D` (xNVSE's inline expression): asked only at a parameter whose first two
+    /// bytes are `0xFFFF`, with the data and the offset's address, the offset at that parameter;
+    /// an answer ends the read there (false), the parameters before it stored. Plain parameters
+    /// (a string, a byte, a short of -2, operands, the 16-bit codes) never ask it.
+    #[test]
+    fn parse_parameters_asks_the_inline_seam_only_at_0xffff() {
+        use std::cell::RefCell;
+        thread_local! {
+            static ASKED: RefCell<Vec<(u32, u32, u32)>> = const { RefCell::new(Vec::new()) };
+        }
+        fn answer(e: &mut Engine, w: &[u32]) -> Option<u32> {
+            let at = e.mem.u32(w[1]);
+            ASKED.with(|a| a.borrow_mut().push((w[0], w[1], at)));
+            Some(1)
+        }
+        let mut e = operand_engine(1);
+        e.on_site_for_test(0x005a_cd0d, answer);
+        let types = [0, 8, 5, 2, 1, 0x20, 0xa];
+        let parameters = parameter_list(&mut e, &types);
+        let mut bytes = vec![7u8, 0];
+        bytes.extend_from_slice(&[3, 0, b'a', b'b', b'c']);
+        bytes.push(0x2a);
+        bytes.extend_from_slice(&(-2i16).to_le_bytes());
+        bytes.push(b'n');
+        bytes.extend_from_slice(&3i32.to_le_bytes());
+        bytes.push(b'n');
+        bytes.extend_from_slice(&(-5i32).to_le_bytes());
+        bytes.extend_from_slice(&0x1234u16.to_le_bytes());
+        bytes.extend_from_slice(&(-9i16).to_le_bytes());
+        let (code, offset) = code_with(&mut e, &bytes);
+        let this = e.new_object::<Script>();
+        let locals = locals(&mut e);
+        let cells: Vec<u32> = (0..7).map(|_| e.mem.alloc(8)).collect();
+        assert!(parse(
+            &mut e,
+            parameters,
+            code,
+            offset,
+            this.addr(),
+            locals.addr(),
+            &cells
+        ));
+        assert_eq!(
+            ASKED.with(|a| a.borrow().clone()),
+            vec![],
+            "plain: never asked"
+        );
+        // A string, then an inline expression where the float stands.
+        let parameters = parameter_list(&mut e, &[0, 2, 1]);
+        let bytes = [
+            3, 0, 3, 0, b'x', b'y', b'z', 0xff, 0xff, 2, 0, b'B', 1, b'n', 1, 0, 0, 0,
+        ];
+        let (code, offset) = code_with(&mut e, &bytes);
+        let cells: Vec<u32> = (0..3).map(|_| e.mem.alloc(8)).collect();
+        assert!(!parse(
+            &mut e,
+            parameters,
+            code,
+            offset,
+            this.addr(),
+            locals.addr(),
+            &cells
+        ));
+        assert_eq!(
+            ASKED.with(|a| a.borrow().clone()),
+            vec![(code, offset, 7)],
+            "asked once, at the expression"
+        );
+        assert_eq!(
+            e.mem.cstr(cells[0]),
+            b"xyz".to_vec(),
+            "the string before it stored"
+        );
+        assert_eq!(e.mem.u32(offset), 7, "the offset left at the expression");
+        // An object parameter (its type's table byte 1, as `AddItem`'s item or `MoveTo`'s
+        // reference) starting `0xFFFF`: asked before its `r` marker is read, the read stopped
+        // with the offset still at the expression (the new language writes every argument so).
+        mark_reference_types(&mut e, &[0xe]);
+        let parameters = parameter_list(&mut e, &[0xe]);
+        let (object_code, object_offset) = code_with(&mut e, &[1, 0, 0xff, 0xff, 4, 0, b'B', 1]);
+        let cell = e.mem.alloc(4);
+        assert!(!parse(
+            &mut e,
+            parameters,
+            object_code,
+            object_offset,
+            this.addr(),
+            locals.addr(),
+            &[cell]
+        ));
+        assert_eq!(
+            ASKED.with(|a| a.borrow().clone()),
+            vec![(code, offset, 7), (object_code, object_offset, 2)],
+            "asked at the object parameter"
+        );
+        assert_eq!(e.mem.u32(object_offset), 2, "no marker read");
     }
 
     #[test]

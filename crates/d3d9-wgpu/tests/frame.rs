@@ -78,6 +78,8 @@ static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
 struct Gpu {
     b: WgpuBackend,
     next: u32,
+    /// Every command run, as `NV_D3D9_RECORD` writes them ([`Gpu::recording`]).
+    rec: Option<Vec<u8>>,
     /// Held until the device is gone (fields drop in order: the backend first).
     _turn: std::sync::MutexGuard<'static, ()>,
 }
@@ -98,10 +100,11 @@ impl Gpu {
         Gpu::make(size, samples, None, env)
     }
 
-    /// As [`Gpu::new`], the device with its finishing and queue threads or (`false`) without, as
-    /// on a machine with fewer than four logical processors.
+    /// As [`Gpu::new`], the device with its finishing and queue threads (one finishing thread at
+    /// least, even on a machine with fewer than four logical processors: CI's macOS runner has
+    /// three) or (`false`) without, as on such a machine.
     fn with_threads(size: u32, samples: u32, threads: bool) -> Option<Gpu> {
-        Gpu::make_with(size, samples, None, &[], threads)
+        Gpu::make_with(size, samples, None, &[], threads, threads)
     }
 
     fn make(
@@ -110,7 +113,12 @@ impl Gpu {
         cache: Option<std::path::PathBuf>,
         env: &[(&str, &str)],
     ) -> Option<Gpu> {
-        Gpu::make_with(size, samples, cache, env, true)
+        Gpu::make_with(size, samples, cache, env, true, false)
+    }
+
+    /// As [`Gpu::new`], keeping every command it runs ([`Gpu::rec`]) from its `CreateDevice` on.
+    fn recording(size: u32, samples: u32) -> Option<Gpu> {
+        Gpu::make_full(size, samples, None, &[], true, false, true)
     }
 
     fn make_with(
@@ -119,9 +127,23 @@ impl Gpu {
         cache: Option<std::path::PathBuf>,
         env: &[(&str, &str)],
         threads: bool,
+        force: bool,
+    ) -> Option<Gpu> {
+        Gpu::make_full(size, samples, cache, env, threads, force, false)
+    }
+
+    fn make_full(
+        size: u32,
+        samples: u32,
+        cache: Option<std::path::PathBuf>,
+        env: &[(&str, &str)],
+        threads: bool,
+        force: bool,
+        record: bool,
     ) -> Option<Gpu> {
         // A failed test leaves the lock poisoned; the next one still takes its turn.
         let turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+        d3d9_wgpu::device::force_queue_threads_for_tests(force);
         for (name, value) in env {
             std::env::set_var(name, value);
         }
@@ -132,7 +154,7 @@ impl Gpu {
         }
         let present = words(&[size, size, A8R8G8B8, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0]);
         let back = words(&[BACK]);
-        b.execute(Cmd::CreateDevice {
+        let create = Cmd::CreateDevice {
             device: DEVICE,
             focus: 0,
             window: 0,
@@ -140,11 +162,18 @@ impl Gpu {
             present: Data::Bytes(&present),
             back_buffers: Data::Bytes(&back),
             depth_stencil: 0,
+        };
+        let rec = record.then(|| {
+            let mut r = d3d9_stream::wire::header().to_vec();
+            d3d9_stream::wire::encode(&create, &mut r);
+            r
         });
+        b.execute(create);
         for (name, _) in env {
             std::env::remove_var(name);
         }
         d3d9_wgpu::device::queue_threads_for_tests(true);
+        d3d9_wgpu::device::force_queue_threads_for_tests(false);
         if b.device().is_none() {
             eprintln!("no GPU adapter: the frame tests are skipped");
             return None;
@@ -152,6 +181,7 @@ impl Gpu {
         let mut g = Gpu {
             b,
             next: 0,
+            rec,
             _turn: turn,
         };
         for (surface, depth, format) in [(RT, false, A8R8G8B8), (DS, true, D24S8)] {
@@ -223,6 +253,9 @@ impl Gpu {
     }
 
     fn run(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+        if let Some(r) = &mut self.rec {
+            d3d9_stream::wire::encode(&cmd, r);
+        }
         self.b.execute(cmd)
     }
 
@@ -3684,6 +3717,634 @@ fn cuts_between_finished_encoders_keep_multisampled_colour_and_depth() {
     }
 }
 
+/// The card's own times (`NV_WGPU_GPU_TIMES`) off, the default: the device asks the driver for
+/// neither timestamp feature, and no timing is made, so no query set, no timestamp and no command
+/// of its own.
+#[test]
+fn the_gpu_times_off_make_nothing() {
+    let Some(mut g) = Gpu::new(4, 4) else {
+        return;
+    };
+    g.run(Cmd::CreateQuery {
+        device: DEVICE,
+        query: 0x2000,
+        kind: 9,
+    });
+    g.clear(3, 0, 1.0);
+    let _ = g.count(0x2000, |g| {
+        g.cover(0.5);
+        g.cover(0.5);
+    });
+    let _ = g.pixels();
+    let d = g.b.device().expect("the device");
+    assert_eq!(
+        d.timestamp_features(),
+        (false, false),
+        "neither timestamp feature asked for"
+    );
+    assert!(!d.gpu_times_on());
+    assert_eq!(d.gpu_time_totals(), None, "no timing, no query set");
+}
+
+/// The card's own times on: each kind of work the backend gives the card is timed in its own
+/// pairs: the game's draws (world), the occlusion count's pass, a multisampled target's resolve,
+/// and (where the driver writes timestamps between passes) the copies: an upload among the draws
+/// and the read-back. Off where the adapter has no timestamps (said, skipped); where it has them
+/// the times must be on, every pair read back in order, and the count, the submits and the
+/// batches' encoders are the same as with the times off (no pass, batch or submit added).
+#[test]
+fn the_gpu_times_on_time_each_kind_of_work() {
+    use d3d9_wgpu::gpu_times::{Kind, KINDS};
+    let run = |g: &mut Gpu| {
+        g.run(Cmd::CreateQuery {
+            device: DEVICE,
+            query: 0x2000,
+            kind: 9,
+        });
+        g.clear(3, 0, 1.0);
+        let count = g.count(0x2000, |g| {
+            g.cover(0.5);
+            g.cover(0.5);
+        });
+        let _ = g.pixels();
+        let s = g.b.device().expect("the device").submits();
+        (count, s.submits, s.encoders)
+    };
+    let off = {
+        let Some(mut g) = Gpu::new(4, 4) else {
+            return;
+        };
+        run(&mut g)
+    };
+    let Some(mut g) = Gpu::with_env(4, 4, &[("NV_WGPU_GPU_TIMES", "1")]) else {
+        return;
+    };
+    let d = g.b.device().expect("the device");
+    if !d.adapter_has_timestamps() {
+        assert!(!d.gpu_times_on());
+        eprintln!("this adapter cannot time passes: skipped");
+        return;
+    }
+    assert!(d.gpu_times_on(), "asked for, and the adapter can");
+    let on = run(&mut g);
+    assert_eq!(
+        on, off,
+        "the same count, submits and batches as with the times off"
+    );
+    let slot = |k: Kind| KINDS.iter().position(|(x, _)| *x == k).expect("a kind");
+    let start = std::time::Instant::now();
+    let t = loop {
+        let t = g.b.device().and_then(|d| d.gpu_time_totals()).expect("on");
+        if t.spans[slot(Kind::Resolves)] > 0 || t.zeros > 0 || start.elapsed().as_secs() >= 5 {
+            break t;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    assert!(t.sets_made >= 1, "{t:?}");
+    if t.zeros > 0 {
+        // A driver that reads timestamps as zero: the times are said to be missing, not shown (the
+        // line's own unit test checks that). Known only of AMD's driver (raw wgpu too); on any
+        // other it is a fault of ours.
+        let d = g.b.device().expect("the device");
+        let name = d.adapter_name().to_string();
+        assert!(
+            name.contains("AMD") || name.contains("Radeon"),
+            "zero timestamps on {name}, not known to give them: {t:?}"
+        );
+        eprintln!("{name} reads timestamps as zero: the times are not shown: {t:?}");
+        assert_eq!(d.wgpu_errors(), 0);
+        return;
+    }
+    for kind in [Kind::World, Kind::Count, Kind::Resolves] {
+        assert!(t.spans[slot(kind)] >= 1, "{kind:?} timed: {t:?}");
+    }
+    assert!(t.ns[slot(Kind::World)] > 0, "the draws took time: {t:?}");
+    assert_eq!(t.left_out, 0, "every pair in order: {t:?}");
+    assert_eq!(t.untimed, 0, "{t:?}");
+    assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
+}
+
+/// A `DrawPrimitiveUP` draw that lands where the register ring is full draws its own vertices: the
+/// batch is sent for the ring's room before the draw's bytes are placed, not after (which handed
+/// them to the batch before and left the draw reading another draw's bytes at their place in the
+/// next: stray triangles). The ring is given room for one draw's blocks, so every UP draw after a
+/// batch's first lands at a full ring: red over the whole target, then green on the left, then blue
+/// on the right in more bytes than the green draw's place had after the red's.
+#[test]
+fn an_up_draw_at_a_full_register_ring_draws_its_own_vertices() {
+    struct Room;
+    impl Drop for Room {
+        fn drop(&mut self) {
+            d3d9_wgpu::device::ring_room_for_tests(0);
+        }
+    }
+    let Some(mut g) = Gpu::new(4, 1) else {
+        return;
+    };
+    let _room = Room;
+    d3d9_wgpu::device::ring_room_for_tests(2 * d3d9_wgpu::device::register_block_for_tests() + 1);
+    let up = |g: &mut Gpu, corners: &[[f32; 2]]| {
+        let v: Vec<f32> = corners
+            .iter()
+            .flat_map(|&[x, y]| [x, y, 0.5, 1.0])
+            .collect();
+        g.run(Cmd::DrawPrimitiveUp {
+            device: DEVICE,
+            kind: 4,
+            count: corners.len() as u32 / 3,
+            stride: 16,
+            vertices: Data::Bytes(&floats(&v)),
+        });
+    };
+    // One triangle over the whole height left of x = 0.1 (its point far left), and its mirror right
+    // of it.
+    let left = [[0.1, -9.0], [0.1, 9.0], [-20.0, 0.0]];
+    let right = [[0.1, -9.0], [0.1, 9.0], [20.0, 0.0]];
+    g.clear(3, 0, 1.0);
+    let sends = g.b.device().expect("the device").ring_sends();
+    g.colour([1.0, 0.0, 0.0, 1.0]);
+    up(&mut g, &[[-3.0, -3.0], [-3.0, 9.0], [9.0, -3.0]]);
+    // The green draw's bytes go where the red's end (48 bytes in); placed before the send they went
+    // with the red's batch, and the draw read the next batch's bytes there.
+    g.colour([0.0, 1.0, 0.0, 1.0]);
+    up(&mut g, &left);
+    // The blue draw's two triangles (the right one twice) fill the next batch's first 96 bytes: at
+    // the green draw's 48 a misplaced green draw finds the right triangle, and the left stays red.
+    g.colour([0.0, 0.0, 1.0, 1.0]);
+    up(&mut g, &[right, right].concat());
+    let px = g.pixels();
+    let d = g.b.device().expect("the device");
+    assert!(
+        d.ring_sends() >= sends + 2,
+        "the green and the blue draw landed at a full ring"
+    );
+    for row in 0..4 {
+        assert_eq!(px[row * 4], [0, 255, 0, 255], "row {row}: the left green");
+        assert_eq!(
+            px[row * 4 + 3],
+            [255, 0, 0, 255],
+            "row {row}: the right blue"
+        );
+    }
+    assert_eq!(d.wgpu_errors(), 0);
+}
+
+/// A batch of more passes than one submit can carry goes in several, in order: AMD's Windows
+/// driver refuses a submit of about 4,000 of its command buffers ("out of host memory"; Radeon
+/// 890M), and wgpu then takes the device for lost: nothing more is drawn and no query answers.
+/// 900 draws in one batch, nine occlusion queries of 100 each, each draw uploading its vertices
+/// into a ring of 64 places (a copy, a pass and the count's pass each: 4,507 command buffers in
+/// one submit before), with and without the finishing and queue threads. Each draw is nearer than
+/// every one before it under a LESS depth test, so it passes only if every draw before it ran
+/// before it, and with its own vertices (a place written again after 64 draws): every query
+/// answers with all of its draws' samples only if no work moved across a submit. The last
+/// draw's colour is left, nothing fails, and no submit takes more than
+/// [`d3d9_wgpu::device::SUBMIT_USES`].
+#[test]
+fn a_batch_of_more_passes_than_a_submit_takes_goes_in_several() {
+    const QUERIES: u32 = 9;
+    const EACH: u32 = 100;
+    for threads in [true, false] {
+        let Some(mut g) = Gpu::with_threads(4, 1, threads) else {
+            return;
+        };
+        if threads {
+            assert!(
+                g.b.device().is_some_and(|d| d.has_queue_thread()),
+                "the queue thread on, whatever the machine"
+            );
+        }
+        // Threaded, the queue thread held 20 ms a batch, so batches pile up unless each early send
+        // waits for the ones before it.
+        struct Delay;
+        impl Drop for Delay {
+            fn drop(&mut self) {
+                d3d9_wgpu::device::submit_delay_for_tests(0);
+            }
+        }
+        let _delay = threads.then(|| {
+            d3d9_wgpu::device::submit_delay_for_tests(20);
+            Delay
+        });
+        for q in 0..QUERIES {
+            g.run(Cmd::CreateQuery {
+                device: DEVICE,
+                query: 0x2000 + q,
+                kind: 9,
+            });
+        }
+        // LESS.
+        g.state(ZFUNC, 2);
+        g.clear(3, 0, 1.0);
+        for q in 0..QUERIES {
+            g.run(Cmd::QueryIssue {
+                query: 0x2000 + q,
+                flags: 2,
+            });
+            for j in 0..EACH {
+                let i = q * EACH + j;
+                let last = i == QUERIES * EACH - 1;
+                g.colour(if last {
+                    [0.0, 1.0, 0.0, 1.0]
+                } else {
+                    [1.0, 0.0, 0.0, 1.0]
+                });
+                // Exact in the 24-bit depth: 1 - (i + 1) / 1024.
+                g.cover(1.0 - (i + 1) as f32 / 1024.0);
+            }
+            g.run(Cmd::QueryIssue {
+                query: 0x2000 + q,
+                flags: 1,
+            });
+        }
+        for q in 0..QUERIES {
+            assert_eq!(
+                g.wait(0x2000 + q, 1),
+                EACH * 16,
+                "threads {threads}: query {q}: each draw nearer than the ones before passed"
+            );
+        }
+        for p in g.pixels() {
+            assert_eq!(
+                p,
+                [0, 255, 0, 255],
+                "threads {threads}: the last draw's green"
+            );
+        }
+        let d = g.b.device().expect("the device");
+        assert_eq!(d.wgpu_errors(), 0, "threads {threads}");
+        let s = d.submits();
+        let limit = d3d9_wgpu::device::SUBMIT_USES;
+        assert!(
+            s.most_uses <= limit,
+            "threads {threads}: a submit took {} uses, more than {limit}",
+            s.most_uses
+        );
+        // Three uses a draw (the copy, the pass, the count's pass).
+        assert!(
+            s.submits > u64::from(3 * 900 / limit),
+            "threads {threads}: {s:?}"
+        );
+        check_submits(&s, &format!("threads {threads}"));
+        // The batch was sent as it reached the limit (one command's few uses past it), so its
+        // command buffers never waited unsubmitted all together.
+        assert!(
+            s.most_batch <= limit + 8,
+            "threads {threads}: a batch took {} uses before it was sent",
+            s.most_batch
+        );
+        assert!(
+            s.bound_sends >= u64::from(3 * 900 / limit),
+            "threads {threads}: the batch sent early as it reached the limit: {s:?}"
+        );
+        // At most about two batches' uses handed over and not yet submitted (Metal loses the
+        // device past 4,096 command buffers made and not submitted).
+        assert!(
+            s.most_pending <= 2 * u64::from(limit + 8),
+            "threads {threads}: {} uses were waiting to be submitted at once",
+            s.most_pending
+        );
+    }
+}
+
+/// What every submit carried was what its part planned, and no command buffer was lost: counted
+/// from the buffers each submit really got ([`d3d9_wgpu::device::SubmitStats`]).
+fn check_submits(s: &d3d9_wgpu::device::SubmitStats, what: &str) {
+    assert!(
+        s.most_buffers <= s.most_planned,
+        "{what}: a submit got {} command buffers, its part planned at most {}",
+        s.most_buffers,
+        s.most_planned
+    );
+    assert_eq!(
+        s.buffers, s.encoders,
+        "{what}: every encoder handed over was submitted, once"
+    );
+    assert_eq!(
+        s.uses, s.batch_uses,
+        "{what}: every use of the batches was counted into a submit"
+    );
+}
+
+/// The crowded frame's way: one batch of many draws in few passes, its encoders cut every 256
+/// draws (each with few uses) and ALL of them sent in ONE submit, in order. 640 draws in one
+/// occlusion query, their triangles uploaded before the batch (no upload between draws: only the
+/// colour changes), each nearer than every draw before it under a LESS depth test: the query
+/// counts every draw only if each encoder's draws ran after the encoder's before. The last draw's
+/// colour is left, the batch went in exactly one submit, and that submit got two or more command
+/// buffers, all that the batch's encoders made.
+#[test]
+fn a_crowded_batch_s_encoders_go_in_one_submit_in_order() {
+    const DRAWS: u32 = 640;
+    const LADDER: u32 = 0x3100;
+    let Some(mut g) = Gpu::with_threads(4, 1, true) else {
+        return;
+    };
+    let d = g.b.device().expect("the device");
+    assert!(
+        d.has_queue_thread(),
+        "the queue thread (and finishing threads) on"
+    );
+    let tris: Vec<f32> = (0..DRAWS)
+        .flat_map(|i| {
+            let z = 1.0 - (i + 1) as f32 / 1024.0;
+            [-3.0, -3.0, z, 1.0, -3.0, 9.0, z, 1.0, 9.0, -3.0, z, 1.0]
+        })
+        .collect();
+    let bytes = floats(&tris);
+    g.run(Cmd::CreateBuffer {
+        device: DEVICE,
+        buffer: LADDER,
+        index: false,
+        length: bytes.len() as u32,
+        usage: 0,
+        format: 0,
+        pool: 1,
+    });
+    g.run(Cmd::UploadBuffer {
+        buffer: LADDER,
+        offset: 0,
+        flags: 0,
+        data: Data::Bytes(&bytes),
+    });
+    g.run(Cmd::SetStreamSource {
+        device: DEVICE,
+        stream: 0,
+        buffer: LADDER,
+        offset: 0,
+        stride: 16,
+    });
+    g.run(Cmd::CreateQuery {
+        device: DEVICE,
+        query: 0x2000,
+        kind: 9,
+    });
+    // LESS.
+    g.state(ZFUNC, 2);
+    // The set-up sent first (a read-back sends the batch), so the batch below is the draws'.
+    let _ = g.pixels();
+    let before = g.b.device().expect("the device").submits();
+    g.clear(3, 0, 1.0);
+    let count = g.count(0x2000, |g| {
+        for i in 0..DRAWS {
+            g.colour(if i == DRAWS - 1 {
+                [0.0, 1.0, 0.0, 1.0]
+            } else {
+                [1.0, 0.0, 0.0, 1.0]
+            });
+            g.run(Cmd::DrawPrimitive {
+                device: DEVICE,
+                kind: 4,
+                start: 3 * i,
+                count: 1,
+            });
+        }
+    });
+    let after = g.b.device().expect("the device").submits();
+    assert_eq!(
+        count,
+        DRAWS * 16,
+        "every draw nearer than the ones before passed"
+    );
+    assert_eq!(
+        after.submits,
+        before.submits + 1,
+        "the batch went in one submit: {before:?} -> {after:?}"
+    );
+    // An ordinary batch never reaches the limit, so it never pays the early send's wait.
+    assert_eq!(
+        after.bound_sends, before.bound_sends,
+        "no early send for a batch of this size: {after:?}"
+    );
+    assert!(
+        after.most_buffers >= 2,
+        "the submit got the batch's encoders, two or more: {after:?}"
+    );
+    assert_eq!(
+        after.encoders - before.encoders,
+        after.buffers - before.buffers,
+        "every encoder of the batch was submitted"
+    );
+    check_submits(&after, "the crowded batch");
+    for p in g.pixels() {
+        assert_eq!(p, [0, 255, 0, 255], "the last draw's green");
+    }
+    assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
+}
+
+/// The early send comes exactly at the limit: a batch of draws that each upload their vertices (a
+/// copy and a pass each, two uses) just under [`d3d9_wgpu::device::SUBMIT_USES`] goes in one
+/// submit with no early send; one just over it makes exactly one early send.
+#[test]
+fn a_batch_just_under_the_limit_is_sent_whole_and_one_just_over_once_early() {
+    let Some(mut g) = Gpu::new(4, 1) else {
+        return;
+    };
+    let limit = d3d9_wgpu::device::SUBMIT_USES;
+    for (draws, early) in [(limit / 2 - 16, 0), (limit / 2 + 4, 1)] {
+        // What was recorded before sent first, so the batch below is the draws' alone.
+        let _ = g.pixels();
+        let before = g.b.device().expect("the device").submits();
+        g.clear(3, 0, 1.0);
+        for _ in 0..draws {
+            g.cover(0.5);
+        }
+        let _ = g.pixels();
+        let after = g.b.device().expect("the device").submits();
+        let uses = after.batch_uses - before.batch_uses;
+        assert!(
+            if early == 0 {
+                uses < u64::from(limit)
+            } else {
+                uses > u64::from(limit)
+            },
+            "{draws} draws: {uses} uses"
+        );
+        assert_eq!(
+            after.bound_sends - before.bound_sends,
+            early,
+            "{draws} draws ({uses} uses): early sends"
+        );
+        // Under: one submit. Over: the early batch's (one, or two when its last command's pass went
+        // in an encoder of its own past the limit) and the rest's.
+        let submits = after.submits - before.submits;
+        assert!(
+            if early == 0 {
+                submits == 1
+            } else {
+                (2..=3).contains(&submits)
+            },
+            "{draws} draws ({uses} uses): {submits} submits"
+        );
+        check_submits(&after, &format!("{draws} draws"));
+    }
+    assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
+}
+
+/// The card's times on (`NV_WGPU_GPU_TIMES`) send and cut the batches exactly as off: their
+/// timestamps and resolve are no uses of the encoders, so no batch goes early
+/// ([`d3d9_wgpu::device::SUBMIT_USES`]) and no encoder is cut or added. With the finishing and
+/// queue threads, four batches: 300 draws from one buffer (one pass, its encoder cut at 256
+/// draws: two passes in two encoders); 256 draws and then an upload into the target, which sends
+/// the batch with its last encoder already at a finishing thread (no encoder open: its timestamps
+/// are resolved with the next batch's, none added); then draws that each upload their vertices (a copy and a
+/// pass each, the copy timed between passes where the driver can) just under the limit (no early
+/// send) and just over it (one). Each batch's submits, early sends, encoders and uses are the same
+/// with the times on as off. On, where the driver gives times: every pair read back in order, no
+/// batch untimed, each draw's pass timed as world (a pass that began with the clear too, not as
+/// clears), and the copies where the driver writes timestamps between passes.
+#[test]
+fn the_gpu_times_on_send_and_cut_the_batches_as_off() {
+    use d3d9_wgpu::gpu_times::{Kind, KINDS};
+    const DRAWS: u32 = 300;
+    const LADDER: u32 = 0x3200;
+    let limit = d3d9_wgpu::device::SUBMIT_USES;
+    let uploads = [limit / 2 - 16, limit / 2 + 4];
+    // Each batch's submits, early sends, encoders and uses.
+    let run = |g: &mut Gpu| -> Vec<[u64; 4]> {
+        let tris: Vec<f32> = (0..DRAWS)
+            .flat_map(|_| {
+                [
+                    -3.0, -3.0, 0.5, 1.0, -3.0, 9.0, 0.5, 1.0, 9.0, -3.0, 0.5, 1.0,
+                ]
+            })
+            .collect();
+        let bytes = floats(&tris);
+        g.run(Cmd::CreateBuffer {
+            device: DEVICE,
+            buffer: LADDER,
+            index: false,
+            length: bytes.len() as u32,
+            usage: 0,
+            format: 0,
+            pool: 1,
+        });
+        g.run(Cmd::UploadBuffer {
+            buffer: LADDER,
+            offset: 0,
+            flags: 0,
+            data: Data::Bytes(&bytes),
+        });
+        g.run(Cmd::SetStreamSource {
+            device: DEVICE,
+            stream: 0,
+            buffer: LADDER,
+            offset: 0,
+            stride: 16,
+        });
+        let mut out = Vec::new();
+        let mut batch = |g: &mut Gpu, draw_all: &dyn Fn(&mut Gpu)| {
+            // What was recorded before sent first, so the batch is the draws' alone.
+            let _ = g.pixels();
+            let before = g.b.device().expect("the device").submits();
+            g.clear(3, 0, 1.0);
+            draw_all(g);
+            let _ = g.pixels();
+            let after = g.b.device().expect("the device").submits();
+            check_submits(&after, "a batch");
+            out.push([
+                after.submits - before.submits,
+                after.bound_sends - before.bound_sends,
+                after.encoders - before.encoders,
+                after.batch_uses - before.batch_uses,
+            ]);
+        };
+        batch(g, &|g: &mut Gpu| {
+            for i in 0..DRAWS {
+                draw(g, 3 * i, 1);
+            }
+        });
+        batch(g, &|g: &mut Gpu| {
+            for i in 0..256 {
+                draw(g, 3 * i, 1);
+            }
+            g.run(Cmd::UploadSurface {
+                surface: RT,
+                row: 16,
+                rows: 4,
+                data: Data::Bytes(&[0x40u8; 64][..]),
+            });
+        });
+        for n in uploads {
+            batch(g, &|g: &mut Gpu| {
+                for _ in 0..n {
+                    g.cover(0.5);
+                }
+            });
+        }
+        out
+    };
+    let times = [("NV_WGPU_GPU_TIMES", "1")];
+    let off = {
+        let Some(mut g) = Gpu::make_with(4, 1, None, &[], true, true) else {
+            return;
+        };
+        run(&mut g)
+    };
+    assert!(off[0][2] >= 2, "the 300 draws' encoder was cut: {off:?}");
+    assert_eq!(
+        (off[2][1], off[3][1]),
+        (0, 1),
+        "no early send just under the limit, one just over: {off:?}"
+    );
+    let Some(mut g) = Gpu::make_with(4, 1, None, &times, true, true) else {
+        return;
+    };
+    let d = g.b.device().expect("the device");
+    if !d.adapter_has_timestamps() {
+        assert!(!d.gpu_times_on());
+        eprintln!("this adapter cannot time passes: skipped");
+        return;
+    }
+    assert!(d.gpu_times_on(), "asked for, and the adapter can");
+    let inside = d.timestamp_features().1;
+    let on = run(&mut g);
+    assert_eq!(
+        on, off,
+        "each batch's submits, early sends, encoders and uses as with the times off"
+    );
+    let slot = |k: Kind| KINDS.iter().position(|(x, _)| *x == k).expect("a kind");
+    // Each draw of the upload batches in a pass of its own, the 300 draws' two passes and the 256
+    // draws' one.
+    let passes = u64::from(uploads[0] + uploads[1]) + 3;
+    let start = std::time::Instant::now();
+    let t = loop {
+        let t = g.b.device().and_then(|d| d.gpu_time_totals()).expect("on");
+        if t.spans[slot(Kind::World)] >= passes || t.zeros > 0 || start.elapsed().as_secs() >= 5 {
+            break t;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    let d = g.b.device().expect("the device");
+    assert_eq!(d.wgpu_errors(), 0);
+    if t.zeros > 0 {
+        // Known only of AMD's driver (raw wgpu too), as in the test above.
+        let name = d.adapter_name().to_string();
+        assert!(
+            name.contains("AMD") || name.contains("Radeon"),
+            "zero timestamps on {name}, not known to give them: {t:?}"
+        );
+        eprintln!("{name} reads timestamps as zero: the times are not shown: {t:?}");
+        return;
+    }
+    assert_eq!(t.left_out, 0, "every pair in order: {t:?}");
+    assert_eq!(t.untimed, 0, "{t:?}");
+    assert_eq!(
+        t.spans[slot(Kind::World)],
+        passes,
+        "each draw's pass as world: {t:?}"
+    );
+    // Each batch's clear is the load of the pass its first draw goes in (counted as world above),
+    // so no pass here only clears.
+    assert_eq!(t.spans[slot(Kind::Clears)], 0, "{t:?}");
+    if inside {
+        assert!(
+            t.spans[slot(Kind::Copies)] >= u64::from(uploads[0] + uploads[1]),
+            "each upload among the draws timed: {t:?}"
+        );
+    }
+}
+
 /// The vertex buffer of [`dynamic_state_scene`]: every shape in it once, uploaded before the
 /// first draw, so that no upload falls between the draws (an upload can end the render pass, and
 /// with it what the command buffer is known to have set). Each shape's first vertex.
@@ -4277,7 +4938,7 @@ fn panic_message(p: Box<dyn std::any::Any + Send>) -> String {
 
 /// A failure on the queue thread comes back to the render thread with its message: a panic in a
 /// batch's job, and a finishing thread's failure (600 draws, so encoders go to the finishing
-/// threads). Each is planted, the batch handed over by a `Present` (which does not wait for it);
+/// threads; one upload among them, so the batch is sent whole at the `Present`). Each is planted, the batch handed over by a `Present` (which does not wait for it);
 /// then the next wait (`wgpu_errors`) raises it, and once raised the device goes on. Planted again,
 /// the next flush (`GetData` with `D3DGETDATA_FLUSH`) raises it after the queue thread has run the
 /// batch. Planted again and never raised (no flush or wait after it), the device is dropped
@@ -4322,9 +4983,18 @@ fn a_failure_on_the_queue_thread_is_raised_on_the_render_thread() {
             query: QUERY,
             kind: 9,
         });
+        // One upload, then the same triangle drawn again: the batch stays far under the most one
+        // submit takes, so it is handed over by the `Present` and not sent early on the way
+        // (`Device::bound_batch`, whose wait would raise the failure in the draws).
         let draws = |g: &mut Gpu| {
-            for _ in 0..600 {
-                g.cover(0.5);
+            g.cover(0.5);
+            for _ in 1..600 {
+                g.run(Cmd::DrawPrimitive {
+                    device: DEVICE,
+                    kind: 4,
+                    start: 0,
+                    count: 1,
+                });
             }
         };
         // At the next wait.
@@ -4802,4 +5472,428 @@ fn a_declaration_set_again_after_an_fvf_is_the_layout_again() {
     );
     let d = g.b.device().expect("the device");
     assert_eq!(d.wgpu_errors(), 0);
+}
+
+/// A depth stand-in (a colour target smaller than the bound depth surface) is kept while a draw
+/// uses it and let go once idle for more than 300 presents: on a 256 x 256 depth surface, a 64 x 64
+/// target cleared once and a 128 x 128 one cleared every frame give two stand-ins, and after 302
+/// presents only the 128 x 128 one is left, for the same depth surface, and it is the stand-in made
+/// at the first frame (not one let go and made again).
+#[test]
+fn idle_depth_stand_ins_go_and_used_ones_stay() {
+    let Some(mut g) = Gpu::new(256, 1) else {
+        return;
+    };
+    const SMALL: u32 = 0x3100;
+    const MEDIUM: u32 = 0x3110;
+    for (surface, size) in [(SMALL, 64), (MEDIUM, 128)] {
+        g.run(Cmd::CreateSurface {
+            device: DEVICE,
+            surface,
+            depth: false,
+            width: size,
+            height: size,
+            format: A8R8G8B8,
+            multisample: 0,
+            quality: 0,
+            flag: 0,
+        });
+    }
+    let target = |g: &mut Gpu, surface: u32| {
+        g.run(Cmd::SetRenderTarget {
+            device: DEVICE,
+            index: 0,
+            surface,
+        });
+    };
+    let present = |g: &mut Gpu| {
+        g.run(Cmd::Present {
+            device: DEVICE,
+            source: None,
+            dest: None,
+            window: 0,
+            dirty: false,
+            model: 0,
+            frame: 1,
+        });
+    };
+    target(&mut g, SMALL);
+    g.clear(3, 0, 1.0);
+    let mut first = Vec::new();
+    for frame in 0..302 {
+        target(&mut g, MEDIUM);
+        g.clear(3, 0, 1.0);
+        if frame == 0 {
+            first =
+                g.b.device()
+                    .expect("the device")
+                    .depth_stand_ins_for_tests();
+        }
+        present(&mut g);
+    }
+    assert_eq!(
+        first.iter().map(|k| (k.1, k.2)).collect::<Vec<_>>(),
+        [(64, 64), (128, 128)]
+    );
+    let left =
+        g.b.device()
+            .expect("the device")
+            .depth_stand_ins_for_tests();
+    assert_eq!(left.len(), 1, "{left:?}");
+    assert_eq!((left[0].1, left[0].2), (128, 128));
+    assert_eq!(left[0].0, first[1].0, "the same depth surface");
+    assert_eq!(
+        left[0].3, first[1].3,
+        "the stand-in drawn with every frame is the one made at the first, never let go"
+    );
+    assert_eq!(g.b.device().expect("the device").wgpu_errors(), 0);
+}
+
+/// Each draw's column of the target, every draw's digest and the script's commands as a
+/// recording ([`records_script`]).
+type Script = (Vec<[u8; 4]>, Vec<u64>, Vec<u8>);
+
+/// One clear, then draws into columns of their own of a 16 by 16 target, with the draw records
+/// off or on ([`d3d9_wgpu::device::Device::set_draw_records`]). Between two draws there is no
+/// other command than the change named, so the draw after each change finds the last draw's
+/// record: a texture changed (only the textures' counter moves), a sampler state changed, the same
+/// texture and the same render state set again (the record is used as it is), a render state of
+/// the pipeline changed, then the fixed-function pixel shader: a texture stage state changed, and
+/// a 2D texture replaced by a cube one on its stage. Returns row 0 (each draw's column) and the
+/// digests. The commands are kept as `NV_D3D9_RECORD` writes them.
+fn records_script(records: bool) -> Option<Script> {
+    const PS_TEX: u32 = 0x1602;
+    const BLUE_TEX: u32 = 0x1610;
+    const CUBE: u32 = 0x1620;
+    const COLOROP: u32 = 1;
+    let mut g = Gpu::recording(16, 1)?;
+    {
+        let d = g.b.device().expect("the device");
+        d.set_draw_records(records);
+        d.record_draw_digests(true);
+    }
+    stage_samplers(&mut g);
+    let levels = words(&[BLUE_TEX + 1]);
+    g.run(Cmd::CreateTexture {
+        device: DEVICE,
+        texture: BLUE_TEX,
+        levels: Data::Bytes(&levels),
+        width: 1,
+        height: 1,
+        usage: 0,
+        format: A8R8G8B8,
+        pool: 1,
+    });
+    g.run(Cmd::UploadSurface {
+        surface: BLUE_TEX + 1,
+        row: 4,
+        rows: 1,
+        data: Data::Bytes(&[255, 0, 0, 255]),
+    });
+    // A 1 by 1 cube texture, every face blue.
+    let faces: Vec<u32> = (1..=6).map(|k| CUBE + k).collect();
+    let face_words = words(&faces);
+    g.run(Cmd::CreateCubeTexture {
+        device: DEVICE,
+        texture: CUBE,
+        surfaces: Data::Bytes(&face_words),
+        edge: 1,
+        usage: 0,
+        format: A8R8G8B8,
+        pool: 1,
+    });
+    for &surface in &faces {
+        g.run(Cmd::UploadSurface {
+            surface,
+            row: 4,
+            rows: 1,
+            data: Data::Bytes(&[255, 0, 0, 255]),
+        });
+    }
+    let shader = |g: &mut Gpu, pixel: bool, shader: u32| {
+        g.run(Cmd::SetShader {
+            device: DEVICE,
+            pixel,
+            shader,
+        });
+    };
+    let texture = |g: &mut Gpu, texture: u32| {
+        g.run(Cmd::SetTexture {
+            device: DEVICE,
+            sampler: 0,
+            texture,
+        });
+    };
+    // Column `i`: clip x of the pixel centres is -1 + i / 8 (Direct3D 9's whole coordinates).
+    let mut column = 0u32;
+    let mut draw = |g: &mut Gpu| {
+        let x = -1.0 + column as f32 / 8.0;
+        let tri = floats(&rect(x - 0.0625, x + 0.0625));
+        let offset = 96 * column;
+        column += 1;
+        g.run(Cmd::UploadBuffer {
+            buffer: VB,
+            offset,
+            flags: 0,
+            data: Data::Bytes(&tri),
+        });
+        g.run(Cmd::SetStreamSource {
+            device: DEVICE,
+            stream: 0,
+            buffer: VB,
+            offset,
+            stride: 16,
+        });
+        g.run(Cmd::DrawPrimitive {
+            device: DEVICE,
+            kind: 4,
+            start: 0,
+            count: 2,
+        });
+    };
+    shader(&mut g, false, VS + 2);
+    shader(&mut g, true, PS + 6);
+    g.clear(3, 0, 1.0);
+    // 0: the vertex texture's green and the pixel texture's red.
+    draw(&mut g);
+    // 1: only the pixel texture changes: green and blue.
+    texture(&mut g, BLUE_TEX);
+    draw(&mut g);
+    // 2: a sampler state (point magnification): the group changes, the colour does not.
+    g.run(Cmd::SetSamplerState {
+        device: DEVICE,
+        sampler: 0,
+        kind: 5,
+        value: 1,
+    });
+    draw(&mut g);
+    // 3, 4: the same texture and the same render state set again.
+    texture(&mut g, BLUE_TEX);
+    draw(&mut g);
+    g.state(COLORWRITEENABLE, 0xF);
+    draw(&mut g);
+    // 5: a render state of the pipeline: red, blue and alpha written, not green.
+    g.state(COLORWRITEENABLE, 0xD);
+    draw(&mut g);
+    // 6: all channels again, the red texture and the shader that draws the vertex texture alone.
+    g.state(COLORWRITEENABLE, 0xF);
+    texture(&mut g, PS_TEX);
+    shader(&mut g, true, PS + 5);
+    draw(&mut g);
+    // 7: no pixel shader: the fixed-function stage 0 modulates its texture (red) by the diffuse
+    // (white without one).
+    shader(&mut g, true, 0);
+    draw(&mut g);
+    // 8: a texture stage state: stage 0 takes argument 2 (the diffuse: white).
+    g.stage_state(0, COLOROP, 3);
+    draw(&mut g);
+    // 9: back to modulate.
+    g.stage_state(0, COLOROP, 4);
+    draw(&mut g);
+    // 10: the cube texture on stage 0, nothing else between: the stage's shader samples a cube.
+    texture(&mut g, CUBE);
+    draw(&mut g);
+    let row = g.pixels()[..16].to_vec();
+    let d = g.b.device().expect("the device");
+    assert_eq!(d.wgpu_errors(), 0);
+    let digests = d.take_draw_digests();
+    Some((row, digests, g.rec.take().expect("the commands kept")))
+}
+
+/// The draw records ([`d3d9_wgpu::device::Device::set_draw_records`]) give wgpu what resolving
+/// every draw afresh gives it: the same digest at each draw and the same pixels, with every change
+/// of [`records_script`] between two draws that would otherwise use one record, and each change
+/// is drawn.
+#[test]
+fn draw_records_give_wgpu_what_each_draw_resolved_afresh_gives() {
+    let Some((off_row, off, recording)) = records_script(false) else {
+        return;
+    };
+    let Some((on_row, on, _)) = records_script(true) else {
+        return;
+    };
+    assert_eq!(off.len(), 11, "every draw noted");
+    assert_eq!(on, off, "the digests, draw by draw");
+    assert_eq!(on_row, off_row, "the pixels, draw by draw");
+    let yellow = [0, 255, 255, 255];
+    let cyan = [255, 255, 0, 255];
+    let blue = [255, 0, 0, 255];
+    let green = [0, 255, 0, 255];
+    let red = [0, 0, 255, 255];
+    let white = [255, 255, 255, 255];
+    let mut want = vec![
+        yellow, cyan, cyan, cyan, cyan, blue, green, red, white, red, blue,
+    ];
+    want.resize(16, [0, 0, 0, 0]);
+    assert_eq!(on_row, want);
+    // The same script as a recording through the replay the example runs on the game's
+    // (`replay_draw_digests`): its draws give the same digests off and on, and the ones above.
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let replay = |records| {
+        d3d9_wgpu::replay_draw_digests(&recording, records, 0, u64::MAX, None)
+            .expect("the script's recording")
+            .expect("a GPU adapter, as above")
+            .into_iter()
+            .map(|(d, _)| d)
+            .collect::<Vec<u64>>()
+    };
+    assert_eq!(replay(false), off, "the recording replayed, records off");
+    assert_eq!(replay(true), off, "the recording replayed, records on");
+}
+
+/// A draw into the A8R8G8B8 target, then with nothing between but `SetRenderTarget` a draw into
+/// a 16 by 16 A16B16G16R16F target texture, then with nothing between but a `Clear` of it a third
+/// draw, the draw records off or on. The bytes of the half-float target after its first draw and
+/// after the clear and its second, and the digests.
+fn records_target_script(records: bool) -> Option<(Vec<u8>, Vec<u8>, Vec<u64>)> {
+    const HALF: u32 = 0x1630;
+    let mut g = Gpu::new(16, 1)?;
+    {
+        let d = g.b.device().expect("the device");
+        d.set_draw_records(records);
+        d.record_draw_digests(true);
+    }
+    target_texture(&mut g, HALF, HALF + 1, 16, A16B16G16R16F);
+    g.state(ZENABLE, 0);
+    g.clear(3, 0, 1.0);
+    g.colour([1.0, 0.0, 0.0, 1.0]);
+    g.cover(0.5);
+    g.run(Cmd::SetRenderTarget {
+        device: DEVICE,
+        index: 0,
+        surface: HALF + 1,
+    });
+    g.cover(0.5);
+    let read = |g: &mut Gpu| {
+        let d = g.b.device().expect("the device");
+        d.read_surface_pixels(HALF + 1)
+            .expect("the target's pixels")
+            .2
+    };
+    let first = read(&mut g);
+    g.clear(1, 0, 1.0);
+    g.cover(0.5);
+    let second = read(&mut g);
+    let d = g.b.device().expect("the device");
+    assert_eq!(d.wgpu_errors(), 0);
+    Some((first, second, d.take_draw_digests()))
+}
+
+/// The draw records give wgpu what resolving each draw afresh gives it when only the render
+/// target changes between two draws (its format is in the pipeline's key) and when only a clear
+/// comes between two: the same digests and bytes off and on, and the half-float target red.
+#[test]
+fn draw_records_follow_a_target_change_and_a_clear_between_two_draws() {
+    let Some((off_first, off_second, off)) = records_target_script(false) else {
+        return;
+    };
+    let Some((on_first, on_second, on)) = records_target_script(true) else {
+        return;
+    };
+    assert_eq!(off.len(), 3, "every draw noted");
+    assert_eq!(on, off, "the digests, draw by draw");
+    assert_eq!(on_first, off_first, "the target after its first draw");
+    assert_eq!(
+        on_second, off_second,
+        "the target after the clear and its second draw"
+    );
+    // A16B16G16R16F: red 1.0 (0x3C00), green and blue 0, alpha 1.0, at every pixel.
+    let red = [0x00, 0x3C, 0, 0, 0, 0, 0x00, 0x3C];
+    for bytes in [&on_first, &on_second] {
+        assert_eq!(bytes.len(), 16 * 16 * 8);
+        assert!(bytes.chunks_exact(8).all(|p| p == red), "{:?}", &bytes[..8]);
+    }
+}
+
+/// Two draws into a 1 by 1 target texture that also sample it, nothing between them but the
+/// second's vertices, the draw records off or on: each adds the vertex texture's red (64) to what
+/// it samples, so the second must sample what the first drew (a copy made just before it, not the
+/// copy made before the first). The target's bytes and the digests.
+fn records_sampled_target_script(records: bool) -> Option<(Vec<u8>, Vec<u64>)> {
+    const QUARTER: u32 = 0x1640;
+    const LOOP: u32 = 0x1650;
+    let mut g = Gpu::new(16, 1)?;
+    {
+        let d = g.b.device().expect("the device");
+        d.set_draw_records(records);
+        d.record_draw_digests(true);
+    }
+    stage_samplers(&mut g);
+    // The vertex texture: red 64, the rest 0 (B, G, R, A).
+    let levels = words(&[QUARTER + 1]);
+    g.run(Cmd::CreateTexture {
+        device: DEVICE,
+        texture: QUARTER,
+        levels: Data::Bytes(&levels),
+        width: 1,
+        height: 1,
+        usage: 0,
+        format: A8R8G8B8,
+        pool: 1,
+    });
+    g.run(Cmd::UploadSurface {
+        surface: QUARTER + 1,
+        row: 4,
+        rows: 1,
+        data: Data::Bytes(&[0, 0, 64, 0]),
+    });
+    g.run(Cmd::SetTexture {
+        device: DEVICE,
+        sampler: 257,
+        texture: QUARTER,
+    });
+    target_texture(&mut g, LOOP, LOOP + 1, 1, A8R8G8B8);
+    g.run(Cmd::SetRenderTarget {
+        device: DEVICE,
+        index: 0,
+        surface: LOOP + 1,
+    });
+    g.run(Cmd::SetDepthStencilSurface {
+        device: DEVICE,
+        surface: 0,
+    });
+    g.state(ZENABLE, 0);
+    g.clear(1, 0, 1.0);
+    for (pixel, shader) in [(false, VS + 2), (true, PS + 6)] {
+        g.run(Cmd::SetShader {
+            device: DEVICE,
+            pixel,
+            shader,
+        });
+    }
+    g.run(Cmd::SetTexture {
+        device: DEVICE,
+        sampler: 0,
+        texture: LOOP,
+    });
+    g.cover(0.5);
+    g.cover(0.5);
+    let d = g.b.device().expect("the device");
+    let bytes = d
+        .read_surface_pixels(LOOP + 1)
+        .expect("the target's pixel")
+        .2;
+    assert_eq!(d.wgpu_errors(), 0);
+    Some((bytes, d.take_draw_digests()))
+}
+
+/// The draw records keep no bind group for a draw that samples one of its own colour targets:
+/// the second of two draws of one record samples a copy of what the first drew, records off
+/// and on (red 64 + 64).
+#[test]
+fn draw_records_keep_no_groups_for_a_draw_sampling_its_own_target() {
+    let Some((off_bytes, off)) = records_sampled_target_script(false) else {
+        return;
+    };
+    let Some((on_bytes, on)) = records_sampled_target_script(true) else {
+        return;
+    };
+    assert_eq!(off.len(), 2, "every draw noted");
+    assert_eq!(on, off, "the digests, draw by draw");
+    assert_eq!(
+        off_bytes,
+        [0, 0, 128, 0],
+        "records off: the second draw saw the first's red"
+    );
+    assert_eq!(on_bytes, off_bytes, "records on");
 }

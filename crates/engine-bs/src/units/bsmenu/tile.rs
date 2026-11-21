@@ -5632,8 +5632,9 @@ pub fn tile_value_change_event(e: &mut Engine, value: Ptr<TileValue>) {
         if found != 0 {
             let mut reaction = e.mem.u32(list.addr());
             while reaction != 0 {
-                let dependent = Ptr::new(e.mem.u32(reaction));
-                value_calculate_value(e, dependent, false);
+                let dependent = e.mem.u32(reaction);
+                // By address, as the exe calls it: `CalculateValue` is overridable.
+                e.call(VALUE_CALCULATE_VALUE, &args![dependent, 0u32]);
                 reaction = e.mem.u32(reaction + 4);
             }
         }
@@ -7033,7 +7034,8 @@ pub fn fn_00a0caf0(e: &mut Engine, this: Ptr<BSSimpleArray>, value: u32, compare
 // Translated from 00a0cb90 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `BSSimpleArray<Tile::Value *, 8>::SortedFind` (Xbox PDB): `bsearch` of
 /// the key in the buffer (4-byte elements, `compare` as the comparison);
-/// answers the element's index or -1 when there is none.
+/// answers the element's index or -1 when there is none. The buffer is read again
+/// for the index, after the search.
 pub fn bs_simple_array_tile_value_sorted_find(
     e: &mut Engine,
     this: Ptr<BSSimpleArray>,
@@ -7048,6 +7050,8 @@ pub fn bs_simple_array_tile_value_sorted_find(
     if found == 0 {
         -1
     } else {
+        // `00a0cbcd`: the buffer is read again after the search.
+        let buffer = e.get(this, BSSimpleArray::pBuffer);
         (found.wrapping_sub(buffer) >> 2) as i32
     }
 }
@@ -14535,6 +14539,12 @@ mod tests {
     #[test]
     fn a_value_change_recalculates_the_values_that_react() {
         let mut e = tile_engine();
+        // The change event calls `CalculateValue` by address (it is overridable): the real one
+        // here, over the outside callees' stand-in.
+        e.register(VALUE_CALCULATE_VALUE, |e, a| {
+            value_calculate_value(e, Ptr::new(a[0]), a[1] & 0xff != 0);
+            Ret::default()
+        });
         let (tile, log) = calculating_tile(&mut e);
         let (head, _) = install_reaction_map(&mut e);
         let changed = value_with(&mut e, tile, TRAIT_X, 1.0, &[(VA_COPY, 5.0)]);

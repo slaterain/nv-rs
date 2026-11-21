@@ -22,6 +22,12 @@ pub struct State {
     pub made: bool,
 }
 
+/// Whether the game's file calls are there to write the log with (a unit test's stand-in engine
+/// has none: its messages then reach the console and the port's log only).
+pub(crate) fn can_write(e: &Engine) -> bool {
+    e.is_registered(crate::commands::array::CREATE_FILE_A)
+}
+
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), common/IDebugLog.cpp: IDebugLog::Message,
 // PrintText, NewLine.
 /// Writes one message and a new line to `nvse.log` (text mode: `\n` written as `\r\n`).

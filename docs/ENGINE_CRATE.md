@@ -660,6 +660,18 @@ cut, to find the geometry it lights: `ShadowSceneLight::AddObject` (`00ba0110`),
 tests (`00b9bbb0`, `00b9dae0`). Main thread only ([`Threads::Main`]); the bound tests' distances are native `f32` in the
 exe's order, the square root `f32::sqrt` in place of the CRT's. About 0.2 ms a frame in the lit, crowded street (the
 profile of 2026-11-11). Its tests are `crates/engine/tests/typed_lights.rs`. On by the native-code rule.
+And `scripts` (same crate, id 11): what every running script line goes through for its values, every mod's scripts
+included. The expression evaluator `CExpression` (the constructor `00593490`, the conversion to postfix `00593500`,
+the tokenizer `00593870`, `Eval` `00593db0`, its error `005934d0` and its two stacks `00594b60` to `00594d40`), the
+number tests of an operand (`004b1230`, `004b12d0`), and the operand reader (`005ac7a0`) with its lookups of a
+referenced object (`005ac4f0`) and a variable (`005a9140`). The tokenizer and the operand reader stay called by
+address (`overridable.tsv`: lStewieAl's Tweaks' script inlines replace the tokenizer; the translation's two plain
+calls of it now go by address too), as do `atol`, `atof`, the commands' handlers, the logs and the extenders' seams
+(xNVSE's command call `005949d4`, JIP LN's double precision operators `00593fbc`, the seam before a handler
+`005acb9d`). Threads: both (the AI threads run package and combat scripts); a value's arithmetic is native `f64`,
+rounded to 24 bits on the main thread as its x87 precision rounds. Its tests are `crates/engine/tests/typed_scripts.rs`
+(generated expressions over every operator and operand kind, parse mode, xNVSE's buffer and command call, JIP's
+operators). On by the native-code rule.
 And `geometry` (same crate, id 23): the code that reads and writes `NiGeometryData`'s arrays (positions, normals
 with the binormals and tangents after them, colours, texture coordinates), typed so that stage 2 can keep those
 arrays outside the 32-bit space (about 23 to 40 MB of the guest heap on the census route, and what mesh mods grow).

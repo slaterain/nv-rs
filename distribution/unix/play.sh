@@ -497,7 +497,7 @@ fi
 mkdir -p -- "$saves" "$own/logs" "$own/reports" "$own/machine" || fail "could not make nv-rs's folders in $own"
 stamp=$(date +%Y-%m-%d_%H-%M-%S)
 log=$own/logs/game-$stamp.log
-# The play run's variables, as Windows' Play.exe passes them (scripts/launcher main.rs): NV_SOUND,
+# The play run's variables, as Windows' Play.exe passes them (crates/nv-launcher play/mod.rs): NV_SOUND,
 # NV_SAVE_OUT, NV_PREFS_OUT, NV_REPORT_DIR, NV_REPORT_LOG, NV_WGPU_CACHE, NV_D3DX_CACHE and
 # NV_SETTINGS. NV_SETTINGS makes the run a play run (host fixes::is_play_run): the play defaults
 # then hold (the fixes preset, real threads, the render thread, the borderless window, drawing on
@@ -516,6 +516,12 @@ export NV_SOUND NV_SAVE_OUT NV_PREFS_OUT NV_REPORT_DIR NV_REPORT_LOG NV_WGPU_CAC
 # the program stops first with its expected status, and the play settings are not read before that stop.
 if starts_here; then
     NV_SETTINGS=$own/settings.ini
+    # The launcher's Settings screen keeps a profile's own choices in $own/PROFILE/settings.ini
+    # until the game's first start of that profile moves them in (the shared file is moved into
+    # the profile played first only): that one, when there is no shared file.
+    if [ ! -e "$own/settings.ini" ] && [ -f "$own/$profile/settings.ini" ]; then
+        NV_SETTINGS=$own/$profile/settings.ini
+    fi
     export NV_SETTINGS
 fi
 cd -- "$own" || fail "could not enter $own"

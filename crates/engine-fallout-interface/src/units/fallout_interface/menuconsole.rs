@@ -288,8 +288,12 @@ pub fn fn_0071d0a0(e: &mut Engine, this: Ptr<MenuConsole>, format: u32, argument
     // JIP LN NVSE's G35 at `0x0071D0D2` (group GA's row and handler, a fix row:
     // `SafeWrite16(0x71D0D2, 0x1BEB)`, a jump to 0x71D0EF): an answer skips both tests, so the
     // line is printed while the loading menu is up too. One load while JIP's fixes are not in.
-    let print_while_loading = e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
-        && e.site(0x0071_d0d2, &[this.addr()]).is_some();
+    // lStewieAl's Tweaks' S0031 warning sets `0x71D0DC`'s jump to always for its line (past both
+    // tests, after JIP's at `0x71D0D2`; the first test's call `00705ea0`, which only reads, is
+    // not made): `Engine::stewie_print_ungated`, false but while it prints.
+    let print_while_loading = (e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+        && e.site(0x0071_d0d2, &[this.addr()]).is_some())
+        || e.stewie_print_ungated();
     if !print_while_loading
         && e.call(0x0070_5ea0, &args![]).bool()
         && !e.call(0x0070_edf0, &args![]).bool()
@@ -2091,6 +2095,28 @@ mod tests {
         assert_eq!(lines, ["ab"]);
         assert_eq!(tests, 0, "both tests jumped over");
         assert_eq!(seen, vec![vec![console]]);
+    }
+
+    /// lStewieAl's Tweaks' S0031 warning prints while the loading menu is up: with
+    /// `Engine::stewie_print_ungated` set (its byte at `0x71D0DC`) the line is printed, without it
+    /// dropped (JIP's fixes off).
+    #[test]
+    fn format_line_prints_tweaks_warning_while_loading() {
+        for ungated in [false, true] {
+            let (mut e, _) = console_engine();
+            put_string(&mut e, 0x0106_fcb4, "ab");
+            e.register(0x0070_5ea0, |_, _| ret(1));
+            e.register(0x0070_edf0, |_, _| ret(0));
+            let console = new_console(&mut e);
+            e.set_stewie_print_ungated(ungated);
+            e.call(0x0071_d0a0, &args![console, 0x0106_fcb4u32, 0u32]);
+            let lines = lines_of(&e, console);
+            if ungated {
+                assert_eq!(lines, ["ab"]);
+            } else {
+                assert!(lines.is_empty());
+            }
+        }
     }
 
     #[test]

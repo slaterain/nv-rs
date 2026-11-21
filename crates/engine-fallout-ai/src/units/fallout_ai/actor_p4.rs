@@ -3934,7 +3934,13 @@ pub fn fn_008a89a0(e: &mut Engine, this: Ptr<Actor>, amount: u32) -> u32 {
     e.call(0x006e_cd40, &args![change, left]);
     if actor_should_use_ammo(e, this, weapon) {
         let change = process_vcall(e, this, 0x14c, &[]).u32();
-        let form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, change));
+        // lStewieAl's Tweaks' row S0199.03 (`MiscCrashFixes`, `0x8A8B0B`): an ammunition entry gone by
+        // now (a script on JIP's DecreaseAmmo event can take it) is no form.
+        let form = if change == 0 && e.stewie(engine_core::extend::stewie::AMMO_ENTRY_GONE) {
+            0
+        } else {
+            typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, change))
+        };
         e.vcall(
             this.addr(),
             0x17c,
@@ -4006,11 +4012,40 @@ pub fn fn_008a89a0(e: &mut Engine, this: Ptr<Actor>, amount: u32) -> u32 {
         if controller != 0 {
             e.call(0x0097_f6d0, &args![controller, 0u32]);
         }
-        if e.call(0x0056_6950, &args![this]).bool() {
+        // lStewieAl's Tweaks' row S0024 (`patchPreventFollowerNoAmmoTopicIfUsingRechargerWeapon`,
+        // the call at `0x8A8DA5`): Tweaks' `ActorDecreaseAmmoCheckShouldQueueFollowerTopicHook` in
+        // place of the teammate test (`00566950`).
+        let queue = if e.stewie(engine_core::extend::stewie::FOLLOWER_NO_AMMO_RECHARGER) {
+            follower_out_of_ammo_topic_wanted(e, this.addr())
+        } else {
+            e.call(0x0056_6950, &args![this]).bool()
+        };
+        if queue {
             e.call(0x008d_5cb0, &args![this, 7u32]);
         }
     }
     left
+}
+
+/// Row S0024's test, Tweaks' `ActorDecreaseAmmoCheckShouldQueueFollowerTopicHook` (`main.h`): a
+/// teammate (the byte at +0x18D) whose equipped weapon (`Actor::GetEquippedWeapon`: the process
+/// at +0x68, its weapon info from slot +0x148, the item at +0x8) has a recharge rate
+/// (`TESObjectWEAP` +0x1A4) of 0.0, so a companion with a recharging weapon says no out-of-ammo
+/// line.
+fn follower_out_of_ammo_topic_wanted(e: &mut Engine, actor: u32) -> bool {
+    if e.mem.u8(actor + 0x18d) == 0 {
+        return false;
+    }
+    let process = e.mem.u32(actor + 0x68);
+    if process == 0 {
+        return false;
+    }
+    let info = e.vcall(process, 0x148, &args![]).u32();
+    if info == 0 {
+        return false;
+    }
+    let weapon = e.mem.u32(info + 0x8);
+    weapon != 0 && e.mem.f32(weapon + 0x1a4) == 0.0
 }
 
 /// `0.75` (`double`): the part of the height difference `008ac8b0` returns.
@@ -4825,7 +4860,13 @@ pub fn fn_008ad970(
     } else {
         e.call(0x0067_ff70, &args![memory]).u32()
     };
-    e.call(0x0067_2fc0, &args![package, target]);
+    // lStewieAl's Tweaks' row S0107.03 (`MemoryLeakFixes`, the call at `0x8ADAEC`): the package takes
+    // the target made for it (+0x30); `SetPackageTarget` would copy it into a new block and lose it.
+    if e.stewie(engine_core::extend::stewie::PACKAGE_TARGET_LEAK) {
+        e.mem.set_u32(package + 0x30, target);
+    } else {
+        e.call(0x0067_2fc0, &args![package, target]);
+    }
     e.call(0x0098_4f60, &args![package, 0x21u32]);
     let package_target = typed_call!(leaf::FAMILY, 0x0067_1d10, leaf::word_at_30(e, package));
     e.call(0x0068_00b0, &args![package_target, 0u32]);
@@ -10025,6 +10066,38 @@ mod tests {
         assert_eq!(called(&log, 0x004a_b5b0), vec![vec![0x5001], vec![0x5000]]);
     }
 
+    /// S0024 (`patchPreventFollowerNoAmmoTopicIfUsingRechargerWeapon`): a companion fires its
+    /// last shot. Off, the teammate test (`00566950`, here yes) queues the out-of-ammo topic (7)
+    /// whatever the weapon; on, Tweaks' test asks the teammate byte (+0x18D) and the weapon's
+    /// recharge rate (+0x1A4): a recharging weapon (rate 2.5) says nothing, one without (0.0)
+    /// still complains, and a non-teammate never does.
+    #[test]
+    fn s0024_a_companion_with_a_recharger_says_no_out_of_ammo_line() {
+        for (on, teammate, rate, queued) in [
+            (false, 0u8, 2.5f32, true),
+            (true, 1, 2.5, false),
+            (true, 1, 0.0, true),
+            (true, 1, -0.0, true),
+            (true, 0, 0.0, false),
+        ] {
+            let mut w = ammo_world(2, 1);
+            w.e.set_stewie(engine_core::extend::stewie::FOLLOWER_NO_AMMO_RECHARGER, on);
+            w.e.register(0x0056_6950, |_, _| 1.into_ret());
+            w.e.mem.set_u8(w.actor.addr() + 0x18d, teammate);
+            w.e.mem.set_f32(w.weapon.addr() + 0x1a4, rate);
+            w.e.call_log = Some(vec![]);
+            assert_eq!(w.e.call(0x008a_89a0, &args![w.actor, 2u32]).u32(), 0);
+            let log = calls(&mut w.e);
+            let topics = called(&log, 0x008d_5cb0);
+            assert_eq!(
+                topics == vec![vec![w.actor.addr(), 7]],
+                queued,
+                "on {on} teammate {teammate} rate {rate}"
+            );
+            assert_eq!(called(&log, 0x0056_6950).is_empty(), on);
+        }
+    }
+
     #[test]
     fn a_regenerating_weapon_refills_instead_of_dropping() {
         let mut w = ammo_world(2, 1);
@@ -13003,6 +13076,113 @@ mod tests {
         assert_eq!(e.mem.u32(package_store + 0x94), 4);
         assert_eq!(e.mem.u32(package_store + 0x98), 5);
         assert_eq!(e.mem.u32(package_store + 0x9c), 6);
+    }
+
+    /// `search_package_setup`'s world run with row S0107.03 `on`: the calls made and the package.
+    fn search_package_run(on: bool) -> (Vec<(u32, Vec<u32>)>, Engine, u32) {
+        let mut e = engine();
+        let (actor, _) = new_actor_with_process(&mut e);
+        e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        stub(
+            &mut e,
+            &[
+                0x0067_0fc0,
+                0x0082_6b40,
+                0x0082_6b90,
+                0x0067_f3c0,
+                0x0067_1d30,
+                0x0067_0b30,
+                0x0067_a4a0,
+                0x0067_2fc0,
+                0x0098_4f60,
+                0x0068_00b0,
+                0x0068_0110,
+                0x0040_3550,
+            ],
+        );
+        e.register(0x0067_f030, |_, a| a[0].into_ret());
+        e.register(0x0067_ff70, |_, a| a[0].into_ret());
+        e.register(SETTING_VALUE_POINTER, |_, a| (a[0] + 4).into_ret());
+        e.set_global(SETTING_SEARCH_DISTANCE + 4, 12.75f32);
+        e.register(FTOL, |_, a| {
+            let value = f64::from_bits(a[0] as u64 | (a[1] as u64) << 32);
+            (value as i32).into_ret()
+        });
+        e.register(0x0043_9090, |_, _| 1.into_ret());
+        e.set_global(ZERO_POINT, 0u32);
+        let package_store = e.mem.alloc(0x200);
+        e.register_double(0x009f_66b0, move |_, _| package_store.into_ret());
+        e.register(0x0067_1d10, |_, a| (a[0] + 0x100).into_ret());
+        e.set_stewie(engine_core::extend::stewie::PACKAGE_TARGET_LEAK, on);
+        e.call_log = Some(vec![]);
+        e.call(0x008a_d970, &args![actor, 0x77u32, 4u32, 5u32, 6u32, 1u32]);
+        let log = calls(&mut e);
+        (log, e, package_store)
+    }
+
+    /// lStewieAl's Tweaks' row S0107.03 (`MemoryLeakFixes`, `0x8ADAEC`): the search package's target
+    /// (the 16-byte block made for it): off, handed to `SetPackageTarget`, which copies it (the block
+    /// is lost); on, the package takes the block itself (+0x30) and nothing is copied.
+    #[test]
+    fn s0107_03_the_search_package_takes_its_target() {
+        let (off, _, package) = search_package_run(false);
+        let target = called(&off, 0x0067_ff70)[0][0];
+        assert_eq!(called(&off, 0x0067_2fc0), vec![vec![package, target]]);
+        let (on, e, package) = search_package_run(true);
+        let target = called(&on, 0x0067_ff70)[0][0];
+        assert!(called(&on, 0x0067_2fc0).is_empty());
+        assert_eq!(e.mem.u32(package + 0x30), target);
+        // The rest goes on as before: the type set after it.
+        assert_eq!(called(&on, 0x0098_4f60), vec![vec![package, 0x21]]);
+    }
+
+    /// lStewieAl's Tweaks' row S0199.03 (`MiscCrashFixes`, `0x8A8B0B`): the player's ammunition entry
+    /// is gone by the time the shot's ammunition is removed (a script on JIP's DecreaseAmmo event, run
+    /// by the count's store, takes it): off, the exe reads the missing entry's form and stops; on, the
+    /// removal is asked with no form.
+    #[test]
+    fn s0199_03_an_ammunition_entry_gone_by_the_removal() {
+        for on in [false, true] {
+            let mut w = ammo_world(10, 2);
+            w.e.set_global(PLAYER_CHARACTER, w.actor.addr());
+            let change = w.change.addr();
+            let gone = std::rc::Rc::new(std::cell::Cell::new(false));
+            let set = gone.clone();
+            w.e.register_double(0x006e_cd40, move |_, _| {
+                set.set(true);
+                Ret::default()
+            });
+            w.e.register_double(target(PROCESS2_VT, 0x14c), move |_, _| {
+                (if gone.get() { 0 } else { change }).into_ret()
+            });
+            w.e.set_stewie(engine_core::extend::stewie::AMMO_ENTRY_GONE, on);
+            w.e.call_log = Some(vec![]);
+            let actor = w.actor;
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                w.e.call(0x008a_89a0, &args![actor, 3u32]).u32()
+            }));
+            w.e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                let log = calls(&mut w.e);
+                assert_eq!(called(&log, target(ACTOR2_VT, 0x17c))[0][1], 0);
+            }
+        }
+    }
+
+    /// Row S0199.03 with the entry there (ordinary input): the same calls with the row off and on.
+    #[test]
+    fn s0199_03_row_on_with_the_entry_changes_nothing() {
+        let mut logs = vec![];
+        for on in [false, true] {
+            let mut w = ammo_world(10, 2);
+            w.e.set_global(PLAYER_CHARACTER, w.actor.addr());
+            w.e.set_stewie(engine_core::extend::stewie::AMMO_ENTRY_GONE, on);
+            w.e.call_log = Some(vec![]);
+            assert_eq!(w.e.call(0x008a_89a0, &args![w.actor, 3u32]).u32(), 4);
+            logs.push(calls(&mut w.e));
+        }
+        assert_eq!(logs[0], logs[1]);
     }
 
     /// Doubles for the small getters `Actor::GetPickUpSoundName` calls.

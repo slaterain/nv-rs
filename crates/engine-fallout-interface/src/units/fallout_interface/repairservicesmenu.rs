@@ -660,7 +660,8 @@ pub fn repair_services_menu_do_click(e: &mut Engine, this: Ptr, id: i32, tile: u
                 let vendor = e.global::<u32>(REPAIR_VENDOR);
                 e.call(PAY_GOLD_TO_ACTOR, &args![player, vendor, cost]);
                 services_play_sound(e, REPAIR_SOUND_TEXT);
-                repair_services_menu_update(e, this);
+                // `0x7B7E86` (lStewieAl's Tweaks' S0033).
+                update_keeping_scroll(e, this);
             } else {
                 services_play_sound(e, FAIL_SOUND_01073A94);
             }
@@ -680,12 +681,39 @@ pub fn repair_services_menu_do_click(e: &mut Engine, this: Ptr, id: i32, tile: u
             let vendor = e.global::<u32>(REPAIR_VENDOR);
             e.call(PAY_GOLD_TO_ACTOR, &args![player, vendor, cost]);
             services_play_sound(e, REPAIR_SOUND_TEXT);
-            repair_services_menu_update(e, this);
+            // `0x7B7F4E` (lStewieAl's Tweaks' S0033).
+            update_keeping_scroll(e, this);
         }
         0xf => repair_services_menu_close(e),
         _ => {}
     }
 }
+
+/// `ListBox::SaveListState` (`007312e0`) and `ListBox::RestoreListState` (`00731360`, `RET 4`: a
+/// byte, whether to play the sound).
+const LIST_BOX_SAVE_POSITION: u32 = 0x0073_12e0;
+const LIST_BOX_RESTORE_POSITION: u32 = 0x0073_1360;
+
+/// `DoClick`'s `RepairServicesMenu::Update` after Repair (`0x7B7E86`) and Repair All
+/// (`0x7B7F4E`); with lStewieAl's Tweaks' S0033 on (`patchRepairServicesMenuRemembersScrollPosition`,
+/// `RepairServicesInitSaveRestorePosition`) the item list's scroll position is saved before and
+/// restored after (`RestorePosition(false)`).
+fn update_keeping_scroll(e: &mut Engine, this: Ptr) {
+    if !e.stewie(engine_core::extend::stewie::REPAIR_SERVICES_KEEPS_SCROLL) {
+        repair_services_menu_update(e, this);
+        return;
+    }
+    e.call(LIST_BOX_SAVE_POSITION, &args![this.addr() + REPAIR_LIST]);
+    repair_services_menu_update(e, this);
+    e.call(
+        LIST_BOX_RESTORE_POSITION,
+        &args![this.addr() + REPAIR_LIST, 0u32],
+    );
+}
+
+/// `Actor::ResetActorDTDR`'s vtable slot (xNVSE's `Actor` virtuals; Tweaks'
+/// `VendorRepairItemResetDRDT` calls `[vtable+0x3C4]`).
+const RESET_ACTOR_DT_DR: u32 = 0x3c4;
 
 /// The repaired condition the vendor reaches: `0040ebd0((setting 011d0ff0 + (setting
 /// 011d018c - setting 011d0ff0) * iVendorRepairSkill / 100) / 10, 1.0)`, as a `float`.
@@ -744,6 +772,11 @@ pub fn repair_services_menu_repair_item(e: &mut Engine, this: Ptr, item: u32) {
     }
     let form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, item));
     let player = e.global::<u32>(PLAYER);
+    // `0x7B8083` (lStewieAl's Tweaks' S0051, `patchUpdateDRDTWhenUsingVendorRepair`, calls
+    // `VendorRepairItemResetDRDT` there): the player's `ResetActorDTDR` (vtable +0x3C4) first.
+    if e.stewie(engine_core::extend::stewie::VENDOR_REPAIR_RESETS_DR_DT) {
+        e.vcall(player, RESET_ACTOR_DT_DR, &args![]);
+    }
     let changes = e.call(GET_INVENTORY_CHANGES, &args![player]).u32();
     let entry = e
         .call(GET_OBJECT_IN_LIST, &args![changes, form, 1u32, 0u32])
@@ -1200,11 +1233,11 @@ mod n057_tests {
         0x004bde40, 0x004be060, 0x004be180, 0x004be200, 0x004bf220, 0x004bfba0, 0x00559450,
         0x00586150, 0x005ae3d0, 0x005b5e40, 0x0061a2d0, 0x006317a0, 0x006450f0, 0x00646360,
         0x00648230, 0x0066ef20, 0x006815c0, 0x00700320, 0x00719ef0, 0x00726070, 0x00730810,
-        0x007308e0, 0x007314c0, 0x0075a0d0, 0x00763ff0, 0x007640a0, 0x007a1910, 0x00891d70,
-        0x008924e0, 0x00905330, 0x00a011b0, 0x00a01230, 0x00a01290, 0x00a012d0, 0x00a01350,
-        0x00a01530, 0x00a01860, 0x00a01b00, 0x00a03c90, 0x00a03da0, 0x00a03eb0, 0x00a09030,
-        0x00a1c4a0, 0x00a1c520, 0x00a1d910, 0x00a1dc20, 0x00a1dc70, 0x00ad7550, 0x00ad8830,
-        0x00ec43fb, 0x00ec62c0,
+        0x007308e0, 0x007312e0, 0x00731360, 0x007314c0, 0x0075a0d0, 0x00763ff0, 0x007640a0,
+        0x007a1910, 0x00891d70, 0x008924e0, 0x00905330, 0x00a011b0, 0x00a01230, 0x00a01290,
+        0x00a012d0, 0x00a01350, 0x00a01530, 0x00a01860, 0x00a01b00, 0x00a03c90, 0x00a03da0,
+        0x00a03eb0, 0x00a09030, 0x00a1c4a0, 0x00a1c520, 0x00a1d910, 0x00a1dc20, 0x00a1dc70,
+        0x00ad7550, 0x00ad8830, 0x00ec43fb, 0x00ec62c0,
     ];
 
     fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
@@ -1614,5 +1647,132 @@ mod n057_tests {
         assert_eq!(formats[1][2..], [GOLD_FORMAT_01070854, 0, 33]);
         assert_eq!(formats[2][2..], [0, 0]);
         assert_eq!(calls_to(&e, TILE_SET_INT), vec![vec![0x2038, 0xfaf, 0]]);
+    }
+
+    /// A single item (`ItemChange` with one extra list, `0x4400`) whose repair finds the player's
+    /// entry with no stack to join: `RepairItem` sets the new list's health and the old one's.
+    fn repairable_item(e: &mut Engine) -> u32 {
+        let low = e.mem.alloc(4);
+        e.mem.set_u32(low, 20.0f32.to_bits());
+        answer(e, SETTING_VALUE, low);
+        answer(e, HEALTH_FORM_GET_FORM_HEALTH, 100);
+        let lists = e.mem.alloc(8);
+        e.mem.set_u32(lists, 0x4400);
+        let item = e.mem.alloc(0xc);
+        e.mem.set_u32(item, lists);
+        let entry_lists = e.mem.alloc(8);
+        let entry = e.mem.alloc(0xc);
+        e.mem.set_u32(entry, entry_lists);
+        answer(e, GET_OBJECT_IN_LIST, entry);
+        answer(e, EXTRA_GET_COUNT, 1);
+        item
+    }
+
+    /// The addresses of the calls in the log, in order, of those in `wanted`.
+    fn order(e: &Engine, wanted: &[u32]) -> Vec<u32> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|(a, _)| *a)
+            .filter(|a| wanted.contains(a))
+            .collect()
+    }
+
+    /// Row S0033: after Repair (id 0x11, a tile that can be repaired) and Repair All (id 0xe) the
+    /// list's scroll position is saved before `Update` (its list fill `00719ef0`) and restored
+    /// after (`00731360` with 0), on the item list (+0x68); off, neither (the exe's `Update`
+    /// alone). The failed repair and Done are untouched.
+    #[test]
+    fn s0033_repair_keeps_the_list_scroll_position() {
+        for on in [false, true] {
+            for id in [0x11i32, 0xe] {
+                let mut e = engine();
+                let menu = menu(&mut e);
+                e.set_stewie(
+                    engine_core::extend::stewie::REPAIR_SERVICES_KEEPS_SCROLL,
+                    on,
+                );
+                answer(&mut e, TILE_IS_TRUE, 1);
+                let item = repairable_item(&mut e);
+                answer(&mut e, LIST_BOX_CURRENT_ITEM, item);
+                e.call_log = Some(vec![]);
+                e.call(0x007b_7d80, &args![menu, id, 0x2200u32]);
+                let seen = order(
+                    &e,
+                    &[
+                        LIST_BOX_SAVE_POSITION,
+                        LIST_BOX_FILL_00719EF0,
+                        LIST_BOX_RESTORE_POSITION,
+                    ],
+                );
+                if on {
+                    assert_eq!(
+                        seen,
+                        [
+                            LIST_BOX_SAVE_POSITION,
+                            LIST_BOX_FILL_00719EF0,
+                            LIST_BOX_RESTORE_POSITION
+                        ],
+                        "id {id:#x}"
+                    );
+                    assert_eq!(
+                        calls_to(&e, LIST_BOX_SAVE_POSITION),
+                        [vec![menu + REPAIR_LIST]]
+                    );
+                    assert_eq!(
+                        calls_to(&e, LIST_BOX_RESTORE_POSITION),
+                        [vec![menu + REPAIR_LIST, 0]]
+                    );
+                } else {
+                    assert_eq!(seen, [LIST_BOX_FILL_00719EF0], "id {id:#x}");
+                }
+            }
+            // A tile that cannot be repaired, and Done: no list calls, row on or off.
+            for id in [0x11i32, 0xf] {
+                let mut e = engine();
+                let menu = menu(&mut e);
+                e.set_stewie(
+                    engine_core::extend::stewie::REPAIR_SERVICES_KEEPS_SCROLL,
+                    on,
+                );
+                e.call_log = Some(vec![]);
+                e.call(0x007b_7d80, &args![menu, id, 0x2200u32]);
+                assert!(order(&e, &[LIST_BOX_SAVE_POSITION, LIST_BOX_RESTORE_POSITION]).is_empty());
+            }
+        }
+    }
+
+    /// Row S0051: a vendor's repair (`RepairItem`) calls the player's `ResetActorDTDR` (vtable
+    /// +0x3C4, no words) once before the player's inventory changes are read (`004bf220`); off,
+    /// it is never called. The rest of the repair is the exe's either way.
+    #[test]
+    fn s0051_vendor_repair_resets_the_players_dr_and_dt() {
+        for on in [false, true] {
+            let mut e = engine();
+            let menu = menu(&mut e);
+            let player = e.mem.alloc(0x10);
+            e.put_vtable(0x0d00_0000, &[0x0000_9000; 0x100]);
+            e.mem.set_u32(player, 0x0d00_0000);
+            e.set_global(PLAYER, player);
+            // The slot read from the Tweaks DLL and checked in the exe's `PlayerCharacter`
+            // vtable (`0108aa3c` + 0x3C4 = `008d4e80`, the DR and DT set to -1).
+            let reset = 0x0000_9000 + 0x3c4;
+            e.mem.set_u32(0x0d00_0000 + 0x3c4, reset);
+            e.register(reset, |_, _| Ret::default());
+            e.set_stewie(engine_core::extend::stewie::VENDOR_REPAIR_RESETS_DR_DT, on);
+            let item = repairable_item(&mut e);
+            e.call_log = Some(vec![]);
+            e.call(0x007b_7f70, &args![menu, item]);
+            let seen = order(&e, &[reset, GET_INVENTORY_CHANGES]);
+            if on {
+                assert_eq!(seen, [reset, GET_INVENTORY_CHANGES]);
+                assert_eq!(calls_to(&e, reset), [vec![player]]);
+            } else {
+                assert_eq!(seen, [GET_INVENTORY_CHANGES]);
+            }
+            assert_eq!(calls_to(&e, GET_INVENTORY_CHANGES), [vec![player]]);
+            assert_eq!(calls_to(&e, EXTRA_SET_HEALTH).len(), 2, "row {on}");
+        }
     }
 }

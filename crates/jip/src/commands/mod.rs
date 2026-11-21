@@ -1,4 +1,4 @@
-//! JIP LN NVSE's script commands built so far (the plan's step 3.6), one module per JIP source
+//! JIP LN NVSE's script commands (the plan's step 3.6), one module per JIP source
 //! file (`functions_jip/jip_fn_climate.h` (JIP LN NVSE) is [`jip_fn_climate`], ...), each with
 //! its own list of handlers, and what they share: JIP's helpers for forms, strings and the
 //! game's heap. [`install`] gives each listed command its handler in JIP's table; a JIP command
@@ -43,7 +43,13 @@ pub mod jip_fn_land_texture;
 pub mod jip_fn_light;
 pub mod jip_fn_linked_ref;
 pub mod jip_fn_marker_cmds;
+pub mod jip_fn_minimap;
+pub mod jip_fn_minimap_fog;
+pub mod jip_fn_minimap_seams;
+pub mod jip_fn_minimap_update;
 pub mod jip_fn_misc_ref;
+pub mod jip_fn_misc_ref_cameras;
+pub mod jip_fn_misc_ref_code;
 pub mod jip_fn_misc_ref_havok;
 pub mod jip_fn_misc_ref_havok_w;
 pub mod jip_fn_misc_ref_insert;
@@ -52,8 +58,10 @@ pub mod jip_fn_misc_ref_lines;
 pub mod jip_fn_misc_ref_nodes;
 pub mod jip_fn_misc_ref_nodes_w;
 pub mod jip_fn_miscellaneous;
+pub mod jip_fn_miscellaneous_depth;
 pub mod jip_fn_miscellaneous_marker;
 pub mod jip_fn_miscellaneous_scene;
+pub mod jip_fn_moon;
 pub mod jip_fn_move_cmds;
 pub mod jip_fn_package;
 pub mod jip_fn_perk;
@@ -66,11 +74,15 @@ pub mod jip_fn_script_vars;
 pub mod jip_fn_sound;
 pub mod jip_fn_sound_playing;
 pub mod jip_fn_string;
+pub mod jip_fn_string_regex;
 pub mod jip_fn_texture_set;
 pub mod jip_fn_ui;
+pub mod jip_fn_ui_code;
 pub mod jip_fn_ui_cursor;
 pub mod jip_fn_ui_menus;
 pub mod jip_fn_ui_nodes;
+pub mod jip_fn_ui_project;
+pub mod jip_fn_ui_text;
 pub mod jip_fn_utility;
 pub mod jip_fn_utility_patches;
 pub mod jip_fn_water;
@@ -102,6 +114,7 @@ pub mod ni_matrix;
 pub mod nif_nodes;
 pub mod pos_marker;
 pub mod ref_move;
+mod rendered_textures;
 
 use engine_core::prelude::*;
 use engine_core::ptr::Layout;
@@ -246,6 +259,8 @@ pub const ALL: &[Handlers] = &[
     jip_fn_ui::AWAITING_G129,
     // `FireWeaponEx`, with its patch H01 (`game_patches::gw`).
     jip_fn_actor_p2::AWAITING_H01,
+    // `sv_RegexMatch`, `sv_RegexSearch`, `sv_RegexReplace`.
+    jip_fn_string_regex::COMMANDS,
     // `ShowQuantityMenu`, `CloseActiveMenu` (with their DoClick seam).
     jip_fn_ui_menus::COMMANDS,
     // Code bytes JIP rewrites as seams and wraps (step 3.5f).
@@ -256,6 +271,21 @@ pub const ALL: &[Handlers] = &[
     jip_fn_misc_ref_lights::COMMANDS,
     // `SetCursorPos`.
     jip_fn_ui_cursor::COMMANDS,
+    // The recipe menu, quest messages and item filter (code bytes as seams and wraps).
+    jip_fn_ui_code::COMMANDS,
+    jip_fn_misc_ref_code::COMMANDS,
+    jip_fn_moon::COMMANDS,
+    // `AttachExtraCamera`, `ProjectExtraCamera`; `ProjectUITile`; `ToggleDepthClear`.
+    jip_fn_misc_ref_cameras::COMMANDS,
+    jip_fn_ui_project::COMMANDS,
+    jip_fn_miscellaneous_depth::COMMANDS,
+    // `InitMiniMap` (JIP MiniMap's start; its patches in `jip_fn_minimap_seams`).
+    jip_fn_minimap::COMMANDS,
+    // `UpdateMiniMap` (its fog of war in `jip_fn_minimap_fog`).
+    jip_fn_minimap_update::COMMANDS,
+    // `ShowTextInputMenu`, `SetTextInputExtendedProps`, `SetTextInputString` (with JIP's text
+    // input hooks).
+    jip_fn_ui_text::COMMANDS,
 ];
 
 /// How many of JIP's commands have a handler.
@@ -290,11 +320,20 @@ pub fn install(e: &mut Engine) {
     e.ext_free::<jip_fn_ui::ItemListRefresh>();
     jip_fn_ui::install(e);
     jip_fn_ui_menus::install(e);
+    jip_fn_ui_text::install(e);
     jip_fn_misc_ref_insert::install(e);
     jip_fn_misc_ref_lines::install(e);
     jip_fn_actor_p2::install(e);
     jip_fn_camera::install(e);
     jip_fn_rock_it::install(e);
+    jip_fn_ui_code::install(e);
+    jip_fn_misc_ref_code::install(e);
+    jip_fn_moon::install(e);
+    jip_fn_miscellaneous_depth::install(e);
+    // The extra cameras' list and the interface's culling process: made now, before the threads.
+    e.ext_free::<jip_fn_misc_ref_cameras::ExtraCameras>();
+    e.ext_free::<rendered_textures::UiCulling>();
+    jip_fn_minimap::install(e);
     for list in ALL {
         for &(opcode, execute) in list.iter() {
             crate::table::set_handlers(e, opcode, Some(execute), None);
@@ -793,7 +832,7 @@ mod tests {
     }
 
     /// Each module lists only commands of its own JIP source file, once each, and the count is
-    /// README's ("JIP LN: N of 1,118", read from README.md).
+    /// README's ("JIP LN: N and its two version commands", read from README.md).
     #[test]
     fn each_module_holds_its_own_file() {
         let files = [
@@ -898,6 +937,8 @@ mod tests {
             "jip_fn_ui",
             // jip_fn_actor_p2::AWAITING_H01 (`FireWeaponEx`, with H01).
             "jip_fn_actor",
+            // jip_fn_string_regex (the regular expressions).
+            "jip_fn_string",
             // jip_fn_ui_menus (ShowQuantityMenu, CloseActiveMenu).
             "jip_fn_ui",
             // jip_fn_camera (ToggleVanityWheel; ToggleCameraCollision), jip_fn_rock_it.
@@ -907,6 +948,22 @@ mod tests {
             // jip_fn_misc_ref_lights (AttachLight, RemoveLight).
             "jip_fn_misc_ref",
             // jip_fn_ui_cursor (SetCursorPos).
+            "jip_fn_ui",
+            // jip_fn_ui_code (the recipe menu, quest messages, item filter).
+            "jip_fn_ui",
+            // jip_fn_misc_ref_code (ToggleNoZPosReset, ToggleObjectCollision).
+            "jip_fn_misc_ref",
+            // jip_fn_moon (SetMoonTexture).
+            "jip_fn_miscellaneous",
+            // jip_fn_misc_ref_cameras, jip_fn_ui_project, jip_fn_miscellaneous_depth.
+            "jip_fn_misc_ref",
+            "jip_fn_ui",
+            "jip_fn_miscellaneous",
+            // jip_fn_minimap (InitMiniMap).
+            "jip_fn_minimap",
+            // jip_fn_minimap_update (UpdateMiniMap).
+            "jip_fn_minimap",
+            // jip_fn_ui_text (ShowTextInputMenu and the two text input setters).
             "jip_fn_ui",
         ];
         assert_eq!(files.len(), ALL.len(), "one file per command list");
@@ -961,8 +1018,11 @@ mod tests {
         // opcode: `ui_hooks::tests::the_readme_counts_the_built_commands`.
     }
 
-    /// Answering "installed", a built command has its execute and its name in its record; an
-    /// unbuilt one has neither.
+    /// Answering "installed", a built command has its execute and its name in its record, and since
+    /// `UpdateMiniMap` every JIP command and condition is built: no slot but the empty ones is
+    /// without its handler. An unbuilt one's record (what the table alone writes, before a
+    /// command's handlers: the state every JIP command was in until it was built) has its name and
+    /// neither handler.
     #[test]
     fn built_commands_are_in_the_table() {
         let e = test_support::engine();
@@ -973,8 +1033,28 @@ mod tests {
             nvse::table::guest_text(&e, e.mem.u32(record)),
             b"GetClimateSunTexture"
         );
-        // InitMiniMap is not built (it waits for the drawing track): no handler.
-        assert_eq!(execute(&e, 0x2873), 0);
+        for slot in crate::slots::SLOTS.iter() {
+            let record = nvse::table::record_of(&e, slot.opcode);
+            let eval = e.mem.u32(record + 0x20);
+            match slot.kind {
+                crate::table::Kind::Empty => {}
+                crate::table::Kind::ConditionOnly => assert_ne!(eval, 0, "{:04x}", slot.opcode),
+                crate::table::Kind::Condition => {
+                    assert_ne!(execute(&e, slot.opcode), 0, "{:04x}", slot.opcode);
+                    assert_ne!(eval, 0, "{:04x}", slot.opcode);
+                }
+                _ => assert_ne!(execute(&e, slot.opcode), 0, "{:04x} not built", slot.opcode),
+            }
+        }
+        let mut unbuilt = test_support::engine();
+        crate::table::install(&mut unbuilt, true);
+        assert_eq!(execute(&unbuilt, 0x2874), 0);
+        let record = nvse::table::record_of(&unbuilt, 0x2874);
+        assert_eq!(
+            nvse::table::guest_text(&unbuilt, unbuilt.mem.u32(record)),
+            b"UpdateMiniMap"
+        );
+        assert_eq!(unbuilt.mem.u32(record + 0x20), 0);
     }
 
     /// Answering "not installed" (players' state until step 3.10), every opcode built here is as
