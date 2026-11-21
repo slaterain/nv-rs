@@ -43,20 +43,45 @@ pub mod diff;
 pub mod leaf;
 pub mod moved;
 
+/// One per-engine flag word: a bit for each family ([`FamilyId`]).
+pub(crate) type FamilyBits = u64;
+
+/// How many families there can be: the bits of a flag word.
+pub const MAX_FAMILIES: usize = std::mem::size_of::<FamilyBits>() * 8;
+
 /// A family's bit in the per-engine flag words. Every family has its own, for good: it is written
 /// in code at each [`typed_call!`](crate::typed_call) of the family.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FamilyId(u8);
 
 impl FamilyId {
-    /// The family numbered `n` (below 32).
+    /// The family numbered `n` (below 64, [`MAX_FAMILIES`]). In a `const`, a number past that stops
+    /// the build:
+    ///
+    /// ```compile_fail
+    /// use engine_core::typed::FamilyId;
+    /// engine_core::assemble!();
+    /// const PAST: FamilyId = FamilyId::new(64);
+    /// fn main() {
+    ///     let _ = PAST;
+    /// }
+    /// ```
+    ///
+    /// ```
+    /// use engine_core::typed::FamilyId;
+    /// engine_core::assemble!();
+    /// const LAST: FamilyId = FamilyId::new(63);
+    /// fn main() {
+    ///     assert_eq!(LAST.number(), 63);
+    /// }
+    /// ```
     pub const fn new(n: u8) -> FamilyId {
-        assert!(n < 32, "the flag words have 32 bits");
+        assert!((n as usize) < MAX_FAMILIES, "the flag words have 64 bits");
         FamilyId(n)
     }
 
     #[inline(always)]
-    pub(crate) const fn bit(self) -> u32 {
+    pub(crate) const fn bit(self) -> FamilyBits {
         1 << self.0
     }
 
@@ -252,19 +277,19 @@ pub fn parse_switch(spec: Option<&str>, families: &[&Family]) -> Result<Vec<Mode
 pub(crate) struct State {
     /// The families whose [`typed_call!`](crate::typed_call)s are Rust calls now: [`State::allowed`]
     /// while no diagnostic is on.
-    pub(crate) direct: u32,
+    pub(crate) direct: FamilyBits,
     /// The families that are on and that nothing has been registered over.
-    allowed: u32,
+    allowed: FamilyBits,
     /// The families the switch put on `dual`.
-    dual: u32,
+    dual: FamilyBits,
     /// The families the switch put on `moved` (K1) and on `freed` (K2).
-    moved: u32,
-    freed: u32,
+    moved: FamilyBits,
+    freed: FamilyBits,
     /// The moved families' slab, stubs and dual run ([`moved::Moved`]): made when any family is in
     /// a stage-2 form, shared by every real thread's engine.
     space: Option<&'static moved::Moved>,
     /// The addresses of the families that are on, with the family's bit.
-    pub(crate) members: AddrMap<u32, u32>,
+    pub(crate) members: AddrMap<u32, FamilyBits>,
     /// The differential test's direct run: every `typed_call!` goes direct with the call log on,
     /// and notes itself in the log ([`Engine::typed_note_direct`]).
     forced: bool,
@@ -422,7 +447,7 @@ impl Engine {
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn typed_force_direct(&mut self) {
         self.typed.forced = true;
-        self.typed.direct = u32::MAX;
+        self.typed.direct = FamilyBits::MAX;
     }
 
     /// Registers over `addr` without clearing its family: the differential test's function under
@@ -1285,6 +1310,218 @@ mod tests {
         );
     }
 
+    const WIDE_ID: FamilyId = FamilyId::new(40);
+    const LAST_ID: FamilyId = FamilyId::new(63);
+    const WIDE_LEAF: u32 = 0x0040_1080;
+    const LAST_LEAF: u32 = 0x0040_1090;
+    const WIDE_CALLER: u32 = 0x0040_10a0;
+
+    static WIDE: Family = Family {
+        name: "wide_40",
+        id: WIDE_ID,
+        past_gate: false,
+        threads: Threads::Both,
+        stage2: true,
+        funcs: || vec![crate::entry!(0x0040_1080, typed_leaf(u32) -> u32)],
+    };
+    static LAST: Family = Family {
+        name: "last_63",
+        id: LAST_ID,
+        past_gate: false,
+        threads: Threads::Both,
+        stage2: true,
+        funcs: || vec![crate::entry!(0x0040_1090, typed_leaf(u32) -> u32)],
+    };
+
+    /// Both high families' leaves through `typed_call!`: the answer shows which form each ran.
+    fn wide_caller(e: &mut Engine, x: u32) -> u32 {
+        let a: u32 = crate::typed_call!(WIDE_ID, WIDE_LEAF, typed_leaf(e, x));
+        let b: u32 = crate::typed_call!(LAST_ID, LAST_LEAF, typed_leaf(e, x));
+        a * 10_000 + b
+    }
+
+    /// An engine with the translations of both high leaves and the caller, the switch `spec`
+    /// applied to [`STAND_IN`] (number 3), [`WIDE`] (40) and [`LAST`] (63).
+    fn wide_engine(spec: Option<&str>) -> Engine {
+        let mut e = Engine::new_untyped();
+        let (wide, f) = crate::entry!(0x0040_1080, translated_leaf(u32) -> u32);
+        e.register(wide, f);
+        let (last, f) = crate::entry!(0x0040_1090, translated_leaf(u32) -> u32);
+        e.register(last, f);
+        let (caller, f) = crate::entry!(0x0040_10a0, wide_caller(u32) -> u32);
+        e.register(caller, f);
+        apply_families(&mut e, &[&STAND_IN, &WIDE, &LAST], spec);
+        e
+    }
+
+    /// Families numbered past 31 (the flag words have 64 bits) go through the switch, take the
+    /// direct bit, follow the diagnostics and lose the bit to a wrap of a member exactly as the
+    /// low ones do, each on its own bit.
+    #[test]
+    fn families_past_31_go_on_off_and_direct_as_the_others_do() {
+        use Mode::*;
+        let (wide, last, low) = (WIDE_ID.bit(), LAST_ID.bit(), FAMILY.bit());
+        assert_eq!((wide, last), (1 << 40, 1 << 63));
+        let table: &[&Family] = &[&STAND_IN, &WIDE, &LAST];
+        assert_eq!(parse_switch(None, table), Ok(vec![Off, Off, Off]));
+        assert_eq!(parse_switch(Some("wide_40"), table), Ok(vec![Off, On, Off]));
+        assert_eq!(
+            parse_switch(Some("last_63, wide_40:dual"), table),
+            Ok(vec![Off, Dual, On])
+        );
+        assert_eq!(
+            parse_switch(Some("wide_40,last_63,off,last_63:freed"), table),
+            Ok(vec![Off, Off, Freed])
+        );
+        // Past its gate a number past 31 is on with no switch, as a low one is.
+        static LAST_PAST_GATE: Family = Family {
+            past_gate: true,
+            ..LAST
+        };
+        assert_eq!(
+            parse_switch(None, &[&WIDE, &LAST_PAST_GATE]),
+            Ok(vec![Off, On])
+        );
+
+        // Off: the translations, no bit.
+        for spec in [None, Some("off"), Some("wide_40:off,last_63:off")] {
+            let mut e = wide_engine(spec);
+            assert_eq!((e.typed.allowed, e.typed.direct), (0, 0), "{spec:?}");
+            assert_eq!(e.call(WIDE_CALLER, &[5]).u32(), 6 * 10_000 + 6, "{spec:?}");
+        }
+        // One on: that bit alone, and only its leaf typed.
+        let mut e = wide_engine(Some("last_63"));
+        assert_eq!(e.typed.direct, last);
+        assert!(e.typed_family_direct(LAST_ID) && !e.typed_family_direct(WIDE_ID));
+        assert_eq!(e.call(WIDE_CALLER, &[5]).u32(), 6 * 10_000 + 1005);
+        let mut e = wide_engine(Some("wide_40"));
+        assert_eq!(e.typed.direct, wide);
+        assert_eq!(e.call(WIDE_CALLER, &[5]).u32(), 1005 * 10_000 + 6);
+
+        // All three on: three bits, each family direct.
+        let mut e = wide_engine(Some("stand_in,wide_40,last_63"));
+        assert_eq!(e.typed.direct, low | wide | last);
+        assert!(e.typed_direct(WIDE_ID, WIDE_LEAF) && e.typed_direct(LAST_ID, LAST_LEAF));
+        assert_eq!(e.typed_mode(WIDE_ID), On);
+        assert_eq!(e.call(WIDE_CALLER, &[5]).u32(), 1005 * 10_000 + 1005);
+
+        // A diagnostic clears every bit; off again, the next full call brings all three back.
+        fn hook(_: &mut Engine, _: u32, _: bool) {}
+        e.set_call_hook(Some(hook));
+        e.call(WIDE_CALLER, &[5]);
+        assert_eq!(e.typed.direct, 0);
+        e.set_call_hook(None);
+        // Back at the next trip down the full path: a cache miss.
+        e.register(0x0040_10b0, |_, _| Ret::default());
+        e.call(0x0040_10b0, &[]);
+        assert_eq!(e.typed.direct, low | wide | last);
+
+        // A wrap over a member of 40 sends 40 by address for good, and leaves 3 and 63 direct.
+        e.register(WIDE_LEAF, |_, a| Ret {
+            eax: a[0] + 7,
+            ..Ret::default()
+        });
+        assert_eq!((e.typed.allowed, e.typed.direct), (low | last, low | last));
+        assert!(!e.typed_family_direct(WIDE_ID) && e.typed_family_direct(LAST_ID));
+        assert_eq!(e.typed_mode(WIDE_ID), On);
+        assert_eq!(e.call(WIDE_CALLER, &[5]).u32(), 12 * 10_000 + 1005);
+        e.typed_sync();
+        assert!(!e.typed_family_direct(WIDE_ID));
+        // Then 63's, through a test double: 3 alone is left.
+        e.register_double(LAST_LEAF, |_, a| Ret {
+            eax: a[0] + 9,
+            ..Ret::default()
+        });
+        assert_eq!((e.typed.allowed, e.typed.direct), (low, low));
+        assert!(!e.typed_family_direct(LAST_ID));
+        assert_eq!(e.call(WIDE_CALLER, &[5]).u32(), 12 * 10_000 + 14);
+
+        // The stage-2 forms keep their own bits too.
+        let e = wide_engine(Some("wide_40:dual,last_63:freed"));
+        assert!(e.typed_dual(WIDE_ID) && !e.typed_dual(LAST_ID));
+        assert_eq!(
+            (e.typed_mode(WIDE_ID), e.typed_mode(LAST_ID)),
+            (Dual, Freed)
+        );
+        assert_eq!(
+            (e.typed.dual, e.typed.freed, e.typed.moved),
+            (wide, last, 0)
+        );
+        assert!(matches!(
+            e.typed_store(LAST_ID),
+            moved::Store::Moved { shadows: false, .. }
+        ));
+        let e = wide_engine(Some("last_63:moved"));
+        assert_eq!(e.typed_mode(LAST_ID), Moved);
+        assert!(matches!(
+            e.typed_store(LAST_ID),
+            moved::Store::Moved { shadows: true, .. }
+        ));
+        assert!(matches!(e.typed_store(WIDE_ID), moved::Store::Guest));
+    }
+
+    /// A test build ties a `typed_call!` naming 40 to an address in 40, as for the low numbers, and
+    /// says the bit it found.
+    #[test]
+    fn a_typed_call_naming_the_wrong_high_family_stops_a_test_build() {
+        if !cfg!(debug_assertions) {
+            return;
+        }
+        let e = wide_engine(Some("wide_40,last_63"));
+        let why = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            e.typed_direct(WIDE_ID, LAST_LEAF)
+        }))
+        .map_err(|p| p.downcast_ref::<String>().cloned().unwrap_or_default())
+        .unwrap_err();
+        assert!(why.contains("with bit 0x8000000000000000"), "{why}");
+
+        // The differential test's direct run reaches 63 with a diagnostic on, as it reaches 3.
+        let mut e = wide_engine(Some("stand_in,last_63"));
+        e.call_log = Some(vec![]);
+        e.call(WIDE_CALLER, &[5]);
+        assert_eq!(e.typed.direct, 0);
+        e.typed_force_direct();
+        assert!(e.typed_direct(FAMILY, LEAF) && e.typed_direct(LAST_ID, LAST_LEAF));
+    }
+
+    /// The dual run's line names the high families in their dual run, with their own counts.
+    #[test]
+    fn the_dual_run_line_shows_families_past_31() {
+        provide(&WIDE);
+        provide(&LAST);
+        let e = wide_engine(Some("wide_40:dual,last_63:dual"));
+        let dual = &e.moved().expect("a dual run").dual;
+        assert!(dual.check(LAST_ID, 4, 1, 1, None));
+        let line = dual_line(&e).expect("a dual run");
+        assert!(
+            line.contains("wide_40: 0 compared, 0 differed; last_63: 1 compared, 0 differed."),
+            "{line}"
+        );
+        assert_eq!(dual_line(&wide_engine(Some("wide_40,last_63"))), None);
+    }
+
+    /// Two families with the same high number clash as low ones do.
+    #[test]
+    fn a_high_number_used_twice_stops_the_start() {
+        static SAME_HIGH: Family = Family {
+            name: "same_high",
+            ..LAST
+        };
+        assert!(check_table(&[&WIDE, &LAST]).is_ok());
+        let why = check_table(&[&WIDE, &LAST, &SAME_HIGH]).unwrap_err();
+        assert!(
+            why.contains("same_high (FamilyId(63)) clashes with last_63"),
+            "{why}"
+        );
+    }
+
+    /// 64 is past the flag words: refused at the start too (in a `const`, at build time).
+    #[test]
+    #[should_panic(expected = "the flag words have 64 bits")]
+    fn number_64_is_refused() {
+        let _ = FamilyId::new(std::hint::black_box(64));
+    }
+
     #[test]
     #[should_panic(expected = "clashes with")]
     fn a_clash_between_provided_families_stops() {
@@ -1345,6 +1582,36 @@ mod tests {
         );
     }
 
+    /// The same with a family numbered 63 in the child: `NV_TYPED` turns it on and off by name.
+    #[test]
+    fn nv_typed_reaches_a_family_past_31_in_a_child_process() {
+        let run = |spec: &str| {
+            let out =
+                std::process::Command::new(std::env::current_exe().expect("this test binary"))
+                    .args([
+                        "--ignored",
+                        "--exact",
+                        "--nocapture",
+                        "typed::tests::child_prints_what_engine_new_did",
+                    ])
+                    .env("NV_TYPED", spec)
+                    .output()
+                    .expect("the child runs");
+            assert!(out.status.success(), "{spec}: {out:?}");
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        let both = run("child_family,child_family_63");
+        assert!(both.contains("answer 1001 direct true"), "{both}");
+        assert!(both.contains("number 63: 1001, direct true"), "{both}");
+        let high = run("child_family_63");
+        assert!(high.contains("answer 2 direct false"), "{high}");
+        assert!(high.contains("number 63: 1001, direct true"), "{high}");
+        for spec in ["off", "child_family", "child_family_63,child_family_63:off"] {
+            let out = run(spec);
+            assert!(out.contains("number 63: 2, direct false"), "{spec}: {out}");
+        }
+    }
+
     /// What a `typed_call!` costs with the flag set and clear, a call to the same one-line getter
     /// as `dispatch_speed` in `engine.rs`: `cargo test --release -p engine-core --lib -- --ignored
     /// --nocapture typed_call_speed`. `NV_BENCH_CALLS` sets how many (default 300M).
@@ -1395,16 +1662,36 @@ mod tests {
             stage2: false,
             funcs: || vec![crate::entry!(0x00ff_0000, typed_leaf(u32) -> u32)],
         };
+        // And one numbered past 31 ([`nv_typed_reaches_a_family_past_31_in_a_child_process`]).
+        const HIGH_ADDR: u32 = 0x00ff_0010;
+        static HIGH: Family = Family {
+            name: "child_family_63",
+            id: FamilyId::new(63),
+            past_gate: false,
+            threads: Threads::Both,
+            stage2: false,
+            funcs: || vec![crate::entry!(0x00ff_0010, typed_leaf(u32) -> u32)],
+        };
         provide(&CHILD);
+        provide(&HIGH);
         let mut e = Engine::new();
         if !e.is_registered(CHILD_ADDR) {
             let (addr, f) = crate::entry!(0x00ff_0000, translated_leaf(u32) -> u32);
+            e.register(addr, f);
+        }
+        if !e.is_registered(HIGH_ADDR) {
+            let (addr, f) = crate::entry!(0x00ff_0010, translated_leaf(u32) -> u32);
             e.register(addr, f);
         }
         println!(
             "answer {} direct {}",
             e.call(CHILD_ADDR, &[1]).u32(),
             e.is_registered(CHILD_ADDR) && e.typed_direct(CHILD.id, CHILD_ADDR)
+        );
+        println!(
+            "number 63: {}, direct {}",
+            e.call(HIGH_ADDR, &[1]).u32(),
+            e.typed_direct(HIGH.id, HIGH_ADDR)
         );
     }
 }

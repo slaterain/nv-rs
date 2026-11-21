@@ -567,14 +567,20 @@ pub(crate) fn camera_vector(e: &mut Engine, renderer: u32, to: u32, from: u32) {
 #[inline(always)]
 pub(crate) fn device_world_transform(e: &mut Engine, renderer: u32, world: u32) {
     let device = super::packet::renderer_device(e, renderer);
-    e.vcall(device, DEVICE_SET_TRANSFORM, &args![TRANSFORM_WORLD, world]);
+    engine_core::real_threads::device_vcall(
+        e,
+        device,
+        DEVICE_SET_TRANSFORM,
+        &args![TRANSFORM_WORLD, world],
+    );
 }
 
 /// Stream 0 of the device (`SetStreamSource(0, buffer, 0, stride)`) (condition 2).
 #[inline(always)]
 pub(crate) fn device_stream(e: &mut Engine, renderer: u32, buffer: u32, stride: u32) {
     let device = super::packet::renderer_device(e, renderer);
-    e.vcall(
+    engine_core::real_threads::device_vcall(
+        e,
         device,
         DEVICE_SET_STREAM_SOURCE,
         &args![0u32, buffer, 0u32, stride],
@@ -585,7 +591,7 @@ pub(crate) fn device_stream(e: &mut Engine, renderer: u32, buffer: u32, stride: 
 #[inline(always)]
 pub(crate) fn device_indices(e: &mut Engine, renderer: u32, indices: u32) {
     let device = super::packet::renderer_device(e, renderer);
-    e.vcall(device, DEVICE_SET_INDICES, &args![indices]);
+    engine_core::real_threads::device_vcall(e, device, DEVICE_SET_INDICES, &args![indices]);
 }
 
 /// A Direct3D object's count given back (`Release`) (condition 7).
@@ -707,7 +713,8 @@ pub(crate) fn device_vertex_constants_of(
     // float or integer register, 4 a boolean).
     let size = if slot == 0x188 { 4 } else { 16 };
     capture::own_image(e, data, count.wrapping_mul(size), |e, data| {
-        e.vcall(device, slot, &args![register, data, count]).u32()
+        engine_core::real_threads::device_vcall(e, device, slot, &args![register, data, count])
+            .u32()
     })
 }
 
@@ -971,7 +978,7 @@ pub(crate) fn set_entry_word(e: &mut Engine, entry: u32, offset: u32, value: u32
 /// (condition 2).
 #[inline(always)]
 pub(crate) fn device_clip_plane(e: &mut Engine, device: u32, index: u32, plane: u32) {
-    e.vcall(device, 0xdc, &args![index, plane]);
+    engine_core::real_threads::device_vcall(e, device, 0xdc, &args![index, plane]);
 }
 
 #[cfg(test)]

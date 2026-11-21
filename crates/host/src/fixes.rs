@@ -390,12 +390,14 @@ pub const SCRIPT_NULL_GUARD: Fix = Fix {
     env: "NV_NVSE_NULL_GUARD",
     addresses: &[],
     summary:
-        "ar_Count and ar_GetNth on a missing array answer 0, and a format string's string outside the game's memory ends the text, instead of stopping the game",
+        "ar_Count and ar_GetNth on a missing array answer 0, and a format string's string outside the game's memory ends the text, instead of stopping the game; with lStewieAl's Tweaks' switch node bounds row a switch node whose shown child is not there takes no child's bound",
     install: install_script_null_guard,
 };
 
 fn install_script_null_guard(e: &mut Engine) {
     nvse::commands::array::set_fix(e, nvse::commands::array::NULL_GUARD, true);
+    // Tweaks' slips not copied (S0237's child index), the same guard.
+    e.set_stewie_slip_guard(true);
 }
 
 pub const SCRIPT_CYCLE_GUARD: Fix = Fix {
@@ -1891,6 +1893,20 @@ mod tests {
         assert!(!nvse::args::game_inline(&mut e));
         (XNVSE_EXTRACT_ARGS.install)(&mut e);
         assert!(nvse::args::game_inline(&mut e));
+    }
+
+    /// The missing-data guard row also turns on the guard of lStewieAl's Tweaks' slips not copied
+    /// (S0237's child index): off until it runs.
+    #[test]
+    fn the_missing_data_guard_row_turns_on_the_tweaks_slip_guard() {
+        let mut e = Engine::new();
+        assert!(!e.stewie_slip_guard());
+        (SCRIPT_NULL_GUARD.install)(&mut e);
+        assert!(e.stewie_slip_guard());
+        assert!(nvse::commands::array::fix_on(
+            &e,
+            nvse::commands::array::NULL_GUARD
+        ));
     }
 
     /// EXTENDER-HOOKS R2 and docs/ENGINE_CRATE.md, "Typed code": what a fix overrides is listed, so
