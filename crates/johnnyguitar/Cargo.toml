@@ -10,3 +10,7 @@ rust-version.workspace = true
 engine-core = { path = "../engine-core" }
 # xNVSE built in: JohnnyGuitar's place in xNVSE's plugins (its listener for the deferred start).
 nvse = { path = "../nvse" }
+
+[dev-dependencies]
+# A second engine sharing one's slots, as a real thread's engine does (`share_slots_for_test`).
+engine-core = { path = "../engine-core", features = ["test-support"] }

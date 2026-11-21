@@ -260,7 +260,7 @@ fn with_the_row_on_player_ref_add_item_caps001_compiles() {
 #[test]
 fn with_the_row_off_the_names_are_not_found() {
     let mut e = engine(false);
-    assert_eq!(referenced(&mut e, b"PlayerRef").0, false);
+    assert!(!referenced(&mut e, b"PlayerRef").0);
     let (ok, _, errors) = compile(&mut e, "Caps001 5");
     assert!(!ok);
     assert_eq!(errors.len(), 1, "one error reported: the item not found");

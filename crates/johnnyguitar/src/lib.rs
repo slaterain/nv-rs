@@ -164,12 +164,14 @@ fn plugin() -> nvse::plugins::BuiltIn {
 /// JG's record in xNVSE's list (not listed). Off: nothing (the exe's path everywhere). After JIP
 /// (its light slots stay its own, as JG finds them not stubs), before lStewieAl's Tweaks.
 pub fn install(e: &mut Engine) {
+    // Made before the threads start, row on or off, so every thread's engine shares them (xNVSE's
+    // removal and JIP's two readers ask the store whether it is on from any thread).
+    editor_ids::store(e);
+    e.ext_free::<editor_ids::ConflictLog>();
     if !e.ext::<JohnnyGuitar>().on {
         return;
     }
-    // Made before the threads start, so every thread's engine shares them.
     editor_ids::store(e).set_on(true);
-    e.ext_free::<editor_ids::ConflictLog>();
     e.register(GETTER, getter);
     e.register(SETTER, setter);
     for &(vtable, _) in vtables::FORM_VTABLES.iter() {

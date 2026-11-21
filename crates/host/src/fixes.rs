@@ -2846,10 +2846,16 @@ bSunShadowsCharacters=0
     #[test]
     fn jg_editor_ids_follow_the_preset() {
         assert!(!Choice::vanilla().is_on(&JG_EDITOR_IDS));
-        assert!(Choice::from_parts(None, no_env).unwrap().is_on(&JG_EDITOR_IDS));
-        let off = with_ini(None, "[nv-rs Fixes]
+        assert!(Choice::from_parts(None, no_env)
+            .unwrap()
+            .is_on(&JG_EDITOR_IDS));
+        let off = with_ini(
+            None,
+            "[nv-rs Fixes]
 bJGEditorIDs=0
-", &[]);
+",
+            &[],
+        );
         assert!(!off.is_on(&JG_EDITOR_IDS));
         let on = Choice::from_parts(
             None,
@@ -2857,7 +2863,11 @@ bJGEditorIDs=0
         )
         .unwrap();
         assert!(on.is_on(&JG_EDITOR_IDS));
-        for choice in [Choice::from_parts(None, no_env).unwrap(), off, Choice::vanilla()] {
+        for choice in [
+            Choice::from_parts(None, no_env).unwrap(),
+            off,
+            Choice::vanilla(),
+        ] {
             let mut e = Engine::new();
             install(&mut e, &choice);
             johnnyguitar::install(&mut e);

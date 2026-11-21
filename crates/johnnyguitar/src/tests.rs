@@ -499,15 +499,43 @@ fn a_name_asked_for_again_is_the_same_copy() {
     );
 }
 
+/// Real threads: the store is made at the install, row on or off, so a thread's engine (made from
+/// main's afterwards) shares main's one store instead of making its own after the threads start.
+#[test]
+fn a_threads_engine_shares_the_one_store() {
+    for on in [true, false] {
+        let mut e = engine(on);
+        let mut thread = Engine::new();
+        e.share_slots_for_test(&mut thread);
+        assert_eq!(editor_ids::on(&mut thread), on);
+        assert!(std::ptr::eq(
+            editor_ids::store(&mut e),
+            editor_ids::store(&mut thread)
+        ));
+        if on {
+            editor_ids::store(&mut thread).add_name(0x0600_8000, b"ThreadName");
+            editor_ids::store(&mut thread).map_insert(0x0600_8000, b"ThreadName");
+            assert_eq!(editor_ids::store(&mut e).lookup(b"threadname"), 0x0600_8000);
+        }
+    }
+}
+
 /// The load's cost (run by hand, `--ignored --nocapture`, in release for the numbers the pull
-/// request gives): a million names stored and put in the map as the setter does, then a million
-/// lookups; the times and the store's bytes printed.
+/// request gives): names stored and put in the map as the setter does, then as many lookups; the
+/// times and the store's bytes printed. Two sizes, each in a fresh engine: 465,016 (every record of
+/// FalloutNV.esm, more than the vanilla game names) and a million (a large mod list).
 #[test]
 #[ignore]
 fn load_cost_of_a_million_names() {
+    for count in [465_016u32, 1_000_000] {
+        load_cost_of(count);
+    }
+}
+
+fn load_cost_of(count: u32) {
     let mut e = engine(true);
     let s = editor_ids::store(&mut e);
-    let names: Vec<String> = (0..1_000_000u32)
+    let names: Vec<String> = (0..count)
         .map(|i| format!("ModForm{i:07}EditorId"))
         .collect();
     let start = std::time::Instant::now();
@@ -524,12 +552,13 @@ fn load_cost_of_a_million_names() {
     let looked = start.elapsed();
     let c = s.counts();
     eprintln!(
-        "1,000,000 names ({} bytes of text): stored in {} ms, looked up in {} ms ({} ns each), {} bytes in all",
+        "{} names ({} bytes of text): stored in {} ms, looked up in {} ms ({} ns each), {} bytes in all",
+        count,
         c.arena_bytes,
         stored.as_millis(),
         looked.as_millis(),
-        looked.as_nanos() / 1_000_000,
+        looked.as_nanos() / u128::from(count),
         c.heap_bytes
     );
-    assert_eq!(found, 1_000_000);
+    assert_eq!(found, u64::from(count));
 }
