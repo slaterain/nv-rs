@@ -271,7 +271,7 @@ pub fn shadow_setup(e: &mut Engine, this: Ptr, word: u32, transform: u32) {
         }
         for k in 0..3u32 {
             let cell = first + 0x30 + 4 * k;
-            let sum = f32::from_bits(e.global::<u32>(CAMERA_OFFSET + 4 * k))
+            let sum = f32::from_bits(super::capture::own_at::<u32>(e, CAMERA_OFFSET + 4 * k))
                 + f32::from_bits(e.global::<u32>(cell));
             e.set_global(cell, sum.to_bits());
         }
@@ -559,5 +559,44 @@ pub fn setup_fog(e: &mut Engine, _this: Ptr, _unused: u32) {
     };
     for (k, word) in (0u32..).zip(words) {
         own::set_constant_word(e, FOG + 4 * k, word);
+    }
+}
+
+// Typed from 00baa3f0
+/// The tall grass shader's pass choice (slot 0xf0), `thiscall(shader, pass type)` (not a Ghidra function: typed
+/// from its bytes): for the types 0x16 to 0x3d the shader's word +0x14 + 4 · type, for 0x25c to 0x287 its word
+/// 4 · type − 0x904 (both its pass table from +0x6c) becomes the current pass; other types: nothing.
+pub fn select_pass(e: &mut Engine, this: Ptr, pass_type: u32) {
+    let slot = this.addr().wrapping_add(pass_type.wrapping_mul(4));
+    let at = if pass_type.wrapping_sub(0x16) <= 0x27 {
+        slot.wrapping_add(0x14)
+    } else if pass_type.wrapping_sub(0x25c) <= 0x2b {
+        slot.wrapping_sub(0x904)
+    } else {
+        return;
+    };
+    let pass = e.global::<u32>(at);
+    own::set_current_pass(e, pass);
+}
+
+// Typed from 00bac8d0
+/// The tall grass shader's pair textures (slot 0xf8), `thiscall(shader, pass type)` (the shader not read; not a
+/// Ghidra function: typed from its bytes): with the current pass read once, for the types 0x1c to 0x25 and 0x262 to
+/// 0x26b the pair into its stages 1 and 2; for 0x30 to 0x39 and 0x276 to 0x27f into its stages 2 and 3.
+pub fn pair_textures(e: &mut Engine, _this: Ptr, pass_type: u32) {
+    let pass = packet::current_pass(e);
+    let set = |e: &mut Engine, first: u32| {
+        for k in 0..2u32 {
+            let stages = e.global::<u32>(pass.wrapping_add(0x24));
+            let stage = e.global::<u32>(stages.wrapping_add(4 * (first + k)));
+            let texture = packet::pair_texture(e, k);
+            own::set_stage_texture(e, stage, texture);
+        }
+    };
+    if (0x1c..=0x25).contains(&pass_type) || pass_type.wrapping_sub(0x262) <= 9 {
+        set(e, 1);
+    }
+    if (0x30..=0x39).contains(&pass_type) || pass_type.wrapping_sub(0x276) <= 9 {
+        set(e, 2);
     }
 }
