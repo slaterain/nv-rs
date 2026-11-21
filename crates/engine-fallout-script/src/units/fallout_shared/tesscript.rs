@@ -2707,7 +2707,8 @@ pub fn script_run(
             e.set(this, Script::fQuestScriptGetSecondsBuffer, 0.0);
         }
     }
-    fn_005ae2e0(e, this);
+    // By address, as the exe calls it (the typed Script::Run calls it in its family).
+    e.call(0x005a_e2e0, &args![this]);
     result
 }
 

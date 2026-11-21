@@ -143,13 +143,7 @@ fn world(e: &mut Engine) {
     e.register(0x00ec_a6bd, atol);
     e.register(0x00ec_a573, atof);
     e.register(0x0044_a670, |e, a| ret(e.mem.cstr(a[0]).len() as u32));
-    for log in [
-        0x005b_5e40u32,
-        0x0070_3c00,
-        0x005e_2410,
-        0x0046_dce0,
-        0x005a_9290,
-    ] {
+    for log in [0x005b_5e40u32, 0x0070_3c00, 0x005e_2410, 0x0046_dce0] {
         e.register(log, |_, _| ret(0));
     }
     e.register(0x0070_2fc0, |e, _| ret(e.mem.u32(ANSWER_PROFILE)));
@@ -167,7 +161,6 @@ fn world(e: &mut Engine) {
     e.register(0x0040_13e0, |e, a| ret((e.mem.u32(a[0] + 8) >> 3) & 1));
     e.register(0x0050_0940, |_, a| ret(a[0] + 0x18));
     e.register(0x0048_3710, |_, _| ret(0));
-    e.register(0x005a_8ea0, |_, _| ret(0));
     e.register(0x005a_bf60, |e, _| ret(e.mem.u32(CONFIG + 0x30)));
     e.register(0x0041_af70, |_, _| ret(0));
     e.register(0x005e_1140, |_, _| ret(0));
