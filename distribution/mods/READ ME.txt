@@ -25,5 +25,6 @@ yourself, put a plugins.txt here (one file name per line, like the game's own pl
 
 Saves made with mods stay apart from your other nv-rs saves (userdata\mods).
 
-Regular .esp and .esm mods work. Mods that need xNVSE, JIP, or other plugins (.dll files) don't
-work yet: their script commands are not built in yet, and those files are not used.
+Regular .esp and .esm mods work. xNVSE, JIP LN NVSE, MCM's plugin and UI Organizer are built in (JIP,
+MCM and UIO with the bug fixes on), so mods that need only these work. Other plugins (.dll
+files, such as JohnnyGuitar NVSE and ShowOff) don't work yet: those files are not used.
