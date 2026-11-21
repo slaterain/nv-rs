@@ -35,9 +35,8 @@ const BUILD_MATRIX: u32 = 0x00e7_df90;
 /// The texture manager (renderer +0x8c4) and its lookup (slot 0xc, [`texture_data`]).
 const SLOT_TEXTURE_LOOKUP: u32 = 0xc;
 const TEXTURE_DATA: u32 = 0x00e9_0b10;
-/// Device slots (`IDirect3DDevice9`): `SetTransform`, `SetSamplerState`.
+/// Device slot (`IDirect3DDevice9`): `SetTransform` (`SetSamplerState` goes through the writer).
 const DEVICE_SET_TRANSFORM: u32 = 0xb0;
-const DEVICE_SET_SAMPLER_STATE: u32 = 0x114;
 /// The renderer's flags (slot 0xa0).
 const SLOT_RENDERER_FLAGS: u32 = 0xa0;
 /// The texture's renderer lock (`011f4748` + 0x180) with `EnterCriticalSection` and
@@ -224,12 +223,7 @@ pub fn apply(e: &mut Engine, this: Ptr<TextureStage>) {
             let device = e.global::<u32>(DEVICE);
             let stage_now = e.get(this, TextureStage::m_uiStage);
             let value = capture::own_at::<u32>(e, MAX_ANISOTROPY);
-            engine_core::real_threads::device_vcall(
-                e,
-                device,
-                DEVICE_SET_SAMPLER_STATE,
-                &args![stage_now, 10u32, value],
-            );
+            engine_core::real_threads::device_set_sampler_state(e, device, stage_now, 10, value);
         }
     })
 }

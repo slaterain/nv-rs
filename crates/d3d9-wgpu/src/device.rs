@@ -415,8 +415,12 @@ impl Bindings {
 
 /// A bind group's key: each binding's number, the dimension its shader declares (2D, cube, volume:
 /// the layout the group is made for, and the dummy a texture of the other kind is replaced by), its
-/// texture and its sampler.
-type GroupKey = Vec<(u32, u8, u64, Option<SamplerKey>)>;
+/// texture and its sampler (its number in [`Device::sampler_keys`]: a word to hash and compare, not the
+/// key's nine fields).
+type GroupKey = Vec<(u32, u8, u64, u32)>;
+
+/// A sampler slot's key not yet worked out since its states last changed ([`Device::slot_keys`]).
+const NO_KEY: u32 = u32::MAX;
 
 /// A vertex shader's inputs read from a declaration ([`Device::vertex_link`]).
 struct VertexLink {
@@ -984,6 +988,13 @@ pub struct Device {
     vs_modules: Map<VKey, Option<wgpu::ShaderModule>>,
     ps_modules: Map<PKey, Option<wgpu::ShaderModule>>,
     samplers: Map<SamplerKey, wgpu::Sampler>,
+    /// Every sampler key a draw has bound, numbered in the order first met (a group key's fourth
+    /// part), and each one's number; and each sampler slot's number for a draw that filters its
+    /// texture and one that cannot ([`NO_KEY`] until the first draw after its states change):
+    /// a draw reads a word for each of its samplers instead of making and hashing each key.
+    sampler_keys: Vec<SamplerKey>,
+    sampler_ids: Map<SamplerKey, u32>,
+    slot_keys: [[u32; 2]; 20],
     groups: Map<GroupKey, wgpu::BindGroup>,
     blit: Map<(wgpu::TextureFormat, bool), wgpu::RenderPipeline>,
     blit_layout: Option<wgpu::BindGroupLayout>,
@@ -1757,6 +1768,9 @@ impl Device {
             vs_modules: Map::default(),
             ps_modules: Map::default(),
             samplers: Map::default(),
+            sampler_keys: Vec::new(),
+            sampler_ids: Map::default(),
+            slot_keys: [[NO_KEY; 2]; 20],
             groups: Map::default(),
             blit: Map::default(),
             blit_layout: None,
@@ -2917,6 +2931,7 @@ impl Device {
             }
             *s = value;
             self.tex_gen += 1;
+            self.slot_keys[slot] = [NO_KEY; 2];
             // Of the sampler states only the LOD bias is in the stage's block; the rest go into
             // the draw's sampler, made from them at the draw.
             if kind as usize == state::ss::MIPMAPLODBIAS {
@@ -4077,13 +4092,31 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         })
     }
 
+    /// The number of sampler `slot`'s key ([`SamplerKey::new`] of its states, for a texture that
+    /// can be filtered or not) in [`Device::sampler_keys`]: the slot's number again while its
+    /// states are unchanged, else the key made, numbered when it is new.
+    fn sampler_key(&mut self, slot: usize, filterable: bool) -> u32 {
+        let id = self.slot_keys[slot][usize::from(filterable)];
+        if id != NO_KEY {
+            return id;
+        }
+        let sk = SamplerKey::new(&self.st.samplers[slot], filterable);
+        let keys = &mut self.sampler_keys;
+        let id = *self.sampler_ids.entry(sk).or_insert_with(|| {
+            keys.push(sk);
+            (keys.len() - 1) as u32
+        });
+        self.slot_keys[slot][usize::from(filterable)] = id;
+        id
+    }
+
     /// The bind group of one stage's samplers (`k`: 0 the pixel shader's, 1 the vertex
     /// shader's) as `key` and `samplers` give them: the last draw's again, else the cache's, else
     /// a new one in `layout`, each binding numbered within the stage's group.
     fn stage_group(
         &mut self,
         k: usize,
-        key: &[(u32, u8, u64, Option<SamplerKey>)],
+        key: &[(u32, u8, u64, u32)],
         samplers: &[((u32, u8, bool), usize)],
         copies: &[Option<Arc<Tex>>; 20],
     ) {
@@ -4111,12 +4144,12 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             }
             let mut views = Vec::new();
             let mut samps = Vec::new();
-            for &((binding, dim, filterable), slot) in samplers {
+            for (&((binding, dim, _), slot), e) in samplers.iter().zip(key) {
                 let view = match copies[slot].as_ref().or(self.st.textures[slot].as_ref()) {
                     Some(t) if (dim == 1) == t.cube => t.view.clone(),
                     _ => self.dummy[dim as usize].clone(),
                 };
-                let sk = SamplerKey::new(&self.st.samplers[slot], filterable);
+                let sk = self.sampler_keys[e.3 as usize];
                 views.push((binding % 32, view));
                 samps.push((binding % 32 + 1, self.sampler(sk)));
             }
@@ -4947,14 +4980,13 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 copies[slot] = self.copy_for_sampling(&t);
             }
             // The textures and samplers: the last draw's bind group again, else the cache's.
-            let mut group_key = [(0u32, 0u8, 0u64, None::<SamplerKey>); 20];
+            let mut group_key = [(0u32, 0u8, 0u64, 0u32); 20];
             for (g, &((binding, dim, filterable), slot)) in group_key.iter_mut().zip(samplers) {
                 let tex_id = copies[slot]
                     .as_ref()
                     .or(self.st.textures[slot].as_ref())
                     .map_or(0, |t| t.id);
-                let sk = SamplerKey::new(&self.st.samplers[slot], filterable);
-                *g = (binding, dim, tex_id, Some(sk));
+                *g = (binding, dim, tex_id, self.sampler_key(slot, filterable));
             }
             let group_key = &group_key[..samplers.len()];
             // Each stage's own group ([`wgsl::sampler_group`]): the vertex shader's samplers come
@@ -5221,8 +5253,14 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 k.hash(&mut h);
                 planes.hash(&mut h);
             }
+            // Each group key with its samplers' keys themselves, hashed as a list of (binding,
+            // dimension, texture, Some(sampler key)) is: the digest does not depend on how the keys
+            // are numbered.
             for (g, _) in &self.last_groups {
-                g.hash(&mut h);
+                h.write_usize(g.len());
+                for e in g {
+                    (e.0, e.1, e.2, Some(self.sampler_keys[e.3 as usize])).hash(&mut h);
+                }
             }
             self.blocks.hash(&mut h);
             for (k, a) in attributes.iter().enumerate() {
@@ -10083,6 +10121,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         st.ds = None;
         st.rs = state::default_render_states(pp.auto_depth);
         *st.samplers = [state::default_sampler_states(); 20];
+        self.slot_keys = [[NO_KEY; 2]; 20];
         *st.tss = ffp::default_stage_states();
         st.fvf = None;
         st.textures = Default::default();
@@ -11197,6 +11236,16 @@ fn capture(
 /// Makes a module from WGSL: read and checked once, by wgpu (naga's reader and validator, with
 /// the device's own capabilities); what it refuses, as text.
 fn create_module(device: &wgpu::Device, source: String) -> Result<wgpu::ShaderModule, String> {
+    // The hitch log's counts (`d3d9_stream::hitch`): a module made and its time, on whichever thread.
+    let started = std::time::Instant::now();
+    let made = create_module_here(device, source);
+    d3d9_stream::hitch::add(d3d9_stream::hitch::Count::Modules, 1);
+    d3d9_stream::hitch::add_time(d3d9_stream::hitch::Count::ModuleNs, started.elapsed());
+    made
+}
+
+/// [`create_module`]'s work.
+fn create_module_here(device: &wgpu::Device, source: String) -> Result<wgpu::ShaderModule, String> {
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: None,
@@ -11210,6 +11259,20 @@ fn create_module(device: &wgpu::Device, source: String) -> Result<wgpu::ShaderMo
 
 /// Makes the pipeline `job` describes (with the driver's cache, where there is one).
 fn build_pipeline(
+    device: &wgpu::Device,
+    cache: Option<&wgpu::PipelineCache>,
+    job: &PipelineJob,
+) -> Result<wgpu::RenderPipeline, String> {
+    // The hitch log's counts (`d3d9_stream::hitch`): a pipeline made and its time, on whichever thread.
+    let started = std::time::Instant::now();
+    let made = build_pipeline_here(device, cache, job);
+    d3d9_stream::hitch::add(d3d9_stream::hitch::Count::Pipelines, 1);
+    d3d9_stream::hitch::add_time(d3d9_stream::hitch::Count::PipelineNs, started.elapsed());
+    made
+}
+
+/// [`build_pipeline`]'s work.
+fn build_pipeline_here(
     device: &wgpu::Device,
     cache: Option<&wgpu::PipelineCache>,
     job: &PipelineJob,

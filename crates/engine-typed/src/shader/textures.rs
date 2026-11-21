@@ -130,7 +130,7 @@ pub fn stage_shared_texture(e: &mut Engine, index: u32) {
     let value = e.global::<u32>(SAMPLER_VALUE);
     let renderer = e.global::<u32>(RENDERER);
     let device = e.mem.u32(renderer.wrapping_add(0x288));
-    engine_core::real_threads::device_vcall(e, device, 0x114, &args![index, 8u32, value]);
+    engine_core::real_threads::device_set_sampler_state(e, device, index, 8, value);
 }
 
 /// The texture getter `00c02f30` (unnamed, `stdcall`, two words: the property and an index).
@@ -219,7 +219,10 @@ pub fn setup_geometry_textures(e: &mut Engine, this: Ptr, block: Ptr) {
     let kind = u32::from(e.mem.u16(rendering.wrapping_add(4)));
     let property = e.mem.u32(block.addr().wrapping_add(0xc));
     let pass = capture::own_at::<u32>(e, CURRENT_PASS);
-    let second_set = e.mem.u32(property.wrapping_add(0x24)) & 0x100000 == 0;
+    // The property's second flags word is a per-frame value the cut copies (main may change it after the cut): the
+    // packet's. Read in place, the drawing side saw main's later word (POISON: the scribble) and put the land's
+    // second texture set on its stages or not by it (the late gate's sampler 8/9 difference in Goodsprings).
+    let second_set = crate::draw::packet::property_word(e, property, 0x24) & 0x100000 == 0;
     let p = Ptr::new(property);
     let body = match kind {
         0x2
