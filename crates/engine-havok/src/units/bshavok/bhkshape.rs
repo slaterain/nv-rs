@@ -422,7 +422,14 @@ pub fn bhk_shape_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
 /// non-zero, compared as the value 0 or 1 with `mask` itself. Only `AL` is set (`MOV AL, DL`):
 /// the upper bytes of `EAX` stay those of `mask`. Ghidra made no function here; it is called from
 /// 005dbc1c.
+///
+/// lStewieAl's Tweaks' S0216 (`StairMaterialFix`, `WriteRelJump(0xC84F50, GetSubMaterialVarType)`)
+/// replaces it whole: with the row the answer is [`stair_sub_material_var_type`]'s, 0 or 1 (only
+/// `AL` is read by the exe's callers).
 pub fn fn_00c84f50(e: &mut Engine, this: u32, selector: u32, mask: u32) -> u32 {
+    if e.stewie(engine_core::extend::stewie::STAIR_MATERIAL) {
+        return u32::from(stair_sub_material_var_type(e, this, selector, mask));
+    }
     let mut object = this;
     if selector != 0xffff_ffff {
         loop {
@@ -435,6 +442,129 @@ pub fn fn_00c84f50(e: &mut Engine, this: u32, selector: u32, mask: u32) -> u32 {
     }
     let masked_non_zero = u32::from(e.mem.u32(object + 0x10) & mask != 0);
     (mask & 0xffff_ff00) | u32::from(masked_non_zero == mask)
+}
+
+/// `NiRTTI` of `bhkPackedNiTriStripsShape` (Tweaks' `StairMaterialFix.cpp`).
+const RTTI_PACKED_TRI_STRIPS_SHAPE: u32 = 0x0126_82dc;
+/// `NiRTTI` of `bhkNiTriStripsShape`.
+const RTTI_TRI_STRIPS_SHAPE: u32 = 0x0126_82e8;
+/// `NiRTTI` of `bhkListShape`.
+const RTTI_LIST_SHAPE: u32 = 0x0126_81a8;
+/// `NiRTTI` of `bhkConvexListShape`.
+const RTTI_CONVEX_LIST_SHAPE: u32 = 0x0126_86c4;
+/// `NiObject::GetRTTI`'s virtual slot.
+const GET_RTTI_SLOT: u32 = 0x8;
+/// `bhkShape::FindShapeCollection`'s virtual slot (the link `00c84f50` and `00c84f10` follow).
+const FIND_SHAPE_COLLECTION_SLOT: u32 = 0xcc;
+/// `bhkPackedNiTriStripsShape::GetSubMaterial` (`thiscall`, a shape key): the sub-shape's whole
+/// material word, or the shape's own masked to five bits.
+const PACKED_GET_SUB_MATERIAL: u32 = 0x00ca_5540;
+/// `bhkNiTriStripsShape::GetSubMaterialVarType` (`thiscall`, a shape key and a flag).
+const TRI_STRIPS_GET_SUB_MATERIAL_VAR_TYPE: u32 = 0x00ca_6920;
+/// `bhkListShape::GetNumChildShapes` (`thiscall`).
+const LIST_GET_NUM_CHILD_SHAPES: u32 = 0x004d_8560;
+/// `bhkListShape::GetChildShape` (`thiscall`, an index): the child's `bhkShape`, or null.
+const LIST_GET_CHILD_SHAPE: u32 = 0x004d_85a0;
+/// `bhkShape::materialType`, the material word.
+const MATERIAL_WORD: u32 = 0x10;
+/// `bhkRefObject`'s Havok object.
+const HAVOK_OBJECT: u32 = 0x8;
+/// `hkpConvexListShape::m_childShapes` (the array's data) and `m_size` (Tweaks' `havok.h`).
+const CONVEX_LIST_CHILDREN: u32 = 0x44;
+const CONVEX_LIST_SIZE: u32 = 0x48;
+/// `hkpShape::m_userData`: the shape's `bhkShape`.
+const SHAPE_USER_DATA: u32 = 0x8;
+
+/// lStewieAl's Tweaks' S0216 `GetSubMaterialVarType(shape, key, flag)` (`StairMaterialFix.cpp`, its
+/// replacement of `00c84f50`): unless `key` is -1 the shape's `FindShapeCollection` links are
+/// followed to their end (null or the shape itself ends them), then [`has_material_var`] answers
+/// whether `flag` is set in the material of the touched part.
+pub fn stair_sub_material_var_type(e: &mut Engine, shape: u32, key: u32, flag: u32) -> bool {
+    let mut shape = shape;
+    if key != u32::MAX {
+        loop {
+            let collection = e.vcall(shape, FIND_SHAPE_COLLECTION_SLOT, &args![]).u32();
+            if collection == 0 || collection == shape {
+                break;
+            }
+            shape = collection;
+        }
+    }
+    has_material_var(e, shape, key, flag)
+}
+
+/// Tweaks' `HasMaterialVar`: a key of -1 reads the shape's own material word.
+fn has_material_var(e: &mut Engine, shape: u32, key: u32, flag: u32) -> bool {
+    if key != u32::MAX {
+        return material_flag(e, shape, key, flag);
+    }
+    e.mem.u32(shape + MATERIAL_WORD) & flag != 0
+}
+
+/// Tweaks' `GetMaterialFlag`, by the shape's exact class (`GetRTTI`): a packed tri-strip shape's
+/// sub-shape word (`00ca5540`), a tri-strip shape's own test (`00ca6920`), a list shape's children's
+/// collections (any one set answers yes), a convex list shape's child at `key` (its own word when
+/// `key` is past the children); otherwise, and when none of a list's children answers yes, the
+/// shape's own material word.
+///
+/// Two Tweaks slips are guarded only with the missing-data guard row
+/// ([`Engine::stewie_slip_guard`]): a convex list key equal to the child count reads one past the
+/// list (Tweaks tests `key > count`), and a list's missing child is asked for its collection.
+fn material_flag(e: &mut Engine, shape: u32, key: u32, flag: u32) -> bool {
+    let own = |e: &mut Engine| e.mem.u32(shape + MATERIAL_WORD) & flag != 0;
+    let rtti = e.vcall(shape, GET_RTTI_SLOT, &args![]).u32();
+    match rtti {
+        RTTI_PACKED_TRI_STRIPS_SHAPE => {
+            e.call(PACKED_GET_SUB_MATERIAL, &args![shape, key]).u32() & flag != 0
+        }
+        RTTI_TRI_STRIPS_SHAPE => e
+            .call(
+                TRI_STRIPS_GET_SUB_MATERIAL_VAR_TYPE,
+                &args![shape, key, flag],
+            )
+            .bool(),
+        RTTI_LIST_SHAPE => {
+            let count = e.call(LIST_GET_NUM_CHILD_SHAPES, &args![shape]).u32();
+            let mut stairs = false;
+            let mut i = 0;
+            while i < count && !stairs {
+                let child = e.call(LIST_GET_CHILD_SHAPE, &args![shape, i]).u32();
+                i += 1;
+                if child == 0 && e.stewie_slip_guard() {
+                    continue;
+                }
+                let collection = e.vcall(child, FIND_SHAPE_COLLECTION_SLOT, &args![]).u32();
+                if collection != 0 {
+                    stairs = material_flag(e, collection, key, flag);
+                }
+            }
+            stairs || own(e)
+        }
+        RTTI_CONVEX_LIST_SHAPE => {
+            let list = e.mem.u32(shape + HAVOK_OBJECT);
+            let count = if list != 0 {
+                e.mem.u32(list + CONVEX_LIST_SIZE)
+            } else {
+                0
+            };
+            if list == 0 || key > count || (key == count && e.stewie_slip_guard()) {
+                return own(e);
+            }
+            let children = e.mem.u32(list + CONVEX_LIST_CHILDREN);
+            let child = e.mem.u32(children.wrapping_add(key.wrapping_mul(4)));
+            let child_shape = if child != 0 {
+                e.mem.u32(child + SHAPE_USER_DATA)
+            } else {
+                0
+            };
+            if child_shape != 0 {
+                material_flag(e, child_shape, key, flag)
+            } else {
+                own(e)
+            }
+        }
+        _ => own(e),
+    }
 }
 
 /// This unit's translated functions, by exe address.
@@ -1031,6 +1161,11 @@ mod tests {
 
 #[cfg(test)]
 mod tests_a01 {
+    use super::{
+        stair_sub_material_var_type, LIST_GET_CHILD_SHAPE, LIST_GET_NUM_CHILD_SHAPES,
+        PACKED_GET_SUB_MATERIAL, RTTI_CONVEX_LIST_SHAPE, RTTI_LIST_SHAPE,
+        RTTI_PACKED_TRI_STRIPS_SHAPE, RTTI_TRI_STRIPS_SHAPE, TRI_STRIPS_GET_SUB_MATERIAL_VAR_TYPE,
+    };
     use crate::prelude::*;
 
     /// Objects whose virtual function at +0xcc answers the word at +0x20 (the next link).
@@ -1081,6 +1216,172 @@ mod tests_a01 {
         );
         // A mask of 0 gives "no bits set" == 0.
         assert_eq!(e.call(0x00c8_4f50, &args![objects[0], 0u32, 0u32]).u32(), 1);
+    }
+
+    /// A `bhkShape` of the class `rtti` with the material word `word` and the collection link
+    /// `link` (slot 0xcc; 0 for none). The RTTI and link answers are the words at `+0x30`, `+0x34`.
+    fn stair_shape(e: &mut Engine, rtti: u32, word: u32, link: u32) -> u32 {
+        let vtable = e.mem.alloc(0xd0);
+        e.mem.set_u32(vtable + 0x8, 0x0900_1008);
+        e.mem.set_u32(vtable + 0xcc, 0x0900_10cc);
+        e.register(0x0900_1008, |e, a| Ret {
+            eax: e.mem.u32(a[0] + 0x30),
+            ..Ret::default()
+        });
+        e.register(0x0900_10cc, |e, a| Ret {
+            eax: e.mem.u32(a[0] + 0x34),
+            ..Ret::default()
+        });
+        let shape = e.mem.alloc(0x40);
+        e.mem.set_u32(shape, vtable);
+        e.mem.set_u32(shape + 0x10, word);
+        e.mem.set_u32(shape + 0x30, rtti);
+        e.mem.set_u32(shape + 0x34, link);
+        shape
+    }
+
+    fn stairs_on(e: &mut Engine, on: bool) {
+        e.set_stewie(engine_core::extend::stewie::STAIR_MATERIAL, on);
+    }
+
+    /// S0216 off: the exe's `((word & 0x40) != 0) == 0x40` never holds, so a stair word answers 0;
+    /// on: Tweaks' test answers the bit, a key of -1 reading the shape's own word.
+    #[test]
+    fn s0216_the_stair_bit_both_ways() {
+        let mut e = Engine::new();
+        let shape = stair_shape(&mut e, 0x4242, 0x45, 0);
+        assert_eq!(
+            e.call(0x00c8_4f50, &args![shape, 0xffff_ffffu32, 0x40u32])
+                .u32()
+                & 0xff,
+            0
+        );
+        stairs_on(&mut e, true);
+        assert_eq!(
+            e.call(0x00c8_4f50, &args![shape, 0xffff_ffffu32, 0x40u32])
+                .u32(),
+            1
+        );
+        // An unknown class with a key: its own word.
+        assert_eq!(e.call(0x00c8_4f50, &args![shape, 3u32, 0x40u32]).u32(), 1);
+        e.mem.set_u32(shape + 0x10, 0x05);
+        assert_eq!(e.call(0x00c8_4f50, &args![shape, 3u32, 0x40u32]).u32(), 0);
+    }
+
+    /// S0216 on: the links are followed to their end before the class is asked; a packed
+    /// tri-strip shape answers its sub-shape word (`00ca5540`, not its own word), a tri-strip shape
+    /// its own test (`00ca6920` with the key and the flag).
+    #[test]
+    fn s0216_packed_and_strip_shapes_answer_their_sub_shape() {
+        let mut e = Engine::new();
+        stairs_on(&mut e, true);
+        e.register(PACKED_GET_SUB_MATERIAL, |_, a| Ret {
+            eax: if a[1] == 7 { 0x49 } else { 0x09 },
+            ..Ret::default()
+        });
+        let packed = stair_shape(&mut e, RTTI_PACKED_TRI_STRIPS_SHAPE, 0x00, 0);
+        let outer = stair_shape(&mut e, 0x4242, 0x00, packed);
+        assert!(stair_sub_material_var_type(&mut e, outer, 7, 0x40));
+        assert!(!stair_sub_material_var_type(&mut e, outer, 8, 0x40));
+        // Key -1: no links followed, the outer shape's own word.
+        assert!(!stair_sub_material_var_type(&mut e, outer, u32::MAX, 0x40));
+        e.register(TRI_STRIPS_GET_SUB_MATERIAL_VAR_TYPE, |_, a| Ret {
+            eax: u32::from(a[1] == 0x0030_0000 && a[2] == 0x40),
+            ..Ret::default()
+        });
+        let strips = stair_shape(&mut e, RTTI_TRI_STRIPS_SHAPE, 0x40, 0);
+        assert!(stair_sub_material_var_type(
+            &mut e,
+            strips,
+            0x0030_0000,
+            0x40
+        ));
+        assert!(!stair_sub_material_var_type(
+            &mut e,
+            strips,
+            0x0010_0000,
+            0x40
+        ));
+    }
+
+    /// S0216 on: a list shape answers yes when any child's collection does, else its own word; a
+    /// missing child is skipped only with the missing-data guard (Tweaks asks it for its
+    /// collection).
+    #[test]
+    fn s0216_list_shape_asks_its_children() {
+        let mut e = Engine::new();
+        stairs_on(&mut e, true);
+        let plain = stair_shape(&mut e, 0x4242, 0x05, 0);
+        let stairs = stair_shape(&mut e, 0x4242, 0x45, 0);
+        let child_a = stair_shape(&mut e, 0x4242, 0x00, plain);
+        let child_b = stair_shape(&mut e, 0x4242, 0x00, stairs);
+        let list = stair_shape(&mut e, RTTI_LIST_SHAPE, 0x01, 0);
+        e.mem.set_u32(list + 0x20, child_a);
+        e.mem.set_u32(list + 0x24, child_b);
+        e.mem.set_u32(list + 0x28, 2);
+        e.register(LIST_GET_NUM_CHILD_SHAPES, |e, a| Ret {
+            eax: e.mem.u32(a[0] + 0x28),
+            ..Ret::default()
+        });
+        e.register(LIST_GET_CHILD_SHAPE, |e, a| Ret {
+            eax: e.mem.u32(a[0] + 0x20 + 4 * a[1]),
+            ..Ret::default()
+        });
+        assert!(stair_sub_material_var_type(&mut e, list, 2, 0x40));
+        e.mem.set_u32(list + 0x28, 1);
+        assert!(!stair_sub_material_var_type(&mut e, list, 2, 0x40));
+        // The list's own word answers when no child does.
+        e.mem.set_u32(list + 0x10, 0x41);
+        assert!(stair_sub_material_var_type(&mut e, list, 2, 0x40));
+        // A missing first child, with the guard: skipped, the second answers.
+        e.mem.set_u32(list + 0x10, 0x01);
+        e.mem.set_u32(list + 0x20, 0);
+        e.mem.set_u32(list + 0x28, 2);
+        e.set_stewie_slip_guard(true);
+        assert!(stair_sub_material_var_type(&mut e, list, 2, 0x40));
+    }
+
+    /// S0216 on: a convex list shape answers its child at the key (the child `hkpShape`'s
+    /// `bhkShape`), its own word for a key past the children; a key equal to the count reads one
+    /// past the list without the missing-data guard (Tweaks' `key > count`) and is no part with it.
+    #[test]
+    fn s0216_convex_list_shape_and_the_key_past_its_children() {
+        let mut e = Engine::new();
+        stairs_on(&mut e, true);
+        let stairs = stair_shape(&mut e, 0x4242, 0x50, 0);
+        let plain = stair_shape(&mut e, 0x4242, 0x10, 0);
+        let hk_child = |e: &mut Engine, shape: u32| {
+            let child = e.mem.alloc(0x10);
+            e.mem.set_u32(child + 8, shape);
+            child
+        };
+        let (a, b, past) = (
+            hk_child(&mut e, plain),
+            hk_child(&mut e, stairs),
+            hk_child(&mut e, stairs),
+        );
+        let children = e.mem.alloc(0x10);
+        e.mem.set_u32(children, a);
+        e.mem.set_u32(children + 4, b);
+        e.mem.set_u32(children + 8, past);
+        let hk = e.mem.alloc(0x50);
+        e.mem.set_u32(hk + 0x44, children);
+        e.mem.set_u32(hk + 0x48, 2);
+        let list = stair_shape(&mut e, RTTI_CONVEX_LIST_SHAPE, 0x00, 0);
+        e.mem.set_u32(list + 8, hk);
+        assert!(!stair_sub_material_var_type(&mut e, list, 0, 0x40));
+        assert!(stair_sub_material_var_type(&mut e, list, 1, 0x40));
+        assert!(!stair_sub_material_var_type(&mut e, list, 3, 0x40));
+        // Key == count: Tweaks reads the word one past the children.
+        assert!(stair_sub_material_var_type(&mut e, list, 2, 0x40));
+        e.set_stewie_slip_guard(true);
+        assert!(!stair_sub_material_var_type(&mut e, list, 2, 0x40));
+        e.mem.set_u32(list + 0x10, 0x40);
+        assert!(stair_sub_material_var_type(&mut e, list, 2, 0x40));
+        // No Havok object: its own word.
+        e.mem.set_u32(list + 8, 0);
+        e.mem.set_u32(list + 0x10, 0);
+        assert!(!stair_sub_material_var_type(&mut e, list, 1, 0x40));
     }
 
     /// A link that points back at the object itself ends the chain.
