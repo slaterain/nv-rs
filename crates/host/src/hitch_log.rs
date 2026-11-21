@@ -1291,7 +1291,12 @@ mod tests {
         v[Column::AfterPass as usize] = (250.0, 1);
         v[Column::P1 as usize] = (1000.0, 1);
         v[Column::W as usize] = (2000.0, 1);
-        assert_eq!(stages_of(&v), [4.0, 0.0, 0.0, 0.0, 0.75, 0.0, 3.0]);
+        v[Column::GameTail as usize] = (1500.0, 1);
+        v[Column::HostGap as usize] = (250.0, 1);
+        assert_eq!(
+            stages_of(&v),
+            [4.0, 0.0, 0.0, 0.0, 0.75, 0.0, 3.0, 1.5, 0.25]
+        );
         assert_eq!(thousands(1_234_567), "1,234,567");
         assert_eq!(thousands(999), "999");
         assert_eq!(bytes(1536), "2 KB");

@@ -154,6 +154,11 @@ pub fn side(main: Count, other: Count) -> Count {
     }
 }
 
+/// Where a heap block's count is in [`HEAP`] (and so which [`Count`] it is).
+fn heap_index(free: bool, other: bool) -> usize {
+    usize::from(other) * 2 + usize::from(free)
+}
+
 /// A heap block allocated (`free` false) or freed: one relaxed add on a cache line of its own ([`HEAP`]); nothing
 /// with the log off.
 #[inline]
@@ -162,9 +167,7 @@ pub fn heap(free: bool) {
         return;
     }
     let other = crate::real_threads::on_other_game_thread();
-    HEAP[usize::from(other) * 2 + usize::from(free)]
-        .0
-        .fetch_add(1, Relaxed);
+    HEAP[heap_index(free, other)].0.fetch_add(1, Relaxed);
 }
 
 /// What main waited for.
@@ -353,6 +356,15 @@ mod tests {
         let d = since(&snapshot(), &before);
         assert!(d[Count::AllocsMain as usize] >= 2);
         assert!(d[Count::FreesMain as usize] >= 1);
+        // Each block's count is its own Count (other tests count meanwhile, so the mapping is checked directly).
+        for (free, other, c) in [
+            (false, false, Count::AllocsMain),
+            (true, false, Count::FreesMain),
+            (false, true, Count::AllocsOther),
+            (true, true, Count::FreesOther),
+        ] {
+            assert!(std::ptr::eq(counter(c as usize), &HEAP[heap_index(free, other)].0));
+        }
         assert_eq!(
             side(Count::FilesOpenedMain, Count::FilesOpenedOther),
             Count::FilesOpenedMain
