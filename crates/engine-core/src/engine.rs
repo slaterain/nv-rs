@@ -967,6 +967,49 @@ impl Engine {
         self.call_full(addr, args)
     }
 
+    /// [`Engine::call`] of `addr` with `words`, except that where the call would run `expect` (the
+    /// function registered at `addr` and found in the call cache, no diagnostic on) it runs `typed`
+    /// in its place: the same function as a plain Rust call, its arguments not packed into words
+    /// (`crate::real_threads::DeviceWriter`). The time slice, the hook at its end and the call
+    /// stack go as in [`Engine::dispatch`]'s fast path; everything else is [`Engine::call`] itself.
+    #[inline(always)]
+    pub(crate) fn call_typed(
+        &mut self,
+        addr: u32,
+        expect: AbiFn,
+        words: &[u32],
+        typed: impl FnOnce(&mut Engine) -> u32,
+    ) -> Ret {
+        if let Some(f) = self.cached(addr) {
+            if crate::abi::same_fn(f, expect) && !self.diagnosing() {
+                let left = self
+                    .slice_left
+                    .checked_sub(u64::from(self.slice_hook.is_some()));
+                match left {
+                    Some(left) if self.call_stack.len() < self.call_stack.capacity() => {
+                        self.slice_left = left;
+                        self.call_stack.push(addr);
+                        let ret = typed(self);
+                        self.call_stack.pop();
+                        return crate::abi::RetVal::into_ret(ret);
+                    }
+                    None => {
+                        // As [`Engine::call_at_slice_end`].
+                        if let Some(hook) = self.slice_hook {
+                            hook(self, addr);
+                        }
+                        self.call_stack.push(addr);
+                        let ret = typed(self);
+                        self.call_stack.pop();
+                        return crate::abi::RetVal::into_ret(ret);
+                    }
+                    Some(_) => {}
+                }
+            }
+        }
+        self.dispatch(addr, words)
+    }
+
     /// [`Engine::dispatch`]'s fast path when the slice is used up: the hook (which starts the
     /// next turn, or asks again at the next call), then the call.
     #[cold]
@@ -2525,6 +2568,77 @@ mod tests {
         let fast = run(false);
         assert_eq!(fast.0, [201, 202, 203, 204, 205]);
         assert_eq!(fast, run(true));
+    }
+
+    /// [`Engine::call_typed`] against [`Engine::call`]: the same answers, the time slice counted
+    /// down alike, the hook run at the same calls with the same address, and the call stack alike;
+    /// the typed form runs only while the registered function is the one expected (another
+    /// registered over it runs in its place) and no diagnostic is on.
+    #[test]
+    fn a_typed_call_slices_and_stacks_as_a_call() {
+        fn hook(e: &mut Engine, addr: u32) {
+            let n = e.mem.u32(0x2000);
+            e.mem.set_u32(0x2000 + 4 + 4 * n, addr);
+            e.mem.set_u32(0x2000, n + 1);
+            e.slice_left = e.slice_len;
+        }
+        const F: u32 = 0x0040_6000;
+        let base: AbiFn = |e, a| Ret {
+            eax: e.call_stack.len() as u32 * 100 + a[1],
+            ..Ret::default()
+        };
+        let run = |typed: bool, full: bool| {
+            let mut e = Engine::new();
+            e.mem.map(0x2000, 0x100);
+            e.register(F, base);
+            if full {
+                e.set_call_budget(Some(u64::MAX));
+            }
+            e.slice_len = 3;
+            e.slice_left = 3;
+            e.slice_hook = Some(hook);
+            let mut typed_runs = 0u32;
+            let mut rets: Vec<u32> = Vec::new();
+            for i in 0..8 {
+                if i == 5 {
+                    // Something registered over the expected function: it runs, not the typed form.
+                    e.register(F, |_, a| Ret {
+                        eax: 7000 + a[1],
+                        ..Ret::default()
+                    });
+                }
+                let words = [0x1234, i];
+                let ret = if typed {
+                    e.call_typed(F, base, &words, |e| {
+                        typed_runs += 1;
+                        e.call_stack.len() as u32 * 100 + i
+                    })
+                } else {
+                    e.call(F, &words)
+                };
+                rets.push(ret.eax);
+            }
+            let hooks: Vec<u32> = (0..e.mem.u32(0x2000))
+                .map(|i| e.mem.u32(0x2004 + 4 * i))
+                .collect();
+            assert!(e.call_stack.is_empty());
+            (rets, hooks, e.slice_left, typed_runs)
+        };
+        let by_call = run(false, false);
+        assert_eq!(by_call.0, [100, 101, 102, 103, 104, 7005, 7006, 7007]);
+        let typed = run(true, false);
+        assert_eq!(
+            (&typed.0, &typed.1, typed.2),
+            (&by_call.0, &by_call.1, by_call.2)
+        );
+        // The first call misses the call cache and goes by address; the next four run typed.
+        assert_eq!(typed.3, 4);
+        // A diagnostic on: every call by address.
+        let full = run(true, true);
+        assert_eq!(
+            (&full.0, &full.1, full.2, full.3),
+            (&by_call.0, &by_call.1, by_call.2, 0)
+        );
     }
 
     /// The trace keeps the last `trace_keep` returned calls with their words, oldest first.
