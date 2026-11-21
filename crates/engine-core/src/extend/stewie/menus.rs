@@ -52,3 +52,35 @@ pub const ROULETTE_CUT_BET_VALUE: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END,
 /// won game pays the ante once (the exe moves the won items and caps to the player, then gives
 /// them again from the barter container).
 pub const CARAVAN_SINGLE_PAYOUT: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 11);
+/// S0022.12 `MenuFixes` (`fn_00728da0`, the recipe menu's item information, at `0x7296E0`): the
+/// condition tile's notch sits in the armour place for armour (`user6` 0) and at the crafted
+/// condition (`user5`), not always in the weapon's place.
+pub const RECIPE_CONDITION_NOTCH: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 12);
+/// S0022.34 `MenuFixes` (`InventoryMenu::DoGamepad` `00782190`, its switch slot `0x7823B0`): the
+/// pad's and Page Up's mod menu button does nothing while the mod button cannot be used
+/// (`target` 0).
+pub const WEAPON_MOD_MENU_NEEDS_TARGET: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 13);
+/// S0022.52 `MenuFixes` (`RepairMenu::DoEnter` `007b6120` at `0x7B6514`): the repair menu's stat
+/// lines follow the broken item's type, not the type of the item repaired with.
+pub const REPAIR_MENU_BROKEN_ITEM_TYPE: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 14);
+/// S0033 `patchRepairServicesMenuRemembersScrollPosition` (`RepairServicesMenu::DoClick`
+/// `007b7d80` at `0x7B7E86` and `0x7B7F4E`): the vendor's repair list keeps its scroll position
+/// after Repair and Repair All.
+pub const REPAIR_SERVICES_KEEPS_SCROLL: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 15);
+/// S0044 `patchFixRecipeMenuArmorIcons` (`RecipeMenu::DoEnter` `00727b10` at `0x728378`): an
+/// armour recipe shows the armour's inventory icon, not its message (glow) icon.
+pub const RECIPE_ARMOUR_ICONS: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 16);
+/// S0051 `patchUpdateDRDTWhenUsingVendorRepair` (`RepairServicesMenu::RepairItem` `007b7f70` at
+/// `0x7B8083`): a vendor's repair recounts the player's DR and DT.
+pub const VENDOR_REPAIR_RESETS_DR_DT: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 17);
+/// S0070 `patchFixBookAndAmmoHotkeyIcons` (`InventoryMenu` `00780ff0` at `0x78149C`,
+/// `HotkeyWheel::UpdateHotkeyList` `007017b0` at `0x701861`): a hotkeyed book shows the chems
+/// icon and hotkeyed ammo the big guns icon, not none.
+pub const BOOK_AND_AMMO_HOTKEY_ICONS: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 18);
+/// S0071 `patchFixRecipeNegativeIngredientCount` (`RecipeMenu::DoEnter` at `0x727F92`): an
+/// ingredient count below 0 shows 0.
+pub const RECIPE_NO_NEGATIVE_COUNT: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 19);
+/// S0200 `RecipeMenuRefreshFix` (`fn_00728a30` at `0x728A4E`, `fn_00727680` at `0x7276A6` and
+/// `0x7278A9`): the recipe list refilled after crafting keeps the menu's category, its filter
+/// and its scroll position.
+pub const RECIPE_REFRESH_KEEPS_CATEGORY: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 20);
