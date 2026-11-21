@@ -62,6 +62,41 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         Row::at(AI_FIXES, 19),
     ),
     (
+        "S0089.01",
+        "bRememberAmmoCountOnLoadSavedCount",
+        Row::at(AI_FIXES, 25),
+    ),
+    (
+        "S0089.02",
+        "bRememberAmmoCountOnLoadNoReload",
+        Row::at(AI_FIXES, 26),
+    ),
+    (
+        "S0089.03",
+        "bRememberAmmoCountOnLoadReloadNoNewEntry",
+        Row::at(AI_FIXES, 27),
+    ),
+    (
+        "S0089.06",
+        "bRememberAmmoCountOnLoadPlayerWithout3D",
+        Row::at(AI_FIXES, 28),
+    ),
+    (
+        "S0089.07",
+        "bRememberAmmoCountOnLoadSetupAmmo",
+        Row::at(AI_FIXES, 29),
+    ),
+    (
+        "S0089.08",
+        "bRememberAmmoCountOnLoadHotkeyAmmoNeedsRounds",
+        Row::at(AI_FIXES, 30),
+    ),
+    (
+        "S0089.09",
+        "bRememberAmmoCountOnLoadSwapSetsType",
+        Row::at(AI_FIXES, 31),
+    ),
+    (
         "S0133",
         "bFixSpectatorThreatInfoUsingWrongWeaponType",
         Row::at(AI_FIXES, 16),
