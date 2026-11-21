@@ -35,6 +35,7 @@ use super::startmenu::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
 use crate::types::BSSimpleArray;
+use engine_core::extend::stewie;
 
 // ---- globals ---------------------------------------------------------------
 
@@ -1909,9 +1910,7 @@ pub fn fn_007d52a0(e: &mut Engine, this: Ptr<StartMenu>) -> bool {
         let active = e.call(INTERFACE_ACTIVE, &[]).bool();
         let device_button = tile_of(e, this, TILE_DEVICE_BUTTON);
         set_int(e, device_button, TRAIT_1004, !active as i32);
-    } else if e.call(WAITING_FOR_REMAP_PRESS, &args![this]).bool()
-        && !e.call(IS_CONSOLE_VISIBLE, &[]).bool()
-    {
+    } else if remap_waiting(e, this) && !e.call(IS_CONSOLE_VISIBLE, &[]).bool() {
         let mut bound = false;
         let selected = e
             .call(LIST_SELECTED_DATA, &args![list_at(this, LIST_OPTIONS)])
@@ -2170,7 +2169,14 @@ pub fn fn_007d5830(e: &mut Engine, this: Ptr<StartMenu>) -> bool {
             }
         }
     }
-    if get_flag(e, this, FLAG_DLC_WAIT_MESSAGE) {
+    // `0x7D59C7` (lStewieAl's Tweaks' S0154 writes `JMP 0x7D5A21` there): no message box and no
+    // wait for the DLC enumeration; the flag is cleared and the content loaded at once.
+    let dlc_wait = get_flag(e, this, FLAG_DLC_WAIT_MESSAGE);
+    if dlc_wait && e.stewie(stewie::NO_LOADING_DLC_POPUP) {
+        set_flag(e, this, FLAG_DLC_WAIT_MESSAGE, false);
+        e.call(DLC_FINISH, &[]);
+        fn_007d69f0(e);
+    } else if dlc_wait {
         let menu = e.call(TILE_GET_MENU_BY_CLASS, &args![0x3e9u32]).u32();
         if menu == 0 {
             let text = e.call(SETTING_STRING_ALT, &args![SETTING_011D3E2C]).u32();
@@ -2945,8 +2951,11 @@ pub fn fn_007d69f0(e: &mut Engine) {
     }
     let idle_manager = e.global::<u32>(IDLE_MANAGER_OBJECT);
     e.call(IDLE_MANAGER_FN_6003C0, &args![idle_manager]);
-    e.call(MESSAGE_MENU_CLOSE_007AA480, &[]);
-    e.call(CLOSE_MESSAGE_MENU, &[]);
+    // `0x7D6AA3`, `0x7D6AA8` (lStewieAl's Tweaks' S0154 writes 5-byte NOPs over both calls).
+    if !e.stewie(stewie::NO_LOADING_DLC_POPUP) {
+        e.call(MESSAGE_MENU_CLOSE_007AA480, &[]);
+        e.call(CLOSE_MESSAGE_MENU, &[]);
+    }
     let utility = e.call(SYSTEM_UTILITY_INSTANCE, &[]).u32();
     let dlc = e.call(DLC_UTILITY_FROM_SYSTEM, &args![utility]).u32();
     let content_list = fn_007d6bb0(e, Ptr::new(dlc));
@@ -3094,12 +3103,76 @@ pub fn fn_007d6d70(e: &mut Engine) {
         let icon = e
             .call(SETTING_STRING_ALT, &args![MESSAGE_ICON_SETTING])
             .u32();
-        let text = e.call(SETTING_STRING_ALT, &args![SETTING_011D3138]).u32();
+        // `0x7D6E50` (lStewieAl's Tweaks' S0883 calls `OnFailSaveSettings` there).
+        let text = if e.stewie(stewie::SETTINGS_SAVE_ERROR_NAMES_FILE) {
+            stewie_save_settings_error(e)
+        } else {
+            e.call(SETTING_STRING_ALT, &args![SETTING_011D3138]).u32()
+        };
         e.call(
             SHOW_MESSAGE,
             &args![text, 0u32, 0u32, 0u32, 0u32, 0x12u32, 0.0f32, 0.0f32, icon, 0u32],
         );
     }
+}
+
+/// `StartMenu::IsInActionMapping` (`007ce8f0`) at `0x7D5365`; with lStewieAl's Tweaks' S0022.07
+/// on, `MenuFixes::StartMenuIsActionMappingOptionSelected`: while the remap waits, false the
+/// first time (its `static bool debounce` set) and true after; not waiting clears the debounce.
+fn remap_waiting(e: &mut Engine, this: Ptr<StartMenu>) -> bool {
+    if !e.stewie(stewie::START_MENU_REMAP_DEBOUNCE) {
+        return e.call(WAITING_FOR_REMAP_PRESS, &args![this]).bool();
+    }
+    let waiting = e.call(WAITING_FOR_REMAP_PRESS, &args![this]).bool();
+    let debounce = e.stewie_kept(stewie::kept::REMAP_DEBOUNCE, 1);
+    if waiting {
+        if e.mem.u8(debounce) != 0 {
+            return true;
+        }
+        e.mem.set_u8(debounce, 1);
+    } else {
+        e.mem.set_u8(debounce, 0);
+    }
+    false
+}
+
+/// `IniSettingCollection::GetIniPrefs` (`*0x11F35A0`): the prefs collection, its path at +4.
+const INI_PREFS: u32 = 0x011f_35a0;
+/// `GetFileAttributesA` (KERNEL32 import slot `00fdf160`).
+const GET_FILE_ATTRIBUTES: u32 = 0x00fd_f160;
+
+/// lStewieAl's Tweaks' `MoreDescriptiveSettingsSaveError::OnFailSaveSettings` (row S0883), at
+/// `0x7D6E50` in place of the setting's text: into its 0x200-byte static (`snprintf`, cut to
+/// 0x1FF), with the prefs ini's path (`GetFileAttributesA`): read-only (attribute 1) and missing
+/// (`INVALID_FILE_ATTRIBUTES`) get Tweaks' own sentences, anything else the setting's text
+/// (`sMenuDisplayFailSaveSettings`, its +4 read raw), two line breaks and the path.
+fn stewie_save_settings_error(e: &mut Engine) -> u32 {
+    let path = e.mem.u32(INI_PREFS) + 4;
+    let name = e.mem.cstr(path);
+    let attributes = e.call(GET_FILE_ATTRIBUTES, &args![path]).u32();
+    let mut text = Vec::new();
+    if attributes == u32::MAX {
+        text.extend_from_slice(b"Failed to save settings to file ");
+        text.extend_from_slice(&name);
+        text.extend_from_slice(
+            b" as it is missing, you may need to run the launcher to generate it. Selected settings will not be saved.",
+        );
+    } else if attributes & 1 != 0 {
+        text.extend_from_slice(b"Failed to save settings to file ");
+        text.extend_from_slice(&name);
+        text.extend_from_slice(
+            b" as it is marked 'read-only'. Selected settings will not be saved.",
+        );
+    } else {
+        let setting = e.mem.u32(SETTING_011D3138 + 4);
+        text.extend_from_slice(&e.mem.cstr(setting));
+        text.extend_from_slice(b"\n\n");
+        text.extend_from_slice(&name);
+    }
+    text.truncate(0x1ff);
+    let buffer = e.stewie_kept(stewie::kept::SAVE_SETTINGS_ERROR, 0x200);
+    e.mem.set_cstr(buffer, &text);
+    buffer
 }
 
 // Translated from 007d6eb0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -9032,5 +9105,164 @@ mod tests {
         assert!(calls(&e, OPERATOR_DELETE).is_empty());
         bs_simple_array_user_option_ptr_scalar_deleting_destructor(&mut e, array, 1);
         assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![array.addr()]]);
+    }
+
+    // ---- lStewieAl's Tweaks' rows (share 3, group 3) ----
+
+    use engine_core::extend::stewie;
+
+    /// Row S0022.07: the remap test (`007ce8f0`) waiting answers false the first frame and true
+    /// after with the row on (Tweaks' debounce); a frame not waiting answers false and clears it.
+    /// Off: the exe's answer every frame.
+    #[test]
+    fn s0022_07_the_remap_waits_a_frame() {
+        for on in [false, true] {
+            let mut e = engine();
+            let menu = new_menu(&mut e);
+            e.set_stewie(stewie::START_MENU_REMAP_DEBOUNCE, on);
+            let waiting = [true, true, true, false, true, true];
+            let wanted = if on {
+                [false, true, true, false, false, true]
+            } else {
+                waiting
+            };
+            for (frame, (now, want)) in waiting.into_iter().zip(wanted).enumerate() {
+                stub(&mut e, WAITING_FOR_REMAP_PRESS, u32::from(now));
+                assert_eq!(remap_waiting(&mut e, menu), want, "row {on} frame {frame}");
+            }
+        }
+    }
+
+    /// Row S0022.07 at its place in the start menu's input (`fn_007d52a0`, `0x7D5365`): waiting
+    /// for a remap press with a key held, the row on binds nothing the first frame and the key
+    /// the second; off, the key is bound the first frame.
+    #[test]
+    fn s0022_07_the_remap_binds_on_the_second_frame() {
+        for on in [false, true] {
+            let mut e = engine();
+            let menu = remapping_menu(&mut e, 0);
+            keyboard_with_key_down(&mut e, 30, true);
+            e.set_stewie(stewie::START_MENU_REMAP_DEBOUNCE, on);
+            assert!(fn_007d52a0(&mut e, menu));
+            assert_eq!(
+                calls(&e, BIND_INPUT).len(),
+                usize::from(!on),
+                "row {on}, first frame"
+            );
+            if on {
+                assert!(fn_007d52a0(&mut e, menu));
+                assert_eq!(
+                    calls(&e, BIND_INPUT),
+                    vec![vec![0x2222, 77, 0, 30]],
+                    "second frame"
+                );
+            }
+        }
+    }
+
+    /// Row S0154: the content load (`007d69f0`) closes the message menus (`007aa480`, `00704000`)
+    /// with the row off, not with it on.
+    #[test]
+    fn s0154_the_content_load_leaves_the_messages() {
+        for on in [false, true] {
+            let mut e = engine();
+            let menu = new_menu(&mut e);
+            list_vtable(&mut e, list_at(menu, LIST_DOWNLOADS));
+            stub(&mut e, LIST_FIRST_NODE, 0);
+            stub(&mut e, LIST_IS_EMPTY_NODE, 1);
+            e.set_stewie(stewie::NO_LOADING_DLC_POPUP, on);
+            e.call_log = Some(Vec::new());
+            fn_007d69f0(&mut e);
+            let closed =
+                calls(&e, MESSAGE_MENU_CLOSE_007AA480).len() + calls(&e, CLOSE_MESSAGE_MENU).len();
+            assert_eq!(closed, if on { 0 } else { 2 }, "row {on}");
+            assert_eq!(calls(&e, DLC_UTILITY_FN_AF2940).len(), 1);
+        }
+    }
+
+    /// Row S0154: the start menu's idle with the DLC wait flag: off, the exe's (no DLC menu: the
+    /// loading message, the flag kept); on, no menu looked up and no message, the flag cleared,
+    /// the DLC finished and the content loaded at once.
+    #[test]
+    fn s0154_no_loading_dlc_message() {
+        for on in [false, true] {
+            let mut e = engine();
+            let menu = new_menu(&mut e);
+            list_vtable(&mut e, list_at(menu, LIST_DOWNLOADS));
+            // The content list is empty (no corrupt-content message after the load).
+            stub(&mut e, LIST_FIRST_NODE, 0);
+            stub(&mut e, LIST_IS_EMPTY_NODE, 1);
+            e.set_stewie(stewie::NO_LOADING_DLC_POPUP, on);
+            set_flags(&mut e, menu, FLAG_DLC_WAIT_MESSAGE);
+            e.call_log = Some(Vec::new());
+            assert!(fn_007d5830(&mut e, menu));
+            if on {
+                assert!(calls(&e, SHOW_MESSAGE).is_empty());
+                assert!(!calls(&e, TILE_GET_MENU_BY_CLASS).contains(&vec![0x3e9]));
+                assert_eq!(calls(&e, DLC_FINISH).len(), 1);
+                assert_eq!(
+                    calls(&e, DLC_UTILITY_FN_AF2940).len(),
+                    1,
+                    "the content loaded"
+                );
+                assert_eq!(flags(&e, menu) & FLAG_DLC_WAIT_MESSAGE, 0);
+            } else {
+                assert_eq!(calls(&e, SHOW_MESSAGE).len(), 1);
+                assert!(calls(&e, DLC_FINISH).is_empty());
+                assert_eq!(
+                    flags(&e, menu) & FLAG_DLC_WAIT_MESSAGE,
+                    FLAG_DLC_WAIT_MESSAGE
+                );
+            }
+        }
+    }
+
+    /// Row S0883: the settings save failure's text. Off: the setting's (`004c69f0`). On: Tweaks'
+    /// own, in its kept 0x200-byte buffer, by the prefs ini's attributes (`GetFileAttributesA` on
+    /// its path): missing, read-only, or the setting's text, two line breaks and the path.
+    #[test]
+    fn s0883_the_save_error_names_the_file() {
+        let path = b"C:\\Game\\FalloutPrefs.ini";
+        let missing =
+            "Failed to save settings to file C:\\Game\\FalloutPrefs.ini as it is missing, \
+                       you may need to run the launcher to generate it. Selected settings will \
+                       not be saved.";
+        let read_only =
+            "Failed to save settings to file C:\\Game\\FalloutPrefs.ini as it is marked \
+                         'read-only'. Selected settings will not be saved.";
+        for (on, attributes, wanted) in [
+            (true, u32::MAX, missing),
+            (true, 0x21, read_only),
+            (true, 0x20, "Could not save.\n\nC:\\Game\\FalloutPrefs.ini"),
+            (false, 0x21, ""),
+        ] {
+            let mut e = engine();
+            e.map(0x011f_3000, 0x1000);
+            let prefs = e.mem.alloc(0x110);
+            e.mem.set_cstr(prefs + 4, path);
+            e.mem.set_u32(INI_PREFS, prefs);
+            let setting = e.mem.alloc(0x20);
+            e.mem.set_cstr(setting, b"Could not save.");
+            e.mem.set_u32(SETTING_011D3138 + 4, setting);
+            e.register_double(GET_FILE_ATTRIBUTES, move |_, _| ret(attributes));
+            e.set_stewie(stewie::SETTINGS_SAVE_ERROR_NAMES_FILE, on);
+            e.call_log = Some(Vec::new());
+            fn_007d6d70(&mut e);
+            let shown = calls(&e, SHOW_MESSAGE);
+            assert_eq!(shown.len(), 1);
+            if on {
+                assert_eq!(calls(&e, GET_FILE_ATTRIBUTES), [vec![prefs + 4]]);
+                assert_eq!(
+                    e.mem.cstr(shown[0][0]),
+                    wanted.as_bytes(),
+                    "attributes {attributes:#x}"
+                );
+                let kept = e.stewie_kept(stewie::kept::SAVE_SETTINGS_ERROR, 0x200);
+                assert_eq!(shown[0][0], kept);
+            } else {
+                assert!(calls(&e, GET_FILE_ATTRIBUTES).is_empty());
+                assert_eq!(shown[0][0], SETTING_011D3138 + 4);
+            }
+        }
     }
 }
