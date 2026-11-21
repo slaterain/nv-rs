@@ -267,6 +267,9 @@ thread_local! {
     /// lets the read accessors of a thread with no packet (main while the drawing side draws) go straight to
     /// guest memory, without the packet's borrow and look-ups on every read ([`held`]).
     static HOLDS: Cell<bool> = const { Cell::new(false) };
+    /// This thread's packet is paused between the world draw's halves ([`pause`]): what runs meanwhile (the VATS target's draw)
+    /// reads and writes guest memory, whose cached device state is the cut's, not what the first half left ([`beside`]).
+    static PAUSED: Cell<bool> = const { Cell::new(false) };
     /// The last write [`mark`] noted on this thread, with the packet generation it was noted in: the same
     /// write again in the same generation is not pushed twice.
     static LAST_MARK: Cell<(u64, usize, u32, u32)> = const { Cell::new((0, 0, 0, 0)) };
@@ -293,7 +296,9 @@ fn held() -> bool {
 /// skip its device call on such a value ([`main_must_send`]). One relaxed load while no packet is open.
 #[inline(always)]
 pub fn beside(e: &Engine) -> bool {
-    OPEN.load(Relaxed) != 0 && !HOLDS.with(Cell::get) && open_for(run(e))
+    OPEN.load(Relaxed) != 0
+        && (!HOLDS.with(Cell::get) || PAUSED.with(Cell::get))
+        && open_for(run(e))
 }
 
 /// The runs with an open packet, one slot each (a run opens one packet at a time; 0 is a free slot): what
@@ -776,6 +781,7 @@ pub fn pause(e: &mut Engine) {
             return;
         }
         p.paused = true;
+        PAUSED.with(|f| f.set(true));
         if let Some(scribble) = p.scribble {
             p.written += unscribble_all(e, p, scribble);
         }
@@ -804,6 +810,7 @@ pub fn resume(e: &mut Engine) {
             return;
         }
         p.paused = false;
+        PAUSED.with(|f| f.set(false));
         if let Some(scribble) = p.scribble {
             scribble_all(e, p, scribble);
         }
@@ -888,6 +895,7 @@ pub fn end(e: &mut Engine) -> Report {
     let Some(packet) = packet else {
         return Report::default();
     };
+    PAUSED.with(|f| f.set(false));
     HOLDS.with(|h| h.set(false));
     OPEN.fetch_sub(1, Relaxed);
     note_closed(packet.run);
@@ -975,6 +983,7 @@ pub fn detach(e: &Engine) -> Option<Detached> {
                 !p.as_ref().is_some_and(|p| p.served),
                 "NV_DRAW_THREAD: a packet detached while a half draws from it (unserve first)"
             );
+            PAUSED.with(|f| f.set(false));
             HOLDS.with(|h| h.set(false));
             p.take().map(|p| Detached(Box::new(p)))
         } else {
@@ -990,8 +999,10 @@ pub fn attach(packet: Detached) -> Result<(), Detached> {
         if p.is_some() {
             return Err(packet);
         }
+        let paused = packet.0.paused;
         *p = Some(*packet.0);
         HOLDS.with(|h| h.set(true));
+        PAUSED.with(|f| f.set(paused));
         Ok(())
     })
 }
