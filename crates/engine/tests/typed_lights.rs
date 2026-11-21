@@ -633,3 +633,354 @@ fn lights_frustum_mask_inherited() {
         .run()
         .assert_same();
 }
+
+/// The light lists' slow loops made linear (`ResortLights` `00b70390`, `ComputeWeightedShadowLight`
+/// `00b9d150`, the dominant light direction `00b5bca0`), against their translations, under both
+/// control words. The world: the shadow scene node at `011f91c8` with its lighting offset, its sun
+/// light and its light list (real `NiTListItem`s, in several shapes: items allocated out of order,
+/// a count below the items' number, a null light inside), shadow scene lights with their `NiLight`s
+/// (position, radius, dimmer, colour, flags), a lighting property's light list, a bound, and the
+/// exe's constants.
+///
+/// What stands in: the extra data look-up, the point normalisation (halves the point, and logs it),
+/// the object update, the property's active non-shadow light walk (answers the property's lights in
+/// order through the iterator word) and `_CIsqrt`; `GetLuminanceToBound` and the node's light at an
+/// index are left out of the call compare (the typed code does their work in place).
+mod lists {
+    use super::{bits, f64_arg, log, ret, ret_f, words, HALF, LOG, MINUS_ONE, ONE, TWO};
+    use engine_core::prelude::*;
+    use engine_core::typed::diff::{Case, Diff, Input};
+    use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
+    use engine_typed::lights::{self, dominant, resort, weighted};
+
+    const TEN: u32 = 0x4120_0000;
+    const QUARTER: u32 = 0x3e80_0000;
+    const NAN: u32 = 0x7fc0_0000;
+    const BOTH: [u16; 2] = [OTHER_THREADS, MAIN_THREAD];
+
+    const SCENE_NODE: u32 = 0x011f_91c8;
+    const EXTRA_DATA_NAME: u32 = 0x0120_31e4;
+
+    fn logged<const TAG: u32>(e: &mut Engine, a: &[u32]) -> Ret {
+        log(e, TAG, a.first().copied().unwrap_or(0));
+        for w in a.iter().skip(1) {
+            log(e, TAG | 0x1_0000, *w);
+        }
+        ret(e.mem.u32(LOG + 0x3f00 + 4 * (TAG & 0x3f)))
+    }
+
+    fn set_logged(e: &mut Engine, tag: u32, value: u32) {
+        e.mem.set_u32(LOG + 0x3f00 + 4 * (tag & 0x3f), value);
+    }
+
+    /// The normalisation stand-in: halves the point's three floats.
+    fn halve(e: &mut Engine, a: &[u32]) -> Ret {
+        log(e, 0x42, a[0]);
+        for i in 0..3 {
+            let v = e.mem.f32(a[0] + 4 * i) * 0.5;
+            e.mem.set_f32(a[0] + 4 * i, v);
+        }
+        ret(0)
+    }
+
+    /// The exe's data pages and constants, the scene node with its lighting offset (`offset`).
+    fn world(e: &mut Engine, offset: [u32; 3]) -> u32 {
+        e.map(LOG, 0x4000);
+        for page in [
+            0x0101_2000,
+            0x0101_3000,
+            0x0101_6000,
+            0x0101_7000,
+            0x0101_d000,
+            0x0102_1000,
+            0x0102_2000,
+            0x0102_3000,
+            0x0102_4000,
+            0x0102_9000,
+            0x0103_0000,
+            0x0103_2000,
+            0x0107_3000,
+            0x010b_7000,
+            0x011f_4000,
+            0x011f_9000,
+            0x011f_f000,
+            0x0120_3000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        for (at, value) in [
+            (0x0101_2060u32, 0.0f64),
+            (0x0101_2070, 1.0),
+            (0x010b_7e98, 0.0625),
+            (0x0107_31a8, 75.0),
+            (0x0101_7b70, 1000.0),
+            (0x0101_de30, 0.75),
+            (0x0102_31d8, 256.0),
+            (0x010b_7e90, f64::from(1.4f32)),
+            (0x0102_40b0, 8.0),
+            (0x0102_90c0, f64::from(0.4f32)),
+            (0x0102_17d8, f64::from(0.8f32)),
+            (0x0102_1928, 3.0),
+            (0x0102_28a0, 0.4),
+        ] {
+            e.mem.set_u64(at, value.to_bits());
+        }
+        e.mem.set_u32(0x0101_3ea4, 0x3c23_d70a);
+        e.mem.set_u32(0x0101_6264, 0x3f40_0000);
+        e.mem.set_u32(0x0103_0ff0, 0x3f4c_cccd);
+        e.mem.set_u32(0x0103_2adc, 0x4380_0000);
+        e.mem.set_u32(EXTRA_DATA_NAME, 0x99);
+        words(e, 0x011f_4998, &[HALF, HALF, HALF]);
+        words(e, 0x011f_426c, &[0, HALF, 0]);
+        let node = e.mem.alloc(0x200);
+        words(e, node + 0x1e4, &offset);
+        e.mem.set_u32(SCENE_NODE, node);
+        e.register(0x00ec_6040, |_, a| ret_f(f64_arg(a, 0).sqrt()));
+        e.register(0x004a_0c10, halve);
+        node
+    }
+
+    /// An `NiLight` at `position` with radius `radius`, dimmer `dimmer`, culled or not, its colour.
+    fn ni_light(e: &mut Engine, position: [u32; 3], radius: u32, dimmer: u32, culled: bool) -> u32 {
+        let l = e.mem.alloc(0x100);
+        words(e, l + 0x8c, &position);
+        e.mem.set_u32(l + 0xe0, radius);
+        e.mem.set_u32(l + 0xc4, dimmer);
+        e.mem.set_u32(l + 0x30, u32::from(culled));
+        words(e, l + 0xd4, &[ONE, HALF, QUARTER]);
+        l
+    }
+
+    /// A shadow scene light with its `NiLight`, casting shadows or not.
+    fn shadow_light(e: &mut Engine, ni: u32, cast: bool) -> u32 {
+        let l = e.mem.alloc(0x250);
+        e.mem.set_u32(l + 0xf8, ni);
+        e.mem.set_u8(l + 0xec, u8::from(cast));
+        l
+    }
+
+    /// A list at `list` (head, tail, count) of `elements` as `NiTListItem`s, in the shape `shape`:
+    /// 0 plain, 1 its items allocated last first (the list's order is not the memory's, as after
+    /// adds and removals mid-list), 2 its count one below the items' number, 3 the third element
+    /// null.
+    fn list(e: &mut Engine, list: u32, elements: &[u32], shape: u32) {
+        let mut items: Vec<u32> = elements.iter().map(|_| e.mem.alloc(0xc)).collect();
+        if shape == 1 {
+            items.reverse();
+        }
+        for (i, (&item, &element)) in items.iter().zip(elements).enumerate() {
+            let next = items.get(i + 1).copied().unwrap_or(0);
+            let previous = if i == 0 { 0 } else { items[i - 1] };
+            let element = if shape == 3 && i == 2 { 0 } else { element };
+            words(e, item, &[next, previous, element]);
+        }
+        let count = items.len() as u32 - u32::from(shape == 2 && !items.is_empty());
+        words(
+            e,
+            list,
+            &[
+                items.first().copied().unwrap_or(0),
+                items.last().copied().unwrap_or(0),
+                count,
+            ],
+        );
+    }
+
+    /// The positions the lights take in turn.
+    const POSITIONS: [[u32; 3]; 7] = [
+        [ONE, TWO, HALF],
+        [TEN, 0, MINUS_ONE],
+        [0, 0, 0],
+        [MINUS_ONE, TEN, TWO],
+        [HALF, HALF, HALF],
+        [0x41a0_0000, ONE, 0],
+        [TWO, MINUS_ONE, TEN],
+    ];
+    /// The radii the lights take in turn (a zero and a NaN among them).
+    const RADII: [u32; 5] = [TEN, TWO, 0x4248_0000, 0, NAN];
+
+    #[test]
+    fn lights_resort_lights() {
+        // The number of lights; the pattern of positions and radii (equal luminances included,
+        // which must not move); the list's shape (no null light: the exe reads through it); floats
+        // for the bound's centre and the lighting offset.
+        Diff::new(entry!(0x00b7_0390, resort::resort_lights(Ptr<_>, u32)))
+            .family(&lights::LIGHTS)
+            .family(&leaf::LEAVES)
+            .ignore_calls(&[0x00b9_dbe0, 0x00ec_6040])
+            .control_words(&BOTH)
+            .inputs(&[
+                Input::Of(&[0, 1, 2, 5, 9]),
+                Input::Of(&[0, 1, 2, 3, 4, 5, 6]),
+                Input::Of(&[0, 1]),
+                Input::F32,
+                Input::F32Swept(ONE),
+                Input::F32Swept(HALF),
+            ])
+            .max_cases(400)
+            .float_sweep(64)
+            .setup(|e, case: &Case| {
+                world(e, [bits(case, 5), 0, HALF]);
+                let k = case.word(1) as usize;
+                let lights: Vec<u32> = (0..case.word(0) as usize)
+                    .map(|i| {
+                        // Lights in threes share a place and a radius, so ties come up.
+                        let p = POSITIONS[(i / 3 * 2 + k) % 7];
+                        let ni = ni_light(e, p, RADII[(i / 3 + k) % 5], ONE, false);
+                        shadow_light(e, ni, false)
+                    })
+                    .collect();
+                let property = e.mem.alloc(0x80);
+                e.mem.set_u32(property + 0x38, 7);
+                list(e, property + 0x60, &lights, case.word(2));
+                let bound = e.mem.alloc(0x10);
+                words(e, bound, &[bits(case, 3), bits(case, 4), ONE, TWO]);
+                vec![property, bound]
+            })
+            .run()
+            .assert_same();
+    }
+
+    /// The property's light walk stand-ins: the property's +0x60 holds the address of a zero-ended
+    /// array of lights, and the iterator word the index of the next one.
+    fn first_property_light(e: &mut Engine, a: &[u32]) -> Ret {
+        log(e, 0x40, a[0]);
+        e.mem.set_u32(a[1], 1);
+        ret(e.mem.u32(e.mem.u32(a[0] + 0x60)))
+    }
+
+    fn next_property_light(e: &mut Engine, a: &[u32]) -> Ret {
+        log(e, 0x41, a[0]);
+        let i = e.mem.u32(a[1]);
+        e.mem.set_u32(a[1], i + 1);
+        ret(e.mem.u32(e.mem.u32(a[0] + 0x60) + 4 * i))
+    }
+
+    /// The lights of a case: `n` shadow scene lights in pattern `k` (casting shadows, culled,
+    /// dimmed out, far, near).
+    fn pattern_lights(e: &mut Engine, n: usize, k: usize) -> Vec<u32> {
+        (0..n)
+            .map(|i| {
+                let pattern = (i + k) % 7;
+                let p = POSITIONS[(i * 3 + k) % 7];
+                let dimmer = if pattern == 3 { 0 } else { ONE };
+                let ni = ni_light(e, p, RADII[(i + k) % 4], dimmer, pattern == 2);
+                shadow_light(e, ni, pattern == 1)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn lights_compute_weighted() {
+        // With a property or the scene node's list; the number of lights (past the 40 counted
+        // ones too) and their pattern; the node list's shape; the extra data (none, or one with an
+        // offset and extents); floats for the sun's z and the shadow scene's position and scale.
+        Diff::new(entry!(
+            0x00b9_d150,
+            weighted::compute_weighted(Ptr<_>, u32, u32, u32, u32)
+        ))
+        .family(&lights::LIGHTS)
+        .family(&leaf::LEAVES)
+        .ignore_calls(&[0x00b5_ac20, 0x00ec_6040])
+        .goes_by_address(&[0x00b7_0600, 0x00b7_0700, 0x004a_0c10, 0x00a5_9c60])
+        .control_words(&BOTH)
+        .inputs(&[
+            Input::Flag,
+            Input::Of(&[3, 0, 1, 2, 8, 45]),
+            Input::Of(&[0, 1, 2, 3, 4, 5, 6]),
+            Input::Of(&[0, 1, 2, 3]),
+            Input::Flag,
+            Input::F32,
+            Input::F32Swept(ONE),
+        ])
+        .max_cases(400)
+        .float_sweep(64)
+        .max_calls(50_000)
+        .setup(|e, case: &Case| {
+            let node = world(e, [HALF, 0, MINUS_ONE]);
+            e.register(0x00a5_bdd0, logged::<0x01>);
+            e.register(0x00a5_9c60, logged::<0x02>);
+            e.register(0x00b7_0600, first_property_light);
+            e.register(0x00b7_0700, next_property_light);
+            let lights = pattern_lights(e, case.word(1) as usize, case.word(2) as usize);
+            list(e, node + 0xb4, &lights, case.word(3));
+            // The sun: a shadow scene light whose `NiLight` has a direction at +0xf0.
+            let sun_ni = ni_light(e, [0, 0, 0], ONE, ONE, false);
+            words(e, sun_ni + 0xf0, &[HALF, MINUS_ONE, bits(case, 5)]);
+            let sun = shadow_light(e, sun_ni, false);
+            e.mem.set_u32(node + 0xe0, sun);
+            // The property (or none) with its zero-ended array of the same lights.
+            let property = if case.word(0) == 1 {
+                let p = e.mem.alloc(0x80);
+                let array = e.mem.alloc(4 * (lights.len() as u32 + 1));
+                words(e, array, &lights);
+                e.mem.set_u32(p + 0x60, array);
+                p
+            } else {
+                0
+            };
+            // The shadow scene with its position and scale, the extra data or none.
+            let scene = e.mem.alloc(0x100);
+            words(e, scene + 0x8c, &[ONE, bits(case, 6), TWO]);
+            e.mem.set_u32(scene + 0x98, bits(case, 6));
+            if case.word(4) == 1 {
+                let extra = e.mem.alloc(0x30);
+                words(e, extra + 0xc, &[HALF, 0, ONE]);
+                words(e, extra + 0x18, &[TWO, TEN, bits(case, 5)]);
+                set_logged(e, 0x01, extra);
+            }
+            let this_ni = ni_light(e, [0, 0, 0], ONE, ONE, false);
+            let this = shadow_light(e, this_ni, true);
+            e.mem.set_u32(this + 0x128, scene);
+            vec![this, property, 1, 2, 3]
+        })
+        .run()
+        .assert_same();
+    }
+
+    #[test]
+    fn lights_dominant_light_direction() {
+        // The sun bright (its direction answers) or dim (the lights are weighed); the number of
+        // lights (past the 100 weighed ones too) and their pattern; the list's shape; floats for
+        // the point and the direction.
+        Diff::new(entry!(
+            0x00b5_bca0,
+            dominant::dominant_light_direction(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>) -> u32
+        ))
+        .family(&lights::LIGHTS)
+        .family(&leaf::LEAVES)
+        .ignore_calls(&[0x00b5_ac20, 0x00ec_6040])
+        .goes_by_address(&[0x004a_0c10])
+        .control_words(&BOTH)
+        .inputs(&[
+            Input::Flag,
+            Input::Of(&[3, 0, 1, 2, 9, 104]),
+            Input::Of(&[0, 1, 2, 3, 4, 5, 6]),
+            Input::Of(&[0, 1, 2, 3]),
+            Input::F32,
+            Input::F32Swept(MINUS_ONE),
+        ])
+        .max_cases(400)
+        .float_sweep(64)
+        .max_calls(50_000)
+        .setup(|e, case: &Case| {
+            let node = world(e, [HALF, 0, MINUS_ONE]);
+            let lights = pattern_lights(e, case.word(1) as usize, case.word(2) as usize);
+            list(e, node + 0xb4, &lights, case.word(3));
+            // The sun: its luminance (dimmer times (1 + 0.5 + 0.25) / 3) above 0.4 or below it.
+            let dimmer = if case.word(0) == 1 { ONE } else { QUARTER };
+            let sun_ni = ni_light(e, [0, 0, 0], ONE, dimmer, false);
+            words(e, sun_ni + 0xf0, &[HALF, MINUS_ONE, bits(case, 5)]);
+            let sun = shadow_light(e, sun_ni, false);
+            e.mem.set_u32(node + 0xe0, sun);
+            let point = e.mem.alloc(0x10);
+            words(e, point, &[bits(case, 4), ONE, HALF]);
+            let direction = e.mem.alloc(0x10);
+            words(e, direction, &[HALF, bits(case, 5), MINUS_ONE]);
+            let out = e.mem.alloc(0x10);
+            vec![node, point, direction, out]
+        })
+        .run()
+        .assert_same();
+    }
+}
