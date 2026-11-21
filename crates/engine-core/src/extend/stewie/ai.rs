@@ -68,3 +68,27 @@ pub const PATROL_PACKAGE: Row = Row::share(AI_FIXES, AI_FIXES_END, 15);
 /// S0133 `patchFixSpectatorThreatInfoUsingWrongWeaponType` (`009f6d50` (`0x9F6E76`)): a
 /// spectator's threat reads the weapon's combat type.
 pub const SPECTATOR_THREAT_WEAPON_TYPE: Row = Row::share(AI_FIXES, AI_FIXES_END, 16);
+/// S0211 `ThrowableRotationFix` (`MissileProjectile::UpdateProjectile` `009b8030` (`0x9B8552`)): a
+/// spinning throwable (its projectile's rotation flag) is not turned along its arc.
+pub const THROWABLE_ROTATION: Row = Row::share(AI_FIXES, AI_FIXES_END, 17);
+/// S0230 `DoubleSoundFix` (`BSAnimGroupSequence::PlaySounds` `004eef00` (`0x4EEF3C`)): a sequence
+/// not yet updated plays no text-key sounds, so they are not heard twice.
+pub const DOUBLE_SOUND: Row = Row::share(AI_FIXES, AI_FIXES_END, 18);
+/// S0074 `patchFixCombatMissileDepthGamesettings` (`009ba660` (`0x9BA8AC`); `009b90b0`
+/// (`0x9B9626`, `0x9B9AE3`)): the missile stick and impale depths read their settings each time.
+pub const COMBAT_MISSILE_DEPTH_SETTINGS: Row = Row::share(AI_FIXES, AI_FIXES_END, 19);
+/// S0024 `patchPreventFollowerNoAmmoTopicIfUsingRechargerWeapon` (`008a89a0` (`0x8A8DA5`)): a
+/// companion with a recharging weapon says no out-of-ammo line.
+pub const FOLLOWER_NO_AMMO_RECHARGER: Row = Row::share(AI_FIXES, AI_FIXES_END, 20);
+/// S0041 `fixWeaponModGetDestructibleForm` (`BGSDestructibleObjectForm::GetDestructionForm`
+/// `00475400` (`0x4754CF`)): a weapon mod's destructible data is read at its own offset.
+pub const WEAPON_MOD_DESTRUCTIBLE: Row = Row::share(AI_FIXES, AI_FIXES_END, 21);
+/// S0055 `patchFixZeroSpreadZeroVATSChance` (`CombatFormulas::GetVATSChanceToHit` `00646f70`
+/// (`0x64747B`)): a weapon with no spread keeps a VATS chance.
+pub const ZERO_SPREAD_VATS_CHANCE: Row = Row::share(AI_FIXES, AI_FIXES_END, 22);
+/// S0189.01 `InventoryCalcWeaponDamageUseAmmoFix` (`CombatFormulas::CalcWeaponDamageForDisplay`
+/// `006450f0` (`0x6451B6`, `0x645216`)): the shown damage passes the ammunition it is for.
+pub const WEAPON_DAMAGE_DISPLAY_AMMO: Row = Row::share(AI_FIXES, AI_FIXES_END, 23);
+/// S0189.02 `InventoryCalcWeaponDamageUseAmmoFix` (`CombatFormulas::CalcWeaponDamage` `00644ce0`
+/// (`0x644EF3`, `0x644F00`, `0x644F79`)): the damage takes the projectile of the ammunition passed.
+pub const WEAPON_DAMAGE_AMMO_PROJECTILE: Row = Row::share(AI_FIXES, AI_FIXES_END, 24);

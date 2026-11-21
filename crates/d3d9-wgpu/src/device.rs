@@ -7774,11 +7774,15 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let mut step = 0.0f64;
         let mut skin_places = std::mem::take(&mut sun.skin_now);
         skin_places.clear();
+        // The ranges the game drew from each pair of buffers this frame (report 012: an LOD
+        // block's segments).
+        let mut ranges_drawn = sun_shadow::RangesDrawn::default();
         for c in std::mem::take(&mut sun.lists.casters) {
             if c.depth != scene {
                 continue;
             }
             on_scene += 1;
+            ranges_drawn.insert(&c.key);
             let world = sun_shadow::world_of(&c.draw.mvp(), frustum, axes, position);
             // A character, as posed in that frame: cast this frame, never kept (its next pose comes
             // with its next draw), never in the far map.
@@ -7859,8 +7863,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             }
         }
         // Let go: what was written or released since; a moving place's old places; what the game
-        // would have drawn (wholly in view) and has not for a few frames; what is too far to cast
-        // into any map. A place that came near a place of the same geometry drawn the frame before
+        // would have drawn (wholly in view) and has not for a few frames, or a range of buffers
+        // the game still draws other ranges of, whose sphere reaches into the view or round the
+        // camera (report 012: an LOD block's piece turned off for a loaded cell,
+        // [`sun_shadow::segment_gone`]); what is too far to cast into any map. A place that came near a place of the same geometry drawn the frame before
         // and not in this one moves (decided place by place, [`sun_shadow::Cache::mark_moves`]):
         // kept out of the still maps (drawn each frame over a copy of them), so it does not redraw
         // them.
@@ -7881,6 +7887,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             std::array::from_fn(|k| axes[k][0] * d[0] + axes[k][1] * d[1] + axes[k][2] * d[2])
         };
         let (near, far) = (f64::from(view.near), f64::from(s[sun_shadow::CASCADES]));
+        let view_far = f64::from(view.far);
         sun.cache.mark_moves(
             now,
             &came,
@@ -7911,7 +7918,15 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 distance - i.radius > reach,
                 i.moved_on(now)
                     || (now - i.seen > sun_shadow::GRACE
-                        && sun_shadow::wholly_in_view(frustum, v, i.radius, near, far)),
+                        && (sun_shadow::wholly_in_view(frustum, v, i.radius, near, far)
+                            || sun_shadow::segment_gone(
+                                frustum,
+                                v,
+                                i.radius,
+                                near,
+                                view_far,
+                                ranges_drawn.others(k),
+                            ))),
             ];
             match gone.iter().position(|&g| g) {
                 Some(n) => {
@@ -7956,7 +7971,6 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // the old place goes at once, so a large caster moving (radius [`sun_shadow::FAR_MIN_RADIUS`]
         // up) leaves no trail of shadows in the far map, which casts it from its latest place; one
         // that stood still a while is still again (review of #817).
-        let view_far = f64::from(view.far);
         let far_moved = sun.far.mark_moves(
             now,
             &far_came,
@@ -7969,7 +7983,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             sun.far_moving = sun.far.iter().any(|i| i.moving);
         }
         let mut far_changed = sun.far.iter().any(|i| i.born == now);
-        for _ in sun.far.sweep(|_, i| {
+        for _ in sun.far.sweep(|k, i| {
             if i.seen == now {
                 return false;
             }
@@ -7982,7 +7996,17 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 || (now - i.seen > sun_shadow::GRACE
                     && (sun_shadow::wholly_in_view(frustum, v, i.radius, near, view_far)
                         || (inside
-                            && sun_shadow::partly_in_view(frustum, v, i.radius, near, view_far))))
+                            && sun_shadow::partly_in_view(frustum, v, i.radius, near, view_far))
+                        // An LOD block's piece turned off for a loaded cell, as in the cascades
+                        // (review of #844: the far map went on casting it).
+                        || sun_shadow::segment_gone(
+                            frustum,
+                            v,
+                            i.radius,
+                            near,
+                            view_far,
+                            ranges_drawn.others(k),
+                        )))
         }) {
             far_changed = true;
         }

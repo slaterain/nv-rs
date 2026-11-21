@@ -1439,6 +1439,28 @@ pub fn wholly_in_view(
         && inside([0.0, -1.0, t])
 }
 
+/// Report 012 (a distant-object LOD block's segment kept casting where the game draws the cell
+/// itself): whether a kept caster the game has not drawn for more than [`GRACE`] frames, at
+/// `centre` and `radius` in the camera's view space, is gone although part of it may be out of
+/// sight: the game drew other ranges of its buffers this frame (`others_drawn`: its block, the
+/// segments it still shows, [`RangesDrawn::others`]) and its sphere reaches into the view up to
+/// the view's own far plane `far`, or the camera stands inside it (a segment the game turned off
+/// for a loaded cell, which is never wholly in view from there). The game culls a block's pieces
+/// one by one against the view, so a piece whose sphere reaches into it and that is not drawn was
+/// turned off, not culled (review of #844: its centre may be out of the view, the cell beside the
+/// player's, or deeper than the cascades reach).
+pub fn segment_gone(
+    frustum: [f32; 4],
+    centre: [f64; 3],
+    radius: f64,
+    near: f64,
+    far: f64,
+    others_drawn: bool,
+) -> bool {
+    let inside = dot3(centre, centre).sqrt() < radius;
+    others_drawn && (inside || partly_in_view(frustum, centre, radius, near, far))
+}
+
 /// The sun direction one cascade's map was drawn for: kept until the sun has turned far enough
 /// from it to move a shadow edge in that map by half a texel ([`turn_limit`]); then the map is
 /// drawn again with the sun as it is ([`sun_turns`] picks which maps take it in a frame).
@@ -1543,6 +1565,39 @@ impl GeoKey {
             index: (self.index.0, 0),
             ..self.clone()
         }
+    }
+
+    /// Its buffers alone (their own numbers, without offsets' upload counts, ranges or pipeline):
+    /// what an LOD block's segments share, each segment a range of the same buffers.
+    pub fn buffers(&self) -> ([u64; 8], u64) {
+        (self.streams.map(|(b, _, _)| b), self.index.0)
+    }
+}
+
+/// The ranges the game drew this frame from each pair of buffers ([`GeoKey::buffers`]): whether a
+/// kept caster's buffers had a DIFFERENT range of them drawn (an LOD block's other pieces), not only
+/// another copy of the same range at another place (a mesh shared by two objects: review of #844).
+#[derive(Default)]
+pub(crate) struct RangesDrawn(crate::fxhash::Map<([u64; 8], u64), Vec<Range>>);
+
+/// A range of a geometry's buffers: its first index, triangle count and base vertex.
+type Range = (u32, u32, i32);
+
+impl RangesDrawn {
+    pub fn insert(&mut self, k: &GeoKey) {
+        let range = (k.start, k.count, k.base_vertex);
+        let ranges = self.0.entry(k.buffers()).or_default();
+        if !ranges.contains(&range) {
+            ranges.push(range);
+        }
+    }
+
+    /// Whether a range of `k`'s buffers other than its own was drawn.
+    pub fn others(&self, k: &GeoKey) -> bool {
+        let range = (k.start, k.count, k.base_vertex);
+        self.0
+            .get(&k.buffers())
+            .is_some_and(|r| r.iter().any(|x| *x != range))
     }
 }
 
@@ -5980,6 +6035,83 @@ mod tests {
         assert_eq!(own.origin, [0, 0, 0]);
         let step_off: [f64; 3] = std::array::from_fn(|i| centre[i] - c.step * b[0][i]);
         assert_eq!(far_place(centre, b, Some(step_off)).origin, [1, 0, 0]);
+    }
+
+    /// Report 012: a kept caster not drawn for its grace is let go although not wholly in view
+    /// only when the game drew other ranges of its buffers this frame and its sphere reaches into
+    /// the view or the camera stands inside it.
+    #[test]
+    fn a_segment_is_gone_only_while_its_buffers_are_drawn_and_it_is_round_or_before_the_camera() {
+        let f = frustum();
+        let (near, far) = (10.0, 100_000.0);
+        // Centre in view, the sphere across the right edge (x = 0.77 of the depth: 384 at 500).
+        let edge = [360.0, 0.0, 500.0];
+        assert!(!wholly_in_view(f, edge, 50.0, near, far));
+        assert!(segment_gone(f, edge, 50.0, near, far, true));
+        assert!(
+            !segment_gone(f, edge, 50.0, near, far, false),
+            "its buffers not drawn"
+        );
+        // Round the camera (behind it, the camera inside the sphere).
+        assert!(segment_gone(f, [0.0, 0.0, -100.0], 400.0, near, far, true));
+        // Review of #844: its centre out of view (the cell beside the player's), its sphere
+        // reaching in (51 from the edge's plane, radius 100): gone.
+        let beside = [450.0, 0.0, 500.0];
+        assert!(!partly_in_view(f, beside, 0.0, near, far));
+        assert!(segment_gone(f, beside, 100.0, near, far, true));
+        // ... and one ahead deeper than the cascades reach (the view's far plane counts).
+        assert!(segment_gone(
+            f,
+            [0.0, 0.0, 15_000.0],
+            2_900.0,
+            near,
+            far,
+            true
+        ));
+        // Its sphere wholly out of view and the camera outside it: kept (culled, not gone).
+        assert!(!segment_gone(
+            f,
+            [600.0, 0.0, 500.0],
+            100.0,
+            near,
+            far,
+            true
+        ));
+        assert!(!segment_gone(f, [0.0, 0.0, -500.0], 100.0, near, far, true));
+    }
+
+    /// Review of #844: a pair of buffers counts as drawing other ranges only when a different range
+    /// of it was drawn, not another copy of the same range at another place.
+    #[test]
+    fn only_a_different_range_of_the_buffers_counts_as_another_drawn() {
+        let key = |start: u32| GeoKey {
+            pipe: 1,
+            streams: [(7, 0, 3); 8],
+            index: (9, 2),
+            start,
+            count: 10,
+            base_vertex: 0,
+        };
+        let mut drawn = RangesDrawn::default();
+        drawn.insert(&key(0));
+        drawn.insert(&key(0));
+        assert!(!drawn.others(&key(0)), "a copy of the same range");
+        assert!(drawn.others(&key(30)), "another range of the same buffers");
+        let other_buffers = GeoKey {
+            index: (10, 2),
+            ..key(30)
+        };
+        assert!(!drawn.others(&other_buffers), "other buffers");
+        drawn.insert(&key(30));
+        assert!(drawn.others(&key(0)));
+        // The upload counts and the pipeline do not part a range from its buffers' others.
+        let rewritten = GeoKey {
+            pipe: 2,
+            streams: [(7, 0, 4); 8],
+            index: (9, 5),
+            ..key(60)
+        };
+        assert!(drawn.others(&rewritten));
     }
 
     /// Review of #817: a character (or a moving cut-out) whose shadow cannot reach where a cascade
