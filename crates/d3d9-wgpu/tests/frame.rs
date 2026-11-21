@@ -5519,3 +5519,121 @@ fn idle_depth_stand_ins_go_and_used_ones_stay() {
     );
     assert_eq!(g.b.device().expect("the device").wgpu_errors(), 0);
 }
+
+/// Each step's pixels, and every draw's digest ([`records_script`]).
+type Script = (Vec<Vec<[u8; 4]>>, Vec<u64>);
+
+/// One script of draws run with the draw records off and on ([`d3d9_wgpu::device::Device::set_draw_records`]):
+/// between its draws only the constants change, or a texture, a sampler state, a render state,
+/// a shader, the target (set again), or nothing at all. Returns each step's pixels and every
+/// draw's digest of what it gave wgpu.
+fn records_script(records: bool) -> Option<Script> {
+    const BLUE_TEX: u32 = 0x1610;
+    let mut g = Gpu::new(4, 1)?;
+    {
+        let d = g.b.device().expect("the device");
+        d.set_draw_records(records);
+        d.record_draw_digests(true);
+    }
+    stage_samplers(&mut g);
+    let levels = words(&[BLUE_TEX + 1]);
+    g.run(Cmd::CreateTexture {
+        device: DEVICE,
+        texture: BLUE_TEX,
+        levels: Data::Bytes(&levels),
+        width: 1,
+        height: 1,
+        usage: 0,
+        format: A8R8G8B8,
+        pool: 1,
+    });
+    g.run(Cmd::UploadSurface {
+        surface: BLUE_TEX + 1,
+        row: 4,
+        rows: 1,
+        data: Data::Bytes(&[255, 0, 0, 255]),
+    });
+    let shader = |g: &mut Gpu, pixel: bool, shader: u32| {
+        g.run(Cmd::SetShader {
+            device: DEVICE,
+            pixel,
+            shader,
+        });
+    };
+    let texture = |g: &mut Gpu, texture: u32| {
+        g.run(Cmd::SetTexture {
+            device: DEVICE,
+            sampler: 0,
+            texture,
+        });
+    };
+    let mut steps = Vec::new();
+    let mut step = |g: &mut Gpu, draws: u32| {
+        g.clear(3, 0, 1.0);
+        for _ in 0..draws {
+            g.cover(0.5);
+        }
+        steps.push(g.pixels());
+    };
+    shader(&mut g, false, VS + 2);
+    shader(&mut g, true, PS + 6);
+    // The vertex texture's green and the pixel texture's red, three draws of one record.
+    step(&mut g, 3);
+    // Only the pixel texture changes: green and blue.
+    texture(&mut g, BLUE_TEX);
+    step(&mut g, 2);
+    // The same texture set again, and a sampler state that changes the group only.
+    texture(&mut g, BLUE_TEX);
+    g.run(Cmd::SetSamplerState {
+        device: DEVICE,
+        sampler: 0,
+        kind: 5,
+        value: 1,
+    });
+    step(&mut g, 2);
+    // A render state of the pipeline: no colour written.
+    g.state(COLORWRITEENABLE, 0);
+    step(&mut g, 1);
+    g.state(COLORWRITEENABLE, 0xF);
+    // The same state again (no change), then another pixel shader: the vertex texture's green.
+    g.state(COLORWRITEENABLE, 0xF);
+    shader(&mut g, true, PS + 5);
+    step(&mut g, 2);
+    // The target set again (a command that counts as a change), the first pair back.
+    g.run(Cmd::SetRenderTarget {
+        device: DEVICE,
+        index: 0,
+        surface: RT,
+    });
+    shader(&mut g, true, PS + 6);
+    texture(&mut g, 0x1602);
+    step(&mut g, 2);
+    let d = g.b.device().expect("the device");
+    assert_eq!(d.wgpu_errors(), 0);
+    Some((steps, d.take_draw_digests()))
+}
+
+/// The draw records ([`d3d9_wgpu::device::Device::set_draw_records`]) give wgpu what resolving
+/// every draw afresh gives it: the same digest at each draw and the same pixels at each step, and
+/// a change of a texture, a sampler state, a render state or a shader between two draws of one
+/// record is drawn.
+#[test]
+fn draw_records_give_wgpu_what_each_draw_resolved_afresh_gives() {
+    let Some((off_steps, off)) = records_script(false) else {
+        return;
+    };
+    let Some((on_steps, on)) = records_script(true) else {
+        return;
+    };
+    assert_eq!(off.len(), 12, "every draw noted");
+    assert_eq!(on, off, "the digests, draw by draw");
+    assert_eq!(on_steps, off_steps, "the pixels, step by step");
+    let yellow = vec![[0, 255, 255, 255]; 16];
+    let cyan = vec![[255, 255, 0, 255]; 16];
+    let black = vec![[0, 0, 0, 0]; 16];
+    let green = vec![[0, 255, 0, 255]; 16];
+    assert_eq!(
+        on_steps,
+        vec![yellow.clone(), cyan.clone(), cyan, black, green, yellow]
+    );
+}

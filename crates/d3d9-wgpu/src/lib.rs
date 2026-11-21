@@ -185,6 +185,33 @@ impl Backend for WgpuBackend {
         };
         // A batch that has taken the most one submit carries is sent before the next command.
         d.bound_batch();
+        // What the last draw resolved is used again only while nothing it came from changed
+        // ([`device::Device::state_changed`]): the sets below count their own changes (most set
+        // what is set already), the draws and the uploads change none of it, and every other
+        // command (targets, clears, queries, creations, releases, presents...) counts as a change.
+        if !matches!(
+            cmd,
+            Cmd::DrawIndexedPrimitive { .. }
+                | Cmd::DrawPrimitive { .. }
+                | Cmd::DrawPrimitiveUp { .. }
+                | Cmd::SetConstants { .. }
+                | Cmd::SetStreamSource { .. }
+                | Cmd::SetIndices { .. }
+                | Cmd::SetTexture { .. }
+                | Cmd::SetSamplerState { .. }
+                | Cmd::SetRenderState { .. }
+                | Cmd::SetTextureStageState { .. }
+                | Cmd::SetShader { .. }
+                | Cmd::SetVertexDeclaration { .. }
+                | Cmd::SetFvf { .. }
+                | Cmd::SetViewport { .. }
+                | Cmd::SetScissorRect { .. }
+                | Cmd::UploadBuffer { .. }
+                | Cmd::UploadSurface { .. }
+                | Cmd::QueryGetData { .. }
+        ) {
+            d.state_changed();
+        }
         match cmd {
             Cmd::CreateDevice { .. } => unreachable!("handled above"),
             Cmd::Reset {

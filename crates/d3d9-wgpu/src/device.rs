@@ -354,6 +354,41 @@ struct VertexLink {
     attributes: [Vec<wgpu::VertexAttribute>; 8],
 }
 
+/// What a draw resolves from the device's state before it records anything
+/// ([`Device::draw_resolved`]): its two shaders (and whether each is a fixed-function one), the
+/// declaration and the vertex link, the samplers, the depth surface's facts,
+/// the alpha to coverage switch and the pipeline key's fields that come from the state alone.
+///
+/// `NV_WGPU_DRAW_RECORDS` (on unless `0`): the last draw's is kept and used again while nothing it
+/// was resolved from changed. Two counters say so: [`Device::state_gen`] (shaders, declaration,
+/// render and texture-stage states, targets, and every command not known to leave them alone) and
+/// [`Device::tex_gen`] (textures and sampler states: the samplers' filtering and the bind groups).
+/// What a draw reads besides (its streams, indices, viewport, scissor, the occlusion count, the sun
+/// shadows' switch) is read at each draw as before.
+#[derive(Clone)]
+struct DrawRecord {
+    state_gen: u64,
+    tex_gen: u64,
+    vs: Arc<Shader>,
+    ps: Arc<Shader>,
+    ffp_vs: bool,
+    ffp_ps: bool,
+    decl: Arc<Decl>,
+    link: Arc<VertexLink>,
+    samplers: Bindings,
+    /// A texture it samples is one of its colour targets: each draw samples a copy made just
+    /// before it ([`Device::copy_for_sampling`]), so its groups are made at each draw.
+    copies: bool,
+    /// The depth surface's wgpu and Direct3D 9 format, samples, width and height.
+    depth: Option<(wgpu::TextureFormat, u32, u32, u32, u32)>,
+    /// The key; its strides, index size, filtering, occlusion count and sun fields are set at each
+    /// draw.
+    key: PipeKey,
+    /// The stage groups were set for these samplers and textures ([`Device::stage_group`]) by a
+    /// draw of this record: a later one leaves them as they are.
+    groups: bool,
+}
+
 /// What making pipelines cost since the last report (printed with the present counters every
 /// 600 presents): a pipeline made on first use holds the draw, and so the frame, until it is done.
 #[derive(Default)]
@@ -836,6 +871,14 @@ pub struct Device {
     empty_groups: [Option<wgpu::BindGroup>; 2],
     last_link: Option<((u64, u64), Arc<VertexLink>)>,
     vertex_links: Map<(u64, u64), Arc<VertexLink>>,
+    /// [`DrawRecord`]: the switch, the two counters and the last draw's record.
+    draw_records: bool,
+    state_gen: u64,
+    tex_gen: u64,
+    record: Option<DrawRecord>,
+    /// Each draw's digest of what it gave wgpu ([`Device::record_draw_digests`], tests and the
+    /// replay example; none in play).
+    draw_digests: Option<Vec<u64>>,
     binds: PassBinds,
     /// The driver's compiled pipelines kept between runs ([`cache`]), where the backend has them.
     pipeline_cache: Option<cache::PipelineCacheFile>,
@@ -1605,6 +1648,11 @@ impl Device {
             empty_groups: [None, None],
             last_link: None,
             vertex_links: Map::default(),
+            draw_records: std::env::var("NV_WGPU_DRAW_RECORDS").map_or(true, |v| v.trim() != "0"),
+            state_gen: 0,
+            tex_gen: 0,
+            record: None,
+            draw_digests: None,
             binds: PassBinds::default(),
             made_on_draws: 0,
             list_offers: 0,
@@ -2750,6 +2798,7 @@ impl Device {
             if self.st.a2m1 != on {
                 self.st.a2m1 = on;
                 self.st.touch(1);
+                self.state_gen += 1;
             }
             return;
         }
@@ -2761,6 +2810,7 @@ impl Device {
             return;
         }
         *s = value;
+        self.state_gen += 1;
         match state as usize {
             // The pixel block's alpha test and alpha to coverage; the vertex block's clip planes.
             rs::ALPHATESTENABLE | rs::ALPHAREF | rs::ALPHAFUNC | RS_ADAPTIVETESS_Y => {
@@ -2795,6 +2845,7 @@ impl Device {
                 return;
             }
             *s = value;
+            self.tex_gen += 1;
             // Of the sampler states only the LOD bias is in the stage's block; the rest go into
             // the draw's sampler, made from them at the draw.
             if kind as usize == state::ss::MIPMAPLODBIAS {
@@ -2813,6 +2864,7 @@ impl Device {
             if self.st.bound.textures[slot] == texture {
                 return;
             }
+            self.tex_gen += 1;
             let t = if texture == 0 {
                 None
             } else {
@@ -2833,6 +2885,7 @@ impl Device {
         if self.st.bound.shaders[usize::from(pixel)] == shader {
             return;
         }
+        self.state_gen += 1;
         self.st.bound.shaders[usize::from(pixel)] = shader;
         let s = match self.objects.get(&shader) {
             Some(Obj::Shader(s)) => Some(s.clone()),
@@ -2849,6 +2902,7 @@ impl Device {
         if self.st.bound.declaration == declaration {
             return;
         }
+        self.state_gen += 1;
         self.st.bound.declaration = declaration;
         self.st.fvf = None;
         self.st.decl = match self.objects.get(&declaration) {
@@ -2862,6 +2916,7 @@ impl Device {
     /// binding is forgotten, so setting the same declaration again sets it). A code without a
     /// position (0 included) leaves no layout, and a draw without one is skipped.
     pub(crate) fn set_fvf(&mut self, fvf: u32) {
+        self.state_gen += 1;
         self.st.bound.declaration = UNKNOWN;
         self.st.fvf = Some(fvf);
         self.st.decl = ffp::fvf_elements(fvf).map(|elements| {
@@ -2889,8 +2944,41 @@ impl Device {
             .get_mut(stage as usize)
             .and_then(|s| s.get_mut(state as usize))
         {
-            *s = value;
+            if *s != value {
+                *s = value;
+                self.state_gen += 1;
+            }
         }
+    }
+
+    /// A command that may change what a draw is resolved from ([`DrawRecord`]): every one but the
+    /// draws and the sets that count their own changes ([`crate::WgpuBackend`]'s dispatch).
+    pub(crate) fn state_changed(&mut self) {
+        self.state_gen += 1;
+    }
+
+    /// Turns [`DrawRecord`] on or off (`NV_WGPU_DRAW_RECORDS`; tests and the replay example
+    /// compare the two). The next draw is resolved afresh either way.
+    pub fn set_draw_records(&mut self, on: bool) {
+        self.draw_records = on;
+        self.record = None;
+    }
+
+    /// From now on each draw notes a digest of what it gave wgpu: its pipeline key, both stages'
+    /// group keys, the register blocks' places, its vertex and index buffers (by the game's
+    /// handles, offsets and strides), viewport, scissor, stencil reference, blend factor, the
+    /// sun shadows' switch and its own arguments ([`Device::take_draw_digests`]). For tests and
+    /// the replay example: nothing is noted in play.
+    pub fn record_draw_digests(&mut self, on: bool) {
+        self.draw_digests = on.then(Vec::new);
+    }
+
+    /// The digests noted since the last call ([`Device::record_draw_digests`]).
+    pub fn take_draw_digests(&mut self) -> Vec<u64> {
+        self.draw_digests
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
     }
 
     /// `Set*ShaderConstant*` (`kind`: vertex float, int, bool, then the same for the pixel stage)
@@ -4418,6 +4506,109 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         s
     }
 
+    /// The draw's [`DrawRecord`]: the last draw's while [`Device::state_gen`] is the same (its
+    /// samplers resolved again when only [`Device::tex_gen`] moved), else made from the state as
+    /// each draw made it before records. None for a draw that is skipped (no declaration, no
+    /// shader the fixed-function stand-ins cover, no target), each said once as before.
+    fn draw_resolved(&mut self) -> Option<DrawRecord> {
+        if self.draw_records {
+            if let Some(r) = self
+                .record
+                .as_ref()
+                .filter(|r| r.state_gen == self.state_gen)
+            {
+                if r.tex_gen == self.tex_gen {
+                    return Some(r.clone());
+                }
+                let mut r = r.clone();
+                r.samplers = self.sampler_bindings(&r.vs, &r.ps);
+                r.copies = self.samples_a_target(&r.samplers);
+                r.tex_gen = self.tex_gen;
+                r.groups = false;
+                self.record = Some(r.clone());
+                return Some(r);
+            }
+        }
+        let Some(decl) = self.st.decl.clone() else {
+            self.warn("a draw without a vertex declaration or FVF: skipped");
+            return None;
+        };
+        // The game's shaders, or for a stage without one the fixed-function shader of the state
+        // ([`ffp`]); a fixed-function draw it does not cover is skipped (printed once a layout).
+        let (vs, ps, ffp_vs, ffp_ps) = self.draw_shaders(&decl)?;
+        if self.st.rt.iter().all(|r| r.is_none()) && self.st.ds.is_none() {
+            return None;
+        }
+        // The vertex inputs: each shader input from the declaration's element of its usage
+        // (linked once for each vertex shader and declaration).
+        let link = self.vertex_link(&vs, &decl);
+        let samplers = self.sampler_bindings(&vs, &ps);
+        // The depth surface's format (wgpu's, Direct3D 9's), samples and size.
+        let depth =
+            self.usable_depth_with(|d| (d.format.wgpu, d.format.d3d, d.samples, d.width, d.height));
+        let atoc = self.atoc();
+        let samples = self
+            .st
+            .rt
+            .iter()
+            .flatten()
+            .next()
+            .map(|s| s.samples)
+            .or(depth.map(|d| d.2))
+            .unwrap_or(1);
+        // The fields of the draw's own (strides, topology, index size, filtering, count, sun) are
+        // set at each draw.
+        let key = PipeKey {
+            vs: vs.id,
+            ps: ps.id,
+            decl: decl.id,
+            strides: [0; 8],
+            topology: 0,
+            index32: false,
+            colours: std::array::from_fn(|i| {
+                self.st.rt[i]
+                    .as_ref()
+                    .map(|s| (s.format.wgpu, s.format.opaque))
+            }),
+            depth: depth.map(|d| d.0),
+            states: PIPELINE_STATES.map(|s| self.st.rs[s]),
+            samples,
+            filterable: 0,
+            atoc,
+            count: false,
+            clip: self.clip_link(samples),
+            sun: false,
+        };
+        let r = DrawRecord {
+            state_gen: self.state_gen,
+            tex_gen: self.tex_gen,
+            copies: self.samples_a_target(&samplers),
+            vs,
+            ps,
+            ffp_vs,
+            ffp_ps,
+            decl,
+            link,
+            samplers,
+            depth,
+            key,
+            groups: false,
+        };
+        if self.draw_records {
+            self.record = Some(r.clone());
+        }
+        Some(r)
+    }
+
+    /// Whether a texture `samplers` read is one of the colour targets ([`DrawRecord::copies`]).
+    fn samples_a_target(&self, samplers: &Bindings) -> bool {
+        samplers.as_slice().iter().any(|&(_, slot)| {
+            self.st.textures[slot]
+                .as_ref()
+                .is_some_and(|t| self.is_colour_target(t))
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn draw(
         &mut self,
@@ -4438,24 +4629,26 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             self.skipped += 1;
             return;
         };
-        let Some(decl) = self.st.decl.clone() else {
-            self.warn("a draw without a vertex declaration or FVF: skipped");
+        // The shaders, declaration, link, samplers and the key's state fields: the last draw's
+        // again while nothing they come from changed ([`DrawRecord`]), else resolved afresh.
+        let Some(rec) = self.draw_resolved() else {
             self.skipped += 1;
             return;
         };
-        // The game's shaders, or for a stage without one the fixed-function shader of the state
-        // ([`ffp`]); a fixed-function draw it does not cover is skipped (printed once a layout).
-        let Some((vs, ps, ffp_vs, ffp_ps)) = self.draw_shaders(&decl) else {
-            self.skipped += 1;
-            return;
-        };
-        if self.st.rt.iter().all(|r| r.is_none()) && self.st.ds.is_none() {
-            self.skipped += 1;
-            return;
-        }
-        // The vertex inputs: each shader input from the declaration's element of its usage
-        // (linked once for each vertex shader and declaration).
-        let link = self.vertex_link(&vs, &decl);
+        let DrawRecord {
+            vs,
+            ps,
+            ffp_vs,
+            ffp_ps,
+            decl,
+            link,
+            samplers,
+            copies: any_copies,
+            depth,
+            mut key,
+            groups: groups_set,
+            ..
+        } = rec;
         let attributes = &link.attributes;
         let mut strides = [0u32; 8];
         for (k, a) in attributes.iter().enumerate() {
@@ -4467,16 +4660,12 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 };
             }
         }
-        let samplers = self.sampler_bindings(&vs, &ps);
         let samplers = samplers.as_slice();
         let filterable = samplers
             .iter()
             .enumerate()
             .fold(0u32, |m, (i, &((_, _, f), _))| m | (u32::from(f) << i));
         let index32 = indexed && self.st.indices.as_ref().is_some_and(|b| b.index32);
-        // The depth surface's format (wgpu's, Direct3D 9's), samples and size.
-        let depth =
-            self.usable_depth_with(|d| (d.format.wgpu, d.format.d3d, d.samples, d.width, d.height));
         // The sun shadows' variant of a lit pixel shader, on the scene while this frame has the
         // sun's lookup ([`Device::sun_lookup`]), before its depth-only clear: the first-person
         // arms and weapon after it are drawn with their own camera, which the lookup does not
@@ -4489,37 +4678,14 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     && s.scene_depth.is_some()
                     && s.scene_depth == self.st.ds.as_ref().map(|d| d.id)
             });
-        let atoc = self.atoc();
-        let samples = self
-            .st
-            .rt
-            .iter()
-            .flatten()
-            .next()
-            .map(|s| s.samples)
-            .or(depth.map(|d| d.2))
-            .unwrap_or(1);
-        let mut key = PipeKey {
-            vs: vs.id,
-            ps: ps.id,
-            decl: decl.id,
-            strides,
-            topology: kind as u8,
-            index32,
-            colours: std::array::from_fn(|i| {
-                self.st.rt[i]
-                    .as_ref()
-                    .map(|s| (s.format.wgpu, s.format.opaque))
-            }),
-            depth: depth.map(|d| d.0),
-            states: PIPELINE_STATES.map(|s| self.st.rs[s]),
-            samples,
-            filterable,
-            atoc,
-            count: self.counting.is_some(),
-            clip: self.clip_link(samples),
-            sun: use_sun,
-        };
+        let atoc = key.atoc;
+        let samples = key.samples;
+        key.strides = strides;
+        key.topology = kind as u8;
+        key.index32 = index32;
+        key.filterable = filterable;
+        key.count = self.counting.is_some();
+        key.sun = use_sun;
         // A variant is made on a thread of its own the first time (its shaders take the driver a
         // while): until it is there, the draw takes the plain pipeline (no hitch, no shadow).
         if key.sun && !self.pipelines.contains_key(&key) {
@@ -4688,32 +4854,48 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // samples a copy of that texture instead, made just before it
         // ([`Device::copy_for_sampling`]): what the target held before this draw.
         let mut copies: [Option<Arc<Tex>>; 20] = Default::default();
-        for &(_, slot) in samplers {
-            let t = match &self.st.textures[slot] {
-                Some(t) if self.is_colour_target(t) => t.clone(),
-                _ => continue,
-            };
-            copies[slot] = self.copy_for_sampling(&t);
+        // The record's groups are set already (its textures and samplers unchanged since a draw of
+        // it set them, and none of them a target: [`DrawRecord::groups`]): nothing to look up.
+        let groups_kept = self.draw_records
+            && groups_set
+            && !any_copies
+            && self.last_groups.iter().all(|(_, g)| g.is_some());
+        if !groups_kept {
+            for &(_, slot) in samplers {
+                let t = match &self.st.textures[slot] {
+                    Some(t) if self.is_colour_target(t) => t.clone(),
+                    _ => continue,
+                };
+                copies[slot] = self.copy_for_sampling(&t);
+            }
+            // The textures and samplers: the last draw's bind group again, else the cache's.
+            let mut group_key = [(0u32, 0u8, 0u64, None::<SamplerKey>); 20];
+            for (g, &((binding, dim, filterable), slot)) in group_key.iter_mut().zip(samplers) {
+                let tex_id = copies[slot]
+                    .as_ref()
+                    .or(self.st.textures[slot].as_ref())
+                    .map_or(0, |t| t.id);
+                let sk = SamplerKey::new(&self.st.samplers[slot], filterable);
+                *g = (binding, dim, tex_id, Some(sk));
+            }
+            let group_key = &group_key[..samplers.len()];
+            // Each stage's own group ([`wgsl::sampler_group`]): the vertex shader's samplers come
+            // first in the pair's list ([`Device::sampler_bindings`]).
+            let vertex = samplers
+                .iter()
+                .take_while(|((b, _, _), _)| *b >= 32)
+                .count();
+            self.stage_group(0, &group_key[vertex..], &samplers[vertex..], &copies);
+            self.stage_group(1, &group_key[..vertex], &samplers[..vertex], &copies);
+            let (state_gen, tex_gen) = (self.state_gen, self.tex_gen);
+            if let Some(r) = self
+                .record
+                .as_mut()
+                .filter(|r| r.state_gen == state_gen && r.tex_gen == tex_gen)
+            {
+                r.groups = true;
+            }
         }
-        // The textures and samplers: the last draw's bind group again, else the cache's.
-        let mut group_key = [(0u32, 0u8, 0u64, None::<SamplerKey>); 20];
-        for (g, &((binding, dim, filterable), slot)) in group_key.iter_mut().zip(samplers) {
-            let tex_id = copies[slot]
-                .as_ref()
-                .or(self.st.textures[slot].as_ref())
-                .map_or(0, |t| t.id);
-            let sk = SamplerKey::new(&self.st.samplers[slot], filterable);
-            *g = (binding, dim, tex_id, Some(sk));
-        }
-        let group_key = &group_key[..samplers.len()];
-        // Each stage's own group ([`wgsl::sampler_group`]): the vertex shader's samplers come
-        // first in the pair's list ([`Device::sampler_bindings`]).
-        let vertex = samplers
-            .iter()
-            .take_while(|((b, _, _), _)| *b >= 32)
-            .count();
-        self.stage_group(0, &group_key[vertex..], &samplers[vertex..], &copies);
-        self.stage_group(1, &group_key[..vertex], &samplers[..vertex], &copies);
         // Vertices from DrawPrimitiveUP go into the batch's ring. The register ring's room is made
         // first: a send for it after the bytes are placed (in [`Device::write_blocks`]) would hand
         // them to the batch before the draw's own, and the draw would read another draw's vertices
@@ -4951,6 +5133,29 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 pass.draw_indexed(start..start + n, base_vertex, 0..1);
             }
             None => pass.draw(start..start + n, 0..1),
+        }
+        // What this draw gave wgpu, for the tests' and the replay example's compares
+        // ([`Device::record_draw_digests`]); one test of an option in play.
+        if let Some(digests) = self.draw_digests.as_mut() {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            if let Some((k, _, planes)) = &self.last_pipeline {
+                k.hash(&mut h);
+                planes.hash(&mut h);
+            }
+            for (g, _) in &self.last_groups {
+                g.hash(&mut h);
+            }
+            self.blocks.hash(&mut h);
+            for (k, a) in attributes.iter().enumerate() {
+                if !a.is_empty() {
+                    (k, self.st.bound.streams[k]).hash(&mut h);
+                }
+            }
+            indexed.then_some(self.st.bound.indices).hash(&mut h);
+            (kind, base_vertex, start, n, up_offset, use_sun).hash(&mut h);
+            (stencil_ref, bf, scissor, viewport).hash(&mut h);
+            digests.push(h.finish());
         }
         // The sun shadows' light list ([`sun_shadow`]): off (or no sun last frame), only this test.
         let caster = self
