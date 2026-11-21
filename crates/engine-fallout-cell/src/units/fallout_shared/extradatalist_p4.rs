@@ -2756,7 +2756,7 @@ fn save_extra_ov2(e: &mut Engine, buffer: u32, extra: u32, extra_type: u8, flag:
         0x2c => {
             let data = word(e, 0x0c);
             let flags = if data != 0 {
-                fn_00424940(e, Ptr::new(data))
+                e.call(0x0042_4940, &args![data]).u8()
             } else {
                 0
             };

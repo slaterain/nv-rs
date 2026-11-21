@@ -8,14 +8,18 @@
 //! looked up at the head, inside or at the end of its chain, or absent. A second vtable whose slots
 //! are this test's stand-ins checks the calls through the vtable for any other map.
 //!
-//! What stands in: the save buffer's append (`00865570`, logged with the three bytes it is given) and
-//! the other vtable's slots. The allocator (`00401000`) runs as it is, on both sides.
+//! The save buffer (`BGSSaveGameBuffer`) is real too: the positioned write, the append, the growth,
+//! the variable-sized values, the strings, the save to a file (whose real write and the
+//! data-to-file helper stand in, logged), sizing or not; and the walk over a map.
+//!
+//! What stands in: the other vtable.s slots, the real file.s write (`00473180`), the warnings. The
+//! allocator (`00401000`) runs as it is, on both sides.
 
 use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::leaf;
-use engine_typed::save::{self, refs};
+use engine_typed::save::{self, buffer, maps, refs};
 
 /// The log the stand-ins write (a count, then `(tag, word)` pairs).
 const LOG: u32 = 0x0300_0000;
@@ -24,8 +28,8 @@ const VT_FN: u32 = 0x00ff_2000;
 /// The data handler and the save/load game's pointers.
 const DATA_HANDLER: u32 = 0x011c_3f2c;
 const SAVE_LOAD_GAME: u32 = 0x011d_df38;
-/// The save buffer's append.
-const APPEND: u32 = 0x0086_5570;
+/// The save/load manager (its byte at +0xc: the save is only being sized).
+const MANAGER: u32 = 0x011d_e134;
 
 /// `NiTMap<unsigned int, unsigned int>`'s vtable (`0106cf68`) as the exe holds it: the scalar
 /// deleting destructor, the hash, the compare, `SetValue`, `ClearValue`, the new item, the delete.
@@ -65,23 +69,15 @@ fn block(e: &mut Engine, size: u32, w: &[u32]) -> u32 {
     a
 }
 
-/// The pages and stand-ins every case has: the log, the globals, the append and the other
+/// The pages and stand-ins every case has: the log, the globals and the other
 /// vtable's slots (hash: bucket 0; compare: the map's word at `+0x40`; `SetValue`: the key and value
 /// stored, logged; new item: a fresh 12-byte block, logged).
 fn stand_ins(e: &mut Engine) {
     e.map(LOG, 0x4000);
-    for page in [0x011c_3000, 0x011d_d000] {
+    for page in [0x011c_3000, 0x011d_d000, 0x011d_e000] {
         e.map(page, 0x1000);
     }
     e.mem.set_u32(DATA_HANDLER, 0x0123_4560);
-    e.register(APPEND, |e, a| {
-        log(e, 0x5570, a[0]);
-        let bytes = e.mem.u32(a[1]) & 0x00ff_ffff;
-        log(e, 0x5571, bytes);
-        log(e, 0x5572, a[2]);
-        log(e, 0x5573, a[3]);
-        ret(0)
-    });
     e.register(VT_FN + 4, |e, a| {
         log(e, 4, a[1]);
         ret(0)
@@ -389,6 +385,7 @@ fn index_new() {
 
 fn save_form_id_world(e: &mut Engine, case: &Case) -> u32 {
     stand_ins(e);
+    manager(e, 0);
     let map = form_id_map(e, 37, case.word(1), 9);
     with_game(e, map);
     block(e, 0x14, &[0x0108_2324, 0, 0, 0, 0])
@@ -503,4 +500,409 @@ fn many_form_ids_through_one_map() {
         })
         .run()
         .assert_same();
+}
+
+// ---- The save buffer (PR 2) ----
+
+/// The save/load manager with its sizing byte (+0xc).
+
+fn manager(e: &mut Engine, sizing: u32) {
+    let m = block(e, 0x10, &[0, 0, 0, sizing]);
+    e.mem.set_u32(MANAGER, m);
+}
+
+fn save_buffer(e: &mut Engine, size: u32, position: u32) -> u32 {
+    let data = if size == 0 {
+        0
+    } else {
+        let d = e.mem.alloc(size);
+        for i in 0..size {
+            e.mem.set_u8(d + i, (i * 7 + 3) as u8);
+        }
+        d
+    };
+    block(e, 0x14, &[0x0108_2324, data, size, position, 5])
+}
+
+/// The bytes a write takes: `n` bytes of another pattern.
+fn source(e: &mut Engine, n: u32) -> u32 {
+    let s = e.mem.alloc(n.max(4));
+    for i in 0..n {
+        e.mem.set_u8(s + i, (0x80 + i) as u8);
+    }
+    s
+}
+
+fn buffer_world(e: &mut Engine) {
+    stand_ins(e);
+}
+
+/// A positioned write: sizing or not; a buffer empty, roomy or one byte short; the write at the
+/// position, before it or past it; with or without the separator; 0, 1, 3 or 0x11000 bytes (past
+/// a growth).
+#[test]
+fn write_at() {
+    Diff::new(entry!(
+        0x0086_5ce0,
+        buffer::write_at(Ptr<_>, Ptr<_>, u32, u32, u8)
+    ))
+    .families()
+    .family(&engine_typed::crt::CRT)
+    .inputs(&[
+        Input::Flag,
+        Input::Of(&[0, 0x20, 0x10]),
+        Input::Of(&[0, 1, 3, 0x11000]),
+        Input::Of(&[0, 8, 0xc]),
+        Input::Flag,
+    ])
+    .setup(|e, case| {
+        buffer_world(e);
+        manager(e, case.word(0));
+        let b = save_buffer(e, case.word(1), 0xc.min(case.word(1)));
+        let s = source(e, case.word(2));
+        vec![b, s, case.word(2), case.word(3), case.word(4)]
+    })
+    .max_calls(2_000_000)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn append() {
+    Diff::new(entry!(0x0086_5570, buffer::append(Ptr<_>, Ptr<_>, u32, u8)))
+        .families()
+        .family(&engine_typed::crt::CRT)
+        .inputs(&[
+            Input::Flag,
+            Input::Of(&[0, 0x10, 0x20]),
+            Input::Of(&[0, 2, 9]),
+            Input::Flag,
+        ])
+        .setup(|e, case| {
+            buffer_world(e);
+            manager(e, case.word(0));
+            let b = save_buffer(e, case.word(1), case.word(1) / 2);
+            let s = source(e, case.word(2));
+            vec![b, s, case.word(2), case.word(3)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn save_bytes() {
+    Diff::new(entry!(
+        0x0086_5e50,
+        buffer::save_bytes(Ptr<_>, Ptr<_>, u32, u32)
+    ))
+    .families()
+    .family(&engine_typed::crt::CRT)
+    .inputs(&[
+        Input::Flag,
+        Input::Of(&[0, 0x10]),
+        Input::Of(&[0, 2, 9]),
+        Input::Word,
+    ])
+    .setup(|e, case| {
+        buffer_world(e);
+        manager(e, case.word(0));
+        let b = save_buffer(e, case.word(1), case.word(1) / 2);
+        let s = source(e, case.word(2));
+        vec![b, s, case.word(2), case.word(3)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn grow() {
+    Diff::new(entry!(0x0086_60b0, buffer::grow(Ptr<_>)))
+        .families()
+        .family(&engine_typed::crt::CRT)
+        .inputs(&[Input::Flag, Input::Of(&[0, 0x10, 0xffff_0008])])
+        .setup(|e, case| {
+            buffer_world(e);
+            manager(e, case.word(0));
+            let size = case.word(1);
+            // A size near the top of the word wraps; it holds no block (none could be that big).
+            let b = if size > 0x10_0000 {
+                block(e, 0x14, &[0x0108_2324, 0, size, 0, 0])
+            } else {
+                save_buffer(e, size, 0)
+            };
+            vec![b]
+        })
+        .run()
+        .assert_same();
+}
+
+/// The variable-sized values: each tag width and the boundaries, and a value too large.
+const VARIABLE_VALUES: &[u32] = &[
+    0,
+    1,
+    0x3f,
+    0x40,
+    0x3fff,
+    0x4000,
+    0x3fff_ffff,
+    0x4000_0000,
+    u32::MAX,
+];
+
+#[test]
+fn save_variable_sized_value() {
+    Diff::new(entry!(
+        0x0086_5f60,
+        buffer::save_variable_sized_value(Ptr<_>, u32)
+    ))
+    .families()
+    .family(&engine_typed::crt::CRT)
+    .inputs(&[Input::Flag, Input::Of(VARIABLE_VALUES)])
+    .setup(|e, case| {
+        buffer_world(e);
+        manager(e, case.word(0));
+        e.register(0x0084_5cc0, |e, a| {
+            log(e, 0x5cc0, a[1]);
+            ret(0)
+        });
+        vec![save_buffer(e, 0x10, 3), case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn start_and_finish_variable_value() {
+    Diff::new(entry!(
+        0x0086_5f20,
+        buffer::start_variable_value(Ptr<_>) -> u32
+    ))
+    .families()
+    .family(&engine_typed::crt::CRT)
+    .inputs(&[Input::Flag, Input::Of(&[0, 0x10, 0x11])])
+    .setup(|e, case| {
+        buffer_world(e);
+        manager(e, case.word(0));
+        vec![save_buffer(e, case.word(1), case.word(1).min(0xf))]
+    })
+    .run()
+    .assert_same();
+    Diff::new(entry!(
+        0x0086_5ff0,
+        buffer::finish_variable_value(Ptr<_>, u32, u32)
+    ))
+    .families()
+    .family(&engine_typed::crt::CRT)
+    .inputs(&[
+        Input::Flag,
+        Input::Of(VARIABLE_VALUES),
+        Input::Of(&[0, 4, 0xc]),
+    ])
+    .setup(|e, case| {
+        buffer_world(e);
+        manager(e, case.word(0));
+        e.register(0x0084_5cc0, |e, a| {
+            log(e, 0x5cc0, a[1]);
+            ret(0)
+        });
+        vec![save_buffer(e, 0x10, 0xc), case.word(1), case.word(2)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn insert_space() {
+    Diff::new(entry!(0x0086_6140, buffer::insert_space(Ptr<_>, u32, u32)))
+        .families()
+        .family(&engine_typed::crt::CRT)
+        .inputs(&[
+            Input::Flag,
+            Input::Of(&[0, 0x10]),
+            Input::Of(&[0, 4]),
+            Input::Of(&[0, 1, 3, 0x20, 0x8000_0000]),
+        ])
+        .setup(|e, case| {
+            buffer_world(e);
+            manager(e, case.word(0));
+            vec![
+                save_buffer(e, case.word(1), case.word(1).min(8)),
+                case.word(2),
+                case.word(3),
+            ]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn save_string() {
+    Diff::new(entry!(
+        0x0086_5e70,
+        buffer::save_string(Ptr<_>, Ptr<_>, u32)
+    ))
+    .families()
+    .family(&engine_typed::crt::CRT)
+    .inputs(&[Input::Flag, Input::Of(&[0, 1, 2, 40])])
+    .setup(|e, case| {
+        buffer_world(e);
+        manager(e, case.word(0));
+        // 0: no text; else a text of n - 1 letters.
+        let text = match case.word(1) {
+            0 => 0,
+            n => {
+                let t = e.mem.alloc(n + 4);
+                for i in 0..n - 1 {
+                    e.mem.set_u8(t + i, b'a' + (i % 26) as u8);
+                }
+                t
+            }
+        };
+        vec![save_buffer(e, 0x10, 2), text, 0]
+    })
+    .run()
+    .assert_same();
+}
+
+/// A save file (0x110 bytes) with simulated size and position, and the real file's write logged.
+fn save_file(e: &mut Engine, size: u32, position: u32) -> u32 {
+    let f = e.mem.alloc(0x110);
+    words(e, f + 0x104, &[0x0bad_f11e, size, position]);
+    e.register(0x0047_3180, |e, a| {
+        log(e, 0x3180, a[0]);
+        log(e, 0x3181, a[1]);
+        log(e, 0x3182, a[2]);
+        ret(a[2])
+    });
+    e.register(0x0084_5d00, |e, a| {
+        log(e, 0x5d00, a[0]);
+        log(e, 0x5d01, e.mem.u32(a[1]));
+        ret(0)
+    });
+    f
+}
+
+#[test]
+fn file_write() {
+    Diff::new(entry!(
+        0x0084_6330,
+        buffer::file_write(Ptr<_>, u32, u32) -> u32
+    ))
+    .families()
+    .inputs(&[
+        Input::Flag,
+        Input::Of(&[0, 0x10, 0xffff_fff0]),
+        Input::Of(&[0, 8, 0x10]),
+        Input::Of(&[0, 4, 0x20]),
+    ])
+    .setup(|e, case| {
+        buffer_world(e);
+        manager(e, case.word(0));
+        let f = save_file(e, case.word(1), case.word(2));
+        vec![f, 0x0030_0000, case.word(3)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn save_and_save_part() {
+    Diff::new(entry!(0x0086_5c40, buffer::save(Ptr<_>, Ptr<_>)))
+        .families()
+        .inputs(&[Input::Flag, Input::Of(&[0, 0x10])])
+        .setup(|e, case| {
+            buffer_world(e);
+            manager(e, case.word(0));
+            let f = save_file(e, 0, 0);
+            vec![save_buffer(e, case.word(1), case.word(1) / 2), f]
+        })
+        .run()
+        .assert_same();
+    Diff::new(entry!(0x0086_5c80, buffer::save_part(Ptr<_>, Ptr<_>, u32)))
+        .families()
+        .inputs(&[Input::Flag, Input::Of(&[0, 0x10]), Input::Of(&[0, 3])])
+        .setup(|e, case| {
+            buffer_world(e);
+            manager(e, case.word(0));
+            let f = save_file(e, 0, 0);
+            vec![save_buffer(e, case.word(1), 0), f, case.word(2)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn byte_c() {
+    Diff::new(entry!(0x0042_4940, buffer::byte_c(Ptr<_>) -> u8))
+        .families()
+        .inputs(&[Input::Of(&[0, 1, 0x1ff, 0xffff_ffff])])
+        .setup(|e, case| {
+            stand_ins(e);
+            vec![block(e, 0x10, &[0, 0, 0, case.word(0)])]
+        })
+        .run()
+        .assert_same();
+}
+
+// ---- The changes map's walk (PR 2) ----
+
+/// A walk over a map: buckets 1, 5 or 37, 0 to 9 keys, the hash the word map's or a stand-in's
+/// (bucket 0).
+fn walk_map(e: &mut Engine, case: &Case) -> u32 {
+    stand_ins(e);
+    let vt = if case.word(2) == 0 {
+        word_map_vtable(e)
+    } else {
+        other_vtable(e)
+    };
+    let map = e.mem.alloc(0x44);
+    fill_map(e, map, vt, case.word(0), &entries(case.word(1)));
+    map
+}
+
+#[test]
+fn first_position() {
+    Diff::new(entry!(0x004b_9ba0, maps::first_position(Ptr<_>) -> u32))
+        .families()
+        .inputs(&[
+            Input::Of(&[1, 5, 37]),
+            Input::Of(&[0, 1, 4, 9]),
+            Input::Flag,
+        ])
+        .setup(|e, case| vec![walk_map(e, case)])
+        .run()
+        .assert_same();
+}
+
+/// Each step of a whole walk: the position at the n-th node of the walk.
+#[test]
+fn next() {
+    Diff::new(entry!(
+        0x006b_7f20,
+        maps::next(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>)
+    ))
+    .families()
+    .inputs(&[
+        Input::Of(&[1, 5, 37]),
+        Input::Of(&[1, 4, 9]),
+        Input::Flag,
+        Input::Of(&[0, 1, 2, 3, 8]),
+    ])
+    .setup(|e, case| {
+        let map = walk_map(e, case);
+        let position = block(e, 0xc, &[0, 0, 0]);
+        // Walk to the n-th node with the translation (the same on every side).
+        let first = e.call(0x004b_9ba0, &args![map]).u32();
+        e.mem.set_u32(position, first);
+        let steps = case.word(3).min(case.word(1) - 1);
+        for _ in 0..steps {
+            e.call(
+                0x006b_7f20,
+                &args![map, position, position + 4, position + 8],
+            );
+        }
+        vec![map, position, position + 4, position + 8]
+    })
+    .run()
+    .assert_same();
 }

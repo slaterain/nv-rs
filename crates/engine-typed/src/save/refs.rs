@@ -18,8 +18,6 @@ const DATA_HANDLER: u32 = 0x011c_3f2c;
 const SAVE_LOAD_GAME: u32 = 0x011d_df38;
 /// The game's `operator new` (`00401000`, cdecl: size).
 const ALLOCATE: u32 = 0x0040_1000;
-/// The save buffer's append (`00865570`, `thiscall`: source, size, a byte flag).
-const APPEND: u32 = 0x0086_5570;
 
 /// The word map's vtable slots, by the functions `NiTMap<unsigned int, unsigned int>` holds there.
 const WORD_MAP_HASH: u32 = 0x006c_6a60;
@@ -250,7 +248,11 @@ fn append_index(e: &mut Engine, this: Ptr, id: u32) {
     e.with_stack(4, |e, index| {
         typed_call!(FAMILY, 0x0084_eaf0, index_new(e, index));
         typed_call!(FAMILY, 0x0085_3570, set_numeric_id(e, index, id));
-        e.call(APPEND, &args![this, index, 3u32, 0u8]);
+        typed_call!(
+            FAMILY,
+            0x0086_5570,
+            super::buffer::append(e, this, index, 3, 0)
+        );
     });
 }
 

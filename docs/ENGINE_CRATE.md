@@ -677,8 +677,12 @@ first the form id map every form reference a save writes goes through: an id's s
 and resolved back (`00846d20`), the word maps' `SetAt` (`00844700`) with the new item (`00844a70`, `006f99e0`) and
 `SetValue` (`00863840`) their vtable holds, the created-id test (`00469860`), the three-byte index
 (`BGSNumericIDIndex`: `0084eaf0`, `00853500`, `00853570`) and the save buffer's two `SaveFormID`s (`00865db0`,
-`00865df0`). The map's lookup (`00853130`) is the dispatch family's. The buffer's append (`00865570`) and the
-allocator stay called by address, as does any map whose vtable holds other functions. Threads: both (`SetAt` is
+`00865df0`). The map's lookup (`00853130`) is the dispatch family's. Then the save buffer every form's save writes its
+fields into (`BGSSaveGameBuffer`: the positioned write `00865ce0`, the append `00865570`, the growth `008660b0`,
+`SaveData` `00865e50`, `SaveString` `00865e70`, the variable-sized values `00865f60`, `00865f20`, `00865ff0` and the room
+they make `00866140`, `Save` `00865c40` and `Save_ov2` `00865c80`), the save file's write (`00846330`), the sizing test
+(`00424940`) and the walk over a word-keyed map (`004b9ba0`, `006b7f20`). The allocator, the real file's write and the
+warnings stay called by address, as does any map whose vtable holds other functions. Threads: both (`SetAt` is
 every word map's insert, the AI's combat maps included); integer work only. Its tests are
 `crates/engine/tests/typed_save.rs`. On by the native-code rule.
 And `geometry` (same crate, id 23): the code that reads and writes `NiGeometryData`'s arrays (positions, normals
