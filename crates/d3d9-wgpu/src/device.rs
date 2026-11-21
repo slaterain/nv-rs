@@ -4256,7 +4256,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// can be filtered or not) in [`Device::sampler_keys`]: the slot's number again while its
     /// states are unchanged, else the key made, numbered when it is new.
     fn sampler_key(&mut self, slot: usize, filterable: bool) -> u32 {
-        let id = self.slot_keys[slot][usize::from(filterable)];
+        let f = usize::from(filterable);
+        let id = self.slot_keys[slot][f];
         if id != NO_KEY {
             return id;
         }
@@ -4266,7 +4267,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             keys.push(sk);
             (keys.len() - 1) as u32
         });
-        self.slot_keys[slot][usize::from(filterable)] = id;
+        self.slot_keys[slot][f] = id;
         id
     }
 
