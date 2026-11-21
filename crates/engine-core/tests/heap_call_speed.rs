@@ -24,7 +24,7 @@ impl Rng {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 7;
         self.0 ^= self.0 << 17;
-        ((self.0 >> 32) * u64::from(n) >> 32) as u32
+        (((self.0 >> 32) * u64::from(n)) >> 32) as u32
     }
 }
 
