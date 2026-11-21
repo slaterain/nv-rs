@@ -149,7 +149,10 @@ pub fn default_moved<T: PartialEq>(ours: Option<&[T]>, now: Option<&[T]>) -> boo
 /// Whether an owner whose stream was lost tries to open one now: the first try at once, then at
 /// most once per [`DEFAULT_CHECK`] while no device answers.
 pub fn try_again(last: Option<std::time::Instant>, now: std::time::Instant) -> bool {
-    last.is_none_or(|t| now.saturating_duration_since(t) >= DEFAULT_CHECK)
+    match last {
+        None => true,
+        Some(t) => now.saturating_duration_since(t) >= DEFAULT_CHECK,
+    }
 }
 
 impl Drop for Output {
