@@ -140,6 +140,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 mod heap;
 mod touch;
+pub mod track;
 
 use touch::TOUCH;
 pub use touch::{allocating_function, TouchHit, TouchSpec, ALLOC_WRAPPERS};
@@ -644,8 +645,13 @@ pub struct Mem {
     check: Option<Box<BlockCheck>>,
     /// The block check looks at every store ([`Mem::enable_block_check`] with `store`).
     check_store: bool,
-    /// A store diagnostic is on: the write watch, the block check's store mode or the touch census.
+    /// A store diagnostic or the store track is on (the one test every store makes).
     store_diag: bool,
+    /// A store diagnostic is on: the write watch, the block check's store mode, the touch census or
+    /// the race census ([`Mem::store_diagnostics`]).
+    other_diag: bool,
+    /// The store track ([`Mem::enable_track`]); `None` in normal runs. Shared with every view.
+    track: Option<std::sync::Arc<track::Track>>,
     /// The touch census ([`Mem::enable_touch`], `mem/touch.rs`); `None` in normal runs.
     touch: Option<Box<touch::Touch>>,
     /// The sizes the C runtime's heap blocks and the game's memory manager's were asked for
@@ -903,6 +909,7 @@ impl Mem {
         }));
         self.check_store = store;
         self.store_diag |= store;
+        self.other_diag |= store;
     }
 
     /// With the block check on: the engine's calls `calls` (outermost first, as
@@ -1213,6 +1220,8 @@ impl Mem {
             check: None,
             check_store: false,
             store_diag: false,
+            other_diag: false,
+            track: None,
             touch: None,
             asked: HashMap::new(),
             shared: None,
@@ -1242,6 +1251,8 @@ impl Mem {
             check: None,
             check_store: false,
             store_diag: false,
+            other_diag: false,
+            track: None,
             touch: None,
             asked: HashMap::new(),
             shared: Some(shared),
@@ -1283,6 +1294,8 @@ impl Mem {
         let mut view = Mem::view_at(self.space.base, shared);
         view.view_check = checked;
         view.checking = checked;
+        view.track = self.track.clone();
+        view.store_diag = view.track.is_some();
         let mut owner = std::mem::replace(self, view);
         owner.defer_hand_back = true;
         let owner = std::ptr::NonNull::from(Box::leak(Box::new(owner)));
@@ -1297,6 +1310,8 @@ impl Mem {
         let mut view = Mem::view_at(self.space.base, shared);
         view.view_check = self.view_check;
         view.checking = self.view_check;
+        view.track = self.track.clone();
+        view.store_diag = view.track.is_some();
         view
     }
 
@@ -1332,6 +1347,30 @@ impl Mem {
     pub fn enable_race_census(&mut self, path: String) {
         self.race = Some(Box::new(crate::race_census::RaceCensus::new(path)));
         self.store_diag = true;
+        self.other_diag = true;
+    }
+
+    /// The store track ([`track`]): every write through this memory and its views to a page the
+    /// track marks tracked sets that page's dirty bit. Made once (a second call answers the same
+    /// track), before the memory is shared, so every view carries it; until then nothing pays for it.
+    /// `None` once the memory is shared without one (views made earlier could not carry it): the
+    /// caller then goes without the track.
+    pub fn enable_track(&mut self) -> Option<std::sync::Arc<track::Track>> {
+        if let Some(t) = &self.track {
+            return Some(t.clone());
+        }
+        if self.shared.is_some() {
+            return None;
+        }
+        let t = std::sync::Arc::new(track::Track::new());
+        self.track = Some(t.clone());
+        self.store_diag = true;
+        Some(t)
+    }
+
+    /// The store track, when it is on ([`Mem::enable_track`]).
+    pub fn track(&self) -> Option<&std::sync::Arc<track::Track>> {
+        self.track.as_ref()
     }
 
     /// The race census, when it is on.
@@ -1382,6 +1421,13 @@ impl Mem {
     pub fn atomic_u32(&self, a: u32) -> Option<&std::sync::atomic::AtomicU32> {
         if a % 4 != 0 || !self.page_is_mapped((a >> PAGE_BITS) as usize) {
             return None;
+        }
+        // The caller's interlocked operation may write the word (the track's one mark before the
+        // write: `track::Track::note_atomic`). Behind the one flag every store tests.
+        if self.store_diag {
+            if let Some(t) = self.track.as_deref() {
+                t.note_atomic(a);
+            }
         }
         // SAFETY: four bytes of one mapped page (4-aligned), and the guest space's host block is
         // 64 KB aligned, so the host address is 4-aligned too. Mapped pages stay committed while
@@ -1449,6 +1495,7 @@ impl Mem {
         });
         w.ranges.insert(start, (len, frees_only));
         self.store_diag = true;
+        self.other_diag = true;
         let last = (start as u64 + len as u64 - 1) >> PAGE_BITS;
         for p in (start >> PAGE_BITS) as u64..=last {
             w.pages[p as usize] = w.pages[p as usize].saturating_add(1);
@@ -1607,6 +1654,18 @@ impl Mem {
             last < PAGES,
             "map of {addr:08x}+{len:x}: runs past the end of the 4 GB space"
         );
+        self.note_written(addr, len);
+    }
+
+    /// The store track's mark of a write already made (`track`), behind the one flag every store
+    /// tests: with the track off nothing more than that test.
+    #[inline(always)]
+    fn note_written(&self, addr: u32, len: u32) {
+        if self.store_diag && len > 0 {
+            if let Some(t) = self.track.as_deref() {
+                t.note(addr, len);
+            }
+        }
     }
 
     /// Makes the pages of `[addr, addr + len)` unaddressable again, their contents dropped (a
@@ -1654,6 +1713,7 @@ impl Mem {
             end <= PAGES,
             "unmap of {addr:08x}+{len:x}: runs past the end of the 4 GB space"
         );
+        self.note_written(addr, len);
     }
 
     /// Marks the [`MAPPED`] pages of `first..stop` (`mapped` of them) [`KEPT`].
@@ -2000,7 +2060,9 @@ impl Mem {
         if self.watched_page(addr, data.len() as u32) {
             self.watch_note(addr, data.len() as u32, Some(data), WatchKind::Write);
         }
-        self.try_write_raw(addr, data)
+        let written = self.try_write_raw(addr, data);
+        self.note_written(addr, data.len() as u32);
+        written
     }
 
     /// [`Mem::try_write`] without the write watch.
@@ -2037,6 +2099,7 @@ impl Mem {
             self.watch_note(addr, len, None, WatchKind::Zero);
         }
         self.zero_raw(addr, len);
+        self.note_written(addr, len);
     }
 
     /// [`Mem::zero`] without the write watch.
@@ -2222,7 +2285,7 @@ impl Mem {
         // One test for both diagnostics (the write watch, the block check's store mode), so a
         // normal run pays a single predictable branch per store.
         if self.store_diag {
-            self.store_diagnostics(a, &b);
+            return self.store_watched(a, b);
         }
         debug_assert!(N <= 8);
         let p = self.host_at(a);
@@ -2233,6 +2296,25 @@ impl Mem {
             return;
         }
         self.store_slow(a, b)
+    }
+
+    /// [`Mem::store`] with a store diagnostic or the store track on, out of its hot path: the
+    /// diagnostics see the store before it is made, the track marks its pages after.
+    #[cold]
+    #[inline(never)]
+    fn store_watched<const N: usize>(&self, a: u32, b: [u8; N]) {
+        if self.other_diag {
+            self.store_diagnostics(a, &b);
+        }
+        if self.fast_at(a) {
+            // SAFETY: as in `Mem::store`.
+            unsafe { std::ptr::write_unaligned(self.host_at(a).cast::<[u8; N]>(), b) };
+        } else {
+            self.store_slow(a, b);
+        }
+        if let Some(t) = self.track.as_deref() {
+            t.note(a, N as u32);
+        }
     }
 
     /// [`Mem::store`] off its fast path, as [`Mem::load_slow`] for loads.
@@ -2426,6 +2508,8 @@ impl Mem {
             self.watch_note(addr, size, None, WatchKind::Alloc);
         }
         self.zero_raw(addr, size);
+        // The zeroed block's pages (the store track), after the zeroing.
+        self.note_written(addr, size);
         if let Some(r) = &self.race {
             r.forget(addr, size);
         }
@@ -2491,6 +2575,8 @@ impl Mem {
             }
             None => self.heap.give(addr, size - (entry & ODD_POOL)),
         }
+        // The block's pages, after the freed check's fill and the bins' links are written.
+        self.note_written(addr, size);
     }
 
     /// Stops with the heap's state: live blocks and bytes, free bytes and blocks with the
@@ -2629,6 +2715,128 @@ impl Span<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pages the store track handed over since the last look.
+    fn dirty(t: &track::Track) -> Vec<u32> {
+        let mut v = Vec::new();
+        t.take_dirty(|p| v.push(p));
+        v
+    }
+
+    /// The store track: stores of every width, writes, zeroing and the interlocked words mark the
+    /// tracked pages they touch (both pages of a store across a page end), and only those; taking
+    /// the dirty pages clears them; off, nothing is tested.
+    #[test]
+    fn track_marks_the_tracked_pages_written() {
+        let mut m = Mem::new();
+        assert!(!m.store_diag, "off: the store test stays the one flag");
+        m.map(0x0010_0000, 0x5000);
+        let t = m.enable_track().unwrap();
+        assert!(
+            std::sync::Arc::ptr_eq(&t, &m.enable_track().unwrap()),
+            "one track"
+        );
+        t.set_tracked(0x0010_1000, 0x2000, true);
+        assert!(t.is_tracked(0x101) && t.is_tracked(0x102) && !t.is_tracked(0x103));
+        assert_eq!(
+            dirty(&t),
+            vec![0x0010_1000, 0x0010_2000],
+            "pages tracked from now on are checked once"
+        );
+        m.set_u32(0x0010_0010, 1);
+        m.set_u8(0x0010_3010, 1);
+        assert_eq!(dirty(&t), Vec::<u32>::new(), "untracked pages");
+        m.set_u16(0x0010_1ffe, 7);
+        assert_eq!(dirty(&t), vec![0x0010_1000]);
+        assert_eq!(dirty(&t), Vec::<u32>::new(), "taken: cleared");
+        // A store across the end of an untracked page into a tracked one.
+        m.set_u32(0x0010_0ffe, 7);
+        assert_eq!(dirty(&t), vec![0x0010_1000]);
+        m.set_u64(0x0010_2ffc, 7);
+        assert_eq!(dirty(&t), vec![0x0010_2000]);
+        // What a store writes is written as ever (read before the zeroing below clears it).
+        assert_eq!(m.u64(0x0010_2ffc), 7);
+        m.set_f64(0x0010_2008, 1.5);
+        m.set_u32(0x0010_1008, 1);
+        assert_eq!(dirty(&t), vec![0x0010_1000, 0x0010_2000]);
+        m.write(0x0010_0ff0, &[1; 0x20]);
+        assert_eq!(dirty(&t), vec![0x0010_1000]);
+        m.zero(0x0010_0000, 0x4000);
+        assert_eq!(dirty(&t), vec![0x0010_1000, 0x0010_2000]);
+        m.try_write(0x0010_2000, &[1, 2]).unwrap();
+        assert_eq!(dirty(&t), vec![0x0010_2000]);
+        assert!(m.atomic_u32(0x0010_1004).is_some());
+        assert_eq!(dirty(&t), vec![0x0010_1000], "an interlocked word");
+        assert_eq!(
+            dirty(&t),
+            vec![0x0010_1000],
+            "and again at the next take (its operation follows the hand out)"
+        );
+        assert_eq!(dirty(&t), Vec::<u32>::new(), "then clean");
+        t.set_tracked(0x0010_1000, 0x1000, false);
+        m.set_u32(0x0010_1004, 9);
+        assert_eq!(dirty(&t), Vec::<u32>::new(), "no longer tracked");
+        assert_eq!(m.u32(0x0010_1004), 9);
+        assert_eq!(m.u64(0x0010_2ffc), 0, "zeroed");
+    }
+
+    /// A freed block, and pages unmapped or mapped again, mark the tracked pages they cover.
+    #[test]
+    fn track_marks_frees_and_page_changes() {
+        let mut m = Mem::new();
+        let t = m.enable_track().unwrap();
+        let block = m.alloc(0x40);
+        let page = block & !0xfff;
+        t.set_tracked(page, 0x1000, true);
+        let _ = dirty(&t);
+        m.free(block);
+        assert_eq!(dirty(&t), vec![page], "the freed block");
+        // The block handed out again is zeroed: its page is marked.
+        let again = m.alloc(0x40);
+        assert_eq!(again & !0xfff, page, "the same page reused");
+        assert_eq!(dirty(&t), vec![page], "the reused block's zeroing");
+        m.map(0x0800_0000, 0x2000);
+        t.set_tracked(0x0800_1000, 0x1000, true);
+        m.unmap(0x0800_0000, 0x2000);
+        assert_eq!(dirty(&t), vec![0x0800_1000], "unmapped");
+        m.map(0x0800_0000, 0x2000);
+        assert_eq!(dirty(&t), vec![0x0800_1000], "mapped again");
+    }
+
+    /// Shared (real threads): the memory and every view carry the one track; a view's stores mark it.
+    #[test]
+    fn track_is_carried_into_every_view() {
+        let mut m = Mem::new();
+        m.map(0x0010_0000, 0x2000);
+        let t = m.enable_track().unwrap();
+        t.set_tracked(0x0010_0000, 0x1000, true);
+        m.start_sharing();
+        let _ = dirty(&t);
+        m.set_u32(0x0010_0004, 1);
+        assert_eq!(dirty(&t), vec![0x0010_0000], "the shared memory's own view");
+        let v = m.view();
+        v.set_u32(0x0010_0008, 1);
+        assert_eq!(dirty(&t), vec![0x0010_0000], "a new view");
+        // Once shared, a memory without a track cannot get one (views made before could not carry
+        // it): the caller goes without.
+        let mut other = Mem::new();
+        other.start_sharing();
+        assert!(other.enable_track().is_none());
+    }
+
+    /// The write watch with the track on: both see a store.
+    #[test]
+    fn track_and_watch_together() {
+        let mut m = Mem::new();
+        m.map(0x0010_0000, 0x1000);
+        let t = m.enable_track().unwrap();
+        t.set_tracked(0x0010_0000, 0x1000, true);
+        let _ = dirty(&t);
+        m.watch(0x0010_0000, 8, false);
+        m.set_u32(0x0010_0000, 5);
+        assert_eq!(dirty(&t), vec![0x0010_0000]);
+        assert_eq!(m.take_watch_hits().len(), 1, "the watch saw it");
+    }
 
     /// A span reads what `Mem::u32` reads, only where its page and the next are plainly mapped.
     #[test]

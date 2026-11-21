@@ -360,6 +360,11 @@ thread_local! {
     static REUSED_WORLD: std::cell::Cell<Option<W>> = const { std::cell::Cell::new(None) };
 }
 
+/// The stand-in renderer's size: through its inverse view matrix (+0xa40..+0xa80), the last of the per-draw words
+/// the cut owns (`draw::statics::RENDERER_BLOCKS`). A smaller one let the owned block run into the next objects
+/// (the geometry group's manager and group), whose vtables POISON then scribbled.
+const RENDERER_SIZE: u32 = 0xa80;
+
 /// [`world_named`] with the draw family's members stood in or not ([`stand_ins_all`]).
 fn world_all(e: &mut Engine, render: bool, dispatch: bool, draw: bool) -> W {
     if let Some(w) = REUSED_WORLD.with(std::cell::Cell::get) {
@@ -380,7 +385,7 @@ fn world_all(e: &mut Engine, render: bool, dispatch: bool, draw: bool) -> W {
     for i in 0..8 {
         set(e, cache + 0xd4 + 4 * i, 0x100 + i);
     }
-    let renderer = obj(e, 0xa40, vt);
+    let renderer = obj(e, RENDERER_SIZE, vt);
     set(e, renderer + 0x288, device);
     let manager = obj(e, 0x10, vt);
     let group_obj = obj(e, 0x10, vt);
@@ -5000,6 +5005,28 @@ fn stage_light_texture_reads_the_pass_lights_through_the_packet() {
     );
 }
 
+/// The texture set-up (`00b7d200`) reads the property's second flags word (+0x24, which keeps the land's second
+/// texture set off the stages) through the packet (the cut copies the property's per-frame words): with them scribbled
+/// (POISON, both scribbles: one has the bit set, the other clear) it fills the same stages. Read in place, the drawing
+/// side chose by main's later word: the late gate's sampler 8/9 difference on Goodsprings' land (2026-11-16).
+#[test]
+fn setup_geometry_textures_reads_the_property_flags_through_the_packet() {
+    packet_same(
+        "setup_geometry_textures",
+        entry!(
+            0x00b7_d200,
+            textures::setup_geometry_textures(Ptr<_>, Ptr<_>)
+        )
+        .1,
+        &product(&[&[0x1f7, 0x1ff, 0x217, 0x227, 0x22e, 0x93, 0x2], TWO_WAYS]),
+        |e, c| {
+            let g = geometry_shape(e, &texture_shape(c.word(0), 1, 0, c.word(1) != 0));
+            (vec![g.shader, g.block], vec![g.property])
+        },
+        |e, w| cut::take_property_lights(e, w[0]),
+    );
+}
+
 #[test]
 fn stage_shared_texture() {
     Diff::new(entry!(0x00b7_c190, textures::stage_shared_texture(u32)))
@@ -6984,6 +7011,16 @@ const DRAW_COUNTERS: &[u32] = &[
     0x0071_4aa0,
     0x0071_4ae0,
     0x004e_ced0,
+    0x0071_4a80,
+    0x0071_4bf0,
+    0x0071_4ac0,
+    0x0071_4b00,
+    0x004e_cb40,
+    0x0071_4b20,
+    0x0071_4b50,
+    0x0071_4b80,
+    0x004e_b510,
+    0x00b9_85f0,
 ];
 
 /// A stand-in that folds its words into a mark (`RETS + 0x780`), so the calls' order and words show.
@@ -9181,7 +9218,11 @@ fn tall_grass_constants_words(e: &mut Engine, c: &Case) -> Vec<u32> {
     set(e, 0x011f_91c0, c.word(7));
     let shadows = c.word(8);
     e.mem.set_u8(0x011f_9427, u8::from(shadows == 1));
-    set(e, 0x011f_95e4, u32::from(shadows != 2));
+    // The pair's first texture: a counted object (the cut holds it), or none.
+    let shadow_vt = vtable(e, &[]);
+    let shadow_map = obj(e, 0x10, shadow_vt);
+    set(e, shadow_map + 4, 2);
+    set(e, 0x011f_95e4, if shadows != 2 { shadow_map } else { 0 });
     e.mem
         .set_u8(0x011f_91d8, if shadows == 3 { 0x1f } else { 0x3f });
     set(e, 0x011f_d890, c.word(9));
@@ -10233,6 +10274,7 @@ fn leaf_setup_geometry() {
         ) -> u32
     ))
     .shader_translated()
+    .goes_by_address(&[0x00bb_1960, 0x00bb_1a90])
     .main_thread(0)
     .inputs(LEAF_GEOMETRY)
     .float_sweep(FLOAT_SWEEP)
@@ -10359,7 +10401,7 @@ fn leaf_setup_constants() {
         engine_typed::draw::speedtree::setup_constants(Ptr<_>, Ptr<_>)
     ))
     .shader_translated()
-    .goes_by_address(&[0x00bb_25d0, 0x00ec_44d0])
+    .goes_by_address(&[0x00bb_25d0, 0x00ec_44d0, 0x00b7_1360])
     .main_thread(0)
     .inputs(LEAF_CONSTANTS)
     .float_sweep(FLOAT_SWEEP)
@@ -11079,7 +11121,8 @@ fn the_hand_off_draws_as_the_cut_on_one_thread() {
             .collect()
     };
     let poison = capture::Mode::Poison;
-    for (mode, forced) in [(poison, false), (poison, true), (capture::Mode::On, false)] {
+    let on = capture::Mode::On;
+    for (mode, forced) in [(poison, false), (poison, true), (on, false), (on, true)] {
         let mut handed = Engine::new();
         let b = setup(&mut handed);
         let before = camera_words(&handed, b[0]);
@@ -11090,6 +11133,31 @@ fn the_hand_off_draws_as_the_cut_on_one_thread() {
                 cut::cut_for_thread(&mut handed, b[0], Ptr::new(b[1]), false).is_none(),
                 "POISON without stepped threads must be refused"
             );
+        }
+        if !forced {
+            // The test world's shader classes are not listed clean (`statics::CLASSES`): the own state would stay in
+            // guest memory, written by both threads at once, so the frame is not handed off and draws on main; the
+            // packet is closed again and the cut counted as one that kept the own state.
+            let kept = statics::report().1;
+            assert!(
+                cut::cut_for_thread(&mut handed, b[0], Ptr::new(b[1]), true).is_none(),
+                "{mode:?}: a frame with a pass of an unlisted shader class was handed off"
+            );
+            assert!(
+                !capture::is_open(&handed),
+                "{mode:?}: the refused cut left its packet open"
+            );
+            assert!(
+                statics::report().1 > kept,
+                "{mode:?}: the kept cut not counted"
+            );
+            assert_eq!(
+                camera_words(&handed, b[0]),
+                before,
+                "{mode:?}: the refused cut changed guest memory"
+            );
+            capture::set_thread_mode(None);
+            continue;
         }
         let packet = cut::cut_for_thread(&mut handed, b[0], Ptr::new(b[1]), true)
             .expect("the cut for the drawing thread");
@@ -11160,7 +11228,9 @@ fn the_hand_off_draws_as_the_cut_on_one_thread() {
         let mut e = Engine::new();
         let w = setup(&mut e);
         capture::set_thread_mode(Some(capture::Mode::On));
+        statics::set_forced(true);
         let one = cut::cut_for_thread(&mut e, w[0], Ptr::new(w[1]), true).expect("one");
+        statics::set_forced(false);
         assert!(capture::begin(&e), "an open packet on this thread");
         let back = cut::adopt(&mut e, one).expect_err("a second packet on this thread");
         let _ = capture::end(&mut e);
@@ -12829,7 +12899,11 @@ fn own_state_same_with(
             assert_eq!(
                 memory_digest_beside_stack(&plain),
                 memory_digest_beside_stack(&owned),
-                "{name} {words:x?} {scribble:#x}: the memory differs"
+                "{name} {words:x?} {scribble:#x}: the memory differs at {:08x?}",
+                engine_core::typed::diff::memory_differences_beside_stack(&plain, &owned, 8)
+                    .iter()
+                    .map(|&a| (a, plain.mem.u8(a), owned.mem.u8(a)))
+                    .collect::<Vec<_>>()
             );
             assert_eq!(
                 (report.misses, report.written, report.kept_main),
@@ -13479,10 +13553,12 @@ fn no_lighting_subtextures_go_to_the_draws_own_constants() {
 }
 
 /// The pass constants with vertex entry 8 on write the fog constants and the fog colour's copies into the draw's
-/// own shader statics (the fog read through the packet the frame's values fill).
+/// own shader statics (the fog read through the packet the frame's values fill). With a skin, the renderer's
+/// view-projection (its own state) goes to the transpose as an image on the stack: the plain engine runs with the
+/// packet open too, so both lay their stacks out alike.
 #[test]
 fn setup_pass_constants_writes_the_draws_own_constants() {
-    own_state_same(
+    own_state_same_with(
         "setup_pass_constants",
         entry!(0x00b7_b450, setups::setup_pass_constants(Ptr<_>, u32)).1,
         &product(&[
@@ -13491,6 +13567,8 @@ fn setup_pass_constants_writes_the_draws_own_constants() {
             &[1, 2, 3],
             TWO_WAYS,
         ]),
+        &[],
+        true,
         |e, c| {
             let p = pass_world(e, &[], 0, 0);
             for addr in SETUP_CALLEES {
@@ -14301,7 +14379,7 @@ fn leaf_setup_constants_with_the_leaf_class() {
         engine_typed::draw::speedtree::setup_constants(Ptr<_>, Ptr<_>)
     ))
     .shader_translated()
-    .goes_by_address(&[0x00bb_25d0, 0x00ec_44d0])
+    .goes_by_address(&[0x00bb_25d0, 0x00ec_44d0, 0x00b7_1360])
     // The slots' targets run by address on the translation's side only: the typed set-up reads their fields.
     .ignore_calls(&[0x00bb_3c80, 0x00bb_3c90])
     .main_thread(0)
@@ -15262,7 +15340,7 @@ fn acceptance_poison(setups: &[AcceptanceSetup]) -> PoisonRun {
     let (d, words, passes) = acceptance_world(&mut poisoned, setups);
     let objects = acceptance_objects(&poisoned, &d, &passes);
     let others = [
-        ("renderer (not tagged)", d.w.renderer, 0xa40),
+        ("renderer (not tagged)", d.w.renderer, RENDERER_SIZE),
         ("device (not tagged)", d.w.device, 0x10),
         ("stage cache (not tagged)", d.w.stage_cache, 0xb8),
     ];
@@ -15978,4 +16056,1880 @@ fn whole_frame_acceptance() {
     if std::env::var("NV_ACCEPTANCE_REPORT").is_err() {
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
+}
+
+// ---- The draw's own state in play: the shader classes' slots that still ran as translations ----
+
+use engine_typed::draw::{lighting30 as l30, no_lighting as nl, sky as dsky, speedtree as st};
+use engine_typed::draw::{tall_grass as tg, water as dwater};
+
+/// The fill mode (`00b98480`): the wireframe byte (its low byte read), the lock, the counter (its index word 6).
+#[test]
+fn fill_mode() {
+    Diff::new(entry!(0x00b9_8480, state::set_fill_mode(u8, u32)))
+        .common()
+        .inputs(&[Input::Of(BYTES), Input::Of(LOCKS), Input::Of(TWO_WAYS)])
+        .translation_calls_plainly(&[])
+        .float_sweep(0)
+        .setup(|e, c| {
+            let _w = world(e);
+            set(e, 0x011f_fa50, 6);
+            counter(e, 6, c.word(2));
+            vec![c.word(0), c.word(1)]
+        })
+        .run()
+        .assert_same();
+}
+
+/// The three counters a multi-state setter reads: index words `at` set to 1, 2 and 3, their counters from the case.
+fn three_counters(e: &mut Engine, c: &Case, at: [u32; 3], first: usize) {
+    for (k, index) in (1u32..).zip(at) {
+        set(e, index, k);
+        counter(e, k, c.word(first + k as usize - 1));
+    }
+}
+
+/// The stencil operations (`00b980c0`): each operation through the exe's map (filled with marks), the lock, the
+/// three counters 0 or not (the first two set only while unlocked and keep their counters).
+#[test]
+fn stencil_operations() {
+    Diff::new(entry!(
+        0x00b9_80c0,
+        state::set_stencil_operations(u32, u32, u32, u32)
+    ))
+    .common()
+    .inputs(&[
+        Input::Of(&[0, 1, 7]),
+        Input::Of(&[0, 3]),
+        Input::Of(&[2, 5]),
+        Input::Of(LOCKS),
+        Input::Of(TWO_WAYS),
+        Input::Of(TWO_WAYS),
+        Input::Of(TWO_WAYS),
+    ])
+    .max_cases(400)
+    .translation_calls_plainly(&[])
+    .float_sweep(0)
+    .setup(|e, c| {
+        let _w = world(e);
+        for k in 0..8u32 {
+            set(e, 0x011a_d8d4 + 4 * k, 0x0101 + k);
+        }
+        three_counters(e, c, [0x011f_fb04, 0x011f_fb08, 0x011f_fb0c], 4);
+        vec![c.word(0), c.word(1), c.word(2), c.word(3)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The stencil function (`00b98180`): the function through the exe's map, the reference and mask as given, the
+/// lock, the three counters.
+#[test]
+fn stencil_function() {
+    Diff::new(entry!(
+        0x00b9_8180,
+        state::set_stencil_function(u32, u32, u32, u32)
+    ))
+    .common()
+    .inputs(&[
+        Input::Of(&[0, 1, 7]),
+        Input::Of(&[0, 0x80]),
+        Input::Of(&[0xff, 0x0f]),
+        Input::Of(LOCKS),
+        Input::Of(TWO_WAYS),
+        Input::Of(TWO_WAYS),
+        Input::Of(TWO_WAYS),
+    ])
+    .max_cases(400)
+    .translation_calls_plainly(&[])
+    .float_sweep(0)
+    .setup(|e, c| {
+        let _w = world(e);
+        for k in 0..8u32 {
+            set(e, 0x011a_d888 + 4 * k, 0x0201 + k);
+        }
+        three_counters(e, c, [0x011f_fb10, 0x011f_fb14, 0x011f_fb18], 4);
+        vec![c.word(0), c.word(1), c.word(2), c.word(3)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The stencil write mask (`00b98230`): the mask, the lock, the counter (index word 5).
+#[test]
+fn stencil_write_mask() {
+    Diff::new(entry!(0x00b9_8230, state::set_stencil_write_mask(u32, u32)))
+        .common()
+        .inputs(&[Input::Of(&[0, 0xff]), Input::Of(LOCKS), Input::Of(TWO_WAYS)])
+        .translation_calls_plainly(&[])
+        .float_sweep(0)
+        .setup(|e, c| {
+            let _w = world(e);
+            set(e, 0x011f_fb1c, 5);
+            counter(e, 5, c.word(2));
+            vec![c.word(0), c.word(1)]
+        })
+        .run()
+        .assert_same();
+}
+
+/// The colour-write enables 1 to 3 (`00b983d0`): three masks, the lock (added to each counter), the counters.
+#[test]
+fn color_writes() {
+    Diff::new(entry!(
+        0x00b9_83d0,
+        state::set_color_writes(u32, u32, u32, u32)
+    ))
+    .common()
+    .inputs(&[
+        Input::Of(&[0, 0xf]),
+        Input::Of(&[0, 7]),
+        Input::Of(&[0, 3]),
+        Input::Of(LOCKS),
+        Input::Of(TWO_WAYS),
+        Input::Of(TWO_WAYS),
+        Input::Of(TWO_WAYS),
+    ])
+    .max_cases(400)
+    .translation_calls_plainly(&[])
+    .float_sweep(0)
+    .setup(|e, c| {
+        let _w = world(e);
+        three_counters(e, c, [0x011f_fd28, 0x011f_fd2c, 0x011f_fd30], 4);
+        vec![c.word(0), c.word(1), c.word(2), c.word(3)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn release_z_function() {
+    Diff::new(entry!(0x0071_4a80, group_c::release_z_function(u32)))
+        .common()
+        .inputs(RELEASE)
+        .translation_calls_plainly(&[])
+        .float_sweep(0)
+        .setup(|e, c| release_words(e, c, 0x011f_f9e0, 0x17))
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn release_depth_bias() {
+    Diff::new(entry!(0x0071_4bf0, group_c::release_depth_bias(u32)))
+        .common()
+        .inputs(RELEASE)
+        .translation_calls_plainly(&[])
+        .float_sweep(0)
+        .setup(|e, c| release_words(e, c, 0x011f_f9e4, 0xc3))
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn release_alpha_function() {
+    Diff::new(entry!(0x0071_4ac0, group_c::release_alpha_function(u32)))
+        .common()
+        .inputs(RELEASE)
+        .translation_calls_plainly(&[])
+        .float_sweep(0)
+        .setup(|e, c| release_words(e, c, 0x011f_f9ec, 0x19))
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn release_blend() {
+    Diff::new(entry!(0x0071_4b00, group_c::release_blend(u32)))
+        .common()
+        .inputs(RELEASE)
+        .translation_calls_plainly(&[])
+        .float_sweep(0)
+        .setup(|e, c| release_words(e, c, 0x011f_f9f4, 0x13))
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn release_stencil() {
+    Diff::new(entry!(0x004e_cb40, group_c::release_stencil(u32)))
+        .common()
+        .inputs(RELEASE)
+        .translation_calls_plainly(&[])
+        .float_sweep(0)
+        .setup(|e, c| release_words(e, c, 0x011f_f9fc, 0x34))
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn release_stencil_operations() {
+    Diff::new(entry!(
+        0x0071_4b20,
+        group_c::release_stencil_operations(u32)
+    ))
+    .common()
+    .inputs(RELEASE)
+    .translation_calls_plainly(&[])
+    .float_sweep(0)
+    .setup(|e, c| release_words(e, c, 0x011f_fa00, 0x37))
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn release_stencil_function() {
+    Diff::new(entry!(0x0071_4b50, group_c::release_stencil_function(u32)))
+        .common()
+        .inputs(RELEASE)
+        .translation_calls_plainly(&[])
+        .float_sweep(0)
+        .setup(|e, c| release_words(e, c, 0x011f_fa04, 0x3a))
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn release_stencil_write_mask() {
+    Diff::new(entry!(
+        0x0071_4b80,
+        group_c::release_stencil_write_mask(u32)
+    ))
+    .common()
+    .inputs(RELEASE)
+    .translation_calls_plainly(&[])
+    .float_sweep(0)
+    .setup(|e, c| release_words(e, c, 0x011f_fa08, 0x3b))
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn release_clip_planes() {
+    Diff::new(entry!(0x004e_b510, group_c::release_clip_planes(u32)))
+        .common()
+        .inputs(RELEASE)
+        .translation_calls_plainly(&[])
+        .float_sweep(0)
+        .setup(|e, c| release_words(e, c, 0x011f_fa14, 0x98))
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn release_color_writes() {
+    Diff::new(entry!(0x00b9_85f0, group_c::release_color_writes(u32)))
+        .common()
+        .inputs(RELEASE)
+        .translation_calls_plainly(&[])
+        .float_sweep(0)
+        .setup(|e, c| release_words(e, c, 0x011f_fa1c, 0xbe))
+        .run()
+        .assert_same();
+}
+
+/// A counted pointer at `slot` and its source at `source` by `kind`: 0 the same object, 1 none held, 2 no source,
+/// 3 another whose count is 1 (let go: deleted), 4 another whose count stays above 0.
+fn counted_pair(e: &mut Engine, slot: u32, source: u32, kind: u32) {
+    let vt = vtable(e, &[]);
+    let held = obj(e, 0x10, vt);
+    set(e, held + 4, if kind == 3 { 1 } else { 5 });
+    let other = obj(e, 0x10, vt);
+    set(e, other + 4, 2);
+    let (old, new) = match kind {
+        0 => (held, held),
+        1 => (0, other),
+        2 => (held, 0),
+        _ => (held, other),
+    };
+    set(e, slot, old);
+    set(e, source, new);
+}
+
+/// The pass-choice tests' world: the plain world, Group C's pages, a shader of `size` bytes whose words from +0x6c
+/// on are marked passes, the pass words `words` (a table of the exe's) marked too, and a current pass already set.
+fn pass_choice_world(e: &mut Engine, size: u32, words: (u32, u32)) -> u32 {
+    let _w = world_all(e, false, false, false);
+    e.map(GROUP_C_PAGES.0, GROUP_C_PAGES.1);
+    let vt = vtable(e, &[]);
+    let shader = obj(e, size, vt);
+    for at in (0x6c..size).step_by(4) {
+        // Counted objects (the declarations and maps the choices assign), each its own pass word too.
+        let o = obj(e, 0x10, vt);
+        set(e, o + 4, 3);
+        set(e, shader + at, o);
+    }
+    for (k, at) in (0u32..).zip((words.0..words.1).step_by(4)) {
+        let o = obj(e, 0x10, vt);
+        set(e, o + 4, 3 + k);
+        set(e, at, o);
+    }
+    set(e, 0x0126_f74c, 0x5eed_0000);
+    shader
+}
+
+/// The SpeedTree branch's pass choice (`00bd4030`): every pass type (each jump table's arms, 0x15f's own case), the
+/// counted pointer +0x28 against its declaration +0x6c each way.
+#[test]
+fn branch_select_pass() {
+    Diff::new(entry!(0x00bd_4030, st::branch_select_pass(Ptr<_>, u32)))
+        .pass_common()
+        .inputs(&[Input::Of(&EVERY_PASS_TYPE), Input::Of(&[0, 1, 2, 3, 4])])
+        .max_cases(0x2f0 * 5)
+        .setup(|e, c| {
+            let shader = pass_choice_world(e, 0x80, (0x0120_2350, 0x0120_23c8));
+            counted_pair(e, shader + 0x28, shader + 0x6c, c.word(1));
+            vec![shader, c.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+/// The SpeedTree leaves' pass choice (`00bb1b20`): the two types it knows and their neighbours.
+#[test]
+fn leaf_select_pass() {
+    Diff::new(entry!(0x00bb_1b20, st::select_pass(Ptr<_>, u32)))
+        .pass_common()
+        .inputs(&[Input::Of(&[0, 0x3d, 0x3e, 0x3f, 0x40, 0x13e])])
+        .setup(|e, c| {
+            let shader = pass_choice_world(e, 0x390, (0, 0));
+            vec![shader, c.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+/// The sky's pass choice (`00b884e0`): every pass type.
+#[test]
+fn sky_select_pass() {
+    Diff::new(entry!(0x00b8_84e0, dsky::select_pass(Ptr<_>, u32)))
+        .pass_common()
+        .inputs(&[Input::Of(&EVERY_PASS_TYPE)])
+        .max_cases(0x2f0)
+        .setup(|e, c| {
+            let shader = pass_choice_world(e, 0x98, (0, 0));
+            vec![shader, c.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+/// The water's pass choice (`00b81760`): every pass type.
+#[test]
+fn water_select_pass() {
+    Diff::new(entry!(0x00b8_1760, dwater::select_pass(Ptr<_>, u32)))
+        .pass_common()
+        .inputs(&[Input::Of(&EVERY_PASS_TYPE)])
+        .max_cases(0x2f0)
+        .setup(|e, c| {
+            let shader = pass_choice_world(e, 0x194, (0, 0));
+            vec![shader, c.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+/// The tall grass's pass choice (`00baa3f0`): every pass type (both ranges' edges among them).
+#[test]
+fn tall_grass_select_pass() {
+    Diff::new(entry!(0x00ba_a3f0, tg::select_pass(Ptr<_>, u32)))
+        .pass_common()
+        .inputs(&[Input::Of(&EVERY_PASS_TYPE)])
+        .max_cases(0x2f0)
+        .setup(|e, c| {
+            let shader = pass_choice_world(e, 0x120, (0, 0));
+            vec![shader, c.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+/// The water's pass constants (`00b81d60`): every pass type, to the pass flags (`00b815e0`, this family's) with
+/// its index.
+#[test]
+fn water_pass_constants() {
+    Diff::new(entry!(0x00b8_1d60, dwater::pass_constants(Ptr<_>, u32)))
+        .pass_common()
+        .inputs(&[Input::Of(&EVERY_PASS_TYPE)])
+        .max_cases(0x2f0)
+        .setup(|e, c| {
+            let _w = world_all(e, false, false, false);
+            for pass in 0..0x50u32 {
+                set(e, 0x011f_f248 + 4 * pass, 0x5a5a_5a5a ^ (pass * 0x2f));
+                set(e, 0x011f_f120 + 4 * pass, 0xa5a5_a5a5 ^ (pass * 0x63));
+            }
+            for k in 0..9u32 {
+                let entry = e.mem.alloc(0x10);
+                e.mem.set_u8(entry + 8, 0x77);
+                set(e, 0x011f_f4a0 + 4 * k, entry);
+            }
+            vec![0x0bad_0001, c.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+/// Lighting 3.0's pass choice (`00bbe020`): the pass types `00c0abd0` knows and others, with the fog colour's
+/// ambient (`00bbb840`) after it; for 0x1e0 and 0x1e1 the counted pointers +0x30/+0x34 against +0x6c/+0x70 each way,
+/// for the others their copies from +0x74/+0x78.
+#[test]
+fn lighting30_select_pass() {
+    Diff::new(entry!(0x00bb_e020, l30::select_pass(Ptr<_>, u32)))
+        .pass_common()
+        .inputs(&[
+            Input::Of(&[
+                0, 0xa, 0xf, 0x178, 0x17f, 0x181, 0x1c8, 0x1cc, 0x1cd, 0x1ce, 0x1e0, 0x1e1, 0x1e2,
+                0x2da, 0x2ed, 0x2ee,
+            ]),
+            Input::Of(&[0, 1, 2, 3, 4]),
+        ])
+        .max_cases(16 * 5)
+        .setup(|e, c| {
+            let shader = pass_choice_world(e, 0xa0, (0x0120_0ec0, 0x0120_1080));
+            for k in 0..4u32 {
+                set(e, 0x011a_9bd0 + 4 * k, 0x3e00_0000 + (k << 20));
+            }
+            let enable = e.mem.alloc(0x10);
+            set(e, 0x0120_10c4, enable);
+            counted_pair(e, shader + 0x28, shader + 0x7c, c.word(1));
+            counted_pair(e, shader + 0x30, shader + 0x6c, c.word(1));
+            counted_pair(e, shader + 0x34, shader + 0x70, (c.word(1) + 1) % 5);
+            vec![shader, c.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+/// The pass types the shadow light subclasses' choices know (their tables' arms), 1 to 3 and others.
+const SUBCLASS_PASS_TYPES: &[u32] = &[
+    0, 1, 2, 3, 4, 0x98, 0x99, 0x9a, 0xa4, 0xbb, 0xc5, 0xc8, 0xd6, 0xd9, 0xdb, 0xde, 0xf5, 0xf6,
+    0xf9, 0xfa, 0x100, 0x101, 0x102, 0x107, 0x10d, 0x125, 0x142, 0x143, 0x162, 0x174, 0x175, 0x250,
+    0x251,
+];
+
+/// The first subclass's pass choice (`00bcce40`): its table's types, 1 and 2 (the fallback, then +0x28 set again),
+/// others (the fallback: the shadow light shader's choice and shader 1's slot 0xf0), the counted pointers each way.
+#[test]
+fn first_subclass_select_pass() {
+    Diff::new(entry!(
+        0x00bc_ce40,
+        setups::first_subclass_select_pass(Ptr<_>, u32)
+    ))
+    .pass_common()
+    .inputs(&[Input::Of(SUBCLASS_PASS_TYPES), Input::Of(&[0, 1, 2, 3, 4])])
+    .max_cases(33 * 5)
+    .setup(|e, c| {
+        let shader = pass_choice_world(e, 0x90, (0x0120_2230, 0x0120_22b4));
+        set(e, 0x011f_dff8 + 4 * c.word(0), 0x0c55_0000 + c.word(0));
+        counted_pair(e, shader + 0x28, shader + 0x6c, c.word(1));
+        let vt = vtable(e, &[]);
+        let table = obj(e, 0x40, vt);
+        set(e, RETS + 0x1f0, table);
+        vec![shader, c.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The second subclass's pass choice (`00bcfd20`): its table's types (either declaration), 1 to 3, 0x250 and 0x251
+/// (the inline assignments of +0x30/+0x34) and others (their copies), the counted pointers each way.
+#[test]
+fn second_subclass_select_pass() {
+    Diff::new(entry!(
+        0x00bc_fd20,
+        setups::second_subclass_select_pass(Ptr<_>, u32)
+    ))
+    .pass_common()
+    .inputs(&[Input::Of(SUBCLASS_PASS_TYPES), Input::Of(&[0, 1, 2, 3, 4])])
+    .max_cases(33 * 5)
+    .setup(|e, c| {
+        let shader = pass_choice_world(e, 0x90, (0x0120_22c0, 0x0120_2328));
+        set(e, 0x011f_dff8 + 4 * c.word(0), 0x0c55_0000 + c.word(0));
+        counted_pair(e, shader + 0x28, shader + 0x6c, c.word(1));
+        counted_pair(e, shader + 0x30, shader + 0x7c, c.word(1));
+        counted_pair(e, shader + 0x34, shader + 0x80, (c.word(1) + 2) % 5);
+        let vt = vtable(e, &[]);
+        let table = obj(e, 0x40, vt);
+        set(e, RETS + 0x1f0, table);
+        vec![shader, c.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// A shader property for the stage set-ups: its `[+0xac]` source word, its textures +0xb0 (texture 0 set or not:
+/// `with_first`), its flags +0x20 (bit 0x80 picks the fallback `011f9518` over `011f9510`), its `[+0xb0]` word for
+/// lighting 3.0, its textures +0xb4, its +0x30 float word and its 16-bit light count +0x68; the exe's fallbacks
+/// and the pair textures marked.
+fn stage_property(e: &mut Engine, with_first: bool, flags: u32, count: u32) -> u32 {
+    let vt = vtable(e, &[]);
+    let property = obj(e, 0x100, vt);
+    let source = e.mem.alloc(8);
+    set(e, source, 0x7a00_00ac);
+    set(e, source + 4, 0x7a00_04ac);
+    set(e, property + 0xac, source);
+    let textures = e.mem.alloc(0x10);
+    set(e, textures, if with_first { 0x7a00_00b0 } else { 0 });
+    set(e, textures + 4, 0x7a00_04b0);
+    set(e, property + 0xb0, textures);
+    let more = e.mem.alloc(0x20);
+    for k in 0..8u32 {
+        set(
+            e,
+            more + 4 * k,
+            if with_first || k > 0 {
+                0x7b00_0000 + k
+            } else {
+                0
+            },
+        );
+    }
+    set(e, property + 0xb4, more);
+    set(e, property + 0x20, flags);
+    set(e, property + 0x30, 0x3f40_0000);
+    e.mem.set_u16(property + 0x68, count as u16);
+    for (at, word) in [
+        (0x011f_9510u32, 0x0f00_9510u32),
+        (0x011f_9514, 0x0f00_9514),
+        (0x011f_9518, 0x0f00_9518),
+        (0x011f_951c, 0x0f00_951c),
+        (0x011f_9530, 0x0f00_9530),
+        (0x011f_95e4, 0x0f00_95e4),
+        (0x011f_95e8, 0x0f00_95e8),
+    ] {
+        set(e, at, word);
+    }
+    property
+}
+
+/// The rendered pass's first scene light (its +0xec byte, its shadow map +0x10c when `shadow`) and the rendered
+/// pass's byte 9 (`lit`); `GetTexture` (`004bc320`) and the slot after the textures (+0x108) marked.
+fn stage_light(e: &mut Engine, ed: u32, shadow: bool, lit: u32) -> u32 {
+    let rendering = e.mem.u32(0x011f_91e0);
+    let lights = e.mem.alloc(8);
+    let vt = vtable(e, &[]);
+    let light = obj(e, 0x220, vt);
+    e.mem.set_u8(light + 0xec, ed as u8);
+    if shadow {
+        let map = obj(e, 0x40, vt);
+        set(e, light + 0x10c, map);
+    }
+    set(e, lights, light);
+    set(e, rendering + 0xc, lights);
+    e.mem.set_u8(rendering + 9, lit as u8);
+    e.register(0x004b_c320, marked);
+    e.register(VT_FN + 0x108, marked);
+    light
+}
+
+/// A geometry's state block whose property 3 is `property`, property 0 an alpha property with flags `alpha` (none
+/// for `u32::MAX`) and property 4 one with flags `fourth` (none for `u32::MAX`).
+fn set_up_state(e: &mut Engine, property: u32, alpha: u32, fourth: u32) -> u32 {
+    let state = e.mem.alloc(0x18);
+    let vt = vtable(e, &[]);
+    for (at, flags) in [(0u32, alpha), (0x10, fourth)] {
+        if flags != u32::MAX {
+            let p = obj(e, 0x20, vt);
+            e.mem.set_u16(p + 0x18, flags as u16);
+            set(e, state + at, p);
+        }
+    }
+    set(e, state + 0xc, property);
+    state
+}
+
+/// The SpeedTree branch's slot 0x78 (`00bd4890`): each pass type arm of both switches and 0x234's shadow stage; the
+/// property's texture 0 or the fallbacks.
+#[test]
+fn branch_setup_textures() {
+    Diff::new(entry!(
+        0x00bd_4890,
+        st::branch_setup_textures(Ptr<_>, Ptr<_>)
+    ))
+    .pass_common()
+    .inputs(&[
+        Input::Of(&[
+            0, 0x7a, 0x7b, 0x7e, 0x9f, 0xaa, 0xc0, 0xe8, 0xfa, 0x108, 0x114, 0x130, 0x151, 0x165,
+            0x177, 0x178, 0x233, 0x234, 0x235,
+        ]),
+        Input::Flag,
+        Input::Of(&[0, 0x80]),
+    ])
+    .max_cases(19 * 4)
+    .setup(|e, c| {
+        let p = pass_world(e, &[], 0, c.word(0));
+        let property = stage_property(e, c.word(1) != 0, c.word(2), 0);
+        stage_light(e, 1, true, 1);
+        let state = set_up_state(e, property, u32::MAX, u32::MAX);
+        vec![p.d.w.shader, state]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The SpeedTree leaves' slot 0x78 (`00bb26d0`): the property's texture (its slot 0xb4) into stage 0, held over the
+/// slot after the textures; a stage count that falls to 0 deletes the stage (`00e7ecd0`, marked).
+#[test]
+fn leaf_setup_textures() {
+    Diff::new(entry!(0x00bb_26d0, st::setup_textures(Ptr<_>, Ptr<_>)))
+        .pass_common()
+        .inputs(&[Input::Of(&[0, 1, 4])])
+        .setup(|e, c| {
+            let p = pass_world(e, &[], 0, 0x3e);
+            e.register(VT_FN + 0xb4, slot_answer::<0xb4>);
+            e.register(VT_FN + 0x108, marked);
+            e.register(0x00e7_ecd0, marked);
+            let stages = e.mem.u32(p.pass + 0x24);
+            let stage = e.mem.u32(stages);
+            // A count of 0 here reaches 0 again after the hold: the stage is deleted.
+            set(e, stage + 0x60, c.word(0).wrapping_sub(1).min(3));
+            let property = stage_property(e, true, 0, 0);
+            let state = set_up_state(e, property, u32::MAX, u32::MAX);
+            vec![p.d.w.shader, state]
+        })
+        .run()
+        .assert_same();
+}
+
+/// The tall grass's pair textures (`00bac8d0`): every pass type.
+#[test]
+fn tall_grass_pair_textures() {
+    Diff::new(entry!(0x00ba_c8d0, tg::pair_textures(Ptr<_>, u32)))
+        .pass_common()
+        .inputs(&[Input::Of(&EVERY_PASS_TYPE)])
+        .max_cases(0x2f0)
+        .setup(|e, c| {
+            let _p = pass_world(e, &[], 0, 0);
+            let _ = stage_property(e, true, 0, 0);
+            vec![0x0bad_0001, c.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+/// The first subclass's pair textures (`00bcc590`): every pass type (the none, stage-pair and shadow light shader's
+/// arms).
+#[test]
+fn subclass_pair_textures() {
+    Diff::new(entry!(
+        0x00bc_c590,
+        setups::subclass_pair_textures(Ptr<_>, u32)
+    ))
+    .pass_common()
+    .inputs(&[Input::Of(&EVERY_PASS_TYPE)])
+    .max_cases(0x2f0)
+    .setup(|e, c| {
+        let p = pass_world(e, &[], 0, 0);
+        let _ = stage_property(e, true, 0, 0);
+        vec![p.d.w.shader, c.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The second subclass's pair textures (`00bce800`): every pass type.
+#[test]
+fn second_subclass_pair_textures() {
+    Diff::new(entry!(
+        0x00bc_e800,
+        setups::second_subclass_pair_textures(Ptr<_>, u32)
+    ))
+    .pass_common()
+    .inputs(&[Input::Of(&EVERY_PASS_TYPE)])
+    .max_cases(0x2f0)
+    .setup(|e, c| {
+        let p = pass_world(e, &[], 0, 0);
+        let _ = stage_property(e, true, 0, 0);
+        vec![p.d.w.shader, c.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The pair's stage setters (`00b7c150`, `00b7c170`): each stage of the current pass.
+#[test]
+fn stage_pair_first() {
+    Diff::new(entry!(0x00b7_c150, setups::stage_pair_first(Ptr<_>, u32)))
+        .pass_common()
+        .inputs(&[Input::Of(&[0, 1, 7, 15])])
+        .setup(|e, c| {
+            let _p = pass_world(e, &[], 0, 0);
+            let _ = stage_property(e, true, 0, 0);
+            vec![0x0bad_0001, c.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn stage_pair_second() {
+    Diff::new(entry!(0x00b7_c170, setups::stage_pair_second(Ptr<_>, u32)))
+        .pass_common()
+        .inputs(&[Input::Of(&[0, 1, 7, 15])])
+        .setup(|e, c| {
+            let _p = pass_world(e, &[], 0, 0);
+            let _ = stage_property(e, true, 0, 0);
+            vec![0x0bad_0001, c.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+/// A property's indexed texture (`00b7c1f0`): set or not (the fallback with the flag's low byte, or none).
+#[test]
+fn stage_indexed_texture() {
+    Diff::new(entry!(
+        0x00b7_c1f0,
+        setups::stage_indexed_texture(Ptr<_>, u32, u32, bool)
+    ))
+    .pass_common()
+    .inputs(&[
+        Input::Of(&[0, 3]),
+        Input::Of(&[0, 1]),
+        Input::Of(&[0, 1, 0x100]),
+    ])
+    .setup(|e, c| {
+        let _p = pass_world(e, &[], 0, 0);
+        let property = stage_property(e, false, 0, 0);
+        vec![property, c.word(0), c.word(1), c.word(2)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// A property's texture by its slot 0xf4 (`00b7c230`): an answer or none (the fallback with the flag, or none).
+#[test]
+fn stage_slot_texture() {
+    Diff::new(entry!(
+        0x00b7_c230,
+        setups::stage_slot_texture(Ptr<_>, u32, u32, bool)
+    ))
+    .pass_common()
+    .inputs(&[Input::Of(&[0, 2]), Input::Flag, Input::Of(&[0, 1, 0x100])])
+    .setup(|e, c| {
+        let _p = pass_world(e, &[], 0, 0);
+        let property = stage_property(e, true, 0, 0);
+        e.register(VT_FN + 0xf4, slot_answer::<0xf4>);
+        set(e, RETS + 0xf4, if c.word(1) != 0 { 0x7c00_00f4 } else { 0 });
+        vec![property, c.word(0), 3, c.word(2)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The first subclass's `SetupGeometryTextures` (`00bce500`): each list's pass types, the shadow types 0x231 to
+/// 0x233 and others (the shadow light shader's own, `00b7d200`, marked).
+#[test]
+fn subclass_textures() {
+    Diff::new(entry!(
+        0x00bc_e500,
+        setups::subclass_textures(Ptr<_>, Ptr<_>)
+    ))
+    .shader_translated()
+    .float_sweep(0)
+    .goes_by_address(&[
+        0x00b7_d200,
+        0x00b7_c0a0,
+        0x00b7_c0e0,
+        0x00b7_c230,
+        0x00b7_c1f0,
+        0x00b7_c120,
+    ])
+    .inputs(&[
+        Input::Of(&[
+            0, 0x98, 0x99, 0x9a, 0x9b, 0xd9, 0xda, 0x101, 0x103, 0x134, 0x153, 0x15c, 0x174, 0x175,
+            0x230, 0x231, 0x233, 0x234,
+        ]),
+        Input::Flag,
+    ])
+    .max_cases(18 * 2)
+    .setup(|e, c| {
+        let p = pass_world(e, &[], 0, c.word(0));
+        e.register(0x00b7_d200, marked);
+        e.register(VT_FN + 0xf4, slot_answer::<0xf4>);
+        set(e, RETS + 0xf4, 0x7c00_00f4);
+        let property = stage_property(e, c.word(1) != 0, 0, 0);
+        stage_light(e, 1, true, 1);
+        let state = set_up_state(e, property, u32::MAX, u32::MAX);
+        vec![p.d.w.shader, state]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The no-lighting, sky, water and lighting 3.0 geometry ends' inputs: the pass type, the property's flags +0x24,
+/// its +0x20 flags, the alpha property's and property 4's flags (none, bit 0 clear, set).
+const GEOMETRY_DONE: &[Input] = &[
+    Input::Of(&[0, 0x1d3, 0x1d6, 0x1d7, 0x1e0, 0x1e1, 0x288, 0x289]),
+    Input::Of(&[0, 1, 0x1_0000, 0x1_0001]),
+    Input::Of(&[0, 0x8000_0000]),
+    Input::Of(&[u32::MAX, 0, 1]),
+    Input::Of(&[u32::MAX, 0, 1]),
+];
+
+/// A geometry end's words: the pass world of the case's type, a property with the case's flags (kind 6 for the sky,
+/// its byte +0x60 set for the water), the state.
+fn geometry_done_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let p = pass_world(e, &[], 0, c.word(0));
+    let property = stage_property(e, true, c.word(2), 0);
+    set(e, property + 0x24, c.word(1));
+    set(e, property + 0x8c, c.word(1) & 6);
+    e.mem.set_u8(property + 0x60, (c.word(1) & 1) as u8);
+    let state = set_up_state(e, property, c.word(3), c.word(4));
+    vec![p.d.w.shader, state]
+}
+
+#[test]
+fn no_lighting_geometry_done() {
+    Diff::new(entry!(0x00bc_8d90, nl::geometry_done(Ptr<_>, Ptr<_>)))
+        .pass_common()
+        .inputs(GEOMETRY_DONE)
+        .max_cases(400)
+        .setup(geometry_done_words)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn sky_geometry_done() {
+    Diff::new(entry!(0x00b8_a1a0, dsky::geometry_done(Ptr<_>, Ptr<_>)))
+        .pass_common()
+        .inputs(GEOMETRY_DONE)
+        .max_cases(400)
+        .setup(geometry_done_words)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn water_geometry_done() {
+    Diff::new(entry!(0x00b8_6b80, dwater::geometry_done(Ptr<_>, Ptr<_>)))
+        .pass_common()
+        .inputs(GEOMETRY_DONE)
+        .max_cases(400)
+        .setup(geometry_done_words)
+        .run()
+        .assert_same();
+}
+
+/// Lighting 3.0's geometry end (`00bbeef0`): its types lower the depth-write lock counter by hand.
+#[test]
+fn lighting30_geometry_done() {
+    Diff::new(entry!(0x00bb_eef0, l30::geometry_done(Ptr<_>, Ptr<_>)))
+        .pass_common()
+        .inputs(GEOMETRY_DONE)
+        .max_cases(400)
+        .setup(|e, c| {
+            let words = geometry_done_words(e, c);
+            set(e, 0x011f_f9dc, 2);
+            words
+        })
+        .run()
+        .assert_same();
+}
+
+/// The no-lighting and lighting 3.0 blendings' pass types (each range's edges) and the alpha property's flags.
+const BLENDING: &[Input] = &[
+    Input::Of(&[
+        0, 0x49, 0x4a, 0x51, 0x52, 0x1bc, 0x1bd, 0x1c3, 0x1c4, 0x1cc, 0x1dc, 0x1dd, 0x1e0, 0x1e1,
+        0x2d7, 0x2d8, 0x2ef, 0x2f0,
+    ]),
+    Input::Of(&[u32::MAX, 0, 1]),
+];
+
+fn blending_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let p = pass_world(e, &[], 0, c.word(0));
+    let property = stage_property(e, true, 0, 0);
+    let state = set_up_state(e, property, c.word(1), u32::MAX);
+    vec![p.d.w.shader, state]
+}
+
+#[test]
+fn no_lighting_blending() {
+    Diff::new(entry!(0x00bc_8ed0, nl::blending(Ptr<_>, Ptr<_>)))
+        .pass_common()
+        .inputs(BLENDING)
+        .max_cases(18 * 3)
+        .setup(blending_words)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn lighting30_blending() {
+    Diff::new(entry!(0x00bb_c5c0, l30::blending(Ptr<_>, Ptr<_>)))
+        .pass_common()
+        .inputs(BLENDING)
+        .max_cases(18 * 3)
+        .setup(blending_words)
+        .run()
+        .assert_same();
+}
+
+/// The partition set-ups' inputs: a partition or none; the shader's +0x38; its +0x34 its own bone constants or not;
+/// the switch object (none, byte +8 clear, set).
+const PARTITION: &[Input] = &[Input::Flag, Input::Flag, Input::Flag, Input::Of(&[0, 1, 2])];
+
+/// A partition set-up's words: the world's skin (its buffer +0x28, its word +0x20), a partition (count 3, indices),
+/// the shader's +0x34/+0x38/+0x70/+0x80 and the switch object at `switch_at`; the renderer's bone matrices
+/// (`00e6fe30`), the constants' slot 0x78 and the map's slot 0x70 marked.
+fn partition_words(e: &mut Engine, c: &Case, switch_at: u32) -> Vec<u32> {
+    let p = pass_world(e, &[], 0, 0);
+    e.map(GROUP_C_PAGES.0, GROUP_C_PAGES.1);
+    let w = p.d.w;
+    e.register(0x00e6_fe30, marked);
+    e.register(VT_FN + 0x70, slot_answer::<0x70>);
+    let skin = w.skin;
+    set(e, skin + 0x20, 0x0000_0303);
+    set(e, skin + 0x28, 0x5c1d_0028);
+    let partition = if c.word(0) != 0 {
+        let partition = e.mem.alloc(0x24);
+        e.mem.set_u16(partition + 0x20, 3);
+        set(e, partition + 4, 0x5a00_0004);
+        partition
+    } else {
+        0
+    };
+    let vt = vtable(e, &[]);
+    let map = obj(e, 0x20, vt);
+    set(e, w.shader + 0x38, c.word(1));
+    set(e, w.shader + 0x70, map);
+    set(e, w.shader + 0x80, map);
+    set(e, w.shader + 0x34, if c.word(2) != 0 { map } else { 0 });
+    set(e, w.shader + 0x180, 0x0e00_0180);
+    let switch = if c.word(3) != 0 {
+        let s = e.mem.alloc(0x10);
+        e.mem.set_u8(s + 8, (c.word(3) - 1) as u8);
+        s
+    } else {
+        0
+    };
+    set(e, switch_at, switch);
+    vec![w.shader, 0, skin, partition, 0, 0, 0, w.transform, 0]
+}
+
+#[test]
+fn no_lighting_bone_setup() {
+    Diff::new(entry!(
+        0x00bc_8f20,
+        nl::bone_setup(Ptr<_>, u32, u32, u32, u32, u32, u32, u32, u32) -> u32
+    ))
+    .common()
+    .float_sweep(0)
+    .goes_by_address(&[0x00e6_fe30])
+    .inputs(PARTITION)
+    .setup(|e, c| partition_words(e, c, 0x0120_1090))
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn lighting30_bone_setup() {
+    Diff::new(entry!(
+        0x00bb_d000,
+        l30::bone_setup(Ptr<_>, u32, u32, u32, u32, u32, u32, u32, u32) -> u32
+    ))
+    .common()
+    .float_sweep(0)
+    .goes_by_address(&[0x00e6_fe30])
+    .inputs(PARTITION)
+    .setup(|e, c| partition_words(e, c, 0x0120_1090))
+    .run()
+    .assert_same();
+}
+
+/// The shader slot 0x94 (`00e80590`): a current pass or none (its slot 0xc marked with the shader's +0x38).
+#[test]
+fn pass_hand_word() {
+    Diff::new(entry!(0x00e8_0590, passes::pass_hand_word(u32) -> u32))
+        .pass_common()
+        .inputs(&[Input::Flag])
+        .setup(|e, c| {
+            let p = pass_world(e, &[], 0, 0);
+            e.register(VT_FN + 0xc, marked);
+            let vt = vtable(e, &[]);
+            let pass = obj(e, 0x60, vt);
+            set(e, 0x0126_f74c, if c.word(0) != 0 { pass } else { 0 });
+            set(e, p.d.w.shader + 0x38, 0x0e00_0038);
+            vec![p.d.w.shader]
+        })
+        .run()
+        .assert_same();
+}
+
+/// Lighting 3.0's stage textures (`00c0cd80`): the skipped and set types, the property's second texture or the
+/// fallback, the shadow stage's conditions each way (the rendered pass's type, the light count, the light's byte
+/// +0xec, a shadow map, the rendered pass's byte 9, the filter setting, the property's flag 8).
+#[test]
+fn lighting30_stage_textures_slot() {
+    Diff::new(entry!(0x00c0_cd80, l30::stage_textures(Ptr<_>, u32, u32)))
+        .pass_common()
+        .goes_by_address(&[0x004a_2020])
+        .inputs(&[
+            Input::Of(&[
+                0, 0x1bc, 0x1bd, 0x1c3, 0x1c4, 0x1c7, 0x1c8, 0x1cb, 0x1cc, 0x1d3, 0x1e1, 0x1e2,
+                0x2d8, 0x2e0, 0x2ef,
+            ]),
+            Input::Flag,
+            Input::Of(&[0, 0x1c4, 0x1c7, 0x1c8]),
+            Input::Of(&[0, 2]),
+            Input::Flag,
+            Input::Flag,
+            Input::Flag,
+            Input::Of(&[0, 3]),
+        ])
+        .max_cases(600)
+        .setup(|e, c| {
+            let p = pass_world(e, &[], 0, c.word(2));
+            e.map(GROUP_C_PAGES.0, GROUP_C_PAGES.1);
+            e.register(0x00bb_9640, marked);
+            let property = stage_property(e, c.word(1) != 0, 0, c.word(3));
+            set(e, property + 0x18, if c.word(6) != 0 { 0x100 } else { 0 });
+            stage_light(e, c.word(4), c.word(5) != 0, c.word(6));
+            set(e, 0x011f_91b0, c.word(7));
+            vec![p.d.w.shader, c.word(0), property]
+        })
+        .run()
+        .assert_same();
+}
+
+/// Lighting 3.0's stage constants (`00c0cf10`): every pass type to 0x2f0 (the jump table's lists, 0x181, 0xe and
+/// 0xf), the setters it calls by address marked.
+#[test]
+fn lighting30_stage_constants() {
+    Diff::new(entry!(0x00c0_cf10, l30::stage_constants(Ptr<_>, u32, u32)))
+        .pass_common()
+        .inputs(&[Input::Of(&EVERY_PASS_TYPE)])
+        .max_cases(0x2f0)
+        .setup(|e, c| {
+            let p = pass_world(e, &[], 0, 0);
+            e.map(GROUP_C_PAGES.0, GROUP_C_PAGES.1);
+            for addr in [
+                0x00bb_9640u32,
+                0x00c0_bae0,
+                0x00c0_bb20,
+                0x00c0_bb50,
+                0x00c0_bba0,
+                0x00c0_bc00,
+                0x00c0_bcf0,
+                0x00bb_dda0,
+                0x00bb_dcd0,
+            ] {
+                e.register(addr, marked);
+            }
+            e.register(VT_FN + 0xf4, slot_answer::<0xf4>);
+            set(e, RETS + 0xf4, 0x7c00_00f4);
+            let property = stage_property(e, true, 0, 0);
+            vec![p.d.w.shader, c.word(0), property]
+        })
+        .run()
+        .assert_same();
+}
+
+/// Lighting 3.0's emittance stage (`00c0bc90`): the property's slot 0xf4 answering a texture or none; its +0x30
+/// any float (through `FLD`/`FSTP`: a signalling NaN comes out quiet, compared payload and all).
+#[test]
+fn lighting30_emittance_stage() {
+    Diff::new(entry!(0x00c0_bc90, l30::emittance_stage(Ptr<_>, u32, u32)))
+        .pass_common()
+        .inputs(&[Input::Flag, Input::Of(&[0, ONE, 0x7f80_0001, 0xffc0_1234])])
+        .setup(|e, c| {
+            let p = pass_world(e, &[], 0, 0);
+            e.map(GROUP_C_PAGES.0, GROUP_C_PAGES.1);
+            e.register(0x00bb_9640, marked);
+            e.register(VT_FN + 0xf4, slot_answer::<0xf4>);
+            set(e, RETS + 0xf4, if c.word(0) != 0 { 0x7c00_00f4 } else { 0 });
+            let property = stage_property(e, true, 0, 0);
+            set(e, property + 0x30, c.word(1));
+            vec![p.d.w.shader, p.pass, property]
+        })
+        .run()
+        .assert_same();
+}
+
+/// The leaf lights' set-up's inputs: the light direction's first word and the position's (play's floats, NaNs
+/// among them), the range and the scale (the native division: one rounding, as the x87's to a float), the property's
+/// active lights (none, two, 0x10000: the exe tests the low 16 bits).
+const LEAF_LIGHTS: &[Input] = &[
+    Input::F32,
+    Input::F32,
+    Input::F32,
+    Input::F32,
+    Input::Of(&[0, 2, 0x1_0000]),
+];
+
+/// The leaf lights' set-up's words: the light rows (the direction `011fa1f0`, the position `011fa180`, the range
+/// `011fa200`: each row's words `direction`, `position` with a different bit each), the active-light count stood in
+/// (`00b70790`, answering `active`), a matrix on the heap, the scale's bits; the D3DX imports behind the thunks marked.
+fn leaf_lights_world(
+    e: &mut Engine,
+    direction: u32,
+    position: u32,
+    range: u32,
+    scale: u32,
+    active: u32,
+) -> Vec<u32> {
+    let _w = world(e);
+    e.map(GROUP_C_PAGES.0, GROUP_C_PAGES.1);
+    e.register(0x00b7_0790, slot_answer::<0x790>);
+    e.register(0x00fd_f414, |e, a| {
+        e.mem.set_u32(a[0], 0x3f80_0003);
+        ret(a[0])
+    });
+    set(e, RETS + 0x790, active);
+    for k in 0..3u32 {
+        set(e, 0x011f_a1f0 + 4 * k, direction ^ (k << 12));
+        set(e, 0x011f_a180 + 4 * k, position ^ (k << 12));
+    }
+    set(e, 0x011f_a200, range);
+    let matrix = e.mem.alloc(0x40);
+    for k in 0..16u32 {
+        set(e, matrix + 4 * k, ONE + (k << 16));
+    }
+    let vt = vtable(e, &[]);
+    let property = obj(e, 0x80, vt);
+    vec![0x0bad_0001, property, matrix, scale]
+}
+
+/// [`leaf_lights_world`] from a case of [`LEAF_LIGHTS`].
+fn leaf_lights_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let (d, p, r, s) = (
+        play_bits(c, 0),
+        play_bits(c, 1),
+        play_bits(c, 2),
+        play_bits(c, 3),
+    );
+    leaf_lights_world(e, d, p, r, s, c.word(4))
+}
+
+/// The SpeedTree leaves' lights (`00bb1960`): main-thread code on the main thread's word, bit for bit (NaN payloads
+/// aside), with play's floats.
+#[test]
+fn leaf_light_setup() {
+    Diff::new(entry!(
+        0x00bb_1960,
+        st::light_setup(Ptr<_>, Ptr<_>, u32, f32)
+    ))
+    .common()
+    .goes_by_address(&[0x00b7_0790])
+    .main_thread(0)
+    .inputs(LEAF_LIGHTS)
+    .float_sweep(FLOAT_SWEEP)
+    .setup(leaf_lights_words)
+    .run()
+    .assert_same();
+}
+
+/// The leaf lights with signalling NaNs planted in the rows: the exe's `FLD`/`FSTP` quiets them, payload and all,
+/// and the comparison here is payload-exact.
+#[test]
+fn leaf_light_setup_quiets_signalling_nans() {
+    Diff::new(entry!(
+        0x00bb_1960,
+        st::light_setup(Ptr<_>, Ptr<_>, u32, f32)
+    ))
+    .common()
+    .goes_by_address(&[0x00b7_0790])
+    .control_words(&[MAIN_THREAD])
+    .float_sweep(0)
+    .inputs(&[
+        Input::Of(&[0x7f80_0001, 0xff81_2345, ONE]),
+        Input::Of(&[0x7fa0_0000, HALF]),
+        Input::Of(&[0x7f80_0007, TWO]),
+        Input::Of(&[2]),
+    ])
+    .setup(|e, c| {
+        let words = leaf_lights_world(e, c.word(0), c.word(1), c.word(2), TWO, c.word(3));
+        // The D3DX results signalling NaNs too, so the quieting of what comes back shows.
+        for addr in [0x00fd_f410u32, 0x00fd_f414, 0x00fd_f41c, 0x00fd_f420] {
+            e.register(addr, |e, a| {
+                for k in 0..3u32 {
+                    e.mem.set_u32(a[0] + 4 * k, 0x7f80_0005 + k);
+                }
+                ret(a[0])
+            });
+        }
+        words
+    })
+    .run()
+    .assert_same();
+}
+
+/// The camera the leaves' rows read (`011f917c`): its words +0x6c to +0x88 from `word(k)`.
+fn camera_rows_words(e: &mut Engine, word: impl Fn(u32) -> u32) -> Vec<u32> {
+    let w = world(e);
+    e.map(GROUP_C_PAGES.0, GROUP_C_PAGES.1);
+    let camera = full_camera(e, &w);
+    for k in 0..8u32 {
+        set(e, camera + 0x6c + 4 * k, word(k));
+    }
+    set(e, 0x011f_917c, camera);
+    vec![]
+}
+
+/// The SpeedTree leaves' camera rows (`00bb1a90`): play's floats, signalling NaNs among them (payload-exact).
+#[test]
+fn leaf_camera_rows() {
+    Diff::new(entry!(0x00bb_1a90, st::camera_rows()))
+        .common()
+        .float_sweep(0)
+        .inputs(&[Input::Of(&[0, ONE, 0x7f80_0001, 0xff80_1234, 0x7fc0_0000])])
+        .setup(|e, c| camera_rows_words(e, |k| c.word(0) ^ (k << 13)))
+        .run()
+        .assert_same();
+}
+
+/// A scene light's constants (`00b71360`): the rendered geometry's shader of lighting 3.0's kind (0x11) or not, the
+/// light's byte +0xf4, the value a signalling NaN or not (quieted before it is handed on: the stood-in setters mark
+/// its word, payload and all).
+#[test]
+fn scene_light() {
+    Diff::new(entry!(0x00b7_1360, st::scene_light(u32, Ptr<_>, f32)))
+        .shader_translated()
+        .float_sweep(0)
+        .goes_by_address(&[0x00b7_0820, 0x00b7_1130, 0x00b7_0de0])
+        .inputs(&[
+            Input::Of(&[0x10, 0x11]),
+            Input::Flag,
+            Input::Of(&[ONE, 0x7f80_0003]),
+        ])
+        .setup(|e, c| {
+            let p = pass_world(e, &[], 0, 0);
+            for addr in [0x00b7_0820u32, 0x00b7_1130, 0x00b7_0de0] {
+                e.register(addr, marked);
+            }
+            let geometry = e.mem.u32(e.mem.u32(0x011f_91e0));
+            let vt = vtable(e, &[]);
+            let shader = obj(e, 0x80, vt);
+            set(e, shader + 0x68, c.word(0));
+            set(e, geometry + 0xc0, shader);
+            let light = obj(e, 0x120, vt);
+            e.mem.set_u8(light + 0xf4, c.word(1) as u8);
+            let _ = p;
+            vec![3, light, c.word(2)]
+        })
+        .run()
+        .assert_same();
+}
+
+// ---- The draw's own state at the cut: the set-ups above keep it in the packet ----
+
+/// The pass choices set the current pass, the geometry ends lower the depth-write lock counter, the leaves' set-ups
+/// and lighting 3.0's stages fill Group C's constants, the multi-state setters and the lock releases move their
+/// counters: each in the packet. With the own state scribbled in guest memory, they do what they do without it.
+#[test]
+fn the_new_set_ups_keep_the_draws_own_state() {
+    own_state_same(
+        "branch_select_pass",
+        entry!(0x00bd_4030, st::branch_select_pass(Ptr<_>, u32)).1,
+        &product(&[&[0x60, 0x7e, 0x15f, 0x234, 0x300], &[0, 3]]),
+        |e, c| {
+            let shader = pass_choice_world(e, 0x80, (0x0120_2350, 0x0120_23c8));
+            counted_pair(e, shader + 0x28, shader + 0x6c, c.word(1));
+            let acc = e.mem.alloc(0x200);
+            (vec![shader, c.word(0)], acc)
+        },
+        |_, _, _| {},
+    );
+    own_state_same(
+        "sky_select_pass",
+        entry!(0x00b8_84e0, dsky::select_pass(Ptr<_>, u32)).1,
+        &[vec![9], vec![0x23c], vec![0x2d5], vec![0x2d6]],
+        |e, c| {
+            let shader = pass_choice_world(e, 0x98, (0, 0));
+            let acc = e.mem.alloc(0x200);
+            (vec![shader, c.word(0)], acc)
+        },
+        |_, _, _| {},
+    );
+    own_state_same(
+        "lighting30_geometry_done",
+        entry!(0x00bb_eef0, l30::geometry_done(Ptr<_>, Ptr<_>)).1,
+        &product(&[&[0x1d3, 0x1e0, 0], &[0, 1]]),
+        |e, c| {
+            let p = pass_world(e, &[], 0, c.word(0));
+            let property = stage_property(e, true, 0, 0);
+            let state = set_up_state(e, property, c.word(1), c.word(1));
+            set(e, 0x011f_f9dc, 2);
+            (vec![p.d.w.shader, state], p.d.w.acc)
+        },
+        |_, _, _| {},
+    );
+    own_state_same_floats(
+        "leaf_light_setup",
+        entry!(0x00bb_1960, st::light_setup(Ptr<_>, Ptr<_>, u32, f32)).1,
+        &[
+            vec![ONE, HALF, TWO, ONE, 2],
+            vec![0x7f80_0001, ONE, HALF, TWO, 0],
+        ],
+        &[0, 1, 2, 3],
+        |e, c| {
+            let words = leaf_lights_words(e, c);
+            let acc = e.mem.alloc(0x200);
+            (words, acc)
+        },
+        |_, _, _| {},
+    );
+    own_state_same(
+        "lighting30_emittance_stage",
+        entry!(0x00c0_bc90, l30::emittance_stage(Ptr<_>, u32, u32)).1,
+        &[vec![0], vec![1]],
+        |e, c| {
+            let p = pass_world(e, &[], 0, 0);
+            e.register(0x00bb_9640, marked);
+            e.register(VT_FN + 0xf4, slot_answer::<0xf4>);
+            set(e, RETS + 0xf4, if c.word(0) != 0 { 0x7c00_00f4 } else { 0 });
+            let property = stage_property(e, true, 0, 0);
+            (vec![p.d.w.shader, p.pass, property], p.d.w.acc)
+        },
+        |e, _, a| cut::take_property_lights(e, a[2]),
+    );
+    own_state_same(
+        "stencil_operations",
+        entry!(
+            0x00b9_80c0,
+            state::set_stencil_operations(u32, u32, u32, u32)
+        )
+        .1,
+        &product(&[&[1], LOCKS, TWO_WAYS, TWO_WAYS, TWO_WAYS]),
+        |e, c| {
+            let w = world(e);
+            e.map(CONSTANT_UPLOAD_COPY, 0x2000);
+            e.register(VT_FN + 0xe4, set_render_state_answer);
+            three_counters(e, c, [0x011f_fb04, 0x011f_fb08, 0x011f_fb0c], 2);
+            (vec![c.word(0), 2, 3, c.word(1)], w.acc)
+        },
+        |_, _, _| {},
+    );
+    own_state_same(
+        "release_blend",
+        entry!(0x0071_4b00, group_c::release_blend(u32)).1,
+        &product(&[&[0, 1, 3], &[0, 1, 2], TWO_WAYS]),
+        |e, c| {
+            let w = world(e);
+            e.map(CONSTANT_UPLOAD_COPY, 0x2000);
+            e.register(VT_FN + 0xe4, set_render_state_answer);
+            set(e, 0x011f_f9f4, c.word(1));
+            cached_state(e, &w, 0x13, c.word(2), 0);
+            (vec![c.word(0)], w.acc)
+        },
+        |_, _, _| {},
+    );
+}
+
+/// Lighting 3.0's stages read the rendered pass's light and the property's +0x30 through the packet: with what the
+/// cut takes scribbled in guest memory, they write as without.
+#[test]
+fn lighting30_stages_read_the_packet() {
+    packet_same(
+        "lighting30_stage_textures",
+        entry!(0x00c0_cd80, l30::stage_textures(Ptr<_>, u32, u32)).1,
+        &product(&[&[0x1c4, 0x1c8], &[0x1c4, 0x1c7], TWO_WAYS]),
+        |e, c| {
+            let p = pass_world(e, &[], 0, c.word(1));
+            e.map(GROUP_C_PAGES.0, GROUP_C_PAGES.1);
+            e.register(0x00bb_9640, marked);
+            let property = stage_property(e, true, 0, 2);
+            let light = stage_light(e, 1, true, c.word(2));
+            let rendering = e.mem.u32(0x011f_91e0);
+            (
+                vec![p.d.w.shader, c.word(0), property],
+                vec![rendering, light],
+            )
+        },
+        |e, w| {
+            cut::take_pass_lights(e, w[0]);
+            cut::take_one_light(e, w[1]);
+        },
+    );
+    packet_same(
+        "lighting30_emittance_stage",
+        entry!(0x00c0_bc90, l30::emittance_stage(Ptr<_>, u32, u32)).1,
+        &[vec![0], vec![1]],
+        |e, c| {
+            let p = pass_world(e, &[], 0, 0);
+            e.map(GROUP_C_PAGES.0, GROUP_C_PAGES.1);
+            e.register(0x00bb_9640, marked);
+            e.register(VT_FN + 0xf4, slot_answer::<0xf4>);
+            set(e, RETS + 0xf4, if c.word(0) != 0 { 0x7c00_00f4 } else { 0 });
+            let property = stage_property(e, true, 0, 0);
+            (vec![p.d.w.shader, p.pass, property], vec![property])
+        },
+        |e, w| cut::take_property_lights(e, w[0]),
+    );
+    packet_same(
+        "branch_setup_textures",
+        entry!(0x00bd_4890, st::branch_setup_textures(Ptr<_>, Ptr<_>)).1,
+        &[vec![0x234], vec![0x7a]],
+        |e, c| {
+            let p = pass_world(e, &[], 0, c.word(0));
+            let property = stage_property(e, true, 0, 0);
+            let light = stage_light(e, 1, true, 1);
+            let state = set_up_state(e, property, u32::MAX, u32::MAX);
+            let rendering = e.mem.u32(0x011f_91e0);
+            (vec![p.d.w.shader, state], vec![rendering, light])
+        },
+        |e, w| {
+            cut::take_pass_lights(e, w[0]);
+            cut::take_one_light(e, w[1]);
+        },
+    );
+    packet_same(
+        "leaf_camera_rows",
+        entry!(0x00bb_1a90, st::camera_rows()).1,
+        &[vec![ONE], vec![0x7f80_0001]],
+        |e, c| {
+            let words = camera_rows_words(e, |k| c.word(0) ^ (k << 13));
+            let camera = e.mem.u32(0x011f_917c);
+            (words, vec![camera])
+        },
+        |e, w| cut::take_camera(e, w[0]),
+    );
+}
+
+/// The shader classes the route meets are listed clean, so the cut takes the draw's own state in play: a frame of
+/// passes of every listed class owns every own block after `cut::fill` with the check's forcing off; one pass of a
+/// class not listed keeps it in guest memory and names that vtable. (Before this piece every class still named a
+/// blocking translation, so no cut in play ever took it.)
+#[test]
+fn the_cut_takes_the_own_state_in_play() {
+    const LISTED: [u32; 11] = [
+        0x010a_f2f8,
+        0x010b_b7a8,
+        0x010b_b980,
+        0x010b_bb50,
+        0x010b_9190,
+        0x010b_b230,
+        0x010b_8980,
+        0x010a_fe18,
+        0x010a_f9e0,
+        0x010b_a0f8,
+        0x010b_c070,
+    ];
+    let cases: Vec<(u32, bool)> = LISTED
+        .iter()
+        .map(|&class| (class, true))
+        .chain([(0x0bad_7ab1u32, false)])
+        .collect();
+    for (class, expect_taken) in cases {
+        let mut e = Engine::new();
+        e.map(GROUP_C_PAGES.0, GROUP_C_PAGES.1);
+        let d = draw_world(&mut e);
+        // Every pass's geometry draws with a shader of the class (the draw world's passes share geometries).
+        let shader = e.mem.alloc(0x40);
+        set(&mut e, shader, class);
+        let mut passes = d.w.passes.to_vec();
+        passes.push(d.w.skin_pass);
+        for &pass in &passes {
+            let geometry = e.mem.u32(pass);
+            if geometry != 0 {
+                set(&mut e, geometry + 0xc0, shader);
+            }
+        }
+        let reason = statics::ownable(&e, &passes);
+        assert_eq!(
+            reason,
+            (!expect_taken).then_some(class),
+            "the first reason for {class:08x}"
+        );
+        statics::set_forced(false);
+        assert!(capture::begin(&e));
+        let before = statics::report();
+        cut::fill(&mut e, d.w.camera, Ptr::new(d.w.acc));
+        let after = statics::report();
+        let taken = statics::GLOBAL_BLOCKS
+            .iter()
+            .all(|&(lo, hi)| capture::owns(&e, lo, hi - lo));
+        let _ = capture::end(&mut e);
+        assert_eq!(taken, expect_taken, "the own blocks taken for {class:08x}");
+        if expect_taken {
+            assert!(after.0 > before.0, "the cut was not counted as taking it");
+        } else {
+            assert!(after.1 > before.1, "the cut was not counted as keeping it");
+        }
+    }
+}
+
+/// The vertex constant setters read the device through the render-state cache (in play the vertex shader's renderer
+/// +0x28 is the cache, whose device word the cut takes with it): with the cache's own bytes scribbled in guest
+/// memory, they reach the device as without.
+#[test]
+fn constant_setters_read_the_device_through_the_packet() {
+    own_state_same(
+        "set_vertex_constant",
+        entry!(
+            0x00e8_9ba0,
+            dconstants::set_constant(Ptr<_>, Ptr<_>, u32, u32) -> bool
+        )
+        .1,
+        &product(&[&[0, 1, 3], &[0, 1]]),
+        |e, c| {
+            let (shader, entry) = constant_entry(e, c.word(0), c.word(1), 1);
+            let renderer = e.mem.u32(0x011f_9508);
+            let cache = e.mem.u32(renderer + 0x8b8);
+            set(e, shader + 0x28, cache);
+            let acc = e.mem.alloc(0x200);
+            (vec![shader, entry, 0, 1], acc)
+        },
+        |_, _, _| {},
+    );
+    own_state_same(
+        "set_vertex_constant_array",
+        entry!(
+            0x00e8_9c70,
+            dconstants::set_constant_array(Ptr<_>, Ptr<_>, u32, u32, u32, u32) -> bool
+        )
+        .1,
+        &[vec![3], vec![4]],
+        |e, c| {
+            let (shader, entry) = constant_entry(e, c.word(0), 0, 0);
+            let renderer = e.mem.u32(0x011f_9508);
+            let cache = e.mem.u32(renderer + 0x8b8);
+            set(e, shader + 0x28, cache);
+            let data = e.mem.alloc(0x400);
+            let indices = e.mem.alloc(8);
+            e.mem.set_u16(indices, 2);
+            let acc = e.mem.alloc(0x200);
+            (vec![shader, entry, data, 1, 4, indices], acc)
+        },
+        |_, _, _| {},
+    );
+}
+
+/// Lighting 3.0's pass for a pass type (`00c0abd0`): every pass type to 0x2f0 (both jump tables, 0x178 and the
+/// passes read after the assignment among them), the counted pointer +0x28 against the type's field each way.
+#[test]
+fn lighting30_pass_for_type() {
+    Diff::new(entry!(0x00c0_abd0, l30::pass_for_type(Ptr<_>, u32) -> u32))
+        .pass_common()
+        .inputs(&[Input::Of(&EVERY_PASS_TYPE), Input::Of(&[0, 3])])
+        .max_cases(0x2f0 * 2)
+        .setup(|e, c| {
+            let shader = pass_choice_world(e, 0xa0, (0x0120_0ec0, 0x0120_1080));
+            counted_pair(e, shader + 0x28, shader + 0x7c, c.word(1));
+            vec![shader, c.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+/// Lighting 3.0's pass table is the draw's own state (Group C's statics): with it scribbled in guest memory, the pass
+/// for a type answers what it answers without.
+#[test]
+fn lighting30_pass_for_type_reads_the_draws_own_state() {
+    own_state_same(
+        "lighting30_pass_for_type",
+        entry!(0x00c0_abd0, l30::pass_for_type(Ptr<_>, u32) -> u32).1,
+        &product(&[&[0xa, 0x178, 0x1c8, 0x1cd, 0x2ed, 0x300], &[0, 3]]),
+        |e, c| {
+            let shader = pass_choice_world(e, 0xa0, (0x0120_0ec0, 0x0120_1080));
+            counted_pair(e, shader + 0x28, shader + 0x7c, c.word(1));
+            let acc = e.mem.alloc(0x200);
+            (vec![shader, c.word(0)], acc)
+        },
+        |_, _, _| {},
+    );
+}
+
+/// Lighting 3.0's pair stages (`00c0bbd0`): the pass's stages 2 and 3 take the pair (each set or not).
+#[test]
+fn lighting30_pair_stages() {
+    Diff::new(entry!(0x00c0_bbd0, l30::pair_stages(Ptr<_>, u32)))
+        .pass_common()
+        .inputs(&[Input::Of(&[0, 0x0f00_95e4]), Input::Of(&[0, 0x0f00_95e8])])
+        .setup(|e, c| {
+            let p = pass_world(e, &[], 0, 0);
+            let _ = stage_property(e, true, 0, 0);
+            set(e, 0x011f_95e4, c.word(0));
+            set(e, 0x011f_95e8, c.word(1));
+            vec![p.d.w.shader, p.pass]
+        })
+        .run()
+        .assert_same();
+}
+
+/// The pair of textures the shadow passes sample (`011f95e4`, `011f95e8`) is the packet's: the frame's tail may set
+/// others before a posted draw runs (the late gate's difference in Goodsprings: samplers 8 and 9 took the tail's
+/// pair). With what the cut takes for the frame scribbled in guest memory, the pair's setters write as without.
+#[test]
+fn the_pair_textures_are_read_through_the_packet() {
+    packet_same(
+        "lighting30_pair_stages",
+        entry!(0x00c0_bbd0, l30::pair_stages(Ptr<_>, u32)).1,
+        &[vec![0]],
+        |e, _| {
+            let p = pass_world(e, &[], 0, 0);
+            let _ = stage_property(e, true, 0, 0);
+            (vec![p.d.w.shader, p.pass], vec![])
+        },
+        |e, _| cut::take_frame(e, 0, Ptr::new(0)),
+    );
+    packet_same(
+        "pair_textures",
+        entry!(0x00b7_cfb0, acc::set_pair_textures(u32, u32)).1,
+        &[vec![0x94], vec![0xa0], vec![0x1f8]],
+        |e, c| {
+            let _p = pass_world(e, &[], 0, 0);
+            let _ = stage_property(e, true, 0, 0);
+            (vec![0x0bad_0001, c.word(0)], vec![])
+        },
+        |e, _| cut::take_frame(e, 0, Ptr::new(0)),
+    );
+    packet_same(
+        "stage_pair_first",
+        entry!(0x00b7_c150, setups::stage_pair_first(Ptr<_>, u32)).1,
+        &[vec![3]],
+        |e, c| {
+            let _p = pass_world(e, &[], 0, 0);
+            let _ = stage_property(e, true, 0, 0);
+            (vec![0x0bad_0001, c.word(0)], vec![])
+        },
+        |e, _| cut::take_frame(e, 0, Ptr::new(0)),
+    );
+}
+
+// ---- The renderer's camera set-up, typed so its words are each side's own (the drawing thread, 2026-11-16). ----
+
+use engine_typed::draw::camera;
+
+/// A page mapped when the test world has not mapped it, then `words` written from `at`.
+fn constant_words(e: &mut Engine, at: u32, words: &[u32]) {
+    let page = at & !0xfff;
+    if !e.mem.is_mapped(page) {
+        e.map(page, 0x1000);
+    }
+    for (k, w) in (0u32..).zip(words) {
+        set(e, at + 4 * k, *w);
+    }
+}
+
+#[test]
+fn set_camera_data() {
+    Diff::new(entry!(
+        0x00e6_c780,
+        camera::set_camera_data(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>)
+    ))
+    .draw_common_at(0x00e6_c780)
+    .inputs(&[
+        // The skip byte, the clip plane's flag, the eye's flag, an orthographic frustum, a flipped render state.
+        Input::Of(TWO_WAYS),
+        Input::Of(TWO_WAYS),
+        Input::Of(TWO_WAYS),
+        Input::Of(TWO_WAYS),
+        Input::Of(TWO_WAYS),
+        // The render target's width (one past the sign bit: the unsigned conversion's correction).
+        Input::Of(&[1280, 0x8000_0400]),
+        Input::F32Swept(ONE),
+        Input::F32Swept(HALF),
+    ])
+    .float_sweep(16)
+    .setup(|e, c| {
+        let d = draw_world(e);
+        let r = d.w.renderer;
+        e.mem.set_u8(r + 0x6fc, c.word(0) as u8);
+        constant_words(e, 0x0126_efd0, &[c.word(1) << 8, bits(c, 7)]);
+        constant_words(e, 0x011a_9604, &[c.word(2)]);
+        constant_words(e, 0x011f_426c, &[bits(c, 6), bits(c, 7), ONE]);
+        constant_words(e, 0x011f_474c, &[0, 0, 0]);
+        // The projection's scales (2.0 and -2.0 as doubles), the negative side and 2^32.
+        constant_words(e, 0x0101_1590, &[0, 0x4000_0000]);
+        constant_words(e, 0x0106_d4c8, &[0, 0xc000_0000]);
+        constant_words(e, 0x0101_2054, &[0xbf80_0000]);
+        constant_words(e, 0x0109_9378, &[0x4f80_0000]);
+        // The render target group's size, the render state's handedness, the device's slots.
+        let group_vt = vtable(e, &[]);
+        let group = obj(e, 0x10, group_vt);
+        set(e, r + 0x888, group);
+        slots!(e; 0x48, 0x4c, 0x8c, 0x90, 0xb0, 0xbc);
+        // The D3DX imports the thunks jump through, as `geometry_stand_ins` has them: the vector ones rotate three
+        // floats, the matrix product mixes its operands; `D3DXVec4Transform` (`00fdf3ec`) copies four floats.
+        for addr in [0x00fd_f414u32, 0x00fd_f420, 0x00fd_f41c] {
+            e.register(addr, |e, a| {
+                let v = words_at(e, a[1], 3);
+                for k in 0..3u32 {
+                    e.mem.set_u32(a[0] + 4 * k, v[((k + 1) % 3) as usize]);
+                }
+                ret(a[0])
+            });
+        }
+        e.register(0x00fd_f3ec, |e, a| {
+            let v = words_at(e, a[1], 4);
+            for k in 0..4u32 {
+                e.mem
+                    .set_u32(a[0] + 4 * k, v[k as usize] ^ e.mem.u32(a[2] + 4 * k));
+            }
+            ret(a[0])
+        });
+        e.register(0x00fd_f424, |e, a| {
+            let (m, n) = (words_at(e, a[1], 16), words_at(e, a[2], 16));
+            for k in 0..16u32 {
+                let word = m[k as usize] ^ (n[((5 * k + 3) % 16) as usize] & 0xff);
+                e.mem.set_u32(a[0] + 4 * k, word);
+            }
+            ret(a[0])
+        });
+        set(e, RETS + 0x4c, c.word(4));
+        set(e, RETS + 0x8c, c.word(5));
+        set(e, RETS + 0x90, 720);
+        // The camera: location, direction, up, right, the frustum (left, right, top, bottom, near, far, the
+        // orthographic byte) and the port (left, right, top, bottom).
+        let vector = |e: &mut Engine, words: [u32; 3]| {
+            let v = e.mem.alloc(0xc);
+            for (k, w) in (0u32..).zip(words) {
+                set(e, v + 4 * k, w);
+            }
+            v
+        };
+        let (a, b) = (bits(c, 6), bits(c, 7));
+        let location = vector(e, [a, b, 0x4120_0000]);
+        let direction = vector(e, [0, b, a]);
+        let up = vector(e, [b, ONE, 0]);
+        let right = vector(e, [ONE, 0, a ^ 0x8000_0000]);
+        let frustum = e.mem.alloc(0x1c);
+        for (k, w) in (0u32..).zip([0xbf80_0000u32, ONE, a, 0xbf00_0000, b, 0x4500_0000]) {
+            set(e, frustum + 4 * k, w);
+        }
+        e.mem.set_u8(frustum + 0x18, c.word(3) as u8);
+        let port = e.mem.alloc(0x10);
+        for (k, w) in (0u32..).zip([0, ONE, ONE, 0]) {
+            set(e, port + 4 * k, w);
+        }
+        vec![r, location, direction, up, right, frustum, port]
+    })
+    .run()
+    .assert_same();
+}
+
+// ---- The shader constant map's defined constants, typed so the renderer's matrices are the drawing side's. ----
+
+use engine_typed::draw::defined;
+
+/// Where the program's `SetShaderConstant` stand-in copies the 0x40 bytes it is handed.
+const DEFINED_COPY: u32 = 0x0121_6000;
+
+/// The program's slot 0x74 (`SetShaderConstant`, `thiscall(program, entry, data, 0)`): the 0x40 bytes at `data`
+/// copied to [`DEFINED_COPY`] (none for a null pointer), then the slot's answer.
+fn defined_constant_answer(e: &mut Engine, a: &[u32]) -> Ret {
+    if let Some(&data) = a.get(2) {
+        let mut bytes = vec![0u8; 0x40];
+        if data >= 0x1000 && e.mem.try_read(data, &mut bytes).is_ok() {
+            e.mem.write(DEFINED_COPY, &bytes);
+        }
+    }
+    slot_answer::<0x74>(e, a)
+}
+
+#[test]
+fn set_defined_constant() {
+    Diff::new(entry!(
+        0x00e8_3db0,
+        defined::set_defined_constant(
+            Ptr<_>,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+        ) -> u32
+    ))
+    .draw_common_at(0x00e8_3db0)
+    .inputs(&[
+        // The renderer's constants (every matrix case), the inverse view's rows, the property state's floats, no data,
+        // the identity, the skinning array, an unknown constant.
+        Input::Of(&[
+            1, 2, 13, 14, 3, 4, 15, 16, 5, 6, 17, 18, 7, 8, 19, 20, 9, 10, 21, 22, 11, 12, 23, 24,
+            25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 73, 75, 76, 77, 78, 79, 80, 96, 97, 98,
+            99, 200,
+        ]),
+        // The fourth and fifth words present; the program's answer.
+        Input::Of(TWO_WAYS),
+        Input::Of(TWO_WAYS),
+        Input::F32Swept(ONE),
+        Input::F32Swept(HALF),
+    ])
+    .float_sweep(8)
+    .setup(|e, c| {
+        let d = draw_world(e);
+        let r = d.w.renderer;
+        // The renderer's five matrices, from the swept floats.
+        for k in 0..80u32 {
+            let w = if k % 3 == 0 {
+                bits(c, 3)
+            } else {
+                bits(c, 4) ^ (k << 8)
+            };
+            set(e, r + 0x940 + 4 * k, w);
+        }
+        let map = obj(e, 0x40, 0);
+        set(e, map + 0x3c, r);
+        let program_vt = vtable(e, &[]);
+        let program = obj(e, 0x10, program_vt);
+        if !e.mem.is_mapped(DEFINED_COPY) {
+            e.map(DEFINED_COPY, 0x1000);
+        }
+        e.register(VT_FN + 0x74, defined_constant_answer);
+        slots!(e; 0x78);
+        set(e, RETS + 0x74, c.word(2));
+        set(e, RETS + 0x78, c.word(2));
+        let entry = e.mem.alloc(0x20);
+        set(e, entry + 0x10, c.word(0));
+        // The fourth and fifth words: skinning objects (matrices +0x28, registers +0x20; bones +0x20, indices +4).
+        let (fourth, fifth) = if c.word(1) != 0 {
+            let fourth = e.mem.alloc(0x30);
+            let fifth = e.mem.alloc(0x30);
+            set(e, fourth + 0x28, 0x1234);
+            set(e, fourth + 0x20, 3);
+            e.mem.set_u16(fifth + 0x20, 7);
+            set(e, fifth + 4, 0x5678);
+            (fourth, fifth)
+        } else {
+            (0, 0)
+        };
+        // The property state: its +8 object (floats at +0x1c..+0x3c, +0x34 none), no texturing property.
+        let properties = e.mem.alloc(0x20);
+        let source = e.mem.alloc(0x40);
+        for k in 0..16u32 {
+            set(e, source + 4 * k, bits(c, 3) ^ k);
+        }
+        set(e, source + 0x34, 0);
+        set(e, properties + 8, source);
+        constant_words(e, 0x011f_4998, &[ONE, HALF, bits(c, 4)]);
+        // The D3DX imports as the other set-up tests have them: inverse, transpose, multiply, multiply-transpose.
+        e.register(0x00fd_f428, |e, a| {
+            let m = words_at(e, a[2], 16);
+            for k in 0..16u32 {
+                e.mem.set_u32(a[0] + 4 * k, m[(15 - k) as usize]);
+            }
+            ret(a[0])
+        });
+        e.register(0x00fd_f42c, |e, a| {
+            let m = words_at(e, a[1], 16);
+            for k in 0..16u32 {
+                e.mem
+                    .set_u32(a[0] + 4 * k, m[(4 * (k % 4) + k / 4) as usize]);
+            }
+            ret(a[0])
+        });
+        for addr in [0x00fd_f424u32, 0x00fd_f410] {
+            e.register(addr, |e, a| {
+                let (m, n) = (words_at(e, a[1], 16), words_at(e, a[2], 16));
+                for k in 0..16u32 {
+                    let word = m[k as usize] ^ (n[((5 * k + 3) % 16) as usize] & 0xff);
+                    e.mem.set_u32(a[0] + 4 * k, word);
+                }
+                ret(a[0])
+            });
+        }
+        vec![
+            map, program, entry, 0, fourth, fifth, 0, properties, 0, 0, 0, 0,
+        ]
+    })
+    .run()
+    .assert_same();
 }
