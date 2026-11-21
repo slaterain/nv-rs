@@ -98,7 +98,8 @@ fn install_io_wait(e: &mut Engine) {
 /// looked at only after each one. While the loaders are busy (running across cell borders) both
 /// use their whole 5 ms frame after frame. With the row both get [`LOAD_STEPS_MS`] in play (the IO
 /// manager's mode 6); the game's own waits for loads and the loading screens keep the game's
-/// limits. A player's own `iPostProcessMilliseconds` line in `Fallout.ini` or `FalloutPrefs.ini`
+/// limits. Only while loads are in flight: with the loaders idle the game's own limits come back, so
+/// anything left over is finished. A player's own `iPostProcessMilliseconds` line in `Fallout.ini` or `FalloutPrefs.ini`
 /// wins for the second. The same work in the same order, spread over more frames.
 pub const LOAD_STEPS: Fix = Fix {
     name: "loads finished in small steps",

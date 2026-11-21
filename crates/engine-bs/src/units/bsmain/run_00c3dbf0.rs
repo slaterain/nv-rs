@@ -13,6 +13,8 @@ const MODE: u32 = 0x68;
 const AFTER_TASK: u32 = 0x70;
 const BEFORE_RUN: u32 = 0x74;
 const TASK_KEY: u32 = 0x10;
+/// The IO manager's count of tasks in flight (`00c3dfa0` waits while the finished ones are fewer).
+const IN_FLIGHT: u32 = 0x18;
 /// The mode with its own budget.
 const MODE_SIX: u32 = 6;
 
@@ -155,12 +157,15 @@ pub static PLAY_BUDGET_MS: std::sync::atomic::AtomicU32 = std::sync::atomic::Ato
 /// [`fn_00c3dbf0`] with [`PLAY_BUDGET_MS`] as the budget in play (mode 6): the setting's word holds
 /// that value for the length of the call and gets its own value back after it, so the setting
 /// reads as before everywhere else. Any other mode (the game's waits for loads and the loading
-/// screens use the other budget), a call while one runs and a budget of 0 are the translation.
+/// screens use the other budget), a call while one runs and a budget of 0 are the translation; so
+/// is a frame with nothing in flight (`+0x18` is 0: the loaders idle), which gets the game's own
+/// budget back so that whatever the smaller budget left clears.
 pub fn fn_00c3dbf0_play_budget(e: &mut Engine, this: Ptr) -> bool {
     let budget = PLAY_BUDGET_MS.load(std::sync::atomic::Ordering::Relaxed);
     if budget == 0
         || e.mem.u8(RUNNING) != 0
         || e.mem.u32(this.addr().wrapping_add(MODE)) != MODE_SIX
+        || e.mem.u32(this.addr().wrapping_add(IN_FLIGHT)) == 0
     {
         return fn_00c3dbf0(e, this);
     }
@@ -329,10 +334,16 @@ mod tests {
         // Mode 6 with a 1 ms row budget: 1 * 2.0 = 2 ticks (the setting's 10 would be 20).
         let (mut e, log, this, _) = runner(3, 1);
         e.mem.set_u32(this + MODE, 6);
+        e.mem.set_u32(this + IN_FLIGHT, 4);
         PLAY_BUDGET_MS.store(1, Relaxed);
         fn_00c3dbf0_play_budget(&mut e, Ptr::new(this));
         assert_eq!(calls(&log, FLOAT_TO_INT64), [vec![2]]);
         assert_eq!(e.mem.u32(BUDGET_SIX), 10, "the setting keeps its value");
+        // Nothing in flight (the loaders idle): the setting's 10, so a backlog clears.
+        let (mut e, log, this, _) = runner(3, 1);
+        e.mem.set_u32(this + MODE, 6);
+        fn_00c3dbf0_play_budget(&mut e, Ptr::new(this));
+        assert_eq!(calls(&log, FLOAT_TO_INT64), [vec![20]]);
         // Mode 0 (a wait for loads): the other budget, 20 * 2.0.
         let (mut e, log, this, _) = runner(3, 1);
         fn_00c3dbf0_play_budget(&mut e, Ptr::new(this));
