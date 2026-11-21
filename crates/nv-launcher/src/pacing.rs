@@ -30,13 +30,32 @@
 //! - The game queues a screen's welcome text as one item; the launcher queues each of its wrapped
 //!   lines that shows as its own line (each starting a frame after the one before).
 
-/// One line of the queue: its characters, its milliseconds a character, and whether it is an
-/// intro line (500 ms before it types).
+/// One line of the queue: its characters, its milliseconds a character, whether it is an intro
+/// line (the menu's intro state: 500 ms after the line before ends), and whether it is typed as if
+/// by a player (an intro line that starts with `>`: its sounds are the "enter" and one per
+/// character, [`Beat`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Line {
     pub chars: usize,
     pub ms: u64,
     pub intro: bool,
+    pub keyed: bool,
+}
+
+/// What the text manager asks of the terminal's sounds on one frame (`AnimatingTextManager::
+/// Update` 007598d0; `crate::sound` plays them).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Beat {
+    /// A line was updated (`UIHackingCharScroll` played, 00759b19): every frame a line is
+    /// current and not waiting, whether a character types on it or not, but for a keyed line.
+    Scroll,
+    /// A keyed line became the current one after the line before ended (`UIHackingCharEnter`,
+    /// 0075997e; the intro's first line is no such line).
+    Enter,
+    /// `n` characters of a keyed line typed this frame, `ms` its milliseconds a character: one
+    /// `UIHackingCharSingle` each, the `i`-th (from 0) `ms * i / n` milliseconds later (00759ae4,
+    /// the line's own milliseconds, AnimatingText +0x10).
+    Singles { n: usize, ms: u64 },
 }
 
 /// The intro's wait after each of its lines ends (011d93d4 = now + 500).
@@ -54,6 +73,46 @@ pub fn frame_ms(fps: u32) -> f64 {
 /// first frame at 0): the characters typed of each line, and the time (ms) the last line was
 /// done, if it is.
 pub fn typed(lines: &[Line], frame: f64, t: f64) -> (Vec<usize>, Option<f64>) {
+    walk(lines, frame, t, |_, _| {})
+}
+
+/// The sound beats of the frames after `from` up to `t` milliseconds (each with its frame's
+/// time), in order.
+pub fn beats(lines: &[Line], frame: f64, from: f64, t: f64) -> Vec<(f64, Beat)> {
+    let mut out = Vec::new();
+    walk(lines, frame, t, |now, b| {
+        if now > from {
+            out.push((now, b));
+        }
+    });
+    out
+}
+
+/// Beats older than this (ms) when they are played are dropped: the window stalled.
+pub const STALE_MS: f64 = 100.0;
+
+/// The beats `beats` (each with its frame's time) to play at `t`, each with how many
+/// milliseconds from now: those from the last [`STALE_MS`] only (after a stall the older ones
+/// are dropped, not bunched into one burst), each kept at its own time from the oldest one
+/// played (which plays now).
+pub fn scheduled(beats: &[(f64, Beat)], t: f64) -> Vec<(u64, Beat)> {
+    let fresh: Vec<&(f64, Beat)> = beats.iter().filter(|(b, _)| *b > t - STALE_MS).collect();
+    let Some(&&(first, _)) = fresh.first() else {
+        return Vec::new();
+    };
+    fresh
+        .into_iter()
+        .map(|&(b, beat)| ((b - first).max(0.0) as u64, beat))
+        .collect()
+}
+
+/// The queue frame by frame up to `t` ([`typed`]'s answer), each frame's [`Beat`] handed to `beat`.
+fn walk(
+    lines: &[Line],
+    frame: f64,
+    t: f64,
+    mut beat: impl FnMut(f64, Beat),
+) -> (Vec<usize>, Option<f64>) {
     let mut out = vec![0usize; lines.len()];
     // The line typing now, the frame its due time comes (None: its first update), the wait.
     let mut current: Option<usize> = None;
@@ -84,6 +143,9 @@ pub fn typed(lines: &[Line], frame: f64, t: f64) -> (Vec<usize>, Option<f64>) {
             done = false;
             due = None;
             if popped && lines[next].intro {
+                if lines[next].keyed {
+                    beat(now, Beat::Enter);
+                }
                 wait = now + INTRO_LINE_WAIT_MS;
                 continue;
             }
@@ -92,15 +154,29 @@ pub fn typed(lines: &[Line], frame: f64, t: f64) -> (Vec<usize>, Option<f64>) {
         let line = lines[i];
         let count = match due {
             None => 1,
-            Some(d) if now < d => continue,
+            Some(d) if now < d => 0,
             Some(d) => ((now - d) / line.ms.max(1) as f64).floor() as usize + 1,
         };
-        out[i] = (out[i] + count).min(line.chars);
-        if out[i] >= line.chars {
-            done = true;
-            done_at = now;
+        let before = out[i];
+        if count > 0 {
+            out[i] = (out[i] + count).min(line.chars);
+            if out[i] >= line.chars {
+                done = true;
+                done_at = now;
+            }
+            due = Some(now + line.ms as f64);
         }
-        due = Some(now + line.ms as f64);
+        if !line.keyed {
+            beat(now, Beat::Scroll);
+        } else if out[i] > before {
+            beat(
+                now,
+                Beat::Singles {
+                    n: out[i] - before,
+                    ms: line.ms,
+                },
+            );
+        }
     }
 }
 
@@ -119,6 +195,7 @@ mod tests {
             chars,
             ms,
             intro: false,
+            keyed: false,
         }
     }
 
@@ -160,6 +237,7 @@ mod tests {
             chars,
             ms: 6,
             intro: true,
+            keyed: false,
         };
         let l = [intro(2), intro(2), intro(1)];
         let f = frame_ms(120);
@@ -194,5 +272,80 @@ mod tests {
     #[test]
     fn an_empty_queue_is_done() {
         assert_eq!(typed(&[], frame_ms(120), 0.0), (vec![], Some(0.0)));
+    }
+
+    /// A plain line asks for the scroll sound on every frame it is current, typing or not; the
+    /// frames after `from` only.
+    #[test]
+    fn a_plain_line_scrolls_every_frame_it_is_current() {
+        let f = frame_ms(120);
+        let at = |k: f64| (k * f).floor();
+        let scrolls = |v: Vec<(f64, Beat)>| -> Vec<f64> {
+            assert!(v.iter().all(|(_, b)| *b == Beat::Scroll));
+            v.into_iter().map(|(t, _)| t).collect()
+        };
+        assert_eq!(
+            scrolls(beats(&[line(3, 6)], f, -1.0, 100.0)),
+            [at(0.0), at(1.0), at(2.0)]
+        );
+        // 50 ms a character: the frames between its characters scroll too (0 to 6, 50 ms).
+        assert_eq!(beats(&[line(2, 50)], f, -1.0, 100.0).len(), 7);
+        assert_eq!(
+            scrolls(beats(&[line(3, 6)], f, at(1.0), at(2.0))),
+            [at(2.0)]
+        );
+        assert!(beats(&[], f, -1.0, 100.0).is_empty());
+    }
+
+    /// In the intro a line typed as if by a player has the "enter" sound as it becomes current
+    /// after the line before, then one sound for each character, spread over its milliseconds.
+    #[test]
+    fn a_keyed_intro_line_has_enter_then_one_sound_a_character() {
+        let f = frame_ms(120);
+        let intro = |chars, ms, keyed| Line {
+            chars,
+            ms,
+            intro: true,
+            keyed,
+        };
+        let l = [intro(2, 6, false), intro(2, 50, true)];
+        let b = beats(&l, f, -1.0, 1000.0);
+        assert_eq!(
+            b,
+            [
+                (0.0, Beat::Scroll),
+                ((f).floor(), Beat::Scroll),
+                ((2.0 * f).floor(), Beat::Enter),
+                ((63.0 * f).floor(), Beat::Singles { n: 1, ms: 50 }),
+                ((69.0 * f).floor(), Beat::Singles { n: 1, ms: 50 }),
+            ]
+        );
+        // Two characters in one frame (60 frames a second, 6 ms each): one beat of two.
+        let l = [intro(3, 6, true)];
+        let f60 = frame_ms(60);
+        assert_eq!(
+            beats(&l, f60, -1.0, 40.0),
+            [
+                (0.0, Beat::Singles { n: 1, ms: 6 }),
+                ((f60).floor(), Beat::Singles { n: 2, ms: 6 }),
+            ]
+        );
+    }
+
+    /// Each beat keeps its own time from the oldest one played; after a stall, beats older than
+    /// 100 ms are dropped rather than bunched into one burst.
+    #[test]
+    fn beats_keep_their_times_and_a_stall_drops_the_old_ones() {
+        let s = |n| Beat::Singles { n, ms: 50 };
+        let beats = [(0.0, s(1)), (8.0, Beat::Scroll), (16.0, s(2))];
+        assert_eq!(
+            scheduled(&beats, 20.0),
+            [(0, s(1)), (8, Beat::Scroll), (16, s(2))]
+        );
+        // At 1000 ms (a stall): all of them older than 100 ms, nothing plays.
+        assert!(scheduled(&beats, 1000.0).is_empty());
+        // At 105 ms: the first is too old; the others keep their spacing from the oldest kept.
+        assert_eq!(scheduled(&beats, 105.0), [(0, Beat::Scroll), (8, s(2))]);
+        assert!(scheduled(&[], 5.0).is_empty());
     }
 }

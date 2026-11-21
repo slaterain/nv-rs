@@ -2904,8 +2904,14 @@ fn queue_loaded_texture(e: &mut Engine, texture: Ptr, priority: i32, parent: Ptr
 /// `0043c130` is clear.
 fn texture_is_loaded_for_this_thread(e: &mut Engine, this: Ptr, texture: Ptr) -> bool {
     let task = ni_pointer_value(e, texture);
-    e.call(QUEUED_TEXTURE_STATE, &args![task]).u32() == 3
-        && !e.call(THREAD_QUEUED_FLAG_TEST, &args![this]).bool()
+    // lStewieAl's Tweaks' S0136 (its calls at `0x44373F` and `0x443B57`, the two `QueueTexture`s): the state
+    // read guarded as Tweaks' `__try` does.
+    let state = if e.stewie(engine_core::extend::stewie::QUEUED_TEXTURE_LOAD) {
+        engine_core::extend::stewie::queued_texture_state(e, task)
+    } else {
+        e.call(QUEUED_TEXTURE_STATE, &args![task]).u32()
+    };
+    state == 3 && !e.call(THREAD_QUEUED_FLAG_TEST, &args![this]).bool()
 }
 
 // Translated from 004436c0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -7664,6 +7670,39 @@ mod tests {
     /// A zeroed block of `size` bytes.
     fn block(e: &mut Engine, size: u32) -> Ptr {
         Ptr::new(e.mem.alloc(size))
+    }
+
+    /// lStewieAl's Tweaks' row S0136 (the two `QueueTexture`s' state test): a texture whose data
+    /// pointer names memory that is not there. Row off, the exe's state call is made (its stand-in
+    /// answers 3: loaded; in the game the call reads through the bad pointer); row on, the reads are
+    /// Tweaks' guarded ones: not loaded, no call. A texture whose data byte is 3 is loaded with the
+    /// row too.
+    #[test]
+    fn s0136_a_queued_texture_whose_data_is_gone() {
+        for on in [false, true] {
+            let mut e = qe();
+            e.set_stewie(engine_core::extend::stewie::QUEUED_TEXTURE_LOAD, on);
+            e.map(0x011d_8000, 0x1000);
+            answer(&mut e, QUEUED_TEXTURE_STATE, 3);
+            answer(&mut e, THREAD_QUEUED_FLAG_TEST, 0);
+            let this = block(&mut e, 0x40);
+            let texture = block(&mut e, 0x30);
+            e.mem.set_u32(texture.addr() + 0x24, 0x0000_0100);
+            e.mem.unmap(0, 0x1000);
+            let slot = block(&mut e, 4);
+            e.mem.set_u32(slot.addr(), texture.addr());
+            e.call_log = Some(vec![]);
+            assert_eq!(
+                texture_is_loaded_for_this_thread(&mut e, this, slot),
+                !on,
+                "row {on}"
+            );
+            assert_eq!(calls_to(&e, QUEUED_TEXTURE_STATE).is_empty(), on);
+            let data = block(&mut e, 0x60);
+            e.mem.set_u8(data.addr() + 0x5b, 3);
+            e.mem.set_u32(texture.addr() + 0x24, data.addr());
+            assert!(texture_is_loaded_for_this_thread(&mut e, this, slot));
+        }
     }
 
     #[test]

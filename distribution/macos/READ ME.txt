@@ -94,6 +94,8 @@ Start
    runs play.sh for you and shows what it says; type its answers at the launcher's prompt, or
    drop a folder onto its window (Cmd+V pastes at the prompt). Without a window it goes on in
    the terminal, as ./play.sh.
+   It plays the game's own terminal sounds, read from your installed game (Settings > Launcher
+   sounds turns them off).
 
 The first start asks for your game's folder: type it, or drag the folder from Finder into the
 Terminal window, and press Enter. nv-rs remembers it.

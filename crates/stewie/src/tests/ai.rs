@@ -37,6 +37,42 @@ fn s0206_obeys_tweaks_fix_creature_doubled_dr() {
 /// `super::each_rows_plan_number_key_and_bit_are_pinned` checks them with every other share's.
 pub(super) const PINNED: &[(&str, &str, Row)] = &[
     (
+        "S0024",
+        "bPreventFollowerNoAmmoTopicIfUsingRechargerWeapon",
+        Row::at(AI_FIXES, 20),
+    ),
+    (
+        "S0039",
+        "bFixWeaponIdleSoundsHavingInfiniteRange",
+        Row::at(AI_FIXES, 11),
+    ),
+    (
+        "S0041",
+        "bFixWeaponModGetDestructibleForm",
+        Row::at(AI_FIXES, 21),
+    ),
+    (
+        "S0055",
+        "bFixZeroSpreadZeroVATSChance",
+        Row::at(AI_FIXES, 22),
+    ),
+    (
+        "S0074",
+        "bFixCombatMissileDepthGamesettings",
+        Row::at(AI_FIXES, 19),
+    ),
+    (
+        "S0133",
+        "bFixSpectatorThreatInfoUsingWrongWeaponType",
+        Row::at(AI_FIXES, 16),
+    ),
+    (
+        "S0137",
+        "bPreventAgroRadiusBreachedNPCsHolsteringWeapons",
+        Row::at(AI_FIXES, 9),
+    ),
+    ("S0146", "bNPCThrowingAnimFix", Row::at(AI_FIXES, 13)),
+    (
         "S0147",
         "bFixCrippledLimbAnimsNotUpdatingIfLimbsFixed",
         Row::at(AI_FIXES, 0),
@@ -46,10 +82,26 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "bFixInfiniteNPCLoopingReloads",
         Row::at(AI_FIXES, 1),
     ),
+    ("S0171", "bKnockDownHandGripFix", Row::at(AI_FIXES, 12)),
     (
         "S0180",
         "bMineDisarmedLightLoadingFix",
         Row::at(AI_FIXES, 8),
+    ),
+    (
+        "S0189.01",
+        "bInventoryCalcWeaponDamageUseAmmoFixDisplay",
+        Row::at(AI_FIXES, 23),
+    ),
+    (
+        "S0189.02",
+        "bInventoryCalcWeaponDamageUseAmmoFixProjectile",
+        Row::at(AI_FIXES, 24),
+    ),
+    (
+        "S0199.01",
+        "bMiscCrashFixesDialogueNoPackage",
+        Row::at(AI_FIXES, 10),
     ),
     ("S0205", "bEnduranceHealthRestoreFix", Row::at(AI_FIXES, 2)),
     ("S0206", "bCreatureDRFix", Row::at(AI_FIXES, 3)),
@@ -58,7 +110,11 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "bNonHitscanProjectileSplashFix",
         Row::at(AI_FIXES, 4),
     ),
+    ("S0211", "bThrowableRotationFix", Row::at(AI_FIXES, 17)),
+    ("S0214", "bCombatItemCooldownFix", Row::at(AI_FIXES, 14)),
     ("S0217", "bRagdollControllerUpdateFix", Row::at(AI_FIXES, 5)),
     ("S0221", "bDeathAnimFix", Row::at(AI_FIXES, 6)),
+    ("S0228", "bPatrolPackageFix", Row::at(AI_FIXES, 15)),
     ("S0229", "bArmorUpdateFix", Row::at(AI_FIXES, 7)),
+    ("S0230", "bDoubleSoundFix", Row::at(AI_FIXES, 18)),
 ];

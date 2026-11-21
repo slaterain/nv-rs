@@ -408,6 +408,8 @@ fn run() {
         if let Some(log) = &mut frame_log {
             log.record(&mut game.engine);
         }
+        // An F12 report waiting for where it was taken (`place.txt`).
+        host::report_place::note(&mut game.engine);
         if last.map_or(true, |at| at.elapsed() >= Duration::from_secs(5)) {
             last = Some(Instant::now());
             println!("{}", game.movement.summary());

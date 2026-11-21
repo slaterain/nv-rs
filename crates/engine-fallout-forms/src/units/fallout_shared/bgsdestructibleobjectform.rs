@@ -299,6 +299,10 @@ pub fn bgs_destructible_object_form_get_destruction_form(e: &mut Engine, form: P
         0x1a => at(base, 0x144),
         0x1b => at(base, 0x7c),
         0x1d | 0x1e => at(base, 0x94),
+        // lStewieAl's Tweaks' row S0041 (`fixWeaponModGetDestructibleForm`, `SafeWriteBuf` at
+        // `0x4754CF`): this case's code is rewritten to answer +0x8C for a weapon mod
+        // (`TESObjectIMOD`, type 0x67), where the exe gives every type of the case +0x84.
+        0x67 if e.stewie(engine_core::extend::stewie::WEAPON_MOD_DESTRUCTIBLE) => base + 0x8c,
         0x1f | 0x2e | 0x32 | 0x67 => at(base, 0x84),
         0x22 => at(at(base, -0x14), 0xc),
         0x25 => at(base, 0x54),
@@ -3123,6 +3127,28 @@ mod tests {
             assert_eq!(e.call(0x0047_5400, &args![form]).u32(), 0);
         }
         assert_eq!(e.call(0x0047_5400, &args![0u32]).u32(), 0);
+    }
+
+    /// S0041 (`fixWeaponModGetDestructibleForm`): a weapon mod (`TESObjectIMOD`, type 0x67)
+    /// keeps its destructible data at +0x8C. Off, the exe answers +0x84 for it, as for the other
+    /// types of its case; on, +0x8C, and those other types keep +0x84.
+    #[test]
+    fn s0041_a_weapon_mods_destruction_data_is_read_at_its_own_offset() {
+        for (on, imod) in [(false, 0x84u32), (true, 0x8c)] {
+            let mut e = engine();
+            form_type_double(&mut e);
+            e.set_stewie(engine_core::extend::stewie::WEAPON_MOD_DESTRUCTIBLE, on);
+            let form = form_of_type(&mut e, 0x67);
+            assert_eq!(
+                e.call(0x0047_5400, &args![form]).u32(),
+                form + imod,
+                "on {on}"
+            );
+            for other in [0x1fu8, 0x2e, 0x32] {
+                let form = form_of_type(&mut e, other);
+                assert_eq!(e.call(0x0047_5400, &args![form]).u32(), form + 0x84);
+            }
+        }
     }
 
     #[test]

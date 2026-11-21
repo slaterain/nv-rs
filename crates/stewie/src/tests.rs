@@ -188,7 +188,7 @@ fn a_players_file_overlays_vnvs_values_key_by_key() {
 }
 
 /// The S0079 row (`bDialogSpeechNullCheck`), which the key tests use.
-const PROOF: &rows::Row = &rows::ROWS[24];
+const PROOF: &rows::Row = &rows::ROWS[28];
 
 #[test]
 fn every_row_has_its_own_bit_and_key() {
@@ -472,16 +472,16 @@ fn the_install_sets_the_bits_and_lists_tweaks() {
 fn the_start_lines_name_what_was_read() {
     let keys = rows::Keys::default();
     let (settings, on) = settings_and_rows(None, &[], &keys);
+    // Every row built is on with VNV's values (the count is the table's, so a share adding rows
+    // does not edit this line).
+    let built = rows::all().count();
+    assert_eq!(on.len(), built);
     assert_eq!(
         start_lines(false, &settings, &keys, on.len()),
         [
             "lStewieAl's Tweaks: no Data\\NVSE\\Plugins\\nvse_stewie_tweaks.ini: VNV's values"
                 .to_string(),
-            // Every row is on by default: the count follows the rows built (every share's list).
-            format!(
-                "lStewieAl's Tweaks: {n} of its {n} rows built are on",
-                n = rows::all().count()
-            ),
+            format!("lStewieAl's Tweaks: {built} of its {built} rows built are on"),
         ]
     );
     let (settings, on) = settings_and_rows(Some(b"[Tweaks]\nbBetterAutoWalk=1\n"), &[], &keys);
@@ -928,11 +928,27 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
         ),
         ("S0022.36", "bMenuFixesListBoxNullItem", Row::at(CRASH, 16)),
         (
+            "S0022.43",
+            "bMenuFixesFontIconNoTexture",
+            Row::at(CRASH, 68),
+        ),
+        ("S0022.48", "bMenuFixesRepairTargetKept", Row::at(CRASH, 69)),
+        (
+            "S0022.49",
+            "bMenuFixesSelectableRefFreed",
+            Row::at(CRASH, 70),
+        ),
+        (
             "S0022.56",
             "bMenuFixesTileLabelNullName",
             Row::at(CRASH, 17),
         ),
         ("S0023", "bPrintBSXCrash", Row::at(CRASH, 62)),
+        (
+            "S0025",
+            "bFixCrashWhenControllerReconnectsInHackingMenu",
+            Row::at(CRASH, 71),
+        ),
         ("S0027", "bFixPipboyEquipCrash", Row::at(CRASH, 28)),
         ("S0031", "bAddNifShapeNullChecks", Row::at(CRASH, 63)),
         (
@@ -1027,12 +1043,18 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
             Row::at(CRASH, 44),
         ),
         (
+            "S0136",
+            "bTryCatchingQueuedTextureLoadCrash",
+            Row::at(CRASH, 67),
+        ),
+        (
             "S0139",
             "bFixCreditsCrashIfNoLoadedSave",
             Row::at(CRASH, 19),
         ),
         ("S0140", "bFixPatrolMissingNullCheck", Row::at(CRASH, 7)),
         ("S0150", "bFixMissingAnimNullCheck", Row::at(CRASH, 22)),
+        ("S0155", "bNullAudioCrash", Row::at(CRASH, 65)),
         ("S0169", "bFixRareNullTeleportDoorCrash", Row::at(CRASH, 8)),
         (
             "S0172",
@@ -1104,6 +1126,7 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
             "bEquipAmmoOnNullBaseProcessCrashFix",
             Row::at(CRASH, 27),
         ),
+        ("S0225", "bSamplerStateLeakFix", Row::at(CRASH, 66)),
         ("S0881", "bFixSavingNullCellCrash", Row::at(CRASH, 10)),
         (
             "S1016.845558",

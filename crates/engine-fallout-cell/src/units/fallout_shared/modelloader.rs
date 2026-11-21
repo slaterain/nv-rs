@@ -1656,7 +1656,13 @@ pub(crate) fn queued_texture_run_in_context(e: &mut Engine, this: Ptr<QueuedText
     if !ni_pointer_get(e, slot).is_null() {
         e.call(QUEUED_TEXTURE_SET_FLAG_1, &args![this, 1u32]);
         let texture = ni_pointer_get(e, slot);
-        if fn_0043c430(e, texture) == 3 && !fn_0043c3d0(e, this) {
+        // lStewieAl's Tweaks' S0136 (its call at `0x43C20A`): the state read guarded as Tweaks' `__try` does.
+        let state = if e.stewie(engine_core::extend::stewie::QUEUED_TEXTURE_LOAD) {
+            engine_core::extend::stewie::queued_texture_state(e, texture.addr())
+        } else {
+            fn_0043c430(e, texture)
+        };
+        if state == 3 && !fn_0043c3d0(e, this) {
             let texture = ni_pointer_get(e, slot);
             e.vcall(texture.addr(), 0x8c, &args![]);
         }
@@ -7384,6 +7390,45 @@ mod tests {
         e.mem.set_u8(surface + 0x58 + 3, 4);
         e.call(0x0043_c150, &args![this]);
         assert!(calls_to(&e, TEXTURE_HOOK).is_empty());
+    }
+
+    /// lStewieAl's Tweaks' row S0136 at `0x43C20A`: the palette's texture names surface data that is
+    /// not there (the texture freed under the loader). Row off, the exe's state read faults (here
+    /// on unmapped memory); row on, the state counts 0: no hook call, no fault. With good data the
+    /// row reads its format byte as the exe does (3: the hook is called).
+    #[test]
+    fn s0136_run_with_a_texture_whose_data_is_gone() {
+        for on in [false, true] {
+            let mut e = queue_engine();
+            e.set_stewie(engine_core::extend::stewie::QUEUED_TEXTURE_LOAD, on);
+            e.map(0x011d_8000, 0x1000);
+            let this = run_scene(&mut e);
+            let entry = file_entry(&mut e, 0, 0);
+            e.set(this, QueuedTexture::pFileEntry, entry);
+            let texture = e.mem.alloc(0x40);
+            e.mem.set_u32(texture, TEXTURE_VTABLE);
+            e.mem.set_u32(texture + 0x24, 0x0000_0100);
+            e.register_double(TEXTURE_MAP_FIND, move |e, a| {
+                e.mem.set_u32(a[3], texture);
+                1u32.into_ret()
+            });
+            e.mem.unmap(0, 0x1000);
+            e.call_log = Some(vec![]);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.call(0x0043_c150, &args![this]);
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert!(calls_to(&e, TEXTURE_HOOK).is_empty());
+                let surface = e.mem.alloc(0x80);
+                e.mem.set_u32(texture + 0x24, surface);
+                e.mem.set_u8(surface + 0x58 + 3, 3);
+                e.call_log = Some(vec![]);
+                e.call(0x0043_c150, &args![this]);
+                assert_eq!(calls_to(&e, TEXTURE_HOOK), vec![vec![texture]]);
+            }
+        }
     }
 
     #[test]

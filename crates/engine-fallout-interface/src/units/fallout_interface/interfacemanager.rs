@@ -7204,7 +7204,52 @@ pub fn fn_00716010(e: &mut Engine, this: Ptr<InterfaceManager>, reference: u32) 
         }
     }
     e.call(HUD_FORGET_REFERENCE, &args![reference]);
+    // lStewieAl's Tweaks' S0022.49 (`MenuFixes`, `OnFreeRefRemoveFromSelectableList` at `0x7160A2`): the
+    // HUD forgets it as above, and the manager's list of the references the console can pick
+    // (`selectableRefs`, +0x70 of the manager `011d8a80`) loses it too (xNVSE's `tList::Remove`).
+    if e.stewie(engine_core::extend::stewie::SELECTABLE_REF_FREED) {
+        let manager = e.global::<u32>(0x011d_8a80);
+        remove_from_list(e, manager.wrapping_add(0x70), reference);
+    }
 }
+
+/// xNVSE's `tList::Remove(item)` (`GameTypes.h`) on the list whose first node (`[item, next]`) is at
+/// `list`: every node holding `item` goes; the first holder takes its next node's item and link and
+/// that node is freed (`RemoveMe`; with no next node it only loses its item), a later one is unlinked
+/// from the node before it and freed (`RemoveNext`). Freed with the game's heap (`GameHeapFree`).
+fn remove_from_list(e: &mut Engine, list: u32, item: u32) {
+    let mut node = list;
+    let mut previous = 0u32;
+    while node != 0 {
+        if e.mem.u32(node) != item {
+            previous = node;
+            node = e.mem.u32(node + 4);
+            continue;
+        }
+        if previous != 0 {
+            // RemoveNext on the node before: the next node after the removed one is looked at.
+            let next = e.mem.u32(node + 4);
+            e.mem.set_u32(previous + 4, next);
+            e.call(GAME_HEAP_FREE, &args![GAME_HEAP, node]);
+            node = next;
+        } else {
+            // RemoveMe: the next node's item and link copied in, that node freed; none: emptied.
+            let next = e.mem.u32(node + 4);
+            if next != 0 {
+                e.mem.set_u32(node, e.mem.u32(next));
+                e.mem.set_u32(node + 4, e.mem.u32(next + 4));
+                e.call(GAME_HEAP_FREE, &args![GAME_HEAP, next]);
+            } else {
+                e.mem.set_u32(node, 0);
+                node = 0;
+            }
+        }
+    }
+}
+
+/// `GameHeapFree` (xNVSE): `MemoryHeap::Free` (`00aa4060`) on the game's heap (`011f6238`).
+const GAME_HEAP_FREE: u32 = 0x00aa_4060;
+const GAME_HEAP: u32 = 0x011f_6238;
 
 // Translated from 007160b0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `InterfaceManager::ForceTextureRelease` (Xbox PDB): releases the
@@ -13402,6 +13447,69 @@ mod tests {
             .collect();
         assert_eq!(words, vec![0, 0, 0x66, 0, 0]);
         assert_eq!(calls(&e, HUD_FORGET_REFERENCE), vec![vec![0x55]]);
+    }
+
+    /// lStewieAl's Tweaks' row S0022.49: the console's pickable references (`selectableRefs`, +0x70
+    /// of the manager) [0x55, 0x66, 0x55, 0x77, 0x55] lose every 0x55 with the row ([0x66, 0x77]),
+    /// the first node taking its next node's entry, the later ones unlinked and freed; row off,
+    /// the list is left as it is. A list of only that reference is emptied in place.
+    #[test]
+    fn s0022_49_a_freed_reference_leaves_the_selectable_list() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        for on in [false, true] {
+            let mut e = world();
+            e.set_stewie(engine_core::extend::stewie::SELECTABLE_REF_FREED, on);
+            let m = manager(&mut e);
+            e.map(0x011d_8a80 & !0xfff, 0x1000);
+            e.set_global(0x011d_8a80, m.addr());
+            let freed = Rc::new(RefCell::new(Vec::new()));
+            let seen = freed.clone();
+            e.register_double(GAME_HEAP_FREE, move |_, a| {
+                assert_eq!(a[0], GAME_HEAP);
+                seen.borrow_mut().push(a[1]);
+                Ret::default()
+            });
+            let list = m.addr() + 0x70;
+            let mut node = list;
+            let entries = [0x55u32, 0x66, 0x55, 0x77, 0x55];
+            let mut nodes = vec![list];
+            for (i, entry) in entries.iter().enumerate() {
+                e.mem.set_u32(node, *entry);
+                let next = if i + 1 < entries.len() {
+                    e.mem.alloc(8)
+                } else {
+                    0
+                };
+                e.mem.set_u32(node + 4, next);
+                if next != 0 {
+                    nodes.push(next);
+                }
+                node = next;
+            }
+            fn_00716010(&mut e, m, 0x55);
+            let mut left = vec![];
+            let mut node = list;
+            while node != 0 {
+                left.push(e.mem.u32(node));
+                node = e.mem.u32(node + 4);
+            }
+            if on {
+                assert_eq!(left, vec![0x66, 0x77]);
+                // The first holder took node 1's entry (node 1 freed), then nodes 2 and 4 went.
+                assert_eq!(*freed.borrow(), vec![nodes[1], nodes[2], nodes[4]]);
+            } else {
+                assert_eq!(left, entries.to_vec());
+                assert!(freed.borrow().is_empty());
+            }
+            // Only that reference: the first node emptied in place, nothing freed.
+            e.mem.set_u32(list, 0x88);
+            e.mem.set_u32(list + 4, 0);
+            freed.borrow_mut().clear();
+            fn_00716010(&mut e, m, 0x88);
+            assert_eq!(e.mem.u32(list), if on { 0 } else { 0x88 });
+            assert!(freed.borrow().is_empty());
+        }
     }
 
     #[test]
