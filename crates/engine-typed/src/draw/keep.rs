@@ -259,7 +259,10 @@ fn statics(e: &Engine, key: Key) -> Vec<u8> {
 /// and draw) runs and the record is built again. Off, `body` alone.
 pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
     let mode = mode();
-    if mode == Mode::Off || capture::active() || building() {
+    // A test that set its own mode is alone on its thread: other tests' packets (open on other threads) do not
+    // concern it.
+    let packets = capture::active() && TEST_MODE.with(Cell::get).is_none();
+    if mode == Mode::Off || packets || building() {
         body(e);
         return;
     }
