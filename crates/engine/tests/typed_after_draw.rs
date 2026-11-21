@@ -201,19 +201,36 @@ fn level0(e: &mut Engine, kind: u32) -> u32 {
     o
 }
 
-fn common(d: Diff) -> Diff {
-    d.family(&process::PROCESS)
-        .family(&dispatch::DISPATCH)
-        .family(&leaf::LEAVES)
-        .max_calls(50_000)
+/// The families every test of this file runs with (a method, so that each test is one chain from
+/// `Diff::new` to `.assert_same()`).
+trait Common {
+    fn common(self) -> Self;
+    fn animation_common(self) -> Self;
+}
+
+impl Common for Diff {
+    fn common(self) -> Diff {
+        self.family(&process::PROCESS)
+            .family(&dispatch::DISPATCH)
+            .family(&leaf::LEAVES)
+            .max_calls(50_000)
+    }
+
+    fn animation_common(self) -> Diff {
+        self.common()
+            .family(&animation::ANIMATION)
+            .family(&scene::SCENE)
+            .family(&engine_typed::multibound::MULTIBOUND)
+    }
 }
 
 #[test]
 fn after_draw_projectiles_step() {
-    common(Diff::new(entry!(
+    Diff::new(entry!(
         0x0096_c240,
         after_draw::projectiles_step(Ptr<_>, u32)
-    )))
+    ))
+    .common()
     .inputs(&[Input::Of(&[0, 1, 2, 3])])
     .setup(|e, case: &Case| {
         stand_ins(e);
@@ -286,81 +303,95 @@ fn character(e: &mut Engine, k: u32, others: &[u32]) -> u32 {
 }
 
 #[test]
-fn after_draw_merge_detection() {
-    common(Diff::new(entry!(
-        0x0096_c710,
-        after_draw::merge_detection(Ptr<_>)
-    )))
-    .inputs(&[Input::Of(&[0, 1, 2, 3, 4]), Input::Flag])
+fn after_draw_merge_detection_lists() {
+    Diff::new(entry!(
+        0x008f_63e0,
+        after_draw::merge_detection_lists(Ptr<_>, Ptr<_>)
+    ))
+    .common()
+    .inputs(&[Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])])
     .setup(|e, case: &Case| {
         stand_ins(e);
         let others: Vec<u32> = (0..6).map(|_| object(e, &[])).collect();
-        let objects: Vec<u32> = (0..9)
-            .map(|i| {
-                if i == 4 {
-                    0
-                } else if (i + case.word(0)) % 4 == 1 {
-                    // Not an actor (slot +0x100 answers 0) and no process at +0x68.
-                    object(e, &[])
-                } else {
-                    character(e, i + case.word(0), &others)
-                }
-            })
-            .collect();
-        // The player: with or without a process.
-        let player = if case.word(1) == 1 {
-            character(e, 5 + case.word(0), &others)
-        } else {
-            object(e, &[])
-        };
-        e.mem.set_u32(PLAYER, player);
-        vec![lists(e, &objects)]
+        let actor = character(e, case.word(0), &others);
+        vec![e.mem.u32(actor + 0x68), actor]
     })
     .run()
     .assert_same();
 }
 
 #[test]
-fn after_draw_ragdoll_step() {
-    common(Diff::new(entry!(
-        0x0097_81d0,
-        after_draw::ragdoll_step(Ptr<_>, f32)
-    )))
-    .inputs(&[Input::Of(&[0, 1, 2, 3]), Input::Flag, Input::Flag])
-    .setup(|e, case: &Case| {
-        stand_ins(e);
-        let objects: Vec<u32> = (0..16)
-            .map(|i| {
-                let o = level0(e, (i * 5 + case.word(0)) % 16);
-                if o != 0 {
-                    // A ragdoll object at +0xb0 whose flag byte +0x18 says whether it updates;
-                    // a process at +0x68 or none.
-                    let ragdoll = e.mem.alloc(0x40);
-                    e.mem.set_u8(ragdoll + 0x18, (i % 2) as u8);
-                    e.mem.set_u32(o + 0xb0, ragdoll);
-                    let p = object(e, &[]);
-                    e.mem.set_u32(o + 0x68, p);
-                    // Some actors' frame step (slot +0x34c) clears their process word, so the
-                    // second process read finds none.
-                    if i % 3 == 0 {
-                        let vt = e.mem.u32(o);
-                        e.mem.set_u32(vt + 0x34c, CLEARS_PROCESS);
+fn after_draw_merge_detection() {
+    Diff::new(entry!(0x0096_c710, after_draw::merge_detection(Ptr<_>)))
+        .common()
+        .inputs(&[Input::Of(&[0, 1, 2, 3, 4]), Input::Flag])
+        .setup(|e, case: &Case| {
+            stand_ins(e);
+            let others: Vec<u32> = (0..6).map(|_| object(e, &[])).collect();
+            let objects: Vec<u32> = (0..9)
+                .map(|i| {
+                    if i == 4 {
+                        0
+                    } else if (i + case.word(0)) % 4 == 1 {
+                        // Not an actor (slot +0x100 answers 0) and no process at +0x68.
+                        object(e, &[])
+                    } else {
+                        character(e, i + case.word(0), &others)
                     }
-                }
-                o
-            })
-            .collect();
-        let player = object(e, &[]);
-        if case.word(1) == 1 {
-            let p = object(e, &[]);
-            e.mem.set_u32(player + 0x68, p);
-        }
-        e.mem.set_u32(PLAYER, player);
-        set_logged(e, 0x09, case.word(2));
-        vec![lists(e, &objects), 0x3e80_0000]
-    })
-    .run()
-    .assert_same();
+                })
+                .collect();
+            // The player: with or without a process.
+            let player = if case.word(1) == 1 {
+                character(e, 5 + case.word(0), &others)
+            } else {
+                object(e, &[])
+            };
+            e.mem.set_u32(PLAYER, player);
+            vec![lists(e, &objects)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn after_draw_ragdoll_step() {
+    Diff::new(entry!(0x0097_81d0, after_draw::ragdoll_step(Ptr<_>, f32)))
+        .common()
+        .inputs(&[Input::Of(&[0, 1, 2, 3]), Input::Flag, Input::Flag])
+        .setup(|e, case: &Case| {
+            stand_ins(e);
+            let objects: Vec<u32> = (0..16)
+                .map(|i| {
+                    let o = level0(e, (i * 5 + case.word(0)) % 16);
+                    if o != 0 {
+                        // A ragdoll object at +0xb0 whose flag byte +0x18 says whether it updates;
+                        // a process at +0x68 or none.
+                        let ragdoll = e.mem.alloc(0x40);
+                        e.mem.set_u8(ragdoll + 0x18, (i % 2) as u8);
+                        e.mem.set_u32(o + 0xb0, ragdoll);
+                        let p = object(e, &[]);
+                        e.mem.set_u32(o + 0x68, p);
+                        // Some actors' frame step (slot +0x34c) clears their process word, so the
+                        // second process read finds none.
+                        if i % 3 == 0 {
+                            let vt = e.mem.u32(o);
+                            e.mem.set_u32(vt + 0x34c, CLEARS_PROCESS);
+                        }
+                    }
+                    o
+                })
+                .collect();
+            let player = object(e, &[]);
+            if case.word(1) == 1 {
+                let p = object(e, &[]);
+                e.mem.set_u32(player + 0x68, p);
+            }
+            e.mem.set_u32(PLAYER, player);
+            set_logged(e, 0x09, case.word(2));
+            vec![lists(e, &objects), 0x3e80_0000]
+        })
+        .run()
+        .assert_same();
 }
 
 /// An animation with its roots (stand-in nodes whose downward slot logs), the pending bit, the limit
@@ -408,19 +439,13 @@ fn animation_inputs() -> Vec<Input> {
     ]
 }
 
-fn animation_common(d: Diff) -> Diff {
-    common(d)
-        .family(&animation::ANIMATION)
-        .family(&scene::SCENE)
-        .family(&engine_typed::multibound::MULTIBOUND)
-}
-
 #[test]
 fn animation_update_queued_scenegraph() {
-    animation_common(Diff::new(entry!(
+    Diff::new(entry!(
         0x0049_3930,
         animation::queued::update_queued_scenegraph(Ptr<_>) -> bool
-    )))
+    ))
+    .animation_common()
     .inputs(&animation_inputs())
     .setup(animation_case)
     .run()
@@ -429,10 +454,11 @@ fn animation_update_queued_scenegraph() {
 
 #[test]
 fn animation_update_scene_graph_no_controller() {
-    animation_common(Diff::new(entry!(
+    Diff::new(entry!(
         0x0049_3bd0,
         animation::queued::update_scene_graph_no_controller(Ptr<_>)
-    )))
+    ))
+    .animation_common()
     .inputs(&animation_inputs())
     .setup(animation_case)
     .run()
