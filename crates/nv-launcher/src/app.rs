@@ -446,6 +446,18 @@ pub fn may_choose_again(recent: &[Instant], now: Instant) -> bool {
         < CHOOSE_AGAIN_LIMIT
 }
 
+/// The launcher window's frame: none (no title bar or border, the maintainer's wish), titled
+/// "nv-rs" for the task bar.
+pub fn frameless(a: winit::window::WindowAttributes) -> winit::window::WindowAttributes {
+    a.with_title("nv-rs").with_decorations(false)
+}
+
+/// Whether a left press moves the window (it has no title bar): anywhere but on an entry
+/// (which the press chooses), and not while the window has stepped aside for the game.
+pub fn press_drags(on_entry: bool, hidden: bool) -> bool {
+    !on_entry && !hidden
+}
+
 /// Play's work, `work`, run so that its end is always known: a panic in it ends as Rust's
 /// panic code (101), so `Ended` is sent and a closed launcher still ends.
 pub fn work_code(work: impl FnOnce() -> i32) -> i32 {
@@ -1840,8 +1852,10 @@ impl winit::application::ApplicationHandler<Event> for App {
             self.desktop = (m.size().width, m.size().height);
         }
         // Made hidden, then fitted into the monitor's work area with its frame (below), then shown.
-        let mut attributes = winit::window::Window::default_attributes()
-            .with_title("nv-rs")
+        // No title bar or border, as a terminal's screen (the maintainer's wish): the window is
+        // moved by dragging its background ([`press_drags`]) and closed by Exit, Esc's way back
+        // to it, or the system's own close keys. The title still names it in the task bar.
+        let mut attributes = frameless(winit::window::Window::default_attributes())
             .with_visible(false)
             .with_inner_size(winit::dpi::LogicalSize::new(w, h))
             .with_min_inner_size(winit::dpi::LogicalSize::new(
@@ -2191,7 +2205,11 @@ impl winit::application::ApplicationHandler<Event> for App {
                 button: MouseButton::Left,
                 ..
             } => {
-                if matches!(self.mode, Mode::Intro(_)) {
+                // Off the entries the press also moves the window (it has no title bar); the
+                // intro's own click (which ends it) moves it the same way.
+                let intro = matches!(self.mode, Mode::Intro(_));
+                let row = if intro { None } else { self.row_at(self.mouse) };
+                if intro {
                     // A click on the terminal's background finishes the intro (`DoClick` 00757f70,
                     // tile 13); the background is the whole window.
                     self.end_intro();
@@ -2200,12 +2218,17 @@ impl winit::application::ApplicationHandler<Event> for App {
                         KeyAct::FinishTyping => self.finish_typing(),
                         KeyAct::Act(_) => {
                             // A live entry under the mouse is chosen.
-                            if let Some(i) = self.row_at(self.mouse) {
+                            if let Some(i) = row {
                                 self.screen.highlighted = i;
                                 self.choose(event_loop);
                             }
                         }
                         KeyAct::Nothing => {}
+                    }
+                }
+                if press_drags(row.is_some(), self.hidden) {
+                    if let Some(w) = &self.window {
+                        let _ = w.drag_window();
                     }
                 }
                 self.request_redraw();
@@ -2465,6 +2488,18 @@ mod tests {
             mods,
             refused: None,
         }
+    }
+
+    /// The window has no title bar or border, keeps its task bar name, and a press off the
+    /// entries moves it (on an entry the press chooses it; never while the window steps aside).
+    #[test]
+    fn the_window_has_no_frame_and_moves_by_its_background() {
+        let a = frameless(winit::window::Window::default_attributes());
+        assert!(!a.decorations);
+        assert_eq!(a.title, "nv-rs");
+        assert!(press_drags(false, false));
+        assert!(!press_drags(true, false));
+        assert!(!press_drags(false, true));
     }
 
     /// The start screen offers what works today: Play, Play with mods only when there are mods,
