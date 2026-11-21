@@ -6106,3 +6106,182 @@ fn draw_records_keep_no_groups_for_a_draw_sampling_its_own_target() {
     );
     assert_eq!(on_bytes, off_bytes, "records on");
 }
+
+/// Four draws of one batch through a vs_3_0 and a ps_3_0 that read every kind of register the
+/// device writes, with the registers from storage (`storage`) or in uniform blocks: each draw its
+/// own float constants in both stages (a place, a colour picked through `a0`, a pixel colour), its
+/// own integer and boolean constants in both stages (a loop count, a branch), a constant the
+/// shader defines, its own user clip plane and alpha reference. The pixels of a 4 by 4 target
+/// (one column a draw) and the digests. None where the adapter cannot read them from storage.
+fn every_register_script(storage: bool) -> Option<(Vec<[u8; 4]>, Vec<u64>)> {
+    const ALPHAFUNC_GREATER: u32 = 5;
+    let mut g = Gpu::new(4, 1)?;
+    {
+        let d = g.b.device().expect("the device");
+        if d.set_storage_regs(storage) != storage {
+            eprintln!("this adapter cannot read the registers from storage: not checked");
+            return None;
+        }
+        d.record_draw_digests(true);
+    }
+    let f = |x: f32| x.to_bits();
+    // vs_3_0: dcl_position v0; dcl_position o0; dcl_texcoord0 o1; def c10, 0.25, 0, 0, 0;
+    // mova a0.x, c4.x; add o0, v0, c0; mov r1, c[a0.x + 5]; if b0; add r1.y, r1.y, c10.x; endif;
+    // rep i0; add r1.z, r1.z, c10.x; endrep; mov o1, r1.
+    let mut vs = vec![0xFFFE_0300];
+    vs.extend(ins(31, &[0x8000_0000, 0x900F_0000]));
+    vs.extend(ins(31, &[0x8000_0000, 0xE00F_0000]));
+    vs.extend(ins(31, &[0x8000_0005, 0xE00F_0001]));
+    vs.extend(ins(81, &[0xA00F_000A, f(0.25), 0, 0, 0]));
+    vs.extend(ins(46, &[0xB001_0000, 0xA000_0004]));
+    vs.extend(ins(2, &[0xE00F_0000, 0x90E4_0000, 0xA0E4_0000]));
+    vs.extend(ins(1, &[0x800F_0001, 0xA0E4_2005, 0xB000_0000]));
+    vs.extend(ins(40, &[0xE0E4_0800]));
+    vs.extend(ins(2, &[0x8002_0001, 0x8055_0001, 0xA000_000A]));
+    vs.extend(ins(43, &[]));
+    vs.extend(ins(38, &[0xF0E4_0000]));
+    vs.extend(ins(2, &[0x8004_0001, 0x80AA_0001, 0xA000_000A]));
+    vs.extend(ins(39, &[]));
+    vs.extend(ins(1, &[0xE00F_0001, 0x80E4_0001]));
+    vs.push(END);
+    // ps_3_0: dcl_texcoord0 v0; def c9, 0.125, 0, 0, 0; add r0, v0, c2; if b1;
+    // add r0.x, r0.x, c9.x; endif; rep i1; add r0.y, r0.y, c9.x; endrep; mov oC0, r0.
+    let mut ps = vec![0xFFFF_0300];
+    ps.extend(ins(31, &[0x8000_0005, 0x900F_0000]));
+    ps.extend(ins(81, &[0xA00F_0009, f(0.125), 0, 0, 0]));
+    ps.extend(ins(2, &[0x800F_0000, 0x90E4_0000, 0xA0E4_0002]));
+    ps.extend(ins(40, &[0xE0E4_0801]));
+    ps.extend(ins(2, &[0x8001_0000, 0x8000_0000, 0xA000_0009]));
+    ps.extend(ins(43, &[]));
+    ps.extend(ins(38, &[0xF0E4_0001]));
+    ps.extend(ins(2, &[0x8002_0000, 0x8055_0000, 0xA000_0009]));
+    ps.extend(ins(39, &[]));
+    ps.extend(ins(1, &[0x800F_0800, 0x80E4_0000]));
+    ps.push(END);
+    for (shader, pixel, tokens) in [(VS + 50, false, vs), (PS + 50, true, ps)] {
+        let t = words(&tokens);
+        g.run(Cmd::CreateShader {
+            device: DEVICE,
+            shader,
+            pixel,
+            tokens: Data::Bytes(&t),
+        });
+        g.run(Cmd::SetShader {
+            device: DEVICE,
+            pixel,
+            shader,
+        });
+    }
+    let consts = |g: &mut Gpu, kind: u8, start: u32, w: &[u32]| {
+        let per = if kind % 3 == 2 { 1 } else { 4 };
+        let b = words(w);
+        g.run(Cmd::SetConstants {
+            device: DEVICE,
+            kind,
+            start,
+            count: w.len() as u32 / per,
+            data: Data::Bytes(&b),
+        });
+    };
+    g.clear(3, 0, 1.0);
+    g.state(ALPHATESTENABLE, 1);
+    g.state(ALPHAFUNC, ALPHAFUNC_GREATER);
+    g.state(CLIPPING, 1);
+    g.state(CLIPPLANEENABLE, 1);
+    // One column's strip (column 0's centres at clip x = -1), the whole height.
+    let (l, r) = (-1.25f32, -0.75f32);
+    let strip = floats(&[
+        l, -3.0, 0.5, 1.0, l, 3.0, 0.5, 1.0, r, -3.0, 0.5, 1.0, r, -3.0, 0.5, 1.0, l, 3.0, 0.5,
+        1.0, r, 3.0, 0.5, 1.0,
+    ]);
+    g.run(Cmd::UploadBuffer {
+        buffer: VB,
+        offset: 0,
+        flags: 0,
+        data: Data::Bytes(&strip),
+    });
+    g.run(Cmd::SetStreamSource {
+        device: DEVICE,
+        stream: 0,
+        buffer: VB,
+        offset: 0,
+        stride: 16,
+    });
+    // Each draw: its column, which of c5..c7 `a0` picks, the colours, its booleans, loop counts,
+    // clip plane (keeping rows down to its own) and alpha reference.
+    for k in 0..4u32 {
+        let x = 0.5 * k as f32;
+        consts(&mut g, 0, 0, &[f(x), 0, 0, 0]);
+        consts(&mut g, 0, 4, &[f((k % 3) as f32), 0, 0, 0]);
+        consts(
+            &mut g,
+            0,
+            5,
+            &[
+                f(0.5),
+                f(0.0),
+                f(0.0),
+                f(0.75),
+                f(0.0),
+                f(0.25),
+                f(0.0),
+                f(0.75),
+                f(0.0),
+                f(0.0),
+                f(0.25),
+                f(0.75),
+            ],
+        );
+        consts(&mut g, 2, 0, &[k % 2]);
+        consts(&mut g, 1, 0, &[k, 0, 1, 0]);
+        consts(&mut g, 3, 2, &[f(0.0625 * k as f32), 0, 0, 0]);
+        consts(&mut g, 5, 1, &[(k / 2) % 2]);
+        consts(&mut g, 4, 1, &[3 - k, 0, 1, 0]);
+        g.run(Cmd::SetClipPlane {
+            device: DEVICE,
+            index: 0,
+            plane: [0, f(1.0), 0, f(0.25 + 0.5 * k as f32)],
+        });
+        g.state(ALPHAREF, if k == 3 { 250 } else { 16 * k });
+        g.run(Cmd::DrawPrimitive {
+            device: DEVICE,
+            kind: 4,
+            start: 0,
+            count: 2,
+        });
+    }
+    let px = g.pixels();
+    let d = g.b.device().expect("the device");
+    assert_eq!(d.wgpu_errors(), 0);
+    Some((px, d.take_draw_digests()))
+}
+
+/// The registers from storage give the shaders what the uniform blocks give them, register by
+/// register: four draws of one batch with their own float, integer and boolean constants in both
+/// stages, a relative read, a defined constant, a clip plane and an alpha reference each draw the
+/// same pixels, and the digests (which name the bytes each draw's blocks cover, read through its
+/// draw table entry from storage) are alike.
+#[test]
+fn registers_from_storage_read_every_kind_of_register_as_uniform_blocks_do() {
+    let Some((uniform, off)) = every_register_script(false) else {
+        return;
+    };
+    let Some((stored, on)) = every_register_script(true) else {
+        return;
+    };
+    // The script tells the draws apart: each column its own pixels.
+    let column = |px: &[[u8; 4]], c: usize| -> Vec<[u8; 4]> {
+        px.iter().skip(c).step_by(4).copied().collect()
+    };
+    for a in 0..4 {
+        for b in a + 1..4 {
+            assert_ne!(
+                column(&uniform, a),
+                column(&uniform, b),
+                "columns {a} and {b}: {uniform:?}"
+            );
+        }
+    }
+    assert_eq!(stored, uniform, "the pixels");
+    assert_eq!(on, off, "the digests");
+}

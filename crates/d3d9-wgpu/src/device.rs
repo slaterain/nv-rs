@@ -851,12 +851,47 @@ const TABLE: u64 = 4 << 20;
 
 /// Whether an adapter can read the registers from storage ([`Device::storage_regs`]): storage
 /// buffers in vertex shaders, two a stage, the whole register ring in one binding, and the draw
-/// table's location between the stages ([`wgsl::DRAW_SLOT`]).
+/// table's location between the stages ([`wgsl::DRAW_SLOT`]) with the clip distances' two besides.
 fn storage_regs_possible(flags: wgpu::DownlevelFlags, limits: &wgpu::Limits) -> bool {
     flags.contains(wgpu::DownlevelFlags::VERTEX_STORAGE)
         && limits.max_storage_buffers_per_shader_stage >= 2
         && limits.max_storage_buffer_binding_size >= RING.max(TABLE)
-        && limits.max_inter_stage_shader_variables > wgsl::DRAW_SLOT
+        // The draw slot's location, and the two the clip distances take from the count.
+        && limits.max_inter_stage_shader_variables >= wgsl::DRAW_SLOT + 1 + 2
+}
+
+/// The register ring and its uniform group (group 0 at dynamic offsets); the ring also readable
+/// as storage with `storage` ([`StorageRegs`]).
+fn register_ring(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    storage: bool,
+) -> (wgpu::Buffer, wgpu::BindGroup) {
+    let ring = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("register ring"),
+        size: RING,
+        usage: wgpu::BufferUsages::UNIFORM
+            | wgpu::BufferUsages::COPY_DST
+            | if storage {
+                wgpu::BufferUsages::STORAGE
+            } else {
+                wgpu::BufferUsages::empty()
+            },
+        mapped_at_creation: false,
+    });
+    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("registers"),
+        layout,
+        entries: &[0, 1, 2, 3].map(|binding| wgpu::BindGroupEntry {
+            binding,
+            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                buffer: &ring,
+                offset: 0,
+                size: std::num::NonZeroU64::new(regs_binding(binding)),
+            }),
+        }),
+    });
+    (ring, group)
 }
 
 /// The registers read from storage ([`wgsl::Link::storage`]): group 0's layout and group (the
@@ -991,6 +1026,9 @@ pub struct Device {
     /// Only where the adapter has [`Device::storage_regs_gpu`].
     storage_regs: bool,
     storage_regs_gpu: Option<StorageRegs>,
+    /// Whether the adapter can read the registers from storage ([`storage_regs_possible`]): what
+    /// [`Device::set_storage_regs`] makes [`Device::storage_regs_gpu`] for.
+    storable: bool,
     /// The open batch's draw table: one 16-byte entry a draw with [`Device::storage_regs`] (its
     /// blocks' places in 16-byte units, as [`Device::blocks`]).
     table: Vec<u8>,
@@ -1681,33 +1719,14 @@ impl Device {
                 count: None,
             }),
         });
+        // The registers from storage only when asked for and possible: otherwise the ring and its
+        // group are made as without the switch, and nothing else is made.
         let storable =
             storage_regs_possible(adapter.get_downlevel_capabilities().flags, &device.limits());
-        let ring_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("register ring"),
-            size: RING,
-            usage: wgpu::BufferUsages::UNIFORM
-                | wgpu::BufferUsages::COPY_DST
-                | if storable {
-                    wgpu::BufferUsages::STORAGE
-                } else {
-                    wgpu::BufferUsages::empty()
-                },
-            mapped_at_creation: false,
-        });
-        let storage_regs_gpu = storable.then(|| StorageRegs::new(&device, &ring_buffer));
-        let ring_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("registers"),
-            layout: &uniform_layout,
-            entries: &[0, 1, 2, 3].map(|binding| wgpu::BindGroupEntry {
-                binding,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &ring_buffer,
-                    offset: 0,
-                    size: std::num::NonZeroU64::new(regs_binding(binding)),
-                }),
-            }),
-        });
+        let storage_on =
+            storable && std::env::var("NV_WGPU_STORAGE_REGS").is_ok_and(|v| v.trim() == "1");
+        let (ring_buffer, ring_group) = register_ring(&device, &uniform_layout, storage_on);
+        let storage_regs_gpu = storage_on.then(|| StorageRegs::new(&device, &ring_buffer));
         let stage_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("upload stage"),
             size: STAGE,
@@ -1800,8 +1819,8 @@ impl Device {
             ring: Vec::with_capacity(RING as usize),
             ring_buffer,
             ring_group,
-            storage_regs: storage_regs_gpu.is_some()
-                && std::env::var("NV_WGPU_STORAGE_REGS").is_ok_and(|v| v.trim() == "1"),
+            storage_regs: storage_regs_gpu.is_some(),
+            storable,
             storage_regs_gpu,
             table: Vec::new(),
             uniform_layout,
@@ -3156,7 +3175,17 @@ impl Device {
     /// adapter can ([`storage_regs_possible`]). The pipelines made so far are dropped (their
     /// shaders read the registers the other way); the next draw makes its own. Whether it is on.
     pub fn set_storage_regs(&mut self, on: bool) -> bool {
-        let on = on && self.storage_regs_gpu.is_some();
+        let on = on && self.storable;
+        // Made now when the device was made without them: the open batch sent first (its draws
+        // read the old ring), then a ring readable as storage, its uniform group and the table.
+        if on && self.storage_regs_gpu.is_none() {
+            self.flush();
+            let (ring, group) = register_ring(&self.device, &self.uniform_layout, true);
+            self.storage_regs_gpu = Some(StorageRegs::new(&self.device, &ring));
+            self.ring_buffer = ring;
+            self.ring_group = group;
+            self.binds.blocks = None;
+        }
         if on != self.storage_regs {
             self.storage_regs = on;
             self.pipelines.clear();
@@ -5414,7 +5443,31 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             for (g, _) in &self.last_groups {
                 g.hash(&mut h);
             }
-            self.blocks.hash(&mut h);
+            // The registers' bytes its shaders read: at its blocks, or from storage at the places
+            // its entry in the draw table names (the entry its instance number reads): each
+            // header whole and the float constants up to the highest its shader reads.
+            let places: [u32; 4] =
+                match self.storage_regs_gpu.as_ref().filter(|_| self.storage_regs) {
+                    Some(_) => {
+                        let at = 16 * instance as usize;
+                        std::array::from_fn(|k| {
+                            let w = self.table.get(at + 4 * k..at + 4 * k + 4);
+                            16 * w.map_or(u32::MAX / 16, |w| {
+                                u32::from_le_bytes(w.try_into().expect("4 bytes"))
+                            })
+                        })
+                    }
+                    None => self.blocks,
+                };
+            places.hash(&mut h);
+            for (k, &at) in places.iter().enumerate() {
+                let len = match k {
+                    0 | 1 => wgsl::REGS_C_OFFSET as usize,
+                    2 => 16 * vs.fregs as usize,
+                    _ => 16 * ps.fregs as usize,
+                };
+                self.ring.get(at as usize..at as usize + len).hash(&mut h);
+            }
             for (k, a) in attributes.iter().enumerate() {
                 if !a.is_empty() {
                     let seq = self.st.streams[k].buffer.as_ref().map(|b| b.seq);
@@ -5938,7 +5991,19 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// and a vertex shader's for float inputs and every pixel shader that reads only what it
     /// writes; each with the clip code the adapter gives a draw without planes, no occlusion
     /// count. Any other variant is made when a draw first needs it.
+    /// With the registers from storage and the sun shadows on, a vertex shader's module with the
+    /// uniform registers too: the sun shadows' casters draw with those
+    /// ([`Device::sun_pipeline_job`]), and would otherwise make it on the render thread the first
+    /// time.
     fn queue_modules(&mut self, s: &Arc<Shader>) {
+        self.queue_modules_as(s, self.storage_regs);
+        if self.storage_regs && self.sun.is_some() && s.program.stage == Stage::Vertex {
+            self.queue_modules_as(s, false);
+        }
+    }
+
+    /// [`Device::queue_modules`] with the registers from storage or not.
+    fn queue_modules_as(&mut self, s: &Arc<Shader>, storage: bool) {
         let clip = if self.clip_distances {
             wgsl::Clip::Distances
         } else {
@@ -5956,16 +6021,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     clip,
                     count: false,
                     fixed: true,
-                    storage: self.storage_regs,
+                    storage,
                 };
-                let key = ModKey::P((
-                    s.id,
-                    s.varyings.clone(),
-                    false,
-                    clip,
-                    true,
-                    self.storage_regs,
-                ));
+                let key = ModKey::P((s.id, s.varyings.clone(), false, clip, true, storage));
                 (key, link)
             }
             Stage::Vertex => {
@@ -5983,10 +6041,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     clip,
                     count: false,
                     fixed: true,
-                    storage: self.storage_regs,
+                    storage,
                 };
                 (
-                    ModKey::V((s.id, inputs, varyings, clip, true, self.storage_regs)),
+                    ModKey::V((s.id, inputs, varyings, clip, true, storage)),
                     link,
                 )
             }
