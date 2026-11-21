@@ -889,6 +889,14 @@ fn sun_update_body(e: &mut Engine, base: u32, sky: u32, time: f32) {
         // instead; without it (the default) this is the exe's vector, untouched.
         let (x, y, z) = match light_from_sky(e, sky, &direction, brightness) {
             Some(way) => (way[0].to_bits(), way[1].to_bits(), way[2].to_bits()),
+            // lStewieAl's Tweaks' S0145 (its bytes at `0x642298`, `FLD [ECX+4]; FCHS` in place of
+            // the setting's read): the light's north-south part is `fSunYExtreme` negated, so the
+            // light comes from the disc's side. Only on the exe's vector: the turned light above
+            // already comes from the disc.
+            None if e.stewie(engine_core::extend::stewie::SUN_LIGHT_DIRECTION) => {
+                let value = e.mem.u32(DISTANCE_SETTING + 4);
+                (x, x87_quiet_bits(value) ^ 0x8000_0000, z)
+            }
             None => (x, y, z),
         };
         typed_call!(
@@ -1887,6 +1895,56 @@ mod tests {
             if disc[2] / disc.iter().map(|v| v * v).sum::<f32>().sqrt() > 0.2 {
                 assert!(close(way, sky_light::unit(disc).unwrap().map(|v| -v)));
             }
+        }
+    }
+
+    /// lStewieAl's Tweaks' row S0145 at `0x642298`, its four combinations with the new lighting's
+    /// light from the sky: both off, the exe's `(-height, distance, light height)`; the row alone,
+    /// the distance negated (the disc's side), the disc's place and every call unchanged; the
+    /// light from the sky on, the disc's way with the row on or off (the row changes nothing).
+    #[test]
+    fn s0145_the_sun_light_comes_from_the_discs_side() {
+        for hour in [9.0f32, 12.5, 17.0] {
+            let mut ways = vec![];
+            let mut discs = vec![];
+            let mut logs = vec![];
+            for (row, sky) in [(false, false), (true, false), (false, true), (true, true)] {
+                let mut u = update_rig(3, hour);
+                u.e.set_stewie(engine_core::extend::stewie::SUN_LIGHT_DIRECTION, row);
+                // The row reads the setting's value word itself (`[ECX+4]`), not through the
+                // rig's getter double.
+                if !u.e.mem.is_mapped(DISTANCE_SETTING + 4) {
+                    u.e.map((DISTANCE_SETTING + 4) & !0xfff, 0x1000);
+                }
+                u.e.mem.set_f32(DISTANCE_SETTING + 4, 50.0);
+                if sky {
+                    want_light_from_sky(&mut u.e, || true);
+                }
+                run(&mut u);
+                ways.push(light_way(&u));
+                discs.push(disc_place(&u));
+                logs.push(
+                    u.e.call_log
+                        .as_ref()
+                        .unwrap()
+                        .iter()
+                        .map(|(a, _)| *a)
+                        .collect::<Vec<_>>(),
+                );
+            }
+            let disc = discs[0];
+            assert!(discs.iter().all(|d| *d == disc), "{hour}");
+            assert!(logs.iter().all(|l| *l == logs[0]), "{hour}: the same calls");
+            assert_eq!(ways[0], [-disc[0], 50.0, 30.0], "{hour}: the exe's");
+            assert_eq!(ways[1], [-disc[0], -50.0, 30.0], "{hour}: the row's");
+            // The disc stands at +50 north-south: the row's light comes from that side.
+            assert!(disc[1] > 0.0 && -ways[1][1] > 0.0);
+            assert_eq!(
+                ways[2], ways[3],
+                "{hour}: with the light from the sky the row does nothing"
+            );
+            let toward = sky_light::toward_light(disc, 1.0, None).unwrap();
+            assert!(close(ways[3], toward.map(|v| -v)), "{hour}");
         }
     }
 

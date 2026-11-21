@@ -6429,6 +6429,54 @@ mod tests {
         }
     }
 
+    /// Review of #842: S0022.43 row off, a font with no icon atlas name (the exe): the copy's source
+    /// is the font's `+0x3c` word (0), the shape is not culled when its property is attached, and
+    /// the path is not the shared empty texture.
+    #[test]
+    fn s0022_43_row_off_keeps_the_exes_copy_without_an_atlas() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let mut e = engine();
+        e.set_stewie(engine_core::extend::stewie::FONT_ICON_NO_TEXTURE, false);
+        geometry(&mut e);
+        let names = Rc::new(RefCell::new(Vec::new()));
+        let seen = names.clone();
+        e.register_double(NI_FIXED_STRING_CREATE, move |e, a| {
+            seen.borrow_mut().push(e.mem.cstr(a[0]));
+            ret(0x1234)
+        });
+        let sources = Rc::new(RefCell::new(Vec::new()));
+        let seen = sources.clone();
+        e.register_double(STRNCPY_S, move |e, a| {
+            seen.borrow_mut().push(a[2]);
+            // The C runtime's answer to a null source: an empty destination.
+            e.mem.set_cstr(a[0], b"");
+            ret(0)
+        });
+        let culled_at_attach = Rc::new(RefCell::new(Vec::new()));
+        let seen = culled_at_attach.clone();
+        e.register_double(NI_AV_OBJECT_ATTACH_PROPERTY, move |e, a| {
+            seen.borrow_mut().push(e.mem.u32(a[0] + 0x30) & 1);
+            Ret::default()
+        });
+        set_text_at(&mut e, INTERFACE_TEXT_ICONS_NAME, b"Interface: TextIcons");
+        set_text_at(&mut e, TEXTURES_PATH_FORMAT, b"Data\\Textures\\%s");
+        let font = font(&mut e);
+        e.mem.set_u32(font.addr() + 0x4c, 2);
+        let shape = font_make_icons_tri_shape(&mut e, font);
+        assert_eq!(
+            *sources.borrow().last().unwrap(),
+            0,
+            "the font's +0x3c word"
+        );
+        assert_eq!(*culled_at_attach.borrow(), vec![0]);
+        assert_eq!(e.mem.u32(shape + 0x30) & 1, 0);
+        assert_ne!(
+            names.borrow()[1],
+            b"Data\\Textures\\interface\\shared\\empty.dds".to_vec()
+        );
+    }
+
     #[test]
     fn release_reference_frees_the_data_at_zero() {
         let mut e = engine();
