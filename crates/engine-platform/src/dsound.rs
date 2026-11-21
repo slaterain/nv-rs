@@ -1076,6 +1076,9 @@ struct Voices {
     /// The game's device's stream (every voice's when not split) and the platform layers'.
     game: Out,
     own: Out,
+    /// While the outs are parked ([`follow_device`]): the game's clock (µs) up to which the
+    /// playing voices were moved on ([`move_parked`]).
+    parked_clock: Option<u64>,
 }
 
 /// The two streams of a split output ([`Voices::split`]).
@@ -1708,16 +1711,18 @@ type Start<'a> = dyn FnMut(
 /// and is not lost then). Called at every sound call ([`tick`]): one flag read while nothing is
 /// lost.
 ///
-/// On a loss both streams are parked under the voices' lock (`Out::parked`: nothing is mixed, the
-/// voices and the clock wait) and let go (their threads end off the game's thread). Then, at most
+/// On a loss both streams are parked under the voices' lock (`Out::parked`: nothing is mixed)
+/// and let go (their threads end off the game's thread). Each playing voice is moved past what
+/// its stream had not mixed, and from then on, at each sound call, by the clock's time since the
+/// last call ([`move_parked`]): no voice is ever moved for time it was not playing. Then, at most
 /// once a second ([`super::sound_out::try_again`]), a helper thread asks for the default device's
 /// mix format and opens new streams there in its own format, by the rules of the first open
 /// ([`start_output`]): the game's device's layout made again from every buffer, the platform
 /// layers' own stream on an endpoint that is not two channels ([`open_on_default`]). The game's
 /// thread never waits for the system: it looks for the helper's answer at the next sound call.
 /// The new streams give silence until they are put in place ([`put_in_place`]), under the lock:
-/// each playing voice moved past the gap by arithmetic (as far as the game's clock ran beyond
-/// what was mixed), every voice at the new rate, playing ones connected again, one period of
+/// each playing voice moved on for the gap's last stretch, every voice at the new rate, playing
+/// ones connected again, one period of
 /// silence, and the clock's pace started again from now, so what played on through the gap is
 /// skipped, never mixed or heard late. No device answering: said once. A line on stderr each
 /// time.
@@ -1725,11 +1730,12 @@ pub fn follow_device(e: &mut Engine) {
     if state_ref!(e).sound.virtual_out.is_some() {
         return;
     }
-    follow_device_at(e, std::time::Instant::now());
+    let clock = e.clock_now_us();
+    follow_device_at(e, std::time::Instant::now(), clock);
 }
 
-/// [`follow_device`] at `now`.
-fn follow_device_at(e: &mut Engine, now: std::time::Instant) {
+/// [`follow_device`] at `now`, the game's clock at `clock` (µs).
+fn follow_device_at(e: &mut Engine, now: std::time::Instant, clock: u64) {
     use super::sound_out::Output;
     let gone = |o: &Option<Output>| o.as_ref().is_some_and(Output::lost);
     let sound = &mut state!(e).sound;
@@ -1741,7 +1747,24 @@ fn follow_device_at(e: &mut Engine, now: std::time::Instant) {
             return;
         }
         {
-            let mut v = m.voices.lock().expect("the voices");
+            let mut guard = m.voices.lock().expect("the voices");
+            let v = &mut *guard;
+            // What each stream had not mixed when it was lost (how far the clock had run
+            // beyond it): its voices are moved past that now. From here on the parked voices
+            // move with the clock at each sound call ([`move_parked`]).
+            let behind = |out: &Out| out.pace.as_ref().map_or(0, |p| p.behind_us(m.rate));
+            let (game_gap, own_gap) = (behind(&v.game), behind(&v.own));
+            for at in v.playing.iter() {
+                if let Some(voice) = v.all.get_mut(at) {
+                    let gap = if v.split && voice.stream {
+                        own_gap
+                    } else {
+                        game_gap
+                    };
+                    move_past(voice, gap, m.rate);
+                }
+            }
+            v.parked_clock = Some(clock);
             v.game.parked = true;
             v.own.parked = true;
         }
@@ -1769,7 +1792,7 @@ fn follow_device_at(e: &mut Engine, now: std::time::Instant) {
             }
             Ok(Ok(opened)) => {
                 lost.opening = None;
-                return put_in_place(e, opened);
+                return put_in_place(e, opened, clock);
             }
         }
     }
@@ -1790,7 +1813,7 @@ fn follow_device_at(e: &mut Engine, now: std::time::Instant) {
     state!(e).sound.lost.as_mut().expect("lost").opening = Some(rx);
     // In place (the tests), the answer is there now.
     if seam.in_place {
-        follow_device_at(e, now);
+        follow_device_at(e, now, clock);
     }
 }
 
@@ -1878,13 +1901,31 @@ fn move_past(voice: &mut super::mixer::Voice, us: u64, rate: u32) {
     voice.move_to(next);
 }
 
+/// While the outs are parked: each playing voice moved on by the game's clock since the last
+/// move (`Voices::parked_clock`) at its own frequency ([`move_past`]), so a voice plays through
+/// the gap only for the time it was playing: one started, sought, stopped or played again during
+/// the gap moves from then on, as it would have been heard. At every sound call ([`tick`]) and
+/// once more when the new streams are put in place.
+fn move_parked(v: &mut Voices, clock: u64, rate: u32) {
+    let Some(last) = v.parked_clock else {
+        return;
+    };
+    let us = clock.saturating_sub(last);
+    for at in v.playing.iter() {
+        if let Some(voice) = v.all.get_mut(at) {
+            move_past(voice, us, rate);
+        }
+    }
+    v.parked_clock = Some(clock);
+}
+
 /// The helper's new streams put in place, under the voices' lock (so neither stream mixes a
-/// frame before it is done): each playing voice moved past the gap (how far the game's clock ran
-/// beyond what its stream had mixed, [`Pace::behind_us`]; with the device's own pace,
-/// `NV_SOUND=device`, nothing is known and the voices go on where they were), every voice at the
-/// new rate, playing ones connected again, one period of silence, the places of the new layout,
-/// and the paces started again from now. Then the streams, the layout and the line.
-fn put_in_place(e: &mut Engine, o: Opened) {
+/// frame before it is done): each playing voice moved on for the last stretch of the gap
+/// ([`move_parked`]; at the loss each was moved past what its stream had not mixed, and at each
+/// sound call since by the clock), every voice at the new rate, playing ones connected again,
+/// one period of silence, the places of the new layout, and the paces started again from now.
+/// Then the streams, the layout and the line.
+fn put_in_place(e: &mut Engine, o: Opened, clock: u64) {
     let (game, own) = (o.device.current(), o.own_device.current());
     let (Some(game_place), Some(own_place)) = (Place::new(game), Place::new(own)) else {
         // The streams are let go (off this thread) and tried again in a second.
@@ -1898,19 +1939,9 @@ fn put_in_place(e: &mut Engine, o: Opened) {
     {
         let mut guard = m.voices.lock().expect("the voices");
         let v = &mut *guard;
-        let behind = |out: &Out| out.pace.as_ref().map_or(0, |p| p.behind_us(old_rate));
-        let (game_gap, own_gap) = (behind(&v.game), behind(&v.own));
-        let was_split = v.split;
-        for at in v.playing.iter() {
-            if let Some(voice) = v.all.get_mut(at) {
-                let gap = if was_split && voice.stream {
-                    own_gap
-                } else {
-                    game_gap
-                };
-                move_past(voice, gap, old_rate);
-            }
-        }
+        // The last stretch of the gap: from the last sound call to now.
+        move_parked(v, clock, old_rate);
+        v.parked_clock = None;
         for voice in v.all.values_mut() {
             voice.device = rate;
         }
@@ -2061,6 +2092,10 @@ pub fn tick(e: &mut Engine) {
     let now = e.clock_now_us();
     if let Some(m) = &state!(e).sound.mix {
         let mut v = m.voices.lock().expect("the voices");
+        // A lost device: the parked voices move on with the clock ([`move_parked`]).
+        if v.game.parked {
+            move_parked(&mut v, now, m.rate);
+        }
         let Voices { game, own, .. } = &mut *v;
         for p in [&mut game.pace, &mut own.pace].into_iter().flatten() {
             p.game_us = now;
@@ -7348,11 +7383,12 @@ mod tests {
 
     /// A lost output device (stand-in streams marked lost; nothing is heard): the streams are
     /// parked and let go; no device answering: said once, tried again no sooner than a second
-    /// later; then new ones opened on the default device at its rate, giving silence until they
-    /// are put in place; every voice at that rate, the playing one moved past the gap (how far
-    /// the game's clock ran beyond what was mixed), the pace started again from now (nothing
-    /// left to catch up: the first period mixes one period, not the gap), a period of silence,
-    /// and the voice goes on.
+    /// later. While parked the playing voices move on with the game's clock at each sound call,
+    /// each only for the time it plays: one playing through the whole gap moves by all of it,
+    /// one started inside the gap only from its start. Then new streams on the default device at
+    /// its rate, giving silence until they are put in place; every voice at that rate, the pace
+    /// started again from now (the first period mixes one period, not the gap), a period of
+    /// silence, and the voice goes on.
     #[test]
     fn a_lost_device_is_followed_to_the_new_default() {
         use super::super::sound_out::{Output, DEFAULT_CHECK};
@@ -7361,38 +7397,45 @@ mod tests {
         hear_by_hand(&mut e, 48000);
         let data = signal_seeded(9600, 1, 16, 11);
         let a = made(&mut e, ds, 0x2e0, false, 1, 48000, 16, &data);
+        let long = signal_seeded(48000, 1, 16, 12);
+        let b = made(&mut e, ds, 0x2e0, false, 1, 48000, 16, &long);
         e.vcall(a, 0x30, &[0, 0, 1]);
         let _ = mixed(&e, 480);
         stand_in(&mut e, None);
         let t = std::time::Instant::now();
         // Nothing lost: nothing asked.
         state!(e).sound.mix.as_mut().unwrap().output = Some(Output::idle(48000, Layout::STEREO));
-        follow_device_at(&mut e, t);
+        let clock = e.clock_peek_us();
+        follow_device_at(&mut e, t, clock);
         assert_eq!(ASKED.with(|a| a.get()), 0);
         // Lost, and no device answers: parked, said, tried again a second later only.
         let m = state!(e).sound.mix.as_ref().unwrap();
         m.output.as_ref().unwrap().mark_lost();
+        let voices = m.voices.clone();
+        let before = voices.lock().unwrap().all[&a].position.unwrap();
         for at in [t, t + DEFAULT_CHECK / 2] {
-            follow_device_at(&mut e, at);
+            let clock = e.clock_peek_us();
+            follow_device_at(&mut e, at, clock);
         }
         assert_eq!(ASKED.with(|a| a.get()), 1, "tried once within the second");
         assert!(state!(e).sound.mix.as_ref().unwrap().output.is_none());
         assert!(state!(e).sound.lost.as_ref().is_some_and(|l| l.said));
-        let voices = state!(e).sound.mix.as_ref().unwrap().voices.clone();
         assert!(voices.lock().unwrap().game.parked);
-        // The game's clock ran 1.5 s beyond what was mixed: 2.5 s since the pace's start, 1 s
-        // (48000 frames) mixed.
-        let before = voices.lock().unwrap().all[&a].position.unwrap();
+        // 450 ms into the gap a second voice starts (its Play is a sound call: the first voice
+        // moves on 450 ms first); 100 ms later a device answers at 44100 Hz.
+        e.advance_clock_us(450_000);
+        e.vcall(b, 0x30, &[0, 0, 0]);
+        assert_eq!(voices.lock().unwrap().all[&b].position, Some(0));
+        e.advance_clock_us(100_000);
         {
             let mut v = voices.lock().unwrap();
-            let mut p = Pace::new(10_000_000);
-            p.start_us = 10_000_000 - 2_500_000;
+            let mut p = Pace::new(e.clock_peek_us());
             p.mixed = 48000;
             v.game.pace = Some(p);
         }
-        // A second later a device answers at 44100 Hz.
         stand_in(&mut e, Some((44100, Layout::STEREO)));
-        follow_device_at(&mut e, t + DEFAULT_CHECK);
+        let clock = e.clock_peek_us();
+        follow_device_at(&mut e, t + DEFAULT_CHECK, clock);
         assert_eq!(ASKED.with(|a| a.get()), 2);
         assert_eq!(OPENED.with(|o| o.borrow().clone()), [Some(Layout::STEREO)]);
         assert!(
@@ -7406,12 +7449,14 @@ mod tests {
         {
             let v = voices.lock().unwrap();
             assert!(!v.game.parked);
+            assert!(v.parked_clock.is_none());
             assert!(v.all.values().all(|v| v.device == 44100));
-            // 1.5 s at the voice's 48000 Hz is 72000 frames: 7.5 times round its 9600-frame
-            // loop, so 4800 on from where it was (and a few more for the test's own time).
+            // The first voice played through all 550 ms: 26400 frames at its 48000 Hz, round
+            // its 9600-frame loop to 7200 on from where it was.
             let after = v.all[&a].position.unwrap();
-            let moved = (after + 9600 - before) % 9600;
-            assert!((4800..4800 + 960).contains(&moved), "moved {moved}");
+            assert_eq!((after + 9600 - before) % 9600, 7200);
+            // The second played the last 100 ms only: 4800 frames from its start.
+            assert_eq!(v.all[&b].position, Some(4800));
             let p = v.game.pace.as_ref().unwrap();
             assert_eq!(p.mixed, 0);
             assert!(p.behind_us(44100) < 100_000, "nothing left to catch up");
@@ -7434,6 +7479,47 @@ mod tests {
             .unwrap()
             .render_stream(Which::Game, 44100, 2, &mut next);
         assert!(next.iter().any(|&x| x != 0.0), "the voice goes on");
+    }
+
+    /// On a split endpoint the two streams are lost with different gaps (what each had not
+    /// mixed): the game's voices move by the game stream's, the platform layers' by their own.
+    #[test]
+    fn split_streams_move_their_voices_by_their_own_gaps() {
+        use super::super::sound_out::Output;
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        let _ = listener_of(&mut e, ds);
+        hear_by_hand_on(&mut e, 48000, layout_of_mask(0x63f));
+        let long = signal_seeded(48000, 1, 16, 13);
+        let a = made(&mut e, ds, 0x2e0, false, 1, 48000, 16, &long);
+        let s = made(&mut e, ds, 0x2e0, false, 1, 48000, 16, &long);
+        e.vcall(a, 0x30, &[0, 0, 0]);
+        e.vcall(s, 0x30, &[0, 0, 0]);
+        stand_in(&mut e, None);
+        let m = state!(e).sound.mix.as_mut().unwrap();
+        m.output = Some(Output::idle(48000, Layout::STEREO));
+        m.output.as_ref().unwrap().mark_lost();
+        let voices = m.voices.clone();
+        {
+            let mut v = voices.lock().unwrap();
+            assert!(v.split);
+            v.all.get_mut(&s).unwrap().stream = true;
+            let gap = |us: u64| {
+                let mut p = Pace::new(1_000_000);
+                p.start_us = 1_000_000 - us;
+                p
+            };
+            v.game.pace = Some(gap(100_000));
+            v.own.pace = Some(gap(300_000));
+        }
+        let clock = e.clock_peek_us();
+        follow_device_at(&mut e, std::time::Instant::now(), clock);
+        let v = voices.lock().unwrap();
+        assert!(v.game.parked && v.own.parked);
+        // 100 ms and 300 ms at 48000 Hz (a frame more for the test's own time at most).
+        let at = |k: u32| v.all[&k].position.unwrap();
+        assert!((4800..=4801).contains(&at(a)), "{}", at(a));
+        assert!((14400..=14401).contains(&at(s)), "{}", at(s));
     }
 
     /// The game's sound calls look for a lost device ([`tick`] calls [`follow_device`]).

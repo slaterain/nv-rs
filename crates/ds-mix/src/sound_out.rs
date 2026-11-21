@@ -1329,17 +1329,15 @@ mod wasapi {
                     Ok(d) => {
                         let _ = tx.send(Ok((d.rate, d.layout)));
                         // The default device is asked about on a thread of its own, never on
-                        // this time-critical one.
-                        let watch = d.id.clone().map(|id| {
+                        // this time-critical one. Not waited for: it ends by itself within
+                        // 100 ms of the stop, so stopping a stream never waits for its sleep.
+                        if let Some(id) = d.id.clone() {
                             let (stop, lost) = (flag.clone(), lost_thread.clone());
-                            std::thread::Builder::new()
+                            let _ = std::thread::Builder::new()
                                 .name("nv sound watch".into())
-                                .spawn(move || watch_default(&id, &stop, &lost))
-                        });
-                        run(&d, &source, &flag, &lost_thread);
-                        if let Some(Ok(w)) = watch {
-                            let _ = w.join();
+                                .spawn(move || watch_default(&id, &stop, &lost));
                         }
+                        run(&d, &source, &flag, &lost_thread);
                     }
                     Err(why) => {
                         let _ = tx.send(Err(why));
