@@ -7,12 +7,44 @@ use engine_core::extend::stewie;
 /// Share 2's rows built.
 pub const ROWS: &[Row] = &[
     Row {
+        bit: stewie::FOLLOWER_NO_AMMO_RECHARGER,
+        function: "patchPreventFollowerNoAmmoTopicIfUsingRechargerWeapon",
+        plan: "S0024",
+        key: "bPreventFollowerNoAmmoTopicIfUsingRechargerWeapon",
+        tweaks: None,
+        summary: "a companion whose weapon recharges on its own no longer says its out-of-ammo line",
+    },
+    Row {
         bit: stewie::WEAPON_IDLE_SOUND_RANGE,
         function: "fixWeaponIdleSoundsHavingInfiniteRange",
         plan: "S0039",
         key: "bFixWeaponIdleSoundsHavingInfiniteRange",
         tweaks: None,
         summary: "while you are in third person, NPCs' weapon idle sounds (a minigun's spin, a flamer's pilot light) are no longer heard from any distance, and your own weapon's idle sound plays as in first person instead of placed in the world",
+    },
+    Row {
+        bit: stewie::WEAPON_MOD_DESTRUCTIBLE,
+        function: "fixWeaponModGetDestructibleForm",
+        plan: "S0041",
+        key: "bFixWeaponModGetDestructibleForm",
+        tweaks: None,
+        summary: "a weapon mod item's destruction data is read from the right place (nothing to see with the game's own data)",
+    },
+    Row {
+        bit: stewie::ZERO_SPREAD_VATS_CHANCE,
+        function: "patchFixZeroSpreadZeroVATSChance",
+        plan: "S0055",
+        key: "bFixZeroSpreadZeroVATSChance",
+        tweaks: None,
+        summary: "changes play: a gun with no spread gets a VATS chance instead of 0% (its range factor starts at fVATSRangeSpreadMax, 2.0 at the exe's default)",
+    },
+    Row {
+        bit: stewie::COMBAT_MISSILE_DEPTH_SETTINGS,
+        function: "patchFixCombatMissileDepthGamesettings",
+        plan: "S0074",
+        key: "bFixCombatMissileDepthGamesettings",
+        tweaks: None,
+        summary: "a mod or script that changes how deep arrows and spears stick or impale takes effect at once (no change with the game's own data)",
     },
     Row {
         bit: stewie::SPECTATOR_THREAT_WEAPON_TYPE,
@@ -71,6 +103,22 @@ pub const ROWS: &[Row] = &[
         summary: "a mine's light shows correctly again after a save is loaded",
     },
     Row {
+        bit: stewie::WEAPON_DAMAGE_DISPLAY_AMMO,
+        function: "InventoryCalcWeaponDamageUseAmmoFix",
+        plan: "S0189.01",
+        key: "bInventoryCalcWeaponDamageUseAmmoFixDisplay",
+        tweaks: None,
+        summary: "changes what you read: a weapon's shown damage is worked out for the ammunition it lists, not the ammunition you have equipped (with S0189.02)",
+    },
+    Row {
+        bit: stewie::WEAPON_DAMAGE_AMMO_PROJECTILE,
+        function: "InventoryCalcWeaponDamageUseAmmoFix",
+        plan: "S0189.02",
+        key: "bInventoryCalcWeaponDamageUseAmmoFixProjectile",
+        tweaks: None,
+        summary: "changes play: a weapon's shown damage counts the explosion of the listed ammunition's projectile (a gun of damage 20 listed with a round exploding for 25, Guns 50: 22 shown before, 49.5 now); and every hit's damage and NPCs' choice of weapon count the explosion of the weapon's own projectile instead of the loaded ammunition's (in the game's data the .50 MG explosive round, the 40 mm and 25 mm grenade variants, the missile hive and the Fat Man variants; an anti-materiel rifle hit with explosive rounds at Guns 50: 209 before, 121 with the row), as Tweaks does",
+    },
+    Row {
         bit: stewie::DIALOGUE_ACTIVATE_NO_PACKAGE,
         function: "MiscCrashFixes",
         plan: "S0199.01",
@@ -102,6 +150,14 @@ pub const ROWS: &[Row] = &[
         key: "bNonHitscanProjectileSplashFix",
         tweaks: None,
         summary: "projectiles that are not hitscan (grenades, missiles, slow bullets) move their physics body too, so they splash water",
+    },
+    Row {
+        bit: stewie::THROWABLE_ROTATION,
+        function: "ThrowableRotationFix",
+        plan: "S0211",
+        key: "bThrowableRotationFix",
+        tweaks: None,
+        summary: "thrown weapons that spin (throwing knives, hatchets, tomahawks, proton axes) keep spinning in flight instead of being turned to point along their arc",
     },
     Row {
         bit: stewie::COMBAT_ITEM_COOLDOWN,
@@ -142,5 +198,13 @@ pub const ROWS: &[Row] = &[
         key: "bArmorUpdateFix",
         tweaks: None,
         summary: "changes play: an actor's (NPC's or creature's) DR and DT follow a change of its armour at once",
+    },
+    Row {
+        bit: stewie::DOUBLE_SOUND,
+        function: "DoubleSoundFix",
+        plan: "S0230",
+        key: "bDoubleSoundFix",
+        tweaks: None,
+        summary: "sounds at the very start of an animation (footsteps, weapon handling) no longer play twice",
     },
 ];

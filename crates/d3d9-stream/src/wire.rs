@@ -378,6 +378,31 @@ fn renamed(record: &[u8], names: &mut Names, out: &mut Vec<u8>) -> Result<String
     Ok(format!("{cmd:?}"))
 }
 
+/// Each draw's device-state digest ([`crate::StateDigest`]) of a file of commands, read one record at
+/// a time: two runs whose streams differ only in states set again to the value they had (the device
+/// layer leaving those out) give the same list, and any difference a draw could see gives another.
+pub fn draw_digests(from: impl std::io::Read) -> Result<Vec<u64>, String> {
+    let mut records = Records::new(from)?;
+    let (mut digest, list) = crate::StateDigest::new();
+    while let Some(record) = records.next()? {
+        let mut r = Reader {
+            bytes: record,
+            at: 0,
+        };
+        let tag = u8::get(&mut r).map_err(|e| e.to_string())?;
+        let cmd = Cmd::get(tag, &mut r).map_err(|e| e.to_string())?;
+        if r.at != record.len() {
+            return Err(WireError::Length { at: 0 }.to_string());
+        }
+        digest.execute(cmd);
+    }
+    drop(digest);
+    let list = list
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    Ok(list.clone())
+}
+
 /// Two files of commands (`NV_D3D9_RECORD`) compared command by command, each with its object
 /// handles renamed in its own order of first use ([`Names`]): the same calls, states, payloads and
 /// objects, with the objects at whatever addresses each run's heap gave them. Answers how many

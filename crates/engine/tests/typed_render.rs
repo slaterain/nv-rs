@@ -368,28 +368,37 @@ fn bind() {
         .assert_same();
 }
 
-/// The sampler getter's stand-in (lStewieAl's Tweaks' S0225 reads it through `010f095c`): the
-/// word at `cache + 4 * state`.
-const SAMPLER_GETTER: u32 = 0x00ff_7000;
+/// The render state cache's sampler getter (`00e910f0`, the word at `010f095c` that lStewieAl's
+/// Tweaks' S0225 calls through); the typed compare reads its table inline, so its call is left
+/// out of the comparison.
+const SAMPLER_GETTER: u32 = 0x00e9_10f0;
 
-/// lStewieAl's Tweaks' row S0225 on: the texture already bound, the stage group's ADDRESSU current
-/// or saved or neither, and the render state cache answering the same value or another; the typed
-/// stage binds as the translation does.
+/// lStewieAl's Tweaks' row S0225 on: the texture already bound or another, forced or not; the
+/// stage group's ADDRESSU none, current, saved, or current and saved differing; its ADDRESSV none
+/// or current; the render state cache's ADDRESSU and ADDRESSV values equal or not (so a case where
+/// only ADDRESSV is held and differs); the state cache's answer: the typed stage binds as the
+/// translation does.
 #[test]
 fn bind_with_the_sampler_state_row() {
     Diff::new(entry!(0x00e7_eb00, stage::bind(Ptr<_>, u8) -> bool))
         .common(false)
         .inputs(&[
-            Input::Of(&[0, 1, 2]),
+            Input::Of(&[0, 1, 2, 3]),
+            Input::Of(TWO_WAYS),
             Input::Of(&[3, 5]),
+            Input::Of(&[4, 7]),
+            Input::Of(TWO_WAYS),
+            Input::Of(TWO_WAYS),
             Input::Of(TWO_WAYS),
         ])
         .translation_calls_plainly(&[0x00e7_ea00, 0x00e7_e940, 0x00e7_df90])
+        .ignore_calls(&[SAMPLER_GETTER])
         .setup(|e, c| {
             e.set_stewie(engine_core::extend::stewie::SAMPLER_STATE_LEAK, true);
             let w = world(e, false);
-            set(e, SHADOWED + 4, w.texture);
-            set(e, APPLY_STATES_ANSWER, c.word(2));
+            let shadow = if c.word(4) != 0 { w.texture } else { 0x1234 };
+            set(e, SHADOWED + 4, shadow);
+            set(e, APPLY_STATES_ANSWER, c.word(6));
             // The exe's tables and words S0225 reads (mapped as the game's image would have them).
             e.map(0x0126_f000, 0x1000);
             e.map(0x010f_0000, 0x1000);
@@ -399,22 +408,30 @@ fn bind_with_the_sampler_state_row() {
             set(e, 0x0126_f92c, 0);
             set(e, 0x0126_f930, 1);
             let group = e.mem.u32(w.stage + 0x10);
+            // ADDRESSU: wanted 3 (current), 3 (saved), or current 3 over saved 9.
             match c.word(0) {
                 1 => e.mem.set_u8(group + 0xa4, 1),
                 2 => e.mem.set_u8(group + 0x80, 1),
+                3 => {
+                    e.mem.set_u8(group + 0xa4, 1);
+                    e.mem.set_u8(group + 0x80, 1);
+                }
                 _ => {}
             }
             set(e, group + 0x90, 3);
-            set(e, group + 0x6c, 3);
-            let cache = e.mem.alloc(0x10);
-            set(e, cache + 4, c.word(1));
+            set(e, group + 0x6c, if c.word(0) == 3 { 9 } else { 3 });
+            // ADDRESSV: current 4 or not held.
+            if c.word(1) != 0 {
+                e.mem.set_u8(group + 0xa5, 1);
+            }
+            set(e, group + 0x94, 4);
+            // The cache's table for stage 1 (slots 0 and 1 at +0xE20 + (1 * 5 + slot) * 8).
+            let cache = e.mem.alloc(0x1000);
+            set(e, cache + 0xe20 + 5 * 8, c.word(2));
+            set(e, cache + 0xe20 + 6 * 8, c.word(3));
             set(e, 0x0126_f99c, cache);
             set(e, 0x010f_095c, SAMPLER_GETTER);
-            e.register_double(SAMPLER_GETTER, |e, a| engine_core::abi::Ret {
-                eax: e.mem.u32(a[0] + 4 * a[2]),
-                ..Default::default()
-            });
-            vec![w.stage, 0]
+            vec![w.stage, c.word(5)]
         })
         .run()
         .assert_same();

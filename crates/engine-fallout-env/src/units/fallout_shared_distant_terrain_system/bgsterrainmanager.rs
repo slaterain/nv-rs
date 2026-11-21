@@ -392,6 +392,12 @@ pub fn bgs_terrain_manager_hide_tree(
     tree: u32,
     queue_if_missing: u8,
 ) {
+    // lStewieAl's Tweaks' S0050 (its jump at the entry, `0x6FCFA0`): no manager (the reference's LOD
+    // disabled by a plugin) prints Tweaks' line and does nothing.
+    if this.is_null() && e.stewie(engine_core::extend::stewie::LOD_DATA_MISSING_WARNING) {
+        engine_core::extend::stewie::lod_warning(e, tree);
+        return;
+    }
     let tree_key = e.call(REFERENCE_FORM_KEY, &args![tree]).u32();
     let block_key = e.vcall(tree, 0x1f4, &[]).u32();
     let block = fn_006fcef0(e, this, block_key);
@@ -615,7 +621,7 @@ mod tests {
     }
 
     /// A tree reference whose virtual at `+0x1f4` returns `key`; the key is
-    /// stored at `+4`.
+    /// stored at `+4` (its form id word `+0xC` left 0).
     fn tree_reference(e: &mut Engine, key: u32) -> u32 {
         const VTABLE: u32 = 0x0250_0000;
         const KEY_FUNCTION: u32 = 0x0250_1000;
@@ -625,7 +631,7 @@ mod tests {
             e.put_vtable(VTABLE, &slots);
             e.register(KEY_FUNCTION, |e, a| ret(e.mem.u32(a[0] + 4)));
         }
-        let tree = e.mem.alloc(8);
+        let tree = e.mem.alloc(0x10);
         e.mem.set_u32(tree, VTABLE);
         e.mem.set_u32(tree + 4, key);
         tree
@@ -646,6 +652,57 @@ mod tests {
             vec![vec![0x9011, tree + 1, 1]]
         );
         assert!(calls_to(&e, ARRAY_APPEND).is_empty());
+    }
+
+    /// lStewieAl's Tweaks' row S0050 at the entry (`0x6FCFA0`): a tree handed to no manager. Row
+    /// off, the exe reads through the missing manager (a fault, here on unmapped memory); row on,
+    /// nothing is read or queued and Tweaks' line names the reference (queued, the console not made
+    /// yet), once in a row.
+    #[test]
+    fn s0050_hide_tree_with_no_manager() {
+        use std::sync::Mutex;
+        static LINES: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
+        for on in [false, true] {
+            let mut e = manager_engine();
+            e.set_stewie(engine_core::extend::stewie::LOD_DATA_MISSING_WARNING, on);
+            e.register(REFERENCE_FORM_KEY, |_, a| ret(a[0] + 1));
+            e.register(NODE_CALL_006FED30, |_, _| ret(0));
+            e.register(ARRAY_APPEND, |_, _| Ret::default());
+            e.register(0x0048_4e60, |_, _| ret(0));
+            e.register(0x0071_b160, |_, _| ret(0x4000));
+            e.register(0x0071_d0a0, |e, a| {
+                let mut line = vec![];
+                let mut at = e.mem.u32(a[2]);
+                while e.mem.u8(at) != 0 {
+                    line.push(e.mem.u8(at));
+                    at += 1;
+                }
+                LINES.lock().unwrap().push(line);
+                Ret::default()
+            });
+            let tree = tree_reference(&mut e, 0x11);
+            e.mem.set_u32(tree + 0xc, 0x0001_2345);
+            e.mem.unmap(0, 0x1000);
+            e.call_log = Some(vec![]);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.call(0x006f_cfa0, &args![0u32, tree, 1u32]);
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert!(calls_to(&e, REFERENCE_FORM_KEY).is_empty());
+                assert!(calls_to(&e, ARRAY_APPEND).is_empty());
+                e.call(0x006f_cfa0, &args![0u32, tree, 1u32]);
+                assert!(LINES.lock().unwrap().is_empty(), "queued");
+                engine_core::extend::stewie::print_queued(&mut e);
+                assert_eq!(
+                    *LINES.lock().unwrap(),
+                    vec![
+                        b"Warning: reference 00012345 has LOD but is disabled by plugin ".to_vec()
+                    ]
+                );
+            }
+        }
     }
 
     #[test]

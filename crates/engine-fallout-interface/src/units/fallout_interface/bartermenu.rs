@@ -39,6 +39,9 @@ const NODE_SET_NEXT: u32 = 0x006e_cd40;
 const NODE_DELETE: u32 = 0x0047_02f0;
 /// `004459e0` (`thiscall`, `RET 4`): the item data's deleting call, given 1.
 const ITEM_DATA_DELETE: u32 = 0x0044_59e0;
+/// `RepairMenu::GetSelection` (xNVSE's `GameUI.h`): the repair menu's target entry, 0 with no repair
+/// under way.
+const REPAIR_MENU_SELECTION: u32 = 0x011d_a760;
 /// The byte that keeps item tiles alive when set (`011d8909`).
 const KEEP_ITEM_TILES: u32 = 0x011d_8909;
 /// `007242c0` (`thiscall`, `RET 4`): whether the list box has a flag (by bit number).
@@ -213,7 +216,17 @@ pub fn fn_007308e0(e: &mut Engine, this: Ptr<ListBox>) {
 /// Deletes the `ListBoxItem` (`pTile` +0, `data` +4) that `item` reads each time: the
 /// tile through its deleting destructor (vtable slot 0, flag 1) unless `KEEP_ITEM_TILES`
 /// is set, the data (`004459e0` with 1) when flag bit 1 is set, then the item freed.
-fn delete_item(e: &mut Engine, this: Ptr<ListBox>, item: impl Fn(&mut Engine) -> u32) {
+///
+/// `in_loop`: the loop's delete (the data's delete at `0x730A00`), where lStewieAl's Tweaks'
+/// S0022.48 (`MenuFixes`, `OnClearItemListPreventIfRepairTarget`) leaves the repair menu's
+/// target entry (`RepairMenu::GetSelection`, the word at `011da760`) undeleted: Tweaks' own
+/// trade, that entry leaks instead of being used after it is freed.
+fn delete_item(
+    e: &mut Engine,
+    this: Ptr<ListBox>,
+    in_loop: bool,
+    item: impl Fn(&mut Engine) -> u32,
+) {
     if e.global::<u8>(KEEP_ITEM_TILES) == 0 {
         let entry = item(e);
         let tile = e.mem.u32(entry);
@@ -224,7 +237,10 @@ fn delete_item(e: &mut Engine, this: Ptr<ListBox>, item: impl Fn(&mut Engine) ->
     if e.call(LIST_BOX_HAS_FLAG, &args![this, 1u32]).bool() {
         let entry = item(e);
         let data = e.mem.u32(entry + 4);
-        if data != 0 {
+        let repair_target = in_loop
+            && e.stewie(engine_core::extend::stewie::REPAIR_TARGET_KEPT)
+            && data == e.global::<u32>(REPAIR_MENU_SELECTION);
+        if data != 0 && !repair_target {
             e.call(ITEM_DATA_DELETE, &args![data, 1u32]);
         }
     }
@@ -249,7 +265,7 @@ pub fn list_box_item_change_remove_all(e: &mut Engine, this: Ptr<ListBox>) {
         }
         let second = e.mem.u32(base + 8);
         let next = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, second));
-        delete_item(e, this, |e| {
+        delete_item(e, this, true, |e| {
             let node = e.mem.u32(base + 8);
             node_item(e, node)
         });
@@ -262,7 +278,7 @@ pub fn list_box_item_change_remove_all(e: &mut Engine, this: Ptr<ListBox>) {
         e.mem.set_u32(base + 8, next);
     }
     if e.mem.u32(base + 4) != 0 {
-        delete_item(e, this, |e| e.mem.u32(base + 4));
+        delete_item(e, this, false, |e| e.mem.u32(base + 4));
     }
     e.mem.set_u32(base + 4, 0);
     e.set(this, ListBox::usNextIndex, 0);
@@ -3303,6 +3319,56 @@ mod tests {
         e.call(0x0073_0950, &args![this]);
         assert!(calls_to(&e, 0x0000_7000).is_empty());
         assert_eq!(calls_to(&e, FREE), vec![vec![first]]);
+    }
+
+    /// lStewieAl's Tweaks' row S0022.48: the list holds the repair menu's target entry (`011da760`)
+    /// in its second node and another entry first. Row off, both entries are deleted; row on, the
+    /// loop's delete passes over the target and the first entry is still deleted (Tweaks patches
+    /// the loop's call only), even when the first is the target.
+    #[test]
+    fn s0022_48_the_repair_target_is_not_deleted_while_repairing() {
+        for (on, first_is_target) in [(false, false), (true, false), (true, true)] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::REPAIR_TARGET_KEPT, on);
+            stub(
+                &mut e,
+                &[
+                    FREE,
+                    NODE_SET_NEXT,
+                    NODE_DELETE,
+                    ITEM_DATA_DELETE,
+                    TILE_SET_FLOAT,
+                ],
+            );
+            e.register(LIST_BOX_HAS_FLAG, |_, a| u32::from(a[1] == 1).into_ret());
+            e.register(TEXT_TO_TRAIT, |_, _| 0x55u32.into_ret());
+            e.map(REPAIR_MENU_SELECTION & !0xfff, 0x1000);
+            e.set_global(REPAIR_MENU_SELECTION, 0x9000u32);
+            let this = list_box(&mut e);
+            let first = item(&mut e, 0, if first_is_target { 0x9000 } else { 0x8000 }, 0);
+            let second = item(&mut e, 0, 0x9000, 0);
+            let node = e.mem.alloc(8);
+            e.mem.set_u32(node, second);
+            e.mem.set_u32(this.addr() + 4, first);
+            e.mem.set_u32(this.addr() + 8, node);
+            e.call_log = Some(vec![]);
+            e.call(0x0073_0950, &args![this]);
+            let deleted: Vec<u32> = calls_to(&e, ITEM_DATA_DELETE)
+                .iter()
+                .map(|a| a[0])
+                .collect();
+            let expected = match (on, first_is_target) {
+                (false, _) => vec![0x9000, 0x8000],
+                (true, false) => vec![0x8000],
+                (true, true) => vec![0x9000],
+            };
+            assert_eq!(deleted, expected, "row {on}");
+            assert_eq!(
+                calls_to(&e, FREE),
+                vec![vec![second], vec![first]],
+                "the items still go"
+            );
+        }
     }
 
     #[test]

@@ -1029,6 +1029,9 @@ struct SunState {
     /// A far caster came or went since its map was last started, and the present it was.
     far_dirty: bool,
     far_last: u64,
+    /// A far place may be moving (paired as a move since the far cache last had none): only then
+    /// is the far cache passed over for places that stood still (review of #843).
+    far_moving: bool,
     /// The vertex blocks' headers the casters use (a few: the integer and boolean registers).
     headers: Vec<Vec<u8>>,
     /// The integer and boolean registers of the last caster and their header's place.
@@ -1205,6 +1208,7 @@ impl SunState {
             far_maps: 0,
             far_dirty: false,
             far_last: 0,
+            far_moving: false,
             headers: Vec::new(),
             last_regs: None,
             moving: 0,
@@ -7752,6 +7756,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         }
         // The casters on the scene into the cache.
         let mut came = crate::fxhash::Set::<sun_shadow::GeoKey>::default();
+        // The geometries with a new far place this frame (for its moves).
+        let mut far_came = crate::fxhash::Set::<sun_shadow::GeoKey>::default();
         // The far map where it stands now (with the sun it was last drawn for), for which far
         // casters it takes.
         let far_here = sun_shadow::far_place(
@@ -7768,11 +7774,15 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let mut step = 0.0f64;
         let mut skin_places = std::mem::take(&mut sun.skin_now);
         skin_places.clear();
+        // The ranges the game drew from each pair of buffers this frame (report 012: an LOD
+        // block's segments).
+        let mut ranges_drawn = sun_shadow::RangesDrawn::default();
         for c in std::mem::take(&mut sun.lists.casters) {
             if c.depth != scene {
                 continue;
             }
             on_scene += 1;
+            ranges_drawn.insert(&c.key);
             let world = sun_shadow::world_of(&c.draw.mvp(), frustum, axes, position);
             // A character, as posed in that frame: cast this frame, never kept (its next pose comes
             // with its next draw), never in the far map.
@@ -7819,10 +7829,15 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     ];
                     let slack =
                         sun_shadow::far_slack((o[0] * o[0] + o[1] * o[1] + o[2] * o[2]).sqrt());
-                    sun.far
+                    if sun
+                        .far
                         .see_within(c.key.clone(), world, c.bounds, now, false, slack, || {
                             draw.clone()
-                        });
+                        })
+                        .is_some()
+                    {
+                        far_came.insert(c.key.clone());
+                    }
                 }
             }
             // Not a caster: the sky's dome and clouds, and the far land's blocks (whole spheres round
@@ -7848,8 +7863,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             }
         }
         // Let go: what was written or released since; a moving place's old places; what the game
-        // would have drawn (wholly in view) and has not for a few frames; what is too far to cast
-        // into any map. A place that came near a place of the same geometry drawn the frame before
+        // would have drawn (wholly in view) and has not for a few frames, or a range of buffers
+        // the game still draws other ranges of, whose sphere reaches into the view or round the
+        // camera (report 012: an LOD block's piece turned off for a loaded cell,
+        // [`sun_shadow::segment_gone`]); what is too far to cast into any map. A place that came near a place of the same geometry drawn the frame before
         // and not in this one moves (decided place by place, [`sun_shadow::Cache::mark_moves`]):
         // kept out of the still maps (drawn each frame over a copy of them), so it does not redraw
         // them.
@@ -7870,6 +7887,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             std::array::from_fn(|k| axes[k][0] * d[0] + axes[k][1] * d[1] + axes[k][2] * d[2])
         };
         let (near, far) = (f64::from(view.near), f64::from(s[sun_shadow::CASCADES]));
+        let view_far = f64::from(view.far);
         sun.cache.mark_moves(
             now,
             &came,
@@ -7900,7 +7918,15 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 distance - i.radius > reach,
                 i.moved_on(now)
                     || (now - i.seen > sun_shadow::GRACE
-                        && sun_shadow::wholly_in_view(frustum, v, i.radius, near, far)),
+                        && (sun_shadow::wholly_in_view(frustum, v, i.radius, near, far)
+                            || sun_shadow::segment_gone(
+                                frustum,
+                                v,
+                                i.radius,
+                                near,
+                                view_far,
+                                ranges_drawn.others(k),
+                            ))),
             ];
             match gone.iter().position(|&g| g) {
                 Some(n) => {
@@ -7939,22 +7965,48 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         }
         // The far map's casters let go: written or released, two steps past its square, or not
         // drawn for a while where the game would have drawn them (wholly in view; or partly, when
-        // the camera stands inside their sphere: a land block under cells loaded since). No moves
-        // are paired here (a far place that changed is a new still place, its old one goes).
-        let view_far = f64::from(view.far);
+        // the camera stands inside their sphere: a land block under cells loaded since), or moved on.
+        // A far place that came near a place of the same geometry drawn the frame before and not in
+        // this one is that place moved (paired as the cascades', [`sun_shadow::Cache::mark_moves`]):
+        // the old place goes at once, so a large caster moving (radius [`sun_shadow::FAR_MIN_RADIUS`]
+        // up) leaves no trail of shadows in the far map, which casts it from its latest place; one
+        // that stood still a while is still again (review of #817).
+        let far_moved = sun.far.mark_moves(
+            now,
+            &far_came,
+            MAX_SUN_MOVING,
+            sun_shadow::mover(frustum, position, axes, near, view_far),
+        );
+        sun.far_moving |= far_moved > 0;
+        if sun.far_moving {
+            sun.far.settle(now, sun_shadow::SETTLE);
+            sun.far_moving = sun.far.iter().any(|i| i.moving);
+        }
         let mut far_changed = sun.far.iter().any(|i| i.born == now);
-        for _ in sun.far.sweep(|_, i| {
+        for _ in sun.far.sweep(|k, i| {
             if i.seen == now {
                 return false;
             }
             let v = in_view(i.centre);
             let inside = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() < i.radius;
             i.payload.stale()
+                // (A moving far place merely out of view is kept as a still one: review of #843.)
+                || i.left
                 || !far_here.touches(i.centre, i.radius + 2.0 * far_step)
                 || (now - i.seen > sun_shadow::GRACE
                     && (sun_shadow::wholly_in_view(frustum, v, i.radius, near, view_far)
                         || (inside
-                            && sun_shadow::partly_in_view(frustum, v, i.radius, near, view_far))))
+                            && sun_shadow::partly_in_view(frustum, v, i.radius, near, view_far))
+                        // An LOD block's piece turned off for a loaded cell, as in the cascades
+                        // (review of #844: the far map went on casting it).
+                        || sun_shadow::segment_gone(
+                            frustum,
+                            v,
+                            i.radius,
+                            near,
+                            view_far,
+                            ranges_drawn.others(k),
+                        )))
         }) {
             far_changed = true;
         }
@@ -8036,6 +8088,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             redraw,
             (&sun.far, far_redraw.then_some(&far_map)),
             &sun.skinned,
+            sun_shadow::ShadowDepth {
+                position,
+                ahead: axes[2],
+                sine,
+            },
         );
         self.span_end(span);
         for (buffer, bytes) in writes {
@@ -8169,6 +8226,17 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     #[doc(hidden)]
     pub fn sun_far_drawn(&self) -> Option<sun_shadow::Cascade> {
         self.sun.as_ref().and_then(|s| s.gpu.far_drawn)
+    }
+
+    /// Tests: the far map's kept places (world centre, radius, moving).
+    #[doc(hidden)]
+    pub fn sun_far_places(&self) -> Vec<([f64; 3], f64, bool)> {
+        self.sun.as_ref().map_or_else(Vec::new, |s| {
+            s.far
+                .iter()
+                .map(|i| (i.centre, i.radius, i.moving))
+                .collect()
+        })
     }
 
     /// Tests: how many times the sun shadows' far map was drawn (0 with them off).
