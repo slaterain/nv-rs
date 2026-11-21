@@ -2310,7 +2310,11 @@ pub fn container_menu_do_idle(e: &mut Engine, this: Ptr<ContainerMenu>) {
         } else {
             0
         };
-        let first = if current_item(e) != 0 && {
+        // `0x75EBF3` (lStewieAl's Tweaks' S0105 writes `XOR EAX,EAX; MOV [EBP-0xC],EAX; JMP` over
+        // the zero DT's store): without a DT tile the DR tile is passed without its own test.
+        let first = if second == 0 && e.stewie(engine_core::extend::stewie::INVENTORY_STAT_ALPHAS) {
+            tile_at(e, me_addr, 0x6c)
+        } else if current_item(e) != 0 && {
             let object = typed_call!(
                 leaf::FAMILY,
                 0x0044_ddc0,

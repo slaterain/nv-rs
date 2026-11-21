@@ -327,6 +327,14 @@ pub const ROWS: &[Row] = &[
         summary: "the console's text shows in front of the main menu",
     },
     Row {
+        bit: stewie::INVENTORY_STAT_ALPHAS,
+        function: "patchFixDrDTArmorDisplayAlphas",
+        plan: "S0105",
+        key: "bFixDrDTArmorDisplayAlphas",
+        tweaks: None,
+        summary: "armour without DT shows its DR line, and a lone DAM or DR line is not left faded",
+    },
+    Row {
         bit: stewie::PIPBOY_LIGHT_DETACHED,
         function: "MemoryLeakFixes",
         plan: "S0107.05",

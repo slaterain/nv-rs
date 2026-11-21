@@ -1874,6 +1874,16 @@ pub fn fn_00719790(
     let inverse = (e.global::<f64>(COLOR_CHANNEL_SCALE) - level as f64) as f32;
     let inverse = clamp_float(e, inverse, 0.0, maximum);
 
+    // `0x7197FB` (lStewieAl's Tweaks' S0105 jumps to `OnInventoryTileMultiAlpha` there, main.h's
+    // `HandleInventoryMultiAlphas`): when only one of the two tiles is given, it is shown at full
+    // alpha (`Tile::SetFloat` 0xFA9, 255), so a lone DAM or DR line does not keep a faded alpha.
+    if e.stewie(engine_core::extend::stewie::INVENTORY_STAT_ALPHAS)
+        && tile_a.is_null() != tile_b.is_null()
+    {
+        let alone = if tile_a.is_null() { tile_b } else { tile_a };
+        e.call(TILE_SET_FLOAT, &args![alone, TRAIT_FADE, 255.0f32, 1u32]);
+    }
+
     if !tile_a.is_null() && !tile_b.is_null() {
         e.call(TILE_SET_FLOAT, &args![tile_a, TRAIT_FADE, inverse, 1u32]);
         e.call(TILE_SET_FLOAT, &args![tile_b, TRAIT_FADE, level, 1u32]);
@@ -4488,6 +4498,43 @@ mod tests {
         assert_eq!(e.global::<f32>(FADE_LEVEL), 350.0);
         assert_eq!(e.global::<u32>(FADE_LAST_TIME), 5000);
         assert_eq!(e.global::<u8>(FADE_FALLING), 0);
+    }
+
+    /// Row S0105 (lStewieAl's Tweaks' `HandleInventoryMultiAlphas`, `0x7197FB`): a lone first or
+    /// second tile gets alpha 255 with the row on; both, neither, or the row off: no such set.
+    #[test]
+    fn s0105_a_lone_stat_tile_is_fully_shown() {
+        for (on, first, second, wanted) in [
+            (true, true, false, Some(0)),
+            (true, false, true, Some(1)),
+            (true, false, false, None),
+            (false, true, false, None),
+        ] {
+            let (mut e, _) = fade_engine(100.0, false, 5000, 4000);
+            let (a, b, _, _) = fade_tiles(&mut e);
+            let a = if first { a } else { 0 };
+            let b = if second { b } else { 0 };
+            e.set_stewie(engine_core::extend::stewie::INVENTORY_STAT_ALPHAS, on);
+            e.call(0x0071_9790, &args![a, b, 0u32, 0u32, 0u32]);
+            let sets = logged(&e, TILE_SET_FLOAT);
+            let full: Vec<_> = sets
+                .iter()
+                .filter(|w| w[2] == 255.0f32.to_bits())
+                .cloned()
+                .collect();
+            let lone = match wanted {
+                Some(0) => vec![vec![a, TRAIT_FADE, 255.0f32.to_bits(), 1]],
+                Some(_) => vec![vec![b, TRAIT_FADE, 255.0f32.to_bits(), 1]],
+                None => vec![],
+            };
+            assert_eq!(full, lone, "row {on} {first} {second}");
+        }
+        // Both tiles: the exe's fade only.
+        let (mut e, _) = fade_engine(100.0, false, 5000, 4000);
+        let (a, b, _, _) = fade_tiles(&mut e);
+        e.set_stewie(engine_core::extend::stewie::INVENTORY_STAT_ALPHAS, true);
+        e.call(0x0071_9790, &args![a, b, 0u32, 0u32, 0u32]);
+        assert_eq!(logged(&e, TILE_SET_FLOAT).len(), 2);
     }
 
     #[test]

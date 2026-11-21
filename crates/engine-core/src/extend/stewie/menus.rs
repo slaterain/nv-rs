@@ -194,3 +194,7 @@ pub const PAD_B_MENU_DEBOUNCE: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 51
 /// `0x7AC53A`): when the face menu closes a player without a last exterior door gets Doc
 /// Mitchell's (or TTW's Vault 101 cave door), so the world map has somewhere to show them.
 pub const NEW_GAME_LAST_EXTERIOR_DOOR: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 52);
+/// S0105 `patchFixDrDTArmorDisplayAlphas` (`fn_00719790` at `0x7197FB`; `InventoryMenu::DoIdle`
+/// at `0x7820BB`, `BarterMenu::DoIdle` at `0x7307A4`, `ContainerMenu::DoIdle` at `0x75EBF3`): armour
+/// without DT shows its DR line, and a lone stat line is shown at full alpha.
+pub const INVENTORY_STAT_ALPHAS: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 53);
