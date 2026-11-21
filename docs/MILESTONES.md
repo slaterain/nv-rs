@@ -6,6 +6,11 @@ status in [LEDGER.md](LEDGER.md), and the full list of systems in
 [SYSTEMS.md](SYSTEMS.md). The log up to 2026-10-14 is in
 [history/milestones-2026-10-14.md](history/milestones-2026-10-14.md).
 
+Local ARM crash investigation (2026-11-21): a recursive-lock publication failure
+was reproduced and corrected in focused real-thread tests. Gameplay validation
+of the reported stops remains open; next, repeat those routes with the corrected
+build ([evidence and limits](ARM_RECURSIVE_LOCK.md)).
+
 ## Direction (maintainer, 2026-11-04; [ADR-0012](adr/0012-modern-64-bit-engine.md))
 
 The game looks and plays exactly like the original; what players do not see or
@@ -47,7 +52,10 @@ two slots the skinned and particle draws reached as translations are typed: grou
 change a player sees. Then the drawing thread's hand-off itself (the frame's copy cut on main, handed to another
 thread, drawn there and joined back) is in, and on the recorded route (Doc's house and the Goodsprings street) the
 world draw's first half reads the frame only through its copy: the particle systems' arrays, the SpeedTree branches'
-set-up, the shadow light shader's fog and light rows and the toggles' colour were still reading it in place. Every frame
+set-up, the shadow light shader's fog and light rows and the toggles' colour were still reading it in place. Then
+the last shader slots the world draw reached as translations are typed, so the cut takes the draw's own state (its
+shader constants, render-state cache and lock counters) into the frame's copy in play too: with the thread on, the
+posted draw no longer shares them with what main draws meanwhile. Every frame
 still draws on main by default.
 The update half (what main runs besides drawing) began on 2026-11-10 with `scene`: the scene graph's
 downward update pass across geometries, fade nodes and particle systems, and the skinned bound, on once proven

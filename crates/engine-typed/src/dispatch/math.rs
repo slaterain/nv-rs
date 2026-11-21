@@ -397,7 +397,8 @@ pub fn inverse_4x4(e: &mut Engine, transform: Ptr<NiTransform>, fixed: u32, out:
                 .set_f32(matrix + 4 * k, if k % 5 == 0 { 1.0 } else { 0.0 });
         }
         for k in 0..3u32 {
-            let value = e.mem.u32(FIXED_TRANSLATION + 4 * k);
+            // The camera eye: the drawing side's own state while it draws (`draw::statics::CAMERA_EYE`).
+            let value = crate::draw::capture::own_at::<u32>(e, FIXED_TRANSLATION + 4 * k);
             e.mem.set_u32(matrix + 0x30 + 4 * k, value);
         }
         crate::draw::thunks::call_matrix_inverse(e, out, 0u32, matrix);

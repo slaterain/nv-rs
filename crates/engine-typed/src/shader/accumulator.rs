@@ -533,7 +533,7 @@ pub fn make_matrix(
         put(e, 4 * row + 3, 0.0);
     }
     for (i, field) in (0u32..).zip([NiPoint3::x, NiPoint3::y, NiPoint3::z]) {
-        let origin = wide(e.global::<u32>(ORIGIN.wrapping_add(4 * i)));
+        let origin = wide(capture::own_at::<u32>(e, ORIGIN.wrapping_add(4 * i)));
         let v = narrow(f64::from(e.get(point, field)) - origin);
         put(e, 12 + i, v);
     }
@@ -563,20 +563,24 @@ pub fn set_world_transform(
     let scale = e.get(transform, NiTransform::m_fScale);
     let rotation = transform.at(NiTransform::m_Rotate);
     let point = transform.at(NiTransform::m_Translate);
-    typed_call!(
-        FAMILY,
-        0x00b7_1a40,
-        make_matrix(e, world, rotation, point, scale)
-    );
-    if set_world != 0 {
-        let device = e.get(this, R::m_pkD3DDevice9);
-        engine_core::real_threads::device_vcall(
-            e,
-            device,
-            DEVICE_SET_TRANSFORM,
-            &args![WORLD, world],
+    // The renderer's world matrix and directions are the drawing side's own (`draw::statics::RENDERER_BLOCKS`): the
+    // matrix is made and sent through an image of it.
+    capture::own_image(e, world, 0x40, |e, world| {
+        typed_call!(
+            FAMILY,
+            0x00b7_1a40,
+            make_matrix(e, world, rotation, point, scale)
         );
-    }
+        if set_world != 0 {
+            let device = e.get(this, R::m_pkD3DDevice9);
+            engine_core::real_threads::device_vcall(
+                e,
+                device,
+                DEVICE_SET_TRANSFORM,
+                &args![WORLD, world],
+            );
+        }
+    });
     let state = e.get(this, R::m_pkRenderState);
     // `NiDX9RenderState`'s slot 0x30 is `00e879e0` ([`state::set_alpha_test_of`]).
     if crate::slot_target(e, state.addr(), SLOT_STATE_TRANSFORM) == 0x00e8_79e0 {
@@ -591,19 +595,29 @@ pub fn set_world_transform(
     for (i, value) in (0u32..).zip(a.iter_mut()) {
         *value = f64::from(narrow(entry(e, i) * s));
     }
-    let v = |e: &Engine, i: u32| wide(e.global::<u32>(elem_addr(this, R::kDirectionA, i, 4)));
-    let w = |e: &Engine, i: u32| wide(e.global::<u32>(elem_addr(this, R::kDirectionB, i, 4)));
+    let v = |e: &Engine, i: u32| {
+        wide(capture::own_at::<u32>(
+            e,
+            elem_addr(this, R::kDirectionA, i, 4),
+        ))
+    };
+    let w = |e: &Engine, i: u32| {
+        wide(capture::own_at::<u32>(
+            e,
+            elem_addr(this, R::kDirectionB, i, 4),
+        ))
+    };
     let out0 = narrow(v(e, 2) * a[6] + (v(e, 1) * a[3] + v(e, 0) * a[0]));
     let out1 = narrow((v(e, 1) * a[4] + v(e, 0) * a[1]) + v(e, 2) * a[7]);
     let out2 = narrow((v(e, 0) * a[2] + v(e, 1) * a[5]) + v(e, 2) * a[8]);
     for (i, value) in (0u32..).zip([out0, out1, out2]) {
-        e.set_global(elem_addr(this, R::kModelDirectionA, i, 4), value);
+        capture::set_own_at(e, elem_addr(this, R::kModelDirectionA, i, 4), value);
     }
     let out3 = narrow(a[6] * w(e, 2) + (a[0] * w(e, 0) + a[3] * w(e, 1)));
     let out4 = narrow((a[1] * w(e, 0) + a[4] * w(e, 1)) + w(e, 2) * a[7]);
     let out5 = narrow((w(e, 0) * a[2] + w(e, 1) * a[5]) + w(e, 2) * a[8]);
     for (i, value) in (0u32..).zip([out3, out4, out5]) {
-        e.set_global(elem_addr(this, R::kModelDirectionB, i, 4), value);
+        capture::set_own_at(e, elem_addr(this, R::kModelDirectionB, i, 4), value);
     }
 }
 
@@ -642,11 +656,22 @@ pub fn set_world_view_constants(e: &mut Engine, this: u32, _unused: u32, transfo
     );
     let renderer = e.global::<u32>(this.wrapping_add(0x18));
     e.with_stack(0x40, |e, matrix| {
-        crate::draw::thunks::call_matrix_multiply_transpose(
+        // The renderer's matrices are the drawing side's own (`draw::statics::RENDERER_BLOCKS`): read through an
+        // image from the world matrix to the view-projection's end.
+        let world = NiDX9Renderer::m_kWorld.off;
+        let view = NiDX9Renderer::m_kView.off;
+        capture::own_image_read(
             e,
-            matrix,
-            renderer.wrapping_add(NiDX9Renderer::m_kWorld.off),
-            renderer.wrapping_add(NiDX9Renderer::m_kView.off),
+            renderer.wrapping_add(world),
+            view + 0x40 - world,
+            |e, at| {
+                crate::draw::thunks::call_matrix_multiply_transpose(
+                    e,
+                    matrix,
+                    at,
+                    at.wrapping_add(view - world),
+                );
+            },
         );
         set_vertex_constants(e, 0, matrix.addr(), 4);
     });
@@ -844,9 +869,6 @@ pub fn light_at(e: &mut Engine, this: Ptr<ShadowSceneNode>, index: u32) -> u32 {
     item
 }
 
-/// The pair of textures `00b7cfb0` puts into two stages (`011f95e4`, `011f95e8`).
-const PAIR_TEXTURES: [u32; 2] = [0x011f_95e4, 0x011f_95e8];
-
 // Typed from 00b7cfb0
 /// `thiscall(shader, type)`: for the pass types that sample the pair, its two textures go into the
 /// current pass's stages `first` and `first + 1` (stage +8): 2 for 0x94 and 0x1f3, 6, 5 and 4 for their
@@ -870,8 +892,9 @@ pub fn set_pair_textures(e: &mut Engine, _this: u32, pass_type: u32) {
         0x1f8..=0x22c if (pass_type - 0x1f8) & 3 == 0 => 14,
         _ => return,
     };
-    for (i, texture) in (0u32..).zip(PAIR_TEXTURES) {
-        let texture = e.global::<u32>(texture);
+    // The pair (`011f95e4`, `011f95e8`) is the packet's: the cut takes it.
+    for i in 0..2u32 {
+        let texture = crate::draw::packet::pair_texture(e, i);
         let pass = capture::own_at::<u32>(e, CURRENT_PASS);
         let stages = e.global::<u32>(pass.wrapping_add(0x24));
         let stage = e.global::<u32>(stages.wrapping_add((first + i).wrapping_mul(4)));

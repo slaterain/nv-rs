@@ -639,6 +639,7 @@ pub fn fn_00552900(e: &mut Engine, this: Ptr<TESObjectCELL>, flag: u8) {
 /// nodes with the portal graph's always-render array (only when it is empty)
 /// and with the cell's option set, and clears `bCellDetached`.
 pub fn tes_object_cell_attach_to_world(e: &mut Engine, this: Ptr<TESObjectCELL>, parent: Ptr) {
+    engine_core::hitch::one(engine_core::hitch::Count::CellsAttached);
     with_scope_guard(e, 0x1a, 0x395d, |e| {
         let node = e.call(CELL_LOAD_3D, &args![this]).u32();
         e.call(CELL_SET_STATE, &args![this, 5u32]);
@@ -717,6 +718,7 @@ pub fn fn_00552bb0(e: &mut Engine, this: Ptr) -> u8 {
 /// removes the draw-only nav meshes, drops the saved changes when the form
 /// has them and removes the cell's nodes from the portal graph's option set.
 pub fn tes_object_cell_detach(e: &mut Engine, this: Ptr<TESObjectCELL>, detach_havok: bool) {
+    engine_core::hitch::one(engine_core::hitch::Count::CellsDetached);
     e.call(CELL_LOCK_ENTER, &args![this]);
     let state = e.call(CELL_GET_STATE, &args![this]).u32();
     if state == 6 || state == 5 {

@@ -2929,8 +2929,38 @@ pub fn find_close(e: &mut Engine, handle: u32) -> u32 {
 /// `INVALID_HANDLE_VALUE`. Sharing, security and attributes don't change the outcome here.
 /// A missing file for `OPEN_EXISTING` or `TRUNCATE_EXISTING` answers `ERROR_FILE_NOT_FOUND`,
 /// or `ERROR_PATH_NOT_FOUND` when its directory is missing too (measured; see the arm).
+/// A file opened counts for the hitch log (`engine_core::hitch`).
 #[allow(clippy::too_many_arguments)]
 pub fn create_file_a(
+    e: &mut Engine,
+    path: Ptr,
+    access: u32,
+    share: u32,
+    security: u32,
+    disposition: u32,
+    attributes: u32,
+    template: u32,
+) -> u32 {
+    let handle = open_or_make(
+        e,
+        path,
+        access,
+        share,
+        security,
+        disposition,
+        attributes,
+        template,
+    );
+    if handle != INVALID_HANDLE_VALUE {
+        use engine_core::hitch::{one, side, Count};
+        one(side(Count::FilesOpenedMain, Count::FilesOpenedOther));
+    }
+    handle
+}
+
+/// [`create_file_a`]'s work.
+#[allow(clippy::too_many_arguments)]
+fn open_or_make(
     e: &mut Engine,
     path: Ptr,
     access: u32,
@@ -3298,6 +3328,9 @@ pub fn read_file(
             return 0;
         }
     };
+    // The hitch log's counts (`engine_core::hitch`): the bytes, the time the read took, main's largest read.
+    let counted = engine_core::hitch::on();
+    let started = counted.then(std::time::Instant::now);
     let bytes = match read_range(e, handle, &path, position, count) {
         Ok(bytes) => bytes,
         Err(code) => {
@@ -3307,6 +3340,9 @@ pub fn read_file(
     };
     e.mem.write(buffer.addr(), &bytes);
     let got = bytes.len() as u32;
+    if let Some(t) = started {
+        count_read(u64::from(got), t.elapsed(), &path);
+    }
     if let Some(file) = open_file(e, handle) {
         file.position = position + u64::from(got);
     }
@@ -3315,6 +3351,20 @@ pub fn read_file(
     }
     e.kernel.last_error = ERROR_SUCCESS;
     1
+}
+
+/// A read of `bytes` from the guest file `path` that took `took`, counted for the hitch log on the reading thread's
+/// side; on main the largest read keeps the file's name (its last part).
+fn count_read(bytes: u64, took: std::time::Duration, path: &[u8]) {
+    use engine_core::hitch::{add, side, Count};
+    add(side(Count::BytesReadMain, Count::BytesReadOther), bytes);
+    add(
+        side(Count::ReadNsMain, Count::ReadNsOther),
+        took.as_nanos().min(u128::from(u64::MAX)) as u64,
+    );
+    if !engine_core::real_threads::on_other_game_thread() {
+        engine_core::hitch::main_read(bytes, &|| last_part(path));
+    }
 }
 
 // Platform: replaces KERNEL32.DLL CreateFileW (import)
@@ -3777,6 +3827,29 @@ mod tests {
         assert_eq!(super::super::close_handle(&mut e, h), 1);
         assert_eq!(get_file_type(&mut e, h), FILE_TYPE_UNKNOWN);
         assert_eq!(e.kernel.last_error, ERROR_INVALID_HANDLE);
+    }
+
+    /// The hitch log's counts (`engine_core::hitch`): a file opened, and the bytes a read gave, on main's side (this
+    /// thread is no other game thread). (Other tests open files meanwhile: at least.)
+    #[test]
+    fn opens_and_reads_count_for_the_hitch_log() {
+        use engine_core::hitch::{since, snapshot, Count};
+        let (mut e, name) = engine();
+        let rw = GENERIC_READ | GENERIC_WRITE;
+        let before = snapshot();
+        let h = create_file_a(&mut e, Ptr::new(name), rw, 0, 0, OPEN_ALWAYS, 0, 0);
+        let buffer = e.mem.alloc(0x2000);
+        let count = e.mem.alloc(4);
+        write_file(&mut e, h, Ptr::new(buffer), 0x1800, Ptr::new(count), 0);
+        set_file_pointer(&mut e, h, 0, Ptr::new(0), 0);
+        assert_eq!(
+            read_file(&mut e, h, Ptr::new(buffer), 0x1000, Ptr::new(count), 0),
+            1
+        );
+        let d = since(&snapshot(), &before);
+        assert!(d[Count::FilesOpenedMain as usize] >= 1);
+        assert!(d[Count::BytesReadMain as usize] >= 0x1000);
+        super::super::close_handle(&mut e, h);
     }
 
     #[test]
