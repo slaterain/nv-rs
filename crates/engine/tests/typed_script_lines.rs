@@ -583,6 +583,19 @@ fn real_world(e: &mut Engine) {
     e.mem.set_u32(ANSWER_HANDLER, 1);
     e.mem.set_u32(ANSWER_BLOCK, 1);
     e.mem.set_u32(ANSWER_BLOCK_RESULT, 1);
+    // What the operand reader asks of the real operands: a form by id, a global's value, the
+    // container's reference pointer and inventory item (none here), the item's locals.
+    e.register(0x0048_39c0, |_, _| ret(0));
+    e.register(0x0052_6ac0, |e, a| {
+        ret_f(if a[0] == 0 {
+            0.0
+        } else {
+            f64::from(f32::from_bits(e.mem.u32(a[0] + 0x24)))
+        })
+    });
+    for nothing in [0x0041_c8d0u32, 0x0057_6260, 0x004b_dea0, 0x0044_59e0] {
+        e.register(nothing, |_, _| ret(0));
+    }
 }
 
 /// `NV_DATA="...\Data" cargo test -p engine --test typed_script_lines -- --ignored real_scda`:
