@@ -305,7 +305,8 @@ pub fn bgs_save_game_buffer_save_data(
     e.with_stack(0x10, |e, quaternion| {
         typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, quaternion));
         e.call(QUATERNION_FROM_ROTATION, &args![quaternion, rotation]);
-        save_bytes(e, this, quaternion, 0x10, 0);
+        // By address, so the save family's native `SaveData` (`00865e50`) is the one that runs.
+        e.call(0x0086_5e50, &args![this, quaternion, 0x10u32, 0u32]);
     });
 }
 

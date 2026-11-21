@@ -1031,3 +1031,199 @@ fn save_then_load_gives_the_same_ids_with_the_family_on_and_off() {
     assert_eq!(on.2, expected, "every index reads back as the id written");
     assert!(on.1.len() > 4 * 40, "more than 37 ids were saved");
 }
+
+// ---- The save buffer's round trip (PR 2) ----
+
+/// A field a form's save writes, in the order the round trip writes them.
+#[derive(Clone, Copy)]
+enum Field {
+    /// `SaveData` of `n` bytes of `source`'s pattern.
+    Data(u32),
+    /// `SaveString` of a text, or of no text.
+    Text(Option<&'static str>),
+    /// `SaveVariableSizedValue`.
+    Value(u32),
+    /// `StartVariableSizedValue`, `n` bytes appended without separators, then the placeholder
+    /// patched with `n` (`SaveVariableSizedValue_ov2`).
+    Sized(u32),
+}
+
+const FIELDS: &[Field] = &[
+    Field::Data(4),
+    Field::Text(Some("Doc Mitchell")),
+    Field::Value(0),
+    Field::Data(0),
+    Field::Value(0x3f),
+    Field::Text(None),
+    Field::Sized(0x10),
+    Field::Value(0x40),
+    Field::Text(Some("")),
+    Field::Data(1),
+    Field::Sized(0x50),
+    Field::Value(0x3fff),
+    Field::Value(0x4000),
+    Field::Data(0x30),
+    Field::Sized(0x4100),
+    Field::Value(0x3fff_ffff),
+    Field::Text(Some("Goodsprings")),
+    // Past the first block of 0x10000 bytes: the buffer grows while the fields are written.
+    Field::Data(0x1_1000),
+    Field::Sized(3),
+    Field::Data(7),
+];
+
+/// Every field of [`FIELDS`] written into a fresh save buffer through the game's addresses.
+fn fill_buffer(e: &mut Engine) -> u32 {
+    let buffer = block(e, 0x14, &[0x0108_2324, 0, 0, 0, 0]);
+    for field in FIELDS {
+        match *field {
+            Field::Data(n) => {
+                let s = source(e, n);
+                e.call(0x0086_5e50, &args![buffer, s, n, 0u32]);
+            }
+            Field::Text(text) => {
+                let t = match text {
+                    None => 0,
+                    Some(text) => {
+                        let length = text.len() as u32;
+                        let t = e.mem.alloc(length + 1);
+                        e.mem.write(t, text.as_bytes());
+                        e.mem.set_u8(t + length, 0);
+                        t
+                    }
+                };
+                e.call(0x0086_5e70, &args![buffer, t, 0u32]);
+            }
+            Field::Value(v) => {
+                e.call(0x0086_5f60, &args![buffer, v]);
+            }
+            Field::Sized(n) => {
+                let start = e.call(0x0086_5f20, &args![buffer]).u32();
+                let s = source(e, n);
+                e.call(0x0086_5570, &args![buffer, s, n, 1u8]);
+                e.call(0x0086_5ff0, &args![buffer, n, start]);
+            }
+        }
+    }
+    buffer
+}
+
+/// One save of [`FIELDS`] through `BGSSaveGameBuffer::Save` (`00865c40`), first while the save is
+/// only being sized (the simulated file size and position it leaves), then for real (the bytes
+/// the file gets: the data-to-file helper and the real file's write stand in, appending).
+fn buffer_save(mut e: Engine) -> ((u32, u32), Vec<u8>) {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    stand_ins(&mut e);
+    e.register_double(0x0084_5cc0, |_, a| {
+        panic!("a save warning: {a:x?}");
+    });
+    let file = Rc::new(RefCell::new(Vec::<u8>::new()));
+    let f = Rc::clone(&file);
+    e.register_double(0x0084_5d00, move |e, a| {
+        let bytes = e.mem.bytes(a[1], a[2]).to_vec();
+        f.borrow_mut().extend_from_slice(&bytes);
+        ret(a[2])
+    });
+    let f = Rc::clone(&file);
+    e.register_double(0x0047_3180, move |e, a| {
+        let bytes = e.mem.bytes(a[1], a[2]).to_vec();
+        f.borrow_mut().extend_from_slice(&bytes);
+        ret(a[2])
+    });
+    let save_file = block(&mut e, 0x110, &[]);
+    words(&mut e, save_file + 0x104, &[0x0bad_f11e, 0, 0]);
+    manager(&mut e, 1);
+    let sized = fill_buffer(&mut e);
+    e.call(0x0086_5c40, &args![sized, save_file]);
+    let simulated = (e.mem.u32(save_file + 0x108), e.mem.u32(save_file + 0x10c));
+    file.borrow_mut().clear();
+    manager(&mut e, 0);
+    let real = fill_buffer(&mut e);
+    e.call(0x0086_5c40, &args![real, save_file]);
+    let bytes = file.borrow().clone();
+    (simulated, bytes)
+}
+
+/// The saved bytes read back field by field, the variable-sized values through the game's own
+/// reader (`LoadVariableSizedValueFromBuffer`, `00846080`, which also checks each separator).
+fn load_back(bytes: &[u8]) {
+    let mut e = Engine::new();
+    stand_ins(&mut e);
+    e.register_double(0x0084_5cc0, |_, a| {
+        panic!("a load warning (a separator missing): {a:x?}");
+    });
+    let length = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    assert_eq!(
+        length as usize,
+        bytes.len() - 4,
+        "the length word, then the buffer"
+    );
+    let g = e.mem.alloc(length.max(4));
+    e.mem.write(g, &bytes[4..]);
+    let out = e.mem.alloc(4);
+    let pattern = |n: u32| (0..n).map(|i| (0x80 + i) as u8).collect::<Vec<u8>>();
+    let mut at = g;
+    for (i, field) in FIELDS.iter().enumerate() {
+        match *field {
+            Field::Data(n) => {
+                assert_eq!(e.mem.bytes(at, n), &pattern(n)[..], "field {i}: the data");
+                assert_eq!(e.mem.u8(at + n), b'|', "field {i}: the separator");
+                at += n + 1;
+            }
+            Field::Text(text) => {
+                let text = text.unwrap_or("").as_bytes();
+                let count = u32::from(e.mem.u16(at));
+                assert_eq!(count as usize, text.len(), "field {i}: the length");
+                assert_eq!(e.mem.u8(at + 2), b'|', "field {i}: the length's separator");
+                at += 3;
+                if count != 0 {
+                    assert_eq!(e.mem.bytes(at, count), text, "field {i}: the text");
+                    assert_eq!(e.mem.u8(at + count), b'|', "field {i}: the separator");
+                    at += count + 1;
+                }
+            }
+            Field::Value(v) => {
+                let taken = e.call(0x0084_6080, &args![at, out]).u32();
+                assert_eq!(e.mem.u32(out), v, "field {i}: the value");
+                at += taken;
+            }
+            Field::Sized(n) => {
+                let taken = e.call(0x0084_6080, &args![at, out]).u32();
+                assert_eq!(e.mem.u32(out), n, "field {i}: the size");
+                at += taken;
+                assert_eq!(
+                    e.mem.bytes(at, n),
+                    &pattern(n)[..],
+                    "field {i}: the sized data"
+                );
+                at += n;
+            }
+        }
+    }
+    assert_eq!(at, g + length, "every byte read");
+}
+
+/// The save buffer's writes and its save to the file, with the save family off (the translations)
+/// and on: the same simulated size while sizing, the same bytes in the file, and every field read
+/// back as written.
+#[test]
+fn buffer_bytes_are_the_same_with_the_family_on_and_off_and_load_back() {
+    let off = buffer_save(Engine::new_untyped_for_test());
+    let on = buffer_save(Engine::new());
+    assert_eq!(
+        off.0, on.0,
+        "the simulated file size and position while sizing"
+    );
+    assert_eq!(off.1, on.1, "the saved bytes");
+    assert_eq!(
+        on.0 .0 as usize,
+        on.1.len() - 4,
+        "sizing counted the buffer's bytes"
+    );
+    assert!(
+        on.1.len() > 0x1_5000,
+        "the buffer grew past its first blocks"
+    );
+    load_back(&on.1);
+}

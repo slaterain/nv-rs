@@ -13,6 +13,12 @@ pub fn keys_equal(_e: &mut Engine, _this: Ptr, left: u32, right: u32) -> u8 {
 /// The virtual slot (byte offset) of the map that answers the bucket index of a key.
 const SLOT_BUCKET_OF_KEY: u32 = 0x04;
 
+/// The step below called by its address, so the save family's native step (`006b7f20`) is the one
+/// that runs.
+fn map_next(e: &mut Engine, this: Ptr, iterator: Ptr, key: Ptr, value: Ptr) {
+    e.call(0x006b_7f20, &args![this, iterator, key, value]);
+}
+
 // Translated from 006b7f20 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map (`navmeshinfomap.cpp`). `thiscall`, `RET 0xc`: the iterator step of
 /// a chained hash map (`this`: vtable, bucket count at +4, bucket array at +8; an entry: next
@@ -523,13 +529,13 @@ pub fn fn_006b7cb0(e: &mut Engine, this: Ptr) -> bool {
         let first = e.call(MAP_FIRST_004B9BA0, &args![world_map]).u32();
         e.mem.set_u32(it, first);
         while e.mem.u32(it) != 0 {
-            fn_006b7f20(e, world_map, Ptr::new(it), Ptr::new(key), Ptr::new(value));
+            map_next(e, world_map, Ptr::new(it), Ptr::new(key), Ptr::new(value));
             let inner = e.mem.u32(value);
             let first = e.call(MAP_FIRST_004B9BA0, &args![inner]).u32();
             e.mem.set_u32(it2, first);
             while e.mem.u32(it2) != 0 {
                 let inner = e.mem.u32(value);
-                fn_006b7f20(
+                map_next(
                     e,
                     Ptr::new(inner),
                     Ptr::new(it2),
@@ -582,7 +588,7 @@ pub fn fn_006b68b0(e: &mut Engine, this: Ptr, flag: u8) {
         let first = e.call(MAP_FIRST_004B9BA0, &args![info_map]).u32();
         e.mem.set_u32(it, first);
         while e.mem.u32(it) != 0 {
-            fn_006b7f20(e, info_map, Ptr::new(it), Ptr::new(key), Ptr::new(value));
+            map_next(e, info_map, Ptr::new(it), Ptr::new(key), Ptr::new(value));
             let info = e.mem.u32(value);
             e.call(INFO_STEP_004534F0, &args![info, 0u32]);
         }
@@ -609,7 +615,7 @@ pub fn fn_006b6b20(e: &mut Engine, this: Ptr) {
         let first = e.call(MAP_FIRST_004B9BA0, &args![info_map]).u32();
         e.mem.set_u32(it, first);
         while e.mem.u32(it) != 0 {
-            fn_006b7f20(e, info_map, Ptr::new(it), Ptr::new(key), Ptr::new(value));
+            map_next(e, info_map, Ptr::new(it), Ptr::new(key), Ptr::new(value));
             let info = e.mem.u32(value);
             if info != 0 {
                 e.call(NAV_MESH_INFO_DELETE, &args![info, 1u32]);
@@ -619,13 +625,13 @@ pub fn fn_006b6b20(e: &mut Engine, this: Ptr) {
         let first = e.call(MAP_FIRST_004B9BA0, &args![world_map]).u32();
         e.mem.set_u32(it, first);
         while e.mem.u32(it) != 0 {
-            fn_006b7f20(e, world_map, Ptr::new(it), Ptr::new(key), Ptr::new(value));
+            map_next(e, world_map, Ptr::new(it), Ptr::new(key), Ptr::new(value));
             let inner = e.mem.u32(value);
             let first = e.call(MAP_FIRST_004B9BA0, &args![inner]).u32();
             e.mem.set_u32(it2, first);
             while e.mem.u32(it2) != 0 {
                 let inner = e.mem.u32(value);
-                fn_006b7f20(
+                map_next(
                     e,
                     Ptr::new(inner),
                     Ptr::new(it2),
@@ -673,7 +679,7 @@ pub fn nav_mesh_info_map_init_item(e: &mut Engine, this: Ptr) {
         let first = e.call(MAP_FIRST_004B9BA0, &args![info_map]).u32();
         e.mem.set_u32(it, first);
         while e.mem.u32(it) != 0 {
-            fn_006b7f20(
+            map_next(
                 e,
                 info_map,
                 Ptr::new(it),
@@ -999,7 +1005,7 @@ pub fn fn_006b7910(e: &mut Engine, this: Ptr, out: Ptr) {
         let first = e.call(MAP_FIRST_004B9BA0, &args![info_map]).u32();
         e.mem.set_u32(it, first);
         while e.mem.u32(it) != 0 {
-            fn_006b7f20(e, info_map, Ptr::new(it), Ptr::new(key), Ptr::new(value));
+            map_next(e, info_map, Ptr::new(it), Ptr::new(key), Ptr::new(value));
             e.call(ARRAY_ADD_007CB2E0, &args![out, value]);
         }
     });
@@ -1367,7 +1373,7 @@ pub fn nav_mesh_info_map_check_map(e: &mut Engine, this: Ptr) {
         let first = e.call(MAP_FIRST_004B9BA0, &args![info_map]).u32();
         e.mem.set_u32(it, first);
         while e.mem.u32(it) != 0 {
-            fn_006b7f20(
+            map_next(
                 e,
                 info_map,
                 Ptr::new(it),
@@ -1536,7 +1542,7 @@ pub fn fn_006b6580(e: &mut Engine, this: Ptr) -> u8 {
             let first = e.call(MAP_FIRST_004B9BA0, &args![info_map]).u32();
             e.mem.set_u32(it, first);
             while e.mem.u32(it) != 0 {
-                fn_006b7f20(e, info_map, Ptr::new(it), Ptr::new(key), Ptr::new(value));
+                map_next(e, info_map, Ptr::new(it), Ptr::new(key), Ptr::new(value));
                 let info = e.mem.u32(value);
                 if e.call(ALWAYS_ZERO_0047C850, &args![info]).u8() != 0 {
                     found = true;
@@ -1551,7 +1557,7 @@ pub fn fn_006b6580(e: &mut Engine, this: Ptr) -> u8 {
         let first = e.call(MAP_FIRST_004B9BA0, &args![info_map]).u32();
         e.mem.set_u32(it2, first);
         while e.mem.u32(it2) != 0 {
-            fn_006b7f20(e, info_map, Ptr::new(it2), Ptr::new(key2), Ptr::new(value2));
+            map_next(e, info_map, Ptr::new(it2), Ptr::new(key2), Ptr::new(value2));
             e.call(NI_POINTER_CONSTRUCT_0042FB00, &args![mesh]);
             let info = e.mem.u32(value2);
             if e.call(INFO_NAV_MESH_00690860, &args![info, mesh]).u8() != 0 {
@@ -1598,7 +1604,7 @@ pub fn fn_006b6740(e: &mut Engine, this: Ptr) {
         let first = e.call(MAP_FIRST_004B9BA0, &args![info_map]).u32();
         e.mem.set_u32(it, first);
         while e.mem.u32(it) != 0 {
-            fn_006b7f20(e, info_map, Ptr::new(it), Ptr::new(key), Ptr::new(value));
+            map_next(e, info_map, Ptr::new(it), Ptr::new(key), Ptr::new(value));
             let info = e.mem.u32(value);
             let size = e.call(INFO_DATA_SIZE_006B4880, &args![info]).u32();
             let block = e.call(ALLOCATE, &args![size]).u32();
@@ -1610,7 +1616,7 @@ pub fn fn_006b6740(e: &mut Engine, this: Ptr) {
         let first = e.call(MAP_FIRST_004B9BA0, &args![info_map]).u32();
         e.mem.set_u32(it, first);
         while e.mem.u32(it) != 0 {
-            fn_006b7f20(e, info_map, Ptr::new(it), Ptr::new(key2), Ptr::new(value2));
+            map_next(e, info_map, Ptr::new(it), Ptr::new(key2), Ptr::new(value2));
             let info = e.mem.u32(value2);
             let size = e
                 .call(INFO_CONNECTIONS_SIZE_006B4E10, &args![info])

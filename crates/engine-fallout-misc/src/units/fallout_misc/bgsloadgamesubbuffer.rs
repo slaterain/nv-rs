@@ -331,7 +331,8 @@ pub fn bgs_load_game_sub_buffer_save_game(e: &mut Engine, this: Ptr, save_buffer
         e.mem.u32(value.addr())
     });
     e.call(SAVE_GAME_VARIABLE_SIZED_VALUE, &args![save_buffer, size]);
-    append_bytes(e, save_buffer, Ptr::new(cursor), size, 1);
+    // By address, so the save family's native append (`00865570`) is the one that runs.
+    e.call(0x0086_5570, &args![save_buffer, cursor, size, 1u8]);
 }
 
 /// The body `00864f20` and `00865020` share: when `form` is a reference
