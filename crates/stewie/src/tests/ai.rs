@@ -210,15 +210,15 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
     ("S0229", "bArmorUpdateFix", Row::at(AI_FIXES, 7)),
     ("S0230", "bDoubleSoundFix", Row::at(AI_FIXES, 18)),
     ("S0241", "bActorGetHeadingTargetFix", Row::at(AI_FIXES, 38)),
-    (
-        "S0660",
-        "bFixExplosionPushDirection",
-        Row::at(AI_FIXES, 39),
-    ),
+    ("S0660", "bFixExplosionPushDirection", Row::at(AI_FIXES, 39)),
     (
         "S0664",
         "bFixKillChallengeSourceWeapon",
         Row::at(AI_FIXES, 40),
     ),
-    ("S0782", "bShootableNonPlayableExplosives", Row::at(AI_FIXES, 41)),
+    (
+        "S0782",
+        "bShootableNonPlayableExplosives",
+        Row::at(AI_FIXES, 41),
+    ),
 ];
