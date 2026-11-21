@@ -116,6 +116,9 @@ pub enum Owner {
     Nvse,
     /// JIP LN NVSE built in (`crates/jip`); it runs after xNVSE, as JIP is xNVSE's plugin.
     Jip,
+    /// JohnnyGuitar NVSE built in (`crates/johnnyguitar`): xNVSE loads its plugins by DLL name, so
+    /// `johnnyguitarnvse.dll` after `jip_nvse.dll` and before `nvse_stewie_tweaks.dll`.
+    JohnnyGuitar,
     /// lStewieAl's Tweaks built in (`crates/stewie`): xNVSE loads its plugins by DLL name, so
     /// `nvse_stewie_tweaks.dll` after `jip_nvse.dll` (and `MCM.dll`) and before `ui_organizer.dll`.
     Stewie,
@@ -125,15 +128,16 @@ pub enum Owner {
 }
 
 impl Owner {
-    /// Its place in the order: rows, then `nvse`, then `jip`, `stewie` and `uio` (the plugins' DLL
-    /// names in order).
+    /// Its place in the order: rows, then `nvse`, then `jip`, `johnnyguitar`, `stewie` and `uio`
+    /// (the plugins' DLL names in order).
     const fn rank(self) -> u8 {
         match self {
             Owner::Row(_) => 0,
             Owner::Nvse => 1,
             Owner::Jip => 2,
-            Owner::Stewie => 3,
-            Owner::Uio => 4,
+            Owner::JohnnyGuitar => 3,
+            Owner::Stewie => 4,
+            Owner::Uio => 5,
         }
     }
 
@@ -142,6 +146,7 @@ impl Owner {
             (Owner::Row(a), Owner::Row(b)) => same_str(a, b),
             (Owner::Nvse, Owner::Nvse)
             | (Owner::Jip, Owner::Jip)
+            | (Owner::JohnnyGuitar, Owner::JohnnyGuitar)
             | (Owner::Stewie, Owner::Stewie)
             | (Owner::Uio, Owner::Uio) => true,
             _ => false,
@@ -1147,8 +1152,9 @@ const fn check_areas(main: &[Entry], areas: &[&[Entry]]) {
         while i < area.len() {
             let row = area[i];
             assert!(
-                row.owners.len() == 1 && row.owners[0].same(Owner::Jip),
-                "an area row is JIP's alone; a seam shared with another owner is a main row"
+                row.owners.len() == 1
+                    && (row.owners[0].same(Owner::Jip) || row.owners[0].same(Owner::JohnnyGuitar)),
+                "an area row has one owner (JIP or JohnnyGuitar); a seam shared with another owner is a main row"
             );
             let mut j = 0;
             while j < main.len() {

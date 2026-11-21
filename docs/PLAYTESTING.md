@@ -173,12 +173,13 @@ Each also has a `[nv-rs Fixes]` key in `Fallout.ini` (`bUncap` ... `bNVSEListGua
 | `NV_STRIP_LOD_WATER` | No distant water under the Strip (patch data) | `host/patch_data.rs` |
 | `NV_DIRECT_FILES` | Direct file access | `host/direct_files.rs` |
 | `NV_COSAVE_KEEP` | Co-save keeps other plugins | `host/fixes.rs` (flag read by `nvse`) |
-| `NV_JIP_INSTALLED` | JIP LN NVSE built in, for testing (off in every preset; in play, Fallout.ini `[nv-rs Fixes] bJIPInstalled=1`; the variable makes a test run) | `host/fixes.rs` (flag read by `jip`) |
+| `NV_JIP_INSTALLED` | JIP LN NVSE built in (on in the fixes preset with MCM and UIO; in play, Fallout.ini `[nv-rs Fixes] bJIPInstalled=0` turns it off; the variable makes a test run) | `host/fixes.rs` (flag read by `jip`) |
 | `NV_JIP_COSAVE_FIX` | JIP co-save fixes | `host/fixes.rs` (flag read by `jip`) |
 | `NV_JIP_VANILLA_CMDS` | JIP vanilla commands | `host/fixes.rs` (flag read by `jip`) |
 | `NV_JIP_GAME_PATCHES` | JIP game patches | `host/fixes.rs` (flag read by `jip`) |
-| `NV_MCM` | The Mod Configuration Menu's plugin built in (off in every preset) | `host/fixes.rs` (flag read by `mcm`) |
-| `NV_UIO` | UI Organizer built in (off in every preset) | `host/fixes.rs` (flag read by `uio`) |
+| `NV_JG_EDITOR_IDS` | JohnnyGuitar's editor ids | `host/fixes.rs` (flag read by `johnnyguitar`) |
+| `NV_MCM` | The Mod Configuration Menu's plugin built in (on in the fixes preset) | `host/fixes.rs` (flag read by `mcm`) |
+| `NV_UIO` | UI Organizer built in (on in the fixes preset) | `host/fixes.rs` (flag read by `uio`) |
 | `NV_NVSE_ERROR_GUARD` | Script error loop guard | `host/fixes.rs` |
 | `NV_NVSE_IMOD_CHECK` | Image-space event form check | `host/fixes.rs` |
 | `NV_NVSE_INVREF_CHECK` | Script reference checks | `host/fixes.rs` |
@@ -228,7 +229,7 @@ None of these is for players.
 | `NV_D3D9_RECORD=FILE` | Every Direct3D 9 command to FILE (`d3d9_stream::wire`), to replay into another backend | off |
 | `NV_D3D9_REPEATS=keep` | A check: sampler states and shader constants set again to the value they hold still go to the backend (by default they are left out: Direct3D 9 makes them no-ops). Compare a run with it against one without by `record_compare --digests`: every draw sees the same state | left out |
 | `NV_DRAW_DIRECT=0` | The world draw's Direct3D 9 calls by address again, the device lock taken for each call. By default (on) the typed draw code calls the device function at once by its slot, with real threads under one hold of the device lock for each half of the world draw (given back whenever the thread waits, handed over when another thread waits for it): the same calls in the same order | on |
-| `NV_D3D9_ONE_PASS=0` | Shader constant sets (`Set*ShaderConstant*`, about 6,000 a frame in a crowded street) and render, texture stage and sampler state sets go through the Direct3D 9 model and then the forwarding to the backend as two steps again, each finding the device's state itself. By default (on) one pass: the registers or the state stored, compared and sent with one look-up. The same model state and the same commands; compare a stepped recording with it against one without (`record_compare --digests`, one exe) | on |
+| `NV_D3D9_ONE_PASS=0` | Shader constant sets (`Set*ShaderConstant*`, about 6,000 a frame in a crowded street), render, texture stage and sampler state sets, `SetTexture`, `SetStreamSource` and the draws go through the Direct3D 9 model and then the forwarding to the backend as two steps again, each finding the device's state itself. By default (on) one pass: the registers or the state stored, compared and sent with one look-up. The same model state and the same commands; compare a stepped recording with it against one without (`record_compare --digests`, one exe) | on |
 | `NV_D3D9_BACKGROUND=1` | The window opens without taking the focus, behind the other windows (scripted runs) | off |
 | `NV_D3D9_HIDDEN=1` | The window is never shown: nothing on any monitor, not even for a moment as it opens, and no taskbar button. The real Direct3D 9 device draws and presents into it as into a shown one and the game sees the same window, so a recorded run is byte for byte the same as with `NV_D3D9_BACKGROUND` (for the scripted runs whose recordings are compared; it wins over `NV_D3D9_BACKGROUND`). Nobody can close such a window: the run ends by its frame count or time limit | off |
 | `NV_SLICE=n` | Stepped threads: calls between turns (0: only at waits and sleeps) | 200000 |
@@ -250,6 +251,7 @@ None of these is for players.
 | `NV_MOVE_TSV`*, `NV_DATA`, `NV_CAPTURE`, `NV_FEET` | Inputs of the ignored live tests (`crates/host/tests`, `crates/engine/tests`) | none |
 | **Frames, sound and logs** | | |
 | `NV_SHOT=DIR[,every_ms]`*, `NV_SHOT_FRAMES=FROM-TO`, `NV_SHOT_LIST`, `NV_SHOT_WGPU=DIR` | Screenshots of the game's frames to DIR; only those presents; a list of presents; the wgpu backend's own folder (on wgpu alone in a window, the frame the window got is captured too, as `wgpu-window-*.bmp`) | off |
+| `NV_HITCH_LOG=0` | Turns the hitch log off. On (the default), every frame of at least 8 ms (6 ms above 250 fps) and twice the typical frame writes one `hitch:` line to the log (where, the frame's stages, the one-off work counted in it, a likely cause) and an F12 report gets the session's lines as `hitches.txt` (`crates/host/src/hitch_log.rs`) | on |
 | `NV_FRAME_LOG=FILE`* | One line per main frame (clock, step, player position), with no per-call cost | off |
 | `NV_STAGE_TIME=1`* | With `NV_FRAME_LOG`: each line also gives the frame's stages on main, the drawing steps after the world pass, the world draw's halves, and the drawing thread's job and waits by join (`crates/engine-core/src/stage_time.rs`) | off |
 | `NV_LOCK_STATS=FILE`*, `NV_REAL_DUMP`* | Real threads: a line per main frame on the game clock and the waits; a dump of thread-local-storage misuse | off |

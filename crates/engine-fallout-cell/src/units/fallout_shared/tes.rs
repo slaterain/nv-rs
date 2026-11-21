@@ -1747,6 +1747,11 @@ pub fn tes_load_grid_cell(
 /// `BaseProcess::GetCurrentHeadTrackTypeString`; the body returns a constant
 /// string pointer, `01011584`).
 pub fn fn_00451cb0(e: &mut Engine, cell: Ptr) -> u32 {
+    // JohnnyGuitar NVSE's getter seam at the call `0x451CBA` (its editor id in place of
+    // `00401280`'s empty text, while its row is on).
+    if let Some(name) = e.site(0x0045_1cba, &[cell.addr()]) {
+        return name;
+    }
     e.call(0x0040_1280, &args![cell]).u32()
 }
 
