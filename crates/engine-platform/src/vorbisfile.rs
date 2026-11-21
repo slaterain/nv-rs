@@ -89,6 +89,156 @@ pub struct Files {
     /// What [`ov_read`] decodes into before it goes to engine memory, kept from one read to the
     /// next (the game reads a stream a few KB at a time, every frame).
     read: Vec<u8>,
+    /// Streams decoded before the game opened them ([`prepare`], combat preload).
+    prepared: Arc<Mutex<Prepared>>,
+    /// The precision the last file was opened at: what [`prepare`] decodes at.
+    last_precision: Option<Precision>,
+}
+
+/// The switch of the decoded-sound cache (`NV_COMBAT_PRELOAD`, off by default): [`prepare`]
+/// decodes, and [`ov_open_callbacks`] answers a stream it holds from what it decoded.
+pub fn preload_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var_os("NV_COMBAT_PRELOAD").is_some_and(|v| !v.is_empty() && v != "0")
+    })
+}
+
+/// The decoded-sound cache's bound: the PCM it holds, all streams together.
+const PREPARED_LIMIT: usize = 64 << 20;
+/// The longest file it decodes ahead (a long voice line is a few hundred KB).
+const PREPARED_FILE_LIMIT: usize = 4 << 20;
+
+/// One stream decoded whole before it was opened: its file's bytes (the key, compared whole, so a
+/// stream is only ever answered from its own bytes), the precision it was decoded at, and the
+/// chunks the decode-ahead worker would have queued, in order, up to its clean end (a stream whose
+/// decode gave an error is not kept).
+struct Decoded {
+    data: Arc<Vec<u8>>,
+    precision: Precision,
+    chunks: Arc<Vec<Vec<u8>>>,
+    bytes: usize,
+}
+
+/// The decoded streams, oldest first, and the files being decoded.
+#[derive(Default)]
+struct Prepared {
+    done: VecDeque<Decoded>,
+    pending: Vec<Arc<Vec<u8>>>,
+    bytes: usize,
+}
+
+impl Prepared {
+    fn find(&self, data: &[u8], precision: Precision) -> Option<Arc<Vec<Vec<u8>>>> {
+        self.done
+            .iter()
+            .find(|d| d.precision == precision && d.data.as_slice() == data)
+            .map(|d| Arc::clone(&d.chunks))
+    }
+
+    fn holds(&self, data: &[u8], precision: Precision) -> bool {
+        self.find(data, precision).is_some()
+            || self.pending.iter().any(|p| p.as_slice() == data)
+    }
+
+    fn keep(&mut self, d: Decoded) {
+        self.bytes += d.bytes;
+        self.done.push_back(d);
+        while self.bytes > PREPARED_LIMIT {
+            let Some(old) = self.done.pop_front() else {
+                break;
+            };
+            self.bytes -= old.bytes;
+        }
+    }
+}
+
+/// Decodes `pcm` whole the way the decode-ahead worker reads it (all the room a block can need),
+/// giving its chunks up to the clean end, or `None` on an error or a panic.
+fn decode_whole(mut pcm: Box<dyn Pcm>, frame: usize) -> Option<Vec<Vec<u8>>> {
+    let mut buffer = vec![0u8; AHEAD_SAMPLES * frame];
+    let mut chunks = Vec::new();
+    loop {
+        let n = pcm.read(&mut buffer);
+        match n {
+            0 => return Some(chunks),
+            n if n < 0 || n as usize >= buffer.len() => return None,
+            n => chunks.push(buffer[..n as usize].to_vec()),
+        }
+    }
+}
+
+/// Combat preload: decodes the Ogg Vorbis file `data` on a host thread and keeps it, so that when
+/// the game opens a file with exactly these bytes its reads are answered at once. At the precision
+/// the game's last open used (none opened yet: nothing is done); a file that is not Ogg Vorbis, is
+/// too long, or fails to decode is left alone, and the game decodes it as before. No game state is
+/// read or written.
+pub fn prepare(e: &mut Engine, data: Vec<u8>) {
+    if !preload_on() || data.len() > PREPARED_FILE_LIMIT {
+        return;
+    }
+    let sound = &mut state!(e).sound.vorbis;
+    let Some(precision) = sound.last_precision else {
+        return;
+    };
+    let prepared = Arc::clone(&sound.prepared);
+    let data = Arc::new(data);
+    {
+        let mut p = prepared.lock().unwrap_or_else(|p| p.into_inner());
+        if p.holds(&data, precision) {
+            return;
+        }
+        p.pending.push(Arc::clone(&data));
+    }
+    let spawned = std::thread::Builder::new()
+        .name("nv-sound-prepare".into())
+        .spawn({
+            let prepared = Arc::clone(&prepared);
+            let data = Arc::clone(&data);
+            move || {
+                qos::thread_started();
+                let chunks = std::panic::catch_unwind(|| {
+                    let file = VorbisFile::open(data.to_vec(), precision).ok()?;
+                    let frame = 2 * file.info().channels.max(1) as usize;
+                    decode_whole(Box::new(file), frame)
+                })
+                .ok()
+                .flatten();
+                let mut p = prepared.lock().unwrap_or_else(|p| p.into_inner());
+                p.pending.retain(|d| !Arc::ptr_eq(d, &data));
+                if let Some(chunks) = chunks {
+                    let bytes = chunks.iter().map(Vec::len).sum::<usize>() + data.len();
+                    p.keep(Decoded {
+                        data,
+                        precision,
+                        chunks: Arc::new(chunks),
+                        bytes,
+                    });
+                }
+            }
+        });
+    if spawned.is_err() {
+        let mut p = prepared.lock().unwrap_or_else(|p| p.into_inner());
+        p.pending.retain(|d| !Arc::ptr_eq(d, &data));
+    }
+}
+
+/// Drops every decoded stream (a game load: the files a fight needs differ).
+pub fn forget_prepared(e: &mut Engine) {
+    let prepared = Arc::clone(&state!(e).sound.vorbis.prepared);
+    let mut p = prepared.lock().unwrap_or_else(|p| p.into_inner());
+    p.done.clear();
+    p.bytes = 0;
+}
+
+/// What a stream answers after its clean end: the decoder's 0, again and again (the decoder's end
+/// is sticky: it has no page left to read).
+struct Ended;
+
+impl Pcm for Ended {
+    fn read(&mut self, _buffer: &mut [u8]) -> i64 {
+        0
+    }
 }
 
 impl std::fmt::Debug for Files {
@@ -199,6 +349,28 @@ impl Ahead {
                 decode(pcm, frame, worker)
             })
             .expect("a host thread for the sound decoder");
+        Ahead {
+            shared,
+            chunk: Vec::new(),
+            at: 0,
+            frame,
+        }
+    }
+
+    /// A stream already decoded whole ([`prepare`]): its chunks and its clean end queued, as the
+    /// worker would have queued them, with no worker. The reads then answer exactly as with
+    /// [`Ahead::start`] on the same file, and after the end as the decoder does (0).
+    fn replay(chunks: &[Vec<u8>], frame: usize) -> Ahead {
+        let shared: Shared = Arc::default();
+        {
+            let mut q = lock(&shared);
+            for chunk in chunks {
+                q.queued += chunk.len();
+                q.events.push_back(Event::Chunk(chunk.clone()));
+            }
+            q.events.push_back(Event::End(0, Box::new(Ended)));
+            q.ended = true;
+        }
         Ahead {
             shared,
             chunk: Vec::new(),
@@ -357,6 +529,19 @@ pub fn ov_open_callbacks(
         data.extend_from_slice(&e.mem.bytes(buffer, n));
     }
     e.mem.free(buffer);
+    // Combat preload: a stream decoded before from exactly these bytes, at this precision.
+    let ready = if preload_on() {
+        let sound = &mut state!(e).sound.vorbis;
+        sound.last_precision = Some(p);
+        let prepared = Arc::clone(&sound.prepared);
+        let found = prepared
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .find(&data, p);
+        found
+    } else {
+        None
+    };
     match VorbisFile::open(data, p) {
         Ok(file) => {
             let i = file.info();
@@ -377,7 +562,9 @@ pub fn ov_open_callbacks(
             let seekable = file.seekable();
             let total = [file.pcm_total(0), file.pcm_total(1)];
             let frame = 2 * words[1].max(1) as usize;
-            let decoder = if decode_ahead(e) {
+            let decoder = if let Some(chunks) = ready {
+                Decoder::Ahead(Ahead::replay(&chunks, frame))
+            } else if decode_ahead(e) {
                 Decoder::Ahead(Ahead::start(Box::new(file), frame, None))
             } else {
                 Decoder::Inline(Box::new(file))
@@ -753,6 +940,89 @@ mod tests {
         let ahead = Ahead::start(Box::new(Script::new(1, &[])), 2, None);
         insert(&mut e, Decoder::Ahead(ahead));
         assert_eq!(reads(&mut e, &[4096, 4096]), [(0, vec![]), (0, vec![])]);
+    }
+
+    /// Combat preload: a stream decoded whole before it was opened and replayed answers every read
+    /// as the decoder inline does, for the game's read pattern and odd lengths, past its end too.
+    #[test]
+    fn a_prepared_stream_answers_the_reads_as_the_decoder_does() {
+        use Step::*;
+        let steps = [
+            Samples(0),
+            Samples(1024),
+            Samples(300),
+            Samples(0),
+            Samples(2048),
+            Samples(512),
+            Samples(1),
+            Samples(8192),
+        ];
+        let lengths: Vec<i32> = [4096, 1, 0, 2, 3, 4, 5, 7, 4097, 100, 6000, 2, 1, 9999]
+            .iter()
+            .copied()
+            .cycle()
+            .take(300)
+            .collect();
+        for channels in [1, 2] {
+            let mut e = Engine::new();
+            insert(
+                &mut e,
+                Decoder::Inline(Box::new(Script::new(channels, &steps))),
+            );
+            let inline = reads(&mut e, &lengths);
+            let chunks =
+                decode_whole(Box::new(Script::new(channels, &steps)), 2 * channels).unwrap();
+            let mut e = Engine::new();
+            insert(&mut e, Decoder::Ahead(Ahead::replay(&chunks, 2 * channels)));
+            let replayed = reads(&mut e, &lengths);
+            assert_eq!(inline, replayed, "{channels} channels");
+            assert!(inline.iter().any(|(n, _)| *n > 0));
+            assert_eq!(inline.last().map(|r| r.0), Some(0), "read past the end");
+        }
+    }
+
+    /// A decode that gives an error is not kept: the game decodes that file itself, as before.
+    #[test]
+    fn a_stream_with_an_error_is_not_prepared() {
+        use Step::*;
+        assert!(decode_whole(Box::new(Script::new(1, &[Samples(10), Error(-3)])), 2).is_none());
+        assert!(decode_whole(Box::new(Script::new(1, &[Error(-131)])), 2).is_none());
+        assert_eq!(
+            decode_whole(Box::new(Script::new(1, &[])), 2),
+            Some(Vec::new())
+        );
+    }
+
+    /// The cache answers only the same bytes at the same precision, and stays within its bound
+    /// by dropping the oldest streams.
+    #[test]
+    fn the_prepared_cache_matches_whole_bytes_and_precision_and_stays_bounded() {
+        let mut p = Prepared::default();
+        let chunk = vec![0u8; 1 << 20];
+        let file = |i: u8| Arc::new(vec![i; 100]);
+        p.keep(Decoded {
+            data: file(1),
+            precision: Precision::Bits53,
+            chunks: Arc::new(vec![chunk.clone()]),
+            bytes: chunk.len() + 100,
+        });
+        assert!(p.find(&[1; 100], Precision::Bits53).is_some());
+        assert!(p.find(&[1; 100], Precision::Bits24).is_none());
+        assert!(p.find(&[1; 99], Precision::Bits53).is_none());
+        let mut other = vec![1u8; 100];
+        other[99] = 2;
+        assert!(p.find(&other, Precision::Bits53).is_none());
+        for i in 2..=80u8 {
+            p.keep(Decoded {
+                data: file(i),
+                precision: Precision::Bits53,
+                chunks: Arc::new(vec![chunk.clone()]),
+                bytes: chunk.len() + 100,
+            });
+        }
+        assert!(p.bytes <= PREPARED_LIMIT);
+        assert!(p.find(&[1; 100], Precision::Bits53).is_none(), "the oldest went");
+        assert!(p.find(&[80; 100], Precision::Bits53).is_some());
     }
 
     /// The game thread of the next test: reads 4096 bytes at a time to the end, into `result`:
