@@ -32,6 +32,8 @@ mod play;
 mod play_unix;
 mod png;
 mod profiles;
+#[cfg_attr(not(windows), allow(dead_code))]
+mod saves;
 mod screen;
 mod session;
 mod settings;

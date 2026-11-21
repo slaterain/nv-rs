@@ -5,7 +5,7 @@
 #   ./play.sh                  start (the first time it finds your game, or asks for its folder)
 #   ./play.sh --game FOLDER    use the game in FOLDER, and remember it
 #   ./play.sh --forget-game    forget the remembered game folder, then start (it asks again)
-#   ./play.sh --import-saves   offer again to copy the saves found in Steam's Proton folder
+#   ./play.sh --import-saves   offer again to copy the saves found in Steam's Proton folder, then stop
 #   ./play.sh --check          only check the game and say whether it can start
 #   ./play.sh --mods           play with mods: those installed with nv-rs and those put in the
 #                              "my mods" folder in nv-rs's own folder (it says where), laid over a
@@ -488,6 +488,11 @@ EOF
     elif [ "$opt_import" = 1 ]; then
         say "No saves were found in Steam's Proton folder or in Heroic's or Lutris's prefixes."
     fi
+fi
+# --import-saves (the launcher's Import saves, as Windows' Play.exe --import-saves): the copy
+# only; the game is started by a plain ./play.sh (or the launcher's Play).
+if [ "$opt_import" = 1 ]; then
+    exit 0
 fi
 if [ "$profile" = mods ] && ! has_own_saves; then
     say "Saves made with mods are kept apart from your other nv-rs saves, in $saves. To copy saves from Steam's Proton folder into them: ./play.sh --mods --import-saves"

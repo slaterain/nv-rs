@@ -104,7 +104,8 @@ they are. A save and its .nvse file are copied together.
   ./play.sh                  start
   ./play.sh --game FOLDER    use the game in FOLDER, and remember it
   ./play.sh --forget-game    forget the remembered game folder (it asks again)
-  ./play.sh --import-saves   offer again to copy your saves from Steam's Proton folder
+  ./play.sh --import-saves   offer again to copy your saves from Steam's Proton folder, then
+                             stop (the launcher's Import saves runs the same)
   ./play.sh --check          only check your game's version and say whether it can start
   ./play.sh --mods           play with mods: the installed ones, then those you put in the "my
                              mods" folder in nv-rs's own folder (as they would go in Data; it
