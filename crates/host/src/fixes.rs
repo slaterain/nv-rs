@@ -54,6 +54,7 @@ pub static FIXES: &[Fix] = &[
     SCRIPT_CYCLE_GUARD,
     SCRIPT_UI_SORT_PATHS,
     SCRIPT_LIST_GUARD,
+    XNVSE_EXTRACT_ARGS,
     SHADER_WARM,
     IO_WAIT_ENDS_ON_COMPLETION,
     crate::half_loaded_move::FIX,
@@ -388,12 +389,14 @@ pub const SCRIPT_NULL_GUARD: Fix = Fix {
     env: "NV_NVSE_NULL_GUARD",
     addresses: &[],
     summary:
-        "ar_Count and ar_GetNth on a missing array answer 0, and a format string's string outside the game's memory ends the text, instead of stopping the game",
+        "ar_Count and ar_GetNth on a missing array answer 0, and a format string's string outside the game's memory ends the text, instead of stopping the game; with lStewieAl's Tweaks' switch node bounds row a switch node whose shown child is not there takes no child's bound",
     install: install_script_null_guard,
 };
 
 fn install_script_null_guard(e: &mut Engine) {
     nvse::commands::array::set_fix(e, nvse::commands::array::NULL_GUARD, true);
+    // Tweaks' slips not copied (S0237's child index), the same guard.
+    e.set_stewie_slip_guard(true);
 }
 
 pub const SCRIPT_CYCLE_GUARD: Fix = Fix {
@@ -420,6 +423,24 @@ pub const SCRIPT_LIST_GUARD: Fix = Fix {
 
 fn install_script_list_guard(e: &mut Engine) {
     nvse::commands::array::set_fix(e, nvse::commands::array::LIST_GUARD, true);
+}
+
+/// xNVSE's argument reader for the game's own commands where they carry an inline expression
+/// (ADR-0016 §5's `xnvse.extract_args`; `nvse::args::set_game_inline`): a line of a game command
+/// with `0xFFFF` (the new script language's arguments, a parenthesised argument compiled at run
+/// time or by xNVSE's GECK) is read by xNVSE's reader, as xNVSE's entry jump reads every line;
+/// a line without one is the exe's read. Off, the exe reads such a line as the game without
+/// xNVSE does: a string argument's length read as -1, a copy of 4 GB, the game's own crash.
+pub const XNVSE_EXTRACT_ARGS: Fix = Fix {
+    name: "game commands read xNVSE's argument expressions",
+    env: "NV_NVSE_EXTRACT_ARGS",
+    addresses: &[],
+    summary: "a game command's argument written as an xNVSE expression (in parentheses, or any argument in the new script language, and in mods compiled with xNVSE's GECK) is compiled and read as xNVSE reads it, inside set and if too; other lines are read by the game's own reader as before; off, such an argument is read by the game's reader, which can crash the game on a string, as without xNVSE",
+    install: install_xnvse_extract_args,
+};
+
+fn install_xnvse_extract_args(e: &mut Engine) {
+    nvse::args::set_game_inline(e, true);
 }
 
 pub const SCRIPT_UI_SORT_PATHS: Fix = Fix {
@@ -535,6 +556,7 @@ const NO_ADDRESS: &[&str] = &[
     SCRIPT_CYCLE_GUARD.name,
     SCRIPT_UI_SORT_PATHS.name,
     SCRIPT_LIST_GUARD.name,
+    XNVSE_EXTRACT_ARGS.name,
     SHADER_WARM.name,
     DRAW_THREAD.name,
 ];
@@ -1843,6 +1865,29 @@ mod tests {
             line.ends_with(&format!(", frame limit 90; threads {PLAY_THREADS}")),
             "{line}"
         );
+    }
+
+    /// The row `xnvse.extract_args` sets the flag `crates/nvse` reads (off until it runs).
+    #[test]
+    fn the_extract_args_row_turns_on_xnvses_reader_for_game_lines() {
+        let mut e = Engine::new();
+        assert!(!nvse::args::game_inline(&mut e));
+        (XNVSE_EXTRACT_ARGS.install)(&mut e);
+        assert!(nvse::args::game_inline(&mut e));
+    }
+
+    /// The missing-data guard row also turns on the guard of lStewieAl's Tweaks' slips not copied
+    /// (S0237's child index): off until it runs.
+    #[test]
+    fn the_missing_data_guard_row_turns_on_the_tweaks_slip_guard() {
+        let mut e = Engine::new();
+        assert!(!e.stewie_slip_guard());
+        (SCRIPT_NULL_GUARD.install)(&mut e);
+        assert!(e.stewie_slip_guard());
+        assert!(nvse::commands::array::fix_on(
+            &e,
+            nvse::commands::array::NULL_GUARD
+        ));
     }
 
     /// EXTENDER-HOOKS R2 and docs/ENGINE_CRATE.md, "Typed code": what a fix overrides is listed, so

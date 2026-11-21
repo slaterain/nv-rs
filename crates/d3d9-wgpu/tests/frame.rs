@@ -78,6 +78,8 @@ static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
 struct Gpu {
     b: WgpuBackend,
     next: u32,
+    /// Every command run, as `NV_D3D9_RECORD` writes them ([`Gpu::recording`]).
+    rec: Option<Vec<u8>>,
     /// Held until the device is gone (fields drop in order: the backend first).
     _turn: std::sync::MutexGuard<'static, ()>,
 }
@@ -114,6 +116,11 @@ impl Gpu {
         Gpu::make_with(size, samples, cache, env, true, false)
     }
 
+    /// As [`Gpu::new`], keeping every command it runs ([`Gpu::rec`]) from its `CreateDevice` on.
+    fn recording(size: u32, samples: u32) -> Option<Gpu> {
+        Gpu::make_full(size, samples, None, &[], true, false, true)
+    }
+
     fn make_with(
         size: u32,
         samples: u32,
@@ -121,6 +128,18 @@ impl Gpu {
         env: &[(&str, &str)],
         threads: bool,
         force: bool,
+    ) -> Option<Gpu> {
+        Gpu::make_full(size, samples, cache, env, threads, force, false)
+    }
+
+    fn make_full(
+        size: u32,
+        samples: u32,
+        cache: Option<std::path::PathBuf>,
+        env: &[(&str, &str)],
+        threads: bool,
+        force: bool,
+        record: bool,
     ) -> Option<Gpu> {
         // A failed test leaves the lock poisoned; the next one still takes its turn.
         let turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
@@ -135,7 +154,7 @@ impl Gpu {
         }
         let present = words(&[size, size, A8R8G8B8, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0]);
         let back = words(&[BACK]);
-        b.execute(Cmd::CreateDevice {
+        let create = Cmd::CreateDevice {
             device: DEVICE,
             focus: 0,
             window: 0,
@@ -143,7 +162,13 @@ impl Gpu {
             present: Data::Bytes(&present),
             back_buffers: Data::Bytes(&back),
             depth_stencil: 0,
+        };
+        let rec = record.then(|| {
+            let mut r = d3d9_stream::wire::header().to_vec();
+            d3d9_stream::wire::encode(&create, &mut r);
+            r
         });
+        b.execute(create);
         for (name, _) in env {
             std::env::remove_var(name);
         }
@@ -156,6 +181,7 @@ impl Gpu {
         let mut g = Gpu {
             b,
             next: 0,
+            rec,
             _turn: turn,
         };
         for (surface, depth, format) in [(RT, false, A8R8G8B8), (DS, true, D24S8)] {
@@ -227,6 +253,9 @@ impl Gpu {
     }
 
     fn run(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+        if let Some(r) = &mut self.rec {
+            d3d9_stream::wire::encode(&cmd, r);
+        }
         self.b.execute(cmd)
     }
 
@@ -5518,4 +5547,353 @@ fn idle_depth_stand_ins_go_and_used_ones_stay() {
         "the stand-in drawn with every frame is the one made at the first, never let go"
     );
     assert_eq!(g.b.device().expect("the device").wgpu_errors(), 0);
+}
+
+/// Each draw's column of the target, every draw's digest and the script's commands as a
+/// recording ([`records_script`]).
+type Script = (Vec<[u8; 4]>, Vec<u64>, Vec<u8>);
+
+/// One clear, then draws into columns of their own of a 16 by 16 target, with the draw records
+/// off or on ([`d3d9_wgpu::device::Device::set_draw_records`]). Between two draws there is no
+/// other command than the change named, so the draw after each change finds the last draw's
+/// record: a texture changed (only the textures' counter moves), a sampler state changed, the same
+/// texture and the same render state set again (the record is used as it is), a render state of
+/// the pipeline changed, then the fixed-function pixel shader: a texture stage state changed, and
+/// a 2D texture replaced by a cube one on its stage. Returns row 0 (each draw's column) and the
+/// digests. The commands are kept as `NV_D3D9_RECORD` writes them.
+fn records_script(records: bool) -> Option<Script> {
+    const PS_TEX: u32 = 0x1602;
+    const BLUE_TEX: u32 = 0x1610;
+    const CUBE: u32 = 0x1620;
+    const COLOROP: u32 = 1;
+    let mut g = Gpu::recording(16, 1)?;
+    {
+        let d = g.b.device().expect("the device");
+        d.set_draw_records(records);
+        d.record_draw_digests(true);
+    }
+    stage_samplers(&mut g);
+    let levels = words(&[BLUE_TEX + 1]);
+    g.run(Cmd::CreateTexture {
+        device: DEVICE,
+        texture: BLUE_TEX,
+        levels: Data::Bytes(&levels),
+        width: 1,
+        height: 1,
+        usage: 0,
+        format: A8R8G8B8,
+        pool: 1,
+    });
+    g.run(Cmd::UploadSurface {
+        surface: BLUE_TEX + 1,
+        row: 4,
+        rows: 1,
+        data: Data::Bytes(&[255, 0, 0, 255]),
+    });
+    // A 1 by 1 cube texture, every face blue.
+    let faces: Vec<u32> = (1..=6).map(|k| CUBE + k).collect();
+    let face_words = words(&faces);
+    g.run(Cmd::CreateCubeTexture {
+        device: DEVICE,
+        texture: CUBE,
+        surfaces: Data::Bytes(&face_words),
+        edge: 1,
+        usage: 0,
+        format: A8R8G8B8,
+        pool: 1,
+    });
+    for &surface in &faces {
+        g.run(Cmd::UploadSurface {
+            surface,
+            row: 4,
+            rows: 1,
+            data: Data::Bytes(&[255, 0, 0, 255]),
+        });
+    }
+    let shader = |g: &mut Gpu, pixel: bool, shader: u32| {
+        g.run(Cmd::SetShader {
+            device: DEVICE,
+            pixel,
+            shader,
+        });
+    };
+    let texture = |g: &mut Gpu, texture: u32| {
+        g.run(Cmd::SetTexture {
+            device: DEVICE,
+            sampler: 0,
+            texture,
+        });
+    };
+    // Column `i`: clip x of the pixel centres is -1 + i / 8 (Direct3D 9's whole coordinates).
+    let mut column = 0u32;
+    let mut draw = |g: &mut Gpu| {
+        let x = -1.0 + column as f32 / 8.0;
+        let tri = floats(&rect(x - 0.0625, x + 0.0625));
+        let offset = 96 * column;
+        column += 1;
+        g.run(Cmd::UploadBuffer {
+            buffer: VB,
+            offset,
+            flags: 0,
+            data: Data::Bytes(&tri),
+        });
+        g.run(Cmd::SetStreamSource {
+            device: DEVICE,
+            stream: 0,
+            buffer: VB,
+            offset,
+            stride: 16,
+        });
+        g.run(Cmd::DrawPrimitive {
+            device: DEVICE,
+            kind: 4,
+            start: 0,
+            count: 2,
+        });
+    };
+    shader(&mut g, false, VS + 2);
+    shader(&mut g, true, PS + 6);
+    g.clear(3, 0, 1.0);
+    // 0: the vertex texture's green and the pixel texture's red.
+    draw(&mut g);
+    // 1: only the pixel texture changes: green and blue.
+    texture(&mut g, BLUE_TEX);
+    draw(&mut g);
+    // 2: a sampler state (point magnification): the group changes, the colour does not.
+    g.run(Cmd::SetSamplerState {
+        device: DEVICE,
+        sampler: 0,
+        kind: 5,
+        value: 1,
+    });
+    draw(&mut g);
+    // 3, 4: the same texture and the same render state set again.
+    texture(&mut g, BLUE_TEX);
+    draw(&mut g);
+    g.state(COLORWRITEENABLE, 0xF);
+    draw(&mut g);
+    // 5: a render state of the pipeline: red, blue and alpha written, not green.
+    g.state(COLORWRITEENABLE, 0xD);
+    draw(&mut g);
+    // 6: all channels again, the red texture and the shader that draws the vertex texture alone.
+    g.state(COLORWRITEENABLE, 0xF);
+    texture(&mut g, PS_TEX);
+    shader(&mut g, true, PS + 5);
+    draw(&mut g);
+    // 7: no pixel shader: the fixed-function stage 0 modulates its texture (red) by the diffuse
+    // (white without one).
+    shader(&mut g, true, 0);
+    draw(&mut g);
+    // 8: a texture stage state: stage 0 takes argument 2 (the diffuse: white).
+    g.stage_state(0, COLOROP, 3);
+    draw(&mut g);
+    // 9: back to modulate.
+    g.stage_state(0, COLOROP, 4);
+    draw(&mut g);
+    // 10: the cube texture on stage 0, nothing else between: the stage's shader samples a cube.
+    texture(&mut g, CUBE);
+    draw(&mut g);
+    let row = g.pixels()[..16].to_vec();
+    let d = g.b.device().expect("the device");
+    assert_eq!(d.wgpu_errors(), 0);
+    let digests = d.take_draw_digests();
+    Some((row, digests, g.rec.take().expect("the commands kept")))
+}
+
+/// The draw records ([`d3d9_wgpu::device::Device::set_draw_records`]) give wgpu what resolving
+/// every draw afresh gives it: the same digest at each draw and the same pixels, with every change
+/// of [`records_script`] between two draws that would otherwise use one record, and each change
+/// is drawn.
+#[test]
+fn draw_records_give_wgpu_what_each_draw_resolved_afresh_gives() {
+    let Some((off_row, off, recording)) = records_script(false) else {
+        return;
+    };
+    let Some((on_row, on, _)) = records_script(true) else {
+        return;
+    };
+    assert_eq!(off.len(), 11, "every draw noted");
+    assert_eq!(on, off, "the digests, draw by draw");
+    assert_eq!(on_row, off_row, "the pixels, draw by draw");
+    let yellow = [0, 255, 255, 255];
+    let cyan = [255, 255, 0, 255];
+    let blue = [255, 0, 0, 255];
+    let green = [0, 255, 0, 255];
+    let red = [0, 0, 255, 255];
+    let white = [255, 255, 255, 255];
+    let mut want = vec![
+        yellow, cyan, cyan, cyan, cyan, blue, green, red, white, red, blue,
+    ];
+    want.resize(16, [0, 0, 0, 0]);
+    assert_eq!(on_row, want);
+    // The same script as a recording through the replay the example runs on the game's
+    // (`replay_draw_digests`): its draws give the same digests off and on, and the ones above.
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let replay = |records| {
+        d3d9_wgpu::replay_draw_digests(&recording, records, 0, u64::MAX, None)
+            .expect("the script's recording")
+            .expect("a GPU adapter, as above")
+            .into_iter()
+            .map(|(d, _)| d)
+            .collect::<Vec<u64>>()
+    };
+    assert_eq!(replay(false), off, "the recording replayed, records off");
+    assert_eq!(replay(true), off, "the recording replayed, records on");
+}
+
+/// A draw into the A8R8G8B8 target, then with nothing between but `SetRenderTarget` a draw into
+/// a 16 by 16 A16B16G16R16F target texture, then with nothing between but a `Clear` of it a third
+/// draw, the draw records off or on. The bytes of the half-float target after its first draw and
+/// after the clear and its second, and the digests.
+fn records_target_script(records: bool) -> Option<(Vec<u8>, Vec<u8>, Vec<u64>)> {
+    const HALF: u32 = 0x1630;
+    let mut g = Gpu::new(16, 1)?;
+    {
+        let d = g.b.device().expect("the device");
+        d.set_draw_records(records);
+        d.record_draw_digests(true);
+    }
+    target_texture(&mut g, HALF, HALF + 1, 16, A16B16G16R16F);
+    g.state(ZENABLE, 0);
+    g.clear(3, 0, 1.0);
+    g.colour([1.0, 0.0, 0.0, 1.0]);
+    g.cover(0.5);
+    g.run(Cmd::SetRenderTarget {
+        device: DEVICE,
+        index: 0,
+        surface: HALF + 1,
+    });
+    g.cover(0.5);
+    let read = |g: &mut Gpu| {
+        let d = g.b.device().expect("the device");
+        d.read_surface_pixels(HALF + 1)
+            .expect("the target's pixels")
+            .2
+    };
+    let first = read(&mut g);
+    g.clear(1, 0, 1.0);
+    g.cover(0.5);
+    let second = read(&mut g);
+    let d = g.b.device().expect("the device");
+    assert_eq!(d.wgpu_errors(), 0);
+    Some((first, second, d.take_draw_digests()))
+}
+
+/// The draw records give wgpu what resolving each draw afresh gives it when only the render
+/// target changes between two draws (its format is in the pipeline's key) and when only a clear
+/// comes between two: the same digests and bytes off and on, and the half-float target red.
+#[test]
+fn draw_records_follow_a_target_change_and_a_clear_between_two_draws() {
+    let Some((off_first, off_second, off)) = records_target_script(false) else {
+        return;
+    };
+    let Some((on_first, on_second, on)) = records_target_script(true) else {
+        return;
+    };
+    assert_eq!(off.len(), 3, "every draw noted");
+    assert_eq!(on, off, "the digests, draw by draw");
+    assert_eq!(on_first, off_first, "the target after its first draw");
+    assert_eq!(
+        on_second, off_second,
+        "the target after the clear and its second draw"
+    );
+    // A16B16G16R16F: red 1.0 (0x3C00), green and blue 0, alpha 1.0, at every pixel.
+    let red = [0x00, 0x3C, 0, 0, 0, 0, 0x00, 0x3C];
+    for bytes in [&on_first, &on_second] {
+        assert_eq!(bytes.len(), 16 * 16 * 8);
+        assert!(bytes.chunks_exact(8).all(|p| p == red), "{:?}", &bytes[..8]);
+    }
+}
+
+/// Two draws into a 1 by 1 target texture that also sample it, nothing between them but the
+/// second's vertices, the draw records off or on: each adds the vertex texture's red (64) to what
+/// it samples, so the second must sample what the first drew (a copy made just before it, not the
+/// copy made before the first). The target's bytes and the digests.
+fn records_sampled_target_script(records: bool) -> Option<(Vec<u8>, Vec<u64>)> {
+    const QUARTER: u32 = 0x1640;
+    const LOOP: u32 = 0x1650;
+    let mut g = Gpu::new(16, 1)?;
+    {
+        let d = g.b.device().expect("the device");
+        d.set_draw_records(records);
+        d.record_draw_digests(true);
+    }
+    stage_samplers(&mut g);
+    // The vertex texture: red 64, the rest 0 (B, G, R, A).
+    let levels = words(&[QUARTER + 1]);
+    g.run(Cmd::CreateTexture {
+        device: DEVICE,
+        texture: QUARTER,
+        levels: Data::Bytes(&levels),
+        width: 1,
+        height: 1,
+        usage: 0,
+        format: A8R8G8B8,
+        pool: 1,
+    });
+    g.run(Cmd::UploadSurface {
+        surface: QUARTER + 1,
+        row: 4,
+        rows: 1,
+        data: Data::Bytes(&[0, 0, 64, 0]),
+    });
+    g.run(Cmd::SetTexture {
+        device: DEVICE,
+        sampler: 257,
+        texture: QUARTER,
+    });
+    target_texture(&mut g, LOOP, LOOP + 1, 1, A8R8G8B8);
+    g.run(Cmd::SetRenderTarget {
+        device: DEVICE,
+        index: 0,
+        surface: LOOP + 1,
+    });
+    g.run(Cmd::SetDepthStencilSurface {
+        device: DEVICE,
+        surface: 0,
+    });
+    g.state(ZENABLE, 0);
+    g.clear(1, 0, 1.0);
+    for (pixel, shader) in [(false, VS + 2), (true, PS + 6)] {
+        g.run(Cmd::SetShader {
+            device: DEVICE,
+            pixel,
+            shader,
+        });
+    }
+    g.run(Cmd::SetTexture {
+        device: DEVICE,
+        sampler: 0,
+        texture: LOOP,
+    });
+    g.cover(0.5);
+    g.cover(0.5);
+    let d = g.b.device().expect("the device");
+    let bytes = d
+        .read_surface_pixels(LOOP + 1)
+        .expect("the target's pixel")
+        .2;
+    assert_eq!(d.wgpu_errors(), 0);
+    Some((bytes, d.take_draw_digests()))
+}
+
+/// The draw records keep no bind group for a draw that samples one of its own colour targets:
+/// the second of two draws of one record samples a copy of what the first drew, records off
+/// and on (red 64 + 64).
+#[test]
+fn draw_records_keep_no_groups_for_a_draw_sampling_its_own_target() {
+    let Some((off_bytes, off)) = records_sampled_target_script(false) else {
+        return;
+    };
+    let Some((on_bytes, on)) = records_sampled_target_script(true) else {
+        return;
+    };
+    assert_eq!(off.len(), 2, "every draw noted");
+    assert_eq!(on, off, "the digests, draw by draw");
+    assert_eq!(
+        off_bytes,
+        [0, 0, 128, 0],
+        "records off: the second draw saw the first's red"
+    );
+    assert_eq!(on_bytes, off_bytes, "records on");
 }

@@ -214,7 +214,7 @@ const RETURN_THIS: u32 = 0x0068_15c0;
 // (asm).
 /// The first block below `node` whose name is the fixed string `name` (compared as pointers, as
 /// JIP compares them), depth first; 0 for none. Walks no deeper than the port's node walks do.
-fn block_by_name_ptr(e: &Engine, node: u32, name: u32, depth: u32) -> u32 {
+pub(crate) fn block_by_name_ptr(e: &Engine, node: u32, name: u32, depth: u32) -> u32 {
     if crate::commands::nif_nodes::too_deep(depth) {
         return 0;
     }
