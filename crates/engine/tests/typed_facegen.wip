@@ -1,0 +1,244 @@
+//! The differential test of the face family (`engine_typed::facegen`) against the translations: a
+//! face geometry (its data at +0xb8 with the vertex count at +8), its locked vertex array (a
+//! stand-in for the lock's start, `00a67410`, answering the case's array and stride), the morphs
+//! (differential: an offset per vertex; statistical: indexed vertices and basis rows) and the base
+//! offsets of the morph extra data (a stand-in for `NiObjectNET::GetExtraData`).
+//!
+//! The arrays are the size of a game head's (1,400 vertices in the biggest case) with values a face
+//! has, and the awkward ones: signed zeros, tiny and huge offsets, a NaN vertex. The weights try zero,
+//! one, between, above one, below zero and a NaN. The translations make several calls by address a
+//! vertex (the strided cursor's read, write and step, the point's scale, add and difference); the
+//! typed loops make none, so those callees are left out of the call comparison (`ignore_calls`);
+//! every vertex byte, every other call and the heap are compared exactly.
+
+use engine as _;
+use engine_core::prelude::*;
+use engine_core::typed::diff::{Case, Diff, Input};
+use engine_typed::facegen::{self, morph};
+
+/// The case's words the stand-ins read: the locked array and its stride, the extra data.
+const TEST: u32 = 0x0300_0000;
+const LOCKED_ARRAY: u32 = TEST;
+const LOCKED_STRIDE: u32 = TEST + 4;
+const EXTRA: u32 = TEST + 8;
+const MARKS: u32 = TEST + 0xc;
+
+/// The per-vertex callees of the translations the typed loops do not make.
+const PER_VERTEX: [u32; 11] = [
+    0x0053_4550, // the cursor's constructor
+    0x0065_6fd0, // the cursor's read
+    0x0065_33f0, // the cursor's write
+    0x0065_7be0, // the cursor's step
+    0x0053_4570, // the indexed read
+    0x0065_b390, // the indexed write
+    0x0045_34f0, // its bounds check (does nothing)
+    0x0045_bb20, // the point's scale
+    0x0063_c8a0, // the point's add
+    0x0043_9ef0, // the points' difference
+    0x0045_6650, // the face's vertex count, asked again each step of the base copy
+];
+
+fn ret(eax: u32) -> Ret {
+    Ret {
+        eax,
+        ..Ret::default()
+    }
+}
+
+fn stand_ins(e: &mut Engine) {
+    e.map(TEST, 0x1000);
+    e.map(0x0101_2000, 0x1000);
+    e.mem.set_u64(0x0101_2060, 0);
+    e.mem.set_u64(0x0101_2070, 1.0f64.to_bits());
+    e.map(0x011d_5000, 0x1000);
+    e.mem.set_u32(0x011d_5b8c, 0x0700_0000);
+    // The lock's start: the case's array and stride, byte 0.
+    e.register(0x00a6_7410, |e, a| {
+        let out = a[1];
+        let array = e.mem.u32(LOCKED_ARRAY);
+        let stride = e.mem.u32(LOCKED_STRIDE);
+        e.mem.set_u32(out, array);
+        e.mem.set_u32(out + 4, stride);
+        e.mem.set_u8(out + 8, 0);
+        ret(0)
+    });
+    // `GetExtraData` with the morph data's name: the case's extra data (or none).
+    e.register(0x00a5_bdd0, |e, a| {
+        assert_eq!(a[1], 0x0700_0000);
+        ret(e.mem.u32(EXTRA))
+    });
+    // `MarkAsChanged`: counted.
+    e.register(0x00a6_7090, |e, a| {
+        assert_eq!(a[1], 1);
+        let n = e.mem.u32(MARKS);
+        e.mem.set_u32(MARKS, n + 1);
+        ret(0)
+    });
+}
+
+/// Float words a face's coordinates and offsets take, with the awkward ones among them.
+fn value(i: u32, k: u32, pattern: u32) -> u32 {
+    let n = i.wrapping_mul(2_654_435_761).wrapping_add(k * 97 + pattern * 13);
+    match n % 23 {
+        0 => 0x8000_0000,                     // -0.0
+        1 => 0,                               // 0.0
+        2 => 0x0000_0001,                     // the smallest subnormal
+        3 => 0x7f7f_ffff,                     // the largest float
+        4 if pattern == 2 => 0x7fc0_0000,     // a NaN
+        _ => ((n % 2001) as f32 / 97.0 - 10.0).to_bits(),
+    }
+}
+
+/// A block of `count` 12-byte points from the pattern.
+fn points(e: &mut Engine, count: u32, pattern: u32, salt: u32) -> u32 {
+    let a = e.mem.alloc(12 * count.max(1));
+    for i in 0..count {
+        for k in 0..3 {
+            e.mem.set_u32(a + 12 * i + 4 * k, value(i + salt, k, pattern));
+        }
+    }
+    a
+}
+
+/// The face geometry with `vertices` vertices, its locked array of that many at `stride`; returns
+/// the geometry.
+fn face(e: &mut Engine, vertices: u32, stride: u32, pattern: u32) -> u32 {
+    let data = e.mem.alloc(0x40);
+    e.mem.set_u16(data + 8, vertices as u16);
+    let geometry = e.mem.alloc(0xc0);
+    e.mem.set_u32(geometry + 0xb8, data);
+    let array = e.mem.alloc(stride * vertices.max(1) + 16);
+    for i in 0..vertices {
+        for k in 0..(stride / 4) {
+            e.mem.set_u32(array + stride * i + 4 * k, value(i, k + 5, pattern));
+        }
+    }
+    e.mem.set_u32(LOCKED_ARRAY, array);
+    e.mem.set_u32(LOCKED_STRIDE, stride);
+    geometry
+}
+
+const WEIGHTS: [u32; 7] = [
+    0,           // 0.0: not applied
+    0x3e80_0000, // 0.25
+    0x3f80_0000, // 1.0
+    0x3fc0_0000, // 1.5: not applied
+    0xbf00_0000, // -0.5: not applied
+    0x7fc0_0000, // a NaN: applied, as in the exe
+    0x0d80_0000, // tiny
+];
+
+/// The sizes the cases try: (vertices, morph count): none, fewer offsets than vertices, more, a
+/// head's.
+const SIZES: [(u32, u32); 4] = [(0, 0), (40, 7), (25, 100), (1400, 1400)];
+
+fn common(d: Diff) -> Diff {
+    d.family(&facegen::FACEGEN)
+        .family(&leaf::LEAVES)
+        .ignore_calls(&PER_VERTEX)
+        .max_calls(200_000)
+}
+
+#[test]
+fn facegen_differential_apply_morph() {
+    common(Diff::new(entry!(
+        0x0066_0860,
+        morph::differential_apply(Ptr<_>, u32, u32, f32)
+    )))
+    .inputs(&[
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Of(&WEIGHTS),
+        Input::Of(&[12, 16, 32]),
+        Input::Of(&[0, 1, 2]),
+        Input::Flag,
+    ])
+    .setup(|e, case: &Case| {
+        stand_ins(e);
+        let (vertices, count) = SIZES[case.word(0) as usize];
+        let stride = case.word(2);
+        let pattern = case.word(3);
+        let geometry = face(e, vertices, stride, pattern);
+        let morph = e.mem.alloc(0x10);
+        e.mem.set_u32(morph + 4, points(e, count, pattern, 7));
+        e.mem.set_u32(morph + 8, count);
+        let object = if case.word(4) == 0 { geometry } else { 0 };
+        vec![morph, object, 0x5555, case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn facegen_statistical_apply_morph() {
+    common(Diff::new(entry!(
+        0x0066_0a90,
+        morph::statistical_apply(Ptr<_>, u32, u32, f32)
+    )))
+    .inputs(&[
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Of(&WEIGHTS),
+        Input::Of(&[12, 32]),
+        Input::Of(&[0, 1, 2]),
+        Input::Of(&[0, 1, 2]),
+    ])
+    .setup(|e, case: &Case| {
+        stand_ins(e);
+        let (vertices, count) = SIZES[case.word(0) as usize];
+        let count = count.min(vertices);
+        let stride = case.word(2);
+        let pattern = case.word(3);
+        let geometry = face(e, vertices, stride, pattern);
+        // The basis: a row per vertex and then the morph's own rows.
+        let rows = vertices + count + 4;
+        let basis = points(e, rows, pattern, 3);
+        let base = e.mem.alloc(0x10);
+        let morph = e.mem.alloc(0x10);
+        let indices = e.mem.alloc(4 * count.max(1));
+        for i in 0..count {
+            // Indices out of order and repeated, inside the vertices.
+            e.mem.set_u32(indices + 4 * i, (i * 7 + 3) % vertices.max(1));
+        }
+        e.mem.set_u32(morph + 4, indices);
+        e.mem.set_u32(morph + 8, count);
+        e.mem.set_u32(morph + 0xc, vertices);
+        // No object; no basis; both.
+        let (object, with_basis) = match case.word(4) {
+            0 => (geometry, true),
+            1 => (0, true),
+            _ => (geometry, false),
+        };
+        e.mem.set_u32(base + 0xc, if with_basis { basis } else { 0 });
+        vec![morph, object, base, case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn facegen_copy_base() {
+    common(Diff::new(entry!(0x0065_3340, morph::copy_base(u32, u32))))
+        .inputs(&[
+            Input::Of(&[0, 1, 2, 3]),
+            Input::Of(&[12, 32]),
+            Input::Of(&[0, 1, 2]),
+            // No extra data; no cursor array; the geometry without its data word; all there.
+            Input::Of(&[0, 1, 2, 3]),
+        ])
+        .setup(|e, case: &Case| {
+            stand_ins(e);
+            let (vertices, _) = SIZES[case.word(0) as usize];
+            let stride = case.word(1);
+            let pattern = case.word(2);
+            let geometry = face(e, vertices, stride, pattern);
+            let extra = e.mem.alloc(0x10);
+            e.mem.set_u32(extra + 0xc, points(e, vertices, pattern, 11));
+            e.mem.set_u32(EXTRA, if case.word(3) == 0 { 0 } else { extra });
+            let cursor = e.mem.alloc(0xc);
+            let array = e.mem.u32(LOCKED_ARRAY);
+            e.mem.set_u32(cursor, if case.word(3) == 1 { 0 } else { array });
+            e.mem.set_u32(cursor + 4, stride);
+            vec![geometry, cursor]
+        })
+        .run()
+        .assert_same();
+}
