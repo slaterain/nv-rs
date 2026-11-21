@@ -109,11 +109,11 @@ console commands it re-exports are copies of the console's own.
 
 ## JIP LN built in
 
-🔨 JIP LN's script commands and game patches, with nothing to install. All are built, but JIP
-answers "not installed" in every preset: it is off by default and can be switched on to test mods
-that need it (`bJIPInstalled` in `Fallout.ini`, or `NV_JIP_INSTALLED`). The per-patch detail is in
+🔨 JIP LN's script commands and game patches, with nothing to install. All are built, and JIP
+answers "installed" in the default fixes preset, together with MCM's plugin and UI Organizer (vanilla
+leaves all three off; `bJIPInstalled=0` in `Fallout.ini` turns JIP off). The per-patch detail is in
 [FIXES.md, "JIP LN NVSE's game patches"](FIXES.md#jip-ln-nvses-game-patches) and
-[FIXES.md, "JIP LN NVSE switched on for testing"](FIXES.md#jip-ln-nvse-switched-on-for-testing).
+[FIXES.md, "JIP LN NVSE switched on"](FIXES.md#jip-ln-nvse-switched-on).
 
 JIP LN's command table (its 1,150 slots at their own numbers) and its co-save are in, and all of
 its commands: 1,116, plus its two version commands, 1,118 in all. The command count on the front
@@ -272,12 +272,12 @@ Camera's patches; a start-up order change; JIP's own start-up; and one that xNVS
 
 🔨 The script commands MCM's menu needs, with nothing to install: its nine commands (MCM 1.5's
 `MCM.dll`, built from its machine code), its menu traits and its mods' INI settings, kept between
-sessions beside the saves. Off until it is tried in the game (`bMCM`, `NV_MCM`).
+sessions beside the saves. On in the fixes preset with JIP, off in vanilla (`bMCM`, `NV_MCM`).
 
 ## UI Organizer (UIO) built in
 
-🔨 UI mods' HUD and menu additions, with nothing to install. Off until it is proven in the game
-(`bUIO`, `NV_UIO`). In so far:
+🔨 UI mods' HUD and menu additions, with nothing to install. On in the fixes preset with JIP,
+off in vanilla (`bUIO`, `NV_UIO`). In so far:
 
 - Its lists: UIO's own `supported.txt` of the UI mods it knows (35 entries) is built in, and a
   copy in `Data\uio\` takes its place; the UI mods' `Data\uio\public` lists, with their
