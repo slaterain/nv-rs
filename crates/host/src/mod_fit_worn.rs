@@ -26,6 +26,7 @@ use crate::fixes::Fix;
 use engine::prelude::*;
 use engine::units::fallout_interface::itemmodmenu::{
     item_mod_menu_do_click, item_mod_menu_init_item_mod_menu, item_mod_menu_item_mod_item,
+    stewie_after_mod_refresh,
 };
 
 /// `ItemModMenu::DoClick` (Xbox PDB).
@@ -127,6 +128,8 @@ fn fit_clicked_mod(e: &mut Engine, this: Ptr, tile: u32) {
     e.call(LIST_REMOVE_ITEM, &args![base + MOD_LIST, highlighted]);
     let mod_item = e.global::<u32>(MOD_ITEM);
     item_mod_menu_init_item_mod_menu(e, mod_item, 0);
+    // `0x783A35`: lStewieAl's Tweaks' S0088 re-equip after the refresh, as in the translation.
+    stewie_after_mod_refresh(e);
     if worn {
         let player = e.global::<u32>(PLAYER);
         e.vcall(player, UPDATE_EQUIPMENT_SLOT, &args![]);
@@ -215,6 +218,11 @@ mod tests {
     const PLAYER_REMOVE: u32 = 0x00c2_0000;
     const PLAYER_UPDATE_EQUIPMENT: u32 = 0x00c2_1000;
     const LIST_HIGHLIGHTED: u32 = 0x00c3_0000;
+    /// The weapon-worn byte the mod menu keeps, `Actor::QueueUnEquipObject` and
+    /// `Actor::QueueEquipObject` (lStewieAl's Tweaks' S0088 re-equip at `0x783A35`).
+    const STEWIE_WORN_FLAG: u32 = 0x011d_9f40;
+    const QUEUE_UNEQUIP: u32 = 0x0088_c790;
+    const QUEUE_EQUIP: u32 = 0x0088_c650;
 
     fn stub(e: &mut Engine, addresses: &[u32]) {
         for &address in addresses {
@@ -244,6 +252,17 @@ mod tests {
     /// question, whether it read the released block, the calls of the equipment update and the
     /// inventory rebuild, and every call the click made, in order.
     fn click(fixes: bool, always: Option<bool>) -> (Vec<bool>, usize, usize, Log) {
+        click_with(fixes, always, false)
+    }
+
+    /// [`click`], with lStewieAl's Tweaks' S0088 (`ITEM_MOD_MENU_KEEPS_EQUIPPED`) on and the weapon
+    /// worn (`011d9f40` = 1) when `s0088`: the weapon's entry is then a real one (form 0x7100,
+    /// count 1, first extra list 0x9300).
+    fn click_with(
+        fixes: bool,
+        always: Option<bool>,
+        s0088: bool,
+    ) -> (Vec<bool>, usize, usize, Log) {
         let mut e = Engine::new();
         if fixes {
             install(&mut e);
@@ -274,7 +293,23 @@ mod tests {
             PLAYER_UPDATE_EQUIPMENT,
         );
         e.set_global(PLAYER, player);
-        e.set_global(MOD_ITEM, 0x7000u32);
+        if s0088 {
+            let entry = e.mem.alloc(0x10);
+            let lists = e.mem.alloc(8);
+            e.mem.set_u32(lists, 0x9300);
+            e.mem.set_u32(entry, lists);
+            e.mem.set_u32(entry + 4, 1);
+            e.mem.set_u32(entry + 8, 0x7100);
+            e.set_global(MOD_ITEM, entry);
+            e.mem.set_u8(STEWIE_WORN_FLAG, 1);
+            e.set_stewie(
+                engine_core::extend::stewie::ITEM_MOD_MENU_KEEPS_EQUIPPED,
+                true,
+            );
+        } else {
+            e.set_global(MOD_ITEM, 0x7000u32);
+        }
+        stub(&mut e, &[QUEUE_UNEQUIP, QUEUE_EQUIP]);
         // An enabled entry, the mod's.
         let slot = e.mem.alloc(4);
         answer(&mut e, WORD_AT_FOUR_007B5370, slot);
@@ -404,6 +439,37 @@ mod tests {
                 worn
             );
         }
+    }
+
+    /// lStewieAl's Tweaks' S0088 with this fix both on: fitting a mod to the worn weapon through
+    /// the fix's copy of the click unequips and equips the weapon once after the menu's rebuild
+    /// (`0x783A35`, form, count, first extra list, flags 1, 0, 1), as the translation's click does;
+    /// with the row off neither call is made.
+    #[test]
+    fn s0088_both_on_the_worn_weapon_is_equipped_again_after_the_rebuild() {
+        let at = |log: &Log, callee: u32| log.iter().position(|(a, _)| *a == callee);
+        for fixes in [true, false] {
+            let (_, _, _, log) = click_with(fixes, None, true);
+            let player = log
+                .iter()
+                .find(|(a, _)| *a == QUEUE_UNEQUIP)
+                .map(|(_, w)| w[0])
+                .expect("unequipped");
+            for callee in [QUEUE_UNEQUIP, QUEUE_EQUIP] {
+                let calls: Vec<_> = log.iter().filter(|(a, _)| *a == callee).collect();
+                assert_eq!(calls.len(), 1, "fixes {fixes}");
+                assert_eq!(calls[0].1[..7], [player, 0x7100, 1, 0x9300, 1, 0, 1]);
+            }
+            let unequip = at(&log, QUEUE_UNEQUIP).unwrap();
+            assert!(unequip < at(&log, QUEUE_EQUIP).unwrap());
+            assert!(unequip > at(&log, LIST_REMOVE_ITEM).unwrap());
+            assert!(
+                unequip > at(&log, 0x0071_8630).unwrap(),
+                "after the rebuild"
+            );
+        }
+        let (_, _, _, log) = click(true, None);
+        assert!(at(&log, QUEUE_UNEQUIP).is_none() && at(&log, QUEUE_EQUIP).is_none());
     }
 
     /// The other clicks are the translation's: the close button without a weapon to re-equip

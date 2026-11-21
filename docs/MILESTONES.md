@@ -104,7 +104,7 @@ JIP's game patches (step 3.9, its changes to the game's own code) are fix rows b
 (`crates/jip/src/game_patches`; per-area seam tables in `engine-core/src/extend/patch_rows`, so several
 can be built at once); the first (3.9a) remembers each dialogue line's topic as JIP does and starts
 every command's result at 0. Like the rest of JIP, they act only once JIP answers "installed", which the row
-`NV_JIP_INSTALLED` (`bJIPInstalled`, off in every preset; step 3.10's first half) switches on to test mods that need JIP.
+`NV_JIP_INSTALLED` (`bJIPInstalled`; step 3.10) switches on: on in the fixes preset with MCM and UIO since the turn-on (after the in-game pair, `measure/jip/TURN-ON.md`).
 Before JIP is switched on, every call from `crates/jip` into the game's functions was checked for its
 argument word count (2026-11-15: 188 calls, one wrong and fixed); `crates/engine/tests/jip_call_arity.rs`
 now checks each call to a constant address against the translation it reaches.
@@ -113,8 +113,7 @@ UI Organizer (UIO 2.30, which UI mods and then Stewie's tweaks need; maintainer,
 in as `crates/uio` (docs/FIXES.md, "UI Organizer"): part 1 (its lists and conditions, the menus patched in
 memory, its reader at `Tile::ReadFile`), part 2 (its XML parser and parse cache, `UIOInjectComponent`
 for JIP's `InjectUIComponent`) and part 3 (its tile operators, the text zoom, the HUD's hardcore texts;
-audit `measure/uio/AUDIT-uio3-unchanged.md`) are a row, off in every preset until proven in the game
-with a UI mod.
+audit `measure/uio/AUDIT-uio3-unchanged.md`) are a row, on in the fixes preset with JIP since the turn-on.
 
 An interim Windows preview (maintainer, 2026-11-06) can be built with `scripts/package-playtest.ps1`:
 a ZIP a player can run with no build, labelled a preview, wgpu remaining the big release. It has only

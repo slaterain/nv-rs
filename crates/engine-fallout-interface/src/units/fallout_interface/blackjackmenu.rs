@@ -364,12 +364,24 @@ pub fn fn_00739970(e: &mut Engine, this: Ptr, flag: u8) {
     e.call(SET_FLOATS_004BC1F0, &args![geometry, zero, zero, last]);
 }
 
+/// The shoe's count after a shuffle: 0x34 a deck, one less with lStewieAl's Tweaks' S0022.29
+/// (the count then names the last card's index).
+fn shoe_count(e: &Engine, decks: u32) -> u32 {
+    let count = decks.wrapping_mul(0x34);
+    if e.stewie(engine_core::extend::stewie::BLACKJACK_SHOE_COUNT) {
+        count.wrapping_sub(1)
+    } else {
+        count
+    }
+}
+
 // Translated from 007399d0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed (`thiscall`): the cards remaining (+0xda0) become the deck count (+0xd9c)
 /// times 0x34.
 pub fn fn_007399d0(e: &mut Engine, this: Ptr) {
     let decks = e.mem.u32(this.addr() + 0xd9c);
-    e.mem.set_u32(this.addr() + 0xda0, decks.wrapping_mul(0x34));
+    // `0x7399E3` (lStewieAl's Tweaks' S0022.29 writes `DEC ECX; MOV EDX,EAX` there).
+    e.mem.set_u32(this.addr() + 0xda0, shoe_count(e, decks));
 }
 
 /// Shows or hides a named object of the table (`004aae30` on +0xdb4, then `00450f90`).
@@ -838,7 +850,9 @@ pub fn fn_00739090(e: &mut Engine, this: Ptr, hand: u32, luck: u8, dealer: u8) -
             && ((dealer != 0 && skill(e) <= 4) || (dealer == 0 && skill(e) >= 6));
         if !lucky {
             let remaining = e.mem.u32(base + 0xda0);
-            e.mem.set_u32(base + 0xda0, remaining.wrapping_sub(1));
+            // `0x739135` (lStewieAl's Tweaks' S0022.28 writes the `SUB EAX,1`'s 1 as 0).
+            let step = u32::from(!e.stewie(engine_core::extend::stewie::BLACKJACK_ONE_CARD_A_DEAL));
+            e.mem.set_u32(base + 0xda0, remaining.wrapping_sub(step));
             let index = e.call(RANDOM_INDEX_00944460, &args![0u32, remaining]).u32();
             e.mem.set_u32(chosen, index);
         } else {
@@ -1354,7 +1368,8 @@ pub fn black_jack_menu_init_casino_data(e: &mut Engine, this: Ptr) -> bool {
             deck += 1;
         }
         let decks = e.mem.u32(base + 0xd9c);
-        e.mem.set_u32(base + 0xda0, decks.wrapping_mul(0x34));
+        // `0x732456` (S0022.29 writes `DEC EAX; MOV ECX,EDX` there).
+        e.mem.set_u32(base + 0xda0, shoe_count(e, decks));
         for i in 0..3 {
             e.mem.set_u32(base + 0x84 + 4 * i, 1);
         }
@@ -4343,6 +4358,40 @@ mod n051_tests {
         assert_eq!(e.mem.u8(this.addr() + 0x78), 0);
     }
 
+    /// Rows S0022.28 and S0022.29 (lStewieAl's Tweaks), with 4 decks: a shuffle (`007399d0`) sets
+    /// the shoe's count to 208 (off) or 207 (S0022.29); a neutral-luck draw takes 2 off it (off)
+    /// or 1 (S0022.28); the cards dealt before a draw would reshuffle (count under 5): 102 with
+    /// both off, 203 with both on (the PR's numbers), 204 and 102 with one each.
+    #[test]
+    fn s0022_28_29_the_blackjack_shoe() {
+        use engine_core::extend::stewie;
+        for (one_card, shoe, start, dealt) in [
+            (false, false, 208u32, 102u32),
+            (true, false, 208, 204),
+            (false, true, 207, 102),
+            (true, true, 207, 203),
+        ] {
+            let mut e = engine();
+            let this = menu(&mut e);
+            e.set_stewie(stewie::BLACKJACK_ONE_CARD_A_DEAL, one_card);
+            e.set_stewie(stewie::BLACKJACK_SHOE_COUNT, shoe);
+            e.register(RANDOM_INDEX_00944460, |_, a| (a[1] / 2).into_ret());
+            e.register(NI_POINTER_COPY_006E5CC0, |_, _| Ret::default());
+            e.mem.set_u32(this.addr() + 0xd9c, 4);
+            e.call(0x0073_99d0, &args![this]);
+            assert_eq!(e.mem.u32(this.addr() + 0xda0), start);
+            let mut deals = 0;
+            while e.mem.i32(this.addr() + 0xda0) >= 5 {
+                let before = e.mem.u32(this.addr() + 0xda0);
+                e.call(0x0073_9090, &args![this, 0u32, 0u32, 0u32]);
+                let taken = before - e.mem.u32(this.addr() + 0xda0);
+                assert_eq!(taken, if one_card { 1 } else { 2 });
+                deals += 1;
+            }
+            assert_eq!(deals, dealt, "S0022.28 {one_card} S0022.29 {shoe}");
+        }
+    }
+
     #[test]
     fn the_deal_gives_two_cards_each() {
         let mut e = engine();
@@ -4465,6 +4514,10 @@ mod n051_tests {
         assert_eq!(e.mem.u32(this.addr() + 0x90), 12);
         assert_eq!(e.mem.u32(this.addr() + 0x90 + 0x10 * 0x33 + 4), 3);
         assert_eq!(calls_to(&e, CREATE_TEXTURE_IMAGE).len(), 0x35);
+        // lStewieAl's Tweaks' S0022.29 (`0x732456`): the count is one less.
+        e.set_stewie(engine_core::extend::stewie::BLACKJACK_SHOE_COUNT, true);
+        assert!(e.call(0x0073_1d70, &args![this]).bool());
+        assert_eq!(e.mem.u32(this.addr() + 0xda0), 0x33);
     }
 
     #[test]
