@@ -306,7 +306,7 @@ pub const JIP_GAME_PATCHES: Fix = Fix {
     env: "NV_JIP_GAME_PATCHES",
     addresses: &[],
     summary:
-        "JIP LN NVSE's fixes of the game's own code (each dialogue line's topic remembered, results that start at 0, ...), once JIP is built in",
+        "JIP LN NVSE's changes to the game's own code, on with JIP; some change play for every player (JIP's hit damage, the V.A.T.S. damage multiplier on the player, vendors' repair up to 100%, 2-second corner messages, Ctrl/Shift quantity keys; docs/FIXES.md lists them all)",
     install: install_jip_game_patches,
 };
 
@@ -2950,6 +2950,18 @@ bSunShadowsCharacters=0
         assert!(!off.is_on(&JIP_INSTALLED));
         assert_eq!(off.preset, Preset::Fixes);
         assert!(off.is_on(&MCM) && off.is_on(&UIO), "their own switches");
+        // MCM's plugin and UI Organizer turn off by their own keys; JIP and the preset stay.
+        for (text, row) in [
+            ("[nv-rs Fixes]\nbMCM=0\n", &MCM),
+            ("[nv-rs Fixes]\nbUIO=0\n", &UIO),
+        ] {
+            let c = with_ini(None, text, &[]);
+            assert!(!c.is_on(row), "{text}");
+            assert!(c.is_on(&JIP_INSTALLED), "{text}");
+            assert_eq!(c.preset, Preset::Fixes, "{text}");
+            let other = if row.env == MCM.env { &UIO } else { &MCM };
+            assert!(c.is_on(other), "{text}");
+        }
         for text in [
             "[nv-rs Fixes]\n;bJIPInstalled=0\n",
             "[nv-rs Fixes]\nbJIPInstall=1\n",

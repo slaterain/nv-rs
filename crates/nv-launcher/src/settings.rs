@@ -121,6 +121,28 @@ fn default_of(key: &str) -> &'static str {
 }
 
 /// Our key's value in the profile's Fallout.ini, else the table's default.
+/// A Testing row's default as the game plays it: an `[nv-rs Fixes]` key follows the preset (off
+/// under `sPreset=vanilla`, the host's rule for a fix row without its line), any other key the
+/// host table's default.
+fn testing_default(files: &Files, section: &str, key: &str) -> &'static str {
+    if section == "nv-rs Fixes"
+        && ours(files, "nv-rs General", "sPreset").eq_ignore_ascii_case("vanilla")
+    {
+        "0"
+    } else {
+        default_of(key)
+    }
+}
+
+/// A Testing row's value: its key in the profile's Fallout.ini, else [`testing_default`].
+fn testing_value(files: &Files, section: &str, key: &str) -> String {
+    ini_value(&files.ini, section, key)
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| testing_default(files, section, key))
+        .trim()
+        .to_string()
+}
+
 fn ours(files: &Files, section: &str, key: &str) -> String {
     ini_value(&files.ini, section, key)
         .filter(|v| !v.trim().is_empty())
@@ -186,9 +208,9 @@ impl Row {
             Row::FrameRateCounter => &["Hidden (F11 shows it)", "Shown (F11 hides it)"],
             Row::GameThreads => &["Side by side (recommended)", "One at a time (slower)"],
             Row::DrawingThread => &["Own thread (recommended)", "Main thread (slower)"],
-            // The Testing rows: the host table's default first.
+            // The Testing rows: the default the game plays with first.
             r => match r.switch() {
-                Some((_, key)) if default_of(key) == "1" => &["On", "Off"],
+                Some((section, key)) if testing_default(files, section, key) == "1" => &["On", "Off"],
                 _ => &["Off", "On"],
             },
         };
@@ -295,7 +317,7 @@ impl Row {
                 }
             }
             r => match r.switch() {
-                Some((section, key)) if ours(files, section, key) == "1" => "On".into(),
+                Some((section, key)) if testing_value(files, section, key) == "1" => "On".into(),
                 _ => "Off".into(),
             },
         }
@@ -583,6 +605,17 @@ mod tests {
         let r = Row::JipBuiltIn.apply(&f, "Off");
         assert_eq!(r.ini, set_key(&f.ini, "nv-rs Fixes", "bJIPInstalled", "0"));
         assert_eq!(Row::JipBuiltIn.current(&r), "Off");
+        // Under the vanilla preset with no key, JIP is off as the game plays it: the row shows
+        // Off, offers Off first, and On writes the key.
+        let v = files("[nv-rs General]\r\nsPreset=vanilla\r\n", "");
+        assert_eq!(Row::JipBuiltIn.current(&v), "Off");
+        assert_eq!(Row::JipBuiltIn.choices(&v, (1, 1)), ["Off", "On"]);
+        let r = Row::JipBuiltIn.apply(&v, "On");
+        assert_eq!(r.ini, set_key(&v.ini, "nv-rs Fixes", "bJIPInstalled", "1"));
+        assert_eq!(Row::JipBuiltIn.current(&r), "On");
+        assert_eq!(Row::JipBuiltIn.apply(&v, "Off"), v, "already off");
+        // The display rows keep the table's default under vanilla.
+        assert_eq!(Row::SunLightFromSky.current(&v), "On");
         assert_eq!(r.prefs, f.prefs);
         assert_eq!(Row::SunLightFromSky.apply(&f, "On"), f);
         assert!(TESTING.iter().all(|r| !ROWS.contains(r)));
