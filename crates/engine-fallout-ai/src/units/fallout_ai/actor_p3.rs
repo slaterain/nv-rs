@@ -23378,8 +23378,8 @@ mod tests {
             e.set_stewie(engine_core::extend::stewie::EXPLOSION_PUSH_DIRECTION, on);
             let world = hit_world(&mut e, false);
             stub_float(&mut e, ACTOR_GETTER_87F9C0, 50.0);
-            let base = object(&mut e, 0x100, &[]);
-            stub(&mut e, ACTOR_BASE_FORM_FN, base.addr());
+            // The base form (`004181e0`, a default double answering 0) is asked only for its
+            // flag test (`00461580`, here no flag).
             stub(&mut e, FORM_TEST_FLAGS, 0);
             let source_position = e.mem.alloc(12);
             let source = object(
