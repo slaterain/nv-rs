@@ -2075,19 +2075,56 @@ mod tests {
         );
         assert_eq!((seen, e.mem.u32(at + 4)), (0x22, 0));
         assert_eq!(detach::word(&e, at + 4), 0x44);
+        // A callee by address that reads every list word in place, with a nested one naming one word inside it: all
+        // words in guest memory for the outer (the nested one finds them there and takes nothing), all taken again
+        // after it with what the callees left.
+        let inner = detach::suspended(&mut e, |e| {
+            assert_eq!(
+                [e.mem.u32(at), e.mem.u32(at + 4), e.mem.u32(at + 8)],
+                [0x11, 0x44, 0x33]
+            );
+            assert!(!lists_here(e), "every word in place");
+            let seen = detach::suspended_for(
+                e,
+                |_| vec![at + 4],
+                |e| {
+                    let seen = e.mem.u32(at + 4);
+                    e.mem.set_u32(at + 4, 0x66);
+                    seen
+                },
+            );
+            assert_eq!(
+                e.mem.u32(at + 4),
+                0x66,
+                "the nested callee's word stays in place"
+            );
+            e.mem.set_u32(at, 0x77);
+            seen
+        });
+        assert_eq!(inner, 0x44);
+        assert_eq!(
+            [e.mem.u32(at), e.mem.u32(at + 4), e.mem.u32(at + 8)],
+            [0, 0, 0x33],
+            "taken again (the word never taken stays in guest memory)"
+        );
+        assert_eq!(
+            [detach::word(&e, at), detach::word(&e, at + 4)],
+            [0x77, 0x66]
+        );
         unserve(&mut e);
-        // Main beside the drawing side's packet reads guest memory.
+        // Main beside the drawing side's packet reads guest memory, and a word main writes meanwhile is main's.
         let packet = detach(&e).expect("handed over");
         assert_eq!(detach::word(&e, at), 0);
         assert!(!lists_here(&e));
+        e.mem.set_u32(at + 4, 0x55);
         assert!(attach(packet).is_ok());
         let _ = end(&mut e);
         assert_eq!(
             [e.mem.u32(at), e.mem.u32(at + 4), e.mem.u32(at + 8)],
-            [0x11, 0x44, 0x33],
-            "the join puts the drawing side's words back"
+            [0x77, 0x55, 0x33],
+            "the join puts the drawing side's words back where main wrote nothing"
         );
-        assert_eq!(detach::word(&e, at), 0x11, "guest memory after the join");
+        assert_eq!(detach::word(&e, at), 0x77, "guest memory after the join");
     }
 
     #[test]
