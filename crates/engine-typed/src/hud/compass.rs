@@ -200,10 +200,12 @@ pub(super) fn narrow(value: f64) -> f32 {
     value as f32
 }
 
-/// `004b3ab0`: `(x - low) / (high - low) * (b - a) + a`, each step a float (the main thread's
-/// precision), in the exe's order.
+/// `004b3ab0`: `(x - low) / (high - low) * (b - a) + a`, in doubles and rounded to a float once at
+/// the end. Each step rounded to a float differs by up to about 20 ulps where `x - low` cancels
+/// (the review of #874's fixed headings found it); the doubles agree with the translation.
 fn interpolate(a: f32, b: f32, low: f32, high: f32, x: f32) -> f32 {
-    (x - low) / (high - low) * (b - a) + a
+    let ratio = (f64::from(x) - f64::from(low)) / (f64::from(high) - f64::from(low));
+    narrow(ratio * (f64::from(b) - f64::from(a)) + f64::from(a))
 }
 
 /// A reference's position (its slot +0x1f4 answers the address of three floats).
