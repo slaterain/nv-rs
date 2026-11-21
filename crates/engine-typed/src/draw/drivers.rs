@@ -83,7 +83,9 @@ pub fn world_draw_first(e: &mut Engine, camera: u32, acc: Ptr<BSShaderAccumulato
 }
 
 /// Runs `f`; while a value packet is open, a stop unwinding out of `f` first closes it (the join: POISON's
-/// scribble put back, the held references given back), so nothing is left scribbled or held.
+/// scribble put back, the held references given back), so nothing is left scribbled or held. On the drawing thread
+/// (a packet cut on main and adopted here) the packet is not closed here, beside main: it goes back to main with the
+/// stop (`cut::hand_back` in the job), and main closes it at the join, after the job has ended.
 #[inline(always)]
 fn with_packet_guard(e: &mut Engine, f: impl FnOnce(&mut Engine)) {
     if !super::capture::is_open(e) {
@@ -92,8 +94,9 @@ fn with_packet_guard(e: &mut Engine, f: impl FnOnce(&mut Engine)) {
     }
     if let Err(stop) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(e))) {
         super::capture::unserve(e);
-        super::cut::forget_adopted();
-        super::cut::join(e);
+        if !super::cut::adopted() {
+            super::cut::join(e);
+        }
         std::panic::resume_unwind(stop);
     }
 }
@@ -631,5 +634,37 @@ mod tests {
             );
             e.call_stack.clear();
         }
+    }
+
+    /// On the drawing thread (the packet cut on main and adopted here): a stop in the half takes the copy off the
+    /// engine but leaves the packet open, for the hand-back to main, which closes it after the job has ended.
+    #[test]
+    fn a_stop_on_the_drawing_thread_hands_the_packet_back_unclosed() {
+        use super::super::cut;
+        let mut e = Engine::new();
+        let (acc, block) = world(&mut e);
+        e.mem.set_u32(acc.addr() + 4, 1);
+        assert!(capture::begin(&e));
+        capture::own(&e, block, 0, 8);
+        capture::set_word(&mut e, block, 0, 0x66);
+        let packet = capture::detach(&mut e).expect("a packet to hand over");
+        assert!(cut::adopt(&mut e, packet).is_ok());
+        capture::pause(&mut e);
+        let stop = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            world_draw_second(&mut e, 0x6000, acc, 1);
+        }));
+        assert!(stop.is_err(), "the stop comes back");
+        assert_eq!(SEEN.with(Cell::take), Some((true, 0x66)));
+        assert!(e.own_view.is_none(), "the copy taken back off the engine");
+        assert!(
+            capture::is_open(&e) && cut::adopted(),
+            "not closed on the drawing thread"
+        );
+        assert_eq!(e.mem.u32(block), 1, "guest memory untouched until the join");
+        let back = cut::hand_back(&mut e).expect("handed back with the stop");
+        cut::join_handed(&mut e, back);
+        assert!(!capture::is_open(&e), "main closed it");
+        assert_eq!(e.mem.u32(block), 0x66, "the draw's own word at the join");
+        e.call_stack.clear();
     }
 }

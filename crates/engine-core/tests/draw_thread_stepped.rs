@@ -259,7 +259,11 @@ fn the_world_draw_runs_after_the_tail_from_the_packet_cut_before_it() {
     e.call_stack.clear();
     e.mem.set_u32(STOP, 0);
     take_drawn();
-    take_joined();
+    assert_eq!(
+        take_joined(),
+        [40],
+        "the stopped job's packet handed back and closed on main"
+    );
     e.mem.set_u32(VALUE, 50);
     draw_thread::first_half(&mut e, 0x6000, 0x8800, 1, 0);
     draw_thread::idle(&mut e);

@@ -413,13 +413,14 @@ fn finish_posted(e: &mut Engine, at: u32) {
     if let Some(us) = clock_moved {
         e.advance_clock_for_join(us, ends_at_post);
     }
+    // A stopped job's packet is closed here too, on main after the job has ended (the drawing side hands it back with
+    // the stop instead of closing it beside main): what the draw did up to its stop lands as serially, and the stop
+    // comes back after.
     let mut close_ns = None;
-    if joined.is_ok() {
-        if let Some(packet) = back {
-            let closing = Instant::now();
-            (hooks.join)(e, packet);
-            close_ns = Some(closing.elapsed().as_nanos() as u64);
-        }
+    if let Some(packet) = back {
+        let closing = Instant::now();
+        (hooks.join)(e, packet);
+        close_ns = joined.is_ok().then(|| closing.elapsed().as_nanos() as u64);
     }
     let wait_ns = start.elapsed().as_nanos() as u64;
     with_run(id, |r| {
