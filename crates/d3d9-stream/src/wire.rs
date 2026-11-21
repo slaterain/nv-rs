@@ -383,17 +383,14 @@ fn renamed(record: &[u8], names: &mut Names, out: &mut Vec<u8>) -> Result<String
 /// layer leaving those out) give the same list, and any difference a draw could see gives another.
 pub fn draw_digests(from: impl std::io::Read) -> Result<Vec<u64>, String> {
     let mut records = Records::new(from)?;
+    let (mut names, mut buf) = (Names::default(), Vec::new());
     let (mut digest, list) = crate::StateDigest::new();
     while let Some(record) = records.next()? {
-        let mut r = Reader {
-            bytes: record,
-            at: 0,
-        };
+        // Objects by their first use, not their handles: a run whose heap gave a buffer another address draws the same.
+        renamed(record, &mut names, &mut buf)?;
+        let mut r = Reader { bytes: &buf, at: 0 };
         let tag = u8::get(&mut r).map_err(|e| e.to_string())?;
         let cmd = Cmd::get(tag, &mut r).map_err(|e| e.to_string())?;
-        if r.at != record.len() {
-            return Err(WireError::Length { at: 0 }.to_string());
-        }
         digest.execute(cmd);
     }
     drop(digest);
@@ -411,12 +408,11 @@ pub fn draw_snapshot(
     n: usize,
 ) -> Result<Option<crate::DrawSnapshot>, String> {
     let mut records = Records::new(from)?;
+    let (mut names, mut buf) = (Names::default(), Vec::new());
     let (mut digest, _list) = crate::StateDigest::stopping_at(n);
     while let Some(record) = records.next()? {
-        let mut r = Reader {
-            bytes: record,
-            at: 0,
-        };
+        renamed(record, &mut names, &mut buf)?;
+        let mut r = Reader { bytes: &buf, at: 0 };
         let tag = u8::get(&mut r).map_err(|e| e.to_string())?;
         let cmd = Cmd::get(tag, &mut r).map_err(|e| e.to_string())?;
         digest.execute(cmd);
