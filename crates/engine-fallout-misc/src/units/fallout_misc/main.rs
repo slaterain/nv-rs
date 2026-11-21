@@ -3443,6 +3443,8 @@ pub fn fn_0086fbc0(e: &mut Engine, this: Ptr, value: u8) {
 /// cell (`00451530`) and `005f36f0` says there is none, refreshes the player's world space
 /// (`00575d70`) and the tracker's (`004fd3e0`).
 pub fn fn_0086fbe0(e: &mut Engine, this: Ptr) {
+    // The hitch log's timer (main only; no effect on the game).
+    let _timed = engine_core::hitch::Timed::main(engine_core::hitch::Count::GridUpdateNs);
     if byte_flag(e, IN_MENU_FLAG)
         || byte_flag(e, 0x011d_8907)
         || main_flag(e, this, MAIN_FREEZE_TIME)

@@ -1382,6 +1382,7 @@ pub fn install(e: &mut Engine, choice: &Choice) {
     for fix in FIXES.iter().filter(|f| choice.is_on(f)) {
         (fix.install)(e);
     }
+    install_loader_walk_limit(e, std::env::var("NV_LOADER_WALK_MS").ok().as_deref());
     if choice.is_on(&DRAW_THREAD) {
         crate::draw_thread::install(e, choice);
     }
@@ -1394,6 +1395,22 @@ pub fn install(e: &mut Engine, choice: &Choice) {
             crate::patch_data::strip_load_with_cell_offsets,
         );
     }
+}
+
+/// `NV_LOADER_WALK_MS=n` (a measuring switch, off unless set, in every preset): the model loader's
+/// walk over its queued references, run every frame before the IO manager's budget, gives up after
+/// `n` ms in play instead of the exe's 5 ([`fn_00448cc0_limited`]). Unset, 0 or not a number:
+/// nothing registered.
+///
+/// [`fn_00448cc0_limited`]: engine::units::fallout_shared::modelloader_p3::fn_00448cc0_limited
+pub fn install_loader_walk_limit(e: &mut Engine, value: Option<&str>) -> Option<u32> {
+    use engine::units::fallout_shared::modelloader_p3::{fn_00448cc0_limited, LOADER_WALK_MS};
+    let ms = value?.trim().parse::<u32>().ok().filter(|&ms| ms > 0)?;
+    LOADER_WALK_MS.store(ms, std::sync::atomic::Ordering::Relaxed);
+    let (at, f) = engine::entry!(0x0044_8cc0, fn_00448cc0_limited(Ptr) -> bool);
+    e.register(at, f);
+    eprintln!("NV_LOADER_WALK_MS: the model loader's walk gives up after {ms} ms a frame in play");
+    Some(ms)
 }
 
 /// The settings file: `NV_SETTINGS` when set; else `settings.ini` beside the program or in the
