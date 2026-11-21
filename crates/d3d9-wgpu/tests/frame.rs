@@ -3748,6 +3748,143 @@ fn a_buffers_handle_made_again_as_another_object_or_destroyed_draws_nothing() {
     assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
 }
 
+/// A sampler's states reach the draws after each change and after a `Reset` (which returns them
+/// to their defaults with no set): a fixed-function quad over the 4 by 4 target samples a 2 by 1
+/// texture (red, green) from u 0 to 2 at the texels' centres, so the top row shows red, green,
+/// then green, green with U clamped and red, green with it wrapped (Direct3D 9's default). The
+/// draws find their bind groups by each sampler's key number, kept for a slot until its states
+/// change. Planted bugs it catches: a slot keeping its number after a state change or a Reset;
+/// a new key given the first key's number; a group made with another key.
+#[test]
+fn a_samplers_states_reach_its_draws_after_a_change_and_a_reset() {
+    let Some(mut g) = Gpu::new(4, 1) else { return };
+    const TEX: u32 = 0x1730;
+    const ADDRESSU: u32 = 1;
+    // The fixed-function state: the movie's, its sampler states (clamped, linear) only if asked.
+    let setup = |g: &mut Gpu, samplers: bool| {
+        g.no_shaders();
+        g.state(27, 0);
+        for (state, value) in [(4, 2), (2, 2), (5, 2), (1, 4)] {
+            g.stage_state(0, state, value);
+        }
+        if samplers {
+            for (state, value) in [(6, 2), (5, 2), (7, 2), (1, 3), (2, 3)] {
+                g.sampler_state(0, state, value);
+            }
+        }
+        g.state(ZENABLE, 0);
+        g.state(ZWRITEENABLE, 0);
+        g.state(CULLMODE, 1);
+        g.state(168, 0xF);
+        // Red, green (B, G, R, X).
+        g.movie_texture(TEX, 2, 1, &[0, 0, 255, 0, 0, 255, 0, 0]);
+    };
+    // The top row: R or G for each pixel (anything else: ?).
+    let draw = |g: &mut Gpu| -> String {
+        g.clear(3, 0, 1.0);
+        let mut v = Vec::new();
+        for (px, py, u, t) in [
+            (-0.5, -0.5, 0.0, 0.0),
+            (-0.5, 3.5, 0.0, 1.0),
+            (3.5, -0.5, 2.0, 0.0),
+            (3.5, 3.5, 2.0, 1.0),
+        ] {
+            v.extend(floats(&[px, py, 0.0, 1.0, u, t]));
+        }
+        g.run(Cmd::SetFvf {
+            device: DEVICE,
+            fvf: XYZRHW_TEX1,
+        });
+        g.run(Cmd::DrawPrimitiveUp {
+            device: DEVICE,
+            kind: 5,
+            count: 2,
+            stride: 24,
+            vertices: Data::Bytes(&v),
+        });
+        g.pixels()[..4]
+            .iter()
+            .map(|p| match (p[2] > 200, p[1] > 200) {
+                (true, false) => 'R',
+                (false, true) => 'G',
+                _ => '?',
+            })
+            .collect()
+    };
+    setup(&mut g, true);
+    assert_eq!(draw(&mut g), "RGGG", "clamped");
+    g.sampler_state(0, ADDRESSU, 1);
+    assert_eq!(draw(&mut g), "RGRG", "wrapped");
+    g.sampler_state(0, ADDRESSU, 3);
+    assert_eq!(draw(&mut g), "RGGG", "clamped again");
+    // Reset: every sampler state back to its default (wrapped), none set after it.
+    let present = words(&[4, 4, A8R8G8B8, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0]);
+    g.run(Cmd::Reset {
+        device: DEVICE,
+        window: 0,
+        present: Data::Bytes(&present),
+        back_buffers: Data::Bytes(&words(&[BACK])),
+        depth_stencil: 0,
+    });
+    g.run(Cmd::SetRenderTarget {
+        device: DEVICE,
+        index: 0,
+        surface: RT,
+    });
+    g.run(Cmd::SetDepthStencilSurface {
+        device: DEVICE,
+        surface: DS,
+    });
+    setup(&mut g, false);
+    assert_eq!(draw(&mut g), "RGRG", "after the Reset");
+    assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
+}
+
+/// One sampler slot's states serve a texture that can be filtered and then one that cannot (a
+/// depth texture) with no state between: each takes its own sampler (wgpu refuses a filtering
+/// sampler for a depth texture's binding, and the submit with it). Planted bug it catches: the
+/// two kinds sharing one key number.
+#[test]
+fn one_samplers_states_serve_a_filterable_texture_then_a_depth_texture() {
+    let Some(mut g) = Gpu::new(4, 1) else { return };
+    const DEPTH_TEX: u32 = 0x1740;
+    stage_samplers(&mut g);
+    for (pixel, shader) in [(false, VS + 2), (true, PS + 6)] {
+        g.run(Cmd::SetShader {
+            device: DEVICE,
+            pixel,
+            shader,
+        });
+    }
+    // Linear filtering, so the filterable texture's sampler filters.
+    for kind in [5, 6] {
+        g.sampler_state(0, kind, 2);
+    }
+    g.clear(3, 0, 1.0);
+    g.cover(0.5);
+    assert_eq!(g.pixels(), vec![[0, 255, 255, 255]; 16], "green + red");
+    let levels = words(&[DEPTH_TEX + 1]);
+    g.run(Cmd::CreateTexture {
+        device: DEVICE,
+        texture: DEPTH_TEX,
+        levels: Data::Bytes(&levels),
+        width: 1,
+        height: 1,
+        usage: 2,
+        format: INTZ,
+        pool: 1,
+    });
+    g.run(Cmd::SetTexture {
+        device: DEVICE,
+        sampler: 0,
+        texture: DEPTH_TEX,
+    });
+    g.clear(3, 0, 1.0);
+    g.cover(0.5);
+    g.pixels();
+    assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
+}
+
 /// With the answers board (the render thread's way to the game's threads), the backend posts each
 /// occlusion count once the GPU has it, through its idle work alone: the same count a reader that
 /// waits gets, for the game's last `END` of the query only; an event query gets none.
