@@ -147,6 +147,30 @@ pub fn fn_00c3dbf0(e: &mut Engine, this: Ptr) -> bool {
     result != 0
 }
 
+/// The budget (milliseconds) [`fn_00c3dbf0_play_budget`] gives the finishing of loads in play: 0 =
+/// the game's own (`iPostProcessMilliseconds:BackgroundLoad`, the word at `01202dac`). The host's
+/// fixes row sets it before the first frame.
+pub static PLAY_BUDGET_MS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// [`fn_00c3dbf0`] with [`PLAY_BUDGET_MS`] as the budget in play (mode 6): the setting's word holds
+/// that value for the length of the call and gets its own value back after it, so the setting
+/// reads as before everywhere else. Any other mode (the game's waits for loads and the loading
+/// screens use the other budget), a call while one runs and a budget of 0 are the translation.
+pub fn fn_00c3dbf0_play_budget(e: &mut Engine, this: Ptr) -> bool {
+    let budget = PLAY_BUDGET_MS.load(std::sync::atomic::Ordering::Relaxed);
+    if budget == 0
+        || e.mem.u8(RUNNING) != 0
+        || e.mem.u32(this.addr().wrapping_add(MODE)) != MODE_SIX
+    {
+        return fn_00c3dbf0(e, this);
+    }
+    let own = e.mem.u32(BUDGET_SIX);
+    e.mem.set_u32(BUDGET_SIX, budget);
+    let result = fn_00c3dbf0(e, this);
+    e.mem.set_u32(BUDGET_SIX, own);
+    result
+}
+
 // Translated from 00c3de80 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map (unit `run_00c3dbf0`): queues `task`. Unless
 /// the mode is 6, a task whose priority byte (bits 16-23 of its key,
@@ -295,6 +319,30 @@ mod tests {
         log.borrow_mut().clear();
         assert!(e.call(0x00c3_dbf0, &args![this]).bool());
         assert!(log.borrow().is_empty());
+    }
+
+    /// The play budget: in mode 6 the call runs with the row's budget and the setting keeps its own
+    /// value; in any other mode, or with no row budget, the game's own.
+    #[test]
+    fn the_play_budget_replaces_the_setting_in_play_only() {
+        use std::sync::atomic::Ordering::Relaxed;
+        // Mode 6 with a 1 ms row budget: 1 * 2.0 = 2 ticks (the setting's 10 would be 20).
+        let (mut e, log, this, _) = runner(3, 1);
+        e.mem.set_u32(this + MODE, 6);
+        PLAY_BUDGET_MS.store(1, Relaxed);
+        fn_00c3dbf0_play_budget(&mut e, Ptr::new(this));
+        assert_eq!(calls(&log, FLOAT_TO_INT64), [vec![2]]);
+        assert_eq!(e.mem.u32(BUDGET_SIX), 10, "the setting keeps its value");
+        // Mode 0 (a wait for loads): the other budget, 20 * 2.0.
+        let (mut e, log, this, _) = runner(3, 1);
+        fn_00c3dbf0_play_budget(&mut e, Ptr::new(this));
+        assert_eq!(calls(&log, FLOAT_TO_INT64), [vec![40]]);
+        // No row budget: the setting's 10 in play.
+        PLAY_BUDGET_MS.store(0, Relaxed);
+        let (mut e, log, this, _) = runner(3, 1);
+        e.mem.set_u32(this + MODE, 6);
+        fn_00c3dbf0_play_budget(&mut e, Ptr::new(this));
+        assert_eq!(calls(&log, FLOAT_TO_INT64), [vec![20]]);
     }
 
     #[test]
