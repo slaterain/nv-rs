@@ -2824,7 +2824,7 @@ pub fn script_get_referenced_object(
     let object = list_item(e, node);
     let variable_id = e.mem.u32(object + 0xc);
     if variable_id != 0 && locals != 0 {
-        let value = script_locals_get_variable(e, Ptr::new(locals), variable_id, this.cast());
+        let value = e.call(0x005a_9140, &args![locals, variable_id, this]).f64();
         let id = e.with_stack(12, |e, buffer| {
             e.mem.set_f64(buffer.addr(), value);
             e.mem.set_u32(buffer.addr() + 8, 0);
@@ -3001,7 +3001,9 @@ pub fn fn_005ac7a0(
     match marker {
         b'G' | b'Z' | b'r' => {
             let index = take_i16(e, code, offset);
-            object = script_get_referenced_object(e, Ptr::new(script), index as i32 as u32, locals);
+            object = e
+                .call(0x005a_c4f0, &args![script, index as i32 as u32, locals])
+                .u32();
             if object == 0 {
                 return false;
             }
@@ -3148,12 +3150,9 @@ pub fn fn_005ac7a0(
     } else {
         let id = take_i16(e, code, offset);
         if matches!(marker, b'f' | b'l' | b's') {
-            let value = script_locals_get_variable(
-                e,
-                Ptr::new(locals_to_use),
-                id as i32 as u32,
-                Ptr::new(script),
-            );
+            let value = e
+                .call(0x005a_9140, &args![locals_to_use, id as i32 as u32, script])
+                .f64();
             e.mem.set_f64(out, value);
             true
         } else {
@@ -3450,12 +3449,12 @@ pub fn script_parse_parameters(
                 return false;
             }
             let object_index = take_i16(e, code, offset);
-            let object = script_get_referenced_object(
-                e,
-                Ptr::new(script),
-                object_index as i32 as u32,
-                locals,
-            );
+            let object = e
+                .call(
+                    0x005a_c4f0,
+                    &args![script, object_index as i32 as u32, locals],
+                )
+                .u32();
             if !form_flag_bit_3(e, script) || object == 0 || e.mem.u32(object + 8) == 0 {
                 return false;
             }

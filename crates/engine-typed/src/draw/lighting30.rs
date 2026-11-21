@@ -1330,3 +1330,580 @@ pub fn setup_stage_textures(e: &mut Engine, this: Ptr, state: Ptr) {
     }
     e.vcall(base, 0x108, &[]);
 }
+
+// Typed from 00bbe020
+/// Lighting 3.0's pass choice (slot 0xf0), `thiscall(shader, pass type)` (not a Ghidra function: typed from its
+/// bytes): the pass [`pass_for_type`] (`00c0abd0`) answers for the type becomes the current pass; the fog-coloured ambient
+/// ([`own::fog_ambient`], which the exe has inlined here); then for the types 0x1e0 and 0x1e1 the counted pointers
+/// +0x30 and +0x34 take the shader's maps +0x6c and +0x70 (the exe's inlined assignment, the new one read again
+/// after the old one's count went down), for every other type `00c663d0` copies +0x74 into +0x30 and +0x78 into
+/// +0x34.
+pub fn select_pass(e: &mut Engine, this: Ptr, pass_type: u32) {
+    let base = this.addr();
+    let pass: u32 = typed_call!(
+        super::FAMILY,
+        0x00c0_abd0,
+        pass_for_type(e, this, pass_type)
+    );
+    own::set_current_pass(e, pass);
+    own::fog_ambient_inline(e);
+    if pass_type == 0x1e0 || pass_type == 0x1e1 {
+        own::assign_counted(e, base.wrapping_add(0x30), base.wrapping_add(0x6c), true);
+        own::assign_counted(e, base.wrapping_add(0x34), base.wrapping_add(0x70), true);
+    } else {
+        own::copy_counted(e, base.wrapping_add(0x30), base.wrapping_add(0x74));
+        own::copy_counted(e, base.wrapping_add(0x34), base.wrapping_add(0x78));
+    }
+}
+
+// Typed from 00bbc5c0
+/// Lighting 3.0's blending (slot 0x80), `thiscall(shader, state)` (not a Ghidra function): nothing in the pass
+/// types 0x1bd to 0x1c3, 0x1cc to 0x1dc, 0x1e0, 0x1e1 and 0x2d8 to 0x2ef; otherwise the shared blending of the state
+/// (`00be1ff0`, the shader family's: the exe's tail jump). Answers what the exe leaves in `EAX`: the pass type when it does
+/// nothing, else 0 (the batch renderer reads no answer).
+pub fn blending(e: &mut Engine, this: Ptr, state: Ptr) -> u32 {
+    let pass_type = packet::rendering_pass_type(e);
+    let none = (0x1cc..=0x1dc).contains(&pass_type)
+        || (0x1bd..=0x1c3).contains(&pass_type)
+        || (0x1e0..=0x1e1).contains(&pass_type)
+        || (0x2d8..=0x2ef).contains(&pass_type);
+    if none {
+        return pass_type;
+    }
+    typed_call!(
+        shader::FAMILY,
+        0x00be_1ff0,
+        accumulator::set_blend_of(e, this.addr(), state.addr())
+    );
+    0
+}
+
+/// The depth-write lock counter (`011ff9dc`, the lock counters' second word) that lighting 3.0's geometry end
+/// lowers by hand.
+const Z_WRITE_COUNTER: u32 = 0x011f_f9dc;
+
+// Typed from 00bbeef0
+/// Lighting 3.0's geometry end (slot 0x8c), `thiscall(shader, state)` (the shader not read; not a Ghidra function):
+/// in the pass types 0x1e0 and 0x1e1 the depth function put back (`00b97e80(3, 0)`); the stencil test off
+/// (`00b98070(0, 0)`) when the state's property 4 has bit 0 of its flags; in the types 0x1d3 to 0x1d6, when the
+/// state's alpha property (no null check, as the exe) has bit 0 of its flags, the depth-write lock counter lowered
+/// and depth writes on (`SetZWriteEnable(1, 0)`).
+pub fn geometry_done(e: &mut Engine, _this: Ptr, state: Ptr) {
+    let pass_type = packet::rendering_pass_type(e);
+    if pass_type == 0x1e0 || pass_type == 0x1e1 {
+        typed_call!(
+            shader::FAMILY,
+            0x00b9_7e80,
+            crate::shader::state::set_z_function(e, 3, 0)
+        );
+    }
+    let block = state.addr();
+    let other = packet::state_property(e, block, 4);
+    if other != 0 && packet::ni_property_flags(e, other) & 1 != 0 {
+        typed_call!(
+            shader::FAMILY,
+            0x00b9_8070,
+            crate::shader::state::set_stencil_enable(e, 0u8, 0)
+        );
+    }
+    if pass_type.wrapping_sub(0x1d3) <= 3 {
+        let alpha = packet::state_property(e, block, 0);
+        if packet::ni_property_flags(e, alpha) & 1 != 0 {
+            let count = capture::own_at::<u32>(e, Z_WRITE_COUNTER).wrapping_sub(1);
+            capture::set_own_at(e, Z_WRITE_COUNTER, count);
+            typed_call!(
+                shader::FAMILY,
+                0x00b9_7e30,
+                crate::shader::state::set_z_write_enable(e, 1u8, 0)
+            );
+        }
+    }
+}
+
+/// The bone constants' switch object lighting 3.0 uploads under (`01201090`: with its byte +8 set, a shader
+/// without its own bone constants still uploads them) and `"BoneMatrix3"` (`010a1cac`).
+const BONE_SWITCH: u32 = 0x0120_1090;
+const BONE_MATRIX_NAME: u32 = 0x010a_1cac;
+
+// Typed from 00bbd000
+/// Lighting 3.0's partition set-up (slot 0x64), `thiscall(shader, eight words: an unread word, the skin instance,
+/// the partition, three unread words, the world transform, an unread word)`: only with a partition, no +0x38 and
+/// either the switch object (`01201090`) present with its byte +8 set or the shader's +0x34 its own bone constants
+/// (+0x70): the renderer's bone matrices for the skin with the world transform (3 registers a bone, the world left
+/// out), then the current pass's constants (+0x5c) get the partition's bones through their slot 0x78: under the
+/// shader's "BoneMatrix3" handle (slot 0x70 of +0x70) when they are its own, else under the switch, the skin's
+/// buffer (+0x28), the partition's 16-bit count (+0x20), the skin's word +0x20 and the partition's bone indices
+/// (+4). Answers 0.
+#[allow(clippy::too_many_arguments)]
+pub fn bone_setup(
+    e: &mut Engine,
+    this: Ptr,
+    _unused_0: u32,
+    skin: u32,
+    partition: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    world: u32,
+    _unused_7: u32,
+) -> u32 {
+    let t = this.addr();
+    if partition == 0 || e.global::<u32>(t.wrapping_add(0x38)) != 0 {
+        return 0;
+    }
+    let switch = capture::own_at::<u32>(e, BONE_SWITCH);
+    let switched = switch != 0 && e.global::<u8>(switch.wrapping_add(8)) != 0;
+    if !switched && e.global::<u32>(t.wrapping_add(0x34)) != e.global::<u32>(t.wrapping_add(0x70)) {
+        return 0;
+    }
+    let renderer = e.global::<u32>(packet::RENDERER);
+    typed_call!(
+        super::FAMILY,
+        0x00e6_fe30,
+        super::skin::bone_matrices(
+            e,
+            Ptr::new(renderer),
+            Ptr::new(skin),
+            Ptr::new(world),
+            0u8,
+            3u32,
+            1u8
+        )
+    );
+    let map = e.global::<u32>(t.wrapping_add(0x70));
+    let matrices = e.global::<u32>(skin.wrapping_add(0x28));
+    let rows = e.global::<u32>(skin.wrapping_add(0x20));
+    let indices = e.global::<u32>(partition.wrapping_add(4));
+    let count = u32::from(e.global::<u16>(partition.wrapping_add(0x20)));
+    let constants = e.global::<u32>(packet::current_pass(e).wrapping_add(0x5c));
+    let entry = if e.global::<u32>(t.wrapping_add(0x34)) == map {
+        e.vcall(map, 0x70, &args![BONE_MATRIX_NAME]).u32()
+    } else {
+        capture::own_at::<u32>(e, BONE_SWITCH)
+    };
+    e.vcall(
+        constants,
+        0x78,
+        &args![entry, matrices, count, rows, indices],
+    );
+    0
+}
+
+/// What lighting 3.0's stage set-ups call by address (none reads or writes the draw's own state; each works on the
+/// pass handed to it): a stage's set-up after its texture (`00bb9640`, `thiscall(shader, stage, property)`), the
+/// rendered texture's `GetTexture` (`004bc320`), the pass constants' setters (`00c0bae0`, `00c0bb20`, `00c0bb50`,
+/// `00c0bba0`, `00c0bc00`, `00c0bcf0`, `thiscall(shader, pass, ...)`; the pair stages `00c0bbd0` are typed: [`pair_stages`]) and the two set-ups of their own
+/// (`00bbdda0`, `00bbdcd0`, `thiscall(shader, property, pass)`).
+const STAGE_SETUP: u32 = 0x00bb_9640;
+const RENDERED_TEXTURE: u32 = 0x004b_c320;
+const CONSTANTS_BAE0: u32 = 0x00c0_bae0;
+const CONSTANTS_BB20: u32 = 0x00c0_bb20;
+const CONSTANTS_BB50: u32 = 0x00c0_bb50;
+const CONSTANTS_BBA0: u32 = 0x00c0_bba0;
+const CONSTANTS_BC00: u32 = 0x00c0_bc00;
+const CONSTANTS_BCF0: u32 = 0x00c0_bcf0;
+const SETUP_DDA0: u32 = 0x00bb_dda0;
+const SETUP_DCD0: u32 = 0x00bb_dcd0;
+/// The fallback texture (`011f9510`), the texture filter setting (`011f91b0`: 3 asks for filter mode 1), the
+/// word the pass type 0x181 puts in entry +0x10 (`011f9530`), the shadow flag constant (`01201c7c`).
+const DEFAULT_TEXTURE: u32 = 0x011f_9510;
+const FILTER_SETTING: u32 = 0x011f_91b0;
+const ENTRY_181_WORD: u32 = 0x011f_9530;
+const SHADOW_FLAG: u32 = 0x0120_1c7c;
+/// A lighting property's light count getter (`00b704b0`, `fastcall(property)`: its 16 bits at +0x68), by address.
+const LIGHT_COUNT: u32 = 0x00b7_04b0;
+
+/// Stage `index` of `pass` (its stages +0x24: the pass's contents, read in place).
+fn stage_of(e: &Engine, pass: u32, index: u32) -> u32 {
+    let stages = e.global::<u32>(pass.wrapping_add(0x24));
+    e.global::<u32>(stages.wrapping_add(index.wrapping_mul(4)))
+}
+
+/// Stage 0 of `pass` takes the word at the property's `[+0xac]`, then the stage's set-up (`00bb9640`).
+fn first_stage(e: &mut Engine, this: u32, pass: u32, property: u32) {
+    let stage = stage_of(e, pass, 0);
+    let source = e.global::<u32>(property.wrapping_add(0xac));
+    let texture = e.global::<u32>(source);
+    own::set_stage_texture(e, stage, texture);
+    e.call(STAGE_SETUP, &args![this, stage, property]);
+}
+
+// Typed from 00c0cd80
+/// Lighting 3.0's stage textures (its slot 0x13c), `thiscall(shader, pass type, property)` (not a Ghidra function:
+/// typed from its bytes). With the current pass read once: unless the type is in 0x1bd to 0x1e1 outside 0x1c4 to
+/// 0x1cb, or in 0x2d8 to 0x2ef, stage 0 takes the property's `[+0xac]` word and stage 1 (when there is one) its
+/// `[+0xb0]` word or the exe's fallback (`011f9510`), each followed by the stage's set-up (`00bb9640`); then the
+/// shadow stage ([`shadow_stage`]). For the types 0x2e0, 0x2e1, 0x2ec, 0x2ed and 0x1d3 to 0x1d6, stage 0 is set
+/// again as at the start.
+pub fn stage_textures(e: &mut Engine, this: Ptr, pass_type: u32, property: u32) {
+    let base = this.addr();
+    let pass = packet::current_pass(e);
+    let skipped = (pass_type.wrapping_sub(0x1bd) <= 0x24
+        && !(0x1c4..=0x1c7).contains(&pass_type)
+        && pass_type.wrapping_sub(0x1c8) > 3)
+        || (0x2d8..=0x2ef).contains(&pass_type);
+    if !skipped {
+        first_stage(e, base, pass, property);
+        let second = stage_of(e, pass, 1);
+        if second != 0 {
+            let source = e.global::<u32>(property.wrapping_add(0xb0));
+            let mut texture = e.global::<u32>(source);
+            if texture == 0 {
+                texture = e.global::<u32>(DEFAULT_TEXTURE);
+            }
+            own::set_stage_texture(e, second, texture);
+            e.call(STAGE_SETUP, &args![base, second, property]);
+        }
+        shadow_stage(e, pass, property);
+    }
+    if matches!(pass_type, 0x2e0 | 0x2e1 | 0x2ec | 0x2ed) || pass_type.wrapping_sub(0x1d3) <= 3 {
+        first_stage(e, base, pass, property);
+    }
+}
+
+/// [`stage_textures`]'s third stage: when the rendered pass's type is 0x1c4 to 0x1c7, the property's light count
+/// (`00b704b0`, by address: its 16 bits at +0x68) is not 0, the rendered pass's first scene light has its
+/// byte +0xec and a shadow map (+0x10c) and the rendered pass its byte 9: stage 2 takes the shadow map's texture
+/// (`GetTexture(0)`), filter mode 1 when the filter setting (`011f91b0`) is 3 else 0, address mode 0, and the shadow
+/// flag constant (`01201c7c`) becomes 1.0 or 0.0 by the property's flag 8 (`004a2020`; `FILD`/`FSTP`).
+fn shadow_stage(e: &mut Engine, pass: u32, property: u32) {
+    if packet::rendering_pass_type(e).wrapping_sub(0x1c4) > 3 {
+        return;
+    }
+    if e.call(LIGHT_COUNT, &args![property]).u16() == 0 {
+        return;
+    }
+    let rendering = packet::rendering_pass(e);
+    let light = packet::rendering_first_light(e);
+    if packet::pass_light_byte(e, light, 0xec) == 0 {
+        return;
+    }
+    let shadow_map = packet::scene_light_word(e, light, 0x10c);
+    if shadow_map == 0 || packet::rendering_pass_byte9(e, rendering) == 0 {
+        return;
+    }
+    let third = stage_of(e, pass, 2);
+    let texture = e.call(RENDERED_TEXTURE, &args![shadow_map, 0u32]).u32();
+    own::set_stage_texture(e, third, texture);
+    let mode = u32::from(e.global::<u32>(FILTER_SETTING) == 3);
+    typed_call!(
+        shader::FAMILY,
+        0x00e7_def0,
+        crate::shader::state::set_filter_mode(e, Ptr::new(third), mode)
+    );
+    typed_call!(
+        shader::FAMILY,
+        0x00e7_de90,
+        crate::shader::state::set_address_modes(e, Ptr::new(third), 0)
+    );
+    let flagged: bool = typed_call!(
+        crate::render::FAMILY,
+        0x004a_2020,
+        crate::render::passes::has_flag(e, property, 8)
+    );
+    let value = if flagged { ONE } else { 0 };
+    own::set_constant_word(e, SHADOW_FLAG, value);
+}
+
+/// Entry `slot` (a byte offset into the pass's entries +0x24) of `pass` given `value` at +8.
+fn set_entry(e: &mut Engine, pass: u32, slot: u32, value: u32) {
+    let entries = e.global::<u32>(pass.wrapping_add(0x24));
+    let entry = e.global::<u32>(entries.wrapping_add(slot));
+    e.set_global(entry.wrapping_add(8), value);
+}
+
+/// The word at `at` of the object at the property's `offset` (its texture sources).
+fn source_word(e: &Engine, property: u32, offset: u32, at: u32) -> u32 {
+    let source = e.global::<u32>(property.wrapping_add(offset));
+    e.global::<u32>(source.wrapping_add(at))
+}
+
+/// One step of [`stage_constants`]'s lists.
+#[derive(Clone, Copy)]
+enum ConstantStep {
+    Bae0,
+    Bb20,
+    Bb50,
+    Bbd0,
+    Mapped,
+    Entry18,
+}
+
+/// [`stage_constants`]'s lists for the types 0x182 to 0x1b8 (the exe's jump table `00c0d0cc` with the bytes
+/// `00c0d110`, read from the exe).
+fn constant_steps(pass_type: u32) -> &'static [ConstantStep] {
+    use ConstantStep::{Bae0, Bb20, Bb50, Bbd0, Entry18, Mapped};
+    match pass_type {
+        0x182 | 0x183 | 0x18a | 0x18b | 0x191 | 0x192 | 0x199 | 0x19a => &[Bae0],
+        0x186 | 0x187 | 0x18c | 0x18d | 0x195 | 0x196 | 0x19b | 0x19c => &[Entry18],
+        0x1a0 | 0x1a1 | 0x1a8 | 0x1a9 | 0x1af | 0x1b0 | 0x1b7 | 0x1b8 => &[Bbd0, Bae0],
+        0x1a4 | 0x1a5 | 0x1aa | 0x1ab | 0x1b3 | 0x1b4 | 0x1b9 | 0x1ba => &[Entry18, Bbd0],
+        0x19d | 0x19e | 0x1a6 | 0x1a7 | 0x1ac | 0x1ad | 0x1b5 | 0x1b6 => &[Bbd0],
+        0x190 => &[Bb20],
+        0x19f | 0x1ae => &[Bb20, Bbd0],
+        0x1a2 | 0x1b1 => &[Bbd0, Mapped],
+        0x184 | 0x193 => &[Mapped],
+        0x1a3 | 0x1b2 => &[Bbd0, Bb50],
+        0x185 | 0x194 => &[Bb50],
+        _ => &[],
+    }
+}
+
+// Typed from 00c0cf10
+/// Lighting 3.0's stage constants (its slot 0x140), `thiscall(shader, pass type, property)` (not a Ghidra function:
+/// typed from its bytes). With the current pass read once: types 0xe and 0xf run `00bbdda0(property, pass)`; 0x181
+/// sets the pass's entries +0x10 (the exe's word `011f9530`) and +0x14 (the property's `[+0xb4]` word); 0x182 to
+/// 0x1ba run the setters of the exe's jump table ([`constant_steps`]: the entry +0x10 and +0x14 from the property's
+/// `[+0xac]` and `[+0xb0]` objects' word +4, the entry +0x18 from its `[+0xb4]` word); 0x1bd to 0x1c3 the setters
+/// `00c0bc00` (with the type), the emittance stage ([`emittance_stage`]) and `00c0bcf0`; 0x1cc, 0x1ce and 0x1d0
+/// `00c0bba0`; 0x1e0 and 0x1e1 `00bbdcd0(property, pass)`; other types: nothing.
+pub fn stage_constants(e: &mut Engine, this: Ptr, pass_type: u32, property: u32) {
+    let base = this.addr();
+    let pass = packet::current_pass(e);
+    if pass_type <= 0x181 {
+        if pass_type == 0x181 {
+            let word = e.global::<u32>(ENTRY_181_WORD);
+            set_entry(e, pass, 0x10, word);
+            let value = source_word(e, property, 0xb4, 0);
+            set_entry(e, pass, 0x14, value);
+        } else if pass_type == 0xe || pass_type == 0xf {
+            e.call(SETUP_DDA0, &args![base, property, pass]);
+        }
+        return;
+    }
+    match pass_type {
+        0x1bd..=0x1c3 => {
+            e.call(CONSTANTS_BC00, &args![base, pass, property, pass_type]);
+            typed_call!(
+                super::FAMILY,
+                0x00c0_bc90,
+                emittance_stage(e, this, pass, property)
+            );
+            e.call(CONSTANTS_BCF0, &args![base, pass, property, 0u32]);
+            return;
+        }
+        0x1e0 | 0x1e1 => {
+            e.call(SETUP_DCD0, &args![base, property, pass]);
+            return;
+        }
+        0x1cc | 0x1ce | 0x1d0 => {
+            e.call(CONSTANTS_BBA0, &args![base, pass, property]);
+            return;
+        }
+        _ => {}
+    }
+    for step in constant_steps(pass_type) {
+        match step {
+            ConstantStep::Bae0 => {
+                e.call(CONSTANTS_BAE0, &args![base, pass, property, 4u32]);
+            }
+            ConstantStep::Bb20 => {
+                e.call(CONSTANTS_BB20, &args![base, pass, property]);
+            }
+            ConstantStep::Bb50 => {
+                e.call(CONSTANTS_BB50, &args![base, pass, property, 1u32]);
+            }
+            ConstantStep::Bbd0 => {
+                typed_call!(super::FAMILY, 0x00c0_bbd0, pair_stages(e, this, pass));
+            }
+            ConstantStep::Mapped => {
+                let first = source_word(e, property, 0xac, 4);
+                set_entry(e, pass, 0x10, first);
+                let second = source_word(e, property, 0xb0, 4);
+                set_entry(e, pass, 0x14, second);
+            }
+            ConstantStep::Entry18 => {
+                let value = source_word(e, property, 0xb4, 0);
+                set_entry(e, pass, 0x18, value);
+            }
+        }
+    }
+}
+
+/// The emittance stage's constants (`01201bac`: 1.0 with the property's emittance texture, 0.0 with the fallback;
+/// `01201ba8`: the property's +0x30, through `FLD`/`FSTP`, so quieted) and the fallback texture for it (`011f9514`).
+const EMITTANCE_ON: u32 = 0x0120_1bac;
+const EMITTANCE_VALUE: u32 = 0x0120_1ba8;
+const EMITTANCE_FALLBACK: u32 = 0x011f_9514;
+
+// Typed from 00c0bc90
+/// Lighting 3.0's emittance stage, `thiscall(shader, pass, property)`: stage 3 of the pass takes what the property's
+/// slot 0xf4 answers for (5, 0), the emittance constant 1.0; without one the exe's fallback (`011f9514`) and 0.0;
+/// then the stage's set-up (`00bb9640`) and the emittance value the property's +0x30 (the packet's).
+pub fn emittance_stage(e: &mut Engine, this: Ptr, pass: u32, property: u32) {
+    let texture = e.vcall(property, 0xf4, &args![5u32, 0u32]).u32();
+    let stage = stage_of(e, pass, 3);
+    own::set_constant_word(e, EMITTANCE_ON, ONE);
+    let texture = if texture == 0 {
+        own::set_constant_word(e, EMITTANCE_ON, 0);
+        e.global::<u32>(EMITTANCE_FALLBACK)
+    } else {
+        texture
+    };
+    own::set_stage_texture(e, stage, texture);
+    e.call(STAGE_SETUP, &args![this.addr(), stage, property]);
+    let value = engine_core::x87::x87_quiet_bits(capture::word(e, property, 0x30));
+    own::set_constant_word(e, EMITTANCE_VALUE, value);
+}
+
+/// Lighting 3.0's pass table (`01200ec0` on, a pass a word, in Group C's statics: the draw's own state, read through
+/// the packet).
+const PASS_TABLE: u32 = 0x0120_0ec0;
+
+/// What [`pass_for_type`] does for a pass type (the exe's switch: `0xa` to `0xf` through the table `00c0b7a8`, 0x178
+/// its own case, `0x17f` to `0x2ed` through the bytes `00c0b970` into the table `00c0b7c0`; decoded from the exe):
+/// the shader's field whose word goes into its counted pointer +0x28, the pass's place in the pass table, and
+/// whether the pass is read after the assignment rather than before it.
+fn pass_case(pass_type: u32) -> Option<(u32, u32, bool)> {
+    Some(match pass_type {
+        0xa => (0x7c, 0x4, false),
+        0xb => (0x8c, 0x8, false),
+        0xc => (0x84, 0xc, false),
+        0xd => (0x94, 0x10, false),
+        0xe => (0x7c, 0x14, false),
+        0xf => (0x8c, 0x18, false),
+        0x178 => (0x7c, 0x0, false),
+        0x17f => (0x7c, 0x1c, false),
+        0x180 => (0x8c, 0x20, false),
+        0x181 => (0x84, 0x24, false),
+        0x182 => (0x7c, 0x28, false),
+        0x183 => (0x7c, 0x2c, false),
+        0x184 => (0x7c, 0x30, false),
+        0x185 => (0x8c, 0x34, false),
+        0x186 => (0x7c, 0x38, false),
+        0x187 => (0x8c, 0x3c, false),
+        0x188 => (0x84, 0x40, false),
+        0x189 => (0x8c, 0x44, false),
+        0x18a => (0x84, 0x48, false),
+        0x18b => (0x84, 0x4c, false),
+        0x18c => (0x84, 0x50, false),
+        0x18d => (0x94, 0x54, false),
+        0x18e => (0x7c, 0x58, false),
+        0x18f => (0x8c, 0x5c, false),
+        0x190 => (0x84, 0x60, false),
+        0x191 => (0x7c, 0x64, false),
+        0x192 => (0x7c, 0x68, false),
+        0x193 => (0x7c, 0x6c, false),
+        0x194 => (0x8c, 0x70, false),
+        0x195 => (0x7c, 0x74, false),
+        0x196 => (0x8c, 0x78, false),
+        0x197 => (0x84, 0x7c, false),
+        0x198 => (0x94, 0x80, false),
+        0x199 => (0x84, 0x84, false),
+        0x19a => (0x84, 0x88, false),
+        0x19b => (0x84, 0x8c, false),
+        0x19c => (0x94, 0x90, false),
+        0x19d => (0x7c, 0x94, false),
+        0x19e => (0x8c, 0x98, false),
+        0x19f => (0x84, 0x9c, false),
+        0x1a0 => (0x7c, 0xa0, false),
+        0x1a1 => (0x7c, 0xa4, false),
+        0x1a2 => (0x7c, 0xa8, false),
+        0x1a3 => (0x8c, 0xac, false),
+        0x1a4 => (0x7c, 0xb0, false),
+        0x1a5 => (0x8c, 0xb4, false),
+        0x1a6 => (0x84, 0xb8, false),
+        0x1a7 => (0x94, 0xbc, false),
+        0x1a8 => (0x84, 0xc0, false),
+        0x1a9 => (0x84, 0xc4, false),
+        0x1aa => (0x84, 0xc8, false),
+        0x1ab => (0x94, 0xcc, false),
+        0x1ac => (0x7c, 0xd0, false),
+        0x1ad => (0x8c, 0xd4, false),
+        0x1ae => (0x84, 0xd8, false),
+        0x1af => (0x7c, 0xdc, false),
+        0x1b0 => (0x7c, 0xe0, false),
+        0x1b1 => (0x7c, 0xe4, false),
+        0x1b2 => (0x8c, 0xe8, false),
+        0x1b3 => (0x7c, 0xec, false),
+        0x1b4 => (0x8c, 0xf0, false),
+        0x1b5 => (0x84, 0xf4, false),
+        0x1b6 => (0x94, 0xf8, false),
+        0x1b7 => (0x84, 0xfc, false),
+        0x1b8 => (0x84, 0x100, false),
+        0x1b9 => (0x84, 0x104, false),
+        0x1ba => (0x94, 0x108, false),
+        0x1bb => (0x7c, 0x10c, false),
+        0x1bc => (0x84, 0x110, false),
+        0x1bd => (0x7c, 0x114, false),
+        0x1be => (0x7c, 0x118, false),
+        0x1bf => (0x84, 0x11c, false),
+        0x1c0 => (0x84, 0x120, false),
+        0x1c1 => (0x8c, 0x124, false),
+        0x1c2 => (0x94, 0x128, false),
+        0x1c3 => (0x7c, 0x12c, false),
+        0x1c4 => (0x7c, 0x130, false),
+        0x1c5 => (0x84, 0x134, false),
+        0x1c6 => (0x8c, 0x138, false),
+        0x1c7 => (0x8c, 0x13c, false),
+        0x1c8 => (0x7c, 0x140, true),
+        0x1c9 => (0x84, 0x144, true),
+        0x1ca => (0x8c, 0x148, false),
+        0x1cb => (0x94, 0x14c, false),
+        0x1cc => (0x7c, 0x150, true),
+        0x1cd => (0x84, 0x150, true),
+        0x1ce => (0x8c, 0x154, false),
+        0x1cf => (0x8c, 0x154, false),
+        0x1d0 => (0x7c, 0x158, true),
+        0x1d1 => (0x7c, 0x15c, true),
+        0x1d2 => (0x8c, 0x160, false),
+        0x1d3 => (0x7c, 0x164, false),
+        0x1d4 => (0x84, 0x168, false),
+        0x1d5 => (0x8c, 0x16c, false),
+        0x1d6 => (0x94, 0x170, false),
+        0x1d7 => (0x7c, 0x174, true),
+        0x1d8 => (0x84, 0x178, true),
+        0x1d9 => (0x8c, 0x17c, false),
+        0x1da => (0x94, 0x180, false),
+        0x1db => (0x7c, 0x184, false),
+        0x1dc => (0x8c, 0x188, false),
+        0x1dd => (0x7c, 0x18c, true),
+        0x1de => (0x8c, 0x190, false),
+        0x1df => (0x7c, 0x194, true),
+        0x1e0 => (0x7c, 0x198, false),
+        0x1e1 => (0x8c, 0x19c, false),
+        0x2da => (0x7c, 0x1a0, false),
+        0x2db => (0x8c, 0x1a4, false),
+        0x2e0 => (0x7c, 0x1a8, false),
+        0x2e1 => (0x8c, 0x1ac, false),
+        0x2e6 => (0x84, 0x1b0, false),
+        0x2e7 => (0x94, 0x1b4, false),
+        0x2ec => (0x84, 0x1b8, false),
+        0x2ed => (0x94, 0x1bc, false),
+        _ => return None,
+    })
+}
+
+// Typed from 00c0abd0
+/// Lighting 3.0's pass for a pass type, `thiscall(shader, pass type)`: for a type of its switch ([`pass_case`]) the
+/// shader's field goes into its counted pointer +0x28 (`00a5f860`) and the type's pass word is answered (read before
+/// or after the assignment, as the exe reads it); 0 for any other type.
+pub fn pass_for_type(e: &mut Engine, this: Ptr, pass_type: u32) -> u32 {
+    let Some((field, place, after)) = pass_case(pass_type) else {
+        return 0;
+    };
+    let base = this.addr();
+    let word = e.global::<u32>(base.wrapping_add(field));
+    let before = if after {
+        0
+    } else {
+        capture::own_at::<u32>(e, PASS_TABLE + place)
+    };
+    own::set_counted(e, base.wrapping_add(0x28), word);
+    if after {
+        capture::own_at::<u32>(e, PASS_TABLE + place)
+    } else {
+        before
+    }
+}
+
+// Typed from 00c0bbd0
+/// Lighting 3.0's pair stages, `thiscall(shader, pass)` (the shader not read): the pass's stages 2 and 3 take the pair
+/// of textures (the packet's: the cut takes them).
+pub fn pair_stages(e: &mut Engine, _this: Ptr, pass: u32) {
+    for k in 0..2u32 {
+        let stage = stage_of(e, pass, 2 + k);
+        let texture = packet::pair_texture(e, k);
+        own::set_stage_texture(e, stage, texture);
+    }
+}

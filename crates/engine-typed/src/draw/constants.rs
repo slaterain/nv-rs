@@ -3,7 +3,7 @@
 //! call for each constant they upload. A constant goes to the entry's own buffer when it has one,
 //! otherwise to the device (condition 2: the constants the next draw reads).
 
-use super::own;
+use super::{capture, own};
 use engine_core::ptr::Ptr;
 use engine_core::Engine;
 
@@ -24,11 +24,12 @@ const ENTRY_COUNT: u32 = 0x20;
 const ENTRY_SIZE: u32 = 0x28;
 const ENTRY_DATA: u32 = 0x30;
 
-/// The device of the shader's renderer.
+/// The device of the shader's renderer: the renderer here is its render-state cache, whose device word (+0x10f8) the cut
+/// takes with the cache as the draw's own state, so it is read through the packet.
 #[inline(always)]
 fn device(e: &Engine, shader: u32) -> u32 {
     let renderer = e.mem.u32(shader.wrapping_add(0x28));
-    e.mem.u32(renderer.wrapping_add(RENDERER_DEVICE))
+    capture::own_at::<u32>(e, renderer.wrapping_add(RENDERER_DEVICE))
 }
 
 /// The entry's constant kind (the table's word for the low byte of its flags).
