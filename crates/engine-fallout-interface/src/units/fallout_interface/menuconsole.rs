@@ -1504,7 +1504,12 @@ fn idle_tag(e: &mut Engine, ebp: u32, interface: u32) {
     let text = at(ebp, frame::TAG_TEXT);
     e.call(STRING_CONSTRUCT, &args![text]);
     let form_id = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, object));
-    let name = e.call(0x0055_d520, &args![object]).u32();
+    // JohnnyGuitar NVSE's seam at the call `0x71B748` (the editor id for a reference with no
+    // name, while its row is on).
+    let name = match e.site(0x0071_b748, &[object]) {
+        Some(name) => name,
+        None => e.call(0x0055_d520, &args![object]).u32(),
+    };
     e.call(STRING_FORMAT, &args![text, TAG_FORMAT, name, form_id]);
     let key = e.vcall(object, 0x1d0, &args![]).u32();
     let mut found = e.call(0x0065_3270, &args![TAG_LOOKUP_TABLE, key]).u32();
@@ -1915,6 +1920,50 @@ mod tests {
             node = e.mem.u32(node);
         }
         out
+    }
+
+    /// `tag` (`Idle`'s object under the cursor): JohnnyGuitar NVSE's seam at the call `0x71B748`
+    /// gives the name it prints (its full name or editor id), the object given; with no handler,
+    /// the reference's full name (`0055d520`).
+    #[test]
+    fn the_tag_line_names_the_object_through_the_jg_seam() {
+        use engine_core::extend::{Owner, SiteSlot};
+        for with_seam in [true, false] {
+            let (mut e, _) = console_engine();
+            let vtable = e.mem.alloc(0x200);
+            e.mem.set_u32(vtable + 0x1d0, 0x0350_01d0);
+            e.register(0x0350_01d0, |_, _| ret(0x55));
+            let object = e.mem.alloc(0x40);
+            e.mem.set_u32(object, vtable);
+            e.mem.set_u32(object + 0xc, 0x1234);
+            e.register_double(0x0070_31c0, move |_, _| ret(object));
+            e.register(0x0055_d520, |_, _| ret(0x5555));
+            e.register(0x0065_3270, |_, _| ret(0x0777));
+            e.register(STRING_FORMAT, |_, _| Ret::default());
+            e.register(0x00a1_0c00, |_, _| Ret::default());
+            if with_seam {
+                e.on_site(SiteSlot::new(Owner::JohnnyGuitar, 0x0071_b748), |e, a| {
+                    (e.mem.u32(a[0] + 0xc) == 0x1234).then_some(0x6666)
+                });
+            }
+            let stack = e.mem.alloc(0x3000);
+            let ebp = stack + 0x2000;
+            e.call_log = Some(vec![]);
+            idle_tag(&mut e, ebp, 0x9000);
+            let log = e.call_log.take().unwrap();
+            let formats: Vec<&Vec<u32>> = log
+                .iter()
+                .filter(|(at, _)| *at == STRING_FORMAT)
+                .map(|(_, a)| a)
+                .collect();
+            assert_eq!(formats.len(), 1);
+            let want = if with_seam { 0x6666 } else { 0x5555 };
+            assert_eq!(
+                formats[0][..4],
+                [at(ebp, frame::TAG_TEXT), TAG_FORMAT, want, 0x1234],
+                "{with_seam}"
+            );
+        }
     }
 
     #[test]

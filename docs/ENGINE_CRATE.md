@@ -433,7 +433,8 @@ speed gate passed (G1, 2026-11-06: Goodsprings +7.1%, Doc's room +3.0%). It is n
 `pathing`, `shader`, `crt` and `dispatch` are on, and since their gates `render` (2026-11-09), `draw`, `scene`,
 `particles`, `collision` and `multibound` (2026-11-10), and on their tests and reviews `animation`, `draw_f` and
 `anim_keys` (2026-11-11: no comparison runs for native code), `process` and `lights` (2026-11-13) and, since its gate,
-`geometry` (2026-11-16) (below); `NV_TYPED=off` turns every family off, and
+`geometry` (2026-11-16) (below), and on its tests `setup` (2026-11-21: the frame's set-up drivers before the
+world is culled, `crates/engine-typed/src/setup`); `NV_TYPED=off` turns every family off, and
 `<family>:off` one; `geometry` (below) is on since its gate (2026-11-16). A family merged off stays off until its
 gate, and `NV_TYPED=<family>` turns it on. A run compared call for call with the original's record (nv-trace's `NV_TRACE_OUT`,
 `NV_TRACE_LIST`) has every family off unless `NV_TYPED` says otherwise (`typed::switch_for`).
@@ -672,7 +673,12 @@ cut, to find the geometry it lights: `ShadowSceneLight::AddObject` (`00ba0110`),
 (`00b9f5b0`) and by its radius (`00b9f6a0`), the add of a lit geometry to the light's list (`00b9f480`) and the two bound
 tests (`00b9bbb0`, `00b9dae0`). Main thread only ([`Threads::Main`]); the bound tests' distances are native `f32` in the
 exe's order, the square root `f32::sqrt` in place of the CRT's. About 0.2 ms a frame in the lit, crowded street (the
-profile of 2026-11-11). Its tests are `crates/engine/tests/typed_lights.rs`. On by the native-code rule.
+profile of 2026-11-11). Since 2026-11-21 also the light lists' slow loops with the same answers in linear work: the
+lighting property's light sort `ResortLights` (`00b70390`, each light's luminance worked out once instead of at every
+comparison), the shadow light's weighted placement (`00b9d150`) and the dominant light direction at the camera
+(`00b5bca0`), whose walks over the scene node's lights keep their place instead of starting from the list's head for
+each light. Those three keep the exact x87 helpers (the sort also runs on the loading thread) and are tested under both
+control words. Its tests are `crates/engine/tests/typed_lights.rs`. On by the native-code rule.
 And `scripts` (same crate, id 11): what every running script line goes through for its values, every mod's scripts
 included. The expression evaluator `CExpression` (the constructor `00593490`, the conversion to postfix `00593500`,
 the tokenizer `00593870`, `Eval` `00593db0`, its error `005934d0` and its two stacks `00594b60` to `00594d40`), the
@@ -685,6 +691,15 @@ calls of it now go by address too), as do `atol`, `atof`, the commands' handlers
 rounded to 24 bits on the main thread as its x87 precision rounds. Its tests are `crates/engine/tests/typed_scripts.rs`
 (generated expressions over every operator and operand kind, parse mode, xNVSE's buffer and command call, JIP's
 operators). On by the native-code rule.
+And `save` (same crate, id 16): the work of a save's one frame (a quicksave is one frame of about 100 ms in the port),
+first the form id map every form reference a save writes goes through: an id's save index got or added (`00846c90`)
+and resolved back (`00846d20`), the word maps' `SetAt` (`00844700`) with the new item (`00844a70`, `006f99e0`) and
+`SetValue` (`00863840`) their vtable holds, the created-id test (`00469860`), the three-byte index
+(`BGSNumericIDIndex`: `0084eaf0`, `00853500`, `00853570`) and the save buffer's two `SaveFormID`s (`00865db0`,
+`00865df0`). The map's lookup (`00853130`) is the dispatch family's. The buffer's append (`00865570`) and the
+allocator stay called by address, as does any map whose vtable holds other functions. Threads: both (`SetAt` is
+every word map's insert, the AI's combat maps included); integer work only. Its tests are
+`crates/engine/tests/typed_save.rs`. On by the native-code rule.
 And `geometry` (same crate, id 23): the code that reads and writes `NiGeometryData`'s arrays (positions, normals
 with the binormals and tangents after them, colours, texture coordinates), typed so that stage 2 can keep those
 arrays outside the 32-bit space (about 23 to 40 MB of the guest heap on the census route, and what mesh mods grow).

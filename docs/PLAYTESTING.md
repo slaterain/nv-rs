@@ -173,12 +173,13 @@ Each also has a `[nv-rs Fixes]` key in `Fallout.ini` (`bUncap` ... `bNVSEListGua
 | `NV_STRIP_LOD_WATER` | No distant water under the Strip (patch data) | `host/patch_data.rs` |
 | `NV_DIRECT_FILES` | Direct file access | `host/direct_files.rs` |
 | `NV_COSAVE_KEEP` | Co-save keeps other plugins | `host/fixes.rs` (flag read by `nvse`) |
-| `NV_JIP_INSTALLED` | JIP LN NVSE built in, for testing (off in every preset; in play, Fallout.ini `[nv-rs Fixes] bJIPInstalled=1`; the variable makes a test run) | `host/fixes.rs` (flag read by `jip`) |
+| `NV_JIP_INSTALLED` | JIP LN NVSE built in (on in the fixes preset with MCM and UIO; in play, Fallout.ini `[nv-rs Fixes] bJIPInstalled=0` turns it off; the variable makes a test run) | `host/fixes.rs` (flag read by `jip`) |
 | `NV_JIP_COSAVE_FIX` | JIP co-save fixes | `host/fixes.rs` (flag read by `jip`) |
 | `NV_JIP_VANILLA_CMDS` | JIP vanilla commands | `host/fixes.rs` (flag read by `jip`) |
 | `NV_JIP_GAME_PATCHES` | JIP game patches | `host/fixes.rs` (flag read by `jip`) |
-| `NV_MCM` | The Mod Configuration Menu's plugin built in (off in every preset) | `host/fixes.rs` (flag read by `mcm`) |
-| `NV_UIO` | UI Organizer built in (off in every preset) | `host/fixes.rs` (flag read by `uio`) |
+| `NV_JG_EDITOR_IDS` | JohnnyGuitar's editor ids | `host/fixes.rs` (flag read by `johnnyguitar`) |
+| `NV_MCM` | The Mod Configuration Menu's plugin built in (on in the fixes preset) | `host/fixes.rs` (flag read by `mcm`) |
+| `NV_UIO` | UI Organizer built in (on in the fixes preset) | `host/fixes.rs` (flag read by `uio`) |
 | `NV_NVSE_ERROR_GUARD` | Script error loop guard | `host/fixes.rs` |
 | `NV_NVSE_IMOD_CHECK` | Image-space event form check | `host/fixes.rs` |
 | `NV_NVSE_INVREF_CHECK` | Script reference checks | `host/fixes.rs` |
@@ -229,6 +230,7 @@ None of these is for players.
 | `NV_D3D9_REPEATS=keep` | A check: sampler states and shader constants set again to the value they hold still go to the backend (by default they are left out: Direct3D 9 makes them no-ops). Compare a run with it against one without by `record_compare --digests`: every draw sees the same state | left out |
 | `NV_DRAW_DIRECT=0` | The world draw's Direct3D 9 calls by address again, the device lock taken for each call. By default (on) the typed draw code calls the device function at once by its slot, with real threads under one hold of the device lock for each half of the world draw (given back whenever the thread waits, handed over when another thread waits for it): the same calls in the same order | on |
 | `NV_D3D9_ONE_PASS=0` | Shader constant sets (`Set*ShaderConstant*`, about 6,000 a frame in a crowded street), render, texture stage and sampler state sets, `SetTexture`, `SetStreamSource` and the draws go through the Direct3D 9 model and then the forwarding to the backend as two steps again, each finding the device's state itself. By default (on) one pass: the registers or the state stored, compared and sent with one look-up. The same model state and the same commands; compare a stepped recording with it against one without (`record_compare --digests`, one exe) | on |
+| `NV_DRAW_WRITER=0` | The typed draw code's most frequent Direct3D 9 calls (render, texture stage and sampler states, textures, stream sources, the draws and float shader constants) go through the device's slots again (`device_vcall`). By default (on) they call the layer's device functions as plain Rust functions, still checking at every call that the device's slot holds the layer's own function (a mod's hook or a wrap gets the call as before). The same calls in the same order; compare a stepped recording with it against one without (`record_compare --digests`, one exe) | on |
 | `NV_D3D9_BACKGROUND=1` | The window opens without taking the focus, behind the other windows (scripted runs) | off |
 | `NV_D3D9_HIDDEN=1` | The window is never shown: nothing on any monitor, not even for a moment as it opens, and no taskbar button. The real Direct3D 9 device draws and presents into it as into a shown one and the game sees the same window, so a recorded run is byte for byte the same as with `NV_D3D9_BACKGROUND` (for the scripted runs whose recordings are compared; it wins over `NV_D3D9_BACKGROUND`). Nobody can close such a window: the run ends by its frame count or time limit | off |
 | `NV_SLICE=n` | Stepped threads: calls between turns (0: only at waits and sleeps) | 200000 |
