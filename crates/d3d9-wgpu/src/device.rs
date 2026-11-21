@@ -11421,6 +11421,16 @@ fn capture(
 /// Makes a module from WGSL: read and checked once, by wgpu (naga's reader and validator, with
 /// the device's own capabilities); what it refuses, as text.
 fn create_module(device: &wgpu::Device, source: String) -> Result<wgpu::ShaderModule, String> {
+    // The hitch log's counts (`d3d9_stream::hitch`): a module made and its time, on whichever thread.
+    let started = std::time::Instant::now();
+    let made = create_module_here(device, source);
+    d3d9_stream::hitch::add(d3d9_stream::hitch::Count::Modules, 1);
+    d3d9_stream::hitch::add_time(d3d9_stream::hitch::Count::ModuleNs, started.elapsed());
+    made
+}
+
+/// [`create_module`]'s work.
+fn create_module_here(device: &wgpu::Device, source: String) -> Result<wgpu::ShaderModule, String> {
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: None,
@@ -11434,6 +11444,20 @@ fn create_module(device: &wgpu::Device, source: String) -> Result<wgpu::ShaderMo
 
 /// Makes the pipeline `job` describes (with the driver's cache, where there is one).
 fn build_pipeline(
+    device: &wgpu::Device,
+    cache: Option<&wgpu::PipelineCache>,
+    job: &PipelineJob,
+) -> Result<wgpu::RenderPipeline, String> {
+    // The hitch log's counts (`d3d9_stream::hitch`): a pipeline made and its time, on whichever thread.
+    let started = std::time::Instant::now();
+    let made = build_pipeline_here(device, cache, job);
+    d3d9_stream::hitch::add(d3d9_stream::hitch::Count::Pipelines, 1);
+    d3d9_stream::hitch::add_time(d3d9_stream::hitch::Count::PipelineNs, started.elapsed());
+    made
+}
+
+/// [`build_pipeline`]'s work.
+fn build_pipeline_here(
     device: &wgpu::Device,
     cache: Option<&wgpu::PipelineCache>,
     job: &PipelineJob,
