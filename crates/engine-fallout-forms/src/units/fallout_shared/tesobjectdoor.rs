@@ -926,8 +926,30 @@ pub fn fn_005180b0(
     if moved_actor != 0 {
         e.call(0x008a_e640, &args![moved_actor, 0u32]);
     }
-    e.call(0x0057_3800, &args![activator, cell, worldspace]);
+    move_ref_to_new_space(e, activator, cell, worldspace);
     true
+}
+
+/// The door's `MoveRefToNewSpace(reference, cell, world)` (`00573800`, called at `0x518AD9`);
+/// with lStewieAl's Tweaks' S0220 (`SameCellTeleportFix`) an actor sent to the exterior cell it is
+/// already in (its parent cell `+0x40`, read before the move) also has its 3D moved
+/// (`TESObjectREFR::Update3DPosition` `00562020`); the exe leaves it standing where it was.
+fn move_ref_to_new_space(e: &mut Engine, reference: u32, cell: u32, world: u32) {
+    let row = e.stewie(engine_core::extend::stewie::SAME_CELL_TELEPORT);
+    let parent = if row {
+        e.mem.u32(reference.wrapping_add(0x40))
+    } else {
+        0
+    };
+    e.call(0x0057_3800, &args![reference, cell, world]);
+    if row
+        && cell != 0
+        && e.mem.u32(cell.wrapping_add(0xc0)) != 0
+        && e.vcall(reference, 0x100, &args![]).bool()
+        && cell == parent
+    {
+        e.call(0x0056_2020, &args![reference]);
+    }
 }
 
 /// `TESForm::StartForm` (`004855a0`) and `TESForm::CloseForm` (`00485680`),
@@ -1745,6 +1767,41 @@ mod door_tests {
             eax,
             ..Ret::default()
         }
+    }
+
+    /// lStewieAl's Tweaks' S0220: the 3D is moved only with the row, for an actor, to an exterior
+    /// cell (its world `+0xC0` set) that is the cell it was in before the move.
+    #[test]
+    fn s0220_a_same_cell_teleport_moves_the_actor() {
+        let moved = |row: bool, actor: u32, same: bool, exterior: bool| {
+            let mut e = Engine::new();
+            e.register(0x0057_3800, |_, _| Ret::default());
+            e.register(0x0056_2020, |_, _| Ret::default());
+            let vtable = e.mem.alloc(0x200);
+            e.mem.set_u32(vtable + 0x100, 0x0900_0100);
+            e.register_double(0x0900_0100, move |_, _| ret(actor));
+            let reference = e.mem.alloc(0x80);
+            e.mem.set_u32(reference, vtable);
+            let cell = e.mem.alloc(0x100);
+            e.mem.set_u32(cell + 0xc0, u32::from(exterior) * 0x7700);
+            let other = e.mem.alloc(0x100);
+            e.mem
+                .set_u32(reference + 0x40, if same { cell } else { other });
+            e.set_stewie(engine_core::extend::stewie::SAME_CELL_TELEPORT, row);
+            e.call_log = Some(vec![]);
+            move_ref_to_new_space(&mut e, reference, cell, 0x6600);
+            let log = e.call_log.take().unwrap();
+            assert_eq!(
+                calls_to(&log, 0x0057_3800),
+                vec![vec![reference, cell, 0x6600]]
+            );
+            calls_to(&log, 0x0056_2020).len()
+        };
+        assert_eq!(moved(false, 1, true, true), 0);
+        assert_eq!(moved(true, 1, true, true), 1);
+        assert_eq!(moved(true, 0, true, true), 0);
+        assert_eq!(moved(true, 1, false, true), 0);
+        assert_eq!(moved(true, 1, true, false), 0);
     }
 
     #[test]

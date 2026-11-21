@@ -283,6 +283,14 @@ pub const ROWS: &[Row] = &[
         summary: "changes how stairs walk: collision marked as stairs (123 of the game's own meshes) counts every riser as a step, so characters no longer catch on risers or get pushed back",
     },
     Row {
+        bit: stewie::SAME_CELL_TELEPORT,
+        function: "SameCellTeleportFix",
+        plan: "S0220",
+        key: "bSameCellTeleportFix",
+        tweaks: None,
+        summary: "companions follow through a door that leads into the same exterior cell (The Fort's gate) instead of standing still",
+    },
+    Row {
         bit: stewie::OFFERS_SERVICES_NO_PROCESS,
         function: "GetOffersServicesNowFix",
         plan: "S0222",

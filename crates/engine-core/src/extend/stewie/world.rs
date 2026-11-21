@@ -200,6 +200,10 @@ pub const NO_HACKING_WHEN_DEAD: Row = fix(37);
 /// `GetOffersServiceConditionFunction` `005a2af0`): the condition on an actor with no AI process
 /// answers 0, where the exe reads through the missing process.
 pub const OFFERS_SERVICES_NO_PROCESS: Row = fix(38);
+/// S0220 `SameCellTeleportFix` (`MoveRefToNewSpace` called at `0x518AD9` in
+/// `TESObjectDOOR::Activate` `005180b0`): an actor going through a teleport door to the exterior
+/// cell it is already in is moved there in 3D too (`Update3DPosition`).
+pub const SAME_CELL_TELEPORT: Row = fix(39);
 
 /// `OSInputGlobals *` (xNVSE's `0x11F35CC`).
 pub const INPUT_GLOBALS: u32 = 0x011f_35cc;
