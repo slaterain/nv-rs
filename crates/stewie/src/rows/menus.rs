@@ -279,6 +279,14 @@ pub const ROWS: &[Row] = &[
         summary: "the Pip-Boy's chem durations count the player's chem duration perks",
     },
     Row {
+        bit: stewie::HOTKEY_GRX_AND_BOOKS,
+        function: "patchAllowHotkeyGRXAndBooks",
+        plan: "S0069",
+        key: "bAllowHotkeyGRXAndBooks",
+        tweaks: None,
+        summary: "the implant GRX and books can be put on the hotkey wheel",
+    },
+    Row {
         bit: stewie::BOOK_AND_AMMO_HOTKEY_ICONS,
         function: "patchFixBookAndAmmoHotkeyIcons",
         plan: "S0070",

@@ -55,6 +55,7 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "bFixPipboyDisplayedChemDurationIfPerkModified",
         bit(45),
     ),
+    ("S0069", "bAllowHotkeyGRXAndBooks", bit(54)),
     ("S0070", "bFixBookAndAmmoHotkeyIcons", bit(18)),
     ("S0071", "bFixRecipeNegativeIngredientCount", bit(19)),
     ("S0072", "bFixHideHealthbarSetting", bit(36)),

@@ -496,6 +496,12 @@ fn show_message(e: &mut Engine, setting: u32) {
     );
 }
 
+/// Whether a book (type 0x19) is refused a hotkey (`0x78054D`, `0x781CD0`): the exe's yes; with
+/// lStewieAl's Tweaks' S0069 (`patchAllowHotkeyGRXAndBooks`) the book test is jumped over.
+fn hotkey_refuses_books(e: &Engine) -> bool {
+    !e.stewie(engine_core::extend::stewie::HOTKEY_GRX_AND_BOOKS)
+}
+
 /// [`inventory_menu_do_idle`] with a gamepad and the hot-key wheel shown.
 fn gamepad_wheel_shown(e: &mut Engine, this: Ptr<InventoryMenu>) {
     let me_addr = this.addr();
@@ -519,8 +525,9 @@ fn gamepad_wheel_shown(e: &mut Engine, this: Ptr<InventoryMenu>) {
     } else {
         let keyring_trait = e.global::<u32>(TRAIT_FROM_NAME_01073974);
         let tile = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, this));
+        // `0x781CD0` (lStewieAl's Tweaks' S0069 makes the `JZ` a `JMP`): books are not refused.
         let refused = !e.call(TILE_IS_TRUE, &args![tile, keyring_trait]).bool()
-            || (current_item(e) != 0 && current_item_type(e) == 0x19);
+            || (hotkey_refuses_books(e) && current_item(e) != 0 && current_item_type(e) == 0x19);
         if refused {
             show_message(e, NO_HOTKEY_SETTING);
         } else {
@@ -2431,8 +2438,10 @@ fn click_use(e: &mut Engine, this: Ptr<InventoryMenu>) {
                 } else {
                     let keyring = e.global::<u32>(TRAIT_FROM_NAME_01073974);
                     let tile = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, this));
+                    // `0x78054D` (lStewieAl's Tweaks' S0069 writes `JMP 0x78058E` there): books are
+                    // not refused.
                     let refused = !e.call(TILE_IS_TRUE, &args![tile, keyring]).bool()
-                        || current_item_type(e) == 0x19;
+                        || (hotkey_refuses_books(e) && current_item_type(e) == 0x19);
                     if refused {
                         message_box(e, NO_HOTKEY_SETTING, [2, 0, MESSAGE_TEXT_TWO]);
                     } else {
@@ -4257,6 +4266,21 @@ mod n054_tests {
             e.call_log = Some(vec![]);
             assert_eq!(equip_type_for_hotkey_icon(&mut e, form), wanted);
             assert_eq!(calls_to(&e, GET_EQUIP_TYPE), [vec![form]]);
+        }
+    }
+}
+
+#[cfg(test)]
+mod stewie_menus6_tests {
+    use super::*;
+
+    /// Row S0069 (`0x78054D`, `0x781CD0`): books are refused a hotkey with the row off, not on.
+    #[test]
+    fn s0069_books_can_be_hotkeyed() {
+        for on in [false, true] {
+            let e = Engine::new();
+            e.set_stewie(engine_core::extend::stewie::HOTKEY_GRX_AND_BOOKS, on);
+            assert_eq!(hotkey_refuses_books(&e), !on);
         }
     }
 }

@@ -198,3 +198,7 @@ pub const NEW_GAME_LAST_EXTERIOR_DOOR: Row = Row::share(MENUS_FIXES, MENUS_FIXES
 /// at `0x7820BB`, `BarterMenu::DoIdle` at `0x7307A4`, `ContainerMenu::DoIdle` at `0x75EBF3`): armour
 /// without DT shows its DR line, and a lone stat line is shown at full alpha.
 pub const INVENTORY_STAT_ALPHAS: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 53);
+/// S0069 `patchAllowHotkeyGRXAndBooks` (`fn_00967b70` at `0x967B80`, `InventoryMenu::DoClick`
+/// at `0x78054D`, `InventoryMenu::DoIdle` at `0x781CD0`): the implant GRX and books can be
+/// hotkeyed.
+pub const HOTKEY_GRX_AND_BOOKS: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 54);
