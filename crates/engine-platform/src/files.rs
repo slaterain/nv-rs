@@ -1179,6 +1179,26 @@ pub struct OpenFile {
     pub wrote: Option<u64>,
     /// The player's file this handle reads, once read ([`Kept`]).
     pub kept: Kept,
+    /// A `ReadFile` on this handle is reading with the kernel lock given back ([`read_range`]): the handle's other
+    /// synchronous calls (`ReadFile`, `WriteFile`, `SetFilePointer`) wait for it ([`wait_for_handle`]), so they stay in
+    /// order as Windows keeps them on one handle.
+    pub busy: bool,
+}
+
+/// Waits (giving the kernel lock back meanwhile) until no `ReadFile` on `handle` is reading outside the lock; the
+/// kernel lock is held again on return. Lock order: the kernel lock, then the handle's busy flag under it; a call
+/// never waits for the flag while holding the kernel lock.
+fn wait_for_handle(e: &mut Engine, handle: u32) {
+    while open_file(e, handle).is_some_and(|f| f.busy) {
+        engine_core::real_threads::without_kernel_lock(e, std::thread::yield_now);
+    }
+}
+
+/// Sets `handle`'s busy flag ([`OpenFile::busy`]).
+fn set_busy(e: &mut Engine, handle: u32, busy: bool) {
+    if let Some(file) = open_file(e, handle) {
+        file.busy = busy;
+    }
 }
 
 /// The [`Disk`] key of a full path: ASCII lower case, `/` as `\`. Only the bytes that start a
@@ -3026,6 +3046,7 @@ fn open_or_make(
                 write: false,
                 wrote: None,
                 kept: Kept(Some(std::sync::Arc::new(host))),
+                busy: false,
             })));
         }
     }
@@ -3100,6 +3121,7 @@ fn open_or_make(
         write: access & GENERIC_WRITE != 0,
         wrote: None,
         kept: Kept::default(),
+        busy: false,
     })))
 }
 
@@ -3203,6 +3225,7 @@ pub fn get_file_type(e: &mut Engine, handle: u32) -> u32 {
 /// `ERROR_NEGATIVE_SEEK`, a bad method with `ERROR_INVALID_PARAMETER`, both answering
 /// `INVALID_SET_FILE_POINTER` and leaving the position.
 pub fn set_file_pointer(e: &mut Engine, handle: u32, low: u32, high: Ptr, method: u32) -> u32 {
+    wait_for_handle(e, handle);
     let distance = if high.addr() == 0 {
         i64::from(low as i32)
     } else {
@@ -3258,6 +3281,7 @@ pub fn write_file(
         overlapped == 0,
         "WriteFile: overlapped writes are not provided"
     );
+    wait_for_handle(e, handle);
     if written.addr() != 0 {
         e.mem.set_u32(written.addr(), 0);
     }
@@ -3318,6 +3342,7 @@ pub fn read_file(
         overlapped == 0,
         "ReadFile: overlapped reads are not provided"
     );
+    wait_for_handle(e, handle);
     if read.addr() != 0 {
         e.mem.set_u32(read.addr(), 0);
     }
@@ -3335,7 +3360,11 @@ pub fn read_file(
     // The hitch log's counts (`engine_core::hitch`): the bytes, the time the read took, main's largest read.
     let counted = engine_core::hitch::on();
     let started = counted.then(std::time::Instant::now);
-    let bytes = match read_range(e, handle, &path, position, count) {
+    // The handle is this read's until its position is moved on: its other calls wait ([`wait_for_handle`]).
+    set_busy(e, handle, true);
+    let range = read_range(e, handle, &path, position, count);
+    set_busy(e, handle, false);
+    let bytes = match range {
         Ok(bytes) => bytes,
         Err(code) => {
             e.kernel.last_error = code;
@@ -7042,6 +7071,112 @@ mod tests_code_pages {
             }
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod handle_order_tests {
+    use engine_core::prelude::*;
+
+    /// The test's game threads: `ReadFile(p[0], ...)` through the slot `p[1]`, `p[3]` times 256 bytes into the
+    /// buffer at `p[2]` (one after another).
+    fn reads_chunks(e: &mut Engine, a: &[u32]) -> Ret {
+        let p = a[0];
+        let (handle, read, buffer, count) = (
+            e.mem.u32(p),
+            e.mem.u32(p + 4),
+            e.mem.u32(p + 8),
+            e.mem.u32(p + 0xc),
+        );
+        let got = e.mem.alloc(4);
+        for i in 0..count {
+            e.call(read, &args![handle, buffer + 256 * i, 256u32, got, 0u32]);
+        }
+        Ret::default()
+    }
+
+    /// Two game threads reading one handle of a player's file at once, each read with the kernel lock given back
+    /// for the disk read: the handle's reads stay in order as Windows keeps synchronous calls on one handle, so the
+    /// two get disjoint consecutive 256-byte pieces that together are the whole file, none read twice.
+    #[test]
+    fn two_threads_reading_one_handle_get_disjoint_pieces() {
+        const PIECES: u32 = 64;
+        let dir = std::env::temp_dir().join(format!("nv-handle-order-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Piece n holds the byte n throughout.
+        let bytes: Vec<u8> = (0..2 * PIECES * 256).map(|i| (i / 256) as u8).collect();
+        std::fs::write(dir.join("pieces.bin"), &bytes).unwrap();
+        crate::imports();
+        let mut e = Engine::new();
+        e.kernel.current_directory = dir.to_string_lossy().into_owned().into_bytes();
+        let slots = [
+            (0x00fd_f088, "KERNEL32.dll", "CreateFileA"),
+            (0x00fd_f080, "KERNEL32.dll", "ReadFile"),
+            (0x00fd_f07c, "KERNEL32.dll", "CloseHandle"),
+            (0x00fd_f090, "KERNEL32.dll", "CreateThread"),
+            (0x00fd_f094, "KERNEL32.dll", "WaitForSingleObject"),
+        ];
+        let imports: Vec<engine_core::exe::Import> = slots
+            .iter()
+            .map(|&(slot, dll, name)| engine_core::exe::Import {
+                slot,
+                dll: dll.into(),
+                name: name.into(),
+            })
+            .collect();
+        assert_eq!(e.register_imports(&imports), slots.len());
+        e.start_real_clock();
+        e.register(0x0040_f200, reads_chunks);
+        let name = e.mem.alloc(16);
+        e.mem.set_cstr(name, b"pieces.bin");
+        // GENERIC_READ, share read, OPEN_EXISTING.
+        let handle = e
+            .call(
+                0x00fd_f088,
+                &args![name, 0x8000_0000u32, 1u32, 0u32, 3u32, 0x80u32, 0u32],
+            )
+            .eax;
+        assert_ne!(handle, u32::MAX, "the file opened");
+        engine_core::real_threads::start(&mut e).expect("real threads on");
+        let mut threads = Vec::new();
+        for _ in 0..2 {
+            let buffer = e.mem.alloc(256 * PIECES);
+            let p = e.mem.alloc(0x10);
+            for (i, w) in [handle, 0x00fd_f080, buffer, PIECES]
+                .into_iter()
+                .enumerate()
+            {
+                e.mem.set_u32(p + 4 * i as u32, w);
+            }
+            let h = e
+                .call(
+                    0x00fd_f090,
+                    &args![0u32, 0u32, 0x0040_f200u32, p, 0u32, 0u32],
+                )
+                .eax;
+            threads.push((h, buffer));
+        }
+        let mut seen = Vec::new();
+        for (h, buffer) in threads {
+            assert_eq!(
+                e.call(0x00fd_f094, &args![h, 60_000u32]).eax,
+                0,
+                "a reader ended"
+            );
+            for i in 0..PIECES {
+                let piece = e.mem.bytes(buffer + 256 * i, 256);
+                assert!(
+                    piece.iter().all(|&b| b == piece[0]),
+                    "a whole piece, not two halves"
+                );
+                seen.push(piece[0]);
+            }
+        }
+        seen.sort_unstable();
+        let want: Vec<u8> = (0..2 * PIECES).map(|n| n as u8).collect();
+        assert_eq!(seen, want, "every piece once, none twice");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

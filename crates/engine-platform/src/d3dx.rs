@@ -1213,6 +1213,8 @@ struct Prepared {
     bytes: Vec<u8>,
     precision: d3dx_tex::Precision,
     device: u32,
+    /// The device's formats the translation was worked out for.
+    caps: d3dx_tex::Caps,
     cube: bool,
     made: TranslatedTexture,
 }
@@ -1253,14 +1255,15 @@ pub fn prepare_texture(e: &mut Engine, buffer: u32, size: u32, device: u32) {
             bytes,
             precision,
             device,
+            caps,
             cube: false,
             made,
         });
     });
 }
 
-/// The translation [`prepare_texture`] worked out for exactly these bytes, cube flag, precision and device (and
-/// the device's formats unchanged), taken; `None` (nothing kept, or anything differs) and the caller translates.
+/// The translation [`prepare_texture`] worked out for exactly these bytes, cube flag, precision, device and device
+/// formats (the ones it used), taken; `None` (nothing kept, or anything differs) and the caller translates.
 fn take_prepared(
     bytes: &[u8],
     cube: bool,
@@ -1269,10 +1272,7 @@ fn take_prepared(
     caps: &d3dx_tex::Caps,
 ) -> Option<TranslatedTexture> {
     let p = PREPARED.with(|p| p.borrow_mut().take())?;
-    let same_caps = CAPS_SEEN
-        .lock()
-        .ok()
-        .is_some_and(|seen| seen.iter().any(|(d, c)| *d == device && c == caps));
+    let same_caps = p.caps == *caps;
     (p.bytes == bytes
         && p.cube == cube
         && p.precision == precision
