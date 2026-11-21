@@ -4410,8 +4410,7 @@ mod tests {
         shot::set_hitch_totals(None);
         assert_eq!(
             shot::hitches_text(),
-            "The hitch log was off in this session (NV_HITCH_LOG=0).
-"
+            "The hitch log was off in this session (NV_HITCH_LOG=0).\r\n"
         );
         shot::set_hitch_totals(Some((0, 0, 0)));
         assert!(shot::hitches_text().contains(": 0 in all, 0 of them 16 ms or more, 0 not written"));
