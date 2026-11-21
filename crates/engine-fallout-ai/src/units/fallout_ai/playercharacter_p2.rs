@@ -7691,7 +7691,13 @@ pub fn fn_0095a3b0(e: &mut Engine, this: Ptr<PlayerCharacter>, buffer: u32) {
             e.call(0x004b_fb70, &args![this, index, form]);
         }
         let holder = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, this));
-        if holder != 0 {
+        // lStewieAl's Tweaks' row S0089.02 (`RememberAmmoCountOnLoad`, the jump at `0x95BF7F` to
+        // `0x95C05A`): the weapon is not reloaded here (`+0x3EC`), so the loaded rounds stay. Tweaks ships
+        // it only with S0089.06, which sets up the player's ammunition entry on the first load: without
+        // that row this reload is the entry's only set-up there, so it stays.
+        let no_reload = e.stewie(engine_core::extend::stewie::LOAD_GAME_NO_RELOAD)
+            && e.stewie(engine_core::extend::stewie::LOAD_GAME_PLAYER_WEAPON_WITHOUT_3D);
+        if holder != 0 && !no_reload {
             let holder = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, this));
             if e.vcall(holder, 0x148, &args![]).u32() != 0 {
                 let holder = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, this));
@@ -7707,6 +7713,11 @@ pub fn fn_0095a3b0(e: &mut Engine, this: Ptr<PlayerCharacter>, buffer: u32) {
         }
     }
     e.call(0x0094_62c0, &args![this, 0u32, 1u32]);
+    // lStewieAl's Tweaks' row S0089.07 (`RememberAmmoCountOnLoad`, the call at `0x95C064`): after
+    // `SelectDefaultAmmo(false, true)` (`009462c0`), Tweaks' `PlayerCharacterLoad_SetupAmmoHook`.
+    if e.stewie(engine_core::extend::stewie::LOAD_GAME_AMMO_COUNT) {
+        super::playercharacter_p3::load_game_setup_ammo(e, player);
+    }
     if buffer_version(e, buffer) >= 0x1b {
         e.call(0x005a_aaf0, &args![buffer]);
     }
@@ -13862,6 +13873,80 @@ mod tests {
         // The versions after 0x1a close with the pending references.
         assert_eq!(calls_to(&e, 0x005a_aaf0), vec![vec![buffer]]);
         assert_eq!(calls_to(&e, 0x0094_62c0), vec![vec![p, 0, 1]]);
+    }
+
+    /// lStewieAl's Tweaks' row S0089.02 (`RememberAmmoCountOnLoad`, the jump at `0x95BF7F`): a load
+    /// (buffer version 0x1b) of a player whose process has a weapon entry (slot `+0x148`). Off, the
+    /// exe reloads the weapon (the player's slot `+0x3EC` with the weapon's form); on, it does not.
+    /// With S0089.06 off the row does nothing (the reload is then the first load's only set-up of the
+    /// ammunition entry).    /// The default ammunition (`009462c0`) is chosen either way.
+    #[test]
+    fn s0089_02_the_load_does_not_reload_the_weapon() {
+        for (on, with_06) in [(false, true), (true, true), (true, false)] {
+            let mut e = engine();
+            list_helpers(&mut e);
+            let player = new_player(&mut e);
+            let p = player.addr();
+            let buffer = load_buffer(&mut e, 0x1b);
+            e.register(0x0048_39c0, |_, a| eax(a[0] + 0x1000));
+            e.register(DYNAMIC_CAST, |_, a| eax(a[0]));
+            let weapon_entry = e.mem.alloc(0x10);
+            e.mem.set_u32(weapon_entry + 8, 0x6600);
+            let process = e.mem.alloc(0x200);
+            slot(&mut e, process, 0x148, eax(weapon_entry));
+            slot(&mut e, process, 0x168, eax(0));
+            e.mem.set_u32(p + 0x68, process);
+            let reload = slot(&mut e, p, 0x3ec, eax(0));
+            // `GetBaseProcess` (`008d8520`): the process at +0x68.
+            e.register(0x008d_8520, |e, a| eax(e.mem.u32(a[0] + 0x68)));
+            e.register(0x0044_ddc0, |e, a| eax(e.mem.u32(a[0] + 8)));
+            e.set_stewie(engine_core::extend::stewie::LOAD_GAME_NO_RELOAD, on);
+            e.set_stewie(
+                engine_core::extend::stewie::LOAD_GAME_PLAYER_WEAPON_WITHOUT_3D,
+                with_06,
+            );
+            start_log(&mut e);
+            fn_0095a3b0(&mut e, player, buffer);
+            let reloads = calls_to(&e, reload);
+            if on && with_06 {
+                assert!(reloads.is_empty());
+            } else {
+                assert_eq!(reloads.len(), 1);
+                assert_eq!(reloads[0][..2], [p, 0x6600]);
+            }
+            assert_eq!(calls_to(&e, 0x0094_62c0), vec![vec![p, 0, 1]]);
+        }
+    }
+
+    /// lStewieAl's Tweaks' row S0089.07 (`0x95C064`) through the load: a player whose ammunition
+    /// entry (`MiddleHighProcess` +0x118) holds 30 rounds of an ammunition it no longer carries
+    /// (no container changes: 0 rounds) and no saved count. Off, the entry keeps 30 after the load;
+    /// on, Tweaks' setup limits it to the 0 rounds carried.
+    #[test]
+    fn s0089_07_the_load_sets_up_the_ammunition_entry() {
+        for (on, rounds) in [(false, 30u32), (true, 0)] {
+            let mut e = engine();
+            list_helpers(&mut e);
+            let player = new_player(&mut e);
+            let p = player.addr();
+            e.set_global(0x011d_ea3c, p);
+            let buffer = load_buffer(&mut e, 5);
+            e.register(0x0048_39c0, |_, a| eax(a[0]));
+            e.register(DYNAMIC_CAST, |_, a| eax(a[0]));
+            let process = e.mem.alloc(0x200);
+            e.mem.set_u32(p + 0x68, process);
+            let ammo_info = e.mem.alloc(0x10);
+            e.mem.set_u32(ammo_info + 4, 30);
+            e.mem.set_u32(ammo_info + 8, 0x0101_0000);
+            e.mem.set_u32(process + 0x118, ammo_info);
+            // No hotkey on the weapon entry (`004bd7a0`: -1), no container changes (`00410220`).
+            e.register(0x004b_d7a0, |_, _| eax(u32::MAX));
+            e.register(0x0041_0220, |_, _| eax(0));
+            e.set_stewie(engine_core::extend::stewie::LOAD_GAME_AMMO_COUNT, on);
+            start_log(&mut e);
+            fn_0095a3b0(&mut e, player, buffer);
+            assert_eq!(e.mem.u32(ammo_info + 4), rounds, "on {on}");
+        }
     }
 
     #[test]

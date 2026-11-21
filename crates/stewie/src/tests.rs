@@ -424,6 +424,27 @@ fn engine(file: Option<&[u8]>) -> Engine {
     e
 }
 
+/// Tweaks' co-save callbacks as xNVSE gets them: the `AMID` reader at the load AFTER the game's
+/// (`load`, not `pre_load`), the save writer, and the listener whose PreLoadGame clears the saved
+/// count (S0089.01) before the next save is read, so it never reaches another load.
+#[test]
+fn the_install_registers_tweaks_co_save_callbacks_and_listener() {
+    let mut e = engine(None);
+    set_on(&mut e, true);
+    install(&mut e);
+    let tweaks = nvse::plugins::by_opcode_base(&e, OPCODE_BASE).unwrap();
+    assert!(tweaks.load.is_some(), "AMID is read after the game's load");
+    assert!(tweaks.pre_load.is_none(), "not before it");
+    assert!(tweaks.save.is_some());
+    assert!(tweaks.listener.is_some());
+    let kept = e.stewie_kept(bits::kept::SAVED_AMMO_COUNT, 4);
+    e.mem.set_u32(kept, 8);
+    nvse::plugins::dispatch(&mut e, nvse::plugins::msg::LOAD_GAME, 0, 0);
+    assert_eq!(e.mem.u32(kept), 8, "only PreLoadGame clears it");
+    nvse::plugins::dispatch(&mut e, nvse::plugins::msg::PRE_LOAD_GAME, 0, 0);
+    assert_eq!(e.mem.u32(kept), 0);
+}
+
 /// The install: off, nothing; on, the rows' bits reach the engine (the bit the seam tests), Tweaks is
 /// listed with xNVSE, and a row's key keeps its bit clear.
 #[test]

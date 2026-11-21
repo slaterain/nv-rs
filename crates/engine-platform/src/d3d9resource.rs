@@ -214,9 +214,10 @@ pub struct Resources {
     /// The last `Set*ShaderConstant*` the model took set every register to the words it already
     /// held (each set before): its forwarding may leave it out (`super::d3d9device::skip_repeats`).
     constants_repeat: bool,
-    /// Whether constant sets take the model and the forwarding in one pass
-    /// ([`set_constants_one_pass`]): on unless `NV_D3D9_ONE_PASS=0`, read at the first set; tests
-    /// set it ([`one_pass_for_tests`]).
+    /// Whether constant sets ([`set_constants_one_pass`]) and render, texture stage and sampler
+    /// states (`super::d3d9device`) take the model and the forwarding in one pass
+    /// ([`one_pass_in`]): on unless `NV_D3D9_ONE_PASS=0`, read at the first set; tests set it
+    /// ([`one_pass_for_tests`]).
     one_pass: Option<bool>,
 }
 
@@ -226,7 +227,14 @@ fn one_pass_wanted() -> bool {
     *ON.get_or_init(|| std::env::var("NV_D3D9_ONE_PASS").map_or(true, |v| v != "0"))
 }
 
-/// Tests: whether `e`'s constant sets take one pass ([`set_constants_one_pass`]), in place of
+/// Whether the sets that take one pass (constants here, states in `super::d3d9device`) do in this
+/// run: `NV_D3D9_ONE_PASS`, read at the first such set, or what a test set.
+#[inline]
+pub(super) fn one_pass_in(r: &mut Resources) -> bool {
+    *r.one_pass.get_or_insert_with(one_pass_wanted)
+}
+
+/// Tests: whether `e`'s constant and state sets take one pass ([`one_pass_in`]), in place of
 /// `NV_D3D9_ONE_PASS`.
 #[cfg(test)]
 pub(crate) fn one_pass_for_tests(e: &mut Engine, on: bool) {
@@ -1316,11 +1324,7 @@ fn set_constants_one_pass(
         real,
         ..
     } = crate::device_mut(&mut e.device, held);
-    if !*device_objects
-        .resources
-        .one_pass
-        .get_or_insert_with(one_pass_wanted)
-    {
+    if !one_pass_in(&mut device_objects.resources) {
         return None;
     }
     if data.is_null() || u64::from(start) + u64::from(count) > u64::from(registers(kind)) {
