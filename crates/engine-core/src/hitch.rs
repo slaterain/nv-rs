@@ -363,7 +363,10 @@ mod tests {
             (false, true, Count::AllocsOther),
             (true, true, Count::FreesOther),
         ] {
-            assert!(std::ptr::eq(counter(c as usize), &HEAP[heap_index(free, other)].0));
+            assert!(std::ptr::eq(
+                counter(c as usize),
+                &HEAP[heap_index(free, other)].0
+            ));
         }
         assert_eq!(
             side(Count::FilesOpenedMain, Count::FilesOpenedOther),
