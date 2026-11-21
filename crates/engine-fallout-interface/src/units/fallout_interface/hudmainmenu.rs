@@ -4692,10 +4692,7 @@ pub fn hud_main_menu_set_info_for_ref(
         0x33 => {
             let nested = e.call(0x009d_9f00, &args![reference]).u32();
             let mut inspect_direct_form = nested == 0;
-            // `0x77647F` (lStewieAl's Tweaks' S0038, `fixRockItLauncherProjectileDisplay`, jumps
-            // from there to `0x776731`, after the switch): with an item the rest is skipped.
-            let rock_it = stewie::ROCK_IT_PROJECTILE_PROMPT;
-            if nested != 0 && e.stewie(rock_it) {
+            if rock_it_item_skips_the_form_test(e, nested) {
                 inspect_direct_form = false;
             } else if nested != 0 {
                 let nested = e.call(0x009d_9f00, &args![reference]).u32();
@@ -8634,6 +8631,13 @@ fn crosshair_projectile_weapon(e: &mut Engine, reference: u32) -> u32 {
     } else {
         e.call(0x0047_6c90, &args![reference]).u32()
     }
+}
+
+/// `SetInfoForRef`'s projectile case at `0x77647F`: lStewieAl's Tweaks' S0038
+/// (`fixRockItLauncherProjectileDisplay`) jumps from there to `0x776731`, after the switch, so a
+/// projectile with an item (`009d9f00`) skips the exe's test of the item's and its own form type.
+fn rock_it_item_skips_the_form_test(e: &Engine, nested: u32) -> bool {
+    nested != 0 && e.stewie(stewie::ROCK_IT_PROJECTILE_PROMPT)
 }
 
 /// The dropped projectile's item at `0x777D55`: the exe's `009d9f00` (+0x144); lStewieAl's Tweaks'
@@ -18327,6 +18331,25 @@ mod tests {
             let item = rock_it_projectile_item(&mut e, projectile, &mut mask);
             assert_eq!(item, if on { 0x7700 } else { 0x7800 });
             assert_eq!(mask, if on { 0x1ff } else { 0x101 });
+        }
+    }
+
+    /// Row S0038 (`0x77647F`): a projectile with an item skips the form test with the row on;
+    /// without an item, or off, it does not.
+    #[test]
+    fn s0038_the_rock_it_projectile_skips_the_form_test() {
+        for (on, nested, skips) in [
+            (false, 0x7800u32, false),
+            (true, 0x7800, true),
+            (true, 0, false),
+        ] {
+            let e = Engine::new();
+            e.set_stewie(stewie::ROCK_IT_PROJECTILE_PROMPT, on);
+            assert_eq!(
+                rock_it_item_skips_the_form_test(&e, nested),
+                skips,
+                "row {on} {nested:x}"
+            );
         }
     }
 
