@@ -109,7 +109,15 @@ pub fn set_shader_constants(
                         e,
                         data,
                         count.wrapping_mul(16),
-                        |e, data| e.vcall(device, slot, &args![register, data, count]).i32(),
+                        |e, data| {
+                            engine_core::real_threads::device_vcall(
+                                e,
+                                device,
+                                slot,
+                                &args![register, data, count],
+                            )
+                            .i32()
+                        },
                     );
                     u32::from(result < 0)
                 }

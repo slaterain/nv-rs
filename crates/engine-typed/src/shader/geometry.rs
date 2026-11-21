@@ -746,7 +746,12 @@ fn set_clip_planes(e: &mut Engine, planes: u32) {
     for index in 0..6u32 {
         let renderer = e.global::<u32>(RENDERER); // own: main's frame value, value packet B
         let device = e.global::<u32>(renderer + 0x288); // own: main's object read in place (value packet B, piece 4)
-        e.vcall(device, 0xdc, &args![index, planes + 0x10 * index]);
+        engine_core::real_threads::device_vcall(
+            e,
+            device,
+            0xdc,
+            &args![index, planes + 0x10 * index],
+        );
     }
 }
 

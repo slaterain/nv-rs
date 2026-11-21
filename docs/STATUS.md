@@ -68,7 +68,10 @@ In so far:
 - Saves reach the disk from a thread of their own.
 - Its compressed archives unpack in native code and are read without reopening them.
 - Its textures, vertex and index buffers and sound samples are kept outside its 32-bit memory.
-- The first native families are on.
+- The first native families are on: among them the script expression evaluator (every condition and
+  `set ... to` line of a quest or mod script), the world draw's device calls (made directly, one lock
+  per half of the draw, repeated states not sent) and the per-actor loops after each frame.
+- On the drawing thread, a draw reuses what the draw before it resolved while nothing changed.
 - Finding what is on screen, the water's reflection included, is shared out over several cores.
 
 ## xNVSE built in
@@ -203,8 +206,9 @@ page is checked by a test (`the_readme_counts_the_built_commands` in `crates/jip
 
 ### Game patches
 
-JIP's game patches change the game's own code. All 162 planned for the port are built, inert until
-JIP answers "installed". They include:
+JIP's game patches change the game's own code. 171 of its 183 are built, inert until
+JIP answers "installed"; three more are folded into other rows, one waits and eight are left out on
+purpose (below; that list also names Enhanced Camera's patch, which is not one of the 183). They include:
 
 - **Framework and the player:** the patch framework, the first two fixes, the player's update 3D
   (both views, weapon and queued references), the detection patch (forced detection values and the
@@ -287,17 +291,23 @@ More in [FIXES.md, "UI Organizer"](FIXES.md#ui-organizer).
 
 ## lStewieAl's Tweaks built in
 
-🔨 Its engine fixes and tweaks, with nothing to install. 105 of its changes are built:
+🔨 Its engine fixes and tweaks, with nothing to install. 140 of its changes are built:
 
-- 67 of its crash fixes;
+- 72 of its crash and leak fixes;
 - Engine Optimizations' first change (a save's changed-forms map);
-- 37 other fixes and tweaks: 8 to forms, scripts, saves and sound; 17 to AI, actors and the
-  player; 12 to menus and the HUD.
+- 67 other fixes and tweaks: 7 to the engines and the console; 14 to forms, cells, scripts, saves
+  and sound; 25 to AI, actors and the player; 21 to menus and the HUD.
 
 - Each change is on with the fixes preset and has its own off key in `Fallout.ini`'s
   `[nv-rs Stewie]`.
 - Its settings are VNV's, with the player's `nvse_stewie_tweaks.ini` read over them.
 - One of the crash fixes, a leak, the port had already fixed.
+- The engines and the console (seven fixes): the sun's light comes from the side of the sky its disc
+  is on; blood and impact marks on bodies show the variant picked for them; things that are not
+  doors no longer count as doors for NPCs' paths; and four crashes are gone (a tree whose distant
+  LOD a plugin disabled, with Tweaks' console line naming it; a place whose navigation mesh cannot
+  be worked out; a path through a door with no way back; a switch or LOD node that updates only its
+  shown part). One Tweaks slip is not copied, under the missing-data guard row.
 - The remaining crash fixes and tweaks come next.
 
 More in [FIXES.md, "lStewieAl's Tweaks"](FIXES.md#lstewieals-tweaks).

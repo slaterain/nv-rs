@@ -239,14 +239,17 @@ fn fully_seen(e: &mut Engine, a: &[u32]) -> Option<u32> {
 /// an actor's process (`+0x68`), its level byte (`+0x28`) and the held weapon's entry (`+0x114`:
 /// its extra lists `+0`, its form `+8`); `kXData_ExtraWeaponModFlags` (`0x8D`) and its flags byte
 /// (`+0xC`); a weapon's three mod effects (`+0x180`, `+0x184`, `+0x188`); the silencer effects
-/// (`0xB`, `0x10`); `BaseExtraList::GetByType` (`0040a320`, thiscall: the list, the type).
+/// (`0xB`, `0x10`); the game's `BaseExtraList::GetExtraData` (`00410220`, thiscall: the list, the type; the
+/// entry or 0), which answers as JIP's own `BaseExtraList::GetByType` (JIP's code, nvse/GameBSExtraData.cpp: the
+/// type's presence bit, then the list walked under the extra data lock). The `0x0040A320` in JIP's header comment
+/// is not that function in 1.4.0.525 (it is inside `0040a300`): a call there stopped the game at an NPC's first shot.
 const RETURN_TRUE: u32 = 0x008d_0360;
 const IS_ACTOR_SLOT: u32 = 0x100;
 const PROCESS: u32 = 0x68;
 const PROCESS_LEVEL: u32 = 0x28;
 const HELD_WEAPON: u32 = 0x114;
 const EXTRA_WEAPON_MOD_FLAGS: u32 = 0x8d;
-const GET_BY_TYPE: u32 = 0x0040_a320;
+const GET_BY_TYPE: u32 = 0x0041_0220;
 const MOD_EFFECTS: u32 = 0x180;
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: PlayAttackSoundHook.

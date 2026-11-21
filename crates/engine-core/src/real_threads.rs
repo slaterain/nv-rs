@@ -729,6 +729,7 @@ impl World {
     /// This OS thread stops running game code (a wait, a sleep, its end); answers whether it was
     /// counted (the host's own thread never is).
     fn leave_guest(&self) -> bool {
+        release_direct(self);
         // No reference into a shared extension slot is live here: give them back.
         if crate::extend::holds_shared() {
             crate::extend::release_held();
@@ -981,7 +982,7 @@ pub struct Ctx {
     /// sleep ([`World::suspend_flags`]).
     suspend: std::sync::Arc<AtomicBool>,
     /// The platform functions behind the kernel lock, by address: what [`locked_call`] runs.
-    locked: AddrMap<u32, AbiFn>,
+    locked: Locked,
     /// How many of [`World::late`] this engine has taken.
     late_seen: usize,
     /// Events and semaphores this thread looked up, by handle (`None`: not one), while
@@ -989,6 +990,72 @@ pub struct Ctx {
     sync_cache: AddrMap<u32, Option<std::sync::Arc<sync::Object>>>,
     sync_seen: u64,
     world: &'static World,
+}
+
+/// The functions behind the kernel and device locks ([`Ctx::locked`]), by address; those in the layer's device
+/// ranges (`units::platform::layer_device_calls`) also by their place there, so [`device_call`] (once for every
+/// Direct3D call the game makes, about 16,000 a frame in a crowded street) finds its function by an index instead
+/// of a hash look-up.
+#[derive(Clone, Default)]
+struct Locked {
+    by_addr: AddrMap<u32, AbiFn>,
+    /// By the byte offset into the device ranges, laid end to end ([`device_slot`]).
+    device: Vec<Option<AbiFn>>,
+}
+
+impl Locked {
+    fn insert(&mut self, addr: u32, f: AbiFn) {
+        self.insert_in(crate::units::platform::layer_device_calls(), addr, f);
+    }
+
+    /// [`Locked::insert`] with `ranges` as the device ranges.
+    fn insert_in(&mut self, ranges: &[std::ops::Range<u32>], addr: u32, f: AbiFn) {
+        self.by_addr.insert(addr, f);
+        if let Some(slot) = device_slot_in(ranges, addr) {
+            if self.device.len() <= slot {
+                self.device.resize(slot + 1, None);
+            }
+            self.device[slot] = Some(f);
+        }
+    }
+
+    fn get(&self, addr: u32) -> Option<AbiFn> {
+        self.by_addr.get(&addr).copied()
+    }
+
+    /// [`Locked::get`] for a device function: by its slot when it has one, else by address.
+    #[inline]
+    fn device(&self, addr: u32) -> Option<AbiFn> {
+        self.device_in(crate::units::platform::layer_device_calls(), addr)
+    }
+
+    /// [`Locked::device`] with `ranges` as the device ranges.
+    #[inline]
+    fn device_in(&self, ranges: &[std::ops::Range<u32>], addr: u32) -> Option<AbiFn> {
+        match device_slot_in(ranges, addr) {
+            Some(slot) => self.device.get(slot).copied().flatten(),
+            None => self.get(addr),
+        }
+    }
+}
+
+/// `addr`'s byte offset into the layer's device ranges laid end to end, `None` outside them.
+#[inline]
+fn device_slot(addr: u32) -> Option<usize> {
+    device_slot_in(crate::units::platform::layer_device_calls(), addr)
+}
+
+/// [`device_slot`] in `ranges`.
+#[inline]
+fn device_slot_in(ranges: &[std::ops::Range<u32>], addr: u32) -> Option<usize> {
+    let mut base = 0usize;
+    for r in ranges {
+        if r.contains(&addr) {
+            return Some(base + (addr - r.start) as usize);
+        }
+        base += r.len();
+    }
+    None
 }
 
 impl Ctx {
@@ -1169,7 +1236,7 @@ pub fn start(e: &mut Engine) -> Result<(), String> {
     if real_sync {
         sync::adopt(world, e);
     }
-    let mut locked = AddrMap::default();
+    let mut locked = Locked::default();
     let mut addrs = e.registered_addrs();
     addrs.sort_unstable();
     for addr in addrs {
@@ -1384,9 +1451,9 @@ fn locked_call(e: &mut Engine, args: &[u32]) -> Ret {
     }
     let (f, mine) = {
         let r = e.real.as_ref().expect("checked above");
-        let f = *r
+        let f = r
             .locked
-            .get(&addr)
+            .get(addr)
             .unwrap_or_else(|| panic!("{addr:08x}: no locked platform function"));
         (f, r.last_error)
     };
@@ -1411,9 +1478,7 @@ impl Drop for Held {
 /// Whether the platform function at `addr` runs under the device lock ([`device_call`]): one of
 /// the layer's `device_calls`.
 fn device_addr(addr: u32) -> bool {
-    crate::units::platform::layer_device_calls()
-        .iter()
-        .any(|r| r.contains(&addr))
+    device_slot(addr).is_some()
 }
 
 /// A platform function of the Direct3D 9 device or one of its objects: under the device lock,
@@ -1434,20 +1499,16 @@ fn device_call(e: &mut Engine, args: &[u32]) -> Ret {
         .as_ref()
         .expect("a device platform call on a real thread's engine")
         .world;
-    if !world.device.held_here() {
-        park_here(e);
-    }
-    world.device.lock(world);
-    let _held = DeviceGuard(world, std::marker::PhantomData);
+    let _held = device_call_lock(e, world);
     if world.late_count.load(Ordering::Acquire) != e.real.as_ref().map_or(0, |r| r.late_seen) {
         sync_registered(e);
     }
-    let f = *e
+    let f = e
         .real
         .as_ref()
         .expect("checked above")
         .locked
-        .get(&addr)
+        .device(addr)
         .unwrap_or_else(|| panic!("{addr:08x}: no device platform function"));
     f(e, args)
 }
@@ -1496,6 +1557,9 @@ fn released_kernel<R>(world: Option<&'static World>, f: impl FnOnce() -> R) -> R
     let Some(world) = world else {
         return f();
     };
+    // The world draw's hold of the device lock (`NV_DRAW_DIRECT`) given back first, so the kernel lock
+    // is released as without it; the next device call takes the hold again.
+    release_direct(world);
     if world.device.held_here() || !world.kernel.held_here() {
         return f();
     }
@@ -3355,8 +3419,76 @@ mod tests {
     use super::*;
     use crate::args;
 
+    /// A device function's slot is its byte offset into the ranges laid end to end: every address
+    /// of each range has its own slot, the second range's follow the first's, and an address
+    /// outside them (just before, at an end, between) has none.
+    #[test]
+    fn device_slots_number_the_ranges_end_to_end() {
+        let ranges = [0x1000..0x1010, 0x2000..0x2008];
+        assert_eq!(device_slot_in(&ranges, 0x1000), Some(0));
+        assert_eq!(device_slot_in(&ranges, 0x100f), Some(15));
+        assert_eq!(device_slot_in(&ranges, 0x2000), Some(16));
+        assert_eq!(device_slot_in(&ranges, 0x2007), Some(23));
+        for outside in [0x0fff, 0x1010, 0x1fff, 0x2008, 0] {
+            assert_eq!(device_slot_in(&ranges, outside), None, "{outside:#x}");
+        }
+        let all: std::collections::BTreeSet<usize> = ranges
+            .iter()
+            .flat_map(|r| r.clone())
+            .filter_map(|a| device_slot_in(&ranges, a))
+            .collect();
+        assert_eq!(all.len(), 24);
+        assert_eq!(device_slot_in(&[], 0x1000), None);
+    }
+
+    /// Without the layer's ranges (this crate's tests) a device function is found by its address,
+    /// and a later registration at the same address replaces the earlier for both look-ups.
+    #[test]
+    fn locked_functions_are_found_by_address_without_the_layer() {
+        fn one(_: &mut Engine, _: &[u32]) -> Ret {
+            Ret {
+                eax: 1,
+                ..Ret::default()
+            }
+        }
+        fn two(_: &mut Engine, _: &[u32]) -> Ret {
+            Ret {
+                eax: 2,
+                ..Ret::default()
+            }
+        }
+        let mut l = Locked::default();
+        assert!(l.device(0x5000).is_none() && l.get(0x5000).is_none());
+        l.insert(0x5000, one);
+        let mut e = Engine::new();
+        assert_eq!(l.device(0x5000).expect("found")(&mut e, &[]).u32(), 1);
+        l.insert(0x5000, two);
+        assert_eq!(l.device(0x5000).expect("found")(&mut e, &[]).u32(), 2);
+        assert_eq!(l.get(0x5000).expect("found")(&mut e, &[]).u32(), 2);
+        assert!(l.device(0x5004).is_none());
+        // With device ranges: found by slot, each address its own, the latest registration kept,
+        // and the same function as by address.
+        let ranges = [0x5000..0x5100, 0x9000..0x9010];
+        let mut l = Locked::default();
+        l.insert_in(&ranges, 0x5004, one);
+        l.insert_in(&ranges, 0x9008, two);
+        let call = |f: Option<AbiFn>, e: &mut Engine| f.expect("found")(e, &[]).u32();
+        assert_eq!(call(l.device_in(&ranges, 0x5004), &mut e), 1);
+        assert_eq!(call(l.device_in(&ranges, 0x9008), &mut e), 2);
+        assert!(l.device_in(&ranges, 0x5008).is_none(), "not registered");
+        assert!(l.device_in(&ranges, 0x9004).is_none(), "not registered");
+        l.insert_in(&ranges, 0x5004, two);
+        assert_eq!(call(l.device_in(&ranges, 0x5004), &mut e), 2);
+        assert_eq!(call(l.get(0x5004), &mut e), 2);
+        assert_eq!(
+            call(l.clone().device_in(&ranges, 0x9008), &mut e),
+            2,
+            "a thread's copy"
+        );
+    }
+
     /// Import slots of a test engine, by name (the order of `units::platform::imports`).
-    fn engine_with_imports() -> (Engine, impl Fn(&str) -> u32) {
+    pub(super) fn engine_with_imports() -> (Engine, impl Fn(&str) -> u32) {
         let mut e = Engine::new();
         let names: Vec<&'static str> = crate::units::platform::imports()
             .iter()
@@ -5181,5 +5313,510 @@ mod tests {
         assert!(join_draw(&e));
         assert_eq!(next.load(Ordering::SeqCst), local, "the same first local");
         world.leave_guest();
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The world draw's device calls made directly (`NV_DRAW_DIRECT`, step 2 of the native draw path).
+//
+// The typed draw code calls the Direct3D 9 device about 16,500 times a frame in a crowded street. Each
+// call went by address (`Engine::vcall`: the vtable read, the call cache, the call stack, the time
+// slice), then through [`device_call`] (a park check, the late-registration check, the device lock
+// taken and given back). While the world draw's two halves run with the switch on ([`direct_begin`]),
+// [`device_vcall`] reads the vtable slot and calls the device function found by its slot
+// ([`Locked::device`]) at once, and the device lock is taken at the first such call and kept until
+// the halves end. It is given back whenever the thread leaves guest code to wait ([`release_direct`],
+// from `World::leave_guest`: a contended lock, an event, a sleep), so a thread that waits on main
+// never waits for the device lock main holds, and when another thread waits for it the hold is given
+// up for the rest of the half (each call then locks as before). The functions called, their arguments and their order are the same as by
+// address: the command stream and the model see the same calls.
+// ---------------------------------------------------------------------------------------------
+
+thread_local! {
+    /// This thread's direct calls: 0 off, 1 on, 2 on and holding the device lock for them, 3 on with the
+    /// hold given up for the rest of the half (another thread waited for the device lock).
+    static DIRECT: Cell<u8> = const { Cell::new(0) };
+    /// The world the held device lock is of (with 2).
+    static DIRECT_WORLD: Cell<Option<&'static World>> = const { Cell::new(None) };
+    /// The calls this thread made directly (tests).
+    static DIRECT_CALLS: Cell<u64> = const { Cell::new(0) };
+}
+
+/// `NV_DRAW_DIRECT`: on unless `0`.
+fn direct_wanted() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    DIRECT_FORCED.load(Ordering::Relaxed)
+        || *ON.get_or_init(|| std::env::var("NV_DRAW_DIRECT").map_or(true, |v| v != "0"))
+}
+
+static DIRECT_FORCED: AtomicBool = AtomicBool::new(false);
+
+/// Tests: direct calls on for every run from now on, whatever `NV_DRAW_DIRECT` says.
+#[doc(hidden)]
+pub fn force_direct_for_tests() {
+    DIRECT_FORCED.store(true, Ordering::Relaxed);
+}
+
+/// How many device calls this thread has made directly (tests).
+#[doc(hidden)]
+pub fn direct_calls() -> u64 {
+    DIRECT_CALLS.with(Cell::get)
+}
+
+/// Whether this thread has direct calls on and holds the device lock for them (tests).
+#[doc(hidden)]
+pub fn direct_holds() -> bool {
+    DIRECT.with(Cell::get) == 2
+}
+
+/// The world draw's halves begin on `e`'s thread: direct calls on with the switch (stepped threads too, where
+/// a call goes by its address with the time slice counted as by the vtable, so a stepped run is unchanged).
+/// Answers whether they were turned on here (then [`direct_end`] after the halves).
+pub fn direct_begin(_e: &Engine) -> bool {
+    if !direct_wanted() || DIRECT.with(Cell::get) != 0 {
+        return false;
+    }
+    DIRECT.with(|d| d.set(1));
+    true
+}
+
+/// The halves ended: the held device lock given back (only when this thread still holds it), direct
+/// calls off.
+pub fn direct_end() {
+    if DIRECT.with(Cell::get) == 2 {
+        if let Some(w) = DIRECT_WORLD.with(Cell::get) {
+            if w.device.held_here() {
+                w.device.unlock();
+            }
+        }
+    }
+    DIRECT.with(|d| d.set(0));
+    DIRECT_WORLD.with(|d| d.set(None));
+}
+
+/// One world-draw half's direct calls ([`direct_begin`]), ended ([`direct_end`]) when dropped, also
+/// when the half panics: the drawing code's guard (`draw_thread`'s halves, main's and the drawing
+/// helper's alike).
+pub struct DirectHalf(bool);
+
+impl DirectHalf {
+    pub fn begin(e: &Engine) -> DirectHalf {
+        DirectHalf(direct_begin(e))
+    }
+}
+
+impl Drop for DirectHalf {
+    fn drop(&mut self) {
+        if self.0 {
+            direct_end();
+        }
+    }
+}
+
+/// The direct calls' hold given back (this thread is about to wait, or gives the kernel lock up
+/// for pure work): only when it is the only hold of the device lock on this thread. Every device
+/// call takes the lock again on top of the hold ([`device_call_lock`]), so depth 1 means no device
+/// function is running here.
+fn release_direct(w: &World) {
+    if DIRECT.with(Cell::get) == 2
+        && w.device.held_here()
+        && w.device.depth.load(Ordering::Relaxed) == 1
+    {
+        w.device.unlock();
+        DIRECT.with(|d| d.set(1));
+    }
+}
+
+/// The device lock for one device call ([`device_call`], [`device_vcall_direct`]), given back when
+/// the guard drops: with direct calls on, the half's hold taken or given up first ([`direct_hold`]);
+/// then the call's own hold, re-entrant on top of the half's (a depth count when the half holds
+/// it), so a nested call never finds depth 1 inside a device function.
+#[inline]
+fn device_call_lock(e: &Engine, world: &'static World) -> DeviceGuard {
+    if DIRECT.with(Cell::get) != 0 {
+        direct_hold(e, world);
+    }
+    if !world.device.held_here() {
+        park_here(e);
+    }
+    world.device.lock(world);
+    DeviceGuard(world, std::marker::PhantomData)
+}
+
+/// The half's hold of the device lock: taken at its first device call (1 -> 2); given up for the
+/// rest of the half (2 -> 3) when another thread waits for the device lock between two calls, so
+/// from then on every call locks and unlocks as without direct calls and the waiter gets the
+/// lock as it did before them. The next half's [`direct_begin`] starts again at 1.
+fn direct_hold(e: &Engine, world: &'static World) {
+    match DIRECT.with(Cell::get) {
+        1 if !world.device.held_here() => {
+            park_here(e);
+            world.device.lock(world);
+            DIRECT.with(|d| d.set(2));
+            DIRECT_WORLD.with(|d| d.set(Some(world)));
+        }
+        2 if world.device.held_here()
+            && world.device.depth.load(Ordering::Relaxed) == 1
+            && world.device.waiters.load(Ordering::SeqCst) > 0 =>
+        {
+            world.device.unlock();
+            DIRECT.with(|d| d.set(3));
+        }
+        _ => {}
+    }
+}
+
+/// `this->vtable[slot / 4](args)` for the typed draw code's calls into the Direct3D 9 device: with
+/// direct calls on and the slot one of the layer's device functions, that function called at once
+/// under the held device lock; otherwise [`Engine::vcall`] (a hooked slot, a diagnostic, no real
+/// threads, the switch off).
+#[inline]
+pub fn device_vcall(e: &mut Engine, this: u32, slot: u32, args: &[u32]) -> Ret {
+    if DIRECT.with(Cell::get) == 0 || e.diagnosing() {
+        return e.vcall(this, slot, args);
+    }
+    device_vcall_direct(e, this, slot, args)
+}
+
+#[inline(never)]
+fn device_vcall_direct(e: &mut Engine, this: u32, slot: u32, args: &[u32]) -> Ret {
+    let addr = e.mem.u32(e.mem.u32(this).wrapping_add(slot));
+    let mut words = [0u32; 16];
+    if args.len() >= words.len() || device_slot(addr).is_none() {
+        return e.vcall(this, slot, args);
+    }
+    words[0] = this;
+    words[1..=args.len()].copy_from_slice(args);
+    DIRECT_CALLS.with(|c| c.set(c.get() + 1));
+    // Stepped threads: by its address (the slot read here), the time slice counted as for any call.
+    let Some(r) = e.real.as_ref() else {
+        return e.call(addr, &words[..=args.len()]);
+    };
+    let world = r.world;
+    let _held = device_call_lock(e, world);
+    if world.late_count.load(Ordering::Acquire) != e.real.as_ref().map_or(0, |r| r.late_seen) {
+        sync_registered(e);
+    }
+    // Not one of the device lock's functions (registered otherwise): by address.
+    let Some(f) = e.real.as_ref().and_then(|r| r.locked.device(addr)) else {
+        drop(_held);
+        return e.vcall(this, slot, args);
+    };
+    e.call_stack.push(addr);
+    let ret = f(e, &words[..=args.len()]);
+    e.call_stack.pop();
+    ret
+}
+
+/// The world draw's hold of the device lock with real threads (`NV_DRAW_DIRECT`): what a wait, a
+/// waiting thread, the half's end, a panic and a nested call do to it. Each device call here is
+/// [`device_call_lock`], the locking every direct device call goes through. Every wait is bounded:
+/// a thread that does not get the lock in time fails the test, never hangs it.
+#[cfg(test)]
+mod direct_tests {
+    use super::tests::engine_with_imports;
+    use super::*;
+    use crate::args;
+    use std::sync::mpsc;
+
+    const TIMEOUT: Duration = Duration::from_secs(5);
+
+    fn real_engine() -> (Engine, &'static World, impl Fn(&str) -> u32) {
+        let (mut e, slot) = engine_with_imports();
+        start(&mut e).expect("real threads on");
+        force_direct_for_tests();
+        let world = e.real.as_ref().expect("real threads").world;
+        (e, world, slot)
+    }
+
+    /// One device call with the half's hold: the lock taken again for it and given back.
+    fn device_call_here(e: &Engine, world: &'static World) {
+        let _call = device_call_lock(e, world);
+        assert_eq!(
+            world.device.depth.load(Ordering::Relaxed),
+            2,
+            "the call on top of the half's hold"
+        );
+    }
+
+    /// The call after a thread began waiting: the hold given up before it, the call under its own
+    /// lock only.
+    fn device_call_after_waiter(e: &Engine, world: &'static World) {
+        let _call = device_call_lock(e, world);
+        assert_eq!(
+            world.device.depth.load(Ordering::Relaxed),
+            1,
+            "its own lock only"
+        );
+    }
+
+    /// A thread that takes the device lock once; answers on the channel when it has it.
+    fn device_taker(world: &'static World) -> (mpsc::Receiver<()>, std::thread::JoinHandle<()>) {
+        let (tx, rx) = mpsc::channel();
+        let h = std::thread::spawn(move || {
+            world.device.lock(world);
+            let _ = tx.send(());
+            world.device.unlock();
+        });
+        (rx, h)
+    }
+
+    /// Until a thread waits for the device lock (bounded).
+    fn until_waiting(world: &World) -> bool {
+        let deadline = std::time::Instant::now() + TIMEOUT;
+        while world.device.waiters.load(Ordering::SeqCst) == 0 {
+            if std::time::Instant::now() > deadline {
+                return false;
+            }
+            std::thread::yield_now();
+        }
+        true
+    }
+
+    /// The half's first device call takes the hold, and it is kept over the calls after it.
+    #[test]
+    fn the_first_device_call_takes_the_hold_and_keeps_it() {
+        let (e, world, _) = real_engine();
+        assert!(direct_begin(&e));
+        assert!(!direct_holds());
+        device_call_here(&e, world);
+        assert!(direct_holds() && world.device.held_here());
+        device_call_here(&e, world);
+        device_call_here(&e, world);
+        assert!(direct_holds(), "kept with nobody waiting");
+        assert_eq!(world.device.depth.load(Ordering::Relaxed), 1);
+        direct_end();
+        assert!(!direct_holds() && !device_lock_held(&e));
+    }
+
+    /// A Sleep in the half gives the hold back, so another thread gets the device lock while main
+    /// sleeps; the next half's first device call takes it again.
+    #[test]
+    fn a_sleep_gives_the_hold_back() {
+        let (mut e, world, slot) = real_engine();
+        assert!(direct_begin(&e));
+        device_call_here(&e, world);
+        device_call_here(&e, world);
+        assert!(direct_holds());
+        let (got, taker) = device_taker(world);
+        let waiting = until_waiting(world);
+        e.call(slot("Sleep"), &args![20u32]);
+        let in_time = got.recv_timeout(TIMEOUT).is_ok();
+        let after = direct_holds();
+        direct_end();
+        taker.join().expect("the other thread");
+        assert!(waiting, "the other thread waits for the device lock");
+        assert!(
+            in_time,
+            "the other thread got the device lock during main's sleep"
+        );
+        assert!(!after, "given back by the sleep");
+        assert!(direct_begin(&e));
+        device_call_here(&e, world);
+        assert!(direct_holds(), "taken again at the next half's first call");
+        direct_end();
+        assert!(!device_lock_held(&e));
+    }
+
+    /// Main waiting for the kernel lock another thread holds gives the hold back: a third thread
+    /// gets the device lock, and only then does the kernel lock's holder let it go.
+    #[test]
+    fn waiting_for_the_kernel_lock_gives_the_hold_back() {
+        let (e, world, _) = real_engine();
+        let kernel_depth = world.kernel.release_all();
+        assert!(direct_begin(&e));
+        device_call_here(&e, world);
+        device_call_here(&e, world);
+        assert!(direct_holds());
+        let (go_tx, go_rx) = mpsc::channel::<()>();
+        let (held_tx, held_rx) = mpsc::channel::<()>();
+        let holder = std::thread::spawn(move || {
+            world.kernel.lock(world);
+            let _ = held_tx.send(());
+            // Until the device lock reached the third thread (or the time is up).
+            let reached = go_rx.recv_timeout(TIMEOUT).is_ok();
+            world.kernel.unlock();
+            reached
+        });
+        held_rx
+            .recv_timeout(TIMEOUT)
+            .expect("the kernel lock taken");
+        let (got, taker) = device_taker(world);
+        let waiting = until_waiting(world);
+        let forward = std::thread::spawn(move || {
+            if got.recv_timeout(TIMEOUT).is_ok() {
+                let _ = go_tx.send(());
+            }
+        });
+        // Contended: main leaves guest code to wait for it.
+        world.kernel.lock(world);
+        let reached = holder.join().expect("the kernel lock's holder");
+        let after = direct_holds();
+        world.kernel.unlock();
+        direct_end();
+        forward.join().expect("the forwarder");
+        taker.join().expect("the other thread");
+        world.kernel.take_again(world, kernel_depth);
+        assert!(waiting, "the third thread waits for the device lock");
+        assert!(
+            reached,
+            "the device lock reached the third thread while main waited"
+        );
+        assert!(!after, "given back by the wait");
+    }
+
+    /// A thread that waits for the device lock gets it at main's next device call: the hold is
+    /// given up for the rest of the half, and main's later calls in it lock per call.
+    #[test]
+    fn a_waiting_thread_gets_the_device_lock_at_the_next_call() {
+        let (e, world, _) = real_engine();
+        assert!(direct_begin(&e));
+        device_call_here(&e, world);
+        device_call_here(&e, world);
+        assert!(direct_holds());
+        let (got, taker) = device_taker(world);
+        let waiting = until_waiting(world);
+        device_call_after_waiter(&e, world);
+        let in_time = got.recv_timeout(TIMEOUT).is_ok();
+        let given_up = !direct_holds();
+        // Later calls of the half still work, each under its own lock, and the hold is not taken
+        // again in this half.
+        let mut per_call = true;
+        for _ in 0..3 {
+            let _call = device_call_lock(&e, world);
+            per_call &= world.device.held_here() && world.device.depth.load(Ordering::Relaxed) == 1;
+        }
+        let again = direct_holds();
+        let held_after = world.device.held_here();
+        direct_end();
+        taker.join().expect("the other thread");
+        assert!(waiting, "the other thread waits for the device lock");
+        assert!(in_time, "the other thread got the device lock");
+        assert!(given_up, "the hold given up for the rest of the half");
+        assert!(per_call, "later calls lock per call");
+        assert!(!again && !held_after, "not taken again in this half");
+        assert!(direct_begin(&e));
+        device_call_here(&e, world);
+        assert!(direct_holds(), "the next half takes it again");
+        direct_end();
+        assert!(!device_lock_held(&e));
+    }
+
+    /// The half's end gives the hold back, and so does a panic inside the half (the drawing code's
+    /// guard, [`DirectHalf`]), also with a device call's lock taken when it panics.
+    #[test]
+    fn the_end_and_a_panic_give_the_device_lock_back() {
+        let (e, world, _) = real_engine();
+        assert!(direct_begin(&e));
+        device_call_here(&e, world);
+        assert!(device_lock_held(&e));
+        direct_end();
+        let after_end = (
+            device_lock_held(&e),
+            world.device.depth.load(Ordering::Relaxed),
+        );
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _half = DirectHalf::begin(&e);
+            device_call_here(&e, world);
+            let _call = device_call_lock(&e, world);
+            panic!("in the half");
+        }));
+        let after_panic = (
+            device_lock_held(&e),
+            direct_holds(),
+            world.device.depth.load(Ordering::Relaxed),
+        );
+        // Bounded either way: another thread takes it at once, or the test fails.
+        let free = if after_end.0 || after_panic.0 {
+            world.device.release_all();
+            false
+        } else {
+            let (got, taker) = device_taker(world);
+            let free = got.recv_timeout(TIMEOUT).is_ok();
+            taker.join().expect("the other thread");
+            free
+        };
+        assert_eq!(after_end, (false, 0), "after the end");
+        assert!(caught.is_err());
+        assert_eq!(after_panic, (false, false, 0), "after a panic in the half");
+        assert!(free, "free for another thread");
+        // A second end is harmless.
+        direct_end();
+        assert!(!device_lock_held(&e));
+    }
+
+    /// A device call made inside a device function keeps the lock, even with a thread waiting, and
+    /// a wait's release there leaves it held; the hold is given up only between calls.
+    #[test]
+    fn a_nested_device_call_does_not_give_the_lock_away() {
+        let (e, world, _) = real_engine();
+        assert!(direct_begin(&e));
+        device_call_here(&e, world);
+        let (waiting, got, taker, inner_held, outer_held, released_inside) = {
+            // The outer device function runs; a thread begins to wait while it does.
+            let _outer = device_call_lock(&e, world);
+            let (got, taker) = device_taker(world);
+            let waiting = until_waiting(world);
+            let inner_held = {
+                let _inner = device_call_lock(&e, world);
+                world.device.held_here() && direct_holds()
+            };
+            release_direct(world);
+            let released_inside = !world.device.held_here();
+            let outer_held = world.device.held_here() && direct_holds();
+            (waiting, got, taker, inner_held, outer_held, released_inside)
+        };
+        let not_yet = got.try_recv().is_err();
+        // Between calls: given up.
+        device_call_after_waiter(&e, world);
+        let in_time = got.recv_timeout(TIMEOUT).is_ok();
+        direct_end();
+        taker.join().expect("the other thread");
+        assert!(waiting, "the other thread waits");
+        assert!(inner_held, "held through the nested call");
+        assert!(
+            outer_held && !released_inside,
+            "held through the outer function"
+        );
+        assert!(
+            not_yet,
+            "the waiter did not get it inside the device function"
+        );
+        assert!(in_time, "the waiter got it after");
+        assert!(!device_lock_held(&e));
+    }
+
+    /// Work without the kernel lock in the half gives the hold back first, so the kernel lock is
+    /// released as without direct calls and another thread takes it meanwhile.
+    #[test]
+    fn work_without_the_kernel_lock_in_the_half_releases_it() {
+        let (e, world, _) = real_engine();
+        assert!(world.kernel.held_here(), "start returns holding it");
+        assert!(direct_begin(&e));
+        device_call_here(&e, world);
+        assert!(direct_holds());
+        let (tx, rx) = mpsc::channel::<()>();
+        let other = std::thread::spawn(move || {
+            world.kernel.lock(world);
+            let _ = tx.send(());
+            world.kernel.unlock();
+        });
+        let (released, took) = without_kernel_lock(&e, || {
+            (!world.kernel.held_here(), rx.recv_timeout(TIMEOUT).is_ok())
+        });
+        let after = direct_holds();
+        direct_end();
+        let depth = if took {
+            0
+        } else {
+            // Let the other thread finish before failing.
+            world.kernel.release_all()
+        };
+        other.join().expect("the other thread");
+        world.kernel.take_again(world, depth);
+        assert!(released, "the kernel lock given back for the work");
+        assert!(took, "another thread took the kernel lock meanwhile");
+        assert!(!after, "the hold given back first");
+        assert!(world.kernel.held_here(), "the kernel lock taken back");
     }
 }
