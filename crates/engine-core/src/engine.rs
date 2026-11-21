@@ -967,6 +967,49 @@ impl Engine {
         self.call_full(addr, args)
     }
 
+    /// [`Engine::call`] of `addr` with `words`, except that where the call would run `expect` (the
+    /// function registered at `addr` and found in the call cache, no diagnostic on) it runs `typed`
+    /// in its place: the same function as a plain Rust call, its arguments not packed into words
+    /// (`crate::real_threads::DeviceWriter`). The time slice, the hook at its end and the call
+    /// stack go as in [`Engine::dispatch`]'s fast path; everything else is [`Engine::call`] itself.
+    #[inline(always)]
+    pub(crate) fn call_typed(
+        &mut self,
+        addr: u32,
+        expect: AbiFn,
+        words: &[u32],
+        typed: impl FnOnce(&mut Engine) -> u32,
+    ) -> Ret {
+        if let Some(f) = self.cached(addr) {
+            if std::ptr::fn_addr_eq(f, expect) && !self.diagnosing() {
+                let left = self
+                    .slice_left
+                    .checked_sub(u64::from(self.slice_hook.is_some()));
+                match left {
+                    Some(left) if self.call_stack.len() < self.call_stack.capacity() => {
+                        self.slice_left = left;
+                        self.call_stack.push(addr);
+                        let ret = typed(self);
+                        self.call_stack.pop();
+                        return crate::abi::RetVal::into_ret(ret);
+                    }
+                    None => {
+                        // As [`Engine::call_at_slice_end`].
+                        if let Some(hook) = self.slice_hook {
+                            hook(self, addr);
+                        }
+                        self.call_stack.push(addr);
+                        let ret = typed(self);
+                        self.call_stack.pop();
+                        return crate::abi::RetVal::into_ret(ret);
+                    }
+                    Some(_) => {}
+                }
+            }
+        }
+        self.dispatch(addr, words)
+    }
+
     /// [`Engine::dispatch`]'s fast path when the slice is used up: the hook (which starts the
     /// next turn, or asks again at the next call), then the call.
     #[cold]

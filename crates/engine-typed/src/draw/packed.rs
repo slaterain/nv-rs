@@ -21,9 +21,6 @@ use engine_core::x87::{
 };
 use engine_core::{args, typed_call, Engine};
 
-/// `IDirect3DDevice9::DrawPrimitive` (slot 81) and `DrawIndexedPrimitive` (slot 82).
-const DEVICE_DRAW_PRIMITIVE: u32 = 0x144;
-const DEVICE_DRAW_INDEXED_PRIMITIVE: u32 = 0x148;
 /// `IDirect3DDevice9::CreateVertexDeclaration` (slot 86).
 const DEVICE_CREATE_VERTEX_DECLARATION: u32 = 0x158;
 /// The shader's slot 0x90 that asks whether a pass is set, and the render family's `00e80580` there.
@@ -86,7 +83,10 @@ fn strip_length(e: &Engine, data: u32, strip: u32) -> u32 {
 #[inline(always)]
 fn draw_indexed(e: &mut Engine, renderer: u32, words: [u32; 6]) {
     let device = packet::renderer_device(e, renderer);
-    engine_core::real_threads::device_vcall(e, device, DEVICE_DRAW_INDEXED_PRIMITIVE, &words);
+    let [kind, base, min, vertices, start, count] = words;
+    engine_core::real_threads::device_draw_indexed_primitive(
+        e, device, kind, base, min, vertices, start, count,
+    );
 }
 
 // Typed from 00e745a0
@@ -198,12 +198,7 @@ pub fn draw_shape(e: &mut Engine, this: Ptr, geometry: Ptr) {
         let first = e.mem.u32(render_data.wrapping_add(0x38));
         let kind = e.mem.u32(render_data.wrapping_add(0x3c));
         let device = packet::renderer_device(e, t);
-        engine_core::real_threads::device_vcall(
-            e,
-            device,
-            DEVICE_DRAW_PRIMITIVE,
-            &args![kind, first, count],
-        );
+        engine_core::real_threads::device_draw_primitive(e, device, kind, first, count);
     }
     own::settle_changed_flags(e, data);
 }
