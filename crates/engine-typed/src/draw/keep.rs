@@ -10,7 +10,8 @@
 //! is replayed: its writes, setter calls and device calls, in order, without the set-up's work.
 //! The constant set-ups that follow the camera or the game time (world x view x projection, the eye position, the
 //! lights' vectors, the constant maps' defined constants, the vertex entries 15, 16 and 21) are kept as calls too and
-//! run again on every replay with the frame's camera, sun, lights and time; what they read is not an input. So a kept draw breaks only when the geometry's own inputs change, not when the camera moves.
+//! run again on every replay with the frame's camera, sun, lights and time; what they read is not an input. So a kept draw breaks
+//! only when the geometry's own inputs change, not when the camera moves.
 //!
 //! What a player sees is the same: a record is used only when every input it read is the same, and it does what the
 //! set-up did. With `check`, every replay is also checked: the set-up runs as always and what it did is compared
