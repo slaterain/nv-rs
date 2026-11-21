@@ -177,6 +177,7 @@ Each also has a `[nv-rs Fixes]` key in `Fallout.ini` (`bUncap` ... `bNVSEListGua
 | `NV_JIP_COSAVE_FIX` | JIP co-save fixes | `host/fixes.rs` (flag read by `jip`) |
 | `NV_JIP_VANILLA_CMDS` | JIP vanilla commands | `host/fixes.rs` (flag read by `jip`) |
 | `NV_JIP_GAME_PATCHES` | JIP game patches | `host/fixes.rs` (flag read by `jip`) |
+| `NV_JG_EDITOR_IDS` | JohnnyGuitar's editor ids | `host/fixes.rs` (flag read by `johnnyguitar`) |
 | `NV_MCM` | The Mod Configuration Menu's plugin built in (on in the fixes preset) | `host/fixes.rs` (flag read by `mcm`) |
 | `NV_UIO` | UI Organizer built in (on in the fixes preset) | `host/fixes.rs` (flag read by `uio`) |
 | `NV_NVSE_ERROR_GUARD` | Script error loop guard | `host/fixes.rs` |

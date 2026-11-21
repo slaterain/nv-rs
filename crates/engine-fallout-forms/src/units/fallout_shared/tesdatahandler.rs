@@ -4497,6 +4497,11 @@ fn register_loaded_form(e: &mut Engine, file: Ptr) {
             e.call(SAVE_LOAD_ANNOUNCE, &args![save_load, form]);
         }
     } else {
+        // JohnnyGuitar NVSE's seam at `0x4679F8` (its jump to `0x467A84`): no insertion here
+        // while its row is on, its setter having stored the name.
+        if e.site(0x0046_79f8, &[]).is_some() {
+            return;
+        }
         let id = e.call(FILE_GET_FORM_ID, &args![file]).u32();
         let form = e.call(FORM_BY_ID, &args![id]).u32();
         if form != 0 {
@@ -8159,6 +8164,8 @@ enum GameValue {
 /// word the form is kept in (0: a local).
 struct GlobalValueForm {
     id: u32,
+    /// The call registering it with the editor id map (JohnnyGuitar NVSE's seam there).
+    site: u32,
     editor_id: u32,
     value: GameValue,
     global: u32,
@@ -8170,36 +8177,42 @@ struct GlobalValueForm {
 const GAME_VALUE_FORMS: [GlobalValueForm; 6] = [
     GlobalValueForm {
         id: 0x35,
+        site: 0x0046_ca2b,
         editor_id: 0x0101_8fac,
         value: GameValue::Memory(GAME_YEAR_VALUE),
         global: 0,
     },
     GlobalValueForm {
         id: 0x36,
+        site: 0x0046_cb0d,
         editor_id: 0x0101_8f9c,
         value: GameValue::Memory(GAME_MONTH_VALUE),
         global: 0,
     },
     GlobalValueForm {
         id: 0x37,
+        site: 0x0046_cbef,
         editor_id: 0x0101_8f90,
         value: GameValue::Memory(GAME_DAY_VALUE),
         global: 0,
     },
     GlobalValueForm {
         id: 0x38,
+        site: 0x0046_ccd1,
         editor_id: 0x0101_8f80,
         value: GameValue::Memory(GAME_HOUR_VALUE),
         global: 0,
     },
     GlobalValueForm {
         id: 0x39,
+        site: 0x0046_cdaf,
         editor_id: 0x0101_8f6c,
         value: GameValue::One,
         global: 0,
     },
     GlobalValueForm {
         id: 0x3a,
+        site: 0x0046_ce91,
         editor_id: 0x0101_8f60,
         value: GameValue::Memory(TIME_SCALE_VALUE),
         global: 0,
@@ -8358,8 +8371,11 @@ fn make_global_value_form(e: &mut Engine, this: Ptr<TESDataHandler>, spec: &Glob
     };
     fn_0046dce0(e, Ptr::new(form), value);
     add_form_to_list(e, this, GLOBAL_LIST_ACCESSOR, form, spec.global);
-    let editor_ids = e.global::<u32>(EDITOR_ID_MAP);
-    e.call(EDITOR_ID_MAP_ADD, &args![editor_ids, spec.editor_id, form]);
+    // JohnnyGuitar NVSE's seam at the call (its no-op there: its setter registered the name).
+    if e.site(spec.site, &[]).is_none() {
+        let editor_ids = e.global::<u32>(EDITOR_ID_MAP);
+        e.call(EDITOR_ID_MAP_ADD, &args![editor_ids, spec.editor_id, form]);
+    }
 }
 
 /// A form made without a lookup of a cast type: built when `FORM_BY_ID`
@@ -8544,6 +8560,7 @@ pub fn tes_data_handler_generate_default_objects(e: &mut Engine, this: Ptr<TESDa
         this,
         &GlobalValueForm {
             id: 0x63,
+            site: 0x0046_dc77,
             editor_id: 0x0101_8cb0,
             value: GameValue::Zero,
             global: PLAY_CREDITS_GLOBAL,
@@ -14453,6 +14470,36 @@ mod tests {
         e.call(0x0046_7780, &args![this, reader.file, 0u32]);
     }
 
+    /// JohnnyGuitar NVSE's seam at `0x4679F8` (its jump past the insertion): with its skip there
+    /// the loaded form's editor id is not put in the game's map (nor is the form looked up).
+    #[test]
+    fn file_loader_leaves_the_editor_id_to_the_jg_seam() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let (mut e, this, reader) = reader_setup(&[
+            (FORM_TYPE_DEFAULT_OBJECTS, 0),
+            (FORM_TYPE_TOFT, 0xffff_ffff),
+        ]);
+        let manager = probe_form(&mut e, &[]);
+        let manager_object = manager.object;
+        e.register_double(DEFAULT_OBJECT_MANAGER_INSTANCE, move |_, _| {
+            ret(manager_object)
+        });
+        let editor_id = c_string(&mut e, "MyForm");
+        let form = probe_form(&mut e, &[(0x130, editor_id)]);
+        let form_object = form.object;
+        e.register_double(FORM_BY_ID, move |_, _| ret(form_object));
+        e.register(FORM_GET_TYPE, |_, _| ret(FORM_TYPE_DEFAULT_OBJECTS));
+        do_nothing(&mut e, &[FORM_STEP_483870, FORM_STEP_483720]);
+        e.set_global(EDITOR_ID_MAP, 0x5500u32);
+        e.register(EDITOR_ID_MAP_ADD, |_, _| {
+            panic!("JG's seam skips the insertion")
+        });
+        e.on_site(SiteSlot::new(Owner::JohnnyGuitar, 0x0046_79f8), |_, a| {
+            a.is_empty().then_some(0)
+        });
+        e.call(0x0046_7780, &args![this, reader.file, 0u32]);
+    }
+
     #[test]
     fn file_loader_tells_the_save_game_about_the_forms_it_loads() {
         let (mut e, this, reader) = reader_setup(&[
@@ -17407,6 +17454,52 @@ mod tests {
             [0x2f, 1, SOURCE_FILE, 0x2a8f]
         );
         assert_eq!(calls(&e, SCOPE_LEAVE).len(), 2);
+    }
+
+    /// The seven hand registrations JohnnyGuitar NVSE takes out (`0x46CA2B` .. `0x46CE91` and
+    /// `0x46DC77`: GameYear, GameMonth, GameDay, GameHour, GameDaysPassed, TimeScale, PlayCredits):
+    /// with no handler each name goes to the game's map; with JG's skip at each seam, none does.
+    #[test]
+    fn the_jg_seams_skip_the_seven_hand_registrations() {
+        use engine_core::extend::{Owner, SiteSlot};
+        const NAMES: [u32; 7] = [
+            0x0101_8fac,
+            0x0101_8f9c,
+            0x0101_8f90,
+            0x0101_8f80,
+            0x0101_8f6c,
+            0x0101_8f60,
+            0x0101_8cb0,
+        ];
+        for with_seams in [false, true] {
+            let (mut e, this) = default_objects_engine(false);
+            if with_seams {
+                for site in [
+                    0x0046_ca2b,
+                    0x0046_cb0d,
+                    0x0046_cbef,
+                    0x0046_ccd1,
+                    0x0046_cdaf,
+                    0x0046_ce91,
+                    0x0046_dc77,
+                ] {
+                    e.on_site(SiteSlot::new(Owner::JohnnyGuitar, site), |_, a| {
+                        a.is_empty().then_some(0)
+                    });
+                }
+            }
+            start_log(&mut e);
+            e.call(0x0046_a370, &args![this]);
+            let mut added: Vec<u32> = calls(&e, EDITOR_ID_MAP_ADD)
+                .iter()
+                .map(|c| c[1])
+                .filter(|name| NAMES.contains(name))
+                .collect();
+            added.sort_unstable();
+            let mut want = if with_seams { vec![] } else { NAMES.to_vec() };
+            want.sort_unstable();
+            assert_eq!(added, want, "{with_seams}");
+        }
     }
 
     #[test]

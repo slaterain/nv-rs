@@ -2,7 +2,8 @@
 //! process, so this binary holds one run and one test): the world draw posted at the first half's call runs when
 //! main reaches its next join point, after the frame's tail, from the packet main cut before the tail; the second
 //! half's call is skipped; a join point on the drawing side does nothing; a refused post draws on main in order; a
-//! job's stop comes back at the join; the end of the process with a job posted does not hang.
+//! job's stop comes back at the join; the end of the process with a job posted does not hang; the virtual clock is
+//! handed from the job to main once, at the join.
 
 use engine_core::draw_thread::{self, testing, Counts, Hooks, Packet};
 use engine_core::real_threads::{self, on_draw_helper};
@@ -22,6 +23,8 @@ const STOP: u32 = 0x0300_0004;
 const JOIN_INSIDE: u32 = 0x0300_0008;
 /// Set: the first half takes this many milliseconds (the job's own time).
 const SLOW_MS: u32 = 0x0300_000c;
+/// The first half reads the clock this many times (the virtual clock's hand-off at the join).
+const CLOCK_READS: u32 = 0x0300_0010;
 
 /// What the halves did: (half, on the drawing helper, the value it read).
 static DRAWN: Mutex<Vec<(u32, bool, u32)>> = Mutex::new(Vec::new());
@@ -51,6 +54,9 @@ fn first(e: &mut Engine, _: &[u32]) -> Ret {
     let slow = e.mem.u32(SLOW_MS);
     if slow != 0 {
         std::thread::sleep(std::time::Duration::from_millis(u64::from(slow)));
+    }
+    for _ in 0..e.mem.u32(CLOCK_READS) {
+        e.clock_now_ms();
     }
     let v = read_value(e);
     DRAWN.lock().unwrap().push((1, on_draw_helper(), v));
@@ -253,7 +259,11 @@ fn the_world_draw_runs_after_the_tail_from_the_packet_cut_before_it() {
     e.call_stack.clear();
     e.mem.set_u32(STOP, 0);
     take_drawn();
-    take_joined();
+    assert_eq!(
+        take_joined(),
+        [40],
+        "the stopped job's packet handed back and closed on main"
+    );
     e.mem.set_u32(VALUE, 50);
     draw_thread::first_half(&mut e, 0x6000, 0x8800, 1, 0);
     draw_thread::idle(&mut e);
@@ -381,6 +391,100 @@ fn the_world_draw_runs_after_the_tail_from_the_packet_cut_before_it() {
         "{line}"
     );
     take_drawn();
+    take_joined();
+
+    // The virtual clock (`NV_REPEATABLE`; one microsecond a reading): the job starts from main's clock at the post and
+    // main's moves on once, at the join, by the job's readings; a refused post (drawn on main) moves it by the draw's
+    // readings once; a job dropped unrun not at all; a join at OnIdle after main's frame end puts the draw's readings
+    // before the frame end's padding, as serially.
+    e.start_repeatable_clock();
+    let read = |e: &mut Engine, n: u64| {
+        for _ in 0..n {
+            e.clock_now_ms();
+        }
+    };
+    e.mem.set_u32(CLOCK_READS, 7);
+    let at = e.clock_peek_us();
+    draw_thread::first_half(&mut e, 0x6000, 0x8800, 1, 0);
+    draw_thread::second_half(&mut e, 0x6000, 0x8800, 1);
+    read(&mut e, 2);
+    assert_eq!(
+        e.clock_peek_us(),
+        at + 2,
+        "main's readings only before the join"
+    );
+    draw_thread::finish_at(&mut e, 0x0087_5110);
+    assert_eq!(take_drawn(), [(1, true, 50), (2, true, 50)]);
+    assert_eq!(e.clock_peek_us(), at + 2 + 7, "the draw's 7 readings, once");
+    read(&mut e, 1);
+    draw_thread::idle(&mut e);
+    assert_eq!(
+        e.clock_peek_us(),
+        at + 10,
+        "a later join point moves nothing"
+    );
+    take_joined();
+
+    let at = e.clock_peek_us();
+    BUSY.store(true, SeqCst);
+    draw_thread::first_half(&mut e, 0x6000, 0x8800, 1, 0);
+    BUSY.store(false, SeqCst);
+    assert_eq!(take_drawn(), [(1, false, 50), (2, false, 50)]);
+    draw_thread::second_half(&mut e, 0x6000, 0x8800, 1);
+    draw_thread::idle(&mut e);
+    assert_eq!(
+        e.clock_peek_us(),
+        at + 7,
+        "drawn on main: its readings, once"
+    );
+    take_joined();
+
+    // The frame ends (main's frame padded to its target) before the job is joined at OnIdle: the same clock as the
+    // serial frame (the draw's readings, main's, the padding, then main's after the frame end).
+    let mut serial = Engine::new();
+    serial.start_repeatable_clock();
+    let at = e.clock_peek_us();
+    serial.advance_clock_us(at - serial.clock_peek_us());
+    e.repeatable_frame_end();
+    serial.repeatable_frame_end();
+    for (draw, before, after) in [(7u64, 3u64, 2u64), (16_000, 1_000, 4)] {
+        e.mem.set_u32(CLOCK_READS, draw as u32);
+        draw_thread::first_half(&mut e, 0x6000, 0x8800, 1, 0);
+        draw_thread::second_half(&mut e, 0x6000, 0x8800, 1);
+        read(&mut e, before);
+        e.repeatable_frame_end();
+        read(&mut e, after);
+        draw_thread::idle(&mut e);
+        assert_eq!(take_drawn(), [(1, true, 50), (2, true, 50)]);
+        read(&mut serial, draw + before);
+        serial.repeatable_frame_end();
+        read(&mut serial, after);
+        assert_eq!(
+            e.clock_peek_us(),
+            serial.clock_peek_us(),
+            "draw {draw}, before {before}, after {after}"
+        );
+        e.repeatable_frame_end();
+        serial.repeatable_frame_end();
+        assert_eq!(
+            e.clock_peek_us(),
+            serial.clock_peek_us(),
+            "the next frame end alike"
+        );
+    }
+    take_joined();
+
+    // A job dropped unrun (the end of the process) moves main's clock by nothing.
+    let at = e.clock_peek_us();
+    draw_thread::first_half(&mut e, 0x6000, 0x8800, 1, 0);
+    assert_eq!(
+        real_threads::finish_draw_at_exit(std::time::Duration::from_secs(2)),
+        real_threads::DrawAtExit::Dropped
+    );
+    draw_thread::idle(&mut e);
+    assert!(take_drawn().is_empty());
+    assert_eq!(e.clock_peek_us(), at, "a job never run reads no clock");
+    e.mem.set_u32(CLOCK_READS, 0);
     take_joined();
 
     // Turned off: the plain calls again, on main.

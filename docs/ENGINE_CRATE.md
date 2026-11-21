@@ -433,7 +433,8 @@ speed gate passed (G1, 2026-11-06: Goodsprings +7.1%, Doc's room +3.0%). It is n
 `pathing`, `shader`, `crt` and `dispatch` are on, and since their gates `render` (2026-11-09), `draw`, `scene`,
 `particles`, `collision` and `multibound` (2026-11-10), and on their tests and reviews `animation`, `draw_f` and
 `anim_keys` (2026-11-11: no comparison runs for native code), `process` and `lights` (2026-11-13) and, since its gate,
-`geometry` (2026-11-16) (below); `NV_TYPED=off` turns every family off, and
+`geometry` (2026-11-16) (below), and on its tests `setup` (2026-11-21: the frame's set-up drivers before the
+world is culled, `crates/engine-typed/src/setup`); `NV_TYPED=off` turns every family off, and
 `<family>:off` one; `geometry` (below) is on since its gate (2026-11-16). A family merged off stays off until its
 gate, and `NV_TYPED=<family>` turns it on. A run compared call for call with the original's record (nv-trace's `NV_TRACE_OUT`,
 `NV_TRACE_LIST`) has every family off unless `NV_TYPED` says otherwise (`typed::switch_for`).
@@ -690,6 +691,15 @@ calls of it now go by address too), as do `atol`, `atof`, the commands' handlers
 rounded to 24 bits on the main thread as its x87 precision rounds. Its tests are `crates/engine/tests/typed_scripts.rs`
 (generated expressions over every operator and operand kind, parse mode, xNVSE's buffer and command call, JIP's
 operators). On by the native-code rule.
+And `save` (same crate, id 16): the work of a save's one frame (a quicksave is one frame of about 100 ms in the port),
+first the form id map every form reference a save writes goes through: an id's save index got or added (`00846c90`)
+and resolved back (`00846d20`), the word maps' `SetAt` (`00844700`) with the new item (`00844a70`, `006f99e0`) and
+`SetValue` (`00863840`) their vtable holds, the created-id test (`00469860`), the three-byte index
+(`BGSNumericIDIndex`: `0084eaf0`, `00853500`, `00853570`) and the save buffer's two `SaveFormID`s (`00865db0`,
+`00865df0`). The map's lookup (`00853130`) is the dispatch family's. The buffer's append (`00865570`) and the
+allocator stay called by address, as does any map whose vtable holds other functions. Threads: both (`SetAt` is
+every word map's insert, the AI's combat maps included); integer work only. Its tests are
+`crates/engine/tests/typed_save.rs`. On by the native-code rule.
 And `geometry` (same crate, id 23): the code that reads and writes `NiGeometryData`'s arrays (positions, normals
 with the binormals and tangents after them, colours, texture coordinates), typed so that stage 2 can keep those
 arrays outside the 32-bit space (about 23 to 40 MB of the guest heap on the census route, and what mesh mods grow).

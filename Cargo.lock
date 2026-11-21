@@ -539,6 +539,7 @@ dependencies = [
  "engine-speedtree",
  "engine-typed",
  "esm",
+ "johnnyguitar",
  "nvse",
 ]
 
@@ -1126,6 +1127,7 @@ dependencies = [
  "game-folders",
  "game-profile",
  "jip",
+ "johnnyguitar",
  "mcm",
  "nvse",
  "play-patch",
@@ -1220,6 +1222,14 @@ checksum = "1c00acbd29eabad4a2392fa0e921c874934dbbf4194312ad20f04a0ed67a3cb3"
 dependencies = [
  "getrandom 0.4.3",
  "libc",
+]
+
+[[package]]
+name = "johnnyguitar"
+version = "0.1.0"
+dependencies = [
+ "engine-core",
+ "nvse",
 ]
 
 [[package]]
