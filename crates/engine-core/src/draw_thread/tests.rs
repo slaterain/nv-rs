@@ -394,3 +394,43 @@ fn a_dual_family_keeps_the_draw_on_main() {
     assert_eq!(counts(&e).serial, 1);
     turn_off(&mut e);
 }
+
+/// The virtual clock is one in the game's eyes: the job starts from main's clock at the post, and main's moves on at
+/// the join by the job's readings, so main's tail reads the times it reads serially (the draw's readings, then
+/// main's). The vanilla preset's one gate difference (an interface quad's fade, 2026-11-20) was main's clock left
+/// behind by the readings the draw made on the helper. With the real clock nothing is handed.
+#[test]
+fn the_jobs_clock_readings_move_mains_clock() {
+    let read = |e: &mut Engine, n: u32| {
+        for _ in 0..n {
+            e.clock_now_ms();
+        }
+    };
+    let mut serial = Engine::new();
+    serial.start_repeatable_clock();
+    read(&mut serial, 5);
+    let mut main = Engine::new();
+    main.start_repeatable_clock();
+    let mut helper = Engine::new();
+    helper.start_repeatable_clock();
+    read(&mut helper, 1234);
+    let clock = clock_at_post(&main);
+    assert!(clock.is_some());
+    let from = clock_onto_job(&mut helper, clock);
+    assert_eq!(
+        from,
+        main.clock_peek_us(),
+        "the job starts from main's clock"
+    );
+    read(&mut helper, 3); // the draw
+    read(&mut main, 2); // main's work before the join
+    let moved = clock_moved(&helper, clock, from).expect("a virtual clock");
+    assert_eq!(moved, 3);
+    main.advance_clock_us(moved);
+    read(&mut serial, 0);
+    assert_eq!(main.clock_peek_us(), serial.clock_peek_us());
+    // The real clock: nothing handed.
+    let real = Engine::new();
+    assert_eq!(clock_at_post(&real), None);
+    assert_eq!(clock_moved(&helper, None, from), None);
+}

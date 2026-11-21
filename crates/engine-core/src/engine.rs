@@ -341,6 +341,9 @@ pub struct Engine {
     /// The built-in extenders' state: extension slots, wrap chains and seam handlers
     /// ([`crate::extend`]); empty unless an extender installs.
     pub(crate) extend: crate::extend::ExtendState,
+    /// The drawing thread's copied state while a half of the world draw runs on this engine
+    /// ([`crate::own_view`]; `engine_typed::draw::capture` puts it here and takes it back). `None` otherwise.
+    pub own_view: Option<Box<crate::own_view::OwnView>>,
 }
 
 /// The bytes of each game thread's stack for `with_stack` locals.
@@ -488,6 +491,7 @@ impl Engine {
             typed: Default::default(),
             real: None,
             extend: Default::default(),
+            own_view: None,
         };
         engine.sync_diag();
         // The platform layer's state, when the program links the layer (`units::platform::Layer`:
@@ -887,6 +891,7 @@ impl Engine {
             placed_owner: None,
             typed: self.typed.for_thread(),
             extend: self.extend.for_thread(),
+            own_view: None,
             real,
         };
         e.sync_diag();

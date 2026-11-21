@@ -72,10 +72,13 @@ pub fn world_draw_first(e: &mut Engine, camera: u32, acc: Ptr<BSShaderAccumulato
         }
         super::detach::open(e, &words);
     }
+    // The half draws from the copied state as fields of this engine ([`super::capture::serve`]).
+    super::capture::serve(e);
     with_packet_guard(e, |e| {
         e.vcall(acc.addr(), SLOT_DRAW, &args![camera, acc, third]);
     });
-    // What runs before the second half (the VATS target's draw) is not the world draw: it reads guest memory.
+    // What runs before the second half (the VATS target's draw) is not the world draw: it reads guest memory (the
+    // pause takes the copied state back off the engine first).
     super::capture::pause(e);
 }
 
@@ -88,6 +91,7 @@ fn with_packet_guard(e: &mut Engine, f: impl FnOnce(&mut Engine)) {
         return;
     }
     if let Err(stop) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(e))) {
+        super::capture::unserve(e);
         super::cut::forget_adopted();
         super::cut::join(e);
         std::panic::resume_unwind(stop);
@@ -100,9 +104,11 @@ fn with_packet_guard(e: &mut Engine, f: impl FnOnce(&mut Engine)) {
 /// kept a call through the slot for them.
 pub fn world_draw_second(e: &mut Engine, camera: u32, acc: Ptr<BSShaderAccumulator>, third: u32) {
     super::capture::resume(e);
+    super::capture::serve(e);
     with_packet_guard(e, |e| {
         e.vcall(acc.addr(), SLOT_FINISH, &args![camera, acc, third]);
     });
+    super::capture::unserve(e);
     // Step 1 of the drawing thread: the view's words back to guest memory as the draw ends.
     super::detach::close(e);
     // Step 2's join: the value packet closed (on the drawing thread it goes back to main, which closes it: `cut::
