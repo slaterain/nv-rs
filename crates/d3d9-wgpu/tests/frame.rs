@@ -72,16 +72,13 @@ fn floats(f: &[f32]) -> Vec<u8> {
 /// The game makes one device, so only the tests need this.
 static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// The next [`Gpu`] keeps every command it runs ([`Gpu::rec`]), from its `CreateDevice` on.
-static RECORD_NEXT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
 /// A backend with a `size` by `size` A8R8G8B8 target (`samples` per pixel), a D24S8 depth
 /// surface of the same, a pass-through vertex shader (`mov oPos, v0`: positions in clip space)
 /// and a pixel shader writing `c0`.
 struct Gpu {
     b: WgpuBackend,
     next: u32,
-    /// Every command run, as `NV_D3D9_RECORD` writes them ([`RECORD_NEXT`]).
+    /// Every command run, as `NV_D3D9_RECORD` writes them ([`Gpu::recording`]).
     rec: Option<Vec<u8>>,
     /// Held until the device is gone (fields drop in order: the backend first).
     _turn: std::sync::MutexGuard<'static, ()>,
@@ -119,6 +116,11 @@ impl Gpu {
         Gpu::make_with(size, samples, cache, env, true, false)
     }
 
+    /// As [`Gpu::new`], keeping every command it runs ([`Gpu::rec`]) from its `CreateDevice` on.
+    fn recording(size: u32, samples: u32) -> Option<Gpu> {
+        Gpu::make_full(size, samples, None, &[], true, false, true)
+    }
+
     fn make_with(
         size: u32,
         samples: u32,
@@ -126,6 +128,18 @@ impl Gpu {
         env: &[(&str, &str)],
         threads: bool,
         force: bool,
+    ) -> Option<Gpu> {
+        Gpu::make_full(size, samples, cache, env, threads, force, false)
+    }
+
+    fn make_full(
+        size: u32,
+        samples: u32,
+        cache: Option<std::path::PathBuf>,
+        env: &[(&str, &str)],
+        threads: bool,
+        force: bool,
+        record: bool,
     ) -> Option<Gpu> {
         // A failed test leaves the lock poisoned; the next one still takes its turn.
         let turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
@@ -149,13 +163,11 @@ impl Gpu {
             back_buffers: Data::Bytes(&back),
             depth_stencil: 0,
         };
-        let rec = RECORD_NEXT
-            .swap(false, std::sync::atomic::Ordering::Relaxed)
-            .then(|| {
-                let mut r = d3d9_stream::wire::header().to_vec();
-                d3d9_stream::wire::encode(&create, &mut r);
-                r
-            });
+        let rec = record.then(|| {
+            let mut r = d3d9_stream::wire::header().to_vec();
+            d3d9_stream::wire::encode(&create, &mut r);
+            r
+        });
         b.execute(create);
         for (name, _) in env {
             std::env::remove_var(name);
@@ -5554,8 +5566,7 @@ fn records_script(records: bool) -> Option<Script> {
     const BLUE_TEX: u32 = 0x1610;
     const CUBE: u32 = 0x1620;
     const COLOROP: u32 = 1;
-    RECORD_NEXT.store(true, std::sync::atomic::Ordering::Relaxed);
-    let mut g = Gpu::new(16, 1)?;
+    let mut g = Gpu::recording(16, 1)?;
     {
         let d = g.b.device().expect("the device");
         d.set_draw_records(records);
