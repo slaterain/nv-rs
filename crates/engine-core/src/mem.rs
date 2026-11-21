@@ -2723,6 +2723,8 @@ mod tests {
         assert_eq!(dirty(&t), vec![0x0010_1000]);
         m.set_u64(0x0010_2ffc, 7);
         assert_eq!(dirty(&t), vec![0x0010_2000]);
+        // What a store writes is written as ever (read before the zeroing below clears it).
+        assert_eq!(m.u64(0x0010_2ffc), 7);
         m.set_f64(0x0010_2008, 1.5);
         m.set_u32(0x0010_1008, 1);
         assert_eq!(dirty(&t), vec![0x0010_1000, 0x0010_2000]);
@@ -2737,9 +2739,8 @@ mod tests {
         t.set_tracked(0x0010_1000, 0x1000, false);
         m.set_u32(0x0010_1004, 9);
         assert_eq!(dirty(&t), Vec::<u32>::new(), "no longer tracked");
-        // What a store writes is written as ever.
         assert_eq!(m.u32(0x0010_1004), 9);
-        assert_eq!(m.u64(0x0010_2ffc), 7);
+        assert_eq!(m.u64(0x0010_2ffc), 0, "zeroed");
     }
 
     /// A freed block, and pages unmapped or mapped again, mark the tracked pages they cover.
