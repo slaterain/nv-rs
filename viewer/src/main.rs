@@ -395,6 +395,8 @@ fn run() {
     // lists.
     let mut last: Option<Instant> = None;
     let mut frame_log = host::frame_log::FrameLog::from_env();
+    // The hitch log (on unless `NV_HITCH_LOG=0`): a line for each frame a player could feel as a jump.
+    let mut hitch_log = host::hitch_log::HitchLog::from_env();
     loop {
         game.set_keys_down(&[]);
         game.mouse([0; 3], [false; 8]);
@@ -405,8 +407,13 @@ fn run() {
         if game.repeatable_end() {
             host::end_process(0);
         }
+        // The frame's stage marks, taken once for both logs.
+        let stages = host::hitch_log::take_stages();
+        if let Some(log) = &mut hitch_log {
+            log.record(&mut game.engine, stages.as_ref().map(|s| &s[..]));
+        }
         if let Some(log) = &mut frame_log {
-            log.record(&mut game.engine);
+            log.record(&mut game.engine, stages.as_ref().map(|s| &s[..]));
         }
         // An F12 report waiting for where it was taken (`place.txt`).
         host::report_place::note(&mut game.engine);

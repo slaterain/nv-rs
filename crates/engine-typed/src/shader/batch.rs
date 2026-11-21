@@ -535,14 +535,16 @@ fn add_to_geometry_group(
     let holder = Ptr::<R>::new(e.global::<u32>(RENDER_HOLDER));
     let group = e.get(holder, R::pGeometryGroup);
     let manager = e.get(holder, R::pGeometryGroupManager);
-    e.set(
+    // The renderer's per-draw words: the drawing side's own (`draw::statics::RENDERER_BLOCKS`).
+    capture::own_set(
+        e,
         holder,
         R::m_pkCurrProp,
         geometry
             .addr()
             .wrapping_add(NiGeometry::m_PropertyState.off),
     );
-    e.set(holder, R::m_pkCurrEffects, 0);
+    capture::own_set(e, holder, R::m_pkCurrEffects, 0);
     typed_call!(
         FAMILY,
         0x00e8_8dc0,
@@ -869,7 +871,8 @@ pub fn end_pass(e: &mut Engine) {
             use super::layout::NiDX9Renderer as R;
             let holder = Ptr::<R>::new(e.global::<u32>(RENDER_HOLDER));
             let device = e.get(holder, R::m_pkD3DDevice9);
-            e.vcall(
+            engine_core::real_threads::device_vcall(
+                e,
                 device,
                 DEVICE_SET_SAMPLER_STATE,
                 &args![sampler, 8u32, 0u32],

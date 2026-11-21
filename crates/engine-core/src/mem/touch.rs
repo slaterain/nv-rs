@@ -215,6 +215,7 @@ impl Mem {
         }
         self.touch = Some(Box::new(Touch::new(spec)));
         self.store_diag = true;
+        self.other_diag = true;
     }
 
     /// Whether the touch census is on.

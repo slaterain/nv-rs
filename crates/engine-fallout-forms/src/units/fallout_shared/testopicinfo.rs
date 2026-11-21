@@ -1905,7 +1905,11 @@ pub fn tes_topic_info_get_form_detailed_string(e: &mut Engine, this: Ptr, string
             e.call(SPRINTF, &args![text_part, FORMAT_TEXT, text]);
         }
         let id = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, this));
-        let editor = e.call(FORM_TEXT_AT_401280, &args![this]).u32();
+        // JohnnyGuitar NVSE's getter seam at the call `0x61DA92`.
+        let editor = match e.site(0x0061_da92, &[this.addr()]) {
+            Some(name) => name,
+            None => e.call(FORM_TEXT_AT_401280, &args![this]).u32(),
+        };
         let kind = e.call(FORM_TEXT_AT_440E30, &args![this]).u32();
         e.call(
             STRING_PRINTF,
@@ -3695,6 +3699,39 @@ mod n045_tests {
         );
         assert_eq!(p[0][6], s[0][0]);
         assert_eq!(p[0][5], s[1][0]);
+    }
+
+    /// JohnnyGuitar NVSE's getter seam at the call `0x61DA92`: the info's name in its detailed
+    /// string is the seam's answer (`00401280` not asked); with no handler, `00401280`'s.
+    #[test]
+    fn get_form_detailed_string_names_the_info_through_the_jg_seam() {
+        use engine_core::extend::{Owner, SiteSlot};
+        for with_seam in [true, false] {
+            let mut e = Engine::new();
+            e.map(0x011c_b000, 0x2000);
+            e.register_double(GET_OWNER_TOPIC, |_, _| ret(0));
+            e.register(FORM_ID, |_, a| ret(a[0] & 0xff));
+            e.register(SPRINTF, ok);
+            e.register(STRING_PRINTF, ok);
+            e.register(FORM_TEXT_AT_401280, |_, _| ret(0x401));
+            e.register(FORM_TEXT_AT_440E30, |_, _| ret(0x440));
+            let info = e.mem.alloc(0x60);
+            e.mem.set_u32(SHARED_RESPONSES_INFO, info);
+            e.mem.set_u32(SHARED_RESPONSES, 0);
+            e.register(WORD_AT_ZERO, |e, a| ret(e.mem.u32(a[0])));
+            if with_seam {
+                e.on_site(SiteSlot::new(Owner::JohnnyGuitar, 0x0061_da92), |_, a| {
+                    (a.len() == 1).then_some(0x61d)
+                });
+            }
+            e.call_log = Some(vec![]);
+            e.call(0x0061_d950, &[info, 0x9000]);
+            let log = e.call_log.take().unwrap();
+            let p = only(&log, STRING_PRINTF);
+            let want = if with_seam { 0x61d } else { 0x401 };
+            assert_eq!(p[0][3], want, "{with_seam}");
+            assert_eq!(only(&log, FORM_TEXT_AT_401280).is_empty(), with_seam);
+        }
     }
 
     #[test]

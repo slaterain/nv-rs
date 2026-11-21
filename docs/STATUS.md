@@ -68,7 +68,10 @@ In so far:
 - Saves reach the disk from a thread of their own.
 - Its compressed archives unpack in native code and are read without reopening them.
 - Its textures, vertex and index buffers and sound samples are kept outside its 32-bit memory.
-- The first native families are on.
+- The first native families are on: among them the script expression evaluator (every condition and
+  `set ... to` line of a quest or mod script), the world draw's device calls (made directly, one lock
+  per half of the draw, repeated states not sent) and the per-actor loops after each frame.
+- On the drawing thread, a draw reuses what the draw before it resolved while nothing changed.
 - Finding what is on screen, the water's reflection included, is shared out over several cores.
 
 ## xNVSE built in
@@ -106,11 +109,11 @@ console commands it re-exports are copies of the console's own.
 
 ## JIP LN built in
 
-🔨 JIP LN's script commands and game patches, with nothing to install. All are built, but JIP
-answers "not installed" in every preset: it is off by default and can be switched on to test mods
-that need it (`bJIPInstalled` in `Fallout.ini`, or `NV_JIP_INSTALLED`). The per-patch detail is in
+🔨 JIP LN's script commands and game patches, with nothing to install. All are built, and JIP
+answers "installed" in the default fixes preset, together with MCM's plugin and UI Organizer (vanilla
+leaves all three off; `bJIPInstalled=0` in `Fallout.ini` turns JIP off). The per-patch detail is in
 [FIXES.md, "JIP LN NVSE's game patches"](FIXES.md#jip-ln-nvses-game-patches) and
-[FIXES.md, "JIP LN NVSE switched on for testing"](FIXES.md#jip-ln-nvse-switched-on-for-testing).
+[FIXES.md, "JIP LN NVSE switched on"](FIXES.md#jip-ln-nvse-switched-on).
 
 JIP LN's command table (its 1,150 slots at their own numbers) and its co-save are in, and all of
 its commands: 1,116, plus its two version commands, 1,118 in all. The command count on the front
@@ -203,8 +206,9 @@ page is checked by a test (`the_readme_counts_the_built_commands` in `crates/jip
 
 ### Game patches
 
-JIP's game patches change the game's own code. All 162 planned for the port are built, inert until
-JIP answers "installed". They include:
+JIP's game patches change the game's own code. 171 of its 183 are built, inert until
+JIP answers "installed"; three more are folded into other rows, one waits and eight are left out on
+purpose (below; that list also names Enhanced Camera's patch, which is not one of the 183). They include:
 
 - **Framework and the player:** the patch framework, the first two fixes, the player's update 3D
   (both views, weapon and queued references), the detection patch (forced detection values and the
@@ -268,12 +272,12 @@ Camera's patches; a start-up order change; JIP's own start-up; and one that xNVS
 
 🔨 The script commands MCM's menu needs, with nothing to install: its nine commands (MCM 1.5's
 `MCM.dll`, built from its machine code), its menu traits and its mods' INI settings, kept between
-sessions beside the saves. Off until it is tried in the game (`bMCM`, `NV_MCM`).
+sessions beside the saves. On in the fixes preset with JIP, off in vanilla (`bMCM`, `NV_MCM`).
 
 ## UI Organizer (UIO) built in
 
-🔨 UI mods' HUD and menu additions, with nothing to install. Off until it is proven in the game
-(`bUIO`, `NV_UIO`). In so far:
+🔨 UI mods' HUD and menu additions, with nothing to install. On in the fixes preset with JIP,
+off in vanilla (`bUIO`, `NV_UIO`). In so far:
 
 - Its lists: UIO's own `supported.txt` of the UI mods it knows (35 entries) is built in, and a
   copy in `Data\uio\` takes its place; the UI mods' `Data\uio\public` lists, with their
@@ -287,17 +291,27 @@ More in [FIXES.md, "UI Organizer"](FIXES.md#ui-organizer).
 
 ## lStewieAl's Tweaks built in
 
-🔨 Its engine fixes and tweaks, with nothing to install. 105 of its changes are built:
+🔨 Its engine fixes and tweaks, with nothing to install. 158 of its changes are built:
 
-- 67 of its crash fixes;
+- 72 of its crash and leak fixes;
 - Engine Optimizations' first change (a save's changed-forms map);
-- 37 other fixes and tweaks: 8 to forms, scripts, saves and sound; 17 to AI, actors and the
-  player; 12 to menus and the HUD.
+- 85 other fixes and tweaks: 8 to the engines and the console; 14 to forms, cells, scripts, saves
+  and sound; 32 to AI, actors and the player; 31 to menus and the HUD.
 
 - Each change is on with the fixes preset and has its own off key in `Fallout.ini`'s
   `[nv-rs Stewie]`.
 - Its settings are VNV's, with the player's `nvse_stewie_tweaks.ini` read over them.
 - One of the crash fixes, a leak, the port had already fixed.
+- The engines and the console (seven fixes): the sun's light comes from the side of the sky its disc
+  is on; blood and impact marks on bodies show the variant picked for them; things that are not
+  doors no longer count as doors for NPCs' paths; and four crashes are gone (a tree whose distant
+  LOD a plugin disabled, with Tweaks' console line naming it; a place whose navigation mesh cannot
+  be worked out; a path through a door with no way back; a switch or LOD node that updates only its
+  shown part). One Tweaks slip is not copied, under the missing-data guard row.
+- Stairs: collision marked as stairs (123 of the game's own meshes, among them the Hoover Dam
+  towers' stairs and the vault, utility and basement stairs) counts every riser as a step, so the
+  player and NPCs walk up and down them without catching on a riser or being pushed back. Two
+  Tweaks slips are not copied, under the missing-data guard row.
 - The remaining crash fixes and tweaks come next.
 
 More in [FIXES.md, "lStewieAl's Tweaks"](FIXES.md#lstewieals-tweaks).

@@ -206,6 +206,12 @@ fn editor_id_lookup(e: &mut Engine, text: &[u8]) -> u32 {
 /// `LookupFormByEDID`) for a text already in guest memory at `key`: the map's own bucket and
 /// compare functions (its vtable +4 and +8); the form, 0 for none or no map.
 pub(crate) fn editor_id_lookup_at(e: &mut Engine, key: u32) -> u32 {
+    // JohnnyGuitar's editor ids (their row on): their store answers (case-blind), the game's map
+    // being unused.
+    if engine_core::editor_ids::on(e) {
+        let name = e.mem.cstr(key);
+        return engine_core::editor_ids::store(e).lookup(&name);
+    }
     let map = e.mem.u32(EDITOR_IDS_MAP);
     if map == 0 {
         return 0;

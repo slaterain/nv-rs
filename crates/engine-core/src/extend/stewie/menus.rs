@@ -52,3 +52,73 @@ pub const ROULETTE_CUT_BET_VALUE: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END,
 /// won game pays the ante once (the exe moves the won items and caps to the player, then gives
 /// them again from the barter container).
 pub const CARAVAN_SINGLE_PAYOUT: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 11);
+/// S0022.12 `MenuFixes` (`fn_00728da0`, the recipe menu's item information, at `0x7296E0`): the
+/// condition tile's notch sits in the armour place for armour (`user6` 0) and at the crafted
+/// condition (`user5`), not always in the weapon's place.
+pub const RECIPE_CONDITION_NOTCH: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 12);
+/// S0022.34 `MenuFixes` (`InventoryMenu::DoGamepad` `00782190`, its switch slot `0x7823B0`): the
+/// pad's and Page Up's mod menu button does nothing while the mod button cannot be used
+/// (`target` 0).
+pub const WEAPON_MOD_MENU_NEEDS_TARGET: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 13);
+/// S0022.52 `MenuFixes` (`RepairMenu::DoEnter` `007b6120` at `0x7B6514`): the repair menu's stat
+/// lines follow the broken item's type, not the type of the item repaired with.
+pub const REPAIR_MENU_BROKEN_ITEM_TYPE: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 14);
+/// S0033 `patchRepairServicesMenuRemembersScrollPosition` (`RepairServicesMenu::DoClick`
+/// `007b7d80` at `0x7B7E86` and `0x7B7F4E`): the vendor's repair list keeps its scroll position
+/// after Repair and Repair All.
+pub const REPAIR_SERVICES_KEEPS_SCROLL: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 15);
+/// S0044 `patchFixRecipeMenuArmorIcons` (`RecipeMenu::DoEnter` `00727b10` at `0x728378`): an
+/// armour recipe shows the armour's inventory icon, not its message (glow) icon.
+pub const RECIPE_ARMOUR_ICONS: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 16);
+/// S0051 `patchUpdateDRDTWhenUsingVendorRepair` (`RepairServicesMenu::RepairItem` `007b7f70` at
+/// `0x7B8083`): a vendor's repair recounts the player's DR and DT.
+pub const VENDOR_REPAIR_RESETS_DR_DT: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 17);
+/// S0070 `patchFixBookAndAmmoHotkeyIcons` (`InventoryMenu` `00780ff0` at `0x78149C`,
+/// `HotkeyWheel::UpdateHotkeyList` `007017b0` at `0x701861`): a hotkeyed book shows the chems
+/// icon and hotkeyed ammo the big guns icon, not none.
+pub const BOOK_AND_AMMO_HOTKEY_ICONS: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 18);
+/// S0071 `patchFixRecipeNegativeIngredientCount` (`RecipeMenu::DoEnter` at `0x727F92`): an
+/// ingredient count below 0 shows 0.
+pub const RECIPE_NO_NEGATIVE_COUNT: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 19);
+/// S0200 `RecipeMenuRefreshFix` (`fn_00728a30` at `0x728A4E`, `fn_00727680` at `0x7276A6` and
+/// `0x7278A9`): the recipe list refilled after crafting keeps the menu's category, its filter
+/// and its scroll position.
+pub const RECIPE_REFRESH_KEEPS_CATEGORY: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 20);
+/// S0022.07 `MenuFixes` (`fn_007d52a0`, the start menu's input, at `0x7D5365`): the controls
+/// menu's remap waits one frame after it opens (Tweaks' debounce), so the key that opened it is
+/// not taken as the new key.
+pub const START_MENU_REMAP_DEBOUNCE: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 21);
+/// S0022.11 `MenuFixes` (`LevelUpMenu::DoGamepad` `00785ed0` at `0x785F33` and `0x785FAB`,
+/// `CharGenMenu::DoGamepad` `00754150` at `0x7541C8`, `StartMenu::DoGamepad` `007cefc0` at
+/// `0x7CF387`): the Left and Right keys set the interface's keyboard-selected tile unless the
+/// mouse moved.
+pub const LEVEL_UP_ARROWS_SELECT: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 22);
+/// S0022.28 `MenuFixes` (`fn_00739090`, blackjack's draw, at `0x739135`): a card dealt with
+/// neutral luck takes 1 off the shoe's count, not 2.
+pub const BLACKJACK_ONE_CARD_A_DEAL: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 23);
+/// S0022.29 `MenuFixes` (`BlackJackMenu::Shuffle` `007399d0` at `0x7399E3`,
+/// `BlackJackMenu::InitCasinoData` `00731d70` at `0x732456`): the shoe's count starts at
+/// 52 x decks - 1.
+pub const BLACKJACK_SHOE_COUNT: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 24);
+/// S0035 `patchUnsetQuieterRadioWhenForceClosingDialogueMenu` (`fn_00761960` at `0x7619CB`,
+/// `DialogMenu::ServiceStart` `00763ff0` at `0x764090`, `ServiceEnd` `007640a0` at `0x7641E5`):
+/// the radio's "in dialogue" byte is cleared when the dialogue menu goes and while a menu opened
+/// from it is up.
+pub const DIALOG_RADIO_VOLUME_RESET: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 25);
+/// S0088 `fixItemModMenuUnEquipBug` (`ItemModMenu::InitItemModMenu` `00784710` at `0x7847A8`,
+/// `ItemModMenu::DoClick` `007838a0` at `0x783A7E` and `0x783A35`): the weapon mod menu no longer
+/// unequips the worn weapon on opening and equips it again on leaving; fitting a mod to the worn
+/// weapon unequips and equips it once.
+pub const ITEM_MOD_MENU_KEEPS_EQUIPPED: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 26);
+/// S0110 `patchFixStuckInAddSPECIALPointsIfAtMaxAlready` (`CharGenMenu::Create` `00753420` at
+/// `0x7535FD`): the SPECIAL points to give are capped by what the stats can still take.
+pub const CHARGEN_SPECIAL_POINTS_CAPPED: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 27);
+/// S0154 `preventLoadingDlcPopup` (`fn_007d5830` at `0x7D59C7`, `fn_007d69f0` at `0x7D6AA3` and
+/// `0x7D6AA8`): no "loading DLC" message box at start, and the start's messages stay open.
+pub const NO_LOADING_DLC_POPUP: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 28);
+/// S0208 `patchFixRadioVolumeResetWhenUsingSomeHolotapes` (`MapMenu::UpdatePlayingSounds`
+/// `0079a660` at `0x79A750`): the map's sound update leaves the radio's volume alone.
+pub const MAP_KEEPS_RADIO_VOLUME: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 29);
+/// S0883 `MoreDescriptiveSettingsSaveError` (`fn_007d6d70` at `0x7D6E50`): the settings save
+/// failure message names the ini file and why.
+pub const SETTINGS_SAVE_ERROR_NAMES_FILE: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 30);

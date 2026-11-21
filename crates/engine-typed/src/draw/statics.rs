@@ -33,9 +33,11 @@ pub(crate) const RENDERING_PASS: (u32, u32) = (0x011f_91e0, 0x011f_91e8);
 pub(crate) const ACCUMULATORS: (u32, u32) = (0x011f_95ec, 0x011f_95f4);
 /// The shader statics' block.
 pub const SHADER_STATICS: (u32, u32) = (0x011f_a000, 0x011f_fe40);
-/// The Group C shaders' statics (`01200458` to `01202148`: the decal depth bias, the tall grass's, SpeedTree's,
-/// lighting 3.0's and the no-lighting shader's constants and their entry pointers).
-pub(crate) const GROUP_C_STATICS: (u32, u32) = (0x0120_0450, 0x0120_2150);
+/// The Group C shaders' statics (`01200458` to `01202168`: the decal depth bias, the tall grass's, SpeedTree's,
+/// lighting 3.0's and the no-lighting shader's constants and their entry pointers, lighting 3.0's pass table; the last,
+/// the no-lighting shader's fog constants, are eight words from `01202148`: a block ending before them cut their upload
+/// in two, the late gate's first record difference of this piece).
+pub(crate) const GROUP_C_STATICS: (u32, u32) = (0x0120_0450, 0x0120_2168);
 /// The current shader pass.
 pub(crate) const CURRENT_PASS: (u32, u32) = (0x0126_f74c, 0x0126_f750);
 /// The group zero flag (the texture stages' maximum anisotropy word).
@@ -52,9 +54,24 @@ pub(crate) const MODE_FUNCTIONS: (u32, u32) = (0x011f_9f38, 0x011f_9f40);
 pub(crate) const RENDER_STATE_SIZE: u32 = 0x1114;
 /// The accumulator's camera (+8).
 pub(crate) const ACC_CAMERA: (u32, u32) = (8, 0xc);
+/// The camera's eye as the renderer's camera set-up keeps it (`011f474c`, three floats: `00e6c780` writes it; the
+/// matrices `00b71a40` makes are relative to it).
+pub(crate) const CAMERA_EYE: (u32, u32) = (0x011f_474c, 0x011f_4758);
+/// The renderers (`011f4748`, the scene's, and `011f9508`; the same `NiDX9Renderer` in a run) whose per-draw words
+/// every draw writes before it reads them: the geometry's property state and effects (+0xc, +0x10: `00a80610` and
+/// the batch draw set them, each accumulator's finish `00b66570` clears +0xc, the points draw `00e70140` reads
+/// through +0xc), the camera's directions and their model-space turns and the drawn bound (+0x634 to +0x674:
+/// `00e6c780`, `00e6fbb0`, the points draw), the near plane and depth range (+0x684, +0x688: `00e6c780`), and the
+/// world, view, projection, view-projection and inverse view matrices (+0x940 to +0xa80: `00e6fbb0`, `00e6c780`).
+/// Main's own draws after the post (the world pass's extra passes, `00b6c0d0`) write them too, while the drawing
+/// side draws: each side keeps its own (the drawing thread's first-post stop, 2026-11-16: main's finish cleared +0xc
+/// between the particles' `00a80610` and `00e70140` on the drawing side, a read of address 0).
+pub(crate) const RENDERER_GLOBALS: [u32; 2] = [0x011f_4748, 0x011f_9508];
+pub(crate) const RENDERER_BLOCKS: [(u32, u32); 4] =
+    [(0xc, 0x14), (0x634, 0x674), (0x684, 0x68c), (0x940, 0xa80)];
 
 /// The global blocks, in one list (what [`take`] owns besides the render-state cache and the camera).
-pub const GLOBAL_BLOCKS: [(u32, u32); 10] = [
+pub const GLOBAL_BLOCKS: [(u32, u32); 11] = [
     RENDERING_PASS,
     ACCUMULATORS,
     SHADER_STATICS,
@@ -65,6 +82,7 @@ pub const GLOBAL_BLOCKS: [(u32, u32); 10] = [
     FADE_FLAG,
     SHADER_MODE,
     MODE_FUNCTIONS,
+    CAMERA_EYE,
 ];
 
 /// Whether `addr` lies in one of the own blocks of globals (for the checks).
@@ -78,21 +96,29 @@ pub fn is_own_global(addr: u32) -> bool {
 /// that reads or writes own state (0: none, the class is clean). A class not listed is not clean either. A class
 /// is listed clean only once every slot the draw calls on it is typed and none of them reaches such a translation.
 pub(crate) const CLASSES: &[(u32, u32)] = &[
-    // `ShadowLightShader` and its three subclasses sharing its pass constants (slot 0xfc, `00b7b450`): the fog
-    // constants (`00b7c3a0`), the light rows (`00b7c510`, `00b7c580`, `00b7c600`) by address.
-    (0x010a_f2f8, 0x00b7_c3a0),
-    (0x010b_b7a8, 0x00b7_c3a0),
-    (0x010b_b980, 0x00b7_c3a0),
-    (0x010b_bb50, 0x00b7_c3a0),
-    // Group C part 1 (#507): the SpeedTree leaves' shadow set-up (`00bb26d0`) and the no-lighting shader's
-    // `00bcce40` by address; the tall grass, sky and water reach callees not yet checked (their slot 0x7c).
-    (0x010b_9190, 0x00bb_26d0),
-    (0x010b_b230, 0x00bc_ce40),
-    (0x010b_8980, 0x00ba_c9c0),
-    (0x010a_fe18, 0x00b8_9d80),
-    (0x010a_f9e0, 0x00b8_64d0),
-    // Lighting 3.0 (Group C part 2): its slot 0x7c.
-    (0x010b_a0f8, 0x00bb_ef90),
+    // `ShadowLightShader` and its three subclasses sharing its pass constants (slot 0xfc, `00b7b450`): every slot the
+    // batch renderer calls is typed (the subclasses' own 0x78, 0xf0 and 0xf8 too, `00bce500`, `00bcce40`, `00bcc590`,
+    // `00bcfd20`, `00bce800`, and the stage setters they reach); what they still call by address reads no own state
+    // (`00a5f860` and `00c663d0` the counted pointers, `00b55560` the shader table).
+    (0x010a_f2f8, 0),
+    (0x010b_b7a8, 0),
+    (0x010b_b980, 0),
+    (0x010b_bb50, 0),
+    // Group C: the SpeedTree leaves (0x78 `00bb26d0`, 0xf0 `00bb1b20`, with their lights `00bb1960`, camera rows
+    // `00bb1a90` and scene lights `00b71360`), the no-lighting shader (0x64 `00bc8f20`, 0x80 `00bc8ed0`, 0x8c
+    // `00bc8d90`), the tall grass (0xf0 `00baa3f0`, 0xf8 `00bac8d0`), the sky (0x8c `00b8a1a0`, 0xf0 `00b884e0`),
+    // the water (0x8c `00b86b80`, 0xf0 `00b81760`, 0xfc `00b81d60`), lighting 3.0 (0x64 `00bbd000`, 0x80 `00bbc5c0`,
+    // 0x8c `00bbeef0`, 0xf0 `00bbe020`, its stage slots `00c0cd80`, `00c0cf10` and `00c0bc90`; its pass for a type
+    // `00c0abd0`; the pass constants' setters it calls by address work on the pass handed to them).
+    (0x010b_9190, 0),
+    (0x010b_b230, 0),
+    (0x010b_8980, 0),
+    (0x010a_fe18, 0),
+    (0x010a_f9e0, 0),
+    (0x010b_a0f8, 0),
+    // The SpeedTree branch shader: 0x78 `00bd4890`, 0xf0 `00bd4030` typed with 0x7c and its fog slot; 0xfc is a
+    // thunk to the shadow light shader's `00b7b450`.
+    (0x010b_c070, 0),
 ];
 
 /// A geometry's shader (+0xc0).
@@ -155,7 +181,21 @@ pub fn take(e: &Engine, acc: Ptr<BSShaderAccumulator>) {
         // From +4: its vtable (set once) is read in place by every call through it.
         capture::own(e, cache, 4, RENDER_STATE_SIZE);
     }
+    take_renderers(e);
     capture::own(e, acc.addr(), ACC_CAMERA.0, ACC_CAMERA.1);
+    // The held accumulator (`011f95f0`, in [`ACCUMULATORS`]) is a counted pointer: the drawing side's holds move its
+    // objects' counts at the join (main's extra passes hold theirs meanwhile and let the same old one go).
+    capture::own_counted(e, super::own::HELD_ACCUMULATOR);
+}
+
+/// The renderers' per-draw words ([`RENDERER_BLOCKS`]) as own blocks (one renderer held twice is taken once).
+pub fn take_renderers(e: &Engine) {
+    for global in RENDERER_GLOBALS {
+        let renderer = e.global::<u32>(global);
+        for (from, to) in RENDERER_BLOCKS {
+            capture::own(e, renderer, from, to);
+        }
+    }
 }
 
 /// The cuts that took the own state, those that kept it in guest memory, and the first reason seen.
@@ -190,6 +230,140 @@ pub fn report() -> (u64, u64, u32) {
 mod tests {
     use super::*;
 
+    /// The drawing thread's first-post stop (2026-11-16): the drawing side's particles set the renderer's current
+    /// property state (`00a80610`) and read it back in the points draw (`00e70140`), while main's own scene draw after
+    /// the post finished (`00b66570` clears it). With the renderer's per-draw words its own state, the drawing side
+    /// reads its value whatever main does meanwhile, and the join keeps main's clear (main wrote it after the cut).
+    #[test]
+    fn mains_finish_does_not_clear_the_drawing_sides_property_state() {
+        let mut e = Engine::new();
+        if !e.mem.is_mapped(0x011f_4000) {
+            e.map(0x011f_4000, 0x6000);
+        }
+        let renderer = e.mem.alloc(0xa80);
+        let geometry = e.mem.alloc(0x100);
+        let acc = e.mem.alloc(0x1a0);
+        e.mem.set_u32(0x011f_4748, renderer);
+        e.mem.set_u32(0x011f_9508, renderer);
+        assert!(capture::begin(&e));
+        take(&e, Ptr::new(acc));
+        // The drawing side: the particles' render immediate.
+        crate::dispatch::scene::geometry_render_immediate(
+            &mut e,
+            Ptr::new(geometry),
+            Ptr::new(renderer),
+        );
+        // Main, with the packet on the drawing side's thread: its extra pass's finish.
+        let packet = capture::detach(&e).expect("the packet");
+        super::super::packet::clear_scene_word(&mut e);
+        assert_eq!(e.mem.u32(renderer + 0xc), 0, "main clears its own");
+        assert!(capture::attach(packet).is_ok());
+        // The drawing side's points draw reads its own.
+        assert_eq!(
+            super::super::packet::current_property_state(&e, renderer),
+            geometry + 0x9c
+        );
+        // The join: main wrote it after the cut, so main's value stays.
+        let report = capture::end(&mut e);
+        assert_eq!(e.mem.u32(renderer + 0xc), 0);
+        assert!(report.kept_main >= 4);
+    }
+
+    /// The held accumulator is a counted pointer (`00b54b10`): the drawing side holds the world's accumulator while main's
+    /// extra pass holds its own, both letting the cut's go. Its count goes down once, as in the serial order (the draw's
+    /// hold, then main's: the cut's object let go once, the world's held and let go); main holding nothing leaves the drawing
+    /// side's object held by the join; main holding the cut's object again (already held in its eyes) keeps it held.
+    #[test]
+    fn the_held_accumulator_is_let_go_once() {
+        for main_holds in [Some(2u32), None, Some(0)] {
+            let mut e = Engine::new();
+            if !e.mem.is_mapped(0x011f_4000) {
+                e.map(0x011f_4000, 0x6000);
+            }
+            // `InterlockedIncrement` and `InterlockedDecrement` (their import slots): the new count.
+            fn step(e: &mut Engine, at: u32, by: u32) -> engine_core::Ret {
+                let v = e.mem.u32(at).wrapping_add(by);
+                e.mem.set_u32(at, v);
+                engine_core::Ret {
+                    eax: v,
+                    ..engine_core::Ret::default()
+                }
+            }
+            e.register(0x00fd_f1c0, |e, a| step(e, a[0], 1));
+            e.register(0x00fd_f1c4, |e, a| step(e, a[0], u32::MAX));
+            // Three accumulators (a counted object: its count at +4), the cut's held one at count 2.
+            let [cut, world, extra] = [0u32; 3].map(|_| e.mem.alloc(0x10));
+            for (a, count) in [(cut, 2u32), (world, 1), (extra, 1)] {
+                e.mem.set_u32(a + 4, count);
+            }
+            e.mem.set_u32(0x011f_95f0, cut);
+            let acc = e.mem.alloc(0x1a0);
+            assert!(capture::begin(&e));
+            take(&e, Ptr::new(acc));
+            // The drawing side's hold.
+            super::super::own::hold_accumulator(&mut e, world);
+            let packet = capture::detach(&e).expect("the packet");
+            if let Some(k) = main_holds {
+                let object = [cut, world, extra][k as usize];
+                super::super::own::hold_accumulator(&mut e, object);
+            }
+            assert!(capture::attach(packet).is_ok());
+            let _ = capture::end(&mut e);
+            let counts = [cut, world, extra].map(|a| e.mem.u32(a + 4));
+            let (want, held) = match main_holds {
+                // Serial: cut 2 -> 1, world 1 -> 2 -> 1, extra 1 -> 2; held: extra.
+                Some(2) => ([1, 1, 2], extra),
+                // Serial: cut 2 -> 1 -> 2, world 1 -> 2 -> 1; held: the cut's.
+                Some(_) => ([2, 1, 1], cut),
+                None => ([1, 2, 1], world),
+            };
+            assert_eq!(counts, want, "{main_holds:?}");
+            assert_eq!(e.mem.u32(0x011f_95f0), held, "{main_holds:?}");
+        }
+    }
+
+    /// The drawing side's own finish clears its own property state, not main's: guest memory keeps what main has
+    /// until the join, and the join keeps the drawing side's clear where main wrote nothing.
+    #[test]
+    fn the_drawing_sides_finish_clears_its_own_property_state() {
+        let mut e = Engine::new();
+        if !e.mem.is_mapped(0x011f_4000) {
+            e.map(0x011f_4000, 0x6000);
+        }
+        let renderer = e.mem.alloc(0xa80);
+        let acc = e.mem.alloc(0x1a0);
+        e.mem.set_u32(0x011f_4748, renderer);
+        e.mem.set_u32(0x011f_9508, renderer);
+        e.mem.set_u32(renderer + 0xc, 0x1234_5678);
+        assert!(capture::begin(&e));
+        take(&e, Ptr::new(acc));
+        super::super::packet::clear_scene_word(&mut e);
+        assert_eq!(e.mem.u32(renderer + 0xc), 0x1234_5678, "main's stays");
+        assert_eq!(
+            super::super::packet::current_property_state(&e, renderer),
+            0
+        );
+        let _ = capture::end(&mut e);
+        assert_eq!(
+            e.mem.u32(renderer + 0xc),
+            0,
+            "the join takes the drawing side's"
+        );
+    }
+
+    /// Every renderer block the cut takes is inside the renderer's layout and apart from the others, and the camera's
+    /// eye is an own global.
+    #[test]
+    fn the_renderer_blocks_are_apart_and_the_eye_is_owned() {
+        for (i, a) in RENDERER_BLOCKS.iter().enumerate() {
+            assert!(a.0 < a.1 && a.1 <= 0xa80);
+            for b in &RENDERER_BLOCKS[i + 1..] {
+                assert!(a.1 <= b.0 || b.1 <= a.0, "{a:x?} {b:x?}");
+            }
+        }
+        assert!(is_own_global(0x011f_474c) && is_own_global(0x011f_4754));
+    }
+
     /// The global blocks do not overlap.
     #[test]
     fn the_global_blocks_are_apart() {
@@ -198,6 +372,20 @@ mod tests {
             for b in &GLOBAL_BLOCKS[i + 1..] {
                 assert!(a.1 <= b.0 || b.1 <= a.0, "{a:x?} {b:x?}");
             }
+        }
+    }
+
+    /// A constant block the draw uploads in one call lies in one own block (the packet's image of it needs one): the
+    /// no-lighting shader's fog constants (`01202148`, eight words) at the end of Group C's.
+    #[test]
+    fn uploaded_constant_blocks_lie_in_one_own_block() {
+        for (at, len) in [(0x0120_2148u32, 0x20u32), (0x011f_a280, 0x20)] {
+            assert!(
+                GLOBAL_BLOCKS
+                    .iter()
+                    .any(|&(lo, hi)| lo <= at && at + len <= hi),
+                "{at:08x}+{len:#x} is not inside one own block"
+            );
         }
     }
 
@@ -217,6 +405,10 @@ mod tests {
             ("draw/skin.rs", include_str!("skin.rs")),
             ("draw/alpha.rs", include_str!("alpha.rs")),
             ("draw/drivers.rs", include_str!("drivers.rs")),
+            ("draw/camera.rs", include_str!("camera.rs")),
+            ("draw/defined.rs", include_str!("defined.rs")),
+            ("dispatch/math.rs", include_str!("../dispatch/math.rs")),
+            ("draw/packed.rs", include_str!("packed.rs")),
             ("draw/lists.rs", include_str!("lists.rs")),
             ("draw/constants.rs", include_str!("constants.rs")),
             ("draw/group_c.rs", include_str!("group_c.rs")),
@@ -255,6 +447,8 @@ mod tests {
             "set_constant_word",
             "own_get",
             "own_set",
+            "owns",
+            "note_write",
             // Helpers whose accesses to the own blocks go through the accessors. The constant entries, switch objects
             // and pass stages some of them reach through an owned slot (an entry's +8 and +0x20, a stage's +8) are
             // heap objects the cut does not own: in the drawing thread's plan every draw of the frame after the cut runs
@@ -272,6 +466,7 @@ mod tests {
             "copy_constants",
             "entry_on",
             "release_state_locks",
+            "unlocked",
         ];
         // Files routed through and through: every guest access of theirs goes through the accessors, or is a plain
         // guest access that says why (`// own:` a local, a constant of the exe, main's frame value left to value
@@ -449,11 +644,76 @@ mod tests {
                 }
             }
         }
+        // A shader property's per-frame words (`cut::PROPERTY`: the second flags word, alpha, fade, distance) are copied
+        // by the cut and main may change them after it: a raw read or write of one (`property + 0x24`,
+        // `property.wrapping_add(0x24)` on a name holding a property) goes through the packet's `property_word`. The
+        // land's second texture set chosen by an in-place read of +0x24 was the sampler 8/9 record difference
+        // (2026-11-16).
+        for (name, text) in sources {
+            for (n, line) in code_of(text).lines().enumerate() {
+                if line.contains("// own:") {
+                    continue;
+                }
+                let body = line.split("//").next().unwrap_or(line);
+                if let Some(offset) = raw_property_word(body) {
+                    findings.push(format!(
+                        "{name}:{}: the property's per-frame word +{offset:#x} read in place in `{}`",
+                        n + 1,
+                        line.trim()
+                    ));
+                }
+            }
+        }
         assert!(
             findings.is_empty(),
             "own state read or written past the packet:\n{}",
             findings.join("\n")
         );
+    }
+
+    /// The offset of a shader property's per-frame word (`cut::PROPERTY`) that `body` reads or writes in place: a raw
+    /// access (`e.mem.`, `e.global`, `e.set_global`, `e.get(`, `e.set(`) with, after a name containing `propert`, an
+    /// offset in the range added (`.wrapping_add(0x..)` or `+ 0x..`). `None` when there is none.
+    fn raw_property_word(body: &str) -> Option<u32> {
+        let raw = ["e.mem.", "e.global", "e.set_global", "e.get(", "e.set("]
+            .iter()
+            .any(|r| body.contains(r));
+        if !raw {
+            return None;
+        }
+        let (lo, hi) = super::super::cut::PROPERTY;
+        body.match_indices("0x").find_map(|(at, _)| {
+            let digits: String = body[at + 2..]
+                .chars()
+                .take_while(|c| c.is_ascii_hexdigit() || *c == '_')
+                .filter(|c| *c != '_')
+                .collect();
+            let value = u32::from_str_radix(&digits, 16).ok()?;
+            let before = body[..at].trim_end();
+            let added = before.ends_with("wrapping_add(") || before.ends_with('+');
+            let named = before.find("propert").is_some();
+            ((lo..hi).contains(&value) && added && named).then_some(value)
+        })
+    }
+
+    /// The per-frame property check sees the in-place forms and lets the packet's reads and other offsets pass.
+    #[test]
+    fn raw_property_words_are_seen() {
+        for line in [
+            "let flags = e.mem.u32(property.wrapping_add(0x24)) & 0x100000 == 0;",
+            "let alpha = e.global::<u32>(property + 0x2c);",
+            "e.mem.set_u32(the_property.wrapping_add(0x34), 0);",
+        ] {
+            assert!(raw_property_word(line).is_some(), "{line}");
+        }
+        for line in [
+            "let flags = packet::property_word(e, property, 0x24);",
+            "let textures = e.mem.u32(property.wrapping_add(0xac));",
+            "let x = e.mem.u32(light.wrapping_add(0x24));",
+            "let y = e.mem.u32(property.wrapping_add(0x38));",
+        ] {
+            assert!(raw_property_word(line).is_none(), "{line}");
+        }
     }
 
     /// Whether `word` occurs in `line` as a whole identifier.

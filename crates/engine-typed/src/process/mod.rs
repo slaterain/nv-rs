@@ -36,6 +36,7 @@ use engine_core::ptr::Ptr;
 use engine_core::typed::{Family, FamilyId, Threads};
 use engine_core::{entry, AbiFn};
 
+pub mod after_draw;
 pub mod array;
 pub mod bones;
 pub mod forget;
@@ -73,6 +74,10 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0096_b810, levels::update_middle_high(Ptr, f32, u32)),
         entry!(0x0096_f600, forget::null_out_target_ref(Ptr, u32, u8)),
         entry!(0x0097_6680, forget::reference_destructed(Ptr, u32)),
+        entry!(0x0096_c240, after_draw::projectiles_step(Ptr, u32)),
+        entry!(0x0096_c710, after_draw::merge_detection(Ptr)),
+        entry!(0x008f_63e0, after_draw::merge_detection_lists(Ptr, Ptr)),
+        entry!(0x0097_81d0, after_draw::ragdoll_step(Ptr, f32)),
         entry!(0x0096_c970, bones::parallel_update_animation_scenegraph(Ptr)),
     ]
 }

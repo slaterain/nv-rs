@@ -43,6 +43,7 @@ pub static FIXES: &[Fix] = &[
     JIP_COSAVE_FIXES,
     JIP_VANILLA_COMMANDS,
     JIP_GAME_PATCHES,
+    JG_EDITOR_IDS,
     MCM,
     STEWIE,
     UIO,
@@ -243,18 +244,18 @@ fn install_keep_cosave_plugins(e: &mut Engine) {
     nvse::saveload::set_keep_other_plugins(e, true);
 }
 
-/// JIP LN NVSE answers "installed" (step 3.10's switch; off in every preset, [`OFF_IN_EVERY_PRESET`],
-/// until mods that need JIP are proven in the game): its identity, its place in xNVSE's list of
+/// JIP LN NVSE answers "installed" (step 3.10's switch; on in the fixes preset with [`MCM`],
+/// [`UIO`] and [`KEEP_COSAVE_PLUGINS`], off in vanilla): its identity, its place in xNVSE's list of
 /// plugins, its built commands' names and handlers, its hooks and its own always-on patches;
 /// the JIP rows ([`JIP_VANILLA_COMMANDS`], [`JIP_GAME_PATCHES`], [`JIP_COSAVE_FIXES`]) then follow
 /// their own switches. The row sets a flag; `jip::install` (after xNVSE, in
 /// [`crate::install_rows_and_extenders`]) reads it. Off, JIP answers "not installed", as on main before the
 /// row: the same records, the same registrations.
 pub const JIP_INSTALLED: Fix = Fix {
-    name: "JIP LN NVSE built in (for testing)",
+    name: "JIP LN NVSE built in",
     env: "NV_JIP_INSTALLED",
     addresses: &[],
-    summary: "for testing, off in every preset: JIP LN NVSE answers \"installed\" to mods (MCM, oHUD and others that need it), with all its commands, its hooks and the game patches built so far (the README and docs/FIXES.md give the counts)",
+    summary: "JIP LN NVSE answers \"installed\" to mods (MCM, oHUD and others that need it), with all its commands, its hooks and the game patches built so far (the README and docs/FIXES.md give the counts)",
     install: install_jip_installed,
 };
 
@@ -281,8 +282,8 @@ fn install_jip_cosave_fixes(e: &mut Engine) {
 /// JIP LN NVSE's versions of seven of the game's own commands (`InitCmdPatches`: `MenuMode`,
 /// `GetItemCount`, `GetContainer`, `IsInList`, `GetHitLocation`, `HasPerk`, `GetNVSEVersionFull` at
 /// `0x127D`), a flag `crates/jip` reads: they change vanilla commands, so they are a row (ADR-0016
-/// §5). They take effect only once JIP answers "installed" (the row [`JIP_INSTALLED`], off in
-/// every preset).
+/// §5). They take effect only once JIP answers "installed" (the row [`JIP_INSTALLED`], on in
+/// the fixes preset).
 pub const JIP_VANILLA_COMMANDS: Fix = Fix {
     name: "JIP vanilla commands",
     env: "NV_JIP_VANILLA_CMDS",
@@ -299,14 +300,14 @@ fn install_jip_vanilla_commands(e: &mut Engine) {
 /// JIP LN NVSE's game patches (its changes to the game's own code: `InitGamePatches`, the
 /// `[GamePatches]` switches of the player's `jip_nvse.ini`, step 3.9), a flag `crates/jip` reads:
 /// they change the game for every player, so they are a row (ADR-0016 §5). They take effect only
-/// once JIP answers "installed" (the row [`JIP_INSTALLED`], off in every preset); JIP's own
+/// once JIP answers "installed" (the row [`JIP_INSTALLED`], on in the fixes preset); JIP's own
 /// wraps then go over the rows installed here (the dialogue topic index at `0061a310`).
 pub const JIP_GAME_PATCHES: Fix = Fix {
     name: "JIP game patches",
     env: "NV_JIP_GAME_PATCHES",
     addresses: &[],
     summary:
-        "JIP LN NVSE's fixes of the game's own code (each dialogue line's topic remembered, results that start at 0, ...), once JIP is built in",
+        "JIP LN NVSE's changes to the game's own code, on with JIP; some change play for every player (JIP's hit damage, the V.A.T.S. damage multiplier on the player, vendors' repair up to 100%, 2-second corner messages, Ctrl/Shift quantity keys; docs/FIXES.md lists them all)",
     install: install_jip_game_patches,
 };
 
@@ -389,12 +390,14 @@ pub const SCRIPT_NULL_GUARD: Fix = Fix {
     env: "NV_NVSE_NULL_GUARD",
     addresses: &[],
     summary:
-        "ar_Count and ar_GetNth on a missing array answer 0, and a format string's string outside the game's memory ends the text, instead of stopping the game",
+        "ar_Count and ar_GetNth on a missing array answer 0, and a format string's string outside the game's memory ends the text, instead of stopping the game; with lStewieAl's Tweaks' switch node bounds row a switch node whose shown child is not there takes no child's bound",
     install: install_script_null_guard,
 };
 
 fn install_script_null_guard(e: &mut Engine) {
     nvse::commands::array::set_fix(e, nvse::commands::array::NULL_GUARD, true);
+    // Tweaks' slips not copied (S0237's child index), the same guard.
+    e.set_stewie_slip_guard(true);
 }
 
 pub const SCRIPT_CYCLE_GUARD: Fix = Fix {
@@ -474,9 +477,8 @@ pub const DRAW_THREAD: Fix = Fix {
 /// UI Organizer built in (`crates/uio`, parts 1 and 2): its lists (`Data\uio\supported.txt` and
 /// `Data\uio\public\*.txt`) put UI mods' additions into the menus, in memory, and every menu file
 /// is read through UIO's reader and parsed by its own XML parser. It changes how every menu file
-/// is read, so it is a row; off in every preset ([`OFF_IN_EVERY_PRESET`]) until it is proven in the
-/// game with a UI mod, then on in `fixes`. The row sets a flag; `uio::install` (after JIP, in
-/// [`crate::Host::start_with`]) puts its seams in.
+/// is read, so it is a row; on in `fixes` (with JIP, which UI mods need), off in vanilla. The row
+/// sets a flag; `uio::install` (after JIP, in [`crate::Host::start_with`]) puts its seams in.
 pub const UIO: Fix = Fix {
     name: "UI Organizer built in",
     env: "NV_UIO",
@@ -496,6 +498,23 @@ fn install_uio(e: &mut Engine) {
 /// lists it as "lStewieAl's Tweaks" 1005. On in the fixes preset, off in vanilla. The row sets a flag;
 /// `stewie::install` (after JIP and MCM, before UIO, in `install_rows_and_extenders`) reads the
 /// settings and sets the rows' bits.
+/// JohnnyGuitar NVSE's editor-id restoration built in (`crates/johnnyguitar`), a flag the crate
+/// reads at its install: every loaded form keeps the editor id its record gives it, so text
+/// compiled while the game runs (the console, script runner files, `CompileScript`, lambdas from
+/// text) finds `PlayerRef` or `Caps001` by name, as with JohnnyGuitar installed (VNV installs it).
+/// Off (vanilla): the game's own few names, as without JohnnyGuitar.
+pub const JG_EDITOR_IDS: Fix = Fix {
+    name: "JohnnyGuitar's editor ids",
+    env: "NV_JG_EDITOR_IDS",
+    addresses: &[],
+    summary: "JohnnyGuitar NVSE's editor ids built in: every form keeps its editor id, so the console, script runner files and scripts compiled from text find forms such as PlayerRef by name, as on a VNV setup",
+    install: install_jg_editor_ids,
+};
+
+fn install_jg_editor_ids(e: &mut Engine) {
+    johnnyguitar::set_on(e, true);
+}
+
 pub const STEWIE: Fix = Fix {
     name: "lStewieAl's Tweaks built in",
     env: "NV_STEWIE",
@@ -510,9 +529,8 @@ fn install_stewie(e: &mut Engine) {
 
 /// The Mod Configuration Menu's NVSE plugin built in (`crates/mcm`: MCM.dll 1.5, "MCM Extensions"):
 /// its nine commands at `0x21C0` up, which MCM's scripts and the menus of the mods that use it call
-/// (`GetMCMFloat`, `SetMCMFloat`, `GetModINI`, ...). Off in every preset ([`OFF_IN_EVERY_PRESET`])
-/// until the maintainer has seen it work; the intended rule after that is automatic (on when the
-/// load order has MCM), with no switch. The row sets a flag; `mcm::install` (after JIP, before
+/// (`GetMCMFloat`, `SetMCMFloat`, `GetModINI`, ...). On in `fixes` (with JIP, which MCM's mods need),
+/// off in vanilla. The row sets a flag; `mcm::install` (after JIP, before
 /// UIO, in `install_rows_and_extenders`) registers the commands.
 pub const MCM: Fix = Fix {
     name: "The Mod Configuration Menu's plugin built in",
@@ -531,7 +549,7 @@ fn install_nothing(_: &mut Engine) {}
 
 /// Rows that are off in every preset until the maintainer turns them on: only their own variable or `Fallout.ini`
 /// line turns them on.
-pub const OFF_IN_EVERY_PRESET: &[&str] = &[DRAW_THREAD.env, MCM.env, UIO.env, JIP_INSTALLED.env];
+pub const OFF_IN_EVERY_PRESET: &[&str] = &[DRAW_THREAD.env];
 
 /// The rows that register nothing at an exe address: the menu limit paces the uncapped step;
 /// the extender's rows set flags `crates/nvse` reads.
@@ -543,6 +561,7 @@ const NO_ADDRESS: &[&str] = &[
     JIP_COSAVE_FIXES.name,
     JIP_VANILLA_COMMANDS.name,
     JIP_GAME_PATCHES.name,
+    JG_EDITOR_IDS.name,
     MCM.name,
     STEWIE.name,
     UIO.name,
@@ -1874,6 +1893,20 @@ mod tests {
         assert!(nvse::args::game_inline(&mut e));
     }
 
+    /// The missing-data guard row also turns on the guard of lStewieAl's Tweaks' slips not copied
+    /// (S0237's child index): off until it runs.
+    #[test]
+    fn the_missing_data_guard_row_turns_on_the_tweaks_slip_guard() {
+        let mut e = Engine::new();
+        assert!(!e.stewie_slip_guard());
+        (SCRIPT_NULL_GUARD.install)(&mut e);
+        assert!(e.stewie_slip_guard());
+        assert!(nvse::commands::array::fix_on(
+            &e,
+            nvse::commands::array::NULL_GUARD
+        ));
+    }
+
     /// EXTENDER-HOOKS R2 and docs/ENGINE_CRATE.md, "Typed code": what a fix overrides is listed, so
     /// typed code keeps calling it by address.
     #[test]
@@ -2795,12 +2828,15 @@ bSunShadowsCharacters=0
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// Step 3.10's switch (JIP LN NVSE answering "installed") is off in every preset, however the
-    /// preset is chosen: the default, the settings file, `NV_PRESET`, Fallout.ini's `sPreset`.
+    /// Step 3.10's switch (JIP LN NVSE answering "installed") follows the preset with MCM's plugin,
+    /// UI Organizer and the co-save keep row: on in `fixes`, off in vanilla, however the preset is
+    /// chosen: the default, the settings file, `NV_PRESET`, Fallout.ini's `sPreset`.
     #[test]
-    fn jip_installed_is_off_in_every_preset() {
+    fn jip_mcm_and_uio_follow_the_preset() {
         assert_eq!(JIP_INSTALLED.env, "NV_JIP_INSTALLED");
-        assert!(OFF_IN_EVERY_PRESET.contains(&JIP_INSTALLED.env));
+        for row in [&JIP_INSTALLED, &MCM, &UIO, &KEEP_COSAVE_PLUGINS] {
+            assert!(!OFF_IN_EVERY_PRESET.contains(&row.env), "{}", row.name);
+        }
         let choices = [
             Choice::vanilla(),
             Choice::from_parts(None, no_env).unwrap(),
@@ -2812,14 +2848,55 @@ bSunShadowsCharacters=0
             with_ini(None, "[nv-rs General]\nsPreset=vanilla\n", &[]),
         ];
         for choice in &choices {
-            assert!(!choice.is_on(&JIP_INSTALLED), "{choice:?}");
-            // MCM's plugin too, until the maintainer has tried it.
-            assert!(!choice.is_on(&MCM), "{choice:?}");
+            let fixes = choice.preset == Preset::Fixes;
+            for row in [&JIP_INSTALLED, &MCM, &UIO, &KEEP_COSAVE_PLUGINS] {
+                assert_eq!(choice.is_on(row), fixes, "{} {choice:?}", row.name);
+            }
         }
-        assert_eq!(choices[1].preset, Preset::Fixes);
+        assert_eq!(
+            choices
+                .iter()
+                .map(|c| c.preset == Preset::Fixes)
+                .collect::<Vec<_>>(),
+            [false, true, true, false, true, false, true, false]
+        );
         // The other JIP rows still follow the preset.
         assert!(choices[1].is_on(&JIP_GAME_PATCHES));
         assert!(!choices[0].is_on(&JIP_GAME_PATCHES));
+    }
+
+    /// JohnnyGuitar's editor ids: on in the fixes preset, off in vanilla, its own key or variable over
+    /// both; installed, the built-in is on exactly when the row is.
+    #[test]
+    fn jg_editor_ids_follow_the_preset() {
+        assert!(!Choice::vanilla().is_on(&JG_EDITOR_IDS));
+        assert!(Choice::from_parts(None, no_env)
+            .unwrap()
+            .is_on(&JG_EDITOR_IDS));
+        let off = with_ini(
+            None,
+            "[nv-rs Fixes]
+bJGEditorIDs=0
+",
+            &[],
+        );
+        assert!(!off.is_on(&JG_EDITOR_IDS));
+        let on = Choice::from_parts(
+            None,
+            env_of(&[("NV_JG_EDITOR_IDS", "1"), ("NV_PRESET", "vanilla")]),
+        )
+        .unwrap();
+        assert!(on.is_on(&JG_EDITOR_IDS));
+        for choice in [
+            Choice::from_parts(None, no_env).unwrap(),
+            off,
+            Choice::vanilla(),
+        ] {
+            let mut e = Engine::new();
+            install(&mut e, &choice);
+            johnnyguitar::install(&mut e);
+            assert_eq!(johnnyguitar::on(&e), choice.is_on(&JG_EDITOR_IDS));
+        }
     }
 
     /// lStewieAl's Tweaks: on in the fixes preset, off in vanilla, its own line or variable over
@@ -2899,7 +2976,8 @@ bSunShadowsCharacters=0
         assert!(fixes.is_on(&JIP_GAME_PATCHES));
         assert!(fixes.is_on(&JIP_VANILLA_COMMANDS));
         assert!(fixes.is_on(&JIP_COSAVE_FIXES));
-        assert!(!fixes.is_on(&UIO), "UIO keeps its own switch");
+        assert!(fixes.is_on(&UIO), "UIO with the fixes preset");
+        assert!(fixes.is_on(&MCM), "MCM with the fixes preset");
         assert_eq!(fixes.threads, "stepped");
         assert!(fixes.describe().contains(JIP_INSTALLED.name));
         let off = Choice::from_parts(
@@ -2912,23 +2990,38 @@ bSunShadowsCharacters=0
         assert!(Choice::from_parts(None, env_of(&[("NV_JIP_INSTALLED", "yes")])).is_err());
     }
 
-    /// The switch from Fallout.ini (a launcher's play run): `[nv-rs Fixes] bJIPInstalled=1` on,
-    /// `0` or commented out or misspelt off; the run stays a play run (fixes preset, its threads);
-    /// the variable makes a test run instead.
+    /// The switch from Fallout.ini (a launcher's play run): `[nv-rs Fixes] bJIPInstalled=0` off;
+    /// `1`, commented out or misspelt on (the fixes preset decides); the run stays a play run (fixes
+    /// preset, its threads); the variable makes a test run instead.
     #[test]
     fn jip_installed_from_fallout_ini() {
         let on = with_ini(None, "[nv-rs Fixes]\nbJIPInstalled=1\n", &[]);
         assert!(on.is_on(&JIP_INSTALLED));
         assert_eq!(on.preset, Preset::Fixes, "a player's line is not a test");
         assert!(on.is_on(&JIP_GAME_PATCHES));
+        let off = with_ini(None, "[nv-rs Fixes]\nbJIPInstalled=0\n", &[]);
+        assert!(!off.is_on(&JIP_INSTALLED));
+        assert_eq!(off.preset, Preset::Fixes);
+        assert!(off.is_on(&MCM) && off.is_on(&UIO), "their own switches");
+        // MCM's plugin and UI Organizer turn off by their own keys; JIP and the preset stay.
+        for (text, row) in [
+            ("[nv-rs Fixes]\nbMCM=0\n", &MCM),
+            ("[nv-rs Fixes]\nbUIO=0\n", &UIO),
+        ] {
+            let c = with_ini(None, text, &[]);
+            assert!(!c.is_on(row), "{text}");
+            assert!(c.is_on(&JIP_INSTALLED), "{text}");
+            assert_eq!(c.preset, Preset::Fixes, "{text}");
+            let other = if row.env == MCM.env { &UIO } else { &MCM };
+            assert!(c.is_on(other), "{text}");
+        }
         for text in [
-            "[nv-rs Fixes]\nbJIPInstalled=0\n",
-            "[nv-rs Fixes]\n;bJIPInstalled=1\n",
+            "[nv-rs Fixes]\n;bJIPInstalled=0\n",
             "[nv-rs Fixes]\nbJIPInstall=1\n",
             "[nv-rs Fixes]\nbJIP=1\n",
             "[nv-rs Display]\nbJIPInstalled=1\n",
         ] {
-            assert!(!with_ini(None, text, &[]).is_on(&JIP_INSTALLED), "{text}");
+            assert!(with_ini(None, text, &[]).is_on(&JIP_INSTALLED), "{text}");
         }
         // A play run keeps its threads: real unless the file asks for stepped ones.
         assert_eq!(on.threads, PLAY_THREADS);
@@ -2954,10 +3047,11 @@ bSunShadowsCharacters=0
             .into_iter()
             .find(|r| r.switch == JIP_INSTALLED.env)
             .expect("the row's Fallout.ini key");
-        assert_eq!((row.key, row.default), ("bJIPInstalled", "0"));
+        assert_eq!((row.key, row.default), ("bJIPInstalled", "1"));
     }
 
-    /// The row reaches JIP before it installs: off in both presets, on with its variable.
+    /// The row reaches JIP before it installs: off in vanilla, on in the fixes preset and with its
+    /// variable.
     #[test]
     fn the_row_switches_jip_before_it_installs() {
         let row_on = |choice: &Choice| {
@@ -2966,7 +3060,10 @@ bSunShadowsCharacters=0
             e.ext::<jip::Jip>().row_on
         };
         assert!(!row_on(&Choice::vanilla()));
-        assert!(!row_on(&Choice::from_parts(None, no_env).unwrap()));
+        assert!(row_on(&Choice::from_parts(None, no_env).unwrap()));
+        assert!(!row_on(
+            &Choice::from_parts(None, env_of(&[("NV_JIP_INSTALLED", "0")])).unwrap()
+        ));
         assert!(row_on(
             &Choice::from_parts(
                 None,
