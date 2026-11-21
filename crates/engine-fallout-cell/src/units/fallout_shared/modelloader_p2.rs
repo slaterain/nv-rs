@@ -8200,6 +8200,30 @@ mod tests {
             .bool());
     }
 
+    /// Review of #842: S0136 through both `QueueTexture` entries (`004436c0` by name, `00443af0`
+    /// by entry). The palette's texture has a data pointer naming memory that is not there and the
+    /// exe's state stand-in would answer "loaded": with the row no state call is made and the
+    /// texture goes down the not-loaded path (a task built from it and queued).
+    #[test]
+    fn s0136_both_queue_texture_entries_take_the_guarded_read() {
+        const TEXTURE: u32 = 0x0e10_0000;
+        for entry in [0x0044_36c0u32, 0x0044_3af0] {
+            let (mut e, this, _, parent) = texture_setup(TEXTURE, 3, 0);
+            e.set_stewie(engine_core::extend::stewie::QUEUED_TEXTURE_LOAD, true);
+            // The console's word Tweaks' warning line asks (no console: the line is queued).
+            e.map(0x011d_8000, 0x1000);
+            e.map(TEXTURE, 0x1000);
+            e.mem.set_u32(TEXTURE + 0x24, 0x0000_0100);
+            e.mem.unmap(0, 0x1000);
+            e.call_log = Some(vec![]);
+            assert!(e.call(entry, &args![this, 0x7777u32, 4i32, parent]).bool());
+            assert!(calls_to(&e, QUEUED_TEXTURE_STATE).is_empty(), "{entry:x}");
+            let built = calls_to(&e, QUEUED_TEXTURE_FROM_TEXTURE);
+            assert_eq!(built.len(), 1, "{entry:x}: the not-loaded path");
+            assert_eq!(built[0][1..], [TEXTURE, 4]);
+        }
+    }
+
     #[test]
     fn queue_texture_by_entry_builds_a_new_task_when_nothing_is_taken_over() {
         let (mut e, this, task, parent) = texture_setup(0, 0, 0);
