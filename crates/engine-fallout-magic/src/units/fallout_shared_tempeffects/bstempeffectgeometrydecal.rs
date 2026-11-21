@@ -399,8 +399,19 @@ pub fn fn_00683900(
     e.set(this, BSTempEffectGeometryDecal::iNumVerts, 0);
     let texture_set = e.mem.u32(creation_data.wrapping_add(0x30));
     e.set(this, BSTempEffectGeometryDecal::pTextureSet, texture_set);
+    // lStewieAl's Tweaks' S0238 (its jump at `0x683A3D`): the creation data's subtexture index
+    // (`+0x70`) kept in the decal's spare byte `+0x29`.
+    if e.stewie(engine_core::extend::stewie::SKINNED_DECAL_SUBTEXTURE) {
+        let subtexture = e.mem.u8(creation_data.wrapping_add(0x70));
+        e.mem.set_u8(base + DECAL_SUBTEXTURE, subtexture);
+    }
     this
 }
+
+/// The decal's byte Tweaks' S0238 keeps the subtexture index in (`+0x29`, after `bFinished`), and
+/// the shader property's byte it hands it to (`+0xC0`).
+const DECAL_SUBTEXTURE: u32 = 0x29;
+const PROPERTY_SUBTEXTURE: u32 = 0xc0;
 
 /// The uniform form of [`fn_00683900`] (13 words after `this`).
 fn fn_00683900_entry(e: &mut Engine, a: &[u32]) -> Ret {
@@ -1123,6 +1134,13 @@ pub fn fn_00687d90(
             } else {
                 0
             };
+            // lStewieAl's Tweaks' S0238 (its jump at `0x687E9B`): the decal's subtexture index to
+            // the new shader property.
+            if e.stewie(engine_core::extend::stewie::SKINNED_DECAL_SUBTEXTURE) {
+                let subtexture = e.mem.u8(base + DECAL_SUBTEXTURE);
+                e.mem
+                    .set_u8(property.wrapping_add(PROPERTY_SUBTEXTURE), subtexture);
+            }
             e.call(ATTACH_PROPERTY_00439410, &args![shape, property]);
             e.call(
                 PROPERTY_SET_FLOAT_004EE4B0,
@@ -2990,6 +3008,38 @@ mod tests_n073 {
         assert_eq!(e.mem.u32(this + 0x18), 0xdddd);
     }
 
+    /// lStewieAl's Tweaks' row S0238 at `0x683A3D`: the creation data's subtexture index (`+0x70`)
+    /// goes to the decal's byte `+0x29` with the row; without it the byte is left as it was (the
+    /// exe keeps no index).
+    #[test]
+    fn s0238_the_constructor_keeps_the_subtexture_index() {
+        for on in [false, true] {
+            let mut e = Engine::new();
+            e.set_stewie(engine_core::extend::stewie::SKINNED_DECAL_SUBTEXTURE, on);
+            pointer_doubles(&mut e);
+            noop(
+                &mut e,
+                &[
+                    TEMP_EFFECT_CONSTRUCTOR,
+                    POINTER_CONSTRUCT_00633C90,
+                    LOCAL_INIT_006815C0,
+                ],
+            );
+            e.register(PARENT_009611E0, |_, a| ret(a[0] + 0x100));
+            let this = e.mem.alloc(0x64);
+            e.mem.set_u8(this + 0x29, 0xee);
+            let data = e.mem.alloc(0x80);
+            e.mem.set_u32(data + 0x30, 0x7e57);
+            e.mem.set_u8(data + 0x70, 3);
+            let mut words = vec![this, 0xce11u32, 0.5f32.to_bits(), data, 0x3000u32];
+            words.extend([0u32; 9]);
+            assert_eq!(e.call(0x0068_3900, &words).u32(), this);
+            assert_eq!(e.mem.u32(this + 0x58), 0x7e57);
+            assert_eq!(e.mem.u8(this + 0x29), if on { 3 } else { 0xee }, "row {on}");
+            assert_eq!(e.mem.u8(this + 0x28), 0, "bFinished");
+        }
+    }
+
     fn box_globals(e: &mut Engine) {
         e.map(ZERO_DOUBLE & !0xfff, 0x1000);
         e.map(DEPTH_LIMIT & !0xfff, 0x1000);
@@ -3693,6 +3743,48 @@ mod tests_n073_skinned {
         assert_eq!(calls_to(&log, PREPARE_OBJECT), vec![vec![shape, 0, 0]]);
         assert_eq!(e.mem.u32(this + 0x1c), shape);
         assert_eq!(e.mem.u32(this + 0x20), 0x7a67);
+    }
+
+    /// lStewieAl's Tweaks' row S0238 at `0x687E9B`: the decal's subtexture index (`+0x29`) goes to
+    /// the new shader property's byte `+0xC0`, before the property is attached; without the row
+    /// the byte is the constructor's.
+    #[test]
+    fn s0238_the_shader_property_gets_the_subtexture_index() {
+        for on in [false, true] {
+            let mut e = Engine::new();
+            e.set_stewie(engine_core::extend::stewie::SKINNED_DECAL_SUBTEXTURE, on);
+            let (this, _, _) = setup(&mut e, 1);
+            e.register(SHADER_PROPERTY_CONSTRUCT_00BB4080, |e, a| {
+                e.mem.set_u8(a[0] + 0xc0, 0x5a);
+                ret(a[0])
+            });
+            e.register(ATTACH_PROPERTY_00439410, |e, a| {
+                e.mem.set_u8(a[1] + 0xc1, e.mem.u8(a[1] + 0xc0));
+                Ret::default()
+            });
+            e.mem.set_u8(this + 0x29, 2);
+            e.call_log = Some(vec![]);
+            e.call(
+                0x0068_7d90,
+                &args![
+                    this,
+                    0x50u32,
+                    0x10007u32,
+                    0x1_0009u32,
+                    0x100u32,
+                    0x200u32,
+                    0x300u32,
+                    0x400u32,
+                    0u32,
+                    0u32
+                ],
+            );
+            let log = e.call_log.take().unwrap();
+            let property = calls_to(&log, SHADER_PROPERTY_CONSTRUCT_00BB4080)[0][0];
+            let want = if on { 2 } else { 0x5a };
+            assert_eq!(e.mem.u8(property + 0xc0), want, "row {on}");
+            assert_eq!(e.mem.u8(property + 0xc1), want, "set before the attach");
+        }
     }
 
     #[test]
