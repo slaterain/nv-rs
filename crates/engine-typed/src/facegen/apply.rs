@@ -211,22 +211,37 @@ enum Op {
 /// ([`skip`]).
 struct Sink {
     defer: bool,
+    /// Whether the writes are noted at all (not for a plain pass).
+    record: bool,
     ops: Vec<Op>,
 }
 
 impl Sink {
+    /// A pass as the exe makes it, nothing noted.
     fn now() -> Sink {
         Sink {
             defer: false,
+            record: false,
             ops: Vec::new(),
         }
     }
+
+    fn note(&mut self, op: Op) {
+        if self.record {
+            self.ops.push(op);
+        }
+    }
+}
+
+thread_local! {
+    /// The morph pass's note buffer, reused from pass to pass.
+    static NOTES: std::cell::RefCell<Vec<Op>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// The base copy of the context's geometry (`00653340`) through the sink.
 #[inline(always)]
 fn prepare(e: &mut Engine, context: u32, sink: &mut Sink) {
-    sink.ops.push(Op::Prepare);
+    sink.note(Op::Prepare);
     if !sink.defer {
         let geometry = e.mem.u32(context);
         typed_call!(
@@ -285,14 +300,16 @@ fn apply_morph(e: &mut Engine, context: u32, kind: u32, index: u32, value: f32, 
         prepare(e, context, sink);
         e.mem.set_u8(context + 0x1c, 1);
     }
-    let data = e.mem.u32(context + 0x10);
-    let morph = morph_identity(e, data, kind, index);
-    sink.ops.push(Op::Apply {
-        kind,
-        index,
-        value: value.to_bits(),
-        morph,
-    });
+    if sink.record {
+        let data = e.mem.u32(context + 0x10);
+        let morph = morph_identity(e, data, kind, index);
+        sink.note(Op::Apply {
+            kind,
+            index,
+            value: value.to_bits(),
+            morph,
+        });
+    }
     if !sink.defer {
         apply_now(e, context, kind, index, value);
     }
@@ -408,14 +425,22 @@ pub fn apply_modifiers(e: &mut Engine, this: Ptr, context: u32) {
 /// other than what the array holds. Per array (by its address, per run) the pass keeps what fed its
 /// last reshape: the identities (geometry, its data, the morph data, the base and its offsets, the
 /// array and its stride, the vertex count, the thread's precision), the writes in order (each
-/// morph's kind, index, weight and identity), a copy of the base offsets and of the positions it
-/// left. A pass whose identities, base offsets and array positions all still match notes its
-/// writes instead of making them; when the notes equal the kept ones the reshape would give the
-/// same positions from the same inputs, so it is left out (with its `MarkAsChanged`: the data did
-/// not change). Anything else (another writer, a reused address, a changed weight or base) makes
-/// the writes as the exe does and keeps them anew. Not kept, so never skipped: a morph whose
-/// `ApplyMorph` is not one of the two own functions (a class whose effects are not known) and a
-/// statistical index past the vertex count (that vertex is not reset by the base copy).
+/// morph's kind, index, weight and identity), and copies of the base offsets and of the positions
+/// it left.
+///
+/// A pass over a kept array notes its writes instead of making them. At its end the notes are
+/// compared with the kept ones first (a few dozen entries); only when they are equal are the base
+/// offsets and the array's positions compared, in place, with the kept copies. All equal: the
+/// reshape would give the same positions from the same inputs, so it is left out (with its
+/// `MarkAsChanged`: the data did not change). Anything else makes the writes as the exe does and
+/// keeps them anew, in place. After [`MISSES`] misses in a row (a talking or blinking face) the
+/// array is not kept for [`REST`] passes: those run as the exe does, at no extra cost, and then it
+/// is tried again. An array not met for [`STALE`] passes (a head unloaded) is forgotten.
+///
+/// Never kept, so never skipped: a morph whose `ApplyMorph` is not one of the two own functions (a
+/// class whose effects are not known); a statistical morph with an index past the vertex count
+/// (that vertex is not reset by the base copy). The basis rows a statistical morph reads are
+/// part of the compared base offsets.
 pub(crate) mod skip {
     use super::Op;
     use engine_core::Engine;
@@ -423,22 +448,37 @@ pub(crate) mod skip {
     use std::collections::HashMap;
     use std::sync::Mutex;
 
+    /// Misses in a row before an array rests, the passes it rests, the passes after which an array
+    /// not met is forgotten (about a second of frames with a few dozen heads).
+    pub(super) const MISSES: u8 = 3;
+    pub(super) const REST: u16 = 32;
+    const STALE: u64 = 4096;
+
     /// What fed one reshape and what it left.
-    pub(super) struct Kept {
+    struct Kept {
         key: [u32; 9],
         ops: Vec<Op>,
         base: Vec<u32>,
         positions: Vec<u32>,
+        misses: u8,
+        /// Passes left resting (not kept): above zero, the array runs as the exe does.
+        rest: u16,
+        seen: u64,
     }
 
-    /// The kept reshapes, by run (the kernel table's address), then by array address.
-    static KEPT: Mutex<Vec<(usize, HashMap<u32, Kept>)>> = Mutex::new(Vec::new());
-    /// At most this many arrays a run (more are forgotten all at once) and runs (the oldest go).
-    const MAX_ARRAYS: usize = 1024;
+    /// One run's kept arrays and its pass count.
+    #[derive(Default)]
+    struct Run {
+        arrays: HashMap<u32, Kept>,
+        passes: u64,
+    }
+
+    /// The kept reshapes, by run (the kernel table's address).
+    static KEPT: Mutex<Vec<(usize, Run)>> = Mutex::new(Vec::new());
     const MAX_RUNS: usize = 8;
 
     thread_local! {
-        /// A statistical morph wrote past the vertex count during this reshape.
+        /// A statistical morph wrote past the vertex count.
         static PAST_COUNT: Cell<bool> = const { Cell::new(false) };
     }
 
@@ -446,104 +486,184 @@ pub(crate) mod skip {
         PAST_COUNT.with(|c| c.set(true));
     }
 
-    pub(super) fn clear_past_count() {
-        PAST_COUNT.with(|c| c.set(false));
-    }
-
     fn past_count() -> bool {
         PAST_COUNT.with(Cell::get)
     }
 
-    /// The positions of `count` vertices at `array` (three words a vertex, one a stride).
-    pub(super) fn positions(e: &Engine, array: u32, stride: u32, count: u32) -> Vec<u32> {
-        let mut out = Vec::with_capacity(3 * count as usize);
-        let mut at = array;
-        for _ in 0..count {
-            out.push(e.mem.u32(at));
-            out.push(e.mem.u32(at.wrapping_add(4)));
-            out.push(e.mem.u32(at.wrapping_add(8)));
-            at = at.wrapping_add(stride);
-        }
-        out
+    /// How a pass over an array runs.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub(super) enum Mode {
+        /// Not kept and not to be kept now (resting): as the exe, nothing noted.
+        Plain,
+        /// Not kept yet: as the exe, its writes noted, then kept.
+        Record,
+        /// Kept: writes noted only, decided at the end.
+        Defer,
     }
 
-    /// `3 * count` words from `offsets`.
-    pub(super) fn words(e: &Engine, offsets: u32, count: u32) -> Vec<u32> {
-        (0..3 * count)
-            .map(|k| e.mem.u32(offsets.wrapping_add(4 * k)))
-            .collect()
-    }
-
-    /// Whether the array's kept reshape has these identities and still matches the base offsets and
-    /// the array's positions: then the pass notes its writes instead of making them.
-    pub(super) fn candidate(e: &Engine, key: &[u32; 9]) -> bool {
-        let run = e.kernel.id();
-        let kept = KEPT.lock().unwrap_or_else(|p| p.into_inner());
-        let Some((_, arrays)) = kept.iter().find(|(r, _)| *r == run) else {
-            return false;
-        };
-        let Some(k) = arrays.get(&key[4]) else {
-            return false;
-        };
-        let (array, stride, count, offsets) = (key[4], key[5], key[6], key[8]);
-        k.key == *key
-            && k.base == words(e, offsets, count)
-            && k.positions == positions(e, array, stride, count)
-    }
-
-    /// Whether `ops` are the kept reshape's writes (asked only of a candidate).
-    pub(super) fn same_writes(e: &Engine, key: &[u32; 9], ops: &[Op]) -> bool {
-        let run = e.kernel.id();
-        let kept = KEPT.lock().unwrap_or_else(|p| p.into_inner());
-        kept.iter()
-            .find(|(r, _)| *r == run)
-            .and_then(|(_, arrays)| arrays.get(&key[4]))
-            .is_some_and(|k| k.key == *key && k.ops == ops)
-    }
-
-    /// Keeps the reshape just made (or forgets the array when it may not be skipped).
-    pub(super) fn keep(e: &Engine, key: [u32; 9], ops: Vec<Op>) {
-        let run = e.kernel.id();
-        let own = ops.iter().all(|op| match op {
-            Op::Prepare => true,
-            Op::Apply { morph, .. } => {
-                morph[0] == 0 || {
-                    let apply = e.mem.u32(morph[1].wrapping_add(4));
-                    apply == super::DIFFERENTIAL_APPLY || apply == super::STATISTICAL_APPLY
-                }
-            }
-        });
-        let keepable = own && !past_count();
-        let (array, stride, count, offsets) = (key[4], key[5], key[6], key[8]);
-        let fresh = keepable.then(|| Kept {
-            key,
-            ops,
-            base: words(e, offsets, count),
-            positions: positions(e, array, stride, count),
-        });
+    fn with_run<T>(e: &Engine, f: impl FnOnce(&mut Run) -> T) -> T {
+        let id = e.kernel.id();
         let mut kept = KEPT.lock().unwrap_or_else(|p| p.into_inner());
-        let at = match kept.iter().position(|(r, _)| *r == run) {
+        let at = match kept.iter().position(|(r, _)| *r == id) {
             Some(at) => at,
             None => {
                 if kept.len() >= MAX_RUNS {
                     kept.remove(0);
                 }
-                kept.push((run, HashMap::new()));
+                kept.push((id, Run::default()));
                 kept.len() - 1
             }
         };
-        let arrays = &mut kept[at].1;
-        match fresh {
-            Some(k) => {
-                if arrays.len() >= MAX_ARRAYS && !arrays.contains_key(&array) {
-                    arrays.clear();
+        f(&mut kept[at].1)
+    }
+
+    /// The mode of a pass over the array `key[4]` with these identities.
+    pub(super) fn begin(e: &Engine, key: &[u32; 9]) -> Mode {
+        PAST_COUNT.with(|c| c.set(false));
+        with_run(e, |run| {
+            run.passes += 1;
+            let now = run.passes;
+            if now % 1024 == 0 {
+                run.arrays.retain(|_, k| now - k.seen < STALE);
+            }
+            let Some(k) = run.arrays.get_mut(&key[4]) else {
+                return Mode::Record;
+            };
+            k.seen = now;
+            if k.key != *key {
+                return Mode::Record;
+            }
+            if k.rest > 0 {
+                k.rest -= 1;
+                if k.rest == 0 {
+                    run.arrays.remove(&key[4]);
                 }
-                arrays.insert(array, k);
+                return Mode::Plain;
             }
-            None => {
-                arrays.remove(&array);
+            Mode::Defer
+        })
+    }
+
+    /// Whether the words at `at` (three a vertex, one vertex a stride) are `kept`.
+    fn positions_are(e: &Engine, kept: &[u32], array: u32, stride: u32) -> bool {
+        let mut at = array;
+        for v in kept.chunks_exact(3) {
+            if e.mem.u32(at) != v[0]
+                || e.mem.u32(at.wrapping_add(4)) != v[1]
+                || e.mem.u32(at.wrapping_add(8)) != v[2]
+            {
+                return false;
             }
+            at = at.wrapping_add(stride);
         }
+        true
+    }
+
+    /// Whether the words from `offsets` are `kept`.
+    fn words_are(e: &Engine, kept: &[u32], offsets: u32) -> bool {
+        (0u32..)
+            .zip(kept)
+            .all(|(k, w)| e.mem.u32(offsets.wrapping_add(4 * k)) == *w)
+    }
+
+    /// A deferred pass's end: whether its writes may be left out (the kept writes, base offsets and
+    /// positions all equal). On false the caller makes the writes and calls [`keep`].
+    pub(super) fn same(e: &Engine, key: &[u32; 9], ops: &[Op]) -> bool {
+        let (array, stride, offsets) = (key[4], key[5], key[8]);
+        with_run(e, |run| {
+            let Some(k) = run.arrays.get_mut(&array) else {
+                return false;
+            };
+            let hit = k.key == *key
+                && k.ops == ops
+                && words_are(e, &k.base, offsets)
+                && positions_are(e, &k.positions, array, stride);
+            if hit {
+                k.misses = 0;
+            }
+            hit
+        })
+    }
+
+    /// Whether a morph of these identity words is one whose effects are known.
+    fn own_class(e: &Engine, morph: &[u32; 5]) -> bool {
+        morph[0] == 0 || {
+            let apply = e.mem.u32(morph[1].wrapping_add(4));
+            apply == super::DIFFERENTIAL_APPLY || apply == super::STATISTICAL_APPLY
+        }
+    }
+
+    /// Keeps the writes just made (`deferred`: a miss of a kept array, counted), updating the kept
+    /// copies in place; forgets the array when it may not be skipped, and rests it after
+    /// [`MISSES`] misses in a row.
+    pub(super) fn keep(e: &Engine, key: [u32; 9], ops: &[Op], deferred: bool) {
+        let keepable = !past_count()
+            && ops.iter().all(|op| match op {
+                Op::Prepare => true,
+                Op::Apply { morph, .. } => own_class(e, morph),
+            });
+        let (array, stride, count, offsets) = (key[4], key[5], key[6], key[8]);
+        with_run(e, |run| {
+            let now = run.passes;
+            if !keepable {
+                run.arrays.remove(&array);
+                return;
+            }
+            let k = run.arrays.entry(array).or_insert_with(|| Kept {
+                key,
+                ops: Vec::new(),
+                base: Vec::new(),
+                positions: Vec::new(),
+                misses: 0,
+                rest: 0,
+                seen: now,
+            });
+            k.seen = now;
+            k.misses = if deferred && k.key == key {
+                k.misses.saturating_add(1)
+            } else {
+                0
+            };
+            k.key = key;
+            if k.misses >= MISSES {
+                // A face that changes every frame: rest, holding no copies.
+                k.rest = REST;
+                k.misses = 0;
+                k.ops = Vec::new();
+                k.base = Vec::new();
+                k.positions = Vec::new();
+                return;
+            }
+            k.ops.clear();
+            k.ops.extend_from_slice(ops);
+            // The base offsets, with every basis row a statistical morph reads (its first row and
+            // count), so the compare covers them too.
+            let rows = ops.iter().fold(count, |rows, op| match op {
+                Op::Apply { morph, .. }
+                    if morph[0] != 0
+                        && e.mem.u32(morph[1].wrapping_add(4)) == super::STATISTICAL_APPLY =>
+                {
+                    rows.max(morph[4].saturating_add(morph[3]))
+                }
+                _ => rows,
+            });
+            if rows > count.saturating_add(1 << 16) {
+                // Not a basis a face has: never kept.
+                run.arrays.remove(&array);
+                return;
+            }
+            k.base.clear();
+            k.base
+                .extend((0..3 * rows).map(|w| e.mem.u32(offsets.wrapping_add(4 * w))));
+            k.positions.clear();
+            let mut at = array;
+            for _ in 0..count {
+                k.positions.push(e.mem.u32(at));
+                k.positions.push(e.mem.u32(at.wrapping_add(4)));
+                k.positions.push(e.mem.u32(at.wrapping_add(8)));
+                at = at.wrapping_add(stride);
+            }
+        });
     }
 }
 
@@ -692,11 +812,14 @@ pub fn morph_pass(e: &mut Engine, this: Ptr, force: u8) {
                 u32::from(float_precision()),
                 e.mem.u32(base.wrapping_add(0xc)),
             ];
+            let mode = skip::begin(e, &key);
+            let mut notes = NOTES.with(|n| std::mem::take(&mut *n.borrow_mut()));
+            notes.clear();
             let mut sink = Sink {
-                defer: skip::candidate(e, &key),
-                ops: Vec::new(),
+                defer: mode == skip::Mode::Defer,
+                record: mode != skip::Mode::Plain,
+                ops: notes,
             };
-            skip::clear_past_count();
             if force != 0 || e.mem.u8(node + FORCE_BASE_MORPH) != 0 {
                 prepare(e, context, &mut sink);
                 e.mem.set_u8(context + 0x1c, 1);
@@ -790,13 +913,18 @@ pub fn morph_pass(e: &mut Engine, this: Ptr, force: u8) {
                 }
             }
             if !sink.ops.is_empty() {
-                if !sink.defer {
-                    skip::keep(e, key, sink.ops);
-                } else if !skip::same_writes(e, &key, &sink.ops) {
-                    make(e, context, &sink.ops);
-                    skip::keep(e, key, sink.ops);
+                match mode {
+                    skip::Mode::Record => skip::keep(e, key, &sink.ops, false),
+                    skip::Mode::Defer => {
+                        if !skip::same(e, &key, &sink.ops) {
+                            make(e, context, &sink.ops);
+                            skip::keep(e, key, &sink.ops, true);
+                        }
+                    }
+                    skip::Mode::Plain => {}
                 }
             }
+            NOTES.with(|n| *n.borrow_mut() = std::mem::take(&mut sink.ops));
             let data = e.call(at::GEOMETRY_DATA, &args![geometry]).u32();
             e.call(at::DATA_UNLOCK, &args![data]);
         }

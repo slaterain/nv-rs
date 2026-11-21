@@ -116,6 +116,7 @@ pub fn statistical_apply(e: &mut Engine, this: Ptr, object: u32, base: u32, weig
     while i < e.mem.u32(t.wrapping_add(8)) {
         let indices = e.mem.u32(t.wrapping_add(4));
         let index = e.mem.u32(indices.wrapping_add(i.wrapping_mul(4)));
+        // A vertex past the count, which the base copy does not reset: this head is never left out.
         if index >= vertices {
             super::apply::skip::note_past_count();
         }

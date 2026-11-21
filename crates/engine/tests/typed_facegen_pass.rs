@@ -267,7 +267,8 @@ fn geometry(e: &mut Engine, vertices: u32, pattern: u32, refuse: bool) -> u32 {
     e.mem.set_u32(data + 0x30, u32::from(refuse));
     let g = e.mem.alloc(0xc0);
     e.mem.set_u32(g + 0xb8, data);
-    let array = e.mem.alloc(12 * vertices.max(1));
+    // Four vertices of slack: a statistical morph may write one past the count.
+    let array = e.mem.alloc(12 * (vertices + 4));
     for i in 0..3 * vertices {
         e.mem
             .set_f32(array + 4 * i, ((i + pattern) % 9) as f32 / 3.0 - 1.0);
@@ -275,7 +276,7 @@ fn geometry(e: &mut Engine, vertices: u32, pattern: u32, refuse: bool) -> u32 {
     e.mem.set_u32(LOCKED_ARRAY, array);
     e.mem.set_u32(LOCKED_STRIDE, 12);
     let extra = e.mem.alloc(0x10);
-    let offsets = e.mem.alloc(12 * vertices.max(1));
+    let offsets = e.mem.alloc(12 * (vertices + 4));
     e.mem.set_u32(extra + 0xc, offsets);
     e.mem.set_u32(EXTRA, extra);
     g
@@ -702,6 +703,25 @@ enum Change {
     Near,
     BaseOffset,
     ForceBase,
+    /// Both heads freed and rebuilt at the same addresses with other data (other base offsets,
+    /// the arrays back to an unmorphed mesh).
+    Rebuilt,
+    /// Child 0's morphs become a class whose effects are not known; and back.
+    UnknownClass,
+    KnownClass,
+    /// Child 1's first phoneme morph becomes a statistical one writing one vertex past the count.
+    PastCount,
+}
+
+/// What the typed engine must do in a frame, against the translations' reshapes.
+#[derive(Clone, Copy, Debug)]
+enum Expect {
+    /// Left out (no reshape).
+    Skip,
+    /// Reshaped as the exe (both children).
+    Full,
+    /// One child reshaped, the other left out.
+    One,
 }
 
 fn frame(e: &mut Engine, n: u32, data: u32, geometries: &[u32; 2], change: Change) {
@@ -725,6 +745,51 @@ fn frame(e: &mut Engine, n: u32, data: u32, geometries: &[u32; 2], change: Chang
             e.mem.set_f32(offsets + 4, -0.5);
         }
         Change::ForceBase => e.mem.set_u8(n + 0xd4, 1),
+        Change::Rebuilt => {
+            for (i, g) in geometries.iter().enumerate() {
+                let vertices = 20 + 4 * i as u32;
+                let a = array_of(e, *g);
+                let base = e.mem.u32(*g + 0x20);
+                let offsets = e.mem.u32(base + 0xc);
+                for w in 0..3 * vertices {
+                    e.mem.set_f32(a + 4 * w, (w % 5) as f32 - 2.0);
+                    e.mem.set_f32(offsets + 4 * w, (w % 11) as f32 / 32.0);
+                }
+            }
+        }
+        Change::UnknownClass | Change::KnownClass => {
+            let (from, to) = if matches!(change, Change::UnknownClass) {
+                (DIFFERENTIAL_VTABLE, OTHER_VTABLE)
+            } else {
+                (OTHER_VTABLE, DIFFERENTIAL_VTABLE)
+            };
+            let morphs = e.mem.u32(geometries[0] + 0x10);
+            for (offset, slots) in [(0x8u32, 15u32), (0xc, 17), (0x10, 16), (0x14, 1)] {
+                let table = e.mem.u32(morphs + offset);
+                for s in 0..slots {
+                    let m = e.mem.u32(table + 4 * s);
+                    if m != 0 && e.mem.u32(m) == from {
+                        e.mem.set_u32(m, to);
+                    }
+                }
+            }
+        }
+        Change::PastCount => {
+            let vertices = 24;
+            let m = e.mem.alloc(0x10);
+            let indices = e.mem.alloc(8);
+            e.mem.set_u32(indices, 3);
+            e.mem.set_u32(indices + 4, vertices);
+            e.mem.set_u32(m, STATISTICAL_VTABLE);
+            e.mem.set_u32(m + 4, indices);
+            e.mem.set_u32(m + 8, 2);
+            e.mem.set_u32(m + 0xc, 0);
+            let morphs = e.mem.u32(geometries[1] + 0x10);
+            let phonemes = e.mem.u32(morphs + 0x10);
+            for s in 0..16 {
+                e.mem.set_u32(phonemes + 4 * s, m);
+            }
+        }
     }
     e.call(0x0066_3050, &args![n, 0u32]);
 }
@@ -732,63 +797,93 @@ fn frame(e: &mut Engine, n: u32, data: u32, geometries: &[u32; 2], change: Chang
 #[test]
 fn facegen_skip_gives_the_same_vertices() {
     use Change::*;
-    let frames = [
-        Nothing,
-        Nothing,
-        Weight(0, 0.5),
-        Nothing,
-        Weight(1, 0.75),
-        Weight(1, 0.75),
-        OtherWriter,
-        Nothing,
-        Far,
-        Nothing,
-        Near,
-        BaseOffset,
-        Nothing,
-        ForceBase,
-        Nothing,
-        Weight(2, 0.25),
-        Nothing,
+    use Expect::*;
+    let mut frames = vec![
+        (Nothing, Full),
+        (Nothing, Skip),
+        (Weight(0, 0.5), Full),
+        (Nothing, Skip),
+        (Weight(1, 0.75), Full),
+        (Weight(1, 0.75), Skip),
+        (OtherWriter, One),
+        (Nothing, Skip),
+        (Far, Full),
+        (Nothing, Skip),
+        (Near, Full),
+        (BaseOffset, One),
+        (Nothing, Skip),
+        // A forced base copy is the copy the first morph makes: the same writes.
+        (ForceBase, Skip),
+        (Nothing, Skip),
+        (Weight(2, 0.25), Full),
+        (Nothing, Skip),
+        // A weight going A, B, A.
+        (Weight(0, 0.75), Full),
+        (Weight(0, 0.5), Full),
+        (Nothing, Skip),
+        (Rebuilt, Full),
+        (Nothing, Skip),
+        // An unknown class is never kept (child 0 reshapes every frame, child 1 is left out);
+        // back to the known one, it is kept again.
+        (UnknownClass, One),
+        (Nothing, One),
+        (Nothing, One),
+        (KnownClass, One),
+        (Nothing, Skip),
     ];
+    // A talking face: three misses in a row and the arrays rest (the exe's pass, no compare),
+    // then are kept again.
+    for k in 0..4u8 {
+        frames.push((Weight(0, 0.1 + 0.1 * f32::from(k)), Full));
+    }
+    frames.extend(std::iter::repeat_n((Nothing, Full), 2));
     let mut translated = Engine::new_untyped_for_test();
     let mut typed = Engine::new();
     let (tn, td, tg) = head(&mut translated);
     let (yn, yd, yg) = head(&mut typed);
-    for (i, change) in frames.iter().enumerate() {
-        let (tm, ym) = (translated.mem.u32(MARKS), typed.mem.u32(MARKS));
-        frame(&mut translated, tn, td, &tg, *change);
-        frame(&mut typed, yn, yd, &yg, *change);
-        assert_eq!(
-            shapes(&translated, &tg),
-            shapes(&typed, &yg),
-            "frame {i} ({change:?}): the vertices differ"
-        );
-        let reshaped = typed.mem.u32(MARKS) - ym;
-        // Another writer and an edited base touch one of the two children; the other is left out.
-        let one_child = matches!(change, OtherWriter | BaseOffset);
-        let translation_reshaped = translated.mem.u32(MARKS) - tm;
-        assert!(
-            translation_reshaped > 0,
-            "frame {i}: the head was not morphed"
-        );
-        // Frame 5 sets the weight frame 4 set; a forced base copy is the copy the first morph makes.
-        let unchanged = (matches!(change, Nothing | ForceBase) && i > 0) || i == 5;
-        if unchanged {
+    let mut run = |frames: &[(Change, Option<Expect>)], from: usize| {
+        for (j, (change, expect)) in frames.iter().enumerate() {
+            let i = from + j;
+            let (tm, ym) = (translated.mem.u32(MARKS), typed.mem.u32(MARKS));
+            frame(&mut translated, tn, td, &tg, *change);
+            frame(&mut typed, yn, yd, &yg, *change);
             assert_eq!(
-                reshaped, 0,
-                "frame {i} ({change:?}): reshaped though nothing changed"
+                shapes(&translated, &tg),
+                shapes(&typed, &yg),
+                "frame {i} ({change:?}): the vertices differ"
             );
-        } else {
-            let expected = if one_child {
-                translation_reshaped / 2
-            } else {
-                translation_reshaped
+            let reshaped = typed.mem.u32(MARKS) - ym;
+            let translation_reshaped = translated.mem.u32(MARKS) - tm;
+            assert!(
+                translation_reshaped > 0,
+                "frame {i}: the head was not morphed"
+            );
+            let expected = match expect {
+                None => continue,
+                Some(Skip) => 0,
+                Some(Full) => translation_reshaped,
+                Some(One) => translation_reshaped / 2,
             };
             assert_eq!(
                 reshaped, expected,
-                "frame {i} ({change:?}): not reshaped as the exe does"
+                "frame {i} ({change:?}): expected {expect:?}"
             );
         }
-    }
+    };
+    let listed: Vec<(Change, Option<Expect>)> =
+        frames.iter().map(|(c, x)| (*c, Some(*x))).collect();
+    run(&listed, 0);
+    // Through the rest (the vertices still compared every frame), then kept again: one frame
+    // to keep, then left out.
+    let rest: Vec<(Change, Option<Expect>)> = std::iter::repeat_n((Nothing, None), 40).collect();
+    run(&rest, listed.len());
+    let after = [(Nothing, Some(Skip))];
+    run(&after, listed.len() + 40);
+    // A statistical vertex past the count: child 1 is never kept.
+    let past = [
+        (PastCount, Some(One)),
+        (Nothing, Some(One)),
+        (Nothing, Some(One)),
+    ];
+    run(&past, listed.len() + 41);
 }
