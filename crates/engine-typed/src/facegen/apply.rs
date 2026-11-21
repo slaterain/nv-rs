@@ -590,14 +590,12 @@ mod at {
     pub const DATA_LOCK: u32 = 0x00a6_7360;
     pub const DATA_BEGIN: u32 = 0x00a6_7410;
     pub const DATA_UNLOCK: u32 = 0x00a6_73d0;
-    pub const FACE_VERTICES: u32 = 0x0045_6650;
     pub const SETTING_REAL: u32 = 0x0045_0410;
     pub const FAR_SETTING: u32 = 0x011d_5b28;
     pub const NEAR_SETTING: u32 = 0x011d_5b34;
     pub const CAMERA_HOLDER: u32 = 0x011d_59ec;
     pub const DEFAULT_POSITION: u32 = 0x011f_426c;
     pub const POSITION_OF: u32 = 0x0045_bb80;
-    pub const DIFFERENCE: u32 = 0x0043_9ef0;
     pub const LENGTH: u32 = 0x0045_7990;
     pub const QUARTERED: u32 = 0x0052_5420;
     pub const IN_MENU_MODE: u32 = 0x0070_2360;
@@ -678,7 +676,9 @@ pub fn morph_pass(e: &mut Engine, this: Ptr, force: u8) {
             }
             let data = e.call(at::GEOMETRY_DATA, &args![geometry]).u32();
             e.call(at::DATA_BEGIN, &args![data, context + 4]);
-            let vertices = u32::from(e.call(at::FACE_VERTICES, &args![geometry]).u16());
+            // The face's vertex count (`00456650`: the 16 bits at +8 of the data at +0xb8), read in place.
+            let face_data = e.mem.u32(geometry.wrapping_add(0xb8));
+            let vertices = u32::from(e.mem.u16(face_data.wrapping_add(8)));
             e.mem.set_u32(context + 0x18, vertices);
             // The exact skip (see [`skip`]): what this reshape depends on.
             let key = [
@@ -710,9 +710,13 @@ pub fn morph_pass(e: &mut Engine, this: Ptr, force: u8) {
             }
             let ten = e.mem.f32(at::TEN);
             let own = e.call(at::POSITION_OF, &args![node]).u32();
-            let difference = e
-                .call(at::DIFFERENCE, &args![camera, local(0x5c), own])
-                .u32();
+            // `camera - own` into the exe's local (`00439ef0`, each axis one subtraction stored as a
+            // float: plain `f32`), in place.
+            let difference = local(0x5c);
+            for k in 0..3 {
+                let d = e.mem.f32(camera + 4 * k) - e.mem.f32(own + 4 * k);
+                e.mem.set_f32(difference + 4 * k, d);
+            }
             let distance = crate::native::to_float(e.call(at::LENGTH, &args![difference]).f64());
             let mut far = setting(e, at::FAR_SETTING);
             let mut near = setting(e, at::NEAR_SETTING);

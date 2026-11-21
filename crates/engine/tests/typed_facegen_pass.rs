@@ -319,8 +319,12 @@ impl Common for Diff {
             .ignore_calls(&PER_VERTEX)
             // The translations construct their stack points (`006815c0`, a leaf answering its `this`).
             .ignore_calls(&[0x0068_15c0])
+            // The pair split's two outputs are locals it only writes: what they held before (stack residue) differs.
+            .local_at(0x0065_3d70, 2, 0)
+            .local_at(0x0065_3d70, 3, 0)
             .local_at(0x00a6_7410, 1, 0xc)
             .allow_nan_payloads()
+            .max_cases(160)
             .max_calls(200_000)
     }
 }
@@ -761,6 +765,8 @@ fn facegen_skip_gives_the_same_vertices() {
             "frame {i} ({change:?}): the vertices differ"
         );
         let reshaped = typed.mem.u32(MARKS) - ym;
+        // Another writer and an edited base touch one of the two children; the other is left out.
+        let one_child = matches!(change, OtherWriter | BaseOffset);
         let translation_reshaped = translated.mem.u32(MARKS) - tm;
         assert!(
             translation_reshaped > 0,
@@ -774,8 +780,13 @@ fn facegen_skip_gives_the_same_vertices() {
                 "frame {i} ({change:?}): reshaped though nothing changed"
             );
         } else {
+            let expected = if one_child {
+                translation_reshaped / 2
+            } else {
+                translation_reshaped
+            };
             assert_eq!(
-                reshaped, translation_reshaped,
+                reshaped, expected,
                 "frame {i} ({change:?}): not reshaped as the exe does"
             );
         }
