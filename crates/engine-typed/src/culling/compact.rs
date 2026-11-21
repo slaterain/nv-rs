@@ -58,10 +58,9 @@ const FLAGS: u32 = 0x30;
 const CHILDREN: u32 = 0xa0;
 const CHILDREN_SIZE: u32 = 0xa6;
 const OBJECT_SPAN: u32 = 0xa8;
-/// `kCullMode` values: every object visible, none, the planes only.
+/// `kCullMode` values: every object visible, none.
 const MODE_ALL_VISIBLE: u32 = 1;
 const MODE_NONE_VISIBLE: u32 = 2;
-const MODE_PLANES_ONLY: u32 = 3;
 
 /// What the switch says.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
