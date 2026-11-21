@@ -1151,7 +1151,13 @@ pub fn repair_menu_do_enter(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
         let tile50 = e.mem.u32(base + 0x50);
         e.call(TILE_SET_INT, &args![tile50, value_trait, damage]);
     } else {
-        let form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, current));
+        // `0x7B6514` (lStewieAl's Tweaks' S0022.52 writes `MOV ECX,[0x11DA760]; MOV ECX,[ECX+8]`
+        // there): the broken item's form, read raw, in place of the current item's.
+        let form = if e.stewie(engine_core::extend::stewie::REPAIR_MENU_BROKEN_ITEM_TYPE) {
+            e.mem.u32(e.global::<u32>(BROKEN_ITEM) + 8)
+        } else {
+            typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, current))
+        };
         if e.call(FORM_TYPE, &args![form]).u32() == 0x18 {
             let broken = broken_item(e);
             let form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, broken));
@@ -2444,5 +2450,61 @@ mod n057_tests {
         }
         let (e, menu) = click(INSTALLED | FIXES | ENABLE_FO3_REPAIR, close);
         assert!(calls_to(&e, 0x0000_8000).contains(&vec![menu, 0xc, 0]));
+    }
+
+    /// Row S0022.52: `DoEnter`'s stat lines for a broken item that is not a weapon. The broken
+    /// item's form (0x3300) and the item repaired with (0x3400) are of different types; the
+    /// armour lines (`"--"` copied, then the ratings) follow the type of the item repaired with
+    /// with the row off (the exe's `0044ddc0(current)`), the broken item's with it on (its +8
+    /// read raw).
+    #[test]
+    fn s0022_52_repair_lines_follow_the_broken_item() {
+        for (broken_type, used_type, on, lines) in [
+            (0x18u32, 0x1fu32, false, false),
+            (0x18, 0x1f, true, true),
+            (0x1f, 0x18, false, true),
+            (0x1f, 0x18, true, false),
+            (0x18, 0x18, false, true),
+            (0x18, 0x18, true, true),
+        ] {
+            let mut e = engine();
+            let menu = menu(&mut e);
+            e.set_stewie(
+                engine_core::extend::stewie::REPAIR_MENU_BROKEN_ITEM_TYPE,
+                on,
+            );
+            let broken = item_change(&mut e, 0x3300, 0);
+            e.set_global(BROKEN_ITEM, broken);
+            let used = item_change(&mut e, 0x3400, 0);
+            // `0044ddc0` (the form at +8) reads the item, as the exe's.
+            e.register_double(0x0044_ddc0, |e, a| e.mem.u32(a[0] + 8).into_ret());
+            e.set_global(KNOB_INDEX_011DA7D8, 0u32);
+            answer(&mut e, LIST_BOX_CURRENT_ITEM, used);
+            st0(&mut e, GET_ITEM_HEALTH, 80.0);
+            answer(&mut e, TILE_TEXT_TO_TRAIT, 0x61);
+            e.register_double(FORM_TYPE, move |_, a| {
+                let kind = match a[0] {
+                    0x3300 => broken_type,
+                    0x3400 => used_type,
+                    _ => 0,
+                };
+                kind.into_ret()
+            });
+            e.register(GET_FLOAT_TRAIT, |_, a| Ret {
+                st0: if a[1] == 0x1005 { 0.0 } else { 0.5 },
+                ..Ret::default()
+            });
+            e.call_log = Some(vec![]);
+            e.call(0x007b_6120, &args![menu, 0xei32, 0x2200u32]);
+            let copies = calls_to(&e, COPY)
+                .into_iter()
+                .filter(|c| c[2] == DASHES_TEXT)
+                .count();
+            assert_eq!(
+                copies > 0,
+                lines,
+                "broken {broken_type:#x} used {used_type:#x} row {on}"
+            );
+        }
     }
 }
