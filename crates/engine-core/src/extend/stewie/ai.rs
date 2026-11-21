@@ -113,3 +113,34 @@ pub const HOTKEY_AMMO_NEEDS_ROUNDS: Row = Row::share(AI_FIXES, AI_FIXES_END, 30)
 /// S0089.09 `RememberAmmoCountOnLoad` (`AmmoSwapHelper` `009462c0` (`0x94643E`)): a swap that skips
 /// the reload still makes the equipped ammunition the current type.
 pub const SWAP_SKIP_SETS_AMMO_TYPE: Row = Row::share(AI_FIXES, AI_FIXES_END, 31);
+/// S0019 `patchAllowAPRegenModifiersWithNoEquippedWeapon` (`Actor::RestoreActionPoints` `0088b660`
+/// (`0x88B6A1`)): with no weapon equipped the action point regeneration perks see the fists.
+pub const AP_REGEN_NO_WEAPON_FISTS: Row = Row::share(AI_FIXES, AI_FIXES_END, 32);
+/// S0094 `patchFixDisintegrationsStat` (`Actor::ApplyCriticalStage` `008a1a70` (`0x8A1B1B`,
+/// `0x8A1B51`, `0x8A1B6E`)): the player's goo and ash kills are counted when the critical stage
+/// starts, not when it ends.
+pub const DISINTEGRATIONS_STAT: Row = Row::share(AI_FIXES, AI_FIXES_END, 33);
+/// S0112 `patchFixBloodyMessPreventingExplosionGibbing` (`008b43a0` (`0x8B4580`)): a hit with no
+/// body part takes the explosion's parts even when the attacker has Bloody Mess.
+pub const BLOODY_MESS_EXPLOSION_GIBBING: Row = Row::share(AI_FIXES, AI_FIXES_END, 34);
+/// S0149 `VATSFatalCheckDifficulty` (`HitData::DetermineOutcome` `009b73d0` (`0x9B754A`)): the
+/// kill test of a hit multiplies its damage by the difficulty's `fDiffMultHPByPC`.
+pub const VATS_FATAL_CHECK_DIFFICULTY: Row = Row::share(AI_FIXES, AI_FIXES_END, 35);
+/// S0188 `ShotProjectileResistanceFix` (`Actor::DamageEquipment` `00891360` (`0x891951`)): the
+/// explosion of a shot-off explosive names its weapon as its source.
+pub const SHOT_PROJECTILE_RESISTANCE: Row = Row::share(AI_FIXES, AI_FIXES_END, 36);
+/// S0204 `KillCommandDuplicateRewardXpFix` (`KillActor` `005be2a0` (`0x5BE37C`); `Actor::Kill`
+/// `0089d900` (`0x89E5BC`)): the console's `kill` gives the player its experience once.
+pub const KILL_COMMAND_DUPLICATE_XP: Row = Row::share(AI_FIXES, AI_FIXES_END, 37);
+/// S0241 `ActorGetHeadingTargetFix` (`Actor::GetHeadingTarget` `008a2ed0` (`0x8A2F83`)): the
+/// package target within `fAIMaxHeadTrackDistance` is the heading target.
+pub const HEADING_TARGET_DISTANCE: Row = Row::share(AI_FIXES, AI_FIXES_END, 38);
+/// S0660 `patchFixExplosionPushDirection` (`Actor::HitMe` `0089a760` (`0x89C8E3`)): an
+/// explosion's knockback pushes away from the explosion, not from whoever made it.
+pub const EXPLOSION_PUSH_DIRECTION: Row = Row::share(AI_FIXES, AI_FIXES_END, 39);
+/// S0664 `patchFixKillChallengeSourceWeapon` (`Actor::Kill` `0089d900` (`0x89DB50`)): the kill
+/// challenges take the weapon of the killed actor's last hit.
+pub const KILL_CHALLENGE_SOURCE_WEAPON: Row = Row::share(AI_FIXES, AI_FIXES_END, 40);
+/// S0782 `ShootableNonPlayableExplosives` (`Actor::DamageEquipment` `00891360` (`0x891483`,
+/// `0x891759`)): an unplayable explosive an NPC carries can be shot off and set off.
+pub const HIDDEN_FRAGS: Row = Row::share(AI_FIXES, AI_FIXES_END, 41);

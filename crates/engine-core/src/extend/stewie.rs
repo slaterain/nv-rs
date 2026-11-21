@@ -302,8 +302,11 @@ pub mod kept {
     /// S0089.01's `int g_savedAmmoCount` (4 bytes): the player's saved count of loaded rounds plus
     /// one (0: none, Tweaks' -1), read by S0089.07.
     pub const SAVED_AMMO_COUNT: usize = 2;
+    /// S0204's `Actor* pLastKilledActor` (4 bytes): the actor the console's `kill` last killed for
+    /// the player, until `Actor::Kill` reaches its experience step for it.
+    pub const LAST_KILL_COMMAND_ACTOR: usize = 3;
     /// How many.
-    pub const COUNT: usize = 3;
+    pub const COUNT: usize = 4;
 }
 
 /// The last thing each of Tweaks' warnings printed (its functions' statics), its print queue and
