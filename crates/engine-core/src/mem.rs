@@ -2491,6 +2491,14 @@ impl Mem {
     /// freed small block never comes back for another pool's request (a 12-byte object's block
     /// not for a 16-byte one), unless the quick stacks, over their bound, moved it on.
     pub fn alloc(&mut self, size: u32) -> u32 {
+        let timer = crate::hitch::heap_timer();
+        let addr = self.alloc_untimed(size);
+        crate::hitch::heap_timer_end(timer);
+        addr
+    }
+
+    /// [`Mem::alloc`] without the hitch log's timing.
+    fn alloc_untimed(&mut self, size: u32) -> u32 {
         if let Some(s) = self.shared {
             return self.with_shared(s, |m| m.alloc(size));
         }
@@ -2537,6 +2545,13 @@ impl Mem {
         if addr == 0 {
             return;
         }
+        let timer = crate::hitch::heap_timer();
+        self.free_untimed(addr);
+        crate::hitch::heap_timer_end(timer);
+    }
+
+    /// [`Mem::free`] (a block that is not 0) without the hitch log's timing.
+    fn free_untimed(&mut self, addr: u32) {
         if let Some(s) = self.shared {
             return self.with_shared(s, |m| m.free(addr));
         }

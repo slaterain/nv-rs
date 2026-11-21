@@ -1387,6 +1387,7 @@ pub fn tile_init(
     name: Ptr,
     set_parent_arg: u32,
 ) {
+    engine_core::hitch::one(engine_core::hitch::Count::TilesMade);
     e.set(this, Tile::pParent, Ptr::NULL);
     e.call(NI_POINTER_ASSIGN, &args![this.byte_add(0x2c), 0u32]);
     e.call(STRING_SET, &args![this.at(Tile::xName), EMPTY_NAME, 0u32]);

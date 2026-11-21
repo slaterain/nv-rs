@@ -75,10 +75,31 @@ pub enum Count {
     Loads,
     /// Scripts compiled (each compile builds a `ScriptCompileData`, `005ae490`): the console's lines, mods' scripts.
     ScriptCompiles,
+    /// Main's time inside the guest heap's allocate and free (ns; the heap's own lock wait included).
+    HeapNsMain,
+    /// Interface tiles made (`Tile::Init`, `009ff600`: every tile a menu or the HUD builds).
+    TilesMade,
+    /// References given a 3D (`TESObjectREFR::Set3D`, `005702e0`, with a node other than none and other than the
+    /// one they had).
+    Refs3dAttached,
+    /// Main's time in `TESObjectCELL::AttachToWorld` and `TESObjectCELL::Detach` (ns).
+    CellAttachNs,
+    CellDetachNs,
+    /// Main's time in the queued-task hand-over (`IOManager::UpdateQueue`, `00c3dbf0`: finished loads, the queued
+    /// references' and models' completion, run on main once a frame) (ns).
+    HandOverNs,
+    /// Main's time in the physics world's update (`bhkWorld::Update`, `00c6ae70`) (ns), and the Havok steps it took
+    /// (`hkpWorld::stepDeltaTime`, `00c91b10`, and `hkpWorld::stepMultithreaded`: one per sub-step).
+    HavokNsMain,
+    HavokSteps,
+    /// Main's time running scripts (`ScriptRunner::Run`, `005e0d20`, outermost only: a script a script runs is in
+    /// its caller's time) (ns), and the scripts run (every run, nested ones included).
+    ScriptNsMain,
+    ScriptRuns,
 }
 
 /// How many counts there are.
-pub const COUNTS: usize = Count::ScriptCompiles as usize + 1;
+pub const COUNTS: usize = Count::ScriptRuns as usize + 1;
 
 #[allow(clippy::declare_interior_mutable_const)]
 const ZERO: AtomicU64 = AtomicU64::new(0);
@@ -168,6 +189,135 @@ pub fn heap(free: bool) {
     }
     let other = crate::real_threads::on_other_game_thread();
     HEAP[heap_index(free, other)].0.fetch_add(1, Relaxed);
+}
+
+/// Whether the running OS thread is main's side (not another game thread) and the counters are on: where the timed
+/// counts ([`span`], [`heap_timer`]) read the clock.
+#[inline]
+fn timed_here() -> bool {
+    on() && !crate::real_threads::on_other_game_thread()
+}
+
+/// A timed stretch of main's work: its time (ns) goes to its count when it ends. Two clock readings, so only for
+/// work that costs far more (a cell attached, the hand-over, the physics update, a script run). Nothing on another
+/// game thread or with the log off.
+#[must_use = "the time is counted when the span is dropped"]
+pub struct Span(Option<(Count, std::time::Instant)>);
+
+impl Drop for Span {
+    fn drop(&mut self) {
+        if let Some((c, t)) = self.0 {
+            add(c, t.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64);
+        }
+    }
+}
+
+/// Times main's work into `c` until the returned span is dropped.
+#[inline]
+pub fn span(c: Count) -> Span {
+    Span(timed_here().then(|| (c, std::time::Instant::now())))
+}
+
+thread_local! {
+    /// How deep this OS thread is in [`script_span`]s and [`heap_timer`]s (only the outermost is timed).
+    static SCRIPT_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    static IN_HEAP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A script run: counted ([`Count::ScriptRuns`], every run) and timed into [`Count::ScriptNsMain`] when it is the
+/// outermost on this thread, so a script another script runs is not counted twice.
+pub struct ScriptSpan {
+    timed: Option<std::time::Instant>,
+}
+
+impl Drop for ScriptSpan {
+    fn drop(&mut self) {
+        SCRIPT_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+        if let Some(t) = self.timed {
+            add(
+                Count::ScriptNsMain,
+                t.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+            );
+        }
+    }
+}
+
+/// Starts a script run's span ([`ScriptSpan`]); the run count goes up on any thread.
+#[inline]
+pub fn script_span() -> ScriptSpan {
+    if on() {
+        one(Count::ScriptRuns);
+    }
+    let outermost = SCRIPT_DEPTH.with(|d| {
+        let n = d.get();
+        d.set(n + 1);
+        n == 0
+    });
+    ScriptSpan {
+        timed: (outermost && timed_here()).then(std::time::Instant::now),
+    }
+}
+
+/// The heap's time on main ([`Count::HeapNsMain`]): the start of an allocate or free, `None` on another game thread,
+/// with the log off, or inside an outer one (the shared heap's call reaches the plain heap's).
+#[inline]
+pub fn heap_timer() -> Option<std::time::Instant> {
+    if !timed_here() || IN_HEAP.with(std::cell::Cell::get) {
+        return None;
+    }
+    IN_HEAP.with(|h| h.set(true));
+    Some(std::time::Instant::now())
+}
+
+/// The end of a [`heap_timer`]'s allocate or free.
+#[inline]
+pub fn heap_timer_end(started: Option<std::time::Instant>) {
+    if let Some(t) = started {
+        IN_HEAP.with(|h| h.set(false));
+        add(
+            Count::HeapNsMain,
+            t.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+        );
+    }
+}
+
+/// Who held the kernel lock while main waited for it, for main's longest such wait of the frame (of 1 ms or more):
+/// the holder's game thread id and start address, the platform function it was in (0 and an empty name when it held
+/// the lock outside one: the kernel's own bookkeeping, the host between frames), main's wait, and the holder's
+/// processor time over the measured part of that wait (`None` where the system does not tell it: macOS). A holder with far less processor time
+/// than the wait was pushed off the processor (other programs); one with about as much was working under the lock.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LockHolder {
+    pub thread: u32,
+    pub start: u32,
+    pub call: u32,
+    pub call_name: String,
+    pub wait_ns: u64,
+    /// The part of the wait the processor time covers (from the moment the wait passed 1 ms to its end).
+    pub measured_ns: u64,
+    pub cpu_ns: Option<u64>,
+}
+
+/// The waits main makes that are worth naming a holder for (1 ms).
+pub const HOLDER_WAIT_NS: u64 = 1_000_000;
+
+static HOLDER: std::sync::Mutex<Option<LockHolder>> = std::sync::Mutex::new(None);
+
+/// Main waited `holder.wait_ns` for the kernel lock that `holder` held: kept when it is the frame's longest.
+pub fn lock_holder(holder: LockHolder) {
+    if holder.wait_ns < HOLDER_WAIT_NS {
+        return;
+    }
+    if let Ok(mut h) = HOLDER.lock() {
+        if h.as_ref().map_or(true, |k| holder.wait_ns > k.wait_ns) {
+            *h = Some(holder);
+        }
+    }
+}
+
+/// The frame's longest named wait for the kernel lock ([`lock_holder`]), then none.
+pub fn take_lock_holder() -> Option<LockHolder> {
+    HOLDER.lock().ok().and_then(|mut h| h.take())
 }
 
 /// What main waited for.

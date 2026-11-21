@@ -1089,6 +1089,9 @@ pub fn tes_object_refr_set_3d(
         }
         return;
     }
+    if new_node != 0 {
+        engine_core::hitch::one(engine_core::hitch::Count::Refs3dAttached);
+    }
     let current = get_3d(e, me);
     if current != 0 {
         let current = get_3d(e, me);

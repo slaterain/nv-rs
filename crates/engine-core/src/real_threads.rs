@@ -150,6 +150,8 @@ thread_local! {
     /// This OS thread runs a game thread other than main ([`run_thread`]); [`LockStats`] counts
     /// its waits apart from main's (and the host's).
     static GAME_THREAD: Cell<bool> = const { Cell::new(false) };
+    /// This OS thread's game thread id for the kernel lock's holder word (0: main or the host).
+    static GAME_ID: Cell<u32> = const { Cell::new(0) };
 }
 
 /// [`LockStats`]' row for this OS thread: 0 the main thread (or the host's), 1 another game thread.
@@ -382,6 +384,15 @@ fn token() -> u64 {
     TOKEN.with(|t| *t)
 }
 
+/// Who held the kernel lock when a wait of main's passed a millisecond ([`KernelLock::acquire_here`]): its game
+/// thread id, the platform function it took the lock for, its processor time then and when that was.
+struct Seen {
+    thread: u32,
+    call: u32,
+    cpu_ns: Option<u64>,
+    at: std::time::Instant,
+}
+
 /// The kernel lock: re-entrant (a platform function that calls game code that calls another
 /// takes it again), released whole by a wait ([`KernelLock::wait_change`]), whose condition
 /// variable every change of an object's state wakes.
@@ -397,6 +408,11 @@ struct KernelLock {
     m: Mutex<()>,
     free: Condvar,
     changed: Condvar,
+    /// The holder's game thread id (0: main or the host) and the platform function it took the lock for (0:
+    /// outside one), for the hitch log's naming of a long wait of main's ([`crate::hitch::LockHolder`]). Set by
+    /// the holder only, relaxed: a waiter reads them as a hint.
+    holder: AtomicU32,
+    holder_call: AtomicU32,
     /// The device lock ([`World::device`]): its waits count apart in [`LockStats`].
     device: bool,
 }
@@ -416,6 +432,8 @@ impl KernelLock {
             device,
             owner: AtomicU64::new(0),
             depth: AtomicU32::new(0),
+            holder: AtomicU32::new(0),
+            holder_call: AtomicU32::new(0),
             waiters: AtomicU32::new(0),
             dirty: AtomicBool::new(false),
             m: Mutex::new(()),
@@ -443,20 +461,44 @@ impl KernelLock {
             .is_err()
         {
             let was = w.leave_guest();
-            self.acquire(me);
+            self.acquire(me, w);
             if was {
                 w.enter_guest();
             }
         }
         self.depth.store(1, Ordering::Relaxed);
+        self.holder
+            .store(GAME_ID.with(Cell::get), Ordering::Relaxed);
+        self.holder_call.store(0, Ordering::Relaxed);
     }
 
     /// Waits until it is free and takes it (not held by this thread). With `NV_LOCK_STATS` the
     /// wait is counted ([`LockStats`]).
     #[cold]
-    fn acquire(&self, me: u64) {
+    fn acquire(&self, me: u64, w: &World) {
         let started = timed_wait().then(std::time::Instant::now);
-        self.acquire_here(me);
+        // Main's waits for the kernel lock name their holder when they pass a millisecond.
+        let named = started.is_some() && role() == 0 && !self.device && crate::hitch::on();
+        let seen = self.acquire_here(me, named);
+        if let (Some(t), Some(seen)) = (started, seen) {
+            let cpu_ns = seen
+                .cpu_ns
+                .zip(crate::thread_cpu::cpu_ns(seen.thread))
+                .map(|(before, after)| after.saturating_sub(before));
+            let call_name = w
+                .import_names
+                .get(&seen.call)
+                .map_or_else(String::new, |n| n.to_string());
+            crate::hitch::lock_holder(crate::hitch::LockHolder {
+                thread: seen.thread,
+                start: crate::thread_cpu::start_of(seen.thread),
+                call: seen.call,
+                call_name,
+                wait_ns: t.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+                measured_ns: seen.at.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+                cpu_ns,
+            });
+        }
         if let Some(t) = started {
             let d = t.elapsed();
             if let Some(s) = lock_stats() {
@@ -473,7 +515,10 @@ impl KernelLock {
         }
     }
 
-    fn acquire_here(&self, me: u64) {
+    /// Spins, then parks until it takes the lock. With `named` (main's timed wait for the kernel lock), a wait
+    /// still going after [`crate::hitch::HOLDER_WAIT_NS`] notes who holds the lock then and that thread's
+    /// processor time ([`Seen`]); otherwise nothing is read.
+    fn acquire_here(&self, me: u64, named: bool) -> Option<Seen> {
         for _ in 0..64 {
             std::hint::spin_loop();
             if self.owner.load(Ordering::Relaxed) == 0
@@ -482,19 +527,37 @@ impl KernelLock {
                     .compare_exchange(0, me, Ordering::Acquire, Ordering::Relaxed)
                     .is_ok()
             {
-                return;
+                return None;
             }
         }
         let mut g = guard(&self.m);
         self.waiters.fetch_add(1, Ordering::SeqCst);
+        let parked = std::time::Instant::now();
+        let mut seen = None;
         while self
             .owner
             .compare_exchange(0, me, Ordering::SeqCst, Ordering::SeqCst)
             .is_err()
         {
+            if named && seen.is_none() {
+                let left = Duration::from_nanos(crate::hitch::HOLDER_WAIT_NS)
+                    .saturating_sub(parked.elapsed());
+                if !left.is_zero() {
+                    g = wait_for(&self.free, g, left);
+                    continue;
+                }
+                let thread = self.holder.load(Ordering::Relaxed);
+                seen = Some(Seen {
+                    thread,
+                    call: self.holder_call.load(Ordering::Relaxed),
+                    cpu_ns: crate::thread_cpu::cpu_ns(thread),
+                    at: std::time::Instant::now(),
+                });
+            }
             g = wait(&self.free, g);
         }
         self.waiters.fetch_sub(1, Ordering::SeqCst);
+        seen
     }
 
     /// Gives one hold back; the last wakes the waiters of a change made under it and one thread
@@ -544,6 +607,7 @@ impl KernelLock {
         let me = token();
         debug_assert!(self.held_here());
         let depth = self.depth.load(Ordering::Relaxed);
+        let call = self.holder_call.load(Ordering::Relaxed);
         let mut g = guard(&self.m);
         // Released while `m` is held, so a change made by the next holder is notified only once
         // this thread waits (it takes `m` to notify).
@@ -566,9 +630,12 @@ impl KernelLock {
             .compare_exchange(0, me, Ordering::Acquire, Ordering::Relaxed)
             .is_err()
         {
-            self.acquire(me);
+            self.acquire(me, w);
         }
         self.depth.store(depth, Ordering::Relaxed);
+        self.holder
+            .store(GAME_ID.with(Cell::get), Ordering::Relaxed);
+        self.holder_call.store(call, Ordering::Relaxed);
         if was {
             w.enter_guest();
         }
@@ -1372,6 +1439,9 @@ struct ThreadExit(u32);
 fn run_thread(engine: SendEngine, world: &'static World, i: usize, start: u32, parameter: u32) {
     let mut e = engine.0;
     GAME_THREAD.with(|g| g.set(true));
+    let id = e.real.as_ref().map_or(0, |r| r.id);
+    GAME_ID.with(|g| g.set(id));
+    crate::thread_cpu::register(id, start);
     // What was registered since the template was made, replacements included (a call finds only
     // a missing function by itself).
     sync_registered(&mut e);
@@ -1379,7 +1449,6 @@ fn run_thread(engine: SendEngine, world: &'static World, i: usize, start: u32, p
     let tls = e.new_tls_block();
     e.swap_tls(tls);
     crate::x87::set_control_word(crate::units::crt::x87_control_word(&mut e));
-    let id = e.real.as_ref().map_or(0, |r| r.id);
     let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         e.call(start, &[parameter]).eax
     }));
@@ -1445,6 +1514,9 @@ fn locked_call(e: &mut Engine, args: &[u32]) -> Ret {
         .world;
     world.kernel.lock(world);
     let _held = Held(world);
+    if world.kernel.depth.load(Ordering::Relaxed) == 1 {
+        world.kernel.holder_call.store(addr, Ordering::Relaxed);
+    }
     park_if_suspended(e);
     if world.late_count.load(Ordering::Acquire) != e.real.as_ref().map_or(0, |r| r.late_seen) {
         sync_registered(e);
@@ -4266,6 +4338,71 @@ mod tests {
             e.call(wait, &args![sem, 0u32]).eax,
             0x102,
             "a unit left over"
+        );
+    }
+
+    /// Set by [`busy_under_the_lock`] once it runs (under the kernel lock).
+    static BUSY_STARTED: AtomicBool = AtomicBool::new(false);
+
+    /// A platform function that works 250 ms under the kernel lock (the holder test's stand-in for a long call).
+    fn busy_under_the_lock(_: &mut Engine, _: &[u32]) -> Ret {
+        BUSY_STARTED.store(true, Ordering::SeqCst);
+        let t = std::time::Instant::now();
+        let mut x = 0u64;
+        while t.elapsed() < Duration::from_millis(250) {
+            x = std::hint::black_box(x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1));
+        }
+        Ret::default()
+    }
+
+    /// The holder test's game thread: calls the platform function whose slot is its parameter.
+    fn calls_the_busy_function(e: &mut Engine, a: &[u32]) -> Ret {
+        e.call(a[0], &args![0u32]);
+        Ret::default()
+    }
+
+    /// Main's wait for the kernel lock names its holder: the game thread, the platform function it held the lock
+    /// in (by its import name), main's wait, and (where the system tells it) that the holder was working: its
+    /// processor time over the measured part of the wait is most of it.
+    #[test]
+    fn main_s_long_wait_for_the_kernel_lock_names_the_holder() {
+        let (mut e, slot) = engine_with_imports();
+        let busy = slot("D3DPERF_SetOptions");
+        e.register(busy, busy_under_the_lock);
+        e.register(0x0040_f000, calls_the_busy_function);
+        start(&mut e).expect("real threads on");
+        ctx(&e).frame_begins(false);
+        BUSY_STARTED.store(false, Ordering::SeqCst);
+        let h = e
+            .call(
+                slot("CreateThread"),
+                &args![0u32, 0u32, 0x0040_f000u32, busy, 0u32, 0u32],
+            )
+            .eax;
+        while !BUSY_STARTED.load(Ordering::SeqCst) {
+            std::thread::yield_now();
+        }
+        let _ = crate::hitch::take_lock_holder();
+        // A plain locked call: it waits for the busy thread's hold.
+        e.call(slot("GetDoubleClickTime"), &args![]);
+        let held = crate::hitch::take_lock_holder().expect("a named holder");
+        assert_eq!(held.call_name, "D3DPERF_SetOptions");
+        assert_eq!(held.call, busy);
+        assert_eq!(held.start, 0x0040_f000);
+        assert_ne!(held.thread, 0, "a game thread, not main or the host");
+        assert!(held.wait_ns >= 100_000_000, "{held:?}");
+        assert!(held.measured_ns <= held.wait_ns, "{held:?}");
+        if cfg!(any(windows, target_os = "linux")) {
+            let cpu = held.cpu_ns.expect("the holder's processor time");
+            assert!(
+                cpu * 2 >= held.measured_ns,
+                "working, not off the processor: {held:?}"
+            );
+        }
+        assert_eq!(
+            e.call(slot("WaitForSingleObject"), &args![h, STRESS_TIMEOUT_MS])
+                .eax,
+            0
         );
     }
 

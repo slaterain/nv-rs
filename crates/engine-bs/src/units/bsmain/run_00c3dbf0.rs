@@ -70,6 +70,7 @@ const SLOT_TASK_PREPARE: u32 = 0x18;
 /// which is null there. The callbacks are called with `ECX` holding their
 /// own address, passed here as their first word.
 pub fn fn_00c3dbf0(e: &mut Engine, this: Ptr) -> bool {
+    let _time = engine_core::hitch::span(engine_core::hitch::Count::HandOverNs);
     let this = this.addr();
     if e.mem.u8(RUNNING) != 0 {
         return true;

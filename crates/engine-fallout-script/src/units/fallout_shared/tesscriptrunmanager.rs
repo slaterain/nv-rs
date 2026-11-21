@@ -77,6 +77,7 @@ pub fn runner_run(
     effect_finish: u8,
     elapsed: f32,
 ) -> bool {
+    let _time = engine_core::hitch::script_span();
     let profile = e.call(0x0070_2fc0, &args![]).bool();
     e.with_stack(8, |e, start| {
         if profile {

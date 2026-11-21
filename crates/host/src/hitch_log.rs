@@ -213,6 +213,8 @@ pub struct Frame {
     pub stream: Vec<u64>,
     pub longest_wait: (u64, WaitKind, u32),
     pub largest_read: (u64, String),
+    /// Who held the kernel lock in main's longest wait for it of 1 ms or more (`engine_core::hitch::LockHolder`).
+    pub lock_holder: Option<engine_core::hitch::LockHolder>,
     pub left_out: u64,
     /// The longest of those left out (ms).
     pub longest_left_out: f64,
@@ -342,6 +344,40 @@ fn wait_words(k: WaitKind) -> &'static str {
     }
 }
 
+/// The game thread that held the kernel lock, the platform function it held it for, and whether it was working or
+/// pushed off the processor meanwhile, in words.
+fn holder_words(h: &engine_core::hitch::LockHolder) -> String {
+    let who = match (h.thread, h.start) {
+        (0, _) => "the host or main".to_string(),
+        // OEI's IO thread: every file read and the queued loads go through it.
+        (_, 0x00aa_8430) => format!("the IO thread (game thread {})", h.thread),
+        (t, 0) => format!("game thread {t}"),
+        (t, s) => format!("game thread {t} (starts at {s:08x})"),
+    };
+    let what = match (h.call, h.call_name.as_str()) {
+        (0, _) => "outside a platform call".to_string(),
+        (_, "") => format!("in the platform call at {:08x}", h.call),
+        (_, name) => format!("in {name}"),
+    };
+    let ran = match h.cpu_ns {
+        Some(cpu) if h.measured_ns > 0 => {
+            let share = cpu as f64 / h.measured_ns as f64;
+            format!(
+                "; it ran {:.1} of the last {:.1} ms waited ({})",
+                ms(cpu),
+                ms(h.measured_ns),
+                if share >= 0.5 {
+                    "working under the lock"
+                } else {
+                    "mostly off the processor"
+                }
+            )
+        }
+        _ => String::new(),
+    };
+    format!("{who} {what}, main waited {:.1} ms{ran}", ms(h.wait_ns))
+}
+
 /// A wait under this (ns) is left out of the line: too short to matter.
 const TENTH_MS: u64 = 100_000;
 
@@ -435,10 +471,33 @@ impl Frame {
         }
         let locks = self.g(Count::KernelWaitNs) + self.g(Count::DeviceWaitNs);
         if locks > 0 {
+            let holder = self
+                .lock_holder
+                .as_ref()
+                .map_or_else(String::new, |h| format!(" ({})", holder_words(h)));
             said.push((
                 ms(locks),
-                format!("waited {:.0} ms for the platform's locks", ms(locks)),
+                format!(
+                    "waited {:.0} ms for the platform's locks{holder}",
+                    ms(locks)
+                ),
             ));
+        }
+        // Main's timed work: a stretch that explains the frame is named.
+        for (count, words) in [
+            (Count::CellAttachNs, "attaching cells"),
+            (Count::CellDetachNs, "detaching cells"),
+            (
+                Count::HandOverNs,
+                "handing loaded objects over (the queued-task hand-over)",
+            ),
+            (Count::HavokNsMain, "in the physics update"),
+            (Count::ScriptNsMain, "running scripts"),
+        ] {
+            let ns = self.g(count);
+            if ns > 0 {
+                said.push((ms(ns), format!("{:.0} ms {words}", ms(ns))));
+            }
         }
         let render = self.render_wait();
         if render > 0 {
@@ -502,8 +561,10 @@ impl Frame {
             ));
         }
         // About 0.4 µs a guest heap block on main (measure/smooth-200/HITCHES.md H-d1: 22,093 frees in 9.0 ms).
+        // The heap's own time on main when measured, else that estimate.
         let blocks = self.g(Count::FreesMain) + self.g(Count::AllocsMain);
-        if blocks >= 2_000 {
+        let heap = self.g(Count::HeapNsMain);
+        if blocks >= 2_000 || ms(heap) >= 5.0 {
             let freed = self.g(Count::FreesMain);
             let words = if freed * 2 >= blocks {
                 format!("freed {} memory blocks", thousands(freed))
@@ -513,7 +574,14 @@ impl Frame {
                     thousands(self.g(Count::AllocsMain))
                 )
             };
-            said.push((blocks as f64 * 0.0004, words));
+            if heap > 0 {
+                said.push((
+                    ms(heap),
+                    format!("{words} ({:.0} ms in the heap)", ms(heap)),
+                ));
+            } else {
+                said.push((blocks as f64 * 0.0004, words));
+            }
         }
         said.sort_by(|a, b| b.0.total_cmp(&a.0));
         let excess = self.ms - self.typical;
@@ -734,6 +802,10 @@ impl Frame {
             ),
         );
         put(
+            g(Count::HeapNsMain) / TENTH_MS,
+            format!("main in the heap {:.1} ms", ms(g(Count::HeapNsMain))),
+        );
+        put(
             g(Count::AllocsOther) + g(Count::FreesOther),
             format!(
                 "other threads' {} allocated, {} freed",
@@ -796,6 +868,48 @@ impl Frame {
                 ms(g(Count::HandBackNs))
             ),
         );
+        put(
+            g(Count::CellAttachNs) / TENTH_MS,
+            format!("attaching cells {:.1} ms", ms(g(Count::CellAttachNs))),
+        );
+        put(
+            g(Count::CellDetachNs) / TENTH_MS,
+            format!("detaching cells {:.1} ms", ms(g(Count::CellDetachNs))),
+        );
+        put(
+            g(Count::Refs3dAttached),
+            format!("{} references given their 3D", g(Count::Refs3dAttached)),
+        );
+        put(
+            g(Count::HandOverNs) / TENTH_MS,
+            format!(
+                "the queued-task hand-over {:.1} ms",
+                ms(g(Count::HandOverNs))
+            ),
+        );
+        put(
+            g(Count::HavokNsMain) / TENTH_MS,
+            format!(
+                "the physics update {:.1} ms ({} steps)",
+                ms(g(Count::HavokNsMain)),
+                g(Count::HavokSteps)
+            ),
+        );
+        put(
+            g(Count::ScriptNsMain) / TENTH_MS,
+            format!(
+                "scripts {:.1} ms ({} runs)",
+                ms(g(Count::ScriptNsMain)),
+                g(Count::ScriptRuns)
+            ),
+        );
+        put(
+            g(Count::TilesMade),
+            format!("{} interface tiles made", g(Count::TilesMade)),
+        );
+        if let Some(h) = &self.lock_holder {
+            put(1, format!("the kernel lock's holder: {}", holder_words(h)));
+        }
         put(g(Count::Saves), "a save".to_string());
         put(g(Count::Loads), "a load".to_string());
         put(
@@ -881,6 +995,7 @@ impl HitchLog {
         self.stream = stream_now;
         let longest_wait = engine_core::hitch::take_longest_wait();
         let largest_read = engine_core::hitch::take_largest_read();
+        let lock_holder = engine_core::hitch::take_lock_holder();
         let screen = crate::uncap::screen(e);
         let presents = engine_platform::d3d9real::present_count(e).unwrap_or(0);
         let shown = Shown {
@@ -938,6 +1053,7 @@ impl HitchLog {
             stream,
             longest_wait,
             largest_read,
+            lock_holder,
             left_out,
             longest_left_out,
         };
@@ -1239,6 +1355,107 @@ mod tests {
             f.cause(),
             "read 3.0 MB from disk on the main thread (30 ms, the largest 2.0 MB of Fallout - Meshes.bsa)"
         );
+    }
+
+    /// The new names: the kernel lock's holder (who, in which call, working or pushed off the processor), the heap's
+    /// measured time in place of the per-block estimate, and main's timed work (cells, the hand-over, the physics,
+    /// scripts) named in the cause when it explains the frame and listed in the work.
+    #[test]
+    fn the_line_names_the_lock_holder_the_heap_time_and_main_s_timed_work() {
+        use engine_core::hitch::LockHolder;
+        let holder = LockHolder {
+            thread: 3,
+            start: 0x00aa_8430,
+            call: 0x00fd_f080,
+            call_name: "ReadFile".into(),
+            wait_ns: 286_000_000,
+            measured_ns: 285_000_000,
+            cpu_ns: Some(280_000_000),
+        };
+        let mut f = frame();
+        f.stages = Some([2.8, 0.1, 4.7, 5.7, 1.3, 0.3, 405.1, 3.0, 0.0]);
+        f.ms = 423.1;
+        f.typical = 18.1;
+        f.game[Count::KernelWaitNs as usize] = 399_100_000;
+        f.game[Count::KernelWaits as usize] = 4;
+        f.lock_holder = Some(holder.clone());
+        assert_eq!(
+            f.cause(),
+            "waited 399 ms for the platform's locks (the IO thread (game thread 3) in ReadFile, main waited 286.0 ms; \
+             it ran 280.0 of the last 285.0 ms waited (working under the lock))"
+        );
+        assert!(
+            f.line().contains("the kernel lock's holder: the IO thread"),
+            "{}",
+            f.line()
+        );
+        let off_cpu = LockHolder {
+            thread: 5,
+            start: 0x0084_0000,
+            call: 0,
+            call_name: String::new(),
+            cpu_ns: Some(3_000_000),
+            ..holder.clone()
+        };
+        assert_eq!(
+            holder_words(&off_cpu),
+            "game thread 5 (starts at 00840000) outside a platform call, main waited 286.0 ms; it ran 3.0 of the last \
+             285.0 ms waited (mostly off the processor)"
+        );
+        let unknown = LockHolder {
+            cpu_ns: None,
+            thread: 0,
+            ..holder
+        };
+        assert_eq!(
+            holder_words(&unknown),
+            "the host or main in ReadFile, main waited 286.0 ms"
+        );
+
+        // The pause menu's open: the heap's measured time instead of the estimate, and the tiles made.
+        let mut f = frame();
+        f.stages = Some([1.8, 0.1, 2.2, 3.2, 0.5, 0.2, 1.8, 104.3, 0.0]);
+        f.ms = 114.0;
+        f.typical = 13.8;
+        f.game[Count::AllocsMain as usize] = 80_640;
+        f.game[Count::FreesMain as usize] = 15_963;
+        f.game[Count::HeapNsMain as usize] = 61_000_000;
+        f.game[Count::TilesMade as usize] = 2_100;
+        assert_eq!(
+            f.cause(),
+            "allocated 80,640 memory blocks (61 ms in the heap)"
+        );
+        let l = f.line();
+        assert!(l.contains("main in the heap 61.0 ms"), "{l}");
+        assert!(l.contains("2100 interface tiles made"), "{l}");
+
+        // Cells attached on a running route: their time, the hand-over and the references given their 3D.
+        let mut f = frame();
+        f.ms = 21.0;
+        f.typical = 10.0;
+        f.stages = Some([12.6, 0.1, 3.2, 2.8, 0.8, 0.3, 1.0, 0.2, 0.0]);
+        f.game[Count::CellsAttached as usize] = 9;
+        f.game[Count::CellAttachNs as usize] = 6_400_000;
+        f.game[Count::HandOverNs as usize] = 3_100_000;
+        f.game[Count::Refs3dAttached as usize] = 140;
+        f.game[Count::HavokNsMain as usize] = 1_200_000;
+        f.game[Count::HavokSteps as usize] = 2;
+        f.game[Count::ScriptNsMain as usize] = 900_000;
+        f.game[Count::ScriptRuns as usize] = 310;
+        assert_eq!(
+            f.cause(),
+            "6 ms attaching cells; 3 ms handing loaded objects over (the queued-task hand-over); attached 9 cells"
+        );
+        let l = f.line();
+        for part in [
+            "attaching cells 6.4 ms",
+            "140 references given their 3D",
+            "the queued-task hand-over 3.1 ms",
+            "the physics update 1.2 ms (2 steps)",
+            "scripts 0.9 ms (310 runs)",
+        ] {
+            assert!(l.contains(part), "{part}: {l}");
+        }
     }
 
     /// The line: the frame against the typical one, big from 16 ms, the place, the stages, only the counts that are
