@@ -210,7 +210,9 @@ impl Row {
             Row::DrawingThread => &["Own thread (recommended)", "Main thread (slower)"],
             // The Testing rows: the default the game plays with first.
             r => match r.switch() {
-                Some((section, key)) if testing_default(files, section, key) == "1" => &["On", "Off"],
+                Some((section, key)) if testing_default(files, section, key) == "1" => {
+                    &["On", "Off"]
+                }
                 _ => &["Off", "On"],
             },
         };
