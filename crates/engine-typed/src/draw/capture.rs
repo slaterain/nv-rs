@@ -106,28 +106,18 @@ pub const SCRIBBLE: u8 = 0x6e;
 /// [`SCRIBBLE`]'s complement.
 pub const SCRIBBLE_OTHER: u8 = !SCRIBBLE;
 
-/// One copied range of an object: its offsets `[from, to)`, where its bytes start in the packet, and the next
-/// range of the same object (`u32::MAX` for none).
-#[derive(Clone, Copy)]
-struct Range {
-    from: u32,
-    to: u32,
-    at: u32,
-    next: u32,
-}
-
-const NONE: u32 = u32::MAX;
-
-/// A block of the draw's own state ([`own`], step 2, piece 3): the guest addresses `[lo, hi)`, held at `at` in the
-/// packet's own bytes (and at the same place in `own_cut`, their values at the cut, and `own_main`, main's).
-#[derive(Clone, Copy)]
-struct OwnBlock {
-    lo: u32,
-    hi: u32,
-    at: u32,
-}
+// One copied range of an object (`Range`: its offsets, where its bytes start, the object's next range) and a block
+// of the draw's own state (`OwnBlock`, [`own`], step 2, piece 3: the guest addresses `[lo, hi)`, held at `at` in the
+// packet's own bytes, and at the same place in `own_cut`, their values at the cut, and `own_main`, main's): the
+// engine's copied-state view's types, since the packet hands them to the drawing engine for each half ([`serve`]).
+use engine_core::own_view::{OwnBlock, OwnView, Range, NONE};
 
 struct Packet {
+    /// While a half draws on an engine ([`serve`]): the own blocks and bytes and the copied ranges and bytes are on
+    /// that engine (`Engine::own_view`), and this packet's fields for them are empty until [`unserve`].
+    served: bool,
+    /// The view's allocation kept between halves.
+    spare: Option<Box<OwnView>>,
     /// The run that opened it (the kernel table's address): another run's engine on this thread reads guest
     /// memory.
     run: usize,
@@ -314,6 +304,8 @@ pub fn begin(e: &Engine) -> bool {
             return false;
         }
         *p = Some(Packet {
+            served: false,
+            spare: None,
             run: run(e),
             objects: AddrMap::default(),
             ranges: Vec::new(),
@@ -345,6 +337,101 @@ pub fn begin(e: &Engine) -> bool {
         OPEN.fetch_add(1, Relaxed);
     }
     opened
+}
+
+/// A half of the world draw starts on `e`: this thread's open packet for `e`'s run (not paused, not served already)
+/// hands its own blocks and bytes and its copied ranges and bytes to `e` (`Engine::own_view`, with the own state's
+/// page table built), so that the accessors read and write them as fields of the engine. Nothing without one. The
+/// packet takes them back at [`unserve`] (the half's end, a pause, the join), before anything else reads them.
+pub fn serve(e: &mut Engine) {
+    if !active() {
+        return;
+    }
+    let id = run(e);
+    let view = PACKET.with(|p| {
+        let mut p = p.borrow_mut();
+        let p = p.as_mut()?;
+        if p.run != id || p.paused || p.served {
+            return None;
+        }
+        let mut v = p.spare.take().unwrap_or_default();
+        v.own = std::mem::take(&mut p.own);
+        v.own_bytes = std::mem::take(&mut p.own_bytes);
+        v.objects = std::mem::take(&mut p.objects);
+        v.ranges = std::mem::take(&mut p.ranges);
+        v.bytes = std::mem::take(&mut p.bytes);
+        v.reads.set(0);
+        v.misses.set(0);
+        v.poison = p.scribble.is_some();
+        v.index();
+        p.served = true;
+        Some(v)
+    });
+    if let Some(v) = view {
+        e.own_view = Some(v);
+        SERVING.with(|s| s.set(true));
+    }
+}
+
+thread_local! {
+    /// This thread put the view on its engine ([`serve`]) and has not taken it back. Stepped game threads share one
+    /// engine and take turns on it, so another game thread running while a half is served must not see the draw's copy:
+    /// the accessors take the view only on the thread that served it ([`served`]).
+    static SERVING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The engine's served view ([`serve`]) when this thread served it; `None` on any other thread (it reads guest
+/// memory, as before the half began).
+#[inline(always)]
+fn served(view: &Option<Box<OwnView>>) -> Option<&OwnView> {
+    let v = view.as_deref()?;
+    SERVING.with(Cell::get).then_some(v)
+}
+
+/// [`served`], to write the draw's own state.
+#[inline(always)]
+fn served_mut(view: &mut Option<Box<OwnView>>) -> Option<&mut OwnView> {
+    let v = view.as_deref_mut()?;
+    SERVING.with(Cell::get).then_some(v)
+}
+
+/// Whether `e` holds a view this thread served ([`served`]).
+#[inline(always)]
+fn viewing(e: &Engine) -> bool {
+    e.own_view.is_some() && SERVING.with(Cell::get)
+}
+
+/// The half has ended (or pauses, or joins): what [`serve`] put on `e` goes back into this thread's packet, the
+/// view's reads and misses added to the packet's. Nothing when `e` holds none. A view whose packet is gone (a stop
+/// that closed it elsewhere) is dropped.
+pub fn unserve(e: &mut Engine) {
+    // Only the thread that served it takes it back (its packet is this thread's).
+    if !viewing(e) {
+        return;
+    }
+    SERVING.with(|s| s.set(false));
+    let Some(mut v) = e.own_view.take() else {
+        return;
+    };
+    PACKET.with(|p| {
+        let mut p = p.borrow_mut();
+        let Some(p) = p.as_mut() else {
+            return;
+        };
+        if !p.served {
+            return;
+        }
+        p.own = std::mem::take(&mut v.own);
+        p.own_bytes = std::mem::take(&mut v.own_bytes);
+        p.objects = std::mem::take(&mut v.objects);
+        p.ranges = std::mem::take(&mut v.ranges);
+        p.bytes = std::mem::take(&mut v.bytes);
+        p.reads.set(p.reads.get() + v.reads.get());
+        p.misses.set(p.misses.get() + v.misses.get());
+        p.last_object.set((0, NONE));
+        p.served = false;
+        p.spare = Some(v);
+    });
 }
 
 /// Copies `object`'s bytes `[from, to)` into the open packet: the parts no range of it holds yet, each its own
@@ -521,6 +608,9 @@ pub fn note_write(e: &Engine, addr: u32, len: u32) {
 
 /// Whether this thread's open packet owns all of `[addr, addr + len)` in one own block (for the checks).
 pub fn owns(e: &Engine, addr: u32, len: u32) -> bool {
+    if let Some(v) = served(&e.own_view) {
+        return v.own_at(addr, len).is_some();
+    }
     PACKET.with(|p| {
         p.borrow()
             .as_ref()
@@ -615,6 +705,7 @@ fn unscribble_all(e: &mut Engine, p: &Packet, scribble: u8) -> u64 {
 /// POISON: every guest byte the packet holds is saved and set to `scribble`, in the order taken. Once a packet;
 /// nothing without one.
 pub fn poison(e: &mut Engine, scribble: u8) {
+    unserve(e);
     with_packet(e, |e, p| {
         if p.scribble.is_none() {
             p.scribble = Some(scribble);
@@ -629,6 +720,7 @@ pub fn poison(e: &mut Engine, scribble: u8) {
 /// memory: what runs between the halves, such as the VATS target's draw, is main's), and with POISON the guest
 /// bytes are put back (those written meanwhile counted). Nothing without an open packet, or when paused already.
 pub fn pause(e: &mut Engine) {
+    unserve(e);
     with_packet(e, |e, p| {
         if p.paused {
             return;
@@ -644,6 +736,7 @@ pub fn pause(e: &mut Engine) {
 /// thread gives the packet back to main while main still waits, so main never reads the scribble. Nothing without an
 /// open packet or a scribble.
 pub fn unpoison(e: &mut Engine) {
+    unserve(e);
     with_packet(e, |e, p| {
         if let Some(scribble) = p.scribble.take() {
             if !p.paused {
@@ -655,6 +748,7 @@ pub fn unpoison(e: &mut Engine) {
 
 /// The world draw's second half starts: the packet is read again ([`pause`]), and with POISON scribbled again.
 pub fn resume(e: &mut Engine) {
+    unserve(e);
     with_packet(e, |e, p| {
         if !p.paused {
             return;
@@ -732,6 +826,7 @@ pub fn end(e: &mut Engine) -> Report {
     if OPEN.load(Relaxed) == 0 {
         return Report::default();
     }
+    unserve(e);
     let packet = PACKET.with(|p| {
         let mut p = p.borrow_mut();
         if p.as_ref().is_some_and(|p| p.run == run(e)) {
@@ -825,6 +920,10 @@ pub fn detach(e: &Engine) -> Option<Detached> {
     PACKET.with(|p| {
         let mut p = p.borrow_mut();
         if p.as_ref().is_some_and(|p| p.run == run(e)) {
+            assert!(
+                !p.as_ref().is_some_and(|p| p.served),
+                "NV_DRAW_THREAD: a packet detached while a half draws from it (unserve first)"
+            );
             HOLDS.with(|h| h.set(false));
             p.take().map(|p| Detached(Box::new(p)))
         } else {
@@ -854,6 +953,14 @@ fn copied<const N: usize>(e: &Engine, object: u32, offset: u32) -> Option<[u8; N
     if object == 0 {
         return None;
     }
+    if let Some(v) = served(&e.own_view) {
+        let mut out = [0u8; N];
+        if v.read_into(object, offset, &mut out) {
+            return Some(out);
+        }
+        missed(object, offset, v.poison);
+        return None;
+    }
     PACKET.with(|p| {
         let p = p.borrow();
         let p = p.as_ref()?;
@@ -868,7 +975,7 @@ fn copied<const N: usize>(e: &Engine, object: u32, offset: u32) -> Option<[u8; N
 /// The word at `object + offset`: the packet's copy while one is open, else guest memory's.
 #[inline(always)]
 pub fn word(e: &Engine, object: u32, offset: u32) -> u32 {
-    if held() {
+    if viewing(e) || held() {
         if let Some(bytes) = copied::<4>(e, object, offset) {
             return u32::from_le_bytes(bytes);
         }
@@ -879,7 +986,7 @@ pub fn word(e: &Engine, object: u32, offset: u32) -> u32 {
 /// The 16-bit half at `object + offset`, as [`word`].
 #[inline(always)]
 pub fn half(e: &Engine, object: u32, offset: u32) -> u16 {
-    if held() {
+    if viewing(e) || held() {
         if let Some(bytes) = copied::<2>(e, object, offset) {
             return u16::from_le_bytes(bytes);
         }
@@ -890,7 +997,7 @@ pub fn half(e: &Engine, object: u32, offset: u32) -> u16 {
 /// The byte at `object + offset`, as [`word`].
 #[inline(always)]
 pub fn byte(e: &Engine, object: u32, offset: u32) -> u8 {
-    if held() {
+    if viewing(e) || held() {
         if let Some([b]) = copied::<1>(e, object, offset) {
             return b;
         }
@@ -901,7 +1008,33 @@ pub fn byte(e: &Engine, object: u32, offset: u32) -> u8 {
 /// `N` words from `object + offset` on, as [`word`] (one look-up for all of them).
 #[inline(always)]
 pub fn words<const N: usize>(e: &Engine, object: u32, offset: u32) -> [u32; N] {
-    if held() {
+    if let Some(v) = served(&e.own_view) {
+        let len = u32::try_from(4 * N).unwrap_or(u32::MAX);
+        if let Some(r) = v.find(object, offset, len) {
+            v.reads.set(v.reads.get() + 1);
+            let at = (r.at + (offset - r.from)) as usize;
+            return std::array::from_fn(|i| {
+                let b = &v.bytes[at + 4 * i..at + 4 * i + 4];
+                u32::from_le_bytes([b[0], b[1], b[2], b[3]])
+            });
+        }
+        // Spread over several ranges.
+        let mut out = [0u32; N];
+        let mut whole = true;
+        for (i, w) in (0u32..).zip(out.iter_mut()) {
+            let mut b = [0u8; 4];
+            let at = offset.wrapping_add(4 * i);
+            if !v.read_into(object, at, &mut b) {
+                missed(object, at, v.poison);
+                whole = false;
+                break;
+            }
+            *w = u32::from_le_bytes(b);
+        }
+        if whole {
+            return out;
+        }
+    } else if held() {
         let held = PACKET.with(|p| {
             let p = p.borrow();
             let p = p.as_ref()?;
@@ -1005,7 +1138,11 @@ impl OwnValue for bool {
 /// it ([`own`]), else guest memory (own state the cut has not taken is guest memory's, as without a packet).
 #[inline(always)]
 pub fn own_at<T: OwnValue>(e: &Engine, addr: u32) -> T {
-    if held() {
+    if let Some(v) = served(&e.own_view) {
+        if let Some(at) = v.own_at(addr, T::L) {
+            return T::from_bytes(&v.own_bytes[at..at + T::N]);
+        }
+    } else if held() {
         if let Some(v) = own_lookup::<T>(e, addr) {
             return v;
         }
@@ -1031,7 +1168,14 @@ fn own_lookup<T: OwnValue>(e: &Engine, addr: u32) -> Option<T> {
 /// open is noted for the join's rule ([`end`]).
 #[inline(always)]
 pub fn set_own_at<T: OwnValue>(e: &mut Engine, addr: u32, value: T) {
-    if active() && own_store(e, addr, value) {
+    if let Some(v) = served_mut(&mut e.own_view) {
+        // The drawing side: its own state in the view; anything else is guest memory, not noted (it is no write of
+        // main's).
+        if let Some(at) = v.own_at(addr, T::L) {
+            value.to_bytes(&mut v.own_bytes[at..at + T::N]);
+            return;
+        }
+    } else if active() && own_store(e, addr, value) {
         return;
     }
     e.set_global(addr, value);
@@ -1075,6 +1219,26 @@ pub fn own_image<R>(
 ) -> R {
     if !active() || len == 0 {
         return f(e, addr);
+    }
+    if viewing(e) {
+        let Some(at) = served(&e.own_view).and_then(|v| v.own_at(addr, len)) else {
+            // The drawing side's pointer outside its own state: guest memory, nothing noted.
+            return f(e, addr);
+        };
+        let n = len as usize;
+        return e.with_stack((len + 3) & !3, |e, block| {
+            let block = block.addr();
+            if let Some(v) = served(&e.own_view) {
+                e.mem.write(block, &v.own_bytes[at..at + n]);
+            }
+            let r = f(e, block);
+            if let Some(v) = served_mut(&mut e.own_view) {
+                if v.own_bytes.len() >= at + n {
+                    e.mem.read(block, &mut v.own_bytes[at..at + n]);
+                }
+            }
+            r
+        });
     }
     let held = own_place(e, addr, len);
     let Some(at) = held else {
@@ -1131,7 +1295,23 @@ pub fn own_image_read<R>(
     len: u32,
     f: impl FnOnce(&mut Engine, u32) -> R,
 ) -> R {
-    if !held() || len == 0 {
+    if len == 0 {
+        return f(e, addr);
+    }
+    if viewing(e) {
+        let Some(at) = served(&e.own_view).and_then(|v| v.own_at(addr, len)) else {
+            return f(e, addr);
+        };
+        let n = len as usize;
+        return e.with_stack((len + 3) & !3, |e, block| {
+            let block = block.addr();
+            if let Some(v) = served(&e.own_view) {
+                e.mem.write(block, &v.own_bytes[at..at + n]);
+            }
+            f(e, block)
+        });
+    }
+    if !held() {
         return f(e, addr);
     }
     let Some(at) = own_place(e, addr, len) else {
@@ -1151,7 +1331,11 @@ pub fn own_image_read<R>(
 
 /// The own state's bytes `[addr, addr + len)` as the draw reads them ([`own_at`] byte by byte, one look-up).
 pub fn own_bytes(e: &Engine, addr: u32, len: u32) -> Vec<u8> {
-    if held() {
+    if let Some(v) = served(&e.own_view) {
+        if let Some(at) = v.own_at(addr, len) {
+            return v.own_bytes[at..at + len as usize].to_vec();
+        }
+    } else if held() {
         let held = PACKET.with(|p| {
             let p = p.borrow();
             let p = p.as_ref()?;
@@ -1215,7 +1399,17 @@ pub struct Span {
 /// The [`Span`] of `object`'s offsets `[from, to)`. Without an open packet it reads guest memory; with one that
 /// does not hold the whole range, a miss is counted and it reads guest memory.
 pub fn span(e: &Engine, object: u32, from: u32, to: u32) -> Span {
-    let copy = if !held() || object == 0 || from >= to {
+    let copy = if object == 0 || from >= to {
+        None
+    } else if let Some(v) = served(&e.own_view) {
+        let mut bytes = vec![0u8; (to - from) as usize];
+        if v.read_into(object, from, &mut bytes) {
+            Some(bytes)
+        } else {
+            missed(object, from, v.poison);
+            None
+        }
+    } else if !held() {
         None
     } else {
         PACKET.with(|p| {
@@ -1280,18 +1474,22 @@ pub fn image<R>(
     to: u32,
     f: impl FnOnce(&mut Engine, u32) -> R,
 ) -> R {
-    if !held() || from >= to {
+    if from >= to {
         return f(e, object);
     }
-    let held = PACKET.with(|p| {
-        let p = p.borrow();
-        let p = p.as_ref()?;
-        if !p.serves(e) {
-            return None;
-        }
+    let held = if let Some(v) = served(&e.own_view) {
         let mut bytes = vec![0u8; (to - from) as usize];
-        p.read_or_miss(object, from, &mut bytes).then_some(bytes)
-    });
+        if v.read_into(object, from, &mut bytes) {
+            Some(bytes)
+        } else {
+            missed(object, from, v.poison);
+            None
+        }
+    } else if !held() {
+        return f(e, object);
+    } else {
+        image_copy(e, object, from, to)
+    };
     let Some(bytes) = held else {
         return f(e, object);
     };
@@ -1300,6 +1498,19 @@ pub fn image<R>(
         let block = block.addr();
         e.mem.write(block, &bytes);
         f(e, block.wrapping_sub(from))
+    })
+}
+
+/// [`image`]'s copy from this thread's packet.
+fn image_copy(e: &Engine, object: u32, from: u32, to: u32) -> Option<Vec<u8>> {
+    PACKET.with(|p| {
+        let p = p.borrow();
+        let p = p.as_ref()?;
+        if !p.serves(e) {
+            return None;
+        }
+        let mut bytes = vec![0u8; (to - from) as usize];
+        p.read_or_miss(object, from, &mut bytes).then_some(bytes)
     })
 }
 
@@ -1447,6 +1658,160 @@ mod tests {
         take(&e, at, 0, 4);
         poison(&mut e, SCRIBBLE);
         let _ = word(&e, at, 4);
+    }
+
+    /// The copy and its counts as [`the_packet_answers_its_copy_and_counts_what_it_lacks`] has them, with the
+    /// packet's ranges served on the engine (`serve`): every answer, the misses and the report the same.
+    #[test]
+    fn a_served_packet_answers_as_the_packet_does() {
+        let mut e = Engine::new();
+        let at = block(&mut e, 6);
+        assert!(begin(&e));
+        take(&e, at, 4, 12);
+        take(&e, at, 0, 16);
+        take(&e, at, 8, 12);
+        serve(&mut e);
+        assert!(e.own_view.is_some());
+        // Served twice: the second does nothing (the view keeps its bytes).
+        serve(&mut e);
+        e.mem.set_u32(at + 4, 0x55);
+        assert_eq!(
+            [word(&e, at, 0), word(&e, at, 4), word(&e, at, 12)],
+            [1, 2, 4]
+        );
+        assert_eq!(half(&e, at, 6), 0);
+        assert_eq!(byte(&e, at, 8), 3);
+        assert_eq!(words::<3>(&e, at, 4), [2, 3, 4]);
+        assert_eq!(word(&e, at, 16), 5);
+        assert_eq!(word(&e, at, 14), 0x0005_0000);
+        let seen = image(&mut e, at, 4, 12, |e, base| {
+            (e.mem.u32(base + 4), e.mem.u32(base + 8), base == at)
+        });
+        assert_eq!(seen, (2, 3, false));
+        let spanned = span(&e, at, 0, 16);
+        assert_eq!(spanned.word(&e, 4), 2);
+        let report = end(&mut e);
+        assert!(e.own_view.is_none(), "the join took the view back");
+        assert_eq!(
+            report,
+            Report {
+                misses: 2,
+                reads: 10,
+                written: 0,
+                ranges: 3,
+                bytes: 16,
+                held: 0,
+                owned: 0,
+                kept_main: 0
+            }
+        );
+        assert!(!is_open(&e));
+    }
+
+    /// Own state served on the engine: the draw's writes go into the view, guest memory keeps main's, a pause puts
+    /// them back into the packet (and guest reads in between), and the join's rule sees the draw's values.
+    #[test]
+    fn served_own_state_is_the_draws_and_goes_back_at_the_end() {
+        for scribble in [None, Some(SCRIBBLE)] {
+            let mut e = Engine::new();
+            let at = block(&mut e, 3);
+            assert!(begin(&e));
+            own(&e, at, 0, 8);
+            take(&e, at, 8, 12);
+            if let Some(s) = scribble {
+                poison(&mut e, s);
+            }
+            serve(&mut e);
+            set_word(&mut e, at, 0, 0x55);
+            set_half(&mut e, at, 6, 0x7777);
+            set_byte(&mut e, at, 8, 0x99);
+            assert_eq!(
+                [own_word(&e, at, 0), own_word(&e, at, 4), word(&e, at, 8)],
+                [0x55, 0x7777_0002, 3]
+            );
+            assert!(owns(&e, at, 8) && !owns(&e, at + 4, 8));
+            assert_eq!(own_bytes(&e, at, 4), vec![0x55, 0, 0, 0]);
+            // A helper writing through a pointer to the own state writes the view.
+            own_image(&mut e, at + 4, 4, |e, p| e.mem.set_u32(p, 0x1234_5678));
+            assert_eq!(own_word(&e, at, 4), 0x1234_5678);
+            let read = own_image_read(&mut e, at, 8, |e, p| e.mem.u32(p + 4));
+            assert_eq!(read, 0x1234_5678);
+            if scribble.is_none() {
+                assert_eq!([e.mem.u32(at), e.mem.u32(at + 4)], [1, 2]);
+                // Another game thread on the same engine while the half is served (stepped threads take turns on
+                // one engine): it reads guest memory and cannot take the view (its writes are main's, noted as
+                // main's writes are: `own_store`).
+                struct Stepped(Engine);
+                // SAFETY: the engine is used by one thread at a time (moved to the other thread and back by the
+                // join, as the stepped threads hand it over), and nothing of it is kept on this thread meanwhile.
+                unsafe impl Send for Stepped {}
+                let moved = Stepped(e);
+                let back = std::thread::spawn(move || {
+                    // The whole wrapper moves (a pattern would move only its field, the engine).
+                    let moved = moved;
+                    let mut e = moved.0;
+                    assert_eq!(own_word(&e, at, 0), 1, "another thread: guest memory");
+                    assert_eq!(own_bytes(&e, at, 4), vec![1, 0, 0, 0]);
+                    assert!(!owns(&e, at, 8), "another thread owns nothing");
+                    unserve(&mut e);
+                    assert!(
+                        e.own_view.is_some(),
+                        "only the serving thread takes the view back"
+                    );
+                    Stepped(e)
+                })
+                .join()
+                .unwrap()
+                .0;
+                assert_eq!(
+                    own_word(&back, at, 0),
+                    0x55,
+                    "the serving thread: the draw's"
+                );
+                assert_eq!(own_word(&back, at, 4), 0x1234_5678);
+                e = back;
+            }
+            pause(&mut e);
+            assert!(e.own_view.is_none(), "a pause takes the view back");
+            if scribble.is_none() {
+                assert_eq!(own_word(&e, at, 0), 1, "between the halves: main's");
+            }
+            resume(&mut e);
+            serve(&mut e);
+            assert_eq!(
+                own_word(&e, at, 0),
+                0x55,
+                "the second half: the draw's again"
+            );
+            let report = end(&mut e);
+            assert_eq!(
+                [e.mem.u32(at), e.mem.u32(at + 4), e.mem.u32(at + 8)],
+                [0x55, 0x1234_5678, 0x99]
+            );
+            assert_eq!(report.written, u64::from(scribble.is_some()));
+            assert_eq!((report.owned, report.kept_main), (8, 0));
+        }
+    }
+
+    #[test]
+    fn a_served_packet_is_never_detached() {
+        let mut e = Engine::new();
+        let at = block(&mut e, 2);
+        assert!(begin(&e));
+        own(&e, at, 0, 8);
+        serve(&mut e);
+        let stop = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| detach(&e).is_some()));
+        let stop = stop.expect_err("a stop");
+        let why = stop
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| stop.downcast_ref::<String>().cloned())
+            .unwrap_or_default();
+        assert!(why.contains("unserve first"), "{why}");
+        unserve(&mut e);
+        let back = detach(&e).expect("detached once the view is back");
+        assert!(attach(back).is_ok());
+        assert_eq!(end(&mut e).owned, 8);
     }
 
     #[test]

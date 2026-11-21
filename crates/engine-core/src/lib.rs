@@ -74,6 +74,7 @@ pub mod extend;
 pub mod hitch;
 pub mod mem;
 pub mod mod_files;
+pub mod own_view;
 pub mod processor;
 pub mod profile;
 pub mod ptr;
