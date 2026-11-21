@@ -1061,7 +1061,7 @@ With the switch on:
   `GetNVSEVersionFull`, counted apart as README counts), with their hooks and events (README's list), and JIP's
   versions of xNVSE's commands; JIP's versions of seven of the game's commands follow their own row
   (`NV_JIP_VANILLA_CMDS`).
-- All 162 of the JIP game patches planned for the port (below): JIP's own always-on ones go in, its fixes follow the row
+- 171 of JIP's 183 game patches (below; one waits for the 64-bit move, eight are left out on purpose): JIP's own always-on ones go in, its fixes follow the row
   `NV_JIP_GAME_PATCHES`. JIP's co-save section is read and applied (its script variables, linked
   references and the rest), as JIP does.
 - JIP MiniMap's start (`InitMiniMap`, from that mod's script only) and the seven code patches JIP writes
