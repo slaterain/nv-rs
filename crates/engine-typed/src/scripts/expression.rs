@@ -134,14 +134,41 @@ fn high_word(bits: u64) -> u32 {
     low_word(bits >> 32)
 }
 
-/// One arithmetic step's result at the running thread's precision: as computed (53 bits) on the
-/// AI threads, rounded to a float's 24 bits (to nearest, ties to even, the exponent kept) on the
-/// main thread, as the exe's x87 arithmetic rounds there. Infinities, NaNs and zeros as they are.
+/// How the running thread's arithmetic steps are made, read once per `Eval` from its x87 control
+/// word as the exe's helpers read it: 53 bits (the AI threads: the native `f64` step is the x87's),
+/// 24 bits to nearest (main: the native step, rounded once more, unless [`needs_exact`]), or 24 bits
+/// under another rounding mode (always the exact x87 step).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Precision {
+    Double,
+    Float,
+    Exact,
+}
+
 #[inline]
-fn at_precision(value: f64, float: bool) -> f64 {
-    if !float {
-        return value;
+fn precision() -> Precision {
+    if !float_precision() {
+        Precision::Double
+    } else if engine_core::x87::control_word() & 0x0c00 == 0 {
+        Precision::Float
+    } else {
+        Precision::Exact
     }
+}
+
+/// Whether a 24-bit step's `f64` result cannot be rounded again to give the x87's single rounding
+/// of the exact result: at the bottom of the range ([`near_bottom`]), or exactly halfway between
+/// two 24-bit values (the `f64` rounding may have made the tie). One compare each.
+#[inline]
+fn needs_exact(value: f64) -> bool {
+    near_bottom(value) || value.to_bits() & 0x1fff_ffff == 0x1000_0000
+}
+
+/// One arithmetic step's result rounded to a float's 24 bits (to nearest, ties to even, the
+/// exponent kept), as the exe's x87 arithmetic rounds on the main thread. Infinities, NaNs and
+/// zeros as they are.
+#[inline]
+fn at_precision(value: f64) -> f64 {
     let bits = value.to_bits();
     let exponent = (bits >> 52) & 0x7ff;
     if exponent == 0 || exponent == 0x7ff {
@@ -642,7 +669,7 @@ fn binary(
     mut right: Operand,
     parse: u8,
     token: u32,
-    float: bool,
+    precision: Precision,
 ) -> Option<Value> {
     let both_int = !left.is_float() && !right.is_float();
     let truth = |v: bool| Some(Value::Int(i32::from(v)));
@@ -688,14 +715,14 @@ fn binary(
                 11 => l + r,
                 _ => l * r,
             };
-            Some(Value::Float(if float && near_bottom(v) {
-                match operator {
+            Some(Value::Float(match precision {
+                Precision::Double => v,
+                Precision::Float if !needs_exact(v) => at_precision(v),
+                _ => match operator {
                     10 => x87::x87_sub(l, r),
                     11 => x87::x87_add(l, r),
                     _ => x87::x87_mul(l, r),
-                }
-            } else {
-                at_precision(v, float)
+                },
             }))
         }
         13 | 14 => {
@@ -716,10 +743,10 @@ fn binary(
                 (_, _, true) => {
                     let (l, r) = (left.value(), right.value());
                     let v = l / r;
-                    if float && near_bottom(v) {
-                        x87::x87_div(l, r)
-                    } else {
-                        at_precision(v, float)
+                    match precision {
+                        Precision::Double => v,
+                        Precision::Float if !needs_exact(v) => at_precision(v),
+                        _ => x87::x87_div(l, r),
                     }
                 }
                 (false, true, false) => {
@@ -811,7 +838,7 @@ pub fn eval(
         fail(e, base, 1);
         return 0.0;
     }
-    let float = float_precision();
+    let precision = precision();
     // The frame as the exe's: the token buffer (its byte 0x47 the "skip push" flag) directly
     // before the copy of the bytes; then the current operand, the copy cursor, the source position,
     // the kind and the operand offset.
@@ -865,7 +892,16 @@ pub fn eval(
                         // JIP's operator wrote the current operand's type byte and value.
                         result = Operand::read(e, current);
                     } else {
-                        match binary(e, base, operator as u32, left, right, parse, token, float) {
+                        match binary(
+                            e,
+                            base,
+                            operator as u32,
+                            left,
+                            right,
+                            parse,
+                            token,
+                            precision,
+                        ) {
                             Some(Value::Int(v)) => {
                                 result.set_type(false);
                                 result.set_int(v);

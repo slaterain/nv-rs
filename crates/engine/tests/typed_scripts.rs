@@ -19,6 +19,7 @@ use engine_core::extend::jip_patches;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::leaf;
+use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
 use engine_typed::crt;
 use engine_typed::scripts::{self, expression, numbers, value};
 
@@ -512,6 +513,58 @@ fn scripts_eval_operators_on_doubles_and_integers() {
                 case.word(5),
             )
         }
+    })
+    .run()
+    .assert_same();
+}
+
+/// Steps whose `f64` result is exactly halfway between two 24-bit values while the exact result is
+/// not (the main thread's x87 rounds the exact result once; rounding the `f64` again would make the
+/// tie): `(left bits, right bits, operator)`. 1 + 2^-24 (kept bit even) and 1 + 3 * 2^-24 (odd) with
+/// a residual of either sign; a product and a quotient with a residual far below the double's.
+const MIDPOINTS: &[(u64, u64, &str)] = &[
+    (0x3FF0_0000_1000_0000, 0x3C32_725D_D1D2_43AC, "+"), // 1 + 2^-24 and 1e-18
+    (0x3FF0_0000_1000_0000, 0xBC32_725D_D1D2_43AC, "+"), // and -1e-18
+    (0x3FF0_0000_1000_0000, 0x3C32_725D_D1D2_43AC, "-"),
+    (0x3FF0_0000_1000_0000, 0xBC32_725D_D1D2_43AC, "-"),
+    (0x3FF0_0000_3000_0000, 0x3C32_725D_D1D2_43AC, "+"),
+    (0x3FF0_0000_3000_0000, 0x3C32_725D_D1D2_43AC, "-"),
+    (0x3FF0_0000_0FFF_FFFF, 0x3FF0_0000_0000_0001, "*"), // 1 + 2^-24 + 2^-76 - 2^-104
+    (0x3FF0_0000_3000_0001, 0x3FF0_0000_0000_0001, "/"), // 1 + 3 * 2^-24 - about 3 * 2^-76
+    (0x3FF0_0000_0000_0000, 0x4008_0000_0000_0000, "/"), // 1 / 3: no tie, every rounding mode
+];
+
+/// The midpoint steps under every control word the exe's arithmetic reads: 53 bits, and 24 bits
+/// under each rounding mode (to nearest as on the main thread, down, up, toward zero).
+#[test]
+fn scripts_eval_midpoints_and_rounding_modes() {
+    let cases: Vec<u32> = (0..MIDPOINTS.len() as u32).collect();
+    let cases: &'static [u32] = cases.leak();
+    Diff::new(entry!(
+        0x0059_3db0,
+        expression::eval(Ptr<_>, Ptr<_>, u32, u32, u32, u32, i32, u8) -> f64
+    ))
+    .common()
+    .inputs(&[Input::Of(cases)])
+    .control_words(&[
+        OTHER_THREADS,
+        MAIN_THREAD,
+        MAIN_THREAD | 0x0400,
+        MAIN_THREAD | 0x0800,
+        MAIN_THREAD | 0x0c00,
+    ])
+    .setup(|e, case| {
+        world(e);
+        let (left, right, operator) = MIDPOINTS[case.word(0) as usize];
+        let mut bytes = Vec::new();
+        for value in [left, right] {
+            bytes.extend(b" z");
+            bytes.extend(value.to_le_bytes());
+        }
+        bytes.push(b' ');
+        bytes.extend(operator.as_bytes());
+        let w = script_world(e, 0);
+        eval_words(e, &bytes, [0x0070_0000, 0, w.script, w.locals], 0)
     })
     .run()
     .assert_same();
