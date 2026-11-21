@@ -23,7 +23,11 @@
 //! - [`tile`]: the menus' tile values (the sorted trait array's find, with the C runtime's `bsearch`, and insert, `GetValue`,
 //!   `GetOrCreateValue`), the reaction map's `AddReaction` and `ClearActions`, the pointer maps' `SetAt`
 //!   and the menu string map's and integer maps' hash and compare, which the map lookup calls
-//!   directly (Stewie's Engine Optimizations, item 7: menus open faster).
+//!   directly (Stewie's Engine Optimizations, item 7: menus open faster); and the tiles' trait
+//!   getters and setters (`GetFloat`, `GetString`, `IsTrue`, `SetFloat`, `SetString`, `SetInt`,
+//!   `Poke`, the absolute position sums, `Lock`/`Unlock`) and `ValueChangeEvent`, which the HUD's
+//!   update calls on every frame (its compass alone about 1,700 calls a frame on the street). The
+//!   value's own `SetFloat`, `SetString` and `CalculateValue` stay calls by address (overridable).
 //!
 //! Stage 1: the objects stay in guest memory where the game made them. Each function stays
 //! registered at its exe address; a call inside the family, or into another family, is a
@@ -207,6 +211,19 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a0_c6c0, tile::map_set_at(Ptr, u32, u32)),
         entry!(0x00a0_a130, tile::add_reaction(Ptr, Ptr)),
         entry!(0x00a0_9200, tile::clear_actions(Ptr)),
+        // The tiles' trait getters and setters the menus and the HUD call on every update.
+        entry!(0x00a0_44f0, tile::lock()),
+        entry!(0x00a0_4500, tile::unlock()),
+        entry!(0x00a0_11b0, tile::get_float(Ptr, i32) -> f32),
+        entry!(0x00a0_11f0, tile::get_string(Ptr, i32) -> Ptr),
+        entry!(0x00a0_1230, tile::is_true(Ptr, i32) -> bool),
+        entry!(0x00a0_12d0, tile::set_float(Ptr, i32, f32, u8)),
+        entry!(0x00a0_1350, tile::set_string(Ptr, i32, Ptr, u8)),
+        entry!(0x0070_0320, tile::set_int(Ptr, i32, i32)),
+        entry!(0x00a0_1290, tile::poke(Ptr, i32, f32)),
+        entry!(0x00a0_13d0, tile::absolute_x(Ptr) -> f32),
+        entry!(0x00a0_1440, tile::absolute_y(Ptr) -> f32),
+        entry!(0x00a0_a220, tile::value_change_event(Ptr)),
         entry!(0x0085_3130, refs::map_lookup(Ptr, u32, Ptr<u32>) -> u8),
         // The same function at a second address: instruction for instruction the same body.
         entry!(0x00a1_e380, refs::map_lookup(Ptr, u32, Ptr<u32>) -> u8),

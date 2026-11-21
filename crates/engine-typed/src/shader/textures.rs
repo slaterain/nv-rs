@@ -130,7 +130,7 @@ pub fn stage_shared_texture(e: &mut Engine, index: u32) {
     let value = e.global::<u32>(SAMPLER_VALUE);
     let renderer = e.global::<u32>(RENDERER);
     let device = e.mem.u32(renderer.wrapping_add(0x288));
-    e.vcall(device, 0x114, &args![index, 8u32, value]);
+    engine_core::real_threads::device_vcall(e, device, 0x114, &args![index, 8u32, value]);
 }
 
 /// The texture getter `00c02f30` (unnamed, `stdcall`, two words: the property and an index).
