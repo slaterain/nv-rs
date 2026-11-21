@@ -872,40 +872,44 @@ fn tile_getters_diff() {
     .assert_same();
 }
 
+/// Set once [`null_value_allocation`] has given the null value.
+const NULL_VALUE_GIVEN: u32 = LOG + 0x3ff0;
+
+/// The allocate stand-in that answers null for the first value-sized (0x14) block.
+fn null_value_allocation(e: &mut Engine, a: &[u32]) -> Ret {
+    if a[1] == 0x14 && e.mem.u32(NULL_VALUE_GIVEN) == 0 {
+        e.mem.set_u32(NULL_VALUE_GIVEN, 1);
+        return ret(0);
+    }
+    ret(e.mem.alloc(a[1].max(4)))
+}
+
+/// The setters' case: the value argument a float for `SetFloat`, a string pointer (a word) for
+/// `SetString`.
+fn setter_case(e: &mut Engine, case: &engine_core::typed::diff::Case, value: u32) -> Vec<u32> {
+    setter_world(e);
+    let code = case.word(0);
+    let capacity = if case.word(3) == 1 {
+        code.max(1)
+    } else {
+        code + 3
+    };
+    let tile = shaped_tile(e, code, capacity);
+    if case.word(5) == 1 {
+        // The new value's allocation answers null (`GetOrCreateValue` then answers null, its
+        // writes landing on a mapped page 0): the setters' null check is what runs.
+        e.map(0, 0x1000);
+        e.mem.set_u32(NULL_VALUE_GIVEN, 0);
+        e.register(0x00aa_3e40, null_value_allocation);
+    }
+    vec![tile, case.word(1), value, case.word(4)]
+}
+
 /// `SetFloat` and `SetString` (`00a012d0`, `00a01350`): the trait there or made (into arrays with
 /// room and full ones), each float, both flags, the new value's allocation answering null or not; the
 /// value's own setter gets the value, the word and the flag under `Tile::Lock`.
 #[test]
 fn tile_setters_diff() {
-    // The value argument: a float for `SetFloat`, a string pointer (a word) for `SetString`.
-    fn setup(e: &mut Engine, case: &engine_core::typed::diff::Case, value: u32) -> Vec<u32> {
-        setter_world(e);
-        let code = case.word(0);
-        let capacity = if case.word(3) == 1 {
-            code.max(1)
-        } else {
-            code + 3
-        };
-        let tile = shaped_tile(e, code, capacity);
-        if case.word(5) == 1 {
-            // The new value's allocation answers null (`GetOrCreateValue` then answers null, its
-            // writes landing on a mapped page 0): the setters' null check is what runs.
-            e.map(0, 0x1000);
-            e.mem.set_u32(NULL_VALUE_GIVEN, 0);
-            e.register(0x00aa_3e40, null_value_allocation);
-        }
-        vec![tile, case.word(1), value, case.word(4)]
-    }
-    /// Set once the null value has been given.
-    const NULL_VALUE_GIVEN: u32 = LOG + 0x3ff0;
-    /// The allocate stand-in that answers null for the first value-sized (0x14) block.
-    fn null_value_allocation(e: &mut Engine, a: &[u32]) -> Ret {
-        if a[1] == 0x14 && e.mem.u32(NULL_VALUE_GIVEN) == 0 {
-            e.mem.set_u32(NULL_VALUE_GIVEN, 1);
-            return ret(0);
-        }
-        ret(e.mem.alloc(a[1].max(4)))
-    }
     Diff::new(engine_core::entry!(
         0x00a0_12d0,
         dispatch::tile::set_float(Ptr<_>, i32, f32, u8)
@@ -920,7 +924,7 @@ fn tile_setters_diff() {
         Input::Of(&[0, 1]),
         Input::Flag,
     ])
-    .setup(|e, case| setup(e, case, case.f32(2).to_bits()))
+    .setup(|e, case| setter_case(e, case, case.f32(2).to_bits()))
     .run()
     .assert_same();
     Diff::new(engine_core::entry!(
@@ -937,7 +941,7 @@ fn tile_setters_diff() {
         Input::Of(&[0, 1]),
         Input::Flag,
     ])
-    .setup(|e, case| setup(e, case, case.word(2)))
+    .setup(|e, case| setter_case(e, case, case.word(2)))
     .run()
     .assert_same();
 }
@@ -1049,19 +1053,28 @@ fn tile_absolute_position_diff() {
         Input::F32,
         Input::Flag,
     ];
-    for f in [
-        engine_core::entry!(0x00a0_13d0, dispatch::tile::absolute_x(Ptr<_>) -> f32),
-        engine_core::entry!(0x00a0_1440, dispatch::tile::absolute_y(Ptr<_>) -> f32),
-    ] {
-        Diff::new(f)
-            .family(&dispatch::DISPATCH)
-            .translation_calls_plainly(&[0x00a0_11b0, 0x00a0_0f30])
-            .inputs(&inputs)
-            .float_sweep(32)
-            .setup(setup)
-            .run()
-            .assert_same();
-    }
+    Diff::new(engine_core::entry!(
+        0x00a0_13d0,
+        dispatch::tile::absolute_x(Ptr<_>) -> f32
+    ))
+    .family(&dispatch::DISPATCH)
+    .translation_calls_plainly(&[0x00a0_11b0, 0x00a0_0f30])
+    .inputs(&inputs)
+    .float_sweep(32)
+    .setup(setup)
+    .run()
+    .assert_same();
+    Diff::new(engine_core::entry!(
+        0x00a0_1440,
+        dispatch::tile::absolute_y(Ptr<_>) -> f32
+    ))
+    .family(&dispatch::DISPATCH)
+    .translation_calls_plainly(&[0x00a0_11b0, 0x00a0_0f30])
+    .inputs(&inputs)
+    .float_sweep(32)
+    .setup(setup)
+    .run()
+    .assert_same();
 }
 
 /// What the `CalculateValue` stand-in of [`tile_value_change_event_diff`] does on its call number
