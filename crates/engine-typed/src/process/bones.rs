@@ -257,7 +257,9 @@ fn summary() {
 /// object's vtable, the detail, whether it lies in a head's subtree) and how often. What: 0 a node's
 /// controllers (detail: the first controller's vtable), 1 properties with controllers (detail: the
 /// object's flags), 2 a class (detail: its downward pass), 3 a collision object (detail: its vtable).
-static CENSUS: Mutex<Vec<((u32, u32, u32, bool), u64)>> = Mutex::new(Vec::new());
+/// A census key: (what, the object's vtable, the detail, in a head).
+type CensusKey = (u32, u32, u32, bool);
+static CENSUS: Mutex<Vec<(CensusKey, u64)>> = Mutex::new(Vec::new());
 static CENSUS_ON: AtomicU8 = AtomicU8::new(0);
 
 fn census_on() -> bool {
