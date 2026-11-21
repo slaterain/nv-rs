@@ -2379,6 +2379,54 @@ pub fn fn_00448c10_budgeted(e: &mut Engine, this: Ptr) -> bool {
     true
 }
 
+/// The time limit (milliseconds) of [`fn_00448cc0_limited`] in play: 0 = the exe's own (the host's
+/// switch `NV_LOADER_WALK_MS` sets it before the first frame).
+pub static LOADER_WALK_MS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// [`fn_00448cc0`] with another time limit in play, a port-side switch (`NV_LOADER_WALK_MS`, off by
+/// default): the walk over the queued references gives up after [`LOADER_WALK_MS`] instead of the
+/// exe's 5.0 (`0101712c`, on the same timer scale as the IO manager's millisecond budget) when the IO
+/// manager is in mode 6 (play). Outside play (the exe's 100000.0) and with 0 it is the translation.
+/// The walk itself is unchanged: from the start of the map each call, each yielded reference's
+/// finished check (slot `0x20`), the timer looked at between entries.
+pub fn fn_00448cc0_limited(e: &mut Engine, this: Ptr) -> bool {
+    let limit_ms = LOADER_WALK_MS.load(std::sync::atomic::Ordering::Relaxed);
+    let manager = e.global::<u32>(TASK_MANAGER);
+    if limit_ms == 0 || manager == 0 || fn_00448de0(e, Ptr::new(manager)) {
+        return fn_00448cc0(e, this);
+    }
+    let _timed = engine_core::hitch::Timed::main(engine_core::hitch::Count::LoaderWalkNs);
+    e.with_stack(0x10, |e, timer| {
+        fn_00448e00(e, timer);
+        bs_precision_timer_reset(e, timer, limit_ms as f32);
+        e.with_stack(0x10, |e, iterator| {
+            e.call(MAP_ITERATOR_CONSTRUCT, &args![iterator]);
+            let map = e.mem.u32(this.addr() + 0xc);
+            while !e.call(MAP_ITERATOR_IS_DONE, &args![iterator]).bool() && !fn_00448e70(e, timer) {
+                e.with_stack(4, |e, key| {
+                    e.with_stack(4, |e, task| {
+                        e.call(TASK_POINTER_CONSTRUCT, &args![task, 0u32]);
+                        if e.call(
+                            FOURTH_MAP_NEXT_ENTRY,
+                            &args![map, iterator, key, task, 1u32],
+                        )
+                        .bool()
+                        {
+                            let queued =
+                                typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, task));
+                            e.vcall(queued, 0x20, &args![]);
+                        }
+                        e.call(TASK_POINTER_DESTRUCT, &args![task]);
+                    });
+                });
+            }
+            let done = e.call(MAP_ITERATOR_IS_DONE, &args![iterator]).bool();
+            e.call(MAP_ITERATOR_DESTRUCT, &args![iterator]);
+            done
+        })
+    })
+}
+
 // Translated from 00448cc0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Starts a timer ([`fn_00448e00`], [`bs_precision_timer_reset`]) of 5.0
 /// seconds (100000.0 when the task manager's dword at +0x68 is 6,
