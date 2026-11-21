@@ -89,6 +89,10 @@ pub(crate) struct Buf {
     /// The game released it (or made another in its place): the sun shadows let go of what they
     /// keep of it, however many places hold it.
     pub(crate) released: AtomicBool,
+    /// The game's buffers made by this device before it, plus one (0: a list of the device's
+    /// own): the same in every replay of one command file, so the per-draw digests
+    /// ([`Device::record_draw_digests`]) tell which buffer a draw read, not only its handle.
+    pub(crate) seq: u64,
 }
 
 impl Buf {
@@ -149,6 +153,72 @@ enum Obj {
     Shader(Arc<Shader>),
     Decl(Arc<Decl>),
     Query(Query),
+}
+
+/// The game's objects by handle, with the textures and buffers also in small maps of their own
+/// for `SetTexture`, `SetStreamSource` and `SetIndices` ([`Device::texture_of`],
+/// [`Device::buffer_of`]): an entry of the whole map is 80 bytes and the look-up of each set
+/// missed the cache on it; theirs are 16 (the same handle, the same object, a fifth of the
+/// memory walked). Every insert and remove goes through here, so the small maps hold exactly the
+/// whole map's textures and buffers.
+#[derive(Default)]
+struct Objects {
+    all: Map<Handle, Obj>,
+    textures: Map<Handle, Arc<Tex>>,
+    buffers: Map<Handle, Arc<Buf>>,
+}
+
+impl Objects {
+    fn get(&self, h: &Handle) -> Option<&Obj> {
+        self.all.get(h)
+    }
+
+    fn texture(&self, h: Handle) -> Option<&Arc<Tex>> {
+        self.textures.get(&h)
+    }
+
+    fn buffer(&self, h: Handle) -> Option<&Arc<Buf>> {
+        self.buffers.get(&h)
+    }
+
+    /// A buffer's object and its bytes kept here, to write them.
+    fn buffer_bytes_mut(&mut self, h: Handle) -> Option<(&Arc<Buf>, &mut Vec<u8>)> {
+        match self.all.get_mut(&h) {
+            Some(Obj::Buffer(b, shadow)) => Some((b, shadow)),
+            _ => None,
+        }
+    }
+
+    fn query_mut(&mut self, h: Handle) -> Option<&mut Query> {
+        match self.all.get_mut(&h) {
+            Some(Obj::Query(q)) => Some(q),
+            _ => None,
+        }
+    }
+
+    fn insert(&mut self, h: Handle, o: Obj) -> Option<Obj> {
+        match &o {
+            Obj::Texture(t, _) => {
+                self.textures.insert(h, t.clone());
+                self.buffers.remove(&h);
+            }
+            Obj::Buffer(b, _) => {
+                self.buffers.insert(h, b.clone());
+                self.textures.remove(&h);
+            }
+            _ => {
+                self.textures.remove(&h);
+                self.buffers.remove(&h);
+            }
+        }
+        self.all.insert(h, o)
+    }
+
+    fn remove(&mut self, h: &Handle) -> Option<Obj> {
+        self.textures.remove(h);
+        self.buffers.remove(h);
+        self.all.remove(h)
+    }
 }
 
 /// A query (`CreateQuery`): an event's answer comes from the model; an occlusion query counts
@@ -812,7 +882,7 @@ pub struct Device {
     adapter_name: String,
     /// The game's window and its swap chain ([`crate::window::Window`]), with [`Output::Window`].
     surface: Option<crate::window::Window>,
-    objects: Map<Handle, Obj>,
+    objects: Objects,
     back_buffers: Vec<Handle>,
     auto_depth: Handle,
     st: State,
@@ -967,6 +1037,8 @@ pub struct Device {
     /// depth stand-ins that hold them are dropped then ([`Device::purge_destroyed`]).
     destroyed: HashSet<u64>,
     next_id: u64,
+    /// The game's buffers this device has made ([`Buf::seq`]).
+    buffers_made: u64,
     presents: u64,
     /// The window's frames presented ([`Device::frames_shown`]).
     frames_shown: u64,
@@ -1586,7 +1658,7 @@ impl Device {
             adapter: adapter.clone(),
             adapter_name,
             surface: None,
-            objects: Map::default(),
+            objects: Objects::default(),
             back_buffers: Vec::new(),
             auto_depth: 0,
             st: State {
@@ -1711,6 +1783,7 @@ impl Device {
             target_copies: Map::default(),
             destroyed: HashSet::new(),
             next_id: 1,
+            buffers_made: 0,
             presents: 0,
             frames_shown: 0,
             fps_meter: Arc::default(),
@@ -2015,17 +2088,11 @@ impl Device {
     }
 
     fn texture_of(&self, h: Handle) -> Option<Arc<Tex>> {
-        match self.objects.get(&h) {
-            Some(Obj::Texture(t, _)) => Some(t.clone()),
-            _ => None,
-        }
+        self.objects.texture(h).cloned()
     }
 
     fn buffer_of(&self, h: Handle) -> Option<Arc<Buf>> {
-        match self.objects.get(&h) {
-            Some(Obj::Buffer(b, _)) => Some(b.clone()),
-            _ => None,
-        }
+        self.objects.buffer(h).cloned()
     }
 
     // Resources.
@@ -2144,6 +2211,10 @@ impl Device {
             uploads: AtomicU64::new(0),
             id: Buf::next_id(),
             released: AtomicBool::new(false),
+            seq: {
+                self.buffers_made += 1;
+                self.buffers_made
+            },
         });
         if let Some(Obj::Buffer(old, _)) = self
             .objects
@@ -2584,7 +2655,7 @@ impl Device {
         offset: u32,
         data: &d3d9_stream::Data<'_>,
     ) {
-        let Some(Obj::Buffer(b, shadow)) = self.objects.get_mut(&buffer) else {
+        let Some((b, shadow)) = self.objects.buffer_bytes_mut(buffer) else {
             return;
         };
         let b = b.clone();
@@ -5156,10 +5227,18 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             self.blocks.hash(&mut h);
             for (k, a) in attributes.iter().enumerate() {
                 if !a.is_empty() {
-                    (k, self.st.bound.streams[k]).hash(&mut h);
+                    let seq = self.st.streams[k].buffer.as_ref().map(|b| b.seq);
+                    (k, self.st.bound.streams[k], seq).hash(&mut h);
                 }
             }
-            indexed.then_some(self.st.bound.indices).hash(&mut h);
+            indexed
+                .then(|| {
+                    (
+                        self.st.bound.indices,
+                        self.st.indices.as_ref().map(|b| b.seq),
+                    )
+                })
+                .hash(&mut h);
             (kind, base_vertex, start, n, up_offset, use_sun).hash(&mut h);
             (stencil_ref, bf, scissor, viewport).hash(&mut h);
             digests.push(h.finish());
@@ -7501,6 +7580,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     uploads: AtomicU64::new(0),
                     id: Buf::next_id(),
                     released: AtomicBool::new(false),
+                    seq: 0,
                 }),
                 count,
             }
@@ -8823,7 +8903,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             self.encoder()
                 .clear_buffer(&counts, u64::from(slot) * 4, Some(4));
             self.counting = Some((query, slot));
-            if let Some(Obj::Query(q)) = self.objects.get_mut(&query) {
+            if let Some(q) = self.objects.query_mut(query) {
                 q.slot = Some(slot);
                 q.result = None;
                 q.read = None;
@@ -8835,7 +8915,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 self.counting = None;
             }
             let batch = self.batch;
-            if let Some(Obj::Query(q)) = self.objects.get_mut(&query) {
+            if let Some(q) = self.objects.query_mut(query) {
                 q.batch = batch;
                 q.result = None;
                 q.read = None;
@@ -8940,7 +9020,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     });
                 });
                 let read = CountRead { buffer, state };
-                if let Some(Obj::Query(q)) = self.objects.get_mut(&query) {
+                if let Some(q) = self.objects.query_mut(query) {
                     q.read = Some(read.clone());
                 }
                 read
@@ -8967,13 +9047,13 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 self.warn(format!(
                     "an occlusion count not read back ({e}): read again"
                 ));
-                if let Some(Obj::Query(q)) = self.objects.get_mut(&query) {
+                if let Some(q) = self.objects.query_mut(query) {
                     q.read = None;
                 }
                 return Some((S_FALSE, 0));
             }
         };
-        if let Some(Obj::Query(q)) = self.objects.get_mut(&query) {
+        if let Some(q) = self.objects.query_mut(query) {
             q.result = Some(n);
             q.read = None;
         }
