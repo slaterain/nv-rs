@@ -474,6 +474,9 @@ pub struct Objects {
     /// of the devices' state while it is open.
     pub(super) draw: super::d3d9draw::DrawSide,
     draw_devices: engine_core::AddrMap<u32, Device>,
+    /// Whether states set again to the value they hold still reach the backend ([`skip_repeats`]):
+    /// `NV_D3D9_REPEATS=keep`, read at the first such set; tests set it ([`keep_repeats`]).
+    keep_repeats: Option<bool>,
 }
 
 /// Where texture levels keep their pixels in this run ([`Store`]).
@@ -544,6 +547,51 @@ macro_rules! forwarded {
 }
 pub(super) use forwarded;
 
+/// Whether a state set to the value it already has is left out of what the backend gets
+/// ([`fwd_set_sampler_state`], `super::d3d9resource`'s constants): on, unless `NV_D3D9_REPEATS=keep`
+/// (a check: the runs that show the stream's draws see the same state either way); never while a
+/// drawing cut is open, where main's model and the stream's order differ (`super::d3d9draw`).
+/// Direct3D 9 makes such a set a no-op: the draws see the same state.
+#[inline]
+pub(super) fn skip_repeats(e: &mut Engine) -> bool {
+    skip_repeats_in(&mut device!(e).device_objects)
+}
+
+/// [`skip_repeats`] for code that holds the devices' objects already (`super::d3d9resource`'s
+/// constant sets in one pass).
+#[inline]
+pub(super) fn skip_repeats_in(objects: &mut Objects) -> bool {
+    static KEEP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let keep = *objects.keep_repeats.get_or_insert_with(|| {
+        *KEEP.get_or_init(|| std::env::var("NV_D3D9_REPEATS").is_ok_and(|v| v == "keep"))
+    });
+    !keep && !super::d3d9draw::cut_open_in(&objects.draw)
+}
+
+/// Tests: whether states set again to the value they hold still reach the backend on `e`
+/// ([`skip_repeats`]), in place of `NV_D3D9_REPEATS`.
+#[cfg(test)]
+pub(crate) fn keep_repeats(e: &mut Engine, keep: bool) {
+    device!(e).device_objects.keep_repeats = Some(keep);
+}
+
+/// `SetSamplerState` forwarded as the others ([`forwarded`]), except that a value the sampler
+/// already holds is not passed on ([`skip_repeats`]): in a crowded street about 1,900 of the
+/// frame's 2,200 sampler sets (measured 2026-11-20).
+fn fwd_set_sampler_state(e: &mut Engine, this: Ptr, sampler: u32, kind: u32, value: u32) -> u32 {
+    let repeat = skip_repeats(e)
+        && is_sampler(sampler)
+        && device(e, this)
+            .sampler_states
+            .get(sampler_index(sampler, kind))
+            == Some(value);
+    let model = set_sampler_state(e, this, sampler, kind, value);
+    if model == D3D_OK && !repeat {
+        super::d3d9real::set_sampler_state(e, this.addr(), sampler, kind, value, model);
+    }
+    model
+}
+
 forwarded! {
     fn fwd_set_render_target = set_render_target(index: u32, surface: u32) => set_render_target;
     fn fwd_set_depth_stencil_surface = set_depth_stencil_surface(surface: u32)
@@ -557,8 +605,6 @@ forwarded! {
         => set_gamma_ramp;
     fn fwd_set_texture_stage_state = set_texture_stage_state(stage: u32, kind: u32, value: u32)
         => set_texture_stage_state;
-    fn fwd_set_sampler_state = set_sampler_state(sampler: u32, kind: u32, value: u32)
-        => set_sampler_state;
     fn fwd_set_texture = set_texture(sampler: u32, texture: u32) => set_texture;
     fn fwd_set_material = set_material(material: Ptr) => set_material;
     fn fwd_set_light = set_light(index: u32, light: Ptr) => set_light;
@@ -5441,6 +5487,9 @@ pub(crate) mod tests {
     fn forwarded_calls_through(threaded: bool) {
         use super::super::d3d9real::test_finish;
         let mut s = scene([64, 16, 8, 8]);
+        // Every call as given, repeats too (`NV_D3D9_REPEATS=keep`): what is left out by default
+        // is pinned by `repeated_states_do_not_reach_the_real_device`.
+        keep_repeats(&mut s.e, true);
         let (calls, backend) = stand_in(&mut s, threaded);
         let device = s.device;
         calls.record();
@@ -5576,6 +5625,297 @@ pub(crate) mod tests {
             digest, 6_478_585_233_084_394_086,
             "the model's answers' digest"
         );
+    }
+
+    /// By default a sampler state or a constant range set again to what it holds does not reach
+    /// the real device (`skip_repeats`): the second of two identical draws sends its textures,
+    /// render states, shaders, streams and the draw, not its sampler states or constants. A changed
+    /// value, one register changed in a range, and a sampler state never set before still go, and
+    /// the model answers the game the same as when every call goes.
+    #[cfg(windows)]
+    #[test]
+    fn repeated_states_do_not_reach_the_real_device() {
+        use super::super::d3d9real::test_finish;
+        let mut s = scene([64, 16, 8, 8]);
+        let (calls, _backend) = stand_in(&mut s, false);
+        let device = s.device;
+        assert_eq!(s.e.vcall(device, 4 * 41, &[]).u32(), D3D_OK);
+        draw(&mut s, device, 0);
+        test_finish(&mut s.e);
+        calls.record();
+        draw(&mut s, device, 0);
+        test_finish(&mut s.e);
+        let log = calls.take();
+        let names: Vec<&str> = log
+            .iter()
+            .map(|l| l.split('(').next().unwrap_or(""))
+            .collect();
+        assert!(!names.contains(&"SetSamplerState"), "{log:?}");
+        assert!(!names.iter().any(|n| n.contains("constant")), "{log:?}");
+        for kept in [
+            "SetVertexDeclaration",
+            "SetVertexShader",
+            "SetPixelShader",
+            "SetTexture",
+            "SetRenderState",
+            "SetStreamSource",
+            "SetIndices",
+            "DrawIndexedPrimitive",
+        ] {
+            assert!(names.contains(&kept), "{kept} missing: {log:?}");
+        }
+        assert_eq!(log.len(), 28 - 4 - 12, "{log:?}");
+        // A changed sampler value goes, and so does the same value set again after it changed.
+        calls.record();
+        let e = &mut s.e;
+        assert_eq!(e.vcall(device, 4 * 69, &[0, 1, 7]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 69, &[0, 1, 7]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 69, &[0, 1, 1]).u32(), D3D_OK);
+        // A sampler state the device never had set goes.
+        assert_eq!(e.vcall(device, 4 * 69, &[2, 3, 1]).u32(), D3D_OK);
+        // One register changed in a range: the whole range goes, as given.
+        let data = e.mem.alloc(32);
+        for i in 0..8 {
+            e.mem.set_u32(data + 4 * i, 0x3f80_0000 + i);
+        }
+        assert_eq!(e.vcall(device, 4 * 94, &[60, data, 2]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 94, &[60, data, 2]).u32(), D3D_OK);
+        e.mem.set_u32(data + 20, 0x4000_0000);
+        assert_eq!(e.vcall(device, 4 * 94, &[60, data, 2]).u32(), D3D_OK);
+        // Registers set before, then a range reaching one never set: it goes.
+        assert_eq!(e.vcall(device, 4 * 94, &[61, data, 2]).u32(), D3D_OK);
+        // A register never set, set to zeros (what the model's empty store holds): it goes, then not again.
+        let zeros = e.mem.alloc(16);
+        assert_eq!(e.vcall(device, 4 * 94, &[70, zeros, 1]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 94, &[70, zeros, 1]).u32(), D3D_OK);
+        test_finish(&mut s.e);
+        let log: Vec<String> = calls
+            .take()
+            .iter()
+            .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+            .collect();
+        assert_eq!(
+            log,
+            [
+                "SetSamplerState(0, 1, 0x7)",
+                "SetSamplerState(0, 1, 0x1)",
+                "SetSamplerState(2, 3, 0x1)",
+                "vertex_constant_f(60, [3f800000 3f800001 3f800002 3f800003 3f800004 3f800005 3f800006 3f800007], 2)",
+                "vertex_constant_f(60, [3f800000 3f800001 3f800002 3f800003 3f800004 40000000 3f800006 3f800007], 2)",
+                "vertex_constant_f(61, [3f800000 3f800001 3f800002 3f800003 3f800004 40000000 3f800006 3f800007], 2)",
+                "vertex_constant_f(70, [00000000 00000000 00000000 00000000], 1)",
+            ]
+        );
+        // The model holds what the game set, whatever was sent.
+        let out = s.e.mem.alloc(32);
+        assert_eq!(s.e.vcall(device, 4 * 68, &[0, 1, out]).u32(), D3D_OK);
+        assert_eq!(s.e.mem.u32(out), 1);
+        assert_eq!(s.e.vcall(device, 4 * 95, &[60, out, 1]).u32(), D3D_OK);
+        assert_eq!(s.e.mem.u32(out + 4), 0x3f80_0001);
+    }
+
+    /// What one engine did over [`constant_sets_run`]: each call's answer, the stream's commands
+    /// as the wire encodes them, and every constant register as the device's bindings hold it.
+    type ConstantsRun = (Vec<u32>, Vec<u8>, Vec<Vec<u32>>);
+
+    /// Drives a device through `steps` generated calls (seed `seed`): constant sets of all six
+    /// kinds (ranges in and past the registers, null data, exact repeats, ranges that partly
+    /// repeat), the data's words changed now and then, render states between them, and drawing cuts
+    /// with sets from both sides; the constant sets in one pass (`NV_D3D9_ONE_PASS`) as `one_pass`
+    /// says, repeats kept as `keep`.
+    fn constant_sets_run(one_pass: bool, keep: bool, seed: u64, steps: u32) -> ConstantsRun {
+        use super::super::d3d9draw::{as_drawing_side, draw_cut, draw_join};
+        use super::super::d3d9resource::{binding, one_pass_for_tests};
+        use d3d9_stream::{Backend, Cmd, Data, Reply, Stream};
+        struct Wire(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl Backend for Wire {
+            fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+                d3d9_stream::wire::encode(&cmd, &mut self.0.lock().unwrap());
+                Reply::None
+            }
+        }
+        let (mut e, dev) = texture_device(Store::Host);
+        let wire = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        super::super::d3d9real::test_stream(
+            &mut e,
+            dev,
+            Stream::direct(Box::new(Wire(wire.clone()))),
+        );
+        keep_repeats(&mut e, keep);
+        one_pass_for_tests(&mut e, one_pass);
+        // xorshift64*: the same calls for both engines.
+        let mut state = seed | 1;
+        let mut next = move |n: u32| -> u32 {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            ((state.wrapping_mul(0x2545_f491_4f6c_dd1d) >> 32) % u64::from(n.max(1))) as u32
+        };
+        const SLOTS: [u32; 6] = [94, 96, 98, 109, 111, 113];
+        const REGISTERS: [u32; 6] = [256, 16, 16, 224, 16, 16];
+        const VALUES: [u32; 5] = [0, 0x3f80_0000, 0x4000_0000, 0xbf80_0000, 7];
+        let block = e.mem.alloc(4096 + 1024);
+        for i in 0..(4096 + 1024) / 4 {
+            e.mem.set_u32(block + 4 * i, VALUES[next(5) as usize]);
+        }
+        let mut answers = Vec::new();
+        let mut last = None;
+        let mut in_cut = false;
+        for _ in 0..steps {
+            let pick = next(100);
+            let call = match pick {
+                0..=69 => {
+                    let k = next(6) as usize;
+                    let start = next(REGISTERS[k] + 2);
+                    let count = if next(50) == 0 { REGISTERS[k] } else { next(9) };
+                    let data = if next(40) == 0 {
+                        0
+                    } else {
+                        block + 4 * next(256)
+                    };
+                    Some((SLOTS[k], [start, data, count]))
+                }
+                70..=84 => {
+                    for _ in 0..1 + next(4) {
+                        e.mem
+                            .set_u32(block + 4 * next(1024 + 256), VALUES[next(5) as usize]);
+                    }
+                    None
+                }
+                85..=91 => {
+                    let (state, value) = (next(200), next(3));
+                    answers.push(e.vcall(dev, 4 * 57, &[state, value]).u32());
+                    None
+                }
+                92..=96 => last,
+                _ => {
+                    if in_cut {
+                        draw_join(&mut e);
+                    } else {
+                        assert!(draw_cut(&mut e, dev));
+                    }
+                    in_cut = !in_cut;
+                    None
+                }
+            };
+            if let Some((slot, args)) = call {
+                let answer = if in_cut && next(2) == 0 {
+                    as_drawing_side(|| e.vcall(dev, 4 * slot, &args).u32())
+                } else {
+                    e.vcall(dev, 4 * slot, &args).u32()
+                };
+                answers.push(answer);
+                last = Some((slot, args));
+            }
+        }
+        if in_cut {
+            draw_join(&mut e);
+        }
+        let mut registers = Vec::new();
+        for (k, count) in REGISTERS.iter().enumerate() {
+            for r in 0..*count {
+                registers.push(binding(&mut e, dev, &format!("constant {k} {r}")));
+            }
+        }
+        let bytes = wire.lock().unwrap().clone();
+        (answers, bytes, registers)
+    }
+
+    /// The constant sets in one pass (`NV_D3D9_ONE_PASS`, on by default) against the model then
+    /// the forwarding as two steps, over generated calls with repeats left out and kept: the same
+    /// answers, the same commands to the backend byte for byte, and the same registers in the
+    /// model.
+    #[test]
+    fn constant_sets_in_one_pass_match_the_two_steps() {
+        for keep in [false, true] {
+            for seed in [1, 0x9e37_79b9_7f4a_7c15, 0x00c0_ffee] {
+                let two = constant_sets_run(false, keep, seed, 3000);
+                let one = constant_sets_run(true, keep, seed, 3000);
+                assert_eq!(one.0, two.0, "answers, keep {keep}, seed {seed:#x}");
+                assert_eq!(one.2, two.2, "registers, keep {keep}, seed {seed:#x}");
+                assert!(
+                    one.1 == two.1,
+                    "the stream's bytes differ (keep {keep}, seed {seed:#x}): {} against {}",
+                    one.1.len(),
+                    two.1.len()
+                );
+                // The run reached what it is for: sets sent, sets left out, sets refused.
+                assert!(two.1.len() > 10_000, "{}", two.1.len());
+                assert!(two.0.contains(&D3DERR_INVALIDCALL));
+            }
+        }
+    }
+
+    /// One constant set in one pass, by hand: sent once, left out when repeated, sent again when a
+    /// word changes; refused (nothing sent, nothing kept) past the registers.
+    #[test]
+    fn a_constant_set_in_one_pass_sends_what_the_two_steps_send() {
+        use super::super::d3d9resource::{binding, one_pass_for_tests};
+        use d3d9_stream::{Backend, Cmd, Data, Reply, Stream};
+        type Sent = std::sync::Arc<std::sync::Mutex<Vec<(u8, u32, u32, Vec<u32>)>>>;
+        struct Log(Sent);
+        impl Backend for Log {
+            fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+                if let Cmd::SetConstants {
+                    kind,
+                    start,
+                    count,
+                    data,
+                    ..
+                } = cmd
+                {
+                    let words = data
+                        .bytes()
+                        .chunks(4)
+                        .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+                        .collect();
+                    self.0.lock().unwrap().push((kind, start, count, words));
+                }
+                Reply::None
+            }
+        }
+        let (mut e, dev) = texture_device(Store::Host);
+        let sent: Sent = Default::default();
+        super::super::d3d9real::test_stream(
+            &mut e,
+            dev,
+            Stream::direct(Box::new(Log(sent.clone()))),
+        );
+        keep_repeats(&mut e, false);
+        one_pass_for_tests(&mut e, true);
+        let data = e.mem.alloc(32);
+        for i in 0..8 {
+            e.mem.set_u32(data + 4 * i, 0x3f80_0000 + i);
+        }
+        assert_eq!(e.vcall(dev, 4 * 109, &[3, data, 2]).u32(), D3D_OK);
+        assert_eq!(e.vcall(dev, 4 * 109, &[3, data, 2]).u32(), D3D_OK);
+        e.mem.set_u32(data + 4, 9);
+        assert_eq!(e.vcall(dev, 4 * 109, &[3, data, 2]).u32(), D3D_OK);
+        // Booleans: one word a register, packed.
+        assert_eq!(e.vcall(dev, 4 * 113, &[14, data, 2]).u32(), D3D_OK);
+        // Past the pixel float registers (224): refused.
+        assert_eq!(
+            e.vcall(dev, 4 * 109, &[223, data, 2]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(e.vcall(dev, 4 * 109, &[0, 0, 1]).u32(), D3DERR_INVALIDCALL);
+        let first: Vec<u32> = (0..8).map(|i| 0x3f80_0000 + i).collect();
+        let mut changed = first.clone();
+        changed[1] = 9;
+        assert_eq!(
+            *sent.lock().unwrap(),
+            [
+                (3, 3, 2, first),
+                (3, 3, 2, changed),
+                (5, 14, 2, vec![0x3f80_0000, 9]),
+            ]
+        );
+        assert_eq!(
+            binding(&mut e, dev, "constant 3 4"),
+            [0x3f80_0004, 0x3f80_0005, 0x3f80_0006, 0x3f80_0007, 1]
+        );
+        assert_eq!(binding(&mut e, dev, "constant 5 15"), [9, 0, 0, 0, 1]);
+        assert_eq!(binding(&mut e, dev, "constant 3 223"), [0, 0, 0, 0, 0]);
     }
 
     /// The scene's device state as the game can read it back: each getter's answer and the
@@ -6518,6 +6858,23 @@ pub(crate) mod tests {
         t
     }
 
+    /// Repeats are left out only with no cut open on the engine's devices (main's model and the
+    /// stream's order differ then), and not with `NV_D3D9_REPEATS=keep`.
+    #[test]
+    fn repeats_are_kept_while_a_cut_is_open() {
+        use super::super::d3d9draw::{as_drawing_side, draw_cut, draw_join};
+        let (mut e, dev) = texture_device(Store::Host);
+        keep_repeats(&mut e, false);
+        assert!(skip_repeats(&mut e));
+        assert!(draw_cut(&mut e, dev));
+        assert!(!skip_repeats(&mut e), "main, cut open");
+        as_drawing_side(|| assert!(!skip_repeats(&mut e), "the drawing side, cut open"));
+        draw_join(&mut e);
+        assert!(skip_repeats(&mut e), "after the join");
+        keep_repeats(&mut e, true);
+        assert!(!skip_repeats(&mut e), "kept");
+    }
+
     /// The drawing side of a cut starts from main's state, changes only its own, and the join
     /// gives main the serial order's state: the drawing side's value where main set nothing after
     /// the cut, main's where it did (also when it set a state again to the value it had). A second
@@ -6787,6 +7144,64 @@ pub(crate) mod tests {
                 panic!("main's sync call and the drawing job waited for each other (30 s)")
             }
         }
+    }
+
+    /// Stepped threads (no device lock): with direct calls on, a call still reaches the device function by its
+    /// address and the model takes it.
+    #[test]
+    fn direct_device_calls_on_stepped_threads_reach_the_device_functions() {
+        use engine_core::real_threads::{
+            device_vcall, direct_begin, direct_calls, direct_end, direct_holds,
+            force_direct_for_tests,
+        };
+        let (mut e, dev) = texture_device(Store::Host);
+        force_direct_for_tests();
+        let before = direct_calls();
+        assert!(direct_begin(&e));
+        assert_eq!(device_vcall(&mut e, dev, 4 * 57, &[7, 5]).u32(), D3D_OK);
+        assert_eq!(device_vcall(&mut e, dev, 4 * 57, &[8, 6]).u32(), D3D_OK);
+        assert!(!direct_holds(), "no device lock with stepped threads");
+        let out = e.mem.alloc(4);
+        assert_eq!(device_vcall(&mut e, dev, 4 * 58, &[8, out]).u32(), D3D_OK);
+        assert_eq!(e.mem.u32(out), 6);
+        assert_eq!(direct_calls() - before, 3, "made directly");
+        direct_end();
+        assert!(direct_begin(&e), "on again after the end");
+        direct_end();
+        assert_eq!(render_state(&mut e, dev, 7), 5);
+    }
+
+    /// With direct calls on and real threads, under a device lock the caller already holds (this test's device was
+    /// made before the threads started, so its functions are behind the kernel lock, as in
+    /// `sync_call_during_a_cut`): the same answers, no direct hold taken, nothing left held after.
+    #[test]
+    fn direct_device_calls_under_a_held_device_lock_answer_the_same() {
+        use engine_core::real_threads::{
+            device_guard, device_lock_held, device_vcall, direct_begin, direct_end, direct_holds,
+            force_direct_for_tests,
+        };
+        let (mut e, dev) = texture_device(Store::Host);
+        engine_core::real_threads::start(&mut e).expect("real threads on");
+        force_direct_for_tests();
+        assert!(direct_begin(&e));
+        assert!(!direct_begin(&e), "one at a time");
+        {
+            let _device = device_guard(&e);
+            assert_eq!(device_vcall(&mut e, dev, 4 * 57, &[8, 2]).u32(), D3D_OK);
+            assert_eq!(
+                device_vcall(&mut e, dev, 4 * 69, &[16, 1, 1]).u32(),
+                D3DERR_INVALIDCALL
+            );
+            let out = e.mem.alloc(4);
+            assert_eq!(device_vcall(&mut e, dev, 4 * 58, &[8, out]).u32(), D3D_OK);
+            assert_eq!(e.mem.u32(out), 2);
+            assert!(
+                !direct_holds(),
+                "the caller's own hold: no direct hold taken"
+            );
+        }
+        direct_end();
+        assert!(!direct_holds() && !device_lock_held(&e));
     }
 
     #[cfg(windows)]

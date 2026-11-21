@@ -177,6 +177,56 @@ fn copy_bound(e: &mut Engine, destination: u32, source: u32) {
     e.mem.set_f32(destination + 12, radius);
 }
 
+/// `NiAVObject::CreateBoundIfNone` (`005467e0`, `thiscall`): a new bound
+/// (radius 0) for an object without one.
+const CREATE_BOUND_IF_NONE: u32 = 0x0054_67e0;
+/// `NiAVObject`'s `m_flags` bits Tweaks' S0237 tests (its `netimmerse.h`):
+/// the bound is fixed, and the bound is the node's own (not a child's).
+const FIXED_BOUND: u32 = 0x2000;
+const ORPHANED_BOUND: u32 = 0x8_0000;
+
+/// Tweaks' `IsVisualObject`: the object has a world bound whose radius
+/// word is not 0.
+fn is_visual_object(e: &Engine, object: u32) -> bool {
+    let bound = e.mem.u32(object + NiSwitchNode::m_kWorldBound.off);
+    bound != 0 && e.mem.u32(bound + 12) != 0
+}
+
+/// Tweaks' `*m_kWorldBound = child->GetWorldBound()` for a visual child:
+/// the child's four words copied as they are.
+fn copy_child_bound(e: &mut Engine, this: Ptr<NiSwitchNode>, child: u32) {
+    let source = e.mem.u32(child + NiSwitchNode::m_kWorldBound.off);
+    let destination = e.get(this, NiSwitchNode::m_kWorldBound);
+    for word in 0..4 {
+        let value = e.mem.u32(source + word * 4);
+        e.mem.set_u32(destination + word * 4, value);
+    }
+}
+
+/// Whether `index` names a slot of the children array (`0 <= index < m_usSize`, as
+/// `GetAtChecked` and the exe's detach fix-up test it).
+fn index_in_children(e: &Engine, this: Ptr<NiSwitchNode>, index: i32) -> bool {
+    let children = this.at(NiSwitchNode::m_kChildren);
+    (index as u32) < u32::from(e.get(children, NiTArray::m_usSize))
+}
+
+/// lStewieAl's Tweaks' S0237 `UpdateSwitchWorldBound(this, child)`, in
+/// place of [`take_bound_from`] at the end of the three update passes
+/// (`0xA940DE`, `0xA941D8`, `0xA942B7`): unless the node's bound is fixed,
+/// the bound is made when missing, its radius word set to 0, and the
+/// child's bound copied when the child has one with a radius.
+fn switch_world_bound(e: &mut Engine, this: Ptr<NiSwitchNode>, child: u32) {
+    if e.get(this, NiSwitchNode::m_uFlagsAV) & FIXED_BOUND != 0 {
+        return;
+    }
+    e.call(CREATE_BOUND_IF_NONE, &args![this]);
+    let bound = e.get(this, NiSwitchNode::m_kWorldBound);
+    e.mem.set_u32(bound + 12, 0);
+    if is_visual_object(e, child) {
+        copy_child_bound(e, this, child);
+    }
+}
+
 /// The selected child's world bound (the null bound if it has none) copied
 /// into the switch node's own.
 fn take_bound_from(e: &mut Engine, this: Ptr<NiSwitchNode>, child: u32) {
@@ -327,6 +377,31 @@ pub fn ni_switch_node_on_visible(e: &mut Engine, this: Ptr<NiSwitchNode>, cullin
 /// node's world bound is the selected child's (or the null bound if that
 /// child has none); with no selected child the bound's radius is set to 0.
 pub fn ni_switch_node_update_world_bound(e: &mut Engine, this: Ptr<NiSwitchNode>) {
+    // lStewieAl's Tweaks' S0237 (its jump at the entry, `0xA93F90`): `NiSwitchNode__UpdateWorldBound`.
+    if e.stewie(engine_core::extend::stewie::SWITCH_NODE_BOUNDS) {
+        let flags = e.get(this, NiSwitchNode::m_uFlagsAV);
+        if flags & FIXED_BOUND != 0 || flags & ORPHANED_BOUND == 0 {
+            return;
+        }
+        if e.get(this, NiSwitchNode::m_uFlags) & 1 == 0 {
+            e.call(NI_NODE_UPDATE_WORLD_BOUND, &args![this]);
+            return;
+        }
+        e.call(CREATE_BOUND_IF_NONE, &args![this]);
+        // Tweaks' `GetAt(m_iIndex)`: no test of the index, so with no shown child (-1, the
+        // constructor's) it reads the word before the children and past them a stale slot. A
+        // Tweaks slip not copied with the missing-data guard: such an index is no child.
+        let index = e.get(this, NiSwitchNode::m_iIndex);
+        let child = if e.stewie_slip_guard() && !index_in_children(e, this, index) {
+            0
+        } else {
+            child_at(e, this, index)
+        };
+        if child != 0 && is_visual_object(e, child) {
+            copy_child_bound(e, this, child);
+        }
+        return;
+    }
     if e.get(this, NiSwitchNode::m_uFlags) & 1 == 0 {
         e.call(NI_NODE_UPDATE_WORLD_BOUND, &args![this]);
         return;
@@ -362,7 +437,12 @@ pub fn ni_switch_node_is_equal(
 /// child's bound.
 fn after_child_update(e: &mut Engine, this: Ptr<NiSwitchNode>, index: i32, child: u32) {
     record_revision(e, this, index);
-    take_bound_from(e, this, child);
+    // lStewieAl's Tweaks' S0237 (its jumps at `0xA940DE`, `0xA941D8`, `0xA942B7`).
+    if e.stewie(engine_core::extend::stewie::SWITCH_NODE_BOUNDS) {
+        switch_world_bound(e, this, child);
+    } else {
+        take_bound_from(e, this, child);
+    }
 }
 
 // Translated from 00a94040 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1240,6 +1320,175 @@ mod tests {
         f.e.set(node, NiSwitchNode::m_iIndex, -1);
         ni_switch_node_update_world_bound(&mut f.e, node);
         assert_eq!(f.bound_words(node.addr()), [11, 22, 33, 0]);
+    }
+
+    /// `CreateBoundIfNone` (`005467e0`) as a double: a zeroed bound for an
+    /// object without one.
+    fn create_bound_double(f: &mut Fixture) {
+        f.e.register(CREATE_BOUND_IF_NONE, |e, a| {
+            if e.mem.u32(a[0] + 0x20) == 0 {
+                let bound = e.mem.alloc(16);
+                for word in 0..4 {
+                    e.mem.set_u32(bound + 4 * word, 0);
+                }
+                e.mem.set_u32(a[0] + 0x20, bound);
+            }
+            Ret::default()
+        });
+    }
+
+    /// lStewieAl's Tweaks' row S0237 at `UpdateWorldBound`'s entry
+    /// (`0xA93F90`): a node updating only its active child, with no bound
+    /// of its own. Row off, the exe writes the radius through the missing
+    /// bound (a fault, here on unmapped memory). Row on: nothing for a fixed
+    /// bound or one that is not the node's own; the base class without
+    /// "only active"; else the bound made and the child's taken when it has
+    /// a radius (no null bound for a child without one).
+    #[test]
+    fn s0237_update_world_bound() {
+        for on in [false, true] {
+            let mut f = Fixture::new();
+            f.e.set_stewie(engine_core::extend::stewie::SWITCH_NODE_BOUNDS, on);
+            create_bound_double(&mut f);
+            let (node, kids) = f.switch_node(2);
+            f.e.set(node, NiSwitchNode::m_uFlags, 1);
+            f.e.set(node, NiSwitchNode::m_iIndex, 1);
+            f.set_bound(kids[1], [1, 2, 3, 4.5f32.to_bits()]);
+            f.e.set(node, NiSwitchNode::m_uFlagsAV, ORPHANED_BOUND);
+            f.e.set(node, NiSwitchNode::m_kWorldBound, 0);
+            f.e.mem.unmap(0, 0x1000);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                ni_switch_node_update_world_bound(&mut f.e, node);
+            }));
+            f.e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if !on {
+                continue;
+            }
+            assert_eq!(f.bound_words(node.addr()), [1, 2, 3, 4.5f32.to_bits()]);
+            // Fixed, or not the node's own bound: nothing at all.
+            for flags in [ORPHANED_BOUND | FIXED_BOUND, 0] {
+                f.e.set(node, NiSwitchNode::m_uFlagsAV, flags);
+                f.set_bound(node.addr(), [9, 9, 9, 9]);
+                f.log();
+                ni_switch_node_update_world_bound(&mut f.e, node);
+                assert!(f.take_log().is_empty());
+                assert_eq!(f.bound_words(node.addr()), [9, 9, 9, 9]);
+            }
+            f.e.set(node, NiSwitchNode::m_uFlagsAV, ORPHANED_BOUND);
+            ni_switch_node_update_world_bound(&mut f.e, node);
+            assert_eq!(f.bound_words(node.addr()), [1, 2, 3, 4.5f32.to_bits()]);
+            // A child whose bound has no radius: the node's bound is kept.
+            f.set_bound(node.addr(), [9, 9, 9, 9]);
+            f.set_bound(kids[1], [1, 2, 3, 0]);
+            ni_switch_node_update_world_bound(&mut f.e, node);
+            assert_eq!(f.bound_words(node.addr()), [9, 9, 9, 9]);
+            // Without "only active": the base class.
+            f.e.set(node, NiSwitchNode::m_uFlags, 0);
+            f.log();
+            ni_switch_node_update_world_bound(&mut f.e, node);
+            let log = f.take_log();
+            assert_eq!(
+                calls(&log, NI_NODE_UPDATE_WORLD_BOUND),
+                vec![vec![node.addr()]]
+            );
+        }
+    }
+
+    /// lStewieAl's Tweaks' row S0237's `GetAt(m_iIndex)` with an index outside the children:
+    /// -1 (no shown child, the word before the array) and 2 of two children (a stale slot past
+    /// them), each holding an object with a bound. Without the missing-data guard, exactly Tweaks:
+    /// that object's bound is taken. With it (a Tweaks slip not copied): no child, the node keeps
+    /// its bound; an index inside the children still takes its child's.
+    #[test]
+    fn s0237_an_index_outside_the_children_with_and_without_the_guard() {
+        for guard in [false, true] {
+            for index in [-1i32, 2] {
+                let mut f = Fixture::new();
+                f.e.set_stewie(engine_core::extend::stewie::SWITCH_NODE_BOUNDS, true);
+                f.e.set_stewie_slip_guard(guard);
+                create_bound_double(&mut f);
+                let (node, kids) = f.switch_node(2);
+                // The children's words one slot into a block of our own, so the word before
+                // them (index -1) is ours to fill.
+                let block = f.e.mem.alloc(0x20);
+                for (i, kid) in kids.iter().enumerate() {
+                    f.e.mem.set_u32(block + 4 + 4 * i as u32, *kid);
+                }
+                let stale = f.object();
+                f.set_bound(stale, [7, 7, 7, 3.0f32.to_bits()]);
+                let slot = (block + 4).wrapping_add((index as u32).wrapping_mul(4));
+                f.e.mem.set_u32(slot, stale);
+                f.e.mem.set_u32(node.addr() + 0xa0, block + 4);
+                f.e.set(node, NiSwitchNode::m_uFlags, 1);
+                f.e.set(node, NiSwitchNode::m_uFlagsAV, ORPHANED_BOUND);
+                f.e.set(node, NiSwitchNode::m_iIndex, index);
+                f.set_bound(kids[1], [1, 2, 3, 4.5f32.to_bits()]);
+                f.set_bound(node.addr(), [9, 9, 9, 9]);
+                ni_switch_node_update_world_bound(&mut f.e, node);
+                let want = if guard {
+                    [9, 9, 9, 9]
+                } else {
+                    [7, 7, 7, 3.0f32.to_bits()]
+                };
+                assert_eq!(
+                    f.bound_words(node.addr()),
+                    want,
+                    "guard {guard}, index {index}"
+                );
+                // Inside the children the guard changes nothing.
+                f.e.set(node, NiSwitchNode::m_iIndex, 1);
+                ni_switch_node_update_world_bound(&mut f.e, node);
+                assert_eq!(f.bound_words(node.addr()), [1, 2, 3, 4.5f32.to_bits()]);
+            }
+        }
+    }
+
+    /// lStewieAl's Tweaks' row S0237 at the three update passes' ends
+    /// (`0xA940DE`, `0xA941D8`, `0xA942B7`): the node has no bound. Row off,
+    /// the exe copies into the missing bound (a fault); row on, the bound is
+    /// made and takes the child's, a child without a radius leaves it with
+    /// radius 0, and a fixed bound is left alone.
+    #[test]
+    fn s0237_the_update_passes_take_the_childs_bound() {
+        type Pass = fn(&mut Engine, Ptr<NiSwitchNode>, u32, u32);
+        let passes: [Pass; 3] = [
+            ni_switch_node_update_downward_pass,
+            ni_switch_node_update_selected_downward_pass,
+            ni_switch_node_update_rigid_downward_pass,
+        ];
+        for pass in passes {
+            for on in [false, true] {
+                let mut f = Fixture::new();
+                f.e.set_stewie(engine_core::extend::stewie::SWITCH_NODE_BOUNDS, on);
+                create_bound_double(&mut f);
+                let (node, kids) = f.switch_node(2);
+                f.e.set(node, NiSwitchNode::m_uFlags, 1);
+                f.e.set(node, NiSwitchNode::m_iIndex, 1);
+                f.set_bound(kids[1], [5, 6, 7, 8.0f32.to_bits()]);
+                f.e.set(node, NiSwitchNode::m_kWorldBound, 0);
+                let data = update_data(&mut f, 1.0, 0);
+                f.e.mem.unmap(0, 0x1000);
+                let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    pass(&mut f.e, node, data, 0);
+                }));
+                f.e.call_stack.clear();
+                assert_eq!(run.is_ok(), on, "row {on}");
+                if !on {
+                    continue;
+                }
+                assert_eq!(f.bound_words(node.addr()), [5, 6, 7, 8.0f32.to_bits()]);
+                f.set_bound(kids[1], [1, 2, 3, 0]);
+                f.set_bound(node.addr(), [9, 9, 9, 9]);
+                pass(&mut f.e, node, data, 0);
+                assert_eq!(f.bound_words(node.addr()), [9, 9, 9, 0]);
+                f.e.set(node, NiSwitchNode::m_uFlagsAV, FIXED_BOUND);
+                f.set_bound(node.addr(), [9, 9, 9, 9]);
+                f.set_bound(kids[1], [5, 6, 7, 8.0f32.to_bits()]);
+                pass(&mut f.e, node, data, 0);
+                assert_eq!(f.bound_words(node.addr()), [9, 9, 9, 9]);
+            }
+        }
     }
 
     #[test]

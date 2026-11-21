@@ -32,6 +32,7 @@ use engine_core::{entry, AbiFn};
 
 pub mod bip;
 pub mod blend;
+pub mod queued;
 
 /// This family's bit: what each `typed_call!` of it names.
 pub const FAMILY: FamilyId = FamilyId::new(24);
@@ -51,6 +52,8 @@ pub static ANIMATION: Family = Family {
 #[rustfmt::skip]
 fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0049_3930, queued::update_queued_scenegraph(Ptr) -> bool),
+        entry!(0x0049_3bd0, queued::update_scene_graph_no_controller(Ptr)),
         entry!(0x004f_0040, bip::update_all_but_bip(Ptr, f32)),
         entry!(0x004f_0380, bip::update_all_but_target(Ptr, f32, u8)),
         entry!(0x004f_05a0, bip::controller_active(Ptr) -> u32),
