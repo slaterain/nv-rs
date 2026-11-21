@@ -2011,6 +2011,24 @@ pub fn level_up_menu_do_idle(e: &mut Engine, this: Ptr) {
     e.call(MENU_PREP_FOR_VISIBILITY, &args![this, 0u32]);
 }
 
+/// The interface manager's `activeTileAlt` (+0xBC, xNVSE's `InterfaceManager`).
+const ACTIVE_TILE_ALT: u32 = 0xbc;
+
+/// lStewieAl's Tweaks' S0022.11 (`MenuFixes::FindTileByID_SetActiveTileAlt`, called in place of
+/// `Tile::GetChildByID` at `0x785F33` and `0x785FAB` in `LevelUpMenu::DoGamepad`, `0x7541C8` in
+/// `CharGenMenu::DoGamepad` and `0x7CF387` in `StartMenu::DoGamepad`): with the row on and
+/// the mouse not moved since the keys were used (the interface manager's +0xED), the tile the
+/// child is looked up on becomes the interface manager's `activeTileAlt` (+0xBC) first.
+pub fn stewie_arrow_selects(e: &mut Engine, tile: u32) {
+    if e.stewie(engine_core::extend::stewie::LEVEL_UP_ARROWS_SELECT) {
+        use super::mapmenu::stewie_menus::{HAS_MOUSE_MOVED, INTERFACE_MANAGER};
+        let manager = e.mem.u32(INTERFACE_MANAGER);
+        if e.mem.u8(manager.wrapping_add(HAS_MOUSE_MOVED)) == 0 {
+            e.mem.set_u32(manager.wrapping_add(ACTIVE_TILE_ALT), tile);
+        }
+    }
+}
+
 /// [`level_up_menu_do_gamepad`]'s arrow buttons on the skills page: with a
 /// highlighted skill (list vtable +4), its arrow child `id` is clicked
 /// (tile sound `0xfcb`, vtable +0xc) when shown. Answers whether it was
@@ -2023,6 +2041,8 @@ fn gamepad_arrow(e: &mut Engine, base: u32, id: u32) -> bool {
         return false;
     }
     let item = e.vcall(base + SKILLS_LIST, 4, &args![]).u32();
+    // `0x785F33` and `0x785FAB` (lStewieAl's Tweaks' S0022.11).
+    stewie_arrow_selects(e, item);
     let arrow = e.call(TILE_GET_CHILD_BY_ID, &args![item, id]).u32();
     if e.call(TILE_IS_TRUE, &args![arrow, 0xfa3u32]).bool() {
         e.call(TILE_PLAY_TILE_SOUND, &args![arrow, 0xfcbu32]);
@@ -4974,5 +4994,40 @@ mod level_up_menu_tests {
         e.call_log = Some(vec![]);
         e.call(0x0078_8360, &args![array, 1u32]);
         assert_eq!(calls_to(&e, FREE), vec![vec![array]]);
+    }
+
+    /// Row S0022.11 (lStewieAl's Tweaks): buttons 3 and 4 (the Left and Right keys) on the skills
+    /// page make the highlighted skill's tile the interface manager's `activeTileAlt` (+0xBC)
+    /// before its arrow is looked up, unless the mouse has moved (+0xED); off, never. The arrow
+    /// is clicked either way.
+    #[test]
+    fn s0022_11_the_arrow_keys_set_the_selection() {
+        use super::super::mapmenu::stewie_menus::INTERFACE_MANAGER;
+        for (on, moved, set) in [(false, 0u8, false), (true, 0, true), (true, 1, false)] {
+            for button in [3u32, 4] {
+                let mut e = engine();
+                let this = menu(&mut e);
+                if !e.mem.is_mapped(INTERFACE_MANAGER) {
+                    e.map(INTERFACE_MANAGER & !0xfff, 0x1000);
+                }
+                let manager = e.mem.alloc(0x100);
+                e.mem.set_u32(INTERFACE_MANAGER, manager);
+                e.mem.set_u8(manager + 0xed, moved);
+                e.mem.set_u32(manager + 0xbc, 0x5555);
+                e.set_stewie(engine_core::extend::stewie::LEVEL_UP_ARROWS_SELECT, on);
+                e.register(0x0000_9104, |_, _| eax(0x7a00));
+                e.register(TILE_GET_CHILD_BY_ID, |_, a| eax(a[0] + a[1]));
+                e.register(TILE_IS_TRUE, |_, _| eax(1));
+                e.call_log = Some(vec![]);
+                e.call(0x0078_5ed0, &args![this, button, 1.0f32.to_bits()]);
+                let wanted = if set { 0x7a00 } else { 0x5555 };
+                assert_eq!(
+                    e.mem.u32(manager + 0xbc),
+                    wanted,
+                    "row {on} moved {moved} button {button}"
+                );
+                assert_eq!(calls_to(&e, 0x0000_900c).len(), 1);
+            }
+        }
     }
 }
