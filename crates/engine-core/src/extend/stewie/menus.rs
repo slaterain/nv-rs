@@ -179,3 +179,10 @@ pub const MESSAGE_MENU_TEXT_FONT: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END,
 /// S0022.37 `MenuFixes` (`StartMenu::ChooseHelp` `007d0770` at `0x7D08C6` and `0x7D08D3`): the
 /// pause menu's Help shows the caravan, roulette, blackjack and slots helps in those games.
 pub const MINIGAME_HELP_IN_PAUSE_MENU: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 48);
+/// S0107.05 `MemoryLeakFixes` (`FORenderedMenu::ClearMenuLight` `007fc6f0` at `0x7FC761`): the
+/// Pip-Boy's menu light is detached from its node when the menu goes, so opening the Pip-Boy no
+/// longer leaves a light behind each time.
+pub const PIPBOY_LIGHT_DETACHED: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 49);
+/// S0095 `fixConsoleMainMenuVisibility` (`DebugText::CreateDebugText` `00a0fe20` at `0xA10311`):
+/// the console's text nodes sit at depth -200, in front of the main menu.
+pub const CONSOLE_IN_FRONT_OF_MAIN_MENU: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 50);

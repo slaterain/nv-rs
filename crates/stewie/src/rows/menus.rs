@@ -311,6 +311,22 @@ pub const ROWS: &[Row] = &[
         summary: "changes payouts: a won caravan game pays the ante once (the game paid it twice), with a message for each payment",
     },
     Row {
+        bit: stewie::CONSOLE_IN_FRONT_OF_MAIN_MENU,
+        function: "fixConsoleMainMenuVisibility",
+        plan: "S0095",
+        key: "bFixConsoleMainMenuVisibility",
+        tweaks: None,
+        summary: "the console's text shows in front of the main menu",
+    },
+    Row {
+        bit: stewie::PIPBOY_LIGHT_DETACHED,
+        function: "MemoryLeakFixes",
+        plan: "S0107.05",
+        key: "bMemoryLeakFixesPipBoyLight",
+        tweaks: None,
+        summary: "the Pip-Boy's menu light is detached when the menu closes, so no light is left behind each time",
+    },
+    Row {
         bit: stewie::CHARGEN_SPECIAL_POINTS_CAPPED,
         function: "patchFixStuckInAddSPECIALPointsIfAtMaxAlready",
         plan: "S0110",
