@@ -232,7 +232,12 @@ fn pause(e: &Engine, on: bool) {
 /// bytes: flags, alpha and fade, textures, material values), the alpha property and the shader.
 fn statics(e: &Engine, key: Key) -> Vec<u8> {
     let (geometry, _, shader, state) = key;
-    let word = |a: u32| e.mem.u32(a);
+    let word = |a: u32| {
+        let mut b = [0u8; 4];
+        e.mem
+            .try_read(a, &mut b)
+            .map_or(0, |()| u32::from_le_bytes(b))
+    };
     let ranges = [
         (geometry, 0xc0),
         (state, 0x14),
