@@ -592,6 +592,15 @@ pub fn muzzle_flash_update_light(e: &mut Engine, this: Ptr<MuzzleFlash>) {
             e.call(SHADOW_SCENE_NODE_ADD_LIGHT, &args![scene, light, 1u32]);
         }
     }
+    // 009bb906: JIP LN NVSE's G96 (group GK's row and handler, a fix row: `SetMuzzleFlashFadeHook`, a jump here)
+    // gives the light its form's fade itself when it answers (words: the flash, its light). One load while JIP's
+    // fixes are not in.
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        let light = flash_light(e, this);
+        if e.site(0x009b_b906, &[this.addr(), light]).is_some() {
+            return;
+        }
+    }
     let value = if e.get(this, MuzzleFlash::bEnabled) {
         1.0f32
     } else {
@@ -1145,6 +1154,60 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x009b_b850, &args![bare]);
         assert!(calls(&e.call_log.take().unwrap(), NI_POINTER_SET).is_empty());
+    }
+
+    thread_local! {
+        static G96_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static G96_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn at_g96(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G96_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        G96_ANSWER.with(|c| c.get())
+    }
+
+    /// JIP LN NVSE's G96 seam at `0x9BB906`: not asked while JIP is not installed or installed without its fixes
+    /// (the game's 1.0 is set); with its fixes asked with the flash and its light after the scene add, an answer
+    /// taking the game's value's place and no answer letting the game's value be set.
+    #[test]
+    fn g96_seam_takes_the_lights_value_only_with_jips_fixes() {
+        use engine_core::extend::jip_patches;
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        for (word, answer, asked, set) in [
+            (0, Some(0), false, true),
+            (jip_patches::INSTALLED, Some(0), false, true),
+            (fixes, Some(0), true, false),
+            (fixes, None, true, true),
+        ] {
+            let mut e = engine();
+            e.on_site_for_test(0x009b_b906, at_g96);
+            G96_ASKED.with(|s| s.borrow_mut().clear());
+            G96_ANSWER.with(|c| c.set(answer));
+            e.set_jip_patches(word);
+            stub(&mut e, SHADOW_SCENE_NODE, 0x9000);
+            let this = flash(&mut e, 0, 0x6000);
+            e.set(this, MuzzleFlash::bEnabled, true);
+            e.call_log = Some(vec![]);
+            e.call(0x009b_b8a0, &args![this]);
+            let log = e.call_log.take().unwrap();
+            let want = if asked {
+                vec![vec![this.addr(), 0x6000]]
+            } else {
+                vec![]
+            };
+            assert_eq!(G96_ASKED.with(|s| s.take()), want, "{word:x} {answer:?}");
+            assert_eq!(
+                calls(&log, SHADOW_SCENE_NODE_ADD_LIGHT),
+                vec![vec![0x9000, 0x6000, 1]],
+                "{word:x}"
+            );
+            let value = calls(&log, LIGHT_SET_VALUE);
+            if set {
+                assert_eq!(value, vec![vec![0x6000, 1.0f32.to_bits()]], "{word:x}");
+            } else {
+                assert!(value.is_empty(), "{word:x}");
+            }
+        }
     }
 
     #[test]
