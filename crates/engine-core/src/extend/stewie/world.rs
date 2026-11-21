@@ -173,6 +173,10 @@ pub const TEST_ALL_CELLS_NO_INI_REREAD: Row = fix(31);
 /// name as its location line also when only its picture was read (the save list), as `LoadData`
 /// does.
 pub const CUSTOM_SAVE_NAME_SHOWN: Row = fix(32);
+/// S0156 `InventoryMinusOneOverflowFix` (`OnUpdateInventoryWeightHook` at `0x4D0EDA` in
+/// `004d0900`): an inventory whose weights sum to exactly -1.0 caches 0, since -1.0 means
+/// "recompute" and the weight would be summed again every time it is asked.
+pub const INVENTORY_WEIGHT_NOT_MINUS_ONE: Row = fix(33);
 
 /// `OSInputGlobals *` (xNVSE's `0x11F35CC`).
 pub const INPUT_GLOBALS: u32 = 0x011f_35cc;

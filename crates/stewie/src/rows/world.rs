@@ -235,6 +235,14 @@ pub const ROWS: &[Row] = &[
         summary: "changes the look: the sun's light comes from the side of the sky its disc is on (north or south), not the mirror side; nothing with the new lighting's light from the sky",
     },
     Row {
+        bit: stewie::INVENTORY_WEIGHT_NOT_MINUS_ONE,
+        function: "InventoryMinusOneOverflowFix",
+        plan: "S0156",
+        key: "bInventoryMinusOneOverflowFix",
+        tweaks: None,
+        summary: "an inventory weighing exactly -1 (negative-weight mod items) keeps its weight instead of being summed again each time",
+    },
+    Row {
         bit: stewie::NAV_MESH_TELEPORT_DOOR,
         function: "NavMeshTeleportDoorFix",
         plan: "S0193",

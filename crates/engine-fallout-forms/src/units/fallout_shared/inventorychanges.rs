@@ -4945,6 +4945,23 @@ mod s0128_tests {
         assert_eq!(run(true, 0x7000), shown);
         assert!(run(true, 0x8000).is_empty());
     }
+
+    /// lStewieAl's Tweaks' S0156: a total of exactly -1.0 is cached as 0 with the row, kept off;
+    /// other totals (also -1.0 plus a little, -0.0) are cached as they are.
+    #[test]
+    fn s0156_a_minus_one_weight_is_cached_as_zero() {
+        let mut e = Engine::new();
+        assert_eq!(stored_weight(&mut e, -1.0).to_bits(), (-1.0f32).to_bits());
+        e.set_stewie(
+            engine_core::extend::stewie::INVENTORY_WEIGHT_NOT_MINUS_ONE,
+            true,
+        );
+        assert_eq!(stored_weight(&mut e, -1.0).to_bits(), 0);
+        let near = f32::from_bits(0xbf80_0001);
+        assert_eq!(stored_weight(&mut e, near).to_bits(), 0xbf80_0001);
+        assert_eq!(stored_weight(&mut e, -0.0).to_bits(), (-0.0f32).to_bits());
+        assert_eq!(stored_weight(&mut e, 12.5), 12.5);
+    }
 }
 
 // Translated from 004c37d0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -9743,6 +9760,19 @@ fn heavy_weapon_adjusted(e: &mut Engine, weight: f32) -> f32 {
     weight
 }
 
+/// The weight `004d0900` caches (`FLD`/`FSTP` at `0x4D0EDA`); with lStewieAl's Tweaks' S0156
+/// (`OnUpdateInventoryWeightHook`) a total of exactly -1.0 (the "recompute" mark) is cached as 0
+/// (its bits compared, `0xBF800000`).
+fn stored_weight(e: &mut Engine, total: f32) -> f32 {
+    if e.stewie(engine_core::extend::stewie::INVENTORY_WEIGHT_NOT_MINUS_ONE)
+        && total.to_bits() == 0xbf80_0000
+    {
+        0.0
+    } else {
+        total
+    }
+}
+
 // Translated from 004d0900 (decompiled, FalloutNV.exe 1.4.0.525)
 /// The total weight the owner carries (the map has no name), cached in
 /// `fcontainerweight` and recomputed only when that is `-1.0`. Walks the owner
@@ -9910,7 +9940,11 @@ pub fn fn_004d0900(e: &mut Engine, this: Ptr<InventoryChanges>, with_mods: u8) -
         }
         node = list_next(e, node);
     }
-    e.set(this, InventoryChanges::fcontainerweight, total);
+    e.set(
+        this,
+        InventoryChanges::fcontainerweight,
+        stored_weight(e, total),
+    );
     if actor != 0 {
         let sub_object = actor + 0xa4;
         let previous = e.get(this, InventoryChanges::fpreviousContainerWeight);
