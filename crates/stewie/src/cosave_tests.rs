@@ -76,8 +76,16 @@ fn world(mod_flags: Option<u8>) -> World {
         },
         ..Ret::default()
     });
+    // The form ids: the special round as 0x0001_4400 (and as 0x0301_4400, its file at index 3 in
+    // a load order where it moved), a weapon (type 0x28) as 0x0001_4600.
+    let not_ammo = e.mem.alloc(0x20);
+    e.mem.set_u8(not_ammo + 4, 0x28);
     e.register_double(0x0048_39c0, move |_, a| Ret {
-        eax: if a[0] == 0x0001_4400 { special } else { 0 },
+        eax: match a[0] {
+            0x0001_4400 | 0x0301_4400 => special,
+            0x0001_4600 => not_ammo,
+            _ => 0,
+        },
         ..Ret::default()
     });
     e.set_stewie(engine_core::extend::stewie::LOAD_GAME_AMMO_COUNT, true);
@@ -201,4 +209,32 @@ fn a_tweaks_section_is_read_and_its_other_records_kept() {
         w.e.stewie_kept(engine_core::extend::stewie::kept::SAVED_AMMO_COUNT, 4);
     assert_eq!(w.e.mem.u32(kept), 0);
     assert!(w.e.ext::<crate::Stewie>().kept.records.is_empty());
+}
+
+/// The record's checks before it is applied: a form id whose file is no longer loaded (the save's
+/// index 1 maps to nothing) leaves the entry as it was; a file that moved in the load order (the
+/// save's index 1 is today's 3) resolves to the moved id; a looked-up form that is no ammunition
+/// (a weapon, type 0x28) leaves the entry as it was.
+#[test]
+fn the_record_needs_a_loaded_ammunition_form() {
+    let _one = LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let mut w = world(None);
+    SPECIAL.store(20, Relaxed);
+    keep_count(&mut w.e, Some(7));
+    restore_ammo(&mut w.e, 0x0101_4400);
+    assert_eq!(entry(&w), (30, w.default), "index 1 not loaded");
+
+    let mut w = world(None);
+    w.e.ext::<nvse::Nvse>().saveload.preload_mods = vec![0, 3];
+    SPECIAL.store(20, Relaxed);
+    keep_count(&mut w.e, Some(7));
+    restore_ammo(&mut w.e, 0x0101_4400);
+    assert_eq!(entry(&w), (7, w.special), "index 1 is today's 3");
+
+    let mut w = world(None);
+    SPECIAL.store(20, Relaxed);
+    DEFAULT.store(20, Relaxed);
+    keep_count(&mut w.e, Some(7));
+    restore_ammo(&mut w.e, 0x0001_4600);
+    assert_eq!(entry(&w), (30, w.default), "not ammunition");
 }

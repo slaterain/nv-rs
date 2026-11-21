@@ -9688,6 +9688,9 @@ mod tests {
             e.mem.set_u32(kept, saved + 1);
         }
         load_game_setup_ammo(&mut e, player);
+        // The saved count stays for Tweaks' `AMID` step after the load (its PreLoadGame clears it).
+        let kept = e.stewie_kept(engine_core::extend::stewie::kept::SAVED_AMMO_COUNT, 4);
+        assert_eq!(e.mem.u32(kept), saved.map_or(0, |s| s + 1));
         (e.mem.u32(ammo_info + 4), e.mem.u32(ammo_info + 8))
     }
 
