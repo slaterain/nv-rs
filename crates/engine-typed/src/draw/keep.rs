@@ -430,7 +430,13 @@ fn assemble(
 
 /// Replays the record of `key`: its writes, setter calls and device calls, in order.
 fn replay(e: &mut Engine, key: Key) {
-    let ops = KEEP.with(|k| k.borrow().records.get(&key).map(|r| r.ops.clone()));
+    // Taken out while replaying (nothing it calls looks at the records) and put back: no copy.
+    let ops = KEEP.with(|k| {
+        k.borrow_mut()
+            .records
+            .get_mut(&key)
+            .map(|r| std::mem::take(&mut r.ops))
+    });
     for op in ops.iter().flatten() {
         match op {
             Op::Write(at, bytes) => e.mem.write(*at, bytes),
@@ -439,6 +445,13 @@ fn replay(e: &mut Engine, key: Key) {
                 rt::device_replay(e, call);
             }
         }
+    }
+    if let Some(ops) = ops {
+        KEEP.with(|k| {
+            if let Some(r) = k.borrow_mut().records.get_mut(&key) {
+                r.ops = ops;
+            }
+        });
     }
 }
 
