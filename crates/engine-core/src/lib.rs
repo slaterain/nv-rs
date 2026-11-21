@@ -66,6 +66,7 @@ pub mod call_trace;
 pub mod census;
 pub mod cxx_exception;
 pub mod draw_thread;
+pub mod editor_ids;
 mod engine;
 pub mod estimate;
 pub mod exe;

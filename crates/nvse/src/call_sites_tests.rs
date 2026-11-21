@@ -495,3 +495,44 @@ fn a_repair_raises_on_repair_with_an_inventory_reference() {
     let entry = r.data.entry;
     assert_eq!(e.mem.u32(entry + 4), 3, "the entry's count");
 }
+
+/// A form destroyed or a reference trashed with JohnnyGuitar's editor ids on: its names leave
+/// their store and map (`JohnnyExtraData::OnRemoval`); with them off the store is not touched.
+#[test]
+fn a_gone_form_loses_its_editor_ids() {
+    for on in [true, false] {
+        let mut e = sites();
+        let store = engine_core::editor_ids::store(&mut e);
+        store.set_on(on);
+        for (form, name) in [(REF_1, &b"GoneRef"[..]), (CELL, b"GoneCell")] {
+            store.add_name(form, name);
+            store.map_insert(form, name);
+        }
+        e.site(call_sites::FORM_DESTROYED.addr(), &[CELL]);
+        e.site(call_sites::REFERENCE_TRASHED.addr(), &[REF_1]);
+        let store = engine_core::editor_ids::store(&mut e);
+        let want = |form: u32| if on { 0 } else { form };
+        assert_eq!(store.lookup(b"GoneCell"), want(CELL), "{on}");
+        assert_eq!(store.lookup(b"GoneRef"), want(REF_1), "{on}");
+        assert_eq!(store.name(REF_1).is_none(), on);
+    }
+}
+
+/// JohnnyGuitar's `DetachEditorIDs` skips a temporary form: a temporary reference sharing a name
+/// with a permanent cell is trashed, and the cell is still found by that name; the reference's
+/// names are dropped.
+#[test]
+fn a_gone_temporary_form_leaves_the_map_alone() {
+    let mut e = sites();
+    let flags = e.mem.u32(REF_1 + 8);
+    e.mem.set_u32(REF_1 + 8, flags | 0x4000);
+    let store = engine_core::editor_ids::store(&mut e);
+    store.set_on(true);
+    store.add_name(CELL, b"Shared");
+    store.map_insert(CELL, b"Shared");
+    store.add_name(REF_1, b"Shared");
+    e.site(call_sites::REFERENCE_TRASHED.addr(), &[REF_1]);
+    let store = engine_core::editor_ids::store(&mut e);
+    assert_eq!(store.lookup(b"shared"), CELL);
+    assert!(store.name(REF_1).is_none());
+}
