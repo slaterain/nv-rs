@@ -159,7 +159,17 @@ pub fn compare_exchange(e: &mut Engine, target: Ptr, old: i32, new: i32) -> i32 
 /// `Sleep(1)` after 10,000, then a count of 1.
 pub fn lock(e: &mut Engine, this: Ptr<LightLock>, _unused: u32) {
     let thread = typed_call!(FAMILY, 0x0040_fc90, current_thread(e));
-    if e.get(this, LightLock::owner) == thread {
+    // The owner participates in the compare-exchange below. With real host
+    // threads its recursive fast-path read must be atomic too.
+    let owner = if e.mem.is_shared() {
+        e.mem
+            .atomic_u32(this.addr())
+            .map(|word| word.load(std::sync::atomic::Ordering::Relaxed))
+    } else {
+        None
+    }
+    .unwrap_or_else(|| e.get(this, LightLock::owner));
+    if owner == thread {
         let count = e.get(this, LightLock::count).wrapping_add(1);
         e.set(this, LightLock::count, count);
         return;
@@ -187,6 +197,16 @@ pub fn unlock(e: &mut Engine, this: Ptr<LightLock>) {
     let count = e.get(this, LightLock::count).wrapping_sub(1);
     e.set(this, LightLock::count, count);
     if count == 0 {
+        // 0040fbc7's x86 MOV publishes earlier protected writes. An ordinary
+        // ARM store does not: pair this release with lock's acquire CAS.
+        if e.mem.is_shared() {
+            if let Some(owner) = e.mem.atomic_u32(this.addr()) {
+                owner.store(0, std::sync::atomic::Ordering::Release);
+                return;
+            }
+            // Preserve Mem's unaligned/fault/diagnostic path.
+            std::sync::atomic::fence(std::sync::atomic::Ordering::Release);
+        }
         e.set(this, LightLock::owner, 0);
     }
 }

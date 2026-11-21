@@ -6,6 +6,11 @@ status in [LEDGER.md](LEDGER.md), and the full list of systems in
 [SYSTEMS.md](SYSTEMS.md). The log up to 2026-10-14 is in
 [history/milestones-2026-10-14.md](history/milestones-2026-10-14.md).
 
+Local ARM crash investigation (2026-11-21): a recursive-lock publication failure
+was reproduced and corrected in focused real-thread tests. Gameplay validation
+of the reported stops remains open; next, repeat those routes with the corrected
+build ([evidence and limits](ARM_RECURSIVE_LOCK.md)).
+
 ## Direction (maintainer, 2026-11-04; [ADR-0012](adr/0012-modern-64-bit-engine.md))
 
 The game looks and plays exactly like the original; what players do not see or
