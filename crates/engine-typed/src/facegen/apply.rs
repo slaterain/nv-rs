@@ -441,6 +441,14 @@ pub fn apply_modifiers(e: &mut Engine, this: Ptr, context: u32) {
 /// class whose effects are not known); a statistical morph with an index past the vertex count
 /// (that vertex is not reset by the base copy). The basis rows a statistical morph reads are
 /// part of the compared base offsets.
+///
+/// Assumed, not compared: a morph's own rows (a differential morph's offsets, a statistical
+/// morph's index list) do not change in place while the morph's pointer and words stay the same.
+/// The exe builds them once from the head's FaceGen model when it makes the morph data
+/// (`BSFaceGenMorphDataHead`'s constructor, `00660ba0`, through `00660700` and `00660970`) and
+/// writes them nowhere else. A writer that changed them in place (none in the exe; a plugin could)
+/// would show only on the next reshape that something else triggers (`facegen_skip_gives_the_same_vertices`,
+/// frame `MorphRows`, documents it).
 pub(crate) mod skip {
     use super::Op;
     use engine_core::Engine;

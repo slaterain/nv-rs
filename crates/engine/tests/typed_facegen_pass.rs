@@ -711,6 +711,10 @@ enum Change {
     KnownClass,
     /// Child 1's first phoneme morph becomes a statistical one writing one vertex past the count.
     PastCount,
+    /// Morph rows rewritten in place (pointers unchanged): every differential morph's first offset
+    /// and every statistical morph's first index, in both children. The skip assumes this does not
+    /// happen (the exe builds the rows once, `00660ba0`); the frame documents what it does if it does.
+    MorphRows,
 }
 
 /// What the typed engine must do in a frame, against the translations' reshapes.
@@ -722,6 +726,9 @@ enum Expect {
     Full,
     /// One child reshaped, the other left out.
     One,
+    /// Left out though the morph rows changed in place: the vertices are the last frame's, not the
+    /// exe's (the documented limit of the skip), until something else triggers a reshape.
+    Stale,
 }
 
 fn frame(e: &mut Engine, n: u32, data: u32, geometries: &[u32; 2], change: Change) {
@@ -770,6 +777,29 @@ fn frame(e: &mut Engine, n: u32, data: u32, geometries: &[u32; 2], change: Chang
                     let m = e.mem.u32(table + 4 * s);
                     if m != 0 && e.mem.u32(m) == from {
                         e.mem.set_u32(m, to);
+                    }
+                }
+            }
+        }
+        Change::MorphRows => {
+            for (i, g) in geometries.iter().enumerate() {
+                let vertices = 20 + 4 * i as u32;
+                let morphs = e.mem.u32(*g + 0x10);
+                for (offset, slots) in [(0x8u32, 15u32), (0xc, 17), (0x10, 16), (0x14, 1)] {
+                    let table = e.mem.u32(morphs + offset);
+                    for s in 0..slots {
+                        let m = e.mem.u32(table + 4 * s);
+                        if m == 0 {
+                            continue;
+                        }
+                        let rows = e.mem.u32(m + 4);
+                        if e.mem.u32(m) == STATISTICAL_VTABLE {
+                            let index = e.mem.u32(rows);
+                            e.mem.set_u32(rows, (index + 1) % vertices);
+                        } else {
+                            let delta = e.mem.f32(rows);
+                            e.mem.set_f32(rows, delta + 0.125);
+                        }
                     }
                 }
             }
@@ -823,6 +853,10 @@ fn facegen_skip_gives_the_same_vertices() {
         (Nothing, Skip),
         (Rebuilt, Full),
         (Nothing, Skip),
+        // Morph rows changed in place: not seen (documented); the next weight change catches up.
+        (MorphRows, Stale),
+        (Weight(0, 0.6), Full),
+        (Nothing, Skip),
         // An unknown class is never kept (child 0 reshapes every frame, child 1 is left out);
         // back to the known one, it is kept again.
         (UnknownClass, One),
@@ -847,12 +881,21 @@ fn facegen_skip_gives_the_same_vertices() {
             let (tm, ym) = (translated.mem.u32(MARKS), typed.mem.u32(MARKS));
             frame(&mut translated, tn, td, &tg, *change);
             frame(&mut typed, yn, yd, &yg, *change);
+            let reshaped = typed.mem.u32(MARKS) - ym;
+            if matches!(expect, Some(Stale)) {
+                assert_ne!(
+                    shapes(&translated, &tg),
+                    shapes(&typed, &yg),
+                    "frame {i} ({change:?}): expected the documented stale vertices"
+                );
+                assert_eq!(reshaped, 0, "frame {i} ({change:?}): expected no reshape");
+                continue;
+            }
             assert_eq!(
                 shapes(&translated, &tg),
                 shapes(&typed, &yg),
                 "frame {i} ({change:?}): the vertices differ"
             );
-            let reshaped = typed.mem.u32(MARKS) - ym;
             let translation_reshaped = translated.mem.u32(MARKS) - tm;
             assert!(
                 translation_reshaped > 0,
@@ -863,6 +906,7 @@ fn facegen_skip_gives_the_same_vertices() {
                 Some(Skip) => 0,
                 Some(Full) => translation_reshaped,
                 Some(One) => translation_reshaped / 2,
+                Some(Stale) => unreachable!(),
             };
             assert_eq!(
                 reshaped, expected,
