@@ -33,6 +33,7 @@ pub mod pathing;
 pub mod process;
 pub mod render;
 pub mod scene;
+pub mod script_lines;
 pub mod scripts;
 pub mod shader;
 
@@ -115,6 +116,7 @@ pub mod units {
         engine_core::typed::provide(&crate::process::PROCESS);
         engine_core::typed::provide(&crate::lights::LIGHTS);
         engine_core::typed::provide(&crate::scripts::SCRIPTS);
+        engine_core::typed::provide(&crate::script_lines::SCRIPT_LINES);
         crate::render::stream::note_head_check();
     }
 }
@@ -128,7 +130,7 @@ mod tests {
     use engine_core::typed::{parse_switch, Family, Mode};
 
     /// This crate's families, in the order `units::funcs` provides them.
-    fn families() -> [&'static Family; 19] {
+    fn families() -> [&'static Family; 20] {
         [
             &crate::lockfree::LOCKFREE,
             &crate::culling::CULLING,
@@ -149,6 +151,7 @@ mod tests {
             &crate::process::PROCESS,
             &crate::lights::LIGHTS,
             &crate::scripts::SCRIPTS,
+            &crate::script_lines::SCRIPT_LINES,
         ]
     }
 
@@ -187,7 +190,8 @@ mod tests {
                 "anim_keys",
                 "process",
                 "lights",
-                "scripts"
+                "scripts",
+                "script_lines"
             ]
         );
         let defaults = parse_switch(None, &families).unwrap();
