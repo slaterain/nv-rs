@@ -548,11 +548,7 @@ pub fn update_compass(
     // The quotient goes to `_ftol2` in `ST0` as a double (truncated to the same integer at either
     // precision).
     let turns = f64::from(magnitude) / global_f64(e, FULL_TURN);
-    let turns = typed_call!(
-        crt::FAMILY,
-        0x00ec_62c0,
-        crt::math::ftol2_sse(e, turns)
-    );
+    let turns = typed_call!(crt::FAMILY, 0x00ec_62c0, crt::math::ftol2_sse(e, turns));
     let turns = i32::from_ne_bytes(crt::low_word(turns).to_ne_bytes());
     // `IMUL EAX,EAX,0x168`, then `FILD`.
     let offset = narrow(f64::from(degrees) - exact(turns.wrapping_mul(360)));

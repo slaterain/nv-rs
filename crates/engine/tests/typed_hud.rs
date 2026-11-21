@@ -133,7 +133,7 @@ fn world(e: &mut Engine) {
         (0x0101_ff58, -std::f64::consts::PI),
         (0x0101_ff48, 2.0 * std::f64::consts::PI),
         (0x0101_ff40, std::f64::consts::PI),
-        (0x0107_34f8, 1.0),
+        (0x0107_34f8, 1.45),
     ] {
         e.mem.set_f64(at, value);
     }
@@ -405,13 +405,14 @@ fn reference(e: &mut Engine, base: u32, position: [f32; 3], flags: u32) -> u32 {
 
 /// The world of a compass case. `w`: [0] sneaking; [1] the markers' pattern; [2] the pools'
 /// tiles (0, 1, 2 or 6 each); [3] JIP (0 off, 1 the discover event with a user, 2 JIP's name);
-/// [4] the menu shown and the opacity fixed (bits 0, 1); [5] the VATS actors' pattern; [6] the
-/// actor mode. `f`: the player's heading and x.
+/// [4] the menu shown, the opacity fixed, the HUD 200 wide (bits 0, 1, 2); [5] the VATS actors'
+/// pattern (0x40: the first two out of range); [6] the actor mode; [7] the player's heading (bits).
+/// `f`: the player's x.
 fn compass_world(e: &mut Engine, case: &Case) -> Vec<u32> {
     world(e);
     heading_of(e);
     let w = |i: usize| case.word(i);
-    let heading = case.f32(7);
+    let heading = f32::from_bits(case.word(7));
     let px = case.f32(8);
     let own = reference(e, 0x900, [px + 30.0, 5.0, 2.0], 0);
     let me = player(e, heading, [px, 1.0, 0.0], w(0) == 1, own);
@@ -438,7 +439,9 @@ fn compass_world(e: &mut Engine, case: &Case) -> Vec<u32> {
     // The HUD menu.
     let menu = e.mem.alloc(0x300);
     e.mem.set_u32(0x011d_96c0, menu);
-    e.mem.set_i32(menu + 0x214, 100);
+    // Wider than 175 with bit 2, so the quest marker's overshoot cap can apply.
+    e.mem
+        .set_i32(menu + 0x214, if w(4) & 4 != 0 { 200 } else { 100 });
     e.mem.set_i32(menu + 0x218, 70);
     e.mem.set_u32(0x011f_2250 + 8, (w(4) >> 1) & 1);
     // The compass tile: its strip (slot +0x20) a block, or none.
@@ -582,7 +585,14 @@ fn compass_world(e: &mut Engine, case: &Case) -> Vec<u32> {
     let mut actors = vec![];
     for k in 0..3u32 {
         let base = 0xb00 + 0x100 * k;
-        let a = reference(e, base, [px + 4.0 * (k + 1) as f32, -3.0, 0.0], 0);
+        // With bit 0x40 the first two are 37 and 45 units away: past the actor mode's tick range (35)
+        // but inside the landmark range (40), and past both.
+        let along = match (vats_pattern & 0x40 != 0, k) {
+            (true, 0) => 37.0,
+            (true, 1) => 45.0,
+            _ => 4.0 * (k + 1) as f32,
+        };
+        let a = reference(e, base, [px + along, -3.0, 0.0], 0);
         let has_3d = u32::from(vats_pattern & (1 << k) == 0);
         e.register_double(VT_FN + base + 0x1d0, move |_, _| ret(has_3d));
         e.mem
@@ -627,10 +637,18 @@ fn update_compass_diff() {
         Input::Of(&[0, 1, 2, 0x3c, 0x5e, 0x3ff]),
         Input::Of(&[0, 1, 2, 3]),
         Input::Of(&[0, 1, 2]),
-        Input::Of(&[0, 1, 2, 3]),
-        Input::Of(&[0, 1, 2, 5, 6, 7, 0x38]),
+        Input::Of(&[0, 1, 2, 3, 4, 5]),
+        Input::Of(&[0, 1, 2, 5, 6, 7, 0x38, 0x40, 0x41]),
         Input::Flag,
-        Input::F32Swept(0x3f00_0000),
+        // The headings: 14 and 13.4 put the player's own marker in the strip (inside and past the
+        // inner width), 5 and 4.4 the hostile tick.
+        Input::Of(&[
+            0x3f00_0000,
+            0x4160_0000,
+            0x4156_6666,
+            0x40a0_0000,
+            0x408c_cccd,
+        ]),
         Input::F32Swept(0x4120_0000),
     ])
     // About five seconds a case on this machine's debug build: every value of each word once and
