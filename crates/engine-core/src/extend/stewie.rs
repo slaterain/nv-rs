@@ -299,8 +299,12 @@ pub mod kept {
     pub const RUMBLE_STATES: usize = 0;
     /// S0107.04's `static NiFixedString strSpeaker` (4 bytes: the handle of "Bip01 Speaker").
     pub const SPEAKER_NAME: usize = 1;
+    /// S0022.07's `static bool debounce` (1 byte: the remap was already waiting last frame).
+    pub const REMAP_DEBOUNCE: usize = 2;
+    /// S0883's `static char buf[0x200]`: the settings save failure's text.
+    pub const SAVE_SETTINGS_ERROR: usize = 3;
     /// How many.
-    pub const COUNT: usize = 2;
+    pub const COUNT: usize = 4;
 }
 
 /// The last thing each of Tweaks' two Havok warnings printed (its functions' statics), shared by
