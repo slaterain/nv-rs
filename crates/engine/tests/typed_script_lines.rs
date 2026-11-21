@@ -28,6 +28,8 @@ const SSE2_PAGE: u32 = 0x0127_0000;
 const SSE2_AVAILABLE: u32 = 0x0127_0a6c;
 const FALSE_PAGE: u32 = 0x0101_2000;
 const LINE_PAGE: u32 = 0x011c_a000;
+/// The save game's global (SetVariable reads it to report a missing variable).
+const SAVE_PAGE: u32 = 0x011d_e000;
 
 const CONFIG: u32 = 0x0300_0000;
 const ANSWER_HANDLER: u32 = CONFIG;
@@ -94,7 +96,9 @@ fn atof(e: &mut Engine, a: &[u32]) -> Ret {
 
 /// The exe's data and the stand-ins.
 fn world(e: &mut Engine) {
-    for page in [TABLE_PAGE, BLOCK_PAGE, SSE2_PAGE, FALSE_PAGE, LINE_PAGE] {
+    for page in [
+        TABLE_PAGE, BLOCK_PAGE, SSE2_PAGE, FALSE_PAGE, LINE_PAGE, SAVE_PAGE,
+    ] {
         e.map(page, 0x1000);
     }
     e.map(CONFIG, 0x1000);

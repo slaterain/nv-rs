@@ -131,7 +131,7 @@ fn new_runner(e: &mut Engine) -> u32 {
 /// (the owner quest's when above 0, else the setting's, added to what is left) and its buffer
 /// zeroed; then the run's referenced objects are forgotten. The quest's floats: a double difference
 /// or sum stored as a float, the same on every thread.
-pub fn run(e: &mut Engine, this: Ptr, first: u32, second: u32, third: u32, force: u8) -> bool {
+pub fn script_run(e: &mut Engine, this: Ptr, first: u32, second: u32, third: u32, force: u8) -> bool {
     let me = this.addr();
     if force == 0 {
         let header = header_of(e, this);

@@ -75,7 +75,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x005a_c7a0, value::read_operand(u32, u32, u32, u32, u32, u32, u32, u8) -> bool),
         entry!(0x005a_c4f0, value::referenced_object(Ptr, u32, u32) -> u32),
         entry!(0x005a_9140, value::get_variable(Ptr, u32, Ptr) -> f64),
-        entry!(0x005a_c1e0, run::run(Ptr, u32, u32, u32, u8) -> bool),
+        entry!(0x005a_c1e0, run::script_run(Ptr, u32, u32, u32, u8) -> bool),
         entry!(0x005a_c340, run::run_effect_start(Ptr, u32, u32)),
         entry!(0x005a_c380, run::run_effect_finish(Ptr, u32, u32)),
         entry!(0x005a_c3c0, run::run_effect_update(Ptr, u32, u32, f32)),

@@ -178,20 +178,27 @@ fn last_search(e: &mut Engine, script: u32) {
     e.mem.set_u32(tls + 0x288, script);
 }
 
-fn common(diff: Diff) -> Diff {
-    diff.family(&scripts::SCRIPTS)
-        .family(&leaf::LEAVES)
-        .allow_nan_payloads()
+trait Common {
+    fn common(self) -> Diff;
+}
+
+impl Common for Diff {
+    fn common(self) -> Diff {
+        self.family(&scripts::SCRIPTS)
+            .family(&leaf::LEAVES)
+            .allow_nan_payloads()
+    }
 }
 
 const DELAYS: &[u32] = &[0, 0x3f80_0000, 0x4120_0000, 0xbf80_0000];
 
 #[test]
 fn scripts_run() {
-    common(Diff::new(entry!(
+    Diff::new(entry!(
         0x005a_c1e0,
-        run::run(Ptr<_>, u32, u32, u32, u8) -> bool
-    )))
+        run::script_run(Ptr<_>, u32, u32, u32, u8) -> bool
+    ))
+    .common()
     .inputs(&[
         Input::Of(&[2, 4, 5, 0x40]),
         Input::Flag,
@@ -234,26 +241,38 @@ fn scripts_run() {
 
 #[test]
 fn scripts_run_effects() {
-    for f in [
-        entry!(0x005a_c340, run::run_effect_start(Ptr<_>, u32, u32)),
-        entry!(0x005a_c380, run::run_effect_finish(Ptr<_>, u32, u32)),
-    ] {
-        common(Diff::new(f))
-            .inputs(&[Input::Flag, Input::Flag])
-            .setup(|e, case| {
-                world(e);
-                let s = script(e, 8, false, 0.0, 0);
-                e.mem.set_u32(ANSWER_RUN, case.word(0));
-                e.mem.set_u32(RUN_DEPTH, case.word(1));
-                vec![s, 0x0072_0000, 0x0073_0000]
-            })
-            .run()
-            .assert_same();
-    }
-    common(Diff::new(entry!(
+    Diff::new(entry!(0x005a_c340, run::run_effect_start(Ptr<_>, u32, u32)))
+        .common()
+        .inputs(&[Input::Flag, Input::Flag])
+        .setup(|e, case| {
+            world(e);
+            let s = script(e, 8, false, 0.0, 0);
+            e.mem.set_u32(ANSWER_RUN, case.word(0));
+            e.mem.set_u32(RUN_DEPTH, case.word(1));
+            vec![s, 0x0072_0000, 0x0073_0000]
+        })
+        .run()
+        .assert_same();
+    Diff::new(entry!(
+        0x005a_c380,
+        run::run_effect_finish(Ptr<_>, u32, u32)
+    ))
+    .common()
+    .inputs(&[Input::Flag, Input::Flag])
+    .setup(|e, case| {
+        world(e);
+        let s = script(e, 8, false, 0.0, 0);
+        e.mem.set_u32(ANSWER_RUN, case.word(0));
+        e.mem.set_u32(RUN_DEPTH, case.word(1));
+        vec![s, 0x0072_0000, 0x0073_0000]
+    })
+    .run()
+    .assert_same();
+    Diff::new(entry!(
         0x005a_c3c0,
         run::run_effect_update(Ptr<_>, u32, u32, f32)
-    )))
+    ))
+    .common()
     .inputs(&[
         Input::Of(&[0, 0x3e80_0000, 0x7f80_0001, 0xff80_0000]),
         Input::Flag,
@@ -270,10 +289,11 @@ fn scripts_run_effects() {
 
 #[test]
 fn scripts_run_manager() {
-    common(Diff::new(entry!(
+    Diff::new(entry!(
         0x005e_2590,
         run::manager_run(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, u8, u8, u8, f32) -> bool
-    )))
+    ))
+    .common()
     .inputs(&[
         Input::Of(&[0, 1, 5]),
         Input::Flag,
@@ -308,22 +328,22 @@ fn scripts_run_manager() {
     })
     .run()
     .assert_same();
-    common(Diff::new(
-        entry!(0x005e_24d0, run::manager_instance() -> Ptr<_>),
-    ))
-    .inputs(&[Input::Of(&[0, 1, 2, 3])])
-    .setup(|e, case| {
-        world(e);
-        e.mem.set_u32(0x011c_aed8, case.word(0));
-        e.mem.set_u32(MANAGER, 0x1234);
-        vec![]
-    })
-    .run()
-    .assert_same();
-    common(Diff::new(entry!(
+    Diff::new(entry!(0x005e_24d0, run::manager_instance() -> Ptr<_>))
+        .common()
+        .inputs(&[Input::Of(&[0, 1, 2, 3])])
+        .setup(|e, case| {
+            world(e);
+            e.mem.set_u32(0x011c_aed8, case.word(0));
+            e.mem.set_u32(MANAGER, 0x1234);
+            vec![]
+        })
+        .run()
+        .assert_same();
+    Diff::new(entry!(
         0x005e_2730,
         run::manager_init_action_list(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>) -> bool
-    )))
+    ))
+    .common()
     .inputs(&[Input::Flag, Input::Flag, Input::Flag])
     .setup(|e, case| {
         world(e);
@@ -343,60 +363,54 @@ fn scripts_run_manager() {
 
 #[test]
 fn scripts_runner_construct_and_busy() {
-    common(Diff::new(entry!(
-        0x005e_0c60,
-        run::construct_runner(Ptr<_>) -> Ptr<_>
-    )))
-    .inputs(&[Input::Of(&[0, 0xa5a5_a5a5])])
-    .setup(|e, case| {
-        world(e);
-        let r = e.mem.alloc(0xa4);
-        for i in (0..0xa4).step_by(4) {
-            e.mem.set_u32(r + i, case.word(0) ^ i);
-        }
-        vec![r]
-    })
-    .run()
-    .assert_same();
-    common(Diff::new(entry!(
-        0x005e_2850,
-        run::runner_is_busy(Ptr<_>) -> bool
-    )))
-    .inputs(&[Input::Of(&[0, 1, 0x8000_0000])])
-    .setup(|e, case| {
-        world(e);
-        let r = e.mem.alloc(0xa4);
-        e.mem.set_u32(r + 0x14, case.word(0));
-        e.mem.set_u32(r + 0x10, 0xffff_ffff);
-        vec![r]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x005e_0c60, run::construct_runner(Ptr<_>) -> Ptr<_>))
+        .common()
+        .inputs(&[Input::Of(&[0, 0xa5a5_a5a5])])
+        .setup(|e, case| {
+            world(e);
+            let r = e.mem.alloc(0xa4);
+            for i in (0..0xa4).step_by(4) {
+                e.mem.set_u32(r + i, case.word(0) ^ i);
+            }
+            vec![r]
+        })
+        .run()
+        .assert_same();
+    Diff::new(entry!(0x005e_2850, run::runner_is_busy(Ptr<_>) -> bool))
+        .common()
+        .inputs(&[Input::Of(&[0, 1, 0x8000_0000])])
+        .setup(|e, case| {
+            world(e);
+            let r = e.mem.alloc(0xa4);
+            e.mem.set_u32(r + 0x14, case.word(0));
+            e.mem.set_u32(r + 0x10, 0xffff_ffff);
+            vec![r]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn scripts_forget_referenced_objects() {
-    common(Diff::new(entry!(
-        0x005a_e2e0,
-        run::forget_referenced_objects(Ptr<_>)
-    )))
-    .inputs(&[Input::Of(&[0, 1, 2])])
-    .setup(|e, case| {
-        world(e);
-        let s = script(e, 8, false, 0.0, 0);
-        match case.word(0) {
-            0 => last_search(e, s),
-            1 => last_search(e, s + 4),
-            _ => {
-                // An empty list.
-                let empty = list(e, &[]);
-                e.mem.set_u32(s + 0x44, empty);
+    Diff::new(entry!(0x005a_e2e0, run::forget_referenced_objects(Ptr<_>)))
+        .common()
+        .inputs(&[Input::Of(&[0, 1, 2])])
+        .setup(|e, case| {
+            world(e);
+            let s = script(e, 8, false, 0.0, 0);
+            match case.word(0) {
+                0 => last_search(e, s),
+                1 => last_search(e, s + 4),
+                _ => {
+                    // An empty list.
+                    let empty = list(e, &[]);
+                    e.mem.set_u32(s + 0x44, empty);
+                }
             }
-        }
-        vec![s]
-    })
-    .run()
-    .assert_same();
+            vec![s]
+        })
+        .run()
+        .assert_same();
 }
 
 /// Locals with variables 1, 2 and 9 (values set), an action list of three entries, and a master
@@ -430,63 +444,59 @@ fn locals(e: &mut Engine, master: bool) -> u32 {
 
 #[test]
 fn scripts_set_variable_and_action_flags() {
-    common(Diff::new(entry!(
-        0x005a_9290,
-        run::set_variable(Ptr<_>, u32, f64)
-    )))
-    .inputs(&[
-        Input::Of(&[1, 2, 9, 5]),
-        // The double's high word (its low word is 1): 1.5, a tiny number, a signalling NaN with
-        // and without its sign.
-        Input::Of(&[0x3ff8_0000, 0, 0x7ff0_0000, 0xfff4_0000]),
-        Input::Flag,
-        Input::Flag,
-        Input::Flag,
-        Input::Of(&[0, 1, 2]),
-        Input::Flag,
-    ])
-    .max_cases(768)
-    .setup(|e, case| {
-        world(e);
-        let l = locals(e, case.word(2) != 0);
-        let save = e.mem.alloc(0x200);
-        e.mem.set_u32(save + 0x1c4, 0x0050_1000);
-        e.mem.set_u32(SAVE_LOAD_GAME, save);
-        e.mem.set_u32(ANSWER_LOADING, case.word(3));
-        let header = if case.word(4) != 0 {
-            let h = e.mem.alloc(8);
-            e.mem.set_u32(h, 0x0001_2345);
-            h
-        } else {
-            0
-        };
-        e.mem.set_u32(ANSWER_HEADER, header);
-        let (form, cast) = match case.word(5) {
-            0 => (0, 0),
-            1 => (0x0077_0000, 0),
-            _ => (0x0077_0000, 0x0077_0000),
-        };
-        e.mem.set_u32(ANSWER_FORM, form);
-        e.mem.set_u32(ANSWER_CAST, cast);
-        e.mem.set_u32(ANSWER_NAME, case.word(6) * 0x0050_2000);
-        // The double: high word from the input, low word a pattern (a signalling NaN's payload).
-        vec![l, case.word(0), 0x0000_0001, case.word(1)]
-    })
-    .run()
-    .assert_same();
-    common(Diff::new(entry!(
-        0x005a_8ea0,
-        run::clear_action_flags(Ptr<_>)
-    )))
-    .inputs(&[Input::Flag])
-    .setup(|e, case| {
-        world(e);
-        let l = locals(e, false);
-        if case.word(0) != 0 {
-            e.mem.set_u32(l + 8, 0);
-        }
-        vec![l]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x005a_9290, run::set_variable(Ptr<_>, u32, f64)))
+        .common()
+        .inputs(&[
+            Input::Of(&[1, 2, 9, 5]),
+            // The double's high word (its low word is 1): 1.5, a tiny number, a signalling NaN with
+            // and without its sign.
+            Input::Of(&[0x3ff8_0000, 0, 0x7ff0_0000, 0xfff4_0000]),
+            Input::Flag,
+            Input::Flag,
+            Input::Flag,
+            Input::Of(&[0, 1, 2]),
+            Input::Flag,
+        ])
+        .max_cases(768)
+        .setup(|e, case| {
+            world(e);
+            let l = locals(e, case.word(2) != 0);
+            let save = e.mem.alloc(0x200);
+            e.mem.set_u32(save + 0x1c4, 0x0050_1000);
+            e.mem.set_u32(SAVE_LOAD_GAME, save);
+            e.mem.set_u32(ANSWER_LOADING, case.word(3));
+            let header = if case.word(4) != 0 {
+                let h = e.mem.alloc(8);
+                e.mem.set_u32(h, 0x0001_2345);
+                h
+            } else {
+                0
+            };
+            e.mem.set_u32(ANSWER_HEADER, header);
+            let (form, cast) = match case.word(5) {
+                0 => (0, 0),
+                1 => (0x0077_0000, 0),
+                _ => (0x0077_0000, 0x0077_0000),
+            };
+            e.mem.set_u32(ANSWER_FORM, form);
+            e.mem.set_u32(ANSWER_CAST, cast);
+            e.mem.set_u32(ANSWER_NAME, case.word(6) * 0x0050_2000);
+            // The double: high word from the input, low word a pattern (a signalling NaN's payload).
+            vec![l, case.word(0), 0x0000_0001, case.word(1)]
+        })
+        .run()
+        .assert_same();
+    Diff::new(entry!(0x005a_8ea0, run::clear_action_flags(Ptr<_>)))
+        .common()
+        .inputs(&[Input::Flag])
+        .setup(|e, case| {
+            world(e);
+            let l = locals(e, false);
+            if case.word(0) != 0 {
+                e.mem.set_u32(l + 8, 0);
+            }
+            vec![l]
+        })
+        .run()
+        .assert_same();
 }
