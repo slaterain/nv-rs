@@ -7,16 +7,49 @@
 use crate::session::{self, Event};
 use std::io::{Read, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 /// What the player types goes to the running program's input.
 static INPUT: Mutex<Option<ChildStdin>> = Mutex::new(None);
 
+/// A launcher window that takes typed lines is there ([`window_takes_lines`]): set only by the
+/// window once it shows, cleared when Play goes on in Windows' message boxes instead.
+static WINDOW: AtomicBool = AtomicBool::new(false);
+
+/// The window was closed since the work started ([`close_input`], [`reopen`]).
+static CLOSED: AtomicBool = AtomicBool::new(false);
+
+/// Whether a launcher window takes typed lines from now on.
+pub fn window_takes_lines(yes: bool) {
+    WINDOW.store(yes, Ordering::Relaxed);
+}
+
+/// Whether a launcher window takes typed lines now (else a program that asks questions runs in
+/// a console of its own, or with its input closed).
+pub fn window_lines() -> bool {
+    WINDOW.load(Ordering::Relaxed)
+}
+
+/// Whether a started program keeps its input for the player's lines: only with a window that
+/// takes them and not closed since the work started.
+pub fn keeps_input(window: bool, closed: bool) -> bool {
+    window && !closed
+}
+
+/// A new work starts: the program it runs keeps its input again (unless the window closes first).
+pub fn reopen() {
+    if let Ok(_input) = INPUT.lock() {
+        CLOSED.store(false, Ordering::Relaxed);
+    }
+}
+
 /// The window was closed: the program's input ends, so a question it asks reads an empty answer
 /// (play.sh stops or leaves the saves where they are; the mod installer finishes) instead of
-/// waiting for one that never comes.
+/// waiting for one that never comes; a program not started yet starts with its input closed.
 pub fn close_input() {
     if let Ok(mut input) = INPUT.lock() {
+        CLOSED.store(true, Ordering::Relaxed);
         *input = None;
     }
 }
@@ -49,14 +82,16 @@ pub fn run(mut command: Command, what: &str, on_line: fn(&str)) -> i32 {
             return 127;
         }
     };
-    // With no window (scripted runs) nobody will type: the program's questions read an empty
-    // answer at once, as play.sh and the installer do with their input closed.
-    if session::has_window() {
-        if let Ok(mut input) = INPUT.lock() {
+    // With no window that takes lines, or one closed already, nobody will type: the program's
+    // questions read an empty answer at once, as play.sh and the installer do with their input
+    // closed. Checked and stored under the lock [`close_input`] takes, so a close cannot slip
+    // between.
+    if let Ok(mut input) = INPUT.lock() {
+        if keeps_input(window_lines(), CLOSED.load(Ordering::Relaxed)) {
             *input = child.stdin.take();
+        } else {
+            drop(child.stdin.take());
         }
-    } else {
-        drop(child.stdin.take());
     }
     let readers: Vec<_> = [
         child
@@ -76,7 +111,9 @@ pub fn run(mut command: Command, what: &str, on_line: fn(&str)) -> i32 {
         let _ = r.join();
     }
     let status = child.wait().ok().and_then(|s| s.code()).unwrap_or(1);
-    close_input();
+    if let Ok(mut input) = INPUT.lock() {
+        *input = None;
+    }
     status
 }
 
@@ -108,6 +145,9 @@ fn forward(mut pipe: Box<dyn Read + Send>, on_line: fn(&str)) {
 mod tests {
     use super::*;
 
+    /// The tests change the run-wide flags: one at a time.
+    static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+
     static LINES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
     fn heard(line: &str) {
@@ -117,28 +157,53 @@ mod tests {
             .push(line.trim_end_matches('\r').to_string());
     }
 
-    /// A program's whole lines (its output and its errors) reach `on_line`, its exit code comes
-    /// back, and with no window its input is closed at once (a question reads an empty answer and
-    /// the program goes on): every system, through its own shell.
-    #[test]
-    fn lines_and_the_exit_code_come_back_and_no_window_closes_the_input() {
+    /// Each system's own shell: prints a line, reads one (a question), prints one more on its
+    /// errors, ends with 3.
+    fn asking_shell() -> Command {
         #[cfg(windows)]
-        let mut c = {
+        let c = {
             let mut c = Command::new("cmd");
             c.args(["/C", "echo one& set /p a=& echo two 1>&2& exit 3"]);
             c
         };
         #[cfg(not(windows))]
-        let mut c = {
+        let c = {
             let mut c = Command::new("sh");
             c.args(["-c", "echo one; read a; echo two >&2; exit 3"]);
             c
         };
-        c.env("NV_RS_PIPED_TEST", "1");
-        assert_eq!(run(c, "the test's shell", heard), 3);
+        c
+    }
+
+    /// A program's whole lines (its output and its errors) reach `on_line`, its exit code comes
+    /// back, and with no window that takes lines its input is closed at once (a question reads
+    /// an empty answer and the program goes on): every system, through its own shell.
+    #[test]
+    fn lines_and_the_exit_code_come_back_and_no_window_closes_the_input() {
+        let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+        window_takes_lines(false);
+        reopen();
+        assert_eq!(run(asking_shell(), "the test's shell", heard), 3);
         let lines = LINES.lock().unwrap().clone();
         assert!(lines.contains(&"one".to_string()), "{lines:?}");
         assert!(lines.iter().any(|l| l.trim() == "two"), "{lines:?}");
+    }
+
+    /// A window closed before the program starts (Play's work not spawned yet): the program
+    /// starts with its input closed and does not wait for a line nobody sends; a new work keeps
+    /// its input again.
+    #[test]
+    fn a_window_closed_before_the_start_closes_the_input() {
+        let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+        window_takes_lines(true);
+        close_input();
+        assert_eq!(run(asking_shell(), "the test's shell", |_| {}), 3);
+        window_takes_lines(false);
+        assert!(keeps_input(true, false));
+        assert!(!keeps_input(true, true));
+        assert!(!keeps_input(false, false));
+        reopen();
+        assert!(!CLOSED.load(Ordering::Relaxed));
     }
 
     /// A program that cannot be started ends as 127.
