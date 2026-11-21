@@ -250,6 +250,7 @@ None of these is for players.
 | `NV_MOVE_TSV`*, `NV_DATA`, `NV_CAPTURE`, `NV_FEET` | Inputs of the ignored live tests (`crates/host/tests`, `crates/engine/tests`) | none |
 | **Frames, sound and logs** | | |
 | `NV_SHOT=DIR[,every_ms]`*, `NV_SHOT_FRAMES=FROM-TO`, `NV_SHOT_LIST`, `NV_SHOT_WGPU=DIR` | Screenshots of the game's frames to DIR; only those presents; a list of presents; the wgpu backend's own folder (on wgpu alone in a window, the frame the window got is captured too, as `wgpu-window-*.bmp`) | off |
+| `NV_HITCH_LOG=0` | Turns the hitch log off. On (the default), every frame of at least 8 ms (6 ms above 250 fps) and twice the typical frame writes one `hitch:` line to the log (where, the frame's stages, the one-off work counted in it, a likely cause) and an F12 report gets the session's lines as `hitches.txt` (`crates/host/src/hitch_log.rs`) | on |
 | `NV_FRAME_LOG=FILE`* | One line per main frame (clock, step, player position), with no per-call cost | off |
 | `NV_STAGE_TIME=1`* | With `NV_FRAME_LOG`: each line also gives the frame's stages on main, the drawing steps after the world pass, the world draw's halves, and the drawing thread's job and waits by join (`crates/engine-core/src/stage_time.rs`) | off |
 | `NV_LOCK_STATS=FILE`*, `NV_REAL_DUMP`* | Real threads: a line per main frame on the game clock and the waits; a dump of thread-local-storage misuse | off |

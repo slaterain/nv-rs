@@ -85,6 +85,16 @@ carried out (`shown`, `shown_qpc`), and that frame's time from its poll to its P
 (`input_to_present_us`); every 1000 frames a `# input to present` line gives the median and the 95th
 percentile since the last one.
 
+The hitch log (on in every run; `NV_HITCH_LOG=0` turns it off; `crates/host/src/hitch_log.rs`) writes one `hitch:`
+line for each frame of at least 8 ms (6 ms where the median is under 4 ms) and twice the median of the last 128 frames that were not loading screens
+(at most 20 lines in any 10 s): the frame against the typical one (`big` from 16 ms), the player's cell, the
+frame's stages (`NV_STAGE_TIME`'s points, timed with the log on: about ten clock reads a frame), the one-off work
+counted in it (files opened and bytes read on main, main's waits for other threads, locks, the render thread and
+in Present, guest heap blocks, Direct3D objects created and bytes uploaded, pipelines and shader modules made,
+sound buffers, cells attached and detached, saves, loads, script compiles: `crates/engine-core/src/hitch.rs`,
+`crates/d3d9-stream/src/hitch.rs`) and a plain-word guess of the main cause. An F12 report carries the session's
+last 1000 lines as `hitches.txt`. It changes nothing in the game.
+
 `NV_STAGE_TIME=1` with `NV_FRAME_LOG` adds columns to each line (`crates/engine-core/src/stage_time.rs`, a
 measuring aid for the drawing thread): the frame's stages on main (`st_u` to `st_p2`, between OnIdle's entry,
 `Main::Swap` around the frame's draw, the world draw's cut and end, and `WaitForThreads`; `st_cut_to_idle` and
