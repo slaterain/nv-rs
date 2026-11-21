@@ -181,6 +181,11 @@ pub const INVENTORY_WEIGHT_NOT_MINUS_ONE: Row = fix(33);
 /// `004c0cf0`): unequipping a backpack also refreshes what the actor is shown wearing, as power and
 /// heavy armor already do (the biped flags `& 0xA4`).
 pub const NPC_BACKPACK_UPDATE: Row = fix(34);
+/// S0151 `patchFixWeaponModHealthResetting` (bytes at `0x4BD07C`, `GetContChangeMaxHealth` at
+/// `0x4BD07F` in `ItemChange::SetItemHealth` `004bd030`): an item's full health counts a weapon's
+/// "increase max condition" mod, so a modded weapon repaired to its unmodded maximum keeps its
+/// health record instead of losing it (and showing full condition).
+pub const WEAPON_MOD_HEALTH_KEPT: Row = fix(35);
 
 /// `OSInputGlobals *` (xNVSE's `0x11F35CC`).
 pub const INPUT_GLOBALS: u32 = 0x011f_35cc;

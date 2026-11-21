@@ -1282,7 +1282,13 @@ pub fn item_change_set_item_health(
             ],
         )
         .u32();
-    let form_health = e.call(GET_FORM_HEALTH, &args![form]).i32();
+    let form_health = if e.stewie(engine_core::extend::stewie::WEAPON_MOD_HEALTH_KEPT) {
+        // lStewieAl's Tweaks' S0151 (bytes at `0x4BD07C`, `GetContChangeMaxHealth` called at
+        // `0x4BD07F` with the entry in place of `GetFormHealth(form)`).
+        modded_max_health(e, this, form)
+    } else {
+        e.call(GET_FORM_HEALTH, &args![form]).i32()
+    };
     let current = item_change_get_item_health(e, this, false);
     let current = float_to_int(e, current as f64);
     // InventoryChanges::pRef (Xbox PDB) +4.
@@ -4942,6 +4948,48 @@ mod s0128_tests {
         assert_eq!(run(false, 0x8000), shown);
         assert_eq!(run(true, 0x7000), shown);
         assert!(run(true, 0x8000).is_empty());
+    }
+
+    /// lStewieAl's Tweaks' S0151 `GetContChangeMaxHealth`: a weapon whose mod flags include a slot
+    /// with "increase max condition" (10) adds every slot's value for that effect; without such
+    /// an active slot, or for armor, the form's health; other forms 0.
+    #[test]
+    fn s0151_the_max_health_counts_the_condition_mod() {
+        let run = |kind: u8, flags: u32| {
+            let mut e = Engine::new();
+            let form = e.mem.alloc(0x200);
+            e.mem.set_u8(form + 4, kind);
+            for (slot, (effect, value)) in [(10u32, 25.5f32), (1, 99.0), (10, 4.0)]
+                .into_iter()
+                .enumerate()
+            {
+                e.mem.set_u32(form + 0x180 + 4 * slot as u32, effect);
+                e.mem.set_f32(form + 0x18c + 4 * slot as u32, value);
+            }
+            let this: Ptr<ItemChange> = e.new_object();
+            let node = e.mem.alloc(8);
+            e.mem.set_u32(node, 0x5000);
+            e.set(this, ItemChange::pExtraObjectList, Ptr::new(node));
+            e.register(GET_FORM_HEALTH, |_, _| Ret {
+                eax: 100,
+                ..Ret::default()
+            });
+            e.register(EXTRA_HAS_WEAPON_MODS, |_, _| Ret {
+                eax: 1,
+                ..Ret::default()
+            });
+            e.register_double(EXTRA_GET_WEAPON_MOD_FLAGS, move |_, _| Ret {
+                eax: flags,
+                ..Ret::default()
+            });
+            modded_max_health(&mut e, this, form)
+        };
+        assert_eq!(run(0x28, 0b001), 129);
+        assert_eq!(run(0x28, 0b100), 129);
+        assert_eq!(run(0x28, 0b010), 100);
+        assert_eq!(run(0x28, 0), 100);
+        assert_eq!(run(0x18, 0b001), 100);
+        assert_eq!(run(0x2f, 0b001), 0);
     }
 
     /// lStewieAl's Tweaks' S0152: with the row the biped flags decide (backpack 0x4, heavy 0x20,
@@ -9786,6 +9834,43 @@ fn heavy_weapon_adjusted(e: &mut Engine, weight: f32) -> f32 {
         return (weight as f64 * factor as f64) as f32;
     }
     weight
+}
+
+/// lStewieAl's Tweaks' `GetContChangeMaxHealth(entry)` (S0151): a weapon's (form type 0x28)
+/// health plus, when one of its three mods in the entry's first extra list's mod flags is "increase
+/// max condition" (effect 10), the sum of the weapon's mod values for that effect (`effectMods`
+/// `+0x180`, `value1Mod` `+0x18C`), truncated; an armor's (0x18) health; else 0. The health is the
+/// form's (`TESHealthForm`, the value `GetFormHealth` answers).
+fn modded_max_health(e: &mut Engine, this: Ptr<ItemChange>, form: u32) -> i32 {
+    const INCREASE_MAX_CONDITION: u32 = 10;
+    let kind = e.mem.u8(form.wrapping_add(4));
+    if kind != 0x28 && kind != 0x18 {
+        return 0;
+    }
+    let health = e.call(GET_FORM_HEALTH, &args![form]).i32();
+    if kind == 0x18 {
+        return health;
+    }
+    let extra = first_item(e, this);
+    let flags = if extra != 0 && e.call(EXTRA_HAS_WEAPON_MODS, &args![extra]).bool() {
+        e.call(EXTRA_GET_WEAPON_MOD_FLAGS, &args![extra]).u8()
+    } else {
+        0
+    };
+    let modded = (0..3u32).rev().any(|slot| {
+        flags & (1 << slot) != 0
+            && e.mem.u32(form.wrapping_add(0x180 + 4 * slot)) == INCREASE_MAX_CONDITION
+    });
+    if !modded {
+        return health;
+    }
+    let mut bonus = 0.0f32;
+    for slot in 0..3u32 {
+        if e.mem.u32(form.wrapping_add(0x180 + 4 * slot)) == INCREASE_MAX_CONDITION {
+            bonus += e.mem.f32(form.wrapping_add(0x18c + 4 * slot));
+        }
+    }
+    (health as f32 + bonus) as i32
 }
 
 /// Whether unequipping armor with the biped model `biped` refreshes what the actor is shown

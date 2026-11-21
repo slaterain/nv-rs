@@ -235,6 +235,14 @@ pub const ROWS: &[Row] = &[
         summary: "changes the look: the sun's light comes from the side of the sky its disc is on (north or south), not the mirror side; nothing with the new lighting's light from the sky",
     },
     Row {
+        bit: stewie::WEAPON_MOD_HEALTH_KEPT,
+        function: "patchFixWeaponModHealthResetting",
+        plan: "S0151",
+        key: "bFixWeaponModHealthResetting",
+        tweaks: None,
+        summary: "a weapon with a condition mod no longer resets to full condition when its health equals the unmodded maximum",
+    },
+    Row {
         bit: stewie::NPC_BACKPACK_UPDATE,
         function: "patchFixNPCBackpackNotUpdating",
         plan: "S0152",
