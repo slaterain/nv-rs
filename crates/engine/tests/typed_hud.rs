@@ -198,22 +198,29 @@ fn world(e: &mut Engine) {
     e.mem.set_f32(0x011d_979c, 200.0);
 }
 
-fn families(d: Diff) -> Diff {
-    d.family(&hud::HUD)
-        .family(&dispatch::DISPATCH)
-        .family(&pathing::PATHING)
-        .family(&crt::CRT)
-        .family(&multibound::MULTIBOUND)
-        .family(&leaf::LEAVES)
-        // The typed code reads the settings, interpolates and takes the differences and the squared
-        // length in its own body: the translation's getter (`0043d4d0`), interpolation (`004b3ab0`),
-        // point difference (`00439ef0`) and squared length (`004a7290`) calls are left out.
-        .ignore_calls(&[0x0043_d4d0, 0x004b_3ab0, 0x0043_9ef0, 0x004a_7290])
-        // The translated tile getters and setters (reached by address from the translated compass)
-        // find and make the trait value and insert it by plain Rust calls; the typed ones by
-        // `typed_call!` (as in `menu_tiles`).
-        .translation_calls_plainly(&[0x00a0_0f30, 0x00a0_1000, 0x00a0_cd50, 0x0040_8860])
-        .float_ulps(ULPS)
+/// The families and the comparison settings every test of this file uses.
+trait Families {
+    fn families(self) -> Diff;
+}
+
+impl Families for Diff {
+    fn families(self) -> Diff {
+        self.family(&hud::HUD)
+            .family(&dispatch::DISPATCH)
+            .family(&pathing::PATHING)
+            .family(&crt::CRT)
+            .family(&multibound::MULTIBOUND)
+            .family(&leaf::LEAVES)
+            // The typed code reads the settings, interpolates and takes the differences and the squared
+            // length in its own body: the translation's getter (`0043d4d0`), interpolation (`004b3ab0`),
+            // point difference (`00439ef0`) and squared length (`004a7290`) calls are left out.
+            .ignore_calls(&[0x0043_d4d0, 0x004b_3ab0, 0x0043_9ef0, 0x004a_7290])
+            // The translated tile getters and setters (reached by address from the translated compass)
+            // find and make the trait value and insert it by plain Rust calls; the typed ones by
+            // `typed_call!` (as in `menu_tiles`).
+            .translation_calls_plainly(&[0x00a0_0f30, 0x00a0_1000, 0x00a0_cd50, 0x0040_8860])
+            .float_ulps(ULPS)
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -221,10 +228,11 @@ fn families(d: Diff) -> Diff {
 
 #[test]
 fn set_strip_diff() {
-    families(Diff::new(engine_core::entry!(
+    Diff::new(engine_core::entry!(
         0x0077_a450,
         hud::compass::set_strip(Ptr<_>, f32, f32)
-    )))
+    ))
+    .families()
     .inputs(&[Input::F32, Input::F32])
     .setup(|e, case| {
         world(e);
@@ -237,10 +245,11 @@ fn set_strip_diff() {
 
 #[test]
 fn player_marker_diff() {
-    families(Diff::new(engine_core::entry!(
+    Diff::new(engine_core::entry!(
         0x0077_a400,
         hud::compass::player_marker(Ptr<_>) -> Ptr
-    )))
+    ))
+    .families()
     .inputs(&[Input::Of(&[0, 1, 3])])
     .setup(|e, case| {
         world(e);
@@ -295,10 +304,11 @@ fn heading_of(e: &mut Engine) {
 
 #[test]
 fn compass_angle_diff() {
-    families(Diff::new(engine_core::entry!(
+    Diff::new(engine_core::entry!(
         0x0077_8b80,
         hud::compass::compass_angle(f32, f32, f32, f32, f32, f32) -> f32
-    )))
+    ))
+    .families()
     .inputs(&[
         Input::F32,
         Input::F32Swept(0x4120_0000),
@@ -324,10 +334,11 @@ fn blink_tile_diff() {
     // The tile's `_AlphaDown` (none, 0 rising, 1 falling, 3 held, 2 other); its alpha; its next
     // time; the period (clamped to 100 or 900, below or above the breakpoint 400); the amplitude;
     // the HUD's alpha (0, 200, NaN); the guard of `_AlphaDown` set or not.
-    families(Diff::new(engine_core::entry!(
+    Diff::new(engine_core::entry!(
         0x0077_8c20,
         hud::compass::blink_tile(Ptr<_>, f32, f32)
-    )))
+    ))
+    .families()
     .inputs(&[
         Input::Of(&[0xffff_ffff, 0, 1, 3, 2]),
         Input::Of(&[0, 0x4248_0000, 0xc000_0000, 0x4348_0000]),
@@ -606,10 +617,11 @@ fn compass_world(e: &mut Engine, case: &Case) -> Vec<u32> {
 
 #[test]
 fn update_compass_diff() {
-    families(Diff::new(engine_core::entry!(
+    Diff::new(engine_core::entry!(
         0x0077_9070,
         hud::compass::update_compass(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>)
-    )))
+    ))
+    .families()
     .inputs(&[
         Input::Flag,
         Input::Of(&[0, 1, 2, 0x3c, 0x5e, 0x3ff]),

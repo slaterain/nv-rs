@@ -14,7 +14,7 @@ use crate::dispatch::tile;
 use crate::{crt, dispatch};
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
-use engine_core::x87::x87_quiet;
+use engine_core::x87::{fistp_chop64, x87_quiet};
 use engine_core::{args, typed_call, Engine};
 
 const PLAYER: u32 = 0x011d_ea3c;
@@ -119,7 +119,6 @@ const ARRAY_REMOVE: u32 = 0x006b_f8f0;
 const NEXT_SUBTITLE: u32 = 0x0077_5230;
 const LIST_COUNT: u32 = 0x005a_e380;
 const HIDE_MESSAGE: u32 = 0x0077_56e0;
-const FTOL: u32 = 0x00ec_62c0;
 
 /// JIP LN NVSE's places in the update: H21 at the HUD tiles' update (`0x7704AE`, a fix row), O14
 /// at the sneak test (`0x770B0E`, `bSneakBoundingBoxFix`) and G10 at the corner message's display
@@ -197,7 +196,7 @@ fn opacity_alpha(e: &mut Engine) -> f32 {
 
 /// `_ftol2` of a double the exe has on the x87 stack (an `ST0` answer of a settings getter).
 fn to_int(e: &mut Engine, value: f64) -> i32 {
-    let low = typed_call!(crt::FAMILY, FTOL, crt::math::ftol2_sse(e, value));
+    let low = typed_call!(crt::FAMILY, 0x00ec_62c0, crt::math::ftol2_sse(e, value));
     i32::from_ne_bytes(crt::low_word(low).to_ne_bytes())
 }
 
@@ -210,16 +209,9 @@ fn seconds_to_ms(e: &Engine, seconds: f32) -> f64 {
 }
 
 /// `FISTP qword` under a truncating control word (`OR 0xC00`), its low word.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn truncate_low(value: f64) -> u32 {
-    let converted = if value.is_finite()
-        && (-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&value)
-    {
-        value.trunc() as i64
-    } else {
-        i64::MIN
-    };
-    converted as u32
+    let bytes = fistp_chop64(value).to_le_bytes();
+    u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
 }
 
 /// The HUD tiles' update (`0x7704AE`): JIP's H21 seam first while JIP's fixes are in (its answer

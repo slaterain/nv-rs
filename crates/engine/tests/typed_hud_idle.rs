@@ -158,18 +158,25 @@ fn world(e: &mut Engine) {
     e.mem.set_f32(0x011d_979c, 200.0);
 }
 
-fn families(d: Diff) -> Diff {
-    d.family(&dispatch::DISPATCH)
-        .family(&pathing::PATHING)
-        .family(&crt::CRT)
-        .family(&leaf::LEAVES)
-        // The typed update reads the reminder delay's integer itself: the translation's getter
-        // (`0043d4d0`) is left out.
-        .ignore_calls(&[0x0043_d4d0])
-        .translation_calls_plainly(&[0x00a0_0f30, 0x00a0_1000, 0x00a0_cd50, 0x0040_8860])
-        // The main thread's word (the `hud` family's threads).
-        .control_words(&[0x007f])
-        .float_ulps(ULPS)
+/// The families and the comparison settings every test of this file uses.
+trait Families {
+    fn families(self) -> Diff;
+}
+
+impl Families for Diff {
+    fn families(self) -> Diff {
+        self.family(&dispatch::DISPATCH)
+            .family(&pathing::PATHING)
+            .family(&crt::CRT)
+            .family(&leaf::LEAVES)
+            // The typed update reads the reminder delay's integer itself: the translation's getter
+            // (`0043d4d0`) is left out.
+            .ignore_calls(&[0x0043_d4d0])
+            .translation_calls_plainly(&[0x00a0_0f30, 0x00a0_1000, 0x00a0_cd50, 0x0040_8860])
+            // The main thread's word (the `hud` family's threads).
+            .control_words(&[0x007f])
+            .float_ulps(ULPS)
+    }
 }
 
 /// The HUD's tile offsets the update reads.
@@ -461,26 +468,24 @@ fn idle_world(e: &mut Engine, case: &Case) -> Vec<u32> {
 
 #[test]
 fn do_idle_diff() {
-    families(Diff::new(engine_core::entry!(
-        0x0077_0430,
-        hud::idle::do_idle(Ptr<_>)
-    )))
-    .inputs(&[
-        Input::Of(&[0, 1, 2]),
-        Input::Of(&[0, 1, 2]),
-        Input::Of(&[0, 1, 2, 3]),
-        Input::Of(&[0, 1, 2, 3]),
-        Input::Of(&[0, 1, 2, 3, 4, 6, 7]),
-        Input::Of(&[0, 1, 2, 3, 7, 0xb, 0x18, 0x1a, 0x1f]),
-        Input::Of(&[0, 1, 3, 0x13, 0x17, 0x19, 0x33, 0x53, 0x93, 0x0b, 0xf3]),
-        Input::Of(&[0, 1, 2, 4, 6, 8, 0x10, 0x20, 0x60, 0x21]),
-        Input::Of(&[0, 1, 2, 3]),
-        Input::F32Swept(0x3f00_0000),
-        Input::F32Swept(0x44a0_0000),
-    ])
-    .max_cases(96)
-    .float_sweep(4)
-    .setup(idle_world)
-    .run()
-    .assert_same();
+    Diff::new(engine_core::entry!(0x0077_0430, hud::idle::do_idle(Ptr<_>)))
+        .families()
+        .inputs(&[
+            Input::Of(&[0, 1, 2]),
+            Input::Of(&[0, 1, 2]),
+            Input::Of(&[0, 1, 2, 3]),
+            Input::Of(&[0, 1, 2, 3]),
+            Input::Of(&[0, 1, 2, 3, 4, 6, 7]),
+            Input::Of(&[0, 1, 2, 3, 7, 0xb, 0x18, 0x1a, 0x1f]),
+            Input::Of(&[0, 1, 3, 0x13, 0x17, 0x19, 0x33, 0x53, 0x93, 0x0b, 0xf3]),
+            Input::Of(&[0, 1, 2, 4, 6, 8, 0x10, 0x20, 0x60, 0x21]),
+            Input::Of(&[0, 1, 2, 3]),
+            Input::F32Swept(0x3f00_0000),
+            Input::F32Swept(0x44a0_0000),
+        ])
+        .max_cases(96)
+        .float_sweep(4)
+        .setup(idle_world)
+        .run()
+        .assert_same();
 }
