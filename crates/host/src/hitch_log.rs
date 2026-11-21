@@ -442,6 +442,29 @@ impl Frame {
         self.s(S::PresentWaitNs) + self.s(S::ReplyWaitNs) + self.s(S::QueueFullNs)
     }
 
+    /// What the render thread's presents of the frame waited on, the largest first, when one is 1 ms or more: the
+    /// queue thread's last frame (`sync`), the window's next frame (with the Fifo present mode, the display's refresh)
+    /// and the present call itself.
+    fn render_reason(&self) -> String {
+        use engine_platform::stream_hitch::Count as S;
+        let mut parts = [
+            (self.s(S::AcquireNs), "the window's next frame"),
+            (self.s(S::RenderSyncNs), "the queue thread's last frame"),
+            (self.s(S::SwapNs), "the present call"),
+        ];
+        parts.sort_by(|a, b| b.0.cmp(&a.0));
+        let said: Vec<String> = parts
+            .iter()
+            .filter(|(ns, _)| *ns >= 1_000_000)
+            .map(|(ns, w)| format!("{w} {:.0} ms", ms(*ns)))
+            .collect();
+        if said.is_empty() {
+            String::new()
+        } else {
+            format!(" (it waited for {})", said.join(", "))
+        }
+    }
+
     /// The plain-word guess of the frame's main cause, by simple rules over its counts.
     pub fn cause(&self) -> String {
         use engine_platform::stream_hitch::Count as S;
@@ -522,7 +545,11 @@ impl Frame {
         if render > 0 {
             said.push((
                 ms(render),
-                format!("waited {:.0} ms for the render thread", ms(render)),
+                format!(
+                    "waited {:.0} ms for the render thread{}",
+                    ms(render),
+                    self.render_reason()
+                ),
             ));
         }
         let made = self.s(S::PipelineNs) + self.s(S::ModuleNs);
@@ -780,6 +807,15 @@ impl Frame {
         put(
             self.s(S::PresentWaitNs) / TENTH_MS,
             format!("waited in Present {:.1} ms", ms(self.s(S::PresentWaitNs))),
+        );
+        put(
+            (self.s(S::AcquireNs) + self.s(S::RenderSyncNs) + self.s(S::SwapNs)) / TENTH_MS,
+            format!(
+                "the render thread waited {:.1} ms for the window's frame, {:.1} for the queue thread, {:.1} in the present call",
+                ms(self.s(S::AcquireNs)),
+                ms(self.s(S::RenderSyncNs)),
+                ms(self.s(S::SwapNs))
+            ),
         );
         put(
             self.s(S::ReplyWaitNs) / TENTH_MS,
@@ -1477,6 +1513,31 @@ mod tests {
         assert!(
             f.line()
                 .contains("the critical section's owner: section 01200010"),
+            "{}",
+            f.line()
+        );
+
+        // A wait for the render thread named by what its present waited on.
+        let mut f = frame();
+        f.ms = 35.2;
+        f.typical = 16.4;
+        f.stages = Some([1.6, 0.1, 3.8, 4.3, 0.4, 19.9, 2.4, 2.7, 0.1]);
+        {
+            use engine_platform::stream_hitch::Count as S;
+            f.stream[S::PresentWaitNs as usize] = 19_700_000;
+            f.stream[S::AcquireNs as usize] = 16_200_000;
+            f.stream[S::RenderSyncNs as usize] = 2_100_000;
+            f.stream[S::SwapNs as usize] = 300_000;
+        }
+        assert_eq!(
+            f.cause(),
+            "waited 20 ms for the render thread (it waited for the window's next frame 16 ms, the queue thread's last \
+             frame 2 ms)"
+        );
+        assert!(
+            f.line().contains(
+                "the render thread waited 16.2 ms for the window's frame, 2.1 for the queue thread"
+            ),
             "{}",
             f.line()
         );

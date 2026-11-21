@@ -22,10 +22,16 @@ pub enum Count {
     PipelineNs,
     Modules,
     ModuleNs,
+    /// The render thread's present, split (ns): waiting for the queue thread to finish the last frame's work and
+    /// present (`sync`), waiting for the window's next frame (`get_current_texture`: with the Fifo present mode the
+    /// wait for a free swap-chain image, so for the display's refresh), and the queue thread's present call itself.
+    RenderSyncNs,
+    AcquireNs,
+    SwapNs,
 }
 
 /// How many counts there are.
-pub const COUNTS: usize = Count::ModuleNs as usize + 1;
+pub const COUNTS: usize = Count::SwapNs as usize + 1;
 
 #[allow(clippy::declare_interior_mutable_const)]
 const ZERO: AtomicU64 = AtomicU64::new(0);
