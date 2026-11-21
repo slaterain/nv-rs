@@ -203,7 +203,7 @@ pub fn leaf(e: &mut Engine, leaf: Leaf, body: impl FnOnce(&mut Engine)) {
         }
         match k.leaves.as_mut() {
             Some(leaves) => {
-                e.mem.store_log_mark(MARK_LEAF, leaves.len() as u32);
+                e.mem.store_log_mark(MARK_LEAF, n32(leaves.len()));
                 leaves.push(leaf);
                 true
             }
@@ -334,6 +334,11 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
     report();
 }
 
+/// A length or an index as a guest word (they are far below 4 G here).
+fn n32(n: usize) -> u32 {
+    u32::try_from(n).unwrap_or(u32::MAX)
+}
+
 /// Why a record was built again.
 #[derive(Clone, Copy)]
 enum Break {
@@ -398,8 +403,8 @@ fn assemble(
                 MARK_LEAF => ops.extend(leaves.get(index(&bytes)).copied().map(Op::Leaf)),
                 MARK_READ => {
                     if let Some((addr, value)) = reads.get(index(&bytes)) {
-                        let own = (0..value.len() as u32)
-                            .all(|i| written.contains(&addr.wrapping_add(i)));
+                        let own =
+                            (0..n32(value.len())).all(|i| written.contains(&addr.wrapping_add(i)));
                         if !own && read_at.insert(*addr) {
                             inputs.push((*addr, value.clone()));
                         }
@@ -407,8 +412,8 @@ fn assemble(
                 }
                 // A write inside a kept call: made again by the call, so no op; but what it wrote is the set-up's own.
                 STORE_LOG_QUIET if bytes.len() == 8 => {
-                    let addr = index(&bytes[..4]) as u32;
-                    for i in 0..index(&bytes[4..]) as u32 {
+                    let addr = n32(index(&bytes[..4]));
+                    for i in 0..n32(index(&bytes[4..])) {
                         written.insert(addr.wrapping_add(i));
                     }
                 }
@@ -416,7 +421,7 @@ fn assemble(
             }
             continue;
         }
-        for i in 0..bytes.len() as u32 {
+        for i in 0..n32(bytes.len()) {
             written.insert(at.wrapping_add(i));
         }
         ops.push(Op::Write(at, bytes));
@@ -640,7 +645,7 @@ mod tests {
             (0x5002, vec![3, 4, 0]),
             (0x7001, vec![1, 1]),
         ];
-        let r = assemble(log, &[call.clone()], &[leaf], &reads);
+        let r = assemble(log, std::slice::from_ref(&call), &[leaf], &reads);
         assert_eq!(
             r.ops,
             [

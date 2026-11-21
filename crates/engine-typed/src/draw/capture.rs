@@ -290,9 +290,12 @@ static OPEN: AtomicUsize = AtomicUsize::new(0);
 /// they read ([`note_keep_read`]) on that thread; every packet test masks it out.
 const KEEP_OPEN: usize = 1 << 24;
 
+/// [`KEEP_READS`]'s type: each read's address and the bytes read.
+type KeepReads = Option<Vec<(u32, Vec<u8>)>>;
+
 thread_local! {
     /// The reads noted while this thread builds a kept draw record: address and the bytes read, in order.
-    static KEEP_READS: RefCell<Option<Vec<(u32, Vec<u8>)>>> = const { RefCell::new(None) };
+    static KEEP_READS: RefCell<KeepReads> = const { RefCell::new(None) };
     /// Pauses of [`KEEP_READS`] in force ([`keep_reads_pause`]).
     static KEEP_READS_PAUSED: Cell<u32> = const { Cell::new(0) };
 }
@@ -344,7 +347,8 @@ fn note_keep_read(e: &Engine, addr: u32, len: u32) {
                 if e.mem.try_read(addr, &mut bytes).is_err() {
                     return;
                 }
-                e.mem.store_log_mark(KEEP_READ_MARK, v.len() as u32);
+                e.mem
+                    .store_log_mark(KEEP_READ_MARK, u32::try_from(v.len()).unwrap_or(u32::MAX));
                 v.push((addr, bytes));
             }
         });
@@ -921,7 +925,11 @@ fn copied<const N: usize>(e: &Engine, object: u32, offset: u32) -> Option<[u8; N
     if object == 0 {
         return None;
     }
-    note_keep_read(e, object.wrapping_add(offset), N as u32);
+    note_keep_read(
+        e,
+        object.wrapping_add(offset),
+        u32::try_from(N).unwrap_or(u32::MAX),
+    );
     PACKET.with(|p| {
         let p = p.borrow();
         let p = p.as_ref()?;
@@ -970,7 +978,11 @@ pub fn byte(e: &Engine, object: u32, offset: u32) -> u8 {
 #[inline(always)]
 pub fn words<const N: usize>(e: &Engine, object: u32, offset: u32) -> [u32; N] {
     if held() {
-        note_keep_read(e, object.wrapping_add(offset), 4 * N as u32);
+        note_keep_read(
+            e,
+            object.wrapping_add(offset),
+            u32::try_from(4 * N).unwrap_or(u32::MAX),
+        );
         let held = PACKET.with(|p| {
             let p = p.borrow();
             let p = p.as_ref()?;
