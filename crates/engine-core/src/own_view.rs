@@ -276,6 +276,8 @@ mod tests {
         // Past the copy, and another object.
         assert!(!v.read_into(0x5000, 0xe, &mut four));
         assert!(!v.read_into(0x6000, 0, &mut four));
-        assert_eq!((v.reads.get(), v.misses.get()), (2, 2));
+        // One more answered read, so that reads and misses differ (a swap of the two counts shows).
+        assert!(v.read_into(0x5000, 0, &mut four));
+        assert_eq!((v.reads.get(), v.misses.get()), (3, 2));
     }
 }
