@@ -283,7 +283,9 @@ fn census_note(e: &Engine, object: u32, barrier: Barrier, in_head: bool) {
         _ => (2, slot_target(e, object, SLOT_DOWNWARD)),
     };
     let key = (what, vtable, detail, in_head);
-    let mut c = CENSUS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut c = CENSUS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(entry) = c.iter_mut().find(|(k, _)| *k == key) {
         entry.1 += 1;
     } else {
@@ -296,7 +298,11 @@ fn census_print() {
     if !census_on() {
         return;
     }
-    let mut c = std::mem::take(&mut *CENSUS.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+    let mut c = std::mem::take(
+        &mut *CENSUS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    );
     c.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
     for ((what, vtable, detail, in_head), n) in c.iter().take(16) {
         let what = ["controllers", "property controllers", "class", "collision"][*what as usize];
