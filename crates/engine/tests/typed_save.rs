@@ -477,30 +477,152 @@ fn set_value() {
     .assert_same();
 }
 
-/// A whole save's worth of form ids in one run: 300 ids written through `SaveFormID` against the
-/// translation, the map growing from empty, ids repeating, created forms between them; the maps,
-/// the counter and every appended index compare.
+/// The form ids a whole save's worth of writes gives: repeats, 0, created forms (0xff prefix), and
+/// more distinct ids than a 37-bucket map has buckets, so chains fill; the last one is new.
+fn save_ids() -> Vec<u32> {
+    let mut ids: Vec<u32> = (0..300u32)
+        .map(|i| match i % 7 {
+            0 => 0xff00_0000 | i,
+            1 => i / 2,
+            2 => 0,
+            _ => 0x0001_0000 + (i * 37) % 211,
+        })
+        .collect();
+    ids.push(0x0002_0000);
+    ids
+}
+
+/// A whole save's worth of form ids written through `SaveFormID` (`00865db0`) by address, so that
+/// the loop runs the translation on one side and the typed functions on the other. Two bodies that
+/// differ only in a hint the calls never see, so the harness has two functions to compare.
+fn save_loop_typed(e: &mut Engine, buffer: Ptr, _unused: u32) {
+    for id in save_ids() {
+        e.call(0x0086_5db0, &args![buffer, id, 0u32]);
+    }
+}
+
+fn save_loop_translated(e: &mut Engine, buffer: Ptr, _unused: u32) {
+    std::hint::black_box(1u32);
+    for id in save_ids() {
+        e.call(0x0086_5db0, &args![buffer, id, 0u32]);
+    }
+}
+
+/// The loop under test: 301 ids written through `SaveFormID` into a map growing from empty (or
+/// from four held keys), every id looked up, the new ones added (the last one against the grown
+/// map); the maps, the counter and every appended index (the append's log) compare.
 #[test]
 fn many_form_ids_through_one_map() {
-    Diff::new(entry!(0x0085_3570, refs::set_numeric_id(Ptr<_>, u32)))
+    Diff::new(entry!(0x00ff_4000, save_loop_typed(Ptr<_>, u32)))
+        .translation(entry!(0x00ff_4000, save_loop_translated(Ptr<_>, u32)).1)
         .families()
-        .inputs(&[Input::Of(&[37, 1])])
+        .inputs(&[Input::Of(&[37, 1]), Input::Of(&[0, 4])])
         .setup(|e, case| {
             stand_ins(e);
-            let map = form_id_map(e, case.word(0), 0, 1);
+            let map = form_id_map(e, case.word(0), case.word(1), case.word(1).max(1));
             with_game(e, map);
-            let index = index_block(e, 0);
-            // Fill the map first through the translation, the same on every side.
-            for i in 0..300u32 {
-                let id = match i % 7 {
-                    0 => 0xff00_0000 | i,
-                    1 => i / 2,
-                    _ => 0x0001_0000 + (i * 37) % 211,
-                };
-                e.call(0x0085_3570, &args![index, id]);
-            }
-            vec![index, 0x0001_0007]
+            vec![block(e, 0x14, &[0x0108_2324, 0, 0, 0, 0]), 0]
         })
+        .max_calls(1_000_000)
         .run()
         .assert_same();
+}
+
+/// What one save-then-load gives with the family on or off: the three-byte indices `SaveFormID`
+/// wrote, the map's own `Save` (`00846e00`) bytes, and the ids `GetNumericID` reads back for each
+/// index after the map's own `Load` (`00846e70`) into a fresh map.
+fn save_and_load(mut e: Engine) -> (Vec<[u8; 3]>, Vec<u8>, Vec<u32>) {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    for page in [0x011c_3000, 0x011d_d000] {
+        e.map(page, 0x1000);
+    }
+    e.mem.set_u32(DATA_HANDLER, 0x0123_4560);
+    // The save/load manager (not only sizing), the saved bytes and the read position.
+    e.map(0x011d_e000, 0x1000);
+    let manager = block(&mut e, 0x10, &[0, 0, 0, 0]);
+    e.mem.set_u32(0x011d_e134, manager);
+    let file = Rc::new(RefCell::new((Vec::<u8>::new(), 0usize)));
+    let f = Rc::clone(&file);
+    e.register_double(0x0084_5d00, move |e, a| {
+        let bytes = e.mem.bytes(a[1], a[2]).to_vec();
+        f.borrow_mut().0.extend_from_slice(&bytes);
+        ret(a[2])
+    });
+    let f = Rc::clone(&file);
+    e.register_double(0x0084_5d20, move |e, a| {
+        let (data, at) = &mut *f.borrow_mut();
+        let n = (a[2] as usize).min(data.len() - *at);
+        let bytes = data[*at..*at + n].to_vec();
+        *at += n;
+        e.mem.write(a[1], &bytes);
+        ret(n as u32)
+    });
+    // The save/load game: the form id map at +8, the load order table at +0x44 (the same order).
+    let game = e.mem.alloc(0x250);
+    for i in 0..0xffu32 {
+        e.mem.set_u8(game + 0x44 + i, i as u8);
+    }
+    e.mem.set_u32(0x011d_df38, game);
+    // A fresh form id map of 37 buckets with index 0 kept for the null id, as its constructor
+    // (`00846b60`) leaves it.
+    let map = form_id_map(&mut e, 37, 0, 0);
+    e.call(0x0084_6c90, &args![map, 0u32]);
+    e.mem.set_u32(game + 8, map);
+    let buffer = block(&mut e, 0x14, &[0x0108_2324, 0, 0, 0, 0]);
+    for (i, id) in save_ids().into_iter().enumerate() {
+        if i % 11 == 5 {
+            // Through a form (and a null form now and then).
+            let form = if i % 22 == 5 {
+                0
+            } else {
+                block(&mut e, 0x10, &[0, 0, 0, id])
+            };
+            e.call(0x0086_5df0, &args![buffer, form, 0u32]);
+        } else {
+            e.call(0x0086_5db0, &args![buffer, id, 0u32]);
+        }
+    }
+    e.call(0x0084_6e00, &args![map, 0u32]);
+    let loaded = form_id_map(&mut e, 37, 0, 0);
+    e.call(0x0084_6e70, &args![loaded, 0u32]);
+    e.mem.set_u32(game + 8, loaded);
+    let index = e.mem.alloc(4);
+    // The indices the buffer holds: three bytes and the separator each.
+    let data = e.mem.u32(buffer + 4);
+    let length = e.mem.u32(buffer + 0xc);
+    let written: Vec<[u8; 3]> = e
+        .mem
+        .bytes(data, length)
+        .chunks(4)
+        .map(|c| [c[0], c[1], c[2]])
+        .collect();
+    let ids = written
+        .iter()
+        .map(|b| {
+            e.mem.write(index, b);
+            e.call(0x0085_3500, &args![index]).u32()
+        })
+        .collect();
+    let saved = file.borrow().0.clone();
+    (written, saved, ids)
+}
+
+/// A save-then-load round trip through the save's own map functions, with the save family off (the
+/// translations) and on: the same indices written, the same saved bytes, and every index read back
+/// as the id that was written (a null form as 0).
+#[test]
+fn save_then_load_gives_the_same_ids_with_the_family_on_and_off() {
+    let off = save_and_load(Engine::new_untyped_for_test());
+    let on = save_and_load(Engine::new());
+    assert_eq!(off.0, on.0, "the indices SaveFormID wrote");
+    assert_eq!(off.1, on.1, "the map's saved bytes");
+    assert_eq!(off.2, on.2, "the ids read back");
+    let expected: Vec<u32> = save_ids()
+        .into_iter()
+        .enumerate()
+        .map(|(i, id)| if i % 22 == 5 { 0 } else { id })
+        .collect();
+    assert_eq!(on.2, expected, "every index reads back as the id written");
+    assert!(on.1.len() > 4 * 40, "more than 37 ids were saved");
 }
