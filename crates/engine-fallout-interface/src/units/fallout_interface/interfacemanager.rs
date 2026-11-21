@@ -4542,7 +4542,12 @@ pub fn interface_manager_display_current_pick_ref(e: &mut Engine, this: Ptr<Inte
             e.call(SET_PICK_REF_DISPLAY, &args![this, pick]);
             e.set(this, InterfaceManager::pPickRef, pick);
             let form_id = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, pick));
-            let name = e.call(REFR_NAME, &args![pick]).u32();
+            // JohnnyGuitar NVSE's seam at the call `0x710BFC` (the editor id for a reference with
+            // no name, while its row is on).
+            let name = match e.site(0x0071_0bfc, &[pick]) {
+                Some(name) => name,
+                None => e.call(REFR_NAME, &args![pick]).u32(),
+            };
             e.call(
                 FORMAT_INTO_STRING,
                 &args![text, FORMAT_NAME_AND_ID, name, form_id],
@@ -10657,6 +10662,24 @@ mod tests {
         assert_eq!(printed(&e), vec![(0xd0d0, 100)]);
         assert_eq!(calls(&e, STRING_CONSTRUCT).len(), 1);
         assert_eq!(calls(&e, STRING_DESTROY).len(), 1);
+    }
+
+    /// JohnnyGuitar NVSE's seam at the call `0x710BFC`: the picked reference's name is the seam's
+    /// answer (its full name or editor id), the reference given; `REFR_NAME` is not asked.
+    #[test]
+    fn the_picked_references_name_comes_from_the_jg_seam() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let (mut e, m) = debug_text_world();
+        e.mem.set_u32(m.addr() + 0x70, 0x9000);
+        returns(&mut e, FORM_ID_GETTER, 0x1234);
+        returns(&mut e, REFR_NAME, 0x5555);
+        e.on_site(SiteSlot::new(Owner::JohnnyGuitar, 0x0071_0bfc), |_, a| {
+            (a == [0x9000]).then_some(0x6666)
+        });
+        interface_manager_display_current_pick_ref(&mut e, m);
+        let format = calls(&e, FORMAT_INTO_STRING);
+        assert_eq!(format[0][1..], [FORMAT_NAME_AND_ID, 0x6666, 0x1234]);
+        assert!(calls(&e, REFR_NAME).is_empty());
     }
 
     /// A picked reference object (virtual: slot 0x100 is the actor test)

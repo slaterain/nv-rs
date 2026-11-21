@@ -241,3 +241,91 @@ pub fn multibound_node_on_visible(
     }
     e.set(process, BSCullingProcess::kCullMode, mode);
 }
+
+#[cfg(test)]
+mod read_ahead_tests {
+    use super::*;
+
+    /// Two mapped pages for the test's objects (the read-ahead reads only where a word's page
+    /// and the next are mapped, so a lone page at the end of a heap would hide what it reads).
+    const BASE: u32 = 0x0800_0000;
+    const UNMAPPED: u32 = 0x0900_0040;
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.mem.map(BASE, 0x4000);
+        assert!(!e.mem.is_mapped(UNMAPPED));
+        e
+    }
+
+    /// A child at `at`: its flags, bound and vtable words (the bound's radius and the vtable's
+    /// `OnVisible` slot made nonzero where they are mapped).
+    fn child(e: &mut Engine, at: u32, bound: u32, vtable: u32) {
+        e.mem
+            .set_u32(at + NiAVObject::m_uFlags.off, FLAG_APP_CULLED);
+        e.mem.set_u32(at + NiAVObject::m_kWorldBound.off, bound);
+        e.mem.set_u32(at + NiAVObject::vtable.off, vtable);
+        if e.mem.is_mapped(bound) {
+            e.mem.set_u32(bound + NiBound::m_fRadius.off, 0x3f80_0000);
+        }
+        if e.mem.is_mapped(vtable) {
+            e.mem
+                .set_u32(vtable + super::super::process::SLOT_ON_VISIBLE, 0x00a5_dbe0);
+        }
+    }
+
+    /// A node at `BASE` with `count` slots in use in the storage at `storage`.
+    fn node(e: &mut Engine, storage: u32, count: u16) -> Ptr<NiNode> {
+        e.mem.set_u32(BASE + NiNode::m_pBase.off, storage);
+        e.mem.set_u16(BASE + NiNode::m_usMaxSize.off, count);
+        e.mem.set_u16(BASE + NiNode::m_usSize.off, count);
+        Ptr::new(BASE)
+    }
+
+    /// No slot in use and the storage at unmapped memory: the read-ahead reads none of it (nor
+    /// does the walk).
+    #[test]
+    fn no_slot_in_use_reads_no_storage() {
+        let mut e = engine();
+        let n = node(&mut e, UNMAPPED, 0);
+        read_children_ahead(&e, n);
+    }
+
+    /// Children whose bound, vtable or both are dangling, an empty slot, and two whole children:
+    /// the read-ahead stops on nothing and writes nothing anywhere (the test's pages, the shared
+    /// empty bound).
+    #[test]
+    fn dangling_children_stop_nothing_and_nothing_is_written() {
+        let mut e = engine();
+        let null_bound = super::super::NULL_BOUND.addr() & !0xfff;
+        e.mem.map(null_bound, 0x2000);
+        let storage = BASE + 0x1000;
+        let bounds = BASE + 0x1800;
+        let vtables = BASE + 0x2000;
+        let children = [
+            (BASE + 0x200, bounds, vtables),
+            (BASE + 0x300, UNMAPPED, vtables),
+            (BASE + 0x400, bounds + 0x10, UNMAPPED),
+            (BASE + 0x500, UNMAPPED, UNMAPPED),
+            (BASE + 0x600, bounds + 0x20, vtables + 0x100),
+        ];
+        for (i, &(at, bound, vtable)) in (0u32..).zip(children.iter()) {
+            child(&mut e, at, bound, vtable);
+            e.mem.set_u32(storage + 4 * i, at);
+        }
+        const CHILDREN: u16 = 5;
+        assert_eq!(children.len(), usize::from(CHILDREN));
+        // An empty slot and one pointing at unmapped memory.
+        e.mem.set_u32(storage + 4 * u32::from(CHILDREN), 0);
+        e.mem
+            .set_u32(storage + 4 * (u32::from(CHILDREN) + 1), UNMAPPED);
+        let n = node(&mut e, storage, CHILDREN + 2);
+        e.mem.watch(BASE, 0x4000, false);
+        e.mem.watch(null_bound, 0x2000, false);
+        read_children_ahead(&e, n);
+        assert!(
+            e.mem.take_watch_hits().is_empty(),
+            "the read-ahead wrote to memory"
+        );
+    }
+}

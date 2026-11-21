@@ -59,6 +59,12 @@ pub const SWITCH_NODE_BOUNDS: Row = fix(6);
 /// of the call reading `fSunYExtreme`, `011ccf0c`): the north-south part of the sun light's way is
 /// the setting negated, so the light comes from the side the disc is on.
 pub const SUN_LIGHT_DIRECTION: Row = fix(7);
+/// S0216 `StairMaterialFix` (`bhkCharacterController::IsStep` `00c6eb00` at `0xC6EBAB`, `00c6d7e0` at
+/// `0xC6D80B`, `SetSupportMaterial` `00c6e980` and `00c84f50` replaced whole): the stair bit `0x40`
+/// of a Havok material word (the touched sub-shape's, through Tweaks' `GetSubMaterialVarType`) makes
+/// a contact a step, keeps the step's ray from counting the shape as blocking and sets the
+/// character's on-stairs flag; the exe masks the bit away or compares `(bit set) == 0x40`.
+pub const STAIR_MATERIAL: Row = fix(8);
 
 /// `TESForm::GetFile` (`00484e60`, `thiscall`): the form's file at an index, `-1` the last one.
 const FORM_GET_FILE: u32 = 0x0048_4e60;

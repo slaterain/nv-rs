@@ -2078,6 +2078,8 @@ pub fn start_menu_do_gamepad(
             {
                 let id: u32 = if button != 4 { 101 } else { 100 };
                 let highlighted = e.vcall(options.addr(), 4, &args![]).u32();
+                // `0x7CF387` (lStewieAl's Tweaks' S0022.11).
+                super::levelupmenu::stewie_arrow_selects(e, highlighted);
                 let tile = e.call(TILE_GET_CHILD_BY_ID, &args![highlighted, id]).u32();
                 if tile != 0
                     && e.call(TILE_IS_VISIBLE, &args![tile]).bool()
@@ -7846,6 +7848,41 @@ mod tests {
             .position(|a| *a == TILE_PLAY_TILE_SOUND)
             .unwrap();
         assert!(click < sound);
+    }
+
+    /// Row S0022.11 (lStewieAl's Tweaks, `0x7CF387`): buttons 3 and 4 make the highlighted
+    /// option's tile (0x4040) the interface manager's `activeTileAlt` (+0xBC) before its arrow is
+    /// looked up, unless the mouse has moved (+0xED); off, never. The arrow is clicked either way.
+    #[test]
+    fn s0022_11_the_arrow_keys_set_the_selection() {
+        use super::super::mapmenu::stewie_menus::INTERFACE_MANAGER;
+        for (on, moved, set) in [(false, 0u8, false), (true, 0, true), (true, 1, false)] {
+            for button in [3i32, 4] {
+                let mut r = rig();
+                let menu = gamepad_scene(&mut r);
+                let handler = click_handler(menu, &r);
+                r.stub(LIST_BOX_IS_ENABLED, 1);
+                r.with(TILE_GET_CHILD_BY_ID, |_, a| eax(0x4100 + a[1]));
+                r.stub(TILE_IS_VISIBLE, 1);
+                r.stub(TILE_IS_TRUE, 1);
+                if !r.e.mem.is_mapped(INTERFACE_MANAGER) {
+                    r.e.map(INTERFACE_MANAGER & !0xfff, 0x1000);
+                }
+                let manager = r.alloc(0x100);
+                r.e.mem.set_u32(INTERFACE_MANAGER, manager);
+                r.e.mem.set_u8(manager + 0xed, moved);
+                r.e.mem.set_u32(manager + 0xbc, 0x5555);
+                r.e.set_stewie(stewie::LEVEL_UP_ARROWS_SELECT, on);
+                assert!(r.e.call(0x007c_efc0, &args![menu, button, 0u32]).bool());
+                let wanted = if set { 0x4040 } else { 0x5555 };
+                assert_eq!(
+                    r.e.mem.u32(manager + 0xbc),
+                    wanted,
+                    "row {on} moved {moved}"
+                );
+                assert_eq!(r.calls_to(handler).len(), 1);
+            }
+        }
     }
 
     #[test]
