@@ -4369,6 +4369,11 @@ fn the_gpu_times_on_send_and_cut_the_batches_as_off() {
     let uploads = [limit / 2 - 16, limit / 2 + 4];
     // Each batch's submits, early sends, encoders and uses.
     let run = |g: &mut Gpu| -> Vec<[u64; 4]> {
+        // One pass and draw each, as the counts below take them: the held draws' merging
+        // (`NV_WGPU_MERGE_DRAWS`, which a run of the whole suite may set) off.
+        if let Some(d) = g.b.device() {
+            d.set_merge_draws(false, false, false);
+        }
         let tris: Vec<f32> = (0..DRAWS)
             .flat_map(|_| {
                 [
@@ -5144,6 +5149,10 @@ fn a_failure_on_the_queue_thread_is_raised_on_the_render_thread() {
         if g.b.device().is_some_and(|d| !d.has_queue_thread()) {
             eprintln!("no queue thread on this machine: skipped");
             return;
+        }
+        // Each draw its own, as the batch sizes below take them (`NV_WGPU_MERGE_DRAWS` off).
+        if let Some(d) = g.b.device() {
+            d.set_merge_draws(false, false, false);
         }
         g.run(Cmd::CreateQuery {
             device: DEVICE,
