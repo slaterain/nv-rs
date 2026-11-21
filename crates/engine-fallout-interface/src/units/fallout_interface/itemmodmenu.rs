@@ -601,7 +601,7 @@ pub fn item_mod_menu_do_click(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
 /// the menu's target entry (`011d9f58`) is unequipped and equipped again: its first extra list
 /// (the word its `extendData` list starts with), `QueueUnEquipObject` then `QueueEquipObject` on
 /// the player with the entry's form (+8) and count (+4), flags 1, 0, 1. Off: nothing.
-fn stewie_after_mod_refresh(e: &mut Engine) {
+pub fn stewie_after_mod_refresh(e: &mut Engine) {
     if !e.stewie(engine_core::extend::stewie::ITEM_MOD_MENU_KEEPS_EQUIPPED)
         || e.global::<u8>(FLAG_011D9F40) == 0
     {

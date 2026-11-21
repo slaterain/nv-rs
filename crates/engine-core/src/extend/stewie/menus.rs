@@ -88,8 +88,10 @@ pub const RECIPE_REFRESH_KEEPS_CATEGORY: Row = Row::share(MENUS_FIXES, MENUS_FIX
 /// menu's remap waits one frame after it opens (Tweaks' debounce), so the key that opened it is
 /// not taken as the new key.
 pub const START_MENU_REMAP_DEBOUNCE: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 21);
-/// S0022.11 `MenuFixes` (`LevelUpMenu::DoGamepad` `00785ed0` at `0x785F33` and `0x785FAB`): the
-/// Left and Right keys set the interface's keyboard-selected tile unless the mouse moved.
+/// S0022.11 `MenuFixes` (`LevelUpMenu::DoGamepad` `00785ed0` at `0x785F33` and `0x785FAB`,
+/// `CharGenMenu::DoGamepad` `00754150` at `0x7541C8`, `StartMenu::DoGamepad` `007cefc0` at
+/// `0x7CF387`): the Left and Right keys set the interface's keyboard-selected tile unless the
+/// mouse moved.
 pub const LEVEL_UP_ARROWS_SELECT: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 22);
 /// S0022.28 `MenuFixes` (`fn_00739090`, blackjack's draw, at `0x739135`): a card dealt with
 /// neutral luck takes 1 off the shoe's count, not 2.
