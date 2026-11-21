@@ -17,6 +17,15 @@ pub fn fn_0040fba0(e: &mut Engine, this: Ptr) {
     let count = e.mem.u32(this.addr() + 4).wrapping_sub(1);
     e.mem.set_u32(this.addr() + 4, count);
     if count == 0 {
+        // The x86 store at 0040fbc7 releases protected writes in order.
+        // Preserve that ordering on ARM, paired with 0040fbf0's acquire CAS.
+        if e.mem.is_shared() {
+            if let Some(owner) = e.mem.atomic_u32(this.addr()) {
+                owner.store(0, std::sync::atomic::Ordering::Release);
+                return;
+            }
+            std::sync::atomic::fence(std::sync::atomic::Ordering::Release);
+        }
         e.mem.set_u32(this.addr(), 0);
     }
 }
