@@ -132,7 +132,7 @@ mod tests {
     use engine_core::typed::{parse_switch, Family, Mode};
 
     /// This crate's families, in the order `units::funcs` provides them.
-    fn families() -> [&'static Family; 20] {
+    fn families() -> [&'static Family; 21] {
         [
             &crate::lockfree::LOCKFREE,
             &crate::culling::CULLING,
