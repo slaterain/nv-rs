@@ -29,6 +29,10 @@ rates, fast loading, far fewer crashes, built-in modding and more platforms.
 **[Download the Windows preview](https://github.com/slaterain/nv-rs/releases)**. You need
 Fallout: New Vegas (version 1.4.0.525; only the Steam version has been tested so far) on a Windows PC.
 
+Source builds also recognize the exact en-US GOG offline installer build
+1.4.0.525(a), 55068. See [GOG compatibility and validation limits](docs/GOG_55068.md);
+this does not imply that an existing preview release includes that support.
+
 1. Extract the ZIP to a folder of its own, for example `C:\Games\nv-rs`.
 2. Double-click `Play.exe`. The launcher opens, in the look of the game's terminals; `> Play` finds
    your game and starts it.

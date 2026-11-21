@@ -31,6 +31,7 @@
 mod chunk;
 mod cmd;
 mod digest;
+pub mod hitch;
 mod runner;
 mod tee;
 pub mod wire;

@@ -69,6 +69,111 @@ pub fn release_color_write(e: &mut Engine, count: u32) {
     );
 }
 
+// Typed from 00714a80
+/// `count` z-function locks given back (`011ff9e0`), then the z function 3, unlocked (`00b97e80(3, 0)`).
+pub fn release_z_function(e: &mut Engine, count: u32) {
+    own::release_state_locks(e, own::Z_FUNCTION_LOCKS, count);
+    typed_call!(shader::FAMILY, 0x00b9_7e80, state::set_z_function(e, 3, 0));
+}
+
+// Typed from 00714bf0
+/// `count` depth-bias locks given back (`011ff9e4`), then the depth bias 0.0 (`FLDZ`/`FSTP`: the word 0),
+/// unlocked (`00b98320(0.0, 0)`).
+pub fn release_depth_bias(e: &mut Engine, count: u32) {
+    own::release_state_locks(e, own::DEPTH_BIAS_LOCKS, count);
+    typed_call!(shader::FAMILY, 0x00b9_8320, state::set_depth_bias(e, 0, 0));
+}
+
+// Typed from 00714ac0
+/// `count` alpha-function locks given back (`011ff9ec`), then the alpha function 0 with reference 0, unlocked
+/// (`00b97f20(0, 0, 0)`).
+pub fn release_alpha_function(e: &mut Engine, count: u32) {
+    own::release_state_locks(e, own::ALPHA_FUNCTION_LOCKS, count);
+    typed_call!(
+        shader::FAMILY,
+        0x00b9_7f20,
+        state::set_alpha_function(e, 0, 0, 0)
+    );
+}
+
+// Typed from 00714b00
+/// `count` blend locks given back (`011ff9f4`), then the blend 0, 1, unlocked (`00b97ff0(0, 1, 0)`).
+pub fn release_blend(e: &mut Engine, count: u32) {
+    own::release_state_locks(e, own::BLEND_LOCKS, count);
+    typed_call!(shader::FAMILY, 0x00b9_7ff0, state::set_blend(e, 0, 1, 0));
+}
+
+// Typed from 004ecb40
+/// `count` stencil-test locks given back (`011ff9fc`), then the stencil test off, unlocked (`00b98070(0, 0)`).
+pub fn release_stencil(e: &mut Engine, count: u32) {
+    own::release_state_locks(e, own::STENCIL_LOCKS, count);
+    typed_call!(
+        shader::FAMILY,
+        0x00b9_8070,
+        state::set_stencil_enable(e, 0u8, 0)
+    );
+}
+
+// Typed from 00714b20
+/// `count` stencil-operation locks given back (`011ffa00`), then the operations 0, 0, 0, unlocked
+/// (`00b980c0(0, 0, 0, 0)`).
+pub fn release_stencil_operations(e: &mut Engine, count: u32) {
+    own::release_state_locks(e, own::STENCIL_OPERATION_LOCKS, count);
+    typed_call!(
+        shader::FAMILY,
+        0x00b9_80c0,
+        state::set_stencil_operations(e, 0, 0, 0, 0)
+    );
+}
+
+// Typed from 00714b50
+/// `count` stencil-function locks given back (`011ffa04`), then the function 0, reference 0 and mask 0xff,
+/// unlocked (`00b98180(0, 0, 0xff, 0)`).
+pub fn release_stencil_function(e: &mut Engine, count: u32) {
+    own::release_state_locks(e, own::STENCIL_FUNCTION_LOCKS, count);
+    typed_call!(
+        shader::FAMILY,
+        0x00b9_8180,
+        state::set_stencil_function(e, 0, 0, 0xff, 0)
+    );
+}
+
+// Typed from 00714b80
+/// `count` stencil write-mask locks given back (`011ffa08`), then the write mask 0xff, unlocked
+/// (`00b98230(0xff, 0)`).
+pub fn release_stencil_write_mask(e: &mut Engine, count: u32) {
+    own::release_state_locks(e, own::STENCIL_WRITE_LOCKS, count);
+    typed_call!(
+        shader::FAMILY,
+        0x00b9_8230,
+        state::set_stencil_write_mask(e, 0xff, 0)
+    );
+}
+
+// Typed from 004eb510
+/// `count` clip-plane locks given back (`011ffa14`), then every clip plane off, unlocked (`00b98280` with seven
+/// zeros).
+pub fn release_clip_planes(e: &mut Engine, count: u32) {
+    own::release_state_locks(e, own::CLIP_PLANE_LOCKS, count);
+    typed_call!(
+        shader::FAMILY,
+        0x00b9_8280,
+        state::set_clip_planes(e, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0)
+    );
+}
+
+// Typed from 00b985f0
+/// `count` locks given back on the colour-write enables 1 to 3 (`011ffa1c`), then each 0, unlocked
+/// (`00b983d0(0, 0, 0, 0)`).
+pub fn release_color_writes(e: &mut Engine, count: u32) {
+    own::release_state_locks(e, own::COLOR_WRITES_LOCKS, count);
+    typed_call!(
+        shader::FAMILY,
+        0x00b9_83d0,
+        state::set_color_writes(e, 0, 0, 0, 0)
+    );
+}
+
 // ---- What the set-ups share. ----
 
 /// Bits of 1.0.
