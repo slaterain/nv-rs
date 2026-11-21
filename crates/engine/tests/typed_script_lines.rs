@@ -231,7 +231,8 @@ fn locals(e: &mut Engine) -> u32 {
         vars.push(v);
     }
     let l = e.mem.alloc(0x14);
-    e.mem.set_u32(l + 0xc, list(e, &vars));
+    let head = list(e, &vars);
+    e.mem.set_u32(l + 0xc, head);
     l
 }
 
@@ -565,4 +566,84 @@ fn script_lines_data_is_read_where_the_runner_says() {
     world(&mut e);
     let w = script_world(&mut e, b"\x11\x00\x00\x00", false);
     assert_eq!(e.mem.u32(w.script + 0x30), w.data);
+}
+
+// ---- The game's own compiled scripts (opt-in) ---------------------------------------------------
+
+/// The real scripts' world on top of [`world`]: every block type (0 to 0x25) with a handler that
+/// applies, and a record for every command opcode (0x1000 up) whose handler succeeds.
+fn real_world(e: &mut Engine) {
+    for kind in 0..0x26u32 {
+        let entry = BLOCK_TYPES + kind * 0x28;
+        e.mem.set_u32(entry + 8, BLOCK_HANDLER);
+        e.mem.set_u32(entry - 0x10 + 8, 0x10 + kind);
+    }
+    e.register(0x005b_1120, |_, a| {
+        ret(if a[0] >= 0x1000 { DEFINITION } else { 0 })
+    });
+    e.mem.set_u32(ANSWER_HANDLER, 1);
+    e.mem.set_u32(ANSWER_BLOCK, 1);
+    e.mem.set_u32(ANSWER_BLOCK_RESULT, 1);
+}
+
+/// `NV_DATA="...\Data" cargo test -p engine --test typed_script_lines -- --ignored real_scda`:
+/// `FalloutNV.esm`'s compiled scripts (up to `NV_SCRIPTS`, default 400) run whole through the line
+/// loop, typed against translated, the extenders' seams on and off, with given and fresh locals.
+/// Nothing of the game's is stored; referenced objects beyond the world's four answer as missing
+/// (such a line fails as in the game with a missing reference), every command succeeds.
+#[test]
+#[ignore = "needs the player's FalloutNV.esm (set NV_DATA)"]
+fn real_scda_scripts() {
+    use esm::{FourCC, Plugin};
+    let data = std::path::PathBuf::from(std::env::var("NV_DATA").expect("NV_DATA"));
+    let limit: usize = std::env::var("NV_SCRIPTS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(400);
+    let plugin = Plugin::open(data.join("FalloutNV.esm")).expect("FalloutNV.esm");
+    let mut all = Vec::new();
+    for entry in plugin.records_of_type(FourCC(*b"SCPT")) {
+        let record = plugin.record(entry).expect("SCPT");
+        if let Some(code) = record.get(FourCC(*b"SCDA")) {
+            if !code.data.is_empty() {
+                all.push(code.data.to_vec());
+            }
+        }
+        if all.len() >= limit {
+            break;
+        }
+    }
+    assert!(!all.is_empty(), "no scripts found");
+    let count = all.len();
+    let all: &'static [Vec<u8>] = all.leak();
+    let indices: &'static [u32] = (0..count as u32).collect::<Vec<_>>().leak();
+    Diff::new(entry!(
+        0x005e_0d20,
+        runner::run_lines(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, bool, u8, u8, f32) -> bool
+    ))
+    .common()
+    .inputs(&[Input::Of(indices), Input::Flag, Input::Flag])
+    .max_cases(count * 3)
+    .setup(move |e, case| {
+        world(e);
+        real_world(e);
+        extenders(e, case.word(1) != 0);
+        let w = script_world(e, &all[case.word(0) as usize], false);
+        let locals = if case.word(2) != 0 { w.locals } else { 0 };
+        let reference = form(e, 0x3b);
+        vec![
+            w.runner,
+            w.script,
+            reference,
+            locals,
+            0x0070_0000,
+            0,
+            0,
+            0,
+            0,
+        ]
+    })
+    .run()
+    .assert_same();
+    eprintln!("{count} real scripts compared");
 }

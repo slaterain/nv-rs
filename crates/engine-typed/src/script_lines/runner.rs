@@ -932,7 +932,7 @@ fn evaluate_condition(e: &mut Engine, at: &Line) -> bool {
         new_expression(e, expression);
         let container = e.mem.u32(this);
         let locals = e.mem.u32(this + 8);
-        let mut evaluate = |e: &mut Engine| {
+        let evaluate = |e: &mut Engine| {
             typed_call!(
                 scripts::FAMILY,
                 0x0059_3db0,

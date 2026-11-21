@@ -202,11 +202,11 @@ mod tests {
         assert!(off.iter().all(|m| *m == Mode::Off));
         let one_off = parse_switch(Some("shader:off"), &families).unwrap();
         assert_eq!(one_off[3], Mode::Off);
-        assert!(one_off.iter().filter(|m| **m == Mode::On).count() == 18);
+        assert!(one_off.iter().filter(|m| **m == Mode::On).count() == 19);
         // `NV_TYPED=geometry:off` still turns the geometry family (index 12) off, and only it.
         let geometry_off = parse_switch(Some("geometry:off"), &families).unwrap();
         assert_eq!(geometry_off[12], Mode::Off);
-        assert!(geometry_off.iter().filter(|m| **m == Mode::On).count() == 18);
+        assert!(geometry_off.iter().filter(|m| **m == Mode::On).count() == 19);
     }
 
     /// No two of this crate's families (with the core's) hold the same address, past their gate or not:
