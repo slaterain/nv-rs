@@ -690,6 +690,15 @@ calls of it now go by address too), as do `atol`, `atof`, the commands' handlers
 rounded to 24 bits on the main thread as its x87 precision rounds. Its tests are `crates/engine/tests/typed_scripts.rs`
 (generated expressions over every operator and operand kind, parse mode, xNVSE's buffer and command call, JIP's
 operators). On by the native-code rule.
+And `save` (same crate, id 16): the work of a save's one frame (a quicksave is one frame of about 100 ms in the port),
+first the form id map every form reference a save writes goes through: an id's save index got or added (`00846c90`)
+and resolved back (`00846d20`), the word maps' `SetAt` (`00844700`) with the new item (`00844a70`, `006f99e0`) and
+`SetValue` (`00863840`) their vtable holds, the created-id test (`00469860`), the three-byte index
+(`BGSNumericIDIndex`: `0084eaf0`, `00853500`, `00853570`) and the save buffer's two `SaveFormID`s (`00865db0`,
+`00865df0`). The map's lookup (`00853130`) is the dispatch family's. The buffer's append (`00865570`) and the
+allocator stay called by address, as does any map whose vtable holds other functions. Threads: both (`SetAt` is
+every word map's insert, the AI's combat maps included); integer work only. Its tests are
+`crates/engine/tests/typed_save.rs`. On by the native-code rule.
 And `geometry` (same crate, id 23): the code that reads and writes `NiGeometryData`'s arrays (positions, normals
 with the binormals and tangents after them, colours, texture coordinates), typed so that stage 2 can keep those
 arrays outside the 32-bit space (about 23 to 40 MB of the guest heap on the census route, and what mesh mods grow).

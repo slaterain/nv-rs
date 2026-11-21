@@ -34,6 +34,7 @@ pub mod particles;
 pub mod pathing;
 pub mod process;
 pub mod render;
+pub mod save;
 pub mod scene;
 pub mod script_lines;
 pub mod scripts;
@@ -121,6 +122,7 @@ pub mod units {
         engine_core::typed::provide(&crate::hud::HUD);
         engine_core::typed::provide(&crate::script_lines::SCRIPT_LINES);
         engine_core::typed::provide(&crate::facegen::FACEGEN);
+        engine_core::typed::provide(&crate::save::SAVE);
         crate::render::stream::note_head_check();
     }
 }
@@ -158,6 +160,7 @@ mod tests {
             &crate::hud::HUD,
             &crate::script_lines::SCRIPT_LINES,
             &crate::facegen::FACEGEN,
+            &crate::save::SAVE,
         ]
     }
 
@@ -200,7 +203,8 @@ mod tests {
                 "scripts",
                 "hud",
                 "script_lines",
-                "facegen"
+                "facegen",
+                "save"
             ]
         );
         let defaults = parse_switch(None, &families).unwrap();
