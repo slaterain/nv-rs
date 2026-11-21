@@ -299,8 +299,11 @@ pub mod kept {
     pub const RUMBLE_STATES: usize = 0;
     /// S0107.04's `static NiFixedString strSpeaker` (4 bytes: the handle of "Bip01 Speaker").
     pub const SPEAKER_NAME: usize = 1;
+    /// S0089.01's `int g_savedAmmoCount` (4 bytes): the player's saved count of loaded rounds plus
+    /// one (0: none, Tweaks' -1), read by S0089.07.
+    pub const SAVED_AMMO_COUNT: usize = 2;
     /// How many.
-    pub const COUNT: usize = 2;
+    pub const COUNT: usize = 3;
 }
 
 /// The last thing each of Tweaks' warnings printed (its functions' statics), its print queue and

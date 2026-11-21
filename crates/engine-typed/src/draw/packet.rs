@@ -308,11 +308,20 @@ pub(crate) fn note_camera(e: &mut Engine, camera: u32) {
     e.set_global(LAST_CAMERA, camera);
 }
 
+/// The camera the draw last started with (`011f917c`): written by the draw itself as it starts ([`note_camera`]),
+/// so on the drawing side it is the drawn camera.
+#[inline(always)]
+pub(crate) fn last_camera(e: &Engine) -> u32 {
+    e.global::<u32>(LAST_CAMERA)
+}
+
 /// Clears the scene renderer's word +0xc as the second half ends.
 #[inline(always)]
 pub(crate) fn clear_scene_word(e: &mut Engine) {
     let scene = e.global::<u32>(SCENE_RENDERER);
-    e.set_global(scene.wrapping_add(0xc), 0u32);
+    // The renderer's per-draw words are each side's own (`statics::RENDERER_BLOCKS`): main's finish of its own scene
+    // draws clears main's, the drawing side's clears its own.
+    capture::set_word(e, scene, 0xc, 0);
 }
 
 // Typed from 00d47a40
@@ -458,11 +467,29 @@ pub fn pass_camera_data(
     {
         return;
     }
-    e.vcall(
-        renderer,
-        SLOT_SET_CAMERA_DATA,
-        &args![translate, zero, one, two, port, frustum],
-    );
+    // The renderer's camera set-up (`00e6c780`) is the draw family's: its words are each side's own state.
+    if crate::slot_target(e, renderer, SLOT_SET_CAMERA_DATA) == 0x00e6_c780 {
+        typed_call!(
+            super::FAMILY,
+            0x00e6_c780,
+            super::camera::set_camera_data(
+                e,
+                Ptr::new(renderer),
+                Ptr::new(translate),
+                Ptr::new(zero),
+                Ptr::new(one),
+                Ptr::new(two),
+                Ptr::new(port),
+                Ptr::new(frustum)
+            )
+        );
+    } else {
+        e.vcall(
+            renderer,
+            SLOT_SET_CAMERA_DATA,
+            &args![translate, zero, one, two, port, frustum],
+        );
+    }
 }
 
 // ---- The geometry paths' reads: the renderer, the drawn geometry and its data. ----
@@ -495,7 +522,7 @@ pub(crate) fn renderer_device(e: &Engine, renderer: u32) -> u32 {
 /// drawn geometry's.
 #[inline(always)]
 pub(crate) fn current_property_state(e: &Engine, renderer: u32) -> u32 {
-    e.global::<u32>(renderer.wrapping_add(0xc))
+    capture::own_word(e, renderer, 0xc)
 }
 
 /// A geometry's model data (+0xb8).
@@ -984,9 +1011,20 @@ pub(crate) fn shader_level(e: &Engine) -> i32 {
 pub(crate) fn shadows_skipped(e: &Engine) -> u8 {
     e.global::<u8>(0x011f_9427)
 }
+/// The pair of textures the shadow passes sample (`011f95e4`, `011f95e8`: counted pointers main sets; the cut takes
+/// them, and holds their textures, since the frame's tail may set others before a posted draw runs).
+pub(crate) const PAIR_TEXTURES: u32 = 0x011f_95e4;
+
+/// Texture `k` (0 or 1) of the pair, the packet's.
+#[inline(always)]
+pub(crate) fn pair_texture(e: &Engine, k: u32) -> u32 {
+    capture::word(e, PAIR_TEXTURES, 4 * k)
+}
+
+/// The pair's first texture (whether the shadow maps are there), the packet's.
 #[inline(always)]
 pub(crate) fn shadow_textures(e: &Engine) -> u32 {
-    e.global::<u32>(0x011f_95e4)
+    pair_texture(e, 0)
 }
 #[inline(always)]
 pub(crate) fn shader_flags_byte(e: &Engine) -> u8 {
@@ -1097,7 +1135,7 @@ pub(crate) fn texture_transform_word(e: &Engine, transform: u32, index: u32) -> 
 /// world transform takes it as its translation, the sky's eye position is the sun less it.
 #[inline(always)]
 pub(crate) fn origin_word(e: &Engine, index: u32) -> u32 {
-    e.global::<u32>(0x011f_474c + 4 * index)
+    capture::own_at::<u32>(e, 0x011f_474c + 4 * index)
 }
 
 /// A sky property's first texture (+0x70) and second (+0x80).
@@ -1323,7 +1361,7 @@ pub(crate) fn clip_planes_made(e: &Engine, light: u32) -> u8 {
 /// A renderer's view and light matrices' word at `offset` (+0x940, +0x980, +0x9c0, sixteen words each).
 #[inline(always)]
 pub(crate) fn renderer_view_word(e: &Engine, renderer: u32, offset: u32) -> u32 {
-    e.global::<u32>(renderer.wrapping_add(offset))
+    capture::own_word(e, renderer, offset)
 }
 
 /// The light colour's scale (`011f9184`) and the shadow's eight words (`011fd874`, word `index`).
