@@ -2121,7 +2121,7 @@ pub fn set_constants(
     let held = crate::device_held(e);
     let mem = &e.mem;
     let g = crate::device_mut(&mut e.device, held);
-    let Some(mut s) = stream_of(&mut g.real, this) else {
+    let Some(s) = stream_of(&mut g.real, this) else {
         return;
     };
     let registers = super::d3d9resource::constant_registers(
@@ -2135,6 +2135,38 @@ pub fn set_constants(
     let Some(registers) = registers else {
         return set_constants_as_given(mem, s, this, kind, start, data, count);
     };
+    submit_registers(s, this, kind, start, count, registers);
+}
+
+/// The constant registers a set took, `registers` as the model holds them now (`count` of them
+/// from `start`), sent to the backend when it has the device `this` ([`set_constants`]'s
+/// command): for a model function that holds the bindings and the forwarding at once
+/// (`super::d3d9resource`'s constant sets in one pass).
+#[inline]
+pub(super) fn submit_constants(
+    r: &mut Real,
+    this: u32,
+    kind: u8,
+    start: u32,
+    count: u32,
+    registers: &[[u32; 4]],
+) {
+    if let Some(s) = stream_of(r, this) {
+        submit_registers(s, this, kind, start, count, registers);
+    }
+}
+
+/// [`set_constants`]'s command from the model's registers: a boolean register's first word,
+/// packed; 4 words a register otherwise.
+#[inline]
+fn submit_registers(
+    mut s: Sink<'_>,
+    this: u32,
+    kind: u8,
+    start: u32,
+    count: u32,
+    registers: &[[u32; 4]],
+) {
     if kind % 3 == 2 {
         // A boolean register keeps its word first: packed (at most 16 registers).
         let mut packed = [0u32; 16];
