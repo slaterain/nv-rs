@@ -715,7 +715,7 @@ fn state_one_pass(
         StateSet::Stage => &mut d.stage_states.0[..],
         StateSet::Sampler => &mut d.sampler_states.0[..],
     };
-    let old = std::mem::replace(&mut table[index], Some(value));
+    let old = table[index].replace(value);
     if !(skip && old == Some(value)) {
         super::d3d9real::record_in(real, device, cmd);
     }
