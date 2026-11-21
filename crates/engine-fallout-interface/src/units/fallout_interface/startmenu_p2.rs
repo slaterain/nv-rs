@@ -9133,6 +9133,33 @@ mod tests {
         }
     }
 
+    /// Row S0022.07 at its place in the start menu's input (`fn_007d52a0`, `0x7D5365`): waiting
+    /// for a remap press with a key held, the row on binds nothing the first frame and the key
+    /// the second; off, the key is bound the first frame.
+    #[test]
+    fn s0022_07_the_remap_binds_on_the_second_frame() {
+        for on in [false, true] {
+            let mut e = engine();
+            let menu = remapping_menu(&mut e, 0);
+            keyboard_with_key_down(&mut e, 30, true);
+            e.set_stewie(stewie::START_MENU_REMAP_DEBOUNCE, on);
+            assert!(fn_007d52a0(&mut e, menu));
+            assert_eq!(
+                calls(&e, BIND_INPUT).len(),
+                usize::from(!on),
+                "row {on}, first frame"
+            );
+            if on {
+                assert!(fn_007d52a0(&mut e, menu));
+                assert_eq!(
+                    calls(&e, BIND_INPUT),
+                    vec![vec![0x2222, 77, 0, 30]],
+                    "second frame"
+                );
+            }
+        }
+    }
+
     /// Row S0154: the content load (`007d69f0`) closes the message menus (`007aa480`, `00704000`)
     /// with the row off, not with it on.
     #[test]

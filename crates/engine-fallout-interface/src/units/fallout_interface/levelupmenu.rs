@@ -2011,13 +2011,28 @@ pub fn level_up_menu_do_idle(e: &mut Engine, this: Ptr) {
     e.call(MENU_PREP_FOR_VISIBILITY, &args![this, 0u32]);
 }
 
+/// The interface manager's `activeTileAlt` (+0xBC, xNVSE's `InterfaceManager`).
+const ACTIVE_TILE_ALT: u32 = 0xbc;
+
+/// lStewieAl's Tweaks' S0022.11 (`MenuFixes::FindTileByID_SetActiveTileAlt`, called in place of
+/// `Tile::GetChildByID` at `0x785F33` and `0x785FAB` in `LevelUpMenu::DoGamepad`, `0x7541C8` in
+/// `CharGenMenu::DoGamepad` and `0x7CF387` in `StartMenu::DoGamepad`): with the row on and
+/// the mouse not moved since the keys were used (the interface manager's +0xED), the tile the
+/// child is looked up on becomes the interface manager's `activeTileAlt` (+0xBC) first.
+pub fn stewie_arrow_selects(e: &mut Engine, tile: u32) {
+    if e.stewie(engine_core::extend::stewie::LEVEL_UP_ARROWS_SELECT) {
+        use super::mapmenu::stewie_menus::{HAS_MOUSE_MOVED, INTERFACE_MANAGER};
+        let manager = e.mem.u32(INTERFACE_MANAGER);
+        if e.mem.u8(manager.wrapping_add(HAS_MOUSE_MOVED)) == 0 {
+            e.mem.set_u32(manager.wrapping_add(ACTIVE_TILE_ALT), tile);
+        }
+    }
+}
+
 /// [`level_up_menu_do_gamepad`]'s arrow buttons on the skills page: with a
 /// highlighted skill (list vtable +4), its arrow child `id` is clicked
 /// (tile sound `0xfcb`, vtable +0xc) when shown. Answers whether it was
 /// handled.
-/// The interface manager's `activeTileAlt` (+0xBC, xNVSE's `InterfaceManager`).
-const ACTIVE_TILE_ALT: u32 = 0xbc;
-
 fn gamepad_arrow(e: &mut Engine, base: u32, id: u32) -> bool {
     if e.mem.u32(base + CURRENT_PAGE) != 0 {
         return false;
@@ -2026,16 +2041,8 @@ fn gamepad_arrow(e: &mut Engine, base: u32, id: u32) -> bool {
         return false;
     }
     let item = e.vcall(base + SKILLS_LIST, 4, &args![]).u32();
-    // `0x785F33` and `0x785FAB` (lStewieAl's Tweaks' S0022.11 calls
-    // `MenuFixes::FindTileByID_SetActiveTileAlt` there): unless the mouse has moved, the
-    // interface manager's `activeTileAlt` (+0xBC) becomes the skill's tile first.
-    if e.stewie(engine_core::extend::stewie::LEVEL_UP_ARROWS_SELECT) {
-        use super::mapmenu::stewie_menus::{HAS_MOUSE_MOVED, INTERFACE_MANAGER};
-        let manager = e.mem.u32(INTERFACE_MANAGER);
-        if e.mem.u8(manager.wrapping_add(HAS_MOUSE_MOVED)) == 0 {
-            e.mem.set_u32(manager.wrapping_add(ACTIVE_TILE_ALT), item);
-        }
-    }
+    // `0x785F33` and `0x785FAB` (lStewieAl's Tweaks' S0022.11).
+    stewie_arrow_selects(e, item);
     let arrow = e.call(TILE_GET_CHILD_BY_ID, &args![item, id]).u32();
     if e.call(TILE_IS_TRUE, &args![arrow, 0xfa3u32]).bool() {
         e.call(TILE_PLAY_TILE_SOUND, &args![arrow, 0xfcbu32]);

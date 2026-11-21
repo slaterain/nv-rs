@@ -36,7 +36,7 @@ pub const ROWS: &[Row] = &[
         plan: "S0022.11",
         key: "bMenuFixesLevelUpArrowsSelect",
         tweaks: None,
-        summary: "the Left and Right keys move the level-up menu's keyboard selection too",
+        summary: "the Left and Right keys move the keyboard selection too (level-up, SPECIAL and settings menus)",
     },
     Row {
         bit: stewie::RECIPE_CONDITION_NOTCH,
