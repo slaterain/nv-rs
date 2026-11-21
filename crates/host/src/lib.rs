@@ -28,6 +28,7 @@ pub mod full_screen;
 pub mod game_file;
 pub mod game_ini;
 pub mod half_loaded_move;
+pub mod hitch_log;
 pub mod mod_files;
 pub mod mod_fit_worn;
 pub mod native_inflate;
@@ -101,7 +102,7 @@ pub(crate) fn install_rows_and_extenders(engine: &mut Engine, choice: &fixes::Ch
     // vanilla commands is a row.
     nvse::install(engine);
     // JIP LN NVSE, xNVSE's plugin, right after it: its command slots, answering "not
-    // installed" unless the row `NV_JIP_INSTALLED` (off in every preset, set by
+    // installed" unless the row `NV_JIP_INSTALLED` (on in the fixes preset, set by
     // `fixes::install` above) switched it on (`crates/jip`).
     jip::install(engine);
     // The Mod Configuration Menu's plugin, when its row is on: xNVSE loads MCM.dll after
