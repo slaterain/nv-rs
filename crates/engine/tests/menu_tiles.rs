@@ -873,8 +873,8 @@ fn tile_getters_diff() {
 }
 
 /// `SetFloat` and `SetString` (`00a012d0`, `00a01350`): the trait there or made (into arrays with
-/// room and full ones), each float, both flags; the value's own setter gets the value, the word and
-/// the flag under `Tile::Lock`.
+/// room and full ones), each float, both flags, the new value's allocation answering null or not; the
+/// value's own setter gets the value, the word and the flag under `Tile::Lock`.
 #[test]
 fn tile_setters_diff() {
     // The value argument: a float for `SetFloat`, a string pointer (a word) for `SetString`.
@@ -887,7 +887,24 @@ fn tile_setters_diff() {
             code + 3
         };
         let tile = shaped_tile(e, code, capacity);
+        if case.word(5) == 1 {
+            // The new value's allocation answers null (`GetOrCreateValue` then answers null, its
+            // writes landing on a mapped page 0): the setters' null check is what runs.
+            e.map(0, 0x1000);
+            e.mem.set_u32(NULL_VALUE_GIVEN, 0);
+            e.register(0x00aa_3e40, null_value_allocation);
+        }
         vec![tile, case.word(1), value, case.word(4)]
+    }
+    /// Set once the null value has been given.
+    const NULL_VALUE_GIVEN: u32 = LOG + 0x3ff0;
+    /// The allocate stand-in that answers null for the first value-sized (0x14) block.
+    fn null_value_allocation(e: &mut Engine, a: &[u32]) -> Ret {
+        if a[1] == 0x14 && e.mem.u32(NULL_VALUE_GIVEN) == 0 {
+            e.mem.set_u32(NULL_VALUE_GIVEN, 1);
+            return ret(0);
+        }
+        ret(e.mem.alloc(a[1].max(4)))
     }
     Diff::new(engine_core::entry!(
         0x00a0_12d0,
@@ -901,6 +918,7 @@ fn tile_setters_diff() {
         Input::F32,
         Input::Flag,
         Input::Of(&[0, 1]),
+        Input::Flag,
     ])
     .setup(|e, case| setup(e, case, case.f32(2).to_bits()))
     .run()
@@ -917,6 +935,7 @@ fn tile_setters_diff() {
         Input::Of(&[0, 0x0300_3f00]),
         Input::Flag,
         Input::Of(&[0, 1]),
+        Input::Flag,
     ])
     .setup(|e, case| setup(e, case, case.word(2)))
     .run()
@@ -978,7 +997,9 @@ fn tile_poke_diff() {
 
 /// The absolute position sums (`00a013d0`, `00a01440`): a tile under a chain of none to three
 /// ancestors, each with an `x`, a `y` and a `locus` of 0.0, -0.0, 1.0 or a NaN (or no `locus` trait,
-/// or no traits at all), the positions from the case's floats.
+/// or no traits at all), the positions from the case's floats; `y` a NaN on every tile (each its own
+/// payload) or ordinary. The NaN-plus-NaN sums compare bit for bit: the typed add keeps the
+/// translation's operand order.
 #[test]
 fn tile_absolute_position_diff() {
     let setup = |e: &mut Engine, case: &engine_core::typed::diff::Case| {
@@ -986,6 +1007,7 @@ fn tile_absolute_position_diff() {
         let depth = case.word(0);
         let loci = case.word(1);
         let position = case.f32(2).to_bits();
+        let nan_y = case.word(3) == 1;
         let make = |e: &mut Engine, locus: u32, k: u32| -> u32 {
             match locus {
                 // No traits at all.
@@ -999,7 +1021,12 @@ fn tile_absolute_position_diff() {
                     let x = value(e, 0);
                     e.mem.set_u32(x + 8, position ^ (k << 2));
                     let y = value(e, 1);
-                    e.mem.set_f32(y + 8, 0.25 * k as f32 - 3.0);
+                    if nan_y {
+                        // A NaN `y` on every tile, each with its own payload: two NaNs added.
+                        e.mem.set_u32(y + 8, 0x7fc0_1000 | (k + 1));
+                    } else {
+                        e.mem.set_f32(y + 8, 0.25 * k as f32 - 3.0);
+                    }
                     let l = value(e, 2);
                     let bits = [0, 0x8000_0000, 0x3f80_0000, 0x7fc0_0000][locus as usize];
                     e.mem.set_u32(l + 8, bits);
@@ -1020,6 +1047,7 @@ fn tile_absolute_position_diff() {
         Input::Of(&[0, 1, 2, 3]),
         Input::Of(&[0, 0o2, 0o3, 0o22, 0o123, 0o4, 0o5, 0o210, 0o345]),
         Input::F32,
+        Input::Flag,
     ];
     for f in [
         engine_core::entry!(0x00a0_13d0, dispatch::tile::absolute_x(Ptr<_>) -> f32),
@@ -1036,8 +1064,66 @@ fn tile_absolute_position_diff() {
     }
 }
 
+/// What the `CalculateValue` stand-in of [`tile_value_change_event_diff`] does on its call number
+/// [`CALC_TRIGGER`] (0 nothing; 1 `AddReaction(value, extra)`, a node at the end of the walked list;
+/// 2 the current node taken out of the list and its next word cleared, as if freed and reused;
+/// 3 `ValueChangeEvent(other)`), the values it works on and its call count.
+const CALC_MODE: u32 = LOG + 0x3f00;
+const CALC_VALUE: u32 = LOG + 0x3f04;
+const CALC_OTHER: u32 = LOG + 0x3f08;
+const CALC_EXTRA: u32 = LOG + 0x3f0c;
+const CALC_TRIGGER: u32 = LOG + 0x3f10;
+const CALC_CALLS: u32 = LOG + 0x3f14;
+
+/// The `CalculateValue` stand-in that changes the reaction lists while `ValueChangeEvent` walks
+/// them: logs its words, then on one call does what [`CALC_MODE`] says.
+fn calculating(e: &mut Engine, a: &[u32]) -> Ret {
+    logging(e, a);
+    let n = e.mem.u32(CALC_CALLS);
+    e.mem.set_u32(CALC_CALLS, n + 1);
+    if n != e.mem.u32(CALC_TRIGGER) {
+        return Ret::default();
+    }
+    let value = e.mem.u32(CALC_VALUE);
+    match e.mem.u32(CALC_MODE) {
+        1 => {
+            let extra = e.mem.u32(CALC_EXTRA);
+            e.call(0x00a0_a130, &args![value, extra]);
+        }
+        2 => {
+            // Nothing changed the list before this call, so the current node is the n-th.
+            let head = e.with_stack(4, |e, out| {
+                e.mem.set_u32(out.addr(), 0);
+                e.call(0x00a1_e380, &args![0x011f_3358u32, value, out]);
+                e.mem.u32(out.addr())
+            });
+            let (mut previous, mut node) = (0, head);
+            for _ in 0..n {
+                previous = node;
+                node = e.mem.u32(node + 4);
+            }
+            let next = e.mem.u32(node + 4);
+            if previous == 0 {
+                e.call(0x00a0_c6c0, &args![0x011f_3358u32, value, next]);
+            } else {
+                e.mem.set_u32(previous + 4, next);
+            }
+            e.mem.set_u32(node + 4, 0);
+        }
+        3 => {
+            let other = e.mem.u32(CALC_OTHER);
+            e.call(0x00a0_a220, &args![other]);
+        }
+        _ => {}
+    }
+    Ret::default()
+}
+
 /// `Tile::ValueChangeEvent` (`00a0a220`): a value with no reaction list, and lists of one to three
-/// dependents (one named twice), each recalculated with `CalculateValue(false)` in order.
+/// dependents (one named twice), each recalculated with `CalculateValue(false)` in order. On its
+/// first or second call the `CalculateValue` stand-in may add a reaction to the walked list, take
+/// the current node out of it, or run the event for another value: the walk reads the next node
+/// after the call, from the node it just handled, as the exe does (`00a0a258`).
 #[test]
 fn tile_value_change_event_diff() {
     Diff::new(engine_core::entry!(
@@ -1046,19 +1132,32 @@ fn tile_value_change_event_diff() {
     ))
     .family(&dispatch::DISPATCH)
     .family(&leaf::LEAVES)
-    .inputs(&[Input::Of(&[0, 1, 2, 3, 4]), Input::Of(&[1, 37])])
+    .inputs(&[
+        Input::Of(&[0, 1, 2, 3, 4]),
+        Input::Of(&[1, 37]),
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Of(&[0, 1]),
+    ])
     .setup(|e, case| {
         setter_world(e);
+        e.register(0x00a0_9410, calculating);
         let value = e.mem.alloc(0x14);
         let (a, b, c) = (e.mem.alloc(0x14), e.mem.alloc(0x14), e.mem.alloc(0x14));
         let lists: Vec<Vec<u32>> = vec![vec![], vec![a], vec![a, b], vec![c, a, b], vec![b, b]];
         let list = &lists[case.word(0) as usize];
         let other = e.mem.alloc(0x14);
+        let extra = e.mem.alloc(0x14);
         let mut given = vec![(other, vec![c])];
         if !list.is_empty() {
             given.push((value, list.clone()));
         }
         reaction_map(e, case.word(1), &given);
+        e.mem.set_u32(CALC_MODE, case.word(2));
+        e.mem.set_u32(CALC_VALUE, value);
+        e.mem.set_u32(CALC_OTHER, other);
+        e.mem.set_u32(CALC_EXTRA, extra);
+        e.mem.set_u32(CALC_TRIGGER, case.word(3));
+        e.mem.set_u32(CALC_CALLS, 0);
         vec![value]
     })
     .run()

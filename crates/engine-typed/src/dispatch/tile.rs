@@ -623,6 +623,8 @@ pub fn poke(e: &mut Engine, this: Ptr, trait_id: i32, value: f32) {
 
 /// Trait `trait_id` of the tile and of each ancestor whose `locus` is not 0.0 (a NaN counts), each
 /// added in turn to a float running total (`FADD float; FSTP float`: one rounding, as `f32` adds).
+// `term + sum`, not `sum += term`: the operand order picks which NaN's payload is kept.
+#[allow(clippy::assign_op_pattern)]
 fn sum_over_ancestors(e: &mut Engine, this: Ptr, trait_id: i32) -> f32 {
     let mut sum = typed_call!(super::FAMILY, 0x00a0_11b0, get_float(e, this, trait_id));
     let mut ancestor = e.mem.u32(this.addr() + TILE_PARENT);
@@ -638,7 +640,9 @@ fn sum_over_ancestors(e: &mut Engine, this: Ptr, trait_id: i32) -> f32 {
                 0x00a0_11b0,
                 get_float(e, Ptr::new(ancestor), trait_id)
             );
-            sum += term;
+            // The translation's operand order (`term + sum`): with both NaN the first one's
+            // payload is kept, so the answer is the same bits.
+            sum = term + sum;
         }
         ancestor = e.mem.u32(ancestor + TILE_PARENT);
     }
