@@ -350,6 +350,14 @@ const UNREAD: &[Row] = &[
         N(3),
         "the tile map's compare routine, on insert",
     ),
+    // JohnnyGuitar NVSE.
+    (
+        "johnnyguitar",
+        "lib.rs",
+        "own",
+        N(2),
+        "a storing class's own SetEditorID (vtable +0x134, thiscall: the form and the text)",
+    ),
 ];
 
 /// The source folder of extender crate `name` (`jip`, `nvse`, ...); `NV_<NAME>_SRC=FOLDER`
