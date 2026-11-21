@@ -26,9 +26,11 @@ fn ret(eax: u32) -> Ret {
 /// word (`0126fdf4`: 0, the C locale). The critical section's import thunks, `atexit` and the
 /// manager's allocate and free are stand-ins.
 fn world(e: &mut Engine) {
-    for page in [0x011f_3000, 0x011f_6000, 0x0126_f000] {
+    for page in [0x011f_3000, 0x011f_6000, 0x0126_f000, 0x0101_2000] {
         e.map(page, 0x1000);
     }
+    // The double 0.0 in `.rdata` (`01012060`) the getters and sums compare with.
+    e.mem.set_f64(0x0101_2060, 0.0);
     for stub in [0x00fd_f05c, 0x00fd_f100, 0x00ec_658f, 0x00aa_4060] {
         e.register(stub, |_, _| Ret::default());
     }
@@ -875,7 +877,8 @@ fn tile_getters_diff() {
 /// the flag under `Tile::Lock`.
 #[test]
 fn tile_setters_diff() {
-    let setup = |e: &mut Engine, case: &engine_core::typed::diff::Case| {
+    // The value argument: a float for `SetFloat`, a string pointer (a word) for `SetString`.
+    fn setup(e: &mut Engine, case: &engine_core::typed::diff::Case, value: u32) -> Vec<u32> {
         setter_world(e);
         let code = case.word(0);
         let capacity = if case.word(3) == 1 {
@@ -884,8 +887,8 @@ fn tile_setters_diff() {
             code + 3
         };
         let tile = shaped_tile(e, code, capacity);
-        vec![tile, case.word(1), case.word(2), case.word(4)]
-    };
+        vec![tile, case.word(1), value, case.word(4)]
+    }
     Diff::new(engine_core::entry!(
         0x00a0_12d0,
         dispatch::tile::set_float(Ptr<_>, i32, f32, u8)
@@ -899,7 +902,7 @@ fn tile_setters_diff() {
         Input::Flag,
         Input::Of(&[0, 1]),
     ])
-    .setup(setup)
+    .setup(|e, case| setup(e, case, case.f32(2).to_bits()))
     .run()
     .assert_same();
     Diff::new(engine_core::entry!(
@@ -915,7 +918,7 @@ fn tile_setters_diff() {
         Input::Flag,
         Input::Of(&[0, 1]),
     ])
-    .setup(setup)
+    .setup(|e, case| setup(e, case, case.word(2)))
     .run()
     .assert_same();
 }
@@ -967,7 +970,7 @@ fn tile_poke_diff() {
     .setup(|e, case| {
         setter_world(e);
         let tile = shaped_tile(e, case.word(0), case.word(0) + 1);
-        vec![tile, case.word(1), case.word(2)]
+        vec![tile, case.word(1), case.f32(2).to_bits()]
     })
     .run()
     .assert_same();
