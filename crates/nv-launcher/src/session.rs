@@ -86,6 +86,11 @@ pub fn connect(deliver: impl Fn(Event) -> bool + Send + Sync + 'static) {
     let _ = WINDOW.set(Box::new(deliver));
 }
 
+/// Whether a window takes the work's events (none in scripted runs, `NV_RS_NO_WINDOWS=1`).
+pub fn has_window() -> bool {
+    WINDOW.get().is_some()
+}
+
 /// Sends `event` to the window; false when there is none (or it has gone).
 pub fn send(event: Event) -> bool {
     WINDOW.get().is_some_and(|deliver| deliver(event))
@@ -200,5 +205,6 @@ mod tests {
         assert_eq!(message("x", &["Yes", "No"]), 0);
         assert_eq!(folder("x"), None);
         assert!(!send(Event::StatusDone));
+        assert!(!has_window());
     }
 }

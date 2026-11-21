@@ -69,9 +69,34 @@ pub enum Card {
     NoAnswer,
 }
 
-/// The start screen's entries: Play, Play with mods (when there are mods), Exit.
+/// The start screen's entries: Play, Play with mods (when there are mods), Mods, Settings, Exit.
 pub const PLAY: &str = "Play";
 pub const PLAY_WITH_MODS: &str = "Play with mods";
+/// The mod installer (`crates/mod-chooser`'s text chooser) in the terminal.
+pub const MODS: &str = "Mods";
+/// Play.exe's and play.sh's argument for the mod installer.
+pub const MOD_INSTALLER: &str = "--install-mods";
+
+/// What the window does when the work ends with `code`: the mod installer's good end (`mods`)
+/// goes back to the start screen, Play's ends the launcher; a window closed meanwhile ends it;
+/// a bad end shows the work's own lines with Back and Exit when it wrote any (`lines`), else the
+/// start screen (its message was shown and answered).
+#[derive(Debug, PartialEq)]
+pub enum EndStep {
+    Exit,
+    Start,
+    Lines,
+}
+
+pub fn end_step(mods: bool, code: i32, closed: bool, lines: bool) -> EndStep {
+    if closed || (code == 0 && !mods) {
+        EndStep::Exit
+    } else if code == 0 || !lines {
+        EndStep::Start
+    } else {
+        EndStep::Lines
+    }
+}
 pub const EXIT: &str = "Exit";
 
 /// The start screen. Its status names what the GAME will use: the renderer the play profile
@@ -123,6 +148,7 @@ pub fn start_screen(place: &Place, card: &Card) -> Screen {
     if place.mods {
         entries.push(PLAY_WITH_MODS.to_string());
     }
+    entries.push(MODS.to_string());
     entries.push(SETTINGS.to_string());
     entries.push(EXIT.to_string());
     Screen {
@@ -482,6 +508,8 @@ pub enum Act {
         game: Option<PathBuf>,
     },
     Exit,
+    /// The mod installer, its lines in the terminal.
+    Mods,
     Answer(usize),
     Folder(Option<PathBuf>),
     TypeLine(String),
@@ -837,6 +865,7 @@ pub fn on_enter(kind: Kind, typed: &str, chosen: usize, entry: &str) -> Act {
             mods: true,
             game: None,
         },
+        Kind::Start if entry == MODS => Act::Mods,
         Kind::Start if entry == SETTINGS => Act::OpenSettings,
         Kind::Start | Kind::Refused | Kind::Ended if entry == EXIT => Act::Exit,
         Kind::Ended => Act::BackToStart,
@@ -1007,6 +1036,9 @@ struct App {
     minimise_at: Option<Instant>,
     /// Play's work is running (its one-game claim held).
     working: bool,
+    /// The work running is the mod installer (Mods), not Play: its good end goes back to the
+    /// start screen.
+    mods_running: bool,
     /// The window was closed while Play ran: the launcher ends when Play ends.
     closed: bool,
     /// What the last drawn picture showed ([`App::frame_key`]) and when a frame not drawn is tried
@@ -1245,8 +1277,20 @@ impl App {
     fn play(&mut self, mods: bool, game: Option<PathBuf>) {
         let args = play_arguments(mods, game.as_deref());
         self.output.clear();
+        self.mods_running = false;
         self.back_to_waiting();
         self.start_play(args);
+    }
+
+    /// Mods: the mod installer (Play.exe's `--install-mods` on Windows, play.sh's on Linux and
+    /// macOS, both the game program's text chooser) with its lines in the terminal and its
+    /// questions answered at the prompt (`crate::piped`). No game starts, so the sounds go on.
+    fn mods(&mut self) {
+        self.output.clear();
+        self.mods_running = true;
+        self.back_to_waiting();
+        start_work(vec![MOD_INSTALLER.into()]);
+        self.working = true;
     }
 
     /// Play's work started in [`sound::PLAY_ORDER`]: the sounds stopped and the device let go
@@ -1429,7 +1473,7 @@ impl App {
             self.back(event_loop);
         }
         self.closed = true;
-        crate::play_unix::close_input();
+        crate::piped::close_input();
         if let Some(w) = &self.window {
             w.set_visible(false);
             if on_wayland(event_loop) {
@@ -1472,6 +1516,7 @@ impl App {
             Act::EndIntro => self.end_intro(),
             Act::Play { mods, game } => self.play(mods, game),
             Act::Exit => event_loop.exit(),
+            Act::Mods => self.mods(),
             Act::Answer(i) => {
                 if let Mode::Message(reply) = &mut self.mode {
                     if let Some(r) = reply.take() {
@@ -1489,7 +1534,7 @@ impl App {
                 self.back_to_waiting();
             }
             Act::TypeLine(line) => {
-                crate::play_unix::type_line(&line);
+                crate::piped::type_line(&line);
                 self.add_output(&format!("{line}\n"));
             }
             Act::BackToStart => self.show_start(),
@@ -1998,18 +2043,29 @@ impl winit::application::ApplicationHandler<Event> for App {
                 self.add_output(&text);
             }
             Event::Ended(code) => {
-                self.exit_code = code;
                 self.working = false;
-                // Closed while Play ran: the launcher ends with it.
-                if code == 0 || self.closed {
-                    event_loop.exit();
-                } else if matches!(self.mode, Mode::Output(_)) {
-                    // play.sh's own lines say what went wrong; Back or Exit below them.
-                    self.mode = Mode::Output(Some(code));
-                    self.add_output("");
+                let mods = std::mem::take(&mut self.mods_running);
+                if mods {
+                    // The installer may have added or removed mods: Play with mods follows.
+                    self.place.mods = place::place().mods;
                 } else {
-                    // Play.exe's message was shown and answered: back to the start.
-                    self.show_start();
+                    self.exit_code = code;
+                }
+                match end_step(
+                    mods,
+                    code,
+                    self.closed,
+                    matches!(self.mode, Mode::Output(_)),
+                ) {
+                    // Closed while the work ran, or Play's good end: the launcher ends.
+                    EndStep::Exit => event_loop.exit(),
+                    // The installer's good end, or Play.exe's message shown and answered.
+                    EndStep::Start => self.show_start(),
+                    // The work's own lines say what went wrong; Back or Exit below them.
+                    EndStep::Lines => {
+                        self.mode = Mode::Output(Some(code));
+                        self.add_output("");
+                    }
                 }
             }
             Event::Pasted { id, text } => {
@@ -2382,6 +2438,7 @@ pub fn run(raw: Vec<String>) -> i32 {
         hidden: false,
         minimise_at: None,
         working: false,
+        mods_running: false,
         closed: false,
         frame: FrameState::default(),
         chosen_again: Vec::new(),
@@ -2467,15 +2524,35 @@ mod tests {
         }
     }
 
+    /// When the work ends: the mod installer's good end back to the start screen, Play's good
+    /// end the launcher's end; a closed window ends it; a bad end shows the lines, or the start
+    /// screen when the work wrote none (its message was answered). Mods runs Play.exe's and
+    /// play.sh's own installer argument.
+    #[test]
+    fn the_installer_comes_back_to_the_start_and_play_ends_the_launcher() {
+        assert_eq!(end_step(true, 0, false, true), EndStep::Start);
+        assert_eq!(end_step(false, 0, false, true), EndStep::Exit);
+        assert_eq!(end_step(true, 0, true, true), EndStep::Exit);
+        assert_eq!(end_step(false, 3, true, true), EndStep::Exit);
+        assert_eq!(end_step(true, 2, false, true), EndStep::Lines);
+        assert_eq!(end_step(false, 7, false, true), EndStep::Lines);
+        assert_eq!(end_step(false, 7, false, false), EndStep::Start);
+        let script = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../distribution/unix/play.sh"),
+        )
+        .unwrap();
+        assert!(script.contains(&format!("({MOD_INSTALLER}) opt_install=1")));
+    }
+
     /// The start screen offers what works today: Play, Play with mods only when there are mods,
-    /// Exit; no entry for anything that does not exist yet.
+    /// Mods, Settings, Exit; no entry for anything that does not exist yet.
     #[test]
     fn the_start_screen_offers_what_works() {
         let s = start_screen(&place(Some("/g/Fallout New Vegas"), false), &Card::Asking);
-        assert_eq!(s.entries, [PLAY, SETTINGS, EXIT]);
+        assert_eq!(s.entries, [PLAY, MODS, SETTINGS, EXIT]);
         assert_eq!(s.welcome[0], "Game: Fallout New Vegas");
         let s = start_screen(&place(Some("/g/x"), true), &Card::Asking);
-        assert_eq!(s.entries, [PLAY, PLAY_WITH_MODS, SETTINGS, EXIT]);
+        assert_eq!(s.entries, [PLAY, PLAY_WITH_MODS, MODS, SETTINGS, EXIT]);
         let s = start_screen(&place(None, false), &Card::Asking);
         assert!(s.welcome[0].contains("not found"), "{:?}", s.welcome);
         assert_eq!(s.welcome.len(), 1);
@@ -2906,6 +2983,7 @@ mod tests {
         assert_eq!(testing.len(), settings::TESTING.len() + 1);
         assert_eq!(testing.last().map(String::as_str), Some(BACK));
         assert_eq!(on_enter(Kind::Start, "", 1, SETTINGS), Act::OpenSettings);
+        assert_eq!(on_enter(Kind::Start, "", 1, MODS), Act::Mods);
         assert_eq!(
             on_enter(Kind::Settings, "", 0, &main[0]),
             Act::OpenChoices(0)
