@@ -60,7 +60,7 @@ pub const ROWS: &[Row] = &[
         plan: "S0089.02",
         key: "bRememberAmmoCountOnLoadNoReload",
         tweaks: None,
-        summary: "changes play: loading a save no longer reloads the player's weapon (with S0089.07 the clip keeps its saved rounds)",
+        summary: "changes play: loading a save no longer reloads the player's weapon (with S0089.07 the clip keeps its saved rounds); only together with S0089.06",
     },
     Row {
         bit: stewie::RELOAD_NO_NEW_AMMO_ENTRY,

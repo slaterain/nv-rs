@@ -7692,8 +7692,12 @@ pub fn fn_0095a3b0(e: &mut Engine, this: Ptr<PlayerCharacter>, buffer: u32) {
         }
         let holder = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, this));
         // lStewieAl's Tweaks' row S0089.02 (`RememberAmmoCountOnLoad`, the jump at `0x95BF7F` to
-        // `0x95C05A`): the weapon is not reloaded here (`+0x3EC`), so the loaded rounds stay.
-        if holder != 0 && !e.stewie(engine_core::extend::stewie::LOAD_GAME_NO_RELOAD) {
+        // `0x95C05A`): the weapon is not reloaded here (`+0x3EC`), so the loaded rounds stay. Tweaks ships
+        // it only with S0089.06, which sets up the player's ammunition entry on the first load: without
+        // that row this reload is the entry's only set-up there, so it stays.
+        let no_reload = e.stewie(engine_core::extend::stewie::LOAD_GAME_NO_RELOAD)
+            && e.stewie(engine_core::extend::stewie::LOAD_GAME_PLAYER_WEAPON_WITHOUT_3D);
+        if holder != 0 && !no_reload {
             let holder = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, this));
             if e.vcall(holder, 0x148, &args![]).u32() != 0 {
                 let holder = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, this));
@@ -13874,10 +13878,11 @@ mod tests {
     /// lStewieAl's Tweaks' row S0089.02 (`RememberAmmoCountOnLoad`, the jump at `0x95BF7F`): a load
     /// (buffer version 0x1b) of a player whose process has a weapon entry (slot `+0x148`). Off, the
     /// exe reloads the weapon (the player's slot `+0x3EC` with the weapon's form); on, it does not.
-    /// The default ammunition (`009462c0`) is chosen either way.
+    /// With S0089.06 off the row does nothing (the reload is then the first load's only set-up of the
+    /// ammunition entry).    /// The default ammunition (`009462c0`) is chosen either way.
     #[test]
     fn s0089_02_the_load_does_not_reload_the_weapon() {
-        for on in [false, true] {
+        for (on, with_06) in [(false, true), (true, true), (true, false)] {
             let mut e = engine();
             list_helpers(&mut e);
             let player = new_player(&mut e);
@@ -13896,10 +13901,14 @@ mod tests {
             e.register(0x008d_8520, |e, a| eax(e.mem.u32(a[0] + 0x68)));
             e.register(0x0044_ddc0, |e, a| eax(e.mem.u32(a[0] + 8)));
             e.set_stewie(engine_core::extend::stewie::LOAD_GAME_NO_RELOAD, on);
+            e.set_stewie(
+                engine_core::extend::stewie::LOAD_GAME_PLAYER_WEAPON_WITHOUT_3D,
+                with_06,
+            );
             start_log(&mut e);
             fn_0095a3b0(&mut e, player, buffer);
             let reloads = calls_to(&e, reload);
-            if on {
+            if on && with_06 {
                 assert!(reloads.is_empty());
             } else {
                 assert_eq!(reloads.len(), 1);

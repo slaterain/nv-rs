@@ -6162,12 +6162,23 @@ mod tests {
     /// S0089.06 and S0089.01 as given. Answers whether the weapon was equipped and the kept word
     /// of S0089.01 (the count plus one; 0 none).
     fn s0089_player_load(model: u32, without_3d: bool, keep_count: bool) -> (bool, u32) {
+        s0089_load_of(true, model, without_3d, keep_count)
+    }
+
+    /// [`s0089_player_load`] for the player (`is_player`) or for an NPC (the player another reference).
+    fn s0089_load_of(
+        is_player: bool,
+        model: u32,
+        without_3d: bool,
+        keep_count: bool,
+    ) -> (bool, u32) {
         let mut e = engine();
         let p = process(&mut e);
         let a = p.addr();
         let buffer = thing(&mut e);
         let reference = actor(&mut e);
-        e.set_global(PLAYER, reference);
+        let player = if is_player { reference } else { thing(&mut e) };
+        e.set_global(PLAYER, player);
         let process_object = thing(&mut e);
         slot_returns(&mut e, OBJECT_SLOTS, 0x0, 0x10);
         slot_returns(&mut e, OBJECT_SLOTS, 0xc, reference);
@@ -6214,6 +6225,10 @@ mod tests {
         assert_eq!(s0089_player_load(0, false, true), (false, 0));
         assert_eq!(s0089_player_load(model, false, false), (true, 0));
         assert_eq!(s0089_player_load(model, false, true), (true, 6));
+        // Only the player: an NPC with no 3D is not equipped with the rows, and an NPC with 3D keeps
+        // no count of its own.
+        assert_eq!(s0089_load_of(false, 0, true, true), (false, 0));
+        assert_eq!(s0089_load_of(false, model, true, true), (true, 0));
     }
 
     #[test]

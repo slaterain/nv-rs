@@ -564,11 +564,12 @@ fn ammo_for_hot_key_slot(e: &mut Engine, player: u32, slot: u32) -> u32 {
 /// `+0xE3C`) the player has rounds of, that ammunition becomes the entry's type (+8); the entry's
 /// count (+4) is then the saved count (S0089.01) limited to the rounds carried, or all the rounds
 /// carried when no count was saved. Without the hotkeyed rounds the entry's own type is counted
-/// the same way. The saved count is used once.
+/// the same way.
 pub(crate) fn load_game_setup_ammo(e: &mut Engine, player: u32) {
     let kept = e.stewie_kept(engine_core::extend::stewie::kept::SAVED_AMMO_COUNT, 4);
+    // The saved count stays for Tweaks' `AMID` step after the load (`crates/stewie`'s co-save); its
+    // PreLoadGame listener clears it before the next load.
     let saved = e.mem.u32(kept) as i32 - 1;
-    e.mem.set_u32(kept, 0);
     let limit = |count: i32| if saved >= 0 { saved.min(count) } else { count };
     let process = e.mem.u32(player + 0x68);
     let ammo_info = e.mem.u32(process + 0x118);
@@ -861,7 +862,11 @@ pub fn fn_0095d850(
     let change = process_slot(e, this, 0x14c, &args![]);
     // lStewieAl's Tweaks' row S0089.04 (`RememberAmmoCountOnLoad` at `0x95DBB4`): no equipped
     // ammunition entry counts as an empty one instead of being read.
-    let no_entry = change == 0 && e.stewie(engine_core::extend::stewie::RELOAD_NULL_AMMO_ENTRY);
+    // With S0089.03 (no entry installed just before) a missing entry is just as possible: either row
+    // counts it as empty.
+    let no_entry = change == 0
+        && (e.stewie(engine_core::extend::stewie::RELOAD_NULL_AMMO_ENTRY)
+            || e.stewie(engine_core::extend::stewie::RELOAD_NO_NEW_AMMO_ENTRY));
     if !no_entry && typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, change)) != 0 {
         if equipped_before == 0 {
             return false;
@@ -9490,6 +9495,17 @@ mod tests {
         remembered_rounds: Option<u32>,
         tab_open: bool,
     ) -> Vec<u32> {
+        s0089_08_choice_on_tab(on, rounds, remembered_rounds, tab_open, 4)
+    }
+
+    /// [`s0089_08_choice`] with the inventory menu's filter `tab` (4: ammunition).
+    fn s0089_08_choice_on_tab(
+        on: bool,
+        rounds: u32,
+        remembered_rounds: Option<u32>,
+        tab_open: bool,
+        tab: u32,
+    ) -> Vec<u32> {
         let mut e = engine(CALLEES_0095D450);
         let held = 0x5000_1000;
         let entry = e.mem.alloc(0x10);
@@ -9528,7 +9544,7 @@ mod tests {
         });
         e.mem.set_u8(0x011f_308f + 1002, u8::from(tab_open));
         let menu = e.mem.alloc(0x100);
-        e.mem.set_u32(menu + 0x84, 4);
+        e.mem.set_u32(menu + 0x84, tab);
         e.mem.set_u32(0x011d_9ea4, menu);
         e.set_stewie(engine_core::extend::stewie::HOTKEY_AMMO_NEEDS_ROUNDS, on);
         let log = logged(&mut e, |e| {
@@ -9556,6 +9572,11 @@ mod tests {
         assert_eq!(s0089_08_choice(true, 0, None, false), vec![held, held]);
         assert_eq!(s0089_08_choice(true, 4, None, false), vec![held, hotkeyed]);
         assert_eq!(s0089_08_choice(true, 4, None, true), vec![held, held]);
+        // The inventory open on another tab (weapons, 0): the hotkeyed ammunition is taken.
+        assert_eq!(
+            s0089_08_choice_on_tab(true, 4, None, true, 0),
+            vec![held, hotkeyed]
+        );
         assert_eq!(
             s0089_08_choice(true, 4, Some(2), false),
             vec![held, remembered]
@@ -9594,6 +9615,26 @@ mod tests {
             assert_eq!(installed, usize::from(!on), "on {on}");
             assert_eq!(calls_to(&log, SLOT_C).len(), usize::from(!on), "on {on}");
         }
+    }
+
+    /// S0089.03 on with S0089.04 off: the ammunition entry is gone when its count is read (no entry
+    /// installed just before). The missing entry counts as empty, as with S0089.04, instead of being
+    /// read through.
+    #[test]
+    fn s0089_03_alone_counts_a_missing_entry_as_empty() {
+        let mut e = engine(CALLEES_0095D850);
+        let (player, held) = reload_entry_world(&mut e, Some(0));
+        e.set_stewie(engine_core::extend::stewie::RELOAD_NO_NEW_AMMO_ENTRY, true);
+        e.set_stewie(engine_core::extend::stewie::RELOAD_NULL_AMMO_ENTRY, false);
+        let log = logged(&mut e, |e| {
+            assert!(e
+                .call(
+                    0x0095_d850,
+                    &args![player, Ptr::<()>::new(held), 0u32, 0u32],
+                )
+                .bool());
+        });
+        assert_eq!(calls_to(&log, SET_BYTE_AT_4)[0], vec![held, 0x29]);
     }
 
     /// The player's process for S0089.07: the ammunition entry (`+0x118`: count +4, type +8) of
@@ -9647,8 +9688,6 @@ mod tests {
             e.mem.set_u32(kept, saved + 1);
         }
         load_game_setup_ammo(&mut e, player);
-        let kept = e.stewie_kept(engine_core::extend::stewie::kept::SAVED_AMMO_COUNT, 4);
-        assert_eq!(e.mem.u32(kept), 0, "the saved count is used once");
         (e.mem.u32(ammo_info + 4), e.mem.u32(ammo_info + 8))
     }
 
