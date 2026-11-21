@@ -32,7 +32,9 @@ fn editor_id_to_form_id_finds_the_form() {
 #[test]
 fn seconds_passed_reads_the_game_timer() {
     let mut e = engine(true);
-    e.register(SECONDS_PASSED, |e, a| (e.mem.f32(a[0] + 0xc) / 2.0).into_ret());
+    e.register(SECONDS_PASSED, |e, a| {
+        (e.mem.f32(a[0] + 0xc) / 2.0).into_ret()
+    });
     if !e.mem.is_mapped(GAME_TIMER) {
         e.map(GAME_TIMER & !0xfff, 0x1000);
     }

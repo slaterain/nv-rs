@@ -36,7 +36,15 @@ fn every_slot_is_the_sources() {
             other => panic!("{opcode:04x}: {other}"),
         };
         assert_eq!(
-            (slot.name, slot.returns, slot.kind, slot.alias, slot.needs_ref, slot.params.name, slot.file),
+            (
+                slot.name,
+                slot.returns,
+                slot.kind,
+                slot.alias,
+                slot.needs_ref,
+                slot.params.name,
+                slot.file
+            ),
             (row[2], returns, kind, row[4], row[5] == "1", row[6], row[7]),
             "{opcode:04x}"
         );
@@ -54,12 +62,18 @@ fn installed_the_records_are_written() {
     assert_eq!(nvse::table::guest_text(&e, e.mem.u32(lerp)), b"Lerp");
     assert_ne!(e.mem.u32(lerp + 0x18), 0, "built: an execute");
     let get_editor_id = nvse::table::record_of(&e, 0x3114);
-    assert_eq!(nvse::table::guest_text(&e, e.mem.u32(get_editor_id + 4)), b"GetEdID");
+    assert_eq!(
+        nvse::table::guest_text(&e, e.mem.u32(get_editor_id + 4)),
+        b"GetEdID"
+    );
     assert_eq!(nvse::table::return_type(&e, 0x3114), STR);
     // An unbuilt one: named, no handler (a line calling it fails, as without the DLL).
     let jump = slot(0x310f).unwrap();
     let record = nvse::table::record_of(&e, jump.opcode);
-    assert_eq!(nvse::table::guest_text(&e, e.mem.u32(record)), jump.name.as_bytes());
+    assert_eq!(
+        nvse::table::guest_text(&e, e.mem.u32(record)),
+        jump.name.as_bytes()
+    );
     assert_eq!(e.mem.u32(record + 0x18), 0);
 }
 

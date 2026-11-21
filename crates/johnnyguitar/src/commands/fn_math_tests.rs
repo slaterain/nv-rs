@@ -18,7 +18,11 @@ fn the_arithmetic_commands() {
     assert_eq!(result(&mut e, CLAMP, &[num(-1.0), num(0.0), num(2.0)]), 0.0);
     assert_eq!(result(&mut e, CLAMP, &[num(1.5), num(0.0), num(2.0)]), 1.5);
     assert_eq!(
-        result(&mut e, REMAP, &[num(5.0), num(0.0), num(10.0), num(100.0), num(200.0)]),
+        result(
+            &mut e,
+            REMAP,
+            &[num(5.0), num(0.0), num(10.0), num(100.0), num(200.0)]
+        ),
         150.0
     );
     // In floats: (1 - 0.1) * 0 + 0.1 * 1 rounds as an f32 does.
@@ -37,7 +41,10 @@ fn rgb_color_packs_three_components() {
         result(&mut e, GET_RGB_COLOR, &[int(0x12), int(0x34), int(0x56)]),
         f64::from(0x0012_3456u32)
     );
-    assert_eq!(result(&mut e, GET_RGB_COLOR, &[int(256), int(0), int(0)]), 0.0);
+    assert_eq!(
+        result(&mut e, GET_RGB_COLOR, &[int(256), int(0), int(0)]),
+        0.0
+    );
 }
 
 /// The projection: a point straight ahead lands in the middle; one behind is pulled to the edge
@@ -53,10 +60,12 @@ fn a_point_is_projected_with_the_camera_copy() {
         [0.0, 1.0, 0.0, 0.0],
     ];
     c.port = [0.0, 1.0, 1.0, 0.0];
-    let (on, p) = world_to_screen::project(&c, [0.0, 10.0, 0.0], 0, world_to_screen::ZERO_TOLERANCE);
+    let (on, p) =
+        world_to_screen::project(&c, [0.0, 10.0, 0.0], 0, world_to_screen::ZERO_TOLERANCE);
     assert!(on);
     assert_eq!((p[0], p[1]), (0.5, 0.5));
-    let (on, p) = world_to_screen::project(&c, [0.0, -10.0, 1.0], 0, world_to_screen::ZERO_TOLERANCE);
+    let (on, p) =
+        world_to_screen::project(&c, [0.0, -10.0, 1.0], 0, world_to_screen::ZERO_TOLERANCE);
     assert!(!on);
     assert!((0.0..=1.0).contains(&p[0]) && (0.0..=1.0).contains(&p[1]));
 }
@@ -92,11 +101,17 @@ fn the_camera_is_copied_for_the_world_camera_only() {
     e.mem.set_f32(camera + 0x108, 1.0);
     // Another field of view: no copy.
     e.site(0x00c5_244a, &[camera, 90.0f32.to_bits()]);
-    assert_eq!(world_to_screen::camera(&mut e), world_to_screen::CameraParams::default());
+    assert_eq!(
+        world_to_screen::camera(&mut e),
+        world_to_screen::CameraParams::default()
+    );
     // Another camera: no copy.
     let other = e.mem.alloc(0x120);
     e.site(0x00c5_244a, &[other, 75.0f32.to_bits()]);
-    assert_eq!(world_to_screen::camera(&mut e), world_to_screen::CameraParams::default());
+    assert_eq!(
+        world_to_screen::camera(&mut e),
+        world_to_screen::CameraParams::default()
+    );
     e.site(0x00c5_244a, &[camera, 75.0f32.to_bits()]);
     let copy = world_to_screen::camera(&mut e);
     assert_eq!(copy.world, [1.0, 2.0, 3.0]);

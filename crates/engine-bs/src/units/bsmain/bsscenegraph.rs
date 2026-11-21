@@ -942,7 +942,6 @@ mod tests {
         assert_eq!(e.get(camera, NiCamera::m_fLODAdjust), 0.0);
     }
 
-
     thread_local! {
         static CAMERA_SEEN: std::cell::RefCell<Vec<Vec<u32>>> =
             const { std::cell::RefCell::new(Vec::new()) };

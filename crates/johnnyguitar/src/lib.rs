@@ -26,8 +26,13 @@
 //!
 //! It is a fixes row ("JohnnyGuitar's editor ids", `NV_JG_EDITOR_IDS`, on in the fixes preset,
 //! off in vanilla). Off, nothing here is installed and every site runs the exe's path.
-//! JohnnyGuitar is not listed as installed (its 408 commands are not built): a mod that checks
-//! for it is told it is absent.
+//!
+//! JohnnyGuitar answers "installed" only with the host's row `NV_JG_INSTALLED` (off in every
+//! preset, [`set_answers_installed`]): then it is in xNVSE's list of plugins (version 5.28), its 408
+//! command slots are in the table at their real opcodes ([`table`], [`slots`]) with the built
+//! commands answering ([`commands`]), WorldToScreen's camera copy is taken ([`world_to_screen`]),
+//! and its editor ids are on. Otherwise a mod that checks for it is told it is absent, and its
+//! opcodes stay empty, as without the DLL.
 
 pub mod commands;
 #[rustfmt::skip]
@@ -180,7 +185,7 @@ pub fn on(e: &Engine) -> bool {
     e.ext_get::<JohnnyGuitar>().is_some_and(|j| j.installed)
 }
 
-/// xNVSE's record of JohnnyGuitar: not listed (its commands are not built), its listener for the
+/// xNVSE's record of JohnnyGuitar: listed only while it answers "installed", its listener for the
 /// deferred start.
 fn plugin(listed: bool) -> nvse::plugins::BuiltIn {
     nvse::plugins::BuiltIn {

@@ -50,4 +50,3 @@ pub fn console_print(e: &mut Engine, format: &[u8], words: &[u32]) {
         e.call(PRINT_LINE, &all);
     });
 }
-

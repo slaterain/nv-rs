@@ -337,8 +337,12 @@ fn world_to_screen(e: &mut Engine, w: &[u32]) -> Ret {
         }
     }
     let camera = crate::world_to_screen::camera(e);
-    let (on, out) =
-        crate::world_to_screen::project(&camera, p, handling, crate::world_to_screen::ZERO_TOLERANCE);
+    let (on, out) = crate::world_to_screen::project(
+        &camera,
+        p,
+        handling,
+        crate::world_to_screen::ZERO_TOLERANCE,
+    );
     a.set_result(e, if on { 1.0 } else { 0.0 });
     for (local, v) in outs.into_iter().zip(out) {
         set_var(e, local, f64::from(v));

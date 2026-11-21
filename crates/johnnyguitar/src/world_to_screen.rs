@@ -91,7 +91,12 @@ pub fn camera(e: &mut Engine) -> CameraParams {
 /// viewport, z the depth over w) when it is on screen in front; otherwise `None` of the point,
 /// pulled onto the screen's edge for `offscreen` 0 (a square) or 1 (a circle), as computed for 2
 /// and up. `w` zero: `None` of x and y as projected and z untouched (0).
-pub fn project(c: &CameraParams, p: [f32; 3], offscreen: i32, zero_tolerance: f32) -> (bool, [f32; 3]) {
+pub fn project(
+    c: &CameraParams,
+    p: [f32; 3],
+    offscreen: i32,
+    zero_tolerance: f32,
+) -> (bool, [f32; 3]) {
     let m = &c.world_to_cam;
     let row = |r: usize| p[0] * m[r][0] + p[1] * m[r][1] + p[2] * m[r][2] + m[r][3];
     let fw = row(3);
@@ -131,7 +136,17 @@ pub fn project(c: &CameraParams, p: [f32; 3], offscreen: i32, zero_tolerance: f3
             out[1] = 0.5 * ((y2 / divider) + 1.0);
         }
         // C's `a > 0.f ? (a < 1.f ? a : 1.f) : 0.f` (a NaN gives 0).
-        let clamp01 = |a: f32| if a > 0.0 { if a < 1.0 { a } else { 1.0 } } else { 0.0 };
+        let clamp01 = |a: f32| {
+            if a > 0.0 {
+                if a < 1.0 {
+                    a
+                } else {
+                    1.0
+                }
+            } else {
+                0.0
+            }
+        };
         out[0] = clamp01(out[0]);
         out[1] = clamp01(out[1]);
     }
