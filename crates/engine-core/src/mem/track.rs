@@ -1,26 +1,40 @@
 //! The store track ([`Mem::enable_track`]): which tracked pages of guest memory were written since
-//! their owner last looked. Off unless enabled (then every store tests one byte of a page table).
+//! their owner last looked. Off unless enabled; off, no store pays more than the one flag test it
+//! already made (`store_diag`).
 //!
 //! A reader that keeps its own copy of some of the game's objects (the culling copy) marks the
-//! pages holding them as tracked; every write of guest memory through [`Mem`] (stores of every
-//! width, [`Mem::write`], [`Mem::zero`], frees, the interlocked operations' words) to a tracked
-//! page sets that page's dirty bit; [`Track::take_dirty`] hands the dirty pages over and clears
-//! them. The game's bytes are never changed or held back: the track only says where to look again.
+//! pages holding them as tracked ([`Track::set_tracked`], which also marks them dirty, so a copy
+//! made before or after tracking starts is checked once); every write of guest memory through
+//! [`Mem`] (stores of every width, [`Mem::write`] and `try_write`, [`Mem::zero`], frees, `map` and
+//! `unmap`, the interlocked operations' words) to a tracked page sets that page's dirty bit;
+//! [`Track::take_dirty`] hands the dirty pages over and clears them. The game's bytes are never
+//! changed or held back: the track only says where to look again.
 //!
 //! **Threads.** One track serves the shared memory and all its views (made before
 //! [`Mem::start_sharing`], carried into every view). The tracked flags change only while the owner
-//! has the walk to itself (between frames: [`Track::set_tracked`]); the dirty bits are atomic, set
-//! from any thread, so a store that lands while the owner takes the dirty pages is seen either this
-//! time or the next.
+//! has the walk to itself (between frames). Every write marks its pages AFTER its bytes are written,
+//! with a release `fetch_or`; [`Track::take_dirty`] clears the bits with an acquire swap. So when
+//! the owner takes a page and then re-reads it, every write whose mark it took is visible to it, and
+//! a write it did not see marks the page again for the next take: no store is lost.
+//!
+//! The interlocked words are the one exception to "after": [`Mem::atomic_u32`] hands out the word
+//! and the caller's operation follows outside this module. Such a page is marked when the word is
+//! handed out and marked "late" too: the take that clears its dirty bit marks it dirty again, so the
+//! page comes out in the next take as well, by which time the operation (nanoseconds after the hand
+//! out) has long been done.
 //!
 //! [`Mem`]: super::Mem
 //! [`Mem::enable_track`]: super::Mem::enable_track
 //! [`Mem::write`]: super::Mem::write
 //! [`Mem::zero`]: super::Mem::zero
+//! [`Mem::atomic_u32`]: super::Mem::atomic_u32
 //! [`Mem::start_sharing`]: super::Mem::start_sharing
 
 use super::{PAGES, PAGE_BITS};
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering::Relaxed};
+use std::sync::atomic::{
+    AtomicU64, AtomicU8,
+    Ordering::{Acquire, Relaxed, Release},
+};
 
 /// The pages tracked and the pages written since they were last taken.
 pub struct Track {
@@ -28,6 +42,9 @@ pub struct Track {
     tracked: Box<[AtomicU8]>,
     /// One bit a page: written since [`Track::take_dirty`] last took it.
     dirty: Box<[AtomicU64]>,
+    /// One bit a page: an interlocked word was handed out there ([`Track::note_atomic`]); the next
+    /// take marks the page dirty again.
+    late: Box<[AtomicU64]>,
 }
 
 impl Default for Track {
@@ -41,10 +58,12 @@ impl Track {
         Track {
             tracked: (0..=PAGES).map(|_| AtomicU8::new(0)).collect(),
             dirty: (0..PAGES.div_ceil(64)).map(|_| AtomicU64::new(0)).collect(),
+            late: (0..PAGES.div_ceil(64)).map(|_| AtomicU64::new(0)).collect(),
         }
     }
 
-    /// Tracks (or stops tracking) the pages `[addr, addr + len)` touches.
+    /// Tracks (or stops tracking) the pages `[addr, addr + len)` touches. A page tracked from now on
+    /// is marked dirty, so the owner's next take checks it whatever was written before.
     pub fn set_tracked(&self, addr: u32, len: u32, on: bool) {
         if len == 0 {
             return;
@@ -53,6 +72,9 @@ impl Track {
         let last = ((u64::from(addr) + u64::from(len) - 1) >> PAGE_BITS) as usize;
         for p in first..=last.min(PAGES - 1) {
             self.tracked[p].store(u8::from(on), Relaxed);
+            if on {
+                self.mark(p);
+            }
         }
     }
 
@@ -61,7 +83,8 @@ impl Track {
         self.tracked[p].load(Relaxed) != 0
     }
 
-    /// A write of `len` bytes (at least 1) at `a`: marks each tracked page it touches.
+    /// A write of `len` bytes (at least 1) at `a`, made: marks each tracked page it touched. Called
+    /// after the bytes are written.
     #[inline(always)]
     pub(super) fn note(&self, a: u32, len: u32) {
         let first = (a >> PAGE_BITS) as usize;
@@ -85,24 +108,38 @@ impl Track {
         }
     }
 
-    /// Sets page `p`'s dirty bit (a plain load first: a page written again and again pays the
-    /// atomic once).
-    #[inline(always)]
-    fn mark(&self, p: usize) {
-        let word = &self.dirty[p / 64];
-        let bit = 1u64 << (p % 64);
-        if word.load(Relaxed) & bit == 0 {
-            word.fetch_or(bit, Relaxed);
+    /// The interlocked word at `a` handed out (its operation follows): marks its page dirty and
+    /// late, when tracked.
+    #[inline]
+    pub(super) fn note_atomic(&self, a: u32) {
+        let p = (a >> PAGE_BITS) as usize;
+        if self.tracked[p].load(Relaxed) != 0 {
+            self.late[p / 64].fetch_or(1u64 << (p % 64), Release);
+            self.mark(p);
         }
     }
 
-    /// Hands every page written since the last call to `f` (lowest first) and clears its bit.
+    /// Sets page `p`'s dirty bit, releasing the bytes written before it. Always the read-modify-
+    /// write: skipping it when the bit looks set already could miss the owner clearing it at that
+    /// moment, and the write would never be seen.
+    #[inline(always)]
+    fn mark(&self, p: usize) {
+        self.dirty[p / 64].fetch_or(1u64 << (p % 64), Release);
+    }
+
+    /// Hands every page written since the last call to `f` (lowest first) and clears its bit. A page
+    /// with an interlocked word handed out since is handed over and marked dirty again for the next
+    /// call ([`Track::note_atomic`]).
     pub fn take_dirty(&self, mut f: impl FnMut(u32)) {
-        for (i, word) in self.dirty.iter().enumerate() {
-            if word.load(Relaxed) == 0 {
+        for (i, (word, late)) in self.dirty.iter().zip(self.late.iter()).enumerate() {
+            if word.load(Relaxed) == 0 && late.load(Relaxed) == 0 {
                 continue;
             }
-            let mut bits = word.swap(0, Relaxed);
+            let late_bits = late.swap(0, Acquire);
+            let mut bits = word.swap(0, Acquire) | late_bits;
+            if late_bits != 0 {
+                word.fetch_or(late_bits, Release);
+            }
             while bits != 0 {
                 let b = bits.trailing_zeros() as usize;
                 bits &= bits - 1;
