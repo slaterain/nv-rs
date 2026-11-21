@@ -1474,6 +1474,14 @@ mod tests {
         .map_err(|p| p.downcast_ref::<String>().cloned().unwrap_or_default())
         .unwrap_err();
         assert!(why.contains("with bit 0x8000000000000000"), "{why}");
+
+        // The differential test's direct run reaches 63 with a diagnostic on, as it reaches 3.
+        let mut e = wide_engine(Some("stand_in,last_63"));
+        e.call_log = Some(vec![]);
+        e.call(WIDE_CALLER, &[5]);
+        assert_eq!(e.typed.direct, 0);
+        e.typed_force_direct();
+        assert!(e.typed_direct(FAMILY, LEAF) && e.typed_direct(LAST_ID, LAST_LEAF));
     }
 
     /// The dual run's line names the high families in their dual run, with their own counts.
