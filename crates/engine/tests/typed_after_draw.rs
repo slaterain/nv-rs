@@ -52,11 +52,19 @@ const SLOTS: [u32; 16] = [
     0xa4, 0x0, 0x10,
 ];
 
+/// A slot +0x34c stand-in that also clears the actor's process word (+0x68).
+const CLEARS_PROCESS: u32 = SLOT_FN + 0x800;
+
 fn register_slots(e: &mut Engine) {
     macro_rules! each {
         ($($s:literal)*) => { $( e.register(SLOT_FN + $s, slot::<$s>); )* };
     }
     each!(0x100 0x104 0x170 0x1d0 0x1d8 0x220 0x224 0x22c 0x314 0x34c 0x428 0x500 0x504 0xa4 0x0 0x10);
+    e.register(CLEARS_PROCESS, |e, a| {
+        let r = slot::<0x34c>(e, a);
+        e.mem.set_u32(a[0] + 0x68, 0);
+        r
+    });
 }
 
 /// An object (0x2c0 bytes, answers from +0x100) with its own vtable; `real` names slots that hold an
@@ -291,6 +299,9 @@ fn after_draw_merge_detection() {
             .map(|i| {
                 if i == 4 {
                     0
+                } else if (i + case.word(0)) % 4 == 1 {
+                    // Not an actor (slot +0x100 answers 0) and no process at +0x68.
+                    object(e, &[])
                 } else {
                     character(e, i + case.word(0), &others)
                 }
@@ -329,6 +340,12 @@ fn after_draw_ragdoll_step() {
                     e.mem.set_u32(o + 0xb0, ragdoll);
                     let p = object(e, &[]);
                     e.mem.set_u32(o + 0x68, p);
+                    // Some actors' frame step (slot +0x34c) clears their process word, so the
+                    // second process read finds none.
+                    if i % 3 == 0 {
+                        let vt = e.mem.u32(o);
+                        e.mem.set_u32(vt + 0x34c, CLEARS_PROCESS);
+                    }
                 }
                 o
             })
@@ -374,7 +391,9 @@ fn animation_case(e: &mut Engine, case: &Case) -> Vec<u32> {
     e.mem.set_u32(0x011c_3ea8, case.word(3));
     e.mem.set_u8(0x011e_07a8, case.word(4) as u8);
     e.mem.set_u32(0x011d_df38, 0x0300_0100);
-    set_logged(e, 0x0c, case.word(4));
+    // The flag object's answer (`0042ce10`) on its own input, so all four pairs with the forcing byte
+    // are generated.
+    set_logged(e, 0x0c, case.word(5));
     vec![animation]
 }
 
@@ -384,6 +403,7 @@ fn animation_inputs() -> Vec<Input> {
         Input::Of(&[0, 1, 2, 3]),
         Input::Of(&[0, 2, 3, 6]),
         Input::Of(&[1, 2, 4]),
+        Input::Flag,
         Input::Flag,
     ]
 }
