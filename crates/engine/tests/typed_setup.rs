@@ -654,6 +654,39 @@ fn setup_sort_shadow_lights() {
         .assert_same();
 }
 
+#[test]
+fn setup_sort_share_at_the_low_limit() {
+    // A fading light whose share of the fade lands exactly on `low` (0.25, a float), just below
+    // and just above it: only a share ABOVE `low` moves the light after the active fence. The
+    // target at least `high` (1.0) and the elapsed time below the fade time (1.0), so the share is
+    // the elapsed time.
+    Diff::new(entry!(0x00b5_cde0, lists::sort_shadow_lights(Ptr<_>, u32)))
+        .common()
+        .inputs(&[
+            Input::Of(&[0x3e80_0000, 0x3e7f_ffff, 0x3e80_0001, 0x3f40_0000]),
+            Input::Of(&[ONE]),
+        ])
+        .setup(|e, case: &Case| {
+            stand_ins(e);
+            e.mem.set_u64(FADE_LOW, 0.25f64.to_bits());
+            let l: Vec<u32> = (0..4)
+                .map(|i| {
+                    let ni = flagged(e, false);
+                    let x = object(e);
+                    e.mem.set_u32(x + 0xf8, ni);
+                    e.mem
+                        .set_u32(x + 0xd8, if i == 2 { case.word(1) } else { HALF });
+                    e.mem
+                        .set_u32(x + 0xdc, if i == 2 { case.word(0) } else { TWO });
+                    x
+                })
+                .collect();
+            vec![scene_node(e, &l, 1, 0), 0]
+        })
+        .run()
+        .assert_same();
+}
+
 /// The world `prepare` runs in, from the case: the depth-pass answers, the request and the state;
 /// the shadows setting and the caster limit (interior or exterior); the player's tests; the actors;
 /// the lights; the saved object and its setting; the add-objects setting.
@@ -745,7 +778,6 @@ fn setup_prepare() {
     // actors, lights and models; the saved object.
     Diff::new(entry!(0x0087_1290, shadows::prepare(Ptr<_>)))
         .common()
-        .translation_calls_plainly(&[0x0087_1a50])
         .inputs(&[
             Input::Of(&[7, 0, 1, 2, 3, 5, 6]),
             Input::Of(&[0, 1, 2, 3]),
@@ -939,17 +971,6 @@ fn words_at(e: &mut Engine, at: u32, w: &[u32]) {
     }
 }
 
-/// The set-up calls the world frame's translation makes with plain Rust calls.
-const WORLD_PLAIN: &[u32] = &[
-    0x0087_2ad0,
-    0x0087_2b00,
-    0x0087_27d0,
-    0x0087_1290,
-    0x0087_2f50,
-    0x0087_1a50,
-    0x0087_2e00,
-];
-
 #[test]
 fn setup_world_frame() {
     // `skip_world`; the pattern of the player, world, accumulator and camera; the water
@@ -964,7 +985,6 @@ fn setup_world_frame() {
             0x0070_9cb0,
             0x004d_e080,
         ])
-        .translation_calls_plainly(WORLD_PLAIN)
         .inputs(&[
             Input::Flag,
             Input::Of(&[0, 8, 0x18, 0x1f, 0x48, 0x2a, 0x7f, 0xc5]),
@@ -1008,7 +1028,6 @@ fn setup_world_parts() {
     Diff::new(entry!(0x0087_2b00, world::camera_setup(Ptr<_>) -> u32))
         .common()
         .ignore_calls(&[0x0043_c490])
-        .translation_calls_plainly(&[0x0087_2e00])
         .inputs(&inputs)
         .setup(first_only)
         .run()

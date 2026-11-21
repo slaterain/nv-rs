@@ -13,8 +13,10 @@
 //!   `00b5b060` and `00b5c3c0`.
 //! - [`frame`], the target: `00872f50`.
 //!
-//! Stage 1: the objects stay in guest memory; each function stays registered at its exe address, so
-//! every caller (the three draw sequences, and the scene node's other users) reaches the typed one.
+//! Stage 1: the objects stay in guest memory; each function stays registered at its exe address. The
+//! translated callers reach them through that address: the frame's draw (`008706b0`) calls the world
+//! frame, and the draw sequences (`00870a00`, `008707c0`, `00872940`) the set-up calls, by address
+//! (they were plain Rust calls, which would have skipped the typed functions).
 //! The exe's one- and two-load getters these call are read in place instead of called.
 //!
 //! **Floats.** Main thread only ([`Threads::Main`]): the sort's fade share is one float operation

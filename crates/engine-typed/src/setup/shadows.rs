@@ -11,7 +11,10 @@
 //! passes, the actor tests, the lock, the lights' updates and the rendering system's stages.
 //!
 //! **Floats**: the caster's range test and the light's weight cut-off compare a stored float with a
-//! `double` as the exe does; nothing is rounded in between.
+//! `double`. The range test's product (`largest * scale`) stays a `double` as the translation computes
+//! it, so the differential test compares exactly; the exe's main-thread 24-bit `FMUL` would round it
+//! to a float's precision, which can only move the test for a radius within half a float step of the
+//! range (a caster's shadow at that exact distance), not anything a player sees.
 
 use super::lists;
 use super::FAMILY;

@@ -4,8 +4,11 @@
 //! The getters it calls (the interface flag `008709f0`, the texture manager `004a0ea0`, the camera
 //! root's child `00524c90`) are read in place; the target's size slots, the manager's calls and the profiler scope stay calls.
 //!
-//! **Floats**: the size ratios are the exe's `double` sums and quotients (`FILD`, `FMUL`, `FDIV` of
-//! `double`s) handed to `008731a0` as it does.
+//! **Floats**: the size ratios are computed in `double`s as the translation computes them and handed
+//! to `008731a0`, then stored to a float, so the differential test compares exactly. (The exe's
+//! main-thread 24-bit x87 would round the product and the quotient to a float's precision each; the
+//! ratio is a screen-size scale stored as a float, and the difference is at most a float step, which
+//! no picture shows.) The world frame's margin factor (`world`) is kept the same way.
 
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
