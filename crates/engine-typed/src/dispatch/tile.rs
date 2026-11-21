@@ -489,6 +489,202 @@ pub fn add_reaction(e: &mut Engine, value: Ptr, owner: Ptr) {
     });
 }
 
+/// `Tile::Value::SetFloat(float, bool)`, `SetString(string, bool)` and `CalculateValue(bool)` (Xbox
+/// PDB): overridable (`crates/engine-core/data/overridable.tsv`), so always called by address.
+const VALUE_SET_FLOAT: u32 = 0x00a0_a270;
+const VALUE_SET_STRING: u32 = 0x00a0_a300;
+const VALUE_CALCULATE: u32 = 0x00a0_9410;
+/// The traits the position sums read: `x` (`0xfa1`), `y` (`0xfa2`) and `locus` (`0xfa8`).
+const TRAIT_X: i32 = 0xfa1;
+const TRAIT_Y: i32 = 0xfa2;
+const TRAIT_LOCUS: i32 = 0xfa8;
+/// A tile's parent (`Tile::pParent`, +0x28).
+const TILE_PARENT: u32 = 0x28;
+
+// Typed from 00a044f0
+/// `Tile::Lock` (Xbox PDB): `EnterCriticalSection` on the tiles' critical section.
+pub fn lock(e: &mut Engine) {
+    enter(e);
+}
+
+// Typed from 00a04500
+/// `Tile::Unlock` (Xbox PDB): `LeaveCriticalSection` on the tiles' critical section.
+pub fn unlock(e: &mut Engine) {
+    leave(e);
+}
+
+/// The trait value with id `trait_id` of the tile (`GetValue`, a Rust call while the family is
+/// direct).
+fn value_of(e: &mut Engine, this: Ptr, trait_id: i32) -> u32 {
+    typed_call!(super::FAMILY, 0x00a0_0f30, get_value(e, this, trait_id)).addr()
+}
+
+/// The trait value with id `trait_id` of the tile, made if it has none (`GetOrCreateValue`).
+fn value_made(e: &mut Engine, this: Ptr, trait_id: i32) -> u32 {
+    typed_call!(
+        super::FAMILY,
+        0x00a0_1000,
+        get_or_create_value(e, this, trait_id)
+    )
+    .addr()
+}
+
+// Typed from 00a011b0
+/// `Tile::GetFloat` (no PDB name; `thiscall(trait)`, `RET 4`, the answer in `ST0`): the float of the
+/// tile's trait `trait_id`, 0.0 when it has none. The float is copied as it is.
+pub fn get_float(e: &mut Engine, this: Ptr, trait_id: i32) -> f32 {
+    match value_of(e, this, trait_id) {
+        0 => 0.0,
+        value => e.mem.f32(value + VALUE_FLOAT),
+    }
+}
+
+// Typed from 00a011f0
+/// `Tile::GetString` (Xbox PDB): the string of the tile's trait `trait_id`, null when it has none.
+pub fn get_string(e: &mut Engine, this: Ptr, trait_id: i32) -> Ptr {
+    match value_of(e, this, trait_id) {
+        0 => Ptr::NULL,
+        value => Ptr::new(e.mem.u32(value + VALUE_STRING)),
+    }
+}
+
+// Typed from 00a01230
+/// `Tile::IsTrue` (Xbox PDB): the tile has trait `trait_id` and its float is not 0.0 (`FCOMP` with
+/// the double 0.0 and `TEST AH,44`: a NaN counts as true).
+pub fn is_true(e: &mut Engine, this: Ptr, trait_id: i32) -> bool {
+    match value_of(e, this, trait_id) {
+        0 => false,
+        value => e.mem.f32(value + VALUE_FLOAT) != 0.0,
+    }
+}
+
+// Typed from 00a012d0
+/// `Tile::SetFloat` (no PDB name; `thiscall(trait, value, flag)`, `RET 0xc`): the tile's trait
+/// `trait_id` (made when it has none) gets `value` through `Tile::Value::SetFloat(value, flag)`
+/// (by address), under `Tile::Lock`.
+pub fn set_float(e: &mut Engine, this: Ptr, trait_id: i32, value: f32, flag: u8) {
+    let trait_value = value_made(e, this, trait_id);
+    if trait_value != 0 {
+        typed_call!(super::FAMILY, 0x00a0_44f0, lock(e));
+        e.call(VALUE_SET_FLOAT, &args![trait_value, value, u32::from(flag)]);
+        typed_call!(super::FAMILY, 0x00a0_4500, unlock(e));
+    }
+}
+
+// Typed from 00a01350
+/// `Tile::SetString` (no PDB name; `thiscall(trait, string, flag)`, `RET 0xc`): as
+/// [`set_float`], through `Tile::Value::SetString(string, flag)` (by address).
+pub fn set_string(e: &mut Engine, this: Ptr, trait_id: i32, string: Ptr, flag: u8) {
+    let trait_value = value_made(e, this, trait_id);
+    if trait_value != 0 {
+        typed_call!(super::FAMILY, 0x00a0_44f0, lock(e));
+        e.call(
+            VALUE_SET_STRING,
+            &args![trait_value, string, u32::from(flag)],
+        );
+        typed_call!(super::FAMILY, 0x00a0_4500, unlock(e));
+    }
+}
+
+/// An integer as the float `FILD; FSTP float` makes of it: rounded to nearest, ties to even, as
+/// `as f32` rounds.
+#[allow(clippy::cast_precision_loss)]
+fn int_to_float(value: i32) -> f32 {
+    value as f32
+}
+
+// Typed from 00700320
+/// `Tile::SetInt` (no PDB name; `thiscall(trait, value)`, `RET 8`): the tile's trait `trait_id` set
+/// to the integer `value` as a float ([`set_float`] with flag 1).
+pub fn set_int(e: &mut Engine, this: Ptr, trait_id: i32, value: i32) {
+    let value = int_to_float(value);
+    typed_call!(
+        super::FAMILY,
+        0x00a0_12d0,
+        set_float(e, this, trait_id, value, 1)
+    );
+}
+
+// Typed from 00a01290
+/// `Tile::Poke` (Xbox PDB; `thiscall(trait, value)`, `RET 8`): trait `trait_id` set to `value` and
+/// at once back to 0.0, so the reactions to the change run (both with flag 1).
+pub fn poke(e: &mut Engine, this: Ptr, trait_id: i32, value: f32) {
+    typed_call!(
+        super::FAMILY,
+        0x00a0_12d0,
+        set_float(e, this, trait_id, value, 1)
+    );
+    typed_call!(
+        super::FAMILY,
+        0x00a0_12d0,
+        set_float(e, this, trait_id, 0.0, 1)
+    );
+}
+
+/// Trait `trait_id` of the tile and of each ancestor whose `locus` is not 0.0 (a NaN counts), each
+/// added in turn to a float running total (`FADD float; FSTP float`: one rounding, as `f32` adds).
+// `term + sum`, not `sum += term`: the operand order picks which NaN's payload is kept.
+#[allow(clippy::assign_op_pattern)]
+fn sum_over_ancestors(e: &mut Engine, this: Ptr, trait_id: i32) -> f32 {
+    let mut sum = typed_call!(super::FAMILY, 0x00a0_11b0, get_float(e, this, trait_id));
+    let mut ancestor = e.mem.u32(this.addr() + TILE_PARENT);
+    while ancestor != 0 {
+        let locus = typed_call!(
+            super::FAMILY,
+            0x00a0_11b0,
+            get_float(e, Ptr::new(ancestor), TRAIT_LOCUS)
+        );
+        if locus != 0.0 {
+            let term = typed_call!(
+                super::FAMILY,
+                0x00a0_11b0,
+                get_float(e, Ptr::new(ancestor), trait_id)
+            );
+            // The translation's operand order (`term + sum`): with both NaN the first one's
+            // payload is kept, so the answer is the same bits.
+            sum = term + sum;
+        }
+        ancestor = e.mem.u32(ancestor + TILE_PARENT);
+    }
+    sum
+}
+
+// Typed from 00a013d0
+/// `Tile::GetAbsoluteX` (no PDB name; `thiscall`, the answer in `ST0`): the tile's `x` plus the `x`
+/// of each ancestor whose `locus` is not 0.0.
+pub fn absolute_x(e: &mut Engine, this: Ptr) -> f32 {
+    sum_over_ancestors(e, this, TRAIT_X)
+}
+
+// Typed from 00a01440
+/// `Tile::GetAbsoluteY`: as [`absolute_x`], with the `y` trait.
+pub fn absolute_y(e: &mut Engine, this: Ptr) -> f32 {
+    sum_over_ancestors(e, this, TRAIT_Y)
+}
+
+// Typed from 00a0a220
+/// `Tile::ValueChangeEvent` (Xbox PDB, `cdecl`): each value with a reaction on `value` (its list in
+/// the reaction map, in order) is recalculated with `CalculateValue(false)` (by address).
+pub fn value_change_event(e: &mut Engine, value: Ptr) {
+    e.with_stack(4, |e, list| {
+        let at = list.addr();
+        e.mem.set_u32(at, 0);
+        if !reactions_of(e, value.addr(), at) {
+            return;
+        }
+        loop {
+            let reaction = e.mem.u32(at);
+            if reaction == 0 {
+                break;
+            }
+            let dependent = e.mem.u32(reaction);
+            e.call(VALUE_CALCULATE, &args![dependent, 0u32]);
+            let next = e.mem.u32(e.mem.u32(at) + 4);
+            e.mem.set_u32(at, next);
+        }
+    });
+}
+
 // Typed from 00a09200
 /// `Tile::Value::ClearActions` (Xbox PDB): deletes the trait's actions one by one. An action that
 /// reads another trait (slot +4 answers it; asked each time, as the exe asks) is first taken out of

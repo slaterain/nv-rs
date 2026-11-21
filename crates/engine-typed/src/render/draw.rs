@@ -159,7 +159,8 @@ pub fn draw_packed(e: &mut Engine, this: Ptr, geometry: Ptr) {
                     let vertices = u32::from(e.mem.u16(at));
                     let device = e.mem.u32(t.wrapping_add(DEVICE));
                     let base = e.mem.u32(part_data.wrapping_add(0x38));
-                    e.vcall(
+                    engine_core::real_threads::device_vcall(
+                        e,
                         device,
                         DEVICE_DRAW_INDEXED_PRIMITIVE,
                         &args![kind, base, 0u32, vertices, start, count],
@@ -183,7 +184,8 @@ pub fn draw_packed(e: &mut Engine, this: Ptr, geometry: Ptr) {
             let device = e.mem.u32(t.wrapping_add(DEVICE));
             let base = e.mem.u32(render_data.wrapping_add(0x38));
             let kind = e.mem.u32(render_data.wrapping_add(0x3c));
-            e.vcall(
+            engine_core::real_threads::device_vcall(
+                e,
                 device,
                 DEVICE_DRAW_INDEXED_PRIMITIVE,
                 &args![kind, base, 0u32, vertices, start, count],
@@ -196,7 +198,12 @@ pub fn draw_packed(e: &mut Engine, this: Ptr, geometry: Ptr) {
         let first = e.mem.u32(render_data.wrapping_add(0x38));
         let device = e.mem.u32(t.wrapping_add(DEVICE));
         let kind = e.mem.u32(render_data.wrapping_add(0x3c));
-        e.vcall(device, DEVICE_DRAW_PRIMITIVE, &args![kind, first, count]);
+        engine_core::real_threads::device_vcall(
+            e,
+            device,
+            DEVICE_DRAW_PRIMITIVE,
+            &args![kind, first, count],
+        );
     }
     let flags = e.mem.u16(data.wrapping_add(0xe));
     e.mem.set_u16(data.wrapping_add(0xe), flags & 0xf000);

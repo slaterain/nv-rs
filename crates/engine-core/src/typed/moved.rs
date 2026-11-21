@@ -908,8 +908,8 @@ pub fn difference_line(
         family.number()
     )
 }
-/// Families' numbers are below 32 ([`FamilyId::new`]).
-const FAMILIES: usize = 32;
+/// Families' numbers are below 64 ([`FamilyId::new`]).
+const FAMILIES: usize = super::MAX_FAMILIES;
 
 /// The dual run's state ([module documentation](self)).
 pub struct Dual {
@@ -2067,13 +2067,32 @@ mod tests {
         assert!(!difference_line(TOY, 4, 1, 2, None).contains(" in "));
     }
 
+    /// The dual run counts every family number the flag words hold, the last (63) too, each apart.
+    #[test]
+    fn the_dual_run_counts_families_past_31() {
+        use crate::typed::FamilyId;
+        let dual = Dual::default();
+        let (low, high, last) = (FamilyId::new(31), FamilyId::new(40), FamilyId::new(63));
+        assert!(dual.check(high, 4, 1, 1, None));
+        assert!(!dual.check(last, 4, 1, 2, None));
+        assert!(dual.check(last, 8, 3, 3, None));
+        assert_eq!(dual.counts(low), (0, 0));
+        assert_eq!(dual.counts(high), (1, 0));
+        assert_eq!(dual.counts(last), (2, 1));
+    }
+
     /// -1, -4, -256 and the like are values: only a family's number makes a poison word.
     #[test]
     fn words_near_the_top_are_poison_only_with_a_family() {
-        for w in [0xffff_ffff, 0xffff_fffc, 0xffff_ff00, 0xffff_2000] {
+        // The family byte runs to 63 (the flag words have 64 bits): 64 and up are no family's.
+        for w in [0xffff_ffff, 0xffff_fffc, 0xffff_ff00, 0xffff_4000] {
             assert_eq!(poison_parts(w), None, "{w:08x}");
         }
         assert_eq!(poison_parts(0xffff_1f00), Some((31, 0)));
+        assert_eq!(poison_parts(0xffff_2000), Some((32, 0)));
+        assert_eq!(poison_parts(0xffff_3f00), Some((63, 0)));
+        let last = poison(crate::typed::FamilyId::new(63), 0x14);
+        assert_eq!((last, poison_parts(last)), (0xffff_3f14, Some((63, 0x14))));
     }
 
     /// The store's other operations give the same answers in every form, and the dual run finds
