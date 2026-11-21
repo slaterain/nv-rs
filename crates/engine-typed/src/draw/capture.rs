@@ -282,8 +282,74 @@ thread_local! {
     static LAST_MARK: Cell<(u64, usize, u32, u32)> = const { Cell::new((0, 0, 0, 0)) };
 }
 
-/// How many threads hold an open packet: the accessors' one check while none does.
+/// How many threads hold an open packet: the accessors' one check while none does. [`KEEP_OPEN`] is added
+/// while a kept draw record is being built ([`keep_reads_begin`]).
 static OPEN: AtomicUsize = AtomicUsize::new(0);
+
+/// Added to [`OPEN`] while a thread builds a kept draw record (`super::keep`): the read accessors then note what
+/// they read ([`note_keep_read`]) on that thread; every packet test masks it out.
+const KEEP_OPEN: usize = 1 << 24;
+
+thread_local! {
+    /// The reads noted while this thread builds a kept draw record: address and the bytes read, in order.
+    static KEEP_READS: RefCell<Option<Vec<(u32, Vec<u8>)>>> = const { RefCell::new(None) };
+    /// Pauses of [`KEEP_READS`] in force ([`keep_reads_pause`]).
+    static KEEP_READS_PAUSED: Cell<u32> = const { Cell::new(0) };
+}
+
+/// The kind of store log mark a noted read leaves (`engine_core`'s mark kinds: 0 a device call).
+pub const KEEP_READ_MARK: u32 = 1;
+
+/// Whether this thread notes its reads for a kept draw record.
+#[inline]
+fn keep_reading() -> bool {
+    KEEP_READS.with(|r| r.borrow().is_some())
+}
+
+/// Starts noting this thread's reads through the accessors (a kept draw record's build, `super::keep`).
+pub fn keep_reads_begin() {
+    KEEP_READS_PAUSED.with(|p| p.set(0));
+    KEEP_READS.with(|r| *r.borrow_mut() = Some(Vec::new()));
+    OPEN.fetch_add(KEEP_OPEN, Relaxed);
+}
+
+/// Pauses (`true`) or resumes (`false`) [`keep_reads_begin`]'s notes; pauses nest.
+pub fn keep_reads_pause(pause: bool) {
+    KEEP_READS_PAUSED.with(|p| {
+        p.set(if pause {
+            p.get() + 1
+        } else {
+            p.get().saturating_sub(1)
+        })
+    });
+}
+
+/// Ends [`keep_reads_begin`]: the reads noted, in order.
+pub fn keep_reads_end() -> Vec<(u32, Vec<u8>)> {
+    let reads = KEEP_READS.with(|r| r.borrow_mut().take());
+    if reads.is_some() {
+        OPEN.fetch_sub(KEEP_OPEN, Relaxed);
+    }
+    reads.unwrap_or_default()
+}
+
+/// Notes a read of `[addr, addr + len)` while this thread builds a kept draw record, with its place among the
+/// writes (a store log mark).
+#[inline]
+fn note_keep_read(e: &Engine, addr: u32, len: u32) {
+    if OPEN.load(Relaxed) >= KEEP_OPEN && KEEP_READS_PAUSED.with(Cell::get) == 0 {
+        KEEP_READS.with(|r| {
+            if let Some(v) = r.borrow_mut().as_mut() {
+                let mut bytes = vec![0u8; len as usize];
+                if e.mem.try_read(addr, &mut bytes).is_err() {
+                    return;
+                }
+                e.mem.store_log_mark(KEEP_READ_MARK, v.len() as u32);
+                v.push((addr, bytes));
+            }
+        });
+    }
+}
 
 /// Counts the packets opened ([`begin`]), so a mark noted for an earlier packet is never taken as noted for a
 /// later one.
@@ -294,7 +360,8 @@ static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::
 /// memory's either way.
 #[inline(always)]
 fn held() -> bool {
-    OPEN.load(Relaxed) != 0 && HOLDS.with(Cell::get)
+    let open = OPEN.load(Relaxed);
+    open != 0 && (HOLDS.with(Cell::get) || (open >= KEEP_OPEN && keep_reading()))
 }
 
 fn run(e: &Engine) -> usize {
@@ -729,7 +796,7 @@ pub struct Report {
 /// value the original leaves. With POISON, a byte found no longer the scribble is a write past the packet,
 /// counted in [`Report::written`].
 pub fn end(e: &mut Engine) -> Report {
-    if OPEN.load(Relaxed) == 0 {
+    if OPEN.load(Relaxed) & (KEEP_OPEN - 1) == 0 {
         return Report::default();
     }
     let packet = PACKET.with(|p| {
@@ -854,6 +921,7 @@ fn copied<const N: usize>(e: &Engine, object: u32, offset: u32) -> Option<[u8; N
     if object == 0 {
         return None;
     }
+    note_keep_read(e, object.wrapping_add(offset), N as u32);
     PACKET.with(|p| {
         let p = p.borrow();
         let p = p.as_ref()?;
@@ -902,6 +970,7 @@ pub fn byte(e: &Engine, object: u32, offset: u32) -> u8 {
 #[inline(always)]
 pub fn words<const N: usize>(e: &Engine, object: u32, offset: u32) -> [u32; N] {
     if held() {
+        note_keep_read(e, object.wrapping_add(offset), 4 * N as u32);
         let held = PACKET.with(|p| {
             let p = p.borrow();
             let p = p.as_ref()?;
@@ -946,7 +1015,7 @@ pub fn words<const N: usize>(e: &Engine, object: u32, offset: u32) -> [u32; N] {
 /// goes the other way.
 #[inline(always)]
 pub fn active() -> bool {
-    OPEN.load(Relaxed) != 0
+    OPEN.load(Relaxed) & (KEEP_OPEN - 1) != 0
 }
 
 /// A value the draw's own state holds ([`own_at`]): its bytes, little-endian, as guest memory keeps them.
@@ -1015,6 +1084,7 @@ pub fn own_at<T: OwnValue>(e: &Engine, addr: u32) -> T {
 
 #[cold]
 fn own_lookup<T: OwnValue>(e: &Engine, addr: u32) -> Option<T> {
+    note_keep_read(e, addr, T::L);
     PACKET.with(|p| {
         let p = p.borrow();
         let p = p.as_ref()?;
@@ -1134,6 +1204,7 @@ pub fn own_image_read<R>(
     if !held() || len == 0 {
         return f(e, addr);
     }
+    note_keep_read(e, addr, len);
     let Some(at) = own_place(e, addr, len) else {
         return f(e, addr);
     };
@@ -1152,6 +1223,7 @@ pub fn own_image_read<R>(
 /// The own state's bytes `[addr, addr + len)` as the draw reads them ([`own_at`] byte by byte, one look-up).
 pub fn own_bytes(e: &Engine, addr: u32, len: u32) -> Vec<u8> {
     if held() {
+        note_keep_read(e, addr, len);
         let held = PACKET.with(|p| {
             let p = p.borrow();
             let p = p.as_ref()?;
@@ -1215,6 +1287,9 @@ pub struct Span {
 /// The [`Span`] of `object`'s offsets `[from, to)`. Without an open packet it reads guest memory; with one that
 /// does not hold the whole range, a miss is counted and it reads guest memory.
 pub fn span(e: &Engine, object: u32, from: u32, to: u32) -> Span {
+    if held() && object != 0 && from < to {
+        note_keep_read(e, object.wrapping_add(from), to - from);
+    }
     let copy = if !held() || object == 0 || from >= to {
         None
     } else {
@@ -1283,6 +1358,7 @@ pub fn image<R>(
     if !held() || from >= to {
         return f(e, object);
     }
+    note_keep_read(e, object.wrapping_add(from), to - from);
     let held = PACKET.with(|p| {
         let p = p.borrow();
         let p = p.as_ref()?;

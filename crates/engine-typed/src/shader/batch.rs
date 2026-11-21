@@ -571,6 +571,55 @@ pub fn render_standard(e: &mut Engine, pass: Ptr<RenderPass>, first: u32, second
         .wrapping_add(NiGeometry::m_PropertyState.off);
     let holder = add_to_geometry_group(e, geometry, data, Ptr::new(0), 0);
     let buffer = e.get(data, NiGeometryData::m_pkBuffData);
+    let rest = |e: &mut Engine| {
+        standard_set_up_and_draw(
+            e,
+            pass,
+            (first, second, third),
+            pass_type,
+            geometry,
+            shader,
+            state,
+            buffer,
+            holder,
+        );
+    };
+    if crate::draw::keep::mode() != crate::draw::keep::Mode::Off
+        && keepable(e, pass_type, geometry.addr(), shader)
+    {
+        crate::draw::keep::draw(e, (geometry.addr(), pass_type, shader, state), rest);
+    } else {
+        rest(e);
+    }
+}
+
+/// Whether a plain geometry's draw may be kept (`crate::draw::keep`): a pass type without a set-up of its own
+/// (0xfc, 0xfd, 0x102, 0xca, 0xd1) or a special one in the shadow light shader's (4, 5, 0x250, 0x251), no skin, and
+/// the shadow light shader's per-geometry set-ups, end and draw in the shader's slots.
+fn keepable(e: &Engine, pass_type: u32, geometry: u32, shader: u32) -> bool {
+    !matches!(
+        pass_type,
+        0xfc | 0xfd | 0x102 | 0xca | 0xd1 | 4 | 5 | 0x250 | 0x251
+    ) && e.mem.u32(geometry.wrapping_add(0xbc)) == 0
+        && crate::slot_target(e, shader, slot::GEOMETRY_A) == 0x00b7_d200
+        && crate::slot_target(e, shader, slot::GEOMETRY_B) == 0x00b7_dab0
+        && crate::slot_target(e, shader, slot::GEOMETRY_DONE) == 0x00b7_c320
+        && crate::slot_target(e, shader, slot::DRAW) == 0x00e8_12f0
+}
+
+/// [`render_standard`] after the geometry group: the set-ups, the draw and the end.
+#[allow(clippy::too_many_arguments)]
+fn standard_set_up_and_draw(
+    e: &mut Engine,
+    pass: Ptr<RenderPass>,
+    (first, second, third): (bool, bool, bool),
+    pass_type: u32,
+    geometry: Ptr<NiGeometry>,
+    shader: u32,
+    state: u32,
+    buffer: u32,
+    holder: u32,
+) {
     let call_third = |e: &mut Engine| {
         if third {
             let flag = u32::from(e.get(pass, RenderPass::ucSortFlag));

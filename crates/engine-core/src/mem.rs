@@ -612,6 +612,40 @@ pub const HEAP_LARGEST_BLOCK: u32 = {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Fault(pub u32);
 
+/// Where the store log's marks are ([`Mem::store_log_mark`]): the last 16 bytes of the space, which the
+/// game never maps, so no write the log notes is there.
+pub const STORE_LOG_MARK: u32 = 0xffff_fff0;
+
+/// The store log's state ([`Mem::store_log_begin`]).
+struct StoreLog {
+    /// Pauses in force ([`Mem::store_log_pause`]): nothing is noted while above 0.
+    paused: u32,
+    /// The range left out (the caller's scratch).
+    skip: (u32, u32),
+    /// The writes noted, in order: address and bytes (a run of writes that continue each other is
+    /// kept as one).
+    writes: Vec<(u32, Vec<u8>)>,
+}
+
+impl StoreLog {
+    fn note(&mut self, addr: u32, bytes: &[u8]) {
+        if self.paused > 0 {
+            return;
+        }
+        let end = u64::from(addr) + bytes.len() as u64;
+        if addr >= self.skip.0 && end <= u64::from(self.skip.1) {
+            return;
+        }
+        if let Some((at, run)) = self.writes.last_mut() {
+            if u64::from(*at) + run.len() as u64 == u64::from(addr) && run.len() < 4096 {
+                run.extend_from_slice(bytes);
+                return;
+            }
+        }
+        self.writes.push((addr, bytes.to_vec()));
+    }
+}
+
 pub struct Mem {
     /// The guest space: one block of host address space, guest address `a` at host address
     /// `base + a`, and just below `base`, in the same block, the table of mapped pages ([`Space`],
@@ -654,6 +688,9 @@ pub struct Mem {
     track: Option<std::sync::Arc<track::Track>>,
     /// The touch census ([`Mem::enable_touch`], `mem/touch.rs`); `None` in normal runs.
     touch: Option<Box<touch::Touch>>,
+    /// The store log ([`Mem::store_log_begin`]): every write of guest memory through this view while it
+    /// is on, in order; `None` in normal runs (behind the one flag every store tests).
+    store_log: Option<Box<std::sync::Mutex<StoreLog>>>,
     /// The sizes the C runtime's heap blocks and the game's memory manager's were asked for
     /// (`malloc`, `realloc`, `__calloc_crt`, `MemoryManager::Allocate`), as `HeapSize` answers
     /// them for `_msize` ([`Mem::alloc_asked`]). Kept with the heap so one lock covers both
@@ -1223,6 +1260,7 @@ impl Mem {
             other_diag: false,
             track: None,
             touch: None,
+            store_log: None,
             asked: HashMap::new(),
             shared: None,
             defer_hand_back: false,
@@ -1254,6 +1292,7 @@ impl Mem {
             other_diag: false,
             track: None,
             touch: None,
+            store_log: None,
             asked: HashMap::new(),
             shared: Some(shared),
             defer_hand_back: false,
@@ -1664,6 +1703,76 @@ impl Mem {
         if self.store_diag && len > 0 {
             if let Some(t) = self.track.as_deref() {
                 t.note(addr, len);
+            }
+            if self.store_log.is_some() {
+                self.log_written(addr, len);
+            }
+        }
+    }
+
+    /// [`Mem::note_written`] for the store log: the bytes just written, read back.
+    #[cold]
+    #[inline(never)]
+    fn log_written(&self, addr: u32, len: u32) {
+        if let Some(log) = self.store_log.as_deref() {
+            let mut bytes = vec![0u8; len as usize];
+            if self.try_read(addr, &mut bytes).is_ok() {
+                lock(log).note(addr, &bytes);
+            }
+        }
+    }
+
+    /// Starts the store log: from now on every write of guest memory through this view (stores of
+    /// every width, [`Mem::write`], [`Mem::zero`], `map`) is noted in order, except into
+    /// `[skip_from, skip_to)` (the caller's own scratch, as a thread's stack for locals below its
+    /// top) and while paused ([`Mem::store_log_pause`]). Interlocked words and frees are not noted.
+    /// A tool of the kept draw records (the typed draw code), off in normal runs.
+    pub fn store_log_begin(&mut self, skip_from: u32, skip_to: u32) {
+        self.store_log = Some(Box::new(Mutex::new(StoreLog {
+            paused: 0,
+            skip: (skip_from, skip_to),
+            writes: Vec::new(),
+        })));
+        self.store_diag = true;
+    }
+
+    /// Ends the store log: the writes noted, in order (address, bytes).
+    pub fn store_log_end(&mut self) -> Vec<(u32, Vec<u8>)> {
+        let log = self.store_log.take();
+        self.store_diag = self.other_diag || self.track.is_some();
+        log.map_or_else(Vec::new, |l| {
+            l.into_inner()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .writes
+        })
+    }
+
+    /// Puts a mark into the store log between the writes around it (the owner's own events in the
+    /// writes' order): an entry at address [`STORE_LOG_MARK`] `+ kind` (`kind` below 16) whose bytes are
+    /// `index`, little-endian. Nothing without the log or while it is paused.
+    pub fn store_log_mark(&self, kind: u32, index: u32) {
+        if let Some(log) = self.store_log.as_deref() {
+            let mut l = lock(log);
+            if l.paused == 0 {
+                l.writes
+                    .push((STORE_LOG_MARK + (kind & 0xf), index.to_le_bytes().to_vec()));
+            }
+        }
+    }
+
+    /// Whether the store log is on.
+    pub fn store_log_on(&self) -> bool {
+        self.store_log.is_some()
+    }
+
+    /// Pauses (`true`) or resumes (`false`) the store log; pauses nest. Nothing without the log.
+    pub fn store_log_pause(&self, pause: bool) {
+        if let Some(log) = self.store_log.as_deref() {
+            let mut l = lock(log);
+            if pause {
+                l.paused += 1;
+            } else {
+                l.paused = l.paused.saturating_sub(1);
             }
         }
     }
@@ -2315,6 +2424,9 @@ impl Mem {
         if let Some(t) = self.track.as_deref() {
             t.note(a, N as u32);
         }
+        if let Some(log) = self.store_log.as_deref() {
+            lock(log).note(a, &b);
+        }
     }
 
     /// [`Mem::store`] off its fast path, as [`Mem::load_slow`] for loads.
@@ -2721,6 +2833,43 @@ mod tests {
         let mut v = Vec::new();
         t.take_dirty(|p| v.push(p));
         v
+    }
+
+    /// The store log: stores of every width and bulk writes noted in order with their bytes, runs
+    /// that continue each other joined, the skipped range and paused stretches left out; at its end
+    /// the one flag every store tests is off again.
+    #[test]
+    fn the_store_log_notes_writes_in_order() {
+        let mut m = Mem::new();
+        m.map(0x10000, 0x3000);
+        m.set_u32(0x10000, 1);
+        m.store_log_begin(0x12000, 0x13000);
+        assert!(m.store_log_on() && m.store_diag);
+        m.set_u32(0x10100, 0x1122_3344);
+        m.set_u16(0x10104, 0x5566);
+        m.store_log_mark(1, 7);
+        m.set_u8(0x11000, 7);
+        m.set_u32(0x12010, 9);
+        m.store_log_pause(true);
+        m.set_u32(0x10200, 5);
+        m.store_log_pause(false);
+        m.write(0x11010, &[1, 2, 3]);
+        m.zero(0x11020, 2);
+        let log = m.store_log_end();
+        assert!(!m.store_log_on() && !m.store_diag);
+        assert_eq!(
+            log,
+            [
+                (0x10100, vec![0x44, 0x33, 0x22, 0x11, 0x66, 0x55]),
+                (STORE_LOG_MARK + 1, vec![7, 0, 0, 0]),
+                (0x11000, vec![7]),
+                (0x11010, vec![1, 2, 3]),
+                (0x11020, vec![0, 0]),
+            ]
+        );
+        // Off: nothing more is noted.
+        m.set_u32(0x10300, 1);
+        assert!(m.store_log_end().is_empty());
     }
 
     /// The store track: stores of every width, writes, zeroing and the interlocked words mark the

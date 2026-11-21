@@ -1460,6 +1460,20 @@ impl Engine {
         r
     }
 
+    /// The running thread's stack for locals below its current top, `[lowest, top)`: where every
+    /// [`Engine::with_stack`] local made from now until the current one ends lies (block check
+    /// off). `(0, 0)` while the thread has no such stack yet or the block check is on (locals are
+    /// heap blocks then).
+    pub fn locals_below(&self) -> (u32, u32) {
+        if self.mem.block_check_on() {
+            return (0, 0);
+        }
+        match self.guest_stacks.get(self.thread_index()) {
+            Some(Some((base, top))) => (*base, *top),
+            _ => (0, 0),
+        }
+    }
+
     /// The address the next [`Engine::with_stack`] of `size` bytes on the running thread takes
     /// (block check off), for tests that need to know a local's address beforehand.
     pub fn next_stack_local(&mut self, size: u32) -> u32 {
