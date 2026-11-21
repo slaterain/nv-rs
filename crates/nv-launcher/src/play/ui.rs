@@ -401,6 +401,8 @@ fn boxed_answer(tone: Tone, text: &str, entries: &[String]) -> usize {
 /// small "getting ready" window (the launcher's window could not be drawn).
 pub fn answer_in_boxes() {
     IN_BOXES.store(true, Ordering::Relaxed);
+    // No launcher window takes typed lines: the mod installer gets a console of its own.
+    crate::piped::window_takes_lines(false);
     session::connect(|event| {
         match event {
             Event::Message {

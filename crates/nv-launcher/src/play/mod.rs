@@ -65,6 +65,8 @@ const CHECK_LIMIT: Duration = Duration::from_secs(60);
 
 const ISSUES: &str = "https://github.com/slaterain/nv-rs/issues";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+/// `CREATE_NEW_CONSOLE`: a console tool in a window of its own (Play.exe has none).
+const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
 
 /// The package's folders.
 struct Package {
@@ -1007,7 +1009,7 @@ fn parse_options(raw: &[String]) -> Options {
 /// `--install-mods`: the mod installer (nv-rs's own program with `--install-mods`, the same text
 /// chooser as `play.sh --install-mods`) for the game found as for play, its lines in the
 /// launcher's terminal and its questions answered at the prompt (`crate::piped`), with no console
-/// window. Mods go to `userdata\mod installs`, archives are read from `mods`.
+/// window; without a launcher window that takes typed lines, in a console window of its own. Mods go to `userdata\mod installs`, archives are read from `mods`.
 fn install_mods(package: &Package, options: &Options) -> Result<i32, Stop> {
     let (game, _) = find_game(package, options.game.as_deref())?;
     clear_for_writing(package, Some(&game.folder))?;
@@ -1017,13 +1019,30 @@ fn install_mods(package: &Package, options: &Options) -> Result<i32, Stop> {
         .arg(&game.folder)
         .arg(package.userdata.join("mod installs"))
         .arg(package.root.join("mods"))
-        .current_dir(&package.userdata)
-        .creation_flags(CREATE_NO_WINDOW);
-    let code = crate::piped::run(
-        command,
-        &format!("its mod installer ({})", package.game_exe.display()),
-        |_| {},
-    );
+        .current_dir(&package.userdata);
+    let code = if crate::piped::window_lines() {
+        command.creation_flags(CREATE_NO_WINDOW);
+        crate::piped::run(
+            command,
+            &format!("its mod installer ({})", package.game_exe.display()),
+            |_| {},
+        )
+    } else {
+        // No launcher window takes typed lines (it could not be drawn, or a scripted run): the
+        // installer in a console window of its own, as before the launcher showed it.
+        command
+            .creation_flags(CREATE_NEW_CONSOLE)
+            .status()
+            .map_err(|e| Stop {
+                code: STOP_LOCATION,
+                message: format!(
+                    "nv-rs could not start its mod installer ({e}):\n{}",
+                    package.game_exe.display()
+                ),
+            })?
+            .code()
+            .unwrap_or(1)
+    };
     package.log(&format!("mod installer ended: {code}"));
     Ok(code)
 }

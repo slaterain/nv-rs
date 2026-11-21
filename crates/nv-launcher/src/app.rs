@@ -1275,6 +1275,7 @@ impl App {
 
     /// Play (with mods), and with a game folder typed or dropped.
     fn play(&mut self, mods: bool, game: Option<PathBuf>) {
+        crate::piped::reopen();
         let args = play_arguments(mods, game.as_deref());
         self.output.clear();
         self.mods_running = false;
@@ -1286,6 +1287,7 @@ impl App {
     /// macOS, both the game program's text chooser) with its lines in the terminal and its
     /// questions answered at the prompt (`crate::piped`). No game starts, so the sounds go on.
     fn mods(&mut self) {
+        crate::piped::reopen();
         self.output.clear();
         self.mods_running = true;
         self.back_to_waiting();
@@ -1954,6 +1956,8 @@ impl winit::application::ApplicationHandler<Event> for App {
         self.window = Some(window);
         let proxy = std::sync::Mutex::new(self.proxy.clone());
         session::connect(move |e| proxy.lock().is_ok_and(|p| p.send_event(e).is_ok()));
+        // From here on a program the work runs takes the lines typed at the prompt.
+        crate::piped::window_takes_lines(true);
         // The game's card, from a process of its own.
         std::thread::spawn(|| {
             session::send(Event::Card(ask_game_card()));
