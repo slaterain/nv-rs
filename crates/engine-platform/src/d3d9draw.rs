@@ -193,6 +193,13 @@ fn side(e: &mut Engine) -> &mut DrawSide {
     &mut device!(e).device_objects.draw
 }
 
+/// Whether a cut is open on the devices whose draw side is `side`: the one load of [`any_cut`] when none is
+/// open anywhere; for code already under the device lock (a device function).
+#[inline]
+pub(super) fn cut_open_in(side: &DrawSide) -> bool {
+    any_cut() && side.device.is_some()
+}
+
 /// Main, at the world draw: the cut. The drawing side's state is main's for `device` from here,
 /// and the command stream is cut. False (nothing done, the draw stays on main) while a cut is
 /// open, from the drawing side, or for a device the layer does not have.

@@ -360,6 +360,11 @@ thread_local! {
     static REUSED_WORLD: std::cell::Cell<Option<W>> = const { std::cell::Cell::new(None) };
 }
 
+/// The stand-in renderer's size: through its inverse view matrix (+0xa40..+0xa80), the last of the per-draw words
+/// the cut owns (`draw::statics::RENDERER_BLOCKS`). A smaller one let the owned block run into the next objects
+/// (the geometry group's manager and group), whose vtables POISON then scribbled.
+const RENDERER_SIZE: u32 = 0xa80;
+
 /// [`world_named`] with the draw family's members stood in or not ([`stand_ins_all`]).
 fn world_all(e: &mut Engine, render: bool, dispatch: bool, draw: bool) -> W {
     if let Some(w) = REUSED_WORLD.with(std::cell::Cell::get) {
@@ -380,7 +385,7 @@ fn world_all(e: &mut Engine, render: bool, dispatch: bool, draw: bool) -> W {
     for i in 0..8 {
         set(e, cache + 0xd4 + 4 * i, 0x100 + i);
     }
-    let renderer = obj(e, 0xa40, vt);
+    let renderer = obj(e, RENDERER_SIZE, vt);
     set(e, renderer + 0x288, device);
     let manager = obj(e, 0x10, vt);
     let group_obj = obj(e, 0x10, vt);
@@ -11116,7 +11121,8 @@ fn the_hand_off_draws_as_the_cut_on_one_thread() {
             .collect()
     };
     let poison = capture::Mode::Poison;
-    for (mode, forced) in [(poison, false), (poison, true), (capture::Mode::On, false)] {
+    let on = capture::Mode::On;
+    for (mode, forced) in [(poison, false), (poison, true), (on, false), (on, true)] {
         let mut handed = Engine::new();
         let b = setup(&mut handed);
         let before = camera_words(&handed, b[0]);
@@ -11127,6 +11133,31 @@ fn the_hand_off_draws_as_the_cut_on_one_thread() {
                 cut::cut_for_thread(&mut handed, b[0], Ptr::new(b[1]), false).is_none(),
                 "POISON without stepped threads must be refused"
             );
+        }
+        if !forced {
+            // The test world's shader classes are not listed clean (`statics::CLASSES`): the own state would stay in
+            // guest memory, written by both threads at once, so the frame is not handed off and draws on main; the
+            // packet is closed again and the cut counted as one that kept the own state.
+            let kept = statics::report().1;
+            assert!(
+                cut::cut_for_thread(&mut handed, b[0], Ptr::new(b[1]), true).is_none(),
+                "{mode:?}: a frame with a pass of an unlisted shader class was handed off"
+            );
+            assert!(
+                !capture::is_open(&handed),
+                "{mode:?}: the refused cut left its packet open"
+            );
+            assert!(
+                statics::report().1 > kept,
+                "{mode:?}: the kept cut not counted"
+            );
+            assert_eq!(
+                camera_words(&handed, b[0]),
+                before,
+                "{mode:?}: the refused cut changed guest memory"
+            );
+            capture::set_thread_mode(None);
+            continue;
         }
         let packet = cut::cut_for_thread(&mut handed, b[0], Ptr::new(b[1]), true)
             .expect("the cut for the drawing thread");
@@ -11197,7 +11228,9 @@ fn the_hand_off_draws_as_the_cut_on_one_thread() {
         let mut e = Engine::new();
         let w = setup(&mut e);
         capture::set_thread_mode(Some(capture::Mode::On));
+        statics::set_forced(true);
         let one = cut::cut_for_thread(&mut e, w[0], Ptr::new(w[1]), true).expect("one");
+        statics::set_forced(false);
         assert!(capture::begin(&e), "an open packet on this thread");
         let back = cut::adopt(&mut e, one).expect_err("a second packet on this thread");
         let _ = capture::end(&mut e);
@@ -12866,7 +12899,11 @@ fn own_state_same_with(
             assert_eq!(
                 memory_digest_beside_stack(&plain),
                 memory_digest_beside_stack(&owned),
-                "{name} {words:x?} {scribble:#x}: the memory differs"
+                "{name} {words:x?} {scribble:#x}: the memory differs at {:08x?}",
+                engine_core::typed::diff::memory_differences_beside_stack(&plain, &owned, 8)
+                    .iter()
+                    .map(|&a| (a, plain.mem.u8(a), owned.mem.u8(a)))
+                    .collect::<Vec<_>>()
             );
             assert_eq!(
                 (report.misses, report.written, report.kept_main),
@@ -13516,10 +13553,12 @@ fn no_lighting_subtextures_go_to_the_draws_own_constants() {
 }
 
 /// The pass constants with vertex entry 8 on write the fog constants and the fog colour's copies into the draw's
-/// own shader statics (the fog read through the packet the frame's values fill).
+/// own shader statics (the fog read through the packet the frame's values fill). With a skin, the renderer's
+/// view-projection (its own state) goes to the transpose as an image on the stack: the plain engine runs with the
+/// packet open too, so both lay their stacks out alike.
 #[test]
 fn setup_pass_constants_writes_the_draws_own_constants() {
-    own_state_same(
+    own_state_same_with(
         "setup_pass_constants",
         entry!(0x00b7_b450, setups::setup_pass_constants(Ptr<_>, u32)).1,
         &product(&[
@@ -13528,6 +13567,8 @@ fn setup_pass_constants_writes_the_draws_own_constants() {
             &[1, 2, 3],
             TWO_WAYS,
         ]),
+        &[],
+        true,
         |e, c| {
             let p = pass_world(e, &[], 0, 0);
             for addr in SETUP_CALLEES {
@@ -15299,7 +15340,7 @@ fn acceptance_poison(setups: &[AcceptanceSetup]) -> PoisonRun {
     let (d, words, passes) = acceptance_world(&mut poisoned, setups);
     let objects = acceptance_objects(&poisoned, &d, &passes);
     let others = [
-        ("renderer (not tagged)", d.w.renderer, 0xa40),
+        ("renderer (not tagged)", d.w.renderer, RENDERER_SIZE),
         ("device (not tagged)", d.w.device, 0x10),
         ("stage cache (not tagged)", d.w.stage_cache, 0xb8),
     ];

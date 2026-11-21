@@ -12,6 +12,36 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         Row::at(FORMS_FIXES, 1),
     ),
     (
+        "S0093.01",
+        "bPerkMenuDescriptionTypoFixNoDashes",
+        Row::at(FORMS_FIXES, 5),
+    ),
+    (
+        "S0093.02",
+        "bPerkMenuDescriptionTypoFixNoEmptyComma",
+        Row::at(FORMS_FIXES, 6),
+    ),
+    (
+        "S0093.03",
+        "bPerkMenuDescriptionTypoFixIndexByOne",
+        Row::at(FORMS_FIXES, 7),
+    ),
+    (
+        "S0093.04",
+        "bPerkMenuDescriptionTypoFixSkipOther",
+        Row::at(FORMS_FIXES, 8),
+    ),
+    (
+        "S0093.05",
+        "bPerkMenuDescriptionTypoFixCommas",
+        Row::at(FORMS_FIXES, 9),
+    ),
+    (
+        "S0093.06",
+        "bPerkMenuDescriptionTypoFixPerkNotOr",
+        Row::at(FORMS_FIXES, 10),
+    ),
+    (
         "S0099",
         "bNoNeededCountForAddRemoveItemCommands",
         Row::at(FORMS_TWEAKS, 0),

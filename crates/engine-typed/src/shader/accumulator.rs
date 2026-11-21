@@ -573,7 +573,12 @@ pub fn set_world_transform(
         );
         if set_world != 0 {
             let device = e.get(this, R::m_pkD3DDevice9);
-            e.vcall(device, DEVICE_SET_TRANSFORM, &args![WORLD, world]);
+            engine_core::real_threads::device_vcall(
+                e,
+                device,
+                DEVICE_SET_TRANSFORM,
+                &args![WORLD, world],
+            );
         }
     });
     let state = e.get(this, R::m_pkRenderState);
@@ -629,7 +634,8 @@ fn set_vertex_constants(e: &mut Engine, register: u32, data: u32, count: u32) {
     let shader = e.global::<u32>(pass.wrapping_add(0x5c));
     let device = e.global::<u32>(shader.wrapping_add(0x20));
     capture::own_image(e, data, count.wrapping_mul(16), |e, data| {
-        e.vcall(
+        engine_core::real_threads::device_vcall(
+            e,
             device,
             DEVICE_SET_VERTEX_CONSTANTS,
             &args![register, data, count],

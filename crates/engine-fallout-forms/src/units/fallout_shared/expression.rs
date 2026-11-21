@@ -198,7 +198,10 @@ pub fn expression_to_postfix(
         };
         loop {
             e.mem.set_u32(kind.addr(), OPERAND);
-            let count = expression_next_token(e, this, cursor, token, kind, false, Ptr::NULL);
+            // By address: lStewieAl's Tweaks' script inlines replace the tokenizer (overridable.tsv).
+            let count = e
+                .call(0x0059_3870, &args![this, cursor, token, kind, 0u32, 0u32])
+                .u32();
             if count != 0 {
                 let current = e.mem.i32(kind.addr());
                 if current < OPERAND as i32 {
@@ -502,15 +505,12 @@ pub fn expression_eval(
         e.mem.set_u8(copy.wrapping_add(length as u32), 0);
         e.mem.set_u32(cursor, copy);
         let next = |e: &mut Engine| {
-            expression_next_token(
-                e,
-                this,
-                Ptr::new(cursor),
-                Ptr::new(token),
-                Ptr::new(kind),
-                parse != 0,
-                Ptr::new(position),
+            // By address, as the exe calls it (overridable.tsv).
+            e.call(
+                0x0059_3870,
+                &args![this, cursor, token, kind, u32::from(parse != 0), position],
             )
+            .u32()
         };
         let mut size = next(e);
         let mut token_text = if size == 0 { 0 } else { token };
