@@ -2597,7 +2597,7 @@ fn lists_pass_in() {
 #[test]
 fn remove_all() {
     Diff::new(entry!(0x00b7_1300, own::remove_all(u32)))
-        .common()
+        .family(&draw::DRAW)
         .goes_by_address(&[0x0040_fbf0, 0x0040_fba0])
         .inputs(&[
             Input::Of(&[0, 1, 3]),
