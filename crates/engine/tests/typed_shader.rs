@@ -11116,7 +11116,8 @@ fn the_hand_off_draws_as_the_cut_on_one_thread() {
             .collect()
     };
     let poison = capture::Mode::Poison;
-    for (mode, forced) in [(poison, false), (poison, true), (capture::Mode::On, false)] {
+    let on = capture::Mode::On;
+    for (mode, forced) in [(poison, false), (poison, true), (on, false), (on, true)] {
         let mut handed = Engine::new();
         let b = setup(&mut handed);
         let before = camera_words(&handed, b[0]);
@@ -11127,6 +11128,31 @@ fn the_hand_off_draws_as_the_cut_on_one_thread() {
                 cut::cut_for_thread(&mut handed, b[0], Ptr::new(b[1]), false).is_none(),
                 "POISON without stepped threads must be refused"
             );
+        }
+        if !forced {
+            // The test world's shader classes are not listed clean (`statics::CLASSES`): the own state would stay in
+            // guest memory, written by both threads at once, so the frame is not handed off and draws on main; the
+            // packet is closed again and the cut counted as one that kept the own state.
+            let kept = statics::report().1;
+            assert!(
+                cut::cut_for_thread(&mut handed, b[0], Ptr::new(b[1]), true).is_none(),
+                "{mode:?}: a frame with a pass of an unlisted shader class was handed off"
+            );
+            assert!(
+                !capture::is_open(&handed),
+                "{mode:?}: the refused cut left its packet open"
+            );
+            assert!(
+                statics::report().1 > kept,
+                "{mode:?}: the kept cut not counted"
+            );
+            assert_eq!(
+                camera_words(&handed, b[0]),
+                before,
+                "{mode:?}: the refused cut changed guest memory"
+            );
+            capture::set_thread_mode(None);
+            continue;
         }
         let packet = cut::cut_for_thread(&mut handed, b[0], Ptr::new(b[1]), true)
             .expect("the cut for the drawing thread");
@@ -11197,7 +11223,9 @@ fn the_hand_off_draws_as_the_cut_on_one_thread() {
         let mut e = Engine::new();
         let w = setup(&mut e);
         capture::set_thread_mode(Some(capture::Mode::On));
+        statics::set_forced(true);
         let one = cut::cut_for_thread(&mut e, w[0], Ptr::new(w[1]), true).expect("one");
+        statics::set_forced(false);
         assert!(capture::begin(&e), "an open packet on this thread");
         let back = cut::adopt(&mut e, one).expect_err("a second packet on this thread");
         let _ = capture::end(&mut e);

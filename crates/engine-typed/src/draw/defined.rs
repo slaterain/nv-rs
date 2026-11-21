@@ -52,11 +52,22 @@ fn copy_float(e: &Engine, at: u32) -> u32 {
     x87_quiet_bits(e.global::<u32>(at))
 }
 
-/// The renderer's matrix at `offset` copied to `to` (`REP MOVSD`), as the draw's own state holds it.
+/// The renderer's matrix at `offset` copied to `to` (`REP MOVSD`), as the draw's own state holds it. With no packet
+/// open (the drawing thread off: every default run) through a buffer on the stack, guest memory to guest memory.
 fn copy_renderer_matrix(e: &mut Engine, renderer: u32, offset: u32, to: u32) {
-    let bytes = capture::own_bytes(e, renderer.wrapping_add(offset), 0x40);
-    e.mem.write(to, &bytes);
+    let from = renderer.wrapping_add(offset);
+    if capture::active() {
+        let bytes = capture::own_bytes(e, from, MATRIX_BYTES);
+        e.mem.write(to, &bytes);
+    } else {
+        let mut bytes = [0u8; 0x40];
+        e.mem.read(from, &mut bytes);
+        e.mem.write(to, &bytes);
+    }
 }
+
+/// A 4x4 matrix of floats, in bytes.
+const MATRIX_BYTES: u32 = 0x40;
 
 /// The matrix at `matrix` inverted in place (no determinant) when `inverse`, then transposed in place when
 /// `transpose`.
@@ -476,4 +487,58 @@ pub fn set_defined_constant(
         }
         result
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A renderer block of 0x60 words holding 1, 2, 3, .. and a destination of 0x18 words holding 0xee.
+    fn renderer_and_destination(e: &mut Engine) -> (u32, u32) {
+        let renderer = e.mem.alloc(0x180);
+        for i in 0..0x60 {
+            e.mem.set_u32(renderer + 4 * i, i + 1);
+        }
+        let to = e.mem.alloc(0x60);
+        for i in 0..0x18 {
+            e.mem.set_u32(to + 4 * i, 0xee);
+        }
+        (renderer, to)
+    }
+
+    fn destination(e: &Engine, to: u32) -> Vec<u32> {
+        (0..0x18).map(|i| e.mem.u32(to + 4 * i)).collect()
+    }
+
+    /// With no packet open (the drawing thread off) the matrix is copied from guest memory, exactly its 0x40 bytes;
+    /// with this thread's packet owning the renderer's words it is the packet's copy (main changed guest memory
+    /// after the cut), as before.
+    #[test]
+    fn a_renderer_matrix_is_copied_from_guest_memory_or_the_own_state() {
+        let offset = 0x100;
+        let mut e = Engine::new();
+        let (renderer, to) = renderer_and_destination(&mut e);
+        copy_renderer_matrix(&mut e, renderer, offset, to + 0x10);
+        let expect: Vec<u32> = (0..0x18u32)
+            .map(|i| {
+                if (4..0x14).contains(&i) {
+                    0x3d + i
+                } else {
+                    0xee
+                }
+            })
+            .collect();
+        assert_eq!(destination(&e, to), expect);
+
+        let mut e = Engine::new();
+        let (renderer, to) = renderer_and_destination(&mut e);
+        assert!(capture::begin(&e));
+        capture::own(&e, renderer, offset, offset + MATRIX_BYTES);
+        for i in 0..0x10 {
+            e.mem.set_u32(renderer + offset + 4 * i, 0x99);
+        }
+        copy_renderer_matrix(&mut e, renderer, offset, to + 0x10);
+        let _ = capture::end(&mut e);
+        assert_eq!(destination(&e, to), expect);
+    }
 }
