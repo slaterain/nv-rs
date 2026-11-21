@@ -257,7 +257,7 @@ pub fn second_half(e: &mut Engine, camera: u32, accumulator: u32, third: u32) {
 #[inline]
 fn call_first(e: &mut Engine, camera: u32, accumulator: u32, third: u32) {
     let _time = stage_time::scope(Column::WorldDrawFirst);
-    let _direct = Direct::begin(e);
+    let _direct = real_threads::DirectHalf::begin(e);
     e.call(WORLD_DRAW_FIRST, &args![camera, accumulator, third]);
 }
 
@@ -265,7 +265,7 @@ fn call_first(e: &mut Engine, camera: u32, accumulator: u32, third: u32) {
 #[inline]
 fn call_second(e: &mut Engine, camera: u32, accumulator: u32, third: u32) {
     let _time = stage_time::scope(Column::WorldDrawSecond);
-    let _direct = Direct::begin(e);
+    let _direct = real_threads::DirectHalf::begin(e);
     e.call(WORLD_DRAW_SECOND, &args![camera, accumulator, third]);
 }
 
@@ -635,21 +635,3 @@ pub mod testing;
 
 #[cfg(test)]
 mod tests;
-
-/// The world draw's direct device calls for one half (`real_threads::direct_begin`), ended when dropped
-/// (also when the half panics).
-struct Direct(bool);
-
-impl Direct {
-    fn begin(e: &Engine) -> Direct {
-        Direct(real_threads::direct_begin(e))
-    }
-}
-
-impl Drop for Direct {
-    fn drop(&mut self) {
-        if self.0 {
-            real_threads::direct_end();
-        }
-    }
-}

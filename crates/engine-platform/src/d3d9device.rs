@@ -6987,7 +6987,10 @@ pub(crate) mod tests {
             let out = e.mem.alloc(4);
             assert_eq!(device_vcall(&mut e, dev, 4 * 58, &[8, out]).u32(), D3D_OK);
             assert_eq!(e.mem.u32(out), 2);
-            assert!(!direct_holds(), "the caller's own hold: no direct hold taken");
+            assert!(
+                !direct_holds(),
+                "the caller's own hold: no direct hold taken"
+            );
         }
         direct_end();
         assert!(!direct_holds() && !device_lock_held(&e));
