@@ -3437,6 +3437,8 @@ fn list_find() {
         refs::list_find(Ptr<_>, Ptr<u32>, u32) -> u32
     ))
     .common(0x0049_c680)
+    // The list's step (`0057cbe0`): the typed find does its two reads in place.
+    .ignore_calls(&[0x0057_cbe0])
     .inputs(&[
         Input::Of(&[0, 1, 2, 5]),
         Input::Of(&[0, 1, 2, 3, 4, 9]),
