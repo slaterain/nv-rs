@@ -1741,7 +1741,13 @@ mod tests {
                 // Another game thread on the same engine while the half is served (stepped threads take turns on
                 // one engine): it reads guest memory and cannot take the view (its writes are main's, noted as
                 // main's writes are: `own_store`).
+                struct Stepped(Engine);
+                // SAFETY: the engine is used by one thread at a time (moved to the other thread and back by the
+                // join, as the stepped threads hand it over), and nothing of it is kept on this thread meanwhile.
+                unsafe impl Send for Stepped {}
+                let moved = Stepped(e);
                 let back = std::thread::spawn(move || {
+                    let Stepped(mut e) = moved;
                     assert_eq!(own_word(&e, at, 0), 1, "another thread: guest memory");
                     assert_eq!(own_bytes(&e, at, 4), vec![1, 0, 0, 0]);
                     assert!(!owns(&e, at, 8), "another thread owns nothing");
@@ -1750,10 +1756,11 @@ mod tests {
                         e.own_view.is_some(),
                         "only the serving thread takes the view back"
                     );
-                    e
+                    Stepped(e)
                 })
                 .join()
-                .unwrap();
+                .unwrap()
+                .0;
                 assert_eq!(
                     own_word(&back, at, 0),
                     0x55,
