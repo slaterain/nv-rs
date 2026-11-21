@@ -421,16 +421,19 @@ fn jip_operator(e: &mut Engine, w: &[u32]) -> Option<u32> {
     Some(1)
 }
 
-fn eval_diff() -> Diff {
-    Diff::new(entry!(
-        0x0059_3db0,
-        expression::eval(Ptr<_>, Ptr<_>, u32, u32, u32, u32, i32, u8) -> f64
-    ))
-    .family(&scripts::SCRIPTS)
-    .family(&crt::CRT)
-    .family(&leaf::LEAVES)
-    .translation_calls_plainly(PLAIN)
-    .allow_nan_payloads()
+/// What every `Eval` comparison names: the families, the plain calls, the NaN payloads.
+trait Common {
+    fn common(self) -> Diff;
+}
+
+impl Common for Diff {
+    fn common(self) -> Diff {
+        self.family(&scripts::SCRIPTS)
+            .family(&crt::CRT)
+            .family(&leaf::LEAVES)
+            .translation_calls_plainly(PLAIN)
+            .allow_nan_payloads()
+    }
 }
 
 /// What the translations of the operand reader and the referenced object lookup call as plain Rust
@@ -468,38 +471,50 @@ const BINARY: &[&str] = &[
     "I J <",
     "I J ==",
     "I ~",
+    "I I <",
+    "I I <=",
+    "I I >",
+    "I I >=",
+    "I I !=",
+    "A A <",
+    "A A ==",
+    "A A >=",
 ];
 
 #[test]
 fn scripts_eval_operators_on_doubles_and_integers() {
     let templates: Vec<u32> = (0..BINARY.len() as u32).collect();
     let templates: &'static [u32] = templates.leak();
-    eval_diff()
-        .inputs(&[
-            Input::Of(templates),
-            Input::F64,
-            Input::F64,
-            Input::Of(&[3, 0x8000_0000, 0xffff_fff9, 0x7fff_ffff, 0]),
-            Input::Of(&[1, 5, 0xffff_ffd8]),
-            Input::Flag,
-        ])
-        .max_cases(512)
-        .float_sweep(96)
-        .setup(|e, case| {
-            world(e);
-            let bytes = postfix(BINARY[case.word(0) as usize], case, [1, 2], [3, 4]);
-            {
-                let w = script_world(e, 0);
-                eval_words(
-                    e,
-                    &bytes,
-                    [0x0070_0000, 0, w.script, w.locals],
-                    case.word(5),
-                )
-            }
-        })
-        .run()
-        .assert_same();
+    Diff::new(entry!(
+        0x0059_3db0,
+        expression::eval(Ptr<_>, Ptr<_>, u32, u32, u32, u32, i32, u8) -> f64
+    ))
+    .common()
+    .inputs(&[
+        Input::Of(templates),
+        Input::F64,
+        Input::F64,
+        Input::Of(&[3, 0x8000_0000, 0xffff_fff9, 0x7fff_ffff, 0]),
+        Input::Of(&[1, 5, 0xffff_ffd8]),
+        Input::Flag,
+    ])
+    .max_cases(512)
+    .float_sweep(96)
+    .setup(|e, case| {
+        world(e);
+        let bytes = postfix(BINARY[case.word(0) as usize], case, [1, 2], [3, 4]);
+        {
+            let w = script_world(e, 0);
+            eval_words(
+                e,
+                &bytes,
+                [0x0070_0000, 0, w.script, w.locals],
+                case.word(5),
+            )
+        }
+    })
+    .run()
+    .assert_same();
 }
 
 /// Texts, literals, the modulo and division cases that do not fault, the errors and the long
@@ -561,35 +576,39 @@ fn text_stops(template: &str, parse: bool) -> bool {
 fn scripts_eval_texts_errors_and_extenders() {
     let templates: Vec<u32> = (0..TEXTS.len() as u32).collect();
     let templates: &'static [u32] = templates.leak();
-    eval_diff()
-        .inputs(&[Input::Of(templates), Input::Flag, Input::Flag, Input::Flag])
-        .max_cases(512)
-        .expect_stops(|case| text_stops(TEXTS[case.word(0) as usize], case.word(1) != 0))
-        .setup(|e, case| {
-            world(e);
-            xnvse(e, case.word(2) != 0);
-            jip(e, case.word(3) != 0);
-            let template = TEXTS[case.word(0) as usize];
-            let mut bytes = Vec::new();
-            for t in template.split(' ').filter(|t| !t.is_empty()) {
-                bytes.push(b' ');
-                bytes.extend(t.as_bytes());
-            }
-            if bytes.is_empty() {
-                bytes.push(b' ');
-            }
-            {
-                let w = script_world(e, 0);
-                eval_words(
-                    e,
-                    &bytes,
-                    [0x0070_0000, 0, w.script, w.locals],
-                    case.word(1),
-                )
-            }
-        })
-        .run()
-        .assert_same();
+    Diff::new(entry!(
+        0x0059_3db0,
+        expression::eval(Ptr<_>, Ptr<_>, u32, u32, u32, u32, i32, u8) -> f64
+    ))
+    .common()
+    .inputs(&[Input::Of(templates), Input::Flag, Input::Flag, Input::Flag])
+    .max_cases(512)
+    .expect_stops(|case| text_stops(TEXTS[case.word(0) as usize], case.word(1) != 0))
+    .setup(|e, case| {
+        world(e);
+        xnvse(e, case.word(2) != 0);
+        jip(e, case.word(3) != 0);
+        let template = TEXTS[case.word(0) as usize];
+        let mut bytes = Vec::new();
+        for t in template.split(' ').filter(|t| !t.is_empty()) {
+            bytes.push(b' ');
+            bytes.extend(t.as_bytes());
+        }
+        if bytes.is_empty() {
+            bytes.push(b' ');
+        }
+        {
+            let w = script_world(e, 0);
+            eval_words(
+                e,
+                &bytes,
+                [0x0070_0000, 0, w.script, w.locals],
+                case.word(1),
+            )
+        }
+    })
+    .run()
+    .assert_same();
 }
 
 /// Expressions of compiled operands, read through the operand reader (typed too).
@@ -614,30 +633,34 @@ const COMPILED: &[&[u8]] = &[
 fn scripts_eval_compiled_operands_with_extenders() {
     let templates: Vec<u32> = (0..COMPILED.len() as u32).collect();
     let templates: &'static [u32] = templates.leak();
-    eval_diff()
-        .inputs(&[
-            Input::Of(templates),
-            Input::Flag,
-            Input::Flag,
-            Input::Flag,
-            Input::Flag,
-        ])
-        .max_cases(512)
-        .setup(|e, case| {
-            world(e);
-            xnvse(e, case.word(2) != 0);
-            jip(e, case.word(3) != 0);
-            let w = script_world(e, 0);
-            e.mem.set_u32(ANSWER_HANDLER, case.word(4));
-            eval_words(
-                e,
-                COMPILED[case.word(0) as usize],
-                [0x0070_0000, 0, w.script, w.locals],
-                case.word(1),
-            )
-        })
-        .run()
-        .assert_same();
+    Diff::new(entry!(
+        0x0059_3db0,
+        expression::eval(Ptr<_>, Ptr<_>, u32, u32, u32, u32, i32, u8) -> f64
+    ))
+    .common()
+    .inputs(&[
+        Input::Of(templates),
+        Input::Flag,
+        Input::Flag,
+        Input::Flag,
+        Input::Flag,
+    ])
+    .max_cases(512)
+    .setup(|e, case| {
+        world(e);
+        xnvse(e, case.word(2) != 0);
+        jip(e, case.word(3) != 0);
+        let w = script_world(e, 0);
+        e.mem.set_u32(ANSWER_HANDLER, case.word(4));
+        eval_words(
+            e,
+            COMPILED[case.word(0) as usize],
+            [0x0070_0000, 0, w.script, w.locals],
+            case.word(1),
+        )
+    })
+    .run()
+    .assert_same();
 }
 
 // ---- The tokenizer and the postfix conversion -------------------------------------------------
@@ -780,28 +803,34 @@ fn scripts_construct_and_error() {
         })
         .run()
         .assert_same();
-    for (addr, f) in [
-        entry!(
-            0x0059_4b60,
-            expression::operator_stack_construct(Ptr<_>) -> Ptr<_>
-        ),
-        entry!(
-            0x0059_4c60,
-            expression::operand_stack_construct(Ptr<_>) -> Ptr<_>
-        ),
-    ] {
-        Diff::new((addr, f))
-            .family(&scripts::SCRIPTS)
-            .inputs(&[Input::Word])
-            .setup(|e, case| {
-                let this = e.mem.alloc(0x210);
-                e.mem.set_u32(this + 0x100, case.word(0));
-                e.mem.set_u32(this + 0x200, case.word(0));
-                vec![this]
-            })
-            .run()
-            .assert_same();
-    }
+    Diff::new(entry!(
+        0x0059_4b60,
+        expression::operator_stack_construct(Ptr<_>) -> Ptr<_>
+    ))
+    .family(&scripts::SCRIPTS)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        let this = e.mem.alloc(0x210);
+        e.mem.set_u32(this + 0x100, case.word(0));
+        e.mem.set_u32(this + 0x200, case.word(0));
+        vec![this]
+    })
+    .run()
+    .assert_same();
+    Diff::new(entry!(
+        0x0059_4c60,
+        expression::operand_stack_construct(Ptr<_>) -> Ptr<_>
+    ))
+    .family(&scripts::SCRIPTS)
+    .inputs(&[Input::Word])
+    .setup(|e, case| {
+        let this = e.mem.alloc(0x210);
+        e.mem.set_u32(this + 0x100, case.word(0));
+        e.mem.set_u32(this + 0x200, case.word(0));
+        vec![this]
+    })
+    .run()
+    .assert_same();
 }
 
 /// A stack of either kind with its index at `index`.
@@ -831,29 +860,45 @@ fn scripts_operator_stack() {
         .setup(|e, case| vec![stack(e, case.word(0))])
         .run()
         .assert_same();
-    for (addr, f) in [
-        entry!(0x0059_4c00, expression::operator_is_empty(Ptr<_>) -> bool),
-        entry!(0x0059_4c20, expression::operator_is_full(Ptr<_>) -> bool),
-        entry!(0x0059_4d20, expression::operand_is_empty(Ptr<_>) -> bool),
-    ] {
-        Diff::new((addr, f))
-            .family(&scripts::SCRIPTS)
-            .inputs(&[Input::Of(INDICES)])
-            .setup(|e, case| vec![stack(e, case.word(0))])
-            .run()
-            .assert_same();
-    }
-    for (addr, f) in [
-        entry!(0x0059_4c40, expression::operator_clear(Ptr<_>)),
-        entry!(0x0059_4d40, expression::operand_clear(Ptr<_>)),
-    ] {
-        Diff::new((addr, f))
-            .family(&scripts::SCRIPTS)
-            .inputs(&[Input::Of(INDICES)])
-            .setup(|e, case| vec![stack(e, case.word(0))])
-            .run()
-            .assert_same();
-    }
+    Diff::new(entry!(
+        0x0059_4c00,
+        expression::operator_is_empty(Ptr<_>) -> bool
+    ))
+    .family(&scripts::SCRIPTS)
+    .inputs(&[Input::Of(INDICES)])
+    .setup(|e, case| vec![stack(e, case.word(0))])
+    .run()
+    .assert_same();
+    Diff::new(entry!(
+        0x0059_4c20,
+        expression::operator_is_full(Ptr<_>) -> bool
+    ))
+    .family(&scripts::SCRIPTS)
+    .inputs(&[Input::Of(INDICES)])
+    .setup(|e, case| vec![stack(e, case.word(0))])
+    .run()
+    .assert_same();
+    Diff::new(entry!(
+        0x0059_4d20,
+        expression::operand_is_empty(Ptr<_>) -> bool
+    ))
+    .family(&scripts::SCRIPTS)
+    .inputs(&[Input::Of(INDICES)])
+    .setup(|e, case| vec![stack(e, case.word(0))])
+    .run()
+    .assert_same();
+    Diff::new(entry!(0x0059_4c40, expression::operator_clear(Ptr<_>)))
+        .family(&scripts::SCRIPTS)
+        .inputs(&[Input::Of(INDICES)])
+        .setup(|e, case| vec![stack(e, case.word(0))])
+        .run()
+        .assert_same();
+    Diff::new(entry!(0x0059_4d40, expression::operand_clear(Ptr<_>)))
+        .family(&scripts::SCRIPTS)
+        .inputs(&[Input::Of(INDICES)])
+        .setup(|e, case| vec![stack(e, case.word(0))])
+        .run()
+        .assert_same();
 }
 
 /// An operand stack big enough for 32 operands and the index.
@@ -915,22 +960,28 @@ fn scripts_number_tests() {
     ];
     let texts: Vec<u32> = (0..TEXTS.len() as u32).collect();
     let texts: &'static [u32] = texts.leak();
-    for (addr, f) in [
-        entry!(0x004b_1230, numbers::is_an_integer(Ptr<_>) -> bool),
-        entry!(0x004b_12d0, numbers::is_a_float(Ptr<_>) -> bool),
-    ] {
-        Diff::new((addr, f))
-            .family(&scripts::SCRIPTS)
-            .inputs(&[Input::Of(texts)])
-            .setup(|e, case| {
-                let text = TEXTS[case.word(0) as usize];
-                let at = e.mem.alloc(text.len() as u32 + 4);
-                e.mem.write(at, text);
-                vec![at]
-            })
-            .run()
-            .assert_same();
-    }
+    Diff::new(entry!(0x004b_1230, numbers::is_an_integer(Ptr<_>) -> bool))
+        .family(&scripts::SCRIPTS)
+        .inputs(&[Input::Of(texts)])
+        .setup(|e, case| {
+            let text = TEXTS[case.word(0) as usize];
+            let at = e.mem.alloc(text.len() as u32 + 4);
+            e.mem.write(at, text);
+            vec![at]
+        })
+        .run()
+        .assert_same();
+    Diff::new(entry!(0x004b_12d0, numbers::is_a_float(Ptr<_>) -> bool))
+        .family(&scripts::SCRIPTS)
+        .inputs(&[Input::Of(texts)])
+        .setup(|e, case| {
+            let text = TEXTS[case.word(0) as usize];
+            let at = e.mem.alloc(text.len() as u32 + 4);
+            e.mem.write(at, text);
+            vec![at]
+        })
+        .run()
+        .assert_same();
 }
 
 // ---- The operand reader and its lookups -------------------------------------------------------
@@ -1180,22 +1231,26 @@ fn real_scda_expressions() {
     let count = all.len();
     let all: &'static [Vec<u8>] = all.leak();
     let indices: &'static [u32] = (0..count as u32).collect::<Vec<_>>().leak();
-    eval_diff()
-        .inputs(&[Input::Of(indices), Input::Flag, Input::Flag])
-        .max_cases(count * 4)
-        .setup(move |e, case| {
-            world(e);
-            xnvse(e, case.word(1) != 0);
-            jip(e, case.word(2) != 0);
-            let w = script_world(e, 0);
-            eval_words(
-                e,
-                &all[case.word(0) as usize],
-                [0x0070_0000, 0, w.script, w.locals],
-                0,
-            )
-        })
-        .run()
-        .assert_same();
+    Diff::new(entry!(
+        0x0059_3db0,
+        expression::eval(Ptr<_>, Ptr<_>, u32, u32, u32, u32, i32, u8) -> f64
+    ))
+    .common()
+    .inputs(&[Input::Of(indices), Input::Flag, Input::Flag])
+    .max_cases(count * 4)
+    .setup(move |e, case| {
+        world(e);
+        xnvse(e, case.word(1) != 0);
+        jip(e, case.word(2) != 0);
+        let w = script_world(e, 0);
+        eval_words(
+            e,
+            &all[case.word(0) as usize],
+            [0x0070_0000, 0, w.script, w.locals],
+            0,
+        )
+    })
+    .run()
+    .assert_same();
     eprintln!("{count} real expressions compared");
 }

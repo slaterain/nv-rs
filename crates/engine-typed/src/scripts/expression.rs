@@ -123,6 +123,12 @@ fn low_word(bits: u64) -> u32 {
     bits as u32
 }
 
+/// A word read as a signed integer.
+#[inline]
+fn signed(word: u32) -> i32 {
+    word as i32
+}
+
 #[inline]
 fn high_word(bits: u64) -> u32 {
     low_word(bits >> 32)
@@ -615,7 +621,7 @@ fn idiv(dividend: i32, divisor: i32) -> (i32, i32) {
 #[inline]
 fn to_int(e: &mut Engine, value: f64) -> i32 {
     let long = typed_call!(crt::FAMILY, 0x00ec_62c0, crt::math::ftol2_sse(e, value));
-    low_word(long) as i32
+    signed(low_word(long))
 }
 
 /// What a binary operator gives: the result's type byte (a double or not) and its value, or
