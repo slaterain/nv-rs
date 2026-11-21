@@ -14539,6 +14539,12 @@ mod tests {
     #[test]
     fn a_value_change_recalculates_the_values_that_react() {
         let mut e = tile_engine();
+        // The change event calls `CalculateValue` by address (it is overridable): the real one
+        // here, over the outside callees' stand-in.
+        e.register(VALUE_CALCULATE_VALUE, |e, a| {
+            value_calculate_value(e, Ptr::new(a[0]), a[1] & 0xff != 0);
+            Ret::default()
+        });
         let (tile, log) = calculating_tile(&mut e);
         let (head, _) = install_reaction_map(&mut e);
         let changed = value_with(&mut e, tile, TRAIT_X, 1.0, &[(VA_COPY, 5.0)]);
