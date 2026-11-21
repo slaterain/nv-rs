@@ -433,7 +433,8 @@ speed gate passed (G1, 2026-11-06: Goodsprings +7.1%, Doc's room +3.0%). It is n
 `pathing`, `shader`, `crt` and `dispatch` are on, and since their gates `render` (2026-11-09), `draw`, `scene`,
 `particles`, `collision` and `multibound` (2026-11-10), and on their tests and reviews `animation`, `draw_f` and
 `anim_keys` (2026-11-11: no comparison runs for native code), `process` and `lights` (2026-11-13) and, since its gate,
-`geometry` (2026-11-16) (below); `NV_TYPED=off` turns every family off, and
+`geometry` (2026-11-16) (below), and on its tests `setup` (2026-11-21: the frame's set-up drivers before the
+world is culled, `crates/engine-typed/src/setup`); `NV_TYPED=off` turns every family off, and
 `<family>:off` one; `geometry` (below) is on since its gate (2026-11-16). A family merged off stays off until its
 gate, and `NV_TYPED=<family>` turns it on. A run compared call for call with the original's record (nv-trace's `NV_TRACE_OUT`,
 `NV_TRACE_LIST`) has every family off unless `NV_TYPED` says otherwise (`typed::switch_for`).

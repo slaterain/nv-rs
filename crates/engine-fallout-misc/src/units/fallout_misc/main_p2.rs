@@ -365,7 +365,7 @@ pub fn fn_008706b0(e: &mut Engine, this: Ptr, target: u32, menu_background: u8, 
     if menu_background != 0 && !is_menu_visible(e, 0x3f5) {
         fn_008707c0(e, this, target, byte_131);
     } else if byte_131 == 0 {
-        fn_00870bd0(e, this, target, flag);
+        e.call(0x0087_0bd0, &args![this, target, flag]);
     } else {
         fn_00870a00(e, this, target, flag);
     }
@@ -407,12 +407,14 @@ pub fn fn_008707c0(e: &mut Engine, this: Ptr, target: u32, flag: u8) {
     } else {
         0
     };
-    fn_00872ad0(e, this);
+    e.call(0x0087_2ad0, &args![this]);
     for stage in 1..0x11u32 {
         mt_both_threads(e, stage);
     }
-    fn_00871290(e, this);
-    let frame = fn_00872f50(e, this, renderer, target, flag, byte_flag);
+    e.call(0x0087_1290, &args![this]);
+    let frame = e
+        .call(0x0087_2f50, &args![this, renderer, target, flag, byte_flag])
+        .u32();
     e.call(
         0x0087_4b90,
         &args![this, global_91ac, renderer, byte_flag, target],
@@ -497,12 +499,14 @@ pub fn fn_00870a00(e: &mut Engine, this: Ptr, target: u32, skip_world: u8) {
     let flag_a = e.call(0x0045_6610, &args![player_child]).u8();
     let byte_flag = e.call(0x004d_c310, &args![]).u8();
     e.call(0x00b9_8480, &args![1u32, 1u32]);
-    fn_00872ad0(e, this);
-    let accumulator = fn_00872b00(e, this);
-    fn_008727d0(e, this);
+    e.call(0x0087_2ad0, &args![this]);
+    let accumulator = e.call(0x0087_2b00, &args![this]).u32();
+    e.call(0x0087_27d0, &args![this]);
     let accumulator_flag = e.call(0x0087_49b0, &args![this]).u8();
-    fn_00871290(e, this);
-    let frame = fn_00872f50(e, this, renderer, target, 0, byte_flag);
+    e.call(0x0087_1290, &args![this]);
+    let frame = e
+        .call(0x0087_2f50, &args![this, renderer, target, 0u8, byte_flag])
+        .u32();
     let draw_world = world_draw_enabled(e, flag_a != 0, skip_world);
     e.call(
         0x0087_3200,
@@ -570,12 +574,14 @@ pub fn fn_00870bd0(e: &mut Engine, this: Ptr, target: u32, skip_world: u8) {
     let player_child = e.call(0x0095_0bb0, &args![player, 1u32]).u32();
     let flag_a = e.call(0x0045_6610, &args![player_child]).u8();
     let byte_flag = e.call(0x004d_c310, &args![]).u8();
-    fn_00872ad0(e, this);
-    let accumulator = fn_00872b00(e, this);
-    fn_008727d0(e, this);
+    e.call(0x0087_2ad0, &args![this]);
+    let accumulator = e.call(0x0087_2b00, &args![this]).u32();
+    e.call(0x0087_27d0, &args![this]);
     let accumulator_flag = e.call(0x0087_49b0, &args![this]).u8();
-    fn_00871290(e, this);
-    let frame = fn_00872f50(e, this, renderer, target, 0, byte_flag);
+    e.call(0x0087_1290, &args![this]);
+    let frame = e
+        .call(0x0087_2f50, &args![this, renderer, target, 0u8, byte_flag])
+        .u32();
     e.call(0x0087_4ac0, &args![this, accumulator_flag]);
     e.call(0x0087_4b50, &args![this, frame, byte_flag, 5u32]);
     let draw_world = world_draw_enabled(e, flag_a != 0, skip_world);
@@ -874,7 +880,7 @@ pub fn fn_00871290(e: &mut Engine, this: Ptr) {
             mt_both_threads(e, stage);
         }
     }
-    main_update_offscreen_interface(e, this);
+    e.call(0x0087_1a50, &args![this]);
 }
 
 /// The shadow-caster limit: the setting `0x011c72d8` when `005f36f0` of the
@@ -1645,8 +1651,10 @@ pub fn fn_00872940(e: &mut Engine, this: Ptr, target: u32) {
     let renderer = e.call(GET_GLOBAL_011F4748, &args![]).u32();
     let global_91ac = e.call(GET_GLOBAL_011F91AC, &args![]).u32();
     let byte_flag = e.call(0x004d_c310, &args![]).u8();
-    fn_00872ad0(e, this);
-    let frame = fn_00872f50(e, this, renderer, target, 0, byte_flag);
+    e.call(0x0087_2ad0, &args![this]);
+    let frame = e
+        .call(0x0087_2f50, &args![this, renderer, target, 0u8, byte_flag])
+        .u32();
     e.call(
         0x0087_4b90,
         &args![this, global_91ac, renderer, byte_flag, target],
@@ -1743,7 +1751,7 @@ pub fn fn_00872b00(e: &mut Engine, this: Ptr) -> u32 {
         let guard = e.global::<u32>(0x011d_efb4);
         if guard & 1 == 0 {
             e.set_global(0x011d_efb4, guard | 1);
-            fn_00872e00(e, Ptr::new(0x011d_ef10));
+            e.call(0x0087_2e00, &args![0x011d_ef10u32]);
             e.call(0x00ec_658f, &args![0x00fd_9380u32]);
         }
         e.call(0x008d_6f50, &args![0x011d_ef10u32, accumulator]);
