@@ -579,6 +579,9 @@ pub(crate) fn keep_repeats(e: &mut Engine, keep: bool) {
 /// already holds is not passed on ([`skip_repeats`]): in a crowded street about 1,900 of the
 /// frame's 2,200 sampler sets (measured 2026-11-20).
 fn fwd_set_sampler_state(e: &mut Engine, this: Ptr, sampler: u32, kind: u32, value: u32) -> u32 {
+    if let Some(model) = state_one_pass(e, this, StateSet::Sampler, sampler, kind, value) {
+        return model;
+    }
     let repeat = skip_repeats(e)
         && is_sampler(sampler)
         && device(e, this)
@@ -592,6 +595,133 @@ fn fwd_set_sampler_state(e: &mut Engine, this: Ptr, sampler: u32, kind: u32, val
     model
 }
 
+/// `SetRenderState` forwarded as the others ([`forwarded`]), in one pass when it can
+/// ([`state_one_pass`]).
+fn fwd_set_render_state(e: &mut Engine, this: Ptr, state: u32, value: u32) -> u32 {
+    if let Some(model) = state_one_pass(e, this, StateSet::Render, state, 0, value) {
+        return model;
+    }
+    let model = set_render_state(e, this, state, value);
+    if model == D3D_OK {
+        super::d3d9real::set_render_state(e, this.addr(), state, value, model);
+    }
+    model
+}
+
+/// `SetTextureStageState` forwarded as the others ([`forwarded`]), in one pass when it can
+/// ([`state_one_pass`]).
+fn fwd_set_texture_stage_state(
+    e: &mut Engine,
+    this: Ptr,
+    stage: u32,
+    kind: u32,
+    value: u32,
+) -> u32 {
+    if let Some(model) = state_one_pass(e, this, StateSet::Stage, stage, kind, value) {
+        return model;
+    }
+    let model = set_texture_stage_state(e, this, stage, kind, value);
+    if model == D3D_OK {
+        super::d3d9real::set_texture_stage_state(e, this.addr(), stage, kind, value, model);
+    }
+    model
+}
+
+/// Which of the device's state tables a set in one pass writes ([`state_one_pass`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum StateSet {
+    Render,
+    Stage,
+    Sampler,
+}
+
+/// A forwarded `SetRenderState(unit, value)`, `SetTextureStageState(unit, kind, value)` or
+/// `SetSamplerState(unit, kind, value)` (the model's [`set_render_state`] /
+/// [`set_texture_stage_state`] / [`set_sampler_state`], then `super::d3d9real`'s command) in one
+/// pass over the device's state: the device found once, the state noted for an open cut, stored
+/// and (a sampler state, [`fwd_set_sampler_state`]'s repeat test) compared there, and the command
+/// sent with no second look-up of the devices or the backend's state. The same model state, answer
+/// and command as the two steps. `None` (nothing done) when `NV_D3D9_ONE_PASS=0` or for a call the
+/// model does not provide (the two steps then stop the run as before).
+#[inline]
+fn state_one_pass(
+    e: &mut Engine,
+    this: Ptr,
+    set: StateSet,
+    unit: u32,
+    kind: u32,
+    value: u32,
+) -> Option<u32> {
+    use super::d3d9draw::Key;
+    use d3d9_stream::Cmd;
+    let held = crate::device_held(e);
+    let crate::d3d9::DeviceState {
+        device_objects: objects,
+        real,
+        ..
+    } = crate::device_mut(&mut e.device, held);
+    if !super::d3d9resource::one_pass_in(&mut objects.resources) {
+        return None;
+    }
+    let device = this.addr();
+    let (key, index, cmd) = match set {
+        StateSet::Render => {
+            if unit >= 256 {
+                return None;
+            }
+            let cmd = Cmd::SetRenderState {
+                device,
+                state: unit,
+                value,
+            };
+            (Key::Render(unit), unit as usize, cmd)
+        }
+        StateSet::Stage => {
+            if unit >= 8 {
+                return Some(D3DERR_INVALIDCALL);
+            }
+            let index = stage_index(unit, kind)?;
+            let cmd = Cmd::SetTextureStageState {
+                device,
+                stage: unit,
+                kind,
+                value,
+            };
+            (Key::Stage(index as u32), index, cmd)
+        }
+        StateSet::Sampler => {
+            if !is_sampler(unit) {
+                return Some(D3DERR_INVALIDCALL);
+            }
+            let index = sampler_index(unit, kind)?;
+            let cmd = Cmd::SetSamplerState {
+                device,
+                sampler: unit,
+                kind,
+                value,
+            };
+            (Key::Sampler(index as u32), index, cmd)
+        }
+    };
+    // Only sampler states leave repeats out ([`fwd_set_sampler_state`]); read before the device
+    // is borrowed, as the two steps read it before the model's set.
+    let skip = set == StateSet::Sampler && skip_repeats_in(objects);
+    if super::d3d9draw::any_cut() {
+        super::d3d9draw::main_set(&mut objects.draw, key);
+    }
+    let d = device_in(objects, this);
+    let table: &mut [Option<u32>] = match set {
+        StateSet::Render => &mut d.render_states.0[..],
+        StateSet::Stage => &mut d.stage_states.0[..],
+        StateSet::Sampler => &mut d.sampler_states.0[..],
+    };
+    let old = table[index].replace(value);
+    if !(skip && old == Some(value)) {
+        super::d3d9real::record_in(real, device, cmd);
+    }
+    Some(D3D_OK)
+}
+
 forwarded! {
     fn fwd_set_render_target = set_render_target(index: u32, surface: u32) => set_render_target;
     fn fwd_set_depth_stencil_surface = set_depth_stencil_surface(surface: u32)
@@ -600,11 +730,8 @@ forwarded! {
     fn fwd_set_transform = set_transform(state: u32, matrix: Ptr) => set_transform;
     fn fwd_set_scissor_rect = set_scissor_rect(rect: Ptr) => set_scissor_rect;
     fn fwd_set_clip_plane = set_clip_plane(index: u32, plane: Ptr) => set_clip_plane;
-    fn fwd_set_render_state = set_render_state(state: u32, value: u32) => set_render_state;
     fn fwd_set_gamma_ramp = set_gamma_ramp(swap_chain: u32, flags: u32, ramp: Ptr)
         => set_gamma_ramp;
-    fn fwd_set_texture_stage_state = set_texture_stage_state(stage: u32, kind: u32, value: u32)
-        => set_texture_stage_state;
     fn fwd_set_texture = set_texture(sampler: u32, texture: u32) => set_texture;
     fn fwd_set_material = set_material(material: Ptr) => set_material;
     fn fwd_set_light = set_light(index: u32, light: Ptr) => set_light;
@@ -1361,7 +1488,13 @@ pub fn create_device(
 /// The device's state as this call sees it: the drawing side's copy for a call from the drawing
 /// side of an open cut (`super::d3d9draw`), main's otherwise.
 fn device(e: &mut Engine, this: Ptr) -> &mut Device {
-    let objects = &mut device!(e).device_objects;
+    device_in(&mut device!(e).device_objects, this)
+}
+
+/// [`device`] for code that holds the devices' objects already (the state sets in one pass,
+/// [`state_one_pass`]).
+#[inline]
+fn device_in(objects: &mut Objects, this: Ptr) -> &mut Device {
     if super::d3d9draw::drawing_side(&objects.draw) {
         if let Some(d) = objects.draw_devices.get_mut(&this.addr()) {
             return d;
@@ -5758,6 +5891,9 @@ pub(crate) mod tests {
         for i in 0..(4096 + 1024) / 4 {
             e.mem.set_u32(block + 4 * i, VALUES[next(5) as usize]);
         }
+        // Zeros never written: registers set for the first time to what the model's empty
+        // store already holds (they must still go).
+        let zeros = e.mem.alloc(4096);
         let mut answers = Vec::new();
         let mut last = None;
         let mut in_cut = false;
@@ -5768,10 +5904,10 @@ pub(crate) mod tests {
                     let k = next(6) as usize;
                     let start = next(REGISTERS[k] + 2);
                     let count = if next(50) == 0 { REGISTERS[k] } else { next(9) };
-                    let data = if next(40) == 0 {
-                        0
-                    } else {
-                        block + 4 * next(256)
+                    let data = match next(40) {
+                        0 => 0,
+                        1..=4 => zeros,
+                        _ => block + 4 * next(256),
                     };
                     Some((SLOTS[k], [start, data, count]))
                 }
@@ -5893,6 +6029,10 @@ pub(crate) mod tests {
         assert_eq!(e.vcall(dev, 4 * 109, &[3, data, 2]).u32(), D3D_OK);
         // Booleans: one word a register, packed.
         assert_eq!(e.vcall(dev, 4 * 113, &[14, data, 2]).u32(), D3D_OK);
+        // A register never set, set to zeros (what the model's empty store holds): it goes once.
+        let zeros = e.mem.alloc(16);
+        assert_eq!(e.vcall(dev, 4 * 94, &[70, zeros, 1]).u32(), D3D_OK);
+        assert_eq!(e.vcall(dev, 4 * 94, &[70, zeros, 1]).u32(), D3D_OK);
         // Past the pixel float registers (224): refused.
         assert_eq!(
             e.vcall(dev, 4 * 109, &[223, data, 2]).u32(),
@@ -5908,6 +6048,7 @@ pub(crate) mod tests {
                 (3, 3, 2, first),
                 (3, 3, 2, changed),
                 (5, 14, 2, vec![0x3f80_0000, 9]),
+                (0, 70, 1, vec![0; 4]),
             ]
         );
         assert_eq!(
@@ -5916,6 +6057,228 @@ pub(crate) mod tests {
         );
         assert_eq!(binding(&mut e, dev, "constant 5 15"), [9, 0, 0, 0, 1]);
         assert_eq!(binding(&mut e, dev, "constant 3 223"), [0, 0, 0, 0, 0]);
+    }
+
+    /// Every render, texture stage and sampler state of `dev` as main's device holds it, then as
+    /// the drawing side's copy holds it (only while a cut is open).
+    fn state_tables(e: &mut Engine, dev: u32) -> Vec<Option<u32>> {
+        let objects = &device!(e).device_objects;
+        let mut out = Vec::new();
+        for d in [objects.devices.get(&dev), objects.draw_devices.get(&dev)]
+            .into_iter()
+            .flatten()
+        {
+            out.extend_from_slice(&d.render_states.0[..]);
+            out.extend_from_slice(&d.stage_states.0[..]);
+            out.extend_from_slice(&d.sampler_states.0[..]);
+        }
+        out
+    }
+
+    /// What one engine did over [`state_sets_run`]: each call's answer, the stream's commands as
+    /// the wire encodes them, and the state tables ([`state_tables`]) before each join and at the
+    /// end.
+    type StatesRun = (Vec<u32>, Vec<u8>, Vec<Vec<Option<u32>>>);
+
+    /// Drives a device through `steps` generated calls (seed `seed`): render states, texture stage
+    /// states (stages 8 and 9 refused) and sampler states (samplers past the named ones refused),
+    /// few values so that many sets repeat, exact repeats of the last call, constant sets between
+    /// them, and drawing cuts with sets from both sides; the state sets in one pass
+    /// (`NV_D3D9_ONE_PASS`) as `one_pass` says, repeats kept as `keep`.
+    fn state_sets_run(one_pass: bool, keep: bool, seed: u64, steps: u32) -> StatesRun {
+        use super::super::d3d9draw::{as_drawing_side, draw_cut, draw_join};
+        use super::super::d3d9resource::one_pass_for_tests;
+        use d3d9_stream::{Backend, Cmd, Data, Reply, Stream};
+        struct Wire(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl Backend for Wire {
+            fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+                d3d9_stream::wire::encode(&cmd, &mut self.0.lock().unwrap());
+                Reply::None
+            }
+        }
+        let (mut e, dev) = texture_device(Store::Host);
+        let wire = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        super::super::d3d9real::test_stream(
+            &mut e,
+            dev,
+            Stream::direct(Box::new(Wire(wire.clone()))),
+        );
+        keep_repeats(&mut e, keep);
+        one_pass_for_tests(&mut e, one_pass);
+        // xorshift64*: the same calls for both engines.
+        let mut state = seed | 1;
+        let mut next = move |n: u32| -> u32 {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            ((state.wrapping_mul(0x2545_f491_4f6c_dd1d) >> 32) % u64::from(n.max(1))) as u32
+        };
+        const SAMPLERS: [u32; 8] = [0, 1, 7, 15, 16, 256, 260, 261];
+        const VALUES: [u32; 4] = [0, 1, 2, 0x3f80_0000];
+        let data = e.mem.alloc(64);
+        e.mem.set_u32(data, 0x3f80_0000);
+        let mut answers = Vec::new();
+        let mut tables = Vec::new();
+        let mut last = None;
+        let mut in_cut = false;
+        for _ in 0..steps {
+            let call = match next(100) {
+                0..=29 => Some((57, [next(210), VALUES[next(4) as usize], 0])),
+                30..=54 => Some((67, [next(10), 1 + next(32), VALUES[next(4) as usize]])),
+                55..=84 => Some((
+                    69,
+                    [
+                        SAMPLERS[next(8) as usize],
+                        1 + next(13),
+                        VALUES[next(4) as usize],
+                    ],
+                )),
+                85..=87 => Some((94, [next(8), data, 1])),
+                88..=95 => last,
+                _ => {
+                    if in_cut {
+                        tables.push(state_tables(&mut e, dev));
+                        draw_join(&mut e);
+                    } else {
+                        assert!(draw_cut(&mut e, dev));
+                    }
+                    in_cut = !in_cut;
+                    None
+                }
+            };
+            if let Some((slot, args)) = call {
+                let args = if slot == 57 { &args[..2] } else { &args[..] };
+                let answer = if in_cut && next(2) == 0 {
+                    as_drawing_side(|| e.vcall(dev, 4 * slot, args).u32())
+                } else {
+                    e.vcall(dev, 4 * slot, args).u32()
+                };
+                answers.push(answer);
+                last = call;
+            }
+        }
+        if in_cut {
+            tables.push(state_tables(&mut e, dev));
+            draw_join(&mut e);
+        }
+        tables.push(state_tables(&mut e, dev));
+        let bytes = wire.lock().unwrap().clone();
+        (answers, bytes, tables)
+    }
+
+    /// The render, texture stage and sampler state sets in one pass (`NV_D3D9_ONE_PASS`, on by
+    /// default) against the model then the forwarding as two steps, over generated calls with
+    /// repeats left out and kept: the same answers, the same commands to the backend byte for
+    /// byte, and the same states in main's device and the drawing side's copy.
+    #[test]
+    fn state_sets_in_one_pass_match_the_two_steps() {
+        for seed in [1, 0x9e37_79b9_7f4a_7c15, 0x00c0_ffee] {
+            let mut lengths = Vec::new();
+            for keep in [false, true] {
+                let two = state_sets_run(false, keep, seed, 3000);
+                let one = state_sets_run(true, keep, seed, 3000);
+                assert_eq!(one.0, two.0, "answers, keep {keep}, seed {seed:#x}");
+                assert!(
+                    one.2 == two.2,
+                    "the states differ (keep {keep}, seed {seed:#x})"
+                );
+                assert!(
+                    one.1 == two.1,
+                    "the stream's bytes differ (keep {keep}, seed {seed:#x}): {} against {}",
+                    one.1.len(),
+                    two.1.len()
+                );
+                // The run reached what it is for: sets refused, cuts made.
+                assert!(two.0.contains(&D3DERR_INVALIDCALL));
+                assert!(two.2.len() > 10, "{}", two.2.len());
+                lengths.push(two.1.len());
+            }
+            // Sampler states set again were left out unless kept.
+            assert!(lengths[0] < lengths[1], "{lengths:?}");
+        }
+    }
+
+    /// The state sets in one pass, by hand: a render or texture stage state set again still goes,
+    /// a sampler state set again does not (unless it changed); a stage or sampler past the named
+    /// ones is refused and nothing goes; the getters answer what was set; and a state main sets
+    /// while a cut is open keeps main's value at the join.
+    #[test]
+    fn a_state_set_in_one_pass_sends_what_the_two_steps_send() {
+        use super::super::d3d9draw::{as_drawing_side, draw_cut, draw_join};
+        use super::super::d3d9resource::one_pass_for_tests;
+        use d3d9_stream::{Backend, Cmd, Data, Reply, Stream};
+        type Sent = std::sync::Arc<std::sync::Mutex<Vec<(char, u32, u32, u32)>>>;
+        struct Log(Sent);
+        impl Backend for Log {
+            fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+                let call = match cmd {
+                    Cmd::SetRenderState { state, value, .. } => ('r', state, 0, value),
+                    Cmd::SetTextureStageState {
+                        stage, kind, value, ..
+                    } => ('t', stage, kind, value),
+                    Cmd::SetSamplerState {
+                        sampler,
+                        kind,
+                        value,
+                        ..
+                    } => ('s', sampler, kind, value),
+                    _ => return Reply::None,
+                };
+                self.0.lock().unwrap().push(call);
+                Reply::None
+            }
+        }
+        let (mut e, dev) = texture_device(Store::Host);
+        let sent: Sent = Default::default();
+        super::super::d3d9real::test_stream(
+            &mut e,
+            dev,
+            Stream::direct(Box::new(Log(sent.clone()))),
+        );
+        keep_repeats(&mut e, false);
+        one_pass_for_tests(&mut e, true);
+        for _ in 0..2 {
+            assert_eq!(e.vcall(dev, 4 * 57, &[7, 1]).u32(), D3D_OK);
+            assert_eq!(e.vcall(dev, 4 * 67, &[1, 4, 2]).u32(), D3D_OK);
+            assert_eq!(e.vcall(dev, 4 * 69, &[256, 5, 3]).u32(), D3D_OK);
+        }
+        assert_eq!(e.vcall(dev, 4 * 69, &[256, 5, 0]).u32(), D3D_OK);
+        // A sampler state never set before, set to zero: it goes.
+        assert_eq!(e.vcall(dev, 4 * 69, &[3, 1, 0]).u32(), D3D_OK);
+        assert_eq!(e.vcall(dev, 4 * 67, &[8, 4, 2]).u32(), D3DERR_INVALIDCALL);
+        assert_eq!(e.vcall(dev, 4 * 69, &[16, 5, 3]).u32(), D3DERR_INVALIDCALL);
+        assert_eq!(
+            *sent.lock().unwrap(),
+            [
+                ('r', 7, 0, 1),
+                ('t', 1, 4, 2),
+                ('s', 256, 5, 3),
+                ('r', 7, 0, 1),
+                ('t', 1, 4, 2),
+                ('s', 256, 5, 0),
+                ('s', 3, 1, 0),
+            ]
+        );
+        let out = e.mem.alloc(4);
+        assert_eq!(e.vcall(dev, 4 * 58, &[7, out]).u32(), D3D_OK);
+        assert_eq!(e.mem.u32(out), 1);
+        assert_eq!(e.vcall(dev, 4 * 66, &[1, 4, out]).u32(), D3D_OK);
+        assert_eq!(e.mem.u32(out), 2);
+        assert_eq!(e.vcall(dev, 4 * 68, &[256, 5, out]).u32(), D3D_OK);
+        assert_eq!(e.mem.u32(out), 0);
+        // A cut: main sets render state 7, the drawing side sets 7 and 8: main's 7 and the
+        // drawing side's 8 hold after the join.
+        assert!(draw_cut(&mut e, dev));
+        assert_eq!(e.vcall(dev, 4 * 57, &[7, 5]).u32(), D3D_OK);
+        as_drawing_side(|| {
+            assert_eq!(e.vcall(dev, 4 * 57, &[7, 6]).u32(), D3D_OK);
+            assert_eq!(e.vcall(dev, 4 * 57, &[8, 6]).u32(), D3D_OK);
+        });
+        draw_join(&mut e);
+        assert_eq!(e.vcall(dev, 4 * 58, &[7, out]).u32(), D3D_OK);
+        assert_eq!(e.mem.u32(out), 5);
+        assert_eq!(e.vcall(dev, 4 * 58, &[8, out]).u32(), D3D_OK);
+        assert_eq!(e.mem.u32(out), 6);
     }
 
     /// The scene's device state as the game can read it back: each getter's answer and the

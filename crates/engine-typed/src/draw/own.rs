@@ -308,6 +308,11 @@ pub(crate) fn decal_state_off(e: &mut Engine) {
 /// (`01201b30`), the ambient's enable flag (`012010c4`, +8) and the bytes `01200bf4` and `01200bf5` set
 /// (condition 2: shader-state globals).
 pub fn fog_ambient(e: &mut Engine) {
+    fog_ambient_inline(e);
+}
+
+/// [`fog_ambient`]'s body, for a caller where the exe has it inlined (lighting 3.0's pass choice).
+pub(crate) fn fog_ambient_inline(e: &mut Engine) {
     for index in 0..4u32 {
         let word = e.global::<u32>(FOG_COLOUR.wrapping_add(4 * index));
         capture::set_own_at(e, AMBIENT.wrapping_add(4 * index), word);
@@ -371,6 +376,14 @@ const SLOT_DELETE: u32 = 4;
 pub fn hold_accumulator(e: &mut Engine, object: u32) {
     let old = capture::own_at::<u32>(e, HELD_ACCUMULATOR);
     if old == object {
+        // Main deciding while the drawing side holds the packet: its value is main's at the join.
+        capture::note_write(e, HELD_ACCUMULATOR, 4);
+        return;
+    }
+    if capture::owns(e, HELD_ACCUMULATOR, 4) {
+        // The drawing side: the word is its own, and the counts move at the join (`capture::end`), so that a hold on
+        // main meanwhile, which lets the same old object go, does not let it go twice.
+        capture::set_own_at(e, HELD_ACCUMULATOR, object);
         return;
     }
     if old != 0 {
@@ -384,6 +397,22 @@ pub fn hold_accumulator(e: &mut Engine, object: u32) {
     capture::set_own_at(e, HELD_ACCUMULATOR, object);
     if object != 0 {
         e.call(INTERLOCKED_INCREMENT, &args![object.wrapping_add(4)]);
+    }
+}
+
+/// A counted pointer moved from `old` to `new` as [`hold_accumulator`] moves it: the old object's count down (deleted at
+/// 0, its slot 4), the new one's up. For the join ([`capture::end`]), which moves the drawing side's held accumulator.
+pub(crate) fn move_count(e: &mut Engine, old: u32, new: u32) {
+    if old != 0 {
+        let left = e
+            .call(INTERLOCKED_DECREMENT, &args![old.wrapping_add(4)])
+            .u32();
+        if left == 0 {
+            e.vcall(old, SLOT_DELETE, &[]);
+        }
+    }
+    if new != 0 {
+        e.call(INTERLOCKED_INCREMENT, &args![new.wrapping_add(4)]);
     }
 }
 
@@ -549,9 +578,9 @@ pub(crate) fn store_chip(e: &mut Engine, data: u32, stream: u32, chip: u32) {
 #[inline(always)]
 pub(crate) fn drawn_bound(e: &mut Engine, renderer: u32, centre: [u32; 3], radius: u32) {
     for (i, word) in (0u32..).zip(centre) {
-        e.set_global(renderer.wrapping_add(0x664 + 4 * i), word);
+        super::capture::set_word(e, renderer, 0x664 + 4 * i, word);
     }
-    e.set_global(renderer.wrapping_add(0x670), radius);
+    super::capture::set_word(e, renderer, 0x670, radius);
 }
 
 /// A camera vector in model space (three words from `from`) into the renderer at `to` (condition 2).
@@ -559,7 +588,7 @@ pub(crate) fn drawn_bound(e: &mut Engine, renderer: u32, centre: [u32; 3], radiu
 pub(crate) fn camera_vector(e: &mut Engine, renderer: u32, to: u32, from: u32) {
     for i in 0..3u32 {
         let word = e.global::<u32>(from.wrapping_add(4 * i));
-        e.set_global(renderer.wrapping_add(to).wrapping_add(4 * i), word);
+        super::capture::set_word(e, renderer, to.wrapping_add(4 * i), word);
     }
 }
 
@@ -792,16 +821,18 @@ pub(crate) fn constant_map(e: &Engine, shader: u32, offset: u32) -> u32 {
 }
 
 /// `size` bytes of constants from `from` copied into an entry's own buffer at `to` (`_memcpy`, the CRT
-/// family's) (condition 2). A target in the draw's own state is copied into through [`capture::own_image`], so
-/// the packet's copy takes the bytes while it owns them.
+/// family's) (condition 2). A source or target in the draw's own state goes through [`capture::own_image`]: the bytes
+/// come from and go to the packet's copy while it owns them.
 #[inline(always)]
 pub(crate) fn copy_constants(e: &mut Engine, to: u32, from: u32, size: u32) {
-    capture::own_image(e, to, size, |e, to| {
-        let _: u32 = typed_call!(
-            crate::crt::FAMILY,
-            0x00ec_44d0,
-            crate::crt::mem::memcpy(e, to, from, size)
-        );
+    capture::own_image(e, from, size, |e, from| {
+        capture::own_image(e, to, size, |e, to| {
+            let _: u32 = typed_call!(
+                crate::crt::FAMILY,
+                0x00ec_44d0,
+                crate::crt::mem::memcpy(e, to, from, size)
+            );
+        });
     });
 }
 
@@ -897,6 +928,20 @@ pub(crate) const ALPHA_TEST_LOCKS: u32 = 0x011f_f9e8;
 pub(crate) const ALPHA_BLEND_LOCKS: u32 = 0x011f_f9f0;
 /// The colour writes' locks (`011ffa18`).
 pub(crate) const COLOR_WRITE_LOCKS: u32 = 0x011f_fa18;
+/// The other restorable states' locks: the z function's (`011ff9e0`), the depth bias's (`011ff9e4`), the alpha
+/// function's (`011ff9ec`), the blend's (`011ff9f4`), the stencil test's (`011ff9fc`), operations' (`011ffa00`),
+/// function's (`011ffa04`) and write mask's (`011ffa08`), the clip planes' (`011ffa14`) and the colour-write enables
+/// 1 to 3's (`011ffa1c`).
+pub(crate) const Z_FUNCTION_LOCKS: u32 = 0x011f_f9e0;
+pub(crate) const DEPTH_BIAS_LOCKS: u32 = 0x011f_f9e4;
+pub(crate) const ALPHA_FUNCTION_LOCKS: u32 = 0x011f_f9ec;
+pub(crate) const BLEND_LOCKS: u32 = 0x011f_f9f4;
+pub(crate) const STENCIL_LOCKS: u32 = 0x011f_f9fc;
+pub(crate) const STENCIL_OPERATION_LOCKS: u32 = 0x011f_fa00;
+pub(crate) const STENCIL_FUNCTION_LOCKS: u32 = 0x011f_fa04;
+pub(crate) const STENCIL_WRITE_LOCKS: u32 = 0x011f_fa08;
+pub(crate) const CLIP_PLANE_LOCKS: u32 = 0x011f_fa14;
+pub(crate) const COLOR_WRITES_LOCKS: u32 = 0x011f_fa1c;
 
 /// `count` locks given back on the render state whose counter is at `counter` (wrapping, as the exe
 /// subtracts).
