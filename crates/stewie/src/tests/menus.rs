@@ -25,6 +25,7 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
     ("S0022.31", "bMenuFixesMapPadSelectionCentred", bit(6)),
     ("S0022.34", "bMenuFixesWeaponModMenuTarget", bit(13)),
     ("S0022.35", "bMenuFixesCompassAlpha", bit(33)),
+    ("S0022.37", "bMenuFixesMinigameHelp", bit(48)),
     ("S0022.41", "bMenuFixesCompanionMarkersReset", bit(7)),
     ("S0022.42", "bMenuFixesHealthBarNotTiedToPrompt", bit(34)),
     ("S0022.46", "bMenuFixesCaravanPadConsole", bit(8)),

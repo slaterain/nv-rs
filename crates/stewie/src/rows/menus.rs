@@ -167,6 +167,14 @@ pub const ROWS: &[Row] = &[
         summary: "the compass markers fade with the compass",
     },
     Row {
+        bit: stewie::MINIGAME_HELP_IN_PAUSE_MENU,
+        function: "MenuFixes",
+        plan: "S0022.37",
+        key: "bMenuFixesMinigameHelp",
+        tweaks: None,
+        summary: "the pause menu's Help shows the caravan, roulette, blackjack and slots helps in those games",
+    },
+    Row {
         bit: stewie::MAP_COMPANION_MARKERS_RESET,
         function: "MenuFixes",
         plan: "S0022.41",

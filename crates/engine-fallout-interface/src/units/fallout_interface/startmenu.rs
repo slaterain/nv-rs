@@ -3039,9 +3039,17 @@ pub fn start_menu_choose_help(e: &mut Engine) {
             }
         } else {
             let manager = e.call(INTERFACE_MANAGER_GETTER, &args![]).u32();
-            index = fn_007d09c0(e, Ptr::new(manager + HELP_TABLE_OFFSET), entry);
+            // `0x7D08C6` (lStewieAl's Tweaks' S0022.37 calls `GetHelpMessageIdForMenu` there).
+            index = stewie_help_index(e, Ptr::new(manager + HELP_TABLE_OFFSET), entry);
         }
-        if index < 0x29 {
+        // `0x7D08D3` (S0022.37 makes the `JGE` a `JE`): any index but 0x29 (none) is looked up, so
+        // the minigames' helps (forms 0x172094..0x172096) are shown too.
+        let looked_up = if e.stewie(stewie::MINIGAME_HELP_IN_PAUSE_MENU) {
+            index != 0x29
+        } else {
+            (index as i32) < 0x29
+        };
+        if looked_up {
             let form = e.call(LOOKUP_FORM, &args![index + 0x168]).u32();
             let candidate = e
                 .call(
@@ -3097,6 +3105,43 @@ pub fn start_menu_choose_help(e: &mut Engine) {
         depth += 1;
     }
     e.call(TUTORIAL_MENU_CREATE, &args![found, 1u32]);
+}
+
+/// The help index at `0x7D08C6`: the exe's [`fn_007d09c0`]; with lStewieAl's Tweaks' S0022.37
+/// (`MenuFixes::GetHelpMessageIdForMenu`) a minigame's help first: the caravan menu
+/// (`011d917c`) by its page (`currMenu` +0x28: bet 0x1E, deck building 0x1F, game 0x20 while
+/// `flags` (+0xE74) has 0x800, the starting caravans, else 0x21), then roulette (`011da878`),
+/// blackjack (`011d9050`) and slots (`011da9a4`): Tweaks' `kHelpBlackJack` (0x172094 - 0x168, so
+/// that the looked-up form is 0x172094), roulette and slots the two after it.
+fn stewie_help_index(e: &mut Engine, table: Ptr, class: u32) -> u32 {
+    const BLACKJACK: u32 = 0x0017_2094 - 0x168;
+    if e.stewie(stewie::MINIGAME_HELP_IN_PAUSE_MENU) {
+        let caravan = e.global::<u32>(0x011d_917c);
+        if caravan != 0 {
+            match e.mem.u32(caravan + 0x28) {
+                0 => return 0x1e,
+                1 => return 0x1f,
+                2 => {
+                    return if e.mem.u32(caravan + 0xe74) & 0x800 != 0 {
+                        0x20
+                    } else {
+                        0x21
+                    }
+                }
+                _ => {}
+            }
+        }
+        if e.global::<u32>(0x011d_a878) != 0 {
+            return BLACKJACK + 1;
+        }
+        if e.global::<u32>(0x011d_9050) != 0 {
+            return BLACKJACK;
+        }
+        if e.global::<u32>(0x011d_a9a4) != 0 {
+            return BLACKJACK + 2;
+        }
+    }
+    fn_007d09c0(e, table, class)
 }
 
 // Translated from 007d09c0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -9146,6 +9191,63 @@ mod tests {
         assert_eq!(r.calls_to(LOOKUP_FORM)[1], vec![0x163]);
         assert_eq!(r.calls_to(FORM_LIST_HEAD), vec![vec![0xbeef]]);
         let _ = menu;
+    }
+
+    /// Row S0022.37 (lStewieAl's Tweaks, `0x7D08C6`, `0x7D08D3`): with blackjack open
+    /// (`011d9050`) the help looked up is form 0x172094 with the row on, the menu's own table
+    /// entry (index 5) off; a caravan game in its starting caravans (`flags` 0x800) gives index
+    /// 0x20; roulette and slots the forms after blackjack's.
+    #[test]
+    fn s0022_37_the_pause_menu_help_knows_the_minigames() {
+        let caravan = |r: &mut Rig, page: u32, flags: u32| {
+            let menu = r.alloc(0x1000);
+            r.e.mem.set_u32(menu + 0x28, page);
+            r.e.mem.set_u32(menu + 0xe74, flags);
+            r.e.mem.set_u32(0x011d_917c, menu);
+        };
+        for (on, game, wanted) in [
+            (false, 0x011d_9050u32, 0x168 + 5),
+            (true, 0x011d_9050, 0x0017_2094),
+            (true, 0x011d_a878, 0x0017_2095),
+            (true, 0x011d_a9a4, 0x0017_2096),
+            (true, 0, 0x168 + 5),
+        ] {
+            let mut r = rig();
+            let _ = help_scene(&mut r, vec![0x3ee], &[0xc005]);
+            if game != 0 {
+                if !r.e.mem.is_mapped(game) {
+                    r.e.map(game & !0xfff, 0x1000);
+                }
+                r.e.mem.set_u32(game, 0x7700);
+            }
+            r.e.set_stewie(stewie::MINIGAME_HELP_IN_PAUSE_MENU, on);
+            r.e.call(0x007d_0770, &args![]);
+            assert_eq!(
+                r.calls_to(LOOKUP_FORM)[0],
+                vec![wanted],
+                "row {on} game {game:x}"
+            );
+        }
+        for (page, flags, wanted) in [
+            (0u32, 0u32, 0x1e),
+            (1, 0, 0x1f),
+            (2, 0x800, 0x20),
+            (2, 0, 0x21),
+        ] {
+            let mut r = rig();
+            let _ = help_scene(&mut r, vec![0x3ee], &[0xc005]);
+            if !r.e.mem.is_mapped(0x011d_917c) {
+                r.e.map(0x011d_9000, 0x1000);
+            }
+            caravan(&mut r, page, flags);
+            r.e.set_stewie(stewie::MINIGAME_HELP_IN_PAUSE_MENU, true);
+            r.e.call(0x007d_0770, &args![]);
+            assert_eq!(
+                r.calls_to(LOOKUP_FORM)[0],
+                vec![0x168 + wanted],
+                "page {page}"
+            );
+        }
     }
 
     #[test]

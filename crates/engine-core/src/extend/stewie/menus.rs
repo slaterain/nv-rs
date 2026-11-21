@@ -176,3 +176,6 @@ pub const VATS_NO_RELOAD_COST_WITHOUT_AMMO: Row = Row::share(MENUS_FIXES, MENUS_
 /// S0160 `MessageMenuFontWidthFix` (`MessageMenu::LoadNextMessage` `007a92e0` at `0x7A95D2`,
 /// `0x7A9850`, `0x7A9B74`): message boxes measure their texts in the texts' own fonts.
 pub const MESSAGE_MENU_TEXT_FONT: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 47);
+/// S0022.37 `MenuFixes` (`StartMenu::ChooseHelp` `007d0770` at `0x7D08C6` and `0x7D08D3`): the
+/// pause menu's Help shows the caravan, roulette, blackjack and slots helps in those games.
+pub const MINIGAME_HELP_IN_PAUSE_MENU: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 48);
