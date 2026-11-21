@@ -5472,7 +5472,7 @@ fn direct_hold(e: &Engine, world: &'static World) {
 /// threads, the switch off).
 #[inline]
 pub fn device_vcall(e: &mut Engine, this: u32, slot: u32, args: &[u32]) -> Ret {
-    note_device_call(e, this, slot, args);
+    let _call = InCall::enter(note_device_call(e, this, slot, args));
     if DIRECT.with(Cell::get) == 0 || e.diagnosing() {
         return e.vcall(this, slot, args);
     }
@@ -5577,7 +5577,7 @@ fn device_typed(
     pick: fn(&'static DeviceWriter) -> AbiFn,
     typed: impl FnOnce(&mut Engine, &'static DeviceWriter) -> u32,
 ) -> Ret {
-    note_device_call(e, this, slot, args);
+    let _call = InCall::enter(note_device_call(e, this, slot, args));
     if DIRECT.with(Cell::get) == 0 || e.diagnosing() {
         return e.vcall(this, slot, args);
     }
@@ -5837,12 +5837,19 @@ thread_local! {
     static RECORDING: Cell<u32> = const { Cell::new(0) };
     /// Pauses in force while the recorder is on.
     static RECORD_PAUSES: Cell<u32> = const { Cell::new(0) };
+    /// How deep this thread is in device calls the recorder noted.
+    static IN_CALL: Cell<u32> = const { Cell::new(0) };
+    /// Whether the device's state was reached outside a noted call while the recorder was on (a call it cannot
+    /// make again: [`note_device_state`]).
+    static UNSEEN: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Starts this thread's device call recorder (the kept draw records' build, the typed draw code):
 /// every call through [`device_vcall`] and the writer's functions is noted until
 /// [`device_record_end`]. Starting it again drops what it held.
 pub fn device_record_begin() {
+    IN_CALL.with(|c| c.set(0));
+    UNSEEN.with(|u| u.set(false));
     RECORDED.with(|r| *r.borrow_mut() = Some(Vec::new()));
     RECORD_PAUSES.with(|p| p.set(0));
     RECORDING.with(|r| r.set(1));
@@ -5889,12 +5896,52 @@ fn pointer_arg(slot: u32, args: &[u32]) -> Option<(usize, u32)> {
     }
 }
 
-/// Notes a device call when this thread's recorder is on (one thread-local test otherwise).
+/// Notes a device call when this thread's recorder is on (one thread-local test otherwise); answers whether it did.
 #[inline(always)]
-fn note_device_call(e: &Engine, this: u32, slot: u32, args: &[u32]) {
+fn note_device_call(e: &Engine, this: u32, slot: u32, args: &[u32]) -> bool {
     if RECORDING.with(Cell::get) != 0 {
         note_device_call_slow(e, this, slot, args);
+        return true;
     }
+    false
+}
+
+/// A noted device call running ([`IN_CALL`] one deeper while it does).
+struct InCall(bool);
+
+impl InCall {
+    #[inline(always)]
+    fn enter(noted: bool) -> InCall {
+        if noted {
+            IN_CALL.with(|c| c.set(c.get() + 1));
+        }
+        InCall(noted)
+    }
+}
+
+impl Drop for InCall {
+    #[inline(always)]
+    fn drop(&mut self) {
+        if self.0 {
+            IN_CALL.with(|c| c.set(c.get().saturating_sub(1)));
+        }
+    }
+}
+
+/// The platform layer reached the device's state (every device function and the resources' do): with the recorder
+/// on and outside a call it noted, that is a call it could not make again (a device call by the vtable from
+/// translated code, a buffer's `Lock`), noted for [`device_record_unseen`]. One thread-local test otherwise.
+#[inline(always)]
+pub fn note_device_state() {
+    if RECORDING.with(Cell::get) != 0 && IN_CALL.with(Cell::get) == 0 {
+        UNSEEN.with(|u| u.set(true));
+    }
+}
+
+/// Whether, since [`device_record_begin`], the device's state was reached outside the calls the recorder noted
+/// ([`note_device_state`]): what it recorded is then not all the device got.
+pub fn device_record_unseen() -> bool {
+    UNSEEN.with(Cell::get)
 }
 
 #[cold]

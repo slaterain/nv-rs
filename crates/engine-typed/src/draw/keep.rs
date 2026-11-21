@@ -167,6 +167,9 @@ struct Record {
     /// itself had written left out).
     inputs: Vec<(u32, Vec<u8>)>,
     ops: Vec<Op>,
+    /// False when the set-up reached the device outside the calls the recorder saw (a call by the vtable from
+    /// translated code, a buffer's lock): the record would leave that out, so it is never replayed.
+    replayable: bool,
 }
 
 /// The counters (`NV_DRAW_KEEP` reports them every [`REPORT_EVERY`] draws it saw).
@@ -177,6 +180,7 @@ struct Stats {
     built_new: u64,
     built_statics: u64,
     built_inputs: u64,
+    built_unkeepable: u64,
     checked: u64,
     mismatched: u64,
     /// Which input address broke records most (the inputs' addresses, counted).
@@ -295,6 +299,7 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
         k.stats.seen += 1;
         match k.records.get(&key) {
             None => Some(Break::New),
+            Some(r) if !r.replayable => Some(Break::Unkeepable),
             Some(r) if r.statics != snapshot => Some(Break::Statics),
             Some(r) => r
                 .inputs
@@ -340,6 +345,7 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
                 match why {
                     Break::New => k.stats.built_new += 1,
                     Break::Statics => k.stats.built_statics += 1,
+                    Break::Unkeepable => k.stats.built_unkeepable += 1,
                     Break::Input(at) => {
                         k.stats.built_inputs += 1;
                         *k.stats.broke_at.entry(at).or_default() += 1;
@@ -368,6 +374,7 @@ fn n32(n: usize) -> u32 {
 enum Break {
     New,
     Statics,
+    Unkeepable,
     Input(u32),
 }
 
@@ -404,7 +411,9 @@ fn build(e: &mut Engine, body: &mut impl FnMut(&mut Engine)) -> Record {
     let reads = capture::keep_reads_end();
     let calls = rt::device_record_end();
     let log = e.mem.store_log_end();
-    assemble(log, &calls, &leaves, &reads)
+    let mut record = assemble(log, &calls, &leaves, &reads);
+    record.replayable = !rt::device_record_unseen();
+    record
 }
 
 /// The record from the logs: the writes, setter calls and device calls in the store log's order; the reads of bytes
@@ -454,6 +463,7 @@ fn assemble(
         statics: Vec::new(),
         inputs,
         ops,
+        replayable: true,
     }
 }
 
@@ -662,13 +672,14 @@ fn summary(s: &Stats, records: usize) -> String {
         .max_by_key(|(at, n)| (**n, std::cmp::Reverse(**at)))
         .map_or_else(|| "none".to_string(), |(at, n)| format!("{at:08x} ({n})"));
     format!(
-        "NV_DRAW_KEEP: {} draws: {} replayed, {} built (new {}, own bytes changed {}, inputs changed {}); {} checked, {} differed{}; {records} records; top input that broke one: {top}",
+        "NV_DRAW_KEEP: {} draws: {} replayed, {} built (new {}, own bytes changed {}, inputs changed {}, device reached outside the record {}); {} checked, {} differed{}; {records} records; top input that broke one: {top}",
         s.seen,
         s.replayed,
-        s.built_new + s.built_statics + s.built_inputs,
+        s.built_new + s.built_statics + s.built_inputs + s.built_unkeepable,
         s.built_new,
         s.built_statics,
         s.built_inputs,
+        s.built_unkeepable,
         s.checked,
         s.mismatched,
         s.first_mismatch.as_deref().map_or_else(String::new, |m| format!(" (first: {m})")),
