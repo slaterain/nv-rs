@@ -89,6 +89,10 @@ pub(crate) struct Buf {
     /// The game released it (or made another in its place): the sun shadows let go of what they
     /// keep of it, however many places hold it.
     pub(crate) released: AtomicBool,
+    /// The game's buffers made by this device before it, plus one (0: a list of the device's
+    /// own): the same in every replay of one command file, so the per-draw digests
+    /// ([`Device::record_draw_digests`]) tell which buffer a draw read, not only its handle.
+    pub(crate) seq: u64,
 }
 
 impl Buf {
@@ -967,6 +971,8 @@ pub struct Device {
     /// depth stand-ins that hold them are dropped then ([`Device::purge_destroyed`]).
     destroyed: HashSet<u64>,
     next_id: u64,
+    /// The game's buffers this device has made ([`Buf::seq`]).
+    buffers_made: u64,
     presents: u64,
     /// The window's frames presented ([`Device::frames_shown`]).
     frames_shown: u64,
@@ -1711,6 +1717,7 @@ impl Device {
             target_copies: Map::default(),
             destroyed: HashSet::new(),
             next_id: 1,
+            buffers_made: 0,
             presents: 0,
             frames_shown: 0,
             fps_meter: Arc::default(),
@@ -2144,6 +2151,10 @@ impl Device {
             uploads: AtomicU64::new(0),
             id: Buf::next_id(),
             released: AtomicBool::new(false),
+            seq: {
+                self.buffers_made += 1;
+                self.buffers_made
+            },
         });
         if let Some(Obj::Buffer(old, _)) = self
             .objects
@@ -5156,10 +5167,18 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             self.blocks.hash(&mut h);
             for (k, a) in attributes.iter().enumerate() {
                 if !a.is_empty() {
-                    (k, self.st.bound.streams[k]).hash(&mut h);
+                    let seq = self.st.streams[k].buffer.as_ref().map(|b| b.seq);
+                    (k, self.st.bound.streams[k], seq).hash(&mut h);
                 }
             }
-            indexed.then_some(self.st.bound.indices).hash(&mut h);
+            indexed
+                .then(|| {
+                    (
+                        self.st.bound.indices,
+                        self.st.indices.as_ref().map(|b| b.seq),
+                    )
+                })
+                .hash(&mut h);
             (kind, base_vertex, start, n, up_offset, use_sun).hash(&mut h);
             (stencil_ref, bf, scissor, viewport).hash(&mut h);
             digests.push(h.finish());
@@ -7501,6 +7520,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     uploads: AtomicU64::new(0),
                     id: Buf::next_id(),
                     released: AtomicBool::new(false),
+                    seq: 0,
                 }),
                 count,
             }
