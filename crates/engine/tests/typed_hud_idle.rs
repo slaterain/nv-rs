@@ -195,8 +195,8 @@ const TILES: [u32; 25] = [
 /// detecting (bit 6), sneaking (bit 7); [7] quests: forced reminders (bit 0), the timer clear (bit
 /// 1), the game state 2 (bit 2), kill (bit 3), the subtitles: none (bit 4), two (bit 5), no current
 /// (bit 6); [8] messages: none (0), one with its tiles clear (1), one shown and timed out (2), one
-/// shown, not timed out (3); [11] lStewieAl's Tweaks' S0022.42 on (bit 0), the action prompt shown (bit
-/// 1). `f` ([9], [10]): the player's heading, the screen width.
+/// shown, not timed out (3); [11] lStewieAl's Tweaks' S0022.42 on (bit 0), the action prompt
+/// shown (bit 1). `f` ([9], [10]): the player's heading, the screen width.
 fn idle_world(e: &mut Engine, case: &Case) -> Vec<u32> {
     world(e);
     let w = |i: usize| case.word(i);
