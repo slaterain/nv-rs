@@ -388,7 +388,7 @@ case "$here/" in
 ("$game"/*) say "Note: nv-rs is in the game's folder ($here). It never writes there, but it is better kept apart: move the nv-rs folder out of $game." ;;
 esac
 
-# Installing mods: the text chooser, as "Install mods.cmd" on Windows (nv-viewer --install-mods):
+# Installing mods: the text chooser, as the launcher's Mods on Windows (nv-viewer --install-mods):
 # into nv-rs's own folder (mod installs), never the game's; then nothing is started.
 if [ "$opt_install" = 1 ]; then
     mkdir -p -- "$mods" || fail "could not make the mods folder $mods"

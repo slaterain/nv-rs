@@ -51,13 +51,10 @@ error, it says what happened and can open the logs folder. Later starts take a m
 graphics card, drivers, monitors, sound device, Windows language or Windows version change, nv-rs
 notices and reads them again.
 
-  Play.exe               the launcher (above)
-  Play with mods.cmd     the game with the mods in the mods folder (see mods\READ ME.txt)
-  Install mods.cmd       install a mod from its archive (.7z, .zip, .fomod) put in the mods
-                         folder, answering its installer's questions; also removes mods
-                         (the same installer as Mods on the launcher's start screen, which
-                         shows it in the launcher's own window)
-  Import my saves.cmd    copies your saves from Documents\My Games\FalloutNV. Those stay as they are
+  Play.exe               the launcher (above): Play, Play with mods (see mods\READ ME.txt), Mods
+                         (install a mod from its .7z, .zip or .fomod archive in the mods folder,
+                         or remove one), Import saves (copies your saves from Documents\My
+                         Games\FalloutNV; those stay as they are) and Settings are its entries
 
 Use Exit Game in the game's menu to quit. Saves reach the disk within about 5 seconds of being made,
 so wait a moment after saving before you close the window with its X.
@@ -72,7 +69,7 @@ Playing with mods links your game's files into userdata\modgame rather than copy
 another name for the same file, so if you uninstall the game while that folder is still here, the
 disk space stays used until you delete the nv-rs folder too.
 
-Your real saves are only read, and only when you run Import my saves.cmd. Saves you make here are in
+Your real saves are only read, and only when you choose Import saves in the launcher. Saves you make here are in
 userdata\game\Documents\My Games\FalloutNV\Saves. They are normal saves; nv-rs doesn't copy them back
 for you.
 
