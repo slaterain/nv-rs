@@ -57,6 +57,9 @@ pub(in super::super) const SITES: &[Entry] = &[
     // (`InterfaceManager::DisplayCurrentPickRef` 00710ad0, `MenuConsole::Idle` 0071b210).
     row(0x0071_0bfc),
     row(0x0071_b748),
+    // `WriteRelJump(0xC5244A, NiCameraGetAltHook)` (WorldToScreen.cpp): the camera copy at the end of
+    // `BSSceneGraph::SetCameraFOV` 00c52020, with JohnnyGuitar answering "installed".
+    row(0x00c5_244a),
 ];
 
 /// The wraps.

@@ -44,6 +44,7 @@ pub static FIXES: &[Fix] = &[
     JIP_VANILLA_COMMANDS,
     JIP_GAME_PATCHES,
     JG_EDITOR_IDS,
+    JG_INSTALLED,
     MCM,
     STEWIE,
     UIO,
@@ -515,6 +516,23 @@ fn install_jg_editor_ids(e: &mut Engine) {
     johnnyguitar::set_on(e, true);
 }
 
+/// JohnnyGuitar NVSE answers "installed" (off in every preset, [`OFF_IN_EVERY_PRESET`], until mods that need
+/// it are proven in the game): in xNVSE's list of plugins (version 5.28), its 408 command slots in the table
+/// with the built commands named and answering, its version line at the start, the camera copy
+/// `WorldToScreen` uses. Its editor ids come with it, as with the real plugin. The row sets a flag
+/// `johnnyguitar::install` reads.
+pub const JG_INSTALLED: Fix = Fix {
+    name: "JohnnyGuitar NVSE built in (for testing)",
+    env: "NV_JG_INSTALLED",
+    addresses: &[],
+    summary: "for testing, off in every preset: JohnnyGuitar NVSE answers \"installed\" to mods (ISControl and others that need it), with the commands built so far and its editor ids",
+    install: install_jg_installed,
+};
+
+fn install_jg_installed(e: &mut Engine) {
+    johnnyguitar::set_answers_installed(e, true);
+}
+
 pub const STEWIE: Fix = Fix {
     name: "lStewieAl's Tweaks built in",
     env: "NV_STEWIE",
@@ -549,7 +567,7 @@ fn install_nothing(_: &mut Engine) {}
 
 /// Rows that are off in every preset until the maintainer turns them on: only their own variable or `Fallout.ini`
 /// line turns them on.
-pub const OFF_IN_EVERY_PRESET: &[&str] = &[DRAW_THREAD.env];
+pub const OFF_IN_EVERY_PRESET: &[&str] = &[DRAW_THREAD.env, JG_INSTALLED.env];
 
 /// The rows that register nothing at an exe address: the menu limit paces the uncapped step;
 /// the extender's rows set flags `crates/nvse` reads.
@@ -562,6 +580,7 @@ const NO_ADDRESS: &[&str] = &[
     JIP_VANILLA_COMMANDS.name,
     JIP_GAME_PATCHES.name,
     JG_EDITOR_IDS.name,
+    JG_INSTALLED.name,
     MCM.name,
     STEWIE.name,
     UIO.name,
@@ -2897,6 +2916,18 @@ bJGEditorIDs=0
             johnnyguitar::install(&mut e);
             assert_eq!(johnnyguitar::on(&e), choice.is_on(&JG_EDITOR_IDS));
         }
+    }
+
+    /// JohnnyGuitar answering "installed": off in every preset, on only by its own variable (or
+    /// `Fallout.ini` line), and then its editor ids are on too.
+    #[test]
+    fn jg_installed_is_off_in_every_preset() {
+        assert!(OFF_IN_EVERY_PRESET.contains(&JG_INSTALLED.env));
+        assert!(!Choice::vanilla().is_on(&JG_INSTALLED));
+        let fixes = Choice::from_parts(None, env_of(&[("NV_PRESET", "fixes")])).unwrap();
+        assert!(!fixes.is_on(&JG_INSTALLED));
+        let on = Choice::from_parts(None, env_of(&[("NV_JG_INSTALLED", "1")])).unwrap();
+        assert!(on.is_on(&JG_INSTALLED));
     }
 
     /// lStewieAl's Tweaks: on in the fixes preset, off in vanilla, its own line or variable over

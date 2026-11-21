@@ -1,0 +1,408 @@
+3100	Default	JGLegacyWorldToScreen	COMMAND_PLUGIN		0	kParamsProjectionArgsLegacy	fn_math
+3101	Default	ToggleLevelUpMenu	COMMAND_PLUGIN		0	kParams_OneInt	fn_gameplay
+3102	Default	IsLevelUpMenuEnabled	CMD_COND_PLUGIN		0	nullptr	fn_gameplay
+3103	Default	GetBaseEffectAV	COMMAND_PLUGIN		0	kParams_OneForm	fn_form
+3104	Default	GetBaseEffectArchetype	COMMAND_PLUGIN		0	kParams_OneForm	fn_form
+3105	Default	IsCellVisited	COMMAND_PLUGIN		0	kParams_OneForm	fn_form
+3106	Default	IsCellExpired	COMMAND_PLUGIN		0	kParams_OneForm	fn_form
+3107	String	MD5File	COMMAND_PLUGIN		0	kParams_OneString	fn_file
+3108	String	SHA1File	COMMAND_PLUGIN		0	kParams_OneString	fn_file
+3109	Default	TogglePipBoy	COMMAND_PLUGIN		0	kParams_OneOptionalInt	fn_gameplay
+310A	Default	GetCalculatedWeaponDPS	COMMAND_PLUGIN		0	kParams_OneOptionalObjectID	fn_form
+310B	Default	GetInteriorLightingTraitNumeric	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_form
+310C	Default	SetInteriorLightingTraitNumeric	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneFloat	fn_form
+310D	Default	GetPixelFromBMP	COMMAND_PLUGIN		0	kParams_BMP	fn_file
+310E	String	GetWorldSpaceMapTexture	COMMAND_PLUGIN		0	kParams_OneForm	fn_ui
+310F	Default	Jump	COMMAND_PLUGIN		1	nullptr	fn_gameplay
+3110	Default	SetCameraShake	COMMAND_PLUGIN		0	kParams_TwoFloats	fn_gameplay
+3111	Default	StopVATSCam	COMMAND_PLUGIN		0	nullptr	fn_gameplay
+3112	Default	GetIMODAnimatable	COMMAND_PLUGIN		0	kParams_OneIMOD	fn_form
+3113	Default	SetIMODAnimatable	COMMAND_PLUGIN		0	kParams_OneIMOD_OneInt	fn_form
+3114	String	GetEditorID	COMMAND_ALT_PLUGIN	GetEdID	0	kParams_OneOptionalForm	fn_utility
+3115	Default	GetJohnnyPatch	CMD_COND_PLUGIN		0	kParams_OneInt	fn_utility
+3116	Default	SetVelEx	COMMAND_PLUGIN		1	kParams_ThreeFloats	fn_gameplay
+3117	Default	NullArgs	COMMAND_PLUGIN		0	kParams_OneOptionalInt	fn_utility
+3118	Default	GetMediaSetTraitNumeric	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_mediaset
+3119	Default	SetMediaSetTraitNumeric	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneFloat	fn_mediaset
+311A	String	GetMediaSetTraitString	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_mediaset
+311B	Default	SetMediaSetTraitString	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneString	fn_mediaset
+311C	Form	GetMediaSetTraitSound	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_mediaset
+311D	Default	SetMediaSetTraitSound	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneForm	fn_mediaset
+311E	Form	GetWeapon1stPersonModel	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_form
+311F	Default	SetWeapon1stPersonModel	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneOptionalForm	fn_form
+3120	Array	GetBufferedCellsAlt	COMMAND_PLUGIN		0	kParams_OneInt	fn_form
+3121	Default	GetTimePlayed	CMD_COND_PLUGIN		0	kParams_OneOptionalInt	fn_utility
+3122	Default	GetActorValueModifierAlt	COMMAND_ALT_PLUGIN	GetAVModAlt	1	kParams_OneActorValue_OneOptionalInt	fn_form
+3123	Default	AsmBreak	COMMAND_PLUGIN		0	nullptr	fn_utility
+3124	Default	RefAddr	COMMAND_PLUGIN		0	kParams_OneOptionalForm	fn_utility
+3125	String	GetMusicTypePath	COMMAND_PLUGIN		0	kParams_OneForm	fn_form
+3126	Default	GetMusicTypeDB	COMMAND_PLUGIN		0	kParams_OneForm	fn_form
+3127	Default	SetMusicTypeDB	COMMAND_PLUGIN		0	kParams_OneForm_OneFloat	fn_form
+3128	Form	EditorIDToFormID	COMMAND_PLUGIN		0	kParams_OneString	fn_utility
+3129	Default	GetRegionWeatherOverride	COMMAND_PLUGIN		0	kParams_OneForm	fn_region
+312A	Default	SetRegionWeatherOverride	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_region
+312B	Default	GetRegionWeatherPriority	COMMAND_PLUGIN		0	kParams_OneForm	fn_region
+312C	Default	SetRegionWeatherPriority	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_region
+312D	Default	IsWeatherInRegion	COMMAND_PLUGIN		0	kParams_TwoForms	fn_region
+312E	Default	RemoveRegionWeather	COMMAND_PLUGIN		0	kParams_TwoForms	fn_region
+312F	Default	AddRegionWeather	COMMAND_PLUGIN		0	kParams_OneForm_OneWeatherID_OneInt_OneOptionalGlobal	fn_region
+3130	Array	GetRegionWeathers	COMMAND_PLUGIN		0	kParams_OneForm	fn_region
+3131	Default	ClearRegionWeathers	COMMAND_PLUGIN		0	kParams_OneForm	fn_region
+3132	Default	StopSoundAlt	COMMAND_PLUGIN		0	kParams_TwoForms_OneOptionalFloat	fn_sound
+3133	Default	RemovePrimitive	COMMAND_PLUGIN		1	nullptr	fn_form
+3134	Default	GetPrimitiveType	COMMAND_PLUGIN		1	nullptr	fn_form
+3135	Default	GetBaseScale	CMD_ALT_COND_PLUGIN	GetBasedScale	0	kParams_OneOptionalForm	fn_form
+3136	Form	GetCustomMapMarker	COMMAND_PLUGIN		0	nullptr	fn_ui
+3137	Default	UnsetAV	COMMAND_PLUGIN		1	kParams_OneActorValue	fn_gameplay
+3138	Default	UnforceAV	COMMAND_PLUGIN		1	kParams_OneActorValue	fn_gameplay
+3139	Default	ToggleNthPipboyLight	COMMAND_PLUGIN		0	kParams_TwoInts	fn_gameplay
+313A	Default	SetBipedIconPathAlt	COMMAND_PLUGIN		0	kParams_OneString_OneInt_OneForm	fn_ui
+313B	Default	GetFacegenModelFlag	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts	fn_form
+313C	Default	SetFacegenModelFlag	COMMAND_PLUGIN		0	kParams_OneForm_ThreeInts	fn_form
+313D	String	GetRaceBodyModelPath	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts	fn_form
+313E	Default	SetEquipType	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_form
+313F	Array	GetFactionMembers	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalInt	fn_form
+3140	String	GetRaceHeadModelPath	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts	fn_form
+3141	Default	GetDefaultHeapSize	COMMAND_PLUGIN		0	nullptr	fn_utility
+3142	Default	Get3DDistanceBetweenNiNodes	COMMAND_PLUGIN		0	kParams_TwoRefs_TwoStrings	fn_math
+3143	Default	Get3DDistanceToNiNode	COMMAND_PLUGIN		1	kParams_OneString_ThreeFloats	fn_math
+3144	Default	Get3DDistanceFromHitToNiNode	COMMAND_PLUGIN		1	kParams_OneString	fn_math
+3145	Default	GetVector3DDistance	COMMAND_PLUGIN		0	kParams_SixFloats	fn_math
+3146	Default	GetLinearVelocity	COMMAND_PLUGIN		1	kParams_FourStrings	fn_utility
+3147	Default	GetLifeState	CMD_COND_PLUGIN		1	nullptr	fn_form
+3148	Default	GetRaceFlag	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_form
+3149	Default	SetRaceFlag	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts	fn_form
+314A	Form	GetContainerSound	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_form
+314B	Default	SetContainerSound	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneForm	fn_form
+314C	Default	SetJohnnyOnDyingEventHandler	COMMAND_ALT_PLUGIN	SetOnDyingEventHandler	0	kParams_Event_OneForm	fn_event
+314D	Default	SetJohnnyOnStartQuestEventHandler	COMMAND_ALT_PLUGIN	SetOnStartQuestEventHandler	0	kParams_Event_OneForm	fn_event
+314E	Default	SetJohnnyOnStopQuestEventHandler	COMMAND_ALT_PLUGIN	SetOnStopQuestEventHandler	0	kParams_Event_OneForm	fn_event
+314F	Default	DisableMuzzleFlashLights	COMMAND_PLUGIN		0	kParams_OneOptionalInt	fn_gameplay
+3150	Default	SetCustomMapMarkerIcon	COMMAND_PLUGIN		0	kParams_OneForm_OneString	fn_ui
+3151	Default	GetCreatureCombatSkill	COMMAND_PLUGIN		0	kParams_OneOptionalActorBase	fn_form
+3152	Default	SetExplosionSound	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneForm	fn_form
+3153	Default	SetProjectileSound	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneForm	fn_form
+3154	Default	SetWeaponWorldModelPath	COMMAND_PLUGIN		0	kParams_OneForm_OneString	fn_form
+3155	Default	Clamp	COMMAND_PLUGIN		0	kParams_ThreeFloats	fn_math
+3156	Default	Remap	COMMAND_PLUGIN		0	kParams_FiveFloats	fn_math
+3157	Default	Lerp	COMMAND_PLUGIN		0	kParams_ThreeFloats	fn_math
+3158	Default	SetJohnnySeenDataEventHandler	COMMAND_ALT_PLUGIN	SetSeenDataEventHandler	0	kParams_Event_OneForm	fn_event
+3159	Default	SetJohnnyOnLimbGoneEventHandler	COMMAND_ALT_PLUGIN	SetOnLimbGoneEventHandler	0	kParams_Event_OneForm_OneInt	fn_event
+315A	Default	Sign	COMMAND_PLUGIN		0	kParams_OneFloat	fn_math
+315B	Default	AddTerminalMenuItem	COMMAND_PLUGIN		0	kParams_OneForm	fn_terminal
+315C	String	GetTerminalMenuItemText	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts	fn_terminal
+315D	Default	SetTerminalMenuItemText	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts_OneString	fn_terminal
+315E	Form	GetTerminalMenuItemNote	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_terminal
+315F	Default	SetTerminalMenuItemNote	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneForm	fn_terminal
+3160	Form	GetTerminalMenuItemSubmenu	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_terminal
+3161	Default	SetTerminalMenuItemSubmenu	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneForm	fn_terminal
+3162	Default	GetRunSpeed	CMD_COND_PLUGIN		1	nullptr	fn_gameplay
+3163	Default	DisableMenuArrowKeys	COMMAND_PLUGIN		0	nullptr	fn_gameplay
+3164	Default	EnableMenuArrowKeys	COMMAND_PLUGIN		0	nullptr	fn_gameplay
+3165	Default	GetQuestFailed	CMD_ALT_COND_PLUGIN	GetQF	0	kParams_OneQuest	fn_form
+3166	Default	SetJohnnyOnChallengeCompleteEventHandler	COMMAND_ALT_PLUGIN	SetOnChallengeCompleteEventHandler	0	kParams_Event_OneForm	fn_event
+3167	Default	GetTerminalMenuItemCount	COMMAND_PLUGIN		0	kParams_OneForm	fn_terminal
+3168	Default	GetPipBoyMode	CMD_COND_PLUGIN		0	nullptr	fn_utility
+3169	Default	GetWeaponVATSTraitNumeric	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_form
+316A	Default	SetWeaponVATSTraitNumeric	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneFloat	fn_form
+316B	Default	RemoveTerminalMenuItem	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_terminal
+316C	Default	SetWorldSpaceMapTexture	COMMAND_PLUGIN		0	kParams_OneForm_OneString	fn_ui
+316D	Default	GetFormOverrideIndex	COMMAND_PLUGIN		0	kParams_OneForm	fn_utility
+316E	Default	SetJohnnyOnCrosshairEventHandler	COMMAND_ALT_PLUGIN	SetOnCrosshairEventHandler	0	kParams_Event_OneForm_OneInt	fn_event
+316F	Default	GetSequenceAnimGroup	CMD_COND_PLUGIN		1	kParams_OneInt	fn_utility
+3170	Default	QueueObjectiveText	COMMAND_PLUGIN		0	kParams_OneString_TwoOptionalInts	fn_ui
+3171	Default	QueueCinematicText	COMMAND_PLUGIN		0	kParams_TwoStrings_OneOptionalString_FourOptionalInts	fn_ui
+3172	Array	ar_SortEditor	COMMAND_PLUGIN		0	kParams_OneInt_OneOptionalInt	fn_utility
+3173	Default	SetUIUpdateSound	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_utility
+3174	Default	GetActorValueAlt	COMMAND_ALT_PLUGIN	GetAVAlt	1	kParams_OneInt	fn_av
+3175	Default	ModActorValueAlt	COMMAND_ALT_PLUGIN	ModAVAlt	1	kParams_TwoInts	fn_av
+3176	Default	SetActorValueAlt	COMMAND_ALT_PLUGIN	SetAVAlt	1	kParams_TwoInts	fn_av
+3177	Default	ForceActorValueAlt	COMMAND_ALT_PLUGIN	ForceAVAlt	1	kParams_TwoInts	fn_av
+3178	Default	DamageActorValueAlt	COMMAND_ALT_PLUGIN	DamageAVAlt	1	kParams_OneInt_OneFloat	fn_av
+3179	Default	RestoreActorValueAlt	COMMAND_ALT_PLUGIN	RestoreAVAlt	1	kParams_OneInt_OneFloat	fn_av
+317A	Default	HighlightBodyPartAlt	COMMAND_PLUGIN		1	kParams_OneOptionalFloat	fn_gameplay
+317B	Default	DeactivateAllHighlightsAlt	COMMAND_PLUGIN		1	kParams_OneOptionalFloat	fn_gameplay
+317C	Default	SetJohnnyOnCompleteQuestEventHandler	COMMAND_ALT_PLUGIN	SetOnCompleteQuestEventHandler	0	kParams_Event_OneForm	fn_event
+317D	Default	SetJohnnyOnFailQuestEventHandler	COMMAND_ALT_PLUGIN	SetOnFailQuestEventHandler	0	kParams_Event_OneForm	fn_event
+317E	Default	IsDLLLoaded	COMMAND_PLUGIN		0	kParams_OneString_OneOptionalInt	fn_utility
+317F	Default	SetJohnnyOnSettingsUpdateEventHandler	COMMAND_ALT_PLUGIN	SetOnSettingsUpdateEventHandler	0	kParams_Event	fn_event
+3180	Default	GetQuestDelay	COMMAND_PLUGIN		0	kParams_OneForm	fn_form
+3181	Default	GetNearestCompassHostileDirection	COMMAND_PLUGIN		0	kParams_OneOptionalInt	fn_gameplay
+3182	Form	GetNearestCompassHostile	COMMAND_PLUGIN		0	kParams_OneOptionalInt	fn_gameplay
+3183	Default	RefreshIdle	COMMAND_PLUGIN		1	kParams_OneOptionalInt	fn_utility
+3184	Default	SetNoteRead	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneOptionalInt	fn_form
+3185	Default	SetDisablePlayerControlsHUDVisibilityFlags	COMMAND_ALT_PLUGIN	SetDPCHUDFlags	0	kParams_OneOptionalInt	fn_gameplay
+3186	Default	GetCameraTranslation	COMMAND_PLUGIN		0	kParams_ThreeStrings_OneInt	fn_math
+3187	Default	IsCompassHostile	CMD_COND_PLUGIN		1	nullptr	fn_gameplay
+3188	Default	SetMessageIconPath	COMMAND_PLUGIN		0	kParams_OneString_OneForm_OneOptionalInt	fn_form
+3189	String	GetMessageIconPath	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalInt	fn_form
+318A	Default	ExitGameAlt	COMMAND_PLUGIN		0	nullptr	fn_utility
+318B	Default	ToggleCombatMusic	COMMAND_PLUGIN		0	kParams_OneInt	fn_gameplay
+318C	Default	IsCombatMusicEnabled	COMMAND_PLUGIN		0	nullptr	fn_gameplay
+318D	Default	SetJohnnyOnAddPerkEventHandler	COMMAND_ALT_PLUGIN	SetOnAddPerkEventHandler	0	kParams_Event_OneForm	fn_event
+318E	Default	SetJohnnyOnRemovePerkEventHandler	COMMAND_ALT_PLUGIN	SetOnRemovePerkEventHandler	0	kParams_Event_OneForm	fn_event
+318F	Default	IsHostilesNearby	COMMAND_PLUGIN		0	nullptr	fn_gameplay
+3190	Default	ModNthTempEffectTimeLeft	COMMAND_PLUGIN		1	kParams_OneInt_OneFloat	fn_gameplay
+3191	String	GetWeaponWorldModelPath	COMMAND_PLUGIN		0	kParams_OneForm	fn_form
+3192	String	GetBodyPartTraitString	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts	fn_form
+3193	Default	GetActorEffectType	COMMAND_PLUGIN		0	kParams_OneForm	fn_form
+3194	Default	GetTextureWidth	COMMAND_PLUGIN		0	kParams_OneString_OneOptionalInt	fn_file
+3195	Default	GetTextureHeight	COMMAND_PLUGIN		0	kParams_OneString	fn_file
+3196	Default	GetTextureFormat	COMMAND_PLUGIN		0	kParams_OneString	fn_file
+3197	Default	GetTextureMipMapCount	COMMAND_PLUGIN		0	kParams_OneString	fn_file
+3198	Default	GetCalculatedSpread	COMMAND_PLUGIN		1	nullptr	fn_gameplay
+3199	Default	SendStealingAlarm	COMMAND_PLUGIN		1	kParams_OneRef_OneOptionalInt	fn_gameplay
+319A	Default	ApplyWeaponPoison	COMMAND_PLUGIN		1	kParams_OneOptionalForm	fn_gameplay
+319B	Form	GetTalkingActivatorActor	COMMAND_PLUGIN		0	kParams_OneForm	fn_form
+319C	String	GetPlayerKarmaTitle	COMMAND_PLUGIN		0	kParams_OneOptionalInt	fn_form
+319D	Array	GetCompassHostiles	COMMAND_PLUGIN		0	kParams_TwoOptionalInts	fn_gameplay
+319E	Default	ToggleDisableSaves	COMMAND_PLUGIN		0	kParams_OneInt_OneOptionalInt	fn_gameplay
+319F	Default	SetJohnnyOnRenderUpdateEventHandler	COMMAND_ALT_PLUGIN	SetOnRenderUpdateEventHandler	0	kParams_Event_OptionalFlag	fn_event
+31A0	Default	WorldToScreen	COMMAND_PLUGIN		0	kParamsProjectionArgs	fn_math
+31A1	Default	FaceGenGetNthProperty	COMMAND_ALT_PLUGIN	FaceGGetNth	0	kParams_OneActorBase_TwoInts	fn_form
+31A2	Default	FaceGenSetNthProperty	COMMAND_ALT_PLUGIN	FaceGSetNth	0	kParams_OneActorBase_TwoInts_OneFloat	fn_form
+31A3	Default	FaceGenRefreshAppearance	COMMAND_ALT_PLUGIN	FaceGRefresh	1	nullptr	fn_form
+31A4	Default	SendTrespassAlarmAlt	COMMAND_PLUGIN		1	nullptr	fn_gameplay
+31A5	Default	IsCrimeOrEnemy	COMMAND_PLUGIN		1	nullptr	fn_gameplay
+31A6	Array	GetAvailablePerks	COMMAND_PLUGIN		0	nullptr	fn_form
+31A7	Default	GetThresholdedActorValue	CMD_ALT_COND_PLUGIN	GetThresholdAV	1	kParams_OneActorValue	fn_av
+31A8	Default	GetEffectShaderTraitNumeric	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_form
+31A9	Default	SetEffectShaderTraitNumeric	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneFloat	fn_form
+31AA	String	GetEffectShaderTexturePath	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_form
+31AB	Default	SetEffectShaderTexturePath	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneString	fn_form
+31AC	Default	GetSystemColor	COMMAND_PLUGIN		0	kParams_OneInt	fn_ui
+31AD	Default	RGBtoHSV	COMMAND_PLUGIN		0	kParams_SixScriptVars	fn_math
+31AE	Default	HSVtoRGB	COMMAND_PLUGIN		0	kParams_SixScriptVars	fn_math
+31AF	Default	GetLocationSpecificLoadScreensOnly	CMD_COND_PLUGIN		0	nullptr	fn_gameplay
+31B0	Array	GetArmorAltTextures	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_form
+31B1	Default	GetIdleMarkerTraitNumeric	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_form
+31B2	Array	GetIdleMarkerAnimations	COMMAND_PLUGIN		0	kParams_OneForm	fn_form
+31B3	Default	SetIdleMarkerTraitNumeric	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneFloat	fn_form
+31B4	Default	SetIdleMarkerAnimation	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneForm	fn_form
+31B5	Default	SetIdleMarkerAnimations	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_form
+31B6	Array	GetWeaponAltTextures	COMMAND_PLUGIN		0	kParams_OneForm	fn_form
+31B7	String	GetRefActivationPromptOverride	COMMAND_ALT_PLUGIN	GetXATO	1	nullptr	fn_form
+31B8	Default	SetRefActivationPromptOverride	COMMAND_ALT_PLUGIN	SetXATO	1	kParams_OneString	fn_form
+31B9	Default	GetTerminalMenuItemFlags	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_terminal
+31BA	Default	SetTerminalMenuItemFlags	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts	fn_terminal
+31BB	String	GetLocationName	COMMAND_PLUGIN		1	nullptr	fn_gameplay
+31BC	String	GetRegionMapName	COMMAND_PLUGIN		0	kParams_OneForm	fn_region
+31BD	Default	SetRegionMapName	COMMAND_PLUGIN		0	kParams_OneForm_OneString	fn_region
+31BE	Default	GetRGBColor	COMMAND_PLUGIN		0	kParams_ThreeInts	fn_math
+31BF	Array	GetPlayingEffectShaders	COMMAND_PLUGIN		1	nullptr	fn_gameplay
+31C0	Default	GetBookFlags	COMMAND_PLUGIN		0	kParams_OneForm	fn_book
+31C1	Default	SetBookFlags	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_book
+31C2	Default	GetBookSkill	COMMAND_PLUGIN		0	kParams_OneForm	fn_book
+31C3	Default	SetBookSkill	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_book
+31C4	Default	SetOnActorValueChangeEventHandler	COMMAND_ALT_PLUGIN	SetJohnnyOnActorValueChangeEventHandler	0	kParams_Event_OneInt	fn_event
+31C5	Default	RefreshTerminalMenu	COMMAND_ALT_PLUGIN	rtm	0	nullptr	fn_terminal
+31C6	Default	SetRefEncounterZone	COMMAND_ALT_PLUGIN	SetRefZone	1	kParams_OneOptionalForm	fn_form
+31C7	Form	GetRefEncounterZone	COMMAND_ALT_PLUGIN	GetRefZone	1	nullptr	fn_form
+31C8	Default	SetCellEncounterZone	COMMAND_ALT_PLUGIN	SetCellZone	0	kParams_OneForm_OneOptionalForm	fn_form
+31C9	Default	SetWorldspaceEncounterZone	COMMAND_ALT_PLUGIN	SetWorldZone	0	kParams_OneForm_OneOptionalForm	fn_form
+31CA	Form	GetWorldspaceEncounterZone	COMMAND_ALT_PLUGIN	GetWorldZone	0	kParams_OneForm	fn_form
+31CB	Default	UpdateCrosshairPrompt	COMMAND_PLUGIN		0	nullptr	fn_utility
+31CC	Default	GetLightingTemplateTraitNumeric	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_form
+31CD	Default	SetLightingTemplateTraitNumeric	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneFloat	fn_form
+31CE	Form	GetLightingTemplateCell	COMMAND_PLUGIN		0	kParams_OneForm	fn_form
+31CF	Default	SetLightingTemplateCell	COMMAND_PLUGIN		0	kParams_TwoForms	fn_form
+31D0	Default	RemoveScopeModelPath	COMMAND_PLUGIN		0	kParams_OneForm	fn_form
+31D1	Form	GetNthRegionWeatherType	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_region
+31D2	Default	GetNthRegionWeatherChance	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_region
+31D3	Form	GetNthRegionWeatherGlobal	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_region
+31D4	Default	PlaySoundFile	COMMAND_PLUGIN		0	kParams_OneString_ThreeOptionalInts	fn_sound
+31D5	Default	StopSoundFile	COMMAND_PLUGIN		0	nullptr	fn_sound
+31D6	Default	StopSoundLooping	COMMAND_PLUGIN		0	kParams_OneForm	fn_sound
+31D7	Default	GetSystemColorAlt	COMMAND_PLUGIN		0	kParams_OneInt_ThreeScriptVars	fn_ui
+31D8	Default	SetCustomReputationChangeIcon	COMMAND_ALT_PLUGIN	scrci	0	kParams_OneForm_OneInt_OneString	fn_ui
+31D9	Default	SetArmorAltTexture	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts_OneForm	fn_form
+31DA	Default	SetWeaponAltTexture	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneForm	fn_form
+31DB	Default	ClearWeaponAltTexture	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_form
+31DC	Default	ClearArmorAltTexture	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts	fn_form
+31DD	Default	AddNavmeshObstacle	COMMAND_PLUGIN		1	nullptr	fn_gameplay
+31DE	Default	RemoveNavmeshObstacle	COMMAND_PLUGIN		1	nullptr	fn_gameplay
+31DF	Default	RollCredits	COMMAND_PLUGIN		0	nullptr	fn_utility
+31E0	Default	GetFactionFlags	COMMAND_PLUGIN		0	kParams_OneForm	fn_form
+31E1	Default	SetFactionFlags	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_form
+31E2	Form	GetLandTextureUnderFeet	COMMAND_PLUGIN		1	nullptr	fn_gameplay
+31E3	Default	SetOnProcessLevelChangeEventHandler	COMMAND_PLUGIN		0	kParams_Event_OneForm_OneInt	fn_event
+31E4	Default	GetExtraMiscStat	COMMAND_PLUGIN		0	kParams_OneString	fn_ui
+31E5	Default	ModExtraMiscStat	COMMAND_PLUGIN		0	kParams_OneString_OneInt	fn_ui
+31E6	Default	GetMoonPhase	CMD_COND_PLUGIN		0	nullptr	fn_gameplay
+31E7	Array	GetFormRecipesAlt	COMMAND_PLUGIN		0	kParams_OneForm	fn_form
+31E8	Default	RewardKarmaAlt	COMMAND_PLUGIN		0	kParams_OneInt	fn_gameplay
+31E9	Default	GetPackedPlayerFOV	COMMAND_PLUGIN		0	kParams_TwoScriptVars_OneOptionalScriptVar	fn_math
+31EA	Default	DialogResponseAddRelatedTopic	COMMAND_PLUGIN		0	kParams_OneDialogRes_OneTopic_OneInt_OneOptionalInt	fn_dial
+31EB	Array	DialogResponseRelatedGetAll	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_dial
+31EC	Default	GetPlayerCamFOV	COMMAND_PLUGIN		0	kParams_OneInt	fn_math
+31ED	Default	ShowBarberMenuEx	COMMAND_PLUGIN		0	kParams_OneInt_OneOptionalForm	fn_ui
+31EE	Default	InitExtraMiscStat	COMMAND_PLUGIN		0	kParams_OneString	fn_ui
+31EF	Default	TriggerScreenSplatterEx	COMMAND_PLUGIN		0	kSplatterParams	fn_utility
+31F0	Default	SetViewmodelClipDistance	COMMAND_PLUGIN		0	kParams_OneFloat	fn_utility
+31F1	Default	GetViewmodelClipDistance	COMMAND_PLUGIN		0	nullptr	fn_utility
+31F2	Default	SetBlockTransform	COMMAND_PLUGIN		1	kTransformParams	fn_utility
+31F3	Default	RefAddrxData	COMMAND_PLUGIN		1	kParams_OneInt	fn_utility
+31F4	Default	AudioMarkerGetController	CMD_ALT_COND_PLUGIN	AMKGetCtrl	1	nullptr	fn_mediaset
+31F5	Default	AudioMarkerSetController	COMMAND_ALT_PLUGIN	AMKSetCtrl	1	kParams_OneForm	fn_mediaset
+31F6	Default	AudioMarkerGetProperty	COMMAND_ALT_PLUGIN	AMKGetProp	1	kParams_OneInt	fn_mediaset
+31F7	Default	AudioMarkerSetProperty	COMMAND_ALT_PLUGIN	AMKSetProp	1	kParams_OneInt_OneFloat	fn_mediaset
+31F8	Default	IsRadioRefPlaying	CMD_COND_PLUGIN		1	nullptr	fn_form
+31F9	Default	TuneRadioRef	COMMAND_PLUGIN		1	kParams_OneOptionalForm	fn_form
+31FA	Array	GetAllGameRadios	COMMAND_PLUGIN		0	nullptr	fn_utility
+31FB	Array	GetAvailableRadios	COMMAND_PLUGIN		1	nullptr	fn_utility
+31FC	Default	SetJohnnyOnRadioPostSoundAttachEventHandler	COMMAND_ALT_PLUGIN	SetOnRadioPostSoundHandler	0	kParams_Event_OneForm	fn_event
+31FD	Default	AudioMarkerGetCurrent	CMD_ALT_COND_PLUGIN	AMKGetCur	0	nullptr	fn_mediaset
+31FE	Default	HideItemBarterEx	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneOptionalInt_OneOptionalForm	fn_form
+31FF	Default	IsItemBarterHiddenEx	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalForm	fn_form
+3200	Default	GetCurrentFurnitureRef	COMMAND_PLUGIN		1	nullptr	fn_form
+3201	Default	SetCameraShakeNoHUDShudder	COMMAND_ALT_PLUGIN	CamShakeNHUD	0	kParams_TwoFloats	fn_gameplay
+3202	Default	GameGetSecondsPassed	CMD_ALT_COND_PLUGIN	GGetSecPass	0	nullptr	fn_utility
+3203	Default	SetJohnnyOnKeyboardControllerSelectionChangeEventHandler	COMMAND_ALT_PLUGIN	SetOnKBCTrlUIDeltaHandler	0	kParams_Event_OneInt	fn_event
+3204	Default	IsBSALoaded	COMMAND_PLUGIN		0	kParams_OneString	fn_file
+3205	Array	GetTempIngestibleEffects	COMMAND_PLUGIN		0	nullptr	fn_gameplay
+3206	Default	PlaySoundFade	COMMAND_PLUGIN		0	kParams_OneForm_OneFloat	fn_sound
+3207	Array	GetPointInNavMesh	COMMAND_PLUGIN		0	kParams_ThreeFloats_OneInt_OneOptionalFloat	fn_gameplay
+3208	Array	GetNearestNavMeshTriangle	COMMAND_PLUGIN		0	kParams_ThreeFloats_OneInt_OneOptionalFloat	fn_gameplay
+3209	Array	GetAltTexturesEx	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalInt	fn_form
+320A	Default	HasHealthDamageEffect	CMD_COND_PLUGIN		1	nullptr	fn_gameplay
+320B	Default	SetAlwaysRun	COMMAND_PLUGIN		0	kParams_OneInt_OneOptionalInt	fn_gameplay
+320C	Default	SetAutoMove	COMMAND_PLUGIN		0	kParams_OneInt_OneOptionalInt	fn_gameplay
+320D	Default	SetActorMovementFlags	COMMAND_ALT_PLUGIN	SetPlayerMovementFlags	0	kParams_OneInt	fn_gameplay
+320E	Default	PushUIQuestToTop	COMMAND_ALT_PLUGIN	PushSelectedQuestInterfaceListEntryToTheTopOfThePipBoyQuestLogInterfaceImmediately	0	kParams_OneQuest	fn_ui
+320F	Default	SetExtraAccuracyPenaltyMult	COMMAND_PLUGIN		0	kParams_OneFloat_OneOptionalForm	fn_gameplay
+3210	Default	RemoveExtraAccuracyPenaltyMult	COMMAND_PLUGIN		0	kParams_OneOptionalForm	fn_gameplay
+3211	Default	SetJohnnyOnSleepWaitEventHandler	COMMAND_ALT_PLUGIN	SetONSleepWEventHandler	0	kParams_Event_OneInt	fn_event
+3212	Default	GetExtraAccuracyPenaltyMult	CMD_COND_PLUGIN		0	kParams_OneOptionalForm	fn_gameplay
+3213	Default	SetCustomMapMarker	COMMAND_PLUGIN		0	kParams_ThreeFloats	fn_gameplay
+3214	Default	ClearCustomMapMarker	COMMAND_PLUGIN		0	nullptr	fn_gameplay
+3215	Default	EjectCasing	COMMAND_PLUGIN		0	kParams_EjectCasing	fn_gameplay
+3216	Form	GetNoteSpeaker	COMMAND_PLUGIN		0	kParams_OneForm	fn_form
+3217	Default	SetNoteSpeaker	COMMAND_PLUGIN		0	kParams_TwoForms	fn_form
+3218	Default	GetNoteType	COMMAND_PLUGIN		0	kParams_OneForm	fn_form
+3219	Default	SetNoteType	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_form
+321A	Form	GetNoteSound	COMMAND_PLUGIN		0	kParams_OneForm	fn_form
+321B	Default	SetNoteSound	COMMAND_PLUGIN		0	kParams_TwoForms	fn_form
+321C	Form	GetNoteTopic	COMMAND_PLUGIN		0	kParams_OneForm	fn_form
+321D	Default	SetNoteTopic	COMMAND_PLUGIN		0	kParams_TwoForms	fn_form
+321E	String	GetNoteImage	COMMAND_PLUGIN		0	kParams_OneForm	fn_form
+321F	Default	SetNoteImage	COMMAND_PLUGIN		0	kParams_OneForm_OneString	fn_form
+3220	Array	GetNoteQuestList	COMMAND_PLUGIN		0	kParams_OneForm	fn_form
+3221	Default	AddNoteQuest	COMMAND_PLUGIN		0	kParams_TwoForms	fn_form
+3222	Default	RemoveNoteQuest	COMMAND_PLUGIN		0	kParams_TwoForms	fn_form
+3223	Default	SetHUDShudderPower	COMMAND_PLUGIN		0	kParams_OneFloat	fn_gameplay
+3224	Default	GetHUDShudderPower	COMMAND_PLUGIN		0	nullptr	fn_gameplay
+3225	Default	SetDialogResponseOverrideValues	COMMAND_PLUGIN		0	kParams_OneForm_FourInts_TwoOptionalForms_OneOptionalInt	fn_dial
+3226	Default	SetMediaLocationControllerOverride	COMMAND_ALT_PLUGIN	SetMLCOverride	0	kParams_OneForm	fn_gameplay
+3227	Default	ClearMediaLocationControllerOverride	COMMAND_ALT_PLUGIN	ClearMLCOverride	0	nullptr	fn_gameplay
+3228	Default	GetCasinoWinnings	COMMAND_ALT_PLUGIN		0	kParams_OneCasino	fn_gameplay
+3229	Default	SetCasinoWinnings	COMMAND_ALT_PLUGIN		0	kParams_OneCasinoOneInt	fn_gameplay
+322A	Default	GetAcousticSpace	COMMAND_PLUGIN		1	kParams_OneForm	fn_mediaset
+322B	Default	SetAcousticSpace	COMMAND_PLUGIN		1	kParams_OneForm_OneOptionalForm	fn_mediaset
+322C	Default	SetCameraTranslate	COMMAND_PLUGIN		0	kParams_OneBoolThreeFloats	fn_utility
+322D	Default	SetCameraRotate	COMMAND_PLUGIN		0	kParams_OneBoolOneIntOneFloat	fn_utility
+322E	Default	PlayHolotape	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalInt	fn_gameplay
+322F	Default	StopHolotape	COMMAND_PLUGIN		0	kParams_OneOptionalInt	fn_gameplay
+3230	Default	SetOnTakeBackItemEventHandler	COMMAND_PLUGIN		0	kParams_Event_TwoForms	fn_event
+3231	String	GetCasinoDeckTexture	COMMAND_PLUGIN		0	kParams_OneCasinoOneInt	fn_gameplay
+3232	Default	SetCasinoDeckTexture	COMMAND_PLUGIN		0	kParams_OneCasinoOneIntOneString	fn_gameplay
+3233	Form	GetCasinoChip	COMMAND_PLUGIN		0	kParams_OneCasino	fn_gameplay
+3234	Default	SetCasinoChip	COMMAND_PLUGIN		0	kParams_OneCasinoOneForm	fn_gameplay
+3235	String	GetCustomMapMarkerIcon	COMMAND_PLUGIN		1	nullptr	fn_ui
+3236	Default	GetSleepWaitMenuState	COMMAND_PLUGIN		0	nullptr	fn_ui
+3237	Default	SetOnNPCResponseEventHandler	COMMAND_PLUGIN		0	kParams_Event_OneInt	fn_event
+3238	Default	PlaySoundFromPath	COMMAND_PLUGIN		0	kParams_OneString_OneOptionalFloat_FourOptionalInts	fn_sound
+3239	Default	PlaySound3DFromPath	COMMAND_PLUGIN		1	kParams_OneString_OneOptionalFloat_ThreeOptionalInts	fn_sound
+323A	Default	StopSoundFromPath	COMMAND_PLUGIN		0	kParams_OneString_OneOptionalFloat	fn_sound
+323B	Default	StopSound3DFromPath	COMMAND_PLUGIN		1	kParams_OneString_OneOptionalFloat	fn_sound
+323C	Default	IsSoundPlayingFromPath	COMMAND_PLUGIN		0	kParams_OneString_OneOptionalObjectRef	fn_sound
+323D	Default	SetOnGeneralSubtitleEventHandler	COMMAND_PLUGIN		0	kParams_Event_OneInt	fn_event
+323E	Default	PathToRef	COMMAND_PLUGIN		1	kParams_PathToRef	fn_gameplay
+323F	Default	SetOnReputationChangeEventHandler	COMMAND_PLUGIN		0	kParams_Event_OneForm	fn_event
+3240	Default	IsNiSequenceActive	COMMAND_PLUGIN		1	kParams_IsNiSequenceActive	fn_gamebryo
+3241	Default	GetHotkeySlot	COMMAND_PLUGIN		1	nullptr	fn_form
+3242	Default	SetOnNPCActorValueChangeEventHandler	COMMAND_ALT_PLUGIN	SetJohnnyOnNPCActorValueEventHandler	0	kParams_Event_OneForm_OneInt	fn_event
+3243	Default	GetGrenadeHoldTime	CMD_COND_PLUGIN		0	nullptr	fn_gameplay
+3244	Default	RemoveHighlightedRef	COMMAND_PLUGIN		1	nullptr	fn_gameplay
+3245	Default	GetSaidOnce	CMD_COND_PLUGIN		0	kParams_OneForm	fn_dial
+3246	Default	SetSaidOnce	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts	fn_dial
+3247	Array	GetTopicInfo	COMMAND_PLUGIN		0	kParams_GetTopicInfo	fn_dial
+3248	Default	IsMenuPaused	CMD_COND_PLUGIN		0	kParams_OneOptionalInt	fn_ui
+3249	Default	IsInDialogueWithPlayer	CMD_COND_PLUGIN		1	nullptr	fn_gameplay
+324A	Default	SetHUDVisibilityOverride	COMMAND_PLUGIN		0	kParams_OneInt	fn_ui
+324B	Default	GetHUDVisibilityOverride	COMMAND_PLUGIN		0	nullptr	fn_ui
+324C	Default	UpdateRepairMenu	COMMAND_PLUGIN		0	nullptr	fn_ui
+324D	Array	GetWeaponsForMod	COMMAND_PLUGIN		0	kParams_OneObjectID	fn_gameplay
+324E	Default	GetMineArmedEx	COMMAND_PLUGIN		1	nullptr	fn_form
+324F	Default	SetMusicTypePath	COMMAND_PLUGIN		0	kParams_OneForm_OneString	fn_form
+3250	Form	GetParentTopic	COMMAND_PLUGIN		0	kParams_OneForm	fn_dial
+3251	Default	GetCameraShotTraitNumeric	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_form
+3252	Default	SetCameraShotTraitNumeric	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneFloat	fn_form
+3253	Default	GetCameraShotFlags	COMMAND_PLUGIN		0	kParams_OneForm	fn_form
+3254	Default	SetCameraShotFlags	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_form
+3255	Default	GetCameraShotPath	COMMAND_PLUGIN		0	kParams_OneForm	fn_form
+3256	Default	SetCameraShotPath	COMMAND_PLUGIN		0	kParams_OneForm_OneString	fn_form
+3257	Form	GetCameraShotImageSpaceModifier	COMMAND_PLUGIN		0	kParams_OneForm	fn_form
+3258	Default	SetCameraShotImageSpaceModifier	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalForm	fn_form
+3259	Default	SetAlphaPropertyValue	COMMAND_PLUGIN		1	kParams_SetPropertyValue	fn_gamebryo
+325A	Default	GetAlphaPropertyValue	COMMAND_PLUGIN		1	kParams_GetPropertyValue	fn_gamebryo
+325B	Default	SetStencilPropertyValue	COMMAND_PLUGIN		1	kParams_SetPropertyValue	fn_gamebryo
+325C	Default	GetStencilPropertyValue	COMMAND_PLUGIN		1	kParams_GetPropertyValue	fn_gamebryo
+325D	Default	PathToPoint	COMMAND_PLUGIN		1	kParams_ThreeFloatsTwoOptionalFloats	fn_gameplay
+325E	Default	GetYieldTimer	CMD_COND_PLUGIN		0	nullptr	fn_gameplay
+325F	Default	SetYieldTimer	COMMAND_PLUGIN		0	kParams_OneFloat	fn_gameplay
+3260	Default	SetSwitchNodeIndex	COMMAND_PLUGIN		1	kParams_SetSwitchNodeIndex	fn_gamebryo
+3261	Default	GetSwitchNodeIndex	COMMAND_PLUGIN		1	kParams_GetSwitchNodeIndex	fn_gamebryo
+3262	Default	SetNiLODLevel	COMMAND_PLUGIN		0	kParams_OneInt	fn_gamebryo
+3263	Default	GetNiLODLevel	COMMAND_PLUGIN		0	nullptr	fn_gamebryo
+3264	Default	SetWeaponScopeUIModel	COMMAND_PLUGIN		0	kParams_OneString_OneOptionalObject	fn_ui
+3265	Default	ToggleWeaponScopeUIModel	COMMAND_PLUGIN		0	kParams_OneInt	fn_ui
+3266	Default	ClearWeaponScopeUIModel	COMMAND_PLUGIN		0	nullptr	fn_ui
+3267	Default	UpdateScenegraph	COMMAND_PLUGIN		1	kParams_ScenegraphUpdate	fn_gamebryo
+3268	Array	GetNiBound	COMMAND_PLUGIN		1	kParams_GetNiBound	fn_gamebryo
+3269	Default	CallPerRef	COMMAND_PLUGIN		0	kParamsCallPerRef	fn_form
+326A	Default	CallPerRefEx	COMMAND_PLUGIN_EXP		0	kParamsCallPerRefEx	fn_form
+326B	Default	CallPerMobileObject	COMMAND_PLUGIN		0	kParamsCallPerMobileObject	fn_form
+326C	Default	CallPerMobileObjectEx	COMMAND_PLUGIN_EXP		0	kParamsCallPerMobileObjectEx	fn_form
+326D	Default	Update3DAlt	COMMAND_PLUGIN		1	kParams_OneInt	fn_form
+326E	Default	SetNiPSysModifierValue	COMMAND_PLUGIN		1	kParams_SetNiPSysModifierValue	fn_gamebryo
+326F	Default	GetNiPSysModifierValue	COMMAND_PLUGIN		1	kParams_GetNiPSysModifierValue	fn_gamebryo
+3270	Array	ar_Shuffle	COMMAND_PLUGIN		0	kParams_OneInt	fn_utility
+3271	Default	GetRecipeCategoryFlags	COMMAND_PLUGIN		0	kParams_OneForm	fn_form
+3272	Default	GetCurrentSkyColor	COMMAND_PLUGIN		0	kParams_OneInt_ThreeScriptVars	fn_utility
+3273	Default	RemapLand	COMMAND_PLUGIN		0	kParamsRemapLand	fn_form
+3274	Default	SetParticleEmitterSpawnRate	COMMAND_PLUGIN		1	kParams_SetParticleEmitterSpawnRate	fn_gamebryo
+3275	Default	GetParticleEmitterSpawnRate	COMMAND_PLUGIN		1	kParams_GetSwitchNodeIndex	fn_gamebryo
+3276	String	GetItemEffectString	COMMAND_PLUGIN		0	kParams_OneOptionalObjectID	fn_form
+3277	Default	ApplyModelTextureSwap	COMMAND_PLUGIN		1	kParamsApplyModelTextureSwap	fn_form
+3278	Default	StopIdleLoop	COMMAND_ALT_PLUGIN	ForceDeactivateCurrentAnimationLoopForTargetReferenceButDontCancelTheAnimationItself	1	kParams_OneOptionalInt	fn_utility
+3279	Default	SetIKState	COMMAND_PLUGIN		1	kParams_TwoInts	fn_form
+327A	Default	GetIKState	CMD_COND_PLUGIN		1	kParams_OneInt	fn_form
+327B	Default	IsCarryable	CMD_COND_PLUGIN		0	kParams_OneOptionalObjectID	fn_form
+327C	Default	PickIdleEx	COMMAND_PLUGIN		1	kParams_OneRef	fn_form
+327D	Default	GetUsedItemHeight	CMD_COND_PLUGIN		0	nullptr	fn_form
+327E	Default	GetMenuItemListIndex	COMMAND_PLUGIN		1	kParams_OneOptionalInt	fn_ui
+327F	Default	SelectMenuItemListIndex	COMMAND_PLUGIN		0	kParams_OneInt_OneOptionalInt	fn_ui
+3280	Default	StopNiSequence	COMMAND_PLUGIN		1	kParams_StopNiSequence	fn_gamebryo
+3281	Default	GetPCInRootWorldspace	CMD_COND_PLUGIN		0	kParams_OneWorldSpace	fn_gameplay
+3282	Form	GetPCRootWorldspace	COMMAND_PLUGIN		0	nullptr	fn_gameplay
+3283	Array	GetAltTextures	COMMAND_PLUGIN		0	kParams_OneForm	fn_form
+3284	Default	SetAltTexture	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneForm	fn_form
+3285	Default	ClearAltTexture	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	fn_form
+3286	Default	SetNiLightValue	COMMAND_PLUGIN		1	kParams_SetNiLightValue	fn_gamebryo
+3287	Default	GetNiLightValue	COMMAND_PLUGIN		1	kParams_GetPropertyValue	fn_gamebryo
+3288	Default	SetNiLightColor	COMMAND_PLUGIN		1	kParams_SetNiLightColor	fn_gamebryo
+3289	Default	GetNiLightColor	COMMAND_PLUGIN		1	kParams_GetNiLightColor	fn_gamebryo
+328A	Default	ReloadEquippedModelsAlt	COMMAND_ALT_PLUGIN	ReloadModelsAlt	1	kParams_OneOptionalInt	fn_form
+328B	Default	ar_IsFormInList	COMMAND_PLUGIN		0	kParams_OneInt_OneFormList_OneInt	fn_utility
+328C	Form	GetExternalEmittanceSource	COMMAND_PLUGIN		0	kParams_OneOptionalForm	fn_form
+328D	Default	SetExternalEmittanceSource	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalForm	fn_form
+328E	Form	GetProjectileMuzzleFlashLight	COMMAND_PLUGIN		0	kParams_OneForm	fn_form
+328F	Default	SetProjectileMuzzleFlashLight	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalForm	fn_form
+3290	Default	SetShaderPropertyFlag	COMMAND_PLUGIN		1	kParams_SetPropertyValue	fn_gamebryo
+3291	Default	GetShaderPropertyFlag	COMMAND_PLUGIN		1	kParams_GetPropertyValue	fn_gamebryo
+3292	String	GetCustomReputationChangeIcon	COMMAND_ALT_PLUGIN	gcrci	0	kParams_OneForm_OneInt	fn_ui
+3293	String	GetReputationTitle	COMMAND_PLUGIN		0	kParams_OneReputation	fn_form
+3294	String	GetReputationIcon	COMMAND_PLUGIN		0	kParams_OneReputation	fn_form
+3295	String	GetReputationFormIcon	COMMAND_PLUGIN		0	kParams_GetReputationFormIcon	fn_form
+3296	Default	SetReputationFormIcon	COMMAND_PLUGIN		0	kParams_SetReputationFormIcon	fn_form
+3297	Default	ToggleAddonNodes	COMMAND_PLUGIN		1	kParams_GetPropertyValue	fn_gamebryo

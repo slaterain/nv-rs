@@ -456,6 +456,7 @@ pub fn bs_scene_graph_set_camera_fov(
             if set_lod_adjust {
                 lod_adjust(e);
             }
+            camera_copy_site(e, target.addr(), fov);
             return;
         }
         e.set(this, BSSceneGraph::fCurrentFOV, x87_quiet(fov));
@@ -527,6 +528,14 @@ pub fn bs_scene_graph_set_camera_fov(
     if set_lod_adjust {
         lod_adjust(e);
     }
+    camera_copy_site(e, target.addr(), fov);
+}
+
+/// JohnnyGuitar NVSE's seam at `0xC5244A`, where both of `SetCameraFOV`'s exits meet (its jump there
+/// copies the camera for `WorldToScreen`: words the camera set, `[ebp-8]`, and the field of view as
+/// passed, `[ebp+8]`). The exe goes on (its `leave; ret 0x10`).
+fn camera_copy_site(e: &mut Engine, camera: u32, fov: f32) {
+    e.site(0x00c5_244a, &[camera, fov.to_bits()]);
 }
 
 // Translated from 00c52450 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -931,6 +940,38 @@ mod tests {
         e.set(camera, NiCamera::m_fLODAdjust, 0.0);
         e.call(0x00c5_2020, &args![graph, 90.0f32, false, 0u32, false]);
         assert_eq!(e.get(camera, NiCamera::m_fLODAdjust), 0.0);
+    }
+
+
+    thread_local! {
+        static CAMERA_SEEN: std::cell::RefCell<Vec<Vec<u32>>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// JohnnyGuitar NVSE's seam at the end of `SetCameraFOV` (its jump at `0xC5244A`, where both
+    /// exits meet): asked once per call, the unchanged-field-of-view exit too, with the camera set
+    /// (the scene graph's own for a null one) and the field of view as passed.
+    #[test]
+    fn set_camera_fov_asks_the_jg_camera_seam_at_both_exits() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = test_engine();
+        let (graph, camera) = graph_with_camera(&mut e);
+        e.on_site(SiteSlot::new(Owner::JohnnyGuitar, 0x00c5_244a), |_, a| {
+            CAMERA_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+            None
+        });
+        e.set(graph, BSSceneGraph::fCurrentFOV, 90.0);
+        // Unchanged: the early exit.
+        e.call(0x00c5_2020, &args![graph, 90.0f32, false, 0u32, false]);
+        // Changed: the whole frustum, then the end.
+        e.call(0x00c5_2020, &args![graph, 70.0f32, false, 0u32, false]);
+        assert_eq!(
+            CAMERA_SEEN.with(|s| s.take()),
+            vec![
+                vec![camera.addr(), 90.0f32.to_bits()],
+                vec![camera.addr(), 70.0f32.to_bits()]
+            ]
+        );
     }
 
     #[test]

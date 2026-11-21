@@ -29,7 +29,15 @@
 //! JohnnyGuitar is not listed as installed (its 408 commands are not built): a mod that checks
 //! for it is told it is absent.
 
+pub mod commands;
+#[rustfmt::skip]
+pub mod slots;
+pub mod table;
 pub mod vtables;
+pub mod world_to_screen;
+
+#[cfg(test)]
+mod test_support;
 
 // The unit tests' own program: no other crate's functions are linked in.
 #[cfg(test)]
@@ -111,6 +119,9 @@ pub const SKIPPED_SITES: [SiteSlot; 9] = [
 ];
 /// `SetTemporary`'s call of `RemoveFromDataStructures` (the seam right after it).
 pub const TEMPORARY_SITE: SiteSlot = SiteSlot::new(Owner::JohnnyGuitar, 0x0048_449a);
+/// The end of `BSSceneGraph::SetCameraFOV` (`WorldToScreen::Install`'s jump at `0xC5244A`): the camera copy
+/// `WorldToScreen` projects with ([`world_to_screen`]), installed while JohnnyGuitar answers "installed".
+pub const CAMERA_SITE: SiteSlot = SiteSlot::new(Owner::JohnnyGuitar, 0x00c5_244a);
 /// `GetFormEditorIDLength` and `GetFormByEditorID`, replaced.
 pub const NAME_LENGTH: WrapSlot = WrapSlot::new(Owner::JohnnyGuitar, 0x0047_4cb0);
 pub const FORM_BY_NAME: WrapSlot = WrapSlot::new(Owner::JohnnyGuitar, 0x0048_3a00);
@@ -127,6 +138,12 @@ pub struct JohnnyGuitar {
     pub on: bool,
     /// [`install`] ran with the row on.
     pub installed: bool,
+    /// The host's row `NV_JG_INSTALLED` asked for "installed" ([`set_answers_installed`]).
+    pub row_installed: bool,
+    /// JohnnyGuitar answers "installed": what [`install`] found in [`JohnnyGuitar::row_installed`].
+    pub answers_installed: bool,
+    /// The parameter lists written for its records.
+    pub table: table::State,
 }
 
 /// The nine storing classes' own setters, as their slots held them: fixed at the install (before
@@ -147,6 +164,17 @@ pub fn set_on(e: &mut Engine, on: bool) {
     editor_ids::store(e).set_on(on);
 }
 
+/// The host's row `NV_JG_INSTALLED` (off in every preset): JohnnyGuitar answers "installed" in this
+/// run: in xNVSE's list of plugins, its built commands named and answering in the table, its version
+/// line at the start. The real plugin always restores the editor ids, so "installed" turns them on
+/// too. Before [`install`].
+pub fn set_answers_installed(e: &mut Engine, on: bool) {
+    e.ext::<JohnnyGuitar>().row_installed = on;
+    if on {
+        set_on(e, true);
+    }
+}
+
 /// Whether the editor ids are installed.
 pub fn on(e: &Engine) -> bool {
     e.ext_get::<JohnnyGuitar>().is_some_and(|j| j.installed)
@@ -154,13 +182,13 @@ pub fn on(e: &Engine) -> bool {
 
 /// xNVSE's record of JohnnyGuitar: not listed (its commands are not built), its listener for the
 /// deferred start.
-fn plugin() -> nvse::plugins::BuiltIn {
+fn plugin(listed: bool) -> nvse::plugins::BuiltIn {
     nvse::plugins::BuiltIn {
         file: FILE,
         name: NAME,
         version: VERSION,
         opcode_base: OPCODE_BASE,
-        listed: false,
+        listed,
         listener: Some(listener),
         save: None,
         load: None,
@@ -181,6 +209,16 @@ pub fn install(e: &mut Engine) {
     editor_ids::store(e);
     e.ext_free::<editor_ids::ConflictLog>();
     e.ext_free::<StoringSetters>();
+    let answers = e.ext::<JohnnyGuitar>().row_installed;
+    e.ext::<JohnnyGuitar>().answers_installed = answers;
+    if answers {
+        // No records at all while not installed: the opcodes stay xNVSE's empty padding, as
+        // without the DLL.
+        table::install(e);
+        commands::install(e);
+        // JohnnyPatches::Init installs it whenever JohnnyGuitar is loaded.
+        e.on_site(CAMERA_SITE, world_to_screen::camera_site);
+    }
     if !e.ext::<JohnnyGuitar>().on {
         return;
     }
@@ -225,7 +263,7 @@ pub fn install(e: &mut Engine) {
     e.wrap(NAME_LENGTH, name_length);
     e.wrap(FORM_BY_NAME, form_by_name);
     e.ext::<JohnnyGuitar>().installed = true;
-    nvse::plugins::register(e, plugin());
+    nvse::plugins::register(e, plugin(answers));
     // The game's state, not one engine's: real threads' engines share it.
     e.share_ext::<JohnnyGuitar>();
 }
@@ -354,19 +392,28 @@ fn listener(e: &mut Engine, m: &nvse::plugins::Message) {
     if m.kind != nvse::plugins::msg::DEFERRED_INIT {
         return;
     }
-    eprintln!("{}", load_line(e));
-    if editor_ids::store(e).counts().conflicts == 0 {
-        return;
+    if e.ext::<JohnnyGuitar>().answers_installed {
+        commands::fn_utility::deferred_init(e);
     }
-    write_log(e);
-    let random = e.call(RANDOM_01, &args![]).f32();
-    let who = if random < 0.001 { "slop" } else { "mod" };
-    let who = nvse::table::guest_str(e, who.as_bytes());
-    nvse::commands::console_print(
-        e,
-        "Some EDIDs are conflicting! Check JohnnyGuitarNVSE.log for details. (Ignore this message if you are not a %s author.)",
-        &[who],
-    );
+    eprintln!("{}", load_line(e));
+    if editor_ids::store(e).counts().conflicts != 0 {
+        write_log(e);
+        let random = e.call(RANDOM_01, &args![]).f32();
+        let who = if random < 0.001 { "slop" } else { "mod" };
+        let who = nvse::table::guest_str(e, who.as_bytes());
+        nvse::commands::console_print(
+            e,
+            "Some EDIDs are conflicting! Check JohnnyGuitarNVSE.log for details. (Ignore this message if you are not a %s author.)",
+            &[who],
+        );
+    }
+    // Translated from JohnnyGuitar NVSE 5.28 (c87905e), JG/internal/JG/JohnnyMessageHandler.cpp:
+    // DeferredInit's last line (`MenuConsole::Print("JohnnyGuitar version: %.2f",
+    // JG_VERSION_DECIMAL)`), once it answers "installed".
+    if e.ext::<JohnnyGuitar>().answers_installed {
+        let version = args![f64::from(VERSION) / 100.0];
+        nvse::commands::console_print(e, "JohnnyGuitar version: %.2f", &version);
+    }
 }
 
 /// JohnnyGuitar's log, which its console line names.
