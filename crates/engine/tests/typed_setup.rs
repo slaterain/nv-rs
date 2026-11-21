@@ -681,7 +681,8 @@ fn setup_sort_share_at_the_low_limit() {
                     x
                 })
                 .collect();
-            vec![scene_node(e, &l, 1, 0), 0]
+            // The active fence on the last light, so a light moved after it changes the order.
+            vec![scene_node(e, &l, 3, 0), 0]
         })
         .run()
         .assert_same();
