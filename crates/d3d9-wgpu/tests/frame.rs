@@ -3581,6 +3581,78 @@ fn a_handle_made_again_while_bound_is_looked_up_again() {
     assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
 }
 
+/// A texture's handle made again without being destroyed binds the new texture, and once a
+/// buffer is made at it, setting it as a texture binds none (as setting no texture does): the
+/// sets look textures and buffers up in maps of their own, which follow every object made at a
+/// handle. The pixel shader adds its texture to the vertex texture's green.
+/// Planted bugs it catches: a texture made again not put in the textures' map; a buffer made at
+/// a texture's handle leaving the texture there.
+#[test]
+fn a_handle_made_again_as_another_texture_or_a_buffer_is_set_as_that() {
+    let Some(mut g) = Gpu::new(4, 1) else { return };
+    const PS_TEX: u32 = 0x1602;
+    stage_samplers(&mut g);
+    for (pixel, shader) in [(false, VS + 2), (true, PS + 6)] {
+        g.run(Cmd::SetShader {
+            device: DEVICE,
+            pixel,
+            shader,
+        });
+    }
+    let set = |g: &mut Gpu, texture: u32| {
+        g.run(Cmd::SetTexture {
+            device: DEVICE,
+            sampler: 0,
+            texture,
+        });
+        g.clear(3, 0, 1.0);
+        g.cover(0.5);
+        g.pixels()
+    };
+    // Red: green + red.
+    assert_eq!(
+        set(&mut g, PS_TEX),
+        vec![[0, 255, 255, 255]; 16],
+        "the first"
+    );
+    // Made again, blue, no destroy between: green + blue.
+    let levels = words(&[PS_TEX + 1]);
+    g.run(Cmd::CreateTexture {
+        device: DEVICE,
+        texture: PS_TEX,
+        levels: Data::Bytes(&levels),
+        width: 1,
+        height: 1,
+        usage: 0,
+        format: A8R8G8B8,
+        pool: 1,
+    });
+    g.run(Cmd::UploadSurface {
+        surface: PS_TEX + 1,
+        row: 4,
+        rows: 1,
+        data: Data::Bytes(&[255, 0, 0, 255]),
+    });
+    assert_eq!(
+        set(&mut g, PS_TEX),
+        vec![[255, 255, 0, 255]; 16],
+        "made again"
+    );
+    let none = set(&mut g, 0);
+    // A buffer at the handle: no texture there any more.
+    g.run(Cmd::CreateBuffer {
+        device: DEVICE,
+        buffer: PS_TEX,
+        index: false,
+        length: 64,
+        usage: 0,
+        format: 0,
+        pool: 1,
+    });
+    assert_eq!(set(&mut g, PS_TEX), none, "a buffer at the handle");
+    assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
+}
+
 /// With the answers board (the render thread's way to the game's threads), the backend posts each
 /// occlusion count once the GPU has it, through its idle work alone: the same count a reader that
 /// waits gets, for the game's last `END` of the query only; an event query gets none.
