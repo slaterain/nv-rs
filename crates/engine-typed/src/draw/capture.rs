@@ -287,6 +287,25 @@ fn held() -> bool {
     OPEN.load(Relaxed) != 0 && HOLDS.with(Cell::get)
 }
 
+/// Whether this thread runs beside a packet another thread draws from: a packet is open and this thread holds none
+/// (main while the drawing thread draws). Its cached device state (the render-state cache, the current shaders and
+/// declaration) then holds the values at the cut, while serially it would hold what the draw left; a setter must not
+/// skip its device call on such a value ([`main_must_send`]). One relaxed load while no packet is open.
+#[inline(always)]
+pub fn beside() -> bool {
+    OPEN.load(Relaxed) != 0 && !HOLDS.with(Cell::get)
+}
+
+/// A typed setter's "already the cached value, skip" decision: `same` is what its cache says. Beside a packet
+/// ([`beside`]) the cache is main's value at the cut, not what the draw left (which serially comes first), so the
+/// setter sends and caches its value anyway: the device gets it after the draw's commands as serially, and the
+/// cache's write is noted as main's for the join (`set_own_at`), which then keeps main's value over the draw's. The
+/// one difference from the serial order: when the draw left the same value, the device gets it once more.
+#[inline(always)]
+pub fn main_must_send(same: bool) -> bool {
+    !same || beside()
+}
+
 fn run(e: &Engine) -> usize {
     e.kernel.id()
 }
