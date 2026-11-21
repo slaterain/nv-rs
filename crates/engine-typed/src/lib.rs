@@ -34,6 +34,7 @@ pub mod process;
 pub mod render;
 pub mod save;
 pub mod scene;
+pub mod script_lines;
 pub mod scripts;
 pub mod shader;
 
@@ -116,6 +117,7 @@ pub mod units {
         engine_core::typed::provide(&crate::process::PROCESS);
         engine_core::typed::provide(&crate::lights::LIGHTS);
         engine_core::typed::provide(&crate::scripts::SCRIPTS);
+        engine_core::typed::provide(&crate::script_lines::SCRIPT_LINES);
         engine_core::typed::provide(&crate::save::SAVE);
         crate::render::stream::note_head_check();
     }
@@ -130,7 +132,7 @@ mod tests {
     use engine_core::typed::{parse_switch, Family, Mode};
 
     /// This crate's families, in the order `units::funcs` provides them.
-    fn families() -> [&'static Family; 20] {
+    fn families() -> [&'static Family; 21] {
         [
             &crate::lockfree::LOCKFREE,
             &crate::culling::CULLING,
@@ -151,6 +153,7 @@ mod tests {
             &crate::process::PROCESS,
             &crate::lights::LIGHTS,
             &crate::scripts::SCRIPTS,
+            &crate::script_lines::SCRIPT_LINES,
             &crate::save::SAVE,
         ]
     }
@@ -191,6 +194,7 @@ mod tests {
                 "process",
                 "lights",
                 "scripts",
+                "script_lines",
                 "save"
             ]
         );
@@ -202,11 +206,11 @@ mod tests {
         assert!(off.iter().all(|m| *m == Mode::Off));
         let one_off = parse_switch(Some("shader:off"), &families).unwrap();
         assert_eq!(one_off[3], Mode::Off);
-        assert!(one_off.iter().filter(|m| **m == Mode::On).count() == 19);
+        assert!(one_off.iter().filter(|m| **m == Mode::On).count() == 20);
         // `NV_TYPED=geometry:off` still turns the geometry family (index 12) off, and only it.
         let geometry_off = parse_switch(Some("geometry:off"), &families).unwrap();
         assert_eq!(geometry_off[12], Mode::Off);
-        assert!(geometry_off.iter().filter(|m| **m == Mode::On).count() == 19);
+        assert!(geometry_off.iter().filter(|m| **m == Mode::On).count() == 20);
     }
 
     /// No two of this crate's families (with the core's) hold the same address, past their gate or not:
