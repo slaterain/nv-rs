@@ -3037,7 +3037,10 @@ mod tests {
             (true, false, 1, 120.0, None),
         ] {
             let (mut e, this, _, target) = wheel_engine([0.0, 4.0], [1.0, 2.0], false);
-            e.set_stewie(engine_core::extend::stewie::RECIPE_WHEEL_CHANGES_CATEGORY, on);
+            e.set_stewie(
+                engine_core::extend::stewie::RECIPE_WHEEL_CHANGES_CATEGORY,
+                on,
+            );
             if !e.mem.is_mapped(0x011d_8a80) {
                 e.map(0x011d_8000, 0x1000);
             }
