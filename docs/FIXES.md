@@ -1113,8 +1113,8 @@ Not yet, with the switch on:
   frame's depth clear before the first-person view is a seam the command's switch answers; a skipped clear
   still marks the world as drawn for the new lighting and the sun shadows, so the first-person arms and
   weapon still neither cast nor take the sun's shadows.) Left out on purpose: two patches that only make the game faster (G24, G36),
-  the editor's (E1, E2), NVAC's (O15) and Enhanced Camera's, a start-up order change with no known effect
-  (D02), JIP's own start-up (D08), and one xNVSE already makes (G05).
+  the editor's (E1, E2), NVAC's (O15) and Enhanced Camera's, JIP's own start-up (D08), and one xNVSE
+  already makes (G05). (Its start-up order change, D02, is in with JIP: the table above.)
 - With real threads JIP's own data no longer makes a thread wait (its aux variables and item data have
   their own locks, and xNVSE's string variables, which `AuxVarGetFltCond` reads its name from, have
   theirs, as in xNVSE), but a mod's event script run from another thread (JIP's actor, world and UI
@@ -1447,6 +1447,11 @@ the form type, so it never picks `sNPCModelFemale`: with FalloutNV.esm, which se
 male skeleton, a player sees the original's skeletons), and an NPC record's model path is no longer stored
 when it loads (`0x104A1BC`, the original ignores it for NPCs anyway). With the row off a player with JIP
 installed gets these two and nothing else of this group.
+
+Also built as part of JIP (D02, JIP's `PostLoad` and `DeferredInit`): the game's start-up refresh of the
+process lists' time (the calendar's hour and date copied into the AI's globals, `00970d50`) is taken out of
+the start-up (`0x86B1EE`) and made once at JIP's deferred start instead, after the data and the main menu
+are up, as with JIP (before this, the port made it twice: at start-up and at JIP's deferred start).
 
 Also built as part of JIP (G48, `004f15a0`): setting a form's type clears JIP's own flag bytes beside it, and
 for an NPC or creature reference JIP's actor flag bytes too. The game never sets those bytes when it makes a
