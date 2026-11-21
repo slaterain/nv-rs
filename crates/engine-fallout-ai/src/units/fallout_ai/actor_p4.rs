@@ -4012,11 +4012,40 @@ pub fn fn_008a89a0(e: &mut Engine, this: Ptr<Actor>, amount: u32) -> u32 {
         if controller != 0 {
             e.call(0x0097_f6d0, &args![controller, 0u32]);
         }
-        if e.call(0x0056_6950, &args![this]).bool() {
+        // lStewieAl's Tweaks' row S0024 (`patchPreventFollowerNoAmmoTopicIfUsingRechargerWeapon`,
+        // the call at `0x8A8DA5`): Tweaks' `ActorDecreaseAmmoCheckShouldQueueFollowerTopicHook` in
+        // place of the teammate test (`00566950`).
+        let queue = if e.stewie(engine_core::extend::stewie::FOLLOWER_NO_AMMO_RECHARGER) {
+            follower_out_of_ammo_topic_wanted(e, this.addr())
+        } else {
+            e.call(0x0056_6950, &args![this]).bool()
+        };
+        if queue {
             e.call(0x008d_5cb0, &args![this, 7u32]);
         }
     }
     left
+}
+
+/// Row S0024's test, Tweaks' `ActorDecreaseAmmoCheckShouldQueueFollowerTopicHook` (`main.h`): a
+/// teammate (the byte at +0x18D) whose equipped weapon (`Actor::GetEquippedWeapon`: the process
+/// at +0x68, its weapon info from slot +0x148, the item at +0x8) has a recharge rate
+/// (`TESObjectWEAP` +0x1A4) of 0.0, so a companion with a recharging weapon says no out-of-ammo
+/// line.
+fn follower_out_of_ammo_topic_wanted(e: &mut Engine, actor: u32) -> bool {
+    if e.mem.u8(actor + 0x18d) == 0 {
+        return false;
+    }
+    let process = e.mem.u32(actor + 0x68);
+    if process == 0 {
+        return false;
+    }
+    let info = e.vcall(process, 0x148, &args![]).u32();
+    if info == 0 {
+        return false;
+    }
+    let weapon = e.mem.u32(info + 0x8);
+    weapon != 0 && e.mem.f32(weapon + 0x1a4) == 0.0
 }
 
 /// `0.75` (`double`): the part of the height difference `008ac8b0` returns.
@@ -10035,6 +10064,38 @@ mod tests {
         w.e.call(0x008a_89a0, &args![w.actor, 2u32]);
         let log = calls(&mut w.e);
         assert_eq!(called(&log, 0x004a_b5b0), vec![vec![0x5001], vec![0x5000]]);
+    }
+
+    /// S0024 (`patchPreventFollowerNoAmmoTopicIfUsingRechargerWeapon`): a companion fires its
+    /// last shot. Off, the teammate test (`00566950`, here yes) queues the out-of-ammo topic (7)
+    /// whatever the weapon; on, Tweaks' test asks the teammate byte (+0x18D) and the weapon's
+    /// recharge rate (+0x1A4): a recharging weapon (rate 2.5) says nothing, one without (0.0)
+    /// still complains, and a non-teammate never does.
+    #[test]
+    fn s0024_a_companion_with_a_recharger_says_no_out_of_ammo_line() {
+        for (on, teammate, rate, queued) in [
+            (false, 0u8, 2.5f32, true),
+            (true, 1, 2.5, false),
+            (true, 1, 0.0, true),
+            (true, 1, -0.0, true),
+            (true, 0, 0.0, false),
+        ] {
+            let mut w = ammo_world(2, 1);
+            w.e.set_stewie(engine_core::extend::stewie::FOLLOWER_NO_AMMO_RECHARGER, on);
+            w.e.register(0x0056_6950, |_, _| 1.into_ret());
+            w.e.mem.set_u8(w.actor.addr() + 0x18d, teammate);
+            w.e.mem.set_f32(w.weapon.addr() + 0x1a4, rate);
+            w.e.call_log = Some(vec![]);
+            assert_eq!(w.e.call(0x008a_89a0, &args![w.actor, 2u32]).u32(), 0);
+            let log = calls(&mut w.e);
+            let topics = called(&log, 0x008d_5cb0);
+            assert_eq!(
+                topics == vec![vec![w.actor.addr(), 7]],
+                queued,
+                "on {on} teammate {teammate} rate {rate}"
+            );
+            assert_eq!(called(&log, 0x0056_6950).is_empty(), on);
+        }
     }
 
     #[test]

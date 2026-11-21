@@ -57,6 +57,18 @@ const STICK_VALUE: u32 = 0x011f_2020;
 const STICK_VALUE_GUARD: u32 = 0x011f_2024;
 /// Global object whose `00403e20` accessor supplies the static's value.
 const STICK_VALUE_SOURCE: u32 = 0x011c_fc8c;
+
+/// The stick depth `fn_009ba660` reads at `0x9BA8AA`: the copy cached once in [`STICK_VALUE`].
+/// lStewieAl's Tweaks' row S0074 (`patchFixCombatMissileDepthGamesettings`, `SafeWrite32` at
+/// `0x9BA8AC`): the read takes `fCombatMissileStickDepth`'s own value (the setting at `011cfc8c`,
+/// value at +4) instead, so a change of the setting after the first projectile counts.
+fn stick_depth(e: &mut Engine) -> f32 {
+    if e.stewie(engine_core::extend::stewie::COMBAT_MISSILE_DEPTH_SETTINGS) {
+        e.mem.f32(STICK_VALUE_SOURCE + 4)
+    } else {
+        e.global::<f32>(STICK_VALUE)
+    }
+}
 /// Float global stored in `fStickTime`.
 const STICK_TIME: u32 = 0x0101_7b78;
 /// A global object whose method `007af430` answers with a reference and
@@ -296,7 +308,7 @@ pub fn fn_009ba660(e: &mut Engine, this: Ptr<MissileProjectile>) {
         });
     }
     if !skip_reposition {
-        let static_value = x87_quiet(e.global::<f32>(STICK_VALUE));
+        let static_value = x87_quiet(stick_depth(e));
         e.with_stack(12, |e, first| {
             e.with_stack(12, |e, second| {
                 e.with_stack(12, |e, offset| {
@@ -1272,6 +1284,43 @@ mod tests {
             0x009b_f470,
         ];
         assert_eq!(order(&e, &steps), steps);
+    }
+
+    /// S0074 (`patchFixCombatMissileDepthGamesettings`): `fCombatMissileStickDepth` is 3.5 at the
+    /// first impact and 7.0 by the second (a mod or script changed it). Off, the second impact
+    /// still uses the copy cached at the first, 3.5; on, the setting's own value, 7.0. With the
+    /// game's own data the setting never changes, so both read the same.
+    #[test]
+    fn s0074_the_stick_depth_follows_the_setting() {
+        for (on, second_depth) in [(false, 3.5f32), (true, 7.0)] {
+            let mut e = engine();
+            let s = impact_scene(&mut e);
+            e.set_stewie(
+                engine_core::extend::stewie::COMBAT_MISSILE_DEPTH_SETTINGS,
+                on,
+            );
+            if !e.mem.is_mapped(STICK_VALUE_SOURCE) {
+                e.map(STICK_VALUE_SOURCE & !0xfff, 0x1000);
+            }
+            let value = STICK_VALUE_SOURCE + 4;
+            e.mem.set_f32(value, 3.5);
+            e.register_double(0x0040_3e20, move |_, _| ret(value));
+            e.call(0x009b_a660, &args![s.this]);
+            assert_eq!(calls_to(&e, 0x0045_bb20)[0][2], 3.5f32.to_bits());
+            e.mem.set_f32(value, 7.0);
+            e.call_log = Some(vec![]);
+            e.call(0x009b_a660, &args![s.this]);
+            assert_eq!(
+                calls_to(&e, 0x0045_bb20)[0][2],
+                second_depth.to_bits(),
+                "on {on}"
+            );
+            assert_eq!(
+                e.global::<f32>(STICK_VALUE),
+                3.5,
+                "the cache is kept either way"
+            );
+        }
     }
 
     #[test]
