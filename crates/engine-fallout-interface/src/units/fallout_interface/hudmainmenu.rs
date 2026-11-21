@@ -2790,8 +2790,9 @@ pub fn hud_main_menu_set_region_text(e: &mut Engine, region: Ptr) {
 
 // Translated from 00772aa0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Replaces the HUD's location text when a newly active reference has map
-/// marker data, and clears its fade control while the region text resets.
-pub fn fn_00772aa0(e: &mut Engine, reference: Ptr, state: Ptr) {
+/// marker data, and clears its fade control while the region text resets. cdecl with one stack word,
+/// the state (`007795ee` pushes only its address; ECX is not read).
+pub fn fn_00772aa0(e: &mut Engine, state: Ptr) {
     if e.mem.u32(0x011d_96c0) == 0 {
         return;
     }
@@ -2823,7 +2824,6 @@ pub fn fn_00772aa0(e: &mut Engine, reference: Ptr, state: Ptr) {
     } else if e.mem.u8(state.addr() + 5) != 0 {
         e.mem.set_u32(0x011d_9af0, id);
     }
-    let _ = reference; // ECX is not read by the PC body.
 }
 
 // Translated from 00772c30 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -5563,7 +5563,7 @@ pub fn hud_main_menu_update_compass(
                     e.mem.set_u32(state.addr(), reference);
                     e.mem.set_u8(state.addr() + 4, 0);
                     e.mem.set_u8(state.addr() + 5, location_changed);
-                    e.call(0x0077_2aa0, &args![reference, state]);
+                    e.call(0x0077_2aa0, &args![state]);
                 });
             }
         }
@@ -8411,7 +8411,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0077_2820, fn_00772820(Ptr) -> Ptr),
         entry!(0x0077_2840, hud_main_menu_heading_between_locations(Ptr, Ptr) -> f64),
         entry!(0x0077_28f0, hud_main_menu_set_region_text(Ptr)),
-        entry!(0x0077_2aa0, fn_00772aa0(Ptr, Ptr)),
+        entry!(0x0077_2aa0, fn_00772aa0(Ptr)),
         entry!(0x0077_2c30, hud_main_menu_set_worldspace_text(Ptr)),
         entry!(0x0077_2d10, hud_main_menu_set_target_type(Ptr, bool)),
         entry!(0x0077_3050, fn_00773050()),
@@ -10296,7 +10296,7 @@ mod tests {
         let state: Ptr = Ptr::new(e.mem.alloc(8));
         e.mem.set_u8(state.addr() + 4, 1);
         e.call_log = Some(vec![]);
-        fn_00772aa0(&mut e, Ptr::new(0x2222), state);
+        fn_00772aa0(&mut e, state);
         assert!(e.call_log.as_ref().unwrap().is_empty());
     }
 

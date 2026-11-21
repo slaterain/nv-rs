@@ -202,6 +202,10 @@ fn families(d: Diff) -> Diff {
         // length in its own body: the translation's getter (`0043d4d0`), interpolation (`004b3ab0`),
         // point difference (`00439ef0`) and squared length (`004a7290`) calls are left out.
         .ignore_calls(&[0x0043_d4d0, 0x004b_3ab0, 0x0043_9ef0, 0x004a_7290])
+        // The translated tile getters and setters (reached by address from the translated compass)
+        // find and make the trait value and insert it by plain Rust calls; the typed ones by
+        // `typed_call!` (as in `menu_tiles`).
+        .translation_calls_plainly(&[0x00a0_0f30, 0x00a0_1000, 0x00a0_cd50])
         .float_ulps(ULPS)
 }
 
@@ -271,10 +275,12 @@ fn player(e: &mut Engine, heading: f32, position: [f32; 3], sneaking: bool, own:
     me
 }
 
-/// The heading of a vector (`004b1550`): a stand-in `0.5 x - 0.25 y`, logged.
+/// The heading of a vector (`004b1550`): a stand-in `0.5 x - 0.25 y`, logged with the vector's
+/// three floats (its address is a stack slot, placed differently on the two sides).
 fn heading_of(e: &mut Engine) {
     e.register_double(0x004b_1550, |e, a| {
-        log(e, 0x004b_1550, a);
+        let vector = [e.mem.u32(a[0]), e.mem.u32(a[0] + 4), e.mem.u32(a[0] + 8)];
+        log(e, 0x004b_1550, &vector);
         let (x, y) = (e.mem.f32(a[0]), e.mem.f32(a[0] + 4));
         ret_f(0.5 * f64::from(x) - 0.25 * f64::from(y))
     });
