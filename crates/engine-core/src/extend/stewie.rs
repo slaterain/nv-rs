@@ -303,8 +303,8 @@ pub mod kept {
     pub const COUNT: usize = 2;
 }
 
-/// The last thing each of Tweaks' two Havok warnings printed (its functions' statics), shared by
-/// every thread's engine.
+/// The last thing each of Tweaks' warnings printed (its functions' statics), its print queue and
+/// the missing-data guard's switch, shared by every thread's engine.
 #[derive(Debug)]
 pub(crate) struct Prints {
     /// `[Tweaks] bInvalidBSFadeNodePrints` (Tweaks' code default 1): S0023 prints only with it.
@@ -319,6 +319,12 @@ pub(crate) struct Prints {
     /// Tweaks' print queue (`queuedConsoleMessages`, in its copy of xNVSE's `GameAPI.cpp`): the lines
     /// printed off the main thread or before the console exists, printed by [`print_queued`].
     queued: Mutex<Vec<Vec<u8>>>,
+    /// S0050's `NullLODDataPrintID` `static TESObjectREFR* lastRef`: the reference it saw last, 0
+    /// at start.
+    lod_ref: AtomicU32,
+    /// Tweaks' slips not copied ([`Engine::stewie_slip_guard`]): on with the fixes preset's
+    /// missing-data guard row (`NV_NVSE_NULL_GUARD`, the host's install), off in vanilla.
+    slip_guard: AtomicBool,
 }
 
 impl Default for Prints {
@@ -329,6 +335,8 @@ impl Default for Prints {
             fade_mesh: AtomicU32::new(0),
             shape_model: Mutex::new(Vec::new()),
             queued: Mutex::new(Vec::new()),
+            lod_ref: AtomicU32::new(0),
+            slip_guard: AtomicBool::new(false),
         }
     }
 }
@@ -644,6 +652,19 @@ impl Engine {
     /// Whether S0023 prints ([`Engine::set_stewie_fade_node_prints`]).
     pub fn stewie_fade_node_prints(&self) -> bool {
         self.extend.stewie.3.fade_prints.load(Relaxed)
+    }
+
+    /// The missing-data guard row's part in Tweaks' rows (the host turns it on with
+    /// `NV_NVSE_NULL_GUARD`, every thread's engine shares it): where a row copies a Tweaks slip
+    /// that reads data that is not there (S0237's unchecked child index), the guard passes over the
+    /// missing data. Off, every row is exactly Tweaks.
+    pub fn set_stewie_slip_guard(&self, on: bool) {
+        self.extend.stewie.3.slip_guard.store(on, Relaxed);
+    }
+
+    /// Whether the missing-data guard is on for Tweaks' rows ([`Engine::set_stewie_slip_guard`]).
+    pub fn stewie_slip_guard(&self) -> bool {
+        self.extend.stewie.3.slip_guard.load(Relaxed)
     }
 
     /// Whether the console's print passes over its loading-screen test for this line (S0031's
@@ -1048,5 +1069,102 @@ mod tests {
         assert_eq!(LINES.lock().unwrap()[1], b"now".to_vec());
         print_queued(&mut e);
         assert_eq!(LINES.lock().unwrap().len(), 2);
+    }
+
+    /// Review of #842: off the main thread the line waits even with the console made (Tweaks'
+    /// `isMainThread` test), and the main loop's drain prints it once.
+    #[test]
+    fn a_line_printed_off_the_main_thread_waits_for_the_drain() {
+        use crate::abi::Ret;
+        static LINES: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
+        let mut e = Engine::new();
+        e.register(CONSOLE_INSTANCE, |_, _| Ret {
+            eax: 0x4000,
+            ..Ret::default()
+        });
+        e.register(CONSOLE_PRINT, |e, a| {
+            LINES.lock().unwrap().push(text(e, e.mem.u32(a[2])));
+            Ret::default()
+        });
+        e.mem.map(CONSOLE_SINGLETON & !0xfff, 0x1000);
+        e.mem.set_u32(CONSOLE_SINGLETON, 0x4000);
+        e.kernel.threads.current = 1;
+        assert!(!crate::thread_host::on_main(&e));
+        e.call_log = Some(vec![]);
+        console_queue_or_print(&mut e, b"from a worker");
+        assert!(e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .all(|(a, _)| *a != CONSOLE_PRINT));
+        assert!(LINES.lock().unwrap().is_empty(), "queued, not printed");
+        e.kernel.threads.current = 0;
+        print_queued(&mut e);
+        print_queued(&mut e);
+        assert_eq!(*LINES.lock().unwrap(), vec![b"from a worker".to_vec()]);
+    }
+
+    /// S0050's line: the reference's id and its last file's name (`GetFile(-1)`), an empty name
+    /// without a file; not again for the reference seen last; at most 255 bytes; queued before the
+    /// console exists.
+    #[test]
+    fn the_lod_warning_names_the_reference_and_its_last_file_once_in_a_row() {
+        use crate::abi::Ret;
+        static LINES: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
+        static FILE: AtomicU32 = AtomicU32::new(0);
+        let mut e = Engine::new();
+        e.register(CONSOLE_INSTANCE, |_, _| Ret {
+            eax: 0x4000,
+            ..Ret::default()
+        });
+        e.register(CONSOLE_PRINT, |e, a| {
+            LINES.lock().unwrap().push(text(e, e.mem.u32(a[2])));
+            Ret::default()
+        });
+        e.register(0x0048_4e60, |_, a| {
+            assert_eq!(a[1], u32::MAX, "the last file");
+            Ret {
+                eax: FILE.load(Relaxed),
+                ..Ret::default()
+            }
+        });
+        e.mem.map(CONSOLE_SINGLETON & !0xfff, 0x1000);
+        e.mem.set_u32(CONSOLE_SINGLETON, 0x4000);
+        let first = e.mem.alloc(0x20);
+        e.mem.set_u32(first + 0xc, 0x0012_ab34);
+        let second = e.mem.alloc(0x20);
+        e.mem.set_u32(second + 0xc, 0xff00_0001);
+        let file = e.mem.alloc(0x200);
+        for (i, b) in b"Mod.esp".iter().enumerate() {
+            e.mem.set_u8(file + 0x20 + i as u32, *b);
+        }
+        FILE.store(file, Relaxed);
+        lod_warning(&mut e, first);
+        lod_warning(&mut e, first);
+        FILE.store(0, Relaxed);
+        lod_warning(&mut e, second);
+        lod_warning(&mut e, first);
+        assert_eq!(
+            *LINES.lock().unwrap(),
+            vec![
+                b"Warning: reference 0012AB34 has LOD but is disabled by plugin Mod.esp".to_vec(),
+                b"Warning: reference FF000001 has LOD but is disabled by plugin ".to_vec(),
+                b"Warning: reference 0012AB34 has LOD but is disabled by plugin ".to_vec(),
+            ]
+        );
+        // A long name: the line is cut at 255 bytes, as Tweaks' buffer cuts it.
+        for i in 0..0x103 {
+            e.mem.set_u8(file + 0x20 + i, b'x');
+        }
+        FILE.store(file, Relaxed);
+        lod_warning(&mut e, second);
+        assert_eq!(LINES.lock().unwrap()[3].len(), 255);
+        // Before the console exists the line waits for the main loop's drain.
+        e.mem.set_u32(CONSOLE_SINGLETON, 0);
+        lod_warning(&mut e, first);
+        assert_eq!(LINES.lock().unwrap().len(), 4);
+        print_queued(&mut e);
+        assert_eq!(LINES.lock().unwrap().len(), 5);
     }
 }
