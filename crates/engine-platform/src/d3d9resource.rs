@@ -211,6 +211,9 @@ pub struct Resources {
     /// block, and those that did not; the bytes compared.
     round_trips: [u64; 2],
     round_trip_bytes: u64,
+    /// The last `Set*ShaderConstant*` the model took set every register to the words it already
+    /// held (each set before): its forwarding may leave it out (`super::d3d9device::skip_repeats`).
+    constants_repeat: bool,
 }
 
 fn resources(e: &mut Engine) -> &mut Resources {
@@ -1220,25 +1223,31 @@ fn set_constants(e: &mut Engine, this: Ptr, kind: u8, start: u32, data: Ptr, cou
             b.constants_set = vec![0; 6 * CONSTANT_SLOTS / 64];
         }
         let at = data.addr();
+        let mut same = all_set(&b.constants_set, first, count as usize);
         let registers = &mut b.constants[first..first + count as usize];
         if words == 4 {
             for (i, value) in registers.iter_mut().enumerate() {
                 let at = at + 16 * i as u32;
-                *value = [
+                let new = [
                     mem.u32(at),
                     mem.u32(at + 4),
                     mem.u32(at + 8),
                     mem.u32(at + 12),
                 ];
+                same &= *value == new;
+                *value = new;
             }
         } else {
             for (i, value) in registers.iter_mut().enumerate() {
-                *value = [mem.u32(at + 4 * i as u32), 0, 0, 0];
+                let new = [mem.u32(at + 4 * i as u32), 0, 0, 0];
+                same &= *value == new;
+                *value = new;
             }
         }
         for slot in first..first + count as usize {
             b.constants_set[slot / 64] |= 1 << (slot % 64);
         }
+        device_objects.resources.constants_repeat = same;
         return D3D_OK;
     }
     // Otherwise the registers are read first (a fault stops the run with the bindings as they
@@ -1256,12 +1265,23 @@ fn set_constants(e: &mut Engine, this: Ptr, kind: u8, start: u32, data: Ptr, cou
         b.constants = vec![[0; 4]; 6 * CONSTANT_SLOTS];
         b.constants_set = vec![0; 6 * CONSTANT_SLOTS / 64];
     }
+    let mut same = all_set(&b.constants_set, first, count as usize);
     for (i, value) in values.iter().enumerate().take(count as usize) {
         let slot = first + i;
+        same &= b.constants[slot] == *value;
         b.constants[slot] = *value;
         b.constants_set[slot / 64] |= 1 << (slot % 64);
     }
+    resources(e).constants_repeat = same;
     D3D_OK
+}
+
+/// Whether every register `first..first + count` was set before (its bit in `set`).
+fn all_set(set: &[u64], first: usize, count: usize) -> bool {
+    (first..first + count).all(|slot| {
+        set.get(slot / 64)
+            .is_some_and(|w| w & (1 << (slot % 64)) != 0)
+    })
 }
 
 /// The registers `start..start + count` of a constant kind as the device's bindings hold them
@@ -1560,7 +1580,11 @@ macro_rules! forwarded_constants {
     ($($name:ident = $set:ident, $kind:expr;)*) => {$(
         pub(super) fn $name(e: &mut Engine, this: Ptr, start: u32, data: Ptr, count: u32) -> u32 {
             let model = $set(e, this, start, data, count);
-            if model == D3D_OK {
+            // Registers set again to the words they hold are not passed on: in a crowded street
+            // about half the frame's 6,500 constant sets (measured 2026-11-20).
+            let repeat = std::mem::take(&mut resources(e).constants_repeat)
+                && super::d3d9device::skip_repeats(e);
+            if model == D3D_OK && !repeat {
                 super::d3d9real::set_constants(e, this.addr(), $kind, start, data.addr(), count, model);
             }
             model

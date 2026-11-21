@@ -190,13 +190,18 @@ pub fn prepare_streams(
         let chip = e.mem.u32(chips.wrapping_add(stream.wrapping_mul(4)));
         let buffer = e.mem.u32(chip.wrapping_add(8));
         let device = e.mem.u32(base.wrapping_add(0x14));
-        e.vcall(device, 0x190, &args![stream, buffer, 0u32, stride]);
+        engine_core::real_threads::device_vcall(
+            e,
+            device,
+            0x190,
+            &args![stream, buffer, 0u32, stride],
+        );
         count = e.mem.u32(result.wrapping_add(0x20));
         stream += 1;
     }
     let device = e.mem.u32(base.wrapping_add(0x14));
     let declaration = e.mem.u32(result.wrapping_add(0x34));
-    e.vcall(device, 0x1a0, &args![declaration]);
+    engine_core::real_threads::device_vcall(e, device, 0x1a0, &args![declaration]);
     result
 }
 
