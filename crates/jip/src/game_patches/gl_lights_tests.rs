@@ -340,6 +340,34 @@ fn h04_set_editor_id_registers_the_form() {
     assert!(calls(MAP_NEW_NODE).is_empty());
 }
 
+/// With JohnnyGuitar's editor ids in (their row on), JIP leaves H04 out, as it does with
+/// JohnnyGuitar loaded (`if (!GetModuleHandle("johnnyguitar"))`): the light form keeps the
+/// game's size (the site does not answer) and the light class's two editor-id slots stay the
+/// exe's, for JohnnyGuitar's getter and setter. JIP's lookup by name asks their store.
+#[test]
+fn h04_left_out_with_johnnyguitars_editor_ids() {
+    let mut e = engine();
+    e.register(GAME_ANIMATED_LIGHTS, |_, _| Ret::default());
+    engine_core::editor_ids::store(&mut e).set_on(true);
+    crate::install_as(&mut e, true);
+    assert_eq!(e.site(LIGHT_FORM_SIZE.addr(), &[]), None);
+    assert_eq!(e.mem.u32(GET_EDITOR_ID_SLOT), 0);
+    assert_eq!(e.mem.u32(SET_EDITOR_ID_SLOT), 0);
+    assert_eq!(
+        e.mem.u32(DESTROY_SLOT),
+        DESTROY_ROUTINE,
+        "the rest of JIP's lights stay"
+    );
+    assert!(e.site(CLONE_WORD.addr(), &[]).is_some());
+    e.map(AT, 0x1_0000);
+    let form = e.mem.alloc(LIGHT_FORM_BYTES);
+    let store = engine_core::editor_ids::store(&mut e);
+    store.add_name(form, b"MyLamp");
+    store.map_insert(form, b"MyLamp");
+    let lower = text(&mut e, "mylamp");
+    assert_eq!(editor_id_lookup_at(&mut e, lower), form);
+}
+
 // ---- H07 the destructor ----
 
 /// The destructor body always; 0x110 bytes freed with flag bit 0 for a light not of JIP's; a
@@ -440,6 +468,60 @@ fn h06_ties_the_tagged_lights_to_their_forms() {
     assert_eq!(e.mem.u32(tied + BASE_LIGHT), 0);
     // No 3D: nothing.
     assert_eq!(e.site(LOAD_NIF.addr(), &[0]), Some(0));
+}
+
+/// With JohnnyGuitar's editor ids in (their row on), JohnnyGuitar's InitLights: every form has
+/// a name, so a light is tied only to a light form (type 0x1E). A static owning the `LIGH_EDID`
+/// name leaves the light untied (the extra still removed); a light form's name ties. With the
+/// store off, JIP's own: the same name ties to whatever form the game's map gives.
+#[test]
+fn h06_with_johnnyguitar_ties_only_to_a_light_form() {
+    let mut e = world();
+    engine_core::editor_ids::store(&mut e).set_on(true);
+    let stat = e.mem.alloc(LIGHT_FORM_BYTES);
+    e.mem.set_u8(stat + 4, 0x20);
+    let lamp = e.mem.alloc(LIGHT_FORM_BYTES);
+    e.mem.set_u8(lamp + 4, 0x1e);
+    let store = engine_core::editor_ids::store(&mut e);
+    for (form, name) in [(stat, &b"Shared01"[..]), (lamp, &b"Lamp01"[..])] {
+        store.add_name(form, name);
+        store.map_insert(form, name);
+    }
+    let by_static = point_light(&mut e);
+    let shared = text(&mut e, "Shared01");
+    let x = extra(&mut e, STRING_EXTRA_VTABLE, "LIGH_EDID", shared);
+    set_extras(&mut e, by_static, &[x]);
+    let by_lamp = point_light(&mut e);
+    let lamp_text = text(&mut e, "lamp01");
+    let y = extra(&mut e, STRING_EXTRA_VTABLE, "LIGH_EDID", lamp_text);
+    set_extras(&mut e, by_lamp, &[y]);
+    let root = node(&mut e, &[by_static, by_lamp]);
+    assert_eq!(e.site(LOAD_NIF.addr(), &[root]), Some(0));
+    assert_eq!(
+        e.mem.u32(by_static + BASE_LIGHT),
+        0,
+        "a static is not a light"
+    );
+    assert_eq!(e.mem.u8(by_static + FLAGS_HIGH), 0);
+    assert_eq!(e.mem.u32(by_lamp + BASE_LIGHT), lamp);
+    assert_eq!(e.mem.u8(by_lamp + FLAGS_HIGH), 0x20);
+    assert_eq!(
+        calls(REMOVE_EXTRA_AT),
+        vec![vec![by_static, 0], vec![by_lamp, 0]]
+    );
+
+    // The store off: JIP's own tie, to any form of the game's map.
+    let mut e = world();
+    let stat = e.mem.alloc(LIGHT_FORM_BYTES);
+    e.mem.set_u8(stat + 4, 0x20);
+    editor_map(&mut e, &[("Shared01", stat)]);
+    let light = point_light(&mut e);
+    let shared = text(&mut e, "Shared01");
+    let x = extra(&mut e, STRING_EXTRA_VTABLE, "LIGH_EDID", shared);
+    set_extras(&mut e, light, &[x]);
+    let root = node(&mut e, &[light]);
+    assert_eq!(e.site(LOAD_NIF.addr(), &[root]), Some(0));
+    assert_eq!(e.mem.u32(light + BASE_LIGHT), stat);
 }
 
 /// The parents are marked up to the root and no further, and stop at one marked already.

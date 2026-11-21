@@ -3962,7 +3962,11 @@ pub fn tes_object_cell_save_render_failure_data(e: &mut Engine, record: Ptr) {
             );
         } else {
             let world_space = e.call(CELL_GET_WORLD_SPACE, &args![cell]).u32();
-            let name_pointer = e.call(CELL_NAME_POINTER, &args![cell]).u32();
+            // JohnnyGuitar NVSE's getter seam at the call `0x558796`.
+            let name_pointer = match e.site(0x0055_8796, &[cell]) {
+                Some(name) => name,
+                None => e.call(CELL_NAME_POINTER, &args![cell]).u32(),
+            };
             if e.mem.u8(name_pointer) != 0 {
                 let cell_name = e.vcall(cell, NAME_SLOT, &[]).u32();
                 let y = e.call(CELL_GET_DATA_Y, &args![cell]).u32();
@@ -9648,6 +9652,36 @@ mod tests {
                 9
             ]
         );
+    }
+
+    /// JohnnyGuitar NVSE's getter seam at the call `0x558796`: an exterior cell whose own name
+    /// (`00401280`) is empty is named in the file when the seam answers its editor id; with no
+    /// handler there, the exe's empty name leaves it out.
+    #[test]
+    fn the_jg_seam_names_an_exterior_cell_in_the_file() {
+        use engine_core::extend::{Owner, SiteSlot};
+        for with_seam in [true, false] {
+            let mut e = engine();
+            let (record, cell, _) = failure_setup(&mut e, false, b"Goodsprings");
+            let empty = e.mem.alloc(4);
+            e.mem.set_u8(empty, 0);
+            e.mem.set_u32(cell + 0x38, empty);
+            if with_seam {
+                e.on_site(SiteSlot::new(Owner::JohnnyGuitar, 0x0055_8796), |e, a| {
+                    Some(e.mem.u32(a[0] + 0x3c))
+                });
+            }
+            start_log(&mut e);
+            e.call(0x0055_86e0, &args![record]);
+            let log = calls(&e);
+            let format = calls_to(&log, FORMAT_TEXT)[0][2];
+            let want = if with_seam {
+                EXTERIOR_NAMED_FILE_FORMAT
+            } else {
+                EXTERIOR_FILE_FORMAT
+            };
+            assert_eq!(format, want, "{with_seam}");
+        }
     }
 
     #[test]
