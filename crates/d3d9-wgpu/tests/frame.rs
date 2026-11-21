@@ -5729,3 +5729,160 @@ fn draw_records_give_wgpu_what_each_draw_resolved_afresh_gives() {
     assert_eq!(replay(false), off, "the recording replayed, records off");
     assert_eq!(replay(true), off, "the recording replayed, records on");
 }
+
+/// A draw into the A8R8G8B8 target, then with nothing between but `SetRenderTarget` a draw into
+/// a 16 by 16 A16B16G16R16F target texture, then with nothing between but a `Clear` of it a third
+/// draw, the draw records off or on. The bytes of the half-float target after its first draw and
+/// after the clear and its second, and the digests.
+fn records_target_script(records: bool) -> Option<(Vec<u8>, Vec<u8>, Vec<u64>)> {
+    const HALF: u32 = 0x1630;
+    let mut g = Gpu::new(16, 1)?;
+    {
+        let d = g.b.device().expect("the device");
+        d.set_draw_records(records);
+        d.record_draw_digests(true);
+    }
+    target_texture(&mut g, HALF, HALF + 1, 16, A16B16G16R16F);
+    g.state(ZENABLE, 0);
+    g.clear(3, 0, 1.0);
+    g.colour([1.0, 0.0, 0.0, 1.0]);
+    g.cover(0.5);
+    g.run(Cmd::SetRenderTarget {
+        device: DEVICE,
+        index: 0,
+        surface: HALF + 1,
+    });
+    g.cover(0.5);
+    let read = |g: &mut Gpu| {
+        let d = g.b.device().expect("the device");
+        d.read_surface_pixels(HALF + 1)
+            .expect("the target's pixels")
+            .2
+    };
+    let first = read(&mut g);
+    g.clear(1, 0, 1.0);
+    g.cover(0.5);
+    let second = read(&mut g);
+    let d = g.b.device().expect("the device");
+    assert_eq!(d.wgpu_errors(), 0);
+    Some((first, second, d.take_draw_digests()))
+}
+
+/// The draw records give wgpu what resolving each draw afresh gives it when only the render
+/// target changes between two draws (its format is in the pipeline's key) and when only a clear
+/// comes between two: the same digests and bytes off and on, and the half-float target red.
+#[test]
+fn draw_records_follow_a_target_change_and_a_clear_between_two_draws() {
+    let Some((off_first, off_second, off)) = records_target_script(false) else {
+        return;
+    };
+    let Some((on_first, on_second, on)) = records_target_script(true) else {
+        return;
+    };
+    assert_eq!(off.len(), 3, "every draw noted");
+    assert_eq!(on, off, "the digests, draw by draw");
+    assert_eq!(on_first, off_first, "the target after its first draw");
+    assert_eq!(
+        on_second, off_second,
+        "the target after the clear and its second draw"
+    );
+    // A16B16G16R16F: red 1.0 (0x3C00), green and blue 0, alpha 1.0, at every pixel.
+    let red = [0x00, 0x3C, 0, 0, 0, 0, 0x00, 0x3C];
+    for bytes in [&on_first, &on_second] {
+        assert_eq!(bytes.len(), 16 * 16 * 8);
+        assert!(bytes.chunks_exact(8).all(|p| p == red), "{:?}", &bytes[..8]);
+    }
+}
+
+/// Two draws into a 1 by 1 target texture that also sample it, nothing between them but the
+/// second's vertices, the draw records off or on: each adds the vertex texture's red (64) to what
+/// it samples, so the second must sample what the first drew (a copy made just before it, not the
+/// copy made before the first). The target's bytes and the digests.
+fn records_sampled_target_script(records: bool) -> Option<(Vec<u8>, Vec<u64>)> {
+    const QUARTER: u32 = 0x1640;
+    const LOOP: u32 = 0x1650;
+    let mut g = Gpu::new(16, 1)?;
+    {
+        let d = g.b.device().expect("the device");
+        d.set_draw_records(records);
+        d.record_draw_digests(true);
+    }
+    stage_samplers(&mut g);
+    // The vertex texture: red 64, the rest 0 (B, G, R, A).
+    let levels = words(&[QUARTER + 1]);
+    g.run(Cmd::CreateTexture {
+        device: DEVICE,
+        texture: QUARTER,
+        levels: Data::Bytes(&levels),
+        width: 1,
+        height: 1,
+        usage: 0,
+        format: A8R8G8B8,
+        pool: 1,
+    });
+    g.run(Cmd::UploadSurface {
+        surface: QUARTER + 1,
+        row: 4,
+        rows: 1,
+        data: Data::Bytes(&[0, 0, 64, 0]),
+    });
+    g.run(Cmd::SetTexture {
+        device: DEVICE,
+        sampler: 257,
+        texture: QUARTER,
+    });
+    target_texture(&mut g, LOOP, LOOP + 1, 1, A8R8G8B8);
+    g.run(Cmd::SetRenderTarget {
+        device: DEVICE,
+        index: 0,
+        surface: LOOP + 1,
+    });
+    g.run(Cmd::SetDepthStencilSurface {
+        device: DEVICE,
+        surface: 0,
+    });
+    g.state(ZENABLE, 0);
+    g.clear(1, 0, 1.0);
+    for (pixel, shader) in [(false, VS + 2), (true, PS + 6)] {
+        g.run(Cmd::SetShader {
+            device: DEVICE,
+            pixel,
+            shader,
+        });
+    }
+    g.run(Cmd::SetTexture {
+        device: DEVICE,
+        sampler: 0,
+        texture: LOOP,
+    });
+    g.cover(0.5);
+    g.cover(0.5);
+    let d = g.b.device().expect("the device");
+    let bytes = d
+        .read_surface_pixels(LOOP + 1)
+        .expect("the target's pixel")
+        .2;
+    assert_eq!(d.wgpu_errors(), 0);
+    Some((bytes, d.take_draw_digests()))
+}
+
+/// The draw records keep no bind group for a draw that samples one of its own colour targets:
+/// the second of two draws of one record samples a copy of what the first drew, records off
+/// and on (red 64 + 64).
+#[test]
+fn draw_records_keep_no_groups_for_a_draw_sampling_its_own_target() {
+    let Some((off_bytes, off)) = records_sampled_target_script(false) else {
+        return;
+    };
+    let Some((on_bytes, on)) = records_sampled_target_script(true) else {
+        return;
+    };
+    assert_eq!(off.len(), 2, "every draw noted");
+    assert_eq!(on, off, "the digests, draw by draw");
+    assert_eq!(
+        off_bytes,
+        [0, 0, 128, 0],
+        "records off: the second draw saw the first's red"
+    );
+    assert_eq!(on_bytes, off_bytes, "records on");
+}
