@@ -415,6 +415,14 @@ pub const ROWS: &[Row] = &[
         summary: "the Pip-Boy map no longer resets the radio volume while some holotapes play",
     },
     Row {
+        bit: stewie::NEW_GAME_LAST_EXTERIOR_DOOR,
+        function: "WorldMapNoExteriorDoorFix",
+        plan: "S0218",
+        key: "bWorldMapNoExteriorDoorFix",
+        tweaks: None,
+        summary: "a new game's world map knows where the player is (Doc Mitchell's door, or TTW's Vault 101 cave door)",
+    },
+    Row {
         bit: stewie::SETTINGS_SAVE_ERROR_NAMES_FILE,
         function: "MoreDescriptiveSettingsSaveError",
         plan: "S0883",

@@ -1990,6 +1990,7 @@ controller's input.
 | `CrosshairProjectileNameFix` | S0197 | `bCrosshairProjectileNameFix` | `HUDMainMenu::SetInfoForRef` (`0x776EE2`) | A projectile under the crosshair is named after its weapon only for thrown weapons; others take their own name |
 | `RecipeMenuRefreshFix` | S0200 | `bRecipeMenuRefreshFix` | `00728a30` (`0x728A4E`), the recipe list's fill `00727680` (`0x7276A6`, `0x7278A9`) | After crafting, the rebuilt recipe list keeps the workbench's recipes (the game listed every category's), the chosen filter and its scroll position |
 | `patchFixRadioVolumeResetWhenUsingSomeHolotapes` | S0208 | `bFixRadioVolumeResetWhenUsingSomeHolotapes` | `MapMenu::UpdatePlayingSounds` `0079a660` (`0x79A750`) | The Pip-Boy map's sound update no longer sets the radio's volume back when its notes stop, so some holotapes no longer reset it |
+| `WorldMapNoExteriorDoorFix` | S0218 | `bWorldMapNoExteriorDoorFix` | `RaceSexMenu`'s deleting destructor `007ac530` (`0x7AC53A`) | When the face menu closes, a player without a last exterior door gets Doc Mitchell's front door (in his house) or, with TTW's Fallout3.esm, the Vault 101 cave's exterior door (in Vault 101), and the map its world space; a new game's world map then knows where the player is |
 | `MoreDescriptiveSettingsSaveError` | S0883 | `bMoreDescriptiveSettingsSaveError` | the settings save `007d6d70` (`0x7D6E50`) | The "could not save settings" message names the ini file, and says when it is read-only or missing |
 
 ## Credits

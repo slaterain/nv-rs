@@ -190,3 +190,7 @@ pub const CONSOLE_IN_FRONT_OF_MAIN_MENU: Row = Row::share(MENUS_FIXES, MENUS_FIX
 /// `0x717CB0`, `0x717CC8`): the pad's B button honours the input's menu mode debounce, so B
 /// closing the console does not also close the menu under it.
 pub const PAD_B_MENU_DEBOUNCE: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 51);
+/// S0218 `WorldMapNoExteriorDoorFix` (`RaceSexMenu`'s deleting destructor `007ac530` at
+/// `0x7AC53A`): when the face menu closes a player without a last exterior door gets Doc
+/// Mitchell's (or TTW's Vault 101 cave door), so the world map has somewhere to show them.
+pub const NEW_GAME_LAST_EXTERIOR_DOOR: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 52);
