@@ -1214,8 +1214,11 @@ struct Prepared {
     precision: d3dx_tex::Precision,
     device: u32,
     cube: bool,
-    made: Result<(CachedTexture, Vec<Vec<u8>>), d3dx_tex::Error>,
+    made: TranslatedTexture,
 }
+
+/// What [`translated_texture`] answers.
+type TranslatedTexture = Result<(CachedTexture, Vec<Vec<u8>>), d3dx_tex::Error>;
 
 thread_local! {
     static PREPARED: std::cell::RefCell<Option<Prepared>> = const { std::cell::RefCell::new(None) };
@@ -1264,7 +1267,7 @@ fn take_prepared(
     precision: d3dx_tex::Precision,
     device: u32,
     caps: &d3dx_tex::Caps,
-) -> Option<Result<(CachedTexture, Vec<Vec<u8>>), d3dx_tex::Error>> {
+) -> Option<TranslatedTexture> {
     let p = PREPARED.with(|p| p.borrow_mut().take())?;
     let same_caps = CAPS_SEEN
         .lock()
