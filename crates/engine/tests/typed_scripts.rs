@@ -590,6 +590,14 @@ const TEXTS: &[&str] = &[
     "2147483647 1 +",
     "0.5 ~",
     "1 2 < 3 4 > ||",
+    // Equal integer literals, so each comparison's equal case on two integers is seen (the
+    // generated `I I` cases did not reach the integer comparisons: a planted `<` to `<=` passed).
+    "2 2 <",
+    "2 2 <=",
+    "2 2 >",
+    "2 2 >=",
+    "2 2 ==",
+    "2 2 !=",
     "2 2.0 ==",
     "1 0 /",
     "1 0 %",
