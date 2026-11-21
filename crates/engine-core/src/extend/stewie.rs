@@ -299,8 +299,11 @@ pub mod kept {
     pub const RUMBLE_STATES: usize = 0;
     /// S0107.04's `static NiFixedString strSpeaker` (4 bytes: the handle of "Bip01 Speaker").
     pub const SPEAKER_NAME: usize = 1;
+    /// S0089.01's `int g_savedAmmoCount` (4 bytes): the player's saved count of loaded rounds plus
+    /// one (0: none, Tweaks' -1), read by S0089.07.
+    pub const SAVED_AMMO_COUNT: usize = 2;
     /// How many.
-    pub const COUNT: usize = 2;
+    pub const COUNT: usize = 3;
 }
 
 /// The last thing each of Tweaks' warnings printed (its functions' statics), its print queue and
@@ -656,7 +659,8 @@ impl Engine {
 
     /// The missing-data guard row's part in Tweaks' rows (the host turns it on with
     /// `NV_NVSE_NULL_GUARD`, every thread's engine shares it): where a row copies a Tweaks slip
-    /// that reads data that is not there (S0237's unchecked child index), the guard passes over the
+    /// that reads data that is not there (S0237's unchecked child index; S0216's convex list key
+    /// equal to the child count and a list's missing child), the guard passes over the
     /// missing data. Off, every row is exactly Tweaks.
     pub fn set_stewie_slip_guard(&self, on: bool) {
         self.extend.stewie.3.slip_guard.store(on, Relaxed);

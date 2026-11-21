@@ -1447,6 +1447,96 @@ fn records_compare_with_handles_renamed() {
     assert!(wire::compare_renamed(&b"not a stream at all"[..], &ra[..]).is_err());
 }
 
+/// One step of [`regrown`]'s records: a buffer made at an address, bound and drawn from, or ended.
+#[derive(Clone, Copy)]
+enum Step {
+    Make(u32),
+    Draw(u32),
+    End(u32),
+}
+
+/// A record of `steps` (a dynamic vertex buffer's growth: the old one ended, a bigger one made).
+fn regrown(steps: &[Step]) -> Vec<u8> {
+    let device = 0x2000_0010;
+    let mut cmds = Vec::new();
+    let mut made = 0;
+    for step in steps {
+        match *step {
+            Step::Make(buffer) => {
+                cmds.push(Cmd::CreateBuffer {
+                    device,
+                    buffer,
+                    index: false,
+                    length: if made == 0 { 2736 } else { 144_000 },
+                    usage: 0x208,
+                    format: 0,
+                    pool: 0,
+                });
+                made += 1;
+            }
+            Step::Draw(buffer) => {
+                cmds.push(Cmd::SetStreamSource {
+                    device,
+                    stream: 0,
+                    buffer,
+                    offset: 0,
+                    stride: 36,
+                });
+                cmds.push(Cmd::DrawPrimitive {
+                    device,
+                    kind: 4,
+                    start: 0,
+                    count: 2,
+                });
+            }
+            Step::End(object) => cmds.push(Cmd::Destroy { object }),
+        }
+    }
+    file_of(&cmds)
+}
+
+/// With the world's draw on the drawing thread an object the drawing side lets go of ends at the
+/// join, so in the posted run's record its `Destroy` comes later and the bigger buffer the serial run
+/// makes at the freed address lies elsewhere (the late gate's second difference, 2026-11-16): the
+/// plain comparison stops there, the one with deferred ends finds the records alike. It still finds
+/// an end earlier in B, an end missing from one record, and a use of an object after its end.
+#[test]
+fn records_compare_with_deferred_ends() {
+    use Step::{Draw, End, Make};
+    let (x, y) = (0x2400_0100u32, 0x2400_0200u32);
+    let serial = regrown(&[Make(x), Draw(x), End(x), Make(x), Draw(x)]);
+    let posted = regrown(&[Make(x), Draw(x), Make(y), Draw(y), End(x)]);
+    let (_, plain) = wire::compare_renamed(&serial[..], &posted[..]).unwrap();
+    assert_eq!(
+        plain.expect("a difference").index,
+        3,
+        "the plain one stops at the end"
+    );
+    let (alike, diff, ends) =
+        wire::compare_renamed_ends_deferred(&serial[..], &posted[..]).unwrap();
+    assert_eq!(diff, None);
+    assert_eq!((alike, ends.later), (6, 1));
+    // An end earlier in B than in A.
+    let (_, diff, _) = wire::compare_renamed_ends_deferred(&posted[..], &serial[..]).unwrap();
+    assert!(diff
+        .expect("earlier")
+        .a
+        .expect("why")
+        .contains("earlier in B"));
+    // An end in one record only.
+    let kept = regrown(&[Make(x), Draw(x), Make(y), Draw(y)]);
+    let (_, diff, _) = wire::compare_renamed_ends_deferred(&serial[..], &kept[..]).unwrap();
+    assert!(diff
+        .expect("one only")
+        .a
+        .expect("why")
+        .contains("one record only"));
+    // B draws from the ended buffer: another name there.
+    let stale = regrown(&[Make(x), Draw(x), End(x), Make(y), Draw(x)]);
+    let (alike, diff, _) = wire::compare_renamed_ends_deferred(&serial[..], &stale[..]).unwrap();
+    assert_eq!((alike, diff.map(|d| d.index)), (4, Some(5)));
+}
+
 /// TEST DATA: a backend with idle work for its first `turns` idle calls, counting them.
 struct Idler {
     turns: u64,

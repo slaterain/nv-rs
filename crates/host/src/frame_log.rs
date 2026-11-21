@@ -148,8 +148,9 @@ impl FrameLog {
         })
     }
 
-    /// One frame's line.
-    pub fn record(&mut self, e: &mut Engine) {
+    /// One frame's line; `stages` the stage marks' take of the frame (the host takes them once a frame, for this
+    /// log and the hitch log).
+    pub fn record(&mut self, e: &mut Engine, stages: Option<&[(f64, u64)]>) {
         let us = e.clock_now_us();
         let delta = e.mem.f32(MAIN_TIMER_DELTA);
         let count = e.mem.u32(STEP_COUNT);
@@ -179,7 +180,7 @@ impl FrameLog {
             shown.map_or(0, |s| s.0),
             qpc(shown.map(|s| s.1)),
             delay.map_or(String::new(), |d| d.to_string()),
-            stage_values(),
+            stage_values(stages),
         );
         self.frame += 1;
         if self.frame % SUMMARY_EVERY == 0 {
@@ -210,11 +211,11 @@ fn stage_titles() -> String {
 }
 
 /// The stage columns' values since the last line (`NV_STAGE_TIME` on), each after a tab; empty off.
-fn stage_values() -> String {
-    if !engine::stage_time::on() {
+fn stage_values(stages: Option<&[(f64, u64)]>) -> String {
+    let (true, Some(stages)) = (engine::stage_time::on(), stages) else {
         return String::new();
-    }
-    engine::stage_time::take()
+    };
+    stages
         .iter()
         .map(|(us, n)| format!("\t{us:.1}\t{n}"))
         .collect()
