@@ -5463,6 +5463,7 @@ fn device_vcall_direct(e: &mut Engine, this: u32, slot: u32, args: &[u32]) -> Re
 /// [`device_set_render_state`] and its kin call the second where [`device_vcall`] would have run
 /// the first: the same function, the same order, the same locks; only the slot's look-ups and the
 /// packing of the arguments into words go.
+#[allow(clippy::type_complexity)]
 pub struct DeviceWriter {
     /// Where the layer put its device functions: slot byte offset `s`'s at `code + s` (the device's
     /// vtable holds these words while nothing replaced them).
@@ -5473,7 +5474,6 @@ pub struct DeviceWriter {
     pub texture: (AbiFn, fn(&mut Engine, u32, u32, u32) -> u32),
     pub stream_source: (AbiFn, fn(&mut Engine, u32, u32, u32, u32, u32) -> u32),
     pub draw_primitive: (AbiFn, fn(&mut Engine, u32, u32, u32, u32) -> u32),
-    #[allow(clippy::type_complexity)]
     pub draw_indexed_primitive: (
         AbiFn,
         fn(&mut Engine, u32, u32, u32, u32, u32, u32, u32) -> u32,
@@ -5554,7 +5554,7 @@ fn device_typed(
         return e.vcall(this, slot, args);
     };
     e.call_stack.push(addr);
-    let ret = if std::ptr::fn_addr_eq(f, expect) {
+    let ret = if crate::abi::same_fn(f, expect) {
         crate::abi::RetVal::into_ret(typed(e, w))
     } else {
         f(e, words)

@@ -605,6 +605,13 @@ pub fn extra_words(e: &crate::Engine, callee: u32, given: usize, taken: usize) {
     }
 }
 
+/// Whether `a` and `b` are the same function (by address: what a slot's registration holds, as
+/// `crate::real_threads::DeviceWriter` compares it).
+#[inline(always)]
+pub fn same_fn(a: AbiFn, b: AbiFn) -> bool {
+    a as usize == b as usize
+}
+
 /// Builds argument words: `args![this, 1.5f32, true]`.
 #[macro_export]
 macro_rules! args {

@@ -981,7 +981,7 @@ impl Engine {
         typed: impl FnOnce(&mut Engine) -> u32,
     ) -> Ret {
         if let Some(f) = self.cached(addr) {
-            if std::ptr::fn_addr_eq(f, expect) && !self.diagnosing() {
+            if crate::abi::same_fn(f, expect) && !self.diagnosing() {
                 let left = self
                     .slice_left
                     .checked_sub(u64::from(self.slice_hook.is_some()));
