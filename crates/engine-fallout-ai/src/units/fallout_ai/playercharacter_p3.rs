@@ -9526,8 +9526,7 @@ mod tests {
                 _ => 3,
             })
         });
-        e.mem
-            .set_u8(0x011f_308f + 1002, u8::from(tab_open));
+        e.mem.set_u8(0x011f_308f + 1002, u8::from(tab_open));
         let menu = e.mem.alloc(0x100);
         e.mem.set_u32(menu + 0x84, 4);
         e.mem.set_u32(0x011d_9ea4, menu);
@@ -9634,11 +9633,7 @@ mod tests {
         let changes = e.mem.alloc(0x10);
         e.mem.set_u32(changes + 0xc, 0x4100_0000);
         e.register_double(EXTRA_GET_BY_TYPE, move |_, a| {
-            int(if a[1] == 0x15 {
-                changes
-            } else {
-                0
-            })
+            int(if a[1] == 0x15 { changes } else { 0 })
         });
         e.register_double(INVENTORY_GET_OBJECT_COUNT, move |_, a| {
             int(if a[1] == hotkeyed {

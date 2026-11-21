@@ -2815,7 +2815,7 @@ mod tests {
         };
         assert_eq!(call(&mut e, true, true), 110.0);
         assert_eq!(call(&mut e, false, true), 55.0);
-        assert_eq!(call(&mut e, false), 27.5);
+        assert_eq!(call(&mut e, false, false), 27.5);
     }
 
     // ---- 00644680 ---------------------------------------------------------------------------------
