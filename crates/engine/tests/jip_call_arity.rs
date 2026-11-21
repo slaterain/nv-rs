@@ -358,6 +358,13 @@ const UNREAD: &[Row] = &[
         N(2),
         "a storing class's own SetEditorID (vtable +0x134, thiscall: the form and the text)",
     ),
+    (
+        "johnnyguitar",
+        "commands/mod.rs",
+        "PRINT_LINE",
+        AtLeast(1),
+        "Interface::PrintLine (00703C00, cdecl): the format, then its arguments",
+    ),
 ];
 
 /// The source folder of extender crate `name` (`jip`, `nvse`, ...); `NV_<NAME>_SRC=FOLDER`
