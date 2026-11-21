@@ -26,6 +26,8 @@ struct World {
 fn world(mod_flags: Option<u8>) -> World {
     let mut e = Engine::new();
     e.map(0x011d_e000, 0x1000);
+    // No data handler (`011c3f2c` 0): no files loaded, as the co-save lists none.
+    e.map(0x011c_3000, 0x1000);
     e.ext::<nvse::Nvse>().saveload.preload_mods = vec![0];
     let player = e.mem.alloc(0x100);
     e.set_global(PLAYER, player);
@@ -118,6 +120,10 @@ fn the_save_writes_the_current_ammunitions_form_id() {
     assert!(records.chunks.is_empty());
 }
 
+/// A case: the clip mod flags, the rounds carried, the saved count, whether there is a weapon, and
+/// the entry after (its count, whether the special round is its type).
+type Case = (Option<u8>, u32, Option<u32>, bool, (u32, bool));
+
 /// The `AMID` step: a special round chosen without a hotkey, saved with 7 loaded and 20 carried,
 /// loads as 7 of that round (where S0089.07 had left the default round); with only 5 carried, 5;
 /// a save without a count: the rounds carried capped at the clip (12, or 18 with the clip mod
@@ -125,7 +131,7 @@ fn the_save_writes_the_current_ammunitions_form_id() {
 #[test]
 fn the_load_restores_the_chosen_round_and_its_count() {
     let _one = LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let cases: [(Option<u8>, u32, Option<u32>, bool, (u32, bool)); 6] = [
+    let cases: [Case; 6] = [
         (None, 20, Some(7), true, (7, true)),
         (None, 5, Some(7), true, (5, true)),
         (None, 20, None, true, (12, true)),
