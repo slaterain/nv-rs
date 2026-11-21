@@ -123,6 +123,14 @@ pub const ROWS: &[Row] = &[
         summary: "typing E in the console with a pad connected no longer changes the selected reference (the pad's RB does)",
     },
     Row {
+        bit: stewie::CUSTOM_SAVE_NAME_SHOWN,
+        function: "MenuFixes",
+        plan: "S0022.44",
+        key: "bMenuFixesCustomSaveNameShown",
+        tweaks: None,
+        summary: "saves with names the player typed show those names in the save list",
+    },
+    Row {
         bit: stewie::CONSOLE_DPAD_HISTORY,
         function: "MenuFixes",
         plan: "S0022.45",

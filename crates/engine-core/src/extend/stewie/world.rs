@@ -166,6 +166,14 @@ pub const TREE_FULL_LOD_KEPT: Row = fix(30);
 /// time, which made the `TestAllCells` console command slow.
 pub const TEST_ALL_CELLS_NO_INI_REREAD: Row = fix(31);
 
+// ---- Group N ----
+
+/// S0022.44 (`MenuFixes`, `OnInitSaveFileForScreenshotImageHook` at `0x8468A0` in
+/// `BGSSaveLoadFileEntry::GetScreenshot` `00846820`): a save with a player-given name shows that
+/// name as its location line also when only its picture was read (the save list), as `LoadData`
+/// does.
+pub const CUSTOM_SAVE_NAME_SHOWN: Row = fix(32);
+
 /// `OSInputGlobals *` (xNVSE's `0x11F35CC`).
 pub const INPUT_GLOBALS: u32 = 0x011f_35cc;
 /// `OSInputGlobals::overrideFlags` (`UInt16` at `+0x1B92`); bit 3 is the menu-mode debounce.

@@ -62,6 +62,11 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         Row::at(WORLD_FIXES, 21),
     ),
     (
+        "S0022.44",
+        "bMenuFixesCustomSaveNameShown",
+        Row::at(WORLD_FIXES, 32),
+    ),
+    (
         "S0022.45",
         "bMenuFixesConsoleDpad",
         Row::at(WORLD_FIXES, 22),
