@@ -155,6 +155,7 @@ impl Families for Diff {
             .family(&engine_typed::dispatch::DISPATCH)
             .family(&engine_typed::pathing::PATHING)
             .family(&leaf::LEAVES)
+            .family(&engine_typed::crt::CRT)
     }
 }
 
@@ -535,6 +536,13 @@ fn source(e: &mut Engine, n: u32) -> u32 {
 
 fn buffer_world(e: &mut Engine) {
     stand_ins(e);
+    // The bounded move (`008661e0`, the CRT's `memmove_s`): a move, logged.
+    e.register(0x0086_61e0, |e, a| {
+        log(e, 0x61e0, a[3]);
+        let bytes = e.mem.bytes(a[2], a[3]).to_vec();
+        e.mem.write(a[0], &bytes);
+        ret(0)
+    });
 }
 
 /// A positioned write: sizing or not; a buffer empty, roomy or one byte short; the write at the
@@ -547,7 +555,6 @@ fn write_at() {
         buffer::write_at(Ptr<_>, Ptr<_>, u32, u32, u8)
     ))
     .families()
-    .family(&engine_typed::crt::CRT)
     .inputs(&[
         Input::Flag,
         Input::Of(&[0, 0x20, 0x10]),
@@ -571,7 +578,6 @@ fn write_at() {
 fn append() {
     Diff::new(entry!(0x0086_5570, buffer::append(Ptr<_>, Ptr<_>, u32, u8)))
         .families()
-        .family(&engine_typed::crt::CRT)
         .inputs(&[
             Input::Flag,
             Input::Of(&[0, 0x10, 0x20]),
@@ -596,7 +602,6 @@ fn save_bytes() {
         buffer::save_bytes(Ptr<_>, Ptr<_>, u32, u32)
     ))
     .families()
-    .family(&engine_typed::crt::CRT)
     .inputs(&[
         Input::Flag,
         Input::Of(&[0, 0x10]),
@@ -618,7 +623,6 @@ fn save_bytes() {
 fn grow() {
     Diff::new(entry!(0x0086_60b0, buffer::grow(Ptr<_>)))
         .families()
-        .family(&engine_typed::crt::CRT)
         .inputs(&[Input::Flag, Input::Of(&[0, 0x10, 0xffff_0008])])
         .setup(|e, case| {
             buffer_world(e);
@@ -656,7 +660,6 @@ fn save_variable_sized_value() {
         buffer::save_variable_sized_value(Ptr<_>, u32)
     ))
     .families()
-    .family(&engine_typed::crt::CRT)
     .inputs(&[Input::Flag, Input::Of(VARIABLE_VALUES)])
     .setup(|e, case| {
         buffer_world(e);
@@ -678,7 +681,7 @@ fn start_and_finish_variable_value() {
         buffer::start_variable_value(Ptr<_>) -> u32
     ))
     .families()
-    .family(&engine_typed::crt::CRT)
+    .translation_calls_plainly(&[0x0086_5ce0])
     .inputs(&[Input::Flag, Input::Of(&[0, 0x10, 0x11])])
     .setup(|e, case| {
         buffer_world(e);
@@ -692,7 +695,7 @@ fn start_and_finish_variable_value() {
         buffer::finish_variable_value(Ptr<_>, u32, u32)
     ))
     .families()
-    .family(&engine_typed::crt::CRT)
+    .translation_calls_plainly(&[0x0086_5ce0, 0x0086_6140])
     .inputs(&[
         Input::Flag,
         Input::Of(VARIABLE_VALUES),
@@ -715,7 +718,6 @@ fn start_and_finish_variable_value() {
 fn insert_space() {
     Diff::new(entry!(0x0086_6140, buffer::insert_space(Ptr<_>, u32, u32)))
         .families()
-        .family(&engine_typed::crt::CRT)
         .inputs(&[
             Input::Flag,
             Input::Of(&[0, 0x10]),
@@ -742,7 +744,6 @@ fn save_string() {
         buffer::save_string(Ptr<_>, Ptr<_>, u32)
     ))
     .families()
-    .family(&engine_typed::crt::CRT)
     .inputs(&[Input::Flag, Input::Of(&[0, 1, 2, 40])])
     .setup(|e, case| {
         buffer_world(e);
@@ -809,6 +810,7 @@ fn file_write() {
 fn save_and_save_part() {
     Diff::new(entry!(0x0086_5c40, buffer::save(Ptr<_>, Ptr<_>)))
         .families()
+        .translation_calls_plainly(&[0x0086_5c80])
         .inputs(&[Input::Flag, Input::Of(&[0, 0x10])])
         .setup(|e, case| {
             buffer_world(e);
