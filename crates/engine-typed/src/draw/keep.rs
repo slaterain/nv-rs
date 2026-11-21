@@ -494,7 +494,7 @@ fn summary(s: &Stats, records: usize) -> String {
     )
 }
 
-/// The counters now, as the periodic report prints them (tests, and the hitch log's stage line).
+/// The counters now, as the periodic report prints them.
 pub fn summary_now() -> String {
     KEEP.with(|k| {
         let k = k.borrow();
