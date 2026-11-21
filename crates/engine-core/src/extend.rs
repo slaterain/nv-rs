@@ -3098,7 +3098,12 @@ mod tests {
         ] {
             assert!(find(SITES, Owner::Nvse, a).is_some(), "{a:08x}");
         }
-        assert_eq!(SITES.len(), 128);
+        assert_eq!(SITES.len(), 129);
+        // lStewieAl's Tweaks' (its seams in the text key event and Idle), Tweaks' alone.
+        for a in [0x0071_5563] {
+            assert!(find(SITES, Owner::Stewie, a).is_some(), "{a:08x}");
+            assert!(find(SITES, Owner::Jip, a).is_none(), "{a:08x}");
+        }
         // UI Organizer's ten (UIOLoad's place, ResolveXMLFileHook's, the five hardcore zooms,
         // FinalPostParse, the operators' dispatch, the text scale), its alone.
         for a in [
