@@ -7432,6 +7432,18 @@ pub fn player_character_ammo_swap_helper(
             .i32()
             > 0
     {
+        // lStewieAl's Tweaks' row S0089.09 (`RememberAmmoCountOnLoad`, the call at `0x94643E`):
+        // Tweaks' `OnSkipReloadDefaultAmmo` makes the current ammunition the type of the player's
+        // ammunition entry (its process's slot `+0x14C`, the entry's form at `+8`) before the
+        // stack's entry is freed, so the type kept is really the one equipped.
+        if e.stewie(engine_core::extend::stewie::SWAP_SKIP_SETS_AMMO_TYPE) {
+            let player = e.global::<u32>(0x011d_ea3c);
+            let process = e.mem.u32(player + 0x68);
+            let ammo_info = e.vcall(process, 0x14c, &args![]).u32();
+            if ammo_info != 0 {
+                e.mem.set_u32(ammo_info + 8, current);
+            }
+        }
         e.call(0x0044_59e0, &args![item, 1u32]);
         return;
     }
@@ -18314,6 +18326,27 @@ mod tests {
         assert!(called(&e, 0x004b_fb70).is_empty());
         assert!(called(&e, 0x00b0_03ec).is_empty());
         assert!(slot_calls(&e, 0x0268_0000, 0x168).is_empty());
+    }
+
+    /// lStewieAl's Tweaks' row S0089.09 (`OnSkipReloadDefaultAmmo`, `0x94643E`): a swap that keeps
+    /// the current ammunition (0xA1, still in stock). Off, the player's ammunition entry (process
+    /// slot `+0x14C`) keeps its type (0xB2); on, the current ammunition becomes its type. The
+    /// stack's entry is freed either way.
+    #[test]
+    fn s0089_09_a_kept_swap_makes_the_current_ammo_the_entry_type() {
+        for (on, kind) in [(false, 0xb2u32), (true, 0xa1)] {
+            let mut e = engine();
+            let (this, [item_a, _]) = ammo_world(&mut e);
+            e.set_global(0x011d_ea3c, this.addr());
+            let ammo_info = e.mem.alloc(0x10);
+            e.mem.set_u32(ammo_info + 8, 0xb2);
+            let slot = 0x00b0_0000 + (0x0268_0000u32 & 0xf_ffff) / 0x10 + 0x14c;
+            e.register_double(slot, move |_, _| int(ammo_info));
+            e.set_stewie(engine_core::extend::stewie::SWAP_SKIP_SETS_AMMO_TYPE, on);
+            e.call(0x0094_62c0, &args![this, false, true]);
+            assert_eq!(e.mem.u32(ammo_info + 8), kind, "on {on}");
+            assert_eq!(called(&e, 0x0044_59e0), vec![vec![item_a, 1]]);
+        }
     }
 
     #[test]

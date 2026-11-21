@@ -22,7 +22,6 @@
     ("geometry +0xc0", 0x6c, 0x16b, true, &[0x00b8_9d80, 0x00ba_c9c0, 0x00ec_44d0], "draw family's next agent: the shader objects and the renderer they hold (device-side state the draw reads and writes in place)"),
     ("geometry +0xc0", 0x1d0, 0x1e0, true, &[0x00ba_c9c0], "draw family's next agent: the shader objects and the renderer they hold (device-side state the draw reads and writes in place)"),
     ("geometry +0xc0 +0x18", 0x200, 0x204, false, &[0x00a9_b1f0], "draw family's next agent: the shader objects and the renderer they hold (device-side state the draw reads and writes in place)"),
-    ("geometry +0xc0 +0x18", 0xc, 0x14, true, &[0x00a8_0610, 0x00b6_6570, 0x00b9_8e80, 0x00b9_9110], "draw family's next agent: the shader objects and the renderer they hold (device-side state the draw reads and writes in place)"),
     ("geometry +0xc0 +0x1a4", 0x0, 0x30, true, &[0x00ec_44d0], "draw family's next agent: the shader objects and the renderer they hold (device-side state the draw reads and writes in place)"),
     ("geometry +0xc0 +0x1a8", 0x20, 0x24, true, &[0x00ba_af40], "draw family's next agent: the shader objects and the renderer they hold (device-side state the draw reads and writes in place)"),
     ("geometry +0xc0 +0x30", 0x0, 0x4, false, &[0x00b7_dab0], "draw family's next agent: the shader objects and the renderer they hold (device-side state the draw reads and writes in place)"),
