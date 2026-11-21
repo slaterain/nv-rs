@@ -68,7 +68,7 @@ pub const ROWS: &[Row] = &[
         plan: "S0022.22",
         key: "bMenuFixesConditionFlashFrameRate",
         tweaks: None,
-        summary: "changes a timing: the low-condition label flashes about 1.2 times a second at any frame rate (the game flashed it faster the higher the frame rate)",
+        summary: "changes a timing: the low-condition label flashes about 1.15 times a second at any frame rate (the game flashed it faster the higher the frame rate)",
     },
     Row {
         bit: stewie::MAP_PAD_MARKER_WHILE_MOVING,
