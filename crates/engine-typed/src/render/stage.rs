@@ -224,7 +224,8 @@ pub fn apply(e: &mut Engine, this: Ptr<TextureStage>) {
             let device = e.global::<u32>(DEVICE);
             let stage_now = e.get(this, TextureStage::m_uiStage);
             let value = capture::own_at::<u32>(e, MAX_ANISOTROPY);
-            e.vcall(
+            engine_core::real_threads::device_vcall(
+                e,
                 device,
                 DEVICE_SET_SAMPLER_STATE,
                 &args![stage_now, 10u32, value],
@@ -236,7 +237,8 @@ pub fn apply(e: &mut Engine, this: Ptr<TextureStage>) {
 /// `SetTransform(stage + 0x10, matrix)` on the device (`D3DTS_TEXTURE0` + stage).
 fn set_transform(e: &mut Engine, stage: u32, matrix: u32) {
     let device = e.global::<u32>(DEVICE);
-    e.vcall(
+    engine_core::real_threads::device_vcall(
+        e,
         device,
         DEVICE_SET_TRANSFORM,
         &args![stage.wrapping_add(0x10), matrix],

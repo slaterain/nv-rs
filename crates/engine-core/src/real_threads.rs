@@ -699,6 +699,7 @@ impl World {
     /// This OS thread stops running game code (a wait, a sleep, its end); answers whether it was
     /// counted (the host's own thread never is).
     fn leave_guest(&self) -> bool {
+        release_direct(self);
         // No reference into a shared extension slot is live here: give them back.
         if crate::extend::holds_shared() {
             crate::extend::release_held();
@@ -1459,11 +1460,15 @@ fn device_call(e: &mut Engine, args: &[u32]) -> Ret {
         .as_ref()
         .expect("a device platform call on a real thread's engine")
         .world;
-    if !world.device.held_here() {
-        park_here(e);
-    }
-    world.device.lock(world);
-    let _held = DeviceGuard(world, std::marker::PhantomData);
+    let _held = if direct_lock(e, world) {
+        None
+    } else {
+        if !world.device.held_here() {
+            park_here(e);
+        }
+        world.device.lock(world);
+        Some(DeviceGuard(world, std::marker::PhantomData))
+    };
     if world.late_count.load(Ordering::Acquire) != e.real.as_ref().map_or(0, |r| r.late_seen) {
         sync_registered(e);
     }
@@ -5262,4 +5267,165 @@ mod tests {
         assert_eq!(next.load(Ordering::SeqCst), local, "the same first local");
         world.leave_guest();
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The world draw's device calls made directly (`NV_DRAW_DIRECT`, step 2 of the native draw path).
+//
+// The typed draw code calls the Direct3D 9 device about 16,500 times a frame in a crowded street. Each
+// call went by address (`Engine::vcall`: the vtable read, the call cache, the call stack, the time
+// slice), then through [`device_call`] (a park check, the late-registration check, the device lock
+// taken and given back). While the world draw's two halves run with the switch on ([`direct_begin`]),
+// [`device_vcall`] reads the vtable slot and calls the device function found by its slot
+// ([`Locked::device`]) at once, and the device lock is taken at the first such call and kept until
+// the halves end. It is given back whenever the thread leaves guest code to wait ([`release_direct`],
+// from `World::leave_guest`: a contended lock, an event, a sleep), so a thread that waits on main
+// never waits for the device lock main holds, and it is handed over at the next call when another
+// thread waits for it. The functions called, their arguments and their order are the same as by
+// address: the command stream and the model see the same calls.
+// ---------------------------------------------------------------------------------------------
+
+thread_local! {
+    /// This thread's direct calls: 0 off, 1 on, 2 on and holding the device lock for them.
+    static DIRECT: Cell<u8> = const { Cell::new(0) };
+    /// The world the held device lock is of (with 2).
+    static DIRECT_WORLD: Cell<Option<&'static World>> = const { Cell::new(None) };
+    /// The calls this thread made directly (tests).
+    static DIRECT_CALLS: Cell<u64> = const { Cell::new(0) };
+}
+
+/// `NV_DRAW_DIRECT`: on unless `0`.
+fn direct_wanted() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    DIRECT_FORCED.load(Ordering::Relaxed)
+        || *ON.get_or_init(|| std::env::var("NV_DRAW_DIRECT").map_or(true, |v| v != "0"))
+}
+
+static DIRECT_FORCED: AtomicBool = AtomicBool::new(false);
+
+/// Tests: direct calls on for every run from now on, whatever `NV_DRAW_DIRECT` says.
+#[doc(hidden)]
+pub fn force_direct_for_tests() {
+    DIRECT_FORCED.store(true, Ordering::Relaxed);
+}
+
+/// How many device calls this thread has made directly (tests).
+#[doc(hidden)]
+pub fn direct_calls() -> u64 {
+    DIRECT_CALLS.with(Cell::get)
+}
+
+/// Whether this thread has direct calls on and holds the device lock for them (tests).
+#[doc(hidden)]
+pub fn direct_holds() -> bool {
+    DIRECT.with(Cell::get) == 2
+}
+
+/// The world draw's halves begin on `e`'s thread: direct calls on with the switch (stepped threads too, where
+/// a call goes by its address with the time slice counted as by the vtable, so a stepped run is unchanged).
+/// Answers whether they were turned on here (then [`direct_end`] after the halves).
+pub fn direct_begin(_e: &Engine) -> bool {
+    if !direct_wanted() || DIRECT.with(Cell::get) != 0 {
+        return false;
+    }
+    DIRECT.with(|d| d.set(1));
+    true
+}
+
+/// The halves ended: the held device lock given back, direct calls off.
+pub fn direct_end() {
+    if DIRECT.with(Cell::get) == 2 {
+        if let Some(w) = DIRECT_WORLD.with(Cell::get) {
+            w.device.unlock();
+        }
+    }
+    DIRECT.with(|d| d.set(0));
+    DIRECT_WORLD.with(|d| d.set(None));
+}
+
+/// The direct calls' hold given back (this thread is about to wait): only when it is their own one
+/// (no device function is running on this thread).
+fn release_direct(w: &World) {
+    if DIRECT.with(Cell::get) == 2
+        && w.device.held_here()
+        && w.device.depth.load(Ordering::Relaxed) == 1
+    {
+        w.device.unlock();
+        DIRECT.with(|d| d.set(1));
+    }
+}
+
+/// [`device_call`]'s locking with direct calls on: true when their hold covers this call (no guard).
+fn direct_lock(e: &Engine, world: &'static World) -> bool {
+    match DIRECT.with(Cell::get) {
+        1 if !world.device.held_here() => {
+            park_here(e);
+            world.device.lock(world);
+            DIRECT.with(|d| d.set(2));
+            DIRECT_WORLD.with(|d| d.set(Some(world)));
+            true
+        }
+        2 if world.device.held_here() => {
+            // Another thread waits for the device: handed over between two calls.
+            if world.device.waiters.load(Ordering::SeqCst) > 0
+                && world.device.depth.load(Ordering::Relaxed) == 1
+            {
+                world.device.unlock();
+                park_here(e);
+                world.device.lock(world);
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+/// `this->vtable[slot / 4](args)` for the typed draw code's calls into the Direct3D 9 device: with
+/// direct calls on and the slot one of the layer's device functions, that function called at once
+/// under the held device lock; otherwise [`Engine::vcall`] (a hooked slot, a diagnostic, no real
+/// threads, the switch off).
+#[inline]
+pub fn device_vcall(e: &mut Engine, this: u32, slot: u32, args: &[u32]) -> Ret {
+    if DIRECT.with(Cell::get) == 0 || e.diagnosing() {
+        return e.vcall(this, slot, args);
+    }
+    device_vcall_direct(e, this, slot, args)
+}
+
+#[inline(never)]
+fn device_vcall_direct(e: &mut Engine, this: u32, slot: u32, args: &[u32]) -> Ret {
+    let addr = e.mem.u32(e.mem.u32(this).wrapping_add(slot));
+    let mut words = [0u32; 16];
+    if args.len() >= words.len() || device_slot(addr).is_none() {
+        return e.vcall(this, slot, args);
+    }
+    words[0] = this;
+    words[1..=args.len()].copy_from_slice(args);
+    DIRECT_CALLS.with(|c| c.set(c.get() + 1));
+    // Stepped threads: by its address (the slot read here), the time slice counted as for any call.
+    let Some(r) = e.real.as_ref() else {
+        return e.call(addr, &words[..=args.len()]);
+    };
+    let world = r.world;
+    let _held = if direct_lock(e, world) {
+        None
+    } else {
+        if !world.device.held_here() {
+            park_here(e);
+        }
+        world.device.lock(world);
+        Some(DeviceGuard(world, std::marker::PhantomData))
+    };
+    if world.late_count.load(Ordering::Acquire) != e.real.as_ref().map_or(0, |r| r.late_seen) {
+        sync_registered(e);
+    }
+    // Not one of the device lock's functions (registered otherwise): by address.
+    let Some(f) = e.real.as_ref().and_then(|r| r.locked.device(addr)) else {
+        drop(_held);
+        return e.vcall(this, slot, args);
+    };
+    e.call_stack.push(addr);
+    let ret = f(e, &words[..=args.len()]);
+    e.call_stack.pop();
+    ret
 }

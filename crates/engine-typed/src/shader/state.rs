@@ -391,7 +391,12 @@ pub fn set_render_state(
     let cached = elem_addr(this, NiDX9RenderState::auiRenderStates, state, 8);
     if capture::own_at::<u32>(e, cached) != value {
         let device = capture::own_get(e, this, NiDX9RenderState::m_pkD3DDevice9);
-        e.vcall(device, DEVICE_SET_RENDER_STATE, &args![state, value]);
+        engine_core::real_threads::device_vcall(
+            e,
+            device,
+            DEVICE_SET_RENDER_STATE,
+            &args![state, value],
+        );
         capture::set_own_at(e, cached, value);
     }
 }
@@ -425,7 +430,12 @@ pub fn set_stage_state(
     );
     if capture::own_at::<u32>(e, cached) != value {
         let device = capture::own_get(e, this, NiDX9RenderState::m_pkD3DDevice9);
-        e.vcall(device, DEVICE_SET_STAGE_STATE, &args![stage, state, value]);
+        engine_core::real_threads::device_vcall(
+            e,
+            device,
+            DEVICE_SET_STAGE_STATE,
+            &args![stage, state, value],
+        );
     }
     capture::set_own_at(e, cached, value);
 }
@@ -455,7 +465,8 @@ pub fn set_sampler_state(
     }
     capture::set_own_at(e, cached, value);
     let device = capture::own_get(e, this, NiDX9RenderState::m_pkD3DDevice9);
-    e.vcall(
+    engine_core::real_threads::device_vcall(
+        e,
         device,
         DEVICE_SET_SAMPLER_STATE,
         &args![stage, state, value],
@@ -472,7 +483,7 @@ pub fn set_texture(e: &mut Engine, this: Ptr<NiDX9RenderState>, stage: u32, text
     }
     capture::set_own_at(e, cached, texture);
     let device = capture::own_get(e, this, NiDX9RenderState::m_pkD3DDevice9);
-    e.vcall(device, DEVICE_SET_TEXTURE, &args![stage, texture]);
+    engine_core::real_threads::device_vcall(e, device, DEVICE_SET_TEXTURE, &args![stage, texture]);
 }
 
 /// The shader and declaration setters' pattern: `saved` keeps the current one when asked; a new one
@@ -496,7 +507,7 @@ fn set_cached(
     }
     capture::own_set(e, this, current, value);
     let device = capture::own_get(e, this, NiDX9RenderState::m_pkD3DDevice9);
-    e.vcall(device, slot, &args![value]);
+    engine_core::real_threads::device_vcall(e, device, slot, &args![value]);
 }
 
 // Typed from 00e90e00
@@ -547,7 +558,7 @@ pub fn set_declaration(e: &mut Engine, this: Ptr<NiDX9RenderState>, declaration:
     }
     capture::own_set(e, this, NiDX9RenderState::pDeclaration, declaration);
     let device = capture::own_get(e, this, NiDX9RenderState::m_pkD3DDevice9);
-    e.vcall(device, DEVICE_SET_DECLARATION, &args![declaration]);
+    engine_core::real_threads::device_vcall(e, device, DEVICE_SET_DECLARATION, &args![declaration]);
 }
 
 // Typed from 00e879e0

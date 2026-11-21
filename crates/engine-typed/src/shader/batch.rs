@@ -869,7 +869,8 @@ pub fn end_pass(e: &mut Engine) {
             use super::layout::NiDX9Renderer as R;
             let holder = Ptr::<R>::new(e.global::<u32>(RENDER_HOLDER));
             let device = e.get(holder, R::m_pkD3DDevice9);
-            e.vcall(
+            engine_core::real_threads::device_vcall(
+                e,
                 device,
                 DEVICE_SET_SAMPLER_STATE,
                 &args![sampler, 8u32, 0u32],

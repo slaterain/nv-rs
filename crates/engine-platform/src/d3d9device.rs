@@ -6938,6 +6938,61 @@ pub(crate) mod tests {
         }
     }
 
+    /// Stepped threads (no device lock): with direct calls on, a call still reaches the device function by its
+    /// address and the model takes it.
+    #[test]
+    fn direct_device_calls_on_stepped_threads_reach_the_device_functions() {
+        use engine_core::real_threads::{
+            device_vcall, direct_begin, direct_calls, direct_end, direct_holds,
+            force_direct_for_tests,
+        };
+        let (mut e, dev) = texture_device(Store::Host);
+        force_direct_for_tests();
+        let before = direct_calls();
+        assert!(direct_begin(&e));
+        assert_eq!(device_vcall(&mut e, dev, 4 * 57, &[7, 5]).u32(), D3D_OK);
+        assert_eq!(device_vcall(&mut e, dev, 4 * 57, &[8, 6]).u32(), D3D_OK);
+        assert!(!direct_holds(), "no device lock with stepped threads");
+        let out = e.mem.alloc(4);
+        assert_eq!(device_vcall(&mut e, dev, 4 * 58, &[8, out]).u32(), D3D_OK);
+        assert_eq!(e.mem.u32(out), 6);
+        assert_eq!(direct_calls() - before, 3, "made directly");
+        direct_end();
+        assert!(direct_begin(&e), "on again after the end");
+        direct_end();
+        assert_eq!(render_state(&mut e, dev, 7), 5);
+    }
+
+    /// With direct calls on and real threads, under a device lock the caller already holds (this test's device was
+    /// made before the threads started, so its functions are behind the kernel lock, as in
+    /// `sync_call_during_a_cut`): the same answers, no direct hold taken, nothing left held after.
+    #[test]
+    fn direct_device_calls_under_a_held_device_lock_answer_the_same() {
+        use engine_core::real_threads::{
+            device_guard, device_lock_held, device_vcall, direct_begin, direct_end, direct_holds,
+            force_direct_for_tests,
+        };
+        let (mut e, dev) = texture_device(Store::Host);
+        engine_core::real_threads::start(&mut e).expect("real threads on");
+        force_direct_for_tests();
+        assert!(direct_begin(&e));
+        assert!(!direct_begin(&e), "one at a time");
+        {
+            let _device = device_guard(&e);
+            assert_eq!(device_vcall(&mut e, dev, 4 * 57, &[8, 2]).u32(), D3D_OK);
+            assert_eq!(
+                device_vcall(&mut e, dev, 4 * 69, &[16, 1, 1]).u32(),
+                D3DERR_INVALIDCALL
+            );
+            let out = e.mem.alloc(4);
+            assert_eq!(device_vcall(&mut e, dev, 4 * 58, &[8, out]).u32(), D3D_OK);
+            assert_eq!(e.mem.u32(out), 2);
+            assert!(!direct_holds(), "the caller's own hold: no direct hold taken");
+        }
+        direct_end();
+        assert!(!direct_holds() && !device_lock_held(&e));
+    }
+
     #[cfg(windows)]
     fn sync_call_during_a_cut() {
         use super::super::d3d9draw::{draw_close, draw_cut, draw_join};
