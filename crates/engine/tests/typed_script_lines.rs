@@ -35,7 +35,20 @@ const ANSWER_BLOCK: u32 = CONFIG + 4;
 const ANSWER_BLOCK_RESULT: u32 = CONFIG + 8;
 const ANSWER_DELETED: u32 = CONFIG + 12;
 const ANSWER_PROCESS: u32 = CONFIG + 16;
+/// Whether a console command runs (the thread's echo byte is written from it in a case's setup).
 const ANSWER_CONSOLE: u32 = CONFIG + 20;
+/// Whether the debug text is shown (the profiler runs), the vtable +0xf0 slot's answer (a form
+/// that takes a variable set), the form a reference variable's id looks up, whether the owner
+/// lookups answer no script variables, and the performance counter.
+const ANSWER_PROFILE: u32 = CONFIG + 0x90;
+const ANSWER_F0: u32 = CONFIG + 0x94;
+const LOOKED_UP_FORM: u32 = CONFIG + 0x98;
+const ANSWER_NO_OWNER: u32 = CONFIG + 0x9c;
+const CLOCK: u32 = CONFIG + 0xa0;
+/// A second command record (0x1012): needs a reference, marks references changed.
+const DEFINITION2: u32 = CONFIG + 0x300;
+/// The numeric id a reference variable (local 3) holds, which looks up `LOOKED_UP_FORM`.
+const LOOKED_UP_ID: u32 = 0x7777;
 const DEFINITION_FOR: u32 = CONFIG + 24;
 const DEFINITION: u32 = CONFIG + 0x40;
 const FORM_VTABLE: u32 = CONFIG + 0x100;
@@ -139,7 +152,18 @@ fn world(e: &mut Engine) {
     ] {
         e.register(log, |_, _| ret(0));
     }
-    e.register(0x0070_2fc0, |_, _| ret(0));
+    e.register(0x0070_2fc0, |e, _| ret(e.mem.u32(ANSWER_PROFILE)));
+    // QueryPerformanceFrequency and QueryPerformanceCounter: 1000 ticks a second, 7 ticks a read.
+    e.register(0x00fd_f0a4, |e, a| {
+        e.mem.set_u64(a[0], 1000);
+        ret(1)
+    });
+    e.register(0x00fd_f0a0, |e, a| {
+        let now = e.mem.u64(CLOCK) + 7;
+        e.mem.set_u64(CLOCK, now);
+        e.mem.set_u64(a[0], now);
+        ret(1)
+    });
     e.register(0x0040_13e0, |e, a| ret((e.mem.u32(a[0] + 8) >> 3) & 1));
     e.register(0x0050_0940, |_, a| ret(a[0] + 0x18));
     e.register(0x0048_3710, |_, _| ret(0));
@@ -165,22 +189,39 @@ fn world(e: &mut Engine) {
         };
         ret(if ok { a[0] } else { 0 })
     });
-    e.register(0x0056_73e0, |e, _| ret(e.mem.u32(CONFIG + 0x34)));
-    e.register(0x0059_e300, |e, _| ret(e.mem.u32(CONFIG + 0x34)));
+    for owner in [0x0056_73e0u32, 0x0059_e300] {
+        e.register(owner, |e, _| {
+            ret(if e.mem.u32(ANSWER_NO_OWNER) != 0 {
+                0
+            } else {
+                e.mem.u32(CONFIG + 0x34)
+            })
+        });
+    }
     e.register(0x005a_bed0, |_, _| ret(0x0050_1000));
     e.register(0x0040_77c0, |e, _| ret(e.mem.u32(ANSWER_DELETED)));
     e.register(0x008d_6f30, |e, _| ret(e.mem.u32(ANSWER_PROCESS)));
     e.register(0x0045_0ff0, |_, _| ret(1));
+    // The command table: 0x1010 and the counted 0x1059 (both with parameters), 0x1012 (needs a
+    // reference, marks references changed); anything else unknown.
     e.register(0x005b_1120, |e, a| {
-        ret(if a[0] == e.mem.u32(DEFINITION_FOR) {
+        ret(if a[0] == e.mem.u32(DEFINITION_FOR) || a[0] == 0x1059 {
             DEFINITION
+        } else if a[0] == 0x1012 {
+            DEFINITION2
         } else {
             0
         })
     });
     e.register(0x005a_ccb0, |_, _| ret(1));
-    // A reference variable's form lookup: none (the reference is not set yet).
-    e.register(0x0048_39c0, |_, _| ret(0));
+    // A reference variable's form lookup: its form for the one id, none for others.
+    e.register(0x0048_39c0, |e, a| {
+        ret(if a[0] == LOOKED_UP_ID {
+            e.mem.u32(LOOKED_UP_FORM)
+        } else {
+            0
+        })
+    });
     e.register(0x0040_37b0, |e, a| {
         e.mem.set_u32(a[0], 0x0050_2000);
         ret(a[0])
@@ -198,7 +239,8 @@ fn world(e: &mut Engine) {
         ret(e.mem.u32(ANSWER_BLOCK))
     });
     e.register(NAME_SLOT_FN, |_, _| ret(0x0050_0000));
-    e.register(SLOT_F0_FN, |_, _| ret(1));
+    e.register(SLOT_F0_FN, |e, _| ret(e.mem.u32(ANSWER_F0)));
+    e.mem.set_u32(ANSWER_F0, 1);
     e.register(SLOT_48_FN, |_, _| ret(0));
     for slot in (0..0x140).step_by(4) {
         e.mem.set_u32(FORM_VTABLE + slot, NAME_SLOT_FN);
@@ -208,6 +250,10 @@ fn world(e: &mut Engine) {
     e.mem.set_u32(DEFINITION_FOR, 0x1010);
     e.mem.set_u32(DEFINITION + 0x14, 0x0060_0000);
     e.mem.set_u32(DEFINITION + 0x18, HANDLER);
+    e.mem.set_u32(DEFINITION2, 0x0050_3000);
+    e.mem.set_u8(DEFINITION2 + 0x10, 1);
+    e.mem.set_u32(DEFINITION2 + 0x18, HANDLER);
+    e.mem.set_u8(DEFINITION2 + 0x25, 1);
 }
 
 fn list(e: &mut Engine, items: &[u32]) -> u32 {
@@ -226,7 +272,12 @@ fn list(e: &mut Engine, items: &[u32]) -> u32 {
 
 fn locals(e: &mut Engine) -> u32 {
     let mut vars = Vec::new();
-    for (id, value) in [(1u32, 2.5f64), (2, -4.0)] {
+    // Local 3 is a reference variable: its double's first word holds a numeric form id.
+    for (id, value) in [
+        (1u32, 2.5f64),
+        (2, -4.0),
+        (3, f64::from_bits(u64::from(LOOKED_UP_ID))),
+    ] {
         let v = e.mem.alloc(0x10);
         e.mem.set_u32(v, id);
         e.mem.set_f64(v + 8, value);
@@ -248,7 +299,8 @@ fn form(e: &mut Engine, kind: u8) -> u32 {
 }
 
 /// A runner and a script whose data is `code`: referenced objects 1 a global, 2 a quest, 3 a
-/// reference, 4 one with no form, 5 a reference variable not set yet; `flags` the script's form flags (bit 3: compiled).
+/// reference, 4 one with no form, 5 a reference variable not set yet (its local holds 0), 6 a
+/// reference variable whose local holds a form's id (looked up to a reference).
 struct World {
     runner: u32,
     script: u32,
@@ -261,19 +313,21 @@ fn script_world(e: &mut Engine, code: &[u8], magic_effect: bool) -> World {
     let other = self::locals(e);
     e.mem.set_u32(CONFIG + 0x30, other);
     e.mem.set_u32(CONFIG + 0x34, other);
-    // 0xff: a reference variable whose reference is not set yet (a variable id, no form).
-    let objects: Vec<u32> = [0x06u8, 0x47, 0x3b, 0, 0xff]
+    let looked_up = form(e, 0x3b);
+    e.mem.set_u32(LOOKED_UP_FORM, looked_up);
+    // 0xff and 0xfe: reference variables (a variable id, no form yet) of locals 2 and 3.
+    let objects: Vec<u32> = [0x06u8, 0x47, 0x3b, 0, 0xff, 0xfe]
         .iter()
         .map(|kind| {
             let o = e.mem.alloc(0x10);
-            let f = if *kind == 0 || *kind == 0xff {
+            let f = if *kind == 0 || *kind >= 0xfe {
                 0
             } else {
                 form(e, *kind)
             };
             e.mem.set_u32(o + 8, f);
-            if *kind == 0xff {
-                e.mem.set_u32(o + 0xc, 2);
+            if *kind >= 0xfe {
+                e.mem.set_u32(o + 0xc, u32::from(0x101 - u16::from(*kind)));
             }
             o
         })
@@ -454,12 +508,14 @@ fn script_lines_evaluate_line() {
 }
 
 /// Lines for `ParseLine`: an ordinary line, a reference prefix to an object with a reference, to
-/// one without a form, to a reference variable not set yet, past the count.
+/// one without a form, to a reference variable not set yet and to one holding a form's id, past
+/// the count.
 const PARSED: &[&[u8]] = &[
     b"\x15\x00\x06\x00",
     b"\x1c\x00\x03\x00\x10\x10\x02\x00",
     b"\x1c\x00\x04\x00\x10\x10\x02\x00",
     b"\x1c\x00\x05\x00\x10\x10\x02\x00",
+    b"\x1c\x00\x06\x00\x10\x10\x02\x00",
     b"\x1c\x00\x09\x00\x11\x10\x02\x00",
     b"\x1c\x00\x02\x00\x10\x10\x02\x00",
 ];
@@ -499,6 +555,12 @@ const SCRIPTS: &[&[u8]] = &[
     b"\x1e\x00\x00\x00\x15\x00\x06\x00f\x01\x00\x02\x00 5",
     b"\x1c\x00\x04\x00\x10\x10\x02\x00\x00\x00",
     b"\x10\x10\x02\x00\x00\x00\x11\x10\x02\x00\x00\x00",
+    // A command that needs a reference and marks references changed (the loop answers true).
+    b"\x12\x10\x02\x00\x00\x00",
+    // An invalid block type (the line fails).
+    b"\x10\x00\x06\x00\x30\x00\x04\x00\x00\x00",
+    // A set through a reference variable holding a form's id.
+    b"\x15\x00\x0a\x00r\x06\x00f\x01\x00\x02\x00 5",
 ];
 
 #[test]
@@ -516,8 +578,9 @@ fn script_lines_run() {
         Input::Flag,
         Input::Flag,
         Input::Flag,
+        Input::Flag,
     ])
-    .max_cases(256)
+    .max_cases(512)
     .setup(|e, case| {
         world(e);
         extenders(e, case.word(5) != 0);
@@ -535,7 +598,8 @@ fn script_lines_run() {
             let other = e.mem.u32(CONFIG + 0x30);
             e.mem.set_u32(other + 0x10, effect);
         }
-        let reference = form(e, 0x3b);
+        // A null reference is how every quest script runs.
+        let reference = if case.word(6) != 0 { 0 } else { form(e, 0x3b) };
         vec![
             w.runner,
             w.script,
@@ -555,15 +619,146 @@ fn script_lines_run() {
         runner::build_action_list(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>) -> bool
     ))
     .common()
-    .inputs(&[Input::Of(scripts_), Input::Flag])
+    .inputs(&[Input::Of(scripts_), Input::Flag, Input::Flag])
     .setup(|e, case| {
         world(e);
         let w = script_world(e, SCRIPTS[case.word(0) as usize], false);
         if case.word(1) != 0 {
             e.mem.set_u32(w.runner + 0x14, w.script);
         }
-        let reference = form(e, 0x3b);
+        let reference = if case.word(2) != 0 { 0 } else { form(e, 0x3b) };
         vec![w.runner, w.script, reference, w.locals]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The line loop's rarer paths (the review of #867): the magic effect's block made on the first
+/// run (none in the locals), the profiler's timing with the debug text shown, a null reference,
+/// with the extenders' seams on and off, every script above.
+#[test]
+fn script_lines_run_effect_block_and_profiler() {
+    let scripts_: &'static [u32] = (0..SCRIPTS.len() as u32).collect::<Vec<_>>().leak();
+    Diff::new(entry!(
+        0x005e_0d20,
+        runner::run_lines(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, bool, u8, u8, f32) -> bool
+    ))
+    .common()
+    .inputs(&[
+        Input::Of(scripts_),
+        Input::Flag,
+        Input::Of(&[0, 1, 2]),
+        Input::Flag,
+        Input::Flag,
+    ])
+    .max_cases(256)
+    .setup(|e, case| {
+        world(e);
+        extenders(e, case.word(3) != 0);
+        // 0: no magic effect; 1: a magic effect with its block made; 2: one without (made now).
+        let magic = case.word(2);
+        let w = script_world(e, SCRIPTS[case.word(0) as usize], magic != 0);
+        e.mem.set_u32(ANSWER_HANDLER, 1);
+        e.mem.set_u32(ANSWER_BLOCK, 1);
+        e.mem.set_u32(ANSWER_BLOCK_RESULT, 1);
+        e.mem.set_u32(ANSWER_PROFILE, case.word(4));
+        if magic == 1 {
+            let effect = e.mem.alloc(8);
+            e.mem.set_u32(w.locals + 0x10, effect);
+        }
+        let reference = if case.word(1) != 0 { 0 } else { form(e, 0x3b) };
+        vec![
+            w.runner,
+            w.script,
+            reference,
+            w.locals,
+            0x0070_0000,
+            0,
+            1,
+            1,
+            0x3e80_0000,
+        ]
+    })
+    .run()
+    .assert_same();
+}
+
+/// `EvaluateLine`'s set and command paths the first test does not reach (the review of #867): a
+/// set through a reference variable not set yet and through one holding a form's id, on a form with
+/// no script variables (a global), on a reference whose owner answers none, with no runner locals,
+/// a deleted target, a form whose +0xf0 slot says no; the command that needs a reference and marks
+/// references changed; the counted command's operands; the console's echo.
+const GAP_LINES: &[(u32, &[u8])] = &[
+    (0x15, b"r\x05\x00f\x01\x00\x02\x00 5"),
+    (0x15, b"r\x06\x00f\x01\x00\x02\x00 5"),
+    (0x15, b"r\x06\x00l\x02\x00\x02\x00 7"),
+    (0x15, b"r\x01\x00f\x01\x00\x02\x00 5"),
+    (0x15, b"r\x03\x00f\x01\x00\x04\x00 1.0"),
+    (0x15, b"r\x02\x00s\x02\x00\x02\x00 5"),
+    (0x15, b"f\x01\x00\x06\x00 3 4 +"),
+    (0x15, b"l\x02\x00\x06\x00 7 2 /"),
+    (0x15, b"G\x01\x00\x04\x00 2.5"),
+    (0x1012, b"\x00\x00"),
+    (
+        0x1059,
+        b"\x02\x00n\x01\x00\x00\x00n\x02\x00\x00\x00\x00\x00\x00\x00",
+    ),
+];
+
+#[test]
+fn script_lines_evaluate_set_and_command_paths() {
+    let lines: &'static [u32] = (0..GAP_LINES.len() as u32).collect::<Vec<_>>().leak();
+    Diff::new(entry!(
+        0x005e_1550,
+        runner::run_line(Ptr<_>, Ptr<_>, i32, Ptr<_>, Ptr<_>, u32, Ptr<_>, u32, bool, bool) -> bool
+    ))
+    .common()
+    .inputs(&[
+        Input::Of(lines),
+        Input::Flag,
+        Input::Flag,
+        Input::Flag,
+        Input::Flag,
+        Input::Of(&[0, 1, 2]),
+        Input::Flag,
+    ])
+    .max_cases(1100)
+    .setup(|e, case| {
+        world(e);
+        let (opcode, bytes) = GAP_LINES[case.word(0) as usize];
+        let mut code = vec![0u8; 4];
+        code.extend_from_slice(bytes);
+        let w = script_world(e, &code, false);
+        e.mem.set_u32(ANSWER_HANDLER, 1);
+        e.mem.set_u32(ANSWER_PROCESS, 0);
+        if case.word(3) != 0 {
+            e.mem.set_u32(w.runner + 8, 0);
+        }
+        e.mem.set_u32(ANSWER_NO_OWNER, case.word(4));
+        // 0: an ordinary target; 1: a deleted one; 2: a form whose +0xf0 slot says no.
+        e.mem.set_u32(ANSWER_DELETED, u32::from(case.word(5) == 1));
+        e.mem.set_u32(ANSWER_F0, u32::from(case.word(5) != 2));
+        if case.word(6) != 0 {
+            e.mem.set_u32(ANSWER_CONSOLE, 1);
+            let tls = e.tls();
+            e.mem.set_u8(tls + 0x268, 1);
+        }
+        let reference = if case.word(2) != 0 { form(e, 0x3b) } else { 0 };
+        let length = e.mem.alloc(4);
+        e.mem.set_u32(length, bytes.len() as u32);
+        let skip = e.mem.alloc(4);
+        vec![
+            w.runner,
+            w.script,
+            opcode,
+            reference,
+            length,
+            4,
+            skip,
+            7,
+            case.word(1),
+            0,
+        ]
     })
     .run()
     .assert_same();
@@ -611,7 +806,8 @@ fn real_world(e: &mut Engine) {
 
 /// `NV_DATA="...\Data" cargo test -p engine --test typed_script_lines -- --ignored real_scda`:
 /// `FalloutNV.esm`'s compiled scripts (up to `NV_SCRIPTS`, default 400) run whole through the line
-/// loop, typed against translated, the extenders' seams on and off, with given and fresh locals.
+/// loop, typed against translated, the extenders' seams on and off, with given and fresh locals,
+/// and with a null reference (as quest scripts run).
 /// Nothing of the game's is stored; referenced objects beyond the world's four answer as missing
 /// (such a line fails as in the game with a missing reference), every command succeeds.
 #[test]
@@ -645,15 +841,16 @@ fn real_scda_scripts() {
         runner::run_lines(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, bool, u8, u8, f32) -> bool
     ))
     .common()
-    .inputs(&[Input::Of(indices), Input::Flag, Input::Flag])
-    .max_cases(count * 3)
+    .inputs(&[Input::Of(indices), Input::Flag, Input::Of(&[0, 1, 2])])
+    .max_cases(count * 6)
     .setup(move |e, case| {
         world(e);
         real_world(e);
         extenders(e, case.word(1) != 0);
         let w = script_world(e, &all[case.word(0) as usize], false);
+        // 0: fresh locals; 1: given locals; 2: given locals and a null reference (a quest script).
         let locals = if case.word(2) != 0 { w.locals } else { 0 };
-        let reference = form(e, 0x3b);
+        let reference = if case.word(2) == 2 { 0 } else { form(e, 0x3b) };
         vec![
             w.runner,
             w.script,
