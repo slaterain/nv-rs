@@ -86,7 +86,7 @@ fn strip_length(e: &Engine, data: u32, strip: u32) -> u32 {
 #[inline(always)]
 fn draw_indexed(e: &mut Engine, renderer: u32, words: [u32; 6]) {
     let device = packet::renderer_device(e, renderer);
-    e.vcall(device, DEVICE_DRAW_INDEXED_PRIMITIVE, &words);
+    engine_core::real_threads::device_vcall(e, device, DEVICE_DRAW_INDEXED_PRIMITIVE, &words);
 }
 
 // Typed from 00e745a0
@@ -198,7 +198,12 @@ pub fn draw_shape(e: &mut Engine, this: Ptr, geometry: Ptr) {
         let first = e.mem.u32(render_data.wrapping_add(0x38));
         let kind = e.mem.u32(render_data.wrapping_add(0x3c));
         let device = packet::renderer_device(e, t);
-        e.vcall(device, DEVICE_DRAW_PRIMITIVE, &args![kind, first, count]);
+        engine_core::real_threads::device_vcall(
+            e,
+            device,
+            DEVICE_DRAW_PRIMITIVE,
+            &args![kind, first, count],
+        );
     }
     own::settle_changed_flags(e, data);
 }
@@ -548,7 +553,8 @@ fn made_declaration(e: &mut Engine, this: Ptr, slot: u32, elements: &[VertexElem
             e.mem.set_u8(at + 7, *index);
             at += 8;
         }
-        (e.vcall(
+        (engine_core::real_threads::device_vcall(
+            e,
             device,
             DEVICE_CREATE_VERTEX_DECLARATION,
             &args![array, slot],

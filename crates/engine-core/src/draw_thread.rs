@@ -257,6 +257,7 @@ pub fn second_half(e: &mut Engine, camera: u32, accumulator: u32, third: u32) {
 #[inline]
 fn call_first(e: &mut Engine, camera: u32, accumulator: u32, third: u32) {
     let _time = stage_time::scope(Column::WorldDrawFirst);
+    let _direct = real_threads::DirectHalf::begin(e);
     e.call(WORLD_DRAW_FIRST, &args![camera, accumulator, third]);
 }
 
@@ -264,6 +265,7 @@ fn call_first(e: &mut Engine, camera: u32, accumulator: u32, third: u32) {
 #[inline]
 fn call_second(e: &mut Engine, camera: u32, accumulator: u32, third: u32) {
     let _time = stage_time::scope(Column::WorldDrawSecond);
+    let _direct = real_threads::DirectHalf::begin(e);
     e.call(WORLD_DRAW_SECOND, &args![camera, accumulator, third]);
 }
 
