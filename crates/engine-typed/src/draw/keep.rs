@@ -123,6 +123,8 @@ pub enum Leaf {
         pass_type: u32,
         flag: u32,
     },
+    /// A constant map's defined constant (`super::defined::set_defined_constant`): its twelve words.
+    Defined([u32; 12]),
 }
 
 /// What a set-up did, in its order.
@@ -498,6 +500,23 @@ fn replay_leaf(e: &mut Engine, leaf: Leaf) {
             pass_type,
             flag,
         ),
+        Leaf::Defined(w) => {
+            super::defined::set_defined_constant(
+                e,
+                Ptr::new(w[0]),
+                w[1],
+                w[2],
+                w[3],
+                w[4],
+                w[5],
+                w[6],
+                w[7],
+                w[8],
+                w[9],
+                w[10],
+                w[11],
+            );
+        }
     }
 }
 
