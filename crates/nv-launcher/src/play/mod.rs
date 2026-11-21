@@ -1009,7 +1009,8 @@ fn parse_options(raw: &[String]) -> Options {
 /// `--install-mods`: the mod installer (nv-rs's own program with `--install-mods`, the same text
 /// chooser as `play.sh --install-mods`) for the game found as for play, its lines in the
 /// launcher's terminal and its questions answered at the prompt (`crate::piped`), with no console
-/// window; without a launcher window that takes typed lines, in a console window of its own. Mods go to `userdata\mod installs`, archives are read from `mods`.
+/// window; without a launcher window that takes typed lines, in a console window of its own.
+/// Mods go to `userdata\mod installs`, archives are read from `mods`.
 fn install_mods(package: &Package, options: &Options) -> Result<i32, Stop> {
     let (game, _) = find_game(package, options.game.as_deref())?;
     clear_for_writing(package, Some(&game.folder))?;

@@ -87,6 +87,8 @@ Start
    the terminal, as ./play.sh.
    It plays the game's own terminal sounds, read from your installed game (Settings > Launcher
    sounds turns them off).
+   The window has no title bar: drag it by its background (anywhere but an entry) to move it;
+   > Exit or Esc on the first screen closes it.
    On Wayland its window cannot hide while you play: once the game has run a few seconds it is
    minimised. If the game stops at once, the launcher stays on screen with what went wrong; if it
    stops later, the launcher asks for your attention in the taskbar (Wayland does not let it come
