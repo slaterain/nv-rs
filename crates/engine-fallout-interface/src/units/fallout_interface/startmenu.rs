@@ -427,6 +427,10 @@ const TICK_COUNT: u32 = 0x0045_7fe0;
 /// `operator new(size)` (`00401000`) and `operator delete` (`00401030`).
 const OPERATOR_NEW: u32 = 0x0040_1000;
 const OPERATOR_DELETE: u32 = 0x0040_1030;
+/// The settings' save (`007d6d70`, Tweaks' `SaveIniSettings`) and
+/// `HUDMainMenu::UpdateVisibilityState` (`00771700`, xNVSE), lStewieAl's Tweaks' S0020.
+const SAVE_INI_SETTINGS_007D6D70: u32 = 0x007d_6d70;
+const HUD_UPDATE_VISIBILITY_STATE_00771700: u32 = 0x0077_1700;
 /// The interface manager object getter (`004b7210`, the word at
 /// `011d8a80`, per `interface.rs`) and its `pMenusRoot` getter (`00586150`:
 /// the word at `+0x9c`).
@@ -576,7 +580,18 @@ pub fn start_menu_scalar_deleting_destructor(
     this: Ptr<StartMenu>,
     flags: u32,
 ) -> Ptr<StartMenu> {
+    // `0x7CB51A` (lStewieAl's Tweaks' S0020 calls `StartMenuDestructorSaveIniChanges` there, main.h):
+    // with changed settings (`flags` +0x1A8 bit 2) the settings are saved (`007d6d70`) first,
+    // and after the destructor the HUD's visibility is set for state 6 (`00771700`, `kDialog`),
+    // which shows the XP bar, the quest and the messages again.
+    let stewie_save = e.stewie(stewie::START_MENU_CLOSE_SAVES_SETTINGS);
+    if stewie_save && e.get(this, StartMenu::uiFlags) & 2 != 0 {
+        e.call(SAVE_INI_SETTINGS_007D6D70, &args![]);
+    }
     fn_007cb5b0(e, this);
+    if stewie_save {
+        e.call(HUD_UPDATE_VISIBILITY_STATE_00771700, &args![6u32]);
+    }
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
     }
@@ -2448,7 +2463,10 @@ pub fn start_menu_do_enter(e: &mut Engine, this: Ptr<StartMenu>, _unused_1: u32,
     if e.call(LIST_BOX_HAS_TILE, &args![this.byte_add(0x174), tile])
         .bool()
     {
-        let update = if e.call(GAMEPAD_ACTIVE, &args![]).bool() {
+        let gamepad = e.call(GAMEPAD_ACTIVE, &args![]).bool();
+        // `0x7CF85B` (lStewieAl's Tweaks' S0022.04 writes `JMP` over the `JNZ`): the pad is still
+        // asked, and the save's picture is shown whether or not the mouse is over the list.
+        let update = if gamepad || e.stewie(stewie::SAVE_PICTURE_WITHOUT_HOVER) {
             true
         } else {
             let manager = e.call(INTERFACE_MANAGER_GETTER, &args![]).u32();
@@ -8274,6 +8292,71 @@ mod tests {
         r.stub(GAMEPAD_ACTIVE, 1);
         r.e.call(0x007c_f7e0, &args![menu, 0u32, 0x9000u32]);
         assert_eq!(r.calls_to(UPDATE_HIGHLIGHTED_SAVE_GAME_INFO).len(), 2);
+    }
+
+    /// Row S0022.04 (lStewieAl's Tweaks, `0x7CF85B`): with the row on a save tile's picture is
+    /// shown with the mouse outside the list's rows too; the pad is still asked and the rows are
+    /// not measured. Off: the exe's test (outside the rows, nothing).
+    #[test]
+    fn s0022_04_the_save_picture_without_hover() {
+        for on in [false, true] {
+            let mut r = rig();
+            r.real_flags();
+            let menu = r.menu();
+            r.list_vtable(menu, 0x114, 0x4040);
+            let saves = menu.addr() + 0x174;
+            r.with(LIST_BOX_HAS_TILE, move |_, a| eax(u32::from(a[0] == saves)));
+            r.e.mem.set_u32(menu.addr() + 0x40, 0x4500);
+            r.stub(MANAGER_ROW_COUNT, 10);
+            r.stub_float(TILE_POSITION_B, 10.5);
+            r.e.set_stewie(stewie::SAVE_PICTURE_WITHOUT_HOVER, on);
+            r.e.call(0x007c_f7e0, &args![menu, 0u32, 0x9000u32]);
+            assert_eq!(
+                r.calls_to(UPDATE_HIGHLIGHTED_SAVE_GAME_INFO).len(),
+                usize::from(on),
+                "row {on}"
+            );
+            assert_eq!(r.calls_to(GAMEPAD_ACTIVE).len(), 1);
+            assert_eq!(r.calls_to(TILE_POSITION_B).len(), usize::from(!on));
+        }
+    }
+
+    /// Row S0020 (lStewieAl's Tweaks' `StartMenuDestructorSaveIniChanges`, `0x7CB51A`): with the
+    /// row on the settings are saved (`007d6d70`) before the destructor when `uiFlags` has bit 2,
+    /// and the HUD's visibility is set for state 6 (`00771700`) after it; off, neither.
+    #[test]
+    fn s0020_closing_the_start_menu_saves_the_settings() {
+        for (on, changed) in [(false, true), (true, false), (true, true)] {
+            let mut r = rig();
+            let menu = r.menu();
+            r.real_flags();
+            r.stub(SAVE_INI_SETTINGS_007D6D70, 0);
+            r.stub(HUD_UPDATE_VISIBILITY_STATE_00771700, 0);
+            r.e.set(menu, StartMenu::uiFlags, if changed { 2 } else { 0 });
+            r.e.set_stewie(stewie::START_MENU_CLOSE_SAVES_SETTINGS, on);
+            r.e.call(0x007c_b510, &args![menu, 0u32]);
+            assert_eq!(
+                r.calls_to(SAVE_INI_SETTINGS_007D6D70).len(),
+                usize::from(on && changed),
+                "row {on} changed {changed}"
+            );
+            let hud = r.calls_to(HUD_UPDATE_VISIBILITY_STATE_00771700);
+            assert_eq!(hud, if on { vec![vec![6]] } else { vec![] });
+            if on {
+                let order = r.order();
+                let hud_at = order
+                    .iter()
+                    .position(|a| *a == HUD_UPDATE_VISIBILITY_STATE_00771700)
+                    .unwrap();
+                if changed {
+                    let save_at = order
+                        .iter()
+                        .position(|a| *a == SAVE_INI_SETTINGS_007D6D70)
+                        .unwrap();
+                    assert!(save_at < hud_at);
+                }
+            }
+        }
     }
 
     #[test]
