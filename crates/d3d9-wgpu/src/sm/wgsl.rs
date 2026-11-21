@@ -285,6 +285,60 @@ pub struct Link {
     /// and the discard's two clip varyings at [`CLIP_SLOTS`]: a module that links with any
     /// partner, whatever else that partner writes or reads.
     pub fixed: bool,
+    /// The registers read from storage ([`STORAGE_DECLARATIONS`]): the register ring whole, each
+    /// stage's blocks found through the draw's entry in the draw table (`instance_index`; the
+    /// pixel shader gets the entry's number from the vertex shader at [`DRAW_SLOT`]), instead of
+    /// two uniform blocks at dynamic offsets. The same registers, read at the same places: an
+    /// instanced draw's instances each read their own draw's blocks. Both stages of a pair take
+    /// the same.
+    pub storage: bool,
+}
+
+/// The location of the draw table entry's number, from the vertex shader to the pixel shader
+/// ([`Link::storage`]): after every varying and the clip slots.
+pub const DRAW_SLOT: u32 = 15;
+
+/// The register bindings of a module with [`Link::storage`]: the register ring as words (each
+/// stage's header and float constants where the device wrote them, as with uniform blocks) and
+/// the draw table (one entry a draw: the vertex and pixel headers' places, then the vertex and
+/// pixel float constants', in 16-byte units).
+pub const STORAGE_DECLARATIONS: &str = "@group(0) @binding(0) var<storage, read> RING: array<vec4<u32>>;\n@group(0) @binding(1) var<storage, read> TABLE: array<vec4<u32>>;\nvar<private> rb: u32;\nvar<private> cb: u32;\n";
+
+/// Where each of `Regs`' fields starts, in 16-byte units ([`REGS_SIZE`]'s layout), and how its
+/// words are read: `i` integers, `b` and `fix` words, the rest floats.
+fn regs_field(field: &str) -> (u32, &'static str) {
+    match field {
+        "i" => (0, "bitcast<vec4<i32>>"),
+        "b" => (16, ""),
+        "sys" => (20, "bitcast<vec4<f32>>"),
+        "fix" => (24, ""),
+        "bias" => (28, "bitcast<vec4<f32>>"),
+        "clip" => (32, "bitcast<vec4<f32>>"),
+        _ => unreachable!("no register field {field}"),
+    }
+}
+
+/// `R.field[k]` (a vec4 of the field's type) as `link` reads it.
+fn regs_read(link: &Link, field: &str, k: u32) -> String {
+    if link.storage {
+        let (at, cast) = regs_field(field);
+        format!("{cast}(RING[rb + {}u])", at + k)
+    } else {
+        format!("R.{field}[{k}]")
+    }
+}
+
+/// The float constant `c[n]` as `link` reads it: `n` a literal number or an `i32` expression
+/// already checked to be in 0..=255.
+fn const_read(link: &Link, n: &str) -> String {
+    if link.storage {
+        match n.parse::<u32>() {
+            Ok(k) => format!("bitcast<vec4<f32>>(RING[cb + {k}u])"),
+            Err(_) => format!("bitcast<vec4<f32>>(RING[cb + u32({n})])"),
+        }
+    } else {
+        format!("C.c[{n}]")
+    }
 }
 
 /// [`Link::centroid`] of a pair with `varyings` varyings as the device links it: every one at
@@ -354,6 +408,12 @@ pub fn stand_in_vertex(link: &Link) -> String {
     s.push_str(&varying_fields(link));
     // The clip varyings a pixel shader reads (the discard's), not the clip distances.
     s.push_str(&clip_fields(link, false));
+    if link.storage {
+        let _ = writeln!(
+            s,
+            "    @location({DRAW_SLOT}) @interpolate(flat) draw: u32,"
+        );
+    }
     s.push_str("}\n@vertex\nfn main() -> Out {\n    var out: Out;\n");
     s.push_str("    out.position = vec4<f32>(0.0, 0.0, 0.0, 1.0);\n    return out;\n}\n");
     s
@@ -742,12 +802,17 @@ impl Gen<'_> {
             self.out.push_str("enable clip_distances;\n");
         }
         self.out.push_str(PRELUDE);
-        let group0 = if self.vertex() { 0 } else { 1 };
-        let group1 = group0 + 2;
-        let _ = writeln!(
-            self.out,
-            "@group(0) @binding({group0}) var<uniform> R: Regs;\n@group(0) @binding({group1}) var<uniform> C: Consts;\n"
-        );
+        if self.link.storage {
+            self.out.push_str(STORAGE_DECLARATIONS);
+            self.out.push('\n');
+        } else {
+            let group0 = if self.vertex() { 0 } else { 1 };
+            let group1 = group0 + 2;
+            let _ = writeln!(
+                self.out,
+                "@group(0) @binding({group0}) var<uniform> R: Regs;\n@group(0) @binding({group1}) var<uniform> C: Consts;\n"
+            );
+        }
         if self.sun.is_some() {
             self.out.push_str(&if self.vertex() {
                 crate::sun_shadow::lookup_wgsl_vertex(self.skinned)
@@ -831,9 +896,17 @@ impl Gen<'_> {
                     float(v[3])
                 );
             }
-            self.out.push_str("        default: { if (i < 0 || i > 255) { return vec4<f32>(0.0); } return C.c[i]; }\n    }\n}\n");
+            let _ = write!(
+                self.out,
+                "        default: {{ if (i < 0 || i > 255) {{ return vec4<f32>(0.0); }} return {}; }}\n    }}\n}}\n",
+                const_read(self.link, "i")
+            );
         } else if self.relative_constants {
-            self.out.push_str("fn cr(i: i32) -> vec4<f32> {\n    if (i < 0 || i > 255) { return vec4<f32>(0.0); }\n    return C.c[i];\n}\n");
+            let _ = write!(
+                self.out,
+                "fn cr(i: i32) -> vec4<f32> {{\n    if (i < 0 || i > 255) {{ return vec4<f32>(0.0); }}\n    return {};\n}}\n",
+                const_read(self.link, "i")
+            );
         }
         // The body: the main program, then each subroutine.
         let ins = &self.p.ins;
@@ -920,11 +993,26 @@ impl Gen<'_> {
             s.push_str(f);
             s.push('\n');
         }
+        if self.link.storage {
+            s.push_str("    @builtin(instance_index) draw: u32,\n");
+        }
         // The position is invariant (module documentation).
         s.push_str("}\nstruct Out {\n    @builtin(position) @invariant position: vec4<f32>,\n");
         s.push_str(&varying_fields(self.link));
         s.push_str(&clip_fields(self.link, true));
+        if self.link.storage {
+            let _ = writeln!(
+                s,
+                "    @location({DRAW_SLOT}) @interpolate(flat) draw: u32,"
+            );
+        }
         s.push_str("}\n@vertex\nfn main(input: In) -> Out {\n");
+        // The draw's blocks ([`Link::storage`]): its entry in the draw table.
+        if self.link.storage {
+            s.push_str(
+                "    let entry = TABLE[input.draw];\n    rb = entry.x;\n    cb = entry.z;\n",
+            );
+        }
         for l in &loads {
             s.push_str(l);
             s.push('\n');
@@ -949,13 +1037,18 @@ impl Gen<'_> {
         s.push_str("    body();\n    var out: Out;\n");
         let _ = writeln!(s, "    let opos = {pos};");
         // Half a pixel right and down: Direct3D 9's pixel centres (module documentation).
-        s.push_str("    out.position = opos + vec4<f32>(R.sys[0].xy * opos.w, 0.0, 0.0);\n");
+        let _ = writeln!(
+            s,
+            "    out.position = opos + vec4<f32>({}.xy * opos.w, 0.0, 0.0);",
+            regs_read(self.link, "sys", 0)
+        );
         // The user clip planes' distances, from the shader's own position. A plane that is off
         // is zero and gives exactly 0, which keeps everything (also a position with an infinite
         // or NaN component, whose product with 0 would be NaN).
-        let d: Vec<String> = (0..CLIP_PLANES)
+        let d: Vec<String> = (0..CLIP_PLANES as u32)
             .map(|k| {
-                format!("select(dp4(R.clip[{k}], opos), 0.0, all(R.clip[{k}] == vec4<f32>(0.0)))")
+                let plane = regs_read(self.link, "clip", k);
+                format!("select(dp4({plane}, opos), 0.0, all({plane} == vec4<f32>(0.0)))")
             })
             .collect();
         match self.link.clip {
@@ -991,6 +1084,9 @@ impl Gen<'_> {
             };
             let _ = writeln!(s, "    out.l{l} = {value};");
         }
+        if self.link.storage {
+            s.push_str("    out.draw = input.draw;\n");
+        }
         s.push_str("    return out;\n}\n");
         self.out.push_str(&s);
     }
@@ -1002,6 +1098,12 @@ impl Gen<'_> {
         }
         s.push_str(&varying_fields(self.link));
         s.push_str(&clip_fields(self.link, false));
+        if self.link.storage {
+            let _ = writeln!(
+                s,
+                "    @location({DRAW_SLOT}) @interpolate(flat) draw: u32,"
+            );
+        }
         s.push_str("}\nstruct Out {\n");
         for k in 0..4 {
             if self.sig.colours & (1 << k) != 0 {
@@ -1018,6 +1120,11 @@ impl Gen<'_> {
             let _ = writeln!(s, "    @location({COUNT_TARGET}) n: vec4<f32>,");
         }
         s.push_str("}\n@fragment\nfn main(input: In) -> Out {\n");
+        if self.link.storage {
+            s.push_str(
+                "    let entry = TABLE[input.draw];\n    rb = entry.y;\n    cb = entry.w;\n",
+            );
+        }
         if matches!(self.link.clip, Clip::Discard { .. }) {
             s.push_str(
                 "    if (any(input.k0 < vec4<f32>(0.0)) || any(input.k1 < vec4<f32>(0.0))) { discard; }\n",
@@ -1052,8 +1159,13 @@ impl Gen<'_> {
         // against sys[0].x (above the reference past it) and sys[0].z (at or above it past it),
         // as the reference machine compares (the device's `alpha_bounds`).
         if self.sig.colours & 1 != 0 {
+            let sys = regs_read(self.link, "sys", 0);
+            let _ = write!(
+                s,
+                "    let x = floor(saturate(oC0.w) * 4096.0);\n    let f = u32({sys}.y);\n    let gt = x > {sys}.x;\n    let ge = x > {sys}.z;\n"
+            );
             s.push_str(
-                "    let x = floor(saturate(oC0.w) * 4096.0);\n    let f = u32(R.sys[0].y);\n    let gt = x > R.sys[0].x;\n    let ge = x > R.sys[0].z;\n    if (f != 8u) {\n        var ok = true;\n        switch f {\n            case 1u: { ok = false; }\n            case 2u: { ok = !ge; }\n            case 3u: { ok = ge && !gt; }\n            case 4u: { ok = !gt; }\n            case 5u: { ok = gt; }\n            case 6u: { ok = !(ge && !gt); }\n            case 7u: { ok = ge; }\n            default: { ok = true; }\n        }\n        if (!ok) { discard; }\n    }\n",
+                "    if (f != 8u) {\n        var ok = true;\n        switch f {\n            case 1u: { ok = false; }\n            case 2u: { ok = !ge; }\n            case 3u: { ok = ge && !gt; }\n            case 4u: { ok = !gt; }\n            case 5u: { ok = gt; }\n            case 6u: { ok = !(ge && !gt); }\n            case 7u: { ok = ge; }\n            default: { ok = true; }\n        }\n        if (!ok) { discard; }\n    }\n",
             );
         }
         s.push_str("    var out: Out;\n");
@@ -1099,9 +1211,12 @@ impl Gen<'_> {
                     ),
                     None => match self.sun {
                         Some(sun) if sun == n => {
-                            format!("(C.c[{n}] * vec4<f32>(vec3<f32>(sun_lit), 1.0))")
+                            format!(
+                                "({} * vec4<f32>(vec3<f32>(sun_lit), 1.0))",
+                                const_read(self.link, &n.to_string())
+                            )
                         }
-                        _ => format!("C.c[{n}]"),
+                        _ => const_read(self.link, &n.to_string()),
                     },
                 },
             },
@@ -1126,14 +1241,14 @@ impl Gen<'_> {
                 "vec4<i32>({}, {}, {}, {})",
                 v[0] as i32, v[1] as i32, v[2] as i32, v[3] as i32
             ),
-            None => format!("R.i[{n}]"),
+            None => regs_read(self.link, "i", n),
         }
     }
 
     fn bool_constant(&self, n: u32) -> String {
         match self.defbs.get(&n) {
             Some(v) => format!("{}", *v != 0),
-            None => format!("(R.b[{}][{}] != 0u)", n / 4, n % 4),
+            None => format!("({}[{}] != 0u)", regs_read(self.link, "b", n / 4), n % 4),
         }
     }
 
@@ -1292,7 +1407,7 @@ impl Gen<'_> {
             Dim::Cube | Dim::D3 => "xyz",
         };
         // `D3DSAMP_MIPMAPLODBIAS` (wgpu samplers have no bias): from the uniform block.
-        let bias = format!("R.bias[{}][{}]", n / 4, n % 4);
+        let bias = format!("{}[{}]", regs_read(self.link, "bias", n / 4), n % 4);
         let call = match ins.op {
             op::TEXLDL => format!("textureSampleLevel(t{n}, s{n}, ({coords}).{c}, ({coords}).w)"),
             op::TEXLDD => {
@@ -1310,7 +1425,11 @@ impl Gen<'_> {
                 _ => format!("textureSampleBias(t{n}, s{n}, ({coords}).{c}, {bias})"),
             },
         };
-        let mut fixed = format!("fixup({call}, R.fix[{}][{}])", n / 4, n % 4);
+        let mut fixed = format!(
+            "fixup({call}, {}[{}])",
+            regs_read(self.link, "fix", n / 4),
+            n % 4
+        );
         // The game's actor shadows in the sun shadows' variant with the characters cast: lit where
         // the characters cast this frame (`sun_chars`, [`crate::sun_shadow::LOOKUP`]).
         if self.blank == Some(n) {

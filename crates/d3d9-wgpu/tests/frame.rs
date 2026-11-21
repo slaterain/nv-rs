@@ -5729,6 +5729,12 @@ type Script = (Vec<[u8; 4]>, Vec<u64>, Vec<u8>);
 /// a 2D texture replaced by a cube one on its stage. Returns row 0 (each draw's column) and the
 /// digests. The commands are kept as `NV_D3D9_RECORD` writes them.
 fn records_script(records: bool) -> Option<Script> {
+    records_script_with(records, false)
+}
+
+/// [`records_script`] with the registers read from storage or not
+/// ([`d3d9_wgpu::device::Device::set_storage_regs`]; None where the adapter cannot).
+fn records_script_with(records: bool, storage: bool) -> Option<Script> {
     const PS_TEX: u32 = 0x1602;
     const BLUE_TEX: u32 = 0x1610;
     const CUBE: u32 = 0x1620;
@@ -5737,6 +5743,9 @@ fn records_script(records: bool) -> Option<Script> {
     {
         let d = g.b.device().expect("the device");
         d.set_draw_records(records);
+        if d.set_storage_regs(storage) != storage {
+            return None;
+        }
         d.record_draw_digests(true);
     }
     stage_samplers(&mut g);
@@ -5906,6 +5915,39 @@ fn draw_records_give_wgpu_what_each_draw_resolved_afresh_gives() {
     };
     assert_eq!(replay(false), off, "the recording replayed, records off");
     assert_eq!(replay(true), off, "the recording replayed, records on");
+}
+
+/// The registers read from storage ([`d3d9_wgpu::device::Device::set_storage_regs`]: each draw
+/// finds its blocks through its entry in the draw table, its instance number) give wgpu the same
+/// draws as the uniform blocks, and the same pixels: the [`records_script`] draws, whose later
+/// draws have entries past the first (so this also shows that the backend's instance number
+/// counts from the draw's first instance: run with `NV_WGPU_BACKEND=dx12` on Direct3D 12, where
+/// the shader's own instance number does not), records off and on, and its recording replayed.
+#[test]
+fn registers_from_storage_give_wgpu_and_the_picture_what_uniform_blocks_give() {
+    let Some((off_row, off, recording)) = records_script_with(true, false) else {
+        return;
+    };
+    let Some((row, digests, _)) = records_script_with(true, true) else {
+        eprintln!("this adapter cannot read the registers from storage: not checked");
+        return;
+    };
+    assert_eq!(off.len(), 11, "every draw noted");
+    assert_eq!(digests, off, "the digests, draw by draw");
+    assert_eq!(row, off_row, "the pixels, draw by draw");
+    let Some((row, digests, _)) = records_script_with(false, true) else {
+        return;
+    };
+    assert_eq!(digests, off, "records off: the digests");
+    assert_eq!(row, off_row, "records off: the pixels");
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let replayed = d3d9_wgpu::replay_draw_digests_with(&recording, true, true, 0, u64::MAX, None)
+        .expect("the script's recording")
+        .expect("a GPU adapter, as above")
+        .into_iter()
+        .map(|(d, _)| d)
+        .collect::<Vec<u64>>();
+    assert_eq!(replayed, off, "the recording replayed from storage");
 }
 
 /// A draw into the A8R8G8B8 target, then with nothing between but `SetRenderTarget` a draw into

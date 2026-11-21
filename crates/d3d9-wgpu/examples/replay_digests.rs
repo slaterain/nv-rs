@@ -10,12 +10,14 @@
 //! Across two builds (a change that has no switch): `NV_DIGESTS_SAVE=FILE` writes the digests to
 //! FILE, and `NV_DIGESTS_REF=FILE` compares both replays' digests with FILE's (one build's saved
 //! list against another's), each line printed as above.
+//! `NV_DIGESTS_STORAGE=1` adds a third replay, records on and the registers read from storage
+//! (`Device::set_storage_regs`), compared with the first.
 //! `NV_WGPU_CACHE=DIR` as the game's host.
-fn replay(bytes: &[u8], records: bool, from: u64, to: u64) -> Vec<(u64, u64)> {
+fn replay(bytes: &[u8], records: bool, storage: bool, from: u64, to: u64) -> Vec<(u64, u64)> {
     let cache = std::env::var_os("NV_WGPU_CACHE").map(Into::into);
-    d3d9_wgpu::replay_draw_digests(bytes, records, from, to, cache)
+    d3d9_wgpu::replay_draw_digests_with(bytes, records, storage, from, to, cache)
         .expect("a command file")
-        .expect("a GPU adapter")
+        .expect("a GPU adapter (that can read the registers from storage, when asked)")
 }
 
 /// Prints the first draw where `a` and `b` part (`what` names the pair), or that they are alike;
@@ -49,8 +51,8 @@ fn main() {
     let bytes = std::fs::read(&a[0]).expect("read the command file");
     let from: u64 = a.get(1).map_or(0, |s| s.parse().expect("FROM"));
     let to: u64 = a.get(2).map_or(u64::MAX, |s| s.parse().expect("TO"));
-    let off = replay(&bytes, false, from, to);
-    let on = replay(&bytes, true, from, to);
+    let off = replay(&bytes, false, false, from, to);
+    let on = replay(&bytes, true, false, from, to);
     let presents = off.last().map_or(0, |&(_, p)| p + 1);
     println!(
         "records off: {} draws, on: {} draws (Presents {from}..{}), the last in Present {}",
@@ -60,6 +62,10 @@ fn main() {
         presents.saturating_sub(1)
     );
     let mut ok = compare("records off and on", &off, &on);
+    if std::env::var_os("NV_DIGESTS_STORAGE").is_some() {
+        let stored = replay(&bytes, true, true, from, to);
+        ok &= compare("records off and registers from storage", &off, &stored);
+    }
     if let Some(path) = std::env::var_os("NV_DIGESTS_SAVE") {
         let out: Vec<u8> = off
             .iter()
