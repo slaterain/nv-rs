@@ -120,6 +120,11 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
     ),
     ("S0145", "bFixSunDirection", Row::at(WORLD_FIXES, 7)),
     (
+        "S0152",
+        "bFixNPCBackpackNotUpdating",
+        Row::at(WORLD_FIXES, 34),
+    ),
+    (
         "S0156",
         "bInventoryMinusOneOverflowFix",
         Row::at(WORLD_FIXES, 33),

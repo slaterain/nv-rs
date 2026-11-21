@@ -177,6 +177,10 @@ pub const CUSTOM_SAVE_NAME_SHOWN: Row = fix(32);
 /// `004d0900`): an inventory whose weights sum to exactly -1.0 caches 0, since -1.0 means
 /// "recompute" and the weight would be summed again every time it is asked.
 pub const INVENTORY_WEIGHT_NOT_MINUS_ONE: Row = fix(33);
+/// S0152 `patchFixNPCBackpackNotUpdating` (bytes at `0x4C0FF1` in `Actor::QueueUnEquipObject`
+/// `004c0cf0`): unequipping a backpack also refreshes what the actor is shown wearing, as power and
+/// heavy armor already do (the biped flags `& 0xA4`).
+pub const NPC_BACKPACK_UPDATE: Row = fix(34);
 
 /// `OSInputGlobals *` (xNVSE's `0x11F35CC`).
 pub const INPUT_GLOBALS: u32 = 0x011f_35cc;

@@ -3437,9 +3437,7 @@ pub fn fn_004c0cf0(
             match form_type_of(e, form) {
                 0x18 => {
                     let biped = form + ARMOR_BIPED_MODEL;
-                    if e.call(BIPED_IS_POWER_ARMOR, &args![biped]).bool()
-                        || fn_004c0bd0(e, Ptr::new(biped))
-                    {
+                    if unequip_refreshes_worn(e, biped) {
                         power_armor = true;
                     }
                     if dismemberment_allows_slot_update(e, actor) {
@@ -4944,6 +4942,36 @@ mod s0128_tests {
         assert_eq!(run(false, 0x8000), shown);
         assert_eq!(run(true, 0x7000), shown);
         assert!(run(true, 0x8000).is_empty());
+    }
+
+    /// lStewieAl's Tweaks' S0152: with the row the biped flags decide (backpack 0x4, heavy 0x20,
+    /// power 0x80 refresh; others do not) and the exe's two tests are not asked.
+    #[test]
+    fn s0152_unequipping_a_backpack_refreshes() {
+        let mut e = Engine::new();
+        let biped = e.mem.alloc(0x10);
+        e.register(BIPED_IS_POWER_ARMOR, |_, _| Ret {
+            eax: 0,
+            ..Ret::default()
+        });
+        e.set_stewie(engine_core::extend::stewie::NPC_BACKPACK_UPDATE, true);
+        e.call_log = Some(vec![]);
+        for (flags, refresh) in [
+            (4u8, true),
+            (0x20, true),
+            (0x80, true),
+            (0x43, false),
+            (0, false),
+        ] {
+            e.mem.set_u8(biped + 8, flags);
+            assert_eq!(unequip_refreshes_worn(&mut e, biped), refresh, "{flags:#x}");
+        }
+        assert!(e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .all(|c| c.0 != BIPED_IS_POWER_ARMOR));
     }
 
     /// lStewieAl's Tweaks' S0156: a total of exactly -1.0 is cached as 0 with the row, kept off;
@@ -9758,6 +9786,16 @@ fn heavy_weapon_adjusted(e: &mut Engine, weight: f32) -> f32 {
         return (weight as f64 * factor as f64) as f32;
     }
     weight
+}
+
+/// Whether unequipping armor with the biped model `biped` refreshes what the actor is shown
+/// wearing (`0x4C0FF1`: power armor `00480d10` or heavy armor `004c0bd0`); with lStewieAl's Tweaks'
+/// S0152 the biped flags' backpack, heavy and power armor bits (`test byte [ecx+8], 0xA4`).
+fn unequip_refreshes_worn(e: &mut Engine, biped: u32) -> bool {
+    if e.stewie(engine_core::extend::stewie::NPC_BACKPACK_UPDATE) {
+        return e.mem.u8(biped + 8) & 0xa4 != 0;
+    }
+    e.call(BIPED_IS_POWER_ARMOR, &args![biped]).bool() || fn_004c0bd0(e, Ptr::new(biped))
 }
 
 /// The weight `004d0900` caches (`FLD`/`FSTP` at `0x4D0EDA`); with lStewieAl's Tweaks' S0156
