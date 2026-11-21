@@ -1747,7 +1747,9 @@ mod tests {
                 unsafe impl Send for Stepped {}
                 let moved = Stepped(e);
                 let back = std::thread::spawn(move || {
-                    let Stepped(mut e) = moved;
+                    // The whole wrapper moves (a pattern would move only its field, the engine).
+                    let moved = moved;
+                    let mut e = moved.0;
                     assert_eq!(own_word(&e, at, 0), 1, "another thread: guest memory");
                     assert_eq!(own_bytes(&e, at, 4), vec![1, 0, 0, 0]);
                     assert!(!owns(&e, at, 8), "another thread owns nothing");
