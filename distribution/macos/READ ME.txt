@@ -96,6 +96,8 @@ Start
    the terminal, as ./play.sh.
    It plays the game's own terminal sounds, read from your installed game (Settings > Launcher
    sounds turns them off).
+   The window has no title bar: drag it by its background (anywhere but an entry) to move it;
+   > Exit or Esc on the first screen closes it.
 
 The first start asks for your game's folder: type it, or drag the folder from Finder into the
 Terminal window, and press Enter. nv-rs remembers it.
