@@ -1363,6 +1363,7 @@ pub fn install(e: &mut Engine, choice: &Choice) {
     for fix in FIXES.iter().filter(|f| choice.is_on(f)) {
         (fix.install)(e);
     }
+    install_loader_drain_budget(e, std::env::var("NV_LOADER_DRAIN_MS").ok().as_deref());
     if choice.is_on(&DRAW_THREAD) {
         crate::draw_thread::install(e, choice);
     }
@@ -1375,6 +1376,22 @@ pub fn install(e: &mut Engine, choice: &Choice) {
             crate::patch_data::strip_load_with_cell_offsets,
         );
     }
+}
+
+/// `NV_LOADER_DRAIN_MS=n` (a measuring switch, off unless set, in every preset): the model loader's
+/// drain of its queue, which `IOManager::UpdateQueue` runs every frame before and outside its own
+/// millisecond budget, stops after `n` ms of tasks in play; the rest run in the next frames, in
+/// order ([`fn_00448c10_budgeted`]). Unset, 0 or not a number: nothing registered.
+///
+/// [`fn_00448c10_budgeted`]: engine::units::fallout_shared::modelloader_p3::fn_00448c10_budgeted
+pub fn install_loader_drain_budget(e: &mut Engine, value: Option<&str>) -> Option<u32> {
+    use engine::units::fallout_shared::modelloader_p3::{fn_00448c10_budgeted, LOADER_DRAIN_MS};
+    let ms = value?.trim().parse::<u32>().ok().filter(|&ms| ms > 0)?;
+    LOADER_DRAIN_MS.store(ms, std::sync::atomic::Ordering::Relaxed);
+    let (at, f) = engine::entry!(0x0044_8c10, fn_00448c10_budgeted(Ptr) -> bool);
+    e.register(at, f);
+    eprintln!("NV_LOADER_DRAIN_MS: the model loader's drain stops after {ms} ms a frame in play");
+    Some(ms)
 }
 
 /// The settings file: `NV_SETTINGS` when set; else `settings.ini` beside the program or in the

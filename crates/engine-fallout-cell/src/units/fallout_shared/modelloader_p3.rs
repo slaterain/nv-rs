@@ -2317,6 +2317,8 @@ pub fn fn_00448bf0(e: &mut Engine, this: Ptr) -> bool {
 /// leaves a task in the slot, virtual function `0x14` of that task is
 /// called. Always returns true.
 pub fn fn_00448c10(e: &mut Engine, this: Ptr) -> bool {
+    // The hitch log's timer (main only; no effect on the game).
+    let _timed = engine_core::hitch::Timed::main(engine_core::hitch::Count::LoaderDrainNs);
     let queue = e.mem.u32(this.addr() + 0x1c);
     e.with_stack(4, |e, slot| {
         e.call(TASK_POINTER_CONSTRUCT, &args![slot, 0u32]);
@@ -2335,6 +2337,48 @@ pub fn fn_00448c10(e: &mut Engine, this: Ptr) -> bool {
     true
 }
 
+/// The budget (milliseconds) of [`fn_00448c10_budgeted`]: 0 = none (the host's switch
+/// `NV_LOADER_DRAIN_MS` sets it before the first frame).
+pub static LOADER_DRAIN_MS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// [`fn_00448c10`] with a time budget a frame, a port-side switch (`NV_LOADER_DRAIN_MS`, off by
+/// default): in play (the IO manager's mode 6) the drain stops taking tasks once the tasks it ran
+/// took longer than [`LOADER_DRAIN_MS`] (the game's own timer and scale, as `00c3dbf0`'s budget);
+/// the ones left stay in the queue, in their order, for the next frame's drain. The first task
+/// always runs, so the queue never stalls. Any other mode (the game's waits for loads, `00c3dfa0`,
+/// which set the priority as the mode, and the loading screens' drains) and a budget of 0 run the
+/// translation unchanged. Each task runs whole with the same calls; only how many a frame differs.
+pub fn fn_00448c10_budgeted(e: &mut Engine, this: Ptr) -> bool {
+    let budget_ms = LOADER_DRAIN_MS.load(std::sync::atomic::Ordering::Relaxed);
+    let manager = e.global::<u32>(TASK_MANAGER);
+    if budget_ms == 0 || manager == 0 || fn_00448de0(e, Ptr::new(manager)) {
+        return fn_00448c10(e, this);
+    }
+    let _timed = engine_core::hitch::Timed::main(engine_core::hitch::Count::LoaderDrainNs);
+    let scale = f64::from(e.global::<f32>(TIMER_SCALE));
+    let limit = (f64::from(budget_ms) * scale) as i64;
+    let start = e.call(TIMER_GET_TIME, &args![]).u64();
+    let queue = e.mem.u32(this.addr() + 0x1c);
+    e.with_stack(4, |e, slot| {
+        e.call(TASK_POINTER_CONSTRUCT, &args![slot, 0u32]);
+        e.call(QUEUE_NEXT_TASK, &args![queue, slot]);
+        loop {
+            let task = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, slot));
+            if task == 0 {
+                break;
+            }
+            e.vcall(task, 0x14, &args![]);
+            let now = e.call(TIMER_GET_TIME, &args![]).u64();
+            if (now.wrapping_sub(start) as i64) > limit {
+                break;
+            }
+            e.call(QUEUE_NEXT_TASK, &args![queue, slot]);
+        }
+        e.call(TASK_POINTER_DESTRUCT, &args![slot]);
+    });
+    true
+}
+
 // Translated from 00448cc0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Starts a timer ([`fn_00448e00`], [`bs_precision_timer_reset`]) of 5.0
 /// seconds (100000.0 when the task manager's dword at +0x68 is 6,
@@ -2342,6 +2386,8 @@ pub fn fn_00448c10(e: &mut Engine, this: Ptr) -> bool {
 /// done or the timer has run out ([`fn_00448e70`]), every task it yields has
 /// its virtual function `0x20` called. Returns whether the iterator is done.
 pub fn fn_00448cc0(e: &mut Engine, this: Ptr) -> bool {
+    // The hitch log's timer (main only; no effect on the game).
+    let _timed = engine_core::hitch::Timed::main(engine_core::hitch::Count::LoaderWalkNs);
     e.with_stack(0x10, |e, timer| {
         fn_00448e00(e, timer);
         let manager = e.global::<u32>(TASK_MANAGER);
@@ -5692,6 +5738,67 @@ mod tests {
                 format!("task {:x}", tasks[1])
             ]
         );
+    }
+
+    /// The budgeted drain: in play it stops after the task that spent the budget (the rest stay
+    /// queued, in order, for the next call; the first always runs); outside play, or with no
+    /// budget, it runs every task as the translation.
+    #[test]
+    fn fn_00448c10_budgeted_stops_after_the_budget_in_play_only() {
+        use std::sync::atomic::Ordering::Relaxed;
+        let run = |mode: u32, budget: u32| {
+            let mut e = engine();
+            let seen: std::rc::Rc<std::cell::RefCell<Vec<u32>>> = Default::default();
+            let sink = seen.clone();
+            e.register_double(0x7700_0000, move |_, a| {
+                sink.borrow_mut().push(a[0]);
+                Ret::default()
+            });
+            let tasks: Vec<u32> = (0..3)
+                .map(|i| {
+                    object(
+                        &mut e,
+                        0x0301_0000 + i * 0x1000,
+                        &[(0x14, 0x7700_0000)],
+                        0x20,
+                    )
+                })
+                .collect();
+            let mut upcoming = vec![0, tasks[2], tasks[1], tasks[0]];
+            e.register_double(QUEUE_NEXT_TASK, move |e, a| {
+                e.mem.set_u32(a[1], upcoming.pop().unwrap_or(0));
+                Ret::default()
+            });
+            let manager = e.mem.alloc(0x80);
+            e.mem.set_u32(manager + 0x68, mode);
+            e.map(TASK_MANAGER, 4);
+            e.mem.set_u32(TASK_MANAGER, manager);
+            e.map(TIMER_SCALE, 4);
+            e.mem.set_f32(TIMER_SCALE, 2.0);
+            // Each timer read moves 3 ticks; a 1 ms budget is 2 ticks.
+            let mut now = 0u64;
+            e.register_double(TIMER_GET_TIME, move |_, _| {
+                let value = now;
+                now += 3;
+                value.into_ret()
+            });
+            let this = e.mem.alloc(0x40);
+            e.mem.set_u32(this + 0x1c, 0x5555);
+            LOADER_DRAIN_MS.store(budget, Relaxed);
+            assert!(fn_00448c10_budgeted(&mut e, Ptr::new(this)));
+            let first = seen.borrow().clone();
+            assert!(fn_00448c10_budgeted(&mut e, Ptr::new(this)));
+            LOADER_DRAIN_MS.store(0, Relaxed);
+            let both = seen.borrow().clone();
+            (tasks, first, both)
+        };
+        let (tasks, first, both) = run(6, 1);
+        assert_eq!(first, [tasks[0]], "one task, then the budget is spent");
+        assert_eq!(both, [tasks[0], tasks[1]], "the next call goes on in order");
+        let (tasks, first, _) = run(2, 1);
+        assert_eq!(first, tasks, "a wait for loads drains everything");
+        let (tasks, first, _) = run(6, 0);
+        assert_eq!(first, tasks, "no budget: the translation");
     }
 
     #[test]
