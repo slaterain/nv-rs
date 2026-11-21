@@ -53,6 +53,8 @@ pub const BURST_SECS: f64 = 10.0;
 
 /// `PlayerCharacter` and its parent cell (`008d6f30`).
 const PLAYER: u32 = 0x011d_ea3c;
+/// `Tile::iHibernatingTileCount` (Xbox PDB): the interface's hibernating tiles.
+const HIBERNATING_TILE_COUNT: u32 = 0x011f_32d8;
 const PARENT_CELL: u32 = 0x40;
 const POSITION: u32 = 0x30;
 
@@ -215,6 +217,10 @@ pub struct Frame {
     pub largest_read: (u64, String),
     /// Who held the kernel lock in main's longest wait for it of 1 ms or more (`engine_core::hitch::LockHolder`).
     pub lock_holder: Option<engine_core::hitch::LockHolder>,
+    /// Who owned the game critical section in main's longest wait for one of 1 ms or more.
+    pub section_holder: Option<engine_core::hitch::LockHolder>,
+    /// The interface's hibernating tiles at the frame's end (`Tile::iHibernatingTileCount`, `011f32d8`).
+    pub hibernating: u32,
     pub left_out: u64,
     /// The longest of those left out (ms).
     pub longest_left_out: f64,
@@ -355,6 +361,7 @@ fn holder_words(h: &engine_core::hitch::LockHolder) -> String {
         (t, s) => format!("game thread {t} (starts at {s:08x})"),
     };
     let what = match (h.call, h.call_name.as_str()) {
+        (0, _) if h.section != 0 => "running game code (in no platform call)".to_string(),
         (0, _) => "outside a platform call".to_string(),
         (_, "") => format!("in the platform call at {:08x}", h.call),
         (_, name) => format!("in {name}"),
@@ -375,7 +382,15 @@ fn holder_words(h: &engine_core::hitch::LockHolder) -> String {
         }
         _ => String::new(),
     };
-    format!("{who} {what}, main waited {:.1} ms{ran}", ms(h.wait_ns))
+    let section = if h.section != 0 {
+        format!("section {:08x} owned by ", h.section)
+    } else {
+        String::new()
+    };
+    format!(
+        "{section}{who} {what}, main waited {:.1} ms{ran}",
+        ms(h.wait_ns)
+    )
 }
 
 /// A wait under this (ns) is left out of the line: too short to matter.
@@ -461,10 +476,14 @@ impl Frame {
             } else {
                 String::new()
             };
+            let owner = self
+                .section_holder
+                .as_ref()
+                .map_or_else(String::new, |h| format!(" ({})", holder_words(h)));
             said.push((
                 ms(section),
                 format!(
-                    "waited {:.0} ms for a lock another game thread held{at}",
+                    "waited {:.0} ms for a lock another game thread held{at}{owner}",
                     ms(section)
                 ),
             ));
@@ -904,9 +923,20 @@ impl Frame {
             ),
         );
         put(
-            g(Count::TilesMade),
-            format!("{} interface tiles made", g(Count::TilesMade)),
+            g(Count::TilesMade) + g(Count::TilesDeleted),
+            format!(
+                "interface tiles {} made, {} destroyed, {} hibernating",
+                g(Count::TilesMade),
+                g(Count::TilesDeleted),
+                self.hibernating
+            ),
         );
+        if let Some(h) = &self.section_holder {
+            put(
+                1,
+                format!("the critical section's owner: {}", holder_words(h)),
+            );
+        }
         if let Some(h) = &self.lock_holder {
             put(1, format!("the kernel lock's holder: {}", holder_words(h)));
         }
@@ -996,6 +1026,12 @@ impl HitchLog {
         let longest_wait = engine_core::hitch::take_longest_wait();
         let largest_read = engine_core::hitch::take_largest_read();
         let lock_holder = engine_core::hitch::take_lock_holder();
+        let section_holder = engine_core::hitch::take_section_holder();
+        let hibernating = if e.mem.is_mapped(HIBERNATING_TILE_COUNT) {
+            e.mem.u32(HIBERNATING_TILE_COUNT)
+        } else {
+            0
+        };
         let screen = crate::uncap::screen(e);
         let presents = engine_platform::d3d9real::present_count(e).unwrap_or(0);
         let shown = Shown {
@@ -1054,6 +1090,8 @@ impl HitchLog {
             longest_wait,
             largest_read,
             lock_holder,
+            section_holder,
+            hibernating,
             left_out,
             longest_left_out,
         };
@@ -1412,6 +1450,37 @@ mod tests {
             "the host or main in ReadFile, main waited 286.0 ms"
         );
 
+        // A game critical section's owner, named in the section wait's cause.
+        let mut f = frame();
+        f.ms = 72.0;
+        f.typical = 16.7;
+        f.stages = Some([22.0, 0.0, 2.9, 44.7, 0.4, 0.3, 0.0, 0.0, 0.1]);
+        f.game[Count::SectionWaitNs as usize] = 35_200_000;
+        f.game[Count::SectionWaits as usize] = 48;
+        f.longest_wait = (3_600_000, WaitKind::Section, 0x00b6_6520);
+        f.section_holder = Some(LockHolder {
+            section: 0x0120_0010,
+            thread: 4,
+            start: 0x00aa_8430,
+            call: 0x00fd_f2a0,
+            call_name: "D3DXCreateTextureFromFileInMemory".into(),
+            wait_ns: 3_600_000,
+            measured_ns: 3_600_000,
+            cpu_ns: Some(3_400_000),
+        });
+        assert_eq!(
+            f.cause(),
+            "waited 35 ms for a lock another game thread held (at 00b66520) (section 01200010 owned by the IO thread \
+             (game thread 4) in D3DXCreateTextureFromFileInMemory, main waited 3.6 ms; it ran 3.4 of the last 3.6 ms \
+             waited (working under the lock))"
+        );
+        assert!(
+            f.line()
+                .contains("the critical section's owner: section 01200010"),
+            "{}",
+            f.line()
+        );
+
         // The pause menu's open: the heap's measured time instead of the estimate, and the tiles made.
         let mut f = frame();
         f.stages = Some([1.8, 0.1, 2.2, 3.2, 0.5, 0.2, 1.8, 104.3, 0.0]);
@@ -1427,7 +1496,10 @@ mod tests {
         );
         let l = f.line();
         assert!(l.contains("main in the heap 61.0 ms"), "{l}");
-        assert!(l.contains("2100 interface tiles made"), "{l}");
+        assert!(
+            l.contains("interface tiles 2100 made, 0 destroyed, 0 hibernating"),
+            "{l}"
+        );
 
         // Cells attached on a running route: their time, the hand-over and the references given their 3D.
         let mut f = frame();

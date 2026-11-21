@@ -490,6 +490,7 @@ impl KernelLock {
                 .get(&seen.call)
                 .map_or_else(String::new, |n| n.to_string());
             crate::hitch::lock_holder(crate::hitch::LockHolder {
+                section: 0,
                 thread: seen.thread,
                 start: crate::thread_cpu::start_of(seen.thread),
                 call: seen.call,
@@ -1517,6 +1518,8 @@ fn locked_call(e: &mut Engine, args: &[u32]) -> Ret {
     if world.kernel.depth.load(Ordering::Relaxed) == 1 {
         world.kernel.holder_call.store(addr, Ordering::Relaxed);
     }
+    // The platform function this game thread is in, for a section waiter's naming (`thread_cpu::call_of`).
+    let _in_call = InCall(crate::thread_cpu::enter_call(addr));
     park_if_suspended(e);
     if world.late_count.load(Ordering::Acquire) != e.real.as_ref().map_or(0, |r| r.late_seen) {
         sync_registered(e);
@@ -1536,6 +1539,15 @@ fn locked_call(e: &mut Engine, args: &[u32]) -> Ret {
         r.last_error = now;
     }
     ret
+}
+
+/// [`locked_call`]'s note of the platform function this thread is in, put back however the call ends.
+struct InCall(u32);
+
+impl Drop for InCall {
+    fn drop(&mut self) {
+        crate::thread_cpu::leave_call(self.0);
+    }
 }
 
 /// The kernel lock's hold of [`locked_call`], given back however the call ends.
@@ -2036,6 +2048,15 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
     let was = w.leave_guest();
     let started = timed_wait().then(std::time::Instant::now);
     let site = if started.is_some() { wait_site(e) } else { 0 };
+    // Main's wait: the owner then, the platform function it is in and its processor time, for the hitch log.
+    let owned_by = (started.is_some() && role() == 0 && crate::hitch::on()).then(|| {
+        let thread = owner.load(Ordering::Relaxed);
+        (
+            thread,
+            crate::thread_cpu::call_of(thread),
+            crate::thread_cpu::cpu_ns(thread),
+        )
+    });
     // Counted, then listed, then the owner word tried: a leave that frees it after the count sees
     // the count and wakes the listed (`leave_critical_section`), so no wake is missed.
     waiting.fetch_add(1, Ordering::SeqCst);
@@ -2088,6 +2109,26 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
             stats.section[role()].add(d);
         }
         hitch_wait(crate::hitch::WaitKind::Section, site, d);
+        if let Some((thread, call, cpu_before)) = owned_by {
+            let ns = d.as_nanos().min(u128::from(u64::MAX)) as u64;
+            if ns >= crate::hitch::HOLDER_WAIT_NS {
+                crate::hitch::section_holder(crate::hitch::LockHolder {
+                    section: a,
+                    thread,
+                    start: crate::thread_cpu::start_of(thread),
+                    call,
+                    call_name: w
+                        .import_names
+                        .get(&call)
+                        .map_or_else(String::new, |n| n.to_string()),
+                    wait_ns: ns,
+                    measured_ns: ns,
+                    cpu_ns: cpu_before
+                        .zip(crate::thread_cpu::cpu_ns(thread))
+                        .map(|(b, after)| after.saturating_sub(b)),
+                });
+            }
+        }
     }
     if was {
         w.enter_guest();
@@ -4343,6 +4384,8 @@ mod tests {
 
     /// Set by [`busy_under_the_lock`] once it runs (under the kernel lock).
     static BUSY_STARTED: AtomicBool = AtomicBool::new(false);
+    /// The two holder tests one at a time (they share the flag above and the hitch log's holder slots).
+    static HOLDER_TESTS: Mutex<()> = Mutex::new(());
 
     /// A platform function that works 250 ms under the kernel lock (the holder test's stand-in for a long call).
     fn busy_under_the_lock(_: &mut Engine, _: &[u32]) -> Ret {
@@ -4366,6 +4409,7 @@ mod tests {
     /// processor time over the measured part of the wait is most of it.
     #[test]
     fn main_s_long_wait_for_the_kernel_lock_names_the_holder() {
+        let _one = guard(&HOLDER_TESTS);
         let (mut e, slot) = engine_with_imports();
         let busy = slot("D3DPERF_SetOptions");
         e.register(busy, busy_under_the_lock);
@@ -4398,6 +4442,77 @@ mod tests {
                 cpu * 2 >= held.measured_ns,
                 "working, not off the processor: {held:?}"
             );
+        }
+        assert_eq!(
+            e.call(slot("WaitForSingleObject"), &args![h, STRESS_TIMEOUT_MS])
+                .eax,
+            0
+        );
+    }
+
+    /// The section test's game thread: enters the section at `p[0]` (`EnterCriticalSection` at `p[1]`), calls the
+    /// busy platform function at `p[2]` holding it, and leaves (`LeaveCriticalSection` at `p[3]`).
+    fn holds_a_section_in_the_busy_function(e: &mut Engine, a: &[u32]) -> Ret {
+        let p = a[0];
+        let (section, enter, busy, leave) = (
+            e.mem.u32(p),
+            e.mem.u32(p + 4),
+            e.mem.u32(p + 8),
+            e.mem.u32(p + 0xc),
+        );
+        e.call(enter, &args![section]);
+        e.call(busy, &args![0u32]);
+        e.call(leave, &args![section]);
+        Ret::default()
+    }
+
+    /// Main's wait for a game critical section names its owner: the section, the game thread, the platform
+    /// function it was in while holding the section, and (where the system tells it) that it was working.
+    #[test]
+    fn main_s_long_wait_for_a_section_names_its_owner() {
+        let _one = guard(&HOLDER_TESTS);
+        let (mut e, slot) = engine_with_imports();
+        let busy = slot("D3DPERF_SetOptions");
+        e.register(busy, busy_under_the_lock);
+        e.register(0x0040_f100, holds_a_section_in_the_busy_function);
+        start(&mut e).expect("real threads on");
+        ctx(&e).frame_begins(false);
+        let section = e.mem.alloc(0x18);
+        e.call(slot("InitializeCriticalSection"), &args![section]);
+        let p = e.mem.alloc(0x10);
+        for (i, word) in [
+            section,
+            slot("EnterCriticalSection"),
+            busy,
+            slot("LeaveCriticalSection"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            e.mem.set_u32(p + 4 * i as u32, word);
+        }
+        BUSY_STARTED.store(false, Ordering::SeqCst);
+        let h = e
+            .call(
+                slot("CreateThread"),
+                &args![0u32, 0u32, 0x0040_f100u32, p, 0u32, 0u32],
+            )
+            .eax;
+        while !BUSY_STARTED.load(Ordering::SeqCst) {
+            std::thread::yield_now();
+        }
+        let _ = crate::hitch::take_section_holder();
+        e.call(slot("EnterCriticalSection"), &args![section]);
+        e.call(slot("LeaveCriticalSection"), &args![section]);
+        let owned = crate::hitch::take_section_holder().expect("a named owner");
+        assert_eq!(owned.section, section);
+        assert_eq!(owned.call_name, "D3DPERF_SetOptions");
+        assert_eq!(owned.start, 0x0040_f100);
+        assert_ne!(owned.thread, 0);
+        assert!(owned.wait_ns >= 100_000_000, "{owned:?}");
+        if cfg!(any(windows, target_os = "linux")) {
+            let cpu = owned.cpu_ns.expect("the owner's processor time");
+            assert!(cpu * 2 >= owned.wait_ns, "working: {owned:?}");
         }
         assert_eq!(
             e.call(slot("WaitForSingleObject"), &args![h, STRESS_TIMEOUT_MS])

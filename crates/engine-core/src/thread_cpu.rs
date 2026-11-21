@@ -7,13 +7,16 @@
 //! `/proc/self/task/<tid>/schedstat` (nanoseconds on the processor), the thread's id read from `/proc/thread-self`
 //! at its start. Other systems (macOS): not known, and the line says so.
 
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
+use std::sync::{Arc, Mutex};
 
-/// A game thread's processor clock.
+/// A game thread's entry: its start address, the platform function it is in now ([`enter_call`]) and its
+/// processor clock (`None` where the system does not tell it).
 struct Clock {
     thread: u32,
     start: u32,
-    os: Os,
+    call: Arc<AtomicU32>,
+    os: Option<Os>,
 }
 
 #[cfg(windows)]
@@ -27,16 +30,57 @@ struct Os;
 
 static CLOCKS: Mutex<Vec<Clock>> = Mutex::new(Vec::new());
 
+thread_local! {
+    /// This OS thread's current platform function word (its registry entry's), once registered.
+    static CALL: std::cell::OnceCell<Arc<AtomicU32>> = const { std::cell::OnceCell::new() };
+}
+
 /// The running OS thread is game thread `thread` (its start address `start`): its clock is kept for later reads
 /// from other threads. A thread registered again (a new run in the same process) replaces its old entry.
 pub fn register(thread: u32, start: u32) {
-    let Some(os) = Os::here() else {
-        return;
-    };
+    let call = Arc::new(AtomicU32::new(0));
+    CALL.with(|c| {
+        let _ = c.set(Arc::clone(&call));
+    });
     if let Ok(mut c) = CLOCKS.lock() {
         c.retain(|k| k.thread != thread);
-        c.push(Clock { thread, start, os });
+        c.push(Clock {
+            thread,
+            start,
+            call,
+            os: Os::here(),
+        });
     }
+}
+
+/// This thread (when registered) enters the platform function at `addr`: answers the one it was in before, for
+/// [`leave_call`]. One relaxed store; nothing on an unregistered thread (main, the host, tests).
+#[inline]
+pub fn enter_call(addr: u32) -> u32 {
+    CALL.with(|c| c.get().map_or(0, |w| w.swap(addr, Relaxed)))
+}
+
+/// This thread left the platform function [`enter_call`] entered: back to `before`.
+#[inline]
+pub fn leave_call(before: u32) {
+    CALL.with(|c| {
+        if let Some(w) = c.get() {
+            w.store(before, Relaxed);
+        }
+    });
+}
+
+/// The platform function game thread `thread` is in now (0: none, or not registered).
+pub fn call_of(thread: u32) -> u32 {
+    CLOCKS
+        .lock()
+        .ok()
+        .and_then(|c| {
+            c.iter()
+                .find(|k| k.thread == thread)
+                .map(|k| k.call.load(Relaxed))
+        })
+        .unwrap_or(0)
 }
 
 /// Game thread `thread`'s start address (0 when not registered).
@@ -51,7 +95,7 @@ pub fn start_of(thread: u32) -> u32 {
 /// Game thread `thread`'s processor time so far (ns), when the system tells it.
 pub fn cpu_ns(thread: u32) -> Option<u64> {
     let c = CLOCKS.lock().ok()?;
-    c.iter().find(|k| k.thread == thread)?.os.read()
+    c.iter().find(|k| k.thread == thread)?.os.as_ref()?.read()
 }
 
 #[cfg(windows)]

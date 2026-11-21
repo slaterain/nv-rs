@@ -79,6 +79,8 @@ pub enum Count {
     HeapNsMain,
     /// Interface tiles made (`Tile::Init`, `009ff600`: every tile a menu or the HUD builds).
     TilesMade,
+    /// Interface tiles destroyed (`Tile::~Tile`, `009ff340`).
+    TilesDeleted,
     /// References given a 3D (`TESObjectREFR::Set3D`, `005702e0`, with a node other than none and other than the
     /// one they had).
     Refs3dAttached,
@@ -288,6 +290,8 @@ pub fn heap_timer_end(started: Option<std::time::Instant>) {
 /// than the wait was pushed off the processor (other programs); one with about as much was working under the lock.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LockHolder {
+    /// The game critical section main waited for (its address), 0 for the kernel lock.
+    pub section: u32,
     pub thread: u32,
     pub start: u32,
     pub call: u32,
@@ -318,6 +322,27 @@ pub fn lock_holder(holder: LockHolder) {
 /// The frame's longest named wait for the kernel lock ([`lock_holder`]), then none.
 pub fn take_lock_holder() -> Option<LockHolder> {
     HOLDER.lock().ok().and_then(|mut h| h.take())
+}
+
+static SECTION_HOLDER: std::sync::Mutex<Option<LockHolder>> = std::sync::Mutex::new(None);
+
+/// Main waited `holder.wait_ns` for the game critical section `holder.section` that `holder.thread` owned (the
+/// platform function the owner was in then, its processor time over the whole wait): kept when it is the frame's
+/// longest of 1 ms or more.
+pub fn section_holder(holder: LockHolder) {
+    if holder.wait_ns < HOLDER_WAIT_NS {
+        return;
+    }
+    if let Ok(mut h) = SECTION_HOLDER.lock() {
+        if h.as_ref().map_or(true, |k| holder.wait_ns > k.wait_ns) {
+            *h = Some(holder);
+        }
+    }
+}
+
+/// The frame's longest named wait for a game critical section ([`section_holder`]), then none.
+pub fn take_section_holder() -> Option<LockHolder> {
+    SECTION_HOLDER.lock().ok().and_then(|mut h| h.take())
 }
 
 /// What main waited for.
