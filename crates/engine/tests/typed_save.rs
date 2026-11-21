@@ -751,9 +751,13 @@ fn insert_space() {
         .setup(|e, case| {
             buffer_world(e);
             manager(e, case.word(0));
+            // Room is made at or before the write position, as the game's only caller
+            // (`SaveVariableSizedValue_ov2`, at a placeholder it wrote) does: an empty buffer
+            // (write position 0) only at 0.
+            let written = case.word(1).min(8);
             vec![
-                save_buffer(e, case.word(1), case.word(1).min(8)),
-                case.word(2),
+                save_buffer(e, case.word(1), written),
+                case.word(2).min(written),
                 case.word(3),
             ]
         })
