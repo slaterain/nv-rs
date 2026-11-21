@@ -309,8 +309,11 @@ pub mod kept {
     /// S0204's `Actor* pLastKilledActor` (4 bytes): the actor the console's `kill` last killed for
     /// the player, until `Actor::Kill` reaches its experience step for it.
     pub const LAST_KILL_COMMAND_ACTOR: usize = 5;
+    /// S0111's `bool isInPlayerAmmoSwap` (4 bytes): set while the player's ammunition swap runs
+    /// (`PlayerCharacter::Update`'s call of `009462c0`), read by `0095d450`.
+    pub const PLAYER_AMMO_SWAP: usize = 6;
     /// How many.
-    pub const COUNT: usize = 6;
+    pub const COUNT: usize = 7;
 }
 
 /// The last thing each of Tweaks' warnings printed (its functions' statics), its print queue and
