@@ -2323,6 +2323,22 @@ impl Mem {
         self.set_u64(a, v.to_bits());
     }
 
+    /// A [`Span`] of the [`SPAN`] bytes from `a`: one test of the table (the page holding `a` and the
+    /// next both plainly mapped, as [`Mem::load`]'s fast path tests), then plain reads. `None` when
+    /// that test fails (a page not mapped, or one the touch census marked): a caller that only reads
+    /// ahead skips it, and anything else reads through [`Mem::u32`] as before.
+    #[inline(always)]
+    pub fn span(&self, a: u32) -> Option<Span<'_>> {
+        if self.fast_at(a) {
+            Some(Span {
+                host: self.host_at(a),
+                _mem: std::marker::PhantomData,
+            })
+        } else {
+            None
+        }
+    }
+
     /// NUL-terminated byte string at `a` (without the NUL). Searched a page at a time; a string
     /// that runs into an unmapped page faults at that page's first byte, as reading it byte by
     /// byte does.
@@ -2577,9 +2593,84 @@ impl Mem {
     }
 }
 
+/// The bytes a [`Span`] reaches from its address: one page. [`Mem::span`] tested the page holding
+/// the address and the next, so every byte up to the end of the next page is mapped, at least this
+/// many from the address.
+pub const SPAN: u32 = PAGE as u32;
+
+/// Guest memory from one address after [`Mem::span`]'s single test of the table: words at offsets
+/// below [`SPAN`] read as plain host loads, with no test of their own, and the read never faults.
+/// Read-only. It borrows the [`Mem`], so while it lives nothing that needs `&mut` of the engine
+/// runs (no call into other game code, no map or unmap): a span lives inside one stretch of
+/// straight code.
+#[derive(Clone, Copy)]
+pub struct Span<'m> {
+    host: *const u8,
+    _mem: std::marker::PhantomData<&'m Mem>,
+}
+
+impl Span<'_> {
+    /// The word at `off`.
+    #[inline(always)]
+    pub fn u32(&self, off: u32) -> u32 {
+        // A constant offset folds this test away.
+        assert!(off <= SPAN - 4, "span read past its end");
+        // SAFETY: `Mem::span` found the page holding the span's address and the next mapped, so
+        // the `SPAN` bytes from it are, and `[off, off + 4)` lies inside them (above). The span
+        // borrows the `Mem`, and the table changes only through `&mut Mem`; with real threads the
+        // shared space keeps unmapped pages committed until the thread host's barrier, as for
+        // every load (the module's "Threads"). A plain load, as `Mem::load`'s fast path makes.
+        u32::from_le_bytes(unsafe {
+            std::ptr::read_unaligned(self.host.add(off as usize).cast::<[u8; 4]>())
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A span reads what `Mem::u32` reads, only where its page and the next are plainly mapped.
+    #[test]
+    fn span_reads_as_u32_where_both_pages_are_mapped() {
+        let mut m = Mem::new();
+        m.map(0x0010_0000, 0x3000);
+        m.set_u32(0x0010_0ffe, 0x1122_3344);
+        m.set_u32(0x0010_1e00, 0x5566_7788);
+        let s = m.span(0x0010_0f00).expect("both pages mapped");
+        assert_eq!(s.u32(0xfe), 0x1122_3344, "across the page's end");
+        assert_eq!(s.u32(0xf00), 0x5566_7788, "in the next page");
+        assert_eq!(s.u32(SPAN - 4), m.u32(0x0010_0f00 + SPAN - 4));
+        // The last mapped page (the next one is not), an unmapped page, address 0.
+        assert!(m.span(0x0010_2000).is_none());
+        assert!(m.span(0x0020_0000).is_none());
+        assert!(m.span(0).is_none());
+    }
+
+    /// A page the touch census tracks (its accesses counted on the slow path) gives no span, so a
+    /// read-ahead never reads it and the census counts only the walk's own reads; the page before it
+    /// gives none either (its next page is the tracked one).
+    #[test]
+    fn span_gives_none_on_a_page_the_touch_census_tracks() {
+        let mut m = Mem::new();
+        m.map(0x0010_0000, 0x4000);
+        m.enable_touch(TouchSpec::default());
+        assert!(m.span(0x0010_1000).is_some(), "plainly mapped");
+        m.touch_tag_range(0x0010_2000, 0x40, 0, 0);
+        assert!(m.span(0x0010_2000).is_none(), "the tracked page");
+        assert!(m.span(0x0010_1000).is_none(), "the page before it");
+        assert!(m.span(0x0010_0000).is_some(), "two pages before");
+    }
+
+    #[test]
+    #[should_panic(expected = "span read past its end")]
+    fn span_refuses_a_read_past_its_end() {
+        let mut m = Mem::new();
+        m.map(0x0010_0000, 0x3000);
+        let s = m.span(0x0010_0000).expect("mapped");
+        let off = std::hint::black_box(SPAN - 3);
+        s.u32(off);
+    }
 
     /// The extenders' code addresses and the built-ins' data lie in the platform's area, above
     /// the platform's own code and module addresses, so no heap block can be one of them and no
