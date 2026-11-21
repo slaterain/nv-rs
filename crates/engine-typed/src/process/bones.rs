@@ -243,9 +243,68 @@ fn summary() {
     let (pass, walk, replay, serial) = (ms(&PASS_NS), ms(&WALK_NS), ms(&REPLAY_NS), ms(&SERIAL_NS));
     let (c, reasons) = take_counts();
     println!(
-        "NV_PAR_BONES: {} frames: a frame {pass:.3} ms (walks {walk:.3}, replays {replay:.3}, whole on main \n         {serial:.3}); actors walked {}, whole on main {} {reasons:?}, subtrees on main {}, Havok parts {}; \n         checked {} actors, {} differences, {} mismatches",
+        "NV_PAR_BONES: {} frames: a frame {pass:.3} ms (walks {walk:.3}, replays {replay:.3}, whole on main \
+         {serial:.3}); actors walked {}, whole on main {} {reasons:?}, subtrees on main {}, Havok parts {}; \
+         checked {} actors, {} differences, {} mismatches",
         c.frames, c.walked, c.barriers, c.subtrees, c.havok, c.checked_actors, c.differences, c.mismatches
     );
+    census_print();
+}
+
+// ----- the barrier census (`NV_PAR_BONES_CENSUS=1`) ----------------------------------------------
+
+/// Every barrier object of every listed actor's tree, not only each actor's first: (what, the
+/// object's vtable, the detail, whether it lies in a head's subtree) and how often. What: 0 a node's
+/// controllers (detail: the first controller's vtable), 1 properties with controllers (detail: the
+/// object's flags), 2 a class (detail: its downward pass), 3 a collision object (detail: its vtable).
+static CENSUS: Mutex<Vec<((u32, u32, u32, bool), u64)>> = Mutex::new(Vec::new());
+static CENSUS_ON: AtomicU8 = AtomicU8::new(0);
+
+fn census_on() -> bool {
+    match CENSUS_ON.load(Relaxed) {
+        0 => {
+            let on = std::env::var("NV_PAR_BONES_CENSUS").is_ok_and(|v| v.trim() == "1");
+            CENSUS_ON.store(if on { 2 } else { 1 }, Relaxed);
+            on
+        }
+        m => m == 2,
+    }
+}
+
+/// Notes a barrier object for the census.
+fn census_note(e: &Engine, object: u32, barrier: Barrier, in_head: bool) {
+    let vtable = e.mem.u32(object);
+    let (what, detail) = match barrier {
+        Barrier::Controllers if e.mem.u32(object + 0x30) & FLAG_PROPERTY_CONTROLLERS != 0 => {
+            (1, e.mem.u32(object + 0x30))
+        }
+        Barrier::Controllers => (0, e.mem.u32(e.mem.u32(object + 0x0c))),
+        Barrier::Collision => (3, e.mem.u32(e.mem.u32(object + 0x1c))),
+        _ => (2, slot_target(e, object, SLOT_DOWNWARD)),
+    };
+    let key = (what, vtable, detail, in_head);
+    let mut c = CENSUS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(entry) = c.iter_mut().find(|(k, _)| *k == key) {
+        entry.1 += 1;
+    } else {
+        c.push((key, 1));
+    }
+}
+
+#[cold]
+fn census_print() {
+    if !census_on() {
+        return;
+    }
+    let mut c = std::mem::take(&mut *CENSUS.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+    c.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+    for ((what, vtable, detail, in_head), n) in c.iter().take(16) {
+        let what = ["controllers", "property controllers", "class", "collision"][*what as usize];
+        println!(
+            "NV_PAR_BONES census: {n} x {what}: object vtable {vtable:08x}, detail {detail:08x}{}",
+            if *in_head { ", in a head" } else { "" }
+        );
+    }
 }
 
 /// The counts since the last call, and the barrier reasons (by [`Barrier::name`]).
@@ -609,7 +668,7 @@ fn classify(e: &mut Engine, object: u32, detached: &[u32]) -> Class {
     if flags & FLAG_PROPERTY_CONTROLLERS != 0 {
         return Class::Barrier(Barrier::Controllers);
     }
-    if e.mem.u32(object + 0x0c) != 0 && !detached.contains(&object) {
+    if !detached.contains(&object) && !controllers_idle(e, e.mem.u32(object + 0x0c)) {
         return Class::Barrier(Barrier::Controllers);
     }
     let collision = e.mem.u32(object + 0x1c);
@@ -621,6 +680,38 @@ fn classify(e: &mut Engine, object: u32, detached: &[u32]) -> Class {
         return Class::Defer;
     }
     Class::Walk
+}
+
+/// `bhkBlendController::Update` and `bhkForceController::Update`, the controllers a helper may run
+/// while idle.
+const BLEND_CONTROLLER_UPDATE: u32 = 0x00c9_b090;
+const FORCE_CONTROLLER_UPDATE: u32 = 0x00cb_9770;
+
+/// Whether every controller of the list from `first` (along +0x30) is one a helper may run now: a
+/// `bhkBlendController` that its update leaves at once (active bit +8 bit 3 clear, no target at
+/// +0x2c, or +0x48 clear: nothing written), or a `bhkForceController` that is not active (bit 3
+/// clear, or no target: its update only stores a word of its own, +0x50). An empty list is idle.
+fn controllers_idle(e: &Engine, first: u32) -> bool {
+    let mut controller = first;
+    let mut steps = 0;
+    while controller != 0 {
+        steps += 1;
+        if steps > 64 {
+            return false;
+        }
+        let active = (e.mem.u16(controller + 8) >> 3) & 1 != 0;
+        let target = e.mem.u32(controller + 0x2c);
+        let idle = match slot_target(e, controller, 0x94) {
+            BLEND_CONTROLLER_UPDATE => !active || target == 0 || e.mem.u32(controller + 0x48) == 0,
+            FORCE_CONTROLLER_UPDATE => !active || target == 0,
+            _ => false,
+        };
+        if !idle {
+            return false;
+        }
+        controller = e.mem.u32(controller + 0x30);
+    }
+    true
 }
 
 /// The children of a node (empty slots left out).
@@ -645,16 +736,23 @@ fn has_children(e: &Engine, object: u32) -> bool {
 /// included (it runs on main, but in the helpers' order, so it may hold nothing that is not
 /// traced). `None`: the actor may be walked on a helper.
 fn barrier_in(e: &mut Engine, root: u32, detached: &[u32]) -> Option<Barrier> {
-    let mut stack = vec![root];
-    while let Some(object) = stack.pop() {
+    let census = census_on();
+    let mut first = None;
+    let mut stack = vec![(root, false)];
+    while let Some((object, in_head)) = stack.pop() {
         if let Class::Barrier(b) = classify(e, object, detached) {
-            return Some(b);
+            if !census {
+                return Some(b);
+            }
+            census_note(e, object, b, in_head);
+            first = first.or(Some(b));
         }
         if has_children(e, object) {
-            stack.extend(children(e, object));
+            let head = in_head || slot_target(e, object, SLOT_DOWNWARD) == HEAD_DOWNWARD;
+            stack.extend(children(e, object).into_iter().map(|c| (c, head)));
         }
     }
-    None
+    first
 }
 
 /// Whether `node` is `root` or below it.

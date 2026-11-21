@@ -274,6 +274,17 @@ fn actor(w: &mut World, e: &mut Engine, k: &Kinds, x: f32, extra: Extra, lightin
     // The weapon in the "hand" (the third bone): a node with a geometry.
     let weapon = node(w, e, k.node, bones[2], [0.3, 0.0, 0.0], 1);
     geometry(w, e, k, weapon, 0.6, true);
+    // Idle Havok controllers, as every actor of the game has them on its bones: a blend controller
+    // (its update leaves at once) and a force controller (its update stores a word of its own);
+    // the translations run, on the helpers.
+    for (bone, update) in [(bones[1], 0x00c9_b090u32), (bones[2], 0x00cb_9770)] {
+        let cvt = w.vtable(e, &[(0x94, update)]);
+        let c = w.alloc(e, 0x60);
+        e.mem.set_u32(c, cvt);
+        e.mem.set_u32(c + 4, 5);
+        e.mem.set_u32(c + 0x2c, bone);
+        e.mem.set_u32(bone + 0xc, c);
+    }
     if extra == Extra::Controller {
         let cvt = w.vtable(e, &[(0x94, CONTROLLER_FN)]);
         let c = w.alloc(e, 0x40);
@@ -406,6 +417,7 @@ fn stand_ins(e: &mut Engine) {
         (0x011a_f000, 0x1000),
         (0x011c_1000, 0x1000),
         (0x0101_6000, 0x1000),
+        (0x010c_8000, 0x1000),
     ] {
         e.map(page, len);
     }
@@ -420,6 +432,8 @@ fn stand_ins(e: &mut Engine) {
     // The quaternion normalisation's constants (`005612a0`): 0.5 and 3.0, as in the exe.
     e.mem.set_f32(0x0101_6248, 0.5);
     e.mem.set_f32(0x0101_7718, 3.0);
+    // The force controller's starting time left (`010c8ae4`, 1/60 s as the exe holds it).
+    e.mem.set_u32(0x010c_8ae4, 0x3c83_126f);
     // The shadow scene node the lighting queue goes to (`00450b80(0)` reads the table).
     e.mem.set_u32(0x011f_91c8, 0x0300_0100);
 }
