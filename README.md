@@ -69,7 +69,7 @@ shows what's left. Each name links to the detail in [docs/STATUS.md](docs/STATUS
 | 🔨 | [**Built-in script extender: JIP LN:**](docs/STATUS.md#jip-ln-built-in) | All its script commands (JIP LN: 1,116 and its two version commands) and 171 of its game patches (one more waits for the 64-bit move; eight are left out on purpose); off by default, for testing. |
 | 🔨 | [**Mod Configuration Menu (MCM)**](docs/STATUS.md#mod-configuration-menu-mcm-built-in) | The commands MCM's menu needs; off until it is tried in the game. |
 | 🔨 | [**UI Organizer (UIO)**](docs/STATUS.md#ui-organizer-uio-built-in) | UI mods' HUD and menu additions; off until it is proven in the game. |
-| 🔨 | [**lStewieAl's Tweaks**](docs/STATUS.md#lstewieals-tweaks-built-in) | 140 of its changes: 72 crash fixes and 68 other fixes and tweaks, on by default; the remaining crash fixes and tweaks come next. |
+| 🔨 | [**lStewieAl's Tweaks**](docs/STATUS.md#lstewieals-tweaks-built-in) | 140 of its changes: 72 crash and leak fixes and 68 other fixes and tweaks, on by default; the remaining crash fixes and tweaks come next. |
 | 🔨 | [**Mod installers (FOMOD)**](docs/STATUS.md#mod-installers-fomod) | Mods with an installer, from .zip or .7z, installed into nv-rs's own folder, never the game's. |
 | 🔨 | [**One launcher**](docs/STATUS.md#the-launcher) | `Play.exe` opens a window like the game's terminals to play and change settings; mods move in next. |
 | 🔨 | [**Modern graphics (wgpu)**](docs/STATUS.md#modern-graphics-wgpu) | The default renderer, on Vulkan; in the places compared, on one NVIDIA card, its pictures nearly match Direct3D 9's, and at 8x antialiasing it is about 8% slower. |

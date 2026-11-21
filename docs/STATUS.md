@@ -208,7 +208,7 @@ page is checked by a test (`the_readme_counts_the_built_commands` in `crates/jip
 
 JIP's game patches change the game's own code. 171 of its 183 are built, inert until
 JIP answers "installed"; three more are folded into other rows, one waits and eight are left out on
-purpose (below). They include:
+purpose (below; that list also names Enhanced Camera's patch, which is not one of the 183). They include:
 
 - **Framework and the player:** the patch framework, the first two fixes, the player's update 3D
   (both views, weapon and queued references), the detection patch (forced detection values and the
@@ -293,7 +293,7 @@ More in [FIXES.md, "UI Organizer"](FIXES.md#ui-organizer).
 
 🔨 Its engine fixes and tweaks, with nothing to install. 140 of its changes are built:
 
-- 72 of its crash fixes;
+- 72 of its crash and leak fixes;
 - Engine Optimizations' first change (a save's changed-forms map);
 - 67 other fixes and tweaks: 7 to the engines and the console; 14 to forms, cells, scripts, saves
   and sound; 25 to AI, actors and the player; 21 to menus and the HUD.
