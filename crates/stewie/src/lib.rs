@@ -195,6 +195,9 @@ pub fn install(e: &mut Engine) {
     }
     // Read by row S0023 (Tweaks reads it with its code default 1, not through `GET_TWEAK`).
     e.set_stewie_fade_node_prints(settings.long("Tweaks", "bInvalidBSFadeNodePrints", 1) != 0);
+    // Read by row S0059 (Tweaks' `g_bExtraConsoleDetailsMeshPath`, code default 0, VNV's 1).
+    e.set_stewie_mesh_path(settings.long("Extra Console Details", "bMeshPath", 0) != 0);
+    rows::world::install(e);
     rows::forms::write_data(e);
     let log = start_lines(ini.is_some(), &settings, &keys, on.len());
     for line in &log {

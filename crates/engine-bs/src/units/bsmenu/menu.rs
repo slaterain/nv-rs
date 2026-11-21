@@ -938,11 +938,28 @@ pub fn menu_start_fade_out(e: &mut Engine, this: Ptr<Menu>) {
         let tile = menu_tile(e, this).addr();
         time = trait_float(e, tile, TRAIT_FADE_TIME_DEFAULT) as f32;
     }
+    if e.stewie(engine_core::extend::stewie::INVENTORY_SCROLL_KEPT) {
+        // lStewieAl's Tweaks' S0021 (`OnMenuCloseHook` in place of the call at `0xA1D97C`): the
+        // inventory menu closing with an item selected (its list `+0xB8`, `GetSelectedTile` slot 4)
+        // saves its scroll place first.
+        let inventory = e.global::<u32>(INVENTORY_MENU);
+        if this.addr() == inventory
+            && inventory != 0
+            && e.vcall(inventory + 0xb8, 4, &args![]).u32() != 0
+        {
+            e.call(SAVE_INVENTORY_SCROLL, &args![]);
+        }
+    }
     e.call(INTERFACE_NEW_TIMER, &args![this, x87_quiet(time)]);
     e.set(this, Menu::xFadeState, FADING_OUT);
     pop_enter_stack_if_needed(e, this);
     e.call(INTERFACE_UPDATE_ALL_TIMERS, &args![]);
 }
+
+/// `InventoryMenu *` (lStewieAl's Tweaks' S0021).
+const INVENTORY_MENU: u32 = 0x011d_9ea4;
+/// `InventoryMenu::SaveCurrentTabScrollPosition` (no arguments).
+const SAVE_INVENTORY_SCROLL: u32 = 0x0077_ffd0;
 
 // Translated from 00a1d9e0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `Menu::InstantFadeOut` (Xbox PDB): unless the menu is `FADE_HIDDEN`, sets
@@ -2440,6 +2457,43 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x00a1_d910, &args![hidden]);
         assert!(calls(&e, INTERFACE_NEW_TIMER).is_empty());
+    }
+
+    /// lStewieAl's Tweaks' S0021 at `0xA1D97C`: with the row, the inventory menu fading out with
+    /// an item selected (its list's slot 4 not null) saves its scroll place before the timer; not
+    /// the inventory menu, no selection, or the row off: no save.
+    #[test]
+    fn s0021_closing_the_inventory_saves_its_scroll() {
+        let saves = |row: bool, is_inventory: bool, selected: u32| {
+            let mut e = engine();
+            e.map(INVENTORY_MENU & !0xfff, 0x1000);
+            // A menu big enough for the inventory menu's list at `+0xB8`.
+            let menu: Ptr<Menu> = Ptr::new(e.mem.alloc(0x200));
+            let tile = e.mem.alloc(0x40);
+            let model = e.mem.alloc(0x70);
+            e.mem.set_u32(tile + 0x2c, model);
+            e.set(menu, Menu::pMenu, Ptr::new(tile));
+            tile_traits(&mut e, &[TRAIT_VISIBLE], &[(TRAIT_FADE_TIME, 0.5)]);
+            let list_vtable = e.mem.alloc(0x10);
+            e.mem.set_u32(menu.addr() + 0xb8, list_vtable);
+            e.mem.set_u32(list_vtable + 4, 0x0900_00b8);
+            e.register_double(0x0900_00b8, move |_, _| Ret {
+                eax: selected,
+                ..Ret::default()
+            });
+            e.register(SAVE_INVENTORY_SCROLL, |_, _| Ret::default());
+            let inventory = if is_inventory { menu.addr() } else { 0x7700 };
+            e.set_global(INVENTORY_MENU, inventory);
+            e.set_stewie(engine_core::extend::stewie::INVENTORY_SCROLL_KEPT, row);
+            e.call_log = Some(vec![]);
+            e.call(0x00a1_d910, &args![menu]);
+            assert_eq!(calls(&e, INTERFACE_NEW_TIMER).len(), 1);
+            calls(&e, SAVE_INVENTORY_SCROLL).len()
+        };
+        assert_eq!(saves(true, true, 0x5000), 1);
+        assert_eq!(saves(true, true, 0), 0);
+        assert_eq!(saves(true, false, 0x5000), 0);
+        assert_eq!(saves(false, true, 0x5000), 0);
     }
 
     #[test]
