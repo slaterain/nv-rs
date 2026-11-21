@@ -179,6 +179,8 @@ fn world(e: &mut Engine) {
         })
     });
     e.register(0x005a_ccb0, |_, _| ret(1));
+    // A reference variable's form lookup: none (the reference is not set yet).
+    e.register(0x0048_39c0, |_, _| ret(0));
     e.register(0x0040_37b0, |e, a| {
         e.mem.set_u32(a[0], 0x0050_2000);
         ret(a[0])
@@ -246,7 +248,7 @@ fn form(e: &mut Engine, kind: u8) -> u32 {
 }
 
 /// A runner and a script whose data is `code`: referenced objects 1 a global, 2 a quest, 3 a
-/// reference, 4 one with no form; `flags` the script's form flags (bit 3: compiled).
+/// reference, 4 one with no form, 5 a reference variable not set yet; `flags` the script's form flags (bit 3: compiled).
 struct World {
     runner: u32,
     script: u32,
@@ -259,12 +261,20 @@ fn script_world(e: &mut Engine, code: &[u8], magic_effect: bool) -> World {
     let other = self::locals(e);
     e.mem.set_u32(CONFIG + 0x30, other);
     e.mem.set_u32(CONFIG + 0x34, other);
-    let objects: Vec<u32> = [0x06u8, 0x47, 0x3b, 0]
+    // 0xff: a reference variable whose reference is not set yet (a variable id, no form).
+    let objects: Vec<u32> = [0x06u8, 0x47, 0x3b, 0, 0xff]
         .iter()
         .map(|kind| {
             let o = e.mem.alloc(0x10);
-            let f = if *kind == 0 { 0 } else { form(e, *kind) };
+            let f = if *kind == 0 || *kind == 0xff {
+                0
+            } else {
+                form(e, *kind)
+            };
             e.mem.set_u32(o + 8, f);
+            if *kind == 0xff {
+                e.mem.set_u32(o + 0xc, 2);
+            }
             o
         })
         .collect();
@@ -444,11 +454,12 @@ fn script_lines_evaluate_line() {
 }
 
 /// Lines for `ParseLine`: an ordinary line, a reference prefix to an object with a reference, to
-/// one without a form, past the count.
+/// one without a form, to a reference variable not set yet, past the count.
 const PARSED: &[&[u8]] = &[
     b"\x15\x00\x06\x00",
     b"\x1c\x00\x03\x00\x10\x10\x02\x00",
     b"\x1c\x00\x04\x00\x10\x10\x02\x00",
+    b"\x1c\x00\x05\x00\x10\x10\x02\x00",
     b"\x1c\x00\x09\x00\x11\x10\x02\x00",
     b"\x1c\x00\x02\x00\x10\x10\x02\x00",
 ];
