@@ -1971,8 +1971,8 @@ fn do_idle_geometry(e: &mut Engine, this: Ptr<HUDMainMenu>) {
         let current_tile = current_hud_tile(e, offset);
         e.call(0x00a0_7530, &args![current_tile, 1_u32]);
     }
-    hud_main_menu_update_actor_value(e, this, 0x10);
-    hud_main_menu_update_actor_value(e, this, 0x0c);
+    e.call(0x0077_1540, &args![this, 0x10_u32]);
+    e.call(0x0077_1540, &args![this, 0x0c_u32]);
     e.call(0x0077_e4f0, &args![this]);
     for offset in [0x180, 0x160, 0x154, 0x170, 0x174, 0x158, 0x15c] {
         let alpha = quiet_f32(e.mem.f32(0x011d_979c));
@@ -2049,7 +2049,7 @@ fn do_idle_fades(e: &mut Engine) {
     };
     if sneaking {
         let menu = e.mem.u32(0x011d_96c0);
-        hud_main_menu_update_sneak(e, Ptr::new(menu));
+        e.call(0x0077_32d0, &args![menu]);
     } else if hud_alpha(e, 0x88) > e.global::<f64>(0x0101_2060) && fade_finished(e, 0x88) {
         let duration: f32 = quiet_f32(e.global(0x0101_6248));
         let alpha = hud_alpha(e, 0x88) as f32;
@@ -2107,11 +2107,9 @@ fn do_idle_target(e: &mut Engine, this: Ptr<HUDMainMenu>) {
         let target_location = e.vcall(target, 0x1f4, &args![]).u32();
         let player = e.mem.u32(0x011d_ea3c);
         let player_location = e.vcall(player, 0x1f4, &args![]).u32();
-        target_heading = hud_main_menu_heading_between_locations(
-            e,
-            Ptr::new(player_location),
-            Ptr::new(target_location),
-        ) as f32;
+        target_heading = e
+            .call(0x0077_2840, &args![player_location, target_location])
+            .f64() as f32;
     }
     let now = hud_time(e, this.addr() + 0x224);
     let elapsed = now.wrapping_sub(e.mem.u32(this.addr() + 0x244));
@@ -2136,7 +2134,7 @@ fn do_idle_target(e: &mut Engine, this: Ptr<HUDMainMenu>) {
             if e.vcall(actor, 0x22c, &args![0_u32]).u8() == 0 {
                 show_enemy = true;
                 let actor = e.mem.u32(0x011f_21cc);
-                hud_main_menu_set_enemy_actor(e, Ptr::new(actor));
+                e.call(0x0077_3190, &args![actor]);
             }
         }
     } else {
@@ -2210,7 +2208,7 @@ fn do_idle_target(e: &mut Engine, this: Ptr<HUDMainMenu>) {
             ) == 4;
         if qualifies {
             let target = e.mem.u32(this.addr() + 0x21c);
-            hud_main_menu_update_enemy_health(e, this, Ptr::new(target));
+            e.call(0x0077_01e0, &args![this, target]);
         }
     }
     let last = e.mem.u32(this.addr() + 0x1b8);
@@ -2246,18 +2244,18 @@ fn do_idle_quests(e: &mut Engine, this: Ptr<HUDMainMenu>) {
         e.mem.set_u32(this.addr() + 0x248, now);
         let player = e.mem.u32(0x011d_ea3c);
         let quest = e.call(0x005c_bb50, &args![player]).u32();
-        hud_main_menu_display_quest_reminder(e, Ptr::new(quest));
+        e.call(0x0077_36d0, &args![quest]);
     } else if e.mem.u32(this.addr() + 0x248) == 0 && e.call(0x0045_8030, &args![]).u32() == 2 {
         let now = hud_time(e, 0x011f_6394);
         e.mem.set_u32(this.addr() + 0x248, now);
         let player = e.mem.u32(0x011d_ea3c);
         let quest = e.call(0x005c_bb50, &args![player]).u32();
-        hud_main_menu_display_quest_reminder(e, Ptr::new(quest));
+        e.call(0x0077_36d0, &args![quest]);
         e.mem.set_u8(this.addr() + 0x254, 0);
     }
     if e.mem.u8(this.addr() + 0x254) != 0 {
         e.call(0x0077_f500, &args![this]);
-        hud_main_menu_kill_quest_objectives(e, this);
+        e.call(0x0077_f5e0, &args![this]);
         e.mem.set_u8(this.addr() + 0x254, 0);
         return;
     }
@@ -2369,7 +2367,7 @@ pub fn hud_main_menu_do_idle(e: &mut Engine, this: Ptr<HUDMainMenu>) {
     if player == 0 || e.call(0x008d_6f30, &args![player]).u32() == 0 {
         return;
     }
-    fn_00771520(e, Ptr::new(this.addr() + 0x224));
+    e.call(0x0077_1520, &args![this.addr() + 0x224]);
     let scene = e.mem.u32(this.addr() + 0x40);
     let a = e.mem.u32(this.addr() + 0x34);
     let b = e.mem.u32(this.addr() + 0x38);
@@ -2383,9 +2381,9 @@ pub fn hud_main_menu_do_idle(e: &mut Engine, this: Ptr<HUDMainMenu>) {
         e.site(0x0077_04ae, &[this.addr()]);
     }
     e.call(0x0077_da60, &args![this]);
-    fn_007721c0(e, this);
+    e.call(0x0077_21c0, &args![this]);
     e.call(0x0077_e750, &args![this]);
-    fn_0077f700(e, this);
+    e.call(0x0077_f700, &args![this]);
     if e.mem.u32(0x011d_97c8) & 1 == 0 {
         let flags = e.mem.u32(0x011d_97c8);
         e.mem.set_u32(0x011d_97c8, flags | 1);
@@ -2416,10 +2414,10 @@ pub fn hud_main_menu_do_idle(e: &mut Engine, this: Ptr<HUDMainMenu>) {
         e.call(0x0077_a650, &args![this]);
     }
     e.call(0x0077_c4e0, &args![this]);
-    hud_main_menu_update_radiation_meter(e, this);
+    e.call(0x0077_4090, &args![this]);
     let player = e.mem.u32(0x011d_ea3c);
     let status = e.call(0x004d_1360, &args![player]).u8() != 0;
-    hud_main_menu_update_status_mode_ui(e, this, status);
+    e.call(0x0077_39f0, &args![this, status]);
     do_idle_target(e, this);
     do_idle_quests(e, this);
     do_idle_messages(e, this);

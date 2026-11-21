@@ -8,6 +8,8 @@
 //! - [`compass`]: `UpdateCompass` (`00779070`), `BlinkTile` (`00778c20`), `GetCompassAngle`
 //!   (`00778b80`), the player's own marker (`0077a400`) and the heading strip's two floats
 //!   (`0077a450`).
+//! - [`idle`]: `HUDMainMenu::DoIdle` (`00770430`) itself, its sub-updates by address (JIP's H21, O14
+//!   and G10 places kept).
 //!
 //! What stays by address: the player's and the markers' virtual slots, the map marker data's getters
 //! and setters, the location's discovery (its message, the event, the stat, the experience), the
@@ -26,6 +28,7 @@ use engine_core::typed::{Family, FamilyId, Threads};
 use engine_core::{entry, AbiFn};
 
 pub mod compass;
+pub mod idle;
 
 /// This family's bit: what each `typed_call!` of it names.
 pub const FAMILY: FamilyId = FamilyId::new(13);
@@ -50,5 +53,6 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0077_8b80, compass::compass_angle(f32, f32, f32, f32, f32, f32) -> f32),
         entry!(0x0077_a400, compass::player_marker(Ptr) -> Ptr),
         entry!(0x0077_a450, compass::set_strip(Ptr, f32, f32)),
+        entry!(0x0077_0430, idle::do_idle(Ptr)),
     ]
 }

@@ -167,13 +167,13 @@ fn hud(e: &Engine) -> u32 {
     e.mem.u32(HUD_MENU)
 }
 
-fn global_f64(e: &Engine, at: u32) -> f64 {
+pub(super) fn global_f64(e: &Engine, at: u32) -> f64 {
     e.mem.f64(at)
 }
 
 /// An integer game setting's value (`0043d4d0` and the read at the address it answers; the
 /// settings named here are never null).
-fn setting(e: &Engine, at: u32) -> i32 {
+pub(super) fn setting(e: &Engine, at: u32) -> i32 {
     e.mem.i32(at + 4)
 }
 
@@ -184,7 +184,7 @@ fn float_setting(e: &mut Engine, at: u32) -> f32 {
 }
 
 /// An integer as `FILD` holds it, for the exact comparisons.
-fn exact(value: i32) -> f64 {
+pub(super) fn exact(value: i32) -> f64 {
     f64::from(value)
 }
 
@@ -196,7 +196,7 @@ fn as_float(value: i32) -> f32 {
 
 /// A double result as the float the exe stores.
 #[allow(clippy::cast_possible_truncation)]
-fn narrow(value: f64) -> f32 {
+pub(super) fn narrow(value: f64) -> f32 {
     value as f32
 }
 
@@ -226,11 +226,11 @@ fn distance_squared(e: &mut Engine, from: [f32; 3], to: [f32; 3]) -> f32 {
     )
 }
 
-fn abs(e: &mut Engine, value: f32) -> f32 {
+pub(super) fn abs(e: &mut Engine, value: f32) -> f32 {
     typed_call!(pathing::FAMILY, 0x0040_8840, pathing::point::abs(e, value))
 }
 
-fn set_float(e: &mut Engine, tile: u32, trait_id: i32, value: f32) {
+pub(super) fn set_float(e: &mut Engine, tile: u32, trait_id: i32, value: f32) {
     typed_call!(
         dispatch::FAMILY,
         0x00a0_12d0,
@@ -238,7 +238,7 @@ fn set_float(e: &mut Engine, tile: u32, trait_id: i32, value: f32) {
     );
 }
 
-fn set_int(e: &mut Engine, tile: u32, trait_id: i32, value: i32) {
+pub(super) fn set_int(e: &mut Engine, tile: u32, trait_id: i32, value: i32) {
     typed_call!(
         dispatch::FAMILY,
         0x0070_0320,
@@ -246,7 +246,7 @@ fn set_int(e: &mut Engine, tile: u32, trait_id: i32, value: i32) {
     );
 }
 
-fn get_float(e: &mut Engine, tile: u32, trait_id: i32) -> f32 {
+pub(super) fn get_float(e: &mut Engine, tile: u32, trait_id: i32) -> f32 {
     typed_call!(
         dispatch::FAMILY,
         0x00a0_11b0,
@@ -545,11 +545,13 @@ pub fn update_compass(
     let sum = narrow(process_heading + player_heading);
     let degrees = narrow(f64::from(sum) * global_f64(e, DEGREES_PER_RADIAN));
     let magnitude = abs(e, degrees);
-    let turns = narrow(f64::from(magnitude) / global_f64(e, FULL_TURN));
+    // The quotient goes to `_ftol2` in `ST0` as a double (truncated to the same integer at either
+    // precision).
+    let turns = f64::from(magnitude) / global_f64(e, FULL_TURN);
     let turns = typed_call!(
         crt::FAMILY,
         0x00ec_62c0,
-        crt::math::ftol2_sse(e, f64::from(turns))
+        crt::math::ftol2_sse(e, turns)
     );
     let turns = i32::from_ne_bytes(crt::low_word(turns).to_ne_bytes());
     // `IMUL EAX,EAX,0x168`, then `FILD`.
@@ -851,7 +853,7 @@ pub fn update_compass(
     let mut vats = e.call(VATS_TARGETS, &args![me]).u32();
     let me = player(e);
     let process = tick_process(e, me, kept_opacity);
-    let actor_mode =e.call(ACTOR_MODE, &args![process]).u8() != 0;
+    let actor_mode = e.call(ACTOR_MODE, &args![process]).u8() != 0;
     let first = float_setting(e, TICK_RANGE);
     let first_squared = first * first;
     let scale = float_setting(e, TICK_RANGE_SCALE);

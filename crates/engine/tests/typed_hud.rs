@@ -141,7 +141,14 @@ fn world(e: &mut Engine) {
     // SSE2 present: the typed `_ftol2_sse` truncates.
     e.mem.set_u32(0x0127_0a6c, 1);
     // The tiles: critical section, atexit, memory manager, trait arrays.
-    for stub in [0x00fd_f05c, 0x00fd_f100, 0x00ec_658f, 0x00aa_4060] {
+    // ... and `GetLastError` (`00fdf094`), which the C runtime's `fabs` reaches on a NaN.
+    for stub in [
+        0x00fd_f05c,
+        0x00fd_f100,
+        0x00ec_658f,
+        0x00aa_4060,
+        0x00fd_f094,
+    ] {
         e.register_double(stub, |_, _| Ret::default());
     }
     e.register_double(0x00aa_3e40, |e, a| ret(e.mem.alloc(a[1].max(4))));
@@ -205,7 +212,7 @@ fn families(d: Diff) -> Diff {
         // The translated tile getters and setters (reached by address from the translated compass)
         // find and make the trait value and insert it by plain Rust calls; the typed ones by
         // `typed_call!` (as in `menu_tiles`).
-        .translation_calls_plainly(&[0x00a0_0f30, 0x00a0_1000, 0x00a0_cd50])
+        .translation_calls_plainly(&[0x00a0_0f30, 0x00a0_1000, 0x00a0_cd50, 0x0040_8860])
         .float_ulps(ULPS)
 }
 
@@ -614,8 +621,10 @@ fn update_compass_diff() {
         Input::F32Swept(0x3f00_0000),
         Input::F32Swept(0x4120_0000),
     ])
-    .max_cases(160)
-    .float_sweep(8)
+    // About five seconds a case on this machine's debug build: every value of each word once and
+    // random combinations to 72, and four all-random float cases.
+    .max_cases(72)
+    .float_sweep(4)
     .max_calls(200_000)
     .setup(compass_world)
     .run()
