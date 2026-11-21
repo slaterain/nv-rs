@@ -248,8 +248,8 @@ mod read_ahead_tests {
 
     /// Two mapped pages for the test's objects (the read-ahead reads only where a word's page
     /// and the next are mapped, so a lone page at the end of a heap would hide what it reads).
-    const BASE: u32 = 0x2000_0000;
-    const UNMAPPED: u32 = 0x3000_0040;
+    const BASE: u32 = 0x0800_0000;
+    const UNMAPPED: u32 = 0x0900_0040;
 
     fn engine() -> Engine {
         let mut e = Engine::new();
