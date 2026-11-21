@@ -14490,7 +14490,9 @@ mod tests {
         e.register(FORM_GET_TYPE, |_, _| ret(FORM_TYPE_DEFAULT_OBJECTS));
         do_nothing(&mut e, &[FORM_STEP_483870, FORM_STEP_483720]);
         e.set_global(EDITOR_ID_MAP, 0x5500u32);
-        e.register(EDITOR_ID_MAP_ADD, |_, _| panic!("JG's seam skips the insertion"));
+        e.register(EDITOR_ID_MAP_ADD, |_, _| {
+            panic!("JG's seam skips the insertion")
+        });
         e.on_site(SiteSlot::new(Owner::JohnnyGuitar, 0x0046_79f8), |_, a| {
             a.is_empty().then_some(0)
         });
