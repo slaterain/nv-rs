@@ -462,7 +462,7 @@ pub fn set_render_state(
     }
     capture::set_own_at(e, locked, lock);
     let cached = elem_addr(this, NiDX9RenderState::auiRenderStates, state, 8);
-    if capture::own_at::<u32>(e, cached) != value {
+    if capture::main_must_send(e, capture::own_at::<u32>(e, cached) == value) {
         let device = capture::own_get(e, this, NiDX9RenderState::m_pkD3DDevice9);
         engine_core::real_threads::device_vcall(
             e,
@@ -501,7 +501,7 @@ pub fn set_stage_state(
         slot.wrapping_add(stage.wrapping_mul(8)),
         8,
     );
-    if capture::own_at::<u32>(e, cached) != value {
+    if capture::main_must_send(e, capture::own_at::<u32>(e, cached) == value) {
         let device = capture::own_get(e, this, NiDX9RenderState::m_pkD3DDevice9);
         engine_core::real_threads::device_vcall(
             e,
@@ -533,7 +533,7 @@ pub fn set_sampler_state(
         stage.wrapping_mul(5).wrapping_add(slot),
         8,
     );
-    if capture::own_at::<u32>(e, cached) == value {
+    if !capture::main_must_send(e, capture::own_at::<u32>(e, cached) == value) {
         return;
     }
     capture::set_own_at(e, cached, value);
@@ -551,7 +551,7 @@ pub fn set_sampler_state(
 /// differs.
 pub fn set_texture(e: &mut Engine, this: Ptr<NiDX9RenderState>, stage: u32, texture: u32) {
     let cached = elem_addr(this, NiDX9RenderState::apTextures, stage, 4);
-    if capture::own_at::<u32>(e, cached) == texture {
+    if !capture::main_must_send(e, capture::own_at::<u32>(e, cached) == texture) {
         return;
     }
     capture::set_own_at(e, cached, texture);
@@ -575,7 +575,7 @@ fn set_cached(
         let now = capture::own_get(e, this, current);
         capture::own_set(e, this, saved, now);
     }
-    if capture::own_get(e, this, current) == value {
+    if !capture::main_must_send(e, capture::own_get(e, this, current) == value) {
         return;
     }
     capture::own_set(e, this, current, value);
@@ -619,9 +619,11 @@ pub fn set_declaration(e: &mut Engine, this: Ptr<NiDX9RenderState>, declaration:
     if declaration == 0 {
         return;
     }
-    if capture::own_get(e, this, NiDX9RenderState::ucDeclarationSet) != 0
-        && capture::own_get(e, this, NiDX9RenderState::pDeclaration) == declaration
-    {
+    if !capture::main_must_send(
+        e,
+        capture::own_get(e, this, NiDX9RenderState::ucDeclarationSet) != 0
+            && capture::own_get(e, this, NiDX9RenderState::pDeclaration) == declaration,
+    ) {
         return;
     }
     capture::own_set(e, this, NiDX9RenderState::ucDeclarationSet, 1);
@@ -1035,6 +1037,102 @@ pub fn sort_by_enabled(e: &mut Engine, this: Ptr<NiD3DShaderConstantMap>) {
             FAMILY,
             0x00e8_70c0,
             sort_entries_by_enabled(e, this.addr(), array)
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    thread_local! {
+        /// The stand-in device's calls: (slot, the arguments after `this`).
+        static CALLS: RefCell<Vec<(u32, Vec<u32>)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// A render-state cache whose device records `SetRenderState` and `SetTexture`.
+    fn cache(e: &mut Engine) -> Ptr<NiDX9RenderState> {
+        let vtable = e.mem.alloc(0x200);
+        for (slot, at) in [
+            (DEVICE_SET_RENDER_STATE, 0x0400_3000u32),
+            (DEVICE_SET_TEXTURE, 0x0400_3010),
+        ] {
+            e.mem.set_u32(vtable + slot, at);
+        }
+        e.register(0x0400_3000, |_, a| {
+            CALLS.with(|c| {
+                c.borrow_mut()
+                    .push((DEVICE_SET_RENDER_STATE, a[1..].to_vec()))
+            });
+            engine_core::abi::Ret::default()
+        });
+        e.register(0x0400_3010, |_, a| {
+            CALLS.with(|c| c.borrow_mut().push((DEVICE_SET_TEXTURE, a[1..].to_vec())));
+            engine_core::abi::Ret::default()
+        });
+        let device = e.mem.alloc(8);
+        e.mem.set_u32(device, vtable);
+        let cache = e.mem.alloc(0x1200);
+        let this = Ptr::<NiDX9RenderState>::new(cache);
+        e.set(this, NiDX9RenderState::m_pkD3DDevice9, device);
+        this
+    }
+
+    /// Main beside the drawing thread's packet (the review of #574): the cut held X, the draw left Y, main asks for X.
+    /// Serially main's cache would hold Y and main would send X; beside the packet its cache holds the cut's X, so the
+    /// setter sends X anyway, and the join keeps main's X in the cache. With no packet open the same value is skipped
+    /// as the exe skips it.
+    #[test]
+    fn main_beside_a_packet_sends_a_value_its_cache_already_holds() {
+        let mut e = Engine::new();
+        let this = cache(&mut e);
+        let texture = elem_addr(this, NiDX9RenderState::apTextures, 0, 4);
+        let state = elem_addr(this, NiDX9RenderState::auiRenderStates, 7, 8);
+        e.mem.set_u32(texture, 0x70);
+        e.mem.set_u32(state, 1);
+        set_texture(&mut e, this, 0, 0x70);
+        set_render_state(&mut e, this, 7, 1, 0, 0);
+        assert!(
+            CALLS.take().is_empty(),
+            "no packet: the cached value is skipped"
+        );
+
+        assert!(capture::begin(&e));
+        capture::own(&e, this.addr(), 0, 0x1200);
+        // The drawing side leaves other values.
+        set_texture(&mut e, this, 0, 0x90);
+        set_render_state(&mut e, this, 7, 2, 0, 0);
+        assert_eq!(
+            CALLS.take(),
+            [
+                (DEVICE_SET_TEXTURE, vec![0, 0x90]),
+                (DEVICE_SET_RENDER_STATE, vec![7, 2])
+            ]
+        );
+        let packet = capture::detach(&e).expect("the packet handed over");
+        assert!(capture::beside(&e));
+        // Main asks for the cut's values, which its cache holds.
+        set_texture(&mut e, this, 0, 0x70);
+        set_render_state(&mut e, this, 7, 1, 0, 0);
+        assert_eq!(
+            CALLS.take(),
+            [
+                (DEVICE_SET_TEXTURE, vec![0, 0x70]),
+                (DEVICE_SET_RENDER_STATE, vec![7, 1])
+            ],
+            "sent although main's cache held them"
+        );
+        assert!(capture::attach(packet).is_ok());
+        assert!(
+            !capture::beside(&e),
+            "the drawing side is not beside its own packet"
+        );
+        let _ = capture::end(&mut e);
+        assert_eq!(
+            [e.mem.u32(texture), e.mem.u32(state)],
+            [0x70, 1],
+            "the join keeps main's values"
         );
     }
 }
