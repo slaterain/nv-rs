@@ -308,6 +308,10 @@ More in [FIXES.md, "UI Organizer"](FIXES.md#ui-organizer).
   LOD a plugin disabled, with Tweaks' console line naming it; a place whose navigation mesh cannot
   be worked out; a path through a door with no way back; a switch or LOD node that updates only its
   shown part). One Tweaks slip is not copied, under the missing-data guard row.
+- Stairs: collision marked as stairs (123 of the game's own meshes, among them the Hoover Dam
+  towers' stairs and the vault, utility and basement stairs) counts every riser as a step, so the
+  player and NPCs walk up and down them without catching on a riser or being pushed back. Two
+  Tweaks slips are not copied, under the missing-data guard row.
 - The remaining crash fixes and tweaks come next.
 
 More in [FIXES.md, "lStewieAl's Tweaks"](FIXES.md#lstewieals-tweaks).

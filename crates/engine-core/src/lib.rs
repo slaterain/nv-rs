@@ -70,6 +70,7 @@ mod engine;
 pub mod estimate;
 pub mod exe;
 pub mod extend;
+pub mod hitch;
 pub mod mem;
 pub mod mod_files;
 pub mod processor;
