@@ -23381,10 +23381,17 @@ mod tests {
             let base = object(&mut e, 0x100, &[]);
             stub(&mut e, ACTOR_BASE_FORM_FN, base.addr());
             stub(&mut e, FORM_TEST_FLAGS, 0);
+            let source_position = e.mem.alloc(12);
             let source = object(
                 &mut e,
                 0x100,
-                &[(REFERENCE_SLOT_224, ret(0)), (0x220, ret(1))],
+                &[
+                    (ACTOR_SLOT_POSITION, ret(source_position)),
+                    (ACTOR_SLOT_100, ret(0)),
+                    (REFERENCE_SLOT_168, ret(0)),
+                    (REFERENCE_SLOT_220, ret(0)),
+                    (REFERENCE_SLOT_224, ret(0)),
+                ],
             );
             if with_source {
                 e.set(world.hit, HitData::pSourceRef, source.cast());
