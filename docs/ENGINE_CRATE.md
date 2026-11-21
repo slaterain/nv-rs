@@ -672,7 +672,12 @@ cut, to find the geometry it lights: `ShadowSceneLight::AddObject` (`00ba0110`),
 (`00b9f5b0`) and by its radius (`00b9f6a0`), the add of a lit geometry to the light's list (`00b9f480`) and the two bound
 tests (`00b9bbb0`, `00b9dae0`). Main thread only ([`Threads::Main`]); the bound tests' distances are native `f32` in the
 exe's order, the square root `f32::sqrt` in place of the CRT's. About 0.2 ms a frame in the lit, crowded street (the
-profile of 2026-11-11). Its tests are `crates/engine/tests/typed_lights.rs`. On by the native-code rule.
+profile of 2026-11-11). Since 2026-11-21 also the light lists' slow loops with the same answers in linear work: the
+lighting property's light sort `ResortLights` (`00b70390`, each light's luminance worked out once instead of at every
+comparison), the shadow light's weighted placement (`00b9d150`) and the dominant light direction at the camera
+(`00b5bca0`), whose walks over the scene node's lights keep their place instead of starting from the list's head for
+each light. Those three keep the exact x87 helpers (the sort also runs on the loading thread) and are tested under both
+control words. Its tests are `crates/engine/tests/typed_lights.rs`. On by the native-code rule.
 And `scripts` (same crate, id 11): what every running script line goes through for its values, every mod's scripts
 included. The expression evaluator `CExpression` (the constructor `00593490`, the conversion to postfix `00593500`,
 the tokenizer `00593870`, `Eval` `00593db0`, its error `005934d0` and its two stacks `00594b60` to `00594d40`), the
