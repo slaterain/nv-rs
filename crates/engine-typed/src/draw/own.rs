@@ -21,19 +21,14 @@ use engine_core::{args, typed_call, Engine};
 // (`super::detach`) takes their words out of guest memory at the cut, and everything the draw does to them
 // after drawing is here, through it.
 
-/// `BSBatchRenderer::kActivePassIndexList` cleared (`00b64ec0`, by address).
-const ACTIVE_LIST_CLEAR: u32 = 0x00b6_4ec0;
-/// `NiTPointerListBase::RemoveAll` (`00b71300`, by address).
-const POINTER_LIST_REMOVE_ALL: u32 = 0x00b7_1300;
-
-/// Clears a batch renderer's active pass type list (condition 1).
+/// Clears a batch renderer's active pass type list (`00b64ec0`, [`super::lists::clear_simple_list`]) (condition 1).
 #[inline(always)]
 pub(crate) fn clear_active_list(e: &mut Engine, renderer: u32) {
     let list = renderer.wrapping_add(BSBatchRenderer::kActivePassIndexList.off);
-    super::detach::suspended_for(
-        e,
-        |_| vec![list, list.wrapping_add(4)],
-        |e| e.call(ACTIVE_LIST_CLEAR, &args![list]),
+    typed_call!(
+        super::FAMILY,
+        0x00b6_4ec0,
+        super::lists::clear_simple_list(e, list)
     );
 }
 
@@ -69,8 +64,7 @@ pub(crate) fn clear_holder_count(e: &mut Engine, holder: u32) {
 #[inline(always)]
 pub(crate) fn empty_alpha_list(e: &mut Engine, renderer: Ptr<BSBatchRenderer>, group: u32) {
     let list = super::packet::alpha_list(renderer, group);
-    let words = |_: &Engine| vec![list, list.wrapping_add(4), list.wrapping_add(8)];
-    super::detach::suspended_for(e, words, |e| e.call(POINTER_LIST_REMOVE_ALL, &args![list]));
+    typed_call!(super::FAMILY, 0x00b7_1300, remove_all(e, list));
     let current = renderer
         .addr()
         .wrapping_add(group.wrapping_mul(4))
@@ -354,6 +348,23 @@ pub(crate) fn give_node(e: &mut Engine, node: u32) {
     batch::pool_give(e, node);
 }
 const LOCK_ENTER: u32 = 0x0040_fbf0;
+
+// Typed from 00b71300
+/// `NiTPointerListBase::RemoveAll`, `thiscall(list)` (head, tail, count): each node in turn, from the head, back to
+/// the global node pool ([`give_node`]: its item cleared, the pool's lock taken, onto the free list), then the
+/// count, the head and the tail cleared, in the exe's order. The list's words go through the drawing thread's view
+/// ([`super::detach`]), the nodes' own words through guest memory.
+pub fn remove_all(e: &mut Engine, list: u32) {
+    let mut node = super::detach::word(e, list);
+    while node != 0 {
+        let next = e.global::<u32>(node);
+        give_node(e, node);
+        node = next;
+    }
+    super::detach::set_word(e, list.wrapping_add(8), 0u32);
+    super::detach::set_word(e, list, 0u32);
+    super::detach::set_word(e, list.wrapping_add(4), 0u32);
+}
 
 // ---- Condition 7: the one reference count. ----
 //

@@ -17,7 +17,7 @@ use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input, F32_VALUES};
 use engine_core::typed::{leaf, MAIN_THREAD, OTHER_THREADS};
 use engine_core::{entry, Engine};
-use engine_typed::draw::{self, packed, packing, shapes, skin, thunks};
+use engine_typed::draw::{self, lists, own, packed, packing, shapes, skin, thunks};
 use engine_typed::draw_f;
 use engine_typed::render::{self, stream};
 use engine_typed::{crt, culling, dispatch, pathing, shader};
@@ -2319,6 +2319,13 @@ const FREED_AT_LOCK: u32 = RETS + 0x700;
 /// allocation (`00401000`) stood in; the lock and unlock (the dispatch family's, run in its tests)
 /// stand in by address: each marks its words, the unlock with the pool's state.
 fn pool_world(e: &mut Engine, c: &Case) -> Vec<u32> {
+    pool_world_of(e, [c.word(0), c.word(1), c.word(2), c.word(3)]);
+    vec![c.word(4)]
+}
+
+/// [`pool_world`]'s world from its first four words (the free list, the nodes per block, a block listed, a node
+/// freed while the lock is taken).
+fn pool_world_of(e: &mut Engine, c: [u32; 4]) {
     e.map(RETS, 0x1000);
     e.map(POOL_FREE & !0xfff, 0x1000);
     e.map(POOL_BLOCK_NODES & !0xfff, 0x1000);
@@ -2341,7 +2348,7 @@ fn pool_world(e: &mut Engine, c: &Case) -> Vec<u32> {
         mark(e, a);
         ret(e.mem.alloc(a[0].max(4)))
     });
-    e.mem.set_u32(POOL_BLOCK_NODES, c.word(1));
+    e.mem.set_u32(POOL_BLOCK_NODES, c[1]);
     // Nodes with words in them, so the clears show.
     let node = |e: &mut Engine, next: u32| {
         let n = e.mem.alloc(0xc);
@@ -2351,19 +2358,18 @@ fn pool_world(e: &mut Engine, c: &Case) -> Vec<u32> {
         n
     };
     let mut head = 0;
-    for _ in 0..c.word(0) {
+    for _ in 0..c[0] {
         head = node(e, head);
     }
     e.mem.set_u32(POOL_FREE, head);
-    if c.word(2) != 0 {
+    if c[2] != 0 {
         let block = node(e, 0);
         e.mem.set_u32(POOL_BLOCKS, block);
     }
-    if c.word(3) != 0 {
+    if c[3] != 0 {
         let freed = node(e, 0x3333_3333);
         e.mem.set_u32(FREED_AT_LOCK, freed);
     }
-    vec![c.word(4)]
 }
 
 #[test]
@@ -2506,4 +2512,118 @@ fn bone_matrices_read_the_packet() {
         },
         |e, a| cut::take_skin_values(e, a[1]),
     );
+}
+
+// ---- The list helpers the world draw called by address (the drawing thread's still-live list) ----
+
+/// A `BSSimpleList<unsigned short>` (its 16-bit item with other bits above it, then the next node) of `nodes`
+/// nodes after the head, each with an item and other bits, the last one's next null.
+fn simple_list(e: &mut Engine, nodes: u32) -> u32 {
+    let list = e.mem.alloc(8);
+    set(e, list, 0xaaaa_0004);
+    let mut next = 0;
+    for i in 0..nodes {
+        let node = e.mem.alloc(8);
+        set(e, node, 0xbbbb_0010 + i);
+        set(e, node + 4, next);
+        next = node;
+    }
+    set(e, list + 4, next);
+    list
+}
+
+#[test]
+fn clear_simple_list() {
+    Diff::new(entry!(0x00b6_4ec0, lists::clear_simple_list(u32)))
+        .common()
+        .inputs(&[Input::Of(&[0, 1, 2, 5])])
+        .setup(|e, c| {
+            stand_ins(e);
+            vec![simple_list(e, c.word(0))]
+        })
+        .run()
+        .assert_same();
+}
+
+/// A batch renderer whose active pass type list holds `types` (the head's item first, then a node each).
+fn renderer_listing(e: &mut Engine, types: &[u32]) -> u32 {
+    let vt = vtable(e, &[]);
+    let renderer = obj(e, 0x100, vt);
+    let head = renderer + 0x2c;
+    let mut at = head;
+    for (i, t) in types.iter().enumerate() {
+        e.mem.set_u16(at, *t as u16);
+        if i + 1 < types.len() {
+            let node = e.mem.alloc(8);
+            set(e, node + 4, 0);
+            set(e, at + 4, node);
+            at = node;
+        }
+    }
+    renderer
+}
+
+#[test]
+fn lists_pass_in() {
+    // Lists of types in and out of the 33 (0x28a and 0x2cd in, 0x28b and 0x289 out), ranges around them.
+    const LISTS: &[&[u32]] = &[
+        &[0],
+        &[0x28b],
+        &[0x28a],
+        &[0x10, 0x289, 0x2cd],
+        &[0x2bb, 0x28b, 0x2c7],
+    ];
+    Diff::new(entry!(
+        0x00b9_8970,
+        lists::lists_pass_in(Ptr<_>, u32, u32) -> bool
+    ))
+    .common()
+    .inputs(&[
+        Input::Of(&[0, 1, 2, 3, 4]),
+        Input::Of(&[0, 0x288, 0x28b, 0x2c8]),
+        Input::Of(&[0x289, 0x28a, 0x2ce, 0x2f1]),
+    ])
+    .setup(|e, c| {
+        stand_ins(e);
+        let renderer = renderer_listing(e, LISTS[c.word(0) as usize]);
+        vec![renderer, c.word(1), c.word(2)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// An `NiTPointerList` (head, tail, count) of `nodes` nodes (next, previous, item) with the pool's world of
+/// [`pool_world`] (its free list, a node freed while the lock is taken).
+#[test]
+fn remove_all() {
+    Diff::new(entry!(0x00b7_1300, own::remove_all(u32)))
+        .common()
+        .goes_by_address(&[0x0040_fbf0, 0x0040_fba0])
+        .inputs(&[
+            Input::Of(&[0, 1, 3]),
+            Input::Of(&[0, 1, 2]),
+            Input::Of(TWO_WAYS),
+        ])
+        .setup(|e, c| {
+            pool_world_of(e, [c.word(1), 4, 0, c.word(2)]);
+            let list = e.mem.alloc(0xc);
+            let mut next = 0;
+            let mut tail = 0;
+            for i in 0..c.word(0) {
+                let node = e.mem.alloc(0xc);
+                set(e, node, next);
+                set(e, node + 4, 0x4444_0000 + i);
+                set(e, node + 8, 0x5555_0000 + i);
+                if next == 0 {
+                    tail = node;
+                }
+                next = node;
+            }
+            set(e, list, next);
+            set(e, list + 4, tail);
+            set(e, list + 8, c.word(0));
+            vec![list]
+        })
+        .run()
+        .assert_same();
 }
