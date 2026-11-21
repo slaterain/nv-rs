@@ -275,6 +275,14 @@ pub const ROWS: &[Row] = &[
         summary: "changes how stairs walk: collision marked as stairs (123 of the game's own meshes) counts every riser as a step, so characters no longer catch on risers or get pushed back",
     },
     Row {
+        bit: stewie::NUDE_CORPSES,
+        function: "NudeCorpsesFix",
+        plan: "S0226",
+        key: "bNudeCorpsesFix",
+        tweaks: None,
+        summary: "an actor killed while their cell was not loaded is no longer found naked",
+    },
+    Row {
         bit: stewie::NAV_MESH_INFO_RESOLVE,
         function: "NavMeshInfoResolveFix",
         plan: "S0235",

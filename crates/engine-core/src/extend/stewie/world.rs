@@ -187,6 +187,13 @@ pub const NPC_BACKPACK_UPDATE: Row = fix(34);
 /// health record instead of losing it (and showing full condition).
 pub const WEAPON_MOD_HEALTH_KEPT: Row = fix(35);
 
+// ---- Group O ----
+
+/// S0226 `NudeCorpsesFix` (its JMP at `0x5F15FE` in `TESActorBase::ShouldRunInitDefaultWorn`
+/// `005f1590`): the dead test no longer keeps a corpse from getting its default worn items, so an
+/// actor killed while its cell was unloaded is not found naked.
+pub const NUDE_CORPSES: Row = fix(36);
+
 /// `OSInputGlobals *` (xNVSE's `0x11F35CC`).
 pub const INPUT_GLOBALS: u32 = 0x011f_35cc;
 /// `OSInputGlobals::overrideFlags` (`UInt16` at `+0x1B92`); bit 3 is the menu-mode debounce.

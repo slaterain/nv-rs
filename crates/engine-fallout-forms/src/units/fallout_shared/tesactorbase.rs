@@ -487,7 +487,12 @@ pub fn tes_actor_base_should_run_init_default_worn(
         } else {
             None
         }
-    } else if e.vcall(reference, 0x22c, &args![0u32]).bool() {
+    } else if e.vcall(reference, 0x22c, &args![0u32]).bool()
+        // lStewieAl's Tweaks' S0226 (`NudeCorpsesFix`, its JMP at `0x5F15FE`): the dead test's
+        // answer is not used, so a corpse whose cell was not loaded when it died still gets its
+        // default worn items.
+        && !e.stewie(engine_core::extend::stewie::NUDE_CORPSES)
+    {
         Some(0x400)
     } else {
         None
@@ -1664,6 +1669,23 @@ mod b024_tests {
         e.mem.set_u32(reference, 0x0090_0000);
         e.register_double(0x00a0_022c, move |_, _| ret(query));
         (e, reference)
+    }
+
+    /// lStewieAl's Tweaks' S0226: with the save/load flag clear and a dead reference that has a
+    /// change, off: no default worn items (false); on: the dead test is still asked but not used,
+    /// so no change lookup and true.
+    #[test]
+    fn s0226_a_dead_unloaded_actor_gets_its_worn_items() {
+        let (mut e, r) = worn_engine(0, 1, 1);
+        let (v, log) = logged(&mut e, 0x005f_1590, &[0x3000, r]);
+        assert!(!v.bool());
+        assert_eq!(only(&log, 0x0084_a6d0).len(), 1);
+        let (mut e, r) = worn_engine(0, 1, 1);
+        e.set_stewie(engine_core::extend::stewie::NUDE_CORPSES, true);
+        let (v, log) = logged(&mut e, 0x005f_1590, &[0x3000, r]);
+        assert!(v.bool());
+        assert_eq!(only(&log, 0x00a0_022c).len(), 1);
+        assert!(only(&log, 0x0084_a6d0).is_empty());
     }
 
     #[test]
