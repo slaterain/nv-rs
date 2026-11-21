@@ -486,14 +486,67 @@ fn scripts_set_variable_and_action_flags() {
         })
         .run()
         .assert_same();
+    // The empty-list exits: a variable list whose first node has no item (the list of a script
+    // with no variables) or none at all, with and without a master script, while a save loads or
+    // not.
+    Diff::new(entry!(0x005a_9290, run::set_variable(Ptr<_>, u32, f64)))
+        .common()
+        .inputs(&[
+            Input::Of(&[1, 2]),
+            Input::Flag,
+            Input::Flag,
+            Input::Flag,
+            Input::Of(&[0, 1, 2]),
+        ])
+        .setup(|e, case| {
+            world(e);
+            let l = locals(e, case.word(1) != 0);
+            let variables = if case.word(0) == 1 { list(e, &[]) } else { 0 };
+            e.mem.set_u32(l + 0xc, variables);
+            let save = e.mem.alloc(0x200);
+            e.mem.set_u32(save + 0x1c4, 0x0050_1000);
+            e.mem.set_u32(SAVE_LOAD_GAME, save);
+            e.mem.set_u32(ANSWER_LOADING, case.word(2));
+            let header = if case.word(3) != 0 {
+                let h = e.mem.alloc(8);
+                e.mem.set_u32(h, 0x0001_2345);
+                h
+            } else {
+                0
+            };
+            e.mem.set_u32(ANSWER_HEADER, header);
+            let (form, cast) = match case.word(4) {
+                0 => (0, 0),
+                1 => (0x0077_0000, 0),
+                _ => (0x0077_0000, 0x0077_0000),
+            };
+            e.mem.set_u32(ANSWER_FORM, form);
+            e.mem.set_u32(ANSWER_CAST, cast);
+            e.mem.set_u32(ANSWER_NAME, 0x0050_2000);
+            vec![l, 1, 0, 0x3ff8_0000]
+        })
+        .run()
+        .assert_same();
+    // The action list: whole, none, a first node with no item (an empty list), an item-0 node in
+    // the middle (the walk stops there).
     Diff::new(entry!(0x005a_8ea0, run::clear_action_flags(Ptr<_>)))
         .common()
-        .inputs(&[Input::Flag])
+        .inputs(&[Input::Of(&[0, 1, 2, 3])])
         .setup(|e, case| {
             world(e);
             let l = locals(e, false);
-            if case.word(0) != 0 {
-                e.mem.set_u32(l + 8, 0);
+            match case.word(0) {
+                1 => e.mem.set_u32(l + 8, 0),
+                2 => {
+                    let empty = list(e, &[]);
+                    e.mem.set_u32(l + 8, empty);
+                }
+                3 => {
+                    let head = e.mem.u32(l + 8);
+                    let second = e.mem.u32(head + 4);
+                    e.mem.set_u32(second, 0);
+                }
+                _ => {}
             }
             vec![l]
         })

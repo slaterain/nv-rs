@@ -131,7 +131,14 @@ fn new_runner(e: &mut Engine) -> u32 {
 /// (the owner quest's when above 0, else the setting's, added to what is left) and its buffer
 /// zeroed; then the run's referenced objects are forgotten. The quest's floats: a double difference
 /// or sum stored as a float, the same on every thread.
-pub fn script_run(e: &mut Engine, this: Ptr, first: u32, second: u32, third: u32, force: u8) -> bool {
+pub fn script_run(
+    e: &mut Engine,
+    this: Ptr,
+    first: u32,
+    second: u32,
+    third: u32,
+    force: u8,
+) -> bool {
     let me = this.addr();
     if force == 0 {
         let header = header_of(e, this);
@@ -336,6 +343,10 @@ pub fn runner_is_busy(e: &mut Engine, this: Ptr) -> bool {
 // Typed from 005e2730
 /// `ScriptRunManager::InitActionList`: builds the action list (by address: xNVSE wraps it) in the
 /// cached runner (made on first use), or in a temporary one while the cached one is busy.
+///
+/// lStewieAl's Tweaks patches the two calls of the action list's run here (`005e280a` and
+/// `005e2834`); that tweak is not built in, so no seam stands there yet: when it is, both calls go
+/// through one.
 pub fn manager_init_action_list(
     e: &mut Engine,
     this: Ptr,
