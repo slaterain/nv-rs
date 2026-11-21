@@ -227,7 +227,11 @@ fn read_range(
             file
         }
     };
-    read_at(&file, start, count)
+    // The disk read itself with the kernel lock given back (when the game called ReadFile directly): it reaches
+    // no platform state and no game memory, only the host file this handle keeps open, read at the position taken
+    // above. A read that waited on a busy disk held every other thread's platform calls up to 400 ms (the
+    // nov21d play, PLAY-1121d.md); the handle's position is moved on after it, under the lock again, as before.
+    engine_core::real_threads::without_kernel_lock_if_outermost(e, || read_at(&file, start, count))
 }
 
 /// A read-only handle's host file for the player's file it reads ([`OpenFile::kept`]): opened by

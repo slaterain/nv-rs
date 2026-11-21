@@ -2412,6 +2412,11 @@ pub mod read_first {
         {
             let name = e.mem.u32(texture + SOURCE_PLATFORM_FILENAME);
             if let Some(read) = read_file(e, name, 0) {
+                // The D3DX translation of the file worked out now too, before the lock (`engine_core::texture_ahead`).
+                if let Read::Bytes { buffer, size } = read {
+                    let device = e.mem.u32(renderer + RENDERER_DEVICE);
+                    engine_core::texture_ahead::prepare(e, buffer, size, device);
+                }
                 keep(Some(Ahead {
                     name,
                     file: 0,
@@ -2435,6 +2440,9 @@ pub mod read_first {
             {
                 e.call(FREE, &args![buffer]);
             }
+        }
+        if kept.is_some() {
+            engine_core::texture_ahead::done(e);
         }
         drop(kept);
         data != 0

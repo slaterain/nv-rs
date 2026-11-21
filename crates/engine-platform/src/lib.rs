@@ -363,6 +363,8 @@ fn layer_funcs() -> Vec<(u32, AbiFn)> {
 /// (DLL, name, platform version) of this layer's imports with a Rust stand-in; the core's
 /// `imports` answers them after its own.
 fn layer_imports() -> Vec<(&'static str, &'static str, AbiFn)> {
+    // The game's texture making hands a file over before the renderer's lock (`engine_core::texture_ahead`).
+    engine_core::texture_ahead::set(d3dx::prepare_texture);
     let k = "KERNEL32.dll";
     #[allow(unused_mut)]
     let mut imports = vec![
