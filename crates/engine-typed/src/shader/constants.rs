@@ -110,11 +110,8 @@ pub fn set_shader_constants(
                         data,
                         count.wrapping_mul(16),
                         |e, data| {
-                            engine_core::real_threads::device_vcall(
-                                e,
-                                device,
-                                slot,
-                                &args![register, data, count],
+                            engine_core::real_threads::device_set_constants(
+                                e, device, slot, register, data, count,
                             )
                             .i32()
                         },
