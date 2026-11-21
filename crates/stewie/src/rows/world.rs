@@ -267,6 +267,14 @@ pub const ROWS: &[Row] = &[
         summary: "an NPC's path through a door whose other side has no way back no longer crashes: that door is not used",
     },
     Row {
+        bit: stewie::NO_HACKING_WHEN_DEAD,
+        function: "PreventHackingWhenDead",
+        plan: "S0203",
+        key: "bPreventHackingWhenDead",
+        tweaks: None,
+        summary: "a dying player can no longer open a terminal (its menu over the death)",
+    },
+    Row {
         bit: stewie::STAIR_MATERIAL,
         function: "StairMaterialFix",
         plan: "S0216",

@@ -1320,6 +1320,13 @@ pub fn bgs_terminal_handle_open_finish(e: &mut Engine, this: Ptr, reference: u32
     if reference == 0 || activator != e.mem.u32(PLAYER) {
         return;
     }
+    // lStewieAl's Tweaks' S0203 (`OnHackActivateOpenMenuHook` at `0x501625`): a dying player
+    // (life state `+0x108` = 1) opens no terminal or hacking menu.
+    if e.stewie(engine_core::extend::stewie::NO_HACKING_WHEN_DEAD)
+        && e.mem.u32(activator.wrapping_add(0x108)) == 1
+    {
+        return;
+    }
     let player = e.mem.u32(PLAYER);
     let access = e.call(GET_TERMINAL_ACCESS, &args![player, reference]).u32();
     match access {
@@ -2561,6 +2568,29 @@ mod n037_tests {
         e.call(0x0050_1310, &[this, reference, someone, 0, 0, 0]);
         assert!(calls_to(&e, REWARD_KARMA).is_empty());
         assert_eq!(calls_to(&e, HANDLE_ACTIVATE).len(), 1);
+    }
+
+    /// lStewieAl's Tweaks' S0203: a dying player (life state 1) opens no menu with the row; other
+    /// life states, or the row off, open it.
+    #[test]
+    fn s0203_a_dying_player_opens_no_terminal() {
+        let opens = |row: bool, life: u32| {
+            let mut e = activate_engine();
+            let this = terminal(&mut e);
+            let player = e.mem.alloc(0x200);
+            e.mem.set_u32(player + 0x108, life);
+            e.mem.set_u32(PLAYER, player);
+            let reference = e.mem.alloc(0x20);
+            e.mem.set_u32(reference + 4, 0);
+            e.set_stewie(engine_core::extend::stewie::NO_HACKING_WHEN_DEAD, row);
+            e.call_log = Some(vec![]);
+            e.call(0x0050_15f0, &[this + 0x70, reference, player]);
+            calls_to(&e, QUEUE_MENU_CREATE).len()
+        };
+        assert_eq!(opens(false, 1), 1);
+        assert_eq!(opens(true, 1), 0);
+        assert_eq!(opens(true, 0), 1);
+        assert_eq!(opens(true, 2), 1);
     }
 
     #[test]

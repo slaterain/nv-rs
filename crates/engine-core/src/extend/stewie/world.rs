@@ -193,6 +193,9 @@ pub const WEAPON_MOD_HEALTH_KEPT: Row = fix(35);
 /// `005f1590`): the dead test no longer keeps a corpse from getting its default worn items, so an
 /// actor killed while its cell was unloaded is not found naked.
 pub const NUDE_CORPSES: Row = fix(36);
+/// S0203 `PreventHackingWhenDead` (`OnHackActivateOpenMenuHook` at `0x501625` in
+/// `BGSTerminal::HandleOpenFinish` `005015f0`): a dying player opens no terminal menu.
+pub const NO_HACKING_WHEN_DEAD: Row = fix(37);
 
 /// `OSInputGlobals *` (xNVSE's `0x11F35CC`).
 pub const INPUT_GLOBALS: u32 = 0x011f_35cc;
