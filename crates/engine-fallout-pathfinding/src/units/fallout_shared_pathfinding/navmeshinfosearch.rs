@@ -860,7 +860,17 @@ fn add_door_connection(
         mesh_point(e, base, info, START_MESH, START_LOCATION, from);
         mesh_point(e, base, other, GOAL_MESH, GOAL_LOCATION, to);
         let teleport = e.call(DOOR_TELEPORT, &args![destination]).u32();
-        let there = e.call(PLUS_4, &args![teleport]).u32();
+        // lStewieAl's Tweaks' S0193 (its jump at `0x6B8AF2`, in place of the call of `00717e50`): a
+        // destination with no teleport of its own passes the door over (the loop's next door,
+        // `0x6B8890`); else its point (`+4`) as the call answers it.
+        let there = if e.stewie(engine_core::extend::stewie::NAV_MESH_TELEPORT_DOOR) {
+            if teleport == 0 {
+                return None;
+            }
+            teleport.wrapping_add(4)
+        } else {
+            e.call(PLUS_4, &args![teleport]).u32()
+        };
         let first = distance(e, there, from);
         let teleport = e.call(DOOR_TELEPORT, &args![door]).u32();
         let here = e.call(PLUS_4, &args![teleport]).u32();
@@ -869,8 +879,11 @@ fn add_door_connection(
         value = x87_store32(x87_mul(x87_load32(value), x87_m32(factor)));
         value = x87_store32(x87_mul(x87_load32(value), double_at(e, EDGE_SCALE)));
         value = x87_store32(x87_add(x87_load32(value), x87_m32(cost)));
-        x87_store32(x87_add(x87_load32(value), x87_m32(penalty)))
+        Some(x87_store32(x87_add(x87_load32(value), x87_m32(penalty))))
     });
+    let Some(new_cost) = new_cost else {
+        return;
+    };
     e.with_stack(4, |e, local| {
         let result = fn_006b8fe0(
             e,
@@ -1548,6 +1561,78 @@ mod b025_tests {
         e.call(0x006b_8490, &args![s2, current, out]);
         let made = e.mem.u32(e.mem.u32(out + 4) + 8);
         assert_eq!(e.mem.f32(made), 409910.0);
+    }
+
+    /// lStewieAl's Tweaks' row S0193 at `0x6B8AF2`: a door whose destination reference has no
+    /// teleport of its own. Row off, the exe reads the missing teleport's point (a fault, here on
+    /// unmapped memory); row on, the door is passed over and the meshes stay. With a teleport the
+    /// row's inline `+4` gives the exe's cost.
+    #[test]
+    fn s0193_a_door_whose_destination_has_no_teleport() {
+        for (on, destination_teleport) in [(false, false), (true, false), (true, true)] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::NAV_MESH_TELEPORT_DOOR, on);
+            e.register(INFO_COST_VALUE, |_, _| Ret::default());
+            let a = mesh(&mut e, 3.0, 4.0, [&[], &[], &[]]);
+            let b = mesh(&mut e, 0.0, 8.0, [&[], &[], &[]]);
+            let other_side = mesh(&mut e, 100.0, 0.0, [&[], &[], &[]]);
+            let door = e.mem.alloc(0x40);
+            let here = mesh(&mut e, 0.0, 0.0, [&[a], &[0, b], &[0, door]]);
+            e.register(REFERENCE_FLAG_800, |_, _| 0u32.into_ret());
+            e.register(DOOR_LOCK_SET_FROM_DOOR, |_, _| Ret::default());
+            e.register(DOOR_LOCK_CAN_UNLOCK, |_, _| 1u32.into_ret());
+            e.register(REFERENCE_BASE_FORM, |_, a| a[0].into_ret());
+            e.register(DOOR_IS_MINIMAL_USE, |_, _| 0u32.into_ret());
+            // The door's teleport names the destination 0x6000, whose own teleport is missing
+            // (or the same block).
+            let teleport = e.mem.alloc(0x10);
+            e.mem.set_u32(teleport, 0x6000);
+            e.register_double(DOOR_TELEPORT, move |_, a| {
+                if a[0] == 0x6000 && !destination_teleport {
+                    0u32.into_ret()
+                } else {
+                    teleport.into_ret()
+                }
+            });
+            e.register(FIRST_WORD, |e, a| e.mem.u32(a[0]).into_ret());
+            e.register(PLUS_4, |_, a| (a[0] + 4).into_ret());
+            e.register(REFERENCE_EXTRA_LIST, |_, a| (a[0] + 0x44).into_ret());
+            let portal = e.mem.alloc(0x10);
+            e.register_double(GET_NAV_MESH_PORTAL, move |_, _| portal.into_ret());
+            e.register(GET_NAV_MESH_INFO_MAP, |_, _| 0x7000u32.into_ret());
+            e.register_double(INFO_MAP_LOOKUP, move |_, _| other_side.into_ret());
+            e.register(INFO_TEST, |_, _| 0u32.into_ret());
+            let s = search(&mut e);
+            e.mem.set_u8(s + 0x2080, 1);
+            e.mem.set_u32(s + 0x207c, 1);
+            let out = e.mem.alloc(0x10);
+            let current = node(&mut e, 10.0, 7.0);
+            e.mem.set_u32(current + 8, here);
+            e.mem.unmap(0, 0x1000);
+            e.call_log = Some(vec![]);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.call(0x006b_8490, &args![s, current, out]).bool()
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if !on {
+                continue;
+            }
+            assert_eq!(run.ok(), Some(true));
+            if destination_teleport {
+                assert_eq!(e.mem.u32(out + 8), 3);
+                let made = e.mem.u32(e.mem.u32(out + 4) + 8);
+                assert_eq!((e.mem.u32(made + 8), e.mem.f32(made)), (other_side, 310.0));
+                assert_eq!(
+                    calls_to(&e, PLUS_4),
+                    vec![vec![teleport]],
+                    "the door's own, only"
+                );
+            } else {
+                assert_eq!(e.mem.u32(out + 8), 2, "the door passed over");
+                assert!(calls_to(&e, PLUS_4).is_empty());
+            }
+        }
     }
 }
 
