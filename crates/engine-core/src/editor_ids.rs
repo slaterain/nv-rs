@@ -284,8 +284,12 @@ impl EditorIds {
     }
 
     /// `JohnnyExtraData::DetachEditorIDs`: each of the form's names taken out of the map (the
-    /// names stay the form's).
-    pub fn detach(&self, form: u32) {
+    /// names stay the form's); nothing for a form already temporary (`!pOwner->GetTemporary()`),
+    /// whose names a permanent form may hold in the map now.
+    pub fn detach(&self, form: u32, temporary: bool) {
+        if temporary {
+            return;
+        }
         let mut s = self.write();
         let names: Vec<Vec<u8>> = s
             .forms
@@ -298,10 +302,11 @@ impl EditorIds {
     }
 
     /// A form gone (`JohnnyExtraData::OnRemoval`: deleted, or a reference trashed): its names out
-    /// of the map, then its names dropped.
-    pub fn forget(&self, form: u32) {
-        self.detach(form);
-        self.write().forms.remove(&form);
+    /// of the map (not for a temporary form, as [`EditorIds::detach`]), then its names dropped.
+    /// Answers its guest copy (0 for none), for the caller to free.
+    pub fn forget(&self, form: u32, temporary: bool) -> u32 {
+        self.detach(form, temporary);
+        self.write().forms.remove(&form).map_or(0, |n| n.guest)
     }
 
     /// The guest copy of the form's newest name already made, 0 for none yet.
@@ -365,7 +370,35 @@ pub fn guest_text(e: &mut crate::Engine, form: u32) -> u32 {
     let text = e.mem.alloc(name.len() as u32 + 1);
     e.mem.write(text, &name);
     e.mem.set_u8(text + name.len() as u32, 0);
-    store(e).keep_guest_copy(form, text)
+    let kept = store(e).keep_guest_copy(form, text);
+    if kept != text {
+        // Another thread's copy was kept first (or the form went meanwhile): ours goes.
+        e.mem.free(text);
+    }
+    if kept == 0 {
+        return EMPTY_TEXT;
+    }
+    kept
+}
+
+/// Whether the form is temporary (its flags +8, 0x4000).
+pub fn is_temporary(e: &mut crate::Engine, form: u32) -> bool {
+    e.mem.u32(form.wrapping_add(FORM_FLAGS)) & TEMPORARY != 0
+}
+
+/// `TESForm::SetTemporary`'s hook (`hk_DetachEditorIDs`, after `RemoveFromDataStructures`): the
+/// form's names leave the map unless it is temporary already.
+pub fn detach_form(e: &mut crate::Engine, form: u32) {
+    let temporary = is_temporary(e, form);
+    store(e).detach(form, temporary);
+}
+
+/// A form gone (xNVSE's removal, JG's `OnRemoval`): [`EditorIds::forget`], and its guest copy
+/// freed back to the game's heap, so streamed named references do not leave copies behind.
+pub fn form_gone(e: &mut crate::Engine, form: u32) {
+    let temporary = is_temporary(e, form);
+    let guest = store(e).forget(form, temporary);
+    e.mem.free(guest);
 }
 
 // ---- JohnnyGuitar's setter (`TESFormEx::hk_SetFormEditorID`), shared with JIP's light names ----
@@ -381,10 +414,8 @@ const FORM_TYPE_NAME: u32 = 0x0044_0e30;
 /// `IgnoredConflicts`: the form JIP's note calls "Obsidian's", and the name `Wilderness`.
 const IGNORED_FORM_ID: u32 = 0x18e;
 const IGNORED_NAME: &[u8] = b"Wilderness";
-/// The most conflict lines kept for the log (each is also printed when made).
-const MAX_CONFLICT_LINES: usize = 1000;
 
-/// The conflict lines this run logged (`LogEDIDConflict`), the first [`MAX_CONFLICT_LINES`].
+/// The conflict lines this run logged (`LogEDIDConflict`), all of them, for JohnnyGuitar's log.
 #[derive(Default)]
 pub struct ConflictLog(std::sync::Mutex<Vec<String>>);
 
@@ -473,7 +504,7 @@ fn type_name(e: &mut crate::Engine, form: u32) -> String {
 // Translated from JohnnyGuitar NVSE 5.28 (c87905e), internal/JG/EditorIDRestoration.cpp:
 // LogEDIDConflict.
 /// One conflict line (JG's log's text: the new form's id and last file steal the name from the
-/// old one's id and first file, with both types when they differ), printed, kept for the log and
+/// old one's id and first file, with both types when they differ), kept for the log and
 /// counted.
 fn log_conflict(e: &mut crate::Engine, old: u32, name: &[u8], form: u32) {
     let (file_a, file_b) = (file_name(e, form, true), file_name(e, old, false));
@@ -485,16 +516,13 @@ fn log_conflict(e: &mut crate::Engine, old: u32, name: &[u8], form: u32) {
         let (from, to) = (type_name(e, old), type_name(e, form));
         line.push_str(&format!(" + changes type from {from} to {to}"));
     }
-    eprintln!("JohnnyGuitar's editor ids: {line}");
     store(e).count_conflict();
     let mut lines = e
         .ext_free::<ConflictLog>()
         .0
         .lock()
         .unwrap_or_else(|p| p.into_inner());
-    if lines.len() < MAX_CONFLICT_LINES {
-        lines.push(line);
-    }
+    lines.push(line);
 }
 
 #[cfg(test)]

@@ -57,11 +57,11 @@ fn detach_and_forget() {
         s.add_name(0x10, name);
         s.map_insert(0x10, name);
     }
-    s.detach(0x10);
+    s.detach(0x10, false);
     assert_eq!((s.lookup(b"a"), s.lookup(b"b")), (0, 0));
     assert_eq!(s.name(0x10).as_deref(), Some(&b"B"[..]));
     s.map_insert(0x10, b"B");
-    s.forget(0x10);
+    s.forget(0x10, false);
     assert_eq!(s.lookup(b"b"), 0);
     assert_eq!(s.name(0x10), None);
 }

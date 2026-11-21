@@ -295,3 +295,130 @@ fn the_translations_seams_answer_the_stored_names() {
         }
     }
 }
+
+// ---- The seams through their translated callers (the review of #852): each test fails when its
+// caller's `e.site` line is taken out. ----
+
+/// `TESForm::GetFormByEditorID` (`00483a00`) of `name`.
+fn by_name(e: &mut Engine, name: &[u8]) -> u32 {
+    let at = TEXTS + 0x100;
+    e.mem.write(at, name);
+    e.mem.set_u8(at + name.len() as u32, 0);
+    e.call(0x0048_3a00, &args![at]).u32()
+}
+
+/// `TESForm::SetFormID` (`00485c10`, `thiscall`): the id at +0xC (JG names only forms with one).
+fn stand_in_form_id(e: &mut Engine) {
+    e.register(0x0048_5c10, |e, a| {
+        e.mem.set_u32(a[0] + 0xc, a[1]);
+        ret(0)
+    });
+}
+
+/// The callees a test does not cover, stood in (answering 0).
+fn quiet(e: &mut Engine, addresses: &[u32]) {
+    for &at in addresses {
+        e.register(at, |_, _| ret(0));
+    }
+}
+
+/// `TESForm::SetTemporary` (`00484490`, its `RemoveFromDataStructures` stood in) on a named
+/// form: with the row on, the name leaves the map at `0x48449A` (not found any more) while the
+/// form still reads it (+0x130); the flag is set either way. Off: never found.
+#[test]
+fn set_temporary_takes_the_name_out_of_the_map() {
+    for on in [true, false] {
+        let mut e = engine(on);
+        quiet(&mut e, &[0x0048_3c70]);
+        assert_eq!(by_name(&mut e, b"Caps001"), if on { CAPS } else { 0 });
+        e.call(0x0048_4490, &args![CAPS]);
+        assert_eq!(e.mem.u32(CAPS + 8) & 0x4000, 0x4000);
+        assert_eq!(by_name(&mut e, b"Caps001"), 0, "{on}");
+        let name = e.vcall(CAPS, 0x130, &args![]).u32();
+        let want: &[u8] = if on { b"Caps001" } else { b"" };
+        assert_eq!(e.mem.cstr(name), want, "{on}");
+    }
+}
+
+/// `ActorValueInfo`'s constructor (`0066fe40`; its base constructors stood in): the name
+/// "AV<name>" it gives its form goes to JG's setter at `0x66FF57` with the row on and is found
+/// by name; off, the exe's stub, and not found.
+#[test]
+fn an_actor_value_info_is_found_by_its_name() {
+    for on in [true, false] {
+        let mut e = engine(on);
+        quiet(
+            &mut e,
+            &[
+                0x0048_3370,
+                0x0040_2d00,
+                0x0048_2c50,
+                0x0040_2c20,
+                0x0040_37b0,
+                0x004f_15a0,
+                0x0043_8390,
+            ],
+        );
+        stand_in_form_id(&mut e);
+        // The actor value's form id (`0066fdf0`).
+        e.register(0x0066_fdf0, |_, a| ret(0x2bc + a[0]));
+        // `_snprintf(buffer, 0x64, "AV%s", name)`.
+        e.register(0x0040_6d00, |e, a| {
+            let mut text = b"AV".to_vec();
+            text.extend(e.mem.cstr(a[3]));
+            text.push(0);
+            e.mem.write(a[0], &text);
+            ret(0)
+        });
+        let form = AREA + 0x4000;
+        let name = TEXTS + 0x200;
+        e.mem.write(name, b"Health\0");
+        e.call(0x0066_fe40, &args![form, 0x10u32, name]);
+        assert_eq!(
+            by_name(&mut e, b"avhealth"),
+            if on { form } else { 0 },
+            "{on}"
+        );
+    }
+}
+
+/// `BGSDefaultObjectManager`'s constructor (`0058d760`; the form constructor, type and id stood
+/// in): its name "DefaultObjectManager" (`01032da4`) goes to JG's setter at `0x58D7BC` with the
+/// row on and is found; off, not found.
+#[test]
+fn the_default_object_manager_is_found_by_its_name() {
+    for on in [true, false] {
+        let mut e = engine(on);
+        quiet(&mut e, &[0x0048_3370, 0x004f_15a0]);
+        stand_in_form_id(&mut e);
+        e.mem.write(0x0103_2da4, b"DefaultObjectManager\0");
+        let form = AREA + 0x5000;
+        e.call(0x0058_d760, &args![form]);
+        assert_eq!(
+            by_name(&mut e, b"DefaultObjectManager"),
+            if on { form } else { 0 },
+            "{on}"
+        );
+    }
+}
+
+/// `TESForm::GetFormDetailedString` (`004868f0`; its id and type readers stood in, the format
+/// recorded): the name it prints is JG's (`0x486903`) with the row on, the exe stub's "" off.
+#[test]
+fn a_forms_detailed_string_shows_its_name() {
+    thread_local! {
+        static PRINTED: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    }
+    for on in [true, false] {
+        let mut e = engine(on);
+        quiet(&mut e, &[0x0084_e3a0, 0x0044_0e30]);
+        e.register(STRING_PRINTF, |e, a| {
+            let name = e.mem.cstr(a[3]);
+            PRINTED.with(|p| *p.borrow_mut() = name);
+            ret(0)
+        });
+        e.call(0x0048_68f0, &args![CAPS, TEXTS + 0x300]);
+        let want: &[u8] = if on { b"Caps001" } else { b"" };
+        assert_eq!(PRINTED.with(|p| p.borrow().clone()), want, "{on}");
+    }
+}

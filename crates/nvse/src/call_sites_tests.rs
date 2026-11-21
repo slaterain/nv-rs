@@ -517,3 +517,22 @@ fn a_gone_form_loses_its_editor_ids() {
         assert_eq!(store.name(REF_1).is_none(), on);
     }
 }
+
+/// JohnnyGuitar's `DetachEditorIDs` skips a temporary form: a temporary reference sharing a name
+/// with a permanent cell is trashed, and the cell is still found by that name; the reference's
+/// names are dropped.
+#[test]
+fn a_gone_temporary_form_leaves_the_map_alone() {
+    let mut e = sites();
+    let flags = e.mem.u32(REF_1 + 8);
+    e.mem.set_u32(REF_1 + 8, flags | 0x4000);
+    let store = engine_core::editor_ids::store(&mut e);
+    store.set_on(true);
+    store.add_name(CELL, b"Shared");
+    store.map_insert(CELL, b"Shared");
+    store.add_name(REF_1, b"Shared");
+    e.site(call_sites::REFERENCE_TRASHED.addr(), &[REF_1]);
+    let store = engine_core::editor_ids::store(&mut e);
+    assert_eq!(store.lookup(b"shared"), CELL);
+    assert!(store.name(REF_1).is_none());
+}

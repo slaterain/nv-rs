@@ -46,7 +46,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
 /// The extender crates the test reads.
-const CRATES: [&str; 5] = ["jip", "nvse", "uio", "mcm", "stewie"];
+const CRATES: [&str; 6] = ["jip", "nvse", "uio", "mcm", "stewie", "johnnyguitar"];
 
 /// One direct call in a crate's source.
 #[derive(Debug)]
@@ -1692,6 +1692,12 @@ fn mcm_passes_each_game_function_the_words_it_takes() {
 #[test]
 fn stewie_passes_each_game_function_the_words_it_takes() {
     check("stewie");
+}
+
+/// JohnnyGuitar NVSE (its editor ids): each game function it calls by address gets the words it takes.
+#[test]
+fn johnnyguitar_passes_each_game_function_the_words_it_takes() {
+    check("johnnyguitar");
 }
 
 /// Virtual calls of the extenders whose target the exe fixes, whatever the object's class (every

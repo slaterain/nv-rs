@@ -41,6 +41,7 @@ mod tests;
 use engine_core::editor_ids;
 use engine_core::extend::{Owner, SiteSlot, WrapSlot, ROUTINE_BASE};
 use engine_core::prelude::*;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 /// `PluginInfo::name`, its version and opcode base (`JohnnyPluginData`), and the DLL's file name.
 pub const NAME: &str = "JohnnyGuitarNVSE";
@@ -126,13 +127,24 @@ pub struct JohnnyGuitar {
     pub on: bool,
     /// [`install`] ran with the row on.
     pub installed: bool,
-    /// The nine storing classes' own setters, as their slots held them.
-    pub storing_setters: [u32; 9],
+}
+
+/// The nine storing classes' own setters, as their slots held them: fixed at the install (before
+/// the threads start) and read lock-free by every thread's engine.
+#[derive(Default)]
+struct StoringSetters([AtomicU32; 9]);
+
+thread_local! {
+    /// [`form_by_name`]'s name, read from the game's memory: one buffer per thread, kept.
+    static NAME_BUFFER: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// The host's row: JohnnyGuitar's editor ids for this run (before [`install`]).
 pub fn set_on(e: &mut Engine, on: bool) {
     e.ext::<JohnnyGuitar>().on = on;
+    // Before JIP's install, which leaves its H04 out while the store is on, as JIP does with
+    // JohnnyGuitar loaded.
+    editor_ids::store(e).set_on(on);
 }
 
 /// Whether the editor ids are installed.
@@ -168,6 +180,7 @@ pub fn install(e: &mut Engine) {
     // removal and JIP's two readers ask the store whether it is on from any thread).
     editor_ids::store(e);
     e.ext_free::<editor_ids::ConflictLog>();
+    e.ext_free::<StoringSetters>();
     if !e.ext::<JohnnyGuitar>().on {
         return;
     }
@@ -186,12 +199,12 @@ pub fn install(e: &mut Engine) {
             e.mem.set_u32(vtable + SETTER_SLOT, SETTER);
         }
     }
-    let mut held = [0u32; 9];
     for (i, &slot) in STORING_SETTER_SLOTS.iter().enumerate() {
         if !e.mem.is_mapped(slot) {
             continue;
         }
-        held[i] = e.mem.u32(slot);
+        let own = e.mem.u32(slot);
+        e.ext_free::<StoringSetters>().0[i].store(own, Ordering::Release);
         let routine = WRAPPED_SETTERS + 4 * i as u32;
         e.register(routine, WRAPPED[i]);
         e.mem.set_u32(slot, routine);
@@ -211,9 +224,7 @@ pub fn install(e: &mut Engine) {
     e.on_site(TEMPORARY_SITE, temporary_site);
     e.wrap(NAME_LENGTH, name_length);
     e.wrap(FORM_BY_NAME, form_by_name);
-    let state = e.ext::<JohnnyGuitar>();
-    state.storing_setters = held;
-    state.installed = true;
+    e.ext::<JohnnyGuitar>().installed = true;
     nvse::plugins::register(e, plugin());
     // The game's state, not one engine's: real threads' engines share it.
     e.share_ext::<JohnnyGuitar>();
@@ -238,7 +249,7 @@ fn setter(e: &mut Engine, w: &[u32]) -> Ret {
 /// A storing class's setter wrapped: its own setter (as its slot held it) first, then, when that
 /// answers true, JG's; answers the class's own answer.
 fn wrapped_setter(e: &mut Engine, index: usize, w: &[u32]) -> Ret {
-    let own = e.ext::<JohnnyGuitar>().storing_setters[index];
+    let own = e.ext_free::<StoringSetters>().0[index].load(Ordering::Acquire);
     let ok = e.call(own, &args![w[0], w[1]]).u32() & 0xff != 0;
     if ok {
         editor_ids::set_form_editor_id(e, w[0], w[1]);
@@ -275,8 +286,23 @@ fn form_by_name(e: &mut Engine, w: &[u32]) -> Ret {
     if text == 0 || e.mem.u8(text) == 0 {
         return 0u32.into_ret();
     }
-    let name = e.mem.cstr(text);
-    editor_ids::store(e).lookup(&name).into_ret()
+    // Every frame on main (scripts asking a form by name): the name read into this thread's
+    // buffer, no allocation.
+    NAME_BUFFER
+        .with_borrow_mut(|name| {
+            name.clear();
+            let mut at = text;
+            loop {
+                let b = e.mem.u8(at);
+                if b == 0 {
+                    break;
+                }
+                name.push(b);
+                at = at.wrapping_add(1);
+            }
+            editor_ids::store(e).lookup(name)
+        })
+        .into_ret()
 }
 
 // ---- the seams ----
@@ -313,7 +339,7 @@ fn skipped_site(_: &mut Engine, _: &[u32]) -> Option<u32> {
 /// After `RemoveFromDataStructures` in `SetTemporary` (words: the form): the form's names leave
 /// the map (they stay its own). The exe goes on.
 fn temporary_site(e: &mut Engine, w: &[u32]) -> Option<u32> {
-    editor_ids::store(e).detach(w[0]);
+    editor_ids::detach_form(e, w[0]);
     None
 }
 
@@ -332,6 +358,7 @@ fn listener(e: &mut Engine, m: &nvse::plugins::Message) {
     if editor_ids::store(e).counts().conflicts == 0 {
         return;
     }
+    write_log(e);
     let random = e.call(RANDOM_01, &args![]).f32();
     let who = if random < 0.001 { "slop" } else { "mod" };
     let who = nvse::table::guest_str(e, who.as_bytes());
@@ -340,6 +367,27 @@ fn listener(e: &mut Engine, m: &nvse::plugins::Message) {
         "Some EDIDs are conflicting! Check JohnnyGuitarNVSE.log for details. (Ignore this message if you are not a %s author.)",
         &[who],
     );
+}
+
+/// JohnnyGuitar's log, which its console line names.
+pub const LOG_FILE: &[u8] = b"JohnnyGuitarNVSE.log";
+
+// Translated from JohnnyGuitar NVSE 5.28 (c87905e), internal/JG/EditorIDRestoration.cpp:
+// LogEDIDConflict's lines to JohnnyGuitarNVSE.log.
+/// The conflict lines to [`LOG_FILE`] in one write at the deferred start (batched: a large list
+/// has thousands), through the game's file calls as `nvse.log` is, so the file lands with the
+/// port's other mod files beside the saves, never in the game folder; one start-up log line says
+/// how many.
+fn write_log(e: &mut Engine) {
+    let mut text = Vec::new();
+    for line in editor_ids::conflict_lines(e) {
+        text.extend_from_slice(line.as_bytes());
+        text.push(b'\n');
+    }
+    let lines = text.iter().filter(|&&b| b == b'\n').count();
+    if nvse::log::write_file(e, LOG_FILE, &text) {
+        eprintln!("JohnnyGuitar's editor ids: {lines} conflicts written to JohnnyGuitarNVSE.log");
+    }
 }
 
 /// The load's log line: forms named, names, map entries, the store's bytes, conflicts.

@@ -78,6 +78,12 @@ fn form(e: &mut Engine, vtable: u32, kind: u8, id: u32) -> u32 {
 /// reference's getter (a real function), JIP's light slots, and the nine storing classes' setters
 /// (their own); the two functions JG replaces registered; the game's calls JG makes stood in.
 fn engine(on: bool) -> Engine {
+    engine_with(on, true)
+}
+
+/// [`engine`], with JIP's light setter in the light class's slot or not (JIP leaves its H04 out
+/// while JohnnyGuitar's editor ids are in, so the real pair has the stub there).
+fn engine_with(on: bool, jip_light_setter: bool) -> Engine {
     CALLS.with(|c| c.borrow_mut().clear());
     NEXT.with(|n| n.set(AREA + 0x1000));
     let mut e = Engine::new();
@@ -90,7 +96,9 @@ fn engine(on: bool) -> Engine {
         e.mem.set_u32(vtable + SETTER_SLOT, SETTER_STUB);
     }
     e.mem.set_u32(REFR_VTABLE + GETTER_SLOT, REFR_GETTER);
-    e.mem.set_u32(LIGH_VTABLE + SETTER_SLOT, JIP_LIGHT_SETTER);
+    if jip_light_setter {
+        e.mem.set_u32(LIGH_VTABLE + SETTER_SLOT, JIP_LIGHT_SETTER);
+    }
     for slot in STORING_SETTER_SLOTS {
         e.mem.set_u32(slot, OWN_SETTER);
     }
@@ -342,6 +350,25 @@ fn a_taken_name_is_a_logged_conflict() {
 /// The lead's first addition: the nine classes that store their own name. The class's own setter
 /// runs first (as its slot held it); when it answers true, JG stores the name too, so the form is
 /// found by name with the row on; when it answers false, nothing is stored and false answered.
+/// The real pair (JIP's H04 left out): the light class's stub slots are JohnnyGuitar's, so a light
+/// is named as any form, and loses its name to a later form that takes it.
+#[test]
+fn a_light_loses_its_name_to_a_later_form() {
+    let mut e = engine_with(true, false);
+    assert_eq!(e.mem.u32(LIGH_VTABLE + GETTER_SLOT), GETTER);
+    assert_eq!(e.mem.u32(LIGH_VTABLE + SETTER_SLOT), SETTER);
+    let light = form(&mut e, LIGH_VTABLE, 0x1e, 0x0000_5678);
+    let later = form(&mut e, 0x0102_b844, 0x1f, 0x0100_5678);
+    let name = text(&mut e, b"GoodspringsLamp");
+    e.vcall(light, SETTER_SLOT, &args![name]);
+    assert_eq!(e.call(EXE_LOOKUP, &args![name]).u32(), light);
+    let named = e.vcall(light, GETTER_SLOT, &args![]).u32();
+    assert_eq!(name_of(&e, named), b"GoodspringsLamp");
+    e.vcall(later, SETTER_SLOT, &args![name]);
+    assert_eq!(e.call(EXE_LOOKUP, &args![name]).u32(), later);
+    assert_eq!(e.vcall(light, GETTER_SLOT, &args![]).u32(), EMPTY_TEXT);
+}
+
 #[test]
 fn the_nine_storing_classes_are_still_found() {
     let mut e = engine(true);
@@ -449,6 +476,82 @@ fn the_deferred_start_reports_conflicts() {
         .map(|&b| b as u8)
         .collect();
     assert_eq!(arg, b"mod");
+}
+
+/// The row turns the store on before any install, so JIP's install (which comes first) sees it
+/// and leaves its H04 out, as JIP does with JohnnyGuitar loaded.
+#[test]
+fn the_row_turns_the_store_on_before_jips_install() {
+    for on in [true, false] {
+        let mut e = Engine::new();
+        set_on(&mut e, on);
+        assert_eq!(editor_ids::on(&mut e), on);
+    }
+}
+
+/// A gone form's guest copy goes back to the game's heap (streamed named references leave none
+/// behind): the next block of that size is the same one.
+#[test]
+fn a_gone_forms_copy_is_freed() {
+    let mut e = engine(true);
+    let f = form(&mut e, 0x0102_b844, 0x1f, 0x0000_6000);
+    let n = text(&mut e, b"StreamedRef");
+    e.vcall(f, SETTER_SLOT, &args![n]);
+    let copy = e.vcall(f, GETTER_SLOT, &args![]).u32();
+    assert_eq!(name_of(&e, copy), b"StreamedRef");
+    editor_ids::form_gone(&mut e, f);
+    assert_eq!(e.call(EXE_LOOKUP, &args![n]).u32(), 0);
+    assert_eq!(e.vcall(f, GETTER_SLOT, &args![]).u32(), EMPTY_TEXT);
+    assert_eq!(e.mem.alloc(12), copy, "the copy's block reused");
+}
+
+/// The console line's log: the conflict lines go to `JohnnyGuitarNVSE.log` in one write, made
+/// anew, through the game's file calls (as `nvse.log`), `\r\n` after each line.
+#[test]
+fn the_conflicts_go_to_johnnyguitars_log() {
+    const CREATE_FILE_A: u32 = 0x00fd_f088;
+    const WRITE_FILE: u32 = 0x00fd_f0dc;
+    const CLOSE_HANDLE: u32 = 0x00fd_f07c;
+    let mut e = engine(true);
+    e.register(CREATE_FILE_A, |e, w| {
+        let path: Vec<u32> = e.mem.cstr(w[0]).iter().map(|&b| u32::from(b)).collect();
+        record(CREATE_FILE_A, &path);
+        record(CREATE_FILE_A + 1, &[w[4]]);
+        ret(7)
+    });
+    e.register(WRITE_FILE, |e, w| {
+        let bytes: Vec<u32> = (0..w[2]).map(|i| u32::from(e.mem.u8(w[1] + i))).collect();
+        record(WRITE_FILE, &bytes);
+        ret(1)
+    });
+    e.register(CLOSE_HANDLE, |_, w| {
+        record(CLOSE_HANDLE, w);
+        ret(1)
+    });
+    let message = nvse::plugins::Message {
+        kind: nvse::plugins::msg::DEFERRED_INIT,
+        data: 0,
+        len: 0,
+    };
+    let n = text(&mut e, b"Bottle");
+    for id in [0x0000_5000, 0x0100_5000, 0x0200_5000] {
+        let f = form(&mut e, 0x0102_b844, 0x1f, id);
+        e.vcall(f, SETTER_SLOT, &args![n]);
+    }
+    listener(&mut e, &message);
+    let as_bytes = |v: &Vec<u32>| v.iter().map(|&b| b as u8).collect::<Vec<u8>>();
+    assert_eq!(
+        as_bytes(&calls_to(CREATE_FILE_A)[0]),
+        b"JohnnyGuitarNVSE.log"
+    );
+    assert_eq!(calls_to(CREATE_FILE_A + 1), vec![vec![2]], "made anew");
+    let writes = calls_to(WRITE_FILE);
+    assert_eq!(writes.len(), 1, "one write");
+    assert_eq!(
+        as_bytes(&writes[0]),
+        b"01005000 (\"\") steals EDID \"Bottle\" from 00005000 (\"\")\r\n02005000 (\"\") steals EDID \"Bottle\" from 01005000 (\"\")\r\n"
+    );
+    assert_eq!(calls_to(CLOSE_HANDLE), vec![vec![7]]);
 }
 
 /// Many names: each stored once in the arena, each found; the counts add up (the load's line).
