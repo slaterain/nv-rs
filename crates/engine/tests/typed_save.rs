@@ -149,11 +149,17 @@ fn entries(n: u32) -> Vec<(u32, u32)> {
 
 /// The families this test runs with: this one, the dispatch family's lookup, the pathing family's
 /// hash and compare, and the leaves.
-fn families(d: Diff) -> Diff {
-    d.family(&save::SAVE)
-        .family(&engine_typed::dispatch::DISPATCH)
-        .family(&engine_typed::pathing::PATHING)
-        .family(&leaf::LEAVES)
+trait Families {
+    fn families(self) -> Diff;
+}
+
+impl Families for Diff {
+    fn families(self) -> Diff {
+        self.family(&save::SAVE)
+            .family(&engine_typed::dispatch::DISPATCH)
+            .family(&engine_typed::pathing::PATHING)
+            .family(&leaf::LEAVES)
+    }
 }
 
 // ---- SetAt ----
@@ -171,19 +177,17 @@ fn set_at_word_map_words(e: &mut Engine, case: &Case) -> Vec<u32> {
 /// chain), an absent key added at the head of its bucket with the count up; every slot typed.
 #[test]
 fn set_at_word_map() {
-    families(Diff::new(entry!(
-        0x0084_4700,
-        refs::set_at(Ptr<_>, u32, u32)
-    )))
-    .inputs(&[
-        Input::Of(&[1, 5, 37]),
-        Input::Of(LOOKED_UP),
-        Input::Of(&[0, 4, 9]),
-        Input::Of(&[0, 0x1234_5678]),
-    ])
-    .setup(set_at_word_map_words)
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0084_4700, refs::set_at(Ptr<_>, u32, u32)))
+        .families()
+        .inputs(&[
+            Input::Of(&[1, 5, 37]),
+            Input::Of(LOOKED_UP),
+            Input::Of(&[0, 4, 9]),
+            Input::Of(&[0, 0x1234_5678]),
+        ])
+        .setup(set_at_word_map_words)
+        .run()
+        .assert_same();
 }
 
 /// Any other map: the stand-ins' slots through the vtable, in the exe's order: 0, 1 or 3 nodes in
@@ -200,14 +204,12 @@ fn set_at_other_words(e: &mut Engine, case: &Case) -> Vec<u32> {
 
 #[test]
 fn set_at_other_slots() {
-    families(Diff::new(entry!(
-        0x0084_4700,
-        refs::set_at(Ptr<_>, u32, u32)
-    )))
-    .inputs(&[Input::Of(&[0, 1, 3]), Input::Flag, Input::Word])
-    .setup(set_at_other_words)
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0084_4700, refs::set_at(Ptr<_>, u32, u32)))
+        .families()
+        .inputs(&[Input::Of(&[0, 1, 3]), Input::Flag, Input::Word])
+        .setup(set_at_other_words)
+        .run()
+        .assert_same();
 }
 
 /// A map whose slots mix the word map's and the stand-ins': each slot decides by its own target.
@@ -229,18 +231,16 @@ fn set_at_mixed_words(e: &mut Engine, case: &Case) -> Vec<u32> {
 
 #[test]
 fn set_at_mixed_slots() {
-    families(Diff::new(entry!(
-        0x0084_4700,
-        refs::set_at(Ptr<_>, u32, u32)
-    )))
-    .inputs(&[
-        Input::Of(&[0, 1, 2, 4, 8, 0xf]),
-        Input::Of(&[0, 3]),
-        Input::Of(&[1, 2, 0xffff_ffff]),
-    ])
-    .setup(set_at_mixed_words)
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0084_4700, refs::set_at(Ptr<_>, u32, u32)))
+        .families()
+        .inputs(&[
+            Input::Of(&[0, 1, 2, 4, 8, 0xf]),
+            Input::Of(&[0, 3]),
+            Input::Of(&[1, 2, 0xffff_ffff]),
+        ])
+        .setup(set_at_mixed_words)
+        .run()
+        .assert_same();
 }
 
 // ---- The form id map ----
@@ -282,10 +282,11 @@ fn form_id_words(e: &mut Engine, case: &Case) -> Vec<u32> {
 /// next index (also at the counter's wrap), put in both maps.
 #[test]
 fn get_or_add_index() {
-    families(Diff::new(entry!(
+    Diff::new(entry!(
         0x0084_6c90,
         refs::get_or_add_index(Ptr<_>, u32) -> u32
-    )))
+    ))
+    .families()
     .inputs(&form_id_inputs())
     .setup(form_id_words)
     .run()
@@ -295,22 +296,21 @@ fn get_or_add_index() {
 /// Resolve: a created form's id stands for itself; a held index gives its id; an absent one 0.
 #[test]
 fn resolve_index() {
-    families(Diff::new(entry!(
-        0x0084_6d20,
-        refs::resolve_index(Ptr<_>, u32) -> u32
-    )))
-    .inputs(&form_id_inputs())
-    .setup(form_id_words)
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0084_6d20, refs::resolve_index(Ptr<_>, u32) -> u32))
+        .families()
+        .inputs(&form_id_inputs())
+        .setup(form_id_words)
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn is_created_id() {
-    families(Diff::new(entry!(
+    Diff::new(entry!(
         0x0046_9860,
         refs::is_created_id(Ptr<_>, u32) -> bool
-    )))
+    ))
+    .families()
     .inputs(&[
         Input::Word,
         Input::Of(&[0, 0xfeff_ffff, 0xff00_0000, 0xff00_0001, 0xffff_ffff]),
@@ -335,60 +335,54 @@ fn index_block(e: &mut Engine, index: u32) -> u32 {
 
 #[test]
 fn get_numeric_id() {
-    families(Diff::new(entry!(
-        0x0085_3500,
-        refs::get_numeric_id(Ptr<_>) -> u32
-    )))
-    .inputs(&[
-        Input::Of(&[
-            0, 1, 3, 8, 0x7f_ffff, 0x80_0000, 0x80_0004, 0xff_ffff, 0x12_3456,
-        ]),
-        Input::Of(&[0, 9]),
-    ])
-    .setup(|e, case| {
-        stand_ins(e);
-        let map = form_id_map(e, 37, case.word(1), 9);
-        with_game(e, map);
-        vec![index_block(e, case.word(0))]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0085_3500, refs::get_numeric_id(Ptr<_>) -> u32))
+        .families()
+        .inputs(&[
+            Input::Of(&[
+                0, 1, 3, 8, 0x7f_ffff, 0x80_0000, 0x80_0004, 0xff_ffff, 0x12_3456,
+            ]),
+            Input::Of(&[0, 9]),
+        ])
+        .setup(|e, case| {
+            stand_ins(e);
+            let map = form_id_map(e, 37, case.word(1), 9);
+            with_game(e, map);
+            vec![index_block(e, case.word(0))]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn set_numeric_id() {
-    families(Diff::new(entry!(
-        0x0085_3570,
-        refs::set_numeric_id(Ptr<_>, u32)
-    )))
-    .inputs(&[
-        Input::Of(LOOKED_UP),
-        Input::Of(&[0, 9]),
-        Input::Of(&[9, 0x80_0000, 0xfe_ffff]),
-    ])
-    .setup(|e, case| {
-        stand_ins(e);
-        let map = form_id_map(e, 37, case.word(1), case.word(2));
-        with_game(e, map);
-        vec![index_block(e, 0xab_cdef), case.word(0)]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0085_3570, refs::set_numeric_id(Ptr<_>, u32)))
+        .families()
+        .inputs(&[
+            Input::Of(LOOKED_UP),
+            Input::Of(&[0, 9]),
+            Input::Of(&[9, 0x80_0000, 0xfe_ffff]),
+        ])
+        .setup(|e, case| {
+            stand_ins(e);
+            let map = form_id_map(e, 37, case.word(1), case.word(2));
+            with_game(e, map);
+            vec![index_block(e, 0xab_cdef), case.word(0)]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn index_new() {
-    families(Diff::new(entry!(
-        0x0084_eaf0,
-        refs::index_new(Ptr<_>) -> Ptr<_>
-    )))
-    .inputs(&[Input::Word])
-    .setup(|e, case| {
-        stand_ins(e);
-        vec![block(e, 4, &[case.word(0)])]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0084_eaf0, refs::index_new(Ptr<_>) -> Ptr<_>))
+        .families()
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            stand_ins(e);
+            vec![block(e, 4, &[case.word(0)])]
+        })
+        .run()
+        .assert_same();
 }
 
 // ---- The save buffer's form ids ----
@@ -402,10 +396,11 @@ fn save_form_id_world(e: &mut Engine, case: &Case) -> u32 {
 
 #[test]
 fn save_numeric_form_id() {
-    families(Diff::new(entry!(
+    Diff::new(entry!(
         0x0086_5db0,
         refs::save_numeric_form_id(Ptr<_>, u32, u32)
-    )))
+    ))
+    .families()
     .inputs(&[Input::Of(LOOKED_UP), Input::Of(&[0, 9]), Input::Word])
     .setup(|e, case| {
         let buffer = save_form_id_world(e, case);
@@ -417,54 +412,61 @@ fn save_numeric_form_id() {
 
 #[test]
 fn save_form_id() {
-    families(Diff::new(entry!(
-        0x0086_5df0,
-        refs::save_form_id(Ptr<_>, Ptr<_>, u32)
-    )))
-    .inputs(&[
-        Input::Of(&[0, 1, 37, 2, 0xff00_0000, 0xffff_ffff]),
-        Input::Of(&[0, 9]),
-        Input::Flag,
-    ])
-    .setup(|e, case| {
-        let buffer = save_form_id_world(e, case);
-        // Flag 0: no form (a null pointer); else a form with the id at +0xc.
-        let form = if case.word(2) == 0 {
-            0
-        } else {
-            block(e, 0x10, &[0, 0, 0, case.word(0)])
-        };
-        vec![buffer, form, 0]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0086_5df0, refs::save_form_id(Ptr<_>, Ptr<_>, u32)))
+        .families()
+        .inputs(&[
+            Input::Of(&[0, 1, 37, 2, 0xff00_0000, 0xffff_ffff]),
+            Input::Of(&[0, 9]),
+            Input::Flag,
+        ])
+        .setup(|e, case| {
+            let buffer = save_form_id_world(e, case);
+            // Flag 0: no form (a null pointer); else a form with the id at +0xc.
+            let form = if case.word(2) == 0 {
+                0
+            } else {
+                block(e, 0x10, &[0, 0, 0, case.word(0)])
+            };
+            vec![buffer, form, 0]
+        })
+        .run()
+        .assert_same();
 }
 
 // ---- The item functions ----
 
+fn a_map(e: &mut Engine, _case: &Case) -> Vec<u32> {
+    stand_ins(e);
+    vec![e.mem.alloc(0x10)]
+}
+
 #[test]
-fn new_item_and_allocate_item() {
-    for (address, f) in [
-        entry!(0x0084_4a70, refs::new_item(Ptr<_>) -> Ptr<_>),
-        entry!(0x006f_99e0, refs::allocate_item(Ptr<_>) -> Ptr<_>),
-    ] {
-        families(Diff::new((address, f)))
-            .inputs(&[Input::Flag])
-            .setup(|e, _| {
-                stand_ins(e);
-                vec![e.mem.alloc(0x10)]
-            })
-            .run()
-            .assert_same();
-    }
+fn new_item() {
+    Diff::new(entry!(0x0084_4a70, refs::new_item(Ptr<_>) -> Ptr<_>))
+        .families()
+        .inputs(&[Input::Flag])
+        .setup(a_map)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn allocate_item() {
+    Diff::new(entry!(0x006f_99e0, refs::allocate_item(Ptr<_>) -> Ptr<_>))
+        .families()
+        .inputs(&[Input::Flag])
+        .setup(a_map)
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn set_value() {
-    families(Diff::new(entry!(
+    Diff::new(entry!(
         0x0086_3840,
         refs::set_value(Ptr<_>, Ptr<_>, u32, u32)
-    )))
+    ))
+    .families()
     .inputs(&[Input::Word, Input::Word])
     .setup(|e, case| {
         stand_ins(e);
@@ -480,27 +482,25 @@ fn set_value() {
 /// the counter and every appended index compare.
 #[test]
 fn many_form_ids_through_one_map() {
-    families(Diff::new(entry!(
-        0x0085_3570,
-        refs::set_numeric_id(Ptr<_>, u32)
-    )))
-    .inputs(&[Input::Of(&[37, 1])])
-    .setup(|e, case| {
-        stand_ins(e);
-        let map = form_id_map(e, case.word(0), 0, 1);
-        with_game(e, map);
-        let index = index_block(e, 0);
-        // Fill the map first through the translation, the same on every side.
-        for i in 0..300u32 {
-            let id = match i % 7 {
-                0 => 0xff00_0000 | i,
-                1 => i / 2,
-                _ => 0x0001_0000 + (i * 37) % 211,
-            };
-            e.call(0x0085_3570, &args![index, id]);
-        }
-        vec![index, 0x0001_0007]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0085_3570, refs::set_numeric_id(Ptr<_>, u32)))
+        .families()
+        .inputs(&[Input::Of(&[37, 1])])
+        .setup(|e, case| {
+            stand_ins(e);
+            let map = form_id_map(e, case.word(0), 0, 1);
+            with_game(e, map);
+            let index = index_block(e, 0);
+            // Fill the map first through the translation, the same on every side.
+            for i in 0..300u32 {
+                let id = match i % 7 {
+                    0 => 0xff00_0000 | i,
+                    1 => i / 2,
+                    _ => 0x0001_0000 + (i * 37) % 211,
+                };
+                e.call(0x0085_3570, &args![index, id]);
+            }
+            vec![index, 0x0001_0007]
+        })
+        .run()
+        .assert_same();
 }
