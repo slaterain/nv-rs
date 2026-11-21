@@ -2285,8 +2285,23 @@ impl Mem {
         // One test for both diagnostics (the write watch, the block check's store mode), so a
         // normal run pays a single predictable branch per store.
         if self.store_diag {
-            return self.store_watched(a, b);
+            if self.other_diag {
+                return self.store_watched(a, b);
+            }
+            // The store track alone (the compact culling copy): the store as ever, then its pages
+            // marked, here in the hot path (one page-table byte read for a store on one page).
+            self.store_plain(a, b);
+            if let Some(t) = self.track.as_deref() {
+                t.note(a, N as u32);
+            }
+            return;
         }
+        self.store_plain(a, b)
+    }
+
+    /// The store itself: fast where the page and the next are mapped, else [`Mem::store_slow`].
+    #[inline(always)]
+    fn store_plain<const N: usize>(&self, a: u32, b: [u8; N]) {
         debug_assert!(N <= 8);
         let p = self.host_at(a);
         if self.fast_at(a) {
@@ -2298,20 +2313,13 @@ impl Mem {
         self.store_slow(a, b)
     }
 
-    /// [`Mem::store`] with a store diagnostic or the store track on, out of its hot path: the
-    /// diagnostics see the store before it is made, the track marks its pages after.
+    /// [`Mem::store`] with a store diagnostic on, out of its hot path: the diagnostics see the store
+    /// before it is made, the track (when on too) marks its pages after.
     #[cold]
     #[inline(never)]
     fn store_watched<const N: usize>(&self, a: u32, b: [u8; N]) {
-        if self.other_diag {
-            self.store_diagnostics(a, &b);
-        }
-        if self.fast_at(a) {
-            // SAFETY: as in `Mem::store`.
-            unsafe { std::ptr::write_unaligned(self.host_at(a).cast::<[u8; N]>(), b) };
-        } else {
-            self.store_slow(a, b);
-        }
+        self.store_diagnostics(a, &b);
+        self.store_plain(a, b);
         if let Some(t) = self.track.as_deref() {
             t.note(a, N as u32);
         }

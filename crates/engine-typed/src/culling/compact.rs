@@ -241,13 +241,12 @@ impl Copy {
         span(item.children, u32::from(item.size) * 4);
     }
 
-    /// Brings the copy up to date: the items on every dirty page read again; answers false when an
-    /// object's class, bound address or children changed (the copy must be built again).
-    pub fn refresh(&mut self, e: &Engine) -> bool {
-        let mut dirty = Vec::new();
-        self.track.take_dirty(|page| dirty.push(page >> 12));
+    /// Brings the copy up to date: the items on every dirty page (page numbers, taken once from the
+    /// track for every copy) read again; answers false when an object's class, bound address or
+    /// children changed (the copy must be built again).
+    pub fn refresh(&mut self, e: &Engine, dirty: &[u32]) -> bool {
         for page in dirty {
-            let Some(items) = self.pages.get(&page) else {
+            let Some(items) = self.pages.get(page) else {
                 continue;
             };
             for &index in items {
@@ -283,16 +282,28 @@ impl Copy {
         true
     }
 
-    /// Every item against the game's bytes (the check mode): answers the objects that differ.
+    /// Every item against the game's bytes (the check mode), its children's slots too: answers the
+    /// objects that differ.
     pub fn stale(&self, e: &Engine) -> Vec<u32> {
         self.items
             .iter()
             .filter(|item| {
                 let now = read_item(e, item.object);
-                Item {
+                let fields_differ = Item {
                     children_at: item.children_at,
                     ..now
-                } != **item
+                } != **item;
+                fields_differ
+                    || (0..u32::from(item.size)).any(|slot| {
+                        let child = e.mem.u32(item.children.wrapping_add(4 * slot));
+                        let at = self.slots[(item.children_at + slot) as usize];
+                        let had = if at == u32::MAX {
+                            0
+                        } else {
+                            self.items[at as usize].object
+                        };
+                        child != had
+                    })
             })
             .map(|item| item.object)
             .collect()
@@ -474,19 +485,22 @@ pub(crate) fn note_fade(node: u32, visible: bool) {
 }
 
 /// What the check mode found over the run (for the report and the tests): walks checked, stale items
-/// seen, geometries the copy found visible that the real walk did not hand over, fade nodes it
-/// reached that the real walk never decided.
+/// seen, geometries the copy found visible that the real walk did not hand over, geometries of the
+/// copy the real walk handed over that the copy did not find, fade nodes it reached that the real
+/// walk never decided.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CheckCounts {
     pub walks: u64,
     pub stale: u64,
     pub extra: u64,
+    pub missing: u64,
     pub undecided: u64,
 }
 static CHECK: Mutex<CheckCounts> = Mutex::new(CheckCounts {
     walks: 0,
     stale: 0,
     extra: 0,
+    missing: 0,
     undecided: 0,
 });
 
@@ -517,11 +531,14 @@ fn with_copy<R>(
 ) -> R {
     COPIES.with(|copies| {
         let mut copies = copies.borrow_mut();
-        let fresh = match copies.get_mut(&scene) {
-            Some(copy) => copy.refresh(e),
-            None => false,
-        };
-        if !fresh {
+        // The dirty pages are taken once (taking clears them) and given to every copy: a scene not
+        // walked this time must not miss a write made before its next walk.
+        let mut dirty = Vec::new();
+        track.take_dirty(|page| dirty.push(page >> 12));
+        if !dirty.is_empty() {
+            copies.retain(|_, copy| copy.refresh(e, &dirty));
+        }
+        if !copies.contains_key(&scene) {
             copies.insert(scene, Copy::build(e, scene, track));
         }
         f(e, &copies[&scene])
@@ -569,7 +586,7 @@ pub fn walk_scene(e: &mut Engine, scene: u32, process: u32) -> bool {
             .and_then(|mut r| r.take())
             .map(|r| r.appended.into_iter().collect())
             .unwrap_or_default();
-        let (extra, undecided) = DRY_LIST.with(|list| {
+        let (extra, undecided, found) = DRY_LIST.with(|list| {
             let list = list.borrow();
             let undecided: Vec<u32> = list.iter().filter(|&&o| o & 1 != 0).copied().collect();
             let extra: Vec<u32> = list
@@ -577,17 +594,33 @@ pub fn walk_scene(e: &mut Engine, scene: u32, process: u32) -> bool {
                 .filter(|&&o| o & 1 == 0 && !real.contains(&o))
                 .copied()
                 .collect();
-            (extra, undecided)
+            let found: std::collections::HashSet<u32> = list.iter().copied().collect();
+            (extra, undecided, found)
         });
-        if !stale.is_empty() || !extra.is_empty() || !undecided.is_empty() {
+        // The other way round: a geometry of the copy that the real walk handed over and the copy's
+        // walk did not find (geometries under a class the real code walks are not in the copy).
+        let missing: Vec<u32> = copy
+            .items
+            .iter()
+            .filter(|item| {
+                item.kind == Kind::Geometry
+                    && real.contains(&item.object)
+                    && !found.contains(&item.object)
+            })
+            .map(|item| item.object)
+            .collect();
+        if !stale.is_empty() || !extra.is_empty() || !missing.is_empty() || !undecided.is_empty() {
             eprintln!(
                 "NV_CULL_COMPACT=check: scene {scene:08x}: {} stale item(s) {:08x?}, {} geometry(ies) \
-                 the copy found visible and the real walk did not {:08x?}, {} fade node(s) reached \
-                 that the real walk never decided",
+                 the copy found visible and the real walk did not {:08x?}, {} the real walk found \
+                 and the copy did not {:08x?}, {} fade node(s) reached that the real walk never \
+                 decided",
                 stale.len(),
                 &stale[..stale.len().min(8)],
                 extra.len(),
                 &extra[..extra.len().min(8)],
+                missing.len(),
+                &missing[..missing.len().min(8)],
                 undecided.len()
             );
         }
@@ -595,6 +628,7 @@ pub fn walk_scene(e: &mut Engine, scene: u32, process: u32) -> bool {
             c.walks += 1;
             c.stale += stale.len() as u64;
             c.extra += extra.len() as u64;
+            c.missing += missing.len() as u64;
             c.undecided += undecided.len() as u64;
         }
     });

@@ -373,5 +373,9 @@ fn the_check_mode_finds_nothing_on_a_kept_copy() {
         after.extra, before.extra,
         "nothing the copy saw that the real walk did not"
     );
+    assert_eq!(
+        after.missing, before.missing,
+        "nothing the real walk saw that the copy did not"
+    );
     assert_eq!(after.undecided, before.undecided);
 }
