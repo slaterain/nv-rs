@@ -678,7 +678,7 @@ lighting property's light sort `ResortLights` (`00b70390`, each light's luminanc
 comparison), the shadow light's weighted placement (`00b9d150`) and the dominant light direction at the camera
 (`00b5bca0`), whose walks over the scene node's lights keep their place instead of starting from the list's head for
 each light. Those three keep the exact x87 helpers (the sort also runs on the loading thread) and are tested under both
-control words. Its tests are `crates/engine/tests/typed_lights.rs`. On by the native-code rule.
+control words. And the scene node's queue drain (`00b5fd60`) with its object half (`00b5dac0`, `00b5c490`, `00b5b260`, `00b5c5c0`, `00b5b410`), which redoes the light lists of every object that moved or animated, every frame; with `NV_LIGHT_TABLE` (off) it tests the objects against one table of the lamps per drain instead of asking each lamp for its kind for every object. Its tests are `crates/engine/tests/typed_lights.rs`. On by the native-code rule.
 And `scripts` (same crate, id 11): what every running script line goes through for its values, every mod's scripts
 included. The expression evaluator `CExpression` (the constructor `00593490`, the conversion to postfix `00593500`,
 the tokenizer `00593870`, `Eval` `00593db0`, its error `005934d0` and its two stacks `00594b60` to `00594d40`), the

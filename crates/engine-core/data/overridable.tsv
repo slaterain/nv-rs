@@ -41,7 +41,7 @@
 00593870	0	script or frame function
 00595560	0	JIP
 005a5e70	1	JG
-005ac1e0	1	script or frame function
+005ac1e0	0	script or frame function
 005ac750	0	script or frame function
 005ac7a0	2	script or frame function
 005accb0	0	YUP,xNVSE
