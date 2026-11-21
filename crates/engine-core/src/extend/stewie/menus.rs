@@ -202,3 +202,8 @@ pub const INVENTORY_STAT_ALPHAS: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 
 /// at `0x78054D`, `InventoryMenu::DoIdle` at `0x781CD0`): the implant GRX and books can be
 /// hotkeyed.
 pub const HOTKEY_GRX_AND_BOOKS: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 54);
+/// S0022.51 `MenuFixes` (`TESObjectREFR::GetTargetType` `00579280` at `0x57951C` and `0x579546`,
+/// `HUDMainMenu::SetInfoForRef` at `0x7775DB`): Pickpocket shows on the creatures that can be
+/// pickpocketed (sneaking), not on those that cannot, and a creature's prompt says Pickpocket,
+/// not Steal.
+pub const CREATURE_PICKPOCKET_PROMPT: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 55);

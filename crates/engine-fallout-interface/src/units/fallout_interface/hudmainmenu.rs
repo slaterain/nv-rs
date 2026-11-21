@@ -1197,7 +1197,10 @@ fn set_info_inventory_action(
                 0x011d_3708
             } else if form_type == 0x2b {
                 let process = e.call(0x0041_81e0, &args![reference]).u32();
-                if e.vcall(process + 0x30, 0x18, &args![]).bool() {
+                // `0x7775DB` (lStewieAl's Tweaks' S0022.51 writes a NOP over the `JZ`): the
+                // dialogue test is still asked and a creature always shows Pickpocket, not Steal.
+                let dialogue = e.vcall(process + 0x30, 0x18, &args![]).bool();
+                if dialogue || e.stewie(stewie::CREATURE_PICKPOCKET_PROMPT) {
                     0x011d_3708
                 } else {
                     0x011d_4f48

@@ -1835,13 +1835,24 @@ pub fn tes_object_refr_get_target_type(e: &mut Engine, this: Ptr) -> u32 {
                 return 2;
             }
             let process = e.call(0x0041_81e0, &args![actor]).u32();
+            let pickpocket_row = e.stewie(engine_core::extend::stewie::CREATURE_PICKPOCKET_PROMPT);
             if !e.vcall(process + 0x30, 0x18, &args![]).bool() {
+                // `0x57951C` (lStewieAl's Tweaks' S0022.51 calls `HUDGetTargetTypeHook` there): a
+                // creature without dialogue that can be pickpocketed answers Tweaks'
+                // `GetCreaturePickpocketPrompt` from the function's exit.
+                if pickpocket_row && e.vcall(process + 0x30, 0x1c, &args![]).bool() {
+                    return stewie_creature_pickpocket_prompt(e, process + 0x30, player);
+                }
                 return 0;
             }
             if e.call(0x0087_f3d0, &args![actor]).bool() {
                 return 0xa;
             }
-            if e.call(0x0049_97b0, &args![player]).bool() {
+            // `0x579546` (S0022.51's `HUDGetTargetTypeHook2`): sneaking shows Pickpocket only for
+            // a creature that can be pickpocketed (`GetAllowPickpocket`, slot +0x1C).
+            if e.call(0x0049_97b0, &args![player]).bool()
+                && (!pickpocket_row || e.vcall(process + 0x30, 0x1c, &args![]).bool())
+            {
                 1
             } else {
                 7
@@ -1849,6 +1860,23 @@ pub fn tes_object_refr_get_target_type(e: &mut Engine, this: Ptr) -> u32 {
         }
         _ => 0,
     }
+}
+
+/// lStewieAl's Tweaks' `MenuFixes::GetCreaturePickpocketPrompt` (row S0022.51): 0 when the
+/// creature's base data (`TESActorBaseData`) does not allow pickpocketing (slot +0x1C); else 1
+/// (Pickpocket) while the player's mover (+0x190, `GetMovementFlags` slot +0x20) is sneaking
+/// (0x400) and not swimming (0x800), 0 otherwise.
+fn stewie_creature_pickpocket_prompt(e: &mut Engine, base_data: u32, player: u32) -> u32 {
+    if !e.vcall(base_data, 0x1c, &args![]).bool() {
+        return 0;
+    }
+    let mover = e.mem.u32(player + 0x190);
+    if mover == 0 {
+        // No mover: Tweaks would call through a null pointer (our guard).
+        return 0;
+    }
+    let flags = e.vcall(mover, 0x20, &args![]).u32();
+    u32::from(flags & 0x400 != 0 && flags & 0x800 == 0)
 }
 
 // Translated from 00579620 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -6657,6 +6685,60 @@ mod tests {
         // a creature base form on a non-actor reference: 0
         let thing = refr(&mut e, 0x2b, &[]);
         assert_eq!(target_type(&mut e, thing), 0);
+    }
+
+    /// Row S0022.51 (lStewieAl's Tweaks, `0x57951C`, `0x579546`): a creature without dialogue
+    /// (slot +0x18) that can be pickpocketed (slot +0x1C) answers 1 while the player's mover
+    /// (+0x190, slot +0x20) is sneaking (0x400) and not swimming (0x800), else 0; with dialogue,
+    /// sneaking shows 1 only when it can be pickpocketed (else 7). Off: 0 without dialogue, 1
+    /// when sneaking.
+    #[test]
+    fn s0022_51_creature_pickpocket_prompt() {
+        // (row, dialogue, pickpocket, sneaking, mover flags, wanted)
+        for (on, dialogue, pickpocket, sneaking, flags, wanted) in [
+            (false, 0u32, 1u32, 1u32, 0x400u32, 0u32),
+            (true, 0, 1, 0, 0x400, 1),
+            (true, 0, 1, 0, 0xc00, 0),
+            (true, 0, 1, 0, 0, 0),
+            (true, 0, 0, 1, 0x400, 0),
+            (false, 1, 0, 1, 0, 1),
+            (true, 1, 0, 1, 0, 7),
+            (true, 1, 1, 1, 0, 1),
+            (true, 1, 0, 0, 0, 7),
+        ] {
+            let mut e = engine2();
+            returns(&mut e, 0x0047_7ba0, 0);
+            let player = refr(
+                &mut e,
+                0x2a,
+                &[(0x100, RETURNS_TRUE), (0x22c, RETURNS_FALSE)],
+            );
+            e.set_global(GLOBAL_PLAYER, player);
+            let mover_slot = 0x00ff_0120;
+            returns(&mut e, mover_slot, flags);
+            let mover = object_with(&mut e, 0x10, &[(0x20, mover_slot)]);
+            e.mem.set_u32(player + 0x190, mover);
+            let creature = refr(
+                &mut e,
+                0x2b,
+                &[(0x100, RETURNS_TRUE), (0x22c, RETURNS_FALSE)],
+            );
+            let (slot18, slot1c) = (0x00ff_0112, 0x00ff_0113);
+            returns(&mut e, slot18, dialogue);
+            returns(&mut e, slot1c, pickpocket);
+            let process = e.mem.alloc(0x40);
+            let inner = object_with(&mut e, 0x10, &[(0x18, slot18), (0x1c, slot1c)]);
+            e.mem.set_u32(process + 0x30, e.mem.u32(inner));
+            returns(&mut e, 0x0041_81e0, process);
+            returns(&mut e, 0x0087_f3d0, 0);
+            returns(&mut e, 0x0049_97b0, sneaking);
+            e.set_stewie(engine_core::extend::stewie::CREATURE_PICKPOCKET_PROMPT, on);
+            assert_eq!(
+                target_type(&mut e, creature),
+                wanted,
+                "row {on} dialogue {dialogue} pickpocket {pickpocket} sneaking {sneaking} {flags:x}"
+            );
+        }
     }
 
     // ---- 00579620, 00579670 ---------------------------------------------
