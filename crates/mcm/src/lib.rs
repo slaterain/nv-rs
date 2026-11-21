@@ -16,10 +16,11 @@
 //!
 //! The commands run on main (script lines); they take no shared slot.
 //!
-//! A fixes row ("The Mod Configuration Menu's plugin built in", `NV_MCM`, `bMCM`), off in every
-//! preset: the row switches it on ([`set_on`]) and [`install`] (after JIP, before UI Organizer:
-//! xNVSE loads plugins in the order of their file names) registers the commands and lists the
-//! plugin. Off, nothing is registered: the opcodes stay empty, as without the DLL.
+//! A fixes row ("The Mod Configuration Menu's plugin built in", `NV_MCM`, `bMCM`), on in the
+//! fixes preset, off in vanilla: the row switches it on ([`set_on`]) and [`install`] (after JIP,
+//! before UI Organizer: xNVSE loads plugins in the order of their file names) registers the
+//! commands and lists the plugin. Off, nothing is registered: the opcodes stay empty, as without
+//! the DLL.
 
 pub mod commands;
 pub mod menu;

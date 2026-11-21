@@ -46,13 +46,16 @@ pub enum Point {
     WaitIn,
     /// `WaitForThreads` returned.
     WaitOut,
+    /// The host took the frame's marks (`host::hitch_log::take_stages`, after main's frame handed the engine back):
+    /// the game's tail after `WaitForThreads` ends here, the host's own time between two frames starts.
+    Host,
 }
 
 /// How many points there are.
-pub const POINTS: usize = 10;
+pub const POINTS: usize = 11;
 
 /// The stages: (column, the point that starts it, the point that ends it).
-pub const SEGMENTS: [(Column, Point, Point); 13] = [
+pub const SEGMENTS: [(Column, Point, Point); 15] = [
     (Column::U, Point::Idle, Point::SwapIn),
     (Column::S1, Point::SwapIn, Point::DrawIn),
     (Column::R, Point::DrawIn, Point::DrawOut),
@@ -66,6 +69,8 @@ pub const SEGMENTS: [(Column, Point, Point); 13] = [
     (Column::P2, Point::WaitOut, Point::Idle),
     (Column::CutToIdle, Point::Cut, Point::Idle),
     (Column::DrawEndToIdle, Point::DrawEnd, Point::Idle),
+    (Column::GameTail, Point::WaitOut, Point::Host),
+    (Column::HostGap, Point::Host, Point::Idle),
 ];
 
 /// The joins of the drawing thread with a column of their own (exe addresses of the functions whose entry joins,
@@ -111,6 +116,10 @@ pub enum Column {
     P2,
     CutToIdle,
     DrawEndToIdle,
+    /// The game's frame after `WaitForThreads` until the host took the marks.
+    GameTail,
+    /// The host's time between two of main's frames (from its take to the next `OnIdle`).
+    HostGap,
     // Steps (scopes).
     WorldPass,
     WorldDrawFirst,
@@ -165,6 +174,8 @@ pub const NAMES: [&str; COLUMNS] = [
     "st_p2",
     "st_cut_to_idle",
     "st_draw_end_to_idle",
+    "st_game_tail",
+    "st_host_gap",
     "world_pass_00873200",
     "world_draw_00b6ba20",
     "world_draw_00b6b930",
@@ -321,7 +332,8 @@ impl Default for Marks {
 
 /// The run's marks.
 static MARKS: Marks = Marks::new();
-/// 0: the variable not read yet; 1: off; 2: on; 3: on for [`on_here`]'s thread only (tests).
+/// 0: the variable not read yet; 1: off; 2: on; 3: on for [`on_here`]'s thread only (tests); 4: the points only (the
+/// hitch log's stage split, [`set_points`]: about ten clock reads a frame, no step or join timed).
 static STATE: AtomicU8 = AtomicU8::new(0);
 static START: OnceLock<Instant> = OnceLock::new();
 
@@ -334,6 +346,27 @@ pub fn on() -> bool {
         3 => HERE.with(Cell::get),
         _ => false,
     }
+}
+
+/// Whether the points are timed ([`point`]): the aid on, or its points only ([`set_points`]).
+#[inline]
+pub fn points_on() -> bool {
+    match STATE.load(Relaxed) {
+        0 => read_switch(),
+        2 | 4 => true,
+        3 => HERE.with(Cell::get),
+        _ => false,
+    }
+}
+
+/// The hitch log's stage split: with the aid off (`NV_STAGE_TIME` unset) its points are timed all the same
+/// ([`points_on`]); `on` false turns that off again. With the aid on, nothing changes.
+pub fn set_points(on: bool) {
+    if STATE.load(Relaxed) == 0 {
+        read_switch();
+    }
+    let (from, to) = if on { (1, 4) } else { (4, 1) };
+    let _ = STATE.compare_exchange(from, to, Relaxed, Relaxed);
 }
 
 #[cold]
@@ -410,7 +443,7 @@ fn now_ns() -> u64 {
 /// Main passed `p` (see [`Point`]). Off: nothing.
 #[inline]
 pub fn point(p: Point) {
-    if on() {
+    if points_on() {
         MARKS.point(p, now_ns());
     }
 }
@@ -607,6 +640,41 @@ mod tests {
         assert_eq!(v[j], (1.0, 1));
         assert!(v[Column::JoinWait as usize].1 >= 1);
         assert!(v[Column::Job as usize].1 >= 1);
+    }
+
+    /// The points-only level (the hitch log's): points close their stages, scopes, joins and jobs read no clock and
+    /// leave nothing; the aid's full switch on is not lowered by it, and turning it off gives the aid's state back.
+    #[test]
+    fn points_only_times_the_points_and_nothing_else() {
+        let _lock = HERE_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+        set_on(false);
+        let _ = take();
+        set_points(true);
+        assert!(points_on() && !on());
+        point(Point::Idle);
+        point(Point::SwapIn);
+        {
+            let s = scope(Column::DrawRest);
+            assert!(s.start.is_none(), "points only: a scope reads no clock");
+        }
+        join_wait(0x0087_5110, 1_000);
+        point(Point::Idle);
+        let v = take();
+        assert_eq!(v[Column::U as usize].1, 1, "the update stage closed");
+        assert_eq!(v[Column::DrawRest as usize], (0.0, 0));
+        let j = Column::JoinFirst as usize
+            + JOIN_POINTS.iter().position(|&a| a == 0x0087_5110).unwrap();
+        assert_eq!(v[j], (0.0, 0));
+        set_points(false);
+        assert!(!points_on());
+        // With the aid on, the hitch log's switch neither lowers nor raises it.
+        set_on(true);
+        set_points(true);
+        assert!(on());
+        set_points(false);
+        assert!(on());
+        set_on(false);
+        MARKS.clear();
     }
 
     /// [`on_here`]'s marks read its test clock: points and scopes measure exactly what [`advance`] moved,

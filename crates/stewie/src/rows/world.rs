@@ -32,6 +32,14 @@ pub const ROWS: &[Row] = &[
         summary: "an NPC's path through a door whose other side has no way back no longer crashes: that door is not used",
     },
     Row {
+        bit: stewie::STAIR_MATERIAL,
+        function: "StairMaterialFix",
+        plan: "S0216",
+        key: "bStairMaterialFix",
+        tweaks: None,
+        summary: "changes how stairs walk: collision marked as stairs (123 of the game's own meshes) counts every riser as a step, so characters no longer catch on risers or get pushed back",
+    },
+    Row {
         bit: stewie::NAV_MESH_INFO_RESOLVE,
         function: "NavMeshInfoResolveFix",
         plan: "S0235",
