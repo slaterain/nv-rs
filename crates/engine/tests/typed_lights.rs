@@ -999,10 +999,10 @@ mod lists {
 mod queue {
     use super::{
         bits, block, geometry, light, logged, ni_light, object, set_logged_answer, stand_ins, tree,
-        words, HALF, ONE, OTHER_RTTI, RADIUS_FREE_RTTI, TWO, VT_FN,
+        words, HALF, LOG, ONE, OTHER_RTTI, RADIUS_FREE_RTTI, TWO, VT_FN,
     };
     use engine_core::prelude::*;
-    use engine_core::typed::diff::{Case, Diff, Input};
+    use engine_core::typed::diff::{memory_differences_beside_stack, Case, Diff, Input, Value};
     use engine_typed::lights::{self, queue};
 
     const ROOM_RTTI: u32 = 0x0120_2828;
@@ -1288,11 +1288,116 @@ mod queue {
         }
     }
 
+    /// The light table (`NV_LIGHT_TABLE`) on and off give the same memory after a drain (every
+    /// lamp's geometry list, every property's lamp list and fence, the flags), save the log of
+    /// the doubles; with it on, fewer kind calls are made.
+    #[test]
+    fn lights_table_gives_the_same_lists() {
+        let mut fewer = false;
+        for k in 0..12u32 {
+            let case = Case(vec![
+                Value::Word(k % 3),
+                Value::Word((k / 3) % 3),
+                Value::Word(k % 3),
+                Value::Word([0, 1, 3][(k % 3) as usize]),
+                Value::Word(k % 2),
+                Value::F32([0, ONE, HALF, 0xc0a0_0000][(k % 4) as usize]),
+                Value::F32(ONE),
+            ]);
+            let run = |table: bool| {
+                let mut e = Engine::new();
+                queue::force_light_table(Some(table));
+                let node = drain_world(&mut e, &case);
+                e.call(0x00b5_fd60, &[node]);
+                queue::force_light_table(None);
+                e
+            };
+            let off = run(false);
+            let on = run(true);
+            let differences: Vec<u32> = memory_differences_beside_stack(&off, &on, 64)
+                .into_iter()
+                .filter(|a| !(LOG..LOG + 0x4000).contains(a))
+                .collect();
+            assert!(
+                differences.is_empty(),
+                "case {k}: memory differs at {differences:08x?}"
+            );
+            let kind_calls = |e: &Engine| {
+                let n = e.mem.u32(LOG);
+                (0..n.min(0x7c0))
+                    .filter(|i| e.mem.u32(LOG + 4 + 8 * i) == 0xff08)
+                    .count()
+            };
+            assert!(kind_calls(&on) <= kind_calls(&off), "case {k}");
+            fewer |= kind_calls(&on) < kind_calls(&off);
+        }
+        assert!(fewer, "the table never saved a kind call: it was not used");
+    }
+
+    /// The drain's world of a case: queued lights to add (shadow casters or not), to update
+    /// (dynamic or not), to remove (a shadow caster with a map or not); queued objects in both
+    /// queues (geometries and trees, near or far); a portal graph or none; floats for the places.
+    /// Answers the node.
+    fn drain_world(e: &mut Engine, case: &Case) -> u32 {
+        queue_stand_ins(e);
+        let lights = lights_of(e, case, 6, 1, 5);
+        let node = scene_node(e, &lights);
+        // Lights queued to add and to update, flags by position.
+        let queued: Vec<u32> = (0..case.word(0) as usize + 1)
+            .map(|i| {
+                let l = lights[i];
+                e.mem.set_u8(l + 0xec, u8::from(i == 1));
+                e.mem.set_u8(l + 0xfc, u8::from(i != 1));
+                l
+            })
+            .collect();
+        list(e, node + 0xe4, &queued[..case.word(0) as usize]);
+        list(
+            e,
+            node + 0xfc,
+            &queued[..case.word(1).min(queued.len() as u32) as usize],
+        );
+        // Lights queued for removal, each with a reference count; the first a shadow
+        // caster holding a map.
+        let removed: Vec<u32> = (0..case.word(2) as usize)
+            .map(|i| {
+                let l = object(e, 0x250, 0, 0, OTHER_RTTI);
+                e.mem.set_u32(l + 4, 1);
+                if i == 0 {
+                    e.mem.set_u8(l + 0xec, 1);
+                    let map = object(e, 0x20, 0, 0, OTHER_RTTI);
+                    e.mem.set_u32(map + 4, 1);
+                    e.mem.set_u32(l + 0x10c, map);
+                }
+                l
+            })
+            .collect();
+        list(e, node + 0xf0, &removed);
+        e.mem.set_u32(0x011f_91a8, 0x0e55_0000);
+        // Queued objects: geometries and trees, one far (radius 200).
+        let objects: Vec<u32> = (0..case.word(3) as usize)
+            .map(|i| {
+                let o = queued_object(e, case, [0, 1, 5][i % 3], 5);
+                if i == 2 {
+                    let b = e.mem.u32(o + 0x20);
+                    e.mem.set_f32(b + 0xc, 200.0);
+                }
+                o
+            })
+            .collect();
+        let split = objects.len() / 2;
+        list(e, node + 0x114, &objects[..split]);
+        list(e, node + 0x108, &objects[split..]);
+        if case.word(4) == 1 {
+            e.mem.set_u32(node + 0x1e0, 0x0e56_0000);
+        }
+        words(e, 0x011f_9ea0, &[3, 1]);
+        words(e, 0x011f_9ec0, &[4, 2]);
+        node
+    }
+
     #[test]
     fn lights_queue_drain() {
-        // Queued lights to add (shadow casters or not), to update (dynamic or not), to remove (a
-        // shadow caster with a map or not); queued objects in both queues (geometries and trees,
-        // near or far); a portal graph or none; floats for the places.
         common(Diff::new(entry!(0x00b5_fd60, queue::drain(Ptr<_>))))
             .inputs(&[
                 Input::Of(&[0, 1, 2]),
@@ -1304,63 +1409,7 @@ mod queue {
                 Input::F32Swept(ONE),
             ])
             .max_cases(300)
-            .setup(|e, case| {
-                queue_stand_ins(e);
-                let lights = lights_of(e, case, 6, 1, 5);
-                let node = scene_node(e, &lights);
-                // Lights queued to add and to update, flags by position.
-                let queued: Vec<u32> = (0..case.word(0) as usize + 1)
-                    .map(|i| {
-                        let l = lights[i];
-                        e.mem.set_u8(l + 0xec, u8::from(i == 1));
-                        e.mem.set_u8(l + 0xfc, u8::from(i != 1));
-                        l
-                    })
-                    .collect();
-                list(e, node + 0xe4, &queued[..case.word(0) as usize]);
-                list(
-                    e,
-                    node + 0xfc,
-                    &queued[..case.word(1).min(queued.len() as u32) as usize],
-                );
-                // Lights queued for removal, each with a reference count; the first a shadow
-                // caster holding a map.
-                let removed: Vec<u32> = (0..case.word(2) as usize)
-                    .map(|i| {
-                        let l = object(e, 0x250, 0, 0, OTHER_RTTI);
-                        e.mem.set_u32(l + 4, 1);
-                        if i == 0 {
-                            e.mem.set_u8(l + 0xec, 1);
-                            let map = object(e, 0x20, 0, 0, OTHER_RTTI);
-                            e.mem.set_u32(map + 4, 1);
-                            e.mem.set_u32(l + 0x10c, map);
-                        }
-                        l
-                    })
-                    .collect();
-                list(e, node + 0xf0, &removed);
-                e.mem.set_u32(0x011f_91a8, 0x0e55_0000);
-                // Queued objects: geometries and trees, one far (radius 200).
-                let objects: Vec<u32> = (0..case.word(3) as usize)
-                    .map(|i| {
-                        let o = queued_object(e, case, [0, 1, 5][i % 3], 5);
-                        if i == 2 {
-                            let b = e.mem.u32(o + 0x20);
-                            e.mem.set_f32(b + 0xc, 200.0);
-                        }
-                        o
-                    })
-                    .collect();
-                let split = objects.len() / 2;
-                list(e, node + 0x114, &objects[..split]);
-                list(e, node + 0x108, &objects[split..]);
-                if case.word(4) == 1 {
-                    e.mem.set_u32(node + 0x1e0, 0x0e56_0000);
-                }
-                words(e, 0x011f_9ea0, &[3, 1]);
-                words(e, 0x011f_9ec0, &[4, 2]);
-                vec![node]
-            })
+            .setup(|e, case| vec![drain_world(e, case)])
             .run()
             .assert_same();
     }

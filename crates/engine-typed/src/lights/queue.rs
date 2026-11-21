@@ -10,12 +10,109 @@
 //! order, the CRT's `qsort` called with the exe's comparator (`00b5aa70`) and `GetLuminanceToBound`
 //! (`00b9dbe0`, which writes each gathered light's luminance) called as the exe calls them.
 //!
-//! **Floats.** None of its own beyond the near test's one comparison (150.0 above the bound's
-//! radius, ordered), which is the same in either precision. Main thread only.
+//! **The light table (`NV_LIGHT_TABLE`, off by default).** The exe's bound test asks each lamp's
+//! `NiLight` for its kind (a virtual call) and reads its place and radius again for every geometry
+//! it tests. With the switch on, each drain's object half keeps one table of the lamps it met:
+//! each `NiLight`'s kind answer, place and radius, read the first time the drain meets it, and the
+//! scene node's lighting offset. Each geometry is then tested against the table with the typed
+//! bound test's float steps. Nothing in the object half moves a lamp or changes its kind (its
+//! callees change light lists, fences, flags and luminances only), so every geometry gets the
+//! same lamps in the same order; what goes is the repeated kind call per geometry and lamp.
+//!
+//! **Floats.** Main thread only. The drain's own: the near test's one ordered comparison (150.0
+//! above the bound's radius). The table's bound test: native `f32` in the exe's order, as the
+//! typed bound test ([`walk::bound_within_radius`]).
+
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use super::{walk, ShadowSceneLight};
 use engine_core::ptr::Ptr;
 use engine_core::{args, draw_thread, typed_call, Engine};
+
+/// An `NiLight`'s world translation (+0x8c) and radius (+0xe0); the scene node's lighting offset
+/// (+0x1e4); the `NiRTTI` record the bound test accepts outright (`011f4a68`).
+const WORLD_TRANSLATE: u32 = 0x8c;
+const NI_LIGHT_RADIUS: u32 = 0xe0;
+const LIGHTING_OFFSET: u32 = 0x1e4;
+const RADIUS_FREE_RTTI: u32 = 0x011f_4a68;
+
+/// One `NiLight` as the bound test reads it.
+#[derive(Clone, Copy)]
+struct Sphere {
+    free: bool,
+    position: [f32; 3],
+    radius: f32,
+}
+
+/// The lamps one drain's object half met, by `NiLight`, and the lighting offset.
+struct Table {
+    offset: [f32; 3],
+    known: HashMap<u32, Sphere>,
+}
+
+impl Table {
+    fn new(e: &Engine) -> Table {
+        let node = e.global::<u32>(SCENE_NODE);
+        Table {
+            offset: [0u32, 4, 8].map(|i| e.mem.f32(node.wrapping_add(LIGHTING_OFFSET + i))),
+            known: HashMap::new(),
+        }
+    }
+
+    /// The bound test of `00b9dae0` with the lamp's own `NiLight` and the scale 1.0, from the
+    /// table: the steps of [`walk::bound_within_radius`].
+    fn within(&mut self, e: &mut Engine, ni_light: u32, bound: u32) -> bool {
+        let sphere = match self.known.get(&ni_light) {
+            Some(s) => *s,
+            None => {
+                let s = Sphere {
+                    free: e.vcall(ni_light, SLOT_RTTI, &args![]).u32() == RADIUS_FREE_RTTI,
+                    position: [0u32, 4, 8]
+                        .map(|i| e.mem.f32(ni_light.wrapping_add(WORLD_TRANSLATE + i))),
+                    radius: e.mem.f32(ni_light.wrapping_add(NI_LIGHT_RADIUS)),
+                };
+                self.known.insert(ni_light, s);
+                s
+            }
+        };
+        if sphere.free {
+            return true;
+        }
+        let b: [f32; 4] = [0u32, 4, 8, 0xc].map(|i| e.mem.f32(bound.wrapping_add(i)));
+        let moved: [f32; 3] = [0usize, 1, 2].map(|i| self.offset[i] + (sphere.position[i] - b[i]));
+        let squared = (moved[1] * moved[1] + moved[0] * moved[0]) + moved[2] * moved[2];
+        let gap = squared.sqrt() - b[3] * 1.0;
+        sphere.radius > gap
+    }
+}
+
+thread_local! {
+    /// The running drain's table (only while a drain's object half runs, with the switch on).
+    static TABLE: RefCell<Option<Table>> = const { RefCell::new(None) };
+    /// The switch as a test sets it, over `NV_LIGHT_TABLE`.
+    static FORCED: Cell<Option<bool>> = const { Cell::new(None) };
+}
+
+/// `NV_LIGHT_TABLE` (`1` or `on`): the drain's light table. Off by default.
+fn table_on() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    FORCED.get().unwrap_or_else(|| {
+        *ON.get_or_init(|| {
+            matches!(
+                std::env::var("NV_LIGHT_TABLE").as_deref(),
+                Ok("1") | Ok("on")
+            )
+        })
+    })
+}
+
+/// For tests: the light table on or off on this thread whatever `NV_LIGHT_TABLE` says (`None`:
+/// the switch again).
+pub fn force_light_table(on: Option<bool>) {
+    FORCED.set(on);
+}
 
 /// The locks the drain holds (`0040fbf0` with 0 on each) and their entry counts.
 const LOCK_ENTER: u32 = 0x0040_fbf0;
@@ -179,6 +276,11 @@ fn each_candidate(
 /// `BoundWithinLightRadius` (typed) with the light's own `NiLight` and the scale 1.0.
 fn within(e: &mut Engine, light: u32, bound: u32) -> bool {
     let ni_light = e.mem.u32(light.wrapping_add(LIGHT_SP_LIGHT));
+    if let Some(mut table) = TABLE.take() {
+        let answer = table.within(e, ni_light, bound);
+        TABLE.set(Some(table));
+        return answer;
+    }
     let answer: u8 = typed_call!(
         super::FAMILY,
         0x00b9_dae0,
@@ -557,6 +659,9 @@ pub fn drain(e: &mut Engine, this: Ptr) {
         });
     });
     e.call(LOCK_ENTER, &args![OBJECT_LOCK, 0u32]);
+    // The light table for this object half (the lamps' adds, updates and removals are done).
+    let table = table_on().then(|| Table::new(e));
+    let outer = TABLE.replace(table);
     for (queue, skip_culled) in [(QUEUE_OBJECTS_ACTIVE, 1u32), (QUEUE_OBJECTS, 0)] {
         each_queued(e, node, queue, &mut |e, object| {
             let near = near_flag(e, object);
@@ -567,6 +672,7 @@ pub fn drain(e: &mut Engine, this: Ptr) {
             );
         });
     }
+    TABLE.set(outer);
     let graph = e.mem.u32(node.wrapping_add(PORTAL_GRAPH));
     if graph != 0 {
         e.call(PORTAL_GRAPH_UPDATE, &args![graph]);
