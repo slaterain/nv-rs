@@ -5632,8 +5632,9 @@ pub fn tile_value_change_event(e: &mut Engine, value: Ptr<TileValue>) {
         if found != 0 {
             let mut reaction = e.mem.u32(list.addr());
             while reaction != 0 {
-                let dependent = Ptr::new(e.mem.u32(reaction));
-                value_calculate_value(e, dependent, false);
+                let dependent = e.mem.u32(reaction);
+                // By address, as the exe calls it: `CalculateValue` is overridable.
+                e.call(VALUE_CALCULATE_VALUE, &args![dependent, 0u32]);
                 reaction = e.mem.u32(reaction + 4);
             }
         }

@@ -759,6 +759,330 @@ fn map_lookup_on_menu_maps_diff() {
     .assert_same();
 }
 
+/// Where the stand-ins below log what they are given: a count, then the words.
+const LOG: u32 = 0x0300_0000;
+
+/// A stand-in that appends its words to the log at [`LOG`] (so the two sides' memory compares what
+/// each was given, in order) and answers nothing.
+fn logging(e: &mut Engine, a: &[u32]) -> Ret {
+    let n = e.mem.u32(LOG);
+    for (i, w) in (0u32..).zip(a) {
+        e.mem.set_u32(LOG + 4 + 4 * (n + i), *w);
+    }
+    e.mem.set_u32(LOG, n + a.len() as u32);
+    Ret::default()
+}
+
+/// [`world`] with the log mapped and `Tile::Value::SetFloat` (`00a0a270`), `SetString`
+/// (`00a0a300`) and `CalculateValue` (`00a09410`) as logging stand-ins: what reaches them is what
+/// the setters and the change event decide; their own work has its own translations.
+fn setter_world(e: &mut Engine) {
+    world(e);
+    e.map(LOG, 0x4000);
+    for stub in [0x00a0_a270, 0x00a0_a300, 0x00a0_9410] {
+        e.register(stub, logging);
+    }
+}
+
+/// The ids the setters and getters are asked for: on, between and past [`tile_with`]'s ids.
+const SET_IDS: &[u32] = &[
+    0xf9f,
+    0xfa0,
+    0xfa1,
+    0xfa3,
+    0xfb8,
+    0x2710,
+    0x8000_0000,
+    0xffff_ffff,
+];
+
+/// Floats for the values' own floats: zeros of both signs, a NaN, ordinary ones.
+const VALUE_FLOATS: &[u32] = &[
+    0,
+    0x8000_0000,
+    0x3f80_0000,
+    0xbf00_0000,
+    0x7fc0_0000,
+    0x4b80_0001,
+];
+
+/// A tile of [`shaped_tile`]'s shape `code` whose values all hold the float `float` and, when
+/// `with_string`, a string of their own.
+fn valued_tile(e: &mut Engine, code: u32, float: u32, with_string: bool) -> u32 {
+    let tile = shaped_tile(e, code, code.max(1) + 2);
+    let (buffer, size) = (e.mem.u32(tile + 0x14), e.mem.u32(tile + 0x18));
+    for i in 0..size {
+        let value = e.mem.u32(buffer + 4 * i);
+        e.mem.set_u32(value + 8, float);
+        if with_string {
+            let text = e.mem.alloc(8);
+            e.mem.write(text, b"ab\0");
+            e.mem.set_u32(value + 0xc, text);
+        }
+    }
+    tile
+}
+
+/// `GetFloat`, `GetString` and `IsTrue` (`00a011b0`, `00a011f0`, `00a01230`): the trait there or
+/// not, its float 0.0, -0.0, a NaN or ordinary, with a string or none.
+#[test]
+fn tile_getters_diff() {
+    let inputs = [
+        Input::Of(&[0, 1, 2, 5, 9, 100, 101]),
+        Input::Of(SET_IDS),
+        Input::Of(VALUE_FLOATS),
+        Input::Flag,
+    ];
+    let setup = |e: &mut Engine, case: &engine_core::typed::diff::Case| {
+        world(e);
+        let tile = valued_tile(e, case.word(0), case.word(2), case.word(3) == 1);
+        vec![tile, case.word(1)]
+    };
+    Diff::new(engine_core::entry!(
+        0x00a0_11b0,
+        dispatch::tile::get_float(Ptr<_>, i32) -> f32
+    ))
+    .family(&dispatch::DISPATCH)
+    .translation_calls_plainly(&[0x00a0_0f30])
+    .inputs(&inputs)
+    .setup(setup)
+    .run()
+    .assert_same();
+    Diff::new(engine_core::entry!(
+        0x00a0_11f0,
+        dispatch::tile::get_string(Ptr<_>, i32) -> Ptr
+    ))
+    .family(&dispatch::DISPATCH)
+    .translation_calls_plainly(&[0x00a0_0f30])
+    .inputs(&inputs)
+    .setup(setup)
+    .run()
+    .assert_same();
+    Diff::new(engine_core::entry!(
+        0x00a0_1230,
+        dispatch::tile::is_true(Ptr<_>, i32) -> bool
+    ))
+    .family(&dispatch::DISPATCH)
+    .translation_calls_plainly(&[0x00a0_0f30])
+    .inputs(&inputs)
+    .setup(setup)
+    .run()
+    .assert_same();
+}
+
+/// `SetFloat` and `SetString` (`00a012d0`, `00a01350`): the trait there or made (into arrays with
+/// room and full ones), each float, both flags; the value's own setter gets the value, the word and
+/// the flag under `Tile::Lock`.
+#[test]
+fn tile_setters_diff() {
+    let setup = |e: &mut Engine, case: &engine_core::typed::diff::Case| {
+        setter_world(e);
+        let code = case.word(0);
+        let capacity = if case.word(3) == 1 {
+            code.max(1)
+        } else {
+            code + 3
+        };
+        let tile = shaped_tile(e, code, capacity);
+        vec![tile, case.word(1), case.word(2), case.word(4)]
+    };
+    Diff::new(engine_core::entry!(
+        0x00a0_12d0,
+        dispatch::tile::set_float(Ptr<_>, i32, f32, u8)
+    ))
+    .family(&dispatch::DISPATCH)
+    .translation_calls_plainly(&[0x00a0_1000, 0x00a0_cd50])
+    .inputs(&[
+        Input::Of(&[0, 1, 2, 5, 100, 101]),
+        Input::Of(SET_IDS),
+        Input::F32,
+        Input::Flag,
+        Input::Of(&[0, 1]),
+    ])
+    .setup(setup)
+    .run()
+    .assert_same();
+    Diff::new(engine_core::entry!(
+        0x00a0_1350,
+        dispatch::tile::set_string(Ptr<_>, i32, Ptr<_>, u8)
+    ))
+    .family(&dispatch::DISPATCH)
+    .translation_calls_plainly(&[0x00a0_1000, 0x00a0_cd50])
+    .inputs(&[
+        Input::Of(&[0, 1, 2, 5, 100, 101]),
+        Input::Of(SET_IDS),
+        Input::Of(&[0, 0x0300_3f00]),
+        Input::Flag,
+        Input::Of(&[0, 1]),
+    ])
+    .setup(setup)
+    .run()
+    .assert_same();
+}
+
+/// `SetInt` (`00700320`): integers a float holds exactly and ones it rounds (ties to even both
+/// ways), the extremes; the trait there or made.
+#[test]
+fn tile_set_int_diff() {
+    const INTS: &[u32] = &[
+        0,
+        1,
+        0xffff_ffff,
+        0x0100_0001,
+        0x0100_0003,
+        0x7fff_ffff,
+        0x8000_0000,
+        0xfeff_ffff,
+    ];
+    Diff::new(engine_core::entry!(
+        0x0070_0320,
+        dispatch::tile::set_int(Ptr<_>, i32, i32)
+    ))
+    .family(&dispatch::DISPATCH)
+    .translation_calls_plainly(&[0x00a0_1000, 0x00a0_cd50])
+    .inputs(&[
+        Input::Of(&[0, 2, 5, 101]),
+        Input::Of(SET_IDS),
+        Input::Of(INTS),
+    ])
+    .setup(|e, case| {
+        setter_world(e);
+        let tile = shaped_tile(e, case.word(0), case.word(0) + 1);
+        vec![tile, case.word(1), case.word(2)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// `Tile::Poke` (`00a01290`): the value set and set back to 0.0, the trait there or made.
+#[test]
+fn tile_poke_diff() {
+    Diff::new(engine_core::entry!(
+        0x00a0_1290,
+        dispatch::tile::poke(Ptr<_>, i32, f32)
+    ))
+    .family(&dispatch::DISPATCH)
+    .translation_calls_plainly(&[0x00a0_12d0, 0x00a0_1000, 0x00a0_cd50])
+    .inputs(&[Input::Of(&[0, 2, 5, 101]), Input::Of(SET_IDS), Input::F32])
+    .setup(|e, case| {
+        setter_world(e);
+        let tile = shaped_tile(e, case.word(0), case.word(0) + 1);
+        vec![tile, case.word(1), case.word(2)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The absolute position sums (`00a013d0`, `00a01440`): a tile under a chain of none to three
+/// ancestors, each with an `x`, a `y` and a `locus` of 0.0, -0.0, 1.0 or a NaN (or no `locus` trait,
+/// or no traits at all), the positions from the case's floats.
+#[test]
+fn tile_absolute_position_diff() {
+    let setup = |e: &mut Engine, case: &engine_core::typed::diff::Case| {
+        world(e);
+        let depth = case.word(0);
+        let loci = case.word(1);
+        let position = case.f32(2).to_bits();
+        let make = |e: &mut Engine, locus: u32, k: u32| -> u32 {
+            match locus {
+                // No traits at all.
+                4 => tile_with_ids(e, &[], 1),
+                // `x` and `y` but no `locus`.
+                5 => tile_with_ids(e, &[0xfa1, 0xfa2], 2),
+                _ => {
+                    let tile = tile_with_ids(e, &[0xfa1, 0xfa2, 0xfa8], 3);
+                    let buffer = e.mem.u32(tile + 0x14);
+                    let value = |e: &Engine, i: u32| e.mem.u32(buffer + 4 * i);
+                    let x = value(e, 0);
+                    e.mem.set_u32(x + 8, position ^ (k << 2));
+                    let y = value(e, 1);
+                    e.mem.set_f32(y + 8, 0.25 * k as f32 - 3.0);
+                    let l = value(e, 2);
+                    let bits = [0, 0x8000_0000, 0x3f80_0000, 0x7fc0_0000][locus as usize];
+                    e.mem.set_u32(l + 8, bits);
+                    tile
+                }
+            }
+        };
+        let tile = make(e, 2, 9);
+        let mut child = tile;
+        for k in 0..depth {
+            let parent = make(e, ((loci >> (3 * k)) & 7) % 6, k);
+            e.mem.set_u32(child + 0x28, parent);
+            child = parent;
+        }
+        vec![tile]
+    };
+    let inputs = [
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Of(&[0, 0o2, 0o3, 0o22, 0o123, 0o4, 0o5, 0o210, 0o345]),
+        Input::F32,
+    ];
+    for f in [
+        engine_core::entry!(0x00a0_13d0, dispatch::tile::absolute_x(Ptr<_>) -> f32),
+        engine_core::entry!(0x00a0_1440, dispatch::tile::absolute_y(Ptr<_>) -> f32),
+    ] {
+        Diff::new(f)
+            .family(&dispatch::DISPATCH)
+            .translation_calls_plainly(&[0x00a0_11b0, 0x00a0_0f30])
+            .inputs(&inputs)
+            .float_sweep(32)
+            .setup(setup)
+            .run()
+            .assert_same();
+    }
+}
+
+/// `Tile::ValueChangeEvent` (`00a0a220`): a value with no reaction list, and lists of one to three
+/// dependents (one named twice), each recalculated with `CalculateValue(false)` in order.
+#[test]
+fn tile_value_change_event_diff() {
+    Diff::new(engine_core::entry!(
+        0x00a0_a220,
+        dispatch::tile::value_change_event(Ptr<_>)
+    ))
+    .family(&dispatch::DISPATCH)
+    .family(&leaf::LEAVES)
+    .inputs(&[Input::Of(&[0, 1, 2, 3, 4]), Input::Of(&[1, 37])])
+    .setup(|e, case| {
+        setter_world(e);
+        let value = e.mem.alloc(0x14);
+        let (a, b, c) = (e.mem.alloc(0x14), e.mem.alloc(0x14), e.mem.alloc(0x14));
+        let lists: Vec<Vec<u32>> = vec![vec![], vec![a], vec![a, b], vec![c, a, b], vec![b, b]];
+        let list = &lists[case.word(0) as usize];
+        let other = e.mem.alloc(0x14);
+        let mut given = vec![(other, vec![c])];
+        if !list.is_empty() {
+            given.push((value, list.clone()));
+        }
+        reaction_map(e, case.word(1), &given);
+        vec![value]
+    })
+    .run()
+    .assert_same();
+}
+
+/// `Tile::Lock` and `Tile::Unlock` (`00a044f0`, `00a04500`).
+#[test]
+fn tile_lock_diff() {
+    Diff::new(engine_core::entry!(0x00a0_44f0, dispatch::tile::lock()))
+        .family(&dispatch::DISPATCH)
+        .setup(|e, _| {
+            world(e);
+            vec![]
+        })
+        .run()
+        .assert_same();
+    Diff::new(engine_core::entry!(0x00a0_4500, dispatch::tile::unlock()))
+        .family(&dispatch::DISPATCH)
+        .setup(|e, _| {
+            world(e);
+            vec![]
+        })
+        .run()
+        .assert_same();
+}
+
 /// A menu's worth of trait reads and creates, typed against the translation (debug build: the
 /// numbers are the call overheads the typed code drops, not a play-build frame time).
 #[test]
