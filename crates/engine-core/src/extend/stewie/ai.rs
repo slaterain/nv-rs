@@ -92,3 +92,24 @@ pub const WEAPON_DAMAGE_DISPLAY_AMMO: Row = Row::share(AI_FIXES, AI_FIXES_END, 2
 /// S0189.02 `InventoryCalcWeaponDamageUseAmmoFix` (`CombatFormulas::CalcWeaponDamage` `00644ce0`
 /// (`0x644EF3`, `0x644F00`, `0x644F79`)): the damage takes the projectile of the ammunition passed.
 pub const WEAPON_DAMAGE_AMMO_PROJECTILE: Row = Row::share(AI_FIXES, AI_FIXES_END, 24);
+/// S0089.01 `RememberAmmoCountOnLoad` (`MiddleHighProcess::LoadGame_ov2` `00927000` (`0x9275EA`)):
+/// the player's saved count of loaded rounds is kept for the player's load to use (S0089.07).
+pub const AMMO_COUNT_FROM_SAVE: Row = Row::share(AI_FIXES, AI_FIXES_END, 25);
+/// S0089.02 `RememberAmmoCountOnLoad` (`PlayerCharacter::LoadGame` `0095a3b0` (`0x95BF7F`)): the
+/// load no longer reloads the weapon.
+pub const LOAD_GAME_NO_RELOAD: Row = Row::share(AI_FIXES, AI_FIXES_END, 26);
+/// S0089.03 `RememberAmmoCountOnLoad` (`0095d850` (`0x95D9D6`)): the player's reload no longer
+/// installs a new ammunition entry.
+pub const RELOAD_NO_NEW_AMMO_ENTRY: Row = Row::share(AI_FIXES, AI_FIXES_END, 27);
+/// S0089.06 `RememberAmmoCountOnLoad` (`00927000` (`0x927591`, `0x927596`)): the load restores the
+/// player's equipped weapon even before the player has 3D.
+pub const LOAD_GAME_PLAYER_WEAPON_WITHOUT_3D: Row = Row::share(AI_FIXES, AI_FIXES_END, 28);
+/// S0089.07 `RememberAmmoCountOnLoad` (`0095a3b0` (`0x95C064`)): after the default ammunition, the
+/// load takes the weapon's hotkeyed ammunition and the saved count, limited to what the player has.
+pub const LOAD_GAME_AMMO_COUNT: Row = Row::share(AI_FIXES, AI_FIXES_END, 29);
+/// S0089.08 `RememberAmmoCountOnLoad` (`0095d850` (`0x95D94F`), `0095d450` (`0x95D539`)): a
+/// reload takes the remembered or hotkeyed ammunition only when the player has rounds of it.
+pub const HOTKEY_AMMO_NEEDS_ROUNDS: Row = Row::share(AI_FIXES, AI_FIXES_END, 30);
+/// S0089.09 `RememberAmmoCountOnLoad` (`AmmoSwapHelper` `009462c0` (`0x94643E`)): a swap that skips
+/// the reload still makes the equipped ammunition the current type.
+pub const SWAP_SKIP_SETS_AMMO_TYPE: Row = Row::share(AI_FIXES, AI_FIXES_END, 31);

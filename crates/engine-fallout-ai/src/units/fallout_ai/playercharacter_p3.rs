@@ -432,7 +432,14 @@ fn equip_hot_key_replacement(e: &mut Engine, inventory: u32, item: Ptr, current:
     if hot_key >= 0 {
         let hot_key = e.call(ITEM_CHANGE_GET_HOT_KEY, &args![item_change]).u32();
         let table = e.global::<u32>(HOT_KEY_TABLE);
-        let replacement = e.call(HOT_KEY_TO_OBJECT, &args![table, hot_key]).u32();
+        // lStewieAl's Tweaks' row S0089.08 (`RememberAmmoCountOnLoad`, the calls at `0x95D539` and
+        // `0x95D94F`, both through this helper): Tweaks' `GetAmmoForHotkeySlotHook` in place of
+        // `004bfb30`.
+        let replacement = if e.stewie(engine_core::extend::stewie::HOTKEY_AMMO_NEEDS_ROUNDS) {
+            ammo_for_hot_key_slot(e, table, hot_key)
+        } else {
+            e.call(HOT_KEY_TO_OBJECT, &args![table, hot_key]).u32()
+        };
         if replacement != 0 {
             current = replacement;
         }
@@ -441,6 +448,160 @@ fn equip_hot_key_replacement(e: &mut Engine, inventory: u32, item: Ptr, current:
         e.call(SCALAR_DELETE, &args![item_change, 1u32]);
     }
     current
+}
+
+/// `g_menuVisibility` (`0x11F308F`, a byte by menu id), the inventory menu's id (1002), its
+/// singleton (`0x11D9EA4`), its filter (`+0x84`) and the filter's ammunition tab (4), as Tweaks
+/// (its xNVSE headers) reads them.
+const MENU_VISIBILITY: u32 = 0x011f_308f;
+const INVENTORY_MENU_ID: u32 = 1002;
+const INVENTORY_MENU: u32 = 0x011d_9ea4;
+const INVENTORY_FILTER_AMMO: u32 = 4;
+/// `BaseExtraList::GetByType` (`00410220`, thiscall: the list, the type), the types
+/// `kExtraData_ContainerChanges` (0x15) and `kExtraData_Ammo` (0x6E), and `BGSListForm`'s form
+/// type (0x55).
+const EXTRA_GET_BY_TYPE: u32 = 0x0041_0220;
+const EXTRA_CONTAINER_CHANGES: u32 = 0x15;
+const EXTRA_AMMO: u32 = 0x6e;
+const FORM_TYPE_LIST: u8 = 0x55;
+
+// Translated from lStewieAl's Tweaks 10.05 (xNVSE's GameUI.cpp): IsAmmoInventoryActive.
+/// Whether the inventory menu is open on its ammunition tab.
+fn ammo_inventory_active(e: &mut Engine) -> bool {
+    e.mem.u8(MENU_VISIBILITY + INVENTORY_MENU_ID) != 0 && {
+        let menu = e.mem.u32(INVENTORY_MENU);
+        e.mem.u32(menu + 0x84) == INVENTORY_FILTER_AMMO
+    }
+}
+
+/// The data of `actor`'s container changes (`ExtraContainerChanges` in its extra list at `+0x44`,
+/// its data at `+0xC`), 0 when it has none.
+fn container_changes_data(e: &mut Engine, actor: u32) -> u32 {
+    let extra = e
+        .call(
+            EXTRA_GET_BY_TYPE,
+            &args![actor + 0x44, EXTRA_CONTAINER_CHANGES],
+        )
+        .u32();
+    if extra == 0 {
+        0
+    } else {
+        e.mem.u32(extra + 0xc)
+    }
+}
+
+// Translated from lStewieAl's Tweaks 10.05 (xNVSE's GameObjects.cpp): TESObjectREFR::GetItemCount.
+/// How many of `form` `actor` carries (`004c8f30` on its container changes' data; a form list's
+/// entries summed); 0 without container changes.
+pub(crate) fn tweaks_item_count(e: &mut Engine, actor: u32, form: u32) -> i32 {
+    let data = container_changes_data(e, actor);
+    if data == 0 {
+        return 0;
+    }
+    if e.mem.u8(form + 4) != FORM_TYPE_LIST {
+        return e.call(INVENTORY_GET_OBJECT_COUNT, &args![data, form]).u32() as i32;
+    }
+    let mut total = 0i32;
+    let mut node = form + 0x18;
+    while node != 0 {
+        let item = e.mem.u32(node);
+        if item != 0 {
+            let count = e.call(INVENTORY_GET_OBJECT_COUNT, &args![data, item]).u32() as i32;
+            total = total.wrapping_add(count);
+        }
+        node = e.mem.u32(node + 4);
+    }
+    total
+}
+
+// Translated from lStewieAl's Tweaks 10.05 (Fixes/RememberAmmoCountOnLoad.cpp):
+// GetAmmoForHotkeySlotHook.
+/// Row S0089.08: none while the inventory's ammunition tab is open (the player is choosing);
+/// else the ammunition remembered on the equipped weapon (the `ExtraAmmo`, +0xC, of its entry's
+/// first extra list) when the player has rounds of it; else the hotkeyed ammunition of `slot`
+/// (`004bfb30`) when the player has rounds of it; else none.
+fn ammo_for_hot_key_slot(e: &mut Engine, player: u32, slot: u32) -> u32 {
+    if ammo_inventory_active(e) {
+        return 0;
+    }
+    let extra = e
+        .call(
+            EXTRA_GET_BY_TYPE,
+            &args![player + 0x44, EXTRA_CONTAINER_CHANGES],
+        )
+        .u32();
+    let data = e.mem.u32(extra + 0xc);
+    let process = e.mem.u32(player + 0x68);
+    let weapon_info = e.vcall(process, 0x148, &args![]).u32();
+    if weapon_info != 0 {
+        // The entry's extra lists (a `tList`: its first node's data). Tweaks reads the list
+        // pointer without a test; an entry without one has nothing remembered here.
+        let lists = e.mem.u32(weapon_info);
+        let first = if lists != 0 { e.mem.u32(lists) } else { 0 };
+        if first != 0 {
+            let remembered = e.call(EXTRA_GET_BY_TYPE, &args![first, EXTRA_AMMO]).u32();
+            if remembered != 0 {
+                let ammo = e.mem.u32(remembered + 0xc);
+                if ammo != 0 && e.call(INVENTORY_GET_OBJECT_COUNT, &args![data, ammo]).u32() != 0 {
+                    return ammo;
+                }
+            }
+        }
+    }
+    let ammo = e.call(HOT_KEY_TO_OBJECT, &args![player, slot]).u32();
+    let count = e.call(INVENTORY_GET_OBJECT_COUNT, &args![data, ammo]).u32();
+    if count != 0 {
+        ammo
+    } else {
+        0
+    }
+}
+
+// Translated from lStewieAl's Tweaks 10.05 (Fixes/RememberAmmoCountOnLoad.cpp):
+// PlayerCharacterLoad_SetupAmmoHook, after its `SelectDefaultAmmo(false, true)`.
+/// Row S0089.07: with an ammunition entry (`MiddleHighProcess` +0x118) and a hotkey on the weapon
+/// entry (+0x114, `004bd7a0`) whose hotkeyed ammunition (the player's `BSSimpleArray` at
+/// `+0xE3C`) the player has rounds of, that ammunition becomes the entry's type (+8); the entry's
+/// count (+4) is then the saved count (S0089.01) limited to the rounds carried, or all the rounds
+/// carried when no count was saved. Without the hotkeyed rounds the entry's own type is counted
+/// the same way.
+pub(crate) fn load_game_setup_ammo(e: &mut Engine, player: u32) {
+    let kept = e.stewie_kept(engine_core::extend::stewie::kept::SAVED_AMMO_COUNT, 4);
+    // The saved count stays for Tweaks' `AMID` step after the load (`crates/stewie`'s co-save); its
+    // PreLoadGame listener clears it before the next load.
+    let saved = e.mem.u32(kept) as i32 - 1;
+    let limit = |count: i32| if saved >= 0 { saved.min(count) } else { count };
+    let process = e.mem.u32(player + 0x68);
+    let ammo_info = e.mem.u32(process + 0x118);
+    if ammo_info == 0 {
+        return;
+    }
+    let weapon_info = e.mem.u32(process + 0x114);
+    let slot = e.call(ITEM_CHANGE_GET_HOT_KEY, &args![weapon_info]).u32() as i32;
+    if slot >= 0 {
+        let singleton = e.global::<u32>(PLAYER_CHARACTER);
+        let array = singleton + 0xe3c;
+        let hot_keyed = if (slot as u32) < e.mem.u32(array + 8) {
+            e.mem.u32(e.mem.u32(array + 4) + 4 * slot as u32)
+        } else {
+            0
+        };
+        if hot_keyed != 0 {
+            let count = tweaks_item_count(e, player, hot_keyed);
+            if count != 0 {
+                e.mem.set_u32(ammo_info + 8, hot_keyed);
+                e.mem.set_u32(ammo_info + 4, limit(count) as u32);
+                return;
+            }
+        }
+    }
+    let ammo = e.mem.u32(ammo_info + 8);
+    let count = if ammo != 0 {
+        tweaks_item_count(e, player, ammo)
+    } else {
+        0
+    };
+    e.mem.set_u32(ammo_info + 4, limit(count) as u32);
 }
 
 /// Builds `ItemChange(object, count)` in a fresh 0xc-byte block, null when
@@ -643,12 +804,16 @@ pub fn fn_0095d850(
         .u32();
 
     let equipped_change = process_slot(e, this, 0x14c, &args![]);
-    if equipped_change == 0
+    // lStewieAl's Tweaks' row S0089.03 (`RememberAmmoCountOnLoad`, the jump at `0x95D9D6` to
+    // `0x95DA5A`): no new ammunition entry is installed here (its S0089.04 then guards the missing
+    // one).
+    if (equipped_change == 0
         || typed_call!(
             leaf::FAMILY,
             0x0044_ddc0,
             leaf::word_at_8(e, equipped_change)
-        ) != current
+        ) != current)
+        && !e.stewie(engine_core::extend::stewie::RELOAD_NO_NEW_AMMO_ENTRY)
     {
         install_item_change(e, this, current, count);
     }
@@ -697,7 +862,11 @@ pub fn fn_0095d850(
     let change = process_slot(e, this, 0x14c, &args![]);
     // lStewieAl's Tweaks' row S0089.04 (`RememberAmmoCountOnLoad` at `0x95DBB4`): no equipped
     // ammunition entry counts as an empty one instead of being read.
-    let no_entry = change == 0 && e.stewie(engine_core::extend::stewie::RELOAD_NULL_AMMO_ENTRY);
+    // With S0089.03 (no entry installed just before) a missing entry is just as possible: either row
+    // counts it as empty.
+    let no_entry = change == 0
+        && (e.stewie(engine_core::extend::stewie::RELOAD_NULL_AMMO_ENTRY)
+            || e.stewie(engine_core::extend::stewie::RELOAD_NO_NEW_AMMO_ENTRY));
     if !no_entry && typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, change)) != 0 {
         if equipped_before == 0 {
             return false;
@@ -9312,6 +9481,235 @@ mod tests {
         }
         assert_eq!(runs[0], runs[1]);
         assert!(!runs[1].0);
+    }
+
+    /// Row S0089.08's world on `equip_item_replaces_the_object_by_its_hot_key`'s: the hotkeyed
+    /// ammunition `0x5000_2000` (slot 4) with `rounds` carried, optionally an ammunition
+    /// `0x5000_3000` remembered on the weapon's entry (its first extra list's `ExtraAmmo`) with
+    /// `remembered_rounds` carried, the inventory's ammunition tab open or not. Answers the forms
+    /// the reload counted in the inventory (`004c8f30` on the inventory changes): the current one
+    /// first, then the one chosen.
+    fn s0089_08_choice(
+        on: bool,
+        rounds: u32,
+        remembered_rounds: Option<u32>,
+        tab_open: bool,
+    ) -> Vec<u32> {
+        s0089_08_choice_on_tab(on, rounds, remembered_rounds, tab_open, 4)
+    }
+
+    /// [`s0089_08_choice`] with the inventory menu's filter `tab` (4: ammunition).
+    fn s0089_08_choice_on_tab(
+        on: bool,
+        rounds: u32,
+        remembered_rounds: Option<u32>,
+        tab_open: bool,
+        tab: u32,
+    ) -> Vec<u32> {
+        let mut e = engine(CALLEES_0095D450);
+        let held = 0x5000_1000;
+        let entry = e.mem.alloc(0x10);
+        let (player, _) = equip_world(&mut e, held, 3, 5, 0);
+        let lists = e.mem.alloc(8);
+        let first = e.mem.alloc(0x20);
+        e.mem.set_u32(lists, first);
+        e.mem.set_u32(entry, lists);
+        let remembered = e.mem.alloc(0x14);
+        e.mem.set_u32(remembered + 0xc, 0x5000_3000);
+        if remembered_rounds.is_some() {
+            answer(&mut e, SLOT_A, entry);
+        }
+        let item = e.mem.alloc(0x40);
+        answer(&mut e, INVENTORY_GET_ITEM, 0x6100_0000);
+        answer(&mut e, ITEM_CHANGE_GET_HOT_KEY, 4);
+        answer(&mut e, HOT_KEY_TO_OBJECT, 0x5000_2000);
+        answer(&mut e, WEAPON_GET_CLIP_ROUNDS, 9);
+        let changes = e.mem.alloc(0x10);
+        e.mem.set_u32(changes + 0xc, 0x4100_0000);
+        e.register_double(EXTRA_GET_BY_TYPE, move |_, a| {
+            int(match a[1] {
+                // xNVSE's kExtraData_ContainerChanges and kExtraData_Ammo, as numbers (not the seam's constants).
+                0x15 => changes,
+                0x6e if a[0] == first => remembered,
+                _ => 0,
+            })
+        });
+        let remembered_rounds = remembered_rounds.unwrap_or(0);
+        e.register_double(INVENTORY_GET_OBJECT_COUNT, move |_, a| {
+            int(match (a[0], a[1]) {
+                (0x4100_0000, 0x5000_2000) => rounds,
+                (0x4100_0000, 0x5000_3000) => remembered_rounds,
+                _ => 3,
+            })
+        });
+        e.mem.set_u8(0x011f_308f + 1002, u8::from(tab_open));
+        let menu = e.mem.alloc(0x100);
+        e.mem.set_u32(menu + 0x84, tab);
+        e.mem.set_u32(0x011d_9ea4, menu);
+        e.set_stewie(engine_core::extend::stewie::HOTKEY_AMMO_NEEDS_ROUNDS, on);
+        let log = logged(&mut e, |e| {
+            e.call(
+                0x0095_d450,
+                &args![player, Ptr::<()>::new(item), 0u32, 0u32, 0u32],
+            );
+        });
+        calls_to(&log, INVENTORY_GET_OBJECT_COUNT)
+            .into_iter()
+            .filter(|c| c[0] == 0x4000_0000)
+            .map(|c| c[1])
+            .collect()
+    }
+
+    /// lStewieAl's Tweaks' row S0089.08 (`GetAmmoForHotkeySlotHook`, `0x95D539` and `0x95D94F`): a
+    /// reload of the weapon whose hotkey slot holds another ammunition. Off, the exe switches to the
+    /// hotkeyed ammunition (`004bfb30`) whatever is carried; on, only with rounds of it carried
+    /// (4, not 0), never while the inventory's ammunition tab is open, and the ammunition remembered
+    /// on the weapon first when rounds of it are carried.
+    #[test]
+    fn s0089_08_a_hotkeyed_ammunition_is_taken_only_with_rounds() {
+        let (held, hotkeyed, remembered) = (0x5000_1000, 0x5000_2000, 0x5000_3000);
+        assert_eq!(s0089_08_choice(false, 0, None, false), vec![held, hotkeyed]);
+        assert_eq!(s0089_08_choice(true, 0, None, false), vec![held, held]);
+        assert_eq!(s0089_08_choice(true, 4, None, false), vec![held, hotkeyed]);
+        assert_eq!(s0089_08_choice(true, 4, None, true), vec![held, held]);
+        // The inventory open on another tab (weapons, 0): the hotkeyed ammunition is taken.
+        assert_eq!(
+            s0089_08_choice_on_tab(true, 4, None, true, 0),
+            vec![held, hotkeyed]
+        );
+        assert_eq!(
+            s0089_08_choice(true, 4, Some(2), false),
+            vec![held, remembered]
+        );
+        assert_eq!(
+            s0089_08_choice(true, 4, Some(0), false),
+            vec![held, hotkeyed]
+        );
+        assert_eq!(
+            s0089_08_choice(false, 4, Some(2), false),
+            vec![held, hotkeyed]
+        );
+    }
+
+    /// lStewieAl's Tweaks' row S0089.03 (`0x95D9D6`): the player reloads ammunition `held` while
+    /// its ammunition entry holds another type. Off, the exe installs a new entry for `held`
+    /// (`ItemChange` made, process slot `+0x168`); on, none is installed.
+    #[test]
+    fn s0089_03_the_reload_installs_no_new_ammunition_entry() {
+        for on in [false, true] {
+            let mut e = engine(CALLEES_0095D850);
+            let held = 0x5000_1000;
+            let (player, change) = equip_world(&mut e, held, 2, 5, 0);
+            e.mem.set_u32(change + 8, 0x5000_9000);
+            e.register_double(OPERATOR_NEW, |e, a| int(e.mem.alloc(a[0])));
+            add_slot(&mut e, player.addr(), 0x340, SLOT_E);
+            answer(&mut e, SLOT_E, 0);
+            e.set_stewie(engine_core::extend::stewie::RELOAD_NO_NEW_AMMO_ENTRY, on);
+            let log = logged(&mut e, |e| {
+                e.call(
+                    0x0095_d850,
+                    &args![player, Ptr::<()>::new(held), 0u32, 0u32],
+                );
+            });
+            let installed = calls_to(&log, ITEM_CHANGE_NEW).len();
+            assert_eq!(installed, usize::from(!on), "on {on}");
+            assert_eq!(calls_to(&log, SLOT_C).len(), usize::from(!on), "on {on}");
+        }
+    }
+
+    /// S0089.03 on with S0089.04 off: the ammunition entry is gone when its count is read (no entry
+    /// installed just before). The missing entry counts as empty, as with S0089.04, instead of being
+    /// read through.
+    #[test]
+    fn s0089_03_alone_counts_a_missing_entry_as_empty() {
+        let mut e = engine(CALLEES_0095D850);
+        let (player, held) = reload_entry_world(&mut e, Some(0));
+        e.set_stewie(engine_core::extend::stewie::RELOAD_NO_NEW_AMMO_ENTRY, true);
+        e.set_stewie(engine_core::extend::stewie::RELOAD_NULL_AMMO_ENTRY, false);
+        let log = logged(&mut e, |e| {
+            assert!(e
+                .call(
+                    0x0095_d850,
+                    &args![player, Ptr::<()>::new(held), 0u32, 0u32],
+                )
+                .bool());
+        });
+        assert_eq!(calls_to(&log, SET_BYTE_AT_4)[0], vec![held, 0x29]);
+    }
+
+    /// The player's process for S0089.07: the ammunition entry (`+0x118`: count +4, type +8) of
+    /// type `0x5000_1000` (default ammunition), the weapon entry (`+0x114`) whose hotkey slot
+    /// (`004bd7a0`) is `slot`, the player's hotkeyed ammunition array (`+0xE3C`: data +4, size +8)
+    /// with `0x5000_2000` at slot 1, and the carried rounds per form (container changes data at
+    /// `+0xC` of the `ExtraContainerChanges` `00410220` finds). Answers the entry's (count, type)
+    /// after `load_game_setup_ammo` with the saved count `saved` (S0089.01's kept word: none when
+    /// `None`).
+    fn s0089_07_after_load(
+        saved: Option<u32>,
+        slot: i32,
+        default_rounds: u32,
+        hot_rounds: u32,
+    ) -> (u32, u32) {
+        let mut e = engine(&[]);
+        let player = e.mem.alloc(0x1000);
+        e.set_global(PLAYER_CHARACTER, player);
+        let process = e.mem.alloc(0x200);
+        e.mem.set_u32(player + 0x68, process);
+        // The two ammunition forms (type 0x29 at +4).
+        let (default, hotkeyed) = (0x0140_1000u32, 0x0140_2000u32);
+        for form in [default, hotkeyed] {
+            e.mem.set_u8(form + 4, 0x29);
+        }
+        let ammo_info = e.mem.alloc(0x10);
+        e.mem.set_u32(ammo_info + 4, 30);
+        e.mem.set_u32(ammo_info + 8, default);
+        e.mem.set_u32(process + 0x118, ammo_info);
+        let weapon_info = e.mem.alloc(0x10);
+        e.mem.set_u32(process + 0x114, weapon_info);
+        answer(&mut e, ITEM_CHANGE_GET_HOT_KEY, slot as u32);
+        let data = e.mem.alloc(0x10);
+        e.mem.set_u32(data + 4, hotkeyed);
+        e.mem.set_u32(player + 0xe3c + 4, data);
+        e.mem.set_u32(player + 0xe3c + 8, 2);
+        let changes = e.mem.alloc(0x10);
+        e.mem.set_u32(changes + 0xc, 0x4100_0000);
+        e.register_double(EXTRA_GET_BY_TYPE, move |_, a| {
+            int(if a[1] == 0x15 { changes } else { 0 })
+        });
+        e.register_double(INVENTORY_GET_OBJECT_COUNT, move |_, a| {
+            int(if a[1] == hotkeyed {
+                hot_rounds
+            } else {
+                default_rounds
+            })
+        });
+        if let Some(saved) = saved {
+            let kept = e.stewie_kept(engine_core::extend::stewie::kept::SAVED_AMMO_COUNT, 4);
+            e.mem.set_u32(kept, saved + 1);
+        }
+        load_game_setup_ammo(&mut e, player);
+        // The saved count stays for Tweaks' `AMID` step after the load (its PreLoadGame clears it).
+        let kept = e.stewie_kept(engine_core::extend::stewie::kept::SAVED_AMMO_COUNT, 4);
+        assert_eq!(e.mem.u32(kept), saved.map_or(0, |s| s + 1));
+        (e.mem.u32(ammo_info + 4), e.mem.u32(ammo_info + 8))
+    }
+
+    /// lStewieAl's Tweaks' row S0089.07 (`PlayerCharacterLoad_SetupAmmoHook`): the ammunition after
+    /// a load. The exe leaves the entry as the load's reload made it (here 30 rounds of the default
+    /// ammunition; `fn_0095a3b0` calls this only with the row on). With the row: a save with 7
+    /// rounds loaded and 20 carried gives 7; with 5 carried, 5; no saved count, all 20; a hotkey on
+    /// the weapon (slot 1) whose ammunition is carried (12) makes that the type with the saved 7;
+    /// a hotkeyed ammunition not carried keeps the default type.
+    #[test]
+    fn s0089_07_the_clip_keeps_the_saved_count_after_a_load() {
+        let (default, hotkeyed) = (0x0140_1000, 0x0140_2000);
+        assert_eq!(s0089_07_after_load(Some(7), -1, 20, 0), (7, default));
+        assert_eq!(s0089_07_after_load(Some(7), -1, 5, 0), (5, default));
+        assert_eq!(s0089_07_after_load(None, -1, 20, 0), (20, default));
+        assert_eq!(s0089_07_after_load(Some(7), 1, 20, 12), (7, hotkeyed));
+        assert_eq!(s0089_07_after_load(None, 1, 20, 12), (12, hotkeyed));
+        assert_eq!(s0089_07_after_load(Some(7), 1, 20, 0), (7, default));
+        assert_eq!(s0089_07_after_load(Some(7), 5, 20, 12), (7, default));
     }
 
     #[test]

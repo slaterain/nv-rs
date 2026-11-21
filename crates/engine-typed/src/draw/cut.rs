@@ -115,7 +115,19 @@ const LIGHT_DIRECTION: (u32, u32) = (0xf0, 0xfc);
 /// listed pass's lights and geometry, each geometry held. The lists are read through the drawing thread's list
 /// view ([`detach`]).
 pub fn fill(e: &mut Engine, camera: u32, acc: Ptr<BSShaderAccumulator>) {
+    let _ = fill_reason(e, camera, acc);
+}
+
+/// [`fill`], answering why the own state stayed in guest memory (`statics::decide`'s reason: a listed pass's shader
+/// class may reach a translation that touches it), or `None` when it was taken.
+fn fill_reason(e: &mut Engine, camera: u32, acc: Ptr<BSShaderAccumulator>) -> Option<u32> {
     take_frame(e, camera, acc);
+    for k in 0..2u32 {
+        let texture = e.global::<u32>(packet::PAIR_TEXTURES + 4 * k);
+        if texture != 0 {
+            capture::hold(e, texture);
+        }
+    }
     let mut passes = Vec::new();
     let mut renderers = AddrSet::default();
     for i in 0..packet::renderer_count(e, acc) {
@@ -153,6 +165,7 @@ pub fn fill(e: &mut Engine, camera: u32, acc: Ptr<BSShaderAccumulator>) {
             capture::hold(e, geometry);
         }
     }
+    reason
 }
 
 /// The frame's values: the camera, the accumulator's two bytes, the empty bound, the fog index with its fog
@@ -190,6 +203,9 @@ pub fn take_frame(e: &Engine, camera: u32, acc: Ptr<BSShaderAccumulator>) {
     }
     capture::take(e, GAME_TIMES, 0, 0x10);
     capture::take(e, START_TIME, 0, 4);
+    // The pair of textures the shadow passes sample: main sets them, and the frame's tail may set others before a posted
+    // draw runs ([`fill`] holds the two).
+    capture::take(e, packet::PAIR_TEXTURES, 0, 8);
 }
 
 /// A shadow scene node's light (+0xe0) and that light's values ([`take_light`]).
@@ -712,7 +728,8 @@ pub(crate) fn forget_adopted() {
 /// ([`fill`], the own state taken when the passes allow it), not scribbled, and moved off main's thread. `None` with
 /// the switch off, when no packet opened, or for POISON without stepped threads (the scribble would be read by the
 /// threads that run beside it: the frame then draws on main); and, as at the serial cut ([`super::drivers`]'s
-/// `world_draw_first`), without a camera or the scene renderer (the draw then starts nothing).
+/// `world_draw_first`), without a camera or the scene renderer (the draw then starts nothing); and when the own
+/// state could not be taken (a listed pass's shader class is not clean: the packet is closed again).
 pub fn cut_for_thread(
     e: &mut Engine,
     camera: u32,
@@ -730,7 +747,12 @@ pub fn cut_for_thread(
     if !capture::begin(e) {
         return None;
     }
-    fill(e, camera, acc);
+    // A pass whose shader class is not listed clean (`statics::CLASSES`) keeps the own state in guest memory, where
+    // both threads would write it at once: the packet is closed and the frame draws on main (the reason counted).
+    if fill_reason(e, camera, acc).is_some() {
+        let _ = capture::end(e);
+        return None;
+    }
     capture::detach(e)
 }
 
