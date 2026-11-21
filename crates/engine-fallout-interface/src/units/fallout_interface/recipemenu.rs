@@ -1883,7 +1883,7 @@ pub fn recipe_menu_do_click(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
                 let category = e.mem.u32(entry);
                 let text = e.call(STRING_TEXT, &args![category + 0x18]).u32();
                 let tile = e.mem.u32(this.addr() + 0x2c);
-                e.call(TILE_SET_STRING, &args![tile, 0xfc4u32, text, 1u32]);
+                set_category_title(e, tile, text);
             }
             let list = this.addr() + RECIPE_LIST;
             let first = e.vcall(list, 0x14, &args![0u32, 0u32]).u32();
@@ -1929,7 +1929,18 @@ const COMPARE_00728CD0: u32 = 0x0072_8cd0;
 /// `fn_00728c10` (vtable +0x20) and sorts the category array with `fn_007278c0`.
 pub fn fn_00727680(e: &mut Engine, this: Ptr, _unused_1: u32, category: u32) {
     let owner = e.global::<u32>(OWNER_011C3F2C);
-    let mut node = e.call(RECIPE_LIST_HEAD_004077E0, &args![owner]).u32();
+    // `0x7276A6` (lStewieAl's Tweaks' S0200 calls `OnPreRefreshRecipeMenu` there).
+    let refresh_fix = e.stewie(engine_core::extend::stewie::RECIPE_REFRESH_KEEPS_CATEGORY);
+    let previous_category = if refresh_fix {
+        stewie_pre_refresh(e)
+    } else {
+        0
+    };
+    let mut node = if refresh_fix {
+        owner.wrapping_add(DATA_HANDLER_RECIPES)
+    } else {
+        e.call(RECIPE_LIST_HEAD_004077E0, &args![owner]).u32()
+    };
     while node != 0 && !typed_call!(leaf::FAMILY, 0x0082_56d0, leaf::both_words_zero(e, node)) {
         let recipe = node_item(e, node);
         node = node_next(e, node);
@@ -1995,6 +2006,84 @@ pub fn fn_00727680(e: &mut Engine, this: Ptr, _unused_1: u32, category: u32) {
     let list = this.addr() + RECIPE_LIST;
     e.vcall(list, 0x20, &args![COMPARE_00728C10]);
     fn_00729970(e, Ptr::new(CATEGORY_ARRAY), COMPARE_007278C0);
+    // `0x7278A9` (S0200's `OnPostRefreshRecipeMenu`, after the exe's sort).
+    if refresh_fix {
+        stewie_post_refresh(e, previous_category);
+    }
+}
+
+/// `DataHandler::recipeList`'s offset (`004077e0` answers the handler plus it).
+const DATA_HANDLER_RECIPES: u32 = 0xa0;
+/// `ListBox::RestoreListState` (`00731360`, `RET 4`: a byte, whether to play the sound).
+const LIST_BOX_RESTORE_POSITION: u32 = 0x0073_1360;
+/// The exe's `""` (`01011584`), for Tweaks' `String::CStr` of an empty name.
+const EMPTY_TEXT: u32 = 0x0101_1584;
+
+/// lStewieAl's Tweaks' `RecipeMenuRefreshFix::OnPreRefreshRecipeMenu` (row S0200), called at
+/// `0x7276A6` in place of `004077e0`: keeps the category index (`0119fbf4`), saves the open
+/// menu's (`011d8e90`) recipe list's scroll position (`ListBox::SaveListState`, `007312e0`) and
+/// frees its tiles (`FreeAllTiles`, vtable +0x1c); the list walked is then the data handler's
+/// recipes. Answers the index kept.
+fn stewie_pre_refresh(e: &mut Engine) -> u32 {
+    let previous = e.global::<u32>(FILTER_INDEX_0119FBF4);
+    let list = me(e).wrapping_add(RECIPE_LIST);
+    e.call(LIST_BOX_SAVE_LIST_STATE, &args![list]);
+    let list = me(e).wrapping_add(RECIPE_LIST);
+    e.vcall(list, 0x1c, &args![]);
+    previous
+}
+
+/// `RecipeMenuRefreshFix::OnPostRefreshRecipeMenu` (row S0200), at `0x7278A9` after the exe's
+/// category sort: xNVSE's `RecipeMenu::SetCategoryIndex(previous)` on the open menu, then
+/// `ListBox::RestorePosition(false)` (`00731360` with 0) on its recipe list.
+fn stewie_post_refresh(e: &mut Engine, previous: u32) {
+    stewie_set_category_index(e, previous as i32);
+    let list = me(e).wrapping_add(RECIPE_LIST);
+    e.call(LIST_BOX_RESTORE_POSITION, &args![list, 0u32]);
+}
+
+/// The call at `0x7275D0` (`DoClick`'s category title, `Tile::SetString` with `string` 0xFC4 and
+/// reactions). Tweaks' `bCapitalizeRecipeCategories` (on in VNV, a row of its own not built yet)
+/// replaces this call; S0200's `SetCategoryIndex` goes through it too (Tweaks calls the call's
+/// target), so that row's seam belongs here.
+fn set_category_title(e: &mut Engine, tile: u32, text: u32) {
+    e.call(TILE_SET_STRING, &args![tile, 0xfc4u32, text, 1u32]);
+}
+
+/// xNVSE's `RecipeMenu::SetCategoryIndex` (`GameUI.cpp`): below -1 becomes the category array's
+/// last (`size - 1`, the array's +8 read raw), above `size` (an unsigned compare, so `size` itself
+/// stays) becomes -1; stored in `0119fbf4`. The items title (+0x2C) gets `string` (0xFC4, with
+/// reactions) the `sRecipes` setting's text (`011d2088`'s +4) for -1, else the category's name
+/// (`data[index]`'s `TESFullName` at +0x18: its text at +0x1C when the text and its length at
+/// +0x20 are set, else `""`); then the recipe list is filtered with the exe's `fn_00728d60` (the
+/// word at `0x727637`).
+fn stewie_set_category_index(e: &mut Engine, index: i32) {
+    let size = e.mem.u32(CATEGORY_ARRAY + 8);
+    let index = if index < -1 {
+        size.wrapping_sub(1)
+    } else if index as u32 > size {
+        u32::MAX
+    } else {
+        index as u32
+    };
+    e.set_global(FILTER_INDEX_0119FBF4, index);
+    let label = if index == u32::MAX {
+        e.mem.u32(SETTING_011D2088 + 4)
+    } else {
+        let data = e.mem.u32(CATEGORY_ARRAY + 4);
+        let category = e.mem.u32(data.wrapping_add(index.wrapping_mul(4)));
+        let text = e.mem.u32(category + 0x1c);
+        if text != 0 && e.mem.u16(category + 0x20) != 0 {
+            text
+        } else {
+            EMPTY_TEXT
+        }
+    };
+    let menu = me(e);
+    let title = e.mem.u32(menu + 0x2c);
+    // Tweaks calls whatever the call at `0x7275D0` goes to (`GetRelJumpAddr`).
+    set_category_title(e, title, label);
+    list_box_tes_recipe_filter(e, Ptr::new(menu + RECIPE_LIST), FILTER_00728D60);
 }
 
 // Translated from 007278c0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2189,6 +2278,11 @@ fn show_selected(e: &mut Engine, this: Ptr) {
     }
     let form = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, selected));
     let second = dynamic_cast(e, form, RTTI_01183A34);
+    // `0x728378` (lStewieAl's Tweaks' S0044 jumps to `RecipeMenuArmorIconHook` there).
+    if second != 0 && e.stewie(engine_core::extend::stewie::RECIPE_ARMOUR_ICONS) {
+        stewie_armour_icon(e, base, second);
+        return;
+    }
     let player = e.global::<u32>(PLAYER);
     if second != 0 && e.call(FORM_00480F80, &args![second, player]).u32() != 0 {
         let player = e.global::<u32>(PLAYER);
@@ -2202,6 +2296,28 @@ fn show_selected(e: &mut Engine, this: Ptr) {
         let tile = e.mem.u32(base + 0x4c);
         e.call(TILE_SET_INT, &args![tile, 0xfa3u32, 0u32]);
     }
+}
+
+/// `0048e730` (`cdecl`, a form and the player): the form's icon path (`""` when it has none).
+const ICON_PATH_0048E730: u32 = 0x0048_e730;
+
+/// lStewieAl's Tweaks' `RecipeMenuArmorIconHook` (row S0044, `patchFixRecipeMenuArmorIcons`: "armor
+/// icons in the recipe menu favoured their glow variants as the UI Message icon was used instead
+/// of the inventory icon"), jumped to at `0x728378` for a form of the `0x1183A34` cast: the path
+/// is `0048e730(form, player)`; its first byte 0 hides the icon tile (+0x4C, `visible` 0, the exe's
+/// `0x7283D9`), anything else becomes its `filename` (0xFCC) and shows it (the exe's `0x7283AE`).
+fn stewie_armour_icon(e: &mut Engine, base: u32, form: u32) {
+    let player = e.global::<u32>(PLAYER);
+    let path = e.call(ICON_PATH_0048E730, &args![form, player]).u32();
+    if e.mem.u8(path) == 0 {
+        let tile = e.mem.u32(base + 0x4c);
+        e.call(TILE_SET_INT, &args![tile, 0xfa3u32, 0u32]);
+        return;
+    }
+    let tile = e.mem.u32(base + 0x4c);
+    e.call(TILE_SET_STRING, &args![tile, 0xfccu32, path, 1u32]);
+    let tile = e.mem.u32(base + 0x4c);
+    e.call(TILE_SET_INT, &args![tile, 0xfa3u32, 1u32]);
 }
 
 /// `show_selected` for a selected recipe (the menu's tiles through `pMe`).
@@ -2263,10 +2379,20 @@ fn show_recipe(e: &mut Engine, this: Ptr, crafter: u32, selected: &mut u32) {
                     let entry = e
                         .call(GET_INVENTORY_ITEM, &args![crafter, bound, 0u32])
                         .u32();
-                    let have = if entry != 0 {
-                        typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, entry))
-                    } else {
+                    // `0x727F92` (lStewieAl's Tweaks' S0071, `patchFixRecipeNegativeIngredientCount`,
+                    // writes `MOV EAX,[EAX+4]; CMP EAX,0; JL` to the 0 there): the count read
+                    // raw, 0 when below 0.
+                    let have = if entry == 0 {
                         0
+                    } else if e.stewie(engine_core::extend::stewie::RECIPE_NO_NEGATIVE_COUNT) {
+                        let count = e.mem.u32(entry + 4);
+                        if (count as i32) < 0 {
+                            0
+                        } else {
+                            count
+                        }
+                    } else {
+                        typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, entry))
                     };
                     if entry != 0 {
                         e.call(ITEM_DATA_DELETE, &args![entry, 1u32]);
@@ -2677,7 +2803,14 @@ pub fn fn_00728a30(e: &mut Engine, now: u8) {
     if now != 0 {
         if me(e) != 0 {
             let menu = me(e);
-            fn_00727680(e, Ptr::new(menu), 0, 0);
+            // `0x728A4E` (lStewieAl's Tweaks' S0200 detours the call: `OnRecipeMenuRefresh`
+            // passes the menu's category, +0x64, for the 0).
+            let category = if e.stewie(engine_core::extend::stewie::RECIPE_REFRESH_KEEPS_CATEGORY) {
+                e.mem.u32(menu + CATEGORY)
+            } else {
+                0
+            };
+            fn_00727680(e, Ptr::new(menu), 0, category);
         }
         e.set_global(REFRESH_011D8EA4, 0u8);
     } else {
@@ -3075,6 +3208,11 @@ pub fn fn_00728da0(e: &mut Engine, _this: Ptr, form: u32, holder: u32) {
     });
     for (tile, setting) in ITEM_TITLE_SETTINGS {
         let text = e.call(SETTING_STRING, &args![setting]).u32();
+        // `0x7296E0`, tile 4's title (lStewieAl's Tweaks' S0022.12 calls its own in place).
+        if tile == 4 && e.stewie(engine_core::extend::stewie::RECIPE_CONDITION_NOTCH) {
+            stewie_condition_tile(e, tiles[tile], form, title_trait, text);
+            continue;
+        }
         e.call(
             TILE_SET_STRING,
             &args![tiles[tile], title_trait, text, 1u32],
@@ -3113,6 +3251,40 @@ pub fn fn_00728da0(e: &mut Engine, _this: Ptr, form: u32, holder: u32) {
             &args![tile, 0xfa2u32, x87_quiet_bits(moved), 1u32],
         );
     }
+}
+
+/// The tile traits `user5` and `user6` (`0x1009`, `0x100A`).
+const USER5: u32 = 0x1009;
+const USER6: u32 = 0x100a;
+/// The form type of weapons, `TESObjectWEAP`'s vtable and its `eWeaponType` byte (+0xF4; from
+/// 10, `kWeapType_OneHandGrenade`, the thrown ones).
+const WEAPON_FORM_TYPE: u8 = 0x28;
+const WEAPON_VTABLE: u32 = 0x0102_c51c;
+const WEAPON_TYPE: u32 = 0xf4;
+const FIRST_THROWN_WEAPON_TYPE: u8 = 10;
+/// Tweaks' `g_fCraftedItemHealth`: 0.8 (its `fCraftedItemHealthPct` 80, VNV's value; that setting
+/// and `bRepairScalesCraftingCondition`, 0 in VNV, are rows of their own not built yet).
+const CRAFTED_ITEM_HEALTH: f32 = 0.8;
+
+/// lStewieAl's Tweaks' `MenuFixes::RecipeMenuInitConditionTile` (row S0022.12, "fix the ^
+/// indicator being in the wrong place for armors"), called at `0x7296E0` in place of tile 4's
+/// `Tile::SetString`: `user6` becomes 1.0 for a weapon (the form's type byte 0x28) and 0.0 for
+/// anything else (the notch's place), `user5` the crafted condition (1.0 for a thrown weapon: type
+/// 0x28, `TESObjectWEAP`'s vtable and `eWeaponType` 10 or more), each with `Tile::SetFloat`
+/// (`0xA012D0`, reactions updated), then the exe's `SetString(title, text, 1)`.
+fn stewie_condition_tile(e: &mut Engine, tile: u32, form: u32, title_trait: u32, text: u32) {
+    let is_weapon = e.mem.u8(form + 4) == WEAPON_FORM_TYPE;
+    let place = if is_weapon { 1.0f32 } else { 0.0 };
+    e.call(TILE_SET_FLOAT, &args![tile, USER6, place.to_bits(), 1u32]);
+    let thrown = is_weapon
+        && e.mem.u32(form) == WEAPON_VTABLE
+        && e.mem.u8(form + WEAPON_TYPE) >= FIRST_THROWN_WEAPON_TYPE;
+    let condition = if thrown { 1.0f32 } else { CRAFTED_ITEM_HEALTH };
+    e.call(
+        TILE_SET_FLOAT,
+        &args![tile, USER5, condition.to_bits(), 1u32],
+    );
+    e.call(TILE_SET_STRING, &args![tile, title_trait, text, 1u32]);
 }
 
 /// `fn_00728da0`'s weapon part (`traits`: title, value, the `0x1009` damage trait).
@@ -3521,25 +3693,25 @@ mod n057_tests {
         0x00406d00, 0x00406d30, 0x00406f60, 0x004077e0, 0x00408da0, 0x0040e210, 0x0040ebd0,
         0x004459e0, 0x0044a670, 0x0044ddc0, 0x0045cd60, 0x00464f30, 0x00469880, 0x0046fb20,
         0x0046ffb0, 0x004702f0, 0x00476b20, 0x00480f80, 0x00481280, 0x00481610, 0x00481680,
-        0x004818e0, 0x00482090, 0x004821a0, 0x00482720, 0x00483a00, 0x0048cee0, 0x0048e8a0,
-        0x0048ebc0, 0x004b71d0, 0x004b7210, 0x004bd510, 0x004be060, 0x004be330, 0x004bf220,
-        0x004c0bf0, 0x004c8f30, 0x004d1360, 0x004d5e10, 0x004e4430, 0x00503a70, 0x00525980,
-        0x00525b20, 0x005330e0, 0x00559450, 0x00574fa0, 0x00575610, 0x00576260, 0x00586150,
-        0x0059bb30, 0x005a8080, 0x005ae380, 0x005b5e40, 0x005d43c0, 0x005f5950, 0x006286d0,
-        0x006450f0, 0x00645380, 0x00646360, 0x00647b70, 0x00647c00, 0x00663b40, 0x00663b60,
-        0x0066e950, 0x0066ef20, 0x00680c30, 0x006815c0, 0x00683520, 0x006a1b60, 0x006a7ad0,
-        0x006a9540, 0x006ecd40, 0x00700320, 0x00702450, 0x007052f0, 0x00706f30, 0x00709430,
-        0x00715860, 0x00715c60, 0x00717280, 0x007185e0, 0x00718840, 0x00719b20, 0x0071aa60,
-        0x0071aa80, 0x00721130, 0x007211c0, 0x007240c0, 0x007242c0, 0x007242f0, 0x00726070,
-        0x007269d0, 0x00726c40, 0x0072ce90, 0x007312e0, 0x0075a0d0, 0x00763ff0, 0x007640a0,
-        0x007a1910, 0x007a1950, 0x007a22d0, 0x007a62e0, 0x007a7eb0, 0x007aba00, 0x007b5370,
-        0x007cb2e0, 0x007e8890, 0x008256d0, 0x00825c00, 0x0083fd60, 0x008454f0, 0x0087f4c0,
-        0x0088d7d0, 0x008a1710, 0x008adcf0, 0x008d8520, 0x00905820, 0x00950030, 0x0096a2d0,
-        0x00a00940, 0x00a00e90, 0x00a00f30, 0x00a011b0, 0x00a01230, 0x00a01290, 0x00a012d0,
-        0x00a01350, 0x00a01530, 0x00a01860, 0x00a01b00, 0x00a03c90, 0x00a03d40, 0x00a03da0,
-        0x00a07530, 0x00a08b20, 0x00a09030, 0x00a09080, 0x00a09130, 0x00a09200, 0x00a09410,
-        0x00a1c4a0, 0x00a1c520, 0x00a1d910, 0x00a1dc20, 0x00a1dc70, 0x00a1ddb0, 0x00ec408c,
-        0x00ec43fb, 0x00ec62c0,
+        0x004818e0, 0x00482090, 0x004821a0, 0x00482720, 0x00483a00, 0x0048cee0, 0x0048e730,
+        0x0048e8a0, 0x0048ebc0, 0x004b71d0, 0x004b7210, 0x004bd510, 0x004be060, 0x004be330,
+        0x004bf220, 0x004c0bf0, 0x004c8f30, 0x004d1360, 0x004d5e10, 0x004e4430, 0x00503a70,
+        0x00525980, 0x00525b20, 0x005330e0, 0x00559450, 0x00574fa0, 0x00575610, 0x00576260,
+        0x00586150, 0x0059bb30, 0x005a8080, 0x005ae380, 0x005b5e40, 0x005d43c0, 0x005f5950,
+        0x006286d0, 0x006450f0, 0x00645380, 0x00646360, 0x00647b70, 0x00647c00, 0x00663b40,
+        0x00663b60, 0x0066e950, 0x0066ef20, 0x00680c30, 0x006815c0, 0x00683520, 0x006a1b60,
+        0x006a7ad0, 0x006a9540, 0x006ecd40, 0x00700320, 0x00702450, 0x007052f0, 0x00706f30,
+        0x00709430, 0x00715860, 0x00715c60, 0x00717280, 0x007185e0, 0x00718840, 0x00719b20,
+        0x0071aa60, 0x0071aa80, 0x00721130, 0x007211c0, 0x007240c0, 0x007242c0, 0x007242f0,
+        0x00726070, 0x007269d0, 0x00726c40, 0x0072ce90, 0x007312e0, 0x00731360, 0x0075a0d0,
+        0x00763ff0, 0x007640a0, 0x007a1910, 0x007a1950, 0x007a22d0, 0x007a62e0, 0x007a7eb0,
+        0x007aba00, 0x007b5370, 0x007cb2e0, 0x007e8890, 0x008256d0, 0x00825c00, 0x0083fd60,
+        0x008454f0, 0x0087f4c0, 0x0088d7d0, 0x008a1710, 0x008adcf0, 0x008d8520, 0x00905820,
+        0x00950030, 0x0096a2d0, 0x00a00940, 0x00a00e90, 0x00a00f30, 0x00a011b0, 0x00a01230,
+        0x00a01290, 0x00a012d0, 0x00a01350, 0x00a01530, 0x00a01860, 0x00a01b00, 0x00a03c90,
+        0x00a03d40, 0x00a03da0, 0x00a07530, 0x00a08b20, 0x00a09030, 0x00a09080, 0x00a09130,
+        0x00a09200, 0x00a09410, 0x00a1c4a0, 0x00a1c520, 0x00a1d910, 0x00a1dc20, 0x00a1dc70,
+        0x00a1ddb0, 0x00ec408c, 0x00ec43fb, 0x00ec62c0,
     ];
 
     fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
@@ -5253,5 +5425,421 @@ mod n057_tests {
         assert!(jip_disposable_weapon(&mut e, 0x7500));
         assert!(calls_to(&e, FORM_004C0BF0).is_empty());
         assert_eq!(asked(), [(0x0072_880d, vec![0x7500])]);
+    }
+
+    // ---- lStewieAl's Tweaks' rows (share 3, group 2) ----
+
+    use engine_core::extend::stewie;
+
+    /// Tile 4 of `info_engine`'s twelve.
+    const CONDITION_TILE: u32 = 0x2100 + 4 * 4;
+
+    /// The calls to `addr` on tile 4, in order.
+    fn on_condition_tile(e: &Engine) -> Vec<(u32, Vec<u32>)> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, w)| {
+                (*a == TILE_SET_FLOAT || *a == TILE_SET_STRING)
+                    && w.first() == Some(&CONDITION_TILE)
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Row S0022.12: tile 4's title (`sInventoryCondition`, setting `011d4da4`) with the row on
+    /// is preceded by `user6` (0x100A: 1.0 for a weapon, 0.0 otherwise) and `user5` (0x1009: 0.8,
+    /// or 1.0 for a thrown weapon: `TESObjectWEAP`'s vtable and `eWeaponType` from 10), each with
+    /// reactions (1); off, the title alone (a weapon's tile 4 still gets the exe's own `0x1009`
+    /// from its damage part, not 0x100A).
+    #[test]
+    fn s0022_12_condition_notch_for_armour_and_thrown_weapons() {
+        let bits = |v: f32| v.to_bits();
+        for (kind, vtable, weapon_type, on, wanted) in [
+            (0x18u8, 0u32, 0u8, true, Some((0.0f32, 0.8f32))),
+            (0x18, 0, 0, false, None),
+            (0x28, WEAPON_VTABLE, 3, true, Some((1.0, 0.8))),
+            (0x28, WEAPON_VTABLE, 9, true, Some((1.0, 0.8))),
+            (0x28, WEAPON_VTABLE, 10, true, Some((1.0, 1.0))),
+            (0x28, WEAPON_VTABLE, 13, true, Some((1.0, 1.0))),
+            (0x28, 0x0102_0000, 10, true, Some((1.0, 0.8))),
+            (0x28, WEAPON_VTABLE, 10, false, None),
+        ] {
+            let (mut e, holder) = info_engine(u32::from(kind));
+            e.set_stewie(stewie::RECIPE_CONDITION_NOTCH, on);
+            st0(&mut e, WEAPON_DAMAGE_00645380, 12.0);
+            answer(&mut e, GET_NUM_PROJECTILES, 1);
+            answer(&mut e, SETTING_STRING, 0x6100);
+            let form = e.mem.alloc(0x100);
+            e.mem.set_u32(form, vtable);
+            e.mem.set_u8(form + 4, kind);
+            e.mem.set_u8(form + 0xf4, weapon_type);
+            e.call_log = Some(vec![]);
+            e.call(0x0072_8da0, &args![0u32, form, holder]);
+            let title = (TILE_SET_STRING, vec![CONDITION_TILE, 0x31, 0x6100, 1]);
+            let seen: Vec<_> = on_condition_tile(&e)
+                .into_iter()
+                .filter(|(a, w)| *a == TILE_SET_STRING || w[1] == USER5 || w[1] == USER6)
+                .collect();
+            let case = format!("kind {kind:#x} type {weapon_type} row {on}");
+            // A weapon's damage part set tile 4's `0x1009` before (the exe's): the title's calls
+            // are the last ones.
+            match wanted {
+                Some((place, condition)) => assert_eq!(
+                    seen[seen.len().saturating_sub(3)..],
+                    [
+                        (TILE_SET_FLOAT, vec![CONDITION_TILE, USER6, bits(place), 1]),
+                        (
+                            TILE_SET_FLOAT,
+                            vec![CONDITION_TILE, USER5, bits(condition), 1]
+                        ),
+                        title,
+                    ],
+                    "{case}"
+                ),
+                None => {
+                    assert_eq!(seen.last(), Some(&title), "{case}");
+                    assert!(
+                        !seen.iter().any(|(_, w)| w.get(1) == Some(&USER6)),
+                        "{case}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// S0022.12 with JIP's G13 (`0x728E10`, `0x729616`) in the same function: both act. JIP's
+    /// plain value and two-decimal weight, and Tweaks' notch values on tile 4.
+    #[test]
+    fn s0022_12_with_jips_g13_seams() {
+        let (mut e, holder) = info_engine(0x18);
+        e.set_jip_patches(INSTALLED | FIXES);
+        e.on_site_for_test(0x0072_8e10, g13_value);
+        e.on_site_for_test(0x0072_9616, g13_format);
+        e.set_stewie(stewie::RECIPE_CONDITION_NOTCH, true);
+        let form = e.mem.alloc(0x100);
+        e.mem.set_u8(form + 4, 0x18);
+        asked();
+        e.call_log = Some(vec![]);
+        e.call(0x0072_8da0, &args![0u32, form, holder]);
+        assert_eq!(
+            amounts(&e),
+            [(NO_DECIMAL_FORMAT, 7.0), (TWO_DECIMAL_FORMAT, 0.5)]
+        );
+        assert_eq!(asked(), [(0x0072_8e10, vec![]), (0x0072_9616, vec![])]);
+        let floats = calls_to(&e, TILE_SET_FLOAT);
+        assert!(floats.contains(&vec![CONDITION_TILE, USER6, 0.0f32.to_bits(), 1]));
+        assert!(floats.contains(&vec![CONDITION_TILE, USER5, 0.8f32.to_bits(), 1]));
+    }
+
+    /// `do_enter_shows_the_selected_recipe`'s menu with the output's form `form` cast to
+    /// `0x1183A34` only (the `0x1183200` cast answers 0); the test answers the icon path.
+    fn icon_engine(form: u32) -> (Engine, u32) {
+        let mut e = engine();
+        let menu = recipe_menu(&mut e);
+        e.set_global(RECIPE_MENU, menu);
+        e.mem.set_u32(menu + CURRENT_LIST, menu + RECIPE_LIST);
+        let output = e.mem.alloc(8);
+        e.mem.set_u32(output + 4, form);
+        let outputs = chain(&mut e, &[output]);
+        answer(&mut e, LIST_BOX_CURRENT_ITEM, 0x7100);
+        answer(&mut e, RECIPE_CATEGORY_006A1B60, 0x90);
+        answer(&mut e, RECIPE_OUTPUTS_005D43C0, outputs);
+        answer(&mut e, RECIPE_INPUTS_005A8080, 0);
+        answer(&mut e, LIST_COUNT_005AE380, 1);
+        answer(&mut e, TILE_GET_MENU, 0x5000);
+        answer(&mut e, MENU_RENDER_TEMPLATE, 0x6000);
+        e.register_double(RT_DYNAMIC_CAST, |_, a| {
+            let cast = if a[3] == RTTI_01183A34 { a[0] } else { 0 };
+            cast.into_ret()
+        });
+        answer(&mut e, FORM_00480F80, 1);
+        answer(&mut e, FORM_00481280, 0x6400);
+        e.set_global(PLAYER, 0x5500u32);
+        let holder = e.mem.alloc(0x10);
+        e.mem.set_u32(menu + 0x50, holder);
+        (e, menu)
+    }
+
+    /// Row S0044: the output's icon. Off: the exe's (`00480f80` asked, then `00481280`'s path
+    /// shown). On: `0048e730(form, player)`'s path, shown when its first byte is not 0, the icon
+    /// tile (+0x4C) hidden when it is; `00480f80` and `00481280` not called.
+    #[test]
+    fn s0044_armour_recipes_show_the_inventory_icon() {
+        let icon_tile = 0x2000 + 0x4c - TILES;
+        for (on, empty) in [(false, false), (true, false), (true, true)] {
+            let (mut e, menu) = icon_engine(0x3500);
+            let path = e.mem.alloc(0x10);
+            let name: &[u8] = if empty { b"" } else { b"armor.dds" };
+            e.mem.set_cstr(path, name);
+            answer(&mut e, ICON_PATH_0048E730, path);
+            e.set_stewie(stewie::RECIPE_ARMOUR_ICONS, on);
+            e.call_log = Some(vec![]);
+            e.call(0x0072_7b10, &args![menu, 0xfi32, 0u32]);
+            let strings: Vec<_> = calls_to(&e, TILE_SET_STRING)
+                .into_iter()
+                .filter(|c| c[0] == icon_tile && c[1] == 0xfcc)
+                .collect();
+            let shown = calls_to(&e, TILE_SET_INT)
+                .into_iter()
+                .rfind(|c| c[0] == icon_tile && c[1] == 0xfa3);
+            if on {
+                assert_eq!(calls_to(&e, ICON_PATH_0048E730), [vec![0x3500, 0x5500]]);
+                assert!(calls_to(&e, FORM_00480F80).is_empty());
+                assert!(calls_to(&e, FORM_00481280).is_empty());
+                if empty {
+                    assert!(strings.is_empty());
+                    assert_eq!(shown, Some(vec![icon_tile, 0xfa3, 0]));
+                } else {
+                    assert_eq!(strings, [vec![icon_tile, 0xfcc, path, 1]]);
+                    assert_eq!(shown, Some(vec![icon_tile, 0xfa3, 1]));
+                }
+            } else {
+                assert!(calls_to(&e, ICON_PATH_0048E730).is_empty());
+                assert_eq!(calls_to(&e, FORM_00480F80), [vec![0x3500, 0x5500]]);
+                assert_eq!(strings, [vec![icon_tile, 0xfcc, 0x6400, 1]]);
+                assert_eq!(shown, Some(vec![icon_tile, 0xfa3, 1]));
+            }
+        }
+    }
+
+    /// Row S0071: the ingredient line `"%s (%d/%d)"` of a crafter holding a count below 0 (-3)
+    /// shows -3 with the row off (`00726070`), 0 with it on (the entry's +4 read raw); a count of
+    /// 5 shows 5 either way.
+    #[test]
+    fn s0071_no_negative_ingredient_count() {
+        for (on, count, shown) in [
+            (false, -3i32, -3i32),
+            (true, -3, 0),
+            (false, 5, 5),
+            (true, 5, 5),
+            (true, i32::MIN, 0),
+        ] {
+            let mut e = engine();
+            let menu = recipe_menu(&mut e);
+            e.set_global(RECIPE_MENU, menu);
+            e.set_stewie(stewie::RECIPE_NO_NEGATIVE_COUNT, on);
+            e.mem.set_u32(menu + CURRENT_LIST, menu + RECIPE_LIST);
+            let crafter = e.mem.alloc(0x200);
+            e.put_vtable(0x0c00_0000, &[0x0000_a000; 0x50]);
+            answer(&mut e, 0x0000_a000, 1);
+            e.mem.set_u32(crafter, 0x0c00_0000);
+            e.mem.set_u32(menu + CRAFTER_REF, crafter);
+            let output = e.mem.alloc(8);
+            e.mem.set_u32(output + 4, 0x3500);
+            let outputs = chain(&mut e, &[output]);
+            let input = e.mem.alloc(8);
+            e.mem.set_u32(input, 2);
+            e.mem.set_u32(input + 4, 0x3300);
+            let inputs = chain(&mut e, &[input]);
+            answer(&mut e, LIST_BOX_CURRENT_ITEM, 0x7100);
+            answer(&mut e, RECIPE_CATEGORY_006A1B60, 0x90);
+            answer(&mut e, RECIPE_OUTPUTS_005D43C0, outputs);
+            answer(&mut e, RECIPE_INPUTS_005A8080, inputs);
+            answer(&mut e, LIST_COUNT_005AE380, 1);
+            answer(&mut e, STRING_TEXT, 0x6600);
+            answer(&mut e, TILE_GET_MENU, 0x5000);
+            answer(&mut e, MENU_RENDER_TEMPLATE, 0x6000);
+            answer(&mut e, RECIPE_SKILL_0059BB30, 0xffff_ffff);
+            e.register_double(RT_DYNAMIC_CAST, |_, a| a[0].into_ret());
+            let entry = e.mem.alloc(8);
+            e.mem.set_u32(entry + 4, count as u32);
+            answer(&mut e, GET_INVENTORY_ITEM, entry);
+            let slot = e.mem.alloc(4);
+            e.mem.set_u32(slot, 0x2f00);
+            answer(&mut e, ITEM_TILE_007B5370, slot);
+            let holder = e.mem.alloc(0x10);
+            e.mem.set_u32(menu + 0x50, holder);
+            e.call_log = Some(vec![]);
+            e.call(0x0072_7b10, &args![menu, 0xfi32, 0u32]);
+            let lines: Vec<_> = calls_to(&e, FORMAT)
+                .into_iter()
+                .filter(|c| c[2] == HAVE_OF_NEED_FORMAT && c[3] == 0x6600)
+                .collect();
+            assert_eq!(lines.len(), 1, "row {on} count {count}");
+            assert_eq!(lines[0][4] as i32, shown, "row {on} count {count}");
+            assert_eq!(lines[0][5], 2);
+        }
+    }
+
+    /// A category array (`011d8f08`) of `names.len()` categories, each name's text at +0x1C and
+    /// its length at +0x20 (an empty name: the text set, length 0).
+    fn categories(e: &mut Engine, names: &[&[u8]]) -> Vec<u32> {
+        let data = e.mem.alloc(4 * names.len() as u32 + 4);
+        let mut texts = vec![];
+        for (i, name) in names.iter().enumerate() {
+            let category = e.mem.alloc(0x40);
+            let text = e.mem.alloc(0x20);
+            e.mem.set_cstr(text, name);
+            e.mem.set_u32(category + 0x1c, text);
+            e.mem.set_u16(category + 0x20, name.len() as u16);
+            e.mem.set_u32(data + 4 * i as u32, category);
+            texts.push(text);
+        }
+        e.mem.set_u32(CATEGORY_ARRAY + 4, data);
+        e.mem.set_u32(CATEGORY_ARRAY + 8, names.len() as u32);
+        texts
+    }
+
+    /// Row S0200's `SetCategoryIndex` (xNVSE's): below -1 is the last category, above the count
+    /// is -1 (the count itself is kept: the compare is unsigned), -1 titles the list with
+    /// `sRecipes`' text, any other its category's name (`""` for an empty one); then the list is
+    /// filtered (`0x728d60`'s filter: the num-filtered static asked).
+    #[test]
+    fn s0200_set_category_index() {
+        for (index, stored, label) in [
+            (-1i32, -1i32, Some(0x6500u32)),
+            (0, 0, None),
+            (1, 1, None),
+            (-2, 2, None),
+            (-7, 2, None),
+            (4, -1, Some(0x6500)),
+        ] {
+            let mut e = engine();
+            e.map(0x011d_2000, 0x1000);
+            e.mem.set_u32(SETTING_011D2088 + 4, 0x6500);
+            let menu = recipe_menu(&mut e);
+            e.set_global(RECIPE_MENU, menu);
+            let texts = categories(&mut e, &[b"Food", b"", b"Ammo"]);
+            e.call_log = Some(vec![]);
+            stewie_set_category_index(&mut e, index);
+            assert_eq!(
+                e.global::<i32>(FILTER_INDEX_0119FBF4),
+                stored,
+                "index {index}"
+            );
+            let label = label.unwrap_or(match stored {
+                0 => texts[0],
+                1 => EMPTY_TEXT,
+                _ => texts[2],
+            });
+            assert_eq!(
+                calls_to(&e, TILE_SET_STRING),
+                [vec![0x2000 + 0x2c - TILES, 0xfc4, label, 1]],
+                "index {index}"
+            );
+        }
+        // The count itself: the category past the last is read (here a zeroed slot: `""`).
+        let mut e = engine();
+        let menu = recipe_menu(&mut e);
+        e.set_global(RECIPE_MENU, menu);
+        let data = e.mem.alloc(0x10);
+        let past = e.mem.alloc(0x40);
+        e.mem.set_u32(data + 8, past);
+        e.mem.set_u32(CATEGORY_ARRAY + 4, data);
+        e.mem.set_u32(CATEGORY_ARRAY + 8, 2);
+        e.call_log = Some(vec![]);
+        stewie_set_category_index(&mut e, 2);
+        assert_eq!(e.global::<i32>(FILTER_INDEX_0119FBF4), 2);
+        assert_eq!(calls_to(&e, TILE_SET_STRING)[0][2], EMPTY_TEXT);
+    }
+
+    /// The test vtable's `FreeAllTiles` slot (+0x1C) address.
+    const FREE_ALL_TILES_SLOT: u32 = 0x0000_801c;
+
+    /// Row S0200 through `fn_00728a30(1)`: off, the exe's fill (`004077e0` asked, every
+    /// category's recipes, no list position kept); on, the menu's category (+0x64) passed (only
+    /// its recipe listed), the data handler's recipes walked raw (+0xA0), the list's position
+    /// saved and its tiles freed (vtable +0x1C) before, and after the sort the category index set
+    /// back (the title) and the position restored (`00731360` with 0).
+    #[test]
+    fn s0200_refresh_keeps_the_category_and_position() {
+        for on in [false, true] {
+            let mut e = engine();
+            e.map(0x011d_2000, 0x1000);
+            let menu = recipe_menu(&mut e);
+            e.set_global(RECIPE_MENU, menu);
+            e.set_stewie(stewie::RECIPE_REFRESH_KEEPS_CATEGORY, on);
+            e.mem.set_u32(menu + CATEGORY, 0x7201);
+            let owner = e.mem.alloc(0x100);
+            e.set_global(OWNER_011C3F2C, owner);
+            let rest = chain(&mut e, &[0x7200]);
+            e.mem.set_u32(owner + 0xa0, 0x7100);
+            e.mem.set_u32(owner + 0xa4, rest);
+            answer(&mut e, RECIPE_LIST_HEAD_004077E0, owner + 0xa0);
+            let outputs = chain(&mut e, &[0]);
+            answer(&mut e, RECIPE_OUTPUTS_005D43C0, outputs);
+            e.register(RECIPE_CATEGORY_006A1B60, |_, a| (a[0] + 1).into_ret());
+            answer(&mut e, CONDITION_IS_TRUE, 1);
+            answer(&mut e, ARRAY_FIND_00719B20, 5);
+            answer(&mut e, ARRAY_COUNT, 2);
+            answer(&mut e, STRING_TEXT, 0x6600);
+            let slot = e.mem.alloc(4);
+            e.mem.set_u32(slot, 0x2f00);
+            answer(&mut e, ITEM_TILE_007B5370, slot);
+            answer(&mut e, TILE_GET_MENU, 0x5000);
+            answer(&mut e, MENU_RENDER_TEMPLATE, 0x6000);
+            // The list's `FreeAllTiles` slot (+0x1C) gets an address of its own.
+            e.mem.set_u32(0x0e00_0000 + 0x1c, FREE_ALL_TILES_SLOT);
+            e.register(FREE_ALL_TILES_SLOT, |_, _| Ret::default());
+            let texts = categories(&mut e, &[b"Food", b"Ammo"]);
+            e.set_global(FILTER_INDEX_0119FBF4, 1u32);
+            e.call_log = Some(vec![]);
+            e.call(0x0072_8a30, &args![1u8]);
+            assert_eq!(e.global::<u8>(REFRESH_011D8EA4), 0);
+            let list = menu + RECIPE_LIST;
+            let formats = calls_to(&e, FORMAT);
+            if on {
+                assert!(calls_to(&e, RECIPE_LIST_HEAD_004077E0).is_empty());
+                assert_eq!(formats.len(), 1, "the menu's category only");
+                assert_eq!(calls_to(&e, LIST_BOX_SAVE_LIST_STATE), [vec![list]]);
+                assert_eq!(calls_to(&e, LIST_BOX_RESTORE_POSITION), [vec![list, 0]]);
+                assert_eq!(
+                    calls_to(&e, FREE_ALL_TILES_SLOT),
+                    [vec![list]],
+                    "tiles freed once"
+                );
+                let vcalls = calls_to(&e, 0x0000_8000);
+                assert!(
+                    !vcalls.iter().any(|c| c.len() == 1),
+                    "no other slot without words: {vcalls:x?}"
+                );
+                assert!(vcalls.contains(&vec![list, COMPARE_00728C10]));
+                assert_eq!(e.global::<u32>(FILTER_INDEX_0119FBF4), 1);
+                assert_eq!(
+                    calls_to(&e, TILE_SET_STRING).last(),
+                    Some(&vec![0x2000 + 0x2c - TILES, 0xfc4, texts[1], 1])
+                );
+                // The order: saved, freed, filled, sorted, restored last.
+                let log: Vec<u32> = e
+                    .call_log
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .map(|(a, _)| *a)
+                    .filter(|a| {
+                        [
+                            LIST_BOX_SAVE_LIST_STATE,
+                            FREE_ALL_TILES_SLOT,
+                            FORMAT,
+                            QSORT,
+                            LIST_BOX_RESTORE_POSITION,
+                        ]
+                        .contains(a)
+                    })
+                    .collect();
+                assert_eq!(
+                    log,
+                    [
+                        LIST_BOX_SAVE_LIST_STATE,
+                        FREE_ALL_TILES_SLOT,
+                        FORMAT,
+                        QSORT,
+                        LIST_BOX_RESTORE_POSITION
+                    ]
+                );
+            } else {
+                assert_eq!(calls_to(&e, RECIPE_LIST_HEAD_004077E0), [vec![owner]]);
+                assert_eq!(formats.len(), 2, "every category");
+                assert!(calls_to(&e, LIST_BOX_SAVE_LIST_STATE).is_empty());
+                assert!(calls_to(&e, LIST_BOX_RESTORE_POSITION).is_empty());
+                assert_eq!(calls_to(&e, 0x0000_8000), [vec![list, COMPARE_00728C10]]);
+                assert!(calls_to(&e, FREE_ALL_TILES_SLOT).is_empty());
+                assert!(!calls_to(&e, TILE_SET_STRING)
+                    .iter()
+                    .any(|c| c[0] == 0x2000 + 0x2c - TILES));
+            }
+        }
     }
 }

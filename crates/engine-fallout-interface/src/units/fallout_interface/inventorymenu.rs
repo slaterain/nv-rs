@@ -1064,6 +1064,22 @@ const WEAPON_TYPE_BADGE: u32 = 0x0066_ea20;
 /// (Xbox PDB, cdecl).
 const GET_EQUIP_TYPE: u32 = 0x0047_9430;
 const GET_EQUIP_TYPE_ICON: u32 = 0x0047_9540;
+
+/// The hotkey icon's equip type for `form`: `BGSEquipType::GetEquipType`'s answer, or with
+/// lStewieAl's Tweaks' S0070 on (`patchFixBookAndAmmoHotkeyIcons`'s `GetEquipTypeIconAidForBooks`,
+/// called at `0x78149C` here and at `0x701861` in the hotkey wheel), for `kNone` (-1) a book
+/// (the form's type byte 0x19) gets `kChems` (10) and ammunition (0x29) `kBigGuns` (0).
+pub(crate) fn equip_type_for_hotkey_icon(e: &mut Engine, form: u32) -> u32 {
+    let equip_type = e.call(GET_EQUIP_TYPE, &args![form]).u32();
+    if equip_type != u32::MAX || !e.stewie(stewie::BOOK_AND_AMMO_HOTKEY_ICONS) {
+        return equip_type;
+    }
+    match e.mem.u8(form + 4) {
+        0x19 => 10,
+        0x29 => 0,
+        _ => equip_type,
+    }
+}
 /// `strcpy_s` and `strcat_s` (cdecl: buffer, size, text) and `strlen`.
 const STRCPY_S: u32 = 0x0040_6d30;
 const STRCAT_S: u32 = 0x0040_6d50;
@@ -1249,7 +1265,8 @@ fn enter_item(e: &mut Engine, this: Ptr<InventoryMenu>) {
             0x0044_ddc0,
             leaf::word_at_8(e, current_item(e))
         );
-        let equip_type = e.call(GET_EQUIP_TYPE, &args![object]).u32();
+        // `0x78149C` (lStewieAl's Tweaks' S0070 calls `GetEquipTypeIconAidForBooks` there).
+        let equip_type = equip_type_for_hotkey_icon(e, object);
         let icon = e.call(GET_EQUIP_TYPE_ICON, &args![equip_type]).u32();
         e.call(STRCAT_S, &args![path, 0x104u32, icon]);
         let equip_tile = |e: &mut Engine| {
@@ -1554,6 +1571,17 @@ pub fn inventory_menu_do_gamepad(
             handled = true;
         }
         0xf => {
+            // The switch's slot at `0x7823B0` (lStewieAl's Tweaks' S0022.34 points it at
+            // `OnWeaponModMenuOpenMenuKeyPress`): with the mod button's (+0x74) `target`
+            // (0xFAF) equal to 0.0 (`FLDZ; FCOMPP; TEST AH,0x44; JNP`), nothing is clicked and
+            // the answer is 1 (`0x78239D`).
+            if e.stewie(stewie::WEAPON_MOD_MENU_NEEDS_TARGET) {
+                let button = tile_at(e, base, 0x74);
+                let target = e.call(GET_FLOAT_TRAIT, &args![button, 0xfafu32]).f64();
+                if target == 0.0 {
+                    return true;
+                }
+            }
             e.vcall(base, 0xc, &args![0x13u32, 0u32]);
             handled = true;
         }
@@ -4033,5 +4061,198 @@ mod n054_tests {
         assert!(calls_to(&e, FORM_TYPE).is_empty(), "nothing further");
         let (_, ok) = repairable(on, o2_allow, 99.9);
         assert!(ok, "the exe's further tests: below 100, a stack of 2");
+    }
+
+    /// Row S0022.34: the pad's button 15 (Page Up's too) clicks the mod menu button (`DoClick`
+    /// 0x13, vtable +0xc) and answers handled. With the row on and the mod button's (+0x74)
+    /// `target` (0xFAF) at 0.0 (or -0.0) nothing is clicked and it still answers handled; any
+    /// other value (a NaN too: `FCOMPP` unordered) clicks. Off: always the click, `target` never
+    /// read.
+    #[test]
+    fn s0022_34_the_mod_menu_needs_a_usable_button() {
+        for (on, target, clicks) in [
+            (false, 0.0f64, true),
+            (true, 0.0, false),
+            (true, -0.0, false),
+            (true, 1.0, true),
+            (true, f64::NAN, true),
+        ] {
+            let mut e = Engine::new();
+            let this = menu(&mut e);
+            e.set_stewie(stewie::WEAPON_MOD_MENU_NEEDS_TARGET, on);
+            answer(&mut e, IS_TOP_MENU_ID, 1);
+            stub(&mut e, &[GET_PIPBOY, 0x00c0_000c]);
+            answer(&mut e, PIPBOY_READY, 1);
+            answer(&mut e, MENU_TEST_00709D40, 0);
+            answer_st0(&mut e, GET_FLOAT_TRAIT, target);
+            e.call_log = Some(vec![]);
+            assert!(e.call(0x0078_2190, &args![this, 0xfi32, 0u32]).bool());
+            let clicked = calls_to(&e, 0x00c0_000c);
+            if clicks {
+                assert_eq!(clicked, [vec![this.addr(), 0x13, 0]], "row {on} {target}");
+            } else {
+                assert!(clicked.is_empty(), "row {on} {target}");
+            }
+            let read = calls_to(&e, GET_FLOAT_TRAIT);
+            if on {
+                assert_eq!(read, [vec![0x100 + 0x74 - 0x28, 0xfaf]]);
+            } else {
+                assert!(read.is_empty());
+            }
+        }
+    }
+
+    /// Row S0022.34 with the buttons as the item part leaves them (`00781680` on a selected
+    /// item sets the mod button's, +0x74 = tile 0x14C, `target` 0xFAF to 1): button 15 still
+    /// clicks the mod menu (0x13) with the row on. The tiles' traits are kept in a table the
+    /// stand-ins of `SET_TRAIT_FROM_INT` and `GET_FLOAT_TRAIT` share.
+    #[test]
+    fn s0022_34_the_mod_button_set_by_the_item_part_opens_the_menu() {
+        use std::cell::RefCell;
+        use std::collections::HashMap;
+        use std::rc::Rc;
+        let mut e = Engine::new();
+        let this = menu(&mut e);
+        e.set_stewie(stewie::WEAPON_MOD_MENU_NEEDS_TARGET, true);
+        e.set_global(CURRENT_ITEM, 0x7000u32);
+        answer(&mut e, ITEM_OBJECT, 0x7100);
+        answer(&mut e, FORM_TYPE, 0x29);
+        answer(&mut e, ITEM_GET_WORN, 1);
+        answer(&mut e, SETTING_STRING, 0x5100);
+        answer(&mut e, WORD_AT_FOUR, 0x4000);
+        pages(&mut e, &[FULL_HEALTH]);
+        e.mem.set_f64(FULL_HEALTH, 100.0);
+        answer_st0(&mut e, ITEM_GET_HEALTH, 100.0);
+        e.register(HEALTH_ROUND, |_, a| Ret {
+            st0: f64::from(f32::from_bits(a[0])),
+            ..Ret::default()
+        });
+        let traits: Rc<RefCell<HashMap<(u32, u32), f64>>> = Rc::default();
+        let set = traits.clone();
+        e.register_double(SET_TRAIT_FROM_INT, move |_, a| {
+            set.borrow_mut()
+                .insert((a[0], a[1]), f64::from(a[2] as i32));
+            Ret::default()
+        });
+        let read = traits.clone();
+        e.register_double(GET_FLOAT_TRAIT, move |_, a| Ret {
+            st0: read.borrow().get(&(a[0], a[1])).copied().unwrap_or(0.0),
+            ..Ret::default()
+        });
+        stub(&mut e, &[SET_STRING_TRAIT, SET_FLOAT_TRAIT]);
+        e.call(0x0078_1680, &args![this]);
+        assert_eq!(traits.borrow().get(&(0x14c, 0xfaf)), Some(&1.0));
+        answer(&mut e, IS_TOP_MENU_ID, 1);
+        stub(&mut e, &[GET_PIPBOY, 0x00c0_000c]);
+        answer(&mut e, PIPBOY_READY, 1);
+        answer(&mut e, MENU_TEST_00709D40, 0);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0078_2190, &args![this, 0xfi32, 0u32]).bool());
+        assert_eq!(calls_to(&e, 0x00c0_000c), [vec![this.addr(), 0x13, 0]]);
+    }
+
+    /// Row S0070 at the inventory's own call (`0x78149C`, `DoEnter`'s item part): a hotkeyed book
+    /// (form type 0x19) with no equip type asks the icon of `kChems` (10) with the row on and of
+    /// -1 with it off.
+    #[test]
+    fn s0070_the_inventory_asks_the_book_icon() {
+        for (on, wanted) in [(false, u32::MAX), (true, 10u32)] {
+            let mut e = Engine::new();
+            let this = menu(&mut e);
+            pages(
+                &mut e,
+                &[
+                    LAST_ROW,
+                    HEALTH_THRESHOLD,
+                    HEALTH_THRESHOLD_ARMOR,
+                    IMAGE_X,
+                    IMAGE_SIZE,
+                    DROP_LABEL_SETTING_POINTER,
+                    FULL_HEALTH,
+                ],
+            );
+            // The item part's button update (`00781680`) runs too: full health 100.
+            e.mem.set_f64(FULL_HEALTH, 100.0);
+            e.register(HEALTH_ROUND, |_, a| Ret {
+                st0: f64::from(f32::from_bits(a[0])),
+                ..Ret::default()
+            });
+            e.set_stewie(stewie::BOOK_AND_AMMO_HOTKEY_ICONS, on);
+            let form = e.mem.alloc(0x40);
+            e.mem.set_u8(form + 4, 0x19);
+            let setting = e.mem.alloc(4);
+            e.mem.set_u32(setting, 1.0f32.to_bits());
+            answer(&mut e, LIST_SELECTED_ITEM, 0x7000);
+            answer(&mut e, 0x00c1_0004, 0x900);
+            answer(&mut e, ITEM_OBJECT, form);
+            answer(&mut e, FORM_TYPE, 0x19);
+            answer(&mut e, SETTING_FLOAT, setting);
+            answer(&mut e, GET_EQUIP_TYPE, u32::MAX);
+            answer(&mut e, STRLEN, 0);
+            let slot = e.mem.alloc(4);
+            e.mem.set_u32(slot, 0x5200);
+            answer(&mut e, WORD_AT_ZERO_0073AC90, slot);
+            real_ftol(&mut e);
+            stub(
+                &mut e,
+                &[
+                    GET_FLOAT_TRAIT,
+                    INTERFACE_SINGLETON,
+                    PIPBOY_MANAGER,
+                    MOVE_KNOB,
+                    ITEM_GET_HEALTH,
+                    SETTING_STRING,
+                    SET_STRING_TRAIT,
+                    SET_FLOAT_TRAIT,
+                    SET_TRAIT_FROM_INT,
+                    POPULATE_ITEM_STATS,
+                    PLAYER_CAN_USE,
+                    WORD_AT_FOUR,
+                    ITEM_GET_ICON_ONE,
+                    TILE_GET_STRING,
+                    STRING_COMPARE,
+                    TILE_ADD_NEEDS_UPDATE,
+                    STRCPY_S,
+                    STRCAT_S,
+                    GET_EQUIP_TYPE_ICON,
+                    WHEEL_GET_VISIBLE,
+                    0x0078_1680,
+                ],
+            );
+            e.call_log = Some(vec![]);
+            e.call(0x0078_0ff0, &args![this, 0x1di32, 0u32]);
+            assert_eq!(calls_to(&e, GET_EQUIP_TYPE), [vec![form]], "row {on}");
+            assert_eq!(
+                calls_to(&e, GET_EQUIP_TYPE_ICON),
+                [vec![wanted]],
+                "row {on}"
+            );
+        }
+    }
+
+    /// Row S0070 (the inventory's `0x78149C` and the wheel's `0x701861` share it): with no equip
+    /// type (-1) and the row on, a book (type 0x19) is `kChems` (10) and ammunition (0x29)
+    /// `kBigGuns` (0); anything else, a form with an equip type, or the row off: `GetEquipType`'s
+    /// answer, asked once.
+    #[test]
+    fn s0070_equip_type_for_books_and_ammo() {
+        for (on, equip_type, kind, wanted) in [
+            (false, u32::MAX, 0x19u8, u32::MAX),
+            (false, u32::MAX, 0x29, u32::MAX),
+            (true, u32::MAX, 0x19, 10),
+            (true, u32::MAX, 0x29, 0),
+            (true, u32::MAX, 0x1f, u32::MAX),
+            (true, 3, 0x19, 3),
+            (true, 3, 0x29, 3),
+        ] {
+            let mut e = Engine::new();
+            e.set_stewie(stewie::BOOK_AND_AMMO_HOTKEY_ICONS, on);
+            answer(&mut e, GET_EQUIP_TYPE, equip_type);
+            let form = e.mem.alloc(0x10);
+            e.mem.set_u8(form + 4, kind);
+            e.call_log = Some(vec![]);
+            assert_eq!(equip_type_for_hotkey_icon(&mut e, form), wanted);
+            assert_eq!(calls_to(&e, GET_EQUIP_TYPE), [vec![form]]);
+        }
     }
 }
