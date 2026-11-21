@@ -24,6 +24,7 @@ pub mod dispatch;
 pub mod draw;
 pub mod draw_f;
 pub mod geometry;
+pub mod hud;
 pub mod lights;
 pub mod lockfree;
 pub mod multibound;
@@ -115,6 +116,7 @@ pub mod units {
         engine_core::typed::provide(&crate::process::PROCESS);
         engine_core::typed::provide(&crate::lights::LIGHTS);
         engine_core::typed::provide(&crate::scripts::SCRIPTS);
+        engine_core::typed::provide(&crate::hud::HUD);
         crate::render::stream::note_head_check();
     }
 }
@@ -149,6 +151,7 @@ mod tests {
             &crate::process::PROCESS,
             &crate::lights::LIGHTS,
             &crate::scripts::SCRIPTS,
+            &crate::hud::HUD,
         ]
     }
 
@@ -187,7 +190,8 @@ mod tests {
                 "anim_keys",
                 "process",
                 "lights",
-                "scripts"
+                "scripts",
+                "hud"
             ]
         );
         let defaults = parse_switch(None, &families).unwrap();
