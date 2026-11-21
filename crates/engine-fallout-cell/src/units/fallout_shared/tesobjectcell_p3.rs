@@ -9652,6 +9652,36 @@ mod tests {
         );
     }
 
+    /// JohnnyGuitar NVSE's getter seam at the call `0x558796`: an exterior cell whose own name
+    /// (`00401280`) is empty is named in the file when the seam answers its editor id; with no
+    /// handler there, the exe's empty name leaves it out.
+    #[test]
+    fn the_jg_seam_names_an_exterior_cell_in_the_file() {
+        use engine_core::extend::{Owner, SiteSlot};
+        for with_seam in [true, false] {
+            let mut e = engine();
+            let (record, cell, _) = failure_setup(&mut e, false, b"Goodsprings");
+            let empty = e.mem.alloc(4);
+            e.mem.set_u8(empty, 0);
+            e.mem.set_u32(cell + 0x38, empty);
+            if with_seam {
+                e.on_site(SiteSlot::new(Owner::JohnnyGuitar, 0x0055_8796), |e, a| {
+                    Some(e.mem.u32(a[0] + 0x3c))
+                });
+            }
+            start_log(&mut e);
+            e.call(0x0055_86e0, &args![record]);
+            let log = calls(&e);
+            let format = calls_to(&log, FORMAT_TEXT)[0][2];
+            let want = if with_seam {
+                EXTERIOR_NAMED_FILE_FORMAT
+            } else {
+                EXTERIOR_FILE_FORMAT
+            };
+            assert_eq!(format, want, "{with_seam}");
+        }
+    }
+
     #[test]
     fn a_null_failure_record_forgets_the_last_cell() {
         let mut e = engine();

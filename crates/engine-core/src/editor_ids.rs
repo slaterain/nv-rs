@@ -20,7 +20,7 @@
 //! is used and the game's own map works as in the exe.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::RwLock;
 
 /// `JohnnyExtraData::EDIDResult`: a name added, already the form's, or refused (empty).
@@ -152,6 +152,8 @@ pub struct EditorIds {
     named: AtomicU64,
     lookups: AtomicU64,
     conflicts: AtomicU64,
+    /// The load's form total the tables were last sized for ([`EditorIds::reserve_for_load`]).
+    reserved: AtomicU32,
 }
 
 /// What the store holds (the load's log line).
@@ -185,6 +187,24 @@ impl EditorIds {
 
     pub fn set_on(&self, on: bool) {
         self.on.store(on, Ordering::Release);
+    }
+
+    /// nv-rs's own (no behaviour): the form table and the map sized once for `records` forms, so
+    /// they do not grow step by step while the plugins load. Nothing when they were sized for as
+    /// many already (one atomic read). The name bytes still grow as they come.
+    pub fn reserve_for_load(&self, records: u32) {
+        if records <= self.reserved.load(Ordering::Acquire) {
+            return;
+        }
+        let mut s = self.write();
+        if records <= self.reserved.load(Ordering::Acquire) {
+            return;
+        }
+        let forms = (records as usize).saturating_sub(s.forms.len());
+        s.forms.reserve(forms);
+        let entries = (records as usize).saturating_sub(s.map.len());
+        s.map.reserve(entries);
+        self.reserved.store(records, Ordering::Release);
     }
 
     /// `JohnnyExtraData::SetEditorID`: an empty name is refused; the form's first name, or a new
@@ -414,6 +434,10 @@ const FORM_TYPE_NAME: u32 = 0x0044_0e30;
 /// `IgnoredConflicts`: the form JIP's note calls "Obsidian's", and the name `Wilderness`.
 const IGNORED_FORM_ID: u32 = 0x18e;
 const IGNORED_NAME: &[u8] = b"Wilderness";
+/// The load's form total (`0x011C3F24`): the data handler's load of the plugin files (`00463070`)
+/// sums each file's form count into it before it loads them (the "Loading Files %d%%" count; 0
+/// before a load).
+const LOAD_FORM_TOTAL: u32 = 0x011c_3f24;
 
 /// The conflict lines this run logged (`LogEDIDConflict`), all of them, for JohnnyGuitar's log.
 #[derive(Default)]
@@ -441,6 +465,11 @@ pub fn set_form_editor_id(e: &mut crate::Engine, form: u32, text: u32) -> bool {
     let mut name = e.mem.cstr(text);
     if name == b"SysWindowCompileAndRun" {
         name = b"Console Command".to_vec();
+    }
+    // nv-rs's own: the tables sized for the load's form total when it is known.
+    if e.mem.is_mapped(LOAD_FORM_TOTAL) {
+        let records = e.mem.u32(LOAD_FORM_TOTAL);
+        store(e).reserve_for_load(records);
     }
     if store(e).add_name(form, &name) != SetResult::Success {
         return false;

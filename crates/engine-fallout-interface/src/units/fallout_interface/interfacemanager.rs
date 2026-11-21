@@ -10664,6 +10664,24 @@ mod tests {
         assert_eq!(calls(&e, STRING_DESTROY).len(), 1);
     }
 
+    /// JohnnyGuitar NVSE's seam at the call `0x710BFC`: the picked reference's name is the seam's
+    /// answer (its full name or editor id), the reference given; `REFR_NAME` is not asked.
+    #[test]
+    fn the_picked_references_name_comes_from_the_jg_seam() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let (mut e, m) = debug_text_world();
+        e.mem.set_u32(m.addr() + 0x70, 0x9000);
+        returns(&mut e, FORM_ID_GETTER, 0x1234);
+        returns(&mut e, REFR_NAME, 0x5555);
+        e.on_site(SiteSlot::new(Owner::JohnnyGuitar, 0x0071_0bfc), |_, a| {
+            (a == [0x9000]).then_some(0x6666)
+        });
+        interface_manager_display_current_pick_ref(&mut e, m);
+        let format = calls(&e, FORMAT_INTO_STRING);
+        assert_eq!(format[0][1..], [FORMAT_NAME_AND_ID, 0x6666, 0x1234]);
+        assert!(calls(&e, REFR_NAME).is_empty());
+    }
+
     /// A picked reference object (virtual: slot 0x100 is the actor test)
     /// in a world where help is shown.
     fn help_world(actor: u32) -> (Engine, Ptr<InterfaceManager>, u32) {

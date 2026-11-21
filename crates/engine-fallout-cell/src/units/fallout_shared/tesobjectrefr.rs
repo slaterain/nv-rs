@@ -9917,6 +9917,98 @@ mod tests {
         );
     }
 
+    /// JohnnyGuitar NVSE's getter seams at the three calls `0x55DF83`, `0x55E076` and `0x55E0CC`:
+    /// in each of the error text's shapes the reference's name is the seam's answer (no cell, a
+    /// plain cell, a cell in a world).
+    #[test]
+    fn init_items_error_text_names_the_reference_through_the_jg_seams() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let (mut e, refr) = init_engine();
+        let counter_bump = std::rc::Rc::new(std::cell::Cell::new(0u32));
+        let c = counter_bump.clone();
+        e.register_double(0x0046_e8a0, move |_, _| {
+            c.set(c.get() + 1);
+            (if c.get() == 1 { 0u32 } else { 2 }).into_ret()
+        });
+        e.register(0x00ff_0090, |_, _| 0x0d01u32.into_ret());
+        let named_base = object_with_vtable(&mut e, 0x100, &[(0x130, 0x00ff_0090)]);
+        e.mem.set_u8(named_base + 4, 0x28);
+        e.set(
+            refr.at(TESObjectREFR::data),
+            OBJ_REFR::pObjectReference,
+            Ptr::new(named_base),
+        );
+        returns(&mut e, 0x0040_1280, 0x0d02);
+        let seams: [(u32, engine_core::extend::SiteFn); 3] = [
+            (0x0055_df83, |_, a| (a.len() == 1).then_some(0x0e83)),
+            (0x0055_e076, |_, a| (a.len() == 1).then_some(0x0e76)),
+            (0x0055_e0cc, |_, a| (a.len() == 1).then_some(0x0ecc)),
+        ];
+        for (site, f) in seams {
+            e.on_site(SiteSlot::new(Owner::JohnnyGuitar, site), f);
+        }
+        let name_in = |e: &mut Engine| {
+            counter_bump.set(0);
+            e.call_log = Some(vec![]);
+            e.call(0x0055_d760, &args![refr]);
+            let log = e.call_log.take().unwrap();
+            let messages = calls_to(&log, MESSAGE);
+            assert_eq!(messages.len(), 1);
+            (messages[0][0], messages[0][3])
+        };
+        // no cell
+        assert_eq!(name_in(&mut e), (INIT_ITEM_ERROR_NO_CELL, 0x0ecc));
+        // a plain cell
+        let cell = object_with_vtable(&mut e, 0x100, &[(0x130, 0x00ff_0090)]);
+        e.set(refr, TESObjectREFR::pParentCell, Ptr::new(cell));
+        returns(&mut e, 0x0042_5fd0, 1);
+        assert_eq!(name_in(&mut e), (INIT_ITEM_ERROR_CELL, 0x0e83));
+        // a cell in a world
+        returns(&mut e, 0x0042_5fd0, 0);
+        let world = object_with_vtable(&mut e, 0x100, &[(0x130, 0x00ff_0090)]);
+        returns(&mut e, 0x0057_5d70, world);
+        assert_eq!(name_in(&mut e), (INIT_ITEM_ERROR_WORLD, 0x0e76));
+    }
+
+    /// JohnnyGuitar NVSE's getter seam at the call `0x55D683`: the reference's name in its
+    /// detailed string is the seam's answer; with no handler, `00401280`'s.
+    #[test]
+    fn detailed_string_names_the_reference_through_the_jg_seam() {
+        use engine_core::extend::{Owner, SiteSlot};
+        for with_seam in [true, false] {
+            let mut e = engine();
+            stub(
+                &mut e,
+                &[
+                    SPRINTF,
+                    STRING_CONSTRUCT,
+                    STRING_FORMAT,
+                    STRING_DESTRUCT,
+                    0x0057_5d70,
+                    0x0044_0e30,
+                ],
+            );
+            returns(&mut e, 0x0040_1280, 0x0b02);
+            if with_seam {
+                e.on_site(SiteSlot::new(Owner::JohnnyGuitar, 0x0055_d683), |_, a| {
+                    (a.len() == 1).then_some(0x0b0f)
+                });
+            }
+            let refr = standard_refr(&mut e);
+            let out = e.mem.alloc(8);
+            e.call_log = Some(vec![]);
+            e.call(0x0055_d540, &args![refr, out]);
+            let log = e.call_log.take().unwrap();
+            let formats: Vec<_> = calls_to(&log, STRING_FORMAT)
+                .into_iter()
+                .filter(|c| c[0] == out)
+                .collect();
+            assert_eq!(formats.len(), 1);
+            let want = if with_seam { 0x0b0f } else { 0x0b02 };
+            assert_eq!(formats[0][3], want, "{with_seam}");
+        }
+    }
+
     #[test]
     fn init_item_initializes_a_containers_inventory_and_the_script() {
         let (mut e, refr) = init_engine();

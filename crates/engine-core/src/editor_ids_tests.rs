@@ -222,3 +222,39 @@ fn two_threads_name_and_look_up_at_once() {
     }
     assert_eq!(s.counts().entries, 40_000);
 }
+
+/// nv-rs's own: the form table and the map sized once for the load's form total, not again for a
+/// smaller or equal one, and still right after.
+#[test]
+fn the_tables_are_sized_for_the_load() {
+    let s = EditorIds::default();
+    s.add_name(1, b"Early");
+    s.reserve_for_load(10_000);
+    let (forms, map) = {
+        let st = s.read();
+        (st.forms.capacity(), st.map.capacity())
+    };
+    assert!(forms >= 10_000 && map >= 10_000, "{forms} {map}");
+    s.reserve_for_load(10_000);
+    s.reserve_for_load(5);
+    assert_eq!(s.read().forms.capacity(), forms);
+    assert_eq!(s.name(1).as_deref(), Some(&b"Early"[..]));
+}
+
+/// The setter sizes the tables from the load's form total (`0x011C3F24`) when it names a form.
+#[test]
+fn naming_a_form_sizes_the_tables_for_the_load() {
+    let mut e = crate::Engine::new();
+    if !e.mem.is_mapped(LOAD_FORM_TOTAL) {
+        e.map(LOAD_FORM_TOTAL & !0xfff, 0x1000);
+    }
+    e.mem.set_u32(LOAD_FORM_TOTAL, 50_000);
+    let form = e.mem.alloc(0x40);
+    e.mem.set_u32(form + FORM_ID, 0x0100_0001);
+    let text = e.mem.alloc(16);
+    e.mem.write(text, b"DocMitchell\0");
+    assert!(set_form_editor_id(&mut e, form, text));
+    let st = store(&mut e).read();
+    assert!(st.forms.capacity() >= 50_000, "{}", st.forms.capacity());
+    assert!(st.map.capacity() >= 50_000, "{}", st.map.capacity());
+}
