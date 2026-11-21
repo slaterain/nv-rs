@@ -137,6 +137,11 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
     ("S0193", "bNavMeshTeleportDoorFix", Row::at(WORLD_FIXES, 4)),
     ("S0203", "bPreventHackingWhenDead", Row::at(WORLD_FIXES, 37)),
     ("S0216", "bStairMaterialFix", Row::at(WORLD_FIXES, 8)),
+    (
+        "S0222",
+        "bGetOffersServicesNowFix",
+        Row::at(WORLD_FIXES, 38),
+    ),
     ("S0226", "bNudeCorpsesFix", Row::at(WORLD_FIXES, 36)),
     ("S0235", "bNavMeshInfoResolveFix", Row::at(WORLD_FIXES, 2)),
     ("S0237", "bSwitchNodeBoundsFix", Row::at(WORLD_FIXES, 6)),

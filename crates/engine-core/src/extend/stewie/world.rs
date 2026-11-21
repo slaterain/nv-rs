@@ -196,6 +196,10 @@ pub const NUDE_CORPSES: Row = fix(36);
 /// S0203 `PreventHackingWhenDead` (`OnHackActivateOpenMenuHook` at `0x501625` in
 /// `BGSTerminal::HandleOpenFinish` `005015f0`): a dying player opens no terminal menu.
 pub const NO_HACKING_WHEN_DEAD: Row = fix(37);
+/// S0222 `GetOffersServicesNowFix` (`GetOffersServicesNow` at `0x5A2B2E` in
+/// `GetOffersServiceConditionFunction` `005a2af0`): the condition on an actor with no AI process
+/// answers 0, where the exe reads through the missing process.
+pub const OFFERS_SERVICES_NO_PROCESS: Row = fix(38);
 
 /// `OSInputGlobals *` (xNVSE's `0x11F35CC`).
 pub const INPUT_GLOBALS: u32 = 0x011f_35cc;

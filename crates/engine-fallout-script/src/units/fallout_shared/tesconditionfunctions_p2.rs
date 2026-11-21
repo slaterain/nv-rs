@@ -257,7 +257,13 @@ pub fn script_get_offers_service_condition_function(
 ) -> bool {
     set_result(e, result, 0.0);
     let actor = actor_of(e, reference);
-    if !actor.is_null() && e.call(ACTOR_OFFERS_SERVICES, &args![actor]).bool() {
+    // lStewieAl's Tweaks' S0222 (`GetOffersServicesNow` called at `0x5A2B2E`): an actor without
+    // an AI process (`+0x68`) answers no instead of being asked.
+    let asked = |e: &mut Engine| {
+        !e.stewie(engine_core::extend::stewie::OFFERS_SERVICES_NO_PROCESS)
+            || e.mem.u32(actor.addr().wrapping_add(0x68)) != 0
+    };
+    if !actor.is_null() && asked(e) && e.call(ACTOR_OFFERS_SERVICES, &args![actor]).bool() {
         set_result(e, result, 1.0);
     }
     // "%s is not offering services" / "%s  is offering services"
@@ -3282,6 +3288,23 @@ mod tests {
         let plain = non_actor(&mut e);
         let lines = printed(&mut e, 0.0, 0x005a_2af0, plain, 0, 0);
         assert_eq!(lines, vec![(DEBUG_PRINT, vec![0x0103_5c10, 0x100])]);
+    }
+
+    /// lStewieAl's Tweaks' S0222: an actor without a process (`+0x68` 0) answers 0 without
+    /// `008ac680` being asked; with a process it is asked; off, it is asked either way.
+    #[test]
+    fn s0222_an_actor_without_a_process_offers_no_services() {
+        let mut e = engine();
+        let a = actor(&mut e);
+        stub(&mut e, ACTOR_OFFERS_SERVICES, 1);
+        assert_eq!(run(&mut e, 0x005a_2af0, a, 0, 0), (true, 1.0));
+        e.set_stewie(
+            engine_core::extend::stewie::OFFERS_SERVICES_NO_PROCESS,
+            true,
+        );
+        assert_eq!(run(&mut e, 0x005a_2af0, a, 0, 0), (true, 0.0));
+        e.mem.set_u32(a + 0x68, 0x4400);
+        assert_eq!(run(&mut e, 0x005a_2af0, a, 0, 0), (true, 1.0));
     }
 
     #[test]
