@@ -1408,6 +1408,74 @@ fn node_on_visible() {
     .assert_same();
 }
 
+/// The read-ahead before the children are walked reads only what is mapped: an app-culled child (its walk
+/// reads its flags and stops) whose bound, vtable or both point at unmapped memory, in the slot that is
+/// empty in the scene, changes nothing and stops nothing; nor does a node with no slot in use whose
+/// children's storage is unmapped. The node in each of its two walks, with the read-ahead on and off.
+#[test]
+fn children_read_ahead_skips_dangling_words() {
+    const UNMAPPED: u32 = 0xffff_0040;
+    let setup = |e: &mut Engine, case: &Case| {
+        let s = scene(e);
+        assert!(
+            !e.mem.is_mapped(UNMAPPED),
+            "the dangling words point at unmapped memory"
+        );
+        let (bound, vt) = match case.word(0) {
+            0 => (bound_of(e, 0, 0, 0, ONE), s.node_vt),
+            1 => (UNMAPPED, s.node_vt),
+            2 => (bound_of(e, 0, 0, 0, ONE), UNMAPPED),
+            _ => (UNMAPPED, UNMAPPED),
+        };
+        let culled = object(e, 0xac, vt, bound, culling::FLAG_APP_CULLED);
+        let slots = e.mem.u32(s.node + 0xa0);
+        e.mem.set_u32(slots + 8, culled);
+        if case.word(0) == 4 {
+            // No slot in use, and the children's storage at unmapped memory: the walk reads neither.
+            e.mem.set_u16(s.node + 0xa6, 0);
+            e.mem.set_u32(s.node + 0xa0, UNMAPPED);
+        }
+        (s, culled)
+    };
+    // With the read-ahead and without it (the same comparison with the translation both times).
+    for on in [true, false] {
+        culling::read_ahead_set_for_tests(on);
+        Diff::new(entry!(
+            0x00a5_dbe0,
+            visible::node_on_visible(Ptr<_>, Ptr<_>)
+        ))
+        .common()
+        .inputs(&[Input::Of(&[0, 1, 2, 3, 4])])
+        .setup(move |e, case| {
+            let (s, _) = setup(e, case);
+            vec![s.node, s.process]
+        })
+        .run()
+        .assert_same();
+        // The same node as a multi-bound node's base (no multi-bound: its children walked in mode 0).
+        Diff::new(entry!(
+            0x00c4_6f60,
+            visible::multibound_node_on_visible(Ptr<_>, Ptr<_>)
+        ))
+        .common()
+        .inputs(&[Input::Of(&[0, 1, 2, 3, 4])])
+        .setup(move |e, case| {
+            let (s, _) = setup(e, case);
+            let node = e.mem.alloc(0xb4);
+            let bytes = e.mem.bytes(s.node, 0xac).to_vec();
+            for (i, b) in bytes.iter().enumerate() {
+                e.mem.set_u8(node + i as u32, *b);
+            }
+            e.mem.set_u32(node + 0xac, 0);
+            e.mem.set_u32(node + 0xb0, 0);
+            vec![node, s.process]
+        })
+        .run()
+        .assert_same();
+    }
+    culling::read_ahead_set_for_tests(true);
+}
+
 #[test]
 fn geometry_on_visible() {
     Diff::new(entry!(

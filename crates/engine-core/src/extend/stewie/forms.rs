@@ -48,6 +48,28 @@ pub const LOCK_COMMAND: Row = fix(3);
 /// once (a use after free, the game's crash).
 pub const OCCLUSION_PLANE_KEPT: Row = fix(4);
 
+// ---- The perk menu's requirement line (group 2): `PerkMenuDescriptionTypoFix`'s text fixes in
+// `BGSPerk::BuildDescriptionString` (`005ebac0`; its crash fix is S0093.07) ----
+
+/// S0093.01 (`0x5EBF8D`, `JNZ` made `JMP`): a perk with nothing listed gets no "--".
+pub const PERK_TEXT_NO_DASHES: Row = fix(5);
+/// S0093.02 (`0x5EBF3E`, `JNZ` made `JMP`): a condition that is neither an actor value nor a perk
+/// adds no ", " before the first requirement.
+pub const PERK_TEXT_NO_EMPTY_COMMA: Row = fix(6);
+/// S0093.03 (`0x5EBC80`/`0x5EBC8C`, `0x5EBF5E`/`0x5EBF6A`): the loop's index steps by one a
+/// condition, not two, so "the next condition" is the next one.
+pub const PERK_TEXT_INDEX_BY_ONE: Row = fix(7);
+/// S0093.04 (`0x5EBE35`, the jump's target made `0x5EBF55`): a condition that is neither an actor
+/// value nor a perk is skipped (it no longer counts as listed).
+pub const PERK_TEXT_SKIP_OTHER: Row = fix(8);
+/// S0093.05 (`0x5EBCFB`, `0x5EBD6E`; `0x5EBCCE`, `0x5EBE61`, `0x5EBF4D`; `0x5EBFB1`): "OR" and ", "
+/// only when a shown requirement follows, no ", " twice, and no ", " left before the level line.
+pub const PERK_TEXT_COMMAS: Row = fix(9);
+/// S0093.06 (`0x5EBD3E`; `0x5EBEC1`, `0x5EBEF4`, `0x5EBB27`; `0x5EBED1`, `0x5EBF04`): no double
+/// space before an "OR", a ", " after each perk and after the ranks, and a perk requirement shows
+/// "NOT" when the perk must be missing and "OR" when it is one of a choice.
+pub const PERK_TEXT_PERK_NOT_OR: Row = fix(10);
+
 /// S0099 `patchNoNeededCountForAddRemoveItemCommands` (the parameter table `0x118D3F0`'s optional
 /// word; `005b4be0` `0x5B4C0F`, `005b4e90` `0x5B4EC6`): `AddItem` and `RemoveItem` compile without
 /// a count and then add or remove one.

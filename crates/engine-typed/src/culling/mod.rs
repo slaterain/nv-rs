@@ -37,6 +37,8 @@ pub mod layout;
 mod par;
 #[doc(hidden)]
 pub use par::{counts_for_tests as par_counts_for_tests, set_for_tests as par_set_for_tests};
+#[doc(hidden)]
+pub use visible::set_read_ahead_for_tests as read_ahead_set_for_tests;
 pub mod planes;
 mod probe;
 pub mod process;
