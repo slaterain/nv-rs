@@ -12,6 +12,8 @@ const PLAYER: u32 = 0x011d_ea3c;
 const ROTATION: u32 = 0x24;
 const POSITION: u32 = 0x30;
 const PARENT_CELL: u32 = 0x40;
+/// `TESFullName`'s string in a form (the component at `+0x18`, its `BSString` at `+0x1c`: the text, then its length).
+const FULL_NAME: u32 = 0x1c;
 /// A form's id; `GetEditorID` (virtual at +0x130, a C string).
 const FORM_ID: u32 = 0x0c;
 const GET_EDITOR_ID: u32 = 0x130;
@@ -146,6 +148,48 @@ fn form(e: &mut Engine, form: u32) -> Option<Named> {
         editor_id: guest_text(e, name),
         form_id: e.mem.u32(form.wrapping_add(FORM_ID)),
     })
+}
+
+/// A form's full name as `TESFullName` keeps it (its string at the form's `+0x1c`, the length at `+0x20`), read
+/// from guest memory only (no guest code runs); empty without one.
+fn full_name(e: &Engine, form: u32) -> String {
+    if form == 0 {
+        return String::new();
+    }
+    let at = e.mem.u32(form + FULL_NAME);
+    let len = u32::from(e.mem.u16(form + FULL_NAME + 4)).min(256);
+    if at == 0 || len == 0 {
+        return String::new();
+    }
+    let bytes: Vec<u8> = (0..len).map(|i| e.mem.u8(at.wrapping_add(i))).collect();
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// Where the player stands as the hitch log names it (`crate::hitch_log`), from guest memory only (no guest code
+/// runs, so a recorded run is the same with the log on or off): `interior Doc Mitchell's House (0x...)`, or outside
+/// `Mojave Wasteland (0x...) grid (x, y)`; a form without a full name by its id alone; `no cell` for a null pointer.
+pub fn cell_place(e: &Engine, cell: u32, position: [f32; 3]) -> String {
+    if cell == 0 {
+        return "no cell".into();
+    }
+    let name = |e: &Engine, form: u32| {
+        let id = e.mem.u32(form + FORM_ID);
+        match full_name(e, form) {
+            n if n.is_empty() => format!("{id:#010x}"),
+            n => format!("{n} ({id:#010x})"),
+        }
+    };
+    if e.mem.u8(cell + CELL_FLAGS) & 1 != 0 {
+        return format!("interior {}", name(e, cell));
+    }
+    let world = e.mem.u32(cell + CELL_WORLD_SPACE);
+    let (gx, gy) = grid(position);
+    let world = if world == 0 {
+        "no worldspace".to_string()
+    } else {
+        name(e, world)
+    };
+    format!("{world} grid ({gx}, {gy})")
 }
 
 /// The place read from the game (none before there is a player).
@@ -380,6 +424,38 @@ mod tests {
             place.contains("position: -39000 18200 5800\n") && place.contains("game hour: 17.50\n"),
             "{place}"
         );
+    }
+
+    /// The hitch log's cell name: an exterior by its worldspace, an interior by its own editor id.
+    #[test]
+    fn the_hitch_log_names_the_place_from_memory_alone() {
+        let mut e = guest();
+        let cell = player_outside(&mut e);
+        // No full names: the ids, and the grid outside.
+        assert_eq!(
+            cell_place(&e, cell, [-39000.0, 18200.0, 0.0]),
+            "0x000da726 grid (-10, 4)"
+        );
+        let world = e.mem.u32(cell + 0xc0);
+        let text = e.mem.alloc(0x20);
+        e.mem.write(text, b"Mojave Wasteland");
+        e.mem.set_u32(world + 0x1c, text);
+        e.mem.set_u16(world + 0x20, 16);
+        assert_eq!(
+            cell_place(&e, cell, [-39000.0, 18200.0, 0.0]),
+            "Mojave Wasteland (0x000da726) grid (-10, 4)"
+        );
+        let room = new_form(&mut e, 0x0010_4c1c, "GSDocMitchellHouse");
+        e.mem.set_u8(room + 0x24, 1);
+        let text = e.mem.alloc(0x20);
+        e.mem.write(text, b"Doc Mitchell's House");
+        e.mem.set_u32(room + 0x1c, text);
+        e.mem.set_u16(room + 0x20, 20);
+        assert_eq!(
+            cell_place(&e, room, [0.0; 3]),
+            "interior Doc Mitchell's House (0x00104c1c)"
+        );
+        assert_eq!(cell_place(&e, 0, [0.0; 3]), "no cell");
     }
 
     #[test]
