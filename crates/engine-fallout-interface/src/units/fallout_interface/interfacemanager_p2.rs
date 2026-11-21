@@ -546,12 +546,44 @@ pub fn interface_manager_check_menu_button(e: &mut Engine, button: i32, analog: 
     if old_pushed || new_pushed {
         // The code returns 0 for both, 2 for only the second, 1 for only
         // the first.
-        return button_state(new_pushed, old_pushed);
+        // `0x717C6B` and `0x717C85`: lStewieAl's Tweaks' S0022.47 (below).
+        return stewie_menu_button_debounce(e, button, button_state(new_pushed, old_pushed));
     }
 
     let down_now = u32::from(e.mem.u16(PAD_BUTTONS_NEW)) & mask != 0;
     let down_before = u32::from(e.mem.u16(PAD_BUTTONS_OLD)) & mask != 0;
-    button_state(down_now, down_before)
+    // `0x717CB0` and `0x717CC8`: lStewieAl's Tweaks' S0022.47 (below).
+    stewie_menu_button_debounce(e, button, button_state(down_now, down_before))
+}
+
+/// lStewieAl's Tweaks' S0022.47 (`MenuFixes::OnControllerInputPressed` at `0x717C6B` and `0x717CB0`,
+/// `OnControllerInputDePressed` at `0x717C85` and `0x717CC8`, in place of `MOV EAX,2` and
+/// `MOV EAX,1`): for the pad's B button (10), a press clears the input globals' (`[011f35cc]`)
+/// menu mode debounce bit (bit 3 of the word at +0x1B92), and a release while that bit is set
+/// answers -1 (not held), so B closing the console does not also close the menu under it.
+/// Other states and buttons, or the row off: `state` as it is.
+fn stewie_menu_button_debounce(e: &mut Engine, button: i32, state: i32) -> i32 {
+    const BUTTON_B: i32 = 0xa;
+    if button != BUTTON_B
+        || !(state == 1 || state == 2)
+        || !e.stewie(engine_core::extend::stewie::PAD_B_MENU_DEBOUNCE)
+    {
+        return state;
+    }
+    let input = e.mem.u32(0x011f_35cc);
+    if input == 0 {
+        // No input globals: Tweaks would read through a null pointer (our guard).
+        return state;
+    }
+    let flags = e.mem.u32(input + 0x1b92);
+    if state == 2 {
+        e.mem.set_u32(input + 0x1b92, flags & 0xffff_fff7);
+        2
+    } else if flags & 8 != 0 {
+        -1
+    } else {
+        1
+    }
 }
 
 // Translated from 00717de0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2649,6 +2681,42 @@ mod tests {
             ret(u32::from(calls == 1))
         });
         assert_eq!(e.call(0x0071_7a40, &args![1u32, 0u32]).i32(), -1);
+    }
+
+    /// Row S0022.47 (lStewieAl's Tweaks, `0x717CB0`, `0x717CC8`): for B (10) a press clears the
+    /// input globals' (`[011f35cc]`) debounce bit 3 at +0x1B92 and still answers 2; a release
+    /// answers -1 while that bit is set, 1 once it is clear. Other buttons, the held states, or
+    /// the row off: the exe's answers, the word untouched.
+    #[test]
+    fn s0022_47_the_pad_b_button_is_debounced() {
+        // (row, button, new, old, word before, answer, word after)
+        for (on, button, new, old, before, answer, after) in [
+            (true, 10u32, 0x2000u16, 0u16, 0x0fu32, 2i32, 0x07u32),
+            (true, 10, 0, 0x2000, 0x08, -1, 0x08),
+            (true, 10, 0, 0x2000, 0x07, 1, 0x07),
+            (true, 10, 0x2000, 0x2000, 0x08, 0, 0x08),
+            (false, 10, 0x2000, 0, 0x0f, 2, 0x0f),
+            (false, 10, 0, 0x2000, 0x08, 1, 0x08),
+            (true, 9, 0, 0x1000, 0x08, 1, 0x08),
+            (true, 9, 0x1000, 0, 0x0f, 2, 0x0f),
+        ] {
+            let mut e = button_engine(false);
+            if !e.mem.is_mapped(0x011f_35cc) {
+                e.map(0x011f_3000, 0x1000);
+            }
+            let input = e.mem.alloc(0x2000);
+            e.mem.set_u32(0x011f_35cc, input);
+            e.mem.set_u32(input + 0x1b92, before);
+            e.mem.set_u16(PAD_BUTTONS_NEW, new);
+            e.mem.set_u16(PAD_BUTTONS_OLD, old);
+            e.set_stewie(engine_core::extend::stewie::PAD_B_MENU_DEBOUNCE, on);
+            assert_eq!(
+                e.call(0x0071_7a40, &args![button, 0u32]).i32(),
+                answer,
+                "row {on} button {button} new {new:x} old {old:x}"
+            );
+            assert_eq!(e.mem.u32(input + 0x1b92), after);
+        }
     }
 
     #[test]

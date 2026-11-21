@@ -33,6 +33,7 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
     ("S0022.41", "bMenuFixesCompanionMarkersReset", bit(7)),
     ("S0022.42", "bMenuFixesHealthBarNotTiedToPrompt", bit(34)),
     ("S0022.46", "bMenuFixesCaravanPadConsole", bit(8)),
+    ("S0022.47", "bMenuFixesPadBDebounce", bit(51)),
     ("S0022.52", "bMenuFixesRepairBrokenItemType", bit(14)),
     ("S0022.55", "bMenuFixesVatsHealthOneTick", bit(42)),
     (

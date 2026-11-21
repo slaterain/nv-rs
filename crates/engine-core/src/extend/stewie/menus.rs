@@ -186,3 +186,7 @@ pub const PIPBOY_LIGHT_DETACHED: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 
 /// S0095 `fixConsoleMainMenuVisibility` (`DebugText::CreateDebugText` `00a0fe20` at `0xA10311`):
 /// the console's text nodes sit at depth -200, in front of the main menu.
 pub const CONSOLE_IN_FRONT_OF_MAIN_MENU: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 50);
+/// S0022.47 `MenuFixes` (`InterfaceManager::CheckMenuButton` `00717a40` at `0x717C6B`, `0x717C85`,
+/// `0x717CB0`, `0x717CC8`): the pad's B button honours the input's menu mode debounce, so B
+/// closing the console does not also close the menu under it.
+pub const PAD_B_MENU_DEBOUNCE: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 51);

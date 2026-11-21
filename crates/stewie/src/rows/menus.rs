@@ -199,6 +199,14 @@ pub const ROWS: &[Row] = &[
         summary: "the pad does not move the caravan selection while the console is open",
     },
     Row {
+        bit: stewie::PAD_B_MENU_DEBOUNCE,
+        function: "MenuFixes",
+        plan: "S0022.47",
+        key: "bMenuFixesPadBDebounce",
+        tweaks: None,
+        summary: "the pad's B button closing the console no longer also closes the menu under it",
+    },
+    Row {
         bit: stewie::REPAIR_MENU_BROKEN_ITEM_TYPE,
         function: "MenuFixes",
         plan: "S0022.52",
