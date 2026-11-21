@@ -9,7 +9,8 @@
 //! first draw that differs, with its Present. Exit status 1 when they differ.
 //! Across two builds (a change that has no switch): `NV_DIGESTS_SAVE=FILE` writes the digests to
 //! FILE, and `NV_DIGESTS_REF=FILE` compares both replays' digests with FILE's (one build's saved
-//! list against another's), each line printed as above.
+//! list against another's), each line printed as above. The saved list is read before anything is
+//! written, and one file named for both is refused.
 //! `NV_DIGESTS_STORAGE=1` adds a third replay, records on and the registers read from storage
 //! (`Device::set_storage_regs`), compared with the first.
 //! `NV_DIGESTS_MERGE=1` (or `sort`, or `pass`: also across blended draws) adds a replay with the
@@ -54,6 +55,24 @@ fn main() {
     let bytes = std::fs::read(&a[0]).expect("read the command file");
     let from: u64 = a.get(1).map_or(0, |s| s.parse().expect("FROM"));
     let to: u64 = a.get(2).map_or(u64::MAX, |s| s.parse().expect("TO"));
+    let save = std::env::var_os("NV_DIGESTS_SAVE");
+    let reference = std::env::var_os("NV_DIGESTS_REF");
+    // The saved list is read before anything is written: one file named for both would compare
+    // this build with itself and always say alike, so that is refused.
+    if save.is_some() && save == reference {
+        eprintln!("NV_DIGESTS_SAVE and NV_DIGESTS_REF name the same file: give two");
+        std::process::exit(2);
+    }
+    let saved: Option<Vec<(u64, u64)>> = reference.map(|path| {
+        std::fs::read(path)
+            .expect("read the saved digests")
+            .chunks_exact(16)
+            .map(|c| {
+                let w = |k: usize| u64::from_le_bytes(c[k..k + 8].try_into().expect("8 bytes"));
+                (w(0), w(8))
+            })
+            .collect()
+    });
     let off = replay(&bytes, false, false, from, to);
     let on = replay(&bytes, true, false, from, to);
     let presents = off.last().map_or(0, |&(_, p)| p + 1);
@@ -94,25 +113,17 @@ fn main() {
         );
         println!("merged (sort {sort}, across blended draws {across}): {moved} draws given at another place");
     }
-    if let Some(path) = std::env::var_os("NV_DIGESTS_SAVE") {
+    if let Some(saved) = saved {
+        ok &= compare("saved and records off", &saved, &off);
+        ok &= compare("saved and records on", &saved, &on);
+    }
+    if let Some(path) = save {
         let out: Vec<u8> = off
             .iter()
             .flat_map(|&(d, p)| d.to_le_bytes().into_iter().chain(p.to_le_bytes()))
             .collect();
         std::fs::write(&path, out).expect("write the digests");
         println!("saved {} digests", off.len());
-    }
-    if let Some(path) = std::env::var_os("NV_DIGESTS_REF") {
-        let saved: Vec<(u64, u64)> = std::fs::read(&path)
-            .expect("read the saved digests")
-            .chunks_exact(16)
-            .map(|c| {
-                let w = |k: usize| u64::from_le_bytes(c[k..k + 8].try_into().expect("8 bytes"));
-                (w(0), w(8))
-            })
-            .collect();
-        ok &= compare("saved and records off", &saved, &off);
-        ok &= compare("saved and records on", &saved, &on);
     }
     if !ok {
         std::process::exit(1);

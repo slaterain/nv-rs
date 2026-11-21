@@ -71,6 +71,39 @@ fn other_messages_make_no_marker() {
     assert_eq!(marker(&mut e), 0);
 }
 
+/// JIP's next line after the marker: the process lists' time refresh (00970d50) on the process
+/// lists (`ProcessManager::Get()`, 011E0E80), once per deferred start, after the marker.
+#[test]
+fn deferred_init_refreshes_the_process_lists_time_after_the_marker() {
+    use crate::cosave::{PROCESS_LISTS, PROCESS_LISTS_REFRESH_TIME};
+    let mut e = ts::engine();
+    stand_ins(&mut e);
+    e.register(PROCESS_LISTS_REFRESH_TIME, |_, w| {
+        record(PROCESS_LISTS_REFRESH_TIME, w);
+        Ret::default()
+    });
+    dispatch(&mut e, msg::DEFERRED_INIT, 0, 0);
+    assert_eq!(PROCESS_LISTS, 0x011e_0e80);
+    assert_eq!(PROCESS_LISTS_REFRESH_TIME, 0x0097_0d50);
+    assert_eq!(calls_to(PROCESS_LISTS_REFRESH_TIME), [vec![PROCESS_LISTS]]);
+    let order: Vec<u32> = calls().iter().map(|c| c.0).collect();
+    assert_eq!(
+        order,
+        [
+            0x00aa_3e40,
+            REFR_CONSTRUCTOR,
+            SET_TEMPORARY,
+            PROCESS_LISTS_REFRESH_TIME
+        ]
+    );
+    // Other messages do not ask for it.
+    CALLS.with(|c| c.borrow_mut().clear());
+    for kind in [msg::MAIN_GAME_LOOP, msg::DEFERRED_INIT + 1, 0xffff] {
+        dispatch(&mut e, kind, 0, 0);
+    }
+    assert!(calls_to(PROCESS_LISTS_REFRESH_TIME).is_empty());
+}
+
 /// JIP answering "not installed" (players' state until step 3.10) touches nothing.
 #[test]
 fn not_installed_makes_no_marker() {
@@ -79,6 +112,10 @@ fn not_installed_makes_no_marker() {
     CALLS.with(|c| c.borrow_mut().clear());
     e.register(0x00aa_3e40, |_, w| {
         record(0x00aa_3e40, w);
+        Ret::default()
+    });
+    e.register(crate::cosave::PROCESS_LISTS_REFRESH_TIME, |_, w| {
+        record(crate::cosave::PROCESS_LISTS_REFRESH_TIME, w);
         Ret::default()
     });
     stand_ins(&mut e);

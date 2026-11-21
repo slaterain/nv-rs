@@ -41,6 +41,27 @@ pub struct StateDigest {
     destroyed: u64,
     digests: Arc<Mutex<Vec<u64>>>,
     encoded: Vec<u8>,
+    /// For [`StateDigest::stopping_at`]: the draw to describe, the draws and presents so far, the draws since the last
+    /// present, the commands since the last draw that set no state (short forms), and the description once made.
+    stop_at: Option<usize>,
+    draws: usize,
+    presents: u64,
+    in_frame: u64,
+    recent: std::collections::VecDeque<String>,
+    snapshot: Option<DrawSnapshot>,
+}
+
+/// One draw's device state as [`StateDigest`] hashes it, in the open ([`crate::wire::draw_snapshot`]): which present it
+/// comes after and its place among the draws since, every state by name with its bytes, the hash of the other commands
+/// so far with the last of them, and the draw command.
+#[derive(Clone, Debug, Default)]
+pub struct DrawSnapshot {
+    pub presents: u64,
+    pub in_frame: u64,
+    pub state: Vec<(String, Vec<u8>)>,
+    pub events: u64,
+    pub recent: Vec<String>,
+    pub draw: String,
 }
 
 impl StateDigest {
@@ -54,9 +75,27 @@ impl StateDigest {
                 destroyed: 0,
                 digests: Arc::clone(&digests),
                 encoded: Vec::new(),
+                stop_at: None,
+                draws: 0,
+                presents: 0,
+                in_frame: 0,
+                recent: std::collections::VecDeque::new(),
+                snapshot: None,
             },
             digests,
         )
+    }
+
+    /// As [`StateDigest::new`], and draw `n` (counted from 0) described in the open ([`StateDigest::snapshot`]).
+    pub fn stopping_at(n: usize) -> (StateDigest, Arc<Mutex<Vec<u64>>>) {
+        let (mut d, list) = StateDigest::new();
+        d.stop_at = Some(n);
+        (d, list)
+    }
+
+    /// The description of the draw [`StateDigest::stopping_at`] named, once it has come.
+    pub fn snapshot(&self) -> Option<&DrawSnapshot> {
+        self.snapshot.as_ref()
     }
 
     fn set(&mut self, key: Key) {
@@ -82,6 +121,22 @@ impl StateDigest {
         }
         h = wire::hash(h, &self.encoded);
         self.push(h);
+        if self.stop_at == Some(self.draws) {
+            self.snapshot = Some(DrawSnapshot {
+                presents: self.presents,
+                in_frame: self.in_frame,
+                state: self
+                    .state
+                    .iter()
+                    .map(|(k, v)| (format!("{k:?}"), v.clone()))
+                    .collect(),
+                events: self.events,
+                recent: self.recent.iter().cloned().collect(),
+                draw: String::new(),
+            });
+        }
+        self.draws += 1;
+        self.in_frame += 1;
     }
 }
 
@@ -159,11 +214,37 @@ impl Backend for StateDigest {
             }
             Cmd::DrawPrimitive { .. }
             | Cmd::DrawIndexedPrimitive { .. }
-            | Cmd::DrawPrimitiveUp { .. } => self.draw(),
-            _ => self.event(),
+            | Cmd::DrawPrimitiveUp { .. } => {
+                let at = self.draws;
+                self.draw();
+                if self.stop_at == Some(at) {
+                    if let Some(s) = self.snapshot.as_mut() {
+                        s.draw = short(&format!("{cmd:?}"));
+                    }
+                }
+                self.recent.clear();
+            }
+            _ => {
+                self.event();
+                if self.stop_at.is_some() {
+                    if name == "Present" {
+                        self.presents += 1;
+                        self.in_frame = 0;
+                    }
+                    self.recent.push_back(short(&format!("{cmd:?}")));
+                    if self.recent.len() > 12 {
+                        self.recent.pop_front();
+                    }
+                }
+            }
         }
         reply
     }
+}
+
+/// A command's debug form cut to 160 characters (uploads carry their bytes).
+fn short(s: &str) -> String {
+    s.chars().take(160).collect()
 }
 
 impl Drop for StateDigest {
