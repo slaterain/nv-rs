@@ -5343,6 +5343,25 @@ fn compass_set_texture(e: &mut Engine, tile: u32, texture: u32) {
     e.call(0x00a0_1350, &args![tile, 0xfcc_u32, texture, 1_u32]);
 }
 
+/// `HUDMainMenu::GetCompassAngle` (`00778b80`) called by address, as the exe calls it (so the typed
+/// HUD family's version is the one reached).
+#[allow(clippy::too_many_arguments)]
+fn compass_angle_by_address(
+    e: &mut Engine,
+    first_x: f32,
+    first_y: f32,
+    first_z: f32,
+    second_x: f32,
+    second_y: f32,
+    second_z: f32,
+) -> f64 {
+    e.call(
+        0x0077_8b80,
+        &args![first_x, first_y, first_z, second_x, second_y, second_z],
+    )
+    .f64()
+}
+
 // Translated from 00779070 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `HUDMainMenu::UpdateCompass` (Xbox PDB): initializes compass tile traits,
 /// updates its heading offset and landmark, objective, player, and VATS markers.
@@ -5396,7 +5415,7 @@ pub fn hud_main_menu_update_compass(
             compass_offset
         };
         let target = e.vcall(compass.addr(), 0x20, &args![]).u32();
-        fn_0077a450(e, Ptr::new(target), adjusted, 0.0);
+        e.call(0x0077_a450, &args![target, adjusted, 0.0_f32]);
     }
     let player = current_player(e);
     let marker = e.call(0x0094_8030, &args![player]).u32();
@@ -5497,15 +5516,17 @@ pub fn hud_main_menu_update_compass(
                     None => e.call(0x0043_8eb0, &args![map_data]).u32(),
                 };
                 let title = e.call(0x0040_3df0, &args![0x011d_2208_u32]).u32();
-                fn_0076b960(
-                    e,
-                    Ptr::new(title),
-                    Ptr::new(location),
-                    1,
-                    0,
-                    -1,
-                    -1,
-                    Ptr::new(0x0106_f370),
+                e.call(
+                    0x0076_b960,
+                    &args![
+                        title,
+                        location,
+                        1_i32,
+                        0_u32,
+                        -1_i32,
+                        -1_i32,
+                        0x0106_f370_u32
+                    ],
                 );
                 let notified_reference = e.mem.u32(record + 4);
                 e.call(
@@ -5542,7 +5563,7 @@ pub fn hud_main_menu_update_compass(
                     e.mem.set_u32(state.addr(), reference);
                     e.mem.set_u8(state.addr() + 4, 0);
                     e.mem.set_u8(state.addr() + 5, location_changed);
-                    fn_00772aa0(e, Ptr::new(reference), state);
+                    e.call(0x0077_2aa0, &args![reference, state]);
                 });
             }
         }
@@ -5555,7 +5576,7 @@ pub fn hud_main_menu_update_compass(
         if tile == 0 {
             continue;
         }
-        let angle = hud_main_menu_get_compass_angle(
+        let angle = compass_angle_by_address(
             e,
             marker_position[0],
             marker_position[1],
@@ -5598,7 +5619,7 @@ pub fn hud_main_menu_update_compass(
             );
         } else if f64::from(distance) < e.global::<f64>(0x0102_f078) {
             let blink_alpha = e.mem.f32(0x011d_979c);
-            blink_tile(e, Ptr::new(tile), distance, blink_alpha);
+            e.call(0x0077_8c20, &args![tile, distance, blink_alpha]);
         } else {
             hud_set_float(e, tile, 0xfa9, max_alpha);
         }
@@ -5659,7 +5680,7 @@ pub fn hud_main_menu_update_compass(
         if tile == 0 {
             continue;
         }
-        let mut angle = hud_main_menu_get_compass_angle(
+        let mut angle = compass_angle_by_address(
             e,
             position[0],
             position[1],
@@ -5703,22 +5724,22 @@ pub fn hud_main_menu_update_compass(
                 hud_set_float(e, tile, 0xfa9, max_alpha);
             } else {
                 let blink_alpha = e.mem.f32(0x011d_979c);
-                blink_tile(e, Ptr::new(tile), distance, blink_alpha);
+                e.call(0x0077_8c20, &args![tile, distance, blink_alpha]);
             }
         }
     }
     let player = current_player(e);
-    let pc_marker = fn_0077a400(e, Ptr::new(player));
+    let pc_marker: Ptr = Ptr::new(e.call(0x0077_a400, &args![player]).u32());
     if !pc_marker.is_null() && objective_tiles != 0 {
         let tile = compass_take_objective_tile(e, objectives, &mut objective_tiles);
         compass_set_texture(e, tile, 0x0107_3534);
         if tile != 0 {
             let player = current_player(e);
-            let pc_marker = fn_0077a400(e, Ptr::new(player));
+            let pc_marker: Ptr = Ptr::new(e.call(0x0077_a400, &args![player]).u32());
             let mut position = compass_position(e, pc_marker.addr());
             position[2] = player_position[2];
             let distance = compass_distance_squared(e, position, player_position);
-            let angle = hud_main_menu_get_compass_angle(
+            let angle = compass_angle_by_address(
                 e,
                 position[0],
                 position[1],
@@ -5753,7 +5774,7 @@ pub fn hud_main_menu_update_compass(
                 } else {
                     compass_interpolate(e, max_alpha, 0.0, inner_width, outer_width, x)
                 };
-                blink_tile(e, Ptr::new(tile), distance, blink_alpha);
+                e.call(0x0077_8c20, &args![tile, distance, blink_alpha]);
             }
         }
     }
@@ -5853,7 +5874,7 @@ pub fn hud_main_menu_update_compass(
         let tile = compass_take_tile(e, actor_ticks, &mut actor_tiles);
         compass_set_texture(e, tile, 0x0107_350c);
         if tile != 0 {
-            let angle = hud_main_menu_get_compass_angle(
+            let angle = compass_angle_by_address(
                 e,
                 position[0],
                 position[1],
