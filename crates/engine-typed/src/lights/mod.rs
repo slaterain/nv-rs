@@ -9,6 +9,14 @@
 //! - [`walk`]: `AddObject` (`00ba0110`), `ParseObjectAddFrustum` (`00b9f5b0`),
 //!   `ParseObjectAddRadius` (`00b9f6a0`), `AddTriGeom` (`00b9f480`),
 //!   `BoundWithinLightFrustum` (`00b9bbb0`) and `BoundWithinLightRadius` (`00b9dae0`).
+//! - The light lists' slow loops, with the same answers in linear work: [`resort`]
+//!   (`BSShaderLightingProperty::ResortLights`, `00b70390`: each light's luminance worked out once
+//!   instead of again at every comparison), [`weighted`] (`ComputeWeightedShadowLight`, `00b9d150`)
+//!   and [`dominant`] (the dominant light direction, `00b5bca0`), whose walks over the scene node's
+//!   lights keep their place instead of starting from the list's head for each light (`00b5ac20`'s
+//!   walk, called by the first and inlined in the second). These three keep the exact x87 helpers:
+//!   the sort also runs on the loading thread (the render passes), the dominant direction is also
+//!   asked by the blood splatter's set-up; their Diff tests run both control words.
 //!
 //! What stays by address: the objects' `IsNode` and `IsTriBasedGeom` slots, the light's RTTI slot,
 //! the geometry and lighting property tests, the property's light add and the list moves and adds.
@@ -24,7 +32,11 @@ use engine_core::ptr::Ptr;
 use engine_core::typed::{Family, FamilyId, Threads};
 use engine_core::{entry, AbiFn};
 
+pub mod dominant;
+mod list;
+pub mod resort;
 pub mod walk;
+pub mod weighted;
 
 /// This family's bit: what each `typed_call!` of it names.
 pub const FAMILY: FamilyId = FamilyId::new(30);
@@ -73,5 +85,8 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b9_f480, walk::add_tri_geom(Ptr<ShadowSceneLight>, u32)),
         entry!(0x00b9_bbb0, walk::bound_within_frustum(Ptr<ShadowSceneLight>, Ptr) -> u8),
         entry!(0x00b9_dae0, walk::bound_within_radius(Ptr<ShadowSceneLight>, Ptr, u32, f32) -> u8),
+        entry!(0x00b7_0390, resort::resort_lights(Ptr, u32)),
+        entry!(0x00b9_d150, weighted::compute_weighted(Ptr<ShadowSceneLight>, u32, u32, u32, u32)),
+        entry!(0x00b5_bca0, dominant::dominant_light_direction(Ptr, Ptr, Ptr, Ptr) -> u32),
     ]
 }
