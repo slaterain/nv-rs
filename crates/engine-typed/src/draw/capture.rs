@@ -292,8 +292,38 @@ fn held() -> bool {
 /// declaration) then holds the values at the cut, while serially it would hold what the draw left; a setter must not
 /// skip its device call on such a value ([`main_must_send`]). One relaxed load while no packet is open.
 #[inline(always)]
-pub fn beside() -> bool {
-    OPEN.load(Relaxed) != 0 && !HOLDS.with(Cell::get)
+pub fn beside(e: &Engine) -> bool {
+    OPEN.load(Relaxed) != 0 && !HOLDS.with(Cell::get) && open_for(run(e))
+}
+
+/// The runs with an open packet, one slot each (a run opens one packet at a time; 0 is a free slot): what
+/// [`beside`] asks after its cheap tests, so that one run's packet never makes another run's setters send (tests run
+/// many engines at once; play has one).
+static OPEN_RUNS: [AtomicUsize; 8] = [const { AtomicUsize::new(0) }; 8];
+
+/// Whether `run` has an open packet ([`OPEN_RUNS`]).
+#[cold]
+fn open_for(run: usize) -> bool {
+    OPEN_RUNS.iter().any(|r| r.load(Relaxed) == run)
+}
+
+/// `run`'s packet opened ([`begin`]): its run in a free slot (with every slot taken it is not noted, and its
+/// setters beside it skip as before).
+fn note_open(run: usize) {
+    for r in &OPEN_RUNS {
+        if r.compare_exchange(0, run, Relaxed, Relaxed).is_ok() {
+            return;
+        }
+    }
+}
+
+/// `run`'s packet closed ([`end`]).
+fn note_closed(run: usize) {
+    for r in &OPEN_RUNS {
+        if r.compare_exchange(run, 0, Relaxed, Relaxed).is_ok() {
+            return;
+        }
+    }
 }
 
 /// A typed setter's "already the cached value, skip" decision: `same` is what its cache says. Beside a packet
@@ -302,8 +332,8 @@ pub fn beside() -> bool {
 /// cache's write is noted as main's for the join (`set_own_at`), which then keeps main's value over the draw's. The
 /// one difference from the serial order: when the draw left the same value, the device gets it once more.
 #[inline(always)]
-pub fn main_must_send(same: bool) -> bool {
-    !same || beside()
+pub fn main_must_send(e: &Engine, same: bool) -> bool {
+    !same || beside(e)
 }
 
 fn run(e: &Engine) -> usize {
@@ -354,6 +384,7 @@ pub fn begin(e: &Engine) -> bool {
         // Main's writes noted before this cut belong to no packet.
         drop(take_marks(run(e)));
         OPEN.fetch_add(1, Relaxed);
+        note_open(run(e));
     }
     opened
 }
@@ -859,6 +890,7 @@ pub fn end(e: &mut Engine) -> Report {
     };
     HOLDS.with(|h| h.set(false));
     OPEN.fetch_sub(1, Relaxed);
+    note_closed(packet.run);
     let mut written = packet.written;
     if let Some(scribble) = packet.scribble {
         if !packet.paused {

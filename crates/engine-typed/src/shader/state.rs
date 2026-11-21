@@ -462,7 +462,7 @@ pub fn set_render_state(
     }
     capture::set_own_at(e, locked, lock);
     let cached = elem_addr(this, NiDX9RenderState::auiRenderStates, state, 8);
-    if capture::main_must_send(capture::own_at::<u32>(e, cached) == value) {
+    if capture::main_must_send(e, capture::own_at::<u32>(e, cached) == value) {
         let device = capture::own_get(e, this, NiDX9RenderState::m_pkD3DDevice9);
         engine_core::real_threads::device_vcall(
             e,
@@ -501,7 +501,7 @@ pub fn set_stage_state(
         slot.wrapping_add(stage.wrapping_mul(8)),
         8,
     );
-    if capture::main_must_send(capture::own_at::<u32>(e, cached) == value) {
+    if capture::main_must_send(e, capture::own_at::<u32>(e, cached) == value) {
         let device = capture::own_get(e, this, NiDX9RenderState::m_pkD3DDevice9);
         engine_core::real_threads::device_vcall(
             e,
@@ -533,7 +533,7 @@ pub fn set_sampler_state(
         stage.wrapping_mul(5).wrapping_add(slot),
         8,
     );
-    if !capture::main_must_send(capture::own_at::<u32>(e, cached) == value) {
+    if !capture::main_must_send(e, capture::own_at::<u32>(e, cached) == value) {
         return;
     }
     capture::set_own_at(e, cached, value);
@@ -551,7 +551,7 @@ pub fn set_sampler_state(
 /// differs.
 pub fn set_texture(e: &mut Engine, this: Ptr<NiDX9RenderState>, stage: u32, texture: u32) {
     let cached = elem_addr(this, NiDX9RenderState::apTextures, stage, 4);
-    if !capture::main_must_send(capture::own_at::<u32>(e, cached) == texture) {
+    if !capture::main_must_send(e, capture::own_at::<u32>(e, cached) == texture) {
         return;
     }
     capture::set_own_at(e, cached, texture);
@@ -575,7 +575,7 @@ fn set_cached(
         let now = capture::own_get(e, this, current);
         capture::own_set(e, this, saved, now);
     }
-    if !capture::main_must_send(capture::own_get(e, this, current) == value) {
+    if !capture::main_must_send(e, capture::own_get(e, this, current) == value) {
         return;
     }
     capture::own_set(e, this, current, value);
@@ -620,6 +620,7 @@ pub fn set_declaration(e: &mut Engine, this: Ptr<NiDX9RenderState>, declaration:
         return;
     }
     if !capture::main_must_send(
+        e,
         capture::own_get(e, this, NiDX9RenderState::ucDeclarationSet) != 0
             && capture::own_get(e, this, NiDX9RenderState::pDeclaration) == declaration,
     ) {
@@ -1110,7 +1111,7 @@ mod tests {
             ]
         );
         let packet = capture::detach(&e).expect("the packet handed over");
-        assert!(capture::beside());
+        assert!(capture::beside(&e));
         // Main asks for the cut's values, which its cache holds.
         set_texture(&mut e, this, 0, 0x70);
         set_render_state(&mut e, this, 7, 1, 0, 0);
@@ -1124,7 +1125,7 @@ mod tests {
         );
         assert!(capture::attach(packet).is_ok());
         assert!(
-            !capture::beside(),
+            !capture::beside(&e),
             "the drawing side is not beside its own packet"
         );
         let _ = capture::end(&mut e);
