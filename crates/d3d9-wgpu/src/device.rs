@@ -415,8 +415,12 @@ impl Bindings {
 
 /// A bind group's key: each binding's number, the dimension its shader declares (2D, cube, volume:
 /// the layout the group is made for, and the dummy a texture of the other kind is replaced by), its
-/// texture and its sampler.
-type GroupKey = Vec<(u32, u8, u64, Option<SamplerKey>)>;
+/// texture and its sampler (its number in [`Device::sampler_keys`]: a word to hash and compare, not the
+/// key's nine fields).
+type GroupKey = Vec<(u32, u8, u64, u32)>;
+
+/// A sampler slot's key not yet worked out since its states last changed ([`Device::slot_keys`]).
+const NO_KEY: u32 = u32::MAX;
 
 /// A vertex shader's inputs read from a declaration ([`Device::vertex_link`]).
 struct VertexLink {
@@ -838,9 +842,113 @@ fn regs_binding(binding: u32) -> u64 {
 }
 
 const BLOCK: u64 = wgsl::REGS_SIZE.div_ceil(256) * 256;
+/// [`PassBinds::blocks`] when the pass has the registers from storage ([`Device::storage_regs`]): no
+/// block is at that offset.
+const STORAGE_BLOCKS: [u32; 4] = [u32::MAX; 4];
 /// The ring of uniform blocks and `DrawPrimitiveUP` vertices sent with each batch.
 const RING: u64 = 32 << 20;
 const UP_RING: u64 = 8 << 20;
+
+/// The draw table's room ([`Device::table`]): 262,144 draws a batch, more than a frame's draws
+/// (the street's 1,500) times the frames a batch can hold before the register ring fills.
+const TABLE: u64 = 4 << 20;
+
+/// Whether an adapter can read the registers from storage ([`Device::storage_regs`]): storage
+/// buffers in vertex shaders, two a stage, the whole register ring in one binding, and the draw
+/// table's location between the stages ([`wgsl::DRAW_SLOT`]) with the clip distances' two besides.
+fn storage_regs_possible(flags: wgpu::DownlevelFlags, limits: &wgpu::Limits) -> bool {
+    flags.contains(wgpu::DownlevelFlags::VERTEX_STORAGE)
+        && limits.max_storage_buffers_per_shader_stage >= 2
+        && limits.max_storage_buffer_binding_size >= RING.max(TABLE)
+        // The draw slot's location, and the two the clip distances take from the count.
+        && limits.max_inter_stage_shader_variables >= wgsl::DRAW_SLOT + 1 + 2
+}
+
+/// The register ring and its uniform group (group 0 at dynamic offsets); the ring also readable
+/// as storage with `storage` ([`StorageRegs`]).
+fn register_ring(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    storage: bool,
+) -> (wgpu::Buffer, wgpu::BindGroup) {
+    let ring = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("register ring"),
+        size: RING,
+        usage: wgpu::BufferUsages::UNIFORM
+            | wgpu::BufferUsages::COPY_DST
+            | if storage {
+                wgpu::BufferUsages::STORAGE
+            } else {
+                wgpu::BufferUsages::empty()
+            },
+        mapped_at_creation: false,
+    });
+    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("registers"),
+        layout,
+        entries: &[0, 1, 2, 3].map(|binding| wgpu::BindGroupEntry {
+            binding,
+            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                buffer: &ring,
+                offset: 0,
+                size: std::num::NonZeroU64::new(regs_binding(binding)),
+            }),
+        }),
+    });
+    (ring, group)
+}
+
+/// The registers read from storage ([`wgsl::Link::storage`]): group 0's layout and group (the
+/// register ring whole, binding 0; the draw table, binding 1) and the draw table's buffer.
+struct StorageRegs {
+    layout: wgpu::BindGroupLayout,
+    group: wgpu::BindGroup,
+    table_buffer: wgpu::Buffer,
+}
+
+impl StorageRegs {
+    fn new(device: &wgpu::Device, ring: &wgpu::Buffer) -> StorageRegs {
+        let entry = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: std::num::NonZeroU64::new(16),
+            },
+            count: None,
+        };
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("registers from storage"),
+            entries: &[entry(0), entry(1)],
+        });
+        let table_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("draw table"),
+            size: TABLE,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("registers from storage"),
+            layout: &layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: ring.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: table_buffer.as_entire_binding(),
+                },
+            ],
+        });
+        StorageRegs {
+            layout,
+            group,
+            table_buffer,
+        }
+    }
+}
 
 /// The register ring's room: [`RING`], or less for a test ([`ring_room_for_tests`]).
 fn ring_room() -> u64 {
@@ -917,6 +1025,17 @@ pub struct Device {
     ring: Vec<u8>,
     ring_buffer: wgpu::Buffer,
     ring_group: wgpu::BindGroup,
+    /// `NV_WGPU_STORAGE_REGS`: the shaders read their registers from the ring as storage, each draw
+    /// through its entry in the draw table ([`wgsl::Link::storage`], [`StorageRegs`]); off by default.
+    /// Only where the adapter has [`Device::storage_regs_gpu`].
+    storage_regs: bool,
+    storage_regs_gpu: Option<StorageRegs>,
+    /// Whether the adapter can read the registers from storage ([`storage_regs_possible`]): what
+    /// [`Device::set_storage_regs`] makes [`Device::storage_regs_gpu`] for.
+    storable: bool,
+    /// The open batch's draw table: one 16-byte entry a draw with [`Device::storage_regs`] (its
+    /// blocks' places in 16-byte units, as [`Device::blocks`]).
+    table: Vec<u8>,
     uniform_layout: wgpu::BindGroupLayout,
     up: Vec<u8>,
     up_buffer: wgpu::Buffer,
@@ -928,7 +1047,14 @@ pub struct Device {
     /// A pair's sampler layouts by its samplers' key ([`Device::sampler_layout`]): the pixel
     /// shader's group and the vertex shader's, and the pipeline layout of the two.
     #[allow(clippy::type_complexity)]
-    sampler_layouts: Map<Vec<(u32, u8, bool)>, ([wgpu::BindGroupLayout; 2], wgpu::PipelineLayout)>,
+    sampler_layouts: Map<
+        Vec<(u32, u8, bool)>,
+        (
+            [wgpu::BindGroupLayout; 2],
+            wgpu::PipelineLayout,
+            Option<wgpu::PipelineLayout>,
+        ),
+    >,
     /// The pipelines by key (none: refused), each with the plane states its draws were listed
     /// with this run (bit 0 none on, bit 1 one on; [`clip_code`]).
     pipelines: Map<PipeKey, (Option<Pipe>, u8)>,
@@ -984,6 +1110,13 @@ pub struct Device {
     vs_modules: Map<VKey, Option<wgpu::ShaderModule>>,
     ps_modules: Map<PKey, Option<wgpu::ShaderModule>>,
     samplers: Map<SamplerKey, wgpu::Sampler>,
+    /// Every sampler key a draw has bound, numbered in the order first met (a group key's fourth
+    /// part), and each one's number; and each sampler slot's number for a draw that filters its
+    /// texture and one that cannot ([`NO_KEY`] until the first draw after its states change):
+    /// a draw reads a word for each of its samplers instead of making and hashing each key.
+    sampler_keys: Vec<SamplerKey>,
+    sampler_ids: Map<SamplerKey, u32>,
+    slot_keys: [[u32; 2]; 20],
     groups: Map<GroupKey, wgpu::BindGroup>,
     blit: Map<(wgpu::TextureFormat, bool), wgpu::RenderPipeline>,
     blit_layout: Option<wgpu::BindGroupLayout>,
@@ -1097,7 +1230,8 @@ pub struct Device {
     /// The stand-in partners those are made with (or why wgpu refused one): a vertex shader for
     /// each set of varyings and clip code ([`wgsl::stand_in_vertex`]), and the pixel shader
     /// ([`wgsl::STAND_IN_PIXEL`]). Kept: wgpu-hal forgets a module's libraries when it goes.
-    stand_in_vertex: Map<(Vec<wgsl::Semantic>, wgsl::Clip), Result<wgpu::ShaderModule, String>>,
+    stand_in_vertex:
+        Map<(Vec<wgsl::Semantic>, wgsl::Clip, bool), Result<wgpu::ShaderModule, String>>,
     stand_in_pixel: Option<Result<wgpu::ShaderModule, String>>,
     /// Where the occlusion counts are posted for the game's threads ([`QueryAnswers`]), and the
     /// `END`s (query, number) whose counts are awaited.
@@ -1596,24 +1730,14 @@ impl Device {
                 count: None,
             }),
         });
-        let ring_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("register ring"),
-            size: RING,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let ring_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("registers"),
-            layout: &uniform_layout,
-            entries: &[0, 1, 2, 3].map(|binding| wgpu::BindGroupEntry {
-                binding,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &ring_buffer,
-                    offset: 0,
-                    size: std::num::NonZeroU64::new(regs_binding(binding)),
-                }),
-            }),
-        });
+        // The registers from storage only when asked for and possible: otherwise the ring and its
+        // group are made as without the switch, and nothing else is made.
+        let storable =
+            storage_regs_possible(adapter.get_downlevel_capabilities().flags, &device.limits());
+        let storage_on =
+            storable && std::env::var("NV_WGPU_STORAGE_REGS").is_ok_and(|v| v.trim() == "1");
+        let (ring_buffer, ring_group) = register_ring(&device, &uniform_layout, storage_on);
+        let storage_regs_gpu = storage_on.then(|| StorageRegs::new(&device, &ring_buffer));
         let stage_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("upload stage"),
             size: STAGE,
@@ -1706,6 +1830,10 @@ impl Device {
             ring: Vec::with_capacity(RING as usize),
             ring_buffer,
             ring_group,
+            storage_regs: storage_regs_gpu.is_some(),
+            storable,
+            storage_regs_gpu,
+            table: Vec::new(),
             uniform_layout,
             up: Vec::new(),
             up_buffer,
@@ -1757,6 +1885,9 @@ impl Device {
             vs_modules: Map::default(),
             ps_modules: Map::default(),
             samplers: Map::default(),
+            sampler_keys: Vec::new(),
+            sampler_ids: Map::default(),
+            slot_keys: [[NO_KEY; 2]; 20],
             groups: Map::default(),
             blit: Map::default(),
             blit_layout: None,
@@ -2493,11 +2624,17 @@ impl Device {
         self.batch_uses = 0;
         self.batch += 1;
         self.st.dirty = [true; 2];
+        // The draw table's buffer, where there is one (the table is empty where there is not).
+        let table_buffer = self
+            .storage_regs_gpu
+            .as_ref()
+            .map_or(&self.ring_buffer, |s| &s.table_buffer);
         let Some(s) = &self.submitter else {
             for (buffer, bytes) in [
                 (&self.ring_buffer, &mut self.ring),
                 (&self.up_buffer, &mut self.up),
                 (&self.stage_buffer, &mut self.stage),
+                (table_buffer, &mut self.table),
             ] {
                 if !bytes.is_empty() {
                     self.queue.write_buffer(buffer, 0, bytes);
@@ -2509,7 +2646,10 @@ impl Device {
             return;
         };
         s.raise_failure();
-        let empty = self.ring.is_empty() && self.up.is_empty() && self.stage.is_empty();
+        let empty = self.ring.is_empty()
+            && self.up.is_empty()
+            && self.stage.is_empty()
+            && self.table.is_empty();
         if empty && finishing.is_empty() && encoder.is_none() {
             return;
         }
@@ -2518,11 +2658,13 @@ impl Device {
             std::mem::replace(&mut self.ring, std::mem::take(&mut fresh[0])),
             std::mem::replace(&mut self.up, std::mem::take(&mut fresh[1])),
             std::mem::replace(&mut self.stage, std::mem::take(&mut fresh[2])),
+            std::mem::replace(&mut self.table, std::mem::take(&mut fresh[3])),
         ];
         let targets = [
             self.ring_buffer.clone(),
             self.up_buffer.clone(),
             self.stage_buffer.clone(),
+            table_buffer.clone(),
         ];
         let pool = Arc::clone(&s.pool);
         let submits = Arc::clone(&self.submits);
@@ -2917,6 +3059,7 @@ impl Device {
             }
             *s = value;
             self.tex_gen += 1;
+            self.slot_keys[slot] = [NO_KEY; 2];
             // Of the sampler states only the LOD bias is in the stage's block; the rest go into
             // the draw's sampler, made from them at the draw.
             if kind as usize == state::ss::MIPMAPLODBIAS {
@@ -3040,6 +3183,38 @@ impl Device {
     pub fn set_draw_records(&mut self, on: bool) {
         self.draw_records = on;
         self.record = None;
+    }
+
+    /// Turns the registers read from storage on or off (`NV_WGPU_STORAGE_REGS`,
+    /// [`wgsl::Link::storage`]; tests and the replay example compare the two); on only where the
+    /// adapter can ([`storage_regs_possible`]). The pipelines made so far are dropped (their
+    /// shaders read the registers the other way); the next draw makes its own. Whether it is on.
+    pub fn set_storage_regs(&mut self, on: bool) -> bool {
+        let on = on && self.storable;
+        // Made now when the device was made without them: the open batch sent first (its draws
+        // read the old ring), then a ring readable as storage, its uniform group and the table.
+        if on && self.storage_regs_gpu.is_none() {
+            self.flush();
+            let (ring, group) = register_ring(&self.device, &self.uniform_layout, true);
+            self.storage_regs_gpu = Some(StorageRegs::new(&self.device, &ring));
+            self.ring_buffer = ring;
+            self.ring_group = group;
+            self.binds.blocks = None;
+        }
+        if on != self.storage_regs {
+            self.storage_regs = on;
+            self.pipelines.clear();
+            self.last_pipeline = None;
+            self.record = None;
+            self.binds.pipeline = None;
+            self.binds.blocks = None;
+        }
+        on
+    }
+
+    /// Whether the registers are read from storage ([`Device::set_storage_regs`]).
+    pub fn storage_regs(&self) -> bool {
+        self.storage_regs
     }
 
     /// From now on each draw notes a digest of what it gave wgpu: its pipeline key, both stages'
@@ -4077,13 +4252,31 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         })
     }
 
+    /// The number of sampler `slot`'s key ([`SamplerKey::new`] of its states, for a texture that
+    /// can be filtered or not) in [`Device::sampler_keys`]: the slot's number again while its
+    /// states are unchanged, else the key made, numbered when it is new.
+    fn sampler_key(&mut self, slot: usize, filterable: bool) -> u32 {
+        let id = self.slot_keys[slot][usize::from(filterable)];
+        if id != NO_KEY {
+            return id;
+        }
+        let sk = SamplerKey::new(&self.st.samplers[slot], filterable);
+        let keys = &mut self.sampler_keys;
+        let id = *self.sampler_ids.entry(sk).or_insert_with(|| {
+            keys.push(sk);
+            (keys.len() - 1) as u32
+        });
+        self.slot_keys[slot][usize::from(filterable)] = id;
+        id
+    }
+
     /// The bind group of one stage's samplers (`k`: 0 the pixel shader's, 1 the vertex
     /// shader's) as `key` and `samplers` give them: the last draw's again, else the cache's, else
     /// a new one in `layout`, each binding numbered within the stage's group.
     fn stage_group(
         &mut self,
         k: usize,
-        key: &[(u32, u8, u64, Option<SamplerKey>)],
+        key: &[(u32, u8, u64, u32)],
         samplers: &[((u32, u8, bool), usize)],
         copies: &[Option<Arc<Tex>>; 20],
     ) {
@@ -4111,12 +4304,12 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             }
             let mut views = Vec::new();
             let mut samps = Vec::new();
-            for &((binding, dim, filterable), slot) in samplers {
+            for (&((binding, dim, _), slot), e) in samplers.iter().zip(key) {
                 let view = match copies[slot].as_ref().or(self.st.textures[slot].as_ref()) {
                     Some(t) if (dim == 1) == t.cube => t.view.clone(),
                     _ => self.dummy[dim as usize].clone(),
                 };
-                let sk = SamplerKey::new(&self.st.samplers[slot], filterable);
+                let sk = self.sampler_keys[e.3 as usize];
                 views.push((binding % 32, view));
                 samps.push((binding % 32 + 1, self.sampler(sk)));
             }
@@ -4150,8 +4343,44 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// the registers' group (0), the pixel shader's samplers' (1) and the vertex shader's (2),
     /// each stage's numbered from 0 in its own group ([`wgsl::sampler_group`]).
     fn sampler_layout(&mut self, key: &[(u32, u8, bool)]) -> wgpu::PipelineLayout {
-        if let Some((_, p)) = self.sampler_layouts.get(key) {
-            return p.clone();
+        self.sampler_layout_regs(key, false)
+    }
+
+    /// The registers' group 0 layout: the uniform blocks at dynamic offsets, or with `storage` the
+    /// register ring and the draw table as storage ([`wgsl::Link::storage`]).
+    fn registers_layout(&self, storage: bool) -> &wgpu::BindGroupLayout {
+        match (&self.storage_regs_gpu, storage) {
+            (Some(s), true) => &s.layout,
+            _ => &self.uniform_layout,
+        }
+    }
+
+    /// [`Device::sampler_layout`] with the registers' group 0 read from storage when `storage`.
+    fn sampler_layout_regs(
+        &mut self,
+        key: &[(u32, u8, bool)],
+        storage: bool,
+    ) -> wgpu::PipelineLayout {
+        if let Some((layouts, uniform, stored)) = self.sampler_layouts.get_mut(key) {
+            if !storage {
+                return uniform.clone();
+            }
+            if let Some(p) = stored {
+                return p.clone();
+            }
+            let regs = match &self.storage_regs_gpu {
+                Some(s) => &s.layout,
+                None => return uniform.clone(),
+            };
+            let p = self
+                .device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("registers from storage"),
+                    bind_group_layouts: &[Some(regs), Some(&layouts[0]), Some(&layouts[1])],
+                    immediate_size: 0,
+                });
+            *stored = Some(p.clone());
+            return p;
         }
         let layouts = [false, true].map(|vertex| {
             let mut entries = Vec::new();
@@ -4205,7 +4434,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 immediate_size: 0,
             });
         self.sampler_layouts
-            .insert(key.to_vec(), (layouts, pipeline_layout.clone()));
+            .insert(key.to_vec(), (layouts, pipeline_layout.clone(), None));
+        if storage {
+            return self.sampler_layout_regs(key, true);
+        }
         pipeline_layout
     }
 
@@ -4330,7 +4562,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
 
     /// Room in the register ring for a draw's two blocks: the batch is sent when there is not.
     fn make_ring_room(&mut self) {
-        if self.ring.len() as u64 + 2 * BLOCK > ring_room() {
+        if self.ring.len() as u64 + 2 * BLOCK > ring_room() || self.table.len() as u64 + 16 > TABLE
+        {
             self.ring_sends += 1;
             self.flush();
         }
@@ -4947,14 +5180,13 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 copies[slot] = self.copy_for_sampling(&t);
             }
             // The textures and samplers: the last draw's bind group again, else the cache's.
-            let mut group_key = [(0u32, 0u8, 0u64, None::<SamplerKey>); 20];
+            let mut group_key = [(0u32, 0u8, 0u64, 0u32); 20];
             for (g, &((binding, dim, filterable), slot)) in group_key.iter_mut().zip(samplers) {
                 let tex_id = copies[slot]
                     .as_ref()
                     .or(self.st.textures[slot].as_ref())
                     .map_or(0, |t| t.id);
-                let sk = SamplerKey::new(&self.st.samplers[slot], filterable);
-                *g = (binding, dim, tex_id, Some(sk));
+                *g = (binding, dim, tex_id, self.sampler_key(slot, filterable));
             }
             let group_key = &group_key[..samplers.len()];
             // Each stage's own group ([`wgsl::sampler_group`]): the vertex shader's samplers come
@@ -5140,10 +5372,29 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             pass.set_pipeline(pipeline);
             b.pipeline = Some(pipeline.clone());
         }
-        if b.blocks != Some(blocks) {
-            pass.set_bind_group(0, &self.ring_group, &blocks);
-            b.blocks = Some(blocks);
-        }
+        // The registers: the draw's two blocks at their offsets, or from storage the ring and the
+        // draw table, set once a pass, and the draw's entry in the table ([`wgsl::Link::storage`]):
+        // its number is the draw's instance.
+        let instance = match self.storage_regs_gpu.as_ref().filter(|_| self.storage_regs) {
+            Some(s) => {
+                if b.blocks != Some(STORAGE_BLOCKS) {
+                    pass.set_bind_group(0, &s.group, &[]);
+                    b.blocks = Some(STORAGE_BLOCKS);
+                }
+                let at = (self.table.len() / 16) as u32;
+                for o in blocks {
+                    self.table.extend_from_slice(&(o / 16).to_le_bytes());
+                }
+                at
+            }
+            None => {
+                if b.blocks != Some(blocks) {
+                    pass.set_bind_group(0, &self.ring_group, &blocks);
+                    b.blocks = Some(blocks);
+                }
+                0
+            }
+        };
         for (k, (_, group)) in self.last_groups.iter().enumerate() {
             let group = group.as_ref().expect("the draw's groups, set above");
             if b.groups[k].as_ref() != Some(group) {
@@ -5208,9 +5459,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     );
                     b.index = Some(i);
                 }
-                pass.draw_indexed(start..start + n, base_vertex, 0..1);
+                pass.draw_indexed(start..start + n, base_vertex, instance..instance + 1);
             }
-            None => pass.draw(start..start + n, 0..1),
+            None => pass.draw(start..start + n, instance..instance + 1),
         }
         // What this draw gave wgpu, for the tests' and the replay example's compares
         // ([`Device::record_draw_digests`]); one test of an option in play.
@@ -5221,10 +5472,40 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 k.hash(&mut h);
                 planes.hash(&mut h);
             }
+            // Each group key with its samplers' keys themselves, hashed as a list of (binding,
+            // dimension, texture, Some(sampler key)) is: the digest does not depend on how the keys
+            // are numbered.
             for (g, _) in &self.last_groups {
-                g.hash(&mut h);
+                h.write_usize(g.len());
+                for e in g {
+                    (e.0, e.1, e.2, Some(self.sampler_keys[e.3 as usize])).hash(&mut h);
+                }
             }
-            self.blocks.hash(&mut h);
+            // The registers' bytes its shaders read: at its blocks, or from storage at the places
+            // its entry in the draw table names (the entry its instance number reads): each
+            // header whole and the float constants up to the highest its shader reads.
+            let places: [u32; 4] =
+                match self.storage_regs_gpu.as_ref().filter(|_| self.storage_regs) {
+                    Some(_) => {
+                        let at = 16 * instance as usize;
+                        std::array::from_fn(|k| {
+                            let w = self.table.get(at + 4 * k..at + 4 * k + 4);
+                            16 * w.map_or(u32::MAX / 16, |w| {
+                                u32::from_le_bytes(w.try_into().expect("4 bytes"))
+                            })
+                        })
+                    }
+                    None => self.blocks,
+                };
+            places.hash(&mut h);
+            for (k, &at) in places.iter().enumerate() {
+                let len = match k {
+                    0 | 1 => wgsl::REGS_C_OFFSET as usize,
+                    2 => 16 * vs.fregs as usize,
+                    _ => 16 * ps.fregs as usize,
+                };
+                self.ring.get(at as usize..at as usize + len).hash(&mut h);
+            }
             for (k, a) in attributes.iter().enumerate() {
                 if !a.is_empty() {
                     let seq = self.st.streams[k].buffer.as_ref().map(|b| b.seq);
@@ -5444,7 +5725,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         {
             let mut seen = HashSet::new();
             for r in &ready {
-                let (vk, pk) = self.module_keys(&r.key, &r.vs, &r.ps, &r.link.inputs);
+                let (vk, pk) =
+                    self.module_keys(&r.key, &r.vs, &r.ps, &r.link.inputs, self.storage_regs);
                 for k in [ModKey::V(vk), ModKey::P(pk)] {
                     if seen.insert(k.clone()) {
                         wanted.push(k);
@@ -5511,7 +5793,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let mut tasks = Vec::new();
         let mut keys = Vec::new();
         for r in &ready {
-            let (vk, pk, t) = self.module_tasks(&r.key, &r.vs, &r.ps, &r.link.inputs);
+            let (vk, pk, t) =
+                self.module_tasks(&r.key, &r.vs, &r.ps, &r.link.inputs, self.storage_regs);
             tasks.extend(t);
             keys.push((vk, pk));
         }
@@ -5746,7 +6029,19 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// and a vertex shader's for float inputs and every pixel shader that reads only what it
     /// writes; each with the clip code the adapter gives a draw without planes, no occlusion
     /// count. Any other variant is made when a draw first needs it.
+    /// With the registers from storage and the sun shadows on, a vertex shader's module with the
+    /// uniform registers too: the sun shadows' casters draw with those
+    /// ([`Device::sun_pipeline_job`]), and would otherwise make it on the render thread the first
+    /// time.
     fn queue_modules(&mut self, s: &Arc<Shader>) {
+        self.queue_modules_as(s, self.storage_regs);
+        if self.storage_regs && self.sun.is_some() && s.program.stage == Stage::Vertex {
+            self.queue_modules_as(s, false);
+        }
+    }
+
+    /// [`Device::queue_modules`] with the registers from storage or not.
+    fn queue_modules_as(&mut self, s: &Arc<Shader>, storage: bool) {
         let clip = if self.clip_distances {
             wgsl::Clip::Distances
         } else {
@@ -5764,8 +6059,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     clip,
                     count: false,
                     fixed: true,
+                    storage,
                 };
-                let key = ModKey::P((s.id, s.varyings.clone(), false, clip, true));
+                let key = ModKey::P((s.id, s.varyings.clone(), false, clip, true, storage));
                 (key, link)
             }
             Stage::Vertex => {
@@ -5783,8 +6079,12 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     clip,
                     count: false,
                     fixed: true,
+                    storage,
                 };
-                (ModKey::V((s.id, inputs, varyings, clip, true)), link)
+                (
+                    ModKey::V((s.id, inputs, varyings, clip, true, storage)),
+                    link,
+                )
             }
         };
         let made = match &key {
@@ -5836,7 +6136,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             })
             .map(|&(n, dim)| (wgsl::texture_binding(stage, n), dim_code(dim), true))
             .collect();
-        let layout = self.sampler_layout(&samplers);
+        let layout = self.sampler_layout_regs(&samplers, link.storage);
         let group_layouts = self.sampler_layouts[&samplers[..]].0.clone();
         let target = Some(wgpu::ColorTargetState {
             format: wgpu::TextureFormat::Rgba8Unorm,
@@ -5874,7 +6174,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 let device = &self.device;
                 let partner = self
                     .stand_in_vertex
-                    .entry((link.varyings.clone(), link.clip))
+                    .entry((link.varyings.clone(), link.clip, link.storage))
                     .or_insert_with(|| create_module(device, wgsl::stand_in_vertex(link)))
                     .clone();
                 // A target for each colour it writes (the module writes target 0 when it writes
@@ -6075,6 +6375,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         vs: &Shader,
         ps: &Shader,
         inputs: &[wgsl::Input],
+        storage: bool,
     ) -> (VKey, PKey) {
         let fixed = ps.fixed;
         let ps_varyings = ps.varyings.clone();
@@ -6084,8 +6385,15 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             ps_varyings.clone()
         };
         (
-            (vs.id, inputs.to_vec(), vs_varyings, key.clip, fixed),
-            (ps.id, ps_varyings, key.count, key.clip, fixed),
+            (
+                vs.id,
+                inputs.to_vec(),
+                vs_varyings,
+                key.clip,
+                fixed,
+                storage,
+            ),
+            (ps.id, ps_varyings, key.count, key.clip, fixed, storage),
         )
     }
 
@@ -6098,9 +6406,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         vs: &Shader,
         ps: &Shader,
         inputs: &[wgsl::Input],
+        storage: bool,
     ) -> (VKey, PKey, Vec<ModuleTask>) {
         let fixed = ps.fixed;
-        let (vkey, pkey) = self.module_keys(key, vs, ps, inputs);
+        let (vkey, pkey) = self.module_keys(key, vs, ps, inputs, storage);
         let (vs_varyings, ps_varyings) = (vkey.2.clone(), pkey.1.clone());
         // Made ahead, or being made, on the module threads ([`Device::queue_modules`]).
         self.collect_modules();
@@ -6118,6 +6427,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 clip: key.clip,
                 count: false,
                 fixed,
+                storage,
             };
             let t = std::time::Instant::now();
             let source = wgsl::convert(&vs.program, &link);
@@ -6135,6 +6445,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 clip: key.clip,
                 count: key.count,
                 fixed,
+                storage,
             };
             let t = std::time::Instant::now();
             let source = wgsl::convert(&ps.program, &link);
@@ -6216,7 +6527,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     ) -> Option<PipelineJob> {
         let vm = self.vs_modules.get(vkey)?.clone()?;
         let pm = self.ps_modules.get(pkey)?.clone()?;
-        let layout = self.sampler_layout(samplers);
+        let layout = self.sampler_layout_regs(samplers, vkey.5);
         let group_layouts = self.sampler_layouts[samplers].0.clone();
         // One layout per stream slot up to the last used (a slot's index is its stream's number).
         let last = attributes
@@ -6323,7 +6634,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     ) -> Option<Pipe> {
         self.made_on_draws += 1;
         let started = std::time::Instant::now();
-        let (vkey, pkey, tasks) = self.module_tasks(key, vs, ps, inputs);
+        let (vkey, pkey, tasks) = self.module_tasks(key, vs, ps, inputs, self.storage_regs);
         self.make_modules(tasks, 1, true, &mut |_| {});
         let job = self.pipeline_job(key, ps, &vkey, &pkey, attributes, topology, samplers)?;
         let t = std::time::Instant::now();
@@ -7766,7 +8077,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let key = self.last_pipeline.as_ref().map(|(k, _, _)| k.clone())?;
         // The modules as the draw's pipeline has them (made ahead, or here if they were not
         // kept: the draw's pipeline can come from a library or the list).
-        let (vkey, pkey, tasks) = self.module_tasks(&key, vs, ps, &link.inputs);
+        let (vkey, pkey, tasks) = self.module_tasks(&key, vs, ps, &link.inputs, false);
         let tasks: Vec<ModuleTask> = tasks
             .into_iter()
             .filter(|t| cutout.is_some() || matches!(t.key, ModKey::V(_)))
@@ -8609,7 +8920,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             sun: false,
             ..key.clone()
         };
-        let (vkey, pkey, tasks) = self.module_tasks(&plain, vs, ps, inputs);
+        let (vkey, pkey, tasks) = self.module_tasks(&plain, vs, ps, inputs, self.storage_regs);
         self.make_modules(tasks, 1, false, &mut |_| {});
         let Some(job) = self.pipeline_job(&plain, ps, &vkey, &pkey, attributes, topology, samplers)
         else {
@@ -8631,6 +8942,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     clip: vkey.3,
                     count: false,
                     fixed: vkey.4,
+                    storage: vkey.5,
                 },
                 characters,
                 vs.skin.is_some() || ps.face,
@@ -8646,13 +8958,14 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     clip: key.clip,
                     count: key.count,
                     fixed: ps.fixed,
+                    storage: pkey.5,
                 },
                 characters,
                 vs.skin.is_some() || ps.face,
             )
         });
         let device = self.device.clone();
-        let registers = self.uniform_layout.clone();
+        let registers = self.registers_layout(vkey.5).clone();
         let (tx, rx) = std::sync::mpsc::channel();
         let made = std::thread::Builder::new()
             .name("nv-wgpu-sun-variant".into())
@@ -10083,6 +10396,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         st.ds = None;
         st.rs = state::default_render_states(pp.auto_depth);
         *st.samplers = [state::default_sampler_states(); 20];
+        self.slot_keys = [[NO_KEY; 2]; 20];
         *st.tss = ffp::default_stage_states();
         st.fvf = None;
         st.textures = Default::default();
@@ -10643,11 +10957,18 @@ fn draw_layout(last: &Option<(PipeKey, Option<Pipe>, bool)>, k: usize) -> &wgpu:
 
 /// A vertex module's cache key: the shader, the inputs its declaration gives, the varyings it
 /// writes (each at the centroid; [`Device::module_tasks`]), the clip code, whether at fixed
-/// locations.
-type VKey = (u64, Vec<wgsl::Input>, Vec<wgsl::Semantic>, wgsl::Clip, bool);
+/// locations, whether the registers are read from storage ([`wgsl::Link::storage`]).
+type VKey = (
+    u64,
+    Vec<wgsl::Input>,
+    Vec<wgsl::Semantic>,
+    wgsl::Clip,
+    bool,
+    bool,
+);
 /// A pixel module's cache key: the shader, its varyings, the occlusion count, the clip code,
-/// whether at fixed locations.
-type PKey = (u64, Vec<wgsl::Semantic>, bool, wgsl::Clip, bool);
+/// whether at fixed locations, from storage.
+type PKey = (u64, Vec<wgsl::Semantic>, bool, wgsl::Clip, bool, bool);
 
 /// The varyings a vertex shader writes for a pixel shader with fixed varying locations
 /// ([`Shader::fixed`]), in location order: every one it writes that has a fixed location (the
@@ -11686,8 +12007,8 @@ fn finish_batch(
 /// A job for the queue thread ([`Submitter`]).
 type QueueJob = Box<dyn FnOnce(&wgpu::Queue) + Send>;
 
-/// A batch's register ring, `DrawPrimitiveUP` vertices and upload stage ([`Device::flush`]).
-type BatchBytes = [Vec<u8>; 3];
+/// A batch's register ring, `DrawPrimitiveUP` vertices and upload stage and draw table ([`Device::flush`]).
+type BatchBytes = [Vec<u8>; 4];
 
 /// The queue thread: runs the render thread's queue operations in the order it hands them over
 /// (each batch's buffer writes, its wait for the finishing threads and its submit; the writes

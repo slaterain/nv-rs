@@ -8,7 +8,7 @@
 //! - H05 (12 bytes at `0xA68D6B`): a cloned light keeps the word +0x9C (the switch byte, the
 //!   type byte, JIP's two bytes) ([`clone_word`]).
 //! - H04 (`SafeWrite8(0x465488, 0xCC)`, `SafeWrite32(0x1029018 / 0x1029014, ..)`; JIP skips it
-//!   when JohnnyGuitar is loaded, which the port never has): a light form is 0xCC bytes
+//!   when JohnnyGuitar is loaded, here when JohnnyGuitar's editor ids are in): a light form is 0xCC bytes
 //!   ([`light_form_size`]) and keeps its editor id: `SetEditorID` puts the form into the game's
 //!   editor id map and the map's copy of the text at +0xC8 ([`set_editor_id`]), `GetEditorID`
 //!   answers it ([`editor_id`]).
@@ -178,6 +178,8 @@ const FORM_COLOUR: u32 = 0xa4;
 const FORM_FLAGS: u32 = 0xa8;
 const FORM_FADE: u32 = 0xb4;
 const FORM_EDITOR_ID: u32 = 0xc8;
+/// `TESObjectLIGH`'s form type (the byte +4).
+const LIGH_TYPE: u8 = 0x1e;
 /// The flags of an animated light (`test dword ptr [ecx+0xA8], 0x19C8`).
 const ANIMATED: u32 = 0x19c8;
 /// The game's editor id map (`*011C54C8`), its node allocator (`0043a010`, `thiscall`, the
@@ -256,15 +258,23 @@ pub fn install(e: &mut Engine) {
         e.on_site(slot, point_light_size);
     }
     e.on_site(CLONE_WORD, clone_word);
-    e.on_site(LIGHT_FORM_SIZE, light_form_size);
+    // H04 only without JohnnyGuitar (`if (!GetModuleHandle("johnnyguitar"))`): with its editor
+    // ids built in (their row on), a light form keeps the game's size and JohnnyGuitar's getter
+    // and setter take the light class's stub slots.
+    let jg = engine_core::editor_ids::on(e);
+    if !jg {
+        e.on_site(LIGHT_FORM_SIZE, light_form_size);
+    }
     e.on_site(LOAD_NIF, load_nif);
     e.on_site(CLONE_3D, clone_3d);
     for slot in ANIMATED_LIGHTS {
         e.on_site(slot, animated_lights);
     }
     e.wrap(UPDATE_ANIMATED_LIGHT, update_animated_light);
-    slots::write_slot(e, GET_EDITOR_ID_SLOT, GET_EDITOR_ID_ROUTINE, editor_id);
-    slots::write_slot(e, SET_EDITOR_ID_SLOT, SET_EDITOR_ID_ROUTINE, set_editor_id);
+    if !jg {
+        slots::write_slot(e, GET_EDITOR_ID_SLOT, GET_EDITOR_ID_ROUTINE, editor_id);
+        slots::write_slot(e, SET_EDITOR_ID_SLOT, SET_EDITOR_ID_ROUTINE, set_editor_id);
+    }
     slots::write_slot(e, DESTROY_SLOT, DESTROY_ROUTINE, destroy_point_light);
 }
 
@@ -433,7 +443,12 @@ fn tag_light(e: &mut Engine, light: u32, root: u32) {
         let text = e.mem.u32(extra.wrapping_add(STRING_EXTRA_TEXT));
         if e.mem.u32(extra) == STRING_EXTRA_VTABLE && text != 0 {
             let form = editor_id_lookup_at(e, text);
-            if form != 0 {
+            // JohnnyGuitar's InitLights (JIPFixes.cpp), which replaces JIP's while its editor ids
+            // are in (their row on): every form has a name then, so the light is tied only when
+            // the form is a light (type 0x1E); the extra goes either way.
+            let tie = form != 0
+                && (!engine_core::editor_ids::on(e) || e.mem.u8(form.wrapping_add(4)) == LIGH_TYPE);
+            if tie {
                 let flags = e.mem.u8(light.wrapping_add(FLAGS_HIGH));
                 e.mem
                     .set_u8(light.wrapping_add(FLAGS_HIGH), flags | IS_POINT_LIGHT);

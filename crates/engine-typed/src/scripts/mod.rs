@@ -8,7 +8,9 @@
 //!
 //! - [`expression`]: `CExpression`, `00593490` to `00594d40`;
 //! - [`numbers`]: the text tests of an operand (`IsAnInteger`, `IsAFloat`);
-//! - [`value`]: the operand reader and its two lookups.
+//! - [`value`]: the operand reader and its two lookups;
+//! - [`run`]: `Script::Run` and the run manager every script run goes through, a fresh runner, and
+//!   the locals' variable set and action flags' clear a run makes.
 //!
 //! What stays by address: the tokenizer (`00593870`, which lStewieAl's Tweaks' script inlines
 //! replace; a built-in of it reaches every caller there), the operand reader (`005ac7a0`, a
@@ -31,6 +33,7 @@ use engine_core::{entry, AbiFn};
 
 pub mod expression;
 pub mod numbers;
+pub mod run;
 pub mod value;
 
 /// This family's bit: what each `typed_call!` of it names.
@@ -72,5 +75,20 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x005a_c7a0, value::read_operand(u32, u32, u32, u32, u32, u32, u32, u8) -> bool),
         entry!(0x005a_c4f0, value::referenced_object(Ptr, u32, u32) -> u32),
         entry!(0x005a_9140, value::get_variable(Ptr, u32, Ptr) -> f64),
+        entry!(0x005a_c1e0, run::script_run(Ptr, u32, u32, u32, u8) -> bool),
+        entry!(0x005a_c340, run::run_effect_start(Ptr, u32, u32)),
+        entry!(0x005a_c380, run::run_effect_finish(Ptr, u32, u32)),
+        entry!(0x005a_c3c0, run::run_effect_update(Ptr, u32, u32, f32)),
+        entry!(0x005e_24d0, run::manager_instance() -> Ptr),
+        entry!(
+            0x005e_2590,
+            run::manager_run(Ptr, Ptr, Ptr, Ptr, Ptr, u8, u8, u8, f32) -> bool
+        ),
+        entry!(0x005e_0c60, run::construct_runner(Ptr) -> Ptr),
+        entry!(0x005e_2850, run::runner_is_busy(Ptr) -> bool),
+        entry!(0x005e_2730, run::manager_init_action_list(Ptr, Ptr, Ptr, Ptr) -> bool),
+        entry!(0x005a_e2e0, run::forget_referenced_objects(Ptr)),
+        entry!(0x005a_8ea0, run::clear_action_flags(Ptr)),
+        entry!(0x005a_9290, run::set_variable(Ptr, u32, f64)),
     ]
 }

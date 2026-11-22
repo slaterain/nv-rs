@@ -5,7 +5,7 @@
 #   ./play.sh                  start (the first time it finds your game, or asks for its folder)
 #   ./play.sh --game FOLDER    use the game in FOLDER, and remember it
 #   ./play.sh --forget-game    forget the remembered game folder, then start (it asks again)
-#   ./play.sh --import-saves   offer again to copy the saves found in Steam's Proton folder
+#   ./play.sh --import-saves   offer again to copy the saves found in Steam's Proton folder, then stop
 #   ./play.sh --check          only check the game and say whether it can start
 #   ./play.sh --mods           play with mods: those installed with nv-rs and those put in the
 #                              "my mods" folder in nv-rs's own folder (it says where), laid over a
@@ -412,6 +412,50 @@ copy_file() {
     rm -f -- "$2.part"
     return 1
 }
+# put_pair FROM CO TO TO_CO: a save and its co-save (CO empty: none) put as a whole pair or not at
+# all, as the launcher's import puts them (crates/nv-launcher saves.rs): both copied beside their
+# places first (.part), the old pair moved aside (.old), the co-save moved in, then the save last
+# (the file the game lists); on any failure the new files go and the old pair is put back. A
+# folder in the way of a .part or .old name stops it (mv would move into the folder).
+put_pair() {
+    rm -f -- "$3.part" "$4.part" 2>/dev/null
+    if [ -d "$3.part" ] || [ -d "$4.part" ] || ! cp -- "$1" "$3.part" ||
+        { [ -n "$2" ] && ! cp -- "$2" "$4.part"; }; then
+        rm -f -- "$3.part" "$4.part" 2>/dev/null
+        return 1
+    fi
+    aside_co=
+    aside=
+    if [ -e "$4" ] || [ -L "$4" ]; then
+        rm -f -- "$4.old" 2>/dev/null
+        if [ -d "$4.old" ] || ! mv -f -- "$4" "$4.old"; then
+            rm -f -- "$3.part" "$4.part" 2>/dev/null
+            return 1
+        fi
+        aside_co=1
+    fi
+    if [ -e "$3" ] || [ -L "$3" ]; then
+        rm -f -- "$3.old" 2>/dev/null
+        if [ -d "$3.old" ] || ! mv -f -- "$3" "$3.old"; then
+            [ -z "$aside_co" ] || mv -f -- "$4.old" "$4"
+            rm -f -- "$3.part" "$4.part" 2>/dev/null
+            return 1
+        fi
+        aside=1
+    fi
+    placed_co=
+    if [ -z "$2" ] || { mv -f -- "$4.part" "$4" && placed_co=1; }; then
+        if mv -f -- "$3.part" "$3"; then
+            rm -f -- "$3.old" "$4.old" 2>/dev/null
+            return 0
+        fi
+    fi
+    [ -z "$placed_co" ] || rm -f -- "$4"
+    rm -f -- "$3.part" "$4.part" 2>/dev/null
+    [ -z "$aside" ] || mv -f -- "$3.old" "$3"
+    [ -z "$aside_co" ] || mv -f -- "$4.old" "$4"
+    return 1
+}
 copy_saves() { # FROM-NAME FOLDER
     source=$(child "$2" Saves)
     [ -n "$source" ] && [ -d "$source" ] || return 0
@@ -459,15 +503,10 @@ copy_saves() { # FROM-NAME FOLDER
                 continue
             }
         fi
-        if copy_file "$from" "$to"; then
-            if [ -n "$co" ]; then
-                copy_file "$co" "$to_co" || say "Could not copy $base.nvse."
-            else
-                rm -f -- "$to_co"
-            fi
+        if put_pair "$from" "$co" "$to" "$to_co"; then
             copied=$((copied + 1))
         else
-            say "Could not copy $name."
+            say "Could not copy $name (nv-rs's own $name, if any, is as it was)."
         fi
     done 4<<EOF
 $names
@@ -488,6 +527,11 @@ EOF
     elif [ "$opt_import" = 1 ]; then
         say "No saves were found in Steam's Proton folder or in Heroic's or Lutris's prefixes."
     fi
+fi
+# --import-saves (the launcher's Import saves, as Windows' Play.exe --import-saves): the copy
+# only; the game is started by a plain ./play.sh (or the launcher's Play).
+if [ "$opt_import" = 1 ]; then
+    exit 0
 fi
 if [ "$profile" = mods ] && ! has_own_saves; then
     say "Saves made with mods are kept apart from your other nv-rs saves, in $saves. To copy saves from Steam's Proton folder into them: ./play.sh --mods --import-saves"

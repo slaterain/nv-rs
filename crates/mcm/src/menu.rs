@@ -288,21 +288,200 @@ pub fn get_float(e: &mut Engine, path: &[u8]) -> f32 {
 }
 
 /// `Tile::SetFloat(id, num, true)` on the trait at `path`; the "not found" line without it.
+/// A set that would change nothing is not made ([`float_set_is_idle`]).
 pub fn set_float(e: &mut Engine, path: &[u8], num: f32) {
     let value = value_at(e, path);
+    set_float_value(e, value, path, num);
+}
+
+/// `Tile::SetString(id, text, true)` on the trait at `path`; the "not found" line without it.
+/// A set that would change nothing is not made ([`string_set_is_idle`]).
+pub fn set_string(e: &mut Engine, path: &[u8], text: &[u8]) {
+    let value = value_at(e, path);
+    set_string_value(e, value, path, text);
+}
+
+/// What the lookups of one command keep, so that a `Mass` command finds the menu, the tiles every
+/// index shares and each trait's id once instead of once per index ([`Lookup::value_at`]). The
+/// answers are [`value_at`]'s: the same walk, with three things kept between its steps, each of
+/// which the game changes only when a menu or a tile is made or deleted, which no trait set does
+/// (a set changes values, runs the actions that depend on them and queues tile updates for the
+/// next frame; it adds and removes no tile and no menu):
+/// - each menu name's tile (`&name;`'s trait id and the menu array's entry);
+/// - each tile's children by name: its children walked once in [`children`]'s order, the first of
+///   each name kept (names without case, as `_stricmp` compares them), and walked again when the
+///   tile's list of children no longer starts and ends with the same nodes;
+/// - each trait name's id (`TraitNameToID`: the text table only grows at start-up and when a
+///   menu file is read).
+///
+/// A part that is not a plain name (`name:n`, `*`) is walked as [`child`] walks it.
+#[derive(Default)]
+pub struct Lookup {
+    menus: std::collections::HashMap<Vec<u8>, Option<u32>>,
+    children: std::collections::HashMap<u32, Kids>,
+    traits: std::collections::HashMap<Vec<u8>, u32>,
+}
+
+/// A tile's children by lower-cased name, and the first and last nodes of its list when they
+/// were walked.
+struct Kids {
+    ends: (u32, u32),
+    by_name: std::collections::HashMap<Vec<u8>, u32>,
+}
+
+impl Lookup {
+    /// `TraitNameToID(name)`, once per name.
+    fn trait_id(&mut self, e: &mut Engine, name: &[u8]) -> u32 {
+        if let Some(&id) = self.traits.get(name) {
+            return id;
+        }
+        let id = trait_id(e, name);
+        self.traits.insert(name.to_vec(), id);
+        id
+    }
+
+    /// [`menu_of`], the menu's tile kept by its name.
+    fn menu_of(&mut self, e: &mut Engine, path: &[u8]) -> Option<(u32, usize)> {
+        let slash = separator(path)?;
+        let name = &path[..slash];
+        if let Some(&menu) = self.menus.get(name) {
+            return menu.map(|m| (m, slash));
+        }
+        let menu = menu_of(e, path).map(|(m, _)| m);
+        self.menus.insert(name.to_vec(), menu);
+        menu.map(|m| (m, slash))
+    }
+
+    /// [`child`], from the kept children of `tile` for a plain name.
+    fn child(&mut self, e: &mut Engine, tile: u32, wanted: &[u8]) -> u32 {
+        let plain = wanted != b"*" && !wanted.iter().skip(1).any(|&b| b == b':');
+        if !plain {
+            return child(e, tile, wanted);
+        }
+        let ends = (
+            e.mem.u32(tile.wrapping_add(CHILDREN)),
+            e.mem.u32(tile.wrapping_add(CHILDREN + 4)),
+        );
+        let fresh = self.children.get(&tile).is_some_and(|k| k.ends == ends);
+        if !fresh {
+            let mut by_name = std::collections::HashMap::new();
+            for candidate in children(e, tile) {
+                let text = e.mem.u32(candidate.wrapping_add(NAME));
+                if text == 0 {
+                    continue;
+                }
+                let name = nvse::table::guest_text(e, text).to_ascii_lowercase();
+                by_name.entry(name).or_insert(candidate);
+            }
+            self.children.insert(tile, Kids { ends, by_name });
+        }
+        let kids = &self.children[&tile];
+        kids.by_name
+            .get(&wanted.to_ascii_lowercase())
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// [`component`] with the kept children.
+    fn component(&mut self, e: &mut Engine, tile: u32, rest: &[u8]) -> Option<(u32, Vec<u8>)> {
+        let parts: Vec<&[u8]> = rest
+            .split(|&b| b == b'\\' || b == b'/')
+            .filter(|p| !p.is_empty())
+            .collect();
+        let mut parent = tile;
+        for (i, part) in parts.iter().enumerate() {
+            let found = self.child(e, parent, part);
+            if found != 0 {
+                parent = found;
+                continue;
+            }
+            return (i + 1 == parts.len()).then(|| (parent, part.to_vec()));
+        }
+        None
+    }
+
+    /// [`value_at`] with what this lookup keeps.
+    pub fn value_at(&mut self, e: &mut Engine, path: &[u8]) -> u32 {
+        if path.len() >= PATH_BUFFER {
+            return 0;
+        }
+        let Some((menu, slash)) = self.menu_of(e, path) else {
+            return 0;
+        };
+        let Some((tile, name)) = self.component(e, menu, &path[slash + 1..]) else {
+            return 0;
+        };
+        let id = self.trait_id(e, &name);
+        value_of(e, tile, id)
+    }
+
+    /// [`set_float`] through this lookup.
+    pub fn set_float(&mut self, e: &mut Engine, path: &[u8], num: f32) {
+        let value = self.value_at(e, path);
+        set_float_value(e, value, path, num);
+    }
+
+    /// [`set_string`] through this lookup.
+    pub fn set_string(&mut self, e: &mut Engine, path: &[u8], text: &[u8]) {
+        let value = self.value_at(e, path);
+        set_string_value(e, value, path, text);
+    }
+}
+
+/// A trait value's string (`+0xC`) and its actions (`+0x10`, the first of its list).
+const VALUE_STRING: u32 = 0xc;
+const VALUE_ACTIONS: u32 = 0x10;
+
+/// Whether `Tile::SetFloat(id, num, true)` would change nothing on the trait value `value`: it
+/// holds exactly `num` (the same bits), no string and no actions. `Tile::Value::SetFloat` then
+/// stores the same number, has no string to free and no actions to clear, and its
+/// `CalculateValue` runs no action, sees the number unchanged (so no change event, no
+/// `PostParse`, no queued update) and leaves the trait as it was: the call changes no memory the
+/// game reads. A number equal but of other bits (0.0 and -0.0) or a NaN goes through the call.
+fn float_set_is_idle(e: &Engine, value: u32, num: f32) -> bool {
+    // A NaN is never equal to the number held (the game's compare), even with the same bits.
+    !num.is_nan()
+        && e.mem.u32(value + VALUE_NUM) == num.to_bits()
+        && e.mem.u32(value + VALUE_STRING) == 0
+        && e.mem.u32(value + VALUE_ACTIONS) == 0
+}
+
+/// Whether `Tile::SetString(id, text, true)` would change nothing on the trait value `value`
+/// except where its string lives: it holds a string equal to `text`, the number 0.0 (the bits
+/// `SetString` stores) and no actions. `Tile::Value::SetString` then frees the string and stores
+/// a copy of the same text (a new block), clears no action, and its `CalculateValue` sees the
+/// string unchanged: no change event, no `PostParse`, no queued update. Skipped, the trait keeps
+/// its block with the same text; which block holds it is not something the game reads.
+fn string_set_is_idle(e: &Engine, value: u32, text: &[u8]) -> bool {
+    let old = e.mem.u32(value + VALUE_STRING);
+    old != 0
+        && e.mem.u32(value + VALUE_NUM) == 0
+        && e.mem.u32(value + VALUE_ACTIONS) == 0
+        && nvse::table::guest_text(e, old) == text
+}
+
+/// `Tile::SetFloat(id, num, true)` on the trait value `value` found at `path` (the "not found"
+/// line for 0); nothing when the set would change nothing ([`float_set_is_idle`]).
+fn set_float_value(e: &mut Engine, value: u32, path: &[u8], num: f32) {
     if value == 0 {
         not_found(e, path);
+        return;
+    }
+    if float_set_is_idle(e, value, num) {
         return;
     }
     let (tile, id) = (e.mem.u32(value + VALUE_TILE), e.mem.u32(value));
     e.call(SET_FLOAT, &args![tile, id, num.to_bits(), 1u32]);
 }
 
-/// `Tile::SetString(id, text, true)` on the trait at `path`; the "not found" line without it.
-pub fn set_string(e: &mut Engine, path: &[u8], text: &[u8]) {
-    let value = value_at(e, path);
+/// `Tile::SetString(id, text, true)` on the trait value `value` found at `path` (the "not found"
+/// line for 0); nothing when the set would change nothing ([`string_set_is_idle`]).
+fn set_string_value(e: &mut Engine, value: u32, path: &[u8], text: &[u8]) {
     if value == 0 {
         not_found(e, path);
+        return;
+    }
+    if string_set_is_idle(e, value, text) {
         return;
     }
     let (tile, id) = (e.mem.u32(value + VALUE_TILE), e.mem.u32(value));

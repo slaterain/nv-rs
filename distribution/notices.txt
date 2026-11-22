@@ -18,4 +18,5 @@ vendor/wgpu-hal/LICENSE.APACHE	LICENSE-wgpu-hal.APACHE
 vendor/wgpu-hal/LICENSE.MIT	LICENSE-wgpu-hal.MIT
 crates/mcm/NOTICE	NOTICE-mcm
 crates/stewie/NOTICE	NOTICE-stewie
+crates/johnnyguitar/NOTICE	NOTICE-johnnyguitar
 crates/engine-platform/data/LICENSE-SDL_GameControllerDB	LICENSE-SDL_GameControllerDB
