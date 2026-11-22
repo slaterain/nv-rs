@@ -3197,6 +3197,53 @@ mod tests {
         }
     }
 
+    /// Row S0069 (lStewieAl's Tweaks, `0x781CD0`): a book (type 0x19) at the end of the pad's
+    /// wheel highlight is refused with the "can't hotkey" message with the row off; with it on it
+    /// is put on the wheel.
+    #[test]
+    fn s0069_the_wheel_takes_a_book() {
+        for on in [false, true] {
+            let mut e = Engine::new();
+            let this = idle_menu(&mut e);
+            e.set_global(CURRENT_ITEM, 0x7000u32);
+            e.set_global(WHEEL_HIGHLIGHTED, 1u8);
+            e.set_global(MESSAGE_TIME, 2.0f32.to_bits());
+            e.set(this, InventoryMenu::iCurrTab, 5);
+            answer(&mut e, GAMEPAD_IN_USE, 1);
+            answer(&mut e, WHEEL_GET_VISIBLE, 1);
+            answer(&mut e, WHEEL_MOVE_HIGHLIGHT, u32::MAX);
+            answer_st0(&mut e, ITEM_GET_HEALTH, 0.5);
+            answer(&mut e, WORD_AT_FOUR, 0x900);
+            answer(&mut e, TILE_IS_TRUE, 1);
+            answer(&mut e, ITEM_OBJECT, 0x7100);
+            answer(&mut e, FORM_TYPE, 0x19);
+            answer(&mut e, SETTING_STRING, 0x5100);
+            stub(
+                &mut e,
+                &[
+                    WHEEL_ASSIGN,
+                    UPDATE_INVENTORY_MENU,
+                    WHEEL_SET_VISIBLE,
+                    LIST_ADD_OBJECT,
+                    SHOW_MESSAGE,
+                ],
+            );
+            e.set_stewie(engine_core::extend::stewie::HOTKEY_GRX_AND_BOOKS, on);
+            e.call_log = Some(vec![]);
+            e.call(0x0078_1ba0, &args![this]);
+            assert_eq!(
+                calls_to(&e, WHEEL_ASSIGN).len(),
+                usize::from(on),
+                "row {on}"
+            );
+            assert_eq!(
+                calls_to(&e, SETTING_STRING).contains(&vec![NO_HOTKEY_SETTING]),
+                !on,
+                "row {on}"
+            );
+        }
+    }
+
     #[test]
     fn do_idle_closes_the_wheel_without_a_key_and_clicks_on_control_1() {
         let mut e = Engine::new();
@@ -3862,6 +3909,53 @@ mod n054_tests {
             }));
             e.call_stack.clear();
             assert_eq!(run.is_ok(), on, "{row:?} {on}");
+        }
+    }
+
+    /// Row S0069 (lStewieAl's Tweaks, `0x78054D`): Use clicked on a book while the hot-key wheel
+    /// is open (no pad) is refused with the "can't hotkey" message with the row off; with it on
+    /// the book is put on the wheel.
+    #[test]
+    fn s0069_use_puts_a_book_on_the_wheel() {
+        for on in [false, true] {
+            let mut e = Engine::new();
+            let this = menu(&mut e);
+            pages(&mut e, &[TRAIT_FROM_NAME_01073974]);
+            e.set_global(CURRENT_ITEM, 0x7000u32);
+            e.set_global(MESSAGE_TIME, 2.0f32.to_bits());
+            e.set_global(TRAIT_FROM_NAME_01073974, 0x4e01u32);
+            e.set_global(TRAIT_FROM_NAME_01073984, 0x4e02u32);
+            answer(&mut e, ITEM_OBJECT, 0x7100);
+            answer(&mut e, FORM_TYPE, 0x19);
+            answer(&mut e, WORD_AT_FOUR, 0x4000);
+            // The hot-key trait true, the keyring's false.
+            e.register(TILE_IS_TRUE, |_, a| Ret {
+                eax: u32::from(a[1] == 0x4e01),
+                ..Ret::default()
+            });
+            answer(&mut e, WHEEL_GET_VISIBLE, 1);
+            answer(&mut e, GAMEPAD_IN_USE, 0);
+            answer_st0(&mut e, ITEM_GET_HEALTH, 0.5);
+            answer(&mut e, SETTING_STRING, 0x5100);
+            stub(&mut e, &[SHOW_MESSAGE, WHEEL_ASSIGN_ITEM, LIST_ADD_OBJECT]);
+            e.set_stewie(stewie::HOTKEY_GRX_AND_BOOKS, on);
+            e.call_log = Some(vec![]);
+            // With the row on the click goes on into the menu's update, which this fixture does
+            // not hold up: only the calls up to there are read.
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.call(0x0078_0140, &args![this, 0x1di32, 0u32]);
+            }));
+            e.call_stack.clear();
+            assert_eq!(
+                calls_to(&e, WHEEL_ASSIGN_ITEM).len(),
+                usize::from(on),
+                "row {on}"
+            );
+            assert_eq!(
+                calls_to(&e, SETTING_STRING).contains(&vec![NO_HOTKEY_SETTING]),
+                !on,
+                "row {on}"
+            );
         }
     }
 
