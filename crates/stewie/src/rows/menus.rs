@@ -10,7 +10,7 @@ pub const ROWS: &[Row] = &[
         bit: stewie::START_MENU_CLOSE_SAVES_SETTINGS,
         function: "patchSaveINIChangesWhenClosingStartMenuAndSetXPBarQuestAndMessagesVisible",
         plan: "S0020",
-        key: "bSaveINIChangesWhenClosingStartMenu",
+        key: "bSaveINIChangesWhenClosingStartMenuAndSetXPBarQuestAndMessagesVisible",
         tweaks: None,
         summary: "changed settings are saved when the pause menu closes, and the HUD's XP bar, quest and messages come back",
     },
