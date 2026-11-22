@@ -1228,6 +1228,11 @@ pub fn start(e: &mut Engine) -> Result<(), String> {
     // threads may still use them after the main engine is gone.
     e.kernel.leak();
     e.device.leak();
+    // The compact culling copy's store track (`engine_typed::culling::compact`, NV_CULL_COMPACT on
+    // or check) is made before the memory is shared, so every view carries it.
+    if std::env::var("NV_CULL_COMPACT").is_ok_and(|v| v == "on" || v == "check") {
+        let _ = e.mem.enable_track();
+    }
     e.mem.start_sharing();
     let world: &'static World = Box::leak(Box::new(World::new(e.kernel.import_names.clone())));
     // The events and semaphores made before (the C runtime's start-up, static initializers): kept

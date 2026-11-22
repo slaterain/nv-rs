@@ -3448,3 +3448,55 @@ fn list_find() {
     .run()
     .assert_same();
 }
+
+/// A word array (vtable, buffer, size, capacity) of the first `n` of [7, 9, 7, 11, 13] (no buffer
+/// for `n` = 6), the word looked for (by index into them, past them a missing 99), the start index,
+/// and the compare: the word compare (`009a3830`) or a stand-in that accepts a word above the
+/// argument's (`00fd_0400`, logging its words).
+fn array_find_words(e: &mut Engine, case: &Case) -> Vec<u32> {
+    e.map(LOG, 0x4000);
+    e.register(0x00fd_0400, |e, a| {
+        log(e, 0x0400, a[0]);
+        ret(u32::from(e.mem.u32(a[0]) > e.mem.u32(a[1])))
+    });
+    let items = [7, 9, 7, 11, 13];
+    let n = case.word(0) as usize;
+    let buffer = if n == 6 {
+        0
+    } else {
+        block(e, 4 * 5, &items[..n])
+    };
+    let size = if n == 6 { 3 } else { n as u32 };
+    let array = block(e, 16, &[0, buffer, size, 5]);
+    let i = case.word(1) as usize;
+    let wanted = block(e, 4, &[if i < n.min(5) { items[i] } else { 99 }]);
+    let compare = if case.word(3) == 0 {
+        0x009a_3830
+    } else {
+        0x00fd_0400
+    };
+    vec![array, wanted, case.word(2), compare]
+}
+
+/// A word array's search (`00719b20`, what `Interface::TileIsBeingDeleted` asks for every deleted
+/// tile): found first, later, twice (the first wins), from a later start, not at all, an empty array,
+/// no buffer; the word compare done in place, any other compare called by address.
+#[test]
+fn array_find() {
+    Diff::new(entry!(
+        0x0071_9b20,
+        refs::array_find(Ptr<_>, u32, u32, u32) -> i32
+    ))
+    .common(0x0071_9b20)
+    // The word compare (`009a3830`): the typed search compares the two words in place.
+    .ignore_calls(&[0x009a_3830])
+    .inputs(&[
+        Input::Of(&[0, 1, 3, 5, 6]),
+        Input::Of(&[0, 1, 2, 3, 4, 9]),
+        Input::Of(&[0, 1, 3, 7]),
+        Input::Of(&[0, 1]),
+    ])
+    .setup(array_find_words)
+    .run()
+    .assert_same();
+}

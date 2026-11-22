@@ -1,4 +1,4 @@
-//! Group GS's game patches: O7, O8, G03, G34, G70, G71, G123, G51, D07. The expected values come from
+//! Group GS's game patches: O7, O8, G03, G24, G34, G70, G71, G123, G51, D07. The expected values come from
 //! JIP's assembly (`DoOperatorHook`, `TerminalGetLockedHook`, `GetHitIMODHook`, the byte patches)
 //! and the exe's code at each place (doubles checked with an independent IEEE computation); the
 //! seams' use in the translations is tested beside them (`expression.rs`,
@@ -40,10 +40,12 @@ fn rows_are_jips_addresses() {
             0x005e_0fbe,
             0x005e_1a23,
             0x005e_1f0b,
-            0x005b_54e7
+            0x005b_54e7,
+            0x005e_0dd1
         ]
     );
     assert_eq!(REMOVE_ME_REFRESH.addr(), 0x005b_54e7);
+    assert_eq!(NESTED_RUN_LOG.addr(), 0x005e_0dd1);
     assert!(AREA.fix_wraps.is_empty() && AREA.jip_sites.is_empty());
     assert_eq!(AREA.jip_wraps, [0x005d_2860]);
 }
@@ -84,6 +86,8 @@ fn each_handler_is_at_its_row_after_install() {
         assert_eq!(e.site(slot.addr(), &[]), Some(1));
     }
     assert_eq!(e.site(ACHIEVEMENT.addr(), &[]), Some(1));
+    // G24: the jump over a busy runner's names and log is taken.
+    assert_eq!(e.site(NESTED_RUN_LOG.addr(), &[]), Some(1));
     // O8: 7 - 3 with integers writes 4 and the integer type.
     e.mem.set_u32(CURRENT, 0xaaaa_aa01);
     assert_eq!(
