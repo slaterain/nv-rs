@@ -15,6 +15,14 @@ pub const ROWS: &[Row] = &[
         summary: "the controls menu does not take the key that started a remap as the new key",
     },
     Row {
+        bit: stewie::RECIPE_WHEEL_CHANGES_CATEGORY,
+        function: "MenuFixes",
+        plan: "S0022.08",
+        key: "bMenuFixesRecipeWheelCategory",
+        tweaks: None,
+        summary: "the mouse wheel over the crafting menu's category title changes the category",
+    },
+    Row {
         bit: stewie::MAP_QUEST_KEEPS_SCROLL,
         function: "MenuFixes",
         plan: "S0022.09",
@@ -53,6 +61,14 @@ pub const ROWS: &[Row] = &[
         key: "bMenuFixesMapDragUndiscovered",
         tweaks: None,
         summary: "dragging the local map over an undiscovered place no longer says you cannot fast travel there",
+    },
+    Row {
+        bit: stewie::HUD_CONDITION_FLASH_FRAME_RATE,
+        function: "MenuFixes",
+        plan: "S0022.22",
+        key: "bMenuFixesConditionFlashFrameRate",
+        tweaks: None,
+        summary: "changes a timing: the low-condition label flashes about 1.15 times a second at any frame rate (the game flashed it faster the higher the frame rate)",
     },
     Row {
         bit: stewie::MAP_PAD_MARKER_WHILE_MOVING,
@@ -111,12 +127,28 @@ pub const ROWS: &[Row] = &[
         summary: "the pad's and Page Up's weapon mod button does nothing while the inventory's mod button cannot be used",
     },
     Row {
+        bit: stewie::HUD_COMPASS_FOLLOWS_ITS_ALPHA,
+        function: "MenuFixes",
+        plan: "S0022.35",
+        key: "bMenuFixesCompassAlpha",
+        tweaks: None,
+        summary: "the compass markers fade with the compass",
+    },
+    Row {
         bit: stewie::MAP_COMPANION_MARKERS_RESET,
         function: "MenuFixes",
         plan: "S0022.41",
         key: "bMenuFixesCompanionMarkersReset",
         tweaks: None,
         summary: "stale companion markers are cleared when the map refreshes",
+    },
+    Row {
+        bit: stewie::HUD_HEALTH_BAR_NOT_TIED_TO_PROMPT,
+        function: "MenuFixes",
+        plan: "S0022.42",
+        key: "bMenuFixesHealthBarNotTiedToPrompt",
+        tweaks: None,
+        summary: "the enemy health bar shows while an action prompt is up",
     },
     Row {
         bit: stewie::CARAVAN_PAD_NOT_WITH_CONSOLE,
@@ -151,6 +183,14 @@ pub const ROWS: &[Row] = &[
         summary: "the radio comes back to full volume when a dialogue closes or opens another menu",
     },
     Row {
+        bit: stewie::ROCK_IT_PROJECTILE_PROMPT,
+        function: "fixRockItLauncherProjectileDisplay",
+        plan: "S0038",
+        key: "bFixRockItLauncherProjectileDisplay",
+        tweaks: None,
+        summary: "a Rock-It Launcher projectile on the ground shows its item and the Take prompt",
+    },
+    Row {
         bit: stewie::RECIPE_ARMOUR_ICONS,
         function: "patchFixRecipeMenuArmorIcons",
         plan: "S0044",
@@ -183,6 +223,14 @@ pub const ROWS: &[Row] = &[
         summary: "a crafting ingredient count never shows below 0",
     },
     Row {
+        bit: stewie::HEALTH_BAR_SETTING_HIDES,
+        function: "patchFixHideHealthbarSetting",
+        plan: "S0072",
+        key: "bFixHideHealthbarSetting",
+        tweaks: None,
+        summary: "the health bar settings really hide the enemy health bar",
+    },
+    Row {
         bit: stewie::ITEM_MOD_MENU_KEEPS_EQUIPPED,
         function: "fixItemModMenuUnEquipBug",
         plan: "S0088",
@@ -207,6 +255,14 @@ pub const ROWS: &[Row] = &[
         summary: "the SPECIAL points to give are capped by what the stats can still take, so the page is never stuck",
     },
     Row {
+        bit: stewie::HUD_CONDITION_ARROWS_FLAGS,
+        function: "patchFixCndArrowsIgnoringHUDFlags",
+        plan: "S0120",
+        key: "bFixCndArrowsIgnoringHUDFlags",
+        tweaks: None,
+        summary: "the weapon condition arrows stay hidden on a weapon change while the HUD hides the action points",
+    },
+    Row {
         bit: stewie::NO_LOADING_DLC_POPUP,
         function: "preventLoadingDlcPopup",
         plan: "S0154",
@@ -229,6 +285,14 @@ pub const ROWS: &[Row] = &[
         key: "bRouletteMenuFixesCutBetValue",
         tweaks: None,
         summary: "a roulette bet cut to the chips left updates the bet's number, not its caption",
+    },
+    Row {
+        bit: stewie::CROSSHAIR_THROWN_WEAPON_NAME,
+        function: "CrosshairProjectileNameFix",
+        plan: "S0197",
+        key: "bCrosshairProjectileNameFix",
+        tweaks: None,
+        summary: "a projectile under the crosshair takes its weapon's name only for thrown weapons",
     },
     Row {
         bit: stewie::RECIPE_REFRESH_KEEPS_CATEGORY,

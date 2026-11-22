@@ -738,24 +738,24 @@ pub fn clear_actions(e: &mut Engine, this: Ptr) {
 }
 
 /// The C runtime's `_stricmp` (`00ec68e4`) and `strcmp` (`00ec6da0`) through the crt family, the
-/// menus root (`00706cd0`), `00706cf0`, the path's split (`00a018d0`: the word before the
+/// menus root (`00706cd0`), the interface manager's globals tile (`00706cf0`: its word at +0xA0, `globalsTile` in JIP LN's layout), the path's split (`00a018d0`: the word before the
 /// parentheses as a text-table code, the name inside them copied out), `Tile::GetMenu`
 /// (`00a03c90`) and `Tile::GetMenuTile` (`00a03d40`).
 const MENUS_ROOT: u32 = 0x0070_6cd0;
-const INTERFACE_00706CF0: u32 = 0x0070_6cf0;
+const GLOBALS_TILE: u32 = 0x0070_6cf0;
 const SPLIT_PATH: u32 = 0x00a0_18d0;
 const GET_MENU: u32 = 0x00a0_3c90;
 const GET_MENU_TILE: u32 = 0x00a0_3d40;
 /// The split's buffer for the name (`char[0x104]` in the exe's frame).
 const NAME_BUFFER: u32 = 0x104;
 /// The words of an action link's path: `parent`, `me`, `sibling`, `child`, the menus root,
-/// `00706cf0`'s, the menu's and the grandparent.
+/// the globals tile, the menu's and the grandparent.
 const LINK_PARENT: i32 = 0x1389;
 const LINK_SELF: i32 = 0x138a;
 const LINK_SIBLING: i32 = 0x138c;
 const LINK_CHILD: i32 = 0x138d;
 const LINK_MENUS_ROOT: i32 = 0x138e;
-const LINK_00706CF0: i32 = 0x138f;
+const LINK_GLOBALS: i32 = 0x138f;
 const LINK_MENU: i32 = 0x1390;
 const LINK_GRANDPARENT: i32 = 0x1391;
 /// A tile's children list (head at +4, count at +0xC; a node is next, previous, tile) and its name
@@ -835,7 +835,7 @@ pub fn child_by_name(e: &mut Engine, this: Ptr, name: Ptr) -> Ptr {
 /// word and a name in parentheses (`00a018d0`, by address); by the word, the parent, the tile
 /// itself, the next sibling (the first child after the last) or the first sibling named so (any
 /// case), the first child or the descendant named so ([`child_by_name`]), the menus root,
-/// `00706cf0`'s tile, the menu's tile or the grandparent; any other word (a tile's own name) the
+/// the globals tile, the menu's tile or the grandparent; any other word (a tile's own name) the
 /// depth-first search of the menu's tree from the tile's menu tile, or from the menus root for no
 /// tile ([`find_named_in_tree`]). The tile is read without a null check where the exe reads it so.
 pub fn find_by_path(e: &mut Engine, tile: Ptr, path: Ptr) -> Ptr {
@@ -895,7 +895,7 @@ pub fn find_by_path(e: &mut Engine, tile: Ptr, path: Ptr) -> Ptr {
                 }
             }
             LINK_MENUS_ROOT => e.call(MENUS_ROOT, &args![]).ptr(),
-            LINK_00706CF0 => e.call(INTERFACE_00706CF0, &args![]).ptr(),
+            LINK_GLOBALS => e.call(GLOBALS_TILE, &args![]).ptr(),
             LINK_MENU => {
                 let menu = e.call(GET_MENU, &args![tile]).u32();
                 Ptr::new(e.mem.u32(menu.wrapping_add(4)))
