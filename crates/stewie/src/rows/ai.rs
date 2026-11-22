@@ -20,7 +20,7 @@ pub const ROWS: &[Row] = &[
         plan: "S0022.21",
         key: "bMenuFixesWorkbenchNoActivateSound",
         tweaks: None,
-        summary: "using a workbench or a reloading bench no longer plays the "no activate" sound",
+        summary: "using a workbench or a reloading bench no longer plays the \"no activate\" sound",
     },
     Row {
         bit: stewie::FOLLOWER_NO_AMMO_RECHARGER,
