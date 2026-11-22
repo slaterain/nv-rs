@@ -1371,8 +1371,20 @@ fn big_guns_world(word: u32) -> Engine {
     e.mem.set_u32(AV_INFO + 0x40, 0x0008_0007);
     e.mem.set_u32(AV_INFO + 0x44, 0x2000);
     e.mem.set_u32(AV_INFO + 0x4c, 0);
+    // The game's heap (`MemoryManager::Allocate` / `Deallocate` on `0x11F6238`), `String::Set`'s.
+    e.register(0x00aa_3e40, |e, a| e.mem.alloc(a[1]).into_ret());
+    e.register(0x00aa_4060, |e, a| {
+        e.mem.free(a[1]);
+        Ret::default()
+    });
     e.set_jip_patches(word);
     e
+}
+
+/// Big Guns' display name: (its buffer, its length, its text).
+fn display_name(e: &Engine) -> (u32, u16, Vec<u8>) {
+    let data = e.mem.u32(AV_INFO + 0x1c);
+    (data, e.mem.u16(AV_INFO + 0x20), e.mem.cstr(data))
 }
 
 /// What JIP's description map holds for Big Guns' description, if anything.
@@ -1383,16 +1395,26 @@ fn big_guns_description(e: &mut Engine) -> Option<Vec<u8>> {
         .cloned()
 }
 
-/// D06 with the row on (`bEnableBigGunsSkill` off): Big Guns' name `String` is its actor value
-/// name's (pointer and both lengths, the buffer shared) and its derivation the skills'
-/// `0x643BD0`; its flags (0x2000) and description stay.
+/// D06 with the row on (`bEnableBigGunsSkill` off): Big Guns' display name is its actor value
+/// name's text ("BigGuns", 7) and its derivation the skills' `0x643BD0`; its flags (0x2000) and
+/// description stay. The display name has its own block of the game's heap (JIP shares the
+/// name's buffer, which the exit's destructor would free twice): the two strings' buffers
+/// differ, and freeing both (as `00670080` does at the exit, the name first) frees two blocks.
 #[test]
 fn d06_names_big_guns_and_gives_it_the_skills_derivation() {
     use engine_core::extend::jip_patches::{FIXES, INSTALLED};
     let mut e = big_guns_world(INSTALLED | FIXES);
     deferred_init(&mut e);
-    assert_eq!(e.mem.u32(AV_INFO + 0x1c), AV_NAME_TEXT);
-    assert_eq!(e.mem.u32(AV_INFO + 0x20), 0x0008_0007);
+    let (block, length, text) = display_name(&e);
+    assert_eq!((length, text.as_slice()), (7, &b"BigGuns"[..]));
+    assert_ne!(block, 0);
+    assert_ne!(block, AV_NAME_TEXT, "its own buffer, not the name's");
+    // A second deferred start keeps one block of its own (the same text, not the name's buffer).
+    deferred_init(&mut e);
+    assert_eq!(display_name(&e), (block, 7, b"BigGuns".to_vec()));
+    // The exit's two frees: the name's buffer (not a heap block in this test) and the display
+    // name's, a live block freed once.
+    e.call(0x00aa_4060, &args![0x011f_6238u32, block]);
     assert_eq!(e.mem.u32(AV_INFO + 0x4c), 0x0064_3bd0);
     assert_eq!(e.mem.u32(AV_INFO + 0x44), 0x2000);
     assert_eq!(e.mem.u32(AV_INFO + 0x3c), AV_NAME_TEXT, "avName kept");
@@ -1408,7 +1430,7 @@ fn o3_makes_big_guns_a_skill_with_jips_description() {
     let mut e = big_guns_world(INSTALLED | FIXES | ENABLE_BIG_GUNS_SKILL);
     deferred_init(&mut e);
     assert_eq!(e.mem.u32(AV_INFO + 0x44), 0x410);
-    assert_eq!(e.mem.u32(AV_INFO + 0x1c), AV_NAME_TEXT);
+    assert_eq!(display_name(&e).2, b"BigGuns");
     assert_eq!(e.mem.u32(AV_INFO + 0x4c), 0x0064_3bd0);
     assert_eq!(
         big_guns_description(&mut e).as_deref(),
