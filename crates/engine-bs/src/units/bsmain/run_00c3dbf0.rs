@@ -74,6 +74,8 @@ pub fn fn_00c3dbf0(e: &mut Engine, this: Ptr) -> bool {
     if e.mem.u8(RUNNING) != 0 {
         return true;
     }
+    // The hitch log's timers (main only; no effect on the game).
+    let _whole = engine_core::hitch::Timed::main(engine_core::hitch::Count::LoadFinishNs);
     let mut result = 1u8;
     e.mem.set_u8(RUNNING, 1);
     let budget_word = if e.mem.u32(this.wrapping_add(MODE)) == MODE_SIX {
@@ -107,7 +109,13 @@ pub fn fn_00c3dbf0(e: &mut Engine, this: Ptr) -> bool {
         e.call(QUEUE_NEXT, &args![queue, task]);
         while e.mem.u32(task) != 0 {
             let current = e.mem.u32(task);
+            let timed = engine_core::hitch::Timed::main(engine_core::hitch::Count::LoadFinishNs);
             e.vcall(current, SLOT_TASK_RUN, &args![]);
+            let ns = timed.ns();
+            std::mem::forget(timed);
+            if ns > 0 {
+                engine_core::hitch::main_load_task(e.mem.u32(current), ns);
+            }
             let after = e.mem.u32(this.wrapping_add(AFTER_TASK));
             if after != 0 {
                 e.call(after, &args![after]);

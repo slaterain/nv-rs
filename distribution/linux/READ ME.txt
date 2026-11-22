@@ -117,6 +117,7 @@ they are. A save and its .nvse file are copied together.
                              answer its installer's questions (type what each line says; Enter
                              keeps the recommended choice); it goes to nv-rs's own folder, and
                              --mods plays with it. Also lists and removes installed mods
+                             (the launcher's Mods entry runs the same installer in its window)
 
 
 Your files

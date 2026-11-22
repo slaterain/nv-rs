@@ -51,12 +51,9 @@ const COVERAGE_KIND: u32 = 0x011f_94b8;
 /// `SetRenderState` of the renderer's state cache, virtual slot 0x68: `thiscall(state cache, state,
 /// value, 0, lock)` ([`set_render_state`]).
 pub(crate) const SLOT_SET_RENDER_STATE: u32 = 0x68;
-/// Device slots (`IDirect3DDevice9`): `SetRenderState`, `SetTexture`, `SetTextureStageState`,
-/// `SetSamplerState`, `SetVertexDeclaration`, `SetVertexShader`, `SetPixelShader`.
-const DEVICE_SET_RENDER_STATE: u32 = 0xe4;
-const DEVICE_SET_TEXTURE: u32 = 0x104;
-const DEVICE_SET_STAGE_STATE: u32 = 0x10c;
-pub(crate) const DEVICE_SET_SAMPLER_STATE: u32 = 0x114;
+/// Device slots (`IDirect3DDevice9`): `SetVertexDeclaration`, `SetVertexShader`, `SetPixelShader`
+/// (`SetRenderState`, `SetTexture`, `SetTextureStageState` and `SetSamplerState` go through the
+/// writer, `engine_core::real_threads::device_set_render_state` and its kin).
 const DEVICE_SET_DECLARATION: u32 = 0x15c;
 const DEVICE_SET_VERTEX_SHADER: u32 = 0x170;
 const DEVICE_SET_PIXEL_SHADER: u32 = 0x1ac;
@@ -464,12 +461,7 @@ pub fn set_render_state(
     let cached = elem_addr(this, NiDX9RenderState::auiRenderStates, state, 8);
     if capture::own_at::<u32>(e, cached) != value {
         let device = capture::own_get(e, this, NiDX9RenderState::m_pkD3DDevice9);
-        engine_core::real_threads::device_vcall(
-            e,
-            device,
-            DEVICE_SET_RENDER_STATE,
-            &args![state, value],
-        );
+        engine_core::real_threads::device_set_render_state(e, device, state, value);
         capture::set_own_at(e, cached, value);
     }
 }
@@ -503,12 +495,7 @@ pub fn set_stage_state(
     );
     if capture::own_at::<u32>(e, cached) != value {
         let device = capture::own_get(e, this, NiDX9RenderState::m_pkD3DDevice9);
-        engine_core::real_threads::device_vcall(
-            e,
-            device,
-            DEVICE_SET_STAGE_STATE,
-            &args![stage, state, value],
-        );
+        engine_core::real_threads::device_set_stage_state(e, device, stage, state, value);
     }
     capture::set_own_at(e, cached, value);
 }
@@ -538,12 +525,7 @@ pub fn set_sampler_state(
     }
     capture::set_own_at(e, cached, value);
     let device = capture::own_get(e, this, NiDX9RenderState::m_pkD3DDevice9);
-    engine_core::real_threads::device_vcall(
-        e,
-        device,
-        DEVICE_SET_SAMPLER_STATE,
-        &args![stage, state, value],
-    );
+    engine_core::real_threads::device_set_sampler_state(e, device, stage, state, value);
 }
 
 // Typed from 00e88a20
@@ -556,7 +538,7 @@ pub fn set_texture(e: &mut Engine, this: Ptr<NiDX9RenderState>, stage: u32, text
     }
     capture::set_own_at(e, cached, texture);
     let device = capture::own_get(e, this, NiDX9RenderState::m_pkD3DDevice9);
-    engine_core::real_threads::device_vcall(e, device, DEVICE_SET_TEXTURE, &args![stage, texture]);
+    engine_core::real_threads::device_set_texture(e, device, stage, texture);
 }
 
 /// The shader and declaration setters' pattern: `saved` keeps the current one when asked; a new one
