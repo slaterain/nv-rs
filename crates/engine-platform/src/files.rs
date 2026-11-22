@@ -7282,8 +7282,11 @@ mod handle_order_tests {
                 &args![0u32, 0u32, 0x0040_f200u32, p, 0u32, 0u32],
             )
             .eax;
+        // The test's main holds the kernel lock outside its waits (as the host does between frames), so it waits
+        // in 1 ms waits on the thread until the read is in flight; its calls below are then nested ones, which wait
+        // for the read with the kernel lock kept and apply its handed-over position.
         while !PAUSED.load(Ordering::SeqCst) {
-            std::thread::yield_now();
+            e.call(0x00fd_f094, &args![h, 1u32]);
         }
         PAUSE_MS.store(0, Ordering::SeqCst);
         // FILE_BEGIN.
