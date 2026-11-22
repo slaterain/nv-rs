@@ -437,7 +437,7 @@ put_pair() {
     if [ -e "$3" ] || [ -L "$3" ]; then
         rm -f -- "$3.old" 2>/dev/null
         if [ -d "$3.old" ] || ! mv -f -- "$3" "$3.old"; then
-            [ -z "$aside_co" ] || mv -f -- "$4.old" "$4"
+            [ -z "$aside_co" ] || mv -f -- "$4.old" "$4" || say "Could not put back $4 (it is at $4.old)."
             rm -f -- "$3.part" "$4.part" 2>/dev/null
             return 1
         fi
@@ -452,8 +452,8 @@ put_pair() {
     fi
     [ -z "$placed_co" ] || rm -f -- "$4"
     rm -f -- "$3.part" "$4.part" 2>/dev/null
-    [ -z "$aside" ] || mv -f -- "$3.old" "$3"
-    [ -z "$aside_co" ] || mv -f -- "$4.old" "$4"
+    [ -z "$aside" ] || mv -f -- "$3.old" "$3" || say "Could not put back $3 (it is at $3.old)."
+    [ -z "$aside_co" ] || mv -f -- "$4.old" "$4" || say "Could not put back $4 (it is at $4.old)."
     return 1
 }
 copy_saves() { # FROM-NAME FOLDER

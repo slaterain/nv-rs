@@ -95,19 +95,28 @@ fn put_pair(save: &Path, co: Option<&Path>, target: &Path, target_co: &Path) -> 
     }
     // The old pair aside, the co-save first.
     let mut aside: Vec<(PathBuf, PathBuf)> = Vec::new();
-    let put_back = |aside: &[(PathBuf, PathBuf)]| {
+    // The old pair put back; each one that cannot be is named with where it is now.
+    let put_back = |aside: &[(PathBuf, PathBuf)]| -> String {
+        let mut said = String::new();
         for (old, place) in aside.iter().rev() {
-            let _ = std::fs::rename(old, place);
+            if let Err(e) = std::fs::rename(old, place) {
+                said.push_str(&format!(
+                    "; could not put back {} (it is at {}): {e}",
+                    name(place),
+                    name(old)
+                ));
+            }
         }
+        said
     };
     for place in [target_co, target] {
         if std::fs::symlink_metadata(place).is_ok() {
             let old = with_tail(place, ".old");
             let _ = std::fs::remove_file(&old);
             if let Err(e) = std::fs::rename(place, &old) {
-                put_back(&aside);
+                let back = put_back(&aside);
                 clear_parts();
-                return Err(format!("{}: {e}", name(place)));
+                return Err(format!("{}: {e}{back}", name(place)));
             }
             aside.push((old, place.to_path_buf()));
         }
@@ -123,9 +132,9 @@ fn put_pair(save: &Path, co: Option<&Path>, target: &Path, target_co: &Path) -> 
             for p in &placed {
                 let _ = std::fs::remove_file(p);
             }
-            put_back(&aside);
+            let back = put_back(&aside);
             clear_parts();
-            return Err(format!("{}: {e}", name(to)));
+            return Err(format!("{}: {e}{back}", name(to)));
         }
         placed.push(to);
     }
