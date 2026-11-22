@@ -313,6 +313,10 @@ More in [FIXES.md, "UI Organizer"](FIXES.md#ui-organizer).
   towers' stairs and the vault, utility and basement stairs) counts every riser as a step, so the
   player and NPCs walk up and down them without catching on a riser or being pushed back. Two
   Tweaks slips are not copied, under the missing-data guard row.
+- Menus' input: the inventory keeps its scroll place when the Pip-Boy closes; typed text uses
+  shift as it is now; arrow keys keep a menu's selection from the mouse; the pad's key repeat no
+  longer carries over; the left thumbstick moves the console's pointer; menus get L3 and R3; the
+  Pip-Boy light fades when it should; the console shows the selected reference's model path.
 - The remaining crash fixes and tweaks come next.
 
 More in [FIXES.md, "lStewieAl's Tweaks"](FIXES.md#lstewieals-tweaks).
