@@ -403,6 +403,30 @@ pub fn draw_digests(from: impl std::io::Read) -> Result<Vec<u64>, String> {
     Ok(list.clone())
 }
 
+/// Draw `n` (counted from 0) of a file of commands described in the open ([`crate::DrawSnapshot`]): what
+/// [`draw_digests`] hashes for it, for saying which state two files' draws differ in. `None` when the file has fewer
+/// draws. Reading stops at that draw.
+pub fn draw_snapshot(
+    from: impl std::io::Read,
+    n: usize,
+) -> Result<Option<crate::DrawSnapshot>, String> {
+    let mut records = Records::new(from)?;
+    let (mut digest, _list) = crate::StateDigest::stopping_at(n);
+    while let Some(record) = records.next()? {
+        let mut r = Reader {
+            bytes: record,
+            at: 0,
+        };
+        let tag = u8::get(&mut r).map_err(|e| e.to_string())?;
+        let cmd = Cmd::get(tag, &mut r).map_err(|e| e.to_string())?;
+        digest.execute(cmd);
+        if let Some(s) = digest.snapshot() {
+            return Ok(Some(s.clone()));
+        }
+    }
+    Ok(None)
+}
+
 /// Two files of commands (`NV_D3D9_RECORD`) compared command by command, each with its object
 /// handles renamed in its own order of first use ([`Names`]): the same calls, states, payloads and
 /// objects, with the objects at whatever addresses each run's heap gave them. Answers how many

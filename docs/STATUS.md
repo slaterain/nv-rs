@@ -236,7 +236,8 @@ purpose (below; that list also names Enhanced Camera's patch, which is not one o
   shape, `SetScale` clamped, the weapon node cleared, clouds after leaving a building, the water
   lookup, save and global fixes, fresh mod logs, markers by id, magic effect fixes, loading screens
   made for a place (`bLoadScreenFix`), JIP's light data (flicker and pulse, light editor ids,
-  lights tagged in mod meshes).
+  lights tagged in mod meshes), the process lists' time refresh made at JIP's deferred start
+  instead of at the game's start-up.
 - **Weapons and models:** a modded weapon's "+" in the crosshair, modded weapons' "Name+" in every
   item list, NPCs showing their weapon mods and random NPC weapon mods (`bNPCWeaponMods`), the gun
   wobble as JIP works it out (and the actors a script spares it), body slots a script hides in
@@ -266,7 +267,7 @@ Not yet:
 - Its fixed-string pool: it waits for the 64-bit move.
 
 Left out on purpose: two patches that only make the game faster; the editor's, NVAC's and Enhanced
-Camera's patches; a start-up order change; JIP's own start-up; and one that xNVSE already makes.
+Camera's patches; JIP's own start-up; and one that xNVSE already makes.
 
 ## Mod Configuration Menu (MCM) built in
 
@@ -291,12 +292,12 @@ More in [FIXES.md, "UI Organizer"](FIXES.md#ui-organizer).
 
 ## lStewieAl's Tweaks built in
 
-🔨 Its engine fixes and tweaks, with nothing to install. 140 of its changes are built:
+🔨 Its engine fixes and tweaks, with nothing to install. 158 of its changes are built:
 
 - 72 of its crash and leak fixes;
 - Engine Optimizations' first change (a save's changed-forms map);
-- 67 other fixes and tweaks: 7 to the engines and the console; 14 to forms, cells, scripts, saves
-  and sound; 25 to AI, actors and the player; 21 to menus and the HUD.
+- 85 other fixes and tweaks: 8 to the engines and the console; 14 to forms, cells, scripts, saves
+  and sound; 32 to AI, actors and the player; 31 to menus and the HUD.
 
 - Each change is on with the fixes preset and has its own off key in `Fallout.ini`'s
   `[nv-rs Stewie]`.

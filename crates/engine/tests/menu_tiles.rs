@@ -1227,3 +1227,180 @@ fn tile_values_speed() {
         println!("GetValue + GetOrCreateValue {name}: 200 tiles, 25 rounds, 5 ids: {best} us");
     }
 }
+
+// ---- The action links' tile search (every menu's build) ----
+
+/// The text table (`011f32f4`): a string map of one bucket with the menus' string hash and compare
+/// (`00a0d1b0`, `00a0d180`), holding the link words this test gives the path split.
+const LINK_WORDS: &[(&[u8], u32)] = &[
+    (b"parent", 0x1389),
+    (b"me", 0x138a),
+    (b"sibling", 0x138c),
+    (b"child", 0x138d),
+    (b"grandparent", 0x1391),
+];
+
+/// A C string on the heap.
+fn c_string(e: &mut Engine, text: &[u8]) -> u32 {
+    let at = e.mem.alloc(text.len() as u32 + 1);
+    e.mem.write(at, text);
+    e.mem.set_u8(at + text.len() as u32, 0);
+    at
+}
+
+fn text_table(e: &mut Engine) {
+    let table = 0x011f_32f4;
+    let vtable = e.mem.alloc(0x20);
+    e.mem.set_u32(vtable + 4, 0x00a0_d1b0);
+    e.mem.set_u32(vtable + 8, 0x00a0_d180);
+    let buckets = e.mem.alloc(4);
+    let mut head = 0;
+    for &(word, code) in LINK_WORDS.iter().rev() {
+        let key = c_string(e, word);
+        let node = e.mem.alloc(12);
+        e.mem.set_u32(node, head);
+        e.mem.set_u32(node + 4, key);
+        e.mem.set_u32(node + 8, code);
+        head = node;
+    }
+    e.mem.set_u32(buckets, head);
+    e.mem.set_u32(table, vtable);
+    e.mem.set_u32(table + 4, 1);
+    e.mem.set_u32(table + 8, buckets);
+    e.mem.set_u32(table + 0xc, LINK_WORDS.len() as u32);
+}
+
+/// A tile (0x40 bytes) named `name` (none for an empty name) under `parent` (0 for none), added
+/// behind its siblings (the children list: head +4, tail +8, count +0xC; a node is next, previous,
+/// tile; the name at +0x20, the parent at +0x28).
+fn named_tile(e: &mut Engine, parent: u32, name: &[u8]) -> u32 {
+    let t = e.mem.alloc(0x40);
+    if !name.is_empty() {
+        let text = c_string(e, name);
+        e.mem.set_u32(t + 0x20, text);
+    }
+    e.mem.set_u32(t + 0x28, parent);
+    if parent != 0 {
+        let node = e.mem.alloc(12);
+        e.mem.set_u32(node + 8, t);
+        let tail = e.mem.u32(parent + 8);
+        if tail == 0 {
+            e.mem.set_u32(parent + 4, node);
+        } else {
+            e.mem.set_u32(tail, node);
+            e.mem.set_u32(node + 4, tail);
+        }
+        e.mem.set_u32(parent + 8, node);
+        let count = e.mem.u32(parent + 0xc);
+        e.mem.set_u32(parent + 0xc, count + 1);
+    }
+    t
+}
+
+/// A menu's tiles under a root: the menu tile `Menu`; under it `Alpha` (children `x` and `Beta`),
+/// `beta`, an unnamed tile and `Gamma` (child `deep`, its child `Target`). Answers them in that order
+/// (root first).
+fn tile_tree(e: &mut Engine) -> Vec<u32> {
+    let root = named_tile(e, 0, b"root");
+    let menu = named_tile(e, root, b"Menu");
+    let alpha = named_tile(e, menu, b"Alpha");
+    let x = named_tile(e, alpha, b"x");
+    let alpha_beta = named_tile(e, alpha, b"Beta");
+    let beta = named_tile(e, menu, b"beta");
+    let unnamed = named_tile(e, menu, b"");
+    let gamma = named_tile(e, menu, b"Gamma");
+    let deep = named_tile(e, gamma, b"deep");
+    let target = named_tile(e, deep, b"Target");
+    vec![
+        root, menu, alpha, x, alpha_beta, beta, unnamed, gamma, deep, target,
+    ]
+}
+
+/// The names and paths the searches are asked for: found at the start, deeper, in another case,
+/// twice (the first in the walk wins), or not at all; every link word, with and without a name.
+const SEARCHED: &[&[u8]] = &[
+    b"Menu",
+    b"beta",
+    b"BETA",
+    b"Beta",
+    b"target",
+    b"Target",
+    b"x",
+    b"nothing",
+    b"parent()",
+    b"me()",
+    b"sibling()",
+    b"sibling(gamma)",
+    b"sibling(zz)",
+    b"child()",
+    b"child(Target)",
+    b"child(target)",
+    b"child(zz)",
+    b"grandparent()",
+];
+
+/// The searches' words: the tile (by its index in [`tile_tree`]) and the searched text.
+fn search_words(e: &mut Engine, case: &engine_core::typed::diff::Case) -> Vec<u32> {
+    world(e);
+    text_table(e);
+    let tiles = tile_tree(e);
+    let text = c_string(e, SEARCHED[case.word(1) as usize]);
+    vec![tiles[case.word(0) as usize], text]
+}
+
+/// The tile search by name, depth first (`00a08f20`), against its translation: from the root,
+/// the menu tile, a leaf and deeper tiles, every name.
+#[test]
+fn find_named_in_tree_diff() {
+    Diff::new(engine_core::entry!(
+        0x00a0_8f20,
+        dispatch::tile::find_named_in_tree(Ptr<_>, Ptr<_>) -> Ptr<_>
+    ))
+    .family(&dispatch::DISPATCH)
+    .family(&crt::CRT)
+    .inputs(&[
+        Input::Of(&[0, 1, 2, 3, 7, 9]),
+        Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7]),
+    ])
+    .setup(search_words)
+    .run()
+    .assert_same();
+}
+
+/// `Tile::GetChildByName` (`00a03da0`), each level under its own lock, the name compared with case.
+#[test]
+fn child_by_name_diff() {
+    Diff::new(engine_core::entry!(
+        0x00a0_3da0,
+        dispatch::tile::child_by_name(Ptr<_>, Ptr<_>) -> Ptr<_>
+    ))
+    .family(&dispatch::DISPATCH)
+    .family(&crt::CRT)
+    .inputs(&[
+        Input::Of(&[0, 1, 2, 3, 7, 9]),
+        Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7]),
+    ])
+    .setup(search_words)
+    .run()
+    .assert_same();
+}
+
+/// The tile an action link's path names (`00a08b20`): every link word with and without a name,
+/// and plain names (the depth-first search from the tile's menu tile), from tiles at every depth.
+#[test]
+fn find_by_path_diff() {
+    Diff::new(engine_core::entry!(
+        0x00a0_8b20,
+        dispatch::tile::find_by_path(Ptr<_>, Ptr<_>) -> Ptr<_>
+    ))
+    .family(&dispatch::DISPATCH)
+    .family(&crt::CRT)
+    .translation_calls_plainly(&[0x00a0_18d0, 0x00a0_3d40, 0x00a0_3da0, 0x00a0_8f20])
+    .inputs(&[
+        Input::Of(&[1, 2, 3, 5, 7, 8, 9]),
+        Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]),
+    ])
+    .setup(search_words)
+    .run()
+    .assert_same();
+}

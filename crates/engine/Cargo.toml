@@ -42,3 +42,5 @@ engine-core = { path = "../engine-core", features = ["test-support"] }
 esm = { path = "../esm" }
 # xNVSE's run-time line reader against the game's (`tests/xnvse_line_reader.rs`).
 nvse = { path = "../nvse" }
+# JohnnyGuitar's editor ids through the game's compile (`tests/jg_editor_ids_compile.rs`).
+johnnyguitar = { path = "../johnnyguitar" }
