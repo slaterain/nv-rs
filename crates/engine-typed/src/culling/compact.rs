@@ -152,59 +152,80 @@ pub struct Copy {
     /// Which items read each tracked page.
     pages: HashMap<u32, Vec<u32>>,
     track: Arc<Track>,
+    /// The walk count ([`WALKS`]) at this scene's last walk: a copy not walked for
+    /// [`EVICT_AFTER`] walks is dropped (its scene may be gone).
+    walked: u64,
 }
 
-/// Reads one object into an item (its children's items are filled by the builder).
-fn read_item(e: &Engine, object: u32) -> Item {
-    let vtable = e.mem.u32(object.wrapping_add(VTABLE));
-    let kind = Kind::of(e.mem.u32(vtable.wrapping_add(0xd4)));
-    let bound = e.mem.u32(object.wrapping_add(WORLD_BOUND));
+/// The `N` bytes at `a`, or `None` where they are not mapped: the copy never faults where the real
+/// walk would not read (an object freed since the copy was made is read only by a refresh).
+fn bytes<const N: usize>(e: &Engine, a: u32) -> Option<[u8; N]> {
+    let mut b = [0u8; N];
+    e.mem.try_read(a, &mut b).ok().map(|()| b)
+}
+
+fn word(e: &Engine, a: u32) -> Option<u32> {
+    bytes::<4>(e, a).map(u32::from_le_bytes)
+}
+
+/// Reads one object into an item (its children's items are filled by the builder); `None` when a
+/// word it reads is not mapped (the copy is then built again, or the walk is the real one).
+fn read_item(e: &Engine, object: u32) -> Option<Item> {
+    let vtable = word(e, object.wrapping_add(VTABLE))?;
+    let kind = Kind::of(word(e, vtable.wrapping_add(0xd4))?);
+    let bound = word(e, object.wrapping_add(WORLD_BOUND))?;
     let (center, radius) = if bound != 0 {
         (
-            [0u32, 4, 8].map(|i| e.mem.u32(bound.wrapping_add(i))),
-            e.mem.u32(bound.wrapping_add(0xc)),
+            [
+                word(e, bound)?,
+                word(e, bound.wrapping_add(4))?,
+                word(e, bound.wrapping_add(8))?,
+            ],
+            word(e, bound.wrapping_add(0xc))?,
         )
     } else {
         ([0; 3], 0)
     };
     let (children, size) = match kind {
         Kind::Node | Kind::Fade => (
-            e.mem.u32(object.wrapping_add(CHILDREN)),
-            e.mem.u16(object.wrapping_add(CHILDREN_SIZE)),
+            word(e, object.wrapping_add(CHILDREN))?,
+            bytes::<2>(e, object.wrapping_add(CHILDREN_SIZE)).map(u16::from_le_bytes)?,
         ),
         _ => (0, 0),
     };
-    Item {
+    Some(Item {
         object,
         kind,
-        flags: e.mem.u32(object.wrapping_add(FLAGS)),
+        flags: word(e, object.wrapping_add(FLAGS))?,
         bound,
         center,
         radius,
         children,
         size,
         children_at: 0,
-    }
+    })
 }
 
 impl Copy {
-    /// Builds the copy of the scene under `root` and tracks its pages.
-    pub fn build(e: &Engine, root: u32, track: Arc<Track>) -> Copy {
+    /// Builds the copy of the scene under `root` and tracks its pages; `None` when a word it reads
+    /// is not mapped (the walk is then the real one).
+    pub fn build(e: &Engine, root: u32, track: Arc<Track>) -> Option<Copy> {
         let mut copy = Copy {
             root,
             items: Vec::new(),
             slots: Vec::new(),
             pages: HashMap::new(),
             track,
+            walked: 0,
         };
-        copy.add(e, root);
-        copy
+        copy.add(e, root)?;
+        Some(copy)
     }
 
     /// Adds `object` and its subtree; answers its item.
-    fn add(&mut self, e: &Engine, object: u32) -> u32 {
+    fn add(&mut self, e: &Engine, object: u32) -> Option<u32> {
         let index = u32::try_from(self.items.len()).unwrap_or(u32::MAX);
-        let item = read_item(e, object);
+        let item = read_item(e, object)?;
         self.items.push(item);
         self.note_pages(index, &item);
         if matches!(item.kind, Kind::Node | Kind::Fade) {
@@ -213,14 +234,14 @@ impl Copy {
                 .extend(std::iter::repeat(u32::MAX).take(usize::from(item.size)));
             self.items[index as usize].children_at = at;
             for slot in 0..u32::from(item.size) {
-                let child = e.mem.u32(item.children.wrapping_add(4 * slot));
+                let child = word(e, item.children.wrapping_add(4 * slot))?;
                 if child != 0 {
-                    let child_item = self.add(e, child);
+                    let child_item = self.add(e, child)?;
                     self.slots[(at + slot) as usize] = child_item;
                 }
             }
         }
-        index
+        Some(index)
     }
 
     /// Tracks the pages `item` reads and remembers which item reads each.
@@ -241,70 +262,71 @@ impl Copy {
         span(item.children, u32::from(item.size) * 4);
     }
 
+    /// The object in child slot `slot` of `item` as the copy has it (0 for an empty slot).
+    fn had(&self, item: &Item, slot: u32) -> u32 {
+        let at = self.slots[(item.children_at + slot) as usize];
+        if at == u32::MAX {
+            0
+        } else {
+            self.items[at as usize].object
+        }
+    }
+
+    /// `item` read again from the game's bytes when its class, bound address, children array, size
+    /// and child slots are still as copied (the walk's shape); `None` when not, or when a word it
+    /// reads is no longer mapped.
+    fn reread(&self, e: &Engine, old: &Item) -> Option<Item> {
+        let new = read_item(e, old.object)?;
+        if new.kind != old.kind
+            || new.bound != old.bound
+            || new.children != old.children
+            || new.size != old.size
+        {
+            return None;
+        }
+        for slot in 0..u32::from(new.size) {
+            if word(e, new.children.wrapping_add(4 * slot))? != self.had(old, slot) {
+                return None;
+            }
+        }
+        Some(Item {
+            children_at: old.children_at,
+            ..new
+        })
+    }
+
     /// Brings the copy up to date: the items on every dirty page (page numbers, taken once from the
     /// track for every copy) read again; answers false when an object's class, bound address or
-    /// children changed (the copy must be built again).
+    /// children changed, or a word it reads is no longer mapped (the copy must be built again).
+    ///
+    /// The items are read again in the copy's order (depth first: a parent before its children),
+    /// whatever pages they sit on, so a parent whose child was detached (and maybe freed) since
+    /// drops the copy before that child is read.
     pub fn refresh(&mut self, e: &Engine, dirty: &[u32]) -> bool {
-        for page in dirty {
-            let Some(items) = self.pages.get(page) else {
-                continue;
-            };
-            for &index in items {
-                let old = self.items[index as usize];
-                let new = read_item(e, old.object);
-                if new.kind != old.kind
-                    || new.bound != old.bound
-                    || new.children != old.children
-                    || new.size != old.size
-                {
-                    return false;
-                }
-                if new.children != 0 {
-                    for slot in 0..u32::from(new.size) {
-                        let child = e.mem.u32(new.children.wrapping_add(4 * slot));
-                        let at = self.slots[(old.children_at + slot) as usize];
-                        let had = if at == u32::MAX {
-                            0
-                        } else {
-                            self.items[at as usize].object
-                        };
-                        if child != had {
-                            return false;
-                        }
-                    }
-                }
-                self.items[index as usize] = Item {
-                    children_at: old.children_at,
-                    ..new
-                };
+        let mut indices: Vec<u32> = dirty
+            .iter()
+            .filter_map(|page| self.pages.get(page))
+            .flatten()
+            .copied()
+            .collect();
+        indices.sort_unstable();
+        indices.dedup();
+        for index in indices {
+            let old = self.items[index as usize];
+            match self.reread(e, &old) {
+                Some(new) => self.items[index as usize] = new,
+                None => return false,
             }
         }
         true
     }
 
     /// Every item against the game's bytes (the check mode), its children's slots too: answers the
-    /// objects that differ.
+    /// objects that differ or no longer read.
     pub fn stale(&self, e: &Engine) -> Vec<u32> {
         self.items
             .iter()
-            .filter(|item| {
-                let now = read_item(e, item.object);
-                let fields_differ = Item {
-                    children_at: item.children_at,
-                    ..now
-                } != **item;
-                fields_differ
-                    || (0..u32::from(item.size)).any(|slot| {
-                        let child = e.mem.u32(item.children.wrapping_add(4 * slot));
-                        let at = self.slots[(item.children_at + slot) as usize];
-                        let had = if at == u32::MAX {
-                            0
-                        } else {
-                            self.items[at as usize].object
-                        };
-                        child != had
-                    })
-            })
+            .filter(|item| self.reread(e, item) != Some(**item))
             .map(|item| item.object)
             .collect()
     }
@@ -444,6 +466,10 @@ thread_local! {
     static COPIES: std::cell::RefCell<HashMap<u32, Copy>> = std::cell::RefCell::new(HashMap::new());
     /// A dry walk's geometries (an object with bit 0 set: a fade node the real walk never decided).
     static DRY_LIST: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// Scene walks through [`walk_scene`] so far (a copy's age, [`EVICT_AFTER`]).
+    static WALKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// A scene walk of [`walk_scene`] is running.
+    static IN_WALK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// The check mode's dry walk is running (main thread only; the flag keeps the hot path one load).
@@ -522,27 +548,41 @@ fn covered(e: &Engine, process: u32) -> bool {
     frustum.is_null() || e.get(frustum, BSCompoundFrustum::iFreeOp) == 0
 }
 
-/// The copy of `scene`, refreshed or built again.
+/// A copy not walked for this many scene walks is dropped: its scene may be gone (a menu's, a
+/// cell's), and refreshing it would only read what no walk needs.
+const EVICT_AFTER: u64 = 2_000;
+
+/// The copy of `scene`, refreshed or built again, taken out of the map while `f` walks it;
+/// `None` when it cannot be built (a word it reads is not mapped: the walk is the real one).
 fn with_copy<R>(
     e: &mut Engine,
     scene: u32,
     track: Arc<Track>,
     f: impl FnOnce(&mut Engine, &Copy) -> R,
-) -> R {
-    COPIES.with(|copies| {
+) -> Option<R> {
+    let walks = WALKS.with(|w| {
+        w.set(w.get() + 1);
+        w.get()
+    });
+    let copy = COPIES.with(|copies| {
         let mut copies = copies.borrow_mut();
         // The dirty pages are taken once (taking clears them) and given to every copy: a scene not
         // walked this time must not miss a write made before its next walk.
         let mut dirty = Vec::new();
         track.take_dirty(|page| dirty.push(page >> 12));
-        if !dirty.is_empty() {
-            copies.retain(|_, copy| copy.refresh(e, &dirty));
-        }
-        let copy = copies
-            .entry(scene)
-            .or_insert_with(|| Copy::build(e, scene, track));
-        f(e, copy)
-    })
+        copies.retain(|_, copy| {
+            walks - copy.walked <= EVICT_AFTER && (dirty.is_empty() || copy.refresh(e, &dirty))
+        });
+        copies.remove(&scene)
+    });
+    let mut copy = match copy {
+        Some(copy) => copy,
+        None => Copy::build(e, scene, track)?,
+    };
+    copy.walked = walks;
+    let r = f(e, &copy);
+    COPIES.with(|copies| copies.borrow_mut().insert(scene, copy));
+    Some(r)
 }
 
 /// The scene form's walk (`bs_process_scene`'s `NiAVObject::Cull` of the scene) through the copy
@@ -559,11 +599,26 @@ pub fn walk_scene(e: &mut Engine, scene: u32, process: u32) -> bool {
     let Some(track) = e.mem.track().cloned().or_else(|| e.mem.enable_track()) else {
         return false;
     };
-    if mode == Mode::On {
-        with_copy(e, scene, track, |e, copy| cull(e, copy, 0, process));
-        return true;
+    // A scene walk inside a scene walk (a class the real code walks culling another scene) is the
+    // real walk: the copies and the check mode's record belong to the outer one.
+    if IN_WALK.with(|w| w.replace(true)) {
+        return false;
     }
-    // The check mode.
+    let walked = walk_covered(e, scene, process, mode, track);
+    IN_WALK.with(|w| w.set(false));
+    walked
+}
+
+/// [`walk_scene`] past its tests: the copy's walk (on), or the real walk checked against it.
+fn walk_covered(e: &mut Engine, scene: u32, process: u32, mode: Mode, track: Arc<Track>) -> bool {
+    if mode == Mode::On {
+        return with_copy(e, scene, track, |e, copy| cull(e, copy, 0, process)).is_some();
+    }
+    // The check mode compares what the typed `AppendVirtual` registered: a process with another
+    // one is walked unchecked.
+    if crate::slot_target(e, process, 0x4c) != 0x00c4_f1d0 {
+        return false;
+    }
     with_copy(e, scene, track, |e, copy| {
         let stale = copy.stale(e);
         if let Ok(mut r) = RECORD.lock() {
@@ -635,6 +690,6 @@ pub fn walk_scene(e: &mut Engine, scene: u32, process: u32) -> bool {
             c.missing += missing.len() as u64;
             c.undecided += undecided.len() as u64;
         }
-    });
-    true
+    })
+    .is_some()
 }

@@ -379,3 +379,52 @@ fn the_check_mode_finds_nothing_on_a_kept_copy() {
     );
     assert_eq!(after.undecided, before.undecided);
 }
+
+/// A child detached from its parent and freed after the copy was built, on a page below its
+/// parent's children array: the next walk must not read it (its first word now points at nothing
+/// mapped, as a freed block's can), and walks as the real walk, which never visits it.
+#[test]
+fn a_child_detached_and_freed_since_the_copy_is_never_read() {
+    let _one = ONE_AT_A_TIME.lock().unwrap();
+    let mut e = Engine::new();
+    let w = world(&mut e);
+    let geometry_vt = e.mem.u32(w.geometries[0]);
+    let node_vt = e.mem.u32(w.root);
+    let b = bound(&mut e, 0.0, 0.0, 0.0, 1.0);
+    let child = object(&mut e, 0xc8, geometry_vt, b, 0);
+    let _gap = e.mem.alloc(0x2000);
+    let nb = bound(&mut e, 0.0, 0.0, 0.0, 12.0);
+    let parent = object(&mut e, 0xac, node_vt, nb, 0);
+    let slots = e.mem.alloc(4);
+    e.mem.set_u32(slots, child);
+    e.mem.set_u32(parent + 0xa0, slots);
+    e.mem.set_u16(parent + 0xa4, 1);
+    e.mem.set_u16(parent + 0xa6, 1);
+    assert!(
+        child >> 12 < slots >> 12,
+        "the child below its parent's slots"
+    );
+    let root_slots = e.mem.u32(w.root + 0xa0);
+    e.mem.set_u32(root_slots, parent);
+    compact::set_mode_for_tests(Mode::On);
+    for (at, bytes) in &w.fades {
+        e.mem.write(*at, bytes);
+    }
+    RECORD.lock().unwrap().clear();
+    assert!(compact::walk_scene(&mut e, w.root, w.process));
+    assert!(
+        RECORD.lock().unwrap().contains(&Rec::Register(child)),
+        "the copy was built with the child"
+    );
+    // Detached, then freed: its slot emptied, its first word pointing at nothing mapped.
+    e.mem.set_u32(slots, 0);
+    e.mem.set_u32(child, 0x10);
+    for (at, bytes) in &w.fades {
+        e.mem.write(*at, bytes);
+    }
+    RECORD.lock().unwrap().clear();
+    assert!(compact::walk_scene(&mut e, w.root, w.process));
+    let copy = std::mem::take(&mut *RECORD.lock().unwrap());
+    let real = walk(&mut e, &w, Mode::Off);
+    assert_eq!(copy, real.0);
+}
