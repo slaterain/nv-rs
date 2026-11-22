@@ -294,7 +294,7 @@ fn drain_words(d: &engine_core::stage_time::DrainStats) -> String {
     if d.other.0 > 0 {
         kinds.push(("other kinds".into(), d.other.0, d.other.1));
     }
-    kinds.sort_by(|a, b| b.2.cmp(&a.2));
+    kinds.sort_by_key(|k| std::cmp::Reverse(k.2));
     let shown: Vec<String> = kinds
         .iter()
         .take(3)
@@ -1866,24 +1866,7 @@ mod tests {
         f.ms = 14.0;
         f.typical = 5.7;
         f.stages = Some([1.0, 0.0, 0.8, 2.5, 0.3, 0.1, 0.8, 8.1, 0.0]);
-        let mut tail = Tail::default();
-        tail.parts = [
-            Some(200_000),
-            Some(10_000),
-            Some(90_000),
-            Some(0),
-            Some(0),
-            Some(20_000),
-            Some(10_000),
-            Some(7_600_000),
-            Some(10_000),
-            Some(100_000),
-            Some(10_000),
-            Some(40_000),
-            Some(0),
-            Some(10_000),
-        ];
-        tail.drains[0] = Some(DrainStats {
+        let first = Some(DrainStats {
             ns: 100_000,
             tasks: 2,
             kinds: [
@@ -1896,7 +1879,7 @@ mod tests {
             ],
             ..DrainStats::default()
         });
-        tail.drains[1] = Some(DrainStats {
+        let secondary = Some(DrainStats {
             ns: 7_590_000,
             tasks: 12,
             waits: 1_500,
@@ -1910,8 +1893,26 @@ mod tests {
             ],
             other: (2, 50_000),
         });
-        tail.tick = Some((37, Some(1_203)));
-        f.tail = Some(tail);
+        f.tail = Some(Tail {
+            parts: [
+                Some(200_000),
+                Some(10_000),
+                Some(90_000),
+                Some(0),
+                Some(0),
+                Some(20_000),
+                Some(10_000),
+                Some(7_600_000),
+                Some(10_000),
+                Some(100_000),
+                Some(10_000),
+                Some(40_000),
+                Some(0),
+                Some(10_000),
+            ],
+            drains: [first, secondary],
+            tick: Some((37, Some(1_203))),
+        });
         let l = f.line();
         assert!(
             l.contains(

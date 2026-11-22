@@ -433,7 +433,7 @@ pub fn tail_tick(index: u32, free: Option<u32>) {
     if points_on() {
         let present = u64::from(free.is_some()) << 62;
         TICK.store(
-            1 << 63 | present | u64::from(index & 0xff) << 32 | u64::from(free.unwrap_or(0)),
+            (1 << 63) | present | (u64::from(index & 0xff) << 32) | u64::from(free.unwrap_or(0)),
             Relaxed,
         );
     }
@@ -482,8 +482,8 @@ pub fn take_tail() -> Option<Tail> {
     tail.drains = drains;
     tail.tick = (tick >> 63 != 0).then(|| {
         (
-            (tick >> 32) as u32 & 0xff,
-            (tick >> 62 & 1 != 0).then_some(tick as u32),
+            ((tick >> 32) as u32) & 0xff,
+            ((tick >> 62) & 1 != 0).then_some(tick as u32),
         )
     });
     Some(tail)
