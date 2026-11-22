@@ -228,9 +228,9 @@ pub const ROWS: &[Row] = &[
     },
     Row {
         bit: stewie::CONSOLE_PAD_B_CLOSES,
-        function: "MenuFixes",
+        function: "MenuFixesDeferredInit",
         plan: "S0984",
-        key: "bMenuFixesConsolePadBCloses",
+        key: "bMenuFixesDeferredInit",
         tweaks: None,
         summary: "B on the pad closes the open console (with JIP's console key fix too)",
     },
