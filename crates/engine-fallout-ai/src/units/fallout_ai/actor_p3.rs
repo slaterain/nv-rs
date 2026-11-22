@@ -13775,6 +13775,18 @@ fn hit_me_reactions(e: &mut Engine, s: &mut HitMe) {
     }
 }
 
+/// The start point of the knockback in `HitMe` (`0x89C8E0`): the aggressor's position (slot
+/// `0x1f4`). lStewieAl's Tweaks' row S0660 (`patchFixExplosionPushDirection`, the bytes at
+/// `0x89C8E3`): the hit's source reference (the explosion) when it has one, else the aggressor,
+/// their position at +0x30 read directly.
+fn knockback_start(e: &mut Engine, source: u32, aggressor: u32) -> u32 {
+    if e.stewie(engine_core::extend::stewie::EXPLOSION_PUSH_DIRECTION) {
+        (if source != 0 { source } else { aggressor }).wrapping_add(0x30)
+    } else {
+        e.vcall(aggressor, ACTOR_SLOT_POSITION, &args![]).u32()
+    }
+}
+
 /// `0089c614`..`0089c7b7`: the hit was (partly) blocked: the block idle for
 /// the actor and the player's feedback.
 fn hit_me_blocked_reaction(e: &mut Engine, s: &mut HitMe) {
@@ -13863,17 +13875,7 @@ fn hit_me_unblocked_reaction(e: &mut Engine, s: &mut HitMe) {
             let owner = this.addr() + 0xa4;
             let amount = e.call(FTOL, &args![s.total as f64]).u32();
             let mut speed = e.call(GET_KNOCKBACK_SPEED, &args![owner, amount]).f32();
-            // lStewieAl's Tweaks' row S0660 (`patchFixExplosionPushDirection`, the bytes at
-            // `0x89C8E3`): the push starts from the hit's source reference (the explosion) when
-            // it has one, else from the aggressor: their position at +0x30, read directly in
-            // place of the aggressor's slot `0x1f4`.
-            let aggressor_position =
-                if e.stewie(engine_core::extend::stewie::EXPLOSION_PUSH_DIRECTION) {
-                    let source = s.source(e);
-                    (if source != 0 { source } else { aggressor }).wrapping_add(0x30)
-                } else {
-                    e.vcall(aggressor, ACTOR_SLOT_POSITION, &args![]).u32()
-                };
+            let aggressor_position = knockback_start(e, s.source(e), aggressor);
             let this_position = e.vcall(this.addr(), ACTOR_SLOT_POSITION, &args![]).u32();
             let difference = s.local(-0x410);
             let scaled = s.local(-0x428);
@@ -23367,50 +23369,27 @@ mod tests {
         );
     }
 
-    /// S0660 (`patchFixExplosionPushDirection`): the knockback's direction is the victim's
-    /// position minus a start point. Off, the start is the aggressor's slot `0x1f4` position, also
-    /// for a hit with a source reference (an explosion); on, it is the source's position (+0x30)
-    /// when the hit has one, else the aggressor's own (+0x30).
+    /// S0660 (`patchFixExplosionPushDirection`): the knockback starts from the aggressor's slot
+    /// `0x1f4` position off, also for a hit with a source reference (an explosion); on, from the
+    /// source's position (+0x30) when the hit has one, else the aggressor's own (+0x30).
     #[test]
     fn s0660_an_explosion_pushes_away_from_itself() {
         for (on, with_source) in [(false, true), (true, true), (true, false), (false, false)] {
             let mut e = engine();
             e.set_stewie(engine_core::extend::stewie::EXPLOSION_PUSH_DIRECTION, on);
-            let world = hit_world(&mut e, false);
-            stub_float(&mut e, ACTOR_GETTER_87F9C0, 50.0);
-            // The base form (`004181e0`, a default double answering 0) is asked only for its
-            // flag test (`00461580`, here no flag).
-            stub(&mut e, FORM_TEST_FLAGS, 0);
-            let source_position = e.mem.alloc(12);
-            let source = object(
-                &mut e,
-                0x100,
-                &[
-                    (ACTOR_SLOT_POSITION, ret(source_position)),
-                    (ACTOR_SLOT_100, ret(0)),
-                    (REFERENCE_SLOT_168, ret(0)),
-                    (REFERENCE_SLOT_220, ret(0)),
-                    (REFERENCE_SLOT_224, ret(0)),
-                ],
-            );
-            if with_source {
-                e.set(world.hit, HitData::pSourceRef, source.cast());
-            }
-            let slot_position = e
-                .vcall(world.player.addr(), ACTOR_SLOT_POSITION, &args![])
-                .u32();
-            e.call_log = Some(vec![]);
-            actor_hit_me(&mut e, world.victim, world.hit, 0);
+            let slot_position = e.mem.alloc(12);
+            let aggressor = actor_with(&mut e, &[(ACTOR_SLOT_POSITION, ret(slot_position))], None);
+            let source = if with_source { e.mem.alloc(0x40) } else { 0 };
             let start = match (on, with_source) {
                 (false, _) => slot_position,
-                (true, true) => source.addr() + 0x30,
-                (true, false) => world.player.addr() + 0x30,
+                (true, true) => source + 0x30,
+                (true, false) => aggressor.addr() + 0x30,
             };
-            let starts: Vec<u32> = calls_to(&e, VECTOR_SUBTRACT)
-                .iter()
-                .map(|call| call[2])
-                .collect();
-            assert_eq!(starts, vec![start], "on {on} source {with_source}");
+            assert_eq!(
+                knockback_start(&mut e, source, aggressor.addr()),
+                start,
+                "on {on} source {with_source}"
+            );
         }
     }
 

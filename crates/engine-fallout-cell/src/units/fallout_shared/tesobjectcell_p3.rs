@@ -640,6 +640,7 @@ pub fn fn_00552900(e: &mut Engine, this: Ptr<TESObjectCELL>, flag: u8) {
 /// and with the cell's option set, and clears `bCellDetached`.
 pub fn tes_object_cell_attach_to_world(e: &mut Engine, this: Ptr<TESObjectCELL>, parent: Ptr) {
     engine_core::hitch::one(engine_core::hitch::Count::CellsAttached);
+    let _timed = engine_core::hitch::Timed::main(engine_core::hitch::Count::CellAttachNs);
     with_scope_guard(e, 0x1a, 0x395d, |e| {
         let node = e.call(CELL_LOAD_3D, &args![this]).u32();
         e.call(CELL_SET_STATE, &args![this, 5u32]);
@@ -719,6 +720,7 @@ pub fn fn_00552bb0(e: &mut Engine, this: Ptr) -> u8 {
 /// has them and removes the cell's nodes from the portal graph's option set.
 pub fn tes_object_cell_detach(e: &mut Engine, this: Ptr<TESObjectCELL>, detach_havok: bool) {
     engine_core::hitch::one(engine_core::hitch::Count::CellsDetached);
+    let _timed = engine_core::hitch::Timed::main(engine_core::hitch::Count::CellDetachNs);
     e.call(CELL_LOCK_ENTER, &args![this]);
     let state = e.call(CELL_GET_STATE, &args![this]).u32();
     if state == 6 || state == 5 {

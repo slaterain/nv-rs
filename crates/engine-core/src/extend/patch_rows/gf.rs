@@ -132,6 +132,13 @@ pub(in super::super) const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.9-GF",
     },
+    // D02 (JIP's own, its PostLoad), main 0086a850: the start-up call of the process lists' time
+    // refresh (00970d50) made a NOP; JIP makes it at its deferred start instead.
+    Entry {
+        addr: 0x0086_b1ee,
+        owners: JIP,
+        step: "3.9-GF",
+    },
 ];
 
 /// The group's wraps.

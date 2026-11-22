@@ -126,6 +126,16 @@ pub fn ask(text: &str) -> bool {
     session::message_as(Tone::Question, text, &["Yes", "No"]) == 0
 }
 
+/// A yes-or-no question whose answer is No unless the player chooses Yes: No is the first entry
+/// (highlighted in the launcher's window), the default button in a message box, and the answer
+/// with no window (scripted runs), as play.sh takes Enter or the end of its input as no.
+pub fn ask_default_no(text: &str) -> bool {
+    session::message_as(Tone::Question, text, &NO_FIRST) == 1
+}
+
+/// [`ask_default_no`]'s entries.
+const NO_FIRST: [&str; 2] = ["No", "Yes"];
+
 /// Opens a folder in Explorer (after an error, so the player finds the log).
 pub fn open_folder(path: &std::path::Path) {
     if !windows_allowed() {
@@ -325,6 +335,8 @@ const MB_ICONERROR: u32 = 0x10;
 const MB_ICONWARNING: u32 = 0x30;
 const MB_ICONINFORMATION: u32 = 0x40;
 const IDYES: i32 = 6;
+/// `MB_DEFBUTTON2`: the second button (No) is the default.
+const MB_DEFBUTTON2: u32 = 0x100;
 
 fn message_box(text: &str, kind: u32) -> i32 {
     let (text, title) = (wide_str(text), wide_str(TITLE));
@@ -373,10 +385,19 @@ pub fn box_kind(tone: Tone, entries: usize) -> u32 {
     icon | if entries >= 2 { MB_YESNO } else { MB_OK }
 }
 
+/// Whether `entries` are [`ask_default_no`]'s (No first).
+fn no_first(entries: &[String]) -> bool {
+    entries.len() == 2 && entries[0] == NO_FIRST[0] && entries[1] == NO_FIRST[1]
+}
+
 /// A question of Play's as Play.exe asked it, in a message box: the entry chosen. Two entries are
 /// Yes and No (an entry other than Yes first is asked as its own question).
 fn boxed_answer(tone: Tone, text: &str, entries: &[String]) -> usize {
     let kind = box_kind(tone, entries.len());
+    if no_first(entries) {
+        // No first ([`ask_default_no`]): Yes and No with No the default; Yes is entry 1.
+        return usize::from(message_box(text, kind | MB_DEFBUTTON2) == IDYES);
+    }
     match entries {
         [first, _, ..] => {
             let text = if first == "Yes" {
@@ -401,6 +422,8 @@ fn boxed_answer(tone: Tone, text: &str, entries: &[String]) -> usize {
 /// small "getting ready" window (the launcher's window could not be drawn).
 pub fn answer_in_boxes() {
     IN_BOXES.store(true, Ordering::Relaxed);
+    // No launcher window takes typed lines: the mod installer gets a console of its own.
+    crate::piped::window_takes_lines(false);
     session::connect(|event| {
         match event {
             Event::Message {
@@ -432,6 +455,19 @@ mod tests {
     extern "system" {
         fn GetThreadDpiAwarenessContext() -> isize;
         fn AreDpiAwarenessContextsEqual(a: isize, b: isize) -> i32;
+    }
+
+    /// A question whose default is No: No is the first entry (highlighted in the window, the
+    /// answer with no window), its box has No as the default button; the plain question keeps
+    /// Yes first.
+    #[test]
+    fn a_replace_question_defaults_to_no() {
+        assert!(!ask_default_no("Replace?"), "no window: No");
+        let entries: Vec<String> = NO_FIRST.iter().map(|s| s.to_string()).collect();
+        assert!(no_first(&entries));
+        assert_eq!(entries[0], "No");
+        assert!(!no_first(&["Yes".to_string(), "No".to_string()]));
+        assert_eq!(MB_DEFBUTTON2 & box_kind(Tone::Question, 2), 0);
     }
 
     /// The desktop's size is read with the thread DPI-unaware (as the game, unaware, sees it),

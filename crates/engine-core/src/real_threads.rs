@@ -1228,6 +1228,11 @@ pub fn start(e: &mut Engine) -> Result<(), String> {
     // threads may still use them after the main engine is gone.
     e.kernel.leak();
     e.device.leak();
+    // The compact culling copy's store track (`engine_typed::culling::compact`, NV_CULL_COMPACT on
+    // or check) is made before the memory is shared, so every view carries it.
+    if std::env::var("NV_CULL_COMPACT").is_ok_and(|v| v == "on" || v == "check") {
+        let _ = e.mem.enable_track();
+    }
     e.mem.start_sharing();
     let world: &'static World = Box::leak(Box::new(World::new(e.kernel.import_names.clone())));
     // The events and semaphores made before (the C runtime's start-up, static initializers): kept
@@ -1543,6 +1548,34 @@ pub fn device_guard(e: &Engine) -> Option<DeviceGuard> {
 /// threads it just runs `f`.
 pub fn without_kernel_lock<R>(e: &Engine, f: impl FnOnce() -> R) -> R {
     released_kernel(e.real.as_ref().map(|r| r.world), f)
+}
+
+/// Tests: the hold of the kernel lock [`start`] takes for the start-up given back, as the host's first frame does,
+/// so this engine's platform calls are outermost ones (depth 1), as main's are in its frames.
+#[cfg(any(test, feature = "test-support"))]
+pub fn end_start_hold_for_tests(e: &Engine) {
+    if e.real.is_some() {
+        ctx(e).frame_begins(false);
+    }
+}
+
+/// [`without_kernel_lock_mut`] only when this thread holds the kernel lock once (a platform function the game called
+/// directly): inside a nested hold (a platform function that runs game code that calls this one) the outer function
+/// may be part way through changing platform state, so `f` then runs with the lock held, as before. For game code a
+/// platform function calls back (its own callbacks, as a stream reader's), which runs without the lock anyway when
+/// the game calls it itself.
+pub fn without_kernel_lock_mut_if_outermost<R>(
+    e: &mut Engine,
+    f: impl FnOnce(&mut Engine) -> R,
+) -> R {
+    match e.real.as_ref().map(|r| r.world) {
+        Some(world)
+            if world.kernel.held_here() && world.kernel.depth.load(Ordering::Relaxed) > 1 =>
+        {
+            f(e)
+        }
+        world => released_kernel(world, || f(e)),
+    }
 }
 
 /// [`without_kernel_lock`] for work that needs the engine itself (a test that calls a seam's
@@ -4269,6 +4302,52 @@ mod tests {
         );
     }
 
+    /// What [`calls_back_game_code`] saw in its work: 1 the kernel lock still held, 2 given back.
+    static HELD_IN_CALLBACK: AtomicU32 = AtomicU32::new(0);
+    static OUTER_SLOT: AtomicU32 = AtomicU32::new(0);
+
+    /// A platform function that runs game code of its own through [`without_kernel_lock_mut_if_outermost`] (as
+    /// DirectShow's `Render` runs the game's stream reader).
+    fn calls_back_game_code(e: &mut Engine, _: &[u32]) -> Ret {
+        let w = ctx(e).world;
+        let held = without_kernel_lock_mut_if_outermost(e, |_| w.kernel.held_here());
+        HELD_IN_CALLBACK.store(if held { 1 } else { 2 }, Ordering::SeqCst);
+        assert!(w.kernel.held_here(), "taken back after the work");
+        Ret::default()
+    }
+
+    /// A platform function that calls the one at `OUTER_SLOT` inside its own hold.
+    fn calls_the_callback_nested(e: &mut Engine, _: &[u32]) -> Ret {
+        let slot = OUTER_SLOT.load(Ordering::SeqCst);
+        e.call(slot, &args![0u32]);
+        Ret::default()
+    }
+
+    /// The engine-taking form gives the kernel lock back for an outermost call's work and keeps it in a nested one.
+    #[test]
+    fn game_code_called_back_runs_without_the_kernel_lock_only_when_outermost() {
+        let (mut e, slot) = engine_with_imports();
+        let outer = slot("D3DPERF_SetOptions");
+        let nested = slot("GetDoubleClickTime");
+        OUTER_SLOT.store(outer, Ordering::SeqCst);
+        e.register(outer, calls_back_game_code);
+        e.register(nested, calls_the_callback_nested);
+        start(&mut e).expect("real threads on");
+        end_start_hold_for_tests(&e);
+        e.call(outer, &args![0u32]);
+        assert_eq!(
+            HELD_IN_CALLBACK.load(Ordering::SeqCst),
+            2,
+            "given back when outermost"
+        );
+        e.call(nested, &args![]);
+        assert_eq!(
+            HELD_IN_CALLBACK.load(Ordering::SeqCst),
+            1,
+            "kept when nested"
+        );
+    }
+
     /// Timed waits racing releases: four game threads retry 1-3 ms waits on one semaphore while
     /// the main thread releases 20,000 units one at a time without waiting. Each unit is taken
     /// once: none lost to a wait timing out as it is released, none taken twice.
@@ -5506,6 +5585,311 @@ fn device_vcall_direct(e: &mut Engine, this: u32, slot: u32, args: &[u32]) -> Re
     let ret = f(e, &words[..=args.len()]);
     e.call_stack.pop();
     ret
+}
+
+/// The platform layer's Direct3D 9 device functions the world draw calls most, as plain Rust
+/// functions: the typed draw code's writer (`NV_DRAW_WRITER`, on by default; `=0` sends every call
+/// through [`device_vcall`]). Each entry is the function registered at the device slot (the words
+/// form, as the vtable reaches it) and the same function taking its arguments as they are.
+/// [`device_set_render_state`] and its kin call the second where [`device_vcall`] would have run
+/// the first: the same function, the same order, the same locks; only the slot's look-ups and the
+/// packing of the arguments into words go.
+#[allow(clippy::type_complexity)]
+pub struct DeviceWriter {
+    /// Where the layer put its device functions: slot byte offset `s`'s at `code + s` (the device's
+    /// vtable holds these words while nothing replaced them).
+    pub code: u32,
+    pub render_state: (AbiFn, fn(&mut Engine, u32, u32, u32) -> u32),
+    pub stage_state: (AbiFn, fn(&mut Engine, u32, u32, u32, u32) -> u32),
+    pub sampler_state: (AbiFn, fn(&mut Engine, u32, u32, u32, u32) -> u32),
+    pub texture: (AbiFn, fn(&mut Engine, u32, u32, u32) -> u32),
+    pub stream_source: (AbiFn, fn(&mut Engine, u32, u32, u32, u32, u32) -> u32),
+    pub draw_primitive: (AbiFn, fn(&mut Engine, u32, u32, u32, u32) -> u32),
+    pub draw_indexed_primitive: (
+        AbiFn,
+        fn(&mut Engine, u32, u32, u32, u32, u32, u32, u32) -> u32,
+    ),
+    pub vertex_constants: (AbiFn, fn(&mut Engine, u32, u32, u32, u32) -> u32),
+    pub pixel_constants: (AbiFn, fn(&mut Engine, u32, u32, u32, u32) -> u32),
+}
+
+static DEVICE_WRITER: std::sync::OnceLock<&'static DeviceWriter> = std::sync::OnceLock::new();
+
+/// `NV_DRAW_WRITER`: 0 not read yet, 1 on, 2 off.
+static DEVICE_WRITER_ON: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// The platform layer gives the typed draw code its device functions ([`DeviceWriter`]); the first
+/// call wins (the layer is the same for the whole program).
+pub fn install_device_writer(writer: &'static DeviceWriter) {
+    let _ = DEVICE_WRITER.set(writer);
+}
+
+/// The writer when installed and on (`NV_DRAW_WRITER` is not `0`).
+#[inline(always)]
+fn device_writer() -> Option<&'static DeviceWriter> {
+    let w = DEVICE_WRITER.get()?;
+    match DEVICE_WRITER_ON.load(Ordering::Relaxed) {
+        1 => Some(w),
+        2 => None,
+        _ => {
+            let on = std::env::var("NV_DRAW_WRITER").map_or(true, |v| v != "0");
+            DEVICE_WRITER_ON.store(if on { 1 } else { 2 }, Ordering::Relaxed);
+            on.then_some(w)
+        }
+    }
+}
+
+/// [`device_vcall`] of `slot` with `args`, the writer's function `pick` names called as `typed`
+/// when that call would run it: direct calls on, no diagnostic, the device's vtable word for `slot`
+/// still the layer's own (read at every call: a mod that replaced the slot, or anything that
+/// patched the vtable, gets the call by its word as before), and the function registered there the
+/// layer's (a wrap of ours registered over it gets the call by address as before). Anything else
+/// takes [`device_vcall`]'s path. Cost of the tests: two memory reads and a compare for the slot,
+/// one pointer compare for the registration.
+#[inline(always)]
+fn device_typed(
+    e: &mut Engine,
+    this: u32,
+    slot: u32,
+    args: &[u32],
+    pick: fn(&'static DeviceWriter) -> AbiFn,
+    typed: impl FnOnce(&mut Engine, &'static DeviceWriter) -> u32,
+) -> Ret {
+    if DIRECT.with(Cell::get) == 0 || e.diagnosing() {
+        return e.vcall(this, slot, args);
+    }
+    let Some(w) = device_writer() else {
+        return device_vcall_direct(e, this, slot, args);
+    };
+    let addr = e.mem.u32(e.mem.u32(this).wrapping_add(slot));
+    if addr != w.code.wrapping_add(slot) || args.len() >= 16 {
+        return device_vcall_direct(e, this, slot, args);
+    }
+    let expect = pick(w);
+    let mut words = [0u32; 16];
+    words[0] = this;
+    words[1..=args.len()].copy_from_slice(args);
+    let words = &words[..=args.len()];
+    // From here [`device_vcall_direct`]'s steps, with `typed` where it would call `expect`.
+    DIRECT_CALLS.with(|c| c.set(c.get() + 1));
+    let Some(r) = e.real.as_ref() else {
+        return e.call_typed(addr, expect, words, |e| typed(e, w));
+    };
+    let world = r.world;
+    let _held = device_call_lock(e, world);
+    if world.late_count.load(Ordering::Acquire) != e.real.as_ref().map_or(0, |r| r.late_seen) {
+        sync_registered(e);
+    }
+    let Some(f) = e.real.as_ref().and_then(|r| r.locked.device(addr)) else {
+        drop(_held);
+        return e.vcall(this, slot, args);
+    };
+    e.call_stack.push(addr);
+    let ret = if crate::abi::same_fn(f, expect) {
+        crate::abi::RetVal::into_ret(typed(e, w))
+    } else {
+        f(e, words)
+    };
+    e.call_stack.pop();
+    ret
+}
+
+/// `SetRenderState(state, value)` on `device` through the writer ([`device_typed`]).
+#[inline]
+pub fn device_set_render_state(e: &mut Engine, device: u32, state: u32, value: u32) -> Ret {
+    device_typed(
+        e,
+        device,
+        0xe4,
+        &[state, value],
+        |w| w.render_state.0,
+        |e, w| (w.render_state.1)(e, device, state, value),
+    )
+}
+
+/// `SetTextureStageState(stage, kind, value)` on `device` through the writer ([`device_typed`]).
+#[inline]
+pub fn device_set_stage_state(
+    e: &mut Engine,
+    device: u32,
+    stage: u32,
+    kind: u32,
+    value: u32,
+) -> Ret {
+    device_typed(
+        e,
+        device,
+        0x10c,
+        &[stage, kind, value],
+        |w| w.stage_state.0,
+        |e, w| (w.stage_state.1)(e, device, stage, kind, value),
+    )
+}
+
+/// `SetSamplerState(sampler, kind, value)` on `device` through the writer ([`device_typed`]).
+#[inline]
+pub fn device_set_sampler_state(
+    e: &mut Engine,
+    device: u32,
+    sampler: u32,
+    kind: u32,
+    value: u32,
+) -> Ret {
+    device_typed(
+        e,
+        device,
+        0x114,
+        &[sampler, kind, value],
+        |w| w.sampler_state.0,
+        |e, w| (w.sampler_state.1)(e, device, sampler, kind, value),
+    )
+}
+
+/// `SetTexture(sampler, texture)` on `device` through the writer ([`device_typed`]).
+#[inline]
+pub fn device_set_texture(e: &mut Engine, device: u32, sampler: u32, texture: u32) -> Ret {
+    device_typed(
+        e,
+        device,
+        0x104,
+        &[sampler, texture],
+        |w| w.texture.0,
+        |e, w| (w.texture.1)(e, device, sampler, texture),
+    )
+}
+
+/// `SetStreamSource(stream, buffer, offset, stride)` on `device` through the writer
+/// ([`device_typed`]).
+#[inline]
+pub fn device_set_stream_source(
+    e: &mut Engine,
+    device: u32,
+    stream: u32,
+    buffer: u32,
+    offset: u32,
+    stride: u32,
+) -> Ret {
+    device_typed(
+        e,
+        device,
+        0x190,
+        &[stream, buffer, offset, stride],
+        |w| w.stream_source.0,
+        |e, w| (w.stream_source.1)(e, device, stream, buffer, offset, stride),
+    )
+}
+
+/// `DrawPrimitive(kind, start, count)` on `device` through the writer ([`device_typed`]).
+#[inline]
+pub fn device_draw_primitive(
+    e: &mut Engine,
+    device: u32,
+    kind: u32,
+    start: u32,
+    count: u32,
+) -> Ret {
+    device_typed(
+        e,
+        device,
+        0x144,
+        &[kind, start, count],
+        |w| w.draw_primitive.0,
+        |e, w| (w.draw_primitive.1)(e, device, kind, start, count),
+    )
+}
+
+/// `DrawIndexedPrimitive(kind, base vertex, min index, vertices, start index, count)` on `device`
+/// through the writer ([`device_typed`]).
+#[inline]
+#[allow(clippy::too_many_arguments)]
+pub fn device_draw_indexed_primitive(
+    e: &mut Engine,
+    device: u32,
+    kind: u32,
+    base_vertex: u32,
+    min_index: u32,
+    vertices: u32,
+    start_index: u32,
+    count: u32,
+) -> Ret {
+    device_typed(
+        e,
+        device,
+        0x148,
+        &[kind, base_vertex, min_index, vertices, start_index, count],
+        |w| w.draw_indexed_primitive.0,
+        |e, w| {
+            (w.draw_indexed_primitive.1)(
+                e,
+                device,
+                kind,
+                base_vertex,
+                min_index,
+                vertices,
+                start_index,
+                count,
+            )
+        },
+    )
+}
+
+/// `SetVertexShaderConstantF(start, data, count)` on `device` through the writer
+/// ([`device_typed`]): the registers are read at `data`, the address the caller hands over.
+#[inline]
+pub fn device_set_vertex_constants(
+    e: &mut Engine,
+    device: u32,
+    start: u32,
+    data: u32,
+    count: u32,
+) -> Ret {
+    device_typed(
+        e,
+        device,
+        0x178,
+        &[start, data, count],
+        |w| w.vertex_constants.0,
+        |e, w| (w.vertex_constants.1)(e, device, start, data, count),
+    )
+}
+
+/// The constant set of device slot `slot` (`start, data, count`) on `device`: the float sets
+/// (0x178 vertex, 0x1b4 pixel) through the writer, the integer and boolean ones by
+/// [`device_vcall`].
+#[inline]
+pub fn device_set_constants(
+    e: &mut Engine,
+    device: u32,
+    slot: u32,
+    start: u32,
+    data: u32,
+    count: u32,
+) -> Ret {
+    match slot {
+        0x178 => device_set_vertex_constants(e, device, start, data, count),
+        0x1b4 => device_set_pixel_constants(e, device, start, data, count),
+        _ => device_vcall(e, device, slot, &[start, data, count]),
+    }
+}
+
+/// `SetPixelShaderConstantF(start, data, count)` on `device` through the writer
+/// ([`device_typed`]): the registers are read at `data`, the address the caller hands over.
+#[inline]
+pub fn device_set_pixel_constants(
+    e: &mut Engine,
+    device: u32,
+    start: u32,
+    data: u32,
+    count: u32,
+) -> Ret {
+    device_typed(
+        e,
+        device,
+        0x1b4,
+        &[start, data, count],
+        |w| w.pixel_constants.0,
+        |e, w| (w.pixel_constants.1)(e, device, start, data, count),
+    )
 }
 
 /// The world draw's hold of the device lock with real threads (`NV_DRAW_DIRECT`): what a wait, a

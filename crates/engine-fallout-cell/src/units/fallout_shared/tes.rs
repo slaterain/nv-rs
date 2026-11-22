@@ -2565,17 +2565,23 @@ pub fn tes_update_current_grid_cell(e: &mut Engine, this: Ptr<TES>, pos: Ptr, fl
     e.set_global(GRID_FLAG_MOVED_COPY, moved);
     e.call(0x0045_c840, &args![this]);
     e.call(0x0045_c780, &args![this]);
-    let loader = exterior_cell_loader(e);
-    e.call(0x0052_8110, &args![loader]);
-    let loader = exterior_cell_loader(e);
-    if e.call(0x0052_81f0, &args![loader]).u32() != 0 {
+    // The hitch log's timers in this shift (main only; no effect on the game).
+    use engine_core::hitch::{Count as Hitch, Timed};
+    {
+        let _timed = Timed::main(Hitch::GridCancelNs);
         let loader = exterior_cell_loader(e);
-        e.call(0x0052_82d0, &args![loader]);
+        e.call(0x0052_8110, &args![loader]);
+        let loader = exterior_cell_loader(e);
+        if e.call(0x0052_81f0, &args![loader]).u32() != 0 {
+            let loader = exterior_cell_loader(e);
+            e.call(0x0052_82d0, &args![loader]);
+        }
     }
     if e.call(GET_INTERIOR_CELL, &args![this]).u32() == 0 || script_running {
         if setting_byte(e, SETTING_PREEMPTIVELY_UNLOAD_CELLS) != 0
             && e.call(0x0045_4d50, &args![this, 1u32]).u32() != 0
         {
+            let _timed = Timed::main(Hitch::GridTexturesNs);
             tes_clean_up_unused_textures(e, this, 0);
         }
         if e.call(GET_WORLD_SPACE, &args![this]).u32() == 0 {
@@ -2597,7 +2603,11 @@ pub fn tes_update_current_grid_cell(e: &mut Engine, this: Ptr<TES>, pos: Ptr, fl
             e.call(HAVOK_WORLD_ADD_COUNT_1C, &args![world]);
         }
         let grid_cells = e.get(this, TES::pGridCellA);
-        e.vcall(grid_cells.addr(), 0x10, &args![new_x, new_y]);
+        {
+            let _timed = Timed::main(Hitch::GridShiftNs);
+            e.vcall(grid_cells.addr(), 0x10, &args![new_x, new_y]);
+        }
+        let havok = Timed::main(Hitch::GridHavokNs);
         if fn_00451010(e) != 0 {
             let loader = exterior_cell_loader(e);
             if loading_menu == 0 && (!far || e.call(0x0052_85a0, &args![loader]).u32() == 0) {
@@ -2612,6 +2622,7 @@ pub fn tes_update_current_grid_cell(e: &mut Engine, this: Ptr<TES>, pos: Ptr, fl
                 e.call(HAVOK_WORLD_DROP_COUNT_1C, &args![world, flag]);
             }
         }
+        drop(havok);
         if loading_menu == 0
             && !tes_all_cells_in_grid_loaded(e, this)
             && !e.call(0x0042_ce10, &args![script_context]).bool()
@@ -2628,8 +2639,12 @@ pub fn tes_update_current_grid_cell(e: &mut Engine, this: Ptr<TES>, pos: Ptr, fl
             let world = fn_00451010(e);
             e.call(HAVOK_WORLD_ADD_COUNT_18, &args![world]);
         }
-        tes_grid_array_load(e, this);
+        {
+            let _timed = Timed::main(Hitch::GridLoadNs);
+            tes_grid_array_load(e, this);
+        }
         fn_00452e50(e, this);
+        let _havok = Timed::main(Hitch::GridHavokNs);
         if fn_00451010(e) != 0 {
             if far {
                 let world = fn_00451010(e);
@@ -2640,8 +2655,12 @@ pub fn tes_update_current_grid_cell(e: &mut Engine, this: Ptr<TES>, pos: Ptr, fl
             }
         }
     }
-    tes_clean_up_unused_textures(e, this, 0);
+    {
+        let _timed = Timed::main(Hitch::GridTexturesNs);
+        tes_clean_up_unused_textures(e, this, 0);
+    }
     e.call(0x0062_f460, &args![]);
+    let terrain_timed = Timed::main(Hitch::GridTerrainNs);
     if e.call(GET_INTERIOR_CELL, &args![this]).u32() == 0 {
         let player: u32 = e.global(PLAYER_CHARACTER);
         // `PlayerCharacter` slot 0x1f4 returns the position (three floats).
@@ -2653,6 +2672,7 @@ pub fn tes_update_current_grid_cell(e: &mut Engine, this: Ptr<TES>, pos: Ptr, fl
             &args![terrain, player_position, 0xfu32],
         );
     }
+    drop(terrain_timed);
     fn_00452e40(e, 1);
     true
 }

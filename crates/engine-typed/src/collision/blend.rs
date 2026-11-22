@@ -5,6 +5,7 @@
 //! mode it last set (+0x20) and the owner (+0x24).
 
 use super::{body, FAMILY};
+use crate::process::bones;
 use crate::{culling, dispatch, slot_target};
 use engine_core::ptr::Ptr;
 use engine_core::sse::{addps, mulps, subps};
@@ -86,19 +87,39 @@ pub fn update_world_data(e: &mut Engine, this: Ptr, _unused: u32) {
         let flags = e.mem.u8(me + 0xc);
         if (flags >> 6) & 1 != 0 {
             if state != 2 {
-                typed_call!(FAMILY, 0x00c6_5b00, body::ni_to_hk(e, this));
-                let word = e.mem.u16(me + 0xc);
-                e.mem.set_u16(me + 0xc, word & 0xffbf);
+                if bones::walking() || bones::recording() {
+                    // The parallel bone pass: the node's refresh (`NitohkTransform`'s first step),
+                    // then on a helper the rest logged for main, or in the check noted as made.
+                    let target = e.mem.u32(me + 8);
+                    if target != 0 {
+                        refresh(e, target);
+                    }
+                    if bones::walking() {
+                        bones::log_havok(e, me, false);
+                        return;
+                    }
+                    bones::record_havok(e, me, false);
+                }
+                ni_to_hk_and_clear(e, me);
                 return;
             }
         } else if flags & 1 != 0 {
             let scale = e.mem.f32(me + 0x18);
             if object != 0 || 1.0 > scale || e.mem.u32(me + 0x20) == 1 {
-                if slot_target(e, me, SLOT_HK_TO_NI) == 0x00c8_1e30 {
-                    typed_call!(FAMILY, 0x00c8_1e30, hk_to_ni(e, this));
-                } else {
-                    e.vcall(me, SLOT_HK_TO_NI, &args![]);
+                if bones::walking() || bones::recording() {
+                    // Only the keyframed case reaches a helper (`bones`' check before the walk):
+                    // `NitohkTransform` through the motion slot, which refreshes the node first.
+                    let target = e.mem.u32(me + 8);
+                    if target != 0 {
+                        refresh(e, target);
+                    }
+                    if bones::walking() {
+                        bones::log_havok(e, me, true);
+                        return;
+                    }
+                    bones::record_havok(e, me, true);
                 }
+                keyframed_hk_to_ni(e, me);
             }
             return;
         }
@@ -106,6 +127,24 @@ pub fn update_world_data(e: &mut Engine, this: Ptr, _unused: u32) {
     let target = e.mem.u32(me + 8);
     if target != 0 {
         refresh(e, target);
+    }
+}
+
+/// The node-moved branch of [`update_world_data`]: `NitohkTransform`, then the bit cleared (also the
+/// parallel bone pass's replay of what a helper logged).
+pub(crate) fn ni_to_hk_and_clear(e: &mut Engine, me: u32) {
+    typed_call!(FAMILY, 0x00c6_5b00, body::ni_to_hk(e, Ptr::new(me)));
+    let word = e.mem.u16(me + 0xc);
+    e.mem.set_u16(me + 0xc, word & 0xffbf);
+}
+
+/// The keyframed branch's `hktoNiTransform` (slot +0xa4, directly when it is this class's; also the
+/// parallel bone pass's replay).
+pub(crate) fn keyframed_hk_to_ni(e: &mut Engine, me: u32) {
+    if slot_target(e, me, SLOT_HK_TO_NI) == 0x00c8_1e30 {
+        typed_call!(FAMILY, 0x00c8_1e30, hk_to_ni(e, Ptr::new(me)));
+    } else {
+        e.vcall(me, SLOT_HK_TO_NI, &args![]);
     }
 }
 
