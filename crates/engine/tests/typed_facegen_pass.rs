@@ -35,6 +35,8 @@ const LOCKS: u32 = TEST + 0x54;
 const RESETS: u32 = TEST + 0x58;
 const OTHER_APPLIES: u32 = TEST + 0x5c;
 const PARENT_ANSWER: u32 = TEST + 0x60;
+/// Base copies made (each asks the morph extra data once): how the skip test tells a reshape made.
+const BASE_COPIES: u32 = TEST + 0x64;
 const NODE_POSITION: u32 = TEST + 0x70;
 const CAMERA_POSITION: u32 = TEST + 0x80;
 /// Vtables: the node's, the animation data's, the child's, the morphs' (three kinds), the
@@ -642,7 +644,10 @@ fn head(e: &mut Engine) -> (u32, u32, [u32; 2]) {
         children.push(c);
     }
     // Each geometry's own locked array and extra data (the doubles read them per geometry).
-    e.register_double(0x00a5_bdd0, |e, a| ret(e.mem.u32(a[0] + 0x20)));
+    e.register_double(0x00a5_bdd0, |e, a| {
+        count(e, BASE_COPIES);
+        ret(e.mem.u32(a[0] + 0x20))
+    });
     e.register_double(0x00a6_7410, |e, a| {
         // `a[0]` is the geometry's data; the array sits at +0x38 of it.
         e.mem.set_u32(a[1], e.mem.u32(a[0] + 0x38));
@@ -878,10 +883,17 @@ fn facegen_skip_gives_the_same_vertices() {
     let mut run = |frames: &[(Change, Option<Expect>)], from: usize| {
         for (j, (change, expect)) in frames.iter().enumerate() {
             let i = from + j;
-            let (tm, ym) = (translated.mem.u32(MARKS), typed.mem.u32(MARKS));
+            let (tm, ym) = (translated.mem.u32(MARKS), typed.mem.u32(BASE_COPIES));
+            let typed_marks = typed.mem.u32(MARKS);
             frame(&mut translated, tn, td, &tg, *change);
             frame(&mut typed, yn, yd, &yg, *change);
-            let reshaped = typed.mem.u32(MARKS) - ym;
+            // Base copies made: each child's pass asks the extra data once (`00653430`), each copy once more.
+            let reshaped = typed.mem.u32(BASE_COPIES) - ym - 2;
+            assert_eq!(
+                typed.mem.u32(MARKS) - typed_marks,
+                translated.mem.u32(MARKS) - tm,
+                "frame {i} ({change:?}): MarkAsChanged as the exe makes it, skipped or not"
+            );
             if matches!(expect, Some(Stale)) {
                 assert_ne!(
                     shapes(&translated, &tg),

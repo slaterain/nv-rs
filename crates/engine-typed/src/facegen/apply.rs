@@ -31,6 +31,9 @@ const OWN_CUSTOM: u32 = 0x0064_9b10;
 const SLOT_APPLY_MORPH: u32 = 0x4;
 const DIFFERENTIAL_APPLY: u32 = 0x0066_0860;
 const STATISTICAL_APPLY: u32 = 0x0066_0a90;
+/// The geometry's data test (`0049ec60`) and `MarkAsChanged` (`00a67090`), as the base copy calls them.
+const HAS_DATA: u32 = 0x0049_ec60;
+const MARK_AS_CHANGED: u32 = 0x00a6_7090;
 
 /// The node's animation data (slot +0x100).
 #[inline(always)]
@@ -431,8 +434,8 @@ pub fn apply_modifiers(e: &mut Engine, this: Ptr, context: u32) {
 /// A pass over a kept array notes its writes instead of making them. At its end the notes are
 /// compared with the kept ones first (a few dozen entries); only when they are equal are the base
 /// offsets and the array's positions compared, in place, with the kept copies. All equal: the
-/// reshape would give the same positions from the same inputs, so it is left out (with its
-/// `MarkAsChanged`: the data did not change). Anything else makes the writes as the exe does and
+/// reshape would give the same positions from the same inputs, so its vertex work is left out
+/// (its `MarkAsChanged` is still made, [`marks_only`], so the renderer and the heap go as before). Anything else makes the writes as the exe does and
 /// keeps them anew, in place. After [`MISSES`] misses in a row (a talking or blinking face) the
 /// array is not kept for [`REST`] passes: those run as the exe does, at no extra cost, and then it
 /// is tried again. An array not met for [`STALE`] passes (a head unloaded) is forgotten.
@@ -539,6 +542,15 @@ pub(crate) mod skip {
             };
             k.seen = now;
             if k.key != *key {
+                return Mode::Record;
+            }
+            // The array's first vertex still the one kept (three words, so a talking face pays almost
+            // nothing for it): a head rebuilt at the same addresses, or another engine of the same process
+            // reusing them (the tests' runs), is recorded afresh, not deferred.
+            if k.rest == 0
+                && k.positions.len() >= 3
+                && !positions_are(e, &k.positions[..3], key[4], key[5])
+            {
                 return Mode::Record;
             }
             if k.rest > 0 {
@@ -672,6 +684,25 @@ pub(crate) mod skip {
                 at = at.wrapping_add(stride);
             }
         });
+    }
+}
+
+/// A left-out reshape's one effect beyond the vertices: each base copy it would have made still marks
+/// the geometry's data changed (`00653340`'s end: `0049ec60`, then `MarkAsChanged` with 1), so the
+/// renderer does what it did (the same upload of the same bytes, the same blocks of the game's heap)
+/// and only the vertex work is saved. Without it the game's heap is laid out otherwise from then on
+/// (the lead's record check: other addresses, and pointer-ordered work in another order).
+fn marks_only(e: &mut Engine, context: u32, ops: &[Op]) {
+    let geometry = e.mem.u32(context);
+    for op in ops {
+        if *op == Op::Prepare
+            && geometry != 0
+            && e.mem.u32(context + 4) != 0
+            && e.call(HAS_DATA, &args![geometry]).u32() != 0
+        {
+            let data = e.call(at::GEOMETRY_DATA, &args![geometry]).u32();
+            e.call(MARK_AS_CHANGED, &args![data, 1u32]);
+        }
     }
 }
 
@@ -924,7 +955,9 @@ pub fn morph_pass(e: &mut Engine, this: Ptr, force: u8) {
                 match mode {
                     skip::Mode::Record => skip::keep(e, key, &sink.ops, false),
                     skip::Mode::Defer => {
-                        if !skip::same(e, &key, &sink.ops) {
+                        if skip::same(e, &key, &sink.ops) {
+                            marks_only(e, context, &sink.ops);
+                        } else {
                             make(e, context, &sink.ops);
                             skip::keep(e, key, &sink.ops, true);
                         }
