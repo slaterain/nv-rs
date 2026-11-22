@@ -221,6 +221,8 @@ pub struct Frame {
     pub section_holder: Option<engine_core::hitch::LockHolder>,
     /// The interface's hibernating tiles at the frame's end (`Tile::iHibernatingTileCount`, `011f32d8`).
     pub hibernating: u32,
+    /// The longest completed load task main ran (ns, its vtable).
+    pub longest_task: (u64, u32),
     pub left_out: u64,
     /// The longest of those left out (ms).
     pub longest_left_out: f64,
@@ -529,10 +531,7 @@ impl Frame {
         for (count, words) in [
             (Count::CellAttachNs, "attaching cells"),
             (Count::CellDetachNs, "detaching cells"),
-            (
-                Count::HandOverNs,
-                "handing loaded objects over (the queued-task hand-over)",
-            ),
+            (Count::LoadFinishNs, "finishing background loads on main"),
             (Count::HavokNsMain, "in the physics update"),
             (Count::ScriptNsMain, "running scripts"),
         ] {
@@ -917,6 +916,64 @@ impl Frame {
             format!("{} cells unloaded", g(Count::CellsUnloaded)),
         );
         put(
+            g(Count::LoadFinishNs) / TENTH_MS,
+            format!(
+                "finished {} background loads on main in {:.1} ms (the longest {:.1} ms, type {:08x})",
+                g(Count::LoadFinishTasks),
+                ms(g(Count::LoadFinishNs)),
+                ms(self.longest_task.0),
+                self.longest_task.1
+            ),
+        );
+        put(
+            g(Count::LoaderDrainNs) / TENTH_MS,
+            format!(
+                "the model loader's drain {:.1} ms",
+                ms(g(Count::LoaderDrainNs))
+            ),
+        );
+        put(
+            g(Count::LoaderWalkNs) / TENTH_MS,
+            format!(
+                "the model loader's walk {:.1} ms",
+                ms(g(Count::LoaderWalkNs))
+            ),
+        );
+        put(
+            g(Count::GridUpdateNs) / TENTH_MS,
+            format!("grid update {:.1} ms", ms(g(Count::GridUpdateNs))),
+        );
+        // The grid shift's parts, in its order, as one entry when any is over a tenth of a millisecond.
+        let parts = [
+            ("cancel", Count::GridCancelNs),
+            ("textures", Count::GridTexturesNs),
+            ("shift", Count::GridShiftNs),
+            ("Havok", Count::GridHavokNs),
+            ("load", Count::GridLoadNs),
+            ("terrain", Count::GridTerrainNs),
+        ];
+        let shown: Vec<String> = parts
+            .iter()
+            .filter(|(_, c)| g(*c) >= TENTH_MS)
+            .map(|(name, c)| format!("{name} {:.1}", ms(g(*c))))
+            .collect();
+        put(
+            shown.len() as u64,
+            format!("grid shift parts ms: {}", shown.join(", ")),
+        );
+        put(
+            g(Count::CellAttachNs) / TENTH_MS,
+            format!("cell attach {:.1} ms", ms(g(Count::CellAttachNs))),
+        );
+        put(
+            g(Count::CellDetachNs) / TENTH_MS,
+            format!("cell detach {:.1} ms", ms(g(Count::CellDetachNs))),
+        );
+        put(
+            g(Count::CellUnloadNs) / TENTH_MS,
+            format!("cell unload {:.1} ms", ms(g(Count::CellUnloadNs))),
+        );
+        put(
             g(Count::HandBackNs) / TENTH_MS,
             format!(
                 "memory handed back at the frame's end {:.1} ms",
@@ -924,23 +981,8 @@ impl Frame {
             ),
         );
         put(
-            g(Count::CellAttachNs) / TENTH_MS,
-            format!("attaching cells {:.1} ms", ms(g(Count::CellAttachNs))),
-        );
-        put(
-            g(Count::CellDetachNs) / TENTH_MS,
-            format!("detaching cells {:.1} ms", ms(g(Count::CellDetachNs))),
-        );
-        put(
             g(Count::Refs3dAttached),
             format!("{} references given their 3D", g(Count::Refs3dAttached)),
-        );
-        put(
-            g(Count::HandOverNs) / TENTH_MS,
-            format!(
-                "the queued-task hand-over {:.1} ms",
-                ms(g(Count::HandOverNs))
-            ),
         );
         put(
             g(Count::HavokNsMain) / TENTH_MS,
@@ -1068,6 +1110,7 @@ impl HitchLog {
         } else {
             0
         };
+        let longest_task = engine_core::hitch::take_longest_task();
         let screen = crate::uncap::screen(e);
         let presents = engine_platform::d3d9real::present_count(e).unwrap_or(0);
         let shown = Shown {
@@ -1128,6 +1171,7 @@ impl HitchLog {
             lock_holder,
             section_holder,
             hibernating,
+            longest_task,
             left_out,
             longest_left_out,
         };
@@ -1360,6 +1404,39 @@ mod tests {
         }
     }
 
+    /// The background-load and cell timers are written in the work list with the longest task's type.
+    #[test]
+    fn the_load_finish_and_cell_timers_are_written() {
+        let mut f = frame();
+        f.game[Count::LoadFinishNs as usize] = 9_400_000;
+        f.game[Count::LoadFinishTasks as usize] = 3;
+        f.longest_task = (8_100_000, 0x0101_6a4c);
+        f.game[Count::GridUpdateNs as usize] = 50_000;
+        f.game[Count::CellAttachNs as usize] = 6_200_000;
+        let line = f.line();
+        assert!(
+            line.contains(
+                "finished 3 background loads on main in 9.4 ms (the longest 8.1 ms, type 01016a4c)"
+            ),
+            "{line}"
+        );
+        assert!(line.contains("cell attach 6.2 ms"), "{line}");
+        assert!(!line.contains("grid shift parts"), "none counted: {line}");
+        f.game[Count::GridShiftNs as usize] = 3_800_000;
+        f.game[Count::GridLoadNs as usize] = 5_100_000;
+        f.game[Count::GridTerrainNs as usize] = 20_000;
+        let line = f.line();
+        assert!(
+            line.contains("grid shift parts ms: shift 3.8, load 5.1"),
+            "{line}"
+        );
+        assert!(
+            !line.contains("grid update"),
+            "under a tenth of a ms: {line}"
+        );
+        assert!(!line.contains("cell detach"), "{line}");
+    }
+
     /// The cause rules: the counted work that explains the most of the frame's excess is named, with the save, a
     /// load's first frame and cells attached always said; with nothing counted, the stage that took the time.
     #[test]
@@ -1569,7 +1646,7 @@ mod tests {
         f.stages = Some([12.6, 0.1, 3.2, 2.8, 0.8, 0.3, 1.0, 0.2, 0.0]);
         f.game[Count::CellsAttached as usize] = 9;
         f.game[Count::CellAttachNs as usize] = 6_400_000;
-        f.game[Count::HandOverNs as usize] = 3_100_000;
+        f.game[Count::LoadFinishNs as usize] = 3_100_000;
         f.game[Count::Refs3dAttached as usize] = 140;
         f.game[Count::HavokNsMain as usize] = 1_200_000;
         f.game[Count::HavokSteps as usize] = 2;
@@ -1577,13 +1654,13 @@ mod tests {
         f.game[Count::ScriptRuns as usize] = 310;
         assert_eq!(
             f.cause(),
-            "6 ms attaching cells; 3 ms handing loaded objects over (the queued-task hand-over); attached 9 cells"
+            "6 ms attaching cells; 3 ms finishing background loads on main; attached 9 cells"
         );
         let l = f.line();
         for part in [
-            "attaching cells 6.4 ms",
+            "cell attach 6.4 ms",
             "140 references given their 3D",
-            "the queued-task hand-over 3.1 ms",
+            "background loads on main in 3.1 ms",
             "the physics update 1.2 ms (2 steps)",
             "scripts 0.9 ms (310 runs)",
         ] {

@@ -52,6 +52,10 @@ fn world_bound(e: &mut Engine, object: Ptr<NiAVObject>) {
 /// pass of the classes whose slot holds one (`NiNode` 00a5dd70, the fade node 00b4ded0, a plain
 /// object 00a59f90, the particle system 00c1ad90) as a Rust call, any other through the vtable.
 pub fn downward(e: &mut Engine, object: u32, data: u32, flags: u32) {
+    // An actor's walk for the parallel bone pass: what must run on main is logged there instead.
+    if crate::process::bones::walking() && crate::process::bones::logs_subtree(e, object, flags) {
+        return;
+    }
     match slot_target(e, object, SLOT_UPDATE_DOWNWARD) {
         0x00a5_dd70 => typed_call!(
             dispatch::FAMILY,
