@@ -1067,10 +1067,33 @@ pub fn fn_00fb3390(e: &mut Engine) {
     e.call(0x00ec_658f, &args![0x00fd_a170]);
 }
 
+/// The buckets the exe gives the menus' reaction map (`Tile`'s `ValueReactionList`, `011f3358`).
+pub const REACTION_MAP_GAME_BUCKETS: u32 = 0x25;
+/// The buckets nv-rs gives it ([`reaction_map_buckets`]): a prime, about one bucket per value
+/// that another value reads in a large menu.
+pub const REACTION_MAP_BUCKETS: u32 = 8191;
+
+/// The reaction map's bucket count: [`REACTION_MAP_BUCKETS`], or the exe's 37 with
+/// `NV_MENU_REACTION_BUCKETS=0`. The map holds one entry per tile value that another value reads
+/// (each `<copy src=... trait=.../>` style action), keyed by the value's address, its bucket the
+/// address modulo the count (`00a0d260`). With 37 buckets and the thousands of values of a menu
+/// file, every lookup walks a chain of about 80 nodes (hundreds with MCM's start menu), and
+/// building a menu looks up there for every value it calculates, changes or links: about 17,000
+/// lookups in each vanilla pause menu's opening, about half its time (a profile of 2026-11-21).
+/// The map is the same map with the same entries and answers; only the order of its buckets
+/// differs, which only its clearing at exit walks.
+pub fn reaction_map_buckets() -> u32 {
+    match std::env::var("NV_MENU_REACTION_BUCKETS").as_deref() {
+        Ok("0") => REACTION_MAP_GAME_BUCKETS,
+        _ => REACTION_MAP_BUCKETS,
+    }
+}
+
 // Translated from 00fb33c0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// The start-up initializer: runs `00a0d8e0` on `011f3358` (`ECX`; stack arguments `0x25`), then stores `01094e7c` in the word at `011f3358`, then registers `00fda190` with `_atexit` (`00ec658f`).
+/// The bucket count is [`reaction_map_buckets`] (the exe's `0x25` with `NV_MENU_REACTION_BUCKETS=0`).
 pub fn fn_00fb33c0(e: &mut Engine) {
-    e.call(0x00a0_d8e0, &args![0x011f_3358, 0x25]);
+    e.call(0x00a0_d8e0, &args![0x011f_3358, reaction_map_buckets()]);
     e.set_global::<u32>(0x011f_3358, 0x0109_4e7c);
     e.call(0x00ec_658f, &args![0x00fd_a190]);
 }
@@ -2965,7 +2988,7 @@ mod tests {
                 rets: &[],
                 st0s: &[],
                 calls: &[
-                    (0x00a0_d8e0, &[0x011f_3358, 0x25]),
+                    (0x00a0_d8e0, &[0x011f_3358, REACTION_MAP_BUCKETS]),
                     (0x00ec_658f, &[0x00fd_a190]),
                 ],
                 mem: &[(0x011f_3358, 4, 0x0109_4e7c)],

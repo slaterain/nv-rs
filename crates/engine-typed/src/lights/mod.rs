@@ -17,6 +17,11 @@
 //!   walk, called by the first and inlined in the second). These three keep the exact x87 helpers:
 //!   the sort also runs on the loading thread (the render passes), the dominant direction is also
 //!   asked by the blood splatter's set-up; their Diff tests run both control words.
+//! - [`queue`]: the scene node's queue drain (`00b5fd60`, once a frame from `00b60040`) and its
+//!   object half, which redoes the light lists of every object that moved or animated:
+//!   `UpdateQueuedObjectLightingStart` (`00b5dac0`), the object walks (`00b5c490`, `00b5c5c0`) and
+//!   the per-geometry updates (`00b5b260`, `00b5b410`), reaching the typed bound test and add
+//!   directly.
 //!
 //! What stays by address: the objects' `IsNode` and `IsTriBasedGeom` slots, the light's RTTI slot,
 //! the geometry and lighting property tests, the property's light add and the list moves and adds.
@@ -37,6 +42,7 @@ use engine_core::{entry, AbiFn};
 
 pub mod dominant;
 mod list;
+pub mod queue;
 pub mod resort;
 pub mod walk;
 pub mod weighted;
@@ -95,5 +101,11 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b7_0390, resort::resort_lights(Ptr, u32)),
         entry!(0x00b9_d150, weighted::compute_weighted(Ptr<ShadowSceneLight>, u32, u32, u32, u32)),
         entry!(0x00b5_bca0, dominant::dominant_light_direction(Ptr, Ptr, Ptr, Ptr) -> u32),
+        entry!(0x00b5_fd60, queue::drain(Ptr)),
+        entry!(0x00b5_dac0, queue::update_start(u32, u32, u32, u32) -> u8),
+        entry!(0x00b5_b260, queue::update_geometry(u32, u32, u32, u32, u32) -> u8),
+        entry!(0x00b5_b410, queue::update_geometry_list(u32, u32, u32, u32) -> u8),
+        entry!(0x00b5_c490, queue::update_tree(u32, u32, u32, u32, u32) -> u8),
+        entry!(0x00b5_c5c0, queue::update_tree_list(u32, u32, u32, u32) -> u8),
     ]
 }

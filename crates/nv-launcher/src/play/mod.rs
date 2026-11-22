@@ -1084,8 +1084,8 @@ fn import_saves(package: &Package, profile: &Profile, from: Option<&Path>) -> Re
         message: format!("{}: {e}", profile.saves.display()),
     })?;
     let out = crate::saves::copy_saves(&source, &profile.saves, &mut |name| {
-        ui::ask(&format!(
-            "nv-rs's folder already has a different {name} (or its .nvse file).\n\nReplace both with the copy?"
+        ui::ask_default_no(&format!(
+            "nv-rs's folder already has a different {name} (or its .nvse file).\n\nReplace both with the copy? (No keeps the one in nv-rs's folder.)"
         ))
     })
     .map_err(|e| Stop {

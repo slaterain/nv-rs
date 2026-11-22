@@ -182,6 +182,7 @@ const NVSE: &[Owner] = &[Owner::Nvse];
 const JIP: &[Owner] = &[Owner::Jip];
 const NVSE_JIP: &[Owner] = &[Owner::Nvse, Owner::Jip];
 const UIO: &[Owner] = &[Owner::Uio];
+const STEWIE: &[Owner] = &[Owner::Stewie];
 
 /// Every exe address a built-in may wrap (ADR-0016 §3, "Wrappers"), by address. Each is a
 /// function entry registered by a translation (or a fix row's copy of it) and reached by
@@ -644,6 +645,13 @@ pub const SITES: &[Entry] = &[
         addr: 0x0071_47c4,
         owners: NVSE,
         step: "I-8",
+    },
+    // The text key event 007154b0, the shift state pushed for the character lookup: lStewieAl's
+    // Tweaks' S0022.03 (`IsShiftHeld`, xNVSE's raw key state of either shift key).
+    Entry {
+        addr: 0x0071_5563,
+        owners: STEWIE,
+        step: "stewie-K",
     },
     // RecipeMenu's craft 007284f0: JIP LN NVSE's ItemCrafted (OnCrafting).
     Entry {
@@ -3096,7 +3104,12 @@ mod tests {
         ] {
             assert!(find(SITES, Owner::Nvse, a).is_some(), "{a:08x}");
         }
-        assert_eq!(SITES.len(), 128);
+        assert_eq!(SITES.len(), 129);
+        // lStewieAl's Tweaks' (its seams in the text key event and Idle), Tweaks' alone.
+        for a in [0x0071_5563] {
+            assert!(find(SITES, Owner::Stewie, a).is_some(), "{a:08x}");
+            assert!(find(SITES, Owner::Jip, a).is_none(), "{a:08x}");
+        }
         // UI Organizer's ten (UIOLoad's place, ResolveXMLFileHook's, the five hardcore zooms,
         // FinalPostParse, the operators' dispatch, the text scale), its alone.
         for a in [

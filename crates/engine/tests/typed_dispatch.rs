@@ -3398,3 +3398,53 @@ fn extra_package_target() {
     .run()
     .assert_same();
 }
+
+/// A simple list (head, tail, count; a node is next, previous, item) of the first `n` of
+/// [10, 20, 30, 20, 40], the item wanted (by index into them, past them a missing 99) and where
+/// the walk starts (0: the list's first node; k: the k-th node, 0 when there is none).
+fn list_find_words(e: &mut Engine, case: &Case) -> Vec<u32> {
+    let items = [10, 20, 30, 20, 40];
+    let n = case.word(0) as usize;
+    let mut nodes = vec![0u32; n];
+    for i in (0..n).rev() {
+        let next = nodes.get(i + 1).copied().unwrap_or(0);
+        nodes[i] = block(e, 12, &[next, 0, items[i]]);
+    }
+    for i in 1..n {
+        e.mem.set_u32(nodes[i] + 4, nodes[i - 1]);
+    }
+    let head = nodes.first().copied().unwrap_or(0);
+    let tail = nodes.last().copied().unwrap_or(0);
+    let list = block(e, 12, &[head, tail, n as u32]);
+    let i = case.word(1) as usize;
+    let wanted = block(e, 4, &[if i < n { items[i] } else { 99 }]);
+    let k = case.word(2) as usize;
+    let start = if k == 0 {
+        0
+    } else {
+        nodes.get(k - 1).copied().unwrap_or(0)
+    };
+    vec![list, wanted, start]
+}
+
+/// The simple list's find (`0049c680`, the hibernating tiles' list every deleted tile asks): found at
+/// the head, inside, at the end, the first of two equal items, or not; an empty list; from the first
+/// node or a later one.
+#[test]
+fn list_find() {
+    Diff::new(entry!(
+        0x0049_c680,
+        refs::list_find(Ptr<_>, Ptr<u32>, u32) -> u32
+    ))
+    .common(0x0049_c680)
+    // The list's step (`0057cbe0`): the typed find does its two reads in place.
+    .ignore_calls(&[0x0057_cbe0])
+    .inputs(&[
+        Input::Of(&[0, 1, 2, 5]),
+        Input::Of(&[0, 1, 2, 3, 4, 9]),
+        Input::Of(&[0, 1, 2, 4, 6]),
+    ])
+    .setup(list_find_words)
+    .run()
+    .assert_same();
+}
