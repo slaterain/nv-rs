@@ -163,8 +163,9 @@ fn a_second_engine_of_the_run_finds_the_same_string() {
     );
 }
 
-/// The clean-up: a string whose count is 0 leaves the pool (the same text then gets a new one,
-/// count 1); a counted one stays (a count JIP's code would see as not 0: 0xFFFFFFFF included).
+/// The clean-up: a string whose count is 0 leaves the pool and its block is freed (the same text
+/// then gets a new one, count 1); a counted one stays (a count JIP's code would see as not 0:
+/// 0xFFFFFFFF included).
 #[test]
 fn the_clean_up_frees_only_unused_strings() {
     let mut e = with(true, true);
@@ -175,6 +176,9 @@ fn the_clean_up_frees_only_unused_strings() {
     e.mem.set_u32(sa - 8, 0);
     e.mem.set_u32(sc - 8, 0xffff_ffff);
     e.call(FREE_UNUSED.addr(), &[]);
+    // The unused string's block is freed; the counted ones' blocks stay.
+    assert_eq!(e.mem.block_size(sa - 8), None, "freed");
+    assert!(e.mem.block_size(sb - 8).is_some() && e.mem.block_size(sc - 8).is_some());
     assert_eq!(make(&mut e, b), sb);
     assert_eq!(e.mem.u32(sb - 8), 2);
     assert_eq!(make(&mut e, c), sc);
