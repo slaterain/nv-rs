@@ -224,6 +224,8 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a0_13d0, tile::absolute_x(Ptr) -> f32),
         entry!(0x00a0_1440, tile::absolute_y(Ptr) -> f32),
         entry!(0x00a0_a220, tile::value_change_event(Ptr)),
+        // The values' calculation every menu's build runs for each value (and its readers').
+        entry!(0x00a0_9410, tile::calculate_value(Ptr, u8)),
         // The action links' tile search a menu's build makes for every link (every menu's opening).
         entry!(0x00a0_8b20, tile::find_by_path(Ptr, Ptr) -> Ptr),
         entry!(0x00a0_8f20, tile::find_named_in_tree(Ptr, Ptr) -> Ptr),

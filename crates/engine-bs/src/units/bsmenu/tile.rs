@@ -5659,7 +5659,8 @@ pub fn value_set_float(e: &mut Engine, this: Ptr<TileValue>, value: f32, flag: b
     if flag {
         value_clear_actions(e, this);
     }
-    value_calculate_value(e, this, changed);
+    // By address, as the exe calls it: `CalculateValue` is overridable (and typed).
+    e.call(VALUE_CALCULATE_VALUE, &args![this, u32::from(changed)]);
 }
 
 // Translated from 00a0a300 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -5690,7 +5691,8 @@ pub fn value_set_string(e: &mut Engine, this: Ptr<TileValue>, text: Ptr, flag: b
     if flag {
         value_clear_actions(e, this);
     }
-    value_calculate_value(e, this, changed);
+    // By address, as the exe calls it: `CalculateValue` is overridable (and typed).
+    e.call(VALUE_CALCULATE_VALUE, &args![this, u32::from(changed)]);
 }
 
 /// Links `item` behind the last item of the template's list (a node from
@@ -14566,6 +14568,11 @@ mod tests {
     #[test]
     fn setting_a_float_replaces_the_string_and_recalculates() {
         let mut e = tile_engine();
+        // `SetFloat` and `SetString` call `CalculateValue` by address: the real one here.
+        e.register(VALUE_CALCULATE_VALUE, |e, a| {
+            value_calculate_value(e, Ptr::new(a[0]), a[1] & 0xff != 0);
+            Ret::default()
+        });
         let (tile, log) = calculating_tile(&mut e);
         let value = value_with(&mut e, tile, TRAIT_X, 1.0, &[(VA_ADD, 1.0)]);
         let text = cstring(&mut e, "s");
@@ -14595,6 +14602,11 @@ mod tests {
     #[test]
     fn setting_a_string_copies_it_and_zeroes_the_float() {
         let mut e = tile_engine();
+        // `SetFloat` and `SetString` call `CalculateValue` by address: the real one here.
+        e.register(VALUE_CALCULATE_VALUE, |e, a| {
+            value_calculate_value(e, Ptr::new(a[0]), a[1] & 0xff != 0);
+            Ret::default()
+        });
         install_strcmp(&mut e);
         let (tile, log) = calculating_tile(&mut e);
         let value = value_with(&mut e, tile, TRAIT_X, 6.0, &[(VA_ADD, 1.0)]);

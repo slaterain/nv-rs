@@ -1404,3 +1404,127 @@ fn find_by_path_diff() {
     .run()
     .assert_same();
 }
+
+// ---- Tile::Value::CalculateValue (every value of a menu's build) ----
+
+/// The value actions this test strings together: (type, operand, reads the other value).
+const PROGRAMS: &[&[(u32, f32, bool)]] = &[
+    &[],
+    &[(2000, 3.0, false), (2001, 0.0, true)],
+    &[(2000, 0.0, true), (2003, 2.5, false), (2012, 4.0, false)],
+    &[
+        (2000, 7.0, false),
+        (2004, 2.0, false),
+        (2004, 0.0, false),
+        (2005, 3.0, false),
+        (2006, -1.0, false),
+        (2007, 2.0, false),
+        (2008, 0.25, false),
+        (2009, 0.5, false),
+        (2010, -9.0, false),
+        (2011, 2.0, false),
+    ],
+    &[
+        (2000, 1.0, false),
+        (2013, 1.0, false),
+        (2014, 1.0, false),
+        (2015, 0.0, false),
+        (2016, 2.0, false),
+        (2017, 0.0, false),
+        (2018, 0.0, true),
+        (2019, 0.0, true),
+        (2020, 0.0, true),
+        (2021, 0.0, true),
+        (2022, 0.0, false),
+    ],
+    &[(2000, 0.0, true), (2002, 1.0, false), (2099, 5.0, false)],
+];
+
+/// The words of [`calculate_value_diff`]: a tile (flags from the case: none, loading, its menu
+/// deleting, released; vtable slot 0xC a rect's type, slot 0x18 a `PostParse` answering the case's
+/// word) holding the value (trait `x`, the class or a user trait; its float from the case) whose
+/// actions are a program of [`PROGRAMS`] (float actions and reference actions with the two action
+/// classes' vtables) reading another value (float 2.0; with a string or not); empty reaction and
+/// user-trait maps with the game's integer slots.
+fn calculate_words(e: &mut Engine, case: &engine_core::typed::diff::Case) -> Vec<u32> {
+    world(e);
+    for page in [0x0109_4000, 0x0101_1000] {
+        e.map(page, 0x1000);
+    }
+    e.mem.set_f64(0x0101_1588, 0.5);
+    e.mem.set_u32(0x0109_4c2c, 0x00a0_c000);
+    e.mem.set_u32(0x0109_4c30, 0x00ad_87c0);
+    e.mem.set_u32(0x0109_4c44, 0x00a0_c020);
+    e.mem.set_u32(0x0109_4c48, 0x00a0_c060);
+    int_map(e, 0x011f_3358, 37, 0, false);
+    int_map(e, 0x011f_3308, 37, 0, false);
+    let answer = case.word(3);
+    e.register(0x00fd_0500, |_, _| ret(0x385));
+    e.register_double(0x00fd_0504, move |_, _| ret(answer));
+    let vtable = e.mem.alloc(0x20);
+    e.mem.set_u32(vtable + 0xc, 0x00fd_0500);
+    e.mem.set_u32(vtable + 0x18, 0x00fd_0504);
+    let tile = e.mem.alloc(0x40);
+    e.mem.set_u32(tile, vtable);
+    let flags = [0, 0x10000, 0x4000, 0x2000][case.word(1) as usize];
+    e.mem.set_u32(tile + 0x30, flags);
+    let other = e.mem.alloc(0x14);
+    e.mem.set_u32(other, 0xfa2);
+    e.mem.set_u32(other + 4, tile);
+    e.mem.set_f32(other + 8, 2.0);
+    if case.word(4) != 0 {
+        let text = e.mem.alloc(4);
+        e.mem.write(text, b"ab\0");
+        e.mem.set_u32(other + 0xc, text);
+    }
+    let value = e.mem.alloc(0x14);
+    let id = [0xfa1, 0xfa4, 10_005][case.word(2) as usize];
+    e.mem.set_u32(value, id);
+    e.mem.set_u32(value + 4, tile);
+    e.mem
+        .set_f32(value + 8, [0.0f32, 1.5, -3.0][case.word(5) as usize]);
+    let mut link = value + 0x10;
+    for &(kind, operand, reads) in PROGRAMS[case.word(0) as usize] {
+        let action = e.mem.alloc(0x10);
+        if reads {
+            e.mem.set_u32(action, 0x0109_4c44);
+            e.mem.set_u32(action + 0xc, other);
+        } else {
+            e.mem.set_u32(action, 0x0109_4c2c);
+            e.mem.set_f32(action + 0xc, operand);
+        }
+        e.mem.set_u32(action + 4, kind);
+        e.mem.set_u32(link, action);
+        link = action + 8;
+    }
+    vec![value, case.word(6)]
+}
+
+/// `Tile::Value::CalculateValue` (`00a09410`) against its translation: every operation, a reference
+/// action's float and string, the tile's flags (loading, menu deleting, released), the class trait,
+/// `PostParse`'s answers (0 leads to `Tile::FinalPostParse`), with and without the flag. The two
+/// action classes' operand functions are read in place.
+#[test]
+fn calculate_value_diff() {
+    Diff::new(engine_core::entry!(
+        0x00a0_9410,
+        dispatch::tile::calculate_value(Ptr<_>, u8)
+    ))
+    .family(&dispatch::DISPATCH)
+    .family(&crt::CRT)
+    .ignore_calls(&[0x00a0_c000, 0x00a0_c020, 0x00a0_c060, 0x00ad_87c0])
+    .translation_calls_plainly(&[0x00a0_37e0])
+    .inputs(&[
+        Input::Of(&[0, 1, 2, 3, 4, 5]),
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Of(&[0, 1, 2]),
+        Input::Of(&[0, 1]),
+        Input::Of(&[0, 1]),
+        Input::Of(&[0, 1, 2]),
+        Input::Of(&[0, 1]),
+    ])
+    .max_cases(600)
+    .setup(calculate_words)
+    .run()
+    .assert_same();
+}
