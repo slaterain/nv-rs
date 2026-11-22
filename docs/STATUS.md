@@ -335,8 +335,8 @@ More in [FIXES.md, "lStewieAl's Tweaks"](FIXES.md#lstewieals-tweaks).
   mods" lays them over the game, then the hand-filled `mods` folder (`crates/mod-install`, which
   Play.exe uses). Mod archives in the `mods` folder are no longer copied into the game.
 - On Linux and macOS, `./play.sh --mods` plays with them the same way, in a profile of its own.
-- The text chooser (`crates/mod-chooser`, the same on all three systems: "Install mods.cmd" on
-  Windows, `./play.sh --install-mods` on Linux and macOS) lists the archives and installed mods,
+- The text chooser (`crates/mod-chooser`, the same on all three systems: the launcher's `> Mods`,
+  which runs Play.exe's or play.sh's `--install-mods` in its window) lists the archives and installed mods,
   asks each installer's questions in plain words, and installs and removes mods.
 
 ## The launcher

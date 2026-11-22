@@ -318,7 +318,7 @@ GitHub Releases; the packages there from before 2026-11-03 are of the removed vi
   but after that the game's start-up still stops, in the renderer (a run without `sD3DDevice`): the name must match.
 - **The name:** the program is simply named `FalloutNV.exe` in the package, in `app\`: no link is needed,
   and NVIDIA's driver profile (the white orbs) and Windows' per-program sound go by the name.
-- **Mods:** `Play with mods.cmd` builds `userdata\modgame`: the game's folder as hard links (no copy,
+- **Mods:** the launcher's `> Play with mods` builds `userdata\modgame`: the game's folder as hard links (no copy,
   same NTFS drive needed), the `mods` folder's files copied over them with each link removed first.
 
 ### What the tables can't cover
