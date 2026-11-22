@@ -123,6 +123,14 @@ fn jip_keeps_failed_script(e: &mut Engine, site: u32) -> bool {
         && e.site(site, &[]).is_some()
 }
 
+/// JIP LN NVSE's G24: a busy runner's jump at `0x5E0DD1` over the two names and the script log's
+/// nested-run line. The fixes' bit is tested first; true when JIP's handler takes the jump.
+#[inline]
+fn jip_skips_nested_log(e: &mut Engine) -> bool {
+    e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+        && e.site(0x005e_0dd1, &[]).is_some()
+}
+
 /// The address of if-stack level `depth`.
 #[inline]
 fn if_level(this: u32, depth: u32) -> u32 {
@@ -177,13 +185,16 @@ pub fn run_lines(
         }
         let running = e.mem.u32(me + RUNNING);
         if running != 0 {
-            let requested_name = name_of(e, script.addr());
-            let running = e.mem.u32(me + RUNNING);
-            let running_name = name_of(e, running);
-            e.call(
-                SCRIPT_LOG,
-                &args![NESTED_RUN_MESSAGE, running_name, requested_name],
-            );
+            // 005e0dd1: JIP LN NVSE's G24 jumps over the two names and the log.
+            if !jip_skips_nested_log(e) {
+                let requested_name = name_of(e, script.addr());
+                let running = e.mem.u32(me + RUNNING);
+                let running_name = name_of(e, running);
+                e.call(
+                    SCRIPT_LOG,
+                    &args![NESTED_RUN_MESSAGE, running_name, requested_name],
+                );
+            }
             return e.mem.u8(me + 0xa1) != 0;
         }
         e.mem.set_u32(me + RUNNING, script.addr());
