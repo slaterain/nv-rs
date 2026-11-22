@@ -234,7 +234,7 @@ fn read_range(
     // nov21d play, PLAY-1121d.md); the handle's position is moved on after it, under the lock again, as before.
     engine_core::real_threads::without_kernel_lock_if_outermost(e, || {
         #[cfg(test)]
-        handle_order_tests::while_reading();
+        handle_order_tests::while_reading(k);
         let read = read_at(&file, start, count);
         // Over: the handle's new position handed to a waiter that may hold the kernel lock now.
         let moved = read.as_ref().map_or(0, |b| b.len() as u64);
@@ -7187,10 +7187,11 @@ mod handle_order_tests {
     /// This module's tests one at a time (the pause above is shared).
     static ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    /// Called by [`super::read_range`] in the disk read outside the kernel lock.
-    pub(super) fn while_reading() {
+    /// Called by [`super::read_range`] in the disk read outside the kernel lock (`key`: the file's guest path key).
+    pub(super) fn while_reading(key: &[u8]) {
         let ms = PAUSE_MS.load(Ordering::SeqCst);
-        if ms > 0 {
+        // Only this module's seek test's file: other tests read at the same time.
+        if ms > 0 && key.windows(20).any(|w| w == b"nv-handle-order-seek") {
             PAUSED.store(true, Ordering::SeqCst);
             std::thread::sleep(std::time::Duration::from_millis(ms));
         }
