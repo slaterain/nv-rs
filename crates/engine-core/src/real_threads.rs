@@ -4584,6 +4584,8 @@ mod tests {
                 .eax,
             0
         );
+    }
+
     /// What [`records_the_hold`] saw inside its work: 1 the kernel lock still held, 2 given back.
     static HELD_IN_WORK: AtomicU32 = AtomicU32::new(0);
 
