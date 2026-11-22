@@ -46,3 +46,5 @@ esm = { path = "../esm" }
 nvse = { path = "../nvse" }
 # JohnnyGuitar's editor ids through the game's compile (`tests/jg_editor_ids_compile.rs`).
 johnnyguitar = { path = "../johnnyguitar" }
+# JIP setting commands against the actual native setter and heap ownership.
+jip = { path = "../jip", features = ["test-support"] }

@@ -240,7 +240,7 @@ fn settings_setup(e: &mut Engine) -> (u32, u32, u32) {
     e.map(0x011f_3000, 0x1000);
     e.map(0x011f_9000, 0x1000);
     let (s1, s2, s3) = (SETTINGS, SETTINGS + 0x200, SETTINGS + 0x400);
-    let old = heap_alloc(e, 4);
+    let old = crate::commands::heap_alloc(e, 4);
     e.mem.write(old, b"Old\0");
     setting(e, s1, b"sGreeting", old);
     setting(e, s2, b"fGravity", 9.5f32.to_bits());
@@ -274,18 +274,36 @@ fn string_settings() {
     // Only names starting with s.
     let (_, res) = call(&mut e, 0x2283, &[s(b"fGravity")]);
     assert_eq!(string_result(&e, res), b"");
-    let old = e.mem.u32(s1 + 4);
-    let block = heap_next(&e);
+    // The command delegates ownership to Setting::Set. The real native setter
+    // and strict heap are exercised together in engine/tests/jip_setting_string.rs.
+    e.register(0x00c3_3170, |e, w| {
+        let text = e.mem.cstr(w[1]);
+        e.ext::<Vec<(u32, Vec<u8>)>>().push((w[0], text.clone()));
+        let copy = nvse::table::guest_str(e, &text);
+        e.mem.set_u32(w[0] + 4, copy);
+        w[0].into_ret()
+    });
+    let before = allocations().len();
     call(&mut e, 0x2284, &[s(b"sgreeting"), s(b"Hello there")]);
-    assert_eq!(freed(), vec![old]);
-    assert_eq!(e.mem.u32(s1 + 4), block);
-    assert_eq!(*allocations().last().unwrap(), 12, "the length and its 0");
+    assert_eq!(
+        e.ext::<Vec<(u32, Vec<u8>)>>().as_slice(),
+        [(s1, b"Hello there".to_vec())]
+    );
+    assert!(
+        freed().is_empty(),
+        "the command never frees the value directly"
+    );
+    assert_eq!(allocations().len(), before);
     let (_, res) = call(&mut e, 0x2283, &[s(b"sGreeting")]);
     assert_eq!(string_result(&e, res), b"Hello there");
     call(&mut e, 0x2284, &[s(b"fGravity"), s(b"x")]);
-    assert_eq!(freed().len(), 1, "not a string setting: nothing");
+    assert_eq!(
+        e.ext::<Vec<(u32, Vec<u8>)>>().len(),
+        1,
+        "not a string setting: nothing"
+    );
     call(&mut e, 0x2284, &[s(b"sMissing"), s(b"x")]);
-    assert_eq!(freed().len(), 1);
+    assert_eq!(e.ext::<Vec<(u32, Vec<u8>)>>().len(), 1);
 }
 
 #[test]

@@ -539,6 +539,7 @@ dependencies = [
  "engine-speedtree",
  "engine-typed",
  "esm",
+ "jip",
  "johnnyguitar",
  "nvse",
  "uio",

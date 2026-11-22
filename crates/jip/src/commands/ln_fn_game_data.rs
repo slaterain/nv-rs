@@ -21,8 +21,8 @@ use super::forms::ListNode;
 use super::jip_fn_aux_variable::overriding_mod;
 use super::jip_fn_utility::{hex_to_uint, lookup_mod_by_name, nth_mod_name};
 use super::{
-    assign_string, buffer_arg, heap_alloc, heap_free, list_items, list_prepend, list_remove_all,
-    ref_id, the_name, type_of, Handlers,
+    assign_string, buffer_arg, list_items, list_prepend, list_remove_all, ref_id, the_name,
+    type_of, Handlers,
 };
 use crate::cosave::lookup_form;
 use crate::utility::str_compare_ci;
@@ -537,8 +537,11 @@ fn get_string_setting(e: &mut Engine, w: &[u32]) -> Ret {
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_ln/ln_fn_game_data.h:
 // Cmd_SetStringSetting_Execute; nvse/GameSettings.cpp: Setting::Set(const char*, bool).
-/// A string setting's text replaced: the old text freed, a copy of the new one (the game's heap,
-/// its length and 0) put in.
+/// Replace the string through the native ownership-aware `Setting::Set` (00C33170).
+/// JIP's helper frees `data.str` unconditionally; that is unsafe for the executable's
+/// static defaults and for native replacements whose value is inside a key/value block.
+/// This deliberate ownership adaptation keeps the native `s`/`S` key convention: the
+/// setter copies both strings and frees an old owned key, never a static/interior value.
 fn set_string_setting(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     let read = Read::of(e, &a);
@@ -550,11 +553,10 @@ fn set_string_setting(e: &mut Engine, w: &[u32]) -> Ret {
     let value = &value[..value.iter().position(|&b| b == 0).unwrap_or(value.len())];
     if name.first().map(|b| b | 0x20) == Some(b's') {
         if let Some(s) = crate::overrides::game_setting(e, &name) {
-            heap_free(e, e.mem.u32(s + 4));
-            let copy = heap_alloc(e, value.len() as u32 + 1);
-            e.mem.write(copy, value);
-            e.mem.set_u8(copy + value.len() as u32, 0);
-            e.mem.set_u32(s + 4, copy);
+            e.with_stack(value.len() as u32 + 1, |e, text| {
+                e.mem.set_cstr(text.addr(), value);
+                e.call(0x00c3_3170, &args![s, text]);
+            });
         }
     }
     handled(true)
