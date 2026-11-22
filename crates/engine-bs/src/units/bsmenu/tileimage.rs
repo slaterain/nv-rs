@@ -80,6 +80,9 @@ const TEXTURE_PALETTE_SET_TEXTURE: u32 = 0x00a6_1c50;
 /// thiscall: path, second path, 6 or 0, -1) on the finder at `011f81dc`.
 const FILE_FINDER_FIND: u32 = 0x00af_e0d0;
 const FILE_FINDER: u32 = 0x011f_81dc;
+/// `NiPath::Standardize` (`00aa2a00`, cdecl: the path, changed in place: `/` becomes `\`, doubled
+/// separators are dropped).
+const PATH_STANDARDIZE: u32 = 0x00aa_2a00;
 /// `Interface::GetInterfaceRoot` (`00706d30`), `GetScreenHeight`
 /// (`00706df0`), `GetScreenWidth` (`00706e00`), `GetScreenAspectRatio`
 /// (`00706e70`) and `SetNeedToUpdate` (`00707930`) (Xbox PDB names, cdecl).
@@ -231,7 +234,18 @@ pub fn fn_00a1f7d0(e: &mut Engine, path: Ptr, scale: Ptr, _unused_2: u32, buffer
             e.call(INTERLOCKED_INCREMENT, &args![start + 4]);
         }
         e.mem.set_u32(texture.addr(), start);
-        let handle = fixed_string(e, buffer.addr());
+        // `0xA1F88B` (lStewieAl's Tweaks' S0227, `TileTextureCacheFix`, calls its own
+        // `NiGlobalStringTable__AddString` there, on the non-null path only): the path in the
+        // buffer is standardized first (`NiPath::Standardize`, in place), so the palette is asked
+        // with the spelling the texture loader stored it under.
+        let handle = if !buffer.is_null()
+            && e.stewie(engine_core::extend::stewie::TILE_TEXTURE_PATH_STANDARDIZED)
+        {
+            e.call(PATH_STANDARDIZE, &args![buffer]);
+            e.call(NI_FIXED_STRING_CREATE, &args![buffer]).u32()
+        } else {
+            fixed_string(e, buffer.addr())
+        };
         e.call(TEXTURE_PALETTE_GET_TEXTURE, &args![handle, texture]);
         if e.mem.u32(texture.addr()) == 0 {
             let finder = e.global::<u32>(FILE_FINDER);
@@ -778,6 +792,63 @@ mod tests {
         assert!(calls_to(&e, FILE_FINDER_FIND).is_empty());
         assert_eq!(e.mem.u32(texture + 4), 1);
         assert!(calls_to(&e, DELETE_THIS).is_empty());
+    }
+
+    /// Row S0227 (lStewieAl's Tweaks' `TileTextureCacheFix`, `0xA1F88B`): with the row on the
+    /// built path is standardized in the buffer (`NiPath::Standardize`, `00aa2a00`, here a
+    /// stand-in turning `/` into `\`) before its fixed string is made, so the palette is asked
+    /// with the loader's spelling and the buffer keeps it; off, the path as written and no such
+    /// call.
+    #[test]
+    fn s0227_the_path_is_standardized_before_the_palette() {
+        for on in [false, true] {
+            let mut e = path_engine(0, vec![1]);
+            e.register_double(PATH_STANDARDIZE, |e, a| {
+                let mut at = a[0];
+                while e.mem.u8(at) != 0 {
+                    if e.mem.u8(at) == b'/' {
+                        e.mem.set_u8(at, b'\\');
+                    }
+                    at += 1;
+                }
+                Ret {
+                    eax: 1,
+                    ..Ret::default()
+                }
+            });
+            let seen = e.mem.alloc(0x104);
+            let handle = e.mem.alloc(0x10) + 8;
+            e.register_double(NI_FIXED_STRING_CREATE, move |e, a| {
+                let text = e.mem.cstr(a[0]);
+                e.mem.set_cstr(seen, &text);
+                Ret {
+                    eax: handle,
+                    ..Ret::default()
+                }
+            });
+            let path = text(&mut e, b"menus/a.dds");
+            let scale = e.mem.alloc(4);
+            let buffer = e.mem.alloc(0x104);
+            e.set_stewie(
+                engine_core::extend::stewie::TILE_TEXTURE_PATH_STANDARDIZED,
+                on,
+            );
+            e.call_log = Some(vec![]);
+            e.call(0x00a1_f7d0, &args![path, scale, 0u32, buffer]);
+            let wanted: &[u8] = if on {
+                b"Data\\Textures\\menus\\a.dds"
+            } else {
+                b"Data\\Textures\\menus/a.dds"
+            };
+            assert_eq!(e.mem.cstr(seen), wanted, "row {on}");
+            assert_eq!(e.mem.cstr(buffer), wanted, "row {on}");
+            let standardized = calls_to(&e, PATH_STANDARDIZE);
+            if on {
+                assert_eq!(standardized, vec![vec![buffer]]);
+            } else {
+                assert!(standardized.is_empty());
+            }
+        }
     }
 
     #[test]

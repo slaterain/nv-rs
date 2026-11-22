@@ -2246,12 +2246,71 @@ pub fn hacking_menu_prepare(e: &mut Engine, this: Ptr<HackingMenu>, count: u32) 
     e.with_stack(8, |e, path| {
         e.call(STRING_CONSTRUCTOR, &args![path]);
         e.with_stack(8, |e, candidates| {
-            e.call(WORD_LIST_CONSTRUCTOR, &args![candidates]);
+            // `0x7680BA` (lStewieAl's Tweaks' S0015, `EasterEggs`, calls its own
+            // `HackingWordsListInit` there in place of the list's constructor).
+            if e.stewie(engine_core::extend::stewie::HACKING_EASTER_EGG_WORDS) {
+                stewie_easter_egg_words(e, candidates.addr());
+            } else {
+                e.call(WORD_LIST_CONSTRUCTOR, &args![candidates]);
+            }
             prepare_words(e, this, count, path, candidates);
             fn_00765810(e, candidates);
         });
         e.call(STRING_DESTRUCTOR, &args![path]);
     });
+}
+
+/// The game heap (`011f6238`) and its allocate (`00aa3e40`: `this`, size): xNVSE's
+/// `GameHeapAlloc`.
+const GAME_HEAP: u32 = 0x011f_6238;
+const HEAP_ALLOCATE: u32 = 0x00aa_3e40;
+
+/// lStewieAl's Tweaks' `EasterEggs::HackingWordsListInit` (row S0015, at `0x7680BA` in place of
+/// the word list's constructor): the list (data +0, next +4) is emptied; when the hacking menu
+/// (`011d95b8`) wants six-letter words (+0x1AC) copies of "STEWIE" and "TWEAKS" are put in, for
+/// eight letters "FRONTIER", each copy on the game heap. Tweaks' `tList::Insert`: an empty list
+/// takes the word as its data; else a new node (8 bytes, game heap) takes the old data and next
+/// and the head the new word (so TWEAKS comes before STEWIE).
+fn stewie_easter_egg_words(e: &mut Engine, list: u32) {
+    e.mem.set_u32(list, 0);
+    e.mem.set_u32(list + 4, 0);
+    let menu = e.global::<u32>(HACKING_MENU);
+    if menu == 0 {
+        // No menu: Tweaks would read its word length through a null pointer (our guard).
+        return;
+    }
+    let words: &[&[u8]] = match e.mem.u32(menu + 0x1ac) {
+        6 => &[b"STEWIE\0", b"TWEAKS\0"],
+        8 => &[b"FRONTIER\0"],
+        _ => &[],
+    };
+    let copies: Vec<u32> = words
+        .iter()
+        .map(|word| {
+            let copy = e
+                .call(HEAP_ALLOCATE, &args![GAME_HEAP, word.len() as u32])
+                .u32();
+            if copy != 0 {
+                e.mem.write(copy, word);
+            }
+            copy
+        })
+        .collect();
+    for copy in copies {
+        if copy == 0 {
+            continue;
+        }
+        let head = e.mem.u32(list);
+        if head == 0 {
+            e.mem.set_u32(list, copy);
+        } else {
+            let node = e.call(HEAP_ALLOCATE, &args![GAME_HEAP, 8u32]).u32();
+            e.mem.set_u32(node, head);
+            e.mem.set_u32(list, copy);
+            e.mem.set_u32(node + 4, e.mem.u32(list + 4));
+            e.mem.set_u32(list + 4, node);
+        }
+    }
 }
 
 /// The body of [`hacking_menu_prepare`] between its locals' constructors
@@ -5476,6 +5535,96 @@ mod n054_menu_tests {
             vec![vec![0x12, WORD_FILE_MESSAGE, 0x5000]]
         );
         assert_eq!(calls_to(&e, MENU_START_FADE_OUT).len(), 1);
+    }
+
+    /// Row S0015 (lStewieAl's Tweaks' `EasterEggs`, `0x7680BA`): with the row on `Prepare` empties
+    /// the candidate list itself instead of calling its constructor and, for six-letter words,
+    /// puts in game-heap copies of STEWIE and TWEAKS (7 bytes each, then one 8-byte node); off,
+    /// the constructor and no such allocation.
+    #[test]
+    fn s0015_prepare_adds_the_easter_egg_words() {
+        for on in [false, true] {
+            let mut e = Engine::new();
+            let this = menu(&mut e);
+            e.set(this, HackingMenu::iWordLength, 6);
+            stub(
+                &mut e,
+                &[
+                    STRING_CONSTRUCTOR,
+                    STRING_DESTRUCTOR,
+                    WORD_LIST_CONSTRUCTOR,
+                    SIMPLE_LIST_DESTRUCTOR,
+                    GAME_TIME,
+                    STRING_SET,
+                    PRINT_MESSAGE,
+                    PLAY_SHUTDOWN_SOUND,
+                    TILE_SET_FLOAT,
+                    TILE_SET_INT,
+                    MENU_START_FADE_OUT,
+                ],
+            );
+            e.register(HEAP_ALLOCATE, |e, a| e.mem.alloc(a[1]).into_ret());
+            answer(&mut e, WORD_AT_ZERO, 0x5000);
+            answer(&mut e, FILE_FINDER_GET_FILE, 0);
+            answer(&mut e, WORD_AT_FOUR, 0);
+            answer(&mut e, MANAGER_TERMINAL_REFERENCE, 0);
+            pages(&mut e, &[CLOSE_FADE, RETRY_TIME]);
+            e.set_stewie(engine_core::extend::stewie::HACKING_EASTER_EGG_WORDS, on);
+            e.call_log = Some(vec![]);
+            e.call(0x0076_8070, &args![this, 8u32]);
+            assert_eq!(
+                calls_to(&e, WORD_LIST_CONSTRUCTOR).len(),
+                usize::from(!on),
+                "row {on}"
+            );
+            let sizes: Vec<u32> = calls_to(&e, HEAP_ALLOCATE).iter().map(|c| c[1]).collect();
+            let wanted = if on { vec![7, 7, 8] } else { vec![] };
+            assert_eq!(sizes, wanted, "row {on}");
+        }
+    }
+
+    /// Row S0015's list (`HackingWordsListInit`): emptied first; six letters gives TWEAKS then
+    /// STEWIE (the second insert's node holds STEWIE), eight letters FRONTIER alone, other
+    /// lengths nothing; no menu: emptied, nothing allocated.
+    #[test]
+    fn s0015_the_easter_egg_word_list() {
+        let words = |e: &Engine, list: u32| {
+            let mut words = vec![];
+            let mut node = list;
+            while node != 0 {
+                let data = e.mem.u32(node);
+                if data != 0 {
+                    words.push(String::from_utf8(e.mem.cstr(data)).unwrap());
+                }
+                node = e.mem.u32(node + 4);
+            }
+            words
+        };
+        for (length, wanted) in [
+            (6u32, vec!["TWEAKS", "STEWIE"]),
+            (8, vec!["FRONTIER"]),
+            (5, vec![]),
+        ] {
+            let mut e = Engine::new();
+            let this = menu(&mut e);
+            e.set(this, HackingMenu::iWordLength, length);
+            e.register(HEAP_ALLOCATE, |e, a| e.mem.alloc(a[1]).into_ret());
+            let list = e.mem.alloc(8);
+            e.mem.set_u32(list, 0x1234);
+            e.mem.set_u32(list + 4, 0x5678);
+            stewie_easter_egg_words(&mut e, list);
+            assert_eq!(words(&e, list), wanted, "length {length}");
+        }
+        let mut e = Engine::new();
+        menu(&mut e);
+        e.set_global(HACKING_MENU, 0u32);
+        e.call_log = Some(vec![]);
+        let list = e.mem.alloc(8);
+        e.mem.set_u32(list, 0x1234);
+        e.mem.set_u32(list + 4, 0x5678);
+        stewie_easter_egg_words(&mut e, list);
+        assert_eq!((e.mem.u32(list), e.mem.u32(list + 4)), (0, 0));
+        assert!(calls_to(&e, HEAP_ALLOCATE).is_empty());
     }
 
     #[test]

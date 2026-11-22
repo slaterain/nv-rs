@@ -7,6 +7,14 @@ use engine_core::extend::stewie;
 /// Share 3's rows built.
 pub const ROWS: &[Row] = &[
     Row {
+        bit: stewie::HACKING_EASTER_EGG_WORDS,
+        function: "EasterEggs",
+        plan: "S0015",
+        key: "bEasterEggs",
+        tweaks: None,
+        summary: "the terminal hacking game may use STEWIE and TWEAKS among its six-letter words, FRONTIER among its eight-letter words",
+    },
+    Row {
         bit: stewie::START_MENU_CLOSE_SAVES_SETTINGS,
         function: "patchSaveINIChangesWhenClosingStartMenuAndSetXPBarQuestAndMessagesVisible",
         plan: "S0020",
@@ -399,6 +407,22 @@ pub const ROWS: &[Row] = &[
         summary: "message boxes are sized for their texts' own fonts",
     },
     Row {
+        bit: stewie::INCLUDES_LONG_STRING,
+        function: "ResolveIncludesLongStringFix",
+        plan: "S0176.01",
+        key: "bResolveIncludesLongStringFixLongString",
+        tweaks: None,
+        summary: "a menu file's text with its includes is gathered in a string with a 32-bit length",
+    },
+    Row {
+        bit: stewie::INCLUDES_LONG_STRING_LENGTH,
+        function: "ResolveIncludesLongStringFix",
+        plan: "S0176.02",
+        key: "bResolveIncludesLongStringFixLength",
+        tweaks: None,
+        summary: "a menu file over 64 KB with its includes keeps its whole text",
+    },
+    Row {
         bit: stewie::ROULETTE_ZERO_WINS,
         function: "RouletteMenuFixes",
         plan: "S0196.04",
@@ -445,6 +469,14 @@ pub const ROWS: &[Row] = &[
         key: "bWorldMapNoExteriorDoorFix",
         tweaks: None,
         summary: "a new game's world map knows where the player is (Doc Mitchell's door, or TTW's Vault 101 cave door)",
+    },
+    Row {
+        bit: stewie::TILE_TEXTURE_PATH_STANDARDIZED,
+        function: "TileTextureCacheFix",
+        plan: "S0227",
+        key: "bTileTextureCacheFix",
+        tweaks: None,
+        summary: "menu images written with / are found in the texture cache instead of being read from disk at each update",
     },
     Row {
         bit: stewie::SETTINGS_SAVE_ERROR_NAMES_FILE,

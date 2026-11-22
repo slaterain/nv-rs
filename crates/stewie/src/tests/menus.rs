@@ -5,6 +5,7 @@ use engine_core::extend::stewie::{self, Row};
 /// Share 3's rows' plan numbers, off keys and bits (`rows::menus::ROWS`), in the same order:
 /// `super::each_rows_plan_number_key_and_bit_are_pinned` checks them with every other share's.
 pub(super) const PINNED: &[(&str, &str, Row)] = &[
+    ("S0015", "bEasterEggs", bit(57)),
     (
         "S0020",
         "bSaveINIChangesWhenClosingStartMenuAndSetXPBarQuestAndMessagesVisible",
@@ -74,6 +75,12 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
     ("S0144", "bFixVATSChargingReloadAPCostWithNoAmmo", bit(46)),
     ("S0154", "bPreventLoadingDlcPopup", bit(28)),
     ("S0160", "bMessageMenuFontWidthFix", bit(47)),
+    (
+        "S0176.01",
+        "bResolveIncludesLongStringFixLongString",
+        bit(58),
+    ),
+    ("S0176.02", "bResolveIncludesLongStringFixLength", bit(59)),
     ("S0196.04", "bRouletteMenuFixesZeroWins", bit(9)),
     ("S0196.05", "bRouletteMenuFixesCutBetValue", bit(10)),
     ("S0197", "bCrosshairProjectileNameFix", bit(38)),
@@ -84,6 +91,7 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         bit(29),
     ),
     ("S0218", "bWorldMapNoExteriorDoorFix", bit(52)),
+    ("S0227", "bTileTextureCacheFix", bit(56)),
     ("S0883", "bMoreDescriptiveSettingsSaveError", bit(30)),
 ];
 

@@ -2475,13 +2475,27 @@ pub fn tile_insert_included_files(e: &mut Engine, xml: Ptr<XmlStorage>) -> bool 
     if include == 0 {
         return false;
     }
-    e.with_stack(8, |e, result| {
+    // lStewieAl's Tweaks' S0176.01 (`ResolveIncludesLongStringFix`) gathers the text in its own
+    // 12-byte string (32-bit length +4, capacity +8: the exe's flag byte after the 8-byte
+    // `BSStringT` is moved out of the way); S0176.02 then takes that length as it is.
+    let long = e.stewie(engine_core::extend::stewie::INCLUDES_LONG_STRING);
+    let long_length = long && e.stewie(engine_core::extend::stewie::INCLUDES_LONG_STRING_LENGTH);
+    e.with_stack(if long { 12 } else { 8 }, |e, result| {
         let size = e.get(xml, XmlStorage::iFileSize) + 1;
         let buffer = allocate(e, size).addr();
         e.call(MEMSET, &args![buffer, 0u32, size]);
         let head = include - old_text;
         e.call(STRNCPY_S, &args![buffer, head + 1, old_text, head]);
-        e.call(STRING_SET, &args![result, buffer, 0x4000u32]);
+        if long {
+            // The exe's own constructor (`0xA02D8F`): the pointer and both 16-bit words 0. Then
+            // `0xA02E58`: Tweaks' `OnInitString` in place of `BSStringT::Set`.
+            e.mem.set_u32(result.addr(), 0);
+            e.mem.set_u32(result.addr() + 4, 0);
+            large_string_init(e, result.addr(), 0x4000);
+            large_string_append(e, result.addr(), buffer);
+        } else {
+            e.call(STRING_SET, &args![result, buffer, 0x4000u32]);
+        }
         let mut last = false;
         while !last {
             e.with_stack(8, |e, path_string| {
@@ -2496,7 +2510,8 @@ pub fn tile_insert_included_files(e: &mut Engine, xml: Ptr<XmlStorage>) -> bool 
                 let path = e.mem.u32(path_string.addr());
                 let prefab: Ptr<XmlStorage> = e.call(MENU_GET_XML, &args![path, 0u32]).ptr();
                 let prefab_text = e.get(prefab, XmlStorage::pXMLData);
-                e.call(STRING_APPEND, &args![result, prefab_text]);
+                // `0xA02F59`: Tweaks' `OnAppend` with S0176.01.
+                include_append(e, result.addr(), prefab_text.addr(), long);
                 if !prefab.is_null() {
                     e.call(XML_STORAGE_DESTROY, &args![prefab]);
                     deallocate(e, prefab.addr());
@@ -2512,15 +2527,19 @@ pub fn tile_insert_included_files(e: &mut Engine, xml: Ptr<XmlStorage>) -> bool 
                     e.call(STRCPY_S, &args![buffer, size, after_tag]);
                     last = true;
                 }
-                e.call(STRING_APPEND, &args![result, buffer]);
+                // `0xA03031`: Tweaks' `OnAppend` with S0176.01.
+                include_append(e, result.addr(), buffer, long);
                 e.call(STRING_SET, &args![path_string, 0u32, 0u32]);
             });
         }
         deallocate(e, old_text);
         // The result's length, from its length field or, when that is
-        // 0xffff (unknown), by counting.
+        // 0xffff (unknown), by counting. With S0176.02 (`0xA03062`, `0xA030C1`, `0xA03122`:
+        // `MOV reg,[EBP-0x24]` and a jump past the count) the 32-bit length as it is.
         let result_length = |e: &mut Engine| {
-            if e.mem.u16(result.addr() + 4) == 0xffff {
+            if long_length {
+                e.mem.u32(result.addr() + 4)
+            } else if e.mem.u16(result.addr() + 4) == 0xffff {
                 let text = e.mem.u32(result.addr());
                 e.call(STRLEN, &args![text]).u32()
             } else {
@@ -2537,9 +2556,79 @@ pub fn tile_insert_included_files(e: &mut Engine, xml: Ptr<XmlStorage>) -> bool 
         e.set(xml, XmlStorage::iFileSize, length);
         deallocate(e, buffer);
         tile_insert_included_files(e, xml);
-        e.call(STRING_SET, &args![result, 0u32, 0u32]);
+        if long {
+            // `0xA03194`: Tweaks' `OnFreeString` in place of `BSStringT::Set(0, 0)`.
+            large_string_free(e, result.addr());
+        } else {
+            e.call(STRING_SET, &args![result, 0u32, 0u32]);
+        }
     });
     true
+}
+
+/// Rows S0176.01 and S0176.02's appends (`0xA02F59`, `0xA03031`): Tweaks' `OnAppend` (a null
+/// text appends nothing) with S0176.01, else the exe's `BSStringT::Append`.
+fn include_append(e: &mut Engine, result: u32, text: u32, long: bool) {
+    if !long {
+        e.call(STRING_APPEND, &args![result, text]);
+    } else if text != 0 {
+        large_string_append(e, result, text);
+    }
+}
+
+/// lStewieAl's Tweaks' `ResolveIncludesLongStringFix::LargeString::Init` (row S0176.01): the old
+/// text given back to the game heap, a new block of `capacity + 1` bytes holding an empty text.
+fn large_string_init(e: &mut Engine, string: u32, capacity: u32) {
+    let data = e.mem.u32(string);
+    if data != 0 {
+        deallocate(e, data);
+    }
+    e.mem.set_u32(string + 8, capacity);
+    let data = allocate(e, capacity.wrapping_add(1)).addr();
+    e.mem.set_u8(data, 0);
+    e.mem.set_u32(string, data);
+    e.mem.set_u32(string + 4, 0);
+}
+
+/// `LargeString::Append`: nothing for an empty text; past the capacity the block grows to the
+/// larger of the new length and twice the capacity (the old text copied over, the old block given
+/// back), then the text and its terminator are copied after the old length.
+fn large_string_append(e: &mut Engine, string: u32, text: u32) {
+    let mut piece = e.mem.cstr(text);
+    let length = piece.len() as u32;
+    if length == 0 {
+        return;
+    }
+    let old_length = e.mem.u32(string + 4);
+    let new_length = old_length.wrapping_add(length);
+    let capacity = e.mem.u32(string + 8);
+    if capacity < new_length {
+        let capacity = new_length.max(capacity.wrapping_mul(2));
+        e.mem.set_u32(string + 8, capacity);
+        let block = allocate(e, capacity.wrapping_add(1)).addr();
+        let data = e.mem.u32(string);
+        if data != 0 {
+            let old = e.mem.bytes(data, old_length);
+            e.mem.write(block, &old);
+            deallocate(e, data);
+        }
+        e.mem.set_u32(string, block);
+    }
+    piece.push(0);
+    let data = e.mem.u32(string);
+    e.mem.write(data.wrapping_add(old_length), &piece);
+    e.mem.set_u32(string + 4, new_length);
+}
+
+/// `OnFreeString` (`0xA03194`): the text given back, the pointer and both lengths 0.
+fn large_string_free(e: &mut Engine, string: u32) {
+    let data = e.mem.u32(string);
+    if data != 0 {
+        deallocate(e, data);
+        e.mem.set_u32(string, 0);
+    }
+    e.mem.set_u32(string + 4, 0);
+    e.mem.set_u32(string + 8, 0);
 }
 
 // Translated from 00a031b0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -9792,6 +9881,67 @@ mod tests {
             matches!((destroyed_at, freed_at), (Some(d), Some(f)) if d < f),
             "{destroyed_at:?} {freed_at:?}"
         );
+    }
+
+    /// Rows S0176.01 and S0176.02 (lStewieAl's Tweaks' `ResolveIncludesLongStringFix`): with
+    /// S0176.01 the text is gathered in Tweaks' own string, so the result string is never set or
+    /// appended to as a `BSStringT` (only the prefab path is cleared), with the same answer; off,
+    /// the exe's sets and appends.
+    #[test]
+    fn s0176_includes_are_gathered_in_tweaks_string() {
+        for (long, length) in [(false, false), (true, false), (true, true)] {
+            let mut e = tile_engine();
+            install_string_doubles(&mut e, false);
+            install_xml_files(&mut e, vec![("Data\\Menus\\Prefabs\\p.xml", "[X]")]);
+            e.set_stewie(engine_core::extend::stewie::INCLUDES_LONG_STRING, long);
+            e.set_stewie(
+                engine_core::extend::stewie::INCLUDES_LONG_STRING_LENGTH,
+                length,
+            );
+            e.call_log = Some(vec![]);
+            let (changed, text, size) = insert_includes(&mut e, "AA<include src=\"p.xml\"/>BB");
+            assert!(changed);
+            assert_eq!(text, "AA[X]BB", "rows {long} {length}");
+            assert_eq!(size, 7, "rows {long} {length}");
+            assert_eq!(
+                calls_to(&e, STRING_APPEND).len(),
+                if long { 0 } else { 2 },
+                "rows {long} {length}"
+            );
+            assert_eq!(
+                calls_to(&e, STRING_SET).len(),
+                if long { 1 } else { 3 },
+                "rows {long} {length}"
+            );
+        }
+    }
+
+    /// Rows S0176.01 and S0176.02 with a text past 64 KB: the whole text and its length (the
+    /// 16-bit `BSStringT` length could not hold it); Tweaks' string starts at 0x4000 and grows to
+    /// the larger of the new length and twice its capacity (blocks of capacity + 1 bytes).
+    #[test]
+    fn s0176_a_text_past_64_kb_keeps_its_length() {
+        let big: &'static str = Box::leak("x".repeat(70_000).into_boxed_str());
+        let mut e = tile_engine();
+        install_string_doubles(&mut e, false);
+        install_xml_files(&mut e, vec![("Data\\Menus\\Prefabs\\p.xml", big)]);
+        e.set_stewie(engine_core::extend::stewie::INCLUDES_LONG_STRING, true);
+        e.set_stewie(
+            engine_core::extend::stewie::INCLUDES_LONG_STRING_LENGTH,
+            true,
+        );
+        e.call_log = Some(vec![]);
+        let (changed, text, size) = insert_includes(&mut e, "AA<include src=\"p.xml\"/>BB");
+        assert!(changed);
+        assert_eq!(size, 70_004);
+        assert_eq!(text.len(), 70_004);
+        assert!(text.starts_with("AAxx") && text.ends_with("xxBB"));
+        let grown: Vec<u32> = calls_to(&e, MEMORY_ALLOCATE)
+            .iter()
+            .map(|c| c[1])
+            .filter(|size| [0x4001, 70_003, 140_005].contains(size))
+            .collect();
+        assert_eq!(grown, vec![0x4001, 70_003, 140_005]);
     }
 
     /// Appends `element` to the `NiTPointerList` at `list`.

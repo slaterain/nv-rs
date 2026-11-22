@@ -207,3 +207,18 @@ pub const HOTKEY_GRX_AND_BOOKS: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 5
 /// pickpocketed (sneaking), not on those that cannot, and a creature's prompt says Pickpocket,
 /// not Steal.
 pub const CREATURE_PICKPOCKET_PROMPT: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 55);
+/// S0227 `TileTextureCacheFix` (`TileImage`'s path helper `00a1f7d0` at `0xA1F88B`): a menu
+/// image's path is standardized (`/` to `\`) before the texture palette is asked, so a texture
+/// once loaded is found there instead of being read from disk at each tile update.
+pub const TILE_TEXTURE_PATH_STANDARDIZED: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 56);
+/// S0015 `EasterEggs` (`HackingMenu::Prepare` `00768070` at `0x7680BA`): the terminal hacking
+/// game's six-letter words may include STEWIE and TWEAKS, its eight-letter words FRONTIER.
+pub const HACKING_EASTER_EGG_WORDS: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 57);
+/// S0176.01 `ResolveIncludesLongStringFix` (`Tile::InsertIncludedFiles` `00a02d40` at
+/// `0xA02E58`, `0xA02F59`, `0xA03031`, `0xA03194`): the menu text with its includes is gathered in
+/// a string with a 32-bit length, grown geometrically.
+pub const INCLUDES_LONG_STRING: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 58);
+/// S0176.02 `ResolveIncludesLongStringFix` (`0xA03062`, `0xA030C1`, `0xA03122`): the gathered
+/// text's length is that string's 32-bit length, so a menu over 64 KB with its includes is no
+/// longer cut. Tweaks writes it with S0176.01, whose string it reads; alone it does nothing.
+pub const INCLUDES_LONG_STRING_LENGTH: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 59);
