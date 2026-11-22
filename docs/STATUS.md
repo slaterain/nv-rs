@@ -262,13 +262,18 @@ purpose (below; that list also names Enhanced Camera's patch, which is not one o
   they pass (`SetProjectileLight`'s light included), and a muzzle flash's and an explosion's
   light shine at the light record's own brightness. Each lit shot adds a light while it flies,
   with no cap, as in JIP.
+- **Loading:** JIP's fixed-string pool in place of the game's slow store of name strings (a hash
+  lookup for every model, node and animation name a load makes; unused names freed at the same
+  clean-ups as the game's).
 
-Not yet:
+Not built, because they do nothing on this port:
 
-- Its fixed-string pool: it waits for the 64-bit move.
-
-Left out on purpose: two patches that only make the game faster; the editor's, NVAC's and Enhanced
-Camera's patches; JIP's own start-up; and one that xNVSE already makes.
+- four tiny functions JIP shortens: the port's code for them is already just the answer;
+- the expression buffer JIP grows: the built-in xNVSE writes the same bytes;
+- JIP's own start-up hook: it hands back the same camera and only fills JIP's own copies;
+- the editor's two patches: the port does not run the editor (GECK);
+- NVAC's console alerts and Enhanced Camera's ground fix: they patch those programs' DLLs, which the
+  port does not load (Enhanced Camera's fix is not one of the 183).
 
 ## Mod Configuration Menu (MCM) built in
 
