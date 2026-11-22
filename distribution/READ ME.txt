@@ -192,6 +192,10 @@ Problems at the start
 When nv-rs can't start it says why in a window, for example: no game found; the wrong version of the
 game; DirectX's d3dx9_38.dll missing (install "DirectX End-User Runtimes (June 2010)" from Microsoft);
 the folder's path too long or in a place it shouldn't be. With no sound device the game starts silently.
+A sound device plugged in, unplugged or chosen as the default while the game or the launcher runs
+is followed: after a short gap (under a second) the sound goes on from the new default device, and
+sounds that were playing carry on where they would be. If no device answers after a loss it keeps
+trying once a second. A game started with no sound device at all stays silent until its next start.
 Everything it said is in userdata\logs\launcher.log.
 
 

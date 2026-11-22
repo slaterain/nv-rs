@@ -282,8 +282,10 @@ struct State {
     opening: Option<std::thread::JoinHandle<()>>,
     /// Still wanted when the opening ends (false: a release came first, the stream is let go).
     wanted: bool,
-    /// The device would not open: not tried again (said once).
-    refused: bool,
+    /// When the device last would not open: tried again at most once a second
+    /// ([`sound_out::try_again`]), said once until one opens.
+    failed: Option<std::time::Instant>,
+    said_failed: bool,
     /// Lines for the launcher's log, taken by the window ([`Sounds::take_lines`]).
     said: Vec<String>,
 }
@@ -336,10 +338,26 @@ impl Sounds {
     /// Opens the device, if it is not open or opening (and the banks are there), on a thread of
     /// its own: the stream in the device's mix format as it is now, then the mix made for the
     /// stream that opened (its rate and layout, whatever an earlier device's were), then the hum.
+    /// An open stream whose device was lost (`Output::lost`: unplugged, disabled, or on Windows
+    /// no longer the default) is let go and one opened on the default device as it is now, the
+    /// hum starting again at a random place of its loop, as at every open. A device that would
+    /// not open is tried again at most once a second.
     pub fn open(&self) {
+        let now = std::time::Instant::now();
         let mut s = self.lock();
         s.wanted = true;
-        if s.open.is_some() || s.opening.is_some() || s.refused || self.banks.is_empty() {
+        if s.open.as_ref().is_some_and(|(out, _)| out.lost()) {
+            if let Some(open) = s.open.take() {
+                std::thread::spawn(move || let_go(open));
+            }
+            s.said.push(
+                "sounds: the sound device was lost: opening the default device again".to_string(),
+            );
+        }
+        if s.open.is_some() || s.opening.is_some() || self.banks.is_empty() {
+            return;
+        }
+        if s.failed.is_some() && !sound_out::try_again(s.failed, now) {
             return;
         }
         let (me, banks, fixed) = (self.clone(), self.banks.clone(), self.fixed.clone());
@@ -361,24 +379,30 @@ impl Sounds {
                     Some(mut m) => {
                         m.play(Cue::Hum);
                         *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(m);
+                        let (rate, channels) = (out.rate, out.layout.channels);
                         s.open = Some((out, slot));
+                        if s.failed.take().is_some() {
+                            s.said.push(format!(
+                                "sounds: the sound device opened ({rate} Hz, {channels} channels)"
+                            ));
+                        }
+                        s.said_failed = false;
                     }
                     None => {
-                        s.refused = true;
-                        s.said.push(format!(
-                            "sounds: {}: the launcher is silent",
-                            sound_out::not_provided(out.layout)
-                        ));
+                        let why = sound_out::not_provided(out.layout);
+                        failed(&mut s, why);
                     }
                 },
-                Err(e) => {
-                    s.refused = true;
-                    s.said.push(format!(
-                        "sounds: the sound device would not open ({e:?}): the launcher is silent"
-                    ));
-                }
+                Err(e) => failed(&mut s, format!("the sound device would not open ({e:?})")),
             }
         }));
+    }
+
+    /// Whether the window should wake now and then to look at the device ([`check_wake`]): the
+    /// stream is open (its device may be lost while nothing else happens) or a try is due.
+    pub fn watching(&self) -> bool {
+        let s = self.lock();
+        s.wanted && (s.open.is_some() || s.failed.is_some())
     }
 
     /// Stops everything and lets the device go, waiting until it is (an opening under way ends
@@ -451,6 +475,14 @@ impl Sounds {
         }
     }
 
+    /// The open stream marked lost, as its thread marks it when the device goes (the tests').
+    #[cfg(test)]
+    fn mark_lost(&self) {
+        if let Some((out, _)) = self.lock().open.as_ref() {
+            out.mark_lost();
+        }
+    }
+
     /// The open mix's rate and channels (the tests').
     #[cfg(test)]
     fn mix_format(&self) -> Option<(u32, u16)> {
@@ -458,6 +490,32 @@ impl Sounds {
         self.with(|m| r = Some((m.rate, m.place.layout.channels)));
         r
     }
+}
+
+/// A try that opened nothing: tried again in a second at the earliest, said the first time only.
+fn failed(s: &mut State, why: String) {
+    s.failed = Some(std::time::Instant::now());
+    if !s.said_failed {
+        s.said_failed = true;
+        s.said.push(format!(
+            "sounds: {why}: the launcher is silent (tried again each second)"
+        ));
+    }
+}
+
+/// When the window wakes next: at `wake` (its own frame's time, none when it waits for an
+/// event), and while the sounds are `watching` at most [`sound_out::DEFAULT_CHECK`] after `now`,
+/// so a device lost while nothing else happens is followed within a second.
+pub fn check_wake(
+    wake: Option<std::time::Instant>,
+    watching: bool,
+    now: std::time::Instant,
+) -> Option<std::time::Instant> {
+    if !watching {
+        return wake;
+    }
+    let check = now + sound_out::DEFAULT_CHECK;
+    Some(wake.map_or(check, |w| w.min(check)))
 }
 
 /// An open stream let go: everything stopped, then the output (its thread ends).
@@ -761,6 +819,72 @@ mod tests {
             },
         );
         assert!(!s.is_open());
+    }
+
+    /// A stream whose device was lost (a headset plugged in, the device unplugged) is let go at
+    /// the next look and one opened on the default device as it is now, the mix at its rate;
+    /// the line for the log says so. Stand-in streams only: nothing is heard.
+    #[test]
+    fn a_lost_device_is_followed_to_the_new_default() {
+        ds_mix::resampler::tables();
+        let calls = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let c = calls.clone();
+        let opener: Opener = Arc::new(move |_source| {
+            let n = c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let rate = if n == 0 { 48000 } else { 44100 };
+            Ok(Output::idle(rate, Layout::STEREO))
+        });
+        let s = Sounds::with_opener(vec![(Cue::Hum, bank(4800, 0, true))], opener, 7);
+        s.open();
+        s.opened();
+        assert_eq!(s.mix_format(), Some((48000, 2)));
+        assert!(s.watching());
+        // Not lost: another look opens nothing.
+        s.open();
+        s.opened();
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        s.take_lines();
+        s.mark_lost();
+        s.open();
+        s.opened();
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert_eq!(s.mix_format(), Some((44100, 2)));
+        assert!(s.take_lines().iter().any(|l| l.contains("lost")));
+    }
+
+    /// A device that would not open is tried again at most once a second, and said once; the
+    /// window wakes within a second while it waits ([`check_wake`]).
+    #[test]
+    fn a_device_that_would_not_open_is_tried_again_each_second() {
+        let calls = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let c = calls.clone();
+        let opener: Opener = Arc::new(move |_source| {
+            c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(sound_out::Refused::NoDevice)
+        });
+        let s = Sounds::with_opener(vec![(Cue::Hum, bank(4800, 0, true))], opener, 7);
+        s.open();
+        s.opened();
+        s.open();
+        s.opened();
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(!s.is_open());
+        assert!(s.watching());
+        assert_eq!(s.take_lines().len(), 1);
+        // A second later it is tried again; said no more.
+        s.lock().failed = Some(std::time::Instant::now() - sound_out::DEFAULT_CHECK);
+        s.open();
+        s.opened();
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert!(s.take_lines().is_empty());
+        let now = std::time::Instant::now();
+        let soon = now + std::time::Duration::from_millis(100);
+        assert_eq!(check_wake(None, false, now), None);
+        assert_eq!(check_wake(Some(soon), true, now), Some(soon));
+        assert_eq!(
+            check_wake(None, true, now),
+            Some(now + sound_out::DEFAULT_CHECK)
+        );
     }
 
     /// An opening that ends after the sound was no longer wanted (the window lost focus while
