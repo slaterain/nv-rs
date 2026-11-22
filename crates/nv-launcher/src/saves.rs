@@ -3,8 +3,9 @@
 //! goes with its script extender co-save (`.nvse`, same name) when there is one; the same save
 //! already there (and the same co-save, or none on either side) is left alone; a different save
 //! (or co-save) of the same name is replaced, both together, only when the player says yes; a
-//! co-save left over from another save goes when its save is replaced by one without. Each file
-//! is written beside its place (`.part`) and moved over it, so a stop leaves no half file.
+//! co-save left over from another save goes when its save is replaced by one without. A pair
+//! lands whole or not at all ([`put_pair`]): both copied beside their places first, the old pair
+//! moved aside, the save moved in last, the old pair put back on any failure.
 //! Windows' Play.exe (`--import-saves`) uses it; play.sh keeps its own copy of the rule in shell.
 
 use std::path::{Path, PathBuf};
@@ -57,17 +58,81 @@ fn same(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// `from` copied to `to` through `to.part` (a stale `.part` removed first).
-fn copy_file(from: &Path, to: &Path) -> std::io::Result<()> {
-    let mut part = to.as_os_str().to_owned();
-    part.push(".part");
-    let part = PathBuf::from(part);
-    let _ = std::fs::remove_file(&part);
-    let done = std::fs::copy(from, &part).and_then(|_| std::fs::rename(&part, to));
-    if done.is_err() {
+/// `path` with `tail` added to its name (`Save 1.fos` -> `Save 1.fos.part`).
+fn with_tail(path: &Path, tail: &str) -> PathBuf {
+    let mut p = path.as_os_str().to_owned();
+    p.push(tail);
+    PathBuf::from(p)
+}
+
+/// One save (and its co-save, `co`, or none) put at `target` (and `target_co`) as a whole pair or
+/// not at all: both copied beside their places first (`.part`); the old pair moved aside
+/// (`.old`); the co-save moved in, then the save LAST (the file the game lists); on any failure
+/// what was moved in is removed and the old pair put back. `Err` names what failed.
+fn put_pair(save: &Path, co: Option<&Path>, target: &Path, target_co: &Path) -> Result<(), String> {
+    let name = |p: &Path| {
+        p.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    };
+    let (part, part_co) = (with_tail(target, ".part"), with_tail(target_co, ".part"));
+    let clear_parts = || {
         let _ = std::fs::remove_file(&part);
+        let _ = std::fs::remove_file(&part_co);
+    };
+    clear_parts();
+    let copied = std::fs::copy(save, &part)
+        .map_err(|e| format!("{}: {e}", name(save)))
+        .and_then(|_| match co {
+            Some(c) => std::fs::copy(c, &part_co)
+                .map(|_| ())
+                .map_err(|e| format!("{}: {e}", name(c))),
+            None => Ok(()),
+        });
+    if let Err(why) = copied {
+        clear_parts();
+        return Err(why);
     }
-    done
+    // The old pair aside, the co-save first.
+    let mut aside: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let put_back = |aside: &[(PathBuf, PathBuf)]| {
+        for (old, place) in aside.iter().rev() {
+            let _ = std::fs::rename(old, place);
+        }
+    };
+    for place in [target_co, target] {
+        if std::fs::symlink_metadata(place).is_ok() {
+            let old = with_tail(place, ".old");
+            let _ = std::fs::remove_file(&old);
+            if let Err(e) = std::fs::rename(place, &old) {
+                put_back(&aside);
+                clear_parts();
+                return Err(format!("{}: {e}", name(place)));
+            }
+            aside.push((old, place.to_path_buf()));
+        }
+    }
+    // The new pair in: the co-save, then the save.
+    let mut placed: Vec<&Path> = Vec::new();
+    let moves: Vec<(&Path, &Path)> = match co {
+        Some(_) => vec![(&part_co, target_co), (&part, target)],
+        None => vec![(&part, target)],
+    };
+    for (from, to) in moves {
+        if let Err(e) = std::fs::rename(from, to) {
+            for p in &placed {
+                let _ = std::fs::remove_file(p);
+            }
+            put_back(&aside);
+            clear_parts();
+            return Err(format!("{}: {e}", name(to)));
+        }
+        placed.push(to);
+    }
+    for (old, _) in &aside {
+        let _ = std::fs::remove_file(old);
+    }
+    Ok(())
 }
 
 /// Copies the saves of `from` into `to` (made when needed) by the rule above; `replace` is asked,
@@ -102,21 +167,10 @@ pub fn copy_saves(
             out.kept += 1;
             continue;
         }
-        match copy_file(save, &target) {
-            Ok(()) => {
-                match &co {
-                    Some(c) => {
-                        if let Err(e) = copy_file(c, &target_co) {
-                            out.failed.push(format!("{co_name}: {e}"));
-                        }
-                    }
-                    None => {
-                        let _ = std::fs::remove_file(&target_co);
-                    }
-                }
-                out.copied += 1;
-            }
-            Err(e) => out.failed.push(format!("{name}: {e}")),
+        // Counted as copied only when the whole pair landed; else the old pair is as it was.
+        match put_pair(save, co.as_deref(), &target, &target_co) {
+            Ok(()) => out.copied += 1,
+            Err(why) => out.failed.push(why),
         }
     }
     Ok(out)
@@ -198,6 +252,34 @@ mod tests {
         assert_eq!(read(&from, "notes.txt").as_deref(), Some("x"));
         let _ = std::fs::remove_dir_all(&from);
         let _ = std::fs::remove_dir_all(to.parent().unwrap());
+    }
+
+    /// A failure half-way leaves the old pair as it was and counts nothing as copied: the
+    /// co-save's copy failing (its `.part` name taken by a folder), and the stray co-save that
+    /// cannot be moved aside (its `.old` name taken by a folder with something in it).
+    #[test]
+    fn a_failure_half_way_leaves_the_old_pair() {
+        let (from, to) = (folder("ffrom"), folder("fto"));
+        put(&from, "Save 1.fos", "one");
+        put(&from, "Save 1.nvse", "co");
+        put(&from, "Save 2.fos", "two");
+        put(&to, "Save 1.fos", "mine");
+        put(&to, "Save 1.nvse", "mine-co");
+        put(&to, "Save 2.fos", "mine2");
+        put(&to, "Save 2.nvse", "stray");
+        std::fs::create_dir_all(to.join("Save 1.nvse.part").join("x")).unwrap();
+        std::fs::create_dir_all(to.join("Save 2.nvse.old").join("x")).unwrap();
+        let out = copy_saves(&from, &to, &mut |_| true).unwrap();
+        assert_eq!(out.copied, 0, "{out:?}");
+        assert_eq!(out.failed.len(), 2, "{out:?}");
+        assert_eq!(read(&to, "Save 1.fos").as_deref(), Some("mine"));
+        assert_eq!(read(&to, "Save 1.nvse").as_deref(), Some("mine-co"));
+        assert_eq!(read(&to, "Save 2.fos").as_deref(), Some("mine2"));
+        assert_eq!(read(&to, "Save 2.nvse").as_deref(), Some("stray"));
+        assert!(!to.join("Save 1.fos.part").exists() && !to.join("Save 2.fos.part").exists());
+        assert!(!to.join("Save 1.fos.old").exists() && !to.join("Save 2.fos.old").exists());
+        let _ = std::fs::remove_dir_all(&from);
+        let _ = std::fs::remove_dir_all(&to);
     }
 
     /// No saves: nothing made, nothing asked.
