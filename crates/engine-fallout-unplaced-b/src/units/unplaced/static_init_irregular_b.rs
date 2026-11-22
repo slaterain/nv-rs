@@ -1020,8 +1020,9 @@ pub fn fn_00fb3250(e: &mut Engine) {
 
 // Translated from 00fb32b0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// The start-up initializer: runs `00a0d710` on `011f3308` (`ECX`; stack arguments `0x25`), then stores `01094e3c` in the word at `011f3308`, then registers `00fda020` with `_atexit` (`00ec658f`).
+/// The bucket count is [`user_trait_map_buckets`] (the exe's `0x25` with `NV_MENU_REACTION_BUCKETS=0`).
 pub fn fn_00fb32b0(e: &mut Engine) {
-    e.call(0x00a0_d710, &args![0x011f_3308, 0x25]);
+    e.call(0x00a0_d710, &args![0x011f_3308, user_trait_map_buckets()]);
     e.set_global::<u32>(0x011f_3308, 0x0109_4e3c);
     e.call(0x00ec_658f, &args![0x00fd_a020]);
 }
@@ -1086,6 +1087,27 @@ pub fn reaction_map_buckets() -> u32 {
     match std::env::var("NV_MENU_REACTION_BUCKETS").as_deref() {
         Ok("0") => REACTION_MAP_GAME_BUCKETS,
         _ => REACTION_MAP_BUCKETS,
+    }
+}
+
+/// The buckets the exe gives the menus' user-trait map (`011f3308`: a user trait's id, from
+/// 10000 up, to the number at the end of its name, `_name_3` to 3).
+pub const USER_TRAIT_MAP_GAME_BUCKETS: u32 = 0x25;
+/// The buckets nv-rs gives it ([`user_trait_map_buckets`]): a prime.
+pub const USER_TRAIT_MAP_BUCKETS: u32 = 1021;
+
+/// The user-trait map's bucket count: [`USER_TRAIT_MAP_BUCKETS`], or the exe's 37 with
+/// `NV_MENU_REACTION_BUCKETS=0` (the one switch for both menu maps). Every action that reads a user
+/// trait (MCM's `_...` traits) looks its id up there each time its value is calculated
+/// (`Tile::Value::CalculateValue`): about 140,000 lookups in each opening and closing of MCM's start
+/// menu, each walking a chain of about 8 entries with 37 buckets (a profile of 2026-11-21). The same
+/// map, entries and answers; the exe walks it whole only to empty it (`Tile::FreeTraitList` and its
+/// exit destructor), where the order does not matter, and UI Organizer's inserts take the bucket
+/// count from the map.
+pub fn user_trait_map_buckets() -> u32 {
+    match std::env::var("NV_MENU_REACTION_BUCKETS").as_deref() {
+        Ok("0") => USER_TRAIT_MAP_GAME_BUCKETS,
+        _ => USER_TRAIT_MAP_BUCKETS,
     }
 }
 
@@ -2929,7 +2951,7 @@ mod tests {
                 rets: &[],
                 st0s: &[],
                 calls: &[
-                    (0x00a0_d710, &[0x011f_3308, 0x25]),
+                    (0x00a0_d710, &[0x011f_3308, USER_TRAIT_MAP_BUCKETS]),
                     (0x00ec_658f, &[0x00fd_a020]),
                 ],
                 mem: &[(0x011f_3308, 4, 0x0109_4e3c)],

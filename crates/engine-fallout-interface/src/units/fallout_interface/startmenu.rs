@@ -427,6 +427,10 @@ const TICK_COUNT: u32 = 0x0045_7fe0;
 /// `operator new(size)` (`00401000`) and `operator delete` (`00401030`).
 const OPERATOR_NEW: u32 = 0x0040_1000;
 const OPERATOR_DELETE: u32 = 0x0040_1030;
+/// The settings' save (`007d6d70`, Tweaks' `SaveIniSettings`) and
+/// `HUDMainMenu::UpdateVisibilityState` (`00771700`, xNVSE), lStewieAl's Tweaks' S0020.
+const SAVE_INI_SETTINGS_007D6D70: u32 = 0x007d_6d70;
+const HUD_UPDATE_VISIBILITY_STATE_00771700: u32 = 0x0077_1700;
 /// The interface manager object getter (`004b7210`, the word at
 /// `011d8a80`, per `interface.rs`) and its `pMenusRoot` getter (`00586150`:
 /// the word at `+0x9c`).
@@ -576,7 +580,18 @@ pub fn start_menu_scalar_deleting_destructor(
     this: Ptr<StartMenu>,
     flags: u32,
 ) -> Ptr<StartMenu> {
+    // `0x7CB51A` (lStewieAl's Tweaks' S0020 calls `StartMenuDestructorSaveIniChanges` there, main.h):
+    // with changed settings (`flags` +0x1A8 bit 2) the settings are saved (`007d6d70`) first,
+    // and after the destructor the HUD's visibility is set for state 6 (`00771700`, `kDialog`),
+    // which shows the XP bar, the quest and the messages again.
+    let stewie_save = e.stewie(stewie::START_MENU_CLOSE_SAVES_SETTINGS);
+    if stewie_save && e.get(this, StartMenu::uiFlags) & 2 != 0 {
+        e.call(SAVE_INI_SETTINGS_007D6D70, &args![]);
+    }
     fn_007cb5b0(e, this);
+    if stewie_save {
+        e.call(HUD_UPDATE_VISIBILITY_STATE_00771700, &args![6u32]);
+    }
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
     }
@@ -2448,7 +2463,10 @@ pub fn start_menu_do_enter(e: &mut Engine, this: Ptr<StartMenu>, _unused_1: u32,
     if e.call(LIST_BOX_HAS_TILE, &args![this.byte_add(0x174), tile])
         .bool()
     {
-        let update = if e.call(GAMEPAD_ACTIVE, &args![]).bool() {
+        let gamepad = e.call(GAMEPAD_ACTIVE, &args![]).bool();
+        // `0x7CF85B` (lStewieAl's Tweaks' S0022.04 writes `JMP` over the `JNZ`): the pad is still
+        // asked, and the save's picture is shown whether or not the mouse is over the list.
+        let update = if gamepad || e.stewie(stewie::SAVE_PICTURE_WITHOUT_HOVER) {
             true
         } else {
             let manager = e.call(INTERFACE_MANAGER_GETTER, &args![]).u32();
@@ -3021,9 +3039,17 @@ pub fn start_menu_choose_help(e: &mut Engine) {
             }
         } else {
             let manager = e.call(INTERFACE_MANAGER_GETTER, &args![]).u32();
-            index = fn_007d09c0(e, Ptr::new(manager + HELP_TABLE_OFFSET), entry);
+            // `0x7D08C6` (lStewieAl's Tweaks' S0022.37 calls `GetHelpMessageIdForMenu` there).
+            index = stewie_help_index(e, Ptr::new(manager + HELP_TABLE_OFFSET), entry);
         }
-        if index < 0x29 {
+        // `0x7D08D3` (S0022.37 makes the `JGE` a `JE`): any index but 0x29 (none) is looked up, so
+        // the minigames' helps (forms 0x172094..0x172096) are shown too.
+        let looked_up = if e.stewie(stewie::MINIGAME_HELP_IN_PAUSE_MENU) {
+            index != 0x29
+        } else {
+            (index as i32) < 0x29
+        };
+        if looked_up {
             let form = e.call(LOOKUP_FORM, &args![index + 0x168]).u32();
             let candidate = e
                 .call(
@@ -3079,6 +3105,43 @@ pub fn start_menu_choose_help(e: &mut Engine) {
         depth += 1;
     }
     e.call(TUTORIAL_MENU_CREATE, &args![found, 1u32]);
+}
+
+/// The help index at `0x7D08C6`: the exe's [`fn_007d09c0`]; with lStewieAl's Tweaks' S0022.37
+/// (`MenuFixes::GetHelpMessageIdForMenu`) a minigame's help first: the caravan menu
+/// (`011d917c`) by its page (`currMenu` +0x28: bet 0x1E, deck building 0x1F, game 0x20 while
+/// `flags` (+0xE74) has 0x800, the starting caravans, else 0x21), then roulette (`011da878`),
+/// blackjack (`011d9050`) and slots (`011da9a4`): Tweaks' `kHelpBlackJack` (0x172094 - 0x168, so
+/// that the looked-up form is 0x172094), roulette and slots the two after it.
+fn stewie_help_index(e: &mut Engine, table: Ptr, class: u32) -> u32 {
+    const BLACKJACK: u32 = 0x0017_2094 - 0x168;
+    if e.stewie(stewie::MINIGAME_HELP_IN_PAUSE_MENU) {
+        let caravan = e.global::<u32>(0x011d_917c);
+        if caravan != 0 {
+            match e.mem.u32(caravan + 0x28) {
+                0 => return 0x1e,
+                1 => return 0x1f,
+                2 => {
+                    return if e.mem.u32(caravan + 0xe74) & 0x800 != 0 {
+                        0x20
+                    } else {
+                        0x21
+                    }
+                }
+                _ => {}
+            }
+        }
+        if e.global::<u32>(0x011d_a878) != 0 {
+            return BLACKJACK + 1;
+        }
+        if e.global::<u32>(0x011d_9050) != 0 {
+            return BLACKJACK;
+        }
+        if e.global::<u32>(0x011d_a9a4) != 0 {
+            return BLACKJACK + 2;
+        }
+    }
+    fn_007d09c0(e, table, class)
 }
 
 // Translated from 007d09c0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -8276,6 +8339,71 @@ mod tests {
         assert_eq!(r.calls_to(UPDATE_HIGHLIGHTED_SAVE_GAME_INFO).len(), 2);
     }
 
+    /// Row S0022.04 (lStewieAl's Tweaks, `0x7CF85B`): with the row on a save tile's picture is
+    /// shown with the mouse outside the list's rows too; the pad is still asked and the rows are
+    /// not measured. Off: the exe's test (outside the rows, nothing).
+    #[test]
+    fn s0022_04_the_save_picture_without_hover() {
+        for on in [false, true] {
+            let mut r = rig();
+            r.real_flags();
+            let menu = r.menu();
+            r.list_vtable(menu, 0x114, 0x4040);
+            let saves = menu.addr() + 0x174;
+            r.with(LIST_BOX_HAS_TILE, move |_, a| eax(u32::from(a[0] == saves)));
+            r.e.mem.set_u32(menu.addr() + 0x40, 0x4500);
+            r.stub(MANAGER_ROW_COUNT, 10);
+            r.stub_float(TILE_POSITION_B, 10.5);
+            r.e.set_stewie(stewie::SAVE_PICTURE_WITHOUT_HOVER, on);
+            r.e.call(0x007c_f7e0, &args![menu, 0u32, 0x9000u32]);
+            assert_eq!(
+                r.calls_to(UPDATE_HIGHLIGHTED_SAVE_GAME_INFO).len(),
+                usize::from(on),
+                "row {on}"
+            );
+            assert_eq!(r.calls_to(GAMEPAD_ACTIVE).len(), 1);
+            assert_eq!(r.calls_to(TILE_POSITION_B).len(), usize::from(!on));
+        }
+    }
+
+    /// Row S0020 (lStewieAl's Tweaks' `StartMenuDestructorSaveIniChanges`, `0x7CB51A`): with the
+    /// row on the settings are saved (`007d6d70`) before the destructor when `uiFlags` has bit 2,
+    /// and the HUD's visibility is set for state 6 (`00771700`) after it; off, neither.
+    #[test]
+    fn s0020_closing_the_start_menu_saves_the_settings() {
+        for (on, changed) in [(false, true), (true, false), (true, true)] {
+            let mut r = rig();
+            let menu = r.menu();
+            r.real_flags();
+            r.stub(SAVE_INI_SETTINGS_007D6D70, 0);
+            r.stub(HUD_UPDATE_VISIBILITY_STATE_00771700, 0);
+            r.e.set(menu, StartMenu::uiFlags, if changed { 2 } else { 0 });
+            r.e.set_stewie(stewie::START_MENU_CLOSE_SAVES_SETTINGS, on);
+            r.e.call(0x007c_b510, &args![menu, 0u32]);
+            assert_eq!(
+                r.calls_to(SAVE_INI_SETTINGS_007D6D70).len(),
+                usize::from(on && changed),
+                "row {on} changed {changed}"
+            );
+            let hud = r.calls_to(HUD_UPDATE_VISIBILITY_STATE_00771700);
+            assert_eq!(hud, if on { vec![vec![6]] } else { vec![] });
+            if on {
+                let order = r.order();
+                let hud_at = order
+                    .iter()
+                    .position(|a| *a == HUD_UPDATE_VISIBILITY_STATE_00771700)
+                    .unwrap();
+                if changed {
+                    let save_at = order
+                        .iter()
+                        .position(|a| *a == SAVE_INI_SETTINGS_007D6D70)
+                        .unwrap();
+                    assert!(save_at < hud_at);
+                }
+            }
+        }
+    }
+
     #[test]
     fn do_enter_shows_the_brightness_tile_for_the_brightness_option() {
         let mut r = rig();
@@ -9063,6 +9191,63 @@ mod tests {
         assert_eq!(r.calls_to(LOOKUP_FORM)[1], vec![0x163]);
         assert_eq!(r.calls_to(FORM_LIST_HEAD), vec![vec![0xbeef]]);
         let _ = menu;
+    }
+
+    /// Row S0022.37 (lStewieAl's Tweaks, `0x7D08C6`, `0x7D08D3`): with blackjack open
+    /// (`011d9050`) the help looked up is form 0x172094 with the row on, the menu's own table
+    /// entry (index 5) off; a caravan game in its starting caravans (`flags` 0x800) gives index
+    /// 0x20; roulette and slots the forms after blackjack's.
+    #[test]
+    fn s0022_37_the_pause_menu_help_knows_the_minigames() {
+        let caravan = |r: &mut Rig, page: u32, flags: u32| {
+            let menu = r.alloc(0x1000);
+            r.e.mem.set_u32(menu + 0x28, page);
+            r.e.mem.set_u32(menu + 0xe74, flags);
+            r.e.mem.set_u32(0x011d_917c, menu);
+        };
+        for (on, game, wanted) in [
+            (false, 0x011d_9050u32, 0x168 + 5),
+            (true, 0x011d_9050, 0x0017_2094),
+            (true, 0x011d_a878, 0x0017_2095),
+            (true, 0x011d_a9a4, 0x0017_2096),
+            (true, 0, 0x168 + 5),
+        ] {
+            let mut r = rig();
+            let _ = help_scene(&mut r, vec![0x3ee], &[0xc005]);
+            if game != 0 {
+                if !r.e.mem.is_mapped(game) {
+                    r.e.map(game & !0xfff, 0x1000);
+                }
+                r.e.mem.set_u32(game, 0x7700);
+            }
+            r.e.set_stewie(stewie::MINIGAME_HELP_IN_PAUSE_MENU, on);
+            r.e.call(0x007d_0770, &args![]);
+            assert_eq!(
+                r.calls_to(LOOKUP_FORM)[0],
+                vec![wanted],
+                "row {on} game {game:x}"
+            );
+        }
+        for (page, flags, wanted) in [
+            (0u32, 0u32, 0x1e),
+            (1, 0, 0x1f),
+            (2, 0x800, 0x20),
+            (2, 0, 0x21),
+        ] {
+            let mut r = rig();
+            let _ = help_scene(&mut r, vec![0x3ee], &[0xc005]);
+            if !r.e.mem.is_mapped(0x011d_917c) {
+                r.e.map(0x011d_9000, 0x1000);
+            }
+            caravan(&mut r, page, flags);
+            r.e.set_stewie(stewie::MINIGAME_HELP_IN_PAUSE_MENU, true);
+            r.e.call(0x007d_0770, &args![]);
+            assert_eq!(
+                r.calls_to(LOOKUP_FORM)[0],
+                vec![0x168 + wanted],
+                "page {page}"
+            );
+        }
     }
 
     #[test]

@@ -367,7 +367,8 @@ fn extenders(e: &mut Engine, on: bool) {
         e.set_jip_patches(
             jip_patches::INSTALLED | jip_patches::FIXES | jip_patches::NO_FAILED_SCRIPT_LOCKS,
         );
-        for site in [0x005e_0fbe, 0x005e_1a23, 0x005e_1f0b] {
+        // O7's three and G24's skip of a busy runner's names and log (`0x5E0DD1`).
+        for site in [0x005e_0fbe, 0x005e_1a23, 0x005e_1f0b, 0x005e_0dd1] {
             e.on_site_for_test(site, |_, _| Some(1));
         }
         for site in [0x005e_16c3, 0x005e_2329] {
