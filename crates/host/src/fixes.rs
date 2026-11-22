@@ -58,6 +58,7 @@ pub static FIXES: &[Fix] = &[
     XNVSE_EXTRACT_ARGS,
     SHADER_WARM,
     IO_WAIT_ENDS_ON_COMPLETION,
+    LOAD_STEPS,
     crate::half_loaded_move::FIX,
     crate::thread_races::FIX,
     TEXTURE_READ_FIRST,
@@ -89,6 +90,58 @@ fn install_io_wait(e: &mut Engine) {
     use engine::units::bsmain::iomanager::fn_00c3dfa0_waking_early;
     let (at, f) = engine::entry!(0x00c3_dfa0, fn_00c3dfa0_waking_early(Ptr, i32));
     e.register(at, f);
+}
+
+/// Loads finished in small steps: in play the game finishes background loads on main once a frame
+/// (`IOManager::UpdateQueue`, `00c3dbf0`): first the model loader's walk over its queued references
+/// (`00448cc0`, which starts their loads front to back, up to 5 ms), then completed loads for
+/// `iPostProcessMilliseconds` (5 ms), the clock
+/// looked at only after each one. While the loaders are busy (running across cell borders) both
+/// use their whole 5 ms frame after frame. With the row both get [`LOAD_STEPS_MS`] in play (the IO
+/// manager's mode 6); the game's own waits for loads and the loading screens keep the game's
+/// limits. Only while loads are in flight: with the loaders idle the game's own limits come back, so
+/// anything left over is finished. A player's own `iPostProcessMilliseconds` line in `Fallout.ini` or `FalloutPrefs.ini`
+/// wins for the second. The same work in the same order, spread over more frames.
+pub const LOAD_STEPS: Fix = Fix {
+    name: "loads finished in small steps",
+    env: "NV_LOAD_STEPS",
+    addresses: &[0x00c3_dbf0, 0x0044_8cc0],
+    summary: "while running across cell borders the game finishes its background loads in smaller steps each frame, so frame times jump less; far objects may get their models a few frames later",
+    install: install_load_steps,
+};
+
+/// The milliseconds a frame [`LOAD_STEPS`] gives each of the two in play.
+pub const LOAD_STEPS_MS: u32 = 1;
+
+/// Whether an INI text sets `iPostProcessMilliseconds` in `[BackgroundLoad]`.
+pub fn ini_sets_post_process_budget(text: &str) -> bool {
+    crate::game_ini::value(text, "BackgroundLoad", "iPostProcessMilliseconds").is_some()
+}
+
+fn player_sets_post_process_budget() -> bool {
+    let Some(ini) = crate::game_ini::path() else {
+        return false;
+    };
+    let prefs = ini.with_file_name("FalloutPrefs.ini");
+    [ini, prefs].iter().any(|p| {
+        std::fs::read(p)
+            .map(|b| ini_sets_post_process_budget(&String::from_utf8_lossy(&b)))
+            .unwrap_or(false)
+    })
+}
+
+fn install_load_steps(e: &mut Engine) {
+    use engine::units::bsmain::run_00c3dbf0::{fn_00c3dbf0_play_budget, PLAY_BUDGET_MS};
+    use engine::units::fallout_shared::modelloader_p3::{fn_00448cc0_limited, LOADER_WALK_MS};
+    use std::sync::atomic::Ordering::Relaxed;
+    LOADER_WALK_MS.store(LOAD_STEPS_MS, Relaxed);
+    let (at, f) = engine::entry!(0x0044_8cc0, fn_00448cc0_limited(Ptr) -> bool);
+    e.register(at, f);
+    if !player_sets_post_process_budget() {
+        PLAY_BUDGET_MS.store(LOAD_STEPS_MS, Relaxed);
+        let (at, f) = engine::entry!(0x00c3_dbf0, fn_00c3dbf0_play_budget(Ptr) -> bool);
+        e.register(at, f);
+    }
 }
 
 /// The loading thread made a texture's renderer data (`00e6dc40`) under the renderer's source-data
@@ -1420,6 +1473,24 @@ mod tests {
 
     fn no_env(_: &str) -> Option<String> {
         None
+    }
+
+    /// The load-steps row is on in the fixes preset, off in vanilla, and sees a player's own
+    /// post-process budget line.
+    #[test]
+    fn load_steps_is_a_fixes_row_and_reads_the_player_s_budget_line() {
+        assert!(Choice::from_parts(None, no_env).unwrap().is_on(&LOAD_STEPS));
+        assert!(!Choice::vanilla().is_on(&LOAD_STEPS));
+        assert!(ini_sets_post_process_budget(
+            "[BackgroundLoad]\niPostProcessMilliseconds=3\n"
+        ));
+        assert!(!ini_sets_post_process_budget(
+            "[BackgroundLoad]\niPostProcessMillisecondsLoadingQueuedPriority=4\n"
+        ));
+        assert!(!ini_sets_post_process_budget(
+            "[General]\niPostProcessMilliseconds=3\n"
+        ));
+        assert_eq!(LOAD_STEPS_MS, 1);
     }
 
     fn env_of(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
