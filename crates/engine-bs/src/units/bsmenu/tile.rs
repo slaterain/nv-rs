@@ -5392,6 +5392,9 @@ fn run_action(e: &mut Engine, this: Ptr<TileValue>, action: u32, stack: Ptr, cha
         let referenced_trait = e.mem.i32(referenced);
         if referenced_trait >= FIRST_USER_TEXT_ID {
             e.with_stack(4, |e, out| {
+                // The exe zeroes its local first: the lookup leaves it alone
+                // when the trait is not in the map.
+                e.mem.set_u32(out.addr(), 0);
                 e.call(
                     REACTION_MAP_FIND,
                     &args![TRAIT_EXTRA_DATA_MAP, referenced_trait, out],

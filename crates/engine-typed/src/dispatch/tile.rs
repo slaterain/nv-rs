@@ -1141,6 +1141,9 @@ fn run_action(e: &mut Engine, me: u32, action: u32, stack: u32, changed: &mut bo
         let referenced_trait = e.mem.i32(referenced);
         if referenced_trait >= FIRST_USER_TEXT_ID {
             e.with_stack(4, |e, out| {
+                // The exe zeroes its local first: the lookup leaves it alone when the trait is
+                // not in the map.
+                e.mem.set_u32(out.addr(), 0);
                 typed_call!(
                     super::FAMILY,
                     0x00a1_e380,

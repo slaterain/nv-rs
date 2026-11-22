@@ -27,7 +27,12 @@
 //!   getters and setters (`GetFloat`, `GetString`, `IsTrue`, `SetFloat`, `SetString`, `SetInt`,
 //!   `Poke`, the absolute position sums, `Lock`/`Unlock`) and `ValueChangeEvent`, which the HUD's
 //!   update calls on every frame (its compass alone about 1,700 calls a frame on the street). The
-//!   value's own `SetFloat`, `SetString` and `CalculateValue` stay calls by address (overridable).
+//!   value's own `SetFloat` and `SetString` stay translated and are called by address
+//!   (overridable). `CalculateValue` (`00a09410`) is typed here too and is still always called by
+//!   address, its translated callers included, since it is overridable: a built-in or plugin that
+//!   registers over it is what runs. Such a registration over a member sends the whole family's
+//!   `typed_call!`s by address for the rest of the run (`State::replaced` in engine-core), so it
+//!   costs the family its direct calls, not only this function; no built-in replaces it today.
 //!
 //! Stage 1: the objects stay in guest memory where the game made them. Each function stays
 //! registered at its exe address; a call inside the family, or into another family, is a
