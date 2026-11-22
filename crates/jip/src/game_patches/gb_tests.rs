@@ -1422,6 +1422,27 @@ fn d06_names_big_guns_and_gives_it_the_skills_derivation() {
     assert_eq!(e.hook_users(engine_core::extend::Hook::GetDescription), 0);
 }
 
+/// D06 when the display name already holds the name's buffer (as JIP's own copy of the 8-byte
+/// `String` leaves it): the display name lets go of that buffer and gets a block of its own with
+/// the text; the name keeps its buffer and its text ("BigGuns", 7), so the exit frees two blocks.
+#[test]
+fn d06_lets_go_of_a_shared_name_buffer() {
+    use engine_core::extend::jip_patches::{FIXES, INSTALLED};
+    let mut e = big_guns_world(INSTALLED | FIXES);
+    e.mem.set_u32(AV_INFO + 0x1c, AV_NAME_TEXT);
+    e.mem.set_u32(AV_INFO + 0x20, 0x0008_0007);
+    deferred_init(&mut e);
+    let (block, length, text) = display_name(&e);
+    assert_eq!((length, text.as_slice()), (7, &b"BigGuns"[..]));
+    assert_ne!(block, 0);
+    assert_ne!(block, AV_NAME_TEXT, "its own buffer, not the name's");
+    assert_eq!(e.mem.u32(AV_INFO + 0x3c), AV_NAME_TEXT, "avName kept");
+    assert_eq!(e.mem.u32(AV_INFO + 0x40), 0x0008_0007);
+    assert_eq!(e.mem.cstr(AV_NAME_TEXT), b"BigGuns");
+    // The display name's block is a live block of the heap, freed once.
+    e.call(0x00aa_4060, &args![0x011f_6238u32, block]);
+}
+
 /// O3 (`bEnableBigGunsSkill`, with the row): D06's part, the flags 0x410 and JIP's description
 /// (`kBigGunsDescription`) put in JIP's description map, one user of its hook.
 #[test]
