@@ -1028,6 +1028,13 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
 
+    /// Device slots (`IDirect3DDevice9`) the writer takes (`engine_core::real_threads::device_set_render_state` and
+    /// its kin): with the test's own functions in them the writer goes the table's way, which the test notes.
+    const DEVICE_SET_RENDER_STATE: u32 = 0xe4;
+    const DEVICE_SET_TEXTURE: u32 = 0x104;
+    const DEVICE_SET_STAGE_STATE: u32 = 0x10c;
+    const DEVICE_SET_SAMPLER_STATE: u32 = 0x114;
+
     thread_local! {
         /// The stand-in device's calls: (slot, the arguments after `this`).
         static CALLS: RefCell<Vec<(u32, Vec<u32>)>> = const { RefCell::new(Vec::new()) };
