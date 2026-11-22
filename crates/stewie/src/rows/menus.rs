@@ -31,6 +31,14 @@ pub const ROWS: &[Row] = &[
         summary: "the save/load list shows the highlighted save's picture without the mouse over it",
     },
     Row {
+        bit: stewie::VATS_KEYS_OVER_MOUSE,
+        function: "MenuFixes",
+        plan: "S0022.06",
+        key: "bMenuFixesVatsKeysOverMouse",
+        tweaks: None,
+        summary: "in VATS the W and S keys, the arrows and the mouse wheel choose the body part over the mouse",
+    },
+    Row {
         bit: stewie::START_MENU_REMAP_DEBOUNCE,
         function: "MenuFixes",
         plan: "S0022.07",

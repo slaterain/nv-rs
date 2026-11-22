@@ -2451,26 +2451,19 @@ pub fn vats_menu_do_idle(e: &mut Engine, this: Ptr<VatsMenu>) {
 
     // 007ed9c0
     if e.global::<u32>(TARGET_REFERENCE) == 0 || special == 0 {
-        // 007eea88: the target switch keys.
+        // 007eea88: the target switch keys (`0x7EEAA0`, `0x7EEAB0`, `0x7EEAF0`, `0x7EEB00`:
+        // lStewieAl's Tweaks' S0022.06, `stewie_vats_switch_key`).
         if !gamepad_in_use(e)
-            && e.call(CONTROL_PRESSED, &args![controls, 0x1eu32, 1u32])
-                .u32()
-                != 0
-            && e.call(CONTROL_PRESSED, &args![controls, 0x1eu32, 3u32])
-                .u32()
-                != 0
+            && stewie_vats_switch_key(e, controls, 0x1e, 1)
+            && stewie_vats_switch_key(e, controls, 0x1e, 3)
             && key_high != 0x1e
         {
             e.vcall(m, 0x0c, &args![2u32, 0u32]);
             return;
         }
         if !gamepad_in_use(e)
-            && e.call(CONTROL_PRESSED, &args![controls, 0x20u32, 1u32])
-                .u32()
-                != 0
-            && e.call(CONTROL_PRESSED, &args![controls, 0x20u32, 3u32])
-                .u32()
-                != 0
+            && stewie_vats_switch_key(e, controls, 0x20, 1)
+            && stewie_vats_switch_key(e, controls, 0x20, 3)
             && key_high != 0x20
         {
             e.vcall(m, 0x0c, &args![3u32, 0u32]);
@@ -5338,16 +5331,14 @@ pub fn fn_007f3070(e: &mut Engine, this: Ptr<VatsMenu>) {
         });
         return;
     }
-    let forward = e
-        .call(CONTROL_PRESSED, &args![controls, 0x11u32, 1u32])
-        .u32()
-        != 0
-        || {
-            let object = e.call(OBJECT_004B7210, &[]).u32();
-            let wheel = e.call(WHEEL_VALUE, &args![object]).i32();
-            // `TEST AH,0x41; JNZ`: forward when above 0.0.
-            above(wheel as f64, double_zero(e))
-        };
+    // `0x7F3847` and `0x7F3857`: lStewieAl's Tweaks' S0022.06 (`stewie_vats_part_key`,
+    // `stewie_vats_wheel`).
+    let forward = stewie_vats_part_key(e, controls, 0x11) || {
+        let object = e.call(OBJECT_004B7210, &[]).u32();
+        let wheel = stewie_vats_wheel(e, object);
+        // `TEST AH,0x41; JNZ`: forward when above 0.0.
+        above(wheel as f64, double_zero(e))
+    };
     if forward {
         loop {
             let reference = e.global::<u32>(TARGET_REFERENCE);
@@ -5378,16 +5369,13 @@ pub fn fn_007f3070(e: &mut Engine, this: Ptr<VatsMenu>) {
         vats_menu_show_target_limb(e, 0);
         return;
     }
-    let backward = e
-        .call(CONTROL_PRESSED, &args![controls, 0x1fu32, 1u32])
-        .u32()
-        != 0
-        || {
-            let object = e.call(OBJECT_004B7210, &[]).u32();
-            let wheel = e.call(WHEEL_VALUE, &args![object]).i32();
-            // `TEST AH,5; JP`: back when below 0.0.
-            (wheel as f64) < double_zero(e)
-        };
+    // `0x7F39CD` and `0x7F39DD`: S0022.06 likewise.
+    let backward = stewie_vats_part_key(e, controls, 0x1f) || {
+        let object = e.call(OBJECT_004B7210, &[]).u32();
+        let wheel = stewie_vats_wheel(e, object);
+        // `TEST AH,5; JP`: back when below 0.0.
+        (wheel as f64) < double_zero(e)
+    };
     if !backward {
         return;
     }
@@ -6147,6 +6135,79 @@ fn fistp_truncate(value: f64) -> i32 {
     } else {
         value.trunc() as i32
     }
+}
+
+/// The interface manager's pointer (`011d8a80`) and its `hasMouseMoved` byte (+0xED).
+const INTERFACE_MANAGER: u32 = 0x011d_8a80;
+const HAS_MOUSE_MOVED: u32 = 0xed;
+/// DirectInput's arrow keys (Tweaks' `UpArrow`, `LeftArrow`, `RightArrow`, `DownArrow`).
+const KEY_UP_ARROW: u32 = 0xc8;
+const KEY_LEFT_ARROW: u32 = 0xcb;
+const KEY_RIGHT_ARROW: u32 = 0xcd;
+const KEY_DOWN_ARROW: u32 = 0xd0;
+
+/// The target switch key test of `DoIdle` (`0x7EEAA0`, `0x7EEAB0` for A, 0x1E; `0x7EEAF0`,
+/// `0x7EEB00` for D, 0x20): the key in `state`; with lStewieAl's Tweaks' S0022.06
+/// (`GetIsKeyPressedOrLeftPressed`, `GetIsKeyPressedOrRightPressed`) else the left or right arrow
+/// in the same state.
+fn stewie_vats_switch_key(e: &mut Engine, controls: u32, key: u32, state: u32) -> bool {
+    if e.call(CONTROL_PRESSED, &args![controls, key, state]).u32() != 0 {
+        return true;
+    }
+    if !e.stewie(stewie::VATS_KEYS_OVER_MOUSE) {
+        return false;
+    }
+    let arrow = if key == 0x1e {
+        KEY_LEFT_ARROW
+    } else {
+        KEY_RIGHT_ARROW
+    };
+    e.call(CONTROL_PRESSED, &args![controls, arrow, state])
+        .u32()
+        != 0
+}
+
+/// The body part key test (`0x7F3847` for W, 0x11; `0x7F39CD` for S, 0x1F), pressed (state 1):
+/// with S0022.06 (`ResetMouseMovedIfKeyUpPressed`, `ResetMouseMovedIfKeyDownPressed`) the key or
+/// else the up or down arrow (xNVSE's `GetKeyState`: the answer's low byte), and when either is
+/// pressed the interface manager's `hasMouseMoved` is cleared, so the mouse stops taking the
+/// choice back.
+fn stewie_vats_part_key(e: &mut Engine, controls: u32, key: u32) -> bool {
+    if !e.stewie(stewie::VATS_KEYS_OVER_MOUSE) {
+        return e.call(CONTROL_PRESSED, &args![controls, key, 1u32]).u32() != 0;
+    }
+    let arrow = if key == 0x11 {
+        KEY_UP_ARROW
+    } else {
+        KEY_DOWN_ARROW
+    };
+    let pressed = e.call(CONTROL_PRESSED, &args![controls, key, 1u32]).u32() & 0xff != 0
+        || e.call(CONTROL_PRESSED, &args![controls, arrow, 1u32]).u32() & 0xff != 0;
+    if pressed {
+        let manager = e.mem.u32(INTERFACE_MANAGER);
+        if manager != 0 {
+            e.mem.set_u8(manager + HAS_MOUSE_MOVED, 0);
+        }
+    }
+    pressed
+}
+
+/// The mouse wheel's value (`0x7F3857`, `0x7F39DD`): the exe's `0070ec70` (the float at +0x44
+/// cut to a whole number); with S0022.06 Tweaks' `ResetMouseMovedIfMouseScroll` on the same
+/// object: the same number, and a wheel that moved clears `hasMouseMoved` (+0xED).
+fn stewie_vats_wheel(e: &mut Engine, manager: u32) -> i32 {
+    if !e.stewie(stewie::VATS_KEYS_OVER_MOUSE) {
+        return e.call(WHEEL_VALUE, &args![manager]).i32();
+    }
+    if manager == 0 {
+        // No interface manager: Tweaks would read through a null pointer (our guard).
+        return 0;
+    }
+    let wheel = e.mem.f32(manager + 0x44);
+    if wheel != 0.0 {
+        e.mem.set_u8(manager + HAS_MOUSE_MOVED, 0);
+    }
+    fistp_truncate(f64::from(wheel))
 }
 
 /// lStewieAl's Tweaks' `GetContChangeMaxHealth` (row S0022.23, main.h) for an inventory entry: a
@@ -9390,6 +9451,61 @@ mod tests {
             (0, 0, 0),
             "the other axis outside"
         );
+    }
+
+    /// Row S0022.06 (lStewieAl's Tweaks' `MenuFixes`): with the row the target switch keys also
+    /// take the left (A) and right (D) arrows in the same state, the body part keys the up (W)
+    /// and down (S) arrows, a part key or arrow pressed clears the interface manager's
+    /// `hasMouseMoved` (+0xED), and the wheel gives the same cut number (here -120) and clears it
+    /// when turned. Off: the keys alone, the exe's wheel call (`0070ec70`), the byte untouched.
+    #[test]
+    fn s0022_06_keys_and_wheel_beat_the_mouse() {
+        for on in [false, true] {
+            let mut e = engine();
+            // Only the arrows are pressed.
+            e.register(CONTROL_PRESSED, |_, a| word(u32::from(a[1] >= 0xc8)));
+            e.register(WHEEL_VALUE, |_, _| word(7));
+            let manager = e.mem.alloc(0x100);
+            e.mem.set_u32(INTERFACE_MANAGER, manager);
+            e.mem.set_u8(manager + 0xed, 1);
+            e.mem.set_f32(manager + 0x44, -120.0);
+            e.set_stewie(stewie::VATS_KEYS_OVER_MOUSE, on);
+            e.call_log = Some(vec![]);
+            assert_eq!(stewie_vats_switch_key(&mut e, 0x500, 0x1e, 3), on);
+            assert_eq!(stewie_vats_switch_key(&mut e, 0x500, 0x20, 1), on);
+            assert_eq!(e.mem.u8(manager + 0xed), 1, "row {on}: switch keys");
+            assert_eq!(stewie_vats_part_key(&mut e, 0x500, 0x11), on);
+            assert_eq!(e.mem.u8(manager + 0xed), u8::from(!on), "row {on}: W");
+            e.mem.set_u8(manager + 0xed, 1);
+            assert_eq!(stewie_vats_part_key(&mut e, 0x500, 0x1f), on);
+            assert_eq!(e.mem.u8(manager + 0xed), u8::from(!on), "row {on}: S");
+            e.mem.set_u8(manager + 0xed, 1);
+            assert_eq!(
+                stewie_vats_wheel(&mut e, manager),
+                if on { -120 } else { 7 }
+            );
+            assert_eq!(e.mem.u8(manager + 0xed), u8::from(!on), "row {on}: wheel");
+            let keys: Vec<Vec<u32>> = calls(&e, CONTROL_PRESSED)
+                .into_iter()
+                .map(|c| c[1..].to_vec())
+                .collect();
+            let wanted: Vec<Vec<u32>> = if on {
+                vec![
+                    vec![0x1e, 3],
+                    vec![0xcb, 3],
+                    vec![0x20, 1],
+                    vec![0xcd, 1],
+                    vec![0x11, 1],
+                    vec![0xc8, 1],
+                    vec![0x1f, 1],
+                    vec![0xd0, 1],
+                ]
+            } else {
+                vec![vec![0x1e, 3], vec![0x20, 1], vec![0x11, 1], vec![0x1f, 1]]
+            };
+            assert_eq!(keys, wanted, "row {on}");
+            assert_eq!(calls(&e, WHEEL_VALUE).len(), usize::from(!on));
+        }
     }
 
     #[test]

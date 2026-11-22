@@ -6709,6 +6709,22 @@ const TES_PICK: u32 = 0x0045_8420;
 const TES_SINGLETON: u32 = 0x011d_ea10;
 /// The function at `004b71d0`, cdecl, no arguments.
 const FUNCTION_004B71D0: u32 = 0x004b_71d0;
+
+/// The pad test of `UpdateAutoAimActor` at `0x964CBB` (`004b71d0`). With lStewieAl's Tweaks'
+/// S0022.06 xNVSE's `IsControllerConnectedOrMouseNotMoved` in its place: the pad (the byte at
+/// `011d8c50` is not 1 and the one at `011d8a84` is set), or the mouse not moved since the keys
+/// were last used (the interface manager `011d8a80`'s `hasMouseMoved`, +0xED, is 0).
+fn stewie_controller_or_mouse_still(e: &mut Engine) -> bool {
+    if !e.stewie(engine_core::extend::stewie::VATS_KEYS_OVER_MOUSE) {
+        return e.call(FUNCTION_004B71D0, &args![]).bool();
+    }
+    if e.mem.u8(0x011d_8c50) != 1 && e.mem.u8(0x011d_8a84) != 0 {
+        return true;
+    }
+    let manager = e.mem.u32(0x011d_8a80);
+    // No interface manager: Tweaks would read through a null pointer (our guard: moved).
+    manager != 0 && e.mem.u8(manager + 0xed) == 0
+}
 /// The function at `008b3ef0` `(reference, index)`.
 const FUNCTION_008B3EF0: u32 = 0x008b_3ef0;
 /// The function at `007f3b40`, cdecl `(index)`.
@@ -7155,7 +7171,8 @@ fn update_auto_aim_actor_in_frame(e: &mut Engine, f: Frame, this: Ptr<PlayerChar
         && e.global::<u32>(POINTER_011F21CC) != 0
         && weapon_word != 0
         && !e.call(WEAPON_IS_MELEE_TYPE, &args![weapon_word]).bool()
-        && !e.call(FUNCTION_004B71D0, &args![]).bool()
+        // `0x964CBB`: lStewieAl's Tweaks' S0022.06 (`stewie_controller_or_mouse_still`).
+        && !stewie_controller_or_mouse_still(e)
     {
         let target_object = e.global::<u32>(POINTER_011F21CC);
         let node = e.vcall(target_object, 0x1d0, &args![]).u32();
@@ -9428,6 +9445,47 @@ mod tests {
         add_slot(e, player.addr(), 0x340, SLOT_E);
         answer(e, SLOT_E, 0);
         (player, held)
+    }
+
+    /// lStewieAl's Tweaks' row S0022.06 at `0x964CBB`: off, the exe's pad test (`004b71d0`); on,
+    /// the pad (disabled byte not 1, connected byte set) or the mouse not moved since the keys
+    /// were used (the interface manager's +0xED is 0), without that call.
+    #[test]
+    fn s0022_06_auto_aim_pad_or_mouse_still() {
+        // (row, disabled, connected, moved, the exe's answer, wanted)
+        for (on, disabled, connected, moved, exe, wanted) in [
+            (false, 0u8, 0u8, 1u8, 1u32, true),
+            (false, 0, 1, 0, 0, false),
+            (true, 0, 1, 1, 0, true),
+            (true, 1, 1, 1, 1, false),
+            (true, 0, 0, 0, 0, true),
+            (true, 0, 0, 1, 1, false),
+        ] {
+            let mut e = Engine::new();
+            if !e.mem.is_mapped(0x011d_8a80) {
+                e.map(0x011d_8000, 0x1000);
+            }
+            e.mem.set_u8(0x011d_8c50, disabled);
+            e.mem.set_u8(0x011d_8a84, connected);
+            let manager = e.mem.alloc(0x100);
+            e.mem.set_u32(0x011d_8a80, manager);
+            e.mem.set_u8(manager + 0xed, moved);
+            answer(&mut e, FUNCTION_004B71D0, exe);
+            e.set_stewie(engine_core::extend::stewie::VATS_KEYS_OVER_MOUSE, on);
+            e.call_log = Some(vec![]);
+            assert_eq!(
+                stewie_controller_or_mouse_still(&mut e),
+                wanted,
+                "row {on} {disabled} {connected} {moved}"
+            );
+            let asked = e
+                .call_log
+                .as_ref()
+                .unwrap()
+                .iter()
+                .any(|(a, _)| *a == FUNCTION_004B71D0);
+            assert_eq!(asked, !on, "row {on}");
+        }
     }
 
     /// lStewieAl's Tweaks' row S0089.04 (`0x95DBB4`): the ammunition entry is gone by the time its

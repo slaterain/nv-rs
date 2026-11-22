@@ -12,6 +12,7 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         bit(43),
     ),
     ("S0022.04", "bMenuFixesSavePictureWithoutHover", bit(39)),
+    ("S0022.06", "bMenuFixesVatsKeysOverMouse", bit(60)),
     ("S0022.07", "bMenuFixesRemapDebounce", bit(21)),
     ("S0022.08", "bMenuFixesRecipeWheelCategory", bit(31)),
     ("S0022.09", "bMenuFixesQuestScroll", bit(0)),

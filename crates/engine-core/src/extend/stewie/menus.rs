@@ -222,3 +222,9 @@ pub const INCLUDES_LONG_STRING: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 5
 /// text's length is that string's 32-bit length, so a menu over 64 KB with its includes is no
 /// longer cut. Tweaks writes it with S0176.01, whose string it reads; alone it does nothing.
 pub const INCLUDES_LONG_STRING_LENGTH: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 59);
+/// S0022.06 `MenuFixes` (`PlayerCharacter::UpdateAutoAimActor` at `0x964CBB`; the VATS menu's
+/// part choice `007f3070` at `0x7F3847`, `0x7F3857`, `0x7F39CD`, `0x7F39DD`; `VATSMenu::DoIdle`
+/// at `0x7EEAA0`, `0x7EEAB0`, `0x7EEAF0`, `0x7EEB00`): in VATS the W and S keys, the up and down
+/// arrows and the mouse wheel take the body part choice from the mouse; A and D also answer to
+/// the left and right arrows.
+pub const VATS_KEYS_OVER_MOUSE: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 60);
