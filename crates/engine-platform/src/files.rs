@@ -206,6 +206,7 @@ fn read_range(
     k: &[u8],
     start: u64,
     count: u32,
+    (io, number): (&HandleIo, u64),
 ) -> Result<Vec<u8>, u32> {
     if let Some(data) = state_ref!(e).disk.files.get(k) {
         let start = (start as usize).min(data.len());
@@ -231,7 +232,15 @@ fn read_range(
     // no platform state and no game memory, only the host file this handle keeps open, read at the position taken
     // above. A read that waited on a busy disk held every other thread's platform calls up to 400 ms (the
     // nov21d play, PLAY-1121d.md); the handle's position is moved on after it, under the lock again, as before.
-    engine_core::real_threads::without_kernel_lock_if_outermost(e, || read_at(&file, start, count))
+    engine_core::real_threads::without_kernel_lock_if_outermost(e, || {
+        #[cfg(test)]
+        handle_order_tests::while_reading();
+        let read = read_at(&file, start, count);
+        // Over: the handle's new position handed to a waiter that may hold the kernel lock now.
+        let moved = read.as_ref().map_or(0, |b| b.len() as u64);
+        io.hand_over(number, start + moved);
+        read
+    })
 }
 
 /// A read-only handle's host file for the player's file it reads ([`OpenFile::kept`]): opened by
@@ -1179,25 +1188,95 @@ pub struct OpenFile {
     pub wrote: Option<u64>,
     /// The player's file this handle reads, once read ([`Kept`]).
     pub kept: Kept,
-    /// A `ReadFile` on this handle is reading with the kernel lock given back ([`read_range`]): the handle's other
-    /// synchronous calls (`ReadFile`, `WriteFile`, `SetFilePointer`) wait for it ([`wait_for_handle`]), so they stay in
-    /// order as Windows keeps them on one handle.
-    pub busy: bool,
+    /// A `ReadFile` on this handle reading with the kernel lock given back ([`HandleIo`]): the handle's other
+    /// synchronous calls wait for it ([`wait_for_handle`]), so they stay in order as Windows keeps them on one handle.
+    pub io: HandleIo,
 }
 
-/// Waits (giving the kernel lock back meanwhile) until no `ReadFile` on `handle` is reading outside the lock; the
-/// kernel lock is held again on return. Lock order: the kernel lock, then the handle's busy flag under it; a call
-/// never waits for the flag while holding the kernel lock.
-fn wait_for_handle(e: &mut Engine, handle: u32) {
-    while open_file(e, handle).is_some_and(|f| f.busy) {
-        engine_core::real_threads::without_kernel_lock(e, std::thread::yield_now);
+/// A handle's read in flight outside the kernel lock ([`read_file`]): `busy` from its start to its end, `done` the
+/// position it moves the handle to once its disk read is over (handed over without the kernel lock, so a waiter
+/// that holds the lock can apply it), `read` a number each read takes so a late reader never ends another's.
+#[derive(Debug, Default)]
+struct IoState {
+    busy: bool,
+    done: Option<u64>,
+    read: u64,
+}
+
+/// [`OpenFile::io`]: the state and the condition variable its waiters park on. Shared by the handle's copies; two
+/// handles compare equal whatever it holds.
+#[derive(Debug, Clone, Default)]
+pub struct HandleIo(std::sync::Arc<(std::sync::Mutex<IoState>, std::sync::Condvar)>);
+
+impl PartialEq for HandleIo {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+impl Eq for HandleIo {}
+
+impl HandleIo {
+    fn state(&self) -> std::sync::MutexGuard<'_, IoState> {
+        self.0
+             .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Parks until the read in flight has handed its position over (or ended).
+    fn wait(&self) {
+        let mut s = self.state();
+        while s.busy && s.done.is_none() {
+            s = self
+                .0
+                 .1
+                .wait(s)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+    }
+
+    /// The read numbered `read` is over its disk read: the position it moves the handle to, for a waiter.
+    fn hand_over(&self, read: u64, position: u64) {
+        let mut s = self.state();
+        if s.busy && s.read == read {
+            s.done = Some(position);
+        }
+        drop(s);
+        self.0 .1.notify_all();
     }
 }
 
-/// Sets `handle`'s busy flag ([`OpenFile::busy`]).
-fn set_busy(e: &mut Engine, handle: u32, busy: bool) {
-    if let Some(file) = open_file(e, handle) {
-        file.busy = busy;
+/// Under the kernel lock: waits until no `ReadFile` on `handle` is reading outside the lock, and returns with the
+/// kernel lock held. A read whose disk read is over but which could not take the kernel lock back yet (this caller
+/// holds it) has its handed-over position applied here, in its order. The wait itself parks on the handle's
+/// condition variable: with the kernel lock given back when this call is the game's own (outermost); inside a
+/// nested hold, or with the device lock held, with the kernel lock kept, which is safe because the reader needs no
+/// lock of the platform's to hand its position over ([`HandleIo::hand_over`]). Lock order: the kernel lock, then the
+/// handle's mutex, never the reverse; the handle's mutex is never held across a wait for the kernel lock.
+fn wait_for_handle(e: &mut Engine, handle: u32) {
+    loop {
+        let Some(io) = open_file(e, handle).map(|f| f.io.clone()) else {
+            return;
+        };
+        let applied = {
+            let mut s = io.state();
+            if !s.busy {
+                return;
+            }
+            let done = s.done.take();
+            if done.is_some() {
+                s.busy = false;
+            }
+            done
+        };
+        if let Some(position) = applied {
+            io.0 .1.notify_all();
+            if let Some(file) = open_file(e, handle) {
+                file.position = position;
+            }
+            return;
+        }
+        engine_core::real_threads::without_kernel_lock_if_outermost(e, || io.wait());
     }
 }
 
@@ -3046,7 +3125,7 @@ fn open_or_make(
                 write: false,
                 wrote: None,
                 kept: Kept(Some(std::sync::Arc::new(host))),
-                busy: false,
+                io: HandleIo::default(),
             })));
         }
     }
@@ -3121,7 +3200,7 @@ fn open_or_make(
         write: access & GENERIC_WRITE != 0,
         wrote: None,
         kept: Kept::default(),
-        busy: false,
+        io: HandleIo::default(),
     })))
 }
 
@@ -3361,9 +3440,28 @@ pub fn read_file(
     let counted = engine_core::hitch::on();
     let started = counted.then(std::time::Instant::now);
     // The handle is this read's until its position is moved on: its other calls wait ([`wait_for_handle`]).
-    set_busy(e, handle, true);
-    let range = read_range(e, handle, &path, position, count);
-    set_busy(e, handle, false);
+    let io = open_file(e, handle)
+        .map(|f| f.io.clone())
+        .unwrap_or_default();
+    let number = {
+        let mut s = io.state();
+        s.read = s.read.wrapping_add(1);
+        s.busy = true;
+        s.done = None;
+        s.read
+    };
+    let range = read_range(e, handle, &path, position, count, (&io, number));
+    // Under the kernel lock again: the position moved on here unless a waiter already applied it.
+    let mine = {
+        let mut s = io.state();
+        let mine = s.busy && s.read == number;
+        if mine {
+            s.busy = false;
+            s.done = None;
+        }
+        mine
+    };
+    io.0 .1.notify_all();
     let bytes = match range {
         Ok(bytes) => bytes,
         Err(code) => {
@@ -3376,8 +3474,10 @@ pub fn read_file(
     if let Some(t) = started {
         count_read(u64::from(got), t.elapsed(), &path);
     }
-    if let Some(file) = open_file(e, handle) {
-        file.position = position + u64::from(got);
+    if mine {
+        if let Some(file) = open_file(e, handle) {
+            file.position = position + u64::from(got);
+        }
     }
     if read.addr() != 0 {
         e.mem.set_u32(read.addr(), got);
@@ -7078,6 +7178,23 @@ mod tests_code_pages {
 #[cfg(test)]
 mod handle_order_tests {
     use engine_core::prelude::*;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    /// A pause inside the next disk reads outside the kernel lock (ms; 0 none), and that one began: so a test can
+    /// race a call against a read in flight.
+    static PAUSE_MS: AtomicU64 = AtomicU64::new(0);
+    static PAUSED: AtomicBool = AtomicBool::new(false);
+    /// This module's tests one at a time (the pause above is shared).
+    static ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Called by [`super::read_range`] in the disk read outside the kernel lock.
+    pub(super) fn while_reading() {
+        let ms = PAUSE_MS.load(Ordering::SeqCst);
+        if ms > 0 {
+            PAUSED.store(true, Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(ms));
+        }
+    }
 
     /// The test's game threads: `ReadFile(p[0], ...)` through the slot `p[1]`, `p[3]` times 256 bytes into the
     /// buffer at `p[2]` (one after another).
@@ -7096,33 +7213,31 @@ mod handle_order_tests {
         Ret::default()
     }
 
-    /// Two game threads reading one handle of a player's file at once, each read with the kernel lock given back
-    /// for the disk read: the handle's reads stay in order as Windows keeps synchronous calls on one handle, so the
-    /// two get disjoint consecutive 256-byte pieces that together are the whole file, none read twice.
-    #[test]
-    fn two_threads_reading_one_handle_get_disjoint_pieces() {
-        const PIECES: u32 = 64;
-        let dir = std::env::temp_dir().join(format!("nv-handle-order-{}", std::process::id()));
+    /// A real-threads engine with the file imports, a player's file of `pieces` 256-byte pieces (piece n holds the byte
+    /// n throughout) opened for reading; its handle and the folder (deleted by the caller).
+    fn pieces_file(tag: &str, pieces: u32) -> (Engine, u32, std::path::PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("nv-handle-order-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        // Piece n holds the byte n throughout.
-        let bytes: Vec<u8> = (0..2 * PIECES * 256).map(|i| (i / 256) as u8).collect();
+        let bytes: Vec<u8> = (0..pieces * 256).map(|i| (i / 256) as u8).collect();
         std::fs::write(dir.join("pieces.bin"), &bytes).unwrap();
         crate::imports();
         let mut e = Engine::new();
         e.kernel.current_directory = dir.to_string_lossy().into_owned().into_bytes();
         let slots = [
-            (0x00fd_f088, "KERNEL32.dll", "CreateFileA"),
-            (0x00fd_f080, "KERNEL32.dll", "ReadFile"),
-            (0x00fd_f07c, "KERNEL32.dll", "CloseHandle"),
-            (0x00fd_f090, "KERNEL32.dll", "CreateThread"),
-            (0x00fd_f094, "KERNEL32.dll", "WaitForSingleObject"),
+            (0x00fd_f088, "CreateFileA"),
+            (0x00fd_f080, "ReadFile"),
+            (0x00fd_f07c, "CloseHandle"),
+            (0x00fd_f090, "CreateThread"),
+            (0x00fd_f094, "WaitForSingleObject"),
+            (0x00fd_f240, "SetFilePointer"),
         ];
         let imports: Vec<engine_core::exe::Import> = slots
             .iter()
-            .map(|&(slot, dll, name)| engine_core::exe::Import {
+            .map(|&(slot, name)| engine_core::exe::Import {
                 slot,
-                dll: dll.into(),
+                dll: "KERNEL32.dll".into(),
                 name: name.into(),
             })
             .collect();
@@ -7140,6 +7255,72 @@ mod handle_order_tests {
             .eax;
         assert_ne!(handle, u32::MAX, "the file opened");
         engine_core::real_threads::start(&mut e).expect("real threads on");
+        (e, handle, dir)
+    }
+
+    /// A seek racing a read in flight on the same handle is not lost: a game thread's read of piece 0 is paused
+    /// outside the kernel lock; main's `SetFilePointer` to piece 4 meanwhile waits for it and then moves the position,
+    /// so main's next read gets piece 4 (not piece 1, where the read would have left the position had it moved it on
+    /// after the seek).
+    #[test]
+    fn a_seek_racing_a_read_is_not_lost() {
+        let _one = ONE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (mut e, handle, dir) = pieces_file("seek", 8);
+        let buffer = e.mem.alloc(256);
+        let p = e.mem.alloc(0x10);
+        for (i, w) in [handle, 0x00fd_f080, buffer, 1].into_iter().enumerate() {
+            e.mem.set_u32(p + 4 * i as u32, w);
+        }
+        PAUSED.store(false, Ordering::SeqCst);
+        PAUSE_MS.store(300, Ordering::SeqCst);
+        let h = e
+            .call(
+                0x00fd_f090,
+                &args![0u32, 0u32, 0x0040_f200u32, p, 0u32, 0u32],
+            )
+            .eax;
+        while !PAUSED.load(Ordering::SeqCst) {
+            std::thread::yield_now();
+        }
+        PAUSE_MS.store(0, Ordering::SeqCst);
+        // FILE_BEGIN.
+        assert_eq!(
+            e.call(0x00fd_f240, &args![handle, 1024u32, 0u32, 0u32]).eax,
+            1024
+        );
+        let mine = e.mem.alloc(256);
+        let got = e.mem.alloc(4);
+        e.call(0x00fd_f080, &args![handle, mine, 256u32, got, 0u32]);
+        assert_eq!(
+            e.call(0x00fd_f094, &args![h, 60_000u32]).eax,
+            0,
+            "the reader ended"
+        );
+        assert_eq!(
+            e.mem.bytes(buffer, 256),
+            vec![0u8; 256],
+            "the thread's read: piece 0"
+        );
+        assert_eq!(
+            e.mem.bytes(mine, 256),
+            vec![4u8; 256],
+            "after the seek: piece 4"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two game threads reading one handle of a player's file at once, each read with the kernel lock given back
+    /// for the disk read: the handle's reads stay in order as Windows keeps synchronous calls on one handle, so the
+    /// two get disjoint consecutive 256-byte pieces that together are the whole file, none read twice.
+    #[test]
+    fn two_threads_reading_one_handle_get_disjoint_pieces() {
+        let _one = ONE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        const PIECES: u32 = 64;
+        let (mut e, handle, dir) = pieces_file("two", 2 * PIECES);
         let mut threads = Vec::new();
         for _ in 0..2 {
             let buffer = e.mem.alloc(256 * PIECES);
