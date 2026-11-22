@@ -8,8 +8,8 @@
 use engine_core::prelude::*;
 use std::sync::Mutex;
 
-/// JG's `ZERO_TOLERANCE` (`0.0000099999997f`).
-pub const ZERO_TOLERANCE: f32 = 0.000_009_999_999_7;
+/// JG's `ZERO_TOLERANCE` (`0.0000099999997f`, which as a float is the same value as `1e-5f`).
+pub const ZERO_TOLERANCE: f32 = 1.0e-5;
 
 /// `WorldToScreen::CameraParams`: the camera's world and local positions, its world-to-camera
 /// matrix (row by row) and its viewport (left, right, top, bottom).
@@ -107,7 +107,10 @@ pub fn project(
     let mut inv_w = 1.0 / fw;
     out[2] = row(2) * inv_w;
     let mut behind = false;
-    if !(fw > zero_tolerance) {
+    // JG's `!(fW > afZeroTolerance)`: a NaN w counts as behind too.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    let not_ahead = !(fw > zero_tolerance);
+    if not_ahead {
         behind = true;
         inv_w *= -1.0;
     }

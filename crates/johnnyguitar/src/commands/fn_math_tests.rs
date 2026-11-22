@@ -51,15 +51,17 @@ fn rgb_color_packs_three_components() {
 /// (0 and 1 for the square), and the answer is 0.
 #[test]
 fn a_point_is_projected_with_the_camera_copy() {
-    let mut c = world_to_screen::CameraParams::default();
     // Camera looking down +y: x to the right, z up, w = y.
-    c.world_to_cam = [
-        [1.0, 0.0, 0.0, 0.0],
-        [0.0, 0.0, 1.0, 0.0],
-        [0.0, 1.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0, 0.0],
-    ];
-    c.port = [0.0, 1.0, 1.0, 0.0];
+    let c = world_to_screen::CameraParams {
+        world_to_cam: [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+        ],
+        port: [0.0, 1.0, 1.0, 0.0],
+        ..Default::default()
+    };
     let (on, p) =
         world_to_screen::project(&c, [0.0, 10.0, 0.0], 0, world_to_screen::ZERO_TOLERANCE);
     assert!(on);
