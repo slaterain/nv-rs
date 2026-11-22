@@ -391,6 +391,8 @@ struct Seen {
     call: u32,
     /// [`KernelLock::holder_site`] then (0: none).
     site: usize,
+    /// What the holder was waiting for on the render thread then (`thread_cpu::render_wait_of`).
+    render_wait: u32,
     cpu_ns: Option<u64>,
     at: std::time::Instant,
 }
@@ -525,6 +527,7 @@ impl KernelLock {
                 measured_ns: seen.at.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
                 cpu_ns,
                 site: site_words(seen.site),
+                render_wait: seen.render_wait,
                 // Other threads' takes while main waited (this one's own comes after): 0 is one long hold.
                 handoffs: self
                     .takes
@@ -584,6 +587,7 @@ impl KernelLock {
                     thread,
                     call: self.holder_call.load(Ordering::Relaxed),
                     site: self.holder_site.load(Ordering::Relaxed),
+                    render_wait: crate::thread_cpu::render_wait_of(thread),
                     cpu_ns: crate::thread_cpu::cpu_ns(thread),
                     at: std::time::Instant::now(),
                 });
@@ -2096,6 +2100,7 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
             thread,
             crate::thread_cpu::call_of(thread),
             crate::thread_cpu::cpu_ns(thread),
+            crate::thread_cpu::render_wait_of(thread),
         )
     });
     // Counted, then listed, then the owner word tried: a leave that frees it after the count sees
@@ -2150,7 +2155,7 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
             stats.section[role()].add(d);
         }
         hitch_wait(crate::hitch::WaitKind::Section, site, d);
-        if let Some((thread, call, cpu_before)) = owned_by {
+        if let Some((thread, call, cpu_before, render_wait)) = owned_by {
             let ns = d.as_nanos().min(u128::from(u64::MAX)) as u64;
             if ns >= crate::hitch::HOLDER_WAIT_NS {
                 crate::hitch::section_holder(crate::hitch::LockHolder {
@@ -2169,6 +2174,7 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
                         .map(|(b, after)| after.saturating_sub(b)),
                     site: String::new(),
                     handoffs: 0,
+                    render_wait,
                 });
             }
         }

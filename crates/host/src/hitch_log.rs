@@ -390,6 +390,13 @@ fn holder_words(h: &engine_core::hitch::LockHolder) -> String {
     } else {
         String::new()
     };
+    let render = match h.render_wait {
+        1 => "; it was waiting for a reply from the render thread",
+        2 => "; it was waiting in Present for the frames in flight",
+        3 => "; it was waiting for room in the render queue",
+        _ => "",
+    };
+    let ran = format!("{ran}{render}");
     let hands = if h.handoffs > 0 {
         format!(
             "; not one hold: the lock changed hands {} times while main waited",
@@ -1533,6 +1540,7 @@ mod tests {
             cpu_ns: Some(280_000_000),
             site: String::new(),
             handoffs: 0,
+            render_wait: 0,
         };
         let mut f = frame();
         f.stages = Some([2.8, 0.1, 4.7, 5.7, 1.3, 0.3, 405.1, 3.0, 0.0]);
@@ -1575,6 +1583,20 @@ mod tests {
         );
 
         // Taken outside a platform call by the port's own code (a `kernel_guard` site), and many short holds.
+        let replying = LockHolder {
+            thread: 4,
+            start: 0x00aa_8430,
+            call: 0x00fd_f2a0,
+            call_name: "D3DXCreateTextureFromFileInMemory".into(),
+            wait_ns: 18_300_000,
+            render_wait: 1,
+            ..LockHolder::default()
+        };
+        assert_eq!(
+            holder_words(&replying),
+            "the IO thread (game thread 4) in D3DXCreateTextureFromFileInMemory, main waited 18.3 ms; it was waiting for \
+             a reply from the render thread"
+        );
         let guarded = LockHolder {
             site: "crates/engine-core/src/mod_files.rs:120".into(),
             handoffs: 3,
@@ -1606,6 +1628,7 @@ mod tests {
             cpu_ns: Some(3_400_000),
             site: String::new(),
             handoffs: 0,
+            render_wait: 0,
         });
         assert_eq!(
             f.cause(),

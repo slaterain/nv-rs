@@ -16,6 +16,8 @@ struct Clock {
     thread: u32,
     start: u32,
     call: Arc<AtomicU32>,
+    /// What the thread is waiting for on the render thread now ([`note_render_wait`]; 0 nothing).
+    render_wait: Arc<AtomicU32>,
     os: Option<Os>,
 }
 
@@ -33,6 +35,8 @@ static CLOCKS: Mutex<Vec<Clock>> = Mutex::new(Vec::new());
 thread_local! {
     /// This OS thread's current platform function word (its registry entry's), once registered.
     static CALL: std::cell::OnceCell<Arc<AtomicU32>> = const { std::cell::OnceCell::new() };
+    /// This OS thread's render-thread wait word (its registry entry's), once registered.
+    static RENDER_WAIT: std::cell::OnceCell<Arc<AtomicU32>> = const { std::cell::OnceCell::new() };
 }
 
 /// The running OS thread is game thread `thread` (its start address `start`): its clock is kept for later reads
@@ -42,12 +46,17 @@ pub fn register(thread: u32, start: u32) {
     CALL.with(|c| {
         let _ = c.set(Arc::clone(&call));
     });
+    let render_wait = Arc::new(AtomicU32::new(0));
+    RENDER_WAIT.with(|c| {
+        let _ = c.set(Arc::clone(&render_wait));
+    });
     if let Ok(mut c) = CLOCKS.lock() {
         c.retain(|k| k.thread != thread);
         c.push(Clock {
             thread,
             start,
             call,
+            render_wait,
             os: Os::here(),
         });
     }
@@ -68,6 +77,29 @@ pub fn leave_call(before: u32) {
             w.store(before, Relaxed);
         }
     });
+}
+
+/// This thread (when registered) starts (`what` > 0: 1 a reply, 2 the frames in flight, 3 room in the queue) or ends
+/// (0) a wait for the render thread (`d3d9_stream::hitch::set_wait_hook`). One relaxed store.
+pub fn note_render_wait(what: u32) {
+    RENDER_WAIT.with(|c| {
+        if let Some(w) = c.get() {
+            w.store(what, Relaxed);
+        }
+    });
+}
+
+/// What game thread `thread` is waiting for on the render thread now (0: nothing, or not registered).
+pub fn render_wait_of(thread: u32) -> u32 {
+    CLOCKS
+        .lock()
+        .ok()
+        .and_then(|c| {
+            c.iter()
+                .find(|k| k.thread == thread)
+                .map(|k| k.render_wait.load(Relaxed))
+        })
+        .unwrap_or(0)
 }
 
 /// The platform function game thread `thread` is in now (0: none, or not registered).

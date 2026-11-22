@@ -380,6 +380,9 @@ pub struct LockHolder {
     /// How many times other threads took the lock while main waited: 0 is one long hold, more a lock that changed
     /// hands (short holds re-taken before main woke).
     pub handoffs: u32,
+    /// What the holder was waiting for on the render thread when it was seen (0 nothing, 1 a reply, 2 the frames in
+    /// flight at `Present`, 3 room in the queue).
+    pub render_wait: u32,
 }
 
 /// The waits main makes that are worth naming a holder for (1 ms).

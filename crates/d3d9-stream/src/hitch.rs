@@ -49,6 +49,24 @@ pub fn add_time(c: Count, d: std::time::Duration) {
     add(c, d.as_nanos().min(u128::from(u64::MAX)) as u64);
 }
 
+/// Told when a thread starts (`1` a reply, `2` the frames in flight at `Present`, `3` room in the queue) and ends (`0`)
+/// a wait for the render thread: the engine notes it for the thread, so a thread that waits for the platform's lock
+/// while this one holds it can say what the holder was waiting for (installed by the platform layer).
+static WAIT_HOOK: std::sync::OnceLock<fn(u32)> = std::sync::OnceLock::new();
+
+/// Installs [`WAIT_HOOK`] (the first one set stays).
+pub fn set_wait_hook(f: fn(u32)) {
+    let _ = WAIT_HOOK.set(f);
+}
+
+/// This thread starts (`what` > 0) or ends (0) a wait for the render thread.
+#[inline]
+pub(crate) fn note_wait(what: u32) {
+    if let Some(f) = WAIT_HOOK.get() {
+        f(what);
+    }
+}
+
 /// Every count now (the host subtracts the one before).
 pub fn snapshot() -> [u64; COUNTS] {
     std::array::from_fn(|i| COUNTERS[i].load(Relaxed))
