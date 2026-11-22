@@ -3163,6 +3163,39 @@ fn made(e: &mut Engine, name: &[u8], k: &[u8]) {
     state!(e).disk.entries.insert(k.to_vec(), entry);
 }
 
+/// The file at the full path `path` given `bytes` whole, as a handle opened on it with
+/// `OPEN_ALWAYS` that writes them from its start, sets its end there and is closed: a file of this
+/// run (engine memory, never the player's disk; [`create_file_a`]'s rules). A player's file is
+/// taken into the run with its directory entry ([`adopt`], unread: every byte is replaced); one
+/// not there is made ([`made`]) when its folder exists, else `ERROR_PATH_NOT_FOUND` and nothing is
+/// made. The entry then shows the size and the write's time as a closed handle that wrote
+/// publishes them ([`closed`]). For the profile writes (`super::ini`), which change a whole file.
+pub fn write_whole(e: &mut Engine, path: &[u8], bytes: Vec<u8>) -> Result<(), u32> {
+    let k = key(path);
+    if !state!(e).disk.files.contains_key(&k) {
+        let players = !state!(e).disk.deleted.contains(&k)
+            && std::fs::metadata(real_path(path)).is_ok_and(|m| m.is_file());
+        if players {
+            adopt(e, path, &k, false)?;
+        } else if directory_exists(e, path) {
+            made(e, path, &k);
+        } else {
+            return Err(ERROR_PATH_NOT_FOUND);
+        }
+    }
+    let now = file_clock(e);
+    let size = bytes.len() as u64;
+    let disk = &mut state!(e).disk;
+    disk.files.insert(k.clone(), bytes);
+    disk.changed(&k);
+    if let Some(entry) = disk.entries.get_mut(&k) {
+        entry.size = size;
+        entry.accessed = now;
+        entry.written = now;
+    }
+    Ok(())
+}
+
 /// A file handle closed (`CloseHandle`): a handle that wrote publishes the file's size, and the
 /// time of its last write as the last access and last write (measured: a search shows neither
 /// while the handle is open, `findfile-changed/findfile-2026-11-03.txt` 2).
