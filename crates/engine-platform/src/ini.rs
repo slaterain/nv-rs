@@ -178,7 +178,7 @@ pub fn get_private_profile_string_a(
 /// `NV_PREFS_OUT`, as it copies saves): `key=value` written
 /// (`engine_core::mod_files::written_profile`), a null value the key taken out (`removed_key`), a
 /// null key the section taken out (`removed_section`). Measured on scratch files with this call
-/// (2026-11-22, `build43-scratch/measure/player-bugs/ini-write`, 120 cases, and the extenders'
+/// (2026-11-22, `build43-scratch/measure/player-bugs/ini-write`, 99 cases, and the extenders'
 /// 2026-11-16 ones the rules were made from):
 /// - true, the last error 0; a file not there is made (a removal makes it empty), the last error
 ///   `ERROR_FILE_NOT_FOUND`; a folder not there: false, `ERROR_PATH_NOT_FOUND`, nothing made;
