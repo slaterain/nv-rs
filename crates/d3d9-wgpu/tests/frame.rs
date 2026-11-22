@@ -6366,3 +6366,143 @@ fn merged_draws_across_a_blended_draw_draw_what_one_draw_each_draws() {
         "the six opaque draws as one, the blended one after them"
     );
 }
+
+/// A 4 by 4 target, the registers from storage, the held draws with the blended ones after them,
+/// and the light passes fused into their base or not ([`d3d9_wgpu::device::Device::set_fuse_lights`]):
+/// a base strip in column 0 (depth LESSEQUAL with writes) drawn in its own colour, then over the
+/// same vertices a light pass adding its colour (one, one) and a pass multiplying by its colour
+/// (destination colour, zero), both depth EQUAL without writes, colour only; then a strip in column
+/// 1 drawn alone. The pixels, and the groups drawn fused with the passes they held.
+fn fuse_script(fuse: bool) -> Option<(Vec<[u8; 4]>, (u64, u64))> {
+    const ALPHABLENDENABLE: u32 = 27;
+    const SRCBLEND: u32 = 19;
+    const DESTBLEND: u32 = 20;
+    const COLORWRITEENABLE: u32 = 168;
+    let mut g = Gpu::new(4, 1)?;
+    {
+        let d = g.b.device().expect("the device");
+        if !d.set_storage_regs(true) {
+            eprintln!("this adapter cannot read the registers from storage: not checked");
+            return None;
+        }
+        d.set_merge_draws(true, true, true);
+        d.set_fuse_lights(fuse);
+    }
+    // vs_2_0: dcl_position v0; add oPos, v0, c0; mov oT0, c1. ps_2_0: mov oC0, c0.
+    let mut vs = vec![0xFFFE_0200];
+    vs.extend(ins(31, &[0x8000_0000, 0x900F_0000]));
+    vs.extend(ins(2, &[0xC00F_0000, 0x90E4_0000, 0xA0E4_0000]));
+    vs.extend(ins(1, &[0xE00F_0000, 0xA0E4_0001]));
+    vs.push(END);
+    let mut own = vec![0xFFFF_0200];
+    own.extend(ins(1, &[0x800F_0800, 0xA0E4_0000]));
+    own.push(END);
+    for (shader, pixel, tokens) in [(VS + 50, false, vs), (PS + 50, true, own)] {
+        let t = words(&tokens);
+        g.run(Cmd::CreateShader {
+            device: DEVICE,
+            shader,
+            pixel,
+            tokens: Data::Bytes(&t),
+        });
+    }
+    for (pixel, shader) in [(false, VS + 50), (true, PS + 50)] {
+        g.run(Cmd::SetShader {
+            device: DEVICE,
+            pixel,
+            shader,
+        });
+    }
+    let regs = |g: &mut Gpu, kind: u8, r: &[f32]| {
+        let b = floats(r);
+        g.run(Cmd::SetConstants {
+            device: DEVICE,
+            kind,
+            start: 0,
+            count: r.len() as u32 / 4,
+            data: Data::Bytes(&b),
+        });
+    };
+    g.clear(3, 0, 1.0);
+    g.state(ZWRITEENABLE, 1);
+    g.state(ZFUNC, 4);
+    let (l, r) = (-1.25f32, -0.75f32);
+    let strip = floats(&[
+        l, -3.0, 0.5, 1.0, l, 3.0, 0.5, 1.0, r, -3.0, 0.5, 1.0, r, -3.0, 0.5, 1.0, l, 3.0, 0.5,
+        1.0, r, 3.0, 0.5, 1.0,
+    ]);
+    g.run(Cmd::UploadBuffer {
+        buffer: VB,
+        offset: 0,
+        flags: 0,
+        data: Data::Bytes(&strip),
+    });
+    g.run(Cmd::SetStreamSource {
+        device: DEVICE,
+        stream: 0,
+        buffer: VB,
+        offset: 0,
+        stride: 16,
+    });
+    let draw = |g: &mut Gpu, column: u32, colour: [f32; 4]| {
+        regs(
+            g,
+            0,
+            &[0.5 * column as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        );
+        regs(g, 3, &colour);
+        g.run(Cmd::DrawPrimitive {
+            device: DEVICE,
+            kind: 4,
+            start: 0,
+            count: 2,
+        });
+    };
+    draw(&mut g, 0, [0.25, 0.5, 0.0, 1.0]);
+    g.state(ALPHABLENDENABLE, 1);
+    g.state(ZWRITEENABLE, 0);
+    g.state(ZFUNC, 3);
+    g.state(COLORWRITEENABLE, 0x7);
+    g.state(SRCBLEND, 2);
+    g.state(DESTBLEND, 2);
+    draw(&mut g, 0, [0.5, 0.25, 0.5, 0.0]);
+    g.state(SRCBLEND, 9);
+    g.state(DESTBLEND, 1);
+    draw(&mut g, 0, [0.5, 1.0, 0.5, 0.0]);
+    g.state(ALPHABLENDENABLE, 0);
+    g.state(ZWRITEENABLE, 1);
+    g.state(ZFUNC, 4);
+    g.state(COLORWRITEENABLE, 0xF);
+    draw(&mut g, 1, [0.0, 0.0, 1.0, 1.0]);
+    let px = g.pixels();
+    let d = g.b.device().expect("the device");
+    assert_eq!(d.wgpu_errors(), 0);
+    Some((px, d.fused_counts()))
+}
+
+/// A base and its two light passes drawn as one fused draw (`NV_WGPU_FUSE_LIGHTS`): the same
+/// pixels as the three draws one by one (within one step of an 8-bit channel: the blend unit
+/// rounds between the passes, the fused shader once), the alpha the base's, column 1 untouched.
+#[test]
+fn fused_light_passes_draw_what_the_passes_draw_one_by_one() {
+    let Some((off_px, off_counts)) = fuse_script(false) else {
+        return;
+    };
+    assert_eq!(off_counts, (0, 0), "nothing fused with the switch off");
+    let (px, counts) = fuse_script(true).expect("the adapter, as above");
+    assert_eq!(counts, (1, 2), "one group fused, two light passes in it");
+    for (a, b) in px.iter().zip(&off_px) {
+        for c in 0..4 {
+            assert!(
+                (i32::from(a[c]) - i32::from(b[c])).abs() <= 1,
+                "fused {px:?} one by one {off_px:?}"
+            );
+        }
+    }
+    // Column 0: (0.25 + 0.5) * 0.5, (0.5 + 0.25) * 1, (0 + 0.5) * 0.5, alpha 1 (BGRA bytes).
+    let c0 = off_px[0];
+    assert!((i32::from(c0[2]) - 96).abs() <= 1, "{off_px:?}");
+    assert!((i32::from(c0[1]) - 191).abs() <= 1, "{off_px:?}");
+    assert!((i32::from(c0[0]) - 64).abs() <= 1, "{off_px:?}");
+    assert_eq!(c0[3], 255);
+}

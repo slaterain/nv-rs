@@ -1,0 +1,379 @@
+//! An object's base pass and its extra light passes drawn as one draw (`NV_WGPU_FUSE_LIGHTS`, off by
+//! default; [`sm::fused`]). With the held draws on ([`Device::may_hold`]), a held opaque draw is a
+//! base; a later draw of the same vertices that adds light (one, one) or multiplies the colour
+//! (destination colour, zero), tests depth EQUAL or LESSEQUAL without writing it, writes colour
+//! only (no alpha), has no alpha test, no stencil and no occlusion count, joins its base instead of
+//! being held after the opaque draws. When the held draws are drawn, a base with extra passes is
+//! drawn once with a fused pipeline; where one cannot be made, the base and its passes are drawn
+//! one by one right after each other (the light passes of other objects that lay between them in
+//! the game's order touch other pixels: depth EQUAL on their own surfaces).
+//!
+//! A see-through or other blended draw that is not such a pass closes every base held before it:
+//! light added after a see-through surface was blended over the base must stay added after it.
+
+use super::*;
+use crate::sm::fused::{self, Blend, Moved};
+
+/// One pass of a fused group as its own draw had it.
+pub(super) struct Pass {
+    vs: Arc<Shader>,
+    ps: Arc<Shader>,
+    inputs: Vec<wgsl::Input>,
+    clip: wgsl::Clip,
+    /// Each sampler of the pair: its binding (the vertex shader's from 32), dimension, filtering,
+    /// view and sampler.
+    textures: Vec<((u32, u8, bool), wgpu::TextureView, wgpu::Sampler)>,
+    /// The pass's registers' places ([`Device::blocks`]) and its digest.
+    blocks: [u32; 4],
+    digest: Option<u64>,
+}
+
+/// A held base and the light passes that joined it.
+pub(super) struct Group {
+    base: Pass,
+    key: PipeKey,
+    attributes: [Vec<wgpu::VertexAttribute>; 8],
+    topology: wgpu::PrimitiveTopology,
+    /// The bases held before the last blended draw that was not a light pass are closed.
+    epoch: u64,
+    pub(super) extras: Vec<(Pass, Blend, HeldKey)>,
+}
+
+/// The fused groups' state of a device.
+#[derive(Default)]
+pub(super) struct State {
+    pub(super) on: bool,
+    pub(super) epoch: u64,
+    /// The fused pipelines made, by their passes (None: one that could not be made).
+    pub(super) pipelines: Map<Vec<u64>, Option<(wgpu::RenderPipeline, [wgpu::BindGroupLayout; 2])>>,
+    /// Groups drawn fused, and passes they held (tests).
+    pub(super) drawn: (u64, u64),
+}
+
+/// Where a fused stage's sampler goes: its binding, dimension and filtering, the pass and the
+/// pass's sampler.
+type Placed = Vec<((u32, u8, bool), usize, usize)>;
+
+/// A fused group ready to draw: its pipeline and its two sampler groups.
+pub(super) struct Ready {
+    pub(super) pipeline: wgpu::RenderPipeline,
+    pub(super) groups: [wgpu::BindGroup; 2],
+}
+
+impl Device {
+    /// Whether the draw about to be given is a light pass that may join a held base (module
+    /// documentation), and how its colour goes into the target.
+    pub(super) fn fuse_blend(&self) -> Option<Blend> {
+        let r = &self.st.rs;
+        if !self.fuse.on
+            || r[rs::ALPHABLENDENABLE] == 0
+            || r[rs::ZWRITEENABLE] != 0
+            || !matches!(r[rs::ZFUNC], 3 | 4)
+            || r[rs::COLORWRITEENABLE] & 0xF != 0x7
+            || r[rs::ALPHATESTENABLE] != 0
+            || r[rs::STENCILENABLE] != 0
+            || r[rs::SEPARATEALPHABLENDENABLE] != 0
+            || r[rs::BLENDOP] != 1
+            || self.counting.is_some()
+        {
+            return None;
+        }
+        match (r[rs::SRCBLEND], r[rs::DESTBLEND]) {
+            (2, 2) => Some(Blend::Add),
+            (9, 1) | (1, 3) => Some(Blend::Multiply),
+            _ => None,
+        }
+    }
+
+    /// A blended draw that is not a light pass: the bases held before it may take no more passes.
+    pub(super) fn fuse_close(&mut self) {
+        self.fuse.epoch += 1;
+    }
+
+    /// The pass of the draw about to be given (its shaders, link and textures).
+    fn fuse_pass(
+        &mut self,
+        vs: &Arc<Shader>,
+        ps: &Arc<Shader>,
+        link: &VertexLink,
+        samplers: &[((u32, u8, bool), usize)],
+        blocks: [u32; 4],
+        clip: wgsl::Clip,
+    ) -> Pass {
+        let mut textures = Vec::new();
+        for &((binding, dim, filterable), slot) in samplers {
+            let view = match self.st.textures[slot].as_ref() {
+                Some(t) if (dim == 1) == t.cube => t.view.clone(),
+                _ => self.dummy[dim as usize].clone(),
+            };
+            let sk = SamplerKey::new(&self.st.samplers[slot], filterable);
+            textures.push(((binding, dim, filterable), view, self.sampler(sk)));
+        }
+        Pass {
+            vs: vs.clone(),
+            ps: ps.clone(),
+            inputs: link.inputs.clone(),
+            clip,
+            textures,
+            blocks,
+            digest: None,
+        }
+    }
+
+    /// A newly held base (the group `g`, one draw so far): it may take light passes.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn fuse_base(
+        &mut self,
+        g: usize,
+        vs: &Arc<Shader>,
+        ps: &Arc<Shader>,
+        link: &VertexLink,
+        samplers: &[((u32, u8, bool), usize)],
+        blocks: [u32; 4],
+        key: &PipeKey,
+        topology: wgpu::PrimitiveTopology,
+    ) {
+        if !self.fuse.on || self.held.get(g).map_or(true, |h| h.members.len() != 1) || key.sun {
+            return;
+        }
+        let base = self.fuse_pass(vs, ps, link, samplers, blocks, key.clip);
+        let group = Group {
+            base,
+            key: key.clone(),
+            attributes: link.attributes.clone(),
+            topology,
+            epoch: self.fuse.epoch,
+            extras: Vec::new(),
+        };
+        self.held[g].fuse = Some(Box::new(group));
+    }
+
+    /// The light pass about to be given joins the held base of its vertices, if there is one that
+    /// may take it; answers its group.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn fuse_join(
+        &mut self,
+        blend: Blend,
+        key: &HeldKey,
+        vs: &Arc<Shader>,
+        ps: &Arc<Shader>,
+        link: &VertexLink,
+        samplers: &[((u32, u8, bool), usize)],
+        blocks: [u32; 4],
+        clip: wgsl::Clip,
+    ) -> Option<usize> {
+        let &g = self.held_geometry.get(&key.geometry)?;
+        let epoch = self.fuse.epoch;
+        let h = self.held.get(g)?;
+        let ok = h.members.len() == 1
+            && h.fuse.as_ref().is_some_and(|f| f.epoch == epoch)
+            && key.viewport == h.key.viewport
+            && key.scissor == h.key.scissor;
+        if !ok {
+            return None;
+        }
+        let pass = self.fuse_pass(vs, ps, link, samplers, blocks, clip);
+        let group = self.held[g].fuse.as_mut()?;
+        group.extras.push((pass, blend, key.clone()));
+        self.held_draws += 1;
+        Some(g)
+    }
+
+    /// The digest of the light pass that just joined group `g`.
+    pub(super) fn fuse_digest(&mut self, g: usize, digest: Option<u64>) {
+        if let Some(p) = self
+            .held
+            .get_mut(g)
+            .and_then(|h| h.fuse.as_mut())
+            .and_then(|f| f.extras.last_mut())
+        {
+            p.0.digest = digest;
+        }
+    }
+
+    /// The fused pipeline and sampler groups of a held group with light passes; None to draw its
+    /// passes one by one.
+    pub(super) fn fuse_ready(&mut self, h: &Held) -> Option<Ready> {
+        let f = h.fuse.as_ref().filter(|f| !f.extras.is_empty())?;
+        let passes: Vec<&Pass> = std::iter::once(&f.base)
+            .chain(f.extras.iter().map(|(p, _, _)| p))
+            .collect();
+        let blends: Vec<Blend> = f.extras.iter().map(|(_, b, _)| *b).collect();
+        let clamp =
+            f.key.colours[0].is_some_and(|(format, _)| !format!("{format:?}").contains("Float"));
+        let vertex_links: Vec<wgsl::Link> = passes
+            .iter()
+            .map(|p| wgsl::Link {
+                inputs: p.inputs.clone(),
+                centroid: wgsl::centroid_everywhere(p.ps.varyings.len()),
+                varyings: p.ps.varyings.clone(),
+                clip: p.clip,
+                count: false,
+                fixed: false,
+                storage: true,
+            })
+            .collect();
+        let pixel_links: Vec<wgsl::Link> = vertex_links
+            .iter()
+            .map(|l| wgsl::Link {
+                inputs: Vec::new(),
+                ..l.clone()
+            })
+            .collect();
+        let vs: Vec<(&sm::Program, &wgsl::Link)> = passes
+            .iter()
+            .zip(&vertex_links)
+            .map(|(p, l)| (&p.vs.program, l))
+            .collect();
+        let ps: Vec<(&sm::Program, &wgsl::Link)> = passes
+            .iter()
+            .zip(&pixel_links)
+            .map(|(p, l)| (&p.ps.program, l))
+            .collect();
+        let v = fused::fused_vertex(&vs).ok()?;
+        let p = fused::fused_pixel(&ps, &blends, clamp).ok()?;
+        // The fused stages' samplers: each pass's moved to its new binding (the vertex shader's
+        // from 32), with what that binding holds.
+        let place = |moved: &[Moved], vertex: bool| -> Option<Placed> {
+            moved
+                .iter()
+                .map(|m| {
+                    let from = if vertex { 32 + m.from } else { m.from };
+                    let k = passes[m.pass]
+                        .textures
+                        .iter()
+                        .position(|((b, _, _), _, _)| *b == from)?;
+                    let (b, dim, filterable) = passes[m.pass].textures[k].0;
+                    let _ = b;
+                    let to = if vertex { 32 + m.to } else { m.to };
+                    (to < if vertex { 64 } else { 32 }).then_some((
+                        (to, dim, filterable),
+                        m.pass,
+                        k,
+                    ))
+                })
+                .collect()
+        };
+        let vertex_samplers = place(&v.bindings, true)?;
+        let pixel_samplers = place(&p.bindings, false)?;
+        // The pair's sampler list as the device orders it: the vertex shader's first.
+        let list: Vec<(u32, u8, bool)> = vertex_samplers
+            .iter()
+            .chain(&pixel_samplers)
+            .map(|(k, _, _)| *k)
+            .collect();
+        let mut cache_key: Vec<u64> = vec![u64::from(clamp)];
+        {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            f.key.hash(&mut hasher);
+            list.hash(&mut hasher);
+            cache_key.push(hasher.finish());
+        }
+        for (pass, b) in passes
+            .iter()
+            .zip(std::iter::once(None).chain(blends.iter().map(Some)))
+        {
+            cache_key.extend([pass.vs.id, pass.ps.id, b.map_or(0, |b| *b as u64 + 1)]);
+        }
+        let made = match self.fuse.pipelines.get(&cache_key) {
+            Some(m) => m.clone(),
+            None => {
+                let made = self.fuse_pipeline(f, &v.source, &p.source, &list);
+                self.fuse.pipelines.insert(cache_key, made.clone());
+                made
+            }
+        };
+        let (pipeline, layouts) = made?;
+        let group = |device: &wgpu::Device,
+                     layout: &wgpu::BindGroupLayout,
+                     set: &[((u32, u8, bool), usize, usize)]| {
+            let mut entries = Vec::new();
+            for ((to, _, _), pass, k) in set {
+                let (_, view, sampler) = &passes[*pass].textures[*k];
+                entries.push(wgpu::BindGroupEntry {
+                    binding: to % 32,
+                    resource: wgpu::BindingResource::TextureView(view),
+                });
+                entries.push(wgpu::BindGroupEntry {
+                    binding: to % 32 + 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                });
+            }
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("fused lamp passes"),
+                layout,
+                entries: &entries,
+            })
+        };
+        let groups = [
+            group(&self.device, &layouts[0], &pixel_samplers),
+            group(&self.device, &layouts[1], &vertex_samplers),
+        ];
+        Some(Ready { pipeline, groups })
+    }
+
+    /// Makes a fused pipeline: the base's states with the fused modules and samplers.
+    fn fuse_pipeline(
+        &mut self,
+        f: &Group,
+        vertex: &str,
+        pixel: &str,
+        list: &[(u32, u8, bool)],
+    ) -> Option<(wgpu::RenderPipeline, [wgpu::BindGroupLayout; 2])> {
+        let vm = create_module(&self.device, vertex.to_string()).ok()?;
+        let pm = create_module(&self.device, pixel.to_string()).ok()?;
+        // Under keys of their own (the top bit set), so the device's job maker finds them.
+        let id = FUSED_ID | (self.fuse.pipelines.len() as u64);
+        let vkey: VKey = (id, Vec::new(), Vec::new(), wgsl::Clip::Off, false, true);
+        let pkey: PKey = (id, Vec::new(), false, wgsl::Clip::Off, false, true);
+        self.vs_modules.insert(vkey.clone(), Some(vm));
+        self.ps_modules.insert(pkey.clone(), Some(pm));
+        let job = self.pipeline_job(
+            &f.key,
+            &f.base.ps,
+            &vkey,
+            &pkey,
+            &f.attributes,
+            f.topology,
+            list,
+        );
+        self.vs_modules.remove(&vkey);
+        self.ps_modules.remove(&pkey);
+        let job = job?;
+        let made = build_pipeline(
+            &self.device,
+            self.pipeline_cache.as_ref().map(|c| &c.cache),
+            &job,
+        )
+        .ok()?;
+        Some((made, job.group_layouts))
+    }
+}
+
+/// The top bit of a fused pipeline's module keys: no shader's id has it.
+const FUSED_ID: u64 = 1 << 63;
+
+/// The table entries of a fused group in pass order (the base's, then each pass's), and the digests
+/// in the same order.
+pub(super) fn entries(f: &Group) -> (Vec<[u32; 4]>, Vec<Option<u64>>) {
+    let mut blocks = vec![f.base.blocks];
+    let mut digests = vec![f.base.digest];
+    for (p, _, _) in &f.extras {
+        blocks.push(p.blocks);
+        digests.push(p.digest);
+    }
+    (blocks, digests)
+}
+
+/// A fused group's light passes as held draws of their own, for drawing one by one after the base.
+pub(super) fn one_by_one(f: &Group) -> Vec<Held> {
+    f.extras
+        .iter()
+        .map(|(p, _, key)| Held {
+            key: key.clone(),
+            members: vec![(p.blocks, p.digest)],
+            fuse: None,
+        })
+        .collect()
+}
