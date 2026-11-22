@@ -382,8 +382,24 @@ fn renamed(record: &[u8], names: &mut Names, out: &mut Vec<u8>) -> Result<String
 /// a time: two runs whose streams differ only in states set again to the value they had (the device
 /// layer leaving those out) give the same list, and any difference a draw could see gives another.
 pub fn draw_digests(from: impl std::io::Read) -> Result<Vec<u64>, String> {
+    digests_of(from, crate::StateDigest::new())
+}
+
+/// As [`draw_digests`], with the buffers hashed by their contents at each draw
+/// ([`crate::StateDigest::with_contents`]): leaving out an upload of bytes a buffer already holds
+/// changes no digest.
+pub fn draw_digests_with_contents(from: impl std::io::Read) -> Result<Vec<u64>, String> {
+    digests_of(from, crate::StateDigest::with_contents())
+}
+
+fn digests_of(
+    from: impl std::io::Read,
+    (mut digest, list): (
+        crate::StateDigest,
+        std::sync::Arc<std::sync::Mutex<Vec<u64>>>,
+    ),
+) -> Result<Vec<u64>, String> {
     let mut records = Records::new(from)?;
-    let (mut digest, list) = crate::StateDigest::new();
     while let Some(record) = records.next()? {
         let mut r = Reader {
             bytes: record,
@@ -410,8 +426,22 @@ pub fn draw_snapshot(
     from: impl std::io::Read,
     n: usize,
 ) -> Result<Option<crate::DrawSnapshot>, String> {
+    snapshot_of(from, crate::StateDigest::stopping_at(n).0)
+}
+
+/// As [`draw_snapshot`], with the buffers by their contents ([`draw_digests_with_contents`]).
+pub fn draw_snapshot_with_contents(
+    from: impl std::io::Read,
+    n: usize,
+) -> Result<Option<crate::DrawSnapshot>, String> {
+    snapshot_of(from, crate::StateDigest::stopping_at_with_contents(n).0)
+}
+
+fn snapshot_of(
+    from: impl std::io::Read,
+    mut digest: crate::StateDigest,
+) -> Result<Option<crate::DrawSnapshot>, String> {
     let mut records = Records::new(from)?;
-    let (mut digest, _list) = crate::StateDigest::stopping_at(n);
     while let Some(record) = records.next()? {
         let mut r = Reader {
             bytes: record,

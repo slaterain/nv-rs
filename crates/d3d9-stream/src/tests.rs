@@ -2585,3 +2585,96 @@ fn the_last_present_carried_out_is_known_with_when() {
         assert!(at >= before, "threaded {threaded}: after its submit began");
     }
 }
+
+/// The digests of `cmds` with the buffers by their contents ([`StateDigest::with_contents`]).
+fn content_digests_of(cmds: &[Cmd<Data<'_>>]) -> Vec<u64> {
+    let (mut d, list) = StateDigest::with_contents();
+    for &c in cmds {
+        d.execute(c);
+    }
+    drop(d);
+    let v = list.lock().unwrap().clone();
+    v
+}
+
+/// With the buffers by their contents, leaving out an upload of the bytes a buffer already holds
+/// changes no digest (the plain digests do change: they hash every upload); an upload of other bytes
+/// changes the digest of every draw that has the buffer bound, and not of a draw that has another.
+#[test]
+fn a_contents_digest_sees_buffer_bytes_not_uploads() {
+    const SAME: [u32; 4] = [1, 2, 3, 4];
+    const OTHER: [u32; 4] = [1, 2, 9, 4];
+    let create = |buffer| Cmd::CreateBuffer {
+        device: 0x1000,
+        buffer,
+        index: false,
+        length: 16,
+        usage: 0,
+        format: 0,
+        pool: 0,
+    };
+    let bind = |buffer| Cmd::SetStreamSource {
+        device: 0x1000,
+        stream: 0,
+        buffer,
+        offset: 0,
+        stride: 16,
+    };
+    let upload = |buffer, words: &'static [u32]| Cmd::UploadBuffer {
+        buffer,
+        offset: 0,
+        flags: 0,
+        data: Data::from_words(words),
+    };
+    let draw = Cmd::DrawPrimitive {
+        device: 0x1000,
+        kind: 4,
+        start: 0,
+        count: 1,
+    };
+    let base = vec![
+        create(0x5000),
+        create(0x6000),
+        bind(0x5000),
+        upload(0x5000, &SAME),
+        draw,
+        upload(0x5000, &SAME),
+        draw,
+        bind(0x6000),
+        draw,
+    ];
+    let mut left_out = base.clone();
+    left_out.remove(5);
+    assert_eq!(content_digests_of(&base), content_digests_of(&left_out));
+    assert_ne!(
+        digests_of(&base),
+        digests_of(&left_out),
+        "the plain digests hash every upload"
+    );
+    let mut changed = base.clone();
+    changed[5] = upload(0x5000, &OTHER);
+    let (a, b) = (content_digests_of(&base), content_digests_of(&changed));
+    assert_eq!(a[0], b[0], "the draw before the upload");
+    assert_ne!(a[1], b[1], "the draw after it, with the buffer bound");
+    assert_eq!(a[2], b[2], "a draw with another buffer bound");
+    // The same objects at other addresses (another heap layout): the same digests.
+    let moved: Vec<_> = base
+        .iter()
+        .map(|c| match *c {
+            Cmd::CreateBuffer { buffer: 0x5000, .. } => create(0x7000),
+            Cmd::SetStreamSource { buffer: 0x5000, .. } => bind(0x7000),
+            Cmd::UploadBuffer {
+                buffer: 0x5000,
+                data,
+                ..
+            } => Cmd::UploadBuffer {
+                buffer: 0x7000,
+                offset: 0,
+                flags: 0,
+                data,
+            },
+            other => other,
+        })
+        .collect();
+    assert_eq!(content_digests_of(&base), content_digests_of(&moved));
+}
