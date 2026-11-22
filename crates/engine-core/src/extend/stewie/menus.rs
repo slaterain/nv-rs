@@ -122,3 +122,28 @@ pub const MAP_KEEPS_RADIO_VOLUME: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END,
 /// S0883 `MoreDescriptiveSettingsSaveError` (`fn_007d6d70` at `0x7D6E50`): the settings save
 /// failure message names the ini file and why.
 pub const SETTINGS_SAVE_ERROR_NAMES_FILE: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 30);
+/// S0022.08 `MenuFixes` (`RecipeMenu`'s vtable slot `0x10704B4`, reached from
+/// `InterfaceManager::DoWheelMove` `00718080`): the mouse wheel over the crafting menu's category
+/// title changes the category.
+pub const RECIPE_WHEEL_CHANGES_CATEGORY: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 31);
+/// S0022.22 `MenuFixes` (`fn_007721c0`, the HUD's weapon part, at `0x77268F` and `0x7726AC`): the
+/// low-condition label's flash runs by the frame's time, the same at any frame rate.
+pub const HUD_CONDITION_FLASH_FRAME_RATE: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 32);
+/// S0022.35 `MenuFixes` (`HUDMainMenu::UpdateCompass` `00779070` at `0x7792F9` and `0x779F1F`): the
+/// compass's markers take the compass window's alpha.
+pub const HUD_COMPASS_FOLLOWS_ITS_ALPHA: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 33);
+/// S0022.42 `MenuFixes` (`HUDMainMenu::DoIdle` `00770430` at `0x770E78`): the enemy health bar no
+/// longer waits for the action prompt to be hidden.
+pub const HUD_HEALTH_BAR_NOT_TIED_TO_PROMPT: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 34);
+/// S0038 `fixRockItLauncherProjectileDisplay` (`HUDMainMenu::SetInfoForRef` `00775a00` at
+/// `0x77647F` and `0x777D55`): a Rock-It Launcher projectile shows its item and the Take prompt.
+pub const ROCK_IT_PROJECTILE_PROMPT: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 35);
+/// S0072 `patchFixHideHealthbarSetting` (`HUDMainMenu::SetTargetType` `00772d10` at `0x772D36`): the
+/// health bar settings' value words hide the enemy health bar.
+pub const HEALTH_BAR_SETTING_HIDES: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 36);
+/// S0120 `patchFixCndArrowsIgnoringHUDFlags` (`fn_007721c0` at `0x7725D0`): the condition arrows
+/// follow the HUD's action points flag on a weapon change.
+pub const HUD_CONDITION_ARROWS_FLAGS: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 37);
+/// S0197 `CrosshairProjectileNameFix` (`HUDMainMenu::SetInfoForRef` at `0x776EE2`): a projectile
+/// under the crosshair is named after its weapon only for thrown weapons.
+pub const CROSSHAIR_THROWN_WEAPON_NAME: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 38);
