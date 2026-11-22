@@ -89,7 +89,7 @@ pub enum Count {
     GridUpdateNs,
     /// Main's time in the model loader's two checks that `IOManager::UpdateQueue` runs first every frame, outside its
     /// budget (`00446e40`): the drain of the loader's queue (`00448c10`, every task run) and the walk over its queued
-    /// references (`00448cc0`, each one's finished check) (ns).
+    /// references (`00448cc0`, each one's `QueueMe`, slot `0x20`, which starts its loads) (ns).
     LoaderDrainNs,
     LoaderWalkNs,
     /// The parts of a grid shift in `TES::UpdateCurrentGridCell` (`00452580`), main's time in each (ns): the cancel of
