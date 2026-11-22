@@ -1107,15 +1107,19 @@ With the switch on:
   bits: 70,000 bytes keep 4,464).
 
 Not yet, with the switch on:
-- JIP's game patches not in the port's plan yet (`measure/jip/PLAN-3.9-groups.md`, "Kept out"): its fixed-string pool
-  (G43) waits for the 64-bit move; what it changes stays the game's own. (Its three null checks, G01, and its
+- JIP's game patches: every one that does something on this port is in (its fixed-string pool, G43, too: group
+  GT below). (Its three null checks, G01, and its
   lights on projectiles, muzzle flashes and explosions, G95 to G97, are in with JIP: the tables below; the
   third place of the null checks changes nothing, the game's loop already stops there.) (`ToggleDepthClear`'s patch, G128, is in with JIP: the
   frame's depth clear before the first-person view is a seam the command's switch answers; a skipped clear
   still marks the world as drawn for the new lighting and the sun shadows, so the first-person arms and
-  weapon still neither cast nor take the sun's shadows.) Left out on purpose: two patches that only make the game faster (G24, G36),
-  the editor's (E1, E2), NVAC's (O15) and Enhanced Camera's, JIP's own start-up (D08), and one xNVSE
-  already makes (G05). (Its start-up order change, D02, is in with JIP: the table above.)
+  weapon still neither cast nor take the sun's shadows.) Not built, because they do nothing on this port:
+  four tiny functions JIP shortens, which the port's code already answers directly (G36); the expression
+  buffer the built-in xNVSE already grows with the same bytes (G05); JIP's start-up hook, which hands back
+  the same camera and only fills JIP's own copies (D08); the editor's two (E1, E2), as the port does not run
+  the editor; NVAC's alerts (O15) and Enhanced Camera's ground fix, which patch DLLs the port does not load.
+  (Its start-up order change, D02, and its skip of a busy script runner's log, G24, are in with JIP: the
+  tables above.)
 - With real threads JIP's own data no longer makes a thread wait (its aux variables and item data have
   their own locks, and xNVSE's string variables, which `AuxVarGetFltCond` reads its name from, have
   theirs, as in xNVSE), but a mod's event script run from another thread (JIP's actor, world and UI
@@ -1502,6 +1506,12 @@ too).
 | (`InitGamePatches`: `SafeWrite16(0x5B4DBC, 0x19EB)`) | `005b4be0` (`AddItem`, `0x5B4DBC`) | Items a script adds with `AddItem` all go through the game's item-condition step that the game gives only to weapons: with JIP's own version of that step (G50, GH1) armour and weapons, also those from leveled lists and form lists, arrive at the same 99.9% condition a plainly added weapon gets, and any other item is left at full condition | 3.9 GS-4 |
 | (`InitGamePatches`: `WriteRelJump(0x5B54E7, RemoveMeHook)`) | `005b53d0` (`RemoveMe`, `0x5B54E7`: the menu refresh when the player gets the item, `00704af0`) | When a script's `RemoveMe` gives the player the item, the open item list (inventory, container, barter, recipe menu) is refreshed at the next main loop pass, through JIP's own refresh, instead of at once (G60) | 3.9 GS |
 | (`DeferredInit`: "JIP Companions Command & Control.esp") | that plugin's main script (form `0xADE` in the plugin), its compiled data at `+0x29C` | With the plugin "JIP Companions Command & Control.esp" loaded, a known bug in its main script is patched once at start-up (a number in its compiled script, 139, becomes 255), as JIP does. Deliberate difference: a form there that is not a script, has no compiled data, or has data too short to hold that number is left alone, where JIP would crash or read past the data | 3.9 GS-4 |
+
+#### GT: Fixed strings
+
+| JIP's comment | Exe places | What a player with JIP gets | Built |
+|---|---|---|---|
+| (`InitGamePatches`: `SafeWrite8(0xA5B630, 0xC3)`, `WriteRelJump(0xA5B690, GetNiFixedString)`, `WriteRelCall(0x878203, FreeUnusedNiFixedStrings)`) | `00a5b630` (the string table's making), `00a5b690` (make a fixed string), `00a5b460` (its clean-up, called only at `0x878203`: cell clean-ups, fast travel, `TestAllCells`) | The game's one-copy store of name strings (models, nodes, animations, settings) is JIP's pool: one hash lookup where the game walked a long bucket under a lock for every name a load makes, so loading is faster; names nothing uses any more are freed at the same clean-ups as the game's. As JIP, two different texts whose 32-bit hash is the same share the first one's string (rare). JohnnyGuitar NVSE replaces this pool with its own when it is loaded; that part of JohnnyGuitar is not built, so the port uses JIP's | 3.9 G43 |
 
 #### GW: World, sky, sound, saves, start-up
 
