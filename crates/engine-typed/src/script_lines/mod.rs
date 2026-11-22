@@ -3,18 +3,18 @@
 //! action list's run `005e1160`). A wrap registered over any of them clears this family's direct
 //! bit for good, so every call into them stays by address and reaches the wrap, whose call to the
 //! function it wrapped reaches the typed body here. What the bodies call in the scripts family (the
-//! expression's constructor and `Eval`, the referenced object lookup) goes direct while that family
-//! is direct.
+//! expression's constructor and `Eval`, the referenced object lookup, a variable's set and the
+//! action flags' clear) goes direct while that family is direct.
 //!
 //! - [`runner`]: the line loop, the action list's run, `ParseLine` and `EvaluateLine` with its
 //!   `set`, `if` and command lines.
 //!
 //! What stays by address: `ParseLine` and `EvaluateLine` from the loops (xNVSE's wraps), the
 //! operand reader and the parameter parser (`overridable.tsv`), every command's and block type's
-//! handler, the logs and the console, the locals' set and the casts. The seams stay at their
-//! points: JIP LN's script wait (`005e0ec9`, `005e1716`), its kept failed scripts (`005e0fbe`,
-//! `005e1a23`, `005e1f0b`), and the seams before a block type's handler (`005e16c3`) and a
-//! command's handler (`005e2329`).
+//! handler, the logs and the console, the locals' making and delete, and the casts. The seams stay
+//! at their points: JIP LN's script wait (`005e0ec9`, `005e1716`), its kept failed scripts
+//! (`005e0fbe`, `005e1a23`, `005e1f0b`), and the seams before a block type's handler (`005e16c3`)
+//! and a command's handler (`005e2329`).
 //!
 //! Stage 1: the objects stay in guest memory where the game made them. **Threads and floats.**
 //! Scripts run on the main thread and the AI threads ([`Threads::Both`]). The only float maths: a

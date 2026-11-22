@@ -588,6 +588,30 @@ const MENU_STRING_EQUAL: u32 = 0x00a0_d180;
 const INT_MAP_HASH: u32 = 0x00a0_d260;
 const INT_MAP_EQUAL: u32 = 0x00ae_8dc0;
 
+// Typed from 0049c680
+/// A simple list's find (`thiscall(this, wanted, start)`, `RET 8`): from `start`, or from the list's
+/// first node when it is 0 (`00559450`), the first node whose item equals the word at `wanted`
+/// (read again for each node, as the exe reads it), else 0. Every tile a menu deletes asks it of the
+/// list of hibernating tiles (`Tile::~Tile`, through `0057c730`), so a menu of many hidden tiles
+/// walked that list once per tile with a call by address per node; here the walk is a loop.
+pub fn list_find(e: &mut Engine, this: Ptr, wanted: Ptr<u32>, start: u32) -> u32 {
+    let mut node = start;
+    if node == 0 {
+        node = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, this));
+    }
+    // The exe steps with `0057cbe0` (the node's next at `+0`, its item at `+8`), its node variable
+    // on its stack; the step's two reads, here in place.
+    while node != 0 {
+        let current = node;
+        let item = node.wrapping_add(8);
+        node = e.mem.u32(node);
+        if e.mem.u32(wanted.addr()) == e.mem.u32(item) {
+            return current;
+        }
+    }
+    0
+}
+
 // Typed from 00853130
 // Typed from 00a1e380
 /// A map's lookup (`thiscall(this, key, out)`, `NiTMapBase::GetAt`): the key's bucket from the map's

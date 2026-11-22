@@ -1256,7 +1256,7 @@ fn old_load_body(e: &mut Engine, this: Ptr<ScriptLocals>, frame: u32) {
         }
         let id = e.mem.u32(id_word);
         let variable = e.mem.f64(value);
-        script_locals_set_variable(e, this, id, variable);
+        e.call(0x005a_9290, &args![this, id, variable]);
         index += 1;
     }
     stream_read(e, flag, 1);
@@ -1301,7 +1301,7 @@ fn old_load_body(e: &mut Engine, this: Ptr<ScriptLocals>, frame: u32) {
 /// frees the effect data.
 pub fn fn_005a9d00(e: &mut Engine, this: Ptr<ScriptLocals>) {
     fn_005a8c90(e, this);
-    fn_005a8ea0(e, this);
+    e.call(0x005a_8ea0, &args![this]);
     let master = e.get(this, ScriptLocals::m_pMasterScript);
     if !master.is_null() {
         let list = e.call(SCRIPT_BUILD_LOCALS, &args![master]).ptr::<()>();
@@ -1405,7 +1405,7 @@ pub fn script_locals_load_game(e: &mut Engine, this: Ptr<ScriptLocals>, buffer: 
             }
             let id = e.mem.u32(id_word);
             let variable = e.mem.f64(value);
-            script_locals_set_variable(e, this, id, variable);
+            e.call(0x005a_9290, &args![this, id, variable]);
             index += 1;
         }
         e.mem.set_u8(effect_flag, 0);
@@ -1433,7 +1433,7 @@ pub fn script_locals_load_game(e: &mut Engine, this: Ptr<ScriptLocals>, buffer: 
                 &args![manager, master, second, this],
             );
         } else {
-            fn_005a8ea0(e, this);
+            e.call(0x005a_8ea0, &args![this]);
         }
         if e.mem.u8(action_flag) != 0 {
             script_locals_set_action_flag(e, this, 0, 0x1000);
@@ -2707,7 +2707,8 @@ pub fn script_run(
             e.set(this, Script::fQuestScriptGetSecondsBuffer, 0.0);
         }
     }
-    fn_005ae2e0(e, this);
+    // By address, as the exe calls it (the typed Script::Run calls it in its family).
+    e.call(0x005a_e2e0, &args![this]);
     result
 }
 
@@ -2777,7 +2778,7 @@ pub fn script_compile_and_run(
             if reference != 0 {
                 variables = e.call(REFERENCE_SCRIPT_VARIABLES, &args![reference]).u32();
             }
-            script_run(e, this, reference, variables, 0, 1);
+            e.call(0x005a_c1e0, &args![this, reference, variables, 0u32, 1u32]);
             e.mem.set_u8(tls + TLS_SYSTEM_OUTPUT, 0);
         }
     });

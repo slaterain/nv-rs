@@ -984,3 +984,460 @@ mod lists {
         .assert_same();
     }
 }
+
+/// The scene node's queue drain and the object half under it (`00b5fd60`, `00b5dac0`, `00b5c490`,
+/// `00b5b260`, `00b5c5c0`, `00b5b410`), against their translations. The world: the walk tests' object
+/// trees and geometries (their properties, bounds, flags and vtables), shadow scene lights with their
+/// `NiLight`s (some radius-free, some view-culled), the node's light list and queues, a parent of each
+/// kind (a room, the other kind, none) with its light array.
+///
+/// What stands in, beyond the walk tests' doubles: the locks, the light half's callees, the removal,
+/// the renderer's map release, the portal graph's update, the lists' remove-all, the reference counts
+/// (they count), the property's fence and fenced removal, the accumulator, the multibound cast and
+/// its child, and the scrap heap (a fresh block per allocation). The CRT `qsort`, the comparator and
+/// `GetLuminanceToBound` are the real translations.
+mod queue {
+    use super::{
+        bits, block, geometry, light, logged, ni_light, object, set_logged_answer, stand_ins, tree,
+        words, HALF, LOG, ONE, OTHER_RTTI, RADIUS_FREE_RTTI, TWO, VT_FN,
+    };
+    use engine_core::prelude::*;
+    use engine_core::typed::diff::{memory_differences_beside_stack, Case, Diff, Input, Value};
+    use engine_typed::lights::{self, queue};
+
+    const ROOM_RTTI: u32 = 0x0120_2828;
+    const OTHERS_RTTI: u32 = 0x0120_30b8;
+
+    fn count_up(e: &mut Engine, a: &[u32]) -> Ret {
+        let n = e.mem.u32(a[0]).wrapping_add(1);
+        e.mem.set_u32(a[0], n);
+        super::ret(n)
+    }
+
+    fn count_down(e: &mut Engine, a: &[u32]) -> Ret {
+        let n = e.mem.u32(a[0]).wrapping_sub(1);
+        e.mem.set_u32(a[0], n);
+        super::ret(n)
+    }
+
+    fn scrap_block(e: &mut Engine, a: &[u32]) -> Ret {
+        let b = e.mem.alloc(a[1].max(4));
+        super::ret(b)
+    }
+
+    /// The doubles of the drain's callees, on top of the walk tests' ones.
+    fn queue_stand_ins(e: &mut Engine) {
+        stand_ins(e);
+        e.map(0x0102_3000, 0x1000);
+        e.map(0x010a_2000, 0x1000);
+        e.map(0x011c_5000, 0x1000);
+        e.map(0x011f_6000, 0x1000);
+        e.mem.set_f32(0x0102_31d0, 150.0);
+        e.mem.set_u32(0x010a_2720, 4);
+        for (address, f) in [
+            (0x0040_fbf0u32, logged::<0x07> as AbiFn),
+            (0x00b5_cd00, logged::<0x08>),
+            (0x00b5_eca0, logged::<0x09>),
+            (0x00b5_d930, logged::<0x0a>),
+            (0x00b5_d300, logged::<0x0b>),
+            (0x00b5_ef90, logged::<0x0c>),
+            (0x00b6_d4c0, logged::<0x0d>),
+            (0x00c5_b8d0, logged::<0x0e>),
+            (0x00e7_4d40, logged::<0x0f>),
+            (0x00b7_18b0, logged::<0x10>),
+            (0x00b7_1600, logged::<0x11>),
+            (0x00b4_f5c0, logged::<0x12>),
+            (0x0065_3290, logged::<0x13>),
+            (0x00b5_aa40, logged::<0x14>),
+            (0x00aa_42e0, logged::<0x15>),
+            (0x00aa_5610, logged::<0x16>),
+        ] {
+            e.register(address, f);
+        }
+        e.register(VT_FN + 4, logged::<0x17>);
+        e.register(0x00fd_f1c0, count_up);
+        e.register(0x00fd_f1c4, count_down);
+        e.register(0x00aa_54a0, scrap_block);
+        set_logged_answer(e, 0x15, 0x0e77_0000);
+    }
+
+    /// `n` shadow scene lights in pattern `k`: their `NiLight`s at places from the case's floats at
+    /// `f`, radii 10, 0.5, 50, a radius-free one now and then; every fourth view-culled, every
+    /// third with equal luminance to the one before (the same place).
+    fn lights_of(e: &mut Engine, case: &Case, n: usize, k: usize, f: usize) -> Vec<u32> {
+        let radii = [0x4120_0000u32, HALF, 0x4248_0000];
+        let planes = [[0; 4]; 6];
+        (0..n)
+            .map(|i| {
+                let rtti = if (i + k) % 5 == 4 {
+                    RADIUS_FREE_RTTI
+                } else {
+                    OTHER_RTTI
+                };
+                let ni = ni_light(e, case, f, radii[(i / 3 + k) % 3], rtti);
+                words(
+                    e,
+                    ni + 0x8c,
+                    &[bits(case, f), [0, ONE, TWO][i / 3 % 3], TWO],
+                );
+                let l = light(e, &planes, 0, ni, 0, 0);
+                if (i + k) % 4 == 3 {
+                    e.mem.set_u16(l + 0x110, 0xff);
+                }
+                l
+            })
+            .collect()
+    }
+
+    /// A list at `list` (head, tail, count) of `elements` as `NiTListItem`s.
+    fn list(e: &mut Engine, list: u32, elements: &[u32]) {
+        let items: Vec<u32> = elements.iter().map(|_| e.mem.alloc(0xc)).collect();
+        for (i, (&item, &element)) in items.iter().zip(elements).enumerate() {
+            let next = items.get(i + 1).copied().unwrap_or(0);
+            let previous = if i == 0 { 0 } else { items[i - 1] };
+            words(e, item, &[next, previous, element]);
+        }
+        words(
+            e,
+            list,
+            &[
+                items.first().copied().unwrap_or(0),
+                items.last().copied().unwrap_or(0),
+                items.len() as u32,
+            ],
+        );
+    }
+
+    /// The scene node with its light list (`lights`) and the scene node pointer.
+    fn scene_node(e: &mut Engine, lights: &[u32]) -> u32 {
+        let node = e.mem.u32(0x011f_91c8);
+        list(e, node + 0xb4, lights);
+        node
+    }
+
+    /// The parent of kind `kind` (0 none, 1 a room, 2 the other kind, 3 some other object) holding
+    /// `lights` in its array.
+    fn parent(e: &mut Engine, kind: u32, lights: &[u32]) -> u32 {
+        let rtti = match kind {
+            0 => return 0,
+            1 => ROOM_RTTI,
+            2 => OTHERS_RTTI,
+            _ => OTHER_RTTI,
+        };
+        let p = object(e, 0x100, 0, 0, rtti);
+        let array = block(e, 4 * lights.len() as u32 + 4, lights);
+        let (at, count) = if kind == 1 {
+            (0xe0, 0xe4)
+        } else {
+            (0xb4, 0xb8)
+        };
+        e.mem.set_u32(p + at, array);
+        e.mem.set_u32(p + count, lights.len() as u32);
+        p
+    }
+
+    /// The queued object of a case: a geometry (its bound from the case's floats) or a tree.
+    fn queued_object(e: &mut Engine, case: &Case, tree_or_geometry: u32, f: usize) -> u32 {
+        if tree_or_geometry == 0 {
+            let g = geometry(e, true, 1, false);
+            let b = block(e, 0x10, &[bits(case, f), bits(case, f + 1), ONE, TWO]);
+            e.mem.set_u32(g + 0x20, b);
+            e.mem.set_u32(g + 0x30, 0);
+            g
+        } else {
+            tree(e, case, tree_or_geometry, f)
+        }
+    }
+
+    trait QueueCommon {
+        fn queue_common(self) -> Diff;
+    }
+
+    impl QueueCommon for Diff {
+        fn queue_common(self) -> Diff {
+            self.family(&lights::LIGHTS)
+                .family(&leaf::LEAVES)
+                .ignore_calls(&[0x00ec_6040])
+                .max_calls(50_000)
+                .float_sweep(64)
+        }
+    }
+
+    #[test]
+    fn lights_update_start() {
+        // The object (a geometry, or a tree pattern); its parent's kind; the skip and collect
+        // flags; the number of lights and their pattern; the multibound cast's answer; floats for
+        // the lights' and the object's places.
+        Diff::new(entry!(0x00b5_dac0, queue::update_start(u32, u32, u32, u32) -> u8))
+            .queue_common()
+            .inputs(&[
+                Input::Of(&[0, 1, 4, 5]),
+                Input::Of(&[0, 1, 2, 3]),
+                Input::Flag,
+                Input::Flag,
+                Input::Of(&[3, 0, 1, 7]),
+                Input::Of(&[0, 1, 2]),
+                Input::Flag,
+                Input::F32,
+                Input::F32Swept(ONE),
+            ])
+            .max_cases(400)
+            .setup(|e, case| {
+                queue_stand_ins(e);
+                let lights = lights_of(e, case, case.word(4) as usize, case.word(5) as usize, 7);
+                let node = scene_node(e, &lights);
+                let object = queued_object(e, case, case.word(0), 7);
+                let p = parent(e, case.word(1), &lights);
+                e.mem.set_u32(object + 0x18, p);
+                // The multibound cast: none, or the node itself with its first child indexed.
+                if case.word(6) == 1 && case.word(0) != 0 {
+                    set_logged_answer(e, 0x13, object);
+                    let first = e.mem.u32(e.mem.u32(object + 0xa0));
+                    set_logged_answer(e, 0x14, first);
+                }
+                vec![object, node, case.word(2), case.word(3)]
+            })
+            .run()
+            .assert_same();
+    }
+
+    /// The inputs of the per-geometry update and its walk: a null node (the accumulator's, or the
+    /// pointer's); the property's kind (as made, none, -1, 13); the candidates' kind; the number of
+    /// lights; the tree pattern; floats.
+    const GEOMETRY_INPUTS: [Input; 7] = [
+        Input::Flag,
+        Input::Of(&[1, 0, 0xffff_ffff, 13]),
+        Input::Of(&[0, 1, 2]),
+        Input::Of(&[3, 0, 5]),
+        Input::Of(&[0, 1, 4, 5]),
+        Input::F32,
+        Input::F32Swept(ONE),
+    ];
+
+    /// The world of a per-geometry case: the geometry (`tree_pattern` 0) or a tree; answers the
+    /// call's words.
+    fn geometry_case(e: &mut Engine, case: &Case, tree_pattern: u32) -> Vec<u32> {
+        queue_stand_ins(e);
+        let lights = lights_of(e, case, case.word(3) as usize, 1, 5);
+        let node = scene_node(e, &lights);
+        let accumulator = block(e, 0x200, &[]);
+        e.mem.set_u32(
+            accumulator + 0x194,
+            if case.word(0) == 1 { 0 } else { node },
+        );
+        set_logged_answer(e, 0x12, accumulator);
+        let object = queued_object(e, case, tree_pattern, 5);
+        if tree_pattern == 0 {
+            match case.word(1) {
+                0 => e.mem.set_u32(object + 0xa8, 0),
+                1 => {}
+                kind => {
+                    let p = e.mem.u32(object + 0xa8);
+                    e.mem.set_u32(p + 0x1c, kind);
+                }
+            }
+        }
+        let rooms = if case.word(2) == 1 {
+            parent(e, 1, &lights)
+        } else {
+            0
+        };
+        let others = if case.word(2) == 2 {
+            parent(e, 2, &lights)
+        } else {
+            0
+        };
+        let given = if case.word(0) == 1 { 0 } else { node };
+        vec![object, given, 0, rooms, others]
+    }
+
+    #[test]
+    fn lights_update_geometry() {
+        Diff::new(entry!(0x00b5_b260, queue::update_geometry(u32, u32, u32, u32, u32) -> u8))
+            .queue_common()
+            .inputs(&GEOMETRY_INPUTS)
+            .max_cases(300)
+            .setup(|e, case| geometry_case(e, case, 0))
+            .run()
+            .assert_same();
+    }
+
+    #[test]
+    fn lights_update_tree() {
+        Diff::new(entry!(0x00b5_c490, queue::update_tree(u32, u32, u32, u32, u32) -> u8))
+            .queue_common()
+            .inputs(&GEOMETRY_INPUTS)
+            .max_cases(300)
+            .setup(|e, case| geometry_case(e, case, case.word(4)))
+            .run()
+            .assert_same();
+    }
+
+    /// The world of a lamp-array case: the zero-ended array of 0, 1, 3 or 6 lamps and the geometry
+    /// (`tree_pattern` 0) or a tree; answers the call's words.
+    fn list_case(e: &mut Engine, case: &Case, tree_pattern: u32) -> Vec<u32> {
+        queue_stand_ins(e);
+        let lights = lights_of(e, case, case.word(1) as usize, 0, 2);
+        let mut zero_ended = lights.clone();
+        zero_ended.push(0);
+        let array = block(e, 4 * zero_ended.len() as u32, &zero_ended);
+        let object = queued_object(e, case, tree_pattern, 2);
+        vec![object, 0, array, 0]
+    }
+
+    const LIST_INPUTS: [Input; 4] = [
+        Input::Of(&[0, 1, 4, 5]),
+        Input::Of(&[3, 0, 1, 6]),
+        Input::F32,
+        Input::F32Swept(ONE),
+    ];
+
+    #[test]
+    fn lights_update_geometry_list() {
+        Diff::new(entry!(0x00b5_b410, queue::update_geometry_list(u32, u32, u32, u32) -> u8))
+            .queue_common()
+            .inputs(&LIST_INPUTS)
+            .max_cases(100)
+            .setup(|e, case| list_case(e, case, 0))
+            .run()
+            .assert_same();
+    }
+
+    #[test]
+    fn lights_update_tree_list() {
+        Diff::new(entry!(0x00b5_c5c0, queue::update_tree_list(u32, u32, u32, u32) -> u8))
+            .queue_common()
+            .inputs(&LIST_INPUTS)
+            .max_cases(100)
+            .setup(|e, case| list_case(e, case, case.word(0)))
+            .run()
+            .assert_same();
+    }
+
+    /// The light table (`NV_LIGHT_TABLE`) on and off give the same memory after a drain (every
+    /// lamp's geometry list, every property's lamp list and fence, the flags), save the log of
+    /// the doubles; with it on, fewer kind calls are made.
+    #[test]
+    fn lights_table_gives_the_same_lists() {
+        let mut fewer = false;
+        for k in 0..12u32 {
+            let case = Case(vec![
+                Value::Word(k % 3),
+                Value::Word((k / 3) % 3),
+                Value::Word(k % 3),
+                Value::Word([0, 1, 3][(k % 3) as usize]),
+                Value::Word(k % 2),
+                Value::F32([0, ONE, HALF, 0xc0a0_0000][(k % 4) as usize]),
+                Value::F32(ONE),
+            ]);
+            let run = |table: bool| {
+                let mut e = Engine::new();
+                queue::force_light_table(Some(table));
+                let node = drain_world(&mut e, &case);
+                e.call(0x00b5_fd60, &[node]);
+                queue::force_light_table(None);
+                e
+            };
+            let off = run(false);
+            let on = run(true);
+            let differences: Vec<u32> = memory_differences_beside_stack(&off, &on, 64)
+                .into_iter()
+                .filter(|a| !(LOG..LOG + 0x4000).contains(a))
+                .collect();
+            assert!(
+                differences.is_empty(),
+                "case {k}: memory differs at {differences:08x?}"
+            );
+            let kind_calls = |e: &Engine| {
+                let n = e.mem.u32(LOG);
+                (0..n.min(0x7c0))
+                    .filter(|i| e.mem.u32(LOG + 4 + 8 * i) == 0xff08)
+                    .count()
+            };
+            assert!(kind_calls(&on) <= kind_calls(&off), "case {k}");
+            fewer |= kind_calls(&on) < kind_calls(&off);
+        }
+        assert!(fewer, "the table never saved a kind call: it was not used");
+    }
+
+    /// The drain's world of a case: queued lights to add (shadow casters or not), to update
+    /// (dynamic or not), to remove (a shadow caster with a map or not); queued objects in both
+    /// queues (geometries and trees, near or far); a portal graph or none; floats for the places.
+    /// Answers the node.
+    fn drain_world(e: &mut Engine, case: &Case) -> u32 {
+        queue_stand_ins(e);
+        let lights = lights_of(e, case, 6, 1, 5);
+        let node = scene_node(e, &lights);
+        // Lights queued to add and to update, flags by position.
+        let queued: Vec<u32> = (0..case.word(0) as usize + 1)
+            .map(|i| {
+                let l = lights[i];
+                e.mem.set_u8(l + 0xec, u8::from(i == 1));
+                e.mem.set_u8(l + 0xfc, u8::from(i != 1));
+                l
+            })
+            .collect();
+        list(e, node + 0xe4, &queued[..case.word(0) as usize]);
+        list(
+            e,
+            node + 0xfc,
+            &queued[..case.word(1).min(queued.len() as u32) as usize],
+        );
+        // Lights queued for removal, each with a reference count; the first a shadow
+        // caster holding a map.
+        let removed: Vec<u32> = (0..case.word(2) as usize)
+            .map(|i| {
+                let l = object(e, 0x250, 0, 0, OTHER_RTTI);
+                e.mem.set_u32(l + 4, 1);
+                if i == 0 {
+                    e.mem.set_u8(l + 0xec, 1);
+                    let map = object(e, 0x20, 0, 0, OTHER_RTTI);
+                    e.mem.set_u32(map + 4, 1);
+                    e.mem.set_u32(l + 0x10c, map);
+                }
+                l
+            })
+            .collect();
+        list(e, node + 0xf0, &removed);
+        e.mem.set_u32(0x011f_91a8, 0x0e55_0000);
+        // Queued objects: geometries and trees, one far (radius 200).
+        let objects: Vec<u32> = (0..case.word(3) as usize)
+            .map(|i| {
+                let o = queued_object(e, case, [0, 1, 5][i % 3], 5);
+                if i == 2 {
+                    let b = e.mem.u32(o + 0x20);
+                    e.mem.set_f32(b + 0xc, 200.0);
+                }
+                o
+            })
+            .collect();
+        let split = objects.len() / 2;
+        list(e, node + 0x114, &objects[..split]);
+        list(e, node + 0x108, &objects[split..]);
+        if case.word(4) == 1 {
+            e.mem.set_u32(node + 0x1e0, 0x0e56_0000);
+        }
+        words(e, 0x011f_9ea0, &[3, 1]);
+        words(e, 0x011f_9ec0, &[4, 2]);
+        node
+    }
+
+    #[test]
+    fn lights_queue_drain() {
+        Diff::new(entry!(0x00b5_fd60, queue::drain(Ptr<_>)))
+            .queue_common()
+            .inputs(&[
+                Input::Of(&[0, 1, 2]),
+                Input::Of(&[0, 1, 2]),
+                Input::Of(&[0, 1, 2]),
+                Input::Of(&[0, 1, 3]),
+                Input::Flag,
+                Input::F32,
+                Input::F32Swept(ONE),
+            ])
+            .max_cases(300)
+            .setup(|e, case| vec![drain_world(e, case)])
+            .run()
+            .assert_same();
+    }
+}

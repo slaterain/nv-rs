@@ -624,7 +624,6 @@ pub fn set_world_transform(
 /// The current pass (`0126f74c`): its vertex shader (+0x5c) holds the device (+0x20) whose slot 0x178
 /// (`SetVertexShaderConstantF`) takes constants; its stages are at +0x24.
 const CURRENT_PASS: u32 = 0x0126_f74c;
-const DEVICE_SET_VERTEX_CONSTANTS: u32 = 0x178;
 /// `-1.0` (`double`, `0101a6b0`).
 const MINUS_ONE: u32 = 0x0101_a6b0;
 
@@ -634,12 +633,7 @@ fn set_vertex_constants(e: &mut Engine, register: u32, data: u32, count: u32) {
     let shader = e.global::<u32>(pass.wrapping_add(0x5c));
     let device = e.global::<u32>(shader.wrapping_add(0x20));
     capture::own_image(e, data, count.wrapping_mul(16), |e, data| {
-        engine_core::real_threads::device_vcall(
-            e,
-            device,
-            DEVICE_SET_VERTEX_CONSTANTS,
-            &args![register, data, count],
-        );
+        engine_core::real_threads::device_set_vertex_constants(e, device, register, data, count);
     });
 }
 
