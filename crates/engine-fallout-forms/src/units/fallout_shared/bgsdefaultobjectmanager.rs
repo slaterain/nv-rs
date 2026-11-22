@@ -122,7 +122,10 @@ pub fn bgs_default_object_manager_constructor(e: &mut Engine, this: Ptr) -> Ptr 
     e.mem.set_u32(this.addr(), VTABLE);
     e.call(SET_FORM_TYPE, &args![this, 0x64u32]);
     e.call(SET_FORM_ID, &args![this, 0x31u32, 1u32]);
-    e.call(RETURN_TRUE_00401290, &args![this, EDITOR_ID]);
+    // JohnnyGuitar NVSE's setter seam at the call `0x58D7BC`.
+    if e.site(0x0058_d7bc, &[this.addr(), EDITOR_ID]).is_none() {
+        e.call(RETURN_TRUE_00401290, &args![this, EDITOR_ID]);
+    }
     fn_0058d840(e, this);
     this
 }

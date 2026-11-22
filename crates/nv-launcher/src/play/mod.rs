@@ -7,7 +7,7 @@
 //!   Play.exe                  the start screen (`> Play` plays)
 //!   Play.exe --mods           plays with the mods in the `mods` folder
 //!   Play.exe --import-saves   copies the saves from Documents\My Games\FalloutNV (read only)
-//!   Play.exe --install-mods   the mod installer, in a console window of its own
+//!   Play.exe --install-mods   the mod installer, in the launcher's terminal
 //!   Play.exe --check          everything up to starting the game, then says what it found
 //!   --game FOLDER             the game's folder, instead of looking for it
 //!   --from FOLDER             with --import-saves: where to copy saves from
@@ -1007,29 +1007,45 @@ fn parse_options(raw: &[String]) -> Options {
 }
 
 /// `--install-mods`: the mod installer (nv-rs's own program with `--install-mods`, the same text
-/// chooser as `play.sh --install-mods`) in a console window of its own, for the game found as for
-/// play; Play.exe waits for it. Mods go to `userdatamod installs`, archives are read from `mods`.
+/// chooser as `play.sh --install-mods`) for the game found as for play, its lines in the
+/// launcher's terminal and its questions answered at the prompt (`crate::piped`), with no console
+/// window; without a launcher window that takes typed lines, in a console window of its own.
+/// Mods go to `userdata\mod installs`, archives are read from `mods`.
 fn install_mods(package: &Package, options: &Options) -> Result<i32, Stop> {
     let (game, _) = find_game(package, options.game.as_deref())?;
     clear_for_writing(package, Some(&game.folder))?;
-    let status = Command::new(&package.game_exe)
+    let mut command = Command::new(&package.game_exe);
+    command
         .arg("--install-mods")
         .arg(&game.folder)
         .arg(package.userdata.join("mod installs"))
         .arg(package.root.join("mods"))
-        .current_dir(&package.userdata)
-        .creation_flags(CREATE_NEW_CONSOLE)
-        .status()
-        .map_err(|e| Stop {
-            code: STOP_LOCATION,
-            message: format!(
-                "nv-rs could not start its mod installer ({e}):
-{}",
-                package.game_exe.display()
-            ),
-        })?;
-    package.log(&format!("mod installer ended: {status}"));
-    Ok(status.code().unwrap_or(1))
+        .current_dir(&package.userdata);
+    let code = if crate::piped::window_lines() {
+        command.creation_flags(CREATE_NO_WINDOW);
+        crate::piped::run(
+            command,
+            &format!("its mod installer ({})", package.game_exe.display()),
+            |_| {},
+        )
+    } else {
+        // No launcher window takes typed lines (it could not be drawn, or a scripted run): the
+        // installer in a console window of its own, as before the launcher showed it.
+        command
+            .creation_flags(CREATE_NEW_CONSOLE)
+            .status()
+            .map_err(|e| Stop {
+                code: STOP_LOCATION,
+                message: format!(
+                    "nv-rs could not start its mod installer ({e}):\n{}",
+                    package.game_exe.display()
+                ),
+            })?
+            .code()
+            .unwrap_or(1)
+    };
+    package.log(&format!("mod installer ended: {code}"));
+    Ok(code)
 }
 
 /// `--import-saves`: the player's saves copied into the package, never the other way, never over a

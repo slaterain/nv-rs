@@ -24,6 +24,7 @@ mod gpu;
 mod intro;
 mod pacing;
 mod paste;
+mod piped;
 mod place;
 #[cfg(windows)]
 mod play;
