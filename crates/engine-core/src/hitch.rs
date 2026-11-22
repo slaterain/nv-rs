@@ -111,10 +111,23 @@ pub enum Count {
     GridCellsMade,
     GridLandNs,
     GridWaterNs,
+    /// The rest of the grid array's load (`TES::GridArrayLoad`, `00452ff0`), main's time in each part (ns): the first
+    /// loop over the grid (each slot's `TES::LoadGridCell` with the exterior buffer and the load screen's refresh), the
+    /// Havok world's `+0x18` lock count dropped after each loop (`00c6b540`: only when it reaches zero are the bodies,
+    /// phantoms, actions and constraints queued while the world was locked added, the bodies' broad-phase inserts),
+    /// the save/load object's and the script context's pass between the loops (`008727b0`'s branch, `008492b0`), and
+    /// the second loop's two parts for each cell in load state 5: its references attached (`0054bcf0`: the cell's
+    /// scripts, each reference's model queued and its 3D attached) with the buffer entry, and its 3D's properties and
+    /// update (`NiAVObject::UpdateProperties`, `00a59c60`).
+    GridLoadCellsNs,
+    GridLoadHavokNs,
+    GridLoadPassNs,
+    GridLoadRefsNs,
+    GridLoad3dNs,
 }
 
 /// How many counts there are.
-pub const COUNTS: usize = Count::GridWaterNs as usize + 1;
+pub const COUNTS: usize = Count::GridLoad3dNs as usize + 1;
 
 /// Times main's work from [`Timed::main`] to its drop into a `...Ns` count: nothing on another game thread or with
 /// the log off. One clock read at each end, at places that run a few times a frame at most and do far more work.

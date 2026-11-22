@@ -842,7 +842,18 @@ impl Frame {
                 ("terrain", Count::GridTerrainNs),
             ],
         );
-        // Per grid cell (`TES::LoadGridCell`): its own entry, since it also runs outside a grid shift.
+        // The grid array's load (`TES::GridArrayLoad`) and, inside its first loop, each grid cell's
+        // (`TES::LoadGridCell`): entries of their own, since both also run outside a grid shift.
+        parts(
+            "grid load parts",
+            &[
+                ("cells", Count::GridLoadCellsNs),
+                ("Havok drop", Count::GridLoadHavokNs),
+                ("pass", Count::GridLoadPassNs),
+                ("references", Count::GridLoadRefsNs),
+                ("3D update", Count::GridLoad3dNs),
+            ],
+        );
         parts(
             "grid cell parts",
             &[
@@ -1289,6 +1300,21 @@ mod tests {
             "{line}"
         );
         assert!(line.contains("2 grid cells made"), "{line}");
+        // The grid array load's parts come between the shift's and the cells', in the load's order.
+        assert!(!line.contains("grid load parts"), "none counted: {line}");
+        f.game[Count::GridLoadCellsNs as usize] = 600_000;
+        f.game[Count::GridLoadHavokNs as usize] = 1_700_000;
+        f.game[Count::GridLoadPassNs as usize] = 90_000;
+        f.game[Count::GridLoadRefsNs as usize] = 2_500_000;
+        f.game[Count::GridLoad3dNs as usize] = 400_000;
+        let line = f.line();
+        assert!(
+            line.contains(
+                "load 5.1, grid load parts ms: cells 0.6, Havok drop 1.7, references 2.5, 3D update 0.4, \
+                 grid cell parts ms: cell find 4.2"
+            ),
+            "{line}"
+        );
         assert!(
             !line.contains("grid update"),
             "under a tenth of a ms: {line}"
