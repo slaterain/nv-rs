@@ -457,6 +457,20 @@ pub fn replay_draw_digests(
     to: u64,
     cache: Option<std::path::PathBuf>,
 ) -> Result<Option<Vec<(u64, u64)>>, d3d9_stream::wire::WireError> {
+    replay_draw_digests_with(bytes, records, false, from, to, cache)
+}
+
+/// [`replay_draw_digests`] with the registers read from storage or not
+/// ([`device::Device::set_storage_regs`]). None also where `storage` is asked and the adapter
+/// cannot.
+pub fn replay_draw_digests_with(
+    bytes: &[u8],
+    records: bool,
+    storage: bool,
+    from: u64,
+    to: u64,
+    cache: Option<std::path::PathBuf>,
+) -> Result<Option<Vec<(u64, u64)>>, d3d9_stream::wire::WireError> {
     let mut b = WgpuBackend::new(Output::Offscreen);
     if let Some(dir) = cache {
         b = b.with_cache_dir(dir);
@@ -471,6 +485,9 @@ pub fn replay_draw_digests(
         match b.device() {
             Some(d) => {
                 if !set {
+                    if d.set_storage_regs(storage) != storage {
+                        return Ok(None);
+                    }
                     d.set_draw_records(records);
                     d.record_draw_digests(true);
                     set = true;

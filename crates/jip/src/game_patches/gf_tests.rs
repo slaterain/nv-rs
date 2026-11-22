@@ -664,6 +664,26 @@ const P3_FORM: u32 = P3;
 const P3_VTABLE: u32 = P3 + 0x400;
 const P3_SAVE_SLOT: u32 = 0x00fe_3240;
 
+/// D02 (`SAFE_WRITE_BUF(0x86B1EE, 5-byte NOP)` in JIP's PostLoad): JIP's own, so installed with
+/// the row off its handler is at `0x86B1EE` and takes the start-up call away (no words); not
+/// installed, nothing answers there.
+#[test]
+fn d02_takes_the_start_up_refresh_away_whenever_installed() {
+    assert_eq!(START_UP_PROCESS_REFRESH.addr(), 0x0086_b1ee);
+    assert!(AREA.jip_sites.contains(&0x0086_b1ee));
+    assert!(!AREA.fix_sites.contains(&0x0086_b1ee));
+    let mut e = world_as(true);
+    super::super::set_row(&mut e, false);
+    assert_eq!(
+        e.site_owners(START_UP_PROCESS_REFRESH.addr()).to_vec(),
+        vec![Owner::Jip]
+    );
+    assert_eq!(e.site(START_UP_PROCESS_REFRESH.addr(), &[]), Some(1));
+    let mut e = world_as(false);
+    super::super::set_row(&mut e, true);
+    assert_eq!(e.site(START_UP_PROCESS_REFRESH.addr(), &[]), None);
+}
+
 /// Installed: G47's two seams and H22's wrap are JIP's own (in with the row off); G45's four and
 /// G52's seam come with the row's installer.
 #[test]

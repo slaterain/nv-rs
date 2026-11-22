@@ -498,10 +498,9 @@ pub(crate) fn return_reflection(e: &mut Engine) {
 // critical section (held from the lock to the unlock) and the reference counts given back (a
 // declaration or an index buffer released) are here too.
 
-/// `IDirect3DDevice9::SetTransform` (slot 44), `SetStreamSource` (slot 100) and `SetIndices` (slot
-/// 104); `D3DTS_WORLD`.
+/// `IDirect3DDevice9::SetTransform` (slot 44) and `SetIndices` (slot 104) (`SetStreamSource` goes
+/// through the writer); `D3DTS_WORLD`.
 const DEVICE_SET_TRANSFORM: u32 = 0xb0;
-const DEVICE_SET_STREAM_SOURCE: u32 = 0x190;
 const DEVICE_SET_INDICES: u32 = 0x1a0;
 const TRANSFORM_WORLD: u32 = 0x100;
 /// `IUnknown::Release` (slot 2).
@@ -608,12 +607,7 @@ pub(crate) fn device_world_transform(e: &mut Engine, renderer: u32, world: u32) 
 #[inline(always)]
 pub(crate) fn device_stream(e: &mut Engine, renderer: u32, buffer: u32, stride: u32) {
     let device = super::packet::renderer_device(e, renderer);
-    engine_core::real_threads::device_vcall(
-        e,
-        device,
-        DEVICE_SET_STREAM_SOURCE,
-        &args![0u32, buffer, 0u32, stride],
-    );
+    engine_core::real_threads::device_set_stream_source(e, device, 0, buffer, 0, stride);
 }
 
 /// The device's indices (`SetIndices`) (condition 2).
@@ -742,7 +736,7 @@ pub(crate) fn device_vertex_constants_of(
     // float or integer register, 4 a boolean).
     let size = if slot == 0x188 { 4 } else { 16 };
     capture::own_image(e, data, count.wrapping_mul(size), |e, data| {
-        engine_core::real_threads::device_vcall(e, device, slot, &args![register, data, count])
+        engine_core::real_threads::device_set_constants(e, device, slot, register, data, count)
             .u32()
     })
 }

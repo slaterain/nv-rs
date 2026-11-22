@@ -5513,6 +5513,311 @@ fn device_vcall_direct(e: &mut Engine, this: u32, slot: u32, args: &[u32]) -> Re
     ret
 }
 
+/// The platform layer's Direct3D 9 device functions the world draw calls most, as plain Rust
+/// functions: the typed draw code's writer (`NV_DRAW_WRITER`, on by default; `=0` sends every call
+/// through [`device_vcall`]). Each entry is the function registered at the device slot (the words
+/// form, as the vtable reaches it) and the same function taking its arguments as they are.
+/// [`device_set_render_state`] and its kin call the second where [`device_vcall`] would have run
+/// the first: the same function, the same order, the same locks; only the slot's look-ups and the
+/// packing of the arguments into words go.
+#[allow(clippy::type_complexity)]
+pub struct DeviceWriter {
+    /// Where the layer put its device functions: slot byte offset `s`'s at `code + s` (the device's
+    /// vtable holds these words while nothing replaced them).
+    pub code: u32,
+    pub render_state: (AbiFn, fn(&mut Engine, u32, u32, u32) -> u32),
+    pub stage_state: (AbiFn, fn(&mut Engine, u32, u32, u32, u32) -> u32),
+    pub sampler_state: (AbiFn, fn(&mut Engine, u32, u32, u32, u32) -> u32),
+    pub texture: (AbiFn, fn(&mut Engine, u32, u32, u32) -> u32),
+    pub stream_source: (AbiFn, fn(&mut Engine, u32, u32, u32, u32, u32) -> u32),
+    pub draw_primitive: (AbiFn, fn(&mut Engine, u32, u32, u32, u32) -> u32),
+    pub draw_indexed_primitive: (
+        AbiFn,
+        fn(&mut Engine, u32, u32, u32, u32, u32, u32, u32) -> u32,
+    ),
+    pub vertex_constants: (AbiFn, fn(&mut Engine, u32, u32, u32, u32) -> u32),
+    pub pixel_constants: (AbiFn, fn(&mut Engine, u32, u32, u32, u32) -> u32),
+}
+
+static DEVICE_WRITER: std::sync::OnceLock<&'static DeviceWriter> = std::sync::OnceLock::new();
+
+/// `NV_DRAW_WRITER`: 0 not read yet, 1 on, 2 off.
+static DEVICE_WRITER_ON: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// The platform layer gives the typed draw code its device functions ([`DeviceWriter`]); the first
+/// call wins (the layer is the same for the whole program).
+pub fn install_device_writer(writer: &'static DeviceWriter) {
+    let _ = DEVICE_WRITER.set(writer);
+}
+
+/// The writer when installed and on (`NV_DRAW_WRITER` is not `0`).
+#[inline(always)]
+fn device_writer() -> Option<&'static DeviceWriter> {
+    let w = DEVICE_WRITER.get()?;
+    match DEVICE_WRITER_ON.load(Ordering::Relaxed) {
+        1 => Some(w),
+        2 => None,
+        _ => {
+            let on = std::env::var("NV_DRAW_WRITER").map_or(true, |v| v != "0");
+            DEVICE_WRITER_ON.store(if on { 1 } else { 2 }, Ordering::Relaxed);
+            on.then_some(w)
+        }
+    }
+}
+
+/// [`device_vcall`] of `slot` with `args`, the writer's function `pick` names called as `typed`
+/// when that call would run it: direct calls on, no diagnostic, the device's vtable word for `slot`
+/// still the layer's own (read at every call: a mod that replaced the slot, or anything that
+/// patched the vtable, gets the call by its word as before), and the function registered there the
+/// layer's (a wrap of ours registered over it gets the call by address as before). Anything else
+/// takes [`device_vcall`]'s path. Cost of the tests: two memory reads and a compare for the slot,
+/// one pointer compare for the registration.
+#[inline(always)]
+fn device_typed(
+    e: &mut Engine,
+    this: u32,
+    slot: u32,
+    args: &[u32],
+    pick: fn(&'static DeviceWriter) -> AbiFn,
+    typed: impl FnOnce(&mut Engine, &'static DeviceWriter) -> u32,
+) -> Ret {
+    if DIRECT.with(Cell::get) == 0 || e.diagnosing() {
+        return e.vcall(this, slot, args);
+    }
+    let Some(w) = device_writer() else {
+        return device_vcall_direct(e, this, slot, args);
+    };
+    let addr = e.mem.u32(e.mem.u32(this).wrapping_add(slot));
+    if addr != w.code.wrapping_add(slot) || args.len() >= 16 {
+        return device_vcall_direct(e, this, slot, args);
+    }
+    let expect = pick(w);
+    let mut words = [0u32; 16];
+    words[0] = this;
+    words[1..=args.len()].copy_from_slice(args);
+    let words = &words[..=args.len()];
+    // From here [`device_vcall_direct`]'s steps, with `typed` where it would call `expect`.
+    DIRECT_CALLS.with(|c| c.set(c.get() + 1));
+    let Some(r) = e.real.as_ref() else {
+        return e.call_typed(addr, expect, words, |e| typed(e, w));
+    };
+    let world = r.world;
+    let _held = device_call_lock(e, world);
+    if world.late_count.load(Ordering::Acquire) != e.real.as_ref().map_or(0, |r| r.late_seen) {
+        sync_registered(e);
+    }
+    let Some(f) = e.real.as_ref().and_then(|r| r.locked.device(addr)) else {
+        drop(_held);
+        return e.vcall(this, slot, args);
+    };
+    e.call_stack.push(addr);
+    let ret = if crate::abi::same_fn(f, expect) {
+        crate::abi::RetVal::into_ret(typed(e, w))
+    } else {
+        f(e, words)
+    };
+    e.call_stack.pop();
+    ret
+}
+
+/// `SetRenderState(state, value)` on `device` through the writer ([`device_typed`]).
+#[inline]
+pub fn device_set_render_state(e: &mut Engine, device: u32, state: u32, value: u32) -> Ret {
+    device_typed(
+        e,
+        device,
+        0xe4,
+        &[state, value],
+        |w| w.render_state.0,
+        |e, w| (w.render_state.1)(e, device, state, value),
+    )
+}
+
+/// `SetTextureStageState(stage, kind, value)` on `device` through the writer ([`device_typed`]).
+#[inline]
+pub fn device_set_stage_state(
+    e: &mut Engine,
+    device: u32,
+    stage: u32,
+    kind: u32,
+    value: u32,
+) -> Ret {
+    device_typed(
+        e,
+        device,
+        0x10c,
+        &[stage, kind, value],
+        |w| w.stage_state.0,
+        |e, w| (w.stage_state.1)(e, device, stage, kind, value),
+    )
+}
+
+/// `SetSamplerState(sampler, kind, value)` on `device` through the writer ([`device_typed`]).
+#[inline]
+pub fn device_set_sampler_state(
+    e: &mut Engine,
+    device: u32,
+    sampler: u32,
+    kind: u32,
+    value: u32,
+) -> Ret {
+    device_typed(
+        e,
+        device,
+        0x114,
+        &[sampler, kind, value],
+        |w| w.sampler_state.0,
+        |e, w| (w.sampler_state.1)(e, device, sampler, kind, value),
+    )
+}
+
+/// `SetTexture(sampler, texture)` on `device` through the writer ([`device_typed`]).
+#[inline]
+pub fn device_set_texture(e: &mut Engine, device: u32, sampler: u32, texture: u32) -> Ret {
+    device_typed(
+        e,
+        device,
+        0x104,
+        &[sampler, texture],
+        |w| w.texture.0,
+        |e, w| (w.texture.1)(e, device, sampler, texture),
+    )
+}
+
+/// `SetStreamSource(stream, buffer, offset, stride)` on `device` through the writer
+/// ([`device_typed`]).
+#[inline]
+pub fn device_set_stream_source(
+    e: &mut Engine,
+    device: u32,
+    stream: u32,
+    buffer: u32,
+    offset: u32,
+    stride: u32,
+) -> Ret {
+    device_typed(
+        e,
+        device,
+        0x190,
+        &[stream, buffer, offset, stride],
+        |w| w.stream_source.0,
+        |e, w| (w.stream_source.1)(e, device, stream, buffer, offset, stride),
+    )
+}
+
+/// `DrawPrimitive(kind, start, count)` on `device` through the writer ([`device_typed`]).
+#[inline]
+pub fn device_draw_primitive(
+    e: &mut Engine,
+    device: u32,
+    kind: u32,
+    start: u32,
+    count: u32,
+) -> Ret {
+    device_typed(
+        e,
+        device,
+        0x144,
+        &[kind, start, count],
+        |w| w.draw_primitive.0,
+        |e, w| (w.draw_primitive.1)(e, device, kind, start, count),
+    )
+}
+
+/// `DrawIndexedPrimitive(kind, base vertex, min index, vertices, start index, count)` on `device`
+/// through the writer ([`device_typed`]).
+#[inline]
+#[allow(clippy::too_many_arguments)]
+pub fn device_draw_indexed_primitive(
+    e: &mut Engine,
+    device: u32,
+    kind: u32,
+    base_vertex: u32,
+    min_index: u32,
+    vertices: u32,
+    start_index: u32,
+    count: u32,
+) -> Ret {
+    device_typed(
+        e,
+        device,
+        0x148,
+        &[kind, base_vertex, min_index, vertices, start_index, count],
+        |w| w.draw_indexed_primitive.0,
+        |e, w| {
+            (w.draw_indexed_primitive.1)(
+                e,
+                device,
+                kind,
+                base_vertex,
+                min_index,
+                vertices,
+                start_index,
+                count,
+            )
+        },
+    )
+}
+
+/// `SetVertexShaderConstantF(start, data, count)` on `device` through the writer
+/// ([`device_typed`]): the registers are read at `data`, the address the caller hands over.
+#[inline]
+pub fn device_set_vertex_constants(
+    e: &mut Engine,
+    device: u32,
+    start: u32,
+    data: u32,
+    count: u32,
+) -> Ret {
+    device_typed(
+        e,
+        device,
+        0x178,
+        &[start, data, count],
+        |w| w.vertex_constants.0,
+        |e, w| (w.vertex_constants.1)(e, device, start, data, count),
+    )
+}
+
+/// The constant set of device slot `slot` (`start, data, count`) on `device`: the float sets
+/// (0x178 vertex, 0x1b4 pixel) through the writer, the integer and boolean ones by
+/// [`device_vcall`].
+#[inline]
+pub fn device_set_constants(
+    e: &mut Engine,
+    device: u32,
+    slot: u32,
+    start: u32,
+    data: u32,
+    count: u32,
+) -> Ret {
+    match slot {
+        0x178 => device_set_vertex_constants(e, device, start, data, count),
+        0x1b4 => device_set_pixel_constants(e, device, start, data, count),
+        _ => device_vcall(e, device, slot, &[start, data, count]),
+    }
+}
+
+/// `SetPixelShaderConstantF(start, data, count)` on `device` through the writer
+/// ([`device_typed`]): the registers are read at `data`, the address the caller hands over.
+#[inline]
+pub fn device_set_pixel_constants(
+    e: &mut Engine,
+    device: u32,
+    start: u32,
+    data: u32,
+    count: u32,
+) -> Ret {
+    device_typed(
+        e,
+        device,
+        0x1b4,
+        &[start, data, count],
+        |w| w.pixel_constants.0,
+        |e, w| (w.pixel_constants.1)(e, device, start, data, count),
+    )
+}
+
 /// The world draw's hold of the device lock with real threads (`NV_DRAW_DIRECT`): what a wait, a
 /// waiting thread, the half's end, a panic and a nested call do to it. Each device call here is
 /// [`device_call_lock`], the locking every direct device call goes through. Every wait is bounded:
