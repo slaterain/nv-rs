@@ -164,9 +164,9 @@ pub const ROWS: &[Row] = &[
     },
     Row {
         bit: stewie::RENDERED_MENU_BEHIND_TRADE,
-        function: "MenuFixes",
+        function: "fixMouseInBarterAndContainerMenusInsideTerminals",
         plan: "S0065",
-        key: "bMenuFixesRenderedMenuBehindTrade",
+        key: "bFixMouseInBarterAndContainerMenusInsideTerminals",
         tweaks: None,
         summary: "a terminal behind the barter, container or quantity menu no longer takes the mouse",
     },

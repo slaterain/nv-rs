@@ -80,7 +80,7 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
     ),
     (
         "S0065",
-        "bMenuFixesRenderedMenuBehindTrade",
+        "bFixMouseInBarterAndContainerMenusInsideTerminals",
         Row::at(WORLD_FIXES, 24),
     ),
     ("S0145", "bFixSunDirection", Row::at(WORLD_FIXES, 7)),
