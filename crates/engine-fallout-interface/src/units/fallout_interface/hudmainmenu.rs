@@ -5427,7 +5427,7 @@ pub fn hud_main_menu_update_compass(
     } else {
         1.0
     };
-    let (max_alpha, kept_opacity) = compass_max_alpha(e, compass, opacity);
+    let (max_alpha, kept_opacity) = compass_max_alpha(e, compass.addr(), opacity);
     let landmarks_list = landmarks.addr() + 4;
     let mut landmark_tiles = typed_call!(
         leaf::FAMILY,
