@@ -100,7 +100,9 @@ fn culling_fade_on_visible() {
             Input::Of(&[0, 1, 2]),
         ],
         1200,
-    );
+    )
+    .run()
+    .assert_same();
 }
 
 /// The alpha grouping on every case: fading on, the node faded in (flag 0x4000, a positive type,
@@ -128,11 +130,13 @@ fn culling_fade_on_visible_groups_alphas() {
             Input::Of(&[0, 1, 2]),
         ],
         400,
-    );
+    )
+    .run()
+    .assert_same();
 }
 
-/// The comparison of `diff` (the fade node's `OnVisible`) over `inputs`.
-fn fade_diff(diff: Diff, inputs: &[Input], max_cases: usize) {
+/// The comparison of `diff` (the fade node's `OnVisible`) over `inputs`, set up (each test runs it).
+fn fade_diff(diff: Diff, inputs: &[Input], max_cases: usize) -> Diff {
     diff.family(&culling::CULLING)
         .family(&leaf::LEAVES)
         // `_CIsqrt` and the two float getters: the typed function does them in place.
@@ -265,6 +269,4 @@ fn fade_diff(diff: Diff, inputs: &[Input], max_cases: usize) {
                 .set_u32(node + 0xc8, if case.word(3) == 1 { 50 } else { 99 });
             vec![node, process]
         })
-        .run()
-        .assert_same();
 }
