@@ -82,6 +82,7 @@ fn culling_fade_on_visible() {
     // accumulator's answer; the node's bound and child; the distance multiplier; the LOD adjust; the
     // near and far distances (near below, equal to and above far).
     fade_diff(
+        Diff::new(entry!(0x00b4_e490, fade::on_visible(Ptr<_>, Ptr<_>))),
         &[
             Input::Flag,
             Input::Of(&[0, 0x8000, 0x4000, 0x1000_0000, 0x1000_4000]),
@@ -109,6 +110,7 @@ fn culling_fade_on_visible() {
 #[test]
 fn culling_fade_on_visible_groups_alphas() {
     fade_diff(
+        Diff::new(entry!(0x00b4_e490, fade::on_visible(Ptr<_>, Ptr<_>))),
         &[
             Input::Of(&[1]),
             Input::Of(&[0x4000, 0x1000_4000]),
@@ -129,9 +131,9 @@ fn culling_fade_on_visible_groups_alphas() {
     );
 }
 
-fn fade_diff(inputs: &[Input], max_cases: usize) {
-    Diff::new(entry!(0x00b4_e490, fade::on_visible(Ptr<_>, Ptr<_>)))
-        .family(&culling::CULLING)
+/// The comparison of `diff` (the fade node's `OnVisible`) over `inputs`.
+fn fade_diff(diff: Diff, inputs: &[Input], max_cases: usize) {
+    diff.family(&culling::CULLING)
         .family(&leaf::LEAVES)
         // `_CIsqrt` and the two float getters: the typed function does them in place.
         .ignore_calls(&[0x00ec_6040, 0x0040_ebd0, 0x0040_4010])
