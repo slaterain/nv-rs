@@ -819,6 +819,24 @@ impl Frame {
             g(Count::GridUpdateNs) / TENTH_MS,
             format!("grid update {:.1} ms", ms(g(Count::GridUpdateNs))),
         );
+        // The grid shift's parts, in its order, as one entry when any is over a tenth of a millisecond.
+        let parts = [
+            ("cancel", Count::GridCancelNs),
+            ("textures", Count::GridTexturesNs),
+            ("shift", Count::GridShiftNs),
+            ("Havok", Count::GridHavokNs),
+            ("load", Count::GridLoadNs),
+            ("terrain", Count::GridTerrainNs),
+        ];
+        let shown: Vec<String> = parts
+            .iter()
+            .filter(|(_, c)| g(*c) >= TENTH_MS)
+            .map(|(name, c)| format!("{name} {:.1}", ms(g(*c))))
+            .collect();
+        put(
+            shown.len() as u64,
+            format!("grid shift parts ms: {}", shown.join(", ")),
+        );
         put(
             g(Count::CellAttachNs) / TENTH_MS,
             format!("cell attach {:.1} ms", ms(g(Count::CellAttachNs))),
@@ -1231,6 +1249,15 @@ mod tests {
             "{line}"
         );
         assert!(line.contains("cell attach 6.2 ms"), "{line}");
+        assert!(!line.contains("grid shift parts"), "none counted: {line}");
+        f.game[Count::GridShiftNs as usize] = 3_800_000;
+        f.game[Count::GridLoadNs as usize] = 5_100_000;
+        f.game[Count::GridTerrainNs as usize] = 20_000;
+        let line = f.line();
+        assert!(
+            line.contains("grid shift parts ms: shift 3.8, load 5.1"),
+            "{line}"
+        );
         assert!(
             !line.contains("grid update"),
             "under a tenth of a ms: {line}"

@@ -90,13 +90,16 @@ pub fn runner_run(
             return e.mem.u8(this.addr() + 0xa1) != 0;
         }
         if !e.get(this, ScriptRunner::m_scriptRunning).is_null() {
-            let requested_name = e.vcall(script.addr(), 0x130, &args![]).u32();
-            let running = e.get(this, ScriptRunner::m_scriptRunning);
-            let running_name = e.vcall(running.addr(), 0x130, &args![]).u32();
-            e.call(
-                0x005b_5e40,
-                &args![NESTED_RUN_MESSAGE, running_name, requested_name],
-            );
+            // 005e0dd1: JIP LN NVSE's G24 jumps over the two names and the log.
+            if !jip_skips_nested_log(e) {
+                let requested_name = e.vcall(script.addr(), 0x130, &args![]).u32();
+                let running = e.get(this, ScriptRunner::m_scriptRunning);
+                let running_name = e.vcall(running.addr(), 0x130, &args![]).u32();
+                e.call(
+                    0x005b_5e40,
+                    &args![NESTED_RUN_MESSAGE, running_name, requested_name],
+                );
+            }
             return e.mem.u8(this.addr() + 0xa1) != 0;
         }
         e.set(this, ScriptRunner::m_scriptRunning, script);
@@ -754,6 +757,15 @@ struct Line {
 fn jip_keeps_failed_script(e: &mut Engine, site: u32) -> bool {
     e.jip_patches() & engine_core::extend::jip_patches::NO_FAILED_SCRIPT_LOCKS != 0
         && e.site(site, &[]).is_some()
+}
+
+/// JIP LN NVSE's G24 (`SafeWrite16(0x5E0DD1, 0x39EB)`, step 3.9): a busy runner's jump from
+/// `0x5E0DD1` to `0x5E0E0C`, over the two editor-id reads (vtable `+0x130` of the requested and
+/// the running script) and the script log's "Nested call to ScriptRunner::Run" (`005b5e40`). The
+/// fixes' bit is tested first; true when JIP's handler at `0x5E0DD1` takes the jump.
+fn jip_skips_nested_log(e: &mut Engine) -> bool {
+    e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+        && e.site(0x005e_0dd1, &[]).is_some()
 }
 
 /// The address of if-stack level `depth` (runner +0x24, one word each).
@@ -1983,6 +1995,93 @@ mod tests {
             | engine_core::extend::jip_patches::FIXES
             | engine_core::extend::jip_patches::NO_FAILED_SCRIPT_LOCKS,
     ];
+
+    thread_local! {
+        static G24_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn g24_taken(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G24_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(1)
+    }
+
+    fn g24_none(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G24_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        None
+    }
+
+    /// A busy runner asked to run a script, the word `word` and `handler` at G24's seam: (what
+    /// `Run` answered, the names read (vtable `+0x130` calls), the script log's calls, the seam's
+    /// asks). The runner's answer byte is set before and cleared on entry, as `Run` does.
+    fn busy_run_jip(
+        word: u32,
+        handler: fn(&mut Engine, &[u32]) -> Option<u32>,
+    ) -> (bool, usize, Vec<Vec<u32>>, Vec<Vec<u32>>) {
+        G24_ASKED.with(|s| s.borrow_mut().clear());
+        let mut e = Engine::new();
+        let (runner, script, _) = run_fixture(&mut e, &[0x11, 0, 0, 0], false);
+        e.mem.set_u8(runner.addr() + 0xa1, 1);
+        let running = e.mem.alloc(4);
+        let table = e.mem.alloc(0x134);
+        e.mem.set_u32(script.addr(), table);
+        e.mem.set_u32(running, table);
+        e.mem.set_u32(table + 0x130, 0x12340000);
+        e.register_double(0x12340000, move |_, a| {
+            if a[0] == script.addr() {
+                0x2222u32
+            } else {
+                0x3333
+            }
+            .into_ret()
+        });
+        e.register_double(0x005b5e40, |_, _| Ret::default());
+        e.set(runner, ScriptRunner::m_scriptRunning, Ptr::new(running));
+        e.set_jip_patches(word);
+        e.on_site_for_test(0x005e_0dd1, handler);
+        e.call_log = Some(Vec::new());
+        let answer = e
+            .call(
+                0x005e0d20,
+                &args![runner, script, 0u32, 0u32, 0u32, false, 0u8, 0u8, 0.0f32],
+            )
+            .bool();
+        assert_eq!(e.get(runner, ScriptRunner::m_scriptRunning).addr(), running);
+        let log = e.call_log.take().unwrap();
+        let names = log.iter().filter(|c| c.0 == 0x12340000).count();
+        let logged = log
+            .iter()
+            .filter(|c| c.0 == 0x005b5e40)
+            .map(|c| c.1.clone())
+            .collect();
+        (
+            answer,
+            names,
+            logged,
+            G24_ASKED.with(|s| s.borrow().clone()),
+        )
+    }
+
+    /// G24 (`0x5E0DD1`): JIP not installed, or installed with the row off, the busy runner reads
+    /// both names and logs the nested run, the seam not asked; with the row, a taken answer skips
+    /// the names and the log (no words asked); no answer keeps them. `Run` answers the cleared
+    /// byte either way and runs nothing.
+    #[test]
+    fn jip_g24_skips_the_nested_run_names_and_log() {
+        use engine_core::extend::jip_patches;
+        let log = vec![vec![0x0103d498, 0x3333, 0x2222]];
+        for word in [0, jip_patches::INSTALLED] {
+            assert_eq!(
+                busy_run_jip(word, g24_taken),
+                (false, 2, log.clone(), vec![])
+            );
+        }
+        let on = jip_patches::INSTALLED | jip_patches::FIXES;
+        assert_eq!(
+            busy_run_jip(on, g24_taken),
+            (false, 0, vec![], vec![vec![]])
+        );
+        assert_eq!(busy_run_jip(on, g24_none), (false, 2, log, vec![vec![]]));
+    }
 
     /// `Run`'s failed line (`0x5E0FBE`): with JIP's `bNoFailedScriptLocks` the data length stays
     /// (the script runs again next time); otherwise it is cleared, the seam not asked.

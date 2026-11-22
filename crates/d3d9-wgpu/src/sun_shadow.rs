@@ -5415,6 +5415,7 @@ mod tests {
             clip: wgsl::Clip::Off,
             count: false,
             fixed: true,
+            storage: false,
         };
         let plain = wgsl::convert(&lit, &link).unwrap();
         let src = wgsl::convert_with_sun(&lit, &link, true, false).unwrap();
@@ -5488,6 +5489,7 @@ mod tests {
             clip: wgsl::Clip::Off,
             count: false,
             fixed: true,
+            storage: false,
         };
         let one = wgsl::convert_with_sun(&lit, &link, true, false).unwrap();
         let both = wgsl::convert_with_sun(&lit, &link, false, false).unwrap();
@@ -5604,6 +5606,7 @@ mod tests {
             clip: wgsl::Clip::Off,
             count: false,
             fixed: true,
+            storage: false,
         };
         let src = wgsl::convert_with_sun(&grass, &link, true, false).unwrap();
         assert!(

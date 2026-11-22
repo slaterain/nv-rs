@@ -8,6 +8,7 @@
 0041af70	0	YUP,xNVSE
 0043c3b0	0	JG,nv-rs direct file access
 00446b50	1	nv-rs cell entry waits for its own cell
+00448cc0	1	nv-rs loads finished in small steps
 004512a0	0	xNVSE
 00455490	0	script or frame function
 0045dfe0	1	nv-rs dialogue topic index
@@ -136,7 +137,8 @@
 00a39960	1	kNVSE
 00a3fdb0	0	kNVSE
 00a41110	0	kNVSE
-00a5b460	0	JG
+00a5b460	0	JG,JIP
+00a5b630	0	JG,JIP
 00a5b690	0	JG,JIP
 00aa14d0	0	ModLimitFix,nv-rs direct file access
 00aa15f0	1	ModLimitFix,nv-rs direct file access
@@ -185,6 +187,7 @@
 00be1750	0	ShaderLoader
 00c3d0e0	0	JG,nv-rs direct file access
 00c3d440	0	JG,nv-rs direct file access
+00c3dbf0	2	nv-rs loads finished in small steps
 00c3dfa0	0	nv-rs IO wait ends on completion
 00c44280	0	nv-rs full screen taken as the borderless window
 00c65a80	1	nv-rs smooth physics drawing

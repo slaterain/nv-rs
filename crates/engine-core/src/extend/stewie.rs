@@ -332,6 +332,9 @@ pub(crate) struct Prints {
     /// Tweaks' slips not copied ([`Engine::stewie_slip_guard`]): on with the fixes preset's
     /// missing-data guard row (`NV_NVSE_NULL_GUARD`, the host's install), off in vanilla.
     slip_guard: AtomicBool,
+    /// `[Extra Console Details] bMeshPath` (Tweaks' code default 0): S0059 prints every selected
+    /// reference's model path with it.
+    mesh_path: AtomicBool,
 }
 
 impl Default for Prints {
@@ -344,6 +347,7 @@ impl Default for Prints {
             queued: Mutex::new(Vec::new()),
             lod_ref: AtomicU32::new(0),
             slip_guard: AtomicBool::new(false),
+            mesh_path: AtomicBool::new(false),
         }
     }
 }
@@ -673,6 +677,17 @@ impl Engine {
     /// Whether the missing-data guard is on for Tweaks' rows ([`Engine::set_stewie_slip_guard`]).
     pub fn stewie_slip_guard(&self) -> bool {
         self.extend.stewie.3.slip_guard.load(Relaxed)
+    }
+
+    /// `[Extra Console Details] bMeshPath` (`crates/stewie`'s install): whether S0059 prints the
+    /// model path of every selected reference, not only of one whose model is missing.
+    pub fn set_stewie_mesh_path(&self, on: bool) {
+        self.extend.stewie.3.mesh_path.store(on, Relaxed);
+    }
+
+    /// Whether S0059 prints every selected reference's model path ([`Engine::set_stewie_mesh_path`]).
+    pub fn stewie_mesh_path(&self) -> bool {
+        self.extend.stewie.3.mesh_path.load(Relaxed)
     }
 
     /// Whether the console's print passes over its loading-screen test for this line (S0031's

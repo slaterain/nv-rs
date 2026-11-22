@@ -195,7 +195,8 @@ const TILES: [u32; 25] = [
 /// detecting (bit 6), sneaking (bit 7); [7] quests: forced reminders (bit 0), the timer clear (bit
 /// 1), the game state 2 (bit 2), kill (bit 3), the subtitles: none (bit 4), two (bit 5), no current
 /// (bit 6); [8] messages: none (0), one with its tiles clear (1), one shown and timed out (2), one
-/// shown, not timed out (3). `f`: the player's heading, the screen width.
+/// shown, not timed out (3); [11] lStewieAl's Tweaks' S0022.42 on (bit 0), the action prompt
+/// shown (bit 1). `f` ([9], [10]): the player's heading, the screen width.
 fn idle_world(e: &mut Engine, case: &Case) -> Vec<u32> {
     world(e);
     let w = |i: usize| case.word(i);
@@ -287,6 +288,16 @@ fn idle_world(e: &mut Engine, case: &Case) -> Vec<u32> {
     ] {
         let t = at(e, offset);
         set_trait(e, t, id, value);
+    }
+    // [11]: lStewieAl's Tweaks' S0022.42 (`HUD_HEALTH_BAR_NOT_TIED_TO_PROMPT`) on (bit 0), the
+    // action prompt (+0x9C) shown (bit 1).
+    e.set_stewie(
+        engine_core::extend::stewie::HUD_HEALTH_BAR_NOT_TIED_TO_PROMPT,
+        w(11) & 1 != 0,
+    );
+    if w(11) & 2 != 0 {
+        let t = at(e, 0x9c);
+        set_trait(e, t, 0xfa3, 1.0);
     }
     let fades = w(5);
     for (bit, offset) in [(1u32, 0x64u32), (2, 0x68)] {
@@ -482,6 +493,7 @@ fn do_idle_diff() {
             Input::Of(&[0, 1, 2, 3]),
             Input::F32Swept(0x3f00_0000),
             Input::F32Swept(0x44a0_0000),
+            Input::Of(&[0, 1, 2, 3]),
         ])
         .max_cases(96)
         .float_sweep(4)
