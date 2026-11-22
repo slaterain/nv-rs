@@ -33,6 +33,9 @@ pub(in super::super) const SITES: &[Entry] = &[
     row(0x005c_240d),
     // G03: `AddAchievement` 005d3b20's console-used test, JIP's two-byte NOP.
     row(0x005d_3b69),
+    // G24: `ScriptRunner::Run` 005e0d20's names and log for a busy runner, JIP's two-byte jump over
+    // them.
+    row(0x005e_0dd1),
     // O7 `bNoFailedScriptLocks` (`SetOptionalPatch(7)`: three `SafeWrite16` jumps past the clear of a
     // failed script's data length): `ScriptRunner::Run` 005e0d20, then `ScriptRunner::EvaluateLine`
     // 005e1550's set and condition errors.

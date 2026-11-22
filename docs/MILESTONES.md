@@ -7,7 +7,8 @@ status in [LEDGER.md](LEDGER.md), and the full list of systems in
 [history/milestones-2026-10-14.md](history/milestones-2026-10-14.md).
 
 Local ARM crash investigation (2026-11-21): a recursive-lock publication failure
-was reproduced and corrected in focused real-thread tests. Gameplay validation
+and duplicate scrap-buffer ownership were reproduced and corrected in focused
+real-thread tests (including the pool's inlined unlock). Gameplay validation
 of the reported stops remains open; next, repeat those routes with the corrected
 build ([evidence and limits](ARM_RECURSIVE_LOCK.md)).
 

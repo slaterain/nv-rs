@@ -7,6 +7,22 @@ use engine_core::extend::stewie;
 /// Share 3's rows built.
 pub const ROWS: &[Row] = &[
     Row {
+        bit: stewie::START_MENU_CLOSE_SAVES_SETTINGS,
+        function: "patchSaveINIChangesWhenClosingStartMenuAndSetXPBarQuestAndMessagesVisible",
+        plan: "S0020",
+        key: "bSaveINIChangesWhenClosingStartMenuAndSetXPBarQuestAndMessagesVisible",
+        tweaks: None,
+        summary: "changed settings are saved when the pause menu closes, and the HUD's XP bar, quest and messages come back",
+    },
+    Row {
+        bit: stewie::SAVE_PICTURE_WITHOUT_HOVER,
+        function: "MenuFixes",
+        plan: "S0022.04",
+        key: "bMenuFixesSavePictureWithoutHover",
+        tweaks: None,
+        summary: "the save/load list shows the highlighted save's picture without the mouse over it",
+    },
+    Row {
         bit: stewie::START_MENU_REMAP_DEBOUNCE,
         function: "MenuFixes",
         plan: "S0022.07",
@@ -69,6 +85,22 @@ pub const ROWS: &[Row] = &[
         key: "bMenuFixesConditionFlashFrameRate",
         tweaks: None,
         summary: "changes a timing: the low-condition label flashes about 1.15 times a second at any frame rate (the game flashed it faster the higher the frame rate)",
+    },
+    Row {
+        bit: stewie::VATS_CONDITION_WITH_HEALTH_MODS,
+        function: "MenuFixes",
+        plan: "S0022.23",
+        key: "bMenuFixesVatsConditionHealthMods",
+        tweaks: None,
+        summary: "the VATS condition bar counts a weapon's condition mods",
+    },
+    Row {
+        bit: stewie::VATS_CONDITION_WITHOUT_AMMO,
+        function: "MenuFixes",
+        plan: "S0022.24",
+        key: "bMenuFixesVatsConditionWithoutAmmo",
+        tweaks: None,
+        summary: "the VATS condition and ammo labels show for weapons without ammo too",
     },
     Row {
         bit: stewie::MAP_PAD_MARKER_WHILE_MOVING,
@@ -135,6 +167,14 @@ pub const ROWS: &[Row] = &[
         summary: "the compass markers fade with the compass",
     },
     Row {
+        bit: stewie::MINIGAME_HELP_IN_PAUSE_MENU,
+        function: "MenuFixes",
+        plan: "S0022.37",
+        key: "bMenuFixesMinigameHelp",
+        tweaks: None,
+        summary: "the pause menu's Help shows the caravan, roulette, blackjack and slots helps in those games",
+    },
+    Row {
         bit: stewie::MAP_COMPANION_MARKERS_RESET,
         function: "MenuFixes",
         plan: "S0022.41",
@@ -165,6 +205,14 @@ pub const ROWS: &[Row] = &[
         key: "bMenuFixesRepairBrokenItemType",
         tweaks: None,
         summary: "the repair menu's armour stat lines follow the broken item, not the item it is repaired with",
+    },
+    Row {
+        bit: stewie::VATS_HEALTH_AT_LEAST_ONE_TICK,
+        function: "MenuFixes",
+        plan: "S0022.55",
+        key: "bMenuFixesVatsHealthOneTick",
+        tweaks: None,
+        summary: "the VATS health meter never shows empty at low health",
     },
     Row {
         bit: stewie::REPAIR_SERVICES_KEEPS_SCROLL,
@@ -199,12 +247,28 @@ pub const ROWS: &[Row] = &[
         summary: "armour made at a workbench shows its inventory icon, not its glowing message icon",
     },
     Row {
+        bit: stewie::VATS_BURST_TIMES_AMMO_USE,
+        function: "patchFixVATSAutoWeaponMultiAmmoUseBug",
+        plan: "S0047",
+        key: "bFixVATSAutoWeaponMultiAmmoUseBug",
+        tweaks: None,
+        summary: "changes gameplay: an automatic weapon using more than one round a shot no longer gets VATS stuck",
+    },
+    Row {
         bit: stewie::VENDOR_REPAIR_RESETS_DR_DT,
         function: "patchUpdateDRDTWhenUsingVendorRepair",
         plan: "S0051",
         key: "bUpdateDRDTWhenUsingVendorRepair",
         tweaks: None,
         summary: "changes shown numbers: a vendor's repair of worn armour updates the player's DR and DT at once",
+    },
+    Row {
+        bit: stewie::PIPBOY_CHEM_DURATION_PERKS,
+        function: "patchFixPipboyDisplayedChemDurationIfPerkModified",
+        plan: "S0066",
+        key: "bFixPipboyDisplayedChemDurationIfPerkModified",
+        tweaks: None,
+        summary: "the Pip-Boy's chem durations count the player's chem duration perks",
     },
     Row {
         bit: stewie::BOOK_AND_AMMO_HOTKEY_ICONS,
@@ -263,12 +327,28 @@ pub const ROWS: &[Row] = &[
         summary: "the weapon condition arrows stay hidden on a weapon change while the HUD hides the action points",
     },
     Row {
+        bit: stewie::VATS_NO_RELOAD_COST_WITHOUT_AMMO,
+        function: "patchFixVATSChargingReloadAPCostWithNoAmmo",
+        plan: "S0144",
+        key: "bFixVATSChargingReloadAPCostWithNoAmmo",
+        tweaks: None,
+        summary: "changes gameplay: VATS charges no reload action points without ammo to reload with",
+    },
+    Row {
         bit: stewie::NO_LOADING_DLC_POPUP,
         function: "preventLoadingDlcPopup",
         plan: "S0154",
         key: "bPreventLoadingDlcPopup",
         tweaks: None,
         summary: "no loading DLC message box at the main menu, and the start's messages stay open",
+    },
+    Row {
+        bit: stewie::MESSAGE_MENU_TEXT_FONT,
+        function: "MessageMenuFontWidthFix",
+        plan: "S0160",
+        key: "bMessageMenuFontWidthFix",
+        tweaks: None,
+        summary: "message boxes are sized for their texts' own fonts",
     },
     Row {
         bit: stewie::ROULETTE_ZERO_WINS,

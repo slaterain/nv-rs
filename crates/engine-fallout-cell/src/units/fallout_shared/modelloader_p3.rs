@@ -2349,7 +2349,9 @@ pub static LOADER_WALK_MS: std::sync::atomic::AtomicU32 = std::sync::atomic::Ato
 /// comes back, so whatever the smaller limit left gets checked.
 /// Outside play (the exe's 100000.0) and with 0 it is the translation.
 /// The walk itself is unchanged: from the start of the map each call, each yielded reference's
-/// finished check (slot `0x20`), the timer looked at between entries.
+/// `QueuedReference::QueueMe` (slot `0x20`, `0043fed0`: starts its loads; the step `0044b8d0`
+/// takes the entry out of the map, so the walk drains it front to back), the timer looked at
+/// between entries.
 pub fn fn_00448cc0_limited(e: &mut Engine, this: Ptr) -> bool {
     let limit_ms = LOADER_WALK_MS.load(std::sync::atomic::Ordering::Relaxed);
     let manager = e.global::<u32>(TASK_MANAGER);

@@ -258,7 +258,7 @@ None of these is for players.
 | **Frames, sound and logs** | | |
 | `NV_SHOT=DIR[,every_ms]`*, `NV_SHOT_FRAMES=FROM-TO`, `NV_SHOT_LIST`, `NV_SHOT_WGPU=DIR` | Screenshots of the game's frames to DIR; only those presents; a list of presents; the wgpu backend's own folder (on wgpu alone in a window, the frame the window got is captured too, as `wgpu-window-*.bmp`) | off |
 | `NV_HITCH_LOG=0` | Turns the hitch log off. On (the default), every frame of at least 8 ms (6 ms above 250 fps) and twice the typical frame writes one `hitch:` line to the log (where, the frame's stages, the one-off work counted in it, a likely cause) and an F12 report gets the session's lines as `hitches.txt` (`crates/host/src/hitch_log.rs`) | on |
-| `NV_LOADER_WALK_MS=n` | A measuring switch for the running stutters: the model loader's per-frame walk over its queued references (each one's finished check; run by the IO manager before its own budget) gives up after n ms in play instead of the game's 5 ms, starting again from the start of the list next frame as the game does; outside play the game's own limit (`crates/host/src/fixes.rs`, `install_loader_walk_limit`) | off |
+| `NV_LOADER_WALK_MS=n` | A measuring switch for the running stutters: the model loader's per-frame walk over its queued references (each one's loads started, in order; run by the IO manager before its own budget) gives up after n ms in play instead of the game's 5 ms, starting again from the start of the list next frame as the game does; outside play the game's own limit (`crates/host/src/fixes.rs`, `install_loader_walk_limit`) | off |
 | `NV_FRAME_LOG=FILE`* | One line per main frame (clock, step, player position), with no per-call cost | off |
 | `NV_STAGE_TIME=1`* | With `NV_FRAME_LOG`: each line also gives the frame's stages on main, the drawing steps after the world pass, the world draw's halves, and the drawing thread's job and waits by join (`crates/engine-core/src/stage_time.rs`) | off |
 | `NV_LOCK_STATS=FILE`*, `NV_REAL_DUMP`* | Real threads: a line per main frame on the game clock and the waits; a dump of thread-local-storage misuse | off |
@@ -319,7 +319,7 @@ GitHub Releases; the packages there from before 2026-11-03 are of the removed vi
   but after that the game's start-up still stops, in the renderer (a run without `sD3DDevice`): the name must match.
 - **The name:** the program is simply named `FalloutNV.exe` in the package, in `app\`: no link is needed,
   and NVIDIA's driver profile (the white orbs) and Windows' per-program sound go by the name.
-- **Mods:** `Play with mods.cmd` builds `userdata\modgame`: the game's folder as hard links (no copy,
+- **Mods:** the launcher's `> Play with mods` builds `userdata\modgame`: the game's folder as hard links (no copy,
   same NTFS drive needed), the `mods` folder's files copied over them with each link removed first.
 
 ### What the tables can't cover
