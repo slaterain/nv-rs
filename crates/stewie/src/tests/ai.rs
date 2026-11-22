@@ -52,6 +52,19 @@ fn s0111_obeys_tweaks_fix_looping_reload_ammo_swap() {
     assert!(!rows::on(row, &keys, &off));
 }
 
+/// S0926 follows Tweaks' own `[INI] bCombatDialogueCooldownFix` (main INI only, code default 1,
+/// not in VNV's INI): on with no file either way, off when the player's Tweaks INI sets 0.
+#[test]
+fn s0926_obeys_tweaks_combat_dialogue_cooldown_fix() {
+    let row = rows::all().find(|r| r.plan == "S0926").unwrap();
+    assert_eq!(row.tweaks, Some(("INI", "bCombatDialogueCooldownFix")));
+    let keys = rows::Keys::default();
+    assert!(rows::on(row, &keys, &Settings::new(&[], false)));
+    assert!(rows::on(row, &keys, &Settings::new(&[], true)));
+    let off = Settings::new(&[("p", b"[INI]\nbCombatDialogueCooldownFix=0\n")], false);
+    assert!(!rows::on(row, &keys, &off));
+}
+
 /// S0489, S0660, S0664 and S0782 follow Tweaks' own `[Tweaks]` keys (code default 0, VNV's 1): on
 /// with no file (the port's defaults are VNV's), off when the player's Tweaks INI sets the key to
 /// 0, off with no file under `bMissingKeysAsTweaks` (Tweaks' code default), and off by their own
@@ -318,4 +331,5 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "bShootableNonPlayableExplosives",
         Row::at(AI_FIXES, 41),
     ),
+    ("S0926", "bCombatSoundCooldownFix", Row::at(AI_FIXES, 58)),
 ];

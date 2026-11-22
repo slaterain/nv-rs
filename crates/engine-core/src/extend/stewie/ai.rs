@@ -197,3 +197,7 @@ pub const VANITY_CAM_ROTATION: Row = Row::share(AI_FIXES, AI_FIXES_END, 56);
 /// S0489 `patchSpinWeaponsAlwaysPlaySound` (`Actor::Update` `00888b50` (`0x8893F8`, `0x889422`,
 /// `0x8895A8`)): a weapon with a looping attack sound plays it again after a short stop.
 pub const SPIN_WEAPON_SOUND: Row = Row::share(AI_FIXES, AI_FIXES_END, 57);
+/// S0926 `CombatSoundCooldownFix` (`009839b0` (`0x983A37`, `0x9841CC`); `Actor::HitMe` `0089a760`
+/// (`0x89D42B`, `0x89D4ED`)): the combat line and hit sound cooldowns start only when a line was
+/// said.
+pub const COMBAT_SOUND_COOLDOWN: Row = Row::share(AI_FIXES, AI_FIXES_END, 58);

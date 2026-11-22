@@ -471,4 +471,12 @@ pub const ROWS: &[Row] = &[
         tweaks: Some(("Tweaks", "bHiddenFragsFix")),
         summary: "changes play: an unplayable explosive an NPC carries (a Ghost People's gas tank) can be shot and set off, as the playable ones can",
     },
+    Row {
+        bit: stewie::COMBAT_SOUND_COOLDOWN,
+        function: "CombatSoundCooldownFix",
+        plan: "S0926",
+        key: "bCombatSoundCooldownFix",
+        tweaks: Some(("INI", "bCombatDialogueCooldownFix")),
+        summary: "changes what you hear: the wait between combat lines and pain sounds starts only when a line was said, so a hit that said nothing no longer silences the next one",
+    },
 ];

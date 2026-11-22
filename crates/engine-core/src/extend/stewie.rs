@@ -315,8 +315,13 @@ pub mod kept {
     /// S0130.05/.06's `static bool bDecreasedPlayerAmmo` (4 bytes): the player's update took a
     /// round for its continuous beam, so its next impact does damage; cleared before each load.
     pub const BEAM_DECREASED_PLAYER_AMMO: usize = 7;
+    /// S0926's `Actor* lastPlayerTarget` (4 bytes): the actor the player last hit that said a
+    /// line while the hit sound's cooldown setting is 0.
+    pub const COMBAT_SOUND_PLAYER_TARGET: usize = 8;
+    /// S0926's `static UInt32 lastRNG` (4 bytes): the extra wait drawn for that actor's next line.
+    pub const COMBAT_SOUND_TARGET_WAIT: usize = 9;
     /// How many.
-    pub const COUNT: usize = 8;
+    pub const COUNT: usize = 10;
 }
 
 /// The last thing each of Tweaks' warnings printed (its functions' statics), its print queue and
