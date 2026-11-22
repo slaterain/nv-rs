@@ -1,4 +1,4 @@
-//! `cargo run --release -p d3d9-stream --example record_compare -- [--ends-deferred | --digests] A.d3d9s B.d3d9s`:
+//! `cargo run --release -p d3d9-stream --example record_compare -- [--ends-deferred | --digests | --contents] A.d3d9s B.d3d9s`:
 //! two `NV_D3D9_RECORD` files compared command by command with object handles renamed by first use
 //! (`wire::compare_renamed`): what a run whose game heap was laid out otherwise (a typed family's
 //! objects moved out of it, ADR-0014 stage 2) is compared by, where the plain `cmp` would see every
@@ -8,7 +8,9 @@
 //! (`wire::compare_renamed_ends_deferred`, which says why that changes no picture and what it still
 //! checks). With `--digests`, each draw's device state instead (`wire::draw_digests`): runs whose
 //! streams differ only in states set again to the value they had (`NV_D3D9_REPEATS=keep` against
-//! the default) give the same digest at every draw. Exit 0: alike; 1: a difference; 2: a file could
+//! the default) give the same digest at every draw. With `--contents`, the same, but the vertex and index
+//! buffers by their bytes (`wire::draw_digests_with_contents`): a run that leaves out uploads of
+//! bytes a buffer already holds (a face whose reshape was left out) gives the same digests. Exit 0: alike; 1: a difference; 2: a file could
 //! not be read.
 
 use std::fs::File;
@@ -28,8 +30,12 @@ fn hex(bytes: &[u8]) -> String {
 /// The first differing draw `i` of the two files in the open: which present it comes after and its place among the
 /// draws since, which states differ (both values), whether the other commands so far differ (with the last of them),
 /// and the two draw commands.
-fn describe(a: &str, b: &str, i: usize, open: impl Fn(&str) -> BufReader<File>) {
-    let snap = |path: &str| match d3d9_stream::wire::draw_snapshot(open(path), i) {
+fn describe(a: &str, b: &str, i: usize, contents: bool, open: impl Fn(&str) -> BufReader<File>) {
+    let snap = |path: &str| match if contents {
+        d3d9_stream::wire::draw_snapshot_with_contents(open(path), i)
+    } else {
+        d3d9_stream::wire::draw_snapshot(open(path), i)
+    } {
         Ok(Some(s)) => s,
         Ok(None) => {
             println!("  {path}: no draw {i}");
@@ -82,12 +88,15 @@ fn describe(a: &str, b: &str, i: usize, open: impl Fn(&str) -> BufReader<File>) 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let deferred = args.first().is_some_and(|a| a == "--ends-deferred");
-    let digests = args.first().is_some_and(|a| a == "--digests");
+    let contents = args.first().is_some_and(|a| a == "--contents");
+    let digests = contents || args.first().is_some_and(|a| a == "--digests");
     if deferred || digests {
         args.remove(0);
     }
     let [a, b] = args.as_slice() else {
-        eprintln!("usage: record_compare [--ends-deferred | --digests] A.d3d9s B.d3d9s");
+        eprintln!(
+            "usage: record_compare [--ends-deferred | --digests | --contents] A.d3d9s B.d3d9s"
+        );
         std::process::exit(2);
     };
     let open = |path: &str| match File::open(path) {
@@ -98,7 +107,11 @@ fn main() {
         }
     };
     if digests {
-        let read = |path: &str| match d3d9_stream::wire::draw_digests(open(path)) {
+        let read = |path: &str| match if contents {
+            d3d9_stream::wire::draw_digests_with_contents(open(path))
+        } else {
+            d3d9_stream::wire::draw_digests(open(path))
+        } {
             Ok(list) => list,
             Err(why) => {
                 eprintln!("{path}: {why}");
@@ -121,7 +134,7 @@ fn main() {
             }
             Some(i) => {
                 println!("{i} draws alike, then draw {i} sees another device state");
-                describe(a, b, i, open);
+                describe(a, b, i, contents, open);
                 std::process::exit(1);
             }
         }
