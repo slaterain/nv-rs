@@ -22,10 +22,10 @@
 //! 128 values: a few microseconds. The counters cost one relaxed add at each counted event (heap blocks: a plain
 //! load and store under the heap's lock) and, for waits and reads, a clock read pair around a call that already
 //! blocks or reads the disk. The stage split costs about ten clock reads a frame (`engine_core::stage_time`'s
-//! points), the frame tail's split nine more and two for each task main drains from the task queues there. Main's
-//! time in the guest heap is timed only with `NV_HITCH_HEAP=1` (two clock reads a block: about 4 ms on the pause
-//! menu's 80,000-block opening frame). A hitch frame adds one formatted line, one write to the log and, when the
-//! player's cell changed since the last line, one call of the cell's `GetEditorID`.
+//! points), the frame tail's split thirteen more and two for each task main drains from the task queues
+//! there. Main's time in the guest heap is timed only with `NV_HITCH_HEAP=1` (two clock reads a block: about
+//! 4 ms on the pause menu's 80,000-block opening frame). A hitch frame adds one formatted line, one write to the
+//! log and, when the player's cell changed since the last line, one call of the cell's `GetEditorID`.
 
 use engine::Engine;
 use engine_core::hitch::{Count, WaitKind, COUNTS};
@@ -252,16 +252,15 @@ const TAIL_STAGE: usize = 7;
 pub const TAIL_SPLIT_MS: f64 = 2.0;
 
 /// The frame tail's parts in words (`engine_core::stage_time::Tail`, the order main runs them): each part's time;
-/// for the AI tasks and the secondary task queue's drain, what the drain ran; for the free-list sort, the pool and its
+/// for the two task queues' drains, what each ran; for the free-list sort, the pool and its
 /// free list's count.
 fn tail_words(t: &engine_core::stage_time::Tail) -> String {
     use engine_core::stage_time::{DrainQueue, TailMark, TAIL_PART_NAMES};
     let mut parts = Vec::new();
     for (i, p) in t.parts.iter().enumerate() {
         let Some(ns) = p else { continue };
-        let extra = if i == TailMark::AiTasks as usize {
-            t.drains[DrainQueue::First as usize]
-                .map(|d| format!(" (their task queue drained: {})", drain_words(&d)))
+        let extra = if i == TailMark::AiQueue as usize {
+            t.drains[DrainQueue::First as usize].map(|d| format!(" ({})", drain_words(&d)))
         } else if i == TailMark::QueueDrain as usize {
             t.drains[DrainQueue::Secondary as usize].map(|d| format!(" ({})", drain_words(&d)))
         } else if i == TailMark::TickOut as usize {
@@ -1869,7 +1868,11 @@ mod tests {
         f.stages = Some([1.0, 0.0, 0.8, 2.5, 0.3, 0.1, 0.8, 8.1, 0.0]);
         let mut tail = Tail::default();
         tail.parts = [
-            Some(300_000),
+            Some(200_000),
+            Some(10_000),
+            Some(90_000),
+            Some(0),
+            Some(0),
             Some(20_000),
             Some(10_000),
             Some(7_600_000),
@@ -1912,8 +1915,9 @@ mod tests {
         let l = f.line();
         assert!(
             l.contains(
-                "; frame tail parts ms: AI tasks 0.3 (their task queue drained: 2 tasks: tag 0x14 x2 0.1 ms; 0.0 ms \
-                 outside the tasks), delayed script actions 0.0, task queue end input 0.0, task queue drain 7.6 (12 \
+                "; frame tail parts ms: AI tasks: process lists 0.2, AI tasks: Pip-Boy and child attaches 0.0, AI \
+                 tasks: first task queue 0.1 (2 tasks: tag 0x14 x2 0.1 ms; 0.0 ms outside the tasks), AI tasks: \
+                 queued node updates 0.0, AI tasks: the rest 0.0, delayed script actions 0.0, task queue end input 0.0, task queue drain 7.6 (12 \
                  tasks: tag 0x0e x1 7.0 ms, tag 0x07 x3 0.3 ms, tag 0x22 x2 0.2 ms and 2 more kinds; 0.0 ms outside \
                  the tasks, 1,500 turns on an empty queue waiting for another thread's input), task queue begin input \
                  0.0, queued menu open, support menus and prints 0.1, other steps 0.0, free-list sort 0.0 (pool 37, \
@@ -1930,7 +1934,7 @@ mod tests {
         );
         // A part not passed (one processor: no task queue) is left out; a pool not in the table is said so.
         let t = f.tail.as_mut().unwrap();
-        t.parts[2..5].fill(None);
+        t.parts[6..9].fill(None);
         t.drains[1] = None;
         t.tick = Some((5, None));
         let l = f.line();

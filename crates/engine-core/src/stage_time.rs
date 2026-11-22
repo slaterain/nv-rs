@@ -230,8 +230,20 @@ pub const NAMES: [&str; COLUMNS] = [
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(usize)]
 pub enum TailMark {
-    /// `Main::UpdateNonRenderSafeAITasks` (`0086f6a0`) returned: the process lists, the Pip-Boy and, with more than
-    /// one thread, the drain of the first packed task queue (the tasks the AI threads queued for main).
+    /// In `Main::UpdateNonRenderSafeAITasks` (`0086f6a0`): the process lists' steps returned (the projectiles and
+    /// explosions `0096c240`, the actors' animation scene graphs `0096c970` or `0096c860`, the detection lists
+    /// `0096c710`, the actors' process and ragdoll step `009781d0`).
+    AiLists,
+    /// The Pip-Boy's step and, with more than one thread, `TESObjectCELL::PerformQueuedChildAttaches` (`0054ae30`)
+    /// returned.
+    AiAttaches,
+    /// The first packed task queue's end of main's input and its drain (`0087a6d0`, `0087a790`: the tasks the AI
+    /// threads queued for main) returned.
+    AiQueue,
+    /// The queued node updates (`00552570`: the queued nodes' geometry, their morphs) returned.
+    AiNodes,
+    /// `Main::UpdateNonRenderSafeAITasks` returned: the rest (main's input to the first queue begun again, the
+    /// interface's steps `007034c0` and `00703490`, the AI groups' clean-up `00991600`).
     AiTasks,
     /// `Script::RunDelayedScriptActionsOnReferences` (`005aa720`), first in `00870610`, returned.
     DelayedScripts,
@@ -254,13 +266,17 @@ pub enum TailMark {
 }
 
 /// How many tail marks there are.
-pub const TAIL_MARKS: usize = 9;
+pub const TAIL_MARKS: usize = 13;
 /// The tail's parts: one ending at each mark, then the last to the host's take.
 pub const TAIL_PARTS: usize = TAIL_MARKS + 1;
 
 /// The tail's parts in words, in [`TailMark`]'s order, then the last mark to the host's take.
 pub const TAIL_PART_NAMES: [&str; TAIL_PARTS] = [
-    "AI tasks",
+    "AI tasks: process lists",
+    "AI tasks: Pip-Boy and child attaches",
+    "AI tasks: first task queue",
+    "AI tasks: queued node updates",
+    "AI tasks: the rest",
     "delayed script actions",
     "task queue end input",
     "task queue drain",
@@ -1015,6 +1031,7 @@ mod tests {
         d.waited();
         advance(100);
         d.end();
+        tail_mark(TailMark::AiQueue);
         tail_mark(TailMark::AiTasks);
         advance(500);
         tail_mark(TailMark::DelayedScripts);
@@ -1033,7 +1050,11 @@ mod tests {
         assert_eq!(
             tail.parts,
             [
+                None,
+                None,
                 Some(2_400),
+                None,
+                Some(0),
                 Some(500),
                 None,
                 None,
@@ -1045,7 +1066,7 @@ mod tests {
                 Some(50)
             ]
         );
-        assert_eq!(tail.longest(), Some((7, 8_000)));
+        assert_eq!(tail.longest(), Some((11, 8_000)));
         assert_eq!(tail.tick, Some((37, Some(1_203))));
         let first = tail.drains[DrainQueue::First as usize].expect("the first queue's drain");
         assert_eq!(

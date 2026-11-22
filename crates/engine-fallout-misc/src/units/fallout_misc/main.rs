@@ -3289,17 +3289,24 @@ pub fn main_update_non_render_safe_ai_tasks(e: &mut Engine, this: Ptr) {
     e.call(0x0096_c710, &args![PROCESS_LISTS]);
     let seconds = timer_seconds(e);
     e.call(0x0097_81d0, &args![PROCESS_LISTS, seconds]);
+    // The hitch log's split of the frame tail (`engine_core::stage_time::TailMark`): a clock read at each mark,
+    // none with the log off; nothing in the game changes.
+    use engine_core::stage_time::{tail_mark, TailMark};
+    tail_mark(TailMark::AiLists);
     let pipboy = e.call(0x0070_5990, &args![]).u32();
     if fn_0086f840(e, Ptr::new(pipboy)) != 0 {
         e.call(0x007f_a990, &args![pipboy]);
     }
     if processor_count(e) > 1 {
         e.call(0x0054_ae30, &args![]);
+        tail_mark(TailMark::AiAttaches);
         let object = e.call(0x0045_37b0, &args![]).u32();
         e.call(0x0087_a6d0, &args![object]);
         let object = e.call(0x0045_37b0, &args![]).u32();
         e.call(0x0087_a790, &args![object]);
+        tail_mark(TailMark::AiQueue);
         e.call(0x0055_2570, &args![]);
+        tail_mark(TailMark::AiNodes);
         let value = e.global::<f32>(0x011c_3c08);
         fn_0086f830(e, value);
         let object = e.call(0x0045_37b0, &args![]).u32();
