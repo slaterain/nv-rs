@@ -1145,7 +1145,8 @@ fn stewie_after_free(e: &mut Engine) {
 /// game's player (`011dea3c`) has no last exterior door (+0x604), so the world map had nowhere to
 /// put them; with none set and a cell (+0x40) it becomes Doc Mitchell's door (0x103E69) in his
 /// house (0x103DF9), or with Fallout3.esm loaded (TTW) the Vault 101 cave's exterior door
-/// (0x18612 in its index) in Vault 101 (0x28138), when that form is a reference (type 0x3A);
+/// (0x18612 in its index) in Vault 101 (0x28138), when that form is a plain reference (Tweaks'
+/// `IS_TYPE`: its vtable is `TESObjectREFR`'s, `0102f55c`);
 /// then xNVSE's `PlayerCharacter::SetLastExteriorDoor`: the word, and the map told the door's
 /// world space (`007a1880`; its cell +0x40, or the child cell's, slot +0 of +0x18; the cell's
 /// world space +0xC0).
@@ -1154,6 +1155,7 @@ pub fn stewie_set_last_exterior_door(e: &mut Engine) {
     const DOC_MITCHELL_HOUSE_DOOR: u32 = 0x0010_3e69;
     const TTW_VAULT_101: u32 = 0x0002_8138;
     const TTW_VAULT_101_CAVE_DOOR: u32 = 0x0001_8612;
+    const REFR_VTABLE: u32 = 0x0102_f55c;
     let player = e.global::<u32>(0x011d_ea3c);
     if player == 0 {
         return;
@@ -1183,7 +1185,7 @@ pub fn stewie_set_last_exterior_door(e: &mut Engine) {
             0
         }
     };
-    if form == 0 || e.mem.u8(form + 4) != 0x3a {
+    if form == 0 || e.mem.u32(form) != REFR_VTABLE {
         return;
     }
     e.mem.set_u32(player + 0x604, form);
@@ -11534,9 +11536,10 @@ mod stewie_menus6_tests {
     use super::*;
     use engine_core::extend::stewie;
 
-    /// A player (`011dea3c`) in a cell with `cell_id`, a door reference (type 0x3A) whose cell's
-    /// world space is 0x7900, `LookupFormByID` answering the door for `door_id`, Fallout3.esm at
-    /// `index` (0xFF: not loaded), the map's world space call logged.
+    /// A player (`011dea3c`) in a cell with `cell_id`, a plain door reference (vtable
+    /// `0102f55c`) whose cell's world space is 0x7900 (its child cell, slot +0 of +0x18, answers
+    /// another cell with world space 0x7a00), `LookupFormByID` answering the door for `door_id`,
+    /// Fallout3.esm at `index` (0xFF: not loaded), the map's world space call logged.
     fn door_engine(cell_id: u32, door_id: u32, index: u8) -> (Engine, u32, u32) {
         let mut e = Engine::new();
         for page in [0x011d_e000u32, 0x011c_3000] {
@@ -11550,10 +11553,19 @@ mod stewie_menus6_tests {
         e.mem.set_u32(player + 0x40, cell);
         e.mem.set_u32(0x011d_ea3c, player);
         let door = e.mem.alloc(0x100);
-        e.mem.set_u8(door + 4, 0x3a);
+        e.mem.set_u32(door, 0x0102_f55c);
         let door_cell = e.mem.alloc(0x100);
         e.mem.set_u32(door_cell + 0xc0, 0x7900);
         e.mem.set_u32(door + 0x40, door_cell);
+        let child_cell = e.mem.alloc(0x100);
+        e.mem.set_u32(child_cell + 0xc0, 0x7a00);
+        let child_vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(child_vtable, 0x00c9_0000);
+        e.mem.set_u32(door + 0x18, child_vtable);
+        e.register_double(0x00c9_0000, move |_, _| Ret {
+            eax: child_cell,
+            ..Ret::default()
+        });
         e.register_double(0x0048_39c0, move |_, a| Ret {
             eax: if a[0] == door_id { door } else { 0 },
             ..Ret::default()
@@ -11607,6 +11619,27 @@ mod stewie_menus6_tests {
         stewie_set_last_exterior_door(&mut e);
         assert_eq!(e.mem.u32(player + 0x604), 0x4444);
         assert!(map_calls(&e).is_empty());
+
+        // The door in no cell of its own: its child cell's world space.
+        let (mut e, player, door) = door_engine(0x0010_3df9, 0x0010_3e69, 0xff);
+        e.mem.set_u32(door + 0x40, 0);
+        stewie_set_last_exterior_door(&mut e);
+        assert_eq!(e.mem.u32(player + 0x604), door);
+        assert_eq!(map_calls(&e), vec![vec![0x7a00]]);
+
+        // Not a plain reference (another vtable word): nothing.
+        let (mut e, player, door) = door_engine(0x0010_3df9, 0x0010_3e69, 0xff);
+        e.mem.set_u32(door, 0x0102_f560);
+        stewie_set_last_exterior_door(&mut e);
+        assert_eq!(e.mem.u32(player + 0x604), 0);
+        assert!(map_calls(&e).is_empty());
+
+        // No cell: nothing asked.
+        let (mut e, player, _) = door_engine(0x0010_3df9, 0x0010_3e69, 0xff);
+        e.mem.set_u32(player + 0x40, 0);
+        stewie_set_last_exterior_door(&mut e);
+        assert_eq!(e.mem.u32(player + 0x604), 0);
+        assert!(e.call_log.as_ref().unwrap().is_empty());
     }
 
     /// The row's place (`0x7AC53A`, after the destructor): the door is set only with the row on.

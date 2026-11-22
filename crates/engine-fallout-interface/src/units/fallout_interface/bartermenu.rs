@@ -2846,27 +2846,26 @@ pub fn barter_menu_do_idle(e: &mut Engine, this: Ptr<BarterMenu>) {
         return;
     }
     let zero: f64 = e.global(ZERO_DOUBLE);
-    let stat_tile = |e: &mut Engine, getter: u32, offset: u32| {
+    let stat_shown = |e: &mut Engine, getter: u32| {
         if e.global::<u32>(BARTER_CURRENT_ITEM) == 0 {
-            return 0;
+            return false;
         }
         let item = e.global::<u32>(BARTER_CURRENT_ITEM);
         let object = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, item));
         let value = e.call(getter, &args![object]).f64();
         // FCOMP against 0.0; TEST AH,0x44; JNP: none only when equal.
-        if value != zero {
-            e.mem.u32(base + offset)
-        } else {
-            0
-        }
+        value != zero
     };
-    let second = stat_tile(e, STAT_004BE180, 0x70);
+    let has_dt = stat_shown(e, STAT_004BE180);
+    let second = if has_dt { e.mem.u32(base + 0x70) } else { 0 };
     // `0x7307A4` (lStewieAl's Tweaks' S0105 writes `XOR EAX,EAX; MOV [EBP-8],EAX; JMP` over the
-    // zero DT's store): without a DT tile the DR tile is passed without its own test.
-    let first = if second == 0 && e.stewie(engine_core::extend::stewie::INVENTORY_STAT_ALPHAS) {
+    // zero DT's store): without a DT the DR tile is passed without its own test.
+    let first = if (!has_dt && e.stewie(engine_core::extend::stewie::INVENTORY_STAT_ALPHAS))
+        || stat_shown(e, STAT_004BE060)
+    {
         e.mem.u32(base + 0x6c)
     } else {
-        stat_tile(e, STAT_004BE060, 0x6c)
+        0
     };
     let item = e.global::<u32>(BARTER_CURRENT_ITEM);
     e.call(
@@ -4750,20 +4749,23 @@ mod n051_tests {
 
     /// Row S0105 (lStewieAl's Tweaks, `0x7307A4`): armour with DT 0 and DR 0 passes the DR tile
     /// (+0x6C) with the row on, without asking the DR (`004be060`); off, neither tile. With a DT
-    /// the exe's DR test stays.
+    /// the exe's DR test stays, even when the DT tile (+0x70) itself is 0 (the patch is on the
+    /// DT test's path, not on the tile's value).
     #[test]
     fn s0105_no_dt_passes_the_dr_tile() {
-        for (on, dt, dr, wanted, dr_asked) in [
-            (false, 0.0f64, 0.0f64, [0u32, 0], 1usize),
-            (true, 0.0, 0.0, [0x6c, 0], 0),
-            (true, 3.0, 0.0, [0, 0x70], 1),
-            (true, 3.0, 2.0, [0x6c, 0x70], 1),
+        for (on, dt, dr, dt_tile, wanted, dr_asked) in [
+            (false, 0.0f64, 0.0f64, 0x70u32, [0u32, 0], 1usize),
+            (true, 0.0, 0.0, 0x70, [0x6c, 0], 0),
+            (true, 3.0, 0.0, 0x70, [0, 0x70], 1),
+            (true, 3.0, 2.0, 0x70, [0x6c, 0x70], 1),
+            (true, 3.0, 0.0, 0, [0, 0], 1),
         ] {
             let mut e = engine();
             let this = menu(&mut e);
-            for offset in [0x60u32, 0x64, 0x68, 0x6c, 0x70] {
+            for offset in [0x60u32, 0x64, 0x68, 0x6c] {
                 e.mem.set_u32(this.addr() + offset, offset);
             }
+            e.mem.set_u32(this.addr() + 0x70, dt_tile);
             let it = item(&mut e, 0, 1, 0x8000);
             e.set_global(BARTER_CURRENT_ITEM, it);
             e.set_global(ITEM_ENTERED_0119FDB0, 1u8);

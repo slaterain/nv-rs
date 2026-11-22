@@ -633,19 +633,16 @@ fn finish_idle(e: &mut Engine, this: Ptr<InventoryMenu>) {
         let item = current_item(e);
         e.call(SET_ITEM_CARD, &args![first, second, third, item, 0u32]);
     } else if tab == 0x19 {
-        let second = if current_item(e) != 0 && {
+        let has_dt = current_item(e) != 0 && {
             let item = current_item(e);
             let object = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, item));
             let value = e.call(OBJECT_VALUE_004BE180, &args![object]).f64();
             value != e.global::<f64>(ZERO_DOUBLE)
-        } {
-            tile_at(e, me_addr, 0x70)
-        } else {
-            0
         };
+        let second = if has_dt { tile_at(e, me_addr, 0x70) } else { 0 };
         // `0x7820BB` (lStewieAl's Tweaks' S0105 writes `XOR EAX,EAX; MOV [EBP-0x1C],EAX; JMP` over
-        // the zero DT's store): without a DT tile the DR tile is passed without its own test.
-        let first = if second == 0 && e.stewie(engine_core::extend::stewie::INVENTORY_STAT_ALPHAS) {
+        // the zero DT's store): without a DT the DR tile is passed without its own test.
+        let first = if !has_dt && e.stewie(engine_core::extend::stewie::INVENTORY_STAT_ALPHAS) {
             tile_at(e, me_addr, 0x6c)
         } else if current_item(e) != 0 && {
             let item = current_item(e);
@@ -3155,6 +3152,49 @@ mod tests {
         // Tab 1: the tile at +0x70 for the first value, none for the second.
         let cards = calls_to(&e, SET_ITEM_CARD);
         assert_eq!(cards[0], vec![0, 0x148, 0, 0x7000, 0]);
+    }
+
+    /// Row S0105 (lStewieAl's Tweaks, `0x7820BB`): on the apparel tab, armour with DT 0 passes the
+    /// DR tile (+0x6C) with the row on, without asking the DR (`004be060`); off, the exe's DR test
+    /// (0 here: no tile). With a DT the exe's DR test stays.
+    #[test]
+    fn s0105_no_dt_passes_the_dr_tile() {
+        for (on, dt, wanted, dr_asked) in [
+            (false, 0.0f64, [0u32, 0], 1usize),
+            (true, 0.0, [0x144, 0], 0),
+            (true, 1.0, [0, 0x148], 1),
+        ] {
+            let mut e = Engine::new();
+            let this = idle_menu(&mut e);
+            e.set(this, InventoryMenu::iCurrTab, 1);
+            answer(&mut e, GAMEPAD_IN_USE, 0);
+            answer(&mut e, WORD_AT_FOUR, 0x900);
+            answer(&mut e, TILE_IS_TRUE, 0);
+            answer(&mut e, WHEEL_COUNT, 8);
+            answer(&mut e, INPUT_CONTROLS, 0x6000);
+            // The fixture of `do_idle_number_key_opens_the_wheel_on_its_slot`: key 0x11 + 2 held.
+            e.register(CONTROL_STATE, |_, a| Ret {
+                eax: u32::from(a[1] == 0x13 && a[2] == 0),
+                ..Ret::default()
+            });
+            answer(&mut e, WHEEL_GET_VISIBLE, 0);
+            answer(&mut e, ITEM_OBJECT, 0x7100);
+            answer_st0(&mut e, OBJECT_VALUE_004BE180, dt);
+            answer_st0(&mut e, OBJECT_VALUE_004BE060, 0.0);
+            e.set_global(CURRENT_ITEM, 0x7000u32);
+            answer(&mut e, FORM_TYPE, 0x1f);
+            stub(&mut e, &[WHEEL_SET_VISIBLE, WHEEL_MOVE_HIGHLIGHT]);
+            e.set_stewie(engine_core::extend::stewie::INVENTORY_STAT_ALPHAS, on);
+            e.call_log = Some(vec![]);
+            e.call(0x0078_1ba0, &args![this]);
+            let cards = calls_to(&e, SET_ITEM_CARD);
+            assert_eq!(
+                cards[0],
+                vec![wanted[0], wanted[1], 0, 0x7000, 0],
+                "row {on} dt {dt}"
+            );
+            assert_eq!(calls_to(&e, OBJECT_VALUE_004BE060).len(), dr_asked);
+        }
     }
 
     #[test]
