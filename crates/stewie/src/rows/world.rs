@@ -188,9 +188,9 @@ pub const ROWS: &[Row] = &[
     },
     Row {
         bit: stewie::RENDERED_MENU_BEHIND_TRADE,
-        function: "MenuFixes",
+        function: "fixMouseInBarterAndContainerMenusInsideTerminals",
         plan: "S0065",
-        key: "bMenuFixesRenderedMenuBehindTrade",
+        key: "bFixMouseInBarterAndContainerMenusInsideTerminals",
         tweaks: None,
         summary: "a terminal behind the barter, container or quantity menu no longer takes the mouse",
     },
@@ -308,9 +308,9 @@ pub const ROWS: &[Row] = &[
     },
     Row {
         bit: stewie::CONSOLE_PAD_B_CLOSES,
-        function: "MenuFixes",
+        function: "MenuFixesDeferredInit",
         plan: "S0984",
-        key: "bMenuFixesConsolePadBCloses",
+        key: "bMenuFixesDeferredInit",
         tweaks: None,
         summary: "B on the pad closes the open console (with JIP's console key fix too)",
     },

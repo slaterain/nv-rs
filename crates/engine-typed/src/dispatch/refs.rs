@@ -159,7 +159,17 @@ pub fn compare_exchange(e: &mut Engine, target: Ptr, old: i32, new: i32) -> i32 
 /// `Sleep(1)` after 10,000, then a count of 1.
 pub fn lock(e: &mut Engine, this: Ptr<LightLock>, _unused: u32) {
     let thread = typed_call!(FAMILY, 0x0040_fc90, current_thread(e));
-    if e.get(this, LightLock::owner) == thread {
+    // The owner participates in the compare-exchange below. With real host
+    // threads its recursive fast-path read must be atomic too.
+    let owner = if e.mem.is_shared() {
+        e.mem
+            .atomic_u32(this.addr())
+            .map(|word| word.load(std::sync::atomic::Ordering::Relaxed))
+    } else {
+        None
+    }
+    .unwrap_or_else(|| e.get(this, LightLock::owner));
+    if owner == thread {
         let count = e.get(this, LightLock::count).wrapping_add(1);
         e.set(this, LightLock::count, count);
         return;
@@ -187,6 +197,16 @@ pub fn unlock(e: &mut Engine, this: Ptr<LightLock>) {
     let count = e.get(this, LightLock::count).wrapping_sub(1);
     e.set(this, LightLock::count, count);
     if count == 0 {
+        // 0040fbc7's x86 MOV publishes earlier protected writes. An ordinary
+        // ARM store does not: pair this release with lock's acquire CAS.
+        if e.mem.is_shared() {
+            if let Some(owner) = e.mem.atomic_u32(this.addr()) {
+                owner.store(0, std::sync::atomic::Ordering::Release);
+                return;
+            }
+            // Preserve Mem's unaligned/fault/diagnostic path.
+            std::sync::atomic::fence(std::sync::atomic::Ordering::Release);
+        }
         e.set(this, LightLock::owner, 0);
     }
 }
@@ -567,6 +587,63 @@ const MENU_STRING_HASH: u32 = 0x00a0_d1b0;
 const MENU_STRING_EQUAL: u32 = 0x00a0_d180;
 const INT_MAP_HASH: u32 = 0x00a0_d260;
 const INT_MAP_EQUAL: u32 = 0x00ae_8dc0;
+
+/// The word compare the game hands [`array_find`] most (`009a3830`, `cdecl(a, b)`: whether the
+/// words at `a` and `b` are equal).
+const WORDS_EQUAL: u32 = 0x009a_3830;
+
+// Typed from 00719b20
+/// A word array's search (`BSSimpleArray`: buffer at `+4`, size at `+8`; `thiscall(this, argument,
+/// start, matches)`): from index `start`, the first element `matches(&element, argument)` accepts
+/// (`cdecl`, by address), else -1; a null buffer skips the call for every index (the size and the
+/// buffer read again for each index, as the exe reads them). With the word compare (`009a3830`) the
+/// two words are compared in place: `Interface::TileIsBeingDeleted` searches the interface's update
+/// array this way for every tile a menu deletes (twice: its release and its destructor), so
+/// closing a large menu made hundreds of thousands of calls by address here.
+pub fn array_find(e: &mut Engine, this: Ptr, argument: u32, start: u32, matches: u32) -> i32 {
+    let a = this.addr();
+    let mut index = start;
+    while index < e.mem.u32(a.wrapping_add(8)) {
+        let buffer = e.mem.u32(a.wrapping_add(4));
+        if buffer != 0 {
+            let element = buffer.wrapping_add(index.wrapping_mul(4));
+            let hit = if matches == WORDS_EQUAL {
+                e.mem.u32(element) == e.mem.u32(argument)
+            } else {
+                e.call(matches, &args![element, argument]).bool()
+            };
+            if hit {
+                return index as i32;
+            }
+        }
+        index = index.wrapping_add(1);
+    }
+    -1
+}
+
+// Typed from 0049c680
+/// A simple list's find (`thiscall(this, wanted, start)`, `RET 8`): from `start`, or from the list's
+/// first node when it is 0 (`00559450`), the first node whose item equals the word at `wanted`
+/// (read again for each node, as the exe reads it), else 0. Every tile a menu deletes asks it of the
+/// list of hibernating tiles (`Tile::~Tile`, through `0057c730`), so a menu of many hidden tiles
+/// walked that list once per tile with a call by address per node; here the walk is a loop.
+pub fn list_find(e: &mut Engine, this: Ptr, wanted: Ptr<u32>, start: u32) -> u32 {
+    let mut node = start;
+    if node == 0 {
+        node = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, this));
+    }
+    // The exe steps with `0057cbe0` (the node's next at `+0`, its item at `+8`), its node variable
+    // on its stack; the step's two reads, here in place.
+    while node != 0 {
+        let current = node;
+        let item = node.wrapping_add(8);
+        node = e.mem.u32(node);
+        if e.mem.u32(wanted.addr()) == e.mem.u32(item) {
+            return current;
+        }
+    }
+    0
+}
 
 // Typed from 00853130
 // Typed from 00a1e380

@@ -33,7 +33,17 @@ const SPINS_BEFORE_SLEEPING: u32 = 0x2710;
 /// count is then set to 1.
 pub fn fn_0040fbf0(e: &mut Engine, this: Ptr, _unused_1: u32) {
     let thread = e.call(CURRENT_THREAD_ID, &args![]).u32();
-    if e.mem.u32(this.addr()) == thread {
+    // The owner word is also accessed by the acquire CAS. Use an atomic
+    // read for its recursive fast path when host threads share this memory.
+    let owner = if e.mem.is_shared() {
+        e.mem
+            .atomic_u32(this.addr())
+            .map(|word| word.load(std::sync::atomic::Ordering::Relaxed))
+    } else {
+        None
+    }
+    .unwrap_or_else(|| e.mem.u32(this.addr()));
+    if owner == thread {
         let count = e.mem.u32(this.addr() + 4).wrapping_add(1);
         e.mem.set_u32(this.addr() + 4, count);
     } else {

@@ -11,8 +11,8 @@
 //!   DLL.
 //! - [`identity`]: the answers a mod asks first (`GetLNVersion`, `GetNVSEVersionFull`, JIP's
 //!   versions of `IsPluginInstalled` and `GetPluginVersion`), behind one run-time
-//!   switch, the host's row `NV_JIP_INSTALLED` ([`set_answers_installed`], off in every preset:
-//!   step 3.10), that keeps JIP "not installed" unless a run turns it on.
+//!   switch, the host's row `NV_JIP_INSTALLED` ([`set_answers_installed`], on in the fixes
+//!   preset, off in vanilla: step 3.10), that keeps JIP "not installed" unless a run turns it on.
 //! - [`cosave`]: JIP's co-save section (its eight records, in JIP's format and in JohnnyGuitar
 //!   NVSE's corrected one) and its listener for xNVSE's messages, registered with xNVSE as a
 //!   plugin (`nvse::plugins`); [`containers`]: JIP's hash maps, whose walking order decides the
@@ -87,11 +87,11 @@ use engine_core::prelude::*;
 /// table, its hooks and its own game patches go in. Not installed, a mod that checks for JIP
 /// stops with its own "requires JIP" message, as without the DLL, instead of halfway through a
 /// script. A run switches it on only with the host's row `NV_JIP_INSTALLED` (Fallout.ini
-/// `bJIPInstalled`, off in every preset: step 3.10), through [`set_answers_installed`] before
+/// `bJIPInstalled`, on in the fixes preset, off in vanilla: step 3.10), through [`set_answers_installed`] before
 /// [`install`].
 pub const DEFAULT_ANSWERS_INSTALLED: bool = false;
 
-// "Installed" only by the row, never by default, until the row is proven in the game.
+// "Installed" only by the row (on in the fixes preset): an engine with no row stays "not installed".
 const _: () = assert!(
     !DEFAULT_ANSWERS_INSTALLED,
     "JIP answers \"installed\" only when the host's row NV_JIP_INSTALLED switches it on"

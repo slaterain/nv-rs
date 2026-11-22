@@ -5614,9 +5614,12 @@ pub fn map_menu_update_playing_sounds(e: &mut Engine, this: Ptr<MapMenu>) {
         }
         if none_valid {
             map_menu_stop_note_sound(e, this);
-            let volume = x87_quiet_bits(e.mem.u32(base + 0xc8));
-            let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
-            e.call(AUDIO_SET_RADIO_VOLUME, &args![audio, volume]);
+            // `0x79A750` (lStewieAl's Tweaks' S0208 jumps over the radio volume's set there).
+            if !e.stewie(engine_core::extend::stewie::MAP_KEEPS_RADIO_VOLUME) {
+                let volume = x87_quiet_bits(e.mem.u32(base + 0xc8));
+                let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
+                e.call(AUDIO_SET_RADIO_VOLUME, &args![audio, volume]);
+            }
         } else if all_ready {
             e.set(this, MapMenu::bSoundsLoading, 0);
             let length = count
@@ -13492,6 +13495,30 @@ mod n056_tests {
         let subtitle = calls_to(&e, SHOW_SUBTITLE);
         assert_eq!(subtitle.len(), 1);
         assert_eq!(subtitle[0][7..], [player, 0]);
+    }
+
+    /// lStewieAl's Tweaks' row S0208: a loading holotape whose sounds are none valid stops its
+    /// note sound; the exe then sets the radio's volume (`00ad7c00` with the menu's +0xC8), the
+    /// row on skips it (`0x79A750`).
+    #[test]
+    fn s0208_no_radio_volume_reset_from_the_map() {
+        for on in [false, true] {
+            let mut e = engine();
+            let menu = open_menu(&mut e, 0x100);
+            e.set_stewie(engine_core::extend::stewie::MAP_KEEPS_RADIO_VOLUME, on);
+            e.set(menu, MapMenu::bSoundsLoading, 1);
+            e.mem.set_u32(menu.addr() + 0xc8, 0.5f32.to_bits());
+            returns(&mut e, SOUND_IS_VALID, 0);
+            returns(&mut e, AUDIO_INSTANCE, 0x6100);
+            e.call_log = Some(vec![]);
+            e.call(0x0079_a660, &args![menu]);
+            let set = calls_to(&e, AUDIO_SET_RADIO_VOLUME);
+            if on {
+                assert!(set.is_empty());
+            } else {
+                assert_eq!(set, vec![vec![0x6100, 0.5f32.to_bits()]]);
+            }
+        }
     }
 
     /// lStewieAl's Tweaks' row S0182: a holotape whose sound starts with no subtitles. The exe

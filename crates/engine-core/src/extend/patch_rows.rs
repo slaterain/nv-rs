@@ -6,7 +6,7 @@
 //! Each file lists `SITES` and `WRAPS` rows as [`super::SITES`] and [`super::WRAPS`] do (by
 //! address, each with its step), and the build checks them as it checks those: addresses in
 //! order, and also that no address is listed twice anywhere (in a file, in two files, or in a file
-//! and the main tables). A row here has the one owner `Jip`. A patch at an address that already has
+//! and the main tables). A row here has one owner, `Jip` (or `JohnnyGuitar` in `jg`). A patch at an address that already has
 //! a row of the main tables (a seam xNVSE also uses, say) is not a row here: JIP joins that row as
 //! a second owner instead (as the result zeroing of step 3.9a does). A row lives in the file of its HOME
 //! group (the one that writes its handler), wraps too. A row split across groups' files: the other
@@ -34,8 +34,10 @@ mod gk;
 mod gl;
 mod gp;
 mod gs;
+mod gt;
 mod gw;
 mod gx;
+mod jg;
 
 /// Every file's seams: step 3.9a's, then the groups', then the commands'.
 pub(super) const SITES: &[&[Entry]] = &[
@@ -52,9 +54,11 @@ pub(super) const SITES: &[&[Entry]] = &[
     gk::SITES,
     gp::SITES,
     gs::SITES,
+    gt::SITES,
     gw::SITES,
     gx::SITES,
     cmds::SITES,
+    jg::SITES,
 ];
 
 /// Every file's wraps.
@@ -72,10 +76,14 @@ pub(super) const WRAPS: &[&[Entry]] = &[
     gk::WRAPS,
     gp::WRAPS,
     gs::WRAPS,
+    gt::WRAPS,
     gw::WRAPS,
     gx::WRAPS,
     cmds::WRAPS,
+    jg::WRAPS,
 ];
 
 /// The owner list of a row here.
 const JIP: &[super::Owner] = &[super::Owner::Jip];
+/// The owner list of a JohnnyGuitar row.
+const JG: &[super::Owner] = &[super::Owner::JohnnyGuitar];

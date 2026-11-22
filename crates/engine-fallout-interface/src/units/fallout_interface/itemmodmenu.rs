@@ -528,7 +528,10 @@ pub fn item_mod_menu_do_click(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
     };
     if id == 0xc {
         e.call(PLAY_MENU_SOUND, &args![0x24u32]);
-        if e.global::<u8>(FLAG_011D9F40) == 1 {
+        // `0x783A7E` (S0088 writes the `JNZ` as `JMP`: the equip back never runs).
+        if !e.stewie(engine_core::extend::stewie::ITEM_MOD_MENU_KEEPS_EQUIPPED)
+            && e.global::<u8>(FLAG_011D9F40) == 1
+        {
             let list = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, mod_item(e)));
             let extra = node_item(e, list);
             let count = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, mod_item(e)));
@@ -583,11 +586,41 @@ pub fn item_mod_menu_do_click(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
     let highlighted = e.vcall(base + MOD_LIST, 4, &args![]).u32();
     e.call(LIST_REMOVE_ITEM, &args![base + MOD_LIST, highlighted]);
     item_mod_menu_init_item_mod_menu(e, mod_item(e), 0);
+    // `0x783A35` (lStewieAl's Tweaks' S0088 calls `ItemModMenuHook` there: the refresh, then the
+    // re-equip of a worn item).
+    stewie_after_mod_refresh(e);
     if e.call(ITEM_GET_WORN, &args![item, 0u32]).bool() {
         let player = e.global::<u32>(PLAYER);
         e.vcall(player, 0x3c4, &args![]);
         e.call(UPDATE_INVENTORY_MENU, &args![]);
     }
+}
+
+/// The tail of lStewieAl's Tweaks' `ItemModMenuHook` (row S0088, `main.h`), after the refresh: with
+/// the row on and the target worn (byte `011d9f40`; no longer unequipped while the menu is open),
+/// the menu's target entry (`011d9f58`) is unequipped and equipped again: its first extra list
+/// (the word its `extendData` list starts with), `QueueUnEquipObject` then `QueueEquipObject` on
+/// the player with the entry's form (+8) and count (+4), flags 1, 0, 1. Off: nothing.
+pub fn stewie_after_mod_refresh(e: &mut Engine) {
+    if !e.stewie(engine_core::extend::stewie::ITEM_MOD_MENU_KEEPS_EQUIPPED)
+        || e.global::<u8>(FLAG_011D9F40) == 0
+    {
+        return;
+    }
+    let entry = mod_item(e);
+    let lists = e.mem.u32(entry);
+    let extra = if lists != 0 { e.mem.u32(lists) } else { 0 };
+    let count = e.mem.u32(entry + 4);
+    let object = e.mem.u32(entry + 8);
+    let player = e.global::<u32>(PLAYER);
+    e.call(
+        QUEUE_UNEQUIP,
+        &args![player, object, count, extra, 1u32, 0u32, 1u32],
+    );
+    e.call(
+        QUEUE_EQUIP,
+        &args![player, object, count, extra, 1u32, 0u32, 1u32],
+    );
 }
 
 // Translated from 00783af0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -990,10 +1023,14 @@ pub fn item_mod_menu_init_item_mod_menu(e: &mut Engine, item: u32, flag: u8) {
         let count = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, mod_item(e)));
         let object = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, mod_item(e)));
         let player = e.global::<u32>(PLAYER);
-        e.call(
-            QUEUE_UNEQUIP,
-            &args![player, object, count, extra, 0u32, 0u32, 1u32],
-        );
+        // `0x7847A8` (lStewieAl's Tweaks' S0088 writes a NOP and `ADD ESP,0x18` over the call:
+        // its words are still read).
+        if !e.stewie(engine_core::extend::stewie::ITEM_MOD_MENU_KEEPS_EQUIPPED) {
+            e.call(
+                QUEUE_UNEQUIP,
+                &args![player, object, count, extra, 0u32, 0u32, 1u32],
+            );
+        }
         e.set_global(FLAG_011D9F40, 1u8);
     }
     let health = e.call(ITEM_GET_HEALTH, &args![mod_item(e), 1u32]).f64();
@@ -1794,5 +1831,119 @@ mod n054_tests {
             calls_to(&e, 0x00c0_0010),
             vec![vec![this.addr(), 0xf, 0x900]]
         );
+    }
+
+    /// Row S0088 (lStewieAl's Tweaks' `fixItemModMenuUnEquipBug`): opening the menu on a worn
+    /// item marks it modding and sets the flag either way, but queues the unequip (`0088c790`,
+    /// six words) only with the row off; closing (id 0xc) with the flag set queues the equip,
+    /// clears the modding mark and the flag only with the row off.
+    #[test]
+    fn s0088_the_mod_menu_keeps_the_weapon_equipped() {
+        for on in [false, true] {
+            let mut e = Engine::new();
+            let this = menu(&mut e);
+            pages(&mut e, &[FLAG_011D9F40]);
+            e.set_stewie(
+                engine_core::extend::stewie::ITEM_MOD_MENU_KEEPS_EQUIPPED,
+                on,
+            );
+            e.mem.set_f64(FULL_HEALTH, 100.0);
+            e.set_global(MOD_ITEM, 0x7000u32);
+            answer_st0(&mut e, ITEM_GET_HEALTH, 50.0);
+            answer(&mut e, ITEM_GET_WORN, 1);
+            answer(&mut e, ITEM_OBJECT, 0x7100);
+            answer(&mut e, FORM_TYPE, 0x18);
+            answer(&mut e, SETTING_STRING, 0x5700);
+            answer_st0(&mut e, ARMOR_VALUE, 12.0);
+            answer_st0(&mut e, CALC_ARMOR_RATING, 30.0);
+            answer_st0(&mut e, HEALTH_ROUND, 31.0);
+            real_ftol(&mut e);
+            answer(&mut e, 0x00c1_0004, 0x900);
+            answer(&mut e, WORD_AT_ZERO, 0x7200);
+            answer(&mut e, WORD_AT_FOUR, 1);
+            e.register(IDENTITY, |_, a| a[0].into_ret());
+            e.mem.map(0x7000, 0x1000);
+            e.mem.set_u32(0x7200, 0x7300);
+            stub(
+                &mut e,
+                &[
+                    SET_FLOAT_TRAIT,
+                    SET_TRAIT_FROM_INT,
+                    SET_STRING_TRAIT,
+                    LIST_SORT,
+                    0x00c1_0020,
+                    0x00c0_0010,
+                    ITEM_SET_IS_MODDING,
+                    QUEUE_UNEQUIP,
+                    PLAY_MENU_SOUND,
+                    QUEUE_EQUIP,
+                    ITEM_REMOVE_IS_MODDING,
+                    SET_INVENTORY_MENU_VISIBLE,
+                ],
+            );
+            let player = e.global::<u32>(PLAYER);
+            e.call_log = Some(vec![]);
+            e.call(0x0078_4710, &args![0u32, 1u32]);
+            assert_eq!(calls_to(&e, ITEM_SET_IS_MODDING), vec![vec![0x7000]]);
+            let unequip = calls_to(&e, QUEUE_UNEQUIP);
+            if on {
+                assert!(unequip.is_empty());
+            } else {
+                assert_eq!(unequip, vec![vec![player, 0x7100, 1, 0x7300, 0, 0, 1]]);
+            }
+            assert_eq!(e.global::<u8>(FLAG_011D9F40), 1, "row {on}");
+            e.call_log = Some(vec![]);
+            e.call(0x0078_38a0, &args![this, 0xci32, 0u32]);
+            assert_eq!(calls_to(&e, QUEUE_EQUIP).is_empty(), on);
+            assert_eq!(calls_to(&e, ITEM_REMOVE_IS_MODDING).is_empty(), on);
+            assert_eq!(e.global::<u8>(FLAG_011D9F40), u8::from(on));
+            assert_eq!(
+                calls_to(&e, SET_INVENTORY_MENU_VISIBLE),
+                vec![vec![1, 0, 0]]
+            );
+        }
+    }
+
+    /// Row S0088's third part (`0x783A35`, Tweaks' `ItemModMenuHook` after the refresh): with the
+    /// row on and the target worn (`011d9f40`), the target entry (`011d9f58`: extra lists +0,
+    /// count +4, form +8) is unequipped, then equipped, with its first extra list and flags 1, 0,
+    /// 1; not worn, or the row off: neither.
+    #[test]
+    fn s0088_a_modded_worn_item_is_equipped_again() {
+        for (on, worn) in [(true, 1u8), (true, 0), (false, 1)] {
+            let mut e = Engine::new();
+            pages(&mut e, &[FLAG_011D9F40, MOD_ITEM, PLAYER]);
+            e.set_stewie(
+                engine_core::extend::stewie::ITEM_MOD_MENU_KEEPS_EQUIPPED,
+                on,
+            );
+            e.set_global(FLAG_011D9F40, worn);
+            let entry = e.mem.alloc(0xc);
+            let lists = e.mem.alloc(8);
+            e.mem.set_u32(lists, 0x7300);
+            e.mem.set_u32(entry, lists);
+            e.mem.set_u32(entry + 4, 2);
+            e.mem.set_u32(entry + 8, 0x7100);
+            e.set_global(MOD_ITEM, entry);
+            e.set_global(PLAYER, 0x6600u32);
+            stub(&mut e, &[QUEUE_UNEQUIP, QUEUE_EQUIP]);
+            e.call_log = Some(vec![]);
+            stewie_after_mod_refresh(&mut e);
+            let log = e.call_log.take().unwrap();
+            let queued: Vec<_> = log
+                .iter()
+                .filter(|(a, _)| *a == QUEUE_UNEQUIP || *a == QUEUE_EQUIP)
+                .cloned()
+                .collect();
+            let args = vec![0x6600, 0x7100, 2, 0x7300, 1, 0, 1];
+            if on && worn != 0 {
+                assert_eq!(
+                    queued,
+                    vec![(QUEUE_UNEQUIP, args.clone()), (QUEUE_EQUIP, args)]
+                );
+            } else {
+                assert!(queued.is_empty(), "row {on} worn {worn}");
+            }
+        }
     }
 }

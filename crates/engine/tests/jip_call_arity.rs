@@ -47,7 +47,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
 /// The extender crates the test reads.
-const CRATES: [&str; 5] = ["jip", "nvse", "uio", "mcm", "stewie"];
+const CRATES: [&str; 6] = ["jip", "nvse", "uio", "mcm", "stewie", "johnnyguitar"];
 
 /// One direct call in a crate's source.
 #[derive(Debug)]
@@ -349,6 +349,14 @@ const UNREAD: &[Row] = &[
         "equal",
         N(3),
         "the tile map's compare routine, on insert",
+    ),
+    // JohnnyGuitar NVSE.
+    (
+        "johnnyguitar",
+        "lib.rs",
+        "own",
+        N(2),
+        "a storing class's own SetEditorID (vtable +0x134, thiscall: the form and the text)",
     ),
 ];
 
@@ -1742,6 +1750,12 @@ fn mcm_passes_each_game_function_the_words_it_takes() {
 #[test]
 fn stewie_passes_each_game_function_the_words_it_takes() {
     check("stewie");
+}
+
+/// JohnnyGuitar NVSE (its editor ids): each game function it calls by address gets the words it takes.
+#[test]
+fn johnnyguitar_passes_each_game_function_the_words_it_takes() {
+    check("johnnyguitar");
 }
 
 /// The rule for callees nobody translated: G94's old `0x0040A320` (inside `0040a300`) fails, every
