@@ -46,7 +46,8 @@ pub enum Row {
     JipBuiltIn,
 }
 
-/// The Testing list's rows: the new lighting (Vulkan only, off by default) and JIP LN built in.
+/// The Testing list's rows: the new lighting (Vulkan only, off by default) and JIP LN built in (on
+/// by default with the fixes preset since the turn-on; "Off" here turns it off).
 pub const TESTING: [Row; 5] = [
     Row::AmbientOcclusion,
     Row::SunShadows,
@@ -120,6 +121,28 @@ fn default_of(key: &str) -> &'static str {
 }
 
 /// Our key's value in the profile's Fallout.ini, else the table's default.
+/// A Testing row's default as the game plays it: an `[nv-rs Fixes]` key follows the preset (off
+/// under `sPreset=vanilla`, the host's rule for a fix row without its line), any other key the
+/// host table's default.
+fn testing_default(files: &Files, section: &str, key: &str) -> &'static str {
+    if section == "nv-rs Fixes"
+        && ours(files, "nv-rs General", "sPreset").eq_ignore_ascii_case("vanilla")
+    {
+        "0"
+    } else {
+        default_of(key)
+    }
+}
+
+/// A Testing row's value: its key in the profile's Fallout.ini, else [`testing_default`].
+fn testing_value(files: &Files, section: &str, key: &str) -> String {
+    ini_value(&files.ini, section, key)
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| testing_default(files, section, key))
+        .trim()
+        .to_string()
+}
+
 fn ours(files: &Files, section: &str, key: &str) -> String {
     ini_value(&files.ini, section, key)
         .filter(|v| !v.trim().is_empty())
@@ -185,9 +208,11 @@ impl Row {
             Row::FrameRateCounter => &["Hidden (F11 shows it)", "Shown (F11 hides it)"],
             Row::GameThreads => &["Side by side (recommended)", "One at a time (slower)"],
             Row::DrawingThread => &["Own thread (recommended)", "Main thread (slower)"],
-            // The Testing rows: the host table's default first.
+            // The Testing rows: the default the game plays with first.
             r => match r.switch() {
-                Some((_, key)) if default_of(key) == "1" => &["On", "Off"],
+                Some((section, key)) if testing_default(files, section, key) == "1" => {
+                    &["On", "Off"]
+                }
                 _ => &["Off", "On"],
             },
         };
@@ -294,7 +319,7 @@ impl Row {
                 }
             }
             r => match r.switch() {
-                Some((section, key)) if ours(files, section, key) == "1" => "On".into(),
+                Some((section, key)) if testing_value(files, section, key) == "1" => "On".into(),
                 _ => "Off".into(),
             },
         }
@@ -567,19 +592,32 @@ mod tests {
 
     /// The Testing rows: each one key of ours, shown as the host table's default when missing
     /// (the new lighting off, the sun light from the sky and characters' shadows on with it, JIP
-    /// off), the default offered first, and a change writes only that key.
+    /// on with the fixes preset), the default offered first, and a change writes only that key.
     #[test]
     fn the_testing_rows_are_one_key_each() {
         let f = files("[nv-rs Display]\r\nsRenderer=vulkan\r\n", "");
         let shown: Vec<String> = TESTING.iter().map(|r| r.current(&f)).collect();
-        assert_eq!(shown, ["Off", "Off", "On", "On", "Off"]);
+        assert_eq!(shown, ["Off", "Off", "On", "On", "On"]);
         assert_eq!(Row::AmbientOcclusion.choices(&f, (1, 1)), ["Off", "On"]);
         assert_eq!(Row::SunLightFromSky.choices(&f, (1, 1)), ["On", "Off"]);
         let r = Row::SunShadows.apply(&f, "On");
         assert_eq!(r.ini, set_key(&f.ini, "nv-rs Display", "bSunShadows", "1"));
         assert_eq!(Row::SunShadows.current(&r), "On");
-        let r = Row::JipBuiltIn.apply(&f, "On");
-        assert_eq!(r.ini, set_key(&f.ini, "nv-rs Fixes", "bJIPInstalled", "1"));
+        assert_eq!(Row::JipBuiltIn.choices(&f, (1, 1)), ["On", "Off"]);
+        let r = Row::JipBuiltIn.apply(&f, "Off");
+        assert_eq!(r.ini, set_key(&f.ini, "nv-rs Fixes", "bJIPInstalled", "0"));
+        assert_eq!(Row::JipBuiltIn.current(&r), "Off");
+        // Under the vanilla preset with no key, JIP is off as the game plays it: the row shows
+        // Off, offers Off first, and On writes the key.
+        let v = files("[nv-rs General]\r\nsPreset=vanilla\r\n", "");
+        assert_eq!(Row::JipBuiltIn.current(&v), "Off");
+        assert_eq!(Row::JipBuiltIn.choices(&v, (1, 1)), ["Off", "On"]);
+        let r = Row::JipBuiltIn.apply(&v, "On");
+        assert_eq!(r.ini, set_key(&v.ini, "nv-rs Fixes", "bJIPInstalled", "1"));
+        assert_eq!(Row::JipBuiltIn.current(&r), "On");
+        assert_eq!(Row::JipBuiltIn.apply(&v, "Off"), v, "already off");
+        // The display rows keep the table's default under vanilla.
+        assert_eq!(Row::SunLightFromSky.current(&v), "On");
         assert_eq!(r.prefs, f.prefs);
         assert_eq!(Row::SunLightFromSky.apply(&f, "On"), f);
         assert!(TESTING.iter().all(|r| !ROWS.contains(r)));

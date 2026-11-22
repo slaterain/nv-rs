@@ -95,7 +95,7 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
     ),
     (
         "S0065",
-        "bMenuFixesRenderedMenuBehindTrade",
+        "bFixMouseInBarterAndContainerMenusInsideTerminals",
         Row::at(WORLD_FIXES, 24),
     ),
     (
@@ -156,9 +156,5 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "bNavMeshObstacleDoorTypeFix",
         Row::at(WORLD_FIXES, 3),
     ),
-    (
-        "S0984",
-        "bMenuFixesConsolePadBCloses",
-        Row::at(WORLD_FIXES, 25),
-    ),
+    ("S0984", "bMenuFixesDeferredInit", Row::at(WORLD_FIXES, 25)),
 ];

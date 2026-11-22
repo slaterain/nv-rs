@@ -19,6 +19,9 @@ pub struct Place {
     pub adapter_card: Option<String>,
     /// Mods are installed, or put in the mods folder by hand.
     pub mods: bool,
+    /// Saves to import were found (Windows: `Documents\My Games\FalloutNV\Saves`; Linux: a
+    /// Proton or Wine prefix's), so the start screen offers Import saves.
+    pub saves: bool,
     /// Why nv-rs must not write in its own folder, in the player's words, and Play.exe's stop
     /// code for it (`None`: it may).
     pub refused: Option<(String, i32)>,
@@ -68,6 +71,16 @@ pub fn has_mods(dir: &Path) -> bool {
                 .to_string_lossy()
                 .to_ascii_lowercase()
                 .starts_with("read me")
+        })
+    })
+}
+
+/// Whether the folder `dir` holds a save (a `.fos` file, any case), as the import counts them.
+pub fn has_saves(dir: &Path) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|entries| {
+        entries.flatten().any(|e| {
+            let p = e.path();
+            p.is_file() && p.extension().is_some_and(|x| x.eq_ignore_ascii_case("fos"))
         })
     })
 }
@@ -179,6 +192,7 @@ pub fn place() -> Place {
             fallout_ini: PathBuf::new(),
             adapter_card: None,
             mods: false,
+            saves: false,
             refused: Some((
                 "HOME is not set to a full path, so nv-rs has no folder of its own".into(),
                 1,
@@ -204,11 +218,17 @@ pub fn place_from(home: &game_folders::Home, named: Option<PathBuf>) -> Place {
                 .to_string()
         })
         .map(PathBuf::from);
+    let scan = gf::scan(home);
     let game = named
         .into_iter()
         .chain(remembered)
-        .chain(gf::games(home).into_iter().map(|f| f.folder))
+        .chain(scan.games.into_iter().map(|f| f.folder))
         .find_map(|folder| gf::game_folder(&folder));
+    // The saves play.sh offers to copy: a Proton or Wine prefix's `My Games/FalloutNV/Saves`.
+    let saves = scan
+        .saves
+        .iter()
+        .any(|s| gf::find_child(&s.folder, "Saves").is_some_and(|d| has_saves(&d)));
     let fallout_ini = own
         .join("game")
         .join("Documents")
@@ -222,6 +242,7 @@ pub fn place_from(home: &game_folders::Home, named: Option<PathBuf>) -> Place {
         fallout_ini,
         adapter_card: None,
         mods,
+        saves,
         refused,
     }
 }
