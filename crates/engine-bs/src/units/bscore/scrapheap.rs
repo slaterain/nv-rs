@@ -136,6 +136,16 @@ fn unlock_buffers(e: &mut Engine, manager: Ptr<ScrapHeapManager>) {
         .wrapping_sub(1);
     e.set(manager, ScrapHeapManager::uiLockCount, count);
     if count == 0 {
+        // The compiler inlined BSSpinLock's final x86 store here (for example
+        // 00aa5bea and 00aa5c68). It must publish the buffer table before
+        // another native thread claims the lock, just as 0040fba0 must.
+        if e.mem.is_shared() {
+            if let Some(owner) = e.mem.atomic_u32(buffer_lock(manager).addr()) {
+                owner.store(0, std::sync::atomic::Ordering::Release);
+                return;
+            }
+            std::sync::atomic::fence(std::sync::atomic::Ordering::Release);
+        }
         e.set(manager, ScrapHeapManager::uiOwningThread, 0);
     }
 }
