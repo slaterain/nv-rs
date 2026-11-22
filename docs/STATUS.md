@@ -109,11 +109,11 @@ console commands it re-exports are copies of the console's own.
 
 ## JIP LN built in
 
-🔨 JIP LN's script commands and game patches, with nothing to install. All are built, but JIP
-answers "not installed" in every preset: it is off by default and can be switched on to test mods
-that need it (`bJIPInstalled` in `Fallout.ini`, or `NV_JIP_INSTALLED`). The per-patch detail is in
+🔨 JIP LN's script commands and game patches, with nothing to install. All are built, and JIP
+answers "installed" in the default fixes preset, together with MCM's plugin and UI Organizer (vanilla
+leaves all three off; `bJIPInstalled=0` in `Fallout.ini` turns JIP off). The per-patch detail is in
 [FIXES.md, "JIP LN NVSE's game patches"](FIXES.md#jip-ln-nvses-game-patches) and
-[FIXES.md, "JIP LN NVSE switched on for testing"](FIXES.md#jip-ln-nvse-switched-on-for-testing).
+[FIXES.md, "JIP LN NVSE switched on"](FIXES.md#jip-ln-nvse-switched-on).
 
 JIP LN's command table (its 1,150 slots at their own numbers) and its co-save are in, and all of
 its commands: 1,116, plus its two version commands, 1,118 in all. The command count on the front
@@ -212,7 +212,8 @@ purpose (below; that list also names Enhanced Camera's patch, which is not one o
 
 - **Framework and the player:** the patch framework, the first two fixes, the player's update 3D
   (both views, weapon and queued references), the detection patch (forced detection values and the
-  detection fix), the player kept at a reference's node while a script synchronizes them.
+  detection fix), the player kept at a reference's node while a script synchronizes them, a busy
+  script runner asked to run again skipping its names and log line.
 - **Projectiles and combat:** fired projectiles' ammo, count and split beams; the hit and combat
   fixes (equip notices, life state saved, kill challenges, impact data and hit blood, weapon wear,
   on-hit weapon effects, creature spread, the player's killer kept); JIP's hit damage (damage
@@ -236,7 +237,8 @@ purpose (below; that list also names Enhanced Camera's patch, which is not one o
   shape, `SetScale` clamped, the weapon node cleared, clouds after leaving a building, the water
   lookup, save and global fixes, fresh mod logs, markers by id, magic effect fixes, loading screens
   made for a place (`bLoadScreenFix`), JIP's light data (flicker and pulse, light editor ids,
-  lights tagged in mod meshes).
+  lights tagged in mod meshes), the process lists' time refresh made at JIP's deferred start
+  instead of at the game's start-up.
 - **Weapons and models:** a modded weapon's "+" in the crosshair, modded weapons' "Name+" in every
   item list, NPCs showing their weapon mods and random NPC weapon mods (`bNPCWeaponMods`), the gun
   wobble as JIP works it out (and the actors a script spares it), body slots a script hides in
@@ -260,24 +262,29 @@ purpose (below; that list also names Enhanced Camera's patch, which is not one o
   they pass (`SetProjectileLight`'s light included), and a muzzle flash's and an explosion's
   light shine at the light record's own brightness. Each lit shot adds a light while it flies,
   with no cap, as in JIP.
+- **Loading:** JIP's fixed-string pool in place of the game's slow store of name strings (a hash
+  lookup for every model, node and animation name a load makes; unused names freed at the same
+  clean-ups as the game's).
 
-Not yet:
+Not built, because they do nothing on this port:
 
-- Its fixed-string pool: it waits for the 64-bit move.
-
-Left out on purpose: two patches that only make the game faster; the editor's, NVAC's and Enhanced
-Camera's patches; a start-up order change; JIP's own start-up; and one that xNVSE already makes.
+- four tiny functions JIP shortens: the port's code for them is already just the answer;
+- the expression buffer JIP grows: the built-in xNVSE writes the same bytes;
+- JIP's own start-up hook: it hands back the same camera and only fills JIP's own copies;
+- the editor's two patches: the port does not run the editor (GECK);
+- NVAC's console alerts and Enhanced Camera's ground fix: they patch those programs' DLLs, which the
+  port does not load (Enhanced Camera's fix is not one of the 183).
 
 ## Mod Configuration Menu (MCM) built in
 
 🔨 The script commands MCM's menu needs, with nothing to install: its nine commands (MCM 1.5's
 `MCM.dll`, built from its machine code), its menu traits and its mods' INI settings, kept between
-sessions beside the saves. Off until it is tried in the game (`bMCM`, `NV_MCM`).
+sessions beside the saves. On in the fixes preset with JIP, off in vanilla (`bMCM`, `NV_MCM`).
 
 ## UI Organizer (UIO) built in
 
-🔨 UI mods' HUD and menu additions, with nothing to install. Off until it is proven in the game
-(`bUIO`, `NV_UIO`). In so far:
+🔨 UI mods' HUD and menu additions, with nothing to install. On in the fixes preset with JIP,
+off in vanilla (`bUIO`, `NV_UIO`). In so far:
 
 - Its lists: UIO's own `supported.txt` of the UI mods it knows (35 entries) is built in, and a
   copy in `Data\uio\` takes its place; the UI mods' `Data\uio\public` lists, with their
@@ -291,12 +298,12 @@ More in [FIXES.md, "UI Organizer"](FIXES.md#ui-organizer).
 
 ## lStewieAl's Tweaks built in
 
-🔨 Its engine fixes and tweaks, with nothing to install. 140 of its changes are built:
+🔨 Its engine fixes and tweaks, with nothing to install. 158 of its changes are built:
 
 - 72 of its crash and leak fixes;
 - Engine Optimizations' first change (a save's changed-forms map);
-- 67 other fixes and tweaks: 7 to the engines and the console; 14 to forms, cells, scripts, saves
-  and sound; 25 to AI, actors and the player; 21 to menus and the HUD.
+- 85 other fixes and tweaks: 8 to the engines and the console; 14 to forms, cells, scripts, saves
+  and sound; 32 to AI, actors and the player; 31 to menus and the HUD.
 
 - Each change is on with the fixes preset and has its own off key in `Fallout.ini`'s
   `[nv-rs Stewie]`.
@@ -308,6 +315,14 @@ More in [FIXES.md, "UI Organizer"](FIXES.md#ui-organizer).
   LOD a plugin disabled, with Tweaks' console line naming it; a place whose navigation mesh cannot
   be worked out; a path through a door with no way back; a switch or LOD node that updates only its
   shown part). One Tweaks slip is not copied, under the missing-data guard row.
+- Stairs: collision marked as stairs (123 of the game's own meshes, among them the Hoover Dam
+  towers' stairs and the vault, utility and basement stairs) counts every riser as a step, so the
+  player and NPCs walk up and down them without catching on a riser or being pushed back. Two
+  Tweaks slips are not copied, under the missing-data guard row.
+- Menus' input: the inventory keeps its scroll place when the Pip-Boy closes; typed text uses
+  shift as it is now; arrow keys keep a menu's selection from the mouse; the pad's key repeat no
+  longer carries over; the left thumbstick moves the console's pointer; menus get L3 and R3; the
+  Pip-Boy light fades when it should; the console shows the selected reference's model path.
 - The remaining crash fixes and tweaks come next.
 
 More in [FIXES.md, "lStewieAl's Tweaks"](FIXES.md#lstewieals-tweaks).
@@ -325,8 +340,8 @@ More in [FIXES.md, "lStewieAl's Tweaks"](FIXES.md#lstewieals-tweaks).
   mods" lays them over the game, then the hand-filled `mods` folder (`crates/mod-install`, which
   Play.exe uses). Mod archives in the `mods` folder are no longer copied into the game.
 - On Linux and macOS, `./play.sh --mods` plays with them the same way, in a profile of its own.
-- The text chooser (`crates/mod-chooser`, the same on all three systems: "Install mods.cmd" on
-  Windows, `./play.sh --install-mods` on Linux and macOS) lists the archives and installed mods,
+- The text chooser (`crates/mod-chooser`, the same on all three systems: the launcher's `> Mods`,
+  which runs Play.exe's or play.sh's `--install-mods` in its window) lists the archives and installed mods,
   asks each installer's questions in plain words, and installs and removes mods.
 
 ## The launcher

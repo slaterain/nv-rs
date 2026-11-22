@@ -627,6 +627,97 @@ fn fwd_set_texture_stage_state(
     model
 }
 
+/// `SetTexture` forwarded as the others ([`forwarded`]), in one pass when it can
+/// ([`texture_one_pass`]).
+fn fwd_set_texture(e: &mut Engine, this: Ptr, sampler: u32, texture: u32) -> u32 {
+    if let Some(model) = texture_one_pass(e, this, sampler, texture) {
+        return model;
+    }
+    let model = set_texture(e, this, sampler, texture);
+    if model == D3D_OK {
+        super::d3d9real::set_texture(e, this.addr(), sampler, texture, model);
+    }
+    model
+}
+
+/// A forwarded `SetTexture` ([`set_texture`], then `super::d3d9real::set_texture`) in one pass over
+/// the device's state: the device and the texture found once, the sampler's texture replaced and
+/// the counts kept there, and the command sent with no second look-up of the devices or the
+/// backend's state. The same model state, answer and commands as the two steps: when the texture
+/// let go of ends (neither the program nor a device holds it any more), its end comes first and
+/// the command after it, as in the two steps. `None` (nothing done) when `NV_D3D9_ONE_PASS=0` or
+/// for a texture not of this layer (the two steps then stop the run as before).
+#[inline]
+fn texture_one_pass(e: &mut Engine, this: Ptr, sampler: u32, texture: u32) -> Option<u32> {
+    let held = crate::device_held(e);
+    let crate::d3d9::DeviceState {
+        device_objects: objects,
+        real,
+        ..
+    } = crate::device_mut(&mut e.device, held);
+    if !super::d3d9resource::one_pass_in(&mut objects.resources) {
+        return None;
+    }
+    if !is_sampler(sampler) {
+        return Some(D3DERR_INVALIDCALL);
+    }
+    let device = this.addr();
+    let cmd = d3d9_stream::Cmd::SetTexture {
+        device,
+        sampler,
+        texture,
+    };
+    super::d3d9draw::main_set(&mut objects.draw, super::d3d9draw::Key::Texture(sampler));
+    let Objects {
+        devices,
+        draw_devices,
+        textures,
+        draw,
+        ..
+    } = objects;
+    let devices = if super::d3d9draw::drawing_side(draw) && draw_devices.contains_key(&device) {
+        draw_devices
+    } else {
+        devices
+    };
+    let d = devices
+        .get_mut(&device)
+        .expect("an IDirect3DDevice9 of this layer");
+    // The texture the sampler holds already: counting it once more and letting go of it once
+    // changes nothing (as [`set_texture`]).
+    if texture != 0 && d.textures.get(&sampler) == Some(&texture) {
+        super::d3d9real::record_in(real, device, cmd);
+        return Some(D3D_OK);
+    }
+    let old = if texture != 0 {
+        textures.get_mut(&texture)?.bound += 1;
+        d.textures.insert(sampler, texture)
+    } else {
+        d.textures.remove(&sampler)
+    };
+    if let Some(old) = old {
+        // As [`texture_unbind`]: the texture ends once neither the program nor a device holds it.
+        let t = textures
+            .get_mut(&old)
+            .expect("an IDirect3DTexture9 of this layer");
+        t.bound -= 1;
+        if t.bound == 0 && t.references == 0 {
+            texture_destroy(e, Ptr::new(old));
+            super::d3d9real::set_texture(e, device, sampler, texture, D3D_OK);
+            return Some(D3D_OK);
+        }
+    }
+    super::d3d9real::record_in(real, device, cmd);
+    Some(D3D_OK)
+}
+
+/// [`in_scene`] for code that holds the devices' objects already (`super::d3d9resource`'s draws in
+/// one pass).
+#[inline]
+pub(super) fn in_scene_in(objects: &mut Objects, this: Ptr) -> bool {
+    device_in(objects, this).in_scene
+}
+
 /// Which of the device's state tables a set in one pass writes ([`state_one_pass`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum StateSet {
@@ -732,7 +823,6 @@ forwarded! {
     fn fwd_set_clip_plane = set_clip_plane(index: u32, plane: Ptr) => set_clip_plane;
     fn fwd_set_gamma_ramp = set_gamma_ramp(swap_chain: u32, flags: u32, ramp: Ptr)
         => set_gamma_ramp;
-    fn fwd_set_texture = set_texture(sampler: u32, texture: u32) => set_texture;
     fn fwd_set_material = set_material(material: Ptr) => set_material;
     fn fwd_set_light = set_light(index: u32, light: Ptr) => set_light;
     fn fwd_light_enable = light_enable(index: u32, enable: u32) => light_enable;
@@ -928,7 +1018,75 @@ fn fwd_create_depth_stencil_surface(
     )
 }
 
+/// The device functions the world draw calls most, for the typed draw code's writer
+/// (`engine_core::real_threads::DeviceWriter`, `NV_DRAW_WRITER`): each the function registered at
+/// its slot below (the words form) and the same one taking its arguments as they are.
+static WRITER: engine_core::real_threads::DeviceWriter = {
+    use super::d3d9resource as r;
+    engine_core::real_threads::DeviceWriter {
+        code: DEVICE_CODE,
+        render_state: (
+            crate::entry!(0, fwd_set_render_state(Ptr, u32, u32) -> u32).1,
+            |e, this, state, value| fwd_set_render_state(e, Ptr::new(this), state, value),
+        ),
+        stage_state: (
+            crate::entry!(0, fwd_set_texture_stage_state(Ptr, u32, u32, u32) -> u32).1,
+            |e, this, stage, kind, value| {
+                fwd_set_texture_stage_state(e, Ptr::new(this), stage, kind, value)
+            },
+        ),
+        sampler_state: (
+            crate::entry!(0, fwd_set_sampler_state(Ptr, u32, u32, u32) -> u32).1,
+            |e, this, sampler, kind, value| {
+                fwd_set_sampler_state(e, Ptr::new(this), sampler, kind, value)
+            },
+        ),
+        texture: (
+            crate::entry!(0, fwd_set_texture(Ptr, u32, u32) -> u32).1,
+            |e, this, sampler, texture| fwd_set_texture(e, Ptr::new(this), sampler, texture),
+        ),
+        stream_source: (
+            crate::entry!(0, r::fwd_set_stream_source(Ptr, u32, u32, u32, u32) -> u32).1,
+            |e, this, stream, buffer, offset, stride| {
+                r::fwd_set_stream_source(e, Ptr::new(this), stream, buffer, offset, stride)
+            },
+        ),
+        draw_primitive: (
+            crate::entry!(0, r::fwd_draw_primitive(Ptr, u32, u32, u32) -> u32).1,
+            |e, this, kind, start, count| r::fwd_draw_primitive(e, Ptr::new(this), kind, start, count),
+        ),
+        draw_indexed_primitive: (
+            crate::entry!(0, r::fwd_draw_indexed_primitive(Ptr, u32, u32, u32, u32, u32, u32) -> u32).1,
+            |e, this, kind, base, min, vertices, start, count| {
+                r::fwd_draw_indexed_primitive(
+                    e,
+                    Ptr::new(this),
+                    kind,
+                    base,
+                    min,
+                    vertices,
+                    start,
+                    count,
+                )
+            },
+        ),
+        vertex_constants: (
+            crate::entry!(0, r::fwd_set_vertex_constant_f(Ptr, u32, Ptr, u32) -> u32).1,
+            |e, this, start, data, count| {
+                r::fwd_set_vertex_constant_f(e, Ptr::new(this), start, Ptr::new(data), count)
+            },
+        ),
+        pixel_constants: (
+            crate::entry!(0, r::fwd_set_pixel_constant_f(Ptr, u32, Ptr, u32) -> u32).1,
+            |e, this, start, data, count| {
+                r::fwd_set_pixel_constant_f(e, Ptr::new(this), start, Ptr::new(data), count)
+            },
+        ),
+    }
+};
+
 fn register_code(e: &mut Engine) {
+    engine_core::real_threads::install_device_writer(&WRITER);
     let device: [(u32, crate::AbiFn); 48] = [
         (16, crate::entry!(0, reset(Ptr, Ptr) -> u32).1),
         (
@@ -1019,21 +1177,21 @@ fn register_code(e: &mut Engine) {
         (76, crate::entry!(0, get_scissor_rect(Ptr, Ptr) -> u32).1),
         (
             57,
-            crate::entry!(0, fwd_set_render_state(Ptr, u32, u32) -> u32).1,
+            WRITER.render_state.0,
         ),
         (
             58,
             crate::entry!(0, get_render_state(Ptr, u32, Ptr) -> u32).1,
         ),
         (64, crate::entry!(0, get_texture(Ptr, u32, Ptr) -> u32).1),
-        (65, crate::entry!(0, fwd_set_texture(Ptr, u32, u32) -> u32).1),
+        (65, WRITER.texture.0),
         (
             66,
             crate::entry!(0, get_texture_stage_state(Ptr, u32, u32, Ptr) -> u32).1,
         ),
         (
             67,
-            crate::entry!(0, fwd_set_texture_stage_state(Ptr, u32, u32, u32) -> u32).1,
+            WRITER.stage_state.0,
         ),
         (
             68,
@@ -1041,7 +1199,7 @@ fn register_code(e: &mut Engine) {
         ),
         (
             69,
-            crate::entry!(0, fwd_set_sampler_state(Ptr, u32, u32, u32) -> u32).1,
+            WRITER.sampler_state.0,
         ),
         (48, crate::entry!(0, get_viewport(Ptr, Ptr) -> u32).1),
         (49, crate::entry!(0, fwd_set_material(Ptr, Ptr) -> u32).1),
@@ -1095,10 +1253,7 @@ fn register_code(e: &mut Engine) {
             93,
             crate::entry!(0, r::get_vertex_shader(Ptr, Ptr) -> u32).1,
         ),
-        (
-            94,
-            crate::entry!(0, r::fwd_set_vertex_constant_f(Ptr, u32, Ptr, u32) -> u32).1,
-        ),
+        (94, WRITER.vertex_constants.0),
         (
             95,
             crate::entry!(0, r::get_vertex_constant_f(Ptr, u32, Ptr, u32) -> u32).1,
@@ -1119,22 +1274,13 @@ fn register_code(e: &mut Engine) {
             99,
             crate::entry!(0, r::get_vertex_constant_b(Ptr, u32, Ptr, u32) -> u32).1,
         ),
-        (
-            100,
-            crate::entry!(0, r::fwd_set_stream_source(Ptr, u32, u32, u32, u32) -> u32).1,
-        ),
+        (100, WRITER.stream_source.0),
         (
             101,
             crate::entry!(0, r::get_stream_source(Ptr, u32, Ptr, Ptr, Ptr) -> u32).1,
         ),
-        (
-            81,
-            crate::entry!(0, r::fwd_draw_primitive(Ptr, u32, u32, u32) -> u32).1,
-        ),
-        (
-            82,
-            crate::entry!(0, r::fwd_draw_indexed_primitive(Ptr, u32, u32, u32, u32, u32, u32) -> u32).1,
-        ),
+        (81, WRITER.draw_primitive.0),
+        (82, WRITER.draw_indexed_primitive.0),
         (
             83,
             crate::entry!(0, r::fwd_draw_primitive_up(Ptr, u32, u32, u32, u32) -> u32).1,
@@ -1157,10 +1303,7 @@ fn register_code(e: &mut Engine) {
             108,
             crate::entry!(0, r::get_pixel_shader(Ptr, Ptr) -> u32).1,
         ),
-        (
-            109,
-            crate::entry!(0, r::fwd_set_pixel_constant_f(Ptr, u32, Ptr, u32) -> u32).1,
-        ),
+        (109, WRITER.pixel_constants.0),
         (
             110,
             crate::entry!(0, r::get_pixel_constant_f(Ptr, u32, Ptr, u32) -> u32).1,
@@ -6279,6 +6422,496 @@ pub(crate) mod tests {
         assert_eq!(e.mem.u32(out), 5);
         assert_eq!(e.vcall(dev, 4 * 58, &[8, out]).u32(), D3D_OK);
         assert_eq!(e.mem.u32(out), 6);
+    }
+
+    /// The textures: each one's address, references and samplers holding it (address order), then
+    /// each sampler's texture on main's device and on the drawing side's copy (while a cut is
+    /// open).
+    fn textures_held(e: &mut Engine, dev: u32) -> Vec<u32> {
+        let objects = &device!(e).device_objects;
+        let mut textures: Vec<_> = objects
+            .textures
+            .iter()
+            .map(|(a, t)| [*a, t.references, t.bound])
+            .collect();
+        textures.sort_unstable();
+        let mut out: Vec<u32> = textures.into_iter().flatten().collect();
+        for d in [objects.devices.get(&dev), objects.draw_devices.get(&dev)]
+            .into_iter()
+            .flatten()
+        {
+            let mut bound: Vec<_> = d.textures.iter().map(|(s, t)| [*s, *t]).collect();
+            bound.sort_unstable();
+            out.push(u32::MAX);
+            out.extend(bound.into_iter().flatten());
+        }
+        out
+    }
+
+    /// A device for [`binding_sets_run`] and the hand test: six managed textures, four vertex
+    /// buffers and an index buffer made before the stream (so their making is not in it), then the
+    /// wire stream (`wire`, the commands as `d3d9_stream::wire` encodes them) with every object
+    /// forwarded (so an object's end is a command too), the FVF, the index buffer, `vertex[0]` on
+    /// stream 0 and a scene begun; the sets and draws in one pass as `one_pass` says.
+    #[allow(clippy::type_complexity)]
+    fn binding_device(
+        one_pass: bool,
+        wire: Box<dyn d3d9_stream::Backend>,
+    ) -> (Engine, u32, Vec<u32>, Vec<u32>, u32) {
+        use super::super::d3d9resource::one_pass_for_tests;
+        let (mut e, dev) = texture_device(Store::Host);
+        let out = e.mem.alloc(4);
+        let textures: Vec<u32> = (0..6)
+            .map(|_| new_texture(&mut e, dev, [4, 4, 1, 0, A8R8G8B8, 1]))
+            .collect();
+        let make = |e: &mut Engine, slot: u32, [a, b, c, d]: [u32; 4]| {
+            assert_eq!(e.vcall(dev, 4 * slot, &[a, b, c, d, out, 0]).u32(), D3D_OK);
+            e.mem.u32(out)
+        };
+        let vertex: Vec<u32> = (0..4)
+            .map(|_| make(&mut e, 26, [64, 0, 0x142, 1]))
+            .collect();
+        let index = make(&mut e, 27, [12, 0, 101, 1]);
+        super::super::d3d9real::test_stream(&mut e, dev, d3d9_stream::Stream::direct(wire));
+        for &o in textures.iter().chain(&vertex).chain([&index]) {
+            super::super::d3d9real::test_forwarded(&mut e, o);
+        }
+        one_pass_for_tests(&mut e, one_pass);
+        assert_eq!(e.vcall(dev, 4 * 89, &[0x142]).u32(), D3D_OK);
+        assert_eq!(e.vcall(dev, 4 * 104, &[index]).u32(), D3D_OK);
+        assert_eq!(e.vcall(dev, 4 * 100, &[0, vertex[0], 0, 16]).u32(), D3D_OK);
+        assert_eq!(e.vcall(dev, 4 * 41, &[]).u32(), D3D_OK);
+        (e, dev, textures, vertex, index)
+    }
+
+    /// What one engine did over [`binding_sets_run`]: each call's answer, the stream's commands as
+    /// the wire encodes them, and what the model held (textures, buffers, streams) before each
+    /// join and at the end.
+    type BindingsRun = (Vec<u32>, Vec<u8>, Vec<Vec<u32>>);
+
+    /// Drives a device ([`binding_device`]) through `steps` generated calls (seed `seed`):
+    /// `SetTexture` (samplers past the named ones refused, null), `SetStreamSource` (streams past
+    /// 15 and index buffers refused, null on streams other than 0, the same buffer with another
+    /// offset), `DrawPrimitive` and `DrawIndexedPrimitive`, the program letting go of textures and
+    /// buffers (so a later set ends them: their end, then the command), exact repeats, and drawing
+    /// cuts with calls from both sides; the sets and draws in one pass (`NV_D3D9_ONE_PASS`) as
+    /// `one_pass` says.
+    fn binding_sets_run(one_pass: bool, seed: u64, steps: u32) -> BindingsRun {
+        use super::super::d3d9draw::{as_drawing_side, draw_cut, draw_join};
+        use super::super::d3d9resource::held_for_tests;
+        use d3d9_stream::{Backend, Cmd, Data, Reply};
+        struct Wire(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl Backend for Wire {
+            fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+                d3d9_stream::wire::encode(&cmd, &mut self.0.lock().unwrap());
+                Reply::None
+            }
+        }
+        let wire = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (mut e, dev, mut textures, mut vertex, index) =
+            binding_device(one_pass, Box::new(Wire(wire.clone())));
+        // Stream 0 always holds a buffer (a draw without one is not provided): `keep`, which the
+        // program never lets go of, or another set over it.
+        let keep = vertex[0];
+        // xorshift64*: the same calls for both engines.
+        let mut state = seed | 1;
+        let mut next = move |n: u32| -> u32 {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            ((state.wrapping_mul(0x2545_f491_4f6c_dd1d) >> 32) % u64::from(n.max(1))) as u32
+        };
+        const SAMPLERS: [u32; 6] = [0, 1, 2, 15, 16, 256];
+        const STREAMS: [u32; 5] = [0, 1, 2, 15, 16];
+        let mut answers = Vec::new();
+        let mut held = Vec::new();
+        let mut last: Option<(u32, [u32; 6])> = None;
+        let mut in_cut = false;
+        for _ in 0..steps {
+            let call = match next(100) {
+                0..=29 => {
+                    let t = match next(8) {
+                        0 => 0,
+                        _ => textures[next(textures.len() as u32) as usize],
+                    };
+                    Some((65, [SAMPLERS[next(6) as usize], t, 0, 0, 0, 0]))
+                }
+                30..=54 => {
+                    let stream = STREAMS[next(5) as usize];
+                    let buffer = match next(10) {
+                        0 if stream != 0 => 0,
+                        1 => index,
+                        2 => keep,
+                        _ => vertex[next(vertex.len() as u32) as usize],
+                    };
+                    Some((100, [stream, buffer, 4 * next(3), 16, 0, 0]))
+                }
+                55..=64 => Some((81, [1 + next(6), next(4), 1 + next(3), 0, 0, 0])),
+                65..=74 => Some((82, [2 + next(5), 0, 0, 4, next(3), 1])),
+                75..=79 => {
+                    // The program lets go of a texture or a buffer, and sets it no more.
+                    if next(2) == 0 && textures.len() > 2 {
+                        let t = textures.swap_remove(next(textures.len() as u32) as usize);
+                        answers.push(e.vcall(t, 4 * 2, &[]).u32());
+                    } else if vertex.len() > 2 {
+                        let b = vertex.swap_remove(1 + next(vertex.len() as u32 - 1) as usize);
+                        answers.push(e.vcall(b, 4 * 2, &[]).u32());
+                    }
+                    last = None;
+                    None
+                }
+                80..=93 => last,
+                _ => {
+                    if in_cut {
+                        held.push(textures_held(&mut e, dev));
+                        held.push(held_for_tests(&mut e));
+                        draw_join(&mut e);
+                    } else {
+                        assert!(draw_cut(&mut e, dev));
+                    }
+                    in_cut = !in_cut;
+                    None
+                }
+            };
+            if let Some((slot, args)) = call {
+                let n = match slot {
+                    65 => 2,
+                    81 => 3,
+                    100 => 4,
+                    _ => 6,
+                };
+                let answer = if in_cut && next(2) == 0 {
+                    as_drawing_side(|| e.vcall(dev, 4 * slot, &args[..n]).u32())
+                } else {
+                    e.vcall(dev, 4 * slot, &args[..n]).u32()
+                };
+                answers.push(answer);
+                last = call;
+            }
+        }
+        if in_cut {
+            held.push(textures_held(&mut e, dev));
+            held.push(held_for_tests(&mut e));
+            draw_join(&mut e);
+        }
+        held.push(textures_held(&mut e, dev));
+        held.push(held_for_tests(&mut e));
+        let bytes = wire.lock().unwrap().clone();
+        (answers, bytes, held)
+    }
+
+    /// `SetTexture`, `SetStreamSource` and the draws in one pass (`NV_D3D9_ONE_PASS`, on by
+    /// default) against the model then the forwarding as two steps, over generated calls: the same
+    /// answers, the same commands to the backend byte for byte (objects' ends included), and the
+    /// same textures, buffers, counts and streams in the model.
+    #[test]
+    fn binding_sets_and_draws_in_one_pass_match_the_two_steps() {
+        for seed in [1, 0x9e37_79b9_7f4a_7c15, 0x00c0_ffee] {
+            let two = binding_sets_run(false, seed, 3000);
+            let one = binding_sets_run(true, seed, 3000);
+            assert_eq!(one.0, two.0, "answers, seed {seed:#x}");
+            assert!(
+                one.2 == two.2,
+                "what the model holds differs (seed {seed:#x})"
+            );
+            assert!(
+                one.1 == two.1,
+                "the stream's bytes differ (seed {seed:#x}): {} against {}",
+                one.1.len(),
+                two.1.len()
+            );
+            // The run reached what it is for: calls refused, cuts made.
+            assert!(two.0.contains(&D3DERR_INVALIDCALL));
+            assert!(two.2.len() > 20, "{}", two.2.len());
+        }
+    }
+
+    /// `SetTexture` and `SetStreamSource` in one pass, by hand: each set sent; a texture or a
+    /// buffer the program let go of ends when the device lets go of it, and its end reaches the
+    /// backend before the set that replaced it; refused calls send nothing; the draws are sent.
+    #[test]
+    fn a_binding_set_in_one_pass_sends_what_the_two_steps_send() {
+        use d3d9_stream::{Backend, Cmd, Data, Reply};
+        type Sent = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
+        struct Log(Sent);
+        impl Backend for Log {
+            fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+                let line = match cmd {
+                    Cmd::SetTexture {
+                        sampler, texture, ..
+                    } => format!("texture {sampler} {texture:#x}"),
+                    Cmd::SetStreamSource {
+                        stream,
+                        buffer,
+                        offset,
+                        ..
+                    } => format!("stream {stream} {buffer:#x} {offset}"),
+                    Cmd::Destroy { object } => format!("destroy {object:#x}"),
+                    Cmd::DrawPrimitive { .. } => "draw".into(),
+                    Cmd::DrawIndexedPrimitive { .. } => "indexed draw".into(),
+                    _ => return Reply::None,
+                };
+                self.0.lock().unwrap().push(line);
+                Reply::None
+            }
+        }
+        let sent: Sent = Default::default();
+        let (mut e, dev, textures, vertex, index) =
+            binding_device(true, Box::new(Log(sent.clone())));
+        sent.lock().unwrap().clear();
+        let (t0, t1, v1) = (textures[0], textures[1], vertex[1]);
+        assert_eq!(e.vcall(dev, 4 * 65, &[0, t0]).u32(), D3D_OK);
+        assert_eq!(e.vcall(dev, 4 * 65, &[0, t0]).u32(), D3D_OK);
+        // The program lets go of t0 while sampler 0 holds it: it lives until replaced.
+        assert_eq!(e.vcall(t0, 4 * 2, &[]).u32(), 0);
+        assert_eq!(e.vcall(dev, 4 * 65, &[0, t1]).u32(), D3D_OK);
+        assert_eq!(e.vcall(dev, 4 * 65, &[16, t1]).u32(), D3DERR_INVALIDCALL);
+        assert_eq!(e.vcall(dev, 4 * 100, &[1, v1, 8, 16]).u32(), D3D_OK);
+        assert_eq!(e.vcall(dev, 4 * 100, &[1, v1, 12, 16]).u32(), D3D_OK);
+        assert_eq!(e.vcall(v1, 4 * 2, &[]).u32(), 0);
+        assert_eq!(e.vcall(dev, 4 * 100, &[1, 0, 0, 0]).u32(), D3D_OK);
+        assert_eq!(
+            e.vcall(dev, 4 * 100, &[16, v1, 0, 16]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(
+            e.vcall(dev, 4 * 100, &[2, index, 0, 16]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(e.vcall(dev, 4 * 81, &[4, 0, 1]).u32(), D3D_OK);
+        assert_eq!(e.vcall(dev, 4 * 82, &[4, 0, 0, 4, 0, 1]).u32(), D3D_OK);
+        assert_eq!(
+            *sent.lock().unwrap(),
+            [
+                format!("texture 0 {t0:#x}"),
+                format!("texture 0 {t0:#x}"),
+                format!("destroy {t0:#x}"),
+                format!("texture 0 {t1:#x}"),
+                format!("stream 1 {v1:#x} 8"),
+                format!("stream 1 {v1:#x} 12"),
+                format!("destroy {v1:#x}"),
+                "stream 1 0x0 0".to_string(),
+                "draw".to_string(),
+                "indexed draw".to_string(),
+            ]
+        );
+        let out = e.mem.alloc(12);
+        assert_eq!(e.vcall(dev, 4 * 64, &[0, out]).u32(), D3D_OK);
+        assert_eq!(e.mem.u32(out), t1);
+        assert_eq!(
+            e.vcall(dev, 4 * 101, &[1, out, out + 4, out + 8]).u32(),
+            D3D_OK
+        );
+        assert_eq!([e.mem.u32(out), e.mem.u32(out + 4)], [0, 0]);
+    }
+
+    /// What one engine did over [`writer_run`]: each call's answer, the stream's bytes, what the
+    /// model holds (states, textures, buffers, streams, constant registers) at the end, and how
+    /// many device calls went directly.
+    type WriterRun = (Vec<u32>, Vec<u8>, Vec<Vec<u32>>, u64);
+
+    /// Drives a device ([`binding_device`], stepped threads, direct calls on) through `steps`
+    /// generated calls (seed `seed`) of every kind the typed draw code's writer takes (render,
+    /// stage and sampler states, textures, stream sources, both draws, float constants of both
+    /// kinds, the integer ones beside them), refused ones among them: through the writer's
+    /// functions (`engine_core::real_threads::device_set_render_state` and its kin) when `writer`,
+    /// else through `device_vcall` with the same words.
+    fn writer_run(writer: bool, seed: u64, steps: u32) -> WriterRun {
+        use super::super::d3d9resource::{binding, held_for_tests};
+        use d3d9_stream::{Backend, Cmd, Data, Reply};
+        use engine_core::real_threads as rt;
+        struct Wire(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl Backend for Wire {
+            fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+                d3d9_stream::wire::encode(&cmd, &mut self.0.lock().unwrap());
+                Reply::None
+            }
+        }
+        let wire = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (mut e, dev, textures, vertex, index) =
+            binding_device(true, Box::new(Wire(wire.clone())));
+        let data = e.mem.alloc(16 * 64);
+        for i in 0..4 * 64 {
+            e.mem.set_u32(
+                data + 4 * i,
+                [0, 0x3f80_0000, 7, 0xbf80_0000][(i % 7 % 4) as usize],
+            );
+        }
+        rt::force_direct_for_tests();
+        assert!(rt::direct_begin(&e));
+        let before = rt::direct_calls();
+        // xorshift64*: the same calls for both engines.
+        let mut state = seed | 1;
+        let mut next = move |n: u32| -> u32 {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            ((state.wrapping_mul(0x2545_f491_4f6c_dd1d) >> 32) % u64::from(n.max(1))) as u32
+        };
+        let mut answers = Vec::new();
+        for _ in 0..steps {
+            let v = [0, 1, 2, 0x3f80_0000][next(4) as usize];
+            let (slot, args): (u32, Vec<u32>) = match next(10) {
+                0 => (0xe4, vec![next(210), v]),
+                1 => (0x10c, vec![next(10), 1 + next(32), v]),
+                2 => (
+                    0x114,
+                    vec![[0, 1, 15, 16, 256][next(5) as usize], 1 + next(13), v],
+                ),
+                3 => {
+                    let t = [0, textures[next(6) as usize]][usize::from(next(8) != 0)];
+                    (0x104, vec![[0, 1, 16][next(3) as usize], t])
+                }
+                4 => {
+                    let b = [vertex[next(4) as usize], index][usize::from(next(8) == 0)];
+                    (0x190, vec![next(17), b, 4 * next(2), 16])
+                }
+                5 => (0x144, vec![1 + next(6), next(4), 1 + next(3)]),
+                6 => (0x148, vec![2 + next(5), 0, 0, 4, next(3), 1]),
+                7 => (0x178, vec![next(260), data + 16 * next(8), 1 + next(4)]),
+                8 => (0x1b4, vec![next(230), data + 16 * next(8), 1 + next(4)]),
+                _ => (0x180, vec![next(17), data, 1 + next(2)]),
+            };
+            let a = &args;
+            let ret = if !writer {
+                rt::device_vcall(&mut e, dev, slot, a)
+            } else {
+                match slot {
+                    0xe4 => rt::device_set_render_state(&mut e, dev, a[0], a[1]),
+                    0x10c => rt::device_set_stage_state(&mut e, dev, a[0], a[1], a[2]),
+                    0x114 => rt::device_set_sampler_state(&mut e, dev, a[0], a[1], a[2]),
+                    0x104 => rt::device_set_texture(&mut e, dev, a[0], a[1]),
+                    0x190 => rt::device_set_stream_source(&mut e, dev, a[0], a[1], a[2], a[3]),
+                    0x144 => rt::device_draw_primitive(&mut e, dev, a[0], a[1], a[2]),
+                    0x148 => rt::device_draw_indexed_primitive(
+                        &mut e, dev, a[0], a[1], a[2], a[3], a[4], a[5],
+                    ),
+                    _ => rt::device_set_constants(&mut e, dev, slot, a[0], a[1], a[2]),
+                }
+            };
+            answers.push(ret.u32());
+        }
+        let calls = rt::direct_calls() - before;
+        rt::direct_end();
+        let mut held = vec![
+            state_tables(&mut e, dev)
+                .iter()
+                .map(|s| s.unwrap_or(u32::MAX))
+                .collect(),
+            textures_held(&mut e, dev),
+            held_for_tests(&mut e),
+        ];
+        for (k, count) in [(0, 256), (1, 16), (3, 224)] {
+            for r in 0..count {
+                held.push(binding(&mut e, dev, &format!("constant {k} {r}")));
+            }
+        }
+        let bytes = wire.lock().unwrap().clone();
+        (answers, bytes, held, calls)
+    }
+
+    /// The typed draw code's writer against `device_vcall` (stepped threads, direct calls on):
+    /// over generated calls of every kind it takes, the same answers, the same commands to the
+    /// backend byte for byte, the same model state and the same count of direct calls.
+    #[test]
+    fn the_writer_matches_device_calls_by_slot() {
+        for seed in [1, 0x9e37_79b9_7f4a_7c15, 0x00c0_ffee] {
+            let by_slot = writer_run(false, seed, 2000);
+            let writer = writer_run(true, seed, 2000);
+            assert_eq!(writer.0, by_slot.0, "answers, seed {seed:#x}");
+            assert!(writer.2 == by_slot.2, "the model differs (seed {seed:#x})");
+            assert!(
+                writer.1 == by_slot.1,
+                "the stream's bytes differ (seed {seed:#x}): {} against {}",
+                writer.1.len(),
+                by_slot.1.len()
+            );
+            assert_eq!(writer.3, by_slot.3, "direct calls, seed {seed:#x}");
+            assert_eq!(by_slot.3, 2000, "every call went directly");
+            assert!(by_slot.0.contains(&D3DERR_INVALIDCALL));
+            assert!(by_slot.1.len() > 10_000, "{}", by_slot.1.len());
+        }
+    }
+
+    /// Calls the writer must not take: a device vtable word replaced (as a mod's hook does) sends
+    /// `SetRenderState` to what the word names, at the very next call and back to the layer's own
+    /// once the word is put back; a function registered over the layer's at the slot's address (as
+    /// a wrap does) runs in its place; with direct calls off the call goes by the vtable.
+    #[test]
+    fn the_writer_sends_replaced_slots_where_they_point() {
+        use engine_core::real_threads as rt;
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static HOOKED: AtomicU32 = AtomicU32::new(0);
+        let (mut e, dev) = texture_device(Store::Host);
+        let hook: crate::AbiFn = |_, a| {
+            HOOKED.fetch_add(a[2], Ordering::Relaxed);
+            engine_core::abi::Ret::default()
+        };
+        let elsewhere = CODE_BASE + 0xf000;
+        e.register(elsewhere, hook);
+        rt::force_direct_for_tests();
+        assert!(rt::direct_begin(&e));
+        let table = e.mem.u32(dev);
+        let word = table + 0xe4;
+        assert_eq!(e.mem.u32(word), DEVICE_CODE + 0xe4);
+        assert_eq!(rt::device_set_render_state(&mut e, dev, 7, 1).u32(), D3D_OK);
+        assert_eq!(render_state(&mut e, dev, 7), 1);
+        // A hook in the vtable: the hook gets the call, the model does not.
+        e.mem.set_u32(word, elsewhere);
+        assert_eq!(rt::device_set_render_state(&mut e, dev, 7, 5).u32(), 0);
+        assert_eq!(HOOKED.load(Ordering::Relaxed), 5);
+        assert_eq!(render_state(&mut e, dev, 7), 1);
+        e.mem.set_u32(word, DEVICE_CODE + 0xe4);
+        assert_eq!(rt::device_set_render_state(&mut e, dev, 7, 2).u32(), D3D_OK);
+        assert_eq!(render_state(&mut e, dev, 7), 2);
+        // A function registered over the layer's at the slot's address.
+        e.register(DEVICE_CODE + 0xe4, hook);
+        assert_eq!(rt::device_set_render_state(&mut e, dev, 7, 3).u32(), 0);
+        assert_eq!(HOOKED.load(Ordering::Relaxed), 8);
+        assert_eq!(render_state(&mut e, dev, 7), 2);
+        rt::direct_end();
+        // Direct calls off: by the vtable (still the registered function).
+        assert_eq!(rt::device_set_render_state(&mut e, dev, 7, 4).u32(), 0);
+        assert_eq!(HOOKED.load(Ordering::Relaxed), 12);
+    }
+
+    /// With real threads (direct calls on, under a device lock the caller holds, as
+    /// `direct_device_calls_under_a_held_device_lock_answer_the_same`): the writer's calls answer
+    /// and change the model as the calls by slot do.
+    #[test]
+    fn the_writer_with_real_threads_answers_the_same() {
+        use engine_core::real_threads as rt;
+        let (mut e, dev) = texture_device(Store::Host);
+        rt::start(&mut e).expect("real threads on");
+        rt::force_direct_for_tests();
+        assert!(rt::direct_begin(&e));
+        let before = rt::direct_calls();
+        {
+            let _device = rt::device_guard(&e);
+            assert_eq!(rt::device_set_render_state(&mut e, dev, 8, 2).u32(), D3D_OK);
+            assert_eq!(
+                rt::device_set_sampler_state(&mut e, dev, 16, 1, 1).u32(),
+                D3DERR_INVALIDCALL
+            );
+            assert_eq!(
+                rt::device_set_sampler_state(&mut e, dev, 1, 1, 3).u32(),
+                D3D_OK
+            );
+            let out = e.mem.alloc(4);
+            assert_eq!(
+                rt::device_vcall(&mut e, dev, 4 * 58, &[8, out]).u32(),
+                D3D_OK
+            );
+            assert_eq!(e.mem.u32(out), 2);
+            assert_eq!(
+                rt::device_vcall(&mut e, dev, 4 * 68, &[1, 1, out]).u32(),
+                D3D_OK
+            );
+            assert_eq!(e.mem.u32(out), 3);
+        }
+        assert_eq!(rt::direct_calls() - before, 5);
+        rt::direct_end();
+        assert!(!rt::direct_holds() && !rt::device_lock_held(&e));
     }
 
     /// The scene's device state as the game can read it back: each getter's answer and the

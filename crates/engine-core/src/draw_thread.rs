@@ -117,6 +117,9 @@ fn clock_at_post(e: &Engine) -> Option<(u32, u32)> {
 /// The job's engine `w` takes main's clock at the post ([`clock_at_post`]); answers where its clock starts.
 fn clock_onto_job(w: &mut Engine, clock: Option<(u32, u32)>) -> u64 {
     if let Some((ms, us)) = clock {
+        // The helper's engine may have been made before main's clock turned virtual: it reads the same clock.
+        w.repeatable = true;
+        w.real_clock = None;
         w.clock_ms = ms;
         w.clock_us = us;
     }

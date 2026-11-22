@@ -1231,6 +1231,7 @@ pub fn bgssaveloadgame_load_game(
     file: Ptr,
     quiet: bool,
 ) -> bool {
+    engine_core::hitch::one(engine_core::hitch::Count::Loads);
     engine_core::draw_thread::save_or_load(e, 0x0084_7df0);
     let name = e.mem.alloc(0x104);
     let version = e.mem.alloc(0x104);

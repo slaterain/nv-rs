@@ -2627,3 +2627,39 @@ fn remove_all() {
         .run()
         .assert_same();
 }
+
+/// Every pass type from 0x286 to 0x2cf, each alone in the list with the range exactly it: the 33 listed types answer
+/// true and their neighbours false on both sides (a wrong constant in the set shows here).
+const EVERY_TYPE: &[u32] = &[
+    0x286, 0x287, 0x288, 0x289, 0x28a, 0x28b, 0x28c, 0x28d, 0x28e, 0x28f, 0x290, 0x291, 0x292,
+    0x293, 0x294, 0x295, 0x296, 0x297, 0x298, 0x299, 0x29a, 0x29b, 0x29c, 0x29d, 0x29e, 0x29f,
+    0x2a0, 0x2a1, 0x2a2, 0x2a3, 0x2a4, 0x2a5, 0x2a6, 0x2a7, 0x2a8, 0x2a9, 0x2aa, 0x2ab, 0x2ac,
+    0x2ad, 0x2ae, 0x2af, 0x2b0, 0x2b1, 0x2b2, 0x2b3, 0x2b4, 0x2b5, 0x2b6, 0x2b7, 0x2b8, 0x2b9,
+    0x2ba, 0x2bb, 0x2bc, 0x2bd, 0x2be, 0x2bf, 0x2c0, 0x2c1, 0x2c2, 0x2c3, 0x2c4, 0x2c5, 0x2c6,
+    0x2c7, 0x2c8, 0x2c9, 0x2ca, 0x2cb, 0x2cc, 0x2cd, 0x2ce, 0x2cf,
+];
+
+#[test]
+fn lists_pass_in_every_type() {
+    Diff::new(entry!(
+        0x00b9_8970,
+        lists::lists_pass_in(Ptr<_>, u32, u32) -> bool
+    ))
+    .common()
+    .inputs(&[Input::Of(EVERY_TYPE), Input::Of(&[0, 1, 2])])
+    .setup(|e, c| {
+        stand_ins(e);
+        let t = c.word(0);
+        let renderer = renderer_listing(e, &[t]);
+        // The range: exactly the type, one above it as the low bound, one below it as the high bound.
+        let (low, high) = match c.word(1) {
+            0 => (t, t),
+            1 => (t + 1, 0x2f1),
+            _ => (1, t - 1),
+        };
+        vec![renderer, low, high]
+    })
+    .max_cases(240)
+    .run()
+    .assert_same();
+}
