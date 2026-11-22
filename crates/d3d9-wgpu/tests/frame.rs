@@ -6554,6 +6554,13 @@ fn merged_draws_across_a_blended_draw_draw_what_one_draw_each_draws() {
     );
 }
 
+/// A draw of [`held_script`]'s strip in a column, with a colour.
+type StripDraw = dyn Fn(&mut Gpu, u32, [f32; 4]);
+/// What [`held_script`] runs: its draws, given the strip's draw.
+type HeldDraws = dyn Fn(&mut Gpu, &StripDraw);
+/// What [`held_script`] gives: the pixels, the held keys drawn with their draws, the mismatches.
+type HeldScript = (Vec<[u8; 4]>, (u64, u64), u64);
+
 /// An 8 by 8 target, the registers from storage, held draws merged (`merge`, with `pass`: blended
 /// draws held after the opaque ones) or not: the vs_2_0 of [`merge_script`] (moved right by `c0`,
 /// passing `c1` on) and its ps_2_0 drawing what it was passed, two strips of one column each in
@@ -6561,11 +6568,7 @@ fn merged_draws_across_a_blended_draw_draw_what_one_draw_each_draws() {
 /// `script` draws; then the pixels, the held draws drawn with the draws they held, and the held
 /// draws drawn with another state than they asked for. None where the adapter cannot read the
 /// registers from storage.
-fn held_script(
-    merge: bool,
-    pass: bool,
-    script: &dyn Fn(&mut Gpu, &dyn Fn(&mut Gpu, u32, [f32; 4])),
-) -> Option<(Vec<[u8; 4]>, (u64, u64), u64)> {
+fn held_script(merge: bool, pass: bool, script: &HeldDraws) -> Option<HeldScript> {
     let mut g = Gpu::new(8, 1)?;
     {
         let d = g.b.device().expect("the device");

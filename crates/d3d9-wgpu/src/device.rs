@@ -965,8 +965,6 @@ struct Member {
     /// game gave it ([`Device::pass_state_hash`]), checked against what the pass has when its key
     /// is drawn ([`Device::held_mismatches`]).
     state: Option<u64>,
-    /// How many float constants its vertex and pixel shader read.
-    fregs: [u32; 2],
     /// The vertex streams its declaration reads.
     streams: Vec<bool>,
     /// Whether it draws with the sun shadows' lookup.
@@ -5929,7 +5927,6 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 blocks,
                 digest: None,
                 state,
-                fregs: [vs.fregs, ps.fregs],
                 streams: attributes.iter().map(|a| !a.is_empty()).collect(),
                 sun: use_sun,
             };
