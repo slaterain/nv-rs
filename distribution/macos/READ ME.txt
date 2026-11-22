@@ -96,6 +96,8 @@ Start
    the terminal, as ./play.sh.
    It plays the game's own terminal sounds, read from your installed game (Settings > Launcher
    sounds turns them off).
+   macOS moves the sound to a new default device by itself (a headset plugged in); nv-rs leaves
+   it to macOS and opens a new stream only if the device is reported gone. Not tried on a Mac yet.
    The window has no title bar: drag it by its background (anywhere but an entry) to move it;
    > Exit or Esc on the first screen closes it.
 
