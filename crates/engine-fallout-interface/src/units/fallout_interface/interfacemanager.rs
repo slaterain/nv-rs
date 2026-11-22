@@ -15511,10 +15511,15 @@ mod tests {
             count("if controller && e.get(this, InterfaceManager::bShowMouse) == 0 {"),
             1
         );
+        // The mouse-button read's test (`0x70CDC5`): not (a pad and the pointer hidden); with lStewieAl's
+        // Tweaks' S0022.39 the pad branch is taken whatever the pointer shows.
         assert_eq!(
-            count("if !controller || e.get(this, InterfaceManager::bShowMouse) != 0 {"),
+            count(
+                "controller && (activate_clicks || e.get(this, InterfaceManager::bShowMouse) == 0);"
+            ),
             1
         );
+        assert_eq!(count("if !pad_branch {"), 1);
     }
 
     /// The pad's menu event (0070df99, review of #797): with a pad in use and the pointer hidden
