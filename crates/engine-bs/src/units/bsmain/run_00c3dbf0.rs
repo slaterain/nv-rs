@@ -13,8 +13,17 @@ const MODE: u32 = 0x68;
 const AFTER_TASK: u32 = 0x70;
 const BEFORE_RUN: u32 = 0x74;
 const TASK_KEY: u32 = 0x10;
-/// The IO manager's count of tasks in flight (`00c3dfa0` waits while the finished ones are fewer).
+/// The IO manager's count of its tasks (its lock-free map's count, `00c3f6f0`): queued, loading and
+/// finished-but-not-yet-finished-on-main alike (`00c3dfa0` waits while the finished queue holds fewer).
 const IN_FLIGHT: u32 = 0x18;
+
+/// Whether the loading threads have nothing left to do for the IO manager `manager`: all its tasks
+/// (`+0x18`) are in its finished queue (`+0x64`, count at slot `0x0c`), waiting only for main.
+pub fn loaders_idle(e: &mut Engine, manager: u32) -> bool {
+    let queue = e.mem.u32(manager.wrapping_add(QUEUE));
+    let finished = e.vcall(queue, 0x0c, &[]).u32();
+    e.mem.u32(manager.wrapping_add(IN_FLIGHT)) <= finished
+}
 /// The mode with its own budget.
 const MODE_SIX: u32 = 6;
 
@@ -158,14 +167,14 @@ pub static PLAY_BUDGET_MS: std::sync::atomic::AtomicU32 = std::sync::atomic::Ato
 /// that value for the length of the call and gets its own value back after it, so the setting
 /// reads as before everywhere else. Any other mode (the game's waits for loads and the loading
 /// screens use the other budget), a call while one runs and a budget of 0 are the translation; so
-/// is a frame with nothing in flight (`+0x18` is 0: the loaders idle), which gets the game's own
-/// budget back so that whatever the smaller budget left clears.
+/// is a frame whose loading threads have nothing left ([`loaders_idle`]: every task waits only for
+/// main), which gets the game's own budget back so that whatever the smaller budget left clears.
 pub fn fn_00c3dbf0_play_budget(e: &mut Engine, this: Ptr) -> bool {
     let budget = PLAY_BUDGET_MS.load(std::sync::atomic::Ordering::Relaxed);
     if budget == 0
         || e.mem.u8(RUNNING) != 0
         || e.mem.u32(this.addr().wrapping_add(MODE)) != MODE_SIX
-        || e.mem.u32(this.addr().wrapping_add(IN_FLIGHT)) == 0
+        || loaders_idle(e, this.addr())
     {
         return fn_00c3dbf0(e, this);
     }
@@ -326,22 +335,37 @@ mod tests {
         assert!(log.borrow().is_empty());
     }
 
+    /// Gives the manager `tasks` tasks of which its finished queue holds `finished`.
+    fn tasks_and_finished(e: &mut Engine, this: u32, tasks: u32, finished: u32) {
+        const FINISHED_COUNT: u32 = 0x00ee_0600;
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 0x0c, FINISHED_COUNT);
+        let queue = e.mem.alloc(0x10);
+        e.mem.set_u32(queue, vtable);
+        e.mem.set_u32(this + QUEUE, queue);
+        e.mem.set_u32(this + IN_FLIGHT, tasks);
+        e.register_double(FINISHED_COUNT, move |_, _| finished.into_ret());
+    }
+
     /// The play budget: in mode 6 the call runs with the row's budget and the setting keeps its own
     /// value; in any other mode, or with no row budget, the game's own.
     #[test]
     fn the_play_budget_replaces_the_setting_in_play_only() {
         use std::sync::atomic::Ordering::Relaxed;
         // Mode 6 with a 1 ms row budget: 1 * 2.0 = 2 ticks (the setting's 10 would be 20).
+        // Four tasks, one of them finished: the loaders still work.
         let (mut e, log, this, _) = runner(3, 1);
         e.mem.set_u32(this + MODE, 6);
-        e.mem.set_u32(this + IN_FLIGHT, 4);
+        tasks_and_finished(&mut e, this, 4, 1);
         PLAY_BUDGET_MS.store(1, Relaxed);
         fn_00c3dbf0_play_budget(&mut e, Ptr::new(this));
         assert_eq!(calls(&log, FLOAT_TO_INT64), [vec![2]]);
         assert_eq!(e.mem.u32(BUDGET_SIX), 10, "the setting keeps its value");
-        // Nothing in flight (the loaders idle): the setting's 10, so a backlog clears.
+        // Four tasks all finished, waiting only for main (the loaders idle): the setting's 10, so
+        // the backlog clears.
         let (mut e, log, this, _) = runner(3, 1);
         e.mem.set_u32(this + MODE, 6);
+        tasks_and_finished(&mut e, this, 4, 4);
         fn_00c3dbf0_play_budget(&mut e, Ptr::new(this));
         assert_eq!(calls(&log, FLOAT_TO_INT64), [vec![20]]);
         // Mode 0 (a wait for loads): the other budget, 20 * 2.0.
