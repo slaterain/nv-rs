@@ -412,7 +412,7 @@ fn read_switch() -> u8 {
 /// helpers -1.29 ms a frame (+9.3%) and one -0.47 ms (+3.2%); pinned to 4, one helper +0.16 ms
 /// (-1.0%), and +0.33 ms (-4.2%) in the view of the sky. The game keeps main, the render thread,
 /// its AI threads and loaders busy, so a helper needs a processor of its own to pay.
-fn default_helpers(logical: usize) -> usize {
+pub(crate) fn default_helpers(logical: usize) -> usize {
     if logical >= 8 {
         3
     } else {

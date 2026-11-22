@@ -39,6 +39,9 @@ pub mod layout;
 mod par;
 #[doc(hidden)]
 pub use par::{counts_for_tests as par_counts_for_tests, set_for_tests as par_set_for_tests};
+// The helpers a parallel pass takes by default on a machine of so many logical processors (the
+// culling walk's rule; the actors' bone pass, `NV_PAR_BONES`, takes the same).
+pub(crate) use par::default_helpers;
 #[doc(hidden)]
 pub use visible::set_read_ahead_for_tests as read_ahead_set_for_tests;
 pub mod planes;

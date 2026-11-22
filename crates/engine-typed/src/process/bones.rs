@@ -6,9 +6,10 @@
 //! per actor its animation root's downward pass with the root's and the accumulation root's
 //! controllers detached, the pending mark cleared, then the lighting queue for an actor that asks.
 //!
-//! **`NV_PAR_BONES`** (`off`, `on`, `check`; off by default until a sitting shows the gain): the
-//! downward passes on the parallel render's helper engines (`engine_core::real_threads::fork_join_first`,
-//! the caller's x87 control word on each), everything else on main in the list's order, so the end
+//! **`NV_PAR_BONES`** (`off`, `on`, `check`; unset: on with real threads where the cores allow, as
+//! the parallel culling walk is, and a stepped run keeps the serial pass): the downward passes on
+//! the parallel render's helper engines (`engine_core::real_threads::fork_join_first`, the
+//! caller's x87 control word on each), everything else on main in the list's order, so the end
 //! state is the serial pass's. A host change, not exe behaviour. The game's own parallel path (the
 //! setting `bTaskletActorSceneGraphUpdates`, `011f1260`) is left as it is when that setting is on.
 //!
@@ -50,7 +51,9 @@ use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
 use engine_core::{args, typed_call, Engine};
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering::Relaxed};
+use std::sync::atomic::{
+    AtomicBool, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering::Relaxed,
+};
 use std::sync::Mutex;
 
 // ----- the exe's functions and data ------------------------------------------------------------
@@ -141,6 +144,8 @@ const CHILD_COUNT: u32 = 0xa6;
 static MODE: AtomicU8 = AtomicU8::new(0);
 /// The helpers a stretch asks for.
 static HELPERS: AtomicUsize = AtomicUsize::new(3);
+/// On by default (the switch unset): only with real threads; a stepped run keeps the serial pass.
+static AUTO: AtomicBool = AtomicBool::new(false);
 
 fn mode() -> u8 {
     match MODE.load(Relaxed) {
@@ -149,27 +154,47 @@ fn mode() -> u8 {
     }
 }
 
+/// What the switch's value, `NV_PAR_BONES_THREADS` and the machine's logical processors make:
+/// the mode, whether it is the default's (on with real threads only) and the helpers. Unset (or
+/// a value it does not know): on, with the helpers the parallel culling walk takes by default
+/// (`culling::default_helpers`: three from 8 logical processors, none below, which leaves it
+/// off); `off` or `0`: off; `on` or `1`: on with real or stepped threads; `check`: the check.
+fn parse(value: &str, threads: Option<usize>, logical: usize) -> (u8, bool, usize) {
+    let asked = threads.map(|n| n.clamp(1, 15));
+    match value {
+        "off" | "0" => (1, false, asked.unwrap_or(3)),
+        "on" | "1" => (2, false, asked.unwrap_or(3)),
+        "check" => (3, false, asked.unwrap_or(3)),
+        _ => match threads.unwrap_or_else(|| culling::default_helpers(logical)) {
+            0 => (1, false, 3),
+            n => (2, true, n.clamp(1, 15)),
+        },
+    }
+}
+
 #[cold]
 fn read_switch() -> u8 {
     let value = std::env::var("NV_PAR_BONES").unwrap_or_default();
-    let m = match value.trim() {
-        "on" | "1" => 2,
-        "check" => 3,
-        _ => 1,
-    };
-    if let Some(n) = std::env::var("NV_PAR_BONES_THREADS")
+    let threads = std::env::var("NV_PAR_BONES_THREADS")
         .ok()
-        .and_then(|v| v.trim().parse::<usize>().ok())
-    {
-        HELPERS.store(n.clamp(1, 15), Relaxed);
-    }
+        .and_then(|v| v.trim().parse::<usize>().ok());
+    let logical = std::thread::available_parallelism().map_or(1, usize::from);
+    let (m, auto, helpers) = parse(value.trim(), threads, logical);
+    HELPERS.store(helpers, Relaxed);
+    AUTO.store(auto, Relaxed);
     if m != 1 {
         println!(
             "NV_PAR_BONES={}: actors' bones moved on {} helpers{}",
-            value.trim(),
-            HELPERS.load(Relaxed),
+            if value.trim().is_empty() {
+                "(default)"
+            } else {
+                value.trim()
+            },
+            helpers,
             if m == 3 {
                 ", each stretch checked against the serial pass"
+            } else if auto {
+                ", with real threads only"
             } else {
                 ""
             }
@@ -179,14 +204,16 @@ fn read_switch() -> u8 {
     m
 }
 
-/// For the tests: the mode (`off`, `on`, `check`) and the helpers, as `NV_PAR_BONES` and
-/// `NV_PAR_BONES_THREADS` would set them (the environment is then not read).
+/// For the tests: the mode (`off`, `on`, `check`, or `default`: the switch unset) and the
+/// helpers, as `NV_PAR_BONES` and `NV_PAR_BONES_THREADS` would set them (the environment is then
+/// not read).
 #[doc(hidden)]
 pub fn set_for_tests(mode: &str, helpers: usize) {
     HELPERS.store(helpers.clamp(1, 15), Relaxed);
+    AUTO.store(mode == "default", Relaxed);
     MODE.store(
         match mode {
-            "on" => 2,
+            "on" | "default" => 2,
             "check" => 3,
             _ => 1,
         },
@@ -387,7 +414,10 @@ pub fn parallel_update_animation_scenegraph(e: &mut Engine, this: Ptr) {
         let slot = scrap + 0x14;
         let task = scrap + 0x20;
         e.call(SCRAP_CONSTRUCT, &args![scrap]);
-        if tasklets || mode() == 1 || !parallel(e, array, first, last) {
+        // The default (the switch unset) splits only with real threads: a stepped run keeps the
+        // serial pass, as the parallel culling walk does. (The mode first: it sets the default.)
+        let off = mode() == 1 || (AUTO.load(Relaxed) && e.real.is_none());
+        if tasklets || off || !parallel(e, array, first, last) {
             serial_loop(e, array, first, last, tasklets, scrap, slot);
         }
         if typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, scrap)) != 0 {
@@ -1345,4 +1375,34 @@ const _: () = assert!(std::mem::size_of::<crate::culling::layout::NiAVObjectImag
 /// An index or count as a guest word (the lists are far below 2^32 entries).
 fn idx(i: usize) -> u32 {
     u32::try_from(i).unwrap_or(u32::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse;
+
+    #[test]
+    fn the_switch_unset_is_on_with_real_threads_where_the_cores_allow() {
+        // Unset: on, the default's (real threads only), three helpers from 8 logical processors.
+        assert_eq!(parse("", None, 24), (2, true, 3));
+        assert_eq!(parse("", None, 8), (2, true, 3));
+        // Below 8 logical processors the default leaves it off.
+        assert_eq!(parse("", None, 4).0, 1);
+        // NV_PAR_BONES_THREADS sets the default's helpers, below 8 too.
+        assert_eq!(parse("", Some(2), 4), (2, true, 2));
+        assert_eq!(parse("", Some(40), 24), (2, true, 15));
+        // A value it does not know is the default.
+        assert_eq!(parse("yes", None, 24), (2, true, 3));
+    }
+
+    #[test]
+    fn off_on_and_check_are_what_they_say() {
+        assert_eq!(parse("off", None, 24).0, 1);
+        assert_eq!(parse("0", Some(3), 24).0, 1);
+        // On and check: with real or stepped threads (not the default's), three helpers unless told.
+        assert_eq!(parse("on", None, 4), (2, false, 3));
+        assert_eq!(parse("1", Some(1), 24), (2, false, 1));
+        assert_eq!(parse("check", None, 24), (3, false, 3));
+        assert_eq!(parse("check", Some(0), 24), (3, false, 1));
+    }
 }

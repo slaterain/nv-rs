@@ -614,4 +614,15 @@ fn parallel_bones_end_in_the_serial_state() {
         "check: the outside calls are the serial pass's"
     );
     assert_eq!(state, serial_state, "check: the serial pass's end state");
+
+    // The default (the switch unset) with stepped threads, as here: the serial pass, no split.
+    assert!(e.real.is_none(), "the test engine runs stepped");
+    let (got, state) = pass(&mut e, &w, "default", 3);
+    let (counts, _) = bones::take_counts();
+    assert_eq!(counts.frames, 0, "default, stepped: no split: {counts:?}");
+    assert_eq!(got, serial, "default, stepped: the serial pass");
+    assert_eq!(
+        state, serial_state,
+        "default, stepped: the serial end state"
+    );
 }
