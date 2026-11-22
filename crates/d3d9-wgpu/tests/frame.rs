@@ -6661,7 +6661,7 @@ fn held_script(merge: bool, pass: bool, script: &HeldDraws) -> Option<HeldScript
 #[test]
 fn merged_draws_keep_apart_draws_that_differ_in_one_pass_setting() {
     const SCISSORTESTENABLE: u32 = 174;
-    let script = |g: &mut Gpu, draw: &dyn Fn(&mut Gpu, u32, [f32; 4])| {
+    let script = |g: &mut Gpu, draw: &StripDraw| {
         let viewport = |g: &mut Gpu, x: u32, w: u32| {
             g.run(Cmd::SetViewport {
                 device: DEVICE,
@@ -6730,7 +6730,7 @@ fn held_blended_draws_never_move_past_opaque_draws_when_they_ignore_or_write_dep
     const ALPHABLENDENABLE: u32 = 27;
     const SRCBLEND: u32 = 19;
     const DESTBLEND: u32 = 20;
-    let script = |g: &mut Gpu, draw: &dyn Fn(&mut Gpu, u32, [f32; 4])| {
+    let script = |g: &mut Gpu, draw: &StripDraw| {
         g.state(SRCBLEND, 2);
         g.state(DESTBLEND, 2);
         // Column 0: a blended draw with the depth test off, then an opaque draw over it.
