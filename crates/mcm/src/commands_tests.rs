@@ -131,7 +131,7 @@ fn child(e: &mut Engine, parent: u32, name: &str) -> u32 {
 
 /// Trait `name` on `tile` with number `num`: its `Tile::Value`.
 fn value(e: &mut Engine, tile: u32, name: &str, num: f32) -> u32 {
-    let v = take(e, 0x10);
+    let v = take(e, 0x14);
     e.mem.set_u32(v, id_of(name.as_bytes()));
     e.mem.set_u32(v + 4, tile);
     e.mem.set_f32(v + 8, num);
@@ -990,3 +990,6 @@ fn atof_matches_the_vc2010_runtime() {
     }
     assert_eq!(atof(b"1e400"), f64::INFINITY);
 }
+
+#[path = "commands_tests/lookup_tests.rs"]
+mod lookup_tests;

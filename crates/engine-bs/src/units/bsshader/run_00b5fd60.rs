@@ -218,7 +218,7 @@ pub fn fn_00b60040(e: &mut Engine) {
     while slot < NODES_END_011F91D8 {
         let node = e.mem.u32(slot);
         if node != 0 {
-            fn_00b5fd60(e, Ptr::new(node));
+            e.call(0x00b5_fd60, &args![node]);
         }
         slot += 4;
     }

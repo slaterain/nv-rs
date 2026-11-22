@@ -11,6 +11,9 @@
 //!   the cursors' correction;
 //! - [`levels`]: the three level passes (`0096b050`, `0096b470`, `0096b810`) with the hour test,
 //!   the actor update and the removal of the actors that left a level.
+//! - [`bones`]: `ProcessLists::ParallelUpdateAnimationScenegraph` (`0096c970`), the actors' postponed
+//!   bone updates after the frame is shown, and `NV_PAR_BONES`, which walks them on helper engines
+//!   (other families' passes there; this family's code stays on main).
 //! - [`forget`]: the clean-up when a reference goes away (`0096f600`, `00976680`), which walks every
 //!   actor of the process lists for each reference a cell unload or a fast travel frees.
 //!
@@ -35,6 +38,7 @@ use engine_core::{entry, AbiFn};
 
 pub mod after_draw;
 pub mod array;
+pub mod bones;
 pub mod forget;
 pub mod levels;
 
@@ -74,5 +78,6 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0096_c710, after_draw::merge_detection(Ptr)),
         entry!(0x008f_63e0, after_draw::merge_detection_lists(Ptr, Ptr)),
         entry!(0x0097_81d0, after_draw::ragdoll_step(Ptr, f32)),
+        entry!(0x0096_c970, bones::parallel_update_animation_scenegraph(Ptr)),
     ]
 }

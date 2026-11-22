@@ -69,9 +69,38 @@ pub enum Card {
     NoAnswer,
 }
 
-/// The start screen's entries: Play, Play with mods (when there are mods), Exit.
+/// The start screen's entries: Play, Play with mods (when there are mods), Mods, Settings, Exit.
 pub const PLAY: &str = "Play";
 pub const PLAY_WITH_MODS: &str = "Play with mods";
+/// The mod installer (`crates/mod-chooser`'s text chooser) in the terminal.
+pub const MODS: &str = "Mods";
+/// Play.exe's and play.sh's argument for the mod installer.
+pub const MOD_INSTALLER: &str = "--install-mods";
+/// The saves' import, on the start screen only when saves to import were found ([`Place::saves`]),
+/// and Play.exe's and play.sh's argument for it.
+pub const IMPORT_SAVES: &str = "Import saves";
+pub const SAVES_IMPORT: &str = "--import-saves";
+
+/// What the window does when the work ends with `code`: the mod installer's good end (`mods`)
+/// goes back to the start screen, Play's ends the launcher; a window closed meanwhile ends it;
+/// a bad end shows the work's own lines with Back and Exit when it wrote any (`lines`), else the
+/// start screen (its message was shown and answered).
+#[derive(Debug, PartialEq)]
+pub enum EndStep {
+    Exit,
+    Start,
+    Lines,
+}
+
+pub fn end_step(mods: bool, code: i32, closed: bool, lines: bool) -> EndStep {
+    if closed || (code == 0 && !mods) {
+        EndStep::Exit
+    } else if code == 0 || !lines {
+        EndStep::Start
+    } else {
+        EndStep::Lines
+    }
+}
 pub const EXIT: &str = "Exit";
 
 /// The start screen. Its status names what the GAME will use: the renderer the play profile
@@ -122,6 +151,10 @@ pub fn start_screen(place: &Place, card: &Card) -> Screen {
     entries.push(PLAY.to_string());
     if place.mods {
         entries.push(PLAY_WITH_MODS.to_string());
+    }
+    entries.push(MODS.to_string());
+    if place.saves {
+        entries.push(IMPORT_SAVES.to_string());
     }
     entries.push(SETTINGS.to_string());
     entries.push(EXIT.to_string());
@@ -452,6 +485,23 @@ pub fn frameless(a: winit::window::WindowAttributes) -> winit::window::WindowAtt
     a.with_title("nv-rs").with_decorations(false)
 }
 
+/// The entry under the window position `pos` (pixels) in a window of `window` pixels, the
+/// terminal's picture fitted into it ([`gpu::fit`]) and its rows laid out as `rows`: the index of
+/// a shown entry, none above, below, left or right of them.
+pub fn row_hit(window: (u32, u32), rows: &screen::Rows, pos: (f64, f64)) -> Option<usize> {
+    let (x, y, w, h) = gpu::fit((screen::WIDTH, screen::HEIGHT), window);
+    if w == 0 || h == 0 || rows.row == 0 {
+        return None;
+    }
+    let px = (pos.0 - x as f64) * screen::WIDTH as f64 / w as f64;
+    let py = (pos.1 - y as f64) * screen::HEIGHT as f64 / h as f64;
+    if px < rows.x as f64 || px > (rows.x + rows.width as i32) as f64 || py < rows.top as f64 {
+        return None;
+    }
+    let k = ((py - rows.top as f64) / rows.row as f64) as usize;
+    (k < rows.shown).then_some(rows.first + k)
+}
+
 /// Whether a left press moves the window (it has no title bar): anywhere but on an entry
 /// (which the press chooses), and not while the window has stepped aside for the game.
 pub fn press_drags(on_entry: bool, hidden: bool) -> bool {
@@ -494,6 +544,10 @@ pub enum Act {
         game: Option<PathBuf>,
     },
     Exit,
+    /// The mod installer, its lines in the terminal.
+    Mods,
+    /// The saves' import, its questions in the terminal.
+    ImportSaves,
     Answer(usize),
     Folder(Option<PathBuf>),
     TypeLine(String),
@@ -849,6 +903,8 @@ pub fn on_enter(kind: Kind, typed: &str, chosen: usize, entry: &str) -> Act {
             mods: true,
             game: None,
         },
+        Kind::Start if entry == MODS => Act::Mods,
+        Kind::Start if entry == IMPORT_SAVES => Act::ImportSaves,
         Kind::Start if entry == SETTINGS => Act::OpenSettings,
         Kind::Start | Kind::Refused | Kind::Ended if entry == EXIT => Act::Exit,
         Kind::Ended => Act::BackToStart,
@@ -1019,6 +1075,9 @@ struct App {
     minimise_at: Option<Instant>,
     /// Play's work is running (its one-game claim held).
     working: bool,
+    /// The work running is the mod installer (Mods) or the saves' import, not Play: its good end
+    /// goes back to the start screen.
+    to_start: bool,
     /// The window was closed while Play ran: the launcher ends when Play ends.
     closed: bool,
     /// What the last drawn picture showed ([`App::frame_key`]) and when a frame not drawn is tried
@@ -1255,10 +1314,37 @@ impl App {
 
     /// Play (with mods), and with a game folder typed or dropped.
     fn play(&mut self, mods: bool, game: Option<PathBuf>) {
+        crate::piped::reopen();
         let args = play_arguments(mods, game.as_deref());
         self.output.clear();
+        self.to_start = false;
         self.back_to_waiting();
         self.start_play(args);
+    }
+
+    /// Mods: the mod installer (Play.exe's `--install-mods` on Windows, play.sh's on Linux and
+    /// macOS, both the game program's text chooser) with its lines in the terminal and its
+    /// questions answered at the prompt (`crate::piped`). No game starts, so the sounds go on.
+    fn mods(&mut self) {
+        self.work_to_start(MOD_INSTALLER);
+    }
+
+    /// Import saves: Play.exe's `--import-saves` on Windows, play.sh's on Linux and macOS (the
+    /// saves found COPIED into nv-rs's own folder, each with its script extender co-save, a
+    /// different save already there replaced only on a yes), its questions in the terminal.
+    fn import_saves(&mut self) {
+        self.work_to_start(SAVES_IMPORT);
+    }
+
+    /// Work that is not Play (`arg`: the installer or the import) on its thread, its good end
+    /// back to the start screen ([`end_step`]). No game starts, so the sounds go on.
+    fn work_to_start(&mut self, arg: &str) {
+        crate::piped::reopen();
+        self.output.clear();
+        self.to_start = true;
+        self.back_to_waiting();
+        start_work(vec![arg.into()]);
+        self.working = true;
     }
 
     /// Play's work started in [`sound::PLAY_ORDER`]: the sounds stopped and the device let go
@@ -1441,7 +1527,7 @@ impl App {
             self.back(event_loop);
         }
         self.closed = true;
-        crate::play_unix::close_input();
+        crate::piped::close_input();
         if let Some(w) = &self.window {
             w.set_visible(false);
             if on_wayland(event_loop) {
@@ -1464,17 +1550,7 @@ impl App {
     /// The row under the window position, if any.
     fn row_at(&self, pos: (f64, f64)) -> Option<usize> {
         let (config, rows) = (self.config.as_ref()?, self.rows.as_ref()?);
-        let (x, y, w, h) = gpu::fit(
-            (screen::WIDTH, screen::HEIGHT),
-            (config.width, config.height),
-        );
-        let px = (pos.0 - x as f64) * screen::WIDTH as f64 / w as f64;
-        let py = (pos.1 - y as f64) * screen::HEIGHT as f64 / h as f64;
-        if px < rows.x as f64 || px > (rows.x + rows.width as i32) as f64 || py < rows.top as f64 {
-            return None;
-        }
-        let k = ((py - rows.top as f64) / rows.row as f64) as usize;
-        (k < rows.shown).then_some(rows.first + k)
+        row_hit((config.width, config.height), rows, pos)
     }
 
     /// Whether what is typed goes to the prompt on this screen.
@@ -1484,6 +1560,8 @@ impl App {
             Act::EndIntro => self.end_intro(),
             Act::Play { mods, game } => self.play(mods, game),
             Act::Exit => event_loop.exit(),
+            Act::Mods => self.mods(),
+            Act::ImportSaves => self.import_saves(),
             Act::Answer(i) => {
                 if let Mode::Message(reply) = &mut self.mode {
                     if let Some(r) = reply.take() {
@@ -1501,7 +1579,7 @@ impl App {
                 self.back_to_waiting();
             }
             Act::TypeLine(line) => {
-                crate::play_unix::type_line(&line);
+                crate::piped::type_line(&line);
                 self.add_output(&format!("{line}\n"));
             }
             Act::BackToStart => self.show_start(),
@@ -1923,6 +2001,8 @@ impl winit::application::ApplicationHandler<Event> for App {
         self.window = Some(window);
         let proxy = std::sync::Mutex::new(self.proxy.clone());
         session::connect(move |e| proxy.lock().is_ok_and(|p| p.send_event(e).is_ok()));
+        // From here on a program the work runs takes the lines typed at the prompt.
+        crate::piped::window_takes_lines(true);
         // The game's card, from a process of its own.
         std::thread::spawn(|| {
             session::send(Event::Card(ask_game_card()));
@@ -2012,18 +2092,32 @@ impl winit::application::ApplicationHandler<Event> for App {
                 self.add_output(&text);
             }
             Event::Ended(code) => {
-                self.exit_code = code;
                 self.working = false;
-                // Closed while Play ran: the launcher ends with it.
-                if code == 0 || self.closed {
-                    event_loop.exit();
-                } else if matches!(self.mode, Mode::Output(_)) {
-                    // play.sh's own lines say what went wrong; Back or Exit below them.
-                    self.mode = Mode::Output(Some(code));
-                    self.add_output("");
+                let mods = std::mem::take(&mut self.to_start);
+                if mods {
+                    // The installer may have added or removed mods (Play with mods follows), the
+                    // import its saves.
+                    let now = place::place();
+                    self.place.mods = now.mods;
+                    self.place.saves = now.saves;
                 } else {
-                    // Play.exe's message was shown and answered: back to the start.
-                    self.show_start();
+                    self.exit_code = code;
+                }
+                match end_step(
+                    mods,
+                    code,
+                    self.closed,
+                    matches!(self.mode, Mode::Output(_)),
+                ) {
+                    // Closed while the work ran, or Play's good end: the launcher ends.
+                    EndStep::Exit => event_loop.exit(),
+                    // The installer's good end, or Play.exe's message shown and answered.
+                    EndStep::Start => self.show_start(),
+                    // The work's own lines say what went wrong; Back or Exit below them.
+                    EndStep::Lines => {
+                        self.mode = Mode::Output(Some(code));
+                        self.add_output("");
+                    }
                 }
             }
             Event::Pasted { id, text } => {
@@ -2264,6 +2358,8 @@ impl winit::application::ApplicationHandler<Event> for App {
             self.frame_key(),
             Instant::now(),
         );
+        // While the sounds are open (or a try is due), a look at the device once a second.
+        let wake = sound::check_wake(wake, self.sounds.watching(), Instant::now());
         event_loop.set_control_flow(match wake {
             Some(at) => winit::event_loop::ControlFlow::WaitUntil(at),
             None => winit::event_loop::ControlFlow::Wait,
@@ -2405,6 +2501,7 @@ pub fn run(raw: Vec<String>) -> i32 {
         hidden: false,
         minimise_at: None,
         working: false,
+        to_start: false,
         closed: false,
         frame: FrameState::default(),
         chosen_again: Vec::new(),
@@ -2441,6 +2538,7 @@ pub fn capture(c: &crate::Capture) -> Result<(), String> {
         fallout_ini: fallout_ini.clone(),
         adapter_card: None,
         mods: false,
+        saves: false,
         refused: None,
     };
     let look = look_of(place.game.as_deref(), &fallout_ini, c.plain);
@@ -2486,8 +2584,30 @@ mod tests {
             fallout_ini: PathBuf::from("no such folder/Fallout.ini"),
             adapter_card: Some("Radeon X".into()),
             mods,
+            saves: false,
             refused: None,
         }
+    }
+
+    /// When the work ends: the mod installer's good end back to the start screen, Play's good
+    /// end the launcher's end; a closed window ends it; a bad end shows the lines, or the start
+    /// screen when the work wrote none (its message was answered). Mods runs Play.exe's and
+    /// play.sh's own installer argument.
+    #[test]
+    fn the_installer_comes_back_to_the_start_and_play_ends_the_launcher() {
+        assert_eq!(end_step(true, 0, false, true), EndStep::Start);
+        assert_eq!(end_step(false, 0, false, true), EndStep::Exit);
+        assert_eq!(end_step(true, 0, true, true), EndStep::Exit);
+        assert_eq!(end_step(false, 3, true, true), EndStep::Exit);
+        assert_eq!(end_step(true, 2, false, true), EndStep::Lines);
+        assert_eq!(end_step(false, 7, false, true), EndStep::Lines);
+        assert_eq!(end_step(false, 7, false, false), EndStep::Start);
+        let script = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../distribution/unix/play.sh"),
+        )
+        .unwrap();
+        assert!(script.contains(&format!("({MOD_INSTALLER}) opt_install=1")));
+        assert!(script.contains(&format!("({SAVES_IMPORT}) opt_import=1")));
     }
 
     /// The window has no title bar or border, keeps its task bar name, and a press off the
@@ -2503,14 +2623,22 @@ mod tests {
     }
 
     /// The start screen offers what works today: Play, Play with mods only when there are mods,
-    /// Exit; no entry for anything that does not exist yet.
+    /// Mods, Settings, Exit; no entry for anything that does not exist yet.
     #[test]
     fn the_start_screen_offers_what_works() {
         let s = start_screen(&place(Some("/g/Fallout New Vegas"), false), &Card::Asking);
-        assert_eq!(s.entries, [PLAY, SETTINGS, EXIT]);
+        assert_eq!(s.entries, [PLAY, MODS, SETTINGS, EXIT]);
         assert_eq!(s.welcome[0], "Game: Fallout New Vegas");
         let s = start_screen(&place(Some("/g/x"), true), &Card::Asking);
-        assert_eq!(s.entries, [PLAY, PLAY_WITH_MODS, SETTINGS, EXIT]);
+        assert_eq!(s.entries, [PLAY, PLAY_WITH_MODS, MODS, SETTINGS, EXIT]);
+        let mut with_saves = place(Some("/g/x"), false);
+        with_saves.saves = true;
+        let s = start_screen(&with_saves, &Card::Asking);
+        assert_eq!(s.entries, [PLAY, MODS, IMPORT_SAVES, SETTINGS, EXIT]);
+        let mut with_saves = place(Some("/g/x"), false);
+        with_saves.saves = true;
+        let s = start_screen(&with_saves, &Card::Asking);
+        assert_eq!(s.entries, [PLAY, MODS, IMPORT_SAVES, SETTINGS, EXIT]);
         let s = start_screen(&place(None, false), &Card::Asking);
         assert!(s.welcome[0].contains("not found"), "{:?}", s.welcome);
         assert_eq!(s.welcome.len(), 1);
@@ -2916,6 +3044,54 @@ mod tests {
         );
     }
 
+    /// A press on each shown entry hits that entry and does not move the window; a press above
+    /// the rows, left or right of their column, or below the last shown row hits none and moves
+    /// it. The start screen and the full Settings list (15 entries: it scrolls), at the top and
+    /// scrolled to the end, in the 960x720 window, a smaller one and a wider one.
+    #[test]
+    fn a_press_hits_the_entry_under_it_and_drags_elsewhere() {
+        let look = Look::plain();
+        let settings = settings_entries(&settings::ROWS, &settings::Files::default(), false, true);
+        let start = vec![PLAY.to_string(), MODS.into(), SETTINGS.into(), EXIT.into()];
+        for entries in [start, settings] {
+            for highlighted in [0, entries.len() - 1] {
+                let s = Screen {
+                    entries: entries.clone(),
+                    highlighted,
+                    ..Default::default()
+                };
+                let rows = screen::rows_of(&look, &s);
+                assert!(rows.shown > 0);
+                for window in [(960, 720), (640, 480), (1280, 700)] {
+                    let (x, y, w, h) = gpu::fit((screen::WIDTH, screen::HEIGHT), window);
+                    let at = |px: f64, py: f64| {
+                        (
+                            x as f64 + px * w as f64 / screen::WIDTH as f64,
+                            y as f64 + py * h as f64 / screen::HEIGHT as f64,
+                        )
+                    };
+                    let mid = rows.x as f64 + rows.width as f64 / 2.0;
+                    let row_y = |k: f64| rows.top as f64 + (k + 0.5) * rows.row as f64;
+                    for k in 0..rows.shown {
+                        let hit = row_hit(window, &rows, at(mid, row_y(k as f64)));
+                        assert_eq!(hit, Some(rows.first + k), "{window:?} row {k}");
+                        assert!(!press_drags(hit.is_some(), false));
+                    }
+                    for (px, py) in [
+                        (mid, rows.top as f64 - 5.0),
+                        (rows.x as f64 - 5.0, row_y(0.0)),
+                        (rows.x as f64 + rows.width as f64 + 5.0, row_y(0.0)),
+                        (mid, row_y(rows.shown as f64)),
+                    ] {
+                        let hit = row_hit(window, &rows, at(px, py));
+                        assert_eq!(hit, None, "{window:?} at {px},{py}");
+                        assert!(press_drags(hit.is_some(), false));
+                    }
+                }
+            }
+        }
+    }
+
     /// The Settings list shows each row with its value (its note left out), then Testing and
     /// Back; the Testing list its rows and Back. Enter on a row opens its choices, on a choice
     /// saves it; Esc goes back a list (never saving); Left and Right step round a row's choices.
@@ -2941,6 +3117,8 @@ mod tests {
         assert_eq!(testing.len(), settings::TESTING.len() + 1);
         assert_eq!(testing.last().map(String::as_str), Some(BACK));
         assert_eq!(on_enter(Kind::Start, "", 1, SETTINGS), Act::OpenSettings);
+        assert_eq!(on_enter(Kind::Start, "", 1, MODS), Act::Mods);
+        assert_eq!(on_enter(Kind::Start, "", 1, IMPORT_SAVES), Act::ImportSaves);
         assert_eq!(
             on_enter(Kind::Settings, "", 0, &main[0]),
             Act::OpenChoices(0)

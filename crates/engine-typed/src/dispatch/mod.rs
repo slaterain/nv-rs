@@ -224,6 +224,12 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a0_13d0, tile::absolute_x(Ptr) -> f32),
         entry!(0x00a0_1440, tile::absolute_y(Ptr) -> f32),
         entry!(0x00a0_a220, tile::value_change_event(Ptr)),
+        // The action links' tile search a menu's build makes for every link (every menu's opening).
+        entry!(0x00a0_8b20, tile::find_by_path(Ptr, Ptr) -> Ptr),
+        entry!(0x00a0_8f20, tile::find_named_in_tree(Ptr, Ptr) -> Ptr),
+        entry!(0x00a0_3da0, tile::child_by_name(Ptr, Ptr) -> Ptr),
+        entry!(0x0049_c680, refs::list_find(Ptr, Ptr<u32>, u32) -> u32),
+        entry!(0x0071_9b20, refs::array_find(Ptr, u32, u32, u32) -> i32),
         entry!(0x0085_3130, refs::map_lookup(Ptr, u32, Ptr<u32>) -> u8),
         // The same function at a second address: instruction for instruction the same body.
         entry!(0x00a1_e380, refs::map_lookup(Ptr, u32, Ptr<u32>) -> u8),
