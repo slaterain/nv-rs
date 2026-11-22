@@ -1343,9 +1343,8 @@ that took it, the cell it took (JIP also lets go a lock it never took for a refe
 JIP's point lights are added to the 3D after the fade (group GL's light hooks flag the nodes: see
 GL below). With H08 the attach also puts JIP's inserted nodes and models into a reloaded 3D: when a
 reference or its base form has entries from `InsertNode` or `AttachModel`, they go into its 3D (and the
-player's first-person node too). One step of JIP's attach is not built yet, because nothing can set what
-it tests: collision turned off for a reference marked by `ToggleObjectCollision` (waits for that command,
-with JIP's `TESObjectREFR::ToggleCollision` and `NiNode::ToggleCollision`).
+player's first-person node too). After the fade, a reference marked by `ToggleObjectCollision` has its collision turned off again in
+the new 3D, as JIP's attach does.
 
 #### GH1: Extra data and inventory stacks
 

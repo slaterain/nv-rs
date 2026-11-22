@@ -302,8 +302,8 @@ More in [FIXES.md, "UI Organizer"](FIXES.md#ui-organizer).
 
 - 72 of its crash and leak fixes;
 - Engine Optimizations' first change (a save's changed-forms map);
-- 111 other fixes and tweaks: 8 to the engines and the console; 14 to forms, cells, scripts, saves
-  and sound; 32 to AI, actors and the player; 57 to menus and the HUD.
+- 111 other fixes and tweaks: 16 to the engines and the console; 14 to forms, cells, scripts, saves
+  and sound; 32 to AI, actors and the player; 49 to menus and the HUD.
 
 - Each change is on with the fixes preset and has its own off key in `Fallout.ini`'s
   `[nv-rs Stewie]`.
@@ -347,7 +347,7 @@ More in [FIXES.md, "lStewieAl's Tweaks"](FIXES.md#lstewieals-tweaks).
 ## The launcher
 
 🔨 One window in the look of the game's own terminals, where the player plays, changes the
-settings and the renderer and (next) picks mods. `Play.exe` opens it (`crates/nv-launcher`).
+settings and the renderer, installs mods and imports saves. `Play.exe` opens it (`crates/nv-launcher`).
 
 - The terminal's font, colour, header lines and intro are read from the player's game at every
   start (nothing of the game ships); before the game is found it has the port's own plain look.
@@ -358,7 +358,9 @@ settings and the renderer and (next) picks mods. `Play.exe` opens it (`crates/nv
   it has not been tried on those systems yet.
 - `> Settings` has the twelve settings Settings.cmd had (saved at once into both profiles, with
   and without mods) and a Testing list (the new lighting, JIP LN built in). Settings.cmd is gone.
-- Mods, Import saves and Help move in next; the other `.cmd` files and play.sh still work.
+- `> Mods` installs or removes mods from archives, and `> Import saves` copies the player's saves
+  over (shown when there are saves to import); the package's `.cmd` files are gone (#907). Help
+  comes next; play.sh still works.
 
 ## Modern graphics (wgpu)
 
