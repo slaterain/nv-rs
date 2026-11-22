@@ -137,7 +137,8 @@
 00a39960	1	kNVSE
 00a3fdb0	0	kNVSE
 00a41110	0	kNVSE
-00a5b460	0	JG
+00a5b460	0	JG,JIP
+00a5b630	0	JG,JIP
 00a5b690	0	JG,JIP
 00aa14d0	0	ModLimitFix,nv-rs direct file access
 00aa15f0	1	ModLimitFix,nv-rs direct file access

@@ -388,7 +388,7 @@ case "$here/" in
 ("$game"/*) say "Note: nv-rs is in the game's folder ($here). It never writes there, but it is better kept apart: move the nv-rs folder out of $game." ;;
 esac
 
-# Installing mods: the text chooser, as "Install mods.cmd" on Windows (nv-viewer --install-mods):
+# Installing mods: the text chooser, as the launcher's Mods on Windows (nv-viewer --install-mods):
 # into nv-rs's own folder (mod installs), never the game's; then nothing is started.
 if [ "$opt_install" = 1 ]; then
     mkdir -p -- "$mods" || fail "could not make the mods folder $mods"
@@ -437,7 +437,7 @@ put_pair() {
     if [ -e "$3" ] || [ -L "$3" ]; then
         rm -f -- "$3.old" 2>/dev/null
         if [ -d "$3.old" ] || ! mv -f -- "$3" "$3.old"; then
-            [ -z "$aside_co" ] || mv -f -- "$4.old" "$4"
+            [ -z "$aside_co" ] || mv -f -- "$4.old" "$4" || say "Could not put back $4 (it is at $4.old)."
             rm -f -- "$3.part" "$4.part" 2>/dev/null
             return 1
         fi
@@ -452,8 +452,8 @@ put_pair() {
     fi
     [ -z "$placed_co" ] || rm -f -- "$4"
     rm -f -- "$3.part" "$4.part" 2>/dev/null
-    [ -z "$aside" ] || mv -f -- "$3.old" "$3"
-    [ -z "$aside_co" ] || mv -f -- "$4.old" "$4"
+    [ -z "$aside" ] || mv -f -- "$3.old" "$3" || say "Could not put back $3 (it is at $3.old)."
+    [ -z "$aside_co" ] || mv -f -- "$4.old" "$4" || say "Could not put back $4 (it is at $4.old)."
     return 1
 }
 copy_saves() { # FROM-NAME FOLDER
