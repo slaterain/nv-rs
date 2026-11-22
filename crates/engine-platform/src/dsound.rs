@@ -1077,8 +1077,9 @@ struct Voices {
     game: Out,
     own: Out,
     /// While the outs are parked ([`follow_device`]): the game's clock (µs) up to which the
-    /// playing voices were moved on ([`move_parked`]).
-    parked_clock: Option<u64>,
+    /// playing voices were moved on ([`move_parked`]), after the park's origin (the clock at the
+    /// loss): `(origin, last)`.
+    parked_clock: Option<(u64, u64)>,
 }
 
 /// The two streams of a split output ([`Voices::split`]).
@@ -1764,7 +1765,7 @@ fn follow_device_at(e: &mut Engine, now: std::time::Instant, clock: u64) {
                     move_past(voice, gap, m.rate);
                 }
             }
-            v.parked_clock = Some(clock);
+            v.parked_clock = Some((clock, clock));
             v.game.parked = true;
             v.own.parked = true;
         }
@@ -1875,11 +1876,29 @@ fn open_on_default(
 /// rate `rate` for a voice at the device's rate), round its loop, or to its end (then it has
 /// ended, as the mixer ends it).
 fn move_past(voice: &mut super::mixer::Voice, us: u64, rate: u32) {
+    let step = frames_in(us, hz_of(voice, rate));
+    move_frames(voice, step);
+}
+
+/// A voice's frequency: its own, or the device's `rate` for a voice at the device's rate.
+fn hz_of(voice: &super::mixer::Voice, rate: u32) -> u32 {
+    if voice.rate != 0 {
+        voice.rate
+    } else {
+        rate
+    }
+}
+
+/// Whole frames at `hz` in `us` microseconds (rounded down).
+fn frames_in(us: u64, hz: u32) -> usize {
+    (u128::from(us) * u128::from(hz) / 1_000_000) as usize
+}
+
+/// A playing voice moved on `step` frames, round its loop or to its end ([`move_past`]).
+fn move_frames(voice: &mut super::mixer::Voice, step: usize) {
     let Some(at) = voice.position else {
         return;
     };
-    let hz = if voice.rate != 0 { voice.rate } else { rate };
-    let step = (u128::from(us) * u128::from(hz) / 1_000_000) as usize;
     if step == 0 {
         return;
     }
@@ -1907,16 +1926,21 @@ fn move_past(voice: &mut super::mixer::Voice, us: u64, rate: u32) {
 /// the gap moves from then on, as it would have been heard. At every sound call ([`tick`]) and
 /// once more when the new streams are put in place.
 fn move_parked(v: &mut Voices, clock: u64, rate: u32) {
-    let Some(last) = v.parked_clock else {
+    let Some((origin, last)) = v.parked_clock else {
         return;
     };
-    let us = clock.saturating_sub(last);
+    // Whole frames counted from the park's origin, so calls microseconds apart lose nothing:
+    // the frames between `last` and `clock` are those from the origin to `clock` less those to
+    // `last`, however often this runs.
+    let (now_us, last_us) = (clock.saturating_sub(origin), last.saturating_sub(origin));
     for at in v.playing.iter() {
         if let Some(voice) = v.all.get_mut(at) {
-            move_past(voice, us, rate);
+            let hz = hz_of(voice, rate);
+            let step = frames_in(now_us, hz).saturating_sub(frames_in(last_us, hz));
+            move_frames(voice, step);
         }
     }
-    v.parked_clock = Some(clock);
+    v.parked_clock = Some((origin, clock.max(last)));
 }
 
 /// The helper's new streams put in place, under the voices' lock (so neither stream mixes a
@@ -2881,13 +2905,27 @@ fn relayout(e: &mut Engine, now: Layout) {
     }
 }
 
+/// The lock could not reopen the game's stream (`why`): the output is counted as lost (a stand-in
+/// stream marked lost), so the next sound call's [`follow_device`] parks the voices and opens a
+/// stream on the default device as it is now, at its own rate; no stop, and never silent for the
+/// rest of the session.
+fn lose_at_lock(e: &mut Engine, why: &str) {
+    eprintln!("sound: {why}; the game's sound goes to the default device as it is now");
+    if let Some(m) = state!(e).sound.mix.as_mut() {
+        let lost = super::sound_out::Output::idle(m.rate, Layout::STEREO);
+        lost.mark_lost();
+        let old = m.output.replace(lost);
+        std::thread::spawn(move || drop(old));
+    }
+}
+
 /// Opens the game's stream again at the lock, in `now`, with `open` (`super::sound_out::start`,
 /// which asks the endpoint again). An endpoint that no longer takes `now` (the default device or
 /// its format changed since the output started) gets a stream in its own mix format, and the
 /// game's device takes that layout at once, as DirectSound's device takes a new default format's
-/// channels at once (`10055086`, read only). A stream at a rate other than the one the voices are
-/// converted to is not provided: it is closed, named, and the game's sound is not heard from then
-/// on (no stop).
+/// channels at once (`10055086`, read only). A stream that will not open, at a rate other than the
+/// one the voices are converted to, or in a layout with no matrix is let go and the output counted
+/// as lost ([`lose_at_lock`]), so [`follow_device`] opens it on the default device as it is now.
 fn reopen<F>(e: &mut Engine, now: Layout, mut open: F)
 where
     F: FnMut(Option<Layout>) -> Result<super::sound_out::Output, super::sound_out::Refused>,
@@ -2900,30 +2938,29 @@ where
     let o = match got {
         Ok(o) => o,
         Err(why) => {
-            eprintln!(
-                "sound: the stream in {} channels cannot be opened ({why:?}); the game's sound \
-                 is not heard",
-                now.channels
+            return lose_at_lock(
+                e,
+                &format!(
+                    "the stream in {} channels cannot be opened ({why:?})",
+                    now.channels
+                ),
             );
-            return;
         }
     };
     let rate = state!(e).sound.mix.as_ref().map_or(0, |m| m.rate);
     if o.rate != rate {
-        eprintln!(
-            "sound: the default device now mixes at {} Hz, not {rate} Hz as when the output \
-             started: not provided; the game's sound is not heard",
+        let why = format!(
+            "the default device now mixes at {} Hz, not {rate} Hz as when the output started",
             o.rate
         );
-        return;
+        std::thread::spawn(move || drop(o));
+        return lose_at_lock(e, &why);
     }
     if o.layout != now {
         let Some(place) = Place::new(o.layout) else {
-            eprintln!(
-                "sound: no matrix for the device's layout {:?}; the game's sound is not heard",
-                o.layout
-            );
-            return;
+            let why = format!("no matrix for the device's layout {:?}", o.layout);
+            std::thread::spawn(move || drop(o));
+            return lose_at_lock(e, &why);
         };
         if let Some(d) = state!(e).sound.layout.as_mut() {
             d.mix = o.layout;
@@ -7294,7 +7331,8 @@ mod tests {
 
     /// At the lock the endpoint is asked again: one that no longer takes the layout (another
     /// default device since the output started) gets a stream in its own mix format and the
-    /// game's device mixes that; a stream at another rate is not provided: none, and no stop.
+    /// game's device mixes that; a stream at another rate is not provided: the output counts as lost
+    /// (the device is followed), and no stop.
     #[test]
     fn the_lock_follows_an_endpoint_that_changed() {
         use super::super::sound_out::{Output, Refused};
@@ -7330,7 +7368,9 @@ mod tests {
         reopen(&mut e, Layout::STEREO, |_| {
             Ok(Output::idle(44100, Layout::STEREO))
         });
-        assert!(state!(e).sound.mix.as_ref().unwrap().output.is_none());
+        // Not provided: the output counts as lost, so the next sound call follows the device.
+        let m = state!(e).sound.mix.as_ref().unwrap();
+        assert!(m.output.as_ref().is_some_and(Output::lost));
     }
 
     thread_local! {
@@ -7479,6 +7519,33 @@ mod tests {
             .unwrap()
             .render_stream(Which::Game, 44100, 2, &mut next);
         assert!(next.iter().any(|&x| x != 0.0), "the voice goes on");
+    }
+
+    /// Parked voices lose nothing to many sound calls microseconds apart: 20,000 calls 3 us apart
+    /// move a voice exactly as far as one call after the same 60 ms (whole frames counted from
+    /// the park's origin).
+    #[test]
+    fn parked_voices_lose_nothing_to_many_small_calls() {
+        let make = || {
+            let mut v = Voices::default();
+            let mut voice = Voice::new(vec![0; 2 * 48000], 1, 16);
+            voice.rate = 22050;
+            voice.start(0);
+            v.all.insert(1, voice);
+            v.playing.push(1);
+            v.parked_clock = Some((1000, 1000));
+            v
+        };
+        let (mut many, mut one) = (make(), make());
+        let mut clock = 1000;
+        for _ in 0..20_000 {
+            clock += 3;
+            move_parked(&mut many, clock, 48000);
+        }
+        move_parked(&mut one, clock, 48000);
+        let want = frames_in(60_000, 22050);
+        assert_eq!(one.all[&1].position, Some(want));
+        assert_eq!(many.all[&1].position, Some(want));
     }
 
     /// On a split endpoint the two streams are lost with different gaps (what each had not
