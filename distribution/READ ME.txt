@@ -21,7 +21,9 @@ antivirus objects" below.
 
 Play.exe opens nv-rs's launcher: a window in the look of the game's own terminals (its font, colour
 and lines are read from your installed game). Choose with the arrow keys and Enter, or the mouse:
-> Play starts the game, > Play with mods (shown when you have mods) plays with them, > Settings
+> Play starts the game, > Play with mods (shown when you have mods) plays with them, > Mods
+installs a mod from its archive in the mods folder (or removes one), answering its questions at
+the launcher's prompt, > Settings
 has the window or borderless, resolution, anti-aliasing, game fixes, frame limit and more (and a
 Testing list of what is still being tried), saved at once for the next start; > Exit closes
 it. The window has no title bar: drag it by its background (anywhere but an entry) to move it;
@@ -51,6 +53,8 @@ notices and reads them again.
   Play with mods.cmd     the game with the mods in the mods folder (see mods\READ ME.txt)
   Install mods.cmd       install a mod from its archive (.7z, .zip, .fomod) put in the mods
                          folder, answering its installer's questions; also removes mods
+                         (the same installer as Mods on the launcher's start screen, which
+                         shows it in the launcher's own window)
   Import my saves.cmd    copies your saves from Documents\My Games\FalloutNV. Those stay as they are
 
 Use Exit Game in the game's menu to quit. Saves reach the disk within about 5 seconds of being made,
