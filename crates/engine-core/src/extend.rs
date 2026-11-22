@@ -116,6 +116,9 @@ pub enum Owner {
     Nvse,
     /// JIP LN NVSE built in (`crates/jip`); it runs after xNVSE, as JIP is xNVSE's plugin.
     Jip,
+    /// JohnnyGuitar NVSE built in (`crates/johnnyguitar`): xNVSE loads its plugins by DLL name, so
+    /// `johnnyguitarnvse.dll` after `jip_nvse.dll` and before `nvse_stewie_tweaks.dll`.
+    JohnnyGuitar,
     /// lStewieAl's Tweaks built in (`crates/stewie`): xNVSE loads its plugins by DLL name, so
     /// `nvse_stewie_tweaks.dll` after `jip_nvse.dll` (and `MCM.dll`) and before `ui_organizer.dll`.
     Stewie,
@@ -125,15 +128,16 @@ pub enum Owner {
 }
 
 impl Owner {
-    /// Its place in the order: rows, then `nvse`, then `jip`, `stewie` and `uio` (the plugins' DLL
-    /// names in order).
+    /// Its place in the order: rows, then `nvse`, then `jip`, `johnnyguitar`, `stewie` and `uio`
+    /// (the plugins' DLL names in order).
     const fn rank(self) -> u8 {
         match self {
             Owner::Row(_) => 0,
             Owner::Nvse => 1,
             Owner::Jip => 2,
-            Owner::Stewie => 3,
-            Owner::Uio => 4,
+            Owner::JohnnyGuitar => 3,
+            Owner::Stewie => 4,
+            Owner::Uio => 5,
         }
     }
 
@@ -142,6 +146,7 @@ impl Owner {
             (Owner::Row(a), Owner::Row(b)) => same_str(a, b),
             (Owner::Nvse, Owner::Nvse)
             | (Owner::Jip, Owner::Jip)
+            | (Owner::JohnnyGuitar, Owner::JohnnyGuitar)
             | (Owner::Stewie, Owner::Stewie)
             | (Owner::Uio, Owner::Uio) => true,
             _ => false,
@@ -177,6 +182,7 @@ const NVSE: &[Owner] = &[Owner::Nvse];
 const JIP: &[Owner] = &[Owner::Jip];
 const NVSE_JIP: &[Owner] = &[Owner::Nvse, Owner::Jip];
 const UIO: &[Owner] = &[Owner::Uio];
+const STEWIE: &[Owner] = &[Owner::Stewie];
 
 /// Every exe address a built-in may wrap (ADR-0016 §3, "Wrappers"), by address. Each is a
 /// function entry registered by a translation (or a fix row's copy of it) and reached by
@@ -639,6 +645,13 @@ pub const SITES: &[Entry] = &[
         addr: 0x0071_47c4,
         owners: NVSE,
         step: "I-8",
+    },
+    // The text key event 007154b0, the shift state pushed for the character lookup: lStewieAl's
+    // Tweaks' S0022.03 (`IsShiftHeld`, xNVSE's raw key state of either shift key).
+    Entry {
+        addr: 0x0071_5563,
+        owners: STEWIE,
+        step: "stewie-K",
     },
     // RecipeMenu's craft 007284f0: JIP LN NVSE's ItemCrafted (OnCrafting).
     Entry {
@@ -1147,8 +1160,9 @@ const fn check_areas(main: &[Entry], areas: &[&[Entry]]) {
         while i < area.len() {
             let row = area[i];
             assert!(
-                row.owners.len() == 1 && row.owners[0].same(Owner::Jip),
-                "an area row is JIP's alone; a seam shared with another owner is a main row"
+                row.owners.len() == 1
+                    && (row.owners[0].same(Owner::Jip) || row.owners[0].same(Owner::JohnnyGuitar)),
+                "an area row has one owner (JIP or JohnnyGuitar); a seam shared with another owner is a main row"
             );
             let mut j = 0;
             while j < main.len() {
@@ -3090,7 +3104,12 @@ mod tests {
         ] {
             assert!(find(SITES, Owner::Nvse, a).is_some(), "{a:08x}");
         }
-        assert_eq!(SITES.len(), 128);
+        assert_eq!(SITES.len(), 129);
+        // lStewieAl's Tweaks' (its seams in the text key event and Idle), Tweaks' alone.
+        for a in [0x0071_5563] {
+            assert!(find(SITES, Owner::Stewie, a).is_some(), "{a:08x}");
+            assert!(find(SITES, Owner::Jip, a).is_none(), "{a:08x}");
+        }
         // UI Organizer's ten (UIOLoad's place, ResolveXMLFileHook's, the five hardcore zooms,
         // FinalPostParse, the operators' dispatch, the text scale), its alone.
         for a in [

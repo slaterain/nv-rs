@@ -151,6 +151,7 @@ pub struct Screen {
 }
 
 /// Where the rows are, for the mouse: the list's top, its x, width and a row's height.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rows {
     pub top: i32,
     pub x: i32,
@@ -206,6 +207,12 @@ pub fn welcome_lines(look: &Look, screen: &Screen) -> Vec<String> {
         out.push(now);
     }
     out
+}
+
+/// Where `screen`'s rows go, as [`draw`] lays them out (the tests' mouse hits).
+#[cfg(test)]
+pub fn rows_of(look: &Look, screen: &Screen) -> Rows {
+    layout(look, screen).rows
 }
 
 fn layout(look: &Look, screen: &Screen) -> Layout {
