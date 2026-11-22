@@ -620,6 +620,13 @@ pub const STORE_LOG_MARK: u32 = 0xffff_fff0;
 /// address and the length, little-endian (where it wrote, not what).
 pub const STORE_LOG_QUIET: u32 = 0xf;
 
+/// The read audit's state ([`Mem::read_audit_begin`]): the pages turned to [`TOUCH`]; the pauses in force and the
+/// reads noted.
+struct ReadAudit {
+    turned: Vec<u32>,
+    log: Mutex<(u32, Vec<(u32, u32)>)>,
+}
+
 /// The store log's state ([`Mem::store_log_begin`]).
 struct StoreLog {
     /// Pauses in force ([`Mem::store_log_pause`]): nothing is noted while above 0.
@@ -699,6 +706,8 @@ pub struct Mem {
     /// The store log ([`Mem::store_log_begin`]): every write of guest memory through this view while it
     /// is on, in order; `None` in normal runs (behind the one flag every store tests).
     store_log: Option<Box<std::sync::Mutex<StoreLog>>>,
+    /// The read audit ([`Mem::read_audit_begin`]): the pages it turned to [`TOUCH`] and the reads noted since.
+    read_audit: Option<Box<ReadAudit>>,
     /// The sizes the C runtime's heap blocks and the game's memory manager's were asked for
     /// (`malloc`, `realloc`, `__calloc_crt`, `MemoryManager::Allocate`), as `HeapSize` answers
     /// them for `_msize` ([`Mem::alloc_asked`]). Kept with the heap so one lock covers both
@@ -1269,6 +1278,7 @@ impl Mem {
             track: None,
             touch: None,
             store_log: None,
+            read_audit: None,
             asked: HashMap::new(),
             shared: None,
             defer_hand_back: false,
@@ -1301,6 +1311,7 @@ impl Mem {
             track: None,
             touch: None,
             store_log: None,
+            read_audit: None,
             asked: HashMap::new(),
             shared: Some(shared),
             defer_hand_back: false,
@@ -1765,6 +1776,68 @@ impl Mem {
             if l.paused == 0 {
                 l.writes
                     .push((STORE_LOG_MARK + (kind & 0xf), index.to_le_bytes().to_vec()));
+            }
+        }
+    }
+
+    /// Starts the read audit (a tool of the kept draw records' check, slow: one run with stepped threads only): every
+    /// mapped page is turned to [`TOUCH`], so every load and read takes the slow path, where it is noted
+    /// ([`Mem::read_audit_end`]); reads while paused ([`Mem::read_audit_pause`]) are not. Nothing with the touch
+    /// census on (its pages are [`TOUCH`] already).
+    pub fn read_audit_begin(&mut self) {
+        if self.touch.is_some() || self.read_audit.is_some() {
+            return;
+        }
+        let mut turned = Vec::new();
+        for p in 0..PAGES {
+            if self.page_state(p) == MAPPED {
+                self.set_state(p, p + 1, TOUCH);
+                turned.push(p as u32);
+            }
+        }
+        self.read_audit = Some(Box::new(ReadAudit {
+            turned,
+            log: Mutex::new((0, Vec::new())),
+        }));
+    }
+
+    /// Ends the read audit: the pages it turned back to [`MAPPED`] (those still [`TOUCH`]), and the reads noted
+    /// (address, length), in order.
+    pub fn read_audit_end(&mut self) -> Vec<(u32, u32)> {
+        let Some(audit) = self.read_audit.take() else {
+            return Vec::new();
+        };
+        for &p in &audit.turned {
+            let p = p as usize;
+            if self.page_state(p) == TOUCH {
+                self.set_state(p, p + 1, MAPPED);
+            }
+        }
+        audit
+            .log
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .1
+    }
+
+    /// Pauses (`true`) or resumes (`false`) the read audit's notes; pauses nest.
+    pub fn read_audit_pause(&self, pause: bool) {
+        if let Some(audit) = self.read_audit.as_deref() {
+            let mut l = lock(&audit.log);
+            l.0 = if pause {
+                l.0 + 1
+            } else {
+                l.0.saturating_sub(1)
+            };
+        }
+    }
+
+    /// A read of `[a, a + n)` the read audit notes.
+    fn audit_note(&self, a: u32, n: usize) {
+        if let Some(audit) = self.read_audit.as_deref() {
+            let mut l = lock(&audit.log);
+            if l.0 == 0 {
+                l.1.push((a, n as u32));
             }
         }
     }
@@ -2885,6 +2958,29 @@ mod tests {
         // Off: nothing more is noted.
         m.set_u32(0x10300, 1);
         assert!(m.store_log_end().is_empty());
+    }
+
+    /// The read audit: loads of every width and reads noted in order, paused stretches left out; stores still made;
+    /// at its end the pages are plainly mapped again and nothing more is noted.
+    #[test]
+    fn the_read_audit_notes_reads() {
+        let mut m = Mem::new();
+        m.map(0x10000, 0x2000);
+        m.set_u32(0x10100, 7);
+        m.read_audit_begin();
+        assert_eq!(m.u32(0x10100), 7);
+        m.set_u32(0x10200, 9);
+        m.read_audit_pause(true);
+        let _ = m.u16(0x10300);
+        m.read_audit_pause(false);
+        let mut b = [0u8; 3];
+        m.read(0x10ffe, &mut b);
+        let log = m.read_audit_end();
+        assert_eq!(log, [(0x10100, 4), (0x10ffe, 2), (0x11000, 1)]);
+        assert_eq!(m.u32(0x10200), 9);
+        assert_eq!(m.page_state(0x10), MAPPED);
+        let _ = m.u32(0x10100);
+        assert!(m.read_audit_end().is_empty());
     }
 
     /// The store track: stores of every width, writes, zeroing and the interlocked words mark the

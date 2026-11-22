@@ -365,6 +365,9 @@ impl Mem {
     #[cold]
     #[inline(never)]
     pub(super) fn touch_note(&self, a: u32, n: usize, write: bool) {
+        if !write && self.read_audit.is_some() {
+            self.audit_note(a, n);
+        }
         let Some(t) = self.touch.as_deref() else {
             return;
         };

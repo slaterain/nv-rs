@@ -290,8 +290,8 @@ static OPEN: AtomicUsize = AtomicUsize::new(0);
 /// they read ([`note_keep_read`]) on that thread; every packet test masks it out.
 const KEEP_OPEN: usize = 1 << 24;
 
-/// [`KEEP_READS`]'s type: each read's address and the bytes read.
-type KeepReads = Option<Vec<(u32, Vec<u8>)>>;
+/// [`KEEP_READS`]'s type: each read's address, the bytes read and the exe function reading (the call stack's top).
+type KeepReads = Option<Vec<(u32, Vec<u8>, u32)>>;
 
 thread_local! {
     /// The reads noted while this thread builds a kept draw record: address and the bytes read, in order.
@@ -328,7 +328,7 @@ pub fn keep_reads_pause(pause: bool) {
 }
 
 /// Ends [`keep_reads_begin`]: the reads noted, in order.
-pub fn keep_reads_end() -> Vec<(u32, Vec<u8>)> {
+pub fn keep_reads_end() -> Vec<(u32, Vec<u8>, u32)> {
     let reads = KEEP_READS.with(|r| r.borrow_mut().take());
     if reads.is_some() {
         OPEN.fetch_sub(KEEP_OPEN, Relaxed);
@@ -349,7 +349,7 @@ fn note_keep_read(e: &Engine, addr: u32, len: u32) {
                 }
                 e.mem
                     .store_log_mark(KEEP_READ_MARK, u32::try_from(v.len()).unwrap_or(u32::MAX));
-                v.push((addr, bytes));
+                v.push((addr, bytes, e.call_stack.last().copied().unwrap_or(0)));
             }
         });
     }

@@ -34,6 +34,10 @@ pub enum Mode {
     Off,
     On,
     Check,
+    /// As [`Mode::Check`], and every 64th build also notes every guest read the set-up makes ([`engine_core::Mem`]'s
+    /// read audit; stepped threads only, slow): reads that are none of the record's inputs, its own writes, its
+    /// device calls' structures, its own bytes or its locals are counted by address (the counters' `uncovered`).
+    Audit,
 }
 
 /// The process's mode: `NV_DRAW_KEEP` (`1` or `on`, `check`; anything else off), read once; tests set it
@@ -46,6 +50,7 @@ pub fn mode() -> Mode {
     *MODE.get_or_init(|| match std::env::var("NV_DRAW_KEEP").as_deref() {
         Ok("1" | "on") => Mode::On,
         Ok("check") => Mode::Check,
+        Ok("audit") => Mode::Audit,
         _ => Mode::Off,
     })
 }
@@ -139,6 +144,28 @@ pub enum Leaf {
         first: u32,
         second: u32,
     },
+    /// A texture stage's bind (`super::super::render::stage::bind`): the stage's texture against the one last bound to
+    /// its stage (`0126f680`, a cache other draws change) and the texture's device object, both of the moment.
+    StageBind {
+        this: u32,
+        force: u8,
+    },
+    /// The tint (`super::super::shader::accumulator::set_tint`): it reads the fog property of the frame.
+    Tint {
+        this: u32,
+        owner: u32,
+        green: u32,
+        source: u32,
+    },
+    /// The ambient and emittance set-up (`super::super::shader::geometry::ambient_emittance`): the lights' colours
+    /// and the HDR scale of the frame (`011fa270`, `011fa0c0`).
+    Ambient {
+        this: u32,
+        property: u32,
+        rendering: u32,
+        block: u32,
+        word: u32,
+    },
     /// A constant map's defined constant (`super::defined::set_defined_constant`): its twelve words.
     Defined([u32; 12]),
 }
@@ -156,8 +183,9 @@ const MARK_DEVICE: u32 = rt::DEVICE_CALL_MARK;
 const MARK_READ: u32 = capture::KEEP_READ_MARK;
 const MARK_LEAF: u32 = 2;
 
-/// A geometry drawn in a pass: the geometry, the pass type, the shader, the property state.
-pub type Key = (u32, u32, u32, u32);
+/// A geometry drawn in a pass: the geometry, the pass type, the shader, the property state, and the draw's order-dependent
+/// choices (its flags, the pass's sort flag, whether a restore is owed: `render_standard`).
+pub type Key = (u32, u32, u32, u32, u32);
 
 /// A kept draw.
 struct Record {
@@ -165,11 +193,13 @@ struct Record {
     statics: Vec<u8>,
     /// The inputs the set-up read through the accessors, with their bytes at the time (reads of what the set-up
     /// itself had written left out).
-    inputs: Vec<(u32, Vec<u8>)>,
+    inputs: Vec<(u32, Vec<u8>, u32)>,
     ops: Vec<Op>,
     /// False when the set-up reached the device outside the calls the recorder saw (a call by the vtable from
     /// translated code, a buffer's lock): the record would leave that out, so it is never replayed.
     replayable: bool,
+    /// The draw count ([`Stats::seen`]) when it was last built or replayed: records unused for long are dropped.
+    last_used: u64,
 }
 
 /// The counters (`NV_DRAW_KEEP` reports them every [`REPORT_EVERY`] draws it saw).
@@ -184,8 +214,16 @@ struct Stats {
     checked: u64,
     mismatched: u64,
     /// Which input address broke records most (the inputs' addresses, counted).
-    broke_at: HashMap<u32, u64>,
+    /// By (input address, the exe function that read it): how often it broke a record, and how often it was the only
+    /// input that changed (the records it alone kept from replaying).
+    broke_at: HashMap<(u32, u32), (u64, u64)>,
     first_mismatch: Option<String>,
+    /// Builds made, and those audited ([`Mode::Audit`]) with their uncovered reads by word.
+    builds: u64,
+    audited: u64,
+    uncovered: HashMap<u32, u64>,
+    /// Check mode: the differing ops by kind and destination.
+    differed_at: HashMap<String, u64>,
 }
 
 const REPORT_EVERY: u64 = 1_000_000;
@@ -243,6 +281,7 @@ pub fn leaf(e: &mut Engine, leaf: Leaf, body: impl FnOnce(&mut Engine)) {
 /// Pauses or resumes the three logs.
 fn pause(e: &Engine, on: bool) {
     e.mem.store_log_pause(on);
+    e.mem.read_audit_pause(on);
     rt::device_record_pause(on);
     capture::keep_reads_pause(on);
 }
@@ -251,14 +290,27 @@ fn pause(e: &Engine, on: bool) {
 /// transform, data and skin), the property state's five words, the first property, the shader property (0x100
 /// bytes: flags, alpha and fade, textures, material values), the alpha property and the shader.
 fn statics(e: &Engine, key: Key) -> Vec<u8> {
-    let (geometry, _, shader, state) = key;
+    let mut out = Vec::with_capacity(0x380);
+    for (at, len) in statics_ranges(e, key) {
+        let start = out.len();
+        out.resize(start + len as usize, 0);
+        if at == 0 || e.mem.try_read(at, &mut out[start..]).is_err() {
+            out[start..].fill(0xa5);
+        }
+    }
+    out
+}
+
+/// Where [`statics`] reads: (address, length).
+fn statics_ranges(e: &Engine, key: Key) -> [(u32, u32); 9] {
+    let (geometry, _, shader, state, _) = key;
     let word = |a: u32| {
         let mut b = [0u8; 4];
         e.mem
             .try_read(a, &mut b)
             .map_or(0, |()| u32::from_le_bytes(b))
     };
-    let ranges = [
+    [
         (geometry, 0xc0),
         (state, 0x14),
         (word(state), 0x20),
@@ -268,16 +320,14 @@ fn statics(e: &Engine, key: Key) -> Vec<u8> {
         (word(state.wrapping_add(0xc)).wrapping_add(0x38), 0xc8),
         (word(state.wrapping_add(0x10)), 0x20),
         (shader, 0x80),
-    ];
-    let mut out = Vec::with_capacity(0x2c0);
-    for (at, len) in ranges {
-        let start = out.len();
-        out.resize(start + len, 0);
-        if at == 0 || e.mem.try_read(at, &mut out[start..]).is_err() {
-            out[start..].fill(0xa5);
-        }
-    }
-    out
+        // The geometry data (its dirty bits +0xe, counts) and its render data (the counts, base and kind the draw sends,
+        // its buffers): a change of either is a vertex update or another draw.
+        (word(geometry.wrapping_add(0xb8)), 0x40),
+        (
+            word(word(geometry.wrapping_add(0xb8)).wrapping_add(0x34)),
+            0x50,
+        ),
+    ]
 }
 
 /// Draws one geometry of a pass: through its kept record when every input is unchanged, else `body` (the set-up
@@ -304,18 +354,31 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
             Some(r) => r
                 .inputs
                 .iter()
-                .find(|(at, bytes)| !same_bytes(e, *at, bytes))
-                .map(|(at, _)| Break::Input(*at)),
+                .find(|(at, bytes, _)| !same_bytes(e, *at, bytes))
+                .map(|(at, _, reader)| {
+                    let others = r
+                        .inputs
+                        .iter()
+                        .any(|(a, b, _)| a != at && !same_bytes(e, *a, b));
+                    Break::Input(*at, *reader, !others)
+                }),
         }
     });
     match verdict {
         None if mode == Mode::On => {
             replay(e, key);
+            KEEP.with(|k| {
+                let mut k = k.borrow_mut();
+                let seen = k.stats.seen;
+                if let Some(r) = k.records.get_mut(&key) {
+                    r.last_used = seen;
+                }
+            });
             count(|s| s.replayed += 1);
         }
         None => {
             // Check: the set-up runs as always; what it did against the record.
-            let built = build(e, &mut body);
+            let built = build(e, key, &mut body);
             KEEP.with(|k| {
                 let mut k = k.borrow_mut();
                 let k = &mut *k;
@@ -323,6 +386,10 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
                 if let Some(old) = k.records.get(&key) {
                     if let Some(diff) = first_difference(&old.ops, &built.ops) {
                         k.stats.mismatched += 1;
+                        *k.stats
+                            .differed_at
+                            .entry(difference_kind(&old.ops, &built.ops))
+                            .or_default() += 1;
                         if k.stats.first_mismatch.is_none() {
                             k.stats.first_mismatch = Some(format!("{key:08x?}: {diff}"));
                         }
@@ -332,13 +399,14 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
                     key,
                     Record {
                         statics: snapshot,
+                        last_used: k.stats.seen,
                         ..built
                     },
                 );
             });
         }
         Some(why) => {
-            let built = build(e, &mut body);
+            let built = build(e, key, &mut body);
             KEEP.with(|k| {
                 let mut k = k.borrow_mut();
                 let k = &mut *k;
@@ -346,23 +414,45 @@ pub fn draw(e: &mut Engine, key: Key, mut body: impl FnMut(&mut Engine)) {
                     Break::New => k.stats.built_new += 1,
                     Break::Statics => k.stats.built_statics += 1,
                     Break::Unkeepable => k.stats.built_unkeepable += 1,
-                    Break::Input(at) => {
+                    Break::Input(at, reader, alone) => {
                         k.stats.built_inputs += 1;
-                        *k.stats.broke_at.entry(at).or_default() += 1;
+                        let n = k.stats.broke_at.entry((at, reader)).or_default();
+                        n.0 += 1;
+                        n.1 += u64::from(alone);
                     }
                 }
                 k.records.insert(
                     key,
                     Record {
                         statics: snapshot,
+                        last_used: k.stats.seen,
                         ..built
                     },
                 );
             });
         }
     }
+    evict();
     report();
 }
+
+/// Above [`MAX_RECORDS`] records, the ones not used in the last [`STALE_AFTER`] draws are dropped (geometry freed, a cell
+/// unloaded, a game loaded: their keys are dead or about to be reused).
+fn evict() {
+    KEEP.with(|k| {
+        let mut k = k.borrow_mut();
+        if k.records.len() > MAX_RECORDS {
+            let cutoff = k.stats.seen.saturating_sub(STALE_AFTER);
+            k.records.retain(|_, r| r.last_used >= cutoff);
+            if k.records.len() > MAX_RECORDS {
+                k.records.clear();
+            }
+        }
+    });
+}
+
+const MAX_RECORDS: usize = 40_000;
+const STALE_AFTER: u64 = 2_000_000;
 
 /// A length or an index as a guest word (they are far below 4 G here).
 fn n32(n: usize) -> u32 {
@@ -375,7 +465,8 @@ enum Break {
     New,
     Statics,
     Unkeepable,
-    Input(u32),
+    /// The first input that changed, the function that read it, and whether it was the only one.
+    Input(u32, u32, bool),
 }
 
 fn count(f: impl FnOnce(&mut Stats)) {
@@ -394,10 +485,20 @@ fn same_bytes(e: &Engine, at: u32, bytes: &[u8]) -> bool {
 }
 
 /// Runs `body` with the three logs on and makes the record of what it did (statics filled in by the caller).
-fn build(e: &mut Engine, body: &mut impl FnMut(&mut Engine)) -> Record {
+fn build(e: &mut Engine, key: Key, body: &mut impl FnMut(&mut Engine)) -> Record {
     // The stack for locals made first, so the set-up's locals lie in the range the store log leaves out.
     e.with_stack(4, |_, _| ());
     let (low, top) = e.locals_below();
+    let audit = mode() == Mode::Audit
+        && e.real.is_none()
+        && KEEP.with(|k| {
+            let mut k = k.borrow_mut();
+            k.stats.builds += 1;
+            k.stats.builds % AUDIT_EVERY == 0
+        });
+    if audit {
+        e.mem.read_audit_begin();
+    }
     e.mem.store_log_begin(low, top);
     rt::device_record_begin();
     capture::keep_reads_begin();
@@ -405,15 +506,72 @@ fn build(e: &mut Engine, body: &mut impl FnMut(&mut Engine)) -> Record {
     BUILDING.with(|b| b.set(true));
     body(e);
     BUILDING.with(|b| b.set(false));
+    let audited = if audit {
+        e.mem.read_audit_end()
+    } else {
+        Vec::new()
+    };
     let leaves = KEEP
         .with(|k| k.borrow_mut().leaves.take())
         .unwrap_or_default();
     let reads = capture::keep_reads_end();
     let calls = rt::device_record_end();
     let log = e.mem.store_log_end();
-    let mut record = assemble(log, &calls, &leaves, &reads);
+    let (mut record, written) = assemble(log, &calls, &leaves, &reads);
     record.replayable = !rt::device_record_unseen();
+    if audit {
+        note_uncovered(e, key, &audited, &record, &written, &calls);
+    }
     record
+}
+
+/// Every [`AUDIT_EVERY`]th build is audited ([`Mode::Audit`]).
+const AUDIT_EVERY: u64 = 64;
+
+/// The audited reads of a build that nothing in its record covers, counted by their 4-byte word ([`Mode::Audit`]):
+/// covered are the inputs, the build's own writes, its device calls' structures, its own bytes ([`statics`]'s
+/// ranges) and its stack locals.
+fn note_uncovered(
+    e: &Engine,
+    key: Key,
+    audited: &[(u32, u32)],
+    record: &Record,
+    written: &std::collections::HashSet<u32>,
+    calls: &[DeviceCall],
+) {
+    let mut ranges: Vec<(u32, u32)> = record
+        .inputs
+        .iter()
+        .map(|(at, bytes, _)| (*at, n32(bytes.len())))
+        .collect();
+    for call in calls {
+        if let Some((i, len)) = rt::device_structure(call.slot, &call.args) {
+            ranges.push((call.args[i], len));
+        }
+    }
+    ranges.extend(statics_ranges(e, key));
+    let covered = |b: u32| {
+        written.contains(&b)
+            || e.in_locals(b)
+            || ranges
+                .iter()
+                .any(|&(at, len)| b >= at && u64::from(b) < u64::from(at) + u64::from(len))
+    };
+    let mut words = std::collections::BTreeSet::new();
+    for &(at, len) in audited {
+        for b in at..at.saturating_add(len) {
+            if !covered(b) {
+                words.insert(b & !3);
+            }
+        }
+    }
+    KEEP.with(|k| {
+        let mut k = k.borrow_mut();
+        k.stats.audited += 1;
+        for w in words {
+            *k.stats.uncovered.entry(w).or_default() += 1;
+        }
+    });
 }
 
 /// The record from the logs: the writes, setter calls and device calls in the store log's order; the reads of bytes
@@ -422,10 +580,10 @@ fn assemble(
     log: Vec<(u32, Vec<u8>)>,
     calls: &[DeviceCall],
     leaves: &[Leaf],
-    reads: &[(u32, Vec<u8>)],
-) -> Record {
+    reads: &[(u32, Vec<u8>, u32)],
+) -> (Record, std::collections::HashSet<u32>) {
     let mut ops = Vec::new();
-    let mut inputs: Vec<(u32, Vec<u8>)> = Vec::new();
+    let mut inputs: Vec<(u32, Vec<u8>, u32)> = Vec::new();
     let mut written = std::collections::HashSet::new();
     let mut read_at = std::collections::HashSet::new();
     for (at, bytes) in log {
@@ -435,11 +593,11 @@ fn assemble(
                 MARK_DEVICE => ops.extend(calls.get(index(&bytes)).cloned().map(Op::Device)),
                 MARK_LEAF => ops.extend(leaves.get(index(&bytes)).copied().map(Op::Leaf)),
                 MARK_READ => {
-                    if let Some((addr, value)) = reads.get(index(&bytes)) {
+                    if let Some((addr, value, reader)) = reads.get(index(&bytes)) {
                         let own =
                             (0..n32(value.len())).all(|i| written.contains(&addr.wrapping_add(i)));
                         if !own && read_at.insert(*addr) {
-                            inputs.push((*addr, value.clone()));
+                            inputs.push((*addr, value.clone(), *reader));
                         }
                     }
                 }
@@ -459,12 +617,16 @@ fn assemble(
         }
         ops.push(Op::Write(at, bytes));
     }
-    Record {
-        statics: Vec::new(),
-        inputs,
-        ops,
-        replayable: true,
-    }
+    (
+        Record {
+            statics: Vec::new(),
+            inputs,
+            ops,
+            replayable: true,
+            last_used: 0,
+        },
+        written,
+    )
 }
 
 /// Replays the record of `key`: its writes, setter calls and device calls, in order.
@@ -618,6 +780,41 @@ fn replay_leaf(e: &mut Engine, leaf: Leaf) {
                 Ptr::new(second)
             )
         ),
+        Leaf::Ambient {
+            this,
+            property,
+            rendering,
+            block,
+            word,
+        } => typed_call!(
+            SHADER,
+            0x00b7_ba70,
+            crate::shader::geometry::ambient_emittance(
+                e,
+                Ptr::new(this),
+                Ptr::new(property),
+                Ptr::new(rendering),
+                Ptr::new(block),
+                word
+            )
+        ),
+        Leaf::StageBind { this, force } => {
+            let _: bool = typed_call!(
+                crate::render::FAMILY,
+                0x00e7_eb00,
+                crate::render::stage::bind(e, Ptr::new(this), force)
+            );
+        }
+        Leaf::Tint {
+            this,
+            owner,
+            green,
+            source,
+        } => typed_call!(
+            SHADER,
+            0x00c0_2d90,
+            crate::shader::accumulator::set_tint(e, this, Ptr::new(owner), green, source)
+        ),
         Leaf::Defined(w) => {
             let _: u32 = typed_call!(
                 super::FAMILY,
@@ -653,6 +850,33 @@ fn first_difference(old: &[Op], new: &[Op]) -> Option<String> {
         .then(|| format!("{} ops kept, {} made by the set-up", old.len(), new.len()))
 }
 
+/// Where two records' work first differs, by kind and destination (the check mode's histogram): a write by its
+/// address, a device call by its slot, a kept call by its kind, or the lengths.
+fn difference_kind(old: &[Op], new: &[Op]) -> String {
+    let kind = |op: &Op| match op {
+        Op::Write(at, _) => format!("write {at:08x}"),
+        Op::Device(call) => format!("device slot {:#x}", call.slot),
+        Op::Leaf(leaf) => format!(
+            "call {}",
+            format!("{leaf:?}")
+                .split([' ', '{', '('])
+                .next()
+                .unwrap_or("")
+        ),
+    };
+    old.iter().zip(new).find(|(a, b)| a != b).map_or_else(
+        || "length".to_string(),
+        |(a, b)| {
+            let (a, b) = (kind(a), kind(b));
+            if a == b {
+                a
+            } else {
+                format!("{a} / {b}")
+            }
+        },
+    )
+}
+
 /// The counters, every [`REPORT_EVERY`] draws seen.
 fn report() {
     KEEP.with(|k| {
@@ -666,13 +890,42 @@ fn report() {
 }
 
 fn summary(s: &Stats, records: usize) -> String {
-    let top = s
-        .broke_at
+    let mut broke: Vec<_> = s.broke_at.iter().collect();
+    broke.sort_by_key(|(at, n)| (std::cmp::Reverse(n.0), **at));
+    let top = broke
         .iter()
-        .max_by_key(|(at, n)| (**n, std::cmp::Reverse(**at)))
-        .map_or_else(|| "none".to_string(), |(at, n)| format!("{at:08x} ({n})"));
+        .take(4)
+        .map(|((at, reader), (n, alone))| {
+            format!("{at:08x} read by {reader:08x}: {n} ({alone} alone)")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut uncovered: Vec<_> = s.uncovered.iter().collect();
+    uncovered.sort_by_key(|(at, n)| (std::cmp::Reverse(**n), **at));
+    let audit = if s.audited == 0 {
+        String::new()
+    } else {
+        let words = uncovered
+            .iter()
+            .take(16)
+            .map(|(at, n)| format!("{at:08x}: {n}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "; {} builds audited, reads none of their records covers (by word, builds): [{words}]",
+            s.audited
+        )
+    };
+    let mut differed: Vec<_> = s.differed_at.iter().collect();
+    differed.sort_by_key(|(at, n)| (std::cmp::Reverse(**n), (*at).clone()));
+    let differed = differed
+        .iter()
+        .take(6)
+        .map(|(at, n)| format!("{at}: {n}"))
+        .collect::<Vec<_>>()
+        .join(", ");
     format!(
-        "NV_DRAW_KEEP: {} draws: {} replayed, {} built (new {}, own bytes changed {}, inputs changed {}, device reached outside the record {}); {} checked, {} differed{}; {records} records; top input that broke one: {top}",
+        "NV_DRAW_KEEP: {} draws: {} replayed, {} built (new {}, own bytes changed {}, inputs changed {}, device reached outside the record {}); {} checked, {} differed{}; {records} records; inputs that broke records most: [{top}]; differed first at: [{differed}]{audit}",
         s.seen,
         s.replayed,
         s.built_new + s.built_statics + s.built_inputs + s.built_unkeepable,
@@ -737,13 +990,13 @@ mod tests {
             m(MARK_READ, 4),
         ];
         let reads = vec![
-            (0x4000, vec![5, 5]),
-            (0x5000, vec![1, 2, 3, 4]),
-            (0x4000, vec![6, 6]),
-            (0x5002, vec![3, 4, 0]),
-            (0x7001, vec![1, 1]),
+            (0x4000, vec![5, 5], 0x11),
+            (0x5000, vec![1, 2, 3, 4], 0x12),
+            (0x4000, vec![6, 6], 0x13),
+            (0x5002, vec![3, 4, 0], 0x14),
+            (0x7001, vec![1, 1], 0x15),
         ];
-        let r = assemble(log, std::slice::from_ref(&call), &[leaf], &reads);
+        let (r, _) = assemble(log, std::slice::from_ref(&call), &[leaf], &reads);
         assert_eq!(
             r.ops,
             [
@@ -753,7 +1006,10 @@ mod tests {
                 Op::Write(0x6000, vec![9]),
             ]
         );
-        assert_eq!(r.inputs, [(0x4000, vec![5, 5]), (0x5002, vec![3, 4, 0])]);
+        assert_eq!(
+            r.inputs,
+            [(0x4000, vec![5, 5], 0x11), (0x5002, vec![3, 4, 0], 0x14)]
+        );
     }
 
     /// A draw kept and replayed: the first draw runs the body and keeps what it wrote and read; the next, with the
@@ -777,7 +1033,7 @@ mod tests {
             let _ = capture::word(e, scratch, 0);
             e.mem.set_u32(out, value + 1 + extra.get());
         };
-        let key = (0x10, 1, 0x20, 0x30);
+        let key = (0x10, 1, 0x20, 0x30, 0);
         draw(&mut e, key, body);
         assert_eq!((runs.get(), e.mem.u32(out)), (1, 6));
         e.mem.set_u32(out, 0);

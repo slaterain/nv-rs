@@ -5882,7 +5882,7 @@ pub fn device_record_pause(pause: bool) {
 /// The word of a device call that is the address of a structure, and the structure's bytes:
 /// `Set{Vertex,Pixel}ShaderConstant{F,I,B}` (16, 16 and 4 bytes a register), `SetTransform` (a
 /// matrix), `SetClipPlane` (a plane), `SetViewport`, `SetMaterial`, `SetLight`.
-fn pointer_arg(slot: u32, args: &[u32]) -> Option<(usize, u32)> {
+pub fn device_structure(slot: u32, args: &[u32]) -> Option<(usize, u32)> {
     let count = |i: usize| args.get(i).copied().unwrap_or(0);
     match slot {
         0x178 | 0x180 | 0x1b4 | 0x1bc => Some((1, count(2).saturating_mul(16))),
@@ -5949,7 +5949,7 @@ pub fn device_record_unseen() -> bool {
 fn note_device_call_slow(e: &Engine, this: u32, slot: u32, args: &[u32]) {
     // A structure on the caller's stack for locals is gone by replay time: its bytes are kept. One elsewhere (the
     // shader statics, an object) is read again where it is at replay, as the call would read it then.
-    let (data_arg, data) = match pointer_arg(slot, args) {
+    let (data_arg, data) = match device_structure(slot, args) {
         Some((i, len))
             if args.get(i).is_some_and(|&p| p != 0 && e.in_locals(p)) && len <= 0x4000 =>
         {

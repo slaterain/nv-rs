@@ -1207,12 +1207,30 @@ const COLOUR_LUMINANCE: u32 = 0x00b7_19e0;
 /// `this` (`ECX`) is not read, but `SetupGeometryConstants` (`00b7dab0`) calls it with `ECX` set.
 pub fn ambient_emittance(
     e: &mut Engine,
-    _this: Ptr,
+    this: Ptr,
     property: Ptr,
     rendering: Ptr,
     block: Ptr,
     word: u32,
 ) {
+    if crate::draw::keep::building() {
+        let call = crate::draw::keep::Leaf::Ambient {
+            this: this.addr(),
+            property: property.addr(),
+            rendering: rendering.addr(),
+            block: block.addr(),
+            word,
+        };
+        return crate::draw::keep::leaf(e, call, |e| {
+            ambient_emittance_now(e, property, rendering, block, word);
+        });
+    }
+    ambient_emittance_now(e, property, rendering, block, word);
+}
+
+/// [`ambient_emittance`]'s work (a kept draw record makes the call again with the frame's lights and HDR scale).
+#[inline(always)]
+fn ambient_emittance_now(e: &mut Engine, property: Ptr, rendering: Ptr, block: Ptr, word: u32) {
     let property = property.addr();
     let rendering = rendering.addr();
     let current = capture::own_at::<u32>(e, RENDERING_PASS);

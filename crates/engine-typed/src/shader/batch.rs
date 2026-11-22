@@ -587,7 +587,14 @@ pub fn render_standard(e: &mut Engine, pass: Ptr<RenderPass>, first: u32, second
     if crate::draw::keep::mode() != crate::draw::keep::Mode::Off
         && keepable(e, pass_type, geometry.addr(), shader)
     {
-        crate::draw::keep::draw(e, (geometry.addr(), pass_type, shader, state), rest);
+        // The draw's order-dependent choices are part of its key: the flags, the pass's sort flag and whether a restore
+        // is owed (`RESTORE_OWED`): a record is only replayed where the set-up would take the same branches.
+        let order = u32::from(first)
+            | u32::from(second) << 1
+            | u32::from(third) << 2
+            | u32::from(e.get(pass, RenderPass::ucSortFlag)) << 3
+            | u32::from(e.global::<u8>(RESTORE_OWED)) << 11;
+        crate::draw::keep::draw(e, (geometry.addr(), pass_type, shader, state, order), rest);
     } else {
         rest(e);
     }
