@@ -35,7 +35,7 @@ use super::layout::{
 use engine_core::mem::track::Track;
 use engine_core::ptr::Ptr;
 use engine_core::x87::{x87_add, x87_load32, x87_m32, x87_mul, x87_store32};
-use engine_core::Engine;
+use engine_core::{typed_call, Engine};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering::Relaxed};
 use std::sync::{Arc, Mutex};
@@ -570,10 +570,14 @@ pub fn walk_scene(e: &mut Engine, scene: u32, process: u32) -> bool {
             *r = Some(Record::default());
         }
         RECORDING.store(true, Relaxed);
-        super::visible::cull(
-            e,
-            Ptr::<NiAVObject>::new(scene),
-            Ptr::<NiCullingProcess>::new(process),
+        typed_call!(
+            super::FAMILY,
+            0x00a5_9e00,
+            super::visible::cull(
+                e,
+                Ptr::<NiAVObject>::new(scene),
+                Ptr::<NiCullingProcess>::new(process)
+            )
         );
         RECORDING.store(false, Relaxed);
         DRY.store(true, Relaxed);
