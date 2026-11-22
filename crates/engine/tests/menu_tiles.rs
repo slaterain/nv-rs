@@ -1683,8 +1683,10 @@ fn calc_scene(
         e.mem.write(moved, &bytes);
         ret(moved)
     });
-    // `GetLastError` (`00fdf094`), which the C runtime's math error path reaches on a NaN.
-    e.register(0x00fd_f094, |_, _| Ret::default());
+    // `floor` and `ceil` of a NaN report it through `errno`: the static slot (no thread data:
+    // `__getptd_noexit` answers 0, as in the lookup tests above), compared with the rest of memory.
+    e.map(0x011c_1000, 0x1000);
+    e.register(0x00ed_1165, |_, _| ret(0));
     reaction_map(e, 37, &[]);
     int_map(e, 0x011f_3308, 37, 0, false);
     e.call(0x00a0_c6c0, &args![0x011f_3308u32, 10_010u32, u32::MAX]);
