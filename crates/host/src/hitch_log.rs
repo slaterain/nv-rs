@@ -827,6 +827,9 @@ impl Frame {
             ("Havok", Count::GridHavokNs),
             ("load", Count::GridLoadNs),
             ("terrain", Count::GridTerrainNs),
+            ("cell find", Count::GridCellFindNs),
+            ("land", Count::GridLandNs),
+            ("water", Count::GridWaterNs),
         ];
         let shown: Vec<String> = parts
             .iter()
@@ -836,6 +839,10 @@ impl Frame {
         put(
             shown.len() as u64,
             format!("grid shift parts ms: {}", shown.join(", ")),
+        );
+        put(
+            g(Count::GridCellsMade),
+            format!("{} grid cells made", g(Count::GridCellsMade)),
         );
         put(
             g(Count::CellAttachNs) / TENTH_MS,
@@ -1258,6 +1265,14 @@ mod tests {
             line.contains("grid shift parts ms: shift 3.8, load 5.1"),
             "{line}"
         );
+        f.game[Count::GridCellFindNs as usize] = 4_200_000;
+        f.game[Count::GridCellsMade as usize] = 2;
+        let line = f.line();
+        assert!(
+            line.contains("grid shift parts ms: shift 3.8, load 5.1, cell find 4.2"),
+            "{line}"
+        );
+        assert!(line.contains("2 grid cells made"), "{line}");
         assert!(
             !line.contains("grid update"),
             "under a tenth of a ms: {line}"
