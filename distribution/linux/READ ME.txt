@@ -87,6 +87,9 @@ Start
    the terminal, as ./play.sh.
    It plays the game's own terminal sounds, read from your installed game (Settings > Launcher
    sounds turns them off).
+   A sound device that is removed while the game or the launcher runs is followed: the sound
+   goes on from the default device after a short gap (PipeWire and PulseAudio usually move it
+   themselves). Not tried on Linux yet.
    The window has no title bar: drag it by its background (anywhere but an entry) to move it;
    > Exit or Esc on the first screen closes it.
    On Wayland its window cannot hide while you play: once the game has run a few seconds it is
@@ -104,7 +107,8 @@ they are. A save and its .nvse file are copied together.
   ./play.sh                  start
   ./play.sh --game FOLDER    use the game in FOLDER, and remember it
   ./play.sh --forget-game    forget the remembered game folder (it asks again)
-  ./play.sh --import-saves   offer again to copy your saves from Steam's Proton folder
+  ./play.sh --import-saves   offer again to copy your saves from Steam's Proton folder, then
+                             stop (the launcher's Import saves runs the same)
   ./play.sh --check          only check your game's version and say whether it can start
   ./play.sh --mods           play with mods: the installed ones, then those you put in the "my
                              mods" folder in nv-rs's own folder (as they would go in Data; it
@@ -117,6 +121,7 @@ they are. A save and its .nvse file are copied together.
                              answer its installer's questions (type what each line says; Enter
                              keeps the recommended choice); it goes to nv-rs's own folder, and
                              --mods plays with it. Also lists and removes installed mods
+                             (the launcher's Mods entry runs the same installer in its window)
 
 
 Your files

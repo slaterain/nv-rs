@@ -2317,6 +2317,8 @@ pub fn fn_00448bf0(e: &mut Engine, this: Ptr) -> bool {
 /// leaves a task in the slot, virtual function `0x14` of that task is
 /// called. Always returns true.
 pub fn fn_00448c10(e: &mut Engine, this: Ptr) -> bool {
+    // The hitch log's timer (main only; no effect on the game).
+    let _timed = engine_core::hitch::Timed::main(engine_core::hitch::Count::LoaderDrainNs);
     let queue = e.mem.u32(this.addr() + 0x1c);
     e.with_stack(4, |e, slot| {
         e.call(TASK_POINTER_CONSTRUCT, &args![slot, 0u32]);
@@ -2335,6 +2337,64 @@ pub fn fn_00448c10(e: &mut Engine, this: Ptr) -> bool {
     true
 }
 
+/// The time limit (milliseconds) of [`fn_00448cc0_limited`] in play: 0 = the exe's own (the host's
+/// switch `NV_LOADER_WALK_MS` sets it before the first frame).
+pub static LOADER_WALK_MS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// [`fn_00448cc0`] with another time limit in play, a port-side switch (`NV_LOADER_WALK_MS`, off by
+/// default): the walk over the queued references gives up after [`LOADER_WALK_MS`] instead of the
+/// exe's 5.0 (`0101712c`, on the same timer scale as the IO manager's millisecond budget) when the IO
+/// manager is in mode 6 (play). While nothing is in flight
+/// (the IO manager's `+0x18` is 0: the loaders idle) the exe's limit
+/// comes back, so whatever the smaller limit left gets checked.
+/// Outside play (the exe's 100000.0) and with 0 it is the translation.
+/// The walk itself is unchanged: from the start of the map each call, each yielded reference's
+/// `QueuedReference::QueueMe` (slot `0x20`, `0043fed0`: starts its loads; the step `0044b8d0`
+/// takes the entry out of the map, so the walk drains it front to back), the timer looked at
+/// between entries.
+pub fn fn_00448cc0_limited(e: &mut Engine, this: Ptr) -> bool {
+    let limit_ms = LOADER_WALK_MS.load(std::sync::atomic::Ordering::Relaxed);
+    let manager = e.global::<u32>(TASK_MANAGER);
+    // Loaders idle (nothing in flight, the IO manager's +0x18): the exe's limit, so what is left clears.
+    if limit_ms == 0
+        || manager == 0
+        || fn_00448de0(e, Ptr::new(manager))
+        || e.mem.u32(manager + 0x18) == 0
+    {
+        return fn_00448cc0(e, this);
+    }
+    let _timed = engine_core::hitch::Timed::main(engine_core::hitch::Count::LoaderWalkNs);
+    e.with_stack(0x10, |e, timer| {
+        fn_00448e00(e, timer);
+        bs_precision_timer_reset(e, timer, limit_ms as f32);
+        e.with_stack(0x10, |e, iterator| {
+            e.call(MAP_ITERATOR_CONSTRUCT, &args![iterator]);
+            let map = e.mem.u32(this.addr() + 0xc);
+            while !e.call(MAP_ITERATOR_IS_DONE, &args![iterator]).bool() && !fn_00448e70(e, timer) {
+                e.with_stack(4, |e, key| {
+                    e.with_stack(4, |e, task| {
+                        e.call(TASK_POINTER_CONSTRUCT, &args![task, 0u32]);
+                        if e.call(
+                            FOURTH_MAP_NEXT_ENTRY,
+                            &args![map, iterator, key, task, 1u32],
+                        )
+                        .bool()
+                        {
+                            let queued =
+                                typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, task));
+                            e.vcall(queued, 0x20, &args![]);
+                        }
+                        e.call(TASK_POINTER_DESTRUCT, &args![task]);
+                    });
+                });
+            }
+            let done = e.call(MAP_ITERATOR_IS_DONE, &args![iterator]).bool();
+            e.call(MAP_ITERATOR_DESTRUCT, &args![iterator]);
+            done
+        })
+    })
+}
+
 // Translated from 00448cc0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Starts a timer ([`fn_00448e00`], [`bs_precision_timer_reset`]) of 5.0
 /// seconds (100000.0 when the task manager's dword at +0x68 is 6,
@@ -2342,6 +2402,8 @@ pub fn fn_00448c10(e: &mut Engine, this: Ptr) -> bool {
 /// done or the timer has run out ([`fn_00448e70`]), every task it yields has
 /// its virtual function `0x20` called. Returns whether the iterator is done.
 pub fn fn_00448cc0(e: &mut Engine, this: Ptr) -> bool {
+    // The hitch log's timer (main only; no effect on the game).
+    let _timed = engine_core::hitch::Timed::main(engine_core::hitch::Count::LoaderWalkNs);
     e.with_stack(0x10, |e, timer| {
         fn_00448e00(e, timer);
         let manager = e.global::<u32>(TASK_MANAGER);

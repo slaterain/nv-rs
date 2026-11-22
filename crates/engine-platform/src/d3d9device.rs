@@ -1018,7 +1018,75 @@ fn fwd_create_depth_stencil_surface(
     )
 }
 
+/// The device functions the world draw calls most, for the typed draw code's writer
+/// (`engine_core::real_threads::DeviceWriter`, `NV_DRAW_WRITER`): each the function registered at
+/// its slot below (the words form) and the same one taking its arguments as they are.
+static WRITER: engine_core::real_threads::DeviceWriter = {
+    use super::d3d9resource as r;
+    engine_core::real_threads::DeviceWriter {
+        code: DEVICE_CODE,
+        render_state: (
+            crate::entry!(0, fwd_set_render_state(Ptr, u32, u32) -> u32).1,
+            |e, this, state, value| fwd_set_render_state(e, Ptr::new(this), state, value),
+        ),
+        stage_state: (
+            crate::entry!(0, fwd_set_texture_stage_state(Ptr, u32, u32, u32) -> u32).1,
+            |e, this, stage, kind, value| {
+                fwd_set_texture_stage_state(e, Ptr::new(this), stage, kind, value)
+            },
+        ),
+        sampler_state: (
+            crate::entry!(0, fwd_set_sampler_state(Ptr, u32, u32, u32) -> u32).1,
+            |e, this, sampler, kind, value| {
+                fwd_set_sampler_state(e, Ptr::new(this), sampler, kind, value)
+            },
+        ),
+        texture: (
+            crate::entry!(0, fwd_set_texture(Ptr, u32, u32) -> u32).1,
+            |e, this, sampler, texture| fwd_set_texture(e, Ptr::new(this), sampler, texture),
+        ),
+        stream_source: (
+            crate::entry!(0, r::fwd_set_stream_source(Ptr, u32, u32, u32, u32) -> u32).1,
+            |e, this, stream, buffer, offset, stride| {
+                r::fwd_set_stream_source(e, Ptr::new(this), stream, buffer, offset, stride)
+            },
+        ),
+        draw_primitive: (
+            crate::entry!(0, r::fwd_draw_primitive(Ptr, u32, u32, u32) -> u32).1,
+            |e, this, kind, start, count| r::fwd_draw_primitive(e, Ptr::new(this), kind, start, count),
+        ),
+        draw_indexed_primitive: (
+            crate::entry!(0, r::fwd_draw_indexed_primitive(Ptr, u32, u32, u32, u32, u32, u32) -> u32).1,
+            |e, this, kind, base, min, vertices, start, count| {
+                r::fwd_draw_indexed_primitive(
+                    e,
+                    Ptr::new(this),
+                    kind,
+                    base,
+                    min,
+                    vertices,
+                    start,
+                    count,
+                )
+            },
+        ),
+        vertex_constants: (
+            crate::entry!(0, r::fwd_set_vertex_constant_f(Ptr, u32, Ptr, u32) -> u32).1,
+            |e, this, start, data, count| {
+                r::fwd_set_vertex_constant_f(e, Ptr::new(this), start, Ptr::new(data), count)
+            },
+        ),
+        pixel_constants: (
+            crate::entry!(0, r::fwd_set_pixel_constant_f(Ptr, u32, Ptr, u32) -> u32).1,
+            |e, this, start, data, count| {
+                r::fwd_set_pixel_constant_f(e, Ptr::new(this), start, Ptr::new(data), count)
+            },
+        ),
+    }
+};
+
 fn register_code(e: &mut Engine) {
+    engine_core::real_threads::install_device_writer(&WRITER);
     let device: [(u32, crate::AbiFn); 48] = [
         (16, crate::entry!(0, reset(Ptr, Ptr) -> u32).1),
         (
@@ -1109,21 +1177,21 @@ fn register_code(e: &mut Engine) {
         (76, crate::entry!(0, get_scissor_rect(Ptr, Ptr) -> u32).1),
         (
             57,
-            crate::entry!(0, fwd_set_render_state(Ptr, u32, u32) -> u32).1,
+            WRITER.render_state.0,
         ),
         (
             58,
             crate::entry!(0, get_render_state(Ptr, u32, Ptr) -> u32).1,
         ),
         (64, crate::entry!(0, get_texture(Ptr, u32, Ptr) -> u32).1),
-        (65, crate::entry!(0, fwd_set_texture(Ptr, u32, u32) -> u32).1),
+        (65, WRITER.texture.0),
         (
             66,
             crate::entry!(0, get_texture_stage_state(Ptr, u32, u32, Ptr) -> u32).1,
         ),
         (
             67,
-            crate::entry!(0, fwd_set_texture_stage_state(Ptr, u32, u32, u32) -> u32).1,
+            WRITER.stage_state.0,
         ),
         (
             68,
@@ -1131,7 +1199,7 @@ fn register_code(e: &mut Engine) {
         ),
         (
             69,
-            crate::entry!(0, fwd_set_sampler_state(Ptr, u32, u32, u32) -> u32).1,
+            WRITER.sampler_state.0,
         ),
         (48, crate::entry!(0, get_viewport(Ptr, Ptr) -> u32).1),
         (49, crate::entry!(0, fwd_set_material(Ptr, Ptr) -> u32).1),
@@ -1185,10 +1253,7 @@ fn register_code(e: &mut Engine) {
             93,
             crate::entry!(0, r::get_vertex_shader(Ptr, Ptr) -> u32).1,
         ),
-        (
-            94,
-            crate::entry!(0, r::fwd_set_vertex_constant_f(Ptr, u32, Ptr, u32) -> u32).1,
-        ),
+        (94, WRITER.vertex_constants.0),
         (
             95,
             crate::entry!(0, r::get_vertex_constant_f(Ptr, u32, Ptr, u32) -> u32).1,
@@ -1209,22 +1274,13 @@ fn register_code(e: &mut Engine) {
             99,
             crate::entry!(0, r::get_vertex_constant_b(Ptr, u32, Ptr, u32) -> u32).1,
         ),
-        (
-            100,
-            crate::entry!(0, r::fwd_set_stream_source(Ptr, u32, u32, u32, u32) -> u32).1,
-        ),
+        (100, WRITER.stream_source.0),
         (
             101,
             crate::entry!(0, r::get_stream_source(Ptr, u32, Ptr, Ptr, Ptr) -> u32).1,
         ),
-        (
-            81,
-            crate::entry!(0, r::fwd_draw_primitive(Ptr, u32, u32, u32) -> u32).1,
-        ),
-        (
-            82,
-            crate::entry!(0, r::fwd_draw_indexed_primitive(Ptr, u32, u32, u32, u32, u32, u32) -> u32).1,
-        ),
+        (81, WRITER.draw_primitive.0),
+        (82, WRITER.draw_indexed_primitive.0),
         (
             83,
             crate::entry!(0, r::fwd_draw_primitive_up(Ptr, u32, u32, u32, u32) -> u32).1,
@@ -1247,10 +1303,7 @@ fn register_code(e: &mut Engine) {
             108,
             crate::entry!(0, r::get_pixel_shader(Ptr, Ptr) -> u32).1,
         ),
-        (
-            109,
-            crate::entry!(0, r::fwd_set_pixel_constant_f(Ptr, u32, Ptr, u32) -> u32).1,
-        ),
+        (109, WRITER.pixel_constants.0),
         (
             110,
             crate::entry!(0, r::get_pixel_constant_f(Ptr, u32, Ptr, u32) -> u32).1,
@@ -6650,6 +6703,215 @@ pub(crate) mod tests {
             D3D_OK
         );
         assert_eq!([e.mem.u32(out), e.mem.u32(out + 4)], [0, 0]);
+    }
+
+    /// What one engine did over [`writer_run`]: each call's answer, the stream's bytes, what the
+    /// model holds (states, textures, buffers, streams, constant registers) at the end, and how
+    /// many device calls went directly.
+    type WriterRun = (Vec<u32>, Vec<u8>, Vec<Vec<u32>>, u64);
+
+    /// Drives a device ([`binding_device`], stepped threads, direct calls on) through `steps`
+    /// generated calls (seed `seed`) of every kind the typed draw code's writer takes (render,
+    /// stage and sampler states, textures, stream sources, both draws, float constants of both
+    /// kinds, the integer ones beside them), refused ones among them: through the writer's
+    /// functions (`engine_core::real_threads::device_set_render_state` and its kin) when `writer`,
+    /// else through `device_vcall` with the same words.
+    fn writer_run(writer: bool, seed: u64, steps: u32) -> WriterRun {
+        use super::super::d3d9resource::{binding, held_for_tests};
+        use d3d9_stream::{Backend, Cmd, Data, Reply};
+        use engine_core::real_threads as rt;
+        struct Wire(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl Backend for Wire {
+            fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+                d3d9_stream::wire::encode(&cmd, &mut self.0.lock().unwrap());
+                Reply::None
+            }
+        }
+        let wire = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (mut e, dev, textures, vertex, index) =
+            binding_device(true, Box::new(Wire(wire.clone())));
+        let data = e.mem.alloc(16 * 64);
+        for i in 0..4 * 64 {
+            e.mem.set_u32(
+                data + 4 * i,
+                [0, 0x3f80_0000, 7, 0xbf80_0000][(i % 7 % 4) as usize],
+            );
+        }
+        rt::force_direct_for_tests();
+        assert!(rt::direct_begin(&e));
+        let before = rt::direct_calls();
+        // xorshift64*: the same calls for both engines.
+        let mut state = seed | 1;
+        let mut next = move |n: u32| -> u32 {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            ((state.wrapping_mul(0x2545_f491_4f6c_dd1d) >> 32) % u64::from(n.max(1))) as u32
+        };
+        let mut answers = Vec::new();
+        for _ in 0..steps {
+            let v = [0, 1, 2, 0x3f80_0000][next(4) as usize];
+            let (slot, args): (u32, Vec<u32>) = match next(10) {
+                0 => (0xe4, vec![next(210), v]),
+                1 => (0x10c, vec![next(10), 1 + next(32), v]),
+                2 => (
+                    0x114,
+                    vec![[0, 1, 15, 16, 256][next(5) as usize], 1 + next(13), v],
+                ),
+                3 => {
+                    let t = [0, textures[next(6) as usize]][usize::from(next(8) != 0)];
+                    (0x104, vec![[0, 1, 16][next(3) as usize], t])
+                }
+                4 => {
+                    let b = [vertex[next(4) as usize], index][usize::from(next(8) == 0)];
+                    (0x190, vec![next(17), b, 4 * next(2), 16])
+                }
+                5 => (0x144, vec![1 + next(6), next(4), 1 + next(3)]),
+                6 => (0x148, vec![2 + next(5), 0, 0, 4, next(3), 1]),
+                7 => (0x178, vec![next(260), data + 16 * next(8), 1 + next(4)]),
+                8 => (0x1b4, vec![next(230), data + 16 * next(8), 1 + next(4)]),
+                _ => (0x180, vec![next(17), data, 1 + next(2)]),
+            };
+            let a = &args;
+            let ret = if !writer {
+                rt::device_vcall(&mut e, dev, slot, a)
+            } else {
+                match slot {
+                    0xe4 => rt::device_set_render_state(&mut e, dev, a[0], a[1]),
+                    0x10c => rt::device_set_stage_state(&mut e, dev, a[0], a[1], a[2]),
+                    0x114 => rt::device_set_sampler_state(&mut e, dev, a[0], a[1], a[2]),
+                    0x104 => rt::device_set_texture(&mut e, dev, a[0], a[1]),
+                    0x190 => rt::device_set_stream_source(&mut e, dev, a[0], a[1], a[2], a[3]),
+                    0x144 => rt::device_draw_primitive(&mut e, dev, a[0], a[1], a[2]),
+                    0x148 => rt::device_draw_indexed_primitive(
+                        &mut e, dev, a[0], a[1], a[2], a[3], a[4], a[5],
+                    ),
+                    _ => rt::device_set_constants(&mut e, dev, slot, a[0], a[1], a[2]),
+                }
+            };
+            answers.push(ret.u32());
+        }
+        let calls = rt::direct_calls() - before;
+        rt::direct_end();
+        let mut held = vec![
+            state_tables(&mut e, dev)
+                .iter()
+                .map(|s| s.unwrap_or(u32::MAX))
+                .collect(),
+            textures_held(&mut e, dev),
+            held_for_tests(&mut e),
+        ];
+        for (k, count) in [(0, 256), (1, 16), (3, 224)] {
+            for r in 0..count {
+                held.push(binding(&mut e, dev, &format!("constant {k} {r}")));
+            }
+        }
+        let bytes = wire.lock().unwrap().clone();
+        (answers, bytes, held, calls)
+    }
+
+    /// The typed draw code's writer against `device_vcall` (stepped threads, direct calls on):
+    /// over generated calls of every kind it takes, the same answers, the same commands to the
+    /// backend byte for byte, the same model state and the same count of direct calls.
+    #[test]
+    fn the_writer_matches_device_calls_by_slot() {
+        for seed in [1, 0x9e37_79b9_7f4a_7c15, 0x00c0_ffee] {
+            let by_slot = writer_run(false, seed, 2000);
+            let writer = writer_run(true, seed, 2000);
+            assert_eq!(writer.0, by_slot.0, "answers, seed {seed:#x}");
+            assert!(writer.2 == by_slot.2, "the model differs (seed {seed:#x})");
+            assert!(
+                writer.1 == by_slot.1,
+                "the stream's bytes differ (seed {seed:#x}): {} against {}",
+                writer.1.len(),
+                by_slot.1.len()
+            );
+            assert_eq!(writer.3, by_slot.3, "direct calls, seed {seed:#x}");
+            assert_eq!(by_slot.3, 2000, "every call went directly");
+            assert!(by_slot.0.contains(&D3DERR_INVALIDCALL));
+            assert!(by_slot.1.len() > 10_000, "{}", by_slot.1.len());
+        }
+    }
+
+    /// Calls the writer must not take: a device vtable word replaced (as a mod's hook does) sends
+    /// `SetRenderState` to what the word names, at the very next call and back to the layer's own
+    /// once the word is put back; a function registered over the layer's at the slot's address (as
+    /// a wrap does) runs in its place; with direct calls off the call goes by the vtable.
+    #[test]
+    fn the_writer_sends_replaced_slots_where_they_point() {
+        use engine_core::real_threads as rt;
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static HOOKED: AtomicU32 = AtomicU32::new(0);
+        let (mut e, dev) = texture_device(Store::Host);
+        let hook: crate::AbiFn = |_, a| {
+            HOOKED.fetch_add(a[2], Ordering::Relaxed);
+            engine_core::abi::Ret::default()
+        };
+        let elsewhere = CODE_BASE + 0xf000;
+        e.register(elsewhere, hook);
+        rt::force_direct_for_tests();
+        assert!(rt::direct_begin(&e));
+        let table = e.mem.u32(dev);
+        let word = table + 0xe4;
+        assert_eq!(e.mem.u32(word), DEVICE_CODE + 0xe4);
+        assert_eq!(rt::device_set_render_state(&mut e, dev, 7, 1).u32(), D3D_OK);
+        assert_eq!(render_state(&mut e, dev, 7), 1);
+        // A hook in the vtable: the hook gets the call, the model does not.
+        e.mem.set_u32(word, elsewhere);
+        assert_eq!(rt::device_set_render_state(&mut e, dev, 7, 5).u32(), 0);
+        assert_eq!(HOOKED.load(Ordering::Relaxed), 5);
+        assert_eq!(render_state(&mut e, dev, 7), 1);
+        e.mem.set_u32(word, DEVICE_CODE + 0xe4);
+        assert_eq!(rt::device_set_render_state(&mut e, dev, 7, 2).u32(), D3D_OK);
+        assert_eq!(render_state(&mut e, dev, 7), 2);
+        // A function registered over the layer's at the slot's address.
+        e.register(DEVICE_CODE + 0xe4, hook);
+        assert_eq!(rt::device_set_render_state(&mut e, dev, 7, 3).u32(), 0);
+        assert_eq!(HOOKED.load(Ordering::Relaxed), 8);
+        assert_eq!(render_state(&mut e, dev, 7), 2);
+        rt::direct_end();
+        // Direct calls off: by the vtable (still the registered function).
+        assert_eq!(rt::device_set_render_state(&mut e, dev, 7, 4).u32(), 0);
+        assert_eq!(HOOKED.load(Ordering::Relaxed), 12);
+    }
+
+    /// With real threads (direct calls on, under a device lock the caller holds, as
+    /// `direct_device_calls_under_a_held_device_lock_answer_the_same`): the writer's calls answer
+    /// and change the model as the calls by slot do.
+    #[test]
+    fn the_writer_with_real_threads_answers_the_same() {
+        use engine_core::real_threads as rt;
+        let (mut e, dev) = texture_device(Store::Host);
+        rt::start(&mut e).expect("real threads on");
+        rt::force_direct_for_tests();
+        assert!(rt::direct_begin(&e));
+        let before = rt::direct_calls();
+        {
+            let _device = rt::device_guard(&e);
+            assert_eq!(rt::device_set_render_state(&mut e, dev, 8, 2).u32(), D3D_OK);
+            assert_eq!(
+                rt::device_set_sampler_state(&mut e, dev, 16, 1, 1).u32(),
+                D3DERR_INVALIDCALL
+            );
+            assert_eq!(
+                rt::device_set_sampler_state(&mut e, dev, 1, 1, 3).u32(),
+                D3D_OK
+            );
+            let out = e.mem.alloc(4);
+            assert_eq!(
+                rt::device_vcall(&mut e, dev, 4 * 58, &[8, out]).u32(),
+                D3D_OK
+            );
+            assert_eq!(e.mem.u32(out), 2);
+            assert_eq!(
+                rt::device_vcall(&mut e, dev, 4 * 68, &[1, 1, out]).u32(),
+                D3D_OK
+            );
+            assert_eq!(e.mem.u32(out), 3);
+        }
+        assert_eq!(rt::direct_calls() - before, 5);
+        rt::direct_end();
+        assert!(!rt::direct_holds() && !rt::device_lock_held(&e));
     }
 
     /// The scene's device state as the game can read it back: each getter's answer and the
