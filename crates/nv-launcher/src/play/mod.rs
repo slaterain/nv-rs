@@ -7,7 +7,7 @@
 //!   Play.exe                  the start screen (`> Play` plays)
 //!   Play.exe --mods           plays with the mods in the `mods` folder
 //!   Play.exe --import-saves   copies the saves from Documents\My Games\FalloutNV (read only)
-//!   Play.exe --install-mods   the mod installer, in a console window of its own
+//!   Play.exe --install-mods   the mod installer, in the launcher's terminal
 //!   Play.exe --check          everything up to starting the game, then says what it found
 //!   --game FOLDER             the game's folder, instead of looking for it
 //!   --from FOLDER             with --import-saves: where to copy saves from
@@ -1007,33 +1007,50 @@ fn parse_options(raw: &[String]) -> Options {
 }
 
 /// `--install-mods`: the mod installer (nv-rs's own program with `--install-mods`, the same text
-/// chooser as `play.sh --install-mods`) in a console window of its own, for the game found as for
-/// play; Play.exe waits for it. Mods go to `userdatamod installs`, archives are read from `mods`.
+/// chooser as `play.sh --install-mods`) for the game found as for play, its lines in the
+/// launcher's terminal and its questions answered at the prompt (`crate::piped`), with no console
+/// window; without a launcher window that takes typed lines, in a console window of its own.
+/// Mods go to `userdata\mod installs`, archives are read from `mods`.
 fn install_mods(package: &Package, options: &Options) -> Result<i32, Stop> {
     let (game, _) = find_game(package, options.game.as_deref())?;
     clear_for_writing(package, Some(&game.folder))?;
-    let status = Command::new(&package.game_exe)
+    let mut command = Command::new(&package.game_exe);
+    command
         .arg("--install-mods")
         .arg(&game.folder)
         .arg(package.userdata.join("mod installs"))
         .arg(package.root.join("mods"))
-        .current_dir(&package.userdata)
-        .creation_flags(CREATE_NEW_CONSOLE)
-        .status()
-        .map_err(|e| Stop {
-            code: STOP_LOCATION,
-            message: format!(
-                "nv-rs could not start its mod installer ({e}):
-{}",
-                package.game_exe.display()
-            ),
-        })?;
-    package.log(&format!("mod installer ended: {status}"));
-    Ok(status.code().unwrap_or(1))
+        .current_dir(&package.userdata);
+    let code = if crate::piped::window_lines() {
+        command.creation_flags(CREATE_NO_WINDOW);
+        crate::piped::run(
+            command,
+            &format!("its mod installer ({})", package.game_exe.display()),
+            |_| {},
+        )
+    } else {
+        // No launcher window takes typed lines (it could not be drawn, or a scripted run): the
+        // installer in a console window of its own, as before the launcher showed it.
+        command
+            .creation_flags(CREATE_NEW_CONSOLE)
+            .status()
+            .map_err(|e| Stop {
+                code: STOP_LOCATION,
+                message: format!(
+                    "nv-rs could not start its mod installer ({e}):\n{}",
+                    package.game_exe.display()
+                ),
+            })?
+            .code()
+            .unwrap_or(1)
+    };
+    package.log(&format!("mod installer ended: {code}"));
+    Ok(code)
 }
 
-/// `--import-saves`: the player's saves copied into the package, never the other way, never over a
-/// save already there.
+/// `--import-saves`: the player's saves COPIED into the package by play.sh's rule
+/// (`crate::saves`): each with its script extender co-save, the same save already there left
+/// alone, a different one replaced only on a yes; never the other way.
 fn import_saves(package: &Package, profile: &Profile, from: Option<&Path>) -> Result<i32, Stop> {
     let source = match from {
         Some(path) => path.to_path_buf(),
@@ -1047,17 +1064,7 @@ fn import_saves(package: &Package, profile: &Profile, from: Option<&Path>) -> Re
             }
         },
     };
-    let saves: Vec<PathBuf> = std::fs::read_dir(&source)
-        .map(|entries| {
-            entries
-                .flatten()
-                .map(|e| e.path())
-                .filter(|p| {
-                    p.is_file() && p.extension().is_some_and(|x| x.eq_ignore_ascii_case("fos"))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let saves = crate::saves::saves_in(&source);
     if saves.is_empty() {
         let text = format!("No saves were found in:\n{}", source.display());
         package.log(&text);
@@ -1065,7 +1072,7 @@ fn import_saves(package: &Package, profile: &Profile, from: Option<&Path>) -> Re
         return Ok(0);
     }
     if !ui::ask(&format!(
-        "Copy {} saves into nv-rs's own folder?\n\nFrom (only read, nothing there changes):\n{}\n\nTo:\n{}\n\nA save already there stays as it is. A save made with mods needs those mods: use Play with mods for it.",
+        "Copy {} saves into nv-rs's own folder (each with its .nvse file when there is one)?\n\nFrom (only read, nothing there changes):\n{}\n\nTo:\n{}\n\nA save made with mods needs those mods: use Play with mods for it.",
         saves.len(),
         source.display(),
         profile.saves.display()
@@ -1076,27 +1083,28 @@ fn import_saves(package: &Package, profile: &Profile, from: Option<&Path>) -> Re
         code: STOP_LOCATION,
         message: format!("{}: {e}", profile.saves.display()),
     })?;
-    let (mut copied, mut kept) = (0, 0);
-    for save in &saves {
-        let Some(name) = save.file_name() else {
-            continue;
-        };
-        let target = profile.saves.join(name);
-        if target.exists() {
-            kept += 1;
-            continue;
-        }
-        let mut temporary = target.as_os_str().to_owned();
-        temporary.push(".part");
-        // `copy` only reads the source, and keeps its date (the game sorts saves by date).
-        let done =
-            std::fs::copy(save, &temporary).and_then(|_| std::fs::rename(&temporary, &target));
-        match done {
-            Ok(()) => copied += 1,
-            Err(e) => package.log(&format!("{}: {e}", save.display())),
-        }
+    let out = crate::saves::copy_saves(&source, &profile.saves, &mut |name| {
+        ui::ask_default_no(&format!(
+            "nv-rs's folder already has a different {name} (or its .nvse file).\n\nReplace both with the copy? (No keeps the one in nv-rs's folder.)"
+        ))
+    })
+    .map_err(|e| Stop {
+        code: STOP_LOCATION,
+        message: format!("{}: {e}", profile.saves.display()),
+    })?;
+    for why in &out.failed {
+        package.log(&format!("import: could not copy {why}"));
     }
-    let text = format!("Saves copied: {copied}. Already there, left as they were: {kept}.");
+    let mut text = format!(
+        "Saves copied: {}. Different saves of nv-rs's own kept as they were: {}.",
+        out.copied, out.kept
+    );
+    if !out.failed.is_empty() {
+        text.push_str(&format!(
+            " Could not copy: {} (the log says why).",
+            out.failed.len()
+        ));
+    }
     package.log(&format!("import from {}: {text}", source.display()));
     ui::info(&text);
     Ok(0)
@@ -1618,6 +1626,8 @@ fn place_at_in(
             .ok()
             .and_then(|table| tables::adapter_name(&table)),
         mods,
+        saves: real_documents()
+            .is_some_and(|d| crate::place::has_saves(&d.join("My Games\\FalloutNV\\Saves"))),
         refused,
     }
 }

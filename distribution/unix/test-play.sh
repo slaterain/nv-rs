@@ -156,6 +156,17 @@ echo mine >"$S2/Save 2.fos"
 echo stray >"$S2/Save 2.nvse"
 out=$(answer 'yes\nyes\n' --import-saves 2>&1)
 check "4 stray co-save removed" '[ "$(cat "$S2/Save 2.fos")" = two ] && [ ! -e "$S2/Save 2.nvse" ]'
+# A failure half-way (a folder where the co-save's copy goes): the old pair as it was, said.
+echo mine >"$S2/Save 1.fos"
+echo mine-co >"$S2/Save 1.nvse"
+mkdir -p "$S2/Save 1.nvse.part/x"
+out=$(answer 'yes\nyes\n' --import-saves 2>&1)
+check "4 old pair kept on a failure" '[ "$(cat "$S2/Save 1.fos")" = mine ] && [ "$(cat "$S2/Save 1.nvse")" = mine-co ]'
+check "4 failure said" 'printf "%s" "$out" | grep -q "Could not copy Save 1.fos"'
+check "4 nothing left beside" '[ ! -e "$S2/Save 1.fos.part" ] && [ ! -e "$S2/Save 1.fos.old" ]'
+rm -rf "$S2/Save 1.nvse.part"
+echo one >"$S2/Save 1.fos"
+echo co >"$S2/Save 1.nvse"
 
 # 5. The player's side untouched by all of the above.
 check "5 steam folder unchanged" '[ "$(snapshot)" = "$before" ]'

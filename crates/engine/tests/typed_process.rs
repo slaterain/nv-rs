@@ -1080,3 +1080,122 @@ fn process_forget_speed() {
         }
     }
 }
+
+// ----- 0096c970: the actors' postponed bone updates (NV_PAR_BONES off) -------------------------
+
+/// Where this test's own slot functions live: `IsActor` (+0x100: the object's word +0x10 low byte),
+/// the animation (+0x1e4: its word +0x14) and the 3D node (+0x1d0: its word +0x18).
+const BONES_FN: u32 = 0x00ff_6000;
+/// The bool setting `bTaskletActorSceneGraphUpdates`'s value word, which the setting getter
+/// (`00408d60`, a stand-in here) answers the address of.
+const TASKLET_VALUE: u32 = LOG + 0x3d00;
+
+fn bones_slot<const SLOT: u32>(e: &mut Engine, a: &[u32]) -> Ret {
+    let this = a[0];
+    log(e, 0xb000 | SLOT, this);
+    ret(match SLOT {
+        0x100 => e.mem.u32(this + 0x10) & 0xff,
+        0x1e4 => e.mem.u32(this + 0x14),
+        _ => e.mem.u32(this + 0x18),
+    })
+}
+
+/// An actor of the bones pass from `kind`: 0 null; 1 not an actor; 2 an actor without an animation;
+/// 3.. an actor with an animation whose `UpdateQueuedScenegraph` (a stand-in) answers bit 0 of
+/// `kind - 3`, asking for its lighting by bit 1.
+fn bones_actor(e: &mut Engine, kind: u32) -> u32 {
+    if kind == 0 {
+        return 0;
+    }
+    let vt = e.mem.alloc(0x400);
+    for slot in [0x100u32, 0x1e4, 0x1d0] {
+        e.mem.set_u32(vt + slot, BONES_FN + slot);
+    }
+    let a = e.mem.alloc(0x160);
+    e.mem.set_u32(a, vt);
+    e.mem.set_u32(a + 0x10, u32::from(kind != 1));
+    e.mem.set_u32(a + 0x18, 0x0500_0000 + kind);
+    if kind >= 3 {
+        let bits = kind - 3;
+        let animation = e.mem.alloc(0x100);
+        e.mem.set_u32(animation + 0x40, bits & 1);
+        e.mem.set_u32(a + 0x14, animation);
+        e.mem.set_u8(a + 0x14e, ((bits >> 1) & 1) as u8);
+    }
+    a
+}
+
+fn bones_stand_ins(e: &mut Engine) {
+    e.register(BONES_FN + 0x100, bones_slot::<0x100>);
+    e.register(BONES_FN + 0x1e4, bones_slot::<0x1e4>);
+    e.register(BONES_FN + 0x1d0, bones_slot::<0x1d0>);
+    e.register(0x0040_8d60, |e, a| {
+        log(e, 0x8d60, a[0]);
+        ret(TASKLET_VALUE)
+    });
+    // `UpdateQueuedScenegraph`: logs the animation, answers its word +0x40.
+    e.register(0x0049_3930, |e, a| {
+        log(e, 0x3930, a[0]);
+        ret(e.mem.u32(a[0] + 0x40))
+    });
+    // The scrap array: construct, push (the count at +8 up by one), destruct; the task's build and run.
+    e.register(0x0097_89e0, |e, a| {
+        log(e, 0x89e0, 0);
+        e.mem.set_u32(a[0] + 8, 0);
+        ret(a[0])
+    });
+    e.register(0x007c_b2e0, |e, a| {
+        let pushed = e.mem.u32(a[1]);
+        log(e, 0xb2e0, pushed);
+        let n = e.mem.u32(a[0] + 8);
+        e.mem.set_u32(a[0] + 8, n + 1);
+        ret(0)
+    });
+    e.register(0x0097_8a80, |e, _| {
+        log(e, 0x8a80, 0);
+        ret(0)
+    });
+    e.register(0x0087_cf10, |e, a| {
+        log(e, 0xcf10, a[1]);
+        log(e, 0xcf11, a[3]);
+        ret(a[0])
+    });
+    e.register(0x00c4_4c90, logged::<0x10>);
+    // The shadow scene nodes' table (`00450b80` reads it; a family member, so not a stand-in).
+    e.map(0x011f_9000, 0x1000);
+    e.register(0x00b5_d9f0, logged::<0x11>);
+    e.register(0x0049_6960, logged::<0x12>);
+}
+
+#[test]
+fn process_parallel_update_animation_scenegraph() {
+    engine_typed::process::bones::set_for_tests("off", 3);
+    // The actors' kinds pattern, the game's own parallel switch, how many actors (none, one, many).
+    Diff::new(entry!(
+        0x0096_c970,
+        process::bones::parallel_update_animation_scenegraph(Ptr<_>)
+    ))
+    .common()
+    .inputs(&[Input::Of(&[0, 3, 5]), Input::Flag, Input::Of(&[0, 1, 13])])
+    .setup(|e, case| {
+        stand_ins(e);
+        bones_stand_ins(e);
+        e.mem.set_u8(TASKLET_VALUE, case.word(1) as u8);
+        e.mem.set_u32(0x011f_91c8, 0x0600_0000);
+        e.mem.set_u32(0x0120_2df4, 0x0700_0000);
+        let n = case.word(2);
+        let k = case.word(0);
+        let all: Vec<u32> = (0..n).map(|i| bones_actor(e, (i * 3 + k) % 7)).collect();
+        // Levels 0 and 1 hold them (the pass walks level 0's head to level 1's tail); one actor of
+        // level 2 after them is not walked.
+        let split = all.len() / 2;
+        let other = [bones_actor(e, 4)];
+        let a = process_array(e, [&all[..split], &all[split..], &other, &[]], 2, [0; 4]);
+        let lists = block(e, 0x100, &[]);
+        let bytes = e.mem.bytes(a, 0x40);
+        e.mem.write(lists + 4, &bytes);
+        vec![lists]
+    })
+    .run()
+    .assert_same();
+}
