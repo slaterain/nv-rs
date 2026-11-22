@@ -538,10 +538,10 @@ fn with_copy<R>(
         if !dirty.is_empty() {
             copies.retain(|_, copy| copy.refresh(e, &dirty));
         }
-        if !copies.contains_key(&scene) {
-            copies.insert(scene, Copy::build(e, scene, track));
-        }
-        f(e, &copies[&scene])
+        let copy = copies
+            .entry(scene)
+            .or_insert_with(|| Copy::build(e, scene, track));
+        f(e, copy)
     })
 }
 
