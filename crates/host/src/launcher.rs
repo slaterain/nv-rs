@@ -21,8 +21,8 @@
 //! translation asks again: it now finds the same card, rewrites the setting with its quotes as at
 //! a start after the launcher, and answers "the same card", so `main` keeps its renderer and its
 //! workers. The log names both names once. Only the name changes, as Play.exe and play.sh change
-//! only the name; the file is not written (the platform's `WritePrivateProfileStringA` writes
-//! nothing). `main` calls the check by address (`e.call`), so the entry registered here runs; it
+//! only the name, in the game's setting, as a start after the launcher would read it from the
+//! file. `main` calls the check by address (`e.call`), so the entry registered here runs; it
 //! is a row of `crates/engine-core/data/overridable.tsv`.
 
 use engine::prelude::*;
@@ -201,7 +201,11 @@ mod tests {
         assert!(lines[0].contains("\"nv-rs test: deliberately mismatched adapter\""));
         assert!(lines[0].contains("\"NVIDIA GeForce GTX 1650 Ti\""));
         assert!(!lines[0].contains("still found"), "{}", lines[0]);
-        // The next ask finds the same card, says nothing more and keeps the quotes.
+        // The quotes are for the file (the game's settings write puts `sD3DDevice="..."` there):
+        // the next start reads the name without them, finds the same card and says nothing.
+        let read_back = e.mem.alloc(0x40);
+        e.mem.set_cstr(read_back, b"NVIDIA GeForce GTX 1650 Ti");
+        e.mem.set_u32(S_D3D_DEVICE + VALUE, read_back);
         let (answer, lines) = ask(&mut e);
         assert_eq!((answer, lines.len()), (0, 0));
         assert_eq!(setting(&e), "\"NVIDIA GeForce GTX 1650 Ti\"");
