@@ -233,7 +233,7 @@ mod tests {
         rx.recv().unwrap();
         assert_eq!(start_of(0x7fff_0001), 0x00aa_8430);
         assert_eq!(start_of(0x7fff_0002), 0);
-        let mut measure = |work: bool| {
+        let measure = |work: bool| {
             let before = cpu_ns(0x7fff_0001);
             go_tx.send(work).unwrap();
             rx.recv().unwrap();

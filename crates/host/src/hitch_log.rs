@@ -470,7 +470,7 @@ impl Frame {
             (self.s(S::RenderSyncNs), "the queue thread's last frame"),
             (self.s(S::SwapNs), "the present call"),
         ];
-        parts.sort_by(|a, b| b.0.cmp(&a.0));
+        parts.sort_by_key(|a| std::cmp::Reverse(a.0));
         let said: Vec<String> = parts
             .iter()
             .filter(|(ns, _)| *ns >= 1_000_000)
@@ -1531,6 +1531,7 @@ mod tests {
     fn the_line_names_the_lock_holder_the_heap_time_and_main_s_timed_work() {
         use engine_core::hitch::LockHolder;
         let holder = LockHolder {
+            section: 0,
             thread: 3,
             start: 0x00aa_8430,
             call: 0x00fd_f080,
