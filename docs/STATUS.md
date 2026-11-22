@@ -212,7 +212,8 @@ purpose (below; that list also names Enhanced Camera's patch, which is not one o
 
 - **Framework and the player:** the patch framework, the first two fixes, the player's update 3D
   (both views, weapon and queued references), the detection patch (forced detection values and the
-  detection fix), the player kept at a reference's node while a script synchronizes them.
+  detection fix), the player kept at a reference's node while a script synchronizes them, a busy
+  script runner asked to run again skipping its names and log line.
 - **Projectiles and combat:** fired projectiles' ammo, count and split beams; the hit and combat
   fixes (equip notices, life state saved, kill challenges, impact data and hit blood, weapon wear,
   on-hit weapon effects, creature spread, the player's killer kept); JIP's hit damage (damage
