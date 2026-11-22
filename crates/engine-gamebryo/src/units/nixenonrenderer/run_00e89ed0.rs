@@ -960,7 +960,7 @@ fn pop_light_node(e: &mut Engine, this: u32) -> u32 {
     e.mem.set_u32(NODE_POOL_LOCK_COUNT, count);
     e.mem.set_u32(NODE_POOL_FREE_LIST, node);
     if count == 0 {
-        e.mem.set_u32(NODE_POOL_LOCK, 0);
+        e.mem.set_u32_release(NODE_POOL_LOCK, 0);
     }
     let left = e.mem.u32(this.wrapping_add(0x18));
     e.mem.set_u32(this.wrapping_add(0x18), left.wrapping_sub(1));
@@ -1528,7 +1528,7 @@ fn unlink_light_node(e: &mut Engine, this: u32, node: u32) {
     e.mem.set_u32(NODE_POOL_LOCK_COUNT, count);
     e.mem.set_u32(NODE_POOL_FREE_LIST, node);
     if count == 0 {
-        e.mem.set_u32(NODE_POOL_LOCK, 0);
+        e.mem.set_u32_release(NODE_POOL_LOCK, 0);
     }
     let left = e.mem.u32(this.wrapping_add(0x18));
     e.mem.set_u32(this.wrapping_add(0x18), left.wrapping_sub(1));

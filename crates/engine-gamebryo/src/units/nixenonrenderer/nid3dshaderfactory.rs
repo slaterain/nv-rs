@@ -137,7 +137,7 @@ pub fn ni_t_pointer_map_delete_item(e: &mut Engine, _this: Ptr, item: Ptr) {
     e.set_global::<u32>(FREE_LIST_LOCK_011C5F80 + 4, count);
     e.set_global::<u32>(FREE_LIST_HEAD_011C5F58, item);
     if count == 0 {
-        e.set_global::<u32>(FREE_LIST_LOCK_011C5F80, 0);
+        e.mem.set_u32_release(FREE_LIST_LOCK_011C5F80, 0);
     }
 }
 

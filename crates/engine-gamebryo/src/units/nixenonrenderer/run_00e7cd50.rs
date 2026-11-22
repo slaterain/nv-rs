@@ -112,7 +112,7 @@ pub fn fn_00e7d5b0(e: &mut Engine, this: Ptr<NiTPointerList>) -> u32 {
     e.mem.set_u32(NODE_POOL_LOCK_COUNT, count);
     e.mem.set_u32(NODE_POOL_FREE_LIST, item.addr());
     if count == 0 {
-        e.mem.set_u32(NODE_POOL_LOCK, 0);
+        e.mem.set_u32_release(NODE_POOL_LOCK, 0);
     }
     let items = e.get(this, NiTPointerList::m_uiCount).wrapping_sub(1);
     e.set(this, NiTPointerList::m_uiCount, items);
