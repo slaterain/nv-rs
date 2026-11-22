@@ -2358,6 +2358,8 @@ impl winit::application::ApplicationHandler<Event> for App {
             self.frame_key(),
             Instant::now(),
         );
+        // While the sounds are open (or a try is due), a look at the device once a second.
+        let wake = sound::check_wake(wake, self.sounds.watching(), Instant::now());
         event_loop.set_control_flow(match wake {
             Some(at) => winit::event_loop::ControlFlow::WaitUntil(at),
             None => winit::event_loop::ControlFlow::Wait,

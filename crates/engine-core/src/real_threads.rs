@@ -1228,6 +1228,11 @@ pub fn start(e: &mut Engine) -> Result<(), String> {
     // threads may still use them after the main engine is gone.
     e.kernel.leak();
     e.device.leak();
+    // The compact culling copy's store track (`engine_typed::culling::compact`, NV_CULL_COMPACT on
+    // or check) is made before the memory is shared, so every view carries it.
+    if std::env::var("NV_CULL_COMPACT").is_ok_and(|v| v == "on" || v == "check") {
+        let _ = e.mem.enable_track();
+    }
     e.mem.start_sharing();
     let world: &'static World = Box::leak(Box::new(World::new(e.kernel.import_names.clone())));
     // The events and semaphores made before (the C runtime's start-up, static initializers): kept
@@ -1543,6 +1548,34 @@ pub fn device_guard(e: &Engine) -> Option<DeviceGuard> {
 /// threads it just runs `f`.
 pub fn without_kernel_lock<R>(e: &Engine, f: impl FnOnce() -> R) -> R {
     released_kernel(e.real.as_ref().map(|r| r.world), f)
+}
+
+/// Tests: the hold of the kernel lock [`start`] takes for the start-up given back, as the host's first frame does,
+/// so this engine's platform calls are outermost ones (depth 1), as main's are in its frames.
+#[cfg(any(test, feature = "test-support"))]
+pub fn end_start_hold_for_tests(e: &Engine) {
+    if e.real.is_some() {
+        ctx(e).frame_begins(false);
+    }
+}
+
+/// [`without_kernel_lock_mut`] only when this thread holds the kernel lock once (a platform function the game called
+/// directly): inside a nested hold (a platform function that runs game code that calls this one) the outer function
+/// may be part way through changing platform state, so `f` then runs with the lock held, as before. For game code a
+/// platform function calls back (its own callbacks, as a stream reader's), which runs without the lock anyway when
+/// the game calls it itself.
+pub fn without_kernel_lock_mut_if_outermost<R>(
+    e: &mut Engine,
+    f: impl FnOnce(&mut Engine) -> R,
+) -> R {
+    match e.real.as_ref().map(|r| r.world) {
+        Some(world)
+            if world.kernel.held_here() && world.kernel.depth.load(Ordering::Relaxed) > 1 =>
+        {
+            f(e)
+        }
+        world => released_kernel(world, || f(e)),
+    }
 }
 
 /// [`without_kernel_lock`] for work that needs the engine itself (a test that calls a seam's
@@ -4266,6 +4299,52 @@ mod tests {
             e.call(wait, &args![sem, 0u32]).eax,
             0x102,
             "a unit left over"
+        );
+    }
+
+    /// What [`calls_back_game_code`] saw in its work: 1 the kernel lock still held, 2 given back.
+    static HELD_IN_CALLBACK: AtomicU32 = AtomicU32::new(0);
+    static OUTER_SLOT: AtomicU32 = AtomicU32::new(0);
+
+    /// A platform function that runs game code of its own through [`without_kernel_lock_mut_if_outermost`] (as
+    /// DirectShow's `Render` runs the game's stream reader).
+    fn calls_back_game_code(e: &mut Engine, _: &[u32]) -> Ret {
+        let w = ctx(e).world;
+        let held = without_kernel_lock_mut_if_outermost(e, |_| w.kernel.held_here());
+        HELD_IN_CALLBACK.store(if held { 1 } else { 2 }, Ordering::SeqCst);
+        assert!(w.kernel.held_here(), "taken back after the work");
+        Ret::default()
+    }
+
+    /// A platform function that calls the one at `OUTER_SLOT` inside its own hold.
+    fn calls_the_callback_nested(e: &mut Engine, _: &[u32]) -> Ret {
+        let slot = OUTER_SLOT.load(Ordering::SeqCst);
+        e.call(slot, &args![0u32]);
+        Ret::default()
+    }
+
+    /// The engine-taking form gives the kernel lock back for an outermost call's work and keeps it in a nested one.
+    #[test]
+    fn game_code_called_back_runs_without_the_kernel_lock_only_when_outermost() {
+        let (mut e, slot) = engine_with_imports();
+        let outer = slot("D3DPERF_SetOptions");
+        let nested = slot("GetDoubleClickTime");
+        OUTER_SLOT.store(outer, Ordering::SeqCst);
+        e.register(outer, calls_back_game_code);
+        e.register(nested, calls_the_callback_nested);
+        start(&mut e).expect("real threads on");
+        end_start_hold_for_tests(&e);
+        e.call(outer, &args![0u32]);
+        assert_eq!(
+            HELD_IN_CALLBACK.load(Ordering::SeqCst),
+            2,
+            "given back when outermost"
+        );
+        e.call(nested, &args![]);
+        assert_eq!(
+            HELD_IN_CALLBACK.load(Ordering::SeqCst),
+            1,
+            "kept when nested"
         );
     }
 
