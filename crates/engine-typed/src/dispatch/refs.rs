@@ -588,6 +588,39 @@ const MENU_STRING_EQUAL: u32 = 0x00a0_d180;
 const INT_MAP_HASH: u32 = 0x00a0_d260;
 const INT_MAP_EQUAL: u32 = 0x00ae_8dc0;
 
+/// The word compare the game hands [`array_find`] most (`009a3830`, `cdecl(a, b)`: whether the
+/// words at `a` and `b` are equal).
+const WORDS_EQUAL: u32 = 0x009a_3830;
+
+// Typed from 00719b20
+/// A word array's search (`BSSimpleArray`: buffer at `+4`, size at `+8`; `thiscall(this, argument,
+/// start, matches)`): from index `start`, the first element `matches(&element, argument)` accepts
+/// (`cdecl`, by address), else -1; a null buffer skips the call for every index (the size and the
+/// buffer read again for each index, as the exe reads them). With the word compare (`009a3830`) the
+/// two words are compared in place: `Interface::TileIsBeingDeleted` searches the interface's update
+/// array this way for every tile a menu deletes (twice: its release and its destructor), so
+/// closing a large menu made hundreds of thousands of calls by address here.
+pub fn array_find(e: &mut Engine, this: Ptr, argument: u32, start: u32, matches: u32) -> i32 {
+    let a = this.addr();
+    let mut index = start;
+    while index < e.mem.u32(a.wrapping_add(8)) {
+        let buffer = e.mem.u32(a.wrapping_add(4));
+        if buffer != 0 {
+            let element = buffer.wrapping_add(index.wrapping_mul(4));
+            let hit = if matches == WORDS_EQUAL {
+                e.mem.u32(element) == e.mem.u32(argument)
+            } else {
+                e.call(matches, &args![element, argument]).bool()
+            };
+            if hit {
+                return index as i32;
+            }
+        }
+        index = index.wrapping_add(1);
+    }
+    -1
+}
+
 // Typed from 0049c680
 /// A simple list's find (`thiscall(this, wanted, start)`, `RET 8`): from `start`, or from the list's
 /// first node when it is 0 (`00559450`), the first node whose item equals the word at `wanted`
