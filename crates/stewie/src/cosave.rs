@@ -75,6 +75,13 @@ pub fn listen(e: &mut Engine, m: &nvse::plugins::Message) {
     if m.kind == nvse::plugins::msg::PRE_LOAD_GAME {
         let kept = e.stewie_kept(engine_core::extend::stewie::kept::SAVED_AMMO_COUNT, 4);
         e.mem.set_u32(kept, 0);
+        // `ContinuousBeamProjectileCrashFix::OnLoadGame`: S0130.05's flag is not carried into
+        // another save.
+        let beam = e.stewie_kept(
+            engine_core::extend::stewie::kept::BEAM_DECREASED_PLAYER_AMMO,
+            4,
+        );
+        e.mem.set_u8(beam, 0);
         e.ext::<crate::Stewie>().kept.records.clear();
     }
 }
