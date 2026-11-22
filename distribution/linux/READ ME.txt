@@ -87,6 +87,9 @@ Start
    the terminal, as ./play.sh.
    It plays the game's own terminal sounds, read from your installed game (Settings > Launcher
    sounds turns them off).
+   A sound device that is removed while the game or the launcher runs is followed: the sound
+   goes on from the default device after a short gap (PipeWire and PulseAudio usually move it
+   themselves). Not tried on Linux yet.
    The window has no title bar: drag it by its background (anywhere but an entry) to move it;
    > Exit or Esc on the first screen closes it.
    On Wayland its window cannot hide while you play: once the game has run a few seconds it is
