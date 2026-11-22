@@ -2932,8 +2932,13 @@ pub fn fn_0086e650(e: &mut Engine, this: Ptr) {
             e.call(0x008c_a300, &args![0x011e_0fe0u32]);
         }
     }
+    // The hitch log's split of the frame tail (`engine_core::stage_time::TailMark`): a clock read at each mark, none
+    // with the log off; nothing in the game changes.
+    use engine_core::stage_time::{tail_mark, TailMark};
     main_update_non_render_safe_ai_tasks(e, this);
+    tail_mark(TailMark::AiTasks);
     e.call(0x0087_0610, &args![this]);
+    tail_mark(TailMark::PostThreads);
     if e.call(0x0070_ed10, &args![]).u8() != 0 {
         e.call(0x0070_ed20, &args![0u32]);
         e.call(0x0070_3e10, &args![]);
@@ -2953,9 +2958,24 @@ pub fn fn_0086e650(e: &mut Engine, this: Ptr) {
         e.set_global(0x011d_eef8, 0.0f32);
         let step = e.global::<u8>(0x011d_eef5);
         e.set_global(0x011d_eef5, step.wrapping_add(1));
+        if engine_core::stage_time::points_on() {
+            // The pool the tick sorts (the memory manager's table, `011f67b8`) and its free list's count
+            // (`+0x54`, the count `00aa7260` tests) before the sort: read only, for the hitch log.
+            let entry = 0x011f_67b8 + 4 * u32::from(step);
+            let pool = if e.mem.is_mapped(entry) {
+                e.mem.u32(entry)
+            } else {
+                0
+            };
+            let free = (pool != 0 && e.mem.is_mapped(pool + 0x54)).then(|| e.mem.u32(pool + 0x54));
+            engine_core::stage_time::tail_tick(u32::from(step), free);
+        }
+        tail_mark(TailMark::TickIn);
         e.call(0x00aa_7290, &args![step as u32]);
+        tail_mark(TailMark::TickOut);
         // The game also resets the counter when it reaches 0x100, which a byte never does.
     }
+    tail_mark(TailMark::IdleEnd);
 }
 
 // Translated from 0086ef30 (decompiled, FalloutNV.exe 1.4.0.525)

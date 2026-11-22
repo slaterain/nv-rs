@@ -92,7 +92,13 @@ frame's stages (`NV_STAGE_TIME`'s points, timed with the log on: about ten clock
 counted in it (files opened and bytes read on main, main's waits for other threads, locks, the render thread and
 in Present, guest heap blocks, Direct3D objects created and bytes uploaded, pipelines and shader modules made,
 sound buffers, cells attached and detached, saves, loads, script compiles: `crates/engine-core/src/hitch.rs`,
-`crates/d3d9-stream/src/hitch.rs`) and a plain-word guess of the main cause. An F12 report carries the session's
+`crates/d3d9-stream/src/hitch.rs`) and a plain-word guess of the main cause. When the game's frame tail (main after
+`WaitForThreads`) is 2 ms or more, the line splits it at its parts in the order main runs them: the AI tasks with
+their task queue's drain, the delayed script actions, the secondary task queue's end input, drain and begin input
+(the tasks run by kind, the time outside them and the turns spent waiting for another thread's input), the queued
+menu open and prints, the 256-step free-list sort (its pool and free list), and the rest (a clock read at each
+part and two for each drained task). Main's time inside the guest heap is timed only with `NV_HITCH_HEAP=1` (two clock
+reads a block). An F12 report carries the session's
 last 1000 lines as `hitches.txt`. It changes nothing in the game.
 
 `NV_STAGE_TIME=1` with `NV_FRAME_LOG` adds columns to each line (`crates/engine-core/src/stage_time.rs`, a

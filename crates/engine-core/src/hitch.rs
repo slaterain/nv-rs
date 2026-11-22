@@ -334,11 +334,41 @@ pub fn script_span() -> ScriptSpan {
     }
 }
 
-/// The heap's time on main ([`Count::HeapNsMain`]): the start of an allocate or free, `None` on another game thread,
-/// with the log off, or inside an outer one (the shared heap's call reaches the plain heap's).
+/// `NV_HITCH_HEAP=1` (a diagnostic switch, off by default): main's time in the guest heap is timed
+/// ([`heap_timer`]). Two clock reads around every allocate and free on main cost about 4 ms on the pause menu's
+/// opening frame (80,000 blocks), so a normal run counts the blocks only. 0: the variable not read yet; 1: off; 2: on.
+static HEAP_TIMED: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Whether main's heap time is timed (`NV_HITCH_HEAP=1`; read once).
+#[inline]
+pub fn heap_timed() -> bool {
+    match HEAP_TIMED.load(Relaxed) {
+        0 => read_heap_switch(),
+        2 => true,
+        _ => false,
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn read_heap_switch() -> bool {
+    let on = std::env::var("NV_HITCH_HEAP").is_ok_and(|v| v.trim() == "1");
+    let _ = HEAP_TIMED.compare_exchange(0, if on { 2 } else { 1 }, Relaxed, Relaxed);
+    HEAP_TIMED.load(Relaxed) == 2
+}
+
+/// Sets [`heap_timed`], whatever the variable says (tests).
+#[doc(hidden)]
+pub fn set_heap_timed(on: bool) {
+    HEAP_TIMED.store(if on { 2 } else { 1 }, Relaxed);
+}
+
+/// The heap's time on main ([`Count::HeapNsMain`]): the start of an allocate or free, `None` unless
+/// `NV_HITCH_HEAP=1` ([`heap_timed`]), on another game thread, with the log off, or inside an outer one (the shared
+/// heap's call reaches the plain heap's).
 #[inline]
 pub fn heap_timer() -> Option<std::time::Instant> {
-    if !timed_here() || IN_HEAP.with(std::cell::Cell::get) {
+    if !heap_timed() || !timed_here() || IN_HEAP.with(std::cell::Cell::get) {
         return None;
     }
     IN_HEAP.with(|h| h.set(true));
@@ -675,6 +705,28 @@ mod tests {
         assert!(since(&snapshot(), &before)[Count::LoadFinishTasks as usize] >= 3);
         assert_eq!(take_longest_task(), (9, 0x0102_0000));
         assert_eq!(take_longest_task(), (0, 0));
+    }
+
+    /// Main's heap time reads the clock only behind `NV_HITCH_HEAP=1`: off (the default), an allocate or free
+    /// starts no timer; on, the outermost one on main does, and a nested one (the shared heap's call reaching the
+    /// plain heap's) does not.
+    #[test]
+    fn the_heap_is_timed_only_behind_its_switch() {
+        let _l = WAIT_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        set_heap_timed(false);
+        assert!(heap_timer().is_none(), "off: no clock read");
+        set_heap_timed(true);
+        if on() {
+            let outer = heap_timer();
+            assert!(outer.is_some(), "on: main's allocate is timed");
+            assert!(heap_timer().is_none(), "a nested one is not");
+            heap_timer_end(outer);
+            heap_timer_end(heap_timer());
+        }
+        set_heap_timed(false);
+        assert!(!heap_timed());
     }
 
     static WAIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

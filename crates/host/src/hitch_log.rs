@@ -22,8 +22,10 @@
 //! 128 values: a few microseconds. The counters cost one relaxed add at each counted event (heap blocks: a plain
 //! load and store under the heap's lock) and, for waits and reads, a clock read pair around a call that already
 //! blocks or reads the disk. The stage split costs about ten clock reads a frame (`engine_core::stage_time`'s
-//! points). A hitch frame adds one formatted line, one write to the log and, when the player's cell changed since
-//! the last line, one call of the cell's `GetEditorID`.
+//! points), the frame tail's split nine more and two for each task main drains from the task queues there. Main's
+//! time in the guest heap is timed only with `NV_HITCH_HEAP=1` (two clock reads a block: about 4 ms on the pause
+//! menu's 80,000-block opening frame). A hitch frame adds one formatted line, one write to the log and, when the
+//! player's cell changed since the last line, one call of the cell's `GetEditorID`.
 
 use engine::Engine;
 use engine_core::hitch::{Count, WaitKind, COUNTS};
@@ -223,6 +225,9 @@ pub struct Frame {
     pub hibernating: u32,
     /// The longest completed load task main ran (ns, its vtable).
     pub longest_task: (u64, u32),
+    /// The game's frame tail split at its marks (`engine_core::stage_time::take_tail`): printed when the tail is
+    /// [`TAIL_SPLIT_MS`] or more.
+    pub tail: Option<engine_core::stage_time::Tail>,
     pub left_out: u64,
     /// The longest of those left out (ms).
     pub longest_left_out: f64,
@@ -240,6 +245,81 @@ const STAGE_NAMES: [&str; 10] = [
     "host between frames",
     "unmeasured",
 ];
+
+/// The index of the frame tail in [`STAGE_NAMES`].
+const TAIL_STAGE: usize = 7;
+/// A frame tail at least this long (ms) is split into its parts in the line.
+pub const TAIL_SPLIT_MS: f64 = 2.0;
+
+/// The frame tail's parts in words (`engine_core::stage_time::Tail`, the order main runs them): each part's time;
+/// for the AI tasks and the secondary task queue's drain, what the drain ran; for the free-list sort, the pool and its
+/// free list's count.
+fn tail_words(t: &engine_core::stage_time::Tail) -> String {
+    use engine_core::stage_time::{DrainQueue, TailMark, TAIL_PART_NAMES};
+    let mut parts = Vec::new();
+    for (i, p) in t.parts.iter().enumerate() {
+        let Some(ns) = p else { continue };
+        let extra = if i == TailMark::AiTasks as usize {
+            t.drains[DrainQueue::First as usize]
+                .map(|d| format!(" (their task queue drained: {})", drain_words(&d)))
+        } else if i == TailMark::QueueDrain as usize {
+            t.drains[DrainQueue::Secondary as usize].map(|d| format!(" ({})", drain_words(&d)))
+        } else if i == TailMark::TickOut as usize {
+            t.tick.map(|(pool, free)| match free {
+                Some(n) => format!(" (pool {pool}, {} in its free list)", thousands(n.into())),
+                None => format!(" (pool {pool}: none in the table)"),
+            })
+        } else {
+            None
+        };
+        parts.push(format!(
+            "{} {:.1}{}",
+            TAIL_PART_NAMES[i],
+            ms(*ns),
+            extra.unwrap_or_default()
+        ));
+    }
+    parts.join(", ")
+}
+
+/// One frame's drains of a packed task queue in words: the tasks, the three kinds (the record's tag) that took
+/// longest, the time outside the tasks (the pops, and the turns the loop took on an empty queue while another
+/// thread's input to it was still open: main spinning).
+fn drain_words(d: &engine_core::stage_time::DrainStats) -> String {
+    let mut kinds: Vec<(String, u32, u64)> = d
+        .kinds
+        .iter()
+        .filter(|k| k.1 != 0)
+        .map(|k| (format!("tag {:#04x}", k.0), k.1, k.2))
+        .collect();
+    if d.other.0 > 0 {
+        kinds.push(("other kinds".into(), d.other.0, d.other.1));
+    }
+    kinds.sort_by(|a, b| b.2.cmp(&a.2));
+    let shown: Vec<String> = kinds
+        .iter()
+        .take(3)
+        .map(|(name, n, ns)| format!("{name} x{n} {:.1} ms", ms(*ns)))
+        .collect();
+    let mut s = format!("{} tasks", d.tasks);
+    if !shown.is_empty() {
+        s += &format!(": {}", shown.join(", "));
+        if kinds.len() > 3 {
+            s += &format!(" and {} more kinds", kinds.len() - 3);
+        }
+    }
+    s += &format!(
+        "; {:.1} ms outside the tasks",
+        ms(d.ns.saturating_sub(d.task_ns()))
+    );
+    if d.waits > 0 {
+        s += &format!(
+            ", {} turns on an empty queue waiting for another thread's input",
+            thousands(d.waits.into())
+        );
+    }
+    s
+}
 
 /// The stages (ms) from the stage marks' take (µs per column).
 pub fn stages_of(v: &[(f64, u64)]) -> [f64; 9] {
@@ -688,10 +768,19 @@ impl Frame {
                 } else {
                     ""
                 };
+                // The frame tail's longest part, when it was split.
+                let part = match (i, self.tail.as_ref().and_then(|t| t.longest())) {
+                    (TAIL_STAGE, Some((p, ns))) => format!(
+                        " (most in the {}, {:.1} ms)",
+                        engine_core::stage_time::TAIL_PART_NAMES[p],
+                        ms(ns)
+                    ),
+                    _ => String::new(),
+                };
                 out.push(if i == 9 {
                     format!("{m:.0} ms fell outside the measured stages{none}")
                 } else {
-                    format!("the {} took {m:.0} ms{none}", STAGE_NAMES[i])
+                    format!("the {} took {m:.0} ms{part}{none}", STAGE_NAMES[i])
                 });
             }
         }
@@ -726,6 +815,11 @@ impl Frame {
                 .map(|(n, m)| format!("{n} {m:.1}"))
                 .collect();
             l += &format!("; stages ms: {}", parts.join(", "));
+            if st[TAIL_STAGE] >= TAIL_SPLIT_MS {
+                if let Some(t) = &self.tail {
+                    l += &format!("; frame tail parts ms: {}", tail_words(t));
+                }
+            }
         }
         let mut work: Vec<String> = Vec::new();
         let mut put = |n: u64, w: String| {
@@ -1127,6 +1221,8 @@ impl HitchLog {
             0
         };
         let longest_task = engine_core::hitch::take_longest_task();
+        // Taken every frame (its drains are the frame's), after `take_stages` passed the host's mark.
+        let tail = engine_core::stage_time::take_tail();
         let screen = crate::uncap::screen(e);
         let presents = engine_platform::d3d9real::present_count(e).unwrap_or(0);
         let shown = Shown {
@@ -1188,6 +1284,7 @@ impl HitchLog {
             section_holder,
             hibernating,
             longest_task,
+            tail,
             left_out,
             longest_left_out,
         };
@@ -1758,6 +1855,96 @@ mod tests {
             "{l}"
         );
         assert!(!l.contains("stages"), "{l}");
+    }
+
+    /// A long frame tail is split into its parts in the order main runs them, with what the two task queues' drains
+    /// ran (the three kinds that took longest, the time outside the tasks, the turns spent waiting for another
+    /// thread's input) and the free-list sort's pool; the cause names the longest part. A short tail is not split.
+    #[test]
+    fn a_long_frame_tail_is_split_into_its_parts() {
+        use engine_core::stage_time::{DrainStats, Tail};
+        let mut f = frame();
+        f.ms = 14.0;
+        f.typical = 5.7;
+        f.stages = Some([1.0, 0.0, 0.8, 2.5, 0.3, 0.1, 0.8, 8.1, 0.0]);
+        let mut tail = Tail::default();
+        tail.parts = [
+            Some(300_000),
+            Some(20_000),
+            Some(10_000),
+            Some(7_600_000),
+            Some(10_000),
+            Some(100_000),
+            Some(10_000),
+            Some(40_000),
+            Some(0),
+            Some(10_000),
+        ];
+        tail.drains[0] = Some(DrainStats {
+            ns: 100_000,
+            tasks: 2,
+            kinds: [
+                (0x14, 2, 60_000),
+                (0, 0, 0),
+                (0, 0, 0),
+                (0, 0, 0),
+                (0, 0, 0),
+                (0, 0, 0),
+            ],
+            ..DrainStats::default()
+        });
+        tail.drains[1] = Some(DrainStats {
+            ns: 7_590_000,
+            tasks: 12,
+            waits: 1_500,
+            kinds: [
+                (0x07, 3, 300_000),
+                (0x22, 2, 200_000),
+                (0x14, 4, 100_000),
+                (0x0e, 1, 7_000_000),
+                (0, 0, 0),
+                (0, 0, 0),
+            ],
+            other: (2, 50_000),
+        });
+        tail.tick = Some((37, Some(1_203)));
+        f.tail = Some(tail);
+        let l = f.line();
+        assert!(
+            l.contains(
+                "; frame tail parts ms: AI tasks 0.3 (their task queue drained: 2 tasks: tag 0x14 x2 0.1 ms; 0.0 ms \
+                 outside the tasks), delayed script actions 0.0, task queue end input 0.0, task queue drain 7.6 (12 \
+                 tasks: tag 0x0e x1 7.0 ms, tag 0x07 x3 0.3 ms, tag 0x22 x2 0.2 ms and 2 more kinds; 0.0 ms outside \
+                 the tasks, 1,500 turns on an empty queue waiting for another thread's input), task queue begin input \
+                 0.0, queued menu open, support menus and prints 0.1, other steps 0.0, free-list sort 0.0 (pool 37, \
+                 1,203 in its free list), after the sort 0.0, the game's loop to the host 0.0;"
+            ),
+            "{l}"
+        );
+        assert!(
+            l.contains(
+                "likely cause: the frame tail took 8 ms (most in the task queue drain, 7.6 ms) with no one-off work \
+                 counted"
+            ),
+            "{l}"
+        );
+        // A part not passed (one processor: no task queue) is left out; a pool not in the table is said so.
+        let t = f.tail.as_mut().unwrap();
+        t.parts[2..5].fill(None);
+        t.drains[1] = None;
+        t.tick = Some((5, None));
+        let l = f.line();
+        assert!(
+            l.contains("delayed script actions 0.0, queued menu open"),
+            "{l}"
+        );
+        assert!(
+            l.contains("free-list sort 0.0 (pool 5: none in the table)"),
+            "{l}"
+        );
+        // A short tail is not split.
+        f.stages = Some([1.0, 0.0, 0.8, 2.5, 0.3, 0.1, 0.8, 1.9, 0.0]);
+        assert!(!f.line().contains("frame tail parts"));
     }
 
     #[test]
