@@ -493,7 +493,7 @@ pub const COUNT_TARGET: u32 = 4;
 const COMPONENTS: [char; 4] = ['x', 'y', 'z', 'w'];
 
 /// The common functions every converted shader starts with.
-const PRELUDE: &str = "diagnostic(off, derivative_uniformity);
+pub(crate) const PRELUDE: &str = "diagnostic(off, derivative_uniformity);
 
 struct Regs {
     i: array<vec4<i32>, 16>,
@@ -591,7 +591,7 @@ fn frc(a: vec4<f32>) -> vec4<f32> {
 /// A texture's sampled value with the components its format does not have filled in as
 /// Direct3D 9 fills them (`fix` mode: 0 as sampled, 1 (r, 1, 1, 1), 2 (r, g, 1, 1), 3 alpha 1,
 /// 4 (0, 0, 0, r) for A8, 5 (r, r, r, 1) for L8 and L16, 6 (r, r, r, g) for A8L8).
-const FIX: &str = "fn fixup(t: vec4<f32>, mode: u32) -> vec4<f32> {
+pub(crate) const FIX: &str = "fn fixup(t: vec4<f32>, mode: u32) -> vec4<f32> {
     switch mode {
         case 1u: { return vec4<f32>(t.x, 1.0, 1.0, 1.0); }
         case 2u: { return vec4<f32>(t.x, t.y, 1.0, 1.0); }

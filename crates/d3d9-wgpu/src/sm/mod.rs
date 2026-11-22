@@ -8,6 +8,7 @@
 //! structured instructions instead of text.
 
 pub mod disasm;
+pub mod fused;
 pub mod package;
 pub mod wgsl;
 
