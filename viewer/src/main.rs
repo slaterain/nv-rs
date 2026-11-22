@@ -101,8 +101,8 @@ fn build_mods(raw: &[OsString]) {
 
 /// `--install-mods GAME INSTALLS MODS`: the mod installer's text front end (`mod_chooser`): the
 /// mods waiting in MODS installed into INSTALLS, or removed from it; the game folder GAME only
-/// read. Started by Play.exe's `--install-mods` (Install mods.cmd, in a console window of its own)
-/// and play.sh's. Every way it ends, on every system, says "Press Enter to close." and waits for
+/// read. Started by Play.exe's `--install-mods` (the launcher's Mods, its lines in the
+/// launcher's window) and play.sh's. Every way it ends, on every system, says "Press Enter to close." and waits for
 /// it (`mod_chooser::run_in_window`), so that window never closes before it is read.
 fn install_mods(raw: &[OsString]) {
     let [game, installs, loose] = [1, 2, 3].map(|i| raw.get(i).map(PathBuf::from));
@@ -122,7 +122,7 @@ fn install_mods(raw: &[OsString]) {
                 room: mod_chooser::room_on_drive,
             })
         }
-        _ => Err("The mod installer was started without the folders it needs (the game's folder, the mod installs folder and the mods folder). Start it with \"Install mods\" (Windows) or ./play.sh --install-mods (Linux and macOS).".to_owned()),
+        _ => Err("The mod installer was started without the folders it needs (the game's folder, the mod installs folder and the mods folder). Start it with Mods in Play.exe (Windows) or ./play.sh --install-mods (Linux and macOS).".to_owned()),
     };
     let stdin = std::io::stdin();
     let mut input = stdin.lock();
@@ -395,6 +395,8 @@ fn run() {
     // lists.
     let mut last: Option<Instant> = None;
     let mut frame_log = host::frame_log::FrameLog::from_env();
+    // The hitch log (on unless `NV_HITCH_LOG=0`): a line for each frame a player could feel as a jump.
+    let mut hitch_log = host::hitch_log::HitchLog::from_env();
     loop {
         game.set_keys_down(&[]);
         game.mouse([0; 3], [false; 8]);
@@ -405,8 +407,13 @@ fn run() {
         if game.repeatable_end() {
             host::end_process(0);
         }
+        // The frame's stage marks, taken once for both logs.
+        let stages = host::hitch_log::take_stages();
+        if let Some(log) = &mut hitch_log {
+            log.record(&mut game.engine, stages.as_ref().map(|s| &s[..]));
+        }
         if let Some(log) = &mut frame_log {
-            log.record(&mut game.engine);
+            log.record(&mut game.engine, stages.as_ref().map(|s| &s[..]));
         }
         // An F12 report waiting for where it was taken (`place.txt`).
         host::report_place::note(&mut game.engine);

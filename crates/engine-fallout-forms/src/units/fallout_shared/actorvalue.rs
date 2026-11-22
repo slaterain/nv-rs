@@ -35,7 +35,11 @@ pub fn fn_0066fe40(e: &mut Engine, this: Ptr, id: u32, name: u32) -> Ptr {
     if name != 0 {
         e.with_stack(0x64, |e, buffer| {
             e.call(0x0040_6d00, &args![buffer, 0x64u32, 0x0106_79d0u32, name]);
-            e.call(0x0040_1290, &args![this, buffer]);
+            // JohnnyGuitar NVSE's setter seam at the call `0x66FF57` (the name stored, while its
+            // row is on).
+            if e.site(0x0066_ff57, &[this.addr(), buffer.addr()]).is_none() {
+                e.call(0x0040_1290, &args![this, buffer]);
+            }
         });
     }
     e.call(0x0043_8390, &args![base + 0x3c, 0x0101_1584u32]);

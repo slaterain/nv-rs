@@ -130,6 +130,9 @@ terms, whose notice must be kept:
   in [crates/uio/NOTICE](crates/uio/NOTICE).
 - `crates/mcm` rebuilds the NVSE plugin of The Mod Configuration Menu 1.5 (Pelinor) with its
   author's permission; see [crates/mcm/NOTICE](crates/mcm/NOTICE).
+- `crates/johnnyguitar` builds JohnnyGuitar NVSE 5.28 (carxt and its contributors) in,
+  piece by piece, with its authors' permission; JohnnyGuitar NVSE is under the LGPL-2.1, used here
+  under the GPL-3.0 (this repository's LICENSE) as its section 3 allows; see [crates/johnnyguitar/NOTICE](crates/johnnyguitar/NOTICE).
 - `crates/stewie` builds lStewieAl's Tweaks 10.05 (lStewieAl) in with its author's permission,
   with Viva New Vegas' INI values for it (ModdingLinked, MIT licence); see
   [crates/stewie/NOTICE](crates/stewie/NOTICE).

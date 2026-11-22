@@ -214,8 +214,9 @@ pub struct Resources {
     /// The last `Set*ShaderConstant*` the model took set every register to the words it already
     /// held (each set before): its forwarding may leave it out (`super::d3d9device::skip_repeats`).
     constants_repeat: bool,
-    /// Whether constant sets ([`set_constants_one_pass`]) and render, texture stage and sampler
-    /// states (`super::d3d9device`) take the model and the forwarding in one pass
+    /// Whether constant sets ([`set_constants_one_pass`]), stream sources and draws
+    /// ([`stream_source_one_pass`], [`draw_one_pass`]), and render, texture stage and sampler
+    /// states and textures (`super::d3d9device`) take the model and the forwarding in one pass
     /// ([`one_pass_in`]): on unless `NV_D3D9_ONE_PASS=0`, read at the first set; tests set it
     /// ([`one_pass_for_tests`]).
     one_pass: Option<bool>,
@@ -291,6 +292,35 @@ pub(super) fn binding(e: &mut Engine, device: u32, what: &str) -> Vec<u32> {
         }
         _ => panic!("no binding {what}"),
     }
+}
+
+/// Tests: what the module holds, in a fixed order: each object's address, references and
+/// bindings (address order), then each device's streams and empty strides, main's then the
+/// drawing side's copies.
+#[cfg(test)]
+pub(super) fn held_for_tests(e: &mut Engine) -> Vec<u32> {
+    let r = resources(e);
+    let mut objects: Vec<_> = r
+        .objects
+        .iter()
+        .map(|(a, o)| [*a, o.references, o.bound])
+        .collect();
+    objects.sort_unstable();
+    let mut out: Vec<u32> = objects.into_iter().flatten().collect();
+    for list in [&r.bindings, &r.draw_bindings] {
+        out.push(u32::MAX);
+        for (device, b) in list {
+            out.push(*device);
+            let mut streams: Vec<_> = b.streams.iter().map(|(s, v)| [*s, v.0, v.1, v.2]).collect();
+            streams.sort_unstable();
+            out.extend(streams.into_iter().flatten());
+            out.push(u32::MAX - 1);
+            let mut empty: Vec<_> = b.empty_strides.iter().map(|(s, v)| [*s, *v]).collect();
+            empty.sort_unstable();
+            out.extend(empty.into_iter().flatten());
+        }
+    }
+    out
 }
 
 /// The bindings list a call sees ([`bindings`]).
@@ -1660,16 +1690,242 @@ pub(super) fn draw_primitive_up(
 }
 
 forwarded! {
-    pub(super) fn fwd_set_stream_source = set_stream_source(stream: u32, buffer: u32, offset: u32, stride: u32)
-        => set_stream_source;
     pub(super) fn fwd_set_indices = set_indices(buffer: u32) => set_indices;
     pub(super) fn fwd_set_vertex_declaration = set_vertex_declaration(declaration: u32)
         => set_vertex_declaration;
     pub(super) fn fwd_set_fvf = set_fvf(fvf: u32) => set_fvf;
-    pub(super) fn fwd_draw_primitive = draw_primitive(kind: u32, start: u32, count: u32) => draw_primitive;
-    pub(super) fn fwd_draw_indexed_primitive = draw_indexed_primitive(
-        kind: u32, base_vertex: u32, min_index: u32, vertices: u32, start_index: u32, count: u32
-    ) => draw_indexed_primitive;
+}
+
+/// `SetStreamSource`, then (`NV_D3D9=real`) the real one; in one pass when it can
+/// ([`stream_source_one_pass`]).
+pub(super) fn fwd_set_stream_source(
+    e: &mut Engine,
+    this: Ptr,
+    stream: u32,
+    buffer: u32,
+    offset: u32,
+    stride: u32,
+) -> u32 {
+    if let Some(model) = stream_source_one_pass(e, this, stream, buffer, offset, stride) {
+        return model;
+    }
+    let model = set_stream_source(e, this, stream, buffer, offset, stride);
+    if model == D3D_OK {
+        super::d3d9real::set_stream_source(e, this.addr(), stream, buffer, offset, stride, model);
+    }
+    model
+}
+
+/// `DrawPrimitive`, then (`NV_D3D9=real`) the real one; in one pass when it can
+/// ([`draw_one_pass`]).
+pub(super) fn fwd_draw_primitive(
+    e: &mut Engine,
+    this: Ptr,
+    kind: u32,
+    start: u32,
+    count: u32,
+) -> u32 {
+    let cmd = d3d9_stream::Cmd::DrawPrimitive {
+        device: this.addr(),
+        kind,
+        start,
+        count,
+    };
+    if let Some(model) = draw_one_pass(e, this, kind, false, cmd) {
+        return model;
+    }
+    let model = draw_primitive(e, this, kind, start, count);
+    if model == D3D_OK {
+        super::d3d9real::draw_primitive(e, this.addr(), kind, start, count, model);
+    }
+    model
+}
+
+/// `DrawIndexedPrimitive`, then (`NV_D3D9=real`) the real one; in one pass when it can
+/// ([`draw_one_pass`]).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn fwd_draw_indexed_primitive(
+    e: &mut Engine,
+    this: Ptr,
+    kind: u32,
+    base_vertex: u32,
+    min_index: u32,
+    vertices: u32,
+    start_index: u32,
+    count: u32,
+) -> u32 {
+    // As `super::d3d9real::draw_indexed_primitive`'s command.
+    let cmd = d3d9_stream::Cmd::DrawIndexedPrimitive {
+        device: this.addr(),
+        kind,
+        base_vertex: base_vertex as i32,
+        min_index,
+        vertices,
+        start_index,
+        count,
+    };
+    if let Some(model) = draw_one_pass(e, this, kind, true, cmd) {
+        return model;
+    }
+    let model = draw_indexed_primitive(
+        e,
+        this,
+        kind,
+        base_vertex,
+        min_index,
+        vertices,
+        start_index,
+        count,
+    );
+    if model == D3D_OK {
+        super::d3d9real::draw_indexed_primitive(
+            e,
+            this.addr(),
+            kind,
+            base_vertex,
+            min_index,
+            vertices,
+            start_index,
+            count,
+            model,
+        );
+    }
+    model
+}
+
+/// A forwarded `SetStreamSource` ([`set_stream_source`], then `super::d3d9real::set_stream_source`)
+/// in one pass over the device's state: the bindings found once, the stream replaced and the
+/// buffers' counts kept there, and the command sent with no second look-up of the devices or the
+/// backend's state. The same model state, answer and commands as the two steps: when the buffer
+/// let go of ends (neither the program nor a device holds it any more), its end comes first and
+/// the command after it, as in the two steps. `None` (nothing done) when `NV_D3D9_ONE_PASS=0`.
+#[inline]
+fn stream_source_one_pass(
+    e: &mut Engine,
+    this: Ptr,
+    stream: u32,
+    buffer: u32,
+    offset: u32,
+    stride: u32,
+) -> Option<u32> {
+    let held = crate::device_held(e);
+    let crate::d3d9::DeviceState {
+        device_objects,
+        real,
+        ..
+    } = crate::device_mut(&mut e.device, held);
+    if !one_pass_in(&mut device_objects.resources) {
+        return None;
+    }
+    if stream >= STREAMS {
+        return Some(D3DERR_INVALIDCALL);
+    }
+    if super::d3d9draw::any_cut() {
+        super::d3d9draw::main_set(
+            &mut device_objects.draw,
+            super::d3d9draw::Key::Stream(stream),
+        );
+    }
+    let drawing = super::d3d9draw::drawing_side(&device_objects.draw);
+    let Resources {
+        objects,
+        bindings,
+        draw_bindings,
+        ..
+    } = &mut device_objects.resources;
+    let b = bindings_in(if drawing { draw_bindings } else { bindings }, this.addr());
+    let device = this.addr();
+    let cmd = d3d9_stream::Cmd::SetStreamSource {
+        device,
+        stream,
+        buffer,
+        offset,
+        stride,
+    };
+    // The buffer the stream holds already: only the offset and stride change (as
+    // [`set_stream_source`]).
+    if buffer != 0 {
+        if let Some(held) = b.streams.get_mut(&stream).filter(|s| s.0 == buffer) {
+            *held = (buffer, offset, stride);
+            if !b.empty_strides.is_empty() {
+                b.empty_strides.remove(&stream);
+            }
+            super::d3d9real::record_in(real, device, cmd);
+            return Some(D3D_OK);
+        }
+    }
+    let Ok(new) = checked(objects, buffer, VERTEX_BUFFER_CODE) else {
+        return Some(D3DERR_INVALIDCALL);
+    };
+    if !b.empty_strides.is_empty() {
+        b.empty_strides.remove(&stream);
+    }
+    let old = if buffer != 0 {
+        b.streams.insert(stream, (buffer, offset, stride))
+    } else {
+        b.streams.remove(&stream)
+    }
+    .map_or(0, |o| o.0);
+    if old != buffer {
+        if let Some(o) = new {
+            o.bound += 1;
+        }
+        if old != 0 {
+            // As [`unbind`]: the buffer ends once neither the program nor a device holds it.
+            let o = objects
+                .get_mut(&old)
+                .expect("a Direct3D 9 buffer, shader or declaration of this layer");
+            o.bound -= 1;
+            if o.bound == 0 && o.references == 0 {
+                destroy(e, Ptr::new(old));
+                super::d3d9real::set_stream_source(
+                    e, device, stream, buffer, offset, stride, D3D_OK,
+                );
+                return Some(D3D_OK);
+            }
+        }
+    }
+    super::d3d9real::record_in(real, device, cmd);
+    Some(D3D_OK)
+}
+
+/// A forwarded draw (`DrawPrimitive`, or `DrawIndexedPrimitive` when `indexed`: [`draw_checks`],
+/// then `super::d3d9real`'s command `cmd`) in one pass: the scene and the bindings read once and
+/// the command sent with no second look-up of the devices or the backend's state. `None` (nothing
+/// done) when `NV_D3D9_ONE_PASS=0` or for a draw the model does not provide (the two steps then
+/// stop the run as before).
+#[inline]
+fn draw_one_pass(
+    e: &mut Engine,
+    this: Ptr,
+    kind: u32,
+    indexed: bool,
+    cmd: d3d9_stream::Cmd<d3d9_stream::Data<'_>>,
+) -> Option<u32> {
+    let held = crate::device_held(e);
+    let crate::d3d9::DeviceState {
+        device_objects,
+        real,
+        ..
+    } = crate::device_mut(&mut e.device, held);
+    if !one_pass_in(&mut device_objects.resources) {
+        return None;
+    }
+    let scene = super::d3d9device::in_scene_in(device_objects, this);
+    let b = bindings_in(
+        side_list(&device_objects.draw, &mut device_objects.resources),
+        this.addr(),
+    );
+    let provided = scene
+        && (D3DPT_POINTLIST..=D3DPT_TRIANGLEFAN).contains(&kind)
+        && (b.declaration != 0 || b.fvf != 0)
+        && b.streams.contains_key(&0)
+        && (!indexed || (b.indices != 0 && kind != D3DPT_POINTLIST));
+    if !provided {
+        return None;
+    }
+    super::d3d9real::record_in(real, this.addr(), cmd);
+    Some(D3D_OK)
 }
 
 /// `SetVertexShader` / `SetPixelShader`, then (`NV_D3D9=real`) the real shader.

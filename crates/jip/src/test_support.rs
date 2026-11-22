@@ -40,6 +40,14 @@ pub fn install_into_as(e: &mut Engine, answers_installed: bool) {
 
 /// What [`engine`] does to a new engine.
 fn prepare(e: &mut Engine) {
+    // JIP's deferred start calls the process lists' time refresh (00970d50): a stand-in that
+    // does nothing unless the engine already has one (an engine crate's translation, or a
+    // test's recording stand-in).
+    if !e.is_registered(crate::cosave::PROCESS_LISTS_REFRESH_TIME) {
+        e.register(crate::cosave::PROCESS_LISTS_REFRESH_TIME, |_, _| {
+            Ret::default()
+        });
+    }
     e.map(0x0118_e000, 0x9000);
     e.map(CONSOLE_OPEN & !0xfff, 0x1000);
     e.map(DATA, 0x1_0000);
@@ -88,6 +96,14 @@ fn prepare(e: &mut Engine) {
     // engine has no translation of it: a stand-in that does nothing (JIP's wrap replaces it).
     if !e.is_registered(0x0048_2090) {
         e.register(0x0048_2090, |_, _| Ret::default());
+    }
+    // The game's fixed-string table (`00a5b630` makes it, `00a5b690` makes a string, `00a5b460`
+    // frees the unused ones; JIP's wraps there: group GT, G43), when the test engine has no
+    // translation of them: stand-ins that do nothing and answer 0 (JIP's wraps replace them).
+    for addr in [0x00a5_b630, 0x00a5_b690, 0x00a5_b460] {
+        if !e.is_registered(addr) {
+            e.register(addr, |_, _| Ret::default());
+        }
     }
     if !e.is_registered(0x0041_8b10) {
         e.register(0x0041_8b10, |e, a| Ret {

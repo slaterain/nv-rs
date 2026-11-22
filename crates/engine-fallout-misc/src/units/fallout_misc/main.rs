@@ -410,6 +410,19 @@ fn jip_before_main(e: &mut Engine) {
     }
 }
 
+/// The process lists' time refresh at start-up (`0x86B1EE`, `CALL 0x00970D50` on the process
+/// lists `0x011E0E80`). JIP LN NVSE's D02 (its `PostLoad`: `SAFE_WRITE_BUF(0x86B1EE, 5-byte NOP)`)
+/// removes this call and makes it at its deferred start instead (`DeferredInit`'s
+/// `ThisCall(0x970D50, ProcessManager::Get())`, the `jip` crate's `cosave::refresh_process_time`).
+/// JIP does both whenever it is loaded, so the seam is asked while JIP answers "installed" (the
+/// same condition as the deferred call), with no words; true when JIP's handler takes the call
+/// away. Without JIP: one load, the exe's call.
+#[inline]
+fn jip_moves_process_refresh(e: &mut Engine) -> bool {
+    e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+        && e.site(0x0086_b1ee, &[]).is_some()
+}
+
 /// Resizes the game window to the renderer's screen size: the client rectangle
 /// (`0, 0, 004dc1f0(), 004dc200()`) grown by the window's style, then `SetWindowPos` with the
 /// rectangle's left and bottom as the position and (right - left, top - bottom) as the size,
@@ -792,7 +805,9 @@ fn run_main(e: &mut Engine, ebp: u32, instance: u32) -> u32 {
     let object = e.global::<u32>(0x011d_e45c);
     e.call(0x008a_8150, &args![object, 1u32]);
     typed_call!(leaf::FAMILY, 0x0040_fbe0, leaf::nothing(e); words 0x0108_293cu32);
-    e.call(0x0097_0d50, &args![0x011e_0e80u32]);
+    if !jip_moves_process_refresh(e) {
+        e.call(0x0097_0d50, &args![0x011e_0e80u32]);
+    }
     let data_handler = e.global::<u32>(0x011c_3f2c);
     e.call(0x0046_14e0, &args![data_handler]);
     let object = e.global::<u32>(0x011d_df38);
@@ -3443,6 +3458,8 @@ pub fn fn_0086fbc0(e: &mut Engine, this: Ptr, value: u8) {
 /// cell (`00451530`) and `005f36f0` says there is none, refreshes the player's world space
 /// (`00575d70`) and the tracker's (`004fd3e0`).
 pub fn fn_0086fbe0(e: &mut Engine, this: Ptr) {
+    // The hitch log's timer (main only; no effect on the game).
+    let _timed = engine_core::hitch::Timed::main(engine_core::hitch::Count::GridUpdateNs);
     if byte_flag(e, IN_MENU_FLAG)
         || byte_flag(e, 0x011d_8907)
         || main_flag(e, this, MAIN_FREEZE_TIME)
@@ -5061,6 +5078,54 @@ mod tests {
             (1, 1, 0x4120_0000, 12.5),
             "a plugin's setting wins"
         );
+    }
+
+    /// D02's seam at `0x86B1EE`: JIP not installed (the game-patch row alone does not count),
+    /// nothing is asked and the process lists' time refresh (`00970d50` on `0x011E0E80`) runs
+    /// once; JIP installed, the seam is asked once with no words, and a taken answer leaves the
+    /// refresh out (JIP makes it at its deferred start); no answer keeps the exe's call.
+    #[test]
+    fn d02_takes_the_start_up_process_refresh_away_while_jip_is_installed() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        thread_local! {
+            static D02_ASKED: RefCell<Vec<Vec<u32>>> = const { RefCell::new(Vec::new()) };
+        }
+        fn taken(_: &mut Engine, a: &[u32]) -> Option<u32> {
+            D02_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+            Some(1)
+        }
+        fn kept(_: &mut Engine, a: &[u32]) -> Option<u32> {
+            D02_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+            None
+        }
+        let run = |word: u32, handler: fn(&mut Engine, &[u32]) -> Option<u32>| {
+            D02_ASKED.with(|s| s.borrow_mut().clear());
+            let mut e = main_engine();
+            e.set_jip_patches(word);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0086_b1ee), handler);
+            e.call_log = Some(vec![]);
+            assert_eq!(run_main_entry(&mut e), 0);
+            let log = take_log(&mut e);
+            (
+                calls_to(&log, 0x0097_0d50),
+                D02_ASKED.with(|s| s.borrow().clone()),
+            )
+        };
+        let refresh = vec![vec![0x011e_0e80]];
+        for word in [0, jip_patches::FIXES] {
+            assert_eq!(run(word, taken), (refresh.clone(), vec![]), "{word:08x}");
+        }
+        for word in [
+            jip_patches::INSTALLED,
+            jip_patches::INSTALLED | jip_patches::FIXES,
+        ] {
+            assert_eq!(run(word, taken), (vec![], vec![vec![]]), "{word:08x}");
+            assert_eq!(
+                run(word, kept),
+                (refresh.clone(), vec![vec![]]),
+                "{word:08x}"
+            );
+        }
     }
 
     #[test]
