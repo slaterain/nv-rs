@@ -147,3 +147,35 @@ pub const HUD_CONDITION_ARROWS_FLAGS: Row = Row::share(MENUS_FIXES, MENUS_FIXES_
 /// S0197 `CrosshairProjectileNameFix` (`HUDMainMenu::SetInfoForRef` at `0x776EE2`): a projectile
 /// under the crosshair is named after its weapon only for thrown weapons.
 pub const CROSSHAIR_THROWN_WEAPON_NAME: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 38);
+/// S0022.04 `MenuFixes` (`StartMenu::DoEnter` `007cf7e0` at `0x7CF85B`): the save/load list shows
+/// the highlighted save's picture whether or not the mouse is over the list.
+pub const SAVE_PICTURE_WITHOUT_HOVER: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 39);
+/// S0022.23 `MenuFixes` (`VATSMenu::UpdateAmmo` `007f28d0` at `0x7F2E30`): the VATS condition bar
+/// measures against the weapon's largest health with its condition mods.
+pub const VATS_CONDITION_WITH_HEALTH_MODS: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 40);
+/// S0022.24 `MenuFixes` (`VATSMenu::UpdateAmmo` at `0x7F2DCE`): the VATS condition and ammo labels
+/// show for weapons without ammo too.
+pub const VATS_CONDITION_WITHOUT_AMMO: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 41);
+/// S0022.55 `MenuFixes` (`VATSMenu::DoIdle` `007ec810` at `0x7ED119`): the VATS health meter keeps
+/// at least one tick.
+pub const VATS_HEALTH_AT_LEAST_ONE_TICK: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 42);
+/// S0020 `patchSaveINIChangesWhenClosingStartMenuAndSetXPBarQuestAndMessagesVisible`
+/// (`StartMenu`'s deleting destructor `007cb510` at `0x7CB51A`): changed settings are saved when
+/// the start menu closes, and the HUD's XP bar, quest and messages are shown again.
+pub const START_MENU_CLOSE_SAVES_SETTINGS: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 43);
+/// S0047 `patchFixVATSAutoWeaponMultiAmmoUseBug` (`VATSMenu::GetShotBurstCount` `007f5050` at
+/// `0x7F5177`): an automatic weapon's VATS burst counts its ammo use per shot.
+pub const VATS_BURST_TIMES_AMMO_USE: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 44);
+/// S0066 `patchFixPipboyDisplayedChemDurationIfPerkModified` (`StatusDataList::Register`
+/// `007e0b20` at `0x7E0C1F`): the Pip-Boy's effect durations count the player's chem duration
+/// perks.
+pub const PIPBOY_CHEM_DURATION_PERKS: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 45);
+/// S0144 `patchFixVATSChargingReloadAPCostWithNoAmmo` (`VATSMenu::DoIdle` at `0x7EDB33`): no
+/// reload action points are charged without ammo to reload with or in god mode.
+pub const VATS_NO_RELOAD_COST_WITHOUT_AMMO: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 46);
+/// S0160 `MessageMenuFontWidthFix` (`MessageMenu::LoadNextMessage` `007a92e0` at `0x7A95D2`,
+/// `0x7A9850`, `0x7A9B74`): message boxes measure their texts in the texts' own fonts.
+pub const MESSAGE_MENU_TEXT_FONT: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 47);
+/// S0022.37 `MenuFixes` (`StartMenu::ChooseHelp` `007d0770` at `0x7D08C6` and `0x7D08D3`): the
+/// pause menu's Help shows the caravan, roulette, blackjack and slots helps in those games.
+pub const MINIGAME_HELP_IN_PAUSE_MENU: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 48);
