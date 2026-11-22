@@ -206,9 +206,9 @@ page is checked by a test (`the_readme_counts_the_built_commands` in `crates/jip
 
 ### Game patches
 
-JIP's game patches change the game's own code. 171 of its 183 are built, inert until
-JIP answers "installed"; three more are folded into other rows, one waits and eight are left out on
-purpose (below; that list also names Enhanced Camera's patch, which is not one of the 183). They include:
+JIP's game patches change the game's own code. 174 of its 183 are built, inert until
+JIP answers "installed"; three more are folded into other rows and six do nothing on this port
+(below; that list also names Enhanced Camera's patch, which is not one of the 183). They include:
 
 - **Framework and the player:** the patch framework, the first two fixes, the player's update 3D
   (both views, weapon and queued references), the detection patch (forced detection values and the
@@ -298,12 +298,12 @@ More in [FIXES.md, "UI Organizer"](FIXES.md#ui-organizer).
 
 ## lStewieAl's Tweaks built in
 
-🔨 Its engine fixes and tweaks, with nothing to install. 158 of its changes are built:
+🔨 Its engine fixes and tweaks, with nothing to install. 184 of its changes are built:
 
 - 72 of its crash and leak fixes;
 - Engine Optimizations' first change (a save's changed-forms map);
-- 85 other fixes and tweaks: 8 to the engines and the console; 14 to forms, cells, scripts, saves
-  and sound; 32 to AI, actors and the player; 31 to menus and the HUD.
+- 111 other fixes and tweaks: 8 to the engines and the console; 14 to forms, cells, scripts, saves
+  and sound; 32 to AI, actors and the player; 57 to menus and the HUD.
 
 - Each change is on with the fixes preset and has its own off key in `Fallout.ini`'s
   `[nv-rs Stewie]`.
