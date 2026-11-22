@@ -153,7 +153,7 @@ pub fn requeue_cells_ahead(e: &mut Engine, entered: Ptr) {
                         e.mem.u32(data.wrapping_add(4)) as i32,
                     );
                     if Some(place) != own {
-                        let wanted = cell_priority_at(e, place.0, place.1);
+                        let wanted = ahead_priority(cell_priority_at(e, place.0, place.1));
                         let current = u32::from(e.call(TASK_PRIORITY, &args![task]).u8());
                         if current != wanted {
                             e.vcall(task, SLOT_REQUEUE, &args![wanted]);
@@ -167,6 +167,38 @@ pub fn requeue_cells_ahead(e: &mut Engine, entered: Ptr) {
     });
 }
 
+/// `NV_CELL_AHEAD_PRIORITY=n` (a measuring switch, 1 to 3, off unless set; only with this row on): the
+/// cells ahead get at most priority `n` instead of their cell's 1 or 3, so the row the next grid
+/// shift needs is loaded in the background before the shift instead of standing behind every far
+/// reference (at the shift the exe cancels the cell loads still queued, 005281f0, and loads those
+/// cells on main, `TES::LoadGridCell`). The entered cell's own loads stay at 0, first.
+pub static AHEAD_PRIORITY: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The priority a cell ahead is given: its cell's, capped by [`AHEAD_PRIORITY`] when set.
+pub fn ahead_priority(cell_priority: u32) -> u32 {
+    capped(
+        cell_priority,
+        AHEAD_PRIORITY.load(std::sync::atomic::Ordering::Relaxed),
+    )
+}
+
+/// `cell_priority` capped by `cap` (0: no cap).
+pub fn capped(cell_priority: u32, cap: u32) -> u32 {
+    if cap == 0 {
+        cell_priority
+    } else {
+        cell_priority.min(cap)
+    }
+}
+
+/// The value of `NV_CELL_AHEAD_PRIORITY`: 1 to 3, else none.
+pub fn ahead_priority_switch(value: Option<&str>) -> u32 {
+    value
+        .and_then(|v| v.trim().parse::<u32>().ok())
+        .filter(|n| (1..=3).contains(n))
+        .unwrap_or(0)
+}
+
 /// The walk with the row on: the translation's, then, at a cell entry, the cells ahead.
 pub fn walk(e: &mut Engine, loader: Ptr, cell: Ptr) {
     fn_00446b50(e, loader, cell);
@@ -177,6 +209,11 @@ pub fn walk(e: &mut Engine, loader: Ptr, cell: Ptr) {
 
 /// Registers the walk.
 pub fn install(e: &mut Engine) {
+    let cap = ahead_priority_switch(std::env::var("NV_CELL_AHEAD_PRIORITY").ok().as_deref());
+    AHEAD_PRIORITY.store(cap, std::sync::atomic::Ordering::Relaxed);
+    if cap != 0 {
+        eprintln!("NV_CELL_AHEAD_PRIORITY: the cells ahead load at priority {cap} at most");
+    }
     e.register(WALK, |e, a| {
         walk(e, Ptr::new(a[0]), Ptr::new(a[1]));
         Ret::default()
@@ -186,6 +223,20 @@ pub fn install(e: &mut Engine) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The cells-ahead switch: 1 to 3 caps the cell's priority, anything else leaves it.
+    #[test]
+    fn the_cells_ahead_priority_switch_caps_only_when_set() {
+        assert_eq!(ahead_priority_switch(Some("1")), 1);
+        assert_eq!(ahead_priority_switch(Some(" 2 ")), 2);
+        for off in [None, Some("0"), Some("4"), Some("x")] {
+            assert_eq!(ahead_priority_switch(off), 0, "{off:?}");
+        }
+        assert_eq!(capped(3, 0), 3);
+        assert_eq!(capped(3, 1), 1);
+        assert_eq!(capped(3, 2), 2);
+        assert_eq!(capped(1, 2), 1, "a near cell keeps its 1");
+    }
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
