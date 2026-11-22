@@ -302,8 +302,12 @@ pub mod kept {
     /// S0089.01's `int g_savedAmmoCount` (4 bytes): the player's saved count of loaded rounds plus
     /// one (0: none, Tweaks' -1), read by S0089.07.
     pub const SAVED_AMMO_COUNT: usize = 2;
+    /// S0022.07's `static bool debounce` (1 byte: the remap was already waiting last frame).
+    pub const REMAP_DEBOUNCE: usize = 3;
+    /// S0883's `static char buf[0x200]`: the settings save failure's text.
+    pub const SAVE_SETTINGS_ERROR: usize = 4;
     /// How many.
-    pub const COUNT: usize = 3;
+    pub const COUNT: usize = 5;
 }
 
 /// The last thing each of Tweaks' warnings printed (its functions' statics), its print queue and
@@ -328,6 +332,9 @@ pub(crate) struct Prints {
     /// Tweaks' slips not copied ([`Engine::stewie_slip_guard`]): on with the fixes preset's
     /// missing-data guard row (`NV_NVSE_NULL_GUARD`, the host's install), off in vanilla.
     slip_guard: AtomicBool,
+    /// `[Extra Console Details] bMeshPath` (Tweaks' code default 0): S0059 prints every selected
+    /// reference's model path with it.
+    mesh_path: AtomicBool,
 }
 
 impl Default for Prints {
@@ -340,6 +347,7 @@ impl Default for Prints {
             queued: Mutex::new(Vec::new()),
             lod_ref: AtomicU32::new(0),
             slip_guard: AtomicBool::new(false),
+            mesh_path: AtomicBool::new(false),
         }
     }
 }
@@ -659,7 +667,8 @@ impl Engine {
 
     /// The missing-data guard row's part in Tweaks' rows (the host turns it on with
     /// `NV_NVSE_NULL_GUARD`, every thread's engine shares it): where a row copies a Tweaks slip
-    /// that reads data that is not there (S0237's unchecked child index), the guard passes over the
+    /// that reads data that is not there (S0237's unchecked child index; S0216's convex list key
+    /// equal to the child count and a list's missing child), the guard passes over the
     /// missing data. Off, every row is exactly Tweaks.
     pub fn set_stewie_slip_guard(&self, on: bool) {
         self.extend.stewie.3.slip_guard.store(on, Relaxed);
@@ -668,6 +677,17 @@ impl Engine {
     /// Whether the missing-data guard is on for Tweaks' rows ([`Engine::set_stewie_slip_guard`]).
     pub fn stewie_slip_guard(&self) -> bool {
         self.extend.stewie.3.slip_guard.load(Relaxed)
+    }
+
+    /// `[Extra Console Details] bMeshPath` (`crates/stewie`'s install): whether S0059 prints the
+    /// model path of every selected reference, not only of one whose model is missing.
+    pub fn set_stewie_mesh_path(&self, on: bool) {
+        self.extend.stewie.3.mesh_path.store(on, Relaxed);
+    }
+
+    /// Whether S0059 prints every selected reference's model path ([`Engine::set_stewie_mesh_path`]).
+    pub fn stewie_mesh_path(&self) -> bool {
+        self.extend.stewie.3.mesh_path.load(Relaxed)
     }
 
     /// Whether the console's print passes over its loading-screen test for this line (S0031's

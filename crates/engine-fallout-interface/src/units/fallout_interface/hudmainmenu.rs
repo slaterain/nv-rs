@@ -1370,7 +1370,7 @@ fn set_info_item_details(
     reference: Ptr,
     actor: bool,
     marked_actor: bool,
-    display_mask: u32,
+    mut display_mask: u32,
 ) -> bool {
     let is_dropped_item = e.vcall(reference.addr(), 0x224, &args![]).bool();
     let dropped = if is_dropped_item { reference.addr() } else { 0 };
@@ -1389,7 +1389,7 @@ fn set_info_item_details(
 
     e.with_stack(0xc, |e, item| {
         if has_nested {
-            let nested = e.call(0x009d_9f00, &args![dropped]).u32();
+            let nested = rock_it_projectile_item(e, dropped, &mut display_mask);
             e.call(0x004b_c650, &args![item, nested]);
         } else {
             let form = if item_form_override != 0 {
@@ -1971,8 +1971,8 @@ fn do_idle_geometry(e: &mut Engine, this: Ptr<HUDMainMenu>) {
         let current_tile = current_hud_tile(e, offset);
         e.call(0x00a0_7530, &args![current_tile, 1_u32]);
     }
-    hud_main_menu_update_actor_value(e, this, 0x10);
-    hud_main_menu_update_actor_value(e, this, 0x0c);
+    e.call(0x0077_1540, &args![this, 0x10_u32]);
+    e.call(0x0077_1540, &args![this, 0x0c_u32]);
     e.call(0x0077_e4f0, &args![this]);
     for offset in [0x180, 0x160, 0x154, 0x170, 0x174, 0x158, 0x15c] {
         let alpha = quiet_f32(e.mem.f32(0x011d_979c));
@@ -2049,7 +2049,7 @@ fn do_idle_fades(e: &mut Engine) {
     };
     if sneaking {
         let menu = e.mem.u32(0x011d_96c0);
-        hud_main_menu_update_sneak(e, Ptr::new(menu));
+        e.call(0x0077_32d0, &args![menu]);
     } else if hud_alpha(e, 0x88) > e.global::<f64>(0x0101_2060) && fade_finished(e, 0x88) {
         let duration: f32 = quiet_f32(e.global(0x0101_6248));
         let alpha = hud_alpha(e, 0x88) as f32;
@@ -2107,11 +2107,9 @@ fn do_idle_target(e: &mut Engine, this: Ptr<HUDMainMenu>) {
         let target_location = e.vcall(target, 0x1f4, &args![]).u32();
         let player = e.mem.u32(0x011d_ea3c);
         let player_location = e.vcall(player, 0x1f4, &args![]).u32();
-        target_heading = hud_main_menu_heading_between_locations(
-            e,
-            Ptr::new(player_location),
-            Ptr::new(target_location),
-        ) as f32;
+        target_heading = e
+            .call(0x0077_2840, &args![player_location, target_location])
+            .f64() as f32;
     }
     let now = hud_time(e, this.addr() + 0x224);
     let elapsed = now.wrapping_sub(e.mem.u32(this.addr() + 0x244));
@@ -2136,7 +2134,7 @@ fn do_idle_target(e: &mut Engine, this: Ptr<HUDMainMenu>) {
             if e.vcall(actor, 0x22c, &args![0_u32]).u8() == 0 {
                 show_enemy = true;
                 let actor = e.mem.u32(0x011f_21cc);
-                hud_main_menu_set_enemy_actor(e, Ptr::new(actor));
+                e.call(0x0077_3190, &args![actor]);
             }
         }
     } else {
@@ -2146,7 +2144,7 @@ fn do_idle_target(e: &mut Engine, this: Ptr<HUDMainMenu>) {
             let target = e.mem.u32(this.addr() + 0x21c);
             if e.call(0x0047_7ba0, &args![target]).u8() == 0
                 && e.mem.u8(0x011d_96c5) != 0
-                && !hud_visible(e, 0x9c)
+                && !prompt_hides_health_bar(e)
                 && !hud_visible(e, 0xa8)
             {
                 let current_tile = current_hud_tile(e, 0x120);
@@ -2210,7 +2208,7 @@ fn do_idle_target(e: &mut Engine, this: Ptr<HUDMainMenu>) {
             ) == 4;
         if qualifies {
             let target = e.mem.u32(this.addr() + 0x21c);
-            hud_main_menu_update_enemy_health(e, this, Ptr::new(target));
+            e.call(0x0077_01e0, &args![this, target]);
         }
     }
     let last = e.mem.u32(this.addr() + 0x1b8);
@@ -2246,18 +2244,18 @@ fn do_idle_quests(e: &mut Engine, this: Ptr<HUDMainMenu>) {
         e.mem.set_u32(this.addr() + 0x248, now);
         let player = e.mem.u32(0x011d_ea3c);
         let quest = e.call(0x005c_bb50, &args![player]).u32();
-        hud_main_menu_display_quest_reminder(e, Ptr::new(quest));
+        e.call(0x0077_36d0, &args![quest]);
     } else if e.mem.u32(this.addr() + 0x248) == 0 && e.call(0x0045_8030, &args![]).u32() == 2 {
         let now = hud_time(e, 0x011f_6394);
         e.mem.set_u32(this.addr() + 0x248, now);
         let player = e.mem.u32(0x011d_ea3c);
         let quest = e.call(0x005c_bb50, &args![player]).u32();
-        hud_main_menu_display_quest_reminder(e, Ptr::new(quest));
+        e.call(0x0077_36d0, &args![quest]);
         e.mem.set_u8(this.addr() + 0x254, 0);
     }
     if e.mem.u8(this.addr() + 0x254) != 0 {
         e.call(0x0077_f500, &args![this]);
-        hud_main_menu_kill_quest_objectives(e, this);
+        e.call(0x0077_f5e0, &args![this]);
         e.mem.set_u8(this.addr() + 0x254, 0);
         return;
     }
@@ -2369,7 +2367,7 @@ pub fn hud_main_menu_do_idle(e: &mut Engine, this: Ptr<HUDMainMenu>) {
     if player == 0 || e.call(0x008d_6f30, &args![player]).u32() == 0 {
         return;
     }
-    fn_00771520(e, Ptr::new(this.addr() + 0x224));
+    e.call(0x0077_1520, &args![this.addr() + 0x224]);
     let scene = e.mem.u32(this.addr() + 0x40);
     let a = e.mem.u32(this.addr() + 0x34);
     let b = e.mem.u32(this.addr() + 0x38);
@@ -2383,9 +2381,9 @@ pub fn hud_main_menu_do_idle(e: &mut Engine, this: Ptr<HUDMainMenu>) {
         e.site(0x0077_04ae, &[this.addr()]);
     }
     e.call(0x0077_da60, &args![this]);
-    fn_007721c0(e, this);
+    e.call(0x0077_21c0, &args![this]);
     e.call(0x0077_e750, &args![this]);
-    fn_0077f700(e, this);
+    e.call(0x0077_f700, &args![this]);
     if e.mem.u32(0x011d_97c8) & 1 == 0 {
         let flags = e.mem.u32(0x011d_97c8);
         e.mem.set_u32(0x011d_97c8, flags | 1);
@@ -2416,10 +2414,10 @@ pub fn hud_main_menu_do_idle(e: &mut Engine, this: Ptr<HUDMainMenu>) {
         e.call(0x0077_a650, &args![this]);
     }
     e.call(0x0077_c4e0, &args![this]);
-    hud_main_menu_update_radiation_meter(e, this);
+    e.call(0x0077_4090, &args![this]);
     let player = e.mem.u32(0x011d_ea3c);
     let status = e.call(0x004d_1360, &args![player]).u8() != 0;
-    hud_main_menu_update_status_mode_ui(e, this, status);
+    e.call(0x0077_39f0, &args![this, status]);
     do_idle_target(e, this);
     do_idle_quests(e, this);
     do_idle_messages(e, this);
@@ -2790,8 +2788,9 @@ pub fn hud_main_menu_set_region_text(e: &mut Engine, region: Ptr) {
 
 // Translated from 00772aa0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Replaces the HUD's location text when a newly active reference has map
-/// marker data, and clears its fade control while the region text resets.
-pub fn fn_00772aa0(e: &mut Engine, reference: Ptr, state: Ptr) {
+/// marker data, and clears its fade control while the region text resets. cdecl with one stack word,
+/// the state (`007795ee` pushes only its address; ECX is not read).
+pub fn fn_00772aa0(e: &mut Engine, state: Ptr) {
     if e.mem.u32(0x011d_96c0) == 0 {
         return;
     }
@@ -2823,7 +2822,6 @@ pub fn fn_00772aa0(e: &mut Engine, reference: Ptr, state: Ptr) {
     } else if e.mem.u8(state.addr() + 5) != 0 {
         e.mem.set_u32(0x011d_9af0, id);
     }
-    let _ = reference; // ECX is not read by the PC body.
 }
 
 // Translated from 00772c30 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4106,18 +4104,7 @@ pub fn hud_main_menu_set_target_type(e: &mut Engine, target: Ptr, enabled: bool)
     let blocked = if target.is_null() || e.mem.u32(0x011d_96c0) == 0 {
         true
     } else {
-        let blocked_ptr = e.call(0x0040_8d60, &args![0x011d_8a0c_u32]).u32();
-        if e.mem.u8(blocked_ptr) != 0 || !enabled {
-            true
-        } else {
-            let iron_ptr = e.call(0x0040_8d60, &args![0x011d_898c_u32]).u32();
-            if e.mem.u8(iron_ptr) != 0 {
-                let player = e.mem.u32(0x011d_ea3c);
-                e.call(0x008b_bc10, &args![player]).bool()
-            } else {
-                false
-            }
-        }
+        target_blocked_by_settings(e, enabled)
     };
     if blocked {
         let icon = hud_tile(e, 0x3e);
@@ -4344,7 +4331,11 @@ pub fn fn_007721c0(e: &mut Engine, this: Ptr<HUDMainMenu>) {
     if e.mem.u32(0x011d_98d4) != weapon {
         for offset in [0x4c_u32, 0x50, 0x54, 0x180] {
             let item = e.mem.u32(this.addr() + offset);
-            hud_trait(e, item, 0xfa3, 1);
+            if offset == 0x180 {
+                condition_arrows_on_weapon_change(e, item);
+            } else {
+                hud_trait(e, item, 0xfa3, 1);
+            }
         }
         e.mem.set_u32(0x011d_98d4, weapon);
         if e.mem.u8(0x011d_96b8) != 0 {
@@ -4362,9 +4353,7 @@ pub fn fn_007721c0(e: &mut Engine, this: Ptr<HUDMainMenu>) {
             let old = e.mem.u8(0x011a_0114);
             e.mem.set_u8(0x011a_0114, u8::from(old == 0));
         }
-        let scale: f64 = e.global(0x0102_0758);
-        let maximum: f64 = e.global(0x0101_e568);
-        let change = f64::from(alpha) / maximum * scale;
+        let change = condition_flash_step(e, alpha);
         let next = if e.mem.u8(0x011a_0114) != 0 {
             (f64::from(current_alpha) - change) as f32
         } else {
@@ -4701,7 +4690,9 @@ pub fn hud_main_menu_set_info_for_ref(
         0x33 => {
             let nested = e.call(0x009d_9f00, &args![reference]).u32();
             let mut inspect_direct_form = nested == 0;
-            if nested != 0 {
+            if rock_it_item_skips_the_form_test(e, nested) {
+                inspect_direct_form = false;
+            } else if nested != 0 {
                 let nested = e.call(0x009d_9f00, &args![reference]).u32();
                 let form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, nested));
                 inspect_direct_form = e.call(0x0040_1170, &args![form]).u32() == 0x1f;
@@ -4893,7 +4884,7 @@ pub fn hud_main_menu_set_info_for_ref(
             let name = e.call(0x0048_2720, &args![form]).u32();
             e.call(0x0040_6d30, &args![0x011d_9c48_u32, 0x104_u32, name]);
         } else {
-            let direct = e.call(0x0047_6c90, &args![reference]).u32();
+            let direct = crosshair_projectile_weapon(e, reference.addr());
             if direct != 0 {
                 let mut form = e.call(0x0047_6c90, &args![reference]).u32();
                 if e.call(0x0052_5a90, &args![form, 0_u32]).u32() != 0 {
@@ -5343,6 +5334,25 @@ fn compass_set_texture(e: &mut Engine, tile: u32, texture: u32) {
     e.call(0x00a0_1350, &args![tile, 0xfcc_u32, texture, 1_u32]);
 }
 
+/// `HUDMainMenu::GetCompassAngle` (`00778b80`) called by address, as the exe calls it (so the typed
+/// HUD family's version is the one reached).
+#[allow(clippy::too_many_arguments)]
+fn compass_angle_by_address(
+    e: &mut Engine,
+    first_x: f32,
+    first_y: f32,
+    first_z: f32,
+    second_x: f32,
+    second_y: f32,
+    second_z: f32,
+) -> f64 {
+    e.call(
+        0x0077_8b80,
+        &args![first_x, first_y, first_z, second_x, second_y, second_z],
+    )
+    .f64()
+}
+
 // Translated from 00779070 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `HUDMainMenu::UpdateCompass` (Xbox PDB): initializes compass tile traits,
 /// updates its heading offset and landmark, objective, player, and VATS markers.
@@ -5396,7 +5406,7 @@ pub fn hud_main_menu_update_compass(
             compass_offset
         };
         let target = e.vcall(compass.addr(), 0x20, &args![]).u32();
-        fn_0077a450(e, Ptr::new(target), adjusted, 0.0);
+        e.call(0x0077_a450, &args![target, adjusted, 0.0_f32]);
     }
     let player = current_player(e);
     let marker = e.call(0x0094_8030, &args![player]).u32();
@@ -5417,7 +5427,7 @@ pub fn hud_main_menu_update_compass(
     } else {
         1.0
     };
-    let max_alpha = (f64::from(opacity) * e.global::<f64>(0x0101_e568)) as f32;
+    let (max_alpha, kept_opacity) = compass_max_alpha(e, compass.addr(), opacity);
     let landmarks_list = landmarks.addr() + 4;
     let mut landmark_tiles = typed_call!(
         leaf::FAMILY,
@@ -5497,15 +5507,17 @@ pub fn hud_main_menu_update_compass(
                     None => e.call(0x0043_8eb0, &args![map_data]).u32(),
                 };
                 let title = e.call(0x0040_3df0, &args![0x011d_2208_u32]).u32();
-                fn_0076b960(
-                    e,
-                    Ptr::new(title),
-                    Ptr::new(location),
-                    1,
-                    0,
-                    -1,
-                    -1,
-                    Ptr::new(0x0106_f370),
+                e.call(
+                    0x0076_b960,
+                    &args![
+                        title,
+                        location,
+                        1_i32,
+                        0_u32,
+                        -1_i32,
+                        -1_i32,
+                        0x0106_f370_u32
+                    ],
                 );
                 let notified_reference = e.mem.u32(record + 4);
                 e.call(
@@ -5542,7 +5554,7 @@ pub fn hud_main_menu_update_compass(
                     e.mem.set_u32(state.addr(), reference);
                     e.mem.set_u8(state.addr() + 4, 0);
                     e.mem.set_u8(state.addr() + 5, location_changed);
-                    fn_00772aa0(e, Ptr::new(reference), state);
+                    e.call(0x0077_2aa0, &args![state]);
                 });
             }
         }
@@ -5555,7 +5567,7 @@ pub fn hud_main_menu_update_compass(
         if tile == 0 {
             continue;
         }
-        let angle = hud_main_menu_get_compass_angle(
+        let angle = compass_angle_by_address(
             e,
             marker_position[0],
             marker_position[1],
@@ -5598,7 +5610,7 @@ pub fn hud_main_menu_update_compass(
             );
         } else if f64::from(distance) < e.global::<f64>(0x0102_f078) {
             let blink_alpha = e.mem.f32(0x011d_979c);
-            blink_tile(e, Ptr::new(tile), distance, blink_alpha);
+            e.call(0x0077_8c20, &args![tile, distance, blink_alpha]);
         } else {
             hud_set_float(e, tile, 0xfa9, max_alpha);
         }
@@ -5659,7 +5671,7 @@ pub fn hud_main_menu_update_compass(
         if tile == 0 {
             continue;
         }
-        let mut angle = hud_main_menu_get_compass_angle(
+        let mut angle = compass_angle_by_address(
             e,
             position[0],
             position[1],
@@ -5703,22 +5715,22 @@ pub fn hud_main_menu_update_compass(
                 hud_set_float(e, tile, 0xfa9, max_alpha);
             } else {
                 let blink_alpha = e.mem.f32(0x011d_979c);
-                blink_tile(e, Ptr::new(tile), distance, blink_alpha);
+                e.call(0x0077_8c20, &args![tile, distance, blink_alpha]);
             }
         }
     }
     let player = current_player(e);
-    let pc_marker = fn_0077a400(e, Ptr::new(player));
+    let pc_marker: Ptr = Ptr::new(e.call(0x0077_a400, &args![player]).u32());
     if !pc_marker.is_null() && objective_tiles != 0 {
         let tile = compass_take_objective_tile(e, objectives, &mut objective_tiles);
         compass_set_texture(e, tile, 0x0107_3534);
         if tile != 0 {
             let player = current_player(e);
-            let pc_marker = fn_0077a400(e, Ptr::new(player));
+            let pc_marker: Ptr = Ptr::new(e.call(0x0077_a400, &args![player]).u32());
             let mut position = compass_position(e, pc_marker.addr());
             position[2] = player_position[2];
             let distance = compass_distance_squared(e, position, player_position);
-            let angle = hud_main_menu_get_compass_angle(
+            let angle = compass_angle_by_address(
                 e,
                 position[0],
                 position[1],
@@ -5753,7 +5765,7 @@ pub fn hud_main_menu_update_compass(
                 } else {
                     compass_interpolate(e, max_alpha, 0.0, inner_width, outer_width, x)
                 };
-                blink_tile(e, Ptr::new(tile), distance, blink_alpha);
+                e.call(0x0077_8c20, &args![tile, distance, blink_alpha]);
             }
         }
     }
@@ -5770,7 +5782,7 @@ pub fn hud_main_menu_update_compass(
     let player = current_player(e);
     let vats = e.call(0x0059_5d10, &args![player]).u32();
     let player = current_player(e);
-    let process = e.call(0x008d_6f30, &args![player]).u32();
+    let process = compass_player_cell(e, kept_opacity, player);
     let is_actor_mode = e.call(0x0042_5fd0, &args![process]).bool();
     let first_limit = e.call(0x0040_3e20, &args![0x011c_d7d8_u32]).u32();
     let first_limit = e.mem.f32(first_limit);
@@ -5853,7 +5865,7 @@ pub fn hud_main_menu_update_compass(
         let tile = compass_take_tile(e, actor_ticks, &mut actor_tiles);
         compass_set_texture(e, tile, 0x0107_350c);
         if tile != 0 {
-            let angle = hud_main_menu_get_compass_angle(
+            let angle = compass_angle_by_address(
                 e,
                 position[0],
                 position[1],
@@ -8390,7 +8402,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0077_2820, fn_00772820(Ptr) -> Ptr),
         entry!(0x0077_2840, hud_main_menu_heading_between_locations(Ptr, Ptr) -> f64),
         entry!(0x0077_28f0, hud_main_menu_set_region_text(Ptr)),
-        entry!(0x0077_2aa0, fn_00772aa0(Ptr, Ptr)),
+        entry!(0x0077_2aa0, fn_00772aa0(Ptr)),
         entry!(0x0077_2c30, hud_main_menu_set_worldspace_text(Ptr)),
         entry!(0x0077_2d10, hud_main_menu_set_target_type(Ptr, bool)),
         entry!(0x0077_3050, fn_00773050()),
@@ -8534,6 +8546,137 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0077_f9d0, fn_0077f9d0(Ptr, u32) -> Ptr),
         entry!(0x0077_f9c0, fn_0077f9c0(i32) -> i32),
     ]
+}
+
+/// The low-condition label's alpha step a frame (`0x77268F`, `0x7726AC`): the exe's `alpha / 255 x
+/// 10` (`FMUL [0x1020758]`); with lStewieAl's Tweaks' S0022.22 (`OnScaleHUDConditionLabelDeltaHook`)
+/// x 600 x the frame's seconds (`011f63a0`) over the time scale (`011ac3a0`), the 10 as at 60 fps.
+fn condition_flash_step(e: &Engine, alpha: f32) -> f64 {
+    let maximum: f64 = e.global(0x0101_e568);
+    if e.stewie(stewie::HUD_CONDITION_FLASH_FRAME_RATE) {
+        let seconds = f64::from(e.mem.f32(0x011f_63a0));
+        let time_scale = f64::from(e.mem.f32(0x011a_c3a0));
+        f64::from(alpha) / maximum * 600.0 * seconds / time_scale
+    } else {
+        let scale: f64 = e.global(0x0102_0758);
+        f64::from(alpha) / maximum * scale
+    }
+}
+
+/// The compass's largest alpha at `0x7792F9`: the exe's `opacity x 255` (`FMUL [0x101E568]`); with
+/// lStewieAl's Tweaks' S0022.35 (`PreCompassUpdateStoreHUDOpacityHook`) the HUD opacity
+/// (`011d979c`) is kept, becomes the compass window's `alpha` (0xFA9) for the update, and that
+/// alpha multiplies the opacity. Answers the alpha and the opacity kept (row on only).
+fn compass_max_alpha(e: &mut Engine, compass: u32, opacity: f32) -> (f32, Option<f32>) {
+    if e.stewie(stewie::HUD_COMPASS_FOLLOWS_ITS_ALPHA) {
+        let kept = e.mem.f32(0x011d_979c);
+        let compass_alpha = e.call(0x00a0_11b0, &args![compass, 0xfa9_u32]).f64() as f32;
+        e.mem.set_f32(0x011d_979c, compass_alpha);
+        (
+            (f64::from(opacity) * f64::from(compass_alpha)) as f32,
+            Some(kept),
+        )
+    } else {
+        (
+            (f64::from(opacity) * e.global::<f64>(0x0101_e568)) as f32,
+            None,
+        )
+    }
+}
+
+/// The player's cell at `0x779F1F`: the exe's `008d6f30`; with S0022.35
+/// (`PostCompassUpdateRestoreHUDOpacity`) the kept HUD opacity is put back first and the cell
+/// (+0x40) read raw.
+fn compass_player_cell(e: &mut Engine, kept: Option<f32>, player: u32) -> u32 {
+    match kept {
+        Some(opacity) => {
+            e.mem.set_f32(0x011d_979c, opacity);
+            e.mem.u32(player + 0x40)
+        }
+        None => e.call(0x008d_6f30, &args![player]).u32(),
+    }
+}
+
+/// `HUDMainMenu::SetTargetType`'s settings test from `0x772D36` (with a target and the HUD): the
+/// exe blocks on the setting `011d8a0c`'s byte (`00408d60`) or `enabled` false, then on iron sights
+/// (`011d898c`) while the player aims. lStewieAl's Tweaks' S0072 (`patchFixHideHealthbarSetting`)
+/// writes `CMP [0x11D8A10],0; JNZ; CMP [0x11E098C],0; JNZ` over the first test: either value word
+/// set blocks (both jumps land on the exe's `JNZ` to the blocked exit at `0x772D78`).
+fn target_blocked_by_settings(e: &mut Engine, enabled: bool) -> bool {
+    let first = if e.stewie(stewie::HEALTH_BAR_SETTING_HIDES) {
+        e.mem.u32(0x011d_8a10) != 0 || e.mem.u32(0x011e_098c) != 0
+    } else {
+        let blocked_ptr = e.call(0x0040_8d60, &args![0x011d_8a0c_u32]).u32();
+        e.mem.u8(blocked_ptr) != 0
+    };
+    if first || !enabled {
+        return true;
+    }
+    let iron_ptr = e.call(0x0040_8d60, &args![0x011d_898c_u32]).u32();
+    if e.mem.u8(iron_ptr) != 0 {
+        let player = e.mem.u32(0x011d_ea3c);
+        e.call(0x008b_bc10, &args![player]).bool()
+    } else {
+        false
+    }
+}
+
+/// The condition arrows (+0x180) on a weapon change (`0x7725D0`): the exe shows them
+/// (`visible` 1); lStewieAl's Tweaks' S0120 (`OnChangeWeaponUpdateCndArrowsVisibility`) sets
+/// `visible` with `Tile::SetFloat` to the HUD's (`011d96c0`) visibility flags (+0x1BC) & 1
+/// (`kActionPoints`).
+fn condition_arrows_on_weapon_change(e: &mut Engine, arrows: u32) {
+    if e.stewie(stewie::HUD_CONDITION_ARROWS_FLAGS) {
+        let hud = e.mem.u32(0x011d_96c0);
+        let shown = e.mem.u32(hud + 0x1bc) & 1;
+        hud_set_float(e, arrows, 0xfa3, shown as f32);
+    } else {
+        hud_trait(e, arrows, 0xfa3, 1);
+    }
+}
+
+/// The projectile's weapon at `0x776EE2` (`SetInfoForRef`'s name of a projectile): the exe's
+/// `00476c90` (`sourceWeap`, +0xF8); lStewieAl's Tweaks' S0197 (`CrosshairProjectileNameFix`,
+/// `ProjectileGetSourceWeaponIfThrown`): that weapon only when it is a thrown one
+/// (`eWeaponType`, +0xF4, from 10, `kWeapType_OneHandGrenade`), else none.
+fn crosshair_projectile_weapon(e: &mut Engine, reference: u32) -> u32 {
+    if e.stewie(stewie::CROSSHAIR_THROWN_WEAPON_NAME) {
+        let weapon = e.mem.u32(reference + 0xf8);
+        if weapon != 0 && e.mem.u8(weapon + 0xf4) >= 10 {
+            weapon
+        } else {
+            0
+        }
+    } else {
+        e.call(0x0047_6c90, &args![reference]).u32()
+    }
+}
+
+/// `SetInfoForRef`'s projectile case at `0x77647F`: lStewieAl's Tweaks' S0038
+/// (`fixRockItLauncherProjectileDisplay`) jumps from there to `0x776731`, after the switch, so a
+/// projectile with an item (`009d9f00`) skips the exe's test of the item's and its own form type.
+fn rock_it_item_skips_the_form_test(e: &Engine, nested: u32) -> bool {
+    nested != 0 && e.stewie(stewie::ROCK_IT_PROJECTILE_PROMPT)
+}
+
+/// The dropped projectile's item at `0x777D55`: the exe's `009d9f00` (+0x144); lStewieAl's Tweaks'
+/// S0038 (`RockItProjectileHUDHook`): the display mask (`[ebp-0x58]`) gets 0xFE (the Take prompt
+/// shown) and +0x144 is read raw.
+fn rock_it_projectile_item(e: &mut Engine, dropped: u32, display_mask: &mut u32) -> u32 {
+    if e.stewie(stewie::ROCK_IT_PROJECTILE_PROMPT) {
+        *display_mask |= 0xfe;
+        e.mem.u32(dropped + 0x144)
+    } else {
+        e.call(0x009d_9f00, &args![dropped]).u32()
+    }
+}
+
+/// The enemy health bar's test of the action prompt (`0x770E62`..`0x770E78`): the prompt tile's
+/// (+0x9C) visibility is asked; the exe hides the bar while it shows, lStewieAl's Tweaks'
+/// S0022.42 writes a NOP over the `JNZ` (the answer not used).
+fn prompt_hides_health_bar(e: &mut Engine) -> bool {
+    let shown = hud_visible(e, 0x9c);
+    shown && !e.stewie(stewie::HUD_HEALTH_BAR_NOT_TIED_TO_PROMPT)
 }
 
 #[cfg(test)]
@@ -10275,7 +10418,7 @@ mod tests {
         let state: Ptr = Ptr::new(e.mem.alloc(8));
         e.mem.set_u8(state.addr() + 4, 1);
         e.call_log = Some(vec![]);
-        fn_00772aa0(&mut e, Ptr::new(0x2222), state);
+        fn_00772aa0(&mut e, state);
         assert!(e.call_log.as_ref().unwrap().is_empty());
     }
 
@@ -17986,5 +18129,273 @@ mod tests {
             &*calls.borrow(),
             &[(0x0084_54f0, vec![object, 1]), (0x0040_1030, vec![object]),]
         );
+    }
+
+    // ---- lStewieAl's Tweaks' rows (share 3, group 4): HUD ----
+
+    fn g4_pages(e: &mut Engine, addresses: &[u32]) {
+        for &address in addresses {
+            if !e.mem.is_mapped(address) {
+                e.map(address & !0xfff, 0x1000);
+            }
+        }
+    }
+
+    /// Row S0022.22 (`0x77268F`, `0x7726AC`): the low-condition label's alpha step a frame with the
+    /// HUD at full opacity (255). Off: 255 / 255 x 10 = 10 a frame at any frame rate (twice the
+    /// flashing at 120 fps). On: x 600 x the frame's seconds over the time scale: 10 at 60 fps,
+    /// 5 at 120 fps, 20 at 60 fps with the time scale 0.5.
+    #[test]
+    fn s0022_22_the_condition_flash_follows_time() {
+        for (on, fps, time_scale, wanted) in [
+            (false, 60.0f32, 1.0f32, 10.0f64),
+            (false, 120.0, 1.0, 10.0),
+            (true, 60.0, 1.0, 10.0),
+            (true, 120.0, 1.0, 5.0),
+            (true, 60.0, 0.5, 20.0),
+        ] {
+            let mut e = Engine::new();
+            g4_pages(
+                &mut e,
+                &[0x0101_e568, 0x0102_0758, 0x011f_63a0, 0x011a_c3a0],
+            );
+            e.mem.set_f64(0x0101_e568, 255.0);
+            e.mem.set_f64(0x0102_0758, 10.0);
+            e.mem.set_f32(0x011f_63a0, 1.0 / fps);
+            e.mem.set_f32(0x011a_c3a0, time_scale);
+            e.set_stewie(stewie::HUD_CONDITION_FLASH_FRAME_RATE, on);
+            let step = condition_flash_step(&e, 255.0);
+            assert!(
+                (step - wanted).abs() < 1e-3,
+                "row {on} {fps} fps scale {time_scale}: {step}"
+            );
+        }
+    }
+
+    /// A HUD (`011d96c0`) of 0x400 bytes, the calls logged.
+    fn g4_hud(e: &mut Engine) -> u32 {
+        g4_pages(e, &[0x011d_96c0, 0x011d_979c, 0x0101_e568]);
+        let hud = e.mem.alloc(0x400);
+        e.mem.set_u32(0x011d_96c0, hud);
+        e.mem.set_f64(0x0101_e568, 255.0);
+        e.call_log = Some(vec![]);
+        hud
+    }
+
+    fn g4_calls(e: &Engine, at: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == at)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// Row S0022.35 (`0x7792F9`, `0x779F1F`): on, the HUD opacity (`011d979c`, 200) is kept, set to
+    /// the compass window's `alpha` (0xFA9: 128) for the update, the largest alpha is opacity x 128;
+    /// after it the opacity is 200 again and the player's cell is +0x40 read raw. Off: opacity x 255
+    /// and `008d6f30`, the opacity untouched.
+    #[test]
+    fn s0022_35_the_compass_follows_its_alpha() {
+        for on in [false, true] {
+            let mut e = Engine::new();
+            g4_hud(&mut e);
+            e.mem.set_f32(0x011d_979c, 200.0);
+            e.set_stewie(stewie::HUD_COMPASS_FOLLOWS_ITS_ALPHA, on);
+            e.register_double(0x00a0_11b0, |_, a| Ret {
+                st0: if a[1] == 0xfa9 { 128.0 } else { 0.0 },
+                ..Ret::default()
+            });
+            e.register_double(0x008d_6f30, |_, _| Ret {
+                eax: 0x4400,
+                ..Ret::default()
+            });
+            let player = e.mem.alloc(0x100);
+            e.mem.set_u32(player + 0x40, 0x4500);
+            let (max_alpha, kept) = compass_max_alpha(&mut e, 0x6000, 0.5);
+            if on {
+                assert_eq!(max_alpha, 64.0);
+                assert_eq!(e.mem.f32(0x011d_979c), 128.0);
+                assert_eq!(g4_calls(&e, 0x00a0_11b0), vec![vec![0x6000, 0xfa9]]);
+            } else {
+                assert_eq!(max_alpha, 127.5);
+                assert_eq!(e.mem.f32(0x011d_979c), 200.0);
+                assert!(g4_calls(&e, 0x00a0_11b0).is_empty());
+            }
+            let cell = compass_player_cell(&mut e, kept, player);
+            assert_eq!(e.mem.f32(0x011d_979c), 200.0, "row {on}");
+            assert_eq!(cell, if on { 0x4500 } else { 0x4400 });
+            assert_eq!(g4_calls(&e, 0x008d_6f30).len(), usize::from(!on));
+        }
+    }
+
+    /// Row S0072 (`0x772D36`): off, the setting `011d8a0c`'s byte (through `00408d60`) blocks;
+    /// on, the value words `011d8a10` or `011e098c` block and the byte is not asked. `enabled`
+    /// false blocks either way.
+    #[test]
+    fn s0072_the_health_bar_settings_hide_it() {
+        // (row, byte, word 8a10, word 098c, enabled, blocked)
+        for (on, byte, first, second, enabled, blocked) in [
+            (false, 1u8, 0u32, 0u32, true, true),
+            (false, 0, 1, 1, true, false),
+            (true, 1, 0, 0, true, false),
+            (true, 0, 1, 0, true, true),
+            (true, 0, 0, 1, true, true),
+            (true, 0, 0, 0, false, true),
+            (false, 0, 0, 0, false, true),
+        ] {
+            let mut e = Engine::new();
+            g4_hud(&mut e);
+            g4_pages(&mut e, &[0x011d_8a10, 0x011e_098c, 0x011d_ea3c]);
+            e.mem.set_u32(0x011d_8a10, first);
+            e.mem.set_u32(0x011e_098c, second);
+            let flags = e.mem.alloc(8);
+            e.mem.set_u8(flags, byte);
+            e.mem.set_u8(flags + 4, 0);
+            e.register_double(0x0040_8d60, move |_, a| Ret {
+                eax: if a[0] == 0x011d_8a0c {
+                    flags
+                } else {
+                    flags + 4
+                },
+                ..Ret::default()
+            });
+            e.set_stewie(stewie::HEALTH_BAR_SETTING_HIDES, on);
+            assert_eq!(
+                target_blocked_by_settings(&mut e, enabled),
+                blocked,
+                "row {on} byte {byte} words {first} {second} enabled {enabled}"
+            );
+            let asked = g4_calls(&e, 0x0040_8d60).contains(&vec![0x011d_8a0c]);
+            assert_eq!(asked, !on, "row {on}");
+        }
+    }
+
+    /// Row S0120 (`0x7725D0`): on a weapon change the condition arrows' `visible` (0xFA3) is set
+    /// with `Tile::SetFloat` (`00a012d0`) to the HUD flags (+0x1BC) & 1 with the row on; off, the
+    /// exe's `00700320` with 1.
+    #[test]
+    fn s0120_the_condition_arrows_follow_the_hud_flags() {
+        for (flags, wanted) in [(0u32, 0.0f32), (3, 1.0), (2, 0.0)] {
+            let mut e = Engine::new();
+            let hud = g4_hud(&mut e);
+            e.mem.set_u32(hud + 0x1bc, flags);
+            e.set_stewie(stewie::HUD_CONDITION_ARROWS_FLAGS, true);
+            e.register_double(0x00a0_12d0, |_, _| Ret::default());
+            condition_arrows_on_weapon_change(&mut e, 0x6100);
+            assert_eq!(
+                g4_calls(&e, 0x00a0_12d0),
+                vec![vec![0x6100, 0xfa3, wanted.to_bits(), 1]],
+                "flags {flags}"
+            );
+            assert!(g4_calls(&e, 0x0070_0320).is_empty());
+        }
+        let mut e = Engine::new();
+        g4_hud(&mut e);
+        e.register_double(0x0070_0320, |_, _| Ret::default());
+        condition_arrows_on_weapon_change(&mut e, 0x6100);
+        assert_eq!(g4_calls(&e, 0x0070_0320), vec![vec![0x6100, 0xfa3, 1]]);
+        assert!(g4_calls(&e, 0x00a0_12d0).is_empty());
+    }
+
+    /// Row S0197 (`0x776EE2`): on, the projectile's `sourceWeap` (+0xF8) only when its
+    /// `eWeaponType` (+0xF4) is 10 or more (thrown), else 0, `00476c90` not called; off,
+    /// `00476c90`'s answer.
+    #[test]
+    fn s0197_only_thrown_weapons_name_a_projectile() {
+        for (on, kind, wanted) in [
+            (true, 10u8, true),
+            (true, 13, true),
+            (true, 9, false),
+            (false, 9, true),
+        ] {
+            let mut e = Engine::new();
+            g4_hud(&mut e);
+            let projectile = e.mem.alloc(0x200);
+            let weapon = e.mem.alloc(0x200);
+            e.mem.set_u32(projectile + 0xf8, weapon);
+            e.mem.set_u8(weapon + 0xf4, kind);
+            e.register_double(0x0047_6c90, move |_, _| Ret {
+                eax: weapon,
+                ..Ret::default()
+            });
+            e.set_stewie(stewie::CROSSHAIR_THROWN_WEAPON_NAME, on);
+            let got = crosshair_projectile_weapon(&mut e, projectile);
+            assert_eq!(got, if wanted { weapon } else { 0 }, "row {on} type {kind}");
+            assert_eq!(g4_calls(&e, 0x0047_6c90).len(), usize::from(!on));
+        }
+        let mut e = Engine::new();
+        g4_hud(&mut e);
+        let projectile = e.mem.alloc(0x200);
+        e.set_stewie(stewie::CROSSHAIR_THROWN_WEAPON_NAME, true);
+        assert_eq!(crosshair_projectile_weapon(&mut e, projectile), 0);
+    }
+
+    /// Row S0038 (`0x777D55`): on, the display mask gets 0xFE and the item is the projectile's
+    /// +0x144 read raw; off, `009d9f00`'s answer and the mask unchanged.
+    #[test]
+    fn s0038_the_rock_it_projectile_shows_take() {
+        for on in [false, true] {
+            let mut e = Engine::new();
+            g4_hud(&mut e);
+            let projectile = e.mem.alloc(0x200);
+            e.mem.set_u32(projectile + 0x144, 0x7700);
+            e.register_double(0x009d_9f00, |_, _| Ret {
+                eax: 0x7800,
+                ..Ret::default()
+            });
+            e.set_stewie(stewie::ROCK_IT_PROJECTILE_PROMPT, on);
+            let mut mask = 0x101;
+            let item = rock_it_projectile_item(&mut e, projectile, &mut mask);
+            assert_eq!(item, if on { 0x7700 } else { 0x7800 });
+            assert_eq!(mask, if on { 0x1ff } else { 0x101 });
+        }
+    }
+
+    /// Row S0038 (`0x77647F`): a projectile with an item skips the form test with the row on;
+    /// without an item, or off, it does not.
+    #[test]
+    fn s0038_the_rock_it_projectile_skips_the_form_test() {
+        for (on, nested, skips) in [
+            (false, 0x7800u32, false),
+            (true, 0x7800, true),
+            (true, 0, false),
+        ] {
+            let e = Engine::new();
+            e.set_stewie(stewie::ROCK_IT_PROJECTILE_PROMPT, on);
+            assert_eq!(
+                rock_it_item_skips_the_form_test(&e, nested),
+                skips,
+                "row {on} {nested:x}"
+            );
+        }
+    }
+
+    /// Row S0022.42 (`0x770E78`): the prompt tile's (+0x9C) `visible` is asked either way; shown,
+    /// it hides the enemy health bar with the row off, not with it on.
+    #[test]
+    fn s0022_42_the_prompt_does_not_hide_the_health_bar() {
+        for (on, shown, hides) in [
+            (false, 1u32, true),
+            (false, 0, false),
+            (true, 1, false),
+            (true, 0, false),
+        ] {
+            let mut e = Engine::new();
+            let hud = g4_hud(&mut e);
+            e.mem.set_u32(hud + 0x9c, 0x6200);
+            e.register_double(0x00a0_1230, move |_, _| Ret {
+                eax: shown,
+                ..Ret::default()
+            });
+            e.set_stewie(stewie::HUD_HEALTH_BAR_NOT_TIED_TO_PROMPT, on);
+            assert_eq!(
+                prompt_hides_health_bar(&mut e),
+                hides,
+                "row {on} shown {shown}"
+            );
+            assert_eq!(g4_calls(&e, 0x00a0_1230), vec![vec![0x6200, 0xfa3]]);
+        }
     }
 }

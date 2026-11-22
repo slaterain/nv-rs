@@ -339,6 +339,8 @@ pub fn ov_open_callbacks(
         "ov_open_callbacks with initial bytes is not provided"
     );
     let p = precision(e, "ov_open_callbacks");
+    // The hitch log's count (`engine_core::hitch`): a sound opened for decoding.
+    engine_core::hitch::one(engine_core::hitch::Count::SoundsOpened);
     let seekable = seek != 0 && e.call(seek, &[source, 0, 0, SEEK_CUR]).u32() as i32 != -1;
     assert!(
         seekable && tell != 0,

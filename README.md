@@ -29,6 +29,8 @@ rates, fast loading, far fewer crashes, built-in modding and more platforms.
 **[Download the Windows preview](https://github.com/slaterain/nv-rs/releases)**. You need
 Fallout: New Vegas (version 1.4.0.525; only the Steam version has been tested so far) on a Windows PC.
 
+Builds from source (not yet the preview) also recognize one GOG build: the en-US offline installer 1.4.0.525(a), build 55068 (see [GOG compatibility](docs/GOG_55068.md)).
+
 1. Extract the ZIP to a folder of its own, for example `C:\Games\nv-rs`.
 2. Double-click `Play.exe`. The launcher opens, in the look of the game's terminals; `> Play` finds
    your game and starts it.
@@ -66,10 +68,10 @@ shows what's left. Each name links to the detail in [docs/STATUS.md](docs/STATUS
 | ✅ | [**Windows preview**](docs/STATUS.md#windows-preview) | [Released](https://github.com/slaterain/nv-rs/releases); run on one PC so far. |
 | 🔨 | [**Native 64-bit code**](docs/STATUS.md#native-64-bit-code) | Started: threads on their own cores, textures and sounds kept outside the 32-bit memory, and the first hot paths as native code (the script evaluator, the world draw's device calls, the actors' per-frame loops). |
 | 🔨 | [**Built-in script extender: xNVSE**](docs/STATUS.md#xnvse-built-in) | All 654 of its script commands and both its script languages, with nothing to install. |
-| 🔨 | [**Built-in script extender: JIP LN:**](docs/STATUS.md#jip-ln-built-in) | All its script commands (JIP LN: 1,116 and its two version commands) and 171 of its game patches (one more waits for the 64-bit move; eight are left out on purpose); off by default, for testing. |
-| 🔨 | [**Mod Configuration Menu (MCM)**](docs/STATUS.md#mod-configuration-menu-mcm-built-in) | The commands MCM's menu needs; off until it is tried in the game. |
-| 🔨 | [**UI Organizer (UIO)**](docs/STATUS.md#ui-organizer-uio-built-in) | UI mods' HUD and menu additions; off until it is proven in the game. |
-| 🔨 | [**lStewieAl's Tweaks**](docs/STATUS.md#lstewieals-tweaks-built-in) | 140 of its changes: 72 crash and leak fixes and 68 other fixes and tweaks, on by default; the remaining crash fixes and tweaks come next. |
+| 🔨 | [**Built-in script extender: JIP LN:**](docs/STATUS.md#jip-ln-built-in) | All its script commands (JIP LN: 1,116 and its two version commands) and 171 of its game patches (one more waits for the 64-bit move; eight are left out on purpose); on in the default fixes preset, off in vanilla (`bJIPInstalled=0` turns it off). |
+| 🔨 | [**Mod Configuration Menu (MCM)**](docs/STATUS.md#mod-configuration-menu-mcm-built-in) | The commands MCM's menu needs; on in the default fixes preset (`bMCM=0` turns it off). |
+| 🔨 | [**UI Organizer (UIO)**](docs/STATUS.md#ui-organizer-uio-built-in) | UI mods' HUD and menu additions; on in the default fixes preset (`bUIO=0` turns it off). |
+| 🔨 | [**lStewieAl's Tweaks**](docs/STATUS.md#lstewieals-tweaks-built-in) | 158 of its changes: 72 crash and leak fixes and 86 other fixes and tweaks, on by default; the remaining crash fixes and tweaks come next. |
 | 🔨 | [**Mod installers (FOMOD)**](docs/STATUS.md#mod-installers-fomod) | Mods with an installer, from .zip or .7z, installed into nv-rs's own folder, never the game's. |
 | 🔨 | [**One launcher**](docs/STATUS.md#the-launcher) | `Play.exe` opens a window like the game's terminals to play and change settings; mods move in next. |
 | 🔨 | [**Modern graphics (wgpu)**](docs/STATUS.md#modern-graphics-wgpu) | The default renderer, on Vulkan; in the places compared, on one NVIDIA card, its pictures nearly match Direct3D 9's, and at 8x antialiasing it is about 8% slower. |

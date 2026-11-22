@@ -45,3 +45,21 @@ pub fn message(e: &mut Engine, text: &[u8]) {
         e.ext::<Nvse>().log.made = true;
     }
 }
+
+/// Another plugin's log built in (JohnnyGuitar's `JohnnyGuitarNVSE.log`), written as this one is:
+/// made anew, through the game's file calls (so where the platform layer keeps the game's files,
+/// never the player's folder), text mode (`\n` written as `\r\n`), in one write. False when the
+/// game's file calls are not there or the file cannot be made.
+pub fn write_file(e: &mut Engine, path: &[u8], text: &[u8]) -> bool {
+    if !can_write(e) {
+        return false;
+    }
+    let mut out = Vec::with_capacity(text.len() + text.len() / 32);
+    for &b in text {
+        if b == b'\n' {
+            out.push(b'\r');
+        }
+        out.push(b);
+    }
+    crate::commands::array::write_text_file(e, path, false, &out)
+}
