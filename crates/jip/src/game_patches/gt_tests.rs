@@ -21,6 +21,14 @@ fn with(row: bool, installed: bool) -> Engine {
     let mut e = engine();
     e.map(TEXTS, 0x10_0000);
     e.map(STRING_TABLE & !0xfff, 0x1000);
+    // No settings file (JIP's defaults), and the topic lookup another group wraps.
+    e.register(0x00fd_f088, |_, _| Ret {
+        eax: 0xffff_ffff,
+        ..Ret::default()
+    });
+    if !e.is_registered(0x0061_a310) {
+        e.register(0x0061_a310, |_, _| Ret::default());
+    }
     crate::install_as(&mut e, installed);
     super::super::set_row(&mut e, row);
     e
