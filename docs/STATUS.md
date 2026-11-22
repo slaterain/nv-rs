@@ -236,7 +236,8 @@ purpose (below; that list also names Enhanced Camera's patch, which is not one o
   shape, `SetScale` clamped, the weapon node cleared, clouds after leaving a building, the water
   lookup, save and global fixes, fresh mod logs, markers by id, magic effect fixes, loading screens
   made for a place (`bLoadScreenFix`), JIP's light data (flicker and pulse, light editor ids,
-  lights tagged in mod meshes).
+  lights tagged in mod meshes), the process lists' time refresh made at JIP's deferred start
+  instead of at the game's start-up.
 - **Weapons and models:** a modded weapon's "+" in the crosshair, modded weapons' "Name+" in every
   item list, NPCs showing their weapon mods and random NPC weapon mods (`bNPCWeaponMods`), the gun
   wobble as JIP works it out (and the actors a script spares it), body slots a script hides in
@@ -266,7 +267,7 @@ Not yet:
 - Its fixed-string pool: it waits for the 64-bit move.
 
 Left out on purpose: two patches that only make the game faster; the editor's, NVAC's and Enhanced
-Camera's patches; a start-up order change; JIP's own start-up; and one that xNVSE already makes.
+Camera's patches; JIP's own start-up; and one that xNVSE already makes.
 
 ## Mod Configuration Menu (MCM) built in
 
