@@ -1747,7 +1747,7 @@ pub fn tes_load_grid_cell(
         e.call(0x0049_c860, &args![cell]);
     }
     drop(water_timed);
-    let land_timed = Timed::main(Hitch::GridLandNs);
+    let _land_borders = Timed::main(Hitch::GridLandNs);
     let show_borders = e.mem.u8(this.addr() + TES::bShowLANDborders.off);
     e.call(0x0053_fa40, &args![land, show_borders]);
 }
