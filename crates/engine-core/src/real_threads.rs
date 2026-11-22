@@ -397,6 +397,20 @@ struct Seen {
     at: std::time::Instant,
 }
 
+/// A platform function's name for the hitch log: its import name, else its kind of platform code and the offset in
+/// that kind's range (a COM object's method: "DirectShow platform object +0x30"), else empty.
+fn call_words(w: &World, call: u32) -> String {
+    if call == 0 {
+        return String::new();
+    }
+    if let Some(name) = w.import_names.get(&call) {
+        return name.to_string();
+    }
+    crate::profile::platform_kind(call).map_or_else(String::new, |(kind, base)| {
+        format!("{kind} +{:#x}", call - base)
+    })
+}
+
 /// A [`KernelLock::holder_site`] number as `file:line` (empty for 0).
 fn site_words(site: usize) -> String {
     if site == 0 {
@@ -513,10 +527,7 @@ impl KernelLock {
                 .cpu_ns
                 .zip(crate::thread_cpu::cpu_ns(seen.thread))
                 .map(|(before, after)| after.saturating_sub(before));
-            let call_name = w
-                .import_names
-                .get(&seen.call)
-                .map_or_else(String::new, |n| n.to_string());
+            let call_name = call_words(w, seen.call);
             crate::hitch::lock_holder(crate::hitch::LockHolder {
                 section: 0,
                 thread: seen.thread,
@@ -2163,10 +2174,7 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
                     thread,
                     start: crate::thread_cpu::start_of(thread),
                     call,
-                    call_name: w
-                        .import_names
-                        .get(&call)
-                        .map_or_else(String::new, |n| n.to_string()),
+                    call_name: call_words(w, call),
                     wait_ns: ns,
                     measured_ns: ns,
                     cpu_ns: cpu_before
