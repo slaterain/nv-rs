@@ -66,6 +66,83 @@ pub const SUN_LIGHT_DIRECTION: Row = fix(7);
 /// character's on-stairs flag; the exe masks the bit away or compares `(bit set) == 0x40`.
 pub const STAIR_MATERIAL: Row = fix(8);
 
+// ---- Group K: the interface manager's input (Tweaks' `MenuFixes.cpp` and `patches.h`) ----
+
+/// S0021 `patchSaveInventoryScrollPositionWhenClosingPipBoy` (`Menu::StartFadeOut` `00a1d910`'s
+/// call at `0xA1D97C`; the Pip-Boy close request `0070f690`'s end `0x70F6D3`): the inventory list's
+/// scroll place is saved (`InventoryMenu::SaveCurrentTabScrollPosition` `0077ffd0`) when the
+/// inventory menu closes with an item selected and whenever the Pip-Boy is asked to close while the
+/// inventory menu is shown.
+pub const INVENTORY_SCROLL_KEPT: Row = fix(9);
+/// S0022.03 (`MenuFixes::InitHooks`, `IsShiftHeld` at `0x715563` in `007154b0`): a key press's
+/// character is looked up with shift as the keyboard has it now (xNVSE's raw key state of either
+/// shift key), not the interface manager's `bShiftDown`.
+pub const TEXT_SHIFT_HELD_NOW: Row = fix(10);
+/// S0022.05 (`InterfaceManager__HandleKeyPressHook` at `0x70F8BB` in `DoGamepadEvent` `0070f6e0`):
+/// an arrow key or shift-left/right handed to the frontmost menu clears `bMouseInMotion`, so the
+/// mouse no longer takes the selection back.
+pub const ARROW_KEYS_OVER_MOUSE: Row = fix(11);
+/// S0022.32 (bytes at `0x710624` and `0x71085F` in `GetTopGamepadButton` `00710060`): with no pad
+/// button acting, the repeat time is cleared to -1 instead of twice the tick count.
+pub const GAMEPAD_REPEAT_CLEARED: Row = fix(12);
+/// S0022.38 (bytes at `0x7119CF`, `0x711A2B`, `0x711A37`, `0x711A44`; calls at `0x7119D8`,
+/// `0x7119E7` in `007118d0`): with a controller and the cursor shown, the left thumbstick (inside
+/// the deadzone `[0x717B90]` nothing) moves the cursor, the mouse's movement added to it.
+pub const CONSOLE_THUMBSTICK_CURSOR: Row = fix(13);
+/// S0022.53 (`L3PressedHook` at `0x7104A1`, `R3PressedHook` at `0x7104B0` in
+/// `GetTopGamepadButton`): L3 and R3 reach the frontmost menu (its `HandleControllerInput`) unless
+/// the start menu's control mapping waits for a key.
+pub const MENU_L3_R3: Row = fix(14);
+/// S0046 `patchFixPipboyLightStayingOnWhenViewing` (`PipboyManager__SetLightEffect` at `0x70EFCD`
+/// in `UpdatePipboy` `0070ee80`): raising the Pip-Boy fades its light also when the screen's light
+/// effect is still lit though the manager says it is off.
+pub const PIPBOY_LIGHT_FADE: Row = fix(15);
+/// S0059 `patchShowSelectedMeshPathInConsoleIfMissing` (`OnSelectedRefPrintHook` at `0x710C41` in
+/// `DisplayCurrentPickRef` `00710ad0`): the console's selected reference shows its base form's model
+/// path on a line of its own, with `[Extra Console Details] bMeshPath` or when its model is missing.
+pub const CONSOLE_MESH_PATH: Row = fix(16);
+
+/// The player (`PlayerCharacter *`).
+const PLAYER: u32 = 0x011d_ea3c;
+
+/// S0059, Tweaks' `OnSelectedRefPrint`: the model path line the console shows for `reference` (its
+/// base form's, `+0x20`, through xNVSE's `GetModelPath`; 0 for none or an empty one), asked only
+/// with `[Extra Console Details] bMeshPath` or when the reference's 3D is the missing-model marker
+/// ([`missing_model_marker`]); else 0.
+pub fn mesh_path_line(e: &mut Engine, reference: u32) -> u32 {
+    if !e.stewie_mesh_path() && !missing_model_marker(e, reference) {
+        return 0;
+    }
+    let base = e.mem.u32(reference.wrapping_add(0x20));
+    super::model_path(e, base)
+}
+
+/// Tweaks' `IsRefMissingMeshMarker`: the reference's node (xNVSE's `GetNiNode`: the render state's,
+/// `+0x64` then `+0x14`, or the player's own node `+0x694` while `is3rdPersonVisible` `+0x64A`)
+/// is named `marker_error`, compared without case (`_stricmp`).
+fn missing_model_marker(e: &mut Engine, reference: u32) -> bool {
+    let state = e.mem.u32(reference.wrapping_add(0x64));
+    if state == 0 {
+        return false;
+    }
+    let player = e.mem.u32(PLAYER);
+    let node = if reference == player && e.mem.u8(player.wrapping_add(0x64a)) != 0 {
+        e.mem.u32(player.wrapping_add(0x694))
+    } else {
+        e.mem.u32(state.wrapping_add(0x14))
+    };
+    if node == 0 {
+        return false;
+    }
+    let name = e.mem.u32(node.wrapping_add(8));
+    if name == 0 {
+        return false;
+    }
+    let marker = b"marker_error\0";
+    (0..marker.len() as u32)
+        .all(|i| e.mem.u8(name.wrapping_add(i)).to_ascii_lowercase() == marker[i as usize])
+}
+
 /// `TESForm::GetFile` (`00484e60`, `thiscall`): the form's file at an index, `-1` the last one.
 const FORM_GET_FILE: u32 = 0x0048_4e60;
 /// `ModInfo::name` (`char[0x104]` at `+0x20`, xNVSE's `GameData.h`).

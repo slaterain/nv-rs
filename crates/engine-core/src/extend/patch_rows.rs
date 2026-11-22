@@ -34,6 +34,7 @@ mod gk;
 mod gl;
 mod gp;
 mod gs;
+mod gt;
 mod gw;
 mod gx;
 mod jg;
@@ -53,6 +54,7 @@ pub(super) const SITES: &[&[Entry]] = &[
     gk::SITES,
     gp::SITES,
     gs::SITES,
+    gt::SITES,
     gw::SITES,
     gx::SITES,
     cmds::SITES,
@@ -74,6 +76,7 @@ pub(super) const WRAPS: &[&[Entry]] = &[
     gk::WRAPS,
     gp::WRAPS,
     gs::WRAPS,
+    gt::WRAPS,
     gw::WRAPS,
     gx::WRAPS,
     cmds::WRAPS,

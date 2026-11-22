@@ -96,6 +96,8 @@ Start
    the terminal, as ./play.sh.
    It plays the game's own terminal sounds, read from your installed game (Settings > Launcher
    sounds turns them off).
+   macOS moves the sound to a new default device by itself (a headset plugged in); nv-rs leaves
+   it to macOS and opens a new stream only if the device is reported gone. Not tried on a Mac yet.
    The window has no title bar: drag it by its background (anywhere but an entry) to move it;
    > Exit or Esc on the first screen closes it.
 
@@ -105,7 +107,8 @@ Terminal window, and press Enter. nv-rs remembers it.
   ./play.sh                  start
   ./play.sh --game FOLDER    use the game in FOLDER, and remember it
   ./play.sh --forget-game    forget the remembered game folder (it asks again)
-  ./play.sh --import-saves   offer again to copy saves found in CrossOver's bottles
+  ./play.sh --import-saves   offer again to copy saves found in CrossOver's bottles, then stop
+                             (the launcher's Import saves runs the same)
   ./play.sh --check          only check your game's version and say whether it can start
   ./play.sh --mods           play with mods: the installed ones, then those you put in the "my
                              mods" folder in nv-rs's own folder (as they would go in Data; it
@@ -118,6 +121,7 @@ Terminal window, and press Enter. nv-rs remembers it.
                              answer its installer's questions (type what each line says; Enter
                              keeps the recommended choice); it goes to nv-rs's own folder, and
                              --mods plays with it. Also lists and removes installed mods
+                             (the launcher's Mods entry runs the same installer in its window)
 
 
 Your files
