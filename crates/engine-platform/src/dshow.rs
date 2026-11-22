@@ -1244,7 +1244,7 @@ mod tests {
             2,
             "SyncRead without the lock"
         );
-        let at = graph_of(&mut e, Ptr::new(fg));
+        let at = graph_of(&e, Ptr::new(fg));
         assert_eq!(graph(&mut e, at).stream_bytes, size, "the whole track read");
     }
 
