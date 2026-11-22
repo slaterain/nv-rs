@@ -502,6 +502,11 @@ pub enum Entry {
     Mismatch { object: u32 },
 }
 
+/// How many threads have a walk log or a check record open now: the one relaxed load
+/// [`walking`] and [`recording`] make before any thread-local lookup, so with the switch off every
+/// downward pass and blend collision update pays only that load.
+static ACTIVE: AtomicUsize = AtomicUsize::new(0);
+
 thread_local! {
     /// While this thread walks an actor on a helper's engine (or main's own share): its log.
     static LOG: RefCell<Option<Vec<Entry>>> = const { RefCell::new(None) };
@@ -513,13 +518,13 @@ thread_local! {
 /// collision object ask, so that they log instead of running what main must run).
 #[inline(always)]
 pub fn walking() -> bool {
-    LOG.with(|l| l.borrow().is_some())
+    ACTIVE.load(Relaxed) != 0 && LOG.with(|l| l.borrow().is_some())
 }
 
 /// Whether main records the serial pass's Havok parts now (check mode).
 #[inline(always)]
 pub fn recording() -> bool {
-    RECORD.with(|l| l.borrow().is_some())
+    ACTIVE.load(Relaxed) != 0 && RECORD.with(|l| l.borrow().is_some())
 }
 
 fn push(entry: Entry) {
@@ -1005,9 +1010,11 @@ fn walk_on_helpers(e: &mut Engine, items: &[Item], walk: &[usize], base: u32) ->
             let i = walk[k];
             let item = &items[i];
             let data = base + ITEM_WORDS * idx(i);
+            ACTIVE.fetch_add(1, Relaxed);
             LOG.with(|l| *l.borrow_mut() = Some(Vec::new()));
             walk_actor(w, item.root, data);
             let log = LOG.with(|l| l.borrow_mut().take()).unwrap_or_default();
+            ACTIVE.fetch_sub(1, Relaxed);
             *logs[k]
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(log);
@@ -1239,9 +1246,11 @@ fn check_stretch(
             serial_actor(e, item);
             continue;
         }
+        ACTIVE.fetch_add(1, Relaxed);
         RECORD.with(|l| *l.borrow_mut() = Some(Vec::new()));
         serial_actor(e, item);
         let made = RECORD.with(|l| l.borrow_mut().take()).unwrap_or_default();
+        ACTIVE.fetch_sub(1, Relaxed);
         let log = &logs[next];
         let (inside, above) = logged_sets(e, log, item.root);
         CHECKED.fetch_add(1, Relaxed);
