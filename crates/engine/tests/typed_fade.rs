@@ -80,9 +80,8 @@ fn culling_fade_on_visible() {
     Diff::new(entry!(0x00b4_e490, fade::on_visible(Ptr<_>, Ptr<_>)))
         .family(&culling::CULLING)
         .family(&leaf::LEAVES)
-        // `_CIsqrt` (and on a NaN its error path's `GetLastError`, `00fdf094`) and the two float
-        // getters: the typed function does them in place.
-        .ignore_calls(&[0x00ec_6040, 0x0040_ebd0, 0x0040_4010, 0x00fd_f094])
+        // `_CIsqrt` and the two float getters: the typed function does them in place.
+        .ignore_calls(&[0x00ec_6040, 0x0040_ebd0, 0x0040_4010])
         .inputs(&[
             Input::Flag,
             Input::Of(&[0, 0x8000, 0x4000, 0x1000_0000, 0x1000_4000]),
@@ -120,7 +119,12 @@ fn culling_fade_on_visible() {
             ] {
                 e.register(addr, f);
             }
-            e.register_double(0x00fd_f094, |_, _| Ret::default());
+            // `_CIsqrt`: the root of the double it is handed, in ST0 (the C runtime's own error
+            // path on a NaN reaches statics this test does not lay out).
+            e.register(0x00ec_6040, |_, a| Ret {
+                st0: f64::from_bits(u64::from(a[0]) | (u64::from(a[1]) << 32)).sqrt(),
+                ..Ret::default()
+            });
             // The statics.
             e.mem.set_u8(0x011a_d7b4, case.word(0) as u8);
             words(e, 0x011a_d7b8, &MULTIPLIERS);
