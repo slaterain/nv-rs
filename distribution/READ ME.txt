@@ -23,7 +23,9 @@ Play.exe opens nv-rs's launcher: a window in the look of the game's own terminal
 and lines are read from your installed game). Choose with the arrow keys and Enter, or the mouse:
 > Play starts the game, > Play with mods (shown when you have mods) plays with them, > Mods
 installs a mod from its archive in the mods folder (or removes one), answering its questions at
-the launcher's prompt, > Settings
+the launcher's prompt, > Import saves (shown when Documents\My Games\FalloutNV\Saves has
+saves) copies them into nv-rs's own folder, each with its .nvse file, asking before it replaces a
+different save of the same name (yours in Documents are only read), > Settings
 has the window or borderless, resolution, anti-aliasing, game fixes, frame limit and more (and a
 Testing list of what is still being tried), saved at once for the next start; > Exit closes
 it. The window has no title bar: drag it by its background (anywhere but an entry) to move it;
