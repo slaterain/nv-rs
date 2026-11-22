@@ -9673,25 +9673,25 @@ fn clear_automatic_firing(e: &mut Engine) {
 /// its answer true means activated (no "no activate" sound). lStewieAl's Tweaks' row S0022.21
 /// (`MenuFixes`, its `OnActivateRefShouldSkipNoActivateSound`): the activation runs as the exe's,
 /// and a reference whose base form (+0x20) is the workbench (`00075005`) or the reloading bench
-/// (`0015361F`, form id at +0xC) counts as activated too.
+/// (`0015361F`, form id at +0xC) counts as activated too. As in Tweaks, the base form is read
+/// before the activation runs.
 fn activate_or_workbench(
     e: &mut Engine,
     reference: u32,
     this: Ptr<PlayerCharacter>,
     activator: u32,
 ) -> bool {
+    let workbench = e
+        .stewie(engine_core::extend::stewie::WORKBENCH_NO_ACTIVATE_SOUND)
+        .then(|| {
+            let base = e.mem.u32(reference + 0x20);
+            let id = if base != 0 { e.mem.u32(base + 0xc) } else { 0 };
+            id == 0x0007_5005 || id == 0x0015_361f
+        });
     let activated = e
-        .call(
-            0x0057_3170,
-            &args![reference, this, 0u32, 0u32, activator],
-        )
+        .call(0x0057_3170, &args![reference, this, 0u32, 0u32, activator])
         .bool();
-    if !e.stewie(engine_core::extend::stewie::WORKBENCH_NO_ACTIVATE_SOUND) {
-        return activated;
-    }
-    let base = e.mem.u32(reference + 0x20);
-    let id = if base != 0 { e.mem.u32(base + 0xc) } else { 0 };
-    activated || id == 0x0007_5005 || id == 0x0015_361f
+    activated || workbench == Some(true)
 }
 
 /// The level-up test of `PlayerCharacter::Update` (`0x9439D4`, `005c7870`: the player in character
@@ -20392,7 +20392,11 @@ mod tests {
             let map = e.mem.alloc(0x200);
             e.mem.set_u32(map + 0x118, u32::from(marker) * 0x6600);
             e.set_global(MAP_MENU, if menu { map } else { 0 });
-            assert_eq!(jump_blocked(&mut e, this), blocked, "on {on} menu {menu} marker {marker}");
+            assert_eq!(
+                jump_blocked(&mut e, this),
+                blocked,
+                "on {on} menu {menu} marker {marker}"
+            );
             assert_eq!(called(&e, 0x005a_03f0).is_empty(), blocked, "on {on}");
         }
     }
@@ -20412,7 +20416,10 @@ mod tests {
             (true, 1, true, false, false),
         ] {
             let mut e = engine();
-            e.set_stewie(engine_core::extend::stewie::NO_AUTO_VANITY_IN_SPECIAL_IDLE, on);
+            e.set_stewie(
+                engine_core::extend::stewie::NO_AUTO_VANITY_IN_SPECIAL_IDLE,
+                on,
+            );
             e.map(0x011e_0000, 0x1000);
             e.map(0x011d_e000, 0x1000);
             e.mem.set_u32(IDLE_OBJECT_011E09E0 + 4, disabled);
@@ -20449,7 +20456,10 @@ mod tests {
             (true, true, false, false, true),
         ] {
             let mut e = engine();
-            e.set_stewie(engine_core::extend::stewie::NO_LEVELUP_IN_TEST_ALL_CELLS, on);
+            e.set_stewie(
+                engine_core::extend::stewie::NO_LEVELUP_IN_TEST_ALL_CELLS,
+                on,
+            );
             e.map(0x011d_e000, 0x1000);
             e.register(0x005c_7870, |e, a| int(u32::from(e.mem.u8(a[0] + 0x75c))));
             let this = player(&mut e);
@@ -20458,7 +20468,11 @@ mod tests {
             e.mem.set_u8(tes + 0x51, u8::from(test_51));
             e.mem.set_u8(tes + 0x52, u8::from(test_52));
             e.set_global(TES_SINGLETON, tes);
-            assert_eq!(levelup_held(&mut e, this), held, "on {on} chargen {chargen}");
+            assert_eq!(
+                levelup_held(&mut e, this),
+                held,
+                "on {on} chargen {chargen}"
+            );
         }
     }
 
