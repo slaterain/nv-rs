@@ -124,10 +124,16 @@ pub enum Count {
     GridLoadPassNs,
     GridLoadRefsNs,
     GridLoad3dNs,
+    /// Main's batches of queued bodies added to the Havok world (`00c674d0`: `hkpWorld::addEntityBatch`, the
+    /// broad-phase inserts, then each body's island and activation): the bodies and the time (ns). A body is queued
+    /// while the world's lock count is up (`bhkWorld::Add`, `00c6b0a0`); the batches run when the count drops to
+    /// zero, at most 100 a frame with the drop's flag set, and from `bhkWorld::Update` (on the AI thread, not counted).
+    HavokBodiesAdded,
+    HavokBodiesAddNs,
 }
 
 /// How many counts there are.
-pub const COUNTS: usize = Count::GridLoad3dNs as usize + 1;
+pub const COUNTS: usize = Count::HavokBodiesAddNs as usize + 1;
 
 /// Times main's work from [`Timed::main`] to its drop into a `...Ns` count: nothing on another game thread or with
 /// the log off. One clock read at each end, at places that run a few times a frame at most and do far more work.

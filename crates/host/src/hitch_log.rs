@@ -867,6 +867,14 @@ impl Frame {
             format!("{} grid cells made", g(Count::GridCellsMade)),
         );
         put(
+            g(Count::HavokBodiesAddNs) / TENTH_MS,
+            format!(
+                "{} queued Havok bodies added on main in {:.1} ms",
+                g(Count::HavokBodiesAdded),
+                ms(g(Count::HavokBodiesAddNs))
+            ),
+        );
+        put(
             g(Count::CellAttachNs) / TENTH_MS,
             format!("cell attach {:.1} ms", ms(g(Count::CellAttachNs))),
         );
@@ -1313,6 +1321,16 @@ mod tests {
                 "load 5.1, grid load parts ms: cells 0.6, Havok drop 1.7, references 2.5, 3D update 0.4, \
                  grid cell parts ms: cell find 4.2"
             ),
+            "{line}"
+        );
+        // The queued Havok bodies added on main: with their count, from a tenth of a millisecond.
+        f.game[Count::HavokBodiesAdded as usize] = 100;
+        f.game[Count::HavokBodiesAddNs as usize] = 90_000;
+        assert!(!f.line().contains("Havok bodies"), "{}", f.line());
+        f.game[Count::HavokBodiesAddNs as usize] = 1_300_000;
+        let line = f.line();
+        assert!(
+            line.contains("2 grid cells made, 100 queued Havok bodies added on main in 1.3 ms, "),
             "{line}"
         );
         assert!(
