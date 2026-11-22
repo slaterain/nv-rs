@@ -55,3 +55,38 @@ thread, Metal, 3024x1898 rendering and 4x multisampling. Gameplay reproduction,
 Windows/Linux runs, and the complete workspace suite remain outstanding.
 Next: repeat the reported play routes with this build; inspect the captured
 native backtrace if any stop recurs.
+
+## Follow-up: the scrap-buffer pool's inlined unlock
+
+The first corrected play run later stopped at frame 91,664 on game thread 4:
+`006bbc50 < 00698f40 < 006c8170 < 00b023f0`, an unmapped read at `0000001b`
+in `NavMeshObstacleCutter` destruction. The later main/render-thread stop was
+propagation of that worker failure. This is a different signature from the
+three earlier stops; its exact invalid pointer write has not been captured.
+
+The cutter uses `ScrapHeapManager` buffers. Its private `unlock_buffers` copies
+the compiler-inlined BSSpinLock release (for example the owner stores at
+`00aa5bea` and `00aa5c68`), so it never reaches `0040fba0`. The first fix did
+not cover these releases. The same release-store rule is now applied there.
+The table operations, recursion count, and stepped-memory path stay unchanged.
+
+`crates/engine/tests/scrap_heap_publication.rs` seeds eight synthetic buffers
+and exercises the actual `RequestBuffer` (`00aa59b0`) and `ReleaseBuffer`
+(`00aa5b70`) from four real engine threads, 100,000 times each. Atomic ownership
+markers catch a buffer handed to a second thread while still in use; payloads
+must stay consistent, and the final table must contain all eight buffers once.
+No game files or UI are involved.
+
+On M1 Max, with the general lock fix already present but the private unlock
+unchanged, the test failed twice, specifically detecting duplicate buffer
+ownership (not an unknown buffer id). With the private unlock corrected, it
+passed, including ten repeat runs: four million handouts and four million
+returns without duplicate ownership or inconsistent payloads. All 36 existing
+scrap-heap unit tests and Clippy for engine-bs all targets also passed on that
+combined local candidate.
+
+This demonstrates a buffer-sharing race capable of corrupting cutter data;
+it does not prove that it caused the captured `0000001b` fault. Gameplay was
+not relaunched after the user requested that it stay closed. Retesting that
+route remains the next validation step. Temporary cutter instrumentation is
+excluded from the fix.

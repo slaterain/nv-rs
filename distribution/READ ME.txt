@@ -21,7 +21,11 @@ antivirus objects" below.
 
 Play.exe opens nv-rs's launcher: a window in the look of the game's own terminals (its font, colour
 and lines are read from your installed game). Choose with the arrow keys and Enter, or the mouse:
-> Play starts the game, > Play with mods (shown when you have mods) plays with them, > Settings
+> Play starts the game, > Play with mods (shown when you have mods) plays with them, > Mods
+installs a mod from its archive in the mods folder (or removes one), answering its questions at
+the launcher's prompt, > Import saves (shown when Documents\My Games\FalloutNV\Saves has
+saves) copies them into nv-rs's own folder, each with its .nvse file, asking before it replaces a
+different save of the same name (yours in Documents are only read), > Settings
 has the window or borderless, resolution, anti-aliasing, game fixes, frame limit and more (and a
 Testing list of what is still being tried), saved at once for the next start; > Exit closes
 it. The window has no title bar: drag it by its background (anywhere but an entry) to move it;
@@ -47,11 +51,10 @@ error, it says what happened and can open the logs folder. Later starts take a m
 graphics card, drivers, monitors, sound device, Windows language or Windows version change, nv-rs
 notices and reads them again.
 
-  Play.exe               the launcher (above)
-  Play with mods.cmd     the game with the mods in the mods folder (see mods\READ ME.txt)
-  Install mods.cmd       install a mod from its archive (.7z, .zip, .fomod) put in the mods
-                         folder, answering its installer's questions; also removes mods
-  Import my saves.cmd    copies your saves from Documents\My Games\FalloutNV. Those stay as they are
+  Play.exe               the launcher (above): Play, Play with mods (see mods\READ ME.txt), Mods
+                         (install a mod from its .7z, .zip or .fomod archive in the mods folder,
+                         or remove one), Import saves (copies your saves from Documents\My
+                         Games\FalloutNV; those stay as they are) and Settings are its entries
 
 Use Exit Game in the game's menu to quit. Saves reach the disk within about 5 seconds of being made,
 so wait a moment after saving before you close the window with its X.
@@ -66,7 +69,7 @@ Playing with mods links your game's files into userdata\modgame rather than copy
 another name for the same file, so if you uninstall the game while that folder is still here, the
 disk space stays used until you delete the nv-rs folder too.
 
-Your real saves are only read, and only when you run Import my saves.cmd. Saves you make here are in
+Your real saves are only read, and only when you choose Import saves in the launcher. Saves you make here are in
 userdata\game\Documents\My Games\FalloutNV\Saves. They are normal saves; nv-rs doesn't copy them back
 for you.
 
@@ -189,6 +192,10 @@ Problems at the start
 When nv-rs can't start it says why in a window, for example: no game found; the wrong version of the
 game; DirectX's d3dx9_38.dll missing (install "DirectX End-User Runtimes (June 2010)" from Microsoft);
 the folder's path too long or in a place it shouldn't be. With no sound device the game starts silently.
+A sound device plugged in, unplugged or chosen as the default while the game or the launcher runs
+is followed: after a short gap (under a second) the sound goes on from the new default device, and
+sounds that were playing carry on where they would be. If no device answers after a loss it keeps
+trying once a second. A game started with no sound device at all stays silent until its next start.
 Everything it said is in userdata\logs\launcher.log.
 
 

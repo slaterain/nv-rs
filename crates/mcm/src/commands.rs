@@ -346,8 +346,9 @@ fn set_mcm_float_mass(e: &mut Engine, w: &[u32]) -> Ret {
         return handled(true);
     };
     let value = read.float(4, 0.0);
+    let mut lookup = menu::Lookup::default();
     for index in mass_indices(e, kind, min, max) {
-        menu::set_float(e, &menu::path(kind, index, &setting), value);
+        lookup.set_float(e, &menu::path(kind, index, &setting), value);
     }
     handled(true)
 }
@@ -366,8 +367,9 @@ fn set_mcm_string_mass(e: &mut Engine, w: &[u32]) -> Ret {
     let (Some(setting), Some(text)) = (fits(leading_text(&f.leading, 3)), fits(f.text)) else {
         return handled(true);
     };
+    let mut lookup = menu::Lookup::default();
     for index in mass_indices(e, kind, min, max) {
-        menu::set_string(e, &menu::path(kind, index, &setting), &text);
+        lookup.set_string(e, &menu::path(kind, index, &setting), &text);
     }
     handled(true)
 }
@@ -438,14 +440,15 @@ fn set_mcm_mod_list(e: &mut Engine, w: &[u32]) -> Ret {
     let form = read.form(4);
     let base = format!("StartMenu/MCM/MCM_ModList/Mod{number}");
     let at = |tail: &str| format!("{base}{tail}").into_bytes();
-    menu::set_float(e, &at("/_enable"), f32::from(enable));
+    let mut lookup = menu::Lookup::default();
+    lookup.set_float(e, &at("/_enable"), f32::from(enable));
     if form != 0 {
         let name = full_name(e, form);
-        menu::set_float(e, &at("/_modIndex"), f32::from(index));
-        menu::set_float(e, &at("/_modIndex2"), f32::from(index2));
-        menu::set_string(e, &at("/text/string"), &name);
+        lookup.set_float(e, &at("/_modIndex"), f32::from(index));
+        lookup.set_float(e, &at("/_modIndex2"), f32::from(index2));
+        lookup.set_string(e, &at("/text/string"), &name);
         let title = format!("StartMenu/MCM/MCM_ModTitle/Title{number}/string");
-        menu::set_string(e, title.as_bytes(), &name);
+        lookup.set_string(e, title.as_bytes(), &name);
     }
     handled(true)
 }

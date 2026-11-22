@@ -414,6 +414,27 @@ fn tile_of(e: &Engine, this: u32, index: u32) -> u32 {
     e.mem.u32(this + 0x28 + 4 * index)
 }
 
+/// The font a message menu text is measured in (`FontManager::GetStringDimensions` `00a1b020`
+/// at `0x7A95D2`, `0x7A9850`, `0x7A9B74`): the exe's `font` (6 for the title, 2 otherwise); with
+/// lStewieAl's Tweaks' S0160 (`MessageMenuFontWidthFix::GetDimensions`) the text tile's own `font`
+/// trait (0xFB9), cut to a whole number.
+fn stewie_text_font(e: &mut Engine, tile: u32, font: u32) -> u32 {
+    if e.stewie(engine_core::extend::stewie::MESSAGE_MENU_TEXT_FONT) {
+        float_to_int(get_float(e, tile, 0xfb9)) as u32
+    } else {
+        font
+    }
+}
+
+/// `cvttss2si`: toward zero, `0x80000000` out of range.
+fn float_to_int(value: f32) -> i32 {
+    if (-2_147_483_648.0..2_147_483_648.0).contains(&value) {
+        value as i32
+    } else {
+        i32::MIN
+    }
+}
+
 fn get_float(e: &mut Engine, tile: u32, id: u32) -> f32 {
     e.call(GET_FLOAT_TRAIT, &args![tile, id]).f32()
 }
@@ -999,9 +1020,12 @@ pub fn message_menu_load_next_message(e: &mut Engine, this: Ptr<MessageMenu>) {
                 measured
             };
             let font = e.call(FONT_MANAGER, &args![]).u32();
+            // `0x7A95D2` (lStewieAl's Tweaks' S0160): the title tile's font.
+            let title_tile = e.mem.u32(e.global::<u32>(MESSAGE_MENU) + 0x2c);
+            let font_id = stewie_text_font(e, title_tile, 6);
             e.call(
                 CALCULATE_STRING_DIMENSIONS,
-                &args![font, out, title.addr(), 6u32, maximum, 0u32],
+                &args![font, out, title.addr(), font_id, maximum, 0u32],
             );
             title_width = e.mem.f32(out);
             let extra = if width_override > 0 {
@@ -1078,9 +1102,11 @@ pub fn message_menu_load_next_message(e: &mut Engine, this: Ptr<MessageMenu>) {
                             .call(GET_STRING_TRAIT, &args![text_tile, TRAIT_STRING])
                             .u32();
                         let font = e.call(FONT_MANAGER, &args![]).u32();
+                        // `0x7A9850` (lStewieAl's Tweaks' S0160): the button text tile's font.
+                        let font_id = stewie_text_font(e, text_tile, 2);
                         e.call(
                             CALCULATE_STRING_DIMENSIONS,
-                            &args![font, local(0xdc), string, 2u32, measured, 0u32],
+                            &args![font, local(0xdc), string, font_id, measured, 0u32],
                         );
                         let width = e.mem.f32(local(0xdc));
                         let truncated = e.call(FTOL, &args![width as f64]).i32();
@@ -1166,9 +1192,12 @@ pub fn message_menu_load_next_message(e: &mut Engine, this: Ptr<MessageMenu>) {
         let room_now = get_float(e, message_tile, TRAIT_WIDTH);
         let text = c_str(e, cur.at(MessageMenuEntry::strMessageText));
         let font = e.call(FONT_MANAGER, &args![]).u32();
+        // `0x7A9B74` (lStewieAl's Tweaks' S0160): the message text tile's font.
+        let message_text = e.mem.u32(e.global::<u32>(MESSAGE_MENU) + 0x34);
+        let font_id = stewie_text_font(e, message_text, 2);
         e.call(
             CALCULATE_STRING_DIMENSIONS,
-            &args![font, local(0x1b0), text, 2u32, room_now, 0u32],
+            &args![font, local(0x1b0), text, font_id, room_now, 0u32],
         );
         let measured_width = e.mem.f32(local(0x1b0));
         let lines = e.mem.f32(local(0x1b0) + 8);
@@ -3842,5 +3871,54 @@ mod tests {
         let frame = next_frame(&mut e, 0x40);
         e.call(0x007a_a110, &args![m, 0x5au32]);
         assert_eq!(calls(&e, STD_STRING_FROM_C_STRING)[0][0], frame + 0x10);
+    }
+}
+
+#[cfg(test)]
+mod stewie_menus5_tests {
+    use super::*;
+    use engine_core::extend::stewie;
+
+    /// Row S0160 (`MessageMenuFontWidthFix`, `0x7A95D2`, `0x7A9850`, `0x7A9B74`): with the row on
+    /// the text's measuring font is its tile's `font` trait (0xFB9) cut to a whole number; off,
+    /// the exe's 6 or 2 and the trait is not read.
+    #[test]
+    fn s0160_texts_are_measured_in_their_own_font() {
+        for (on, font, exe, wanted) in [
+            (false, 7.0f64, 2u32, 2u32),
+            (false, 7.0, 6, 6),
+            (true, 7.0, 2, 7),
+            (true, 7.9, 6, 7),
+            (true, 1.0, 6, 1),
+        ] {
+            let mut e = Engine::new();
+            e.register_double(GET_FLOAT_TRAIT, move |_, a| Ret {
+                st0: if a[1] == 0xfb9 { font } else { 0.0 },
+                ..Ret::default()
+            });
+            e.set_stewie(stewie::MESSAGE_MENU_TEXT_FONT, on);
+            e.call_log = Some(vec![]);
+            assert_eq!(
+                stewie_text_font(&mut e, 0x6400, exe),
+                wanted,
+                "row {on} font {font}"
+            );
+            let reads: Vec<_> = e
+                .call_log
+                .as_ref()
+                .unwrap()
+                .iter()
+                .filter(|(a, _)| *a == GET_FLOAT_TRAIT)
+                .map(|(_, w)| w[..2].to_vec())
+                .collect();
+            assert_eq!(
+                reads,
+                if on {
+                    vec![vec![0x6400, 0xfb9]]
+                } else {
+                    vec![]
+                }
+            );
+        }
     }
 }

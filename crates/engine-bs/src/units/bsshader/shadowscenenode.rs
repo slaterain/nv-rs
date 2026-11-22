@@ -1978,14 +1978,14 @@ pub fn fn_00b5d180(e: &mut Engine, this: Ptr<ShadowSceneNode>) {
             release(e, light);
         });
     }
-    fn_00b5c3c0(e, this);
+    e.call(0x00b5_c3c0, &args![this]);
     e.call(
         LIST_REMOVE_ALL,
         &args![this.addr().wrapping_add(SHADOW_LIGHT_LIST)],
     );
     e.set(this, ShadowSceneNode::kShadowLightActiveFence, 0);
     e.set(this, ShadowSceneNode::kShadowLightFadingInFence, 0);
-    fn_00b5c3c0(e, this);
+    e.call(0x00b5_c3c0, &args![this]);
 }
 
 // Translated from 00b5d270 (decompiled, FalloutNV.exe 1.4.0.525)

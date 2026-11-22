@@ -2974,6 +2974,7 @@ pub fn fn_00462270(_e: &mut Engine, this: Ptr) -> Ptr {
 /// from the remembered answer and clears the byte at `0x01202df0`.
 pub fn tes_data_handler_unload_cell(e: &mut Engine, _this: Ptr<TESDataHandler>, cell: Ptr) {
     engine_core::hitch::one(engine_core::hitch::Count::CellsUnloaded);
+    let _timed = engine_core::hitch::Timed::main(engine_core::hitch::Count::CellUnloadNs);
     if cell.is_null() || typed_call!(leaf::FAMILY, 0x0044_0d80, leaf::form_flag_20(e, cell)) {
         return;
     }
