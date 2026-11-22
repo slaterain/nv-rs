@@ -2,10 +2,10 @@ Mods for nv-rs
 ==============
 
 Put a mod's files here exactly as they would go in the game's Data folder: its .esp or .esm,
-its .bsa, and folders such as Meshes, Textures or Sound. Then start "Play with mods.cmd".
+its .bsa, and folders such as Meshes, Textures or Sound. Then choose Play with mods in Play.exe.
 
 A mod that comes as an archive (.7z, .zip or .fomod, with or without an installer): put the
-archive here and start "Install mods.cmd". It lists the archives here and the mods installed,
+archive here and choose Mods in Play.exe. It lists the archives here and the mods installed,
 asks each installer's questions in plain words (type what each line says; Enter keeps the
 recommended choice; a typo only asks again), and installs the mod into its own folder in
 userdata\mod installs, then moves the archive to "installed archives" here. Installed mods are

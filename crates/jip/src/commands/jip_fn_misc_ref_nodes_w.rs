@@ -24,8 +24,9 @@
 //!   `NiTextureTransformController` `01098184`, whose +0x94 is `00A46490`, `RET 4`).
 //! - `RenameNifBlock`: JIP's `NiObjectNET::SetName`: the new name's fixed string from the
 //!   string table (JIP's `GetNiFixedString`; JIP replaces the game's `00A5B690` with its own
-//!   pool, stage 3.9 G43, which waits: the port calls the game's own `00A5B690`, `cdecl` (text),
-//!   which interns the text and counts it up exactly as JIP's pool does, the count at -8), the
+//!   pool, G43, `game_patches::gt`): the port calls `00A5B690` by address, `cdecl` (text), which
+//!   with the game-patch row is JIP's pool and otherwise the game's table; both count it up, the
+//!   count at -8), the
 //!   old name's count taken down (`lock dec [name-8]`, as JIP; neither table frees it there).
 //! - `RemoveNifBlock`: the parent's `RemoveObject` (vtable +0xE8, `00A5D8F0` in every node
 //!   class, `thiscall` (parent, block), `RET 4`).

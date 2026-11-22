@@ -213,6 +213,8 @@ pub struct Frame {
     pub stream: Vec<u64>,
     pub longest_wait: (u64, WaitKind, u32),
     pub largest_read: (u64, String),
+    /// The longest completed load task main ran (ns, its vtable).
+    pub longest_task: (u64, u32),
     pub left_out: u64,
     /// The longest of those left out (ms).
     pub longest_left_out: f64,
@@ -790,6 +792,64 @@ impl Frame {
             format!("{} cells unloaded", g(Count::CellsUnloaded)),
         );
         put(
+            g(Count::LoadFinishNs) / TENTH_MS,
+            format!(
+                "finished {} background loads on main in {:.1} ms (the longest {:.1} ms, type {:08x})",
+                g(Count::LoadFinishTasks),
+                ms(g(Count::LoadFinishNs)),
+                ms(self.longest_task.0),
+                self.longest_task.1
+            ),
+        );
+        put(
+            g(Count::LoaderDrainNs) / TENTH_MS,
+            format!(
+                "the model loader's drain {:.1} ms",
+                ms(g(Count::LoaderDrainNs))
+            ),
+        );
+        put(
+            g(Count::LoaderWalkNs) / TENTH_MS,
+            format!(
+                "the model loader's walk {:.1} ms",
+                ms(g(Count::LoaderWalkNs))
+            ),
+        );
+        put(
+            g(Count::GridUpdateNs) / TENTH_MS,
+            format!("grid update {:.1} ms", ms(g(Count::GridUpdateNs))),
+        );
+        // The grid shift's parts, in its order, as one entry when any is over a tenth of a millisecond.
+        let parts = [
+            ("cancel", Count::GridCancelNs),
+            ("textures", Count::GridTexturesNs),
+            ("shift", Count::GridShiftNs),
+            ("Havok", Count::GridHavokNs),
+            ("load", Count::GridLoadNs),
+            ("terrain", Count::GridTerrainNs),
+        ];
+        let shown: Vec<String> = parts
+            .iter()
+            .filter(|(_, c)| g(*c) >= TENTH_MS)
+            .map(|(name, c)| format!("{name} {:.1}", ms(g(*c))))
+            .collect();
+        put(
+            shown.len() as u64,
+            format!("grid shift parts ms: {}", shown.join(", ")),
+        );
+        put(
+            g(Count::CellAttachNs) / TENTH_MS,
+            format!("cell attach {:.1} ms", ms(g(Count::CellAttachNs))),
+        );
+        put(
+            g(Count::CellDetachNs) / TENTH_MS,
+            format!("cell detach {:.1} ms", ms(g(Count::CellDetachNs))),
+        );
+        put(
+            g(Count::CellUnloadNs) / TENTH_MS,
+            format!("cell unload {:.1} ms", ms(g(Count::CellUnloadNs))),
+        );
+        put(
             g(Count::HandBackNs) / TENTH_MS,
             format!(
                 "memory handed back at the frame's end {:.1} ms",
@@ -881,6 +941,7 @@ impl HitchLog {
         self.stream = stream_now;
         let longest_wait = engine_core::hitch::take_longest_wait();
         let largest_read = engine_core::hitch::take_largest_read();
+        let longest_task = engine_core::hitch::take_longest_task();
         let screen = crate::uncap::screen(e);
         let presents = engine_platform::d3d9real::present_count(e).unwrap_or(0);
         let shown = Shown {
@@ -938,6 +999,7 @@ impl HitchLog {
             stream,
             longest_wait,
             largest_read,
+            longest_task,
             left_out,
             longest_left_out,
         };
@@ -1168,6 +1230,39 @@ mod tests {
             stream: vec![0; engine_platform::stream_hitch::COUNTS],
             ..Frame::default()
         }
+    }
+
+    /// The background-load and cell timers are written in the work list with the longest task's type.
+    #[test]
+    fn the_load_finish_and_cell_timers_are_written() {
+        let mut f = frame();
+        f.game[Count::LoadFinishNs as usize] = 9_400_000;
+        f.game[Count::LoadFinishTasks as usize] = 3;
+        f.longest_task = (8_100_000, 0x0101_6a4c);
+        f.game[Count::GridUpdateNs as usize] = 50_000;
+        f.game[Count::CellAttachNs as usize] = 6_200_000;
+        let line = f.line();
+        assert!(
+            line.contains(
+                "finished 3 background loads on main in 9.4 ms (the longest 8.1 ms, type 01016a4c)"
+            ),
+            "{line}"
+        );
+        assert!(line.contains("cell attach 6.2 ms"), "{line}");
+        assert!(!line.contains("grid shift parts"), "none counted: {line}");
+        f.game[Count::GridShiftNs as usize] = 3_800_000;
+        f.game[Count::GridLoadNs as usize] = 5_100_000;
+        f.game[Count::GridTerrainNs as usize] = 20_000;
+        let line = f.line();
+        assert!(
+            line.contains("grid shift parts ms: shift 3.8, load 5.1"),
+            "{line}"
+        );
+        assert!(
+            !line.contains("grid update"),
+            "under a tenth of a ms: {line}"
+        );
+        assert!(!line.contains("cell detach"), "{line}");
     }
 
     /// The cause rules: the counted work that explains the most of the frame's excess is named, with the save, a

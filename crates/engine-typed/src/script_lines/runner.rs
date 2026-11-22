@@ -20,12 +20,11 @@ const QUERY_PERFORMANCE_COUNTER: u32 = 0x00fd_f0a0;
 /// Whether the interface's debug text is shown (the profiler runs then).
 const DEBUG_TEXT_SHOWN: u32 = 0x0070_2fc0;
 /// The script's compiled-data flag test, its header, the locals made for a run, the locals'
-/// delete, the action list's processing, the profiler timer's add.
+/// delete, the profiler timer's add.
 const FORM_FLAG_BIT_3: u32 = 0x0040_13e0;
 const SCRIPT_HEADER_OF: u32 = 0x0050_0940;
 const NEW_LOCALS: u32 = 0x005a_bf60;
 const DELETE_LOCALS: u32 = 0x0041_af70;
-const PROCESS_ACTIONS: u32 = 0x005a_8ea0;
 const ADD_PROFILER_TIME: u32 = 0x005e_1140;
 const ALLOCATE: u32 = 0x0040_1000;
 /// `CExpression`'s destructor.
@@ -71,10 +70,9 @@ const CONDITION_ERROR: u32 = 0x0103_d664;
 const COMMAND_UNKNOWN: u32 = 0x0103_d618;
 const COMMAND_NEEDS_REFERENCE: u32 = 0x0103_d5d0;
 const COMMAND_FAILED: u32 = 0x0103_d588;
-/// The global's set, a variable's set, a variable's name, the reference's changed test and its
+/// The global's set, a variable's name, the reference's changed test and its
 /// process.
 const SET_GLOBAL: u32 = 0x0046_dce0;
-const SET_VARIABLE: u32 = 0x005a_9290;
 const VARIABLE_NAME: u32 = 0x005a_bed0;
 const REFERENCE_SCRIPT_VARIABLES: u32 = 0x0056_73e0;
 const QUEST_SCRIPT_LOCALS: u32 = 0x0059_e300;
@@ -88,6 +86,16 @@ const STRING_PRINTF: u32 = 0x0040_6f60;
 const STRING_TEXT: u32 = 0x0046_4f30;
 const STRING_DESTRUCT: u32 = 0x0040_37d0;
 const PARSE_COUNTED_COMMAND: i32 = 0x1059;
+
+/// `ScriptLocals::SetVariable` (the scripts family's) on the locals at `locals`.
+#[inline]
+fn set_variable(e: &mut Engine, locals: u32, index: i32, value: f64) {
+    typed_call!(
+        scripts::FAMILY,
+        0x005a_9290,
+        scripts::run::set_variable(e, Ptr::new(locals), index as u32, value)
+    );
+}
 
 /// The thread's console-echo byte (TLS +0x268, the inline body of `005e23f0`).
 #[inline]
@@ -113,6 +121,14 @@ fn header_of(e: &mut Engine, script: Ptr) -> u32 {
 fn jip_keeps_failed_script(e: &mut Engine, site: u32) -> bool {
     e.jip_patches() & engine_core::extend::jip_patches::NO_FAILED_SCRIPT_LOCKS != 0
         && e.site(site, &[]).is_some()
+}
+
+/// JIP LN NVSE's G24: a busy runner's jump at `0x5E0DD1` over the two names and the script log's
+/// nested-run line. The fixes' bit is tested first; true when JIP's handler takes the jump.
+#[inline]
+fn jip_skips_nested_log(e: &mut Engine) -> bool {
+    e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+        && e.site(0x005e_0dd1, &[]).is_some()
 }
 
 /// The address of if-stack level `depth`.
@@ -169,13 +185,16 @@ pub fn run_lines(
         }
         let running = e.mem.u32(me + RUNNING);
         if running != 0 {
-            let requested_name = name_of(e, script.addr());
-            let running = e.mem.u32(me + RUNNING);
-            let running_name = name_of(e, running);
-            e.call(
-                SCRIPT_LOG,
-                &args![NESTED_RUN_MESSAGE, running_name, requested_name],
-            );
+            // 005e0dd1: JIP LN NVSE's G24 jumps over the two names and the log.
+            if !jip_skips_nested_log(e) {
+                let requested_name = name_of(e, script.addr());
+                let running = e.mem.u32(me + RUNNING);
+                let running_name = name_of(e, running);
+                e.call(
+                    SCRIPT_LOG,
+                    &args![NESTED_RUN_MESSAGE, running_name, requested_name],
+                );
+            }
             return e.mem.u8(me + 0xa1) != 0;
         }
         e.mem.set_u32(me + RUNNING, script.addr());
@@ -285,7 +304,11 @@ pub fn run_lines(
                 }
                 if !keep_actions && !failed {
                     let runner_locals = e.mem.u32(me + 8);
-                    e.call(PROCESS_ACTIONS, &args![runner_locals]);
+                    typed_call!(
+                        scripts::FAMILY,
+                        0x005a_8ea0,
+                        scripts::run::clear_action_flags(e, Ptr::new(runner_locals))
+                    );
                 }
             });
             if created_locals != 0 {
@@ -863,7 +886,7 @@ fn evaluate_set(e: &mut Engine, at: &Line) -> bool {
         match kind {
             b'f' => {
                 let stored = reload_f64(value);
-                e.call(SET_VARIABLE, &args![target_locals, index, stored]);
+                set_variable(e, target_locals, index, stored);
                 if console_echo(e) {
                     let master = e.mem.u32(target_locals);
                     let name = e.call(VARIABLE_NAME, &args![master, index]).u32();
@@ -872,10 +895,7 @@ fn evaluate_set(e: &mut Engine, at: &Line) -> bool {
             }
             b'l' | b's' => {
                 let integer = truncated(e, value) as i32;
-                e.call(
-                    SET_VARIABLE,
-                    &args![target_locals, index, f64::from(integer)],
-                );
+                set_variable(e, target_locals, index, f64::from(integer));
                 if console_echo(e) {
                     let integer = truncated(e, value);
                     let master = e.mem.u32(target_locals);

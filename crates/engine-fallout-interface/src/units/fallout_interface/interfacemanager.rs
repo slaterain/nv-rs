@@ -3618,7 +3618,12 @@ fn pipboy_raise(e: &mut Engine, this: Ptr<InterfaceManager>, player: u32) {
         &args![animation, 0xe2u32, 1u32, -1i32, -1i32],
     );
     let pipboy = e.call(GET_PIPBOY_STATIC, &args![]).u32();
-    e.call(PIPBOY_FADE_LIGHT_EFFECT, &args![pipboy, 1u32]);
+    if e.stewie(engine_core::extend::stewie::PIPBOY_LIGHT_FADE) {
+        // lStewieAl's Tweaks' S0046 (its call at `0x70EFCD`).
+        super::fopipboymanager::stewie_set_light_effect(e, Ptr::new(pipboy));
+    } else {
+        e.call(PIPBOY_FADE_LIGHT_EFFECT, &args![pipboy, 1u32]);
+    }
     e.with_stack(12, |e, found| {
         let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
         let handle = e
@@ -3826,7 +3831,20 @@ pub fn fn_0070f690(e: &mut Engine, this: Ptr<InterfaceManager>, callback: u32) {
         e.set(this, InterfaceManager::field_4bc, 4);
         e.set(this, InterfaceManager::field_4c0, callback);
     }
+    // lStewieAl's Tweaks' S0021 (`OnPipboyClose` called at `0x70F6D3`, the common end): with the
+    // inventory menu shown (`g_menuVisibility[1002]`) its scroll place is saved. Tweaks' menu search
+    // and sort button parts there belong to features the port does not build.
+    if e.stewie(engine_core::extend::stewie::INVENTORY_SCROLL_KEPT)
+        && e.mem.u8(MENU_VISIBILITY + 1002) != 0
+    {
+        e.call(SAVE_INVENTORY_SCROLL, &args![]);
+    }
 }
+
+/// `g_menuVisibility` (one byte per menu type, xNVSE's `0x11F308F`).
+const MENU_VISIBILITY: u32 = 0x011f_308f;
+/// `InventoryMenu::SaveCurrentTabScrollPosition` (no arguments).
+const SAVE_INVENTORY_SCROLL: u32 = 0x0077_ffd0;
 
 // Translated from 0070f6e0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `InterfaceManager::DoGamepadEvent` (Xbox PDB): handles one gamepad event
@@ -3901,11 +3919,17 @@ pub fn interface_manager_do_gamepad_event(e: &mut Engine, this: Ptr<InterfaceMan
     } else {
         0
     };
-    if frontmost != 0
-        && !released
-        && e.call(DO_GAMEPAD, &args![this, frontmost, event, 1.0f32])
+    if frontmost != 0 && !released && {
+        // lStewieAl's Tweaks' S0022.05 (`InterfaceManager__HandleKeyPressHook` at `0x70F8BB`): the
+        // arrows and shift-left/right (codes 1 to 4, 0xD, 0xE) clear `bMouseInMotion` first.
+        if e.stewie(engine_core::extend::stewie::ARROW_KEYS_OVER_MOUSE)
+            && matches!(event, 1..=4 | 0xd | 0xe)
+        {
+            e.set(this, InterfaceManager::bMouseInMotion, 0);
+        }
+        e.call(DO_GAMEPAD, &args![this, frontmost, event, 1.0f32])
             .bool()
-    {
+    } {
         return;
     }
     if released {
@@ -4266,8 +4290,10 @@ pub fn interface_manager_get_top_gamepad_button(
         result = 3;
     } else if pressed_11 {
         result = 0x11;
+        stewie_l3_r3_released(e, released);
     } else if pressed_12 {
         result = 0x12;
+        stewie_l3_r3_released(e, released);
     }
     let last = e.get(this, InterfaceManager::iLastGamepadEvent);
     let mut held_direction = 0;
@@ -4320,8 +4346,7 @@ pub fn interface_manager_get_top_gamepad_button(
         if wants_repeat {
             set_repeat_time(e, this, REPEAT_DELAY_HOLDER_FIRST);
         } else {
-            let tick = e.call(FADE_CLOCK_READ, &args![FADE_CLOCK]).u32();
-            e.set(this, InterfaceManager::uGamepadRepeatStartTime, tick << 1);
+            cleared_repeat_time(e, this);
         }
     }
     let any_direction = pressed_right
@@ -4381,10 +4406,60 @@ fn finish_top_gamepad_button(
 ) -> i32 {
     if reset_repeat {
         e.set(this, InterfaceManager::iLastGamepadEvent, 0);
-        let tick = e.call(FADE_CLOCK_READ, &args![FADE_CLOCK]).u32();
-        e.set(this, InterfaceManager::uGamepadRepeatStartTime, tick << 1);
+        cleared_repeat_time(e, this);
     }
     result
+}
+
+/// The word Tweaks' S0022.38 reads as the thumbstick deadzone (`*(UInt32*)0x717B90`): the
+/// immediate of `CMP EDX, 0x1EA9` at `0x717B8E` in the exe's code (7849, XInput's left-stick
+/// deadzone). The port does not map the exe's code, so the value is written here.
+const STICK_DEADZONE: u32 = 0x1ea9;
+
+/// One stick axis of the cursor (`OSInputGlobals::GetControllerValue` `00a23390` with 0 and
+/// `axis`); with lStewieAl's Tweaks' S0022.38 its `GetConsoleControllerMovementXY`: 0 when the
+/// value's size is under the deadzone word.
+fn stick_axis(e: &mut Engine, controls: u32, axis: u32, thumbstick: bool) -> i32 {
+    let value = e
+        .call(CONTROLS_AXIS_00A23390, &args![controls, 0u32, axis])
+        .i32();
+    if thumbstick && value.unsigned_abs() < STICK_DEADZONE {
+        0
+    } else {
+        value
+    }
+}
+
+/// The start menu (`StartMenu *`).
+const START_MENU_SINGLETON: u32 = 0x011d_aac0;
+/// `StartMenu::IsInActionMapping` (`thiscall`): the control mapping waits for a key.
+const START_MENU_IS_IN_ACTION_MAPPING: u32 = 0x007c_e8f0;
+
+/// lStewieAl's Tweaks' S0022.53 (`L3PressedHook` at `0x7104A1`, `R3PressedHook` at `0x7104B0`):
+/// with L3 or R3 taken, `*released` = 1 unless the start menu exists and its control mapping waits
+/// for a key (then 0), so `DoGamepadEvent` hands the button to the frontmost menu's
+/// `HandleControllerInput` (slot 0x3c). Off: `*released` is not written there.
+fn stewie_l3_r3_released(e: &mut Engine, released: Ptr) {
+    if !e.stewie(engine_core::extend::stewie::MENU_L3_R3) {
+        return;
+    }
+    let start_menu = e.global::<u32>(START_MENU_SINGLETON);
+    let mapping = start_menu != 0
+        && e.call(START_MENU_IS_IN_ACTION_MAPPING, &args![start_menu])
+            .u8()
+            != 0;
+    e.mem.set_u8(released.addr(), u8::from(!mapping));
+}
+
+/// `uGamepadRepeatStartTime` = twice the tick count (`0x710624`, `0x71085F`); with lStewieAl's
+/// Tweaks' S0022.32 (its `mov eax, -1` over the tick's call and the shift) -1.
+fn cleared_repeat_time(e: &mut Engine, this: Ptr<InterfaceManager>) {
+    let time = if e.stewie(engine_core::extend::stewie::GAMEPAD_REPEAT_CLEARED) {
+        u32::MAX
+    } else {
+        e.call(FADE_CLOCK_READ, &args![FADE_CLOCK]).u32() << 1
+    };
+    e.set(this, InterfaceManager::uGamepadRepeatStartTime, time);
 }
 
 // Translated from 00710880 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4552,6 +4627,16 @@ pub fn interface_manager_display_current_pick_ref(e: &mut Engine, this: Ptr<Inte
                 FORMAT_INTO_STRING,
                 &args![text, FORMAT_NAME_AND_ID, name, form_id],
             );
+            if e.stewie(engine_core::extend::stewie::CONSOLE_MESH_PATH) {
+                // lStewieAl's Tweaks' S0059 (its hook on the debug text's instance call at
+                // `0x710C41`, before the name line is printed): the model path at the next line's
+                // row (`EBP-0x1C`), which moves down a line (`EBP-0x24`).
+                let path = engine_core::extend::stewie::mesh_path_line(e, pick);
+                if path != 0 {
+                    debug_text_print_literal(e, path, y);
+                    y += line_height;
+                }
+            }
             debug_text_print(e, text, start_y);
             if e.get(this, InterfaceManager::bFullHelp) != 0 {
                 pick_ref_full_help(e, this, text, pick, &mut y, line_height);
@@ -4921,15 +5006,15 @@ pub fn fn_007118d0(e: &mut Engine, this: Ptr<InterfaceManager>) {
         let cursor = e.get(this, InterfaceManager::pCursor);
         tile_set_int(e, cursor, 0xfa3, 1);
         let (mut mouse_x, mut mouse_y);
+        // lStewieAl's Tweaks' S0022.38: the cursor-shown test at `0x7119CF` and the jump over the
+        // mouse axes at `0x711A2B` are taken out, the stick axes go through its deadzone getter
+        // (`0x7119D8`, `0x7119E7`) and the mouse axes are added (`0x711A37`, `0x711A44`).
+        let thumbstick = e.stewie(engine_core::extend::stewie::CONSOLE_THUMBSTICK_CURSOR);
         if e.call(HAS_360_CONTROLLER_GETTER, &args![]).bool()
-            && e.get(this, InterfaceManager::bShowMouse) == 0
+            && (thumbstick || e.get(this, InterfaceManager::bShowMouse) == 0)
         {
-            mouse_x = e
-                .call(CONTROLS_AXIS_00A23390, &args![controls, 0u32, 7u32])
-                .i32();
-            mouse_y = e
-                .call(CONTROLS_AXIS_00A23390, &args![controls, 0u32, 8u32])
-                .i32();
+            mouse_x = stick_axis(e, controls, 7, thumbstick);
+            mouse_y = stick_axis(e, controls, 8, thumbstick);
             // 00711a01, 00711a20: FLD float, FMUL double, then `_ftol2`. Here and below each
             // step rounds with the running thread's control word.
             let stick_scale = float_holder_value(e, STICK_SCALE_HOLDER);
@@ -4938,6 +5023,16 @@ pub fn fn_007118d0(e: &mut Engine, this: Ptr<InterfaceManager>) {
             let stick_scale = float_holder_value(e, STICK_SCALE_HOLDER);
             let scaled = x87_mul(stick_scale, -(mouse_y as f64));
             mouse_y = e.call(FTOL, &args![scaled]).i32();
+            if thumbstick {
+                let x = e
+                    .call(CONTROLS_QUERY_00A239E0, &args![controls, 1u32])
+                    .i32();
+                mouse_x = mouse_x.wrapping_add(x);
+                let y = e
+                    .call(CONTROLS_QUERY_00A239E0, &args![controls, 2u32])
+                    .i32();
+                mouse_y = mouse_y.wrapping_add(y);
+            }
         } else {
             mouse_x = e
                 .call(CONTROLS_QUERY_00A239E0, &args![controls, 1u32])
@@ -6879,7 +6974,15 @@ pub fn fn_007154b0(e: &mut Engine, this: Ptr<InterfaceManager>, event: i32, key:
     if event != 1 {
         return 0;
     }
-    let shift = e.get(this, InterfaceManager::bShiftDown) as u32;
+    let mut shift = e.get(this, InterfaceManager::bShiftDown) as u32;
+    if e.stewie(engine_core::extend::stewie::TEXT_SHIFT_HELD_NOW) {
+        // lStewieAl's Tweaks' S0022.03 (`IsShiftHeld` called at `0x715563`, `push eax`): either
+        // shift key's raw state now (xNVSE's key bytes), through the Stewie seam. The upper bytes of
+        // the pushed `EAX` are the caller's event or key code's, 0 on the event-1 paths that get here.
+        if let Some(held) = e.site(0x0071_5563, &[]) {
+            shift = u32::from(held != 0);
+        }
+    }
     let controls_owner = e.global::<u32>(CONTROLS_OWNER);
     let controls = e.call(CONTROLS_GET, &args![controls_owner]).u32();
     let character = e
@@ -9444,6 +9547,31 @@ mod tests {
         assert_eq!(calls(&e, SOUND_HANDLE_PLAY).len(), 1);
     }
 
+    /// lStewieAl's Tweaks' S0046 at `0x70EFCD`: with the row the raise starts the light's fade
+    /// itself (the manager's light on: start time, flag, end 0.0) in place of `FadeLightEffect(1)`;
+    /// the other two calls of `FadeLightEffect` (states 2 and 4) stay the exe's.
+    #[test]
+    fn s0046_raising_the_pipboy_fades_its_light_tweaks_way() {
+        let mut e = audio_world();
+        let m = manager(&mut e);
+        e.set(m, InterfaceManager::field_4bc, 1);
+        let player = e.mem.alloc(0x1000);
+        e.set_global(PLAYER_SINGLETON, player);
+        returns(&mut e, ACTOR_GET_ANIM_ACTION, 7);
+        returns(&mut e, PLAYER_GET_ANIMATION, 0x2000_0700);
+        let pipboy = e.mem.alloc(0x170);
+        e.mem.set_u8(pipboy + 0x160, 1);
+        e.mem.set_u32(0x011f_6394 + 0x14, 1234);
+        returns(&mut e, GET_PIPBOY_STATIC, pipboy);
+        e.set_stewie(engine_core::extend::stewie::PIPBOY_LIGHT_FADE, true);
+        update_pipboy(&mut e, m);
+        assert_eq!(e.get(m, InterfaceManager::field_4bc), 2);
+        assert!(calls(&e, PIPBOY_FADE_LIGHT_EFFECT).is_empty());
+        assert_eq!(e.mem.f32(pipboy + 0x164), 1234.0);
+        assert_eq!(e.mem.u8(pipboy + 0x162), 1);
+        assert_eq!(e.mem.u32(pipboy + 0x168), 0);
+    }
+
     #[test]
     fn the_pipboy_gives_up_waiting_when_the_animation_is_gone() {
         let mut e = world();
@@ -9675,6 +9803,30 @@ mod tests {
         e.set(m, InterfaceManager::field_4bc, 2);
         fn_0070f690(&mut e, m, 0);
         assert_eq!(e.get(m, InterfaceManager::field_4bc), 2);
+    }
+
+    /// lStewieAl's Tweaks' S0021 at `0x70F6D3`: every close request, whatever the state, saves the
+    /// inventory's scroll place while the inventory menu is shown (`g_menuVisibility[1002]`), with
+    /// the row only.
+    #[test]
+    fn s0021_closing_the_pipboy_saves_the_inventory_scroll() {
+        let saves = |row: bool, shown: u8, state: u32| {
+            let mut e = world();
+            let m = manager(&mut e);
+            returns(&mut e, SAVE_INVENTORY_SCROLL, 0);
+            e.mem.set_u8(MENU_VISIBILITY + 1002, shown);
+            e.mem.set_u8(MENU_VISIBILITY + 1001, 1);
+            e.mem.set_u8(MENU_VISIBILITY + 1003, 1);
+            e.set(m, InterfaceManager::field_4bc, state);
+            e.set_stewie(engine_core::extend::stewie::INVENTORY_SCROLL_KEPT, row);
+            fn_0070f690(&mut e, m, 0);
+            calls(&e, SAVE_INVENTORY_SCROLL).len()
+        };
+        for state in [0, 2, 3] {
+            assert_eq!(saves(true, 1, state), 1, "{state}");
+            assert_eq!(saves(true, 0, state), 0, "{state}");
+            assert_eq!(saves(false, 1, state), 0, "{state}");
+        }
     }
 
     /// A manager with a cursor and a pipboy object, in the given menu mode,
@@ -10277,6 +10429,93 @@ mod tests {
         );
     }
 
+    /// lStewieAl's Tweaks' S0022.32: the two `tick * 2` stores of the repeat time (no button
+    /// acting, and a first direction press with no repeating tile) store -1 with the row.
+    #[test]
+    fn s0022_32_the_repeat_time_is_cleared() {
+        let (mut e, m, out) = gamepad_world();
+        e.set_stewie(engine_core::extend::stewie::GAMEPAD_REPEAT_CLEARED, true);
+        button_states(&mut e, &[]);
+        e.set(m, InterfaceManager::iLastGamepadEvent, 3);
+        assert_eq!(
+            interface_manager_get_top_gamepad_button(&mut e, m, 0, 0, out),
+            0
+        );
+        assert_eq!(e.get(m, InterfaceManager::iLastGamepadEvent), 0);
+        assert_eq!(
+            e.get(m, InterfaceManager::uGamepadRepeatStartTime),
+            u32::MAX
+        );
+        button_states(&mut e, &[(1, 2)]);
+        e.set(m, InterfaceManager::iLastGamepadEvent, 0);
+        e.set(m, InterfaceManager::uGamepadRepeatStartTime, 7);
+        assert_eq!(
+            interface_manager_get_top_gamepad_button(&mut e, m, 0, 0, out),
+            1
+        );
+        assert_eq!(
+            e.get(m, InterfaceManager::uGamepadRepeatStartTime),
+            u32::MAX
+        );
+        // Off: twice the tick, as above.
+        e.set_stewie(engine_core::extend::stewie::GAMEPAD_REPEAT_CLEARED, false);
+        e.set(m, InterfaceManager::iLastGamepadEvent, 0);
+        assert_eq!(
+            interface_manager_get_top_gamepad_button(&mut e, m, 0, 0, out),
+            1
+        );
+        assert_eq!(e.get(m, InterfaceManager::uGamepadRepeatStartTime), 2000);
+    }
+
+    /// lStewieAl's Tweaks' S0022.53: L3 (0x11) and R3 (0x12) set `*released` to 1 with the row (so
+    /// the menu's `HandleControllerInput` gets them), 0 while the start menu's control mapping
+    /// waits; off, the byte is left as it was.
+    #[test]
+    fn s0022_53_l3_and_r3_reach_the_menu() {
+        let run = |row: bool, button: u32, start_menu: u32, mapping: u32| {
+            let (mut e, m, out) = gamepad_world();
+            button_states(&mut e, &[(button, 2)]);
+            e.mem.set_u8(out.addr(), 0x55);
+            e.set_global(START_MENU_SINGLETON, start_menu);
+            returns(&mut e, START_MENU_IS_IN_ACTION_MAPPING, mapping);
+            e.set_stewie(engine_core::extend::stewie::MENU_L3_R3, row);
+            let result = interface_manager_get_top_gamepad_button(&mut e, m, 0, 0, out);
+            let asked = calls(&e, START_MENU_IS_IN_ACTION_MAPPING);
+            (result, e.mem.u8(out.addr()), asked)
+        };
+        assert_eq!(run(false, 0x11, 0x7e00, 0), (0x11, 0x55, vec![]));
+        assert_eq!(run(true, 0x11, 0, 1), (0x11, 1, vec![]));
+        assert_eq!(run(true, 0x12, 0x7e00, 0), (0x12, 1, vec![vec![0x7e00]]));
+        assert_eq!(run(true, 0x12, 0x7e00, 1), (0x12, 0, vec![vec![0x7e00]]));
+        assert_eq!(run(true, 0x11, 0x7e00, 1), (0x11, 0, vec![vec![0x7e00]]));
+    }
+
+    /// lStewieAl's Tweaks' S0022.05: an arrow (1 to 4) or shift-left/right (0xD, 0xE) handed to the
+    /// frontmost menu clears `bMouseInMotion` with the row; another code, or the row off, leaves it.
+    #[test]
+    fn s0022_05_arrow_keys_take_the_selection_from_the_mouse() {
+        let run = |row: bool, event: i32| {
+            let (mut e, m, _) = gamepad_world();
+            returns(&mut e, HAS_360_CONTROLLER_GETTER, 0);
+            menu_list(&mut e, m, &[]);
+            returns(&mut e, MENU_MANAGER_INSTANCE, 0x2000_2000);
+            returns(&mut e, GET_FRONTMOST_MENU, 0x7d00);
+            returns(&mut e, DO_GAMEPAD, 1);
+            e.set(m, InterfaceManager::bMouseInMotion, 1);
+            e.set_stewie(engine_core::extend::stewie::ARROW_KEYS_OVER_MOUSE, row);
+            interface_manager_do_gamepad_event(&mut e, m, event);
+            assert_eq!(calls(&e, DO_GAMEPAD).len(), 1);
+            e.get(m, InterfaceManager::bMouseInMotion)
+        };
+        for event in [1, 2, 3, 4, 0xd, 0xe] {
+            assert_eq!(run(true, event), 0, "{event:x}");
+            assert_eq!(run(false, event), 1, "{event:x}");
+        }
+        for event in [5, 9, 0xf, 0x11] {
+            assert_eq!(run(true, event), 1, "{event:x}");
+        }
+    }
+
     /// A root menu list with the given children (tile addresses), iterated
     /// from the last: the previous-element double walks `children`.
     fn menu_list(e: &mut Engine, m: Ptr<InterfaceManager>, children: &[u32]) {
@@ -10664,6 +10903,64 @@ mod tests {
         assert_eq!(calls(&e, STRING_DESTROY).len(), 1);
     }
 
+    /// lStewieAl's Tweaks' S0059: with the row the model path is printed at the first line under
+    /// the name (130) before the name line (100), and the lines after it move down one (the bottom
+    /// is 147). Off, or with `bMeshPath` off and a model that is not the missing marker, nothing;
+    /// with the marker (`MARKER_ERROR`, any case) it is printed though `bMeshPath` is off.
+    #[test]
+    fn s0059_the_console_shows_the_model_path() {
+        let run = |row: bool, mesh_path: bool, node_name: &[u8]| {
+            let (mut e, m) = debug_text_world();
+            let pick = e.mem.alloc(0x100);
+            e.mem.set_u32(m.addr() + 0x70, pick);
+            returns(&mut e, FORM_ID_GETTER, 0x1234);
+            returns(&mut e, REFR_NAME, 0x5555);
+            e.set_global(DEBUG_TEXT_BOTTOM, 0i32);
+            let base = e.mem.alloc(0x40);
+            e.mem.set_u32(pick + 0x20, base);
+            let path = e.mem.alloc(0x20);
+            e.mem.set_u8(path, b'm');
+            let model = e.mem.alloc(0x10);
+            let vtable = e.mem.alloc(0x20);
+            e.mem.set_u32(model, vtable);
+            e.mem.set_u32(vtable + 0x14, 0x0900_0714);
+            e.register_double(0x0900_0714, move |_, _| Ret {
+                eax: path,
+                ..Ret::default()
+            });
+            returns(&mut e, 0x00ec_43fb, model);
+            let state = e.mem.alloc(0x20);
+            let node = e.mem.alloc(0x20);
+            let name = e.mem.alloc(0x20);
+            for (i, b) in node_name.iter().enumerate() {
+                e.mem.set_u8(name + i as u32, *b);
+            }
+            e.mem.set_u32(node + 8, name);
+            e.mem.set_u32(state + 0x14, node);
+            e.mem.set_u32(pick + 0x64, state);
+            e.set_stewie(engine_core::extend::stewie::CONSOLE_MESH_PATH, row);
+            e.set_stewie_mesh_path(mesh_path);
+            interface_manager_display_current_pick_ref(&mut e, m);
+            let lines: Vec<(u32, u32)> = calls(&e, DEBUG_TEXT_PRINT)
+                .iter()
+                .map(|c| (c[1], f32::from_bits(c[3]) as u32))
+                .collect();
+            (lines, e.global::<i32>(DEBUG_TEXT_BOTTOM), path)
+        };
+        let (lines, bottom, path) = run(true, true, b"Plain\0");
+        assert_eq!(lines, vec![(path, 130), (0xc0c0, 100)]);
+        assert_eq!(bottom, 147);
+        let (lines, bottom, _) = run(false, true, b"Plain\0");
+        assert_eq!(lines, vec![(0xc0c0, 100)]);
+        assert_eq!(bottom, 130);
+        let (lines, _, _) = run(true, false, b"Plain\0");
+        assert_eq!(lines, vec![(0xc0c0, 100)]);
+        let (lines, _, path) = run(true, false, b"MARKER_ERROR\0");
+        assert_eq!(lines, vec![(path, 130), (0xc0c0, 100)]);
+        let (lines, _, _) = run(true, false, b"marker_errors\0");
+        assert_eq!(lines, vec![(0xc0c0, 100)]);
+    }
+
     /// JohnnyGuitar NVSE's seam at the call `0x710BFC`: the picked reference's name is the seam's
     /// answer (its full name or editor id), the reference given; `REFR_NAME` is not asked.
     #[test]
@@ -11022,6 +11319,65 @@ mod tests {
         e.set(m, InterfaceManager::bShowMouse, 1);
         fn_007118d0(&mut e, m);
         assert_eq!(calls(&e, NODE_SET_TRANSLATE_VECTOR).len(), 1);
+    }
+
+    /// lStewieAl's Tweaks' S0022.38: with a controller and the cursor shown, off: the mouse alone
+    /// (10 right, 5 up); on: the stick (scaled 0.001: 10 right, 10 down) plus the mouse; a stick
+    /// value inside the deadzone (7,849) is 0, so the mouse alone again.
+    #[test]
+    fn s0022_38_the_thumbstick_moves_the_shown_cursor() {
+        let moved = |row: bool, stick: i32| {
+            let (mut e, m) = cursor_world();
+            let vectors = vector_recorder(&mut e);
+            returns(&mut e, HAS_360_CONTROLLER_GETTER, 1);
+            e.set(m, InterfaceManager::bShowMouse, 1);
+            e.register_double(CONTROLS_AXIS_00A23390, move |_, a| Ret {
+                eax: if a[2] == 7 { stick } else { -stick } as u32,
+                ..Ret::default()
+            });
+            let scale = e.mem.alloc(4);
+            e.mem.set_f32(scale, 0.001);
+            returns(&mut e, FLOAT_HOLDER_GET, scale);
+            e.set_stewie(engine_core::extend::stewie::CONSOLE_THUMBSTICK_CURSOR, row);
+            fn_007118d0(&mut e, m);
+            let first = vectors.borrow()[0];
+            (first[0], first[2], calls(&e, CONTROLS_AXIS_00A23390).len())
+        };
+        assert_eq!(moved(false, 10_000), (10.0, 5.0, 0));
+        assert_eq!(moved(true, 10_000), (20.0, -5.0, 2));
+        assert_eq!(moved(true, 7_848), (10.0, 5.0, 2));
+        // At the deadzone itself the stick counts: 7.849 chopped to 7, plus the mouse.
+        assert_eq!(moved(true, 7_849), (17.0, -2.0, 2));
+    }
+
+    /// lStewieAl's Tweaks' S0022.03: the shift state handed to the character lookup. Off:
+    /// `bShiftDown`; on: the Stewie seam's answer (the raw keys), `bShiftDown` without a handler.
+    #[test]
+    fn s0022_03_the_shift_state_is_the_keyboard_s_now() {
+        fn up(_: &mut Engine, _: &[u32]) -> Option<u32> {
+            Some(0)
+        }
+        fn down(_: &mut Engine, _: &[u32]) -> Option<u32> {
+            Some(1)
+        }
+        let run = |row: bool, handler: Option<engine_core::extend::SiteFn>, shift_down: u8| {
+            let mut e = world();
+            let m = manager(&mut e);
+            returns(&mut e, CONTROLS_GET, 0xc0de);
+            returns(&mut e, CONTROLS_QUERY_00A238A0, b'a' as u32);
+            e.set(m, InterfaceManager::bShiftDown, shift_down);
+            if let Some(handler) = handler {
+                e.on_site_for_test(0x0071_5563, handler);
+            }
+            e.set_stewie(engine_core::extend::stewie::TEXT_SHIFT_HELD_NOW, row);
+            assert_eq!(fn_007154b0(&mut e, m, 1, 0x1e), b'a' as u32);
+            calls(&e, CONTROLS_QUERY_00A238A0)[0][2]
+        };
+        assert_eq!(run(false, Some(up), 1), 1);
+        assert_eq!(run(false, Some(down), 0), 0);
+        assert_eq!(run(true, Some(up), 1), 0);
+        assert_eq!(run(true, Some(down), 0), 1);
+        assert_eq!(run(true, None, 1), 1);
     }
 
     // ---- 00712450 .. 00714c20 ----
