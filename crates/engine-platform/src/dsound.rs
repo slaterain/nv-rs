@@ -40,7 +40,11 @@
 //! effects and settings the game asks for. Where an answer follows a rule (which buffer sizes
 //! and formats are refused, the ranges of volume, pan, frequency and the distortion's
 //! parameters), the layer answers by the rule and checks the rule against every captured line
-//! when it loads the table: a table that disagrees stops the run. Which secondary buffers are
+//! when it loads the table. A table that disagrees (another DirectSound answered the capture: a
+//! replacement `dsound.dll`, an audio tool's, Wine's) is said once in the log and the game is
+//! answered by [`FIXED_TABLE`], Windows' own DirectSound's answers, instead ([`load_table`]):
+//! the layer mixes the game's sound itself, so the PC's DirectSound plays no part in what is
+//! heard (until 2026-11-22 such a table stopped the run: issues #558 and #634). Which secondary buffers are
 //! made follows that rule for every description measured (`MEASURED_FLAGS`, PCM mono or stereo,
 //! 8 or 16 bits, 100 to 200000 Hz, any size), whether the capture asked for it or not; another
 //! description is not provided. The state of buffers, the listener and the effects is this
@@ -385,6 +389,10 @@ pub struct Table {
     /// `SetFX` / `GetObjectInPath` by (effect, buffer has `DSBCAPS_CTRLFX`): `SetFX`'s result,
     /// its result code, `GetObjectInPath`'s result.
     effects: BTreeMap<(String, bool), (u32, u32, u32)>,
+    /// The captured lines that disagree with the layer's rules: how many, and the first one's
+    /// rule and line ([`Table::differ`]).
+    differing: usize,
+    first_difference: Option<(String, String)>,
 }
 
 fn hex(text: &str) -> u32 {
@@ -400,10 +408,6 @@ fn bytes(text: &str) -> Vec<u8> {
     (0..text.len() / 2)
         .map(|i| u8::from_str_radix(&text[2 * i..2 * i + 2], 16).expect("hex bytes"))
         .collect()
-}
-
-fn disagree(line: &str, rule: impl std::fmt::Display) -> ! {
-    panic!("the sound table disagrees with the layer ({rule}): {line}; re-capture it or report it")
 }
 
 /// The answer the layer gives a secondary `CreateSoundBuffer` (see the module documentation).
@@ -444,7 +448,9 @@ fn distortion_ok(p: [f32; 5]) -> bool {
 }
 
 impl Table {
-    /// Parses and checks a capture.
+    /// Parses and checks a capture: a line this layer does not know, or a table cut short, stops
+    /// the run; the lines whose answers disagree with the layer's rules are counted
+    /// ([`Table::differ`], [`load_table`] decides).
     pub fn parse(text: &str) -> Table {
         let mut t = Table::default();
         let mut ended = false;
@@ -464,7 +470,7 @@ impl Table {
                 }
                 "DsBuffer" => t.check_buffer(line, &f),
                 "DsFx" => t.check_effect(line, &f),
-                "DsSet" => check_setting(line, &f),
+                "DsSet" => t.check_setting(line, &f),
                 "DsCursor" => {}
                 "DsEnd" => ended = true,
                 other => panic!("the sound table has a line this layer does not know: {other}"),
@@ -477,6 +483,15 @@ impl Table {
         t
     }
 
+    /// A captured line whose answer is not the layer's rule's: counted, the first one kept for
+    /// the log ([`load_table`]).
+    fn differ(&mut self, line: &str, rule: impl std::fmt::Display) {
+        self.differing += 1;
+        if self.first_difference.is_none() {
+            self.first_difference = Some((rule.to_string(), line.to_string()));
+        }
+    }
+
     fn check_buffer(&mut self, line: &str, f: &[&str]) {
         let w = words(f[1]);
         let kind: Kind = (w[0], w[1] != 0, w[2] as u16, w[3] as u16, w[4], w[5] as u16);
@@ -484,13 +499,18 @@ impl Table {
         let result = hex(f[2]);
         let want = create_result(kind, size);
         if result != want {
-            disagree(line, format!("CreateSoundBuffer answers {want:x}"));
+            self.differ(line, format!("CreateSoundBuffer answers {want:x}"));
+            return;
         }
         if (result as i32) < 0 {
             return;
         }
         // The new buffer as the layer makes it.
         let caps = bytes(f[3]);
+        if caps.len() < 20 {
+            self.differ(line, "a new buffer's caps, format, state and interfaces");
+            return;
+        }
         let read = |b: &[u8], o: usize| u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]);
         let (flags, _, tag, channels, rate, bits) = kind;
         let align = u32::from(channels) * u32::from(bits) / 8;
@@ -511,7 +531,7 @@ impl Table {
             && state == [rate, 0, 0, 0]
             && queries == [DS_OK, three_d];
         if !ok || align == 0 {
-            disagree(line, "a new buffer's caps, format, state and interfaces");
+            self.differ(line, "a new buffer's caps, format, state and interfaces");
         }
     }
 
@@ -523,9 +543,21 @@ impl Table {
         let flags = hex(w[1]);
         let key = (w[0].to_string(), flags & DSBCAPS_CTRLFX != 0);
         let value = (hex(f[2]), hex(f[3]), hex(f[4]));
-        if let Some(old) = self.effects.insert(key, value) {
+        if let Some(old) = self.effects.insert(key.clone(), value) {
             if old != value {
-                disagree(line, "the same effect answers the same for every format");
+                self.effects.insert(key, old);
+                self.differ(line, "the same effect answers the same for every format");
+            }
+        }
+    }
+
+    /// Checks a `DsSet` line against the layer's rules.
+    fn check_setting(&mut self, line: &str, f: &[&str]) {
+        if let Some(want) = setting_rule(line, f) {
+            // The 3D buffer's defaults line has two results (the query's and `GetAllParameters`').
+            let result = hex(f[2].split(' ').next().unwrap_or_default());
+            if result != want {
+                self.differ(line, format!("answers {want:x}"));
             }
         }
     }
@@ -558,48 +590,68 @@ fn format_bytes(tag: u16, channels: u16, rate: u32, bits: u16) -> Vec<u8> {
     b
 }
 
-/// Checks a `DsSet` line against the layer's rules.
-fn check_setting(line: &str, f: &[&str]) {
+/// The answer the layer's rules give a `DsSet` line's setting; `None` for the settings no rule
+/// answers (locks, the 3D buffer's and the listener's other settings, the reverb's presets).
+fn setting_rule(line: &str, f: &[&str]) -> Option<u32> {
     let w: Vec<&str> = f[1].split(' ').collect();
-    // The 3D buffer's defaults line has two results (the query's and `GetAllParameters`').
-    let result = hex(f[2].split(' ').next().unwrap_or_default());
-    let expect = |want: u32| {
-        if result != want {
-            disagree(line, format!("answers {want:x}"));
-        }
-    };
     let ok = |good: bool| if good { DS_OK } else { DSERR_INVALIDPARAM };
-    match w.as_slice() {
+    Some(match w.as_slice() {
         ["distortion", gain] => {
             let g = f32::from_bits(hex(gain));
-            expect(ok(distortion_ok([g, 0.0, 5000.0, 1135.0, 5000.0])));
+            ok(distortion_ok([g, 0.0, 5000.0, 1135.0, 5000.0]))
         }
-        [_, "volume", v] => expect(ok(volume_ok(hex(v) as i32))),
+        [_, "volume", v] => ok(volume_ok(hex(v) as i32)),
         [flags, "pan", v] => {
             let has_pan = hex(flags) & DSBCAPS_CTRLPAN != 0;
             let v = hex(v) as i32;
-            expect(match (pan_ok(v), has_pan) {
+            match (pan_ok(v), has_pan) {
                 (false, _) => DSERR_INVALIDPARAM,
                 (true, false) => DSERR_CONTROLUNAVAIL,
                 (true, true) => DS_OK,
-            });
+            }
         }
-        [_, "frequency", v] => expect(ok(frequency_ok(hex(v)))),
-        ["3dbuffer", "mindistance" | "maxdistance", v] => {
-            expect(ok(f32::from_bits(hex(v)) > 0.0));
-        }
+        [_, "frequency", v] => ok(frequency_ok(hex(v))),
+        ["3dbuffer", "mindistance" | "maxdistance", v] => ok(f32::from_bits(hex(v)) > 0.0),
         [_, "lock", ..]
         | [_, "unlock"]
         | ["3dbuffer", ..]
         | ["listener", ..]
-        | ["i3dl2preset", _] => {}
+        | ["i3dl2preset", _] => return None,
         _ => panic!("the sound table has a setting this layer does not know: {line}"),
-    }
+    })
 }
 
-/// Gives the layer the player's sound table (`scripts/dsound-capture`'s output).
+/// Gives the layer the player's sound table (`scripts/dsound-capture`'s output). A table whose
+/// answers disagree with the layer's rules was answered by another DirectSound than Windows' own
+/// (a replacement `dsound.dll` or an audio tool's on the PC, Wine's): one line in the log says so
+/// (how many lines, the first one and its rule), and the game is answered by [`fixed_table`]
+/// instead, Windows' own DirectSound's answers (with the capture's sound device or none), as
+/// on Linux and macOS. What is heard does not change: the layer mixes the game's sound itself
+/// and sends it to the device; the PC's DirectSound plays no part in it.
 pub fn load_table(e: &mut Engine, text: &str) {
-    state!(e).sound.table = Some(Table::parse(text));
+    let captured = Table::parse(text);
+    state!(e).sound.table = Some(answering(captured, |line| eprintln!("{line}")));
+}
+
+/// The table [`load_table`] answers the game with: `captured`, or, when it disagrees with the
+/// layer's rules, [`fixed_table`] with the capture's sound device or none (`say` gets the line).
+fn answering(captured: Table, say: impl FnOnce(String)) -> Table {
+    let Some((rule, line)) = &captured.first_difference else {
+        return captured;
+    };
+    let device = captured.create != DSERR_NODRIVER;
+    say(format!(
+        "sound: {} line(s) of the sound table were answered otherwise than Windows' own \
+         DirectSound answers them (the first: {rule}: {}): another DirectSound answered the \
+         capture on this PC; the game is answered as Windows' own DirectSound answers{}, and its \
+         sound is mixed and played as always",
+        captured.differing,
+        line.replace('\t', " "),
+        if device { "" } else { " (no sound device)" }
+    ));
+    let fixed = Table::parse(&fixed_table(device));
+    debug_assert_eq!(fixed.differing, 0, "the fixed table follows the rules");
+    fixed
 }
 
 /// The loaded table; loaded from `NV_DSOUND_TABLE` (default `%LOCALAPPDATA%\nv-rs\dsound.tsv`)
@@ -6977,14 +7029,114 @@ mod tests {
         }
     }
 
+    /// `t`'s answers that are not the rules': create, caps, primary, listener, the effects.
+    fn answers(t: &Table) -> String {
+        format!(
+            "{:x} {:?} {:?} {:x} {:?} {:?}",
+            t.create, t.cooperative, t.caps, t.primary, t.listener, t.effects
+        )
+    }
+
+    /// `text` loaded as the game's start-up loads it ([`answering`]), with the lines it said.
+    fn answered(text: &str) -> (Table, Vec<String>) {
+        let mut said = Vec::new();
+        let t = answering(Table::parse(text), |line| said.push(line));
+        (t, said)
+    }
+
+    /// Issue #558: a capture whose DirectSound made a DSBCAPS_CTRLFX buffer of 4 bytes at 8000 Hz
+    /// (the player's line), where Windows' own answers `DSERR_BUFFERTOOSMALL`, no longer stops the
+    /// run: the line is counted, said once, and the game is answered by the fixed table.
     #[test]
-    #[should_panic(expected = "the sound table disagrees")]
-    fn a_table_that_disagrees_stops() {
+    fn a_table_that_disagrees_is_answered_as_windows_answers() {
+        let player = "DsBuffer\t2e0 0 1 1 1f40 8 4\t0\t14000000e8020000040000000000000000000000\t\
+                      01000100401f0000401f0000010008000000 12\t1f40 0 0 0\t0 80004002\n";
         let text = table_text().replace(
             "DsBuffer\t2e0 0 1 1 5622 10 3\t80070057",
             "DsBuffer\t2e0 0 1 1 5622 10 3\t0",
         );
-        Table::parse(&text);
+        let text = text.replace("DsEnd\n", &format!("{player}DsEnd\n"));
+        let captured = Table::parse(&text);
+        assert_eq!(captured.differing, 2);
+        let (rule, line) = captured.first_difference.clone().unwrap();
+        assert_eq!(rule, "CreateSoundBuffer answers 80070057");
+        assert!(
+            line.starts_with("DsBuffer\t2e0 0 1 1 5622 10 3\t0"),
+            "{line}"
+        );
+        let (t, said) = answered(&text);
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].contains("2 line(s)"), "{}", said[0]);
+        assert!(said[0].contains("CreateSoundBuffer answers 80070057"));
+        assert!(!said[0].contains('\t'), "one line");
+        assert_eq!(answers(&t), answers(&Table::parse(&fixed_table(true))));
+        // The player's line alone: its rule names Windows' DSERR_BUFFERTOOSMALL.
+        let only = table_text().replace("DsEnd\n", &format!("{player}DsEnd\n"));
+        let captured = Table::parse(&only);
+        assert_eq!(captured.differing, 1);
+        assert_eq!(
+            captured.first_difference.unwrap().0,
+            format!("CreateSoundBuffer answers {DSERR_BUFFERTOOSMALL:x}")
+        );
+    }
+
+    /// A table that follows the rules is the game's, as it was, and nothing is said.
+    #[test]
+    fn a_table_that_agrees_is_the_games() {
+        let text = table_text();
+        let (t, said) = answered(&text);
+        assert!(said.is_empty(), "{said:?}");
+        assert_eq!(t.differing, 0);
+        assert_eq!(answers(&t), answers(&Table::parse(&text)));
+        assert_ne!(answers(&t), answers(&Table::parse(&fixed_table(true))));
+    }
+
+    /// The other disagreements a capture by another DirectSound shows (issue #634: Wine's): a
+    /// setting's answer (the distortion's `SetAllParameters` not implemented), an effect that
+    /// answers otherwise for another format (the first answer kept), a new buffer's caps cut
+    /// short; each counted, none stops. Without a sound device in the capture the fixed table
+    /// has none either.
+    #[test]
+    fn every_kind_of_disagreement_is_counted() {
+        let text = table_text()
+            .replace(
+                "DsSet\tdistortion 00000000\t0\t00",
+                "DsSet\tdistortion 00000000\t80004001\t00",
+            )
+            .replace(
+                "DsEnd\n",
+                "DsFx\ti3dl2 2e0 1 ac44 ac44\t0\t0\t0\t00\nDsEnd\n",
+            );
+        let t = Table::parse(&text);
+        assert_eq!(t.differing, 2);
+        assert_eq!(t.first_difference.as_ref().unwrap().0, "answers 0");
+        assert_eq!(t.effect("i3dl2", true).0, 0x8004_0154, "the first answer");
+        let short = table_text().replace(
+            "DsBuffer\t2e0 0 1 1 5622 10 ac44\t0\t14000000",
+            "DsBuffer\t2e0 0 1 1 5622 10 ac44\t0\t1400",
+        );
+        assert_ne!(short, table_text(), "the line was found");
+        assert_eq!(Table::parse(&short).differing, 1);
+        let silent = text.replace(
+            "DsCreate\t\t0\t",
+            &format!("DsCreate\t\t{DSERR_NODRIVER:x}\t"),
+        );
+        let (t, said) = answered(&silent);
+        assert!(said[0].contains("(no sound device)"), "{}", said[0]);
+        assert_eq!(t.create, DSERR_NODRIVER);
+    }
+
+    /// `load_table` puts the answering table in the layer's state.
+    #[test]
+    fn the_start_up_loads_the_answering_table() {
+        let text = table_text().replace(
+            "DsBuffer\t2e0 0 1 1 5622 10 3\t80070057",
+            "DsBuffer\t2e0 0 1 1 5622 10 3\t0",
+        );
+        let mut e = Engine::new();
+        load_table(&mut e, &text);
+        let loaded = state!(e).sound.table.clone().unwrap();
+        assert_eq!(answers(&loaded), answers(&Table::parse(&fixed_table(true))));
     }
 
     #[test]
