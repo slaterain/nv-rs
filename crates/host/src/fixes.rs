@@ -94,7 +94,7 @@ fn install_io_wait(e: &mut Engine) {
 
 /// Loads finished in small steps: in play the game finishes background loads on main once a frame
 /// (`IOManager::UpdateQueue`, `00c3dbf0`): first the model loader's walk over its queued references
-/// (`00448cc0`, up to 5 ms), then completed loads for `iPostProcessMilliseconds` (5 ms), the clock
+/// (`00448cc0`, which starts their loads front to back, up to 5 ms), then completed loads for `iPostProcessMilliseconds` (5 ms), the clock
 /// looked at only after each one. While the loaders are busy (running across cell borders) both
 /// use their whole 5 ms frame after frame. With the row both get [`LOAD_STEPS_MS`] in play (the IO
 /// manager's mode 6); the game's own waits for loads and the loading screens keep the game's
