@@ -92,10 +92,21 @@ pub enum Count {
     /// references (`00448cc0`, each one's finished check) (ns).
     LoaderDrainNs,
     LoaderWalkNs,
+    /// The parts of a grid shift in `TES::UpdateCurrentGridCell` (`00452580`), main's time in each (ns): the cancel of
+    /// the exterior cell loader's queued cells (`00528110`, `005281f0`, `005282d0`), the unused textures' clean-up
+    /// (`00454d50` / `TES::CleanUpUnusedTextures`), the grid's `SetCenter` (slot `0x10`: cells leaving detached, the
+    /// grid moved), the Havok world's lock counts dropped after it (the deferred additions run), the grid array's load
+    /// (`TES::GridArrayLoad`: the new cells loaded and attached) and the distant terrain's update at the player.
+    GridCancelNs,
+    GridTexturesNs,
+    GridShiftNs,
+    GridHavokNs,
+    GridLoadNs,
+    GridTerrainNs,
 }
 
 /// How many counts there are.
-pub const COUNTS: usize = Count::LoaderWalkNs as usize + 1;
+pub const COUNTS: usize = Count::GridTerrainNs as usize + 1;
 
 /// Times main's work from [`Timed::main`] to its drop into a `...Ns` count: nothing on another game thread or with
 /// the log off. One clock read at each end, at places that run a few times a frame at most and do far more work.
