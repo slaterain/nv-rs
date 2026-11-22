@@ -131,15 +131,22 @@ fn culling_fade_on_visible() {
             e.mem.set_u32(0x0101_df44, 0x3e4c_cccd);
             e.mem.set_u32(0x0101_786c, 0x4416_0000);
             // The most-alpha callback: none, or one answering 0, a half or 1 (in ST0).
-            let alpha = [0, 0, HALF, ONE, 0x3f7f_0000][case.word(5) as usize];
-            if case.word(5) != 0 {
-                e.register(CALLBACK, move |e, a| {
-                    log(e, 0x05, a[0]);
-                    Ret {
-                        st0: f64::from(f32::from_bits(alpha)),
-                        ..Ret::default()
-                    }
-                });
+            fn most_alpha<const ALPHA: u32>(e: &mut Engine, a: &[u32]) -> Ret {
+                log(e, 0x05, a[0]);
+                Ret {
+                    st0: f64::from(f32::from_bits(ALPHA)),
+                    ..Ret::default()
+                }
+            }
+            let callback: Option<fn(&mut Engine, &[u32]) -> Ret> = match case.word(5) {
+                1 => Some(most_alpha::<0>),
+                2 => Some(most_alpha::<HALF>),
+                3 => Some(most_alpha::<ONE>),
+                4 => Some(most_alpha::<0x3f7f_0000>),
+                _ => None,
+            };
+            if let Some(callback) = callback {
+                e.register(CALLBACK, callback);
                 e.mem.set_u32(0x011f_9134, CALLBACK);
             }
             e.mem.set_u32(LOG + 0x3c00 + 8, case.word(5) & 1);
