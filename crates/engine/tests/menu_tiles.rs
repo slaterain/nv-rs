@@ -775,13 +775,14 @@ fn logging(e: &mut Engine, a: &[u32]) -> Ret {
     Ret::default()
 }
 
-/// [`world`] with the log mapped and `Tile::Value::SetFloat` (`00a0a270`), `SetString`
-/// (`00a0a300`) and `CalculateValue` (`00a09410`) as logging stand-ins: what reaches them is what
-/// the setters and the change event decide; their own work has its own translations.
+/// [`world`] with the log mapped and `Tile::Value::SetFloat` (`00a0a270`) and `SetString`
+/// (`00a0a300`) as logging stand-ins: what reaches them is what the setters decide; their own work
+/// has its own translations. `CalculateValue` (`00a09410`) is typed (a member of the dispatch
+/// family), so no setup may stand in for it: the real one runs on both sides.
 fn setter_world(e: &mut Engine) {
     world(e);
     e.map(LOG, 0x4000);
-    for stub in [0x00a0_a270, 0x00a0_a300, 0x00a0_9410] {
+    for stub in [0x00a0_a270, 0x00a0_a300] {
         e.register(stub, logging);
     }
 }
@@ -1077,7 +1078,7 @@ fn tile_absolute_position_diff() {
     .assert_same();
 }
 
-/// What the `CalculateValue` stand-in of [`tile_value_change_event_diff`] does on its call number
+/// What the action stand-in of [`tile_value_change_event_diff`] does on its call number
 /// [`CALC_TRIGGER`] (0 nothing; 1 `AddReaction(value, extra)`, a node at the end of the walked list;
 /// 2 the current node taken out of the list and its next word cleared, as if freed and reused;
 /// 3 `ValueChangeEvent(other)`), the values it works on and its call count.
@@ -1088,8 +1089,10 @@ const CALC_EXTRA: u32 = LOG + 0x3f0c;
 const CALC_TRIGGER: u32 = LOG + 0x3f10;
 const CALC_CALLS: u32 = LOG + 0x3f14;
 
-/// The `CalculateValue` stand-in that changes the reaction lists while `ValueChangeEvent` walks
-/// them: logs its words, then on one call does what [`CALC_MODE`] says.
+/// The operand function (`QFloat`, action vtable slot 0) of each dependent's one action in
+/// [`tile_value_change_event_diff`], so it runs inside the real `CalculateValue` of that dependent
+/// and changes the reaction lists while `ValueChangeEvent` walks them: logs its words (the action,
+/// one per dependent), then on one call does what [`CALC_MODE`] says. It answers 0.0.
 fn calculating(e: &mut Engine, a: &[u32]) -> Ret {
     logging(e, a);
     let n = e.mem.u32(CALC_CALLS);
@@ -1133,10 +1136,13 @@ fn calculating(e: &mut Engine, a: &[u32]) -> Ret {
 }
 
 /// `Tile::ValueChangeEvent` (`00a0a220`): a value with no reaction list, and lists of one to three
-/// dependents (one named twice), each recalculated with `CalculateValue(false)` in order. On its
-/// first or second call the `CalculateValue` stand-in may add a reaction to the walked list, take
-/// the current node out of it, or run the event for another value: the walk reads the next node
-/// after the call, from the node it just handled, as the exe does (`00a0a258`).
+/// dependents (one named twice), each recalculated with `CalculateValue(false)` in order (the real
+/// one, typed on the typed side: it is a member of the dispatch family). Each dependent is a value
+/// of a plain tile with one action of an unknown type whose operand function is the stand-in
+/// [`calculating`], so its recalculation changes nothing but makes that one call. On its first or
+/// second call the stand-in may add a reaction to the walked list, take the current node out of
+/// it, or run the event for another value: the walk reads the next node after the call, from the
+/// node it just handled, as the exe does (`00a0a258`).
 #[test]
 fn tile_value_change_event_diff() {
     Diff::new(engine_core::entry!(
@@ -1153,13 +1159,29 @@ fn tile_value_change_event_diff() {
     ])
     .setup(|e, case| {
         setter_world(e);
-        e.register(0x00a0_9410, calculating);
+        // The action class: `QFloat` the stand-in, `QRefValue` answering none (both called
+        // through the vtable on both sides, as neither is one of the classes' own).
+        e.register(0x00fd_0700, calculating);
+        e.register(0x00fd_0704, |_, _| Ret::default());
+        let vtable = e.mem.alloc(8);
+        e.mem.set_u32(vtable, 0x00fd_0700);
+        e.mem.set_u32(vtable + 4, 0x00fd_0704);
+        let tile = e.mem.alloc(0x40);
+        let dependent = |e: &mut Engine| {
+            let value = e.mem.alloc(0x14);
+            e.mem.set_u32(value + 4, tile);
+            let action = e.mem.alloc(0x10);
+            e.mem.set_u32(action, vtable);
+            e.mem.set_u32(action + 4, 2099);
+            e.mem.set_u32(value + 0x10, action);
+            value
+        };
         let value = e.mem.alloc(0x14);
-        let (a, b, c) = (e.mem.alloc(0x14), e.mem.alloc(0x14), e.mem.alloc(0x14));
+        let (a, b, c) = (dependent(e), dependent(e), dependent(e));
         let lists: Vec<Vec<u32>> = vec![vec![], vec![a], vec![a, b], vec![c, a, b], vec![b, b]];
         let list = &lists[case.word(0) as usize];
         let other = e.mem.alloc(0x14);
-        let extra = e.mem.alloc(0x14);
+        let extra = dependent(e);
         let mut given = vec![(other, vec![c])];
         if !list.is_empty() {
             given.push((value, list.clone()));
@@ -1459,6 +1481,12 @@ fn calculate_words(e: &mut Engine, case: &engine_core::typed::diff::Case) -> Vec
     int_map(e, 0x011f_3358, 37, 0, false);
     int_map(e, 0x011f_3308, 37, 0, false);
     let answer = case.word(3);
+    // `Tile::FinalPostParse` (a value that changed on a tile whose `PostParse` answers 0) queues
+    // its updates with `Tile::AddNeedsUpdate` (`00a07530`): a logging stand-in, so what it is
+    // given compares and the update list's node pool (its lock asks `GetCurrentThreadId`) is left
+    // to that function's own translation.
+    e.map(LOG, 0x4000);
+    e.register(0x00a0_7530, logging);
     e.register(0x00fd_0500, |_, _| ret(0x385));
     e.register_double(0x00fd_0504, move |_, _| ret(answer));
     let vtable = e.mem.alloc(0x20);
@@ -1512,8 +1540,15 @@ fn calculate_value_diff() {
     ))
     .family(&dispatch::DISPATCH)
     .family(&crt::CRT)
+    // `_ctrlfp` (`00ed5abb`), which `floor`'s x87 body reaches with `typed_call!`.
+    .family(&leaf::LEAVES)
     .ignore_calls(&[0x00a0_c000, 0x00a0_c020, 0x00a0_c060, 0x00ad_87c0])
-    .translation_calls_plainly(&[0x00a0_37e0])
+    // `Tile::FinalPostParse`: the translation's plain call. And `floor`'s x87 body (`00ed4563`):
+    // both sides call `floor` (`00ec6940`) by address; its translation (the translation side) jumps
+    // to the body with a plain Rust call, its typed version (the C runtime family, on for the typed
+    // side) by address, as `typed_crt.rs`'s `floor` test declares. The body runs on both sides and
+    // its own calls (`_ctrlfp` loading and putting back the round-down control word) compare.
+    .translation_calls_plainly(&[0x00a0_37e0, 0x00ed_4563])
     .inputs(&[
         Input::Of(&[0, 1, 2, 3, 4, 5]),
         Input::Of(&[0, 1, 2, 3]),
