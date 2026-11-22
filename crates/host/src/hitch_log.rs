@@ -364,6 +364,7 @@ fn holder_words(h: &engine_core::hitch::LockHolder) -> String {
     };
     let what = match (h.call, h.call_name.as_str()) {
         (0, _) if h.section != 0 => "running game code (in no platform call)".to_string(),
+        (0, _) if !h.site.is_empty() => format!("in {}", h.site),
         (0, _) => "outside a platform call".to_string(),
         (_, "") => format!("in the platform call at {:08x}", h.call),
         (_, name) => format!("in {name}"),
@@ -389,8 +390,16 @@ fn holder_words(h: &engine_core::hitch::LockHolder) -> String {
     } else {
         String::new()
     };
+    let hands = if h.handoffs > 0 {
+        format!(
+            "; not one hold: the lock changed hands {} times while main waited",
+            h.handoffs
+        )
+    } else {
+        String::new()
+    };
     format!(
-        "{section}{who} {what}, main waited {:.1} ms{ran}",
+        "{section}{who} {what}, main waited {:.1} ms{ran}{hands}",
         ms(h.wait_ns)
     )
 }
@@ -1522,6 +1531,8 @@ mod tests {
             wait_ns: 286_000_000,
             measured_ns: 285_000_000,
             cpu_ns: Some(280_000_000),
+            site: String::new(),
+            handoffs: 0,
         };
         let mut f = frame();
         f.stages = Some([2.8, 0.1, 4.7, 5.7, 1.3, 0.3, 405.1, 3.0, 0.0]);
@@ -1563,6 +1574,19 @@ mod tests {
             "the host or main in ReadFile, main waited 286.0 ms"
         );
 
+        // Taken outside a platform call by the port's own code (a `kernel_guard` site), and many short holds.
+        let guarded = LockHolder {
+            site: "crates/engine-core/src/mod_files.rs:120".into(),
+            handoffs: 3,
+            wait_ns: 18_300_000,
+            ..LockHolder::default()
+        };
+        assert_eq!(
+            holder_words(&guarded),
+            "the host or main in crates/engine-core/src/mod_files.rs:120, main waited 18.3 ms; not one hold: the lock \
+             changed hands 3 times while main waited"
+        );
+
         // A game critical section's owner, named in the section wait's cause.
         let mut f = frame();
         f.ms = 72.0;
@@ -1580,6 +1604,8 @@ mod tests {
             wait_ns: 3_600_000,
             measured_ns: 3_600_000,
             cpu_ns: Some(3_400_000),
+            site: String::new(),
+            handoffs: 0,
         });
         assert_eq!(
             f.cause(),

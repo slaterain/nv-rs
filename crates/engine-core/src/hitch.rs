@@ -374,6 +374,12 @@ pub struct LockHolder {
     /// The part of the wait the processor time covers (from the moment the wait passed 1 ms to its end).
     pub measured_ns: u64,
     pub cpu_ns: Option<u64>,
+    /// Where outside a platform call the holder took the lock (`file:line` of the port's own code; empty: none
+    /// known).
+    pub site: String,
+    /// How many times other threads took the lock while main waited: 0 is one long hold, more a lock that changed
+    /// hands (short holds re-taken before main woke).
+    pub handoffs: u32,
 }
 
 /// The waits main makes that are worth naming a holder for (1 ms).

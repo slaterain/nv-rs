@@ -389,8 +389,20 @@ fn token() -> u64 {
 struct Seen {
     thread: u32,
     call: u32,
+    /// [`KernelLock::holder_site`] then (0: none).
+    site: usize,
     cpu_ns: Option<u64>,
     at: std::time::Instant,
+}
+
+/// A [`KernelLock::holder_site`] number as `file:line` (empty for 0).
+fn site_words(site: usize) -> String {
+    if site == 0 {
+        return String::new();
+    }
+    // SAFETY: only `kernel_guard` stores it, from a `&'static Location<'static>`.
+    let at = unsafe { &*(site as *const std::panic::Location<'static>) };
+    format!("{}:{}", at.file(), at.line())
 }
 
 /// The kernel lock: re-entrant (a platform function that calls game code that calls another
@@ -413,6 +425,11 @@ struct KernelLock {
     /// the holder only, relaxed: a waiter reads them as a hint.
     holder: AtomicU32,
     holder_call: AtomicU32,
+    /// Where outside a platform call the holder took it ([`kernel_guard`]'s caller, a `&'static Location` as a
+    /// number; 0: none), and how many times it has been taken (the holder counts each first take): a waiter tells
+    /// one long hold from many short ones by it.
+    holder_site: AtomicUsize,
+    takes: AtomicU32,
     /// The device lock ([`World::device`]): its waits count apart in [`LockStats`].
     device: bool,
 }
@@ -434,6 +451,8 @@ impl KernelLock {
             depth: AtomicU32::new(0),
             holder: AtomicU32::new(0),
             holder_call: AtomicU32::new(0),
+            holder_site: AtomicUsize::new(0),
+            takes: AtomicU32::new(0),
             waiters: AtomicU32::new(0),
             dirty: AtomicBool::new(false),
             m: Mutex::new(()),
@@ -470,6 +489,12 @@ impl KernelLock {
         self.holder
             .store(GAME_ID.with(Cell::get), Ordering::Relaxed);
         self.holder_call.store(0, Ordering::Relaxed);
+        self.holder_site.store(0, Ordering::Relaxed);
+        // Only the holder writes it: a plain load and store, no atomic read-modify-write.
+        self.takes.store(
+            self.takes.load(Ordering::Relaxed).wrapping_add(1),
+            Ordering::Relaxed,
+        );
     }
 
     /// Waits until it is free and takes it (not held by this thread). With `NV_LOCK_STATS` the
@@ -479,6 +504,7 @@ impl KernelLock {
         let started = timed_wait().then(std::time::Instant::now);
         // Main's waits for the kernel lock name their holder when they pass a millisecond.
         let named = started.is_some() && role() == 0 && !self.device && crate::hitch::on();
+        let takes_before = self.takes.load(Ordering::Relaxed);
         let seen = self.acquire_here(me, named);
         if let (Some(t), Some(seen)) = (started, seen) {
             let cpu_ns = seen
@@ -498,6 +524,12 @@ impl KernelLock {
                 wait_ns: t.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
                 measured_ns: seen.at.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
                 cpu_ns,
+                site: site_words(seen.site),
+                // Other threads' takes while main waited (this one's own comes after): 0 is one long hold.
+                handoffs: self
+                    .takes
+                    .load(Ordering::Relaxed)
+                    .wrapping_sub(takes_before),
             });
         }
         if let Some(t) = started {
@@ -551,6 +583,7 @@ impl KernelLock {
                 seen = Some(Seen {
                     thread,
                     call: self.holder_call.load(Ordering::Relaxed),
+                    site: self.holder_site.load(Ordering::Relaxed),
                     cpu_ns: crate::thread_cpu::cpu_ns(thread),
                     at: std::time::Instant::now(),
                 });
@@ -1673,9 +1706,17 @@ impl Drop for KernelGuard {
 /// commands call on main, where game code runs without the lock. Held until the guard drops;
 /// `None` without real threads, where one game thread runs at a time. Re-entrant. Never hold it
 /// across a call into game code, and never take it inside the device lock.
+#[track_caller]
 pub fn kernel_guard(e: &Engine) -> Option<KernelGuard> {
     let world = e.real.as_ref()?.world;
     world.kernel.lock(world);
+    if world.kernel.depth.load(Ordering::Relaxed) == 1 {
+        let at: &'static std::panic::Location<'static> = std::panic::Location::caller();
+        world.kernel.holder_site.store(
+            at as *const std::panic::Location<'static> as usize,
+            Ordering::Relaxed,
+        );
+    }
     Some(KernelGuard(world, std::marker::PhantomData))
 }
 
@@ -2126,6 +2167,8 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
                     cpu_ns: cpu_before
                         .zip(crate::thread_cpu::cpu_ns(thread))
                         .map(|(b, after)| after.saturating_sub(b)),
+                    site: String::new(),
+                    handoffs: 0,
                 });
             }
         }
@@ -4431,6 +4474,8 @@ mod tests {
         e.call(slot("GetDoubleClickTime"), &args![]);
         let held = crate::hitch::take_lock_holder().expect("a named holder");
         assert_eq!(held.call_name, "D3DPERF_SetOptions");
+        assert_eq!(held.handoffs, 0, "one long hold: {held:?}");
+        assert!(held.site.is_empty(), "in a platform call: {held:?}");
         assert_eq!(held.call, busy);
         assert_eq!(held.start, 0x0040_f000);
         assert_ne!(held.thread, 0, "a game thread, not main or the host");
