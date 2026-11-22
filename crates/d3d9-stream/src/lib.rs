@@ -37,7 +37,7 @@ mod tee;
 pub mod wire;
 
 pub use cmd::{Backend, Cmd, Data, Handle, Native, Rect, Reply, Rows};
-pub use digest::StateDigest;
+pub use digest::{DrawSnapshot, StateDigest};
 pub use runner::{CutWaiter, Settings, Slot, Stream, IDLE_POLL};
 pub use tee::Tee;
 

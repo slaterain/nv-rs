@@ -302,8 +302,12 @@ pub mod kept {
     /// S0089.01's `int g_savedAmmoCount` (4 bytes): the player's saved count of loaded rounds plus
     /// one (0: none, Tweaks' -1), read by S0089.07.
     pub const SAVED_AMMO_COUNT: usize = 2;
+    /// S0022.07's `static bool debounce` (1 byte: the remap was already waiting last frame).
+    pub const REMAP_DEBOUNCE: usize = 3;
+    /// S0883's `static char buf[0x200]`: the settings save failure's text.
+    pub const SAVE_SETTINGS_ERROR: usize = 4;
     /// How many.
-    pub const COUNT: usize = 3;
+    pub const COUNT: usize = 5;
 }
 
 /// The last thing each of Tweaks' warnings printed (its functions' statics), its print queue and

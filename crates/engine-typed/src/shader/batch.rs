@@ -12,7 +12,7 @@ use super::layout::{
     ActivePass, BSBatchRenderer, NiGeometry, NiGeometryData, NiProperty, NiSkinInstance,
     NiSkinPartition, PassGroup, PassHolder, PassList, PassNode, RenderPass,
 };
-use super::state::{self, DEVICE_SET_SAMPLER_STATE};
+use super::state;
 use super::{accumulator, elem_addr, geometry, low8, textures, FAMILY};
 use crate::culling::layout::NiBound;
 use crate::draw::capture;
@@ -871,12 +871,7 @@ pub fn end_pass(e: &mut Engine) {
             use super::layout::NiDX9Renderer as R;
             let holder = Ptr::<R>::new(e.global::<u32>(RENDER_HOLDER));
             let device = e.get(holder, R::m_pkD3DDevice9);
-            engine_core::real_threads::device_vcall(
-                e,
-                device,
-                DEVICE_SET_SAMPLER_STATE,
-                &args![sampler, 8u32, 0u32],
-            );
+            engine_core::real_threads::device_set_sampler_state(e, device, sampler, 8, 0);
         }
     }
     capture::set_own_at(e, CURRENT_PASS_TYPE, 0u32);

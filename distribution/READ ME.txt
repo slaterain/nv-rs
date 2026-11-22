@@ -24,7 +24,9 @@ and lines are read from your installed game). Choose with the arrow keys and Ent
 > Play starts the game, > Play with mods (shown when you have mods) plays with them, > Settings
 has the window or borderless, resolution, anti-aliasing, game fixes, frame limit and more (and a
 Testing list of what is still being tried), saved at once for the next start; > Exit closes
-it. The first time it types the game's terminal intro once. Its text types as fast as the game's
+it. The window has no title bar: drag it by its background (anywhere but an entry) to move it;
+> Exit, Esc on the first screen or Alt+F4 closes it. The first time it types the game's terminal
+intro once. Its text types as fast as the game's
 terminals do, and, as there, the entries can be chosen once a screen's text is all in.
 Where the launcher differs from the game's terminals: Esc and Enter finish the intro (in the game
 only a click does, which works here too); while a screen types, the first key you press or a click
@@ -157,7 +159,9 @@ under Controls in the game's Settings menu; "Vibration" there turns rumble off.
 
 What doesn't yet
 ----------------
-- Mods that need xNVSE, JIP or other plugins (.dll files) don't work yet.
+- Script extenders: xNVSE, JIP LN NVSE, MCM's plugin and UI Organizer are built in (JIP, MCM and
+  UIO with the bug fixes on). Other plugins (.dll files, such as JohnnyGuitar NVSE and ShowOff) don't
+  work yet, so mods that also need those still say so.
 - Game pads that are not Xbox-style, not one of those three PlayStation pads and not in SDL's
   controller database don't work yet, unless you add a line for them (above).
 - It is slower than the original. On the maintainer's PC (a laptop with an RTX 5070 Ti, at 2560x1440

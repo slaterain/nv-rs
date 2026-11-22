@@ -394,3 +394,92 @@ fn a_dual_family_keeps_the_draw_on_main() {
     assert_eq!(counts(&e).serial, 1);
     turn_off(&mut e);
 }
+
+/// The virtual clock is one in the game's eyes: the job starts from main's clock at the post, and main's moves on at
+/// the join by the job's readings, so main's tail reads the times it reads serially (the draw's readings, then
+/// main's). The vanilla preset's one gate difference (an interface quad's fade, 2026-11-20) was main's clock left
+/// behind by the readings the draw made on the helper. With the real clock nothing is handed.
+#[test]
+fn the_jobs_clock_readings_move_mains_clock() {
+    let read = |e: &mut Engine, n: u32| {
+        for _ in 0..n {
+            e.clock_now_ms();
+        }
+    };
+    let mut serial = Engine::new();
+    serial.start_repeatable_clock();
+    read(&mut serial, 5);
+    let mut main = Engine::new();
+    main.start_repeatable_clock();
+    let mut helper = Engine::new();
+    helper.start_repeatable_clock();
+    read(&mut helper, 1234);
+    let clock = clock_at_post(&main);
+    assert!(clock.is_some());
+    let from = clock_onto_job(&mut helper, clock);
+    assert_eq!(
+        from,
+        main.clock_peek_us(),
+        "the job starts from main's clock"
+    );
+    read(&mut helper, 3); // the draw
+    read(&mut main, 2); // main's work before the join
+    let moved = clock_moved(&helper, clock, from).expect("a virtual clock");
+    assert_eq!(moved, 3);
+    main.advance_clock_us(moved);
+    read(&mut serial, 0);
+    assert_eq!(main.clock_peek_us(), serial.clock_peek_us());
+    // The real clock: nothing handed.
+    let real = Engine::new();
+    assert_eq!(clock_at_post(&real), None);
+    assert_eq!(clock_moved(&helper, None, from), None);
+}
+
+/// A join after main's frame end (OnIdle) puts the job's readings before the frame end's padding, as serially: the
+/// padding absorbs them while the frame stays within its target, and past it the clock and the frame's mark move on by
+/// what is over (so the next frame end pads from there). A join with no frame end since the post is a plain move.
+#[test]
+fn a_join_after_the_frame_end_puts_the_draws_readings_before_its_padding() {
+    let read = |e: &mut Engine, n: u64| {
+        for _ in 0..n {
+            e.clock_now_ms();
+        }
+    };
+    // (draw readings, main's readings before the frame end, main's readings after it before the join)
+    for (draw, before, after) in [
+        (3u64, 10u64, 4u64),
+        (16_000, 1_000, 7),
+        (20_000, 10, 2),
+        (5, 17_000, 3),
+    ] {
+        let mut serial = Engine::new();
+        serial.start_repeatable_clock();
+        read(&mut serial, draw + before);
+        serial.repeatable_frame_end();
+        read(&mut serial, after);
+
+        let mut main = Engine::new();
+        main.start_repeatable_clock();
+        let ends = main.repeatable_frame_ends();
+        read(&mut main, before);
+        main.repeatable_frame_end();
+        read(&mut main, after);
+        main.advance_clock_for_join(draw, ends);
+        assert_eq!(
+            main.clock_peek_us(),
+            serial.clock_peek_us(),
+            "draw {draw}, before {before}, after {after}"
+        );
+        // The next frame end pads to the same target on both.
+        serial.repeatable_frame_end();
+        main.repeatable_frame_end();
+        assert_eq!(main.clock_peek_us(), serial.clock_peek_us());
+    }
+    // No frame end since the post: a plain move.
+    let mut main = Engine::new();
+    main.start_repeatable_clock();
+    let ends = main.repeatable_frame_ends();
+    let at = main.clock_peek_us();
+    main.advance_clock_for_join(5, ends);
+    assert_eq!(main.clock_peek_us(), at + 5);
+}
