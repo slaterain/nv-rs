@@ -1047,11 +1047,24 @@ struct Mix {
     /// other endpoints, [`Voices::split`]).
     output: Option<super::sound_out::Output>,
     _own_output: Option<super::sound_out::Output>,
+    /// When [`tick`] last told the paces the clock, and what it told them (µs): it tells them again only when a
+    /// millisecond has passed or the clock is not where they read it.
+    told: Option<(std::time::Instant, u64)>,
 }
 
 impl std::fmt::Debug for Mix {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Mix {{ rate: {} }}", self.rate)
+    }
+}
+
+impl Mix {
+    /// The voices, locked, for the game's sound calls (the output's thread holds the same lock for each period's
+    /// mix, so each hold a call takes may wait for one). The tests count the holds ([`tests::VOICE_HOLDS`]).
+    fn voices_locked(&self) -> std::sync::MutexGuard<'_, Voices> {
+        #[cfg(test)]
+        tests::VOICE_HOLDS.with(|n| n.set(n.get() + 1));
+        self.voices.lock().expect("the voices")
     }
 }
 
@@ -1666,6 +1679,7 @@ pub fn start_output(e: &mut Engine) -> bool {
         rate,
         output: Some(output),
         _own_output: own_output,
+        told: None,
     });
     true
 }
@@ -2010,12 +2024,14 @@ fn put_in_place(e: &mut Engine, o: Opened, clock: u64) {
 /// Writes `what` to the recording's log, when the output is recorded, with the game's clock
 /// (ms) beside the real time.
 pub fn note(e: &mut Engine, what: &str) {
-    if state!(e).sound.mix.is_none() {
+    // Only a run that records (`NV_SOUND_RECORD`, [`want_output`]) has a log to write: other runs do not take the
+    // voices' lock (held by the output's thread for each period's mix) just to find none.
+    if state!(e).sound.mix.is_none() || state!(e).sound.record.is_none() {
         return;
     }
     let game = e.clock_now_ms();
     if let Some(m) = &state!(e).sound.mix {
-        if let Some(r) = &mut m.voices.lock().expect("the voices").record {
+        if let Some(r) = &mut m.voices_locked().record {
             r.note(&format!("game {game}\t{what}"));
         }
     }
@@ -2040,9 +2056,16 @@ fn buffer_samples(e: &Engine, at: u32, b: &Buffer) -> Vec<u8> {
     if s.samples_in == Some(Samples::Guest) {
         return e.mem.bytes(b.data, b.bytes);
     }
-    let mut kept = s.samples.get(&at).cloned().unwrap_or_default();
-    kept.resize(b.bytes as usize, 0);
-    kept
+    // A buffer with none kept (a new one) gets a zeroed block from the allocator, whose pages cost nothing until read
+    // (its first Unlock replaces it whole).
+    match s.samples.get(&at) {
+        Some(kept) => {
+            let mut kept = kept.clone();
+            kept.resize(b.bytes as usize, 0);
+            kept
+        }
+        None => vec![0; b.bytes as usize],
+    }
 }
 
 /// A buffer's voice: its samples as they are now ([`buffer_samples`]), its settings, not playing.
@@ -2101,7 +2124,7 @@ fn edge_table() -> &'static [f64; 32] {
 fn with_voice(e: &mut Engine, at: u32, f: impl FnOnce(&mut Voices, u32)) {
     tick(e);
     if let Some(m) = &state!(e).sound.mix {
-        let mut v = m.voices.lock().expect("the voices");
+        let mut v = m.voices_locked();
         f(&mut v, at);
     }
 }
@@ -2114,16 +2137,32 @@ pub fn tick(e: &mut Engine) {
     }
     follow_device(e);
     let now = e.clock_now_us();
-    if let Some(m) = &state!(e).sound.mix {
-        let mut v = m.voices.lock().expect("the voices");
-        // A lost device: the parked voices move on with the clock ([`move_parked`]).
-        if v.game.parked {
-            move_parked(&mut v, now, m.rate);
-        }
-        let Voices { game, own, .. } = &mut *v;
-        for p in [&mut game.pace, &mut own.pace].into_iter().flatten() {
-            p.game_us = now;
-            p.at = std::time::Instant::now();
+    let lost = state!(e).sound.lost.is_some();
+    if let Some(m) = state!(e).sound.mix.as_mut() {
+        // The paces read the clock as told plus the real time since ([`Pace::game_now`]). While the game's clock
+        // runs at real time that reading is the clock itself, so telling them again within a millisecond, with the
+        // clock where that reading puts it (within a millisecond), changes nothing they decide (they act on 100 ms);
+        // each telling takes the voices' lock, which the output's thread holds for a whole period's mix. A clock
+        // that jumped (a test's, a stop) is told at once. A lost device's parked voices still move at every call
+        // ([`move_parked`]: `lost` is set exactly while they are parked).
+        let at = std::time::Instant::now();
+        let fresh = m.told.is_some_and(|(t, told_us)| {
+            let since = at.saturating_duration_since(t);
+            let read = told_us + since.as_micros() as u64;
+            since < std::time::Duration::from_millis(1) && read.abs_diff(now) < 1000
+        });
+        if lost || !fresh {
+            m.told = Some((at, now));
+            let mut v = m.voices_locked();
+            // A lost device: the parked voices move on with the clock ([`move_parked`]).
+            if v.game.parked {
+                move_parked(&mut v, now, m.rate);
+            }
+            let Voices { game, own, .. } = &mut *v;
+            for p in [&mut game.pace, &mut own.pace].into_iter().flatten() {
+                p.game_us = now;
+                p.at = at;
+            }
         }
     }
     // `NV_REPEATABLE`: the mix catches up to the clock before the call changes a voice, so a
@@ -2328,6 +2367,7 @@ pub(crate) fn hear_by_hand_on(e: &mut Engine, rate: u32, mix: Layout) {
         rate,
         output: None,
         _own_output: None,
+        told: None,
     });
 }
 
@@ -3215,13 +3255,9 @@ fn set_volume(e: &mut Engine, this: Ptr, v: i32) -> u32 {
         "SetVolume without DSBCAPS_CTRLVOLUME is not provided"
     );
     buffer(e, this).volume = v;
-    with_voice(e, this.addr(), |m, at| {
-        if let Some(voice) = m.all.get_mut(&at) {
-            voice.volume = v;
-        }
-    });
-    // A 3D buffer's volume goes through the 3D stage (`1002a7d0`).
-    refresh_voice(e, this.addr());
+    // The voice takes the volume and, as a 3D buffer's volume goes through the 3D stage (`1002a7d0`), is brought up
+    // to date, under one hold of the voices' lock.
+    update_voices(e, &[this.addr()], |voice| voice.volume = v);
     DS_OK
 }
 
@@ -3411,12 +3447,12 @@ fn heard(e: &mut Engine, this: Ptr, call: &str) {
         .sound
         .mix
         .as_ref()
-        .is_some_and(|m| m.voices.lock().expect("the voices").apl);
+        .is_some_and(|m| m.voices_locked().apl);
     if f != rate && !apl && super::resampler::tables().is_none() {
         unheard(e, &what(&b));
     }
     refresh_voice(e, this.addr());
-    if call == "Play" {
+    if call == "Play" && state_ref!(e).sound.record.is_some() {
         // The log also names the level it is heard at: the volume, and for a 3D buffer its
         // position from the listener and the 3D stage's channel multipliers.
         let what = what(&b);
@@ -3449,82 +3485,120 @@ fn heard(e: &mut Engine, this: Ptr, call: &str) {
 /// converter: a frequency that moves by more than 1/500 of the rate turns on the second one
 /// for every buffer (`super::resampler`).
 fn refresh_voice(e: &mut Engine, at: u32) {
-    let Some(rate) = state!(e).sound.mix.as_ref().map(|m| m.rate) else {
-        return;
-    };
-    let Some(b) = state!(e).sound.buffers.get(&at) else {
-        return;
-    };
+    update_voices(e, &[at], |_| {});
+}
+
+/// What a secondary buffer's voice is brought up to ([`refresh_voice`]): the frequency it is heard at and, for a 3D
+/// buffer, the 3D stage's channel multipliers (`super::ds3d::hear`; its Doppler frequency). `None` for the primary
+/// buffer or an address that is not a buffer.
+fn heard_now(e: &Engine, at: u32) -> Option<Heard> {
+    let b = state_ref!(e).sound.buffers.get(&at)?;
     if b.flags & DSBCAPS_PRIMARYBUFFER != 0 {
-        return;
+        return None;
     }
-    let (frequency, spatial) = if b.flags & DSBCAPS_CTRL3D != 0 {
+    Some(if b.flags & DSBCAPS_CTRL3D != 0 {
         let h = super::ds3d::hear(&source3d(b), &listener_now(e), device_layout(e));
         (h.frequency, Some(h.gains))
     } else {
         (b.frequency(), None)
+    })
+}
+
+/// A voice's heard frequency and 3D channel multipliers ([`heard_now`]).
+type Heard = (u32, Option<[f32; super::speakers::MAX_CHANNELS]>);
+
+/// Brings the voices of the buffers at `ats` up to date ([`refresh_voice`]) under ONE hold of the voices' lock (the
+/// output's thread mixes a whole period under it, so each hold main takes may wait for a mix), after `change` has run
+/// on the first one's voice (a setting the call made: [`set_volume`]). In the order given, as one [`refresh_voice`]
+/// after another: when one turns the second converter on, the rest only take its flag and their settings, and the
+/// buffers' cursors step by it after (`second_converter_on` moves only the playing buffers' cursors, which nothing
+/// here reads). The clock is told ([`tick`]) when at least one of them is a secondary buffer, as one
+/// [`refresh_voice`] each did (so `NV_REPEATABLE`'s pulls happen in the same calls), and before their settings are
+/// read (a lost device found there is followed first).
+fn update_voices(e: &mut Engine, ats: &[u32], change: impl FnOnce(&mut Voice)) {
+    if state!(e).sound.mix.is_none() {
+        return;
+    }
+    let secondary = |e: &Engine, at: &u32| {
+        state_ref!(e)
+            .sound
+            .buffers
+            .get(at)
+            .is_some_and(|b| b.flags & DSBCAPS_PRIMARYBUFFER == 0)
     };
-    // DirectSound's rule for its converters (`dsound` `100581e0`): a move of more than 1/500 of
-    // the rate turns on the device's second converter for every buffer; a smaller one is the
-    // playing converter's `SetRate` (`super::resampler`, at its next period). (`with_voice`
-    // written out, so the buffers are read in place.)
+    if !ats.iter().any(|at| secondary(&*e, at)) {
+        return;
+    }
     tick(e);
+    let heard: Vec<(u32, Option<Heard>)> = ats.iter().map(|&at| (at, heard_now(&*e, at))).collect();
     let sound = &state!(e).sound;
     let Some(mix) = &sound.mix else {
         return;
     };
-    let mut voices = mix.voices.lock().expect("the voices");
-    let m = &mut *voices;
-    let Some(v) = m.all.get_mut(&at) else {
-        return;
-    };
-    let old = v.rate;
-    v.device = rate;
-    v.spatial = spatial;
-    v.rate = frequency;
-    if old == 0 || old == frequency {
-        return;
-    }
-    if old.abs_diff(frequency) > old / 500 && !m.apl {
-        m.apl = true;
-        for (b, _) in sound
-            .buffers
-            .iter()
-            .filter(|(_, b)| b.flags & DSBCAPS_PRIMARYBUFFER == 0)
-        {
-            if let Some(v) = m.all.get_mut(b) {
-                v.apl = true;
+    let rate = mix.rate;
+    let mut turned = false;
+    {
+        let mut voices = mix.voices_locked();
+        let m = &mut *voices;
+        let mut change = Some(change);
+        for (at, h) in heard {
+            let Some(v) = m.all.get_mut(&at) else {
+                continue;
+            };
+            if at == ats[0] {
+                if let Some(change) = change.take() {
+                    change(v);
+                }
+            }
+            let Some((frequency, spatial)) = h else {
+                continue;
+            };
+            // DirectSound's rule for its converters (`dsound` `100581e0`): a move of more than 1/500 of the rate
+            // turns on the device's second converter for every buffer; a smaller one is the playing converter's
+            // `SetRate` (`super::resampler`, at its next period).
+            let old = v.rate;
+            v.device = rate;
+            v.spatial = spatial;
+            v.rate = frequency;
+            if old == 0 || old == frequency {
+                continue;
+            }
+            if old.abs_diff(frequency) > old / 500 && !m.apl {
+                m.apl = true;
+                turned = true;
+                for (b, _) in sound
+                    .buffers
+                    .iter()
+                    .filter(|(_, b)| b.flags & DSBCAPS_PRIMARYBUFFER == 0)
+                {
+                    if let Some(v) = m.all.get_mut(b) {
+                        v.apl = true;
+                    }
+                }
             }
         }
+    }
+    if turned {
         // The cursors step by it too ([`Steps`]).
-        drop(voices);
         let now = e.clock_now_us();
         second_converter_on(e, now);
     }
 }
 
-/// The 3D buffers' voices brought up to date (after the listener changed).
+/// The 3D buffers' voices brought up to date (after the listener changed), in address order, under one hold of
+/// the voices' lock ([`update_voices`]).
 fn refresh_3d(e: &mut Engine) {
     if state!(e).sound.mix.is_none() {
         return;
     }
-    // In address order, found one after another, with no list: `refresh_voice` adds, removes
-    // and reflags no buffer (when it turns the second converter on, it only moves the cursors
-    // of the buffers that play).
-    let mut from = 0;
-    while let Some(at) = state!(e)
+    let ats: Vec<u32> = state!(e)
         .sound
         .buffers
-        .range(from..)
-        .find(|(_, b)| b.flags & DSBCAPS_CTRL3D != 0 && b.flags & DSBCAPS_PRIMARYBUFFER == 0)
+        .iter()
+        .filter(|(_, b)| b.flags & DSBCAPS_CTRL3D != 0 && b.flags & DSBCAPS_PRIMARYBUFFER == 0)
         .map(|(&at, _)| at)
-    {
-        refresh_voice(e, at);
-        let Some(next) = at.checked_add(1) else {
-            break;
-        };
-        from = next;
-    }
+        .collect();
+    update_voices(e, &ats, |_| {});
 }
 
 /// The layout the game's device mixes in now (two channels before the output knows the
@@ -3910,31 +3984,69 @@ fn unlock(e: &mut Engine, this: Ptr, _p1: u32, _n1: u32, _p2: u32, _n2: u32) -> 
     b.locks -= 1;
     let (last, window, bytes) = (b.locks == 0, b.window, b.bytes);
     let data = if window != 0 { window } else { b.data };
+    // The last unlock of a window that still holds the kept samples (a lock the game only read through: its copy of a
+    // cached sound reads the cached buffer this way, every start) leaves the voice and the kept samples as they are:
+    // they hold these bytes already, so the two whole-buffer copies are not made again.
+    let unchanged = last && window != 0 && window_unchanged(e, this.addr(), window, bytes);
     if state!(e).sound.mix.is_some() {
-        // `with_voice` written out: the samples are read straight into the voice's copy, which
-        // has the buffer's size (a new copy otherwise), instead of into a new one each time.
         tick(e);
-        if let Some(m) = &state!(e).sound.mix {
-            let mut voices = m.voices.lock().expect("the voices");
-            if let Some(voice) = voices.all.get_mut(&this.addr()) {
-                // With the distortion the samples are the effect's input; the voice plays its
-                // processed copy.
-                let to = match voice.fx.as_mut() {
-                    Some(fx) => &mut fx.source,
-                    None => &mut voice.data,
-                };
-                if to.len() == bytes as usize {
-                    e.mem.read(data, to);
-                } else {
-                    *to = e.mem.bytes(data, bytes);
-                }
-            }
-        }
+    }
+    if state!(e).sound.mix.is_some() && !unchanged {
+        // The samples are copied out of the game's memory before the voices' lock is taken, and only swapped in under
+        // it (the old copy let go after): the output's thread holds that lock for each period's mix, so neither waits
+        // for the other's whole-buffer work.
+        let fresh = e.mem.bytes(data, bytes);
+        let old = state!(e).sound.mix.as_ref().and_then(|m| {
+            let mut voices = m.voices_locked();
+            let voice = voices.all.get_mut(&this.addr())?;
+            // With the distortion the samples are the effect's input; the voice plays its processed copy.
+            let to = match voice.fx.as_mut() {
+                Some(fx) => &mut fx.source,
+                None => &mut voice.data,
+            };
+            Some(std::mem::replace(to, fresh))
+        });
+        drop(old);
     }
     if last && window != 0 {
-        close_window(e, this.addr(), window, bytes);
+        if unchanged {
+            let b = buffer_at(e, this.addr());
+            b.window = 0;
+            let own = b.data;
+            if window != own {
+                e.mem.free(window);
+            }
+        } else {
+            close_window(e, this.addr(), window, bytes);
+        }
     }
     DS_OK
+}
+
+/// Whether the window `window` of the buffer at `at` (`bytes` long) still holds the buffer's kept samples (zero where
+/// none are kept), read a page at a time and stopping at the first difference. Never with the old store, which keeps
+/// no samples outside the game's memory ([`Samples::Guest`]).
+fn window_unchanged(e: &mut Engine, at: u32, window: u32, bytes: u32) -> bool {
+    if samples_in(e) == Samples::Guest {
+        return false;
+    }
+    let kept = state_ref!(e)
+        .sound
+        .samples
+        .get(&at)
+        .map_or(&[][..], Vec::as_slice);
+    let mut page = [0u8; 4096];
+    let mut from = 0usize;
+    while from < bytes as usize {
+        let n = (bytes as usize - from).min(page.len());
+        e.mem.read(window + from as u32, &mut page[..n]);
+        let want = kept.get(from..(from + n).min(kept.len())).unwrap_or(&[]);
+        if page[..want.len()] != *want || page[want.len()..n].iter().any(|&b| b != 0) {
+            return false;
+        }
+        from += n;
+    }
+    true
 }
 
 /// `Play(0, 0, flags)` with flags 0 or `DSBPLAY_LOOPING`: plays from where the buffer stopped
@@ -6361,6 +6473,7 @@ mod tests {
             rate: 22050,
             output: None,
             _own_output: None,
+            told: None,
         });
         voices
     }
@@ -8224,5 +8337,148 @@ mod tests {
         assert!(a[44..].iter().any(|&b| b != 0), "the stream was mixed");
         let (_, b) = run("b");
         assert_eq!(a, b);
+    }
+
+    thread_local! {
+        /// The holds of the voices' lock the game's sound calls took on this thread ([`Mix::voices_locked`]).
+        pub(super) static VOICE_HOLDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    /// The holds of the voices' lock `call` takes, with the paces told the clock as it is now (as a call within the
+    /// same millisecond finds them).
+    fn holds(e: &mut Engine, call: impl FnOnce(&mut Engine)) -> usize {
+        let now = e.clock_now_us();
+        state!(e).sound.mix.as_mut().expect("the output").told = Some((
+            std::time::Instant::now() + std::time::Duration::from_secs(60),
+            now,
+        ));
+        VOICE_HOLDS.with(|n| n.set(0));
+        call(e);
+        VOICE_HOLDS.with(std::cell::Cell::get)
+    }
+
+    /// The calls the game makes for its sounds every frame take the voices' lock (which the output's thread holds for
+    /// each period's mix) once at most: `SetVolume` once, a listener commit once for all of its 3D buffers (it took two
+    /// holds a buffer), `GetStatus` none while the paces know the clock; and every voice comes out as one buffer
+    /// brought up to date at a time left it. A clock that moved is told at once.
+    #[test]
+    fn the_game_s_sound_calls_take_the_voices_lock_once() {
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        let listener = listener_of(&mut e, ds);
+        hear_by_hand(&mut e, 48000);
+        let data = signal_seeded(4800, 1, 16, 31);
+        let flat = made(&mut e, ds, 0x2e0, false, 1, 48000, 16, &data);
+        e.vcall(flat, 0x30, &[0, 0, 1]);
+        let mut three = Vec::new();
+        for k in 0..6u32 {
+            let b = made(&mut e, ds, 0x302b0, false, 1, 48000, 16, &data);
+            let t = buffer3d_of(&mut e, b);
+            e.vcall(t, 0x44, &[1.0f32.to_bits(), 1]);
+            e.vcall(t, 0x40, &[100.0f32.to_bits(), 1]);
+            let x = (k as f32 * 2.0 - 5.0).to_bits();
+            e.vcall(t, 0x4c, &[x, 0f32.to_bits(), 3.0f32.to_bits(), 1]);
+            e.vcall(b, 0x30, &[0, 0, 1]);
+            three.push(b);
+        }
+        assert_eq!(
+            holds(&mut e, |e| assert_eq!(
+                e.vcall(listener, 0x44, &[]).u32(),
+                DS_OK
+            )),
+            1,
+            "a commit: one hold for six 3D buffers"
+        );
+        let voices = state!(e).sound.mix.as_ref().unwrap().voices.clone();
+        for &b in &three {
+            let buffer = state!(e).sound.buffers[&b].clone();
+            let h =
+                super::super::ds3d::hear(&source3d(&buffer), &listener_now(&e), device_layout(&e));
+            let v = voices.lock().unwrap();
+            assert_eq!(v.all[&b].spatial, Some(h.gains), "{b:#x}");
+            assert_eq!(v.all[&b].rate, h.frequency, "{b:#x}");
+        }
+        for b in [flat, three[2]] {
+            assert_eq!(
+                holds(&mut e, |e| assert_eq!(
+                    e.vcall(b, 0x3c, &[(-700i32) as u32]).u32(),
+                    DS_OK
+                )),
+                1,
+                "SetVolume: one hold"
+            );
+            assert_eq!(voices.lock().unwrap().all[&b].volume, -700);
+            let status = 0x1a00;
+            assert_eq!(
+                holds(&mut e, |e| {
+                    e.vcall(b, 0x24, &[status]);
+                }),
+                0,
+                "GetStatus: none"
+            );
+            assert_eq!(e.mem.u32(status), DSBSTATUS_PLAYING | DSBSTATUS_LOOPING);
+        }
+        // The 3D buffer's volume went through the 3D stage under that hold.
+        let buffer = state!(e).sound.buffers[&three[2]].clone();
+        let h = super::super::ds3d::hear(&source3d(&buffer), &listener_now(&e), device_layout(&e));
+        assert_eq!(voices.lock().unwrap().all[&three[2]].spatial, Some(h.gains));
+        // A clock that moved is told (the paces' reading would be off): one hold, and the pace has it.
+        voices.lock().unwrap().game.pace = Some(Pace::new(e.clock_now_us()));
+        let now = e.clock_now_us();
+        state!(e).sound.mix.as_mut().unwrap().told = Some((
+            std::time::Instant::now() + std::time::Duration::from_secs(60),
+            now,
+        ));
+        e.advance_clock_us(2_000);
+        VOICE_HOLDS.with(|n| n.set(0));
+        e.vcall(flat, 0x24, &[0x1a00]);
+        assert_eq!(
+            VOICE_HOLDS.with(std::cell::Cell::get),
+            1,
+            "a moved clock is told"
+        );
+        assert_eq!(
+            voices.lock().unwrap().game.pace.as_ref().unwrap().game_us,
+            now + 2_000
+        );
+    }
+
+    /// The game's copy of a cached sound locks the cached buffer only to read it: that unlock leaves the voice and the
+    /// kept samples as they are (no copy, no hold of the voices' lock) and lets the window go, and the next lock hands
+    /// out the same bytes. A window written to is taken as before.
+    #[test]
+    fn a_window_only_read_is_not_copied_back() {
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        hear_by_hand(&mut e, 48000);
+        let data = signal_seeded(4800, 1, 16, 41);
+        let size = data.len() as u32;
+        let b = made(&mut e, ds, 0x2e0, false, 1, 48000, 16, &data);
+        let voices = state!(e).sound.mix.as_ref().unwrap().voices.clone();
+        let lock_whole = |e: &mut Engine| {
+            let r = e.vcall(b, 0x2c, &[0, 0, 0x1800, 0x1804, 0, 0, DSBLOCK_ENTIREBUFFER]);
+            assert_eq!(r.u32(), DS_OK);
+            e.mem.u32(0x1800)
+        };
+        let at = lock_whole(&mut e);
+        assert_eq!(e.mem.bytes(at, size), data);
+        let unlock = |e: &mut Engine| {
+            assert_eq!(e.vcall(b, 0x4c, &[at, size, 0, 0]).u32(), DS_OK);
+        };
+        assert_eq!(holds(&mut e, unlock), 0, "nothing copied back");
+        assert_eq!(state!(e).sound.samples[&b], data);
+        assert_eq!(voices.lock().unwrap().all[&b].data, data);
+        assert_eq!(state!(e).sound.buffers[&b].window, 0, "the window let go");
+        let at = lock_whole(&mut e);
+        assert_eq!(e.mem.bytes(at, size), data, "the same bytes again");
+        let mut want = data.clone();
+        want[10] ^= 0xff;
+        e.mem.write(at + 10, &want[10..11]);
+        let unlock = |e: &mut Engine| {
+            assert_eq!(e.vcall(b, 0x4c, &[at, size, 0, 0]).u32(), DS_OK);
+        };
+        assert_eq!(holds(&mut e, unlock), 1, "a written window is taken");
+        assert_eq!(state!(e).sound.samples[&b], want);
+        assert_eq!(voices.lock().unwrap().all[&b].data, want);
     }
 }
