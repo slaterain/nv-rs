@@ -2486,6 +2486,158 @@ fn a_state_digest_resets_as_the_device_does() {
     );
 }
 
+/// What a `Clear` clears into goes into its hash: a wrong render target, depth surface, viewport, scissor rectangle
+/// or scissor test seen only by a `Clear` (set right again before the next draw) gives that draw another digest; a
+/// state the `Clear` does not reach, set otherwise before it and right again after, gives the same.
+#[test]
+fn a_clear_is_hashed_with_what_it_clears_into() {
+    let device = 0x1000;
+    let clear = Cmd::Clear {
+        device,
+        count: 0,
+        rects: None,
+        flags: 7,
+        colour: 0xff00_00ff,
+        z: 1f32.to_bits(),
+        stencil: 0,
+        model: 0,
+    };
+    let draw = Cmd::DrawIndexedPrimitive {
+        device,
+        kind: 4,
+        base_vertex: 0,
+        min_index: 0,
+        vertices: 3,
+        start_index: 0,
+        count: 1,
+    };
+    let target = |index: u32, surface: u32| Cmd::SetRenderTarget {
+        device,
+        index,
+        surface,
+    };
+    let depth = |surface: u32| Cmd::SetDepthStencilSurface { device, surface };
+    let viewport = |w: u32| Cmd::SetViewport {
+        device,
+        viewport: [0, 0, w, 100, 0, 1f32.to_bits()],
+    };
+    let scissor = |w: i32| Cmd::SetScissorRect {
+        device,
+        rect: [0, 0, w, 100],
+    };
+    let test = |value: u32| Cmd::SetRenderState {
+        device,
+        state: 174,
+        value,
+    };
+    let pairs = [
+        // Target 0 sets the viewport and the scissor rectangle too; target 1 only itself.
+        ("render target 0", target(0, 0x9000), target(0, 0x9001)),
+        ("render target 1", target(1, 0x9000), target(1, 0x9001)),
+        ("depth surface", depth(0x9100), depth(0x9101)),
+        ("viewport", viewport(50), viewport(100)),
+        ("scissor rectangle", scissor(50), scissor(100)),
+        ("scissor test", test(0), test(1)),
+    ];
+    for (what, wrong, right) in pairs {
+        assert_ne!(
+            digests_of(&[wrong, clear, right, draw]),
+            digests_of(&[right, clear, right, draw]),
+            "the {what} the clear saw"
+        );
+        assert_eq!(
+            digests_of(&[right, clear, draw]),
+            digests_of(&[right, right, clear, draw]),
+            "the {what} set again before the clear"
+        );
+    }
+    let state = |value: u32| Cmd::SetRenderState {
+        device,
+        state: 7,
+        value,
+    };
+    assert_eq!(
+        digests_of(&[state(1), clear, state(2), draw]),
+        digests_of(&[state(2), clear, state(2), draw]),
+        "a state the clear does not reach"
+    );
+}
+
+/// `DrawPrimitiveUP` leaves stream 0 empty, as the device does: the stream set again to the buffer it held before
+/// that draw gives the next draw another digest than leaving it out, which would draw from no buffer.
+#[test]
+fn a_draw_from_memory_empties_stream_0() {
+    let device = 0x1000;
+    let stream = Cmd::SetStreamSource {
+        device,
+        stream: 0,
+        buffer: 0x6000,
+        offset: 0,
+        stride: 16,
+    };
+    let vertices = [0u32; 12];
+    let up = Cmd::DrawPrimitiveUp {
+        device,
+        kind: 4,
+        count: 1,
+        stride: 16,
+        vertices: Data::from_words(&vertices),
+    };
+    let draw = Cmd::DrawIndexedPrimitive {
+        device,
+        kind: 4,
+        base_vertex: 0,
+        min_index: 0,
+        vertices: 3,
+        start_index: 0,
+        count: 1,
+    };
+    let set_again = digests_of(&[stream, up, stream, draw]);
+    let left_out = digests_of(&[stream, up, draw]);
+    assert_eq!(set_again.len(), 3, "two draws, then the destroys");
+    assert_eq!(set_again[0], left_out[0], "the draw from memory itself");
+    assert_ne!(set_again[1], left_out[1], "the draw after it");
+    // Before the draw from memory nothing changes: the stream set twice is one state.
+    assert_eq!(digests_of(&[stream, stream, up, stream, draw]), set_again);
+}
+
+/// The per-draw digests name objects by first use across a `Destroy`: a buffer's address used again for a new buffer
+/// (record `a`) draws as a new buffer at another address does (record `b`), when the stream is set again to it; a
+/// record that keeps the old binding without setting it again, whose raw handles at the draw match `a`'s, gives that
+/// draw another digest.
+#[test]
+fn draw_digests_see_an_address_used_again_as_a_new_object() {
+    let record = |device: u32, first: u32, again: u32, set_again: bool| {
+        let stream = |buffer: u32| Cmd::SetStreamSource {
+            device,
+            stream: 0,
+            buffer,
+            offset: 0,
+            stride: 32,
+        };
+        let draw = Cmd::DrawPrimitive {
+            device,
+            kind: 4,
+            start: 0,
+            count: 1,
+        };
+        let mut cmds = vec![stream(first), draw, Cmd::Destroy { object: first }];
+        if set_again {
+            cmds.push(stream(again));
+        }
+        cmds.push(draw);
+        file_of(&cmds)
+    };
+    let a = wire::draw_digests(&record(0x2000_0010, 0x2000_0030, 0x2000_0030, true)[..]).unwrap();
+    let b = wire::draw_digests(&record(0x2400_0010, 0x2400_0050, 0x2400_0060, true)[..]).unwrap();
+    assert_eq!(a.len(), 3, "two draws, then the destroys");
+    assert_eq!(a, b);
+    let kept =
+        wire::draw_digests(&record(0x2000_0010, 0x2000_0030, 0x2000_0030, false)[..]).unwrap();
+    assert_eq!(kept[0], a[0]);
+    assert_ne!(kept[1], a[1], "the old binding of the address used again");
+}
+
 #[test]
 fn a_dropped_slot_closes_and_main_goes_on() {
     for threaded in [false, true] {

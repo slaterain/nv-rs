@@ -141,6 +141,9 @@ struct Queue {
     cancelled: bool,
     /// The worker stopped without an `End` (it panicked).
     lost: bool,
+    /// Tests: the main thread's waits for the worker begun ([`wait_queued`]).
+    #[cfg(test)]
+    main_waits: u32,
 }
 
 type Shared = Arc<(Mutex<Queue>, Condvar)>;
@@ -257,6 +260,10 @@ impl Ahead {
 /// On the main thread: waits until the worker behind `shared` has queued something (or is lost).
 fn wait_queued(shared: &Shared) {
     let mut q = lock(shared);
+    #[cfg(test)]
+    {
+        q.main_waits += 1;
+    }
     while q.events.is_empty() && !q.lost {
         q = shared.1.wait(q).unwrap_or_else(|p| p.into_inner());
     }
@@ -1170,7 +1177,6 @@ mod tests {
     /// back (another thread's platform calls go on meanwhile), then answers as the decoder does.
     #[test]
     fn main_waits_for_the_decoder_with_the_kernel_lock_given_back() {
-        use std::sync::atomic::{AtomicBool, Ordering};
         use std::time::{Duration, Instant};
         let steps = [Step::Samples(100), Step::Samples(50)];
         let mut e = Engine::new();
@@ -1180,6 +1186,7 @@ mod tests {
         let mut e = Engine::new();
         let (go, hold) = std::sync::mpsc::channel();
         let ahead = Ahead::start(Box::new(Script::new(1, &steps)), 2, Some(hold));
+        let shared = Arc::clone(&ahead.shared);
         insert(&mut e, Decoder::Ahead(ahead));
         e.register(
             READ_AT,
@@ -1188,29 +1195,24 @@ mod tests {
         engine_core::real_threads::start(&mut e).expect("real threads on");
         engine_core::real_threads::end_start_hold_for_tests(&e);
         let free = engine_core::real_threads::kernel_lock_free_probe(&e);
-        // Once main is in its read (well past its start), a helper looks whether the lock is free, then lets the
-        // worker decode; if the lock stays held it lets it decode after two seconds, so the read ends either way.
-        let calling = Arc::new(AtomicBool::new(false));
-        let c = Arc::clone(&calling);
+        // Once main is inside its wait for the worker (it has begun one: the queue counts them), a helper looks
+        // whether the kernel lock is free, then lets the worker decode; if main never waits it lets the worker go
+        // after two seconds, so the read ends either way.
         let watcher = std::thread::spawn(move || {
-            while !c.load(Ordering::SeqCst) {
-                std::thread::yield_now();
-            }
-            std::thread::sleep(Duration::from_millis(50));
             let start = Instant::now();
-            let mut seen = false;
+            let mut waiting = false;
             while start.elapsed() < Duration::from_secs(2) {
-                if free() {
-                    seen = true;
+                if lock(&shared).main_waits > 0 {
+                    waiting = true;
                     break;
                 }
-                std::thread::sleep(Duration::from_millis(1));
+                std::thread::yield_now();
             }
+            let seen = waiting && free();
             go.send(()).expect("the worker waits");
             seen
         });
         let buffer = e.mem.alloc(4096);
-        calling.store(true, Ordering::SeqCst);
         let mut got = Vec::new();
         for _ in 0..3 {
             let n = e.call(READ_AT, &[VF, buffer, 4096, 0, 2, 1, 0]).u32() as i32;
