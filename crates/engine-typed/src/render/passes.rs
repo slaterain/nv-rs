@@ -142,7 +142,9 @@ fn clear_on_crossing(e: &mut Engine, this: u32, limit: f32, previous: f32) {
 /// crossed; the alpha is set (with the material's alpha and the `011f946c`/`011f9470` fade, `004b3ab0`);
 /// then unless the state matches the key, the lights are resorted when needed and the passes added
 /// through slot 0x114 (level 1) or 0x118 (2 or more), a depth pass when `005bf7b0` asks, the last pass
-/// marked, and one 0xfc/0x102 pass number lowered by one.
+/// marked, and one 0xfc/0x102 pass number lowered by one. With the fixes row "dead lights in a light
+/// list", before the state is compared with the key the property's dead light entries are taken out
+/// and the passes rebuilt ([`crate::lights::dead::sweep`]).
 #[allow(clippy::too_many_arguments)]
 pub fn render_passes(
     e: &mut Engine,
@@ -344,6 +346,9 @@ pub fn render_passes(
                 );
             }
         }
+        // The fixes row "dead lights in a light list": a dead entry taken out, and the passes (whose
+        // lights may hold it) rebuilt ([`crate::lights::dead`]).
+        crate::lights::dead::sweep(e, base, geometry);
         if e.mem.u32(base.wrapping_add(0x38)) == key
             && low8(flag_word) != 0
             && e.mem.u8(base.wrapping_add(0x74)) == 0
