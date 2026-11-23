@@ -1419,6 +1419,7 @@ pub fn finish_main_frame(e: &mut Engine, main: &mut MainThread) -> MainTurn {
     e.sync_check_frame();
     crate::profile::resync(&e.call_stack);
     crate::profile::back_to_host();
+    crate::call_count::frame_ended();
     load_fpu(e);
     let turn = match reply {
         _ if stopped.is_some() => MainTurn::Stopped(stopped.unwrap_or_default()),

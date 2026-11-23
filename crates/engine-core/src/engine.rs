@@ -419,6 +419,8 @@ impl Engine {
         crate::x87::set_control_word(crate::x87::DEFAULT_CONTROL_WORD);
         // `NV_PROFILE` (a diagnostic): read once, before any call.
         crate::profile::init_from_env();
+        // `NV_CALL_COUNT=1` (not a diagnostic: typed direct calls stay direct): read once.
+        crate::call_count::init_from_env();
         let mut mem = Mem::new();
         // `NV_BLOCK_CHECK=free|store[,freed][,log]` (a diagnostic): guards after every heap block
         // and stack local, checked when the block is freed or at every store
@@ -982,6 +984,10 @@ impl Engine {
             "the engine's diagnostic bits ({:#x}) don't say which diagnostics are on",
             self.diag
         );
+        // `NV_CALL_COUNT=1` ([`crate::call_count`]): off, one relaxed load and a branch not taken.
+        if crate::call_count::on() {
+            crate::call_count::count(self, addr);
+        }
         if let Some(f) = self.cached(addr) {
             if !self.diagnosing() {
                 // With the thread host's hook the slice counts down by one (`None`: used up, 0);
@@ -1025,6 +1031,10 @@ impl Engine {
                     .checked_sub(u64::from(self.slice_hook.is_some()));
                 match left {
                     Some(left) if self.call_stack.len() < self.call_stack.capacity() => {
+                        // Looked up by address as a call is: counted as one ([`Engine::dispatch`]).
+                        if crate::call_count::on() {
+                            crate::call_count::count(self, addr);
+                        }
                         self.slice_left = left;
                         self.call_stack.push(addr);
                         let ret = typed(self);
@@ -1032,6 +1042,9 @@ impl Engine {
                         return crate::abi::RetVal::into_ret(ret);
                     }
                     None => {
+                        if crate::call_count::on() {
+                            crate::call_count::count(self, addr);
+                        }
                         // As [`Engine::call_at_slice_end`].
                         if let Some(hook) = self.slice_hook {
                             hook(self, addr);
