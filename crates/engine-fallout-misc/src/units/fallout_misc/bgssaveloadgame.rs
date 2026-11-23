@@ -1233,6 +1233,8 @@ pub fn bgssaveloadgame_load_game(
 ) -> bool {
     engine_core::hitch::one(engine_core::hitch::Count::Loads);
     engine_core::draw_thread::save_or_load(e, 0x0084_7df0);
+    // The "cell borders in steps" row: cells a grid shift left pending come up before the load.
+    engine_fallout_cell::units::fallout_shared::tes::grid_steps_finish(e);
     let name = e.mem.alloc(0x104);
     let version = e.mem.alloc(0x104);
     let save_name = e.mem.alloc(0x104);
