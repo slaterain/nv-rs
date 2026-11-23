@@ -108,11 +108,18 @@ pub fn statistical_apply(e: &mut Engine, this: Ptr, object: u32, base: u32, weig
     let basis = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, base));
     let geometry = e.call(OBJECT_GEOMETRY, &args![object]).u32();
     let (start, stride) = locked_array(e, geometry);
+    // The data's vertex count (+8, 16 bits), read in place: an index past it is a vertex the base
+    // copy does not reset, so a head with one is never left out by the exact skip.
+    let vertices = u32::from(e.mem.u16(geometry.wrapping_add(8)));
     let t = this.addr();
     let mut i = 0u32;
     while i < e.mem.u32(t.wrapping_add(8)) {
         let indices = e.mem.u32(t.wrapping_add(4));
         let index = e.mem.u32(indices.wrapping_add(i.wrapping_mul(4)));
+        // A vertex past the count, which the base copy does not reset: this head is never left out.
+        if index >= vertices {
+            super::apply::skip::note_past_count();
+        }
         let at = start.wrapping_add(index.wrapping_mul(stride));
         let row = e
             .mem
