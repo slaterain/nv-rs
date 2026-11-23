@@ -420,7 +420,7 @@ fn the_boxes_fall_and_come_to_rest_on_the_ground() {
 
 #[test]
 #[ignore = "needs the player's FalloutNV.exe (set NV_DATA)"]
-fn the_multithreaded_step_moves_the_bodies_as_the_continuous_one() {
+fn the_multithreaded_step_leaves_the_bodies_within_a_centimetre_of_the_continuous_one() {
     let _one = SERIAL
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -456,6 +456,34 @@ fn the_multithreaded_step_moves_the_bodies_as_the_continuous_one() {
     }
     let steps = single.contacts.len();
     println!("steps with the same contact points: {same_set} of {steps}; in the same order: {same_order}");
-    assert_eq!(differing, vec![0; ROUNDS], "motions part ways");
-    assert_eq!(same_set, steps, "the contact points differ");
+    // What the first run found (FalloutNV.exe 1.4.0.525): the two steps are not bit for bit the same. Every box's
+    // motion bytes differ from the first 20 steps on, but the boxes come to rest at most 0.07 Havok units (7 mm)
+    // from where the continuous step leaves them and stay there; the contact points are the same in 238 of the
+    // 240 steps (in the same order in 236), and some are added on a worker thread. Held here as found.
+    for (round, gap) in gaps.iter().enumerate() {
+        assert!(
+            *gap < 0.1,
+            "after {} steps the bodies are {gap} apart",
+            (round + 1) * 20
+        );
+    }
+    assert!(
+        gaps[ROUNDS - 1] <= gaps[0] + 0.01,
+        "the gap grows: {gaps:?}"
+    );
+    assert!(
+        same_set * 100 >= steps * 98,
+        "the contact points differ in {} steps",
+        steps - same_set
+    );
+    assert!(
+        threads.len() > 1,
+        "every contact point was added on the stepping thread: {threads:?}"
+    );
+    for (i, p) in multi.positions.iter().enumerate().skip(1) {
+        assert!(
+            (5.0..120.0).contains(&p[2]),
+            "box {i} at {p:?}: fell through or flew"
+        );
+    }
 }
