@@ -6006,7 +6006,7 @@ pub fn actor_equip_object(
         return;
     }
     if is_player
-        && fn_0088d2d0(e, Ptr::new(player)) == 0
+        && !power_armor_training(e, player)
         && !item.is_null()
         && e.call(FORM_TYPE, &args![item]).u32() == FORM_TYPE_ARMOR
         && e.call(
@@ -6278,6 +6278,17 @@ pub fn actor_equip_object(
             e.call(SET_ACTION_FLAG, &args![item, list, ACTION_FLAG_USED]);
         }
     }
+}
+
+/// The player's power armour training test in `Actor::EquipObject` (`0x88C8DA`, `0088d2d0`: the byte
+/// +0x7C7). lStewieAl's Tweaks' row S0179 (`GodmodeSkipsPowerArmorTraining`, its
+/// `PlayerHasPowerArmorTrainingOrGodmode`): also true in god mode (`011e07ba`) or demigod mode
+/// (`011e0898`).
+fn power_armor_training(e: &mut Engine, player: u32) -> bool {
+    if !e.stewie(engine_core::extend::stewie::GODMODE_POWER_ARMOR) {
+        return fn_0088d2d0(e, Ptr::new(player)) != 0;
+    }
+    e.mem.u8(player + 0x7c7) != 0 || e.mem.u8(0x011e_07ba) != 0 || e.mem.u8(0x011e_0898) != 0
 }
 
 // Translated from 0088d2d0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -12062,6 +12073,34 @@ mod tests {
                 "on {on} count {count}"
             );
             assert!(!was_called(&e, SOUND_HANDLE_PLAY), "on {on} count {count}");
+        }
+    }
+
+    /// S0179 (`PlayerHasPowerArmorTrainingOrGodmode`, `0x88C8DA`): the training byte (+0x7C7)
+    /// passes the test; with the row god mode (`011e07ba`) or demigod mode (`011e0898`) too.
+    #[test]
+    fn s0179_god_mode_passes_the_power_armor_training() {
+        // (row, trained, god, demigod, passes)
+        for (on, trained, god, demigod, passes) in [
+            (false, 0u8, 1u8, 1u8, false),
+            (false, 1, 0, 0, true),
+            (true, 0, 1, 0, true),
+            (true, 0, 0, 1, true),
+            (true, 0, 0, 0, false),
+            (true, 1, 0, 0, true),
+        ] {
+            let mut e = engine2();
+            e.set_stewie(engine_core::extend::stewie::GODMODE_POWER_ARMOR, on);
+            e.map(0x011e_0000, 0x1000);
+            e.mem.set_u8(0x011e_07ba, god);
+            e.mem.set_u8(0x011e_0898, demigod);
+            let player = actor2(&mut e);
+            e.mem.set_u8(player.addr() + 0x7c7, trained);
+            assert_eq!(
+                power_armor_training(&mut e, player.addr()),
+                passes,
+                "on {on} trained {trained} god {god} demigod {demigod}"
+            );
         }
     }
 
