@@ -15849,32 +15849,59 @@ mod tests {
         assert_eq!(call_count(&e, SOUND_HANDLE_PLAY), 1);
     }
 
-    /// S0148 (`patchResetForceFireWeaponWhenReloadJamming`, `0x8940A5`): a power attack group (the
-    /// same exit as a jam) clears the process' forced firing (slot `0x3f4` with 0) with the row.
+    /// S0148 (`patchResetForceFireWeaponWhenReloadJamming`, `0x8940A5`): the special-group exit of
+    /// `Actor::StartAttack` clears the process' forced firing (slot `0x3f4` with 0) once with the
+    /// row, never without it, on each of its routes: a power attack group (210) and the jam (a
+    /// plain group 0x30, slot `0x6dc` answering 0, a jam multiplier of 1 and a won roll: group
+    /// 0x10 + 0x17), each with its animation found (played through the worker) or not.
     #[test]
     fn s0148_a_jam_or_power_group_clears_the_forced_firing() {
-        for on in [false, true] {
-            let mut e = engine();
-            e.set_stewie(engine_core::extend::stewie::JAM_CLEARS_FORCE_FIRE, on);
-            let (actor, _, _) = attack_setup(&mut e);
-            let process = e.get(actor, Actor::pCurrentProcess);
-            set_slot(&mut e, process, 0x148, ret(0x6800));
-            set_slot(&mut e, process, 0x14c, ret(0x6900));
-            stub(&mut e, ENTRY_FORM, 0xf0f0);
-            stub(&mut e, WEAPON_GET_CURRENT_AMMO, 0xa1);
-            stub(&mut e, LIST_NEXT, 9);
-            stub(&mut e, ANIM_GROUP_GET_TYPE, 210);
-            assert!(!actor_start_attack(&mut e, actor, 210));
-            let cleared = if on {
-                vec![vec![process.addr(), 0]]
-            } else {
-                vec![]
-            };
-            assert_eq!(
-                calls_to(&e, slot_target(&e, process, 0x3f4)),
-                cleared,
-                "on {on}"
-            );
+        // (the attack's group, the jam route, the animation found)
+        for (group, jam, found) in [
+            (210u32, false, true),
+            (210, false, false),
+            (0x30, true, true),
+            (0x30, true, false),
+        ] {
+            for on in [false, true] {
+                let label = format!("on {on} group {group:#x} found {found}");
+                let mut e = engine();
+                e.set_stewie(engine_core::extend::stewie::JAM_CLEARS_FORCE_FIRE, on);
+                let (actor, _, _) = attack_setup(&mut e);
+                let process = e.get(actor, Actor::pCurrentProcess);
+                set_slot(&mut e, process, 0x148, ret(0x6800));
+                set_slot(&mut e, process, 0x14c, ret(0x6900));
+                stub(&mut e, ENTRY_FORM, 0xf0f0);
+                stub(&mut e, WEAPON_GET_CURRENT_AMMO, 0xa1);
+                stub(&mut e, LIST_NEXT, 9);
+                let special = if jam {
+                    stub_float(&mut e, GET_WEAPON_CONDITION_JAM_MULT, 1.0);
+                    stub(&mut e, CHANCE_ROLL, 1);
+                    stub(&mut e, WEAPON_GET_ATTACK_ANIM, 0x10);
+                    0x27
+                } else {
+                    group
+                };
+                let answer = if found { special } else { special + 1 };
+                stub(&mut e, ANIM_GROUP_GET_TYPE, answer);
+                assert!(!actor_start_attack(&mut e, actor, group), "{label}");
+                assert_eq!(
+                    call_count(&e, ACTOR_PLAY_GROUP_WORKER),
+                    usize::from(found),
+                    "{label}"
+                );
+                assert_eq!(call_count(&e, CHANCE_ROLL), usize::from(jam), "{label}");
+                let cleared = if on {
+                    vec![vec![process.addr(), 0]]
+                } else {
+                    vec![]
+                };
+                assert_eq!(
+                    calls_to(&e, slot_target(&e, process, 0x3f4)),
+                    cleared,
+                    "{label}"
+                );
+            }
         }
     }
 
