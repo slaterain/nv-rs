@@ -1140,6 +1140,14 @@ mod tests {
             } else if carried {
                 assert_eq!(lineage.fresh, fresh, "build {n}: the line's start kept");
             }
+            if n == 3 {
+                // The carry rule is for a previous build's file only: this build's own file,
+                // carried three times in a row, is read again (warm) by its next start.
+                let again =
+                    PipelineCacheFile::open_with(&device, &info, &dir, fp, CARRY_MAX).unwrap();
+                assert!(again.warm && !again.carried, "{}", again.note);
+                kept.push(again);
+            }
             if n == 4 {
                 assert!(f.note.contains("carried 3 times in a row"), "{}", f.note);
                 assert!(!file(&builds[3]).exists(), "the old file removed at once");
