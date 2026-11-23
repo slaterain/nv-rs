@@ -232,3 +232,7 @@ pub const DETECTION_OFF_MINES: Row = Row::share(AI_FIXES, AI_FIXES_END, 67);
 /// `PlayerCharacter::Update` `0093e860` (`0x942793`, `0x9427AA`)): with collision off, keyboard
 /// flying moves along the view and the jump control rises.
 pub const TCL_MOVEMENT: Row = Row::share(AI_FIXES, AI_FIXES_END, 68);
+/// S0097 `patchRunAndGunDontLetAPBeNegative` (`PlayerCharacter`'s vtable slot `0108AD7C`
+/// (`0093ab30`); `0095d850` (`0x95DD7C`)): action points spent for an action never go below 0,
+/// and a reload charges them only as a reload.
+pub const RUN_AND_GUN_AP: Row = Row::share(AI_FIXES, AI_FIXES_END, 69);

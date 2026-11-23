@@ -143,6 +143,14 @@ pub const ROWS: &[Row] = &[
         summary: "changes play: with collision off (tcl), flying with the keyboard moves along your view, and holding jump rises",
     },
     Row {
+        bit: stewie::RUN_AND_GUN_AP,
+        function: "patchRunAndGunDontLetAPBeNegative",
+        plan: "S0097",
+        key: "bRunAndGunDontLetAPBeNegative",
+        tweaks: None,
+        summary: "changes play: an action costs at most the action points you have, and switching weapons no longer charges a reload's action points",
+    },
+    Row {
         bit: stewie::AMMO_SWAP_NO_INSTANT_REFILL,
         function: "patchFixLoopingReloadAmmoSwapInstantRefill",
         plan: "S0111",

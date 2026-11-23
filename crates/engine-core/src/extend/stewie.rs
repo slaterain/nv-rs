@@ -349,6 +349,9 @@ pub(crate) struct Prints {
     /// `[Extra Console Details] bMeshPath` (Tweaks' code default 0): S0059 prints every selected
     /// reference's model path with it.
     mesh_path: AtomicBool,
+    /// `[Tweaks] bRunAndGunAPInCombatOnly` (Tweaks' code default 0): S0097 takes action points outside
+    /// VATS only in combat with it.
+    run_and_gun_combat_only: AtomicBool,
 }
 
 impl Default for Prints {
@@ -362,6 +365,7 @@ impl Default for Prints {
             lod_ref: AtomicU32::new(0),
             slip_guard: AtomicBool::new(false),
             mesh_path: AtomicBool::new(false),
+            run_and_gun_combat_only: AtomicBool::new(false),
         }
     }
 }
@@ -691,6 +695,22 @@ impl Engine {
     /// Whether the missing-data guard is on for Tweaks' rows ([`Engine::set_stewie_slip_guard`]).
     pub fn stewie_slip_guard(&self) -> bool {
         self.extend.stewie.3.slip_guard.load(Relaxed)
+    }
+
+    /// `[Tweaks] bRunAndGunAPInCombatOnly` (`crates/stewie`'s install): whether S0097 takes action
+    /// points outside VATS only while the player is in combat.
+    pub fn set_stewie_run_and_gun_combat_only(&self, on: bool) {
+        self.extend
+            .stewie
+            .3
+            .run_and_gun_combat_only
+            .store(on, Relaxed);
+    }
+
+    /// Whether S0097 takes action points outside VATS only in combat
+    /// ([`Engine::set_stewie_run_and_gun_combat_only`]).
+    pub fn stewie_run_and_gun_combat_only(&self) -> bool {
+        self.extend.stewie.3.run_and_gun_combat_only.load(Relaxed)
     }
 
     /// `[Extra Console Details] bMeshPath` (`crates/stewie`'s install): whether S0059 prints the

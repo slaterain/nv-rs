@@ -1004,6 +1004,10 @@ pub fn fn_0093aa10(e: &mut Engine, this: Ptr<PlayerCharacter>, actor_value: u32,
 /// `00525430` reads from the object at `011f2250`) and passes it to the
 /// virtual at `+0x33C` (which spends the action points).
 pub fn fn_0093ab30(e: &mut Engine, this: Ptr<PlayerCharacter>, actor_value: u32) {
+    if e.stewie(engine_core::extend::stewie::RUN_AND_GUN_AP) {
+        run_and_gun_action_points(e, this, actor_value);
+        return;
+    }
     // 0093ab39 pushes 0 and 0.0 before the thiscall 00525430 (plain RET); they
     // are the last two of the four words the cdecl 0066dca0 is given (ADD
     // ESP,0x10 after it).
@@ -1012,6 +1016,30 @@ pub fn fn_0093ab30(e: &mut Engine, this: Ptr<PlayerCharacter>, actor_value: u32)
         .call(0x0066_dca0, &args![actor_value, flag, 0.0f32, 0u32])
         .f32();
     e.vcall(this.addr(), 0x33c, &args![cost]);
+}
+
+// Translated from lStewieAl's Tweaks 10.05 (main.h): PlayerCharacterDamageActionPointsForAction.
+/// lStewieAl's Tweaks' row S0097 (`patchRunAndGunDontLetAPBeNegative`, written into `PlayerCharacter`'s
+/// vtable slot `0108AD7C`, [`fn_0093ab30`]'s only reference): outside VATS (the mode word +8 of
+/// `011f2250` is 0), out of combat (+0xDF0) and with `[Tweaks] bRunAndGunAPInCombatOnly` nothing is
+/// taken; else the action's cost (`0066dca0`) is held to the player's action points (`011dea3c`
+/// +0xA4, `GetClampedActorFloatValue` `0066ef50` with 0xC, the smaller kept) and, when above 0,
+/// spent (slot `0x33c`).
+fn run_and_gun_action_points(e: &mut Engine, this: Ptr<PlayerCharacter>, action: u32) {
+    let vats = e.mem.u32(0x011f_2250 + 8) != 0;
+    if !vats && e.mem.u8(this.addr() + 0xdf0) == 0 && e.stewie_run_and_gun_combat_only() {
+        return;
+    }
+    let cost = e
+        .call(0x0066_dca0, &args![action, u32::from(vats), 0.0f32, 0u32])
+        .f32();
+    let player = e.global::<u32>(PLAYER_SINGLETON);
+    let points = e.call(0x0066_ef50, &args![player + 0xa4, 0xcu32]).f32();
+    // `min(actionCost, pcActionPoints)` (`(a < b) ? a : b`).
+    let damage = if cost < points { cost } else { points };
+    if damage > 0.0 {
+        e.vcall(this.addr(), 0x33c, &args![damage]);
+    }
 }
 
 // Translated from 0093ab80 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -21015,6 +21043,45 @@ mod tests {
                 [0.5, 1.5, z - 1.0],
                 "held {held}"
             );
+        }
+    }
+
+    /// S0097 (`PlayerCharacterDamageActionPointsForAction`): the action's cost (`0066dca0`: 30)
+    /// is spent (slot `0x33c`); with the row it is held to the player's action points
+    /// (`0066ef50` with 0xC: 20), none is spent with no points left, and outside VATS out of
+    /// combat (+0xDF0) with `bRunAndGunAPInCombatOnly` nothing is taken.
+    #[test]
+    fn s0097_an_action_costs_at_most_the_points_left() {
+        // (row, the points, combat only, in combat, spent)
+        for (on, points, only, combat, spent) in [
+            (false, 20.0f32, false, false, Some(30.0f32)),
+            (true, 20.0, false, false, Some(20.0)),
+            (true, 0.0, false, false, None),
+            (true, 20.0, true, false, None),
+            (true, 20.0, true, true, Some(20.0)),
+        ] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::RUN_AND_GUN_AP, on);
+            e.set_stewie_run_and_gun_combat_only(only);
+            e.map(0x011d_e000, 0x1000);
+            e.map(0x011f_2000, 0x1000);
+            let this = player(&mut e);
+            e.set_global(PLAYER_SINGLETON, this.addr());
+            e.mem.set_u8(this.addr() + 0xdf0, u8::from(combat));
+            let table = e.mem.alloc(0x800);
+            let target = e.mem.alloc(8);
+            e.register_double(target, |_, _| Ret::default());
+            e.mem.set_u32(table + 0x33c, target);
+            e.mem.set_u32(this.addr(), table);
+            e.register(0x0052_5430, |e, a| int(u32::from(e.mem.u32(a[0] + 8) != 0)));
+            e.register(0x0066_dca0, |_, _| float(30.0));
+            e.register(0x0066_ef50, move |_, _| float(points as f64));
+            fn_0093ab30(&mut e, this, 9);
+            let calls = called(&e, target);
+            match spent {
+                Some(v) => assert_eq!(calls, vec![vec![this.addr(), v.to_bits()]], "on {on}"),
+                None => assert!(calls.is_empty(), "on {on} points {points} only {only}"),
+            }
         }
     }
 
