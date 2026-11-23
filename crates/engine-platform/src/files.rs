@@ -2710,18 +2710,30 @@ fn short_name(e: &Engine, path: &[u8]) -> Option<String> {
     short_name_on_windows(e, path)
 }
 
-/// [`short_name`] on a volume without 8.3 names (every one off Windows): none, for every name.
-#[cfg(any(not(windows), test))]
+/// [`short_name`] on a volume without 8.3 names (every one off Windows, and Windows where ntdll
+/// makes none): none, for every name.
 fn short_name_off_windows() -> Option<String> {
     Some(String::new())
 }
 
-/// [`short_name`] on a Windows volume that makes 8.3 names (the system drive's default).
+/// [`short_name`] on a Windows volume that makes 8.3 names (the system drive's default), when
+/// ntdll's name maker is really there ([`ntdll::makes_names`]); where it is not (Wine's ntdll
+/// lists `RtlGenerate8dot3Name` but ends the process when it is called: Proton, issue #634) as
+/// a volume without 8.3 names answers, none ([`short_name_off_windows`]), said once.
 #[cfg(windows)]
 fn short_name_on_windows(e: &Engine, path: &[u8]) -> Option<String> {
+    short_name_made(e, path, ntdll::makes_names())
+}
+
+/// [`short_name_on_windows`] with ntdll's name maker there (`makes`) or not.
+#[cfg(windows)]
+fn short_name_made(e: &Engine, path: &[u8], makes: bool) -> Option<String> {
     let name = last_part(path);
     if short_extension(&name).is_none() {
         return Some(String::new());
+    }
+    if !makes {
+        return short_name_off_windows();
     }
     let extension = name.rfind('.').map_or("", |at| &name[at + 1..]);
     if extension.len() > 3 {
@@ -2768,6 +2780,38 @@ fn names_in(e: &Engine, directory: &[u8]) -> std::collections::HashSet<String> {
 /// again and again with one context, as a file system asks while the name it got is taken.
 #[cfg(windows)]
 mod ntdll {
+    /// Whether `RtlGenerate8dot3Name` really makes names here: not under Wine (Proton), whose
+    /// ntdll lists it but ends the process when it is called (an unimplemented function, issue
+    /// #634); Wine's ntdll is known by its `wine_get_version` export. Asked once a run; where it
+    /// makes none the log says so once, and new files get no short name, as on a volume with 8.3
+    /// names turned off.
+    pub fn makes_names() -> bool {
+        static MAKES: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *MAKES.get_or_init(|| {
+            let makes = !has_wine_export();
+            if !makes {
+                eprintln!(
+                    "files: this system's ntdll makes no 8.3 short names (Wine); new files get \
+                     none, as on a Windows drive with short names turned off"
+                );
+            }
+            makes
+        })
+    }
+
+    /// Whether the loaded ntdll exports `wine_get_version`.
+    fn has_wine_export() -> bool {
+        use windows::core::PCSTR;
+        use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
+        // SAFETY: both names are NUL-terminated; ntdll is in every process and never unloaded.
+        unsafe {
+            GetModuleHandleA(PCSTR(b"ntdll.dll\0".as_ptr()))
+                .ok()
+                .and_then(|ntdll| GetProcAddress(ntdll, PCSTR(b"wine_get_version\0".as_ptr())))
+                .is_some()
+        }
+    }
+
     #[repr(C)]
     struct UnicodeString {
         length: u16,
@@ -3161,6 +3205,39 @@ fn made(e: &mut Engine, name: &[u8], k: &[u8]) {
         written: now,
     };
     state!(e).disk.entries.insert(k.to_vec(), entry);
+}
+
+/// The file at the full path `path` given `bytes` whole, as a handle opened on it with
+/// `OPEN_ALWAYS` that writes them from its start, sets its end there and is closed: a file of this
+/// run (engine memory, never the player's disk; [`create_file_a`]'s rules). A player's file is
+/// taken into the run with its directory entry ([`adopt`], unread: every byte is replaced); one
+/// not there is made ([`made`]) when its folder exists, else `ERROR_PATH_NOT_FOUND` and nothing is
+/// made. The entry then shows the size and the write's time as a closed handle that wrote
+/// publishes them ([`closed`]). For the profile writes (`super::ini`), which change a whole file.
+pub fn write_whole(e: &mut Engine, path: &[u8], bytes: Vec<u8>) -> Result<(), u32> {
+    let k = key(path);
+    if !state!(e).disk.files.contains_key(&k) {
+        let players = !state!(e).disk.deleted.contains(&k)
+            && std::fs::metadata(real_path(path)).is_ok_and(|m| m.is_file());
+        if players {
+            adopt(e, path, &k, false)?;
+        } else if directory_exists(e, path) {
+            made(e, path, &k);
+        } else {
+            return Err(ERROR_PATH_NOT_FOUND);
+        }
+    }
+    let now = file_clock(e);
+    let size = bytes.len() as u64;
+    let disk = &mut state!(e).disk;
+    disk.files.insert(k.clone(), bytes);
+    disk.changed(&k);
+    if let Some(entry) = disk.entries.get_mut(&k) {
+        entry.size = size;
+        entry.accessed = now;
+        entry.written = now;
+    }
+    Ok(())
 }
 
 /// A file handle closed (`CloseHandle`): a handle that wrote publishes the file's size, and the
@@ -5756,6 +5833,27 @@ mod tests_changed_directories {
             ]
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Issue #634: where ntdll makes no 8.3 names (Wine's lists `RtlGenerate8dot3Name` but ends
+    /// the process when it is called), a new long name gets none, as on a drive with short names
+    /// turned off, and ntdll is not asked; Windows' own ntdll makes them.
+    #[cfg(windows)]
+    #[test]
+    fn without_ntdlls_name_maker_a_new_name_gets_none() {
+        let e = Engine::new();
+        assert!(ntdll::makes_names(), "Windows' own ntdll makes names");
+        for path in [
+            &br"Q:\nv-rs-no-maker\Save 140 x.fos"[..],
+            br"Q:\nv-rs-no-maker\quicksave.fos",
+        ] {
+            assert_eq!(short_name_made(&e, path, false), Some(String::new()));
+        }
+        // A name that needs no short name needs none either way.
+        assert_eq!(
+            short_name_made(&e, br"Q:\nv-rs-no-maker\NVFIX.FOS", true),
+            Some(String::new())
+        );
     }
 
     /// Short names as NTFS makes them (`NAME~1` to `~4`, then the checksum name; measured

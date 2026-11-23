@@ -33,6 +33,7 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
     ("S0022.41", "bMenuFixesCompanionMarkersReset", bit(7)),
     ("S0022.42", "bMenuFixesHealthBarNotTiedToPrompt", bit(34)),
     ("S0022.46", "bMenuFixesCaravanPadConsole", bit(8)),
+    ("S0022.47", "bMenuFixesPadBDebounce", bit(51)),
     ("S0022.52", "bMenuFixesRepairBrokenItemType", bit(14)),
     ("S0022.55", "bMenuFixesVatsHealthOneTick", bit(42)),
     (
@@ -54,11 +55,15 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "bFixPipboyDisplayedChemDurationIfPerkModified",
         bit(45),
     ),
+    ("S0069", "bAllowHotkeyGRXAndBooks", bit(54)),
     ("S0070", "bFixBookAndAmmoHotkeyIcons", bit(18)),
     ("S0071", "bFixRecipeNegativeIngredientCount", bit(19)),
     ("S0072", "bFixHideHealthbarSetting", bit(36)),
     ("S0088", "bFixItemModMenuUnEquipBug", bit(26)),
     ("S0092", "bCaravanDoublePayoutFix", bit(11)),
+    ("S0095", "bFixConsoleMainMenuVisibility", bit(50)),
+    ("S0105", "bFixDrDTArmorDisplayAlphas", bit(53)),
+    ("S0107.05", "bMemoryLeakFixesPipBoyLight", bit(49)),
     (
         "S0110",
         "bFixStuckInAddSPECIALPointsIfAtMaxAlready",
@@ -77,6 +82,7 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "bFixRadioVolumeResetWhenUsingSomeHolotapes",
         bit(29),
     ),
+    ("S0218", "bWorldMapNoExteriorDoorFix", bit(52)),
     ("S0883", "bMoreDescriptiveSettingsSaveError", bit(30)),
 ];
 

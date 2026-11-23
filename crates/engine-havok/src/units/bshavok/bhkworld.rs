@@ -3650,6 +3650,7 @@ pub fn fn_00c6aca0(e: &mut Engine, this: Ptr<BhkWorld>) {
 /// stepped. Finally the remaining entity removals are flushed, a scheduled
 /// visual debugger is created (`012677cd`) and the updating byte is cleared.
 pub fn bhk_world_update(e: &mut Engine, this: Ptr<BhkWorld>) -> bool {
+    let _time = engine_core::hitch::span(engine_core::hitch::Count::HavokNsMain);
     // The "border's Havok work on the physics step" row: the grid shift's drop of the add-lock count, before anything.
     finish_deferred_lock_drop(e, this.addr());
     e.set_global(GLOBAL_WORLD_FLOAT, 0.0f32);
