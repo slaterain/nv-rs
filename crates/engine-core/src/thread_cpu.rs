@@ -310,10 +310,12 @@ mod tests {
     #[test]
     fn a_busy_thread_s_own_clock_shows_it_working() {
         let Some((cpu0, wall0)) = own_clock() else {
-            assert!(!cfg!(any(
+            if cfg!(any(
                 all(windows, target_arch = "x86_64"),
                 target_os = "linux"
-            )));
+            )) {
+                panic!("this system tells a thread its own processor clock");
+            }
             return;
         };
         let t = std::time::Instant::now();
