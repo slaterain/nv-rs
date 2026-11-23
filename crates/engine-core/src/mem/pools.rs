@@ -14,9 +14,9 @@
 //!   under the shared memory's lock; a stack over [`CACHE_MAX`] gives its oldest [`BATCH`] back to
 //!   the stock. So a block freed on another thread than the one that took it goes back in a batch.
 //! - A run whose every slot is back in the stock (none live, none in a thread's stack) gives its
-//!   heap block back when its pool's stock still holds [`SPARE`] blocks of other runs: a one-off
-//!   peak in one pool does not keep its memory for the rest of the session. Its number is used
-//!   again for the pool's next run.
+//!   heap block back when its pool's stock still holds [`SPARE_BYTES`] in blocks of other runs:
+//!   a one-off peak in one pool does not keep its memory for the rest of the session. Its number
+//!   is used again for the pool's next run.
 //! - As with the heap's quick stacks, a freed block comes back only for a request of its own pool (a
 //!   12-byte object's block never for a 16-byte one): a stale pointer finds an object of its own
 //!   pool or the old bytes, as in the original. Blocks are 8-byte aligned and zero-filled when
@@ -37,12 +37,20 @@ pub(super) const RUN_BLOCK: u32 = RUN_BYTES + PAGE as u32;
 /// The most runs there can be at once: the heap's two ranges in runs (the run numbers fit 16 bits).
 const MAX_RUNS: usize = ((HEAP_END - HEAP_BASE) / RUN_BYTES) as usize;
 const _: () = assert!(MAX_RUNS < u16::MAX as usize);
+/// Where a run cut from the heap block at `block` starts: the first page boundary past the block's
+/// start (so no slot of the run ever has the block's own address, and a stray free of the block is
+/// told from a free of the first slot).
+pub(super) fn run_start(block: u32) -> u32 {
+    (block + PAGE as u32) & !(PAGE as u32 - 1)
+}
 /// The blocks a thread's stack takes from the stock at once, and gives back at once.
 pub(super) const BATCH: usize = 32;
 /// The most free blocks a thread's stack of one pool holds before it gives [`BATCH`] back.
 pub(super) const CACHE_MAX: usize = 2 * BATCH;
-/// The blocks of other runs a pool's stock keeps before an empty run gives its memory back.
-pub(super) const SPARE: usize = 2 * BATCH;
+/// The bytes of other runs' free blocks a pool's stock keeps before an empty run gives its memory
+/// back: a menu's blocks (a few MB over all pools) are not given back between its openings, a
+/// one-off peak of many MB in one pool is.
+pub(super) const SPARE_BYTES: usize = 4 << 20;
 /// The census line is written again each time the runs hold this many more bytes than at the last.
 pub(super) const REPORT_STEP: u64 = 32 << 20;
 
@@ -183,7 +191,7 @@ impl Tables {
 
     /// Whether `addr` is the heap block of a run that is held (a free of it is a stray free).
     pub(super) fn is_run_block(&self, addr: u32) -> bool {
-        let start = (addr + PAGE as u32 - 1) & !(PAGE as u32 - 1);
+        let start = run_start(addr);
         self.run_of(start).is_some_and(|r| r.block() == addr)
     }
 
@@ -328,8 +336,8 @@ impl Cache {
 
 impl Stocks {
     /// Takes the blocks given back to pool `class`. Answers the heap blocks of the pool's runs that
-    /// gave their memory back meanwhile (every slot in the stock, and [`SPARE`] blocks of other
-    /// runs left in it besides), for the caller to free.
+    /// gave their memory back meanwhile (every slot in the stock, and [`SPARE_BYTES`] in blocks of
+    /// other runs left in it besides), for the caller to free.
     pub(super) fn give_back(
         &mut self,
         tables: &Tables,
@@ -352,13 +360,14 @@ impl Stocks {
         let mut freed = Vec::new();
         for number in full {
             let stock = &mut self.pools[class];
+            let run = tables.runs[number].get().expect("a held run");
             let mine = self.in_stock[number] as usize;
-            if mine != tables.runs[number].get().map_or(0, Run::slots)
-                || stock.given_back.len() - mine < SPARE
+            if mine != run.slots()
+                || (stock.given_back.len() - mine) * (run.stride as usize) < SPARE_BYTES
             {
                 continue;
             }
-            let start = tables.runs[number].get().map_or(0, Run::start);
+            let start = run.start();
             stock
                 .given_back
                 .retain(|&b| b.wrapping_sub(start) >= RUN_BYTES);
@@ -692,28 +701,29 @@ mod tests {
     #[test]
     fn an_empty_run_gives_its_memory_back_and_another_pool_uses_it() {
         let mut m = on();
-        // A one-off peak: four runs of the 596-byte pool (436 blocks a run), then all freed.
+        // A one-off peak: 24 runs of the 596-byte pool (436 blocks a run, 6.1 MB), then all freed: the
+        // runs that fill up once the pool keeps 4 MB of others give their memory back.
         let per_run = (super::RUN_BYTES / 600) as usize;
-        let peak: Vec<u32> = (0..4 * per_run).map(|_| m.alloc_asked(596)).collect();
+        let peak: Vec<u32> = (0..24 * per_run).map(|_| m.alloc_asked(596)).collect();
         let held = m.thread_heap_census().expect("on");
-        assert_eq!((held.runs, held.live_blocks), (4, 4 * per_run as u64));
+        assert_eq!((held.runs, held.live_blocks), (24, 24 * per_run as u64));
         let top = m.heap_top();
         for &b in &peak {
             m.free_asked(b);
         }
         let after = m.thread_heap_census().expect("on");
         assert!(after.runs_given_back >= 1, "{after}");
-        assert_eq!(after.runs as u64 + after.runs_given_back, 4);
+        assert_eq!(after.runs as u64 + after.runs_given_back, 24);
         assert_eq!(after.live_blocks, 0);
         // Another pool's new run takes the memory given back: the heap does not grow.
         let small = m.alloc_asked(8);
         assert!(m.heap_top() <= top, "{:08x} > {top:08x}", m.heap_top());
         m.free_asked(small);
         // And a run's number is used again by its own pool after a run gave it back.
-        let again: Vec<u32> = (0..4 * per_run).map(|_| m.alloc_asked(596)).collect();
+        let again: Vec<u32> = (0..24 * per_run).map(|_| m.alloc_asked(596)).collect();
         assert_eq!(
             m.thread_heap_census().expect("on").live_blocks,
-            4 * per_run as u64
+            24 * per_run as u64
         );
         for b in again {
             m.free_asked(b);

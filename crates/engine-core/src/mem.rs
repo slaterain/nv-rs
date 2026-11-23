@@ -1630,7 +1630,7 @@ impl Mem {
         stocks.restock(&tables, class, stride, out, || {
             made = true;
             let block = self.alloc(pools::RUN_BLOCK);
-            (block, (block + PAGE as u32 - 1) & !(PAGE as u32 - 1))
+            (block, pools::run_start(block))
         });
         if made {
             let census = ThreadHeapCensus::of(&tables, Some(&stocks));
