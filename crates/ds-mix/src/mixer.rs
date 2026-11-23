@@ -732,7 +732,9 @@ fn render_converted(
                 next.min(frames as u64) as usize
             });
         }
-        let k = period - c.held.len();
+        // The frame's place in its period; frames an earlier device's longer period left (a
+        // voice connected again at a lower rate, [`Voice::reconnect`]) count from 0.
+        let k = period.saturating_sub(c.held.len());
         let (l, r) = c.held.pop_front().expect("a converted frame");
         put(frame, l, r, i, Some(k));
     }
@@ -1237,6 +1239,25 @@ mod tests {
         (-5, 0x3f7d11fd),
         (-1, 0x3f7d11fd),
     ];
+
+    /// A converted voice connected again at a lower device rate in the middle of a period (its
+    /// old converter still holding frames of the longer 48000 Hz period): it plays on, and the
+    /// new 44100 Hz periods follow, with no overflow of the frame's place in its period.
+    #[test]
+    fn a_voice_connected_again_at_a_lower_rate_mid_period_plays_on() {
+        let mut v = Voice::new(signal(48000), 1, 16);
+        (v.rate, v.device, v.looping) = (22050, 48000, true);
+        v.start(0);
+        // 10 frames of the first 480-frame period: 470 held, more than a 441-frame period.
+        let mut out = vec![0f32; 2 * 10];
+        render_voice(&mut v, &mut out);
+        v.device = 44100;
+        v.reconnect();
+        let mut out = vec![0f32; 2 * 2000];
+        render_voice(&mut v, &mut out);
+        assert!(v.position.is_some());
+        assert!(out.iter().any(|&x| x != 0.0));
+    }
 
     #[test]
     fn the_gain_law_gives_the_measured_factors() {

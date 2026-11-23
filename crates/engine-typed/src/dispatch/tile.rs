@@ -1036,13 +1036,22 @@ const ACTION_LEFT_PAREN: i32 = 0x7e8;
 const ACTION_RIGHT_PAREN: i32 = 0x7e9;
 
 /// An action's `QFloat` (vtable slot 0): read in place when the slot holds one of the two action
-/// classes' own, else called through the vtable.
+/// classes' own, else called through the vtable. A float read in place comes back as the call
+/// answers it in `ST0`: loaded into the x87 register, so a signalling NaN comes back quiet (its
+/// quiet bit set, sign and payload kept).
 fn action_float(e: &mut Engine, action: u32) -> f32 {
+    let as_answered = |float: f32| {
+        if float.is_nan() {
+            f32::from_bits(float.to_bits() | 0x0040_0000)
+        } else {
+            float
+        }
+    };
     match crate::slot_target(e, action, ACTION_SLOT_FLOAT) {
-        FLOAT_ACTION_Q_FLOAT => e.mem.f32(action + ACTION_OPERAND),
+        FLOAT_ACTION_Q_FLOAT => as_answered(e.mem.f32(action + ACTION_OPERAND)),
         REF_ACTION_Q_FLOAT => match e.mem.u32(action + ACTION_OPERAND) {
             0 => 0.0,
-            value => e.mem.f32(value + VALUE_FLOAT),
+            value => as_answered(e.mem.f32(value + VALUE_FLOAT)),
         },
         _ => e.vcall(action, ACTION_SLOT_FLOAT, &[]).f32(),
     }
@@ -1183,6 +1192,9 @@ fn run_action(e: &mut Engine, me: u32, action: u32, stack: u32, changed: &mut bo
         let referenced_trait = e.mem.i32(referenced);
         if referenced_trait >= FIRST_USER_TEXT_ID {
             e.with_stack(4, |e, out| {
+                // The exe zeroes its local first: the lookup leaves it alone when the trait is
+                // not in the map.
+                e.mem.set_u32(out.addr(), 0);
                 typed_call!(
                     super::FAMILY,
                     0x00a1_e380,
