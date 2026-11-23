@@ -60,6 +60,7 @@ pub static FIXES: &[Fix] = &[
     IO_WAIT_ENDS_ON_COMPLETION,
     LOAD_STEPS,
     DEAD_LIGHTS,
+    THREAD_HEAP,
     crate::half_loaded_move::FIX,
     crate::thread_races::FIX,
     TEXTURE_READ_FIRST,
@@ -131,6 +132,25 @@ pub const DEAD_LIGHTS: Fix = Fix {
 
 fn install_dead_lights(e: &mut Engine) {
     engine::dead_lights::install(e);
+}
+
+/// The thread heap (`engine_core`'s `mem/pools.rs`): the blocks of the game's memory pools (8 to
+/// 596 bytes, nearly every object, list node and string the game makes) come from runs of one
+/// pool each through each thread's own cache, with no lock and no table lookup on the common path;
+/// the same answers to the game (sizes, alignment, zero fill, a freed block reused only for its own
+/// pool). It changes where blocks go, nothing the game computes. Lead's check on 2026-11-23 (play
+/// build nov22e): the pause menu with mods opens in 45-54 ms (65-67 off), the staged fight runs 61.0
+/// fps with 0 stutters (53.3 and 21 off). Vanilla keeps the heap's own path.
+pub const THREAD_HEAP: Fix = Fix {
+    name: "thread heap",
+    env: "NV_THREAD_HEAP",
+    addresses: &[],
+    summary: "the game's small blocks (nearly every object and string) come from each thread's own cache, with no lock: pause menus with mods open faster and fights stutter less",
+    install: install_thread_heap,
+};
+
+fn install_thread_heap(e: &mut Engine) {
+    e.mem.enable_thread_heap();
 }
 
 /// The milliseconds a frame [`LOAD_STEPS`] gives each of the two in play.
@@ -671,6 +691,7 @@ const NO_ADDRESS: &[&str] = &[
     XNVSE_EXTRACT_ARGS.name,
     SHADER_WARM.name,
     DEAD_LIGHTS.name,
+    THREAD_HEAP.name,
     DRAW_THREAD.name,
 ];
 
@@ -2998,6 +3019,36 @@ bSunShadowsCharacters=0
 
     /// JohnnyGuitar's editor ids: on in the fixes preset, off in vanilla, its own key or variable over
     /// both; installed, the built-in is on exactly when the row is.
+    /// The thread heap: on in the fixes preset, off in vanilla, `bThreadHeap` or `NV_THREAD_HEAP` over
+    /// both; on, the install turns the memory's thread heap on.
+    #[test]
+    fn the_thread_heap_follows_the_preset() {
+        assert!(!Choice::vanilla().is_on(&THREAD_HEAP));
+        let fixes = Choice::from_parts(None, no_env).unwrap();
+        assert!(fixes.is_on(&THREAD_HEAP));
+        let off = with_ini(
+            None,
+            "[nv-rs Fixes]
+bThreadHeap=0
+",
+            &[],
+        );
+        assert!(!off.is_on(&THREAD_HEAP));
+        let env_off = Choice::from_parts(None, env_of(&[("NV_THREAD_HEAP", "0")])).unwrap();
+        assert!(!env_off.is_on(&THREAD_HEAP));
+        let on = Choice::from_parts(
+            None,
+            env_of(&[("NV_THREAD_HEAP", "1"), ("NV_PRESET", "vanilla")]),
+        )
+        .unwrap();
+        assert!(on.is_on(&THREAD_HEAP));
+        for choice in [fixes, off, env_off, Choice::vanilla(), on] {
+            let mut e = Engine::new();
+            install(&mut e, &choice);
+            assert_eq!(e.mem.thread_heap_on(), choice.is_on(&THREAD_HEAP));
+        }
+    }
+
     #[test]
     fn jg_editor_ids_follow_the_preset() {
         assert!(!Choice::vanilla().is_on(&JG_EDITOR_IDS));
