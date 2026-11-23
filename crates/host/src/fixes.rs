@@ -59,6 +59,7 @@ pub static FIXES: &[Fix] = &[
     SHADER_WARM,
     IO_WAIT_ENDS_ON_COMPLETION,
     LOAD_STEPS,
+    DEAD_LIGHTS,
     crate::half_loaded_move::FIX,
     crate::thread_races::FIX,
     TEXTURE_READ_FIRST,
@@ -71,6 +72,7 @@ pub static FIXES: &[Fix] = &[
     crate::patch_data::STRIP_LOD_WATER,
     crate::direct_files::FIX,
     DRAW_THREAD,
+    HAVOK_REF_COUNTS,
 ];
 
 /// The IO manager's wait for queued loads (`00c3dfa0`: main at a cell border, a load, a save) sleeps
@@ -109,6 +111,27 @@ pub const LOAD_STEPS: Fix = Fix {
     summary: "while running across cell borders the game finishes its background loads in smaller steps each frame, so frame times jump less; far objects may get their models a few frames later",
     install: install_load_steps,
 };
+
+/// Dead lights in a light list: a lighting property can keep a light after the light was destroyed
+/// (its destructor `00b9f0c0` takes it out only of the properties of the geometries in its own list,
+/// and `RemoveLight` `00b717a0` does nothing on a fenced property), and the original then reads
+/// through the light's cleared `spLight` in `ResortLights` (`00b70390`), the active-light walks and
+/// the pass staging: a stop seen in the staged fight with JIP's projectile lights (2026-11-22). JIP's
+/// game patches guard one of those walkers only (G01, `0xB707E0`). With the row such an entry is
+/// taken out and the object's passes rebuilt (at each lighting property's `GetRenderPasses`: the
+/// typed `00b67be0` and, hooked here, the translated `00bb4740` and `00c058f0`), the walks skip it,
+/// and the first few are printed (`engine_typed::lights::dead`, `engine::dead_lights`).
+pub const DEAD_LIGHTS: Fix = Fix {
+    name: "dead lights in a light list",
+    env: "NV_DEAD_LIGHT_GUARD",
+    addresses: &[0x00bb_4740, 0x00c0_58f0],
+    summary: "a light destroyed while an object's light list still held it is taken out of the list instead of stopping the game (the original reads through it; seen in fights with JIP's projectile lights)",
+    install: install_dead_lights,
+};
+
+fn install_dead_lights(e: &mut Engine) {
+    engine::dead_lights::install(e);
+}
 
 /// The milliseconds a frame [`LOAD_STEPS`] gives each of the two in play.
 pub const LOAD_STEPS_MS: u32 = 1;
@@ -527,6 +550,25 @@ pub const DRAW_THREAD: Fix = Fix {
     install: install_nothing,
 };
 
+/// Havok reference counts without the global lock (OFF in every preset, [`OFF_IN_EVERY_PRESET`], until its in-game
+/// check): every Havok object's reference count is guarded by one global critical section the game always has on
+/// (`00c90830` sets the lock mode 1), and the physics step holds it whole (`hkpWorld::stepDeltaTime` takes the
+/// world's lock, `00c91180`, which is `lockAll`), so a reference change on main while the physics thread steps waits
+/// for the step (7.0 ms in the 2026-11-22 play log). With the row the six reference functions change the count in one
+/// atomic operation and never take the section (`engine::units::havok_sdk::hkreferencedobject`, "Havok reference
+/// counts without the global lock"); the world's lock and `lockAll` keep it. Same counts, same deletes.
+pub const HAVOK_REF_COUNTS: Fix = Fix {
+    name: "Havok reference counts without the global lock",
+    env: "NV_HAVOK_REFS",
+    addresses: &engine::units::havok_sdk::hkreferencedobject::LOCK_FREE_ADDRESSES,
+    summary: "off in every preset until checked: a physics object's reference count changes in one atomic step instead of under Havok's one global lock, so the main thread no longer waits for the physics step to finish",
+    install: install_havok_ref_counts,
+};
+
+fn install_havok_ref_counts(e: &mut Engine) {
+    engine::units::havok_sdk::hkreferencedobject::lock_free_turn_on(e);
+}
+
 /// UI Organizer built in (`crates/uio`, parts 1 and 2): its lists (`Data\uio\supported.txt` and
 /// `Data\uio\public\*.txt`) put UI mods' additions into the menus, in memory, and every menu file
 /// is read through UIO's reader and parsed by its own XML parser. It changes how every menu file
@@ -602,7 +644,7 @@ fn install_nothing(_: &mut Engine) {}
 
 /// Rows that are off in every preset until the maintainer turns them on: only their own variable or `Fallout.ini`
 /// line turns them on.
-pub const OFF_IN_EVERY_PRESET: &[&str] = &[DRAW_THREAD.env];
+pub const OFF_IN_EVERY_PRESET: &[&str] = &[DRAW_THREAD.env, HAVOK_REF_COUNTS.env];
 
 /// The rows that register nothing at an exe address: the menu limit paces the uncapped step;
 /// the extender's rows set flags `crates/nvse` reads.
@@ -628,6 +670,7 @@ const NO_ADDRESS: &[&str] = &[
     SCRIPT_LIST_GUARD.name,
     XNVSE_EXTRACT_ARGS.name,
     SHADER_WARM.name,
+    DEAD_LIGHTS.name,
     DRAW_THREAD.name,
 ];
 

@@ -17,6 +17,13 @@
 //! and skinned geometry bounds, the bound merges, and a bone's blend collision object up to its node's
 //! refresh. They read the node, its parent's world transform, the skin's bones (the actor's own clone)
 //! and constants, and write the node's world transform, bound and flags.
+//! The controllers on its nodes a helper runs too ([`controllers_ok`]; the two roots' are detached):
+//! idle Havok ones, and transform and visibility controllers that drive the node they sit on, with
+//! no interpolator or a plain one (they write the node's local transform or its culled bit and their
+//! own state). Two things they touch are not the actor's own: an Euler rotation key's search hints in
+//! the transform data every clone of the model shares, which is why a stretch ends before an actor
+//! that reads Euler keys an earlier actor of the stretch reads (one thread at a time, in list order),
+//! and the scaled-time cache in the running thread's block (see [`controllers_ok`]).
 //!
 //! **What a helper logs instead of running** (its actor's log, in walk order): a blend collision
 //! object's Havok part (`bhkCollisionObject::NitohkTransform` after the node's refresh, or
@@ -24,14 +31,20 @@
 //! the body, under the Havok lock, and the node never reads it back; and a subtree that must run on
 //! main: a head (`BSFaceGenNiNode::UpdateDownwardPass`, `00663a70`, whose face morphing reads the
 //! actor's process, the player pointer, the close-to-player list, menu mode, settings, the base
-//! NPC's face data and the world camera's position, none of which a bone pass writes) and an object
-//! without a world bound yet (its allocation then happens on main, in the serial order).
+//! NPC's face data and the world camera's position, none of which a bone pass writes) and a geometry
+//! without a world bound (its `UpdateWorldBound` allocates one, on main, in the serial order). A node
+//! without a bound is walked: a skeleton's nodes never take one, and deferring them left the skins
+//! walked after them reading last frame's bones. [`order_check`] works out, once per actor per pass
+//! before the walks, what the walk's order needs: a node whose children loop would allocate a bound,
+//! or a skin whose bones the replay would read in another state than the serial pass, makes the
+//! actor a barrier.
 //!
 //! **Barriers.** An actor with anything else in its tree (controllers or property controllers below
 //! the two detached roots, particle systems, lights and other classes, a collision object that reads
 //! its body into the node or changes its motion type, a parent chain through another listed actor)
 //! runs whole on main as the translation runs it, and the helpers walk only the actors listed before
-//! it: code not traced for other cores sees exactly the state the serial pass shows it.
+//! it: code not traced for other cores sees exactly the state the serial pass shows it. So does an
+//! actor [`order_check`] refuses (a node that would allocate its bound, a skin read out of order).
 //!
 //! **The replay**, per actor in list order: its log (a subtree's downward pass with the actor's
 //! update data, a Havok part as the serial pass makes it), the merged bounds of the logged
@@ -43,6 +56,9 @@
 //! serial pass runs (it is what the game goes on with) and its results and Havok parts are compared
 //! with the helpers'. The bounds of a node above a logged subtree are compared by doing the bound
 //! part again on the serial end state.
+//! It covers the walked objects only: what a deferred subtree (a head, a geometry without a bound)
+//! does is main's in both paths, and the inputs it reads from outside itself are kept exact by
+//! [`order_check`], not compared. Its first 200 differences are printed in detail.
 
 use crate::culling::layout::NiNode;
 use crate::{collision, culling, dispatch, scene, slot_target};
@@ -50,6 +66,7 @@ use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
 use engine_core::{args, typed_call, Engine};
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering::Relaxed};
 use std::sync::Mutex;
 
@@ -208,6 +225,8 @@ pub struct Counts {
     pub checked_actors: u64,
     pub differences: u64,
     pub mismatches: u64,
+    /// Stretches ended early: an actor read Euler keys an earlier actor of the stretch read.
+    pub splits: u64,
 }
 
 static FRAMES: AtomicU64 = AtomicU64::new(0);
@@ -218,6 +237,7 @@ static HAVOK: AtomicU64 = AtomicU64::new(0);
 static CHECKED: AtomicU64 = AtomicU64::new(0);
 static DIFFERENCES: AtomicU64 = AtomicU64::new(0);
 static MISMATCHES: AtomicU64 = AtomicU64::new(0);
+static SPLITS: AtomicU64 = AtomicU64::new(0);
 /// Barrier reasons, by [`Barrier`] as a number.
 static REASONS: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
 /// Differences printed so far (the first 20 are).
@@ -245,8 +265,9 @@ fn summary() {
     println!(
         "NV_PAR_BONES: {} frames: a frame {pass:.3} ms (walks {walk:.3}, replays {replay:.3}, whole on main \
          {serial:.3}); actors walked {}, whole on main {} {reasons:?}, subtrees on main {}, Havok parts {}; \
-         checked {} actors, {} differences, {} mismatches",
-        c.frames, c.walked, c.barriers, c.subtrees, c.havok, c.checked_actors, c.differences, c.mismatches
+         checked {} actors, {} differences, {} mismatches; stretches cut at shared Euler keys {}",
+        c.frames, c.walked, c.barriers, c.subtrees, c.havok, c.checked_actors, c.differences, c.mismatches,
+        c.splits
     );
     census_print();
 }
@@ -326,6 +347,7 @@ pub fn take_counts() -> (Counts, Vec<(&'static str, u64)>) {
         checked_actors: CHECKED.swap(0, Relaxed),
         differences: DIFFERENCES.swap(0, Relaxed),
         mismatches: MISMATCHES.swap(0, Relaxed),
+        splits: SPLITS.swap(0, Relaxed),
     };
     let reasons = Barrier::ALL
         .iter()
@@ -450,16 +472,24 @@ pub enum Barrier {
     /// The world camera the face morphing measures from is inside an actor's tree: the whole pass
     /// runs serially that frame.
     Camera = 5,
+    /// A node without a world bound whose children loop would allocate one, or a tree too big to
+    /// work out ([`order_check`]).
+    Bound = 6,
+    /// A skin whose bones the replay would read in another state than the serial pass
+    /// ([`order_check`]).
+    Skin = 7,
 }
 
 impl Barrier {
-    const ALL: [Barrier; 6] = [
+    const ALL: [Barrier; 8] = [
         Barrier::Controllers,
         Barrier::Class,
         Barrier::Collision,
         Barrier::Attached,
         Barrier::Untyped,
         Barrier::Camera,
+        Barrier::Bound,
+        Barrier::Skin,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -469,6 +499,8 @@ impl Barrier {
             Barrier::Attached => "attached",
             Barrier::Untyped => "untyped",
             Barrier::Camera => "camera",
+            Barrier::Bound => "bound",
+            Barrier::Skin => "skin",
         }
     }
 }
@@ -681,18 +713,177 @@ fn classify(e: &mut Engine, object: u32, detached: &[u32]) -> Class {
     if flags & FLAG_PROPERTY_CONTROLLERS != 0 {
         return Class::Barrier(Barrier::Controllers);
     }
-    if !detached.contains(&object) && !controllers_idle(e, e.mem.u32(object + 0x0c)) {
+    if !detached.contains(&object) && !controllers_ok(e, e.mem.u32(object + 0x0c), object) {
         return Class::Barrier(Barrier::Controllers);
     }
     let collision = e.mem.u32(object + 0x1c);
     if collision != 0 && !collision_ok(e, collision) {
         return Class::Barrier(Barrier::Collision);
     }
-    if head || e.mem.u32(object + 0x20) == 0 {
-        // A head's morphing, or an object that gets its world bound allocated now: on main.
+    if head || (e.mem.u32(object + 0x20) == 0 && downward == OBJECT_DOWNWARD) {
+        // A head's morphing, or a geometry whose `UpdateWorldBound` allocates its world bound now
+        // (it has none): on main. A node without a bound is walked: [`order_check`] made the actor a
+        // barrier before the walk if any node's children loop would allocate one.
         return Class::Defer;
     }
     Class::Walk
+}
+
+/// The flags that make a node take its bound from its children (`0x80000`, the children loop's
+/// bound part), and the one that makes it take a bound without looking at them (`0x2000`).
+const FLAG_BOUND_FROM_CHILDREN: u32 = 0x0008_0000;
+const FLAG_BOUND_WITHOUT_CHILDREN: u32 = 0x2000;
+/// A geometry's skin instance (+0xbc); the skin's root parent (+0x10), bone list (+0x14) and data
+/// (+8, the bone count at +0x44).
+const SKIN_INSTANCE: u32 = 0xbc;
+/// The objects of one actor's tree [`order_check`] reads at most; a bigger tree is a barrier.
+const ORDER_CHECK_MOST: usize = 4096;
+
+/// One object of an actor's tree in the walk's order.
+struct Walked {
+    object: u32,
+    /// Its subtree's end: the index after its last descendant.
+    end: usize,
+    /// A node the downward pass walks the children of.
+    node: bool,
+}
+
+/// What the walk's order needs that [`classify`] cannot see object by object, worked out once per
+/// actor per pass on main, before the walks (`None`: the actor may be walked on helpers):
+/// - `Barrier::Bound`: a node without a world bound whose children loop allocates one (the
+///   bound-from-children flag 0x80000, and either the flag 0x2000 or a child that ends its pass with
+///   a bound: one that has a bound, a geometry, which allocates its own, or a node that allocates),
+///   worked out bottom-up. The allocation must happen on main in the serial order, and deferring
+///   such a node would leave whatever is walked after it reading last frame's state of its subtree:
+///   the actor runs whole on main (in the game only on the first pass after a node's subtree got
+///   its first bound; a skeleton's nodes never take one and are walked). Nodes inside a deferred
+///   subtree (a head) are main's and left out.
+/// - `Barrier::Skin`: a skin whose inputs (its bones' and its root parent's world transforms) the
+///   replay would read in another state than the serial pass: a skin inside a deferred subtree (a
+///   head, a geometry without a bound) reading an object walked after that subtree; any skin
+///   reading an object under another listed actor's root (another helper may be walking it;
+///   anything outside every listed actor is not written by this pass); or a walked skin reading
+///   an object inside a deferred subtree.
+///
+/// A tree of more than [`ORDER_CHECK_MOST`] objects is a `Barrier::Bound` (not worked out).
+fn order_check(e: &Engine, root: u32, roots: &[u32]) -> Option<Barrier> {
+    let mut order: Vec<Walked> = Vec::new();
+    let mut stack = vec![(root, usize::MAX)];
+    let mut parents: Vec<usize> = Vec::new();
+    // Pre-order with each object's parent index, then the subtree ends.
+    while let Some((object, parent)) = stack.pop() {
+        if order.len() >= ORDER_CHECK_MOST {
+            return Some(Barrier::Bound);
+        }
+        let node = has_children(e, object);
+        let at = order.len();
+        order.push(Walked {
+            object,
+            end: at + 1,
+            node,
+        });
+        parents.push(parent);
+        if node {
+            let mut c = children(e, object);
+            c.reverse();
+            stack.extend(c.into_iter().map(|child| (child, at)));
+        }
+    }
+    for i in (1..order.len()).rev() {
+        let p = parents[i];
+        order[p].end = order[p].end.max(order[i].end);
+    }
+    let index: HashMap<u32, usize> = order
+        .iter()
+        .enumerate()
+        .map(|(i, w)| (w.object, i))
+        .collect();
+    // The deferred subtrees (a head, a geometry without a bound), as index ranges.
+    let mut deferred: Vec<(usize, usize)> = Vec::new();
+    let mut i = 0;
+    while i < order.len() {
+        let w = &order[i];
+        let downward = slot_target(e, w.object, SLOT_DOWNWARD);
+        if downward == HEAD_DOWNWARD
+            || (downward == OBJECT_DOWNWARD && e.mem.u32(w.object + 0x20) == 0)
+        {
+            deferred.push((i, w.end));
+            i = w.end;
+        } else {
+            i += 1;
+        }
+    }
+    let inside = |j: usize| {
+        deferred
+            .iter()
+            .find(|&&(d, end)| d <= j && j < end)
+            .copied()
+    };
+    // Bottom-up (every descendant comes after its node in the walk's order): whether each object
+    // ends its pass with a bound, handed to its parent; whether a walked node allocates.
+    let mut child_bound = vec![false; order.len()];
+    for i in (0..order.len()).rev() {
+        let w = &order[i];
+        let ends = if e.mem.u32(w.object + 0x20) != 0 || !w.node {
+            // It has one, or it is a geometry, which allocates its own (any other class is a
+            // barrier of `classify`).
+            true
+        } else {
+            let flags = e.mem.u32(w.object + 0x30);
+            let allocates = flags & FLAG_BOUND_FROM_CHILDREN != 0
+                && (flags & FLAG_BOUND_WITHOUT_CHILDREN != 0 || child_bound[i]);
+            if allocates && inside(i).is_none() {
+                return Some(Barrier::Bound);
+            }
+            allocates
+        };
+        if ends && parents[i] != usize::MAX {
+            child_bound[parents[i]] = true;
+        }
+    }
+    // The skins' inputs against the deferred subtrees.
+    for (i, w) in order.iter().enumerate() {
+        if w.node {
+            continue;
+        }
+        let skin = e.mem.u32(w.object + SKIN_INSTANCE);
+        if skin == 0 || slot_target(e, w.object, SLOT_DOWNWARD) != OBJECT_DOWNWARD {
+            continue;
+        }
+        let data = e.mem.u32(skin + 8);
+        let bones = e.mem.u32(skin + 0x14);
+        let count = if data != 0 { e.mem.u32(data + 0x44) } else { 0 };
+        if count > idx(ORDER_CHECK_MOST) || (count != 0 && bones == 0) {
+            return Some(Barrier::Skin);
+        }
+        let inputs = (0..count)
+            .map(|b| e.mem.u32(bones + 4 * b))
+            .chain(std::iter::once(e.mem.u32(skin + 0x10)));
+        let own = inside(i);
+        for input in inputs {
+            if input == 0 {
+                continue;
+            }
+            let Some(&j) = index.get(&input) else {
+                // Outside this tree: no walk of this actor writes it; another listed actor's may.
+                if roots.iter().any(|&r| r != root && below(e, input, r)) {
+                    return Some(Barrier::Skin);
+                }
+                continue;
+            };
+            let late = match own {
+                // A skin replayed with its subtree reads the input as the replay finds it: final
+                // when walked before the subtree, the serial pass's when inside it.
+                Some((_, end)) => j >= end,
+                // A walked skin must not read what main replays after the walk.
+                None => inside(j).is_some(),
+            };
+            if late {
+                return Some(Barrier::Skin);
+            }
+        }
+    }
+    None
 }
 
 /// `bhkBlendController::Update` and `bhkForceController::Update`, the controllers a helper may run
@@ -700,11 +891,40 @@ fn classify(e: &mut Engine, object: u32, detached: &[u32]) -> Class {
 const BLEND_CONTROLLER_UPDATE: u32 = 0x00c9_b090;
 const FORCE_CONTROLLER_UPDATE: u32 = 0x00cb_9770;
 
-/// Whether every controller of the list from `first` (along +0x30) is one a helper may run now: a
-/// `bhkBlendController` that its update leaves at once (active bit +8 bit 3 clear, no target at
-/// +0x2c, or +0x48 clear: nothing written), or a `bhkForceController` that is not active (bit 3
-/// clear, or no target: its update only stores a word of its own, +0x50). An empty list is idle.
-fn controllers_idle(e: &Engine, first: u32) -> bool {
+/// `NiTransformController::Update` and `NiVisController::Update`, and the interpolators' updates they
+/// may run on a helper: `NiTransformInterpolator::Update` (slot 0x8c) and `NiBoolInterpolator::Update`
+/// (slot 0xa0).
+const TRANSFORM_CONTROLLER_UPDATE: u32 = 0x00a3_6680;
+const VIS_CONTROLLER_UPDATE: u32 = 0x00a4_4e10;
+const TRANSFORM_INTERPOLATOR_UPDATE: u32 = 0x00a3_fdb0;
+const BOOL_INTERPOLATOR_UPDATE: u32 = 0x00a5_33c0;
+/// Their sizes (the controllers' and interpolators' `CreateObject` allocations): what check mode
+/// saves and puts back around the helpers' walk.
+const CONTROLLER_SIZE: u32 = 0x38;
+const TRANSFORM_INTERPOLATOR_SIZE: u32 = 0x48;
+const BOOL_INTERPOLATOR_SIZE: u32 = 0x18;
+
+/// Whether every controller of `object`'s list from `first` (along +0x30) is one a helper may run
+/// now: a `bhkBlendController` that its update leaves at once (active bit +8 bit 3 clear, no target
+/// at +0x2c, or +0x48 clear: nothing written), a `bhkForceController` that is not active (bit 3
+/// clear, or no target: its update only stores a word of its own, +0x50), or a transform or
+/// visibility controller whose target is `object` itself and whose interpolator (+0x34) is none or a
+/// plain one ([`controller_state`]): its update writes only the node's local transform (+0x34 to
+/// +0x67) or its flags' bit 0, the update data's byte +8 (the actor's own, on main's stack), its own
+/// times (`NiTimeController::DontDoUpdate` and, with the scaled-time flag 0x40 every loaded
+/// controller has, `ComputeScaledTime` through slot 0xa4: +0x1c to +0x28) and flags, and the
+/// interpolator's own state (its last time, value and key indices). Clones get their own controllers
+/// and interpolators (`CopyMembers`, `00a38ef0`) but share the key data: the keys are only read,
+/// except an Euler rotation key's (type 4) three search hints, which `NiFloatKey::GenInterp` keeps in
+/// the shared key ([`euler_key`]; the stretches keep one actor per key, [`parallel`]).
+///
+/// `ComputeScaledTime` also keeps a one-entry cache in the running thread's block (+0x2a0 to +0x2b0:
+/// the result for a key range, cycle type and input time). A helper's own cache answers what the
+/// computation would, and main's cache after the pass holds another entry than the serial pass
+/// leaves; either changes an answer only for two controllers alike in key range, cycle type and
+/// input time that differ in the reverse flag (bit 4), which the cache does not key on. The
+/// translation shares that blind spot. An empty list is idle.
+fn controllers_ok(e: &Engine, first: u32, object: u32) -> bool {
     let mut controller = first;
     let mut steps = 0;
     while controller != 0 {
@@ -717,6 +937,9 @@ fn controllers_idle(e: &Engine, first: u32) -> bool {
         let idle = match slot_target(e, controller, 0x94) {
             BLEND_CONTROLLER_UPDATE => !active || target == 0 || e.mem.u32(controller + 0x48) == 0,
             FORCE_CONTROLLER_UPDATE => !active || target == 0,
+            TRANSFORM_CONTROLLER_UPDATE | VIS_CONTROLLER_UPDATE => {
+                target == object && controller_state(e, controller).is_some()
+            }
             _ => false,
         };
         if !idle {
@@ -725,6 +948,92 @@ fn controllers_idle(e: &Engine, first: u32) -> bool {
         controller = e.mem.u32(controller + 0x30);
     }
     true
+}
+
+/// A transform or visibility controller a helper may run: the byte ranges its update writes (the
+/// controller, its interpolator when it has one, and the search hints of the Euler key that
+/// interpolator reads, [`euler_key`]), or `None` when it may not run on a helper
+/// (another controller class, or an interpolator that is not the plain class its controller takes).
+fn controller_state(e: &Engine, controller: u32) -> Option<Vec<(u32, u32)>> {
+    let interpolator = e.mem.u32(controller + 0x34);
+    let (slot, update, size, none_ok) = match slot_target(e, controller, 0x94) {
+        TRANSFORM_CONTROLLER_UPDATE => (
+            0x8c,
+            TRANSFORM_INTERPOLATOR_UPDATE,
+            TRANSFORM_INTERPOLATOR_SIZE,
+            true,
+        ),
+        VIS_CONTROLLER_UPDATE => (
+            0xa0,
+            BOOL_INTERPOLATOR_UPDATE,
+            BOOL_INTERPOLATOR_SIZE,
+            false,
+        ),
+        _ => return None,
+    };
+    let mut ranges = vec![(controller, CONTROLLER_SIZE)];
+    if interpolator == 0 {
+        return none_ok.then_some(ranges);
+    }
+    if slot_target(e, interpolator, slot) != update {
+        return None;
+    }
+    ranges.push((interpolator, size));
+    if update == TRANSFORM_INTERPOLATOR_UPDATE {
+        let key = euler_key(e, interpolator);
+        if key != 0 {
+            ranges.push((key + EULER_LAST_INDEX, EULER_HINTS_SIZE));
+        }
+    }
+    Some(ranges)
+}
+
+/// `NiTransformData`'s rotation key count (+0x8, 16 bits), key type (+0x10) and keys (+0x20); the
+/// Euler key type, and an Euler key's three search hints (`m_uiLastIdx`, +0x3c, one word per axis).
+const DATA_ROTATION_COUNT: u32 = 0x08;
+const DATA_ROTATION_TYPE: u32 = 0x10;
+const DATA_ROTATION_KEYS: u32 = 0x20;
+const EULER_KEY_TYPE: u32 = 4;
+const EULER_LAST_INDEX: u32 = 0x3c;
+const EULER_HINTS_SIZE: u32 = 12;
+/// `NiTransformInterpolator::m_spData`.
+const INTERPOLATOR_DATA: u32 = 0x2c;
+
+/// The Euler rotation key (type 4) a plain transform interpolator's update reads, or 0: with Euler
+/// keys `NiRotKey::GenInterp` (`00a28740`) hands the first key to its interpolation (`00a29b10`),
+/// whose `NiFloatKey::GenInterp` (`00a26b40`) per axis starts its search at the key's hint and
+/// stores where it stopped. The key lives in the data every clone of the model shares.
+fn euler_key(e: &Engine, interpolator: u32) -> u32 {
+    let data = e.mem.u32(interpolator + INTERPOLATOR_DATA);
+    if data == 0
+        || e.mem.u16(data + DATA_ROTATION_COUNT) == 0
+        || e.mem.u32(data + DATA_ROTATION_TYPE) != EULER_KEY_TYPE
+    {
+        return 0;
+    }
+    e.mem.u32(data + DATA_ROTATION_KEYS)
+}
+
+/// The Euler keys the transform controllers of `object`'s list run on a helper would write hints
+/// into, added to `keys`.
+fn euler_keys_of(e: &Engine, object: u32, keys: &mut Vec<u32>) {
+    let mut controller = e.mem.u32(object + 0x0c);
+    let mut steps = 0;
+    while controller != 0 && steps < 64 {
+        if slot_target(e, controller, 0x94) == TRANSFORM_CONTROLLER_UPDATE {
+            let interpolator = e.mem.u32(controller + 0x34);
+            if interpolator != 0
+                && slot_target(e, interpolator, 0x8c) == TRANSFORM_INTERPOLATOR_UPDATE
+            {
+                let key = euler_key(e, interpolator);
+                if key != 0 && !keys.contains(&key) {
+                    keys.push(key);
+                }
+            }
+        }
+        controller = e.mem.u32(controller + 0x30);
+        steps += 1;
+    }
 }
 
 /// The children of a node (empty slots left out).
@@ -748,7 +1057,12 @@ fn has_children(e: &Engine, object: u32) -> bool {
 /// The check before a stretch: every object of the actor's tree, a subtree that will be logged
 /// included (it runs on main, but in the helpers' order, so it may hold nothing that is not
 /// traced). `None`: the actor may be walked on a helper.
-fn barrier_in(e: &mut Engine, root: u32, detached: &[u32]) -> Option<Barrier> {
+fn barrier_in(
+    e: &mut Engine,
+    root: u32,
+    detached: &[u32],
+    euler: &mut Vec<u32>,
+) -> Option<Barrier> {
     let census = census_on();
     let mut first = None;
     let mut stack = vec![(root, false)];
@@ -759,6 +1073,10 @@ fn barrier_in(e: &mut Engine, root: u32, detached: &[u32]) -> Option<Barrier> {
             }
             census_note(e, object, b, in_head);
             first = first.or(Some(b));
+        }
+        // Every object's, deferred subtrees' too: their replays run before the next stretch.
+        if !detached.contains(&object) {
+            euler_keys_of(e, object, euler);
         }
         if has_children(e, object) {
             let head = in_head || slot_target(e, object, SLOT_DOWNWARD) == HEAD_DOWNWARD;
@@ -805,6 +1123,8 @@ fn parallel(e: &mut Engine, array: u32, first: u32, last: u32) -> bool {
     // The list, in order, with each actor's animation asked as the translation asks it.
     let started = std::time::Instant::now();
     let mut items = Vec::new();
+    // Per item, the Euler keys its tree's transform controllers read ([`euler_key`]).
+    let mut euler: Vec<Vec<u32>> = Vec::new();
     let mut entries = Vec::new();
     let mut index = first;
     while index < last {
@@ -828,11 +1148,13 @@ fn parallel(e: &mut Engine, array: u32, first: u32, last: u32) -> bool {
         // Nothing pending (the update answers false) or no roots (it only clears the mark): the
         // translation's call at the actor's place, reading nothing of the others.
         let walks = pending && root != 0 && accum != 0;
+        let mut keys = Vec::new();
         let barrier = if walks {
-            barrier_in(e, root, &[root, accum])
+            barrier_in(e, root, &[root, accum], &mut keys)
         } else {
             None
         };
+        euler.push(keys);
         items.push(Item {
             actor,
             animation,
@@ -858,6 +1180,8 @@ fn parallel(e: &mut Engine, array: u32, first: u32, last: u32) -> bool {
             let parent = e.mem.u32(item.root + 0x18);
             if roots.iter().any(|&r| r != item.root && below(e, parent, r)) {
                 item.barrier = Some(Barrier::Attached);
+            } else {
+                item.barrier = order_check(e, item.root, &roots);
             }
         }
     }
@@ -884,7 +1208,15 @@ fn parallel(e: &mut Engine, array: u32, first: u32, last: u32) -> bool {
             start = end;
             continue;
         }
+        // An actor reading Euler keys an earlier actor of the stretch reads starts the next one: the
+        // keys' search hints are then written by one thread at a time, in the list's order.
+        let mut claimed: Vec<u32> = Vec::new();
         while end < items.len() && walkable_or_idle(&items[end]) {
+            if euler[end].iter().any(|k| claimed.contains(k)) {
+                SPLITS.fetch_add(1, Relaxed);
+                break;
+            }
+            claimed.extend_from_slice(&euler[end]);
             end += 1;
         }
         stretch(e, &items[start..end], check);
@@ -1126,6 +1458,12 @@ struct Fields {
     words: Vec<u32>,
     bound: [u32; 4],
     collision: [u32; 2],
+    /// The bytes of the transform and visibility controllers on the object, of their
+    /// interpolators and of the Euler keys' search hints they write ([`controller_state`]): put
+    /// back with the rest, so the serial pass starts where the helper started (with the game's
+    /// scaled-time flag a controller already updated at this time skips its update, and the
+    /// node would keep the transform put back), and compared after it.
+    controllers: Vec<(u32, Vec<u8>)>,
 }
 
 fn fields_of(e: &Engine, object: u32) -> Fields {
@@ -1144,11 +1482,24 @@ fn fields_of(e: &Engine, object: u32) -> Fields {
     } else {
         [0; 2]
     };
+    let mut controllers = Vec::new();
+    let mut controller = e.mem.u32(object + 0x0c);
+    let mut steps = 0;
+    while controller != 0 && steps < 64 {
+        if let Some(ranges) = controller_state(e, controller) {
+            for (at, size) in ranges {
+                controllers.push((at, e.mem.bytes(at, size)));
+            }
+        }
+        controller = e.mem.u32(controller + 0x30);
+        steps += 1;
+    }
     Fields {
         object,
         words,
         bound,
         collision,
+        controllers,
     }
 }
 
@@ -1168,6 +1519,9 @@ fn put_fields(e: &mut Engine, f: &Fields) {
             .set_u16(c + 0xc, u16::try_from(f.collision[0]).unwrap_or(0));
         e.mem
             .set_u8(c + 0x14, u8::try_from(f.collision[1]).unwrap_or(0));
+    }
+    for (at, bytes) in &f.controllers {
+        e.mem.write(*at, bytes);
     }
 }
 
@@ -1293,7 +1647,7 @@ fn check_stretch(
                 _ => None,
             })
             .collect();
-        for f in &walked[next] {
+        for (k, f) in walked[next].iter().enumerate() {
             if inside.contains(&f.object) {
                 continue;
             }
@@ -1303,11 +1657,22 @@ fn check_stretch(
                 expected[0] &= 0xffbf;
             }
             let bound_differs = !above.contains(&f.object) && now.bound != f.bound;
-            if now.words != f.words || now.collision != expected || bound_differs {
+            // The controllers' and interpolators' bytes (and Euler hints) the helper left, at the
+            // same addresses (the detached roots' controllers are back on them now).
+            let controllers_differ = f
+                .controllers
+                .iter()
+                .any(|(at, bytes)| e.mem.bytes(*at, idx(bytes.len())) != *bytes);
+            if now.words != f.words
+                || now.collision != expected
+                || bound_differs
+                || controllers_differ
+            {
                 DIFFERENCES.fetch_add(1, Relaxed);
+                detail(e, item, k, &saved[next][k], f, &now, bound_differs);
                 report(format_args!(
-                    "NV_PAR_BONES=check: actor {:08x}, object {:08x}: transform, flags, bound or collision \
-                     bytes differ from the serial pass",
+                    "NV_PAR_BONES=check: actor {:08x}, object {:08x}: transform, flags, bound, collision or \
+                     controller bytes differ from the serial pass (controllers differ: {controllers_differ})",
                     item.actor, f.object
                 ));
             }
@@ -1345,4 +1710,88 @@ const _: () = assert!(std::mem::size_of::<crate::culling::layout::NiAVObjectImag
 /// An index or count as a guest word (the lists are far below 2^32 entries).
 fn idx(i: usize) -> u32 {
     u32::try_from(i).unwrap_or(u32::MAX)
+}
+
+/// Check-mode detail lines printed so far (the first 200 are).
+static DETAILED: AtomicU32 = AtomicU32::new(0);
+
+/// One differing object of the check, in detail: its class (vtable and downward pass), name, depth,
+/// walk index, and per part (flags +0x30, local +0x34, world +0x68, bound, collision) the words that
+/// differ as they were before the walks, after the helper's walk and after the serial pass.
+#[cold]
+fn detail(
+    e: &Engine,
+    item: &Item,
+    k: usize,
+    before: &Fields,
+    helper: &Fields,
+    serial: &Fields,
+    bound_differs: bool,
+) {
+    if DETAILED.fetch_add(1, Relaxed) >= 200 {
+        return;
+    }
+    let object = helper.object;
+    let name = {
+        let p = e.mem.u32(object + 8);
+        let mut s = String::new();
+        if p != 0 {
+            for i in 0..48 {
+                let b = e.mem.u8(p + i);
+                if b == 0 {
+                    break;
+                }
+                s.push(char::from(b));
+            }
+        }
+        s
+    };
+    let mut depth = 0;
+    let mut n = object;
+    while n != 0 && n != item.root && depth < 64 {
+        n = e.mem.u32(n + 0x18);
+        depth += 1;
+    }
+    let part = |i: usize| match i {
+        0 => "flags",
+        1..=13 => "local",
+        _ => "world",
+    };
+    let mut words = String::new();
+    let mut shown = 0;
+    for i in 0..helper.words.len() {
+        if helper.words[i] != serial.words[i] && shown < 6 {
+            shown += 1;
+            words.push_str(&format!(
+                " {}[{}]: before {:08x} helper {:08x} serial {:08x};",
+                part(i),
+                i,
+                before.words[i],
+                helper.words[i],
+                serial.words[i]
+            ));
+        }
+    }
+    let differing = helper
+        .words
+        .iter()
+        .zip(&serial.words)
+        .filter(|(a, b)| a != b)
+        .count();
+    eprintln!(
+        "NV_PAR_BONES=check detail: actor {:08x} root {:08x} object {object:08x} '{name}' vtable {:08x} \
+         downward {:08x} depth {depth} walk index {k}: {differing} words differ{words} bound {} \
+         (before {:08x?} helper {:08x?} serial {:08x?}) collision before {:x?} helper {:x?} serial {:x?}",
+        item.actor,
+        item.root,
+        e.mem.u32(object),
+        slot_target(e, object, SLOT_DOWNWARD),
+        if bound_differs { "DIFFERS" } else { "same" },
+        before.bound,
+        helper.bound,
+        serial.bound,
+        before.collision,
+        helper.collision,
+        serial.collision,
+    );
 }

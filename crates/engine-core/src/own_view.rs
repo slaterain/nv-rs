@@ -59,6 +59,9 @@ pub struct OwnView {
     pub misses: Cell<u64>,
     /// POISON: the guest bytes are scribbled meanwhile (a read not copied is a stop).
     pub poison: bool,
+    /// The world draw's per-frame list words handed to the drawing side at the cut (`engine_typed::draw::detach`),
+    /// by guest address: the draw's list walks and clears read and write them here.
+    pub lists: AddrMap<u32, u32>,
     /// The object [`OwnView::find`] looked up last and its first range.
     last_object: Cell<(u32, u32)>,
     /// The own state's page table (open addressing, a power of two long) and the block indices it points into.

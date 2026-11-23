@@ -39,6 +39,9 @@ struct D {
     key: u64,
     buffers: Vec<u32>,
     movable: bool,
+    /// Blended, tested against depth (LESS or LESSEQUAL), writing none, no stencil: what
+    /// `NV_WGPU_SORT_DRAWS=pass` holds after the opaque draws.
+    see_through: bool,
     blend: usize,
     alpha_test: bool,
     skinned: bool,
@@ -71,6 +74,8 @@ struct Sums {
     movable: u64,
     kept_order: u64,
     kept_order_coarse: u64,
+    in_place: u64,
+    opaque_after_see_through: u64,
     runs: u64,
     ch_asis: [u64; 3],
     ch_merged: [u64; 3],
@@ -224,6 +229,42 @@ fn frame(evs: &[Ev], world: u32, s: &mut Sums) {
         &mut merged_order,
         &mut in_run,
     );
+    // In place: a draw joins only the draw just before it (the same key, nothing between). And the
+    // opaque draws given after a see-through draw with only state sets between (pass mode would move
+    // them ahead of it).
+    let mut prev_key: Option<u64> = None;
+    let mut see_through = false;
+    let mut pass_now = 0u32;
+    for e in evs {
+        match e {
+            Ev::Draw(d) => {
+                if d.pass != pass_now {
+                    prev_key = None;
+                    see_through = false;
+                    pass_now = d.pass;
+                }
+                if d.pass != world {
+                    continue;
+                }
+                if d.movable {
+                    if prev_key == Some(d.key) {
+                        s.in_place += 1;
+                    }
+                    prev_key = Some(d.key);
+                    if see_through {
+                        s.opaque_after_see_through += 1;
+                    }
+                } else {
+                    prev_key = None;
+                    see_through = d.see_through;
+                }
+            }
+            Ev::Wall | Ev::Upload(_) => {
+                prev_key = None;
+                see_through = false;
+            }
+        }
+    }
     changes(&asis, &mut s.ch_asis);
     changes(&merged_order, &mut s.ch_merged);
     s.calls_after += merged_order.len() as u64;
@@ -545,6 +586,11 @@ fn main() {
                     key,
                     buffers,
                     movable,
+                    see_through: blend_on
+                        && zon
+                        && (zfunc == 2 || zfunc == 4)
+                        && !zwrite
+                        && !stencil,
                     blend,
                     alpha_test: r(15, 0) != 0,
                     skinned: skinned_decls.contains(&decl),
@@ -603,6 +649,11 @@ fn main() {
             pf(s.kept_order_coarse)
         );
         println!("  draw calls after merging: {:.0}", pf(s.calls_after));
+        println!(
+            "  join the draw just before them only (in place): {:.0}; opaque draws after a held see-through draw: {:.0}",
+            pf(s.in_place),
+            pf(s.opaque_after_see_through)
+        );
         let gs: Vec<String> = s
             .group_sizes
             .iter()

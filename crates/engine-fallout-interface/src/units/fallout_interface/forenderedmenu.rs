@@ -1205,7 +1205,21 @@ pub fn fo_rendered_menu_clear_menu_light(e: &mut Engine, this: Ptr<FORenderedMen
         let light = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, base + 0x1c));
         e.vcall(parent, 0xe8, &args![light]);
     }
-    let light = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, base + 0x1c));
+    // `0x7FC761` (lStewieAl's Tweaks' S0107.05 calls `MemoryLeakFixes::DetachMenuLight` there):
+    // the light, detached first from the node it still hangs on (its `m_parent` +0x18,
+    // `NiNode::DetachChild`, slot +0xE8), so the menu's next light is not added beside it.
+    let light = if e.stewie(engine_core::extend::stewie::PIPBOY_LIGHT_DETACHED) {
+        let light = e.mem.u32(base + 0x1c);
+        if light != 0 {
+            let parent = e.mem.u32(light + 0x18);
+            if parent != 0 {
+                e.vcall(parent, 0xe8, &args![light]);
+            }
+        }
+        light
+    } else {
+        typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, base + 0x1c))
+    };
     let node = e.get(this, FORenderedMenu::pLightShadowSceneNode);
     e.call(SHADOW_SCENE_NODE_REMOVE_LIGHT, &args![node, light]);
     e.call(POINTER_SET, &args![base + 0x1c, 0u32]);
@@ -2670,6 +2684,39 @@ mod tests {
             vec![vec![0x7500, 0x7400]]
         );
         assert_eq!(e.get(this, FORenderedMenu::spLight), 0);
+    }
+
+    /// lStewieAl's Tweaks' S0107.05 (`0x7FC761`): with the row on the light still hanging on a
+    /// node (its `m_parent` +0x18) is detached from it (`DetachChild`, slot +0xE8) before it
+    /// leaves the shadow scene node; no parent, or the row off, no such call.
+    #[test]
+    fn s0107_05_the_pipboy_light_is_detached() {
+        for (on, with_parent) in [(false, true), (true, true), (true, false)] {
+            let (mut e, this) = light_menu_engine(0, 0);
+            let light = e.mem.alloc(0x40);
+            let holder = object(&mut e, &[(0xe8, 0x00c7_00e8)]);
+            answer(&mut e, 0x00c7_00e8, 0);
+            if with_parent {
+                e.mem.set_u32(light + 0x18, holder);
+            }
+            e.set(this, FORenderedMenu::spLight, light);
+            e.set(this, FORenderedMenu::pLightShadowSceneNode, 0x7500);
+            answer(&mut e, NODE_SLOTS + 0x10, 0);
+            e.set_stewie(engine_core::extend::stewie::PIPBOY_LIGHT_DETACHED, on);
+            e.call_log = Some(vec![]);
+            e.call(0x007f_c6f0, &args![this]);
+            let detached = calls(&e, 0x00c7_00e8);
+            let wanted = if on && with_parent {
+                vec![vec![holder, light]]
+            } else {
+                vec![]
+            };
+            assert_eq!(detached, wanted, "row {on} parent {with_parent}");
+            assert_eq!(
+                calls(&e, SHADOW_SCENE_NODE_REMOVE_LIGHT),
+                vec![vec![0x7500, light]]
+            );
+        }
     }
 
     #[test]
