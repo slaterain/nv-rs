@@ -7028,3 +7028,31 @@ fn sorted_draws_never_hold_draws_without_depth_writes() {
     assert_eq!(mismatches, 0, "each draw drawn with its own state");
     assert_eq!(held, (0, 0), "none held");
 }
+
+/// Merged or sorted, a draw over the same vertices as a held draw of another key (another pass
+/// over the same surface) has the held draws drawn first, so the later pass still lands last
+/// (#890's planted fault G2 survived without this). The keys differ only in the cull mode, which
+/// changes nothing on these front faces; both depth tests pass at the same depth (LESSEQUAL). Red
+/// then green at column 1, green then red at column 3, all over one strip, so one column would
+/// show the earlier pass whichever key a sort puts first.
+#[test]
+fn held_draws_over_one_surface_keep_their_order_across_keys() {
+    let script = |g: &mut Gpu, _: &StripDraw| {
+        strip_at(g, 1, 0.0, [1.0, 0.0, 0.0, 1.0]);
+        g.state(CULLMODE, 1);
+        strip_at(g, 1, 0.0, [0.0, 1.0, 0.0, 1.0]);
+        strip_at(g, 3, 0.0, [0.0, 1.0, 0.0, 1.0]);
+        g.state(CULLMODE, 3);
+        strip_at(g, 3, 0.0, [1.0, 0.0, 0.0, 1.0]);
+    };
+    let Some((off, _, _)) = held_script(false, false, &script) else {
+        return;
+    };
+    assert_eq!(off[1], [0, 255, 0, 255], "column 1: green, drawn last");
+    assert_eq!(off[3], [0, 0, 255, 255], "column 3: red, drawn last");
+    for (merge, pass) in [(true, false), (true, true)] {
+        let (on, _, mismatches) = held_script(merge, pass, &script).expect("the adapter, as above");
+        assert_eq!(on, off, "merge {merge} pass {pass}: the pixels");
+        assert_eq!(mismatches, 0, "each held draw drawn with its own state");
+    }
+}
