@@ -392,7 +392,9 @@ original's Direct3D 9 instead, which also draws by itself where Vulkan and Direc
 - At 8x antialiasing it runs (its pictures not yet compared), about 8% slower than Direct3D 9 on
   the Goodsprings street.
 - What the recorded places draw is prepared at the start behind a loading screen; elsewhere it
-  still pauses briefly the first time something new is drawn.
+  still pauses briefly the first time something new is drawn. After an update of nv-rs the
+  driver's compiled pipelines of the previous build are used again wherever the shaders are the
+  same, so the first session after an update no longer compiles them all anew.
 - Other vendors' pictures are not yet compared, though every card, AMD and Intel too, is given
   NVIDIA's shader path and alpha to coverage switch, so foliage under antialiasing draws as on
   NVIDIA.

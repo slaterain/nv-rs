@@ -6632,6 +6632,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             "NV_D3D9 wgpu: the start: {waiting} shader modules, {libraries} with their pipeline library ({}), {:.0} ms on {cores} cores (threads' time: converting {:.0} ms, modules {:.0} ms, libraries {:.0} ms)",
             if self.warm_start {
                 "the pipeline cache warm: the listed shaders'"
+            } else if self.pipeline_cache.as_ref().is_some_and(|c| c.carried) {
+                "the pipeline cache from the previous build: every shader's, unchanged ones from it"
             } else {
                 "the pipeline cache cold: every shader's"
             },
