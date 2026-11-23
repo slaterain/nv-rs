@@ -941,12 +941,14 @@ impl Threaded {
         if sync {
             self.chunk.reply_wanted = true;
             self.hand_over(holding);
+            crate::hitch::note_wait(1);
             let t = Instant::now();
             let reply = self
                 .wait(|q| q.reply.is_some())
                 .reply
                 .take()
                 .expect("the reply waited for");
+            crate::hitch::note_wait(0);
             let d = t.elapsed();
             self.stats.reply(name, d);
             crate::hitch::add_time(crate::hitch::Count::ReplyWaitNs, d);
@@ -961,8 +963,10 @@ impl Threaded {
                 // may be waiting for main: only the Presents before the mark are waited for.
                 need = need.min(self.cut_presents);
             }
+            crate::hitch::note_wait(2);
             let t = Instant::now();
             drop(self.wait(|q| q.presents_done >= need));
+            crate::hitch::note_wait(0);
             let d = t.elapsed();
             self.stats.present.add(d);
             crate::hitch::add_time(crate::hitch::Count::PresentWaitNs, d);
@@ -1017,8 +1021,10 @@ impl Threaded {
                 self.settings.max_queued_bytes / 2,
                 self.settings.max_queued_chunks / 2,
             );
+            crate::hitch::note_wait(3);
             let t = Instant::now();
             drop(self.wait(|q| q.queued_bytes <= bytes && q.chunks.len() <= chunks));
+            crate::hitch::note_wait(0);
             let d = t.elapsed();
             self.stats.full.add(d);
             crate::hitch::add_time(crate::hitch::Count::QueueFullNs, d);

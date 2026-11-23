@@ -129,7 +129,9 @@ pub fn exit_process(_e: &mut Engine, code: u32) {
 // Platform: replaces SHELL32.DLL ShellExecuteA (import)
 /// `ShellExecuteA`: starting another program is not provided, but for the game's launcher, which
 /// `main` starts when the graphics card isn't the one in `sD3DDevice` (`004da570`). There it answers
-/// that nothing started, and `main` goes on with the game, the settings as they are.
+/// that nothing started. In play `main` never asks for it: the host answers the check by naming
+/// the card (`crates/host/src/launcher.rs`), since `main` has stopped its tasklet workers for good
+/// before it asks, and a game going on from here waits for them at its first cell (issue #935).
 pub fn shell_execute_a(
     e: &mut Engine,
     _w: u32,
