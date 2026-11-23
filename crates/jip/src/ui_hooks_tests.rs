@@ -501,6 +501,45 @@ fn menu_click_events() {
     assert!(e.ext::<Jip>().ui_hooks.clicks[0].is_empty());
 }
 
+#[test]
+fn original_menu_click_runs_without_the_kernel_lock() {
+    use engine_core::real_threads;
+
+    let mut e = world();
+    let root = tile(&mut e, 0, 0, b"root");
+    let menu_tile = tile(&mut e, 1, root, b"MessageMenu");
+    e.mem.set_u32(menu_tile, 0x0106_ed44);
+    let button = tile(&mut e, 2, menu_tile, b"Button");
+    e.mem.set_u32(MENU + 0x20, 0x3e9);
+    run(
+        &mut e,
+        SET_ON_MENU_CLICK,
+        &[form_arg(1), int_arg(1), s(b"MessageMenu/Button")],
+    );
+    run(
+        &mut e,
+        SET_ON_MENU_CLICK,
+        &[form_arg(2), int_arg(1), s(b"MessageMenu#7")],
+    );
+    e.register(EXE_CLICK, |e, a| {
+        let name = e.mem.u32(a[2] + 0x20);
+        assert_eq!(
+            calls(),
+            [
+                (SCRIPT_FORM, 0, vec![0x3e9, 7, name]),
+                (SCRIPT_TWO, 0, vec![0x3e9, 7, name]),
+            ],
+            "JIP dispatched both events in order before the original handler"
+        );
+        assert!(!real_threads::kernel_lock_held(e));
+        42u32.into_ret()
+    });
+    real_threads::start(&mut e).expect("real threads on");
+    real_threads::end_start_hold_for_tests(&e);
+    let click = e.mem.u32(MESSAGE_MENU_SLOT);
+    assert_eq!(e.call(click, &[MENU, 7, button]).u32(), 42);
+}
+
 /// A path's script is not added under a shorter path that has it, and replaces it in the deeper
 /// paths below (removed where it was the last).
 #[test]
