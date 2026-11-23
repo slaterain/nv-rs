@@ -38,6 +38,10 @@ pub enum Count {
     RenderSyncNs,
     AcquireNs,
     SwapNs,
+    /// The sun shadows' caster pipelines made (a newly seen object's depth-only pipeline; on the render thread for
+    /// a still object, on a thread of its own for a character) and their time (ns). Not in [`Count::Pipelines`].
+    ShadowPipelines,
+    ShadowPipelineNs,
     /// The render thread's time carrying out the game's commands (ns): its calls and waits below included, the rest
     /// is its own work on the commands.
     RenderBusyNs,
@@ -131,10 +135,12 @@ pub enum Call {
     /// Pipelines and shader modules made, counted in [`Count::PipelineNs`] and [`Count::ModuleNs`]: the same.
     Pipeline,
     Module,
+    /// A sun-shadow caster pipeline made, counted in [`Count::ShadowPipelineNs`]: the same.
+    ShadowPipeline,
 }
 
 /// The calls in their number's order (from 1).
-const CALLS: [Call; 19] = [
+const CALLS: [Call; 20] = [
     Call::Submit,
     Call::WriteBuffer,
     Call::WriteTexture,
@@ -154,6 +160,7 @@ const CALLS: [Call; 19] = [
     Call::Present,
     Call::Pipeline,
     Call::Module,
+    Call::ShadowPipeline,
 ];
 
 impl Call {
@@ -172,9 +179,12 @@ impl Call {
             Call::GpuWait => Part::GpuWait,
             Call::QueueWait | Call::FinishWait => Part::ThreadWait,
             Call::Finish => Part::Finish,
-            Call::FrameSync | Call::Acquire | Call::Present | Call::Pipeline | Call::Module => {
-                return None
-            }
+            Call::FrameSync
+            | Call::Acquire
+            | Call::Present
+            | Call::Pipeline
+            | Call::Module
+            | Call::ShadowPipeline => return None,
         })
     }
 
@@ -200,6 +210,7 @@ impl Call {
             Call::Present => "the present call",
             Call::Pipeline => "a pipeline made",
             Call::Module => "a shader module made",
+            Call::ShadowPipeline => "a sun-shadow caster pipeline made",
         }
     }
 

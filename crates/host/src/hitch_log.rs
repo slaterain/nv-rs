@@ -863,13 +863,21 @@ impl Frame {
                 ),
             ));
         }
-        let made = self.s(S::PipelineNs) + self.s(S::ModuleNs);
+        let made = self.s(S::PipelineNs) + self.s(S::ModuleNs) + self.s(S::ShadowPipelineNs);
         if made > 0 {
             // Made on the render thread or a helper: main feels it through its wait for the render thread.
+            let casters = if self.s(S::ShadowPipelines) > 0 {
+                format!(
+                    ", {} sun-shadow caster pipelines",
+                    self.s(S::ShadowPipelines)
+                )
+            } else {
+                String::new()
+            };
             said.push((
                 ms(made).min(ms(render).max(ms(made) / 2.0)),
                 format!(
-                    "made {} pipelines and {} shader modules ({:.0} ms)",
+                    "made {} pipelines{casters} and {} shader modules ({:.0} ms)",
                     self.s(S::Pipelines),
                     self.s(S::Modules),
                     ms(made)
@@ -1217,6 +1225,14 @@ impl Frame {
                 "{} shader modules made ({:.1} ms)",
                 self.s(S::Modules),
                 ms(self.s(S::ModuleNs))
+            ),
+        );
+        put(
+            self.s(S::ShadowPipelines),
+            format!(
+                "{} sun-shadow caster pipelines made ({:.1} ms)",
+                self.s(S::ShadowPipelines),
+                ms(self.s(S::ShadowPipelineNs))
             ),
         );
         put(
@@ -2333,6 +2349,33 @@ mod tests {
             ),
             "{}",
             f.cause()
+        );
+        // The sun shadows' caster pipelines made on the render thread: counted and named apart from the game's.
+        {
+            use engine_platform::stream_hitch::{Call, Count as S};
+            f.stream[S::ShadowPipelines as usize] = 24;
+            f.stream[S::ShadowPipelineNs as usize] = 160_000_000;
+            f.longest_calls[0] = Some((Call::ShadowPipeline, 31_000_000));
+        }
+        assert!(
+            f.cause().contains(
+                "made 0 pipelines, 24 sun-shadow caster pipelines and 0 shader modules (160 ms)"
+            ),
+            "{}",
+            f.cause()
+        );
+        assert!(
+            f.line()
+                .contains("24 sun-shadow caster pipelines made (160.0 ms)"),
+            "{}",
+            f.line()
+        );
+        assert!(
+            f.line().contains(
+                "the longest call a sun-shadow caster pipeline made on the render thread 31.0 ms"
+            ),
+            "{}",
+            f.line()
         );
         // Main hardly waited for the render thread: its frame is not written out.
         let mut f = frame();

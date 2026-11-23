@@ -577,6 +577,26 @@ fn off_the_frame_is_unchanged() {
     }
 }
 
+/// The casters' depth-only pipelines are counted for the hitch log apart from the game's pipelines
+/// (`d3d9_stream::hitch::Count::ShadowPipelines`): a still box's made on the render thread the first
+/// time it is seen.
+#[test]
+fn the_casters_pipelines_are_counted_for_the_hitch_log() {
+    use d3d9_stream::hitch::{snapshot, Count};
+    let before = snapshot();
+    if picture(1, true, true).is_none() {
+        return;
+    }
+    let now = snapshot();
+    let d = |c: Count| now[c as usize] - before[c as usize];
+    assert!(
+        d(Count::ShadowPipelines) >= 1,
+        "{}",
+        d(Count::ShadowPipelines)
+    );
+    assert!(d(Count::ShadowPipelineNs) > 0);
+}
+
 /// On: the ground just past the box on the side away from the sun is darker; the ground on the
 /// sun's side, the box's sunlit top, the sky and the arms are exactly as without it.
 #[test]
