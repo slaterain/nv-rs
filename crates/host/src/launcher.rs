@@ -1,5 +1,6 @@
 //! The game's launcher check (`004da570`): a graphics card other than the one `FalloutPrefs.ini`
-//! names is answered as the game's launcher answers it, by naming the card, in every preset.
+//! names is named there, as the game's launcher names it, in every preset: only the name (the
+//! launcher's other work for a new card, a preset and a size, is not done: the profile's stay).
 //! **Not 1:1 with FalloutNV.exe**: the original ends its process and starts the launcher.
 //!
 //! **Why.** `main` (`0086a850`) asks `004da570` whether the first adapter's name differs from
@@ -62,7 +63,7 @@ fn launcher_check(
     let again = check(e);
     log(format!(
         "The game asked for its launcher: sD3DDevice names \"{saved}\", the graphics card is \
-         \"{card}\"; answered as the launcher answers it: the card's name taken{}, the game goes on",
+         \"{card}\"; the card's name taken, as the launcher writes it{}, the game goes on",
         if again {
             " (the check still found them different: gone on all the same)"
         } else {
