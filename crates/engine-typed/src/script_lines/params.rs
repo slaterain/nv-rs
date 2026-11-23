@@ -325,7 +325,6 @@ fn low_word(value: u64) -> u32 {
     value as u32
 }
 
-// Typed from 005accb0
 /// `Script::ParseParameters` (`cdecl`, varargs): reads a command's parameters from the compiled
 /// data at `*offset` (`code`): a 16-bit count, then each parameter by the type in the command's
 /// list (12 bytes an entry, the type at +4), stored through the next of the caller's output
@@ -462,6 +461,7 @@ pub fn parse_parameters(
     true
 }
 
+// Typed from 005accb0
 /// The registered form of [`parse_parameters`]: seven fixed words, then the output pointers,
 /// however many the caller pushed.
 pub fn parse_parameters_entry(e: &mut Engine, words: &[u32]) -> Ret {
