@@ -242,6 +242,8 @@ const VALUE_ADD_ACTION: u32 = 0x00a0_9080;
 const VALUE_ADD_ACTION_OV2: u32 = 0x00a0_9130;
 /// `Tile::Value::CalculateValue(bool)` (Xbox PDB).
 const VALUE_CALCULATE_VALUE: u32 = 0x00a0_9410;
+/// `Tile::Value::ClearActions` (Xbox PDB), `thiscall`.
+const VALUE_CLEAR_ACTIONS: u32 = 0x00a0_9200;
 /// `BSSimpleArray<Tile::Value *, 8>::SortedFind(&key, compare)` (Xbox PDB)
 /// and its insert counterpart `(&value, compare)`; both are given
 /// [`fn_00a01160`] as the comparison.
@@ -5247,7 +5249,8 @@ pub fn value_clear_actions(e: &mut Engine, this: Ptr<TileValue>) {
 /// the reaction nodes and erases the map entry. Frees the string and zeroes
 /// the float and the owning tile. (The value itself is not freed.)
 pub fn value_destructor(e: &mut Engine, this: Ptr<TileValue>) {
-    value_clear_actions(e, this);
+    // By address, as the exe calls it: `ClearActions` is typed.
+    e.call(VALUE_CLEAR_ACTIONS, &args![this]);
     e.with_stack(4, |e, reactions| {
         e.mem.set_u32(reactions.addr(), 0);
         let found = e
@@ -5660,7 +5663,8 @@ pub fn value_set_float(e: &mut Engine, this: Ptr<TileValue>, value: f32, flag: b
         e.set(this, TileValue::strValue, Ptr::NULL);
     }
     if flag {
-        value_clear_actions(e, this);
+        // By address, as the exe calls it: `ClearActions` is typed.
+        e.call(VALUE_CLEAR_ACTIONS, &args![this]);
     }
     // By address, as the exe calls it: `CalculateValue` is overridable (and typed).
     e.call(VALUE_CALCULATE_VALUE, &args![this, u32::from(changed)]);
@@ -5692,7 +5696,8 @@ pub fn value_set_string(e: &mut Engine, this: Ptr<TileValue>, text: Ptr, flag: b
     }
     e.set(this, TileValue::fValue, 0.0);
     if flag {
-        value_clear_actions(e, this);
+        // By address, as the exe calls it: `ClearActions` is typed.
+        e.call(VALUE_CLEAR_ACTIONS, &args![this]);
     }
     // By address, as the exe calls it: `CalculateValue` is overridable (and typed).
     e.call(VALUE_CALCULATE_VALUE, &args![this, u32::from(changed)]);
@@ -8048,6 +8053,11 @@ mod tests {
         for &addr in OUTSIDE_CALLEES {
             e.register(addr, |_, _| Ret::default());
         }
+        // `~Value`, `SetFloat` and `SetString` call `ClearActions` by address: the real one.
+        e.register(VALUE_CLEAR_ACTIONS, |e, a| {
+            value_clear_actions(e, Ptr::new(a[0]));
+            Ret::default()
+        });
         for addr in [
             TILE_BASE_CONSTRUCT,
             TILE_IMAGE_CONSTRUCT,
