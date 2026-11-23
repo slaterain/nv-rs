@@ -16,6 +16,11 @@
 //! overlap counts every 600 posts. `NV_STAGE_TIME` (`crate::stage_time`) gives them per frame too, with the world
 //! draw's halves timed wherever they run.
 //!
+//! **Late joins** (`NV_DRAW_THREAD_LATE=1`, a check's switch like the thread's own; off): main passes the two early
+//! waits and the four entries that guard the world draw's lists ([`LATE_POINTS`]) without a join, so the job runs on
+//! beside the rest of the frame's draws until the frame's list reset or OnIdle; the counters say how often each was
+//! passed.
+//!
 //! **Off** (no run turned on): [`first_half`] and [`second_half`] are one relaxed load and the call they replace
 //! (plus `NV_STAGE_TIME`'s one load); every join point is one relaxed load. No lock, no allocation, nothing
 //! registered.
@@ -157,6 +162,8 @@ struct Run {
     closes: Times,
     /// The reasons already noted in the log (each once a run).
     noted: Vec<&'static str>,
+    /// The late joins ([`set_late`]): main passes [`LATE_POINTS`] with the job still posted.
+    late: bool,
     /// What happened, for the tests: posts, frames drawn on main with a handed-off packet, joins.
     counts: Counts,
 }
@@ -198,6 +205,43 @@ impl Times {
 pub struct JoinWait {
     pub at: u32,
     pub waits: Times,
+    /// With the late joins ([`set_late`]): the times main passed this point with a job posted, without a join.
+    pub passed: u64,
+}
+
+/// The join points main passes with the job still posted when the run's late joins are on ([`set_late`]): the
+/// world accumulator's check (`00b63a90`) and the sun query (`006426a0`), the two early waits, and the entries of the
+/// first person's draw (`008746d0`), the refraction normals' (`00874920`), the rest of the frame's draws (`00875110`)
+/// and the depth-of-field re-render (`00875e40`), the four that guard the world draw's lists. What the drawing side
+/// reads of what main's passes there change goes with the packet: the lists the job draws (`take_lists` in the draw
+/// family's cut) and the values the cut copies. The frame's list reset (`00876850`), `Main::OnIdle` and the other join
+/// points still join.
+pub const LATE_POINTS: [u32; 6] = [
+    0x00b6_3a90,
+    0x0064_26a0,
+    0x0087_46d0,
+    0x0087_4920,
+    0x0087_5110,
+    0x0087_5e40,
+];
+
+/// `NV_DRAW_THREAD_LATE=1` (or `on`), read once: a run that turns the drawing thread on starts with the late joins on
+/// ([`set_late`]). The thread itself is a check's switch (play refuses it without `NV_DRAW_THREAD_CHECK=1`), so this one
+/// is too.
+fn late_from_env() -> bool {
+    static LATE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *LATE.get_or_init(|| {
+        matches!(
+            std::env::var("NV_DRAW_THREAD_LATE").as_deref(),
+            Ok("1") | Ok("on")
+        )
+    })
+}
+
+/// Turns the late joins on or off for `e`'s run (a run that is on; tests): with them on, main passes [`LATE_POINTS`]
+/// without joining the posted job, which then runs on beside the rest of the frame until the next join point.
+pub fn set_late(e: &Engine, late: bool) {
+    with_run(e.kernel.id(), |r| r.late = late);
 }
 
 static RUNS: Mutex<Vec<Run>> = Mutex::new(Vec::new());
@@ -234,6 +278,7 @@ pub fn turn_on(e: &Engine, hooks: Hooks) {
         jobs: Times::default(),
         closes: Times::default(),
         noted: Vec::new(),
+        late: late_from_env(),
         counts: Counts::default(),
     });
     ON.fetch_add(1, Relaxed);
@@ -390,6 +435,10 @@ fn finish_posted(e: &mut Engine, at: u32) {
     }
     let id = e.kernel.id();
     let Some((slot, hooks)) = with_run(id, |r| {
+        if r.late && r.pending.is_some() && LATE_POINTS.contains(&at) {
+            point(r, at).passed += 1;
+            return None;
+        }
         let slot = r.pending.take()?;
         r.counts.joined += 1;
         if std::mem::take(&mut r.in_pass) {
@@ -427,17 +476,7 @@ fn finish_posted(e: &mut Engine, at: u32) {
     }
     let wait_ns = start.elapsed().as_nanos() as u64;
     with_run(id, |r| {
-        match r.by_point.iter_mut().find(|j| j.at == at) {
-            Some(j) => j.waits.add(wait_ns),
-            None => {
-                let mut j = JoinWait {
-                    at,
-                    ..JoinWait::default()
-                };
-                j.waits.add(wait_ns);
-                r.by_point.push(j);
-            }
-        }
+        point(r, at).waits.add(wait_ns);
         if let Some(ns) = job_ns.filter(|_| joined.is_ok()) {
             r.jobs.add(ns);
         }
@@ -449,6 +488,21 @@ fn finish_posted(e: &mut Engine, at: u32) {
     if let Err(payload) = joined {
         std::panic::resume_unwind(payload);
     }
+}
+
+/// The run's counts for join point `at`, made the first time it is seen.
+fn point(r: &mut Run, at: u32) -> &mut JoinWait {
+    let i = match r.by_point.iter().position(|j| j.at == at) {
+        Some(i) => i,
+        None => {
+            r.by_point.push(JoinWait {
+                at,
+                ..JoinWait::default()
+            });
+            r.by_point.len() - 1
+        }
+    };
+    &mut r.by_point[i]
 }
 
 fn lock_slot(slot: &SharedSlot) -> MutexGuard<'_, Slot> {
@@ -618,7 +672,10 @@ fn first_half_on(e: &mut Engine, camera: u32, accumulator: u32, third: u32, over
         // The overlap achieved so far: joins inside the posting world pass overlapped nothing of the tail.
         let points: Vec<String> = by
             .iter()
-            .map(|j| format!("{:08x}:{}", j.at, j.waits.count))
+            .map(|j| match j.passed {
+                0 => format!("{:08x}:{}", j.at, j.waits.count),
+                passed => format!("{:08x}:{} (passed {passed})", j.at, j.waits.count),
+            })
             .collect();
         eprintln!(
             "NV_DRAW_THREAD: posted {}, joined {} ({} inside the same world pass), drawn on main {} serial {}; joins by point {}",
@@ -671,7 +728,13 @@ pub fn times_line(by: &[JoinWait], jobs: Times, closes: Times) -> String {
     };
     let points: Vec<String> = by
         .iter()
-        .map(|j| format!("{:08x} {}", j.at, ms(&j.waits)))
+        .map(|j| {
+            if j.passed == 0 {
+                format!("{:08x} {}", j.at, ms(&j.waits))
+            } else {
+                format!("{:08x} {} passed {}", j.at, ms(&j.waits), j.passed)
+            }
+        })
         .collect();
     format!(
         "waits (count/total ms/longest ms) {}; job {}; close {}",

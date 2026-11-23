@@ -312,6 +312,40 @@ fn the_world_draw_runs_after_the_tail_from_the_packet_cut_before_it() {
     take_drawn();
     take_joined();
 
+    // The late joins: main passes the six late points with the job still posted (stepped, it has not run), counted as
+    // passed there; the frame's list reset joins it, from the packet cut before them. Off again, those points join.
+    draw_thread::set_late(&e, true);
+    e.mem.set_u32(VALUE, 41);
+    draw_thread::first_half(&mut e, 0x6000, 0x8800, 1, 0);
+    draw_thread::second_half(&mut e, 0x6000, 0x8800, 1);
+    draw_thread::world_pass_end(&mut e);
+    e.mem.set_u32(VALUE, 42);
+    for at in draw_thread::LATE_POINTS {
+        draw_thread::finish_at(&mut e, at);
+        assert!(draw_thread::posted(&e), "passed at {at:08x}");
+    }
+    assert!(take_drawn().is_empty(), "the job has not run");
+    draw_thread::finish_at(&mut e, 0x0087_6850);
+    assert!(!draw_thread::posted(&e));
+    assert_eq!(take_drawn(), [(1, true, 41), (2, true, 41)]);
+    assert_eq!(take_joined(), [41]);
+    let waits = draw_thread::join_waits(&e);
+    for at in draw_thread::LATE_POINTS {
+        assert_eq!(
+            waits.iter().find(|j| j.at == at).map(|j| j.passed),
+            Some(1),
+            "{at:08x}: {waits:x?}"
+        );
+    }
+    draw_thread::set_late(&e, false);
+    draw_thread::first_half(&mut e, 0x6000, 0x8800, 1, 0);
+    draw_thread::second_half(&mut e, 0x6000, 0x8800, 1);
+    draw_thread::finish_at(&mut e, draw_thread::LATE_POINTS[0]);
+    assert!(!draw_thread::posted(&e), "joined with the late joins off");
+    draw_thread::world_pass_end(&mut e);
+    take_drawn();
+    take_joined();
+
     // Main's wait at each join point and the job's own time: two first halves of 20 ms and 5 ms, each joined at
     // 00875110's entry (stepped, the job runs inside the join, so each wait holds its whole job); `NV_STAGE_TIME`'s
     // columns get the same.

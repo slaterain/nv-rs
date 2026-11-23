@@ -196,6 +196,12 @@ pub fn list_words(e: &Engine, renderer: u32, out: &mut Vec<u32>) {
 /// Every word [`list_words`] looks at in renderer `renderer` and its holders' renderers, whatever its value. The
 /// structure it walks (the group array, the pass map, the holders and their renderers) is never in the view.
 pub fn candidates(e: &Engine, renderer: u32, out: &mut Vec<u32>) {
+    candidates_of(e, renderer, out, |_| true);
+}
+
+/// [`candidates`], but of the renderer's own holder slots (+0x3c..=+0x74) only those `slot_taken` answers true for; each
+/// taken holder's renderer whole.
+fn candidates_of(e: &Engine, renderer: u32, out: &mut Vec<u32>, slot_taken: fn(u32) -> bool) {
     if renderer == 0 {
         return;
     }
@@ -230,9 +236,9 @@ pub fn candidates(e: &Engine, renderer: u32, out: &mut Vec<u32>) {
     take(e, renderer.wrapping_add(0x90));
     take(e, renderer.wrapping_add(0x94));
     let mut nested = Vec::new();
-    for slot in (0x3cu32..=0x74).step_by(4) {
+    for slot in HOLDERS.step_by(4) {
         let holder = e.global::<u32>(renderer.wrapping_add(slot));
-        if holder == 0 {
+        if holder == 0 || !slot_taken(slot) {
             continue;
         }
         for offset in [0u32, 0x10, 0x14, 0x1c] {
@@ -245,6 +251,33 @@ pub fn candidates(e: &Engine, renderer: u32, out: &mut Vec<u32>) {
             candidates(e, inner, out);
         }
     }
+}
+
+/// The register groups whose holders the world draw draws (render mode 0's halves `00b65ae0` and `00b65c60`, and the
+/// decal pass `00b64e30` inside the first): 0xa, 0, 2 and 3, 9, 1. The other groups' holders belong to main's passes
+/// after the draw (the refraction normals draw groups 8 and 6, `00b64570`, after counting group 6 in `00b63a90`; the
+/// water's is group 0xb), so they stay in guest memory when the lists go to the drawing side ([`drawn_list_words`]).
+pub const DRAWN_GROUPS: [u32; 6] = [0, 1, 2, 3, 9, 0xa];
+
+/// The holder slots of a batch renderer: the register groups' (+0x3c, four bytes each, groups 0 to 0xc) and the two
+/// alpha holders (+0x70, +0x74).
+const HOLDERS: std::ops::RangeInclusive<u32> = 0x3c..=0x74;
+const ALPHA_HOLDERS: u32 = 0x70;
+
+/// Whether the holder slot `slot` of a renderer the world draw draws is one the draw draws: a register group of
+/// [`DRAWN_GROUPS`] or an alpha holder.
+fn drawn_slot(slot: u32) -> bool {
+    slot >= ALPHA_HOLDERS || DRAWN_GROUPS.contains(&((slot - 0x3c) / 4))
+}
+
+/// The list words the cut hands to the drawing side for the world accumulator's renderer `renderer` (with a value:
+/// [`list_words`]'s rule): as [`list_words`], but of its holders only those the draw draws ([`drawn_slot`]), each with
+/// its own renderer's words whole. The other holders' words stay in guest memory, where main's passes after the draw
+/// read and draw them.
+pub fn drawn_list_words(e: &Engine, renderer: u32, out: &mut Vec<u32>) {
+    let mut all = Vec::new();
+    candidates_of(e, renderer, &mut all, drawn_slot);
+    out.extend(all.into_iter().filter(|addr| e.global::<u32>(*addr) != 0));
 }
 
 /// Runs `f` with the view's words back in guest memory, then takes the same words again (their values then,
@@ -431,5 +464,61 @@ mod tests {
         set_word(&mut e, at, 5);
         assert_eq!((word(&e, at), e.mem.u32(at)), (5, 5));
         assert_eq!(suspended_for(&mut e, |_| vec![at], |e| e.mem.u32(at)), 5);
+    }
+
+    /// The words the cut hands over: a renderer with a holder in every slot (each holder with a renderer of its own,
+    /// whose own holder 6 is there too): of the renderer's holders only the drawn groups' and the alpha holders', each
+    /// with its renderer whole; groups 4 to 8, 0xb and 0xc stay out. Every word holds 1 (a zero is not taken).
+    #[test]
+    fn the_cut_takes_the_holders_the_draw_draws() {
+        let mut e = Engine::new();
+        let renderer = |e: &mut Engine| {
+            let r = e.mem.alloc(0xa0);
+            for at in [
+                0x2cu32, 0x30, 0x78, 0x7c, 0x80, 0x84, 0x88, 0x8c, 0x90, 0x94,
+            ] {
+                e.mem.set_u32(r + at, 1);
+            }
+            r
+        };
+        let holder = |e: &mut Engine, inner: u32| {
+            let h = e.mem.alloc(0x20);
+            for at in [0u32, 0x10, 0x14, 0x1c] {
+                e.mem.set_u32(h + at, 1);
+            }
+            e.mem.set_u32(h + 8, inner);
+            h
+        };
+        let top = renderer(&mut e);
+        let mut holders = Vec::new();
+        for slot in HOLDERS.step_by(4) {
+            let inner = renderer(&mut e);
+            let nested = holder(&mut e, 0);
+            e.mem.set_u32(inner + 0x3c + 4 * 6, nested);
+            let h = holder(&mut e, inner);
+            e.mem.set_u32(top + slot, h);
+            holders.push((slot, h, inner, nested));
+        }
+        let mut taken = Vec::new();
+        drawn_list_words(&e, top, &mut taken);
+        let mut all = Vec::new();
+        list_words(&e, top, &mut all);
+        let words = |h: u32| [h, h + 0x10, h + 0x14, h + 0x1c];
+        for (slot, h, inner, nested) in holders {
+            let drawn = slot >= 0x70 || [0u32, 1, 2, 3, 9, 0xa].contains(&((slot - 0x3c) / 4));
+            let mut inner_words = Vec::new();
+            candidates(&e, inner, &mut inner_words);
+            assert!(
+                inner_words.contains(&nested),
+                "{slot:#x}: the inner renderer's own holder 6"
+            );
+            for w in words(h).into_iter().chain(inner_words) {
+                assert_eq!(taken.contains(&w), drawn, "slot {slot:#x}, word {w:#x}");
+                assert!(all.contains(&w), "list_words takes every holder: {w:#x}");
+            }
+        }
+        for at in [0x2cu32, 0x30, 0x78, 0x80, 0x84, 0x8c, 0x90, 0x94] {
+            assert!(taken.contains(&(top + at)), "the renderer's own {at:#x}");
+        }
     }
 }
