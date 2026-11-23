@@ -1,5 +1,6 @@
 //! Tests of [`super`]: the INI write against Windows' bytes, measured on scratch files
-//! (2026-11-16, `build43-scratch/measure/mcm/ini-measure`), and the seam without a platform layer.
+//! (2026-11-16, `build43-scratch/measure/mcm/ini-measure`; the game's own settings writes 2026-11-22,
+//! `build43-scratch/measure/player-bugs/ini-write`), and the seam without a platform layer.
 
 use super::*;
 
@@ -357,4 +358,260 @@ fn without_the_platform_nothing_is_read_or_written() {
     );
     assert_eq!(list_or_error(&e, br"Data\Config"), Err(ERROR_NOT_SUPPORTED));
     assert!(list(&e, br"Data\Config").is_empty());
+}
+
+/// Windows' bytes for the game's own settings writes (`WritePrivateProfileStringA` through the
+/// platform's import, issue #370), measured on scratch files with the call (2026-11-22,
+/// `build43-scratch/measure/player-bugs/ini-write`, `ini-write-2026-11-22.txt` to
+/// `ini-write5-...`): each case one write from its start. Among them the one the 2026-11-16 cases
+/// did not hold: a new key of the file's LAST section goes at the very end when the file's last
+/// line is blank (after the blank lines), not after the section's last key.
+#[test]
+fn the_games_settings_writes_make_windows_bytes() {
+    let cases: &[(&[u8], (&str, &str, &str), &[u8])] = &[
+        // Replaced in place: the line up to `=` kept, its leading spaces and spelling too.
+        (
+            b"[Display]\r\niSize W=1280\r\niSize H=720\r\n",
+            ("Display", "iSize W", "1920"),
+            b"[Display]\r\niSize W=1920\r\niSize H=720\r\n",
+        ),
+        (
+            b"[Display]\r\niSize W = 1280\r\niSize H=720\r\n",
+            ("Display", "iSize W", "1920"),
+            b"[Display]\r\niSize W =1920\r\niSize H=720\r\n",
+        ),
+        (
+            b"[display]\r\nisize w=1280\r\n",
+            ("Display", "iSize W", "1920"),
+            b"[display]\r\nisize w=1920\r\n",
+        ),
+        (
+            b"[Display]\r\n  iSize W=1280\r\n",
+            ("Display", "iSize W", "1920"),
+            b"[Display]\r\n  iSize W=1920\r\n",
+        ),
+        (b"[A]\r\na\t=1\r\n", ("A", "a", "2"), b"[A]\r\na\t=2\r\n"),
+        (b"[A]\r\nx=1", ("A", "x", "2"), b"[A]\r\nx=2\r\n"),
+        (
+            b"[A]\r\nx=1\r\nx=2\r\n",
+            ("A", "x", "3"),
+            b"[A]\r\nx=3\r\nx=2\r\n",
+        ),
+        (b"[A]\r\n#x=1\r\n", ("A", "#x", "2"), b"[A]\r\n#x=2\r\n"),
+        (b"[A]x\r\na=1\r\n", ("A", "a", "2"), b"[A]x\r\na=2\r\n"),
+        (b"[A\r\na=1\r\n", ("A", "a", "2"), b"[A\r\na=2\r\n"),
+        (b"  [A]\r\na=1\r\n", ("A", "a", "2"), b"  [A]\r\na=2\r\n"),
+        (b"[A ]\r\nx=1\r\n", (" A", "x", "2"), b"[A ]\r\nx=2\r\n"),
+        // The value as given.
+        (
+            b"[Display]\r\na=1\r\n",
+            ("Display", "a", "  x y  "),
+            b"[Display]\r\na=  x y  \r\n",
+        ),
+        (
+            b"[A]\r\na=1\r\n",
+            ("A", "a", "1\r\nb=2"),
+            b"[A]\r\na=1\r\nb=2\r\n",
+        ),
+        // A new key after the section's last key line, before what follows it...
+        (
+            b"[Display]\r\na=1\r\n;c\r\n\r\n[Audio]\r\nv=1\r\n",
+            ("Display", "b", "2"),
+            b"[Display]\r\na=1\r\nb=2\r\n;c\r\n\r\n[Audio]\r\nv=1\r\n",
+        ),
+        (
+            b"[A]\r\n;c\r\n[B]\r\n",
+            ("A", "b", "2"),
+            b"[A]\r\nb=2\r\n;c\r\n[B]\r\n",
+        ),
+        (
+            b"[A]\r\njunk\r\n\r\n[B]\r\n",
+            ("A", "b", "2"),
+            b"[A]\r\nb=2\r\njunk\r\n\r\n[B]\r\n",
+        ),
+        (
+            b"[A]\r\na=1\r\n   \r\n[B]\r\n",
+            ("A", "b", "2"),
+            b"[A]\r\na=1\r\nb=2\r\n   \r\n[B]\r\n",
+        ),
+        (
+            b"[A]\r\na=1\r\n=5\r\n\r\n[B]\r\n",
+            ("A", "b", "2"),
+            b"[A]\r\na=1\r\n=5\r\nb=2\r\n\r\n[B]\r\n",
+        ),
+        (
+            b"[A]\r\nx=1\r\n\r\n[B]\r\ny=1\r\n\r\n",
+            ("A", "b", "2"),
+            b"[A]\r\nx=1\r\nb=2\r\n\r\n[B]\r\ny=1\r\n\r\n",
+        ),
+        (
+            b"[A]\r\n[x=1\r\n",
+            ("A", "c", "2"),
+            b"[A]\r\nc=2\r\n[x=1\r\n",
+        ),
+        // ...also in the last section, unless the file's last line is blank.
+        (
+            b"[A]\r\na=1\r\n;c\r\n",
+            ("A", "b", "2"),
+            b"[A]\r\na=1\r\nb=2\r\n;c\r\n",
+        ),
+        (
+            b"[A]\r\na=1\r\n\r\n;c\r\n",
+            ("A", "b", "2"),
+            b"[A]\r\na=1\r\nb=2\r\n\r\n;c\r\n",
+        ),
+        (
+            b"[A]\r\na=1\r\njunk\r\n",
+            ("A", "b", "2"),
+            b"[A]\r\na=1\r\nb=2\r\njunk\r\n",
+        ),
+        (
+            b"[A]\r\n  ;x=1\r\n",
+            ("A", ";x", "2"),
+            b"[A]\r\n;x=2\r\n  ;x=1\r\n",
+        ),
+        // The last section, its file's last line blank: at the very end.
+        (
+            b"[A]\r\na=1\r\n\r\n",
+            ("A", "b", "2"),
+            b"[A]\r\na=1\r\n\r\nb=2\r\n",
+        ),
+        (
+            b"[Display]\r\na=1\r\n\r\n\r\n",
+            ("Display", "b", "2"),
+            b"[Display]\r\na=1\r\n\r\n\r\nb=2\r\n",
+        ),
+        (
+            b"[A]\r\na=1\r\n   \r\n",
+            ("A", "b", "2"),
+            b"[A]\r\na=1\r\n   \r\nb=2\r\n",
+        ),
+        (
+            b"[A]\r\na=1\r\n;c\r\n\r\n",
+            ("A", "b", "2"),
+            b"[A]\r\na=1\r\n;c\r\n\r\nb=2\r\n",
+        ),
+        (
+            b"[A]\r\n;c\r\n\r\n",
+            ("A", "b", "2"),
+            b"[A]\r\n;c\r\n\r\nb=2\r\n",
+        ),
+        (
+            b"[A]\r\nx=1\r\n\r\n[B]\r\ny=1\r\n\r\n",
+            ("B", "b", "2"),
+            b"[A]\r\nx=1\r\n\r\n[B]\r\ny=1\r\n\r\nb=2\r\n",
+        ),
+        (b"[A]\nx=1\n\n", ("A", "b", "2"), b"[A]\nx=1\n\nb=2\r\n"),
+        (
+            b"[A]\r\nx=1\r\n\r\n\t",
+            ("A", "b", "2"),
+            b"[A]\r\nx=1\r\n\r\nb=2\r\n",
+        ),
+        (
+            b"[A]\r\nx=1\r\n\r\n",
+            ("A", "x", "2"),
+            b"[A]\r\nx=2\r\n\r\n",
+        ),
+        // New sections at the end.
+        (
+            b"[Display]\r\na=1\r\n\r\n",
+            ("Audio", "v", "2"),
+            b"[Display]\r\na=1\r\n\r\n[Audio]\r\nv=2\r\n",
+        ),
+        (
+            b"[A]\r\na=1\r\n;c\r\n",
+            ("B", "b", "2"),
+            b"[A]\r\na=1\r\n;c\r\n[B]\r\nb=2\r\n",
+        ),
+        (
+            b"[A]\r\na=1\r\nx[B]\r\n",
+            ("B", "b", "2"),
+            b"[A]\r\na=1\r\nx[B]\r\n[B]\r\nb=2\r\n",
+        ),
+        (
+            b"\xef\xbb\xbf[A]\r\nx=1\r\n",
+            ("A", "x", "2"),
+            b"\xef\xbb\xbf[A]\r\nx=1\r\n[A]\r\nx=2\r\n",
+        ),
+        (
+            b"[A]\r\na=1\r\n",
+            ("", "b", "6"),
+            b"[A]\r\na=1\r\n[]\r\nb=6\r\n",
+        ),
+        (b"[A]\r\na=1\r\n", ("A", "", "6"), b"[A]\r\na=1\r\n=6\r\n"),
+        (b"", ("Audio", "v", "2"), b"[Audio]\r\nv=2\r\n"),
+    ];
+    for &(old, (s, k, v), want) in cases {
+        assert_eq!(
+            String::from_utf8_lossy(&w(old, s, k, v)),
+            String::from_utf8_lossy(want),
+            "{:?} [{s}] {k}={v}",
+            String::from_utf8_lossy(old)
+        );
+    }
+    // Two sections of one name: the first one is written, keys after its last.
+    let mut f = w(b"[A]\r\nx=1\r\n[A]\r\ny=1\r\n", "A", "y", "2");
+    f = w(&f, "A", "z", "3");
+    assert_eq!(f, b"[A]\r\nx=1\r\ny=2\r\nz=3\r\n[A]\r\ny=1\r\n");
+}
+
+/// The removals the same measurements hold (a null value: the key; a null key: the section).
+#[test]
+fn the_games_settings_removals_make_windows_bytes() {
+    let keys: &[(&[u8], (&str, &str), Option<&[u8]>)] = &[
+        (
+            b"[A]\r\nx=1\r\ny=2\r\n",
+            ("A", "x"),
+            Some(b"[A]\r\ny=2\r\n"),
+        ),
+        (b"[A]\r\nx=1\r\n", ("A", "q"), None),
+        (b"[A]\r\nx=1\r\n", ("A", "x"), Some(b"[A]\r\n")),
+        (b"[A]\r\ny=1\r\nx=1", ("A", "x"), Some(b"[A]\r\ny=1\r\n")),
+        (
+            b"[A]\r\nx=1\r\n[A]\r\nx=2\r\n",
+            ("A", "x"),
+            Some(b"[A]\r\n[A]\r\nx=2\r\n"),
+        ),
+    ];
+    for &(old, (s, k), want) in keys {
+        assert_eq!(
+            removed_key(old, s.as_bytes(), k.as_bytes()).as_deref(),
+            want,
+            "{:?} [{s}] {k}",
+            String::from_utf8_lossy(old)
+        );
+    }
+    let sections: &[(&[u8], &str, Option<&[u8]>)] = &[
+        (
+            b"[A]\r\nx=1\r\n;c\r\n\r\n[B]\r\ny=2\r\n",
+            "A",
+            Some(b";c\r\n\r\n[B]\r\ny=2\r\n"),
+        ),
+        (
+            b"[A]\r\nx=1\r\n\r\n[B]\r\ny=2\r\n",
+            "B",
+            Some(b"[A]\r\nx=1\r\n\r\n"),
+        ),
+        (b"[A]\r\nx=1\r\n", "C", None),
+        (
+            b"[A]\r\nx=1\r\njunk\r\n  \r\n[B]\r\ny=2\r\n",
+            "A",
+            Some(b"  \r\n[B]\r\ny=2\r\n"),
+        ),
+        (
+            b"[A]\r\nx=1\r\n[B]\r\n[A]\r\ny=1\r\n",
+            "A",
+            Some(b"[B]\r\n[A]\r\ny=1\r\n"),
+        ),
+        (b"[A]\r\n;x=1\r\nx=1\r\n[B]\r\n", "A", Some(b"[B]\r\n")),
+        (b"[A]\r\nx=1\r\n", "A", Some(b"")),
+    ];
+    for &(old, s, want) in sections {
+        assert_eq!(
+            removed_section(old, s.as_bytes()).as_deref(),
+            want,
+            "{:?} [{s}]",
+            String::from_utf8_lossy(old)
+        );
+    }
 }
