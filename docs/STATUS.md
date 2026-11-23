@@ -323,6 +323,12 @@ More in [FIXES.md, "UI Organizer"](FIXES.md#ui-organizer).
   shift as it is now; arrow keys keep a menu's selection from the mouse; the pad's key repeat no
   longer carries over; the left thumbstick moves the console's pointer; menus get L3 and R3; the
   Pip-Boy light fades when it should; the console shows the selected reference's model path.
+- Pad and keyboard in menus and the console: the pad's activate button clicks and B closes the
+  console, the D-pad, A and right stick work the console, RB (not E) picks in the console,
+  shift-arrows read shift as it is now, closing a book no longer closes the Pip-Boy, F1 to F3 wait
+  while typing, menus' keyboard buttons answer number keys, Tab, Caps Lock, Alt and F-keys, and a
+  terminal behind a trade menu leaves the mouse alone. All work with JIP's console key fix on or
+  off.
 - The remaining crash fixes and tweaks come next.
 
 More in [FIXES.md, "lStewieAl's Tweaks"](FIXES.md#lstewieals-tweaks).

@@ -206,6 +206,18 @@ fn geometry(
     g
 }
 
+/// A node vtable with the bound setter (slot 0x78) a bound allocation (`005467e0`) calls.
+fn bound_node_vt(w: &mut World, e: &mut Engine) -> u32 {
+    w.vtable(
+        e,
+        &[
+            (0xa4, NODE_DOWNWARD),
+            (0xb8, WORLD_DATA),
+            (0x78, SET_BOUND_FN),
+        ],
+    )
+}
+
 /// A node without a world bound, with the bound-from-children flag (0x80000) every node of a
 /// loaded model has, and room for `children`: it takes a bound only when a child ends its pass
 /// with one.
@@ -293,6 +305,14 @@ enum Extra {
     /// A walked skin (under the root, after the skeleton) reading the head, which is deferred: the
     /// helper would read it before main's replay moves it.
     SkinOnHead,
+    /// A node without a bound flagged 0x80000|0x2000 (it takes one at once).
+    BoundNow,
+    /// A head without a bound (over a bounded geometry) under a bone without a bound.
+    HeadNoBound,
+    /// A skinned geometry without a bound reading the weapon, walked after it.
+    SkinNoBound,
+    /// A skin reading another listed actor's bone (set by `world`).
+    SkinOther,
 }
 
 /// An actor at offset `x` with its animation and tree.
@@ -320,7 +340,14 @@ fn actor(w: &mut World, e: &mut Engine, k: &Kinds, x: f32, extra: Extra, lightin
         bones.push(b);
         bone = b;
     }
-    geometry(w, e, k, accum, 1.5, extra != Extra::NoBound);
+    geometry(
+        w,
+        e,
+        k,
+        accum,
+        1.5,
+        !matches!(extra, Extra::NoBound | Extra::HeadNoBound),
+    );
     geometry(w, e, k, bones[2], 0.75, true);
     blend(w, e, k, bones[1], true, 1.0);
     blend(
@@ -373,20 +400,53 @@ fn actor(w: &mut World, e: &mut Engine, k: &Kinds, x: f32, extra: Extra, lightin
     }
     if extra == Extra::NodeNoBound {
         // Two nested nodes without a bound that take theirs from their children, a bounded geometry
-        // under the inner one: both children loops allocate a bound (`005467e0`), which must happen
-        // on main (the look-ahead needs two steps to see it).
-        // Their vtable has the bound setter (slot 0x78) the allocation uses.
-        let vt = w.vtable(
+        // under the inner one: both children loops would allocate a bound (`005467e0`), so the
+        // actor is a `bound` barrier and the allocations run on main in the serial order
+        // (`order_check` sees the bounded geometry two levels down).
+        let vt = bound_node_vt(w, e);
+        let outer = bare_node(w, e, vt, accum, [0.0, -0.1, 0.0], 1);
+        let inner = bare_node(w, e, vt, outer, [0.0, 0.0, 0.1], 1);
+        geometry(w, e, k, inner, 0.4, true);
+    }
+    if extra == Extra::BoundNow {
+        // A node without a bound flagged to take one without looking at its children (0x80000 and
+        // 0x2000), with only a bound-less child: its children loop allocates a bound anyway
+        // (`005467e0`): a `bound` barrier, the allocation on main.
+        let vt = bound_node_vt(w, e);
+        let n = bare_node(w, e, vt, accum, [0.0, -0.2, 0.0], 1);
+        e.mem.set_u32(n + 0x30, 0x0008_2000);
+        bare_node(w, e, k.node, n, [0.0, 0.0, 0.1], 1);
+    }
+    if extra == Extra::HeadNoBound {
+        // A second head, built without a bound, with a bounded geometry under it, under a bone
+        // without a bound: the head's children loop allocates its bound, so the bone's does too
+        // (right after the head, in the serial order): a `bound` barrier. A geometry without a
+        // bound walked after them (the one under the accumulation root) allocates later still, so
+        // a late bone allocation would come out of order.
+        let vt = bound_node_vt(w, e);
+        let bone = bare_node(w, e, vt, bones[4], [0.0, 0.05, 0.0], 1);
+        let head_vt = w.vtable(
             e,
             &[
-                (0xa4, NODE_DOWNWARD),
+                (0xa4, HEAD_DOWNWARD),
                 (0xb8, WORLD_DATA),
                 (0x78, SET_BOUND_FN),
             ],
         );
-        let outer = bare_node(w, e, vt, accum, [0.0, -0.1, 0.0], 1);
-        let inner = bare_node(w, e, vt, outer, [0.0, 0.0, 0.1], 1);
-        geometry(w, e, k, inner, 0.4, true);
+        let head = bare_node(w, e, head_vt, bone, [0.0, 0.0, 0.05], 1);
+        geometry(w, e, k, head, 0.3, true);
+    }
+    if extra == Extra::SkinNoBound {
+        // A skinned geometry without a world bound (deferred: its pass allocates one) under the
+        // fourth bone, reading the weapon, which is walked after it: main's replay would read the
+        // weapon's new transform where the serial pass reads last frame's: a `skin` barrier.
+        let g = skinned(w, e, k, bones[3], &[weapon]);
+        e.mem.set_u32(g + 0x20, 0);
+    }
+    if extra == Extra::SkinOther {
+        // A skin under the root whose bone the world points at another actor's (`world`): a `skin`
+        // barrier (a helper would read it while another helper walks that actor).
+        skinned(w, e, k, root, &[accum]);
     }
     if extra == Extra::Controller {
         let cvt = w.vtable(e, &[(0x94, CONTROLLER_FN)]);
@@ -609,10 +669,22 @@ fn world(e: &mut Engine) -> World {
         (Extra::SkinOnHead, true),
         (Extra::None, true),
         (Extra::None, false),
+        (Extra::BoundNow, true),
+        (Extra::HeadNoBound, true),
+        // Next to the head without a bound: were that actor walked, they would share a stretch.
+        (Extra::None, true),
+        (Extra::SkinNoBound, true),
+        (Extra::None, true),
+        (Extra::None, true),
+        (Extra::SkinOther, true),
+        (Extra::None, true),
+        (Extra::None, false),
     ];
+    let mut made = Vec::new();
     for (i, &(extra, lighting)) in plan.iter().enumerate() {
         let a = actor(&mut w, e, &k, i as f32 * 3.0, extra, lighting);
         actors.push(a);
+        made.push(a);
         if i == 2 {
             actors.push(0);
         }
@@ -620,6 +692,22 @@ fn world(e: &mut Engine) -> World {
             actors.push(non_actor);
         }
     }
+    // The skin of the actor reading another's bone: its bone is the first bone of the actor listed
+    // just before it (walked in the same stretch were it not a barrier).
+    let skin_other = plan
+        .iter()
+        .position(|p| p.0 == Extra::SkinOther)
+        .expect("planned");
+    let first_bone = |e: &Engine, a: u32| {
+        let animation = e.mem.u32(a + 0x10);
+        let accum = e.mem.u32(animation + 0xc);
+        e.mem.u32(e.mem.u32(accum + 0xa0))
+    };
+    let other_bone = first_bone(&*e, made[skin_other - 1]);
+    let root = e.mem.u32(e.mem.u32(made[skin_other] + 0x10) + 8);
+    let skinned_geometry = e.mem.u32(e.mem.u32(root + 0xa0) + 4);
+    let skin = e.mem.u32(skinned_geometry + 0xbc);
+    e.mem.set_u32(e.mem.u32(skin + 0x14), other_bone);
     // The process array at the lists' +4: level 0 the first half, level 1 the rest, then an actor
     // of level 2 the pass does not walk.
     let split = actors.len() / 2;
@@ -712,13 +800,17 @@ fn parallel_bones_end_in_the_serial_state() {
             );
         }
         assert_eq!(counts.frames, 1, "{counts:?}");
-        // Exact: ten actors walked (the skinned one among them: its flagged bones without bounds
-        // are walked, not deferred; the one alone between two barriers runs serially), five whole
-        // on main (a controller, a ragdoll, a node that allocates its bound, two skins read out of
-        // order), eleven subtrees deferred (ten heads and the geometry without a bound).
-        assert_eq!(counts.walked, 10, "{counts:?}");
-        assert_eq!(counts.barriers, 5, "{counts:?} {reasons:?}");
-        assert_eq!(counts.subtrees, 11, "{counts:?}");
+        // Exact: fourteen actors walked (the skinned one among them: its flagged bones without
+        // bounds are walked, not deferred; the two alone between two barriers run serially), nine
+        // whole on main (a controller, a ragdoll; three nodes that allocate their bound; four skins
+        // read out of order), fifteen subtrees deferred (fourteen heads and the geometry without a
+        // bound).
+        assert_eq!(counts.walked, 14, "{counts:?}");
+        assert_eq!(counts.barriers, 9, "{counts:?} {reasons:?}");
+        assert_eq!(counts.subtrees, 15, "{counts:?}");
+        let count_of = |name: &str| reasons.iter().find(|r| r.0 == name).map_or(0, |r| r.1);
+        assert_eq!(count_of("bound"), 3, "{reasons:?}");
+        assert_eq!(count_of("skin"), 4, "{reasons:?}");
         assert!(counts.havok >= 20, "{counts:?}");
         assert_eq!(counts.mismatches, 0, "{counts:?}");
         let names: Vec<&str> = reasons.iter().map(|r| r.0).collect();
@@ -733,7 +825,7 @@ fn parallel_bones_end_in_the_serial_state() {
     let (got, state) = pass(&mut e, &w, "check", 3);
     let (counts, _) = bones::take_counts();
     assert_eq!(counts.differences, 0, "{counts:?}");
-    assert_eq!(counts.checked_actors, 10, "{counts:?}");
+    assert_eq!(counts.checked_actors, 14, "{counts:?}");
     assert_eq!(
         got, serial,
         "check: the outside calls are the serial pass's"
