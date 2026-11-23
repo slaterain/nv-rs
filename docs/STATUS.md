@@ -298,18 +298,19 @@ More in [FIXES.md, "UI Organizer"](FIXES.md#ui-organizer).
 
 ## lStewieAl's Tweaks built in
 
-🔨 Its engine fixes and tweaks, with nothing to install. 184 of its changes are built:
+🔨 Its engine fixes and tweaks, with nothing to install. 225 of its changes are built:
 
 - 72 of its crash and leak fixes;
 - Engine Optimizations' first change (a save's changed-forms map);
-- 111 other fixes and tweaks: 16 to the engines and the console; 14 to forms, cells, scripts, saves
-  and sound; 32 to AI, actors and the player; 49 to menus and the HUD.
+- 152 other fixes and tweaks (a few of them crash fixes too): 52 to AI, actors and the player; 55 to
+  menus and the HUD; 45 to the engines and the world, menus' keyboard and pad input, the perk
+  menu's requirement line, console commands and scripts.
 
 - Each change is on with the fixes preset and has its own off key in `Fallout.ini`'s
   `[nv-rs Stewie]`.
 - Its settings are VNV's, with the player's `nvse_stewie_tweaks.ini` read over them.
 - One of the crash fixes, a leak, the port had already fixed.
-- The engines and the console (seven fixes): the sun's light comes from the side of the sky its disc
+- The engines (seven fixes): the sun's light comes from the side of the sky its disc
   is on; blood and impact marks on bodies show the variant picked for them; things that are not
   doors no longer count as doors for NPCs' paths; and four crashes are gone (a tree whose distant
   LOD a plugin disabled, with Tweaks' console line naming it; a place whose navigation mesh cannot
