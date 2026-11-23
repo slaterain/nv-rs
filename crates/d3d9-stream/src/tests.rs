@@ -1472,7 +1472,11 @@ fn draw_digests_and_counts_see_objects_by_first_use() {
     };
     let (ra, rb) = (drawing(&a, 2), drawing(&b, 2));
     let da = wire::draw_digests(&ra[..]).unwrap();
-    assert_eq!(da.len(), 2, "the draw, then the file's end (what was destroyed)");
+    assert_eq!(
+        da.len(),
+        2,
+        "the draw, then the file's end (what was destroyed)"
+    );
     assert_eq!(da, wire::draw_digests(&rb[..]).unwrap());
     let sa = wire::draw_snapshot(&ra[..], 0).unwrap().expect("a draw");
     let sb = wire::draw_snapshot(&rb[..], 0).unwrap().expect("a draw");
