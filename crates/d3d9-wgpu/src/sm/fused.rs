@@ -57,18 +57,20 @@ struct Field {
     ty: String,
 }
 
-/// The fields of the struct `name` in a converted module's text.
+/// The fields of the struct `name` in a converted module's text: one a line up to the line that
+/// closes the struct, each line's `//` comment left out (the converter notes each varying's
+/// semantic there, braces included).
 fn fields(text: &str, name: &str) -> Vec<Field> {
     let head = format!("struct {name} {{");
     let Some(start) = text.find(&head) else {
         return Vec::new();
     };
-    let body = &text[start + head.len()..];
-    let end = body.find('}').unwrap_or(body.len());
-    body[..end]
+    text[start + head.len()..]
         .lines()
+        .map(|l| l.split("//").next().unwrap_or("").trim())
+        .take_while(|l| !l.starts_with('}'))
         .filter_map(|l| {
-            let l = l.trim().trim_end_matches(',');
+            let l = l.trim_end_matches(',');
             let (left, ty) = l.split_once(':')?;
             let left = left.trim();
             let (attrs, name) = match left.rfind(' ') {
@@ -637,6 +639,55 @@ mod tests {
             "{}",
             v.source
         );
+    }
+
+    /// Every varying of every pass is passed on, in both stages: the converter notes each varying's
+    /// semantic in a comment with braces after its field, which ended the struct's fields at the
+    /// first one (the picture compare's red lit surfaces in Doc's house: only each pass's first
+    /// varying arrived). The fields' types carry no comment.
+    #[test]
+    fn every_varying_of_every_pass_is_passed_on() {
+        let vp = parse(&small_vertex_shader()).unwrap();
+        let pp = parse(&small_pixel_shader()).unwrap();
+        let (mut vl, mut pl) = links();
+        for link in [&mut vl, &mut pl] {
+            link.varyings.push(wgsl::Semantic {
+                usage: usage::TEXCOORD,
+                index: 1,
+            });
+            link.centroid = wgsl::centroid_everywhere(2);
+        }
+        let own = wgsl::convert(&vp, &vl).unwrap();
+        assert!(
+            own.contains("// "),
+            "the converter notes its varyings: {own}"
+        );
+        let out: Vec<String> = fields(&own, "Out").into_iter().map(|f| f.ty).collect();
+        assert!(out.len() >= 3, "position and both varyings: {out:?}");
+        assert!(
+            out.iter().all(|t| !t.contains("//") && !t.ends_with(',')),
+            "{out:?}"
+        );
+        let fed = [vec![(0, 0)], vec![(0, 0)]];
+        let v = fused_vertex(&[(&vp, &vl), (&vp, &vl)], &fed).unwrap();
+        validate(&v.source).unwrap_or_else(|e| panic!("{e}\n{}", v.source));
+        let p = fused_pixel(&[(&pp, &pl), (&pp, &pl)], &[Blend::Add], false).unwrap();
+        validate(&p.source).unwrap_or_else(|e| panic!("{e}\n{}", p.source));
+        for k in 0..2 {
+            for n in 0..2 {
+                let field = format!("f{k}_l{n}");
+                assert!(
+                    v.source.contains(&format!("out.{field} = o{k}.l{n};")),
+                    "{field}\n{}",
+                    v.source
+                );
+                assert!(
+                    p.source.contains(&format!("i{k}.l{n} = input.{field};")),
+                    "{field}\n{}",
+                    p.source
+                );
+            }
+        }
     }
 
     /// More varyings than the stages pass, a pass without the registers from storage, or a missing
