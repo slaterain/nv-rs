@@ -642,14 +642,13 @@ fn finish_idle(e: &mut Engine, this: Ptr<InventoryMenu>) {
         let second = if has_dt { tile_at(e, me_addr, 0x70) } else { 0 };
         // `0x7820BB` (lStewieAl's Tweaks' S0105 writes `XOR EAX,EAX; MOV [EBP-0x1C],EAX; JMP` over
         // the zero DT's store): without a DT the DR tile is passed without its own test.
-        let first = if !has_dt && e.stewie(engine_core::extend::stewie::INVENTORY_STAT_ALPHAS) {
-            tile_at(e, me_addr, 0x6c)
-        } else if current_item(e) != 0 && {
-            let item = current_item(e);
-            let object = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, item));
-            let value = e.call(OBJECT_VALUE_004BE060, &args![object]).f64();
-            value != e.global::<f64>(ZERO_DOUBLE)
-        } {
+        let first = if (!has_dt && e.stewie(engine_core::extend::stewie::INVENTORY_STAT_ALPHAS))
+            || (current_item(e) != 0 && {
+                let item = current_item(e);
+                let object = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, item));
+                let value = e.call(OBJECT_VALUE_004BE060, &args![object]).f64();
+                value != e.global::<f64>(ZERO_DOUBLE)
+            }) {
             tile_at(e, me_addr, 0x6c)
         } else {
             0
