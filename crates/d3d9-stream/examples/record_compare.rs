@@ -86,11 +86,12 @@ fn main() {
     let deferred = args.first().is_some_and(|a| a == "--ends-deferred");
     let digests = args.first().is_some_and(|a| a == "--digests");
     let counts = args.first().is_some_and(|a| a == "--counts");
-    if deferred || digests || counts {
+    let frames = args.first().is_some_and(|a| a == "--frames");
+    if deferred || digests || counts || frames {
         args.remove(0);
     }
     let [a, b] = args.as_slice() else {
-        eprintln!("usage: record_compare [--ends-deferred | --digests | --counts] A.d3d9s B.d3d9s");
+        eprintln!("usage: record_compare [--ends-deferred | --digests | --counts | --frames] A.d3d9s B.d3d9s");
         std::process::exit(2);
     };
     let open = |path: &str| match File::open(path) {
@@ -100,6 +101,31 @@ fn main() {
             std::process::exit(2);
         }
     };
+    if frames {
+        let read = |path: &str| match d3d9_stream::wire::frame_draws(open(path)) {
+            Ok(list) => list,
+            Err(why) => {
+                eprintln!("{path}: {why}");
+                std::process::exit(2);
+            }
+        };
+        let (fa, fb) = (read(a), read(b));
+        let differ: Vec<usize> = (0..fa.len().max(fb.len()))
+            .filter(|&i| fa.get(i) != fb.get(i))
+            .collect();
+        println!(
+            "frames A {} B {}; draws A {} B {}; frames whose draws differ: {}",
+            fa.len(),
+            fb.len(),
+            fa.iter().map(|&n| u64::from(n)).sum::<u64>(),
+            fb.iter().map(|&n| u64::from(n)).sum::<u64>(),
+            differ.len()
+        );
+        for &i in differ.iter().take(40) {
+            println!("frame {i}: A {:?} B {:?}", fa.get(i), fb.get(i));
+        }
+        std::process::exit(i32::from(!differ.is_empty()));
+    }
     if counts {
         let read = |path: &str| match d3d9_stream::wire::command_counts(open(path)) {
             Ok(list) => list,
