@@ -3174,6 +3174,54 @@ mod tests {
         assert!(emptied < read);
     }
 
+    /// Row S0160 at its three places in `LoadNextMessage` (`0x7A95D2` the title, `0x7A9850` a
+    /// button's text, `0x7A9B74` the message): with the row on each text is measured in its own
+    /// tile's `font` trait (0xFB9: title tile 3, button text tile 5, message tile 4), in that call
+    /// order; off, the exe's 6, 2, 2 and trait 0xFB9 is never read.
+    #[test]
+    fn s0160_each_text_is_measured_in_its_own_tiles_font() {
+        for on in [false, true] {
+            let (mut e, m, object) = load_world(false);
+            let title = put_cstr(&mut e, "T");
+            e.set(object, MessageMenuEntry::strTitle, Ptr::new(title));
+            set_text(&mut e, object.addr(), 0x14, "A");
+            // One button: the list's and the piece's sizes 2, the separator found at 1.
+            e.register_double(WORD_AT_0X14, |_, _| ret(2));
+            e.register_double(STD_STRING_FIND_C_STRING, |_, _| ret(1));
+            e.register_double(LIST_BOX_ADD_ITEM, |_, _| ret(0x7600));
+            e.register_double(GET_CHILD_BY_NAME, |_, _| ret(0x7700));
+            e.register_double(GET_FLOAT_TRAIT, |_, a| {
+                fret(match (a[0], a[1]) {
+                    (0x6200, 0xfb9) => 3.0,
+                    (0x6400, 0xfb9) => 4.0,
+                    (0x7700, 0xfb9) => 5.0,
+                    (_, HORIZONTAL_BUFFER_NAME) => 10.0,
+                    (_, MAX_MENU_WIDTH_NAME) => 500.0,
+                    (_, MIN_MENU_WIDTH_NAME) => 100.0,
+                    (_, 0xfb1) => 220.0,
+                    (_, 0xfb0) => 100.0,
+                    _ => 0.0,
+                })
+            });
+            e.set_stewie(engine_core::extend::stewie::MESSAGE_MENU_TEXT_FONT, on);
+            e.call(0x007a_92e0, &args![m]);
+            let fonts: Vec<u32> = calls(&e, CALCULATE_STRING_DIMENSIONS)
+                .iter()
+                .map(|w| w[3])
+                .collect();
+            assert_eq!(
+                fonts,
+                if on { vec![3, 5, 4] } else { vec![6, 2, 2] },
+                "row {on}"
+            );
+            let font_reads = calls(&e, GET_FLOAT_TRAIT)
+                .iter()
+                .filter(|w| w[1] == 0xfb9)
+                .count();
+            assert_eq!(font_reads, if on { 3 } else { 0 }, "row {on}");
+        }
+    }
+
     #[test]
     fn load_next_message_keeps_a_position_override_on_screen() {
         let (mut e, m, object) = load_world(false);
