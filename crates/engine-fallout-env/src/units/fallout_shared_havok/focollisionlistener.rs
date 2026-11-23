@@ -3,6 +3,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use engine_core::job_effects;
 
 /// The function `fn_00624050` calls on the member (`00577bf0`).
 const CALLEE_00577BF0: u32 = 0x0057_7bf0;
@@ -281,6 +282,13 @@ pub fn fn_006238b0(
 /// `006240b0` giving 0x11. In every case it then queues the collision
 /// damage (`fn_006238b0`) and offers the event to both references
 /// (`fn_006240f0`).
+///
+/// Inside a job of Havok's multithreaded step (`engine_core::job_effects`)
+/// everything that decides stays here (the early returns, the sound record,
+/// the references, the offers' reject of the point), while the sound and the
+/// damage are recorded, the sound with a copy of its record, and run on the
+/// stepping thread in the step's order (the projectile's impact, the offer's
+/// effect, likewise in `009b4950`).
 pub fn fo_collision_listener_contact_point_added_callback(e: &mut Engine, this: Ptr, event: Ptr) {
     let event = event.addr();
     if e.mem.u32(event.wrapping_add(0x20)) != 0 {
@@ -359,22 +367,38 @@ pub fn fo_collision_listener_contact_point_added_callback(e: &mut Engine, this: 
             let second = (i32::from(e.mem.u8(sound + 0x15) as i8)).wrapping_add(1);
             e.mem
                 .set_u32(sound + 0x18, first.wrapping_mul(second) as u32);
-            e.call(0x0083_7550, &args![sound]);
+            play_collision_sound(e, sound);
         }
         let (first_body, first) = entity_reference(e, first_root);
         let (second_body, second) = entity_reference(e, second_root);
         let approach = x87_quiet_bits(e.mem.u32(event.wrapping_add(0x1c)));
-        fn_006238b0(
-            e,
-            this,
-            f32::from_bits(approach),
-            first_body,
-            second_body,
-            first,
-            second,
-        );
+        let listener = this.addr();
+        job_effects::run_or_record(e, move |e| {
+            e.call(
+                0x0062_38b0,
+                &args![listener, approach, first_body, second_body, first, second],
+            );
+        });
         fn_006240f0(e, this, first, Ptr::new(event));
         fn_006240f0(e, this, second, Ptr::new(event));
+    });
+}
+
+/// `ImpactMixer::PlayCollisionSound` (`00837550`) on the 0x24-byte sound
+/// record at `sound`; inside a physics job it plays a copy of the record at
+/// the job's replay on the stepping thread (the mixer drops a sound heard
+/// again within a short interval, so which collision plays first matters).
+fn play_collision_sound(e: &mut Engine, sound: u32) {
+    if !job_effects::in_job() {
+        e.call(0x0083_7550, &args![sound]);
+        return;
+    }
+    let record = e.mem.bytes(sound, 0x24);
+    job_effects::run_or_record(e, move |e| {
+        e.with_stack(0x24, |e, copy| {
+            e.mem.write(copy.addr(), &record);
+            e.call(0x0083_7550, &args![copy]);
+        });
     });
 }
 
@@ -809,6 +833,72 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x0062_3cb0, &args![this, event]);
         assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    /// The sound and damage calls of a log, in order: (address, arguments).
+    fn effects(e: &Engine) -> Vec<(u32, Vec<u32>)> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| [0x0083_7550, 0x0062_38b0].contains(address))
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn inside_a_physics_job_the_sound_and_the_damage_wait_for_the_replay() {
+        let (mut e, event) = contact_engine();
+        let this = e.mem.alloc(0x10);
+        let first = e.mem.alloc(4);
+        let second = e.mem.alloc(4);
+        e.mem.set_u32(event, first);
+        e.mem.set_u32(event + 4, second);
+        e.mem.set_f32(event + 0x1c, 3.0);
+        let copy = 0x011c_c800;
+        // Outside a job: both at once, the sound first.
+        e.call_log = Some(vec![]);
+        e.call(0x0062_3cb0, &args![this, event]);
+        let at_once = effects(&e);
+        assert_eq!(
+            at_once.iter().map(|c| c.0).collect::<Vec<_>>(),
+            [0x0083_7550, 0x0062_38b0]
+        );
+        let record = e.mem.bytes(copy, 0x24);
+        e.mem.write(copy, &[0u8; 0x24]);
+        // Inside a job: nothing yet; the decisions ran (the roots were looked up).
+        e.call_log = Some(vec![]);
+        {
+            let _job = job_effects::enter(job_effects::JobKey {
+                island: 0,
+                kind: 0xd,
+                part: 0,
+            });
+            e.call(0x0062_3cb0, &args![this, event]);
+        }
+        assert!(effects(&e).is_empty());
+        assert_eq!(calls_to(&e, BODY_FROM_ENTITY).len(), 2);
+        assert_eq!(e.mem.bytes(copy, 0x24), [0u8; 0x24]);
+        // The replay plays the same record (a copy) and queues the same damage, in that order.
+        assert_eq!(job_effects::replay(&mut e), 2);
+        let replayed = effects(&e);
+        assert_eq!(
+            replayed.iter().map(|c| c.0).collect::<Vec<_>>(),
+            [0x0083_7550, 0x0062_38b0]
+        );
+        assert_eq!(e.mem.bytes(copy, 0x24), record);
+        assert_eq!(replayed[1], at_once[1]);
+        // A flagged event records nothing.
+        e.mem.set_u32(event + 0x20, 1);
+        {
+            let _job = job_effects::enter(job_effects::JobKey {
+                island: 0,
+                kind: 0xd,
+                part: 1,
+            });
+            e.call(0x0062_3cb0, &args![this, event]);
+        }
+        assert_eq!(job_effects::replay(&mut e), 0);
     }
 
     #[test]

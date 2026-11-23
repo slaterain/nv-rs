@@ -1118,6 +1118,9 @@ fn by_value_points(e: &mut Engine, words: [u32; 6], f: impl FnOnce(&mut Engine, 
 /// hit is the first (both points `00460140` of `+0x10`; the first collidable's words). The
 /// projectile's slot `+0x32c` gets the hit, both points, the two words and 0x24. A hit
 /// whose slot `+0x100` is true with both objects set marks the contact (`+0x20` = 1).
+/// Inside a job of Havok's multithreaded step (`engine_core::job_effects`) the slot `+0x32c`
+/// call is recorded with copies of the points and made on the stepping thread in the step's
+/// order; the mark is made at once.
 pub fn fn_009b4950(e: &mut Engine, this: Ptr, contact: u32) {
     let reference_of = |e: &mut Engine, collidable: u32| -> (u32, u32) {
         let word = e.call(COLLIDABLE_WORD, &args![collidable]).u32();
@@ -1181,11 +1184,32 @@ pub fn fn_009b4950(e: &mut Engine, this: Ptr, contact: u32) {
             let collidable = e.mem.u32(contact);
             word_b = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, collidable));
         }
-        e.vcall(
-            this.addr(),
-            0x32c,
-            &args![hit, one, two, word_a, word_b, 0x24u32],
-        );
+        let projectile = this.addr();
+        if engine_core::job_effects::in_job() {
+            // The port, inside a job of Havok's multithreaded step: the impact (the projectile's
+            // list, its first hit) is recorded with copies of the two points and made on the
+            // stepping thread in the step's order; the reject below does not depend on it.
+            let mut words = [0u32; 6];
+            for lane in 0..3 {
+                words[lane as usize] = e.mem.u32(one + 4 * lane);
+                words[3 + lane as usize] = e.mem.u32(two + 4 * lane);
+            }
+            engine_core::job_effects::run_or_record(e, move |e| {
+                by_value_points(e, words, |e, one, two| {
+                    e.vcall(
+                        projectile,
+                        0x32c,
+                        &args![hit, one, two, word_a, word_b, 0x24u32],
+                    );
+                });
+            });
+        } else {
+            e.vcall(
+                projectile,
+                0x32c,
+                &args![hit, one, two, word_a, word_b, 0x24u32],
+            );
+        }
         if hit != 0 && e.vcall(hit, 0x100, &[]).u8() != 0 && first_object != 0 && second_object != 0
         {
             e.mem.set_u32(contact + 0x20, 1);
@@ -1974,6 +1998,84 @@ mod projectile_tests {
         assert_eq!(reported[0][1], 0);
         assert_eq!(reported[0][4..], [0, 0xffff_ffff, 0x24]);
         assert_eq!(e.mem.u32(contact + 0x20), 0);
+    }
+
+    #[test]
+    fn fn_009b4950_inside_a_physics_job_rejects_at_once_and_records_the_impact() {
+        let mut e = Engine::new();
+        constants(&mut e);
+        e.register(COLLIDABLE_WORD, |e, a| ret(e.mem.u32(a[0])));
+        e.register(COLLIDABLE_OBJECT, |_, a| ret(a[0] + 0x10));
+        e.register(OBJECT_OWNER, |_, a| ret(a[0] + 0x20));
+        e.register(FIND_REFERENCE_FOR_3D, |e, a| ret(e.mem.u32(a[0])));
+        e.register(MEMBER_AT_10, |_, a| ret(a[0] + 0x10));
+        stub(&mut e, &[COPY_POINT, SCALE_BY]);
+        // The impact keeps what its two points hold when it is made.
+        e.register(0x732c, |e, a| {
+            let points = [e.mem.bytes(a[2], 12), e.mem.bytes(a[3], 12)].concat();
+            e.mem.write(ZERO_POINT + 0x40, &points);
+            Ret::default()
+        });
+        e.register(0x7224, |e, a| ret(e.mem.u32(a[0] + 0x20)));
+        e.register(0x7100, |e, a| ret(e.mem.u32(a[0] + 0x24)));
+        // The points start as the zero point's words (the copies are stubbed).
+        for (lane, value) in (0u32..).zip([1.5f32, -2.0, 3.25]) {
+            e.mem.set_f32(ZERO_POINT + 4 * lane, value);
+        }
+        let reference = |e: &mut Engine| {
+            let r = object(e, &[(0x224, 0x7224), (0x100, 0x7100)]);
+            let node = e.mem.alloc(4);
+            e.mem.set_u32(node, r);
+            let word = e.mem.alloc(0x40);
+            e.mem.set_u32(word + 0x30 + 8, node);
+            let collidable = e.mem.alloc(4);
+            e.mem.set_u32(collidable, word);
+            (r, word, collidable)
+        };
+        let (first, _, first_collidable) = reference(&mut e);
+        let (second, second_word, second_collidable) = reference(&mut e);
+        let contact = e.mem.alloc(0x24);
+        e.mem.set_u32(contact, first_collidable);
+        e.mem.set_u32(contact + 4, second_collidable);
+        e.mem.set_u32(contact + 0x10, 0x3000);
+        e.mem.set_u32(first + 0x20, 1);
+        e.mem.set_u32(second + 0x24, 1);
+        let this = object(&mut e, &[(0x32c, 0x732c)]);
+        // Outside a job: the impact at once, then the reject.
+        e.call_log = Some(vec![]);
+        e.call(0x009b_4950, &args![this, contact]);
+        let at_once = calls(&e, 0x732c);
+        assert_eq!(at_once.len(), 1);
+        assert_eq!(at_once[0][..2], [this, second]);
+        assert_eq!(at_once[0][4], second_word);
+        assert_eq!(e.mem.u32(contact + 0x20), 1);
+        let point: Vec<u8> = [1.5f32, -2.0, 3.25]
+            .iter()
+            .flat_map(|f| f.to_le_bytes())
+            .collect();
+        let points = [point.clone(), point].concat();
+        assert_eq!(e.mem.bytes(ZERO_POINT + 0x40, 24), points);
+        e.mem.write(ZERO_POINT + 0x40, &[0u8; 24]);
+        e.mem.set_u32(contact + 0x20, 0);
+        // Inside a job: the reject at once, the impact at the replay with the same words and
+        // the same two points.
+        e.call_log = Some(vec![]);
+        {
+            let _job = engine_core::job_effects::enter(engine_core::job_effects::JobKey {
+                island: 3,
+                kind: 0xd,
+                part: 0,
+            });
+            e.call(0x009b_4950, &args![this, contact]);
+        }
+        assert_eq!(e.mem.u32(contact + 0x20), 1);
+        assert!(calls(&e, 0x732c).is_empty());
+        assert_eq!(engine_core::job_effects::replay(&mut e), 1);
+        let replayed = calls(&e, 0x732c);
+        assert_eq!(replayed.len(), 1);
+        assert_eq!(replayed[0][..2], at_once[0][..2]);
+        assert_eq!(replayed[0][4..], at_once[0][4..]);
+        assert_eq!(e.mem.bytes(ZERO_POINT + 0x40, 24), points);
     }
 
     #[test]

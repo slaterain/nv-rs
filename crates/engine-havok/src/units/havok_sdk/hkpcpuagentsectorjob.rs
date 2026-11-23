@@ -164,7 +164,12 @@ fn at(base: u32, offset: i32) -> u32 {
 /// of a command keeps its upper three bytes from the frame (padding, never read). Profile
 /// records `TtNarrowPhase`/`EtNarrowPhase` (or the `TOI` pair) bracket the work. Returns what
 /// `00d04e80` returns.
+///
+/// The port runs the job as a job of the step ([`engine_core::job_effects`], [`job_key`]): the
+/// game's collision effects started inside it (the collision listener's sounds, damage and
+/// projectile impacts) are recorded and replayed on the stepping thread in the step's order.
 pub fn hk_cpu_agent_sector_job(e: &mut Engine, owner: Ptr, second: u32, job: Ptr) -> u32 {
+    let _job = engine_core::job_effects::enter(job_key(e, job.addr()));
     e.with_stack(FRAME_SIZE, |e, frame| {
         let input = frame.addr() + FRAME_INPUT;
         let owner = owner.addr();
@@ -206,6 +211,28 @@ pub fn hk_cpu_agent_sector_job(e: &mut Engine, owner: Ptr, second: u32, job: Ptr
         }
         result
     })
+}
+
+/// The job's place in the step, the order the continuous step works the same agents in: the
+/// island's position among the world's active islands (its halfword `+0x20`, which
+/// `finishMtStep` renumbers), the job's type byte, and the part of the island's agents it takes.
+/// A type-0xD job names its island at `+0x14` and its first sector at `+0x40`; a list job (0xF,
+/// `processAgentNnEntries`) carries its island's halfword at `+0x10` and its part of the list
+/// at `+0x24`.
+pub fn job_key(e: &Engine, job: u32) -> engine_core::job_effects::JobKey {
+    let kind = e.mem.u8(job);
+    let (island, part) = if kind == 0xd {
+        let island = e.mem.u32(job + 0x14);
+        let index = if island == 0 {
+            u16::MAX
+        } else {
+            e.mem.u16(island + 0x20)
+        };
+        (index, e.mem.u32(job + 0x40))
+    } else {
+        (e.mem.u16(job + 0x10), u32::from(e.mem.u16(job + 0x24)))
+    };
+    engine_core::job_effects::JobKey { island, kind, part }
 }
 
 /// The rule for the end of a chunk: the last chunk (number `world + 0x60`) holds `world + 0x58`

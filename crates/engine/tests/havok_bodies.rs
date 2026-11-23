@@ -125,6 +125,8 @@ struct Contact {
 
 /// The listener's record of the run in progress (the callback may run on a worker's stack).
 static CONTACTS: Mutex<Vec<Contact>> = Mutex::new(Vec::new());
+/// The listener's effects as they ran (in a job of the multithreaded step: at the replay).
+static EFFECTS: Mutex<Vec<Contact>> = Mutex::new(Vec::new());
 /// One run at a time: the listener's record is shared.
 static SERIAL: Mutex<()> = Mutex::new(());
 
@@ -182,7 +184,10 @@ fn listener_nothing(_: &mut Engine, _: &[u32]) -> Ret {
 }
 
 /// The listener's `contactPointAdded` (slot 0x10, as `FOCollisionListener`'s `00623cb0`):
-/// records the event's two bodies (`+0`, `+4`) and the thread; accepts the point.
+/// records the event's two bodies (`+0`, `+4`) and the thread; accepts the point. Its "effect"
+/// (as the game's listener's sound and damage) goes through `job_effects` as the game's does:
+/// at once outside a job of the multithreaded step, else at the job's replay on the stepping
+/// thread, and records the same bodies with the thread it ran on.
 fn listener_added(e: &mut Engine, a: &[u32]) -> Ret {
     let event = a.get(1).copied().unwrap_or(0);
     let contact = Contact {
@@ -191,6 +196,12 @@ fn listener_added(e: &mut Engine, a: &[u32]) -> Ret {
         thread: engine_core::thread_host::current_id(e),
     };
     CONTACTS.lock().unwrap().push(contact);
+    engine_core::job_effects::run_or_record(e, move |e| {
+        EFFECTS.lock().unwrap().push(Contact {
+            thread: engine_core::thread_host::current_id(e),
+            ..contact
+        });
+    });
     Ret::default()
 }
 
@@ -353,6 +364,8 @@ fn step(e: &mut Engine, world: u32) {
 struct Run {
     motions: Vec<Vec<Vec<u8>>>,
     contacts: Vec<Vec<Contact>>,
+    /// Each step's listener effects in the order they ran, with the thread they ran on.
+    effects: Vec<Vec<Contact>>,
     positions: Vec<[f32; 3]>,
     awake: Vec<bool>,
 }
@@ -426,20 +439,23 @@ fn run(simulation: u8, workers: u32) -> Run {
     let number: BTreeMap<u32, u32> = (0u32..).zip(&bodies).map(|(i, &b)| (b, i)).collect();
     let mut motions = Vec::new();
     let mut contacts = Vec::new();
+    let mut effects = Vec::new();
+    let numbered = |made: Vec<Contact>| -> Vec<Contact> {
+        made.into_iter()
+            .map(|c| Contact {
+                a: number.get(&c.a).copied().unwrap_or(u32::MAX),
+                b: number.get(&c.b).copied().unwrap_or(u32::MAX),
+                thread: c.thread,
+            })
+            .collect()
+    };
     for _ in 0..ROUNDS {
         for _ in 0..STEPS_PER_ROUND {
             CONTACTS.lock().unwrap().clear();
+            EFFECTS.lock().unwrap().clear();
             step(&mut e, world);
-            let made = std::mem::take(&mut *CONTACTS.lock().unwrap());
-            contacts.push(
-                made.into_iter()
-                    .map(|c| Contact {
-                        a: number.get(&c.a).copied().unwrap_or(u32::MAX),
-                        b: number.get(&c.b).copied().unwrap_or(u32::MAX),
-                        thread: c.thread,
-                    })
-                    .collect(),
-            );
+            contacts.push(numbered(std::mem::take(&mut *CONTACTS.lock().unwrap())));
+            effects.push(numbered(std::mem::take(&mut *EFFECTS.lock().unwrap())));
         }
         motions.push(
             bodies
@@ -458,6 +474,7 @@ fn run(simulation: u8, workers: u32) -> Run {
     Run {
         motions,
         contacts,
+        effects,
         positions,
         awake,
     }
@@ -589,4 +606,62 @@ fn the_multithreaded_step_leaves_the_bodies_within_a_centimetre_of_the_continuou
             (round + 1) * 20
         );
     }
+}
+
+#[test]
+#[ignore = "needs the player's FalloutNV.exe (set NV_DATA)"]
+fn the_listeners_effects_run_on_the_stepping_thread_in_the_continuous_order() {
+    let _one = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let single = run(CONTINUOUS, 1);
+    let multi = run(MULTITHREADED, 3);
+    // The continuous step has no jobs: every effect runs at once, with its contact point.
+    assert_eq!(single.effects, single.contacts);
+    let stepping = single
+        .contacts
+        .iter()
+        .flatten()
+        .next()
+        .expect("contact points")
+        .thread;
+    let on_workers = multi
+        .contacts
+        .iter()
+        .flatten()
+        .filter(|c| c.thread != stepping)
+        .count();
+    let (mut same_set, mut same_order) = (0, 0);
+    for (step, (s, m)) in single.effects.iter().zip(&multi.effects).enumerate() {
+        assert!(
+            m.iter().all(|c| c.thread == stepping),
+            "step {step}: an effect ran off the stepping thread: {m:?}"
+        );
+        let (mut made, mut ran) = (pairs(&multi.contacts[step]), pairs(m));
+        made.sort_unstable();
+        ran.sort_unstable();
+        assert_eq!(made, ran, "step {step}: an effect was lost or doubled");
+        let (ps, pm) = (pairs(s), pairs(m));
+        let (mut ss, mut sm) = (ps.clone(), pm.clone());
+        ss.sort_unstable();
+        sm.sort_unstable();
+        if ss == sm {
+            same_set += 1;
+            if ps == pm {
+                same_order += 1;
+            }
+        }
+    }
+    let steps = single.effects.len();
+    println!(
+        "multithreaded: {on_workers} contact points added on a worker; effects in the continuous order in {same_order} of the {same_set} steps (of {steps}) with the same contact points"
+    );
+    assert!(
+        on_workers > 0,
+        "no contact point was added on a worker: nothing was replayed"
+    );
+    assert_eq!(
+        same_order, same_set,
+        "where the two steps find the same contact points, the effects ran in another order"
+    );
 }

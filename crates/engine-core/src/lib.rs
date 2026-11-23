@@ -72,6 +72,7 @@ pub mod estimate;
 pub mod exe;
 pub mod extend;
 pub mod hitch;
+pub mod job_effects;
 pub mod mem;
 pub mod mod_files;
 pub mod own_view;

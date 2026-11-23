@@ -1058,6 +1058,8 @@ pub fn process_agent_nn_entries(
         }
         let queue = e.mem.u32(me + SIM_JOB_QUEUE);
         e.call(JOB_QUEUE_PROCESS_ALL, &args![queue]);
+        // The port: the jobs waited for have ended; their collision effects run here, in the step's order.
+        engine_core::job_effects::replay(e);
         if count > 0 {
             e.mem.set_u16(post + 6, 0xffff);
             e.mem.set_u16(post + 4, 0x30);
@@ -1179,6 +1181,8 @@ pub fn process_agent_nn_entries_from_multiple_islands(
     }
     let queue = e.mem.u32(me + SIM_JOB_QUEUE);
     e.call(JOB_QUEUE_PROCESS_ALL, &args![queue]);
+    // The port: the jobs waited for have ended; their collision effects run here, in the step's order.
+    engine_core::job_effects::replay(e);
     e.with_stack(0x150, |e, frame| {
         let post = frame.addr();
         let state = post + 0x30;

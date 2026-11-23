@@ -4591,6 +4591,10 @@ pub fn fn_00c93a60(e: &mut Engine, this: Ptr<HkpWorld>, listener: u32) {
 /// function at 0xC with the queue and 0xB, processes all the jobs of the queue (`00d051b0`,
 /// `ECX` the queue), calls the listener's virtual function at 0x10 and returns `finishMtStep`
 /// (`00c91c00`) of the queue and the listener.
+///
+/// The port replays the collision effects the jobs recorded ([`engine_core::job_effects`]) on
+/// this, the stepping thread, once the listener (the worker pool) has waited for every job, and
+/// again after `finishMtStep` for those of its own jobs.
 pub fn hkp_world_step_multithreaded(
     e: &mut Engine,
     this: Ptr<HkpWorld>,
@@ -4606,7 +4610,10 @@ pub fn hkp_world_step_multithreaded(
     e.vcall(listener, 0xc, &args![queue, 0xbu32]);
     e.call(PROCESS_ALL_JOBS, &args![queue]);
     e.vcall(listener, 0x10, &args![]);
-    hkp_world_finish_mt_step(e, this, queue, listener)
+    engine_core::job_effects::replay(e);
+    let result = hkp_world_finish_mt_step(e, this, queue, listener);
+    engine_core::job_effects::replay(e);
+    result
 }
 
 // Translated from 00c93b30 (decompiled, FalloutNV.exe 1.4.0.525)
