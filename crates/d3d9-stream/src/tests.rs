@@ -2895,3 +2895,60 @@ fn the_last_present_carried_out_is_known_with_when() {
         assert!(at >= before, "threaded {threaded}: after its submit began");
     }
 }
+
+/// TEST DATA: a backend whose presents submit for `submit` (a blocking call, timed as one) and then work `own` more.
+struct SlowSubmit {
+    submit: Duration,
+    own: Duration,
+}
+
+impl Backend for SlowSubmit {
+    fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+        if let Cmd::Present { .. } = cmd {
+            hitch::timed(hitch::Call::Submit, || std::thread::sleep(self.submit));
+            std::thread::sleep(self.own);
+        }
+        Reply::None
+    }
+}
+
+/// What the render thread spent a frame on is counted before main's wait in `Present` for that frame ends: its time
+/// on the game's commands, its blocking calls by part, and its longest call by name. Main's own calls are not timed.
+#[test]
+fn the_render_threads_frame_is_counted_before_main_stops_waiting_for_it() {
+    let _one = hitch::tests::SERIAL
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    hitch::set_on(true);
+    let _ = hitch::take_longest();
+    let mut s = Stream::threaded(
+        Box::new(SlowSubmit {
+            submit: Duration::from_millis(30),
+            own: Duration::from_millis(20),
+        }),
+        Settings::default(),
+    );
+    let before = hitch::snapshot();
+    // One frame in flight: the second Present returns once the first is carried out.
+    s.submit(Part::Present.cmd());
+    s.submit(Part::Present.cmd());
+    let now = hitch::snapshot();
+    let d = |c: hitch::Count| now[c as usize] - before[c as usize];
+    assert!(
+        d(hitch::Count::RenderSubmitNs) >= 30_000_000,
+        "{}",
+        d(hitch::Count::RenderSubmitNs)
+    );
+    assert!(
+        d(hitch::Count::RenderBusyNs) >= 50_000_000,
+        "{}",
+        d(hitch::Count::RenderBusyNs)
+    );
+    let [render, _] = hitch::take_longest();
+    let (call, ns) = render.expect("the render thread's longest call");
+    assert_eq!(call, hitch::Call::Submit);
+    assert!(ns >= 30_000_000, "{ns}");
+    // Main is not one of the timed threads.
+    assert!(!hitch::timing());
+    s.finish();
+}

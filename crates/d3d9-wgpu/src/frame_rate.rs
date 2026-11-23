@@ -526,7 +526,9 @@ impl Overlay {
             for (b, v) in bytes.chunks_exact_mut(4).zip(quads.iter().flatten()) {
                 b.copy_from_slice(&v.to_le_bytes());
             }
-            queue.write_buffer(&self.quads, 0, &bytes[..n * QUAD_BYTES]);
+            d3d9_stream::hitch::timed(d3d9_stream::hitch::Call::WriteBuffer, || {
+                queue.write_buffer(&self.quads, 0, &bytes[..n * QUAD_BYTES])
+            });
             self.count = n as u32;
             self.made_for = Some((generation, size));
         }
