@@ -211,6 +211,26 @@ fn a_tweaks_section_is_read_and_its_other_records_kept() {
     assert!(w.e.ext::<crate::Stewie>().kept.records.is_empty());
 }
 
+/// Tweaks' `kMessage_PreLoadGame` also clears S0130.05's flag (`bDecreasedPlayerAmmo`), so a
+/// round the player's beam took in one game does not make a beam hit after the load do damage.
+#[test]
+fn a_load_clears_the_beams_taken_round() {
+    let _one = LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let mut w = world(None);
+    let flag = w.e.stewie_kept(
+        engine_core::extend::stewie::kept::BEAM_DECREASED_PLAYER_AMMO,
+        4,
+    );
+    w.e.mem.set_u8(flag, 1);
+    let message = nvse::plugins::Message {
+        kind: nvse::plugins::msg::PRE_LOAD_GAME,
+        data: 0,
+        len: 0,
+    };
+    listen(&mut w.e, &message);
+    assert_eq!(w.e.mem.u8(flag), 0);
+}
+
 /// The record's checks before it is applied: a form id whose file is no longer loaded (the save's
 /// index 1 maps to nothing) leaves the entry as it was; a file that moved in the load order (the
 /// save's index 1 is today's 3) resolves to the moved id; a looked-up form that is no ammunition
