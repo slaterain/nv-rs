@@ -27,6 +27,8 @@
 use engine_core::ptr::Ptr;
 use engine_core::typed::{Family, FamilyId, Threads};
 use engine_core::{entry, AbiFn};
+// The varargs entry by its bare name: the repo hygiene test finds a registration's module by it.
+use params::parse_parameters_entry;
 
 pub mod params;
 pub mod runner;
@@ -56,7 +58,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
             0x005e_1550,
             runner::run_line(Ptr, Ptr, i32, Ptr, Ptr, u32, Ptr, u32, bool, bool) -> bool
         ),
-        (0x005a_ccb0, params::parse_parameters_entry as AbiFn),
+        (0x005a_ccb0, parse_parameters_entry as AbiFn),
         entry!(0x005a_c750, params::set_action_flag(u32, Ptr, u32) -> bool),
         entry!(0x0041_af70, params::delete_locals(Ptr, u32) -> Ptr),
     ]
