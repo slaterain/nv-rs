@@ -44,26 +44,45 @@ const DEBUG_SEEN: u32 = TEST + 0x3c;
 const PIXEL_DELETE: u32 = TEST + 0x800;
 const PIXEL_VTABLE: u32 = TEST + 0x900;
 
-/// The getters, iterators and steps the translations call per vertex or texel.
-const PER_ELEMENT: [u32; 17] = [
+/// The getters, iterators and steps `0065a970`'s translation calls per morph or vertex.
+const MESH_IGNORED: [u32; 11] = [
     0x0065_7c00, // the EGM morph set's count
     0x0065_7c20, // its checked element
     0x0065_7bc0, // a morph's vertex count
     0x0060_b370, // the coordinates' row
     0x0062_9ab0, // the row's element
-    0x0044_a170, // a vector's begin iterator (the offsets)
+    0x0044_a170, // the offsets vector's begin
     0x0064_dda0, // the checked iterator's read
     0x0065_dae0, // its six-byte step
     0x0053_4570, // the strided array's read
     0x0045_34f0, // its bounds check (does nothing)
     0x0068_15c0, // the stack point's constructor (a leaf that answers its `this`)
+];
+
+/// What `0065b410`'s translation calls per morph and channel between its texel sums.
+const TINT_IGNORED: [u32; 6] = [
     0x0065_cea0, // the EGT morph set's count
     0x0065_cec0, // its checked element
     0x0065_cc70, // a channel's checked first byte
+    0x0060_b370, // the coordinates' row
+    0x0062_9ab0, // the row's element
     0x00ec_62c0, // `_ftol2`
-    0x0064_dbd0, // the values iterator's element
-    0x0064_ddf0, // its sixteen-byte step
 ];
+
+/// What `0064ceb0`'s translation calls per pixel and channel.
+const IMAGE_IGNORED: [u32; 3] = [
+    0x0064_dbd0, // the values iterator's element (its checked read)
+    0x0064_ddf0, // its sixteen-byte step
+    0x0040_4040, // the float floor (with its `_ftol2`)
+];
+
+/// A proxy for the vector at `vector` (its first word; the proxy's first word is the vector), as
+/// the checked iterators adopt it.
+fn proxy(e: &mut Engine, vector: u32) {
+    let proxy = e.mem.alloc(8);
+    e.mem.set_u32(proxy, vector);
+    e.mem.set_u32(vector, proxy);
+}
 
 fn ret(eax: u32) -> Ret {
     Ret {
@@ -232,7 +251,7 @@ fn egm(e: &mut Engine, vertices: u32, morphs: [u32; 2], short: u32, pattern: u32
             let morph = block + 0x1c * i;
             e.mem.set_u32(morph, value(i, set + 40, pattern));
             // Room for the additional vertices past the count (three more).
-            let count = if set == 0 && i + 1 == n {
+            let count = if set == 0 && i + 1 == n && short > 0 {
                 vertices.saturating_sub(short)
             } else {
                 vertices + 3
@@ -255,6 +274,7 @@ fn egm(e: &mut Engine, vertices: u32, morphs: [u32; 2], short: u32, pattern: u32
             let vector = morph + 4;
             e.mem.set_u32(vector + 0xc, offsets);
             e.mem.set_u32(vector + 0x10, offsets + 6 * count);
+            proxy(e, vector);
         }
     }
     data
@@ -298,7 +318,7 @@ fn facegen_head_apply_coordinates() {
     ))
     .family(&facegen::FACEGEN)
     .family(&leaf::LEAVES)
-    .ignore_calls(&PER_ELEMENT)
+    .ignore_calls(&MESH_IGNORED)
     .inputs(&[
         Input::Of(&[0, 1, 2, 3, 4]),
         Input::Of(&[12, 16, 32]),
@@ -477,6 +497,7 @@ fn tint_stand_ins(e: &mut Engine) {
         }
         e.mem.set_u32(a[0] + 0xc, values);
         e.mem.set_u32(a[0] + 0x10, values + 16 * a[1]);
+        proxy(e, a[0]);
         ret(0)
     });
     // `GetCompressedImage`: its own test; here the texture it answers.
@@ -494,7 +515,7 @@ fn facegen_head_apply_coordinate_texturing() {
         head::apply_coordinate_texturing(Ptr<_>, u32, u32, u32) -> bool
     ))
     .family(&leaf::LEAVES)
-    .ignore_calls(&PER_ELEMENT)
+    .ignore_calls(&TINT_IGNORED)
     .inputs(&[
         Input::Of(&[0, 1, 2, 3, 4, 5]),
         Input::Of(&[0, 1, 2]),
@@ -631,8 +652,7 @@ fn facegen_head_get_compressed_image() {
         head::get_compressed_image(Ptr<_>, f32, f32, f32, u32) -> u32
     ))
     .family(&leaf::LEAVES)
-    .ignore_calls(&PER_ELEMENT)
-    .ignore_calls(&[0x0040_4040])
+    .ignore_calls(&IMAGE_IGNORED)
     .inputs(&[
         Input::Of(&[0, 1, 2, 3]),
         Input::Of(&RANGES),
@@ -680,6 +700,7 @@ fn facegen_head_get_compressed_image() {
             .set_u32(image + 8, if case.word(9) == 1 { 0x0700_0040 } else { 0 });
         e.mem.set_u32(image + 0xc + 0xc, values);
         e.mem.set_u32(image + 0xc + 0x10, values + 16 * count);
+        proxy(e, image + 0xc);
         e.mem.set_u32(image + 0x24, width);
         e.mem.set_u32(image + 0x28, height);
         let size = e.mem.alloc(8);

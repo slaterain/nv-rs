@@ -183,24 +183,41 @@ fn coefficient_at(e: &mut Engine, set: u32, index: u32) -> u32 {
 // The EGM morphs (0065a970)
 // ---------------------------------------------------------------------------------------------
 
-/// A checked iterator over a morph's vertex offsets (three `i16`s, six bytes each): `{container,
-/// position}` as `0044a170` makes it; its read (`0064dda0`) and step (`0065dae0`) call the
-/// invalid-parameter function when the container is null or the position is at or past the
-/// container's last (`+0x10`).
+/// A checked iterator's two tests (`0064dda0`'s and the steps'): it has a proxy (its first word;
+/// the vector's own first word, which the iterator adopted), and its position is before the last
+/// element of the proxy's container (the proxy's first word; its `+0x10`). Each failure calls the
+/// invalid-parameter function and goes on.
+fn check_iterator(e: &mut Engine, proxy: u32, at: u32) {
+    check(e, proxy != 0);
+    let owner = if proxy == 0 { 0 } else { e.mem.u32(proxy) };
+    let last = e.mem.u32(owner.wrapping_add(0x10));
+    check(e, at < last);
+}
+
+/// The checked iterator over a morph's vertex offsets (three `i16`s, six bytes each): `{proxy,
+/// position}` as the vector's begin (`0044a170`) makes it; read (`0064dda0`) and stepped
+/// (`0065dae0`) with [`check_iterator`]'s tests.
 struct Offsets {
-    container: u32,
+    proxy: u32,
     at: u32,
 }
 
 impl Offsets {
-    fn valid(&self, e: &Engine) -> bool {
-        self.container != 0 && self.at < e.mem.u32(self.container.wrapping_add(0x10))
+    /// The vector's begin (`0044a170`, `0065da80`): the vector, its first element in range, the
+    /// vector's proxy adopted.
+    fn begin(e: &mut Engine, vector: u32) -> Offsets {
+        let first = e.mem.u32(vector.wrapping_add(0xc));
+        let last = e.mem.u32(vector.wrapping_add(0x10));
+        check(e, vector != 0 && first <= last);
+        Offsets {
+            proxy: e.mem.u32(vector),
+            at: first,
+        }
     }
 
-    /// The three offsets at the position (the read's check first).
+    /// The three offsets at the position (the read's checks first).
     fn read(&self, e: &mut Engine) -> [i16; 3] {
-        let ok = self.valid(e);
-        check(e, ok);
+        check_iterator(e, self.proxy, self.at);
         [
             e.mem.i16(self.at),
             e.mem.i16(self.at.wrapping_add(2)),
@@ -210,14 +227,12 @@ impl Offsets {
 
     /// One component, read through its own checked read (the tail loops read each axis so).
     fn read_axis(&self, e: &mut Engine, axis: u32) -> i16 {
-        let ok = self.valid(e);
-        check(e, ok);
+        check_iterator(e, self.proxy, self.at);
         e.mem.i16(self.at.wrapping_add(2 * axis))
     }
 
     fn step(&mut self, e: &mut Engine) {
-        let ok = self.valid(e);
-        check(e, ok);
+        check_iterator(e, self.proxy, self.at);
         self.at = self.at.wrapping_add(6);
     }
 }
@@ -407,10 +422,7 @@ fn apply_morph(
     let stride = e.mem.u32(iterator.wrapping_add(4));
     let mut extra = first_extra;
     let offsets_block = e.mem.alloc(8);
-    let mut offsets = Offsets {
-        container: morph.wrapping_add(4),
-        at: e.mem.u32(morph.wrapping_add(4).wrapping_add(0xc)),
-    };
+    let mut offsets = Offsets::begin(e, morph.wrapping_add(4));
     let points_block = e.mem.alloc(0x40);
     // What the points block holds at the end: the last group of four, then the last single one
     // over its first three words.
@@ -497,7 +509,7 @@ fn apply_morph(
     if let Some(point) = last_one {
         write_words(e, points_block, &point);
     }
-    e.mem.set_u32(offsets_block, offsets.container);
+    e.mem.set_u32(offsets_block, offsets.proxy);
     e.mem.set_u32(offsets_block.wrapping_add(4), offsets.at);
     e.mem.free(points_block);
     e.mem.free(offsets_block);
@@ -1020,9 +1032,9 @@ pub fn get_compressed_image(
 }
 
 /// The pixel loop of [`get_compressed_image`]: `pixels` pixels of `channels` bytes from the values
-/// at the checked iterator `{container, position}` at `iterator` (four floats a value), the
+/// at the checked iterator `{proxy, position}` at `iterator` (four floats a value), the
 /// iterator stepped after each pixel with its previous words left in `scratch` (`0064dbf0`). In
-/// one pass with one write of the bytes when every value lies before the container's end (as a
+/// one pass with one write of the bytes when every value lies before the end of the proxy's container (as a
 /// face's do); otherwise value by value with the iterator's checks, as the exe reads them.
 #[allow(clippy::too_many_arguments)]
 fn compress_pixels(
@@ -1039,10 +1051,11 @@ fn compress_pixels(
     if pixels == 0 {
         return;
     }
-    let container = e.mem.u32(iterator);
+    let proxy = e.mem.u32(iterator);
     let start = e.mem.u32(iterator + 4);
-    let in_range = container != 0 && {
-        let end = e.mem.u32(container.wrapping_add(0x10));
+    let in_range = proxy != 0 && {
+        let owner = e.mem.u32(proxy);
+        let end = e.mem.u32(owner.wrapping_add(0x10));
         let last = u64::from(start) + 16 * (u64::from(pixels) - 1);
         last < u64::from(end)
     };
@@ -1065,26 +1078,24 @@ fn compress_pixels(
         e.mem.write(bytes, &out);
         let last = start.wrapping_add(16 * (pixels - 1));
         e.mem.set_u32(iterator + 4, last.wrapping_add(16));
-        e.mem.set_u32(scratch, container);
+        e.mem.set_u32(scratch, proxy);
         e.mem.set_u32(scratch + 4, last);
         return;
     }
     let mut out = bytes;
     for _ in 0..pixels {
         for channel in 0..channels {
-            let (container, at) = (e.mem.u32(iterator), e.mem.u32(iterator + 4));
-            let ok = container != 0 && at < e.mem.u32(container.wrapping_add(0x10));
-            check(e, ok);
+            let (proxy, at) = (e.mem.u32(iterator), e.mem.u32(iterator + 4));
+            check_iterator(e, proxy, at);
             let bits = e.mem.u32(at.wrapping_add(4 * channel));
             let byte = compress_channel(e, bits, min, max, scale);
             e.mem.set_u8(out.wrapping_add(channel), byte);
         }
         out = out.wrapping_add(channels);
-        let (container, at) = (e.mem.u32(iterator), e.mem.u32(iterator + 4));
-        let ok = container != 0 && at < e.mem.u32(container.wrapping_add(0x10));
-        check(e, ok);
+        let (proxy, at) = (e.mem.u32(iterator), e.mem.u32(iterator + 4));
+        check_iterator(e, proxy, at);
         e.mem.set_u32(iterator + 4, at.wrapping_add(0x10));
-        e.mem.set_u32(scratch, container);
+        e.mem.set_u32(scratch, proxy);
         e.mem.set_u32(scratch + 4, at);
     }
 }
