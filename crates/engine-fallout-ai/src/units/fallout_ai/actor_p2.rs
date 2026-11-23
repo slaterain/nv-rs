@@ -3759,9 +3759,12 @@ fn update_movement_mode(e: &mut Engine, f: &mut UpdateFrame) {
 /// continuous beam (+0x1A0) keeps it firing (the beam's slot `0x310` with 0.0, as the player's
 /// update does) while its process' current animation action (slot `0x3e4`, a signed word) is an
 /// attack one (2 to 6: attack, follow-through, latency, throw attach, throw release); otherwise the
-/// beam is set to fade (flag 0x20 at +0xC8). No process counts as no attack.
+/// beam is set to fade (flag 0x20 at +0xC8). No process counts as no attack. Tweaks installs it
+/// with S0130.01 (the shooter's beam pointer cleared when the beam is freed); here it acts only
+/// while that row is on too, so it never follows a stale pointer (a guard against a crash).
 fn update_npc_beam(e: &mut Engine, this: Ptr<Actor>) {
     if !e.stewie(engine_core::extend::stewie::NPC_CONTINUOUS_BEAM)
+        || !e.stewie(engine_core::extend::stewie::BEAM_SHOOTER_POINTER)
         || this.addr() == e.global::<u32>(PLAYER_CHARACTER)
     {
         return;
@@ -11880,21 +11883,24 @@ mod tests {
     /// S0130.02 (`ContinuousBeamProjectileCrashFix`, `OnActorUpdate_UpdateBeam`): an NPC's beam
     /// (+0x1A0) is fired on (slot `0x310` with 0.0) while its process' animation action (slot
     /// `0x3e4`) is 2 to 6 and set to fade (0x20 at +0xC8) for any other (-1 included); the
-    /// player's beam and the row off are left alone.
+    /// player's beam, the row off and S0130.01 (the beam pointer's guard) off are left alone.
     #[test]
     fn s0130_02_an_npcs_beam_follows_its_attack() {
-        // (row, the player, action, fired, fading)
-        for (on, is_player, action, fired, fading) in [
-            (false, false, 2u32, 0usize, false),
-            (true, false, 2, 1, false),
-            (true, false, 6, 1, false),
-            (true, false, 7, 0, true),
-            (true, false, 1, 0, true),
-            (true, false, 0xffff, 0, true),
-            (true, true, 7, 0, false),
+        // (row, S0130.01, the player, action, fired, fading)
+        for (on, pointer, is_player, action, fired, fading) in [
+            (false, true, false, 2u32, 0usize, false),
+            (true, true, false, 2, 1, false),
+            (true, true, false, 6, 1, false),
+            (true, true, false, 7, 0, true),
+            (true, true, false, 1, 0, true),
+            (true, true, false, 0xffff, 0, true),
+            (true, true, true, 7, 0, false),
+            (true, false, false, 2, 0, false),
+            (true, false, false, 7, 0, false),
         ] {
             let mut e = engine2();
             e.set_stewie(engine_core::extend::stewie::NPC_CONTINUOUS_BEAM, on);
+            e.set_stewie(engine_core::extend::stewie::BEAM_SHOOTER_POINTER, pointer);
             let actor = actor2(&mut e);
             let other = actor2(&mut e);
             set_player(&mut e, if is_player { actor } else { other });
@@ -11921,6 +11927,53 @@ mod tests {
             }
             let flags = if fading { 0x24 } else { 0x4 };
             assert_eq!(e.mem.u32(beam + 0xc8), flags, "on {on} action {action}");
+        }
+    }
+
+    /// S0130.02 reached through `Actor::Update`'s position part ([`update_position`], before the
+    /// call at `0x889869`): an NPC's beam is fired on (slot `0x310` with 0.0) during its attack
+    /// (action 2) and set to fade after it (action 7) with the rows on; off, `Actor::Update`
+    /// leaves it alone.
+    #[test]
+    fn s0130_02_actor_update_moves_an_npcs_beam() {
+        // (rows, action, fired, fading)
+        for (on, action, fired, fading) in [
+            (false, 2u32, 0usize, false),
+            (false, 7, 0, false),
+            (true, 2, 1, false),
+            (true, 7, 0, true),
+        ] {
+            let mut e = engine2();
+            e.set_stewie(engine_core::extend::stewie::NPC_CONTINUOUS_BEAM, on);
+            e.set_stewie(engine_core::extend::stewie::BEAM_SHOOTER_POINTER, on);
+            let actor = actor2(&mut e);
+            let other = actor2(&mut e);
+            set_player(&mut e, other);
+            with_process(&mut e, actor);
+            slot(&mut e, PROCESS_TABLE, 0x3e4, eax(action));
+            slot(&mut e, OTHER_TABLE, 0x310, eax(0));
+            let beam = e.mem.alloc(0x160);
+            e.mem.set_u32(beam, OTHER_TABLE);
+            e.mem.set_u32(beam + 0xc8, 0x4);
+            e.mem.set_u32(actor.addr() + 0x1a0, beam);
+            e.mem.set_u8(GLOBAL_FLAG_011F3E60, 1);
+            e.call_log = Some(vec![]);
+            update_position(&mut e, &update_frame(actor, 0, 0, 0));
+            let fires: Vec<_> = logged(&e)
+                .into_iter()
+                .filter(|entry| entry.0 == slot_target(OTHER_TABLE, 0x310))
+                .collect();
+            assert_eq!(fires.len(), fired, "on {on} action {action}");
+            if fired == 1 {
+                assert_eq!(fires[0].1, vec![beam, 0]);
+            }
+            let flags = if fading { 0x24 } else { 0x4 };
+            assert_eq!(e.mem.u32(beam + 0xc8), flags, "on {on} action {action}");
+            assert_eq!(
+                e.mem.u8(GLOBAL_FLAG_011F3E60),
+                0,
+                "the position part ran to its end"
+            );
         }
     }
 

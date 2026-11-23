@@ -1363,6 +1363,8 @@ pub fn begin_main_frame(e: &mut Engine, main: &mut MainThread) -> bool {
     crate::profile::resync(&e.call_stack);
     crate::profile::set_phase(crate::profile::Phase::Switch);
     let baton = Baton(e as *mut Engine);
+    // The host's own steps since its take of the last frame end here (the hitch log's split of its time).
+    crate::stage_time::host_mark(crate::stage_time::HostMark::HandOver);
     // A coroutine that is gone answers its end at the finish (its channel is closed).
     let _ = main.link.resume.send(baton);
     main.in_flight = true;
@@ -1452,9 +1454,12 @@ pub fn end_main_frame(e: &mut Engine) -> bool {
             }
         }
     });
+    // Main's thread runs again, then has the kernel lock back (the hitch log's split of the host's time).
+    crate::stage_time::host_mark(crate::stage_time::HostMark::MainAwake);
     if let (Some(depth), Some(r)) = (held, &e.real) {
         r.take_kernel(depth);
     }
+    crate::stage_time::host_mark(crate::stage_time::HostMark::MainLocked);
     crate::profile::holding(MAIN_THREAD_ID);
     load_fpu(e);
     true

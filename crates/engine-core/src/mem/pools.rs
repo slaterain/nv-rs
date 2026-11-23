@@ -13,11 +13,16 @@
 //!   threads gave back, newest first, then fresh slots of the pool's newest run, then a new run)
 //!   under the shared memory's lock; a stack over [`CACHE_MAX`] gives its oldest [`BATCH`] back to
 //!   the stock. So a block freed on another thread than the one that took it goes back in a batch.
+//! - A run whose every slot is back in the stock (none live, none in a thread's stack) gives its
+//!   heap block back when its pool's stock still holds [`SPARE_BYTES`] in blocks of other runs:
+//!   a one-off peak in one pool does not keep its memory for the rest of the session. Its number
+//!   is used again for the pool's next run.
 //! - As with the heap's quick stacks, a freed block comes back only for a request of its own pool (a
 //!   12-byte object's block never for a 16-byte one): a stale pointer finds an object of its own
 //!   pool or the old bytes, as in the original. Blocks are 8-byte aligned and zero-filled when
 //!   handed out; nothing else is written into guest memory.
-//! - Runs stay live heap blocks for good (the heap's checks and census count them as such).
+//! - Runs are live heap blocks while they are held (the heap's checks and census see them; a free of
+//!   a run's own heap block stops the run, as a free of any block that is not live does).
 //! - With threads stepped there is one `Mem`, one cache and the same order every run.
 
 use super::{HEAP_BASE, HEAP_END, PAGE, PAGES, PAGE_BITS};
@@ -29,30 +34,63 @@ pub(super) const RUN_BYTES: u32 = 0x4_0000;
 /// The heap block a run is cut from: a page more, so the run can start on a page boundary and own
 /// every page it covers.
 pub(super) const RUN_BLOCK: u32 = RUN_BYTES + PAGE as u32;
-/// The most runs there can be: the heap's two ranges in runs (the run numbers fit 16 bits).
+/// The most runs there can be at once: the heap's two ranges in runs (the run numbers fit 16 bits).
 const MAX_RUNS: usize = ((HEAP_END - HEAP_BASE) / RUN_BYTES) as usize;
 const _: () = assert!(MAX_RUNS < u16::MAX as usize);
+/// Where a run cut from the heap block at `block` starts: the first page boundary past the block's
+/// start (so no slot of the run ever has the block's own address, and a stray free of the block is
+/// told from a free of the first slot).
+pub(super) fn run_start(block: u32) -> u32 {
+    (block + PAGE as u32) & !(PAGE as u32 - 1)
+}
 /// The blocks a thread's stack takes from the stock at once, and gives back at once.
 pub(super) const BATCH: usize = 32;
 /// The most free blocks a thread's stack of one pool holds before it gives [`BATCH`] back.
 pub(super) const CACHE_MAX: usize = 2 * BATCH;
+/// The bytes of other runs' free blocks a pool's stock keeps before an empty run gives its memory
+/// back: a menu's blocks (a few MB over all pools) are not given back between its openings, a
+/// one-off peak of many MB in one pool is.
+pub(super) const SPARE_BYTES: usize = 4 << 20;
+/// The census line is written again each time the runs hold this many more bytes than at the last.
+pub(super) const REPORT_STEP: u64 = 32 << 20;
 
-/// One run: `slots` blocks of `stride` bytes from `start`, of pool `class`.
+/// One run: slots of `stride` bytes from `start`, of pool `class`, cut from the heap block at
+/// `block` (0 while the run is given back and its number unused).
 pub(super) struct Run {
-    pub(super) start: u32,
+    start: AtomicU32,
+    block: AtomicU32,
     pub(super) class: usize,
     pub(super) stride: u32,
     /// The size each slot was asked for while it is live, 0 while it is free.
     asked: Box<[AtomicU16]>,
+    /// How many slots are live.
+    live: AtomicU32,
 }
 
 impl Run {
+    /// The first slot.
+    #[inline]
+    pub(super) fn start(&self) -> u32 {
+        self.start.load(Ordering::Relaxed)
+    }
+
+    /// The heap block the run is cut from (0 while given back).
+    #[inline]
+    pub(super) fn block(&self) -> u32 {
+        self.block.load(Ordering::Relaxed)
+    }
+
+    /// How many slots the run has.
+    fn slots(&self) -> usize {
+        self.asked.len()
+    }
+
     /// The slot `addr` starts; a stop for an address inside the run that starts none.
     fn slot(&self, addr: u32) -> usize {
-        let offset = addr - self.start;
+        let offset = addr - self.start();
         let slot = (offset / self.stride) as usize;
         assert!(
-            offset % self.stride == 0 && slot < self.asked.len(),
+            offset % self.stride == 0 && slot < self.slots(),
             "free of {addr:08x}, which is not a live heap block (inside a run of {}-byte blocks)",
             self.stride
         );
@@ -61,7 +99,7 @@ impl Run {
 
     /// The size `addr` was asked for, if it is a live block.
     pub(super) fn asked_of(&self, addr: u32) -> Option<u32> {
-        let offset = addr.wrapping_sub(self.start);
+        let offset = addr.wrapping_sub(self.start());
         if offset % self.stride != 0 {
             return None;
         }
@@ -72,24 +110,29 @@ impl Run {
         }
     }
 
-    /// Marks `addr` live, asked for `asked` bytes (at least 1).
+    /// Marks `addr` live, asked for `asked` bytes (at least 1). A slot is only ever touched by the
+    /// one thread that holds it (in its stack, or live), so a load and a store do (no locked swap).
     pub(super) fn take(&self, addr: u32, asked: u32) {
         let slot = self.slot(addr);
-        let was = self.asked[slot].swap(asked.max(1) as u16, Ordering::Relaxed);
+        let was = self.asked[slot].load(Ordering::Relaxed);
+        self.asked[slot].store(asked.max(1) as u16, Ordering::Relaxed);
         assert!(
             was == 0,
             "the thread heap handed out {addr:08x}, which is live"
         );
+        self.live.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Marks `addr` free; a stop when it is not live (a second free).
     pub(super) fn give(&self, addr: u32) {
         let slot = self.slot(addr);
-        let was = self.asked[slot].swap(0, Ordering::Relaxed);
+        let was = self.asked[slot].load(Ordering::Relaxed);
         assert!(
             was != 0,
             "free of {addr:08x}, which is not a live heap block"
         );
+        self.asked[slot].store(0, Ordering::Relaxed);
+        self.live.fetch_sub(1, Ordering::Relaxed);
     }
 
     /// Sets the asked size of the live block `addr`.
@@ -105,9 +148,10 @@ impl Run {
 
     /// The live blocks of the run and the sizes they were asked for.
     pub(super) fn live(&self) -> impl Iterator<Item = (u32, u32)> + '_ {
-        self.asked.iter().enumerate().filter_map(|(i, a)| {
+        let start = self.start();
+        self.asked.iter().enumerate().filter_map(move |(i, a)| {
             let asked = a.load(Ordering::Relaxed);
-            (asked != 0).then(|| (self.start + i as u32 * self.stride, u32::from(asked)))
+            (asked != 0).then(|| (start + i as u32 * self.stride, u32::from(asked)))
         })
     }
 }
@@ -116,8 +160,10 @@ impl Run {
 pub(super) struct Tables {
     /// For each page of the 4 GB space, the number of the run that owns it plus 1 (0: none).
     by_page: Box<[AtomicU16]>,
+    /// The runs by number. A number keeps its pool for good: a run given back leaves its number
+    /// to the pool's next run (`start` and `block` set anew).
     runs: Box<[OnceLock<Run>]>,
-    /// How many runs there are.
+    /// How many numbers have been used.
     count: AtomicU32,
 }
 
@@ -130,57 +176,109 @@ impl Tables {
         }
     }
 
-    /// The run `addr` lies in, if any.
+    /// The number of the run `addr` lies in, if any.
     #[inline]
-    pub(super) fn run_of(&self, addr: u32) -> Option<&Run> {
+    fn number_of(&self, addr: u32) -> Option<usize> {
         // Acquire: a run is complete before its pages name it (`add`).
         match self.by_page[(addr >> PAGE_BITS) as usize].load(Ordering::Acquire) {
             0 => None,
-            n => self.runs[usize::from(n - 1)].get(),
+            n => Some(usize::from(n - 1)),
         }
     }
 
-    /// Every run made so far.
-    pub(super) fn runs(&self) -> impl Iterator<Item = &Run> + '_ {
-        let n = self.count.load(Ordering::Acquire) as usize;
-        self.runs[..n].iter().filter_map(OnceLock::get)
+    /// The run `addr` lies in, if any.
+    #[inline]
+    pub(super) fn run_of(&self, addr: u32) -> Option<&Run> {
+        self.runs[self.number_of(addr)?].get()
     }
 
-    /// Records run `number` of pool `class` (block size `stride`) at `start` (page-aligned) and
-    /// names it on its pages. Called under the shared memory's lock, so numbers come in order.
-    fn add(&self, number: usize, start: u32, class: usize, stride: u32) {
-        let slots = (RUN_BYTES / stride) as usize;
-        let run = Run {
-            start,
+    /// Whether `addr` is the heap block of a run that is held (a free of it is a stray free).
+    pub(super) fn is_run_block(&self, addr: u32) -> bool {
+        let start = run_start(addr);
+        self.run_of(start).is_some_and(|r| r.block() == addr)
+    }
+
+    /// Every run held now.
+    pub(super) fn runs(&self) -> impl Iterator<Item = &Run> + '_ {
+        let n = self.count.load(Ordering::Acquire) as usize;
+        self.runs[..n]
+            .iter()
+            .filter_map(OnceLock::get)
+            .filter(|r| r.block() != 0)
+    }
+
+    /// Records run `number` of pool `class` (block size `stride`) at `start` (page-aligned, cut
+    /// from heap block `block`) and names it on its pages: a new number, or one a run of the same
+    /// pool gave back. Called under the shared memory's lock.
+    fn add(&self, number: usize, start: u32, block: u32, class: usize, stride: u32) {
+        let run = self.runs[number].get_or_init(|| Run {
+            start: AtomicU32::new(0),
+            block: AtomicU32::new(0),
             class,
             stride,
-            asked: (0..slots).map(|_| AtomicU16::new(0)).collect(),
-        };
+            asked: (0..(RUN_BYTES / stride) as usize)
+                .map(|_| AtomicU16::new(0))
+                .collect(),
+            live: AtomicU32::new(0),
+        });
         assert!(
-            self.runs[number].set(run).is_ok(),
-            "run {number} made twice"
+            run.class == class && run.block() == 0,
+            "run {number} is held, or another pool's"
         );
-        let first = (start >> PAGE_BITS) as usize;
+        run.start.store(start, Ordering::Relaxed);
+        run.block.store(block, Ordering::Relaxed);
         let tag = u16::try_from(number + 1).expect("run numbers fit 16 bits");
+        self.tag(start, tag);
+        let count = self.count.load(Ordering::Relaxed);
+        self.count
+            .store(count.max(number as u32 + 1), Ordering::Release);
+    }
+
+    /// Names run `tag - 1` (0: none) on the pages from `start`.
+    fn tag(&self, start: u32, tag: u16) {
+        let first = (start >> PAGE_BITS) as usize;
         for page in first..first + (RUN_BYTES as usize >> PAGE_BITS) {
             self.by_page[page].store(tag, Ordering::Release);
         }
-        self.count.store(number as u32 + 1, Ordering::Release);
+    }
+
+    /// Takes run `number`'s pages back (no live slot, none in a thread's stack); answers its heap
+    /// block, which the caller frees.
+    fn remove(&self, number: usize) -> u32 {
+        let run = self.runs[number].get().expect("a held run");
+        assert_eq!(
+            run.live.load(Ordering::Relaxed),
+            0,
+            "run {number} given back with live blocks"
+        );
+        self.tag(run.start(), 0);
+        run.block.swap(0, Ordering::Relaxed)
     }
 }
 
-/// One pool's stock, kept by the shared memory under its lock: blocks the threads gave back (the
-/// newest last), and the newest run with the next of its slots never handed out.
+/// One pool's stock, kept by the shared memory under its lock: the runs holding blocks the threads
+/// gave back (the last given to first; a run whose blocks were all taken again, or that gave its
+/// memory back, is skipped when met), how many blocks those are, the newest run with the next of its
+/// slots never handed out, and the numbers of its runs that gave their memory back.
 #[derive(Default)]
 struct Stock {
-    given_back: Vec<u32>,
+    with_free: Vec<usize>,
+    free_count: usize,
     newest: Option<(usize, u32)>,
+    unused: Vec<usize>,
 }
 
 /// Every pool's stock and the runs made (the shared memory's, under its lock).
 pub(super) struct Stocks {
     pools: Vec<Stock>,
-    runs: usize,
+    /// How many run numbers have been used.
+    numbers: usize,
+    /// For each run number, the blocks of it given back, the newest last.
+    free: Vec<Vec<u32>>,
+    /// How many runs gave their memory back.
+    pub(super) runs_given_back: u64,
+    /// The bytes held in runs at which the census line is written next.
+    pub(super) next_line: u64,
 }
 
 impl Default for Stocks {
@@ -189,7 +287,10 @@ impl Default for Stocks {
             pools: (0..super::heap::POOL_COUNT)
                 .map(|_| Stock::default())
                 .collect(),
-            runs: 0,
+            numbers: 0,
+            free: Vec::new(),
+            runs_given_back: 0,
+            next_line: 0,
         }
     }
 }
@@ -239,26 +340,77 @@ impl Cache {
 }
 
 impl Stocks {
-    /// Takes the blocks given back to pool `class`.
-    pub(super) fn give_back(&mut self, class: usize, blocks: impl IntoIterator<Item = u32>) {
-        self.pools[class].given_back.extend(blocks);
+    /// Takes the blocks given back to pool `class`. Answers the heap blocks of the pool's runs that
+    /// gave their memory back meanwhile (every slot in the stock, and [`SPARE_BYTES`] in blocks of
+    /// other runs left in it besides), for the caller to free.
+    pub(super) fn give_back(
+        &mut self,
+        tables: &Tables,
+        class: usize,
+        blocks: impl IntoIterator<Item = u32>,
+    ) -> Vec<u32> {
+        let mut full = Vec::new();
+        for b in blocks {
+            let number = tables
+                .number_of(b)
+                .expect("a thread heap block lies in a run");
+            let list = &mut self.free[number];
+            list.push(b);
+            let stock = &mut self.pools[class];
+            if list.len() == 1 {
+                stock.with_free.push(number);
+            }
+            stock.free_count += 1;
+            if list.len() == tables.runs[number].get().map_or(0, Run::slots) {
+                full.push(number);
+            }
+        }
+        let mut freed = Vec::new();
+        for number in full {
+            let run = tables.runs[number].get().expect("a held run");
+            let mine = self.free[number].len();
+            let stock = &mut self.pools[class];
+            if mine != run.slots()
+                || (stock.free_count - mine) * (run.stride as usize) < SPARE_BYTES
+            {
+                continue;
+            }
+            // Its entry in `with_free` is skipped when met (its list is empty, or another run's
+            // of the pool by then): nothing is scanned under the lock.
+            self.free[number] = Vec::new();
+            stock.free_count -= mine;
+            stock.unused.push(number);
+            self.runs_given_back += 1;
+            freed.push(tables.remove(number));
+        }
+        freed
     }
 
     /// Fills `out` (empty) with up to [`BATCH`] blocks of pool `class` (at least one), so that the
-    /// last is handed out first: given-back blocks, newest first, then fresh slots of the newest
-    /// run in address order. `new_run` makes a run of the pool (`(number, start)`) when the newest
-    /// has no fresh slot left.
+    /// last is handed out first: given-back blocks, the newest first, else fresh slots of the newest
+    /// run in address order. `new_run` takes a heap block for a run (`(block, start)`) when the
+    /// newest has no fresh slot left; the run takes a number the pool gave back, else a new one.
     pub(super) fn restock(
         &mut self,
         tables: &Tables,
         class: usize,
         stride: u32,
         out: &mut Vec<u32>,
-        mut new_run: impl FnMut() -> u32,
+        mut new_run: impl FnMut() -> (u32, u32),
     ) {
         let stock = &mut self.pools[class];
-        let from = stock.given_back.len().saturating_sub(BATCH);
-        out.extend(stock.given_back.drain(from..));
+        while out.len() < BATCH {
+            let Some(&number) = stock.with_free.last() else {
+                break;
+            };
+            let list = &mut self.free[number];
+            let take = (BATCH - out.len()).min(list.len());
+            out.extend(list.drain(list.len() - take..));
+            stock.free_count -= take;
+            if list.is_empty() {
+                stock.with_free.pop();
+            }
+        }
         if !out.is_empty() {
             return;
         }
@@ -266,17 +418,65 @@ impl Stocks {
         let (number, next) = match stock.newest {
             Some((number, next)) if next < slots => (number, next),
             _ => {
-                let start = new_run();
-                let number = self.runs;
-                tables.add(number, start, class, stride);
-                self.runs += 1;
+                let (block, start) = new_run();
+                let number = stock.unused.pop().unwrap_or_else(|| {
+                    self.numbers += 1;
+                    self.numbers - 1
+                });
+                if self.free.len() <= number {
+                    self.free.resize_with(number + 1, Vec::new);
+                }
+                tables.add(number, start, block, class, stride);
                 (number, 0)
             }
         };
-        let start = tables.runs[number].get().expect("the newest run").start;
+        let start = tables.runs[number].get().expect("the newest run").start();
         let end = (next + BATCH as u32).min(slots);
         out.extend((next..end).rev().map(|slot| start + slot * stride));
         self.pools[class].newest = Some((number, end));
+    }
+}
+
+/// The thread heap's census: the runs held and their bytes, the blocks live in them and the bytes
+/// those hold, and how many runs gave their memory back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ThreadHeapCensus {
+    pub runs: u32,
+    pub run_bytes: u64,
+    pub live_blocks: u64,
+    pub live_bytes: u64,
+    pub runs_given_back: u64,
+}
+
+impl ThreadHeapCensus {
+    pub(super) fn of(tables: &Tables, stocks: Option<&Stocks>) -> Self {
+        let mut c = ThreadHeapCensus {
+            runs_given_back: stocks.map_or(0, |s| s.runs_given_back),
+            ..Default::default()
+        };
+        for run in tables.runs() {
+            let live = u64::from(run.live.load(Ordering::Relaxed));
+            c.runs += 1;
+            c.run_bytes += u64::from(RUN_BLOCK);
+            c.live_blocks += live;
+            c.live_bytes += live * u64::from(run.stride);
+        }
+        c
+    }
+}
+
+impl std::fmt::Display for ThreadHeapCensus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "thread heap: {} runs hold {:.1} MB, {} live blocks {:.1} MB in them; {} runs gave their \
+             memory back so far",
+            self.runs,
+            self.run_bytes as f64 / 1_048_576.0,
+            self.live_blocks,
+            self.live_bytes as f64 / 1_048_576.0,
+            self.runs_given_back
+        )
     }
 }
 #[cfg(test)]
@@ -453,6 +653,54 @@ mod tests {
     }
 
     #[test]
+    fn a_peak_freed_on_another_thread_gives_runs_back_and_comes_back_whole() {
+        let mut m = on();
+        m.start_sharing();
+        // Over 4 MB in one pool, tagged, freed on another thread whose memory then goes away.
+        let per_run = (super::RUN_BYTES / 600) as usize;
+        let n = 24 * per_run;
+        let peak: Vec<u32> = (0..n)
+            .map(|i| {
+                let a = m.alloc_asked(596);
+                m.set_u32(a, i as u32 | 0x8000_0000);
+                a
+            })
+            .collect();
+        let mut other = m.view();
+        let freed = peak.clone();
+        std::thread::spawn(move || {
+            for (i, a) in freed.into_iter().enumerate() {
+                assert_eq!(
+                    other.u32(a),
+                    i as u32 | 0x8000_0000,
+                    "block {a:08x} changed hands while live"
+                );
+                other.free_asked(a);
+            }
+        })
+        .join()
+        .expect("the other thread");
+        let census = m.thread_heap_census().expect("on");
+        assert!(census.runs_given_back >= 1, "{census}");
+        assert_eq!(census.live_blocks, 0);
+        // The first thread takes as many again: each block once, zero-filled, its own while live.
+        let mut seen = std::collections::HashSet::new();
+        let again: Vec<u32> = (0..n)
+            .map(|i| {
+                let a = m.alloc_asked(596);
+                assert!(seen.insert(a), "{a:08x} handed out twice");
+                assert!(m.bytes(a, 596).iter().all(|&b| b == 0), "zero-filled");
+                m.set_u32(a, i as u32);
+                a
+            })
+            .collect();
+        for (i, a) in again.into_iter().enumerate() {
+            assert_eq!(m.u32(a), i as u32, "block {a:08x} changed hands while live");
+            m.free_asked(a);
+        }
+    }
+
+    #[test]
     fn many_threads_never_share_a_live_block() {
         let mut m = on();
         m.start_sharing();
@@ -494,5 +742,132 @@ mod tests {
         for t in threads {
             t.join().expect("a thread");
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "not a live heap block")]
+    fn a_free_of_a_runs_own_heap_block_stops() {
+        let mut m = on();
+        let a = m.alloc_asked(12);
+        let block = m
+            .pools
+            .as_deref()
+            .and_then(|t| t.run_of(a))
+            .map(super::Run::block);
+        m.free(block.expect("a run"));
+    }
+
+    /// How many run numbers have been used.
+    fn numbers(m: &Mem) -> u32 {
+        m.pools
+            .as_deref()
+            .map_or(0, |t| t.count.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    #[test]
+    fn an_empty_run_gives_its_memory_back_and_another_pool_uses_it() {
+        let mut m = on();
+        // A one-off peak: 24 runs of the 596-byte pool (436 blocks a run, 6.1 MB), then all freed: the
+        // runs that fill up once the pool keeps 4 MB of others give their memory back.
+        let per_run = (super::RUN_BYTES / 600) as usize;
+        let peak: Vec<u32> = (0..24 * per_run).map(|_| m.alloc_asked(596)).collect();
+        let held = m.thread_heap_census().expect("on");
+        assert_eq!((held.runs, held.live_blocks), (24, 24 * per_run as u64));
+        assert_eq!(numbers(&m), 24);
+        let top = m.heap_top();
+        for &b in &peak {
+            m.free_asked(b);
+        }
+        let after = m.thread_heap_census().expect("on");
+        assert!(after.runs_given_back >= 1, "{after}");
+        assert_eq!(after.runs as u64 + after.runs_given_back, 24);
+        assert_eq!(after.live_blocks, 0);
+        // A run given back names none of its pages any more: its addresses are no thread heap blocks.
+        let gone: Vec<u32> = peak
+            .iter()
+            .copied()
+            .filter(|&a| run_of(&m, a).is_none())
+            .collect();
+        assert_eq!(gone.len(), after.runs_given_back as usize * per_run);
+        assert!(gone.iter().all(|&a| m.asked_size(a).is_none()));
+        let (low, high) = (
+            gone.iter().min().copied().unwrap_or(0),
+            gone.iter().max().copied().unwrap_or(0) + 600,
+        );
+        // Another pool's new run takes the memory given back: the heap does not grow.
+        let small = m.alloc_asked(8);
+        assert!(m.heap_top() <= top, "{:08x} > {top:08x}", m.heap_top());
+        m.free_asked(small);
+        // The heap's own blocks land in the pages given back, and their frees and sizes are the
+        // heap's (a page still naming its old run would take them for a thread heap block).
+        let big: Vec<u32> = (0..800).map(|_| m.alloc_asked(2000)).collect();
+        assert!(big.iter().any(|&a| (low..high).contains(&a)));
+        for &a in &big {
+            assert_eq!(run_of(&m, a), None);
+            assert_eq!(m.asked_size(a), Some(2000));
+            m.free_asked(a);
+        }
+        // And the pool's own numbers are used again for its next runs: no new number.
+        let used = numbers(&m);
+        let again: Vec<u32> = (0..24 * per_run).map(|_| m.alloc_asked(596)).collect();
+        assert_eq!(
+            m.thread_heap_census().expect("on").live_blocks,
+            24 * per_run as u64
+        );
+        assert_eq!(numbers(&m), used, "no new run number");
+        for b in again {
+            m.free_asked(b);
+        }
+    }
+
+    #[test]
+    fn a_pool_keeps_its_last_run_when_no_other_blocks_are_spare() {
+        let mut m = on();
+        let per_run = (super::RUN_BYTES / 600) as usize;
+        let one: Vec<u32> = (0..per_run).map(|_| m.alloc_asked(596)).collect();
+        for b in one {
+            m.free_asked(b);
+        }
+        let c = m.thread_heap_census().expect("on");
+        assert_eq!((c.runs, c.runs_given_back), (1, 0));
+    }
+
+    #[test]
+    fn a_watch_started_after_the_allocation_sees_the_free() {
+        let mut m = on();
+        let a = m.alloc_asked(0x10);
+        m.watch(a, 0x10, true);
+        m.free_asked(a);
+        let hits = m.take_watch_hits();
+        assert!(
+            hits.iter()
+                .any(|h| h.addr == a && h.kind == super::super::WatchKind::Free),
+            "{} hits",
+            hits.len()
+        );
+    }
+
+    #[test]
+    fn sharing_keeps_the_threads_free_blocks_with_it() {
+        let mut m = on();
+        let a = m.alloc_asked(20);
+        m.free_asked(a);
+        m.start_sharing();
+        assert_eq!(m.alloc_asked(20), a);
+    }
+
+    #[test]
+    fn the_census_counts_runs_and_live_blocks() {
+        let mut m = on();
+        assert_eq!(m.thread_heap_census(), Some(Default::default()));
+        let a = m.alloc_asked(12);
+        let b = m.alloc_asked(100);
+        let c = m.thread_heap_census().expect("on");
+        assert_eq!((c.runs, c.live_blocks, c.live_bytes), (2, 2, 16 + 104));
+        assert_eq!(c.run_bytes, 2 * u64::from(super::RUN_BLOCK));
+        m.free_asked(a);
+        m.free_asked(b);
+        assert_eq!(m.thread_heap_census().expect("on").live_blocks, 0);
+        assert_eq!(Mem::new().thread_heap_census(), None);
     }
 }

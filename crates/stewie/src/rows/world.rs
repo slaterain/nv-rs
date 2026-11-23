@@ -35,6 +35,14 @@ fn shift_held(e: &mut Engine, _: &[u32]) -> Option<u32> {
 /// Share 1a's rows built.
 pub const ROWS: &[Row] = &[
     Row {
+        bit: stewie::FIXED_KEYS_WITH_PAD,
+        function: "patchAllowKeyboardPauseAndScreenshotWhileControllerConnected",
+        plan: "S0016",
+        key: "bAllowKeyboardPauseAndScreenshotWhileControllerConnected",
+        tweaks: None,
+        summary: "with a pad connected, Escape still pauses, the console key opens the console and Print Screen takes a screenshot",
+    },
+    Row {
         bit: stewie::INVENTORY_SCROLL_KEPT,
         function: "patchSaveInventoryScrollPositionWhenClosingPipBoy",
         plan: "S0021",
@@ -131,6 +139,14 @@ pub const ROWS: &[Row] = &[
         summary: "menus are told about L3 and R3 presses on the pad (except while the controls menu waits for a key)",
     },
     Row {
+        bit: stewie::BIND_BACKSLASH,
+        function: "MenuFixes",
+        plan: "S0022.54",
+        key: "bMenuFixesBindBackslash",
+        tweaks: None,
+        summary: "backslash can be bound to a control in the controls menu",
+    },
+    Row {
         bit: stewie::PIPBOY_LIGHT_FADE,
         function: "patchFixPipboyLightStayingOnWhenViewing",
         plan: "S0046",
@@ -169,6 +185,38 @@ pub const ROWS: &[Row] = &[
         key: "bFixMouseInBarterAndContainerMenusInsideTerminals",
         tweaks: None,
         summary: "a terminal behind the barter, container or quantity menu no longer takes the mouse",
+    },
+    Row {
+        bit: stewie::TEST_ALL_CELLS_NO_INI_REREAD,
+        function: "patchTestAllCellsNeedlessINIChecks",
+        plan: "S0080",
+        key: "bTestAllCellsNeedlessINIChecks",
+        tweaks: None,
+        summary: "the TestAllCells console command no longer re-reads the budget settings for every cell",
+    },
+    Row {
+        bit: stewie::TREE_FULL_LOD_KEPT,
+        function: "patchFixFullLODResettingWhenOpeningPipboy",
+        plan: "S0103",
+        key: "bFixFullLODResettingWhenOpeningPipboy",
+        tweaks: None,
+        summary: "opening the Pip-Boy map no longer turns off forced full-detail trees (bForceFullLOD)",
+    },
+    Row {
+        bit: stewie::NO_UNEQUIP_MESSAGE_PLAYER_ONLY,
+        function: "PreventNoUnequipMessageForNPCs",
+        plan: "S0128",
+        key: "bPreventNoUnequipMessageForNPCs",
+        tweaks: None,
+        summary: "an NPC using up its last forced grenade no longer shows the player 'you can't remove that item'",
+    },
+    Row {
+        bit: stewie::MAP_MARKER_REPUTATION_INDEX,
+        function: "patchFixMapMarkerReputationLookup",
+        plan: "S0131",
+        key: "bFixMapMarkerReputationLookup",
+        tweaks: None,
+        summary: "a plugin's map marker shows its own faction's reputation, not the master file's form at that id",
     },
     Row {
         bit: stewie::SUN_LIGHT_DIRECTION,
