@@ -800,7 +800,9 @@ const MOUSE_STATE_00A23A50: u32 = 0x00a2_3a50;
 /// (Tweaks reads through it unguarded) has nothing left to show.
 fn stewie_try_advance_page(e: &mut Engine, this: u32) -> bool {
     let input = e.mem.u32(INPUT_GLOBALS_011F35CC);
-    if e.call(MOUSE_STATE_00A23A50, &args![input, 0u32, 2u32]).bool() {
+    if e.call(MOUSE_STATE_00A23A50, &args![input, 0u32, 2u32])
+        .bool()
+    {
         return true;
     }
     let first = first_text_node(e, this);
@@ -4012,7 +4014,11 @@ mod n053_tests {
                 usize::from(on),
                 "{case}"
             );
-            assert_eq!(calls(&e, SOUND_HANDLE_PLAY), vec![vec![this + 0xdc, 0]], "{case}");
+            assert_eq!(
+                calls(&e, SOUND_HANDLE_PLAY),
+                vec![vec![this + 0xdc, 0]],
+                "{case}"
+            );
         }
         // Waiting keeps the note flag (a note counts as shown).
         let mut e = engine();
@@ -4028,7 +4034,11 @@ mod n053_tests {
     /// back to the terminal's items; with a text, or another id, nothing.
     #[test]
     fn s0539_pressing_on_the_screen_goes_back_to_the_items() {
-        for (id, remaining, back) in [(2u32, None, true), (2, Some(false), false), (3, None, false)] {
+        for (id, remaining, back) in [
+            (2u32, None, true),
+            (2, Some(false), false),
+            (3, None, false),
+        ] {
             let mut e = engine();
             let this = s0539_menu(&mut e, false, remaining);
             e.call_log = Some(vec![]);

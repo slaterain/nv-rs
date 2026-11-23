@@ -719,7 +719,11 @@ impl Engine {
     /// `[VATS] bHideFriendliesByDefault` (`crates/stewie`'s install): whether S0382 turns around,
     /// skipping friendly actors without shift held.
     pub fn set_stewie_vats_friendlies_hidden(&self, on: bool) {
-        self.extend.stewie.3.vats_friendlies_hidden.store(on, Relaxed);
+        self.extend
+            .stewie
+            .3
+            .vats_friendlies_hidden
+            .store(on, Relaxed);
     }
 
     /// Whether S0382 skips friendly actors without shift held

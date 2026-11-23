@@ -473,9 +473,7 @@ fn stewie_selection_on_hotkey(e: &mut Engine, hotkey: i32) -> bool {
     if list == 0 {
         return false;
     }
-    let extra = e
-        .call(EXTRA_GET_BY_TYPE, &args![list, EXTRA_HOTKEY])
-        .u32();
+    let extra = e.call(EXTRA_GET_BY_TYPE, &args![list, EXTRA_HOTKEY]).u32();
     extra != 0 && i32::from(e.mem.u8(extra + 0xc)) == hotkey
 }
 
@@ -1365,7 +1363,11 @@ mod tests {
             a.w.e.call(0x0070_19e0, &args![a.this, a.entry]);
             let e = &a.w.e;
             let case = format!("{on} {selection_on:?}");
-            assert_eq!(calls(e, REMOVE_HOTKEY_ITEM), vec![vec![0x8000, a.old, 3]], "{case}");
+            assert_eq!(
+                calls(e, REMOVE_HOTKEY_ITEM),
+                vec![vec![0x8000, a.old, 3]],
+                "{case}"
+            );
             assert_eq!(calls(e, SET_HOTKEY_ITEM).len(), usize::from(set), "{case}");
             assert_eq!(calls(e, EXTRA_GET_BY_TYPE).len(), usize::from(on), "{case}");
             // The rest of the assignment runs either way.

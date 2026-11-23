@@ -1,16 +1,3 @@
-/// Stewie S0377 (Tweaks' `HideCursorWrapIsConsoleOpen`, the call at `0x762967`): the console's
-/// shown byte (xNVSE's `IsConsoleOpen`, not `00703d50`). When it is clear, the dialogue menu is
-/// the top visible menu and, with `[Dialog Hide Mouse] bOnlyWhenNPCSpeaks`
-/// ([`Engine::stewie_cursor_only_speaking`]), the speaker is talking, the cursor tile's node is
-/// culled (flag 1 of +0x30), the tile's `visible` trait set to 0, and the answer is no.
-fn stewie_hide_cursor_in_dialog(e: &mut Engine) -> bool {
-    let console = e.mem.u8(CONSOLE_OPEN_011DEA2E) != 0;
-    if console || stewie_top_visible_menu_id(e) != DIALOG_MENU_ID {
-        return console;
-    }
-    if e.stewie_cursor_only_speaking() && !stewie_speaker_talking(e) {
-        return false;
-    }
 //! `fallout/interface/menus/dialogmenu.cpp` (Xbox PDB source unit), subsystem `fallout/interface`: its functions in
 //! FalloutNV.exe 1.4.0.525, translated (docs/ENGINE_CRATE.md).
 //!
@@ -1712,19 +1699,6 @@ fn stewie_hide_cursor_in_dialog(e: &mut Engine) -> bool {
 /// xNVSE's `DialogMenu::IsNPCTalking` for Stewie S0377: the open dialogue menu's (`011d9510`) tile
 /// has its `"_ShowingText"` trait (the id at `011d9500`) set. Without the menu or its tile (Tweaks
 /// reads through both unguarded): no.
-fn stewie_speaker_talking(e: &mut Engine) -> bool {
-    let menu = e.global::<u32>(OPEN_MENU_011D9510);
-    let root = if menu == 0 { 0 } else { e.mem.u32(menu + 4) };
-    if root == 0 {
-        return false;
-    }
-    let showing = e.global::<u32>(SHOWING_TEXT_TRAIT_011D9500);
-    e.call(TILE_GET_FLOAT, &args![root, showing]).f32() != 0.0
-}
-
-/// xNVSE's `DialogMenu::IsNPCTalking` for Stewie S0377: the open dialogue menu's (`011d9510`) tile
-/// has its `"_ShowingText"` trait (the id at `011d9500`) set. Without the menu or its tile (Tweaks
-/// reads through both unguarded): no. Without a node only the trait is set (S0377 above).
 fn stewie_speaker_talking(e: &mut Engine) -> bool {
     let menu = e.global::<u32>(OPEN_MENU_011D9510);
     let root = if menu == 0 { 0 } else { e.mem.u32(menu + 4) };
