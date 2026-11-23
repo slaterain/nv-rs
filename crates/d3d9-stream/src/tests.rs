@@ -2511,9 +2511,9 @@ fn a_clear_is_hashed_with_what_it_clears_into() {
         start_index: 0,
         count: 1,
     };
-    let target = |surface: u32| Cmd::SetRenderTarget {
+    let target = |index: u32, surface: u32| Cmd::SetRenderTarget {
         device,
-        index: 0,
+        index,
         surface,
     };
     let depth = |surface: u32| Cmd::SetDepthStencilSurface { device, surface };
@@ -2531,7 +2531,9 @@ fn a_clear_is_hashed_with_what_it_clears_into() {
         value,
     };
     let pairs = [
-        ("render target", target(0x9000), target(0x9001)),
+        // Target 0 sets the viewport and the scissor rectangle too; target 1 only itself.
+        ("render target 0", target(0, 0x9000), target(0, 0x9001)),
+        ("render target 1", target(1, 0x9000), target(1, 0x9001)),
         ("depth surface", depth(0x9100), depth(0x9101)),
         ("viewport", viewport(50), viewport(100)),
         ("scissor rectangle", scissor(50), scissor(100)),
