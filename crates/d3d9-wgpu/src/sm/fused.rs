@@ -579,7 +579,8 @@ mod tests {
         let vp = parse(&small_vertex_shader()).unwrap();
         let pp = parse(&small_pixel_shader()).unwrap();
         let (vl, pl) = links();
-        let many: Vec<(&Program, &Link)> = (0..16).map(|_| (&vp, &vl)).collect();
+        // One varying a pass: one pass more than the locations below the draw table's slot.
+        let many: Vec<(&Program, &Link)> = (0..=DRAW_SLOT).map(|_| (&vp, &vl)).collect();
         assert!(fused_vertex(&many).is_err());
         let uniform = Link {
             storage: false,
