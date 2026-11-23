@@ -218,11 +218,14 @@ pub const TILE_TEXTURE_PATH_STANDARDIZED: Row = Row::share(MENUS_FIXES, MENUS_FI
 pub const HACKING_EASTER_EGG_WORDS: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 57);
 /// S0176.01 `ResolveIncludesLongStringFix` (`Tile::InsertIncludedFiles` `00a02d40` at
 /// `0xA02E58`, `0xA02F59`, `0xA03031`, `0xA03194`): the menu text with its includes is gathered in
-/// a string with a 32-bit length, grown geometrically.
+/// a string with a 32-bit length, grown geometrically, and read with S0176.02's 32-bit length
+/// reads (Tweaks' `InitHooks` makes both; its string is never read through the exe's 16-bit
+/// length, which would cut a menu over 64 KB).
 pub const INCLUDES_LONG_STRING: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 58);
 /// S0176.02 `ResolveIncludesLongStringFix` (`0xA03062`, `0xA030C1`, `0xA03122`): the gathered
 /// text's length is that string's 32-bit length, so a menu over 64 KB with its includes is no
-/// longer cut. Tweaks writes it with S0176.01, whose string it reads; alone it does nothing.
+/// longer cut. Tweaks writes it with S0176.01, whose string it reads: S0176.01 makes these reads
+/// itself, so this bit changes nothing on its own (the row keeps Tweaks' second patch named).
 pub const INCLUDES_LONG_STRING_LENGTH: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 59);
 /// S0022.06 `MenuFixes` (`PlayerCharacter::UpdateAutoAimActor` at `0x964CBB`; the VATS menu's
 /// part choice `007f3070` at `0x7F3847`, `0x7F3857`, `0x7F39CD`, `0x7F39DD`; `VATSMenu::DoIdle`

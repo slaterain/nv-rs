@@ -2481,9 +2481,12 @@ pub fn tile_insert_included_files(e: &mut Engine, xml: Ptr<XmlStorage>) -> bool 
     }
     // lStewieAl's Tweaks' S0176.01 (`ResolveIncludesLongStringFix`) gathers the text in its own
     // 12-byte string (32-bit length +4, capacity +8: the exe's flag byte after the 8-byte
-    // `BSStringT` is moved out of the way); S0176.02 then takes that length as it is.
+    // `BSStringT` is moved out of the way); S0176.02 then takes that length as it is. Tweaks'
+    // `InitHooks` makes both, and its string is never read through the exe's 16-bit length (which
+    // would cut a text past 64 KB), so S0176.01 makes S0176.02's reads too; S0176.02 alone (no
+    // such string to read) leaves the exe's.
     let long = e.stewie(engine_core::extend::stewie::INCLUDES_LONG_STRING);
-    let long_length = long && e.stewie(engine_core::extend::stewie::INCLUDES_LONG_STRING_LENGTH);
+    let long_length = long;
     e.with_stack(if long { 12 } else { 8 }, |e, result| {
         let size = e.get(xml, XmlStorage::iFileSize) + 1;
         let buffer = allocate(e, size).addr();
@@ -9903,10 +9906,11 @@ mod tests {
     /// Rows S0176.01 and S0176.02 (lStewieAl's Tweaks' `ResolveIncludesLongStringFix`): with
     /// S0176.01 the text is gathered in Tweaks' own string, so the result string is never set or
     /// appended to as a `BSStringT` (only the prefab path is cleared), with the same answer; off,
-    /// the exe's sets and appends.
+    /// the exe's sets and appends, S0176.02 on or off (alone it has no string of Tweaks'
+    /// to read).
     #[test]
     fn s0176_includes_are_gathered_in_tweaks_string() {
-        for (long, length) in [(false, false), (true, false), (true, true)] {
+        for (long, length) in [(false, false), (false, true), (true, false), (true, true)] {
             let mut e = tile_engine();
             install_string_doubles(&mut e, false);
             install_xml_files(&mut e, vec![("Data\\Menus\\Prefabs\\p.xml", "[X]")]);
@@ -9935,30 +9939,39 @@ mod tests {
 
     /// Rows S0176.01 and S0176.02 with a text past 64 KB: the whole text and its length (the
     /// 16-bit `BSStringT` length could not hold it); Tweaks' string starts at 0x4000 and grows to
-    /// the larger of the new length and twice its capacity (blocks of capacity + 1 bytes).
+    /// the larger of the new length and twice its capacity (blocks of capacity + 1 bytes). S0176.01
+    /// makes S0176.02's 32-bit length reads itself (Tweaks installs both), so with S0176.02's key
+    /// off too the text is whole and `strcpy_s` never takes its invalid-parameter path (the
+    /// handler's decode, `00ed0f92`, and `__invoke_watson`, `00ec7b08`).
     #[test]
     fn s0176_a_text_past_64_kb_keeps_its_length() {
         let big: &'static str = Box::leak("x".repeat(70_000).into_boxed_str());
-        let mut e = tile_engine();
-        install_string_doubles(&mut e, false);
-        install_xml_files(&mut e, vec![("Data\\Menus\\Prefabs\\p.xml", big)]);
-        e.set_stewie(engine_core::extend::stewie::INCLUDES_LONG_STRING, true);
-        e.set_stewie(
-            engine_core::extend::stewie::INCLUDES_LONG_STRING_LENGTH,
-            true,
-        );
-        e.call_log = Some(vec![]);
-        let (changed, text, size) = insert_includes(&mut e, "AA<include src=\"p.xml\"/>BB");
-        assert!(changed);
-        assert_eq!(size, 70_004);
-        assert_eq!(text.len(), 70_004);
-        assert!(text.starts_with("AAxx") && text.ends_with("xxBB"));
-        let grown: Vec<u32> = calls_to(&e, MEMORY_ALLOCATE)
-            .iter()
-            .map(|c| c[1])
-            .filter(|size| [0x4001, 70_003, 140_005].contains(size))
-            .collect();
-        assert_eq!(grown, vec![0x4001, 70_003, 140_005]);
+        for length in [true, false] {
+            let mut e = tile_engine();
+            install_string_doubles(&mut e, false);
+            install_xml_files(&mut e, vec![("Data\\Menus\\Prefabs\\p.xml", big)]);
+            e.register_double(0x00ed_0f92, |_, _| Ret::default());
+            e.register_double(0x00ec_7b08, |_, _| Ret::default());
+            e.set_stewie(engine_core::extend::stewie::INCLUDES_LONG_STRING, true);
+            e.set_stewie(
+                engine_core::extend::stewie::INCLUDES_LONG_STRING_LENGTH,
+                length,
+            );
+            e.call_log = Some(vec![]);
+            let (changed, text, size) = insert_includes(&mut e, "AA<include src=\"p.xml\"/>BB");
+            assert!(changed);
+            assert_eq!(size, 70_004, "S0176.02 {length}");
+            assert_eq!(text.len(), 70_004, "S0176.02 {length}");
+            assert!(text.starts_with("AAxx") && text.ends_with("xxBB"));
+            assert!(calls_to(&e, 0x00ed_0f92).is_empty(), "S0176.02 {length}");
+            assert!(calls_to(&e, 0x00ec_7b08).is_empty(), "S0176.02 {length}");
+            let grown: Vec<u32> = calls_to(&e, MEMORY_ALLOCATE)
+                .iter()
+                .map(|c| c[1])
+                .filter(|size| [0x4001, 70_003, 140_005].contains(size))
+                .collect();
+            assert_eq!(grown, vec![0x4001, 70_003, 140_005]);
+        }
     }
 
     /// Appends `element` to the `NiTPointerList` at `list`.

@@ -420,7 +420,7 @@ pub const ROWS: &[Row] = &[
         plan: "S0176.01",
         key: "bResolveIncludesLongStringFixLongString",
         tweaks: None,
-        summary: "a menu file's text with its includes is gathered in a string with a 32-bit length",
+        summary: "a menu file's text with its includes is gathered in a string with a 32-bit length and keeps its whole text past 64 KB (with S0176.02's reads)",
     },
     Row {
         bit: stewie::INCLUDES_LONG_STRING_LENGTH,
@@ -428,7 +428,7 @@ pub const ROWS: &[Row] = &[
         plan: "S0176.02",
         key: "bResolveIncludesLongStringFixLength",
         tweaks: None,
-        summary: "a menu file over 64 KB with its includes keeps its whole text",
+        summary: "the 32-bit length reads S0176.01 makes with its string (Tweaks installs both); nothing on its own",
     },
     Row {
         bit: stewie::ROULETTE_ZERO_WINS,
