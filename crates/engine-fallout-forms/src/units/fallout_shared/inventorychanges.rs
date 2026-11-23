@@ -10063,11 +10063,8 @@ pub fn fn_004d0900(e: &mut Engine, this: Ptr<InventoryChanges>, with_mods: u8) -
         }
         node = list_next(e, node);
     }
-    e.set(
-        this,
-        InventoryChanges::fcontainerweight,
-        stored_weight(e, total),
-    );
+    let stored = stored_weight(e, total);
+    e.set(this, InventoryChanges::fcontainerweight, stored);
     if actor != 0 {
         let sub_object = actor + 0xa4;
         let previous = e.get(this, InventoryChanges::fpreviousContainerWeight);

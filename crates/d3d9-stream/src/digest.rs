@@ -42,7 +42,8 @@ fn cleared_by(key: &Key) -> bool {
 /// register, material and lights) by its last value, every other command so far (creations,
 /// uploads, clears, copies, queries issued, presents) in order, and the draw itself. A new render
 /// target 0 resets the viewport and the scissor rectangle, `DrawPrimitiveUP` empties stream 0, and
-/// `Reset` every state, as the device does; a `Clear` is hashed with what it clears into (the
+/// `Reset` every state, as the device does; a state that holds an object set to none (no texture, shader, index or
+/// vertex buffer) is the device's default and kept as never set ([`StateDigest::bind`]); a `Clear` is hashed with what it clears into (the
 /// targets, the depth surface, the viewport, the scissor rectangle and its test). Left out, as [`crate::Stream::record_repeatable`] leaves them out: the real windows'
 /// handles and the query reads (made as often as the GPU takes). The objects destroyed are hashed
 /// as a set (the drawing side's ends come at the join, after their place in the serial order),
@@ -131,20 +132,24 @@ impl StateDigest {
         self.events = h;
     }
 
-    /// Stream 0 emptied, as `DrawPrimitiveUP` leaves it on `device` (its `SetStreamSource(0, NULL, 0, 0)`).
-    fn empty_stream_0(&mut self, device: u32) {
-        let empty: Cmd<Data<'_>> = Cmd::SetStreamSource {
-            device,
-            stream: 0,
-            buffer: 0,
-            offset: 0,
-            stride: 0,
-        };
-        if let Some(written) = repeatable_form(empty) {
-            self.encoded.clear();
-            wire::encode(&written, &mut self.encoded);
-            self.set(STREAM_0);
+    /// A state that holds an object (a texture on a sampler, a shader, the index buffer, a stream's vertex buffer):
+    /// `empty` (no object, and for a stream offset and stride 0) is what the device holds from its creation or a
+    /// `Reset` until it is set, so it is kept as never set; any object is kept by its bytes. A stream that sends
+    /// "none" where another sends nothing (a cache that skips a set equal to what it holds on one side only) leaves
+    /// the device as it was, and every draw after sees the same; it cannot hide a difference a draw could see, since
+    /// an object on one side and none on the other still differ (kept against absent), as do two objects.
+    fn bind(&mut self, key: Key, empty: bool) {
+        if empty {
+            self.state.remove(&key);
+        } else {
+            self.set(key);
         }
+    }
+
+    /// Stream 0 emptied, as `DrawPrimitiveUP` leaves it (its `SetStreamSource(0, NULL, 0, 0)`): the device's default
+    /// ([`StateDigest::bind`]).
+    fn empty_stream_0(&mut self) {
+        self.state.remove(&STREAM_0);
     }
 
     fn push(&self, digest: u64) {
@@ -222,9 +227,18 @@ impl Backend for StateDigest {
             Cmd::SetRenderState { state, .. } => self.set(at(state, 0)),
             Cmd::SetTextureStageState { stage, kind, .. } => self.set(at(stage, kind)),
             Cmd::SetSamplerState { sampler, kind, .. } => self.set(at(sampler, kind)),
-            Cmd::SetTexture { sampler, .. } => self.set(at(sampler, 0)),
-            Cmd::SetShader { pixel, .. } => self.set(at(u32::from(pixel), 0)),
-            Cmd::SetStreamSource { stream, .. } => self.set(at(stream, 0)),
+            Cmd::SetTexture {
+                sampler, texture, ..
+            } => self.bind(at(sampler, 0), texture == 0),
+            Cmd::SetShader { pixel, shader, .. } => self.bind(at(u32::from(pixel), 0), shader == 0),
+            Cmd::SetStreamSource {
+                stream,
+                buffer,
+                offset,
+                stride,
+                ..
+            } => self.bind(at(stream, 0), buffer == 0 && offset == 0 && stride == 0),
+            Cmd::SetIndices { buffer, .. } => self.bind(at(0, 0), buffer == 0),
             Cmd::SetLight { index, .. } | Cmd::LightEnable { index, .. } => self.set(at(index, 0)),
             Cmd::SetLod { texture, .. } => self.set(at(texture, 0)),
             // A declaration and an FVF replace each other: one vertex layout.
@@ -235,7 +249,6 @@ impl Backend for StateDigest {
             Cmd::SetScissorRect { .. } => self.set(SCISSOR),
             Cmd::SetDepthStencilSurface { .. }
             | Cmd::SetGammaRamp { .. }
-            | Cmd::SetIndices { .. }
             | Cmd::SetMaterial { .. }
             | Cmd::SetSoftwareVertexProcessing { .. } => self.set(at(0, 0)),
             Cmd::SetConstants {
@@ -264,8 +277,8 @@ impl Backend for StateDigest {
                     }
                 }
                 self.recent.clear();
-                if let Cmd::DrawPrimitiveUp { device, .. } = cmd {
-                    self.empty_stream_0(device);
+                if let Cmd::DrawPrimitiveUp { .. } = cmd {
+                    self.empty_stream_0();
                 }
             }
             Cmd::Clear { .. } => {
