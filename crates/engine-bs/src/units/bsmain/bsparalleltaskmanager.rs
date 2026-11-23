@@ -832,6 +832,7 @@ mod tests {
     /// its start, wait and destructor loops take all three; the destructor forgets the count.
     #[test]
     fn with_the_switch_the_manager_makes_and_runs_n_threads() {
+        let _cap = fresh_cap();
         TEST_THREADS.with(|t| t.set(Some(3)));
         let mut e = engine();
         // Havok's thread memory with room for them (the cap: [`capped_threads`]).
@@ -905,6 +906,7 @@ mod tests {
     /// (here the exe's one: 26 in use leave none beyond the margin).
     #[test]
     fn with_the_switch_and_no_thread_memory_to_spare_the_manager_keeps_one_thread() {
+        let _cap = fresh_cap();
         TEST_THREADS.with(|t| t.set(Some(3)));
         let mut e = engine();
         havok_memory(&mut e, 26);
@@ -918,6 +920,21 @@ mod tests {
             vec![vec![MEMORY_MANAGER, 4], vec![MEMORY_MANAGER, 0x5c]]
         );
         assert_eq!(thread_count(&e, manager), 1);
+    }
+
+    /// The cap's tests one at a time, each starting from no run's record ([`EXTRA_GIVEN`]): an engine dropped by another
+    /// test leaves its record, and a new engine can come at its address (the run's key).
+    static CAP_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn fresh_cap() -> std::sync::MutexGuard<'static, ()> {
+        let guard = CAP_TESTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        EXTRA_GIVEN
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        guard
     }
 
     /// A Havok free-list memory system at its word with `used` thread memory records in use.
@@ -938,7 +955,8 @@ mod tests {
     /// keeps the exe's one thread.
     #[test]
     fn the_extra_threads_fit_in_havok_s_free_thread_memory() {
-        let mut e = engine();
+        let _cap = fresh_cap();
+        let e = engine();
         assert_eq!(capped_threads(&e, 8), THREAD_COUNT, "no memory system yet");
         let mut e = engine();
         assert_eq!(capped_threads(&e, 1), 1);
