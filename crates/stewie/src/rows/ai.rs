@@ -164,7 +164,7 @@ pub const ROWS: &[Row] = &[
         plan: "S0130.02",
         key: "bContinuousBeamProjectileCrashFixNPCs",
         tweaks: None,
-        summary: "changes play: an NPC firing a continuous beam weapon (a flamer, a Gatling laser) keeps the beam going while it attacks, and the beam fades when it stops",
+        summary: "changes play: an NPC firing a continuous beam weapon (a flamer, a Gatling laser) keeps the beam going while it attacks, and the beam fades when it stops (only with S0130.01 on too)",
     },
     Row {
         bit: stewie::BEAM_GODMODE_FIRING,
@@ -180,7 +180,7 @@ pub const ROWS: &[Row] = &[
         plan: "S0130.05",
         key: "bContinuousBeamProjectileCrashFixAmmoInUpdate",
         tweaks: None,
-        summary: "changes play: your continuous beam uses its ammunition while it fires, also at the sky (it used ammunition only where it hit)",
+        summary: "changes play: your continuous beam uses its ammunition while it fires, also at the sky (it used ammunition only where it hit); only with S0130.06 on too",
     },
     Row {
         bit: stewie::BEAM_NO_PLAYER_AMMO_IN_IMPACT,
@@ -188,7 +188,7 @@ pub const ROWS: &[Row] = &[
         plan: "S0130.06",
         key: "bContinuousBeamProjectileCrashFixNoImpactAmmo",
         tweaks: None,
-        summary: "changes play: your continuous beam does its damage once per round used and stops when you put the weapon away",
+        summary: "changes play: your continuous beam does its damage once per round used (only with S0130.05 on too) and stops when you put the weapon away",
     },
     Row {
         bit: stewie::SPECTATOR_THREAT_WEAPON_TYPE,

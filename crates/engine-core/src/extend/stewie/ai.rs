@@ -176,7 +176,8 @@ pub const AMMO_SWAP_NO_INSTANT_REFILL: Row = Row::share(AI_FIXES, AI_FIXES_END, 
 /// `0095d450` (`0x95D65D`)): a clip holding as many rounds as its size or more is not reloaded.
 pub const NO_RELOAD_OVERFILLED_CLIP: Row = Row::share(AI_FIXES, AI_FIXES_END, 51);
 /// S0130.02 `ContinuousBeamProjectileCrashFix` (`Actor::Update` `00888b50` (`0x889869`)): an NPC's
-/// continuous beam keeps firing while its attack animation runs and fades when it ends.
+/// continuous beam keeps firing while its attack animation runs and fades when it ends. Acts
+/// only with `BEAM_SHOOTER_POINTER` (S0130.01) on too.
 pub const NPC_CONTINUOUS_BEAM: Row = Row::share(AI_FIXES, AI_FIXES_END, 52);
 /// S0130.04 `ContinuousBeamProjectileCrashFix` (`PlayerCharacter::Update` `0093e860` (`0x9440C2`);
 /// `Projectile::AddImpact` `009bf5a0` (`0x9BFD6B`)): in god mode the player's continuous beam fires
@@ -184,11 +185,13 @@ pub const NPC_CONTINUOUS_BEAM: Row = Row::share(AI_FIXES, AI_FIXES_END, 52);
 pub const BEAM_GODMODE_FIRING: Row = Row::share(AI_FIXES, AI_FIXES_END, 53);
 /// S0130.05 `ContinuousBeamProjectileCrashFix` (`PlayerCharacter::Update` `0093e860`
 /// (`0x944152`)): the player's continuous beam uses its ammunition in the player's update, so
-/// firing at the sky uses ammunition too.
+/// firing at the sky uses ammunition too. Acts only with `BEAM_NO_PLAYER_AMMO_IN_IMPACT` on too
+/// (Tweaks installs the ammunition parts together).
 pub const BEAM_PLAYER_AMMO_IN_UPDATE: Row = Row::share(AI_FIXES, AI_FIXES_END, 54);
 /// S0130.06 `ContinuousBeamProjectileCrashFix` (`Projectile::AddImpact` `009bf5a0` (`0x9BFD0E`,
 /// `0x9BFCC1`); `PlayerCharacter::Update` `0093e860` (`0x944127`)): the player's continuous beam
-/// uses no ammunition where it hits, and stops when the weapon is put away.
+/// uses no ammunition where it hits (only with `BEAM_PLAYER_AMMO_IN_UPDATE` on too), and stops when
+/// the weapon is put away.
 pub const BEAM_NO_PLAYER_AMMO_IN_IMPACT: Row = Row::share(AI_FIXES, AI_FIXES_END, 55);
 /// S0198 `VanityCamRotationFix` (`009445b0` (`0x945D53`); `PlayerCharacter::UpdateCamera`
 /// `0094ae40` (`0x94B521`)): the vanity camera's turn stays within a circle and its pitch within

@@ -5993,27 +5993,7 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
             }
         }
         e.call(0x0096_4260, &args![this]);
-        let beam = e
-            .get(this.cast::<Actor>(), Actor::pContinuousBeamPersistant)
-            .addr();
-        if beam != 0 {
-            let keep_beam = beam_clip_holds(e, this, weapon_form); // -0x425
-            if !keep_beam
-                || beam_attack_released(e, main_state)
-                || e.call(0x00a2_4660, &args![main_state, 4u32, 0u32]).u32() == 0
-            {
-                e.call(0x009a_b9a0, &args![beam, this]);
-            }
-            // lStewieAl's Tweaks' row S0130.05 (`OnPlayerUpdateReduceAmmo`, the call written at
-            // `0x944152` with `push eax` at `0x944157`: the vcall's 0.0 is its answer 0).
-            if e.stewie(engine_core::extend::stewie::BEAM_PLAYER_AMMO_IN_UPDATE) {
-                player_beam_reduce_ammo(e);
-            }
-            let beam = e
-                .get(this.cast::<Actor>(), Actor::pContinuousBeamPersistant)
-                .addr();
-            e.vcall(beam, 0x310, &args![0.0f32]);
-        }
+        update_player_beam(e, this, weapon_form, main_state);
         let last_hello = e.get(this, PlayerCharacter::fLastHelloTime);
         if last_hello as f64 > zero {
             let now = e.call(0x0045_7fe0, &args![]).u32();
@@ -9740,13 +9720,66 @@ fn beam_attack_released(e: &mut Engine, main_state: u32) -> bool {
     process == 0 || !e.vcall(process, 0x454, &args![]).bool()
 }
 
+/// The player's continuous beam in `PlayerCharacter::Update` (`0x9440A3` to `0x944174`): with a
+/// beam (+0x1A0), a clip that no longer holds ([`beam_clip_holds`]), a released attack
+/// ([`beam_attack_released`]) or the attack control not held (`00a24660` with 4 and 0) stops it
+/// (`009ab9a0`); then (S0130.05 with S0130.06, [`player_beam_update_ammo`]) the update may take the
+/// beam's round; then the beam, read again, is fired on (slot `0x310` with 0.0).
+fn update_player_beam(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    weapon_form: u32,
+    main_state: u32,
+) {
+    let beam = e
+        .get(this.cast::<Actor>(), Actor::pContinuousBeamPersistant)
+        .addr();
+    if beam == 0 {
+        return;
+    }
+    let keep_beam = beam_clip_holds(e, this, weapon_form); // -0x425
+    if !keep_beam
+        || beam_attack_released(e, main_state)
+        || e.call(0x00a2_4660, &args![main_state, 4u32, 0u32]).u32() == 0
+    {
+        e.call(0x009a_b9a0, &args![beam, this]);
+    }
+    // lStewieAl's Tweaks' row S0130.05 (`OnPlayerUpdateReduceAmmo`, the call written at
+    // `0x944152` with `push eax` at `0x944157`: the vcall's 0.0 is its answer 0).
+    player_beam_update_ammo(e);
+    let beam = e
+        .get(this.cast::<Actor>(), Actor::pContinuousBeamPersistant)
+        .addr();
+    e.vcall(beam, 0x310, &args![0.0f32]);
+}
+
+/// lStewieAl's Tweaks installs the three ammunition parts of `ContinuousBeamProjectileCrashFix`
+/// together, with no key of their own: the player's update takes the beam's round (S0130.05,
+/// `0x944152`), the hit takes none and counts no shot (S0130.06, `0x9BFD0E`) and the hit after a
+/// taken round counts as due (S0130.06, `0x9BFCC1`). Alone, either half would leave the player's
+/// beam with unlimited ammunition or with rounds taken twice, so here they act only while both rows
+/// are on (the weapon-out test at `0x944127` follows S0130.06's row alone).
+pub(crate) fn beam_ammo_in_update(e: &Engine) -> bool {
+    e.stewie(engine_core::extend::stewie::BEAM_PLAYER_AMMO_IN_UPDATE)
+        && e.stewie(engine_core::extend::stewie::BEAM_NO_PLAYER_AMMO_IN_IMPACT)
+}
+
+/// The player's update's part of the beam's ammunition (S0130.05): [`player_beam_reduce_ammo`]
+/// while [`beam_ammo_in_update`].
+pub(crate) fn player_beam_update_ammo(e: &mut Engine) {
+    if beam_ammo_in_update(e) {
+        player_beam_reduce_ammo(e);
+    }
+}
+
 // Translated from lStewieAl's Tweaks 10.05 (Fixes/ContinuousBeamProjectileCrashFix.cpp):
 // OnPlayerUpdateReduceAmmo.
 /// lStewieAl's Tweaks' row S0130.05: unless the player's (`011dea3c`) continuous beam (+0x1A0)
 /// fades (flag 0x20 at +0xC8), when its shots (+0x154) over its weapon's (+0xF8) fire rate (+0x134,
 /// above 0) are below its age (+0xD8), one more shot is counted and the player's clip loses a
 /// round (`Actor::DecreaseClipAmmo`, slot `0x3f0`, with 1): with none taken the beam fades, else
-/// the kept word `BEAM_DECREASED_PLAYER_AMMO` is set for the beam's next impact (S0130.06).
+/// the kept word `BEAM_DECREASED_PLAYER_AMMO` is set for the beam's next impact (S0130.06). The
+/// division is a `float` one, as Tweaks' `iShotsFired / weap->fireRate`.
 fn player_beam_reduce_ammo(e: &mut Engine) {
     let player = e.global::<u32>(PLAYER_SINGLETON);
     let beam = e.mem.u32(player + 0x1a0);
@@ -9762,7 +9795,7 @@ fn player_beam_reduce_ammo(e: &mut Engine) {
         return;
     }
     let rate = e.mem.f32(weapon + 0x134);
-    if rate > 0.0 && (shots as f64 / rate as f64) < age as f64 {
+    if rate > 0.0 && (shots as f32 / rate) < age {
         e.mem.set_u32(beam + 0x154, shots.wrapping_add(1));
         if e.vcall(player, 0x3f0, &args![1u32]).u32() == 0 {
             let flags = e.mem.u32(beam + 0xc8);
@@ -20783,6 +20816,96 @@ mod tests {
             if rounds == 1 {
                 assert_eq!(calls[0], vec![this.addr(), 1]);
             }
+        }
+    }
+
+    /// S0130.05's due test divides in `float`, as Tweaks: 1 shot at a fire rate of 3 is
+    /// 0.33333334 in `float`, not below an age of 0.33333334, so nothing is taken (a `double`
+    /// division, 0.3333333333, would have been below it).
+    #[test]
+    fn s0130_05_the_due_test_divides_in_float() {
+        let mut e = engine();
+        e.map(0x011d_e000, 0x1000);
+        let this = player(&mut e);
+        let table = e.mem.alloc(0x800);
+        let target = e.mem.alloc(8);
+        e.register_double(target, move |_, _| int(1));
+        e.mem.set_u32(table + 0x3f0, target);
+        e.mem.set_u32(this.addr(), table);
+        e.set_global(PLAYER_SINGLETON, this.addr());
+        let weapon = e.mem.alloc(0x140);
+        e.mem.set_f32(weapon + 0x134, 3.0);
+        let beam = e.mem.alloc(0x160);
+        e.mem.set_u32(beam + 0x154, 1);
+        e.mem.set_u32(beam + 0xf8, weapon);
+        e.mem.set_f32(beam + 0xd8, 1.0f32 / 3.0);
+        e.mem.set_u32(this.addr() + 0x1a0, beam);
+        player_beam_reduce_ammo(&mut e);
+        assert!(called(&e, target).is_empty());
+        assert_eq!(e.mem.u32(beam + 0x154), 1);
+        e.mem.set_f32(beam + 0xd8, 0.3334);
+        player_beam_reduce_ammo(&mut e);
+        assert_eq!(called(&e, target), vec![vec![this.addr(), 1]]);
+    }
+
+    /// The player's beam block of `PlayerCharacter::Update` (`0x9440A3` to `0x944174`), reached
+    /// through [`update_player_beam`]: the process has no ammunition entry, so the beam is stopped
+    /// (`009ab9a0`) and then fired on (slot `0x310` with 0.0). The update takes the due beam's
+    /// round (slot `0x3f0` with 1, one more shot at +0x154) between the two only with S0130.05
+    /// and S0130.06 both on; with either off it takes none and leaves the shots.
+    #[test]
+    fn s0130_05_the_players_update_takes_the_round_between_stop_and_fire() {
+        const TAKE: u32 = 0x00c0_03f0;
+        const FIRE: u32 = 0x00c0_0310;
+        for (on05, on06) in [(false, false), (true, false), (false, true), (true, true)] {
+            let mut e = engine();
+            e.set_stewie(
+                engine_core::extend::stewie::BEAM_PLAYER_AMMO_IN_UPDATE,
+                on05,
+            );
+            e.set_stewie(
+                engine_core::extend::stewie::BEAM_NO_PLAYER_AMMO_IN_IMPACT,
+                on06,
+            );
+            e.map(0x011d_e000, 0x1000);
+            e.register_double(0x009a_b9a0, |_, _| Ret::default());
+            e.register_double(TAKE, |_, _| int(1));
+            e.register_double(FIRE, |_, _| Ret::default());
+            let this = player(&mut e);
+            put_vtable(&mut e, this.addr(), 0x0268_0000, &[(0x3f0, TAKE)]);
+            e.set_global(PLAYER_SINGLETON, this.addr());
+            let process = answering_object(&mut e, 0x0269_0000, &[(0x14c, 0)]);
+            e.mem.set_u32(this.addr() + 0x68, process);
+            let weapon = e.mem.alloc(0x140);
+            e.mem.set_f32(weapon + 0x134, 10.0);
+            let beam = e.mem.alloc(0x160);
+            put_vtable(&mut e, beam, 0x026a_0000, &[(0x310, FIRE)]);
+            e.mem.set_u32(beam + 0x154, 2);
+            e.mem.set_u32(beam + 0xf8, weapon);
+            e.mem.set_f32(beam + 0xd8, 0.5);
+            e.mem.set_u32(this.addr() + 0x1a0, beam);
+            update_player_beam(&mut e, this, 0x4400, 0x1000);
+            let both = on05 && on06;
+            let order: Vec<u32> = call_addresses(&e)
+                .into_iter()
+                .filter(|a| [0x009a_b9a0, TAKE, FIRE].contains(a))
+                .collect();
+            let expected = if both {
+                vec![0x009a_b9a0, TAKE, FIRE]
+            } else {
+                vec![0x009a_b9a0, FIRE]
+            };
+            assert_eq!(order, expected, "05 {on05} 06 {on06}");
+            assert_eq!(called(&e, 0x009a_b9a0), vec![vec![beam, this.addr()]]);
+            assert_eq!(called(&e, FIRE), vec![vec![beam, 0]]);
+            if both {
+                assert_eq!(called(&e, TAKE), vec![vec![this.addr(), 1]]);
+            }
+            assert_eq!(
+                e.mem.u32(beam + 0x154),
+                if both { 3 } else { 2 },
+                "05 {on05} 06 {on06}"
+            );
         }
     }
 
