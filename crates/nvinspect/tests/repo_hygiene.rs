@@ -3039,7 +3039,7 @@ fn seam_tokens(code: &str) -> Vec<(usize, SeamToken)> {
     }
     for (at, _) in code.match_indices(".jip_patches()") {
         let rest = &code[at..];
-        let end = rest.find(|c| c == '{' || c == ';').unwrap_or(rest.len());
+        let end = rest.find(['{', ';']).unwrap_or(rest.len());
         let bit = rest[..end].find("jip_patches::").map(|k| {
             rest[k + "jip_patches::".len()..]
                 .bytes()
@@ -3248,7 +3248,7 @@ impl SeamCode {
             return None;
         }
         let from = *self.starts.get(line)?;
-        let open = from + self.code[from..].find(|c| c == '{' || c == ';')?;
+        let open = from + self.code[from..].find(['{', ';'])?;
         if self.code.as_bytes()[open] == b';' {
             return None;
         }
