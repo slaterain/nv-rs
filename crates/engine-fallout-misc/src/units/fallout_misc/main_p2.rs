@@ -11171,6 +11171,49 @@ mod tests_third {
         let (_, log) = r.run(0x0087_7f90, &args![0x5000u32, 0u32]);
         assert_eq!(log, vec![(0x0087_7fc0, vec![0x5000])]);
     }
+
+    /// Row S0028 (lStewieAl's Tweaks' `VATSHighlightDataShouldHideWeapon`, `0x870AAA`,
+    /// `0x870C92`): off, `005585e0` on the highlight data decides; on, the highlight's target node
+    /// (+8) set and the VATS menu (`011db0d4`) open, without that call; no data: not hidden.
+    #[test]
+    fn s0028_the_vats_highlight_hides_the_world() {
+        for (on, node, menu, exe, wanted) in [
+            (false, 0u32, 0u32, 1u32, true),
+            (false, 5, 5, 0, false),
+            (true, 5, 5, 0, true),
+            (true, 0, 5, 1, false),
+            (true, 5, 0, 1, false),
+        ] {
+            let mut e = Engine::new();
+            if !e.mem.is_mapped(0x011d_b0d4) {
+                e.map(0x011d_b000, 0x1000);
+            }
+            let data = e.mem.alloc(0x20);
+            e.mem.set_u32(data + 8, node);
+            e.mem.set_u32(0x011d_b0d4, menu);
+            e.register_double(0x0055_85e0, move |_, _| Ret {
+                eax: exe,
+                ..Ret::default()
+            });
+            e.set_stewie(engine_core::extend::stewie::VATS_HIGHLIGHT_KEEPS_WEAPON, on);
+            e.call_log = Some(vec![]);
+            assert_eq!(
+                vats_highlight_hides_world(&mut e, data),
+                wanted,
+                "row {on} {node} {menu}"
+            );
+            let asked = e
+                .call_log
+                .as_ref()
+                .unwrap()
+                .iter()
+                .any(|(a, _)| *a == 0x0055_85e0);
+            assert_eq!(asked, !on);
+            if on {
+                assert!(!vats_highlight_hides_world(&mut e, 0));
+            }
+        }
+    }
 }
 
 /// The drawing thread (`engine_core::draw_thread`): the next frame's start, the world accumulator's later users, a save, a load and the purge join a posted world draw before anything else they do.
@@ -11218,48 +11261,5 @@ mod draw_thread_joins {
             0x0086_e650,
             &[0; 16]
         ));
-    }
-
-    /// Row S0028 (lStewieAl's Tweaks' `VATSHighlightDataShouldHideWeapon`, `0x870AAA`,
-    /// `0x870C92`): off, `005585e0` on the highlight data decides; on, the highlight's target node
-    /// (+8) set and the VATS menu (`011db0d4`) open, without that call; no data: not hidden.
-    #[test]
-    fn s0028_the_vats_highlight_hides_the_world() {
-        for (on, node, menu, exe, wanted) in [
-            (false, 0u32, 0u32, 1u32, true),
-            (false, 5, 5, 0, false),
-            (true, 5, 5, 0, true),
-            (true, 0, 5, 1, false),
-            (true, 5, 0, 1, false),
-        ] {
-            let mut e = Engine::new();
-            if !e.mem.is_mapped(0x011d_b0d4) {
-                e.map(0x011d_b000, 0x1000);
-            }
-            let data = e.mem.alloc(0x20);
-            e.mem.set_u32(data + 8, node);
-            e.mem.set_u32(0x011d_b0d4, menu);
-            e.register_double(0x0055_85e0, move |_, _| Ret {
-                eax: exe,
-                ..Ret::default()
-            });
-            e.set_stewie(engine_core::extend::stewie::VATS_HIGHLIGHT_KEEPS_WEAPON, on);
-            e.call_log = Some(vec![]);
-            assert_eq!(
-                vats_highlight_hides_world(&mut e, data),
-                wanted,
-                "row {on} {node} {menu}"
-            );
-            let asked = e
-                .call_log
-                .as_ref()
-                .unwrap()
-                .iter()
-                .any(|(a, _)| *a == 0x0055_85e0);
-            assert_eq!(asked, !on);
-            if on {
-                assert!(!vats_highlight_hides_world(&mut e, 0));
-            }
-        }
     }
 }
