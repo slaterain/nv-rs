@@ -46,8 +46,6 @@ const POINTER_COPY: u32 = 0x00c4_6270;
 const POINTER_ASSIGN: u32 = 0x0066_b0d0;
 /// The holder of the default accumulator, at +8 (`011f4748` holds its address).
 const DEFAULT_ACCUMULATOR_HOLDER: u32 = 0x011f_4748;
-/// `InterlockedDecrement`, its import slot.
-const INTERLOCKED_DECREMENT: u32 = 0x00fd_f1c4;
 /// The debug print (empty in this build) and what `AppendVirtual` prints with it.
 const DEBUG_PRINT: u32 = 0x00a2_9680;
 const APPEND_FAILED_FORMAT: u32 = 0x0109_c2e0;
@@ -371,9 +369,9 @@ pub fn bs_process_scene(
         }
         let accumulator = e.mem.u32(holder.addr());
         if accumulator != 0 {
-            let count = e
-                .call(INTERLOCKED_DECREMENT, &args![accumulator.wrapping_add(4)])
-                .u32();
+            let count =
+                engine_core::sync_direct::interlocked_decrement(e, accumulator.wrapping_add(4))
+                    as u32;
             if count == 0 {
                 e.vcall(accumulator, SLOT_DELETE, &[]);
             }

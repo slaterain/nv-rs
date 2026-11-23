@@ -9,9 +9,6 @@ use super::{field_ptr, FAMILY, SCOPE_BEGIN, SCOPE_CONTEXT, SCOPE_END, SCOPE_MODE
 use engine_core::ptr::{Layout, Ptr};
 use engine_core::{args, typed_call, Engine};
 
-/// `TlsGetValue` and `TlsSetValue`, by their import slots.
-const TLS_GET_VALUE: u32 = 0x00fd_f044;
-const TLS_SET_VALUE: u32 = 0x00fd_f04c;
 /// The interlocked increment (`cdecl`, the word's address; answers the new count).
 const INTERLOCKED_INCREMENT: u32 = 0x0040_b460;
 /// `GetCurrentThreadId`'s wrapper (no arguments).
@@ -29,7 +26,7 @@ pub fn interface_for_thread(
 ) -> Ptr<MapInterface> {
     let s = store(e);
     let index = s.get(e, this, InterfaceManager::tls_index);
-    let found: Ptr<MapInterface> = Ptr::new(e.call(TLS_GET_VALUE, &args![index]).u32());
+    let found: Ptr<MapInterface> = Ptr::new(engine_core::sync_direct::tls_get_value(e, index));
     if !found.is_null() {
         return found;
     }
@@ -74,7 +71,7 @@ pub fn make_interface(
             thread,
         );
         let tls = s.get(e, this, InterfaceManager::tls_index);
-        e.call(TLS_SET_VALUE, &args![tls, made]);
+        engine_core::sync_direct::tls_set_value(e, tls, made.addr());
     }
     made
 }

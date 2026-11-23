@@ -40,7 +40,6 @@ const HANDOFF_SWITCH: u32 = 0x0120_24d8;
 const HANDOFF_MANAGER: u32 = 0x011f_5b04;
 const HANDOFF_THREAD: u32 = 0x0120_24dc;
 const HANDOFF_WORD: u32 = 0x011a_e6e0;
-const GET_CURRENT_THREAD_ID: u32 = 0x00fd_f1d0;
 const HANDOFF_OBJECT: u32 = 0x00c2_5c40;
 const HANDOFF_WITH: u32 = 0x00c2_58e0;
 
@@ -151,7 +150,7 @@ pub fn update_system(e: &mut Engine, this: Ptr<NiParticleSystem>, time: f32) {
             let data = e.mem.u32(this.addr().wrapping_add(MODEL_DATA));
             // FLDZ; FCOMP [data+0x1c]; TEST AH,5; JP: on only when 0.0 < the value.
             if 0.0 < e.mem.f32(data.wrapping_add(0x1c)) {
-                let thread = e.call(GET_CURRENT_THREAD_ID, &args![]).u32();
+                let thread = engine_core::sync_direct::get_current_thread_id(e);
                 if thread == e.global::<u32>(HANDOFF_THREAD) {
                     let object = e.call(HANDOFF_OBJECT, &args![]).u32();
                     if object != 0 {

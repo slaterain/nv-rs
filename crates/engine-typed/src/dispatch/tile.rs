@@ -20,10 +20,8 @@ use crate::crt;
 use engine_core::ptr::Ptr;
 use engine_core::{args, typed_call, Engine};
 
-/// The tiles' critical section and the import thunks that enter and leave it.
+/// The tiles' critical section.
 const TILE_CRITICAL_SECTION: u32 = 0x011f_3330;
-const ENTER_CRITICAL_SECTION: u32 = 0x00fd_f05c;
-const LEAVE_CRITICAL_SECTION: u32 = 0x00fd_f100;
 /// The memory manager singleton's allocate and free.
 const MEMORY_MANAGER: u32 = 0x011f_6238;
 const MEMORY_ALLOCATE: u32 = 0x00aa_3e40;
@@ -73,11 +71,11 @@ const ACTION_SLOT_REFERENCED: u32 = 0x4;
 const ACTION_NEXT: u32 = 0x08;
 
 fn enter(e: &mut Engine) {
-    e.call(ENTER_CRITICAL_SECTION, &args![TILE_CRITICAL_SECTION]);
+    engine_core::sync_direct::enter_critical_section(e, TILE_CRITICAL_SECTION);
 }
 
 fn leave(e: &mut Engine) {
-    e.call(LEAVE_CRITICAL_SECTION, &args![TILE_CRITICAL_SECTION]);
+    engine_core::sync_direct::leave_critical_section(e, TILE_CRITICAL_SECTION);
 }
 
 fn allocate(e: &mut Engine, size: u32) -> u32 {

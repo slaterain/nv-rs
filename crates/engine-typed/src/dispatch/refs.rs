@@ -10,12 +10,6 @@ use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
 use engine_core::{args, typed_call, Engine};
 
-/// The imports `InterlockedIncrement`, `InterlockedDecrement`, `InterlockedCompareExchange` and
-/// `GetCurrentThreadId`.
-const INTERLOCKED_INCREMENT: u32 = 0x00fd_f1c0;
-const INTERLOCKED_DECREMENT: u32 = 0x00fd_f1c4;
-const INTERLOCKED_COMPARE_EXCHANGE: u32 = 0x00fd_f1bc;
-const GET_CURRENT_THREAD_ID: u32 = 0x00fd_f1d0;
 /// The game's `Sleep` wrapper (`0040fca0`).
 const SLEEP: u32 = 0x0040_fca0;
 /// The spins the lock makes with `Sleep(0)` before it sleeps a millisecond at a time.
@@ -81,13 +75,13 @@ fn next(e: &mut Engine, node: u32) -> u32 {
 // Typed from 0040b460
 /// `InterlockedIncrement` of the word at `target`, the new count.
 pub fn increment(e: &mut Engine, target: Ptr) -> i32 {
-    e.call(INTERLOCKED_INCREMENT, &args![target]).i32()
+    engine_core::sync_direct::interlocked_increment(e, target.addr())
 }
 
 // Typed from 004019a0
 /// `InterlockedDecrement` of the word at `target`, the new count.
 pub fn decrement(e: &mut Engine, target: Ptr) -> i32 {
-    e.call(INTERLOCKED_DECREMENT, &args![target]).i32()
+    engine_core::sync_direct::interlocked_decrement(e, target.addr())
 }
 
 // Typed from 0040f6e0
@@ -143,14 +137,13 @@ pub fn ref_object_drop(e: &mut Engine, this: Ptr<RefObject>) {
 // Typed from 0040fc90
 /// `GetCurrentThreadId`.
 pub fn current_thread(e: &mut Engine) -> u32 {
-    e.call(GET_CURRENT_THREAD_ID, &[]).u32()
+    engine_core::sync_direct::get_current_thread_id(e)
 }
 
 // Typed from 0043b460
 /// `InterlockedCompareExchange(target, new, old)`: what `target` held.
 pub fn compare_exchange(e: &mut Engine, target: Ptr, old: i32, new: i32) -> i32 {
-    e.call(INTERLOCKED_COMPARE_EXCHANGE, &args![target, new, old])
-        .i32()
+    engine_core::sync_direct::interlocked_compare_exchange(e, target.addr(), new, old)
 }
 
 // Typed from 0040fbf0

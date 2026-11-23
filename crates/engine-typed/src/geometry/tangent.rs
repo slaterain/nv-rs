@@ -26,7 +26,6 @@ const FIXED_STRING_MAKE: u32 = 0x00a5_b690;
 const GET_EXTRA_DATA: u32 = 0x00a5_bdd0;
 const REMOVE_EXTRA_DATA: u32 = 0x00a5_be90;
 const TANGENT_SPACE_NAME: u32 = 0x010a_d7a8;
-const INTERLOCKED_DECREMENT: u32 = 0x00fd_f1c4;
 const EMPTY_FIXED_STRING: u32 = 0x0109_b220;
 const MEMORY_MANAGER: u32 = 0x011f_6238;
 const ALLOCATE: u32 = 0x00aa_3e40;
@@ -65,7 +64,7 @@ fn twelve_times(count: u32) -> u32 {
 /// before the text goes down (`InterlockedDecrement`).
 fn release_fixed_string(e: &mut Engine, name: u32) {
     if name != e.global::<u32>(EMPTY_FIXED_STRING) {
-        e.call(INTERLOCKED_DECREMENT, &args![name.wrapping_sub(8)]);
+        engine_core::sync_direct::interlocked_decrement(e, name.wrapping_sub(8));
     }
 }
 

@@ -44,8 +44,6 @@ const SLOT_RENDERER_FLAGS: u32 = 0xa0;
 /// the class `011f444c`) and the renderer data maker (`00e68ef0`, `cdecl`: the source and
 /// the manager's renderer).
 const TEXTURE_RENDERER: u32 = 0x011f_4748;
-const ENTER_CRITICAL_SECTION: u32 = 0x00fd_f05c;
-const LEAVE_CRITICAL_SECTION: u32 = 0x00fd_f100;
 const SOURCE_KIND: u32 = 0x011f_444c;
 const MAKE_RENDERER_DATA: u32 = 0x00e6_8ef0;
 /// The texture data's slots: the levels (0x98), the Direct3D texture (0x9c), the render target or
@@ -323,7 +321,7 @@ pub fn send_sampler_commands(e: &mut Engine, this: Ptr, enable: u32) {
 /// source answers null.
 fn renderer_data(e: &mut Engine, this: Ptr, texture: u32, made: u32) -> u32 {
     let lock = e.global::<u32>(TEXTURE_RENDERER).wrapping_add(0x180);
-    e.call(ENTER_CRITICAL_SECTION, &args![lock]);
+    engine_core::sync_direct::enter_critical_section(e, lock);
     let mut data = e.mem.u32(texture.wrapping_add(0x24));
     if data == 0 {
         let source = typed_call!(
@@ -333,14 +331,14 @@ fn renderer_data(e: &mut Engine, this: Ptr, texture: u32, made: u32) -> u32 {
         )
         .addr();
         if source == 0 {
-            e.call(LEAVE_CRITICAL_SECTION, &args![lock]);
+            engine_core::sync_direct::leave_critical_section(e, lock);
             return 0;
         }
         let renderer = e.mem.u32(this.addr().wrapping_add(0xc));
         data = e.call(MAKE_RENDERER_DATA, &args![source, renderer]).u32();
         e.mem.set_u8(made, 1);
     }
-    e.call(LEAVE_CRITICAL_SECTION, &args![lock]);
+    engine_core::sync_direct::leave_critical_section(e, lock);
     data
 }
 
