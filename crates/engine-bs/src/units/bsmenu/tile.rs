@@ -1346,6 +1346,7 @@ fn remove_from_list(e: &mut Engine, list: u32, tile: Ptr<Tile>) -> bool {
 /// The code the compiler folded away (setting `FLAG_DIRTY`, `FLAG_HIBERNATED`
 /// and `FLAG_PROMOTED` instead of clearing them) is not translated.
 pub fn tile_destructor(e: &mut Engine, this: Ptr<Tile>) {
+    engine_core::hitch::one(engine_core::hitch::Count::TilesDeleted);
     e.mem.set_u32(this.addr(), VTABLE_TILE);
     enter_critical_section(e, TILE_CRITICAL_SECTION);
     e.call(INTERFACE_TILE_IS_BEING_DELETED, &args![this]);
@@ -1389,6 +1390,7 @@ pub fn tile_init(
     name: Ptr,
     set_parent_arg: u32,
 ) {
+    engine_core::hitch::one(engine_core::hitch::Count::TilesMade);
     e.set(this, Tile::pParent, Ptr::NULL);
     e.call(NI_POINTER_ASSIGN, &args![this.byte_add(0x2c), 0u32]);
     e.call(STRING_SET, &args![this.at(Tile::xName), EMPTY_NAME, 0u32]);
