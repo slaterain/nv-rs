@@ -528,23 +528,26 @@ impl KernelLock {
                 .zip(crate::thread_cpu::cpu_ns(seen.thread))
                 .map(|(before, after)| after.saturating_sub(before));
             let call_name = call_words(w, seen.call);
-            crate::hitch::lock_holder(crate::hitch::LockHolder {
-                section: 0,
-                thread: seen.thread,
-                start: crate::thread_cpu::start_of(seen.thread),
-                call: seen.call,
-                call_name,
-                wait_ns: t.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
-                measured_ns: seen.at.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
-                cpu_ns,
-                site: site_words(seen.site),
-                render_wait: seen.render_wait,
-                // Other threads' takes while main waited (this one's own comes after): 0 is one long hold.
-                handoffs: self
-                    .takes
-                    .load(Ordering::Relaxed)
-                    .wrapping_sub(takes_before),
-            });
+            crate::hitch::lock_holder(
+                w.run,
+                crate::hitch::LockHolder {
+                    section: 0,
+                    thread: seen.thread,
+                    start: crate::thread_cpu::start_of(seen.thread),
+                    call: seen.call,
+                    call_name,
+                    wait_ns: t.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+                    measured_ns: seen.at.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+                    cpu_ns,
+                    site: site_words(seen.site),
+                    render_wait: seen.render_wait,
+                    // Other threads' takes while main waited (this one's own comes after): 0 is one long hold.
+                    handoffs: self
+                        .takes
+                        .load(Ordering::Relaxed)
+                        .wrapping_sub(takes_before),
+                },
+            );
         }
         if let Some(t) = started {
             let d = t.elapsed();
@@ -631,22 +634,31 @@ impl KernelLock {
         }
     }
 
-    /// Gives every hold of this thread back, answering how many (0 when it holds none).
-    fn release_all(&self) -> u32 {
+    /// Gives every hold of this thread back, answering how many (none when it holds none) and what the holder was
+    /// in ([`Holds`]).
+    fn release_all(&self) -> Holds {
         if !self.held_here() {
-            return 0;
+            return Holds::default();
         }
-        let depth = self.depth.load(Ordering::Relaxed);
+        let held = Holds {
+            depth: self.depth.load(Ordering::Relaxed),
+            call: self.holder_call.load(Ordering::Relaxed),
+            site: self.holder_site.load(Ordering::Relaxed),
+        };
         self.depth.store(1, Ordering::Relaxed);
         self.unlock();
-        depth
+        held
     }
 
-    /// Takes it again with `depth` holds ([`KernelLock::release_all`]); nothing for 0.
-    fn take_again(&self, w: &World, depth: u32) {
-        if depth > 0 {
+    /// Takes it again with the holds [`KernelLock::release_all`] gave back (nothing for none), and the platform
+    /// function and port code site the holder was in then: a call that gives the lock back part way (a decode
+    /// outside it, a wait) is still named by the hitch log when it works under the lock again.
+    fn take_again(&self, w: &World, held: Holds) {
+        if held.depth > 0 {
             self.lock(w);
-            self.depth.store(depth, Ordering::Relaxed);
+            self.depth.store(held.depth, Ordering::Relaxed);
+            self.holder_call.store(held.call, Ordering::Relaxed);
+            self.holder_site.store(held.site, Ordering::Relaxed);
         }
     }
 
@@ -657,6 +669,7 @@ impl KernelLock {
         debug_assert!(self.held_here());
         let depth = self.depth.load(Ordering::Relaxed);
         let call = self.holder_call.load(Ordering::Relaxed);
+        let site = self.holder_site.load(Ordering::Relaxed);
         let mut g = guard(&self.m);
         // Released while `m` is held, so a change made by the next holder is notified only once
         // this thread waits (it takes `m` to notify).
@@ -685,10 +698,20 @@ impl KernelLock {
         self.holder
             .store(GAME_ID.with(Cell::get), Ordering::Relaxed);
         self.holder_call.store(call, Ordering::Relaxed);
+        self.holder_site.store(site, Ordering::Relaxed);
         if was {
             w.enter_guest();
         }
     }
+}
+
+/// What [`KernelLock::release_all`] gave back: the thread's holds (0: it held none) and the platform function and
+/// port code site its hold was named by, which [`KernelLock::take_again`] restores.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Holds {
+    depth: u32,
+    call: u32,
+    site: usize,
 }
 
 /// A critical section's owner (a thread id, 0 when free) and its count of holds.
@@ -709,6 +732,9 @@ unsafe impl Send for SendEngine {}
 
 /// What the real threads of one run share.
 pub struct World {
+    /// The run this world is (`crate::units::platform::KernelRef::id`): the key of the hitch log's run-wide records
+    /// (a test process runs several at once).
+    run: usize,
     kernel: KernelLock,
     /// The device lock: the Direct3D 9 platform functions' own ([`device_call`], the layer's
     /// `device_calls`), so the thousands of device calls a frame do not take the kernel lock.
@@ -786,8 +812,9 @@ pub struct World {
 }
 
 impl World {
-    fn new(import_names: AddrMap<u32, &'static str>) -> Self {
+    fn new(import_names: AddrMap<u32, &'static str>, run: usize) -> Self {
         World {
+            run,
             kernel: KernelLock::new(),
             device: KernelLock::device(),
             sections: Mutex::new(AddrMap::default()),
@@ -1215,7 +1242,7 @@ impl Ctx {
 
     /// The main thread at its frame's end: gives the kernel lock back whole and stops running game
     /// code (`thread_host::end_main_frame`). Answers the holds to take again.
-    pub(crate) fn release_kernel(&self) -> u32 {
+    pub(crate) fn release_kernel(&self) -> Holds {
         let depth = self.world.kernel.release_all();
         self.world.leave_guest();
         depth
@@ -1223,7 +1250,7 @@ impl Ctx {
 
     /// The main thread at its next frame: runs game code again and takes the kernel lock with
     /// `depth` holds ([`Ctx::release_kernel`]).
-    pub(crate) fn take_kernel(&self, depth: u32) {
+    pub(crate) fn take_kernel(&self, depth: Holds) {
         self.world.enter_guest();
         self.world.kernel.take_again(self.world, depth);
     }
@@ -1350,7 +1377,10 @@ pub fn start(e: &mut Engine) -> Result<(), String> {
         let _ = e.mem.enable_track();
     }
     e.mem.start_sharing();
-    let world: &'static World = Box::leak(Box::new(World::new(e.kernel.import_names.clone())));
+    let world: &'static World = Box::leak(Box::new(World::new(
+        e.kernel.import_names.clone(),
+        e.kernel.id(),
+    )));
     // The events and semaphores made before (the C runtime's start-up, static initializers): kept
     // off the kernel lock from here as the ones made after ([`sync`]).
     let real_sync = sync::wanted();
@@ -1729,7 +1759,7 @@ fn released_kernel<R>(world: Option<&'static World>, f: impl FnOnce() -> R) -> R
         return f();
     }
     /// Takes the kernel lock back with the holds given up, however `f` ends.
-    struct Retake(&'static World, u32);
+    struct Retake(&'static World, Holds);
     impl Drop for Retake {
         fn drop(&mut self) {
             self.0.kernel.take_again(self.0, self.1);
@@ -2202,21 +2232,24 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
         if let Some((thread, call, cpu_before, render_wait)) = owned_by {
             let ns = d.as_nanos().min(u128::from(u64::MAX)) as u64;
             if ns >= crate::hitch::HOLDER_WAIT_NS {
-                crate::hitch::section_holder(crate::hitch::LockHolder {
-                    section: a,
-                    thread,
-                    start: crate::thread_cpu::start_of(thread),
-                    call,
-                    call_name: call_words(w, call),
-                    wait_ns: ns,
-                    measured_ns: ns,
-                    cpu_ns: cpu_before
-                        .zip(crate::thread_cpu::cpu_ns(thread))
-                        .map(|(b, after)| after.saturating_sub(b)),
-                    site: String::new(),
-                    handoffs: 0,
-                    render_wait,
-                });
+                crate::hitch::section_holder(
+                    w.run,
+                    crate::hitch::LockHolder {
+                        section: a,
+                        thread,
+                        start: crate::thread_cpu::start_of(thread),
+                        call,
+                        call_name: call_words(w, call),
+                        wait_ns: ns,
+                        measured_ns: ns,
+                        cpu_ns: cpu_before
+                            .zip(crate::thread_cpu::cpu_ns(thread))
+                            .map(|(b, after)| after.saturating_sub(b)),
+                        site: String::new(),
+                        handoffs: 0,
+                        render_wait,
+                    },
+                );
             }
         }
     }
@@ -4525,11 +4558,11 @@ mod tests {
         while !BUSY_STARTED.load(Ordering::SeqCst) {
             std::thread::yield_now();
         }
-        let _ = crate::hitch::take_lock_holder();
+        let _ = crate::hitch::take_lock_holder(e.kernel.id());
         // A plain locked call: it waits for the busy thread's hold.
         e.call(slot("GetDoubleClickTime"), &args![]);
         MAIN_DONE.store(true, Ordering::SeqCst);
-        let held = crate::hitch::take_lock_holder().expect("a named holder");
+        let held = crate::hitch::take_lock_holder(e.kernel.id()).expect("a named holder");
         assert_eq!(held.call_name, "D3DPERF_SetOptions");
         assert_eq!(held.handoffs, 0, "one long hold: {held:?}");
         assert!(held.site.is_empty(), "in a platform call: {held:?}");
@@ -4545,6 +4578,50 @@ mod tests {
                 "working, not off the processor: {held:?}"
             );
         }
+        assert_eq!(
+            e.call(slot("WaitForSingleObject"), &args![h, STRESS_TIMEOUT_MS])
+                .eax,
+            0
+        );
+    }
+
+    /// A platform function that gives the kernel lock back part way (as a decode outside the lock does), then works
+    /// 250 ms under it again.
+    fn busy_after_a_give_back(e: &mut Engine, a: &[u32]) -> Ret {
+        without_kernel_lock(e, || ());
+        busy_under_the_lock(e, a)
+    }
+
+    /// A holder that gave the kernel lock back and took it again inside its platform call is still named by that
+    /// call (not "outside a platform call") when main waits for it afterwards.
+    #[test]
+    fn a_holder_that_gave_the_lock_back_part_way_is_named_by_its_call() {
+        let _one = guard(&HOLDER_TESTS);
+        let (mut e, slot) = engine_with_imports();
+        let busy = slot("D3DPERF_SetOptions");
+        e.register(busy, busy_after_a_give_back);
+        e.register(0x0040_f000, calls_the_busy_function);
+        start(&mut e).expect("real threads on");
+        ctx(&e).frame_begins(false);
+        BUSY_STARTED.store(false, Ordering::SeqCst);
+        MAIN_DONE.store(false, Ordering::SeqCst);
+        let h = e
+            .call(
+                slot("CreateThread"),
+                &args![0u32, 0u32, 0x0040_f000u32, busy, 0u32, 0u32],
+            )
+            .eax;
+        while !BUSY_STARTED.load(Ordering::SeqCst) {
+            std::thread::yield_now();
+        }
+        let _ = crate::hitch::take_lock_holder(e.kernel.id());
+        e.call(slot("GetDoubleClickTime"), &args![]);
+        MAIN_DONE.store(true, Ordering::SeqCst);
+        let held = crate::hitch::take_lock_holder(e.kernel.id()).expect("a named holder");
+        assert_eq!(held.call_name, "D3DPERF_SetOptions", "{held:?}");
+        assert_eq!(held.call, busy);
+        assert!(held.site.is_empty(), "in a platform call: {held:?}");
+        assert_eq!(held.start, 0x0040_f000);
         assert_eq!(
             e.call(slot("WaitForSingleObject"), &args![h, STRESS_TIMEOUT_MS])
                 .eax,
@@ -4603,10 +4680,10 @@ mod tests {
         while !BUSY_STARTED.load(Ordering::SeqCst) {
             std::thread::yield_now();
         }
-        let _ = crate::hitch::take_section_holder();
+        let _ = crate::hitch::take_section_holder(e.kernel.id());
         e.call(slot("EnterCriticalSection"), &args![section]);
         e.call(slot("LeaveCriticalSection"), &args![section]);
-        let owned = crate::hitch::take_section_holder().expect("a named owner");
+        let owned = crate::hitch::take_section_holder(e.kernel.id()).expect("a named owner");
         assert_eq!(owned.section, section);
         assert_eq!(owned.call_name, "D3DPERF_SetOptions");
         assert_eq!(owned.start, 0x0040_f100);

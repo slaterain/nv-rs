@@ -2954,6 +2954,8 @@ pub fn fn_0086e650(e: &mut Engine, this: Ptr) {
     let tick = e.call(IS_IN_MENU_MODE, &args![]).u8() != 0
         || (player != 0 && e.call(0x0095_0090, &args![player]).u8() != 0)
         || (accumulated as f64) >= e.global::<f64>(0x0103_57e8);
+    // The other steps end here every frame; the sort, when the tick runs, is its own part.
+    tail_mark(TailMark::TickIn);
     if tick {
         e.set_global(0x011d_eef8, 0.0f32);
         let step = e.global::<u8>(0x011d_eef5);
@@ -2970,7 +2972,6 @@ pub fn fn_0086e650(e: &mut Engine, this: Ptr) {
             let free = (pool != 0 && e.mem.is_mapped(pool + 0x54)).then(|| e.mem.u32(pool + 0x54));
             engine_core::stage_time::tail_tick(u32::from(step), free);
         }
-        tail_mark(TailMark::TickIn);
         e.call(0x00aa_7290, &args![step as u32]);
         tail_mark(TailMark::TickOut);
         // The game also resets the counter when it reaches 0x100, which a byte never does.

@@ -256,12 +256,13 @@ pub enum TailMark {
     /// `00870610` returned: the queued menu open (`Interface::HandleQueuedMenuOpen`, `007094f0`), the support menus
     /// closed when flagged (`00870680`), Tweaks' and `DebugText`'s queued prints.
     PostThreads,
-    /// The 256-step tick (`00aa7290`) is called: the steps before it (`0070ed10`'s menu check, `00a29680`,
-    /// `005ae270`, `005a9d60`) and the tick's test.
+    /// Every frame, at the 256-step tick's test: the other steps done (`0070ed10`'s menu check, `00a29680`,
+    /// `005ae270`, `005a9d60`, the test itself).
     TickIn,
-    /// The tick returned: the memory manager's free-list sort of one pool, under the pool's spin lock.
+    /// The tick (`00aa7290`, when the test passed: in a menu, in the vanity camera, else once every 45 s) returned:
+    /// the memory manager's free-list sort of one pool, under the pool's spin lock.
     TickOut,
-    /// `Main::OnIdle` returned.
+    /// `Main::OnIdle` returned (from the tick, or from the test on a frame with no tick).
     IdleEnd,
 }
 
@@ -284,7 +285,7 @@ pub const TAIL_PART_NAMES: [&str; TAIL_PARTS] = [
     "queued menu open, support menus and prints",
     "other steps",
     "free-list sort",
-    "after the sort",
+    "the end of OnIdle",
     "the game's loop to the host",
 ];
 
@@ -1089,6 +1090,23 @@ mod tests {
             Some((3, None)),
             "no pool at that index"
         );
+        // A frame with no tick (the usual one: outside menus the tick runs once every 45 s): the other steps end at
+        // the tick's test, the sort is not passed, and OnIdle ends right after the test.
+        point(Point::Idle);
+        point(Point::WaitOut);
+        tail_mark(TailMark::PostThreads);
+        advance(300);
+        tail_mark(TailMark::TickIn);
+        advance(5);
+        tail_mark(TailMark::IdleEnd);
+        point(Point::Host);
+        let t = take_tail().expect("a tail");
+        assert_eq!(
+            (t.parts[10], t.parts[11], t.parts[12]),
+            (Some(300), None, Some(5))
+        );
+        assert_eq!(TAIL_PART_NAMES[10], "other steps");
+        assert_eq!(t.tick, None);
     }
 
     /// A drain keeps six kinds of task apart (the first seen) and counts the rest together; a second drain of the

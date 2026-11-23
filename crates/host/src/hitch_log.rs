@@ -23,9 +23,10 @@
 //! load and store under the heap's lock) and, for waits and reads, a clock read pair around a call that already
 //! blocks or reads the disk. The stage split costs about ten clock reads a frame (`engine_core::stage_time`'s
 //! points), the frame tail's split thirteen more and two for each task main drains from the task queues
-//! there. Main's time in the guest heap is timed only with `NV_HITCH_HEAP=1` (two clock reads a block: about
-//! 4 ms on the pause menu's 80,000-block opening frame). A hitch frame adds one formatted line, one write to the
-//! log and, when the player's cell changed since the last line, one call of the cell's `GetEditorID`.
+//! there. Main's time in the guest heap and in each script run is timed only with `NV_HITCH_HEAP=1` (two clock
+//! reads a block or a run: about 4 ms on the pause menu's 80,000-block opening frame). A hitch frame adds one
+//! formatted line, one write to the log and, when the player's cell changed since the last line, one call of the
+//! cell's `GetEditorID`.
 
 use engine::Engine;
 use engine_core::hitch::{Count, WaitKind, COUNTS};
@@ -442,7 +443,9 @@ fn holder_words(h: &engine_core::hitch::LockHolder) -> String {
         (t, s) => format!("game thread {t} (starts at {s:08x})"),
     };
     let what = match (h.call, h.call_name.as_str()) {
-        (0, _) if h.section != 0 => "running game code (in no platform call)".to_string(),
+        // A section's owner notes only its locked platform calls: in none, it may be running game code, in a sync
+        // import or a device call, or blocked.
+        (0, _) if h.section != 0 => "in no locked platform call".to_string(),
         (0, _) if !h.site.is_empty() => format!("in {}", h.site),
         (0, _) => "outside a platform call".to_string(),
         (_, "") => format!("in the platform call at {:08x}", h.call),
@@ -457,6 +460,8 @@ fn holder_words(h: &engine_core::hitch::LockHolder) -> String {
                 ms(h.measured_ns),
                 if share >= 0.5 {
                     "working under the lock"
+                } else if h.section != 0 {
+                    "blocked or off the processor"
                 } else {
                     "mostly off the processor"
                 }
@@ -540,14 +545,13 @@ impl Frame {
     }
 
     /// What the render thread's presents of the frame waited on, the largest first, when one is 1 ms or more: the
-    /// queue thread's last frame (`sync`), the window's next frame (with the Fifo present mode, the display's refresh)
-    /// and the present call itself.
+    /// queue thread's last frame (`sync`, its present call included) and the window's next frame (with the Fifo present
+    /// mode, the display's refresh).
     fn render_reason(&self) -> String {
         use engine_platform::stream_hitch::Count as S;
         let mut parts = [
             (self.s(S::AcquireNs), "the window's next frame"),
             (self.s(S::RenderSyncNs), "the queue thread's last frame"),
-            (self.s(S::SwapNs), "the present call"),
         ];
         parts.sort_by_key(|a| std::cmp::Reverse(a.0));
         let said: Vec<String> = parts
@@ -917,9 +921,10 @@ impl Frame {
             format!("waited in Present {:.1} ms", ms(self.s(S::PresentWaitNs))),
         );
         put(
-            (self.s(S::AcquireNs) + self.s(S::RenderSyncNs) + self.s(S::SwapNs)) / TENTH_MS,
+            // The present call runs on the queue thread: its time is part of the render thread's wait for that thread.
+            (self.s(S::AcquireNs) + self.s(S::RenderSyncNs)) / TENTH_MS,
             format!(
-                "the render thread waited {:.1} ms for the window's frame, {:.1} for the queue thread, {:.1} in the present call",
+                "the render thread waited {:.1} ms for the window's frame, {:.1} for the queue thread (whose present call took {:.1})",
                 ms(self.s(S::AcquireNs)),
                 ms(self.s(S::RenderSyncNs)),
                 ms(self.s(S::SwapNs))
@@ -1230,8 +1235,8 @@ impl HitchLog {
         self.stream = stream_now;
         let longest_wait = engine_core::hitch::take_longest_wait();
         let largest_read = engine_core::hitch::take_largest_read();
-        let lock_holder = engine_core::hitch::take_lock_holder();
-        let section_holder = engine_core::hitch::take_section_holder();
+        let lock_holder = engine_core::hitch::take_lock_holder(e.kernel.id());
+        let section_holder = engine_core::hitch::take_section_holder(e.kernel.id());
         let hibernating = if e.mem.is_mapped(HIBERNATING_TILE_COUNT) {
             e.mem.u32(HIBERNATING_TILE_COUNT)
         } else {
@@ -1953,7 +1958,7 @@ mod tests {
                  tasks: tag 0x0e x1 7.0 ms, tag 0x07 x3 0.3 ms, tag 0x22 x2 0.2 ms and 2 more kinds; 0.0 ms outside \
                  the tasks, 1,500 turns on an empty queue waiting for another thread's input), task queue begin input \
                  0.0, queued menu open, support menus and prints 0.1, other steps 0.0, free-list sort 0.0 (pool 37, \
-                 1,203 in its free list), after the sort 0.0, the game's loop to the host 0.0;"
+                 1,203 in its free list), the end of OnIdle 0.0, the game's loop to the host 0.0;"
             ),
             "{l}"
         );
@@ -1981,6 +1986,30 @@ mod tests {
         // A short tail is not split.
         f.stages = Some([1.0, 0.0, 0.8, 2.5, 0.3, 0.1, 0.8, 1.9, 0.0]);
         assert!(!f.line().contains("frame tail parts"));
+    }
+
+    /// A section's owner in no locked platform call is said so (it may be running game code, in a sync import or a
+    /// device call, which it does not note), and a low share of processor time as blocked or off the processor.
+    #[test]
+    fn a_section_owner_in_no_locked_call_is_said_so() {
+        let h = LockHolder {
+            section: 0x0120_0010,
+            thread: 4,
+            start: 0,
+            call: 0,
+            call_name: String::new(),
+            wait_ns: 5_000_000,
+            measured_ns: 5_000_000,
+            cpu_ns: Some(500_000),
+            site: String::new(),
+            handoffs: 0,
+            render_wait: 0,
+        };
+        assert_eq!(
+            holder_words(&h),
+            "section 01200010 owned by game thread 4 in no locked platform call, main waited 5.0 ms; it ran 0.5 of \
+             the last 5.0 ms waited (blocked or off the processor)"
+        );
     }
 
     #[test]

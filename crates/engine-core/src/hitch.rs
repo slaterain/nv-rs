@@ -308,8 +308,9 @@ thread_local! {
     static IN_HEAP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// A script run: counted ([`Count::ScriptRuns`], every run) and timed into [`Count::ScriptNsMain`] when it is the
-/// outermost on this thread, so a script another script runs is not counted twice.
+/// A script run: counted ([`Count::ScriptRuns`], every run) and, with `NV_HITCH_HEAP=1` ([`heap_timed`]: two clock
+/// reads a run), timed into [`Count::ScriptNsMain`] when it is the outermost on this thread, so a script another
+/// script runs is not counted twice.
 pub struct ScriptSpan {
     timed: Option<std::time::Instant>,
 }
@@ -338,13 +339,14 @@ pub fn script_span() -> ScriptSpan {
         n == 0
     });
     ScriptSpan {
-        timed: (outermost && timed_here()).then(std::time::Instant::now),
+        timed: (outermost && heap_timed() && timed_here()).then(std::time::Instant::now),
     }
 }
 
-/// `NV_HITCH_HEAP=1` (a diagnostic switch, off by default): main's time in the guest heap is timed
-/// ([`heap_timer`]). Two clock reads around every allocate and free on main cost about 4 ms on the pause menu's
-/// opening frame (80,000 blocks), so a normal run counts the blocks only. 0: the variable not read yet; 1: off; 2: on.
+/// `NV_HITCH_HEAP=1` (a diagnostic switch, off by default): main's time in the guest heap ([`heap_timer`]) and in
+/// each script run ([`script_span`]) is timed. Two clock reads around every allocate and free on main cost about
+/// 4 ms on the pause menu's opening frame (80,000 blocks), and two more each script run, so a normal run counts
+/// the blocks and the runs only. 0: the variable not read yet; 1: off; 2: on.
 static HEAP_TIMED: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 /// Whether main's heap time is timed (`NV_HITCH_HEAP=1`; read once).
@@ -426,44 +428,63 @@ pub struct LockHolder {
 /// The waits main makes that are worth naming a holder for (1 ms).
 pub const HOLDER_WAIT_NS: u64 = 1_000_000;
 
-static HOLDER: std::sync::Mutex<Option<LockHolder>> = std::sync::Mutex::new(None);
+/// A run's longest named wait of the frame, by the run (`crate::units::platform::KernelRef::id`): a test process runs
+/// several runs at once, each with its own main.
+type Holders = std::sync::Mutex<Vec<(usize, LockHolder)>>;
 
-/// Main waited `holder.wait_ns` for the kernel lock that `holder` held: kept when it is the frame's longest.
-pub fn lock_holder(holder: LockHolder) {
+/// At most this many runs keep a record (a run that never takes its record: a test's).
+const HOLDER_RUNS: usize = 64;
+
+/// Keeps `holder` for `run` when it is that run's longest wait of the frame (1 ms or more).
+fn keep_longest(slots: &Holders, run: usize, holder: LockHolder) {
     if holder.wait_ns < HOLDER_WAIT_NS {
         return;
     }
-    if let Ok(mut h) = HOLDER.lock() {
-        if h.as_ref().map_or(true, |k| holder.wait_ns > k.wait_ns) {
-            *h = Some(holder);
+    if let Ok(mut h) = slots.lock() {
+        match h.iter_mut().find(|(r, _)| *r == run) {
+            Some((_, k)) if holder.wait_ns > k.wait_ns => *k = holder,
+            Some(_) => {}
+            None => {
+                if h.len() >= HOLDER_RUNS {
+                    h.remove(0);
+                }
+                h.push((run, holder));
+            }
         }
     }
 }
 
-/// The frame's longest named wait for the kernel lock ([`lock_holder`]), then none.
-pub fn take_lock_holder() -> Option<LockHolder> {
-    HOLDER.lock().ok().and_then(|mut h| h.take())
+/// `run`'s record ([`keep_longest`]), then none.
+fn take_run(slots: &Holders, run: usize) -> Option<LockHolder> {
+    let mut h = slots.lock().ok()?;
+    let i = h.iter().position(|(r, _)| *r == run)?;
+    Some(h.swap_remove(i).1)
 }
 
-static SECTION_HOLDER: std::sync::Mutex<Option<LockHolder>> = std::sync::Mutex::new(None);
+static HOLDER: Holders = std::sync::Mutex::new(Vec::new());
 
-/// Main waited `holder.wait_ns` for the game critical section `holder.section` that `holder.thread` owned (the
-/// platform function the owner was in then, its processor time over the whole wait): kept when it is the frame's
-/// longest of 1 ms or more.
-pub fn section_holder(holder: LockHolder) {
-    if holder.wait_ns < HOLDER_WAIT_NS {
-        return;
-    }
-    if let Ok(mut h) = SECTION_HOLDER.lock() {
-        if h.as_ref().map_or(true, |k| holder.wait_ns > k.wait_ns) {
-            *h = Some(holder);
-        }
-    }
+/// Main of `run` waited `holder.wait_ns` for the kernel lock that `holder` held: kept when it is the frame's longest.
+pub fn lock_holder(run: usize, holder: LockHolder) {
+    keep_longest(&HOLDER, run, holder);
 }
 
-/// The frame's longest named wait for a game critical section ([`section_holder`]), then none.
-pub fn take_section_holder() -> Option<LockHolder> {
-    SECTION_HOLDER.lock().ok().and_then(|mut h| h.take())
+/// `run`'s longest named wait of the frame for the kernel lock ([`lock_holder`]), then none.
+pub fn take_lock_holder(run: usize) -> Option<LockHolder> {
+    take_run(&HOLDER, run)
+}
+
+static SECTION_HOLDER: Holders = std::sync::Mutex::new(Vec::new());
+
+/// Main of `run` waited `holder.wait_ns` for the game critical section `holder.section` that `holder.thread` owned
+/// (the platform function the owner was in then, its processor time over the whole wait): kept when it is the
+/// frame's longest of 1 ms or more.
+pub fn section_holder(run: usize, holder: LockHolder) {
+    keep_longest(&SECTION_HOLDER, run, holder);
+}
+
+/// `run`'s longest named wait of the frame for a game critical section ([`section_holder`]), then none.
+pub fn take_section_holder(run: usize) -> Option<LockHolder> {
+    take_run(&SECTION_HOLDER, run)
 }
 
 /// What main waited for.
