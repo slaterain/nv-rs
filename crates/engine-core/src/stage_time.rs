@@ -230,9 +230,15 @@ pub const NAMES: [&str; COLUMNS] = [
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(usize)]
 pub enum TailMark {
-    /// In `Main::UpdateNonRenderSafeAITasks` (`0086f6a0`): the process lists' steps returned (the projectiles and
-    /// explosions `0096c240`, the actors' animation scene graphs `0096c970` or `0096c860`, the detection lists
-    /// `0096c710`, the actors' process and ragdoll step `009781d0`).
+    /// In `Main::UpdateNonRenderSafeAITasks` (`0086f6a0`), the process lists' four steps one by one: the projectiles
+    /// and explosions (`0096c240`; with the open dialogue's timer before it) returned.
+    AiProjectiles,
+    /// The actors' animation scene graphs (their bones: `ProcessLists::ParallelUpdateAnimationScenegraph`,
+    /// `0096c970`, with more than one thread, else `UpdateAnimationScenegraph`, `0096c860`) returned.
+    AiBones,
+    /// The detection lists merged (`0096c710`) returned.
+    AiDetection,
+    /// The actors' process step and ragdolls (`009781d0`) returned.
     AiLists,
     /// The Pip-Boy's step and, with more than one thread, `TESObjectCELL::PerformQueuedChildAttaches` (`0054ae30`)
     /// returned.
@@ -267,13 +273,16 @@ pub enum TailMark {
 }
 
 /// How many tail marks there are.
-pub const TAIL_MARKS: usize = 13;
+pub const TAIL_MARKS: usize = 16;
 /// The tail's parts: one ending at each mark, then the last to the host's take.
 pub const TAIL_PARTS: usize = TAIL_MARKS + 1;
 
 /// The tail's parts in words, in [`TailMark`]'s order, then the last mark to the host's take.
 pub const TAIL_PART_NAMES: [&str; TAIL_PARTS] = [
-    "AI tasks: process lists",
+    "AI tasks: projectiles and explosions",
+    "AI tasks: animation scene graphs (bones)",
+    "AI tasks: detection lists",
+    "AI tasks: actors' process and ragdolls",
     "AI tasks: Pip-Boy and child attaches",
     "AI tasks: first task queue",
     "AI tasks: queued node updates",
@@ -440,11 +449,122 @@ pub fn tail_tick(index: u32, free: Option<u32>) {
     }
 }
 
-/// Main passed tail mark `m` (see [`TailMark`]). Off: nothing.
+/// Main passed tail mark `m` (see [`TailMark`]). Off: nothing. At `OnIdle`'s end main's own processor clock is read
+/// too ([`main_clock`]).
 #[inline]
 pub fn tail_mark(m: TailMark) {
     if points_on() {
         MARKS.tail[m as usize].store(now_ns(), Relaxed);
+        if m == TailMark::IdleEnd {
+            main_clock(1);
+        }
+    }
+}
+
+/// Main's own processor clock and the wall clock in the same unit (`crate::thread_cpu::own_clock`), at
+/// `WaitForThreads`' return (0) and at `OnIdle`'s end (1): how much of its tail main spent on the processor.
+static MAIN_CLOCK: [[AtomicU64; 2]; 2] = [
+    [AtomicU64::new(0), AtomicU64::new(0)],
+    [AtomicU64::new(0), AtomicU64::new(0)],
+];
+
+/// Reads main's processor clock into [`MAIN_CLOCK`]`[at]` (none where the system does not tell it cheaply).
+fn main_clock(at: usize) {
+    let (cpu, wall) = crate::thread_cpu::own_clock().unwrap_or((0, 0));
+    MAIN_CLOCK[at][0].store(cpu, Relaxed);
+    MAIN_CLOCK[at][1].store(wall, Relaxed);
+}
+
+/// Main's share of the processor over its tail from `WaitForThreads`' return to `OnIdle`'s end, in thousandths
+/// (`None` where the clock is not read or the frame passed neither point).
+fn main_share() -> Option<u32> {
+    let load = |at: usize, i: usize| MAIN_CLOCK[at][i].load(Relaxed);
+    let (wall0, wall1) = (load(0, 1), load(1, 1));
+    if wall0 == 0 || wall1 <= wall0 {
+        return None;
+    }
+    let cpu = load(1, 0).saturating_sub(load(0, 0));
+    Some((cpu.saturating_mul(1000) / (wall1 - wall0)).min(1000) as u32)
+}
+
+/// Tag 0x04 of the first packed task queue as main ran it in the frame: queued by `TES`'s update at its end on the
+/// AI thread (`00453550` through `0087aa90`), run by `TaskQueueInterface::TaskUnpackFunc` (`0087b990`): the
+/// physics results applied to the scene graph.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HavokSync {
+    /// The actors' Havok sync (`ActorHavokSyncParallelArrayTaskFunc`, `0087cfb0`, over the list at `011df244`, split
+    /// between main and the parallel task thread by `BSParallelTaskManager`, `00c44c90`): its time (ns) and entries.
+    pub actors_ns: u64,
+    pub actors: u32,
+    /// The nodes updated (`0087cf50` over the list at `011df1c4`, a node of more than ten children by each child,
+    /// split the same way): its time (ns) and the nodes.
+    pub nodes_ns: u64,
+    pub nodes: u32,
+    /// The cells' update after it (`00453900` on `TES`, when the list's gate is off) (ns).
+    pub cells_ns: u64,
+    /// How many times it ran in the frame.
+    pub runs: u32,
+}
+
+/// The frame's tag 0x04 runs on main ([`havok_sync`]).
+static HAVOK_SYNC: Mutex<Option<HavokSync>> = Mutex::new(None);
+
+/// Times tag 0x04's three steps on main ([`HavokSync`]); off (the points off, or another thread running it when
+/// the queue is not active) it reads no clock.
+pub struct HavokSyncTimer {
+    /// [`now_ns`] at the last step's end; 0 while off.
+    last: u64,
+    s: HavokSync,
+}
+
+/// Starts timing a run of tag 0x04 (main's, in its frame tail).
+#[inline]
+pub fn havok_sync() -> HavokSyncTimer {
+    let on = points_on() && !crate::real_threads::on_other_game_thread();
+    HavokSyncTimer {
+        last: if on { now_ns() } else { 0 },
+        s: HavokSync::default(),
+    }
+}
+
+impl HavokSyncTimer {
+    /// The time since the last step (ns), and the clock moved on.
+    fn step(&mut self) -> u64 {
+        let now = now_ns();
+        let was = std::mem::replace(&mut self.last, now);
+        now.saturating_sub(was)
+    }
+
+    /// The actors' Havok sync ended: `n` entries in its list.
+    pub fn actors(&mut self, n: u32) {
+        if self.last != 0 {
+            self.s.actors_ns = self.step();
+            self.s.actors = n;
+        }
+    }
+
+    /// The node updates ended: `n` nodes.
+    pub fn nodes(&mut self, n: u32) {
+        if self.last != 0 {
+            self.s.nodes_ns = self.step();
+            self.s.nodes = n;
+        }
+    }
+
+    /// The cells' update ended: the run joins the frame's.
+    pub fn end(mut self) {
+        if self.last == 0 {
+            return;
+        }
+        self.s.cells_ns = self.step();
+        let mut h = HAVOK_SYNC.lock().unwrap_or_else(PoisonError::into_inner);
+        let t = h.get_or_insert_with(HavokSync::default);
+        t.actors_ns += self.s.actors_ns;
+        t.actors += self.s.actors;
+        t.nodes_ns += self.s.nodes_ns;
+        t.nodes += self.s.nodes;
+        t.cells_ns += self.s.cells_ns;
+        t.runs += 1;
     }
 }
 
@@ -457,6 +577,11 @@ pub struct Tail {
     pub drains: [Option<DrainStats>; 2],
     /// The 256-step tick: the pool's index and its free list's count before the sort (`None`: no pool there).
     pub tick: Option<(u32, Option<u32>)>,
+    /// Tag 0x04's runs on main ([`HavokSync`]).
+    pub havok_sync: Option<HavokSync>,
+    /// Main's share of the processor from `WaitForThreads`' return to `OnIdle`'s end, in thousandths (`None` where
+    /// the system does not tell it cheaply: macOS, Windows on ARM).
+    pub main_share: Option<u32>,
 }
 
 impl Tail {
@@ -479,8 +604,14 @@ pub fn take_tail() -> Option<Tail> {
     }
     let drains = std::mem::take(&mut *DRAINS.lock().unwrap_or_else(PoisonError::into_inner));
     let tick = TICK.swap(0, Relaxed);
+    let havok_sync = HAVOK_SYNC
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take();
     let mut tail = MARKS.tail_parts()?;
     tail.drains = drains;
+    tail.havok_sync = havok_sync;
+    tail.main_share = main_share();
     tail.tick = (tick >> 63 != 0).then(|| {
         (
             ((tick >> 32) as u32) & 0xff,
@@ -696,6 +827,10 @@ fn clear_all() {
 fn forget_tail_work() {
     *DRAINS.lock().unwrap_or_else(PoisonError::into_inner) = [None, None];
     TICK.store(0, Relaxed);
+    *HAVOK_SYNC.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    for a in MAIN_CLOCK.iter().flatten() {
+        a.store(0, Relaxed);
+    }
 }
 
 /// The switch on for the calling thread only, until the guard drops (the engine crates' tests of the marks'
@@ -749,6 +884,9 @@ fn now_ns() -> u64 {
 pub fn point(p: Point) {
     if points_on() {
         MARKS.point(p, now_ns());
+        if p == Point::WaitOut {
+            main_clock(0);
+        }
         if p == Point::Idle {
             // A frame starts: the last frame's drains and tick are forgotten if nothing took them.
             forget_tail_work();
@@ -1053,6 +1191,9 @@ mod tests {
             [
                 None,
                 None,
+                None,
+                None,
+                None,
                 Some(2_400),
                 None,
                 Some(0),
@@ -1067,7 +1208,7 @@ mod tests {
                 Some(50)
             ]
         );
-        assert_eq!(tail.longest(), Some((11, 8_000)));
+        assert_eq!(tail.longest(), Some((14, 8_000)));
         assert_eq!(tail.tick, Some((37, Some(1_203))));
         let first = tail.drains[DrainQueue::First as usize].expect("the first queue's drain");
         assert_eq!(
@@ -1102,10 +1243,10 @@ mod tests {
         point(Point::Host);
         let t = take_tail().expect("a tail");
         assert_eq!(
-            (t.parts[10], t.parts[11], t.parts[12]),
+            (t.parts[13], t.parts[14], t.parts[15]),
             (Some(300), None, Some(5))
         );
-        assert_eq!(TAIL_PART_NAMES[10], "other steps");
+        assert_eq!(TAIL_PART_NAMES[13], "other steps");
         assert_eq!(t.tick, None);
     }
 
@@ -1151,6 +1292,51 @@ mod tests {
         tail_tick(1, Some(2));
         assert!(DRAINS.lock().unwrap().iter().all(Option::is_none));
         assert_eq!(TICK.load(Relaxed), 0);
+        let mut h = havok_sync();
+        h.actors(1);
+        h.end();
+        assert!(HAVOK_SYNC.lock().unwrap().is_none());
         assert!(take_tail().is_none());
+    }
+
+    /// Tag 0x04's three steps are timed into the frame's tail, two runs added; main's processor share of the tail
+    /// is a thousandth count where the system tells it.
+    #[test]
+    fn the_havok_sync_steps_and_main_s_share_come_with_the_tail() {
+        let _here = on_here();
+        point(Point::Idle);
+        point(Point::WaitOut);
+        for _ in 0..2 {
+            let mut h = havok_sync();
+            advance(100);
+            h.actors(3);
+            advance(5_000);
+            h.nodes(40);
+            advance(10);
+            h.end();
+        }
+        tail_mark(TailMark::IdleEnd);
+        point(Point::Host);
+        let t = take_tail().expect("a tail");
+        assert_eq!(
+            t.havok_sync,
+            Some(HavokSync {
+                actors_ns: 200,
+                actors: 6,
+                nodes_ns: 10_000,
+                nodes: 80,
+                cells_ns: 20,
+                runs: 2,
+            })
+        );
+        if crate::thread_cpu::own_clock().is_some() {
+            assert!(t.main_share.is_some_and(|s| s <= 1000), "{t:?}");
+        } else {
+            assert_eq!(t.main_share, None);
+        }
+        point(Point::Idle);
+        point(Point::WaitOut);
+        point(Point::Host);
+        assert_eq!(take_tail().expect("a tail").havok_sync, None, "per frame");
     }
 }

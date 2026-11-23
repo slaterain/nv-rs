@@ -22,11 +22,11 @@
 //! 128 values: a few microseconds. The counters cost one relaxed add at each counted event (heap blocks: a plain
 //! load and store under the heap's lock) and, for waits and reads, a clock read pair around a call that already
 //! blocks or reads the disk. The stage split costs about ten clock reads a frame (`engine_core::stage_time`'s
-//! points), the frame tail's split thirteen more and two for each task main drains from the task queues
-//! there. Main's time in the guest heap and in each script run is timed only with `NV_HITCH_HEAP=1` (two clock
-//! reads a block or a run: about 4 ms on the pause menu's 80,000-block opening frame). A hitch frame adds one
-//! formatted line, one write to the log and, when the player's cell changed since the last line, one call of the
-//! cell's `GetEditorID`.
+//! points), the frame tail's split sixteen more, main's own processor clock twice (about a microsecond on
+//! Windows, a small file read on Linux) and two for each task main drains from the task queues there. Main's time
+//! in the guest heap and in each script run is timed only with `NV_HITCH_HEAP=1` (two clock reads a block or a run:
+//! about 4 ms on the pause menu's 80,000-block opening frame). A hitch frame adds one formatted line, one write to
+//! the log and, when the player's cell changed since the last line, one call of the cell's `GetEditorID`.
 
 use engine::Engine;
 use engine_core::hitch::{Count, WaitKind, COUNTS};
@@ -261,7 +261,20 @@ fn tail_words(t: &engine_core::stage_time::Tail) -> String {
     for (i, p) in t.parts.iter().enumerate() {
         let Some(ns) = p else { continue };
         let extra = if i == TailMark::AiQueue as usize {
-            t.drains[DrainQueue::First as usize].map(|d| format!(" ({})", drain_words(&d)))
+            t.drains[DrainQueue::First as usize].map(|d| {
+                let sync = t.havok_sync.map_or_else(String::new, |h| {
+                    format!(
+                        "; tag 0x04 is the physics results applied: {} actors' Havok sync {:.1} ms, {} nodes \
+                         updated {:.1} ms, the cells' update {:.1} ms",
+                        h.actors,
+                        ms(h.actors_ns),
+                        h.nodes,
+                        ms(h.nodes_ns),
+                        ms(h.cells_ns)
+                    )
+                });
+                format!(" ({}{sync})", drain_words(&d))
+            })
         } else if i == TailMark::QueueDrain as usize {
             t.drains[DrainQueue::Secondary as usize].map(|d| format!(" ({})", drain_words(&d)))
         } else if i == TailMark::TickOut as usize {
@@ -279,7 +292,21 @@ fn tail_words(t: &engine_core::stage_time::Tail) -> String {
             extra.unwrap_or_default()
         ));
     }
-    parts.join(", ")
+    let mut out = parts.join(", ");
+    // Main's own processor clock over its part of the tail: little of it means main was pushed off the processor
+    // (other threads or programs), not working.
+    if let Some(share) = t.main_share {
+        let span: u64 = t.parts[..=TailMark::IdleEnd as usize]
+            .iter()
+            .flatten()
+            .sum();
+        out += &format!(
+            "; main was on the processor for {:.1} of the {:.1} ms to OnIdle's end",
+            ms(span) * f64::from(share) / 1000.0,
+            ms(span)
+        );
+    }
+    out
 }
 
 /// One frame's drains of a packed task queue in words: the tasks, the three kinds (the record's tag) that took
@@ -773,11 +800,22 @@ impl Frame {
                 };
                 // The frame tail's longest part, when it was split.
                 let part = match (i, self.tail.as_ref().and_then(|t| t.longest())) {
-                    (TAIL_STAGE, Some((p, ns))) => format!(
-                        " (most in the {}, {:.1} ms)",
-                        engine_core::stage_time::TAIL_PART_NAMES[p],
-                        ms(ns)
-                    ),
+                    (TAIL_STAGE, Some((p, ns))) => {
+                        // Main mostly off the processor: the time is not the part's work.
+                        let off = self
+                            .tail
+                            .as_ref()
+                            .and_then(|t| t.main_share)
+                            .filter(|s| *s < 600)
+                            .map_or_else(String::new, |s| {
+                                format!("; main on the processor for {}% of the tail", s / 10)
+                            });
+                        format!(
+                            " (most in the {}, {:.1} ms{off})",
+                            engine_core::stage_time::TAIL_PART_NAMES[p],
+                            ms(ns)
+                        )
+                    }
                     _ => String::new(),
                 };
                 out.push(if i == 9 {
@@ -1975,7 +2013,10 @@ mod tests {
         });
         f.tail = Some(Tail {
             parts: [
-                Some(200_000),
+                Some(100_000),
+                Some(60_000),
+                Some(20_000),
+                Some(30_000),
                 Some(10_000),
                 Some(90_000),
                 Some(0),
@@ -1992,30 +2033,43 @@ mod tests {
             ],
             drains: [first, secondary],
             tick: Some((37, Some(1_203))),
+            havok_sync: Some(engine_core::stage_time::HavokSync {
+                actors_ns: 20_000,
+                actors: 3,
+                nodes_ns: 40_000,
+                nodes: 40,
+                cells_ns: 10_000,
+                runs: 1,
+            }),
+            main_share: Some(250),
         });
         let l = f.line();
         assert!(
             l.contains(
-                "; frame tail parts ms: AI tasks: process lists 0.2, AI tasks: Pip-Boy and child attaches 0.0, AI \
-                 tasks: first task queue 0.1 (2 tasks: tag 0x14 x2 0.1 ms; 0.0 ms outside the tasks), AI tasks: \
-                 queued node updates 0.0, AI tasks: the rest 0.0, delayed script actions 0.0, task queue end input 0.0, task queue drain 7.6 (12 \
-                 tasks: tag 0x0e x1 7.0 ms, tag 0x07 x3 0.3 ms, tag 0x22 x2 0.2 ms and 2 more kinds; 0.0 ms outside \
-                 the tasks, 1,500 turns on an empty queue waiting for another thread's input), task queue begin input \
-                 0.0, queued menu open, support menus and prints 0.1, other steps 0.0, free-list sort 0.0 (pool 37, \
-                 1,203 in its free list), the end of OnIdle 0.0, the game's loop to the host 0.0;"
+                "; frame tail parts ms: AI tasks: projectiles and explosions 0.1, AI tasks: animation scene graphs \
+                 (bones) 0.1, AI tasks: detection lists 0.0, AI tasks: actors' process and ragdolls 0.0, AI tasks: \
+                 Pip-Boy and child attaches 0.0, AI tasks: first task queue 0.1 (2 tasks: tag 0x14 x2 0.1 ms; 0.0 \
+                 ms outside the tasks; tag 0x04 is the physics results applied: 3 actors' Havok sync 0.0 ms, 40 \
+                 nodes updated 0.0 ms, the cells' update 0.0 ms), AI tasks: queued node updates 0.0, AI tasks: the \
+                 rest 0.0, delayed script actions 0.0, task queue end input 0.0, task queue drain 7.6 (12 tasks: tag \
+                 0x0e x1 7.0 ms, tag 0x07 x3 0.3 ms, tag 0x22 x2 0.2 ms and 2 more kinds; 0.0 ms outside the tasks, \
+                 1,500 turns on an empty queue waiting for another thread's input), task queue begin input 0.0, \
+                 queued menu open, support menus and prints 0.1, other steps 0.0, free-list sort 0.0 (pool 37, 1,203 \
+                 in its free list), the end of OnIdle 0.0, the game's loop to the host 0.0; main was on the \
+                 processor for 2.0 of the 8.1 ms to OnIdle's end;"
             ),
             "{l}"
         );
         assert!(
             l.contains(
-                "likely cause: the frame tail took 8 ms (most in the task queue drain, 7.6 ms) with no one-off work \
-                 counted"
+                "likely cause: the frame tail took 8 ms (most in the task queue drain, 7.6 ms; main on the \
+                 processor for 25% of the tail) with no one-off work counted"
             ),
             "{l}"
         );
         // A part not passed (one processor: no task queue) is left out; a pool not in the table is said so.
         let t = f.tail.as_mut().unwrap();
-        t.parts[6..9].fill(None);
+        t.parts[9..12].fill(None);
         t.drains[1] = None;
         t.tick = Some((5, None));
         let l = f.line();
