@@ -111,10 +111,29 @@ pub enum Count {
     GridCellsMade,
     GridLandNs,
     GridWaterNs,
+    /// The rest of the grid array's load (`TES::GridArrayLoad`, `00452ff0`), main's time in each part (ns): the first
+    /// loop over the grid (each slot's `TES::LoadGridCell` with the exterior buffer and the load screen's refresh), the
+    /// Havok world's `+0x18` lock count dropped after each loop (`00c6b540`: only when it reaches zero are the bodies,
+    /// phantoms, actions and constraints queued while the world was locked added, the bodies' broad-phase inserts),
+    /// the save/load object's and the script context's pass between the loops (`008727b0`'s branch, `008492b0`), and
+    /// the second loop's two parts for each cell in load state 5: its references attached (`0054bcf0`: the cell's
+    /// scripts, each reference's model queued and its 3D attached) with the buffer entry, and its 3D's properties and
+    /// update (`NiAVObject::UpdateProperties`, `00a59c60`).
+    GridLoadCellsNs,
+    GridLoadHavokNs,
+    GridLoadPassNs,
+    GridLoadRefsNs,
+    GridLoad3dNs,
+    /// Main's batches of queued bodies added to the Havok world (`00c674d0`: `hkpWorld::addEntityBatch`, the
+    /// broad-phase inserts, then each body's island and activation): the bodies and the time (ns). A body is queued
+    /// while the world's lock count is up (`bhkWorld::Add`, `00c6b0a0`); the batches run when the count drops to
+    /// zero, at most 100 a frame with the drop's flag set, and from `bhkWorld::Update` (on the AI thread, not counted).
+    HavokBodiesAdded,
+    HavokBodiesAddNs,
 }
 
 /// How many counts there are.
-pub const COUNTS: usize = Count::GridWaterNs as usize + 1;
+pub const COUNTS: usize = Count::HavokBodiesAddNs as usize + 1;
 
 /// Times main's work from [`Timed::main`] to its drop into a `...Ns` count: nothing on another game thread or with
 /// the log off. One clock read at each end, at places that run a few times a frame at most and do far more work.

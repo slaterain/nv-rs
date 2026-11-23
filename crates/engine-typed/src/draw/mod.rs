@@ -144,6 +144,9 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         // The list draws the world draw made through translations (the drawing thread's still-live list).
         entry!(0x00b9_9990, lists::own_list_draw(Ptr<_>, u32)),
         entry!(0x00b9_9e20, lists::render_batches(Ptr<_>, u32, u32, u32)),
+        entry!(0x00b6_4ec0, lists::clear_simple_list(u32)),
+        entry!(0x00b9_8970, lists::lists_pass_in(Ptr<_>, u32, u32) -> bool),
+        entry!(0x00b7_1300, own::remove_all(u32)),
         // The decal pass and the fog-coloured ambient.
         entry!(0x00b6_4e30, drivers::decal_pass(Ptr<_>)),
         entry!(0x00b4_f450, own::select_shader_mode(u32)),
