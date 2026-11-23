@@ -750,6 +750,7 @@ struct Walked {
 ///   replay would read in another state than the serial pass: a skin inside a deferred subtree (a
 ///   head, a geometry without a bound) reading an object walked after that subtree or outside the
 ///   actor's tree, or a walked skin reading an object inside a deferred subtree.
+///
 /// A tree of more than [`ORDER_CHECK_MOST`] objects is a `Barrier::Bound` (not worked out).
 fn order_check(e: &Engine, root: u32, roots: &[u32]) -> Option<Barrier> {
     let mut order: Vec<Walked> = Vec::new();
@@ -838,7 +839,7 @@ fn order_check(e: &Engine, root: u32, roots: &[u32]) -> Option<Barrier> {
         let data = e.mem.u32(skin + 8);
         let bones = e.mem.u32(skin + 0x14);
         let count = if data != 0 { e.mem.u32(data + 0x44) } else { 0 };
-        if count > ORDER_CHECK_MOST as u32 || (count != 0 && bones == 0) {
+        if count > idx(ORDER_CHECK_MOST) || (count != 0 && bones == 0) {
             return Some(Barrier::Skin);
         }
         let inputs = (0..count)
