@@ -3119,7 +3119,8 @@ fn idle_gamepad_events(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut 
             idle_dispatch_key(e, this, state, key, code);
         }
     });
-    // Sad-face messages for the two controller buttons `0x19` and `0x1a`.
+    // Sad-face messages for the two controller buttons `0x19` and `0x1a` (`0x70E549`, `0x70E58D`:
+    // lStewieAl's Tweaks' S0022.33, `stewie_main_menu_or_console`).
     for (button, holder) in [(0x19u32, MESSAGE_HOLDER_19), (0x1a, MESSAGE_HOLDER_1A)] {
         if e.call(
             CONTROLS_QUERY_00A24660,
@@ -3127,7 +3128,7 @@ fn idle_gamepad_events(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut 
         )
         .u32()
             != 0
-            && !e.call(XUI_IS_UP, &args![]).bool()
+            && !stewie_main_menu_or_console(e)
         {
             let text = e.call(STRING_HOLDER_GET, &args![holder]).u32();
             let size: f32 = e.global(MESSAGE_ICON_SIZE);
@@ -3137,6 +3138,19 @@ fn idle_gamepad_events(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut 
             );
         }
     }
+}
+
+/// The quick save and quick load buttons' test (`0x70E549`, `0x70E58D`): the exe's
+/// `XUserInterface::XUIIsUp` (`0070edf0`: the start menu `011daac0` is there and bit 0 of its
+/// flags, +0x1A8, is clear). With lStewieAl's Tweaks' S0022.33 its `InMainMenuOrConsoleOpen` in
+/// place: the same test read directly, or the console open (`011dea2e`), so the buttons do not
+/// show their message (`sCantQuickSave`, `sCantQuickLoad`) while the console is open.
+fn stewie_main_menu_or_console(e: &mut Engine) -> bool {
+    if !e.stewie(stewie::CONSOLE_QUICK_SAVE_AND_AMMO_TAB) {
+        return e.call(XUI_IS_UP, &args![]).bool();
+    }
+    let menu = e.mem.u32(0x011d_aac0);
+    (menu != 0 && e.mem.u32(menu + 0x1a8) & 1 == 0) || e.mem.u8(0x011d_ea2e) != 0
 }
 
 /// A key `Idle` has translated and nobody consumed: the frontmost menu may
@@ -14980,6 +14994,54 @@ mod tests {
                 walked,
                 "pad {pad}, mouse {mouse}"
             );
+        }
+    }
+
+    /// Row S0022.33 (lStewieAl's Tweaks' `InMainMenuOrConsoleOpen`, `0x70E549`, `0x70E58D`): off,
+    /// the exe's `XUIIsUp` (`0070edf0`) answers; on, the start menu (`011daac0`) there with bit 0
+    /// of its flags (+0x1A8) clear, or the console open (`011dea2e`), without that call.
+    #[test]
+    fn s0022_33_main_menu_or_console() {
+        // (row, start menu there, its flags, console, the exe's answer, wanted)
+        for (on, menu_there, flags, console, exe, wanted) in [
+            (false, true, 0u32, 1u8, 0u32, false),
+            (false, false, 0, 0, 1, true),
+            (true, true, 0, 0, 0, true),
+            (true, true, 1, 0, 1, false),
+            (true, false, 0, 1, 0, true),
+            (true, true, 1, 1, 0, true),
+            (true, false, 0, 0, 1, false),
+        ] {
+            let mut e = Engine::new();
+            for page in [0x011d_a000u32, 0x011d_e000] {
+                if !e.mem.is_mapped(page) {
+                    e.map(page, 0x1000);
+                }
+            }
+            let menu = if menu_there {
+                let menu = e.mem.alloc(0x200);
+                e.mem.set_u32(menu + 0x1a8, flags);
+                menu
+            } else {
+                0
+            };
+            e.mem.set_u32(0x011d_aac0, menu);
+            e.mem.set_u8(0x011d_ea2e, console);
+            returns(&mut e, XUI_IS_UP, exe);
+            e.set_stewie(stewie::CONSOLE_QUICK_SAVE_AND_AMMO_TAB, on);
+            e.call_log = Some(vec![]);
+            assert_eq!(
+                stewie_main_menu_or_console(&mut e),
+                wanted,
+                "row {on} {menu_there} {flags} {console}"
+            );
+            let asked = e
+                .call_log
+                .as_ref()
+                .unwrap()
+                .iter()
+                .any(|(a, _)| *a == XUI_IS_UP);
+            assert_eq!(asked, !on);
         }
     }
     // @@TESTS-END@@

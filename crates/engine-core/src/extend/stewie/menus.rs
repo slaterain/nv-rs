@@ -228,3 +228,9 @@ pub const INCLUDES_LONG_STRING_LENGTH: Row = Row::share(MENUS_FIXES, MENUS_FIXES
 /// arrows and the mouse wheel take the body part choice from the mouse; A and D also answer to
 /// the left and right arrows.
 pub const VATS_KEYS_OVER_MOUSE: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 60);
+/// S0022.33 `MenuFixes` (`InterfaceManager::Idle` `0070c4a0` at `0x70E549`, `0x70E58D`; the
+/// player's reload `0095d850` at `0x95D94F` and `0095d450` at `0x95D539`): the quick save and
+/// quick load buttons show no "can't" message while the console is open, and no hot-keyed
+/// ammunition is taken while the inventory's ammunition tab is open (S0089.08, writing the same
+/// two calls, wins there).
+pub const CONSOLE_QUICK_SAVE_AND_AMMO_TAB: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 61);

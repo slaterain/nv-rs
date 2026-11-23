@@ -167,6 +167,14 @@ pub const ROWS: &[Row] = &[
         summary: "switching to the pad centres the map's marker selection box",
     },
     Row {
+        bit: stewie::CONSOLE_QUICK_SAVE_AND_AMMO_TAB,
+        function: "MenuFixes",
+        plan: "S0022.33",
+        key: "bMenuFixesConsoleQuickSaveAmmoTab",
+        tweaks: None,
+        summary: "the quick save and quick load buttons show no message while the console is open; the ammunition tab keeps its choice on a reload",
+    },
+    Row {
         bit: stewie::WEAPON_MOD_MENU_NEEDS_TARGET,
         function: "MenuFixes",
         plan: "S0022.34",

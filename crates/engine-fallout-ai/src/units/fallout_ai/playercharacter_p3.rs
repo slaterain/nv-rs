@@ -435,8 +435,17 @@ fn equip_hot_key_replacement(e: &mut Engine, inventory: u32, item: Ptr, current:
         // lStewieAl's Tweaks' row S0089.08 (`RememberAmmoCountOnLoad`, the calls at `0x95D539` and
         // `0x95D94F`, both through this helper): Tweaks' `GetAmmoForHotkeySlotHook` in place of
         // `004bfb30`.
+        // Row S0022.33 (`MenuFixes`' `GetHotkeyedAmmoIfInventoryNotOpen`) writes the same two
+        // calls only while the exe's call is still there, and S0089.08 writes them in any case:
+        // with both on, S0089.08's hook is the one called, as in the game.
         let replacement = if e.stewie(engine_core::extend::stewie::HOTKEY_AMMO_NEEDS_ROUNDS) {
             ammo_for_hot_key_slot(e, table, hot_key)
+        } else if e.stewie(engine_core::extend::stewie::CONSOLE_QUICK_SAVE_AND_AMMO_TAB)
+            && ammo_inventory_active(e)
+        {
+            // S0022.33: no hot-keyed ammunition while the inventory's ammunition tab is open, so
+            // the ammunition chosen there stays.
+            0
         } else {
             e.call(HOT_KEY_TO_OBJECT, &args![table, hot_key]).u32()
         };
@@ -9564,6 +9573,18 @@ mod tests {
         tab_open: bool,
         tab: u32,
     ) -> Vec<u32> {
+        hotkey_ammo_choice(on, false, rounds, remembered_rounds, tab_open, tab)
+    }
+
+    /// [`s0089_08_choice_on_tab`] with row S0022.33 (`s0022_33`) on or off as well.
+    fn hotkey_ammo_choice(
+        on: bool,
+        s0022_33: bool,
+        rounds: u32,
+        remembered_rounds: Option<u32>,
+        tab_open: bool,
+        tab: u32,
+    ) -> Vec<u32> {
         let mut e = engine(CALLEES_0095D450);
         let held = 0x5000_1000;
         let entry = e.mem.alloc(0x10);
@@ -9605,6 +9626,10 @@ mod tests {
         e.mem.set_u32(menu + 0x84, tab);
         e.mem.set_u32(0x011d_9ea4, menu);
         e.set_stewie(engine_core::extend::stewie::HOTKEY_AMMO_NEEDS_ROUNDS, on);
+        e.set_stewie(
+            engine_core::extend::stewie::CONSOLE_QUICK_SAVE_AND_AMMO_TAB,
+            s0022_33,
+        );
         let log = logged(&mut e, |e| {
             e.call(
                 0x0095_d450,
@@ -9645,6 +9670,40 @@ mod tests {
         );
         assert_eq!(
             s0089_08_choice(false, 4, Some(2), false),
+            vec![held, hotkeyed]
+        );
+    }
+
+    /// lStewieAl's Tweaks' row S0022.33's ammunition part (`GetHotkeyedAmmoIfInventoryNotOpen`,
+    /// `0x95D539`): with the inventory's ammunition tab open no hot-keyed ammunition is taken (the
+    /// current one stays); on another tab, or closed, the exe's choice. With S0089.08 on too its
+    /// hook decides (it writes the same calls whatever is there): with no rounds of the
+    /// hot-keyed ammunition carried it keeps the current one, where S0022.33 alone takes it.
+    #[test]
+    fn s0022_33_no_hotkeyed_ammunition_on_the_ammunition_tab() {
+        let (held, hotkeyed) = (0x5000_1000, 0x5000_2000);
+        assert_eq!(
+            hotkey_ammo_choice(false, true, 0, None, true, 4),
+            vec![held, held]
+        );
+        assert_eq!(
+            hotkey_ammo_choice(false, true, 0, None, true, 0),
+            vec![held, hotkeyed]
+        );
+        assert_eq!(
+            hotkey_ammo_choice(false, true, 0, None, false, 4),
+            vec![held, hotkeyed]
+        );
+        assert_eq!(
+            hotkey_ammo_choice(false, false, 0, None, true, 4),
+            vec![held, hotkeyed]
+        );
+        assert_eq!(
+            hotkey_ammo_choice(true, true, 0, None, false, 4),
+            vec![held, held]
+        );
+        assert_eq!(
+            hotkey_ammo_choice(true, true, 4, None, false, 4),
             vec![held, hotkeyed]
         );
     }
