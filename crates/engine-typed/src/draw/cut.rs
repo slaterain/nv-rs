@@ -788,7 +788,11 @@ pub fn cut_for_thread(
 pub(crate) fn uses_texture_pool(e: &mut Engine, acc: Ptr<BSShaderAccumulator>) -> bool {
     packet::copy_reflection(e, acc)
         && (e.global::<u32>(super::own::REFLECTION_COPY) != 0
-            || super::drivers::has_listed_pass(e, acc, 0x288, 0x2ce))
+            || engine_core::typed_call!(
+                super::FAMILY,
+                0x00b6_3120,
+                super::drivers::has_listed_pass(e, acc, 0x288u32, 0x2ceu32)
+            ))
 }
 
 // Export E2.
@@ -1118,6 +1122,9 @@ mod tests {
     fn only_a_job_that_borrows_or_gives_back_the_reflection_keeps_the_joins() {
         use crate::shader::layout::BSBatchRenderer;
         let mut e = Engine::new();
+        if !e.mem.is_mapped(0x011f_4000) {
+            e.map(0x011f_4000, 0x6000);
+        }
         let acc = e.mem.alloc(0x1ac);
         let renderer = e.mem.alloc(0x40);
         e.mem
