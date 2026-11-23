@@ -4388,7 +4388,7 @@ mod n057_tests {
             });
             let set = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
             let seen = set.clone();
-            e.register(TILE_SET_STRING, move |e, a| {
+            e.register_double(TILE_SET_STRING, move |e, a| {
                 seen.borrow_mut()
                     .push((a[0], a[1], e.mem.cstr(a[2]), a[3], a[2] == text));
                 Ret::default()
