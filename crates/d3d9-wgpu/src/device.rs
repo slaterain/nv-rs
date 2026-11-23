@@ -27,6 +27,8 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
+mod fuse;
+
 /// Where the device's frames go.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Output {
@@ -953,6 +955,8 @@ impl Geometry {
 struct Held {
     key: HeldKey,
     members: Vec<Member>,
+    /// A base's light passes that joined it (`NV_WGPU_FUSE_LIGHTS`, [`fuse`]).
+    fuse: Option<Box<fuse::Group>>,
 }
 
 /// One held draw ([`Held`]).
@@ -1167,12 +1171,18 @@ pub struct Device {
     /// sorted (two surfaces at exactly the same depth may swap which one shows). Off by default;
     /// with the registers from storage only.
     merge_draws: bool,
+    /// `NV_WGPU_FUSE_LIGHTS`: a held base and its light passes drawn as one draw ([`fuse`]).
+    fuse: fuse::State,
     sort_draws: bool,
     /// `NV_WGPU_SORT_DRAWS=pass`: blended draws (stencil off) tested against depth and writing none
-    /// are held too, after the opaque ones in their own order ([`Device::held_after`]); the next
-    /// opaque draw, a clear, an upload, a target change or another command ends the hold.
+    /// are held too, after the opaque ones in their own order ([`Device::held_after`]); an opaque
+    /// draw after one tested LESS or LESSEQUAL ([`Device::held_cover`]), a clear, an upload, a
+    /// target change or another command ends the hold.
     across: bool,
     held_after: Vec<Held>,
+    /// Whether a held blended draw tested LESS or LESSEQUAL is among [`Device::held_after`]: it
+    /// may cover an opaque draw given after it ([`Device::hold`]).
+    held_cover: bool,
     /// The held keys in the order of their first draw, each key's place, the vertices they read
     /// (one key each), and how many draws they hold.
     held: Vec<Held>,
@@ -1985,6 +1995,10 @@ impl Device {
             storable,
             storage_regs_gpu,
             table: Vec::new(),
+            fuse: fuse::State {
+                on: std::env::var("NV_WGPU_FUSE_LIGHTS").is_ok_and(|v| v.trim() == "1"),
+                ..Default::default()
+            },
             merge_draws: std::env::var("NV_WGPU_MERGE_DRAWS").is_ok_and(|v| v.trim() == "1")
                 || std::env::var("NV_WGPU_SORT_DRAWS")
                     .is_ok_and(|v| v.trim() == "1" || v.trim() == "pass"),
@@ -1992,6 +2006,7 @@ impl Device {
                 .is_ok_and(|v| v.trim() == "1" || v.trim() == "pass"),
             across: std::env::var("NV_WGPU_SORT_DRAWS").is_ok_and(|v| v.trim() == "pass"),
             held_after: Vec::new(),
+            held_cover: false,
             held: Vec::new(),
             held_index: Map::default(),
             held_geometry: Map::default(),
@@ -3491,6 +3506,24 @@ impl Device {
         self.across = across;
     }
 
+    /// A held base and its light passes drawn as one draw (`NV_WGPU_FUSE_LIGHTS`, [`fuse`]; tests).
+    /// Needs the held draws with the blended ones held after them ([`Device::set_merge_draws`]).
+    pub fn set_fuse_lights(&mut self, on: bool) {
+        self.emit_held();
+        self.fuse.on = on;
+    }
+
+    /// Groups drawn fused and the light passes they held ([`Device::set_fuse_lights`]; tests).
+    pub fn fused_counts(&self) -> (u64, u64) {
+        self.fuse.drawn
+    }
+
+    /// Fused pipelines made (or refused), and groups with light passes drawn pass by pass because
+    /// none could be made ([`Device::set_fuse_lights`]; the replay's report).
+    pub fn fused_pipelines(&self) -> (usize, u64) {
+        (self.fuse.pipelines.len(), self.fuse.spilled)
+    }
+
     /// `Set*ShaderConstant*` (`kind`: vertex float, int, bool, then the same for the pixel stage)
     /// of `count` registers from `start`, from the command's bytes. Float registers are copied
     /// as bytes (a draw's block carries them so); registers past the file's end are not kept.
@@ -4922,19 +4955,30 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// last ones held (or, with [`Device::sort_draws`], wherever they are held; it is drawn with
     /// the first of them), else as a new key after the others. When a held draw reads the same
     /// vertices with another key (another pass over the same surface, which must stay after it),
-    /// or a blended draw is held ([`Device::held_after`]), the held draws are drawn first. The
-    /// key's place in [`Device::held`].
+    /// a blended draw that may cover it is held ([`Device::held_cover`]), or its key holds a base
+    /// with light passes ([`fuse`]), the held draws are drawn first. The key's place in
+    /// [`Device::held`].
     fn hold(&mut self, key: HeldKey, member: Member) -> usize {
-        // An opaque draw given after a held blended draw may lie behind it on screen: drawn ahead
-        // of it, the blended draw would be laid over it instead of being covered by it. So only
-        // the opaque draws between two blended ones are drawn together.
-        if !self.held_after.is_empty() {
+        // An opaque draw given after a held blended draw tested LESS or LESSEQUAL may lie behind
+        // it on screen: drawn ahead of it, the blended draw would be laid over it instead of being
+        // covered by it. So only the opaque draws between two such blended ones are drawn together.
+        if self.held_cover {
             self.emit_held();
         }
         // Checked before joining: a held key of these vertices drawn first could put this draw
         // before the other key's draw of them.
         if let Some(&g) = self.held_geometry.get(&key.geometry.surface()) {
             if g == AFTER || self.held[g].key != key {
+                self.emit_held();
+            }
+        }
+        // A base with light passes takes no second draw: the held draws are drawn first.
+        if let Some(&g) = self.held_index.get(&key) {
+            if self.held[g]
+                .fuse
+                .as_ref()
+                .is_some_and(|f| !f.extras.is_empty())
+            {
                 self.emit_held();
             }
         }
@@ -4955,6 +4999,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.held.push(Held {
             key,
             members: vec![member],
+            fuse: None,
         });
         self.held_draws += 1;
         g
@@ -4964,10 +5009,12 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// the order of the blended draws ([`Device::may_hold_after`]). An opaque draw of the same
     /// vertices after it has the held draws drawn first. Its place in [`Device::held_after`].
     fn hold_after(&mut self, key: HeldKey, member: Member) -> usize {
+        self.held_cover |= self.st.rs[rs::ZFUNC] != 3;
         self.held_geometry.insert(key.geometry.surface(), AFTER);
         self.held_after.push(Held {
             key,
             members: vec![member],
+            fuse: None,
         });
         self.held_draws += 1;
         self.held_after.len() - 1
@@ -4975,11 +5022,14 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
 
     /// Whether the draw about to be given, which may not be held with the opaque draws, may be
     /// held after them (`NV_WGPU_SORT_DRAWS=pass`): a blended draw without stencil, tested against
-    /// depth LESS or LESSEQUAL and writing none (a draw that ignores depth, such as a sky layer or a
-    /// glare, or one that writes it, such as a fading object, is given in order: moved after the
-    /// opaque draws it would cover them, or let them show through). The blended
-    /// draws keep their order among themselves; the opaque draws held before them are drawn
-    /// first, and an opaque draw given after them has all of them drawn first ([`Device::hold`]).
+    /// depth LESS, LESSEQUAL or EQUAL and writing none (a draw that ignores depth, such as a sky
+    /// layer or a glare, or one that writes it, such as a fading object, is given in order: moved
+    /// after the opaque draws it would cover them, or let them show through). The blended draws
+    /// keep their order among themselves; the opaque draws held before them are drawn first. An
+    /// opaque draw given after a held LESS or LESSEQUAL one has all of them drawn first
+    /// ([`Device::hold`]); one given after held EQUAL ones only (an object's extra light passes,
+    /// drawn only where their own surface's depth is) is held with the opaque draws before them:
+    /// where it covers their surface they fail in either order, and behind it it fails itself.
     fn may_hold_after(&self, depth: bool) -> bool {
         let r = &self.st.rs;
         self.across
@@ -4988,7 +5038,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             && self.storage_regs_gpu.is_some()
             && depth
             && r[rs::ZENABLE] != 0
-            && matches!(r[rs::ZFUNC], 2 | 4)
+            && matches!(r[rs::ZFUNC], 2..=4)
             && r[rs::ZWRITEENABLE] == 0
             && r[rs::ALPHABLENDENABLE] != 0
             && r[rs::STENCILENABLE] == 0
@@ -5008,6 +5058,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.held_index.clear();
         self.held_geometry.clear();
         self.held_draws = 0;
+        self.held_cover = false;
         if self.sort_draws {
             held.sort_by(|a, b| {
                 (&a.key.pipeline, &a.key.groups, &a.key.geometry).cmp(&(
@@ -5017,13 +5068,104 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 ))
             });
         }
+        // A base with light passes ([`fuse`]): drawn fused, or its passes one by one right after it.
+        let ready: Vec<Option<fuse::Ready>> = held
+            .iter()
+            .map(|h| (h.members.len() == 1).then(|| self.fuse_ready(h)).flatten())
+            .collect();
+        let spill: Vec<Vec<Held>> = held
+            .iter()
+            .zip(&ready)
+            .map(|(h, r)| match (&h.fuse, r) {
+                (Some(f), None) => fuse::one_by_one(f),
+                _ => Vec::new(),
+            })
+            .collect();
+        self.fuse.spilled += spill.iter().filter(|s| !s.is_empty()).count() as u64;
+        let mut order: Vec<(&Held, Option<&fuse::Ready>)> = Vec::new();
+        for ((h, r), s) in held.iter().zip(&ready).zip(&spill) {
+            order.push((h, r.as_ref()));
+            order.extend(s.iter().map(|x| (x, None)));
+        }
+        order.extend(after.iter().map(|h| (h, None)));
         // Held only with a pass open and the registers from storage.
         let (Some(pass), Some(s)) = (self.pass.as_mut(), self.storage_regs_gpu.as_ref()) else {
             return;
         };
         let b = &mut self.binds;
-        for h in held.iter().chain(&after) {
+        for (h, fused) in order {
             let k = &h.key;
+            if let (Some(r), Some(f)) = (fused, h.fuse.as_ref()) {
+                if b.pipeline.as_ref() != Some(&r.pipeline) {
+                    pass.set_pipeline(&r.pipeline);
+                    b.pipeline = Some(r.pipeline.clone());
+                }
+                if b.blocks != Some(STORAGE_BLOCKS) {
+                    pass.set_bind_group(0, &s.group, &[]);
+                    b.blocks = Some(STORAGE_BLOCKS);
+                }
+                for (i, group) in r.groups.iter().enumerate() {
+                    pass.set_bind_group(1 + i as u32, group, &[]);
+                    b.groups[i] = Some(group.clone());
+                }
+                if b.viewport != Some(k.viewport) {
+                    let v = k.viewport.map(f32::from_bits);
+                    pass.set_viewport(v[0], v[1], v[2], v[3], v[4], v[5]);
+                    b.viewport = Some(k.viewport);
+                }
+                if b.scissor != Some(k.scissor) {
+                    let r = k.scissor;
+                    pass.set_scissor_rect(r.0, r.1, r.2, r.3);
+                    b.scissor = Some(r);
+                }
+                if b.stencil != Some(k.stencil) {
+                    pass.set_stencil_reference(k.stencil);
+                    b.stencil = Some(k.stencil);
+                }
+                if b.blend != Some(k.blend) {
+                    pass.set_blend_constant(blend_colour(k.blend));
+                    b.blend = Some(k.blend);
+                }
+                let geo = &k.geometry;
+                for (slot, st) in geo.streams.iter().enumerate() {
+                    if st.is_none() || b.streams[slot] == *st {
+                        continue;
+                    }
+                    if let Some((buffer, offset)) = st {
+                        pass.set_vertex_buffer(slot as u32, buffer.slice(*offset..));
+                    }
+                    b.streams[slot] = st.clone();
+                }
+                // The passes' entries one after another: the base's first.
+                let first = (self.table.len() / 16) as u32;
+                let (blocks, mut digests) = fuse::entries(f);
+                digests[0] = h.members[0].digest;
+                for bl in &blocks {
+                    for o in bl {
+                        self.table.extend_from_slice(&(o / 16).to_le_bytes());
+                    }
+                }
+                if let Some(list) = self.emitted_digests.as_mut() {
+                    list.extend(digests.into_iter().flatten());
+                }
+                self.fuse.drawn.0 += 1;
+                self.fuse.drawn.1 += blocks.len() as u64 - 1;
+                self.held_drawn.0 += 1;
+                self.held_drawn.1 += blocks.len() as u64;
+                let vertices = geo.start..geo.start + geo.n;
+                match &geo.index {
+                    Some(i) => {
+                        if b.index.as_ref() != Some(i) {
+                            pass.set_index_buffer(i.0.slice(..), index_format(i.1));
+                            b.index = Some(i.clone());
+                        }
+                        pass.draw_indexed(vertices, geo.base_vertex, first..first + 1);
+                    }
+                    None => pass.draw(vertices, first..first + 1),
+                }
+                self.encoder_draws += 1;
+                continue;
+            }
             if b.pipeline.as_ref() != Some(&k.pipeline) {
                 pass.set_pipeline(&k.pipeline);
                 b.pipeline = Some(k.pipeline.clone());
@@ -5917,6 +6059,13 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             depth_range[1],
         ]
         .map(f32::to_bits);
+        // A light pass joining its held base ([`fuse`]): its group.
+        let mut joined = None;
+        let pipe_key = if self.fuse.on {
+            self.last_pipeline.as_ref().map(|(k, _, _)| k.clone())
+        } else {
+            None
+        };
         // Held: its list and place; else given now: its instance (its draw table entry's number).
         let (held, instance) = if hold || after {
             let state = self.draw_digests.is_some().then(|| {
@@ -5947,9 +6096,28 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 sun: use_sun,
             };
             let at = if after {
-                (true, self.hold_after(key, member))
+                let blend = self.fuse_blend();
+                let g = blend.zip(pipe_key.as_ref()).and_then(|(b, pk)| {
+                    self.fuse_join(b, &key, &vs, &ps, &link, samplers, blocks, pk.clip)
+                });
+                match g {
+                    Some(g) => {
+                        joined = Some(g);
+                        (true, usize::MAX)
+                    }
+                    None => {
+                        if self.fuse.on && blend.is_none() {
+                            self.fuse_close();
+                        }
+                        (true, self.hold_after(key, member))
+                    }
+                }
             } else {
-                (false, self.hold(key, member))
+                let g = self.hold(key, member);
+                if let Some(pk) = &pipe_key {
+                    self.fuse_base(g, &vs, &ps, &link, samplers, blocks, pk, topology);
+                }
+                (false, g)
             };
             (Some(at), None)
         } else {
@@ -6109,6 +6277,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         }
         // Its digest in the order the pass is given the draws ([`Device::take_emitted_digests`]).
         let digest = self.draw_digests.as_ref().and_then(|d| d.last().copied());
+        if let Some(g) = joined {
+            self.fuse_digest(g, digest);
+        }
         match held {
             Some((after, g)) => {
                 let list = if after {
