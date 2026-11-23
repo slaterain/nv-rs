@@ -127,12 +127,18 @@ pub fn bhk_world_return_second_argument(
 }
 
 // Translated from 00c661d0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Sets the physics update mode global to 1 for argument 0, 3 for argument
-/// 4, and 2 for every other value.
+/// Sets the physics update mode global (the simulation type every new world gets) from the
+/// `iSimType:HAVOK` setting: 1 (discrete) for 0, 2 (continuous) for every other value, and in the
+/// exe 3 (Havok's multithreaded step) for 4.
+///
+/// The port gives 4 the continuous step too, in every preset: with the multithreaded step the
+/// game's collision listener (`FOCollisionListener`) runs on Havok's worker threads beside the
+/// stepping thread, and its sounds, damage and projectile impacts are not made safe for that yet.
+/// So a player's `iSimType=4` line cannot turn on an unchecked step; the multithreaded step's own
+/// switch will decide it.
 pub fn bhk_world_set_update_mode(e: &mut Engine, mode: u32) {
     let value = match mode {
         0 => 1,
-        4 => 3,
         _ => 2,
     };
     e.set_global(GLOBAL_WORLD_MODE, value);
@@ -4463,9 +4469,10 @@ mod tests {
     }
 
     #[test]
-    fn world_mode_mapping_matches_the_three_executable_cases() {
+    fn world_mode_mapping_matches_the_executable_but_keeps_4_continuous() {
         let mut e = engine();
-        for (input, expected) in [(0, 1), (1, 2), (4, 3), (2, 2), (u32::MAX, 2)] {
+        // The exe gives 4 the multithreaded step (3); the port keeps it continuous (2).
+        for (input, expected) in [(0, 1), (1, 2), (4, 2), (2, 2), (u32::MAX, 2)] {
             e.call(0x00c6_61d0, &args![input]);
             assert_eq!(e.global::<u32>(GLOBAL_WORLD_MODE), expected);
         }
