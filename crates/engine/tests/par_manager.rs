@@ -284,6 +284,17 @@ fn engine() -> Engine {
         (0x011a_9000, 0x1000),
         (0x0101_6000, 0x1000),
         (0x0101_7000, 0x1000),
+        (0x0101_1000, 0x2000),
+        (0x011c_3000, 0x1000),
+        (0x011c_5000, 0x1000),
+        (0x011c_1000, 0x1000),
+        (0x011e_0000, 0x1000),
+        (0x011d_5000, 0x1000),
+        (0x011d_d000, 0x1000),
+        (0x0120_2000, 0x1000),
+        (0x0126_7000, 0x1000),
+        (0x011f_9000, 0x1000),
+        (0x0102_3000, 0x1000),
     ] {
         e.map(page, len);
     }
@@ -297,6 +308,14 @@ fn engine() -> Engine {
     e.mem.set_u32(0x011a_b3c0, 0x3586_37bd);
     e.mem.set_f32(0x0101_6248, 0.5);
     e.mem.set_f32(0x0101_7718, 3.0);
+    // The doubles 0.5 and 1.0, the next-index table of the quaternion and 1/7 (as `par_bones` sets them).
+    e.mem.set_u64(0x0101_1588, 0.5f64.to_bits());
+    e.mem.set_u64(0x0101_2070, 1.0f64.to_bits());
+    for (i, v) in [1u32, 2, 0].iter().enumerate() {
+        e.mem.set_u32(0x011a_9e98 + 4 * i as u32, *v);
+    }
+    e.mem.set_f32(0x011c_582c, 0.142_857_15);
+    e.mem.set_u64(0x0102_31b0, f64::from(f32::MAX).to_bits());
     // Havok's free-list memory system with two thread memory records in use: room for the extra threads.
     let system = e.mem.alloc(0xc6c + 33 * 0x138);
     for k in (0..0xc6c + 33 * 0x138).step_by(4) {
