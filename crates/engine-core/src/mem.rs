@@ -502,13 +502,12 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// `NV_THREAD_HEAP`, read once: `1` or `on` turns the thread heap on in every memory made
-/// (`mem/pools.rs`); anything else, or unset, leaves it off.
+/// `NV_THREAD_HEAP`, read once: `1` turns the thread heap on in every memory made
+/// (`mem/pools.rs`); anything else, or unset, leaves it off here. The host's row reads the same
+/// variable and takes only `0` or `1` (another value stops the start), so this accepts only `1`.
 fn thread_heap_from_env() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| {
-        std::env::var("NV_THREAD_HEAP").is_ok_and(|v| matches!(v.trim(), "1" | "on"))
-    })
+    *ON.get_or_init(|| std::env::var("NV_THREAD_HEAP").is_ok_and(|v| v.trim() == "1"))
 }
 
 /// `m`'s value through `&mut` (no locking), as [`lock`] takes it.
