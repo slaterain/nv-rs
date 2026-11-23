@@ -884,9 +884,9 @@ pub const BIG_GUNS_DESCRIPTION: &[u8] = b"The Big Guns skill determines your com
 // avInfo->callback4C = (void*)0x643BD0;`) and SetOptionalPatch case 3.
 /// JIP's `DeferredInit`, group GB's part, with the game-patch row: with `bEnableBigGunsSkill` (O3)
 /// Big Guns' flags become [`BIG_GUNS_SKILL_FLAGS`] and its description JIP's text (JIP's
-/// `SetDescriptionAltText`); then (D06) its display name is its actor value name (the 8-byte
-/// `String` copied as it is, buffer shared, as JIP's assignment does) and its derivation
-/// [`DERIVE_SKILL`]. With the row off nothing changes.
+/// `SetDescriptionAltText`); then (D06) its display name is its actor value name (JIP shares the
+/// buffer; here a copy of the text, so the exit's destructor frees two blocks, not one twice)
+/// and its derivation [`DERIVE_SKILL`]. With the row off nothing changes.
 pub fn deferred_init(e: &mut Engine) {
     use engine_core::extend::jip_patches;
     let word = e.jip_patches();
@@ -911,10 +911,20 @@ pub fn deferred_init(e: &mut Engine) {
             BIG_GUNS_DESCRIPTION,
         );
     }
-    for at in [0, 4] {
-        let word = e.mem.u32(info + AV_NAME + at);
-        e.mem.set_u32(info + AV_FULL_NAME + at, word);
+    // JIP copies the 8-byte `String` as it is, so both strings hold one buffer; at the exit the
+    // game deletes every actor value (the data handler's `ClearData`, `0066f110`) and their
+    // destructor (`00670080`) frees the name's buffer and then the display name's, the same block
+    // twice (the original heap does not notice as the process ends; the port's stops). A guard of
+    // nv-rs's own: the display name gets its own copy of the text in a block of the game's heap
+    // (JIP's `String::Set`), the same name shown.
+    let text = crate::commands::string_text(e, info + AV_NAME).unwrap_or_default();
+    let full = info + AV_FULL_NAME;
+    if e.mem.u32(full) != 0 && e.mem.u32(full) == e.mem.u32(info + AV_NAME) {
+        // Already one buffer (a second deferred start): the display name lets go of it.
+        e.mem.set_u32(full, 0);
+        e.mem.set_u32(full + 4, 0);
     }
+    crate::commands::string_set(e, full, &text);
     e.mem.set_u32(info + AV_DERIVATION, DERIVE_SKILL);
 }
 
