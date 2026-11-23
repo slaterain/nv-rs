@@ -551,6 +551,14 @@ pub const ROWS: &[Row] = &[
         summary: "a hacked terminal opens half a second after the password, not 3 seconds",
     },
     Row {
+        bit: stewie::CONSOLE_NUMPAD,
+        function: "ConsoleNumpadSupport",
+        plan: "S0286",
+        key: "bConsoleNumpadSupport",
+        tweaks: Some(("Tweaks", "bConsoleNumpadSupport")),
+        summary: "the number pad types in the console and other text boxes",
+    },
+    Row {
         bit: stewie::INTRO_SKIPPED,
         function: "autoSkipLoadingTiles",
         plan: "S0351",
@@ -589,6 +597,14 @@ pub const ROWS: &[Row] = &[
         key: "bFasterEnterLockPickMenu",
         tweaks: Some(("Tweaks", "bFasterEnterLockpickMenu")),
         summary: "the lock pick menu opens without its entering animation",
+    },
+    Row {
+        bit: stewie::RECIPE_CATEGORIES_CAPITALIZED,
+        function: "CapitalizeRecipeCategories",
+        plan: "S0763",
+        key: "bCapitalizeRecipeCategories",
+        tweaks: Some(("Tweaks", "bCapitalizeRecipeCategories")),
+        summary: "the crafting menu's category titles are in capitals",
     },
     Row {
         bit: stewie::SETTINGS_SAVE_ERROR_NAMES_FILE,

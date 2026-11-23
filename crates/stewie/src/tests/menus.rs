@@ -101,11 +101,13 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
     ("S0240", "bFontDimensionMismatchFix", bit(67)),
     ("S0276", "bSaveDelay", tweak(0)),
     ("S0278", "bFasterHackingToComputerTransition", tweak(1)),
+    ("S0286", "bConsoleNumpadSupport", tweak(8)),
     ("S0351", "bAutoSkipLoadingTiles", tweak(2)),
     ("S0407", "bNonSelectablePlayerInConsole", tweak(3)),
     ("S0482", "bDontAllowConsoleBeforeInitIsDone", tweak(4)),
     ("S0556", "bNoCharacterNameLimit", tweak(5)),
     ("S0592", "bFasterEnterLockPickMenu", tweak(6)),
+    ("S0763", "bCapitalizeRecipeCategories", tweak(7)),
     ("S0883", "bMoreDescriptiveSettingsSaveError", bit(30)),
     ("S0983", "bPipboyMapStoreRefIDs", bit(63)),
 ];

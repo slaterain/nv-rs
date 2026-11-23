@@ -7048,6 +7048,8 @@ pub fn fn_007154b0(e: &mut Engine, this: Ptr<InterfaceManager>, event: i32, key:
     } else if key == 0x1d || key == 0x9d {
         modifiers(e, None, 2);
         0
+    } else if let Some(code) = stewie_numpad_key(e, key) {
+        code
     } else if let Some(&(_, code, repeats)) = TEXT_ENTRY_KEYS.iter().find(|(k, _, _)| *k == key) {
         if repeats {
             fn_007166f0(e, this, code);
@@ -7056,6 +7058,39 @@ pub fn fn_007154b0(e: &mut Engine, this: Ptr<InterfaceManager>, event: i32, key:
     } else {
         character
     }
+}
+
+/// lStewieAl's Tweaks' S0286 (`[Tweaks] bConsoleNumpadSupport`, `ConsoleNumpadSupport::
+/// CheckNumpadKeys`, jumped to at `0x7156EF` where the exe compares Home, after the four
+/// arrows): the number pad's keys give their characters (0-9, `-`, `+`, `.`, `/`, `*`), its
+/// Enter the enter code (0x80000008) and Home (0xC7, whose compare the jump covers) the home code
+/// (0x80000005); other keys go on at the exe's End compare (`0x715701`). None with the row off,
+/// or for a key not in the table.
+fn stewie_numpad_key(e: &Engine, key: i32) -> Option<u32> {
+    if !e.stewie(stewie::CONSOLE_NUMPAD) {
+        return None;
+    }
+    let code = match key {
+        82 => b'0' as u32,
+        79 => b'1' as u32,
+        80 => b'2' as u32,
+        81 => b'3' as u32,
+        75 => b'4' as u32,
+        76 => b'5' as u32,
+        77 => b'6' as u32,
+        71 => b'7' as u32,
+        72 => b'8' as u32,
+        73 => b'9' as u32,
+        74 => b'-' as u32,
+        78 => b'+' as u32,
+        83 => b'.' as u32,
+        181 => b'/' as u32,
+        55 => b'*' as u32,
+        156 => 0x8000_0008,
+        199 => 0x8000_0005,
+        _ => return None,
+    };
+    Some(code)
 }
 
 /// The scan codes `fn_007154b0` turns into editing codes: arrows (`0xcb`
@@ -15136,6 +15171,51 @@ mod tests {
         let slot = e.mem.alloc(4);
         e.set_stewie(stewie::CONSOLE_PLAYER_NOT_SELECTABLE, true);
         assert!(pick_listed(&mut e, 0x900, slot));
+    }
+    /// Row S0286 (lStewieAl's Tweaks' `ConsoleNumpadSupport`, `0x7156EF`): with the row on the number
+    /// pad gives its characters, Enter and Home their codes; other keys (an arrow, End) and the
+    /// row off: none (the exe's checks).
+    #[test]
+    fn s0286_the_number_pad_types() {
+        let mut e = Engine::new();
+        e.set_stewie(stewie::CONSOLE_NUMPAD, true);
+        let typed: Vec<Option<u32>> = [82, 79, 73, 74, 78, 83, 181, 55, 156, 199, 0xcf, 0xc8]
+            .iter()
+            .map(|k| stewie_numpad_key(&e, *k))
+            .collect();
+        assert_eq!(
+            typed,
+            vec![
+                Some(u32::from(b'0')),
+                Some(u32::from(b'1')),
+                Some(u32::from(b'9')),
+                Some(u32::from(b'-')),
+                Some(u32::from(b'+')),
+                Some(u32::from(b'.')),
+                Some(u32::from(b'/')),
+                Some(u32::from(b'*')),
+                Some(0x8000_0008),
+                Some(0x8000_0005),
+                None,
+                None
+            ]
+        );
+        e.set_stewie(stewie::CONSOLE_NUMPAD, false);
+        assert_eq!(stewie_numpad_key(&e, 82), None);
+        let typed: Vec<Option<u32>> = [80, 81, 75, 76, 77, 71, 72]
+            .iter()
+            .map(|k| {
+                e.set_stewie(stewie::CONSOLE_NUMPAD, true);
+                stewie_numpad_key(&e, *k)
+            })
+            .collect();
+        assert_eq!(
+            typed,
+            b"2345678"
+                .iter()
+                .map(|c| Some(u32::from(*c)))
+                .collect::<Vec<_>>()
+        );
     }
     // @@TESTS-END@@
 }

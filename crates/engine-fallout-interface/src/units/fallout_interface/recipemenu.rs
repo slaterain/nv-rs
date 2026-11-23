@@ -2048,12 +2048,28 @@ fn stewie_post_refresh(e: &mut Engine, previous: u32) {
 }
 
 /// The call at `0x7275D0` (`DoClick`'s category title, `Tile::SetString` with `string` 0xFC4 and
-/// reactions). Tweaks' `bCapitalizeRecipeCategories` (on in VNV, a row of its own not built yet)
-/// replaces this call; S0200's `SetCategoryIndex` goes through it too (Tweaks calls the call's
-/// target), so that row's seam belongs here.
+/// reactions). With lStewieAl's Tweaks' S0763 (`[Tweaks] bCapitalizeRecipeCategories`,
+/// `CapitalizeRecipeCategories::OnSetTileString` in place of this call) the text is copied into
+/// 0x80 bytes (`snprintf` with `"%s"`: at most 127 and the terminator), made upper case with the
+/// game's `00730490` (cdecl: the text, its length + 1) and that copy set. S0200's
+/// `SetCategoryIndex` goes through it too (Tweaks calls the call's target).
 fn set_category_title(e: &mut Engine, tile: u32, text: u32) {
-    e.call(TILE_SET_STRING, &args![tile, 0xfc4u32, text, 1u32]);
+    if !e.stewie(engine_core::extend::stewie::RECIPE_CATEGORIES_CAPITALIZED) {
+        e.call(TILE_SET_STRING, &args![tile, 0xfc4u32, text, 1u32]);
+        return;
+    }
+    e.with_stack(0x80, |e, copy| {
+        let mut name = e.mem.cstr(text);
+        name.truncate(0x7f);
+        name.push(0);
+        e.mem.write(copy.addr(), &name);
+        e.call(TO_UPPER_00730490, &args![copy, name.len() as u32]);
+        e.call(TILE_SET_STRING, &args![tile, 0xfc4u32, copy, 1u32]);
+    });
 }
+
+/// The game's in-place upper case (`00730490`, cdecl: the text, its size with the terminator).
+const TO_UPPER_00730490: u32 = 0x0073_0490;
 
 /// xNVSE's `RecipeMenu::SetCategoryIndex` (`GameUI.cpp`): below -1 becomes the category array's
 /// last (`size - 1`, the array's +8 read raw), above `size` (an unsigned compare, so `size` itself
@@ -4352,6 +4368,47 @@ mod n057_tests {
         );
         assert_eq!(calls_to(&e, MENU_PREP_FOR_VISIBILITY), vec![vec![menu, 0]]);
         assert_eq!(calls_to(&e, RECIPE_LIST_HEAD_004077E0).len(), 1);
+    }
+
+    /// Row S0763 (lStewieAl's Tweaks' `CapitalizeRecipeCategories`, `0x7275D0`): with the row on
+    /// the category title is a copy made upper case by `00730490` (here a stand-in), given its
+    /// length + 1, and cut to 127 characters; off, the text itself is set.
+    #[test]
+    fn s0763_recipe_categories_in_capitals() {
+        for on in [false, true] {
+            let mut e = engine();
+            let long = "ab".repeat(100);
+            let text = e.mem.alloc(0x100);
+            e.mem.set_cstr(text, long.as_bytes());
+            e.register(TO_UPPER_00730490, |e, a| {
+                let upper = e.mem.cstr(a[0]).to_ascii_uppercase();
+                assert_eq!(upper.len() as u32 + 1, a[1]);
+                e.mem.set_cstr(a[0], &upper);
+                Ret::default()
+            });
+            let set = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let seen = set.clone();
+            e.register(TILE_SET_STRING, move |e, a| {
+                seen.borrow_mut()
+                    .push((a[0], a[1], e.mem.cstr(a[2]), a[3], a[2] == text));
+                Ret::default()
+            });
+            e.set_stewie(
+                engine_core::extend::stewie::RECIPE_CATEGORIES_CAPITALIZED,
+                on,
+            );
+            set_category_title(&mut e, 0x2c00, text);
+            let wanted = if on {
+                ("AB".repeat(64)[..127].as_bytes().to_vec(), false)
+            } else {
+                (long.as_bytes().to_vec(), true)
+            };
+            assert_eq!(
+                set.borrow().clone(),
+                vec![(0x2c00, 0xfc4, wanted.0, 1, wanted.1)],
+                "row {on}"
+            );
+        }
     }
 
     /// Row S0022.20 (lStewieAl's Tweaks' `OnRecipeMenuOpen`, `0x72701B`): with the row on,

@@ -289,3 +289,9 @@ pub const NO_PLAYER_NAME_LIMIT: Row = tweak(5);
 /// `LockPickMenu::DoIdle` `0078eb50` at `0x78EC4D`): the lock pick menu's entering animation ends
 /// at once.
 pub const LOCKPICK_ENTER_AT_ONCE: Row = tweak(6);
+/// S0763 `CapitalizeRecipeCategories` (`[Tweaks] bCapitalizeRecipeCategories`; `RecipeMenu`'s
+/// category title at `0x7275D0`): the crafting menu's category titles are in capitals.
+pub const RECIPE_CATEGORIES_CAPITALIZED: Row = tweak(7);
+/// S0286 `ConsoleNumpadSupport` (`[Tweaks] bConsoleNumpadSupport`; the text entry's key
+/// `007154b0` at `0x7156EF`): the number pad types in the console and other text boxes.
+pub const CONSOLE_NUMPAD: Row = tweak(8);
