@@ -762,11 +762,13 @@ pub fn cut_for_thread(
         let _ = capture::end(e);
         return None;
     }
-    let mut words = Vec::new();
+    // With each list its spare node chain (main makes its own meanwhile; the join appends the drawing side's) and with
+    // each holder its count (its flags byte stays for main's passes).
+    let mut handed = detach::Handed::default();
     for i in 0..packet::renderer_count(e, acc) {
-        detach::drawn_list_words(e, packet::renderer(e, acc, i).addr(), &mut words);
+        detach::drawn_list_words(e, packet::renderer(e, acc, i).addr(), &mut handed);
     }
-    capture::take_lists(e, &words);
+    capture::take_handed(e, &handed);
     capture::detach(e)
 }
 

@@ -32,7 +32,7 @@
 //! relaxed load.
 
 use engine_core::ptr::{Field, Ptr, Scalar};
-use engine_core::{typed_call, AddrMap, Engine};
+use engine_core::{typed_call, AddrMap, AddrSet, Engine};
 use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::sync::OnceLock;
@@ -110,6 +110,7 @@ pub const SCRIBBLE_OTHER: u8 = !SCRIBBLE;
 // of the draw's own state (`OwnBlock`, [`own`], step 2, piece 3: the guest addresses `[lo, hi)`, held at `at` in the
 // packet's own bytes, and at the same place in `own_cut`, their values at the cut, and `own_main`, main's): the
 // engine's copied-state view's types, since the packet hands them to the drawing engine for each half ([`serve`]).
+use super::detach::Kind;
 use engine_core::own_view::{OwnBlock, OwnView, Range, NONE};
 
 struct Packet {
@@ -157,6 +158,10 @@ struct Packet {
     /// The world draw's per-frame list words handed to the drawing side at the cut ([`take_lists`]), by guest
     /// address: guest memory holds zeros for them meanwhile, and the join puts them back ([`end`]).
     lists: AddrMap<u32, u32>,
+    /// Of [`Packet::lists`], the holders' flags-and-count words and the spare words ([`take_handed`]): the join gives
+    /// them back by their own rules. They stay with the packet when it is served.
+    counts: AddrSet<u32>,
+    spares: AddrSet<u32>,
 }
 
 impl Packet {
@@ -384,6 +389,8 @@ pub fn begin(e: &Engine) -> bool {
             last_own: Cell::new(0),
             own_by_lo: Vec::new(),
             lists: AddrMap::default(),
+            counts: AddrSet::default(),
+            spares: AddrSet::default(),
         });
         HOLDS.with(|h| h.set(true));
         true
@@ -905,7 +912,7 @@ pub fn end(e: &mut Engine) -> Report {
     HOLDS.with(|h| h.set(false));
     OPEN.fetch_sub(1, Relaxed);
     note_closed(packet.run);
-    give_lists_back(e, &packet.lists);
+    give_lists_back(e, &packet);
     let mut written = packet.written;
     if let Some(scribble) = packet.scribble {
         if !packet.paused {
@@ -1596,6 +1603,19 @@ fn image_copy(e: &Engine, object: u32, from: u32, to: u32) -> Option<Vec<u8>> {
 /// Takes the words at `addrs` (4-byte aligned) into this thread's open packet for `e`'s run: each word's value is kept,
 /// the guest word zeroed. A word taken already, or of value 0, is left. Nothing without an open packet.
 pub fn take_lists(e: &mut Engine, addrs: &[u32]) {
+    take_kind(e, addrs, Kind::Word);
+}
+
+/// [`take_lists`] for the words the cut hands over, each by its [`Kind`] (`super::detach::drawn_list_words`): a holder's
+/// flags-and-count word leaves its flags half (the flags byte) in guest memory, where main's passes read it, and only
+/// the count half is zeroed; a spare word is zeroed, main making its own chain meanwhile.
+pub fn take_handed(e: &mut Engine, handed: &super::detach::Handed) {
+    take_kind(e, &handed.words, Kind::Word);
+    take_kind(e, &handed.counts, Kind::Count);
+    take_kind(e, &handed.spares, Kind::Spare);
+}
+
+fn take_kind(e: &mut Engine, addrs: &[u32], kind: Kind) {
     let id = run(e);
     let mut taken = Vec::new();
     PACKET.with(|p| {
@@ -1610,25 +1630,62 @@ pub fn take_lists(e: &mut Engine, addrs: &[u32]) {
             let value = e.global::<u32>(addr);
             if value != 0 {
                 p.lists.insert(addr, value);
-                taken.push(addr);
+                match kind {
+                    Kind::Word => {}
+                    Kind::Count => {
+                        p.counts.insert(addr);
+                    }
+                    Kind::Spare => {
+                        p.spares.insert(addr);
+                    }
+                }
+                taken.push((addr, left_in_guest(kind, value)));
             }
         }
     });
-    for addr in taken {
-        e.set_global(addr, 0u32);
+    for (addr, left) in taken {
+        e.set_global(addr, left);
+    }
+}
+
+/// What guest memory holds for a list word of kind `kind` and value `value` while the drawing side holds it: zero, or
+/// for a holder's flags-and-count word its flags half.
+#[inline(always)]
+fn left_in_guest(kind: Kind, value: u32) -> u32 {
+    if kind == Kind::Count {
+        value & 0xffff
+    } else {
+        0
     }
 }
 
 /// The join: the list words go back to guest memory, in address order. A guest word main wrote meanwhile (not zero any
-/// more) keeps main's value: with the joins that guard the lists in place that does not happen; it is noted once.
-fn give_lists_back(e: &mut Engine, lists: &AddrMap<u32, u32>) {
-    if lists.is_empty() {
+/// more) keeps main's value: with the joins that guard the lists in place that does not happen; it is noted once. A
+/// holder's flags-and-count word gets the drawing side's count half back beside the flags byte guest memory kept, unless
+/// main counted meanwhile. A spare chain main made meanwhile keeps its place, the drawing side's appended after its last
+/// node (the chain's next word at +0), so no node is lost and none is in two chains.
+fn give_lists_back(e: &mut Engine, packet: &Packet) {
+    if packet.lists.is_empty() {
         return;
     }
-    let mut words: Vec<(u32, u32)> = lists.iter().map(|(a, v)| (*a, *v)).collect();
+    let mut words: Vec<(u32, u32)> = packet.lists.iter().map(|(a, v)| (*a, *v)).collect();
     words.sort_unstable();
     for (addr, value) in words {
-        if e.global::<u32>(addr) != 0 {
+        let guest = e.global::<u32>(addr);
+        if packet.spares.contains(&addr) {
+            if guest == 0 || value == 0 {
+                e.set_global(addr, guest | value);
+            } else {
+                append_spare_chain(e, guest, value);
+            }
+            continue;
+        }
+        let (main_wrote, back) = if packet.counts.contains(&addr) {
+            (guest >> 16 != 0, (guest & 0xffff) | (value & 0xffff_0000))
+        } else {
+            (guest != 0, value)
+        };
+        if main_wrote {
             static NOTED: std::sync::Once = std::sync::Once::new();
             NOTED.call_once(|| {
                 eprintln!(
@@ -1637,8 +1694,23 @@ fn give_lists_back(e: &mut Engine, lists: &AddrMap<u32, u32>) {
             });
             continue;
         }
-        e.set_global(addr, value);
+        e.set_global(addr, back);
     }
+}
+
+/// The spare chain at `tail_of` (main's) with `chain` (the drawing side's) after its last node. A chain longer than any
+/// pool holds is a broken one: it is left as it is (the drawing side's nodes then stay out of every chain) and noted.
+fn append_spare_chain(e: &mut Engine, tail_of: u32, chain: u32) {
+    let mut node = tail_of;
+    for _ in 0..1 << 24 {
+        let next = e.global::<u32>(node);
+        if next == 0 {
+            e.set_global(node, chain);
+            return;
+        }
+        node = next;
+    }
+    eprintln!("nv-draw packet: a spare chain without an end at {tail_of:#010x}: the drawing side's left out");
 }
 
 /// Whether this thread draws from a packet that holds list words (the drawing side, served or not).
@@ -1733,9 +1805,20 @@ pub fn lists_out(e: &mut Engine, addrs: Option<&[u32]>) -> Vec<u32> {
     out.into_iter().map(|(a, _)| a).collect()
 }
 
-/// [`lists_out`]'s words taken again: their values now into the drawing side's packet, zeros in guest memory.
+/// [`lists_out`]'s words taken again: their values now into the drawing side's packet, zeros in guest memory (a holder's
+/// flags-and-count word its flags half, as [`take_handed`] leaves it).
 pub fn lists_in(e: &mut Engine, addrs: &[u32]) {
     let words: Vec<(u32, u32)> = addrs.iter().map(|a| (*a, e.global::<u32>(*a))).collect();
+    let left: Vec<u32> = PACKET.with(|p| {
+        let p = p.borrow();
+        words
+            .iter()
+            .map(|(a, w)| {
+                let count = p.as_ref().is_some_and(|p| p.counts.contains(a));
+                left_in_guest(if count { Kind::Count } else { Kind::Word }, *w)
+            })
+            .collect()
+    });
     if let Some(v) = served_mut(&mut e.own_view) {
         v.lists.extend(words.iter().copied());
     } else {
@@ -1745,8 +1828,8 @@ pub fn lists_in(e: &mut Engine, addrs: &[u32]) {
             }
         });
     }
-    for (a, _) in words {
-        e.set_global(a, 0u32);
+    for ((a, _), left) in words.into_iter().zip(left) {
+        e.set_global(a, left);
     }
 }
 
@@ -2136,6 +2219,66 @@ mod tests {
             "the join puts the drawing side's words back where main wrote nothing"
         );
         assert_eq!(detach::word(&e, at), 0x77, "guest memory after the join");
+    }
+
+    /// The holders' flags-and-count words and the lists' spare words handed over at the cut: a count word leaves its
+    /// flags byte in guest memory (also after a callee by address had the word in place) and gets the drawing side's
+    /// count back at the join unless main counted meanwhile; a spare word is zeroed, and at the join the drawing side's
+    /// chain goes where main made none, or after the last node of the chain main made.
+    #[test]
+    fn counts_and_spare_chains_come_back_by_their_own_rules() {
+        use super::super::detach;
+        let mut e = Engine::new();
+        let holders = e.mem.alloc(8);
+        let (h1, h2) = (holders, holders + 4);
+        e.mem.set_u32(h1, 0x0005_0001);
+        e.mem.set_u32(h2, 0x0003_0001);
+        // Spare chains: the drawing side's two nodes on list s1, one on s2; main's own node for s1 meanwhile.
+        let spares = e.mem.alloc(8);
+        let (s1, s2) = (spares, spares + 4);
+        let nodes = e.mem.alloc(0x30);
+        let (n1, n2, n3, m1) = (nodes, nodes + 0xc, nodes + 0x18, nodes + 0x24);
+        e.mem.set_u32(n1, n2);
+        e.mem.set_u32(s1, n1);
+        e.mem.set_u32(s2, n3);
+        assert!(begin(&e));
+        let handed = detach::Handed {
+            words: Vec::new(),
+            counts: vec![h1, h2],
+            spares: vec![s1, s2],
+        };
+        take_handed(&mut e, &handed);
+        assert_eq!(
+            [e.mem.u32(h1), e.mem.u32(h2), e.mem.u32(s1), e.mem.u32(s2)],
+            [1, 1, 0, 0],
+            "the flags stay, the counts and spares go"
+        );
+        serve(&mut e);
+        assert!(
+            super::super::packet::keeps_own(&e, h1),
+            "the drawing side sees the flags"
+        );
+        assert_eq!(detach::half(&e, h1 + 2), 5);
+        detach::set_half(&mut e, h1 + 2, 4);
+        assert_eq!(detach::word(&e, s1), n1);
+        // A callee by address with the count word in place gives it back with the flags left in guest memory.
+        detach::suspended_for(&mut e, |_| vec![h2], |e| e.mem.set_u32(h2, 0x0002_0001));
+        assert_eq!((e.mem.u32(h2), detach::half(&e, h2 + 2)), (1, 2));
+        unserve(&mut e);
+        let packet = detach(&e).expect("handed over");
+        // Main meanwhile: counts on holder 2 and makes its own spare chain for list 1.
+        e.mem.set_u32(h2, 0x0007_0001);
+        e.mem.set_u32(s1, m1);
+        assert!(attach(packet).is_ok());
+        let _ = end(&mut e);
+        assert_eq!(e.mem.u32(h1), 0x0004_0001, "the drawing side's count");
+        assert_eq!(e.mem.u32(h2), 0x0007_0001, "main counted: main's");
+        assert_eq!(
+            [e.mem.u32(s1), e.mem.u32(m1), e.mem.u32(n1), e.mem.u32(n2)],
+            [m1, n1, n2, 0],
+            "the drawing side's chain after main's"
+        );
+        assert_eq!(e.mem.u32(s2), n3, "no chain of main's: the drawing side's");
     }
 
     #[test]

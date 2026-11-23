@@ -11,8 +11,8 @@
 //! differ. That is what this step proves: the draw's list state is complete in the view, so a drawing thread
 //! can take it while main fills the guest lists again.
 //!
-//! Each list's spare node chain stays in guest memory: the draw's clears hand this frame's nodes to it as
-//! today. A drawing thread will need those handed back at its end instead (the design's "deferred return").
+//! Each list's spare node chain stays in guest memory here: the draw's clears hand this frame's nodes to it as
+//! today. The drawing thread's cut takes the spare words too ([`drawn_list_words`], [`Kind::Spare`]).
 //!
 //! Off by default; off, [`word`] and [`set_word`] are the guest reads and writes they replace, behind one relaxed
 //! load. The view is per run (the kernel table's address keys it), so tests' engines keep their own.
@@ -181,6 +181,19 @@ fn low8(w: u32) -> u8 {
     w as u8
 }
 
+/// How a list word goes with the drawing thread's packet and comes back at the join (`super::capture::take_lists`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Kind {
+    /// A head, tail or count: the drawing side's value back, unless main wrote one meanwhile.
+    Word,
+    /// A holder's flags-and-count word (+0): the count half (+2) goes with the packet; the flags byte stays in guest
+    /// memory, where main's passes read it (a holder keeping its own list).
+    Count,
+    /// A pass list's spare node chain (+0xc; a holder's list's, +0x18): the drawing side's chain is appended to the one
+    /// main made meanwhile, so no node is lost and none is shared.
+    Spare,
+}
+
 /// The words the world draw's lists keep in renderer `renderer` and the renderers its register group holders
 /// hold, with a value in them (a zero word is zero in the view and in guest memory alike): the active pass type
 /// list's head (+0x2c, +0x30); for each pass type the pass map holds (its 37 buckets' chains, read in place) the
@@ -196,18 +209,31 @@ pub fn list_words(e: &Engine, renderer: u32, out: &mut Vec<u32>) {
 /// Every word [`list_words`] looks at in renderer `renderer` and its holders' renderers, whatever its value. The
 /// structure it walks (the group array, the pass map, the holders and their renderers) is never in the view.
 pub fn candidates(e: &Engine, renderer: u32, out: &mut Vec<u32>) {
-    candidates_of(e, renderer, out, |_| true);
+    candidates_of(
+        e,
+        renderer,
+        &mut |addr, kind| {
+            if kind != Kind::Spare {
+                out.push(addr);
+            }
+        },
+        |_| true,
+    );
 }
 
-/// [`candidates`], but of the renderer's own holder slots (+0x3c..=+0x74) only those `slot_taken` answers true for; each
-/// taken holder's renderer whole.
-fn candidates_of(e: &Engine, renderer: u32, out: &mut Vec<u32>, slot_taken: fn(u32) -> bool) {
+/// [`candidates`] with each word's [`Kind`] and the lists' spare words, but of the renderer's own holder slots
+/// (+0x3c..=+0x74) only those `slot_taken` answers true for; each taken holder's renderer whole.
+fn candidates_of(
+    e: &Engine,
+    renderer: u32,
+    take: &mut dyn FnMut(u32, Kind),
+    slot_taken: fn(u32) -> bool,
+) {
     if renderer == 0 {
         return;
     }
-    let mut take = |_: &Engine, addr: u32| out.push(addr);
-    take(e, renderer.wrapping_add(0x2c));
-    take(e, renderer.wrapping_add(0x30));
+    take(renderer.wrapping_add(0x2c), Kind::Word);
+    take(renderer.wrapping_add(0x30), Kind::Word);
     let groups = e.global::<u32>(renderer.wrapping_add(0x08));
     let buckets = e.global::<u32>(renderer.wrapping_add(0x14));
     let hash_size = e.global::<u32>(renderer.wrapping_add(0x10));
@@ -220,35 +246,38 @@ fn candidates_of(e: &Engine, renderer: u32, out: &mut Vec<u32>, slot_taken: fn(u
                 for list in 0..5u32 {
                     let at = group.wrapping_add(list * 0x14);
                     for offset in [4u32, 8, 0x10] {
-                        take(e, at.wrapping_add(offset));
+                        take(at.wrapping_add(offset), Kind::Word);
                     }
+                    take(at.wrapping_add(0xc), Kind::Spare);
                 }
-                take(e, group.wrapping_add(0x64));
+                take(group.wrapping_add(0x64), Kind::Word);
                 item = e.global::<u32>(item);
             }
         }
     }
     for at in [0x78u32, 0x84] {
         for offset in [0u32, 4, 8] {
-            take(e, renderer.wrapping_add(at + offset));
+            take(renderer.wrapping_add(at + offset), Kind::Word);
         }
     }
-    take(e, renderer.wrapping_add(0x90));
-    take(e, renderer.wrapping_add(0x94));
+    take(renderer.wrapping_add(0x90), Kind::Word);
+    take(renderer.wrapping_add(0x94), Kind::Word);
     let mut nested = Vec::new();
     for slot in HOLDERS.step_by(4) {
         let holder = e.global::<u32>(renderer.wrapping_add(slot));
         if holder == 0 || !slot_taken(slot) {
             continue;
         }
-        for offset in [0u32, 0x10, 0x14, 0x1c] {
-            take(e, holder.wrapping_add(offset));
+        take(holder, Kind::Count);
+        for offset in [0x10u32, 0x14, 0x1c] {
+            take(holder.wrapping_add(offset), Kind::Word);
         }
+        take(holder.wrapping_add(0x18), Kind::Spare);
         nested.push(e.global::<u32>(holder.wrapping_add(8)));
     }
     for inner in nested {
         if inner != renderer {
-            candidates(e, inner, out);
+            candidates_of(e, inner, take, |_| true);
         }
     }
 }
@@ -270,14 +299,33 @@ fn drawn_slot(slot: u32) -> bool {
     slot >= ALPHA_HOLDERS || DRAWN_GROUPS.contains(&((slot - 0x3c) / 4))
 }
 
+/// The list words the cut hands to the drawing side, by [`Kind`].
+#[derive(Default, Debug)]
+pub struct Handed {
+    pub words: Vec<u32>,
+    pub counts: Vec<u32>,
+    pub spares: Vec<u32>,
+}
+
 /// The list words the cut hands to the drawing side for the world accumulator's renderer `renderer` (with a value:
-/// [`list_words`]'s rule): as [`list_words`], but of its holders only those the draw draws ([`drawn_slot`]), each with
-/// its own renderer's words whole. The other holders' words stay in guest memory, where main's passes after the draw
-/// read and draw them.
-pub fn drawn_list_words(e: &Engine, renderer: u32, out: &mut Vec<u32>) {
-    let mut all = Vec::new();
-    candidates_of(e, renderer, &mut all, drawn_slot);
-    out.extend(all.into_iter().filter(|addr| e.global::<u32>(*addr) != 0));
+/// [`list_words`]'s rule), by [`Kind`]: as [`list_words`] with the lists' spare words, but of its holders only those the
+/// draw draws ([`drawn_slot`]), each with its own renderer's words whole. The other holders' words stay in guest
+/// memory, where main's passes after the draw read and draw them.
+pub fn drawn_list_words(e: &Engine, renderer: u32, out: &mut Handed) {
+    candidates_of(
+        e,
+        renderer,
+        &mut |addr, kind| {
+            if e.global::<u32>(addr) != 0 {
+                match kind {
+                    Kind::Word => out.words.push(addr),
+                    Kind::Count => out.counts.push(addr),
+                    Kind::Spare => out.spares.push(addr),
+                }
+            }
+        },
+        drawn_slot,
+    );
 }
 
 /// Runs `f` with the view's words back in guest memory, then takes the same words again (their values then,
@@ -468,7 +516,8 @@ mod tests {
 
     /// The words the cut hands over: a renderer with a holder in every slot (each holder with a renderer of its own,
     /// whose own holder 6 is there too): of the renderer's holders only the drawn groups' and the alpha holders', each
-    /// with its renderer whole; groups 4 to 8, 0xb and 0xc stay out. Every word holds 1 (a zero is not taken).
+    /// with its renderer whole; groups 4 to 8, 0xb and 0xc stay out. Every word holds 1 (a zero is not taken). A
+    /// holder's flags-and-count word goes as a count, its list's spare word as a spare.
     #[test]
     fn the_cut_takes_the_holders_the_draw_draws() {
         let mut e = Engine::new();
@@ -483,7 +532,7 @@ mod tests {
         };
         let holder = |e: &mut Engine, inner: u32| {
             let h = e.mem.alloc(0x20);
-            for at in [0u32, 0x10, 0x14, 0x1c] {
+            for at in [0u32, 0x10, 0x14, 0x18, 0x1c] {
                 e.mem.set_u32(h + at, 1);
             }
             e.mem.set_u32(h + 8, inner);
@@ -499,11 +548,12 @@ mod tests {
             e.mem.set_u32(top + slot, h);
             holders.push((slot, h, inner, nested));
         }
-        let mut taken = Vec::new();
-        drawn_list_words(&e, top, &mut taken);
+        let mut handed = Handed::default();
+        drawn_list_words(&e, top, &mut handed);
+        let taken = &handed.words;
         let mut all = Vec::new();
         list_words(&e, top, &mut all);
-        let words = |h: u32| [h, h + 0x10, h + 0x14, h + 0x1c];
+        let words = |h: u32| [h + 0x10, h + 0x14, h + 0x1c];
         for (slot, h, inner, nested) in holders {
             let drawn = slot >= 0x70 || [0u32, 1, 2, 3, 9, 0xa].contains(&((slot - 0x3c) / 4));
             let mut inner_words = Vec::new();
@@ -512,9 +562,28 @@ mod tests {
                 inner_words.contains(&nested),
                 "{slot:#x}: the inner renderer's own holder 6"
             );
-            for w in words(h).into_iter().chain(inner_words) {
+            for w in words(h)
+                .into_iter()
+                .chain(inner_words.into_iter().filter(|w| *w != nested))
+            {
                 assert_eq!(taken.contains(&w), drawn, "slot {slot:#x}, word {w:#x}");
                 assert!(all.contains(&w), "list_words takes every holder: {w:#x}");
+            }
+            for (count, what) in [(h, "holder"), (nested, "nested holder")] {
+                assert_eq!(
+                    handed.counts.contains(&count),
+                    drawn,
+                    "slot {slot:#x}: the {what}'s count word"
+                );
+                assert!(!taken.contains(&count) && all.contains(&count));
+            }
+            for spare in [h + 0x18, nested + 0x18] {
+                assert_eq!(
+                    handed.spares.contains(&spare),
+                    drawn,
+                    "slot {slot:#x}: spare"
+                );
+                assert!(!all.contains(&spare), "list_words leaves the spares");
             }
         }
         for at in [0x2cu32, 0x30, 0x78, 0x80, 0x84, 0x8c, 0x90, 0x94] {

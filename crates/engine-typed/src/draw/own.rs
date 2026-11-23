@@ -205,18 +205,18 @@ pub(crate) fn take_first_pass(e: &mut Engine, holder: u32) {
         next = e.global::<u32>(node);
         e.set_global(next.wrapping_add(4), 0u32);
     }
-    let spare = e.global::<u32>(holder.wrapping_add(0x18));
+    let spare = super::detach::word(e, holder.wrapping_add(0x18));
     if spare != 0 {
         let head = super::detach::word(e, holder.wrapping_add(0x10));
         e.set_global(spare.wrapping_add(4), head);
     }
     let head = super::detach::word(e, holder.wrapping_add(0x10));
-    let spare = e.global::<u32>(holder.wrapping_add(0x18));
+    let spare = super::detach::word(e, holder.wrapping_add(0x18));
     e.set_global(head, spare);
     let head = super::detach::word(e, holder.wrapping_add(0x10));
     let items = super::detach::word(e, holder.wrapping_add(0x1c)).wrapping_sub(1);
     super::detach::set_word(e, holder.wrapping_add(0x1c), items);
-    e.set_global(holder.wrapping_add(0x18), head);
+    super::detach::set_word(e, holder.wrapping_add(0x18), head);
     super::detach::set_word(e, holder.wrapping_add(0x10), next);
 }
 
