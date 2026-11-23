@@ -623,6 +623,14 @@ pub const ROWS: &[Row] = &[
         summary: "the lock pick menu opens without its entering animation",
     },
     Row {
+        bit: stewie::HOTKEY_DESELECT,
+        function: "patchDeselectHotkeyedItems",
+        plan: "S0608",
+        key: "bDeselectHotkeyedItems",
+        tweaks: Some(("Tweaks", "bDeselectHotkeys")),
+        summary: "choosing the hotkey an item is already on takes the item off it",
+    },
+    Row {
         bit: stewie::COMPANION_TAKE_ALL,
         function: "patchAllowTakeAllInCompanionContainers",
         plan: "S0628",

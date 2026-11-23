@@ -110,6 +110,7 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
     ("S0482", "bDontAllowConsoleBeforeInitIsDone", tweak(4)),
     ("S0556", "bNoCharacterNameLimit", tweak(5)),
     ("S0592", "bFasterEnterLockPickMenu", tweak(6)),
+    ("S0608", "bDeselectHotkeyedItems", tweak(13)),
     ("S0628", "bAllowTakeAllInCompanionContainers", tweak(10)),
     ("S0763", "bCapitalizeRecipeCategories", tweak(7)),
     ("S0883", "bMoreDescriptiveSettingsSaveError", bit(30)),

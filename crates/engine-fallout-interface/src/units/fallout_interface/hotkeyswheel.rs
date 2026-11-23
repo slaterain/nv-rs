@@ -402,6 +402,9 @@ pub fn hotkeys_wheel_update_hotkey_list(e: &mut Engine, this: Ptr<HotKeysWheel>)
 /// (`ModelLoader::LoadFile`, path then 0, 1, 0, 0, 0). The wheel's list is
 /// refreshed, the player is told (`008aded0` with the object, 1, 0), the
 /// selecting flag is cleared and the removed entry destroyed.
+///
+/// Stewie S0608 (`[Tweaks] bDeselectHotkeys`): when the hotkey already had an entry and the
+/// inventory menu's selection is on that same hotkey, the hotkey is only removed, not set again.
 pub fn fn_007019e0(e: &mut Engine, this: Ptr<HotKeysWheel>, entry: u32) {
     let player: u32 = e.global(PLAYER);
     let inventory = e.call(GET_INVENTORY_CHANGES, &args![player]).u32();
@@ -411,8 +414,12 @@ pub fn fn_007019e0(e: &mut Engine, this: Ptr<HotKeysWheel>, entry: u32) {
     let hotkey = e.get(this, HotKeysWheel::iLastHighlightedHotkey);
     let old = e.call(HOTKEY_ENTRY, &args![inventory, hotkey]).u32();
     let extra = first_extra_data(e, entry);
+    let mut slots_equal = false;
     if old != 0 {
         let hotkey = e.get(this, HotKeysWheel::iLastHighlightedHotkey);
+        if e.stewie(engine_core::extend::stewie::HOTKEY_DESELECT) {
+            slots_equal = stewie_selection_on_hotkey(e, hotkey);
+        }
         e.call(REMOVE_HOTKEY_ITEM, &args![inventory, old, hotkey]);
         if typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, old)) != 0 {
             let model = biped_model(e, old);
@@ -424,7 +431,9 @@ pub fn fn_007019e0(e: &mut Engine, this: Ptr<HotKeysWheel>, entry: u32) {
         }
     }
     let hotkey = e.get(this, HotKeysWheel::iLastHighlightedHotkey);
-    e.call(SET_HOTKEY_ITEM, &args![inventory, entry, extra, hotkey]);
+    if !slots_equal {
+        e.call(SET_HOTKEY_ITEM, &args![inventory, entry, extra, hotkey]);
+    }
     if typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, entry)) != 0 {
         let model = biped_model(e, entry);
         if model != 0 {
@@ -443,6 +452,31 @@ pub fn fn_007019e0(e: &mut Engine, this: Ptr<HotKeysWheel>, entry: u32) {
     if old != 0 {
         e.call(ENTRY_DESTROY, &args![old, 1u32]);
     }
+}
+
+/// The inventory menu's selected entry (`InventoryMenu::GetSelection`, xNVSE).
+const INVENTORY_SELECTION: u32 = 0x011d_9ea8;
+/// `BaseExtraList::GetByType` (engine map; the list, the type) and the hotkey extra data's type
+/// (`kExtraData_Hotkey`, xNVSE), whose hotkey number is the byte at +0xC.
+const EXTRA_GET_BY_TYPE: u32 = 0x0041_0220;
+const EXTRA_HOTKEY: u32 = 0x4a;
+
+/// Stewie S0608 (Tweaks' `RemoveExtraHotkeyStoreIndexHook` at `0x701A6F`): whether the inventory
+/// menu's selected entry, by the hotkey extra data of its first extra data list, is on `hotkey`.
+/// No selection (Tweaks reads through it unguarded) answers no.
+fn stewie_selection_on_hotkey(e: &mut Engine, hotkey: i32) -> bool {
+    let selection: u32 = e.global(INVENTORY_SELECTION);
+    if selection == 0 {
+        return false;
+    }
+    let list = first_extra_data(e, selection);
+    if list == 0 {
+        return false;
+    }
+    let extra = e
+        .call(EXTRA_GET_BY_TYPE, &args![list, EXTRA_HOTKEY])
+        .u32();
+    extra != 0 && i32::from(e.mem.u8(extra + 0xc)) == hotkey
 }
 
 // Translated from 00701bd0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1294,6 +1328,73 @@ mod tests {
         a.w.e.call(0x0070_19e0, &args![a.this, a.entry]);
         assert!(calls(&a.w.e, SET_HOTKEY_ITEM).is_empty());
         assert!(calls(&a.w.e, HOTKEY_ENTRY).is_empty());
+    }
+
+    /// Stewie S0608: the inventory menu's selection is the entry being assigned, and its first
+    /// extra data list holds hotkey extra data (`00410220` with type 0x4a) on `on_hotkey` (none
+    /// for `None`).
+    fn select_on_hotkey(a: &mut Assign, on_hotkey: Option<u8>) {
+        let e = &mut a.w.e;
+        e.map(0x011d_9000, 0x1000);
+        e.set_global(INVENTORY_SELECTION, a.entry);
+        let hotkey_extra = e.mem.alloc(0x10);
+        e.mem.set_u8(hotkey_extra + 0xc, on_hotkey.unwrap_or(0));
+        let found = if on_hotkey.is_some() { hotkey_extra } else { 0 };
+        let list = a.extra;
+        e.register_double(EXTRA_GET_BY_TYPE, move |_, args| {
+            word(if args[0] == list && args[1] == EXTRA_HOTKEY {
+                found
+            } else {
+                0
+            })
+        });
+    }
+
+    #[test]
+    fn stewie_s0608_choosing_the_hotkey_the_item_is_on_takes_it_off() {
+        for (on, selection_on, set) in [
+            (false, Some(3), true),
+            (true, Some(3), false),
+            (true, Some(5), true),
+            (true, None, true),
+        ] {
+            let mut a = assign_world();
+            select_on_hotkey(&mut a, selection_on);
+            a.w.e
+                .set_stewie(engine_core::extend::stewie::HOTKEY_DESELECT, on);
+            a.w.e.call(0x0070_19e0, &args![a.this, a.entry]);
+            let e = &a.w.e;
+            let case = format!("{on} {selection_on:?}");
+            assert_eq!(calls(e, REMOVE_HOTKEY_ITEM), vec![vec![0x8000, a.old, 3]], "{case}");
+            assert_eq!(calls(e, SET_HOTKEY_ITEM).len(), usize::from(set), "{case}");
+            assert_eq!(calls(e, EXTRA_GET_BY_TYPE).len(), usize::from(on), "{case}");
+            // The rest of the assignment runs either way.
+            assert_eq!(calls(e, MODEL_LOAD_FILE).len(), 1, "{case}");
+            assert_eq!(calls(e, AFTER_ASSIGN).len(), 1, "{case}");
+            assert_eq!(calls(e, ENTRY_DESTROY), vec![vec![a.old, 1]], "{case}");
+        }
+    }
+
+    #[test]
+    fn stewie_s0608_needs_an_entry_on_the_hotkey_and_a_selection() {
+        // An empty hotkey: Tweaks' hook is on the removal, which does not run.
+        let mut a = assign_world();
+        select_on_hotkey(&mut a, Some(3));
+        a.w.e.mem.set_u32(CFG_HOTKEYS + 4 * 3, 0);
+        a.w.e
+            .set_stewie(engine_core::extend::stewie::HOTKEY_DESELECT, true);
+        a.w.e.call(0x0070_19e0, &args![a.this, a.entry]);
+        assert_eq!(calls(&a.w.e, SET_HOTKEY_ITEM).len(), 1);
+        assert!(calls(&a.w.e, EXTRA_GET_BY_TYPE).is_empty());
+        // No selection in the inventory menu: the hotkey is set as without the row.
+        let mut a = assign_world();
+        select_on_hotkey(&mut a, Some(3));
+        a.w.e.set_global(INVENTORY_SELECTION, 0u32);
+        a.w.e
+            .set_stewie(engine_core::extend::stewie::HOTKEY_DESELECT, true);
+        a.w.e.call(0x0070_19e0, &args![a.this, a.entry]);
+        assert_eq!(calls(&a.w.e, SET_HOTKEY_ITEM).len(), 1);
+        assert!(calls(&a.w.e, EXTRA_GET_BY_TYPE).is_empty());
     }
 
     // ----- 00701bd0 -----

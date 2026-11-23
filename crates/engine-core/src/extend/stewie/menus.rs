@@ -310,3 +310,6 @@ pub const CONSOLE_HISTORY_NO_REPEATS: Row = tweak(11);
 /// S0467 `patchSkipSkillMenuIfNoPointsToAssign` (`[Tweaks] bSkipSkillMenuIfNoPointsToAssign`;
 /// `LevelUpMenu::Create` at `0x7850DD`): a level up with no skill points to give opens on the perks.
 pub const SKIP_SKILLS_WITHOUT_POINTS: Row = tweak(12);
+/// S0608 `patchDeselectHotkeyedItems` (`[Tweaks] bDeselectHotkeys`; `HotKeysWheel`'s assignment
+/// `007019e0` at `0x701A6F` and `0x701AF4`): choosing the hotkey an item is already on takes it off.
+pub const HOTKEY_DESELECT: Row = tweak(13);
