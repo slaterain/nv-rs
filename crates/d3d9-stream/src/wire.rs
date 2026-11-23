@@ -418,6 +418,31 @@ pub fn command_counts(from: impl std::io::Read) -> Result<Vec<(&'static str, u64
         .collect())
 }
 
+/// How many draws each frame of a file of commands holds: one entry per `Present`, the draws since the one before
+/// (`DrawPrimitive`, `DrawIndexedPrimitive`, `DrawPrimitiveUp`), then the draws after the last present. Two runs of
+/// the same route compare frame by frame where per-draw digests stop at the first difference.
+pub fn frame_draws(from: impl std::io::Read) -> Result<Vec<u32>, String> {
+    let tag = |name: &str| crate::cmd::NAMES.iter().position(|n| *n == name);
+    let draws: Vec<usize> = ["DrawPrimitive", "DrawIndexedPrimitive", "DrawPrimitiveUp"]
+        .into_iter()
+        .filter_map(tag)
+        .collect();
+    let present = tag("Present").ok_or("no Present in the command list")?;
+    let mut records = Records::new(from)?;
+    let (mut frames, mut now) = (Vec::new(), 0u32);
+    while let Some(record) = records.next()? {
+        let t = *record.first().ok_or("an empty record")? as usize;
+        if t == present {
+            frames.push(now);
+            now = 0;
+        } else if draws.contains(&t) {
+            now += 1;
+        }
+    }
+    frames.push(now);
+    Ok(frames)
+}
+
 /// Each draw's device-state digest ([`crate::StateDigest`]) of a file of commands, read one record at
 /// a time: two runs whose streams differ only in states set again to the value they had (the device
 /// layer leaving those out) give the same list, and any difference a draw could see gives another.

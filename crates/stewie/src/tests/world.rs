@@ -7,6 +7,11 @@ use engine_core::extend::stewie::{Row, WORLD_FIXES};
 /// The bits were given in the order the rows were traced, not PLAN.md's.
 pub(super) const PINNED: &[(&str, &str, Row)] = &[
     (
+        "S0016",
+        "bAllowKeyboardPauseAndScreenshotWhileControllerConnected",
+        Row::at(WORLD_FIXES, 26),
+    ),
+    (
         "S0021",
         "bSaveInventoryScrollPositionWhenClosingPipBoy",
         Row::at(WORLD_FIXES, 9),
@@ -63,6 +68,11 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
     ),
     ("S0022.53", "bMenuFixesMenuL3R3", Row::at(WORLD_FIXES, 14)),
     (
+        "S0022.54",
+        "bMenuFixesBindBackslash",
+        Row::at(WORLD_FIXES, 27),
+    ),
+    (
         "S0046",
         "bFixPipboyLightStayingOnWhenViewing",
         Row::at(WORLD_FIXES, 15),
@@ -82,6 +92,26 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "S0065",
         "bFixMouseInBarterAndContainerMenusInsideTerminals",
         Row::at(WORLD_FIXES, 24),
+    ),
+    (
+        "S0080",
+        "bTestAllCellsNeedlessINIChecks",
+        Row::at(WORLD_FIXES, 31),
+    ),
+    (
+        "S0103",
+        "bFixFullLODResettingWhenOpeningPipboy",
+        Row::at(WORLD_FIXES, 30),
+    ),
+    (
+        "S0128",
+        "bPreventNoUnequipMessageForNPCs",
+        Row::at(WORLD_FIXES, 28),
+    ),
+    (
+        "S0131",
+        "bFixMapMarkerReputationLookup",
+        Row::at(WORLD_FIXES, 29),
     ),
     ("S0145", "bFixSunDirection", Row::at(WORLD_FIXES, 7)),
     ("S0193", "bNavMeshTeleportDoorFix", Row::at(WORLD_FIXES, 4)),

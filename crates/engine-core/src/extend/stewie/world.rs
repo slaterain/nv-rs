@@ -139,6 +139,33 @@ pub const RENDERED_MENU_BEHIND_TRADE: Row = fix(24);
 /// when JIP's fix row is on, else the exe's key query) and adds its B test.
 pub const CONSOLE_PAD_B_CLOSES: Row = fix(25);
 
+// ---- Group M: input settings, messages and small engine fixes ----
+
+/// S0016 `patchAllowKeyboardPauseAndScreenshotWhileControllerConnected` (the JNZ at `0xA2479B` in
+/// `OSInputGlobals::GetControlState` `00a24660`): the fixed keys (pause/Escape, the console key,
+/// Print Screen) are read with a pad connected too.
+pub const FIXED_KEYS_WITH_PAD: Row = fix(26);
+/// S0022.54 (`MenuFixes`, its JMP at `0xA2507C` in `Controls::SetControl` `00a24fc0`): backslash
+/// can be bound to a control.
+pub const BIND_BACKSLASH: Row = fix(27);
+/// S0128 `PreventNoUnequipMessageForNPCs` (`OnRemoveWornItemMessageHook` at `0x4C5640` in
+/// `004c37d0`): the "can't remove worn item" message only for the player, not when an NPC uses up
+/// its last force-equipped grenade.
+pub const NO_UNEQUIP_MESSAGE_PLAYER_ONLY: Row = fix(28);
+/// S0131 `patchFixMapMarkerReputationLookup` (`OnGetMapMarkerReputationIDHook` at `0x416E17` in
+/// `ExtraDataList::InitItem` `00416be0`): a map marker's stored reputation id is resolved through
+/// the plugin's own load-order index (`AddCompileIndex`) before the reputation is looked up.
+pub const MAP_MARKER_REPUTATION_INDEX: Row = fix(29);
+/// S0103 `patchFixFullLODResettingWhenOpeningPipboy` (`SetTreeFullLODToINISetting` at `0x54F413`
+/// in `TakeExteriorLocalMapPicture` `0054ee80`): after the local map's picture the trees' full-LOD
+/// flag goes back to the `bForceFullLOD` setting, not to 0. Tweaks reads the tree manager without
+/// testing it: with the missing-data guard row a missing one is passed over.
+pub const TREE_FULL_LOD_KEPT: Row = fix(30);
+/// S0080 `patchTestAllCellsNeedlessINIChecks` (`SafeNopCall(0x4A8BE6)` in `004a8bb0`): the scene
+/// report of the cells around the player no longer re-reads the budget settings (`004a8fe0`) each
+/// time, which made the `TestAllCells` console command slow.
+pub const TEST_ALL_CELLS_NO_INI_REREAD: Row = fix(31);
+
 /// `OSInputGlobals *` (xNVSE's `0x11F35CC`).
 pub const INPUT_GLOBALS: u32 = 0x011f_35cc;
 /// `OSInputGlobals::overrideFlags` (`UInt16` at `+0x1B92`); bit 3 is the menu-mode debounce.
