@@ -1113,6 +1113,20 @@ fn set_info_tile_alpha(e: &mut Engine, offset: u32) {
     hud_set_float(e, target_tile, 0xfa9, alpha);
 }
 
+/// The action label of a creature target (`0x7775C3`..`0x777602`): its base data (`004181e0`
+/// +0x30) asked whether it allows dialogue (slot +0x18); yes, the setting at `011d3708`
+/// (Pickpocket), no, `011d4f48` (Steal). With lStewieAl's Tweaks' S0022.51 (a NOP over the `JZ`
+/// at `0x7775DB`) the question is still asked and the answer is always Pickpocket.
+fn creature_action_setting(e: &mut Engine, reference: u32) -> u32 {
+    let process = e.call(0x0041_81e0, &args![reference]).u32();
+    let dialogue = e.vcall(process + 0x30, 0x18, &args![]).bool();
+    if dialogue || e.stewie(stewie::CREATURE_PICKPOCKET_PROMPT) {
+        0x011d_3708
+    } else {
+        0x011d_4f48
+    }
+}
+
 fn set_info_action_setting(e: &mut Engine, setting: u32) {
     let text = e.call(0x0040_3df0, &args![setting]).u32();
     let tile = hud_field(e, 0x9c);
@@ -1196,15 +1210,7 @@ fn set_info_inventory_action(
             } else if form_type == 0x2a {
                 0x011d_3708
             } else if form_type == 0x2b {
-                let process = e.call(0x0041_81e0, &args![reference]).u32();
-                // `0x7775DB` (lStewieAl's Tweaks' S0022.51 writes a NOP over the `JZ`): the
-                // dialogue test is still asked and a creature always shows Pickpocket, not Steal.
-                let dialogue = e.vcall(process + 0x30, 0x18, &args![]).bool();
-                if dialogue || e.stewie(stewie::CREATURE_PICKPOCKET_PROMPT) {
-                    0x011d_3708
-                } else {
-                    0x011d_4f48
-                }
+                creature_action_setting(e, reference.addr())
             } else {
                 0x011d_4f48
             };
@@ -9044,6 +9050,53 @@ mod tests {
                 .count(),
             opacity_read: calls.iter().any(|(address, _)| *address == 0x0040_3e20),
             seen: SEEN_ASH_PILE.with(|s| s.take()),
+        }
+    }
+
+    /// Row S0022.51's HUD place (lStewieAl's Tweaks, the `JZ` at `0x7775DB` made a NOP): a
+    /// creature whose base data does not allow dialogue (slot +0x18) shows `sPickpocket`
+    /// (`011d3708`) with the row on, `sSteal` (`011d4f48`) off; with dialogue, `sPickpocket`.
+    #[test]
+    fn s0022_51_a_creature_shows_pickpocket() {
+        // (row, dialogue allowed, wanted setting)
+        for (on, dialogue, wanted) in [
+            (false, 0u32, 0x011d_4f48u32),
+            (false, 1, 0x011d_3708),
+            (true, 0, 0x011d_3708),
+            (true, 1, 0x011d_3708),
+        ] {
+            let mut e = Engine::new();
+            let vtable = e.mem.alloc(0x40);
+            e.mem.set_u32(vtable + 0x18, 0x00c5_0018);
+            let base = e.mem.alloc(0x40);
+            e.mem.set_u32(base + 0x30, vtable);
+            e.register_double(0x0041_81e0, move |_, a| {
+                assert_eq!(a[0], 0x6000);
+                Ret {
+                    eax: base,
+                    ..Ret::default()
+                }
+            });
+            e.register_double(0x00c5_0018, move |_, _| Ret {
+                eax: dialogue,
+                ..Ret::default()
+            });
+            e.set_stewie(stewie::CREATURE_PICKPOCKET_PROMPT, on);
+            e.call_log = Some(vec![]);
+            assert_eq!(
+                creature_action_setting(&mut e, 0x6000),
+                wanted,
+                "row {on} dialogue {dialogue}"
+            );
+            // The dialogue question is asked with the row on too.
+            let asked = e
+                .call_log
+                .as_ref()
+                .unwrap()
+                .iter()
+                .filter(|(a, _)| *a == 0x00c5_0018)
+                .count();
+            assert_eq!(asked, 1);
         }
     }
 
