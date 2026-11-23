@@ -791,6 +791,8 @@ fn back_to_the_terminal(e: &mut Engine, this: u32) -> bool {
 /// button, then the state: 0 the left button, 2 `isDepressed`).
 const INPUT_GLOBALS_011F35CC: u32 = 0x011f_35cc;
 const MOUSE_STATE_00A23A50: u32 = 0x00a2_3a50;
+/// A note's next page (`007590c0`, `thiscall`, one word), which S0539's paths call by address.
+const NOTE_NEXT_PAGE_007590C0: u32 = 0x0075_90c0;
 
 /// lStewieAl's Tweaks' S0539 `ComputerTryAdvancePage` (`[Tweaks] bClickingShowsTerminalText`, in
 /// `DoClick` at `0x757FDA`): yes, with nothing else done, when the left button was just let go
@@ -813,7 +815,8 @@ fn stewie_try_advance_page(e: &mut Engine, this: u32) -> bool {
         }
     }
     if word(e, this, 0xbc) != 0 {
-        fn_007590c0(e, Ptr::new(this), 0);
+        // By address, as Tweaks calls it.
+        e.call(NOTE_NEXT_PAGE_007590C0, &args![this, 0u32]);
         return true;
     }
     false
@@ -840,7 +843,7 @@ pub fn stewie_left_click_press(e: &mut Engine, this: u32, id: u32) {
         return;
     }
     if word(e, this, 0xbc) != 0 {
-        fn_007590c0(e, Ptr::new(this), 0);
+        e.call(NOTE_NEXT_PAGE_007590C0, &args![this, 0u32]);
     } else if back_to_the_terminal(e, this) {
         e.set_global(NOTE_SHOWN_011D93C0, 0u8);
     }
@@ -4060,5 +4063,35 @@ mod n053_tests {
         assert!(is_computers_menu(&e, menu));
         e.mem.set_u32(menu, LIST_BOX_VTABLE);
         assert!(!is_computers_menu(&e, menu));
+    }
+
+    /// Row S0539 with a note pending (+0xBC): a press on the screen (id 2) with no text being shown
+    /// turns the note's page (`007590c0`, once, by address) and nothing else; a click there with
+    /// the button held and the first text all shown turns it too, without going back to the items,
+    /// and keeps the note flag (`011d93c0`).
+    #[test]
+    fn s0539_a_pending_note_turns_its_page() {
+        let mut e = engine();
+        let this = s0539_menu(&mut e, false, None);
+        e.mem.set_u32(this + 0xbc, 1);
+        e.register_double(NOTE_NEXT_PAGE_007590C0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        stewie_left_click_press(&mut e, this, 2);
+        assert_eq!(calls(&e, NOTE_NEXT_PAGE_007590C0), vec![vec![this, 0]]);
+        assert!(calls(&e, LIST_BOX_FOR_EACH).is_empty());
+        assert!(calls(&e, TILE_SET_INT).is_empty());
+
+        let mut e = engine();
+        let this = s0539_menu(&mut e, false, Some(false));
+        e.mem.set_u32(this + 0xbc, 1);
+        e.register_double(NOTE_NEXT_PAGE_007590C0, |_, _| Ret::default());
+        e.set_stewie(engine_core::extend::stewie::TERMINAL_CLICK_SHOWS_TEXT, true);
+        e.set_global(NOTE_SHOWN_011D93C0, 1u8);
+        e.call_log = Some(vec![]);
+        e.call(0x0075_7f70, &args![this, 2u32, 0u32]);
+        assert_eq!(calls(&e, NOTE_NEXT_PAGE_007590C0), vec![vec![this, 0]]);
+        assert!(calls(&e, LIST_BOX_FOR_EACH).is_empty());
+        assert!(calls(&e, TILE_SET_INT).is_empty());
+        assert_eq!(e.global::<u8>(NOTE_SHOWN_011D93C0), 1);
     }
 }

@@ -10521,6 +10521,75 @@ mod tests {
         assert!(calls(&e, DO_ENTER).is_empty(), "same tile: nothing entered");
     }
 
+    /// Row S0539's slot +8 (lStewieAl's Tweaks' `ComputersMenuHandleLeftClickPress`, written at
+    /// `0x107200C`): with the row on, a press on a terminal menu's (vtable `01072004`) screen (id 2)
+    /// goes to Tweaks' handler, not the slot (here a pending note: its page turned, `007590c0`
+    /// with the menu); another menu's press still goes to its slot +8 with (id, tile); with the row
+    /// off a terminal's too.
+    #[test]
+    fn s0539_a_terminal_press_goes_to_tweaks_handler() {
+        // (row, a terminal menu, Tweaks' handler)
+        for (on, terminal, handler) in [
+            (true, true, true),
+            (true, false, false),
+            (false, true, false),
+        ] {
+            let (mut e, m) = idle_world(2);
+            let (menu, mut menu_logs) = virtual_object(
+                &mut e,
+                &[
+                    (8, 0x0900_00a0),
+                    (0x18, 0x0900_00a3),
+                    (0x20, 0x0900_00a1),
+                    (0x24, 0x0900_00a2),
+                ],
+                1,
+            );
+            if terminal {
+                // The terminal menu's vtable at its own address, with the same stand-ins.
+                if !e.mem.is_mapped(0x0107_2004) {
+                    e.map(0x0107_2000, 0x1000);
+                }
+                let table = e.mem.u32(menu);
+                for offset in [8u32, 0x18, 0x20, 0x24] {
+                    let target = e.mem.u32(table + offset);
+                    e.mem.set_u32(0x0107_2004 + offset, target);
+                }
+                e.mem.set_u32(menu, 0x0107_2004);
+            }
+            // A note pending, no text being shown.
+            e.mem.set_u32(menu + 0xbc, 1);
+            e.register_double(0x0075_90c0, |_, _| Ret::default());
+            e.set(m, InterfaceManager::bMouseInMotion, 1);
+            e.set(m, InterfaceManager::pOverTileTarget, 0x7100);
+            e.set(m, InterfaceManager::pOverTileMenu, menu);
+            returns(&mut e, PICK_TILE, 0x7100);
+            returns(&mut e, TILE_GET_MENU, menu);
+            returns(&mut e, MENU_STATE, 1);
+            returns_st0(&mut e, TILE_GET_VALUE, 2.0);
+            returns(&mut e, CONTROLS_GET, 0x2222);
+            e.register(CONTROLS_QUERY_00A23A50, |_, a| Ret {
+                eax: (a[2] == 1 || a[2] == 0) as u32,
+                ..Ret::default()
+            });
+            e.set_stewie(engine_core::extend::stewie::TERMINAL_CLICK_SHOWS_TEXT, on);
+            interface_manager_idle(&mut e, m);
+            let case = format!("row {on} terminal {terminal}");
+            let click = menu_logs.remove(0);
+            if handler {
+                assert!(click.borrow().is_empty(), "{case}");
+                assert_eq!(calls(&e, 0x0075_90c0), vec![vec![menu, 0]], "{case}");
+            } else {
+                assert_eq!(
+                    click.borrow().as_slice(),
+                    &[vec![menu, 2, 0x7100]],
+                    "{case}"
+                );
+                assert!(calls(&e, 0x0075_90c0).is_empty(), "{case}");
+            }
+        }
+    }
+
     #[test]
     fn idle_scrolls_the_menu_with_the_wheel() {
         let (mut e, m) = idle_world(2);
