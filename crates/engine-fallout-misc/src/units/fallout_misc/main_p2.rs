@@ -479,10 +479,26 @@ fn world_draw_enabled(e: &mut Engine, forced_off: bool, other: u8) -> bool {
         return false;
     }
     let interface = e.call(0x0070_5910, &args![]).u32();
-    if e.call(0x0055_85e0, &args![interface]).u32() != 0 {
+    if vats_highlight_hides_world(e, interface) {
         return false;
     }
     e.call(0x0070_5100, &args![]).u8() == 0
+}
+
+/// The VATS highlight test of `world_draw_enabled` (`0x870AAA`, `0x870C92`): the exe's `005585e0`
+/// on the highlight data from `00705910` (its first word, the mode, not 0). With lStewieAl's
+/// Tweaks' S0028 (`VATSHighlightDataShouldHideWeapon`): the highlight's target node (+8) is set
+/// and the VATS menu (`011db0d4`) is open, so a body part highlighted outside the VATS menu no
+/// longer hides the first-person weapon.
+fn vats_highlight_hides_world(e: &mut Engine, data: u32) -> bool {
+    if !e.stewie(engine_core::extend::stewie::VATS_HIGHLIGHT_KEEPS_WEAPON) {
+        return e.call(0x0055_85e0, &args![data]).u32() != 0;
+    }
+    if data == 0 {
+        // No highlight data: Tweaks would read through a null pointer (our guard).
+        return false;
+    }
+    e.mem.u32(data + 8) != 0 && e.mem.u32(0x011d_b0d4) != 0
 }
 
 // Translated from 00870a00 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -11194,5 +11210,48 @@ mod draw_thread_joins {
             0x0086_e650,
             &[0; 16]
         ));
+    }
+
+    /// Row S0028 (lStewieAl's Tweaks' `VATSHighlightDataShouldHideWeapon`, `0x870AAA`,
+    /// `0x870C92`): off, `005585e0` on the highlight data decides; on, the highlight's target node
+    /// (+8) set and the VATS menu (`011db0d4`) open, without that call; no data: not hidden.
+    #[test]
+    fn s0028_the_vats_highlight_hides_the_world() {
+        for (on, node, menu, exe, wanted) in [
+            (false, 0u32, 0u32, 1u32, true),
+            (false, 5, 5, 0, false),
+            (true, 5, 5, 0, true),
+            (true, 0, 5, 1, false),
+            (true, 5, 0, 1, false),
+        ] {
+            let mut e = Engine::new();
+            if !e.mem.is_mapped(0x011d_b0d4) {
+                e.map(0x011d_b000, 0x1000);
+            }
+            let data = e.mem.alloc(0x20);
+            e.mem.set_u32(data + 8, node);
+            e.mem.set_u32(0x011d_b0d4, menu);
+            e.register_double(0x0055_85e0, move |_, _| Ret {
+                eax: exe,
+                ..Ret::default()
+            });
+            e.set_stewie(engine_core::extend::stewie::VATS_HIGHLIGHT_KEEPS_WEAPON, on);
+            e.call_log = Some(vec![]);
+            assert_eq!(
+                vats_highlight_hides_world(&mut e, data),
+                wanted,
+                "row {on} {node} {menu}"
+            );
+            let asked = e
+                .call_log
+                .as_ref()
+                .unwrap()
+                .iter()
+                .any(|(a, _)| *a == 0x0055_85e0);
+            assert_eq!(asked, !on);
+            if on {
+                assert!(!vats_highlight_hides_world(&mut e, 0));
+            }
+        }
     }
 }

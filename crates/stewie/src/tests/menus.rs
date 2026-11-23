@@ -40,6 +40,7 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
     ("S0022.51", "bMenuFixesCreaturePickpocket", bit(55)),
     ("S0022.52", "bMenuFixesRepairBrokenItemType", bit(14)),
     ("S0022.55", "bMenuFixesVatsHealthOneTick", bit(42)),
+    ("S0028", "bVATSHighlightBodyPartNoHideWeapon", bit(62)),
     (
         "S0033",
         "bRepairServicesMenuRemembersScrollPosition",

@@ -185,6 +185,56 @@ const PRINT_MESSAGE: u32 = 0x005b_5e40;
 const NO_PARTIAL_QUERY_TEXT: u32 = 0x0107_8ee8;
 const NO_ENTIRE_QUERY_TEXT: u32 = 0x0107_8e90;
 
+/// The vtables Tweaks' (xNVSE's) `TESForm::IsReference` accepts: `TESObjectREFR`,
+/// `PlayerCharacter`, `Character`, `Creature`, `GrenadeProjectile`; and `MissileProjectile`'s.
+const REFERENCE_VTABLES: [u32; 5] = [
+    0x0102_f55c,
+    0x0108_aa3c,
+    0x0108_6a6c,
+    0x0108_70ac,
+    0x0108_f674,
+];
+const MISSILE_PROJECTILE_VTABLE: u32 = 0x0108_fa44;
+/// The exe's `return true` (`008d0360`): an actor's vtable slot +0x100 (Tweaks' `IS_ACTOR`).
+const RETURN_TRUE: u32 = 0x008d_0360;
+
+/// The target test at the start of `DrawTargetToTexture` (`0x800F70`): the exe skips a target
+/// whose `IsDying(false)` (slot +0x22C) is true. With lStewieAl's Tweaks' S0028
+/// (`RefHasNodeOrIsDying`, a `__fastcall` whose second argument is `EDX`, which there holds the
+/// target's vtable): a target that is not a reference (xNVSE's `IsReference`) or a missile
+/// projectile, or that has no node (xNVSE's `GetNiNode`: the render state +0x64's node +0x14, for
+/// the player shown in third person, +0x64A, the player node +0x694), is skipped; else an actor
+/// (slot +0x100 is `008d0360`) whose `IsDying` with the vtable word's low byte as its argument
+/// is true.
+fn stewie_skip_target(e: &mut Engine, target: u32) -> bool {
+    if !e.stewie(engine_core::extend::stewie::VATS_HIGHLIGHT_KEEPS_WEAPON) {
+        return e.vcall(target, 0x22c, &args![0u32]).bool();
+    }
+    if target == 0 {
+        // No target: Tweaks would read its vtable through a null pointer (our guard).
+        return true;
+    }
+    let vtable = e.mem.u32(target);
+    if !(REFERENCE_VTABLES.contains(&vtable) || vtable == MISSILE_PROJECTILE_VTABLE) {
+        return true;
+    }
+    let render_state = e.mem.u32(target + 0x64);
+    let node = if render_state == 0 {
+        0
+    } else {
+        let player = e.mem.u32(0x011d_ea3c);
+        if target == player && e.mem.u8(player + 0x64a) != 0 {
+            e.mem.u32(player + 0x694)
+        } else {
+            e.mem.u32(render_state + 0x14)
+        }
+    };
+    if node == 0 {
+        return true;
+    }
+    e.mem.u32(vtable + 0x100) == RETURN_TRUE && e.vcall(target, 0x22c, &args![vtable & 0xff]).bool()
+}
+
 // Translated from 00800f30 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 00800f30 - the C++ exception-unwinding frame (FS:[0] around the new occlusion queries) is not translated.
 /// `FOVATSEffectManager::DrawTargetToTexture` (Xbox PDB, `RET 0x18`: the texture, the
@@ -216,7 +266,8 @@ pub fn fovats_effect_manager_draw_target_to_texture(
 ) {
     let base = this.addr();
     let target = e.mem.u32(base + 4);
-    if e.vcall(target, 0x22c, &args![0u32]).bool() {
+    // `0x800F70` (lStewieAl's Tweaks' S0028 calls `RefHasNodeOrIsDying` there).
+    if stewie_skip_target(e, target) {
         return;
     }
     let renderer = e.call(RENDERER_0043C4B0, &args![]).u32();
@@ -625,5 +676,73 @@ mod n051_tests {
             &args![this, 0x6000u32, 1i32, 0u32, 0x55u32, 0x66u32, 0u32],
         );
         assert_eq!(e.call_log.as_ref().unwrap().len(), 2);
+    }
+
+    /// Row S0028 (lStewieAl's Tweaks' `RefHasNodeOrIsDying`, `0x800F70`): off, the target's
+    /// `IsDying` (slot +0x22C) with 0 decides; on, a target that is not a reference (another
+    /// vtable) or has no node (no render state) is skipped, a plain reference or a missile
+    /// projectile with a node is drawn without that call, an actor (`Character`'s vtable, slot +0x100 `008d0360`) is skipped
+    /// when its `IsDying` with the vtable word's low byte (0x6C) is true; the player shown in
+    /// third person (+0x64A) is judged by its player node (+0x694).
+    #[test]
+    fn s0028_draw_target_skip() {
+        let mut e = Engine::new();
+        for page in [0x0108_6000u32, 0x0108_f000, 0x0102_f000, 0x011d_e000] {
+            if !e.mem.is_mapped(page) {
+                e.map(page, 0x1000);
+            }
+        }
+        let (character, refr) = (0x0108_6a6c, 0x0102_f55c);
+        e.mem.set_u32(character + 0x100, RETURN_TRUE);
+        e.mem.set_u32(character + 0x22c, 0x00c2_022c);
+        // Dying only when asked with Character's vtable's low byte.
+        e.register(0x00c2_022c, |_, a| Ret {
+            eax: u32::from(a[0] & 0xff == 0x6c),
+            ..Ret::default()
+        });
+        e.mem.set_u32(refr + 0x100, 0x00c2_0100);
+        e.mem.set_u32(refr + 0x22c, 0x00c2_122c);
+        e.register(0x00c2_122c, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        let node = e.mem.alloc(0x10);
+        let state = e.mem.alloc(0x20);
+        e.mem.set_u32(state + 0x14, node);
+        let object = |e: &mut Engine, vtable: u32, state: u32| {
+            let it = e.mem.alloc(0x700);
+            e.mem.set_u32(it, vtable);
+            e.mem.set_u32(it + 0x64, state);
+            it
+        };
+        let actor = object(&mut e, character, state);
+        let thing = object(&mut e, refr, state);
+        let other = object(&mut e, 0x0103_0000, state);
+        let bare = object(&mut e, refr, 0);
+        let missile = object(&mut e, MISSILE_PROJECTILE_VTABLE, state);
+        e.mem.set_u32(0x011d_ea3c, 0);
+
+        e.set_stewie(
+            engine_core::extend::stewie::VATS_HIGHLIGHT_KEEPS_WEAPON,
+            false,
+        );
+        assert!(!stewie_skip_target(&mut e, actor));
+        assert!(stewie_skip_target(&mut e, thing));
+
+        e.set_stewie(
+            engine_core::extend::stewie::VATS_HIGHLIGHT_KEEPS_WEAPON,
+            true,
+        );
+        assert!(stewie_skip_target(&mut e, actor));
+        assert!(!stewie_skip_target(&mut e, thing));
+        assert!(stewie_skip_target(&mut e, other));
+        assert!(stewie_skip_target(&mut e, bare));
+        assert!(!stewie_skip_target(&mut e, missile));
+        // The player in third person: its player node, not the render state's.
+        e.mem.set_u32(0x011d_ea3c, thing);
+        e.mem.set_u8(thing + 0x64a, 1);
+        assert!(stewie_skip_target(&mut e, thing));
+        e.mem.set_u32(thing + 0x694, node);
+        assert!(!stewie_skip_target(&mut e, thing));
     }
 }

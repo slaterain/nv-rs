@@ -255,6 +255,14 @@ pub const ROWS: &[Row] = &[
         summary: "the VATS health meter never shows empty at low health",
     },
     Row {
+        bit: stewie::VATS_HIGHLIGHT_KEEPS_WEAPON,
+        function: "patchVATSHighlightBodyPartNoHideWeapon",
+        plan: "S0028",
+        key: "bVATSHighlightBodyPartNoHideWeapon",
+        tweaks: None,
+        summary: "a highlighted body part hides the first-person weapon only in the VATS menu",
+    },
+    Row {
         bit: stewie::REPAIR_SERVICES_KEEPS_SCROLL,
         function: "patchRepairServicesMenuRemembersScrollPosition",
         plan: "S0033",

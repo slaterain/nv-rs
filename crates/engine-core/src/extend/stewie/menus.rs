@@ -234,3 +234,8 @@ pub const VATS_KEYS_OVER_MOUSE: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 6
 /// ammunition is taken while the inventory's ammunition tab is open (S0089.08, writing the same
 /// two calls, wins there).
 pub const CONSOLE_QUICK_SAVE_AND_AMMO_TAB: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 61);
+/// S0028 `patchVATSHighlightBodyPartNoHideWeapon` (the frame's draw `00870a00` at `0x870AAA` and
+/// `00870bd0` at `0x870C92`; `FOVATSEffectManager::DrawTargetToTexture` `00800f30` at
+/// `0x800F70`): a highlighted body part hides the first-person weapon only in the VATS menu, and
+/// the highlight is drawn for references and missiles that have a node and are not dying.
+pub const VATS_HIGHLIGHT_KEEPS_WEAPON: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 62);
