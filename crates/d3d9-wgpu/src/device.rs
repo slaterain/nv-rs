@@ -1275,6 +1275,8 @@ pub struct Device {
     /// frame reads it, `None` while none was set or the last changes no level; that copy's
     /// pipelines and layout, made at its first use.
     ramp: Option<wgpu::Buffer>,
+    /// Which of its brightness lines are printed ([`crate::ramp::Said`]).
+    said: crate::ramp::Said,
     ramp_blit: Map<wgpu::TextureFormat, wgpu::RenderPipeline>,
     ramp_layout: Option<wgpu::BindGroupLayout>,
     #[allow(clippy::type_complexity)]
@@ -2063,6 +2065,7 @@ impl Device {
             blit: Map::default(),
             blit_layout: None,
             ramp: None,
+            said: crate::ramp::Said::default(),
             ramp_blit: Map::default(),
             ramp_layout: None,
             gamma_resolves: Map::default(),
@@ -2209,8 +2212,11 @@ impl Device {
 
     /// `SetGammaRamp` of the swap chain 0, the game's only one: its brightness, applied to the
     /// frames shown in the window from the next `Present` on ([`crate::ramp`]); a ramp that
-    /// changes no level ([`crate::ramp::Ramp::is_identity`]) leaves the plain copy. Another swap
-    /// chain or a ramp of another size is not provided.
+    /// changes no level ([`crate::ramp::Ramp::is_identity`]) leaves the plain copy. On the game's
+    /// window its brightness is said in the log, bounded ([`crate::ramp::Said`]: the slider, the
+    /// start-up INI value and the `SetGamma` command, which a mod may send every frame, all send
+    /// ramps), and the brightness shown is kept for the F12 report ([`crate::ramp::shown`]).
+    /// Another swap chain or a ramp of another size is not provided.
     pub(crate) fn set_gamma_ramp(&mut self, swap_chain: u32, bytes: &[u8]) {
         let ramp = crate::ramp::Ramp::from_bytes(bytes);
         let Some(ramp) = ramp.filter(|_| swap_chain == 0) else {
@@ -2220,12 +2226,20 @@ impl Device {
             ));
             return;
         };
-        if ramp.is_identity() {
-            self.ramp = None;
-            return;
+        let identity = ramp.is_identity();
+        // Said, and kept for the F12 report, by the device on the game's window only: one without
+        // a window (a replay, the shadow of the real Direct3D 9) shows no ramp.
+        if self.surface.is_some() {
+            if !identity {
+                self.warn(crate::ramp::FIRST_LINE);
+            }
+            let line = crate::ramp::change_line(&ramp);
+            if let Some(line) = self.said.ramp(line, std::time::Instant::now()) {
+                eprintln!("NV_D3D9 wgpu: {line}");
+            }
+            crate::ramp::set_shown((!identity).then_some(&ramp));
         }
-        self.warn("the game's brightness (its gamma ramp) is applied to the frames in the window");
-        self.ramp = Some(crate::ramp::buffer(&self.device, &ramp));
+        self.ramp = (!identity).then(|| crate::ramp::buffer(&self.device, &ramp));
     }
 
     fn make_back_buffers(
@@ -10405,6 +10419,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             self.made.longest_frame = self.made.longest_frame.max(now - t);
         }
         self.last_present = Some(now);
+        // A brightness held back from the log, once it has settled ([`crate::ramp::Said`]).
+        if let Some(line) = self.said.present(now) {
+            eprintln!("NV_D3D9 wgpu: {line}");
+        }
         // Listed pipelines whose shaders the game has now made, made before its next frame.
         self.prepare_listed();
         self.collect_sun_variants();
