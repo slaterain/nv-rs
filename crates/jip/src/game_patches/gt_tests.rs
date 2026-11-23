@@ -130,8 +130,42 @@ fn two_texts_of_one_hash_share_a_string() {
     assert_eq!(e.mem.u32(s - 8), 2);
 }
 
-/// The clean-up: a string whose count is 0 leaves the pool (the same text then gets a new one,
-/// count 1); a counted one stays (a count JIP's code would see as not 0: 0xFFFFFFFF included).
+/// One pool for every engine of a run (a real thread's engine shares the run's slots, as
+/// `ExtendState::for_thread` does): a text made on one engine is found by another, the same
+/// string, its count raised there. The test's second engine holds a copy of the first's memory
+/// (a real thread's engine sees the same memory).
+#[test]
+fn a_second_engine_of_the_run_finds_the_same_string() {
+    let mut a = with(true, true);
+    let at = text(&mut a, 0, b"Bip01 Spine");
+    let s = make(&mut a, at);
+    engine_core::extend::release_held_for_test();
+    let mut b = with(true, true);
+    a.share_slots_for_test(&mut b);
+    engine_core::extend::release_held_for_test();
+    let page = (s - 8) & !0xfff;
+    if !b.mem.is_mapped(page) {
+        b.map(page, 0x1000);
+    }
+    let bytes = a.mem.bytes(page, 0x1000);
+    b.mem.write(page, &bytes);
+    let bt = text(&mut b, 1, b"Bip01 Spine");
+    assert_eq!(make(&mut b, bt), s, "the pool's string, not a new one");
+    assert_eq!(b.mem.u32(s - 8), 2);
+    // A text made on the second engine is in the one pool too.
+    let other = text(&mut b, 2, b"Bip01 Pelvis");
+    let t = make(&mut b, other);
+    engine_core::extend::release_held_for_test();
+    let found = text(&mut a, 3, b"Bip01 Pelvis");
+    assert_eq!(
+        crate::game_patches::gt::Pool::lookup_for_test(&mut a, found),
+        Some(t)
+    );
+}
+
+/// The clean-up: a string whose count is 0 leaves the pool and its block is freed (the same text
+/// then gets a new one, count 1); a counted one stays (a count JIP's code would see as not 0:
+/// 0xFFFFFFFF included).
 #[test]
 fn the_clean_up_frees_only_unused_strings() {
     let mut e = with(true, true);
@@ -142,6 +176,9 @@ fn the_clean_up_frees_only_unused_strings() {
     e.mem.set_u32(sa - 8, 0);
     e.mem.set_u32(sc - 8, 0xffff_ffff);
     e.call(FREE_UNUSED.addr(), &[]);
+    // The unused string's block is freed; the counted ones' blocks stay.
+    assert_eq!(e.mem.block_size(sa - 8), None, "freed");
+    assert!(e.mem.block_size(sb - 8).is_some() && e.mem.block_size(sc - 8).is_some());
     assert_eq!(make(&mut e, b), sb);
     assert_eq!(e.mem.u32(sb - 8), 2);
     assert_eq!(make(&mut e, c), sc);
