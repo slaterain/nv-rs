@@ -4969,19 +4969,21 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         if !self.held_after.is_empty() {
             self.emit_held();
         }
-        // Sorted, only draws that write the same colour channels are moved past each other.
-        if self.sort_draws {
-            if self.held_channels.is_some() && self.held_channels != channels {
-                self.emit_held();
-            }
-            self.held_channels = channels;
-        }
         // Checked before joining: a held key of these vertices drawn first could put this draw
         // before the other key's draw of them.
         if let Some(&g) = self.held_geometry.get(&key.geometry.surface()) {
             if g == AFTER || self.held[g].key != key {
                 self.emit_held();
             }
+        }
+        // Sorted, only draws that write the same colour channels are moved past each other. Noted
+        // after the emits above (an emit forgets it), right before the draw is held, so it is
+        // known for every held draw.
+        if self.sort_draws {
+            if self.held_channels.is_some() && self.held_channels != channels {
+                self.emit_held();
+            }
+            self.held_channels = channels;
         }
         // In place unless sorted: a draw joins its key only when no draw of another key was held
         // after it, so where two surfaces meet at exactly the same depth the one drawn last still
