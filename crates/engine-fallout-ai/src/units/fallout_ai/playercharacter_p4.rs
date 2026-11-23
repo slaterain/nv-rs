@@ -617,8 +617,21 @@ pub fn player_character_is_pipboy_active(e: &mut Engine, this: Ptr<PlayerCharact
 /// float or the form's own health.
 pub fn fn_00967b70(e: &mut Engine, this: Ptr<PlayerCharacter>, entry: Ptr<ItemChange>) -> bool {
     let mut usable = true;
-    let form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, entry));
-    let list = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, entry));
+    // `0x967B80` (lStewieAl's Tweaks' S0069, `patchAllowHotkeyGRXAndBooks`, rewrites 16 bytes and
+    // calls `IsContChangeEquippableHook`): the form (+8) and the extra list (+0) read raw, and
+    // the implant GRX (form 0x03009D4A) is usable at once.
+    // No form: Tweaks would read its id through a null pointer (our guard: no GRX test).
+    let (form, list) = if e.stewie(engine_core::extend::stewie::HOTKEY_GRX_AND_BOOKS) {
+        let form = e.mem.u32(entry.addr() + 8);
+        if form != 0 && e.mem.u32(form + 0xc) == 0x0300_9d4a {
+            return true;
+        }
+        (form, e.mem.u32(entry.addr()))
+    } else {
+        let form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, entry));
+        let list = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, entry));
+        (form, list)
+    };
     let extra = if list != 0 { node_item(e, list) } else { 0 };
     if e.vcall(form, 0x94, &args![]).bool() {
         let kind = e.call(FORM_TYPE, &args![form]).u32();
@@ -4384,5 +4397,59 @@ mod tests {
             vec![vec![frame + 0x1c, frame + 0x10, mine]]
         );
         assert_eq!(calls(&e, POINT_LENGTH_SQUARED), vec![vec![frame + 0x10]]);
+    }
+}
+
+#[cfg(test)]
+mod stewie_menus6_tests {
+    use super::*;
+    use engine_core::extend::stewie;
+
+    /// An inventory entry whose form (refID `id`, vtable slot 0x94 false) is of type 0x1D (always
+    /// usable), no extra list; the calls logged.
+    fn grx_engine(id: u32) -> (Engine, u32) {
+        let mut e = Engine::new();
+        let vtable = e.mem.alloc(0x100);
+        e.mem.set_u32(vtable + 0x94, 0x00c3_0094);
+        let form = e.mem.alloc(0x40);
+        e.mem.set_u32(form, vtable);
+        e.mem.set_u32(form + 0xc, id);
+        let entry = e.mem.alloc(0x10);
+        e.mem.set_u32(entry + 8, form);
+        for address in [0x00c3_0094u32, GET_FORM_HEALTH] {
+            e.register_double(address, |_, _| Ret::default());
+        }
+        e.register_double(FORM_TYPE, |_, _| Ret {
+            eax: 0x1d,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        (e, entry)
+    }
+
+    /// Row S0069 (`0x967B80`): with the row on the implant GRX (0x03009D4A) is usable at once,
+    /// nothing asked; another form goes the exe's way (its type 0x1D: usable). Off, the GRX too.
+    #[test]
+    fn s0069_the_grx_is_usable() {
+        for (on, id, asked) in [
+            (true, 0x0300_9d4au32, false),
+            (true, 0x1234, true),
+            (false, 0x0300_9d4a, true),
+        ] {
+            let (mut e, entry) = grx_engine(id);
+            e.set_stewie(stewie::HOTKEY_GRX_AND_BOOKS, on);
+            assert!(
+                fn_00967b70(&mut e, Ptr::new(0), Ptr::new(entry)),
+                "row {on} id {id:x}"
+            );
+            let calls = e
+                .call_log
+                .as_ref()
+                .unwrap()
+                .iter()
+                .filter(|(a, _)| *a == FORM_TYPE)
+                .count();
+            assert_eq!(calls > 0, asked, "row {on} id {id:x}");
+        }
     }
 }
