@@ -315,6 +315,7 @@ fn the_world_draw_runs_after_the_tail_from_the_packet_cut_before_it() {
     // The late joins: main passes the six late points with the job still posted (stepped, it has not run), counted as
     // passed there; the frame's list reset joins it, from the packet cut before them. Off again, those points join.
     draw_thread::set_late(&e, true);
+    let value = e.mem.u32(VALUE);
     e.mem.set_u32(VALUE, 41);
     draw_thread::first_half(&mut e, 0x6000, 0x8800, 1, 0);
     draw_thread::second_half(&mut e, 0x6000, 0x8800, 1);
@@ -345,6 +346,7 @@ fn the_world_draw_runs_after_the_tail_from_the_packet_cut_before_it() {
     draw_thread::world_pass_end(&mut e);
     take_drawn();
     take_joined();
+    e.mem.set_u32(VALUE, value);
 
     // Main's wait at each join point and the job's own time: two first halves of 20 ms and 5 ms, each joined at
     // 00875110's entry (stepped, the job runs inside the join, so each wait holds its whole job); `NV_STAGE_TIME`'s
