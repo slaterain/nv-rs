@@ -878,7 +878,11 @@ pub fn peek_message_a(
 
 /// [`peek_message_a`] with the host's turn `hand_back` (true when the host had one).
 fn peek_with(e: &mut Engine, msg: Ptr, remove: u32, hand_back: fn(&mut Engine) -> bool) -> u32 {
+    // The message handed out last, if any, was run by the game's procedure since (the hitch log's split of the
+    // host's time between frames).
+    engine_core::stage_time::message_peek();
     if take_message(e, msg, remove) {
+        handed_out(e, msg, remove);
         return 1;
     }
     if std::mem::take(&mut state!(e).windows.frame_begun) {
@@ -887,9 +891,18 @@ fn peek_with(e: &mut Engine, msg: Ptr, remove: u32, hand_back: fn(&mut Engine) -
     state!(e).windows.frames += 1;
     if hand_back(e) && take_message(e, msg, remove) {
         state!(e).windows.frame_begun = true;
+        handed_out(e, msg, remove);
         return 1;
     }
     0
+}
+
+/// A message [`peek_with`] put in `msg`: removed (`PM_REMOVE`), the game runs it next; its id is noted for the
+/// hitch log's split of the host's time between frames (`engine_core::stage_time::message_out`).
+fn handed_out(e: &Engine, msg: Ptr, remove: u32) {
+    if remove & PM_REMOVE != 0 && engine_core::stage_time::points_on() {
+        engine_core::stage_time::message_out(e.mem.u32(msg.addr() + 4));
+    }
 }
 
 /// The next posted message into `msg` (removed with `PM_REMOVE`); false with none.
@@ -1310,6 +1323,43 @@ mod tests {
         state!(e).windows.queue.push_back([7, 0x12, 0, 0, 0, 0, 0]);
         assert_eq!(peek_message_a(&mut e, Ptr::new(msg), 0, 0, 0, 1), 1);
         assert_eq!(e.mem.u32(msg + 4), 0x12);
+    }
+
+    /// A message `PeekMessageA` removes is noted for the hitch log's split of the host's time between frames: its id,
+    /// and its time to main's next `PeekMessageA` (the game's procedure ran it), when main took it after its thread
+    /// woke; a message only looked at (no `PM_REMOVE`) is not.
+    #[test]
+    fn peek_message_notes_the_messages_main_runs_for_the_hitch_log() {
+        use engine_core::stage_time as st;
+        let _here = st::on_here();
+        let mut e = Engine::new();
+        let msg = e.mem.alloc(28);
+        st::point(st::Point::Idle);
+        st::point(st::Point::Host);
+        st::host_mark(st::HostMark::MainAwake);
+        state!(e)
+            .windows
+            .queue
+            .push_back([7, WM_ACTIVATE, 1, 0, 0, 0, 0]);
+        state!(e)
+            .windows
+            .queue
+            .push_back([7, WM_MOUSEMOVE, 0, 0, 0, 0, 0]);
+        assert_eq!(peek_message_a(&mut e, Ptr::new(msg), 0, 0, 0, 0), 1);
+        st::advance(9_000);
+        assert_eq!(peek_message_a(&mut e, Ptr::new(msg), 0, 0, 0, 1), 1);
+        assert_eq!(e.mem.u32(msg + 4), WM_ACTIVATE);
+        st::advance(2_000_000);
+        assert_eq!(peek_message_a(&mut e, Ptr::new(msg), 0, 0, 0, 1), 1);
+        assert_eq!(e.mem.u32(msg + 4), WM_MOUSEMOVE);
+        st::advance(300);
+        assert_eq!(peek_message_a(&mut e, Ptr::new(msg), 0, 0, 0, 1), 0);
+        st::point(st::Point::Idle);
+        let g = st::take_host_gap().expect("a gap");
+        assert_eq!(
+            (g.messages, g.messages_ns, g.longest_message),
+            (2, 2_000_300, Some((WM_ACTIVATE, 2_000_000)))
+        );
     }
 
     /// A window record of the game's (`class` 1).

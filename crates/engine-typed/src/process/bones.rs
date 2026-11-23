@@ -748,8 +748,10 @@ struct Walked {
 ///   subtree (a head) are main's and left out.
 /// - `Barrier::Skin`: a skin whose inputs (its bones' and its root parent's world transforms) the
 ///   replay would read in another state than the serial pass: a skin inside a deferred subtree (a
-///   head, a geometry without a bound) reading an object walked after that subtree or outside the
-///   actor's tree, or a walked skin reading an object inside a deferred subtree.
+///   head, a geometry without a bound) reading an object walked after that subtree; any skin
+///   reading an object under another listed actor's root (another helper may be walking it;
+///   anything outside every listed actor is not written by this pass); or a walked skin reading
+///   an object inside a deferred subtree.
 ///
 /// A tree of more than [`ORDER_CHECK_MOST`] objects is a `Barrier::Bound` (not worked out).
 fn order_check(e: &Engine, root: u32, roots: &[u32]) -> Option<Barrier> {

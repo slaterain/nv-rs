@@ -183,9 +183,11 @@
 00aff300	1	ModLimitFix,nv-rs direct file access
 00b004e0	1	ModLimitFix,nv-rs direct file access
 00b54090	0	DepthResolve
+00bb4740	1	nv-rs dead lights in a light list
 00bdf3e0	1	VanillaPlusTerrain
 00be0fe0	0	ShaderLoader
 00be1750	0	ShaderLoader
+00c058f0	1	nv-rs dead lights in a light list
 00c3d0e0	0	JG,nv-rs direct file access
 00c3d440	0	JG,nv-rs direct file access
 00c3dbf0	2	nv-rs loads finished in small steps

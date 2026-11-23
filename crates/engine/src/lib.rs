@@ -58,6 +58,7 @@
 // Tests build their expected call lists and buffers with `vec!`.
 #![cfg_attr(test, allow(clippy::useless_vec))]
 
+pub mod dead_lights;
 pub mod units;
 
 pub use engine_core::{
