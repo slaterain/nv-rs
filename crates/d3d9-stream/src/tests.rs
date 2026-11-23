@@ -2601,6 +2601,96 @@ fn a_draw_from_memory_empties_stream_0() {
     assert_eq!(digests_of(&[stream, stream, up, stream, draw]), set_again);
 }
 
+/// A state that holds an object set to none is the device's default, as if never set: a sampler, a shader, the index
+/// buffer or a stream set to none (where a cache on the other side skipped the set) draws alike. An object on one side
+/// and none (or nothing) on the other still differ, as does an object left in place against one set to none after it,
+/// a stream set to no buffer with a stride, and a set to none against an object set again after a `Reset`.
+#[test]
+fn a_state_set_to_no_object_is_never_set() {
+    let device = 0x1000;
+    let draw = Part::Draw(1).cmd();
+    let present: Vec<u32> = vec![0; 14];
+    let reset = Cmd::Reset {
+        device,
+        window: 0,
+        present: Data::from_words(&present),
+        back_buffers: Data::from_words(&[0x9000]),
+        depth_stencil: 0,
+    };
+    let texture = |object: u32| Cmd::SetTexture {
+        device,
+        sampler: 7,
+        texture: object,
+    };
+    let shader = |object: u32| Cmd::SetShader {
+        device,
+        pixel: true,
+        shader: object,
+    };
+    let indices = |object: u32| Cmd::SetIndices {
+        device,
+        buffer: object,
+    };
+    let stream = |object: u32| Cmd::SetStreamSource {
+        device,
+        stream: 1,
+        buffer: object,
+        offset: 0,
+        stride: if object == 0 { 0 } else { 16 },
+    };
+    for (name, set) in [
+        ("texture", &texture as &dyn Fn(u32) -> Cmd<Data<'static>>),
+        ("shader", &shader),
+        ("indices", &indices),
+        ("stream", &stream),
+    ] {
+        let never = digests_of(&[draw]);
+        assert_eq!(
+            digests_of(&[set(0), draw]),
+            never,
+            "{name}: none is never set"
+        );
+        assert_eq!(
+            digests_of(&[set(0x4000), set(0), draw]),
+            never,
+            "{name}: an object then none"
+        );
+        assert_ne!(digests_of(&[set(0x4000), draw]), never, "{name}: an object");
+        assert_ne!(
+            digests_of(&[set(0x4000), set(0), draw]),
+            digests_of(&[set(0x4000), draw]),
+            "{name}: an object left in place against one set to none"
+        );
+        assert_ne!(
+            digests_of(&[set(0x4000), draw]),
+            digests_of(&[set(0x4001), draw]),
+            "{name}: two objects"
+        );
+        assert_eq!(
+            digests_of(&[set(0x4000), reset, set(0), draw]),
+            digests_of(&[set(0x4000), reset, draw]),
+            "{name}: none after a Reset"
+        );
+        assert_ne!(
+            digests_of(&[set(0x4000), reset, set(0x4000), draw]),
+            digests_of(&[set(0x4000), reset, set(0), draw]),
+            "{name}: an object set again after a Reset"
+        );
+    }
+    let strided = Cmd::SetStreamSource {
+        device,
+        stream: 1,
+        buffer: 0,
+        offset: 0,
+        stride: 16,
+    };
+    assert_ne!(
+        digests_of(&[strided, draw]),
+        digests_of(&[draw]),
+        "no buffer with a stride is not the default"
+    );
+}
+
 /// The per-draw digests name objects by first use across a `Destroy`: a buffer's address used again for a new buffer
 /// (record `a`) draws as a new buffer at another address does (record `b`), when the stream is set again to it; a
 /// record that keeps the old binding without setting it again, whose raw handles at the draw match `a`'s, gives that
