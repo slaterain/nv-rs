@@ -347,6 +347,11 @@ pub(crate) struct Prints {
     /// `[VATS] bHideFriendliesByDefault` (Tweaks' code default 0): S0382 skips friendly actors
     /// without shift held, and takes them with it.
     vats_friendlies_hidden: AtomicBool,
+    /// S0022.45's `ConsoleManager_HandleControllerHotkeys` statics: `lastHeldKey` (an Xbox control
+    /// code, 0 for none), `nextKeyRepeatTime` and `nextThumbStickRepeatTime` (milliseconds).
+    pub(crate) console_pad_last_held: AtomicU32,
+    pub(crate) console_pad_next_repeat: AtomicU32,
+    pub(crate) console_stick_next_repeat: AtomicU32,
 }
 
 impl Default for Prints {
@@ -362,6 +367,9 @@ impl Default for Prints {
             mesh_path: AtomicBool::new(false),
             cursor_only_speaking: AtomicBool::new(false),
             vats_friendlies_hidden: AtomicBool::new(false),
+            console_pad_last_held: AtomicU32::new(0),
+            console_pad_next_repeat: AtomicU32::new(0),
+            console_stick_next_repeat: AtomicU32::new(0),
         }
     }
 }

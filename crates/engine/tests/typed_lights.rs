@@ -1463,3 +1463,302 @@ mod queue {
             .assert_same();
     }
 }
+
+/// The fixes row "dead lights in a light list" (`engine_typed::lights::dead`): a lighting property
+/// whose list still holds a light destroyed while the property was fenced (the light's destructor
+/// `00b9f0c0`, translated, ran with the property's fence word set, so its `RemoveLight` did
+/// nothing) is walked by each guarded walker without a stop: `ResortLights` and the sweep take the
+/// entry out (its node unlinked as `RemoveLight`'s list remove does, the list marked changed, the
+/// passes' key cleared); the active-light getters and counts skip it; the pass staging stages no
+/// light. With the row off nothing is taken out and `ResortLights` reads through the light, as the
+/// exe does, and stops.
+mod dead_lights {
+    use engine_core::prelude::*;
+    use engine_typed::draw::lights as getters;
+    use engine_typed::lights::{dead, resort};
+    use engine_typed::shader::lighting;
+
+    /// `ShadowSceneLight`'s vtable, `NiRefObject`'s (what the destructor leaves), the objects' count
+    /// the destructor lowers, the fence marker.
+    const LIGHT_VTABLE: u32 = 0x010b_7eb8;
+    const REF_OBJECT_VTABLE: u32 = 0x0101_dce4;
+    const OBJECT_COUNT: u32 = 0x011f_4400;
+    const FENCE_MARKER: u32 = 0x011f_a310;
+    /// The stand-ins: `InterlockedDecrement`, the list's remove-all and remove of an element, and
+    /// the release hook.
+    const INTERLOCKED_DECREMENT: u32 = 0x00fd_f1c4;
+    const LIST_REMOVE_ALL: u32 = 0x00e7_4d40;
+    const LIST_REMOVE: u32 = 0x00e7_db70;
+    const RELEASE_HOOK: u32 = 0x00b6_d4c0;
+    /// A vtable whose slot 4 (the deleting destructor) does nothing.
+    const QUIET_VTABLE: u32 = 0x0090_0000;
+    const QUIET_DELETE: u32 = 0x0090_1000;
+
+    fn decrement(e: &mut Engine, a: &[u32]) -> Ret {
+        let count = e.mem.u32(a[0]).wrapping_sub(1);
+        e.mem.set_u32(a[0], count);
+        Ret {
+            eax: count,
+            ..Ret::default()
+        }
+    }
+
+    /// `NiTPointerList`'s remove-all: the list (head, tail, count) emptied.
+    fn remove_all(e: &mut Engine, a: &[u32]) -> Ret {
+        for word in 0..3u32 {
+            e.mem.set_u32(a[0] + 4 * word, 0);
+        }
+        Ret::default()
+    }
+
+    /// The list's remove of an element (`thiscall(list, slot)`): the first node holding the slot's
+    /// word unlinked (head, tail and count kept right), as the exe's does before freeing it.
+    fn remove(e: &mut Engine, a: &[u32]) -> Ret {
+        let (list, element) = (a[0], e.mem.u32(a[1]));
+        let mut node = e.mem.u32(list);
+        while node != 0 {
+            let (next, previous) = (e.mem.u32(node), e.mem.u32(node + 4));
+            if e.mem.u32(node + 8) == element {
+                if previous == 0 {
+                    e.mem.set_u32(list, next);
+                } else {
+                    e.mem.set_u32(previous, next);
+                }
+                if next == 0 {
+                    e.mem.set_u32(list + 4, previous);
+                } else {
+                    e.mem.set_u32(next + 4, previous);
+                }
+                let count = e.mem.u32(list + 8) - 1;
+                e.mem.set_u32(list + 8, count);
+                break;
+            }
+            node = next;
+        }
+        Ret::default()
+    }
+
+    /// A list (head, tail, count) at `list` holding `elements` in order.
+    fn list(e: &mut Engine, list: u32, elements: &[u32]) {
+        let nodes: Vec<u32> = elements.iter().map(|_| e.mem.alloc(0xc)).collect();
+        for (i, (&node, &element)) in nodes.iter().zip(elements).enumerate() {
+            e.mem.set_u32(node, nodes.get(i + 1).copied().unwrap_or(0));
+            e.mem
+                .set_u32(node + 4, if i == 0 { 0 } else { nodes[i - 1] });
+            e.mem.set_u32(node + 8, element);
+        }
+        e.mem.set_u32(list, nodes.first().copied().unwrap_or(0));
+        e.mem.set_u32(list + 4, nodes.last().copied().unwrap_or(0));
+        e.mem.set_u32(list + 8, nodes.len() as u32);
+    }
+
+    fn elements(e: &Engine, list: u32) -> Vec<u32> {
+        let mut out = Vec::new();
+        let mut node = e.mem.u32(list);
+        while node != 0 {
+            out.push(e.mem.u32(node + 8));
+            node = e.mem.u32(node);
+        }
+        out
+    }
+
+    /// The world: a property (a lighting property of type 1, fenced) listing the light to be
+    /// destroyed and a live one, a geometry carrying the property in the first light's geometry
+    /// list; that light's destructor run (its `RemoveLight` on the fenced property does nothing),
+    /// then the fence cleared, as `RemoveFencedLights` leaves a light that was added again. Answers
+    /// the engine, the property, the dead light and the live one.
+    fn world(guard: bool) -> (Engine, u32, u32, u32) {
+        let mut e = Engine::new();
+        e.register(INTERLOCKED_DECREMENT, decrement);
+        e.register(LIST_REMOVE_ALL, remove_all);
+        e.register(LIST_REMOVE, remove);
+        e.register(RELEASE_HOOK, |_, _| Ret::default());
+        e.register(QUIET_DELETE, |_, _| Ret::default());
+        e.map(OBJECT_COUNT, 4);
+        e.set_global(OBJECT_COUNT, 10u32);
+        e.put_vtable(QUIET_VTABLE, &[0, QUIET_DELETE]);
+        // The scene node the luminance reads its lighting offset from, the staging's rows and its
+        // zero colour.
+        e.map(0x011f_9000, 0x2000);
+        e.map(0x011a_9000, 0x1000);
+        let node = e.mem.alloc(0x200);
+        e.set_global(0x011f_91c8, node);
+        let ni_light = |e: &mut Engine| {
+            let ni = e.mem.alloc(0x100);
+            e.mem.set_u32(ni, QUIET_VTABLE);
+            e.mem.set_u32(ni + 4, 2);
+            ni
+        };
+        let shadow_light = |e: &mut Engine, ni: u32| {
+            let light = e.mem.alloc(0x250);
+            e.mem.set_u32(light, LIGHT_VTABLE);
+            e.mem.set_u32(light + 4, 1);
+            e.mem.set_u32(light + 0xf8, ni);
+            light
+        };
+        let live_ni = ni_light(&mut e);
+        let live = shadow_light(&mut e, live_ni);
+        let dying_ni = ni_light(&mut e);
+        let dying = shadow_light(&mut e, dying_ni);
+        let property = e.mem.alloc(0x80);
+        e.mem.set_u32(property + 0x1c, 1);
+        list(&mut e, property + 0x60, &[dying, live]);
+        let geometry = e.mem.alloc(0xc0);
+        e.mem.set_u32(geometry + 0xa8, property);
+        list(&mut e, dying + 0xe0, &[geometry]);
+        // Fenced: the destructor's RemoveLight on this property does nothing.
+        e.mem.set_u32(property + 0x78, 1);
+        e.call(0x00b9_f0c0, &[dying]);
+        e.mem.set_u32(property + 0x78, 0);
+        assert_eq!(
+            elements(&e, property + 0x60),
+            vec![dying, live],
+            "the property kept the destroyed light"
+        );
+        assert_eq!(e.mem.u32(dying), REF_OBJECT_VTABLE);
+        assert_eq!(e.mem.u32(dying + 0xf8), 0);
+        dead::set_guard(&e, guard);
+        (e, property, dying, live)
+    }
+
+    #[test]
+    fn a_dead_light_is_taken_out_by_the_sort_and_passed_over_by_the_walks() {
+        // The sort: the dead entry taken out, the list marked changed and the passes' key cleared.
+        let (mut e, property, _, live) = world(true);
+        e.mem.set_u32(property + 0x38, 7);
+        let bound = e.mem.alloc(0x10);
+        resort::resort_lights(&mut e, Ptr::new(property), bound);
+        assert_eq!(elements(&e, property + 0x60), vec![live]);
+        assert_eq!(e.mem.u32(property + 0x68), 1);
+        assert_eq!(e.mem.u8(property + 0x74), 1);
+        assert_eq!(e.mem.u32(property + 0x38), 0);
+        // The sweep itself (as GetRenderPasses runs it): nothing more to take out.
+        assert!(!dead::sweep(&mut e, property, 0));
+        dead::set_guard(&e, false);
+
+        // The walks over a list still holding it: the getters and counts pass over it, the
+        // staging stages no light.
+        let (mut e, property, dying, live) = world(true);
+        let iterator = e.mem.alloc(4);
+        assert_eq!(
+            getters::first_active_light(&mut e, Ptr::new(property), Ptr::new(iterator)),
+            live,
+            "the first active light is the live one"
+        );
+        assert_eq!(
+            getters::next_active_light(&mut e, Ptr::new(property), Ptr::new(iterator)),
+            0
+        );
+        assert_eq!(
+            getters::first_active_non_shadow_light(&mut e, Ptr::new(property), Ptr::new(iterator)),
+            live
+        );
+        assert_eq!(getters::active_light_count(&mut e, Ptr::new(property)), 1);
+        assert_eq!(
+            getters::active_non_shadow_light_count(&mut e, Ptr::new(property)),
+            1
+        );
+        e.mem.set_u32(0x011f_a0d0, 0x1234_5678);
+        lighting::light_setup(&mut e, 0, Ptr::new(dying), 1.0);
+        assert_eq!(
+            e.mem.u32(0x011f_a0d0),
+            e.mem.u32(0x011a_9bd0),
+            "the dead light's colour row is the zero colour"
+        );
+        assert_eq!(elements(&e, property + 0x60), vec![dying, live]);
+        dead::set_guard(&e, false);
+    }
+
+    #[test]
+    fn with_the_row_off_the_sort_reads_through_the_dead_light() {
+        let (mut e, property, dying, live) = world(false);
+        assert!(!dead::sweep(&mut e, property, 0), "nothing taken out");
+        let bound = e.mem.alloc(0x10);
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            resort::resort_lights(&mut e, Ptr::new(property), bound);
+        }));
+        assert!(stopped.is_err(), "the exe's read through spLight 0 stops");
+        assert_eq!(elements(&e, property + 0x60), vec![dying, live]);
+    }
+
+    /// The fence marker is never taken for a dead light, nor a null entry (the walkers stop there).
+    #[test]
+    fn the_fence_marker_is_not_a_dead_light() {
+        let (e, _, dying, live) = world(true);
+        assert!(!dead::is_dead(&e, FENCE_MARKER));
+        assert!(dead::is_dead(&e, dying));
+        assert!(!dead::is_dead(&e, live));
+        assert!(
+            !dead::is_dead(&e, 0),
+            "a null entry is left to the walkers, as the exe's"
+        );
+        dead::set_guard(&e, false);
+    }
+
+    /// The translated `GetRenderPasses` of the decal property (vtable `010b9910`, `00bb4740`) and
+    /// of the `010bcb60` class (`00c058f0`), called by address as the accumulator calls them, with
+    /// the property's state at its key and its list not marked changed (so the exe keeps the
+    /// passes, whose lights hold the dead one) and a light destroyed while the property was
+    /// fenced: with the row's hooks the dead entry is taken out first, the lights resorted and the
+    /// passes rebuilt; with the row off the passes are kept and nothing is touched, as the exe.
+    #[test]
+    fn decal_and_other_lighting_passes_take_out_a_dead_light_and_rebuild() {
+        const HAS_FLAG: u32 = 0x004a_2020;
+        const RESORT_LIGHTS: u32 = 0x00b7_0390;
+        const CHECK_CREATE_RENDER_PASSES: u32 = 0x00ba_95e0;
+        /// Two words the stand-ins mark: resorted, rebuilt.
+        const MARKS: u32 = 0x0091_0000;
+        for (at, vtable) in [(0x00bb_4740u32, 0x010b_9910u32), (0x00c0_58f0, 0x010b_cb60)] {
+            for guard in [false, true] {
+                let (mut e, property, dying, live) = world(guard);
+                if guard {
+                    engine::dead_lights::install(&mut e);
+                }
+                e.map(MARKS, 8);
+                e.register(HAS_FLAG, |_, _| Ret::default());
+                e.register(RESORT_LIGHTS, |e, _| {
+                    e.set_global(MARKS, 1u32);
+                    Ret::default()
+                });
+                e.register(CHECK_CREATE_RENDER_PASSES, |e, _| {
+                    e.set_global(MARKS + 4, 1u32);
+                    Ret::default()
+                });
+                e.mem.set_u32(property, vtable);
+                // No fades or flags; the alpha 0, so a rebuild ends right after its pass list is
+                // made; the state at the key of pass kind 0x10 with render mode 3.
+                for offset in [0x20u32, 0x24, 0x28] {
+                    e.mem.set_u32(property + offset, 0);
+                }
+                let passes = e.mem.alloc(0x20);
+                e.mem.set_u32(property + 0x3c, passes);
+                e.mem.set_u32(property + 0x38, (0x10 << 8) | 3);
+                e.mem.set_u8(property + 0x74, 0);
+                let geometry = e.mem.alloc(0xc0);
+                e.call(at, &[property, geometry, 3, 0, 0x10, 0, 1]);
+                let (resorted, rebuilt) =
+                    (e.global::<u32>(MARKS) == 1, e.global::<u32>(MARKS + 4) == 1);
+                if guard {
+                    assert_eq!(
+                        elements(&e, property + 0x60),
+                        vec![live],
+                        "{at:08x}: the dead light taken out"
+                    );
+                    assert!(resorted && rebuilt, "{at:08x}: resorted and rebuilt");
+                    assert_eq!(e.mem.u8(property + 0x74), 0, "{at:08x}: rebuilt, unmarked");
+                } else {
+                    assert_eq!(
+                        elements(&e, property + 0x60),
+                        vec![dying, live],
+                        "{at:08x}: row off: kept"
+                    );
+                    assert!(
+                        !resorted && !rebuilt,
+                        "{at:08x}: row off: the passes kept, as the exe"
+                    );
+                }
+                dead::set_guard(&e, false);
+            }
+        }
+    }
+}
