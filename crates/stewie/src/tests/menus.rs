@@ -103,6 +103,7 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
     ("S0278", "bFasterHackingToComputerTransition", tweak(1)),
     ("S0286", "bConsoleNumpadSupport", tweak(8)),
     ("S0340", "bDecreaseDialogueClickingDelay", tweak(9)),
+    ("S0348", "bConsoleNoStoreDuplicates", tweak(11)),
     ("S0351", "bAutoSkipLoadingTiles", tweak(2)),
     ("S0407", "bNonSelectablePlayerInConsole", tweak(3)),
     ("S0482", "bDontAllowConsoleBeforeInitIsDone", tweak(4)),

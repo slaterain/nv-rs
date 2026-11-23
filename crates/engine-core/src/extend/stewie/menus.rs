@@ -304,3 +304,6 @@ pub const SHORTER_CLICK_DELAYS: Row = tweak(9);
 /// `ContainerMenu::InitContainerMode` at `0x75BDA4`, `ContainerMenu::DoGamepadUpEvent` at
 /// `0x75D459`): a companion's inventory has the Take All button, and the pad's X takes all.
 pub const COMPANION_TAKE_ALL: Row = tweak(10);
+/// S0348 `ConsoleNoStoreDuplicates` (`[Tweaks] bConsoleHistoryNoStoreDuplicates`; the console's
+/// `Idle` at `0x71B510`): a console line repeating the last one sent is not added to the history.
+pub const CONSOLE_HISTORY_NO_REPEATS: Row = tweak(11);

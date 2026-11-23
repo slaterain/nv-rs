@@ -567,6 +567,14 @@ pub const ROWS: &[Row] = &[
         summary: "clicks count sooner after the dialogue and start menus show (256 ms, not 500), and the pad's B goes back at once",
     },
     Row {
+        bit: stewie::CONSOLE_HISTORY_NO_REPEATS,
+        function: "ConsoleNoStoreDuplicates",
+        plan: "S0348",
+        key: "bConsoleNoStoreDuplicates",
+        tweaks: Some(("Tweaks", "bConsoleHistoryNoStoreDuplicates")),
+        summary: "a console line repeating the last one sent is not added to the history again",
+    },
+    Row {
         bit: stewie::INTRO_SKIPPED,
         function: "autoSkipLoadingTiles",
         plan: "S0351",

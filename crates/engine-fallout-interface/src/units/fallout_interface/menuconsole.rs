@@ -214,6 +214,30 @@ pub fn menu_console_init(e: &mut Engine, this: Ptr<MenuConsole>) {
     e.set(this, MenuConsole::pConsoleCompiler, Ptr::new(compiler));
 }
 
+/// lStewieAl's Tweaks' `ConsoleNoStoreDuplicates::IsConsoleStringEqualToLastSent` (row S0348): the
+/// console (xNVSE's `ConsoleManager::GetSingleton`, `0071b160` with 1)'s input history (+0x10):
+/// the node after its first (`first->next`, the last line sent; node text +8, its length +0xC)
+/// with 1 to 259 characters, `|` taken out of a copy, equals `text` ignoring case (`_stricmp`).
+fn stewie_repeats_last_sent(e: &mut Engine, text: u32) -> bool {
+    let console = menu_console_instance(e, 1).addr();
+    let first = e.mem.u32(console + INPUTS_LIST);
+    if first == 0 {
+        // An empty history: Tweaks would read through a null pointer (our guard).
+        return false;
+    }
+    let last = e.mem.u32(first);
+    if last == 0 {
+        return false;
+    }
+    let length = u32::from(e.mem.u16(last + 0xc));
+    if length == 0 || length >= 260 {
+        return false;
+    }
+    let mut sent = e.mem.cstr(e.mem.u32(last + 8));
+    sent.retain(|&c| c != b'|');
+    sent.eq_ignore_ascii_case(&e.mem.cstr(text))
+}
+
 // Translated from 0071b160 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `MenuConsole::Instance` (Xbox PDB): the console singleton. With `create`
 /// set and no console yet, builds one and initialises it.
@@ -1252,9 +1276,16 @@ fn idle_enter_line(e: &mut Engine, this: Ptr<MenuConsole>, ebp: u32, length: i32
     .i32();
     fn_0071d380(e, this, count);
     menu_console_print_line(e, this, at(ebp, frame::LINE), &[]);
+    // `0x71B510`: lStewieAl's Tweaks' S0348 (`[Tweaks] bConsoleHistoryNoStoreDuplicates`,
+    // `ConsoleSendHook2`) asks first whether the line repeats the last one sent; the string is set
+    // either way, the history add (`0071df20`) only for a new line.
+    let repeated = e.stewie(engine_core::extend::stewie::CONSOLE_HISTORY_NO_REPEATS)
+        && stewie_repeats_last_sent(e, at(ebp, frame::LINE));
     let entered = at(ebp, frame::ENTERED_LINE);
     e.call(STRING_FROM_C_STRING, &args![entered, at(ebp, frame::LINE)]);
-    e.call(0x0071_df20, &args![this.addr() + INPUTS_LIST, entered]);
+    if !repeated {
+        e.call(0x0071_df20, &args![this.addr() + INPUTS_LIST, entered]);
+    }
     e.set(this, MenuConsole::iInputsPos, 0);
     let font = setting_int(e, CONSOLE_FONT);
     let (x, y) = console_position(e, this);
@@ -2622,6 +2653,42 @@ mod tests {
         assert_eq!(edit("a|bc", MESSAGE_CURSOR_TO_START).0, "|abc");
         assert_eq!(edit("|ab", MESSAGE_CURSOR_TO_END).0, "ab|");
         assert_eq!(edit("a|bc", MESSAGE_CURSOR_TO_END).0, "abc|");
+    }
+
+    /// Row S0348 (lStewieAl's Tweaks' `IsConsoleStringEqualToLastSent`): the line after the history's
+    /// first node, `|` taken out, against the entered text ignoring case; an empty or 260-long
+    /// last line, or no history, is not a repeat.
+    #[test]
+    fn s0348_a_repeated_console_line() {
+        let mut e = Engine::new();
+        if !e.mem.is_mapped(CONSOLE_INSTANCE) {
+            e.map(CONSOLE_INSTANCE & !0xfff, 0x1000);
+        }
+        let console = e.mem.alloc(0x100);
+        e.set_global(CONSOLE_INSTANCE, console);
+        let text = |e: &mut Engine, s: &[u8]| {
+            let at = e.mem.alloc(0x200);
+            e.mem.set_cstr(at, s);
+            at
+        };
+        assert!(!stewie_repeats_last_sent(&mut e, 0x10));
+        let first = e.mem.alloc(0x10);
+        let last = e.mem.alloc(0x10);
+        e.mem.set_u32(console + INPUTS_LIST, first);
+        e.mem.set_u32(first, last);
+        let sent = text(&mut e, b"s|ay hi");
+        e.mem.set_u32(last + 8, sent);
+        e.mem.set_u16(last + 0xc, 7);
+        let same = text(&mut e, b"SAY HI");
+        let other = text(&mut e, b"say");
+        assert!(stewie_repeats_last_sent(&mut e, same));
+        assert!(!stewie_repeats_last_sent(&mut e, other));
+        e.mem.set_u16(last + 0xc, 0);
+        assert!(!stewie_repeats_last_sent(&mut e, same));
+        e.mem.set_u16(last + 0xc, 260);
+        assert!(!stewie_repeats_last_sent(&mut e, same));
+        e.mem.set_u16(last + 0xc, 259);
+        assert!(stewie_repeats_last_sent(&mut e, same));
     }
 
     #[test]
