@@ -8,6 +8,7 @@ use std::sync::atomic::Ordering::Relaxed;
 const INCREMENT: u32 = 0x00fd_f1c0;
 const CREATE: u32 = 0x00fd_f200;
 const WAIT: u32 = 0x00fd_f204;
+const SLEEP: u32 = 0x00fd_f104;
 /// The game's split task: each runner takes the next item from the work's shared counter.
 const SPLIT: u32 = 0x00c4_4d90;
 const RUNNER: u32 = 0x0300_0000;
@@ -65,6 +66,7 @@ fn run(threads: u32) -> (Vec<u32>, usize) {
         (INCREMENT, "InterlockedIncrement"),
         (CREATE, "CreateThread"),
         (WAIT, "WaitForMultipleObjects"),
+        (SLEEP, "Sleep"),
     ]
     .map(|(slot, name)| Import {
         slot,
@@ -97,7 +99,9 @@ fn run(threads: u32) -> (Vec<u32>, usize) {
         assert_ne!(h, 0);
         e.mem.set_u32(handles + 4 * k, h);
     }
-    // Main runs items too, as `BSParallelTaskManager::RunTask` does after starting the threads.
+    // The game's workers are made once and wait for their start; these are made now, so main lets them start
+    // first. Then main runs items too, as `BSParallelTaskManager::RunTask` does after starting the threads.
+    e.call(SLEEP, &args![30u32]);
     e.call(SPLIT, &args![work]);
     assert_eq!(
         e.call(WAIT, &args![threads, handles, 1u32, 60_000u32])
