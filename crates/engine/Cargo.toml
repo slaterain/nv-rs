@@ -35,6 +35,8 @@ engine-platform = { path = "../engine-platform" }
 engine-typed = { path = "../engine-typed" }
 
 [dev-dependencies]
+# UI Organizer's operator in the menu values' Diff tests (`tests/menu_tiles.rs`).
+uio = { path = "../uio" }
 # The differential tests of the typed leaves (`tests/typed_leaves.rs`).
 engine-core = { path = "../engine-core", features = ["test-support"] }
 # The opt-in real-script run (`tests/real_scda.rs`) reads the player's
