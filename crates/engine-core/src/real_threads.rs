@@ -1559,6 +1559,14 @@ pub fn end_start_hold_for_tests(e: &Engine) {
     }
 }
 
+/// Tests: a probe of whether any thread holds the kernel lock of `e`'s run, to ask from another OS thread while `e`'s
+/// thread waits inside a platform call (always free without real threads).
+#[cfg(any(test, feature = "test-support"))]
+pub fn kernel_lock_free_probe(e: &Engine) -> impl Fn() -> bool + Send + 'static {
+    let world = e.real.as_ref().map(|r| r.world);
+    move || world.is_none_or(|w| w.kernel.owner.load(Ordering::SeqCst) == 0)
+}
+
 /// [`without_kernel_lock_mut`] only when this thread holds the kernel lock once (a platform function the game called
 /// directly): inside a nested hold (a platform function that runs game code that calls this one) the outer function
 /// may be part way through changing platform state, so `f` then runs with the lock held, as before. For game code a
