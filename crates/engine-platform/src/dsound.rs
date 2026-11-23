@@ -8367,7 +8367,7 @@ mod tests {
         let ds = start_up(&mut e);
         let listener = listener_of(&mut e, ds);
         hear_by_hand(&mut e, 48000);
-        let data = signal_seeded(4800, 1, 16, 31);
+        let data = signal_seeded(9600, 1, 16, 31);
         let flat = made(&mut e, ds, 0x2e0, false, 1, 48000, 16, &data);
         e.vcall(flat, 0x30, &[0, 0, 1]);
         let mut three = Vec::new();
@@ -8451,7 +8451,7 @@ mod tests {
         let mut e = engine();
         let ds = start_up(&mut e);
         hear_by_hand(&mut e, 48000);
-        let data = signal_seeded(4800, 1, 16, 41);
+        let data = signal_seeded(9600, 1, 16, 41);
         let size = data.len() as u32;
         let b = made(&mut e, ds, 0x2e0, false, 1, 48000, 16, &data);
         let voices = state!(e).sound.mix.as_ref().unwrap().voices.clone();
