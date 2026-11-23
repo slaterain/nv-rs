@@ -549,9 +549,14 @@ pub(super) use forwarded;
 
 /// Whether a state set to the value it already has is left out of what the backend gets
 /// ([`fwd_set_sampler_state`], `super::d3d9resource`'s constants): on, unless `NV_D3D9_REPEATS=keep`
-/// (a check: the runs that show the stream's draws see the same state either way); never while a
-/// drawing cut is open, where main's model and the stream's order differ (`super::d3d9draw`).
-/// Direct3D 9 makes such a set a no-op: the draws see the same state.
+/// (a check: the runs that show the stream's draws see the same state either way). While a drawing
+/// cut is open (`super::d3d9draw`) only the drawing side leaves them out: its copy starts as main's
+/// state at the cut and takes only its own sets, and its commands go into the cut's slot right after
+/// the commands before the cut, so its copy is the stream's state where its next command lands. Main's
+/// model is not: the drawing side's commands come between, so main sends every set until the join.
+/// Direct3D 9 makes such a set a no-op: the draws see the same state. (A gate of 2026-11-21 with the
+/// drawing thread on: both sides sending every repeat made the stream about 9.5 million constant sets
+/// and 4.6 million sampler states longer on the short route, the only commands whose counts differed.)
 #[inline]
 pub(super) fn skip_repeats(e: &mut Engine) -> bool {
     skip_repeats_in(&mut device!(e).device_objects)
@@ -565,7 +570,9 @@ pub(super) fn skip_repeats_in(objects: &mut Objects) -> bool {
     let keep = *objects.keep_repeats.get_or_insert_with(|| {
         *KEEP.get_or_init(|| std::env::var("NV_D3D9_REPEATS").is_ok_and(|v| v == "keep"))
     });
-    !keep && !super::d3d9draw::cut_open_in(&objects.draw)
+    !keep
+        && (!super::d3d9draw::cut_open_in(&objects.draw)
+            || super::d3d9draw::drawing_side(&objects.draw))
 }
 
 /// Tests: whether states set again to the value they hold still reach the backend on `e`
@@ -7854,17 +7861,20 @@ pub(crate) mod tests {
         t
     }
 
-    /// Repeats are left out only with no cut open on the engine's devices (main's model and the
-    /// stream's order differ then), and not with `NV_D3D9_REPEATS=keep`.
+    /// While a cut is open on the engine's devices only the drawing side leaves repeats out (main's
+    /// model and the stream's order differ then), and nobody with `NV_D3D9_REPEATS=keep`.
     #[test]
-    fn repeats_are_kept_while_a_cut_is_open() {
+    fn repeats_are_kept_by_main_while_a_cut_is_open() {
         use super::super::d3d9draw::{as_drawing_side, draw_cut, draw_join};
         let (mut e, dev) = texture_device(Store::Host);
         keep_repeats(&mut e, false);
         assert!(skip_repeats(&mut e));
         assert!(draw_cut(&mut e, dev));
         assert!(!skip_repeats(&mut e), "main, cut open");
-        as_drawing_side(|| assert!(!skip_repeats(&mut e), "the drawing side, cut open"));
+        as_drawing_side(|| assert!(skip_repeats(&mut e), "the drawing side, cut open"));
+        keep_repeats(&mut e, true);
+        as_drawing_side(|| assert!(!skip_repeats(&mut e), "the drawing side, kept"));
+        keep_repeats(&mut e, false);
         draw_join(&mut e);
         assert!(skip_repeats(&mut e), "after the join");
         keep_repeats(&mut e, true);
@@ -8108,6 +8118,86 @@ pub(crate) mod tests {
         draw_join(&mut e);
         state(&mut e, 10, 4);
         assert_eq!(*seen.lock().unwrap(), ["7=1", "9=2", "8=3", "10=4"]);
+    }
+
+    /// With a cut open the drawing side leaves out a sampler state or constant range set again to what
+    /// ITS copy holds (that copy is the stream's state where its commands land), even where main's
+    /// model holds something else; main sends every set until the join, a repeat of its own model
+    /// too (the drawing side's commands come between in the stream); after the join repeats of the
+    /// serial state are left out again.
+    #[cfg(windows)]
+    #[test]
+    fn the_drawing_side_leaves_out_repeats_of_its_own_copy() {
+        use super::super::d3d9draw::{as_drawing_side, draw_cut, draw_join};
+        use d3d9_stream::{Backend, Cmd, Data, Reply, Stream};
+        struct Seen(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+        impl Backend for Seen {
+            fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+                let seen = match cmd {
+                    Cmd::SetSamplerState {
+                        sampler,
+                        kind,
+                        value,
+                        ..
+                    } => format!("s{sampler}/{kind}={value}"),
+                    Cmd::SetConstants { start, count, .. } => format!("c{start}x{count}"),
+                    _ => return Reply::None,
+                };
+                self.0.lock().unwrap().push(seen);
+                Reply::None
+            }
+        }
+        let (mut e, dev) = texture_device(Store::Host);
+        keep_repeats(&mut e, false);
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        super::super::d3d9real::test_stream(
+            &mut e,
+            dev,
+            Stream::direct(Box::new(Seen(std::sync::Arc::clone(&seen)))),
+        );
+        let sampler = |e: &mut Engine, kind: u32, v: u32| {
+            assert_eq!(e.vcall(dev, 4 * 69, &[0, kind, v]).u32(), D3D_OK);
+        };
+        let data = e.mem.alloc(16);
+        for i in 0..4 {
+            e.mem.set_u32(data + 4 * i, 0x3f80_0000 + i);
+        }
+        let constant = |e: &mut Engine| {
+            assert_eq!(e.vcall(dev, 4 * 94, &[60, data, 1]).u32(), D3D_OK);
+        };
+        sampler(&mut e, 1, 7);
+        constant(&mut e);
+        assert!(draw_cut(&mut e, dev));
+        as_drawing_side(|| {
+            // Repeats of the state at the cut: left out.
+            sampler(&mut e, 1, 7);
+            constant(&mut e);
+            // A change goes, then its repeat does not.
+            sampler(&mut e, 1, 3);
+            sampler(&mut e, 1, 3);
+        });
+        // Main: a repeat of its own model goes (the stream holds the drawing side's 3 there), and so
+        // does every set of a state either side never changed.
+        sampler(&mut e, 1, 7);
+        sampler(&mut e, 2, 5);
+        sampler(&mut e, 2, 5);
+        constant(&mut e);
+        // The drawing side, after main's sets: still against its own copy (3, not main's 7).
+        as_drawing_side(|| sampler(&mut e, 1, 3));
+        assert_eq!(
+            *seen.lock().unwrap(),
+            ["s0/1=7", "c60x1", "s0/1=3"],
+            "main's after the cut held; the drawing side's repeats left out"
+        );
+        draw_join(&mut e);
+        // After the join the serial state (main's 7 and 5, the constant) is the model: repeats left out.
+        sampler(&mut e, 1, 7);
+        sampler(&mut e, 2, 5);
+        constant(&mut e);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            ["s0/1=7", "c60x1", "s0/1=3", "s0/1=7", "s0/2=5", "s0/2=5", "c60x1"]
+        );
     }
 
     /// With real threads, a sync call of main's while a cut is open (a surface read back, under

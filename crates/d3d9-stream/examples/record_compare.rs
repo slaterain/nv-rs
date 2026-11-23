@@ -8,8 +8,9 @@
 //! (`wire::compare_renamed_ends_deferred`, which says why that changes no picture and what it still
 //! checks). With `--digests`, each draw's device state instead (`wire::draw_digests`): runs whose
 //! streams differ only in states set again to the value they had (`NV_D3D9_REPEATS=keep` against
-//! the default) give the same digest at every draw. Exit 0: alike; 1: a difference; 2: a file could
-//! not be read.
+//! the default) give the same digest at every draw. With `--counts`, how many of each command each
+//! file holds and their bytes (`wire::command_counts`), largest byte difference first: why one stream
+//! is bigger. Exit 0: alike; 1: a difference; 2: a file could not be read.
 
 use std::fs::File;
 use std::io::BufReader;
@@ -83,11 +84,12 @@ fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let deferred = args.first().is_some_and(|a| a == "--ends-deferred");
     let digests = args.first().is_some_and(|a| a == "--digests");
-    if deferred || digests {
+    let counts = args.first().is_some_and(|a| a == "--counts");
+    if deferred || digests || counts {
         args.remove(0);
     }
     let [a, b] = args.as_slice() else {
-        eprintln!("usage: record_compare [--ends-deferred | --digests] A.d3d9s B.d3d9s");
+        eprintln!("usage: record_compare [--ends-deferred | --digests | --counts] A.d3d9s B.d3d9s");
         std::process::exit(2);
     };
     let open = |path: &str| match File::open(path) {
@@ -97,6 +99,40 @@ fn main() {
             std::process::exit(2);
         }
     };
+    if counts {
+        let read = |path: &str| match d3d9_stream::wire::command_counts(open(path)) {
+            Ok(list) => list,
+            Err(why) => {
+                eprintln!("{path}: {why}");
+                std::process::exit(2);
+            }
+        };
+        let (ca, cb) = (read(a), read(b));
+        let mut rows: std::collections::BTreeMap<&str, [u64; 4]> = Default::default();
+        for (name, n, bytes) in ca {
+            let r = rows.entry(name).or_default();
+            (r[0], r[1]) = (n, bytes);
+        }
+        for (name, n, bytes) in cb {
+            let r = rows.entry(name).or_default();
+            (r[2], r[3]) = (n, bytes);
+        }
+        let mut rows: Vec<_> = rows.into_iter().collect();
+        rows.sort_by_key(|(_, r)| std::cmp::Reverse((r[3] as i64 - r[1] as i64).abs()));
+        println!("command\tA count\tA bytes\tB count\tB bytes\tB-A count\tB-A bytes");
+        for (name, r) in rows {
+            println!(
+                "{name}\t{}\t{}\t{}\t{}\t{}\t{}",
+                r[0],
+                r[1],
+                r[2],
+                r[3],
+                r[2] as i64 - r[0] as i64,
+                r[3] as i64 - r[1] as i64
+            );
+        }
+        return;
+    }
     if digests {
         let read = |path: &str| match d3d9_stream::wire::draw_digests(open(path)) {
             Ok(list) => list,

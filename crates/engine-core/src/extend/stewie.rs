@@ -306,8 +306,11 @@ pub mod kept {
     pub const REMAP_DEBOUNCE: usize = 3;
     /// S0883's `static char buf[0x200]`: the settings save failure's text.
     pub const SAVE_SETTINGS_ERROR: usize = 4;
+    /// S0204's `Actor* pLastKilledActor` (4 bytes): the actor the console's `kill` last killed for
+    /// the player, until `Actor::Kill` reaches its experience step for it.
+    pub const LAST_KILL_COMMAND_ACTOR: usize = 5;
     /// How many.
-    pub const COUNT: usize = 5;
+    pub const COUNT: usize = 6;
 }
 
 /// The last thing each of Tweaks' warnings printed (its functions' statics), its print queue and

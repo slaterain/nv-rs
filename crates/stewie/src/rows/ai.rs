@@ -7,6 +7,14 @@ use engine_core::extend::stewie;
 /// Share 2's rows built.
 pub const ROWS: &[Row] = &[
     Row {
+        bit: stewie::AP_REGEN_NO_WEAPON_FISTS,
+        function: "patchAllowAPRegenModifiersWithNoEquippedWeapon",
+        plan: "S0019",
+        key: "bAllowAPRegenModifiersWithNoEquippedWeapon",
+        tweaks: None,
+        summary: "changes play: with no weapon equipped, the perks that adjust action point regeneration see the fists as your weapon, as they do with the fists out",
+    },
+    Row {
         bit: stewie::FOLLOWER_NO_AMMO_RECHARGER,
         function: "patchPreventFollowerNoAmmoTopicIfUsingRechargerWeapon",
         plan: "S0024",
@@ -103,6 +111,22 @@ pub const ROWS: &[Row] = &[
         summary: "an ammunition swap that keeps the current ammunition makes it the equipped type",
     },
     Row {
+        bit: stewie::DISINTEGRATIONS_STAT,
+        function: "patchFixDisintegrationsStat",
+        plan: "S0094",
+        key: "bFixDisintegrationsStat",
+        tweaks: None,
+        summary: "your kills that turn into goo or ash are counted in the statistic when the effect starts, not when it ends",
+    },
+    Row {
+        bit: stewie::BLOODY_MESS_EXPLOSION_GIBBING,
+        function: "patchFixBloodyMessPreventingExplosionGibbing",
+        plan: "S0112",
+        key: "bFixBloodyMessPreventingExplosionGibbing",
+        tweaks: None,
+        summary: "changes what you see: with Bloody Mess, explosions blow bodies apart again (the perk made an explosion's hit skip its body parts)",
+    },
+    Row {
         bit: stewie::SPECTATOR_THREAT_WEAPON_TYPE,
         function: "patchFixSpectatorThreatInfoUsingWrongWeaponType",
         plan: "S0133",
@@ -135,6 +159,14 @@ pub const ROWS: &[Row] = &[
         summary: "healing a crippled leg brings the normal walk back (the game kept the limping walk)",
     },
     Row {
+        bit: stewie::VATS_FATAL_CHECK_DIFFICULTY,
+        function: "VATSFatalCheckDifficulty",
+        plan: "S0149",
+        key: "bVATSFatalCheckDifficulty",
+        tweaks: None,
+        summary: "changes play: a hit's kill test (whether it is fatal, and its dismember and explode outcome) counts the difficulty's damage multiplier, so it matches whether the hit really kills",
+    },
+    Row {
         bit: stewie::INFINITE_NPC_RELOADS,
         function: "patchFixInfiniteNPCLoopingReloads",
         plan: "S0159",
@@ -159,6 +191,14 @@ pub const ROWS: &[Row] = &[
         summary: "a mine's light shows correctly again after a save is loaded",
     },
     Row {
+        bit: stewie::SHOT_PROJECTILE_RESISTANCE,
+        function: "ShotProjectileResistanceFix",
+        plan: "S0188",
+        key: "bShotProjectileResistanceFix",
+        tweaks: None,
+        summary: "changes play: an explosive an NPC carries that is shot off and goes off names that explosive as its source, so the damage it does is resisted as that weapon's",
+    },
+    Row {
         bit: stewie::WEAPON_DAMAGE_DISPLAY_AMMO,
         function: "InventoryCalcWeaponDamageUseAmmoFix",
         plan: "S0189.01",
@@ -181,6 +221,14 @@ pub const ROWS: &[Row] = &[
         key: "bMiscCrashFixesDialogueNoPackage",
         tweaks: None,
         summary: "a conversation whose target has no package left no longer crashes",
+    },
+    Row {
+        bit: stewie::KILL_COMMAND_DUPLICATE_XP,
+        function: "KillCommandDuplicateRewardXpFix",
+        plan: "S0204",
+        key: "bKillCommandDuplicateRewardXpFix",
+        tweaks: None,
+        summary: "changes play: the console's kill on an NPC you have already hurt gives its experience once, not twice",
     },
     Row {
         bit: stewie::ENDURANCE_HEALTH_RESTORE,
@@ -262,5 +310,37 @@ pub const ROWS: &[Row] = &[
         key: "bDoubleSoundFix",
         tweaks: None,
         summary: "sounds at the very start of an animation (footsteps, weapon handling) no longer play twice",
+    },
+    Row {
+        bit: stewie::HEADING_TARGET_DISTANCE,
+        function: "ActorGetHeadingTargetFix",
+        plan: "S0241",
+        key: "bActorGetHeadingTargetFix",
+        tweaks: None,
+        summary: "changes what you see: an NPC with no target of its own turns its head toward its package's target when that is within fAIMaxHeadTrackDistance (the game's test never let it)",
+    },
+    Row {
+        bit: stewie::EXPLOSION_PUSH_DIRECTION,
+        function: "patchFixExplosionPushDirection",
+        plan: "S0660",
+        key: "bFixExplosionPushDirection",
+        tweaks: Some(("Tweaks", "bExplosionKnockbackDirectionFix")),
+        summary: "changes play: an explosion knocks actors away from the explosion, not away from whoever caused it",
+    },
+    Row {
+        bit: stewie::KILL_CHALLENGE_SOURCE_WEAPON,
+        function: "patchFixKillChallengeSourceWeapon",
+        plan: "S0664",
+        key: "bFixKillChallengeSourceWeapon",
+        tweaks: Some(("Tweaks", "bFixKillChallengeSourceWeapon")),
+        summary: "changes play: kill challenges and kill statistics count the weapon whose hit killed (a thrown grenade, a mine), not the weapon you hold when the kill lands",
+    },
+    Row {
+        bit: stewie::HIDDEN_FRAGS,
+        function: "ShootableNonPlayableExplosives",
+        plan: "S0782",
+        key: "bShootableNonPlayableExplosives",
+        tweaks: Some(("Tweaks", "bHiddenFragsFix")),
+        summary: "changes play: an unplayable explosive an NPC carries (a Ghost People's gas tank) can be shot and set off, as the playable ones can",
     },
 ];

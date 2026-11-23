@@ -1447,6 +1447,74 @@ fn records_compare_with_handles_renamed() {
     assert!(wire::compare_renamed(&b"not a stream at all"[..], &ra[..]).is_err());
 }
 
+/// The per-draw digests name objects by first use too: the same drawing with every object elsewhere has the same
+/// digest at its draw (the gate of 2026-11-21 saw only two buffers' handles differ), and a real difference (the buffer
+/// bound where the texture was) still gives another. The counts list each command with its bytes.
+#[test]
+fn draw_digests_and_counts_see_objects_by_first_use() {
+    let a = Objects {
+        device: 0x2000_0010,
+        texture: 0x2000_0020,
+        levels: [0x2000_0100, 0x2000_0108],
+        buffer: 0x2000_0030,
+        again: 0x2000_0030,
+        target: 0x2000_0108,
+        bound: 0x2000_0020,
+    };
+    let b = Objects {
+        device: 0x2400_0010,
+        texture: 0x2400_0040,
+        levels: [0x2400_0300, 0x2400_0310],
+        buffer: 0x2400_0050,
+        again: 0x2400_0060,
+        target: 0x2400_0310,
+        bound: 0x2400_0040,
+    };
+    let (ra, rb) = (drawing(&a, 2), drawing(&b, 2));
+    let da = wire::draw_digests(&ra[..]).unwrap();
+    assert_eq!(
+        da.len(),
+        2,
+        "the draw, then the file's end (what was destroyed)"
+    );
+    assert_eq!(da, wire::draw_digests(&rb[..]).unwrap());
+    let sa = wire::draw_snapshot(&ra[..], 0).unwrap().expect("a draw");
+    let sb = wire::draw_snapshot(&rb[..], 0).unwrap().expect("a draw");
+    assert_eq!(sa.state, sb.state);
+    assert!(wire::draw_snapshot(&ra[..], 1).unwrap().is_none());
+    let swapped = Objects {
+        bound: 0x2400_0050,
+        ..b
+    };
+    assert_ne!(da, wire::draw_digests(&drawing(&swapped, 2)[..]).unwrap());
+    assert_ne!(da, wire::draw_digests(&drawing(&b, 3)[..]).unwrap());
+    assert!(wire::draw_digests(&ra[..ra.len() - 3]).is_err());
+
+    let counts = wire::command_counts(&ra[..]).unwrap();
+    let by_name: std::collections::BTreeMap<_, _> =
+        counts.iter().map(|(name, n, _)| (*name, *n)).collect();
+    let expected: std::collections::BTreeMap<_, _> = [
+        ("CreateTexture", 1),
+        ("SetRenderTarget", 1),
+        ("SetTexture", 1),
+        ("SetStreamSource", 2),
+        ("DrawPrimitive", 1),
+        ("Destroy", 1),
+        ("Present", 1),
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(by_name, expected);
+    let header = wire::header().len() as u64;
+    assert_eq!(
+        counts.iter().map(|c| c.2).sum::<u64>(),
+        ra.len() as u64 - header,
+        "every record's bytes, its length word included"
+    );
+    assert_eq!(counts, wire::command_counts(&rb[..]).unwrap());
+    assert!(wire::command_counts(&b"not a stream at all"[..]).is_err());
+}
+
 /// One step of [`regrown`]'s records: a buffer made at an address, bound and drawn from, or ended.
 #[derive(Clone, Copy)]
 enum Step {
