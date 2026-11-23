@@ -2661,10 +2661,24 @@ pub fn fn_008b43a0(
     let hit_list_owner = e.mem.u32(hit + 8);
     let hit_part = e.mem.u32(hit + 0x10);
 
-    if hit_attacker != 0 && e.vcall(hit_attacker + 0xa4, 8, &args![0x37u32]).i32() > 0 {
-        let mut chosen_value: i32 = -1;
+    // The attacker's actor value 0x37 positive: its hit's body part (`005e50f0`) is looked up.
+    let bloody = if hit_attacker != 0 && e.vcall(hit_attacker + 0xa4, 8, &args![0x37u32]).i32() > 0
+    {
         let part = e.call(0x005e_50f0, &args![body_parts, hit_part]).u32();
         e.vcall(magic_target, 8, &args![0x1au32]);
+        // lStewieAl's Tweaks' row S0112 (`patchFixBloodyMessPreventingExplosionGibbing`, the jump
+        // at `0x8B457E` retargeted to `0x8B4973`): with no body part, the parts are taken as for
+        // an attacker without it (the source's explosion list, else the hit's body part).
+        if part == 0 && e.stewie(engine_core::extend::stewie::BLOODY_MESS_EXPLOSION_GIBBING) {
+            None
+        } else {
+            Some(part)
+        }
+    } else {
+        None
+    };
+    if let Some(part) = bloody {
+        let mut chosen_value: i32 = -1;
         let mut forced_part: u32 = u32::MAX;
         let mut severable: bool;
         if part != 0 {
@@ -9023,6 +9037,56 @@ mod tests {
                 vec![w.actor.addr(), w.hit, 7, 0x1234, 0xaa, 0xbb, 0, 0, 0]
             )]
         );
+    }
+
+    /// S0112 (`patchFixBloodyMessPreventingExplosionGibbing`): an attacker whose actor value 0x37
+    /// is positive (Bloody Mess) hits with no body part (an explosion), and the hit's source has a
+    /// part list. Off, the exe looks for the actor's other parts only (none here) and dismembers
+    /// nothing specific; on, the source's list is used as for any other attacker (part 0x1234,
+    /// actor value 7).
+    #[test]
+    fn s0112_bloody_mess_gibs_from_the_explosions_list() {
+        for on in [false, true] {
+            let mut w = dismember_world();
+            w.s.e.set_stewie(
+                engine_core::extend::stewie::BLOODY_MESS_EXPLOSION_GIBBING,
+                on,
+            );
+            let attacker = w.s.object(0x100);
+            w.s.answer(attacker + 0xa4, 8, 5);
+            let vtable = w.s.vtable;
+            w.s.e.mem.set_u32(attacker + 0xa4, vtable);
+            w.s.e.mem.set_u32(w.hit, attacker);
+            // The hit names part key 3, which the body part data does not have.
+            w.s.e.mem.set_u32(w.hit + 0x10, 3);
+            let owner = w.s.object(0x40);
+            w.s.answer(owner, 0x220, 1);
+            w.s.e.mem.set_u32(w.hit + 8, owner);
+            let part = w.part(7, 0x71, 0, 0);
+            w.parts.borrow_mut().insert(0x1234, part);
+            let entry = w.s.e.mem.alloc(4);
+            w.s.e.mem.set_u32(entry, 0x1234);
+            let slot = w.s.e.mem.alloc(4);
+            w.s.e.mem.set_u32(slot, entry);
+            w.s.e.register(0x009b_1720, |_, _| int(0xa1));
+            w.s.e.register(0x0082_56d0, |_, _| int(0));
+            w.s.e.register_double(0x0068_15c0, move |_, _| int(slot));
+            w.s.e.register(0x0072_6070, |_, _| int(0));
+            let log = w.run();
+            let (value, part) = if on {
+                (7, 0x1234)
+            } else {
+                (u32::MAX, u32::MAX)
+            };
+            assert_eq!(
+                dismember_calls(&log),
+                vec![(
+                    ACTOR_DISMEMBER,
+                    vec![w.actor.addr(), w.hit, value, part, 0xaa, 0xbb, 0, 0, 0]
+                )],
+                "on {on}"
+            );
+        }
     }
 
     // ---- 008b4cf0 .. 008b6df0: dismemberment ----------------------------
