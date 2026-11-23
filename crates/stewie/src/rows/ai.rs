@@ -135,6 +135,14 @@ pub const ROWS: &[Row] = &[
         summary: "your kills that turn into goo or ash are counted in the statistic when the effect starts, not when it ends",
     },
     Row {
+        bit: stewie::TCL_MOVEMENT,
+        function: "patchTCLMovement",
+        plan: "S0096",
+        key: "bTCLMovement",
+        tweaks: None,
+        summary: "changes play: with collision off (tcl), flying with the keyboard moves along your view, and holding jump rises",
+    },
+    Row {
         bit: stewie::AMMO_SWAP_NO_INSTANT_REFILL,
         function: "patchFixLoopingReloadAmmoSwapInstantRefill",
         plan: "S0111",

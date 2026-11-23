@@ -228,3 +228,7 @@ pub const PROJECTILE_WEAPON_MOD_FLAGS: Row = Row::share(AI_FIXES, AI_FIXES_END, 
 /// S0223 `ToggleDetectCommandAffectsMines` (`009c39e0` (`0x9C39FF`)): with detection turned off
 /// by the console, mines are not set off.
 pub const DETECTION_OFF_MINES: Row = Row::share(AI_FIXES, AI_FIXES_END, 67);
+/// S0096 `patchTCLMovement` (`PlayerMover::Update` `009e9e50` (`0x9EA1CE`);
+/// `PlayerCharacter::Update` `0093e860` (`0x942793`, `0x9427AA`)): with collision off, keyboard
+/// flying moves along the view and the jump control rises.
+pub const TCL_MOVEMENT: Row = Row::share(AI_FIXES, AI_FIXES_END, 68);

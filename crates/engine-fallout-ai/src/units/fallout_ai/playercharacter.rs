@@ -5247,14 +5247,25 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
                 e.call(0x0069_3ef0, &args![this, 1u32]);
             }
             let moved_by = local(frame, -0x2f0);
-            e.call(0x0043_9ef0, &args![position_copy, moved_by, second_copy]);
+            let tcl_row = e.stewie(engine_core::extend::stewie::TCL_MOVEMENT);
+            if tcl_row {
+                tcl_set_movement(e, position_copy, moved_by, second_copy);
+            } else {
+                e.call(0x0043_9ef0, &args![position_copy, moved_by, second_copy]);
+            }
             e.call(0x0043_9180, &args![moved_by, delta]);
-            let lift = e.mem.f32(moved_by + 8);
-            let pushed = typed_call!(
-                leaf::FAMILY,
-                0x0041_6870,
-                leaf::point3_new(e, local(frame, -0x2fc), 0.0f32, 0.0f32, lift)
-            );
+            // S0096's `TCLMovementAddZHook` (jumped to at `0x9427AA`): with the keyboard (the move
+            // flags at -0x6C have 0x40) the whole move is added, not only its height.
+            let pushed = if tcl_row && e.mem.u8(word_slot) & 0x40 != 0 {
+                moved_by
+            } else {
+                let lift = e.mem.f32(moved_by + 8);
+                typed_call!(
+                    leaf::FAMILY,
+                    0x0041_6870,
+                    leaf::point3_new(e, local(frame, -0x2fc), 0.0f32, 0.0f32, lift)
+                )
+            };
             let sum = e
                 .call(
                     0x0043_9e90,
@@ -9703,6 +9714,26 @@ fn levelup_held(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
 
 /// The god mode byte (`g_bIsGodmode`, `011e07ba`).
 const GODMODE_BYTE: u32 = 0x011e_07ba;
+
+// Translated from lStewieAl's Tweaks 10.05 (main.h): TCLSetMovementHook.
+/// lStewieAl's Tweaks' row S0096 (`patchTCLMovement`, its call at `0x942793` in place of
+/// `00439ef0`): with collision off, while the jump control (0xC) is held (`00a24660` on the
+/// input `011f35cc`, state 0) the move's height (`delta` +8) grows by the player's speed
+/// multiplier (actor value 0x15, the owner +0xA4's slot 0xC) times 1.7; then `out` is `delta`
+/// less `position` (`float`s).
+fn tcl_set_movement(e: &mut Engine, delta: u32, out: u32, position: u32) {
+    let input = e.global::<u32>(0x011f_35cc);
+    if e.call(0x00a2_4660, &args![input, 0xcu32, 0u32]).u32() != 0 {
+        let player = e.global::<u32>(PLAYER_SINGLETON);
+        let speed = e.vcall(player + 0xa4, 0xc, &args![0x15u32]).f32();
+        let z = e.mem.f32(delta + 8);
+        e.mem.set_f32(delta + 8, z + speed * 1.7);
+    }
+    for i in 0..3 {
+        let moved = e.mem.f32(delta + 4 * i) - e.mem.f32(position + 4 * i);
+        e.mem.set_f32(out + 4 * i, moved);
+    }
+}
 
 /// The actor the player bumped into, from `PlayerCharacter::Update` (`0x93EF1D`, `00967a00`).
 /// lStewieAl's Tweaks' row S0132 (`patchBumpingCompanionsDoesntAlertEnemies`, its
@@ -20940,6 +20971,49 @@ mod tests {
                 wait_controller_state(&mut e, controller),
                 state,
                 "on {on} seated {seated}"
+            );
+        }
+    }
+
+    /// S0096 (`TCLSetMovementHook`, `0x942793`): the move is `delta` less `position`; holding
+    /// jump (`00a24660` on the input `011f35cc` with 0xC and 0) first raises `delta`'s height by
+    /// the speed multiplier (actor value 0x15, 100 here) times 1.7.
+    #[test]
+    fn s0096_holding_jump_rises_in_free_flight() {
+        for held in [false, true] {
+            let mut e = engine();
+            e.map(0x011d_e000, 0x1000);
+            e.map(0x011f_3000, 0x1000);
+            let this = player(&mut e);
+            e.set_global(PLAYER_SINGLETON, this.addr());
+            e.set_global(0x011f_35cc, 0x4400u32);
+            let table = e.mem.alloc(0x40);
+            let target = e.mem.alloc(8);
+            e.register_double(target, |_, _| float(100.0));
+            e.mem.set_u32(table + 0xc, target);
+            e.mem.set_u32(this.addr() + 0xa4, table);
+            e.register(0x00a2_4660, move |_, a| {
+                int(u32::from(
+                    held && a[0] == 0x4400 && a[1] == 0xc && a[2] == 0,
+                ))
+            });
+            let delta = e.mem.alloc(12);
+            let out = e.mem.alloc(12);
+            let position = e.mem.alloc(12);
+            for (i, (d, p)) in [(1.0f32, 0.5f32), (2.0, 0.5), (3.0, 1.0)]
+                .into_iter()
+                .enumerate()
+            {
+                e.mem.set_f32(delta + 4 * i as u32, d);
+                e.mem.set_f32(position + 4 * i as u32, p);
+            }
+            tcl_set_movement(&mut e, delta, out, position);
+            let z = if held { 3.0f32 + 100.0f32 * 1.7 } else { 3.0 };
+            assert_eq!(e.mem.f32(delta + 8), z, "held {held}");
+            assert_eq!(
+                [e.mem.f32(out), e.mem.f32(out + 4), e.mem.f32(out + 8)],
+                [0.5, 1.5, z - 1.0],
+                "held {held}"
             );
         }
     }

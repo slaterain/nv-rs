@@ -140,6 +140,12 @@ pub fn fn_009e9e30(e: &mut Engine, this: Ptr<PlayerMover>) {
     e.call(ACTOR_MOVER_DESTRUCT, &args![this]);
 }
 
+/// lStewieAl's Tweaks' row S0096 (`patchTCLMovement`): the mover moves by the keyboard (its flags
+/// +0x94 have 0x40, `kNonController`).
+fn tcl_keyboard(e: &mut Engine, this: Ptr<PlayerMover>) -> bool {
+    e.stewie(engine_core::extend::stewie::TCL_MOVEMENT) && e.mem.u32(this.addr() + 0x94) & 0x40 != 0
+}
+
 // Translated from 009e9e50 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `PlayerMover::Update` (Xbox PDB): builds the player's move vector for
 /// this frame and hands it to the player character.
@@ -300,6 +306,12 @@ pub fn player_mover_update(e: &mut Engine, this: Ptr<PlayerMover>, seconds: f32)
         }
 
         if e.call(0x0050_d4a0, &args![player]).bool() {
+            // lStewieAl's Tweaks' row S0096 (`patchTCLMovement`, its `TCLMovementAddXYHook` jumped
+            // to at `0x9EA1CE`): with the keyboard (the mover's flags +0x94 have 0x40) the move is
+            // not added here (on to the end, `0x9EA2E2`); the player's update moves it.
+            if tcl_keyboard(e, this) {
+                return;
+            }
             let source = e.call(0x0043_6aa0, &args![player]).u32();
             e.call(0x0043_9e90, &args![source, transformed, vector]);
             e.vcall(player, 0x2a8, &args![transformed]);
@@ -534,6 +546,27 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// S0096 (`TCLMovementAddXYHook`, `0x9EA1CE`): with the row, a mover whose flags (+0x94) have
+    /// 0x40 (the keyboard) leaves its flat move to the player's update; a controller does not.
+    #[test]
+    fn s0096_the_keyboard_skips_the_movers_flat_flying_move() {
+        for (on, flags, skips) in [
+            (false, 0x40u32, false),
+            (true, 0x40, true),
+            (true, 0x3f, false),
+        ] {
+            let mut e = Engine::new();
+            e.set_stewie(engine_core::extend::stewie::TCL_MOVEMENT, on);
+            let mover = Ptr::<PlayerMover>::new(e.mem.alloc(0x100));
+            e.mem.set_u32(mover.addr() + 0x94, flags);
+            assert_eq!(
+                tcl_keyboard(&mut e, mover),
+                skips,
+                "on {on} flags {flags:#x}"
+            );
+        }
+    }
 
     type Calls = Rc<RefCell<Vec<(u32, Vec<u32>)>>>;
     type Points = Rc<RefCell<Vec<[f32; 3]>>>;
