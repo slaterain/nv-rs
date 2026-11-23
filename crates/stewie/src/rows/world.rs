@@ -256,7 +256,7 @@ pub const ROWS: &[Row] = &[
         plan: "S0156",
         key: "bInventoryMinusOneOverflowFix",
         tweaks: None,
-        summary: "an inventory weighing exactly -1 (negative-weight mod items) keeps its weight instead of being summed again each time",
+        summary: "an inventory whose items weigh exactly -1 in total (negative-weight mod items) counts as weighing 0 and is no longer re-weighed every time",
     },
     Row {
         bit: stewie::NAV_MESH_TELEPORT_DOOR,
