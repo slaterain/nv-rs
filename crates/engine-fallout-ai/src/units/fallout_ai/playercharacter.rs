@@ -20354,8 +20354,8 @@ mod tests {
             e.set_stewie(engine_core::extend::stewie::AUTOMATIC_FIRING_CLEARS, on);
             let this = attack_world(&mut e, 0x0265_0000, &[(0x6e0, 0)]);
             e.set_global(0x011d_ea3c, this.addr());
-            e.register(0x0043_01b0, move |_, _| int(group));
-            e.register(0x005f_2540, move |_, _| int(attack));
+            e.register_double(0x0043_01b0, move |_, _| int(group));
+            e.register_double(0x005f_2540, move |_, _| int(attack));
             e.register(0x005f_25d0, |_, _| int(0));
             e.register_double(0x00a2_4660, move |_, a| {
                 int(u32::from(
@@ -20491,7 +20491,7 @@ mod tests {
         ] {
             let mut e = engine();
             e.set_stewie(engine_core::extend::stewie::WORKBENCH_NO_ACTIVATE_SOUND, on);
-            e.register(0x0057_3170, move |_, _| int(u32::from(accepted)));
+            e.register_double(0x0057_3170, move |_, _| int(u32::from(accepted)));
             let this = player(&mut e);
             let base = e.mem.alloc(0x40);
             e.mem.set_u32(base + 0xc, id);
