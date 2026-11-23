@@ -6589,7 +6589,7 @@ mod direct_tests {
         let after = direct_holds();
         direct_end();
         let depth = if took {
-            0
+            Holds::default()
         } else {
             // Let the other thread finish before failing.
             world.kernel.release_all()
