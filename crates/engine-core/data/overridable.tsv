@@ -190,6 +190,7 @@
 00c3d440	0	JG,nv-rs direct file access
 00c3dbf0	2	nv-rs loads finished in small steps
 00c3dfa0	0	nv-rs IO wait ends on completion
+00c43e90	0	nv-rs full screen written as read
 00c44280	0	nv-rs full screen taken as the borderless window
 00c65a80	1	nv-rs smooth physics drawing
 00c73170	1	nv-rs high-frame-rate landing

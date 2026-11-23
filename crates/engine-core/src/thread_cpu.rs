@@ -132,6 +132,42 @@ pub fn start_of(run: usize, thread: u32) -> u32 {
         .unwrap_or(0)
 }
 
+/// The calling thread's own processor clock and the wall clock, in one unit, so that their two differences over a
+/// stretch give the share of it the thread spent on the processor (the hitch log's frame tail: was main working or
+/// pushed off the processor?). Windows on x86-64: the thread's cycle count (`QueryThreadCycleTime`, counted in the
+/// time-stamp counter's ticks) and the time-stamp counter (`RDTSC`), about a microsecond; Linux: its `schedstat`
+/// (ns) and the monotonic clock (ns), a small file read. `None` elsewhere (macOS, Windows on ARM), where no reading
+/// is that cheap.
+pub fn own_clock() -> Option<(u64, u64)> {
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetCurrentThread() -> *mut core::ffi::c_void;
+            fn QueryThreadCycleTime(thread: *mut core::ffi::c_void, cycles: *mut u64) -> i32;
+        }
+        let mut cycles = 0u64;
+        // SAFETY: the calling thread's pseudo handle and a local out-word.
+        if unsafe { QueryThreadCycleTime(GetCurrentThread(), &mut cycles) } == 0 {
+            return None;
+        }
+        // SAFETY: `RDTSC` reads a register and has no preconditions on this host.
+        let ticks = unsafe { core::arch::x86_64::_rdtsc() };
+        Some((cycles, ticks))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        let start = *START.get_or_init(std::time::Instant::now);
+        let cpu = schedstat_ns(&std::fs::read_to_string("/proc/thread-self/schedstat").ok()?)?;
+        Some((cpu, start.elapsed().as_nanos() as u64))
+    }
+    #[cfg(not(any(all(windows, target_arch = "x86_64"), target_os = "linux")))]
+    {
+        None
+    }
+}
+
 /// Game thread `thread`'s processor time so far (ns), when the system tells it.
 pub fn cpu_ns(run: usize, thread: u32) -> Option<u64> {
     let c = CLOCKS.lock().ok()?;
@@ -267,6 +303,29 @@ mod tests {
         } else {
             assert_eq!((worked, slept), (None, None));
         }
+    }
+
+    /// A thread busy over a stretch spends most of it on the processor by its own clock, where the system tells it:
+    /// its two clocks are in one unit (a loaded machine may take some of the stretch away, so the bound is wide).
+    #[test]
+    fn a_busy_thread_s_own_clock_shows_it_working() {
+        let Some((cpu0, wall0)) = own_clock() else {
+            if cfg!(any(
+                all(windows, target_arch = "x86_64"),
+                target_os = "linux"
+            )) {
+                panic!("this system tells a thread its own processor clock");
+            }
+            return;
+        };
+        let t = std::time::Instant::now();
+        let mut x = 0u64;
+        while t.elapsed() < std::time::Duration::from_millis(40) {
+            x = std::hint::black_box(x.wrapping_add(1));
+        }
+        let (cpu1, wall1) = own_clock().expect("still told");
+        let share = (cpu1 - cpu0) as f64 / (wall1 - wall0) as f64;
+        assert!((0.02..=1.5).contains(&share), "share {share}");
     }
 
     #[test]
