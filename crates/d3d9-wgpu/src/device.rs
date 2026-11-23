@@ -1179,6 +1179,9 @@ pub struct Device {
     held_index: Map<HeldKey, usize>,
     held_geometry: Map<Surface, usize>,
     held_draws: u32,
+    /// Sorted ([`Device::sort_draws`]): the colour channels every held draw writes
+    /// ([`Device::colour_channels`]); a draw writing others has the held draws drawn first.
+    held_channels: Option<u32>,
     /// Keys drawn from held draws and the draws they held ([`Device::held_counts`]).
     held_drawn: (u64, u64),
     /// Held draws whose pass state when drawn differed from what their state asked for
@@ -1996,6 +1999,7 @@ impl Device {
             held_index: Map::default(),
             held_geometry: Map::default(),
             held_draws: 0,
+            held_channels: None,
             held_drawn: (0, 0),
             held_mismatches: 0,
             emitted_digests: None,
@@ -4903,10 +4907,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// not depend on the draws around it except where two surfaces meet at exactly the same depth:
     /// the depth test LESS or LESSEQUAL with depth writes, no blending (so never a see-through,
     /// fading or decal draw), no stencil, no occlusion count open. With the registers from
-    /// storage only. Sorted ([`Device::sort_draws`]), also only a draw that writes every channel
-    /// of every bound colour target (`written`: the targets its pixel shader writes,
-    /// [`Device::writes_whole_colour`]).
-    fn may_hold(&self, depth: bool, written: u32) -> bool {
+    /// storage only. Sorted ([`Device::sort_draws`]), also only a draw whose colour channels are
+    /// known (`channels`, [`Device::colour_channels`]); [`Device::hold`] keeps the held draws to
+    /// one set of channels.
+    fn may_hold(&self, depth: bool, channels: Option<u32>) -> bool {
         let r = &self.st.rs;
         self.merge_draws
             && self.storage_regs
@@ -4918,50 +4922,59 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             && r[rs::ALPHABLENDENABLE] == 0
             && r[rs::STENCILENABLE] == 0
             && self.counting.is_none()
-            && (!self.sort_draws || self.writes_whole_colour(written))
+            && (!self.sort_draws || channels.is_some())
     }
 
-    /// Whether the draw about to be given writes every channel of every bound colour target
-    /// (`written`: the targets its pixel shader writes). A draw that writes depth but leaves some
-    /// colour (a depth-only draw, one whose colour writes are masked) may not be sorted past other
-    /// draws: drawn ahead of a draw it lies in front of on another surface, it would hide that
-    /// draw's colour, which the game's order let show. A pass with no colour target at all holds
-    /// only depth writes, whose order does not matter.
-    fn writes_whole_colour(&self, written: u32) -> bool {
+    /// The colour channels the draw about to be given writes, as one word: for each bound colour
+    /// target (five bits each) its write mask, or a mark of its own where the pixel shader writes
+    /// no colour to it (`written`: the targets it writes); None without a pipeline. Sorting moves
+    /// held draws past each other: draws that write depth and the same channels leave each pixel
+    /// with the channels of the one in front whatever their order (except where two surfaces meet
+    /// at exactly the same depth), and the other channels untouched. A draw that writes depth but
+    /// fewer channels (a depth-only draw, a draw with masked colour writes) would not: drawn ahead
+    /// of a draw it lies in front of on another surface, it would hide that draw's colour, which
+    /// the game's order let show. So the held draws all write the same channels
+    /// ([`Device::hold`]).
+    fn colour_channels(&self, written: u32) -> Option<u32> {
         const MASKS: [usize; 4] = [
             rs::COLORWRITEENABLE,
             rs::COLORWRITEENABLE1,
             rs::COLORWRITEENABLE2,
             rs::COLORWRITEENABLE3,
         ];
-        let Some((key, _, _)) = self.last_pipeline.as_ref() else {
-            return false;
-        };
-        key.colours.iter().enumerate().all(|(i, c)| match c {
-            None => true,
-            Some((_, opaque)) => {
-                let whole = if *opaque {
-                    wgpu::ColorWrites::COLOR
-                } else {
-                    wgpu::ColorWrites::ALL
-                };
-                written & (1 << i) != 0 && state::write_mask(self.st.rs[MASKS[i]], *opaque) == whole
-            }
-        })
+        let (key, _, _) = self.last_pipeline.as_ref()?;
+        let mut channels = 0u32;
+        for (i, c) in key.colours.iter().enumerate().take(MASKS.len()) {
+            let bits = match c {
+                None => 0,
+                Some(_) if written & (1 << i) == 0 => 0x10,
+                Some((_, opaque)) => state::write_mask(self.st.rs[MASKS[i]], *opaque).bits(),
+            };
+            channels |= bits << (5 * i);
+        }
+        Some(channels)
     }
 
     /// Holds a draw of `key` with its blocks: with the held draws of its key when they are the
     /// last ones held (or, with [`Device::sort_draws`], wherever they are held; it is drawn with
     /// the first of them), else as a new key after the others. When a held draw reads the same
     /// vertices with another key (another pass over the same surface, which must stay after it),
-    /// or a blended draw is held ([`Device::held_after`]), the held draws are drawn first. The
-    /// key's place in [`Device::held`].
-    fn hold(&mut self, key: HeldKey, member: Member) -> usize {
+    /// or a blended draw is held ([`Device::held_after`]), or, sorted, the held draws write other
+    /// colour channels (`channels`, [`Device::colour_channels`]), the held draws are drawn first.
+    /// The key's place in [`Device::held`].
+    fn hold(&mut self, key: HeldKey, member: Member, channels: Option<u32>) -> usize {
         // An opaque draw given after a held blended draw may lie behind it on screen: drawn ahead
         // of it, the blended draw would be laid over it instead of being covered by it. So only
         // the opaque draws between two blended ones are drawn together.
         if !self.held_after.is_empty() {
             self.emit_held();
+        }
+        // Sorted, only draws that write the same colour channels are moved past each other.
+        if self.sort_draws {
+            if self.held_channels.is_some() && self.held_channels != channels {
+                self.emit_held();
+            }
+            self.held_channels = channels;
         }
         // Checked before joining: a held key of these vertices drawn first could put this draw
         // before the other key's draw of them.
@@ -5040,6 +5053,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.held_index.clear();
         self.held_geometry.clear();
         self.held_draws = 0;
+        self.held_channels = None;
         if self.sort_draws {
             held.sort_by(|a, b| {
                 (&a.key.pipeline, &a.key.groups, &a.key.geometry).cmp(&(
@@ -5856,7 +5870,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // Held to be drawn with the other draws of its key ([`Device::may_hold`]), or given to the
         // pass now, after the draws held before it.
         let holdable = up.is_none() && copies.iter().all(Option::is_none);
-        let hold = holdable && self.may_hold(depth.is_some(), u32::from(ps.sig.colours));
+        let channels = self.colour_channels(u32::from(ps.sig.colours));
+        let hold = holdable && self.may_hold(depth.is_some(), channels);
         let after = holdable && !hold && self.may_hold_after(depth.is_some());
         if !hold && !after {
             self.emit_held();
@@ -5981,7 +5996,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             let at = if after {
                 (true, self.hold_after(key, member))
             } else {
-                (false, self.hold(key, member))
+                (false, self.hold(key, member, channels))
             };
             (Some(at), None)
         } else {

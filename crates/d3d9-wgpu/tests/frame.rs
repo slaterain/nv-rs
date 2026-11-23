@@ -6865,11 +6865,12 @@ fn merged_draws_in_place_keep_which_of_two_coplanar_surfaces_shows() {
     );
 }
 
-/// Sorted (`NV_WGPU_SORT_DRAWS`), a draw that writes depth but no colour is not held: moved past
-/// another surface's draw it would hide that draw's colour or let it show where the game's order
-/// did not. Of the pairs colour A then depth-only D in front of it (column 1) and depth-only D
-/// then colour A behind it (column 3), one would differ whichever of the two keys the sort put
-/// first; the pixels are those of one draw each.
+/// Sorted (`NV_WGPU_SORT_DRAWS`), a draw that writes depth but no colour is never moved past a
+/// draw that writes colour: moved past another surface's draw it would hide that draw's colour or
+/// let it show where the game's order did not. Of the pairs colour A then depth-only D in front of
+/// it (column 1) and depth-only D then colour A behind it (column 3), one would differ whichever
+/// of the two keys the sort put first; the pixels are those of one draw each. The held draws
+/// write one set of channels at a time: A, then both D draws as one, then A.
 #[test]
 fn sorted_draws_keep_depth_only_draws_in_place() {
     const COLORWRITEENABLE: u32 = 168;
@@ -6899,7 +6900,31 @@ fn sorted_draws_keep_depth_only_draws_in_place() {
     assert_eq!(mismatches, 0, "each held draw drawn with its own state");
     assert_eq!(
         held,
-        (2, 2),
-        "the two colour draws held, each on its own; the depth-only draws given in place"
+        (3, 4),
+        "A; both depth-only draws as one; A: no draw moved past one writing other channels"
     );
+}
+
+/// Sorted, draws that write the same channels are moved past each other even when they leave
+/// some channel alone: here red, green and blue of an A8R8G8B8 target, alpha masked, as the
+/// game's world draws often are. A at column 1, B (the other strip) at column 3, A again at
+/// column 2: the two A draws as one, and the pixels those of one draw each.
+#[test]
+fn sorted_draws_with_the_same_masked_channels_are_held() {
+    const COLORWRITEENABLE: u32 = 168;
+    let script = |g: &mut Gpu, _: &StripDraw| {
+        g.state(COLORWRITEENABLE, 7);
+        strip_at(g, 1, 0.0, [1.0, 0.0, 0.0, 1.0]);
+        strip_stream(g, 96);
+        strip_at(g, 2, 0.0, [0.0, 1.0, 0.0, 1.0]);
+        strip_stream(g, 0);
+        strip_at(g, 2, -0.25, [0.0, 0.0, 1.0, 1.0]);
+    };
+    let Some((off, _, _)) = held_script(false, false, &script) else {
+        return;
+    };
+    let (on, held, mismatches) = held_script(true, true, &script).expect("the adapter, as above");
+    assert_eq!(on, off, "the pixels");
+    assert_eq!(mismatches, 0, "each held draw drawn with its own state");
+    assert_eq!(held, (2, 3), "the two A draws as one across B");
 }
