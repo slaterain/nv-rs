@@ -106,7 +106,9 @@ pub fn update_world_data(e: &mut Engine, this: Ptr, _unused: u32) {
         } else if flags & 1 != 0 {
             let scale = e.mem.f32(me + 0x18);
             if object != 0 || 1.0 > scale || e.mem.u32(me + 0x20) == 1 {
-                if bones::walking() || bones::recording() {
+                // A ragdoll's bone that only reads its body into the node runs here on a helper as
+                // on main (`bones::reads_body`); the keyframed case below is logged.
+                if (bones::walking() || bones::recording()) && !bones::reads_body(e, me) {
                     // Only the keyframed case reaches a helper (`bones`' check before the walk):
                     // `NitohkTransform` through the motion slot, which refreshes the node first.
                     let target = e.mem.u32(me + 8);

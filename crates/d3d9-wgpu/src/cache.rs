@@ -12,21 +12,54 @@
 //!
 //! The file is the cache's bytes in an envelope of ours: `NVWGPUPC`, a version, the length and a
 //! fixed hash of the bytes ([`hash`], FNV-1a, not the map hasher, so the format never moves with
-//! it). A missing, oversized, truncated, altered or foreign file (another adapter, backend or
+//! it), then the cache's [`Lineage`] (a file of the version before it is still read). A missing, oversized, truncated, altered or foreign file (another adapter, backend or
 //! driver: wgpu's own header says so) is one log line and a new, empty cache: never a failed
 //! start. It is written to a temporary name of its own and renamed, so a run that ends while
 //! writing leaves the old file or the new one, never half of one; a failed write removes its
 //! temporary.
+//!
+//! **A new build starts from the last build's file.** The file's name carries the fingerprint of
+//! this crate's sources (`build.rs`), so a build that may convert a shader differently gets a file
+//! of its own and its first start is not taken as warm (only a warm start leaves the libraries of
+//! shaders the pipeline list does not name to the driver's cache). Its first start still reads the
+//! previous build's file for this adapter, when there is one under [`CARRY_MAX`], as the cache's
+//! starting data ([`previous_build`]): it is not warm, so every shader's library is made at the
+//! start as on a cold one, but each pipeline or library whose create info (its SPIR-V included)
+//! is the same as the previous build's comes back from the driver's cache instead of being
+//! compiled, at the start and in play. That is safe: Vulkan only requires that initial data came
+//! from `vkGetPipelineCacheData` on a compatible device (its header: vendor, device, cache UUID,
+//! checked by the driver), and a driver returns a cached pipeline only for the same create info, so
+//! an entry the new build no longer asks for is never used; wgpu checks its own header too (the
+//! adapter and the driver's version: another driver's file is refused and the cache starts empty)
+//! and documents its data as compatible across its versions. The new build's file is written
+//! under its own name; the previous build's is removed after that first write (until then a
+//! stopped run leaves it for the next start). Entries no build uses any more stay in the data the
+//! driver gives back (the driver has no way to drop them), so the file keeps its [`Lineage`]: how
+//! many builds in a row carried it and the size its line started at (a cache that started empty
+//! writes its own). A previous build's file carried [`CARRIES`] times in a row already, grown past
+//! twice its line's start ([`carry`]) or over [`CARRY_MAX`] is not carried: that start is cold, as
+//! before, and the file is a session's size again.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 const MAGIC: &[u8; 8] = b"NVWGPUPC";
-const VERSION: u32 = 2;
-const HEADER: usize = 8 + 4 + 8 + 8;
+/// The envelope written: the magic, this version, the bytes' length and hash, then the cache's
+/// [`Lineage`] (its carry count and fresh size).
+const VERSION: u32 = 3;
+const HEADER: usize = 8 + 4 + 8 + 8 + 4 + 8;
+/// The envelope before the lineage, still read (a cache that was never carried, [`Lineage`]).
+const VERSION_2: u32 = 2;
+const HEADER_2: usize = 8 + 4 + 8 + 8;
 /// A file larger than this is not read (no driver's cache of one game comes near it).
 const MAX_FILE: u64 = 256 << 20;
+/// A previous build's file larger than this is not carried into a new build ([`previous_build`]),
+/// whatever its [`Lineage`] says: about three times a whole session's cache (20 MB on the
+/// maintainer's card).
+pub(crate) const CARRY_MAX: u64 = 64 << 20;
+/// Builds in a row a cache is carried into at most ([`carry`]).
+pub(crate) const CARRIES: u32 = 3;
 /// Presents after the last new pipeline before the cache is written: a burst of new pipelines
 /// (a new place) is written once, after it.
 const QUIET_PRESENTS: u64 = 300;
@@ -43,34 +76,86 @@ pub(crate) fn hash(bytes: &[u8]) -> u64 {
     h
 }
 
-/// The cache's bytes in the file's envelope.
-pub(crate) fn wrap(data: &[u8]) -> Vec<u8> {
+/// Where a cache's bytes came from, kept in its file so carried entries no build uses any more
+/// go within a few builds ([`carry`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Lineage {
+    /// How many builds in a row have carried the bytes: 0 for a cache that started empty.
+    pub carried: u32,
+    /// The bytes the last cache of this line that started empty had at its last write: about a
+    /// session's worth, with nothing carried.
+    pub fresh: u64,
+}
+
+/// Whether a previous build's cache of `len` bytes, of `lineage`, is carried into a new build:
+/// carried fewer than [`CARRIES`] times in a row so far, and at most twice the size its line
+/// started at. Otherwise the new build starts empty, so the entries no build uses any more
+/// (which stay in the bytes the driver gives back) are gone and the file is a session's size
+/// again within [`CARRIES`] builds.
+pub(crate) fn carry(len: u64, lineage: Lineage) -> bool {
+    lineage.carried < CARRIES && len <= lineage.fresh.saturating_mul(2)
+}
+
+/// The cache's bytes, already hashed (`hash`, [`hash`]), in the file's envelope with its
+/// lineage.
+pub(crate) fn wrap(data: &[u8], hash: u64, lineage: Lineage) -> Vec<u8> {
     let mut out = Vec::with_capacity(HEADER + data.len());
     out.extend_from_slice(MAGIC);
     out.extend_from_slice(&VERSION.to_le_bytes());
     out.extend_from_slice(&(data.len() as u64).to_le_bytes());
-    out.extend_from_slice(&hash(data).to_le_bytes());
+    out.extend_from_slice(&hash.to_le_bytes());
+    out.extend_from_slice(&lineage.carried.to_le_bytes());
+    out.extend_from_slice(&lineage.fresh.to_le_bytes());
     out.extend_from_slice(data);
     out
 }
 
-/// The cache's bytes from a file's contents, or why they are not usable.
-pub(crate) fn unwrap(file: &[u8]) -> Result<&[u8], &'static str> {
-    if file.len() < HEADER || &file[..8] != MAGIC {
+/// What a file holds: the cache's bytes, their hash (checked) and their lineage.
+#[derive(Debug, PartialEq)]
+pub(crate) struct Unwrapped<'a> {
+    pub data: &'a [u8],
+    pub hash: u64,
+    pub lineage: Lineage,
+}
+
+/// The cache's bytes from a file's contents, or why they are not usable. A file of the version
+/// before the lineage is a cache that was never carried, its fresh size its own.
+pub(crate) fn unwrap(file: &[u8]) -> Result<Unwrapped<'_>, &'static str> {
+    if file.len() < HEADER_2 || &file[..8] != MAGIC {
         return Err("not a pipeline cache file of this port");
     }
     let word = |at: usize| u64::from_le_bytes(file[at..at + 8].try_into().expect("8 bytes"));
-    if u32::from_le_bytes(file[8..12].try_into().expect("4 bytes")) != VERSION {
-        return Err("another version of the file");
-    }
-    let data = &file[HEADER..];
+    let version = u32::from_le_bytes(file[8..12].try_into().expect("4 bytes"));
+    let header = match version {
+        VERSION if file.len() >= HEADER => HEADER,
+        VERSION => return Err("truncated or too long"),
+        VERSION_2 => HEADER_2,
+        _ => return Err("another version of the file"),
+    };
+    let data = &file[header..];
     if word(12) != data.len() as u64 {
         return Err("truncated or too long");
     }
-    if word(20) != hash(data) {
+    let h = hash(data);
+    if word(20) != h {
         return Err("its bytes do not match their hash");
     }
-    Ok(data)
+    let lineage = if version == VERSION {
+        Lineage {
+            carried: u32::from_le_bytes(file[28..32].try_into().expect("4 bytes")),
+            fresh: word(32),
+        }
+    } else {
+        Lineage {
+            carried: 0,
+            fresh: data.len() as u64,
+        }
+    };
+    Ok(Unwrapped {
+        data,
+        hash: h,
+        lineage,
+    })
 }
 
 /// Writes `bytes` to `path` through a temporary file of this writer's own in the same folder
@@ -100,26 +185,55 @@ pub(crate) fn cache_stem(adapter: &str, sources: &str) -> String {
     format!("{adapter}-{}", &sources[..8])
 }
 
+/// Whether `stem` names a pipeline cache file an earlier build wrote for this adapter: only names
+/// wgpu's key gives (`wgpu_pipeline_cache_BACKEND_...`), so nothing else in the folder can match:
+/// `ADAPTER` (before the fingerprint) and `ADAPTER-XXXXXXXX` (eight hex digits) other than
+/// `current`. A file renamed aside (`ADAPTER.bin.bak`) is not ours.
+fn earlier_build(stem: &str, adapter: &str, current: &str) -> bool {
+    adapter.starts_with("wgpu_pipeline_cache_")
+        && stem != current
+        && (stem == adapter
+            || stem
+                .strip_prefix(adapter)
+                .and_then(|rest| rest.strip_prefix('-'))
+                .is_some_and(|fp| fp.len() == 8 && fp.bytes().all(|b| b.is_ascii_hexdigit())))
+}
+
+/// The file an earlier build wrote for this adapter that this build's cache starts from (the
+/// newest, when several were left), unless it is over `cap` bytes (see the module's words).
+pub(crate) fn previous_build(
+    dir: &Path,
+    adapter: &str,
+    current: &str,
+    cap: u64,
+) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    entries
+        .flatten()
+        .filter(|e| {
+            e.file_name()
+                .to_str()
+                .and_then(|name| name.strip_suffix(".bin"))
+                .is_some_and(|stem| earlier_build(stem, adapter, current))
+        })
+        .filter_map(|e| {
+            let m = e.metadata().ok()?;
+            (m.is_file() && m.len() <= cap).then(|| (m.modified().ok(), e.path()))
+        })
+        .max_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)))
+        .map(|(_, path)| path)
+}
+
 /// Removes the pipeline cache files earlier builds wrote for this adapter (another sources'
-/// fingerprint, or none), so a new build's first start is cold and old files don't pile up.
+/// fingerprint, or none, [`earlier_build`]), so old files don't pile up.
 pub(crate) fn remove_other_builds(dir: &Path, adapter: &str, current: &str) {
-    // Only names wgpu's key gives (`wgpu_pipeline_cache_BACKEND_...`), so nothing else in the
-    // folder can match: `ADAPTER.bin` (before the fingerprint) and `ADAPTER-XXXXXXXX.bin` (eight
-    // hex digits) other than `current`. A file renamed aside (`ADAPTER.bin.bak`) is not ours.
     if !adapter.starts_with("wgpu_pipeline_cache_") {
         return;
     }
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
-    let earlier = |stem: &str| {
-        stem != current
-            && (stem == adapter
-                || stem
-                    .strip_prefix(adapter)
-                    .and_then(|rest| rest.strip_prefix('-'))
-                    .is_some_and(|fp| fp.len() == 8 && fp.bytes().all(|b| b.is_ascii_hexdigit())))
-    };
+    let earlier = |stem: &str| earlier_build(stem, adapter, current);
     for e in entries.flatten() {
         let Some(name) = e.file_name().to_str().map(str::to_owned) else {
             continue;
@@ -184,6 +298,16 @@ fn own_temporary(name: &str, stems: &[&str]) -> bool {
     stems.contains(&stem) && digits(pid) && digits(n)
 }
 
+/// A cache file's bytes; an empty error when there is none, else why it cannot be read.
+fn read_file(path: &Path) -> Result<Vec<u8>, String> {
+    match std::fs::metadata(path) {
+        Ok(m) if m.len() > MAX_FILE => Err(format!("{} MB, too large", m.len() >> 20)),
+        Ok(_) => std::fs::read(path).map_err(|e| e.to_string()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(String::new()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// What writes the cache's file: shared by the device and the writer threads, and found by
 /// [`save_all_now`] at the end of the run.
 struct Saver {
@@ -195,10 +319,21 @@ struct Saver {
     writing: Mutex<()>,
     /// A write failed (a read-only folder): no more writes this run, so it is said once.
     failed: AtomicBool,
+    /// The cache started from an earlier build's file: (the folder, wgpu's name for the adapter,
+    /// this build's file name without `.bin`), so the earlier builds' files are removed after the
+    /// first write of this one ([`remove_other_builds`]).
+    left_behind: Mutex<Option<(PathBuf, String, String)>>,
+    /// The cache's [`Lineage`]: how many builds in a row carried it (fixed for the run), and the
+    /// size its line started at (a cache that started empty writes its own size).
+    carried: u32,
+    fresh: u64,
 }
 
 impl Saver {
-    /// Takes the cache's bytes and writes them when they changed (on the calling thread).
+    /// Takes the cache's bytes and writes them when they changed, on the calling thread: a thread
+    /// of its own in play ([`PipelineCacheFile::save_if_due`]), never the game's main thread or the
+    /// render thread; at the run's end the exit hooks' ([`save_all_now`]). The bytes are hashed
+    /// once.
     fn save(&self) {
         if self.failed.load(Ordering::Relaxed) {
             return;
@@ -212,14 +347,39 @@ impl Saver {
         if self.last.load(Ordering::Relaxed) == h {
             return;
         }
-        match write_replacing(&self.path, &wrap(&data)) {
+        let lineage = Lineage {
+            carried: self.carried,
+            fresh: if self.carried == 0 {
+                data.len() as u64
+            } else {
+                self.fresh
+            },
+        };
+        match write_replacing(&self.path, &wrap(&data, h, lineage)) {
             Ok(()) => {
                 self.last.store(h, Ordering::Relaxed);
+                let left = self
+                    .left_behind
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .take();
+                if let Some((dir, adapter, stem)) = left {
+                    remove_other_builds(&dir, &adapter, &stem);
+                }
                 eprintln!(
-                    "NV_D3D9 wgpu: pipeline cache {}: {} KB written ({:.1} ms, off the render thread)",
+                    "NV_D3D9 wgpu: pipeline cache {}: {} KB written ({:.1} ms, off the render thread{})",
                     self.path.display(),
                     data.len() / 1024,
-                    t.elapsed().as_secs_f64() * 1000.0
+                    t.elapsed().as_secs_f64() * 1000.0,
+                    if self.carried == 0 {
+                        String::new()
+                    } else {
+                        format!(
+                            "; carried {} times in a row, its line started at {} KB",
+                            self.carried,
+                            self.fresh / 1024
+                        )
+                    }
                 );
             }
             Err(e) => {
@@ -257,9 +417,12 @@ pub(crate) struct PipelineCacheFile {
     saver: Arc<Saver>,
     /// What [`PipelineCacheFile::open`] made of the file (a log line's words; tests read it).
     pub(crate) note: String,
-    /// The file was read and wgpu took it (the same adapter, backend and driver): the driver's
-    /// compiled pipelines and libraries come back from it.
+    /// This build's own file was read and wgpu took it (the same adapter, backend and driver): the
+    /// driver's compiled pipelines and libraries come back from it.
     pub(crate) warm: bool,
+    /// The cache started from the previous build's file instead ([`previous_build`]): not warm, but
+    /// what still matches comes back from it.
+    pub(crate) carried: bool,
     /// Pipelines were made since the last save.
     dirty: std::cell::Cell<bool>,
     /// The present of the last new pipeline, and of the last save.
@@ -270,23 +433,36 @@ pub(crate) struct PipelineCacheFile {
 
 impl PipelineCacheFile {
     /// The cache for `device` (made with `Features::PIPELINE_CACHE`), filled from the file in
-    /// `dir` for this adapter when there is a usable one. None where the backend has no
-    /// pipeline cache (wgpu names a file only for Vulkan) or the folder cannot be made.
+    /// `dir` for this adapter and this build when there is a usable one, else from the previous
+    /// build's ([`previous_build`]). None where the backend has no pipeline cache (wgpu names a
+    /// file only for Vulkan) or the folder cannot be made.
     pub(crate) fn open(
         device: &wgpu::Device,
         info: &wgpu::AdapterInfo,
         dir: &Path,
     ) -> Option<PipelineCacheFile> {
+        Self::open_with(device, info, dir, SOURCES, CARRY_MAX)
+    }
+
+    /// [`PipelineCacheFile::open`] for the sources' fingerprint `sources` and a previous build's
+    /// file of at most `carry_max` bytes (tests).
+    pub(crate) fn open_with(
+        device: &wgpu::Device,
+        info: &wgpu::AdapterInfo,
+        dir: &Path,
+        sources: &str,
+        carry_max: u64,
+    ) -> Option<PipelineCacheFile> {
         if !device.features().contains(wgpu::Features::PIPELINE_CACHE) {
             return None;
         }
         // wgpu's name for this adapter, then the sources' fingerprint (build.rs): a build whose
-        // converted shaders or layouts may differ gets a new file, so its first start is cold and
-        // makes every library at the start, instead of a "warm" start whose unlisted shaders'
-        // libraries no longer match the driver's cache. Files of earlier builds are removed.
+        // converted shaders or layouts may differ gets a file of its own, so its first start is
+        // not "warm" (which would leave its unlisted shaders' libraries to a cache made for other
+        // shaders): it makes every library at the start, from the previous build's entries where
+        // they still match.
         let adapter = wgpu::util::pipeline_cache_key(info)?;
-        let name = cache_stem(&adapter, SOURCES);
-        remove_other_builds(dir, &adapter, &name);
+        let name = cache_stem(&adapter, sources);
         // A folder that cannot be made (a read-only place, a path that is no folder) means no
         // cache, with one line: never a failed start. A relative path is taken from the working
         // folder, as any other path the host is given.
@@ -299,13 +475,17 @@ impl PipelineCacheFile {
         }
         remove_stale_temporaries(dir, &[name.as_str()]);
         let path = dir.join(format!("{name}.bin"));
-        let file = match std::fs::metadata(&path) {
-            Ok(m) if m.len() > MAX_FILE => Err(format!("{} MB, too large", m.len() >> 20)),
-            Ok(_) => std::fs::read(&path).map_err(|e| e.to_string()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(String::new()),
-            Err(e) => Err(e.to_string()),
+        let own = read_file(&path);
+        // None of this build's own yet: the previous build's, as the starting data.
+        let previous = match &own {
+            Err(why) if why.is_empty() => previous_build(dir, &adapter, &name, carry_max),
+            _ => None,
         };
-        let data = match &file {
+        let file = match &previous {
+            Some(p) => read_file(p),
+            None => own,
+        };
+        let unwrapped = match &file {
             Ok(bytes) => unwrap(bytes).map_err(str::to_string),
             Err(e) => Err(e.clone()),
         };
@@ -319,24 +499,67 @@ impl PipelineCacheFile {
                 })
             }
         };
-        let (cache, note, read) = match data {
-            Ok(d) => {
+        // The previous build's file the data came from, by name.
+        let from = previous
+            .as_deref()
+            .and_then(Path::file_name)
+            .map(|n| n.to_string_lossy().into_owned());
+        let whose = from.as_ref().map_or_else(String::new, |f| format!("{f}: "));
+        // The cache, the note, the hash of this build's own bytes read (a warm start), and the
+        // lineage the cache's file is written with (none: a cache started empty).
+        let (cache, note, read, lineage) = match unwrapped {
+            // A previous build's cache carried too often in a row or grown too far ([`carry`]).
+            Ok(u) if from.is_some() && !carry(u.data.len() as u64, u.lineage) => (
+                empty(),
+                format!(
+                    "{whose}carried {} times in a row, {} KB against the {} KB its line started \
+                     at: not carried, a new one is started",
+                    u.lineage.carried,
+                    u.data.len() / 1024,
+                    u.lineage.fresh / 1024
+                ),
+                None,
+                None,
+            ),
+            Ok(u) => {
                 // wgpu checks its own header (another adapter, backend or driver: refused) under
                 // an error scope, so a refusal is said here instead of ending the run; then an
                 // empty cache. SAFETY: the bytes are ones `PipelineCache::get_data` gave (the
-                // envelope's hash says they arrived as written); wgpu checks its header, the
-                // driver its own.
+                // envelope's hash says they arrived as written), this build's or an earlier
+                // one's: wgpu takes data of its earlier versions and checks its header, the
+                // driver its own, and the driver returns a cached pipeline only for the same
+                // create info (the module's words).
                 let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
                 let cache = unsafe {
                     device.create_pipeline_cache(&wgpu::PipelineCacheDescriptor {
                         label: Some("d3d9-wgpu pipelines"),
-                        data: Some(d),
+                        data: Some(u.data),
                         fallback: false,
                     })
                 };
-                match crate::device::block_on(scope.pop()) {
-                    None => (cache, format!("{} KB read", d.len() / 1024), hash(d)),
-                    Some(e) => {
+                match (crate::device::block_on(scope.pop()), &from) {
+                    (None, Some(f)) => (
+                        cache,
+                        format!(
+                            "none yet for this build: {} KB of the previous build's {f} read as \
+                             its start (what the driver still matches is used; carried {} times \
+                             in a row now)",
+                            u.data.len() / 1024,
+                            u.lineage.carried + 1
+                        ),
+                        None,
+                        Some(Lineage {
+                            carried: u.lineage.carried + 1,
+                            fresh: u.lineage.fresh,
+                        }),
+                    ),
+                    (None, None) => (
+                        cache,
+                        format!("{} KB read", u.data.len() / 1024),
+                        Some(u.hash),
+                        Some(u.lineage),
+                    ),
+                    (Some(e), _) => {
                         // wgpu's error and its causes on one line ("... made for a different
                         // device").
                         let why = std::iter::successors(Some(&e as &dyn std::error::Error), |e| {
@@ -346,20 +569,47 @@ impl PipelineCacheFile {
                         .collect::<Vec<_>>()
                         .join(": ");
                         let why = why.split_whitespace().collect::<Vec<_>>().join(" ");
-                        (empty(), format!("{why}: ignored, a new one is started"), 0)
+                        (
+                            empty(),
+                            format!("{whose}{why}: ignored, a new one is started"),
+                            None,
+                            None,
+                        )
                     }
                 }
             }
-            Err(why) if why.is_empty() => (empty(), "none yet, a new one is started".into(), 0),
-            Err(why) => (empty(), format!("{why}: ignored, a new one is started"), 0),
+            Err(why) if why.is_empty() => {
+                (empty(), "none yet, a new one is started".into(), None, None)
+            }
+            Err(why) => (
+                empty(),
+                format!("{whose}{why}: ignored, a new one is started"),
+                None,
+                None,
+            ),
         };
         eprintln!("NV_D3D9 wgpu: pipeline cache {}: {note}", path.display());
+        // A cache that started from the previous build's file keeps that file until its own is
+        // written (a run stopped before then starts from it again); otherwise earlier builds'
+        // files go now (one not carried among them).
+        let carried = from.is_some() && lineage.is_some();
+        let left_behind = if carried {
+            Some((dir.to_path_buf(), adapter.clone(), name.clone()))
+        } else {
+            remove_other_builds(dir, &adapter, &name);
+            None
+        };
         let saver = Arc::new(Saver {
             cache: cache.clone(),
             path,
-            last: AtomicU64::new(read),
+            // A carried cache is written under this build's name at its first save, whatever its
+            // bytes.
+            last: AtomicU64::new(read.unwrap_or(0)),
             writing: Mutex::new(()),
             failed: AtomicBool::new(false),
+            left_behind: Mutex::new(left_behind),
+            carried: lineage.map_or(0, |l| l.carried),
+            fresh: lineage.map_or(0, |l| l.fresh),
         });
         let mut all = SAVERS.lock().unwrap_or_else(|e| e.into_inner());
         all.retain(|w| w.strong_count() > 0);
@@ -368,7 +618,8 @@ impl PipelineCacheFile {
             cache,
             saver,
             note,
-            warm: read != 0,
+            warm: read.is_some(),
+            carried,
             dirty: std::cell::Cell::new(false),
             touched_at: std::cell::Cell::new(0),
             first_touched_at: std::cell::Cell::new(0),
@@ -414,18 +665,63 @@ mod tests {
     #[test]
     fn the_envelope_takes_back_only_what_it_wrote() {
         let data: Vec<u8> = (0..1000u32).map(|i| (i * 7) as u8).collect();
-        let file = wrap(&data);
-        assert_eq!(unwrap(&file), Ok(&data[..]));
-        // Truncated, altered, foreign, empty, another version.
+        let lineage = Lineage {
+            carried: 2,
+            fresh: 777,
+        };
+        let file = wrap(&data, hash(&data), lineage);
+        assert_eq!(
+            unwrap(&file),
+            Ok(Unwrapped {
+                data: &data[..],
+                hash: hash(&data),
+                lineage
+            })
+        );
+        // Truncated, altered, foreign, empty, another version, a header cut short.
         assert!(unwrap(&file[..file.len() - 1]).is_err());
         let mut altered = file.clone();
         altered[HEADER + 10] ^= 1;
         assert!(unwrap(&altered).is_err());
         assert!(unwrap(b"WGPUPLCH and the rest of something else").is_err());
         assert!(unwrap(&[]).is_err());
-        let mut other = file.clone();
-        other[8] = 1;
-        assert!(unwrap(&other).is_err());
+        for version in [1u8, 4] {
+            let mut other = file.clone();
+            other[8] = version;
+            assert!(unwrap(&other).is_err(), "version {version}");
+        }
+        assert!(unwrap(&file[..HEADER - 1]).is_err());
+        // A file written before the lineage (version 2): never carried, its fresh size its own.
+        let mut before = Vec::new();
+        before.extend_from_slice(MAGIC);
+        before.extend_from_slice(&2u32.to_le_bytes());
+        before.extend_from_slice(&(data.len() as u64).to_le_bytes());
+        before.extend_from_slice(&hash(&data).to_le_bytes());
+        before.extend_from_slice(&data);
+        assert_eq!(
+            unwrap(&before),
+            Ok(Unwrapped {
+                data: &data[..],
+                hash: hash(&data),
+                lineage: Lineage {
+                    carried: 0,
+                    fresh: 1000
+                }
+            })
+        );
+    }
+
+    /// A previous build's cache is carried while it was carried fewer than three builds in a row
+    /// and is at most twice the size its line started at.
+    #[test]
+    fn a_cache_is_carried_three_builds_in_a_row_at_most_and_to_twice_its_start() {
+        let line = |carried, fresh| Lineage { carried, fresh };
+        assert!(carry(10, line(0, 10)));
+        assert!(carry(20, line(2, 10)), "twice its start, carried twice");
+        assert!(!carry(20, line(3, 10)), "carried three times in a row");
+        assert!(!carry(21, line(0, 10)), "over twice its start");
+        assert!(!carry(1, line(0, 0)), "a line that never wrote anything");
+        assert_eq!(CARRIES, 3);
     }
 
     #[test]
@@ -616,6 +912,267 @@ mod tests {
         // Not a wgpu key: nothing is touched.
         remove_other_builds(&dir, "pipelines", "x");
         assert!(dir.join("pipelines.txt").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The file a new build starts from: this adapter's newest earlier-build file (with or without
+    /// a fingerprint) at most the cap's size; never the current build's, another adapter's, a
+    /// file renamed aside, the pipeline list, or one over the cap (even the newest).
+    #[test]
+    fn a_new_build_starts_from_this_adapters_newest_earlier_file_under_the_cap() {
+        let exe = std::env::current_exe().unwrap();
+        let dir = exe
+            .parent()
+            .unwrap()
+            .join(format!("d3d9-wgpu-previous-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let adapter = "wgpu_pipeline_cache_vulkan_4318_12120";
+        let current = format!("{adapter}-0123abcd");
+        let now = std::time::SystemTime::now();
+        let ago = |s: u64| now - std::time::Duration::from_secs(s);
+        // (name, size, age in seconds)
+        let files = [
+            (format!("{adapter}.bin"), 10, 900),
+            (format!("{adapter}-11111111.bin"), 10, 600),
+            (format!("{adapter}-22222222.bin"), 10, 300),
+            (format!("{current}.bin"), 10, 10),
+            (
+                "wgpu_pipeline_cache_vulkan_4318_10137-33333333.bin".into(),
+                10,
+                10,
+            ),
+            (format!("{adapter}-44444444.bin.bak"), 10, 10),
+            (format!("{adapter}-short.bin"), 10, 10),
+            ("pipelines.txt".to_string(), 10, 10),
+        ];
+        for (name, size, age) in &files {
+            let f = std::fs::File::create(dir.join(name)).unwrap();
+            f.set_len(*size).unwrap();
+            f.set_modified(ago(*age)).unwrap();
+        }
+        let found = |cap| {
+            previous_build(&dir, adapter, &current, cap)
+                .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+        };
+        assert_eq!(found(10), Some(format!("{adapter}-22222222.bin")));
+        // The newest over the cap: the next newest under it.
+        let big = std::fs::File::create(dir.join(format!("{adapter}-55555555.bin"))).unwrap();
+        big.set_len(11).unwrap();
+        big.set_modified(ago(5)).unwrap();
+        assert_eq!(found(10), Some(format!("{adapter}-22222222.bin")));
+        assert_eq!(found(11), Some(format!("{adapter}-55555555.bin")));
+        // None under the cap; none at all; not a wgpu key.
+        assert_eq!(found(9), None);
+        assert_eq!(previous_build(&dir, "pipelines", "x", u64::MAX), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(found(u64::MAX), None, "no folder");
+    }
+
+    /// A Vulkan device with a pipeline cache (none: the test is skipped).
+    fn vulkan() -> Option<(wgpu::Device, wgpu::AdapterInfo)> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::VULKAN,
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter =
+            crate::device::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+                compatible_surface: None,
+                apply_limit_buckets: false,
+            }))
+            .ok()?;
+        if !adapter.features().contains(wgpu::Features::PIPELINE_CACHE) {
+            return None;
+        }
+        let (device, _) =
+            crate::device::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                required_features: wgpu::Features::PIPELINE_CACHE,
+                ..Default::default()
+            }))
+            .ok()?;
+        Some((device, adapter.get_info()))
+    }
+
+    /// A pipeline made with `file`'s cache, then its file written at once.
+    fn make_and_save(device: &wgpu::Device, file: &mut PipelineCacheFile, n: u32) {
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(
+                format!(
+                    "@group(0) @binding(0) var<storage, read_write> b: array<u32>;\n\
+                     @compute @workgroup_size(1) fn main() {{ b[0] = {n}u; }}"
+                )
+                .into(),
+            ),
+        });
+        let _ = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: None,
+            layout: None,
+            module: &module,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: Some(&file.cache),
+        });
+        file.touched(1);
+        file.save_if_due(1, true);
+    }
+
+    /// On a Vulkan device, through the real cache: a build's first start reads the previous
+    /// build's file as its start (not warm, carried) and keeps it until its own is written, then
+    /// removes it; its next start reads its own (warm). A previous file over the cap is not carried
+    /// and goes at once, so does one that is not a cache file of this port; the start is then a
+    /// new, empty cache as before.
+    #[test]
+    fn a_new_build_starts_from_the_previous_builds_file_and_removes_it_after_its_first_write() {
+        let Some((device, info)) = vulkan() else {
+            eprintln!("no Vulkan adapter with a pipeline cache: the test is skipped");
+            return;
+        };
+        let exe = std::env::current_exe().unwrap();
+        let dir = exe
+            .parent()
+            .unwrap()
+            .join(format!("d3d9-wgpu-carry-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let adapter = wgpu::util::pipeline_cache_key(&info).expect("Vulkan names a file");
+        let file = |fp: &str| dir.join(format!("{}.bin", cache_stem(&adapter, fp)));
+        let (one, two, three) = ("1111111111111111", "2222222222222222", "3333333333333333");
+        // The first build: nothing to start from.
+        let mut first = PipelineCacheFile::open_with(&device, &info, &dir, one, CARRY_MAX).unwrap();
+        assert!(!first.warm && !first.carried, "{}", first.note);
+        make_and_save(&device, &mut first, 1);
+        assert!(file(one).exists());
+        // The next build: carried from the first, whose file stays until the second's is written.
+        let mut second =
+            PipelineCacheFile::open_with(&device, &info, &dir, two, CARRY_MAX).unwrap();
+        assert!(second.carried && !second.warm, "{}", second.note);
+        assert!(
+            second.note.contains(&format!("{}-11111111.bin", adapter)),
+            "{}",
+            second.note
+        );
+        assert!(
+            file(one).exists(),
+            "kept until the new build's file is written"
+        );
+        make_and_save(&device, &mut second, 2);
+        assert!(file(two).exists());
+        assert!(!file(one).exists(), "removed after the first write");
+        // Its next start: its own file, warm.
+        let again = PipelineCacheFile::open_with(&device, &info, &dir, two, CARRY_MAX).unwrap();
+        assert!(again.warm && !again.carried, "{}", again.note);
+        // A previous build's file over the cap: not carried, removed at once.
+        let over = PipelineCacheFile::open_with(&device, &info, &dir, three, 1).unwrap();
+        assert!(!over.warm && !over.carried, "{}", over.note);
+        assert!(!file(two).exists(), "over the cap: removed");
+        // One that is not a cache file of this port: said, not carried, removed.
+        std::fs::write(file("4444444444444444"), b"not a cache").unwrap();
+        let other =
+            PipelineCacheFile::open_with(&device, &info, &dir, "5555555555555555", CARRY_MAX)
+                .unwrap();
+        assert!(!other.warm && !other.carried, "{}", other.note);
+        assert!(
+            other
+                .note
+                .contains("not a pipeline cache file of this port"),
+            "{}",
+            other.note
+        );
+        assert!(!file("4444444444444444").exists());
+        drop((first, second, again, over, other));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The lineage written into the file at `path` (its own envelope read back).
+    fn lineage_of(path: &Path) -> Lineage {
+        let bytes = std::fs::read(path).expect("the file");
+        unwrap(&bytes).expect("an envelope of ours").lineage
+    }
+
+    /// On a Vulkan device, through the real cache: a line of builds carries the cache three builds
+    /// in a row (each file says how often, and the size its line started at, the empty start's own
+    /// size), and the fourth new build starts empty, removing the old file, as does a new build
+    /// after a file grown past twice its line's start.
+    #[test]
+    fn a_line_of_builds_carries_the_cache_three_times_then_starts_empty() {
+        let Some((device, info)) = vulkan() else {
+            eprintln!("no Vulkan adapter with a pipeline cache: the test is skipped");
+            return;
+        };
+        let exe = std::env::current_exe().unwrap();
+        let dir = exe
+            .parent()
+            .unwrap()
+            .join(format!("d3d9-wgpu-line-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let adapter = wgpu::util::pipeline_cache_key(&info).expect("Vulkan names a file");
+        let file = |fp: &str| dir.join(format!("{}.bin", cache_stem(&adapter, fp)));
+        let builds = ["1", "2", "3", "4", "5"].map(|d| d.repeat(16));
+        let mut kept = Vec::new();
+        let mut fresh = 0;
+        for (n, fp) in builds.iter().enumerate() {
+            let mut f = PipelineCacheFile::open_with(&device, &info, &dir, fp, CARRY_MAX).unwrap();
+            let carried = n > 0 && n < 4;
+            assert_eq!(f.carried, carried, "build {n}: {}", f.note);
+            assert!(!f.warm, "build {n}: {}", f.note);
+            // The first build's session makes ten pipelines, each later build one new one: what a
+            // later build adds stays well under its line's start, so the count rule ends the line.
+            let made = if n == 0 {
+                100..110
+            } else {
+                n as u32..n as u32 + 1
+            };
+            for k in made {
+                make_and_save(&device, &mut f, k);
+            }
+            let lineage = lineage_of(&file(fp));
+            let want = if carried { n as u32 } else { 0 };
+            assert_eq!(lineage.carried, want, "build {n}");
+            if n == 0 {
+                fresh = lineage.fresh;
+                assert_eq!(
+                    fresh,
+                    std::fs::metadata(file(fp)).unwrap().len() - HEADER as u64,
+                    "an empty start's own size"
+                );
+            } else if carried {
+                assert_eq!(lineage.fresh, fresh, "build {n}: the line's start kept");
+            }
+            if n == 3 {
+                // The carry rule is for a previous build's file only: this build's own file,
+                // carried three times in a row, is read again (warm) by its next start.
+                let again =
+                    PipelineCacheFile::open_with(&device, &info, &dir, fp, CARRY_MAX).unwrap();
+                assert!(again.warm && !again.carried, "{}", again.note);
+                kept.push(again);
+            }
+            if n == 4 {
+                assert!(f.note.contains("carried 3 times in a row"), "{}", f.note);
+                assert!(!file(&builds[3]).exists(), "the old file removed at once");
+            }
+            kept.push(f);
+        }
+        // A previous build's file grown past twice its line's start (the bytes no driver needs,
+        // since the rule is read before they go to the driver): not carried.
+        let big = vec![7u8; 1000];
+        let grown = Lineage {
+            carried: 1,
+            fresh: 400,
+        };
+        let six = "6".repeat(16);
+        std::fs::write(file(&six), wrap(&big, hash(&big), grown)).unwrap();
+        let after =
+            PipelineCacheFile::open_with(&device, &info, &dir, &"7".repeat(16), CARRY_MAX).unwrap();
+        assert!(!after.carried && !after.warm, "{}", after.note);
+        assert!(
+            after.note.contains("its line started at: not carried"),
+            "{}",
+            after.note
+        );
+        assert!(!file(&six).exists());
+        drop((kept, after));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

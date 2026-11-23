@@ -17,6 +17,17 @@
 //! 1.0), the copy is the plain one, so the picture is the same bit for bit. The back buffer is
 //! never changed: its captures (`NV_SHOT`'s `wgpu-frame-N.bmp`, F12 reports) stay the game's
 //! picture; the window's capture (`wgpu-window-N.bmp`) has the ramp.
+//!
+//! **What it says.** The brightness the game's window takes is said in the log ([`change_line`]).
+//! The game sends a ramp whenever its brightness changes: the slider, the start-up INI value, and
+//! the `SetGamma` console and script command, which a mod may send every frame; so a line is
+//! printed only when its value to two places differs from the last one printed, at most once a
+//! second, and a value held back is printed once it has settled ([`Said`]). The first ramp that
+//! changes the picture also says once that a brightness saved earlier now shows ([`FIRST_LINE`]);
+//! an F12 report's `place.txt` says the brightness the window showed ([`place_line`]).
+
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::{Duration, Instant};
 
 /// Entries per colour.
 pub const ENTRIES: usize = 256;
@@ -70,6 +81,124 @@ impl Ramp {
             }
         }
         bytes
+    }
+
+    /// The brightness the ramp stands for, as the game's `fGamma`: worked out from red's middle
+    /// entry, which the game makes `(128 / 255)^fGamma * 65535` ([`games_ramp`]). `None` where that
+    /// entry is 0 or the full 65535: no curve of the game's gives either.
+    pub fn gamma(&self) -> Option<f32> {
+        let entry = self.0[0][128];
+        if entry == 0 || entry == u16::MAX {
+            return None;
+        }
+        Some(((f64::from(entry) / 65535.0).ln() / (128.0f64 / 255.0).ln()) as f32)
+    }
+}
+
+/// The brightness the game's window shows ([`shown`]): `f32` bits, 0 for none.
+static SHOWN: AtomicU32 = AtomicU32::new(0);
+
+/// The brightness the game's window shows now, as the game's `fGamma` ([`Ramp::gamma`]; NaN for a
+/// ramp not of the game's curve), or `None` while the window shows the picture as drawn (no ramp
+/// set, or one that changes no level). Set by the device on the game's window (never by one
+/// without a window: a replay, the shadow of the real Direct3D 9); the F12 report's place says it
+/// ([`place_line`]).
+pub fn shown() -> Option<f32> {
+    match SHOWN.load(Ordering::Relaxed) {
+        0 => None,
+        bits => Some(f32::from_bits(bits)),
+    }
+}
+
+/// [`shown`] from the ramp the window now applies (`None`: none).
+pub(crate) fn set_shown(ramp: Option<&Ramp>) {
+    let bits = ramp.map_or(0, |r| r.gamma().unwrap_or(f32::NAN).to_bits());
+    SHOWN.store(bits, Ordering::Relaxed);
+}
+
+/// Said once a run, at the first ramp the game's window applies: why a brightness the player
+/// saved long ago may change the picture now.
+pub const FIRST_LINE: &str = "the game's brightness is now shown in its window (new in nv-rs: \
+the original shows it only in exclusive full screen), so a brightness saved in FalloutPrefs.ini \
+(fGamma), also one saved while playing the original in a window, applies from now on";
+
+/// The log line for a ramp the game's window takes: its brightness in plain words.
+pub fn change_line(ramp: &Ramp) -> String {
+    match (ramp.is_identity(), ramp.gamma()) {
+        (true, _) => {
+            "brightness 1.00 (the default): off, the window shows the picture as drawn".to_string()
+        }
+        (false, Some(gamma)) => format!("brightness {gamma:.2} applied in the window"),
+        (false, None) => {
+            "brightness applied in the window (a ramp not of the game's curve)".to_string()
+        }
+    }
+}
+
+/// The shortest time between two brightness lines ([`Said`]).
+pub const SAY_EVERY: Duration = Duration::from_secs(1);
+
+/// Which brightness lines ([`change_line`]) are printed: a line only when it differs from the last
+/// one printed (its value to two places), at most once in [`SAY_EVERY`]; a line held back is
+/// printed at the first `Present` once [`SAY_EVERY`] has passed without a new ramp (the value it
+/// settled at). `SetGamma` sent every frame then prints about a line a second while the value keeps
+/// changing, and none while it stays: never a line every frame on the render thread.
+#[derive(Debug, Default)]
+pub struct Said {
+    /// The last line printed, and when.
+    last: Option<(String, Instant)>,
+    /// The newest line not printed yet, and when its ramp came.
+    held: Option<(String, Instant)>,
+}
+
+impl Said {
+    /// A ramp's line at `now`: the line to print now, if any.
+    pub fn ramp(&mut self, line: String, now: Instant) -> Option<String> {
+        if self.last.as_ref().is_some_and(|(said, _)| *said == line) {
+            // Back at the value printed last: nothing new to say.
+            self.held = None;
+            return None;
+        }
+        let due = self.last.as_ref().map_or(true, |(_, at)| {
+            now.saturating_duration_since(*at) >= SAY_EVERY
+        });
+        if due {
+            self.held = None;
+            self.last = Some((line.clone(), now));
+            Some(line)
+        } else {
+            self.held = Some((line, now));
+            None
+        }
+    }
+
+    /// At a `Present` at `now`: the line held back, once its value has stood for [`SAY_EVERY`].
+    pub fn present(&mut self, now: Instant) -> Option<String> {
+        let settled = self
+            .held
+            .as_ref()
+            .is_some_and(|(_, at)| now.saturating_duration_since(*at) >= SAY_EVERY);
+        if !settled {
+            return None;
+        }
+        let (line, _) = self.held.take()?;
+        self.last = Some((line.clone(), now));
+        Some(line)
+    }
+}
+
+/// The F12 report's place line for the brightness the window shows ([`shown`]): the report's
+/// picture is the back buffer, which never has it.
+pub fn place_line() -> String {
+    match shown() {
+        None => "brightness in the window: none (the picture as drawn)\n".to_string(),
+        Some(gamma) if gamma.is_nan() => {
+            "brightness in the window: a ramp not of the game's curve (picture.bmp is without it)\n"
+                .to_string()
+        }
+        Some(gamma) => {
+            format!("brightness in the window: {gamma:.2} (fGamma; picture.bmp is without it)\n")
+        }
     }
 }
 
@@ -443,6 +572,118 @@ mod tests {
         let mut one = direct3d.clone();
         one.0[2][100] = 101 * 257;
         assert!(!one.is_identity());
+    }
+
+    /// The brightness read back from a ramp is the game's `fGamma`: each slider step's own to a
+    /// thousandth, 1.0 for Direct3D 9's identity; none where the middle entry is 0 or full.
+    #[test]
+    fn a_ramps_brightness_is_the_games_fgamma() {
+        for (step, gamma) in menu_gammas().into_iter().enumerate() {
+            let back = games_ramp(gamma).gamma().expect("a curve of the game's");
+            assert!(
+                (back - gamma).abs() < 0.001,
+                "step {step}: {back} for {gamma}"
+            );
+        }
+        let identity = Ramp::from_bytes(&bytes(|_, i| (i * 257) as u16)).unwrap();
+        let one = identity.gamma().expect("a curve");
+        assert!((one - 1.0).abs() < 0.001, "{one}");
+        for middle in [0, u16::MAX] {
+            let mut flat = identity.clone();
+            flat.0[0][128] = middle;
+            assert_eq!(flat.gamma(), None, "{middle}");
+        }
+    }
+
+    /// The brightness lines are bounded. 100 ramps of different values one frame apart (60 a
+    /// second, as `SetGamma` sent by a mod every frame), then two seconds of presents: three lines,
+    /// the first value at once, one a second later while they keep changing, and the value they
+    /// settled at a second after the last. 100 ramps of one value, or of values the same to two
+    /// places: one line. A value back at the last one printed before its line was due: nothing more.
+    #[test]
+    fn a_ramp_every_frame_prints_a_line_a_second_at_most() {
+        let frame = Duration::from_micros(16_667);
+        let run = |gammas: &[f32]| {
+            let mut said = Said::default();
+            let mut printed = Vec::new();
+            let mut t = Instant::now();
+            for &gamma in gammas {
+                printed.extend(said.ramp(change_line(&games_ramp(gamma)), t));
+                printed.extend(said.present(t));
+                t += frame;
+            }
+            for _ in 0..120 {
+                printed.extend(said.present(t));
+                t += frame;
+            }
+            printed
+        };
+        let changing: Vec<f32> = (0..100).map(|n| 0.6 + n as f32 * 0.008).collect();
+        let printed = run(&changing);
+        assert_eq!(printed.len(), 3, "{printed:?}");
+        assert_eq!(printed[0], "brightness 0.60 applied in the window");
+        assert_eq!(printed[2], change_line(&games_ramp(changing[99])));
+        assert_eq!(run(&[1.4; 100]).len(), 1);
+        let close: Vec<f32> = (0..100).map(|n| 1.401 + n as f32 * 0.00003).collect();
+        assert_eq!(run(&close), vec!["brightness 1.40 applied in the window"]);
+        // Back at the printed value before the next line was due: the held one is dropped.
+        let mut said = Said::default();
+        let t = Instant::now();
+        let a = change_line(&games_ramp(1.4));
+        assert_eq!(said.ramp(a.clone(), t), Some(a.clone()));
+        assert_eq!(said.ramp(change_line(&games_ramp(0.6)), t + frame), None);
+        assert_eq!(said.ramp(a, t + frame * 2), None);
+        assert_eq!(said.present(t + Duration::from_secs(5)), None);
+    }
+
+    /// The brightness in plain words: a ramp's log line (a step's value to two places, the
+    /// identity as off, a ramp not of the game's curve as such), and the F12 report's place line
+    /// from what the window shows, each one line.
+    #[test]
+    fn the_brightness_is_said_in_plain_words() {
+        let g = menu_gammas();
+        assert_eq!(
+            change_line(&games_ramp(g[15])),
+            "brightness 0.60 applied in the window"
+        );
+        assert_eq!(
+            change_line(&games_ramp(g[0])),
+            "brightness 1.40 applied in the window"
+        );
+        let identity = Ramp::from_bytes(&bytes(|_, i| (i * 257) as u16)).unwrap();
+        assert_eq!(
+            change_line(&identity),
+            "brightness 1.00 (the default): off, the window shows the picture as drawn"
+        );
+        let mut own = identity.clone();
+        own.0[0][128] = u16::MAX;
+        assert_eq!(
+            change_line(&own),
+            "brightness applied in the window (a ramp not of the game's curve)"
+        );
+        // What the window shows, for the report (the only test that sets it).
+        set_shown(None);
+        assert_eq!(shown(), None);
+        assert_eq!(
+            place_line(),
+            "brightness in the window: none (the picture as drawn)\n"
+        );
+        set_shown(Some(&games_ramp(g[15])));
+        assert!(shown().is_some_and(|s| (s - 0.6).abs() < 0.001));
+        assert_eq!(
+            place_line(),
+            "brightness in the window: 0.60 (fGamma; picture.bmp is without it)\n"
+        );
+        set_shown(Some(&own));
+        assert!(shown().is_some_and(f32::is_nan));
+        assert_eq!(
+            place_line(),
+            "brightness in the window: a ramp not of the game's curve (picture.bmp is without it)\n"
+        );
+        set_shown(None);
+        for line in [FIRST_LINE.to_string(), change_line(&own), place_line()] {
+            assert_eq!(line.trim_end().lines().count(), 1, "{line}");
+        }
     }
 
     /// The slider's ends and middle as `007d19c0` makes them from its default ends: the darkest
