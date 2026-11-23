@@ -75,10 +75,90 @@ pub enum Count {
     Loads,
     /// Scripts compiled (each compile builds a `ScriptCompileData`, `005ae490`): the console's lines, mods' scripts.
     ScriptCompiles,
+    /// Main's time finishing background loads (`IOManager::UpdateQueue`, `00c3dbf0`, the whole call) (ns), and the
+    /// completed load tasks it ran (each task's run, slot `0x14`).
+    LoadFinishNs,
+    LoadFinishTasks,
+    /// Main's time in `TESObjectCELL::AttachToWorld` (`00552970`), `TESObjectCELL::Detach` (`00552bd0`) and
+    /// `TESDataHandler::UnloadCell` (`00462290`) (ns). Nested calls count in each (an unload detaches).
+    CellAttachNs,
+    CellDetachNs,
+    CellUnloadNs,
+    /// Main's time in the frame's grid-cell update (`0086fbe0`: the player's cell tracker, which shifts the grid at a
+    /// border) (ns).
+    GridUpdateNs,
+    /// Main's time in the model loader's two checks that `IOManager::UpdateQueue` runs first every frame, outside its
+    /// budget (`00446e40`): the drain of the loader's queue (`00448c10`, every task run) and the walk over its queued
+    /// references (`00448cc0`, each one's `QueueMe`, slot `0x20`, which starts its loads) (ns).
+    LoaderDrainNs,
+    LoaderWalkNs,
+    /// The parts of a grid shift in `TES::UpdateCurrentGridCell` (`00452580`), main's time in each (ns): the cancel of
+    /// the exterior cell loader's queued cells (`00528110`, `005281f0`, `005282d0`), the unused textures' clean-up
+    /// (`00454d50` / `TES::CleanUpUnusedTextures`), the grid's `SetCenter` (slot `0x10`: cells leaving detached, the
+    /// grid moved), the Havok world's lock counts dropped after it (the deferred additions run), the grid array's load
+    /// (`TES::GridArrayLoad`: the new cells loaded and attached) and the distant terrain's update at the player.
+    GridCancelNs,
+    GridTexturesNs,
+    GridShiftNs,
+    GridHavokNs,
+    GridLoadNs,
+    GridTerrainNs,
 }
 
 /// How many counts there are.
-pub const COUNTS: usize = Count::ScriptCompiles as usize + 1;
+pub const COUNTS: usize = Count::GridTerrainNs as usize + 1;
+
+/// Times main's work from [`Timed::main`] to its drop into a `...Ns` count: nothing on another game thread or with
+/// the log off. One clock read at each end, at places that run a few times a frame at most and do far more work.
+pub struct Timed {
+    count: Count,
+    start: Option<std::time::Instant>,
+}
+
+impl Timed {
+    /// Starts timing into `count` when the log is on and this is main.
+    #[inline]
+    pub fn main(count: Count) -> Timed {
+        let start =
+            (on() && !crate::real_threads::on_other_game_thread()).then(std::time::Instant::now);
+        Timed { count, start }
+    }
+
+    /// The time since the start (ns), 0 when not timing.
+    pub fn ns(&self) -> u64 {
+        self.start.map_or(0, |s| {
+            s.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64
+        })
+    }
+}
+
+impl Drop for Timed {
+    fn drop(&mut self) {
+        if self.start.is_some() {
+            add(self.count, self.ns());
+        }
+    }
+}
+
+/// The longest completed load task main ran since the last [`take_longest_task`]: ns and its vtable (its type).
+static LONGEST_TASK_NS: AtomicU64 = AtomicU64::new(0);
+static LONGEST_TASK_VTABLE: AtomicU64 = AtomicU64::new(0);
+
+/// Main ran one completed load task of type `vtable` for `ns`: counted, and kept when the longest.
+pub fn main_load_task(vtable: u32, ns: u64) {
+    one(Count::LoadFinishTasks);
+    if ns > LONGEST_TASK_NS.load(Relaxed) {
+        LONGEST_TASK_NS.store(ns, Relaxed);
+        LONGEST_TASK_VTABLE.store(u64::from(vtable), Relaxed);
+    }
+}
+
+/// The longest load task since the last take (ns, vtable), then none.
+pub fn take_longest_task() -> (u64, u32) {
+    let ns = LONGEST_TASK_NS.swap(0, Relaxed);
+    let vtable = LONGEST_TASK_VTABLE.swap(0, Relaxed) as u32;
+    (ns, vtable)
+}
 
 #[allow(clippy::declare_interior_mutable_const)]
 const ZERO: AtomicU64 = AtomicU64::new(0);
@@ -394,6 +474,29 @@ mod tests {
             "{:.2} ns a counted block (two threads at once)",
             t.elapsed().as_secs_f64() * 1e9 / f64::from(n)
         );
+    }
+
+    /// A timed stretch adds its time to its count; the longest load task is kept with its type until taken.
+    #[test]
+    fn timed_work_and_the_longest_load_task() {
+        let _l = WAIT_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = snapshot();
+        {
+            let t = Timed::main(Count::CellDetachNs);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            assert!(t.ns() >= 2_000_000);
+        }
+        let d = since(&snapshot(), &before);
+        assert!(d[Count::CellDetachNs as usize] >= 2_000_000);
+        let _ = take_longest_task();
+        main_load_task(0x0101_0000, 5);
+        main_load_task(0x0102_0000, 9);
+        main_load_task(0x0103_0000, 7);
+        assert!(since(&snapshot(), &before)[Count::LoadFinishTasks as usize] >= 3);
+        assert_eq!(take_longest_task(), (9, 0x0102_0000));
+        assert_eq!(take_longest_task(), (0, 0));
     }
 
     static WAIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

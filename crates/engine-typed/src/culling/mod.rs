@@ -32,7 +32,9 @@ use layout::{
 };
 
 pub mod bound;
+pub mod compact;
 pub mod compound;
+pub mod fade;
 pub mod layout;
 mod par;
 #[doc(hidden)]
@@ -101,6 +103,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
             bound::which_side(Ptr<NiBound>, Ptr<NiPlane>) -> u32
         ),
         entry!(0x00a7_f3f0, bound::merge(Ptr<NiBound>, Ptr<NiBound>)),
+        entry!(0x00b4_e490, fade::on_visible(Ptr, Ptr)),
         entry!(
             0x00a5_9e00,
             visible::cull(Ptr<NiAVObject>, Ptr<NiCullingProcess>)

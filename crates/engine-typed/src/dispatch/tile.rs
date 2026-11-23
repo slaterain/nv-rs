@@ -736,3 +736,190 @@ pub fn clear_actions(e: &mut Engine, this: Ptr) {
         deallocate(e, action);
     }
 }
+
+/// The C runtime's `_stricmp` (`00ec68e4`) and `strcmp` (`00ec6da0`) through the crt family, the
+/// menus root (`00706cd0`), the interface manager's globals tile (`00706cf0`: its word at +0xA0, `globalsTile` in JIP LN's layout), the path's split (`00a018d0`: the word before the
+/// parentheses as a text-table code, the name inside them copied out), `Tile::GetMenu`
+/// (`00a03c90`) and `Tile::GetMenuTile` (`00a03d40`).
+const MENUS_ROOT: u32 = 0x0070_6cd0;
+const GLOBALS_TILE: u32 = 0x0070_6cf0;
+const SPLIT_PATH: u32 = 0x00a0_18d0;
+const GET_MENU: u32 = 0x00a0_3c90;
+const GET_MENU_TILE: u32 = 0x00a0_3d40;
+/// The split's buffer for the name (`char[0x104]` in the exe's frame).
+const NAME_BUFFER: u32 = 0x104;
+/// The words of an action link's path: `parent`, `me`, `sibling`, `child`, the menus root,
+/// the globals tile, the menu's and the grandparent.
+const LINK_PARENT: i32 = 0x1389;
+const LINK_SELF: i32 = 0x138a;
+const LINK_SIBLING: i32 = 0x138c;
+const LINK_CHILD: i32 = 0x138d;
+const LINK_MENUS_ROOT: i32 = 0x138e;
+const LINK_GLOBALS: i32 = 0x138f;
+const LINK_MENU: i32 = 0x1390;
+const LINK_GRANDPARENT: i32 = 0x1391;
+/// A tile's children list (head at +4, count at +0xC; a node is next, previous, tile) and its name
+/// (`+0x20`, a C string or 0).
+const TILE_CHILDREN: u32 = 0x04;
+const TILE_CHILD_COUNT: u32 = 0x0c;
+const TILE_NAME: u32 = 0x20;
+
+/// `_stricmp(a, b) == 0`.
+fn same_name_any_case(e: &mut Engine, a: u32, b: u32) -> bool {
+    typed_call!(crt::FAMILY, 0x00ec_68e4, crt::string::stricmp(e, a, b)) == 0
+}
+
+// Typed from 00a08f20
+/// The first tile named `name` (`_stricmp`) in the tree under and including `tile`, depth first
+/// (the tile, then each child's tree in the children list's order); 0 when there is none. Every
+/// action link a menu file names by a tile's name (`<copy src="MCM_Options" .../>`) searches the
+/// menu's whole tree this way while the menu is built: in the translation a call by address per
+/// tile visited, here a loop of reads and the compare.
+pub fn find_named_in_tree(e: &mut Engine, tile: Ptr, name: Ptr) -> Ptr {
+    let t = tile.addr();
+    if t == 0 {
+        return Ptr::NULL;
+    }
+    let own = e.mem.u32(t + TILE_NAME);
+    if own != 0 && same_name_any_case(e, own, name.addr()) {
+        return tile;
+    }
+    let mut node = e.mem.u32(t + TILE_CHILDREN);
+    while node != 0 {
+        let child = e.mem.u32(node + 8);
+        node = e.mem.u32(node);
+        // The exe's own recursion (a plain call, as in the translation).
+        let found = find_named_in_tree(e, Ptr::new(child), name);
+        if !found.is_null() {
+            return found;
+        }
+    }
+    Ptr::NULL
+}
+
+// Typed from 00a03da0
+/// `Tile::GetChildByName` (Xbox PDB): under `Tile::Lock`, the first tile named `name` (`strcmp`,
+/// with case) among the tile's descendants, depth first (each child compared before its own
+/// children are searched, each level under its own lock); 0 when there is none or `name` is 0.
+pub fn child_by_name(e: &mut Engine, this: Ptr, name: Ptr) -> Ptr {
+    typed_call!(super::FAMILY, 0x00a0_44f0, lock(e));
+    let mut result = Ptr::NULL;
+    let mut node = e.mem.u32(this.addr() + TILE_CHILDREN);
+    while node != 0 && !name.is_null() {
+        let child = e.mem.u32(node + 8);
+        node = e.mem.u32(node);
+        let child_name = e.mem.u32(child + TILE_NAME);
+        if child_name != 0
+            && typed_call!(
+                crt::FAMILY,
+                0x00ec_6da0,
+                crt::string::strcmp(e, child_name, name.addr())
+            ) == 0
+        {
+            result = Ptr::new(child);
+            break;
+        }
+        // The exe's own recursion (a plain call, as in the translation).
+        let found = child_by_name(e, Ptr::new(child), name);
+        if !found.is_null() {
+            result = found;
+            break;
+        }
+    }
+    typed_call!(super::FAMILY, 0x00a0_4500, unlock(e));
+    result
+}
+
+// Typed from 00a08b20
+/// The tile an action link's path names (no PDB name; `cdecl(tile, path)`): the path split into a
+/// word and a name in parentheses (`00a018d0`, by address); by the word, the parent, the tile
+/// itself, the next sibling (the first child after the last) or the first sibling named so (any
+/// case), the first child or the descendant named so ([`child_by_name`]), the menus root,
+/// the globals tile, the menu's tile or the grandparent; any other word (a tile's own name) the
+/// depth-first search of the menu's tree from the tile's menu tile, or from the menus root for no
+/// tile ([`find_named_in_tree`]). The tile is read without a null check where the exe reads it so.
+pub fn find_by_path(e: &mut Engine, tile: Ptr, path: Ptr) -> Ptr {
+    let t = tile.addr();
+    e.with_stack(NAME_BUFFER, |e, buffer| {
+        let b = buffer.addr();
+        e.mem.set_u8(b, 0);
+        let code = e.call(SPLIT_PATH, &args![path, b]).i32();
+        let named = e.mem.i8(b) != 0;
+        match code {
+            LINK_PARENT => Ptr::new(e.mem.u32(t + TILE_PARENT)),
+            LINK_SELF => tile,
+            LINK_SIBLING => {
+                let parent = e.mem.u32(t + TILE_PARENT);
+                let siblings = e.mem.u32(parent + TILE_CHILD_COUNT);
+                if !named && siblings != 0 {
+                    let mut node = e.mem.u32(parent + TILE_CHILDREN);
+                    while node != 0 {
+                        let element = e.mem.u32(node + 8);
+                        node = e.mem.u32(node);
+                        if element == t {
+                            break;
+                        }
+                    }
+                    if node != 0 {
+                        Ptr::new(e.mem.u32(node + 8))
+                    } else {
+                        Ptr::new(e.mem.u32(e.mem.u32(parent + TILE_CHILDREN) + 8))
+                    }
+                } else if named && siblings != 0 {
+                    let mut node = e.mem.u32(parent + TILE_CHILDREN);
+                    while node != 0 {
+                        let sibling = e.mem.u32(node + 8);
+                        node = e.mem.u32(node);
+                        let sibling_name = e.mem.u32(sibling + TILE_NAME);
+                        if sibling_name != 0 && same_name_any_case(e, sibling_name, b) {
+                            return Ptr::new(sibling);
+                        }
+                    }
+                    Ptr::NULL
+                } else {
+                    Ptr::NULL
+                }
+            }
+            LINK_CHILD => {
+                if !named && e.mem.u32(t + TILE_CHILD_COUNT) != 0 {
+                    return Ptr::new(e.mem.u32(e.mem.u32(t + TILE_CHILDREN) + 8));
+                }
+                if t != 0 && named && e.mem.u32(t + TILE_CHILD_COUNT) != 0 {
+                    typed_call!(
+                        super::FAMILY,
+                        0x00a0_3da0,
+                        child_by_name(e, tile, Ptr::new(b))
+                    )
+                } else {
+                    Ptr::NULL
+                }
+            }
+            LINK_MENUS_ROOT => e.call(MENUS_ROOT, &args![]).ptr(),
+            LINK_GLOBALS => e.call(GLOBALS_TILE, &args![]).ptr(),
+            LINK_MENU => {
+                let menu = e.call(GET_MENU, &args![tile]).u32();
+                Ptr::new(e.mem.u32(menu.wrapping_add(4)))
+            }
+            LINK_GRANDPARENT => {
+                let parent = e.mem.u32(t + TILE_PARENT);
+                if parent == 0 {
+                    Ptr::NULL
+                } else {
+                    Ptr::new(e.mem.u32(parent + TILE_PARENT))
+                }
+            }
+            _ => {
+                let start = if t == 0 {
+                    e.call(MENUS_ROOT, &args![]).ptr()
+                } else {
+                    e.call(GET_MENU_TILE, &args![tile]).ptr()
+                };
+                typed_call!(
+                    super::FAMILY,
+                    0x00a0_8f20,
+                    find_named_in_tree(e, start, path)
+                )
+            }
+        }
+    })
+}

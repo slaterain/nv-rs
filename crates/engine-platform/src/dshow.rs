@@ -531,26 +531,35 @@ fn render(e: &mut Engine, this: Ptr, out_pin: Ptr) -> u32 {
         reader != 0,
         "IGraphBuilder::Render: the pin gave no IAsyncReader; not provided"
     );
-    let lengths = e.mem.alloc(16);
-    let r = e.vcall(reader, 0x20, &[lengths, lengths + 8]).u32();
-    assert!(
-        r == S_OK,
-        "IAsyncReader::Length answered {r:#x}: not provided"
-    );
-    let total = e.mem.u64(lengths);
-    e.mem.free(lengths);
-    assert!(
-        total > 0 && total < 1 << 30,
-        "a stream of {total} bytes is not provided"
-    );
-    let buffer = e.mem.alloc(total as u32);
-    let r = e.vcall(reader, 0x1c, &[0, 0, total as u32, buffer]).u32();
-    assert!(
-        r == S_OK,
-        "IAsyncReader::SyncRead answered {r:#x}: not provided"
-    );
-    let data = e.mem.bytes(buffer, total as u32);
-    e.mem.free(buffer);
+    // The game's reader runs with the kernel lock given back (when the game called Render itself): its `Length` and
+    // `SyncRead` are game code reading the whole track out of the archive through the game's own file code, which
+    // runs without the lock whenever the game calls it, and they touch no platform state here (the pin is
+    // registered above, the graph filled in below, both under the lock). Under the lock a track's read held every
+    // other thread's platform calls for its whole length (the hitch log named it: the music thread in this call).
+    let read = engine_core::real_threads::without_kernel_lock_mut_if_outermost(e, |e| {
+        let lengths = e.mem.alloc(16);
+        let r = e.vcall(reader, 0x20, &[lengths, lengths + 8]).u32();
+        assert!(
+            r == S_OK,
+            "IAsyncReader::Length answered {r:#x}: not provided"
+        );
+        let total = e.mem.u64(lengths);
+        e.mem.free(lengths);
+        assert!(
+            total > 0 && total < 1 << 30,
+            "a stream of {total} bytes is not provided"
+        );
+        let buffer = e.mem.alloc(total as u32);
+        let r = e.vcall(reader, 0x1c, &[0, 0, total as u32, buffer]).u32();
+        assert!(
+            r == S_OK,
+            "IAsyncReader::SyncRead answered {r:#x}: not provided"
+        );
+        let data = e.mem.bytes(buffer, total as u32);
+        e.mem.free(buffer);
+        (total, data)
+    });
+    let (total, data) = read;
     let decoder = ::mp3::Decoder::new(data).unwrap_or_else(|err| {
         panic!("IGraphBuilder::Render of a stream mp3 cannot read ({err}): not provided")
     });
@@ -1182,6 +1191,61 @@ mod tests {
         }
         let _ = f.reader;
         [fg, got[2], got[3], got[1], got[4]]
+    }
+
+    /// What the game's reader saw in [`render_reads_the_track_with_the_kernel_lock_given_back`]: 1 the kernel lock
+    /// held, 2 given back, for `Length` and `SyncRead`.
+    static HELD_IN_LENGTH: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    static HELD_IN_READ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+    fn held_word(e: &Engine) -> u32 {
+        if engine_core::real_threads::kernel_lock_held(e) {
+            1
+        } else {
+            2
+        }
+    }
+
+    /// With real threads, the game's reader runs with the kernel lock given back while `Render` reads the track
+    /// (other threads' platform calls go on meanwhile), and `Render` answers as before: the same stream length and
+    /// duration, the samples decoded. (The reader's two calls sit at game code addresses here, as the game's do,
+    /// so they do not take the lock themselves.)
+    #[test]
+    fn render_reads_the_track_with_the_kernel_lock_given_back() {
+        use std::sync::atomic::Ordering;
+        let mut e = Engine::new();
+        let data = mp3(64);
+        let f = fake(&mut e, data.clone());
+        let size = data.len() as u64;
+        let rv = e.mem.u32(f.reader);
+        e.mem.set_u32(rv + 0x20, 0x0040_f320);
+        e.mem.set_u32(rv + 0x1c, 0x0040_f31c);
+        e.register_double(0x0040_f320, move |e, a| {
+            HELD_IN_LENGTH.store(held_word(e), Ordering::SeqCst);
+            e.mem.set_u64(a[1], size);
+            e.mem.set_u64(a[2], size);
+            0u32.into_ret_()
+        });
+        e.register_double(0x0040_f31c, move |e, a| {
+            HELD_IN_READ.store(held_word(e), Ordering::SeqCst);
+            e.mem.write(a[4], &data);
+            0u32.into_ret_()
+        });
+        engine_core::real_threads::start(&mut e).expect("real threads on");
+        engine_core::real_threads::end_start_hold_for_tests(&e);
+        let [fg, ..] = start(&mut e, &f);
+        assert_eq!(
+            HELD_IN_LENGTH.load(Ordering::SeqCst),
+            2,
+            "Length without the lock"
+        );
+        assert_eq!(
+            HELD_IN_READ.load(Ordering::SeqCst),
+            2,
+            "SyncRead without the lock"
+        );
+        let at = graph_of(&e, Ptr::new(fg));
+        assert_eq!(graph(&mut e, at).stream_bytes, size, "the whole track read");
     }
 
     fn position(e: &mut Engine, p: u32) -> f64 {

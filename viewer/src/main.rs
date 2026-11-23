@@ -101,8 +101,8 @@ fn build_mods(raw: &[OsString]) {
 
 /// `--install-mods GAME INSTALLS MODS`: the mod installer's text front end (`mod_chooser`): the
 /// mods waiting in MODS installed into INSTALLS, or removed from it; the game folder GAME only
-/// read. Started by Play.exe's `--install-mods` (Install mods.cmd, in a console window of its own)
-/// and play.sh's. Every way it ends, on every system, says "Press Enter to close." and waits for
+/// read. Started by Play.exe's `--install-mods` (the launcher's Mods, its lines in the
+/// launcher's window) and play.sh's. Every way it ends, on every system, says "Press Enter to close." and waits for
 /// it (`mod_chooser::run_in_window`), so that window never closes before it is read.
 fn install_mods(raw: &[OsString]) {
     let [game, installs, loose] = [1, 2, 3].map(|i| raw.get(i).map(PathBuf::from));
@@ -122,7 +122,7 @@ fn install_mods(raw: &[OsString]) {
                 room: mod_chooser::room_on_drive,
             })
         }
-        _ => Err("The mod installer was started without the folders it needs (the game's folder, the mod installs folder and the mods folder). Start it with \"Install mods\" (Windows) or ./play.sh --install-mods (Linux and macOS).".to_owned()),
+        _ => Err("The mod installer was started without the folders it needs (the game's folder, the mod installs folder and the mods folder). Start it with Mods in Play.exe (Windows) or ./play.sh --install-mods (Linux and macOS).".to_owned()),
     };
     let stdin = std::io::stdin();
     let mut input = stdin.lock();

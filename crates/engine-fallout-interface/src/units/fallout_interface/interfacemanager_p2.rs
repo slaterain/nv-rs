@@ -737,7 +737,33 @@ pub fn interface_manager_do_wheel_move(
         }
         node = list_next(e, node);
     }
+    // `0x10704B4`, `RecipeMenu`'s vtable slot +0x28 (lStewieAl's Tweaks' S0022.08 writes
+    // `MenuFixes::RecipeMenuHandleMousewheel` there; the exe's is the do-nothing `008d0600`).
+    if e.stewie(engine_core::extend::stewie::RECIPE_WHEEL_CHANGES_CATEGORY)
+        && e.mem.u32(target) == RECIPE_MENU_VTABLE
+    {
+        stewie_recipe_menu_wheel(e, target, arg_1);
+        return 0;
+    }
     e.vcall(target, 0x28, &args![arg_1, arg_2]).u32()
+}
+
+/// `RecipeMenu`'s vtable (`0107048c`).
+const RECIPE_MENU_VTABLE: u32 = 0x0107_048c;
+
+/// lStewieAl's Tweaks' `MenuFixes::RecipeMenuHandleMousewheel` (row S0022.08): over tile id 1 (the
+/// category title) the menu clicks (vtable +0xC, `HandleClick`) id 2 for the wheel up (the
+/// interface manager's `mouseWheel`, +0x44, above 0; Tweaks'
+/// `bInvertContainerTitleScrollwheelDirection` is 0 in VNV and not built) and id 0 otherwise.
+/// Its answer (a `void` function's) is taken as 0.
+fn stewie_recipe_menu_wheel(e: &mut Engine, menu: u32, tile_id: u32) {
+    if tile_id != 1 {
+        return;
+    }
+    let manager = e.mem.u32(0x011d_8a80);
+    let up = e.mem.f32(manager + 0x44) > 0.0;
+    let id = if up { 2u32 } else { 0 };
+    e.vcall(menu, 0xc, &args![id, 0u32]);
 }
 
 // Translated from 007181d0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2995,6 +3021,56 @@ mod tests {
         e.call(0x0071_8080, &args![this, target, 0u32, 0u32]);
         assert!(logged(&e, 0x7000_0000).is_empty());
         assert_eq!(logged(&e, 0x7300_0028).len(), 1);
+    }
+
+    /// Row S0022.08 (lStewieAl's Tweaks' `RecipeMenuHandleMousewheel` in `RecipeMenu`'s vtable
+    /// slot +0x28): for a recipe menu the wheel over tile id 1 clicks (+0xC) id 2 when the
+    /// manager's `mouseWheel` (+0x44) is above 0 and id 0 otherwise, any other id nothing; the
+    /// exe's slot is never called and the answer is 0. Off, or another menu: the slot, as before.
+    #[test]
+    fn s0022_08_the_wheel_changes_the_recipe_category() {
+        for (on, recipe, id, wheel, click) in [
+            (true, true, 1u32, 120.0f32, Some(2u32)),
+            (true, true, 1, -120.0, Some(0)),
+            (true, true, 3, 120.0, None),
+            (false, true, 1, 120.0, None),
+            (true, false, 1, 120.0, None),
+        ] {
+            let (mut e, this, _, target) = wheel_engine([0.0, 4.0], [1.0, 2.0], false);
+            e.set_stewie(
+                engine_core::extend::stewie::RECIPE_WHEEL_CHANGES_CATEGORY,
+                on,
+            );
+            if !e.mem.is_mapped(0x011d_8a80) {
+                e.map(0x011d_8000, 0x1000);
+            }
+            e.mem.set_u32(0x011d_8a80, this);
+            e.mem.set_f32(this + 0x44, wheel);
+            if recipe {
+                if !e.mem.is_mapped(RECIPE_MENU_VTABLE) {
+                    e.map(RECIPE_MENU_VTABLE & !0xfff, 0x1000);
+                }
+                e.mem.set_u32(RECIPE_MENU_VTABLE + 0xc, 0x7400_000c);
+                e.mem.set_u32(RECIPE_MENU_VTABLE + 0x28, 0x7300_0028);
+                e.mem.set_u32(target, RECIPE_MENU_VTABLE);
+            }
+            nothing(&mut e, &[0x7400_000c]);
+            let result = e.call(0x0071_8080, &args![this, target, id, 12u32]).u32();
+            let slot = logged(&e, 0x7300_0028);
+            let clicks = logged(&e, 0x7400_000c);
+            if on && recipe {
+                assert!(slot.is_empty(), "the exe's slot is not called");
+                assert_eq!(result, 0);
+                match click {
+                    Some(clicked) => assert_eq!(clicks, vec![vec![target, clicked, 0]]),
+                    None => assert!(clicks.is_empty()),
+                }
+            } else {
+                assert_eq!(slot, vec![vec![target, id, 12]]);
+                assert_eq!(result, 0x99);
+                assert!(clicks.is_empty());
+            }
+        }
     }
 
     #[test]

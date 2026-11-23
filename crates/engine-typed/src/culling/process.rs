@@ -151,6 +151,17 @@ pub(crate) fn object_on_visible(e: &mut Engine, object: Ptr<NiAVObject>, process
             0x00c4_6f60,
             super::visible::multibound_node_on_visible(e, object.cast(), Ptr::new(process))
         ),
+        0x00b4_e490 => {
+            // A parallel walk's check keeps the fade node's state first (`par::defer` answers false
+            // for it: the fade node runs on the walkers).
+            if !super::par::defer(e, object.addr(), process, 0x00b4_e490) {
+                typed_call!(
+                    FAMILY,
+                    0x00b4_e490,
+                    super::fade::on_visible(e, object.cast(), Ptr::new(process))
+                );
+            }
+        }
         target => {
             // A tree met by a parallel walk's walker is walked there (`par::tree_on_walker`).
             if target == super::par::TREE_NODE_ON_VISIBLE
@@ -244,6 +255,7 @@ pub fn bs_process(e: &mut Engine, this: Ptr<BSCullingProcess>, object: Ptr<NiAVO
 /// none).
 pub fn append_virtual(e: &mut Engine, this: Ptr<BSCullingProcess>, geometry: Ptr<NiGeometry>) {
     let _register = super::probe::on().then(super::probe::register_begins);
+    super::compact::note_appended(geometry.addr());
     let mut registered = false;
     if e.get(this, BSCullingProcess::spAccumulator) != 0 {
         let accumulator = e.get(this, BSCullingProcess::spAccumulator);
@@ -345,11 +357,15 @@ pub fn bs_process_scene(
                 e.vcall(accumulator, SLOT_SET_CAMERA, &args![camera]);
             }
         }
-        typed_call!(
-            FAMILY,
-            0x00a5_9e00,
-            super::visible::cull(e, scene, this.cast::<NiCullingProcess>())
-        );
+        // `NV_CULL_COMPACT`: the walk over the compact copy (or, in its check mode, the real walk
+        // checked against it); otherwise the real walk.
+        if !super::compact::walk_scene(e, scene.addr(), this.addr()) {
+            typed_call!(
+                FAMILY,
+                0x00a5_9e00,
+                super::visible::cull(e, scene, this.cast::<NiCullingProcess>())
+            );
+        }
         if visible_set != 0 {
             e.set(base, NiCullingProcess::m_pkVisibleSet, saved);
         }
