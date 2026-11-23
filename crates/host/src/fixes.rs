@@ -61,6 +61,7 @@ pub static FIXES: &[Fix] = &[
     LOAD_STEPS,
     DEAD_LIGHTS,
     THREAD_HEAP,
+    PAR_TASKS,
     crate::half_loaded_move::FIX,
     crate::thread_races::FIX,
     TEXTURE_READ_FIRST,
@@ -151,6 +152,34 @@ pub const THREAD_HEAP: Fix = Fix {
 
 fn install_thread_heap(e: &mut Engine) {
     e.mem.enable_thread_heap();
+}
+
+/// The parallel task manager's extra threads (`engine_bs`' `bsparalleltaskmanager.rs`, #961 and #988): the manager
+/// `TES` makes runs its split work (the physics results applied to the scene graph each frame, the actors' movement
+/// update, and the item sets behind the game's tasklet settings) on its caller and
+/// [`engine::units::bsmain::bsparalleltaskmanager::DEFAULT_THREADS`] threads instead of the exe's one, fewer when
+/// Havok's thread memory is short or the machine has fewer logical processors (none extra below 8). The items are
+/// handed out through one counter as the exe does, so the same items run and leave the same state.
+/// `NV_PAR_TASKS=n` names the count (0 off, 1 the default, 2 to 8). Vanilla keeps the exe's one thread.
+pub const PAR_TASKS: Fix = Fix {
+    name: "parallel tasks",
+    env: "NV_PAR_TASKS",
+    addresses: &[0x00c4_4980],
+    summary: "the game's split work each frame (the physics results applied to the scene, the actors' movement) runs on more threads: crowded scenes take less of the main thread",
+    install: install_par_tasks,
+};
+
+fn install_par_tasks(e: &mut Engine) {
+    use engine::units::bsmain::bsparalleltaskmanager::{
+        bs_parallel_task_manager_constructor_row, BSParallelTaskManager,
+    };
+    let (at, f) = engine::entry!(
+        0x00c4_4980,
+        bs_parallel_task_manager_constructor_row(
+            Ptr<BSParallelTaskManager>,
+        ) -> Ptr<BSParallelTaskManager>
+    );
+    e.register(at, f);
 }
 
 /// The milliseconds a frame [`LOAD_STEPS`] gives each of the two in play.
@@ -1074,6 +1103,10 @@ impl Choice {
                 Some("1") => overrides.push((fix.env, true)),
                 // The drawing thread with the packet's POISON check: a spelling of the variable only, for checks.
                 Some("poison") if fix.env == DRAW_THREAD.env => overrides.push((fix.env, true)),
+                // The parallel task manager's variable also names a count: 2 and up turn the row on with that many threads.
+                Some(n) if fix.env == PAR_TASKS.env && n.parse::<u32>().is_ok_and(|n| n >= 2) => {
+                    overrides.push((fix.env, true))
+                }
                 Some("0") => overrides.push((fix.env, false)),
                 Some(other) => return Err(format!("{}={other}: use 0 or 1", fix.env)),
             }
@@ -3015,6 +3048,97 @@ bSunShadowsCharacters=0
         // The other JIP rows still follow the preset.
         assert!(choices[1].is_on(&JIP_GAME_PATCHES));
         assert!(!choices[0].is_on(&JIP_GAME_PATCHES));
+    }
+
+    /// The parallel task manager's row: on in the fixes preset, off in vanilla, `bParallelTasks` or `NV_PAR_TASKS`
+    /// over both, the variable also naming a count (0 off, 1 the row's default, 2 and up on with that many; anything
+    /// else stops the start); installed, the manager's constructor makes the row's threads.
+    #[test]
+    fn the_parallel_tasks_follow_the_preset() {
+        assert!(!Choice::vanilla().is_on(&PAR_TASKS));
+        let fixes = Choice::from_parts(None, no_env).unwrap();
+        assert!(fixes.is_on(&PAR_TASKS));
+        let off = with_ini(
+            None,
+            "[nv-rs Fixes]
+bParallelTasks=0
+",
+            &[],
+        );
+        assert!(!off.is_on(&PAR_TASKS));
+        let zero = Choice::from_parts(None, env_of(&[("NV_PAR_TASKS", "0")])).unwrap();
+        assert!(!zero.is_on(&PAR_TASKS));
+        let one = Choice::from_parts(
+            None,
+            env_of(&[("NV_PAR_TASKS", "1"), ("NV_PRESET", "vanilla")]),
+        )
+        .unwrap();
+        assert!(one.is_on(&PAR_TASKS));
+        let eight = Choice::from_parts(
+            None,
+            env_of(&[("NV_PAR_TASKS", "8"), ("NV_PRESET", "vanilla")]),
+        )
+        .unwrap();
+        assert!(eight.is_on(&PAR_TASKS), "a count turns the row on");
+        assert!(Choice::from_parts(None, env_of(&[("NV_PAR_TASKS", "many")])).is_err());
+        // Installed, the manager's constructor at `00c44980` asks for the row's threads (here as many as this
+        // machine's processors allow); without it the exe's one.
+        use engine::units::bsmain::bsparalleltaskmanager::{fit_processors, DEFAULT_THREADS};
+        for (choice, threads) in [
+            (fixes, fit_processors(DEFAULT_THREADS)),
+            (Choice::vanilla(), 1),
+        ] {
+            let mut e = Engine::new();
+            install(&mut e, &choice);
+            assert_eq!(threads_made(&mut e), threads);
+        }
+    }
+
+    /// The threads the parallel task manager's constructor at `00c44980` makes on `e`: its allocations, the threads'
+    /// set-up and start stood in, Havok's free-list memory system with one thread memory record in use.
+    fn threads_made(e: &mut Engine) -> u32 {
+        // `MemoryManager::Allocate` (a fresh zeroed block), the linear task thread's constructor, `sprintf_s`, and
+        // `BSThread`'s `Initialize`, `SetName`, `SetThreadProcessor` and `SetThreadPriority`.
+        e.register(0x00aa_3e40, |e, a| {
+            let size = a[1].max(4);
+            let block = e.mem.alloc(size);
+            for k in (0..size).step_by(4) {
+                e.mem.set_u32(block + k, 0);
+            }
+            Ret {
+                eax: block,
+                ..Ret::default()
+            }
+        });
+        for at in [
+            0x008c_76a0,
+            0x0040_6d00,
+            0x00aa_6430,
+            0x00aa_6540,
+            0x00aa_6550,
+            0x00aa_6560,
+        ] {
+            e.register(at, |_, _| Ret::default());
+        }
+        // The processor table (`011af714`) and Havok's memory system word (`01268418`, the free-list vtable
+        // `010cad74`, 32 records 0x138 apart at +0xc6c, in use by the byte at +0x12c).
+        e.map(0x011a_f000, 0x1000);
+        let size = 0xc6c + 33 * 0x138;
+        let system = e.mem.alloc(size);
+        for k in (0..size).step_by(4) {
+            e.mem.set_u32(system + k, 0);
+        }
+        e.mem.set_u32(system, 0x010c_ad74);
+        e.mem.set_u8(system + 0xc6c + 0x12c, 1);
+        e.map(0x0126_8000, 0x1000);
+        e.mem.set_u32(0x0126_8418, system);
+        let manager = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        e.call(0x00c4_4980, &args![manager]);
+        let log = e.call_log.take().unwrap();
+        log.iter()
+            .filter(|(at, args)| *at == 0x00aa_3e40 && args.get(1) == Some(&0x5c))
+            .count() as u32
     }
 
     /// The thread heap: on in the fixes preset, off in vanilla, `bThreadHeap` or `NV_THREAD_HEAP` over

@@ -374,7 +374,7 @@ struct Outcome {
 
 /// The scene built, the manager made with `threads` threads, both item sets run through it `rounds` times, the
 /// manager ended.
-fn run(threads: u32, rounds: u32) -> (Outcome, usize) {
+fn run(threads: u32, rounds: u32) -> (Outcome, usize, Engine) {
     set_threads_for_tests(Some(threads));
     let mut e = engine();
     let mut s = Scene::default();
@@ -471,6 +471,7 @@ fn run(threads: u32, rounds: u32) -> (Outcome, usize) {
             raced,
         },
         runners,
+        e,
     )
 }
 
@@ -480,7 +481,11 @@ fn run(threads: u32, rounds: u32) -> (Outcome, usize) {
 #[test]
 fn more_threads_leave_the_scene_as_the_exe_s_one() {
     let rounds = 3;
-    let (one, _) = run(1, rounds);
+    // Every run's engine kept to the end: a new one never takes an old one's address, the key of the run's record of
+    // Havok's thread memory.
+    let mut engines = Vec::new();
+    let (one, _, e) = run(1, rounds);
+    engines.push(e);
     // The gates: 40 actors less those without an actor, without 3D, not loaded, or flagged.
     let passing = (0..40u32)
         .filter(|k| k % 13 != 6 && k % 11 != 5 && k % 7 != 3 && k % 9 != 4)
@@ -509,7 +514,8 @@ fn more_threads_leave_the_scene_as_the_exe_s_one() {
     assert!(OTHERS.lock().unwrap().is_empty(), "no other slot called");
     let mut most = 0;
     for threads in [4, 8, 4, 8] {
-        let (many, runners) = run(threads, rounds);
+        let (many, runners, e) = run(threads, rounds);
+        engines.push(e);
         assert_eq!(many.syncs, one.syncs, "{threads} threads: the same syncs");
         for (i, (a, b)) in many.nodes.iter().zip(&one.nodes).enumerate() {
             assert_eq!(
