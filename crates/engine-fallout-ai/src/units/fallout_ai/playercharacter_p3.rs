@@ -9575,6 +9575,60 @@ mod tests {
         }
     }
 
+    /// S0121 at the reload animation (`0x95DAE5`, mode 2 of `0095d850`): the clip holds 5 rounds.
+    /// Of a size 4 (overfilled) the exe starts the attack animation group and animation action 9;
+    /// with the row it does not. Of a size 6 (below what it can hold) both start it; of a size 5
+    /// (full) neither does.
+    #[test]
+    fn s0121_an_overfilled_clip_starts_no_reload_animation() {
+        for (on, size, animates) in [
+            (false, 4u32, true),
+            (true, 4, false),
+            (false, 6, true),
+            (true, 6, true),
+            (false, 5, false),
+            (true, 5, false),
+        ] {
+            let mut e = engine(CALLEES_0095D850);
+            e.set_stewie(engine_core::extend::stewie::NO_RELOAD_OVERFILLED_CLIP, on);
+            let held = 0x5000_1000;
+            let (player, _) = equip_world(&mut e, held, 2, 5, 0x7000_2000);
+            add_slot(&mut e, player.addr(), 0x4b0, SLOT_D);
+            add_slot(&mut e, player.addr(), 0x340, SLOT_E);
+            answer(&mut e, SLOT_D, 0);
+            answer(&mut e, SLOT_E, 0);
+            answer(&mut e, ITEM_CHANGE_HAS_MOD, 0);
+            answer(&mut e, WEAPON_GET_CLIP_ROUNDS, size);
+            answer(&mut e, WEAPON_GET_ATTACK_ANIM_BASE, 0x30);
+            answer(&mut e, ACTOR_GET_ANIM_GROUP, 0x1234);
+            answer(&mut e, ANIM_GROUP_GET_TYPE, 0x30);
+            answer(&mut e, ANIMATION_GET_ACTION, 0x55);
+            let log = logged(&mut e, |e| {
+                e.call(
+                    0x0095_d850,
+                    &args![player, Ptr::<()>::new(held), 2u32, 0u32],
+                );
+            });
+            let played = calls_to(&log, ANIMATION_PLAY_GROUP);
+            let actions = calls_to(&log, ACTOR_SET_ANIM_ACTION);
+            if animates {
+                assert_eq!(
+                    played,
+                    vec![vec![0x9000_0000, 0x1234, 1, u32::MAX, u32::MAX]],
+                    "on {on} size {size}"
+                );
+                assert_eq!(
+                    actions,
+                    vec![vec![player.addr(), 9, 0x55]],
+                    "on {on} size {size}"
+                );
+            } else {
+                assert!(played.is_empty(), "on {on} size {size}");
+                assert!(actions.is_empty(), "on {on} size {size}");
+            }
+        }
+    }
+
     /// Row S0089.04 with the entry there (ordinary input): the same calls and answer with the row
     /// off and on (the entry's count 5: the same count already equipped, nothing to do).
     #[test]
