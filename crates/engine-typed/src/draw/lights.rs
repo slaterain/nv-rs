@@ -10,10 +10,18 @@ use engine_core::ptr::Ptr;
 use engine_core::{typed_call, Engine};
 
 /// Whether a light is active: its index (`u16` +0x110) is not 0xff and its light's (+0xf8) app-culled bit (byte
-/// +0x30, bit 0) is clear; for the non-shadow form also its byte +0xec is not 1.
+/// +0x30, bit 0) is clear; for the non-shadow form also its byte +0xec is not 1. With the fixes row "dead lights in a
+/// light list" a light whose light (+0xf8) is 0 is not active (the exe reads through it,
+/// [`crate::lights::dead`]).
 fn active(e: &Engine, light: u32, non_shadow: bool) -> bool {
-    packet::pass_light_half(e, light, 0x110) != 0xff
-        && packet::light_value_byte(e, packet::pass_light_word(e, light, 0xf8), 0x30) & 1 == 0
+    if packet::pass_light_half(e, light, 0x110) == 0xff {
+        return false;
+    }
+    let data = packet::pass_light_word(e, light, 0xf8);
+    if data == 0 && crate::lights::dead::skips_null(e) {
+        return false;
+    }
+    packet::light_value_byte(e, data, 0x30) & 1 == 0
         && (!non_shadow || packet::pass_light_byte(e, light, 0xec) != 1)
 }
 
@@ -113,7 +121,8 @@ pub fn next_active_non_shadow_light(e: &mut Engine, _property: Ptr, iterator: Pt
 /// of the property's list (+0x60) are present, of an index (+0x110) other than 0xff, not app-culled (their light's
 /// +0x30, bit 0) and of byte +0xec 0 (this one tests 0, where the getters skip 1). With JIP LN NVSE's game patches
 /// in (G01, its null check at `0xB707E0`, the row `NV_JIP_GAME_PATCHES`), a light whose `+0xf8` is null is not
-/// counted, as the translation's; the game reads through it.
+/// counted, as the translation's; the game reads through it. The same with the fixes row "dead lights in a light
+/// list" ([`crate::lights::dead`]).
 pub fn active_non_shadow_light_count(e: &mut Engine, property: Ptr) -> u32 {
     let mut node = packet::property_light_list(e, property.addr());
     let mut count = 0u32;
@@ -122,7 +131,7 @@ pub fn active_non_shadow_light_count(e: &mut Engine, property: Ptr) -> u32 {
         node = packet::light_node_word(e, node, 0);
         if light != 0 && packet::pass_light_half(e, light, 0x110) != 0xff {
             let data = packet::pass_light_word(e, light, 0xf8);
-            if (data != 0 || !light_data_null_checked(e))
+            if (data != 0 || !(light_data_null_checked(e) || crate::lights::dead::skips_null(e)))
                 && packet::light_value_byte(e, data, 0x30) & 1 == 0
                 && packet::pass_light_byte(e, light, 0xec) == 0
             {
