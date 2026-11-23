@@ -894,7 +894,7 @@ const TEXTURE_RESIZE: u32 = 0x00b6_bbd0;
 /// The float floor `00404040` of the float `value`: its `_ftol2` back as a float (through a
 /// `double`), one less when the value minus that is below 0.0 or unordered; as `ST0` holds it.
 #[inline]
-fn floor_00404040(e: &Engine, value: f32) -> f64 {
+fn float_floor(e: &Engine, value: f32) -> f64 {
     let mut truncated = f32::from_bits(x87_store32(f64::from(ftol(e, f64::from(value)))));
     let difference = f64::from(value) - f64::from(truncated);
     if !(difference >= 0.0) {
@@ -916,7 +916,7 @@ fn compress_channel(e: &Engine, bits: u32, min: f32, max: f32, scale: f32) -> u8
     } else {
         value
     };
-    let floor = floor_00404040(e, f32::from_bits(x87_quiet_bits(clamped)));
+    let floor = float_floor(e, f32::from_bits(x87_quiet_bits(clamped)));
     let shifted = x87_sub(floor, x87_m32(min.to_bits()));
     let scaled = x87_mul(shifted, x87_m32(scale.to_bits()));
     // The integer's low byte, as the exe stores it.
