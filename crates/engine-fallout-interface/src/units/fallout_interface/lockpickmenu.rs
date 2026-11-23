@@ -4005,7 +4005,7 @@ mod tests {
     #[test]
     fn s0592_the_entering_animation_ends_at_once() {
         for (on, state, wanted) in [(false, 0u32, 0.5), (true, 0, 500_000.0), (true, 2, 0.5)] {
-            let e = Engine::new();
+            let mut e = Engine::new();
             let base = e.mem.alloc(0x100);
             e.mem.set_u32(base + LOCK_STATE, state);
             e.set_stewie(engine_core::extend::stewie::LOCKPICK_ENTER_AT_ONCE, on);
