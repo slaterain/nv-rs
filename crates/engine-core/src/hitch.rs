@@ -143,6 +143,16 @@ pub enum Count {
     /// (`hkpWorld::stepDeltaTime`, `00c91b10`, and `hkpWorld::stepMultithreaded`: one per sub-step).
     HavokNsMain,
     HavokSteps,
+    /// Main's Havok reference changes that took the one global reference-count lock (`hkReferencedObject`'s
+    /// `addReference` `00c90510`, `removeReference` `00c905b0`, `addReferences` `00c90670`, `removeReferences`
+    /// `00c90740` on a thread that does not hold it, with the lock mode 1 the game always has), and main's time
+    /// waiting for it there (ns): a physics step holds it for the whole step (`hkpWorld::stepDeltaTime` takes the
+    /// world's lock, `00c91180`). With the "Havok reference counts without the global lock" row both stay 0.
+    HavokRefLocks,
+    HavokRefWaitNs,
+    /// Main's time waiting for the same lock taken whole (`lockAll`, `00c90490`: the world's lock for a change or
+    /// a step on main) (ns): the waits the row leaves.
+    HavokLockAllWaitNs,
     /// Main's time running scripts (`ScriptRunner::Run`, `005e0d20`, outermost only: a script a script runs is in
     /// its caller's time) (ns), and the scripts run (every run, nested ones included).
     ScriptNsMain,
@@ -549,6 +559,14 @@ impl WaitKind {
     }
 }
 
+/// The functions whose waits for a critical section are main's waits for Havok's global reference-count lock:
+/// `addReference`, `removeReference`, `addReferences`, `removeReferences`, and `lockAll` (the lock taken whole).
+const HAVOK_REF_ADD: u32 = 0x00c9_0510;
+const HAVOK_REF_REMOVE: u32 = 0x00c9_05b0;
+const HAVOK_REFS_ADD: u32 = 0x00c9_0670;
+const HAVOK_REFS_REMOVE: u32 = 0x00c9_0740;
+const HAVOK_LOCK_ALL: u32 = 0x00c9_0490;
+
 /// Main waited `ns` for `kind` at the game function `site` (0: none known): its time and count, and the frame's
 /// longest wait. Called only by main (the caller checks [`crate::real_threads::on_other_game_thread`]).
 pub fn main_wait(kind: WaitKind, site: u32, ns: u64) {
@@ -558,6 +576,15 @@ pub fn main_wait(kind: WaitKind, site: u32, ns: u64) {
     add(time, ns);
     if let Some(c) = count {
         one(c);
+    }
+    if kind == WaitKind::Section {
+        match site {
+            HAVOK_REF_ADD | HAVOK_REF_REMOVE | HAVOK_REFS_ADD | HAVOK_REFS_REMOVE => {
+                add(Count::HavokRefWaitNs, ns)
+            }
+            HAVOK_LOCK_ALL => add(Count::HavokLockAllWaitNs, ns),
+            _ => {}
+        }
     }
     // Sleeps are main's own choice (the frame limiter), not something it was held up by.
     if kind != WaitKind::Sleep && ns > LONGEST_NS.load(Relaxed) {
@@ -663,6 +690,32 @@ mod tests {
             take_longest_wait().0 < HOUR,
             "taken: none of this test's waits left"
         );
+    }
+
+    /// Main's waits for a critical section in Havok's reference functions are its waits for the global
+    /// reference-count lock; in `lockAll`, for the lock taken whole; any other wait or site is neither.
+    #[test]
+    fn main_s_waits_for_havok_s_reference_lock_are_told_apart() {
+        let _l = WAIT_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = snapshot();
+        const HOUR: u64 = 3_600_000_000_000;
+        for site in [
+            HAVOK_REF_ADD,
+            HAVOK_REF_REMOVE,
+            HAVOK_REFS_ADD,
+            HAVOK_REFS_REMOVE,
+        ] {
+            main_wait(WaitKind::Section, site, HOUR);
+        }
+        main_wait(WaitKind::Section, HAVOK_LOCK_ALL, 2 * HOUR);
+        main_wait(WaitKind::Object, HAVOK_REF_ADD, 16 * HOUR);
+        main_wait(WaitKind::Section, 0x00e7_ea00, 32 * HOUR);
+        let d = since(&snapshot(), &before);
+        assert!((4 * HOUR..5 * HOUR).contains(&d[Count::HavokRefWaitNs as usize]));
+        assert!((2 * HOUR..3 * HOUR).contains(&d[Count::HavokLockAllWaitNs as usize]));
+        let _ = take_longest_wait();
     }
 
     /// The largest read is kept with its name, a smaller one after it does not replace it, and a take empties it.
