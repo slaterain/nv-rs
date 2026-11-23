@@ -17,6 +17,13 @@
 //! 1.0), the copy is the plain one, so the picture is the same bit for bit. The back buffer is
 //! never changed: its captures (`NV_SHOT`'s `wgpu-frame-N.bmp`, F12 reports) stay the game's
 //! picture; the window's capture (`wgpu-window-N.bmp`) has the ramp.
+//!
+//! **What it says.** Each ramp the game's window takes is one log line with its brightness
+//! ([`change_line`]: the game sends one only when the slider moves); the first that changes the
+//! picture also says once that a brightness saved earlier now shows ([`FIRST_LINE`]); an F12
+//! report's `place.txt` says the brightness the window showed ([`place_line`]).
+
+use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Entries per colour.
 pub const ENTRIES: usize = 256;
@@ -70,6 +77,72 @@ impl Ramp {
             }
         }
         bytes
+    }
+
+    /// The brightness the ramp stands for, as the game's `fGamma`: worked out from red's middle
+    /// entry, which the game makes `(128 / 255)^fGamma * 65535` ([`games_ramp`]). `None` where that
+    /// entry is 0 or the full 65535: no curve of the game's gives either.
+    pub fn gamma(&self) -> Option<f32> {
+        let entry = self.0[0][128];
+        if entry == 0 || entry == u16::MAX {
+            return None;
+        }
+        Some(((f64::from(entry) / 65535.0).ln() / (128.0f64 / 255.0).ln()) as f32)
+    }
+}
+
+/// The brightness the game's window shows ([`shown`]): `f32` bits, 0 for none.
+static SHOWN: AtomicU32 = AtomicU32::new(0);
+
+/// The brightness the game's window shows now, as the game's `fGamma` ([`Ramp::gamma`]; NaN for a
+/// ramp not of the game's curve), or `None` while the window shows the picture as drawn (no ramp
+/// set, or one that changes no level). Set by the device on the game's window (never by one
+/// without a window: a replay, the shadow of the real Direct3D 9); the F12 report's place says it
+/// ([`place_line`]).
+pub fn shown() -> Option<f32> {
+    match SHOWN.load(Ordering::Relaxed) {
+        0 => None,
+        bits => Some(f32::from_bits(bits)),
+    }
+}
+
+/// [`shown`] from the ramp the window now applies (`None`: none).
+pub(crate) fn set_shown(ramp: Option<&Ramp>) {
+    let bits = ramp.map_or(0, |r| r.gamma().unwrap_or(f32::NAN).to_bits());
+    SHOWN.store(bits, Ordering::Relaxed);
+}
+
+/// Said once a run, at the first ramp the game's window applies: why a brightness the player
+/// saved long ago may change the picture now.
+pub const FIRST_LINE: &str = "the game's brightness is now shown in its window (new in nv-rs: \
+the original shows it only in exclusive full screen), so a brightness saved in FalloutPrefs.ini \
+(fGamma), also one saved while playing the original in a window, applies from now on";
+
+/// The log line for a ramp the game's window takes: its brightness in plain words.
+pub fn change_line(ramp: &Ramp) -> String {
+    match (ramp.is_identity(), ramp.gamma()) {
+        (true, _) => {
+            "brightness 1.00 (the default): off, the window shows the picture as drawn".to_string()
+        }
+        (false, Some(gamma)) => format!("brightness {gamma:.2} applied in the window"),
+        (false, None) => {
+            "brightness applied in the window (a ramp not of the game's curve)".to_string()
+        }
+    }
+}
+
+/// The F12 report's place line for the brightness the window shows ([`shown`]): the report's
+/// picture is the back buffer, which never has it.
+pub fn place_line() -> String {
+    match shown() {
+        None => "brightness in the window: none (the picture as drawn)\n".to_string(),
+        Some(gamma) if gamma.is_nan() => {
+            "brightness in the window: a ramp not of the game's curve (picture.bmp is without it)\n"
+                .to_string()
+        }
+        Some(gamma) => {
+            format!("brightness in the window: {gamma:.2} (fGamma; picture.bmp is without it)\n")
+        }
     }
 }
 
@@ -443,6 +516,77 @@ mod tests {
         let mut one = direct3d.clone();
         one.0[2][100] = 101 * 257;
         assert!(!one.is_identity());
+    }
+
+    /// The brightness read back from a ramp is the game's `fGamma`: each slider step's own to a
+    /// thousandth, 1.0 for Direct3D 9's identity; none where the middle entry is 0 or full.
+    #[test]
+    fn a_ramps_brightness_is_the_games_fgamma() {
+        for (step, gamma) in menu_gammas().into_iter().enumerate() {
+            let back = games_ramp(gamma).gamma().expect("a curve of the game's");
+            assert!(
+                (back - gamma).abs() < 0.001,
+                "step {step}: {back} for {gamma}"
+            );
+        }
+        let identity = Ramp::from_bytes(&bytes(|_, i| (i * 257) as u16)).unwrap();
+        let one = identity.gamma().expect("a curve");
+        assert!((one - 1.0).abs() < 0.001, "{one}");
+        for middle in [0, u16::MAX] {
+            let mut flat = identity.clone();
+            flat.0[0][128] = middle;
+            assert_eq!(flat.gamma(), None, "{middle}");
+        }
+    }
+
+    /// The brightness in plain words: a ramp's log line (a step's value to two places, the
+    /// identity as off, a ramp not of the game's curve as such), and the F12 report's place line
+    /// from what the window shows, each one line.
+    #[test]
+    fn the_brightness_is_said_in_plain_words() {
+        let g = menu_gammas();
+        assert_eq!(
+            change_line(&games_ramp(g[15])),
+            "brightness 0.60 applied in the window"
+        );
+        assert_eq!(
+            change_line(&games_ramp(g[0])),
+            "brightness 1.40 applied in the window"
+        );
+        let identity = Ramp::from_bytes(&bytes(|_, i| (i * 257) as u16)).unwrap();
+        assert_eq!(
+            change_line(&identity),
+            "brightness 1.00 (the default): off, the window shows the picture as drawn"
+        );
+        let mut own = identity.clone();
+        own.0[0][128] = u16::MAX;
+        assert_eq!(
+            change_line(&own),
+            "brightness applied in the window (a ramp not of the game's curve)"
+        );
+        // What the window shows, for the report (the only test that sets it).
+        set_shown(None);
+        assert_eq!(shown(), None);
+        assert_eq!(
+            place_line(),
+            "brightness in the window: none (the picture as drawn)\n"
+        );
+        set_shown(Some(&games_ramp(g[15])));
+        assert!(shown().is_some_and(|s| (s - 0.6).abs() < 0.001));
+        assert_eq!(
+            place_line(),
+            "brightness in the window: 0.60 (fGamma; picture.bmp is without it)\n"
+        );
+        set_shown(Some(&own));
+        assert!(shown().is_some_and(f32::is_nan));
+        assert_eq!(
+            place_line(),
+            "brightness in the window: a ramp not of the game's curve (picture.bmp is without it)\n"
+        );
+        set_shown(None);
+        for line in [FIRST_LINE.to_string(), change_line(&own), place_line()] {
+            assert_eq!(line.trim_end().lines().count(), 1, "{line}");
+        }
     }
 
     /// The slider's ends and middle as `007d19c0` makes them from its default ends: the darkest

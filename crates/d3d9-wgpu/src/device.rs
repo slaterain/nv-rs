@@ -2209,8 +2209,10 @@ impl Device {
 
     /// `SetGammaRamp` of the swap chain 0, the game's only one: its brightness, applied to the
     /// frames shown in the window from the next `Present` on ([`crate::ramp`]); a ramp that
-    /// changes no level ([`crate::ramp::Ramp::is_identity`]) leaves the plain copy. Another swap
-    /// chain or a ramp of another size is not provided.
+    /// changes no level ([`crate::ramp::Ramp::is_identity`]) leaves the plain copy. On the game's
+    /// window each ramp is one log line with its brightness, and the brightness shown is kept for
+    /// the F12 report ([`crate::ramp::shown`]). Another swap chain or a ramp of another size is not
+    /// provided.
     pub(crate) fn set_gamma_ramp(&mut self, swap_chain: u32, bytes: &[u8]) {
         let ramp = crate::ramp::Ramp::from_bytes(bytes);
         let Some(ramp) = ramp.filter(|_| swap_chain == 0) else {
@@ -2220,12 +2222,17 @@ impl Device {
             ));
             return;
         };
-        if ramp.is_identity() {
-            self.ramp = None;
-            return;
+        let identity = ramp.is_identity();
+        // Said, and kept for the F12 report, by the device on the game's window only: one without
+        // a window (a replay, the shadow of the real Direct3D 9) shows no ramp.
+        if self.surface.is_some() {
+            if !identity {
+                self.warn(crate::ramp::FIRST_LINE);
+            }
+            eprintln!("NV_D3D9 wgpu: {}", crate::ramp::change_line(&ramp));
+            crate::ramp::set_shown((!identity).then_some(&ramp));
         }
-        self.warn("the game's brightness (its gamma ramp) is applied to the frames in the window");
-        self.ramp = Some(crate::ramp::buffer(&self.device, &ramp));
+        self.ramp = (!identity).then(|| crate::ramp::buffer(&self.device, &ramp));
     }
 
     fn make_back_buffers(
