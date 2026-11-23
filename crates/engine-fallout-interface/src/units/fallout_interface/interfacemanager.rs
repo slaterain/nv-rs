@@ -15177,7 +15177,7 @@ mod tests {
     /// row off: none (the exe's checks).
     #[test]
     fn s0286_the_number_pad_types() {
-        let mut e = Engine::new();
+        let e = Engine::new();
         e.set_stewie(stewie::CONSOLE_NUMPAD, true);
         let typed: Vec<Option<u32>> = [82, 79, 73, 74, 78, 83, 181, 55, 156, 199, 0xcf, 0xc8]
             .iter()
