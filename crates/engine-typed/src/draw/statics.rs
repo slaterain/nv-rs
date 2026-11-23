@@ -196,7 +196,11 @@ pub fn take_cursors(e: &Engine, acc: Ptr<BSShaderAccumulator>) {
     if acc.addr() == 0 {
         return;
     }
-    let n = super::packet::renderer_count(e, acc);
+    // The renderer count as guest memory holds it: the cut's copy of it holds the same.
+    let n = e.global::<u32>(
+        acc.addr()
+            .wrapping_add(BSShaderAccumulator::uiBatchRendererCount.off),
+    );
     if n == 0 {
         return;
     }
