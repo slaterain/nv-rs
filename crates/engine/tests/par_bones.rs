@@ -665,6 +665,8 @@ fn stand_ins(e: &mut Engine) {
         (0x011a_8000, 0x1000),
         (0x011f_3000, 0x1000),
         (0x0102_4000, 0x1000),
+        // The unset bool (0109a914: 2 in the exe) the visibility controller starts its value with.
+        (0x0109_a000, 0x1000),
     ] {
         e.map(page, len);
     }
@@ -674,6 +676,7 @@ fn stand_ins(e: &mut Engine) {
         }
     }
     e.mem.set_u64(0x0102_41b0, f64::from(f32::MIN).to_bits());
+    e.mem.set_u8(0x0109_a914, 2);
     e.mem.set_u64(0x0101_1588, 0.5f64.to_bits());
     e.mem.set_u64(0x0101_2070, 1.0f64.to_bits());
     for (i, v) in [1u32, 2, 0].iter().enumerate() {
