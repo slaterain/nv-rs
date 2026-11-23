@@ -2952,3 +2952,67 @@ fn the_render_threads_frame_is_counted_before_main_stops_waiting_for_it() {
     assert!(!hitch::timing());
     s.finish();
 }
+
+/// TEST DATA: a backend whose first idle turn polls for 30 ms (a blocking call, timed as one).
+struct IdlePoll {
+    turns: Arc<AtomicU64>,
+}
+
+impl Backend for IdlePoll {
+    fn execute(&mut self, _cmd: Cmd<Data<'_>>) -> Reply {
+        Reply::None
+    }
+
+    fn idle(&mut self) -> bool {
+        if self.turns.fetch_add(1, Ordering::SeqCst) == 0 {
+            hitch::timed(hitch::Call::Poll, || {
+                std::thread::sleep(Duration::from_millis(30))
+            });
+        }
+        false
+    }
+}
+
+/// The render thread's idle work is counted whole as its idle time; its calls there are in none
+/// of the parts of its time on the game's commands (so no part is larger than that time), and
+/// the longest of them is still named.
+#[test]
+fn the_render_threads_idle_calls_stay_out_of_its_commands_parts() {
+    let _one = hitch::tests::SERIAL
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    hitch::set_on(true);
+    let _ = hitch::take_longest();
+    let turns = Arc::new(AtomicU64::new(0));
+    let before = hitch::snapshot();
+    let mut s = Stream::threaded(
+        Box::new(IdlePoll {
+            turns: Arc::clone(&turns),
+        }),
+        Settings::default(),
+    );
+    let start = std::time::Instant::now();
+    while turns.load(Ordering::SeqCst) == 0 {
+        assert!(start.elapsed() < Duration::from_secs(10), "no idle turn");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    // Carried out after the idle turn ended (and handed its counts over).
+    s.submit(Part::Present.cmd());
+    s.finish();
+    let now = hitch::snapshot();
+    let d = |c: hitch::Count| now[c as usize] - before[c as usize];
+    assert_eq!(
+        d(hitch::Count::RenderPollNs),
+        0,
+        "the idle poll is in no part"
+    );
+    assert!(
+        d(hitch::Count::RenderIdleNs) >= 30_000_000,
+        "{}",
+        d(hitch::Count::RenderIdleNs)
+    );
+    let [render, _] = hitch::take_longest();
+    let (call, ns) = render.expect("the render thread's longest call");
+    assert_eq!(call, hitch::Call::Poll);
+    assert!(ns >= 30_000_000, "{ns}");
+}

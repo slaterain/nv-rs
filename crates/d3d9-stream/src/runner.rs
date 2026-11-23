@@ -1261,11 +1261,14 @@ fn render(shared: &Shared, mut backend: Box<dyn Backend>, check: bool) {
                 // Nothing queued: the backend's idle work (outside the lock), then a sleep until
                 // the next chunk, or a short one while the backend has more of it.
                 drop(q);
-                let idled = Instant::now();
+                // Its time counted whole, apart from the commands' (its calls only by the longest).
+                let idled = crate::hitch::timing().then(Instant::now);
                 let idle =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backend.idle()));
-                crate::hitch::add_time(crate::hitch::Count::RenderIdleNs, idled.elapsed());
-                crate::hitch::publish();
+                if let Some(t) = idled {
+                    crate::hitch::add_time(crate::hitch::Count::RenderIdleNs, t.elapsed());
+                }
+                crate::hitch::publish_idle();
                 q = lock(&shared.queue);
                 let more = match idle {
                     Ok(again) => again,
@@ -1303,7 +1306,9 @@ fn render(shared: &Shared, mut backend: Box<dyn Backend>, check: bool) {
         }));
         let busy = started.elapsed();
         // Counted before the chunk is marked done: a Present in it wakes main, whose frame the counts belong to.
-        crate::hitch::add_time(crate::hitch::Count::RenderBusyNs, busy);
+        if crate::hitch::timing() {
+            crate::hitch::add_time(crate::hitch::Count::RenderBusyNs, busy);
+        }
         crate::hitch::publish();
         let mut q = lock(&shared.queue);
         q.busy += busy;
@@ -1363,10 +1368,12 @@ fn carry_out_slot(shared: &Shared, backend: &mut dyn Backend, check: bool, cut: 
                     slot.gone = true;
                 } else {
                     q.renderer_sleeps = true;
-                    let waited = Instant::now();
+                    let waited = crate::hitch::timing().then(Instant::now);
                     q = shared.work.wait(q).unwrap_or_else(PoisonError::into_inner);
                     q.renderer_sleeps = false;
-                    crate::hitch::add_time(crate::hitch::Count::SlotWaitNs, waited.elapsed());
+                    if let Some(t) = waited {
+                        crate::hitch::add_time(crate::hitch::Count::SlotWaitNs, t.elapsed());
+                    }
                     continue;
                 }
                 let wake = q.waiters > 0;
@@ -1382,7 +1389,9 @@ fn carry_out_slot(shared: &Shared, backend: &mut dyn Backend, check: bool, cut: 
             carry_out(&chunk, backend, check, &mut hash)
         }));
         let busy = started.elapsed();
-        crate::hitch::add_time(crate::hitch::Count::RenderBusyNs, busy);
+        if crate::hitch::timing() {
+            crate::hitch::add_time(crate::hitch::Count::RenderBusyNs, busy);
+        }
         crate::hitch::publish();
         let mut q = lock(&shared.queue);
         q.busy += busy;

@@ -45,7 +45,8 @@ pub enum Count {
     /// The render thread's time carrying out the game's commands (ns): its calls and waits below included, the rest
     /// is its own work on the commands.
     RenderBusyNs,
-    /// The render thread's idle work between the game's commands (the occlusion counts it polls for), ns.
+    /// The render thread's idle work between the game's commands (the occlusion counts it polls for), ns: its calls are in
+    /// none of the parts below (they are not its time on the commands), only named when one is the longest.
     RenderIdleNs,
     /// The render thread's waits at a cut's mark for the drawing side's commands, ns.
     SlotWaitNs,
@@ -379,6 +380,19 @@ pub fn publish() {
         }
         LONGEST[side as usize - 1].fetch_max(t.longest.replace(0), Relaxed);
     });
+}
+
+/// [`publish`] after the render thread's idle work ([`crate::Backend::idle`]): its calls are not
+/// part of its time on the game's commands (that time is [`Count::RenderIdleNs`], counted whole),
+/// so only the longest of them is handed over, and their parts are dropped.
+#[inline]
+pub fn publish_idle() {
+    THREAD.with(|t| {
+        for c in &t.parts {
+            c.set(0);
+        }
+    });
+    publish();
 }
 
 /// A call and its time in one word that orders by the time.
