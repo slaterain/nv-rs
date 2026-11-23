@@ -49,6 +49,10 @@ const MAX_THREADS: u32 = 8;
 ///   `011f126c`, ON in the game's defaults) and the temporary effects' update (items `00974960`, each effect's slot
 ///   0x94, from `009746c0`; `bTaskletTempEffectsUpdate` `011f127c`, off in the game's defaults). The settings' names
 ///   and defaults are the exe's static setting constructors' (`00fa9800`, `00fa9830`, `00fa9860`).
+/// A node two items update at once (a parent of more than ten children expanded while one of them is listed too, a
+/// listed node inside a listed subtree) can end with its bound a few last bits off, as the interleaving falls: each
+/// item resets the bound and merges the children's into it in place. The exe's two runners race the same way; more
+/// runners make it likelier. Its transform is exact, and its bound stays the merge of the same children's.
 /// Read once; unset, 1 or anything else: the exe's one thread.
 fn requested_threads() -> u32 {
     #[cfg(test)]

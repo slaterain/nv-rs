@@ -11,8 +11,10 @@
 //! - the actors' Havok sync (`0087cfb0`: its gates the game's, the sync itself, `bhkNiCollisionObject::Synchronize`
 //!   `00c6c3d0`, a recording stand-in: the Havok side is not the subject here).
 //!
-//! With four and with eight threads the world transforms and bounds of every node, and the actors synchronized
-//! (each once, with 2), are those of the exe's one thread; more than two runners took items. No game files.
+//! With four and with eight threads every node's world transform, every bound but those of the nodes two items update
+//! at once (there within the last bits: each item resets the bound and merges into it in place, and the exe's two
+//! runners race the same way), and the actors synchronized (each once, with 2), are those of the exe's one thread;
+//! more than two runners took items. No game files.
 use engine as _;
 use engine_bs::units::bsmain::bsparalleltaskmanager::set_threads_for_tests;
 use engine_core::{args, exe::Import, real_threads, Engine, Ret};
