@@ -753,6 +753,18 @@ pub fn cut_for_thread(
         let _ = capture::end(e);
         return None;
     }
+    // The world draw's lists go with the packet (`capture::take_lists`): the drawing side walks and empties them there,
+    // guest memory holds a fresh frame's zeros meanwhile. Only render mode 0's draw is typed through the list
+    // accessors; another mode's draw is a translation reading the lists in place, so such a frame draws on main.
+    if packet::render_mode(e, acc) != 0 {
+        let _ = capture::end(e);
+        return None;
+    }
+    let mut words = Vec::new();
+    for i in 0..packet::renderer_count(e, acc) {
+        detach::list_words(e, packet::renderer(e, acc, i).addr(), &mut words);
+    }
+    capture::take_lists(e, &words);
     capture::detach(e)
 }
 

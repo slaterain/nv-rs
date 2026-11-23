@@ -206,13 +206,14 @@ page is checked by a test (`the_readme_counts_the_built_commands` in `crates/jip
 
 ### Game patches
 
-JIP's game patches change the game's own code. 171 of its 183 are built, inert until
-JIP answers "installed"; three more are folded into other rows, one waits and eight are left out on
-purpose (below; that list also names Enhanced Camera's patch, which is not one of the 183). They include:
+JIP's game patches change the game's own code. 174 of its 183 are built, inert until
+JIP answers "installed"; three more are folded into other rows and six do nothing on this port
+(below; that list also names Enhanced Camera's patch, which is not one of the 183). They include:
 
 - **Framework and the player:** the patch framework, the first two fixes, the player's update 3D
   (both views, weapon and queued references), the detection patch (forced detection values and the
-  detection fix), the player kept at a reference's node while a script synchronizes them.
+  detection fix), the player kept at a reference's node while a script synchronizes them, a busy
+  script runner asked to run again skipping its names and log line.
 - **Projectiles and combat:** fired projectiles' ammo, count and split beams; the hit and combat
   fixes (equip notices, life state saved, kill challenges, impact data and hit blood, weapon wear,
   on-hit weapon effects, creature spread, the player's killer kept); JIP's hit damage (damage
@@ -236,7 +237,8 @@ purpose (below; that list also names Enhanced Camera's patch, which is not one o
   shape, `SetScale` clamped, the weapon node cleared, clouds after leaving a building, the water
   lookup, save and global fixes, fresh mod logs, markers by id, magic effect fixes, loading screens
   made for a place (`bLoadScreenFix`), JIP's light data (flicker and pulse, light editor ids,
-  lights tagged in mod meshes).
+  lights tagged in mod meshes), the process lists' time refresh made at JIP's deferred start
+  instead of at the game's start-up.
 - **Weapons and models:** a modded weapon's "+" in the crosshair, modded weapons' "Name+" in every
   item list, NPCs showing their weapon mods and random NPC weapon mods (`bNPCWeaponMods`), the gun
   wobble as JIP works it out (and the actors a script spares it), body slots a script hides in
@@ -260,13 +262,18 @@ purpose (below; that list also names Enhanced Camera's patch, which is not one o
   they pass (`SetProjectileLight`'s light included), and a muzzle flash's and an explosion's
   light shine at the light record's own brightness. Each lit shot adds a light while it flies,
   with no cap, as in JIP.
+- **Loading:** JIP's fixed-string pool in place of the game's slow store of name strings (a hash
+  lookup for every model, node and animation name a load makes; unused names freed at the same
+  clean-ups as the game's).
 
-Not yet:
+Not built, because they do nothing on this port:
 
-- Its fixed-string pool: it waits for the 64-bit move.
-
-Left out on purpose: two patches that only make the game faster; the editor's, NVAC's and Enhanced
-Camera's patches; a start-up order change; JIP's own start-up; and one that xNVSE already makes.
+- four tiny functions JIP shortens: the port's code for them is already just the answer;
+- the expression buffer JIP grows: the built-in xNVSE writes the same bytes;
+- JIP's own start-up hook: it hands back the same camera and only fills JIP's own copies;
+- the editor's two patches: the port does not run the editor (GECK);
+- NVAC's console alerts and Enhanced Camera's ground fix: they patch those programs' DLLs, which the
+  port does not load (Enhanced Camera's fix is not one of the 183).
 
 ## Mod Configuration Menu (MCM) built in
 
@@ -291,12 +298,12 @@ More in [FIXES.md, "UI Organizer"](FIXES.md#ui-organizer).
 
 ## lStewieAl's Tweaks built in
 
-🔨 Its engine fixes and tweaks, with nothing to install. 158 of its changes are built:
+🔨 Its engine fixes and tweaks, with nothing to install. 184 of its changes are built:
 
 - 72 of its crash and leak fixes;
 - Engine Optimizations' first change (a save's changed-forms map);
-- 85 other fixes and tweaks: 8 to the engines and the console; 14 to forms, cells, scripts, saves
-  and sound; 32 to AI, actors and the player; 31 to menus and the HUD.
+- 111 other fixes and tweaks: 16 to the engines and the console; 14 to forms, cells, scripts, saves
+  and sound; 32 to AI, actors and the player; 49 to menus and the HUD.
 
 - Each change is on with the fixes preset and has its own off key in `Fallout.ini`'s
   `[nv-rs Stewie]`.
@@ -312,6 +319,20 @@ More in [FIXES.md, "UI Organizer"](FIXES.md#ui-organizer).
   towers' stairs and the vault, utility and basement stairs) counts every riser as a step, so the
   player and NPCs walk up and down them without catching on a riser or being pushed back. Two
   Tweaks slips are not copied, under the missing-data guard row.
+- Menus' input: the inventory keeps its scroll place when the Pip-Boy closes; typed text uses
+  shift as it is now; arrow keys keep a menu's selection from the mouse; the pad's key repeat no
+  longer carries over; the left thumbstick moves the console's pointer; menus get L3 and R3; the
+  Pip-Boy light fades when it should; the console shows the selected reference's model path.
+- Pad and keyboard in menus and the console: the pad's activate button clicks and B closes the
+  console, the D-pad, A and right stick work the console, RB (not E) picks in the console,
+  shift-arrows read shift as it is now, closing a book no longer closes the Pip-Boy, F1 to F3 wait
+  while typing, menus' keyboard buttons answer number keys, Tab, Caps Lock, Alt and F-keys, and a
+  terminal behind a trade menu leaves the mouse alone. All work with JIP's console key fix on or
+  off.
+- More small fixes: Escape, the console key and Print Screen work with a pad connected;
+  backslash can be bound; NPCs' grenades no longer show the player a "can't remove" message; a
+  plugin's map marker shows its own faction's reputation; opening the map keeps forced
+  full-detail trees; the TestAllCells console command no longer re-reads settings per cell.
 - The remaining crash fixes and tweaks come next.
 
 More in [FIXES.md, "lStewieAl's Tweaks"](FIXES.md#lstewieals-tweaks).
@@ -329,14 +350,14 @@ More in [FIXES.md, "lStewieAl's Tweaks"](FIXES.md#lstewieals-tweaks).
   mods" lays them over the game, then the hand-filled `mods` folder (`crates/mod-install`, which
   Play.exe uses). Mod archives in the `mods` folder are no longer copied into the game.
 - On Linux and macOS, `./play.sh --mods` plays with them the same way, in a profile of its own.
-- The text chooser (`crates/mod-chooser`, the same on all three systems: "Install mods.cmd" on
-  Windows, `./play.sh --install-mods` on Linux and macOS) lists the archives and installed mods,
+- The text chooser (`crates/mod-chooser`, the same on all three systems: the launcher's `> Mods`,
+  which runs Play.exe's or play.sh's `--install-mods` in its window) lists the archives and installed mods,
   asks each installer's questions in plain words, and installs and removes mods.
 
 ## The launcher
 
 🔨 One window in the look of the game's own terminals, where the player plays, changes the
-settings and the renderer and (next) picks mods. `Play.exe` opens it (`crates/nv-launcher`).
+settings and the renderer, installs mods and imports saves. `Play.exe` opens it (`crates/nv-launcher`).
 
 - The terminal's font, colour, header lines and intro are read from the player's game at every
   start (nothing of the game ships); before the game is found it has the port's own plain look.
@@ -347,7 +368,9 @@ settings and the renderer and (next) picks mods. `Play.exe` opens it (`crates/nv
   it has not been tried on those systems yet.
 - `> Settings` has the twelve settings Settings.cmd had (saved at once into both profiles, with
   and without mods) and a Testing list (the new lighting, JIP LN built in). Settings.cmd is gone.
-- Mods, Import saves and Help move in next; the other `.cmd` files and play.sh still work.
+- `> Mods` installs or removes mods from archives, and `> Import saves` copies the player's saves
+  over (shown when there are saves to import); the package's `.cmd` files are gone (#907). Help
+  comes next; play.sh still works.
 
 ## Modern graphics (wgpu)
 
@@ -370,6 +393,11 @@ original's Direct3D 9 instead, which also draws by itself where Vulkan and Direc
   NVIDIA.
 - F11 in the game shows a frame-rate counter (frames a second and the slowest recent frame) in the
   corner.
+- The brightness slider (Settings > Display) changes the picture, on every system. This differs
+  from the original, at the maintainer's request: the original shows its brightness only in
+  exclusive full screen, which nv-rs does not have (its full screen is the borderless window), so
+  in a window the slider did nothing. At the default brightness the picture is unchanged. The
+  Direct3D 9 renderer still shows no brightness in a window.
 
 ## Game pads
 

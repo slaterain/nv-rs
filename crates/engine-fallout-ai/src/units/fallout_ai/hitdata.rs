@@ -1059,6 +1059,19 @@ pub fn hit_data_determine_outcome(e: &mut Engine, this: Ptr<HitData>) {
         let count = e.mem.u8(command.wrapping_add(8));
         shots = x87_store32(f64::from(count));
     }
+    // lStewieAl's Tweaks' row S0149 (`VATSFatalCheckDifficulty`, its `OnVATSCheckFatalDamageHook`
+    // called at `0x9B754A`): the multiplier is also scaled by the player's difficulty's
+    // `fDiffMultHPByPC` (the setting pointers at `0119b324` indexed by the player's difficulty at
+    // +0x7B8, the value at +4), so the kill test sees the damage the hit will really do.
+    if e.stewie(engine_core::extend::stewie::VATS_FATAL_CHECK_DIFFICULTY) {
+        let player = e.global::<u32>(0x011d_ea3c);
+        let difficulty = e.mem.u32(player + 0x7b8);
+        let setting = e
+            .mem
+            .u32(0x0119_b324u32.wrapping_add(difficulty.wrapping_mul(4)));
+        let multiplier = e.mem.u32(setting + 4);
+        shots = x87_store32(x87_mul(x87_load32(multiplier), x87_m32(shots)));
+    }
     let mut chance = 0u32;
     let mut sure = false;
     let mut explodes = 0u8;
@@ -2919,6 +2932,52 @@ mod b035_tests {
         assert_eq!(e.get(hit, HitData::fTotalDamage), 36.0f32.to_bits());
         // No aggressor: the fatigue damage stays.
         assert_eq!(e.get(hit, HitData::fFatigueDamage), 3.0f32.to_bits());
+    }
+
+    /// S0149 (`VATSFatalCheckDifficulty`): the kill test (flag 0x10) compares the health (20)
+    /// with the health damage times the multiplier; with the row on the multiplier is also
+    /// scaled by the player's difficulty's `fDiffMultHPByPC` (difficulty 3 here, its setting's
+    /// value at +4), so 15 damage kills at a 2.0 multiplier and 30 does not at 0.5. The hit's
+    /// damage itself is not changed.
+    #[test]
+    fn s0149_the_kill_test_counts_the_difficulty() {
+        for (on, damage, multiplier, kills) in [
+            (false, 15.0f32, 2.0f32, false),
+            (true, 15.0, 2.0, true),
+            (false, 30.0, 0.5, true),
+            (true, 30.0, 0.5, false),
+        ] {
+            let mut e = Engine::new();
+            constants(&mut e);
+            e.set_stewie(engine_core::extend::stewie::VATS_FATAL_CHECK_DIFFICULTY, on);
+            let world = World::new(&mut e);
+            let target = world.object(&mut e);
+            world.answer(target, 0x100, 1);
+            world.answer_float(target + 0xa4, 0xc, 20.0);
+            for page in [0x0119_b000u32, 0x011d_e000] {
+                if !e.mem.is_mapped(page) {
+                    e.map(page, 0x1000);
+                }
+            }
+            let player = e.mem.alloc(0x800);
+            e.mem.set_u32(player + 0x7b8, 3);
+            e.mem.set_u32(0x011d_ea3c, player);
+            let setting = e.mem.alloc(8);
+            e.mem.set_f32(setting + 4, multiplier);
+            e.mem.set_u32(0x0119_b324 + 3 * 4, setting);
+            let hit = Ptr::<HitData>::new(e.mem.alloc(0x64));
+            e.set(hit, HitData::pTarget, target);
+            e.set(hit, HitData::eDamageLimb, u32::MAX);
+            e.set(hit, HitData::fHealthDamage, damage.to_bits());
+            quiet(&mut e, &[SET_FLAG]);
+            e.call_log = Some(vec![]);
+            e.call(0x009b_73d0, &args![hit]);
+            let log = e.call_log.take().unwrap();
+            let flags: Vec<u32> = calls(&log, SET_FLAG).iter().map(|a| a[1]).collect();
+            assert_eq!(flags == vec![0x10], kills, "on {on} damage {damage}");
+            assert!(flags.is_empty() || flags == vec![0x10]);
+            assert_eq!(e.get(hit, HitData::fHealthDamage), damage.to_bits());
+        }
     }
 }
 

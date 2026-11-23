@@ -1132,30 +1132,41 @@ pub fn task_queue_interface_task_unpack_func(e: &mut Engine, task: Ptr) {
             e.call(0x00552390, &args![e.mem.u32(task.addr() + 4)]);
         }
         4 => {
+            // The physics results applied to the scene graph (queued by `TES`'s update, `00453550`, through
+            // `0087aa90`). The hitch log times its three steps (`engine_core::stage_time::havok_sync`: a clock read
+            // at each, none with the log off or on another thread); the counts are the ones the code reads anyway.
+            let mut timed = engine_core::stage_time::havok_sync();
+            let mut actors = 0;
             if typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, 0x011df244u32)) != 0 {
                 let count =
                     typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, 0x011df244u32));
+                actors = count;
                 e.with_stack(16, |e, descriptor| {
                     fn_0087cf10(e, descriptor, 0x0087cfb0, 0x011df244, count);
                     e.call(0x00c44c90, &args![e.global::<u32>(0x01202df4), descriptor]);
                 });
                 e.call(0x008454f0, &args![0x011df244u32, 0u32]);
             }
+            timed.actors(actors);
+            let mut nodes = 0;
             if typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, 0x011df1c4u32)) != 0 {
                 e.with_stack(36, |e, array| {
                     scrap_array_construct(e, array);
                     fn_0087d030(e, array);
                     let count = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, array));
+                    nodes = count;
                     let descriptor = Ptr::new(array.addr() + 20);
                     fn_0087cf10(e, descriptor, 0x0087cf50, array.addr(), count);
                     e.call(0x00c44c90, &args![e.global::<u32>(0x01202df4), descriptor]);
                     scrap_array_destruct(e, array);
                 });
             }
+            timed.nodes(nodes);
             let gate = e.call(0x00408d60, &args![0x011df1b8u32]).u32();
             if e.mem.u8(gate) == 0 {
                 e.call(0x00453900, &args![e.global::<u32>(0x011dea10)]);
             }
+            timed.end();
         }
         5 => {
             let object = e.mem.u32(task.addr() + 4);

@@ -250,6 +250,16 @@ fn children_size(e: &Engine, node: u32) -> u32 {
     u32::from(e.mem.u16(node + 0xa6))
 }
 
+/// The bound part of [`update_downward`]'s children loop alone (no child walked): the node's world
+/// bound taken again from its children's bounds as they are now, as the loop takes it. The parallel
+/// bone pass (`crate::process::bones`) runs it on main above a subtree it ran there after the
+/// node's helper walk.
+pub(crate) fn redo_merged_bound(e: &mut Engine, this: Ptr<NiNode>) {
+    let t = this.addr();
+    let count = children_size(e, t);
+    update_children(e, t, count, true, &mut |_, _| {});
+}
+
 // Typed from 00a5dd70
 /// `NiNode::UpdateDownwardPass` (`thiscall(this, data, flags)`): the object's controllers when the
 /// data says so (`004eff50`), `UpdateWorldData` (vtable +0xb8), then each child's `UpdateDownwardPass`

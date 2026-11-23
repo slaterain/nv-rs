@@ -97,6 +97,14 @@ fn prepare(e: &mut Engine) {
     if !e.is_registered(0x0048_2090) {
         e.register(0x0048_2090, |_, _| Ret::default());
     }
+    // The game's fixed-string table (`00a5b630` makes it, `00a5b690` makes a string, `00a5b460`
+    // frees the unused ones; JIP's wraps there: group GT, G43), when the test engine has no
+    // translation of them: stand-ins that do nothing and answer 0 (JIP's wraps replace them).
+    for addr in [0x00a5_b630, 0x00a5_b690, 0x00a5_b460] {
+        if !e.is_registered(addr) {
+            e.register(addr, |_, _| Ret::default());
+        }
+    }
     if !e.is_registered(0x0041_8b10) {
         e.register(0x0041_8b10, |e, a| Ret {
             eax: u32::from(e.mem.u8(a[0] + 0xf) & 0x40 != 0),

@@ -365,6 +365,8 @@ fn layer_funcs() -> Vec<(u32, AbiFn)> {
 fn layer_imports() -> Vec<(&'static str, &'static str, AbiFn)> {
     // The game's texture making hands a file over before the renderer's lock (`engine_core::texture_ahead`).
     engine_core::texture_ahead::set(d3dx::prepare_texture);
+    // A thread's waits for the render thread, noted for the hitch log's naming of a lock's holder.
+    d3d9_stream::hitch::set_wait_hook(engine_core::thread_cpu::note_render_wait);
     let k = "KERNEL32.dll";
     #[allow(unused_mut)]
     let mut imports = vec![

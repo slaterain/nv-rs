@@ -1570,11 +1570,15 @@ fn create_from_file(
                 // thread's encoding does not hold up other threads' platform calls. The device
                 // calls that fill the texture come after, under the kernel lock again.
                 let caps = device_caps(e, device);
-                // Worked out ahead on this thread before the game took its renderer lock, when it could be.
+                // Worked out ahead on this thread before the game took its renderer lock, when it could be. Else
+                // here, with the table's last-error code kept across the window: another thread's platform call
+                // meanwhile does not leave its own for the game to read after this call.
                 let made = match take_prepared(&bytes, cube, precision, device.addr(), &caps) {
                     Some(made) => made,
-                    None => engine_core::real_threads::without_kernel_lock(e, || {
-                        translated_texture(&bytes, cube, precision, &caps)
+                    None => engine_core::real_threads::keeping_table_last_error(e, |e| {
+                        engine_core::real_threads::without_kernel_lock(e, || {
+                            translated_texture(&bytes, cube, precision, &caps)
+                        })
                     }),
                 };
                 match made {

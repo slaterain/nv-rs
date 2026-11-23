@@ -86,6 +86,7 @@ pub mod stage_time;
 pub mod static_exit;
 pub mod static_init;
 pub mod texture_ahead;
+pub mod thread_cpu;
 pub mod thread_host;
 pub mod typed;
 pub mod types;
