@@ -203,9 +203,10 @@ pub(crate) fn buffer(device: &wgpu::Device, ramp: &Ramp) -> wgpu::Buffer {
     buffer
 }
 
-/// The game's ramp for `gamma` as `004dcef0` builds it: entry `i` is `(i / 255)^gamma * 65535
-/// + 0.5`, truncated (`i / 255` rounded to a float, the power a float, the rest in double), the
-/// same for red, green and blue. For tests (the platform passes the game's own ramp on).
+/// The game's ramp for `gamma` as `004dcef0` builds it: entry `i` is
+/// `(i / 255)^gamma * 65535 + 0.5`, truncated (`i / 255` rounded to a float, the power a float,
+/// the rest in double), the same for red, green and blue. For tests (the platform passes the
+/// game's own ramp on).
 pub fn games_ramp(gamma: f32) -> Ramp {
     let colour: [u16; ENTRIES] = std::array::from_fn(|i| {
         let level = (i as f64 / 255.0) as f32;
@@ -294,8 +295,8 @@ mod tests {
         );
         let target =
             texture(wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC);
-        let layout = layout(&device);
-        let pipeline = pipeline(&device, &layout, format);
+        let layout = layout(device);
+        let pipeline = pipeline(device, &layout, format);
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
         let rect = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
@@ -311,7 +312,7 @@ mod tests {
             m.copy_from_slice(&uv);
         }
         rect.unmap();
-        let ramp = buffer(&device, ramp);
+        let ramp = buffer(device, ramp);
         let view = source.create_view(&Default::default());
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
