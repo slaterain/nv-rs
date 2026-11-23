@@ -346,11 +346,14 @@ fn actor(w: &mut World, e: &mut Engine, k: &Kinds, x: f32, extra: Extra, lightin
         skinned(w, e, k, root, &skin_bones);
     }
     if extra == Extra::NodeNoBound {
-        // A node without a bound that takes one from its children, with a bounded geometry under
-        // it: its children loop allocates the bound (`005467e0`), which must happen on main.
-        let n = bare_node(w, e, k.node, accum, [0.0, -0.1, 0.0]);
-        e.mem.set_u32(n + 0x30, 0x0008_0000);
-        geometry(w, e, k, n, 0.4, true);
+        // Two nested nodes without a bound that take theirs from their children, a bounded geometry
+        // under the inner one: both children loops allocate a bound (`005467e0`), which must happen
+        // on main (the look-ahead needs two steps to see it).
+        let outer = bare_node(w, e, k.node, accum, [0.0, -0.1, 0.0]);
+        e.mem.set_u32(outer + 0x30, 0x0008_0000);
+        let inner = bare_node(w, e, k.node, outer, [0.0, 0.0, 0.1]);
+        e.mem.set_u32(inner + 0x30, 0x0008_0000);
+        geometry(w, e, k, inner, 0.4, true);
     }
     if extra == Extra::Controller {
         let cvt = w.vtable(e, &[(0x94, CONTROLLER_FN)]);
