@@ -2752,6 +2752,12 @@ pub fn set_report_hitch_totals(totals: Option<(u64, u64, u64)>) {
     shot::set_hitch_totals(totals);
 }
 
+/// Tests (the host's): the F12 report's `hitches.txt` as it would be written now.
+#[doc(hidden)]
+pub fn report_hitches_for_test() -> String {
+    shot::hitches_text()
+}
+
 /// The Presents submitted so far (the hitch log's loading-screen test, each frame): the stream's own count, read
 /// without the render thread's queue lock. None before the backend's stream.
 pub fn present_count(e: &mut Engine) -> Option<u32> {
