@@ -180,8 +180,11 @@ pub fn get_private_profile_string_a(
 /// null key the section taken out (`removed_section`). Measured on scratch files with this call
 /// (2026-11-22, `build43-scratch/measure/player-bugs/ini-write`, 99 cases, and the extenders'
 /// 2026-11-16 ones the rules were made from):
-/// - true, the last error 0; a file not there is made (a removal makes it empty), the last error
-///   `ERROR_FILE_NOT_FOUND`; a folder not there: false, `ERROR_PATH_NOT_FOUND`, nothing made;
+/// - true, the last error 0, or `ERROR_INVALID_PARAMETER` (87) when the value, the section or the
+///   key is empty (written all the same: `a=`, `[]`, `=6`; measured `value-empty`,
+///   `empty-section-name`, `empty-key-name`); a file not there is made (a removal makes it
+///   empty), the last error `ERROR_FILE_NOT_FOUND`; a folder not there: false,
+///   `ERROR_PATH_NOT_FOUND`, nothing made;
 /// - a null section: false, `ERROR_FILE_NOT_FOUND`, nothing changed;
 /// - text the profile calls were not measured on (a 0 byte, not UTF-16 LE with its mark,
 ///   `engine_core::mod_files::text`) is left as it is: false, `ERROR_NOT_SUPPORTED`, said once.
@@ -226,8 +229,13 @@ pub fn write_private_profile_string_a(
             return 0;
         }
     }
+    let empty = section.is_empty()
+        || key.as_deref().is_some_and(<[u8]>::is_empty)
+        || value.as_deref().is_some_and(<[u8]>::is_empty);
     e.kernel.last_error = if old.is_none() {
         files::ERROR_FILE_NOT_FOUND
+    } else if empty {
+        files::ERROR_INVALID_PARAMETER
     } else {
         files::ERROR_SUCCESS
     };
@@ -811,6 +819,39 @@ mod tests {
         );
         let path = profile_path(&mut e, &gone);
         assert_eq!(files::read_whole(&e, &path).unwrap(), b"");
+    }
+
+    /// An empty value, section or key is written, true, with the last error
+    /// `ERROR_INVALID_PARAMETER` (87), as Windows answered (measured 2026-11-22: `value-empty`,
+    /// `empty-section-name`, `empty-key-name`); a value that is not empty answers 0.
+    #[test]
+    fn an_empty_value_section_or_key_is_written_with_last_error_87() {
+        let folder = scratch("empty");
+        std::fs::write(folder.0.join("e.ini"), b"[A]\r\na=1\r\n").unwrap();
+        let file = [game_path(&folder.0), br"\e.ini".to_vec()].concat();
+        let mut e = engine();
+        let path = profile_path(&mut e, &file);
+        assert_eq!(
+            write(&mut e, Some(b"A"), Some(b"a"), Some(b""), &file),
+            (1, files::ERROR_INVALID_PARAMETER)
+        );
+        assert_eq!(files::read_whole(&e, &path).unwrap(), b"[A]\r\na=\r\n");
+        assert_eq!(
+            write(&mut e, Some(b"A"), Some(b""), Some(b"6"), &file),
+            (1, files::ERROR_INVALID_PARAMETER)
+        );
+        assert_eq!(
+            write(&mut e, Some(b""), Some(b"b"), Some(b"6"), &file),
+            (1, files::ERROR_INVALID_PARAMETER)
+        );
+        assert_eq!(
+            files::read_whole(&e, &path).unwrap(),
+            b"[A]\r\na=\r\n=6\r\n[]\r\nb=6\r\n"
+        );
+        assert_eq!(
+            write(&mut e, Some(b"A"), Some(b"a"), Some(b"1"), &file),
+            (1, 0)
+        );
     }
 
     /// A file with a 0 byte that is not UTF-16 LE with its mark is left as it is (the profile
