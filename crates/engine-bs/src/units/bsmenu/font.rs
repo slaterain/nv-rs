@@ -299,6 +299,21 @@ fn letter_advance(e: &mut Engine, letter: u32) -> i32 {
     ftol(e, advance)
 }
 
+/// The six advances of `PrepText` (`0xA138E1`, `0xA1391C`, `0xA1398D`, `0xA13AAC`, `0xA13B59`,
+/// `0xA13B96`, each on the letter at `[EBP-0x734]`): [`letter_advance`]. With lStewieAl's Tweaks'
+/// S0240 (`FontDimensionMismatchFix`'s `OnPrepTextComputeWidthHook`) the letter's
+/// `fLeadingEdge` (+0x2C) is added after `fWidth` and before `fSpacing`, as the letters are
+/// drawn, so text measured in a monospace font (font 5 keeps its extra space there) is as wide
+/// as it shows.
+fn prep_text_advance(e: &mut Engine, letter: u32) -> i32 {
+    if !e.stewie(engine_core::extend::stewie::FONT_WIDTH_COUNTS_LEADING_EDGE) {
+        return letter_advance(e, letter);
+    }
+    let advance = (e.mem.f32(letter + 0x24) as f64 + e.mem.f32(letter + 0x2c) as f64)
+        + e.mem.f32(letter + 0x30) as f64;
+    ftol(e, advance)
+}
+
 /// The letter of the signed byte `c` (the code indexes with `MOVSX` here).
 fn signed_letter(font_data: u32, c: i8) -> u32 {
     font_data
@@ -2199,12 +2214,12 @@ pub fn font_prep_text(e: &mut Engine, this: Ptr<Font>, text: u32, data: Ptr<Text
                     }
                     icon_index = icon_index.wrapping_add(1);
                 }
-                let advance = letter_advance(e, current);
+                let advance = prep_text_advance(e, current);
                 let width = advance.wrapping_add(e.mem.i32(width_at));
                 e.mem.set_i32(width_at, width);
                 if ch == b' ' {
                     wrap_pos = pos;
-                    let advance = letter_advance(e, current);
+                    let advance = prep_text_advance(e, current);
                     e.mem.set_i32(break_width_at, width.wrapping_sub(advance));
                     break_full_width = width;
                     hyphen = false;
@@ -2213,7 +2228,7 @@ pub fn font_prep_text(e: &mut Engine, this: Ptr<Font>, text: u32, data: Ptr<Text
                     e.mem.set_i32(break_width_at, width);
                     break_full_width = width;
                     hyphen = true;
-                    let advance = letter_advance(e, current);
+                    let advance = prep_text_advance(e, current);
                     e.mem.set_i32(width_at, width.wrapping_sub(advance));
                 }
                 if e.mem.i32(width_at) > e.get(data, TextData::iWidth) {
@@ -2277,7 +2292,7 @@ pub fn font_prep_text(e: &mut Engine, this: Ptr<Font>, text: u32, data: Ptr<Text
                         let font_data = e.get(this, Font::pFontData);
                         let dash = font_data.wrapping_add(0xb00);
                         height = next_line(e, height);
-                        let advance = letter_advance(e, dash);
+                        let advance = prep_text_advance(e, dash);
                         let width = e.mem.i32(width_at).wrapping_sub(advance);
                         e.mem.set_i32(width_at, width);
                         finish_line(e, lines_list, width_at, &mut widest);
@@ -2285,10 +2300,10 @@ pub fn font_prep_text(e: &mut Engine, this: Ptr<Font>, text: u32, data: Ptr<Text
                         lines = lines.wrapping_add(1);
                         let font_data = e.get(this, Font::pFontData);
                         let before = e.mem.i8(before_at);
-                        let width = letter_advance(e, signed_letter(font_data, before));
+                        let width = prep_text_advance(e, signed_letter(font_data, before));
                         e.mem.set_i32(width_at, width);
                         let font_data = e.get(this, Font::pFontData);
-                        let advance = letter_advance(e, letter(font_data, ch));
+                        let advance = prep_text_advance(e, letter(font_data, ch));
                         let width = advance.wrapping_add(e.mem.i32(width_at));
                         e.mem.set_i32(width_at, width);
                     }
@@ -6170,6 +6185,33 @@ mod tests {
         let untouched: Ptr<TextData> = e.new_object();
         font_prep_text(&mut e, font, 0, untouched);
         assert_eq!(e.get(untouched, TextData::iWidth), 0);
+    }
+
+    /// Row S0240 (lStewieAl's Tweaks' `FontDimensionMismatchFix`, the six `PrepText` advances):
+    /// with the row on each letter's leading edge (+0x2C) counts in the measured width (here
+    /// 10 + 2.5 + 0.6 cut to 13 a letter); off, only the width and the spacing (10).
+    #[test]
+    fn s0240_prep_text_counts_the_leading_edge() {
+        for (on, wanted) in [(false, 20), (true, 26)] {
+            let (mut e, font, _) = text_setup();
+            e.register(FIND_TEXT_REPLACEMENT_STRING, find_replacement_double);
+            e.register(TEST_CONSTANT_FOR_GAME_SETTINGS, |_, _| ret(0));
+            let font_data = e.get(font, Font::pFontData);
+            for c in 0..=255u8 {
+                let at = letter(font_data, c);
+                e.mem.set_f32(at + 0x2c, 2.5);
+                e.mem.set_f32(at + 0x30, 0.6);
+            }
+            e.set_stewie(
+                engine_core::extend::stewie::FONT_WIDTH_COUNTS_LEADING_EDGE,
+                on,
+            );
+            let data: Ptr<TextData> = e.new_object();
+            e.set(data, TextData::cLineSep, b'\n');
+            let text = cstr(&mut e, b"ab");
+            font_prep_text(&mut e, font, text, data);
+            assert_eq!(e.get(data, TextData::iWidth), wanted, "row {on}");
+        }
     }
 
     fn icon_constants(e: &mut Engine) {

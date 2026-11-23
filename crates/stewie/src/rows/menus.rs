@@ -527,6 +527,14 @@ pub const ROWS: &[Row] = &[
         summary: "menu images written with / are found in the texture cache instead of being read from disk at each update",
     },
     Row {
+        bit: stewie::FONT_WIDTH_COUNTS_LEADING_EDGE,
+        function: "FontDimensionMismatchFix",
+        plan: "S0240",
+        key: "bFontDimensionMismatchFix",
+        tweaks: None,
+        summary: "text in a monospace font is measured as wide as it is drawn (each letter's leading edge counts)",
+    },
+    Row {
         bit: stewie::SETTINGS_SAVE_ERROR_NAMES_FILE,
         function: "MoreDescriptiveSettingsSaveError",
         plan: "S0883",

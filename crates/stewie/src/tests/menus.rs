@@ -98,6 +98,7 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
     ),
     ("S0218", "bWorldMapNoExteriorDoorFix", bit(52)),
     ("S0227", "bTileTextureCacheFix", bit(56)),
+    ("S0240", "bFontDimensionMismatchFix", bit(67)),
     ("S0883", "bMoreDescriptiveSettingsSaveError", bit(30)),
     ("S0983", "bPipboyMapStoreRefIDs", bit(63)),
 ];

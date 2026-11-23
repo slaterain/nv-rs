@@ -255,3 +255,7 @@ pub const REPAIR_LIST_TILES_FREED_ON_INIT: Row = Row::share(MENUS_FIXES, MENUS_F
 /// `0x7D345B`): a new game whose character generation quest is not found shows a message box
 /// naming the value and the ini it is in.
 pub const CHARGEN_QUEST_MISSING_ALERT: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 66);
+/// S0240 `FontDimensionMismatchFix` (`Font::PrepText` `00a12fb0` at `0xA138E1`, `0xA1391C`,
+/// `0xA1398D`, `0xA13AAC`, `0xA13B59`, `0xA13B96`): measured text counts each letter's leading
+/// edge, as it is drawn, so monospace fonts are measured as wide as they show.
+pub const FONT_WIDTH_COUNTS_LEADING_EDGE: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 67);
