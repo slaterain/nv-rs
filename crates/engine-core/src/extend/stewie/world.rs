@@ -166,6 +166,27 @@ pub const TREE_FULL_LOD_KEPT: Row = fix(30);
 /// time, which made the `TestAllCells` console command slow.
 pub const TEST_ALL_CELLS_NO_INI_REREAD: Row = fix(31);
 
+// ---- Group N ----
+
+/// S0022.44 (`MenuFixes`, `OnInitSaveFileForScreenshotImageHook` at `0x8468A0` in
+/// `BGSSaveLoadFileEntry::GetScreenshot` `00846820`): a save with a player-given name shows that
+/// name as its location line also when only its picture was read (the save list), as `LoadData`
+/// does.
+pub const CUSTOM_SAVE_NAME_SHOWN: Row = fix(32);
+/// S0156 `InventoryMinusOneOverflowFix` (`OnUpdateInventoryWeightHook` at `0x4D0EDA` in
+/// `004d0900`): an inventory whose weights sum to exactly -1.0 caches 0, since -1.0 means
+/// "recompute" and the weight would be summed again every time it is asked.
+pub const INVENTORY_WEIGHT_NOT_MINUS_ONE: Row = fix(33);
+/// S0152 `patchFixNPCBackpackNotUpdating` (bytes at `0x4C0FF1` in `Actor::QueueUnEquipObject`
+/// `004c0cf0`): unequipping a backpack also refreshes what the actor is shown wearing, as power and
+/// heavy armor already do (the biped flags `& 0xA4`).
+pub const NPC_BACKPACK_UPDATE: Row = fix(34);
+/// S0151 `patchFixWeaponModHealthResetting` (bytes at `0x4BD07C`, `GetContChangeMaxHealth` at
+/// `0x4BD07F` in `ItemChange::SetItemHealth` `004bd030`): an item's full health counts a weapon's
+/// "increase max condition" mod, so a modded weapon repaired to its unmodded maximum keeps its
+/// health record instead of losing it (and showing full condition).
+pub const WEAPON_MOD_HEALTH_KEPT: Row = fix(35);
+
 /// `OSInputGlobals *` (xNVSE's `0x11F35CC`).
 pub const INPUT_GLOBALS: u32 = 0x011f_35cc;
 /// `OSInputGlobals::overrideFlags` (`UInt16` at `+0x1B92`); bit 3 is the menu-mode debounce.
