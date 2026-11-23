@@ -136,7 +136,12 @@ pub fn light_setup(e: &mut Engine, index: u32, light: Ptr, scale: f32) {
     }
     let light = light.addr();
     let row = LIGHT_COLOURS.wrapping_add(index << 4);
-    if light == 0 {
+    // The fixes row "dead lights in a light list": a light whose light (+0xf8) is 0 is staged as no
+    // light (the exe reads its colour through it, [`crate::lights::dead`]).
+    let dead = light != 0
+        && packet::pass_light_word(e, light, 0xf8) == 0
+        && crate::lights::dead::skips_null(e);
+    if light == 0 || dead {
         for i in 0..4u32 {
             let value = e.global::<u32>(ZERO_COLOUR + 4 * i); // own: a constant of the exe
             capture::set_own_at(e, row + 4 * i, value);
