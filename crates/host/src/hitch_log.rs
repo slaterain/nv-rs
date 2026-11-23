@@ -22,8 +22,8 @@
 //! 128 values: a few microseconds. The counters cost one relaxed add at each counted event (heap blocks: a plain
 //! load and store under the heap's lock) and, for waits and reads, a clock read pair around a call that already
 //! blocks or reads the disk. The stage split costs about ten clock reads a frame (`engine_core::stage_time`'s
-//! points), the frame tail's split sixteen more, main's own processor clock twice (about a microsecond on
-//! Windows, a small file read on Linux) and two for each task main drains from the task queues there. Main's time
+//! points), the frame tail's split sixteen more, main's own processor clock twice (about a microsecond each)
+//! and two for each task main drains from the task queues there. Main's time
 //! in the guest heap and in each script run is timed only with `NV_HITCH_HEAP=1` (two clock reads a block or a run:
 //! about 4 ms on the pause menu's 80,000-block opening frame). A hitch frame adds one formatted line, one write to
 //! the log and, when the player's cell changed since the last line, one call of the cell's `GetEditorID`.

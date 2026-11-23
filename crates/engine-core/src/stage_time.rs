@@ -580,7 +580,7 @@ pub struct Tail {
     /// Tag 0x04's runs on main ([`HavokSync`]).
     pub havok_sync: Option<HavokSync>,
     /// Main's share of the processor from `WaitForThreads`' return to `OnIdle`'s end, in thousandths (`None` where
-    /// the system does not tell it cheaply: macOS, Windows on ARM).
+    /// the system does not tell it cheaply: Windows on ARM).
     pub main_share: Option<u32>,
 }
 
