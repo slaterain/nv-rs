@@ -17,6 +17,10 @@
 //! and skinned geometry bounds, the bound merges, and a bone's blend collision object up to its node's
 //! refresh. They read the node, its parent's world transform, the skin's bones (the actor's own clone)
 //! and constants, and write the node's world transform, bound and flags.
+//! The controllers on its nodes a helper runs too ([`controllers_ok`]; the two roots' are detached):
+//! idle Havok ones, and transform and visibility controllers that drive the node they sit on, with
+//! no interpolator or a plain one (they write the node's local transform or its culled bit and their
+//! own state).
 //!
 //! **What a helper logs instead of running** (its actor's log, in walk order): a blend collision
 //! object's Havok part (`bhkCollisionObject::NitohkTransform` after the node's refresh, or
@@ -701,7 +705,7 @@ fn classify(e: &mut Engine, object: u32, detached: &[u32]) -> Class {
     if flags & FLAG_PROPERTY_CONTROLLERS != 0 {
         return Class::Barrier(Barrier::Controllers);
     }
-    if !detached.contains(&object) && !controllers_idle(e, e.mem.u32(object + 0x0c)) {
+    if !detached.contains(&object) && !controllers_ok(e, e.mem.u32(object + 0x0c), object) {
         return Class::Barrier(Barrier::Controllers);
     }
     let collision = e.mem.u32(object + 0x1c);
@@ -879,11 +883,29 @@ fn order_check(e: &Engine, root: u32, roots: &[u32]) -> Option<Barrier> {
 const BLEND_CONTROLLER_UPDATE: u32 = 0x00c9_b090;
 const FORCE_CONTROLLER_UPDATE: u32 = 0x00cb_9770;
 
-/// Whether every controller of the list from `first` (along +0x30) is one a helper may run now: a
-/// `bhkBlendController` that its update leaves at once (active bit +8 bit 3 clear, no target at
-/// +0x2c, or +0x48 clear: nothing written), or a `bhkForceController` that is not active (bit 3
-/// clear, or no target: its update only stores a word of its own, +0x50). An empty list is idle.
-fn controllers_idle(e: &Engine, first: u32) -> bool {
+/// `NiTransformController::Update` and `NiVisController::Update`, and the interpolators' updates they
+/// may run on a helper: `NiTransformInterpolator::Update` (slot 0x8c) and `NiBoolInterpolator::Update`
+/// (slot 0xa0).
+const TRANSFORM_CONTROLLER_UPDATE: u32 = 0x00a3_6680;
+const VIS_CONTROLLER_UPDATE: u32 = 0x00a4_4e10;
+const TRANSFORM_INTERPOLATOR_UPDATE: u32 = 0x00a3_fdb0;
+const BOOL_INTERPOLATOR_UPDATE: u32 = 0x00a5_33c0;
+/// Their sizes (the controllers' and interpolators' `CreateObject` allocations): what check mode
+/// saves and puts back around the helpers' walk.
+const CONTROLLER_SIZE: u32 = 0x38;
+const TRANSFORM_INTERPOLATOR_SIZE: u32 = 0x48;
+const BOOL_INTERPOLATOR_SIZE: u32 = 0x18;
+
+/// Whether every controller of `object`'s list from `first` (along +0x30) is one a helper may run
+/// now: a `bhkBlendController` that its update leaves at once (active bit +8 bit 3 clear, no target
+/// at +0x2c, or +0x48 clear: nothing written), a `bhkForceController` that is not active (bit 3
+/// clear, or no target: its update only stores a word of its own, +0x50), or a transform or
+/// visibility controller whose target is `object` itself and whose interpolator (+0x34) is none or a
+/// plain one ([`controller_state`]): its update writes only the node's local transform (+0x34 to
+/// +0x67) or its flags' bit 0, its own time (+0x28) and flags, and the interpolator's own state
+/// (its last time, value and key index); the keys it reads are loaded data. Clones get their own
+/// controllers and interpolators (`CopyMembers`, `00a38ef0`). An empty list is idle.
+fn controllers_ok(e: &Engine, first: u32, object: u32) -> bool {
     let mut controller = first;
     let mut steps = 0;
     while controller != 0 {
@@ -896,6 +918,9 @@ fn controllers_idle(e: &Engine, first: u32) -> bool {
         let idle = match slot_target(e, controller, 0x94) {
             BLEND_CONTROLLER_UPDATE => !active || target == 0 || e.mem.u32(controller + 0x48) == 0,
             FORCE_CONTROLLER_UPDATE => !active || target == 0,
+            TRANSFORM_CONTROLLER_UPDATE | VIS_CONTROLLER_UPDATE => {
+                target == object && controller_state(e, controller).is_some()
+            }
             _ => false,
         };
         if !idle {
@@ -904,6 +929,37 @@ fn controllers_idle(e: &Engine, first: u32) -> bool {
         controller = e.mem.u32(controller + 0x30);
     }
     true
+}
+
+/// A transform or visibility controller a helper may run: the byte ranges its update writes (the
+/// controller, and its interpolator when it has one), or `None` when it may not run on a helper
+/// (another controller class, or an interpolator that is not the plain class its controller takes).
+fn controller_state(e: &Engine, controller: u32) -> Option<Vec<(u32, u32)>> {
+    let interpolator = e.mem.u32(controller + 0x34);
+    let (slot, update, size, none_ok) = match slot_target(e, controller, 0x94) {
+        TRANSFORM_CONTROLLER_UPDATE => (
+            0x8c,
+            TRANSFORM_INTERPOLATOR_UPDATE,
+            TRANSFORM_INTERPOLATOR_SIZE,
+            true,
+        ),
+        VIS_CONTROLLER_UPDATE => (
+            0xa0,
+            BOOL_INTERPOLATOR_UPDATE,
+            BOOL_INTERPOLATOR_SIZE,
+            false,
+        ),
+        _ => return None,
+    };
+    let mut ranges = vec![(controller, CONTROLLER_SIZE)];
+    if interpolator == 0 {
+        return none_ok.then_some(ranges);
+    }
+    if slot_target(e, interpolator, slot) != update {
+        return None;
+    }
+    ranges.push((interpolator, size));
+    Some(ranges)
 }
 
 /// The children of a node (empty slots left out).
@@ -1307,6 +1363,10 @@ struct Fields {
     words: Vec<u32>,
     bound: [u32; 4],
     collision: [u32; 2],
+    /// The bytes of the transform and visibility controllers on the object and of their
+    /// interpolators ([`controller_state`]): put back with the rest, so the serial pass does not
+    /// find them updated at this time already (their last-time caches would skip the update).
+    controllers: Vec<(u32, Vec<u8>)>,
 }
 
 fn fields_of(e: &Engine, object: u32) -> Fields {
@@ -1325,11 +1385,24 @@ fn fields_of(e: &Engine, object: u32) -> Fields {
     } else {
         [0; 2]
     };
+    let mut controllers = Vec::new();
+    let mut controller = e.mem.u32(object + 0x0c);
+    let mut steps = 0;
+    while controller != 0 && steps < 64 {
+        if let Some(ranges) = controller_state(e, controller) {
+            for (at, size) in ranges {
+                controllers.push((at, e.mem.bytes(at, size)));
+            }
+        }
+        controller = e.mem.u32(controller + 0x30);
+        steps += 1;
+    }
     Fields {
         object,
         words,
         bound,
         collision,
+        controllers,
     }
 }
 
@@ -1349,6 +1422,9 @@ fn put_fields(e: &mut Engine, f: &Fields) {
             .set_u16(c + 0xc, u16::try_from(f.collision[0]).unwrap_or(0));
         e.mem
             .set_u8(c + 0x14, u8::try_from(f.collision[1]).unwrap_or(0));
+    }
+    for (at, bytes) in &f.controllers {
+        e.mem.write(*at, bytes);
     }
 }
 

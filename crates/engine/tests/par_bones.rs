@@ -51,6 +51,14 @@ const OTHER_FN: u32 = VT_FN + 0x14;
 const NOT_ACTOR_FN: u32 = VT_FN + 0x18;
 const SET_BOUND_FN: u32 = VT_FN + 0x1c;
 const MOVE_BODY_FN: u32 = VT_FN + 0x20;
+/// An interpolator update of a class a helper does not know (recorded).
+const ODD_INTERPOLATOR_FN: u32 = VT_FN + 0x24;
+/// The controllers and interpolators a helper may run: `NiTransformController::Update`,
+/// `NiVisController::Update`, `NiTransformInterpolator::Update`, `NiBoolInterpolator::Update`.
+const TRANSFORM_CONTROLLER_UPDATE: u32 = 0x00a3_6680;
+const VIS_CONTROLLER_UPDATE: u32 = 0x00a4_4e10;
+const TRANSFORM_INTERPOLATOR_UPDATE: u32 = 0x00a3_fdb0;
+const BOOL_INTERPOLATOR_UPDATE: u32 = 0x00a5_33c0;
 /// `MemoryManager::Allocate` (the bound pool's block for an object without a world bound): the next
 /// block of a fixed area, the same each pass.
 const POOL_ALLOCATE: u32 = 0x00aa_3e40;
@@ -313,6 +321,11 @@ enum Extra {
     SkinNoBound,
     /// A skin reading another listed actor's bone (set by `world`).
     SkinOther,
+    /// A transform controller (a pose interpolator) on a bone and a visibility controller (a bool
+    /// interpolator) on the weapon, active, each driving its own node: walked on a helper.
+    Animated,
+    /// A transform controller whose interpolator is of a class a helper does not know.
+    OddInterpolator,
 }
 
 /// An actor at offset `x` with its animation and tree.
@@ -443,6 +456,58 @@ fn actor(w: &mut World, e: &mut Engine, k: &Kinds, x: f32, extra: Extra, lightin
         let g = skinned(w, e, k, bones[3], &[weapon]);
         e.mem.set_u32(g + 0x20, 0);
     }
+    if matches!(extra, Extra::Animated | Extra::OddInterpolator) {
+        // The transform controller on the fourth bone (active: flag bit 3), its interpolator a
+        // pose (+0x44): its update copies its value out (translation +0xc, rotation +0x18,
+        // scale +0x28), which the controller writes into the bone's local transform.
+        let odd = extra == Extra::OddInterpolator;
+        let ivt = w.vtable(
+            e,
+            &[(
+                0x8c,
+                if odd {
+                    ODD_INTERPOLATOR_FN
+                } else {
+                    TRANSFORM_INTERPOLATOR_UPDATE
+                },
+            )],
+        );
+        let interpolator = w.alloc(e, 0x48);
+        e.mem.set_u32(interpolator, ivt);
+        e.mem.set_f32(interpolator + 8, -1.0);
+        for (i, v) in [0.3f32, 0.1, 0.2, 1.0, 0.0, 0.0, 0.0, 1.25]
+            .iter()
+            .enumerate()
+        {
+            e.mem.set_f32(interpolator + 0xc + 4 * i as u32, *v);
+        }
+        e.mem.set_u8(interpolator + 0x44, 1);
+        let cvt = w.vtable(e, &[(0x94, TRANSFORM_CONTROLLER_UPDATE)]);
+        let c = w.alloc(e, 0x38);
+        e.mem.set_u32(c, cvt);
+        e.mem.set_u32(c + 4, 5);
+        e.mem.set_u16(c + 8, 8);
+        e.mem.set_u32(c + 0x2c, bones[3]);
+        e.mem.set_u32(c + 0x34, interpolator);
+        e.mem.set_u32(bones[3] + 0xc, c);
+        if !odd {
+            // The visibility controller on the weapon, its interpolator a bool without keys
+            // answering its value byte (+0xc).
+            let bvt = w.vtable(e, &[(0xa0, BOOL_INTERPOLATOR_UPDATE)]);
+            let b = w.alloc(e, 0x18);
+            e.mem.set_u32(b, bvt);
+            e.mem.set_f32(b + 8, -1.0);
+            e.mem.set_u8(b + 0xc, 1);
+            let vvt = w.vtable(e, &[(0x94, VIS_CONTROLLER_UPDATE)]);
+            let v = w.alloc(e, 0x38);
+            e.mem.set_u32(v, vvt);
+            e.mem.set_u32(v + 4, 5);
+            e.mem.set_u16(v + 8, 8);
+            e.mem.set_u32(v + 0x2c, weapon);
+            e.mem.set_u32(v + 0x34, b);
+            e.mem.set_u32(weapon + 0xc, v);
+        }
+    }
     if extra == Extra::SkinOther {
         // A skin under the root whose bone the world points at another actor's (`world`): a `skin`
         // barrier (a helper would read it while another helper walks that actor).
@@ -479,6 +544,10 @@ fn stand_ins(e: &mut Engine) {
             e.mem.set_f32(a[1] + 4 * i as u32, *v);
         }
         ret(a[1])
+    });
+    e.register(ODD_INTERPOLATOR_FN, |_, a| {
+        record("odd interpolator", a.to_vec());
+        ret(0)
     });
     e.register(CONTROLLER_FN, |_, a| {
         record("controller", a.to_vec());
@@ -656,6 +725,8 @@ fn world(e: &mut Engine) -> World {
         (Extra::None, false),
         (Extra::Skinned, true),
         (Extra::None, true),
+        (Extra::Animated, true),
+        (Extra::OddInterpolator, true),
         (Extra::Controller, true),
         (Extra::None, true),
         (Extra::None, false),
@@ -800,17 +871,19 @@ fn parallel_bones_end_in_the_serial_state() {
             );
         }
         assert_eq!(counts.frames, 1, "{counts:?}");
-        // Exact: fourteen actors walked (the skinned one among them: its flagged bones without
-        // bounds are walked, not deferred; the two alone between two barriers run serially), nine
-        // whole on main (a controller, a ragdoll; three nodes that allocate their bound; four skins
-        // read out of order), fifteen subtrees deferred (fourteen heads and the geometry without a
-        // bound).
-        assert_eq!(counts.walked, 14, "{counts:?}");
-        assert_eq!(counts.barriers, 9, "{counts:?} {reasons:?}");
-        assert_eq!(counts.subtrees, 15, "{counts:?}");
+        // Exact: fifteen actors walked (the skinned one among them: its flagged bones without
+        // bounds are walked, not deferred; the animated one: its transform and visibility
+        // controllers run on the helper; the two alone between two barriers run serially), ten
+        // whole on main (two controllers: an unknown controller, an unknown interpolator; a
+        // ragdoll; three nodes that allocate their bound; four skins read out of order), sixteen
+        // subtrees deferred (fifteen heads and the geometry without a bound).
+        assert_eq!(counts.walked, 15, "{counts:?}");
+        assert_eq!(counts.barriers, 10, "{counts:?} {reasons:?}");
+        assert_eq!(counts.subtrees, 16, "{counts:?}");
         let count_of = |name: &str| reasons.iter().find(|r| r.0 == name).map_or(0, |r| r.1);
         assert_eq!(count_of("bound"), 3, "{reasons:?}");
         assert_eq!(count_of("skin"), 4, "{reasons:?}");
+        assert_eq!(count_of("controllers"), 2, "{reasons:?}");
         assert!(counts.havok >= 20, "{counts:?}");
         assert_eq!(counts.mismatches, 0, "{counts:?}");
         let names: Vec<&str> = reasons.iter().map(|r| r.0).collect();
@@ -825,7 +898,7 @@ fn parallel_bones_end_in_the_serial_state() {
     let (got, state) = pass(&mut e, &w, "check", 3);
     let (counts, _) = bones::take_counts();
     assert_eq!(counts.differences, 0, "{counts:?}");
-    assert_eq!(counts.checked_actors, 14, "{counts:?}");
+    assert_eq!(counts.checked_actors, 15, "{counts:?}");
     assert_eq!(
         got, serial,
         "check: the outside calls are the serial pass's"
