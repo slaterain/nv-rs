@@ -819,23 +819,41 @@ impl Frame {
             g(Count::GridUpdateNs) / TENTH_MS,
             format!("grid update {:.1} ms", ms(g(Count::GridUpdateNs))),
         );
-        // The grid shift's parts, in its order, as one entry when any is over a tenth of a millisecond.
-        let parts = [
-            ("cancel", Count::GridCancelNs),
-            ("textures", Count::GridTexturesNs),
-            ("shift", Count::GridShiftNs),
-            ("Havok", Count::GridHavokNs),
-            ("load", Count::GridLoadNs),
-            ("terrain", Count::GridTerrainNs),
-        ];
-        let shown: Vec<String> = parts
-            .iter()
-            .filter(|(_, c)| g(*c) >= TENTH_MS)
-            .map(|(name, c)| format!("{name} {:.1}", ms(g(*c))))
-            .collect();
+        // A set of timed parts, in their order, as one entry when any is over a tenth of a millisecond.
+        let mut parts = |title: &str, parts: &[(&str, Count)]| {
+            let shown: Vec<String> = parts
+                .iter()
+                .filter(|(_, c)| g(*c) >= TENTH_MS)
+                .map(|(name, c)| format!("{name} {:.1}", ms(g(*c))))
+                .collect();
+            put(
+                shown.len() as u64,
+                format!("{title} ms: {}", shown.join(", ")),
+            );
+        };
+        parts(
+            "grid shift parts",
+            &[
+                ("cancel", Count::GridCancelNs),
+                ("textures", Count::GridTexturesNs),
+                ("shift", Count::GridShiftNs),
+                ("Havok", Count::GridHavokNs),
+                ("load", Count::GridLoadNs),
+                ("terrain", Count::GridTerrainNs),
+            ],
+        );
+        // Per grid cell (`TES::LoadGridCell`): its own entry, since it also runs outside a grid shift.
+        parts(
+            "grid cell parts",
+            &[
+                ("cell find", Count::GridCellFindNs),
+                ("land", Count::GridLandNs),
+                ("water", Count::GridWaterNs),
+            ],
+        );
         put(
-            shown.len() as u64,
-            format!("grid shift parts ms: {}", shown.join(", ")),
+            g(Count::GridCellsMade),
+            format!("{} grid cells made", g(Count::GridCellsMade)),
         );
         put(
             g(Count::CellAttachNs) / TENTH_MS,
@@ -1258,6 +1276,19 @@ mod tests {
             line.contains("grid shift parts ms: shift 3.8, load 5.1"),
             "{line}"
         );
+        assert!(!line.contains("grid cell parts"), "none counted: {line}");
+        f.game[Count::GridCellFindNs as usize] = 4_200_000;
+        f.game[Count::GridWaterNs as usize] = 300_000;
+        f.game[Count::GridCellsMade as usize] = 2;
+        let line = f.line();
+        // The per-cell parts are their own entry: LoadGridCell also runs outside a grid shift.
+        assert!(
+            line.contains(
+                "grid shift parts ms: shift 3.8, load 5.1, grid cell parts ms: cell find 4.2, water 0.3, "
+            ),
+            "{line}"
+        );
+        assert!(line.contains("2 grid cells made"), "{line}");
         assert!(
             !line.contains("grid update"),
             "under a tenth of a ms: {line}"

@@ -1062,7 +1062,7 @@ mod queue {
     }
 
     /// `n` shadow scene lights in pattern `k`: their `NiLight`s at places from the case's floats at
-    /// `f`, radii 10, 0.5, 50, a radius-free one now and then; every fourth view-culled, every
+    /// `f`, radii 10, 0.5, 50, a radius-free one now and then (radius 0.01); every fourth view-culled, every
     /// third with equal luminance to the one before (the same place).
     fn lights_of(e: &mut Engine, case: &Case, n: usize, k: usize, f: usize) -> Vec<u32> {
         let radii = [0x4120_0000u32, HALF, 0x4248_0000];
@@ -1074,12 +1074,22 @@ mod queue {
                 } else {
                     OTHER_RTTI
                 };
-                let ni = ni_light(e, case, f, radii[(i / 3 + k) % 3], rtti);
+                // A radius-free light gets a radius that reaches nothing, so only its kind lets it in.
+                let radius = if rtti == RADIUS_FREE_RTTI {
+                    0x3c23_d70a
+                } else {
+                    radii[(i / 3 + k) % 3]
+                };
+                let ni = ni_light(e, case, f, radius, rtti);
                 words(
                     e,
                     ni + 0x8c,
                     &[bits(case, f), [0, ONE, TWO][i / 3 % 3], TWO],
                 );
+                if rtti == RADIUS_FREE_RTTI {
+                    // ... and stands 1000 units off.
+                    e.mem.set_u32(ni + 0x8c, 0x447a_0000);
+                }
                 let l = light(e, &planes, 0, ni, 0, 0);
                 if (i + k) % 4 == 3 {
                     e.mem.set_u16(l + 0x110, 0xff);
@@ -1314,9 +1324,10 @@ mod queue {
             .assert_same();
     }
 
-    /// The light table (`NV_LIGHT_TABLE`) on and off give the same memory after a drain (every
-    /// lamp's geometry list, every property's lamp list and fence, the flags), save the log of
-    /// the doubles; with it on, fewer kind calls are made.
+    /// The light table (`NV_LIGHT_TABLE`) on and off give the same drain: the same memory (the
+    /// flags, the luminances, the sorted arrays) and the same calls of the doubles with their words
+    /// (every lamp add, list add and move, fence and removal), the kind calls left out; with it on,
+    /// fewer kind calls are made.
     #[test]
     fn lights_table_gives_the_same_lists() {
         let mut fewer = false;
@@ -1348,9 +1359,20 @@ mod queue {
                 differences.is_empty(),
                 "case {k}: memory differs at {differences:08x?}"
             );
+            // The doubles' log, the kind calls left out: every add (the property's lamp add, the
+            // lamp's list add and move), fence and removal, with its words, in order.
+            let calls = |e: &Engine| {
+                let n = e.mem.u32(LOG);
+                assert!(n < 0x7c0, "case {k}: the log is full");
+                (0..n)
+                    .map(|i| (e.mem.u32(LOG + 4 + 8 * i), e.mem.u32(LOG + 8 + 8 * i)))
+                    .filter(|(tag, _)| *tag != 0xff08)
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(calls(&off), calls(&on), "case {k}: the adds differ");
             let kind_calls = |e: &Engine| {
                 let n = e.mem.u32(LOG);
-                (0..n.min(0x7c0))
+                (0..n)
                     .filter(|i| e.mem.u32(LOG + 4 + 8 * i) == 0xff08)
                     .count()
             };
