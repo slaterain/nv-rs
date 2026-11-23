@@ -71,6 +71,7 @@ pub static FIXES: &[Fix] = &[
     crate::patch_data::STRIP_LOD_WATER,
     crate::direct_files::FIX,
     DRAW_THREAD,
+    HAVOK_REF_COUNTS,
 ];
 
 /// The IO manager's wait for queued loads (`00c3dfa0`: main at a cell border, a load, a save) sleeps
@@ -527,6 +528,25 @@ pub const DRAW_THREAD: Fix = Fix {
     install: install_nothing,
 };
 
+/// Havok reference counts without the global lock (OFF in every preset, [`OFF_IN_EVERY_PRESET`], until its in-game
+/// check): every Havok object's reference count is guarded by one global critical section the game always has on
+/// (`00c90830` sets the lock mode 1), and the physics step holds it whole (`hkpWorld::stepDeltaTime` takes the
+/// world's lock, `00c91180`, which is `lockAll`), so a reference change on main while the physics thread steps waits
+/// for the step (7.0 ms in the 2026-11-22 play log). With the row the six reference functions change the count in one
+/// atomic operation and never take the section (`engine::units::havok_sdk::hkreferencedobject`, "Havok reference
+/// counts without the global lock"); the world's lock and `lockAll` keep it. Same counts, same deletes.
+pub const HAVOK_REF_COUNTS: Fix = Fix {
+    name: "Havok reference counts without the global lock",
+    env: "NV_HAVOK_REFS",
+    addresses: &engine::units::havok_sdk::hkreferencedobject::LOCK_FREE_ADDRESSES,
+    summary: "off in every preset until checked: a physics object's reference count changes in one atomic step instead of under Havok's one global lock, so the main thread no longer waits for the physics step to finish",
+    install: install_havok_ref_counts,
+};
+
+fn install_havok_ref_counts(e: &mut Engine) {
+    engine::units::havok_sdk::hkreferencedobject::lock_free_turn_on(e);
+}
+
 /// UI Organizer built in (`crates/uio`, parts 1 and 2): its lists (`Data\uio\supported.txt` and
 /// `Data\uio\public\*.txt`) put UI mods' additions into the menus, in memory, and every menu file
 /// is read through UIO's reader and parsed by its own XML parser. It changes how every menu file
@@ -602,7 +622,7 @@ fn install_nothing(_: &mut Engine) {}
 
 /// Rows that are off in every preset until the maintainer turns them on: only their own variable or `Fallout.ini`
 /// line turns them on.
-pub const OFF_IN_EVERY_PRESET: &[&str] = &[DRAW_THREAD.env];
+pub const OFF_IN_EVERY_PRESET: &[&str] = &[DRAW_THREAD.env, HAVOK_REF_COUNTS.env];
 
 /// The rows that register nothing at an exe address: the menu limit paces the uncapped step;
 /// the extender's rows set flags `crates/nvse` reads.
