@@ -6873,8 +6873,10 @@ type FuseScript = (Vec<[u8; 4]>, (u64, u64));
 /// a base strip in column 0 (depth LESSEQUAL with writes) drawn in its own colour, then over the
 /// same vertices a light pass adding its colour (one, one) and a pass multiplying by its colour
 /// (destination colour, zero), both depth EQUAL without writes, colour only; then a strip in column
-/// 1 drawn alone. The pixels, and the groups drawn fused with the passes they held.
-fn fuse_script(fuse: bool) -> Option<FuseScript> {
+/// 1 drawn alone. The pixels, and the groups drawn fused with the passes they held. `moved`: the
+/// light passes' vertex shader reads the position through register 1 (its own declaration), the
+/// base's through register 0.
+fn fuse_script(fuse: bool, moved: bool) -> Option<FuseScript> {
     const ALPHABLENDENABLE: u32 = 27;
     const SRCBLEND: u32 = 19;
     const DESTBLEND: u32 = 20;
@@ -6895,10 +6897,20 @@ fn fuse_script(fuse: bool) -> Option<FuseScript> {
     vs.extend(ins(2, &[0xC00F_0000, 0x90E4_0000, 0xA0E4_0000]));
     vs.extend(ins(1, &[0xE00F_0000, 0xA0E4_0001]));
     vs.push(END);
+    // vs_2_0: dcl_position v1; add oPos, v1, c0; mov oT0, c1.
+    let mut vs1 = vec![0xFFFE_0200];
+    vs1.extend(ins(31, &[0x8000_0000, 0x900F_0001]));
+    vs1.extend(ins(2, &[0xC00F_0000, 0x90E4_0001, 0xA0E4_0000]));
+    vs1.extend(ins(1, &[0xE00F_0000, 0xA0E4_0001]));
+    vs1.push(END);
     let mut own = vec![0xFFFF_0200];
     own.extend(ins(1, &[0x800F_0800, 0xA0E4_0000]));
     own.push(END);
-    for (shader, pixel, tokens) in [(VS + 50, false, vs), (PS + 50, true, own)] {
+    for (shader, pixel, tokens) in [
+        (VS + 50, false, vs),
+        (VS + 51, false, vs1),
+        (PS + 50, true, own),
+    ] {
         let t = words(&tokens);
         g.run(Cmd::CreateShader {
             device: DEVICE,
@@ -6960,6 +6972,16 @@ fn fuse_script(fuse: bool) -> Option<FuseScript> {
         });
     };
     draw(&mut g, 0, [0.25, 0.5, 0.0, 1.0]);
+    let set_vs = |g: &mut Gpu, shader: u32| {
+        g.run(Cmd::SetShader {
+            device: DEVICE,
+            pixel: false,
+            shader,
+        });
+    };
+    if moved {
+        set_vs(&mut g, VS + 51);
+    }
     g.state(ALPHABLENDENABLE, 1);
     g.state(ZWRITEENABLE, 0);
     g.state(ZFUNC, 3);
@@ -6970,6 +6992,7 @@ fn fuse_script(fuse: bool) -> Option<FuseScript> {
     g.state(SRCBLEND, 9);
     g.state(DESTBLEND, 1);
     draw(&mut g, 0, [0.5, 1.0, 0.5, 0.0]);
+    set_vs(&mut g, VS + 50);
     g.state(ALPHABLENDENABLE, 0);
     g.state(ZWRITEENABLE, 1);
     g.state(ZFUNC, 4);
@@ -6986,18 +7009,25 @@ fn fuse_script(fuse: bool) -> Option<FuseScript> {
 /// rounds between the passes, the fused shader once), the alpha the base's, column 1 untouched.
 #[test]
 fn fused_light_passes_draw_what_the_passes_draw_one_by_one() {
-    let Some((off_px, off_counts)) = fuse_script(false) else {
+    let Some((off_px, off_counts)) = fuse_script(false, false) else {
         return;
     };
     assert_eq!(off_counts, (0, 0), "nothing fused with the switch off");
-    let (px, counts) = fuse_script(true).expect("the adapter, as above");
-    assert_eq!(counts, (1, 2), "one group fused, two light passes in it");
-    for (a, b) in px.iter().zip(&off_px) {
-        for c in 0..4 {
-            assert!(
-                (i32::from(a[c]) - i32::from(b[c])).abs() <= 1,
-                "fused {px:?} one by one {off_px:?}"
-            );
+    // Also with the light passes reading the position through another register than the base.
+    for moved in [false, true] {
+        let (px, counts) = fuse_script(true, moved).expect("the adapter, as above");
+        assert_eq!(
+            counts,
+            (1, 2),
+            "one group fused, two light passes in it (moved {moved})"
+        );
+        for (a, b) in px.iter().zip(&off_px) {
+            for c in 0..4 {
+                assert!(
+                    (i32::from(a[c]) - i32::from(b[c])).abs() <= 1,
+                    "fused {px:?} one by one {off_px:?} (moved {moved})"
+                );
+            }
         }
     }
     // Column 0: (0.25 + 0.5) * 0.5, (0.5 + 0.25) * 1, (0 + 0.5) * 0.5, alpha 1 (BGRA bytes).

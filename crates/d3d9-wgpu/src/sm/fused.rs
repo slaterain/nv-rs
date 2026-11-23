@@ -269,12 +269,21 @@ fn pass_text(
 /// The fused vertex stage of `passes` (the base first): every pass's vertex shader run for the
 /// vertex, the base's position and clip distances, each pass's varyings at locations of its own (in
 /// pass order), and the draw table's entry for the pixel stage. Each pass's `Link` is the one its
-/// own draw would use.
-pub fn fused_vertex(passes: &[(&Program, &Link)]) -> Result<Fused, Error> {
+/// own draw would use. `inputs[k]`: where pass `k`'s input registers come from, as (register, the
+/// fused stage's input location): the passes' shaders may read one vertex element through other
+/// registers (each pass's own declaration of its inputs), so each register is fed from the element
+/// it reads in that pass's own draw. A register without a location is refused.
+pub fn fused_vertex(
+    passes: &[(&Program, &Link)],
+    inputs: &[Vec<(u32, u32)>],
+) -> Result<Fused, Error> {
     if passes.iter().any(|(p, _)| p.stage != Stage::Vertex) {
         return Err(Error::Unsupported(
             "a fused vertex stage of a pixel shader".into(),
         ));
+    }
+    if inputs.len() != passes.len() {
+        return Err(Error::Unsupported("the inputs of each pass".into()));
     }
     let mut next = 0u32;
     let mut moved = Vec::new();
@@ -292,18 +301,47 @@ pub fn fused_vertex(passes: &[(&Program, &Link)]) -> Result<Fused, Error> {
     for t in &texts {
         s.push_str(t);
     }
-    // The inputs: every pass's, once each (one declaration feeds them all).
-    let mut inputs: BTreeMap<String, Field> = BTreeMap::new();
+    // The inputs: each vertex element once, at its fused location, whichever register a pass reads
+    // it through; the built-in inputs (the vertex and instance numbers) once each.
+    let mut elements: BTreeMap<u32, Field> = BTreeMap::new();
+    let mut builtins: BTreeMap<String, Field> = BTreeMap::new();
+    // Each pass's input field and the fused field it is given.
+    let mut feeds: Vec<(usize, String, String)> = Vec::new();
     for (k, t) in texts.iter().enumerate() {
         for f in fields(t, &format!("p{k}_In")) {
-            inputs.entry(f.name.clone()).or_insert(f);
+            let Some(register) = location(&f.attrs) else {
+                feeds.push((k, f.name.clone(), f.name.clone()));
+                builtins.entry(f.name.clone()).or_insert(f);
+                continue;
+            };
+            let Some(&(_, at)) = inputs[k].iter().find(|(r, _)| *r == register) else {
+                return Err(Error::Unsupported(
+                    "a fused pass reading a register no element feeds".into(),
+                ));
+            };
+            let name = format!("a{at}");
+            if let Some(e) = elements.get(&at) {
+                if e.ty != f.ty {
+                    return Err(Error::Unsupported(
+                        "one vertex element read as two types".into(),
+                    ));
+                }
+            } else {
+                let field = Field {
+                    attrs: relocated(&f.attrs, at),
+                    name: name.clone(),
+                    ty: f.ty.clone(),
+                };
+                elements.insert(at, field);
+            }
+            feeds.push((k, f.name, name));
         }
     }
     let _ = writeln!(s, "struct In {{");
-    for f in inputs.values() {
+    for f in elements.values().chain(builtins.values()) {
         let _ = writeln!(s, "    {} {}: {},", f.attrs, f.name, f.ty);
     }
-    if !inputs.contains_key("draw") {
+    if !builtins.contains_key("draw") {
         let _ = writeln!(s, "    @builtin(instance_index) draw: u32,");
     }
     s.push_str("}\nstruct Out {\n    @builtin(position) @invariant position: vec4<f32>,\n");
@@ -339,11 +377,14 @@ pub fn fused_vertex(passes: &[(&Program, &Link)]) -> Result<Fused, Error> {
     s.push_str("}\n@vertex\nfn main(input: In) -> Out {\n    var out: Out;\n");
     for (k, t) in texts.iter().enumerate() {
         let _ = writeln!(s, "    var i{k}: p{k}_In;");
-        for f in fields(t, &format!("p{k}_In")) {
-            if f.name == "draw" {
+        for (pass, from, to) in &feeds {
+            if *pass != k {
+                continue;
+            }
+            if from == "draw" {
                 let _ = writeln!(s, "    i{k}.draw = input.draw + {k}u;");
             } else {
-                let _ = writeln!(s, "    i{k}.{0} = input.{0};", f.name);
+                let _ = writeln!(s, "    i{k}.{from} = input.{to};");
             }
         }
         let _ = writeln!(s, "    let o{k} = p{k}_main(i{k});");
@@ -531,7 +572,8 @@ mod tests {
         let vp = parse(&small_vertex_shader()).unwrap();
         let pp = parse(&small_pixel_shader()).unwrap();
         let (vl, pl) = links();
-        let v = fused_vertex(&[(&vp, &vl), (&vp, &vl), (&vp, &vl)]).unwrap();
+        let fed = vec![vec![(0, 0)]; 3];
+        let v = fused_vertex(&[(&vp, &vl), (&vp, &vl), (&vp, &vl)], &fed).unwrap();
         validate(&v.source).unwrap_or_else(|e| panic!("{e}\n{}", v.source));
         for k in 0..3 {
             assert!(
@@ -572,6 +614,27 @@ mod tests {
         validate(&f.source).unwrap_or_else(|e| panic!("{e}\n{}", f.source));
     }
 
+    /// Passes that read one vertex element through other registers (their own declarations): each
+    /// register is fed from its element's fused location, and an element read by two passes is one
+    /// input.
+    #[test]
+    fn each_pass_reads_its_registers_from_its_own_elements() {
+        let vp = parse(&small_vertex_shader()).unwrap();
+        let (vl, _) = links();
+        let fed = [vec![(0, 0)], vec![(0, 1)], vec![(0, 0)]];
+        let v = fused_vertex(&[(&vp, &vl), (&vp, &vl), (&vp, &vl)], &fed).unwrap();
+        validate(&v.source).unwrap_or_else(|e| panic!("{e}\n{}", v.source));
+        for line in ["i0.v0 = input.a0;", "i1.v0 = input.a1;", "i2.v0 = input.a0;"] {
+            assert!(v.source.contains(line), "{line}\n{}", v.source);
+        }
+        assert_eq!(
+            v.source.matches("@location(0) a0:").count(),
+            1,
+            "{}",
+            v.source
+        );
+    }
+
     /// More varyings than the stages pass, a pass without the registers from storage, or a missing
     /// blend: refused, so the passes are drawn one by one.
     #[test]
@@ -581,7 +644,9 @@ mod tests {
         let (vl, pl) = links();
         // One varying a pass: one pass more than the locations below the draw table's slot.
         let many: Vec<(&Program, &Link)> = (0..=DRAW_SLOT).map(|_| (&vp, &vl)).collect();
-        assert!(fused_vertex(&many).is_err());
+        assert!(fused_vertex(&many, &vec![vec![(0, 0)]; many.len()]).is_err());
+        // A register no vertex element feeds.
+        assert!(fused_vertex(&[(&vp, &vl), (&vp, &vl)], &[vec![(0, 0)], Vec::new()]).is_err());
         let uniform = Link {
             storage: false,
             ..pl.clone()

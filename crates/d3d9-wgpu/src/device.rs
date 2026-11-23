@@ -3518,6 +3518,12 @@ impl Device {
         self.fuse.drawn
     }
 
+    /// Fused pipelines made (or refused), and groups with light passes drawn pass by pass because
+    /// none could be made ([`Device::set_fuse_lights`]; the replay's report).
+    pub fn fused_pipelines(&self) -> (usize, u64) {
+        (self.fuse.pipelines.len(), self.fuse.spilled)
+    }
+
     /// `Set*ShaderConstant*` (`kind`: vertex float, int, bool, then the same for the pixel stage)
     /// of `count` registers from `start`, from the command's bytes. Float registers are copied
     /// as bytes (a draw's block carries them so); registers past the file's end are not kept.
@@ -5075,6 +5081,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 _ => Vec::new(),
             })
             .collect();
+        self.fuse.spilled += spill.iter().filter(|s| !s.is_empty()).count() as u64;
         let mut order: Vec<(&Held, Option<&fuse::Ready>)> = Vec::new();
         for ((h, r), s) in held.iter().zip(&ready).zip(&spill) {
             order.push((h, r.as_ref()));

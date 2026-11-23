@@ -19,6 +19,9 @@ pub(super) struct Pass {
     vs: Arc<Shader>,
     ps: Arc<Shader>,
     inputs: Vec<wgsl::Input>,
+    /// Its vertex elements by stream: each one's format, offset and the register its vertex shader
+    /// reads it through ([`VertexLink`]).
+    attributes: [Vec<wgpu::VertexAttribute>; 8],
     clip: wgsl::Clip,
     /// Each sampler of the pair: its binding (the vertex shader's from 32), dimension, filtering,
     /// view and sampler.
@@ -32,7 +35,6 @@ pub(super) struct Pass {
 pub(super) struct Group {
     base: Pass,
     key: PipeKey,
-    attributes: [Vec<wgpu::VertexAttribute>; 8],
     topology: wgpu::PrimitiveTopology,
     /// The bases held before the last blended draw that was not a light pass are closed.
     epoch: u64,
@@ -48,6 +50,8 @@ pub(super) struct State {
     pub(super) pipelines: Map<Vec<u64>, Option<(wgpu::RenderPipeline, [wgpu::BindGroupLayout; 2])>>,
     /// Groups drawn fused, and passes they held (tests).
     pub(super) drawn: (u64, u64),
+    /// Groups with light passes drawn pass by pass (no fused pipeline could be made for them).
+    pub(super) spilled: u64,
 }
 
 /// Where a fused stage's sampler goes: its binding, dimension and filtering, the pass and the
@@ -113,6 +117,7 @@ impl Device {
             vs: vs.clone(),
             ps: ps.clone(),
             inputs: link.inputs.clone(),
+            attributes: link.attributes.clone(),
             clip,
             textures,
             blocks,
@@ -140,7 +145,6 @@ impl Device {
         let group = Group {
             base,
             key: key.clone(),
-            attributes: link.attributes.clone(),
             topology,
             epoch: self.fuse.epoch,
             extras: Vec::new(),
@@ -231,7 +235,40 @@ impl Device {
             .zip(&pixel_links)
             .map(|(p, l)| (&p.ps.program, l))
             .collect();
-        let v = fused::fused_vertex(&vs).ok()?;
+        // The vertex elements the passes read, each once (by stream, offset and format), at the
+        // fused stage's input locations; each pass's registers fed from the elements its own
+        // declaration gives them.
+        let mut elements: Vec<(usize, u64, wgpu::VertexFormat)> = Vec::new();
+        let mut fed: Vec<Vec<(u32, u32)>> = Vec::new();
+        for p in &passes {
+            let mut regs = Vec::new();
+            for (stream, list) in p.attributes.iter().enumerate() {
+                for a in list {
+                    let e = (stream, a.offset, a.format);
+                    let at = match elements.iter().position(|x| *x == e) {
+                        Some(at) => at,
+                        None => {
+                            elements.push(e);
+                            elements.len() - 1
+                        }
+                    };
+                    regs.push((a.shader_location, at as u32));
+                }
+            }
+            fed.push(regs);
+        }
+        if elements.len() > self.device.limits().max_vertex_attributes as usize {
+            return None;
+        }
+        let mut attributes: [Vec<wgpu::VertexAttribute>; 8] = Default::default();
+        for (at, &(stream, offset, format)) in elements.iter().enumerate() {
+            attributes[stream].push(wgpu::VertexAttribute {
+                format,
+                offset,
+                shader_location: at as u32,
+            });
+        }
+        let v = fused::fused_vertex(&vs, &fed).ok()?;
         let p = fused::fused_pixel(&ps, &blends, clamp).ok()?;
         // The fused stages' samplers: each pass's moved to its new binding (the vertex shader's
         // from 32), with what that binding holds.
@@ -269,6 +306,8 @@ impl Device {
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             f.key.hash(&mut hasher);
             list.hash(&mut hasher);
+            elements.hash(&mut hasher);
+            fed.hash(&mut hasher);
             cache_key.push(hasher.finish());
         }
         for (pass, b) in passes
@@ -280,7 +319,7 @@ impl Device {
         let made = match self.fuse.pipelines.get(&cache_key) {
             Some(m) => m.clone(),
             None => {
-                let made = self.fuse_pipeline(f, &v.source, &p.source, &list);
+                let made = self.fuse_pipeline(f, &v.source, &p.source, &list, &attributes);
                 self.fuse.pipelines.insert(cache_key, made.clone());
                 made
             }
@@ -314,13 +353,15 @@ impl Device {
         Some(Ready { pipeline, groups })
     }
 
-    /// Makes a fused pipeline: the base's states with the fused modules and samplers.
+    /// Makes a fused pipeline: the base's states with the fused modules, samplers and vertex
+    /// elements ([`Device::fuse_ready`]).
     fn fuse_pipeline(
         &mut self,
         f: &Group,
         vertex: &str,
         pixel: &str,
         list: &[(u32, u8, bool)],
+        attributes: &[Vec<wgpu::VertexAttribute>; 8],
     ) -> Option<(wgpu::RenderPipeline, [wgpu::BindGroupLayout; 2])> {
         let vm = create_module(&self.device, vertex.to_string()).ok()?;
         let pm = create_module(&self.device, pixel.to_string()).ok()?;
@@ -331,13 +372,7 @@ impl Device {
         self.vs_modules.insert(vkey.clone(), Some(vm));
         self.ps_modules.insert(pkey.clone(), Some(pm));
         let job = self.pipeline_job(
-            &f.key,
-            &f.base.ps,
-            &vkey,
-            &pkey,
-            &f.attributes,
-            f.topology,
-            list,
+            &f.key, &f.base.ps, &vkey, &pkey, attributes, f.topology, list,
         );
         self.vs_modules.remove(&vkey);
         self.ps_modules.remove(&pkey);

@@ -18,8 +18,10 @@ fn main() {
     if let Some(d) = b.device() {
         let (keys, held) = d.held_counts();
         let (groups, passes) = d.fused_counts();
+        let (pipelines, spilled) = d.fused_pipelines();
         eprintln!(
-            "held: {held} draws as {keys}; fused: {groups} groups with {passes} light passes"
+            "held: {held} draws as {keys}; fused: {groups} groups with {passes} light passes, \
+             {pipelines} fused pipelines, {spilled} groups drawn pass by pass"
         );
     }
 }
