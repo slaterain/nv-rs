@@ -5,6 +5,8 @@
 //! thread allocating at the same time). Two patterns: a pause-menu open and close (80,000
 //! blocks of a menu-tile mix allocated, then all freed in the same order, timed on the second
 //! round) and a steady churn (50,000 live blocks, one freed and one allocated per step).
+//! Each again with the thread heap (`NV_THREAD_HEAP`, `mem/pools.rs`): the exe's pools served from
+//! each thread's own cache.
 //!
 //! `cargo test --release -p engine-core --test heap_call_speed -- --ignored --nocapture`
 
@@ -129,25 +131,9 @@ fn report(what: &str, h: &mut impl Heap) {
     );
 }
 
-#[test]
-#[ignore]
-fn heap_call_speed() {
-    let mut e = Engine::new();
-    report("private memory, port heap alone", &mut Direct(&mut e.mem));
-    report("private memory, by address", &mut ByAddress(&mut e));
-
-    let mut e = Engine::new();
-    e.mem.start_sharing();
-    report(
-        "shared memory (real threads), port heap alone",
-        &mut Direct(&mut e.mem),
-    );
-    report(
-        "shared memory (real threads), by address",
-        &mut ByAddress(&mut e),
-    );
-
-    // A second thread allocating and freeing the whole time, on its own view.
+/// `what` timed by address on `e` while a second thread allocates and frees the whole time on its
+/// own view of `e`'s shared memory.
+fn report_with_busy_thread(what: &str, e: &mut Engine) {
     let mut other = e.mem.view();
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stop2 = stop.clone();
@@ -168,11 +154,50 @@ fn heap_call_speed() {
         }
         n
     });
-    report(
-        "shared memory, a second thread allocating, by address",
-        &mut ByAddress(&mut e),
-    );
+    report(what, &mut ByAddress(e));
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
     let n = busy.join().expect("the second thread");
     eprintln!("heap call speed: the second thread made {n} frees and allocations meanwhile");
+}
+
+#[test]
+#[ignore]
+fn heap_call_speed() {
+    let mut e = Engine::new();
+    report("private memory, port heap alone", &mut Direct(&mut e.mem));
+    report("private memory, by address", &mut ByAddress(&mut e));
+
+    let mut e = Engine::new();
+    e.mem.start_sharing();
+    report(
+        "shared memory (real threads), port heap alone",
+        &mut Direct(&mut e.mem),
+    );
+    report(
+        "shared memory (real threads), by address",
+        &mut ByAddress(&mut e),
+    );
+    report_with_busy_thread(
+        "shared memory, a second thread allocating, by address",
+        &mut e,
+    );
+
+    // The thread heap (`NV_THREAD_HEAP`): the exe's pools served from each thread's own cache.
+    let mut e = Engine::new();
+    e.mem.enable_thread_heap();
+    report(
+        "thread heap, private memory, by address",
+        &mut ByAddress(&mut e),
+    );
+    let mut e = Engine::new();
+    e.mem.enable_thread_heap();
+    e.mem.start_sharing();
+    report(
+        "thread heap, shared memory (real threads), by address",
+        &mut ByAddress(&mut e),
+    );
+    report_with_busy_thread(
+        "thread heap, shared memory, a second thread allocating, by address",
+        &mut e,
+    );
 }

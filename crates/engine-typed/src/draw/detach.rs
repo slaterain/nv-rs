@@ -123,6 +123,9 @@ fn store_in_view(e: &Engine, addr: u32, value: u32) -> bool {
 /// The word at `addr`: the view's while it holds that word, else guest memory's.
 #[inline(always)]
 pub fn word(e: &Engine, addr: u32) -> u32 {
+    if let Some(value) = super::capture::list_word(e, addr) {
+        return value;
+    }
     if OPEN.load(Relaxed) {
         if let Some(value) = in_view(e, addr) {
             return value;
@@ -134,6 +137,9 @@ pub fn word(e: &Engine, addr: u32) -> u32 {
 /// Writes the word at `addr`: into the view while it holds that word, else into guest memory.
 #[inline(always)]
 pub fn set_word(e: &mut Engine, addr: u32, value: u32) {
+    if super::capture::set_list_word(e, addr, value) {
+        return;
+    }
     if OPEN.load(Relaxed) && store_in_view(e, addr, value) {
         return;
     }
@@ -246,6 +252,12 @@ pub fn candidates(e: &Engine, renderer: u32, out: &mut Vec<u32>) {
 /// which the view cannot reach. Each such call is a list read the drawing thread cannot make yet (step 1's
 /// list of what is still live). With no view open, `f` alone.
 pub fn suspended<R>(e: &mut Engine, f: impl FnOnce(&mut Engine) -> R) -> R {
+    let handed = super::capture::lists_out(e, None);
+    if !handed.is_empty() {
+        let answer = f(e);
+        super::capture::lists_in(e, &handed);
+        return answer;
+    }
     if !OPEN.load(Relaxed) {
         return f(e);
     }
@@ -280,10 +292,19 @@ pub fn suspended_for<R>(
     words: impl FnOnce(&Engine) -> Vec<u32>,
     f: impl FnOnce(&mut Engine) -> R,
 ) -> R {
-    if !OPEN.load(Relaxed) {
+    if !OPEN.load(Relaxed) && !super::capture::lists_here(e) {
         return f(e);
     }
     let addrs = words(e);
+    let handed = super::capture::lists_out(e, Some(&addrs));
+    if !handed.is_empty() {
+        let answer = f(e);
+        super::capture::lists_in(e, &handed);
+        return answer;
+    }
+    if !OPEN.load(Relaxed) {
+        return f(e);
+    }
     let id = run(e);
     let mut moved = Vec::new();
     {
