@@ -21105,7 +21105,7 @@ mod tests {
             e.register_double(target, |_, _| float(100.0));
             e.mem.set_u32(table + 0xc, target);
             e.mem.set_u32(this.addr() + 0xa4, table);
-            e.register(0x00a2_4660, move |_, a| {
+            e.register_double(0x00a2_4660, move |_, a| {
                 int(u32::from(
                     held && a[0] == 0x4400 && a[1] == 0xc && a[2] == 0,
                 ))
@@ -21160,7 +21160,7 @@ mod tests {
             e.mem.set_u32(this.addr(), table);
             e.register(0x0052_5430, |e, a| int(u32::from(e.mem.u32(a[0] + 8) != 0)));
             e.register(0x0066_dca0, |_, _| float(30.0));
-            e.register(0x0066_ef50, move |_, _| float(points as f64));
+            e.register_double(0x0066_ef50, move |_, _| float(points as f64));
             fn_0093ab30(&mut e, this, 9);
             let calls = called(&e, target);
             match spent {
@@ -21260,7 +21260,7 @@ mod tests {
             (true, false, true, true, false),
         ] {
             let mut e = engine();
-            e.register(0x00a2_4660, move |_, a| {
+            e.register_double(0x00a2_4660, move |_, a| {
                 int(u32::from(match (a[1], a[2]) {
                     (2, 1) => pressed,
                     (2, 0) => held,
