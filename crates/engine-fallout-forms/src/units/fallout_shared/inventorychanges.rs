@@ -17783,8 +17783,9 @@ mod tests {
         assert!(calls(&e, ACTOR_WEIGHT_CHANGED).is_empty());
     }
 
-    /// lStewieAl's Tweaks' S0156 at the store `0x4D0EDA`: a container whose one item weighs -1.0
-    /// (a mod's negative weight) totals exactly -1.0, the "weigh again" mark. Off: -1.0 is stored
+    /// lStewieAl's Tweaks' S0156 at the store `0x4D0EDA`: a container whose two items weigh -2.0 (a
+    /// mod's negative weight) and 1.0 totals exactly -1.0, the "weigh again" mark (an item of exactly
+    /// -1.0 counts as 0). Off: -1.0 is stored
     /// and answered; on: 0.0.
     #[test]
     fn s0156_an_inventory_weighing_minus_one_stores_zero() {
@@ -17793,8 +17794,9 @@ mod tests {
             let owner = object(&mut e);
             let this = inventory(&mut e, &[], owner);
             e.set(this, InventoryChanges::fcontainerweight, -1.0f32);
-            let odd = weighted_form(&mut e, 0x20, -1.0);
-            give_container(&mut e, owner, &[(1, odd)]);
+            let negative = weighted_form(&mut e, 0x20, -2.0);
+            let light = weighted_form(&mut e, 0x20, 1.0);
+            give_container(&mut e, owner, &[(1, negative), (1, light)]);
             e.set_stewie(
                 engine_core::extend::stewie::INVENTORY_WEIGHT_NOT_MINUS_ONE,
                 row,
