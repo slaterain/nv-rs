@@ -1616,6 +1616,8 @@ fn render_passes_take_out_a_dead_light_and_rebuild() {
         set(&mut e, property + 0x60, first);
         set(&mut e, property + 0x64, second);
         set(&mut e, property + 0x68, 2);
+        // The alpha kept below 1 (its crossing would clear the state).
+        set(&mut e, property + 0x28, 0x3f40_0000);
         // The state at the key of pass type 0x10 with word 3, the list not changed.
         set(&mut e, property + 0x38, (0x10 << 8) | 3);
         e.mem.set_u8(property + 0x74, 0);
