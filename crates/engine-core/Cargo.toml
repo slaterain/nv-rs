@@ -21,9 +21,10 @@ soft-x87 = []
 qos = { path = "../qos" }
 
 # Win32_System_Memory: the guest memory's 4 GB host reservation (mem.rs, VirtualAlloc and
-# VirtualFree). The platform layer's Windows APIs are the `engine-platform` crate's.
+# VirtualFree). Win32_System_Threading: the game threads' processor time (thread_cpu.rs).
+# The platform layer's Windows APIs are the `engine-platform` crate's.
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.58", features = ["Win32_Foundation", "Win32_System_Memory"] }
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_System_Memory", "Win32_System_Threading"] }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(nv_chained_unwind_asm)"] }

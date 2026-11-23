@@ -1585,7 +1585,15 @@ pub fn debug_text_create_debug_text(
                 let root = debug_text_root(e);
                 attach_child(e, root, node);
             }
-            let depth: f32 = e.global(TEXT_DEPTH);
+            // `0xA10311` (lStewieAl's Tweaks' S0095, `fixConsoleMainMenuVisibility`, points the `FLD`
+            // at its own -200.0 while the exe's address is still there): the text nodes in front
+            // of the main menu.
+            let depth: f32 = if e.stewie(engine_core::extend::stewie::CONSOLE_IN_FRONT_OF_MAIN_MENU)
+            {
+                -200.0
+            } else {
+                e.global(TEXT_DEPTH)
+            };
             e.mem.set_f32(node + 0x58, x);
             e.mem.set_f32(node + 0x5c, depth);
             e.mem.set_f32(node + 0x60, y);
@@ -3583,6 +3591,25 @@ mod tests {
         assert_eq!(geometry_attach[0][0], node.addr());
         assert_eq!(geometry_attach[1], vec![ROOT, node.addr(), 1]);
         assert_eq!(e.mem.u32(tls + 0x2b4), 5);
+    }
+
+    /// lStewieAl's Tweaks' S0095 (`0xA10311`): with the row on the node's depth (+0x5C) is
+    /// Tweaks' -200.0, in front of the main menu; off, the exe's float at `0104f7c4` (-50.0).
+    #[test]
+    fn s0095_the_console_text_is_in_front_of_the_main_menu() {
+        for (on, depth) in [(false, -50.0f32), (true, -200.0)] {
+            let (mut e, _made) = builder_world();
+            let this = new_debug_text(&mut e);
+            let text = put_text(&mut e, "hi");
+            e.set_stewie(
+                engine_core::extend::stewie::CONSOLE_IN_FRONT_OF_MAIN_MENU,
+                on,
+            );
+            let node =
+                debug_text_create_debug_text(&mut e, this, text, 700.0, 100.0, 3, 0, Ptr::NULL);
+            assert!(!node.is_null());
+            assert_eq!(e.mem.f32(node.addr() + 0x5c), depth, "row {on}");
+        }
     }
 
     #[test]

@@ -36,7 +36,8 @@
 //! `ModLogPrint` reads), H22 (`TESObject::IsMarker` by JIP's set of ids), G54 (the companion
 //! wheel's teammate test false for an actor whose wheel `SetWheelDisabled` turned off; the game's
 //! answer otherwise) and H19 (JIP's gun wobble: the stat part left out for an actor
-//! `ToggleNoGunWobble` marks).
+//! `ToggleNoGunWobble` marks). D02 (JIP's own, its `PostLoad`): the game's start-up call of the
+//! process lists' time refresh is taken away; JIP's deferred start makes it (`cosave.rs`).
 //!
 //! Threads: every handler here reads only the game's own memory and keeps no state, so any
 //! thread may run it: G39 on the main thread and the loader threads (an NPC's model is asked as
@@ -139,6 +140,7 @@ pub const AREA: Area = Area {
         WHEEL_TEAMMATE[1].addr(),
         WHEEL_TEAMMATE[2].addr(),
         GUN_WOBBLE.addr(),
+        START_UP_PROCESS_REFRESH.addr(),
     ],
     jip_wraps: &[SET_FORM_TYPE.addr(), NPC_MODEL.addr(), IS_MARKER.addr()],
     install_jip,
@@ -214,7 +216,23 @@ fn gun_wobble(e: &mut Engine, w: &[u32]) -> Option<u32> {
     Some((sum as f32).to_bits())
 }
 
+/// D02's seam: `main`'s call of the process lists' time refresh at start-up (`0x86B1EE`, `CALL
+/// 0x00970D50`; no words).
+pub const START_UP_PROCESS_REFRESH: SiteSlot = SiteSlot::new(Owner::Jip, 0x0086_b1ee);
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), jip_nvse.cpp: NVSEMessageHandler, kMessage_PostLoad
+// (SAFE_WRITE_BUF(0x86B1EE, "\x0F\x1F\x44\x00\x00")).
+/// D02, the start-up half: the call is a NOP, taken away. JIP makes it at its deferred start
+/// instead (`DeferredInit`'s `ThisCall(0x970D50, ProcessManager::Get())`,
+/// [`crate::cosave::refresh_process_time`]), so the calendar's hour and date reach the AI's
+/// globals once, after the data and the main menu are up, as with JIP. Main thread, before the
+/// game's threads start; no state.
+fn start_up_process_refresh(_: &mut Engine, _: &[u32]) -> Option<u32> {
+    Some(1)
+}
+
 fn install_jip(e: &mut Engine) {
+    e.on_site(START_UP_PROCESS_REFRESH, start_up_process_refresh);
     e.wrap(SET_FORM_TYPE, set_form_type);
     e.wrap(NPC_MODEL, npc_model);
     e.on_site(MOD_NAME_HASH, mod_name_hash);

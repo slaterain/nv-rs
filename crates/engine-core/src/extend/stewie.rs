@@ -306,8 +306,14 @@ pub mod kept {
     pub const REMAP_DEBOUNCE: usize = 3;
     /// S0883's `static char buf[0x200]`: the settings save failure's text.
     pub const SAVE_SETTINGS_ERROR: usize = 4;
+    /// S0204's `Actor* pLastKilledActor` (4 bytes): the actor the console's `kill` last killed for
+    /// the player, until `Actor::Kill` reaches its experience step for it.
+    pub const LAST_KILL_COMMAND_ACTOR: usize = 5;
+    /// S0111's `bool isInPlayerAmmoSwap` (4 bytes): set while the player's ammunition swap runs
+    /// (`PlayerCharacter::Update`'s call of `009462c0`), read by `0095d450`.
+    pub const PLAYER_AMMO_SWAP: usize = 6;
     /// How many.
-    pub const COUNT: usize = 5;
+    pub const COUNT: usize = 7;
 }
 
 /// The last thing each of Tweaks' warnings printed (its functions' statics), its print queue and
@@ -332,6 +338,14 @@ pub(crate) struct Prints {
     /// Tweaks' slips not copied ([`Engine::stewie_slip_guard`]): on with the fixes preset's
     /// missing-data guard row (`NV_NVSE_NULL_GUARD`, the host's install), off in vanilla.
     slip_guard: AtomicBool,
+    /// `[Extra Console Details] bMeshPath` (Tweaks' code default 0): S0059 prints every selected
+    /// reference's model path with it.
+    mesh_path: AtomicBool,
+    /// S0022.45's `ConsoleManager_HandleControllerHotkeys` statics: `lastHeldKey` (an Xbox control
+    /// code, 0 for none), `nextKeyRepeatTime` and `nextThumbStickRepeatTime` (milliseconds).
+    pub(crate) console_pad_last_held: AtomicU32,
+    pub(crate) console_pad_next_repeat: AtomicU32,
+    pub(crate) console_stick_next_repeat: AtomicU32,
 }
 
 impl Default for Prints {
@@ -344,6 +358,10 @@ impl Default for Prints {
             queued: Mutex::new(Vec::new()),
             lod_ref: AtomicU32::new(0),
             slip_guard: AtomicBool::new(false),
+            mesh_path: AtomicBool::new(false),
+            console_pad_last_held: AtomicU32::new(0),
+            console_pad_next_repeat: AtomicU32::new(0),
+            console_stick_next_repeat: AtomicU32::new(0),
         }
     }
 }
@@ -673,6 +691,17 @@ impl Engine {
     /// Whether the missing-data guard is on for Tweaks' rows ([`Engine::set_stewie_slip_guard`]).
     pub fn stewie_slip_guard(&self) -> bool {
         self.extend.stewie.3.slip_guard.load(Relaxed)
+    }
+
+    /// `[Extra Console Details] bMeshPath` (`crates/stewie`'s install): whether S0059 prints the
+    /// model path of every selected reference, not only of one whose model is missing.
+    pub fn set_stewie_mesh_path(&self, on: bool) {
+        self.extend.stewie.3.mesh_path.store(on, Relaxed);
+    }
+
+    /// Whether S0059 prints every selected reference's model path ([`Engine::set_stewie_mesh_path`]).
+    pub fn stewie_mesh_path(&self) -> bool {
+        self.extend.stewie.3.mesh_path.load(Relaxed)
     }
 
     /// Whether the console's print passes over its loading-screen test for this line (S0031's

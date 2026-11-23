@@ -4497,7 +4497,7 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
                     let interval = setting_float(e, AMMO_SWAP_SETTING);
                     let timer = e.get(this, PlayerCharacter::fAmmoSwapButtonTimer);
                     let long_enough = (interval as f64) < timer as f64;
-                    e.call(0x0094_62c0, &args![this, long_enough, 0u32]);
+                    swap_ammo(e, this, long_enough);
                     if long_enough {
                         e.set(this, PlayerCharacter::fAmmoSwapButtonTimer, 0.0);
                     }
@@ -5072,7 +5072,7 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
             }
         }
         if !busy
-            && !e.call(0x005a_03f0, &args![this, 1u32]).bool()
+            && !jump_blocked(e, this)
             // xNVSE's `GetControlState_JumpingHook` (the call at 0094215f): 0 with the mods'
             // jumping disabled.
             && e.call(0x00a2_4660, &args![main_state, 0x0cu32, 1u32]).u32() != 0
@@ -5565,12 +5565,7 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
                                     .hook_users(engine_core::extend::Hook::InteractionDisabled)
                                     != 0
                                     && e.site(0x0094_3279, &[reference]).is_some();
-                                if !skipped
-                                    && e.call(
-                                        0x0057_3170,
-                                        &args![reference, this, 0u32, 0u32, activator],
-                                    )
-                                    .bool()
+                                if !skipped && activate_or_workbench(e, reference, this, activator)
                                 {
                                     allow = false;
                                 } else {
@@ -5670,7 +5665,7 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
                 let idle: f32 = e.global(CAMERA_VALUE_011E07C4);
                 e.set_global(CAMERA_VALUE_011E07C4, (idle as f64 + delta as f64) as f32);
             }
-            if e.call(0x004b_9930, &args![IDLE_OBJECT_011E09E0]).bool() {
+            if auto_vanity_allowed(e) {
                 let limit = setting_float(e, IDLE_SETTING_011CCF50);
                 let idle: f32 = e.global(CAMERA_VALUE_011E07C4);
                 if (limit as f64) < idle as f64
@@ -5795,7 +5790,7 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
             && e.call(0x0094_44a0, &args![]).bool()
             && e.call(0x0070_9be0, &args![]).bool()
             && e.call(0x0094_4270, &args![]).u8() == 0
-            && !e.call(0x005c_7870, &args![this]).bool()
+            && !levelup_held(e, this)
         {
             let progression = e.call(0x0046_4e10, &args![this]).u32();
             e.call(0x008d_5210, &args![progression]);
@@ -9610,6 +9605,110 @@ fn alt_blocked(e: &Engine, flag: u32) -> bool {
     alt != 0 && alt & flag != 0
 }
 
+/// The jump test of `PlayerCharacter::Update` (`0x942148`, `005a03f0` with 1: the player's
+/// control flags at +0x680 forbid it). lStewieAl's Tweaks' row S0224
+/// (`PreventJumpingWhenFastTraveling`, its `OnPlayerUpdateShouldPreventJump`): also forbidden while
+/// the map menu (`011da368`) has a marker selected (+0x118). Tweaks reads the menu without a null
+/// test; a missing menu counts as no marker here (a guard against a crash only).
+fn jump_blocked(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
+    if e.stewie(engine_core::extend::stewie::NO_JUMP_WHEN_FAST_TRAVELING) {
+        let map = e.global::<u32>(MAP_MENU);
+        if map != 0 && e.mem.u32(map + 0x118) != 0 {
+            return true;
+        }
+    }
+    e.call(0x005a_03f0, &args![this, 1u32]).bool()
+}
+/// `MapMenu`'s singleton (`011da368`).
+const MAP_MENU: u32 = 0x011d_a368;
+
+/// The auto vanity camera's test of `PlayerCharacter::Update` (`0x943593`, `004b9930` on the
+/// setting `bDisableAutoVanityMode`: its value at +4 is 0). lStewieAl's Tweaks' row S0209
+/// (`PreventAutoVanityModeIfSpecialIdlesArePlaying`, its `ShouldAllowAutoVanity`): with the
+/// setting clear, also only when the player (`011dea3c`) is in third person (+0x64B) or its
+/// animation data (slot `0x1e4`) plays no special idle (sequence 7, +0xFC).
+fn auto_vanity_allowed(e: &mut Engine) -> bool {
+    if !e.stewie(engine_core::extend::stewie::NO_AUTO_VANITY_IN_SPECIAL_IDLE) {
+        return e.call(0x004b_9930, &args![IDLE_OBJECT_011E09E0]).bool();
+    }
+    if e.mem.u32(IDLE_OBJECT_011E09E0 + 4) != 0 {
+        return false;
+    }
+    let player = e.global::<u32>(PLAYER_SINGLETON);
+    if e.mem.u8(player + 0x64b) != 0 {
+        return true;
+    }
+    let data = e.vcall(player, 0x1e4, &args![]).u32();
+    // Tweaks reads the animation data without a null test: none counts as no idle here (a guard
+    // against a crash only).
+    data == 0 || e.mem.u32(data + 0xfc) == 0
+}
+
+/// The swap control's ammunition swap of `PlayerCharacter::Update` (`0x940B10`, `009462c0`).
+/// lStewieAl's Tweaks' row S0111 (`patchFixLoopingReloadAmmoSwapInstantRefill`, its
+/// `OnPlayerSelectAmmoHook`): its flag (the kept word `PLAYER_AMMO_SWAP`) is set while the swap
+/// runs, for `0095d450`.
+fn swap_ammo(e: &mut Engine, this: Ptr<PlayerCharacter>, long_enough: bool) {
+    let flag = e
+        .stewie(engine_core::extend::stewie::AMMO_SWAP_NO_INSTANT_REFILL)
+        .then(|| e.stewie_kept(engine_core::extend::stewie::kept::PLAYER_AMMO_SWAP, 4));
+    if let Some(flag) = flag {
+        e.mem.set_u32(flag, 1);
+    }
+    e.call(0x0094_62c0, &args![this, long_enough, 0u32]);
+    if let Some(flag) = flag {
+        e.mem.set_u32(flag, 0);
+    }
+}
+
+/// S0210's `SetIsUsingAutomaticWeapon(false)` on the player's process (Tweaks'
+/// `PlayerCharacter::GetSingleton()->baseProcess`, slot `0x6e0`).
+fn clear_automatic_firing(e: &mut Engine) {
+    let player = e.global::<u32>(PLAYER_SINGLETON);
+    let process = e.mem.u32(player + 0x68);
+    e.vcall(process, 0x6e0, &args![0u32]);
+}
+
+/// The activation of `PlayerCharacter::Update` (`0x94328E`, `TESObjectREFR::Activate` `00573170`);
+/// its answer true means activated (no "no activate" sound). lStewieAl's Tweaks' row S0022.21
+/// (`MenuFixes`, its `OnActivateRefShouldSkipNoActivateSound`): the activation runs as the exe's,
+/// and a reference whose base form (+0x20) is the workbench (`00075005`) or the reloading bench
+/// (`0015361F`, form id at +0xC) counts as activated too. As in Tweaks, the base form is read
+/// before the activation runs.
+fn activate_or_workbench(
+    e: &mut Engine,
+    reference: u32,
+    this: Ptr<PlayerCharacter>,
+    activator: u32,
+) -> bool {
+    let workbench = e
+        .stewie(engine_core::extend::stewie::WORKBENCH_NO_ACTIVATE_SOUND)
+        .then(|| {
+            let base = e.mem.u32(reference + 0x20);
+            let id = if base != 0 { e.mem.u32(base + 0xc) } else { 0 };
+            id == 0x0007_5005 || id == 0x0015_361f
+        });
+    let activated = e
+        .call(0x0057_3170, &args![reference, this, 0u32, 0u32, activator])
+        .bool();
+    activated || workbench == Some(true)
+}
+
+/// The level-up test of `PlayerCharacter::Update` (`0x9439D4`, `005c7870`: the player in character
+/// generation, +0x75C). lStewieAl's Tweaks' row S0164 (`patchPreventLevelupInTestAllCells`, its
+/// `PlayerInCharGenOrTestAllCells`): also while the console's `TestAllCells` runs (TES +0x51 or
+/// +0x52).
+fn levelup_held(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
+    if !e.stewie(engine_core::extend::stewie::NO_LEVELUP_IN_TEST_ALL_CELLS) {
+        return e.call(0x005c_7870, &args![this]).bool();
+    }
+    if e.mem.u8(this.addr() + 0x75c) != 0 {
+        return true;
+    }
+    let tes = e.global::<u32>(TES_SINGLETON);
+    e.mem.u8(tes + 0x51) != 0 || e.mem.u8(tes + 0x52) != 0
+}
+
 fn process_flag(e: &mut Engine, this: Ptr<PlayerCharacter>, slot: u32) -> bool {
     let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
     e.vcall(process, slot, &args![]).u8() != 0
@@ -10164,8 +10263,23 @@ fn released_attack(
         return;
     }
     let group = animation_group(e, anim0, 4);
+    // lStewieAl's Tweaks' row S0210 (`FixSetIsFiringAutomaticWeaponNotClearing`, its
+    // `AnimGroup__IsAttack` at `0x949838` and `OnCheckAttackHeldClearIsFiringWeapon` at `0x949862`):
+    // the player's process (`011dea3c` +0x68) is told it is not firing an automatic weapon (slot
+    // `0x6e0` with 0) when the group is none (0xFF) and when the attack is still held at the second
+    // test.
+    let clears = e.stewie(engine_core::extend::stewie::AUTOMATIC_FIRING_CLEARS);
+    if clears && group == 0xff {
+        clear_automatic_firing(e);
+    }
     if e.call(0x005f_2540, &args![group]).u8() != 0
-        && (button_state(e, input, 4, 2) || !button_state(e, input, 4, 0))
+        && (button_state(e, input, 4, 2) || {
+            let held = button_state(e, input, 4, 0);
+            if clears && held {
+                clear_automatic_firing(e);
+            }
+            !held
+        })
     {
         let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
         e.vcall(process, 0x6e0, &args![0u32]);
@@ -20219,6 +20333,202 @@ mod tests {
         released_attack(&mut e, this, 0x1000, 0xa00, 0, &mut ready);
         assert!(!ready);
         assert_eq!(e.mem.u8(ATTACK_RELEASE_BYTE), 1);
+    }
+
+    /// S0210 (`FixSetIsFiringAutomaticWeaponNotClearing`): the player's process slot `0x6e0` with
+    /// 0 (not firing an automatic weapon). With the row it is also told when the weapon's group is
+    /// none (0xFF), and when the attack is still held at the second button test; the exe tells it
+    /// only when the attack was released (both ways).
+    #[test]
+    fn s0210_the_automatic_firing_flag_clears() {
+        // (row, group, attack group, released, held, the calls)
+        for (on, group, attack, released, held, cleared) in [
+            (false, 0xffu32, 0u32, false, false, 0usize),
+            (true, 0xff, 0, false, false, 1),
+            (false, 0x10, 1, false, true, 0),
+            (true, 0x10, 1, false, true, 1),
+            (true, 0x10, 1, true, false, 1),
+            (false, 0x10, 1, true, false, 1),
+        ] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::AUTOMATIC_FIRING_CLEARS, on);
+            let this = attack_world(&mut e, 0x0265_0000, &[(0x6e0, 0)]);
+            e.set_global(0x011d_ea3c, this.addr());
+            e.register_double(0x0043_01b0, move |_, _| int(group));
+            e.register_double(0x005f_2540, move |_, _| int(attack));
+            e.register(0x005f_25d0, |_, _| int(0));
+            e.register_double(0x00a2_4660, move |_, a| {
+                int(u32::from(
+                    a[1] == 4 && ((a[2] == 2 && released) || (a[2] == 0 && held)),
+                ))
+            });
+            let mut ready = true;
+            released_attack(&mut e, this, 0x1000, 0xa00, 0, &mut ready);
+            assert_eq!(
+                called(&e, slot_target(0x0265_0000, 0x6e0)).len(),
+                cleared,
+                "on {on} group {group:#x} released {released} held {held}"
+            );
+        }
+    }
+
+    /// S0224 (`PreventJumpingWhenFastTraveling`): the jump test answers blocked when the player's
+    /// control flags say so (`005a03f0` with 1); with the row also while the map menu
+    /// (`011da368`) has a marker selected (+0x118), without asking the flags. No map menu counts
+    /// as no marker.
+    #[test]
+    fn s0224_no_jump_while_a_map_marker_is_selected() {
+        for (on, menu, marker, blocked) in [
+            (false, true, true, false),
+            (true, true, true, true),
+            (true, true, false, false),
+            (true, false, false, false),
+        ] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::NO_JUMP_WHEN_FAST_TRAVELING, on);
+            e.map(0x011d_a000, 0x1000);
+            let this = player(&mut e);
+            e.register(0x005a_03f0, |_, _| int(0));
+            let map = e.mem.alloc(0x200);
+            e.mem.set_u32(map + 0x118, u32::from(marker) * 0x6600);
+            e.set_global(MAP_MENU, if menu { map } else { 0 });
+            assert_eq!(
+                jump_blocked(&mut e, this),
+                blocked,
+                "on {on} menu {menu} marker {marker}"
+            );
+            assert_eq!(called(&e, 0x005a_03f0).is_empty(), blocked, "on {on}");
+        }
+    }
+
+    /// S0209 (`PreventAutoVanityModeIfSpecialIdlesArePlaying`): the auto vanity camera may start
+    /// when `bDisableAutoVanityMode` (its value at +4) is 0; with the row, also only in third
+    /// person (+0x64B) or with no special idle (sequence 7 of the animation data, slot `0x1e4`,
+    /// +0xFC) playing.
+    #[test]
+    fn s0209_no_auto_vanity_during_a_first_person_special_idle() {
+        for (on, disabled, third, idle, allowed) in [
+            (false, 0u32, false, true, true),
+            (false, 1, false, false, false),
+            (true, 0, false, true, false),
+            (true, 0, true, true, true),
+            (true, 0, false, false, true),
+            (true, 1, true, false, false),
+        ] {
+            let mut e = engine();
+            e.set_stewie(
+                engine_core::extend::stewie::NO_AUTO_VANITY_IN_SPECIAL_IDLE,
+                on,
+            );
+            e.map(0x011e_0000, 0x1000);
+            e.map(0x011d_e000, 0x1000);
+            e.mem.set_u32(IDLE_OBJECT_011E09E0 + 4, disabled);
+            e.register(0x004b_9930, |e, a| int(u32::from(e.mem.u8(a[0] + 4) == 0)));
+            let this = player(&mut e);
+            e.mem.set_u8(this.addr() + 0x64b, u8::from(third));
+            let data = e.mem.alloc(0x200);
+            e.mem.set_u32(data + 0xfc, u32::from(idle) * 0x6700);
+            let table = e.mem.alloc(0x800);
+            let target = e.mem.alloc(8);
+            e.register_double(target, move |_, _| int(data));
+            e.mem.set_u32(table + 0x1e4, target);
+            e.mem.set_u32(this.addr(), table);
+            e.set_global(PLAYER_SINGLETON, this.addr());
+            assert_eq!(
+                auto_vanity_allowed(&mut e),
+                allowed,
+                "on {on} disabled {disabled} third {third} idle {idle}"
+            );
+        }
+    }
+
+    /// S0164 (`patchPreventLevelupInTestAllCells`): the level-up waits while the player is in
+    /// character generation (+0x75C); with the row also while TES says `TestAllCells` runs (+0x51
+    /// or +0x52).
+    #[test]
+    fn s0164_no_levelup_during_test_all_cells() {
+        for (on, chargen, test_51, test_52, held) in [
+            (false, false, true, true, false),
+            (false, true, false, false, true),
+            (true, false, true, false, true),
+            (true, false, false, true, true),
+            (true, false, false, false, false),
+            (true, true, false, false, true),
+        ] {
+            let mut e = engine();
+            e.set_stewie(
+                engine_core::extend::stewie::NO_LEVELUP_IN_TEST_ALL_CELLS,
+                on,
+            );
+            e.map(0x011d_e000, 0x1000);
+            e.register(0x005c_7870, |e, a| int(u32::from(e.mem.u8(a[0] + 0x75c))));
+            let this = player(&mut e);
+            e.mem.set_u8(this.addr() + 0x75c, u8::from(chargen));
+            let tes = e.mem.alloc(0x100);
+            e.mem.set_u8(tes + 0x51, u8::from(test_51));
+            e.mem.set_u8(tes + 0x52, u8::from(test_52));
+            e.set_global(TES_SINGLETON, tes);
+            assert_eq!(
+                levelup_held(&mut e, this),
+                held,
+                "on {on} chargen {chargen}"
+            );
+        }
+    }
+
+    /// S0022.21 (`MenuFixes`, the workbench): an activation the reference refuses (`00573170`
+    /// answers 0) counts as done with the row when the reference's base form is the workbench
+    /// (`00075005`) or the reloading bench (`0015361F`); another form, or the row off, stays
+    /// refused. An accepted activation is done either way. The activation runs every time.
+    #[test]
+    fn s0022_21_a_workbench_counts_as_activated() {
+        for (on, id, accepted, done) in [
+            (false, 0x0007_5005u32, false, false),
+            (true, 0x0007_5005, false, true),
+            (true, 0x0015_361f, false, true),
+            (true, 0x0007_5006, false, false),
+            (false, 0x0007_5006, true, true),
+        ] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::WORKBENCH_NO_ACTIVATE_SOUND, on);
+            e.register_double(0x0057_3170, move |_, _| int(u32::from(accepted)));
+            let this = player(&mut e);
+            let base = e.mem.alloc(0x40);
+            e.mem.set_u32(base + 0xc, id);
+            let reference = e.mem.alloc(0x80);
+            e.mem.set_u32(reference + 0x20, base);
+            assert_eq!(
+                activate_or_workbench(&mut e, reference, this, 0x4400),
+                done,
+                "on {on} id {id:#x} accepted {accepted}"
+            );
+            assert_eq!(
+                called(&e, 0x0057_3170),
+                vec![vec![reference, this.addr(), 0, 0, 0x4400]]
+            );
+        }
+    }
+
+    /// S0111 (`patchFixLoopingReloadAmmoSwapInstantRefill`, `0x940B10`): with the row the swap
+    /// flag (the kept word) is 1 while `009462c0` runs and 0 after; off it is never set.
+    #[test]
+    fn s0111_the_swap_flag_is_set_during_the_swap() {
+        for on in [false, true] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::AMMO_SWAP_NO_INSTANT_REFILL, on);
+            let flag = e.stewie_kept(engine_core::extend::stewie::kept::PLAYER_AMMO_SWAP, 4);
+            let seen = std::rc::Rc::new(std::cell::Cell::new(9u32));
+            let during = seen.clone();
+            e.register_double(0x0094_62c0, move |e, _| {
+                during.set(e.mem.u32(flag));
+                Ret::default()
+            });
+            let this = player(&mut e);
+            swap_ammo(&mut e, this, true);
+            assert_eq!(seen.get(), u32::from(on), "on {on}");
+            assert_eq!(e.mem.u32(flag), 0);
+            assert_eq!(called(&e, 0x0094_62c0), vec![vec![this.addr(), 1, 0]]);
+        }
     }
 
     #[test]

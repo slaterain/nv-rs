@@ -58,6 +58,8 @@ pub static FIXES: &[Fix] = &[
     XNVSE_EXTRACT_ARGS,
     SHADER_WARM,
     IO_WAIT_ENDS_ON_COMPLETION,
+    LOAD_STEPS,
+    DEAD_LIGHTS,
     crate::half_loaded_move::FIX,
     crate::thread_races::FIX,
     TEXTURE_READ_FIRST,
@@ -70,6 +72,7 @@ pub static FIXES: &[Fix] = &[
     crate::patch_data::STRIP_LOD_WATER,
     crate::direct_files::FIX,
     DRAW_THREAD,
+    HAVOK_REF_COUNTS,
 ];
 
 /// The IO manager's wait for queued loads (`00c3dfa0`: main at a cell border, a load, a save) sleeps
@@ -89,6 +92,79 @@ fn install_io_wait(e: &mut Engine) {
     use engine::units::bsmain::iomanager::fn_00c3dfa0_waking_early;
     let (at, f) = engine::entry!(0x00c3_dfa0, fn_00c3dfa0_waking_early(Ptr, i32));
     e.register(at, f);
+}
+
+/// Loads finished in small steps: in play the game finishes background loads on main once a frame
+/// (`IOManager::UpdateQueue`, `00c3dbf0`): first the model loader's walk over its queued references
+/// (`00448cc0`, which starts their loads front to back, up to 5 ms), then completed loads for
+/// `iPostProcessMilliseconds` (5 ms), the clock
+/// looked at only after each one. While the loaders are busy (running across cell borders) both
+/// use their whole 5 ms frame after frame. With the row both get [`LOAD_STEPS_MS`] in play (the IO
+/// manager's mode 6); the game's own waits for loads and the loading screens keep the game's
+/// limits. Only while loads are in flight: with the loaders idle the game's own limits come back, so
+/// anything left over is finished. A player's own `iPostProcessMilliseconds` line in `Fallout.ini` or `FalloutPrefs.ini`
+/// wins for the second. The same work in the same order, spread over more frames.
+pub const LOAD_STEPS: Fix = Fix {
+    name: "loads finished in small steps",
+    env: "NV_LOAD_STEPS",
+    addresses: &[0x00c3_dbf0, 0x0044_8cc0],
+    summary: "while running across cell borders the game finishes its background loads in smaller steps each frame, so frame times jump less; far objects may get their models a few frames later",
+    install: install_load_steps,
+};
+
+/// Dead lights in a light list: a lighting property can keep a light after the light was destroyed
+/// (its destructor `00b9f0c0` takes it out only of the properties of the geometries in its own list,
+/// and `RemoveLight` `00b717a0` does nothing on a fenced property), and the original then reads
+/// through the light's cleared `spLight` in `ResortLights` (`00b70390`), the active-light walks and
+/// the pass staging: a stop seen in the staged fight with JIP's projectile lights (2026-11-22). JIP's
+/// game patches guard one of those walkers only (G01, `0xB707E0`). With the row such an entry is
+/// taken out and the object's passes rebuilt (at each lighting property's `GetRenderPasses`: the
+/// typed `00b67be0` and, hooked here, the translated `00bb4740` and `00c058f0`), the walks skip it,
+/// and the first few are printed (`engine_typed::lights::dead`, `engine::dead_lights`).
+pub const DEAD_LIGHTS: Fix = Fix {
+    name: "dead lights in a light list",
+    env: "NV_DEAD_LIGHT_GUARD",
+    addresses: &[0x00bb_4740, 0x00c0_58f0],
+    summary: "a light destroyed while an object's light list still held it is taken out of the list instead of stopping the game (the original reads through it; seen in fights with JIP's projectile lights)",
+    install: install_dead_lights,
+};
+
+fn install_dead_lights(e: &mut Engine) {
+    engine::dead_lights::install(e);
+}
+
+/// The milliseconds a frame [`LOAD_STEPS`] gives each of the two in play.
+pub const LOAD_STEPS_MS: u32 = 1;
+
+/// Whether an INI text sets `iPostProcessMilliseconds` in `[BackgroundLoad]`.
+pub fn ini_sets_post_process_budget(text: &str) -> bool {
+    crate::game_ini::value(text, "BackgroundLoad", "iPostProcessMilliseconds").is_some()
+}
+
+fn player_sets_post_process_budget() -> bool {
+    let Some(ini) = crate::game_ini::path() else {
+        return false;
+    };
+    let prefs = ini.with_file_name("FalloutPrefs.ini");
+    [ini, prefs].iter().any(|p| {
+        std::fs::read(p)
+            .map(|b| ini_sets_post_process_budget(&String::from_utf8_lossy(&b)))
+            .unwrap_or(false)
+    })
+}
+
+fn install_load_steps(e: &mut Engine) {
+    use engine::units::bsmain::run_00c3dbf0::{fn_00c3dbf0_play_budget, PLAY_BUDGET_MS};
+    use engine::units::fallout_shared::modelloader_p3::{fn_00448cc0_limited, LOADER_WALK_MS};
+    use std::sync::atomic::Ordering::Relaxed;
+    LOADER_WALK_MS.store(LOAD_STEPS_MS, Relaxed);
+    let (at, f) = engine::entry!(0x0044_8cc0, fn_00448cc0_limited(Ptr) -> bool);
+    e.register(at, f);
+    if !player_sets_post_process_budget() {
+        PLAY_BUDGET_MS.store(LOAD_STEPS_MS, Relaxed);
+        let (at, f) = engine::entry!(0x00c3_dbf0, fn_00c3dbf0_play_budget(Ptr) -> bool);
+        e.register(at, f);
+    }
 }
 
 /// The loading thread made a texture's renderer data (`00e6dc40`) under the renderer's source-data
@@ -474,6 +550,25 @@ pub const DRAW_THREAD: Fix = Fix {
     install: install_nothing,
 };
 
+/// Havok reference counts without the global lock (OFF in every preset, [`OFF_IN_EVERY_PRESET`], until its in-game
+/// check): every Havok object's reference count is guarded by one global critical section the game always has on
+/// (`00c90830` sets the lock mode 1), and the physics step holds it whole (`hkpWorld::stepDeltaTime` takes the
+/// world's lock, `00c91180`, which is `lockAll`), so a reference change on main while the physics thread steps waits
+/// for the step (7.0 ms in the 2026-11-22 play log). With the row the six reference functions change the count in one
+/// atomic operation and never take the section (`engine::units::havok_sdk::hkreferencedobject`, "Havok reference
+/// counts without the global lock"); the world's lock and `lockAll` keep it. Same counts, same deletes.
+pub const HAVOK_REF_COUNTS: Fix = Fix {
+    name: "Havok reference counts without the global lock",
+    env: "NV_HAVOK_REFS",
+    addresses: &engine::units::havok_sdk::hkreferencedobject::LOCK_FREE_ADDRESSES,
+    summary: "off in every preset until checked: a physics object's reference count changes in one atomic step instead of under Havok's one global lock, so the main thread no longer waits for the physics step to finish",
+    install: install_havok_ref_counts,
+};
+
+fn install_havok_ref_counts(e: &mut Engine) {
+    engine::units::havok_sdk::hkreferencedobject::lock_free_turn_on(e);
+}
+
 /// UI Organizer built in (`crates/uio`, parts 1 and 2): its lists (`Data\uio\supported.txt` and
 /// `Data\uio\public\*.txt`) put UI mods' additions into the menus, in memory, and every menu file
 /// is read through UIO's reader and parsed by its own XML parser. It changes how every menu file
@@ -549,7 +644,7 @@ fn install_nothing(_: &mut Engine) {}
 
 /// Rows that are off in every preset until the maintainer turns them on: only their own variable or `Fallout.ini`
 /// line turns them on.
-pub const OFF_IN_EVERY_PRESET: &[&str] = &[DRAW_THREAD.env];
+pub const OFF_IN_EVERY_PRESET: &[&str] = &[DRAW_THREAD.env, HAVOK_REF_COUNTS.env];
 
 /// The rows that register nothing at an exe address: the menu limit paces the uncapped step;
 /// the extender's rows set flags `crates/nvse` reads.
@@ -575,6 +670,7 @@ const NO_ADDRESS: &[&str] = &[
     SCRIPT_LIST_GUARD.name,
     XNVSE_EXTRACT_ARGS.name,
     SHADER_WARM.name,
+    DEAD_LIGHTS.name,
     DRAW_THREAD.name,
 ];
 
@@ -1363,6 +1459,7 @@ pub fn install(e: &mut Engine, choice: &Choice) {
     for fix in FIXES.iter().filter(|f| choice.is_on(f)) {
         (fix.install)(e);
     }
+    install_loader_walk_limit(e, std::env::var("NV_LOADER_WALK_MS").ok().as_deref());
     if choice.is_on(&DRAW_THREAD) {
         crate::draw_thread::install(e, choice);
     }
@@ -1375,6 +1472,22 @@ pub fn install(e: &mut Engine, choice: &Choice) {
             crate::patch_data::strip_load_with_cell_offsets,
         );
     }
+}
+
+/// `NV_LOADER_WALK_MS=n` (a measuring switch, off unless set, in every preset): the model loader's
+/// walk over its queued references, run every frame before the IO manager's budget, gives up after
+/// `n` ms in play instead of the exe's 5 ([`fn_00448cc0_limited`]). Unset, 0 or not a number:
+/// nothing registered.
+///
+/// [`fn_00448cc0_limited`]: engine::units::fallout_shared::modelloader_p3::fn_00448cc0_limited
+pub fn install_loader_walk_limit(e: &mut Engine, value: Option<&str>) -> Option<u32> {
+    use engine::units::fallout_shared::modelloader_p3::{fn_00448cc0_limited, LOADER_WALK_MS};
+    let ms = value?.trim().parse::<u32>().ok().filter(|&ms| ms > 0)?;
+    LOADER_WALK_MS.store(ms, std::sync::atomic::Ordering::Relaxed);
+    let (at, f) = engine::entry!(0x0044_8cc0, fn_00448cc0_limited(Ptr) -> bool);
+    e.register(at, f);
+    eprintln!("NV_LOADER_WALK_MS: the model loader's walk gives up after {ms} ms a frame in play");
+    Some(ms)
 }
 
 /// The settings file: `NV_SETTINGS` when set; else `settings.ini` beside the program or in the
@@ -1403,6 +1516,24 @@ mod tests {
 
     fn no_env(_: &str) -> Option<String> {
         None
+    }
+
+    /// The load-steps row is on in the fixes preset, off in vanilla, and sees a player's own
+    /// post-process budget line.
+    #[test]
+    fn load_steps_is_a_fixes_row_and_reads_the_player_s_budget_line() {
+        assert!(Choice::from_parts(None, no_env).unwrap().is_on(&LOAD_STEPS));
+        assert!(!Choice::vanilla().is_on(&LOAD_STEPS));
+        assert!(ini_sets_post_process_budget(
+            "[BackgroundLoad]\niPostProcessMilliseconds=3\n"
+        ));
+        assert!(!ini_sets_post_process_budget(
+            "[BackgroundLoad]\niPostProcessMillisecondsLoadingQueuedPriority=4\n"
+        ));
+        assert!(!ini_sets_post_process_budget(
+            "[General]\niPostProcessMilliseconds=3\n"
+        ));
+        assert_eq!(LOAD_STEPS_MS, 1);
     }
 
     fn env_of(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {

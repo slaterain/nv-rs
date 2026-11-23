@@ -15,7 +15,7 @@
 //!
 //! **Always-on fixes** (`InitGamePatches`): G03 achievements after the console, G34
 //! `PlaySound3D`'s node, G70 `GetLocked` on a terminal, G71 `IsCurrentFurnitureObj`'s null
-//! process. G60: `RemoveMe` giving the player an item refreshes the open item list at the
+//! process, G24 a busy script runner's names and log skipped (speed). G60: `RemoveMe` giving the player an item refreshes the open item list at the
 //! next main loop pass (JIP's refresh) instead of at once. **JIP's own** (in whenever JIP answers "installed"): G123, the "get hit" image space
 //! answered by JIP's hit effects word ([`get_hit_imod`]). JIP installs it in `InitGamePatches`
 //! (`WriteRelJump(0x5D2860, GetHitIMODHook)`), but it is under `INSTALLED`, not the fixes row: it
@@ -51,6 +51,8 @@ pub const FURNITURE_PROCESS: SiteSlot = SiteSlot::new(Owner::Jip, 0x0059_e034);
 pub const SOUND_NODE: SiteSlot = SiteSlot::new(Owner::Jip, 0x005c_240d);
 /// G03: `AddAchievement`'s console-used test.
 pub const ACHIEVEMENT: SiteSlot = SiteSlot::new(Owner::Jip, 0x005d_3b69);
+/// G24: `ScriptRunner::Run`'s names and log for a busy runner (the jump at `0x5E0DD1`).
+pub const NESTED_RUN_LOG: SiteSlot = SiteSlot::new(Owner::Jip, 0x005e_0dd1);
 /// G51: `AddItem`'s tests before the container items' health call (the jump at `0x5B4DBC`).
 pub const EVERY_ITEM_HEALTH: SiteSlot = SiteSlot::new(Owner::Jip, 0x005b_4dbc);
 /// G123: `TESImageSpaceModifier::GetGetHit` (no arguments).
@@ -70,6 +72,7 @@ pub const AREA: Area = Area {
         FAILED_SCRIPT_LOCKS[1].addr(),
         FAILED_SCRIPT_LOCKS[2].addr(),
         REMOVE_ME_REFRESH.addr(),
+        NESTED_RUN_LOG.addr(),
     ],
     fix_wraps: &[],
     install_fixes,
@@ -122,6 +125,16 @@ fn install_fixes(e: &mut Engine) {
     e.on_site(SOUND_NODE, sound_node);
     e.on_site(ACHIEVEMENT, earn_achievement);
     e.on_site(EVERY_ITEM_HEALTH, every_item_health);
+    e.on_site(NESTED_RUN_LOG, skip_nested_log);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
+// (SafeWrite16(0x5E0DD1, 0x39EB)).
+/// G24 (`0x5E0DD1`, no words): a busy runner's two editor-id reads and its script log line
+/// ("Nested call to ScriptRunner::Run") are jumped over; the runner still answers its byte and
+/// runs nothing. Any thread that runs scripts; no state.
+fn skip_nested_log(_: &mut Engine, _: &[u32]) -> Option<u32> {
+    Some(1)
 }
 
 fn install_jip(e: &mut Engine) {

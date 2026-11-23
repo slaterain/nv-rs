@@ -21,6 +21,8 @@
 //!   own opaque draws, shown by a full-screen step.
 //! - `bright`: the HDR watch (a diagnostic, read only): the game's float targets checked for
 //!   pixels that are not finite, lone bright dots and jumps of the luminance targets.
+//! - `ramp`: the game's brightness (its gamma ramp) on the frames shown in the window (port-added:
+//!   Direct3D 9 shows a ramp only in exclusive full screen).
 
 mod ahead;
 mod answers;
@@ -39,6 +41,7 @@ mod fxhash;
 pub mod gpu_times;
 pub mod loading;
 mod prepare;
+pub mod ramp;
 pub mod scene_light;
 pub mod shot;
 pub mod sm;
@@ -211,6 +214,30 @@ impl Backend for WgpuBackend {
                 | Cmd::QueryGetData { .. }
         ) {
             d.state_changed();
+        }
+        // Held draws ([`device::Device::emit_held`]) are given to the pass before any command
+        // that is not a draw or a set of what later draws use: each held draw has its own state
+        // already, and nothing else (a clear, a copy, an upload, a query, a target, a release)
+        // may come before a draw the game gave before it.
+        if !matches!(
+            cmd,
+            Cmd::DrawIndexedPrimitive { .. }
+                | Cmd::DrawPrimitive { .. }
+                | Cmd::SetConstants { .. }
+                | Cmd::SetStreamSource { .. }
+                | Cmd::SetIndices { .. }
+                | Cmd::SetTexture { .. }
+                | Cmd::SetSamplerState { .. }
+                | Cmd::SetRenderState { .. }
+                | Cmd::SetTextureStageState { .. }
+                | Cmd::SetShader { .. }
+                | Cmd::SetVertexDeclaration { .. }
+                | Cmd::SetFvf { .. }
+                | Cmd::SetViewport { .. }
+                | Cmd::SetScissorRect { .. }
+                | Cmd::SetClipPlane { .. }
+        ) {
+            d.emit_held();
         }
         match cmd {
             Cmd::CreateDevice { .. } => unreachable!("handled above"),
@@ -421,12 +448,15 @@ impl Backend for WgpuBackend {
             Cmd::SetTransform { state, matrix, .. } if state == sun_shadow::BEGIN_STATE => {
                 d.sun_lookup(&matrix.to_words());
             }
+            // The game's brightness: kept for the frames shown in the window ([`ramp`]).
+            Cmd::SetGammaRamp {
+                swap_chain, ramp, ..
+            } => d.set_gamma_ramp(swap_chain, &ramp.bytes()),
             // The fixed-function vertex pipeline's state (transforms, materials, lights): no draw
             // of the game uses it (the fixed-function draws, `ffp`, are pre-transformed), and a
             // draw of untransformed vertices without a vertex shader is skipped and printed by
-            // the device. (`SetGammaRamp` changes nothing in a window, which is how the game runs.)
+            // the device.
             Cmd::SetTransform { .. }
-            | Cmd::SetGammaRamp { .. }
             | Cmd::SetMaterial { .. }
             | Cmd::SetLight { .. }
             | Cmd::LightEnable { .. }
@@ -457,6 +487,54 @@ pub fn replay_draw_digests(
     to: u64,
     cache: Option<std::path::PathBuf>,
 ) -> Result<Option<Vec<(u64, u64)>>, d3d9_stream::wire::WireError> {
+    replay_draw_digests_with(bytes, records, false, from, to, cache)
+}
+
+/// [`replay_draw_digests`] with the registers read from storage or not
+/// ([`device::Device::set_storage_regs`]). None also where `storage` is asked and the adapter
+/// cannot.
+pub fn replay_draw_digests_with(
+    bytes: &[u8],
+    records: bool,
+    storage: bool,
+    from: u64,
+    to: u64,
+    cache: Option<std::path::PathBuf>,
+) -> Result<Option<Vec<(u64, u64)>>, d3d9_stream::wire::WireError> {
+    Ok(replay_digests(bytes, records, storage, None, from, to, cache)?.map(|(drawn, _)| drawn))
+}
+
+/// A recording replayed with the registers from storage and the held draws merged
+/// ([`device::Device::set_merge_draws`]; sorted with `sort`, blended draws held after the opaque
+/// ones with `across`), records on: each draw's digest as the game gave the draws and as the pass
+/// was given them ([`device::Device::take_emitted_digests`]),
+/// each with its Present. The proof that merging draws every draw once with what it gave wgpu:
+/// the first list equals the unmerged replay's, and the second holds the same digests within each
+/// Present. None without a GPU adapter or where it cannot read the registers from storage.
+#[allow(clippy::type_complexity)]
+pub fn replay_merged_digests(
+    bytes: &[u8],
+    sort: bool,
+    across: bool,
+    from: u64,
+    to: u64,
+    cache: Option<std::path::PathBuf>,
+) -> Result<Option<(Vec<(u64, u64)>, Vec<(u64, u64)>)>, d3d9_stream::wire::WireError> {
+    replay_digests(bytes, true, true, Some((sort, across)), from, to, cache)
+}
+
+/// [`replay_draw_digests_with`] and [`replay_merged_digests`]: `merge` the sorting and holding
+/// across blended draws when the held draws are merged.
+#[allow(clippy::type_complexity)]
+fn replay_digests(
+    bytes: &[u8],
+    records: bool,
+    storage: bool,
+    merge: Option<(bool, bool)>,
+    from: u64,
+    to: u64,
+    cache: Option<std::path::PathBuf>,
+) -> Result<Option<(Vec<(u64, u64)>, Vec<(u64, u64)>)>, d3d9_stream::wire::WireError> {
     let mut b = WgpuBackend::new(Output::Offscreen);
     if let Some(dir) = cache {
         b = b.with_cache_dir(dir);
@@ -464,6 +542,7 @@ pub fn replay_draw_digests(
     let mut set = false;
     let mut present = 0u64;
     let mut out = Vec::new();
+    let mut emitted = Vec::new();
     for c in d3d9_stream::wire::commands(bytes)? {
         let c = c?;
         let p = matches!(c, Cmd::Present { .. });
@@ -471,13 +550,23 @@ pub fn replay_draw_digests(
         match b.device() {
             Some(d) => {
                 if !set {
+                    if d.set_storage_regs(storage) != storage {
+                        return Ok(None);
+                    }
                     d.set_draw_records(records);
+                    if let Some((sort, across)) = merge {
+                        d.set_merge_draws(true, sort, across);
+                    }
                     d.record_draw_digests(true);
                     set = true;
                 }
                 let digests = d.take_draw_digests();
                 if present >= from && present < to {
                     out.extend(digests.into_iter().map(|x| (x, present)));
+                }
+                let given = d.take_emitted_digests();
+                if present >= from && present < to {
+                    emitted.extend(given.into_iter().map(|x| (x, present)));
                 }
             }
             None if set => return Ok(None),
@@ -487,5 +576,5 @@ pub fn replay_draw_digests(
             present += 1;
         }
     }
-    Ok(set.then_some(out))
+    Ok(set.then_some((out, emitted)))
 }

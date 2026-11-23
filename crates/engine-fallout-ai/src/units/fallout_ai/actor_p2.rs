@@ -4745,6 +4745,8 @@ pub fn actor_restore_fatigue(e: &mut Engine, this: Ptr<Actor>, amount: f32) {
 /// (with the item the process virtual `+0x148` yields, if any) and
 /// multiplied by the owner's value for actor value `0x0c`.
 pub fn actor_restore_action_points(e: &mut Engine, this: Ptr<Actor>, amount: f32) {
+    /// The game's fists weapon (`TESObjectWEAP*` at `011ca278`, Tweaks' `g_fistsWeapon`).
+    const FISTS_WEAPON: u32 = 0x011c_a278;
     if !e
         .vcall(this.addr(), VSLOT_ACTOR_FLAG_0X360, &args![])
         .bool()
@@ -4761,7 +4763,14 @@ pub fn actor_restore_action_points(e: &mut Engine, this: Ptr<Actor>, amount: f32
     }
     let rate = e.call(ACTION_POINT_REGENERATION_FORMULA, &args![]).f32();
     let scaled = (rate as f64 * amount as f64) as f32;
-    let mut item = 0u32;
+    // lStewieAl's Tweaks' row S0019 (`patchAllowAPRegenModifiersWithNoEquippedWeapon`, the bytes
+    // at `0x88B6A1`): the weapon starts as the fists (`011ca278`) instead of none, so with no weapon
+    // equipped the entry point is asked with the fists.
+    let mut item = if e.stewie(engine_core::extend::stewie::AP_REGEN_NO_WEAPON_FISTS) {
+        e.global::<u32>(FISTS_WEAPON)
+    } else {
+        0u32
+    };
     let process = e.get(this, Actor::pCurrentProcess);
     if !process.is_null() && e.vcall(process.addr(), PROCESS_VSLOT_ITEM, &args![]).u32() != 0 {
         let held = e.vcall(process.addr(), PROCESS_VSLOT_ITEM, &args![]).u32();
@@ -7347,7 +7356,14 @@ pub fn actor_damage_equipment(
             return 0;
         }
     }
-    if weapon != 0 && !e.call(WEAPON_FLAG_NOT_80, &args![weapon]).bool() {
+    // lStewieAl's Tweaks' row S0782 (`ShootableNonPlayableExplosives`, its
+    // `WeaponIsPlayableOrValidExplosion` called at `0x891483`): an unplayable weapon is also
+    // damaged when it is an explosive ([`hidden_frag_explosive`]).
+    let hidden_frags = e.stewie(engine_core::extend::stewie::HIDDEN_FRAGS);
+    if weapon != 0
+        && !e.call(WEAPON_FLAG_NOT_80, &args![weapon]).bool()
+        && !(hidden_frags && hidden_frag_explosive(e, weapon))
+    {
         return 0;
     }
     let mut damage = e.with_stack(4, |e, local| {
@@ -7443,7 +7459,11 @@ pub fn actor_damage_equipment(
     let destroyed_at_once = e
         .vcall(this.addr(), VSLOT_ACTOR_FLAG_0X360, &args![])
         .bool()
-        || fn_00891b70(e, Ptr::new(weapon))
+        // S0782's other half (`WeaponIsDropableEmbeddedOrValidExplosion`, called at `0x891759`): a
+        // can't-drop (embedded) weapon that is an explosive is not removed at once, so it is
+        // dropped and, being an explosive, set off.
+        || (fn_00891b70(e, Ptr::new(weapon))
+            && !(hidden_frags && hidden_frag_explosive(e, weapon)))
         || {
             let form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, entry));
             e.vcall(form, FORM_VSLOT_0X94, &args![]).bool()
@@ -7455,6 +7475,17 @@ pub fn actor_damage_equipment(
     }
     drop_destroyed_weapon(e, this, entry, weapon, armor);
     1
+}
+
+/// Row S0782's test, Tweaks' `IsValidExplosionWeapon` (`Features/ShootableNonPlayableExplosives`):
+/// the weapon is not a quest item (its form's slot `0x94`) and has a projectile (+0x118) whose flags
+/// (+0x60) have Explosion (0x2).
+fn hidden_frag_explosive(e: &mut Engine, weapon: u32) -> bool {
+    if e.vcall(weapon, FORM_VSLOT_0X94, &args![]).bool() {
+        return false;
+    }
+    let projectile = e.mem.u32(weapon + 0x118);
+    projectile != 0 && e.mem.u16(projectile + 0x60) & 0x2 != 0
 }
 
 /// The end of `DamageEquipment` for a weapon that is gone and must vanish:
@@ -7562,7 +7593,14 @@ fn drop_destroyed_weapon(e: &mut Engine, this: Ptr<Actor>, entry: Ptr, weapon: u
             for word in 0..9 {
                 words.push(e.mem.u32(matrix + 4 * word));
             }
-            e.call(LAUNCH_PROJECTILE, &words);
+            let launched = e.call(LAUNCH_PROJECTILE, &words).u32();
+            // lStewieAl's Tweaks' row S0188 (`ShotProjectileResistanceFix`, its
+            // `OnCreateDamagedWeaponExplosionHook` jumped to at `0x891951`): the projectile made
+            // names the destroyed weapon as its source (+0xE0), so the damage it does is resisted
+            // as that weapon's.
+            if launched != 0 && e.stewie(engine_core::extend::stewie::SHOT_PROJECTILE_RESISTANCE) {
+                e.mem.set_u32(launched + 0xe0, weapon);
+            }
         } else if e.call(ACTOR_IS_WEAPON_DRAWN, &args![this]).bool() {
             typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, euler));
             e.call(
@@ -12143,6 +12181,39 @@ mod tests {
         assert_eq!(entry.borrow()[0][..3], [0x27, actor.addr(), 0]);
     }
 
+    /// S0019 (`patchAllowAPRegenModifiersWithNoEquippedWeapon`): with no weapon (no process, or a
+    /// process without a weapon entry) the regeneration entry point (0x27) gets the fists
+    /// (`011ca278`) with the row on and none with it off; a weapon held is passed either way.
+    #[test]
+    fn s0019_no_weapon_regenerates_with_the_fists() {
+        for (on, process, held, passed) in [
+            (false, false, 0, 0),
+            (true, false, 0, 0x7700),
+            (true, true, 0, 0x7700),
+            (false, true, 0x5000, 0x5001),
+            (true, true, 0x5000, 0x5001),
+        ] {
+            let mut e = engine3();
+            e.set_stewie(engine_core::extend::stewie::AP_REGEN_NO_WEAPON_FISTS, on);
+            if !e.mem.is_mapped(0x011c_a000) {
+                e.map(0x011c_a000, 0x1000);
+            }
+            e.mem.set_u32(0x011c_a278, 0x7700);
+            let (actor, _) = action_point_setup(&mut e, true, 0);
+            if process {
+                with_process(&mut e, actor);
+                record_slot(&mut e, PROCESS_TABLE, PROCESS_VSLOT_ITEM, eax(held));
+            }
+            let entry = record(&mut e, HANDLE_ENTRY_POINT, Ret::default());
+            actor_restore_action_points(&mut e, actor, 0.5);
+            assert_eq!(
+                entry.borrow()[0][..3],
+                [0x27, actor.addr(), passed],
+                "on {on} process {process} held {held:#x}"
+            );
+        }
+    }
+
     #[test]
     fn restore_action_points_needs_the_virtual_and_a_clear_setting() {
         let mut e = engine3();
@@ -15141,6 +15212,97 @@ mod tests {
         let result = damage(&mut e, actor, entry, 10.0);
         assert_eq!(health.get(), 0.0);
         assert_eq!(result, 1);
+    }
+
+    /// S0782 (`ShootableNonPlayableExplosives`): an unplayable weapon (flag 0x80, here the
+    /// `0047bcf0` test false) is left alone off; on, it is damaged when it is an explosive: not a
+    /// quest item (slot `0x94`) and its projectile (+0x118) has the Explosion flag (2 in +0x60).
+    #[test]
+    fn s0782_an_unplayable_explosive_can_be_damaged() {
+        for (on, quest, flags, damaged) in [
+            (false, false, 0x2u16, false),
+            (true, false, 0x2, true),
+            (true, true, 0x2, false),
+            (true, false, 0x800, false),
+        ] {
+            let mut e = engine3();
+            e.set_stewie(engine_core::extend::stewie::HIDDEN_FRAGS, on);
+            let (actor, item, entry, health) = damage_world(&mut e, 0x28, 40.0);
+            double(&mut e, WEAPON_FLAG_NOT_80, eax(0));
+            slot_at(&mut e, FORM_TABLE, FORM_VSLOT_0X94, eax(quest as u32));
+            let projectile = e.mem.alloc(0x80);
+            e.mem.set_u16(projectile + 0x60, flags);
+            e.mem.set_u32(item.addr() + 0x118, projectile);
+            assert_eq!(damage(&mut e, actor, entry, 10.0), 0);
+            let expected = if damaged { 30.0 } else { 40.0 };
+            assert_eq!(
+                health.get(),
+                expected,
+                "on {on} quest {quest} flags {flags:#x}"
+            );
+        }
+    }
+
+    /// S0782's second half: a destroyed can't-drop (embedded, +0x100 flag 8) weapon is removed
+    /// at once (the moving sounds stopped) off, and also on when it is no explosive; on, an
+    /// explosive one goes the drop way instead (`DamageEquipment`'s end for a weapon that stays).
+    #[test]
+    fn s0782_an_embedded_explosive_is_dropped_not_removed() {
+        for (on, flags, removed) in [(false, 0x2u16, true), (true, 0x2, false), (true, 0, true)] {
+            let mut e = engine3();
+            e.set_stewie(engine_core::extend::stewie::HIDDEN_FRAGS, on);
+            let (actor, item, entry, _) = damage_world(&mut e, 0x28, 5.0);
+            with_process(&mut e, actor);
+            let position = e.mem.alloc(0x10);
+            slot(&mut e, ACTOR_TABLE, VSLOT_POSITION_0X1F4, eax(position));
+            e.mem.set_u8(item.addr() + 0x100, 0x08);
+            let projectile = e.mem.alloc(0x80);
+            e.mem.set_u16(projectile + 0x60, flags);
+            e.mem.set_u32(item.addr() + 0x118, projectile);
+            let stopped = record(&mut e, AUDIO_STOP_MOVING_SOUNDS, Ret::default());
+            assert_eq!(damage(&mut e, actor, entry, 10.0), 1);
+            assert_eq!(
+                !stopped.borrow().is_empty(),
+                removed,
+                "on {on} flags {flags:#x}"
+            );
+        }
+    }
+
+    /// S0188 (`ShotProjectileResistanceFix`): a destroyed explosive weapon launches its
+    /// ammunition's projectile; on, the projectile made gets the weapon as its source (+0xE0);
+    /// off, that word is left alone. No projectile made: nothing is written.
+    #[test]
+    fn s0188_a_shot_off_explosive_names_its_weapon() {
+        for (on, made) in [(false, true), (true, true), (true, false)] {
+            let mut e = engine3();
+            e.set_stewie(engine_core::extend::stewie::SHOT_PROJECTILE_RESISTANCE, on);
+            let (actor, item, entry, _) = damage_world(&mut e, 0x28, 5.0);
+            with_process(&mut e, actor);
+            double(&mut e, FORM_FLAG_TEST_4C0BF0, eax(1));
+            double(&mut e, WEAPON_AMMO_FOR_ACTOR, eax(0x4400));
+            double(&mut e, AMMO_FLAG_TEST, eax(1));
+            double(&mut e, AMMO_PROJECTILE, eax(0x4500));
+            slot(&mut e, ACTOR_TABLE, VSLOT_GET_BIPED, eax(0x9900));
+            record_slot(
+                &mut e,
+                PROCESS_TABLE,
+                PROCESS_VSLOT_DROP_SOURCE_WEAPON,
+                eax(0),
+            );
+            let position = e.mem.alloc(0x10);
+            slot(&mut e, ACTOR_TABLE, VSLOT_POSITION_0X1F4, eax(position));
+            let launched = e.mem.alloc(0x100);
+            e.mem.set_u32(launched + 0xe0, 0x1234);
+            double(
+                &mut e,
+                LAUNCH_PROJECTILE,
+                eax(if made { launched } else { 0 }),
+            );
+            assert_eq!(damage(&mut e, actor, entry, 10.0), 1);
+            let source = if on && made { item.addr() } else { 0x1234 };
+            assert_eq!(e.mem.u32(launched + 0xe0), source, "on {on} made {made}");
+        }
     }
 
     #[test]

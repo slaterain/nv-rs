@@ -30,6 +30,7 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 use crate::units::fallout_interface::startmenu::ListBox;
+use engine_core::extend::stewie;
 
 // ---------------------------------------------------------------------------
 // Layouts
@@ -2231,7 +2232,13 @@ pub fn vats_menu_do_idle(e: &mut Engine, this: Ptr<VatsMenu>) {
         ratio = (health as f64 / ratio as f64) as f32;
     }
     let meter = e.mem.u32(m + 0x70);
-    e.call(HUD_UPDATE_METER, &args![meter, ratio, 0u32, 0u32, 0u32]);
+    // `0x7ED119` (lStewieAl's Tweaks' S0022.55 writes 1 over the `PUSH 0`: the meter's
+    // fourth word, its least number of ticks).
+    let least_ticks = u32::from(e.stewie(stewie::VATS_HEALTH_AT_LEAST_ONE_TICK));
+    e.call(
+        HUD_UPDATE_METER,
+        &args![meter, ratio, 0u32, least_ticks, 0u32],
+    );
     let (compass, general, markers, npcs) = (
         e.mem.u32(m + 0x84),
         e.mem.u32(m + 0x78),
@@ -2534,7 +2541,8 @@ pub fn vats_menu_do_idle(e: &mut Engine, this: Ptr<VatsMenu>) {
         && weapon != 0
         && {
             let player = e.global::<u32>(PLAYER);
-            e.call(GET_CURRENT_AMMO, &args![weapon, player]).u32() != 0
+            // `0x7EDB33` (lStewieAl's Tweaks' S0144 calls `VATSReloadAPGetEquippedAmmo` there).
+            stewie_reload_ammo(e, weapon, player) != 0
         }
         && e.call(GET_FORM_CLIP_ROUNDS, &args![weapon, 0u32]).i32() > 1
     {
@@ -5056,17 +5064,27 @@ pub fn vats_menu_update_ammo(e: &mut Engine, this: Ptr<VatsMenu>) -> bool {
             node = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, node));
         }
         let player = e.global::<u32>(PLAYER);
-        if e.call(GET_CURRENT_AMMO, &args![weapon, player]).u32() != 0 {
+        // `0x7F2DCE` (lStewieAl's Tweaks' S0022.24 writes `JMP 0x7F2DE5` there): the current ammo
+        // is not asked and the condition and ammo labels are always shown.
+        if e.stewie(stewie::VATS_CONDITION_WITHOUT_AMMO)
+            || e.call(GET_CURRENT_AMMO, &args![weapon, player]).u32() != 0
+        {
             set_tile_int(e, m, 0x60, 0xfa3, 1);
             set_tile_int(e, m, 0x64, 0xfc4, 1);
             set_tile_int(e, m, 0x68, 0xfc4, 1);
             set_tile_int(e, m, 0x68, 0xfa3, 1);
-            let form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, equipped));
-            let maximum = if e.call(GET_FORM_HEALTH, &args![form]).u32() != 0 {
-                let form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, equipped));
-                e.call(GET_FORM_HEALTH, &args![form]).u32()
+            // `0x7F2E30` (lStewieAl's Tweaks' S0022.23 jumps to `GetContChangeMaxWeaponHealthHook`
+            // there, which goes on at `0x7F2E53`): the entry's largest health with its mods.
+            let maximum = if e.stewie(stewie::VATS_CONDITION_WITH_HEALTH_MODS) {
+                stewie_entry_max_health(e, equipped)
             } else {
-                1
+                let form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, equipped));
+                if e.call(GET_FORM_HEALTH, &args![form]).u32() != 0 {
+                    let form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, equipped));
+                    e.call(GET_FORM_HEALTH, &args![form]).u32()
+                } else {
+                    1
+                }
             };
             let health = e.call(GET_ITEM_HEALTH, &args![equipped, 0u32]).f64();
             let fraction = (health / maximum as f64) as f32;
@@ -6131,6 +6149,77 @@ fn fistp_truncate(value: f64) -> i32 {
     }
 }
 
+/// lStewieAl's Tweaks' `GetContChangeMaxHealth` (row S0022.23, main.h) for an inventory entry: a
+/// weapon (form type 0x28) gives its health (+0x98) plus, when one of its fitted mods (the first
+/// extra list's `ExtraWeaponModFlags`, `0042e560`'s bits 0..2) has the effect
+/// `IncreaseMaxCondition` (10, `effectMods` +0x180), the values (`value1Mod` +0x18C) of every
+/// mod slot with that effect, summed as floats and cut to a whole number; armour (0x18) its
+/// health (+0x6C); anything else 0.
+fn stewie_entry_max_health(e: &mut Engine, entry: u32) -> u32 {
+    const INCREASE_MAX_CONDITION: u32 = 10;
+    let form = e.mem.u32(entry + 8);
+    if form == 0 {
+        // No form: Tweaks would read through a null pointer (our guard).
+        return 0;
+    }
+    match e.mem.u8(form + 4) {
+        0x28 => {
+            let lists = e.mem.u32(entry);
+            let extra = if lists != 0 { e.mem.u32(lists) } else { 0 };
+            let flags = if extra != 0 {
+                e.call(0x0042_e560, &args![extra]).u8()
+            } else {
+                0
+            };
+            let effect = |e: &Engine, slot: u32| e.mem.u32(form + 0x180 + 4 * slot);
+            let modded = (0..3)
+                .any(|slot| flags & (1 << slot) != 0 && effect(e, slot) == INCREASE_MAX_CONDITION);
+            let mut bonus = 0.0f32;
+            if modded {
+                for slot in 0..3 {
+                    if effect(e, slot) == INCREASE_MAX_CONDITION {
+                        bonus += e.mem.f32(form + 0x18c + 4 * slot);
+                    }
+                }
+            }
+            let health = e.mem.u32(form + 0x98) as f32;
+            float_to_int_trunc(health + bonus) as u32
+        }
+        0x18 => e.mem.u32(form + 0x6c),
+        _ => 0,
+    }
+}
+
+/// `cvttss2si`: toward zero, `0x80000000` out of range.
+fn float_to_int_trunc(value: f32) -> i32 {
+    if (-2_147_483_648.0..2_147_483_648.0).contains(&value) {
+        value as i32
+    } else {
+        i32::MIN
+    }
+}
+
+/// The weapon's current ammo at `0x7EDB33` (`TESObjectWEAP::GetEquippedAmmo`, `00525980`); with
+/// lStewieAl's Tweaks' S0144 (`VATSReloadAPGetEquippedAmmo`, main.h) none while the VATS menu's
+/// (`011db0d4`) reserve ammo (+0xF4) is 0 or less or god mode is on (`011e07ba`, xNVSE's
+/// `g_bIsGodmode`, or `011e0898`, `bSetDemigodMode`), so no reload's points are charged.
+fn stewie_reload_ammo(e: &mut Engine, weapon: u32, player: u32) -> u32 {
+    let ammo = e.call(GET_CURRENT_AMMO, &args![weapon, player]).u32();
+    if ammo != 0 && e.stewie(stewie::VATS_NO_RELOAD_COST_WITHOUT_AMMO) {
+        let menu = e.global::<u32>(VATS_MENU);
+        if menu == 0 {
+            // No menu: Tweaks would read through a null pointer (our guard).
+            return ammo;
+        }
+        let reserve = e.mem.f32(menu + 0xf4);
+        let god = e.mem.u8(0x011e_07ba) != 0 || e.mem.u8(0x011e_0898) != 0;
+        if reserve <= 0.0 || god {
+            return 0;
+        }
+    }
+    ammo
+}
+
 // Translated from 007f5050 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `VATSMenu::GetShotBurstCount` (Xbox PDB), cdecl (action, long burst):
 /// the number of shots of one attack: the weapon's `+0x102` byte (at least
@@ -6171,7 +6260,14 @@ pub fn vats_menu_get_shot_burst_count(e: &mut Engine, action: u32, long_burst: u
     let speed = e
         .call(GET_ATTACK_SPEED, &args![weapon, modded as u32])
         .f64();
-    let shots = fistp_truncate(speed * factor) as u8;
+    let mut shots = fistp_truncate(speed * factor) as u8;
+    // `0x7F5177` (lStewieAl's Tweaks' S0047, `patchFixVATSAutoWeaponMultiAmmoUseBug`, writes
+    // `MOV ECX,[EBP-0x10]; MUL BYTE [ECX+0x102]; TEST AL,AL; JNZ; MOV AL,1` there): the shots'
+    // low byte times the weapon's ammo use (+0x102, read raw), its low byte, 1 when that is 0.
+    // No weapon: Tweaks would read through a null pointer; the exe's count stays (our guard).
+    if weapon != 0 && e.stewie(stewie::VATS_BURST_TIMES_AMMO_USE) {
+        shots = shots.wrapping_mul(e.mem.u8(weapon + 0x102));
+    }
     if shots == 0 {
         1
     } else {
@@ -10262,5 +10358,226 @@ mod tests {
                 vec![list_box, 0, third],
             ]
         );
+    }
+
+    // ---- lStewieAl's Tweaks' rows (share 3, group 5): VATS ----
+
+    /// The shot_bursts weapon (ammo use `+0x102` = `use`) equipped, an attack action whose
+    /// truncated product is 5 shots.
+    fn burst_engine(ammo_use: u8) -> Engine {
+        let mut e = engine();
+        let player = player(&mut e);
+        let weapon = e.mem.alloc(0x200);
+        e.mem.set_u8(weapon + 0x102, ammo_use);
+        e.register(
+            WEAPON_102_524B60,
+            |e, a| word(e.mem.u8(a[0] + 0x102) as u32),
+        );
+        let equipped = e.mem.alloc(0x10);
+        e.mem.set_u32(equipped + 8, weapon);
+        e.register_double(0x0150_0050, move |_, _| word(equipped));
+        let process = e.mem.u32(player + 0x68);
+        let table = vtable(&mut e, &[(0x148, 0x0150_0050)]);
+        e.mem.set_u32(process, table);
+        e.register(WEAPON_FLAG_100_BIT_2, |_, _| word(1));
+        e.register(GET_ATTACK_SPEED, |_, _| float(2.0));
+        e.register(WEAPON_VALUE_821640, |_, _| float(1.0));
+        e.mem.set_f32(SETTING_SHOT_BURST_TIME + 4, 2.5);
+        e
+    }
+
+    /// Row S0047 (`0x7F5177`): the burst's 5 shots times the weapon's ammo use, its low byte, 1
+    /// when that is 0; off, 5 whatever the ammo use. The plain (non-attack) count is untouched.
+    #[test]
+    fn s0047_the_burst_counts_the_ammo_use() {
+        for (on, ammo_use, wanted) in [
+            (false, 3u8, 5u8),
+            (true, 3, 15),
+            (true, 1, 5),
+            (true, 0, 1),
+            (true, 100, 244),
+            (true, 0x33, 255),
+        ] {
+            let mut e = burst_engine(ammo_use);
+            e.set_stewie(stewie::VATS_BURST_TIMES_AMMO_USE, on);
+            assert_eq!(
+                vats_menu_get_shot_burst_count(&mut e, 5, 0),
+                wanted,
+                "row {on} ammo use {ammo_use}"
+            );
+        }
+        let mut e = burst_engine(3);
+        e.set_stewie(stewie::VATS_BURST_TIMES_AMMO_USE, true);
+        assert_eq!(vats_menu_get_shot_burst_count(&mut e, 0, 0), 3);
+    }
+
+    /// Row S0022.23's entry health (`GetContChangeMaxHealth`): a weapon's health (+0x98) plus
+    /// the values of every mod slot with `IncreaseMaxCondition` (10) when a fitted one has it
+    /// (the first extra list's `00042e560` flags); armour its +0x6C; other forms 0.
+    #[test]
+    fn s0022_23_the_entry_health_counts_condition_mods() {
+        let mut e = engine();
+        let weapon = e.mem.alloc(0x200);
+        e.mem.set_u8(weapon + 4, 0x28);
+        e.mem.set_u32(weapon + 0x98, 200);
+        for (slot, effect, value) in [(0u32, 10u32, 25.5f32), (1, 3, 99.0), (2, 10, 10.0)] {
+            e.mem.set_u32(weapon + 0x180 + 4 * slot, effect);
+            e.mem.set_f32(weapon + 0x18c + 4 * slot, value);
+        }
+        let extra = e.mem.alloc(0x10);
+        let lists = e.mem.alloc(8);
+        e.mem.set_u32(lists, extra);
+        let entry = e.mem.alloc(0x10);
+        e.mem.set_u32(entry, lists);
+        e.mem.set_u32(entry + 8, weapon);
+        for (flags, wanted) in [(0u8, 200u32), (1, 235), (2, 200), (4, 235), (7, 235)] {
+            e.register_double(0x0042_e560, move |_, _| word(u32::from(flags)));
+            assert_eq!(
+                stewie_entry_max_health(&mut e, entry),
+                wanted,
+                "flags {flags}"
+            );
+        }
+        // No extra list: no flags asked.
+        e.mem.set_u32(entry, 0);
+        e.call_log = Some(vec![]);
+        assert_eq!(stewie_entry_max_health(&mut e, entry), 200);
+        assert!(calls(&e, 0x0042_e560).is_empty());
+        let armour = e.mem.alloc(0x100);
+        e.mem.set_u8(armour + 4, 0x18);
+        e.mem.set_u32(armour + 0x6c, 150);
+        e.mem.set_u32(entry + 8, armour);
+        assert_eq!(stewie_entry_max_health(&mut e, entry), 150);
+        e.mem.set_u8(armour + 4, 0x1f);
+        assert_eq!(stewie_entry_max_health(&mut e, entry), 0);
+    }
+
+    /// Row S0144 (`0x7EDB33`): the current ammo is asked either way; with the row on it counts as
+    /// none while the VATS menu's reserve ammo (+0xF4) is 0 or less or god mode (`011e07ba`,
+    /// `011e0898`) is on.
+    #[test]
+    fn s0144_no_reload_ammo_without_a_reserve() {
+        for (on, reserve, god, demigod, wanted) in [
+            (false, 0.0f32, 0u8, 0u8, 0x7700u32),
+            (true, 0.0, 0, 0, 0),
+            (true, -1.0, 0, 0, 0),
+            (true, 5.0, 0, 0, 0x7700),
+            (true, 5.0, 1, 0, 0),
+            (true, 5.0, 0, 1, 0),
+            (false, 5.0, 1, 1, 0x7700),
+        ] {
+            let mut e = engine();
+            let menu = open_menu(&mut e);
+            e.mem.set_f32(menu + 0xf4, reserve);
+            e.mem.set_u8(0x011e_07ba, god);
+            e.mem.set_u8(0x011e_0898, demigod);
+            e.register_double(GET_CURRENT_AMMO, |_, _| word(0x7700));
+            e.set_stewie(stewie::VATS_NO_RELOAD_COST_WITHOUT_AMMO, on);
+            assert_eq!(
+                stewie_reload_ammo(&mut e, 0x6000, 0x6100),
+                wanted,
+                "row {on} reserve {reserve} god {god} {demigod}"
+            );
+            assert_eq!(calls(&e, GET_CURRENT_AMMO), vec![vec![0x6000, 0x6100]]);
+        }
+        // Without ammo: none, the menu not read.
+        let mut e = engine();
+        e.register_double(GET_CURRENT_AMMO, |_, _| word(0));
+        e.set_stewie(stewie::VATS_NO_RELOAD_COST_WITHOUT_AMMO, true);
+        assert_eq!(stewie_reload_ammo(&mut e, 0x6000, 0x6100), 0);
+    }
+
+    /// Row S0022.55 (`0x7ED119`): `DoIdle` updates the player health meter (+0x70) with the
+    /// least number of ticks 1 with the row on, the exe's 0 off.
+    #[test]
+    fn s0022_55_the_health_meter_keeps_one_tick() {
+        for on in [false, true] {
+            let mut e = engine();
+            let s = scene(&mut e);
+            e.mem.set_u32(VATS + 8, 1);
+            e.register(IS_TOP_MENU_ID, |_, _| word(1));
+            e.set_stewie(stewie::VATS_HEALTH_AT_LEAST_ONE_TICK, on);
+            e.call_log = Some(vec![]);
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                vats_menu_do_idle(&mut e, Ptr::new(s.menu));
+            }));
+            let meter = e.mem.u32(s.menu + 0x70);
+            let updates: Vec<_> = calls(&e, HUD_UPDATE_METER)
+                .into_iter()
+                .filter(|w| w[0] == meter)
+                .collect();
+            assert_eq!(updates.len(), 1, "row {on}");
+            assert_eq!(updates[0][2..], [0, u32::from(on), 0], "row {on}");
+        }
+    }
+
+    /// An equipped weapon (form type 0x28, health +0x98 200, one condition mod of 50 fitted)
+    /// for `UpdateAmmo`, the entry's health 100, the form's health 100.
+    fn ammo_engine(current_ammo: u32) -> (Engine, u32) {
+        let mut e = engine();
+        let player = player(&mut e);
+        let menu = open_menu(&mut e);
+        let weapon = e.mem.alloc(0x200);
+        e.mem.set_u8(weapon + 4, 0x28);
+        e.mem.set_u32(weapon + 0x98, 200);
+        e.mem.set_u32(weapon + 0x180, 10);
+        e.mem.set_f32(weapon + 0x18c, 50.0);
+        let extra = e.mem.alloc(0x10);
+        let lists = e.mem.alloc(8);
+        e.mem.set_u32(lists, extra);
+        let equipped = e.mem.alloc(0x10);
+        e.mem.set_u32(equipped, lists);
+        e.mem.set_u32(equipped + 8, weapon);
+        e.register_double(0x0042_e560, |_, _| word(1));
+        e.register_double(0x0150_0050, move |_, _| word(equipped));
+        let process = e.mem.u32(player + 0x68);
+        let table = vtable(&mut e, &[(0x148, 0x0150_0050)]);
+        e.mem.set_u32(process, table);
+        e.register_double(GET_CURRENT_AMMO, move |_, _| word(current_ammo));
+        e.register_double(GET_FORM_HEALTH, |_, _| word(100));
+        e.register_double(GET_ITEM_HEALTH, |_, _| float(100.0));
+        (e, menu)
+    }
+
+    /// Rows S0022.24 (`0x7F2DCE`) and S0022.23 (`0x7F2E30`) in `UpdateAmmo`: without current
+    /// ammo the condition label (+0x60) shows only with S0022.24, whose path does not ask the
+    /// ammo; the condition meter (+0x64) is 100 / 100 with the form's health, 100 / 250 with
+    /// S0022.23's entry health.
+    #[test]
+    fn s0022_23_24_the_vats_condition_label_and_meter() {
+        for (s23, s24, ammo, shown, value) in [
+            (false, false, 0x7000u32, true, 1.0f32),
+            (false, false, 0, false, 0.0),
+            (false, true, 0, true, 1.0),
+            (true, false, 0x7000, true, 0.4),
+            (true, true, 0, true, 0.4),
+        ] {
+            let (mut e, menu) = ammo_engine(ammo);
+            e.set_stewie(stewie::VATS_CONDITION_WITH_HEALTH_MODS, s23);
+            e.set_stewie(stewie::VATS_CONDITION_WITHOUT_AMMO, s24);
+            e.call_log = Some(vec![]);
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                vats_menu_update_ammo(&mut e, Ptr::new(menu));
+            }));
+            let label = e.mem.u32(menu + 0x60);
+            let ints = calls(&e, TILE_SET_INT);
+            let last_label = ints.iter().rev().find(|w| w[0] == label && w[1] == 0xfa3);
+            assert_eq!(
+                last_label.map(|w| w[2]),
+                Some(u32::from(shown)),
+                "s23 {s23} s24 {s24} ammo {ammo:x}"
+            );
+            let meter = e.mem.u32(menu + 0x64);
+            let updates: Vec<_> = calls(&e, HUD_UPDATE_METER)
+                .into_iter()
+                .filter(|w| w[0] == meter)
+                .collect();
+            if shown {
+                assert_eq!(updates.len(), 1, "s23 {s23} s24 {s24}");
+                assert_eq!(f32::from_bits(updates[0][1]), value, "s23 {s23}");
+            } else {
+                assert!(updates.is_empty());
+            }
+        }
     }
 }

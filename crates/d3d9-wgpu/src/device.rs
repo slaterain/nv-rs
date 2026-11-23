@@ -842,9 +842,238 @@ fn regs_binding(binding: u32) -> u64 {
 }
 
 const BLOCK: u64 = wgsl::REGS_SIZE.div_ceil(256) * 256;
+/// [`PassBinds::blocks`] when the pass has the registers from storage ([`Device::storage_regs`]): no
+/// block is at that offset.
+const STORAGE_BLOCKS: [u32; 4] = [u32::MAX; 4];
 /// The ring of uniform blocks and `DrawPrimitiveUP` vertices sent with each batch.
 const RING: u64 = 32 << 20;
 const UP_RING: u64 = 8 << 20;
+
+/// The draw table's room ([`Device::table`]): 262,144 draws a batch, more than a frame's draws
+/// (the street's 1,500) times the frames a batch can hold before the register ring fills.
+const TABLE: u64 = 4 << 20;
+
+/// Whether an adapter can read the registers from storage ([`Device::storage_regs`]): storage
+/// buffers in vertex shaders, two a stage, the whole register ring in one binding, and the draw
+/// table's location between the stages ([`wgsl::DRAW_SLOT`]) with the clip distances' two besides.
+fn storage_regs_possible(flags: wgpu::DownlevelFlags, limits: &wgpu::Limits) -> bool {
+    flags.contains(wgpu::DownlevelFlags::VERTEX_STORAGE)
+        && limits.max_storage_buffers_per_shader_stage >= 2
+        && limits.max_storage_buffer_binding_size >= RING.max(TABLE)
+        // The draw slot's location, and the two the clip distances take from the count.
+        && limits.max_inter_stage_shader_variables >= wgsl::DRAW_SLOT + 1 + 2
+}
+
+/// The register ring and its uniform group (group 0 at dynamic offsets); the ring also readable
+/// as storage with `storage` ([`StorageRegs`]).
+fn register_ring(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    storage: bool,
+) -> (wgpu::Buffer, wgpu::BindGroup) {
+    let ring = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("register ring"),
+        size: RING,
+        usage: wgpu::BufferUsages::UNIFORM
+            | wgpu::BufferUsages::COPY_DST
+            | if storage {
+                wgpu::BufferUsages::STORAGE
+            } else {
+                wgpu::BufferUsages::empty()
+            },
+        mapped_at_creation: false,
+    });
+    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("registers"),
+        layout,
+        entries: &[0, 1, 2, 3].map(|binding| wgpu::BindGroupEntry {
+            binding,
+            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                buffer: &ring,
+                offset: 0,
+                size: std::num::NonZeroU64::new(regs_binding(binding)),
+            }),
+        }),
+    });
+    (ring, group)
+}
+
+/// What a held draw gives the pass besides its registers ([`Device::hold`]): the held draws of one
+/// key are drawn as one instanced draw, each instance reading its own draw's blocks through the
+/// draw table ([`wgsl::Link::storage`]). wgpu's objects compare by identity.
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+struct HeldKey {
+    pipeline: wgpu::RenderPipeline,
+    /// The pixel shader's sampler group (1) and the vertex shader's (2).
+    groups: [wgpu::BindGroup; 2],
+    /// The sun shadows' lookup group (3) at its offset, for a variant's draw.
+    light: Option<(u32, wgpu::BindGroup)>,
+    viewport: [u32; 6],
+    scissor: (u32, u32, u32, u32),
+    stencil: u32,
+    blend: u32,
+    geometry: Geometry,
+}
+
+/// What a held draw reads its vertices from, and which of them.
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+struct Geometry {
+    streams: [Option<(wgpu::Buffer, u64)>; 8],
+    /// The index buffer and whether its indices are 32-bit; none for a draw without indices.
+    index: Option<(wgpu::Buffer, bool)>,
+    start: u32,
+    n: u32,
+    base_vertex: i32,
+}
+
+/// The surface a held draw covers, for the guard of [`Device::hold`]: its first vertex stream, index
+/// buffer, index range and base vertex (another pass over a mesh may bind other streams beside it).
+type Surface = (
+    Option<(wgpu::Buffer, u64)>,
+    Option<(wgpu::Buffer, bool)>,
+    u32,
+    u32,
+    i32,
+);
+
+impl Geometry {
+    fn surface(&self) -> Surface {
+        (
+            self.streams[0].clone(),
+            self.index.clone(),
+            self.start,
+            self.n,
+            self.base_vertex,
+        )
+    }
+}
+
+/// The held draws of one key, in the order they came: each one's blocks ([`Device::blocks`])
+/// and, while digests are noted, its digest.
+struct Held {
+    key: HeldKey,
+    members: Vec<Member>,
+}
+
+/// One held draw ([`Held`]).
+struct Member {
+    /// Its blocks ([`Device::blocks`]): its draw table entry when its key is drawn.
+    blocks: [u32; 4],
+    /// Its digest, while digests are noted ([`Device::record_draw_digests`]).
+    digest: Option<u64>,
+    /// While digests are noted: what the pass must have for it, from the device's state when the
+    /// game gave it ([`Device::pass_state_hash`]), checked against what the pass has when its key
+    /// is drawn ([`Device::held_mismatches`]).
+    state: Option<u64>,
+    /// The vertex streams its declaration reads.
+    streams: Vec<bool>,
+    /// Whether it draws with the sun shadows' lookup.
+    sun: bool,
+}
+
+/// A hash of what a draw takes from the pass: pipeline, sampler groups, sun lookup offset, viewport,
+/// scissor, stencil reference and blend constant, the vertex streams it reads, its index buffer and
+/// range ([`Device::held_mismatches`]).
+#[allow(clippy::type_complexity)]
+fn pass_state_hash(
+    pipeline: Option<&wgpu::RenderPipeline>,
+    groups: [Option<&wgpu::BindGroup>; 2],
+    light: Option<u32>,
+    pass: (
+        Option<[u32; 6]>,
+        Option<(u32, u32, u32, u32)>,
+        Option<u32>,
+        Option<u32>,
+    ),
+    streams: impl Iterator<Item = Option<(wgpu::Buffer, u64)>>,
+    index: Option<&(wgpu::Buffer, bool)>,
+    range: (u32, u32, i32),
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (pipeline, groups, light, pass, index, range).hash(&mut h);
+    for s in streams {
+        s.hash(&mut h);
+    }
+    h.finish()
+}
+
+/// The index format of 32-bit (`true`) or 16-bit indices.
+fn index_format(index32: bool) -> wgpu::IndexFormat {
+    if index32 {
+        wgpu::IndexFormat::Uint32
+    } else {
+        wgpu::IndexFormat::Uint16
+    }
+}
+
+/// `D3DRS_BLENDFACTOR` (A8R8G8B8) as the pass's blend constant.
+fn blend_colour(bf: u32) -> wgpu::Color {
+    wgpu::Color {
+        r: f64::from((bf >> 16) & 0xFF) / 255.0,
+        g: f64::from((bf >> 8) & 0xFF) / 255.0,
+        b: f64::from(bf & 0xFF) / 255.0,
+        a: f64::from(bf >> 24) / 255.0,
+    }
+}
+
+/// Held draws at most before they are drawn ([`Device::hold`]): the encoder then goes to its
+/// finishing thread, as every [`SPLIT_DRAWS`] draws otherwise.
+const HOLD_MOST: u32 = 4 * SPLIT_DRAWS;
+/// [`Device::held_geometry`]'s place for vertices a held blended draw reads ([`Device::hold_after`]).
+const AFTER: usize = usize::MAX;
+
+/// The registers read from storage ([`wgsl::Link::storage`]): group 0's layout and group (the
+/// register ring whole, binding 0; the draw table, binding 1) and the draw table's buffer.
+struct StorageRegs {
+    layout: wgpu::BindGroupLayout,
+    group: wgpu::BindGroup,
+    table_buffer: wgpu::Buffer,
+}
+
+impl StorageRegs {
+    fn new(device: &wgpu::Device, ring: &wgpu::Buffer) -> StorageRegs {
+        let entry = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: std::num::NonZeroU64::new(16),
+            },
+            count: None,
+        };
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("registers from storage"),
+            entries: &[entry(0), entry(1)],
+        });
+        let table_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("draw table"),
+            size: TABLE,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("registers from storage"),
+            layout: &layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: ring.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: table_buffer.as_entire_binding(),
+                },
+            ],
+        });
+        StorageRegs {
+            layout,
+            group,
+            table_buffer,
+        }
+    }
+}
 
 /// The register ring's room: [`RING`], or less for a test ([`ring_room_for_tests`]).
 fn ring_room() -> u64 {
@@ -921,6 +1150,43 @@ pub struct Device {
     ring: Vec<u8>,
     ring_buffer: wgpu::Buffer,
     ring_group: wgpu::BindGroup,
+    /// `NV_WGPU_STORAGE_REGS`: the shaders read their registers from the ring as storage, each draw
+    /// through its entry in the draw table ([`wgsl::Link::storage`], [`StorageRegs`]); off by default.
+    /// Only where the adapter has [`Device::storage_regs_gpu`].
+    storage_regs: bool,
+    storage_regs_gpu: Option<StorageRegs>,
+    /// Whether the adapter can read the registers from storage ([`storage_regs_possible`]): what
+    /// [`Device::set_storage_regs`] makes [`Device::storage_regs_gpu`] for.
+    storable: bool,
+    /// The open batch's draw table: one 16-byte entry a draw with [`Device::storage_regs`] (its
+    /// blocks' places in 16-byte units, as [`Device::blocks`]).
+    table: Vec<u8>,
+    /// `NV_WGPU_MERGE_DRAWS`: opaque draws with the same key held and drawn as one instanced draw
+    /// ([`Held`], [`Device::may_hold`]), in place: a draw joins only the key held last.
+    /// `NV_WGPU_SORT_DRAWS`: a draw joins its key wherever it is held, and the held keys are
+    /// sorted (two surfaces at exactly the same depth may swap which one shows). Off by default;
+    /// with the registers from storage only.
+    merge_draws: bool,
+    sort_draws: bool,
+    /// `NV_WGPU_SORT_DRAWS=pass`: blended draws (stencil off) tested against depth and writing none
+    /// are held too, after the opaque ones in their own order ([`Device::held_after`]); the next
+    /// opaque draw, a clear, an upload, a target change or another command ends the hold.
+    across: bool,
+    held_after: Vec<Held>,
+    /// The held keys in the order of their first draw, each key's place, the vertices they read
+    /// (one key each), and how many draws they hold.
+    held: Vec<Held>,
+    held_index: Map<HeldKey, usize>,
+    held_geometry: Map<Surface, usize>,
+    held_draws: u32,
+    /// Keys drawn from held draws and the draws they held ([`Device::held_counts`]).
+    held_drawn: (u64, u64),
+    /// Held draws whose pass state when drawn differed from what their state asked for
+    /// ([`Member::state`]; tests).
+    held_mismatches: u64,
+    /// Each draw's digest ([`Device::record_draw_digests`]) in the order the pass was given the
+    /// draws: a held draw's when its key is drawn ([`Device::take_emitted_digests`]).
+    emitted_digests: Option<Vec<u64>>,
     uniform_layout: wgpu::BindGroupLayout,
     up: Vec<u8>,
     up_buffer: wgpu::Buffer,
@@ -932,7 +1198,14 @@ pub struct Device {
     /// A pair's sampler layouts by its samplers' key ([`Device::sampler_layout`]): the pixel
     /// shader's group and the vertex shader's, and the pipeline layout of the two.
     #[allow(clippy::type_complexity)]
-    sampler_layouts: Map<Vec<(u32, u8, bool)>, ([wgpu::BindGroupLayout; 2], wgpu::PipelineLayout)>,
+    sampler_layouts: Map<
+        Vec<(u32, u8, bool)>,
+        (
+            [wgpu::BindGroupLayout; 2],
+            wgpu::PipelineLayout,
+            Option<wgpu::PipelineLayout>,
+        ),
+    >,
     /// The pipelines by key (none: refused), each with the plane states its draws were listed
     /// with this run (bit 0 none on, bit 1 one on; [`clip_code`]).
     pipelines: Map<PipeKey, (Option<Pipe>, u8)>,
@@ -998,6 +1271,12 @@ pub struct Device {
     groups: Map<GroupKey, wgpu::BindGroup>,
     blit: Map<(wgpu::TextureFormat, bool), wgpu::RenderPipeline>,
     blit_layout: Option<wgpu::BindGroupLayout>,
+    /// The game's brightness ([`crate::ramp`]): its last gamma ramp as the copy into the window's
+    /// frame reads it, `None` while none was set or the last changes no level; that copy's
+    /// pipelines and layout, made at its first use.
+    ramp: Option<wgpu::Buffer>,
+    ramp_blit: Map<wgpu::TextureFormat, wgpu::RenderPipeline>,
+    ramp_layout: Option<wgpu::BindGroupLayout>,
     #[allow(clippy::type_complexity)]
     gamma_resolves:
         Map<(wgpu::TextureFormat, u32, bool), (wgpu::RenderPipeline, wgpu::BindGroupLayout)>,
@@ -1108,7 +1387,8 @@ pub struct Device {
     /// The stand-in partners those are made with (or why wgpu refused one): a vertex shader for
     /// each set of varyings and clip code ([`wgsl::stand_in_vertex`]), and the pixel shader
     /// ([`wgsl::STAND_IN_PIXEL`]). Kept: wgpu-hal forgets a module's libraries when it goes.
-    stand_in_vertex: Map<(Vec<wgsl::Semantic>, wgsl::Clip), Result<wgpu::ShaderModule, String>>,
+    stand_in_vertex:
+        Map<(Vec<wgsl::Semantic>, wgsl::Clip, bool), Result<wgpu::ShaderModule, String>>,
     stand_in_pixel: Option<Result<wgpu::ShaderModule, String>>,
     /// Where the occlusion counts are posted for the game's threads ([`QueryAnswers`]), and the
     /// `END`s (query, number) whose counts are awaited.
@@ -1607,24 +1887,14 @@ impl Device {
                 count: None,
             }),
         });
-        let ring_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("register ring"),
-            size: RING,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let ring_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("registers"),
-            layout: &uniform_layout,
-            entries: &[0, 1, 2, 3].map(|binding| wgpu::BindGroupEntry {
-                binding,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &ring_buffer,
-                    offset: 0,
-                    size: std::num::NonZeroU64::new(regs_binding(binding)),
-                }),
-            }),
-        });
+        // The registers from storage only when asked for and possible: otherwise the ring and its
+        // group are made as without the switch, and nothing else is made.
+        let storable =
+            storage_regs_possible(adapter.get_downlevel_capabilities().flags, &device.limits());
+        let storage_on =
+            storable && std::env::var("NV_WGPU_STORAGE_REGS").is_ok_and(|v| v.trim() == "1");
+        let (ring_buffer, ring_group) = register_ring(&device, &uniform_layout, storage_on);
+        let storage_regs_gpu = storage_on.then(|| StorageRegs::new(&device, &ring_buffer));
         let stage_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("upload stage"),
             size: STAGE,
@@ -1717,6 +1987,24 @@ impl Device {
             ring: Vec::with_capacity(RING as usize),
             ring_buffer,
             ring_group,
+            storage_regs: storage_regs_gpu.is_some(),
+            storable,
+            storage_regs_gpu,
+            table: Vec::new(),
+            merge_draws: std::env::var("NV_WGPU_MERGE_DRAWS").is_ok_and(|v| v.trim() == "1")
+                || std::env::var("NV_WGPU_SORT_DRAWS")
+                    .is_ok_and(|v| v.trim() == "1" || v.trim() == "pass"),
+            sort_draws: std::env::var("NV_WGPU_SORT_DRAWS")
+                .is_ok_and(|v| v.trim() == "1" || v.trim() == "pass"),
+            across: std::env::var("NV_WGPU_SORT_DRAWS").is_ok_and(|v| v.trim() == "pass"),
+            held_after: Vec::new(),
+            held: Vec::new(),
+            held_index: Map::default(),
+            held_geometry: Map::default(),
+            held_draws: 0,
+            held_drawn: (0, 0),
+            held_mismatches: 0,
+            emitted_digests: None,
             uniform_layout,
             up: Vec::new(),
             up_buffer,
@@ -1774,6 +2062,9 @@ impl Device {
             groups: Map::default(),
             blit: Map::default(),
             blit_layout: None,
+            ramp: None,
+            ramp_blit: Map::default(),
+            ramp_layout: None,
             gamma_resolves: Map::default(),
             depth_parts: Map::default(),
             clears: Map::default(),
@@ -1914,6 +2205,27 @@ impl Device {
         if self.warned.insert(what.clone()) {
             eprintln!("NV_D3D9 wgpu: {what}");
         }
+    }
+
+    /// `SetGammaRamp` of the swap chain 0, the game's only one: its brightness, applied to the
+    /// frames shown in the window from the next `Present` on ([`crate::ramp`]); a ramp that
+    /// changes no level ([`crate::ramp::Ramp::is_identity`]) leaves the plain copy. Another swap
+    /// chain or a ramp of another size is not provided.
+    pub(crate) fn set_gamma_ramp(&mut self, swap_chain: u32, bytes: &[u8]) {
+        let ramp = crate::ramp::Ramp::from_bytes(bytes);
+        let Some(ramp) = ramp.filter(|_| swap_chain == 0) else {
+            self.not_provided(&format!(
+                "SetGammaRamp of swap chain {swap_chain} with {} bytes is not provided",
+                bytes.len()
+            ));
+            return;
+        };
+        if ramp.is_identity() {
+            self.ramp = None;
+            return;
+        }
+        self.warn("the game's brightness (its gamma ramp) is applied to the frames in the window");
+        self.ramp = Some(crate::ramp::buffer(&self.device, &ramp));
     }
 
     fn make_back_buffers(
@@ -2507,11 +2819,17 @@ impl Device {
         self.batch_uses = 0;
         self.batch += 1;
         self.st.dirty = [true; 2];
+        // The draw table's buffer, where there is one (the table is empty where there is not).
+        let table_buffer = self
+            .storage_regs_gpu
+            .as_ref()
+            .map_or(&self.ring_buffer, |s| &s.table_buffer);
         let Some(s) = &self.submitter else {
             for (buffer, bytes) in [
                 (&self.ring_buffer, &mut self.ring),
                 (&self.up_buffer, &mut self.up),
                 (&self.stage_buffer, &mut self.stage),
+                (table_buffer, &mut self.table),
             ] {
                 if !bytes.is_empty() {
                     self.queue.write_buffer(buffer, 0, bytes);
@@ -2523,7 +2841,10 @@ impl Device {
             return;
         };
         s.raise_failure();
-        let empty = self.ring.is_empty() && self.up.is_empty() && self.stage.is_empty();
+        let empty = self.ring.is_empty()
+            && self.up.is_empty()
+            && self.stage.is_empty()
+            && self.table.is_empty();
         if empty && finishing.is_empty() && encoder.is_none() {
             return;
         }
@@ -2532,11 +2853,13 @@ impl Device {
             std::mem::replace(&mut self.ring, std::mem::take(&mut fresh[0])),
             std::mem::replace(&mut self.up, std::mem::take(&mut fresh[1])),
             std::mem::replace(&mut self.stage, std::mem::take(&mut fresh[2])),
+            std::mem::replace(&mut self.table, std::mem::take(&mut fresh[3])),
         ];
         let targets = [
             self.ring_buffer.clone(),
             self.up_buffer.clone(),
             self.stage_buffer.clone(),
+            table_buffer.clone(),
         ];
         let pool = Arc::clone(&s.pool);
         let submits = Arc::clone(&self.submits);
@@ -3057,6 +3380,38 @@ impl Device {
         self.record = None;
     }
 
+    /// Turns the registers read from storage on or off (`NV_WGPU_STORAGE_REGS`,
+    /// [`wgsl::Link::storage`]; tests and the replay example compare the two); on only where the
+    /// adapter can ([`storage_regs_possible`]). The pipelines made so far are dropped (their
+    /// shaders read the registers the other way); the next draw makes its own. Whether it is on.
+    pub fn set_storage_regs(&mut self, on: bool) -> bool {
+        let on = on && self.storable;
+        // Made now when the device was made without them: the open batch sent first (its draws
+        // read the old ring), then a ring readable as storage, its uniform group and the table.
+        if on && self.storage_regs_gpu.is_none() {
+            self.flush();
+            let (ring, group) = register_ring(&self.device, &self.uniform_layout, true);
+            self.storage_regs_gpu = Some(StorageRegs::new(&self.device, &ring));
+            self.ring_buffer = ring;
+            self.ring_group = group;
+            self.binds.blocks = None;
+        }
+        if on != self.storage_regs {
+            self.storage_regs = on;
+            self.pipelines.clear();
+            self.last_pipeline = None;
+            self.record = None;
+            self.binds.pipeline = None;
+            self.binds.blocks = None;
+        }
+        on
+    }
+
+    /// Whether the registers are read from storage ([`Device::set_storage_regs`]).
+    pub fn storage_regs(&self) -> bool {
+        self.storage_regs
+    }
+
     /// From now on each draw notes a digest of what it gave wgpu: its pipeline key, both stages'
     /// group keys, the register blocks' places, its vertex and index buffers (by the game's
     /// handles, offsets and strides), viewport, scissor, stencil reference, blend factor, the
@@ -3064,6 +3419,7 @@ impl Device {
     /// the replay example: nothing is noted in play.
     pub fn record_draw_digests(&mut self, on: bool) {
         self.draw_digests = on.then(Vec::new);
+        self.emitted_digests = on.then(Vec::new);
     }
 
     /// The digests noted since the last call ([`Device::record_draw_digests`]).
@@ -3072,6 +3428,97 @@ impl Device {
             .as_mut()
             .map(std::mem::take)
             .unwrap_or_default()
+    }
+
+    /// The same digests in the order the draws were given to the pass: a held draw's when its key
+    /// was drawn ([`Held`]); the draws still held are not in it yet. With the draws merged, every
+    /// draw is in it once; without, it is [`Device::take_draw_digests`]'s list.
+    pub fn take_emitted_digests(&mut self) -> Vec<u64> {
+        self.emitted_digests
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
+    }
+
+    /// How many keys of held draws were drawn, and how many draws they held ([`Held`]): the
+    /// difference is the draws saved.
+    pub fn held_counts(&self) -> (u64, u64) {
+        self.held_drawn
+    }
+
+    /// Held draws drawn with another pipeline, sampler group, sun lookup, viewport, scissor,
+    /// stencil reference, blend constant, vertex stream, index buffer or range than the device's
+    /// state gave them, counted while digests are noted ([`Device::record_draw_digests`]): 0 unless
+    /// a key leaves out something a draw depends on, or a held key is drawn with the wrong state.
+    pub fn held_mismatches(&self) -> u64 {
+        self.held_mismatches
+    }
+
+    /// [`pass_state_hash`] of what the device's state asks of the pass for the draw about to be
+    /// given (as [`Device::held_key`] takes it).
+    #[allow(clippy::too_many_arguments)]
+    fn pass_state_hash(
+        &self,
+        attributes: &[Vec<wgpu::VertexAttribute>; 8],
+        use_sun: bool,
+        viewport: [u32; 6],
+        scissor: (u32, u32, u32, u32),
+        (stencil, blend): (u32, u32),
+        indexed: bool,
+        range: (u32, u32, i32),
+    ) -> u64 {
+        let pipeline = self
+            .last_pipeline
+            .as_ref()
+            .and_then(|(_, p, _)| p.as_ref())
+            .map(|p| &p.0);
+        let light = use_sun
+            .then(|| self.sun.as_ref().and_then(|s| s.light))
+            .flatten();
+        let streams = attributes.iter().enumerate().map(|(k, a)| {
+            (!a.is_empty())
+                .then(|| {
+                    self.st.streams[k]
+                        .buffer
+                        .as_ref()
+                        .map(|b| (b.buffer.clone(), u64::from(self.st.streams[k].offset)))
+                })
+                .flatten()
+        });
+        let index = indexed
+            .then(|| {
+                self.st
+                    .indices
+                    .as_ref()
+                    .map(|b| (b.buffer.clone(), b.index32))
+            })
+            .flatten();
+        pass_state_hash(
+            pipeline,
+            [
+                self.last_groups[0].1.as_ref(),
+                self.last_groups[1].1.as_ref(),
+            ],
+            light,
+            (Some(viewport), Some(scissor), Some(stencil), Some(blend)),
+            streams,
+            index.as_ref(),
+            range,
+        )
+    }
+
+    /// Turns the merging of held draws on or off, and their sorting ([`Device::merge_draws`],
+    /// `NV_WGPU_MERGE_DRAWS`, `NV_WGPU_SORT_DRAWS`; tests and the replay compare them). Any held
+    /// draws are drawn first. Merging needs the registers from storage
+    /// ([`Device::set_storage_regs`]): without them nothing is held.
+    /// `merge` alone joins a draw only to the key held last (in place); `sort` joins it wherever
+    /// its key is held and sorts the keys. `across` (`NV_WGPU_SORT_DRAWS=pass`): blended draws are
+    /// held as well, after the opaque ones ([`Device::may_hold_after`]), and the opaque ones sorted.
+    pub fn set_merge_draws(&mut self, merge: bool, sort: bool, across: bool) {
+        self.emit_held();
+        self.merge_draws = merge || sort || across;
+        self.sort_draws = sort || across;
+        self.across = across;
     }
 
     /// `Set*ShaderConstant*` (`kind`: vertex float, int, bool, then the same for the pixel stage)
@@ -3270,6 +3717,7 @@ impl Device {
     }
 
     fn end_pass(&mut self) {
+        self.emit_held();
         self.pass = None;
         self.pass_targets = None;
         if let (Some((i, true)), 0, Some(t)) =
@@ -4183,8 +4631,44 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// the registers' group (0), the pixel shader's samplers' (1) and the vertex shader's (2),
     /// each stage's numbered from 0 in its own group ([`wgsl::sampler_group`]).
     fn sampler_layout(&mut self, key: &[(u32, u8, bool)]) -> wgpu::PipelineLayout {
-        if let Some((_, p)) = self.sampler_layouts.get(key) {
-            return p.clone();
+        self.sampler_layout_regs(key, false)
+    }
+
+    /// The registers' group 0 layout: the uniform blocks at dynamic offsets, or with `storage` the
+    /// register ring and the draw table as storage ([`wgsl::Link::storage`]).
+    fn registers_layout(&self, storage: bool) -> &wgpu::BindGroupLayout {
+        match (&self.storage_regs_gpu, storage) {
+            (Some(s), true) => &s.layout,
+            _ => &self.uniform_layout,
+        }
+    }
+
+    /// [`Device::sampler_layout`] with the registers' group 0 read from storage when `storage`.
+    fn sampler_layout_regs(
+        &mut self,
+        key: &[(u32, u8, bool)],
+        storage: bool,
+    ) -> wgpu::PipelineLayout {
+        if let Some((layouts, uniform, stored)) = self.sampler_layouts.get_mut(key) {
+            if !storage {
+                return uniform.clone();
+            }
+            if let Some(p) = stored {
+                return p.clone();
+            }
+            let regs = match &self.storage_regs_gpu {
+                Some(s) => &s.layout,
+                None => return uniform.clone(),
+            };
+            let p = self
+                .device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("registers from storage"),
+                    bind_group_layouts: &[Some(regs), Some(&layouts[0]), Some(&layouts[1])],
+                    immediate_size: 0,
+                });
+            *stored = Some(p.clone());
+            return p;
         }
         let layouts = [false, true].map(|vertex| {
             let mut entries = Vec::new();
@@ -4238,7 +4722,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 immediate_size: 0,
             });
         self.sampler_layouts
-            .insert(key.to_vec(), (layouts, pipeline_layout.clone()));
+            .insert(key.to_vec(), (layouts, pipeline_layout.clone(), None));
+        if storage {
+            return self.sampler_layout_regs(key, true);
+        }
         pipeline_layout
     }
 
@@ -4363,9 +4850,301 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
 
     /// Room in the register ring for a draw's two blocks: the batch is sent when there is not.
     fn make_ring_room(&mut self) {
-        if self.ring.len() as u64 + 2 * BLOCK > ring_room() {
+        if self.ring.len() as u64 + 2 * BLOCK > ring_room()
+            || self.table.len() as u64 + 16 * (u64::from(self.held_draws) + 1) > TABLE
+        {
             self.ring_sends += 1;
             self.flush();
+        }
+    }
+
+    /// The key of the draw about to be given ([`HeldKey`]): the last draw's pipeline and groups,
+    /// the sun shadows' lookup for a variant's draw, the pass's settings, and its vertices (the
+    /// streams its declaration reads, its indices, `range`: the first vertex or index, how many,
+    /// the base vertex).
+    #[allow(clippy::too_many_arguments)]
+    fn held_key(
+        &self,
+        attributes: &[Vec<wgpu::VertexAttribute>; 8],
+        indexed: bool,
+        range: (u32, u32, i32),
+        viewport: [u32; 6],
+        scissor: (u32, u32, u32, u32),
+        (stencil, blend): (u32, u32),
+        use_sun: bool,
+    ) -> HeldKey {
+        let pipeline = self
+            .last_pipeline
+            .as_ref()
+            .and_then(|(_, p, _)| p.as_ref())
+            .expect("the draw's pipeline, checked before")
+            .0
+            .clone();
+        let groups = [0, 1].map(|k| {
+            self.last_groups[k]
+                .1
+                .clone()
+                .expect("the draw's groups, set before")
+        });
+        let light = use_sun
+            .then(|| {
+                self.sun
+                    .as_ref()
+                    .and_then(|s| s.light.map(|o| (o, s.gpu.light_group().clone())))
+            })
+            .flatten();
+        let mut streams: [Option<(wgpu::Buffer, u64)>; 8] = Default::default();
+        for (k, a) in attributes.iter().enumerate() {
+            if !a.is_empty() {
+                streams[k] = self.st.streams[k]
+                    .buffer
+                    .as_ref()
+                    .map(|b| (b.buffer.clone(), u64::from(self.st.streams[k].offset)));
+            }
+        }
+        let index = indexed
+            .then(|| {
+                self.st
+                    .indices
+                    .as_ref()
+                    .map(|b| (b.buffer.clone(), b.index32))
+            })
+            .flatten();
+        HeldKey {
+            pipeline,
+            groups,
+            light,
+            viewport,
+            scissor,
+            stencil,
+            blend,
+            geometry: Geometry {
+                streams,
+                index,
+                start: range.0,
+                n: range.1,
+                base_vertex: range.2,
+            },
+        }
+    }
+
+    /// Whether the draw about to be given may be held and drawn later with others of its key
+    /// (`NV_WGPU_MERGE_DRAWS`, [`Held`]): an opaque draw into a depth surface, whose result does
+    /// not depend on the draws around it except where two surfaces meet at exactly the same depth:
+    /// the depth test LESS or LESSEQUAL with depth writes, no blending (so never a see-through,
+    /// fading or decal draw), no stencil, no occlusion count open. With the registers from
+    /// storage only.
+    fn may_hold(&self, depth: bool) -> bool {
+        let r = &self.st.rs;
+        self.merge_draws
+            && self.storage_regs
+            && self.storage_regs_gpu.is_some()
+            && depth
+            && r[rs::ZENABLE] != 0
+            && r[rs::ZWRITEENABLE] != 0
+            && matches!(r[rs::ZFUNC], 2 | 4)
+            && r[rs::ALPHABLENDENABLE] == 0
+            && r[rs::STENCILENABLE] == 0
+            && self.counting.is_none()
+    }
+
+    /// Holds a draw of `key` with its blocks: with the held draws of its key when they are the
+    /// last ones held (or, with [`Device::sort_draws`], wherever they are held; it is drawn with
+    /// the first of them), else as a new key after the others. When a held draw reads the same
+    /// vertices with another key (another pass over the same surface, which must stay after it),
+    /// or a blended draw is held ([`Device::held_after`]), the held draws are drawn first. The
+    /// key's place in [`Device::held`].
+    fn hold(&mut self, key: HeldKey, member: Member) -> usize {
+        // An opaque draw given after a held blended draw may lie behind it on screen: drawn ahead
+        // of it, the blended draw would be laid over it instead of being covered by it. So only
+        // the opaque draws between two blended ones are drawn together.
+        if !self.held_after.is_empty() {
+            self.emit_held();
+        }
+        // Checked before joining: a held key of these vertices drawn first could put this draw
+        // before the other key's draw of them.
+        if let Some(&g) = self.held_geometry.get(&key.geometry.surface()) {
+            if g == AFTER || self.held[g].key != key {
+                self.emit_held();
+            }
+        }
+        // In place unless sorted: a draw joins its key only when no draw of another key was held
+        // after it, so where two surfaces meet at exactly the same depth the one drawn last still
+        // shows. Sorted, keys are moved past each other anyway (the one picture change sorting
+        // may make, [`Device::sort_draws`]).
+        if let Some(&g) = self.held_index.get(&key) {
+            if self.sort_draws || g + 1 == self.held.len() {
+                self.held[g].members.push(member);
+                self.held_draws += 1;
+                return g;
+            }
+        }
+        let g = self.held.len();
+        self.held_geometry.insert(key.geometry.surface(), g);
+        self.held_index.insert(key.clone(), g);
+        self.held.push(Held {
+            key,
+            members: vec![member],
+        });
+        self.held_draws += 1;
+        g
+    }
+
+    /// Holds a blended draw of `key` with its blocks, to be drawn after the held opaque draws, in
+    /// the order of the blended draws ([`Device::may_hold_after`]). An opaque draw of the same
+    /// vertices after it has the held draws drawn first. Its place in [`Device::held_after`].
+    fn hold_after(&mut self, key: HeldKey, member: Member) -> usize {
+        self.held_geometry.insert(key.geometry.surface(), AFTER);
+        self.held_after.push(Held {
+            key,
+            members: vec![member],
+        });
+        self.held_draws += 1;
+        self.held_after.len() - 1
+    }
+
+    /// Whether the draw about to be given, which may not be held with the opaque draws, may be
+    /// held after them (`NV_WGPU_SORT_DRAWS=pass`): a blended draw without stencil, tested against
+    /// depth LESS or LESSEQUAL and writing none (a draw that ignores depth, such as a sky layer or a
+    /// glare, or one that writes it, such as a fading object, is given in order: moved after the
+    /// opaque draws it would cover them, or let them show through). The blended
+    /// draws keep their order among themselves; the opaque draws held before them are drawn
+    /// first, and an opaque draw given after them has all of them drawn first ([`Device::hold`]).
+    fn may_hold_after(&self, depth: bool) -> bool {
+        let r = &self.st.rs;
+        self.across
+            && self.merge_draws
+            && self.storage_regs
+            && self.storage_regs_gpu.is_some()
+            && depth
+            && r[rs::ZENABLE] != 0
+            && matches!(r[rs::ZFUNC], 2 | 4)
+            && r[rs::ZWRITEENABLE] == 0
+            && r[rs::ALPHABLENDENABLE] != 0
+            && r[rs::STENCILENABLE] == 0
+            && self.counting.is_none()
+    }
+
+    /// Draws the held draws ([`Held`]): each key once, at the place of its first draw among the
+    /// keys (or with `NV_WGPU_SORT_DRAWS` sorted by pipeline, textures and vertices, so that the
+    /// pass switches them less often), as one draw with an instance for each of its draws, whose
+    /// entries in the draw table follow one another.
+    pub(crate) fn emit_held(&mut self) {
+        if self.held.is_empty() && self.held_after.is_empty() {
+            return;
+        }
+        let mut held = std::mem::take(&mut self.held);
+        let after = std::mem::take(&mut self.held_after);
+        self.held_index.clear();
+        self.held_geometry.clear();
+        self.held_draws = 0;
+        if self.sort_draws {
+            held.sort_by(|a, b| {
+                (&a.key.pipeline, &a.key.groups, &a.key.geometry).cmp(&(
+                    &b.key.pipeline,
+                    &b.key.groups,
+                    &b.key.geometry,
+                ))
+            });
+        }
+        // Held only with a pass open and the registers from storage.
+        let (Some(pass), Some(s)) = (self.pass.as_mut(), self.storage_regs_gpu.as_ref()) else {
+            return;
+        };
+        let b = &mut self.binds;
+        for h in held.iter().chain(&after) {
+            let k = &h.key;
+            if b.pipeline.as_ref() != Some(&k.pipeline) {
+                pass.set_pipeline(&k.pipeline);
+                b.pipeline = Some(k.pipeline.clone());
+            }
+            if b.blocks != Some(STORAGE_BLOCKS) {
+                pass.set_bind_group(0, &s.group, &[]);
+                b.blocks = Some(STORAGE_BLOCKS);
+            }
+            for (i, group) in k.groups.iter().enumerate() {
+                if b.groups[i].as_ref() != Some(group) {
+                    pass.set_bind_group(1 + i as u32, group, &[]);
+                    b.groups[i] = Some(group.clone());
+                }
+            }
+            if let Some((offset, group)) = &k.light {
+                if b.light != Some(*offset) {
+                    pass.set_bind_group(3, group, &[*offset]);
+                    b.light = Some(*offset);
+                }
+            }
+            if b.viewport != Some(k.viewport) {
+                let f = k.viewport.map(f32::from_bits);
+                pass.set_viewport(f[0], f[1], f[2], f[3], f[4], f[5]);
+                b.viewport = Some(k.viewport);
+            }
+            if b.scissor != Some(k.scissor) {
+                let r = k.scissor;
+                pass.set_scissor_rect(r.0, r.1, r.2, r.3);
+                b.scissor = Some(r);
+            }
+            if b.stencil != Some(k.stencil) {
+                pass.set_stencil_reference(k.stencil);
+                b.stencil = Some(k.stencil);
+            }
+            if b.blend != Some(k.blend) {
+                pass.set_blend_constant(blend_colour(k.blend));
+                b.blend = Some(k.blend);
+            }
+            let geo = &k.geometry;
+            for (slot, st) in geo.streams.iter().enumerate() {
+                if st.is_none() || b.streams[slot] == *st {
+                    continue;
+                }
+                if let Some((buffer, offset)) = st {
+                    pass.set_vertex_buffer(slot as u32, buffer.slice(*offset..));
+                }
+                b.streams[slot] = st.clone();
+            }
+            if let Some(i) = &geo.index {
+                if b.index.as_ref() != Some(i) {
+                    pass.set_index_buffer(i.0.slice(..), index_format(i.1));
+                    b.index = Some(i.clone());
+                }
+            }
+            let first = (self.table.len() / 16) as u32;
+            for m in &h.members {
+                for o in m.blocks {
+                    self.table.extend_from_slice(&(o / 16).to_le_bytes());
+                }
+                if let (Some(d), Some(list)) = (m.digest, self.emitted_digests.as_mut()) {
+                    list.push(d);
+                }
+                // What the pass has for this instance, against what the device's state asked
+                // for when the game gave it (tests, while digests are noted).
+                if let Some(state) = m.state {
+                    let streams =
+                        m.streams
+                            .iter()
+                            .zip(&b.streams)
+                            .map(|(&on, s)| if on { s.clone() } else { None });
+                    let has = pass_state_hash(
+                        b.pipeline.as_ref(),
+                        [b.groups[0].as_ref(), b.groups[1].as_ref()],
+                        if m.sun { b.light } else { None },
+                        (b.viewport, b.scissor, b.stencil, b.blend),
+                        streams,
+                        geo.index.as_ref().and(b.index.as_ref()),
+                        (geo.start, geo.n, geo.base_vertex),
+                    );
+                    self.held_mismatches += u64::from(has != state);
+                }
+            }
+            let instances = first..first + h.members.len() as u32;
+            self.held_drawn.0 += 1;
+            self.held_drawn.1 += h.members.len() as u64;
+            let vertices = geo.start..geo.start + geo.n;
+            match &geo.index {
+                Some(_) => pass.draw_indexed(vertices, geo.base_vertex, instances),
+                None => pass.draw(vertices, instances),
+            }
+            self.encoder_draws += 1;
         }
     }
 
@@ -5072,6 +5851,14 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let blocks = self.blocks;
         let stencil_ref = self.st.rs[rs::STENCILREF] & 0xFF;
         let bf = self.st.rs[rs::BLENDFACTOR];
+        // Held to be drawn with the other draws of its key ([`Device::may_hold`]), or given to the
+        // pass now, after the draws held before it.
+        let holdable = up.is_none() && copies.iter().all(Option::is_none);
+        let hold = holdable && self.may_hold(depth.is_some());
+        let after = holdable && !hold && self.may_hold_after(depth.is_some());
+        if !hold && !after {
+            self.emit_held();
+        }
         let mut streams: [Option<(wgpu::Buffer, u64)>; 8] = Default::default();
         for (k, a) in attributes.iter().enumerate() {
             if a.is_empty() {
@@ -5160,90 +5947,135 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             depth_range[1],
         ]
         .map(f32::to_bits);
-        let b = &mut self.binds;
-        let pass = self.pass.as_mut().expect("a pass is open");
-        let pipeline = &self
-            .last_pipeline
-            .as_ref()
-            .and_then(|(_, p, _)| p.as_ref())
-            .expect("the draw's pipeline, checked above")
-            .0;
-        if b.pipeline.as_ref() != Some(pipeline) {
-            pass.set_pipeline(pipeline);
-            b.pipeline = Some(pipeline.clone());
-        }
-        if b.blocks != Some(blocks) {
-            pass.set_bind_group(0, &self.ring_group, &blocks);
-            b.blocks = Some(blocks);
-        }
-        for (k, (_, group)) in self.last_groups.iter().enumerate() {
-            let group = group.as_ref().expect("the draw's groups, set above");
-            if b.groups[k].as_ref() != Some(group) {
-                pass.set_bind_group(1 + k as u32, group, &[]);
-                b.groups[k] = Some(group.clone());
-            }
-        }
-        // The sun shadows' lookup (group 3) for a variant's draw.
-        if use_sun {
-            if let Some((offset, group)) = self
-                .sun
-                .as_ref()
-                .and_then(|s| s.light.as_ref().map(|o| (*o, s.gpu.light_group().clone())))
-            {
-                if b.light != Some(offset) {
-                    pass.set_bind_group(3, &group, &[offset]);
-                    b.light = Some(offset);
-                }
-            }
-        }
-        if b.viewport != Some(viewport) {
-            let f = viewport.map(f32::from_bits);
-            pass.set_viewport(f[0], f[1], f[2], f[3], f[4], f[5]);
-            b.viewport = Some(viewport);
-        }
-        if b.scissor != Some(scissor) {
-            pass.set_scissor_rect(scissor.0, scissor.1, scissor.2, scissor.3);
-            b.scissor = Some(scissor);
-        }
-        if b.stencil != Some(stencil_ref) {
-            pass.set_stencil_reference(stencil_ref);
-            b.stencil = Some(stencil_ref);
-        }
-        if b.blend != Some(bf) {
-            pass.set_blend_constant(wgpu::Color {
-                r: f64::from((bf >> 16) & 0xFF) / 255.0,
-                g: f64::from((bf >> 8) & 0xFF) / 255.0,
-                b: f64::from(bf & 0xFF) / 255.0,
-                a: f64::from(bf >> 24) / 255.0,
+        // Held: its list and place; else given now: its instance (its draw table entry's number).
+        let (held, instance) = if hold || after {
+            let state = self.draw_digests.is_some().then(|| {
+                self.pass_state_hash(
+                    attributes,
+                    use_sun,
+                    viewport,
+                    scissor,
+                    (stencil_ref, bf),
+                    indexed,
+                    (start, n, base_vertex),
+                )
             });
-            b.blend = Some(bf);
-        }
-        for (slot, s) in streams.into_iter().enumerate() {
-            if s.is_none() || b.streams[slot] == s {
-                continue;
+            let key = self.held_key(
+                attributes,
+                indexed,
+                (start, n, base_vertex),
+                viewport,
+                scissor,
+                (stencil_ref, bf),
+                use_sun,
+            );
+            let member = Member {
+                blocks,
+                digest: None,
+                state,
+                streams: attributes.iter().map(|a| !a.is_empty()).collect(),
+                sun: use_sun,
+            };
+            let at = if after {
+                (true, self.hold_after(key, member))
+            } else {
+                (false, self.hold(key, member))
+            };
+            (Some(at), None)
+        } else {
+            let b = &mut self.binds;
+            let pass = self.pass.as_mut().expect("a pass is open");
+            let pipeline = &self
+                .last_pipeline
+                .as_ref()
+                .and_then(|(_, p, _)| p.as_ref())
+                .expect("the draw's pipeline, checked above")
+                .0;
+            if b.pipeline.as_ref() != Some(pipeline) {
+                pass.set_pipeline(pipeline);
+                b.pipeline = Some(pipeline.clone());
             }
-            if let Some((buffer, offset)) = &s {
-                pass.set_vertex_buffer(slot as u32, buffer.slice(*offset..));
-            }
-            b.streams[slot] = s;
-        }
-        match index {
-            Some(new) => {
-                if let Some(i) = new {
-                    pass.set_index_buffer(
-                        i.0.slice(..),
-                        if i.1 {
-                            wgpu::IndexFormat::Uint32
-                        } else {
-                            wgpu::IndexFormat::Uint16
-                        },
-                    );
-                    b.index = Some(i);
+            // The registers: the draw's two blocks at their offsets, or from storage the ring and the
+            // draw table, set once a pass, and the draw's entry in the table ([`wgsl::Link::storage`]):
+            // its number is the draw's instance.
+            let instance = match self.storage_regs_gpu.as_ref().filter(|_| self.storage_regs) {
+                Some(s) => {
+                    if b.blocks != Some(STORAGE_BLOCKS) {
+                        pass.set_bind_group(0, &s.group, &[]);
+                        b.blocks = Some(STORAGE_BLOCKS);
+                    }
+                    let at = (self.table.len() / 16) as u32;
+                    for o in blocks {
+                        self.table.extend_from_slice(&(o / 16).to_le_bytes());
+                    }
+                    at
                 }
-                pass.draw_indexed(start..start + n, base_vertex, 0..1);
+                None => {
+                    if b.blocks != Some(blocks) {
+                        pass.set_bind_group(0, &self.ring_group, &blocks);
+                        b.blocks = Some(blocks);
+                    }
+                    0
+                }
+            };
+            for (k, (_, group)) in self.last_groups.iter().enumerate() {
+                let group = group.as_ref().expect("the draw's groups, set above");
+                if b.groups[k].as_ref() != Some(group) {
+                    pass.set_bind_group(1 + k as u32, group, &[]);
+                    b.groups[k] = Some(group.clone());
+                }
             }
-            None => pass.draw(start..start + n, 0..1),
-        }
+            // The sun shadows' lookup (group 3) for a variant's draw.
+            if use_sun {
+                if let Some((offset, group)) = self
+                    .sun
+                    .as_ref()
+                    .and_then(|s| s.light.as_ref().map(|o| (*o, s.gpu.light_group().clone())))
+                {
+                    if b.light != Some(offset) {
+                        pass.set_bind_group(3, &group, &[offset]);
+                        b.light = Some(offset);
+                    }
+                }
+            }
+            if b.viewport != Some(viewport) {
+                let f = viewport.map(f32::from_bits);
+                pass.set_viewport(f[0], f[1], f[2], f[3], f[4], f[5]);
+                b.viewport = Some(viewport);
+            }
+            if b.scissor != Some(scissor) {
+                pass.set_scissor_rect(scissor.0, scissor.1, scissor.2, scissor.3);
+                b.scissor = Some(scissor);
+            }
+            if b.stencil != Some(stencil_ref) {
+                pass.set_stencil_reference(stencil_ref);
+                b.stencil = Some(stencil_ref);
+            }
+            if b.blend != Some(bf) {
+                pass.set_blend_constant(blend_colour(bf));
+                b.blend = Some(bf);
+            }
+            for (slot, s) in streams.into_iter().enumerate() {
+                if s.is_none() || b.streams[slot] == s {
+                    continue;
+                }
+                if let Some((buffer, offset)) = &s {
+                    pass.set_vertex_buffer(slot as u32, buffer.slice(*offset..));
+                }
+                b.streams[slot] = s;
+            }
+            match index {
+                Some(new) => {
+                    if let Some(i) = new {
+                        pass.set_index_buffer(i.0.slice(..), index_format(i.1));
+                        b.index = Some(i);
+                    }
+                    pass.draw_indexed(start..start + n, base_vertex, instance..instance + 1);
+                }
+                None => pass.draw(start..start + n, instance..instance + 1),
+            }
+            (None, Some(instance))
+        };
         // What this draw gave wgpu, for the tests' and the replay example's compares
         // ([`Device::record_draw_digests`]); one test of an option in play.
         if let Some(digests) = self.draw_digests.as_mut() {
@@ -5262,7 +6094,31 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     (e.0, e.1, e.2, Some(self.sampler_keys[e.3 as usize])).hash(&mut h);
                 }
             }
-            self.blocks.hash(&mut h);
+            // The registers' bytes its shaders read: at its blocks, or from storage at the places
+            // its entry in the draw table names (the entry its instance number reads): each
+            // header whole and the float constants up to the highest its shader reads.
+            let places: [u32; 4] =
+                match instance.filter(|_| self.storage_regs && self.storage_regs_gpu.is_some()) {
+                    Some(instance) => {
+                        let at = 16 * instance as usize;
+                        std::array::from_fn(|k| {
+                            let w = self.table.get(at + 4 * k..at + 4 * k + 4);
+                            16 * w.map_or(u32::MAX / 16, |w| {
+                                u32::from_le_bytes(w.try_into().expect("4 bytes"))
+                            })
+                        })
+                    }
+                    None => self.blocks,
+                };
+            places.hash(&mut h);
+            for (k, &at) in places.iter().enumerate() {
+                let len = match k {
+                    0 | 1 => wgsl::REGS_C_OFFSET as usize,
+                    2 => 16 * vs.fregs as usize,
+                    _ => 16 * ps.fregs as usize,
+                };
+                self.ring.get(at as usize..at as usize + len).hash(&mut h);
+            }
             for (k, a) in attributes.iter().enumerate() {
                 if !a.is_empty() {
                     let seq = self.st.streams[k].buffer.as_ref().map(|b| b.seq);
@@ -5280,6 +6136,25 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             (kind, base_vertex, start, n, up_offset, use_sun).hash(&mut h);
             (stencil_ref, bf, scissor, viewport).hash(&mut h);
             digests.push(h.finish());
+        }
+        // Its digest in the order the pass is given the draws ([`Device::take_emitted_digests`]).
+        let digest = self.draw_digests.as_ref().and_then(|d| d.last().copied());
+        match held {
+            Some((after, g)) => {
+                let list = if after {
+                    &mut self.held_after
+                } else {
+                    &mut self.held
+                };
+                if let Some(m) = list.get_mut(g).and_then(|h| h.members.last_mut()) {
+                    m.digest = digest;
+                }
+            }
+            None => {
+                if let (Some(d), Some(list)) = (digest, self.emitted_digests.as_mut()) {
+                    list.push(d);
+                }
+            }
         }
         // The sun shadows' light list ([`sun_shadow`]): off (or no sun last frame), only this test.
         let caster = self
@@ -5313,10 +6188,22 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // checking and the driver's recording when an encoder is finished, and those of different
         // encoders run side by side. The next draw opens a new pass (it loads what this one
         // stored) in a new encoder.
-        self.encoder_draws += 1;
+        // A held draw counts when its key is drawn ([`Device::emit_held`]); the held draws are drawn
+        // at the latest every [`HOLD_MOST`] draws.
         self.pass_draws += 1;
-        if self.encoder_draws >= SPLIT_DRAWS && self.finisher.is_some() {
-            self.send_encoder();
+        if held.is_some() {
+            if self.held_draws >= HOLD_MOST {
+                if self.finisher.is_some() {
+                    self.send_encoder();
+                } else {
+                    self.emit_held();
+                }
+            }
+        } else {
+            self.encoder_draws += 1;
+            if self.encoder_draws >= SPLIT_DRAWS && self.finisher.is_some() {
+                self.send_encoder();
+            }
         }
     }
 
@@ -5482,7 +6369,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         {
             let mut seen = HashSet::new();
             for r in &ready {
-                let (vk, pk) = self.module_keys(&r.key, &r.vs, &r.ps, &r.link.inputs);
+                let (vk, pk) =
+                    self.module_keys(&r.key, &r.vs, &r.ps, &r.link.inputs, self.storage_regs);
                 for k in [ModKey::V(vk), ModKey::P(pk)] {
                     if seen.insert(k.clone()) {
                         wanted.push(k);
@@ -5549,7 +6437,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let mut tasks = Vec::new();
         let mut keys = Vec::new();
         for r in &ready {
-            let (vk, pk, t) = self.module_tasks(&r.key, &r.vs, &r.ps, &r.link.inputs);
+            let (vk, pk, t) =
+                self.module_tasks(&r.key, &r.vs, &r.ps, &r.link.inputs, self.storage_regs);
             tasks.extend(t);
             keys.push((vk, pk));
         }
@@ -5784,7 +6673,19 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// and a vertex shader's for float inputs and every pixel shader that reads only what it
     /// writes; each with the clip code the adapter gives a draw without planes, no occlusion
     /// count. Any other variant is made when a draw first needs it.
+    /// With the registers from storage and the sun shadows on, a vertex shader's module with the
+    /// uniform registers too: the sun shadows' casters draw with those
+    /// ([`Device::sun_pipeline_job`]), and would otherwise make it on the render thread the first
+    /// time.
     fn queue_modules(&mut self, s: &Arc<Shader>) {
+        self.queue_modules_as(s, self.storage_regs);
+        if self.storage_regs && self.sun.is_some() && s.program.stage == Stage::Vertex {
+            self.queue_modules_as(s, false);
+        }
+    }
+
+    /// [`Device::queue_modules`] with the registers from storage or not.
+    fn queue_modules_as(&mut self, s: &Arc<Shader>, storage: bool) {
         let clip = if self.clip_distances {
             wgsl::Clip::Distances
         } else {
@@ -5802,8 +6703,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     clip,
                     count: false,
                     fixed: true,
+                    storage,
                 };
-                let key = ModKey::P((s.id, s.varyings.clone(), false, clip, true));
+                let key = ModKey::P((s.id, s.varyings.clone(), false, clip, true, storage));
                 (key, link)
             }
             Stage::Vertex => {
@@ -5821,8 +6723,12 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     clip,
                     count: false,
                     fixed: true,
+                    storage,
                 };
-                (ModKey::V((s.id, inputs, varyings, clip, true)), link)
+                (
+                    ModKey::V((s.id, inputs, varyings, clip, true, storage)),
+                    link,
+                )
             }
         };
         let made = match &key {
@@ -5874,7 +6780,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             })
             .map(|&(n, dim)| (wgsl::texture_binding(stage, n), dim_code(dim), true))
             .collect();
-        let layout = self.sampler_layout(&samplers);
+        let layout = self.sampler_layout_regs(&samplers, link.storage);
         let group_layouts = self.sampler_layouts[&samplers[..]].0.clone();
         let target = Some(wgpu::ColorTargetState {
             format: wgpu::TextureFormat::Rgba8Unorm,
@@ -5912,7 +6818,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 let device = &self.device;
                 let partner = self
                     .stand_in_vertex
-                    .entry((link.varyings.clone(), link.clip))
+                    .entry((link.varyings.clone(), link.clip, link.storage))
                     .or_insert_with(|| create_module(device, wgsl::stand_in_vertex(link)))
                     .clone();
                 // A target for each colour it writes (the module writes target 0 when it writes
@@ -6113,6 +7019,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         vs: &Shader,
         ps: &Shader,
         inputs: &[wgsl::Input],
+        storage: bool,
     ) -> (VKey, PKey) {
         let fixed = ps.fixed;
         let ps_varyings = ps.varyings.clone();
@@ -6122,8 +7029,15 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             ps_varyings.clone()
         };
         (
-            (vs.id, inputs.to_vec(), vs_varyings, key.clip, fixed),
-            (ps.id, ps_varyings, key.count, key.clip, fixed),
+            (
+                vs.id,
+                inputs.to_vec(),
+                vs_varyings,
+                key.clip,
+                fixed,
+                storage,
+            ),
+            (ps.id, ps_varyings, key.count, key.clip, fixed, storage),
         )
     }
 
@@ -6136,9 +7050,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         vs: &Shader,
         ps: &Shader,
         inputs: &[wgsl::Input],
+        storage: bool,
     ) -> (VKey, PKey, Vec<ModuleTask>) {
         let fixed = ps.fixed;
-        let (vkey, pkey) = self.module_keys(key, vs, ps, inputs);
+        let (vkey, pkey) = self.module_keys(key, vs, ps, inputs, storage);
         let (vs_varyings, ps_varyings) = (vkey.2.clone(), pkey.1.clone());
         // Made ahead, or being made, on the module threads ([`Device::queue_modules`]).
         self.collect_modules();
@@ -6156,6 +7071,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 clip: key.clip,
                 count: false,
                 fixed,
+                storage,
             };
             let t = std::time::Instant::now();
             let source = wgsl::convert(&vs.program, &link);
@@ -6173,6 +7089,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 clip: key.clip,
                 count: key.count,
                 fixed,
+                storage,
             };
             let t = std::time::Instant::now();
             let source = wgsl::convert(&ps.program, &link);
@@ -6254,7 +7171,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     ) -> Option<PipelineJob> {
         let vm = self.vs_modules.get(vkey)?.clone()?;
         let pm = self.ps_modules.get(pkey)?.clone()?;
-        let layout = self.sampler_layout(samplers);
+        let layout = self.sampler_layout_regs(samplers, vkey.5);
         let group_layouts = self.sampler_layouts[samplers].0.clone();
         // One layout per stream slot up to the last used (a slot's index is its stream's number).
         let last = attributes
@@ -6361,7 +7278,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     ) -> Option<Pipe> {
         self.made_on_draws += 1;
         let started = std::time::Instant::now();
-        let (vkey, pkey, tasks) = self.module_tasks(key, vs, ps, inputs);
+        let (vkey, pkey, tasks) = self.module_tasks(key, vs, ps, inputs, self.storage_regs);
         self.make_modules(tasks, 1, true, &mut |_| {});
         let job = self.pipeline_job(key, ps, &vkey, &pkey, attributes, topology, samplers)?;
         let t = std::time::Instant::now();
@@ -6486,7 +7403,25 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         (p, layout)
     }
 
-    /// Draws `source` (its rectangle in texels) into `target`'s rectangle, filtered or not.
+    /// The copy pipeline through the game's gamma ramp into `format` ([`crate::ramp`]).
+    fn ramp_pipeline(
+        &mut self,
+        format: wgpu::TextureFormat,
+    ) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout) {
+        let layout = self
+            .ramp_layout
+            .get_or_insert_with(|| crate::ramp::layout(&self.device))
+            .clone();
+        let p = self
+            .ramp_blit
+            .entry(format)
+            .or_insert_with(|| crate::ramp::pipeline(&self.device, &layout, format))
+            .clone();
+        (p, layout)
+    }
+
+    /// Draws `source` (its rectangle in texels) into `target`'s rectangle, filtered or not, and
+    /// through `ramp` (the game's brightness, [`crate::ramp`]) when given.
     #[allow(clippy::too_many_arguments)]
     fn blit_into(
         &mut self,
@@ -6497,9 +7432,13 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         format: (wgpu::TextureFormat, bool),
         target_rect: [f32; 4],
         linear: bool,
+        ramp: Option<&wgpu::Buffer>,
     ) {
         self.end_pass();
-        let (pipeline, layout) = self.blit_pipeline(format);
+        let (pipeline, layout) = match ramp {
+            Some(_) => self.ramp_pipeline(format.0),
+            None => self.blit_pipeline(format),
+        };
         let sampler = self.sampler(SamplerKey {
             address: [3, 3, 3],
             mag: if linear { 2 } else { 1 },
@@ -6528,23 +7467,28 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             mapped.copy_from_slice(&bytes);
         }
         ub.unmap();
+        let entries = [
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(source),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: ub.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: ramp.unwrap_or(&ub).as_entire_binding(),
+            },
+        ];
         let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(source),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: ub.as_entire_binding(),
-                },
-            ],
+            entries: &entries[..if ramp.is_some() { 4 } else { 3 }],
         });
         let span = self.pass_span(Kind::Copies);
         let encoder = self.encoder();
@@ -6680,6 +7624,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             (dst.format.wgpu, dst.format.opaque),
             f(dr),
             filter >= 2,
+            None,
         );
         for s in [&src, &dst] {
             if let Some(t) = &s.tex {
@@ -7804,7 +8749,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let key = self.last_pipeline.as_ref().map(|(k, _, _)| k.clone())?;
         // The modules as the draw's pipeline has them (made ahead, or here if they were not
         // kept: the draw's pipeline can come from a library or the list).
-        let (vkey, pkey, tasks) = self.module_tasks(&key, vs, ps, &link.inputs);
+        let (vkey, pkey, tasks) = self.module_tasks(&key, vs, ps, &link.inputs, false);
         let tasks: Vec<ModuleTask> = tasks
             .into_iter()
             .filter(|t| cutout.is_some() || matches!(t.key, ModKey::V(_)))
@@ -8647,7 +9592,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             sun: false,
             ..key.clone()
         };
-        let (vkey, pkey, tasks) = self.module_tasks(&plain, vs, ps, inputs);
+        let (vkey, pkey, tasks) = self.module_tasks(&plain, vs, ps, inputs, self.storage_regs);
         self.make_modules(tasks, 1, false, &mut |_| {});
         let Some(job) = self.pipeline_job(&plain, ps, &vkey, &pkey, attributes, topology, samplers)
         else {
@@ -8669,6 +9614,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     clip: vkey.3,
                     count: false,
                     fixed: vkey.4,
+                    storage: vkey.5,
                 },
                 characters,
                 vs.skin.is_some() || ps.face,
@@ -8684,13 +9630,14 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     clip: key.clip,
                     count: key.count,
                     fixed: ps.fixed,
+                    storage: pkey.5,
                 },
                 characters,
                 vs.skin.is_some() || ps.face,
             )
         });
         let device = self.device.clone();
-        let registers = self.uniform_layout.clone();
+        let registers = self.registers_layout(vkey.5).clone();
         let (tx, rx) = std::sync::mpsc::channel();
         let made = std::thread::Builder::new()
             .name("nv-wgpu-sun-variant".into())
@@ -9557,11 +10504,18 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // The last frame presented by the queue thread first (one frame is taken at a time, and
         // the swap chain is not configured again while a present runs). Offscreen too, so the
         // render thread is never more than a frame ahead of the queue thread.
+        let synced = std::time::Instant::now();
         self.sync();
+        let asked = std::time::Instant::now();
+        d3d9_stream::hitch::add_time(
+            d3d9_stream::hitch::Count::RenderSyncNs,
+            asked.duration_since(synced),
+        );
         let taken = match (&mut self.surface, &back) {
             (Some(w), Some(_)) => w.frame(&self.device).map(|t| (t, w.config.usage)),
             _ => None,
         };
+        d3d9_stream::hitch::add_time(d3d9_stream::hitch::Count::AcquireNs, asked.elapsed());
         // The counter on: no frame taken (minimised, no area, lost) or the window away since the last
         // (activated, display changed, woke) makes the next present only start its clock.
         if fps && (taken.is_none() || frame_rate::take_gap()) {
@@ -9577,7 +10531,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             let sv = b.view.clone().expect("the back buffer's view");
             let size = (b.width, b.height);
             // Over the whole client area, as Direct3D 9's windowed Present without
-            // rectangles: a copy at the same size, filtered when the window's differs.
+            // rectangles: a copy at the same size, filtered when the window's differs; through
+            // the game's gamma ramp when it set one that changes the picture ([`crate::ramp`]:
+            // not the original's, which shows a ramp only in exclusive full screen).
+            let ramp = self.ramp.clone();
             self.blit_into(
                 &sv,
                 size,
@@ -9586,6 +10543,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 (format, false),
                 [0.0, 0.0, cw as f32, ch as f32],
                 size != (cw, ch),
+                ramp.as_ref(),
             );
             // The start: the loading screen over the frame while the game has drawn nothing.
             if self.start.is_some() {
@@ -9656,7 +10614,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             let meter = fps.then(|| self.fps_meter.clone());
             self.on_queue(move |queue| {
                 let _dpi = hwnd.map(crate::window::DpiScope::of);
+                let swapped = std::time::Instant::now();
                 queue.present(t);
+                d3d9_stream::hitch::add_time(d3d9_stream::hitch::Count::SwapNs, swapped.elapsed());
                 if let Some(Ok(mut m)) = meter.as_ref().map(|m| m.lock()) {
                     m.presented(std::time::Instant::now());
                 }
@@ -10682,11 +11642,18 @@ fn draw_layout(last: &Option<(PipeKey, Option<Pipe>, bool)>, k: usize) -> &wgpu:
 
 /// A vertex module's cache key: the shader, the inputs its declaration gives, the varyings it
 /// writes (each at the centroid; [`Device::module_tasks`]), the clip code, whether at fixed
-/// locations.
-type VKey = (u64, Vec<wgsl::Input>, Vec<wgsl::Semantic>, wgsl::Clip, bool);
+/// locations, whether the registers are read from storage ([`wgsl::Link::storage`]).
+type VKey = (
+    u64,
+    Vec<wgsl::Input>,
+    Vec<wgsl::Semantic>,
+    wgsl::Clip,
+    bool,
+    bool,
+);
 /// A pixel module's cache key: the shader, its varyings, the occlusion count, the clip code,
-/// whether at fixed locations.
-type PKey = (u64, Vec<wgsl::Semantic>, bool, wgsl::Clip, bool);
+/// whether at fixed locations, from storage.
+type PKey = (u64, Vec<wgsl::Semantic>, bool, wgsl::Clip, bool, bool);
 
 /// The varyings a vertex shader writes for a pixel shader with fixed varying locations
 /// ([`Shader::fixed`]), in location order: every one it writes that has a fixed location (the
@@ -11725,8 +12692,8 @@ fn finish_batch(
 /// A job for the queue thread ([`Submitter`]).
 type QueueJob = Box<dyn FnOnce(&wgpu::Queue) + Send>;
 
-/// A batch's register ring, `DrawPrimitiveUP` vertices and upload stage ([`Device::flush`]).
-type BatchBytes = [Vec<u8>; 3];
+/// A batch's register ring, `DrawPrimitiveUP` vertices and upload stage and draw table ([`Device::flush`]).
+type BatchBytes = [Vec<u8>; 4];
 
 /// The queue thread: runs the render thread's queue operations in the order it hands them over
 /// (each batch's buffer writes, its wait for the finishing threads and its submit; the writes

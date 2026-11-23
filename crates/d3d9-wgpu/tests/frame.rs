@@ -4369,6 +4369,11 @@ fn the_gpu_times_on_send_and_cut_the_batches_as_off() {
     let uploads = [limit / 2 - 16, limit / 2 + 4];
     // Each batch's submits, early sends, encoders and uses.
     let run = |g: &mut Gpu| -> Vec<[u64; 4]> {
+        // One pass and draw each, as the counts below take them: the held draws' merging
+        // (`NV_WGPU_MERGE_DRAWS`, which a run of the whole suite may set) off.
+        if let Some(d) = g.b.device() {
+            d.set_merge_draws(false, false, false);
+        }
         let tris: Vec<f32> = (0..DRAWS)
             .flat_map(|_| {
                 [
@@ -5145,6 +5150,10 @@ fn a_failure_on_the_queue_thread_is_raised_on_the_render_thread() {
             eprintln!("no queue thread on this machine: skipped");
             return;
         }
+        // Each draw its own, as the batch sizes below take them (`NV_WGPU_MERGE_DRAWS` off).
+        if let Some(d) = g.b.device() {
+            d.set_merge_draws(false, false, false);
+        }
         g.run(Cmd::CreateQuery {
             device: DEVICE,
             query: QUERY,
@@ -5729,6 +5738,12 @@ type Script = (Vec<[u8; 4]>, Vec<u64>, Vec<u8>);
 /// a 2D texture replaced by a cube one on its stage. Returns row 0 (each draw's column) and the
 /// digests. The commands are kept as `NV_D3D9_RECORD` writes them.
 fn records_script(records: bool) -> Option<Script> {
+    records_script_with(records, false)
+}
+
+/// [`records_script`] with the registers read from storage or not
+/// ([`d3d9_wgpu::device::Device::set_storage_regs`]; None where the adapter cannot).
+fn records_script_with(records: bool, storage: bool) -> Option<Script> {
     const PS_TEX: u32 = 0x1602;
     const BLUE_TEX: u32 = 0x1610;
     const CUBE: u32 = 0x1620;
@@ -5737,6 +5752,9 @@ fn records_script(records: bool) -> Option<Script> {
     {
         let d = g.b.device().expect("the device");
         d.set_draw_records(records);
+        if d.set_storage_regs(storage) != storage {
+            return None;
+        }
         d.record_draw_digests(true);
     }
     stage_samplers(&mut g);
@@ -5908,6 +5926,39 @@ fn draw_records_give_wgpu_what_each_draw_resolved_afresh_gives() {
     assert_eq!(replay(true), off, "the recording replayed, records on");
 }
 
+/// The registers read from storage ([`d3d9_wgpu::device::Device::set_storage_regs`]: each draw
+/// finds its blocks through its entry in the draw table, its instance number) give wgpu the same
+/// draws as the uniform blocks, and the same pixels: the [`records_script`] draws, whose later
+/// draws have entries past the first (so this also shows that the backend's instance number
+/// counts from the draw's first instance: run with `NV_WGPU_BACKEND=dx12` on Direct3D 12, where
+/// the shader's own instance number does not), records off and on, and its recording replayed.
+#[test]
+fn registers_from_storage_give_wgpu_and_the_picture_what_uniform_blocks_give() {
+    let Some((off_row, off, recording)) = records_script_with(true, false) else {
+        return;
+    };
+    let Some((row, digests, _)) = records_script_with(true, true) else {
+        eprintln!("this adapter cannot read the registers from storage: not checked");
+        return;
+    };
+    assert_eq!(off.len(), 11, "every draw noted");
+    assert_eq!(digests, off, "the digests, draw by draw");
+    assert_eq!(row, off_row, "the pixels, draw by draw");
+    let Some((row, digests, _)) = records_script_with(false, true) else {
+        return;
+    };
+    assert_eq!(digests, off, "records off: the digests");
+    assert_eq!(row, off_row, "records off: the pixels");
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let replayed = d3d9_wgpu::replay_draw_digests_with(&recording, true, true, 0, u64::MAX, None)
+        .expect("the script's recording")
+        .expect("a GPU adapter, as above")
+        .into_iter()
+        .map(|(d, _)| d)
+        .collect::<Vec<u64>>();
+    assert_eq!(replayed, off, "the recording replayed from storage");
+}
+
 /// A draw into the A8R8G8B8 target, then with nothing between but `SetRenderTarget` a draw into
 /// a 16 by 16 A16B16G16R16F target texture, then with nothing between but a `Clear` of it a third
 /// draw, the draw records off or on. The bytes of the half-float target after its first draw and
@@ -6063,4 +6114,753 @@ fn draw_records_keep_no_groups_for_a_draw_sampling_its_own_target() {
         "records off: the second draw saw the first's red"
     );
     assert_eq!(on_bytes, off_bytes, "records on");
+}
+
+/// Four draws of one batch through a vs_3_0 and a ps_3_0 that read every kind of register the
+/// device writes, with the registers from storage (`storage`) or in uniform blocks: each draw its
+/// own float constants in both stages (a place, a colour picked through `a0`, a pixel colour), its
+/// own integer and boolean constants in both stages (a loop count, a branch), a constant the
+/// shader defines, its own user clip plane and alpha reference. The pixels of a 4 by 4 target
+/// (one column a draw) and the digests. None where the adapter cannot read them from storage.
+fn every_register_script(storage: bool) -> Option<(Vec<[u8; 4]>, Vec<u64>)> {
+    const ALPHAFUNC_GREATER: u32 = 5;
+    let mut g = Gpu::new(4, 1)?;
+    {
+        let d = g.b.device().expect("the device");
+        if d.set_storage_regs(storage) != storage {
+            eprintln!("this adapter cannot read the registers from storage: not checked");
+            return None;
+        }
+        d.record_draw_digests(true);
+    }
+    let f = |x: f32| x.to_bits();
+    // vs_3_0: dcl_position v0; dcl_position o0; dcl_texcoord0 o1; def c10, 0.25, 0, 0, 0;
+    // mova a0.x, c4.x; add o0, v0, c0; mov r1, c[a0.x + 5]; if b0; add r1.y, r1.y, c10.x; endif;
+    // rep i0; add r1.z, r1.z, c10.x; endrep; mov o1, r1.
+    let mut vs = vec![0xFFFE_0300];
+    vs.extend(ins(31, &[0x8000_0000, 0x900F_0000]));
+    vs.extend(ins(31, &[0x8000_0000, 0xE00F_0000]));
+    vs.extend(ins(31, &[0x8000_0005, 0xE00F_0001]));
+    vs.extend(ins(81, &[0xA00F_000A, f(0.25), 0, 0, 0]));
+    vs.extend(ins(46, &[0xB001_0000, 0xA000_0004]));
+    vs.extend(ins(2, &[0xE00F_0000, 0x90E4_0000, 0xA0E4_0000]));
+    vs.extend(ins(1, &[0x800F_0001, 0xA0E4_2005, 0xB000_0000]));
+    vs.extend(ins(40, &[0xE0E4_0800]));
+    vs.extend(ins(2, &[0x8002_0001, 0x8055_0001, 0xA000_000A]));
+    vs.extend(ins(43, &[]));
+    vs.extend(ins(38, &[0xF0E4_0000]));
+    vs.extend(ins(2, &[0x8004_0001, 0x80AA_0001, 0xA000_000A]));
+    vs.extend(ins(39, &[]));
+    vs.extend(ins(1, &[0xE00F_0001, 0x80E4_0001]));
+    vs.push(END);
+    // ps_3_0: dcl_texcoord0 v0; def c9, 0.125, 0, 0, 0; add r0, v0, c2; if b1;
+    // add r0.x, r0.x, c9.x; endif; rep i1; add r0.y, r0.y, c9.x; endrep; mov oC0, r0.
+    let mut ps = vec![0xFFFF_0300];
+    ps.extend(ins(31, &[0x8000_0005, 0x900F_0000]));
+    ps.extend(ins(81, &[0xA00F_0009, f(0.125), 0, 0, 0]));
+    ps.extend(ins(2, &[0x800F_0000, 0x90E4_0000, 0xA0E4_0002]));
+    ps.extend(ins(40, &[0xE0E4_0801]));
+    ps.extend(ins(2, &[0x8001_0000, 0x8000_0000, 0xA000_0009]));
+    ps.extend(ins(43, &[]));
+    ps.extend(ins(38, &[0xF0E4_0001]));
+    ps.extend(ins(2, &[0x8002_0000, 0x8055_0000, 0xA000_0009]));
+    ps.extend(ins(39, &[]));
+    ps.extend(ins(1, &[0x800F_0800, 0x80E4_0000]));
+    ps.push(END);
+    for (shader, pixel, tokens) in [(VS + 50, false, vs), (PS + 50, true, ps)] {
+        let t = words(&tokens);
+        g.run(Cmd::CreateShader {
+            device: DEVICE,
+            shader,
+            pixel,
+            tokens: Data::Bytes(&t),
+        });
+        g.run(Cmd::SetShader {
+            device: DEVICE,
+            pixel,
+            shader,
+        });
+    }
+    let consts = |g: &mut Gpu, kind: u8, start: u32, w: &[u32]| {
+        let per = if kind % 3 == 2 { 1 } else { 4 };
+        let b = words(w);
+        g.run(Cmd::SetConstants {
+            device: DEVICE,
+            kind,
+            start,
+            count: w.len() as u32 / per,
+            data: Data::Bytes(&b),
+        });
+    };
+    g.clear(3, 0, 1.0);
+    g.state(ALPHATESTENABLE, 1);
+    g.state(ALPHAFUNC, ALPHAFUNC_GREATER);
+    g.state(CLIPPING, 1);
+    g.state(CLIPPLANEENABLE, 1);
+    // One column's strip (column 0's centres at clip x = -1), the whole height.
+    let (l, r) = (-1.25f32, -0.75f32);
+    let strip = floats(&[
+        l, -3.0, 0.5, 1.0, l, 3.0, 0.5, 1.0, r, -3.0, 0.5, 1.0, r, -3.0, 0.5, 1.0, l, 3.0, 0.5,
+        1.0, r, 3.0, 0.5, 1.0,
+    ]);
+    g.run(Cmd::UploadBuffer {
+        buffer: VB,
+        offset: 0,
+        flags: 0,
+        data: Data::Bytes(&strip),
+    });
+    g.run(Cmd::SetStreamSource {
+        device: DEVICE,
+        stream: 0,
+        buffer: VB,
+        offset: 0,
+        stride: 16,
+    });
+    // Each draw: its column, which of c5..c7 `a0` picks, the colours, its booleans, loop counts,
+    // clip plane (keeping rows down to its own) and alpha reference.
+    for k in 0..4u32 {
+        let x = 0.5 * k as f32;
+        consts(&mut g, 0, 0, &[f(x), 0, 0, 0]);
+        consts(&mut g, 0, 4, &[f((k % 3) as f32), 0, 0, 0]);
+        consts(
+            &mut g,
+            0,
+            5,
+            &[
+                f(0.5),
+                f(0.0),
+                f(0.0),
+                f(0.75),
+                f(0.0),
+                f(0.25),
+                f(0.0),
+                f(0.75),
+                f(0.0),
+                f(0.0),
+                f(0.25),
+                f(0.75),
+            ],
+        );
+        consts(&mut g, 2, 0, &[k % 2]);
+        consts(&mut g, 1, 0, &[k, 0, 1, 0]);
+        consts(&mut g, 3, 2, &[f(0.0625 * k as f32), 0, 0, 0]);
+        consts(&mut g, 5, 1, &[(k / 2) % 2]);
+        consts(&mut g, 4, 1, &[3 - k, 0, 1, 0]);
+        g.run(Cmd::SetClipPlane {
+            device: DEVICE,
+            index: 0,
+            plane: [0, f(1.0), 0, f(0.25 + 0.5 * k as f32)],
+        });
+        g.state(ALPHAREF, if k == 3 { 250 } else { 16 * k });
+        g.run(Cmd::DrawPrimitive {
+            device: DEVICE,
+            kind: 4,
+            start: 0,
+            count: 2,
+        });
+    }
+    let px = g.pixels();
+    let d = g.b.device().expect("the device");
+    assert_eq!(d.wgpu_errors(), 0);
+    Some((px, d.take_draw_digests()))
+}
+
+/// The registers from storage give the shaders what the uniform blocks give them, register by
+/// register: four draws of one batch with their own float, integer and boolean constants in both
+/// stages, a relative read, a defined constant, a clip plane and an alpha reference each draw the
+/// same pixels, and the digests (which name the bytes each draw's blocks cover, read through its
+/// draw table entry from storage) are alike.
+#[test]
+fn registers_from_storage_read_every_kind_of_register_as_uniform_blocks_do() {
+    let Some((uniform, off)) = every_register_script(false) else {
+        return;
+    };
+    let Some((stored, on)) = every_register_script(true) else {
+        return;
+    };
+    // The script tells the draws apart: each column its own pixels.
+    let column = |px: &[[u8; 4]], c: usize| -> Vec<[u8; 4]> {
+        px.iter().skip(c).step_by(4).copied().collect()
+    };
+    for a in 0..4 {
+        for b in a + 1..4 {
+            assert_ne!(
+                column(&uniform, a),
+                column(&uniform, b),
+                "columns {a} and {b}: {uniform:?}"
+            );
+        }
+    }
+    assert_eq!(stored, uniform, "the pixels");
+    assert_eq!(on, off, "the digests");
+}
+
+/// What [`merge_script`] gives: the target's pixels, the draws' digests in the order the game gave
+/// them and in the order the pass was given them, and the keys of held draws drawn with the draws
+/// they held ([`d3d9_wgpu::device::Device::held_counts`]).
+type MergeScript = (Vec<[u8; 4]>, Vec<u64>, Vec<u64>, (u64, u64));
+
+/// A 4 by 4 target, the registers from storage, held draws merged (`merge`) and sorted (`sort`)
+/// or not ([`d3d9_wgpu::device::Device::set_merge_draws`]), blended draws held after the opaque ones
+/// (`across`) or not: one strip of two triangles in the
+/// buffer, covering column 0 at depth 0.5, drawn by a vs_2_0 moving it right by `c0` and passing
+/// `c1` on, and a ps_2_0 drawing what it was passed (`PS + 40`) or its own `c0` (`PS + 41`); the
+/// depth test LESSEQUAL with depth writes. `guard`: draws of the same strip with the two pixel
+/// shaders in turn; else four opaque draws of one key in columns 0 to 3, a blended one in column
+/// 0, and two more of the first key in columns 1 and 2. None where the adapter cannot read the
+/// registers from storage.
+fn merge_script(merge: bool, sort: bool, across: bool, guard: bool) -> Option<MergeScript> {
+    const ALPHABLENDENABLE: u32 = 27;
+    const SRCBLEND: u32 = 19;
+    const DESTBLEND: u32 = 20;
+    let mut g = Gpu::new(4, 1)?;
+    {
+        let d = g.b.device().expect("the device");
+        if !d.set_storage_regs(true) {
+            eprintln!("this adapter cannot read the registers from storage: not checked");
+            return None;
+        }
+        d.set_merge_draws(merge, sort, across);
+        d.record_draw_digests(true);
+    }
+    // vs_2_0: dcl_position v0; add oPos, v0, c0; mov oT0, c1.
+    let mut vs = vec![0xFFFE_0200];
+    vs.extend(ins(31, &[0x8000_0000, 0x900F_0000]));
+    vs.extend(ins(2, &[0xC00F_0000, 0x90E4_0000, 0xA0E4_0000]));
+    vs.extend(ins(1, &[0xE00F_0000, 0xA0E4_0001]));
+    vs.push(END);
+    // ps_2_0: dcl t0; mov oC0, t0. And ps_2_0: mov oC0, c0.
+    let mut passed = vec![0xFFFF_0200];
+    passed.extend(ins(31, &[0x8000_0000, 0xB00F_0000]));
+    passed.extend(ins(1, &[0x800F_0800, 0xB0E4_0000]));
+    passed.push(END);
+    let mut own = vec![0xFFFF_0200];
+    own.extend(ins(1, &[0x800F_0800, 0xA0E4_0000]));
+    own.push(END);
+    for (shader, pixel, tokens) in [
+        (VS + 40, false, vs),
+        (PS + 40, true, passed),
+        (PS + 41, true, own),
+    ] {
+        let t = words(&tokens);
+        g.run(Cmd::CreateShader {
+            device: DEVICE,
+            shader,
+            pixel,
+            tokens: Data::Bytes(&t),
+        });
+    }
+    let set_shader = |g: &mut Gpu, pixel: bool, shader: u32| {
+        g.run(Cmd::SetShader {
+            device: DEVICE,
+            pixel,
+            shader,
+        });
+    };
+    let regs = |g: &mut Gpu, kind: u8, start: u32, r: &[f32]| {
+        let b = floats(r);
+        g.run(Cmd::SetConstants {
+            device: DEVICE,
+            kind,
+            start,
+            count: r.len() as u32 / 4,
+            data: Data::Bytes(&b),
+        });
+    };
+    set_shader(&mut g, false, VS + 40);
+    set_shader(&mut g, true, PS + 40);
+    g.clear(3, 0, 1.0);
+    g.state(ZWRITEENABLE, 1);
+    g.state(ZFUNC, 4);
+    // Column 0's centres are at clip x = -1 (Direct3D 9's whole coordinates).
+    let (l, r) = (-1.25f32, -0.75f32);
+    let strip = floats(&[
+        l, -3.0, 0.5, 1.0, l, 3.0, 0.5, 1.0, r, -3.0, 0.5, 1.0, r, -3.0, 0.5, 1.0, l, 3.0, 0.5,
+        1.0, r, 3.0, 0.5, 1.0,
+    ]);
+    g.run(Cmd::UploadBuffer {
+        buffer: VB,
+        offset: 0,
+        flags: 0,
+        data: Data::Bytes(&strip),
+    });
+    // The same strip again, for the blended draw (vertices of its own).
+    g.run(Cmd::UploadBuffer {
+        buffer: VB,
+        offset: 96,
+        flags: 0,
+        data: Data::Bytes(&strip),
+    });
+    g.run(Cmd::SetStreamSource {
+        device: DEVICE,
+        stream: 0,
+        buffer: VB,
+        offset: 0,
+        stride: 16,
+    });
+    let draw = |g: &mut Gpu, column: u32, colour: [f32; 4]| {
+        let mut r = vec![0.5 * column as f32, 0.0, 0.0, 0.0];
+        r.extend_from_slice(&colour);
+        regs(g, 0, 0, &r);
+        g.run(Cmd::DrawPrimitive {
+            device: DEVICE,
+            kind: 4,
+            start: 0,
+            count: 2,
+        });
+    };
+    let red = [1.0, 0.0, 0.0, 1.0];
+    let green = [0.0, 1.0, 0.0, 1.0];
+    let blue = [0.0, 0.0, 1.0, 1.0];
+    let white = [1.0; 4];
+    if guard {
+        // The second pixel shader in column 0, the first in column 1, the second again in column
+        // 1: drawn last there at the same depth, so column 1 is its blue.
+        set_shader(&mut g, true, PS + 41);
+        regs(&mut g, 3, 0, &red);
+        draw(&mut g, 0, white);
+        set_shader(&mut g, true, PS + 40);
+        draw(&mut g, 1, green);
+        set_shader(&mut g, true, PS + 41);
+        regs(&mut g, 3, 0, &blue);
+        draw(&mut g, 1, white);
+    } else {
+        for (column, colour) in [red, green, blue, white].into_iter().enumerate() {
+            draw(&mut g, column as u32, colour);
+        }
+        let stream = |g: &mut Gpu, offset: u32| {
+            g.run(Cmd::SetStreamSource {
+                device: DEVICE,
+                stream: 0,
+                buffer: VB,
+                offset,
+                stride: 16,
+            });
+        };
+        // Blended, tested against depth and writing none, as see-through surfaces are drawn.
+        g.state(ALPHABLENDENABLE, 1);
+        g.state(ZWRITEENABLE, 0);
+        g.state(SRCBLEND, 2);
+        g.state(DESTBLEND, 2);
+        stream(&mut g, 96);
+        draw(&mut g, 0, [0.0, 0.0, 0.5, 1.0]);
+        stream(&mut g, 0);
+        g.state(ALPHABLENDENABLE, 0);
+        g.state(ZWRITEENABLE, 1);
+        g.state(DESTBLEND, 1);
+        draw(&mut g, 1, [1.0, 1.0, 0.0, 1.0]);
+        draw(&mut g, 2, [1.0, 1.0, 0.0, 1.0]);
+    }
+    let px = g.pixels();
+    let d = g.b.device().expect("the device");
+    assert_eq!(d.wgpu_errors(), 0);
+    assert_eq!(
+        d.held_mismatches(),
+        0,
+        "each held draw drawn with its own state"
+    );
+    Some((
+        px,
+        d.take_draw_digests(),
+        d.take_emitted_digests(),
+        d.held_counts(),
+    ))
+}
+
+/// Opaque draws of one key held and drawn as one instanced draw (`NV_WGPU_MERGE_DRAWS`), each
+/// instance with its own registers (its own place and colour): the same pixels as one draw each,
+/// every draw given to the pass once with its own digest, never across a blended draw; sorted
+/// the same.
+#[test]
+fn merged_draws_draw_what_one_draw_each_draws() {
+    let Some((off_px, off, off_emitted, off_held)) = merge_script(false, false, false, false)
+    else {
+        return;
+    };
+    assert_eq!(off.len(), 7, "every draw noted");
+    assert_eq!(off_emitted, off, "unmerged: given in the game's order");
+    assert_eq!(off_held, (0, 0), "nothing held unmerged");
+    let red = [0, 0, 255, 255];
+    let yellow = [0, 255, 255, 255];
+    let white = [255, 255, 255, 255];
+    for row in off_px.chunks_exact(4) {
+        assert_eq!(&row[1..], &[yellow, yellow, white], "{off_px:?}");
+        assert_eq!(&row[0][1..3], &red[1..3], "column 0: red with blue added");
+    }
+    for sort in [false, true] {
+        let (px, drawn, mut emitted, held) =
+            merge_script(true, sort, false, false).expect("the adapter, as above");
+        assert_eq!(px, off_px, "the pixels, sorted {sort}");
+        assert_eq!(
+            drawn, off,
+            "the digests as the game gave the draws, sorted {sort}"
+        );
+        assert_eq!(
+            held,
+            (2, 6),
+            "four draws as one, then two after the blended one, sorted {sort}"
+        );
+        let mut want = off.clone();
+        want.sort_unstable();
+        emitted.sort_unstable();
+        assert_eq!(emitted, want, "every draw given once, sorted {sort}");
+    }
+}
+
+/// A held draw of the same vertices as a held draw of another key (another pass over the same
+/// surface) is not drawn before it: the held draws are drawn first. Column 1 takes the last
+/// draw's blue, as with one draw each.
+#[test]
+fn merged_draws_keep_a_second_pass_over_the_same_vertices_after_the_first() {
+    let Some((off_px, off, _, _)) = merge_script(false, false, false, true) else {
+        return;
+    };
+    let red = [0, 0, 255, 255];
+    let blue = [255, 0, 0, 255];
+    for row in off_px.chunks_exact(4) {
+        assert_eq!(&row[..2], &[red, blue], "{off_px:?}");
+    }
+    let (px, drawn, _, held) =
+        merge_script(true, false, false, true).expect("the adapter, as above");
+    assert_eq!(px, off_px, "the pixels");
+    assert_eq!(drawn, off, "the digests");
+    assert_eq!(
+        held,
+        (3, 3),
+        "each draw on its own: no key drawn before the other's draw"
+    );
+}
+
+/// Blended draws held after the opaque ones (`NV_WGPU_SORT_DRAWS=pass`): the blended one is drawn
+/// after the opaque ones held before it, the opaque draws given after it are drawn after it (they
+/// could lie behind it), and the pixels are as with one draw each.
+#[test]
+fn merged_draws_around_a_held_blended_draw_draw_what_one_draw_each_draws() {
+    let Some((off_px, off, _, _)) = merge_script(false, false, false, false) else {
+        return;
+    };
+    let (px, drawn, mut emitted, held) =
+        merge_script(true, true, true, false).expect("the adapter, as above");
+    assert_eq!(px, off_px, "the pixels");
+    assert_eq!(drawn, off, "the digests as the game gave the draws");
+    let mut want = off.clone();
+    want.sort_unstable();
+    emitted.sort_unstable();
+    assert_eq!(emitted, want, "every draw given once");
+    assert_eq!(
+        held,
+        (3, 7),
+        "the first four opaque draws as one, the blended one, the last two as one"
+    );
+}
+
+/// A draw of [`held_script`]'s strip in a column, with a colour.
+type StripDraw = dyn Fn(&mut Gpu, u32, [f32; 4]);
+/// What [`held_script`] runs: its draws, given the strip's draw.
+type HeldDraws = dyn Fn(&mut Gpu, &StripDraw);
+/// What [`held_script`] gives: the pixels, the held keys drawn with their draws, the mismatches.
+type HeldScript = (Vec<[u8; 4]>, (u64, u64), u64);
+
+/// An 8 by 8 target, the registers from storage, held draws merged (`merge`, with `pass`: blended
+/// draws held after the opaque ones) or not: the vs_2_0 of [`merge_script`] (moved right by `c0`,
+/// passing `c1` on) and its ps_2_0 drawing what it was passed, two strips of one column each in
+/// the buffer (the second one column further right), the depth test LESSEQUAL with depth writes.
+/// `script` draws; then the pixels, the held draws drawn with the draws they held, and the held
+/// draws drawn with another state than they asked for. None where the adapter cannot read the
+/// registers from storage.
+fn held_script(merge: bool, pass: bool, script: &HeldDraws) -> Option<HeldScript> {
+    let mut g = Gpu::new(8, 1)?;
+    {
+        let d = g.b.device().expect("the device");
+        if !d.set_storage_regs(true) {
+            eprintln!("this adapter cannot read the registers from storage: not checked");
+            return None;
+        }
+        d.set_merge_draws(merge, pass, pass);
+        d.record_draw_digests(true);
+    }
+    // vs_2_0: dcl_position v0; add oPos, v0, c0; mov oT0, c1. ps_2_0: dcl t0; mov oC0, t0.
+    let mut vs = vec![0xFFFE_0200];
+    vs.extend(ins(31, &[0x8000_0000, 0x900F_0000]));
+    vs.extend(ins(2, &[0xC00F_0000, 0x90E4_0000, 0xA0E4_0000]));
+    vs.extend(ins(1, &[0xE00F_0000, 0xA0E4_0001]));
+    vs.push(END);
+    let mut ps = vec![0xFFFF_0200];
+    ps.extend(ins(31, &[0x8000_0000, 0xB00F_0000]));
+    ps.extend(ins(1, &[0x800F_0800, 0xB0E4_0000]));
+    ps.push(END);
+    for (shader, pixel, tokens) in [(VS + 60, false, vs), (PS + 60, true, ps)] {
+        let t = words(&tokens);
+        g.run(Cmd::CreateShader {
+            device: DEVICE,
+            shader,
+            pixel,
+            tokens: Data::Bytes(&t),
+        });
+        g.run(Cmd::SetShader {
+            device: DEVICE,
+            pixel,
+            shader,
+        });
+    }
+    g.clear(3, 0, 1.0);
+    g.state(ZWRITEENABLE, 1);
+    g.state(ZFUNC, 4);
+    // Column c's centres are at clip x = -1 + c / 4 (Direct3D 9's whole coordinates).
+    let mut verts = Vec::new();
+    for shift in [0.0f32, 0.25] {
+        let (l, r) = (-1.125 + shift, -0.875 + shift);
+        verts.extend([
+            l, -3.0, 0.5, 1.0, l, 3.0, 0.5, 1.0, r, -3.0, 0.5, 1.0, r, -3.0, 0.5, 1.0, l, 3.0, 0.5,
+            1.0, r, 3.0, 0.5, 1.0,
+        ]);
+    }
+    let b = floats(&verts);
+    g.run(Cmd::UploadBuffer {
+        buffer: VB,
+        offset: 0,
+        flags: 0,
+        data: Data::Bytes(&b),
+    });
+    g.run(Cmd::SetStreamSource {
+        device: DEVICE,
+        stream: 0,
+        buffer: VB,
+        offset: 0,
+        stride: 16,
+    });
+    let draw = |g: &mut Gpu, column: u32, colour: [f32; 4]| {
+        let mut r = vec![0.25 * column as f32, 0.0, 0.0, 0.0];
+        r.extend_from_slice(&colour);
+        let bytes = floats(&r);
+        g.run(Cmd::SetConstants {
+            device: DEVICE,
+            kind: 0,
+            start: 0,
+            count: 2,
+            data: Data::Bytes(&bytes),
+        });
+        g.run(Cmd::DrawPrimitive {
+            device: DEVICE,
+            kind: 4,
+            start: 0,
+            count: 2,
+        });
+    };
+    script(&mut g, &draw);
+    let px = g.pixels();
+    let d = g.b.device().expect("the device");
+    assert_eq!(d.wgpu_errors(), 0);
+    Some((px, d.held_counts(), d.held_mismatches()))
+}
+
+/// Pairs of opaque draws of one strip that differ in exactly one thing the pass takes besides
+/// the registers (the viewport, the scissor rectangle, the stream offset, the first vertex) are
+/// not merged into one key: merged, the pixels are those of one draw each, every held draw is
+/// drawn with the state it asked for, and no two of the pairs share a key.
+#[test]
+fn merged_draws_keep_apart_draws_that_differ_in_one_pass_setting() {
+    const SCISSORTESTENABLE: u32 = 174;
+    let script = |g: &mut Gpu, draw: &StripDraw| {
+        let viewport = |g: &mut Gpu, x: u32, w: u32| {
+            g.run(Cmd::SetViewport {
+                device: DEVICE,
+                viewport: [x, 0, w, 8, 0f32.to_bits(), 1f32.to_bits()],
+            });
+        };
+        let scissor = |g: &mut Gpu, bottom: i32| {
+            g.run(Cmd::SetScissorRect {
+                device: DEVICE,
+                rect: [0, 0, 8, bottom],
+            });
+        };
+        let stream = |g: &mut Gpu, offset: u32| {
+            g.run(Cmd::SetStreamSource {
+                device: DEVICE,
+                stream: 0,
+                buffer: VB,
+                offset,
+                stride: 16,
+            });
+        };
+        // The viewport: the second moved a column right.
+        viewport(g, 0, 8);
+        draw(g, 0, [1.0, 0.0, 0.0, 1.0]);
+        viewport(g, 1, 7);
+        draw(g, 0, [0.0, 1.0, 0.0, 1.0]);
+        viewport(g, 0, 8);
+        // The scissor: the second cut to the top half.
+        g.state(SCISSORTESTENABLE, 1);
+        scissor(g, 8);
+        draw(g, 2, [0.0, 0.0, 1.0, 1.0]);
+        scissor(g, 4);
+        draw(g, 2, [1.0, 1.0, 0.0, 1.0]);
+        g.state(SCISSORTESTENABLE, 0);
+        // The stream offset: the second strip, a column further right.
+        draw(g, 4, [1.0, 0.0, 1.0, 1.0]);
+        stream(g, 96);
+        draw(g, 4, [0.0, 1.0, 1.0, 1.0]);
+        stream(g, 0);
+    };
+    let Some((off, _, _)) = held_script(false, false, &script) else {
+        return;
+    };
+    let (on, held, mismatches) = held_script(true, false, &script).expect("the adapter, as above");
+    assert_eq!(on, off, "the pixels");
+    assert_eq!(mismatches, 0, "each held draw drawn with its own state");
+    assert_eq!(held, (6, 6), "no two draws of the pairs share a key");
+    // The pairs drew apart: column 1 (the moved viewport), the scissored half of column 2, and
+    // column 5 (the second strip) have the second draws' colours.
+    let at = |x: usize, y: usize| off[8 * y + x];
+    assert_eq!(at(5, 2), [255, 255, 0, 255], "the second strip");
+    assert_eq!(
+        at(2, 0),
+        [0, 255, 255, 255],
+        "the scissored draw's top half"
+    );
+    assert_eq!(at(2, 6), [255, 0, 0, 255], "the first draw's bottom half");
+}
+
+/// With blended draws held after the opaque ones (`NV_WGPU_SORT_DRAWS=pass`), a blended draw
+/// that ignores depth (as a sky layer or a glare) or writes it (as a fading object) is given in
+/// the game's order: an opaque draw given after it, in the same place, still covers it (or fails
+/// behind it), as with one draw each.
+#[test]
+fn held_blended_draws_never_move_past_opaque_draws_when_they_ignore_or_write_depth() {
+    const ALPHABLENDENABLE: u32 = 27;
+    const SRCBLEND: u32 = 19;
+    const DESTBLEND: u32 = 20;
+    let script = |g: &mut Gpu, draw: &StripDraw| {
+        g.state(SRCBLEND, 2);
+        g.state(DESTBLEND, 2);
+        // Column 0: a blended draw with the depth test off, then an opaque draw over it.
+        g.state(ALPHABLENDENABLE, 1);
+        g.state(ZENABLE, 0);
+        draw(g, 0, [0.0, 0.0, 0.5, 1.0]);
+        g.state(ZENABLE, 1);
+        g.state(ALPHABLENDENABLE, 0);
+        draw(g, 0, [1.0, 0.0, 0.0, 1.0]);
+        // Column 1: a blended draw writing depth, then an opaque draw at the same depth (LESS:
+        // it fails where the blended draw wrote).
+        g.state(ALPHABLENDENABLE, 1);
+        draw(g, 1, [0.0, 0.0, 0.5, 1.0]);
+        g.state(ALPHABLENDENABLE, 0);
+        g.state(ZFUNC, 2);
+        draw(g, 1, [0.0, 1.0, 0.0, 1.0]);
+        g.state(ZFUNC, 4);
+    };
+    let Some((off, _, _)) = held_script(false, false, &script) else {
+        return;
+    };
+    let (on, _, mismatches) = held_script(true, true, &script).expect("the adapter, as above");
+    assert_eq!(on, off, "the pixels");
+    assert_eq!(mismatches, 0, "each held draw drawn with its own state");
+    assert_eq!(
+        off[0],
+        [0, 0, 255, 255],
+        "column 0: the opaque draw over the depth-off one"
+    );
+    assert!(
+        (127..=128).contains(&off[1][0]) && off[1][1..3] == [0, 0],
+        "column 1: the blended draw alone (the opaque one failed): {:?}",
+        off[1]
+    );
+}
+
+/// [`held_script`]'s strip drawn with its registers: moved right by `column` columns and back by
+/// `z` in depth, passing `colour` on.
+fn strip_at(g: &mut Gpu, column: u32, z: f32, colour: [f32; 4]) {
+    let mut r = vec![0.25 * column as f32, 0.0, z, 0.0];
+    r.extend_from_slice(&colour);
+    let bytes = floats(&r);
+    g.run(Cmd::SetConstants {
+        device: DEVICE,
+        kind: 0,
+        start: 0,
+        count: 2,
+        data: Data::Bytes(&bytes),
+    });
+    g.run(Cmd::DrawPrimitive {
+        device: DEVICE,
+        kind: 4,
+        start: 0,
+        count: 2,
+    });
+}
+
+/// [`held_script`]'s vertex stream 0 at `offset` (96: the second strip, a column further right).
+fn strip_stream(g: &mut Gpu, offset: u32) {
+    g.run(Cmd::SetStreamSource {
+        device: DEVICE,
+        stream: 0,
+        buffer: VB,
+        offset,
+        stride: 16,
+    });
+}
+
+/// With blended draws held after the opaque ones (`NV_WGPU_SORT_DRAWS=pass`), an opaque draw the
+/// game gives after a see-through draw (blended, tested against depth, writing none) and lying
+/// behind it on screen still covers it, as with one draw each: it is not drawn ahead of it.
+#[test]
+fn an_opaque_draw_after_a_held_see_through_draw_still_covers_it() {
+    const ALPHABLENDENABLE: u32 = 27;
+    const SRCBLEND: u32 = 19;
+    const DESTBLEND: u32 = 20;
+    let script = |g: &mut Gpu, _: &StripDraw| {
+        // Column 1: the see-through draw (the second strip, its own vertices) in front ...
+        g.state(SRCBLEND, 2);
+        g.state(DESTBLEND, 2);
+        g.state(ALPHABLENDENABLE, 1);
+        g.state(ZWRITEENABLE, 0);
+        strip_stream(g, 96);
+        strip_at(g, 0, 0.0, [0.0, 0.0, 0.5, 1.0]);
+        // ... then an opaque draw behind it (the first strip moved a column right): the
+        // see-through draw wrote no depth, so it passes and covers it.
+        g.state(ALPHABLENDENABLE, 0);
+        g.state(ZWRITEENABLE, 1);
+        g.state(DESTBLEND, 1);
+        strip_stream(g, 0);
+        strip_at(g, 1, 0.25, [1.0, 0.0, 0.0, 1.0]);
+    };
+    let Some((off, _, _)) = held_script(false, false, &script) else {
+        return;
+    };
+    assert_eq!(off[1], [0, 0, 255, 255], "column 1: the opaque draw's red");
+    let (on, held, mismatches) = held_script(true, true, &script).expect("the adapter, as above");
+    assert_eq!(on, off, "the pixels");
+    assert_eq!(mismatches, 0, "each held draw drawn with its own state");
+    assert_eq!(held, (2, 2), "both draws held");
+}
+
+/// Merged in place (`NV_WGPU_MERGE_DRAWS=1`, not sorted): of draws of two keys at exactly the
+/// same depth given K1, K2, K1 (the depth test LESSEQUAL, so the last one shows), the last K1
+/// does not join the first (it would be drawn before K2): the pixel is the last draw's, as with
+/// one draw each, while draws of one key given one after another still join.
+#[test]
+fn merged_draws_in_place_keep_which_of_two_coplanar_surfaces_shows() {
+    let script = |g: &mut Gpu, _: &StripDraw| {
+        // K1 (the first strip) in columns 3 and 4 and then 1: one run of K1.
+        strip_at(g, 3, 0.0, [1.0, 1.0, 1.0, 1.0]);
+        strip_at(g, 4, 0.0, [1.0, 1.0, 1.0, 1.0]);
+        strip_at(g, 1, 0.0, [1.0, 0.0, 0.0, 1.0]);
+        // K2 (the second strip) over column 1 at the same depth.
+        strip_stream(g, 96);
+        strip_at(g, 0, 0.0, [0.0, 1.0, 0.0, 1.0]);
+        // K1 again over column 1 at the same depth: drawn last, it shows.
+        strip_stream(g, 0);
+        strip_at(g, 1, 0.0, [0.0, 0.0, 1.0, 1.0]);
+    };
+    let Some((off, _, _)) = held_script(false, false, &script) else {
+        return;
+    };
+    assert_eq!(off[1], [255, 0, 0, 255], "column 1: the last draw's blue");
+    let (on, held, mismatches) = held_script(true, false, &script).expect("the adapter, as above");
+    assert_eq!(on, off, "the pixels");
+    assert_eq!(mismatches, 0, "each held draw drawn with its own state");
+    assert_eq!(
+        held,
+        (3, 5),
+        "the first three K1 draws as one, K2, the last K1 on its own"
+    );
 }

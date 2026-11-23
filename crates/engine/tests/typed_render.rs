@@ -1549,3 +1549,98 @@ fn note_vertex_constants(e: &mut Engine) {
         ret(0)
     });
 }
+
+/// The fixes row "dead lights in a light list" (`engine_typed::lights::dead`): `GetRenderPasses` with
+/// its state at the key (the passes kept) and a dead light in the property's list (`NiRefObject`'s
+/// vtable and `spLight` 0, as the light's destructor leaves it) takes the entry out (unlinked through
+/// the list's remove, as `RemoveLight` does) and rebuilds the passes (the lights are resorted); with
+/// the row off it keeps the passes and touches nothing, as the exe.
+#[test]
+fn render_passes_take_out_a_dead_light_and_rebuild() {
+    // The list's remove of an element (`thiscall(list, slot)`): the first node holding the slot's
+    // word unlinked, head, tail and count kept right.
+    fn remove(e: &mut Engine, a: &[u32]) -> Ret {
+        let (list, element) = (a[0], e.mem.u32(a[1]));
+        let mut node = e.mem.u32(list);
+        while node != 0 {
+            let (next, previous) = (e.mem.u32(node), e.mem.u32(node + 4));
+            if e.mem.u32(node + 8) == element {
+                if previous == 0 {
+                    set(e, list, next);
+                } else {
+                    set(e, previous, next);
+                }
+                if next == 0 {
+                    set(e, list + 4, previous);
+                } else {
+                    set(e, next + 4, previous);
+                }
+                let count = e.mem.u32(list + 8) - 1;
+                set(e, list + 8, count);
+                break;
+            }
+            node = next;
+        }
+        Ret::default()
+    }
+    fn elements(e: &Engine, list: u32) -> Vec<u32> {
+        let mut out = Vec::new();
+        let mut node = e.mem.u32(list);
+        while node != 0 {
+            out.push(e.mem.u32(node + 8));
+            node = e.mem.u32(node);
+        }
+        out
+    }
+    for guard in [false, true] {
+        let mut e = Engine::new();
+        let (property, geometry, accumulator) = property_world(&mut e);
+        e.register(0x00e7_db70, remove);
+        // The resort (asked: the geometry's +0x9c byte +0x18 has bit 0) marks the rebuild.
+        e.register(0x00b7_0390, |e, _| {
+            set(e, RETS + 0x700, 1);
+            ret(0)
+        });
+        let dead = e.mem.alloc(0x250);
+        set(&mut e, dead, 0x0101_dce4);
+        let ni = e.mem.alloc(0x100);
+        let live = e.mem.alloc(0x250);
+        set(&mut e, live, 0x010b_7eb8);
+        set(&mut e, live + 0xf8, ni);
+        let first = e.mem.alloc(0xc);
+        let second = e.mem.alloc(0xc);
+        set(&mut e, first, second);
+        set(&mut e, first + 8, dead);
+        set(&mut e, second + 4, first);
+        set(&mut e, second + 8, live);
+        set(&mut e, property + 0x60, first);
+        set(&mut e, property + 0x64, second);
+        set(&mut e, property + 0x68, 2);
+        // The alpha kept below 1 (its crossing would clear the state).
+        set(&mut e, property + 0x28, 0x3f40_0000);
+        // The state at the key of pass type 0x10 with word 3, the list not changed.
+        set(&mut e, property + 0x38, (0x10 << 8) | 3);
+        e.mem.set_u8(property + 0x74, 0);
+        engine_typed::lights::dead::set_guard(&e, guard);
+        let count = e.mem.alloc(4);
+        passes::render_passes(&mut e, property, geometry, 3, count, 0x10, accumulator, 1);
+        let rebuilt = e.mem.u32(RETS + 0x700) == 1;
+        if guard {
+            assert_eq!(
+                elements(&e, property + 0x60),
+                vec![live],
+                "the dead light taken out"
+            );
+            assert_eq!(e.mem.u32(property + 0x68), 1);
+            assert!(rebuilt, "the passes rebuilt");
+        } else {
+            assert_eq!(
+                elements(&e, property + 0x60),
+                vec![dead, live],
+                "row off: kept"
+            );
+            assert!(!rebuilt, "row off: the passes kept, as the exe");
+        }
+        engine_typed::lights::dead::set_guard(&e, false);
+    }
+}

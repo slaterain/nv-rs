@@ -21,14 +21,30 @@ enum Key {
 /// size, so they hold that target's command until set again.
 const VIEWPORT: Key = Key::At("SetViewport", 0, 0);
 const SCISSOR: Key = Key::At("SetScissorRect", 0, 0);
+/// The scissor test's render state (`D3DRS_SCISSORTESTENABLE`, 174): whether a `Clear` keeps to the rectangle.
+const SCISSOR_TEST: Key = Key::At("SetRenderState", 174, 0);
+/// Stream 0's key: `DrawPrimitiveUP` leaves it empty, as the device does.
+const STREAM_0: Key = Key::At("SetStreamSource", 0, 0);
+
+/// Whether a `Clear` reaches what `key` holds: the render targets, the depth surface, the viewport, the scissor
+/// rectangle and its test. A `Clear` is hashed with them ([`StateDigest::clear`]), so a wrong target seen only by a
+/// `Clear` is found there.
+fn cleared_by(key: &Key) -> bool {
+    matches!(
+        key,
+        Key::At("SetRenderTarget", _, _) | Key::At("SetDepthStencilSurface", _, _)
+    ) || [VIEWPORT, SCISSOR, SCISSOR_TEST].contains(key)
+}
 
 /// Each draw's device state hashed, in the order the draws come ([`StateDigest::new`]'s list):
 /// every state set so far (render, stage and sampler states, textures, transforms, viewport,
 /// scissor, clip planes, targets, streams, indices, the vertex layout, shaders and each constant
 /// register, material and lights) by its last value, every other command so far (creations,
 /// uploads, clears, copies, queries issued, presents) in order, and the draw itself. A new render
-/// target 0 resets the viewport and the scissor rectangle, and `Reset` every state, as the device
-/// does. Left out, as [`crate::Stream::record_repeatable`] leaves them out: the real windows'
+/// target 0 resets the viewport and the scissor rectangle, `DrawPrimitiveUP` empties stream 0, and
+/// `Reset` every state, as the device does; a state that holds an object set to none (no texture, shader, index or
+/// vertex buffer) is the device's default and kept as never set ([`StateDigest::bind`]); a `Clear` is hashed with what it clears into (the
+/// targets, the depth surface, the viewport, the scissor rectangle and its test). Left out, as [`crate::Stream::record_repeatable`] leaves them out: the real windows'
 /// handles and the query reads (made as often as the GPU takes). The objects destroyed are hashed
 /// as a set (the drawing side's ends come at the join, after their place in the serial order),
 /// one more value at the end of the list once the backend is dropped. A backend for tests: it
@@ -106,6 +122,36 @@ impl StateDigest {
         self.events = wire::hash(self.events, &self.encoded);
     }
 
+    /// A `Clear`: hashed as an event with the state it clears into ([`cleared_by`]).
+    fn clear(&mut self) {
+        let mut h = wire::hash(self.events, &self.encoded);
+        for (key, value) in self.state.iter().filter(|(key, _)| cleared_by(key)) {
+            h = wire::hash(h, format!("{key:?}").as_bytes());
+            h = wire::hash(h, value);
+        }
+        self.events = h;
+    }
+
+    /// A state that holds an object (a texture on a sampler, a shader, the index buffer, a stream's vertex buffer):
+    /// `empty` (no object, and for a stream offset and stride 0) is what the device holds from its creation or a
+    /// `Reset` until it is set, so it is kept as never set; any object is kept by its bytes. A stream that sends
+    /// "none" where another sends nothing (a cache that skips a set equal to what it holds on one side only) leaves
+    /// the device as it was, and every draw after sees the same; it cannot hide a difference a draw could see, since
+    /// an object on one side and none on the other still differ (kept against absent), as do two objects.
+    fn bind(&mut self, key: Key, empty: bool) {
+        if empty {
+            self.state.remove(&key);
+        } else {
+            self.set(key);
+        }
+    }
+
+    /// Stream 0 emptied, as `DrawPrimitiveUP` leaves it (its `SetStreamSource(0, NULL, 0, 0)`): the device's default
+    /// ([`StateDigest::bind`]).
+    fn empty_stream_0(&mut self) {
+        self.state.remove(&STREAM_0);
+    }
+
     fn push(&self, digest: u64) {
         self.digests
             .lock()
@@ -181,9 +227,18 @@ impl Backend for StateDigest {
             Cmd::SetRenderState { state, .. } => self.set(at(state, 0)),
             Cmd::SetTextureStageState { stage, kind, .. } => self.set(at(stage, kind)),
             Cmd::SetSamplerState { sampler, kind, .. } => self.set(at(sampler, kind)),
-            Cmd::SetTexture { sampler, .. } => self.set(at(sampler, 0)),
-            Cmd::SetShader { pixel, .. } => self.set(at(u32::from(pixel), 0)),
-            Cmd::SetStreamSource { stream, .. } => self.set(at(stream, 0)),
+            Cmd::SetTexture {
+                sampler, texture, ..
+            } => self.bind(at(sampler, 0), texture == 0),
+            Cmd::SetShader { pixel, shader, .. } => self.bind(at(u32::from(pixel), 0), shader == 0),
+            Cmd::SetStreamSource {
+                stream,
+                buffer,
+                offset,
+                stride,
+                ..
+            } => self.bind(at(stream, 0), buffer == 0 && offset == 0 && stride == 0),
+            Cmd::SetIndices { buffer, .. } => self.bind(at(0, 0), buffer == 0),
             Cmd::SetLight { index, .. } | Cmd::LightEnable { index, .. } => self.set(at(index, 0)),
             Cmd::SetLod { texture, .. } => self.set(at(texture, 0)),
             // A declaration and an FVF replace each other: one vertex layout.
@@ -194,7 +249,6 @@ impl Backend for StateDigest {
             Cmd::SetScissorRect { .. } => self.set(SCISSOR),
             Cmd::SetDepthStencilSurface { .. }
             | Cmd::SetGammaRamp { .. }
-            | Cmd::SetIndices { .. }
             | Cmd::SetMaterial { .. }
             | Cmd::SetSoftwareVertexProcessing { .. } => self.set(at(0, 0)),
             Cmd::SetConstants {
@@ -223,22 +277,37 @@ impl Backend for StateDigest {
                     }
                 }
                 self.recent.clear();
+                if let Cmd::DrawPrimitiveUp { .. } = cmd {
+                    self.empty_stream_0();
+                }
+            }
+            Cmd::Clear { .. } => {
+                self.clear();
+                self.note_recent(name, &cmd);
             }
             _ => {
                 self.event();
-                if self.stop_at.is_some() {
-                    if name == "Present" {
-                        self.presents += 1;
-                        self.in_frame = 0;
-                    }
-                    self.recent.push_back(short(&format!("{cmd:?}")));
-                    if self.recent.len() > 12 {
-                        self.recent.pop_front();
-                    }
-                }
+                self.note_recent(name, &cmd);
             }
         }
         reply
+    }
+}
+
+impl StateDigest {
+    /// For [`StateDigest::stopping_at`]: a command that sets no state and draws nothing noted among the recent ones,
+    /// and a present counted.
+    fn note_recent(&mut self, name: &str, cmd: &Cmd<Data<'_>>) {
+        if self.stop_at.is_some() {
+            if name == "Present" {
+                self.presents += 1;
+                self.in_frame = 0;
+            }
+            self.recent.push_back(short(&format!("{cmd:?}")));
+            if self.recent.len() > 12 {
+                self.recent.pop_front();
+            }
+        }
     }
 }
 
