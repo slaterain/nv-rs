@@ -1646,7 +1646,8 @@ const SCENE_INDEXES: &[u32] = &[
 /// "7" or "123") running `program` (an operand whose reads code is 8 is `a`, 9 is `b`), the values
 /// it reads, the user-trait map (10010 gives -1, 10011 gives 5), a `GetUnderscoreValue` stand-in, a
 /// `sprintf_s` stand-in writing the integer, and with `dependents` two values that react to it (one
-/// copying it, one adding 1.0).
+/// copying it, one adding 1.0). With `uio`, UI Organizer's operator (its patch at 00a0968c,
+/// `uio::operators::operate`) runs each operation, as in default play.
 #[allow(clippy::too_many_arguments)]
 fn calc_scene(
     e: &mut Engine,
@@ -1656,9 +1657,14 @@ fn calc_scene(
     answer: u32,
     own_string: u32,
     dependents: bool,
+    uio: bool,
     (a, b): (f32, f32),
 ) -> Vec<u32> {
     world(e);
+    if uio {
+        e.set_uio(true);
+        e.on_site(uio::OPERATOR_SITE, uio::operators::operate);
+    }
     for page in [0x0109_4000, 0x0101_1000] {
         e.map(page, 0x1000);
     }
@@ -1777,7 +1783,8 @@ fn calc_scene(
 /// `eString` rewrite, user traits through the user-trait map and `GetUnderscoreValue`, special
 /// floats) for the traits `x`, `string` and a user trait, `PostParse` answering 0 or 1, the value's
 /// own string none or of one or three characters, and with or without values that react to it
-/// (recalculated through `ValueChangeEvent`, by address, on both sides).
+/// (recalculated through `ValueChangeEvent`, by address, on both sides), with UI Organizer's
+/// operator or the game's own switch.
 #[test]
 fn calculate_value_scenes_diff() {
     assert_eq!(SCENE_INDEXES.len(), SCENES.len());
@@ -1796,8 +1803,9 @@ fn calculate_value_scenes_diff() {
         Input::Of(&[0, 1]),
         Input::Of(&[0, 1, 2]),
         Input::Flag,
+        Input::Flag,
     ])
-    .max_cases(1000)
+    .max_cases(1600)
     .setup(|e, case| {
         let (program, start) = SCENES[case.word(0) as usize];
         calc_scene(
@@ -1808,6 +1816,7 @@ fn calculate_value_scenes_diff() {
             case.word(2),
             case.word(3),
             case.word(4) == 1,
+            case.word(5) == 1,
             (0.0, 0.0),
         )
     })
@@ -1816,7 +1825,8 @@ fn calculate_value_scenes_diff() {
 }
 
 /// Mixed chains of operations on two swept floats (`float_sweep`: full-mantissa floats, now and then
-/// a special one), against the translation bit for bit.
+/// a special one), with UI Organizer's operator or the game's own switch, against the translation
+/// bit for bit.
 #[test]
 fn calculate_value_float_sweep_diff() {
     const CHAINS: &[&[(u32, f32, u8)]] = &[
@@ -1857,8 +1867,8 @@ fn calculate_value_float_sweep_diff() {
     .family(&leaf::LEAVES)
     .ignore_calls(&[0x00a0_c000, 0x00a0_c020, 0x00a0_c060, 0x00ad_87c0])
     .translation_calls_plainly(&[0x00a0_37e0, 0x00ed_4563])
-    .inputs(&[Input::Of(&[0, 1, 2]), Input::F32, Input::F32])
-    .max_cases(150)
+    .inputs(&[Input::Of(&[0, 1, 2]), Input::F32, Input::F32, Input::Flag])
+    .max_cases(300)
     .float_sweep(96)
     .setup(move |e, case| {
         calc_scene(
@@ -1869,6 +1879,7 @@ fn calculate_value_float_sweep_diff() {
             1,
             0,
             false,
+            case.word(3) == 1,
             (case.f32(1), case.f32(2)),
         )
     })
