@@ -1192,7 +1192,93 @@ fn device_caps(e: &mut Engine, device: Ptr) -> d3dx_tex::Caps {
         }
     }
     state!(e).graphics.d3dx_caps = Some((device.addr(), caps.clone()));
+    if let Ok(mut seen) = CAPS_SEEN.lock() {
+        seen.retain(|(d, _)| *d != device.addr());
+        if seen.len() >= 8 {
+            seen.remove(0);
+        }
+        seen.push((device.addr(), caps.clone()));
+    }
     caps
+}
+
+/// The devices' formats [`device_caps`] worked out (the game has one device; a few kept), copied where a loading
+/// thread may read them outside the kernel lock ([`prepare_texture`]); set under the kernel lock, read under this
+/// mutex.
+static CAPS_SEEN: std::sync::Mutex<Vec<(u32, d3dx_tex::Caps)>> = std::sync::Mutex::new(Vec::new());
+
+/// A texture file's translation worked out ahead on this thread ([`prepare_texture`]): the file's bytes, the
+/// precision, the device, the cube flag and what [`translated_texture`] answered.
+struct Prepared {
+    bytes: Vec<u8>,
+    precision: d3dx_tex::Precision,
+    device: u32,
+    /// The device's formats the translation was worked out for.
+    caps: d3dx_tex::Caps,
+    cube: bool,
+    made: TranslatedTexture,
+}
+
+/// What [`translated_texture`] answers.
+type TranslatedTexture = Result<(CachedTexture, Vec<Vec<u8>>), d3dx_tex::Error>;
+
+thread_local! {
+    static PREPARED: std::cell::RefCell<Option<Prepared>> = const { std::cell::RefCell::new(None) };
+}
+
+// The seam `engine_core::texture_ahead` calls (installed by [`super::imports`]).
+/// A texture file the game is about to give the renderer (the loading thread's file read before the renderer's
+/// source-data lock, the fixes preset's "texture files read before the renderer's lock" row): its D3DX translation
+/// worked out now, before the game takes that lock, so the `D3DXCreateTextureFromFileInMemory` the making calls
+/// under it only finds the answer ([`take_prepared`]) and makes and fills the Direct3D texture. Pure work on a copy
+/// of the file, no lock held. Only when the translation would run there (translated textures, a precision D3DX
+/// has, the device's formats already known); a `size` of 0 drops what this thread kept.
+pub fn prepare_texture(e: &mut Engine, buffer: u32, size: u32, device: u32) {
+    PREPARED.with(|p| *p.borrow_mut() = None);
+    if size == 0 || device == 0 {
+        return;
+    }
+    let Some(precision) = calling_precision(e) else {
+        return;
+    };
+    let caps = match CAPS_SEEN.lock() {
+        Ok(seen) => match seen.iter().find(|(d, _)| *d == device) {
+            Some((_, caps)) => caps.clone(),
+            None => return,
+        },
+        Err(_) => return,
+    };
+    let bytes = e.mem.bytes(buffer, size);
+    let made = translated_texture(&bytes, false, precision, &caps);
+    PREPARED.with(|p| {
+        *p.borrow_mut() = Some(Prepared {
+            bytes,
+            precision,
+            device,
+            caps,
+            cube: false,
+            made,
+        });
+    });
+}
+
+/// The translation [`prepare_texture`] worked out for exactly these bytes, cube flag, precision, device and device
+/// formats (the ones it used), taken; `None` (nothing kept, or anything differs) and the caller translates.
+fn take_prepared(
+    bytes: &[u8],
+    cube: bool,
+    precision: d3dx_tex::Precision,
+    device: u32,
+    caps: &d3dx_tex::Caps,
+) -> Option<TranslatedTexture> {
+    let p = PREPARED.with(|p| p.borrow_mut().take())?;
+    let same_caps = p.caps == *caps;
+    (p.bytes == bytes
+        && p.cube == cube
+        && p.precision == precision
+        && p.device == device
+        && same_caps)
+        .then_some(p.made)
 }
 
 /// On wgpu, the formats `d3d9_wgpu` does not provide are left out of what the card takes: a
@@ -1484,13 +1570,17 @@ fn create_from_file(
                 // thread's encoding does not hold up other threads' platform calls. The device
                 // calls that fill the texture come after, under the kernel lock again.
                 let caps = device_caps(e, device);
-                // The table's last-error code is kept across the window: another thread's platform call meanwhile
-                // does not leave its own for the game to read after this call.
-                let made = engine_core::real_threads::keeping_table_last_error(e, |e| {
-                    engine_core::real_threads::without_kernel_lock(e, || {
-                        translated_texture(&bytes, cube, precision, &caps)
-                    })
-                });
+                // Worked out ahead on this thread before the game took its renderer lock, when it could be. Else
+                // here, with the table's last-error code kept across the window: another thread's platform call
+                // meanwhile does not leave its own for the game to read after this call.
+                let made = match take_prepared(&bytes, cube, precision, device.addr(), &caps) {
+                    Some(made) => made,
+                    None => engine_core::real_threads::keeping_table_last_error(e, |e| {
+                        engine_core::real_threads::without_kernel_lock(e, || {
+                            translated_texture(&bytes, cube, precision, &caps)
+                        })
+                    }),
+                };
                 match made {
                     Ok((entry, levels)) => {
                         let levels: Vec<&[u8]> = levels.iter().map(|l| &l[..]).collect();
@@ -2338,6 +2428,66 @@ mod tests {
             1,
             "said once"
         );
+    }
+
+    /// A file translated ahead ([`prepare_texture`], before the game's renderer lock) is taken by the create call for
+    /// exactly those bytes, and the texture made from it is the one made without it; a create call on other bytes
+    /// translates them itself (the kept answer is dropped, never used for them); nothing is kept before the device's
+    /// formats are known.
+    #[test]
+    fn a_texture_translated_ahead_is_taken_only_for_the_same_file() {
+        let mut e = Engine::new();
+        engine_core::units::crt::set_x87_control_word(&mut e, 0x027f);
+        let (device, _texture, levels) = texture_doubles(&mut e);
+        let mut file = dxt1(8, 4, 4, 40);
+        for (i, b) in file[128..144].iter_mut().enumerate() {
+            *b = (i as u8).wrapping_mul(37) ^ 0xa5;
+        }
+        let data = e.mem.alloc(file.len() as u32);
+        e.mem.write(data, &file);
+        let out = e.mem.alloc(4);
+        let size = file.len() as u32;
+        let make = |e: &mut Engine| {
+            let hr = create_texture_from_file_in_memory(
+                e,
+                Ptr::new(device),
+                Ptr::new(data),
+                size,
+                Ptr::new(out),
+            );
+            (hr, e.mem.bytes(levels, 40))
+        };
+        let plain = make(&mut e);
+        assert_eq!(plain.0, 0);
+        // Now known: prepared, taken by the create call, the same texture.
+        prepare_texture(&mut e, data, size, device);
+        assert!(PREPARED.with(|p| p.borrow().is_some()));
+        assert_eq!(make(&mut e), plain);
+        assert!(PREPARED.with(|p| p.borrow().is_none()), "taken");
+        // Prepared for one file, then the create call meets other bytes: the kept answer is not used.
+        prepare_texture(&mut e, data, size, device);
+        let mut other = file.clone();
+        other[128] ^= 0xff;
+        e.mem.write(data, &other);
+        let changed = make(&mut e);
+        e.mem.write(data, &other);
+        assert_eq!(changed.0, 0);
+        let want = d3dx_tex::create_texture_from_file_in_memory(
+            &other,
+            &device_caps(&mut e, Ptr::new(device)),
+            d3dx_tex::Precision::Double,
+        )
+        .expect("a DXT1 file");
+        assert_eq!(
+            &changed.1[..want.surfaces[0].bytes.len()],
+            &want.surfaces[0].bytes[..],
+            "the other bytes' own translation"
+        );
+        assert_ne!(changed.1, plain.1);
+        // A size of 0 drops what was kept.
+        prepare_texture(&mut e, data, size, device);
+        prepare_texture(&mut e, 0, 0, 0);
+        assert!(PREPARED.with(|p| p.borrow().is_none()));
     }
 
     /// The precision comes from the calling game thread's own control word: 24 bits at 0x007f
