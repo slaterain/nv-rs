@@ -352,8 +352,10 @@ enum Extra {
 
 /// A controller as the game has one after loading it (`NiTimeController::LoadBinary`, `00a6d5e0`,
 /// sets the scaled-time flag 0x40; `Start` the active flag 8 and the last time `-FLT_MAX`): flags
-/// 0x48 (cycle type 0, looped), frequency 1, phase 0, keys from 0 to 2 s, the start, last and
-/// scaled times unset, `ComputeScaledTime` at slot 0xa4; `update` at slot 0x94.
+/// 0x4c (cycle type 2, clamped: a looped one's `fmod` needs the runtime library's tables, which
+/// this world does not have; both take the same scaled-time path and cache), frequency 1, phase 0,
+/// keys from 0 to 2 s, the start, last and scaled times unset, `ComputeScaledTime` at slot 0xa4;
+/// `update` at slot 0x94.
 fn loaded_controller(
     w: &mut World,
     e: &mut Engine,
@@ -365,7 +367,7 @@ fn loaded_controller(
     let c = w.alloc(e, 0x38);
     e.mem.set_u32(c, vt);
     e.mem.set_u32(c + 4, 5);
-    e.mem.set_u16(c + 8, 0x48);
+    e.mem.set_u16(c + 8, 0x4c);
     e.mem.set_f32(c + 0xc, 1.0);
     e.mem.set_f32(c + 0x18, 2.0);
     for at in [0x1c, 0x20, 0x28] {
