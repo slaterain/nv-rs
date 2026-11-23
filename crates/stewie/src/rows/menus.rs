@@ -591,6 +591,14 @@ pub const ROWS: &[Row] = &[
         summary: "clicking in the console never picks the player",
     },
     Row {
+        bit: stewie::SKIP_SKILLS_WITHOUT_POINTS,
+        function: "patchSkipSkillMenuIfNoPointsToAssign",
+        plan: "S0467",
+        key: "bSkipSkillMenuIfNoPointsToAssign",
+        tweaks: Some(("Tweaks", "bSkipSkillMenuIfNoPointsToAssign")),
+        summary: "a level up with no skill points to give opens on the perks",
+    },
+    Row {
         bit: stewie::CONSOLE_NOT_DURING_FIRST_LOAD,
         function: "patchDontAllowConsoleBeforeInitIsDone",
         plan: "S0482",

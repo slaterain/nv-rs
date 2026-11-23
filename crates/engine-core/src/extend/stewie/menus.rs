@@ -307,3 +307,6 @@ pub const COMPANION_TAKE_ALL: Row = tweak(10);
 /// S0348 `ConsoleNoStoreDuplicates` (`[Tweaks] bConsoleHistoryNoStoreDuplicates`; the console's
 /// `Idle` at `0x71B510`): a console line repeating the last one sent is not added to the history.
 pub const CONSOLE_HISTORY_NO_REPEATS: Row = tweak(11);
+/// S0467 `patchSkipSkillMenuIfNoPointsToAssign` (`[Tweaks] bSkipSkillMenuIfNoPointsToAssign`;
+/// `LevelUpMenu::Create` at `0x7850DD`): a level up with no skill points to give opens on the perks.
+pub const SKIP_SKILLS_WITHOUT_POINTS: Row = tweak(12);

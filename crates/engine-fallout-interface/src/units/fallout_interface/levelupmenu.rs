@@ -1454,6 +1454,22 @@ fn level_up_menu_create_body(e: &mut Engine, tile: u32) {
     level_up_menu_init_lists(e, Ptr::new(me));
     let me = level_up_me(e);
     level_up_menu_set_current_page(e, Ptr::new(me), 0);
+    // `0x7850DD`: lStewieAl's Tweaks' S0467 (`LevelUpMenuSetInitialPageHook`) after the page.
+    stewie_skip_skill_page(e, me);
+}
+
+/// lStewieAl's Tweaks' S0467 (`[Tweaks] bSkipSkillMenuIfNoPointsToAssign`,
+/// `LevelUpMenuSetInitialPageHook`, in place of `SetCurrentPage(0)` at `0x7850DD`, which it still
+/// makes first): with no skill points to give (+0x5C) and perks to choose from (the list +0xC4 has
+/// data), the menu clicks Done (`DoClick`, slot +0xC, with 7 and no tile), so it opens on the perks
+/// page. No perks: nothing (Tweaks leaves the menu as it is).
+fn stewie_skip_skill_page(e: &mut Engine, me: u32) {
+    if e.stewie(engine_core::extend::stewie::SKIP_SKILLS_WITHOUT_POINTS)
+        && e.mem.u32(me + MAX_POINTS) == 0
+        && e.mem.u32(me + AVAILABLE_PERKS) != 0
+    {
+        e.vcall(me, 0xc, &args![7u32, 0u32]);
+    }
 }
 
 /// [`level_up_menu_create`]'s walk of the game's perk list (`00460fb0` on
@@ -5028,6 +5044,45 @@ mod level_up_menu_tests {
                 );
                 assert_eq!(calls_to(&e, 0x0000_900c).len(), 1);
             }
+        }
+    }
+
+    /// Row S0467 (lStewieAl's Tweaks' `LevelUpMenuSetInitialPageHook`, `0x7850DD`): with the row
+    /// on, no skill points to give and perks to choose, the menu clicks Done (slot +0xC with 7 and
+    /// no tile); points left, no perks, or the row off: no click.
+    #[test]
+    fn s0467_the_skill_page_is_skipped() {
+        for (on, points, perks, clicked) in [
+            (false, 0u32, 0x5000u32, false),
+            (true, 0, 0x5000, true),
+            (true, 2, 0x5000, false),
+            (true, 0, 0, false),
+        ] {
+            let mut e = Engine::new();
+            let vtable = e.mem.alloc(0x40);
+            e.mem.set_u32(vtable + 0xc, 0x00c3_000c);
+            e.register(0x00c3_000c, |_, _| Ret::default());
+            let me = e.mem.alloc(0x100);
+            e.mem.set_u32(me, vtable);
+            e.mem.set_u32(me + MAX_POINTS, points);
+            e.mem.set_u32(me + AVAILABLE_PERKS, perks);
+            e.set_stewie(engine_core::extend::stewie::SKIP_SKILLS_WITHOUT_POINTS, on);
+            e.call_log = Some(vec![]);
+            stewie_skip_skill_page(&mut e, me);
+            let clicks: Vec<Vec<u32>> = e
+                .call_log
+                .as_ref()
+                .unwrap()
+                .iter()
+                .filter(|(a, _)| *a == 0x00c3_000c)
+                .map(|(_, w)| w[..3].to_vec())
+                .collect();
+            let wanted = if clicked {
+                vec![vec![me, 7, 0]]
+            } else {
+                vec![]
+            };
+            assert_eq!(clicks, wanted, "row {on} points {points} perks {perks:x}");
         }
     }
 }
