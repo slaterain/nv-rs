@@ -6864,3 +6864,195 @@ fn merged_draws_in_place_keep_which_of_two_coplanar_surfaces_shows() {
         "the first three K1 draws as one, K2, the last K1 on its own"
     );
 }
+
+/// Sorted (`NV_WGPU_SORT_DRAWS`), a draw that writes depth but no colour is never moved past a
+/// draw that writes colour: moved past another surface's draw it would hide that draw's colour or
+/// let it show where the game's order did not. Of the pairs colour A then depth-only D in front of
+/// it (column 1) and depth-only D then colour A behind it (column 3), one would differ whichever
+/// of the two keys the sort put first; the pixels are those of one draw each. The held draws
+/// write one set of channels at a time: A, then both D draws as one, then A.
+#[test]
+fn sorted_draws_keep_depth_only_draws_in_place() {
+    const COLORWRITEENABLE: u32 = 168;
+    let script = |g: &mut Gpu, _: &StripDraw| {
+        // Column 1: A (the first strip), then D (the second strip, no colour) in front of it.
+        strip_at(g, 1, 0.0, [1.0, 0.0, 0.0, 1.0]);
+        strip_stream(g, 96);
+        g.state(COLORWRITEENABLE, 0);
+        strip_at(g, 0, -0.25, [0.0, 1.0, 0.0, 1.0]);
+        // Column 3: D in front first, then A behind it.
+        strip_at(g, 2, -0.25, [0.0, 1.0, 0.0, 1.0]);
+        g.state(COLORWRITEENABLE, 0xF);
+        strip_stream(g, 0);
+        strip_at(g, 3, 0.0, [1.0, 0.0, 0.0, 1.0]);
+    };
+    let Some((off, _, _)) = held_script(false, false, &script) else {
+        return;
+    };
+    assert_eq!(
+        off[1],
+        [0, 0, 255, 255],
+        "column 1: A's red (D wrote no colour)"
+    );
+    assert_eq!(off[3][2], 0, "column 3: no red (A behind D's depth)");
+    let (on, held, mismatches) = held_script(true, true, &script).expect("the adapter, as above");
+    assert_eq!(on, off, "the pixels");
+    assert_eq!(mismatches, 0, "each held draw drawn with its own state");
+    assert_eq!(
+        held,
+        (3, 4),
+        "A; both depth-only draws as one; A: no draw moved past one writing other channels"
+    );
+}
+
+/// Sorted, draws that write the same channels are moved past each other even when they leave
+/// some channel alone: here red, green and blue of an A8R8G8B8 target, alpha masked, as the
+/// game's world draws often are. A at column 1, B (the other strip) at column 3, A again at
+/// column 2: the two A draws as one, and the pixels those of one draw each.
+#[test]
+fn sorted_draws_with_the_same_masked_channels_are_held() {
+    const COLORWRITEENABLE: u32 = 168;
+    let script = |g: &mut Gpu, _: &StripDraw| {
+        g.state(COLORWRITEENABLE, 7);
+        strip_at(g, 1, 0.0, [1.0, 0.0, 0.0, 1.0]);
+        strip_stream(g, 96);
+        strip_at(g, 2, 0.0, [0.0, 1.0, 0.0, 1.0]);
+        strip_stream(g, 0);
+        strip_at(g, 2, -0.25, [0.0, 0.0, 1.0, 1.0]);
+    };
+    let Some((off, _, _)) = held_script(false, false, &script) else {
+        return;
+    };
+    let (on, held, mismatches) = held_script(true, true, &script).expect("the adapter, as above");
+    assert_eq!(on, off, "the pixels");
+    assert_eq!(mismatches, 0, "each held draw drawn with its own state");
+    assert_eq!(held, (2, 3), "the two A draws as one across B");
+}
+
+/// Sorted, a draw over the same vertices as a held draw of another key has the held draws drawn
+/// first; the draws held after it still keep to its colour channels. Two cases in one run, so
+/// that whichever of the two pipelines a sort puts first, one of them would show a moved draw:
+/// - column 1: colour A1 (LESSEQUAL, at column 3) then A2 (LESS) over the same strip, then
+///   depth-only D in front of A2: A2's red must show;
+/// - column 5: depth-only D1 (LESSEQUAL, at column 7, so its early draw lays no depth there) then
+///   D2 (LESS) over the same strip, then colour A behind D2: A must not show.
+#[test]
+fn sorted_draws_keep_their_channels_after_a_draw_over_held_vertices() {
+    const COLORWRITEENABLE: u32 = 168;
+    let script = |g: &mut Gpu, _: &StripDraw| {
+        g.state(ZFUNC, 4);
+        strip_at(g, 3, 0.0, [1.0, 0.0, 0.0, 1.0]);
+        g.state(ZFUNC, 2);
+        strip_at(g, 1, 0.0, [1.0, 0.0, 0.0, 1.0]);
+        g.state(COLORWRITEENABLE, 0);
+        strip_stream(g, 96);
+        strip_at(g, 0, -0.25, [0.0, 1.0, 0.0, 1.0]);
+        g.state(ZFUNC, 4);
+        strip_at(g, 6, -0.25, [0.0, 1.0, 0.0, 1.0]);
+        g.state(ZFUNC, 2);
+        strip_at(g, 4, -0.25, [0.0, 1.0, 0.0, 1.0]);
+        g.state(COLORWRITEENABLE, 0xF);
+        strip_stream(g, 0);
+        strip_at(g, 5, 0.0, [1.0, 0.0, 0.0, 1.0]);
+    };
+    let Some((off, _, _)) = held_script(false, false, &script) else {
+        return;
+    };
+    assert_eq!(off[1], [0, 0, 255, 255], "column 1: A2's red");
+    assert_eq!(off[5][2], 0, "column 5: no red (A behind D1 and D2)");
+    let (on, _, mismatches) = held_script(true, true, &script).expect("the adapter, as above");
+    assert_eq!(on, off, "the pixels");
+    assert_eq!(mismatches, 0, "each held draw drawn with its own state");
+}
+
+/// Sorted, a draw that writes alpha and one that leaves it alone are never moved past each other
+/// (an A8R8G8B8 target). Two cases in one run, so that whichever of the two pipelines a sort puts
+/// first, one of them would show a moved draw:
+/// - column 1: Y (red, green, blue and alpha 0.25) behind, then X (red, green and blue only) in
+///   front: X's colour with Y's alpha;
+/// - column 3: X in front first, then Y behind it: X's colour, the alpha left as cleared.
+#[test]
+fn sorted_draws_keep_alpha_writes_apart() {
+    const COLORWRITEENABLE: u32 = 168;
+    let x = |g: &mut Gpu, column: u32| {
+        g.state(COLORWRITEENABLE, 7);
+        strip_stream(g, 0);
+        strip_at(g, column, -0.25, [1.0, 0.0, 0.0, 1.0]);
+    };
+    let y = |g: &mut Gpu, column: u32| {
+        g.state(COLORWRITEENABLE, 0xF);
+        strip_stream(g, 96);
+        strip_at(g, column - 1, 0.0, [0.0, 1.0, 0.0, 0.25]);
+    };
+    let script = move |g: &mut Gpu, _: &StripDraw| {
+        y(g, 1);
+        x(g, 1);
+        x(g, 3);
+        y(g, 3);
+    };
+    let Some((off, _, _)) = held_script(false, false, &script) else {
+        return;
+    };
+    assert_eq!(off[1][3], 64, "column 1: Y's alpha (X wrote none)");
+    assert_eq!(off[3][3], 0, "column 3: the cleared alpha (Y behind X)");
+    let (on, _, mismatches) = held_script(true, true, &script).expect("the adapter, as above");
+    assert_eq!(on, off, "the pixels, alpha included");
+    assert_eq!(mismatches, 0, "each held draw drawn with its own state");
+}
+
+/// Merged or sorted, a draw that writes no depth is never held: each such draw lands over the ones
+/// before it wherever it passes the depth test, so moved past another over the same pixels it
+/// would show where the game's order covered it (#890's planted fault G1 survived without this).
+/// With depth writes off: P (red, LESSEQUAL) then Q (green, LESS) at column 1, and Q then P at
+/// column 3, so one column would show a moved draw whichever pipeline a sort puts first.
+#[test]
+fn sorted_draws_never_hold_draws_without_depth_writes() {
+    let script = |g: &mut Gpu, _: &StripDraw| {
+        g.state(ZWRITEENABLE, 0);
+        strip_at(g, 1, 0.0, [1.0, 0.0, 0.0, 1.0]);
+        g.state(ZFUNC, 2);
+        strip_stream(g, 96);
+        strip_at(g, 0, 0.0, [0.0, 1.0, 0.0, 1.0]);
+        strip_at(g, 2, 0.0, [0.0, 1.0, 0.0, 1.0]);
+        g.state(ZFUNC, 4);
+        strip_stream(g, 0);
+        strip_at(g, 3, 0.0, [1.0, 0.0, 0.0, 1.0]);
+    };
+    let Some((off, _, _)) = held_script(false, false, &script) else {
+        return;
+    };
+    assert_eq!(off[1], [0, 255, 0, 255], "column 1: Q's green, drawn last");
+    assert_eq!(off[3], [0, 0, 255, 255], "column 3: P's red, drawn last");
+    let (on, held, mismatches) = held_script(true, true, &script).expect("the adapter, as above");
+    assert_eq!(on, off, "the pixels");
+    assert_eq!(mismatches, 0, "each draw drawn with its own state");
+    assert_eq!(held, (0, 0), "none held");
+}
+
+/// Merged or sorted, a draw over the same vertices as a held draw of another key (another pass
+/// over the same surface) has the held draws drawn first, so the later pass still lands last
+/// (#890's planted fault G2 survived without this). The keys differ only in the cull mode, which
+/// changes nothing on these front faces; both depth tests pass at the same depth (LESSEQUAL). Red
+/// then green at column 1, green then red at column 3, all over one strip, so one column would
+/// show the earlier pass whichever key a sort puts first.
+#[test]
+fn held_draws_over_one_surface_keep_their_order_across_keys() {
+    let script = |g: &mut Gpu, _: &StripDraw| {
+        strip_at(g, 1, 0.0, [1.0, 0.0, 0.0, 1.0]);
+        g.state(CULLMODE, 1);
+        strip_at(g, 1, 0.0, [0.0, 1.0, 0.0, 1.0]);
+        strip_at(g, 3, 0.0, [0.0, 1.0, 0.0, 1.0]);
+        g.state(CULLMODE, 3);
+        strip_at(g, 3, 0.0, [1.0, 0.0, 0.0, 1.0]);
+    };
+    let Some((off, _, _)) = held_script(false, false, &script) else {
+        return;
+    };
+    assert_eq!(off[1], [0, 255, 0, 255], "column 1: green, drawn last");
+    assert_eq!(off[3], [0, 0, 255, 255], "column 3: red, drawn last");
+    for (merge, pass) in [(true, false), (true, true)] {
+        let (on, _, mismatches) = held_script(merge, pass, &script).expect("the adapter, as above");
+        assert_eq!(on, off, "merge {merge} pass {pass}: the pixels");
+        assert_eq!(mismatches, 0, "each held draw drawn with its own state");
+    }
+}
