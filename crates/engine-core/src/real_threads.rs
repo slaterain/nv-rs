@@ -1599,12 +1599,12 @@ pub fn without_kernel_lock_mut<R>(e: &mut Engine, f: impl FnOnce(&mut Engine) ->
     })
 }
 
-/// Runs `f`, in which this thread gives every hold of the kernel lock back and takes it again (game code run without
-/// the lock, a wait, a sleep), keeping this thread's last-error code. While this thread holds the lock, the kernel
-/// table's last-error code is the working copy of its own (`locked_call` puts it there and keeps it after): it is kept
-/// in this thread's context across `f` (where this thread's own platform calls and `GetLastError` find it) and put
-/// back in the table after, so a code another thread's platform call left in the table meanwhile is never the one
-/// this thread's caller reads. Nothing when this thread does not hold the lock.
+/// Runs `f`, game code a platform function runs with the kernel lock given back, keeping this thread's last-error
+/// code. Inside a platform function (this thread holds the lock) the kernel table's last-error code is the working
+/// copy of its own (`locked_call` puts it there and keeps it after): it is kept in this thread's context across `f`,
+/// where the game code's own platform calls and `GetLastError` find it and change it, and put back in the table after,
+/// so a code another thread's platform call left in the table meanwhile is never the one this thread's caller reads.
+/// Nothing when this thread does not hold the lock.
 fn keeping_last_error<R>(e: &mut Engine, f: impl FnOnce(&mut Engine) -> R) -> R {
     let holds = e.real.as_ref().is_some_and(|r| r.world.kernel.held_here());
     if holds {
@@ -1620,6 +1620,33 @@ fn keeping_last_error<R>(e: &mut Engine, f: impl FnOnce(&mut Engine) -> R) -> R 
         }
     }
     answer
+}
+
+/// Runs `f`, in which this thread gives every hold of the kernel lock back and takes it again with no game code of
+/// its own running meanwhile (a wait, a sleep, a park, pure work: D3DX's texture translation), keeping the kernel
+/// table's last-error code as this thread had it: read before (only while this thread holds the lock, when the table
+/// is its own to read) and written back after, so another thread's platform call made meanwhile does not leave its
+/// code for this thread's caller. This thread's context is left alone: game code that holds the lock outside a
+/// platform function keeps its code there (`SetLastError`, `GetLastError`), not in the table.
+pub fn keeping_table_last_error<R>(e: &mut Engine, f: impl FnOnce(&mut Engine) -> R) -> R {
+    let holds = e.real.as_ref().is_some_and(|r| r.world.kernel.held_here());
+    let own = holds.then(|| e.kernel.last_error);
+    let answer = f(e);
+    if let Some(code) = own {
+        e.kernel.last_error = code;
+    }
+    answer
+}
+
+/// [`park_here`] keeping the table's last-error code ([`keeping_table_last_error`]): a suspended thread parks with the
+/// kernel lock given back. Only a thread the game suspended (at quit) parks; others pass straight through.
+fn park_here_keeping(e: &mut Engine) {
+    if e.real
+        .as_ref()
+        .is_some_and(|r| r.suspend.load(Ordering::Relaxed))
+    {
+        keeping_table_last_error(e, |e| park_here(e));
+    }
 }
 
 /// [`without_kernel_lock`]'s work on the run's lock world (`None`: stepped threads).
@@ -1992,7 +2019,7 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
     let r = ctx(e);
     let (w, me) = (r.world, r.id);
     w.safe_point();
-    park_here(e);
+    park_here_keeping(e);
     let a = section.addr();
     let Some((owner, waiting)) = section_words(e, a) else {
         return enter_section_in_table(e, section);
@@ -2030,9 +2057,9 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
             owner.load(Ordering::Relaxed)
         )
     });
-    // This thread's working last-error code, put back in the kernel table once the lock is taken again (as
-    // [`keeping_last_error`] does; no game code runs here meanwhile).
-    let own_error = e.kernel.last_error;
+    // The kernel table's last-error code as this thread has it while it holds the lock, written back once the lock is
+    // taken again, as [`keeping_table_last_error`] does (the wait and a park meanwhile run no game code of its own).
+    let own_error = w.kernel.held_here().then(|| e.kernel.last_error);
     let held = w.kernel.release_all();
     let was = w.leave_guest();
     let started = timed_wait().then(std::time::Instant::now);
@@ -2094,8 +2121,8 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
         w.enter_guest();
     }
     w.kernel.take_again(w, held);
-    if held > 0 {
-        e.kernel.last_error = own_error;
+    if let Some(code) = own_error {
+        e.kernel.last_error = code;
     }
     note_state(e, String::new);
     if let Some(why) = stop {
@@ -2216,7 +2243,7 @@ fn enter_section_in_table(e: &mut Engine, section: Ptr) {
                 return;
             }
         }
-        keeping_last_error(e, |_| real_sleep(w, 0));
+        keeping_table_last_error(e, |_| real_sleep(w, 0));
         main_stop_check(e);
     }
 }
@@ -2252,7 +2279,7 @@ fn try_enter_section_in_table(e: &mut Engine, section: Ptr) -> i32 {
 /// Sleeps for real (`Sleep(0)` gives the rest of the time slice up); a safe point.
 fn sleep(e: &mut Engine, ms: u32) {
     let started = timed_wait().then(std::time::Instant::now);
-    keeping_last_error(e, |e| real_sleep(ctx(e).world, ms));
+    keeping_table_last_error(e, |e| real_sleep(ctx(e).world, ms));
     if let Some(t) = started {
         let d = t.elapsed();
         if let Some(stats) = lock_stats() {
@@ -2261,7 +2288,7 @@ fn sleep(e: &mut Engine, ms: u32) {
         }
         hitch_wait(crate::hitch::WaitKind::Sleep, wait_site(e), d);
     }
-    park_here(e);
+    park_here_keeping(e);
     main_stop_check(e);
 }
 
@@ -2471,7 +2498,7 @@ impl ThreadHost for Real {
                 }
             }
             let me = waiter.as_ref().expect("listed above");
-            keeping_last_error(e, |_| w.wait_for_objects(me, timeout));
+            keeping_table_last_error(e, |_| w.wait_for_objects(me, timeout));
         };
         if let Some(me) = waiter {
             guard(&w.waiters).retain(|o| !std::sync::Arc::ptr_eq(o, &me));
@@ -2502,8 +2529,8 @@ impl ThreadHost for Real {
     fn sleep(&self, e: &mut Engine, ms: u32, _signalled: Signalled) {
         // Under a platform function's hold (`ov_read`'s game thread waiting for its decoder) the sleep gives the lock
         // back: the thread's last-error code is kept across it.
-        keeping_last_error(e, |e| real_sleep(ctx(e).world, ms));
-        park_here(e);
+        keeping_table_last_error(e, |e| real_sleep(ctx(e).world, ms));
+        park_here_keeping(e);
         main_stop_check(e);
     }
 
@@ -4512,6 +4539,108 @@ mod tests {
             e.call(slot("GetLastError"), &args![]).eax,
             7,
             "its own code after the sleep"
+        );
+    }
+
+    /// The next test's platform call that leaves 99.
+    static OBJECT_ERROR_SLOT: AtomicU32 = AtomicU32::new(0);
+
+    /// The other game thread of the next test: once main is listed as waiting (on this thread's handle), makes a
+    /// platform call that leaves 99 in the table, then ends (which wakes main).
+    fn other_thread_errs_while_main_waits(e: &mut Engine, _: &[u32]) -> Ret {
+        let w = ctx(e).world;
+        while w.waiters_n.load(Ordering::SeqCst) == 0 {
+            std::thread::yield_now();
+        }
+        e.call(OBJECT_ERROR_SLOT.load(Ordering::SeqCst), &args![]);
+        Ret::default()
+    }
+
+    /// `WaitForSingleObject` on a kernel object (a thread's handle) gives the kernel lock back while it waits; the
+    /// caller still reads its own last-error code after, whatever another thread's platform call left in the table.
+    #[test]
+    fn a_thread_keeps_its_last_error_across_a_wait_on_an_object() {
+        let (mut e, slot) = engine_with_imports();
+        OBJECT_ERROR_SLOT.store(slot("GetDoubleClickTime"), Ordering::SeqCst);
+        e.register(slot("GetDoubleClickTime"), leaves_error_99);
+        e.register(0x0040_2200, other_thread_errs_while_main_waits);
+        start(&mut e).expect("real threads on");
+        end_start_hold_for_tests(&e);
+        let thread = e
+            .call(
+                slot("CreateThread"),
+                &args![0u32, 0u32, 0x0040_2200u32, 0u32, 0u32, 0u32],
+            )
+            .eax;
+        e.call(slot("SetLastError"), &args![7u32]);
+        let waited = e
+            .call(slot("WaitForSingleObject"), &args![thread, 5000u32])
+            .eax;
+        assert_eq!(waited, 0, "the thread ended");
+        assert_eq!(
+            e.call(slot("GetLastError"), &args![]).eax,
+            7,
+            "its own code after the wait"
+        );
+    }
+
+    /// The next test's slots and the steps the threads hand over.
+    static SECTION_ERROR_SLOT: AtomicU32 = AtomicU32::new(0);
+    static SECTION_ENTER_SLOT: AtomicU32 = AtomicU32::new(0);
+    static SECTION_LEAVE_SLOT: AtomicU32 = AtomicU32::new(0);
+    static SECTION_OWNED: AtomicU32 = AtomicU32::new(0);
+
+    /// The other game thread of the next test: takes the section (its address is the parameter), and once main
+    /// waits for it makes a platform call that leaves 99 in the table, then leaves the section.
+    fn other_thread_holds_the_section(e: &mut Engine, a: &[u32]) -> Ret {
+        let section = a[0];
+        e.call(SECTION_ENTER_SLOT.load(Ordering::SeqCst), &args![section]);
+        SECTION_OWNED.store(1, Ordering::SeqCst);
+        while e.mem.u32(section + 4) == 0 {
+            std::thread::yield_now();
+        }
+        e.call(SECTION_ERROR_SLOT.load(Ordering::SeqCst), &args![]);
+        e.call(SECTION_LEAVE_SLOT.load(Ordering::SeqCst), &args![section]);
+        Ret::default()
+    }
+
+    /// A platform function that sets its own last-error code (7), then enters the section (another thread holds it:
+    /// the wait gives the kernel lock back) and leaves it.
+    fn errs_then_enters(e: &mut Engine, a: &[u32]) -> Ret {
+        e.kernel.last_error = 7;
+        e.call(SECTION_ENTER_SLOT.load(Ordering::SeqCst), &args![a[0]]);
+        e.call(SECTION_LEAVE_SLOT.load(Ordering::SeqCst), &args![a[0]]);
+        Ret::default()
+    }
+
+    /// `EnterCriticalSection` inside a platform function, on a section another thread holds, waits with the kernel
+    /// lock given back; the caller still reads its own last-error code after.
+    #[test]
+    fn a_thread_keeps_its_last_error_across_a_wait_for_a_section() {
+        let (mut e, slot) = engine_with_imports();
+        let outer = slot("D3DPERF_SetOptions");
+        SECTION_ERROR_SLOT.store(slot("GetDoubleClickTime"), Ordering::SeqCst);
+        SECTION_ENTER_SLOT.store(slot("EnterCriticalSection"), Ordering::SeqCst);
+        SECTION_LEAVE_SLOT.store(slot("LeaveCriticalSection"), Ordering::SeqCst);
+        e.register(outer, errs_then_enters);
+        e.register(slot("GetDoubleClickTime"), leaves_error_99);
+        e.register(0x0040_2300, other_thread_holds_the_section);
+        start(&mut e).expect("real threads on");
+        end_start_hold_for_tests(&e);
+        let section = e.mem.alloc(0x18);
+        e.call(slot("InitializeCriticalSection"), &args![section]);
+        e.call(
+            slot("CreateThread"),
+            &args![0u32, 0u32, 0x0040_2300u32, section, 0u32, 0u32],
+        );
+        while SECTION_OWNED.load(Ordering::SeqCst) == 0 {
+            std::thread::yield_now();
+        }
+        e.call(outer, &args![section]);
+        assert_eq!(
+            e.call(slot("GetLastError"), &args![]).eax,
+            7,
+            "its own code after the section wait"
         );
     }
 
