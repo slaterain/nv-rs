@@ -21,14 +21,29 @@ enum Key {
 /// size, so they hold that target's command until set again.
 const VIEWPORT: Key = Key::At("SetViewport", 0, 0);
 const SCISSOR: Key = Key::At("SetScissorRect", 0, 0);
+/// The scissor test's render state (`D3DRS_SCISSORTESTENABLE`, 174): whether a `Clear` keeps to the rectangle.
+const SCISSOR_TEST: Key = Key::At("SetRenderState", 174, 0);
+/// Stream 0's key: `DrawPrimitiveUP` leaves it empty, as the device does.
+const STREAM_0: Key = Key::At("SetStreamSource", 0, 0);
+
+/// Whether a `Clear` reaches what `key` holds: the render targets, the depth surface, the viewport, the scissor
+/// rectangle and its test. A `Clear` is hashed with them ([`StateDigest::clear`]), so a wrong target seen only by a
+/// `Clear` is found there.
+fn cleared_by(key: &Key) -> bool {
+    matches!(
+        key,
+        Key::At("SetRenderTarget", _, _) | Key::At("SetDepthStencilSurface", _, _)
+    ) || [VIEWPORT, SCISSOR, SCISSOR_TEST].contains(key)
+}
 
 /// Each draw's device state hashed, in the order the draws come ([`StateDigest::new`]'s list):
 /// every state set so far (render, stage and sampler states, textures, transforms, viewport,
 /// scissor, clip planes, targets, streams, indices, the vertex layout, shaders and each constant
 /// register, material and lights) by its last value, every other command so far (creations,
 /// uploads, clears, copies, queries issued, presents) in order, and the draw itself. A new render
-/// target 0 resets the viewport and the scissor rectangle, and `Reset` every state, as the device
-/// does. Left out, as [`crate::Stream::record_repeatable`] leaves them out: the real windows'
+/// target 0 resets the viewport and the scissor rectangle, `DrawPrimitiveUP` empties stream 0, and
+/// `Reset` every state, as the device does; a `Clear` is hashed with what it clears into (the
+/// targets, the depth surface, the viewport, the scissor rectangle and its test). Left out, as [`crate::Stream::record_repeatable`] leaves them out: the real windows'
 /// handles and the query reads (made as often as the GPU takes). The objects destroyed are hashed
 /// as a set (the drawing side's ends come at the join, after their place in the serial order),
 /// one more value at the end of the list once the backend is dropped. A backend for tests: it
@@ -104,6 +119,32 @@ impl StateDigest {
 
     fn event(&mut self) {
         self.events = wire::hash(self.events, &self.encoded);
+    }
+
+    /// A `Clear`: hashed as an event with the state it clears into ([`cleared_by`]).
+    fn clear(&mut self) {
+        let mut h = wire::hash(self.events, &self.encoded);
+        for (key, value) in self.state.iter().filter(|(key, _)| cleared_by(key)) {
+            h = wire::hash(h, format!("{key:?}").as_bytes());
+            h = wire::hash(h, value);
+        }
+        self.events = h;
+    }
+
+    /// Stream 0 emptied, as `DrawPrimitiveUP` leaves it on `device` (its `SetStreamSource(0, NULL, 0, 0)`).
+    fn empty_stream_0(&mut self, device: u32) {
+        let empty: Cmd<Data<'_>> = Cmd::SetStreamSource {
+            device,
+            stream: 0,
+            buffer: 0,
+            offset: 0,
+            stride: 0,
+        };
+        if let Some(written) = repeatable_form(empty) {
+            self.encoded.clear();
+            wire::encode(&written, &mut self.encoded);
+            self.set(STREAM_0);
+        }
     }
 
     fn push(&self, digest: u64) {
@@ -223,22 +264,37 @@ impl Backend for StateDigest {
                     }
                 }
                 self.recent.clear();
+                if let Cmd::DrawPrimitiveUp { device, .. } = cmd {
+                    self.empty_stream_0(device);
+                }
+            }
+            Cmd::Clear { .. } => {
+                self.clear();
+                self.note_recent(name, &cmd);
             }
             _ => {
                 self.event();
-                if self.stop_at.is_some() {
-                    if name == "Present" {
-                        self.presents += 1;
-                        self.in_frame = 0;
-                    }
-                    self.recent.push_back(short(&format!("{cmd:?}")));
-                    if self.recent.len() > 12 {
-                        self.recent.pop_front();
-                    }
-                }
+                self.note_recent(name, &cmd);
             }
         }
         reply
+    }
+}
+
+impl StateDigest {
+    /// For [`StateDigest::stopping_at`]: a command that sets no state and draws nothing noted among the recent ones,
+    /// and a present counted.
+    fn note_recent(&mut self, name: &str, cmd: &Cmd<Data<'_>>) {
+        if self.stop_at.is_some() {
+            if name == "Present" {
+                self.presents += 1;
+                self.in_frame = 0;
+            }
+            self.recent.push_back(short(&format!("{cmd:?}")));
+            if self.recent.len() > 12 {
+                self.recent.pop_front();
+            }
+        }
     }
 }
 

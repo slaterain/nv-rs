@@ -640,6 +640,18 @@ pub const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.5a",
     },
+    // InterfaceManager::Idle 0070c4a0, the shift tests of the right and left arrow keys (0070ecf0):
+    // lStewieAl's Tweaks' S0022.02 (`IsShiftHeld`, xNVSE's raw key state of either shift key).
+    Entry {
+        addr: 0x0070_e4db,
+        owners: STEWIE,
+        step: "stewie-L",
+    },
+    Entry {
+        addr: 0x0070_e500,
+        owners: STEWIE,
+        step: "stewie-L",
+    },
     // The loading screen's present in 00713fb0: the present notification.
     Entry {
         addr: 0x0071_47c4,
@@ -3104,11 +3116,12 @@ mod tests {
         ] {
             assert!(find(SITES, Owner::Nvse, a).is_some(), "{a:08x}");
         }
-        assert_eq!(SITES.len(), 129);
-        // lStewieAl's Tweaks' (its seam in the text key event), Tweaks' alone.
-        let a = 0x0071_5563;
-        assert!(find(SITES, Owner::Stewie, a).is_some(), "{a:08x}");
-        assert!(find(SITES, Owner::Jip, a).is_none(), "{a:08x}");
+        assert_eq!(SITES.len(), 131);
+        // lStewieAl's Tweaks' (its seams in the text key event and Idle), Tweaks' alone.
+        for a in [0x0070_e4db, 0x0070_e500, 0x0071_5563] {
+            assert!(find(SITES, Owner::Stewie, a).is_some(), "{a:08x}");
+            assert!(find(SITES, Owner::Jip, a).is_none(), "{a:08x}");
+        }
         // UI Organizer's ten (UIOLoad's place, ResolveXMLFileHook's, the five hardcore zooms,
         // FinalPostParse, the operators' dispatch, the text scale), its alone.
         for a in [
