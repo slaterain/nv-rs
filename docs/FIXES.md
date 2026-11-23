@@ -52,6 +52,15 @@ recording or measurement changes with play's default. The default is the host's 
 `crates/host/data/game_ini.tsv` is held to `PLAY_BORDERLESS` by a test, and the generated sections
 and Play.exe take the value from the table.
 
+Nor is the game's brightness in the window (the maintainer, 2026-11-23). The game sets its
+brightness (`fGamma`, the Display menu's slider) as Direct3D 9's gamma ramp, which the original
+shows only in exclusive full screen; nv-rs always shows the game in a window, so the slider did
+nothing. On wgpu the frame shown in the window now goes through the game's ramp, in every preset
+(`crates/d3d9-wgpu/src/ramp.rs`). At the default `fGamma` 1.0 the ramp changes nothing and the
+picture is the same bit for bit. Comparisons are not affected: the captures and F12 reports read
+the back buffer, which never has the ramp. The Direct3D 9 renderer still shows no brightness in a
+window, as the original.
+
 ## How a fix is built
 
 - An override keyed by exe address, a plain function registered over the translation when it is on.
