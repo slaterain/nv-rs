@@ -110,10 +110,12 @@ impl Run {
         }
     }
 
-    /// Marks `addr` live, asked for `asked` bytes (at least 1).
+    /// Marks `addr` live, asked for `asked` bytes (at least 1). A slot is only ever touched by the
+    /// one thread that holds it (in its stack, or live), so a load and a store do (no locked swap).
     pub(super) fn take(&self, addr: u32, asked: u32) {
         let slot = self.slot(addr);
-        let was = self.asked[slot].swap(asked.max(1) as u16, Ordering::Relaxed);
+        let was = self.asked[slot].load(Ordering::Relaxed);
+        self.asked[slot].store(asked.max(1) as u16, Ordering::Relaxed);
         assert!(
             was == 0,
             "the thread heap handed out {addr:08x}, which is live"
@@ -124,11 +126,12 @@ impl Run {
     /// Marks `addr` free; a stop when it is not live (a second free).
     pub(super) fn give(&self, addr: u32) {
         let slot = self.slot(addr);
-        let was = self.asked[slot].swap(0, Ordering::Relaxed);
+        let was = self.asked[slot].load(Ordering::Relaxed);
         assert!(
             was != 0,
             "free of {addr:08x}, which is not a live heap block"
         );
+        self.asked[slot].store(0, Ordering::Relaxed);
         self.live.fetch_sub(1, Ordering::Relaxed);
     }
 
