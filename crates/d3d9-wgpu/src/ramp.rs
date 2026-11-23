@@ -18,12 +18,16 @@
 //! never changed: its captures (`NV_SHOT`'s `wgpu-frame-N.bmp`, F12 reports) stay the game's
 //! picture; the window's capture (`wgpu-window-N.bmp`) has the ramp.
 //!
-//! **What it says.** Each ramp the game's window takes is one log line with its brightness
-//! ([`change_line`]: the game sends one only when the slider moves); the first that changes the
-//! picture also says once that a brightness saved earlier now shows ([`FIRST_LINE`]); an F12
-//! report's `place.txt` says the brightness the window showed ([`place_line`]).
+//! **What it says.** The brightness the game's window takes is said in the log ([`change_line`]).
+//! The game sends a ramp whenever its brightness changes: the slider, the start-up INI value, and
+//! the `SetGamma` console and script command, which a mod may send every frame; so a line is
+//! printed only when its value to two places differs from the last one printed, at most once a
+//! second, and a value held back is printed once it has settled ([`Said`]). The first ramp that
+//! changes the picture also says once that a brightness saved earlier now shows ([`FIRST_LINE`]);
+//! an F12 report's `place.txt` says the brightness the window showed ([`place_line`]).
 
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::{Duration, Instant};
 
 /// Entries per colour.
 pub const ENTRIES: usize = 256;
@@ -128,6 +132,58 @@ pub fn change_line(ramp: &Ramp) -> String {
         (false, None) => {
             "brightness applied in the window (a ramp not of the game's curve)".to_string()
         }
+    }
+}
+
+/// The shortest time between two brightness lines ([`Said`]).
+pub const SAY_EVERY: Duration = Duration::from_secs(1);
+
+/// Which brightness lines ([`change_line`]) are printed: a line only when it differs from the last
+/// one printed (its value to two places), at most once in [`SAY_EVERY`]; a line held back is
+/// printed at the first `Present` once [`SAY_EVERY`] has passed without a new ramp (the value it
+/// settled at). `SetGamma` sent every frame then prints about a line a second while the value keeps
+/// changing, and none while it stays: never a line every frame on the render thread.
+#[derive(Debug, Default)]
+pub struct Said {
+    /// The last line printed, and when.
+    last: Option<(String, Instant)>,
+    /// The newest line not printed yet, and when its ramp came.
+    held: Option<(String, Instant)>,
+}
+
+impl Said {
+    /// A ramp's line at `now`: the line to print now, if any.
+    pub fn ramp(&mut self, line: String, now: Instant) -> Option<String> {
+        if self.last.as_ref().is_some_and(|(said, _)| *said == line) {
+            // Back at the value printed last: nothing new to say.
+            self.held = None;
+            return None;
+        }
+        let due = self.last.as_ref().map_or(true, |(_, at)| {
+            now.saturating_duration_since(*at) >= SAY_EVERY
+        });
+        if due {
+            self.held = None;
+            self.last = Some((line.clone(), now));
+            Some(line)
+        } else {
+            self.held = Some((line, now));
+            None
+        }
+    }
+
+    /// At a `Present` at `now`: the line held back, once its value has stood for [`SAY_EVERY`].
+    pub fn present(&mut self, now: Instant) -> Option<String> {
+        let settled = self
+            .held
+            .as_ref()
+            .is_some_and(|(_, at)| now.saturating_duration_since(*at) >= SAY_EVERY);
+        if !settled {
+            return None;
+        }
+        let (line, _) = self.held.take()?;
+        self.last = Some((line.clone(), now));
+        Some(line)
     }
 }
 
@@ -537,6 +593,47 @@ mod tests {
             flat.0[0][128] = middle;
             assert_eq!(flat.gamma(), None, "{middle}");
         }
+    }
+
+    /// The brightness lines are bounded. 100 ramps of different values one frame apart (60 a
+    /// second, as `SetGamma` sent by a mod every frame), then two seconds of presents: three lines,
+    /// the first value at once, one a second later while they keep changing, and the value they
+    /// settled at a second after the last. 100 ramps of one value, or of values the same to two
+    /// places: one line. A value back at the last one printed before its line was due: nothing more.
+    #[test]
+    fn a_ramp_every_frame_prints_a_line_a_second_at_most() {
+        let frame = Duration::from_micros(16_667);
+        let run = |gammas: &[f32]| {
+            let mut said = Said::default();
+            let mut printed = Vec::new();
+            let mut t = Instant::now();
+            for &gamma in gammas {
+                printed.extend(said.ramp(change_line(&games_ramp(gamma)), t));
+                printed.extend(said.present(t));
+                t += frame;
+            }
+            for _ in 0..120 {
+                printed.extend(said.present(t));
+                t += frame;
+            }
+            printed
+        };
+        let changing: Vec<f32> = (0..100).map(|n| 0.6 + n as f32 * 0.008).collect();
+        let printed = run(&changing);
+        assert_eq!(printed.len(), 3, "{printed:?}");
+        assert_eq!(printed[0], "brightness 0.60 applied in the window");
+        assert_eq!(printed[2], change_line(&games_ramp(changing[99])));
+        assert_eq!(run(&[1.4; 100]).len(), 1);
+        let close: Vec<f32> = (0..100).map(|n| 1.401 + n as f32 * 0.00003).collect();
+        assert_eq!(run(&close), vec!["brightness 1.40 applied in the window"]);
+        // Back at the printed value before the next line was due: the held one is dropped.
+        let mut said = Said::default();
+        let t = Instant::now();
+        let a = change_line(&games_ramp(1.4));
+        assert_eq!(said.ramp(a.clone(), t), Some(a.clone()));
+        assert_eq!(said.ramp(change_line(&games_ramp(0.6)), t + frame), None);
+        assert_eq!(said.ramp(a, t + frame * 2), None);
+        assert_eq!(said.present(t + Duration::from_secs(5)), None);
     }
 
     /// The brightness in plain words: a ramp's log line (a step's value to two places, the
