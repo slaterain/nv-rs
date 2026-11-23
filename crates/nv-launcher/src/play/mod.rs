@@ -936,7 +936,7 @@ fn plain_end(tail: &str, status: Option<i32>) -> String {
         .copied()
         .unwrap_or("(the log is empty)");
     let has = |what: &str| tail.contains(what);
-    let what = if has("the sound table disagrees") || has("the sound table has") {
+    let what = if has("the sound table has") {
         "Sound on this PC answers differently from what nv-rs knows, and it stops rather than guess. Changing the sound output device, or setting it to stereo, may get past this."
     } else if has("d3dx9_38.dll") {
         "DirectX 9's D3DX library (d3dx9_38.dll) was missing or did something unexpected. Installing Microsoft's \"DirectX End-User Runtimes (June 2010)\" may help."
@@ -1660,7 +1660,7 @@ mod tests {
         assert!(text.contains("status 3"));
         assert!(text.contains("Game's main stopped in frame 12"));
         assert!(plain_end(
-            "panicked: the sound table disagrees with the layer",
+            "panicked: the sound table has a line this layer does not know: DsNew",
             Some(3)
         )
         .contains("Sound on this PC"));
