@@ -716,6 +716,106 @@ impl Listed {
     }
 }
 
+/// The sun shadows' still caster kinds this machine has seen, with [`sun_shadow::casters_ahead`]:
+/// `casters.txt` beside the pipeline list (the same folder, kept across builds as it is, written
+/// on the same schedule and at the end of the run), one [`prepare::Caster`] a line. Their
+/// pipelines are made before play as the listed pipelines are ([`Device::prepare_casters`]), so
+/// only a kind never seen on this machine casts a few frames late (made on a thread of its own).
+struct CasterList {
+    entries: Vec<prepare::Caster>,
+    seen: HashSet<prepare::Caster>,
+    /// Entry by entry, whether its pipeline was made (or tried) this run.
+    done: Vec<bool>,
+    shared: Arc<ListFile>,
+    /// Entries the file does not have yet, the present of the last and of the first of them.
+    dirty: bool,
+    added_at: u64,
+    first_added_at: u64,
+}
+
+impl CasterList {
+    fn load(dir: &std::path::Path) -> CasterList {
+        cache::remove_stale_temporaries(dir, &["casters"]);
+        let file = dir.join("casters.txt");
+        let (mut entries, mut seen, mut skipped) = (Vec::new(), HashSet::new(), 0);
+        if let Ok(text) = std::fs::read_to_string(&file) {
+            for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+                match prepare::Caster::parse(line) {
+                    Some(c) => {
+                        if seen.insert(c.clone()) {
+                            entries.push(c);
+                        }
+                    }
+                    None => skipped += 1,
+                }
+            }
+        }
+        eprintln!(
+            "NV_D3D9 wgpu: sun shadow caster list: {} kinds seen before on this machine ({}; {skipped} lines not read)",
+            entries.len(),
+            file.display()
+        );
+        let lines: Vec<String> = entries.iter().map(prepare::Caster::line).collect();
+        let shared = Arc::new(ListFile {
+            file,
+            written: std::sync::atomic::AtomicUsize::new(lines.len()),
+            lines: std::sync::Mutex::new(lines),
+            writing: std::sync::Mutex::new(()),
+            failed: Default::default(),
+        });
+        let mut all = LISTS.lock().unwrap_or_else(|e| e.into_inner());
+        all.retain(|w| w.strong_count() > 0);
+        all.push(Arc::downgrade(&shared));
+        CasterList {
+            done: vec![false; entries.len()],
+            entries,
+            seen,
+            shared,
+            dirty: false,
+            added_at: 0,
+            first_added_at: 0,
+        }
+    }
+
+    /// `c` listed (its pipeline was sent to be made at present `presents`), unless it is already.
+    fn add(&mut self, c: prepare::Caster, presents: u64) {
+        if !self.seen.insert(c.clone()) {
+            return;
+        }
+        self.shared
+            .lines
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(c.line());
+        self.entries.push(c);
+        self.done.push(true);
+        if !self.dirty {
+            self.first_added_at = presents;
+        }
+        self.dirty = true;
+        self.added_at = presents;
+    }
+
+    /// Writes the list as [`Listed::save_if_due`] writes the pipeline list.
+    fn save_if_due(&mut self, presents: u64, now: bool) {
+        if !self.dirty {
+            return;
+        }
+        let quiet = presents.saturating_sub(self.added_at) >= 300;
+        let long = presents.saturating_sub(self.first_added_at) >= 3600;
+        if !(now || quiet || long) {
+            return;
+        }
+        self.dirty = false;
+        let shared = self.shared.clone();
+        if now {
+            shared.save();
+        } else {
+            std::thread::spawn(move || shared.save());
+        }
+    }
+}
+
 /// What the open render pass was last given, so a draw sends only what changed.
 #[derive(Default)]
 struct PassBinds {
@@ -1258,6 +1358,9 @@ pub struct Device {
     /// (or tried), whether a new shader or sample count may have made more of them ready, the
     /// local list's file and whether it has entries it has not written. None without a cache folder.
     list: Option<Listed>,
+    /// The sun shadows' still caster kinds seen on this machine ([`CasterList`]): with a cache folder, the sun
+    /// shadows and [`sun_shadow::casters_ahead`] only.
+    casters: Option<CasterList>,
     /// The sample counts of the surfaces made so far, as bits (1 always).
     sample_mask: u32,
     listed_new: bool,
@@ -1868,6 +1971,9 @@ impl Device {
             cache_dir.and_then(|d| cache::PipelineCacheFile::open(&device, &adapter.get_info(), d));
         // The pipelines to make before play: the shipped list and this machine's.
         let list = cache_dir.map(Listed::load);
+        let casters = cache_dir
+            .filter(|_| sun_shadow::enabled() && sun_shadow::casters_ahead())
+            .map(CasterList::load);
         let warm_start = pipeline_cache.as_ref().is_some_and(|c| c.warm);
         let listed_shaders: HashSet<u64> = list
             .as_ref()
@@ -2061,6 +2167,7 @@ impl Device {
             collided: HashSet::new(),
             decls_by_elements: Map::default(),
             list,
+            casters,
             sample_mask: 1 << 1,
             listed_new: false,
             made: Made::default(),
@@ -6399,11 +6506,18 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// its formats take that count. The modules first, then the pipelines, each on the worker
     /// threads. At a `Present`, after a new shader or sample count; the game waits for it (its
     /// next frame comes after), so no listed pipeline is ever made during play.
+    /// Then the sun shadows' listed still caster kinds ([`Device::prepare_casters`]).
     fn prepare_listed(&mut self) {
         if !self.listed_new {
             return;
         }
         self.listed_new = false;
+        self.prepare_listed_pipelines();
+        self.prepare_casters();
+    }
+
+    /// [`Device::prepare_listed`]'s pipelines.
+    fn prepare_listed_pipelines(&mut self) {
         let mut list = self.list.take();
         let started = std::time::Instant::now();
         let mut ready = Vec::new();
@@ -8124,6 +8238,19 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                         return;
                     }
                     None => {
+                        // A still caster's kind listed, so the next start makes it before play
+                        // ([`Device::prepare_casters`]).
+                        if !per_frame && self.casters.is_some() {
+                            let index32 = pkey.4;
+                            if let Some(draw) =
+                                self.last_draw_entry(vs, ps, decl, strides, kind, index32)
+                            {
+                                let presents = self.presents;
+                                if let Some(c) = &mut self.casters {
+                                    c.add(prepare::Caster { cutout, draw }, presents);
+                                }
+                            }
+                        }
                         let job = self.sun_pipeline_job(
                             vs,
                             ps,
@@ -8854,9 +8981,175 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         coverage: bool,
     ) -> Option<impl FnOnce() -> Result<wgpu::RenderPipeline, String> + Send + 'static> {
         let key = self.last_pipeline.as_ref().map(|(k, _, _)| k.clone())?;
+        self.sun_pipeline_job_for(
+            &key, vs, ps, link, strides, topology, index32, cull, cutout, coverage,
+        )
+    }
+
+    /// The pipeline list's entry ([`prepare::Entry`]) of the last draw's pipeline
+    /// ([`Device::last_pipeline`]), drawn with `vs`, `ps`, `decl`, `strides`, `kind` and
+    /// `index32`, as the draw lists a new pipeline; none before a draw has a pipeline.
+    #[allow(clippy::too_many_arguments)]
+    fn last_draw_entry(
+        &mut self,
+        vs: &Shader,
+        ps: &Shader,
+        decl: &Decl,
+        strides: [u32; 8],
+        kind: u32,
+        index32: bool,
+    ) -> Option<prepare::Entry> {
+        let depth = self.usable_depth_with(|d| d.format.d3d);
+        let (key, _, planes) = self.last_pipeline.as_ref()?;
+        Some(prepare::Entry {
+            vs: vs.stable,
+            ps: ps.stable,
+            decl: decl
+                .elements
+                .iter()
+                .map(|e| (e.stream, e.offset, e.ty, e.usage, e.index))
+                .collect(),
+            strides,
+            topology: kind as u8,
+            index32,
+            colours: std::array::from_fn(|i| self.st.rt[i].as_ref().map(|s| s.format.d3d)),
+            depth,
+            states: key.states,
+            samples: key.samples,
+            filterable: key.filterable,
+            atoc: key.atoc,
+            count: key.count,
+            clip: clip_code(key.clip, *planes),
+        })
+    }
+
+    /// The still caster kinds this machine has seen ([`CasterList`]) whose shaders the game has now
+    /// made: their pipelines made on the worker threads before the next frame, as the listed
+    /// pipelines are ([`Device::prepare_listed`]), so such a caster is kept from the first frame it
+    /// is drawn in. A kind is tried once a run.
+    fn prepare_casters(&mut self) {
+        if self.sun.is_none() {
+            return;
+        }
+        let Some(mut list) = self.casters.take() else {
+            return;
+        };
+        let started = std::time::Instant::now();
+        let cull_at = PIPELINE_STATES
+            .iter()
+            .position(|&s| s == rs::CULLMODE)
+            .expect("the cull mode is a pipeline state");
+        let mut jobs = Vec::new();
+        for i in 0..list.entries.len() {
+            if list.done[i] {
+                continue;
+            }
+            let c = list.entries[i].clone();
+            let e = &c.draw;
+            let (Some(vs), Some(ps)) = (self.shader_by_hash(e.vs), self.shader_by_hash(e.ps))
+            else {
+                continue;
+            };
+            list.done[i] = true;
+            let Some(r) = self.key_of_entry(e, vs.clone(), ps.clone()) else {
+                continue;
+            };
+            let cull = e.states[cull_at];
+            // The key the caster's draws look it up by ([`Device::sun_record`]).
+            let pkey: PipeOf = (
+                vs.id,
+                r.key.decl,
+                e.strides,
+                e.topology,
+                e.index32,
+                cull,
+                if c.cutout { ps.id } else { 0 },
+                if c.cutout { e.filterable } else { 0 },
+            );
+            if self.sun.as_ref().is_some_and(|s| {
+                s.pipes.contains_key(&pkey) || s.caster_pending.contains_key(&pkey)
+            }) {
+                continue;
+            }
+            let job = self.sun_pipeline_job_for(
+                &r.key,
+                &vs,
+                &ps,
+                &r.link,
+                e.strides,
+                r.topology,
+                e.index32,
+                state::cull(cull),
+                c.cutout.then_some(&r.samplers[..]),
+                false,
+            );
+            if let Some(job) = job {
+                jobs.push((pkey, std::sync::Mutex::new(Some(job))));
+            }
+        }
+        if jobs.is_empty() {
+            self.casters = Some(list);
+            return;
+        }
+        let threads = worker_threads();
+        let made = on_workers(
+            &jobs,
+            threads,
+            |(_, job)| {
+                let job = job.lock().unwrap_or_else(|e| e.into_inner()).take();
+                job.map(|job| job())
+            },
+            &mut |_| {},
+        );
+        let mut refused = 0;
+        for ((pkey, _), m) in jobs.iter().zip(made) {
+            let p = match m {
+                Some(Ok(p)) => Some(p),
+                Some(Err(e)) => {
+                    refused += 1;
+                    self.warn(format!(
+                        "sun shadows: a listed caster pipeline wgpu refuses: {e}"
+                    ));
+                    None
+                }
+                None => None,
+            };
+            let sun = self.sun.as_mut().expect("on");
+            let at = p.map(|p| {
+                sun.gpu.pipelines.push(Some(p));
+                (sun.gpu.pipelines.len() - 1) as u32
+            });
+            sun.pipes.insert(*pkey, at);
+        }
+        self.made.work += started.elapsed();
+        eprintln!(
+            "NV_D3D9 wgpu: sun shadows: made ahead: {} still casters' pipelines of kinds seen before in {:.0} ms on {threads} threads, {refused} refused (present {})",
+            jobs.len(),
+            started.elapsed().as_secs_f64() * 1000.0,
+            self.presents
+        );
+        self.casters = Some(list);
+    }
+
+    /// [`Device::sun_pipeline_job`] for the draw's pipeline `key` (its modules' cache keys), not
+    /// the last draw's: a listed caster kind's at the start ([`Device::prepare_casters`]).
+    #[allow(clippy::too_many_arguments)]
+    fn sun_pipeline_job_for(
+        &mut self,
+        key: &PipeKey,
+        vs: &Shader,
+        ps: &Shader,
+        link: &VertexLink,
+        strides: [u32; 8],
+        topology: wgpu::PrimitiveTopology,
+        index32: bool,
+        cull: Option<wgpu::Face>,
+        cutout: Option<&[(u32, u8, bool)]>,
+        coverage: bool,
+    ) -> Option<impl FnOnce() -> Result<wgpu::RenderPipeline, String> + Send + 'static> {
         // The modules as the draw's pipeline has them (made ahead, or here if they were not
         // kept: the draw's pipeline can come from a library or the list).
-        let (vkey, pkey, tasks) = self.module_tasks(&key, vs, ps, &link.inputs, false);
+        let (vkey, pkey, tasks) = self.module_tasks(key, vs, ps, &link.inputs, false);
         let tasks: Vec<ModuleTask> = tasks
             .into_iter()
             .filter(|t| cutout.is_some() || matches!(t.key, ModKey::V(_)))
@@ -10814,6 +11107,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         }
         if let Some(l) = &mut self.list {
             l.save_if_due(self.presents, false);
+        }
+        if let Some(c) = &mut self.casters {
+            c.save_if_due(self.presents, false);
         }
         if self.presents % 600 == 1 {
             // The bytes kept for read-backs (`ReadSurface`), printed for their memory cost.
@@ -12989,6 +13285,9 @@ impl Drop for Device {
         }
         if let Some(l) = &mut self.list {
             l.save_if_due(self.presents, true);
+        }
+        if let Some(c) = &mut self.casters {
+            c.save_if_due(self.presents, true);
         }
     }
 }

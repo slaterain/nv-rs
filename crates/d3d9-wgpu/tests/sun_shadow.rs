@@ -235,7 +235,15 @@ fn box_corners(x: f32, y: f32, half: f32, height: f32) -> Vec<[f32; 3]> {
 /// and a pixel shader writing `c0`, the ground and the box in vertex buffers; none without an
 /// adapter.
 fn backend(samples: u32) -> Option<WgpuBackend> {
+    backend_in(samples, None)
+}
+
+/// [`backend`] keeping its pipelines and lists in `cache` (a folder), when given.
+fn backend_in(samples: u32, cache: Option<std::path::PathBuf>) -> Option<WgpuBackend> {
     let mut b = WgpuBackend::new(Output::Offscreen);
+    if let Some(dir) = cache {
+        b = b.with_cache_dir(dir);
+    }
     let present = words(&[SIZE, SIZE, A8R8G8B8, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0]);
     let back = words(&[BACK]);
     b.execute(Cmd::CreateDevice {
@@ -4002,6 +4010,61 @@ fn a_still_casters_pipeline_made_ahead_casts_once_it_is_there() {
             at(&frames[2], pixel(p)),
             shadowed,
             "{p:?}: the shadow once the pipeline is there"
+        );
+    }
+}
+
+/// The box's first two frames with still casters' pipelines made ahead on a new backend keeping
+/// its pipelines and lists in `dir`; the backend is dropped after (its lists written).
+fn ahead_in(dir: &std::path::Path) -> Vec<Vec<[u8; 4]>> {
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    sun_shadow::enable_debug();
+    sun_shadow::casters_ahead_for_tests(Some(true));
+    let b = backend_in(1, Some(dir.to_path_buf()));
+    sun_shadow::enable(false);
+    sun_shadow::casters_ahead_for_tests(None);
+    let mut b = b.expect("the adapter");
+    let first = frame(&mut b, true);
+    present(&mut b, 1);
+    let second = frame(&mut b, true);
+    drop(b);
+    vec![first, second]
+}
+
+/// With still casters' pipelines made ahead, the caster kinds a run sees are kept beside the
+/// pipeline list (`casters.txt` in the cache folder) and made before play at the next start, as
+/// the listed pipelines are: on a new backend in the same folder the box casts from the second
+/// frame, the same shadow as with its pipeline made at once; in a new folder it does not yet.
+#[test]
+fn a_caster_kind_seen_before_on_this_machine_is_made_at_the_start() {
+    let Some(at_once) = picture(1, true, true) else {
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("nv-rs-sun-casters-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("a folder");
+    let new = ahead_in(&dir);
+    let text = std::fs::read_to_string(dir.join("casters.txt")).expect("the casters' list");
+    assert!(
+        text.lines().any(|l| l.starts_with("c1 0 p2 ")),
+        "the box's kind listed: {text}"
+    );
+    let seen = ahead_in(&dir);
+    let _ = std::fs::remove_dir_all(&dir);
+    for p in [
+        [-50.0, 150.0, 0.0],
+        [-60.0, 140.0, 0.0],
+        [-45.0, 165.0, 0.0],
+    ] {
+        let shadowed = at(&at_once, pixel(p));
+        assert!(
+            at(&new[1], pixel(p))[2] > shadowed[2],
+            "{p:?}: a kind never seen casts once its pipeline is there, not in the second frame"
+        );
+        assert_eq!(
+            at(&seen[1], pixel(p)),
+            shadowed,
+            "{p:?}: a kind seen before is made at the start and casts as made at once"
         );
     }
 }

@@ -159,6 +159,36 @@ impl Entry {
     }
 }
 
+/// A sun-shadow caster kind a run has seen ([`crate::sun_shadow::casters_ahead`]): the pipeline of
+/// the still draw it was seen on, as the list keeps it (its shaders, declaration, layout and render
+/// states, the cull mode among them), and whether that draw was alpha-tested (a cut-out casts
+/// through its pixel shader). One a line: `c1 CUTOUT` and the draw's `p2` line.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct Caster {
+    pub cutout: bool,
+    pub draw: Entry,
+}
+
+impl Caster {
+    pub(crate) fn line(&self) -> String {
+        format!("c1 {} {}", u8::from(self.cutout), self.draw.line())
+    }
+
+    /// A caster from a line of the casters' list; None for anything else, which is skipped.
+    pub(crate) fn parse(line: &str) -> Option<Caster> {
+        let (cutout, draw) = line.strip_prefix("c1 ")?.split_once(' ')?;
+        let cutout = match cutout {
+            "0" => false,
+            "1" => true,
+            _ => return None,
+        };
+        Some(Caster {
+            cutout,
+            draw: Entry::parse(draw)?,
+        })
+    }
+}
+
 /// A fixed-function shader's line (`f1`).
 pub(crate) fn shader_line(tokens: &[u32]) -> String {
     let hex: Vec<String> = tokens.iter().map(|t| format!("{t:x}")).collect();
@@ -299,6 +329,34 @@ mod tests {
         assert_eq!(l.merge(&text), (1, 1));
         assert_eq!(l.entries.len(), 1);
         assert_eq!(l.text(), format!("{line}\n"));
+    }
+
+    /// A caster kind's `c1` line reads back as it was written, cut-out or not; a damaged one, or a
+    /// pipeline line of the other list, is skipped.
+    #[test]
+    fn a_caster_kinds_line_reads_back_as_it_was_written() {
+        for cutout in [false, true] {
+            let c = Caster {
+                cutout,
+                draw: entry(),
+            };
+            let line = c.line();
+            assert!(
+                line.starts_with(if cutout { "c1 1 p2 " } else { "c1 0 p2 " }),
+                "{line}"
+            );
+            assert_eq!(Caster::parse(&line), Some(c));
+        }
+        let line = entry().line();
+        for bad in [
+            line.clone(),
+            format!("c1 2 {line}"),
+            format!("c1 1 {}", &line[..line.len() - 2]),
+            format!("c2 0 {line}"),
+            "c1 1".to_string(),
+        ] {
+            assert_eq!(Caster::parse(&bad), None, "{bad}");
+        }
     }
 
     /// A fixed-function shader's `f1` line reads back as its tokens, once; a damaged one (not
