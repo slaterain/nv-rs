@@ -659,9 +659,21 @@ fn stand_ins(e: &mut Engine) {
         (0x011c_1000, 0x1000),
         (0x0101_6000, 0x1000),
         (0x010c_8000, 0x1000),
+        // The controllers' constants: the unset translation (011a8400), rotation (011f3704) and
+        // scale (01096b8c), -FLT_MAX in the exe, and the double they are compared with (010241b0).
+        (0x0109_6000, 0x1000),
+        (0x011a_8000, 0x1000),
+        (0x011f_3000, 0x1000),
+        (0x0102_4000, 0x1000),
     ] {
         e.map(page, len);
     }
+    for (at, words) in [(0x011a_8400u32, 3u32), (0x011f_3704, 4), (0x0109_6b8c, 1)] {
+        for i in 0..words {
+            e.mem.set_u32(at + 4 * i, f32::MIN.to_bits());
+        }
+    }
+    e.mem.set_u64(0x0102_41b0, f64::from(f32::MIN).to_bits());
     e.mem.set_u64(0x0101_1588, 0.5f64.to_bits());
     e.mem.set_u64(0x0101_2070, 1.0f64.to_bits());
     for (i, v) in [1u32, 2, 0].iter().enumerate() {
