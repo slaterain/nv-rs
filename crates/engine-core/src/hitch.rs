@@ -128,8 +128,12 @@ pub enum Count {
     /// broad-phase inserts, then each body's island and activation): the bodies and the time (ns). A body is queued
     /// while the world's lock count is up (`bhkWorld::Add`, `00c6b0a0`); the batches run when the count drops to
     /// zero, at most 100 a frame with the drop's flag set, and from `bhkWorld::Update` (on the AI thread, not counted).
+    /// A full queue (3,000 bodies, 200 constraints or phantoms, 100 actions) adds bodies wherever the add that filled
+    /// it runs, with the count still up: those batches count apart, in `HavokBodiesForced`/`HavokBodiesForcedNs`.
     HavokBodiesAdded,
     HavokBodiesAddNs,
+    HavokBodiesForced,
+    HavokBodiesForcedNs,
     /// Main's time inside the guest heap's allocate and free (ns; the heap's own lock wait included).
     HeapNsMain,
     /// Interface tiles made (`Tile::Init`, `009ff600`: every tile a menu or the HUD builds).

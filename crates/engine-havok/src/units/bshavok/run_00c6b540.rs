@@ -30,6 +30,8 @@ const TRIM_LIMIT: u32 = 0x011a_fe80;
 /// shortens the size by that many and sets the byte. Then `00c676e0`, `00c6aac0` and
 /// `00c67850` run. The class is unconfirmed.
 pub fn fn_00c6b540(e: &mut Engine, this: Ptr, flag: u32) {
+    // The "border's Havok work on the physics step" row: a drop left for the step comes first, in the exe's order.
+    super::bhkworld::finish_deferred_lock_drop(e, this.addr());
     let me = this.addr();
     let counter = e.mem.u32(me + 0x18);
     if counter == 0 {

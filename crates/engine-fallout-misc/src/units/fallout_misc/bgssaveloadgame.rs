@@ -1233,6 +1233,8 @@ pub fn bgssaveloadgame_load_game(
 ) -> bool {
     engine_core::hitch::one(engine_core::hitch::Count::Loads);
     engine_core::draw_thread::save_or_load(e, 0x0084_7df0);
+    // The "border's Havok work on the physics step" row: a drop left for the step runs before the load.
+    engine_havok::units::bshavok::bhkworld::finish_deferred_lock_drops(e);
     let name = e.mem.alloc(0x104);
     let version = e.mem.alloc(0x104);
     let save_name = e.mem.alloc(0x104);
