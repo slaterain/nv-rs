@@ -1254,7 +1254,11 @@ fn directory_exists_or(e: &Engine, path: &[u8], host: Option<bool>) -> bool {
     if state_ref!(e).disk.deleted.contains(&k) {
         return false;
     }
-    host.unwrap_or_else(|| host_folder(parent))
+    host.unwrap_or_else(|| {
+        #[cfg(test)]
+        tests_open_outside_lock::host_asked(e);
+        host_folder(parent)
+    })
 }
 
 /// The folder part of the full path `path` (a trailing separator dropped first); `None` with no
@@ -3137,9 +3141,11 @@ fn open_or_make(
     // A file of the player's (on disk, not deleted in this run, not yet the run's): it exists
     // for every disposition. Opened for writing it is read into the run's copy first, emptied
     // when the disposition empties it, with its directory entry as the disk keeps it ([`adopt`]).
-    let players = not_the_runs(e)
-        && host_said.is_none()
-        && std::fs::metadata(real_path(&name)).is_ok_and(|m| m.is_file());
+    let players = not_the_runs(e) && host_said.is_none() && {
+        #[cfg(test)]
+        tests_open_outside_lock::host_asked(e);
+        std::fs::metadata(real_path(&name)).is_ok_and(|m| m.is_file())
+    };
     let exists = state!(e).disk.files.contains_key(&path) || players;
     let fail = |e: &mut Engine, code: u32| {
         e.kernel.last_error = code;
@@ -7221,6 +7227,17 @@ mod tests_open_outside_lock {
         static HELD: Cell<Option<bool>> = const { Cell::new(None) };
         /// What runs while the host is asked, as another thread's platform calls could.
         static HOOK: RefCell<Option<Hook>> = const { RefCell::new(None) };
+        /// The host's file system asked from [`open_or_make`]'s general path (the player's file, its folder) while
+        /// this thread held the kernel lock.
+        static ASKED_LOCKED: Cell<u32> = const { Cell::new(0) };
+    }
+
+    /// [`open_or_make`]'s general path asks the host (the player's file's kind, its folder's): counted when this
+    /// thread holds the kernel lock.
+    pub(super) fn host_asked(e: &Engine) {
+        if engine_core::real_threads::kernel_lock_held(e) {
+            ASKED_LOCKED.with(|n| n.set(n.get() + 1));
+        }
     }
 
     /// [`open_or_make`]'s note, while it asks the host.
@@ -7391,6 +7408,51 @@ mod tests_open_outside_lock {
     /// asked) that deletes the file in the run, or makes it the run's: the run's copy decides, as
     /// when that call came first: the open answers `ERROR_FILE_NOT_FOUND`, or reads the run's
     /// (emptied) copy, not the player's file on disk.
+    /// With real threads, an outermost read-only open of a file that is not there (`OPEN_EXISTING` in a folder that
+    /// is there and in one that is not; `OPEN_ALWAYS`, which makes it in the run) asks the host's file system nothing
+    /// while the kernel lock is held: its window's answers (the file's kind, the folder's) are used (review of #968).
+    #[test]
+    fn a_missing_file_s_outermost_read_only_open_asks_the_host_nothing_under_the_lock() {
+        let dir = scratch("open-outside-lock-missing", &[]);
+        let in_dir = |parts: &[&str]| {
+            let mut p = std::path::PathBuf::from(&dir);
+            p.extend(parts);
+            p.to_string_lossy().into_owned()
+        };
+        let mut e = engine(true);
+        ASKED_LOCKED.with(|n| n.set(0));
+        assert_eq!(
+            open(&mut e, &in_dir(&["None.ogg"]), GENERIC_READ, OPEN_EXISTING),
+            (INVALID_HANDLE_VALUE, ERROR_FILE_NOT_FOUND)
+        );
+        assert_eq!(
+            open(
+                &mut e,
+                &in_dir(&["Gone", "None.ogg"]),
+                GENERIC_READ,
+                OPEN_EXISTING
+            ),
+            (INVALID_HANDLE_VALUE, ERROR_PATH_NOT_FOUND)
+        );
+        let (h, error) = open(&mut e, &in_dir(&["Made.ini"]), GENERIC_READ, OPEN_ALWAYS);
+        assert_ne!(h, INVALID_HANDLE_VALUE);
+        assert_eq!(error, ERROR_SUCCESS);
+        assert_eq!(read_all(&mut e, h), b"", "made empty in the run");
+        assert_eq!(ASKED_LOCKED.with(Cell::get), 0, "asked under the lock");
+        // A write open still asks under the lock (the counter counts).
+        assert_eq!(
+            open(
+                &mut e,
+                &in_dir(&["Other.ini"]),
+                GENERIC_WRITE,
+                OPEN_EXISTING
+            ),
+            (INVALID_HANDLE_VALUE, ERROR_FILE_NOT_FOUND)
+        );
+        assert_eq!(ASKED_LOCKED.with(Cell::get), 2, "the file and its folder");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_change_in_the_run_while_the_host_is_asked_comes_first() {
         let dir = scratch("open-outside-lock-race", &[]);
