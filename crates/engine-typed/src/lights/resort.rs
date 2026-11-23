@@ -139,7 +139,11 @@ fn kept(e: &mut Engine, reached: &[(u32, f32)], at: usize, candidate: u32, bound
 /// The nodes a scan passes are the ones the walk reached before; their values, worked out when the
 /// walk reached them, are kept in `reached` in the list's order (a node moved before the `i`th
 /// reached node takes place `i` there).
+///
+/// With the fixes row "dead lights in a light list" a dead entry is taken out first
+/// ([`super::dead`]): the exe would read its luminance through its cleared `spLight` and stop.
 pub fn resort_lights(e: &mut Engine, this: Ptr, bound: u32) {
+    super::dead::sweep(e, this.addr(), 0);
     resort_with(e, this, bound, &mut |_| {});
 }
 
