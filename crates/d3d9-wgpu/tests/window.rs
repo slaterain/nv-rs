@@ -413,10 +413,11 @@ fn the_same_size_copies_exactly_and_a_stretch_blends_only_at_the_seam() {
 /// own entry, while the back buffer (its capture, what F12 reports read) stays the game's own
 /// picture. Direct3D 9's identity ramp (the game's at `fGamma` 1.0) gives the plain copy back
 /// byte for byte. Stretched into a wider window through the brightest step (0.6), each half is
-/// its colour through the ramp up to the seam.
+/// its colour through the ramp up to the seam. The brightness kept for the F12 report follows
+/// the ramps (none, 1.40, none).
 #[test]
 fn the_games_brightness_is_shown_in_the_window_and_an_identity_ramp_changes_nothing() {
-    use d3d9_wgpu::ramp::{games_ramp, level, menu_gammas, Ramp};
+    use d3d9_wgpu::ramp::{games_ramp, level, menu_gammas, shown, Ramp};
     let Some(mut g) = Rig::new((32, 24), (32, 24)) else {
         return;
     };
@@ -449,9 +450,15 @@ fn the_games_brightness_is_shown_in_the_window_and_an_identity_ramp_changes_noth
         .expect("the back buffer's capture");
     let window = g.capture("wgpu-window", 1).expect("the window's frame");
     assert_eq!(rgb(&window.2), rgb(&back.2), "no ramp: a copy");
+    assert_eq!(shown(), None, "no ramp: no brightness for the report");
     // The darkest step.
     let darkest = games_ramp(menu_gammas()[0]);
     set(&mut g, &darkest);
+    assert!(
+        shown().is_some_and(|s| (s - 1.4).abs() < 0.001),
+        "the report's brightness: {:?}",
+        shown()
+    );
     two(&mut g, 2);
     let back2 = g
         .capture("wgpu-frame", 2)
@@ -478,6 +485,7 @@ fn the_games_brightness_is_shown_in_the_window_and_an_identity_ramp_changes_noth
     )
     .expect("a ramp");
     set(&mut g, &identity);
+    assert_eq!(shown(), None, "the identity ramp: none for the report");
     two(&mut g, 3);
     let back3 = g
         .capture("wgpu-frame", 3)

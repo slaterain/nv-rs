@@ -401,8 +401,10 @@ original's Direct3D 9 instead, which also draws by itself where Vulkan and Direc
 - The brightness slider (Settings > Display) changes the picture, on every system. This differs
   from the original, at the maintainer's request: the original shows its brightness only in
   exclusive full screen, which nv-rs does not have (its full screen is the borderless window), so
-  in a window the slider did nothing. At the default brightness the picture is unchanged. The
-  Direct3D 9 renderer still shows no brightness in a window.
+  in a window the slider did nothing. At the default brightness the picture is unchanged. A
+  brightness saved earlier, including one saved while playing the original in a window, now shows.
+  The log says each brightness the window takes, and an F12 report's place.txt the one shown.
+  The Direct3D 9 renderer still shows no brightness in a window.
 
 ## Game pads
 
