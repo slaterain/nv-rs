@@ -6999,3 +6999,32 @@ fn sorted_draws_keep_alpha_writes_apart() {
     assert_eq!(on, off, "the pixels, alpha included");
     assert_eq!(mismatches, 0, "each held draw drawn with its own state");
 }
+
+/// Merged or sorted, a draw that writes no depth is never held: each such draw lands over the ones
+/// before it wherever it passes the depth test, so moved past another over the same pixels it
+/// would show where the game's order covered it (#890's planted fault G1 survived without this).
+/// With depth writes off: P (red, LESSEQUAL) then Q (green, LESS) at column 1, and Q then P at
+/// column 3, so one column would show a moved draw whichever pipeline a sort puts first.
+#[test]
+fn sorted_draws_never_hold_draws_without_depth_writes() {
+    let script = |g: &mut Gpu, _: &StripDraw| {
+        g.state(ZWRITEENABLE, 0);
+        strip_at(g, 1, 0.0, [1.0, 0.0, 0.0, 1.0]);
+        g.state(ZFUNC, 2);
+        strip_stream(g, 96);
+        strip_at(g, 0, 0.0, [0.0, 1.0, 0.0, 1.0]);
+        strip_at(g, 2, 0.0, [0.0, 1.0, 0.0, 1.0]);
+        g.state(ZFUNC, 4);
+        strip_stream(g, 0);
+        strip_at(g, 3, 0.0, [1.0, 0.0, 0.0, 1.0]);
+    };
+    let Some((off, _, _)) = held_script(false, false, &script) else {
+        return;
+    };
+    assert_eq!(off[1], [0, 255, 0, 255], "column 1: Q's green, drawn last");
+    assert_eq!(off[3], [0, 0, 255, 255], "column 3: P's red, drawn last");
+    let (on, held, mismatches) = held_script(true, true, &script).expect("the adapter, as above");
+    assert_eq!(on, off, "the pixels");
+    assert_eq!(mismatches, 0, "each draw drawn with its own state");
+    assert_eq!(held, (0, 0), "none held");
+}
