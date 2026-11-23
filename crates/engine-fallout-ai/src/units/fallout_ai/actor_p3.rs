@@ -23566,6 +23566,83 @@ mod tests {
         }
     }
 
+    /// S0660 through `HitMe` (the review of #878): an unblocked hit with a source reference (an
+    /// explosion) knocks the victim back from the aggressor's position (its slot `0x1f4`) off, and
+    /// from the source's position (+0x30) with the row: the start point is the third word of the
+    /// knockback's subtraction (`VECTOR_SUBTRACT`).
+    #[test]
+    fn s0660_hit_me_knocks_back_from_the_explosion() {
+        for on in [false, true] {
+            let mut e = engine();
+            let world = hit_world(&mut e, false);
+            e.set_stewie(engine_core::extend::stewie::EXPLOSION_PUSH_DIRECTION, on);
+            stub(&mut e, INTERFACE_IS_IN_MENU_MODE, 0);
+            stub_float(&mut e, ACTOR_GETTER_87F9C0, 1.0);
+            let scaled = e.mem.alloc(12);
+            stub(&mut e, VECTOR_SCALE, scaled);
+            let source_position = e.mem.alloc(12);
+            let source = actor_with(
+                &mut e,
+                &[
+                    (REFERENCE_SLOT_220, ret(0)),
+                    (REFERENCE_SLOT_224, ret(0)),
+                    (ACTOR_SLOT_100, ret(0)),
+                    (REFERENCE_SLOT_168, ret(0)),
+                    (ACTOR_SLOT_POSITION, ret(source_position)),
+                ],
+                None,
+            );
+            e.set(world.hit, HitData::pSourceRef, source.cast());
+            let aggressor_position = e
+                .vcall(world.player.addr(), ACTOR_SLOT_POSITION, &args![])
+                .u32();
+            e.call_log = Some(vec![]);
+            actor_hit_me(&mut e, world.victim, world.hit, 0);
+            let subtractions = calls_to(&e, VECTOR_SUBTRACT);
+            let start = if on {
+                source.addr() + 0x30
+            } else {
+                aggressor_position
+            };
+            assert!(
+                subtractions.iter().any(|c| c[2] == start),
+                "on {on}: {subtractions:x?}"
+            );
+            if on {
+                assert!(
+                    !subtractions.iter().any(|c| c[2] == aggressor_position),
+                    "{subtractions:x?}"
+                );
+            }
+        }
+    }
+
+    /// S0664 without a process (the review of #878): with the row, a victim whose process (+0x68)
+    /// is gone gives the kill statistics (`005f5950`) no weapon (slot 0x2d, number 1), without a
+    /// read through the missing process.
+    #[test]
+    fn s0664_a_victim_without_a_process_gives_no_weapon() {
+        let mut e = engine();
+        e.set_stewie(
+            engine_core::extend::stewie::KILL_CHALLENGE_SOURCE_WEAPON,
+            true,
+        );
+        let (victim, _, player, _) = kill_setup(&mut e);
+        stub(&mut e, REFR_BASE_FORM, 0x9300);
+        stub_with(&mut e, FTOL, |_, a| {
+            ret(f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32) as i32 as u32)
+        });
+        stub(&mut e, CREATURE_GETTER_59F3A0, 0);
+        stub(&mut e, RTTI_DYNAMIC_CAST, 0x9400);
+        stub(&mut e, WEAPON_TYPE, 3);
+        stub(&mut e, WEAPON_GETTER_8D85E0, 0x21);
+        e.mem.set_u32(victim.addr() + 0x68, 0);
+        e.call_log = Some(vec![]);
+        record_kill_statistics(&mut e, victim, player, player.addr());
+        let stats = calls_to(&e, STATISTICS_WORKER_5F5950);
+        assert_eq!(stats[0], vec![1, 1, 0x9300, 0, 0, 0x2d, 1]);
+    }
+
     /// S0660 (`patchFixExplosionPushDirection`): the knockback starts from the aggressor's slot
     /// `0x1f4` position off, also for a hit with a source reference (an explosion); on, from the
     /// source's position (+0x30) when the hit has one, else the aggressor's own (+0x30).
