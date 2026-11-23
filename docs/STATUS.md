@@ -298,12 +298,12 @@ More in [FIXES.md, "UI Organizer"](FIXES.md#ui-organizer).
 
 ## lStewieAl's Tweaks built in
 
-🔨 Its engine fixes and tweaks, with nothing to install. 184 of its changes are built:
+🔨 Its engine fixes and tweaks, with nothing to install. 225 of its changes are built:
 
 - 72 of its crash and leak fixes;
 - Engine Optimizations' first change (a save's changed-forms map);
-- 111 other fixes and tweaks: 16 to the engines and the console; 14 to forms, cells, scripts, saves
-  and sound; 32 to AI, actors and the player; 49 to menus and the HUD.
+- 152 other fixes and tweaks: 31 to the engines and the console; 14 to forms, cells, scripts, saves
+  and sound; 52 to AI, actors and the player; 55 to menus and the HUD.
 
 - Each change is on with the fixes preset and has its own off key in `Fallout.ini`'s
   `[nv-rs Stewie]`.
