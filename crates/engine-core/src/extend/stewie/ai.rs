@@ -236,3 +236,6 @@ pub const TCL_MOVEMENT: Row = Row::share(AI_FIXES, AI_FIXES_END, 68);
 /// (`0093ab30`); `0095d850` (`0x95DD7C`)): action points spent for an action never go below 0,
 /// and a reload charges them only as a reload.
 pub const RUN_AND_GUN_AP: Row = Row::share(AI_FIXES, AI_FIXES_END, 69);
+/// S0410 `GodmodePreventsLegCrippleSound` (`Actor::Move` `008a62b0` (`0x8A655C`, `0x8A6607`)): a
+/// fall plays no landing sound or pain for the player in god mode.
+pub const GODMODE_NO_LEG_CRIPPLE_SOUND: Row = Row::share(AI_FIXES, AI_FIXES_END, 70);

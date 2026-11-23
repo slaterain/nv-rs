@@ -528,6 +528,14 @@ pub const ROWS: &[Row] = &[
         summary: "changes what you see: an NPC with no target of its own turns its head toward its package's target when that is within fAIMaxHeadTrackDistance (the game's test never let it)",
     },
     Row {
+        bit: stewie::GODMODE_NO_LEG_CRIPPLE_SOUND,
+        function: "GodmodePreventsLegCrippleSound",
+        plan: "S0410",
+        key: "bGodmodePreventsLegCrippleSound",
+        tweaks: Some(("Tweaks", "bGodmodePreventsLegCrippleSound")),
+        summary: "changes what you hear: in god mode a hard landing no longer plays its sound or your pain",
+    },
+    Row {
         bit: stewie::SPIN_WEAPON_SOUND,
         function: "patchSpinWeaponsAlwaysPlaySound",
         plan: "S0489",
