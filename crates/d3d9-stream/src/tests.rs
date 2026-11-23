@@ -2502,7 +2502,15 @@ fn a_clear_is_hashed_with_what_it_clears_into() {
         stencil: 0,
         model: 0,
     };
-    let draw = Part::Draw(1).cmd();
+    let draw = Cmd::DrawIndexedPrimitive {
+        device,
+        kind: 4,
+        base_vertex: 0,
+        min_index: 0,
+        vertices: 3,
+        start_index: 0,
+        count: 1,
+    };
     let target = |surface: u32| Cmd::SetRenderTarget {
         device,
         index: 0,
@@ -2513,11 +2521,15 @@ fn a_clear_is_hashed_with_what_it_clears_into() {
         device,
         viewport: [0, 0, w, 100, 0, 1f32.to_bits()],
     };
-    let scissor = |w: u32| Cmd::SetScissorRect {
+    let scissor = |w: i32| Cmd::SetScissorRect {
         device,
         rect: [0, 0, w, 100],
     };
-    let test = |on: u32| Part::State(174, on).cmd();
+    let test = |value: u32| Cmd::SetRenderState {
+        device,
+        state: 174,
+        value,
+    };
     let pairs = [
         ("render target", target(0x9000), target(0x9001)),
         ("depth surface", depth(0x9100), depth(0x9101)),
@@ -2537,7 +2549,11 @@ fn a_clear_is_hashed_with_what_it_clears_into() {
             "the {what} set again before the clear"
         );
     }
-    let state = |v: u32| Part::State(7, v).cmd();
+    let state = |value: u32| Cmd::SetRenderState {
+        device,
+        state: 7,
+        value,
+    };
     assert_eq!(
         digests_of(&[state(1), clear, state(2), draw]),
         digests_of(&[state(2), clear, state(2), draw]),
@@ -2565,7 +2581,15 @@ fn a_draw_from_memory_empties_stream_0() {
         stride: 16,
         vertices: Data::from_words(&vertices),
     };
-    let draw = Part::Draw(1).cmd();
+    let draw = Cmd::DrawIndexedPrimitive {
+        device,
+        kind: 4,
+        base_vertex: 0,
+        min_index: 0,
+        vertices: 3,
+        start_index: 0,
+        count: 1,
+    };
     let set_again = digests_of(&[stream, up, stream, draw]);
     let left_out = digests_of(&[stream, up, draw]);
     assert_eq!(set_again.len(), 3, "two draws, then the destroys");
