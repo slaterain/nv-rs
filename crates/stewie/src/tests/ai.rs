@@ -146,6 +146,7 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "bFixCombatMissileDepthGamesettings",
         Row::at(AI_FIXES, 19),
     ),
+    ("S0082.01", "bNoAmmoGodmodeFiring", Row::at(AI_FIXES, 71)),
     (
         "S0089.01",
         "bRememberAmmoCountOnLoadSavedCount",

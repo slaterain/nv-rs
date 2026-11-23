@@ -352,6 +352,9 @@ pub(crate) struct Prints {
     /// `[Tweaks] bRunAndGunAPInCombatOnly` (Tweaks' code default 0): S0097 takes action points outside
     /// VATS only in combat with it.
     run_and_gun_combat_only: AtomicBool,
+    /// `[Tweaks] bVATSStopBurstIfTargetDead` (Tweaks' code default 0): S0082.01 leaves the burst's
+    /// ammunition test at `0x94928F` alone with it.
+    vats_stop_burst: AtomicBool,
 }
 
 impl Default for Prints {
@@ -366,6 +369,7 @@ impl Default for Prints {
             slip_guard: AtomicBool::new(false),
             mesh_path: AtomicBool::new(false),
             run_and_gun_combat_only: AtomicBool::new(false),
+            vats_stop_burst: AtomicBool::new(false),
         }
     }
 }
@@ -695,6 +699,18 @@ impl Engine {
     /// Whether the missing-data guard is on for Tweaks' rows ([`Engine::set_stewie_slip_guard`]).
     pub fn stewie_slip_guard(&self) -> bool {
         self.extend.stewie.3.slip_guard.load(Relaxed)
+    }
+
+    /// `[Tweaks] bVATSStopBurstIfTargetDead` (`crates/stewie`'s install): whether S0082.01 leaves the
+    /// burst's ammunition test alone (Tweaks writes its bytes there only without the key).
+    pub fn set_stewie_vats_stop_burst(&self, on: bool) {
+        self.extend.stewie.3.vats_stop_burst.store(on, Relaxed);
+    }
+
+    /// Whether `[Tweaks] bVATSStopBurstIfTargetDead` is set
+    /// ([`Engine::set_stewie_vats_stop_burst`]).
+    pub fn stewie_vats_stop_burst(&self) -> bool {
+        self.extend.stewie.3.vats_stop_burst.load(Relaxed)
     }
 
     /// `[Tweaks] bRunAndGunAPInCombatOnly` (`crates/stewie`'s install): whether S0097 takes action

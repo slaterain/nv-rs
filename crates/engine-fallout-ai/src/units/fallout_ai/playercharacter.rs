@@ -4992,7 +4992,7 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
         let process = process_of(e, this);
         let skip_cancel = e.call(0x00a2_4660, &args![main_state, 4u32, 0u32]).u32() != 0
             && e.global::<u8>(STATE_FLAG_011E07AA) != 0
-            && e.vcall(process, 0x14c, &args![]).u32() != 0
+            && has_ammo_or_godmode_automatic(e, this, process)
             && e.call(0x008a_6970, &args![this]).bool();
         if !skip_cancel {
             let process = process_of(e, this);
@@ -9743,6 +9743,52 @@ fn levelup_held(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
 /// The god mode byte (`g_bIsGodmode`, `011e07ba`).
 const GODMODE_BYTE: u32 = 0x011e_07ba;
 
+/// Whether the player's burst ends for want of ammunition (`00948310`, `0x94928F`: the magazine
+/// entry's count, +4 through `00726070`, is 0). lStewieAl's Tweaks' row S0082.01, written only
+/// without `[Tweaks] bVATSStopBurstIfTargetDead`: a missing entry also ends it.
+fn burst_magazine_empty(e: &mut Engine, magazine: u32) -> bool {
+    if e.stewie(engine_core::extend::stewie::NO_AMMO_GODMODE) && !e.stewie_vats_stop_burst() {
+        magazine == 0 || e.mem.u32(magazine + 4) == 0
+    } else {
+        typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, magazine)) == 0
+    }
+}
+
+/// The weapon's current ammunition for the player's attack (`00948310`, `0x9492B5`, `00525980`).
+/// lStewieAl's Tweaks' row S0082.01 (its `WeaponHasAmmoOrGodmode`): none in god mode (not demigod).
+fn current_ammo_or_godmode(e: &mut Engine, weapon: u32, player: u32) -> u32 {
+    if e.stewie(engine_core::extend::stewie::NO_AMMO_GODMODE)
+        && super::actor_p3::godmode_not_demigod(e)
+    {
+        return 0;
+    }
+    e.call(0x0052_5980, &args![weapon, player]).u32()
+}
+
+/// The ammunition test of `PlayerCharacter::Update`'s held attack (`0x941DD4`: the process' slot
+/// `0x14c`, the ammunition entry, is there). lStewieAl's Tweaks' row S0082.01 (`NoAmmoGodmode`, its
+/// `PlayerHasAmmoInfoOrAutoWeaponAndGodmode` and the bytes after it): without an entry, also true
+/// in god mode (not demigod) for an equipped (slot `0x148`, its form +8) automatic weapon (flag 0x2
+/// of +0x100) with an ammunition form (+0xA8).
+fn has_ammo_or_godmode_automatic(e: &mut Engine, this: Ptr<PlayerCharacter>, process: u32) -> bool {
+    if e.vcall(process, 0x14c, &args![]).u32() != 0 {
+        return true;
+    }
+    if !e.stewie(engine_core::extend::stewie::NO_AMMO_GODMODE)
+        || !super::actor_p3::godmode_not_demigod(e)
+    {
+        return false;
+    }
+    let process = e.mem.u32(this.addr() + 0x68);
+    let entry = if process != 0 {
+        e.vcall(process, 0x148, &args![]).u32()
+    } else {
+        0
+    };
+    let weapon = if entry != 0 { e.mem.u32(entry + 8) } else { 0 };
+    weapon != 0 && e.mem.u8(weapon + 0x100) & 0x2 != 0 && e.mem.u32(weapon + 0xa8) != 0
+}
+
 // Translated from lStewieAl's Tweaks 10.05 (main.h): TCLSetMovementHook.
 /// lStewieAl's Tweaks' row S0096 (`patchTCLMovement`, its call at `0x942793` in place of
 /// `00439ef0`): with collision off, while the jump control (0xC) is held (`00a24660` on the
@@ -10327,13 +10373,18 @@ fn held_attack(
     if action != 0 && weapon != 0 && e.call(0x0052_5980, &args![weapon, player]).u32() != 0 {
         let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
         let magazine = e.vcall(process, 0x14c, &args![]).u32();
-        if typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, magazine)) == 0 {
+        // lStewieAl's Tweaks' row S0082.01 (`NoAmmoGodmode`, the bytes at `0x94928F`, written only
+        // without `[Tweaks] bVATSStopBurstIfTargetDead`): a missing magazine entry also ends the
+        // burst, read directly (+4) where the exe read through the missing entry.
+        if burst_magazine_empty(e, magazine) {
             e.mem.set_u8(action + 8, 0);
         }
     }
     let mut main = false;
     if weapon != 0 {
-        let ammo = e.call(0x0052_5980, &args![weapon, player]).u32();
+        // S0082.01's `WeaponHasAmmoOrGodmode` (called at `0x9492B5`): no ammunition in god mode
+        // (not demigod), so an automatic weapon fires on.
+        let ammo = current_ammo_or_godmode(e, weapon, player);
         let mut recheck = true;
         if ammo == 0 && e.call(0x0052_4b40, &args![weapon]).u8() != 0 {
             main = true;
@@ -21082,6 +21133,83 @@ mod tests {
                 Some(v) => assert_eq!(calls, vec![vec![this.addr(), v.to_bits()]], "on {on}"),
                 None => assert!(calls.is_empty(), "on {on} points {points} only {only}"),
             }
+        }
+    }
+
+    /// S0082.01 (`NoAmmoGodmode`) in the player's attack: the held attack's ammunition test
+    /// (`0x941DD4`) passes with an entry (slot `0x14c`), and with the row in god mode for an
+    /// equipped automatic weapon (flag 0x2 of +0x100) with an ammunition form (+0xA8); the burst
+    /// ends on a missing entry too (without `bVATSStopBurstIfTargetDead`); the current ammunition
+    /// (`00525980`) is none in god mode.
+    #[test]
+    fn s0082_01_god_mode_fires_without_ammunition() {
+        // (row, god, the entry, automatic, an ammunition form, passes)
+        for (on, god, entry, automatic, ammo, passes) in [
+            (false, 1u8, 0u32, true, true, false),
+            (false, 0, 0x7000, false, false, true),
+            (true, 1, 0, true, true, true),
+            (true, 1, 0, false, true, false),
+            (true, 1, 0, true, false, false),
+            (true, 0, 0, true, true, false),
+        ] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::NO_AMMO_GODMODE, on);
+            e.map(0x011e_0000, 0x1000);
+            e.mem.set_u8(GODMODE_BYTE, god);
+            let weapon = e.mem.alloc(0x200);
+            e.mem
+                .set_u8(weapon + 0x100, if automatic { 0x2 } else { 0 });
+            e.mem.set_u32(weapon + 0xa8, if ammo { 0x7100 } else { 0 });
+            let weapon_entry = e.mem.alloc(0xc);
+            e.mem.set_u32(weapon_entry + 8, weapon);
+            let process = answering_object(
+                &mut e,
+                0x0268_0000,
+                &[(0x14c, entry), (0x148, weapon_entry)],
+            );
+            let this = player(&mut e);
+            e.mem.set_u32(this.addr() + 0x68, process);
+            assert_eq!(
+                has_ammo_or_godmode_automatic(&mut e, this, process),
+                passes,
+                "on {on} god {god} entry {entry:#x} automatic {automatic} ammo {ammo}"
+            );
+        }
+        for (on, stop_burst, magazine_there, count, empty) in [
+            (true, false, false, 0u32, true),
+            (true, false, true, 3, false),
+            (true, false, true, 0, true),
+            (false, false, true, 0, true),
+            (true, true, true, 3, false),
+        ] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::NO_AMMO_GODMODE, on);
+            e.set_stewie_vats_stop_burst(stop_burst);
+            let magazine = if magazine_there {
+                let m = e.mem.alloc(0xc);
+                e.mem.set_u32(m + 4, count);
+                m
+            } else {
+                0
+            };
+            e.register(0x0072_6070, |e, a| int(e.mem.u32(a[0] + 4)));
+            assert_eq!(
+                burst_magazine_empty(&mut e, magazine),
+                empty,
+                "on {on} {count}"
+            );
+        }
+        for (on, god, ammo) in [(false, 1u8, 0x7200u32), (true, 1, 0), (true, 0, 0x7200)] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::NO_AMMO_GODMODE, on);
+            e.map(0x011e_0000, 0x1000);
+            e.mem.set_u8(GODMODE_BYTE, god);
+            e.register(0x0052_5980, |_, _| int(0x7200));
+            assert_eq!(
+                current_ammo_or_godmode(&mut e, 0x4400, 0x4500),
+                ammo,
+                "on {on}"
+            );
         }
     }
 

@@ -2006,6 +2006,32 @@ fn target_part_percent(e: &mut Engine, menu: Ptr<VatsMenu>) -> Option<i32> {
     Some(ftol(e, chance * hundred))
 }
 
+/// The god mode byte (`g_bIsGodmode`, `011e07ba`).
+const GODMODE_BYTE: u32 = 0x011e_07ba;
+
+/// The VATS ammunition test at `0x7EDD04`: no ammunition entry (`ammo_list`, the process' slot
+/// `0x14c`), or its count (+4) not above 0. lStewieAl's Tweaks' row S0082.01 (`NoAmmoGodmode`, its
+/// `VATSCheckIsGodmode_HasAnyAmmo` jumped to there, `row`): never in god mode (the byte is 1); else
+/// no entry, or the menu's clip (+0xF0) plus reserve (+0xF4) is 0.0 (or unordered).
+fn vats_out_of_ammo(e: &mut Engine, row: bool, ammo_list: u32, menu: u32) -> bool {
+    if !row {
+        return ammo_list == 0
+            || typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, ammo_list))
+                .into_ret()
+                .i32()
+                <= 0;
+    }
+    if e.mem.u8(GODMODE_BYTE) == 1 {
+        return false;
+    }
+    if ammo_list == 0 {
+        return true;
+    }
+    let total = load_f32(e, menu + 0xf0) as f64 + load_f32(e, menu + 0xf4) as f64;
+    // `FLDZ; FCOMPP; TEST AH,0x40`: out when equal to 0.0 or unordered.
+    total == 0.0 || total.is_nan()
+}
+
 /// `[+0xF4] + [+0xF0]` of the menu (queued total and clip ammo) as x87
 /// adds them.
 fn queued_ammo(e: &Engine, menu: u32) -> f64 {
@@ -2572,7 +2598,12 @@ pub fn vats_menu_do_idle(e: &mut Engine, this: Ptr<VatsMenu>) {
     let thrown = weapon != 0
         && (e.call(WEAPON_KIND, &args![weapon]).u32() == 0xa
             || e.call(WEAPON_KIND, &args![weapon]).u32() == 0xd);
-    let mut fail = thrown && !enough;
+    // lStewieAl's Tweaks' row S0082.01 (`NoAmmoGodmode`): in god mode (`011e07ba`) the throwable,
+    // action point and queued ammunition tests no longer stop the shot (its hooks at `0x7EDC3D`,
+    // `0x7EDCA3` and `0x7EDCE5`), and the ammunition test at `0x7EDD04` is its own.
+    let no_ammo_godmode = e.stewie(engine_core::extend::stewie::NO_AMMO_GODMODE);
+    let godmode = no_ammo_godmode && e.mem.u8(GODMODE_BYTE) != 0;
+    let mut fail = thrown && !enough && !godmode;
     // `TEST AH,0x41; JNZ`: fails when the queued ammo is not above 0.0.
     if !fail && rock_it && !above(queued_ammo(e, m), double_zero(e)) {
         fail = true;
@@ -2582,7 +2613,7 @@ pub fn vats_menu_do_idle(e: &mut Engine, this: Ptr<VatsMenu>) {
     }
     // `FCOMPP; TEST AH,0x41; JP`: fails when the cost is above the points
     // or unordered.
-    if !fail && !at_most(cost as f64, load_f32(e, m + 0xe0) as f64) {
+    if !fail && !at_most(cost as f64, load_f32(e, m + 0xe0) as f64) && !godmode {
         fail = true;
     }
     if !fail
@@ -2592,6 +2623,7 @@ pub fn vats_menu_do_idle(e: &mut Engine, this: Ptr<VatsMenu>) {
             e.call(GET_CURRENT_AMMO, &args![weapon, player]).u32() != 0
         }
         && !above(queued_ammo(e, m), double_zero(e))
+        && !godmode
     {
         fail = true;
     }
@@ -2601,11 +2633,7 @@ pub fn vats_menu_do_idle(e: &mut Engine, this: Ptr<VatsMenu>) {
             let player = e.global::<u32>(PLAYER);
             e.call(GET_CURRENT_AMMO, &args![weapon, player]).u32() != 0
         }
-        && (ammo_list == 0
-            || typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, ammo_list))
-                .into_ret()
-                .i32()
-                <= 0)
+        && vats_out_of_ammo(e, no_ammo_godmode, ammo_list, m)
     {
         fail = true;
     }
@@ -8512,6 +8540,44 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// S0082.01 (`VATSCheckIsGodmode_HasAnyAmmo`, `0x7EDD04`): off, VATS is out of ammunition without an
+    /// entry or with its count (+4) not above 0; with the row never in god mode (the byte 1), else
+    /// without an entry or with the menu's clip (+0xF0) plus reserve (+0xF4) at 0.0 or unordered.
+    #[test]
+    fn s0082_01_vats_needs_no_ammunition_in_god_mode() {
+        // (row, god, the entry, its count, clip, reserve, out)
+        for (on, god, entry, count, clip, reserve, out) in [
+            (false, 1u8, true, 0u32, 2.0f32, 0.0f32, true),
+            (false, 0, true, 3, 0.0, 0.0, false),
+            (true, 1, false, 0, 0.0, 0.0, false),
+            (true, 0, false, 3, 2.0, 0.0, true),
+            (true, 0, true, 0, 2.0, 0.0, false),
+            (true, 0, true, 3, 1.0, -1.0, true),
+            (true, 0, true, 3, f32::NAN, 0.0, true),
+        ] {
+            let mut e = Engine::new();
+            e.set_stewie(engine_core::extend::stewie::NO_AMMO_GODMODE, on);
+            e.map(0x011e_0000, 0x1000);
+            e.mem.set_u8(GODMODE_BYTE, god);
+            let menu = e.mem.alloc(0x200);
+            e.mem.set_f32(menu + 0xf0, clip);
+            e.mem.set_f32(menu + 0xf4, reserve);
+            let list = if entry {
+                let l = e.mem.alloc(0xc);
+                e.mem.set_u32(l + 4, count);
+                l
+            } else {
+                0
+            };
+            e.register(0x0072_6070, |e, a| word(e.mem.u32(a[0] + 4)));
+            assert_eq!(
+                vats_out_of_ammo(&mut e, on, list, menu),
+                out,
+                "on {on} god {god} entry {entry} count {count} {clip} {reserve}"
+            );
+        }
+    }
 
     /// Every function outside the unit that the translations call; each
     /// gets a double answering 0 unless a test replaces it.

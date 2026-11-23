@@ -200,6 +200,8 @@ pub fn install(e: &mut Engine) {
     e.set_stewie_fade_node_prints(settings.long("Tweaks", "bInvalidBSFadeNodePrints", 1) != 0);
     // Read by row S0059 (Tweaks' `g_bExtraConsoleDetailsMeshPath`, code default 0, VNV's 1).
     e.set_stewie_mesh_path(settings.long("Extra Console Details", "bMeshPath", 0) != 0);
+    // Read by row S0082.01 (Tweaks' `g_bVATSStopBurstIfTargetDead`, code default 0, VNV's 0).
+    e.set_stewie_vats_stop_burst(settings.long("Tweaks", "bVATSStopBurstIfTargetDead", 0) != 0);
     // Read by row S0097 (Tweaks' `g_bRunAndGunAPInCombatOnly`, code default 0, VNV's 0).
     e.set_stewie_run_and_gun_combat_only(
         settings.long("Tweaks", "bRunAndGunAPInCombatOnly", 0) != 0,

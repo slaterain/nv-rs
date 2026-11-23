@@ -71,6 +71,14 @@ pub const ROWS: &[Row] = &[
         summary: "a mod or script that changes how deep arrows and spears stick or impale takes effect at once (no change with the game's own data)",
     },
     Row {
+        bit: stewie::NO_AMMO_GODMODE,
+        function: "NoAmmoGodmode",
+        plan: "S0082.01",
+        key: "bNoAmmoGodmodeFiring",
+        tweaks: None,
+        summary: "in god mode you fire without ammunition or action points, in and out of VATS",
+    },
+    Row {
         bit: stewie::AMMO_COUNT_FROM_SAVE,
         function: "RememberAmmoCountOnLoad",
         plan: "S0089.01",
