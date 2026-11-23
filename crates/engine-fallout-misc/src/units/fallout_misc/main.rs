@@ -3281,18 +3281,21 @@ pub fn main_update_non_render_safe_ai_tasks(e: &mut Engine, this: Ptr) {
             e.vcall(dialog, 0x404, &args![0.0f32]);
         }
     }
+    // The hitch log's split of the frame tail (`engine_core::stage_time::TailMark`): a clock read at each mark,
+    // none with the log off; nothing in the game changes.
+    use engine_core::stage_time::{tail_mark, TailMark};
     e.call(0x0096_c240, &args![PROCESS_LISTS, 0.0f32]);
+    tail_mark(TailMark::AiProjectiles);
     if processor_count(e) > 1 {
         e.call(0x0096_c970, &args![PROCESS_LISTS]);
     } else {
         e.call(0x0096_c860, &args![PROCESS_LISTS]);
     }
+    tail_mark(TailMark::AiBones);
     e.call(0x0096_c710, &args![PROCESS_LISTS]);
+    tail_mark(TailMark::AiDetection);
     let seconds = timer_seconds(e);
     e.call(0x0097_81d0, &args![PROCESS_LISTS, seconds]);
-    // The hitch log's split of the frame tail (`engine_core::stage_time::TailMark`): a clock read at each mark,
-    // none with the log off; nothing in the game changes.
-    use engine_core::stage_time::{tail_mark, TailMark};
     tail_mark(TailMark::AiLists);
     let pipboy = e.call(0x0070_5990, &args![]).u32();
     if fn_0086f840(e, Ptr::new(pipboy)) != 0 {

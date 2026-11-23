@@ -94,11 +94,13 @@ in Present, guest heap blocks, Direct3D objects created and bytes uploaded, pipe
 sound buffers, cells attached and detached, saves, loads, script compiles: `crates/engine-core/src/hitch.rs`,
 `crates/d3d9-stream/src/hitch.rs`) and a plain-word guess of the main cause. When the game's frame tail (main after
 `WaitForThreads`) is 2 ms or more, the line splits it at its parts in the order main runs them: the AI tasks (the
-process lists, the Pip-Boy and child attaches, the first task queue's drain, the queued node updates, the
-rest), the delayed script actions, the secondary task queue's end input, drain and begin input (the tasks run by
+projectiles and explosions, the actors' animation scene graphs, the detection lists, the actors' process and
+ragdolls, the Pip-Boy and child attaches, the first task queue's drain, whose tag 0x04 task, the physics results
+applied, is split into the actors' Havok sync, the node updates and the cells' update, the queued node updates,
+the rest), the delayed script actions, the secondary task queue's end input, drain and begin input (the tasks run by
 kind, the time outside them and the turns spent waiting for another thread's input), the queued menu open and
-prints, the 256-step free-list sort (its pool and free list), and the rest (a clock read at each part and two for
-each drained task). Main's time inside the guest heap and in each script run is timed only with `NV_HITCH_HEAP=1` (two
+prints, the 256-step free-list sort (its pool and free list), and the rest, and how much of it main spent on the
+processor (its own clock: Windows on x86-64 and Linux) (a clock read at each part and two for each drained task). Main's time inside the guest heap and in each script run is timed only with `NV_HITCH_HEAP=1` (two
 clock reads a block or a run). An F12 report carries the session's last 1000 lines as `hitches.txt`. It changes nothing in the game.
 
 `NV_STAGE_TIME=1` with `NV_FRAME_LOG` adds columns to each line (`crates/engine-core/src/stage_time.rs`, a
