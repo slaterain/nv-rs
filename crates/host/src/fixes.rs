@@ -71,6 +71,7 @@ pub static FIXES: &[Fix] = &[
     crate::patch_data::STRIP_LOD_WATER,
     crate::direct_files::FIX,
     DRAW_THREAD,
+    BORDER_HAVOK,
 ];
 
 /// The IO manager's wait for queued loads (`00c3dfa0`: main at a cell border, a load, a save) sleeps
@@ -527,6 +528,24 @@ pub const DRAW_THREAD: Fix = Fix {
     install: install_nothing,
 };
 
+/// The border's Havok work on the physics step (OFF in every preset, [`OFF_IN_EVERY_PRESET`], until its in-game
+/// check): at a grid shift in play the drop of the Havok world's add-lock count (`00c6b540` with flag 1: the last 100
+/// queued bodies into the broad phase, then the queued phantoms, actions and constraints, 1.0-1.4 ms of the border
+/// frame in the cellb runs) is left to the same frame's physics step (`bhkWorld::Update`, on AI thread 2 with more
+/// than one processor), which runs it first; any other use of the count, a save, a load and the next grid update run
+/// it before themselves (`engine::units::bshavok::bhkworld`, "border's Havok work on the physics step").
+pub const BORDER_HAVOK: Fix = Fix {
+    name: "border's Havok work on the physics step",
+    env: "NV_BORDER_HAVOK",
+    addresses: &[],
+    summary: "off in every preset until checked: at a cell border the new cells' first physics bodies go into the world on the physics thread just before the physics step, not on the main thread, so the border frame does less on main",
+    install: install_border_havok,
+};
+
+fn install_border_havok(e: &mut Engine) {
+    engine::units::bshavok::bhkworld::border_havok_turn_on(e);
+}
+
 /// UI Organizer built in (`crates/uio`, parts 1 and 2): its lists (`Data\uio\supported.txt` and
 /// `Data\uio\public\*.txt`) put UI mods' additions into the menus, in memory, and every menu file
 /// is read through UIO's reader and parsed by its own XML parser. It changes how every menu file
@@ -602,7 +621,7 @@ fn install_nothing(_: &mut Engine) {}
 
 /// Rows that are off in every preset until the maintainer turns them on: only their own variable or `Fallout.ini`
 /// line turns them on.
-pub const OFF_IN_EVERY_PRESET: &[&str] = &[DRAW_THREAD.env];
+pub const OFF_IN_EVERY_PRESET: &[&str] = &[DRAW_THREAD.env, BORDER_HAVOK.env];
 
 /// The rows that register nothing at an exe address: the menu limit paces the uncapped step;
 /// the extender's rows set flags `crates/nvse` reads.
@@ -629,6 +648,7 @@ const NO_ADDRESS: &[&str] = &[
     XNVSE_EXTRACT_ARGS.name,
     SHADER_WARM.name,
     DRAW_THREAD.name,
+    BORDER_HAVOK.name,
 ];
 
 /// Menus' frames a second at most when nothing says otherwise (the maintainer, 2026-11-07).

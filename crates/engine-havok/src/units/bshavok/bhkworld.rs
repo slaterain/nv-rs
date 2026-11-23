@@ -159,9 +159,117 @@ pub fn bhk_world_set_hk_object(e: &mut Engine, this: Ptr<BhkWorld>, hk_object: u
     e.call(0x00c8_7c50, &args![this, hk_object]);
 }
 
+/// The "border's Havok work on the physics step" row (`NV_BORDER_HAVOK`, OFF in every preset until its in-game
+/// check). At a grid shift in play the game drops the world's add-lock count (`+0x18`) with flag 1 on main
+/// (`00c6b540`): at zero that adds the last (at most 100) queued bodies as one batch (their broad-phase inserts), then
+/// the queued phantoms, actions and constraints. With the row on, `TES::UpdateCurrentGridCell` leaves that one drop
+/// to the same frame's physics step: [`bhk_world_update`] runs it first, before anything of its own, on the thread
+/// that steps (AI thread 2 with more than one processor), so the step sees the world the exe's step sees, with the same
+/// bodies added in the same order. Any other use of the count meanwhile (a raise, a drop, an add of a body, constraint
+/// or action, on any thread) runs the drop first, so every operation on the count happens in the exe's order; a save,
+/// a load and the next frame's grid update finish what is left. What a player cannot see: between the shift and the
+/// step (part of one frame) a query of the world does not find those bodies yet.
+struct DeferredDrops {
+    /// The runs the row is on for (`KernelRef::id`, the same in every real thread's engine of a run).
+    runs: Vec<usize>,
+    /// The drops left for the step: run, world, the drop's flag.
+    drops: Vec<(usize, u32, u32)>,
+}
+
+static DEFERRED_DROPS: std::sync::Mutex<DeferredDrops> = std::sync::Mutex::new(DeferredDrops {
+    runs: Vec::new(),
+    drops: Vec::new(),
+});
+
+/// How many drops are left, for the fast path of the hooks (0 for every run without the row).
+static DEFERRED_DROP_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn deferred_drops() -> std::sync::MutexGuard<'static, DeferredDrops> {
+    DEFERRED_DROPS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Turns the row on for `e`'s run (the host's fixes row installs it).
+pub fn border_havok_turn_on(e: &Engine) {
+    let id = e.kernel.id();
+    let mut d = deferred_drops();
+    if !d.runs.contains(&id) {
+        d.runs.push(id);
+    }
+}
+
+/// Whether the row is on for `e`'s run.
+pub fn border_havok_on(e: &Engine) -> bool {
+    deferred_drops().runs.contains(&e.kernel.id())
+}
+
+/// Leaves the drop of `world`'s add-lock count with `flag` to the world's next step (or to whichever use of the count
+/// comes first). The caller has checked [`border_havok_on`].
+pub fn defer_lock_drop(e: &Engine, world: u32, flag: u32) {
+    let id = e.kernel.id();
+    let mut d = deferred_drops();
+    d.drops.push((id, world, flag));
+    DEFERRED_DROP_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Whether `world` has a drop left for its step in `e`'s run.
+pub fn lock_drop_deferred(e: &Engine, world: u32) -> bool {
+    let id = e.kernel.id();
+    DEFERRED_DROP_COUNT.load(std::sync::atomic::Ordering::SeqCst) != 0
+        && deferred_drops()
+            .drops
+            .iter()
+            .any(|&(run, w, _)| run == id && w == world)
+}
+
+/// Runs the drop left for `world` (`00c6b540` with its flag), if there is one. Taken out of the list first, so the
+/// drop's own calls do not run it again.
+pub fn finish_deferred_lock_drop(e: &mut Engine, world: u32) {
+    if DEFERRED_DROP_COUNT.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+        return;
+    }
+    let id = e.kernel.id();
+    let taken = {
+        let mut d = deferred_drops();
+        let at = d
+            .drops
+            .iter()
+            .position(|&(run, w, _)| run == id && w == world);
+        at.map(|i| {
+            DEFERRED_DROP_COUNT.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            d.drops.remove(i).2
+        })
+    };
+    if let Some(flag) = taken {
+        e.call(0x00c6_b540, &args![world, flag]);
+    }
+}
+
+/// Runs every drop `e`'s run has left, oldest first: a save's and a load's start, the next frame's grid update.
+pub fn finish_deferred_lock_drops(e: &mut Engine) {
+    loop {
+        if DEFERRED_DROP_COUNT.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            return;
+        }
+        let id = e.kernel.id();
+        let world = deferred_drops()
+            .drops
+            .iter()
+            .find(|&&(run, _, _)| run == id)
+            .map(|&(_, w, _)| w);
+        match world {
+            Some(world) => finish_deferred_lock_drop(e, world),
+            None => return,
+        }
+    }
+}
+
 // Translated from 00c66300 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Increments the counter at `this + 0x18`.
 pub fn bhk_world_increment_batch_add(e: &mut Engine, this: Ptr) {
+    // The "border's Havok work on the physics step" row: a drop left for the step comes first.
+    finish_deferred_lock_drop(e, this.addr());
     let count = e.mem.u32(this.addr() + 0x18);
     e.mem.set_u32(this.addr() + 0x18, count.wrapping_add(1));
 }
@@ -1143,13 +1251,19 @@ pub fn fn_00c674d0(e: &mut Engine, this: Ptr, entities: Ptr, count: u32) {
         return;
     }
     // The hitch log's timer and count (main only; no effect on the game): the queued bodies added to the world as
-    // one batch, their broad-phase inserts included.
-    let _timed = engine_core::hitch::Timed::main(engine_core::hitch::Count::HavokBodiesAddNs);
+    // one batch, their broad-phase inserts included; apart, the batches forced while the world's add-lock count
+    // (`+0x18`) is still up: a full queue (3,000 bodies, 200 constraints or phantoms, 100 actions) adds bodies
+    // wherever the add that filled it runs.
+    use engine_core::hitch::Count as Hitch;
+    let forced = e.mem.u32(this.addr() + 0x18) != 0;
+    let (bodies, time) = if forced {
+        (Hitch::HavokBodiesForced, Hitch::HavokBodiesForcedNs)
+    } else {
+        (Hitch::HavokBodiesAdded, Hitch::HavokBodiesAddNs)
+    };
+    let _timed = engine_core::hitch::Timed::main(time);
     if !engine_core::real_threads::on_other_game_thread() {
-        engine_core::hitch::add(
-            engine_core::hitch::Count::HavokBodiesAdded,
-            u64::from(count),
-        );
+        engine_core::hitch::add(bodies, u64::from(count));
     }
     e.call(0x00c9_4bd0, &args![world, entities, count, 0u32]);
     let mut island_split = false;
@@ -2022,6 +2136,8 @@ pub fn bhk_world_cinfo_delete(e: &mut Engine, this: Ptr, flags: u8) -> Ptr {
 /// true when queued or when the object has no body to remove, otherwise the
 /// result byte of the immediate removal.
 pub fn bhk_world_remove(e: &mut Engine, this: Ptr<BhkWorld>, object: Ptr) -> bool {
+    // The "border's Havok work on the physics step" row: a drop left for the step comes first.
+    finish_deferred_lock_drop(e, this.addr());
     let world = hk_world(e, this.cast());
     if world == 0 || object.is_null() {
         return false;
@@ -2067,6 +2183,8 @@ pub fn bhk_world_remove(e: &mut Engine, this: Ptr<BhkWorld>, object: Ptr) -> boo
 /// or removes it from the `hkpWorld` at once (`00c92c70`). True whenever
 /// both the world and the object exist.
 pub fn bhk_world_remove_ov2(e: &mut Engine, this: Ptr<BhkWorld>, object: Ptr) -> bool {
+    // The "border's Havok work on the physics step" row: a drop left for the step comes first.
+    finish_deferred_lock_drop(e, this.addr());
     let world = hk_world(e, this.cast());
     if world == 0 || object.is_null() {
         return false;
@@ -2103,6 +2221,8 @@ pub fn bhk_world_remove_ov2(e: &mut Engine, this: Ptr<BhkWorld>, object: Ptr) ->
 /// non-zero; a full batch is flushed first) or removes it from the
 /// `hkpWorld` at once (`00c97e80`). True whenever both exist.
 pub fn bhk_world_remove_ov3(e: &mut Engine, this: Ptr<BhkWorld>, object: Ptr) -> bool {
+    // The "border's Havok work on the physics step" row: a drop left for the step comes first.
+    finish_deferred_lock_drop(e, this.addr());
     let world = hk_world(e, this.cast());
     if world == 0 || object.is_null() {
         return false;
@@ -3530,6 +3650,8 @@ pub fn fn_00c6aca0(e: &mut Engine, this: Ptr<BhkWorld>) {
 /// stepped. Finally the remaining entity removals are flushed, a scheduled
 /// visual debugger is created (`012677cd`) and the updating byte is cleared.
 pub fn bhk_world_update(e: &mut Engine, this: Ptr<BhkWorld>) -> bool {
+    // The "border's Havok work on the physics step" row: the grid shift's drop of the add-lock count, before anything.
+    finish_deferred_lock_drop(e, this.addr());
     e.set_global(GLOBAL_WORLD_FLOAT, 0.0f32);
     e.set_global(GLOBAL_UPDATING, 1u8);
     e.set_global(GLOBAL_WORLD_INTEGER, 0u32);
@@ -3680,6 +3802,8 @@ fn entity_add_flag(e: &mut Engine, owner: u32, object: Ptr) -> u32 {
 /// first, and the entity tail when entities are pending and no partial flush
 /// ran yet).
 pub fn bhk_world_add(e: &mut Engine, this: Ptr<BhkWorld>, object: Ptr) {
+    // The "border's Havok work on the physics step" row: a drop left for the step comes first.
+    finish_deferred_lock_drop(e, this.addr());
     if this.is_null() {
         return;
     }
@@ -3747,6 +3871,8 @@ pub fn bhk_world_add(e: &mut Engine, this: Ptr<BhkWorld>, object: Ptr) {
 /// a full batch of 200 first flushes the entity batch (`fn_00c68a40`) and the
 /// other pending batches.
 pub fn bhk_world_add_ov2(e: &mut Engine, this: Ptr<BhkWorld>, constraint: Ptr) {
+    // The "border's Havok work on the physics step" row: a drop left for the step comes first.
+    finish_deferred_lock_drop(e, this.addr());
     if this.is_null() {
         return;
     }
@@ -3792,6 +3918,8 @@ pub fn bhk_world_add_ov2(e: &mut Engine, this: Ptr<BhkWorld>, constraint: Ptr) {
 /// (`fn_00c68b50`) under a temporary reference.
 // Translation incomplete: 00c6b3c0 - SEH exception unwinding is unsupported.
 pub fn bhk_world_add_ov3(e: &mut Engine, this: Ptr<BhkWorld>, action: Ptr) {
+    // The "border's Havok work on the physics step" row: a drop left for the step comes first.
+    finish_deferred_lock_drop(e, this.addr());
     let scope = enter_scope(e);
     if !this.is_null() {
         let world = hk_world(e, this.cast());
@@ -8373,6 +8501,125 @@ mod tests {
         e.set_global(GLOBAL_ENTITY_FLUSH_LIMIT, 100u32);
         e.call(0x00c6_ae70, &args![this]);
         assert_eq!(e.get(this, BhkWorld::iEntityBatchCount), 2900);
+    }
+
+    /// The "border's Havok work on the physics step" row: the drop of the add-lock count a grid shift left is the
+    /// step's first call, with its flag, before the step's own entity tail; it adds the shift's batch (the last 100
+    /// queued) exactly as the drop on main would have, and runs once.
+    #[test]
+    fn a_deferred_lock_drop_is_the_first_thing_the_step_does() {
+        let mut e = engine();
+        let (this, _) = stepping_world(&mut e, 0);
+        border_havok_turn_on(&e);
+        // The batch itself is a double here: the drop hands it over and shortens the queue.
+        quiet(&mut e, &[0x00c6_74d0]);
+        assert!(border_havok_on(&e));
+        let array = e.mem.alloc(0x400 * 4);
+        e.set(this, BhkWorld::pEntityBatch, Ptr::new(array));
+        e.set(this, BhkWorld::iEntityBatchCount, 250);
+        e.set_global(GLOBAL_ENTITY_FLUSH_LIMIT, 100u32);
+        e.set_global(GLOBAL_PARTIAL_FLUSH_DONE, 0u8);
+        e.mem.set_u32(this.addr() + 0x18, 1);
+        defer_lock_drop(&e, this.addr(), 1);
+        assert!(lock_drop_deferred(&e, this.addr()));
+        log(&mut e);
+        assert!(e.call(0x00c6_ae70, &args![this]).bool());
+        let seen = calls(&mut e);
+        let order = addresses(&seen);
+        let drop_at = order.iter().position(|a| *a == 0x00c6_b540).unwrap();
+        assert!(
+            order[..drop_at].iter().all(|a| *a == 0x00c6_ae70),
+            "{order:x?}"
+        );
+        assert_eq!(calls_to(&seen, 0x00c6_b540), [[this.addr(), 1]]);
+        // The drop's batch: the last 100 of the 250, once (the step's own tail sees the frame's batch done).
+        assert_eq!(
+            calls_to(&seen, 0x00c6_74d0),
+            [[this.addr(), array + 150 * 4, 100]]
+        );
+        assert_eq!(e.get(this, BhkWorld::iEntityBatchCount), 150);
+        assert_eq!(e.mem.u32(this.addr() + 0x18), 0);
+        let batch_at = order.iter().position(|a| *a == 0x00c6_74d0).unwrap();
+        let step_at = order
+            .iter()
+            .position(|a| *a == WORLD_STEP_DELTA_TIME)
+            .unwrap();
+        assert!(batch_at < step_at);
+        assert!(!lock_drop_deferred(&e, this.addr()));
+        // Nothing left: the next step runs no drop.
+        log(&mut e);
+        e.call(0x00c6_ae70, &args![this]);
+        assert!(calls_to(&calls(&mut e), 0x00c6_b540).is_empty());
+    }
+
+    /// Any use of the add-lock count (a raise, a drop, an add, a removal) runs a deferred drop first, so the count's
+    /// operations keep the exe's order; a finish runs every drop of its own run, oldest first, and no other run's.
+    #[test]
+    fn any_use_of_the_lock_count_runs_a_deferred_drop_first() {
+        let mut e = engine();
+        let this = world_with(&mut e, 0).addr();
+        let other = world_with(&mut e, 0).addr();
+        border_havok_turn_on(&e);
+        // A raise: the drop (1 -> 0), then the raise (0 -> 1).
+        e.mem.set_u32(this + 0x18, 1);
+        defer_lock_drop(&e, this, 1);
+        log(&mut e);
+        e.call(0x00c6_6300, &args![this]);
+        let seen = calls(&mut e);
+        assert_eq!(addresses(&seen)[..2], [0x00c6_6300, 0x00c6_b540]);
+        assert_eq!(calls_to(&seen, 0x00c6_b540), [[this, 1]]);
+        assert_eq!(e.mem.u32(this + 0x18), 1);
+        // A drop: the deferred one first (2 -> 1), then this one (1 -> 0).
+        e.mem.set_u32(this + 0x18, 2);
+        defer_lock_drop(&e, this, 1);
+        log(&mut e);
+        e.call(0x00c6_b540, &args![this, 0u32]);
+        assert_eq!(
+            calls_to(&calls(&mut e), 0x00c6_b540),
+            [[this, 0], [this, 1]]
+        );
+        assert_eq!(e.mem.u32(this + 0x18), 0);
+        // An add and a removal of each kind.
+        for function in [
+            0x00c6_b0a0u32,
+            0x00c6_b320,
+            0x00c6_b3c0,
+            0x00c6_8bf0,
+            0x00c6_8cb0,
+            0x00c6_8d50,
+        ] {
+            e.mem.set_u32(this + 0x18, 1);
+            defer_lock_drop(&e, this, 1);
+            log(&mut e);
+            e.call(function, &args![this, 0u32]);
+            let seen = calls(&mut e);
+            assert_eq!(calls_to(&seen, 0x00c6_b540), [[this, 1]], "{function:08x}");
+            assert!(!lock_drop_deferred(&e, this));
+        }
+        // A finish: this run's drops, oldest first; another run's stay.
+        let mut second = engine();
+        let elsewhere = world_with(&mut second, 0).addr();
+        border_havok_turn_on(&second);
+        e.mem.set_u32(this + 0x18, 1);
+        e.mem.set_u32(other + 0x18, 1);
+        second.mem.set_u32(elsewhere + 0x18, 1);
+        defer_lock_drop(&e, other, 1);
+        defer_lock_drop(&e, this, 1);
+        defer_lock_drop(&second, elsewhere, 1);
+        log(&mut e);
+        finish_deferred_lock_drops(&mut e);
+        assert_eq!(
+            calls_to(&calls(&mut e), 0x00c6_b540),
+            [[other, 1], [this, 1]]
+        );
+        assert!(lock_drop_deferred(&second, elsewhere));
+        log(&mut second);
+        finish_deferred_lock_drops(&mut second);
+        assert_eq!(calls_to(&calls(&mut second), 0x00c6_b540).len(), 1);
+        // Nothing left: a finish calls nothing.
+        log(&mut e);
+        finish_deferred_lock_drops(&mut e);
+        assert!(calls(&mut e).is_empty());
     }
 
     /// A world with an `hkpWorld` for the add functions, every callee doubled.

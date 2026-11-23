@@ -875,6 +875,14 @@ impl Frame {
             ),
         );
         put(
+            g(Count::HavokBodiesForcedNs) / TENTH_MS,
+            format!(
+                "{} Havok bodies added on main by a full queue in {:.1} ms",
+                g(Count::HavokBodiesForced),
+                ms(g(Count::HavokBodiesForcedNs))
+            ),
+        );
+        put(
             g(Count::CellAttachNs) / TENTH_MS,
             format!("cell attach {:.1} ms", ms(g(Count::CellAttachNs))),
         );
@@ -1331,6 +1339,17 @@ mod tests {
         let line = f.line();
         assert!(
             line.contains("2 grid cells made, 100 queued Havok bodies added on main in 1.3 ms, "),
+            "{line}"
+        );
+        // The batches a full queue forced while the world was still locked: apart, after the others.
+        f.game[Count::HavokBodiesForced as usize] = 100;
+        f.game[Count::HavokBodiesForcedNs as usize] = 800_000;
+        let line = f.line();
+        assert!(
+            line.contains(
+                "100 queued Havok bodies added on main in 1.3 ms, \
+                 100 Havok bodies added on main by a full queue in 0.8 ms, "
+            ),
             "{line}"
         );
         assert!(

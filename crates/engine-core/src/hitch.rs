@@ -128,12 +128,16 @@ pub enum Count {
     /// broad-phase inserts, then each body's island and activation): the bodies and the time (ns). A body is queued
     /// while the world's lock count is up (`bhkWorld::Add`, `00c6b0a0`); the batches run when the count drops to
     /// zero, at most 100 a frame with the drop's flag set, and from `bhkWorld::Update` (on the AI thread, not counted).
+    /// A full queue (3,000 bodies, 200 constraints or phantoms, 100 actions) adds bodies wherever the add that filled
+    /// it runs, with the count still up: those batches count apart, in `HavokBodiesForced`/`HavokBodiesForcedNs`.
     HavokBodiesAdded,
     HavokBodiesAddNs,
+    HavokBodiesForced,
+    HavokBodiesForcedNs,
 }
 
 /// How many counts there are.
-pub const COUNTS: usize = Count::HavokBodiesAddNs as usize + 1;
+pub const COUNTS: usize = Count::HavokBodiesForcedNs as usize + 1;
 
 /// Times main's work from [`Timed::main`] to its drop into a `...Ns` count: nothing on another game thread or with
 /// the log off. One clock read at each end, at places that run a few times a frame at most and do far more work.

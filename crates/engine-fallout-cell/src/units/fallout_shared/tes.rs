@@ -1137,6 +1137,8 @@ pub fn fn_00450d80(e: &mut Engine, this: Ptr<TES>) {
 ///
 /// A cell is attached when its load state is 3 and detached when it is 6.
 pub fn tes_cull_grid_cells(e: &mut Engine, this: Ptr<TES>, detach: u8, _unused: u32) {
+    // The "border's Havok work on the physics step" row: a drop left for the step runs before the grid's attach or detach.
+    engine_havok::units::bshavok::bhkworld::finish_deferred_lock_drops(e);
     let data_handler: u32 = e.global(DATA_HANDLER);
     if data_handler == 0 {
         return;
@@ -2381,6 +2383,8 @@ pub fn fn_00452540(e: &mut Engine, _this: Ptr<TES>) -> u8 {
 /// unloaded and attached again with the havok world locked, then the terrain
 /// manager is updated at the player and true is returned.
 pub fn tes_update_current_grid_cell(e: &mut Engine, this: Ptr<TES>, pos: Ptr, flag: u8) -> bool {
+    // The "border's Havok work on the physics step" row: a drop the last step did not take runs now.
+    engine_havok::units::bshavok::bhkworld::finish_deferred_lock_drops(e);
     let base = this.addr();
     let list = e.call(GET_LAST_LOADED_EXTERIORS, &args![this]).u32();
     e.call(0x0047_0470, &args![list]);
@@ -2661,7 +2665,13 @@ pub fn tes_update_current_grid_cell(e: &mut Engine, this: Ptr<TES>, pos: Ptr, fl
                 e.call(HAVOK_WORLD_DROP_COUNT_18, &args![world, 0u32]);
             } else {
                 let world = fn_00451010(e);
-                e.call(HAVOK_WORLD_DROP_COUNT_18, &args![world, flag]);
+                use engine_havok::units::bshavok::bhkworld::{border_havok_on, defer_lock_drop};
+                if flag != 0 && border_havok_on(e) {
+                    // The "border's Havok work on the physics step" row: this frame's step drops the count.
+                    defer_lock_drop(e, world, u32::from(flag));
+                } else {
+                    e.call(HAVOK_WORLD_DROP_COUNT_18, &args![world, flag]);
+                }
             }
         }
     }
@@ -9213,6 +9223,40 @@ mod tests {
         assert_eq!(drops.len(), 3);
         assert_eq!(drops[2], vec![0x8000, 7]);
         assert_eq!(count_calls(&log, 0x0045_7be0), 0);
+    }
+
+    /// The "border's Havok work on the physics step" row: a one-cell move with the flag set leaves its last drop of
+    /// the world's add-lock count (block 4) to the world's step; the grid array load's two drops stay. A far move and
+    /// a move with the flag clear drop it as the exe does.
+    #[test]
+    fn grid_move_with_the_border_havok_row_leaves_the_last_drop_to_the_step() {
+        use engine_havok::units::bshavok::bhkworld::{border_havok_turn_on, lock_drop_deferred};
+        let (mut e, tes, _, _) = update_engine(5);
+        install_player(&mut e, 0);
+        border_havok_turn_on(&e);
+        let log = grid_move(&mut e, tes, 11, 7);
+        let drops = calls_to(&log, HAVOK_WORLD_DROP_COUNT_18);
+        assert_eq!(drops, vec![vec![0x8000, 0], vec![0x8000, 0]]);
+        assert!(lock_drop_deferred(&e, 0x8000));
+        // The next grid update runs it first, on main (no step took it), as `00c6b540(world, 7)`.
+        let pos = position(&mut e, 11.0 * 4096.0 + 2048.0, 20.0 * 4096.0 + 2048.0);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_2580, &args![tes, pos, 1u8]);
+        });
+        assert_eq!(
+            calls_to(&log, HAVOK_WORLD_DROP_COUNT_18),
+            vec![vec![0x8000, 7]]
+        );
+        let order: Vec<u32> = log.iter().map(|(a, _)| *a).collect();
+        let at = |addr| order.iter().position(|a| *a == addr).unwrap();
+        assert!(at(HAVOK_WORLD_DROP_COUNT_18) < at(GET_LAST_LOADED_EXTERIORS));
+        assert!(!lock_drop_deferred(&e, 0x8000));
+        // The flag clear: the exe's drops (block 1, the grid array load's two, block 4 with 0).
+        let log = grid_move(&mut e, tes, 12, 0);
+        let drops = calls_to(&log, HAVOK_WORLD_DROP_COUNT_18);
+        assert_eq!(drops.len(), 4);
+        assert_eq!(drops[3], vec![0x8000, 0]);
+        assert!(!lock_drop_deferred(&e, 0x8000));
     }
 
     #[test]
