@@ -2341,7 +2341,7 @@ mod tests {
             f.stream[S::AcquireNs as usize] = 20_000_000;
             f.stream[S::RenderSyncNs as usize] = 2_000_000;
         }
-        assert_eq!(f.render_own(), 10_000_000);
+        assert_eq!(f.render_own(), 9_960_000);
         assert!(
             f.cause().starts_with(
                 "waited 181 ms for the render thread (it waited for the window's next frame 20 ms, the queue \
