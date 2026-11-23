@@ -5825,7 +5825,7 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
         e.mem.set_u8(status_slot, 0);
         let progression = e.call(0x0046_4e10, &args![this]).u32();
         if e.call(0x008d_51f0, &args![progression]).bool()
-            && !e.call(0x0095_3c50, &args![this, status_slot]).bool()
+            && !levelup_combat_test(e, this, status_slot)
             && !e.call(0x0052_5430, &args![VATS_OBJECT]).bool()
             && e.call(0x0094_44a0, &args![]).bool()
             && e.call(0x0070_9be0, &args![]).bool()
@@ -9743,6 +9743,25 @@ fn levelup_held(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
 
 /// The god mode byte (`g_bIsGodmode`, `011e07ba`).
 const GODMODE_BYTE: u32 = 0x011e_07ba;
+
+/// The level-up's combat test in `PlayerCharacter::Update` (`0x943990`,
+/// `PlayerCharacter::IsPlayerCharacterInCombat` `00953c50`: the byte +0xDF0, and +0xDF1 into
+/// `out`). lStewieAl's Tweaks' row S0404 (`patchDelayLevelupAfterCombat`, its
+/// `PlayerWasRecentlyInCombat`): in combat the time (`011f6394` +0x14, milliseconds) is kept
+/// (`LAST_COMBAT_TIME`); out of combat, true until 3000 have passed since (unsigned); `out` is not
+/// written.
+fn levelup_combat_test(e: &mut Engine, this: Ptr<PlayerCharacter>, out: u32) -> bool {
+    if !e.stewie(engine_core::extend::stewie::DELAY_LEVELUP_AFTER_COMBAT) {
+        return e.call(0x0095_3c50, &args![this, out]).bool();
+    }
+    let kept = e.stewie_kept(engine_core::extend::stewie::kept::LAST_COMBAT_TIME, 4);
+    let now = e.mem.u32(0x011f_6394 + 0x14);
+    if e.mem.u8(this.addr() + 0xdf0) != 0 {
+        e.mem.set_u32(kept, now);
+        return true;
+    }
+    now.wrapping_sub(e.mem.u32(kept)) < 3000
+}
 
 /// A movement direction's test in `PlayerCharacter::Update` (`00a24660` on `input`: the control
 /// `key` pressed (1) or held (0)). With lStewieAl's Tweaks' row S0329 (`cancel`): the opposite
@@ -21254,6 +21273,36 @@ mod tests {
                 "on {on} pressed {pressed} held {held} right {right}"
             );
         }
+    }
+
+    /// S0404 (`PlayerWasRecentlyInCombat`, `0x943990`): off, the level-up's combat test is
+    /// `00953c50`; with the row, in combat (+0xDF0) it keeps the time (`011f6394` +0x14) and
+    /// answers true, and out of combat it answers true until 3000 have passed (5000 -> 7999: true,
+    /// 8000: false); the out byte is not written.
+    #[test]
+    fn s0404_the_level_up_waits_after_combat() {
+        let mut e = engine();
+        e.map(0x011f_6000, 0x1000);
+        e.register(0x0095_3c50, |_, _| int(0));
+        let this = player(&mut e);
+        let out = e.mem.alloc(4);
+        e.mem.set_u8(out, 0x55);
+        e.mem.set_u8(this.addr() + 0xdf0, 1);
+        e.mem.set_u32(0x011f_6394 + 0x14, 5000);
+        assert!(!levelup_combat_test(&mut e, this, out), "off");
+        assert_eq!(called(&e, 0x0095_3c50).len(), 1);
+        e.set_stewie(
+            engine_core::extend::stewie::DELAY_LEVELUP_AFTER_COMBAT,
+            true,
+        );
+        assert!(levelup_combat_test(&mut e, this, out), "in combat");
+        e.mem.set_u8(this.addr() + 0xdf0, 0);
+        for (now, recent) in [(7999u32, true), (8000, false)] {
+            e.mem.set_u32(0x011f_6394 + 0x14, now);
+            assert_eq!(levelup_combat_test(&mut e, this, out), recent, "now {now}");
+        }
+        assert_eq!(e.mem.u8(out), 0x55);
+        assert_eq!(called(&e, 0x0095_3c50).len(), 1);
     }
 
     #[test]

@@ -544,6 +544,14 @@ pub const ROWS: &[Row] = &[
         summary: "changes play: holding two opposite movement keys (left and right, forward and back) moves neither way",
     },
     Row {
+        bit: stewie::DELAY_LEVELUP_AFTER_COMBAT,
+        function: "patchDelayLevelupAfterCombat",
+        plan: "S0404",
+        key: "bDelayLevelupAfterCombat",
+        tweaks: Some(("Tweaks", "bDelayPostCombatLevelUp")),
+        summary: "changes play: the level-up menu waits until 3 seconds after combat ends",
+    },
+    Row {
         bit: stewie::GODMODE_NO_LEG_CRIPPLE_SOUND,
         function: "GodmodePreventsLegCrippleSound",
         plan: "S0410",

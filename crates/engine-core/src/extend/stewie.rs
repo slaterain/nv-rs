@@ -320,8 +320,11 @@ pub mod kept {
     pub const COMBAT_SOUND_PLAYER_TARGET: usize = 8;
     /// S0926's `static UInt32 lastRNG` (4 bytes): the extra wait drawn for that actor's next line.
     pub const COMBAT_SOUND_TARGET_WAIT: usize = 9;
+    /// S0404's `static int lastCombatTime` (4 bytes): the time (milliseconds) the player was last in
+    /// combat.
+    pub const LAST_COMBAT_TIME: usize = 10;
     /// How many.
-    pub const COUNT: usize = 10;
+    pub const COUNT: usize = 11;
 }
 
 /// The last thing each of Tweaks' warnings printed (its functions' statics), its print queue and

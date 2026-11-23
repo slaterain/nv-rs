@@ -247,3 +247,6 @@ pub const NO_AMMO_GODMODE: Row = Row::share(AI_FIXES, AI_FIXES_END, 71);
 /// S0329 `patchLeftRightMovementCancelsOut` (`PlayerCharacter::Update` `0093e860` (`0x941BBA`,
 /// `0x941C11`, `0x941C67`, `0x941CBD`)): holding two opposite movement keys moves neither way.
 pub const OPPOSITE_KEYS_CANCEL: Row = Row::share(AI_FIXES, AI_FIXES_END, 72);
+/// S0404 `patchDelayLevelupAfterCombat` (`PlayerCharacter::Update` `0093e860` (`0x943990`)): the
+/// level-up menu waits 3 seconds after combat ends.
+pub const DELAY_LEVELUP_AFTER_COMBAT: Row = Row::share(AI_FIXES, AI_FIXES_END, 73);
