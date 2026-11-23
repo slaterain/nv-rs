@@ -615,6 +615,14 @@ pub const ROWS: &[Row] = &[
         summary: "the console does not open during the game's first load",
     },
     Row {
+        bit: stewie::NO_RED_CROSSHAIR_ON_INVISIBLE,
+        function: "patchHideRedCrosshairOnDistantInvisibleTargets",
+        plan: "S0550",
+        key: "bHideRedCrosshairOnDistantInvisibleTargets",
+        tweaks: Some(("Tweaks", "bHideRedCrosshairOnDistantInvisibleTargets")),
+        summary: "an invisible actor under the crosshair gets no red crosshair or health bar",
+    },
+    Row {
         bit: stewie::NO_PLAYER_NAME_LIMIT,
         function: "patchNoCharacterNameLimit",
         plan: "S0556",

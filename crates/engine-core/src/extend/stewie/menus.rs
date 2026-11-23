@@ -317,3 +317,8 @@ pub const HOTKEY_DESELECT: Row = tweak(13);
 /// bOnlyWhenNPCSpeaks = 1`; `DialogMenu::DoIdle` at `0x762967`): the cursor is hidden while the
 /// dialogue menu is on top and the speaker is talking.
 pub const DIALOG_HIDES_CURSOR: Row = tweak(14);
+/// S0550 `patchHideRedCrosshairOnDistantInvisibleTargets` (`[Tweaks]
+/// bHideRedCrosshairOnDistantInvisibleTargets`; `HUDMainMenu::SetTargetType` at `0x772DA0`): an
+/// invisible or chameleon actor is not taken as the aimed actor unless the player has Improved
+/// Detection, so it gets no red crosshair or health bar.
+pub const NO_RED_CROSSHAIR_ON_INVISIBLE: Row = tweak(15);

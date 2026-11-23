@@ -4103,10 +4103,33 @@ pub fn hud_main_menu_update_sneak(e: &mut Engine, _this: Ptr<HUDMainMenu>) {
     });
 }
 
+/// Stewie S0550 (Tweaks' `ShouldHideActor`, through `CheckCompassTargetForHealthbarHook` at
+/// `0x772DA0`): an aimed actor counts as none when the player has no Improved Detection
+/// (`BGSEntryPoint::HandleEntryPoint` `005e58f0` with entry point 0x45 on 0.0 leaves it not above
+/// 0.0) and the actor's Invisibility (0x30) or Chameleon (0x31) is not 0 (the actor value owner
+/// at +0xA4, `GetActorValueInt` slot +8).
+fn stewie_hides_invisible_actor(e: &mut Engine, actor: u32) -> bool {
+    let player = e.mem.u32(0x011d_ea3c);
+    let improved = e.with_stack(4, |e, value| {
+        let value = value.addr();
+        e.mem.set_u32(value, 0.0f32.to_bits());
+        e.call(0x005e_58f0, &args![0x45_u32, player, value]);
+        e.mem.f32(value) > 0.0
+    });
+    if improved {
+        return false;
+    }
+    e.vcall(actor + 0xa4, 8, &args![0x30_u32]).i32() != 0
+        || e.vcall(actor + 0xa4, 8, &args![0x31_u32]).i32() != 0
+}
+
 // Translated from 00772d10 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `HUDMainMenu::SetTargetType` (Xbox PDB): decides whether the aimed actor
 /// can become the health target, then updates the enemy tiles and cached
 /// perceived/essential flags.
+///
+/// Stewie S0550 (`[Tweaks] bHideRedCrosshairOnDistantInvisibleTargets`): an invisible or
+/// chameleon actor is not taken as the aimed actor ([`stewie_hides_invisible_actor`]).
 pub fn hud_main_menu_set_target_type(e: &mut Engine, target: Ptr, enabled: bool) {
     let mut perceived = false;
     let mut actor_blocked = true;
@@ -4126,11 +4149,17 @@ pub fn hud_main_menu_set_target_type(e: &mut Engine, target: Ptr, enabled: bool)
         }
     } else {
         e.call(0x0057_9280, &args![target]);
-        let actor = if e.vcall(target.addr(), 0x100, &args![]).bool() {
+        let mut actor = if e.vcall(target.addr(), 0x100, &args![]).bool() {
             target.addr()
         } else {
             0
         };
+        if actor != 0
+            && e.stewie(engine_core::extend::stewie::NO_RED_CROSSHAIR_ON_INVISIBLE)
+            && stewie_hides_invisible_actor(e, actor)
+        {
+            actor = 0;
+        }
         actor_blocked = actor != 0 && e.vcall(actor, 0x22c, &args![0_u32]).bool();
         if actor != 0 {
             let player = e.mem.u32(0x011d_ea3c);
@@ -10608,6 +10637,86 @@ mod tests {
         hud_main_menu_set_target_type(&mut e, Ptr::NULL, true);
         assert_eq!(e.mem.u8(0x011d_96ba), 0);
         assert_eq!(e.mem.u8(0x011d_96b9), 1);
+    }
+
+    /// Stewie S0550 (`0x772DA0`): with the row on, an aimed actor that is invisible or a
+    /// chameleon, the player without Improved Detection, is taken as no actor: it is not looked
+    /// at for being perceived (the flag at `011d96ba` stays clear).
+    #[test]
+    fn stewie_s0550_an_invisible_target_is_no_aimed_actor() {
+        // (row, Improved Detection's value, Invisibility, Chameleon, taken as the actor)
+        for (on, detection, invisibility, chameleon, taken) in [
+            (false, 0.0f32, 1_u32, 0_u32, true),
+            (true, 0.0, 1, 0, false),
+            (true, 0.0, 0, 1, false),
+            (true, 0.0, 0, 0, true),
+            (true, 0.5, 1, 1, true),
+        ] {
+            let mut e = Engine::new();
+            e.map(0x011d_8000, 0x7000);
+            let menu = e.new_object::<HUDMainMenu>();
+            e.mem.set_u32(0x011d_96c0, menu.addr());
+            e.mem.set_u32(0x011d_ea3c, 0x9000);
+            // Both settings (`00408d60`) read as not set.
+            let unset = e.mem.alloc(4);
+            e.register_double(0x0040_8d60, move |_, _| Ret {
+                eax: unset,
+                ..Ret::default()
+            });
+            // The target: an actor (slot +0x100), not dead (slot +0x22c), with its actor value
+            // owner at +0xA4 (`GetActorValueInt` slot +8, the base at slot 0).
+            let target = e.mem.alloc(0x100);
+            let mut slots = [0_u32; 0x8c];
+            slots[0x100 / 4] = 0x0300_5100;
+            slots[0x22c / 4] = 0x0300_522c;
+            e.put_vtable(0x0300_5000, &slots);
+            e.mem.set_u32(target, 0x0300_5000);
+            e.register_double(0x0300_5100, |_, _| Ret {
+                eax: 1,
+                ..Ret::default()
+            });
+            e.register_double(0x0300_522c, |_, _| Ret::default());
+            e.put_vtable(0x0300_6000, &[0x0300_6100, 0, 0x0300_6108]);
+            e.mem.set_u32(target + 0xa4, 0x0300_6000);
+            e.register_double(0x0300_6100, |_, _| Ret::default());
+            e.register_double(0x0300_6108, move |_, words| Ret {
+                eax: match words[1] {
+                    0x30 => invisibility,
+                    0x31 => chameleon,
+                    _ => 0,
+                },
+                ..Ret::default()
+            });
+            e.register_double(0x005e_58f0, move |e, words| {
+                assert_eq!(words[..2], [0x45, 0x9000]);
+                e.mem.set_f32(words[2], detection);
+                Ret::default()
+            });
+            e.register_double(0x0057_9280, |_, _| Ret::default());
+            e.register_double(0x0096_7090, |_, _| Ret::default());
+            e.register_double(0x008b_c700, |_, _| Ret {
+                eax: 1,
+                ..Ret::default()
+            });
+            e.set_stewie(
+                engine_core::extend::stewie::NO_RED_CROSSHAIR_ON_INVISIBLE,
+                on,
+            );
+            e.call_log = Some(vec![]);
+            hud_main_menu_set_target_type(&mut e, Ptr::new(target), true);
+            let case = format!("{on} {detection} {invisibility} {chameleon}");
+            let count = |address: u32| {
+                e.call_log
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .filter(|(called, _)| *called == address)
+                    .count()
+            };
+            assert_eq!(count(0x005e_58f0), usize::from(on), "{case}");
+            assert_eq!(count(0x008b_c700), usize::from(taken), "{case}");
+            assert_eq!(e.mem.u8(0x011d_96ba), u8::from(taken), "{case}");
+        }
     }
 
     #[test]
