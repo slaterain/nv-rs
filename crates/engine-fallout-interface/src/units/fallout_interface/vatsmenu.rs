@@ -2132,7 +2132,13 @@ pub fn vats_menu_do_idle(e: &mut Engine, this: Ptr<VatsMenu>) {
     let reference = e.global::<u32>(TARGET_REFERENCE);
     if reference != 0 && e.vcall(reference, 0x100, &[]).bool() {
         let owner = reference + 0xa4;
-        let base = e.vcall(owner, 0x1c, &args![0x10u32]).i32() as f32;
+        // `0x7ECC56`: lStewieAl's Tweaks' S0734 (`ActorGetModifiedMaxHealth`) in place of the
+        // permanent health's integer.
+        let base = if e.stewie(stewie::ENEMY_HEALTH_BAR_WITH_BUFFS) {
+            super::hudmainmenu::stewie_modified_max_health(e, reference)
+        } else {
+            e.vcall(owner, 0x1c, &args![0x10u32]).i32() as f32
+        };
         let owner = e.global::<u32>(TARGET_REFERENCE) + 0xa4;
         let health = e.vcall(owner, 0x08, &args![0x10u32]).i32() as f32;
         let mut ratio = 0.0f32;

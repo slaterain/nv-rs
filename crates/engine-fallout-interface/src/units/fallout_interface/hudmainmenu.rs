@@ -1828,12 +1828,42 @@ pub fn fn_007700f0(e: &mut Engine, player: Ptr, target: Ptr) -> f64 {
     })
 }
 
+/// `ActorValueModifiers::GetModifier` (`00937730`, `thiscall` on the modifiers, the actor value;
+/// in ST0).
+const AV_MODIFIERS_GET_MODIFIER: u32 = 0x0093_7730;
+
+/// lStewieAl's Tweaks' S0734 `ActorGetModifiedMaxHealth` (`[Tweaks] bEnemyHealthbarShowBuffedHP`,
+/// at `0x7701FE` in the HUD and `0x7ECC56` in VATS): an enemy health bar's full health is the
+/// actor's base health as a float (`GetBaseActorValue`, slot +4 of the actor value owner at +0xA4,
+/// with 0x10) plus, when its process (+0x68) is at most middle-low (its level +0x28 not above 2),
+/// the process's temporary health modifier (`00937730` on +0xB8), so buffs show in the bar.
+pub(crate) fn stewie_modified_max_health(e: &mut Engine, actor: u32) -> f32 {
+    let process = e.mem.u32(actor + 0x68);
+    let mut temporary = 0.0f32;
+    if process != 0 && e.mem.u32(process + 0x28) <= 2 {
+        temporary = e
+            .call(AV_MODIFIERS_GET_MODIFIER, &args![process + 0xb8, 0x10_u32])
+            .f64() as f32;
+    }
+    let base = e.vcall(actor + 0xa4, 4, &args![0x10_u32]).f64();
+    (base + f64::from(temporary)) as f32
+}
+
 // Translated from 007701e0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `HUDMainMenu::UpdateEnemyHealth` (Xbox PDB): updates the enemy meter and
 /// its damage threshold text from actor values and perk entry points.
+///
+/// Stewie S0734 (`[Tweaks] bEnemyHealthbarShowBuffedHP`): the full health is
+/// [`stewie_modified_max_health`].
 pub fn hud_main_menu_update_enemy_health(e: &mut Engine, this: Ptr<HUDMainMenu>, enemy: Ptr) {
     let actor_values = enemy.addr() + 0xa4;
-    let maximum = e.vcall(actor_values, 0, &args![0x10_u32]).i32() as f32;
+    // `0x7701FE`: lStewieAl's Tweaks' S0734 (`ActorGetModifiedMaxHealth`) in place of the base
+    // health's integer.
+    let maximum = if e.stewie(engine_core::extend::stewie::ENEMY_HEALTH_BAR_WITH_BUFFS) {
+        stewie_modified_max_health(e, enemy.addr())
+    } else {
+        e.vcall(actor_values, 0, &args![0x10_u32]).i32() as f32
+    };
     let current = e.vcall(actor_values, 8, &args![0x10_u32]).i32() as f32;
     let player: Ptr = Ptr::new(e.mem.u32(0x011d_ea3c));
     let threshold = fn_007700f0(e, player, enemy) as f32;
@@ -10982,6 +11012,80 @@ mod tests {
         });
         hud_main_menu_update_enemy_health(&mut e, original_menu, enemy);
         assert_eq!(e.mem.f32(0x011d_97b8), 0.25);
+    }
+
+    /// Stewie S0734 (`0x7701FE`): with the row on, the enemy bar's full health is the base health
+    /// as a float (slot +4) plus, for a process at most middle-low, its temporary health modifier
+    /// (`00937730` on the process's +0xB8); off, the integer of slot 0.
+    #[test]
+    fn stewie_s0734_the_enemy_bar_counts_temporary_health() {
+        // (row, process level, the bar's ratio: 25 health over the full health)
+        for (on, level, ratio) in [
+            (false, 1_u32, 0.5_f32),
+            (true, 1, 0.25),
+            (true, 2, 0.25),
+            (true, 3, 0.3125),
+        ] {
+            let (mut e, meter) = meter_engine();
+            e.map(0x011d_e000, 0x1000);
+            let menu = e.new_object::<HUDMainMenu>();
+            e.mem.set_u32(0x011d_96c0, menu.addr());
+            e.mem.set_u32(menu.addr() + 0x80, meter.addr());
+            e.mem.set_u32(menu.addr() + 0x84, 0x3000);
+            let enemy: Ptr = Ptr::new(e.mem.alloc(0x200));
+            let process = e.mem.alloc(0x100);
+            e.mem.set_u32(process + 0x28, level);
+            e.mem.set_u32(enemy.addr() + 0x68, process);
+            let values_table = e.mem.alloc(0x20);
+            e.mem.set_u32(enemy.addr() + 0xa4, values_table);
+            e.mem.set_u32(values_table, 0x0f00_0020);
+            e.mem.set_u32(values_table + 4, 0x0f00_0022);
+            e.mem.set_u32(values_table + 8, 0x0f00_0021);
+            // Slot 0: the base health's integer, 50; slot +4: as a float, 80; slot +8: 25 now.
+            e.register_double(0x0f00_0020, |_, _| Ret {
+                eax: 50,
+                ..Ret::default()
+            });
+            e.register_double(0x0f00_0022, |_, words| {
+                assert_eq!(words[1], 0x10);
+                Ret {
+                    st0: 80.0,
+                    ..Ret::default()
+                }
+            });
+            e.register_double(0x0f00_0021, |_, _| Ret {
+                eax: 25,
+                ..Ret::default()
+            });
+            // The temporary modifier: +20 health.
+            e.register_double(AV_MODIFIERS_GET_MODIFIER, move |_, words| {
+                assert_eq!(words[..2], [process + 0xb8, 0x10]);
+                Ret {
+                    st0: 20.0,
+                    ..Ret::default()
+                }
+            });
+            e.register_double(0x0047_7ba0, |_, _| Ret {
+                eax: 1,
+                ..Ret::default()
+            });
+            e.register_double(0x00a0_11b0, |_, _| Ret {
+                st0: 1.0,
+                ..Ret::default()
+            });
+            e.register_double(0x005e_58f0, |e, words| {
+                e.mem.set_f32(words[2], 0.0);
+                Ret::default()
+            });
+            e.register_double(0x0055_d520, |_, _| Ret {
+                eax: 0x9090,
+                ..Ret::default()
+            });
+            e.register_double(0x00a0_1350, |_, _| Ret::default());
+            e.set_stewie(engine_core::extend::stewie::ENEMY_HEALTH_BAR_WITH_BUFFS, on);
+            hud_main_menu_update_enemy_health(&mut e, menu, enemy);
+            assert_eq!(e.mem.f32(0x011d_97b8), ratio, "{on} {level}");
+        }
     }
 
     fn destructor_engine() -> (Engine, Ptr<HUDMainMenu>) {

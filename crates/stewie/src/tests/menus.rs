@@ -120,6 +120,7 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
     ("S0592", "bFasterEnterLockPickMenu", tweak(6)),
     ("S0608", "bDeselectHotkeyedItems", tweak(13)),
     ("S0628", "bAllowTakeAllInCompanionContainers", tweak(10)),
+    ("S0734", "bEnemyHealthbarShowBuffedHP", tweak(18)),
     ("S0763", "bCapitalizeRecipeCategories", tweak(7)),
     ("S0883", "bMoreDescriptiveSettingsSaveError", bit(30)),
     ("S0983", "bPipboyMapStoreRefIDs", bit(63)),

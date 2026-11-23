@@ -331,3 +331,7 @@ pub const VATS_SHIFT_SKIPS_FRIENDLIES: Row = tweak(16);
 /// terminal's screen shows the rest of a note page, and a click only turns the page once it is all
 /// shown.
 pub const TERMINAL_CLICK_SHOWS_TEXT: Row = tweak(17);
+/// S0734 `EnemyHealthbarShowBuffedHP` (`[Tweaks] bEnemyHealthbarShowBuffedHP`; `HUDMainMenu::UpdateEnemyHealth`
+/// at `0x7701FE`, `VATSMenu::DoIdle` at `0x7ECC56`): an enemy health bar's full health counts its
+/// temporary health buffs.
+pub const ENEMY_HEALTH_BAR_WITH_BUFFS: Row = tweak(18);

@@ -682,6 +682,14 @@ pub const ROWS: &[Row] = &[
         summary: "a companion's inventory has the Take All button, and the pad's X takes all",
     },
     Row {
+        bit: stewie::ENEMY_HEALTH_BAR_WITH_BUFFS,
+        function: "EnemyHealthbarShowBuffedHP",
+        plan: "S0734",
+        key: "bEnemyHealthbarShowBuffedHP",
+        tweaks: Some(("Tweaks", "bEnemyHealthbarShowBuffedHP")),
+        summary: "an enemy health bar's full health counts the enemy's temporary health buffs",
+    },
+    Row {
         bit: stewie::RECIPE_CATEGORIES_CAPITALIZED,
         function: "CapitalizeRecipeCategories",
         plan: "S0763",
