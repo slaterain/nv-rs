@@ -40,6 +40,7 @@ use engine_core::ptr::Ptr;
 use engine_core::typed::{Family, FamilyId, Threads};
 use engine_core::{entry, AbiFn};
 
+pub mod dead;
 pub mod dominant;
 mod list;
 pub mod queue;
