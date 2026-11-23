@@ -1564,7 +1564,10 @@ pub fn end_start_hold_for_tests(e: &Engine) {
 #[cfg(any(test, feature = "test-support"))]
 pub fn kernel_lock_free_probe(e: &Engine) -> impl Fn() -> bool + Send + 'static {
     let world = e.real.as_ref().map(|r| r.world);
-    move || world.is_none_or(|w| w.kernel.owner.load(Ordering::SeqCst) == 0)
+    move || match world {
+        Some(w) => w.kernel.owner.load(Ordering::SeqCst) == 0,
+        None => true,
+    }
 }
 
 /// [`without_kernel_lock_mut`] only when this thread holds the kernel lock once (a platform function the game called
