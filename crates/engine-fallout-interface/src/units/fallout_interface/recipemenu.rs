@@ -4399,7 +4399,7 @@ mod n057_tests {
             );
             set_category_title(&mut e, 0x2c00, text);
             let wanted = if on {
-                ("AB".repeat(64)[..127].as_bytes().to_vec(), false)
+                ("AB".repeat(64).as_bytes()[..127].to_vec(), false)
             } else {
                 (long.as_bytes().to_vec(), true)
             };
