@@ -76,6 +76,7 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "bFixStuckInAddSPECIALPointsIfAtMaxAlready",
         bit(27),
     ),
+    ("S0116", "bShowAlertIfChargenQuestMissing", bit(66)),
     ("S0120", "bFixCndArrowsIgnoringHUDFlags", bit(37)),
     ("S0144", "bFixVATSChargingReloadAPCostWithNoAmmo", bit(46)),
     ("S0154", "bPreventLoadingDlcPopup", bit(28)),

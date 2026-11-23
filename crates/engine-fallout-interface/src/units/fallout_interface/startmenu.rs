@@ -4661,6 +4661,144 @@ pub fn start_menu_confirm_continue(e: &mut Engine) {
     start_menu_choose_back(e);
 }
 
+/// `GetFileAttributesA` and `GetPrivateProfileStringA` (import slots), the game's message box
+/// (`ShowMessageBox`, `00703e80`, cdecl, a null word after its buttons) and the empty callback
+/// xNVSE names `ShowMessageBox_Callback` (`005b4a70`), and the folder of the player's ini files
+/// (`OSGlobals::GetConfigDirectory`, the text at `01202fa0`).
+const IMPORT_GET_FILE_ATTRIBUTES: u32 = 0x00fd_f160;
+const IMPORT_GET_PRIVATE_PROFILE_STRING: u32 = 0x00fd_f164;
+const SHOW_MESSAGE_BOX: u32 = 0x0070_3e80;
+const MESSAGE_BOX_CALLBACK: u32 = 0x005b_4a70;
+const CONFIG_DIRECTORY: u32 = 0x0120_2fa0;
+
+/// The C library's `strtol(text, &end, 16)` as Tweaks' build has it: leading white space, a
+/// sign, an optional `0x`, hexadecimal digits; past the range of a `long` the nearest end of it;
+/// no digits 0. The answer as the word Tweaks keeps (`UInt32`).
+fn strtol_hex(text: &[u8]) -> u32 {
+    let mut at = 0;
+    while at < text.len() && matches!(text[at], b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r') {
+        at += 1;
+    }
+    let negative = text.get(at) == Some(&b'-');
+    if matches!(text.get(at), Some(b'-' | b'+')) {
+        at += 1;
+    }
+    if text.get(at) == Some(&b'0')
+        && matches!(text.get(at + 1), Some(b'x' | b'X'))
+        && text.get(at + 2).is_some_and(u8::is_ascii_hexdigit)
+    {
+        at += 2;
+    }
+    let mut value: i64 = 0;
+    let mut over = false;
+    while let Some(digit) = text.get(at).and_then(|c| char::from(*c).to_digit(16)) {
+        value = value * 16 + i64::from(digit);
+        if value > i64::from(i32::MAX) + 1 {
+            over = true;
+            value = i64::from(i32::MAX) + 1;
+        }
+        at += 1;
+    }
+    let signed = if negative { -value } else { value };
+    let clamped = if over || signed > i64::from(i32::MAX) || signed < i64::from(i32::MIN) {
+        if negative {
+            i32::MIN
+        } else {
+            i32::MAX
+        }
+    } else {
+        signed as i32
+    };
+    clamped as u32
+}
+
+/// lStewieAl's Tweaks' `ShowAlertIfChargenQuestMissing::OnInvalidChargenQuest` (row S0116, at
+/// `0x7D345B` before the exe's "unable to find the character generation quest" log): the quest
+/// setting's text read as a hexadecimal id; the ini named is `FalloutCustom.ini` when that file
+/// is in the player's ini folder and has `[General] sCharGenQuest`, else `Fallout.ini`; the game's
+/// message box then says which value was not found (and that TTW, 0x1FFFF8, or FNC, 0xAD31FF, is
+/// not installed when it is theirs), or that the vanilla quest (00102037) was not found.
+fn stewie_chargen_quest_alert(e: &mut Engine, quest: u32) {
+    const VANILLA: u32 = 0x0010_2037;
+    const TTW: u32 = 0x001f_fff8;
+    const FNC: u32 = 0x00ad_31ff;
+    // Tweaks' `char message[MAX_PATH]`.
+    const MESSAGE_SIZE: usize = 260;
+    let quest_text = e.mem.cstr(quest);
+    let id = strtol_hex(&quest_text);
+    let missing: &[u8] = match id {
+        TTW => b"\nTTW quest detected but TTW is not installed.",
+        FNC => b"\nFNC quest detected but FNC is not installed.",
+        _ => b"",
+    };
+    // `snprintf` into the 260 bytes: at most 259 and the terminator.
+    let fit = |mut text: Vec<u8>| {
+        text.truncate(MESSAGE_SIZE - 1);
+        text.push(0);
+        text
+    };
+    e.with_stack(0x180, |e, frame| {
+        let message = frame.addr();
+        let words = message + 0x110;
+        let mut path = e.mem.cstr(CONFIG_DIRECTORY);
+        path.extend_from_slice(b"FalloutCustom.ini");
+        e.mem.write(message, &fit(path));
+        let attributes = e.call(IMPORT_GET_FILE_ATTRIBUTES, &args![message]).u32();
+        let exists = attributes != 0xffff_ffff && attributes & 0x10 == 0;
+        let mut ini: &[u8] = b"Fallout.ini";
+        if exists {
+            e.mem.write(words, b"General\0");
+            e.mem.write(words + 0x10, b"sCharGenQuest\0");
+            let read = e
+                .call(
+                    IMPORT_GET_PRIVATE_PROFILE_STRING,
+                    &args![
+                        words,
+                        words + 0x10,
+                        0u32,
+                        message,
+                        MESSAGE_SIZE as u32,
+                        message
+                    ],
+                )
+                .u32();
+            if read != 0 {
+                ini = b"FalloutCustom.ini";
+            }
+        }
+        let text = if id != VANILLA {
+            let mut text =
+                b"Error: Unable to find new game quest [General] sCharGenQuest=".to_vec();
+            text.extend_from_slice(&quest_text);
+            text.extend_from_slice(b" in ");
+            text.extend_from_slice(ini);
+            text.extend_from_slice(b". ");
+            text.extend_from_slice(missing);
+            text.extend_from_slice(b"\nThe vanilla value is 00102037");
+            fit(text)
+        } else {
+            b"Error: Vanilla new game quest (sCharGenQuest=00102037) could not be found!\0".to_vec()
+        };
+        e.mem.write(message, &text);
+        e.mem.write(words + 0x20, b"OK\0");
+        e.call(
+            SHOW_MESSAGE_BOX,
+            &args![
+                message,
+                0u32,
+                0u32,
+                MESSAGE_BOX_CALLBACK,
+                0u32,
+                0x17u32,
+                0u32,
+                0u32,
+                words + 0x20,
+                0u32
+            ],
+        );
+    });
+}
+
 // Translated from 007d32b0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `StartMenu::ConfirmNewGame` (Xbox PDB): looks up the form whose id is the
 /// hexadecimal text of the setting at `011dac00` (`strtol(text, &end, 16)`
@@ -4711,6 +4849,11 @@ pub fn start_menu_confirm_new_game(e: &mut Engine) {
     }
     if quest == 0 {
         let text = e.call(SETTING_STRING, &args![SETTING_011DAC00]).u32();
+        // `0x7D345B`: lStewieAl's Tweaks' S0116 (`OnInvalidChargenQuest`) shows its message box
+        // first, then makes the exe's call.
+        if e.stewie(stewie::CHARGEN_QUEST_MISSING_ALERT) {
+            stewie_chargen_quest_alert(e, text);
+        }
         e.call(LOG_MESSAGE, &args![TEXT_QUEST_NOT_FOUND, text]);
         start_menu_choose_back(e);
         return;
@@ -10629,6 +10772,92 @@ mod tests {
             // ChooseBack ran.
             assert_eq!(r.calls_to(OPTIONS_LIST_HAS_SELECTION).len(), 1);
         }
+    }
+
+    /// Row S0116 (lStewieAl's Tweaks' `OnInvalidChargenQuest`, `0x7D345B`): with no quest found
+    /// and the row on, the game's message box (callback `005b4a70`, 0x17, "OK" and the closing
+    /// null word) says which value was not found and in which ini (`FalloutCustom.ini` in the ini
+    /// folder when it has `[General] sCharGenQuest`), with TTW's note for TTW's id, before the
+    /// exe's log; the vanilla id has its own text; off, no box.
+    #[test]
+    fn s0116_a_missing_chargen_quest_is_shown() {
+        for (on, quest, custom, wanted) in [
+            (false, "001FFFF8", true, None),
+            (
+                true,
+                "001FFFF8",
+                true,
+                Some("Error: Unable to find new game quest [General] sCharGenQuest=001FFFF8 in FalloutCustom.ini. \nTTW quest detected but TTW is not installed.\nThe vanilla value is 00102037"),
+            ),
+            (
+                true,
+                "12345",
+                false,
+                Some("Error: Unable to find new game quest [General] sCharGenQuest=12345 in Fallout.ini. \nThe vanilla value is 00102037"),
+            ),
+            (
+                true,
+                "00102037",
+                false,
+                Some("Error: Vanilla new game quest (sCharGenQuest=00102037) could not be found!"),
+            ),
+        ] {
+            let mut r = rig();
+            let _ = r.menu();
+            let text = r.alloc(0x10);
+            r.e.mem.set_cstr(text, quest.as_bytes());
+            r.with(SETTING_STRING, move |_, _| eax(text));
+            r.stub(STRTOL, 0x1a2b);
+            r.stub(LOOKUP_FORM, 0);
+            if !r.e.mem.is_mapped(CONFIG_DIRECTORY) {
+                r.e.map(CONFIG_DIRECTORY & !0xfff, 0x1000);
+            }
+            r.e.mem.set_cstr(CONFIG_DIRECTORY, b"C:\\ini\\");
+            r.with(IMPORT_GET_FILE_ATTRIBUTES, move |e, a| {
+                assert_eq!(e.mem.cstr(a[0]), b"C:\\ini\\FalloutCustom.ini");
+                eax(if custom { 0x20 } else { 0xffff_ffff })
+            });
+            r.with(IMPORT_GET_PRIVATE_PROFILE_STRING, |e, a| {
+                assert_eq!(e.mem.cstr(a[0]), b"General");
+                assert_eq!(e.mem.cstr(a[1]), b"sCharGenQuest");
+                assert_eq!((a[2], a[4]), (0, 260));
+                assert_eq!(a[3], a[5]);
+                eax(8)
+            });
+            let shown = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let seen = shown.clone();
+            r.with(SHOW_MESSAGE_BOX, move |e, a| {
+                assert_eq!(a[1..8], [0, 0, MESSAGE_BOX_CALLBACK, 0, 0x17, 0, 0]);
+                assert_eq!(e.mem.cstr(a[8]), b"OK");
+                assert_eq!(a[9], 0);
+                seen.borrow_mut().push(String::from_utf8(e.mem.cstr(a[0])).unwrap());
+                eax(1)
+            });
+            r.e.set_stewie(stewie::CHARGEN_QUEST_MISSING_ALERT, on);
+            r.e.call(0x007d_32b0, &args![]);
+            let wanted: Vec<String> = wanted.into_iter().map(String::from).collect();
+            assert_eq!(*shown.borrow(), wanted, "row {on} {quest}");
+            let order = r.order();
+            let logged = order.iter().position(|a| *a == LOG_MESSAGE);
+            let boxed = order.iter().position(|a| *a == SHOW_MESSAGE_BOX);
+            assert!(logged.is_some());
+            if on {
+                assert!(boxed < logged, "the box before the log");
+            }
+        }
+    }
+
+    /// S0116's `strtol` (base 16): white space, sign, `0x`, a stop at the first non-digit, the
+    /// ends of a `long` past its range.
+    #[test]
+    fn s0116_strtol_hex() {
+        assert_eq!(strtol_hex(b"00102037"), 0x0010_2037);
+        assert_eq!(strtol_hex(b"  0x1FFFF8 tail"), 0x001f_fff8);
+        assert_eq!(strtol_hex(b"-10"), (-16i32) as u32);
+        assert_eq!(strtol_hex(b"zz"), 0);
+        assert_eq!(strtol_hex(b"0x"), 0);
+        assert_eq!(strtol_hex(b"FFFFFFFFF"), 0x7fff_ffff);
+        assert_eq!(strtol_hex(b"-FFFFFFFFF"), 0x8000_0000);
     }
 
     #[test]

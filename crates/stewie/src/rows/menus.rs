@@ -415,6 +415,14 @@ pub const ROWS: &[Row] = &[
         summary: "the SPECIAL points to give are capped by what the stats can still take, so the page is never stuck",
     },
     Row {
+        bit: stewie::CHARGEN_QUEST_MISSING_ALERT,
+        function: "ShowAlertIfChargenQuestMissing",
+        plan: "S0116",
+        key: "bShowAlertIfChargenQuestMissing",
+        tweaks: None,
+        summary: "a new game whose character generation quest is missing says so in a message box",
+    },
+    Row {
         bit: stewie::HUD_CONDITION_ARROWS_FLAGS,
         function: "patchFixCndArrowsIgnoringHUDFlags",
         plan: "S0120",

@@ -251,3 +251,7 @@ pub const RECIPE_CATEGORY_RESET_ON_OPEN: Row = Row::share(MENUS_FIXES, MENUS_FIX
 /// `0x7B72F0`): the repair list's old tiles are freed before the list is rebuilt, so an item
 /// cannot be listed twice.
 pub const REPAIR_LIST_TILES_FREED_ON_INIT: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 65);
+/// S0116 `ShowAlertIfChargenQuestMissing` (`StartMenu::ConfirmNewGame` `007d32b0` at
+/// `0x7D345B`): a new game whose character generation quest is not found shows a message box
+/// naming the value and the ini it is in.
+pub const CHARGEN_QUEST_MISSING_ALERT: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 66);
