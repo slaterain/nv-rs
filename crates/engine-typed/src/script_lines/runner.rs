@@ -170,6 +170,7 @@ pub fn run_lines(
     effect_finish: u8,
     elapsed: f32,
 ) -> bool {
+    let _time = engine_core::hitch::script_span();
     let me = this.addr();
     let profile = e.call(DEBUG_TEXT_SHOWN, &args![]).bool();
     e.with_stack(8, |e, start| {
