@@ -150,6 +150,8 @@ thread_local! {
     /// This OS thread runs a game thread other than main ([`run_thread`]); [`LockStats`] counts
     /// its waits apart from main's (and the host's).
     static GAME_THREAD: Cell<bool> = const { Cell::new(false) };
+    /// This OS thread's game thread id for the kernel lock's holder word (0: main or the host).
+    static GAME_ID: Cell<u32> = const { Cell::new(0) };
 }
 
 /// [`LockStats`]' row for this OS thread: 0 the main thread (or the host's), 1 another game thread.
@@ -382,6 +384,43 @@ fn token() -> u64 {
     TOKEN.with(|t| *t)
 }
 
+/// Who held the kernel lock when a wait of main's passed a millisecond ([`KernelLock::acquire_here`]): its game
+/// thread id, the platform function it took the lock for, its processor time then and when that was.
+struct Seen {
+    thread: u32,
+    call: u32,
+    /// [`KernelLock::holder_site`] then (0: none).
+    site: usize,
+    /// What the holder was waiting for on the render thread then (`thread_cpu::render_wait_of`).
+    render_wait: u32,
+    cpu_ns: Option<u64>,
+    at: std::time::Instant,
+}
+
+/// A platform function's name for the hitch log: its import name, else its kind of platform code and the offset in
+/// that kind's range (a COM object's method: "DirectShow platform object +0x30"), else empty.
+fn call_words(w: &World, call: u32) -> String {
+    if call == 0 {
+        return String::new();
+    }
+    if let Some(name) = w.import_names.get(&call) {
+        return name.to_string();
+    }
+    crate::profile::platform_kind(call).map_or_else(String::new, |(kind, base)| {
+        format!("{kind} +{:#x}", call - base)
+    })
+}
+
+/// A [`KernelLock::holder_site`] number as `file:line` (empty for 0).
+fn site_words(site: usize) -> String {
+    if site == 0 {
+        return String::new();
+    }
+    // SAFETY: only `kernel_guard` stores it, from a `&'static Location<'static>`.
+    let at = unsafe { &*(site as *const std::panic::Location<'static>) };
+    format!("{}:{}", at.file(), at.line())
+}
+
 /// The kernel lock: re-entrant (a platform function that calls game code that calls another
 /// takes it again), released whole by a wait ([`KernelLock::wait_change`]), whose condition
 /// variable every change of an object's state wakes.
@@ -397,6 +436,16 @@ struct KernelLock {
     m: Mutex<()>,
     free: Condvar,
     changed: Condvar,
+    /// The holder's game thread id (0: main or the host) and the platform function it took the lock for (0:
+    /// outside one), for the hitch log's naming of a long wait of main's ([`crate::hitch::LockHolder`]). Set by
+    /// the holder only, relaxed: a waiter reads them as a hint.
+    holder: AtomicU32,
+    holder_call: AtomicU32,
+    /// Where outside a platform call the holder took it ([`kernel_guard`]'s caller, a `&'static Location` as a
+    /// number; 0: none), and how many times it has been taken (the holder counts each first take): a waiter tells
+    /// one long hold from many short ones by it.
+    holder_site: AtomicUsize,
+    takes: AtomicU32,
     /// The device lock ([`World::device`]): its waits count apart in [`LockStats`].
     device: bool,
 }
@@ -416,6 +465,10 @@ impl KernelLock {
             device,
             owner: AtomicU64::new(0),
             depth: AtomicU32::new(0),
+            holder: AtomicU32::new(0),
+            holder_call: AtomicU32::new(0),
+            holder_site: AtomicUsize::new(0),
+            takes: AtomicU32::new(0),
             waiters: AtomicU32::new(0),
             dirty: AtomicBool::new(false),
             m: Mutex::new(()),
@@ -443,20 +496,59 @@ impl KernelLock {
             .is_err()
         {
             let was = w.leave_guest();
-            self.acquire(me);
+            self.acquire(me, w);
             if was {
                 w.enter_guest();
             }
         }
         self.depth.store(1, Ordering::Relaxed);
+        self.holder
+            .store(GAME_ID.with(Cell::get), Ordering::Relaxed);
+        self.holder_call.store(0, Ordering::Relaxed);
+        self.holder_site.store(0, Ordering::Relaxed);
+        // Only the holder writes it: a plain load and store, no atomic read-modify-write.
+        self.takes.store(
+            self.takes.load(Ordering::Relaxed).wrapping_add(1),
+            Ordering::Relaxed,
+        );
     }
 
     /// Waits until it is free and takes it (not held by this thread). With `NV_LOCK_STATS` the
     /// wait is counted ([`LockStats`]).
     #[cold]
-    fn acquire(&self, me: u64) {
+    fn acquire(&self, me: u64, w: &World) {
         let started = timed_wait().then(std::time::Instant::now);
-        self.acquire_here(me);
+        // Main's waits for the kernel lock name their holder when they pass a millisecond.
+        let named = started.is_some() && role() == 0 && !self.device && crate::hitch::on();
+        let takes_before = self.takes.load(Ordering::Relaxed);
+        let seen = self.acquire_here(me, named.then_some(w.run));
+        if let (Some(t), Some(seen)) = (started, seen) {
+            let cpu_ns = seen
+                .cpu_ns
+                .zip(crate::thread_cpu::cpu_ns(w.run, seen.thread))
+                .map(|(before, after)| after.saturating_sub(before));
+            let call_name = call_words(w, seen.call);
+            crate::hitch::lock_holder(
+                w.run,
+                crate::hitch::LockHolder {
+                    section: 0,
+                    thread: seen.thread,
+                    start: crate::thread_cpu::start_of(w.run, seen.thread),
+                    call: seen.call,
+                    call_name,
+                    wait_ns: t.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+                    measured_ns: seen.at.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+                    cpu_ns,
+                    site: site_words(seen.site),
+                    render_wait: seen.render_wait,
+                    // Other threads' takes while main waited (this one's own comes after): 0 is one long hold.
+                    handoffs: self
+                        .takes
+                        .load(Ordering::Relaxed)
+                        .wrapping_sub(takes_before),
+                },
+            );
+        }
         if let Some(t) = started {
             let d = t.elapsed();
             if let Some(s) = lock_stats() {
@@ -473,7 +565,10 @@ impl KernelLock {
         }
     }
 
-    fn acquire_here(&self, me: u64) {
+    /// Spins, then parks until it takes the lock. With `named` (main's timed wait for the kernel lock), a wait
+    /// still going after [`crate::hitch::HOLDER_WAIT_NS`] notes who holds the lock then and that thread's
+    /// processor time ([`Seen`]); otherwise nothing is read.
+    fn acquire_here(&self, me: u64, named: Option<usize>) -> Option<Seen> {
         for _ in 0..64 {
             std::hint::spin_loop();
             if self.owner.load(Ordering::Relaxed) == 0
@@ -482,19 +577,39 @@ impl KernelLock {
                     .compare_exchange(0, me, Ordering::Acquire, Ordering::Relaxed)
                     .is_ok()
             {
-                return;
+                return None;
             }
         }
         let mut g = guard(&self.m);
         self.waiters.fetch_add(1, Ordering::SeqCst);
+        let parked = std::time::Instant::now();
+        let mut seen = None;
         while self
             .owner
             .compare_exchange(0, me, Ordering::SeqCst, Ordering::SeqCst)
             .is_err()
         {
+            if let Some(run) = named.filter(|_| seen.is_none()) {
+                let left = Duration::from_nanos(crate::hitch::HOLDER_WAIT_NS)
+                    .saturating_sub(parked.elapsed());
+                if !left.is_zero() {
+                    g = wait_for(&self.free, g, left);
+                    continue;
+                }
+                let thread = self.holder.load(Ordering::Relaxed);
+                seen = Some(Seen {
+                    thread,
+                    call: self.holder_call.load(Ordering::Relaxed),
+                    site: self.holder_site.load(Ordering::Relaxed),
+                    render_wait: crate::thread_cpu::render_wait_of(run, thread),
+                    cpu_ns: crate::thread_cpu::cpu_ns(run, thread),
+                    at: std::time::Instant::now(),
+                });
+            }
             g = wait(&self.free, g);
         }
         self.waiters.fetch_sub(1, Ordering::SeqCst);
+        seen
     }
 
     /// Gives one hold back; the last wakes the waiters of a change made under it and one thread
@@ -519,22 +634,31 @@ impl KernelLock {
         }
     }
 
-    /// Gives every hold of this thread back, answering how many (0 when it holds none).
-    fn release_all(&self) -> u32 {
+    /// Gives every hold of this thread back, answering how many (none when it holds none) and what the holder was
+    /// in ([`Holds`]).
+    fn release_all(&self) -> Holds {
         if !self.held_here() {
-            return 0;
+            return Holds::default();
         }
-        let depth = self.depth.load(Ordering::Relaxed);
+        let held = Holds {
+            depth: self.depth.load(Ordering::Relaxed),
+            call: self.holder_call.load(Ordering::Relaxed),
+            site: self.holder_site.load(Ordering::Relaxed),
+        };
         self.depth.store(1, Ordering::Relaxed);
         self.unlock();
-        depth
+        held
     }
 
-    /// Takes it again with `depth` holds ([`KernelLock::release_all`]); nothing for 0.
-    fn take_again(&self, w: &World, depth: u32) {
-        if depth > 0 {
+    /// Takes it again with the holds [`KernelLock::release_all`] gave back (nothing for none), and the platform
+    /// function and port code site the holder was in then: a call that gives the lock back part way (a decode
+    /// outside it, a wait) is still named by the hitch log when it works under the lock again.
+    fn take_again(&self, w: &World, held: Holds) {
+        if held.depth > 0 {
             self.lock(w);
-            self.depth.store(depth, Ordering::Relaxed);
+            self.depth.store(held.depth, Ordering::Relaxed);
+            self.holder_call.store(held.call, Ordering::Relaxed);
+            self.holder_site.store(held.site, Ordering::Relaxed);
         }
     }
 
@@ -544,6 +668,8 @@ impl KernelLock {
         let me = token();
         debug_assert!(self.held_here());
         let depth = self.depth.load(Ordering::Relaxed);
+        let call = self.holder_call.load(Ordering::Relaxed);
+        let site = self.holder_site.load(Ordering::Relaxed);
         let mut g = guard(&self.m);
         // Released while `m` is held, so a change made by the next holder is notified only once
         // this thread waits (it takes `m` to notify).
@@ -566,13 +692,26 @@ impl KernelLock {
             .compare_exchange(0, me, Ordering::Acquire, Ordering::Relaxed)
             .is_err()
         {
-            self.acquire(me);
+            self.acquire(me, w);
         }
         self.depth.store(depth, Ordering::Relaxed);
+        self.holder
+            .store(GAME_ID.with(Cell::get), Ordering::Relaxed);
+        self.holder_call.store(call, Ordering::Relaxed);
+        self.holder_site.store(site, Ordering::Relaxed);
         if was {
             w.enter_guest();
         }
     }
+}
+
+/// What [`KernelLock::release_all`] gave back: the thread's holds (0: it held none) and the platform function and
+/// port code site its hold was named by, which [`KernelLock::take_again`] restores.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Holds {
+    depth: u32,
+    call: u32,
+    site: usize,
 }
 
 /// A critical section's owner (a thread id, 0 when free) and its count of holds.
@@ -593,6 +732,9 @@ unsafe impl Send for SendEngine {}
 
 /// What the real threads of one run share.
 pub struct World {
+    /// The run this world is (`crate::units::platform::KernelRef::id`): the key of the hitch log's run-wide records
+    /// (a test process runs several at once).
+    run: usize,
     kernel: KernelLock,
     /// The device lock: the Direct3D 9 platform functions' own ([`device_call`], the layer's
     /// `device_calls`), so the thousands of device calls a frame do not take the kernel lock.
@@ -670,8 +812,9 @@ pub struct World {
 }
 
 impl World {
-    fn new(import_names: AddrMap<u32, &'static str>) -> Self {
+    fn new(import_names: AddrMap<u32, &'static str>, run: usize) -> Self {
         World {
+            run,
             kernel: KernelLock::new(),
             device: KernelLock::device(),
             sections: Mutex::new(AddrMap::default()),
@@ -1099,7 +1242,7 @@ impl Ctx {
 
     /// The main thread at its frame's end: gives the kernel lock back whole and stops running game
     /// code (`thread_host::end_main_frame`). Answers the holds to take again.
-    pub(crate) fn release_kernel(&self) -> u32 {
+    pub(crate) fn release_kernel(&self) -> Holds {
         let depth = self.world.kernel.release_all();
         self.world.leave_guest();
         depth
@@ -1107,7 +1250,7 @@ impl Ctx {
 
     /// The main thread at its next frame: runs game code again and takes the kernel lock with
     /// `depth` holds ([`Ctx::release_kernel`]).
-    pub(crate) fn take_kernel(&self, depth: u32) {
+    pub(crate) fn take_kernel(&self, depth: Holds) {
         self.world.enter_guest();
         self.world.kernel.take_again(self.world, depth);
     }
@@ -1234,7 +1377,10 @@ pub fn start(e: &mut Engine) -> Result<(), String> {
         let _ = e.mem.enable_track();
     }
     e.mem.start_sharing();
-    let world: &'static World = Box::leak(Box::new(World::new(e.kernel.import_names.clone())));
+    let world: &'static World = Box::leak(Box::new(World::new(
+        e.kernel.import_names.clone(),
+        e.kernel.id(),
+    )));
     // The events and semaphores made before (the C runtime's start-up, static initializers): kept
     // off the kernel lock from here as the ones made after ([`sync`]).
     let real_sync = sync::wanted();
@@ -1377,6 +1523,9 @@ struct ThreadExit(u32);
 fn run_thread(engine: SendEngine, world: &'static World, i: usize, start: u32, parameter: u32) {
     let mut e = engine.0;
     GAME_THREAD.with(|g| g.set(true));
+    let id = e.real.as_ref().map_or(0, |r| r.id);
+    GAME_ID.with(|g| g.set(id));
+    crate::thread_cpu::register(world.run, id, start);
     // What was registered since the template was made, replacements included (a call finds only
     // a missing function by itself).
     sync_registered(&mut e);
@@ -1384,7 +1533,6 @@ fn run_thread(engine: SendEngine, world: &'static World, i: usize, start: u32, p
     let tls = e.new_tls_block();
     e.swap_tls(tls);
     crate::x87::set_control_word(crate::units::crt::x87_control_word(&mut e));
-    let id = e.real.as_ref().map_or(0, |r| r.id);
     let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         e.call(start, &[parameter]).eax
     }));
@@ -1450,6 +1598,11 @@ fn locked_call(e: &mut Engine, args: &[u32]) -> Ret {
         .world;
     world.kernel.lock(world);
     let _held = Held(world);
+    if world.kernel.depth.load(Ordering::Relaxed) == 1 {
+        world.kernel.holder_call.store(addr, Ordering::Relaxed);
+    }
+    // The platform function this game thread is in, for a section waiter's naming (`thread_cpu::call_of`).
+    let _in_call = InCall(crate::thread_cpu::enter_call(addr));
     park_if_suspended(e);
     if world.late_count.load(Ordering::Acquire) != e.real.as_ref().map_or(0, |r| r.late_seen) {
         sync_registered(e);
@@ -1469,6 +1622,15 @@ fn locked_call(e: &mut Engine, args: &[u32]) -> Ret {
         r.last_error = now;
     }
     ret
+}
+
+/// [`locked_call`]'s note of the platform function this thread is in, put back however the call ends.
+struct InCall(u32);
+
+impl Drop for InCall {
+    fn drop(&mut self) {
+        crate::thread_cpu::leave_call(self.0);
+    }
 }
 
 /// The kernel lock's hold of [`locked_call`], given back however the call ends.
@@ -1559,6 +1721,17 @@ pub fn end_start_hold_for_tests(e: &Engine) {
     }
 }
 
+/// Tests: a probe of whether any thread holds the kernel lock of `e`'s run, to ask from another OS thread while `e`'s
+/// thread waits inside a platform call (always free without real threads).
+#[cfg(any(test, feature = "test-support"))]
+pub fn kernel_lock_free_probe(e: &Engine) -> impl Fn() -> bool + Send + 'static {
+    let world = e.real.as_ref().map(|r| r.world);
+    move || match world {
+        Some(w) => w.kernel.owner.load(Ordering::SeqCst) == 0,
+        None => true,
+    }
+}
+
 /// [`without_kernel_lock_mut`] only when this thread holds the kernel lock once (a platform function the game called
 /// directly): inside a nested hold (a platform function that runs game code that calls this one) the outer function
 /// may be part way through changing platform state, so `f` then runs with the lock held, as before. For game code a
@@ -1574,15 +1747,68 @@ pub fn without_kernel_lock_mut_if_outermost<R>(
         {
             f(e)
         }
-        world => released_kernel(world, || f(e)),
+        _ => without_kernel_lock_mut(e, f),
     }
 }
 
-/// [`without_kernel_lock`] for work that needs the engine itself (a test that calls a seam's
-/// writes from a thread that does not hold the lock).
+/// [`without_kernel_lock`] for work that needs the engine itself (game code a platform function calls back, a test
+/// that calls a seam's writes from a thread that does not hold the lock), keeping this thread's last-error code across
+/// the window ([`keeping_last_error`]).
 pub fn without_kernel_lock_mut<R>(e: &mut Engine, f: impl FnOnce(&mut Engine) -> R) -> R {
-    let world = e.real.as_ref().map(|r| r.world);
-    released_kernel(world, || f(e))
+    keeping_last_error(e, |e| {
+        let world = e.real.as_ref().map(|r| r.world);
+        released_kernel(world, || f(e))
+    })
+}
+
+/// Runs `f`, game code a platform function runs with the kernel lock given back, keeping this thread's last-error
+/// code. Inside a platform function (this thread holds the lock) the kernel table's last-error code is the working
+/// copy of its own (`locked_call` puts it there and keeps it after): it is kept in this thread's context across `f`,
+/// where the game code's own platform calls and `GetLastError` find it and change it, and put back in the table after,
+/// so a code another thread's platform call left in the table meanwhile is never the one this thread's caller reads.
+/// Nothing when this thread does not hold the lock.
+fn keeping_last_error<R>(e: &mut Engine, f: impl FnOnce(&mut Engine) -> R) -> R {
+    let holds = e.real.as_ref().is_some_and(|r| r.world.kernel.held_here());
+    if holds {
+        let own = e.kernel.last_error;
+        if let Some(r) = &mut e.real {
+            r.last_error = own;
+        }
+    }
+    let answer = f(e);
+    if holds {
+        if let Some(r) = &e.real {
+            e.kernel.last_error = r.last_error;
+        }
+    }
+    answer
+}
+
+/// Runs `f`, in which this thread gives every hold of the kernel lock back and takes it again with no game code of
+/// its own running meanwhile (a wait, a sleep, a park, pure work: D3DX's texture translation), keeping the kernel
+/// table's last-error code as this thread had it: read before (only while this thread holds the lock, when the table
+/// is its own to read) and written back after, so another thread's platform call made meanwhile does not leave its
+/// code for this thread's caller. This thread's context is left alone: game code that holds the lock outside a
+/// platform function keeps its code there (`SetLastError`, `GetLastError`), not in the table.
+pub fn keeping_table_last_error<R>(e: &mut Engine, f: impl FnOnce(&mut Engine) -> R) -> R {
+    let holds = e.real.as_ref().is_some_and(|r| r.world.kernel.held_here());
+    let own = holds.then(|| e.kernel.last_error);
+    let answer = f(e);
+    if let Some(code) = own {
+        e.kernel.last_error = code;
+    }
+    answer
+}
+
+/// [`park_here`] keeping the table's last-error code ([`keeping_table_last_error`]): a suspended thread parks with the
+/// kernel lock given back. Only a thread the game suspended (at quit) parks; others pass straight through.
+fn park_here_keeping(e: &mut Engine) {
+    if e.real
+        .as_ref()
+        .is_some_and(|r| r.suspend.load(Ordering::Relaxed))
+    {
+        keeping_table_last_error(e, |e| park_here(e));
+    }
 }
 
 /// [`without_kernel_lock`]'s work on the run's lock world (`None`: stepped threads).
@@ -1597,7 +1823,7 @@ fn released_kernel<R>(world: Option<&'static World>, f: impl FnOnce() -> R) -> R
         return f();
     }
     /// Takes the kernel lock back with the holds given up, however `f` ends.
-    struct Retake(&'static World, u32);
+    struct Retake(&'static World, Holds);
     impl Drop for Retake {
         fn drop(&mut self) {
             self.0.kernel.take_again(self.0, self.1);
@@ -1622,9 +1848,17 @@ impl Drop for KernelGuard {
 /// commands call on main, where game code runs without the lock. Held until the guard drops;
 /// `None` without real threads, where one game thread runs at a time. Re-entrant. Never hold it
 /// across a call into game code, and never take it inside the device lock.
+#[track_caller]
 pub fn kernel_guard(e: &Engine) -> Option<KernelGuard> {
     let world = e.real.as_ref()?.world;
     world.kernel.lock(world);
+    if world.kernel.depth.load(Ordering::Relaxed) == 1 {
+        let at: &'static std::panic::Location<'static> = std::panic::Location::caller();
+        world.kernel.holder_site.store(
+            at as *const std::panic::Location<'static> as usize,
+            Ordering::Relaxed,
+        );
+    }
     Some(KernelGuard(world, std::marker::PhantomData))
 }
 
@@ -1955,7 +2189,7 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
     let r = ctx(e);
     let (w, me) = (r.world, r.id);
     w.safe_point();
-    park_here(e);
+    park_here_keeping(e);
     let a = section.addr();
     let Some((owner, waiting)) = section_words(e, a) else {
         return enter_section_in_table(e, section);
@@ -1993,10 +2227,23 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
             owner.load(Ordering::Relaxed)
         )
     });
+    // The kernel table's last-error code as this thread has it while it holds the lock, written back once the lock is
+    // taken again, as [`keeping_table_last_error`] does (the wait and a park meanwhile run no game code of its own).
+    let own_error = w.kernel.held_here().then(|| e.kernel.last_error);
     let held = w.kernel.release_all();
     let was = w.leave_guest();
     let started = timed_wait().then(std::time::Instant::now);
     let site = if started.is_some() { wait_site(e) } else { 0 };
+    // Main's wait: the owner then, the platform function it is in and its processor time, for the hitch log.
+    let owned_by = (started.is_some() && role() == 0 && crate::hitch::on()).then(|| {
+        let thread = owner.load(Ordering::Relaxed);
+        (
+            thread,
+            crate::thread_cpu::call_of(w.run, thread),
+            crate::thread_cpu::cpu_ns(w.run, thread),
+            crate::thread_cpu::render_wait_of(w.run, thread),
+        )
+    });
     // Counted, then listed, then the owner word tried: a leave that frees it after the count sees
     // the count and wakes the listed (`leave_critical_section`), so no wake is missed.
     waiting.fetch_add(1, Ordering::SeqCst);
@@ -2049,11 +2296,37 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
             stats.section[role()].add(d);
         }
         hitch_wait(crate::hitch::WaitKind::Section, site, d);
+        if let Some((thread, call, cpu_before, render_wait)) = owned_by {
+            let ns = d.as_nanos().min(u128::from(u64::MAX)) as u64;
+            if ns >= crate::hitch::HOLDER_WAIT_NS {
+                crate::hitch::section_holder(
+                    w.run,
+                    crate::hitch::LockHolder {
+                        section: a,
+                        thread,
+                        start: crate::thread_cpu::start_of(w.run, thread),
+                        call,
+                        call_name: call_words(w, call),
+                        wait_ns: ns,
+                        measured_ns: ns,
+                        cpu_ns: cpu_before
+                            .zip(crate::thread_cpu::cpu_ns(w.run, thread))
+                            .map(|(b, after)| after.saturating_sub(b)),
+                        site: String::new(),
+                        handoffs: 0,
+                        render_wait,
+                    },
+                );
+            }
+        }
     }
     if was {
         w.enter_guest();
     }
     w.kernel.take_again(w, held);
+    if let Some(code) = own_error {
+        e.kernel.last_error = code;
+    }
     note_state(e, String::new);
     if let Some(why) = stop {
         panic!("{why}");
@@ -2173,7 +2446,7 @@ fn enter_section_in_table(e: &mut Engine, section: Ptr) {
                 return;
             }
         }
-        real_sleep(w, 0);
+        keeping_table_last_error(e, |_| real_sleep(w, 0));
         main_stop_check(e);
     }
 }
@@ -2209,7 +2482,7 @@ fn try_enter_section_in_table(e: &mut Engine, section: Ptr) -> i32 {
 /// Sleeps for real (`Sleep(0)` gives the rest of the time slice up); a safe point.
 fn sleep(e: &mut Engine, ms: u32) {
     let started = timed_wait().then(std::time::Instant::now);
-    real_sleep(ctx(e).world, ms);
+    keeping_table_last_error(e, |e| real_sleep(ctx(e).world, ms));
     if let Some(t) = started {
         let d = t.elapsed();
         if let Some(stats) = lock_stats() {
@@ -2218,7 +2491,7 @@ fn sleep(e: &mut Engine, ms: u32) {
         }
         hitch_wait(crate::hitch::WaitKind::Sleep, wait_site(e), d);
     }
-    park_here(e);
+    park_here_keeping(e);
     main_stop_check(e);
 }
 
@@ -2428,7 +2701,7 @@ impl ThreadHost for Real {
                 }
             }
             let me = waiter.as_ref().expect("listed above");
-            w.wait_for_objects(me, timeout);
+            keeping_table_last_error(e, |_| w.wait_for_objects(me, timeout));
         };
         if let Some(me) = waiter {
             guard(&w.waiters).retain(|o| !std::sync::Arc::ptr_eq(o, &me));
@@ -2457,8 +2730,10 @@ impl ThreadHost for Real {
     }
 
     fn sleep(&self, e: &mut Engine, ms: u32, _signalled: Signalled) {
-        real_sleep(ctx(e).world, ms);
-        park_here(e);
+        // Under a platform function's hold (`ov_read`'s game thread waiting for its decoder) the sleep gives the lock
+        // back: the thread's last-error code is kept across it.
+        keeping_table_last_error(e, |e| real_sleep(ctx(e).world, ms));
+        park_here_keeping(e);
         main_stop_check(e);
     }
 
@@ -4302,6 +4577,201 @@ mod tests {
         );
     }
 
+    /// Set by [`busy_under_the_lock`] once it runs (under the kernel lock).
+    static BUSY_STARTED: AtomicBool = AtomicBool::new(false);
+    /// The two holder tests one at a time (they share the flag above and the hitch log's holder slots).
+    static HOLDER_TESTS: Mutex<()> = Mutex::new(());
+
+    /// A platform function that works 250 ms under the kernel lock (the holder test's stand-in for a long call).
+    fn busy_under_the_lock(_: &mut Engine, _: &[u32]) -> Ret {
+        BUSY_STARTED.store(true, Ordering::SeqCst);
+        let t = std::time::Instant::now();
+        let mut x = 0u64;
+        while t.elapsed() < Duration::from_millis(250) {
+            x = std::hint::black_box(x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1));
+        }
+        Ret::default()
+    }
+
+    /// Set by the holder test once main's own locked call is done: until then its game thread takes the kernel lock
+    /// no more (its exit would take it while main still waits, a second hold).
+    static MAIN_DONE: AtomicBool = AtomicBool::new(false);
+
+    /// The holder test's game thread: calls the platform function whose slot is its parameter, then (without the
+    /// lock) waits for main to have had its turn before it ends.
+    fn calls_the_busy_function(e: &mut Engine, a: &[u32]) -> Ret {
+        e.call(a[0], &args![0u32]);
+        while !MAIN_DONE.load(Ordering::SeqCst) {
+            std::thread::yield_now();
+        }
+        Ret::default()
+    }
+
+    /// Main's wait for the kernel lock names its holder: the game thread, the platform function it held the lock
+    /// in (by its import name), main's wait, and (where the system tells it) that the holder was working: its
+    /// processor time over the measured part of the wait is most of it.
+    #[test]
+    fn main_s_long_wait_for_the_kernel_lock_names_the_holder() {
+        let _one = guard(&HOLDER_TESTS);
+        let (mut e, slot) = engine_with_imports();
+        let busy = slot("D3DPERF_SetOptions");
+        e.register(busy, busy_under_the_lock);
+        e.register(0x0040_f000, calls_the_busy_function);
+        start(&mut e).expect("real threads on");
+        ctx(&e).frame_begins(false);
+        BUSY_STARTED.store(false, Ordering::SeqCst);
+        MAIN_DONE.store(false, Ordering::SeqCst);
+        let h = e
+            .call(
+                slot("CreateThread"),
+                &args![0u32, 0u32, 0x0040_f000u32, busy, 0u32, 0u32],
+            )
+            .eax;
+        while !BUSY_STARTED.load(Ordering::SeqCst) {
+            std::thread::yield_now();
+        }
+        let _ = crate::hitch::take_lock_holder(e.kernel.id());
+        // A plain locked call: it waits for the busy thread's hold.
+        e.call(slot("GetDoubleClickTime"), &args![]);
+        MAIN_DONE.store(true, Ordering::SeqCst);
+        let held = crate::hitch::take_lock_holder(e.kernel.id()).expect("a named holder");
+        assert_eq!(held.call_name, "D3DPERF_SetOptions");
+        assert_eq!(held.handoffs, 0, "one long hold: {held:?}");
+        assert!(held.site.is_empty(), "in a platform call: {held:?}");
+        assert_eq!(held.call, busy);
+        assert_eq!(held.start, 0x0040_f000);
+        assert_ne!(held.thread, 0, "a game thread, not main or the host");
+        assert!(held.wait_ns >= 100_000_000, "{held:?}");
+        assert!(held.measured_ns <= held.wait_ns, "{held:?}");
+        if cfg!(any(windows, target_os = "linux")) {
+            let cpu = held.cpu_ns.expect("the holder's processor time");
+            assert!(
+                cpu * 2 >= held.measured_ns,
+                "working, not off the processor: {held:?}"
+            );
+        }
+        assert_eq!(
+            e.call(slot("WaitForSingleObject"), &args![h, STRESS_TIMEOUT_MS])
+                .eax,
+            0
+        );
+    }
+
+    /// A platform function that gives the kernel lock back part way (as a decode outside the lock does), then works
+    /// 250 ms under it again.
+    fn busy_after_a_give_back(e: &mut Engine, a: &[u32]) -> Ret {
+        without_kernel_lock(e, || ());
+        busy_under_the_lock(e, a)
+    }
+
+    /// A holder that gave the kernel lock back and took it again inside its platform call is still named by that
+    /// call (not "outside a platform call") when main waits for it afterwards.
+    #[test]
+    fn a_holder_that_gave_the_lock_back_part_way_is_named_by_its_call() {
+        let _one = guard(&HOLDER_TESTS);
+        let (mut e, slot) = engine_with_imports();
+        let busy = slot("D3DPERF_SetOptions");
+        e.register(busy, busy_after_a_give_back);
+        e.register(0x0040_f000, calls_the_busy_function);
+        start(&mut e).expect("real threads on");
+        ctx(&e).frame_begins(false);
+        BUSY_STARTED.store(false, Ordering::SeqCst);
+        MAIN_DONE.store(false, Ordering::SeqCst);
+        let h = e
+            .call(
+                slot("CreateThread"),
+                &args![0u32, 0u32, 0x0040_f000u32, busy, 0u32, 0u32],
+            )
+            .eax;
+        while !BUSY_STARTED.load(Ordering::SeqCst) {
+            std::thread::yield_now();
+        }
+        let _ = crate::hitch::take_lock_holder(e.kernel.id());
+        e.call(slot("GetDoubleClickTime"), &args![]);
+        MAIN_DONE.store(true, Ordering::SeqCst);
+        let held = crate::hitch::take_lock_holder(e.kernel.id()).expect("a named holder");
+        assert_eq!(held.call_name, "D3DPERF_SetOptions", "{held:?}");
+        assert_eq!(held.call, busy);
+        assert!(held.site.is_empty(), "in a platform call: {held:?}");
+        assert_eq!(held.start, 0x0040_f000);
+        assert_eq!(
+            e.call(slot("WaitForSingleObject"), &args![h, STRESS_TIMEOUT_MS])
+                .eax,
+            0
+        );
+    }
+
+    /// The section test's game thread: enters the section at `p[0]` (`EnterCriticalSection` at `p[1]`), calls the
+    /// busy platform function at `p[2]` holding it, and leaves (`LeaveCriticalSection` at `p[3]`).
+    fn holds_a_section_in_the_busy_function(e: &mut Engine, a: &[u32]) -> Ret {
+        let p = a[0];
+        let (section, enter, busy, leave) = (
+            e.mem.u32(p),
+            e.mem.u32(p + 4),
+            e.mem.u32(p + 8),
+            e.mem.u32(p + 0xc),
+        );
+        e.call(enter, &args![section]);
+        e.call(busy, &args![0u32]);
+        e.call(leave, &args![section]);
+        Ret::default()
+    }
+
+    /// Main's wait for a game critical section names its owner: the section, the game thread, the platform
+    /// function it was in while holding the section, and (where the system tells it) that it was working.
+    #[test]
+    fn main_s_long_wait_for_a_section_names_its_owner() {
+        let _one = guard(&HOLDER_TESTS);
+        let (mut e, slot) = engine_with_imports();
+        let busy = slot("D3DPERF_SetOptions");
+        e.register(busy, busy_under_the_lock);
+        e.register(0x0040_f100, holds_a_section_in_the_busy_function);
+        start(&mut e).expect("real threads on");
+        ctx(&e).frame_begins(false);
+        let section = e.mem.alloc(0x18);
+        e.call(slot("InitializeCriticalSection"), &args![section]);
+        let p = e.mem.alloc(0x10);
+        for (i, word) in [
+            section,
+            slot("EnterCriticalSection"),
+            busy,
+            slot("LeaveCriticalSection"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            e.mem.set_u32(p + 4 * i as u32, word);
+        }
+        BUSY_STARTED.store(false, Ordering::SeqCst);
+        let h = e
+            .call(
+                slot("CreateThread"),
+                &args![0u32, 0u32, 0x0040_f100u32, p, 0u32, 0u32],
+            )
+            .eax;
+        while !BUSY_STARTED.load(Ordering::SeqCst) {
+            std::thread::yield_now();
+        }
+        let _ = crate::hitch::take_section_holder(e.kernel.id());
+        e.call(slot("EnterCriticalSection"), &args![section]);
+        e.call(slot("LeaveCriticalSection"), &args![section]);
+        let owned = crate::hitch::take_section_holder(e.kernel.id()).expect("a named owner");
+        assert_eq!(owned.section, section);
+        assert_eq!(owned.call_name, "D3DPERF_SetOptions");
+        assert_eq!(owned.start, 0x0040_f100);
+        assert_ne!(owned.thread, 0);
+        assert!(owned.wait_ns >= 100_000_000, "{owned:?}");
+        if cfg!(any(windows, target_os = "linux")) {
+            let cpu = owned.cpu_ns.expect("the owner's processor time");
+            assert!(cpu * 2 >= owned.wait_ns, "working: {owned:?}");
+        }
+        assert_eq!(
+            e.call(slot("WaitForSingleObject"), &args![h, STRESS_TIMEOUT_MS])
+                .eax,
+            0
+        );
+    }
+
     /// What [`calls_back_game_code`] saw in its work: 1 the kernel lock still held, 2 given back.
     static HELD_IN_CALLBACK: AtomicU32 = AtomicU32::new(0);
     static OUTER_SLOT: AtomicU32 = AtomicU32::new(0);
@@ -4345,6 +4815,230 @@ mod tests {
             HELD_IN_CALLBACK.load(Ordering::SeqCst),
             1,
             "kept when nested"
+        );
+    }
+
+    /// The next test's other thread and platform functions: the slots, and the steps the threads hand over.
+    static ERROR_99_SLOT: AtomicU32 = AtomicU32::new(0);
+    static GET_ERROR_SLOT: AtomicU32 = AtomicU32::new(0);
+    static OTHER_GO: AtomicU32 = AtomicU32::new(0);
+    static OTHER_DONE: AtomicU32 = AtomicU32::new(0);
+    static SEEN_IN_WINDOW: AtomicU32 = AtomicU32::new(0);
+
+    /// A platform function that leaves the last-error code 99 in the kernel table.
+    fn leaves_error_99(e: &mut Engine, _: &[u32]) -> Ret {
+        e.kernel.last_error = 99;
+        Ret::default()
+    }
+
+    /// The other game thread: once told, makes that platform call, then says so.
+    fn other_thread_errs(e: &mut Engine, _: &[u32]) -> Ret {
+        while OTHER_GO.load(Ordering::SeqCst) == 0 {
+            std::thread::yield_now();
+        }
+        e.call(ERROR_99_SLOT.load(Ordering::SeqCst), &args![]);
+        OTHER_DONE.store(1, Ordering::SeqCst);
+        Ret::default()
+    }
+
+    /// A platform function that sets its own last-error code (7), then runs game code with the kernel lock given
+    /// back: that code reads its thread's code (`GetLastError`), and lets the other thread leave 99 in the table.
+    fn errs_then_gives_back(e: &mut Engine, _: &[u32]) -> Ret {
+        e.kernel.last_error = 7;
+        without_kernel_lock_mut_if_outermost(e, |e| {
+            let seen = e.call(GET_ERROR_SLOT.load(Ordering::SeqCst), &args![]).eax;
+            SEEN_IN_WINDOW.store(seen, Ordering::SeqCst);
+            OTHER_GO.store(1, Ordering::SeqCst);
+            while OTHER_DONE.load(Ordering::SeqCst) == 0 {
+                std::thread::yield_now();
+            }
+        });
+        Ret::default()
+    }
+
+    /// While a platform function runs game code with the kernel lock given back, another thread's platform call
+    /// leaves its own last-error code in the kernel table; the first thread still reads its own afterwards (and its
+    /// game code in the window read it too), as on Windows, where the code is each thread's.
+    #[test]
+    fn a_thread_keeps_its_last_error_across_the_lock_given_back() {
+        let (mut e, slot) = engine_with_imports();
+        let outer = slot("D3DPERF_SetOptions");
+        ERROR_99_SLOT.store(slot("GetDoubleClickTime"), Ordering::SeqCst);
+        GET_ERROR_SLOT.store(slot("GetLastError"), Ordering::SeqCst);
+        e.register(outer, errs_then_gives_back);
+        e.register(slot("GetDoubleClickTime"), leaves_error_99);
+        e.register(0x0040_2000, other_thread_errs);
+        start(&mut e).expect("real threads on");
+        end_start_hold_for_tests(&e);
+        e.call(
+            slot("CreateThread"),
+            &args![0u32, 0u32, 0x0040_2000u32, 0u32, 0u32, 0u32],
+        );
+        e.call(outer, &args![0u32]);
+        assert_eq!(OTHER_DONE.load(Ordering::SeqCst), 1, "the other thread ran");
+        assert_eq!(
+            SEEN_IN_WINDOW.load(Ordering::SeqCst),
+            7,
+            "read in the window"
+        );
+        assert_eq!(
+            e.call(slot("GetLastError"), &args![]).eax,
+            7,
+            "its own code after"
+        );
+    }
+
+    /// The next test's other thread, its platform call, and the steps the threads hand over.
+    static SLEEP_ERROR_SLOT: AtomicU32 = AtomicU32::new(0);
+    static SLEEP_GO: AtomicU32 = AtomicU32::new(0);
+    static SLEEP_DONE: AtomicU32 = AtomicU32::new(0);
+
+    /// The other game thread of the next test: once told, makes a platform call that leaves 99 in the table.
+    fn other_thread_errs_while_slept(e: &mut Engine, _: &[u32]) -> Ret {
+        while SLEEP_GO.load(Ordering::SeqCst) == 0 {
+            std::thread::yield_now();
+        }
+        e.call(SLEEP_ERROR_SLOT.load(Ordering::SeqCst), &args![]);
+        SLEEP_DONE.store(1, Ordering::SeqCst);
+        Ret::default()
+    }
+
+    /// A platform function that sets its own last-error code (7), then sleeps through the thread host (which gives
+    /// the kernel lock back, as `ov_read`'s game thread does while its decoder works) until the other thread has left
+    /// 99 in the table.
+    fn errs_then_sleeps(e: &mut Engine, _: &[u32]) -> Ret {
+        e.kernel.last_error = 7;
+        SLEEP_GO.store(1, Ordering::SeqCst);
+        while SLEEP_DONE.load(Ordering::SeqCst) == 0 {
+            crate::thread_host::host_for(e).sleep(e, 1, crate::units::platform::signalled);
+        }
+        Ret::default()
+    }
+
+    /// A sleep (and so a wait) inside a platform function gives the kernel lock back; the thread still reads its own
+    /// last-error code after it, whatever another thread's platform call left in the table meanwhile.
+    #[test]
+    fn a_thread_keeps_its_last_error_across_a_sleep_under_the_lock() {
+        let (mut e, slot) = engine_with_imports();
+        let outer = slot("D3DPERF_SetOptions");
+        SLEEP_ERROR_SLOT.store(slot("GetDoubleClickTime"), Ordering::SeqCst);
+        e.register(outer, errs_then_sleeps);
+        e.register(slot("GetDoubleClickTime"), leaves_error_99);
+        e.register(0x0040_2100, other_thread_errs_while_slept);
+        start(&mut e).expect("real threads on");
+        end_start_hold_for_tests(&e);
+        e.call(
+            slot("CreateThread"),
+            &args![0u32, 0u32, 0x0040_2100u32, 0u32, 0u32, 0u32],
+        );
+        e.call(outer, &args![0u32]);
+        assert_eq!(SLEEP_DONE.load(Ordering::SeqCst), 1, "the other thread ran");
+        assert_eq!(
+            e.call(slot("GetLastError"), &args![]).eax,
+            7,
+            "its own code after the sleep"
+        );
+    }
+
+    /// The next test's platform call that leaves 99.
+    static OBJECT_ERROR_SLOT: AtomicU32 = AtomicU32::new(0);
+
+    /// The other game thread of the next test: once main is listed as waiting (on this thread's handle), makes a
+    /// platform call that leaves 99 in the table, then ends (which wakes main).
+    fn other_thread_errs_while_main_waits(e: &mut Engine, _: &[u32]) -> Ret {
+        let w = ctx(e).world;
+        while w.waiters_n.load(Ordering::SeqCst) == 0 {
+            std::thread::yield_now();
+        }
+        e.call(OBJECT_ERROR_SLOT.load(Ordering::SeqCst), &args![]);
+        Ret::default()
+    }
+
+    /// `WaitForSingleObject` on a kernel object (a thread's handle) gives the kernel lock back while it waits; the
+    /// caller still reads its own last-error code after, whatever another thread's platform call left in the table.
+    #[test]
+    fn a_thread_keeps_its_last_error_across_a_wait_on_an_object() {
+        let (mut e, slot) = engine_with_imports();
+        OBJECT_ERROR_SLOT.store(slot("GetDoubleClickTime"), Ordering::SeqCst);
+        e.register(slot("GetDoubleClickTime"), leaves_error_99);
+        e.register(0x0040_2200, other_thread_errs_while_main_waits);
+        start(&mut e).expect("real threads on");
+        end_start_hold_for_tests(&e);
+        let thread = e
+            .call(
+                slot("CreateThread"),
+                &args![0u32, 0u32, 0x0040_2200u32, 0u32, 0u32, 0u32],
+            )
+            .eax;
+        e.call(slot("SetLastError"), &args![7u32]);
+        let waited = e
+            .call(slot("WaitForSingleObject"), &args![thread, 5000u32])
+            .eax;
+        assert_eq!(waited, 0, "the thread ended");
+        assert_eq!(
+            e.call(slot("GetLastError"), &args![]).eax,
+            7,
+            "its own code after the wait"
+        );
+    }
+
+    /// The next test's slots and the steps the threads hand over.
+    static SECTION_ERROR_SLOT: AtomicU32 = AtomicU32::new(0);
+    static SECTION_ENTER_SLOT: AtomicU32 = AtomicU32::new(0);
+    static SECTION_LEAVE_SLOT: AtomicU32 = AtomicU32::new(0);
+    static SECTION_OWNED: AtomicU32 = AtomicU32::new(0);
+
+    /// The other game thread of the next test: takes the section (its address is the parameter), and once main
+    /// waits for it makes a platform call that leaves 99 in the table, then leaves the section.
+    fn other_thread_holds_the_section(e: &mut Engine, a: &[u32]) -> Ret {
+        let section = a[0];
+        e.call(SECTION_ENTER_SLOT.load(Ordering::SeqCst), &args![section]);
+        SECTION_OWNED.store(1, Ordering::SeqCst);
+        while e.mem.u32(section + 4) == 0 {
+            std::thread::yield_now();
+        }
+        e.call(SECTION_ERROR_SLOT.load(Ordering::SeqCst), &args![]);
+        e.call(SECTION_LEAVE_SLOT.load(Ordering::SeqCst), &args![section]);
+        Ret::default()
+    }
+
+    /// A platform function that sets its own last-error code (7), then enters the section (another thread holds it:
+    /// the wait gives the kernel lock back) and leaves it.
+    fn errs_then_enters(e: &mut Engine, a: &[u32]) -> Ret {
+        e.kernel.last_error = 7;
+        e.call(SECTION_ENTER_SLOT.load(Ordering::SeqCst), &args![a[0]]);
+        e.call(SECTION_LEAVE_SLOT.load(Ordering::SeqCst), &args![a[0]]);
+        Ret::default()
+    }
+
+    /// `EnterCriticalSection` inside a platform function, on a section another thread holds, waits with the kernel
+    /// lock given back; the caller still reads its own last-error code after.
+    #[test]
+    fn a_thread_keeps_its_last_error_across_a_wait_for_a_section() {
+        let (mut e, slot) = engine_with_imports();
+        let outer = slot("D3DPERF_SetOptions");
+        SECTION_ERROR_SLOT.store(slot("GetDoubleClickTime"), Ordering::SeqCst);
+        SECTION_ENTER_SLOT.store(slot("EnterCriticalSection"), Ordering::SeqCst);
+        SECTION_LEAVE_SLOT.store(slot("LeaveCriticalSection"), Ordering::SeqCst);
+        e.register(outer, errs_then_enters);
+        e.register(slot("GetDoubleClickTime"), leaves_error_99);
+        e.register(0x0040_2300, other_thread_holds_the_section);
+        start(&mut e).expect("real threads on");
+        end_start_hold_for_tests(&e);
+        let section = e.mem.alloc(0x18);
+        e.call(slot("InitializeCriticalSection"), &args![section]);
+        e.call(
+            slot("CreateThread"),
+            &args![0u32, 0u32, 0x0040_2300u32, section, 0u32, 0u32],
+        );
+        while SECTION_OWNED.load(Ordering::SeqCst) == 0 {
+            std::thread::yield_now();
+        }
+        e.call(outer, &args![section]);
+        assert_eq!(
+            e.call(slot("GetLastError"), &args![]).eax,
+            7,
+            "its own code after the section wait"
         );
     }
 
@@ -6191,7 +6885,7 @@ mod direct_tests {
         let after = direct_holds();
         direct_end();
         let depth = if took {
-            0
+            Holds::default()
         } else {
             // Let the other thread finish before failing.
             world.kernel.release_all()

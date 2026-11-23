@@ -40,7 +40,11 @@
 //! effects and settings the game asks for. Where an answer follows a rule (which buffer sizes
 //! and formats are refused, the ranges of volume, pan, frequency and the distortion's
 //! parameters), the layer answers by the rule and checks the rule against every captured line
-//! when it loads the table: a table that disagrees stops the run. Which secondary buffers are
+//! when it loads the table. A table that disagrees (another DirectSound answered the capture: a
+//! replacement `dsound.dll`, an audio tool's, Wine's) is said once in the log and the game is
+//! answered by [`FIXED_TABLE`], Windows' own DirectSound's answers, instead ([`load_table`]):
+//! the layer mixes the game's sound itself, so the PC's DirectSound plays no part in what is
+//! heard (until 2026-11-22 such a table stopped the run: issues #558 and #634). Which secondary buffers are
 //! made follows that rule for every description measured (`MEASURED_FLAGS`, PCM mono or stereo,
 //! 8 or 16 bits, 100 to 200000 Hz, any size), whether the capture asked for it or not; another
 //! description is not provided. The state of buffers, the listener and the effects is this
@@ -385,6 +389,10 @@ pub struct Table {
     /// `SetFX` / `GetObjectInPath` by (effect, buffer has `DSBCAPS_CTRLFX`): `SetFX`'s result,
     /// its result code, `GetObjectInPath`'s result.
     effects: BTreeMap<(String, bool), (u32, u32, u32)>,
+    /// The captured lines that disagree with the layer's rules: how many, and the first one's
+    /// rule and line ([`Table::differ`]).
+    differing: usize,
+    first_difference: Option<(String, String)>,
 }
 
 fn hex(text: &str) -> u32 {
@@ -400,10 +408,6 @@ fn bytes(text: &str) -> Vec<u8> {
     (0..text.len() / 2)
         .map(|i| u8::from_str_radix(&text[2 * i..2 * i + 2], 16).expect("hex bytes"))
         .collect()
-}
-
-fn disagree(line: &str, rule: impl std::fmt::Display) -> ! {
-    panic!("the sound table disagrees with the layer ({rule}): {line}; re-capture it or report it")
 }
 
 /// The answer the layer gives a secondary `CreateSoundBuffer` (see the module documentation).
@@ -444,7 +448,9 @@ fn distortion_ok(p: [f32; 5]) -> bool {
 }
 
 impl Table {
-    /// Parses and checks a capture.
+    /// Parses and checks a capture: a line this layer does not know, or a table cut short, stops
+    /// the run; the lines whose answers disagree with the layer's rules are counted
+    /// ([`Table::differ`], [`load_table`] decides).
     pub fn parse(text: &str) -> Table {
         let mut t = Table::default();
         let mut ended = false;
@@ -464,7 +470,7 @@ impl Table {
                 }
                 "DsBuffer" => t.check_buffer(line, &f),
                 "DsFx" => t.check_effect(line, &f),
-                "DsSet" => check_setting(line, &f),
+                "DsSet" => t.check_setting(line, &f),
                 "DsCursor" => {}
                 "DsEnd" => ended = true,
                 other => panic!("the sound table has a line this layer does not know: {other}"),
@@ -477,6 +483,59 @@ impl Table {
         t
     }
 
+    /// The captured answers no rule gives, against Windows' own (`windows`, [`FIXED_TABLE`]):
+    /// each effect's `SetFX` result, result code and `GetObjectInPath` result for the same
+    /// (effect, `DSBCAPS_CTRLFX`), and, with a device, the cooperative levels' and the listener's
+    /// results. Each one that differs is a difference ([`Table::differ`]): Wine accepts the I3DL2
+    /// reverb, which Windows 11 does not have (`REGDB_E_CLASSNOTREG`), and the layer provides no
+    /// reverb (#957's review).
+    fn differ_from_windows(&mut self, windows: &Table) {
+        let effects: Vec<_> = self.effects.iter().map(|(k, v)| (k.clone(), *v)).collect();
+        for ((name, fx), got) in effects {
+            if let Some(&want) = windows.effects.get(&(name.clone(), fx)) {
+                if got != want {
+                    self.differ(
+                        &format!(
+                            "DsFx {name} (CTRLFX {fx}) {:x} {:x} {:x}",
+                            got.0, got.1, got.2
+                        ),
+                        format!("SetFX answers {:x} {:x} {:x}", want.0, want.1, want.2),
+                    );
+                }
+            }
+        }
+        if self.create != DS_OK {
+            return;
+        }
+        let levels: Vec<_> = self.cooperative.iter().map(|(l, r)| (*l, *r)).collect();
+        for (level, got) in levels {
+            if let Some(&want) = windows.cooperative.get(&level) {
+                if got != want {
+                    self.differ(
+                        &format!("DsCooperativeLevel {level:x} {got:x}"),
+                        format!("SetCooperativeLevel answers {want:x}"),
+                    );
+                }
+            }
+        }
+        if self.listener.0 != windows.listener.0 {
+            let got = self.listener.0;
+            self.differ(
+                &format!("DsListener {got:x}"),
+                format!("the listener answers {:x}", windows.listener.0),
+            );
+        }
+    }
+
+    /// A captured line whose answer is not the layer's rule's: counted, the first one kept for
+    /// the log ([`load_table`]).
+    fn differ(&mut self, line: &str, rule: impl std::fmt::Display) {
+        self.differing += 1;
+        if self.first_difference.is_none() {
+            self.first_difference = Some((rule.to_string(), line.to_string()));
+        }
+    }
+
     fn check_buffer(&mut self, line: &str, f: &[&str]) {
         let w = words(f[1]);
         let kind: Kind = (w[0], w[1] != 0, w[2] as u16, w[3] as u16, w[4], w[5] as u16);
@@ -484,13 +543,18 @@ impl Table {
         let result = hex(f[2]);
         let want = create_result(kind, size);
         if result != want {
-            disagree(line, format!("CreateSoundBuffer answers {want:x}"));
+            self.differ(line, format!("CreateSoundBuffer answers {want:x}"));
+            return;
         }
         if (result as i32) < 0 {
             return;
         }
         // The new buffer as the layer makes it.
         let caps = bytes(f[3]);
+        if caps.len() < 20 {
+            self.differ(line, "a new buffer's caps, format, state and interfaces");
+            return;
+        }
         let read = |b: &[u8], o: usize| u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]);
         let (flags, _, tag, channels, rate, bits) = kind;
         let align = u32::from(channels) * u32::from(bits) / 8;
@@ -511,7 +575,7 @@ impl Table {
             && state == [rate, 0, 0, 0]
             && queries == [DS_OK, three_d];
         if !ok || align == 0 {
-            disagree(line, "a new buffer's caps, format, state and interfaces");
+            self.differ(line, "a new buffer's caps, format, state and interfaces");
         }
     }
 
@@ -523,9 +587,21 @@ impl Table {
         let flags = hex(w[1]);
         let key = (w[0].to_string(), flags & DSBCAPS_CTRLFX != 0);
         let value = (hex(f[2]), hex(f[3]), hex(f[4]));
-        if let Some(old) = self.effects.insert(key, value) {
+        if let Some(old) = self.effects.insert(key.clone(), value) {
             if old != value {
-                disagree(line, "the same effect answers the same for every format");
+                self.effects.insert(key, old);
+                self.differ(line, "the same effect answers the same for every format");
+            }
+        }
+    }
+
+    /// Checks a `DsSet` line against the layer's rules.
+    fn check_setting(&mut self, line: &str, f: &[&str]) {
+        if let Some(want) = setting_rule(line, f) {
+            // The 3D buffer's defaults line has two results (the query's and `GetAllParameters`').
+            let result = hex(f[2].split(' ').next().unwrap_or_default());
+            if result != want {
+                self.differ(line, format!("answers {want:x}"));
             }
         }
     }
@@ -558,48 +634,70 @@ fn format_bytes(tag: u16, channels: u16, rate: u32, bits: u16) -> Vec<u8> {
     b
 }
 
-/// Checks a `DsSet` line against the layer's rules.
-fn check_setting(line: &str, f: &[&str]) {
+/// The answer the layer's rules give a `DsSet` line's setting; `None` for the settings no rule
+/// answers (locks, the 3D buffer's and the listener's other settings, the reverb's presets).
+fn setting_rule(line: &str, f: &[&str]) -> Option<u32> {
     let w: Vec<&str> = f[1].split(' ').collect();
-    // The 3D buffer's defaults line has two results (the query's and `GetAllParameters`').
-    let result = hex(f[2].split(' ').next().unwrap_or_default());
-    let expect = |want: u32| {
-        if result != want {
-            disagree(line, format!("answers {want:x}"));
-        }
-    };
     let ok = |good: bool| if good { DS_OK } else { DSERR_INVALIDPARAM };
-    match w.as_slice() {
+    Some(match w.as_slice() {
         ["distortion", gain] => {
             let g = f32::from_bits(hex(gain));
-            expect(ok(distortion_ok([g, 0.0, 5000.0, 1135.0, 5000.0])));
+            ok(distortion_ok([g, 0.0, 5000.0, 1135.0, 5000.0]))
         }
-        [_, "volume", v] => expect(ok(volume_ok(hex(v) as i32))),
+        [_, "volume", v] => ok(volume_ok(hex(v) as i32)),
         [flags, "pan", v] => {
             let has_pan = hex(flags) & DSBCAPS_CTRLPAN != 0;
             let v = hex(v) as i32;
-            expect(match (pan_ok(v), has_pan) {
+            match (pan_ok(v), has_pan) {
                 (false, _) => DSERR_INVALIDPARAM,
                 (true, false) => DSERR_CONTROLUNAVAIL,
                 (true, true) => DS_OK,
-            });
+            }
         }
-        [_, "frequency", v] => expect(ok(frequency_ok(hex(v)))),
-        ["3dbuffer", "mindistance" | "maxdistance", v] => {
-            expect(ok(f32::from_bits(hex(v)) > 0.0));
-        }
+        [_, "frequency", v] => ok(frequency_ok(hex(v))),
+        ["3dbuffer", "mindistance" | "maxdistance", v] => ok(f32::from_bits(hex(v)) > 0.0),
         [_, "lock", ..]
         | [_, "unlock"]
         | ["3dbuffer", ..]
         | ["listener", ..]
-        | ["i3dl2preset", _] => {}
+        | ["i3dl2preset", _] => return None,
         _ => panic!("the sound table has a setting this layer does not know: {line}"),
-    }
+    })
 }
 
-/// Gives the layer the player's sound table (`scripts/dsound-capture`'s output).
+/// Gives the layer the player's sound table (`scripts/dsound-capture`'s output). A table whose
+/// answers disagree with the layer's rules, or where no rule gives them (the effects, the cooperative
+/// level, the listener) with Windows' own, was answered by another DirectSound than Windows' own
+/// (a replacement `dsound.dll` or an audio tool's on the PC, Wine's): one line in the log says so
+/// (how many lines, the first one and its rule), and the game is answered by [`fixed_table`]
+/// instead, Windows' own DirectSound's answers (with the capture's sound device or none), as
+/// on Linux and macOS. What is heard does not change: the layer mixes the game's sound itself
+/// and sends it to the device; the PC's DirectSound plays no part in it.
 pub fn load_table(e: &mut Engine, text: &str) {
-    state!(e).sound.table = Some(Table::parse(text));
+    let captured = Table::parse(text);
+    state!(e).sound.table = Some(answering(captured, |line| eprintln!("{line}")));
+}
+
+/// The table [`load_table`] answers the game with: `captured`, or, when it disagrees with the
+/// layer's rules, [`fixed_table`] with the capture's sound device or none (`say` gets the line).
+fn answering(mut captured: Table, say: impl FnOnce(String)) -> Table {
+    captured.differ_from_windows(&Table::parse(&fixed_table(true)));
+    let Some((rule, line)) = &captured.first_difference else {
+        return captured;
+    };
+    let device = captured.create != DSERR_NODRIVER;
+    say(format!(
+        "sound: {} line(s) of the sound table were answered otherwise than Windows' own \
+         DirectSound answers them (the first: {rule}: {}): another DirectSound answered the \
+         capture on this PC; the game is answered as Windows' own DirectSound answers{}, and its \
+         sound is mixed and played as always",
+        captured.differing,
+        line.replace('\t', " "),
+        if device { "" } else { " (no sound device)" }
+    ));
+    let fixed = Table::parse(&fixed_table(device));
+    debug_assert_eq!(fixed.differing, 0, "the fixed table follows the rules");
+    fixed
 }
 
 /// The loaded table; loaded from `NV_DSOUND_TABLE` (default `%LOCALAPPDATA%\nv-rs\dsound.tsv`)
@@ -826,6 +924,9 @@ struct Buffer {
     /// `SetCurrentPosition` (the DLL: no measured case moves a buffer with it on).
     apl: Option<super::resampler::AplFrames>,
     locks: u32,
+    /// An Unlock that was not the last copied the window into the voice since the window opened: the voice may then
+    /// hold bytes the kept samples do not, so the last Unlock takes the window whatever it holds ([`unlock`]).
+    voice_ahead: bool,
     effect: Option<&'static str>,
     min_distance: f32,
     max_distance: f32,
@@ -1047,11 +1148,24 @@ struct Mix {
     /// other endpoints, [`Voices::split`]).
     output: Option<super::sound_out::Output>,
     _own_output: Option<super::sound_out::Output>,
+    /// When [`tick`] last told the paces the clock, and what it told them (µs): it tells them again only when a
+    /// millisecond has passed or the clock is not where they read it.
+    told: Option<(std::time::Instant, u64)>,
 }
 
 impl std::fmt::Debug for Mix {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Mix {{ rate: {} }}", self.rate)
+    }
+}
+
+impl Mix {
+    /// The voices, locked, for the game's sound calls (the output's thread holds the same lock for each period's
+    /// mix, so each hold a call takes may wait for one). The tests count the holds ([`tests::VOICE_HOLDS`]).
+    fn voices_locked(&self) -> std::sync::MutexGuard<'_, Voices> {
+        #[cfg(test)]
+        tests::VOICE_HOLDS.with(|n| n.set(n.get() + 1));
+        self.voices.lock().expect("the voices")
     }
 }
 
@@ -1666,6 +1780,7 @@ pub fn start_output(e: &mut Engine) -> bool {
         rate,
         output: Some(output),
         _own_output: own_output,
+        told: None,
     });
     true
 }
@@ -2010,12 +2125,24 @@ fn put_in_place(e: &mut Engine, o: Opened, clock: u64) {
 /// Writes `what` to the recording's log, when the output is recorded, with the game's clock
 /// (ms) beside the real time.
 pub fn note(e: &mut Engine, what: &str) {
+    note_with(e, |_| what.to_string());
+}
+
+/// [`note`] with its text made by `what` only when there is a log to write it in. The clock is read whenever the
+/// output is on, as it always was (under `NV_REPEATABLE` each reading moves the clock on, so a run reads it as
+/// before); only a run that records (`NV_SOUND_RECORD`, [`want_output`]) has a log, and other runs neither make the
+/// text nor take the voices' lock (held by the output's thread for each period's mix) to find none.
+fn note_with(e: &mut Engine, what: impl FnOnce(&mut Engine) -> String) {
     if state!(e).sound.mix.is_none() {
         return;
     }
     let game = e.clock_now_ms();
+    if state!(e).sound.record.is_none() {
+        return;
+    }
+    let what = what(e);
     if let Some(m) = &state!(e).sound.mix {
-        if let Some(r) = &mut m.voices.lock().expect("the voices").record {
+        if let Some(r) = &mut m.voices_locked().record {
             r.note(&format!("game {game}\t{what}"));
         }
     }
@@ -2040,9 +2167,16 @@ fn buffer_samples(e: &Engine, at: u32, b: &Buffer) -> Vec<u8> {
     if s.samples_in == Some(Samples::Guest) {
         return e.mem.bytes(b.data, b.bytes);
     }
-    let mut kept = s.samples.get(&at).cloned().unwrap_or_default();
-    kept.resize(b.bytes as usize, 0);
-    kept
+    // A buffer with none kept (a new one) gets a zeroed block from the allocator, whose pages cost nothing until read
+    // (its first Unlock replaces it whole).
+    match s.samples.get(&at) {
+        Some(kept) => {
+            let mut kept = kept.clone();
+            kept.resize(b.bytes as usize, 0);
+            kept
+        }
+        None => vec![0; b.bytes as usize],
+    }
 }
 
 /// A buffer's voice: its samples as they are now ([`buffer_samples`]), its settings, not playing.
@@ -2101,7 +2235,7 @@ fn edge_table() -> &'static [f64; 32] {
 fn with_voice(e: &mut Engine, at: u32, f: impl FnOnce(&mut Voices, u32)) {
     tick(e);
     if let Some(m) = &state!(e).sound.mix {
-        let mut v = m.voices.lock().expect("the voices");
+        let mut v = m.voices_locked();
         f(&mut v, at);
     }
 }
@@ -2114,16 +2248,32 @@ pub fn tick(e: &mut Engine) {
     }
     follow_device(e);
     let now = e.clock_now_us();
-    if let Some(m) = &state!(e).sound.mix {
-        let mut v = m.voices.lock().expect("the voices");
-        // A lost device: the parked voices move on with the clock ([`move_parked`]).
-        if v.game.parked {
-            move_parked(&mut v, now, m.rate);
-        }
-        let Voices { game, own, .. } = &mut *v;
-        for p in [&mut game.pace, &mut own.pace].into_iter().flatten() {
-            p.game_us = now;
-            p.at = std::time::Instant::now();
+    let lost = state!(e).sound.lost.is_some();
+    if let Some(m) = state!(e).sound.mix.as_mut() {
+        // The paces read the clock as told plus the real time since ([`Pace::game_now`]). While the game's clock
+        // runs at real time that reading is the clock itself, so telling them again within a millisecond, with the
+        // clock where that reading puts it (within a millisecond), changes nothing they decide (they act on 100 ms);
+        // each telling takes the voices' lock, which the output's thread holds for a whole period's mix. A clock
+        // that jumped (a test's, a stop) is told at once. A lost device's parked voices still move at every call
+        // ([`move_parked`]: `lost` is set exactly while they are parked).
+        let at = std::time::Instant::now();
+        let fresh = m.told.is_some_and(|(t, told_us)| {
+            let since = at.saturating_duration_since(t);
+            let read = told_us + since.as_micros() as u64;
+            since < std::time::Duration::from_millis(1) && read.abs_diff(now) < 1000
+        });
+        if lost || !fresh {
+            m.told = Some((at, now));
+            let mut v = m.voices_locked();
+            // A lost device: the parked voices move on with the clock ([`move_parked`]).
+            if v.game.parked {
+                move_parked(&mut v, now, m.rate);
+            }
+            let Voices { game, own, .. } = &mut *v;
+            for p in [&mut game.pace, &mut own.pace].into_iter().flatten() {
+                p.game_us = now;
+                p.at = at;
+            }
         }
     }
     // `NV_REPEATABLE`: the mix catches up to the clock before the call changes a voice, so a
@@ -2328,6 +2478,7 @@ pub(crate) fn hear_by_hand_on(e: &mut Engine, rate: u32, mix: Layout) {
         rate,
         output: None,
         _own_output: None,
+        told: None,
     });
 }
 
@@ -2669,6 +2820,7 @@ fn new_buffer(flags: u32) -> Buffer {
         played: false,
         apl: None,
         locks: 0,
+        voice_ahead: false,
         effect: None,
         // DS3D_DEFAULTMINDISTANCE and DS3D_DEFAULTMAXDISTANCE (the capture's defaults).
         min_distance: 1.0,
@@ -3215,13 +3367,13 @@ fn set_volume(e: &mut Engine, this: Ptr, v: i32) -> u32 {
         "SetVolume without DSBCAPS_CTRLVOLUME is not provided"
     );
     buffer(e, this).volume = v;
-    with_voice(e, this.addr(), |m, at| {
-        if let Some(voice) = m.all.get_mut(&at) {
-            voice.volume = v;
-        }
-    });
-    // A 3D buffer's volume goes through the 3D stage (`1002a7d0`).
-    refresh_voice(e, this.addr());
+    // The voice takes the volume and, as a 3D buffer's volume goes through the 3D stage (`1002a7d0`), is brought up
+    // to date, under one hold of the voices' lock.
+    update_voices(
+        e,
+        &[this.addr()],
+        Some(&mut |voice: &mut Voice| voice.volume = v),
+    );
     DS_OK
 }
 
@@ -3411,36 +3563,39 @@ fn heard(e: &mut Engine, this: Ptr, call: &str) {
         .sound
         .mix
         .as_ref()
-        .is_some_and(|m| m.voices.lock().expect("the voices").apl);
+        .is_some_and(|m| m.voices_locked().apl);
     if f != rate && !apl && super::resampler::tables().is_none() {
         unheard(e, &what(&b));
     }
     refresh_voice(e, this.addr());
     if call == "Play" {
         // The log also names the level it is heard at: the volume, and for a 3D buffer its
-        // position from the listener and the 3D stage's channel multipliers.
-        let what = what(&b);
-        let b = buffer(e, this).clone();
-        let mut what = format!("{what}, volume {}", b.volume);
-        if b.flags & DSBCAPS_CTRL3D != 0 {
-            let l = listener_now(e);
-            let layout = device_layout(e);
-            let h = super::ds3d::hear(&source3d(&b), &l, layout);
-            let gains: Vec<String> = h.gains[..usize::from(layout.channels)]
-                .iter()
-                .map(|g| g.to_string())
-                .collect();
-            what += &format!(
-                ", at {:?} (listener {:?}, min {} max {}), 3D gains {}, {} Hz",
-                b.position,
-                l.position,
-                b.min_distance,
-                b.max_distance,
-                gains.join("/"),
-                h.frequency
-            );
-        }
-        note(e, &what);
+        // position from the listener and the 3D stage's channel multipliers (made only when
+        // there is a log, [`note_with`]).
+        note_with(e, |e| {
+            let what = what(&b);
+            let b = buffer(e, this).clone();
+            let mut what = format!("{what}, volume {}", b.volume);
+            if b.flags & DSBCAPS_CTRL3D != 0 {
+                let l = listener_now(e);
+                let layout = device_layout(e);
+                let h = super::ds3d::hear(&source3d(&b), &l, layout);
+                let gains: Vec<String> = h.gains[..usize::from(layout.channels)]
+                    .iter()
+                    .map(|g| g.to_string())
+                    .collect();
+                what += &format!(
+                    ", at {:?} (listener {:?}, min {} max {}), 3D gains {}, {} Hz",
+                    b.position,
+                    l.position,
+                    b.min_distance,
+                    b.max_distance,
+                    gains.join("/"),
+                    h.frequency
+                );
+            }
+            what
+        });
     }
 }
 
@@ -3449,82 +3604,142 @@ fn heard(e: &mut Engine, this: Ptr, call: &str) {
 /// converter: a frequency that moves by more than 1/500 of the rate turns on the second one
 /// for every buffer (`super::resampler`).
 fn refresh_voice(e: &mut Engine, at: u32) {
-    let Some(rate) = state!(e).sound.mix.as_ref().map(|m| m.rate) else {
-        return;
-    };
-    let Some(b) = state!(e).sound.buffers.get(&at) else {
-        return;
-    };
+    update_voices(e, &[at], None);
+}
+
+/// What a secondary buffer's voice is brought up to ([`refresh_voice`]): the frequency it is heard at and, for a 3D
+/// buffer, the 3D stage's channel multipliers (`super::ds3d::hear`; its Doppler frequency). `None` for the primary
+/// buffer or an address that is not a buffer.
+fn heard_now(e: &Engine, at: u32) -> Option<Heard> {
+    let b = state_ref!(e).sound.buffers.get(&at)?;
     if b.flags & DSBCAPS_PRIMARYBUFFER != 0 {
-        return;
+        return None;
     }
-    let (frequency, spatial) = if b.flags & DSBCAPS_CTRL3D != 0 {
+    Some(if b.flags & DSBCAPS_CTRL3D != 0 {
         let h = super::ds3d::hear(&source3d(b), &listener_now(e), device_layout(e));
         (h.frequency, Some(h.gains))
     } else {
         (b.frequency(), None)
+    })
+}
+
+/// A voice's heard frequency and 3D channel multipliers ([`heard_now`]).
+type Heard = (u32, Option<[f32; super::speakers::MAX_CHANNELS]>);
+
+/// Brings the voices of the buffers at `ats` up to date ([`refresh_voice`]), after `change` has run on the first one's
+/// voice (a setting the call made: [`set_volume`]). The running game does it under ONE hold of the voices' lock
+/// ([`update_voices_together`]: the output's thread mixes a whole period under that lock, so each hold main takes may
+/// wait for a mix). An `NV_REPEATABLE` run does it as before, one call after another, each telling the clock first:
+/// every reading of its clock moves it on and every telling mixes up to it, so its recording stays byte for byte
+/// what it was.
+fn update_voices(e: &mut Engine, ats: &[u32], mut change: Option<&mut dyn FnMut(&mut Voice)>) {
+    if state!(e).sound.mix.is_none() || ats.is_empty() {
+        return;
+    }
+    if state!(e).sound.virtual_out.is_none() {
+        return update_voices_together(e, ats, change);
+    }
+    if let Some(change) = change.as_mut() {
+        with_voice(e, ats[0], |m, at| {
+            if let Some(voice) = m.all.get_mut(&at) {
+                change(voice);
+            }
+        });
+    }
+    for &at in ats {
+        update_voices_together(e, &[at], None);
+    }
+}
+
+/// [`update_voices`] under ONE hold of the voices' lock. In the order given, as one [`refresh_voice`] after another:
+/// when one turns the second converter on, the rest only take its flag and their settings, and the buffers' cursors
+/// step by it after (`second_converter_on` moves only the playing buffers' cursors, which nothing here reads). The
+/// clock is told ([`tick`]) when at least one of them is a secondary buffer, before their settings are read (a lost
+/// device found there is followed first).
+fn update_voices_together(e: &mut Engine, ats: &[u32], change: Option<&mut dyn FnMut(&mut Voice)>) {
+    if state!(e).sound.mix.is_none() {
+        return;
+    }
+    let secondary = |e: &Engine, at: &u32| {
+        state_ref!(e)
+            .sound
+            .buffers
+            .get(at)
+            .is_some_and(|b| b.flags & DSBCAPS_PRIMARYBUFFER == 0)
     };
-    // DirectSound's rule for its converters (`dsound` `100581e0`): a move of more than 1/500 of
-    // the rate turns on the device's second converter for every buffer; a smaller one is the
-    // playing converter's `SetRate` (`super::resampler`, at its next period). (`with_voice`
-    // written out, so the buffers are read in place.)
+    if !ats.iter().any(|at| secondary(&*e, at)) {
+        return;
+    }
     tick(e);
+    let heard: Vec<(u32, Option<Heard>)> = ats.iter().map(|&at| (at, heard_now(&*e, at))).collect();
     let sound = &state!(e).sound;
     let Some(mix) = &sound.mix else {
         return;
     };
-    let mut voices = mix.voices.lock().expect("the voices");
-    let m = &mut *voices;
-    let Some(v) = m.all.get_mut(&at) else {
-        return;
-    };
-    let old = v.rate;
-    v.device = rate;
-    v.spatial = spatial;
-    v.rate = frequency;
-    if old == 0 || old == frequency {
-        return;
-    }
-    if old.abs_diff(frequency) > old / 500 && !m.apl {
-        m.apl = true;
-        for (b, _) in sound
-            .buffers
-            .iter()
-            .filter(|(_, b)| b.flags & DSBCAPS_PRIMARYBUFFER == 0)
-        {
-            if let Some(v) = m.all.get_mut(b) {
-                v.apl = true;
+    let rate = mix.rate;
+    let mut turned = false;
+    {
+        let mut voices = mix.voices_locked();
+        let m = &mut *voices;
+        let mut change = change;
+        for (at, h) in heard {
+            let Some(v) = m.all.get_mut(&at) else {
+                continue;
+            };
+            if at == ats[0] {
+                if let Some(change) = change.take() {
+                    change(v);
+                }
+            }
+            let Some((frequency, spatial)) = h else {
+                continue;
+            };
+            // DirectSound's rule for its converters (`dsound` `100581e0`): a move of more than 1/500 of the rate
+            // turns on the device's second converter for every buffer; a smaller one is the playing converter's
+            // `SetRate` (`super::resampler`, at its next period).
+            let old = v.rate;
+            v.device = rate;
+            v.spatial = spatial;
+            v.rate = frequency;
+            if old == 0 || old == frequency {
+                continue;
+            }
+            if old.abs_diff(frequency) > old / 500 && !m.apl {
+                m.apl = true;
+                turned = true;
+                for (b, _) in sound
+                    .buffers
+                    .iter()
+                    .filter(|(_, b)| b.flags & DSBCAPS_PRIMARYBUFFER == 0)
+                {
+                    if let Some(v) = m.all.get_mut(b) {
+                        v.apl = true;
+                    }
+                }
             }
         }
+    }
+    if turned {
         // The cursors step by it too ([`Steps`]).
-        drop(voices);
         let now = e.clock_now_us();
         second_converter_on(e, now);
     }
 }
 
-/// The 3D buffers' voices brought up to date (after the listener changed).
+/// The 3D buffers' voices brought up to date (after the listener changed), in address order, under one hold of
+/// the voices' lock ([`update_voices`]).
 fn refresh_3d(e: &mut Engine) {
     if state!(e).sound.mix.is_none() {
         return;
     }
-    // In address order, found one after another, with no list: `refresh_voice` adds, removes
-    // and reflags no buffer (when it turns the second converter on, it only moves the cursors
-    // of the buffers that play).
-    let mut from = 0;
-    while let Some(at) = state!(e)
+    let ats: Vec<u32> = state!(e)
         .sound
         .buffers
-        .range(from..)
-        .find(|(_, b)| b.flags & DSBCAPS_CTRL3D != 0 && b.flags & DSBCAPS_PRIMARYBUFFER == 0)
+        .iter()
+        .filter(|(_, b)| b.flags & DSBCAPS_CTRL3D != 0 && b.flags & DSBCAPS_PRIMARYBUFFER == 0)
         .map(|(&at, _)| at)
-    {
-        refresh_voice(e, at);
-        let Some(next) = at.checked_add(1) else {
-            break;
-        };
-        from = next;
-    }
+        .collect();
+    update_voices(e, &ats, None);
 }
 
 /// The layout the game's device mixes in now (two channels before the output knows the
@@ -3908,33 +4123,78 @@ fn unlock(e: &mut Engine, this: Ptr, _p1: u32, _n1: u32, _p2: u32, _n2: u32) -> 
         "IDirectSoundBuffer::Unlock without a Lock is not provided"
     );
     b.locks -= 1;
-    let (last, window, bytes) = (b.locks == 0, b.window, b.bytes);
+    let (last, window, bytes, ahead) = (b.locks == 0, b.window, b.bytes, b.voice_ahead);
     let data = if window != 0 { window } else { b.data };
+    // The last unlock of a window that still holds the kept samples (a lock the game only read through: its copy of a
+    // cached sound reads the cached buffer this way, every start) leaves the voice and the kept samples as they are:
+    // they hold these bytes already, so the two whole-buffer copies are not made again. Not when an earlier, inner
+    // unlock copied the window into the voice (the voice may then hold bytes the kept samples do not).
+    let unchanged =
+        last && window != 0 && !ahead && window_unchanged(e, this.addr(), window, bytes);
+    if last {
+        buffer(e, this).voice_ahead = false;
+    } else if state!(e).sound.mix.is_some() {
+        buffer(e, this).voice_ahead = true;
+    }
     if state!(e).sound.mix.is_some() {
-        // `with_voice` written out: the samples are read straight into the voice's copy, which
-        // has the buffer's size (a new copy otherwise), instead of into a new one each time.
         tick(e);
-        if let Some(m) = &state!(e).sound.mix {
-            let mut voices = m.voices.lock().expect("the voices");
-            if let Some(voice) = voices.all.get_mut(&this.addr()) {
-                // With the distortion the samples are the effect's input; the voice plays its
-                // processed copy.
-                let to = match voice.fx.as_mut() {
-                    Some(fx) => &mut fx.source,
-                    None => &mut voice.data,
-                };
-                if to.len() == bytes as usize {
-                    e.mem.read(data, to);
-                } else {
-                    *to = e.mem.bytes(data, bytes);
-                }
-            }
-        }
+    }
+    if state!(e).sound.mix.is_some() && !unchanged {
+        // The samples are copied out of the game's memory before the voices' lock is taken, and only swapped in under
+        // it (the old copy let go after): the output's thread holds that lock for each period's mix, so neither waits
+        // for the other's whole-buffer work.
+        let fresh = e.mem.bytes(data, bytes);
+        let old = state!(e).sound.mix.as_ref().and_then(|m| {
+            let mut voices = m.voices_locked();
+            let voice = voices.all.get_mut(&this.addr())?;
+            // With the distortion the samples are the effect's input; the voice plays its processed copy.
+            let to = match voice.fx.as_mut() {
+                Some(fx) => &mut fx.source,
+                None => &mut voice.data,
+            };
+            Some(std::mem::replace(to, fresh))
+        });
+        drop(old);
     }
     if last && window != 0 {
-        close_window(e, this.addr(), window, bytes);
+        if unchanged {
+            let b = buffer_at(e, this.addr());
+            b.window = 0;
+            let own = b.data;
+            if window != own {
+                e.mem.free(window);
+            }
+        } else {
+            close_window(e, this.addr(), window, bytes);
+        }
     }
     DS_OK
+}
+
+/// Whether the window `window` of the buffer at `at` (`bytes` long) still holds the buffer's kept samples (zero where
+/// none are kept), read a page at a time and stopping at the first difference. Never with the old store, which keeps
+/// no samples outside the game's memory ([`Samples::Guest`]).
+fn window_unchanged(e: &mut Engine, at: u32, window: u32, bytes: u32) -> bool {
+    if samples_in(e) == Samples::Guest {
+        return false;
+    }
+    let kept = state_ref!(e)
+        .sound
+        .samples
+        .get(&at)
+        .map_or(&[][..], Vec::as_slice);
+    let mut page = [0u8; 4096];
+    let mut from = 0usize;
+    while from < bytes as usize {
+        let n = (bytes as usize - from).min(page.len());
+        e.mem.read(window + from as u32, &mut page[..n]);
+        let want = kept.get(from..(from + n).min(kept.len())).unwrap_or(&[]);
+        if page[..want.len()] != *want || page[want.len()..n].iter().any(|&b| b != 0) {
+            return false;
+        }
+        from += n;
+    }
+    true
 }
 
 /// `Play(0, 0, flags)` with flags 0 or `DSBPLAY_LOOPING`: plays from where the buffer stopped
@@ -6361,6 +6621,7 @@ mod tests {
             rate: 22050,
             output: None,
             _own_output: None,
+            told: None,
         });
         voices
     }
@@ -6977,14 +7238,155 @@ mod tests {
         }
     }
 
+    /// `t`'s answers that are not the rules': create, caps, primary, listener, the effects.
+    fn answers(t: &Table) -> String {
+        format!(
+            "{:x} {:?} {:?} {:x} {:?} {:?}",
+            t.create, t.cooperative, t.caps, t.primary, t.listener, t.effects
+        )
+    }
+
+    /// `text` loaded as the game's start-up loads it ([`answering`]), with the lines it said.
+    fn answered(text: &str) -> (Table, Vec<String>) {
+        let mut said = Vec::new();
+        let t = answering(Table::parse(text), |line| said.push(line));
+        (t, said)
+    }
+
+    /// Issue #558: a capture whose DirectSound made a DSBCAPS_CTRLFX buffer of 4 bytes at 8000 Hz
+    /// (the player's line), where Windows' own answers `DSERR_BUFFERTOOSMALL`, no longer stops the
+    /// run: the line is counted, said once, and the game is answered by the fixed table.
     #[test]
-    #[should_panic(expected = "the sound table disagrees")]
-    fn a_table_that_disagrees_stops() {
+    fn a_table_that_disagrees_is_answered_as_windows_answers() {
+        let player = "DsBuffer\t2e0 0 1 1 1f40 8 4\t0\t14000000e8020000040000000000000000000000\t\
+                      01000100401f0000401f0000010008000000 12\t1f40 0 0 0\t0 80004002\n";
         let text = table_text().replace(
             "DsBuffer\t2e0 0 1 1 5622 10 3\t80070057",
             "DsBuffer\t2e0 0 1 1 5622 10 3\t0",
         );
-        Table::parse(&text);
+        let text = text.replace("DsEnd\n", &format!("{player}DsEnd\n"));
+        let captured = Table::parse(&text);
+        assert_eq!(captured.differing, 2);
+        let (rule, line) = captured.first_difference.clone().unwrap();
+        assert_eq!(rule, "CreateSoundBuffer answers 80070057");
+        assert!(
+            line.starts_with("DsBuffer\t2e0 0 1 1 5622 10 3\t0"),
+            "{line}"
+        );
+        let (t, said) = answered(&text);
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].contains("2 line(s)"), "{}", said[0]);
+        assert!(said[0].contains("CreateSoundBuffer answers 80070057"));
+        assert!(!said[0].contains('\t'), "one line");
+        assert_eq!(answers(&t), answers(&Table::parse(&fixed_table(true))));
+        // The player's line alone: its rule names Windows' DSERR_BUFFERTOOSMALL.
+        let only = table_text().replace("DsEnd\n", &format!("{player}DsEnd\n"));
+        let captured = Table::parse(&only);
+        assert_eq!(captured.differing, 1);
+        assert_eq!(
+            captured.first_difference.unwrap().0,
+            format!("CreateSoundBuffer answers {DSERR_BUFFERTOOSMALL:x}")
+        );
+    }
+
+    /// A table that follows the rules is the game's, as it was, and nothing is said.
+    #[test]
+    fn a_table_that_agrees_is_the_games() {
+        let text = table_text();
+        let (t, said) = answered(&text);
+        assert!(said.is_empty(), "{said:?}");
+        assert_eq!(t.differing, 0);
+        assert_eq!(answers(&t), answers(&Table::parse(&text)));
+        assert_ne!(answers(&t), answers(&Table::parse(&fixed_table(true))));
+    }
+
+    /// The other disagreements a capture by another DirectSound shows (issue #634: Wine's): a
+    /// setting's answer (the distortion's `SetAllParameters` not implemented), an effect that
+    /// answers otherwise for another format (the first answer kept), a new buffer's caps cut
+    /// short; each counted, none stops. Without a sound device in the capture the fixed table
+    /// has none either.
+    #[test]
+    fn every_kind_of_disagreement_is_counted() {
+        let text = table_text()
+            .replace(
+                "DsSet\tdistortion 00000000\t0\t00",
+                "DsSet\tdistortion 00000000\t80004001\t00",
+            )
+            .replace(
+                "DsEnd\n",
+                "DsFx\ti3dl2 2e0 1 ac44 ac44\t0\t0\t0\t00\nDsEnd\n",
+            );
+        let t = Table::parse(&text);
+        assert_eq!(t.differing, 2);
+        assert_eq!(t.first_difference.as_ref().unwrap().0, "answers 0");
+        assert_eq!(t.effect("i3dl2", true).0, 0x8004_0154, "the first answer");
+        let short = table_text().replace(
+            "DsBuffer\t2e0 0 1 1 5622 10 ac44\t0\t14000000",
+            "DsBuffer\t2e0 0 1 1 5622 10 ac44\t0\t1400",
+        );
+        assert_ne!(short, table_text(), "the line was found");
+        assert_eq!(Table::parse(&short).differing, 1);
+        let silent = text.replace(
+            "DsCreate\t\t0\t",
+            &format!("DsCreate\t\t{DSERR_NODRIVER:x}\t"),
+        );
+        let (t, said) = answered(&silent);
+        assert!(said[0].contains("(no sound device)"), "{}", said[0]);
+        assert_eq!(t.create, DSERR_NODRIVER);
+    }
+
+    /// #957's review: answers no rule gives are compared with Windows' own (the fixed table). A
+    /// capture whose only difference is the reverb (Wine accepts the I3DL2 reverb; Windows 11
+    /// answers `REGDB_E_CLASSNOTREG`) is answered by the fixed table, said in one line; so is one
+    /// whose cooperative level or listener answers otherwise.
+    #[test]
+    fn answers_no_rule_gives_are_compared_with_windows_own() {
+        let reverb = table_text()
+            .replace(
+                "DsFx\ti3dl2 2e0 1 5622 ac44\t80040154\t5\t88781161",
+                "DsFx\ti3dl2 2e0 1 5622 ac44\t0\t0\t0",
+            )
+            .replace(
+                "DsFx\ti3dl2 e0 1 5622 ac44\t8878001e\tffffffff\t8878001e",
+                "DsFx\ti3dl2 e0 1 5622 ac44\t0\t0\t0",
+            );
+        assert_ne!(reverb, table_text(), "both lines were found");
+        assert_eq!(Table::parse(&reverb).differing, 0, "no rule says it");
+        let (t, said) = answered(&reverb);
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].contains("2 line(s)"), "{}", said[0]);
+        assert!(said[0].contains("i3dl2"), "{}", said[0]);
+        assert_eq!(answers(&t), answers(&Table::parse(&fixed_table(true))));
+        assert_eq!(
+            t.effect("i3dl2", true).0,
+            0x8004_0154,
+            "Windows' own answer"
+        );
+        for changed in [
+            table_text().replace(
+                "DsCooperativeLevel\t2\t0\t",
+                "DsCooperativeLevel\t2\t88780046\t",
+            ),
+            table_text().replace("DsListener\t\t0 0\t", "DsListener\t\t88780032 0\t"),
+        ] {
+            assert_ne!(changed, table_text(), "the line was found");
+            let (t, said) = answered(&changed);
+            assert_eq!(said.len(), 1, "{said:?}");
+            assert_eq!(answers(&t), answers(&Table::parse(&fixed_table(true))));
+        }
+    }
+
+    /// `load_table` puts the answering table in the layer's state.
+    #[test]
+    fn the_start_up_loads_the_answering_table() {
+        let text = table_text().replace(
+            "DsBuffer\t2e0 0 1 1 5622 10 3\t80070057",
+            "DsBuffer\t2e0 0 1 1 5622 10 3\t0",
+        );
+        let mut e = Engine::new();
+        load_table(&mut e, &text);
+        let loaded = state!(e).sound.table.clone().unwrap();
+        assert_eq!(answers(&loaded), answers(&Table::parse(&fixed_table(true))));
     }
 
     #[test]
@@ -8224,5 +8626,203 @@ mod tests {
         assert!(a[44..].iter().any(|&b| b != 0), "the stream was mixed");
         let (_, b) = run("b");
         assert_eq!(a, b);
+    }
+
+    thread_local! {
+        /// The holds of the voices' lock the game's sound calls took on this thread ([`Mix::voices_locked`]).
+        pub(super) static VOICE_HOLDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    /// The holds of the voices' lock `call` takes, with the paces told the clock as it is now (as a call within the
+    /// same millisecond finds them).
+    fn holds(e: &mut Engine, call: impl FnOnce(&mut Engine)) -> usize {
+        let now = e.clock_now_us();
+        state!(e).sound.mix.as_mut().expect("the output").told = Some((
+            std::time::Instant::now() + std::time::Duration::from_secs(60),
+            now,
+        ));
+        VOICE_HOLDS.with(|n| n.set(0));
+        call(e);
+        VOICE_HOLDS.with(std::cell::Cell::get)
+    }
+
+    /// The calls the game makes for its sounds every frame take the voices' lock (which the output's thread holds for
+    /// each period's mix) once at most: `SetVolume` once, a listener commit once for all of its 3D buffers (it took two
+    /// holds a buffer), `GetStatus` none while the paces know the clock; and every voice comes out as one buffer
+    /// brought up to date at a time left it. A clock that moved is told at once.
+    #[test]
+    fn the_game_s_sound_calls_take_the_voices_lock_once() {
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        let listener = listener_of(&mut e, ds);
+        hear_by_hand(&mut e, 48000);
+        let data = signal_seeded(9600, 1, 16, 31);
+        let flat = made(&mut e, ds, 0x2e0, false, 1, 48000, 16, &data);
+        e.vcall(flat, 0x30, &[0, 0, 1]);
+        let mut three = Vec::new();
+        for k in 0..6u32 {
+            let b = made(&mut e, ds, 0x302b0, false, 1, 48000, 16, &data);
+            let t = buffer3d_of(&mut e, b);
+            e.vcall(t, 0x44, &[1.0f32.to_bits(), 1]);
+            e.vcall(t, 0x40, &[100.0f32.to_bits(), 1]);
+            let x = (k as f32 * 2.0 - 5.0).to_bits();
+            e.vcall(t, 0x4c, &[x, 0f32.to_bits(), 3.0f32.to_bits(), 1]);
+            e.vcall(b, 0x30, &[0, 0, 1]);
+            three.push(b);
+        }
+        assert_eq!(
+            holds(&mut e, |e| assert_eq!(
+                e.vcall(listener, 0x44, &[]).u32(),
+                DS_OK
+            )),
+            1,
+            "a commit: one hold for six 3D buffers"
+        );
+        let voices = state!(e).sound.mix.as_ref().unwrap().voices.clone();
+        for &b in &three {
+            let buffer = state!(e).sound.buffers[&b].clone();
+            let h =
+                super::super::ds3d::hear(&source3d(&buffer), &listener_now(&e), device_layout(&e));
+            let v = voices.lock().unwrap();
+            assert_eq!(v.all[&b].spatial, Some(h.gains), "{b:#x}");
+            assert_eq!(v.all[&b].rate, h.frequency, "{b:#x}");
+        }
+        for b in [flat, three[2]] {
+            assert_eq!(
+                holds(&mut e, |e| assert_eq!(
+                    e.vcall(b, 0x3c, &[(-700i32) as u32]).u32(),
+                    DS_OK
+                )),
+                1,
+                "SetVolume: one hold"
+            );
+            assert_eq!(voices.lock().unwrap().all[&b].volume, -700);
+            let status = 0x1a00;
+            assert_eq!(
+                holds(&mut e, |e| {
+                    e.vcall(b, 0x24, &[status]);
+                }),
+                0,
+                "GetStatus: none"
+            );
+            assert_eq!(e.mem.u32(status), DSBSTATUS_PLAYING | DSBSTATUS_LOOPING);
+        }
+        // The 3D buffer's volume went through the 3D stage under that hold.
+        let buffer = state!(e).sound.buffers[&three[2]].clone();
+        let h = super::super::ds3d::hear(&source3d(&buffer), &listener_now(&e), device_layout(&e));
+        assert_eq!(voices.lock().unwrap().all[&three[2]].spatial, Some(h.gains));
+        // A clock that moved is told (the paces' reading would be off): one hold, and the pace has it.
+        voices.lock().unwrap().game.pace = Some(Pace::new(e.clock_now_us()));
+        let now = e.clock_now_us();
+        state!(e).sound.mix.as_mut().unwrap().told = Some((
+            std::time::Instant::now() + std::time::Duration::from_secs(60),
+            now,
+        ));
+        e.advance_clock_us(2_000);
+        VOICE_HOLDS.with(|n| n.set(0));
+        e.vcall(flat, 0x24, &[0x1a00]);
+        assert_eq!(
+            VOICE_HOLDS.with(std::cell::Cell::get),
+            1,
+            "a moved clock is told"
+        );
+        assert_eq!(
+            voices.lock().unwrap().game.pace.as_ref().unwrap().game_us,
+            now + 2_000
+        );
+    }
+
+    /// The game's copy of a cached sound locks the cached buffer only to read it: that unlock leaves the voice and the
+    /// kept samples as they are (no copy, no hold of the voices' lock) and lets the window go, and the next lock hands
+    /// out the same bytes. A window written to is taken as before.
+    #[test]
+    fn a_window_only_read_is_not_copied_back() {
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        hear_by_hand(&mut e, 48000);
+        let data = signal_seeded(9600, 1, 16, 41);
+        let size = data.len() as u32;
+        let b = made(&mut e, ds, 0x2e0, false, 1, 48000, 16, &data);
+        let voices = state!(e).sound.mix.as_ref().unwrap().voices.clone();
+        let lock_whole = |e: &mut Engine| {
+            let r = e.vcall(b, 0x2c, &[0, 0, 0x1800, 0x1804, 0, 0, DSBLOCK_ENTIREBUFFER]);
+            assert_eq!(r.u32(), DS_OK);
+            e.mem.u32(0x1800)
+        };
+        let at = lock_whole(&mut e);
+        assert_eq!(e.mem.bytes(at, size), data);
+        let unlock = |e: &mut Engine| {
+            assert_eq!(e.vcall(b, 0x4c, &[at, size, 0, 0]).u32(), DS_OK);
+        };
+        assert_eq!(holds(&mut e, unlock), 0, "nothing copied back");
+        assert_eq!(state!(e).sound.samples[&b], data);
+        assert_eq!(voices.lock().unwrap().all[&b].data, data);
+        assert_eq!(state!(e).sound.buffers[&b].window, 0, "the window let go");
+        let at = lock_whole(&mut e);
+        assert_eq!(e.mem.bytes(at, size), data, "the same bytes again");
+        let mut want = data.clone();
+        want[10] ^= 0xff;
+        e.mem.write(at + 10, &want[10..11]);
+        let unlock = |e: &mut Engine| {
+            assert_eq!(e.vcall(b, 0x4c, &[at, size, 0, 0]).u32(), DS_OK);
+        };
+        assert_eq!(holds(&mut e, unlock), 1, "a written window is taken");
+        assert_eq!(state!(e).sound.samples[&b], want);
+        assert_eq!(voices.lock().unwrap().all[&b].data, want);
+
+        // A lock at an offset past the first pages, as a streaming sound refills half its buffer (`00af1c00`): new
+        // bytes there only are taken; the same bytes written again are not copied.
+        let lock_at = |e: &mut Engine, offset: u32, bytes: u32| {
+            let r = e.vcall(b, 0x2c, &[offset, bytes, 0x1800, 0x1804, 0, 0, 0]);
+            assert_eq!(r.u32(), DS_OK);
+            e.mem.u32(0x1800)
+        };
+        let part = 8192..8704usize;
+        let p = lock_at(&mut e, 8192, 512);
+        for k in part.clone() {
+            want[k] ^= 0x5a;
+        }
+        e.mem.write(p, &want[part.clone()]);
+        let unlock_at = |e: &mut Engine| {
+            assert_eq!(e.vcall(b, 0x4c, &[p, 512, 0, 0]).u32(), DS_OK);
+        };
+        assert_eq!(
+            holds(&mut e, unlock_at),
+            1,
+            "bytes past the first page taken"
+        );
+        assert_eq!(
+            state!(e).sound.samples[&b][part.clone()],
+            want[part.clone()]
+        );
+        assert_eq!(voices.lock().unwrap().all[&b].data, want);
+        let p = lock_at(&mut e, 8192, 512);
+        e.mem.write(p, &want[part.clone()]);
+        let unlock_at = |e: &mut Engine| {
+            assert_eq!(e.vcall(b, 0x4c, &[p, 512, 0, 0]).u32(), DS_OK);
+        };
+        assert_eq!(
+            holds(&mut e, unlock_at),
+            0,
+            "the same bytes again: nothing copied"
+        );
+        assert_eq!(state!(e).sound.samples[&b], want);
+
+        // Nested locks: the inner unlock takes a written byte into the voice; the byte put back before the last unlock
+        // is taken too, though the window then equals the kept samples again.
+        let outer = lock_whole(&mut e);
+        let inner = lock_whole(&mut e);
+        assert_eq!(inner, outer, "nested locks hand out the same window");
+        e.mem.write(inner + 20, &[want[20] ^ 0x55]);
+        assert_eq!(e.vcall(b, 0x4c, &[inner, size, 0, 0]).u32(), DS_OK);
+        assert_eq!(voices.lock().unwrap().all[&b].data[20], want[20] ^ 0x55);
+        e.mem.write(outer + 20, &want[20..21]);
+        assert_eq!(e.vcall(b, 0x4c, &[outer, size, 0, 0]).u32(), DS_OK);
+        assert_eq!(
+            voices.lock().unwrap().all[&b].data,
+            want,
+            "the voice as the window left it"
+        );
+        assert_eq!(state!(e).sound.samples[&b], want);
     }
 }
