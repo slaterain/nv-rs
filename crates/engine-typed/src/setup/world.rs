@@ -205,7 +205,13 @@ fn world_draw_enabled(e: &mut Engine, forced_off: bool, other: u8) -> bool {
         return false;
     }
     let interface = e.call(INTERFACE_OBJECT, &args![]).u32();
-    if e.call(INTERFACE_TEST, &args![interface]).u32() != 0 {
+    // `0x870C92`: lStewieAl's Tweaks' S0028 replaces the call with its own test (shared with the
+    // translated frames).
+    let hidden = match engine_core::extend::stewie::vats_highlight_hides_world(e, interface) {
+        Some(hidden) => hidden,
+        None => e.call(INTERFACE_TEST, &args![interface]).u32() != 0,
+    };
+    if hidden {
         return false;
     }
     e.global::<u8>(IN_DIALOG) == 0

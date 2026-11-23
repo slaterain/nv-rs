@@ -679,33 +679,51 @@ mod n051_tests {
     }
 
     /// Row S0028 (lStewieAl's Tweaks' `RefHasNodeOrIsDying`, `0x800F70`): off, the target's
-    /// `IsDying` (slot +0x22C) with 0 decides; on, a target that is not a reference (another
-    /// vtable) or has no node (no render state) is skipped, a plain reference or a missile
-    /// projectile with a node is drawn without that call, an actor (`Character`'s vtable, slot +0x100 `008d0360`) is skipped
-    /// when its `IsDying` with the vtable word's low byte (0x6C) is true; the player shown in
-    /// third person (+0x64A) is judged by its player node (+0x694).
+    /// `IsDying` (slot +0x22C) with 0 decides. On: each of xNVSE's five reference vtables and
+    /// `MissileProjectile`'s with a node is drawn without that call, and skipped without a node
+    /// (no render state); any other vtable is skipped; an actor (slot +0x100 `008d0360`:
+    /// `Character`'s, `Creature`'s) is skipped when its `IsDying` with the vtable word's low byte
+    /// (0x6C, 0xAC) is true; the player (`PlayerCharacter`'s vtable) shown in third person
+    /// (+0x64A) is judged by its player node (+0x694), in first person by the render state's.
     #[test]
     fn s0028_draw_target_skip() {
+        const NOT_ACTOR: u32 = 0x00c2_0100;
+        const ALWAYS_DYING: u32 = 0x00c2_122c;
+        const ACTOR_DYING: u32 = 0x00c2_022c;
+        let (character, creature, player_vtable) = (0x0108_6a6c, 0x0108_70ac, 0x0108_aa3c);
         let mut e = Engine::new();
-        for page in [0x0108_6000u32, 0x0108_f000, 0x0102_f000, 0x011d_e000] {
+        for page in [
+            0x0108_6000u32,
+            0x0108_7000,
+            0x0108_a000,
+            0x0108_f000,
+            0x0102_f000,
+            0x0103_0000,
+            0x011d_e000,
+        ] {
             if !e.mem.is_mapped(page) {
                 e.map(page, 0x1000);
             }
         }
-        let (character, refr) = (0x0108_6a6c, 0x0102_f55c);
-        e.mem.set_u32(character + 0x100, RETURN_TRUE);
-        e.mem.set_u32(character + 0x22c, 0x00c2_022c);
-        // Dying only when asked with Character's vtable's low byte (the word after `this`).
-        e.register(0x00c2_022c, |_, a| Ret {
-            eax: u32::from(a[1] & 0xff == 0x6c),
-            ..Ret::default()
-        });
-        e.mem.set_u32(refr + 0x100, 0x00c2_0100);
-        e.mem.set_u32(refr + 0x22c, 0x00c2_122c);
-        e.register(0x00c2_122c, |_, _| Ret {
+        e.register(NOT_ACTOR, |_, _| Ret::default());
+        e.register(ALWAYS_DYING, |_, _| Ret {
             eax: 1,
             ..Ret::default()
         });
+        // An actor is dying when its byte +0x6F0 is set and it is asked with its own vtable's low
+        // byte (the word after `this`).
+        e.register(ACTOR_DYING, |e, a| Ret {
+            eax: u32::from(a[1] & 0xff == e.mem.u32(a[0]) & 0xff && e.mem.u8(a[0] + 0x6f0) != 0),
+            ..Ret::default()
+        });
+        let set_vtable = |e: &mut Engine, vtable: u32, actor: bool| {
+            e.mem
+                .set_u32(vtable + 0x100, if actor { RETURN_TRUE } else { NOT_ACTOR });
+            e.mem.set_u32(
+                vtable + 0x22c,
+                if actor { ACTOR_DYING } else { ALWAYS_DYING },
+            );
+        };
         let node = e.mem.alloc(0x10);
         let state = e.mem.alloc(0x20);
         e.mem.set_u32(state + 0x14, node);
@@ -715,34 +733,76 @@ mod n051_tests {
             e.mem.set_u32(it + 0x64, state);
             it
         };
-        let actor = object(&mut e, character, state);
-        let thing = object(&mut e, refr, state);
-        let other = object(&mut e, 0x0103_0000, state);
-        let bare = object(&mut e, refr, 0);
-        let missile = object(&mut e, MISSILE_PROJECTILE_VTABLE, state);
+        let asked_dying = |e: &mut Engine, target: u32| {
+            e.call_log = Some(vec![]);
+            let skipped = stewie_skip_target(e, target);
+            let asked = e
+                .call_log
+                .take()
+                .unwrap()
+                .iter()
+                .any(|(a, _)| *a == ALWAYS_DYING || *a == ACTOR_DYING);
+            (skipped, asked)
+        };
+        let row = engine_core::extend::stewie::VATS_HIGHLIGHT_KEEPS_WEAPON;
         e.mem.set_u32(0x011d_ea3c, 0);
 
-        e.set_stewie(
-            engine_core::extend::stewie::VATS_HIGHLIGHT_KEEPS_WEAPON,
-            false,
-        );
-        assert!(!stewie_skip_target(&mut e, actor));
-        assert!(stewie_skip_target(&mut e, thing));
+        // Off: `IsDying(0)` decides, whatever the vtable.
+        e.set_stewie(row, false);
+        set_vtable(&mut e, 0x0102_f55c, false);
+        let thing = object(&mut e, 0x0102_f55c, state);
+        assert_eq!(asked_dying(&mut e, thing), (true, true));
+        let other = object(&mut e, 0x0103_0000, state);
+        e.mem.set_u32(0x0103_0000 + 0x22c, ALWAYS_DYING);
+        assert_eq!(asked_dying(&mut e, other), (true, true));
 
-        e.set_stewie(
-            engine_core::extend::stewie::VATS_HIGHLIGHT_KEEPS_WEAPON,
-            true,
-        );
-        assert!(stewie_skip_target(&mut e, actor));
-        assert!(!stewie_skip_target(&mut e, thing));
-        assert!(stewie_skip_target(&mut e, other));
-        assert!(stewie_skip_target(&mut e, bare));
-        assert!(!stewie_skip_target(&mut e, missile));
-        // The player in third person: its player node, not the render state's.
-        e.mem.set_u32(0x011d_ea3c, thing);
-        e.mem.set_u8(thing + 0x64a, 1);
-        assert!(stewie_skip_target(&mut e, thing));
-        e.mem.set_u32(thing + 0x694, node);
-        assert!(!stewie_skip_target(&mut e, thing));
+        // On: every reference vtable and the missile's.
+        e.set_stewie(row, true);
+        for vtable in REFERENCE_VTABLES
+            .into_iter()
+            .chain([MISSILE_PROJECTILE_VTABLE])
+        {
+            set_vtable(&mut e, vtable, false);
+            let it = object(&mut e, vtable, state);
+            assert_eq!(asked_dying(&mut e, it), (false, false), "{vtable:08x}");
+            let bare = object(&mut e, vtable, 0);
+            assert!(
+                stewie_skip_target(&mut e, bare),
+                "{vtable:08x} without a node"
+            );
+        }
+        assert_eq!(asked_dying(&mut e, other), (true, false), "not a reference");
+
+        // Actors: asked with their vtable's low byte.
+        for vtable in [character, creature] {
+            set_vtable(&mut e, vtable, true);
+            let actor = object(&mut e, vtable, state);
+            assert_eq!(asked_dying(&mut e, actor), (false, true), "{vtable:08x}");
+            e.mem.set_u8(actor + 0x6f0, 1);
+            assert_eq!(
+                asked_dying(&mut e, actor),
+                (true, true),
+                "{vtable:08x} dying"
+            );
+            e.set_stewie(row, false);
+            assert_eq!(
+                asked_dying(&mut e, actor),
+                (false, true),
+                "{vtable:08x} off"
+            );
+            e.set_stewie(row, true);
+        }
+
+        // The player: third person by its player node, first person by the render state's.
+        set_vtable(&mut e, player_vtable, false);
+        let player = object(&mut e, player_vtable, state);
+        e.mem.set_u32(0x011d_ea3c, player);
+        e.mem.set_u8(player + 0x64a, 1);
+        assert!(stewie_skip_target(&mut e, player));
+        e.mem.set_u32(player + 0x694, node);
+        assert!(!stewie_skip_target(&mut e, player));
+        e.mem.set_u32(player + 0x694, 0);
+        e.mem.set_u8(player + 0x64a, 0);
+        assert!(!stewie_skip_target(&mut e, player));
     }
 }

@@ -192,6 +192,13 @@ impl Settings {
     /// An integer setting as `ModifyTweakIfPresent` reads it: the last file whose value reads as a
     /// number (and not as [`MISSING`]), else the default's, else `default`.
     pub fn long(&self, section: &str, name: &str, default: i32) -> i32 {
+        // Tweaks' settings, once read: `if (g_bFasterTitleMenu) g_bSkipIntroVideo = 1;` (row S0351).
+        if section == "Tweaks"
+            && name == "bSkipIntroVideo"
+            && self.long("Tweaks", "bFasterTitleMenu", 0) != 0
+        {
+            return 1;
+        }
         let k = key(section, name);
         if self.rules.get(&k) == Some(&Rule::Or) {
             return self.long_ored(&k, default);
