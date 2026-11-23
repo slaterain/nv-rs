@@ -6984,7 +6984,7 @@ fn sorted_draws_keep_alpha_writes_apart() {
         strip_stream(g, 96);
         strip_at(g, column - 1, 0.0, [0.0, 1.0, 0.0, 0.25]);
     };
-    let script = |g: &mut Gpu, _: &StripDraw| {
+    let script = move |g: &mut Gpu, _: &StripDraw| {
         y(g, 1);
         x(g, 1);
         x(g, 3);
