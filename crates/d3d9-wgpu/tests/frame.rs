@@ -6531,11 +6531,11 @@ fn merged_draws_keep_a_second_pass_over_the_same_vertices_after_the_first() {
     );
 }
 
-/// Blended draws held after the opaque ones (`NV_WGPU_SORT_DRAWS=pass`): the opaque draws after
-/// the blended one join those before it, the blended one is drawn after all of them, and the
-/// pixels are as with one draw each (the blended draw lies over nothing drawn after it).
+/// Blended draws held after the opaque ones (`NV_WGPU_SORT_DRAWS=pass`): the blended one is drawn
+/// after the opaque ones held before it, the opaque draws given after it are drawn after it (they
+/// could lie behind it), and the pixels are as with one draw each.
 #[test]
-fn merged_draws_across_a_blended_draw_draw_what_one_draw_each_draws() {
+fn merged_draws_around_a_held_blended_draw_draw_what_one_draw_each_draws() {
     let Some((off_px, off, _, _)) = merge_script(false, false, false, false) else {
         return;
     };
@@ -6549,8 +6549,8 @@ fn merged_draws_across_a_blended_draw_draw_what_one_draw_each_draws() {
     assert_eq!(emitted, want, "every draw given once");
     assert_eq!(
         held,
-        (2, 7),
-        "the six opaque draws as one, the blended one after them"
+        (3, 7),
+        "the first four opaque draws as one, the blended one, the last two as one"
     );
 }
 
@@ -6764,5 +6764,103 @@ fn held_blended_draws_never_move_past_opaque_draws_when_they_ignore_or_write_dep
         (127..=128).contains(&off[1][0]) && off[1][1..3] == [0, 0],
         "column 1: the blended draw alone (the opaque one failed): {:?}",
         off[1]
+    );
+}
+
+/// [`held_script`]'s strip drawn with its registers: moved right by `column` columns and back by
+/// `z` in depth, passing `colour` on.
+fn strip_at(g: &mut Gpu, column: u32, z: f32, colour: [f32; 4]) {
+    let mut r = vec![0.25 * column as f32, 0.0, z, 0.0];
+    r.extend_from_slice(&colour);
+    let bytes = floats(&r);
+    g.run(Cmd::SetConstants {
+        device: DEVICE,
+        kind: 0,
+        start: 0,
+        count: 2,
+        data: Data::Bytes(&bytes),
+    });
+    g.run(Cmd::DrawPrimitive {
+        device: DEVICE,
+        kind: 4,
+        start: 0,
+        count: 2,
+    });
+}
+
+/// [`held_script`]'s vertex stream 0 at `offset` (96: the second strip, a column further right).
+fn strip_stream(g: &mut Gpu, offset: u32) {
+    g.run(Cmd::SetStreamSource {
+        device: DEVICE,
+        stream: 0,
+        buffer: VB,
+        offset,
+        stride: 16,
+    });
+}
+
+/// With blended draws held after the opaque ones (`NV_WGPU_SORT_DRAWS=pass`), an opaque draw the
+/// game gives after a see-through draw (blended, tested against depth, writing none) and lying
+/// behind it on screen still covers it, as with one draw each: it is not drawn ahead of it.
+#[test]
+fn an_opaque_draw_after_a_held_see_through_draw_still_covers_it() {
+    const ALPHABLENDENABLE: u32 = 27;
+    const SRCBLEND: u32 = 19;
+    const DESTBLEND: u32 = 20;
+    let script = |g: &mut Gpu, _: &StripDraw| {
+        // Column 1: the see-through draw (the second strip, its own vertices) in front ...
+        g.state(SRCBLEND, 2);
+        g.state(DESTBLEND, 2);
+        g.state(ALPHABLENDENABLE, 1);
+        g.state(ZWRITEENABLE, 0);
+        strip_stream(g, 96);
+        strip_at(g, 0, 0.0, [0.0, 0.0, 0.5, 1.0]);
+        // ... then an opaque draw behind it (the first strip moved a column right): the
+        // see-through draw wrote no depth, so it passes and covers it.
+        g.state(ALPHABLENDENABLE, 0);
+        g.state(ZWRITEENABLE, 1);
+        g.state(DESTBLEND, 1);
+        strip_stream(g, 0);
+        strip_at(g, 1, 0.25, [1.0, 0.0, 0.0, 1.0]);
+    };
+    let Some((off, _, _)) = held_script(false, false, &script) else {
+        return;
+    };
+    assert_eq!(off[1], [0, 0, 255, 255], "column 1: the opaque draw's red");
+    let (on, held, mismatches) = held_script(true, true, &script).expect("the adapter, as above");
+    assert_eq!(on, off, "the pixels");
+    assert_eq!(mismatches, 0, "each held draw drawn with its own state");
+    assert_eq!(held, (2, 2), "both draws held");
+}
+
+/// Merged in place (`NV_WGPU_MERGE_DRAWS=1`, not sorted): of draws of two keys at exactly the
+/// same depth given K1, K2, K1 (the depth test LESSEQUAL, so the last one shows), the last K1
+/// does not join the first (it would be drawn before K2): the pixel is the last draw's, as with
+/// one draw each, while draws of one key given one after another still join.
+#[test]
+fn merged_draws_in_place_keep_which_of_two_coplanar_surfaces_shows() {
+    let script = |g: &mut Gpu, _: &StripDraw| {
+        // K1 (the first strip) in columns 3 and 4 and then 1: one run of K1.
+        strip_at(g, 3, 0.0, [1.0, 1.0, 1.0, 1.0]);
+        strip_at(g, 4, 0.0, [1.0, 1.0, 1.0, 1.0]);
+        strip_at(g, 1, 0.0, [1.0, 0.0, 0.0, 1.0]);
+        // K2 (the second strip) over column 1 at the same depth.
+        strip_stream(g, 96);
+        strip_at(g, 0, 0.0, [0.0, 1.0, 0.0, 1.0]);
+        // K1 again over column 1 at the same depth: drawn last, it shows.
+        strip_stream(g, 0);
+        strip_at(g, 1, 0.0, [0.0, 0.0, 1.0, 1.0]);
+    };
+    let Some((off, _, _)) = held_script(false, false, &script) else {
+        return;
+    };
+    assert_eq!(off[1], [255, 0, 0, 255], "column 1: the last draw's blue");
+    let (on, held, mismatches) = held_script(true, false, &script).expect("the adapter, as above");
+    assert_eq!(on, off, "the pixels");
+    assert_eq!(mismatches, 0, "each held draw drawn with its own state");
+    assert_eq!(
+        held,
+        (3, 5),
+        "the first three K1 draws as one, K2, the last K1 on its own"
     );
 }

@@ -1162,13 +1162,15 @@ pub struct Device {
     /// blocks' places in 16-byte units, as [`Device::blocks`]).
     table: Vec<u8>,
     /// `NV_WGPU_MERGE_DRAWS`: opaque draws with the same key held and drawn as one instanced draw
-    /// ([`Held`], [`Device::may_hold`]); `NV_WGPU_SORT_DRAWS`: the held keys also sorted. Off by
-    /// default; with the registers from storage only.
+    /// ([`Held`], [`Device::may_hold`]), in place: a draw joins only the key held last.
+    /// `NV_WGPU_SORT_DRAWS`: a draw joins its key wherever it is held, and the held keys are
+    /// sorted (two surfaces at exactly the same depth may swap which one shows). Off by default;
+    /// with the registers from storage only.
     merge_draws: bool,
     sort_draws: bool,
-    /// `NV_WGPU_SORT_DRAWS=pass`: blended draws (stencil off) are held too, after the opaque ones in
-    /// their own order ([`Device::held_after`]), so the opaque draws merge and sort across them,
-    /// until a clear, an upload, a target change or another command ends the hold.
+    /// `NV_WGPU_SORT_DRAWS=pass`: blended draws (stencil off) tested against depth and writing none
+    /// are held too, after the opaque ones in their own order ([`Device::held_after`]); the next
+    /// opaque draw, a clear, an upload, a target change or another command ends the hold.
     across: bool,
     held_after: Vec<Held>,
     /// The held keys in the order of their first draw, each key's place, the vertices they read
@@ -3479,8 +3481,9 @@ impl Device {
     /// `NV_WGPU_MERGE_DRAWS`, `NV_WGPU_SORT_DRAWS`; tests and the replay compare them). Any held
     /// draws are drawn first. Merging needs the registers from storage
     /// ([`Device::set_storage_regs`]): without them nothing is held.
-    /// `across` (`NV_WGPU_SORT_DRAWS=pass`): blended draws are held as well, after the opaque ones
-    /// ([`Device::may_hold_after`]), and the opaque ones sorted.
+    /// `merge` alone joins a draw only to the key held last (in place); `sort` joins it wherever
+    /// its key is held and sorts the keys. `across` (`NV_WGPU_SORT_DRAWS=pass`): blended draws are
+    /// held as well, after the opaque ones ([`Device::may_hold_after`]), and the opaque ones sorted.
     pub fn set_merge_draws(&mut self, merge: bool, sort: bool, across: bool) {
         self.emit_held();
         self.merge_draws = merge || sort || across;
@@ -4915,11 +4918,19 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             && self.counting.is_none()
     }
 
-    /// Holds a draw of `key` with its blocks: with the held draws of its key when there are some
-    /// (it is drawn with the first of them), else as a new key after the others. When a held draw
-    /// reads the same vertices with another key (another pass over the same surface, which must
-    /// stay after it), the held draws are drawn first. The key's place in [`Device::held`].
+    /// Holds a draw of `key` with its blocks: with the held draws of its key when they are the
+    /// last ones held (or, with [`Device::sort_draws`], wherever they are held; it is drawn with
+    /// the first of them), else as a new key after the others. When a held draw reads the same
+    /// vertices with another key (another pass over the same surface, which must stay after it),
+    /// or a blended draw is held ([`Device::held_after`]), the held draws are drawn first. The
+    /// key's place in [`Device::held`].
     fn hold(&mut self, key: HeldKey, member: Member) -> usize {
+        // An opaque draw given after a held blended draw may lie behind it on screen: drawn ahead
+        // of it, the blended draw would be laid over it instead of being covered by it. So only
+        // the opaque draws between two blended ones are drawn together.
+        if !self.held_after.is_empty() {
+            self.emit_held();
+        }
         // Checked before joining: a held key of these vertices drawn first could put this draw
         // before the other key's draw of them.
         if let Some(&g) = self.held_geometry.get(&key.geometry.surface()) {
@@ -4927,10 +4938,16 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 self.emit_held();
             }
         }
+        // In place unless sorted: a draw joins its key only when no draw of another key was held
+        // after it, so where two surfaces meet at exactly the same depth the one drawn last still
+        // shows. Sorted, keys are moved past each other anyway (the one picture change sorting
+        // may make, [`Device::sort_draws`]).
         if let Some(&g) = self.held_index.get(&key) {
-            self.held[g].members.push(member);
-            self.held_draws += 1;
-            return g;
+            if self.sort_draws || g + 1 == self.held.len() {
+                self.held[g].members.push(member);
+                self.held_draws += 1;
+                return g;
+            }
         }
         let g = self.held.len();
         self.held_geometry.insert(key.geometry.surface(), g);
@@ -4961,9 +4978,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// depth LESS or LESSEQUAL and writing none (a draw that ignores depth, such as a sky layer or a
     /// glare, or one that writes it, such as a fading object, is given in order: moved after the
     /// opaque draws it would cover them, or let them show through). The blended
-    /// draws keep their order among themselves; the opaque draws held with them are drawn first.
-    /// A player could tell only where a see-through surface lies in front of an opaque one the
-    /// game drew after it, which then shows through instead of being covered.
+    /// draws keep their order among themselves; the opaque draws held before them are drawn
+    /// first, and an opaque draw given after them has all of them drawn first ([`Device::hold`]).
     fn may_hold_after(&self, depth: bool) -> bool {
         let r = &self.st.rs;
         self.across

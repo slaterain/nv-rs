@@ -15,7 +15,8 @@
 //! (`Device::set_storage_regs`), compared with the first.
 //! `NV_DIGESTS_MERGE=1` (or `sort`, or `pass`: also across blended draws) adds a replay with the
 //! held draws merged (and sorted): its digests as the game gave the draws equal the first
-//! replay's, and as given to the pass the same within each Present.
+//! replay's, and as given to the pass the same within each Present (merged in place, `1`: in the
+//! same order).
 //! `NV_WGPU_CACHE=DIR` as the game's host.
 fn replay(bytes: &[u8], records: bool, storage: bool, from: u64, to: u64) -> Vec<(u64, u64)> {
     let cache = std::env::var_os("NV_WGPU_CACHE").map(Into::into);
@@ -101,8 +102,16 @@ fn main() {
             &off,
             &drawn,
         );
-        // Given to the pass: each Present's draws, every one once, in another order.
+        // Given to the pass: each Present's draws, every one once, in another order; merged in
+        // place, in the game's own order.
         let moved = drawn.iter().zip(&given).filter(|(a, b)| a != b).count();
+        if !sort {
+            ok &= compare(
+                "records off and draws merged in place (as given to the pass)",
+                &off,
+                &given,
+            );
+        }
         let mut want = off.clone();
         want.sort_unstable_by_key(|&(d, p)| (p, d));
         given.sort_unstable_by_key(|&(d, p)| (p, d));

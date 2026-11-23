@@ -586,7 +586,11 @@ fn main() {
                     key,
                     buffers,
                     movable,
-                    see_through: blend_on && zon && (zfunc == 2 || zfunc == 4) && !zwrite && !stencil,
+                    see_through: blend_on
+                        && zon
+                        && (zfunc == 2 || zfunc == 4)
+                        && !zwrite
+                        && !stencil,
                     blend,
                     alpha_test: r(15, 0) != 0,
                     skinned: skinned_decls.contains(&decl),
