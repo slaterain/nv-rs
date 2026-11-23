@@ -7442,6 +7442,10 @@ fn add_door_marker(e: &mut Engine, this: Ptr<MapMenu>, reference: u32) {
             .u32();
         let teleport = e.call(REFERENCE_TELEPORT_00568E50, &args![reference]).u32();
         e.call(TILE_SET_INT, &args![tile, 0xfaau32, 0x1au32]);
+        // `0x79DA81`: lStewieAl's Tweaks' S0983 (`MapMenuLocalDoorSetID`) also gives the tile the door's id.
+        if e.stewie(stewie::MAP_TILES_STORE_REF_IDS) {
+            stewie_set_tile_ref_id(e, tile, reference);
+        }
         let x_id = e.mem.u32(TRAIT_X);
         let map_x = x87_quiet_bits(e.mem.u32(map_point));
         e.call(TILE_SET_FLOAT, &args![tile, x_id, map_x, 1u32]);
@@ -8198,6 +8202,58 @@ fn in_player_cell(e: &mut Engine, reference: u32) -> bool {
     cell == e.call(PLAYER_CELL_008D6F30, &args![player]).u32()
 }
 
+/// The game heap (`011f6238`) and its allocate (`00aa3e40`: `this`, size).
+const GAME_HEAP: u32 = 0x011f_6238;
+const HEAP_ALLOCATE: u32 = 0x00aa_3e40;
+
+/// A user trait Tweaks registers once at its deferred start (`Tile::TraitNameToIDAdd`, `00a00940`,
+/// with -1, its name a string kept for the whole run): looked up by name (`Tile::TextToTrait`,
+/// `00a01860`, `0x80000000` when there is none) and, the first time, registered with a copy of
+/// the name on the game heap, kept as Tweaks' string literal is (a menu file naming the trait
+/// first registers it itself; the id is then that one, as with Tweaks).
+fn stewie_user_trait(e: &mut Engine, name: &[u8]) -> u32 {
+    let found = e.with_stack(0x10, |e, text| {
+        e.mem.write(text.addr(), name);
+        e.call(TEXT_TO_TRAIT, &args![text]).u32()
+    });
+    if found != 0x8000_0000 {
+        return found;
+    }
+    let copy = e
+        .call(HEAP_ALLOCATE, &args![GAME_HEAP, name.len() as u32])
+        .u32();
+    if copy == 0 {
+        return found;
+    }
+    e.mem.write(copy, name);
+    e.call(ADD_USER_TRAIT, &args![copy, 0xffff_ffffu32]).u32()
+}
+
+/// lStewieAl's Tweaks' `PipboyMapStoreRefIDs::SetTileRefID` (row S0983): the tile's `_RefID`
+/// trait gets the reference's form id (+0xC) as the float with those bits (`Tile::SetFloat`,
+/// propagated), and `_RefIDStr` the id in lowercase hexadecimal (`itoa` with radix 16;
+/// `Tile::SetString`, propagated), so a map menu can find the door or companion a tile stands
+/// for.
+fn stewie_set_tile_ref_id(e: &mut Engine, tile: u32, reference: u32) {
+    if reference == 0 {
+        // No reference: Tweaks would read its id through a null pointer (our guard).
+        return;
+    }
+    let id = e.mem.u32(reference + 0xc);
+    let float_trait = stewie_user_trait(e, b"_RefID\0");
+    // The id passed as a float goes through the x87 unit (a signalling NaN pattern, a runtime
+    // reference's 0xFF index, comes out quiet), as every float argument here.
+    e.call(
+        TILE_SET_FLOAT,
+        &args![tile, float_trait, x87_quiet_bits(id), 1u32],
+    );
+    let string_trait = stewie_user_trait(e, b"_RefIDStr\0");
+    e.with_stack(0x10, |e, text| {
+        e.mem.write(text.addr(), format!("{id:x}\0").as_bytes());
+        e.call(TILE_SET_STRING, &args![tile, string_trait, text, 1u32]);
+    });
+}
+
 /// `AddCompanionMarkers`' work on one companion (see there).
 fn add_companion_marker(e: &mut Engine, this: Ptr<MapMenu>, companion: u32, path: u32) {
     let base = this.addr();
@@ -8282,6 +8338,10 @@ fn add_companion_marker(e: &mut Engine, this: Ptr<MapMenu>, companion: u32, path
         TILE_SET_STRING,
         &args![marker, name_id, COMPANION_TEXT, 1u32],
     );
+    // `0x79F000`: S0983 (`OnInitCompanionTile`) also gives the marker the companion's id.
+    if e.stewie(stewie::MAP_TILES_STORE_REF_IDS) {
+        stewie_set_tile_ref_id(e, marker, companion);
+    }
     follow_trait(e, marker, 0xff5, icon);
     let x = map_extent(e, this, 0xfb1, label_x);
     let y = map_extent(e, this, 0xfb0, label_y);
@@ -15271,5 +15331,87 @@ mod n056_tests {
             let lookups = calls_to(&e, TILE_GET_CHILD_BY_ID);
             assert_eq!(lookups.first(), Some(&vec![map, 0x25]));
         }
+    }
+
+    /// Row S0983 (lStewieAl's Tweaks' `PipboyMapStoreRefIDs::SetTileRefID`, `0x79DA81`,
+    /// `0x79F000`): the tile's `_RefID` gets the form id's bits as a float and `_RefIDStr` the id
+    /// in lowercase hexadecimal, both propagated; the two user traits are registered once (a
+    /// game-heap copy of the name the first time, then found by name); no reference: nothing.
+    #[test]
+    fn s0983_a_map_tile_keeps_its_reference_id() {
+        let mut e = Engine::new();
+        let names = std::rc::Rc::new(std::cell::RefCell::new(Vec::<Vec<u8>>::new()));
+        let known = names.clone();
+        e.register(TEXT_TO_TRAIT, move |e, a| {
+            let name = e.mem.cstr(a[0]);
+            let id = known
+                .borrow()
+                .iter()
+                .position(|n| *n == name)
+                .map_or(0x8000_0000, |i| 10_000 + i as u32);
+            Ret {
+                eax: id,
+                ..Ret::default()
+            }
+        });
+        let added = names.clone();
+        e.register(ADD_USER_TRAIT, move |e, a| {
+            added.borrow_mut().push(e.mem.cstr(a[0]));
+            Ret {
+                eax: 10_000 + added.borrow().len() as u32 - 1,
+                ..Ret::default()
+            }
+        });
+        e.register(HEAP_ALLOCATE, |e, a| Ret {
+            eax: e.mem.alloc(a[1]),
+            ..Ret::default()
+        });
+        let strings = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = strings.clone();
+        e.register(TILE_SET_STRING, move |e, a| {
+            seen.borrow_mut().push((a[0], a[1], e.mem.cstr(a[2]), a[3]));
+            Ret::default()
+        });
+        e.register(TILE_SET_FLOAT, |_, _| Ret::default());
+        let door = e.mem.alloc(0x40);
+        e.mem.set_u32(door + 0xc, 0x0010_3e69);
+        e.call_log = Some(vec![]);
+        stewie_set_tile_ref_id(&mut e, 0x900, door);
+        stewie_set_tile_ref_id(&mut e, 0x904, door);
+        stewie_set_tile_ref_id(&mut e, 0x908, 0);
+        assert_eq!(
+            names.borrow().clone(),
+            vec![b"_RefID".to_vec(), b"_RefIDStr".to_vec()]
+        );
+        let floats: Vec<Vec<u32>> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == TILE_SET_FLOAT)
+            .map(|(_, w)| w[..4].to_vec())
+            .collect();
+        assert_eq!(
+            floats,
+            vec![
+                vec![0x900, 10_000, 0x0010_3e69, 1],
+                vec![0x904, 10_000, 0x0010_3e69, 1]
+            ]
+        );
+        assert_eq!(
+            strings.borrow().clone(),
+            vec![
+                (0x900, 10_001, b"103e69".to_vec(), 1),
+                (0x904, 10_001, b"103e69".to_vec(), 1)
+            ]
+        );
+        let allocations = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == HEAP_ALLOCATE)
+            .count();
+        assert_eq!(allocations, 2);
     }
 }

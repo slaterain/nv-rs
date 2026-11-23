@@ -96,6 +96,7 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
     ("S0218", "bWorldMapNoExteriorDoorFix", bit(52)),
     ("S0227", "bTileTextureCacheFix", bit(56)),
     ("S0883", "bMoreDescriptiveSettingsSaveError", bit(30)),
+    ("S0983", "bPipboyMapStoreRefIDs", bit(63)),
 ];
 
 /// Share 3's fix bit `n` (`Row::share` over its range).

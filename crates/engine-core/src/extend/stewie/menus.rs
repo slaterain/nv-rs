@@ -239,3 +239,7 @@ pub const CONSOLE_QUICK_SAVE_AND_AMMO_TAB: Row = Row::share(MENUS_FIXES, MENUS_F
 /// `0x800F70`): a highlighted body part hides the first-person weapon only in the VATS menu, and
 /// the highlight is drawn for references and missiles that have a node and are not dying.
 pub const VATS_HIGHLIGHT_KEEPS_WEAPON: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 62);
+/// S0983 `PipboyMapStoreRefIDs` (`MapMenu::UpdateLocalMap` `0079d410` at `0x79DA81`,
+/// `MapMenu::AddCompanionMarkers` `0079ea30` at `0x79F000`): the Pip-Boy map's door and
+/// companion tiles carry their reference's id (`_RefID`, `_RefIDStr`) for menus that read them.
+pub const MAP_TILES_STORE_REF_IDS: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 63);

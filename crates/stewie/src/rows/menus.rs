@@ -510,4 +510,12 @@ pub const ROWS: &[Row] = &[
         tweaks: None,
         summary: "the settings save failure message names the ini file and says why",
     },
+    Row {
+        bit: stewie::MAP_TILES_STORE_REF_IDS,
+        function: "PipboyMapStoreRefIDs",
+        plan: "S0983",
+        key: "bPipboyMapStoreRefIDs",
+        tweaks: None,
+        summary: "the Pip-Boy map's door and companion tiles carry their reference's id for menus that read it",
+    },
 ];
