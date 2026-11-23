@@ -103,10 +103,18 @@ pub enum Count {
     GridHavokNs,
     GridLoadNs,
     GridTerrainNs,
+    /// Inside the grid array's load, per grid cell (`TES::LoadGridCell`, `00451a50`), main's time in each part (ns):
+    /// finding the cell (`00585b30`, which reads it from the plugin when it is not in memory) or making a missing one
+    /// (`00461c20`, its persistent references and temporary data), the land (its mesh loaded or updated, the lowest
+    /// height for the water bit) and the placeable water. The cells made count in `GridCellsMade`.
+    GridCellFindNs,
+    GridCellsMade,
+    GridLandNs,
+    GridWaterNs,
 }
 
 /// How many counts there are.
-pub const COUNTS: usize = Count::GridTerrainNs as usize + 1;
+pub const COUNTS: usize = Count::GridWaterNs as usize + 1;
 
 /// Times main's work from [`Timed::main`] to its drop into a `...Ns` count: nothing on another game thread or with
 /// the log off. One clock read at each end, at places that run a few times a frame at most and do far more work.
