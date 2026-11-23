@@ -2281,6 +2281,61 @@ mod tests {
         assert_eq!(e.mem.u32(s2), n3, "no chain of main's: the drawing side's");
     }
 
+    /// The alpha holder's first pass taken on the drawing side (`own::take_first_pass`) goes into the spare chain the
+    /// packet holds, before the old spare; guest memory's spare word stays as the cut left it until the join.
+    #[test]
+    fn a_first_pass_taken_on_the_drawing_side_goes_to_the_packets_spare_chain() {
+        use super::super::detach;
+        let mut e = Engine::new();
+        let holder = e.mem.alloc(0x20);
+        let nodes = e.mem.alloc(0x24);
+        let (n1, n2, s1) = (nodes, nodes + 0xc, nodes + 0x18);
+        e.mem.set_u32(n1, n2);
+        e.mem.set_u32(n2 + 4, n1);
+        e.mem.set_u32(holder, 0x0002_0000);
+        e.mem.set_u32(holder + 0x10, n1);
+        e.mem.set_u32(holder + 0x14, n2);
+        e.mem.set_u32(holder + 0x18, s1);
+        e.mem.set_u32(holder + 0x1c, 2);
+        assert!(begin(&e));
+        let handed = detach::Handed {
+            words: vec![holder + 0x10, holder + 0x14, holder + 0x1c],
+            counts: vec![holder],
+            spares: vec![holder + 0x18],
+        };
+        take_handed(&mut e, &handed);
+        serve(&mut e);
+        super::super::own::take_first_pass(&mut e, holder);
+        assert_eq!(e.mem.u32(holder + 0x18), 0, "guest memory's spare word");
+        assert_eq!(
+            detach::word(&e, holder + 0x18),
+            n1,
+            "the packet's spare chain"
+        );
+        assert_eq!(e.mem.u32(n1), s1, "the node before the old spare");
+        assert_eq!(e.mem.u32(s1 + 4), n1, "the old spare's back link");
+        assert_eq!(
+            [
+                detach::word(&e, holder + 0x10),
+                u32::from(detach::half(&e, holder + 2))
+            ],
+            [n2, 1]
+        );
+        unserve(&mut e);
+        let packet = detach(&e).expect("handed over");
+        assert!(attach(packet).is_ok());
+        let _ = end(&mut e);
+        assert_eq!(
+            [
+                e.mem.u32(holder + 0x18),
+                e.mem.u32(holder + 0x10),
+                e.mem.u32(holder + 0x1c),
+                e.mem.u32(holder)
+            ],
+            [n1, n2, 1, 0x0001_0000]
+        );
+    }
+
     #[test]
     fn own_state_is_written_through_the_packet_and_goes_back_at_the_end() {
         for scribble in [None, Some(SCRIBBLE)] {
