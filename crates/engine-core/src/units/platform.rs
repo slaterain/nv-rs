@@ -2493,6 +2493,20 @@ fn set_thread_priority(e: &mut Engine, handle: u32, _priority: i32) -> i32 {
         )) as i32
 }
 
+// Platform: replaces KERNEL32.DLL SetThreadIdealProcessor (import)
+/// Accepts any ideal processor for a thread handle or the current thread and answers 0, the
+/// processor a plain machine's new thread has as its ideal one (the threads are not pinned here, so
+/// it has no effect); `(DWORD)-1`, Windows' failure, for another handle. Havok's worker threads
+/// (`hkCpuJobThreadPool`'s thread function `00d2cfb0`) set it by their thread number; the game never
+/// reads the answer.
+fn set_thread_ideal_processor(e: &mut Engine, handle: u32, _processor: u32) -> u32 {
+    if set_thread_priority(e, handle, 0) != 0 {
+        0
+    } else {
+        u32::MAX
+    }
+}
+
 /// (DLL, name, platform version) of the imports with a Rust stand-in: the core's own (the
 /// kernel objects, threads, memory and clock the engine crates' tests use), then those of the
 /// platform layer when the program links it ([`Layer::imports`], `engine-platform`).
@@ -2717,6 +2731,11 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             "SetThreadPriority",
             entry!(0, set_thread_priority(u32, i32) -> i32).1,
         ),
+        (
+            k,
+            "SetThreadIdealProcessor",
+            entry!(0, set_thread_ideal_processor(u32, u32) -> u32).1,
+        ),
         (k, "TlsAlloc", entry!(0, tls_alloc() -> u32).1),
         (k, "TlsFree", entry!(0, tls_free(u32) -> i32).1),
         (k, "TlsGetValue", entry!(0, tls_get_value(u32) -> u32).1),
@@ -2920,6 +2939,7 @@ mod tests {
     const VIRTUAL_FREE: u32 = 0x00fd_f10c;
     const VIRTUAL_ALLOC: u32 = 0x00fd_f114;
     const SET_THREAD_PRIORITY: u32 = 0x00fd_f11c;
+    const SET_THREAD_IDEAL_PROCESSOR: u32 = 0x00fd_f12c;
     const GET_CURRENT_THREAD: u32 = 0x00fd_f120;
     const CREATE_THREAD: u32 = 0x00fd_f124;
     const RESUME_THREAD: u32 = 0x00fd_f158;
@@ -2943,6 +2963,7 @@ mod tests {
             (VIRTUAL_FREE, "VirtualFree"),
             (VIRTUAL_ALLOC, "VirtualAlloc"),
             (SET_THREAD_PRIORITY, "SetThreadPriority"),
+            (SET_THREAD_IDEAL_PROCESSOR, "SetThreadIdealProcessor"),
             (GET_CURRENT_THREAD, "GetCurrentThread"),
             (CREATE_THREAD, "CreateThread"),
             (RESUME_THREAD, "ResumeThread"),
@@ -3168,6 +3189,15 @@ mod tests {
         assert_eq!(call(&mut e, SET_THREAD_PRIORITY, &[t, -1i32 as u32]), 1);
         assert_eq!(call(&mut e, SET_THREAD_PRIORITY, &[CURRENT_THREAD, 2]), 1);
         assert_eq!(call(&mut e, SET_THREAD_PRIORITY, &[0x99, 0]), 0);
+        assert_eq!(call(&mut e, SET_THREAD_IDEAL_PROCESSOR, &[t, 3]), 0);
+        assert_eq!(
+            call(&mut e, SET_THREAD_IDEAL_PROCESSOR, &[CURRENT_THREAD, 1]),
+            0
+        );
+        assert_eq!(
+            call(&mut e, SET_THREAD_IDEAL_PROCESSOR, &[0x99, 0]),
+            u32::MAX
+        );
         assert_eq!(call(&mut e, RESUME_THREAD, &[CURRENT_THREAD]), 0);
         assert_eq!(call(&mut e, RESUME_THREAD, &[0x99]), 0xffff_ffff);
         // A suspended thread does not run, so it is not signalled.
