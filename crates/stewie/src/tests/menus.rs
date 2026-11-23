@@ -105,6 +105,7 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
     ("S0340", "bDecreaseDialogueClickingDelay", tweak(9)),
     ("S0348", "bConsoleNoStoreDuplicates", tweak(11)),
     ("S0351", "bAutoSkipLoadingTiles", tweak(2)),
+    ("S0377", "bHideCursorInDialog", tweak(14)),
     ("S0407", "bNonSelectablePlayerInConsole", tweak(3)),
     ("S0467", "bSkipSkillMenuIfNoPointsToAssign", tweak(12)),
     ("S0482", "bDontAllowConsoleBeforeInitIsDone", tweak(4)),

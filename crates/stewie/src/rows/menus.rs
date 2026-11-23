@@ -583,6 +583,14 @@ pub const ROWS: &[Row] = &[
         summary: "the intro video is skipped",
     },
     Row {
+        bit: stewie::DIALOG_HIDES_CURSOR,
+        function: "HideCursorInDialog",
+        plan: "S0377",
+        key: "bHideCursorInDialog",
+        tweaks: Some(("Tweaks", "bHideCursorInDialog")),
+        summary: "the cursor is hidden while the speaker talks in a dialogue",
+    },
+    Row {
         bit: stewie::CONSOLE_PLAYER_NOT_SELECTABLE,
         function: "patchNonSelectablePlayerInConsole",
         plan: "S0407",
