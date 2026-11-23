@@ -190,12 +190,21 @@ pub fn take(e: &Engine, acc: Ptr<BSShaderAccumulator>) {
 }
 
 /// The accumulator's cursor arrays as own blocks, an entry for each of its renderers (`super::own::with_cursors`):
-/// main's own pass type range draws after the cut write them while the drawing side draws.
+/// main's own pass type range draws after the cut write them while the drawing side draws. An accumulator without
+/// arrays (none made yet, or no renderers) has nothing to take.
 pub fn take_cursors(e: &Engine, acc: Ptr<BSShaderAccumulator>) {
+    if acc.addr() == 0 {
+        return;
+    }
     let n = super::packet::renderer_count(e, acc);
+    if n == 0 {
+        return;
+    }
     for (at, size) in super::own::CURSOR_ARRAYS {
         let array = e.global::<u32>(acc.addr().wrapping_add(at));
-        capture::own(e, array, 0, size.wrapping_mul(n));
+        if array != 0 {
+            capture::own(e, array, 0, size.wrapping_mul(n));
+        }
     }
 }
 
