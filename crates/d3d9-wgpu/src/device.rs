@@ -1527,6 +1527,8 @@ struct SunState {
     /// Characters cast ([`sun_shadow::characters`] when made): skinned draws are casters and the
     /// lit variants read the game's own actor shadows as lit.
     characters: bool,
+    /// Still casters' pipelines are made on threads of their own too ([`sun_shadow::casters_ahead`] when made).
+    ahead: bool,
     /// Each skinned geometry's bones' bind-pose spheres ([`sun_shadow::skin_spheres`]) by
     /// [`sun_shadow::GeoKey::geometry`], with the key they were read for (none: unreadable).
     skins: Map<sun_shadow::GeoKey, SkinOf>,
@@ -1534,7 +1536,8 @@ struct SunState {
     skinned: Vec<sun_shadow::Skinned>,
     /// Characters cast since the last line in the log.
     skinned_seen: u64,
-    /// Characters' caster pipelines on their way (made on threads of their own).
+    /// Caster pipelines on their way (made on threads of their own): characters', and still casters' with
+    /// [`sun_shadow::casters_ahead`].
     caster_pending: Map<PipeOf, std::sync::mpsc::Receiver<Result<wgpu::RenderPipeline, String>>>,
     /// The characters' places (geometry, centre) of the frame before and of this one (kept for its
     /// list), for the frame's step; and a test's allowance in place of the measured one.
@@ -1666,6 +1669,7 @@ impl SunState {
                 .and_then(|v| v.trim().parse().ok())
                 .unwrap_or(0),
             characters: sun_shadow::characters(),
+            ahead: sun_shadow::casters_ahead(),
             skins: Map::default(),
             skinned: Vec::new(),
             skinned_seen: 0,
@@ -8059,6 +8063,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // sun's side, review of #726 round 2). The layer is a frame old when the lit draws read
         // it: a character moving away from the sun then does not shade its own sunlit side.
         let per_frame = skin.is_some() || (ps.face && characters);
+        // A still caster's pipeline on a thread of its own too ([`sun_shadow::casters_ahead`]).
+        let ahead = per_frame || self.sun.as_ref().is_some_and(|s| s.ahead);
         let samplers = self.sampler_bindings(vs, ps);
         let sampler_keys: Vec<(u32, u8, bool)> =
             samplers.as_slice().iter().map(|(k, _)| *k).collect();
@@ -8078,9 +8084,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         );
         let pipe = match self.sun.as_ref().and_then(|s| s.pipes.get(&pkey)) {
             Some(p) => *p,
-            // A character's: made on a thread of its own the first time (no hitch when one is
-            // first seen); it casts from the frame its pipeline is there.
-            None if per_frame => {
+            // A character's (and a still caster's with [`sun_shadow::casters_ahead`]): made on a thread
+            // of its own the first time (no hitch when one is first seen); it casts from the frame its
+            // pipeline is there.
+            None if ahead => {
                 let sun = self.sun.as_mut().expect("on");
                 match sun.caster_pending.get(&pkey).map(|rx| rx.try_recv()) {
                     Some(Ok(made)) => {
@@ -8089,7 +8096,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                             Ok(p) => Some(p),
                             Err(e) => {
                                 self.warn(format!(
-                                    "sun shadows: a character's caster pipeline wgpu refuses: {e}"
+                                    "sun shadows: a caster pipeline made on a thread of its own wgpu refuses: {e}"
                                 ));
                                 None
                             }

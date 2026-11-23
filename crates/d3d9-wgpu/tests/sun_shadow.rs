@@ -3948,3 +3948,60 @@ fn a_far_caster_stepping_across_frames_keeps_only_its_latest_place() {
     assert!(seen[2][0].2, "moving while it steps: {:?}", seen[2]);
     assert!(!seen[43][0].2, "still again: {:?}", seen[43]);
 }
+
+/// The box's frames with still casters' pipelines made ahead ([`sun_shadow::casters_ahead`]): the
+/// first frame (its pipeline sent to a thread of its own), the second after the pipeline is there
+/// (the maps drawn from the first frame's casters: none kept), the third (the maps drawn from the
+/// second's, the box among them).
+fn ahead_frames(samples: u32) -> Option<Vec<Vec<[u8; 4]>>> {
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    sun_shadow::enable_debug();
+    sun_shadow::casters_ahead_for_tests(Some(true));
+    let b = backend(samples);
+    sun_shadow::enable(false);
+    sun_shadow::casters_ahead_for_tests(None);
+    let mut b = b?;
+    let first = frame(&mut b, true);
+    present(&mut b, 1);
+    if let Some(d) = b.device() {
+        d.wait_for_sun_variants();
+    }
+    let second = frame(&mut b, true);
+    present(&mut b, 2);
+    let third = frame(&mut b, true);
+    Some(vec![first, second, third])
+}
+
+/// Still casters' pipelines made ahead (`NV_SUN_CASTERS_AHEAD=1`): the render thread does not stop
+/// to make the box's pipeline the frame the box is first seen; the box casts from the frame its
+/// pipeline is there, the same shadow as with the pipeline made at once one frame earlier, and not
+/// before.
+#[test]
+fn a_still_casters_pipeline_made_ahead_casts_once_it_is_there() {
+    use d3d9_stream::hitch::{snapshot, Count};
+    let Some(at_once) = picture(1, true, true) else {
+        return;
+    };
+    let before = snapshot();
+    let frames = ahead_frames(1).expect("the adapter");
+    let made =
+        snapshot()[Count::ShadowPipelines as usize] - before[Count::ShadowPipelines as usize];
+    assert!(made >= 1, "the box's caster pipeline made: {made}");
+    for p in [
+        [-50.0, 150.0, 0.0],
+        [-60.0, 140.0, 0.0],
+        [-45.0, 165.0, 0.0],
+    ] {
+        let shadowed = at(&at_once, pixel(p));
+        assert!(
+            at(&frames[1], pixel(p))[2] > shadowed[2],
+            "{p:?}: no shadow before the pipeline was there to keep the box: {:?} against {shadowed:?}",
+            at(&frames[1], pixel(p))
+        );
+        assert_eq!(
+            at(&frames[2], pixel(p)),
+            shadowed,
+            "{p:?}: the shadow once the pipeline is there"
+        );
+    }
+}

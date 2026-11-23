@@ -3960,6 +3960,28 @@ pub fn characters() -> bool {
     CHARACTERS.load(Ordering::Relaxed) != 0
 }
 
+/// A test's choice of [`casters_ahead`] (0: none, the run's; 1 off; 2 on).
+static AHEAD_FOR_TESTS: AtomicU8 = AtomicU8::new(0);
+
+/// Tests: still casters' pipelines made ahead or not for devices made from now on, whatever the run says (`None`:
+/// the run's choice again).
+#[doc(hidden)]
+pub fn casters_ahead_for_tests(on: Option<bool>) {
+    AHEAD_FOR_TESTS.store(on.map_or(0, |on| 1 + u8::from(on)), Ordering::Relaxed);
+}
+
+/// Whether devices made now make a still caster's depth-only pipeline on a thread of its own the first time its
+/// shader, declaration and layout are seen, as a character's already is (`NV_SUN_CASTERS_AHEAD=1`): the render thread
+/// does not stop for the driver's compile (several ms each when the driver has not made it before; a turn into a new
+/// area brings many at once), and the caster casts from the frame its pipeline is there (its maps are drawn again
+/// then, as for any caster that comes). Off: made on the render thread when first seen, casting in that frame.
+pub fn casters_ahead() -> bool {
+    match AHEAD_FOR_TESTS.load(Ordering::Relaxed) {
+        0 => std::env::var("NV_SUN_CASTERS_AHEAD").is_ok_and(|v| v.trim() == "1"),
+        n => n == 2,
+    }
+}
+
 /// A skinned caster this small in a map (radius in texels) is left out of it: its shadow is a
 /// blot of a texel or two.
 pub const SKIN_MIN_TEXELS: f64 = 2.0;
