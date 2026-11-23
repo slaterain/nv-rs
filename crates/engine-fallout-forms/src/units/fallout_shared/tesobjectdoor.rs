@@ -926,7 +926,7 @@ pub fn fn_005180b0(
     if moved_actor != 0 {
         e.call(0x008a_e640, &args![moved_actor, 0u32]);
     }
-    move_ref_to_new_space(e, activator, cell, worldspace);
+    move_ref_to_new_space(e, activator.addr(), cell, worldspace);
     true
 }
 
