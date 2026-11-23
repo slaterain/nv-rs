@@ -3017,8 +3017,6 @@ bSunShadowsCharacters=0
         assert!(!choices[0].is_on(&JIP_GAME_PATCHES));
     }
 
-    /// JohnnyGuitar's editor ids: on in the fixes preset, off in vanilla, its own key or variable over
-    /// both; installed, the built-in is on exactly when the row is.
     /// The thread heap: on in the fixes preset, off in vanilla, `bThreadHeap` or `NV_THREAD_HEAP` over
     /// both; on, the install turns the memory's thread heap on.
     #[test]
@@ -3049,6 +3047,8 @@ bThreadHeap=0
         }
     }
 
+    /// JohnnyGuitar's editor ids: on in the fixes preset, off in vanilla, its own key or variable over
+    /// both; installed, the built-in is on exactly when the row is.
     #[test]
     fn jg_editor_ids_follow_the_preset() {
         assert!(!Choice::vanilla().is_on(&JG_EDITOR_IDS));
