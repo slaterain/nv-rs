@@ -591,6 +591,8 @@ pub fn bgssaveloadmanager_save_game(
 ) -> bool {
     engine_core::hitch::one(engine_core::hitch::Count::Saves);
     engine_core::draw_thread::save_or_load(e, 0x0085_03b0);
+    // The "cell borders in steps" row: cells a grid shift left pending come up before the save.
+    engine_fallout_cell::units::fallout_shared::tes::grid_steps_finish(e);
     let is_autosave = fn_00851a20(e, this, name);
     let is_quicksave = fn_00851a60(e, this, name);
     let is_system_save = fn_00851b00(e, this, name);

@@ -71,6 +71,7 @@ pub static FIXES: &[Fix] = &[
     crate::patch_data::STRIP_LOD_WATER,
     crate::direct_files::FIX,
     DRAW_THREAD,
+    GRID_STEPS,
 ];
 
 /// The IO manager's wait for queued loads (`00c3dfa0`: main at a cell border, a load, a save) sleeps
@@ -527,6 +528,24 @@ pub const DRAW_THREAD: Fix = Fix {
     install: install_nothing,
 };
 
+/// Cell borders in steps (OFF in every preset, [`OFF_IN_EVERY_PRESET`], until its in-game check): at a grid shift in
+/// play, the new cells' references are attached and their models queued (`0054bcf0`, with the buffer entry and the 3D
+/// update: `TES::GridArrayLoad`'s second loop) over the next frames, two cells a frame at the start of the frame's grid
+/// update, in the exe's order, instead of all in the shift's frame (about 5 ms of it in the cellb runs). The same calls
+/// with the same arguments; the cells stay loaded (load state 5) meanwhile; a save, a load, the next grid load and the
+/// grid's attach or detach finish them first (`engine::units::fallout_shared::tes`, "cell borders in steps").
+pub const GRID_STEPS: Fix = Fix {
+    name: "cell borders in steps",
+    env: "NV_GRID_STEPS",
+    addresses: &[],
+    summary: "off in every preset until checked: at a cell border the new cells' objects are brought into the world over the next few frames, two cells a frame, so the border frame does less at once",
+    install: install_grid_steps,
+};
+
+fn install_grid_steps(e: &mut Engine) {
+    engine::units::fallout_shared::tes::grid_steps_turn_on(e);
+}
+
 /// UI Organizer built in (`crates/uio`, parts 1 and 2): its lists (`Data\uio\supported.txt` and
 /// `Data\uio\public\*.txt`) put UI mods' additions into the menus, in memory, and every menu file
 /// is read through UIO's reader and parsed by its own XML parser. It changes how every menu file
@@ -602,7 +621,7 @@ fn install_nothing(_: &mut Engine) {}
 
 /// Rows that are off in every preset until the maintainer turns them on: only their own variable or `Fallout.ini`
 /// line turns them on.
-pub const OFF_IN_EVERY_PRESET: &[&str] = &[DRAW_THREAD.env];
+pub const OFF_IN_EVERY_PRESET: &[&str] = &[DRAW_THREAD.env, GRID_STEPS.env];
 
 /// The rows that register nothing at an exe address: the menu limit paces the uncapped step;
 /// the extender's rows set flags `crates/nvse` reads.
@@ -629,6 +648,7 @@ const NO_ADDRESS: &[&str] = &[
     XNVSE_EXTRACT_ARGS.name,
     SHADER_WARM.name,
     DRAW_THREAD.name,
+    GRID_STEPS.name,
 ];
 
 /// Menus' frames a second at most when nothing says otherwise (the maintainer, 2026-11-07).

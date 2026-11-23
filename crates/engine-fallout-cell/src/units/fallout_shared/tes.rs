@@ -1137,6 +1137,8 @@ pub fn fn_00450d80(e: &mut Engine, this: Ptr<TES>) {
 ///
 /// A cell is attached when its load state is 3 and detached when it is 6.
 pub fn tes_cull_grid_cells(e: &mut Engine, this: Ptr<TES>, detach: u8, _unused: u32) {
+    // The "cell borders in steps" row: pending cells come up first (the detach takes only state 6 cells).
+    grid_steps_finish(e);
     let data_handler: u32 = e.global(DATA_HANDLER);
     if data_handler == 0 {
         return;
@@ -2381,6 +2383,8 @@ pub fn fn_00452540(e: &mut Engine, _this: Ptr<TES>) -> u8 {
 /// unloaded and attached again with the havok world locked, then the terrain
 /// manager is updated at the player and true is returned.
 pub fn tes_update_current_grid_cell(e: &mut Engine, this: Ptr<TES>, pos: Ptr, flag: u8) -> bool {
+    // The "cell borders in steps" row: the new cells a shift left pending are brought up a few a frame, here.
+    grid_steps_bring_up(e, GRID_STEPS_PER_FRAME);
     let base = this.addr();
     let list = e.call(GET_LAST_LOADED_EXTERIORS, &args![this]).u32();
     e.call(0x0047_0470, &args![list]);
@@ -2787,6 +2791,114 @@ pub fn tes_all_cells_in_grid_loaded(e: &mut Engine, this: Ptr<TES>) -> bool {
     true
 }
 
+/// The "cell borders in steps" row (`NV_GRID_STEPS`, OFF in every preset until its in-game check): at a grid shift in
+/// play, the new cells that `TES::GridArrayLoad`'s second loop would bring up in the shift's frame (load state 5:
+/// `0054bcf0` attaches the cell's references and queues their models, the cell goes into the buffer, its 3D's
+/// properties and update) are left pending and brought up at the start of the next frames' grid update
+/// (`TES::UpdateCurrentGridCell`, run once a frame from `0086fbe0`), [`GRID_STEPS_PER_FRAME`] a frame, in the
+/// loop's order. Each one is brought up by exactly the exe's calls with the exe's arguments; only the frame differs.
+/// The cells keep load state 5 meanwhile, which `TES::IsCellLoaded(cell, 1)` (`004511e0`) already counts as loaded,
+/// so their actors' process level does not change. Whatever needs them up first finishes them all: the next grid
+/// load (`TES::GridArrayLoad`), the grid's attach or detach (`TES::CullGridCells`, which detaches only state 6
+/// cells), and a save's or a load's start ([`grid_steps_finish`], called from those entries). Not with the loading
+/// menu up (a load, a fast travel): the exe's single pass.
+pub const GRID_STEPS_PER_FRAME: usize = 2;
+
+/// A run's pending cells: `(TES, cell, the 0054bcf0 flag)` in the loop's order. Keyed by the run's kernel (the
+/// same in every real thread's engine of a run); a run is in the list once the row is on for it.
+struct GridStepsRun {
+    id: usize,
+    pending: std::collections::VecDeque<(u32, u32, u8)>,
+}
+
+static GRID_STEPS_RUNS: std::sync::Mutex<Vec<GridStepsRun>> = std::sync::Mutex::new(Vec::new());
+
+fn with_grid_steps<R>(e: &Engine, f: impl FnOnce(&mut GridStepsRun) -> R) -> Option<R> {
+    let id = e.kernel.id();
+    let mut runs = GRID_STEPS_RUNS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    runs.iter_mut().find(|r| r.id == id).map(f)
+}
+
+/// Turns the row on for `e`'s run (the host's fixes row installs it).
+pub fn grid_steps_turn_on(e: &Engine) {
+    let id = e.kernel.id();
+    let mut runs = GRID_STEPS_RUNS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !runs.iter().any(|r| r.id == id) {
+        runs.push(GridStepsRun {
+            id,
+            pending: std::collections::VecDeque::new(),
+        });
+    }
+}
+
+/// Whether the row is on for `e`'s run.
+pub fn grid_steps_on(e: &Engine) -> bool {
+    with_grid_steps(e, |_| ()).is_some()
+}
+
+/// How many cells `e`'s run has pending.
+pub fn grid_steps_pending(e: &Engine) -> usize {
+    with_grid_steps(e, |r| r.pending.len()).unwrap_or(0)
+}
+
+/// Brings up every pending cell now: the save's and the load's entries call it before they start.
+pub fn grid_steps_finish(e: &mut Engine) {
+    grid_steps_bring_up(e, usize::MAX);
+}
+
+/// Brings up at most `limit` pending cells, oldest first, with the Havok world's `+0x18` count raised around them as
+/// the grid load raises it (their bodies are queued, not added one by one) and dropped with flag 1, as the shift in
+/// play drops it (`00c6b540`: at zero, the queued bodies go in at most 100 a frame). A cell that is no longer in load
+/// state 5 (detached or unloaded meanwhile) is passed over, as the exe's loop would pass over it.
+fn grid_steps_bring_up(e: &mut Engine, limit: usize) {
+    if grid_steps_pending(e) == 0 {
+        return;
+    }
+    let world = fn_00451010(e);
+    if world != 0 {
+        e.call(HAVOK_WORLD_ADD_COUNT_18, &args![world]);
+    }
+    let mut done = 0;
+    while done < limit {
+        let Some((this, cell, flag)) = with_grid_steps(e, |r| r.pending.pop_front()).flatten()
+        else {
+            break;
+        };
+        if fn_00450fd0(e, Ptr::new(cell)) == 5 {
+            grid_bring_up_cell(e, Ptr::new(this), cell, flag);
+        }
+        done += 1;
+    }
+    let world = fn_00451010(e);
+    if world != 0 {
+        e.call(HAVOK_WORLD_DROP_COUNT_18, &args![world, 1u32]);
+    }
+}
+
+/// `TES::GridArrayLoad`'s second loop for one cell in load state 5: attached (`0054bcf0` with
+/// `flag`, 1 when the loading menu is not up), put in the buffer, its 3D's properties updated and, unless `009938b0`
+/// says no, its 3D updated with a zero update object.
+fn grid_bring_up_cell(e: &mut Engine, this: Ptr<TES>, cell: u32, flag: u8) {
+    use engine_core::hitch::{Count as Hitch, Timed};
+    let refs_timed = Timed::main(Hitch::GridLoadRefsNs);
+    e.call(0x0054_bcf0, &args![cell, u32::from(flag)]);
+    e.call(TES_ADD_TO_BUFFER, &args![this, cell]);
+    drop(refs_timed);
+    let _update_timed = Timed::main(Hitch::GridLoad3dNs);
+    let node = e.call(CELL_LOAD_3D, &args![cell]).u32();
+    e.call(NODE_UPDATE_PROPERTIES, &args![node]);
+    if fn_00453470(e, Ptr::new(node)) == 0 {
+        e.with_stack(12, |e, update| {
+            e.call(UPDATE_OBJECT_CTOR, &args![update, 0.0f32, 0u8, 0u8]);
+            e.call(NODE_UPDATE, &args![node, update]);
+        });
+    }
+}
+
 // Translated from 00452ff0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `TES::GridArrayLoad` (Xbox PDB): loads every cell of the `uGridsToLoad`
 /// square around the current grid cell, then attaches them.
@@ -2805,6 +2917,8 @@ pub fn tes_all_cells_in_grid_loaded(e: &mut Engine, this: Ptr<TES>) -> bool {
 ///
 /// Not translated: the compiler's exception-unwinding frame.
 pub fn tes_grid_array_load(e: &mut Engine, this: Ptr<TES>) {
+    // The "cell borders in steps" row: cells an earlier shift left pending come up before this load.
+    grid_steps_finish(e);
     e.with_stack(SCOPE_GUARD_SIZE, |e, guard| {
         e.call(
             SCOPE_GUARD_CTOR,
@@ -2827,6 +2941,9 @@ pub fn tes_grid_array_load(e: &mut Engine, this: Ptr<TES>) {
             let world = fn_00451010(e);
             e.call(HAVOK_WORLD_ADD_COUNT_18, &args![world]);
         }
+        // The hitch log's timers (main only; no effect on the game).
+        use engine_core::hitch::{Count as Hitch, Timed};
+        let cells_timed = Timed::main(Hitch::GridLoadCellsNs);
         let mut x = 0u32;
         while x < grids_to_load(e) {
             let mut y = 0u32;
@@ -2882,10 +2999,14 @@ pub fn tes_grid_array_load(e: &mut Engine, this: Ptr<TES>) {
             }
             x += 1;
         }
+        drop(cells_timed);
+        let havok_timed = Timed::main(Hitch::GridLoadHavokNs);
         if fn_00451010(e) != 0 {
             let world = fn_00451010(e);
             e.call(HAVOK_WORLD_DROP_COUNT_18, &args![world, 0u32]);
         }
+        drop(havok_timed);
+        let pass_timed = Timed::main(Hitch::GridLoadPassNs);
         let save_load: u32 = e.global(SAVE_LOAD_GAME);
         fn_004534f0(e, save_load, 0);
         if e.call(0x0087_27b0, &args![save_load]).bool() {
@@ -2902,10 +3023,16 @@ pub fn tes_grid_array_load(e: &mut Engine, this: Ptr<TES>) {
         if !e.call(0x0042_ce10, &args![script_context]).bool() {
             e.call(0x0084_92b0, &args![script_context, 0u32]);
         }
+        drop(pass_timed);
         if fn_00451010(e) != 0 {
             let world = fn_00451010(e);
             e.call(HAVOK_WORLD_ADD_COUNT_18, &args![world]);
         }
+        // The "cell borders in steps" row, in play (no loading menu): the state 5 cells of the grid's outer ring (two
+        // cells or more from the centre, uGridsToLoad 5 or more) wait for the next frames; the inner ones, where the
+        // player is, come up now as in the exe.
+        let in_steps = loading_menu_visible == 0 && grid_steps_on(e);
+        let steps_size = if in_steps { grids_to_load(e) } else { 0 };
         let mut x = 0u32;
         while x < grids_to_load(e) {
             let mut y = 0u32;
@@ -2927,18 +3054,15 @@ pub fn tes_grid_array_load(e: &mut Engine, this: Ptr<TES>) {
                         .u32();
                     if cell != 0 {
                         if fn_00450fd0(e, Ptr::new(cell)) == 5 {
-                            e.call(
-                                0x0054_bcf0,
-                                &args![cell, (loading_menu_visible == 0) as u32],
-                            );
-                            e.call(TES_ADD_TO_BUFFER, &args![this, cell]);
-                            let node = e.call(CELL_LOAD_3D, &args![cell]).u32();
-                            e.call(NODE_UPDATE_PROPERTIES, &args![node]);
-                            if fn_00453470(e, Ptr::new(node)) == 0 {
-                                e.with_stack(12, |e, update| {
-                                    e.call(UPDATE_OBJECT_CTOR, &args![update, 0.0f32, 0u8, 0u8]);
-                                    e.call(NODE_UPDATE, &args![node, update]);
+                            let flag = (loading_menu_visible == 0) as u8;
+                            let outer = steps_size >= 5
+                                && (x == 0 || y == 0 || x + 1 == steps_size || y + 1 == steps_size);
+                            if outer {
+                                with_grid_steps(e, |r| {
+                                    r.pending.push_back((this.addr(), cell, flag))
                                 });
+                            } else {
+                                grid_bring_up_cell(e, this, cell, flag);
                             }
                         }
                         e.with_stack(4, |e, slot| {
@@ -2952,10 +3076,12 @@ pub fn tes_grid_array_load(e: &mut Engine, this: Ptr<TES>) {
             }
             x += 1;
         }
+        let havok_timed = Timed::main(Hitch::GridLoadHavokNs);
         if fn_00451010(e) != 0 {
             let world = fn_00451010(e);
             e.call(HAVOK_WORLD_DROP_COUNT_18, &args![world, 0u32]);
         }
+        drop(havok_timed);
         fn_00451570(e, 0);
         fn_00451520(e, 1);
         e.call(SCOPE_GUARD_DTOR, &args![guard]);
@@ -9538,6 +9664,211 @@ mod tests {
                 (0x7000, cells[3])
             ]
         );
+    }
+
+    /// A 5 x 5 grid load engine with the "cell borders in steps" row on: the grid's centre is (10, 20), so the loop's
+    /// slot (x, y) is the cell (8 + x, 18 + y), made with load state `state(x, y)`; returned in the loop's order.
+    fn steps_engine(state: impl Fn(u32, u32) -> u8) -> (Engine, Ptr<TES>, Vec<u32>) {
+        let (mut e, tes, _, _) = update_engine(5);
+        let cells: Vec<u32> = (0..25u32)
+            .map(|i| new_cell(&mut e, state(i / 5, i % 5), 0))
+            .collect();
+        let lookup = cells.clone();
+        e.register_double(DATA_HANDLER_GET_CELL, move |_, a| Ret {
+            eax: lookup[((a[1] - 8) * 5 + (a[2] - 18)) as usize],
+            ..Ret::default()
+        });
+        returns(&mut e, 0x0045_4e20, 1);
+        returns(&mut e, 0x0054_5cf0, 0xd000);
+        grid_steps_turn_on(&e);
+        (e, tes, cells)
+    }
+
+    /// The new column of a shift (x = 4) in load state 5, and the centre cell too.
+    fn new_column(x: u32, y: u32) -> u8 {
+        if x == 4 || (x, y) == (2, 2) {
+            5
+        } else {
+            6
+        }
+    }
+
+    /// The "cell borders in steps" row: the state 5 cells of the grid's outer ring wait, in the loop's order, and
+    /// come up with exactly the calls the loop makes, two a step, with the Havok world's count raised around them;
+    /// an inner state 5 cell comes up in the load as in the exe.
+    #[test]
+    fn grid_steps_bring_the_outer_cells_up_later_with_the_loop_s_calls() {
+        let (mut e, tes, cells) = steps_engine(new_column);
+        let added = Rc::new(RefCell::new(vec![]));
+        let seen = added.clone();
+        e.register_double(LIST_ADD_HEAD, move |e, a| {
+            seen.borrow_mut().push(e.mem.u32(a[1]));
+            Ret::default()
+        });
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_2ff0, &args![tes]);
+        });
+        // In the load only the centre cell comes up; the first loop and the last-loaded list are as without the row.
+        assert_eq!(calls_to(&log, 0x0054_bcf0), vec![vec![cells[12], 1]]);
+        assert_eq!(calls_to(&log, NODE_UPDATE_PROPERTIES), vec![vec![0xd000]]);
+        // The buffer: each slot once from LoadGridCell and once from the first loop, the centre cell from the second.
+        assert_eq!(count_calls(&log, TES_ADD_TO_BUFFER), 25 + 25 + 1);
+        assert_eq!(*added.borrow(), cells);
+        assert_eq!(grid_steps_pending(&e), 5);
+        // Each step: the next two cells, in order, each attached, buffered and its 3D updated, inside one raise of
+        // the Havok world's count, dropped with flag 1.
+        for (step, expected) in [&cells[20..22], &cells[22..24], &cells[24..25]]
+            .iter()
+            .enumerate()
+        {
+            let log = run_logged(&mut e, |e| {
+                grid_steps_bring_up(e, GRID_STEPS_PER_FRAME);
+            });
+            let want: Vec<Vec<u32>> = expected.iter().map(|c| vec![*c, 1]).collect();
+            assert_eq!(calls_to(&log, 0x0054_bcf0), want, "step {step}");
+            assert_eq!(
+                calls_to(&log, TES_ADD_TO_BUFFER)
+                    .iter()
+                    .map(|w| w[1])
+                    .collect::<Vec<_>>(),
+                expected.to_vec()
+            );
+            assert_eq!(count_calls(&log, NODE_UPDATE_PROPERTIES), expected.len());
+            assert_eq!(count_calls(&log, NODE_UPDATE), expected.len());
+            assert_eq!(count_calls(&log, HAVOK_WORLD_ADD_COUNT_18), 1);
+            let drops = calls_to(&log, HAVOK_WORLD_DROP_COUNT_18);
+            assert_eq!(drops.len(), 1);
+            assert_eq!(drops[0][1], 1);
+            let order: Vec<u32> = log.iter().map(|(a, _)| *a).collect();
+            let first = |addr| order.iter().position(|a| *a == addr).unwrap();
+            let last = |addr| order.iter().rposition(|a| *a == addr).unwrap();
+            assert!(first(HAVOK_WORLD_ADD_COUNT_18) < first(0x0054_bcf0));
+            assert!(last(NODE_UPDATE) < first(HAVOK_WORLD_DROP_COUNT_18));
+        }
+        assert_eq!(grid_steps_pending(&e), 0);
+        // With nothing pending a step calls nothing.
+        let log = run_logged(&mut e, |e| {
+            grid_steps_bring_up(e, GRID_STEPS_PER_FRAME);
+        });
+        assert!(log.is_empty(), "{log:x?}");
+    }
+
+    /// A cell no longer in state 5 is passed over; the next grid load, a finish and the grid's cull bring up all
+    /// that is left first.
+    #[test]
+    fn grid_steps_pass_over_left_cells_and_finish_before_the_next_load() {
+        let (mut e, tes, cells) = steps_engine(new_column);
+        e.call(0x0045_2ff0, &args![tes]);
+        let log = run_logged(&mut e, |e| {
+            grid_steps_bring_up(e, GRID_STEPS_PER_FRAME);
+        });
+        assert_eq!(
+            calls_to(&log, 0x0054_bcf0),
+            vec![vec![cells[20], 1], vec![cells[21], 1]]
+        );
+        // Cell 22 is detached meanwhile (load state 3): passed over; 23 and 24 come up before the next load's work.
+        e.mem.set_u8(cells[22] + 0x26, 3);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_2ff0, &args![tes]);
+        });
+        let attached = calls_to(&log, 0x0054_bcf0);
+        assert_eq!(attached[..2], [vec![cells[23], 1], vec![cells[24], 1]]);
+        let order: Vec<u32> = log.iter().map(|(a, _)| *a).collect();
+        let second_attach = order
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| **a == 0x0054_bcf0)
+            .nth(1)
+            .unwrap()
+            .0;
+        let guard = order.iter().position(|a| *a == SCOPE_GUARD_CTOR).unwrap();
+        assert!(second_attach < guard, "before the load's own work");
+        // That load left the outer state 5 cells (20, 21, 23, 24: the stub keeps their state) pending again.
+        assert_eq!(grid_steps_pending(&e), 4);
+        let log = run_logged(&mut e, grid_steps_finish);
+        assert_eq!(count_calls(&log, 0x0054_bcf0), 4);
+        // The grid's cull finishes them too, before its own work.
+        e.call(0x0045_2ff0, &args![tes]);
+        assert_eq!(grid_steps_pending(&e), 4);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_0dd0, &args![tes, 1u32, 0u32]);
+        });
+        assert_eq!(
+            calls_to(&log, 0x0054_bcf0)[..4],
+            [
+                vec![cells[20], 1],
+                vec![cells[21], 1],
+                vec![cells[23], 1],
+                vec![cells[24], 1]
+            ]
+        );
+        assert_eq!(grid_steps_pending(&e), 0);
+    }
+
+    /// The frame's grid update (`00452580`, once a frame from `0086fbe0`) brings up the pending cells first, at most
+    /// [`GRID_STEPS_PER_FRAME`] of them, before any of its own work.
+    #[test]
+    fn grid_steps_come_up_at_the_start_of_the_frame_s_grid_update() {
+        let (mut e, tes, cells) = steps_engine(new_column);
+        e.call(0x0045_2ff0, &args![tes]);
+        assert_eq!(grid_steps_pending(&e), 5);
+        // The player stays in the centre cell (10, 20): no shift.
+        let pos = position(&mut e, 10.0 * 4096.0 + 100.0, 20.0 * 4096.0 + 100.0);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_2580, &args![tes, pos, 1u8]);
+        });
+        assert_eq!(
+            calls_to(&log, 0x0054_bcf0),
+            vec![vec![cells[20], 1], vec![cells[21], 1]]
+        );
+        let order: Vec<u32> = log.iter().map(|(a, _)| *a).collect();
+        let last_attach = order.iter().rposition(|a| *a == 0x0054_bcf0).unwrap();
+        let first_own = order
+            .iter()
+            .position(|a| *a == GET_LAST_LOADED_EXTERIORS)
+            .unwrap();
+        assert!(last_attach < first_own, "before the update's own work");
+        assert_eq!(grid_steps_pending(&e), 3);
+    }
+
+    /// The exe's single pass: with the loading menu up (a load, a fast travel), with a grid under 5 cells across,
+    /// and without the row.
+    #[test]
+    fn grid_steps_leave_loading_screens_small_grids_and_runs_without_the_row_alone() {
+        let (mut e, tes, cells) = steps_engine(new_column);
+        returns(&mut e, 0x0070_5e80, 1);
+        returns(&mut e, 0x0047_c850, 0);
+        returns(&mut e, 0x0087_27b0, 0);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_2ff0, &args![tes]);
+        });
+        let want: Vec<Vec<u32>> = [12, 20, 21, 22, 23, 24]
+            .iter()
+            .map(|i| vec![cells[*i], 0])
+            .collect();
+        assert_eq!(calls_to(&log, 0x0054_bcf0), want);
+        assert_eq!(grid_steps_pending(&e), 0);
+        // uGridsToLoad 2, the row on: every state 5 cell in the load.
+        let (mut e, tes, _, cells) = array_load_engine([5, 3, 5, 6]);
+        grid_steps_turn_on(&e);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_2ff0, &args![tes]);
+        });
+        assert_eq!(
+            calls_to(&log, 0x0054_bcf0),
+            vec![vec![cells[0], 1], vec![cells[2], 1]]
+        );
+        // The row off: the same.
+        let (mut e, tes, _, cells) = array_load_engine([5, 3, 5, 6]);
+        assert!(!grid_steps_on(&e));
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_2ff0, &args![tes]);
+        });
+        assert_eq!(
+            calls_to(&log, 0x0054_bcf0),
+            vec![vec![cells[0], 1], vec![cells[2], 1]]
+        );
+        assert_eq!(grid_steps_pending(&e), 0);
     }
 
     #[test]
