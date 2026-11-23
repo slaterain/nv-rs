@@ -671,6 +671,8 @@ fn world(e: &mut Engine) -> World {
         (Extra::None, false),
         (Extra::BoundNow, true),
         (Extra::HeadNoBound, true),
+        // Next to the head without a bound: were that actor walked, they would share a stretch.
+        (Extra::None, true),
         (Extra::SkinNoBound, true),
         (Extra::None, true),
         (Extra::None, true),
@@ -799,7 +801,7 @@ fn parallel_bones_end_in_the_serial_state() {
         }
         assert_eq!(counts.frames, 1, "{counts:?}");
         // Exact: fourteen actors walked (the skinned one among them: its flagged bones without
-        // bounds are walked, not deferred; the one alone between two barriers runs serially), nine
+        // bounds are walked, not deferred; the two alone between two barriers run serially), nine
         // whole on main (a controller, a ragdoll; three nodes that allocate their bound; four skins
         // read out of order), fifteen subtrees deferred (fourteen heads and the geometry without a
         // bound).
