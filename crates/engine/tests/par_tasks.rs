@@ -77,6 +77,9 @@ fn run(threads: u32) -> (Vec<u32>, usize) {
     e.register(ITEM, item);
     e.start_real_clock();
     real_threads::start(&mut e).unwrap();
+    // Main gives back the start-up's hold of the kernel lock, as the host's first frame does: the threads' platform
+    // calls (the counter's increment) then run beside main's instead of waiting for its end.
+    real_threads::end_start_hold_for_tests(&e);
     let data = e.mem.alloc(12 * ITEMS);
     for k in 0..3 * ITEMS {
         e.mem.set_u32(data + 4 * k, 0);
