@@ -15342,7 +15342,7 @@ mod n056_tests {
         let mut e = Engine::new();
         let names = std::rc::Rc::new(std::cell::RefCell::new(Vec::<Vec<u8>>::new()));
         let known = names.clone();
-        e.register(TEXT_TO_TRAIT, move |e, a| {
+        e.register_double(TEXT_TO_TRAIT, move |e, a| {
             let name = e.mem.cstr(a[0]);
             let id = known
                 .borrow()
@@ -15355,7 +15355,7 @@ mod n056_tests {
             }
         });
         let added = names.clone();
-        e.register(ADD_USER_TRAIT, move |e, a| {
+        e.register_double(ADD_USER_TRAIT, move |e, a| {
             added.borrow_mut().push(e.mem.cstr(a[0]));
             Ret {
                 eax: 10_000 + added.borrow().len() as u32 - 1,
@@ -15368,7 +15368,7 @@ mod n056_tests {
         });
         let strings = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let seen = strings.clone();
-        e.register(TILE_SET_STRING, move |e, a| {
+        e.register_double(TILE_SET_STRING, move |e, a| {
             seen.borrow_mut().push((a[0], a[1], e.mem.cstr(a[2]), a[3]));
             Ret::default()
         });
