@@ -5894,7 +5894,7 @@ pub fn tes_object_cell_take_exterior_local_map_picture(
 
         let restore = e.call(RESTORE_OBJECT_GETTER, &args![]).u32();
         e.call(TREE_MANAGER_CALL_006652E0, &args![restore, 1u32]);
-        fn_0054f4d0(e, 0);
+        restore_tree_full_lod(e);
         e.call(CELL_REFERENCE_WALK_005570D0, &args![this]);
 
         let node = slot_get(e, node_slot);
@@ -5918,6 +5918,60 @@ pub fn fn_0054f4b0(e: &mut Engine) -> u8 {
 /// The word at `011ca438`.
 pub fn fn_0054f4c0(e: &mut Engine) -> u32 {
     e.global(0x011c_a438)
+}
+
+/// `BSTreeManager *` (xNVSE's `GetSingleton`, `0x11D5C48`) and the `bForceFullLOD` setting
+/// (`0x11D5D00`, its value at `+4`), read by lStewieAl's Tweaks' S0103.
+const TREE_MANAGER_SINGLETON: u32 = 0x011d_5c48;
+const FORCE_FULL_LOD_SETTING: u32 = 0x011d_5d00;
+
+/// The local map picture's end (`0x54F413`): the trees' full-LOD flag back to 0 (`0054f4d0`);
+/// with lStewieAl's Tweaks' S0103 (`SetTreeFullLODToINISetting`) the tree manager's flag (`+0x1B`)
+/// gets `bForceFullLOD`'s value. Tweaks takes the manager without testing it; with the
+/// missing-data guard row a missing one is passed over.
+fn restore_tree_full_lod(e: &mut Engine) {
+    if !e.stewie(engine_core::extend::stewie::TREE_FULL_LOD_KEPT) {
+        fn_0054f4d0(e, 0);
+        return;
+    }
+    let manager = e.global::<u32>(TREE_MANAGER_SINGLETON);
+    if manager == 0 && e.stewie_slip_guard() {
+        return;
+    }
+    let setting = e.mem.u32(FORCE_FULL_LOD_SETTING + 4);
+    e.mem.set_u8(manager.wrapping_add(0x1b), setting as u8);
+}
+
+#[cfg(test)]
+mod s0103_tests {
+    use super::*;
+
+    /// lStewieAl's Tweaks' S0103: off, the flag is cleared through `0054f4d0`; on, the tree
+    /// manager's flag gets the setting's value; with no manager and the guard, nothing.
+    #[test]
+    fn s0103_the_trees_keep_the_full_lod_setting() {
+        let world = |row: bool, setting: u32| {
+            let mut e = Engine::new();
+            e.map(0x011d_5000, 0x1000);
+            let manager = e.mem.alloc(0x20);
+            e.mem.set_u8(manager + 0x1b, 1);
+            e.set_global(TREE_MANAGER_SINGLETON, manager);
+            e.mem.set_u32(FORCE_FULL_LOD_SETTING + 4, setting);
+            e.register(0x0054_f4d0, |_, _| Ret::default());
+            e.set_stewie(engine_core::extend::stewie::TREE_FULL_LOD_KEPT, row);
+            (e, manager)
+        };
+        let (mut e, manager) = world(true, 1);
+        restore_tree_full_lod(&mut e);
+        assert_eq!(e.mem.u8(manager + 0x1b), 1);
+        let (mut e, manager) = world(true, 0);
+        restore_tree_full_lod(&mut e);
+        assert_eq!(e.mem.u8(manager + 0x1b), 0);
+        let (mut e, _) = world(true, 1);
+        e.set_global(TREE_MANAGER_SINGLETON, 0u32);
+        e.set_stewie_slip_guard(true);
+        restore_tree_full_lod(&mut e);
+    }
 }
 
 // Translated from 0054f4d0 (decompiled, FalloutNV.exe 1.4.0.525)
