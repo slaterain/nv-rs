@@ -88,13 +88,6 @@ fn world(e: &mut Engine) {
     }
     e.mem.set_u32(FORM_VTABLE + 0xe8, SLOT_E8_FN);
     e.register(0x005d_43c0, |e, a| ret(e.mem.u32(a[0] + 0x44)));
-    e.register(0x0040_1460, |e, a| {
-        for i in 0..a[2] {
-            let b = e.mem.u8(a[1] + i);
-            e.mem.set_u8(a[0] + i, b);
-        }
-        ret(a[0])
-    });
     e.register(0x005b_5e40, |e, a| {
         let h = e.mem.u32(SEEN) ^ a[0] ^ a.get(1).copied().unwrap_or(0).rotate_left(9);
         e.mem.set_u32(SEEN, h);
