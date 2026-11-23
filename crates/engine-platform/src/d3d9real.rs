@@ -3119,6 +3119,9 @@ pub(super) mod shot {
         let Ok(place) = PLACE.take() else {
             return;
         };
+        // And the brightness the game's window showed: the picture below is the back buffer,
+        // which never has it (`d3d9_wgpu::ramp`).
+        let place = format!("{place}{}", d3d9_wgpu::ramp::place_line());
         REPORT_ASKED.store(false, std::sync::atomic::Ordering::Relaxed);
         let Some(folder) = report_dir().and_then(|dir| new_report_folder(dir)) else {
             eprintln!("F12: the report's folder could not be made");

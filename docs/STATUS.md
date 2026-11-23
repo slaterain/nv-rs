@@ -73,6 +73,10 @@ In so far:
   per half of the draw, repeated states not sent) and the per-actor loops after each frame.
 - On the drawing thread, a draw reuses what the draw before it resolved while nothing changed.
 - Finding what is on screen, the water's reflection included, is shared out over several cores.
+- The game's small blocks of memory (nearly every object and string it makes) come from each
+  thread's own cache, with no lock: the pause menu with mods opens faster (45-54 ms, from 65-67) and
+  the staged fight runs smoother (61 frames a second with no stutters, from 53 with 21). On with the
+  fixes preset; `bThreadHeap=0` in `Fallout.ini`'s `[nv-rs Fixes]` turns it off.
 
 ## xNVSE built in
 
@@ -298,18 +302,19 @@ More in [FIXES.md, "UI Organizer"](FIXES.md#ui-organizer).
 
 ## lStewieAl's Tweaks built in
 
-🔨 Its engine fixes and tweaks, with nothing to install. 184 of its changes are built:
+🔨 Its engine fixes and tweaks, with nothing to install. 225 of its changes are built:
 
 - 72 of its crash and leak fixes;
 - Engine Optimizations' first change (a save's changed-forms map);
-- 111 other fixes and tweaks: 16 to the engines and the console; 14 to forms, cells, scripts, saves
-  and sound; 32 to AI, actors and the player; 49 to menus and the HUD.
+- 152 other fixes and tweaks (a few of them crash fixes too): 52 to AI, actors and the player; 55 to
+  menus and the HUD; 45 to the engines and the world, menus' keyboard and pad input, the perk
+  menu's requirement line, console commands and scripts.
 
 - Each change is on with the fixes preset and has its own off key in `Fallout.ini`'s
   `[nv-rs Stewie]`.
 - Its settings are VNV's, with the player's `nvse_stewie_tweaks.ini` read over them.
 - One of the crash fixes, a leak, the port had already fixed.
-- The engines and the console (seven fixes): the sun's light comes from the side of the sky its disc
+- The engines (seven fixes): the sun's light comes from the side of the sky its disc
   is on; blood and impact marks on bodies show the variant picked for them; things that are not
   doors no longer count as doors for NPCs' paths; and four crashes are gone (a tree whose distant
   LOD a plugin disabled, with Tweaks' console line naming it; a place whose navigation mesh cannot
@@ -387,12 +392,21 @@ original's Direct3D 9 instead, which also draws by itself where Vulkan and Direc
 - At 8x antialiasing it runs (its pictures not yet compared), about 8% slower than Direct3D 9 on
   the Goodsprings street.
 - What the recorded places draw is prepared at the start behind a loading screen; elsewhere it
-  still pauses briefly the first time something new is drawn.
+  still pauses briefly the first time something new is drawn. After an update of nv-rs the
+  driver's compiled pipelines of the previous build are used again wherever the shaders are the
+  same, so the first session after an update no longer compiles them all anew.
 - Other vendors' pictures are not yet compared, though every card, AMD and Intel too, is given
   NVIDIA's shader path and alpha to coverage switch, so foliage under antialiasing draws as on
   NVIDIA.
 - F11 in the game shows a frame-rate counter (frames a second and the slowest recent frame) in the
   corner.
+- The brightness slider (Settings > Display) changes the picture, on every system. This differs
+  from the original, at the maintainer's request: the original shows its brightness only in
+  exclusive full screen, which nv-rs does not have (its full screen is the borderless window), so
+  in a window the slider did nothing. At the default brightness the picture is unchanged. A
+  brightness saved earlier, including one saved while playing the original in a window, now shows.
+  The log says each brightness the window takes, and an F12 report's place.txt the one shown.
+  The Direct3D 9 renderer still shows no brightness in a window.
 
 ## Game pads
 
