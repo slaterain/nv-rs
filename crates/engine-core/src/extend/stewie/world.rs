@@ -295,14 +295,15 @@ pub fn console_pad_hotkeys(e: &mut Engine) -> u32 {
                 if prints.console_pad_last_held.load(Relaxed) == held {
                     if now >= prints.console_pad_next_repeat.load(Relaxed) {
                         let interval = e.mem.f32(KEY_REPEAT_INTERVAL);
-                        let next = (f64::from(now) + f64::from(interval)) as u32;
+                        // Tweaks' `currentTime + fKeyRepeatInterval` into its `UInt32`: a float sum, truncated.
+                        let next = (now as f32 + interval) as u32;
                         prints.console_pad_next_repeat.store(next, Relaxed);
                         press = true;
                     }
                 } else {
                     prints.console_pad_last_held.store(held, Relaxed);
                     let delay = e.mem.f32(KEY_REPEAT_TIME);
-                    let next = (f64::from(now) + f64::from(delay)) as u32;
+                    let next = (now as f32 + delay) as u32;
                     prints.console_pad_next_repeat.store(next, Relaxed);
                 }
             }
