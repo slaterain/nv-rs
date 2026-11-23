@@ -13,6 +13,10 @@
 //! written, and one file named for both is refused.
 //! `NV_DIGESTS_STORAGE=1` adds a third replay, records on and the registers read from storage
 //! (`Device::set_storage_regs`), compared with the first.
+//! `NV_DIGESTS_MERGE=1` (or `sort`, or `pass`: also across blended draws) adds a replay with the
+//! held draws merged (and sorted): its digests as the game gave the draws equal the first
+//! replay's, and as given to the pass the same within each Present (merged in place, `1`: in the
+//! same order).
 //! `NV_WGPU_CACHE=DIR` as the game's host.
 fn replay(bytes: &[u8], records: bool, storage: bool, from: u64, to: u64) -> Vec<(u64, u64)> {
     let cache = std::env::var_os("NV_WGPU_CACHE").map(Into::into);
@@ -84,6 +88,39 @@ fn main() {
     if std::env::var_os("NV_DIGESTS_STORAGE").is_some() {
         let stored = replay(&bytes, true, true, from, to);
         ok &= compare("records off and registers from storage", &off, &stored);
+    }
+    if let Some(how) = std::env::var_os("NV_DIGESTS_MERGE") {
+        let across = how == "pass";
+        let sort = how == "sort" || across;
+        let cache = std::env::var_os("NV_WGPU_CACHE").map(Into::into);
+        let (drawn, mut given) =
+            d3d9_wgpu::replay_merged_digests(&bytes, sort, across, from, to, cache)
+                .expect("a command file")
+                .expect("a GPU adapter that can read the registers from storage");
+        ok &= compare(
+            "records off and draws merged (as the game gave them)",
+            &off,
+            &drawn,
+        );
+        // Given to the pass: each Present's draws, every one once, in another order; merged in
+        // place, in the game's own order.
+        let moved = drawn.iter().zip(&given).filter(|(a, b)| a != b).count();
+        if !sort {
+            ok &= compare(
+                "records off and draws merged in place (as given to the pass)",
+                &off,
+                &given,
+            );
+        }
+        let mut want = off.clone();
+        want.sort_unstable_by_key(|&(d, p)| (p, d));
+        given.sort_unstable_by_key(|&(d, p)| (p, d));
+        ok &= compare(
+            "records off and draws merged (as given to the pass, sorted within each Present)",
+            &want,
+            &given,
+        );
+        println!("merged (sort {sort}, across blended draws {across}): {moved} draws given at another place");
     }
     if let Some(saved) = saved {
         ok &= compare("saved and records off", &saved, &off);
