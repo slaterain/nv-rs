@@ -132,6 +132,64 @@ pub fn start_of(run: usize, thread: u32) -> u32 {
         .unwrap_or(0)
 }
 
+/// The calling thread's own processor clock and the wall clock, in one unit, so that their two differences over a
+/// stretch give the share of it the thread spent on the processor (the hitch log's frame tail: was main working or
+/// pushed off the processor?). Windows on x86-64: the thread's cycle count (`QueryThreadCycleTime`, counted in the
+/// time-stamp counter's ticks) and the time-stamp counter (`RDTSC`), about a microsecond; Linux and macOS: the
+/// thread's CPU-time clock (`clock_gettime(CLOCK_THREAD_CPUTIME_ID)`, ns, no file read) and the monotonic clock (ns).
+/// `None` elsewhere (Windows on ARM).
+pub fn own_clock() -> Option<(u64, u64)> {
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetCurrentThread() -> *mut core::ffi::c_void;
+            fn QueryThreadCycleTime(thread: *mut core::ffi::c_void, cycles: *mut u64) -> i32;
+        }
+        let mut cycles = 0u64;
+        // SAFETY: the calling thread's pseudo handle and a local out-word.
+        if unsafe { QueryThreadCycleTime(GetCurrentThread(), &mut cycles) } == 0 {
+            return None;
+        }
+        // SAFETY: `RDTSC` reads a register and has no preconditions on this host.
+        let ticks = unsafe { core::arch::x86_64::_rdtsc() };
+        Some((cycles, ticks))
+    }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        /// `struct timespec` on the 64-bit systems this builds for (Linux and macOS: two 64-bit words).
+        #[repr(C)]
+        struct Timespec {
+            sec: i64,
+            nsec: i64,
+        }
+        extern "C" {
+            fn clock_gettime(clock: i32, time: *mut Timespec) -> i32;
+        }
+        /// `CLOCK_THREAD_CPUTIME_ID` (Linux 3, macOS 16).
+        const THREAD_CPU: i32 = if cfg!(target_os = "linux") { 3 } else { 16 };
+        static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        let start = *START.get_or_init(std::time::Instant::now);
+        let mut t = Timespec { sec: 0, nsec: 0 };
+        // SAFETY: the C library's clock read into a local of its own layout.
+        if unsafe { clock_gettime(THREAD_CPU, &mut t) } != 0 {
+            return None;
+        }
+        let cpu = (t.sec as u64)
+            .wrapping_mul(1_000_000_000)
+            .wrapping_add(t.nsec as u64);
+        Some((cpu, start.elapsed().as_nanos() as u64))
+    }
+    #[cfg(not(any(
+        all(windows, target_arch = "x86_64"),
+        target_os = "linux",
+        target_os = "macos"
+    )))]
+    {
+        None
+    }
+}
+
 /// Game thread `thread`'s processor time so far (ns), when the system tells it.
 pub fn cpu_ns(run: usize, thread: u32) -> Option<u64> {
     let c = CLOCKS.lock().ok()?;
@@ -267,6 +325,48 @@ mod tests {
         } else {
             assert_eq!((worked, slept), (None, None));
         }
+    }
+
+    /// A thread's own clock against the wall, where the system tells it: a busy stretch is (nearly) all on the
+    /// processor and never more, a sleeping one nearly none, so the two clocks are in one unit (a loaded machine may
+    /// take some of a busy stretch away: the best of five tries counts).
+    #[test]
+    fn a_thread_s_own_clock_tells_working_from_sleeping() {
+        if own_clock().is_none() {
+            if cfg!(any(
+                all(windows, target_arch = "x86_64"),
+                target_os = "linux",
+                target_os = "macos"
+            )) {
+                panic!("this system tells a thread its own processor clock");
+            }
+            return;
+        }
+        let share = |work: bool| {
+            let (cpu0, wall0) = own_clock().expect("told");
+            let t = std::time::Instant::now();
+            if work {
+                let mut x = 0u64;
+                while t.elapsed() < std::time::Duration::from_millis(40) {
+                    x = std::hint::black_box(x.wrapping_add(1));
+                }
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(40));
+            }
+            let (cpu1, wall1) = own_clock().expect("still told");
+            (cpu1 - cpu0) as f64 / (wall1 - wall0) as f64
+        };
+        let busy: Vec<f64> = (0..5).map(|_| share(true)).collect();
+        assert!(
+            busy.iter().any(|s| (0.6..=1.05).contains(s)),
+            "busy shares {busy:?}"
+        );
+        assert!(
+            busy.iter().all(|s| *s <= 1.05),
+            "never above the wall: {busy:?}"
+        );
+        let slept = share(false);
+        assert!(slept < 0.2, "a sleeping thread's share {slept}");
     }
 
     #[test]
