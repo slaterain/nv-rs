@@ -67,6 +67,7 @@ pub mod gk;
 pub mod gl;
 pub mod gp;
 pub mod gs;
+pub mod gt;
 pub mod gw;
 pub mod gx;
 pub mod script;
@@ -114,6 +115,7 @@ pub const AREAS: &[Area] = &[
     gk::AREA,
     gp::AREA,
     gs::AREA,
+    gt::AREA,
     gw::AREA,
     gx::AREA,
     crate::commands::jip_fn_ui_menus::AREA,

@@ -162,10 +162,11 @@ impl Device {
         blocks: [u32; 4],
         clip: wgsl::Clip,
     ) -> Option<usize> {
-        let &g = self.held_geometry.get(&key.geometry)?;
+        let &g = self.held_geometry.get(&key.geometry.surface())?;
         let epoch = self.fuse.epoch;
         let h = self.held.get(g)?;
         let ok = h.members.len() == 1
+            && h.key.geometry == key.geometry
             && h.fuse.as_ref().is_some_and(|f| f.epoch == epoch)
             && key.viewport == h.key.viewport
             && key.scissor == h.key.scissor;
@@ -372,7 +373,13 @@ pub(super) fn one_by_one(f: &Group) -> Vec<Held> {
         .iter()
         .map(|(p, _, key)| Held {
             key: key.clone(),
-            members: vec![(p.blocks, p.digest)],
+            members: vec![Member {
+                blocks: p.blocks,
+                digest: p.digest,
+                state: None,
+                streams: Vec::new(),
+                sun: false,
+            }],
             fuse: None,
         })
         .collect()

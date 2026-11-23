@@ -14,4 +14,12 @@ fn main() {
     let start = std::time::Instant::now();
     let n = d3d9_stream::wire::replay(&bytes, &mut b).expect("a recording");
     eprintln!("{n} commands in {:?}", start.elapsed());
+    // The held and fused draws drawn (`NV_WGPU_MERGE_DRAWS`, `NV_WGPU_SORT_DRAWS`, `NV_WGPU_FUSE_LIGHTS`).
+    if let Some(d) = b.device() {
+        let (keys, held) = d.held_counts();
+        let (groups, passes) = d.fused_counts();
+        eprintln!(
+            "held: {held} draws as {keys}; fused: {groups} groups with {passes} light passes"
+        );
+    }
 }

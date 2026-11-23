@@ -310,6 +310,65 @@ fn static_trait(e: &mut Engine, guard: u32, slot: u32) -> u32 {
 }
 
 // Translated from 00753340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The exe's `"_MaxValue"` (`01073df8`), the points to give (+0x4C), "only add values" (+0x54),
+/// the player's actor value owner (+0xA4) and its `GetNormalizedPermanentAV` slot (+0x1C).
+const MAX_VALUE_TRAIT_NAME: u32 = 0x0107_3df8;
+const NUM_POINTS: u32 = 0x4c;
+const ONLY_ADD_VALUES: u32 = 0x54;
+const ACTOR_VALUE_OWNER: u32 = 0xa4;
+const NORMALIZED_PERMANENT_AV: u32 = 0x1c;
+
+/// lStewieAl's Tweaks' `CharGenMenu_SetupSPECIALHook` (row S0110,
+/// `patchFixStuckInAddSPECIALPointsIfAtMaxAlready`, Tweaks' `bCapSPECIALPoints`): over the list's
+/// items (+0x58's nodes: the item's tile and actor value), what each stat can still take
+/// (`_MaxValue` of its tile, 0 without one, less the player's normalized permanent value, not
+/// below 0) and the maxima are summed (each `int += float` in single precision, cut to a whole
+/// number). With "only add values" the points to give are at most that remainder; otherwise
+/// between 0 and the maxima's sum less the stats' count.
+fn stewie_cap_special_points(e: &mut Engine, menu: u32) {
+    let max_trait = e
+        .call(TILE_TEXT_TO_TRAIT, &args![MAX_VALUE_TRAIT_NAME])
+        .u32();
+    let owner = e.global::<u32>(PLAYER).wrapping_add(ACTOR_VALUE_OWNER);
+    let mut remaining = 0i32;
+    let mut max_total = 0i32;
+    let mut stats = 0i32;
+    let mut node = menu + ITEM_LIST + 4;
+    while node != 0 {
+        let item = e.mem.u32(node);
+        let tile = e.mem.u32(item);
+        let value = e.mem.u32(item + 4);
+        let current = e.vcall(owner, NORMALIZED_PERMANENT_AV, &args![value]).u32();
+        let max = if tile != 0 {
+            e.call(GET_FLOAT_TRAIT, &args![tile, max_trait]).f64() as f32
+        } else {
+            0.0
+        };
+        let left = max - current as f32;
+        let left = if 0.0 > left { 0.0 } else { left };
+        remaining = float_to_int(remaining as f32 + left);
+        max_total = float_to_int(max_total as f32 + max);
+        stats += 1;
+        node = e.mem.u32(node + 4);
+    }
+    let points = e.mem.i32(menu + NUM_POINTS);
+    let capped = if e.mem.u8(menu + ONLY_ADD_VALUES) != 0 {
+        points.min(remaining)
+    } else {
+        points.min(max_total.wrapping_sub(stats)).max(0)
+    };
+    e.mem.set_i32(menu + NUM_POINTS, capped);
+}
+
+/// `cvttss2si`: toward zero, `0x80000000` out of range.
+fn float_to_int(value: f32) -> i32 {
+    if (-2_147_483_648.0..2_147_483_648.0).contains(&value) {
+        value as i32
+    } else {
+        i32::MIN
+    }
+}
+
 /// `CharGenMenu::GetClass` (Xbox PDB): the class number `0x418`.
 pub fn char_gen_menu_get_class(_e: &mut Engine, _this: Ptr<CharGenMenu>) -> u32 {
     CHAR_GEN_MENU_CLASS
@@ -470,6 +529,11 @@ fn finish_create(
 
     if item_type == 0 {
         e.call(INIT_ATTRIBUTE_LIST, &args![me(e)]);
+        // `0x7535FD` (lStewieAl's Tweaks' S0110 calls `CharGenMenu_SetupSPECIALHook` there: the
+        // call, then the points capped).
+        if e.stewie(engine_core::extend::stewie::CHARGEN_SPECIAL_POINTS_CAPPED) {
+            stewie_cap_special_points(e, me(e));
+        }
     } else {
         char_gen_menu_init_skill_list(e, Ptr::new(me(e)));
     }
@@ -1158,6 +1222,8 @@ pub fn char_gen_menu_do_gamepad(
             }
             let id = 0xa + u32::from(button != 4);
             let highlighted = e.vcall(list, 4, &args![]).u32();
+            // `0x7541C8` (lStewieAl's Tweaks' S0022.11).
+            super::levelupmenu::stewie_arrow_selects(e, highlighted);
             let child = e.call(TILE_GET_CHILD_BY_ID, &args![highlighted, id]).u32();
             if child != 0 && e.call(TILE_IS_TRUE, &args![child, TRAIT_VISIBLE]).bool() {
                 e.call(TILE_PLAY_TILE_SOUND, &args![child, 0xfcbu32]);
@@ -1569,6 +1635,160 @@ mod tests {
             vec![vec![this.addr(), 0]]
         );
         assert!(calls_to(&e, INIT_ATTRIBUTE_LIST).is_empty());
+    }
+
+    /// Row S0110 through `CharGenMenu::Create` (`0x7535FD`): a SPECIAL menu (item type 0) with
+    /// "only add values" and 200 points to give, one stat whose tile's `_MaxValue` is 103 and whose
+    /// value is 4: with the row on the points are capped to 99 right after the attribute list is
+    /// filled (`0x7539A0`); off they stay 200 and the cap's trait name is never asked.
+    #[test]
+    fn s0110_create_caps_the_special_points() {
+        for on in [false, true] {
+            let mut e = Engine::new();
+            let this = special_menu(&mut e, &[(0x100, 0)], &[4]);
+            let vtable = e.mem.alloc(0x40);
+            e.mem.set_u32(this.addr(), vtable);
+            e.mem.set_u32(vtable + 0x34, 0x0075_3340);
+            for i in 0..7 {
+                e.mem.set_u32(this.addr() + 0x2c + 4 * i, 0x100 + i);
+            }
+            e.map(0x0107_0000, 0x1000);
+            e.map(0x0102_2000, 0x1000);
+            e.set_global(STACKING_TYPE_ONE, 102.0f64);
+            e.set_global(STACKING_TYPE_TWO, 103.0f64);
+            e.map(TRAIT_CURRENT_POINTS & !0xfff, 0x1000);
+            e.set_global(TRAIT_CURRENT_POINTS, 0x55u32);
+            e.set_global(TRAIT_MAXIMUM_POINTS, 0x66u32);
+            answer(&mut e, TILE_GET_MENU_BY_CLASS, 0);
+            answer(&mut e, TILE_READ_FILE, 0x4444);
+            answer(&mut e, TILE_GET_MENU, this.addr());
+            answer(&mut e, WORD_AT_FOUR, 0x900);
+            answer_st0(&mut e, GET_FLOAT_TRAIT, 103.0);
+            answer_st0(&mut e, TILE_GET_MAXIMUM_DEPTH, 7.0);
+            answer(&mut e, TILE_TEXT_TO_TRAIT, 0x1234);
+            stub(
+                &mut e,
+                &[
+                    INTERFACE_SINGLETON,
+                    TILE_READER,
+                    MENU_SET_MENU_TILE,
+                    SET_FLOAT_TRAIT,
+                    SET_TRAIT_FROM_INT,
+                    SET_STRING_TRAIT,
+                    SETTING_STRING,
+                    LIST_BOX_HIGHLIGHTED,
+                    LIST_BOX_VALUE_OF,
+                    ACTOR_VALUE_ICON,
+                    ACTOR_VALUE_DESCRIPTION,
+                    MENU_PREP_FOR_VISIBILITY,
+                    LIST_BOX_INITIALIZE,
+                    SHOW_TUTORIAL,
+                    ACTOR_VALUE_SECTION_COUNT,
+                    PRINT_BOUNDED,
+                    APPEND_BOUNDED,
+                    INIT_ATTRIBUTE_LIST,
+                ],
+            );
+            e.set_stewie(
+                engine_core::extend::stewie::CHARGEN_SPECIAL_POINTS_CAPPED,
+                on,
+            );
+            e.call_log = Some(vec![]);
+            e.call(0x0075_3420, &args![0i32, 200i32, 1u32, 0u32]);
+            assert_eq!(calls_to(&e, INIT_ATTRIBUTE_LIST).len(), 1);
+            assert_eq!(
+                e.get(this, CharGenMenu::iMaxPoints),
+                if on { 99 } else { 200 }
+            );
+            let log = e.call_log.as_ref().unwrap();
+            let asked = log
+                .iter()
+                .position(|(a, w)| *a == TILE_TEXT_TO_TRAIT && w[0] == MAX_VALUE_TRAIT_NAME);
+            assert_eq!(asked.is_some(), on, "row {on}");
+            if let Some(asked) = asked {
+                let filled = log
+                    .iter()
+                    .position(|(a, _)| *a == INIT_ATTRIBUTE_LIST)
+                    .unwrap();
+                assert!(filled < asked, "the cap comes after the list is filled");
+            }
+        }
+    }
+
+    /// A menu whose list (+0x58) holds `stats` (tile, actor value) and a player whose actor
+    /// value owner (+0xA4) answers each value's normalized permanent value from `current`.
+    fn special_menu(
+        e: &mut Engine,
+        stats: &[(u32, u32)],
+        current: &'static [u32],
+    ) -> Ptr<CharGenMenu> {
+        let this = menu(e);
+        let mut node = this.addr() + 0x5c;
+        for (i, &(tile, value)) in stats.iter().enumerate() {
+            let item = e.mem.alloc(0xc);
+            e.mem.set_u32(item, tile);
+            e.mem.set_u32(item + 4, value);
+            e.mem.set_u32(node, item);
+            if i + 1 < stats.len() {
+                let next = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, next);
+                node = next;
+            }
+        }
+        if !e.mem.is_mapped(PLAYER) {
+            e.map(PLAYER & !0xfff, 0x1000);
+        }
+        let player = e.mem.alloc(0x200);
+        let vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(vtable + 0x1c, 0x00c2_001c);
+        e.mem.set_u32(player + 0xa4, vtable);
+        e.set_global(PLAYER, player);
+        e.register_double(0x00c2_001c, move |_, a| current[a[1] as usize].into_ret());
+        this
+    }
+
+    /// Row S0110 (lStewieAl's Tweaks' `CharGenMenu_SetupSPECIALHook`): with "only add values" the
+    /// points to give (+0x4C) are at most what the stats can still take (`_MaxValue` less the
+    /// value, not below 0; no tile: 0); otherwise kept between 0 and the maxima's sum less the
+    /// stats' count.
+    #[test]
+    fn s0110_special_points_are_capped() {
+        // Tiles 0x100.. answer `_MaxValue` (trait 0x77) 10, 10, 6; no tile for the fourth.
+        for (only_add, points, current, wanted) in [
+            (1u8, 40i32, &[4u32, 10, 9, 0][..], 6i32),
+            (1, 3, &[4, 10, 9, 0][..], 3),
+            (1, 40, &[10, 10, 6, 0][..], 0),
+            (0, 40, &[4, 10, 9, 0][..], 22),
+            (0, 5, &[4, 10, 9, 0][..], 5),
+            (0, -3, &[4, 10, 9, 0][..], 0),
+        ] {
+            let mut e = Engine::new();
+            let current: &'static [u32] = current.to_vec().leak();
+            let this = special_menu(
+                &mut e,
+                &[(0x100, 0), (0x101, 1), (0x102, 2), (0, 3)],
+                current,
+            );
+            answer(&mut e, TILE_TEXT_TO_TRAIT, 0x77);
+            e.register(GET_FLOAT_TRAIT, |_, a| Ret {
+                st0: if a[0] == 0x102 { 6.0 } else { 10.0 },
+                ..Ret::default()
+            });
+            e.mem.set_u8(this.addr() + 0x54, only_add);
+            e.mem.set_i32(this.addr() + 0x4c, points);
+            e.call_log = Some(vec![]);
+            stewie_cap_special_points(&mut e, this.addr());
+            assert_eq!(
+                e.mem.i32(this.addr() + 0x4c),
+                wanted,
+                "add {only_add} points {points} {current:?}"
+            );
+            assert_eq!(
+                calls_to(&e, TILE_TEXT_TO_TRAIT),
+                vec![vec![MAX_VALUE_TRAIT_NAME]]
+            );
+            assert_eq!(calls_to(&e, GET_FLOAT_TRAIT).len(), 3);
+        }
     }
 
     #[test]
@@ -2422,6 +2642,48 @@ mod n052_tests {
         assert!(!e.call(0x0075_4150, &args![this, 5i32, one]).bool());
         assert!(!e.call(0x0075_4150, &args![this, 2i32, one]).bool());
         assert!(!e.call(0x0075_4150, &args![this, 11i32, one]).bool());
+    }
+
+    /// Row S0022.11 (lStewieAl's Tweaks, `0x7541C8`): buttons 3 and 4 on the SPECIAL page make
+    /// the highlighted attribute's tile the interface manager's `activeTileAlt` (+0xBC) before
+    /// its arrow is looked up, unless the mouse has moved (+0xED); off, never. The arrow is
+    /// clicked either way.
+    #[test]
+    fn s0022_11_the_arrow_keys_set_the_selection() {
+        use super::super::mapmenu::stewie_menus::INTERFACE_MANAGER;
+        for (on, moved, set) in [(false, 0u8, false), (true, 0, true), (true, 1, false)] {
+            for button in [3i32, 4] {
+                let mut e = Engine::new();
+                let (this, _, _) = setup(&mut e);
+                let vtable = e.mem.alloc(0x40);
+                e.mem.set_u32(this.addr(), vtable);
+                e.mem.set_u32(vtable + 0xc, 0x00c0_000c);
+                let list_vtable = e.mem.alloc(0x40);
+                e.mem.set_u32(this.addr() + 0x58, list_vtable);
+                e.mem.set_u32(list_vtable + 4, 0x00c0_0004);
+                answer(&mut e, 0x00c0_0004, 0x900);
+                e.register(TILE_GET_CHILD_BY_ID, |_, a| Ret {
+                    eax: 0x1000 + a[1],
+                    ..Ret::default()
+                });
+                answer(&mut e, TILE_IS_TRUE, 1);
+                stub(&mut e, &[TILE_PLAY_TILE_SOUND, 0x00c0_000c]);
+                if !e.mem.is_mapped(INTERFACE_MANAGER) {
+                    e.map(INTERFACE_MANAGER & !0xfff, 0x1000);
+                }
+                let manager = e.mem.alloc(0x100);
+                e.mem.set_u32(INTERFACE_MANAGER, manager);
+                e.mem.set_u8(manager + 0xed, moved);
+                e.mem.set_u32(manager + 0xbc, 0x5555);
+                e.set_stewie(engine_core::extend::stewie::LEVEL_UP_ARROWS_SELECT, on);
+                e.call_log = Some(vec![]);
+                let one = 1.0f32.to_bits();
+                assert!(e.call(0x0075_4150, &args![this, button, one]).bool());
+                let wanted = if set { 0x900 } else { 0x5555 };
+                assert_eq!(e.mem.u32(manager + 0xbc), wanted, "row {on} moved {moved}");
+                assert_eq!(calls_to(&e, 0x00c0_000c).len(), 1);
+            }
+        }
     }
 
     #[test]

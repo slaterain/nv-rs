@@ -22,6 +22,7 @@ fn the_rows_go_in_before_the_extenders() {
         at("fixes::install(engine, choice)"),
         at("nvse::install(engine)"),
         at("jip::install(engine)"),
+        at("johnnyguitar::install(engine)"),
         at("mcm::install(engine)"),
         at("uio::install(engine)"),
     ];

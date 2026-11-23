@@ -102,9 +102,13 @@ pub(crate) fn install_rows_and_extenders(engine: &mut Engine, choice: &fixes::Ch
     // vanilla commands is a row.
     nvse::install(engine);
     // JIP LN NVSE, xNVSE's plugin, right after it: its command slots, answering "not
-    // installed" unless the row `NV_JIP_INSTALLED` (off in every preset, set by
+    // installed" unless the row `NV_JIP_INSTALLED` (on in the fixes preset, set by
     // `fixes::install` above) switched it on (`crates/jip`).
     jip::install(engine);
+    // JohnnyGuitar NVSE's editor ids, when their row is on (the fixes preset): xNVSE loads
+    // johnnyguitarnvse.dll after jip_nvse.dll and before MCM.dll (`crates/johnnyguitar`); after
+    // JIP, so its light slots stay JIP's.
+    johnnyguitar::install(engine);
     // The Mod Configuration Menu's plugin, when its row is on: xNVSE loads MCM.dll after
     // jip_nvse.dll and before ui_organizer.dll (`crates/mcm`).
     mcm::install(engine);

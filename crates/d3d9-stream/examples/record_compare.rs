@@ -14,6 +14,71 @@
 use std::fs::File;
 use std::io::BufReader;
 
+/// Up to 64 bytes in hex words, for a state's value.
+fn hex(bytes: &[u8]) -> String {
+    let shown: Vec<String> = bytes
+        .chunks(4)
+        .take(16)
+        .map(|w| w.iter().rev().map(|b| format!("{b:02x}")).collect())
+        .collect();
+    let more = if bytes.len() > 64 { " ..." } else { "" };
+    format!("<{}: {}{more}>", bytes.len(), shown.join(" "))
+}
+
+/// The first differing draw `i` of the two files in the open: which present it comes after and its place among the
+/// draws since, which states differ (both values), whether the other commands so far differ (with the last of them),
+/// and the two draw commands.
+fn describe(a: &str, b: &str, i: usize, open: impl Fn(&str) -> BufReader<File>) {
+    let snap = |path: &str| match d3d9_stream::wire::draw_snapshot(open(path), i) {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            println!("  {path}: no draw {i}");
+            std::process::exit(1);
+        }
+        Err(why) => {
+            eprintln!("{path}: {why}");
+            std::process::exit(2);
+        }
+    };
+    let (sa, sb) = (snap(a), snap(b));
+    println!(
+        "  draw {i}: after present {} (draw {} of that frame) in A; after present {} (draw {}) in B",
+        sa.presents, sa.in_frame, sb.presents, sb.in_frame
+    );
+    let ma: std::collections::BTreeMap<_, _> = sa.state.iter().cloned().collect();
+    let mb: std::collections::BTreeMap<_, _> = sb.state.iter().cloned().collect();
+    let keys: std::collections::BTreeSet<_> = ma.keys().chain(mb.keys()).cloned().collect();
+    let mut shown = 0;
+    for k in keys {
+        let (va, vb) = (ma.get(&k), mb.get(&k));
+        if va == vb {
+            continue;
+        }
+        shown += 1;
+        if shown > 20 {
+            println!("  ... more states differ");
+            break;
+        }
+        let v = |x: Option<&Vec<u8>>| x.map_or("(never set)".to_string(), |b| hex(b));
+        println!("  state {k}: A {}  B {}", v(va), v(vb));
+    }
+    if shown == 0 {
+        println!("  every state alike");
+    }
+    if sa.events != sb.events {
+        println!("  the other commands so far differ (creations, uploads, clears, presents); the last in A:");
+        for r in &sa.recent {
+            println!("    A {r}");
+        }
+        for r in &sb.recent {
+            println!("    B {r}");
+        }
+    }
+    if sa.draw != sb.draw {
+        println!("  the draws differ:\n    A {}\n    B {}", sa.draw, sb.draw);
+    }
+}
+
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let deferred = args.first().is_some_and(|a| a == "--ends-deferred");
@@ -56,6 +121,7 @@ fn main() {
             }
             Some(i) => {
                 println!("{i} draws alike, then draw {i} sees another device state");
+                describe(a, b, i, open);
                 std::process::exit(1);
             }
         }

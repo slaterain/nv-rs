@@ -606,6 +606,40 @@ are tested only against it (`speakers.rs`, `dsound.rs` tests).
   original's 2D buffers after its first (read only).
 - The game itself was not run as `FalloutNV.exe`: when it makes its first 3D buffer.
 
+## When the output device changes
+
+Device handling only: nothing of the mix, the converters, 3D or the distortion changes.
+- The stream says it is lost (`ds-mix` `Output::lost`). On Windows that happens when its endpoint
+  stops answering (unplugged, disabled, its format changed) or when another endpoint becomes the
+  default, which a watch thread of the stream's own checks once a second (`DEFAULT_CHECK`; a
+  headset plugged in, a choice in Sound settings), never the time-critical output thread. On Linux it happens when cpal reports the device gone. PipeWire and
+  PulseAudio usually move a stream of ALSA's `default` device by themselves. On macOS CoreAudio's
+  default output unit follows a new default device by itself and converts the rate if it must;
+  the port says so and leaves it be.
+- The game: `dsound::follow_device`, at every sound call (one flag read while nothing is lost).
+  It parks both streams (nothing is mixed) and lets them go (their
+  threads end off the game's thread). A helper thread, at most once a second, asks for the
+  default device's format and opens new streams there by the first open's rules: the game's
+  device's layout made again from every buffer, and the platform layers' own stream on an
+  endpoint that is not two channels. The game's thread never waits for the system. The new
+  streams give silence until, at the next sound call and under the voices' lock, they are put in
+  place. Each playing voice is moved through the gap by arithmetic, only for the time it was
+  playing: at the loss past what its stream had not mixed, then at each sound call by the clock's
+  time since the last one, at its own frequency, round its loop or to its end (a voice started
+  during the gap moves from its start). Then every voice takes the new rate, each
+  playing one is reconnected (`Voice::reconnect`), each stream starts with one period of
+  silence, and the clock's pace (`Pace`) starts again from now. So the gap is skipped, never
+  mixed in one go or heard late. If no device answers, it says so once.
+  A game started with no device at all stays silent (no retry). `NV_SOUND_RECORD` ends at the
+  change, as its log says.
+- The launcher: its window looks at least once a second while the sounds are open, lets a lost
+  stream go and opens one on the default device. The hum starts again at a random place, as at
+  every open.
+- The original: DirectSound 8 on the default device, which Windows 10 and 11 move to a new
+  default by themselves (our reading; not measured against `FalloutNV.exe`).
+- Not verified: an actual device change on this machine (manual checks only, written for the
+  maintainer), Linux and macOS (compiled, untested).
+
 ## Vorbis
 
 `scripts/vorbis-record` drives the player's `libvorbisfile.dll` the way the game

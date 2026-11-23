@@ -30,8 +30,8 @@
 //! `commands::jip_fn_linked_ref`), and once the game has loaded the links a command changed but
 //! the load did not set again get their defaults back; until then it is only kept.
 //! NPC perks are given to the actors once JIP's NPC perks patch is switched on (`uNPCPerks`,
-//! `game_patches::ge::perks`). Not yet: the appearance undo is not applied; until then a save
-//! holds what the co-save loaded held. What JIP would pass over unread (another record type, a version it does
+//! `game_patches::ge::perks`). The player's appearance undo is kept for `CopyFaceGenFrom`
+//! with no source (`commands::ln_fn_actor`), which puts it back, as JIP keeps it. What JIP would pass over unread (another record type, a version it does
 //! not read, the NPC perks without its NPC perks patch, `JPGF`'s bytes past its 8) is carried byte
 //! for byte to the next save, so a co-save from a real JIP installation loses nothing in nv-rs.
 //! While JIP answers "not installed" and holds nothing it writes no section, as without the DLL.
@@ -1810,6 +1810,22 @@ pub(crate) fn print_version(e: &mut Engine) {
     }
 }
 
+/// The game's process lists (`ProcessManager::Get()`).
+pub(crate) const PROCESS_LISTS: u32 = 0x011e_0e80;
+/// `ProcessLists` 00970d50: the calendar's hour, year, month and day published in the globals
+/// the AI reads, then each actor of the high process level set up again (none at the main menu).
+pub(crate) const PROCESS_LISTS_REFRESH_TIME: u32 = 0x0097_0d50;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: DeferredInit
+// (`ThisCall(0x970D50, ProcessManager::Get())`, right after the position marker).
+/// At the deferred start, while JIP answers "installed": the process lists' time refresh, as JIP
+/// calls it.
+pub(crate) fn refresh_process_time(e: &mut Engine) {
+    if e.ext::<Jip>().answers_installed {
+        e.call(PROCESS_LISTS_REFRESH_TIME, &args![PROCESS_LISTS]);
+    }
+}
+
 // Translated from JIP LN NVSE 57.30 (5a30ac4), jip_nvse.cpp: NVSEMessageHandler (the save,
 // load, exit and new game cases: their saved data, then the script runner's files).
 /// JIP's listener for xNVSE's messages.
@@ -1871,10 +1887,13 @@ pub fn listen(e: &mut Engine, m: &Message) {
             s.serialized_tail.clear();
             s.had_section = false;
         }
-        // `DeferredInit` (once per run): its temporary position marker, the two vanilla ash
+        // `DeferredInit` (once per run): its temporary position marker, the process lists' time
+        // refresh, the two vanilla ash
         // piles marked (step 3.9 G06) and group GF's part (D01's slot, G130's names dropped).
         msg::DEFERRED_INIT => {
             crate::commands::pos_marker::create(e);
+            // The process lists' time refresh, JIP's next line.
+            refresh_process_time(e);
             crate::game_patches::gh2::deferred_init(e);
             // O16's lists (JIP turns the switches from 15 on here, `s_deferrSetOptional`).
             crate::game_patches::ga::deferred_init(e);

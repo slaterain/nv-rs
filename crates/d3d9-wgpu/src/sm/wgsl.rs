@@ -295,8 +295,9 @@ pub struct Link {
 }
 
 /// The location of the draw table entry's number, from the vertex shader to the pixel shader
-/// ([`Link::storage`]): after every varying and the clip slots.
-pub const DRAW_SLOT: u32 = 15;
+/// ([`Link::storage`]): past every varying's, the fixed ones' ([`fixed_slot`]: TEXCOORD15 at 20) and
+/// the clip slots included ([`convert`] refuses a link that would reach it).
+pub const DRAW_SLOT: u32 = 21;
 
 /// The register bindings of a module with [`Link::storage`]: the register ring as words (each
 /// stage's header and float constants where the device wrote them, as with uniform blocks) and
@@ -702,6 +703,29 @@ fn convert_inner(
         if let Some(v) = link.varyings.iter().find(|v| fixed_slot(**v).is_none()) {
             return Err(Error::Unsupported(format!(
                 "the varying {v:?} has no fixed location"
+            )));
+        }
+    }
+    if link.storage {
+        let clip = match (link.clip, link.fixed) {
+            (Clip::Discard { .. }, true) => CLIP_SLOTS.to_vec(),
+            (Clip::Discard { .. }, false) => {
+                let l = link.varyings.len() as u32;
+                vec![l, l + 1]
+            }
+            _ => Vec::new(),
+        };
+        let top = link
+            .varyings
+            .iter()
+            .enumerate()
+            .map(|(l, v)| varying_location(link, l, *v))
+            .chain(clip)
+            .max();
+        if top.is_some_and(|t| t >= DRAW_SLOT) {
+            return Err(Error::Unsupported(format!(
+                "a varying at location {} with the registers from storage (the draw table's is {DRAW_SLOT})",
+                top.unwrap_or(0)
             )));
         }
     }
@@ -2471,5 +2495,88 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![(usage::POSITION, 0), (usage::TEXCOORD, 0)]
         );
+    }
+
+    /// With the registers from storage ([`Link::storage`]) a shader reads them from the ring at the
+    /// draw's blocks (found through its draw table entry, the instance number, handed to the pixel
+    /// shader at [`DRAW_SLOT`]): the same registers as the uniform blocks' at their fields' places;
+    /// without it the text names no storage at all.
+    #[test]
+    fn registers_from_storage_are_read_at_the_blocks_places() {
+        // vs_2_0: dcl_position v0; mov oPos, v0; mov oT0, c1; ps_2_0: dcl t0; mov oC0, t0.
+        let vs = [
+            0xFFFE_0200,
+            0x0200_001F,
+            0x8000_0000,
+            0x900F_0000,
+            0x0200_0001,
+            0xC00F_0000,
+            0x90E4_0000,
+            0x0200_0001,
+            0xE00F_0000,
+            0xA0E4_0001,
+            0x0000_FFFF,
+        ];
+        let ps = [
+            0xFFFF_0200,
+            0x0200_001F,
+            0x8000_0000,
+            0xB00F_0000,
+            0x0200_0001,
+            0x800F_0800,
+            0xB0E4_0000,
+            0x0000_FFFF,
+        ];
+        let semantic = Semantic {
+            usage: usage::TEXCOORD,
+            index: 0,
+        };
+        let link = |storage| Link {
+            inputs: vec![Input::Float(4)],
+            varyings: vec![semantic],
+            storage,
+            ..Link::default()
+        };
+        let plain = converts(&vs, &link(false));
+        assert!(
+            !plain.contains("RING") && !plain.contains("TABLE"),
+            "{plain}"
+        );
+        let v = converts(&vs, &link(true));
+        assert!(v.contains(STORAGE_DECLARATIONS), "{v}");
+        assert!(
+            v.contains(
+                "let entry = TABLE[input.draw];
+    rb = entry.x;
+    cb = entry.z;"
+            ),
+            "{v}"
+        );
+        assert!(v.contains("bitcast<vec4<f32>>(RING[cb + 1u])"), "{v}");
+        assert!(
+            v.contains("bitcast<vec4<f32>>(RING[rb + 20u]).xy"),
+            "the device's values: {v}"
+        );
+        assert!(v.contains("out.draw = input.draw;"), "{v}");
+        let p = converts(&ps, &link(true));
+        assert!(
+            p.contains(
+                "rb = entry.y;
+    cb = entry.w;"
+            ),
+            "{p}"
+        );
+        assert!(
+            p.contains(&format!(
+                "@location({DRAW_SLOT}) @interpolate(flat) draw: u32"
+            )),
+            "{p}"
+        );
+        // The fields' places as `Regs` lays them out.
+        assert_eq!(
+            ["i", "b", "sys", "fix", "bias", "clip"].map(|f| regs_field(f).0),
+            [0, 16, 20, 24, 28, 32]
+        );
+        assert_eq!(REGS_C_OFFSET, 16 * 38);
     }
 }

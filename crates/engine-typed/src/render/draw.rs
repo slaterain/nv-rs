@@ -18,9 +18,6 @@ use engine_core::{args, typed_call, Engine};
 const SKIP_DRAWING: u32 = 0x6fc;
 const DEVICE: u32 = 0x288;
 const DRAWN_BOUND: u32 = 0x664;
-/// `IDirect3DDevice9::DrawPrimitive` (slot 81) and `DrawIndexedPrimitive` (slot 82).
-const DEVICE_DRAW_PRIMITIVE: u32 = 0x144;
-const DEVICE_DRAW_INDEXED_PRIMITIVE: u32 = 0x148;
 /// The bound `00e74840` copies when the geometry has none (`011f4288`).
 const DEFAULT_BOUND: u32 = 0x011f_4288;
 /// The current shader pass (`0126f74c`), and the shader's slot 0x90 that asks whether there is one
@@ -159,11 +156,8 @@ pub fn draw_packed(e: &mut Engine, this: Ptr, geometry: Ptr) {
                     let vertices = u32::from(e.mem.u16(at));
                     let device = e.mem.u32(t.wrapping_add(DEVICE));
                     let base = e.mem.u32(part_data.wrapping_add(0x38));
-                    engine_core::real_threads::device_vcall(
-                        e,
-                        device,
-                        DEVICE_DRAW_INDEXED_PRIMITIVE,
-                        &args![kind, base, 0u32, vertices, start, count],
+                    engine_core::real_threads::device_draw_indexed_primitive(
+                        e, device, kind, base, 0, vertices, start, count,
                     );
                     strip += 1;
                     start = start.wrapping_add(count).wrapping_add(2);
@@ -184,11 +178,8 @@ pub fn draw_packed(e: &mut Engine, this: Ptr, geometry: Ptr) {
             let device = e.mem.u32(t.wrapping_add(DEVICE));
             let base = e.mem.u32(render_data.wrapping_add(0x38));
             let kind = e.mem.u32(render_data.wrapping_add(0x3c));
-            engine_core::real_threads::device_vcall(
-                e,
-                device,
-                DEVICE_DRAW_INDEXED_PRIMITIVE,
-                &args![kind, base, 0u32, vertices, start, count],
+            engine_core::real_threads::device_draw_indexed_primitive(
+                e, device, kind, base, 0, vertices, start, count,
             );
             strip += 1;
             start = start.wrapping_add(count).wrapping_add(2);
@@ -198,12 +189,7 @@ pub fn draw_packed(e: &mut Engine, this: Ptr, geometry: Ptr) {
         let first = e.mem.u32(render_data.wrapping_add(0x38));
         let device = e.mem.u32(t.wrapping_add(DEVICE));
         let kind = e.mem.u32(render_data.wrapping_add(0x3c));
-        engine_core::real_threads::device_vcall(
-            e,
-            device,
-            DEVICE_DRAW_PRIMITIVE,
-            &args![kind, first, count],
-        );
+        engine_core::real_threads::device_draw_primitive(e, device, kind, first, count);
     }
     let flags = e.mem.u16(data.wrapping_add(0xe));
     e.mem.set_u16(data.wrapping_add(0xe), flags & 0xf000);
