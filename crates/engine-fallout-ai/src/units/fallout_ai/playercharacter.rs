@@ -9787,8 +9787,9 @@ fn vanity_turn_gamepad_test(e: &mut Engine) -> bool {
     if !e.stewie(engine_core::extend::stewie::VANITY_CAM_ROTATION) {
         return e.call(0x004b_71d0, &args![]).u8() != 0;
     }
-    const PI: f64 = 3.141_592_653_589_793;
-    const TWO_PI: f64 = 6.283_185_307_179_586;
+    // Tweaks' `kDblPI` and `kDblPIx2` (utility.h), the `double`s of pi and 2 pi.
+    const PI: f64 = std::f64::consts::PI;
+    const TWO_PI: f64 = std::f64::consts::TAU;
     let mut turn = e.global::<f32>(ACCUMULATED_YAW);
     if turn as f64 > TWO_PI {
         turn = (turn as f64 % TWO_PI) as f32;
@@ -20791,7 +20792,7 @@ mod tests {
     /// the turn is kept and `004b71d0` answers.
     #[test]
     fn s0198_the_vanity_turn_stays_within_a_circle() {
-        let two_pi = 6.283_185_307_179_586f64;
+        let two_pi = std::f64::consts::TAU;
         for (turn, wrapped) in [
             (7.0f32, 7.0 - two_pi),
             (4.0, 4.0 - two_pi),
