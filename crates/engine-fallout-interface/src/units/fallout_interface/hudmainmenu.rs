@@ -9100,6 +9100,159 @@ mod tests {
         }
     }
 
+    /// Rows S0022.51 and S0022.50 (one bit, as Tweaks installs them) through
+    /// `set_info_inventory_action` with the real `GetTargetType` (`00579280`) and `00579690`,
+    /// whose answer is also the one `SetInfoForRef` gives the prompt's crime colour by
+    /// (`set_info_target_prompt(2, 0x1005)`): a sneaking player and a creature (0x2B) without
+    /// dialogue that can be pickpocketed get no prompt in the game, a red Pickpocket with the row
+    /// (Tweaks' Pickpocket, not Steal); one with dialogue that cannot be pickpocketed gets a red
+    /// Pickpocket in the game, Talk without the crime colour with the row; a creature at an address
+    /// whose low byte is 0 is no crime with the row (Tweaks' hook tests `AL`), so Take.
+    #[test]
+    fn s0022_50_51_a_creature_s_prompt_and_its_colour() {
+        const TAKE: u32 = 0x011d_3b10;
+        const TALK: u32 = 0x011d_3b70;
+        const PICKPOCKET: u32 = 0x011d_3708;
+        let (no, yes) = (0x00c5_0100_u32, 0x00c5_0101_u32);
+        let (slot18, slot1c, mover_flags) = (0x00c5_0118_u32, 0x00c5_011c_u32, 0x00c5_0120_u32);
+        // (row, dialogue, pickpocket, low byte 0, target type, crime, action settings)
+        for (on, dialogue, pickpocket, zero, wanted_type, wanted_crime, wanted) in [
+            (false, 0_u32, 1_u32, false, 0_u32, false, vec![]),
+            (true, 0, 1, false, 1, true, vec![PICKPOCKET]),
+            (false, 1, 0, false, 1, true, vec![PICKPOCKET]),
+            (true, 1, 0, false, 7, false, vec![TALK]),
+            (false, 1, 1, false, 1, true, vec![PICKPOCKET]),
+            (true, 1, 1, false, 1, true, vec![PICKPOCKET]),
+            (true, 0, 1, true, 1, false, vec![TAKE]),
+        ] {
+            let mut e = Engine::new();
+            e.map(0x011c_a000, 0x1000);
+            e.map(0x011d_2000, 0xd000);
+            e.map(0x0101_e000, 0x1000);
+            e.mem.set_u32(0x011c_a27c, 0x1111);
+            e.mem.set_u32(0x011c_a280, 0x2222);
+            e.mem.set_u32(0x011d_5164, TAKE);
+            e.mem.set_u32(0x011d_517c, TALK);
+            e.mem.set_f64(0x0101_e568, 255.0);
+            e.mem.set_f32(0x011d_9774, 0.5);
+            let menu = e.new_object::<HUDMainMenu>();
+            e.mem.set_u32(0x011d_96c0, menu.addr());
+            e.mem.set_u32(menu.addr() + 0x9c, 0x5000);
+            let object = |e: &mut Engine, size: u32, slots: &[(u32, u32)]| {
+                let object = e.mem.alloc(size);
+                let vtable = e.mem.alloc(0x400);
+                for (offset, target) in slots {
+                    e.mem.set_u32(vtable + offset, *target);
+                }
+                e.mem.set_u32(object, vtable);
+                object
+            };
+            for (slot, value) in [
+                (no, 0),
+                (yes, 1),
+                (slot18, dialogue),
+                (slot1c, pickpocket),
+                (mover_flags, 0x400),
+            ] {
+                e.register_double(slot, move |_, _| Ret {
+                    eax: value,
+                    ..Ret::default()
+                });
+            }
+            let player = object(&mut e, 0x200, &[(0x22c, no)]);
+            let mover = object(&mut e, 0x10, &[(0x20, mover_flags)]);
+            e.mem.set_u32(player + 0x190, mover);
+            e.mem.set_u32(0x011d_ea3c, player);
+            // The creature's base: its form type at +4, its base data's vtable at +0x30.
+            let block = e.mem.alloc(0x300);
+            let base = ((block + 0xff) & !0xff) + if zero { 0 } else { 0x14 };
+            e.mem.set_u8(base + 4, 0x2b);
+            let data = object(&mut e, 0x10, &[(0x18, slot18), (0x1c, slot1c)]);
+            e.mem.set_u32(base + 0x30, e.mem.u32(data));
+            let creature = object(&mut e, 0x100, &[(0x100, yes), (0x224, no), (0x22c, no)]);
+            e.mem.set_u32(creature + 0x20, base);
+            e.register_double(0x007a_f430, |e, words| Ret {
+                eax: e.mem.u32(words[0] + 0x20),
+                ..Ret::default()
+            });
+            e.register_double(0x0040_1170, |e, words| Ret {
+                eax: u32::from(e.mem.u8(words[0] + 4)),
+                ..Ret::default()
+            });
+            // The cast to the creature (`0118 3a00`) gives the base; the action name's cast none.
+            e.register_double(0x00ec_43fb, |_, words| Ret {
+                eax: if words[3] == 0x0118_3a00 { words[0] } else { 0 },
+                ..Ret::default()
+            });
+            e.register_double(0x0041_81e0, move |_, _| Ret {
+                eax: base,
+                ..Ret::default()
+            });
+            e.register_double(0x0049_97b0, |_, _| Ret {
+                eax: 1,
+                ..Ret::default()
+            });
+            for address in [
+                0x0087_f3d0_u32,
+                0x0056_6950,
+                0x0056_9160,
+                0x0057_b460,
+                0x0047_7ba0,
+                0x0040_c0e0,
+                0x0040_48e0,
+                0x0040_37d0,
+                0x00a0_1350,
+                0x00a0_12d0,
+                0x004b_71d0,
+                0x0087_7720,
+                0x0070_3be0,
+                0x0070_0320,
+            ] {
+                e.register_double(address, |_, _| Ret::default());
+            }
+            e.register_double(0x0040_3df0, |_, words| Ret {
+                eax: words[0],
+                ..Ret::default()
+            });
+            e.register_double(0x0040_3e20, |_, _| Ret {
+                eax: 0x011d_9774,
+                ..Ret::default()
+            });
+            e.register_double(0x00a0_1860, |_, _| Ret {
+                eax: 0xfa9,
+                ..Ret::default()
+            });
+            e.set_stewie(stewie::CREATURE_PICKPOCKET_PROMPT, on);
+            let case = format!("row {on} dialogue {dialogue} pickpocket {pickpocket} zero {zero}");
+            let target_type = e.call(0x0057_9280, &args![creature]).u32();
+            assert_eq!(target_type, wanted_type, "{case}");
+            let crime = e.call(0x0057_9690, &args![creature]).bool();
+            assert_eq!(crime, wanted_crime, "{case}");
+            let mut mask = 0x10;
+            e.call_log = Some(vec![]);
+            set_info_inventory_action(
+                &mut e,
+                Ptr::new(creature),
+                0,
+                target_type,
+                0x2b,
+                true,
+                0,
+                false,
+                &mut mask,
+            );
+            let settings: Vec<u32> = e
+                .call_log
+                .take()
+                .unwrap()
+                .iter()
+                .filter(|(address, _)| *address == 0x0040_3df0)
+                .map(|(_, words)| words[0])
+                .collect();
+            assert_eq!(settings, wanted, "{case}");
+        }
+    }
+
     /// JIP LN NVSE's G06 seam at `0x0077765A` (group GH2's row and handler; JIP's own): JIP's
     /// bytes there (`8B 41 20 F6 40 06 20 0F 95 C0 34 01 EB 0D`) test the base's ash pile bit
     /// and jump to the `JZ 0x77768F` at `0x777675`. Not installed (word 0) or `FIXES` alone: not

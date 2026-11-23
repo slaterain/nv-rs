@@ -203,8 +203,10 @@ pub const INVENTORY_STAT_ALPHAS: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 
 /// hotkeyed.
 pub const HOTKEY_GRX_AND_BOOKS: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 54);
 /// S0022.51 `MenuFixes` (`TESObjectREFR::GetTargetType` `00579280` at `0x57951C` and `0x579546`,
-/// `HUDMainMenu::SetInfoForRef` at `0x7775DB`): Pickpocket shows on the creatures that can be
-/// pickpocketed (sneaking), not on those that cannot, and a creature's prompt says Pickpocket,
+/// `HUDMainMenu::SetInfoForRef` at `0x7775DB`) with S0022.50, which Tweaks installs with it
+/// (`GetActivationIsCrimeHook`, `00579690` at `0x579A4A`): Pickpocket shows on the creatures that
+/// can be pickpocketed (sneaking), not on those that cannot, sneaking up to a creature is a crime
+/// when it can be pickpocketed rather than when it talks, and a creature's prompt says Pickpocket,
 /// not Steal.
 pub const CREATURE_PICKPOCKET_PROMPT: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 55);
 /// S0227 `TileTextureCacheFix` (`TileImage`'s path helper `00a1f7d0` at `0xA1F88B`): a menu
