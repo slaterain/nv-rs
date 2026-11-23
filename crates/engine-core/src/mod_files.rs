@@ -396,7 +396,10 @@ fn profile_lines(text: &[u8]) -> Vec<(&[u8], &[u8])> {
 ///   not keys) keeps everything up to `=`, then the new value, then the white space (spaces, tabs,
 ///   CR) that ended the old value; the old value's leading blanks and a comment after it go;
 /// - a new key goes right after the section's last key line (after its heading when it has none),
-///   before comments, other lines and blank lines, as `key=value` CR LF;
+///   before comments, other lines and blank lines, as `key=value` CR LF; but in the file's last
+///   section, when the file's last line (after the trim above) is blank, at the very end, after
+///   the blank lines (measured 2026-11-22 with the call, `build43-scratch/measure/player-bugs/
+///   ini-write`; the removals' `sections::section_end` has the same rule);
 /// - a new section goes at the end, `[section]` CR LF `key=value` CR LF, with no blank line;
 /// - names are written without the spaces around them, the value as given.
 pub fn written_profile(old: &[u8], section: &[u8], key: &[u8], value: &[u8]) -> Vec<u8> {
@@ -408,10 +411,13 @@ pub fn written_profile(old: &[u8], section: &[u8], key: &[u8], value: &[u8]) -> 
     let mut heading: Option<usize> = None;
     let mut last_key: Option<usize> = None;
     let mut replace: Option<(usize, usize)> = None;
+    // The section ends at a later heading (else at the end of the file).
+    let mut ended = false;
     for (i, &(line, _)) in lines.iter().enumerate() {
         let t = trim_spaces(line);
         if let Some(name) = t.strip_prefix(b"[") {
             if heading.is_some() {
+                ended = true;
                 break;
             }
             let name = name.split(|&b| b == b']').next().unwrap_or(name);
@@ -431,6 +437,12 @@ pub fn written_profile(old: &[u8], section: &[u8], key: &[u8], value: &[u8]) -> 
             last_key = Some(i);
         }
     }
+    // The file's last section, the file's last line blank: a new key at the very end.
+    let at_end = heading.is_some()
+        && !ended
+        && lines
+            .last()
+            .is_some_and(|&(line, _)| trim_spaces(line).is_empty());
     // A new key and a new heading are written without spaces around their names (` w `=v writes
     // `w=v`, ` C ` writes `[C]`: `jip-cmds/files-measure/ini6-2026-11-16.txt`, `spaced ... new`).
     let new_line: Vec<u8> = [key_name, b"=", value].concat();
@@ -454,10 +466,14 @@ pub fn written_profile(old: &[u8], section: &[u8], key: &[u8], value: &[u8]) -> 
             }
             _ => push(&mut out, line, ended),
         }
-        if replace.is_none() && heading.is_some() && last_key.or(heading) == Some(i) {
+        if replace.is_none() && !at_end && heading.is_some() && last_key.or(heading) == Some(i) {
             out.extend_from_slice(&new_line);
             out.extend_from_slice(CRLF);
         }
+    }
+    if replace.is_none() && at_end {
+        out.extend_from_slice(&new_line);
+        out.extend_from_slice(CRLF);
     }
     if heading.is_none() {
         out.push(b'[');

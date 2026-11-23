@@ -673,7 +673,12 @@ pub fn fn_0095d450(
         let clip = e
             .call(WEAPON_GET_CLIP_ROUNDS, &args![item, u32::from(has_mod)])
             .u32();
-        if have == clip {
+        // lStewieAl's Tweaks' row S0121 (`patchPreventReloadingIfClipIsOverfilled`, `JNZ` to `JL` at
+        // `0x95D65D`): a clip holding its size or more (signed) is not reloaded either.
+        if have == clip
+            || (e.stewie(engine_core::extend::stewie::NO_RELOAD_OVERFILLED_CLIP)
+                && have as i32 >= clip as i32)
+        {
             return false;
         }
         if count
@@ -703,7 +708,16 @@ pub fn fn_0095d450(
                 equip_count = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, again))
                     .wrapping_add(1);
             }
-            if use_count != 0 {
+            // lStewieAl's Tweaks' row S0111 (`patchFixLoopingReloadAmmoSwapInstantRefill`, its
+            // `OnLoopingReloadChangeAmmoTypesHook` jumped to at `0x95D714`): during the player's
+            // ammunition swap the count stays the clip's plus one; otherwise it is the carried
+            // count whatever `use_count` says (Tweaks' jump replaces the `use_count` test too).
+            if e.stewie(engine_core::extend::stewie::AMMO_SWAP_NO_INSTANT_REFILL) {
+                let swap = e.stewie_kept(engine_core::extend::stewie::kept::PLAYER_AMMO_SWAP, 4);
+                if e.mem.u32(swap) == 0 {
+                    equip_count = count;
+                }
+            } else if use_count != 0 {
                 equip_count = count;
             }
             e.call(
@@ -833,7 +847,9 @@ pub fn fn_0095d850(
             .u32();
         let change = process_slot(e, this, 0x14c, &args![]);
         let equipped_count = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, change));
-        if clip != equipped_count {
+        // S0121 (`JZ` to `JLE` at `0x95DAE5`): with the row, only a clip below its size (signed).
+        let overfill_row = e.stewie(engine_core::extend::stewie::NO_RELOAD_OVERFILLED_CLIP);
+        if clip != equipped_count && !(overfill_row && clip as i32 <= equipped_count as i32) {
             let change = process_slot(e, this, 0x14c, &args![]);
             if count != typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, change)) {
                 let index = e
@@ -878,7 +894,13 @@ pub fn fn_0095d850(
             .call(WEAPON_GET_CLIP_ROUNDS, &args![item, u32::from(has_mod)])
             .u32();
         let change = process_slot(e, this, 0x14c, &args![]);
-        if clip == typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, change)) {
+        let loaded = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, change));
+        // S0121 (`JZ` to `JLE` at `0x95DC01`): a clip at or above its size (signed) is not
+        // reloaded.
+        if clip == loaded
+            || (e.stewie(engine_core::extend::stewie::NO_RELOAD_OVERFILLED_CLIP)
+                && clip as i32 <= loaded as i32)
+        {
             return false;
         }
         let change = process_slot(e, this, 0x14c, &args![]);
@@ -1098,7 +1120,13 @@ pub fn fn_0095de30(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32) {
             .into_ret()
             .i32()
                 == 4;
-        if !(state_is_9 || state_is_x11) || camera_state_4 {
+        // lStewieAl's Tweaks' row S0052 (`patchPreventAimingFOVDuringKillcams`, its
+        // `OnWeaponFOVHook` jumped to at `0x95E088`): no aiming field of view while a kill camera
+        // runs (+0xE18 not 0) unless it is the player-view kind (+0x7C0 is 1).
+        let killcam = e.stewie(engine_core::extend::stewie::NO_AIMING_FOV_IN_KILLCAMS)
+            && e.mem.u32(this.addr() + 0xe18) != 0
+            && e.mem.u32(this.addr() + 0x7c0) != 1;
+        if (!(state_is_9 || state_is_x11) || camera_state_4) && !killcam {
             world_target = zoom;
             first_person_target =
                 ((zoom as f64 / default_world as f64) * default_first_person as f64) as f32;
@@ -9354,6 +9382,70 @@ mod tests {
         );
     }
 
+    /// S0121 (`patchPreventReloadingIfClipIsOverfilled`, `0x95D65D`): the equipped clip holds 5
+    /// rounds of a clip size 4 (overfilled), 3 carried. The exe goes on and queues the equip; with
+    /// the row the reload is refused (false, nothing queued). A clip below its size (6) is reloaded
+    /// both ways.
+    #[test]
+    fn s0121_an_overfilled_clip_is_not_reloaded_by_the_hotkey_equip() {
+        for (on, size, refused) in [(false, 4u32, false), (true, 4, true), (true, 6, false)] {
+            let mut e = engine(CALLEES_0095D450);
+            e.set_stewie(engine_core::extend::stewie::NO_RELOAD_OVERFILLED_CLIP, on);
+            let held = 0x5000_1000;
+            let (player, _) = equip_world(&mut e, held, 3, 5, 0x7000_2000);
+            answer(&mut e, ITEM_CHANGE_HAS_MOD, 0);
+            answer(&mut e, WEAPON_GET_CLIP_ROUNDS, size);
+            let log = logged(&mut e, |e| {
+                let done = e
+                    .call(
+                        0x0095_d450,
+                        &args![player, Ptr::<()>::NULL, 0u32, 0u32, 0u32],
+                    )
+                    .bool();
+                assert_eq!(done, !refused, "on {on} size {size}");
+            });
+            assert_eq!(
+                calls_to(&log, ACTOR_QUEUE_EQUIP_OBJECT).len(),
+                usize::from(!refused),
+                "on {on} size {size}"
+            );
+        }
+    }
+
+    /// S0111 (`patchFixLoopingReloadAmmoSwapInstantRefill`, `0x95D714`): mode 0 queues the equip
+    /// with the clip's count plus one (5 + 1) or, with `use_count`, the carried count (3). With the
+    /// row: during the player's swap (the kept word set) always the clip's plus one; otherwise
+    /// always the carried count, `use_count` or not (Tweaks' jump replaced that test).
+    #[test]
+    fn s0111_the_ammunition_swap_keeps_the_clip() {
+        for (on, swap, use_count, queued) in [
+            (false, false, 0u32, 6u32),
+            (false, false, 1, 3),
+            (true, true, 1, 6),
+            (true, true, 0, 6),
+            (true, false, 0, 3),
+            (true, false, 1, 3),
+        ] {
+            let mut e = engine(CALLEES_0095D450);
+            e.set_stewie(engine_core::extend::stewie::AMMO_SWAP_NO_INSTANT_REFILL, on);
+            let held = 0x5000_1000;
+            let (player, _) = equip_world(&mut e, held, 3, 5, 0);
+            let flag = e.stewie_kept(engine_core::extend::stewie::kept::PLAYER_AMMO_SWAP, 4);
+            e.mem.set_u32(flag, u32::from(swap));
+            let log = logged(&mut e, |e| {
+                e.call(
+                    0x0095_d450,
+                    &args![player, Ptr::<()>::NULL, 0u32, 0u32, use_count],
+                );
+            });
+            assert_eq!(
+                calls_to(&log, ACTOR_QUEUE_EQUIP_OBJECT),
+                vec![vec![player.addr(), held, queued, 0, 1, 0, 0]],
+                "on {on} swap {swap} use_count {use_count}"
+            );
+        }
+    }
+
     #[test]
     fn equip_item_stops_when_the_same_count_is_already_equipped() {
         let mut e = engine(CALLEES_0095D450);
@@ -9455,6 +9547,84 @@ mod tests {
                 assert!(run.unwrap());
                 let log = e.call_log.take().unwrap();
                 assert_eq!(calls_to(&log, SET_BYTE_AT_4)[0], vec![held, 0x29]);
+            }
+        }
+    }
+
+    /// S0121 at the reload (`0x95DC01`): re-equipping the ammunition carried (2 rounds) while the
+    /// clip holds 5 of a size 4. The exe reloads (true); with the row the reload is refused
+    /// (false). A size of 6 reloads both ways.
+    #[test]
+    fn s0121_an_overfilled_clip_is_not_reloaded() {
+        for (on, size, refused) in [(false, 4u32, false), (true, 4, true), (true, 6, false)] {
+            let mut e = engine(CALLEES_0095D850);
+            e.set_stewie(engine_core::extend::stewie::NO_RELOAD_OVERFILLED_CLIP, on);
+            let held = 0x5000_1000;
+            let (player, _) = equip_world(&mut e, held, 2, 5, 0x7000_2000);
+            add_slot(&mut e, player.addr(), 0x340, SLOT_E);
+            answer(&mut e, SLOT_E, 0);
+            answer(&mut e, ITEM_CHANGE_HAS_MOD, 0);
+            answer(&mut e, WEAPON_GET_CLIP_ROUNDS, size);
+            let done = e
+                .call(
+                    0x0095_d850,
+                    &args![player, Ptr::<()>::new(held), 0u32, 0u32],
+                )
+                .bool();
+            assert_eq!(done, !refused, "on {on} size {size}");
+        }
+    }
+
+    /// S0121 at the reload animation (`0x95DAE5`, mode 2 of `0095d850`): the clip holds 5 rounds.
+    /// Of a size 4 (overfilled) the exe starts the attack animation group and animation action 9;
+    /// with the row it does not. Of a size 6 (below what it can hold) both start it; of a size 5
+    /// (full) neither does.
+    #[test]
+    fn s0121_an_overfilled_clip_starts_no_reload_animation() {
+        for (on, size, animates) in [
+            (false, 4u32, true),
+            (true, 4, false),
+            (false, 6, true),
+            (true, 6, true),
+            (false, 5, false),
+            (true, 5, false),
+        ] {
+            let mut e = engine(CALLEES_0095D850);
+            e.set_stewie(engine_core::extend::stewie::NO_RELOAD_OVERFILLED_CLIP, on);
+            let held = 0x5000_1000;
+            let (player, _) = equip_world(&mut e, held, 2, 5, 0x7000_2000);
+            add_slot(&mut e, player.addr(), 0x4b0, SLOT_D);
+            add_slot(&mut e, player.addr(), 0x340, SLOT_E);
+            answer(&mut e, SLOT_D, 0);
+            answer(&mut e, SLOT_E, 0);
+            answer(&mut e, ITEM_CHANGE_HAS_MOD, 0);
+            answer(&mut e, WEAPON_GET_CLIP_ROUNDS, size);
+            answer(&mut e, WEAPON_GET_ATTACK_ANIM_BASE, 0x30);
+            answer(&mut e, ACTOR_GET_ANIM_GROUP, 0x1234);
+            answer(&mut e, ANIM_GROUP_GET_TYPE, 0x30);
+            answer(&mut e, ANIMATION_GET_ACTION, 0x55);
+            let log = logged(&mut e, |e| {
+                e.call(
+                    0x0095_d850,
+                    &args![player, Ptr::<()>::new(held), 2u32, 0u32],
+                );
+            });
+            let played = calls_to(&log, ANIMATION_PLAY_GROUP);
+            let actions = calls_to(&log, ACTOR_SET_ANIM_ACTION);
+            if animates {
+                assert_eq!(
+                    played,
+                    vec![vec![0x9000_0000, 0x1234, 1, u32::MAX, u32::MAX]],
+                    "on {on} size {size}"
+                );
+                assert_eq!(
+                    actions,
+                    vec![vec![player.addr(), 9, 0x55]],
+                    "on {on} size {size}"
+                );
+            } else {
+                assert!(played.is_empty(), "on {on} size {size}");
+                assert!(actions.is_empty(), "on {on} size {size}");
             }
         }
     }
@@ -9935,6 +10105,46 @@ mod tests {
             e.get(player, PlayerCharacter::f1stPersonFOV),
             (20.0f64 / 75.0 * 80.0) as f32
         );
+    }
+
+    /// S0052 (`patchPreventAimingFOVDuringKillcams`): the zoom (20) is the target while aiming;
+    /// with the row on and a kill camera running (+0xE18 not 0) of a kind other than the player
+    /// view (+0x7C0 not 1), the targets stay the defaults (75, 80). The player-view kill camera,
+    /// or no kill camera, zooms as before.
+    #[test]
+    fn s0052_no_aiming_fov_in_a_cinematic_killcam() {
+        for (on, timer, mode, zoomed) in [
+            (false, 1u32, 0u32, true),
+            (true, 1, 0, false),
+            (true, 1, 1, true),
+            (true, 0, 0, true),
+        ] {
+            let mut e = engine(CALLEES_0095DE30);
+            e.set_stewie(engine_core::extend::stewie::NO_AIMING_FOV_IN_KILLCAMS, on);
+            let player = fov_world(&mut e);
+            float_settings(
+                &mut e,
+                &[
+                    (SETTING_0120315C, 75.0),
+                    (SETTING_01203168, 80.0),
+                    (SETTING_01203174, 70.0),
+                    (SETTING_011CE870, 15.0),
+                    (SETTING_011E0970, 20.0),
+                ],
+            );
+            e.register_double(READ_FIELD_8, |_, _| int(4));
+            answer(&mut e, ACTOR_GET_IRON_SIGHTS, 1);
+            answer(&mut e, ACTOR_GET_ANIM_ACTION, 3);
+            e.mem.set_u32(player.addr() + 0xe18, timer);
+            e.mem.set_u32(player.addr() + 0x7c0, mode);
+            e.call(0x0095_de30, &args![player, 1.0f32]);
+            let world = if zoomed { 20.0 } else { 75.0 };
+            assert_eq!(
+                e.get(player, PlayerCharacter::fWorldFOV),
+                world,
+                "on {on} timer {timer} mode {mode}"
+            );
+        }
     }
 
     #[test]
