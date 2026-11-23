@@ -1,4 +1,4 @@
-//! `cargo run --release -p d3d9-stream --example record_compare -- [--ends-deferred | --digests] A.d3d9s B.d3d9s`:
+//! `cargo run --release -p d3d9-stream --example record_compare -- [--ends-deferred | --digests | --counts] A.d3d9s B.d3d9s`:
 //! two `NV_D3D9_RECORD` files compared command by command with object handles renamed by first use
 //! (`wire::compare_renamed`): what a run whose game heap was laid out otherwise (a typed family's
 //! objects moved out of it, ADR-0014 stage 2) is compared by, where the plain `cmp` would see every
@@ -10,7 +10,8 @@
 //! streams differ only in states set again to the value they had (`NV_D3D9_REPEATS=keep` against
 //! the default) give the same digest at every draw. With `--counts`, how many of each command each
 //! file holds and their bytes (`wire::command_counts`), largest byte difference first: why one stream
-//! is bigger. Exit 0: alike; 1: a difference; 2: a file could not be read.
+//! is bigger (exit 1 when any count or size differs). Exit 0: alike; 1: a difference; 2: a file could not
+//! be read.
 
 use std::fs::File;
 use std::io::BufReader;
@@ -120,6 +121,7 @@ fn main() {
         let mut rows: Vec<_> = rows.into_iter().collect();
         rows.sort_by_key(|(_, r)| std::cmp::Reverse((r[3] as i64 - r[1] as i64).abs()));
         println!("command\tA count\tA bytes\tB count\tB bytes\tB-A count\tB-A bytes");
+        let differ = rows.iter().any(|(_, r)| r[0] != r[2] || r[1] != r[3]);
         for (name, r) in rows {
             println!(
                 "{name}\t{}\t{}\t{}\t{}\t{}\t{}",
@@ -131,7 +133,7 @@ fn main() {
                 r[3] as i64 - r[1] as i64
             );
         }
-        return;
+        std::process::exit(i32::from(differ));
     }
     if digests {
         let read = |path: &str| match d3d9_stream::wire::draw_digests(open(path)) {
