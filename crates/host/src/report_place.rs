@@ -250,6 +250,13 @@ pub fn read(e: &mut Engine) -> Option<Place> {
 /// Between two of the game's frames: when an F12 report waits for its place, it is written. Each
 /// call also says a host writes places, so the session's first report waits for its place too.
 pub fn note(e: &mut Engine) {
+    place_for_report(e);
+    // Its time is a part of the host's time between two frames (the hitch log's split).
+    engine_core::stage_time::host_mark(engine_core::stage_time::HostMark::Report);
+}
+
+/// [`note`]'s work.
+fn place_for_report(e: &mut Engine) {
     engine_platform::d3d9real::report_place_writer();
     if !engine_platform::d3d9real::report_place_wanted() {
         return;
