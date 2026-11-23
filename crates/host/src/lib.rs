@@ -805,6 +805,8 @@ pub fn run_exit_hooks() {
 /// flight when the process ends (one left the thread ending the process suspended, and the
 /// process never ended, 2026-11-11).
 pub fn end_process(code: i32) -> ! {
+    // The hitch lines still on their way to the log written first.
+    hitch_log::flush_lines();
     engine_platform::end_process(code)
 }
 

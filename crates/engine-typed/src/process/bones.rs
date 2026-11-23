@@ -15,8 +15,17 @@
 //! **What a helper runs** ([`classify`]): an actor's tree walked with the typed passes only: the
 //! `NiNode`, fade node and plain-object downward passes, `NiAVObject::UpdateWorldData`, the geometry
 //! and skinned geometry bounds, the bound merges, and a bone's blend collision object up to its node's
-//! refresh. They read the node, its parent's world transform, the skin's bones (the actor's own clone)
-//! and constants, and write the node's world transform, bound and flags.
+//! refresh, or for a ragdoll's bone its node set from its own body ([`reads_body`]: the body's
+//! position and rotation read, nothing written to Havok). They read the node, its parent's world
+//! transform, the skin's bones (the actor's own clone), the bone's own body and constants, and write
+//! the node's local and world transforms, bound and flags.
+//! The controllers on its nodes a helper runs too ([`controllers_ok`]; the two roots' are detached):
+//! idle Havok ones, and transform and visibility controllers that drive the node they sit on, with
+//! no interpolator or a plain one (they write the node's local transform or its culled bit and their
+//! own state). Two things they touch are not the actor's own: an Euler rotation key's search hints in
+//! the transform data every clone of the model shares, which is why a stretch ends before an actor
+//! that reads Euler keys an earlier actor of the stretch reads (one thread at a time, in list order),
+//! and the scaled-time cache in the running thread's block (see [`controllers_ok`]).
 //!
 //! **What a helper logs instead of running** (its actor's log, in walk order): a blend collision
 //! object's Havok part (`bhkCollisionObject::NitohkTransform` after the node's refresh, or
@@ -33,8 +42,8 @@
 //! actor a barrier.
 //!
 //! **Barriers.** An actor with anything else in its tree (controllers or property controllers below
-//! the two detached roots, particle systems, lights and other classes, a collision object that reads
-//! its body into the node or changes its motion type, a parent chain through another listed actor)
+//! the two detached roots, particle systems, lights and other classes, a collision object that blends
+//! its body with the node (writing the body back) or changes its motion type, a parent chain through another listed actor)
 //! runs whole on main as the translation runs it, and the helpers walk only the actors listed before
 //! it: code not traced for other cores sees exactly the state the serial pass shows it. So does an
 //! actor [`order_check`] refuses (a node that would allocate its bound, a skin read out of order).
@@ -218,6 +227,12 @@ pub struct Counts {
     pub checked_actors: u64,
     pub differences: u64,
     pub mismatches: u64,
+    /// Stretches ended early: an actor read Euler keys an earlier actor of the stretch read.
+    pub splits: u64,
+    /// Hand-offs to the helpers (a stretch of two or more walkable actors), and of the walked actors
+    /// the ones main walked itself.
+    pub forks: u64,
+    pub by_main: u64,
 }
 
 static FRAMES: AtomicU64 = AtomicU64::new(0);
@@ -228,6 +243,9 @@ static HAVOK: AtomicU64 = AtomicU64::new(0);
 static CHECKED: AtomicU64 = AtomicU64::new(0);
 static DIFFERENCES: AtomicU64 = AtomicU64::new(0);
 static MISMATCHES: AtomicU64 = AtomicU64::new(0);
+static SPLITS: AtomicU64 = AtomicU64::new(0);
+static FORKS: AtomicU64 = AtomicU64::new(0);
+static BY_MAIN: AtomicU64 = AtomicU64::new(0);
 /// Barrier reasons, by [`Barrier`] as a number.
 static REASONS: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
 /// Differences printed so far (the first 20 are).
@@ -238,6 +256,8 @@ static PASS_NS: AtomicU64 = AtomicU64::new(0);
 static WALK_NS: AtomicU64 = AtomicU64::new(0);
 static REPLAY_NS: AtomicU64 = AtomicU64::new(0);
 static SERIAL_NS: AtomicU64 = AtomicU64::new(0);
+/// The pass's lists before any walk: the actors listed, each tree classified and order-checked.
+static LIST_NS: AtomicU64 = AtomicU64::new(0);
 /// Frames between two summary lines.
 const SUMMARY_EVERY: u64 = 1000;
 static SUMMARY_FRAMES: AtomicU64 = AtomicU64::new(0);
@@ -251,12 +271,24 @@ fn nanos(since: std::time::Instant) -> u64 {
 fn summary() {
     let ms = |a: &AtomicU64| a.swap(0, Relaxed) as f64 / 1e6 / SUMMARY_EVERY as f64;
     let (pass, walk, replay, serial) = (ms(&PASS_NS), ms(&WALK_NS), ms(&REPLAY_NS), ms(&SERIAL_NS));
+    let list = ms(&LIST_NS);
     let (c, reasons) = take_counts();
     println!(
-        "NV_PAR_BONES: {} frames: a frame {pass:.3} ms (walks {walk:.3}, replays {replay:.3}, whole on main \
-         {serial:.3}); actors walked {}, whole on main {} {reasons:?}, subtrees on main {}, Havok parts {}; \
-         checked {} actors, {} differences, {} mismatches",
-        c.frames, c.walked, c.barriers, c.subtrees, c.havok, c.checked_actors, c.differences, c.mismatches
+        "NV_PAR_BONES: {} frames: a frame {pass:.3} ms (lists {list:.3}, walks {walk:.3}, replays {replay:.3}, \
+         whole on main {serial:.3}); hand-offs {} (actors main walked itself {}); actors walked {}, whole on \
+         main {} {reasons:?}, subtrees on main {}, Havok parts {}; checked {} actors, {} differences, {} \
+         mismatches; stretches cut at shared Euler keys {}",
+        c.frames,
+        c.forks,
+        c.by_main,
+        c.walked,
+        c.barriers,
+        c.subtrees,
+        c.havok,
+        c.checked_actors,
+        c.differences,
+        c.mismatches,
+        c.splits
     );
     census_print();
 }
@@ -336,6 +368,9 @@ pub fn take_counts() -> (Counts, Vec<(&'static str, u64)>) {
         checked_actors: CHECKED.swap(0, Relaxed),
         differences: DIFFERENCES.swap(0, Relaxed),
         mismatches: MISMATCHES.swap(0, Relaxed),
+        splits: SPLITS.swap(0, Relaxed),
+        forks: FORKS.swap(0, Relaxed),
+        by_main: BY_MAIN.swap(0, Relaxed),
     };
     let reasons = Barrier::ALL
         .iter()
@@ -673,13 +708,68 @@ fn collision_ok(e: &mut Engine, object: u32) -> bool {
     if !(body != 0 || 1.0 > amount || current == 1) {
         return true;
     }
-    // Only the fully keyframed case outside update state 2: motion target 4 already set, blend mode
-    // 2, the motion slot `NitohkTransform` (a refresh, then the body written).
-    1.0 == amount
+    // The fully keyframed case outside update state 2: motion target 4 already set, blend mode 2, the
+    // motion slot `NitohkTransform` (a refresh, then the body written: logged). Or a ragdoll's bone
+    // that only reads its body ([`reads_body`]: run on the helper).
+    (1.0 == amount
         && state != 2
         && current == 4
         && slot_target(e, object, SLOT_HK_TO_NI) == BLEND_HK_TO_NI
-        && slot_target(e, object, SLOT_MOTION) == NI_TO_HK
+        && slot_target(e, object, SLOT_MOTION) == NI_TO_HK)
+        || reads_body(e, object)
+}
+
+/// What blend mode 1 runs (`bhkCollisionObject::hktoNiTransform`, `00c65a80`, by address) reaches
+/// through its body's and its own slots: the body's `GetPosition` and `GetRotation` (slots 0xd4,
+/// 0xd8) of `bhkRigidBody` (`00c8d0f0`, `00c8d130`: the Havok body's position +0x120 and rotation
+/// +0x160) or `bhkRigidBodyT` (`00cb3370`, `00cb3200`: the same with the body's own offset), and
+/// `bhkNiCollisionObject::SetTransform` (slot 0xb8, `00c6bbb0`), which calls the hook at `01267b68`
+/// when it is set and the object's notify bit (2) is.
+const BODY_POSITIONS: [u32; 2] = [0x00c8_d0f0, 0x00cb_3370];
+const BODY_ROTATIONS: [u32; 2] = [0x00c8_d130, 0x00cb_3200];
+const SLOT_SET_TRANSFORM: u32 = 0xb8;
+const SET_TRANSFORM: u32 = 0x00c6_bbb0;
+const TRANSFORM_HOOK: u32 = 0x0126_7b68;
+
+/// Whether a blend collision object's keyframed branch (`hktoNiTransform`, slot 0xa4, this class's)
+/// only reads its body into its node, as a ragdoll's bone does: the blend amount (+0x18) 0.0 and
+/// either update state 1 (the node's refresh only) or the motion mode (+0x20) already 1 (no change:
+/// nothing written to Havok, no notification) with blend mode 1 (the second amount +0x1c 0.0 or the
+/// flag +0xd bit 0), which runs `bhkCollisionObject::hktoNiTransform`: nothing without a body or a
+/// Havok object, the node's refresh for a fixed one (motion type +0xe8 5 with +8 set), else the
+/// body's position and rotation read through the plain getters and `SetTransform` on the node (its
+/// local transform from the parent's world, which is walked first, then its world), no hook.
+///
+/// The body is the bone's own: no other object of the pass reads or writes it. What the pass writes
+/// to bodies is main's replay of the logged Havok parts, each another bone's own body. So the helper
+/// reads what the serial pass reads at that point.
+pub(crate) fn reads_body(e: &mut Engine, object: u32) -> bool {
+    if e.mem.f32(object + 0x18) != 0.0 || slot_target(e, object, SLOT_HK_TO_NI) != BLEND_HK_TO_NI {
+        return false;
+    }
+    let state = {
+        let tls = e.tls();
+        e.mem.u32(tls + TLS_UPDATE_STATE)
+    };
+    if state == 1 {
+        return true;
+    }
+    let flag = e.mem.u8(object + 0xd) & 1 != 0;
+    if !(e.mem.f32(object + 0x1c) == 0.0 || flag) || e.mem.u32(object + 0x20) != 1 {
+        return false;
+    }
+    let body = e.mem.u32(object + 0x10);
+    if body == 0 {
+        return true;
+    }
+    let havok = e.mem.u32(body + 8);
+    if havok == 0 || (e.mem.u8(havok + 0xe8) == 5 && e.mem.u32(havok + 8) != 0) {
+        return true;
+    }
+    BODY_POSITIONS.contains(&slot_target(e, body, 0xd4))
+        && BODY_ROTATIONS.contains(&slot_target(e, body, 0xd8))
+        && slot_target(e, object, SLOT_SET_TRANSFORM) == SET_TRANSFORM
+        && ((e.mem.u8(object + 0xc) >> 2) & 1 == 0 || e.global::<u32>(TRANSFORM_HOOK) == 0)
 }
 
 /// What a helper does with `object` (one object; its children are classified as the walk meets
@@ -701,7 +791,7 @@ fn classify(e: &mut Engine, object: u32, detached: &[u32]) -> Class {
     if flags & FLAG_PROPERTY_CONTROLLERS != 0 {
         return Class::Barrier(Barrier::Controllers);
     }
-    if !detached.contains(&object) && !controllers_idle(e, e.mem.u32(object + 0x0c)) {
+    if !detached.contains(&object) && !controllers_ok(e, e.mem.u32(object + 0x0c), object) {
         return Class::Barrier(Barrier::Controllers);
     }
     let collision = e.mem.u32(object + 0x1c);
@@ -879,11 +969,40 @@ fn order_check(e: &Engine, root: u32, roots: &[u32]) -> Option<Barrier> {
 const BLEND_CONTROLLER_UPDATE: u32 = 0x00c9_b090;
 const FORCE_CONTROLLER_UPDATE: u32 = 0x00cb_9770;
 
-/// Whether every controller of the list from `first` (along +0x30) is one a helper may run now: a
-/// `bhkBlendController` that its update leaves at once (active bit +8 bit 3 clear, no target at
-/// +0x2c, or +0x48 clear: nothing written), or a `bhkForceController` that is not active (bit 3
-/// clear, or no target: its update only stores a word of its own, +0x50). An empty list is idle.
-fn controllers_idle(e: &Engine, first: u32) -> bool {
+/// `NiTransformController::Update` and `NiVisController::Update`, and the interpolators' updates they
+/// may run on a helper: `NiTransformInterpolator::Update` (slot 0x8c) and `NiBoolInterpolator::Update`
+/// (slot 0xa0).
+const TRANSFORM_CONTROLLER_UPDATE: u32 = 0x00a3_6680;
+const VIS_CONTROLLER_UPDATE: u32 = 0x00a4_4e10;
+const TRANSFORM_INTERPOLATOR_UPDATE: u32 = 0x00a3_fdb0;
+const BOOL_INTERPOLATOR_UPDATE: u32 = 0x00a5_33c0;
+/// Their sizes (the controllers' and interpolators' `CreateObject` allocations): what check mode
+/// saves and puts back around the helpers' walk.
+const CONTROLLER_SIZE: u32 = 0x38;
+const TRANSFORM_INTERPOLATOR_SIZE: u32 = 0x48;
+const BOOL_INTERPOLATOR_SIZE: u32 = 0x18;
+
+/// Whether every controller of `object`'s list from `first` (along +0x30) is one a helper may run
+/// now: a `bhkBlendController` that its update leaves at once (active bit +8 bit 3 clear, no target
+/// at +0x2c, or +0x48 clear: nothing written), a `bhkForceController` that is not active (bit 3
+/// clear, or no target: its update only stores a word of its own, +0x50), or a transform or
+/// visibility controller whose target is `object` itself and whose interpolator (+0x34) is none or a
+/// plain one ([`controller_state`]): its update writes only the node's local transform (+0x34 to
+/// +0x67) or its flags' bit 0, the update data's byte +8 (the actor's own, on main's stack), its own
+/// times (`NiTimeController::DontDoUpdate` and, with the scaled-time flag 0x40 every loaded
+/// controller has, `ComputeScaledTime` through slot 0xa4: +0x1c to +0x28) and flags, and the
+/// interpolator's own state (its last time, value and key indices). Clones get their own controllers
+/// and interpolators (`CopyMembers`, `00a38ef0`) but share the key data: the keys are only read,
+/// except an Euler rotation key's (type 4) three search hints, which `NiFloatKey::GenInterp` keeps in
+/// the shared key ([`euler_key`]; the stretches keep one actor per key, [`parallel`]).
+///
+/// `ComputeScaledTime` also keeps a one-entry cache in the running thread's block (+0x2a0 to +0x2b0:
+/// the result for a key range, cycle type and input time). A helper's own cache answers what the
+/// computation would, and main's cache after the pass holds another entry than the serial pass
+/// leaves; either changes an answer only for two controllers alike in key range, cycle type and
+/// input time that differ in the reverse flag (bit 4), which the cache does not key on. The
+/// translation shares that blind spot. An empty list is idle.
+fn controllers_ok(e: &Engine, first: u32, object: u32) -> bool {
     let mut controller = first;
     let mut steps = 0;
     while controller != 0 {
@@ -896,6 +1015,9 @@ fn controllers_idle(e: &Engine, first: u32) -> bool {
         let idle = match slot_target(e, controller, 0x94) {
             BLEND_CONTROLLER_UPDATE => !active || target == 0 || e.mem.u32(controller + 0x48) == 0,
             FORCE_CONTROLLER_UPDATE => !active || target == 0,
+            TRANSFORM_CONTROLLER_UPDATE | VIS_CONTROLLER_UPDATE => {
+                target == object && controller_state(e, controller).is_some()
+            }
             _ => false,
         };
         if !idle {
@@ -904,6 +1026,92 @@ fn controllers_idle(e: &Engine, first: u32) -> bool {
         controller = e.mem.u32(controller + 0x30);
     }
     true
+}
+
+/// A transform or visibility controller a helper may run: the byte ranges its update writes (the
+/// controller, its interpolator when it has one, and the search hints of the Euler key that
+/// interpolator reads, [`euler_key`]), or `None` when it may not run on a helper
+/// (another controller class, or an interpolator that is not the plain class its controller takes).
+fn controller_state(e: &Engine, controller: u32) -> Option<Vec<(u32, u32)>> {
+    let interpolator = e.mem.u32(controller + 0x34);
+    let (slot, update, size, none_ok) = match slot_target(e, controller, 0x94) {
+        TRANSFORM_CONTROLLER_UPDATE => (
+            0x8c,
+            TRANSFORM_INTERPOLATOR_UPDATE,
+            TRANSFORM_INTERPOLATOR_SIZE,
+            true,
+        ),
+        VIS_CONTROLLER_UPDATE => (
+            0xa0,
+            BOOL_INTERPOLATOR_UPDATE,
+            BOOL_INTERPOLATOR_SIZE,
+            false,
+        ),
+        _ => return None,
+    };
+    let mut ranges = vec![(controller, CONTROLLER_SIZE)];
+    if interpolator == 0 {
+        return none_ok.then_some(ranges);
+    }
+    if slot_target(e, interpolator, slot) != update {
+        return None;
+    }
+    ranges.push((interpolator, size));
+    if update == TRANSFORM_INTERPOLATOR_UPDATE {
+        let key = euler_key(e, interpolator);
+        if key != 0 {
+            ranges.push((key + EULER_LAST_INDEX, EULER_HINTS_SIZE));
+        }
+    }
+    Some(ranges)
+}
+
+/// `NiTransformData`'s rotation key count (+0x8, 16 bits), key type (+0x10) and keys (+0x20); the
+/// Euler key type, and an Euler key's three search hints (`m_uiLastIdx`, +0x3c, one word per axis).
+const DATA_ROTATION_COUNT: u32 = 0x08;
+const DATA_ROTATION_TYPE: u32 = 0x10;
+const DATA_ROTATION_KEYS: u32 = 0x20;
+const EULER_KEY_TYPE: u32 = 4;
+const EULER_LAST_INDEX: u32 = 0x3c;
+const EULER_HINTS_SIZE: u32 = 12;
+/// `NiTransformInterpolator::m_spData`.
+const INTERPOLATOR_DATA: u32 = 0x2c;
+
+/// The Euler rotation key (type 4) a plain transform interpolator's update reads, or 0: with Euler
+/// keys `NiRotKey::GenInterp` (`00a28740`) hands the first key to its interpolation (`00a29b10`),
+/// whose `NiFloatKey::GenInterp` (`00a26b40`) per axis starts its search at the key's hint and
+/// stores where it stopped. The key lives in the data every clone of the model shares.
+fn euler_key(e: &Engine, interpolator: u32) -> u32 {
+    let data = e.mem.u32(interpolator + INTERPOLATOR_DATA);
+    if data == 0
+        || e.mem.u16(data + DATA_ROTATION_COUNT) == 0
+        || e.mem.u32(data + DATA_ROTATION_TYPE) != EULER_KEY_TYPE
+    {
+        return 0;
+    }
+    e.mem.u32(data + DATA_ROTATION_KEYS)
+}
+
+/// The Euler keys the transform controllers of `object`'s list run on a helper would write hints
+/// into, added to `keys`.
+fn euler_keys_of(e: &Engine, object: u32, keys: &mut Vec<u32>) {
+    let mut controller = e.mem.u32(object + 0x0c);
+    let mut steps = 0;
+    while controller != 0 && steps < 64 {
+        if slot_target(e, controller, 0x94) == TRANSFORM_CONTROLLER_UPDATE {
+            let interpolator = e.mem.u32(controller + 0x34);
+            if interpolator != 0
+                && slot_target(e, interpolator, 0x8c) == TRANSFORM_INTERPOLATOR_UPDATE
+            {
+                let key = euler_key(e, interpolator);
+                if key != 0 && !keys.contains(&key) {
+                    keys.push(key);
+                }
+            }
+        }
+        controller = e.mem.u32(controller + 0x30);
+        steps += 1;
+    }
 }
 
 /// The children of a node (empty slots left out).
@@ -927,7 +1135,12 @@ fn has_children(e: &Engine, object: u32) -> bool {
 /// The check before a stretch: every object of the actor's tree, a subtree that will be logged
 /// included (it runs on main, but in the helpers' order, so it may hold nothing that is not
 /// traced). `None`: the actor may be walked on a helper.
-fn barrier_in(e: &mut Engine, root: u32, detached: &[u32]) -> Option<Barrier> {
+fn barrier_in(
+    e: &mut Engine,
+    root: u32,
+    detached: &[u32],
+    euler: &mut Vec<u32>,
+) -> Option<Barrier> {
     let census = census_on();
     let mut first = None;
     let mut stack = vec![(root, false)];
@@ -938,6 +1151,10 @@ fn barrier_in(e: &mut Engine, root: u32, detached: &[u32]) -> Option<Barrier> {
             }
             census_note(e, object, b, in_head);
             first = first.or(Some(b));
+        }
+        // Every object's, deferred subtrees' too: their replays run before the next stretch.
+        if !detached.contains(&object) {
+            euler_keys_of(e, object, euler);
         }
         if has_children(e, object) {
             let head = in_head || slot_target(e, object, SLOT_DOWNWARD) == HEAD_DOWNWARD;
@@ -984,6 +1201,8 @@ fn parallel(e: &mut Engine, array: u32, first: u32, last: u32) -> bool {
     // The list, in order, with each actor's animation asked as the translation asks it.
     let started = std::time::Instant::now();
     let mut items = Vec::new();
+    // Per item, the Euler keys its tree's transform controllers read ([`euler_key`]).
+    let mut euler: Vec<Vec<u32>> = Vec::new();
     let mut entries = Vec::new();
     let mut index = first;
     while index < last {
@@ -1007,11 +1226,13 @@ fn parallel(e: &mut Engine, array: u32, first: u32, last: u32) -> bool {
         // Nothing pending (the update answers false) or no roots (it only clears the mark): the
         // translation's call at the actor's place, reading nothing of the others.
         let walks = pending && root != 0 && accum != 0;
+        let mut keys = Vec::new();
         let barrier = if walks {
-            barrier_in(e, root, &[root, accum])
+            barrier_in(e, root, &[root, accum], &mut keys)
         } else {
             None
         };
+        euler.push(keys);
         items.push(Item {
             actor,
             animation,
@@ -1042,6 +1263,7 @@ fn parallel(e: &mut Engine, array: u32, first: u32, last: u32) -> bool {
             }
         }
     }
+    LIST_NS.fetch_add(nanos(started), Relaxed);
     FRAMES.fetch_add(1, Relaxed);
     let check = mode() == 3;
     // Stretches: the walkable actors up to the next barrier, then the barrier on its own.
@@ -1065,7 +1287,15 @@ fn parallel(e: &mut Engine, array: u32, first: u32, last: u32) -> bool {
             start = end;
             continue;
         }
+        // An actor reading Euler keys an earlier actor of the stretch reads starts the next one: the
+        // keys' search hints are then written by one thread at a time, in the list's order.
+        let mut claimed: Vec<u32> = Vec::new();
         while end < items.len() && walkable_or_idle(&items[end]) {
+            if euler[end].iter().any(|k| claimed.contains(k)) {
+                SPLITS.fetch_add(1, Relaxed);
+                break;
+            }
+            claimed.extend_from_slice(&euler[end]);
             end += 1;
         }
         stretch(e, &items[start..end], check);
@@ -1179,7 +1409,7 @@ fn walk_on_helpers(e: &mut Engine, items: &[Item], walk: &[usize], base: u32) ->
         let tls = e.tls();
         e.mem.u32(tls + TLS_UPDATE_STATE)
     };
-    let job = |w: &mut Engine, _number: usize| {
+    let job = |w: &mut Engine, number: usize| {
         let tls = w.tls();
         let own = w.mem.u32(tls + TLS_UPDATE_STATE);
         w.mem.set_u32(tls + TLS_UPDATE_STATE, state);
@@ -1191,6 +1421,9 @@ fn walk_on_helpers(e: &mut Engine, items: &[Item], walk: &[usize], base: u32) ->
             let i = walk[k];
             let item = &items[i];
             let data = base + ITEM_WORDS * idx(i);
+            if number == 0 {
+                BY_MAIN.fetch_add(1, Relaxed);
+            }
             ACTIVE.fetch_add(1, Relaxed);
             LOG.with(|l| *l.borrow_mut() = Some(Vec::new()));
             walk_actor(w, item.root, data);
@@ -1205,9 +1438,11 @@ fn walk_on_helpers(e: &mut Engine, items: &[Item], walk: &[usize], base: u32) ->
     // The pool is the parallel render's when it forked first, made with its own count: a pool with
     // fewer helpers than asked for refuses, so one helper is asked for next.
     let helpers = HELPERS.load(Relaxed);
-    if !engine_core::real_threads::fork_join_first(e, helpers, &job)
-        && (helpers == 1 || !engine_core::real_threads::fork_join_first(e, 1, &job))
+    if engine_core::real_threads::fork_join_first(e, helpers, &job)
+        || (helpers != 1 && engine_core::real_threads::fork_join_first(e, 1, &job))
     {
+        FORKS.fetch_add(1, Relaxed);
+    } else {
         // No helpers to be had: main walks them all, the same way.
         job(e, 0);
     }
@@ -1307,6 +1542,12 @@ struct Fields {
     words: Vec<u32>,
     bound: [u32; 4],
     collision: [u32; 2],
+    /// The bytes of the transform and visibility controllers on the object, of their
+    /// interpolators and of the Euler keys' search hints they write ([`controller_state`]): put
+    /// back with the rest, so the serial pass starts where the helper started (with the game's
+    /// scaled-time flag a controller already updated at this time skips its update, and the
+    /// node would keep the transform put back), and compared after it.
+    controllers: Vec<(u32, Vec<u8>)>,
 }
 
 fn fields_of(e: &Engine, object: u32) -> Fields {
@@ -1325,11 +1566,24 @@ fn fields_of(e: &Engine, object: u32) -> Fields {
     } else {
         [0; 2]
     };
+    let mut controllers = Vec::new();
+    let mut controller = e.mem.u32(object + 0x0c);
+    let mut steps = 0;
+    while controller != 0 && steps < 64 {
+        if let Some(ranges) = controller_state(e, controller) {
+            for (at, size) in ranges {
+                controllers.push((at, e.mem.bytes(at, size)));
+            }
+        }
+        controller = e.mem.u32(controller + 0x30);
+        steps += 1;
+    }
     Fields {
         object,
         words,
         bound,
         collision,
+        controllers,
     }
 }
 
@@ -1349,6 +1603,9 @@ fn put_fields(e: &mut Engine, f: &Fields) {
             .set_u16(c + 0xc, u16::try_from(f.collision[0]).unwrap_or(0));
         e.mem
             .set_u8(c + 0x14, u8::try_from(f.collision[1]).unwrap_or(0));
+    }
+    for (at, bytes) in &f.controllers {
+        e.mem.write(*at, bytes);
     }
 }
 
@@ -1484,12 +1741,22 @@ fn check_stretch(
                 expected[0] &= 0xffbf;
             }
             let bound_differs = !above.contains(&f.object) && now.bound != f.bound;
-            if now.words != f.words || now.collision != expected || bound_differs {
+            // The controllers' and interpolators' bytes (and Euler hints) the helper left, at the
+            // same addresses (the detached roots' controllers are back on them now).
+            let controllers_differ = f
+                .controllers
+                .iter()
+                .any(|(at, bytes)| e.mem.bytes(*at, idx(bytes.len())) != *bytes);
+            if now.words != f.words
+                || now.collision != expected
+                || bound_differs
+                || controllers_differ
+            {
                 DIFFERENCES.fetch_add(1, Relaxed);
                 detail(e, item, k, &saved[next][k], f, &now, bound_differs);
                 report(format_args!(
-                    "NV_PAR_BONES=check: actor {:08x}, object {:08x}: transform, flags, bound or collision \
-                     bytes differ from the serial pass",
+                    "NV_PAR_BONES=check: actor {:08x}, object {:08x}: transform, flags, bound, collision or \
+                     controller bytes differ from the serial pass (controllers differ: {controllers_differ})",
                     item.actor, f.object
                 ));
             }
