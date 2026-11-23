@@ -46,6 +46,7 @@ pub fn fn_00c90740(e: &mut Engine, objects: Ptr, count: i32, stride: u32) {
     if e.mem.u32(lock + 8) != 0 {
         let index: u32 = e.global(LOCK_TLS_INDEX);
         if e.call(TLS_GET_VALUE, &args![index]).u32() != LOCK_OWNER_MARK {
+            super::hkreferencedobject::count_main_lock();
             let index: u32 = e.global(LOCK_TLS_INDEX);
             if e.call(TLS_GET_VALUE, &args![index]).u32() == LOCK_OWNER_MARK {
                 let holds = e.mem.u32(lock + 0xc);
