@@ -459,7 +459,7 @@ pub fn set_render_state(
     }
     capture::set_own_at(e, locked, lock);
     let cached = elem_addr(this, NiDX9RenderState::auiRenderStates, state, 8);
-    if capture::own_at::<u32>(e, cached) != value {
+    if capture::main_must_send(e, capture::own_at::<u32>(e, cached) == value) {
         let device = capture::own_get(e, this, NiDX9RenderState::m_pkD3DDevice9);
         engine_core::real_threads::device_set_render_state(e, device, state, value);
         capture::set_own_at(e, cached, value);
@@ -493,7 +493,7 @@ pub fn set_stage_state(
         slot.wrapping_add(stage.wrapping_mul(8)),
         8,
     );
-    if capture::own_at::<u32>(e, cached) != value {
+    if capture::main_must_send(e, capture::own_at::<u32>(e, cached) == value) {
         let device = capture::own_get(e, this, NiDX9RenderState::m_pkD3DDevice9);
         engine_core::real_threads::device_set_stage_state(e, device, stage, state, value);
     }
@@ -520,7 +520,7 @@ pub fn set_sampler_state(
         stage.wrapping_mul(5).wrapping_add(slot),
         8,
     );
-    if capture::own_at::<u32>(e, cached) == value {
+    if !capture::main_must_send(e, capture::own_at::<u32>(e, cached) == value) {
         return;
     }
     capture::set_own_at(e, cached, value);
@@ -533,7 +533,7 @@ pub fn set_sampler_state(
 /// differs.
 pub fn set_texture(e: &mut Engine, this: Ptr<NiDX9RenderState>, stage: u32, texture: u32) {
     let cached = elem_addr(this, NiDX9RenderState::apTextures, stage, 4);
-    if capture::own_at::<u32>(e, cached) == texture {
+    if !capture::main_must_send(e, capture::own_at::<u32>(e, cached) == texture) {
         return;
     }
     capture::set_own_at(e, cached, texture);
@@ -557,7 +557,7 @@ fn set_cached(
         let now = capture::own_get(e, this, current);
         capture::own_set(e, this, saved, now);
     }
-    if capture::own_get(e, this, current) == value {
+    if !capture::main_must_send(e, capture::own_get(e, this, current) == value) {
         return;
     }
     capture::own_set(e, this, current, value);
@@ -601,13 +601,15 @@ pub fn set_declaration(e: &mut Engine, this: Ptr<NiDX9RenderState>, declaration:
     if declaration == 0 {
         return;
     }
-    if capture::own_get(e, this, NiDX9RenderState::ucDeclarationSet) != 0
-        && capture::own_get(e, this, NiDX9RenderState::pDeclaration) == declaration
-    {
+    let same = capture::own_get(e, this, NiDX9RenderState::ucDeclarationSet) != 0
+        && capture::own_get(e, this, NiDX9RenderState::pDeclaration) == declaration;
+    if !capture::main_must_send(e, same) {
         return;
     }
     capture::own_set(e, this, NiDX9RenderState::ucDeclarationSet, 1);
-    if keep != 0 {
+    // Beside a packet the same one is sent again ([`capture::main_must_send`]), but the saved one is left as the exe
+    // leaves it when it returns early.
+    if keep != 0 && !same {
         let now = capture::own_get(e, this, NiDX9RenderState::pDeclaration);
         capture::own_set(e, this, NiDX9RenderState::pSavedDeclaration, now);
     }
@@ -1018,5 +1020,221 @@ pub fn sort_by_enabled(e: &mut Engine, this: Ptr<NiD3DShaderConstantMap>) {
             0x00e8_70c0,
             sort_entries_by_enabled(e, this.addr(), array)
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    /// Device slots (`IDirect3DDevice9`) the writer takes (`engine_core::real_threads::device_set_render_state` and
+    /// its kin): with the test's own functions in them the writer goes the table's way, which the test notes.
+    const DEVICE_SET_RENDER_STATE: u32 = 0xe4;
+    const DEVICE_SET_TEXTURE: u32 = 0x104;
+    const DEVICE_SET_STAGE_STATE: u32 = 0x10c;
+    const DEVICE_SET_SAMPLER_STATE: u32 = 0x114;
+
+    thread_local! {
+        /// The stand-in device's calls: (slot, the arguments after `this`).
+        static CALLS: RefCell<Vec<(u32, Vec<u32>)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// The stand-in device's function for slot `S`: notes the call.
+    fn noted<const S: u32>(_: &mut Engine, a: &[u32]) -> engine_core::abi::Ret {
+        CALLS.with(|c| c.borrow_mut().push((S, a[1..].to_vec())));
+        engine_core::abi::Ret::default()
+    }
+
+    /// A render-state cache whose device notes every setter's call, and the stage and sampler states' slot tables
+    /// (state 3 and state 5 in slot 0).
+    fn cache(e: &mut Engine) -> Ptr<NiDX9RenderState> {
+        let vtable = e.mem.alloc(0x200);
+        macro_rules! slots {
+            ($($s:expr),*) => {$(
+                e.mem.set_u32(vtable + $s, 0x0400_3000 + $s);
+                e.register(0x0400_3000 + $s, noted::<{ $s }>);
+            )*};
+        }
+        slots!(
+            DEVICE_SET_RENDER_STATE,
+            DEVICE_SET_TEXTURE,
+            DEVICE_SET_STAGE_STATE,
+            DEVICE_SET_SAMPLER_STATE,
+            DEVICE_SET_DECLARATION,
+            DEVICE_SET_VERTEX_SHADER,
+            DEVICE_SET_PIXEL_SHADER
+        );
+        e.map(STAGE_SLOT_OF_STATE & !0xfff, 0x1000);
+        e.mem.set_u16(STAGE_SLOT_OF_STATE + 3 * 2, 0);
+        e.mem.set_u16(SAMPLER_SLOT_OF_STATE + 5 * 2, 0);
+        let device = e.mem.alloc(8);
+        e.mem.set_u32(device, vtable);
+        let cache = e.mem.alloc(0x1200);
+        let this = Ptr::<NiDX9RenderState>::new(cache);
+        e.set(this, NiDX9RenderState::m_pkD3DDevice9, device);
+        e.set(this, NiDX9RenderState::ucDeclarationSet, 1);
+        this
+    }
+
+    /// One typed setter with an "already cached" skip: its device slot, its cache word, the call with a value, and
+    /// the arguments the device gets.
+    struct Setter {
+        name: &'static str,
+        slot: u32,
+        word: fn(Ptr<NiDX9RenderState>) -> u32,
+        call: fn(&mut Engine, Ptr<NiDX9RenderState>, u32),
+        args: fn(u32) -> Vec<u32>,
+    }
+
+    fn setters() -> Vec<Setter> {
+        vec![
+            Setter {
+                name: "render state",
+                slot: DEVICE_SET_RENDER_STATE,
+                word: |t| elem_addr(t, NiDX9RenderState::auiRenderStates, 7, 8),
+                call: |e, t, v| set_render_state(e, t, 7, v, 0, 0),
+                args: |v| vec![7, v],
+            },
+            Setter {
+                name: "texture",
+                slot: DEVICE_SET_TEXTURE,
+                word: |t| elem_addr(t, NiDX9RenderState::apTextures, 0, 4),
+                call: |e, t, v| set_texture(e, t, 0, v),
+                args: |v| vec![0, v],
+            },
+            Setter {
+                name: "stage state",
+                slot: DEVICE_SET_STAGE_STATE,
+                word: |t| elem_addr(t, NiDX9RenderState::auiStageStates, 0, 8),
+                call: |e, t, v| set_stage_state(e, t, 0, 3, v, 0),
+                args: |v| vec![0, 3, v],
+            },
+            Setter {
+                name: "sampler state",
+                slot: DEVICE_SET_SAMPLER_STATE,
+                word: |t| elem_addr(t, NiDX9RenderState::auiSamplerStates, 0, 8),
+                call: |e, t, v| set_sampler_state(e, t, 0, 5, v, 0),
+                args: |v| vec![0, 5, v],
+            },
+            Setter {
+                name: "vertex shader",
+                slot: DEVICE_SET_VERTEX_SHADER,
+                word: |t| t.addr() + NiDX9RenderState::pVertexShader.off,
+                call: |e, t, v| set_vertex_shader(e, t, v, 0),
+                args: |v| vec![v],
+            },
+            Setter {
+                name: "pixel shader",
+                slot: DEVICE_SET_PIXEL_SHADER,
+                word: |t| t.addr() + NiDX9RenderState::pPixelShader.off,
+                call: |e, t, v| set_pixel_shader(e, t, v, 0),
+                args: |v| vec![v],
+            },
+            Setter {
+                name: "declaration",
+                slot: DEVICE_SET_DECLARATION,
+                word: |t| t.addr() + NiDX9RenderState::pDeclaration.off,
+                call: |e, t, v| set_declaration(e, t, v, 0),
+                args: |v| vec![v],
+            },
+        ]
+    }
+
+    /// The cut's value, and the one the drawing side leaves.
+    const CUT: u32 = 0x70;
+    const DRAWN: u32 = 0x90;
+
+    /// Main beside the drawing thread's packet (the review of #574), for every setter with the skip: the cut held X,
+    /// the draw left Y, main asks for X. Serially main's cache would hold Y and main would send X; beside the packet its
+    /// cache holds the cut's X, so the setter sends X anyway, and the join keeps main's X. The same with main's own
+    /// packet paused between the halves (the VATS target's draw; the review of #876). With no packet open the same
+    /// value is skipped as the exe skips it, and one engine's packet never makes another engine's setter send.
+    #[test]
+    fn main_beside_a_packet_sends_a_value_its_cache_already_holds() {
+        for s in setters() {
+            let n = s.name;
+            // No packet: skipped.
+            let mut e = Engine::new();
+            let this = cache(&mut e);
+            e.mem.set_u32((s.word)(this), CUT);
+            (s.call)(&mut e, this, CUT);
+            assert!(CALLS.take().is_empty(), "{n}: no packet: skipped");
+
+            // The packet on the drawing thread (detached from main).
+            assert!(capture::begin(&e));
+            capture::own(&e, this.addr(), 0, 0x1200);
+            (s.call)(&mut e, this, DRAWN);
+            assert_eq!(CALLS.take(), [(s.slot, (s.args)(DRAWN))], "{n}: drawn");
+            let packet = capture::detach(&e).expect("the packet handed over");
+            assert!(capture::beside(&e));
+            // Another engine (another run) is not beside it.
+            let mut other = Engine::new();
+            let other_cache = cache(&mut other);
+            other.mem.set_u32((s.word)(other_cache), CUT);
+            assert!(!capture::beside(&other));
+            (s.call)(&mut other, other_cache, CUT);
+            assert!(CALLS.take().is_empty(), "{n}: another engine: skipped");
+            (s.call)(&mut e, this, CUT);
+            assert_eq!(
+                CALLS.take(),
+                [(s.slot, (s.args)(CUT))],
+                "{n}: sent although main's cache held it"
+            );
+            assert!(capture::attach(packet).is_ok());
+            assert!(
+                !capture::beside(&e),
+                "{n}: the drawing side is not beside its own packet"
+            );
+            let _ = capture::end(&mut e);
+            assert_eq!(
+                e.mem.u32((s.word)(this)),
+                CUT,
+                "{n}: the join keeps main's value"
+            );
+
+            // Main's own packet paused between the halves.
+            let mut e = Engine::new();
+            let this = cache(&mut e);
+            e.mem.set_u32((s.word)(this), CUT);
+            assert!(capture::begin(&e));
+            capture::own(&e, this.addr(), 0, 0x1200);
+            (s.call)(&mut e, this, DRAWN);
+            CALLS.take();
+            capture::pause(&mut e);
+            assert!(capture::beside(&e), "{n}: paused: beside");
+            (s.call)(&mut e, this, CUT);
+            assert_eq!(
+                CALLS.take(),
+                [(s.slot, (s.args)(CUT))],
+                "{n}: paused: sent although the cache held it"
+            );
+            capture::resume(&mut e);
+            assert!(!capture::beside(&e), "{n}: resumed");
+            let _ = capture::end(&mut e);
+            assert_eq!(
+                e.mem.u32((s.word)(this)),
+                CUT,
+                "{n}: paused: the join keeps main's value"
+            );
+        }
+    }
+
+    /// The declaration beside a packet, the same one asked for with "keep": sent again, but the saved one stays as the
+    /// exe leaves it when it returns early.
+    #[test]
+    fn the_same_declaration_beside_a_packet_keeps_the_saved_one() {
+        let mut e = Engine::new();
+        let this = cache(&mut e);
+        e.set(this, NiDX9RenderState::pDeclaration, CUT);
+        e.set(this, NiDX9RenderState::pSavedDeclaration, 0x55);
+        assert!(capture::begin(&e));
+        capture::own(&e, this.addr(), 0, 0x1200);
+        let packet = capture::detach(&e).expect("handed over");
+        set_declaration(&mut e, this, CUT, 1);
+        assert_eq!(CALLS.take(), [(DEVICE_SET_DECLARATION, vec![CUT])]);
+        assert_eq!(e.get(this, NiDX9RenderState::pSavedDeclaration), 0x55);
+        assert!(capture::attach(packet).is_ok());
+        let _ = capture::end(&mut e);
     }
 }
