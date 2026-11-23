@@ -695,9 +695,9 @@ mod n051_tests {
         let (character, refr) = (0x0108_6a6c, 0x0102_f55c);
         e.mem.set_u32(character + 0x100, RETURN_TRUE);
         e.mem.set_u32(character + 0x22c, 0x00c2_022c);
-        // Dying only when asked with Character's vtable's low byte.
+        // Dying only when asked with Character's vtable's low byte (the word after `this`).
         e.register(0x00c2_022c, |_, a| Ret {
-            eax: u32::from(a[0] & 0xff == 0x6c),
+            eax: u32::from(a[1] & 0xff == 0x6c),
             ..Ret::default()
         });
         e.mem.set_u32(refr + 0x100, 0x00c2_0100);
