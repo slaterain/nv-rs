@@ -4488,9 +4488,17 @@ mod tests {
         Ret::default()
     }
 
-    /// The holder test's game thread: calls the platform function whose slot is its parameter.
+    /// Set by the holder test once main's own locked call is done: until then its game thread takes the kernel lock
+    /// no more (its exit would take it while main still waits, a second hold).
+    static MAIN_DONE: AtomicBool = AtomicBool::new(false);
+
+    /// The holder test's game thread: calls the platform function whose slot is its parameter, then (without the
+    /// lock) waits for main to have had its turn before it ends.
     fn calls_the_busy_function(e: &mut Engine, a: &[u32]) -> Ret {
         e.call(a[0], &args![0u32]);
+        while !MAIN_DONE.load(Ordering::SeqCst) {
+            std::thread::yield_now();
+        }
         Ret::default()
     }
 
@@ -4507,6 +4515,7 @@ mod tests {
         start(&mut e).expect("real threads on");
         ctx(&e).frame_begins(false);
         BUSY_STARTED.store(false, Ordering::SeqCst);
+        MAIN_DONE.store(false, Ordering::SeqCst);
         let h = e
             .call(
                 slot("CreateThread"),
@@ -4519,6 +4528,7 @@ mod tests {
         let _ = crate::hitch::take_lock_holder();
         // A plain locked call: it waits for the busy thread's hold.
         e.call(slot("GetDoubleClickTime"), &args![]);
+        MAIN_DONE.store(true, Ordering::SeqCst);
         let held = crate::hitch::take_lock_holder().expect("a named holder");
         assert_eq!(held.call_name, "D3DPERF_SetOptions");
         assert_eq!(held.handoffs, 0, "one long hold: {held:?}");
