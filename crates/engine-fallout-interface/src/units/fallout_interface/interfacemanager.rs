@@ -3350,7 +3350,9 @@ fn top_visible_menu_id(e: &mut Engine, this: Ptr<InterfaceManager>) -> u32 {
 
 /// lStewieAl's Tweaks' `ToggleConsoleHook` after the call it wraps answered `next`: 1 when that is
 /// not 0; else 1 (and the menu-mode debounce set) when the console (`ConsoleManager::GetSingleton`,
-/// `0071b160` with 1) is open (`+0x38`) and the pad's B was pressed this frame; else 0.
+/// `0071b160` with 1) is open (`+0x38`) and the pad's B was pressed this frame; else 0. The
+/// debounce's pad half, B's release not reaching the menu behind the closed console, is Tweaks'
+/// S0022.47 in `CheckMenuButton` (the menus share's row, pull request #943).
 fn stewie_console_pad_b(e: &mut Engine, next: u32) -> u32 {
     use engine_core::extend::stewie as tweaks;
     if next != 0 {
@@ -11934,6 +11936,197 @@ mod tests {
         // Closed: nothing.
         e.mem.set_u8(console + 0x38, 0);
         assert_eq!(frame(&mut e, 3000, 1, 0, 30000), (vec![], vec![]));
+    }
+
+    /// S0022.45's repeat times are Tweaks' float sums (`currentTime + fKeyRepeatTime` stored in its
+    /// `UInt32`): at a clock of 0x4000_0010 ms (the float's step there is 128) the delay of 500 ends
+    /// at 0x4000_0200, not 0x4000_0204, so a held D-pad repeats at 0x4000_0203; the interval of 100
+    /// after that ends at 0x4000_0280, not 0x4000_0267.
+    #[test]
+    fn s0022_45_the_repeat_times_are_float_sums() {
+        let mut e = world();
+        let console = e.mem.alloc(0x40);
+        e.mem.set_u8(console + 0x38, 1);
+        returns(&mut e, MENU_CONSOLE_INSTANCE, console);
+        returns(&mut e, 0x0071_b210, 0);
+        e.mem.set_f32(0x011d_8b38 + 4, 500.0);
+        e.mem.set_f32(0x011d_8b88 + 4, 100.0);
+        // D-pad up held this frame and the last.
+        e.mem.set_u16(0x011f_35a8 + 4, 1);
+        e.mem.set_u16(0x011f_35b8 + 4, 1);
+        let frame = |e: &mut Engine, now: u32| {
+            e.mem.set_u32(0x011f_6394 + 0x14, now);
+            e.call_log = Some(vec![]);
+            assert_eq!(engine_core::extend::stewie::console_pad_hotkeys(e), console);
+            calls(e, 0x0071_b210).len()
+        };
+        // The first held frame starts the delay.
+        assert_eq!(frame(&mut e, 0x4000_0010), 0);
+        assert_eq!(frame(&mut e, 0x4000_01ff), 0);
+        assert_eq!(frame(&mut e, 0x4000_0203), 1);
+        assert_eq!(frame(&mut e, 0x4000_027f), 0);
+        assert_eq!(frame(&mut e, 0x4000_0280), 1);
+    }
+
+    /// lStewieAl's Tweaks' S0022.45 called at `0x70E063` in `Idle`'s key events: with the row the
+    /// console comes from `ConsoleManager::GetSingleton` (`0071b160` with 1) and the open console
+    /// gets D-pad up pressed as arrow-up (`HandleInput`); off, `MenuConsole::Instance(0)` and no
+    /// input.
+    #[test]
+    fn s0022_45_idle_hands_the_pad_to_the_console() {
+        let run = |row: bool| {
+            let mut e = world();
+            let m = manager(&mut e);
+            let console = e.mem.alloc(0x40);
+            e.mem.set_u8(console + 0x38, 1);
+            returns(&mut e, MENU_CONSOLE_INSTANCE, console);
+            returns(&mut e, 0x0071_b210, 0);
+            e.mem.set_u16(0x011f_35a8 + 4, 1);
+            e.mem.set_u16(0x011f_35b8 + 4, 0);
+            e.set_stewie(engine_core::extend::stewie::CONSOLE_DPAD_HISTORY, row);
+            let mut state = IdleState::default();
+            idle_gamepad_events(&mut e, m, &mut state);
+            assert_eq!(state.console, console);
+            (
+                calls(&e, MENU_CONSOLE_INSTANCE),
+                calls(&e, 0x0071_b210),
+                console,
+            )
+        };
+        let (instance, input, _) = run(false);
+        assert_eq!((instance, input), (vec![vec![0]], vec![]));
+        let (instance, input, console) = run(true);
+        assert_eq!(instance, vec![vec![1]]);
+        assert_eq!(input, vec![vec![console, 0x8000_0003]]);
+    }
+
+    /// lStewieAl's Tweaks' S0062 in `Idle`'s key events: a key with no character (key 0) whose scan
+    /// code (Tab, 0x0F) was pressed this frame (`GetKeyState(code, 1)`, its JE at `0x70E1A3`) goes to
+    /// the menus with the row: the keyboard button lookups run (the second by scan code) and the
+    /// frontmost menu's slot 0x30 is not offered the 0 (`0x70E25B`); a translated key is still
+    /// offered and asks no key state. Off, with the scan code not pressed, or with no scan code,
+    /// nothing goes to the menus.
+    #[test]
+    fn s0062_a_scan_code_alone_reaches_the_menus() {
+        let run = |row: bool, pressed: u32, key: u32, code: u32| {
+            let mut e = world();
+            let m = manager(&mut e);
+            let input = e.mem.alloc(0x2000);
+            e.set_global(engine_core::extend::stewie::INPUT_GLOBALS, input);
+            e.register_double(CONTROLS_NEXT_EVENT, move |e, a| {
+                e.mem.set_u32(a[1], code);
+                Ret {
+                    eax: 1,
+                    ..Ret::default()
+                }
+            });
+            returns(&mut e, TRANSLATE_KEY_EVENT, key);
+            returns(&mut e, CONTROLS_QUERY_00A24180, pressed);
+            let (frontmost, offered) = virtual_object(&mut e, &[(0x30, 0x0900_0030)], 0);
+            let root = e.mem.alloc(0x10);
+            e.mem.set_u32(frontmost + 4, root);
+            returns(&mut e, GET_FRONTMOST_MENU, frontmost);
+            e.set_stewie(engine_core::extend::stewie::XML_BUTTONS_BY_SCANCODE, row);
+            let mut state = IdleState::default();
+            idle_gamepad_events(&mut e, m, &mut state);
+            let asked: Vec<(u32, u32, u32)> = calls(&e, CONTROLS_QUERY_00A24180)
+                .iter()
+                .map(|c| (u32::from(c[0] == input), c[1], c[2]))
+                .collect();
+            let offered = offered[0].borrow().len();
+            (asked, calls(&e, TILE_GET_CHILD_BY_NAME).len(), offered)
+        };
+        assert_eq!(run(true, 1, 0, 0x0f), (vec![(1, 0x0f, 1)], 2, 0));
+        assert_eq!(run(false, 1, 0, 0x0f), (vec![], 0, 0));
+        assert_eq!(run(true, 0, 0, 0x0f), (vec![(1, 0x0f, 1)], 0, 0));
+        assert_eq!(run(true, 1, 0, 0), (vec![], 0, 0));
+        assert_eq!(run(true, 1, 0x61, 0x1e), (vec![], 2, 1));
+    }
+
+    /// lStewieAl's Tweaks' S0022.18 after `Idle`'s key dispatch: when the frontmost menu took the
+    /// key (its slot 0x30 answered 1) the Pip-Boy hot keys are not asked; when it did not, they are.
+    #[test]
+    fn s0022_18_a_key_the_menu_took_skips_the_hot_keys() {
+        let run = |taken: u32| {
+            let mut e = world();
+            let m = manager(&mut e);
+            let (frontmost, _) = virtual_object(&mut e, &[(0x30, 0x0900_0030)], taken);
+            let root = e.mem.alloc(0x10);
+            e.mem.set_u32(frontmost + 4, root);
+            returns(&mut e, GET_FRONTMOST_MENU, frontmost);
+            returns(&mut e, CONTROLS_QUERY_00A24180, 0);
+            e.set_stewie(engine_core::extend::stewie::PIPBOY_HOTKEYS_AFTER_TEXT, true);
+            let mut state = IdleState::default();
+            idle_dispatch_key(&mut e, m, &mut state, 0x61, 0x1e);
+            e.call_log = Some(vec![]);
+            idle_pipboy_hot_keys(&mut e, m, &mut state);
+            calls(&e, CONTROLS_QUERY_00A24180).len()
+        };
+        assert_eq!(run(1), 0);
+        assert_eq!(run(0), 3);
+    }
+
+    /// lStewieAl's Tweaks' S0984 at the call `0x70E5FE` in `Idle`: with JIP LN NVSE's G58 (JIP's
+    /// fix row on) answering 0, the open console and B pressed toggle the console once and set the
+    /// menu-mode debounce; G58 answering 1 toggles it without asking the console about B; with JIP's
+    /// fixes off the exe's query (0 here) and then B; B held from the last frame toggles nothing.
+    #[test]
+    fn s0984_idle_closes_the_console_on_b() {
+        use engine_core::extend::jip_patches;
+        let run = |word: u32, answer: u32, previous: u16| {
+            let (mut e, m) = focus_world();
+            returns(&mut e, CONSOLE_KEY_FLAG_GET, 0);
+            returns(&mut e, CONTROLS_QUERY_00A24660, 0);
+            let console = e.mem.alloc(0x40);
+            e.mem.set_u8(console + 0x38, 1);
+            returns(&mut e, MENU_CONSOLE_INSTANCE, console);
+            returns(&mut e, CLEAR_KEYSTROKES, 0);
+            returns(&mut e, MENU_CONSOLE_TOGGLE_VISIBLE, 1);
+            returns(&mut e, ADD_TO_ENTER_STACK, 0);
+            returns(&mut e, DEBUG_TEXT_UPDATE, 0);
+            returns(&mut e, 0x0055_9450, 1);
+            let element = e.mem.alloc(4);
+            e.register_double(LIST_NEXT_ELEMENT, move |e, a| {
+                e.mem.set_u32(a[1], 0);
+                e.mem.set_u8(MENU_LOOP_ABORT, 1);
+                Ret {
+                    eax: element,
+                    ..Ret::default()
+                }
+            });
+            e.on_site_for_test(0x0070_e5fe, g58_answer);
+            e.set_jip_patches(word);
+            G58_SEEN.with(|s| s.borrow_mut().clear());
+            G58_ANSWER.with(|a| a.set(answer));
+            let input = e.mem.alloc(0x2000);
+            e.set_global(engine_core::extend::stewie::INPUT_GLOBALS, input);
+            e.mem.set_u16(0x011f_35a8 + 4, 0x2000);
+            e.mem.set_u16(0x011f_35b8 + 4, previous);
+            e.set_stewie(engine_core::extend::stewie::CONSOLE_PAD_B_CLOSES, true);
+            let mut state = IdleState {
+                controls: 0x7700,
+                ..IdleState::default()
+            };
+            e.call_log = Some(vec![]);
+            idle_console_and_hot_keys(&mut e, m, &mut state);
+            (
+                calls(&e, MENU_CONSOLE_TOGGLE_VISIBLE).len(),
+                calls(&e, MENU_CONSOLE_INSTANCE).len(),
+                e.mem.u16(input + 0x1b92),
+                G58_SEEN.with(|s| s.take()).len(),
+            )
+        };
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        let by_b = run(fixes, 0, 0);
+        let by_jip = run(fixes, 1, 0);
+        assert_eq!((by_b.0, by_b.2, by_b.3), (1, 8, 1));
+        assert_eq!((by_jip.0, by_jip.2, by_jip.3), (1, 0, 1));
+        // The console asked once more for B when G58 said no.
+        assert_eq!(by_b.1, by_jip.1 + 1);
+        let exe = run(0, 0, 0);
+        assert_eq!((exe.0, exe.1, exe.2, exe.3), (1, by_b.1, 8, 0));
+        let held = run(fixes, 0, 0x2000);
+        assert_eq!((held.0, held.2), (0, 0));
     }
 
     // ---- 00712450 .. 00714c20 ----
