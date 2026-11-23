@@ -212,7 +212,7 @@ pub const ROWS: &[Row] = &[
         plan: "S0022.51",
         key: "bMenuFixesCreaturePickpocket",
         tweaks: None,
-        summary: "Pickpocket shows on creatures that can be pickpocketed and not on those that cannot",
+        summary: "Pickpocket (in the crime colour) shows on creatures that can be pickpocketed and not on those that cannot, which show Talk, not in the crime colour (with S0022.50)",
     },
     Row {
         bit: stewie::REPAIR_MENU_BROKEN_ITEM_TYPE,
