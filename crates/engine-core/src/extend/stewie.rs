@@ -341,6 +341,12 @@ pub(crate) struct Prints {
     /// `[Extra Console Details] bMeshPath` (Tweaks' code default 0): S0059 prints every selected
     /// reference's model path with it.
     mesh_path: AtomicBool,
+    /// `[Dialog Hide Mouse] bOnlyWhenNPCSpeaks` (Tweaks' code default 0, VNV's 1): S0377 hides the
+    /// cursor only while the speaker talks.
+    cursor_only_speaking: AtomicBool,
+    /// `[VATS] bHideFriendliesByDefault` (Tweaks' code default 0): S0382 skips friendly actors
+    /// without shift held, and takes them with it.
+    vats_friendlies_hidden: AtomicBool,
 }
 
 impl Default for Prints {
@@ -354,6 +360,8 @@ impl Default for Prints {
             lod_ref: AtomicU32::new(0),
             slip_guard: AtomicBool::new(false),
             mesh_path: AtomicBool::new(false),
+            cursor_only_speaking: AtomicBool::new(false),
+            vats_friendlies_hidden: AtomicBool::new(false),
         }
     }
 }
@@ -694,6 +702,30 @@ impl Engine {
     /// Whether S0059 prints every selected reference's model path ([`Engine::set_stewie_mesh_path`]).
     pub fn stewie_mesh_path(&self) -> bool {
         self.extend.stewie.3.mesh_path.load(Relaxed)
+    }
+
+    /// `[Dialog Hide Mouse] bOnlyWhenNPCSpeaks` (`crates/stewie`'s install): whether S0377 hides
+    /// the cursor only while the speaker talks.
+    pub fn set_stewie_cursor_only_speaking(&self, on: bool) {
+        self.extend.stewie.3.cursor_only_speaking.store(on, Relaxed);
+    }
+
+    /// Whether S0377 hides the cursor only while the speaker talks
+    /// ([`Engine::set_stewie_cursor_only_speaking`]).
+    pub fn stewie_cursor_only_speaking(&self) -> bool {
+        self.extend.stewie.3.cursor_only_speaking.load(Relaxed)
+    }
+
+    /// `[VATS] bHideFriendliesByDefault` (`crates/stewie`'s install): whether S0382 turns around,
+    /// skipping friendly actors without shift held.
+    pub fn set_stewie_vats_friendlies_hidden(&self, on: bool) {
+        self.extend.stewie.3.vats_friendlies_hidden.store(on, Relaxed);
+    }
+
+    /// Whether S0382 skips friendly actors without shift held
+    /// ([`Engine::set_stewie_vats_friendlies_hidden`]).
+    pub fn stewie_vats_friendlies_hidden(&self) -> bool {
+        self.extend.stewie.3.vats_friendlies_hidden.load(Relaxed)
     }
 
     /// Whether the console's print passes over its loading-screen test for this line (S0031's

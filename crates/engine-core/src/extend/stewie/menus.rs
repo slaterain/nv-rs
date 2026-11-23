@@ -313,9 +313,9 @@ pub const SKIP_SKILLS_WITHOUT_POINTS: Row = tweak(12);
 /// S0608 `patchDeselectHotkeyedItems` (`[Tweaks] bDeselectHotkeys`; `HotKeysWheel`'s assignment
 /// `007019e0` at `0x701A6F` and `0x701AF4`): choosing the hotkey an item is already on takes it off.
 pub const HOTKEY_DESELECT: Row = tweak(13);
-/// S0377 `HideCursorInDialog` (`[Tweaks] bHideCursorInDialog`, VNV's `[Dialog Hide Mouse]
-/// bOnlyWhenNPCSpeaks = 1`; `DialogMenu::DoIdle` at `0x762967`): the cursor is hidden while the
-/// dialogue menu is on top and the speaker is talking.
+/// S0377 `HideCursorInDialog` (`[Tweaks] bHideCursorInDialog`; `DialogMenu::DoIdle` at `0x762967`):
+/// the cursor is hidden while the dialogue menu is on top (with `[Dialog Hide Mouse]
+/// bOnlyWhenNPCSpeaks`, VNV's 1, only while the speaker is talking).
 pub const DIALOG_HIDES_CURSOR: Row = tweak(14);
 /// S0550 `patchHideRedCrosshairOnDistantInvisibleTargets` (`[Tweaks]
 /// bHideRedCrosshairOnDistantInvisibleTargets`; `HUDMainMenu::SetTargetType` at `0x772DA0`): an

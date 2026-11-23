@@ -200,6 +200,12 @@ pub fn install(e: &mut Engine) {
     e.set_stewie_fade_node_prints(settings.long("Tweaks", "bInvalidBSFadeNodePrints", 1) != 0);
     // Read by row S0059 (Tweaks' `g_bExtraConsoleDetailsMeshPath`, code default 0, VNV's 1).
     e.set_stewie_mesh_path(settings.long("Extra Console Details", "bMeshPath", 0) != 0);
+    // Read by row S0377 (Tweaks' `g_bHideCursorInDialogOnlyWhenNPCSpeaks`, code default 0, VNV's 1).
+    e.set_stewie_cursor_only_speaking(
+        settings.long("Dialog Hide Mouse", "bOnlyWhenNPCSpeaks", 0) != 0,
+    );
+    // Read by row S0382 (Tweaks' `g_bHideVATSFriendliesByDefault`, code default 0).
+    e.set_stewie_vats_friendlies_hidden(settings.long("VATS", "bHideFriendliesByDefault", 0) != 0);
     rows::world::install(e);
     rows::forms::write_data(e);
     let log = start_lines(ini.is_some(), &settings, &keys, on.len());

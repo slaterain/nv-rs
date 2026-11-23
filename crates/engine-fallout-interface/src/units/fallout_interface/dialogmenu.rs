@@ -1,3 +1,16 @@
+/// Stewie S0377 (Tweaks' `HideCursorWrapIsConsoleOpen`, the call at `0x762967`): the console's
+/// shown byte (xNVSE's `IsConsoleOpen`, not `00703d50`). When it is clear, the dialogue menu is
+/// the top visible menu and, with `[Dialog Hide Mouse] bOnlyWhenNPCSpeaks`
+/// ([`Engine::stewie_cursor_only_speaking`]), the speaker is talking, the cursor tile's node is
+/// culled (flag 1 of +0x30), the tile's `visible` trait set to 0, and the answer is no.
+fn stewie_hide_cursor_in_dialog(e: &mut Engine) -> bool {
+    let console = e.mem.u8(CONSOLE_OPEN_011DEA2E) != 0;
+    if console || stewie_top_visible_menu_id(e) != DIALOG_MENU_ID {
+        return console;
+    }
+    if e.stewie_cursor_only_speaking() && !stewie_speaker_talking(e) {
+        return false;
+    }
 //! `fallout/interface/menus/dialogmenu.cpp` (Xbox PDB source unit), subsystem `fallout/interface`: its functions in
 //! FalloutNV.exe 1.4.0.525, translated (docs/ENGINE_CRATE.md).
 //!
@@ -1665,27 +1678,19 @@ fn stewie_top_visible_menu_id(e: &Engine) -> u32 {
     0
 }
 
-/// Stewie S0377 (Tweaks' `HideCursorWrapIsConsoleOpen`, the call at `0x762967`, with VNV's
-/// `[Dialog Hide Mouse] bOnlyWhenNPCSpeaks = 1`): the console's shown byte (xNVSE's
-/// `IsConsoleOpen`, not `00703d50`). When it is clear, the dialogue menu is the top visible menu
-/// and the speaker is talking (the open dialogue menu's tile has its `"_ShowingText"` trait, the
-/// id at `011d9500`, set), the cursor tile's node is culled (flag 1 of +0x30), the tile's
-/// `visible` trait set to 0, and the answer is no. Without an open dialogue menu or its tile the
-/// speaker is not talking; without a node only the trait is set (Tweaks reads through both
-/// unguarded).
+/// Stewie S0377 (Tweaks' `HideCursorWrapIsConsoleOpen`, the call at `0x762967`): the console's
+/// shown byte (xNVSE's `IsConsoleOpen`, not `00703d50`). When it is clear, the dialogue menu is
+/// the top visible menu and, with `[Dialog Hide Mouse] bOnlyWhenNPCSpeaks`
+/// ([`Engine::stewie_cursor_only_speaking`]), the speaker is talking
+/// ([`stewie_speaker_talking`]), the cursor tile's node is culled (flag 1 of +0x30), the tile's
+/// `visible` trait set to 0, and the answer is no. Without a node only the trait is set (Tweaks
+/// reads through it unguarded).
 fn stewie_hide_cursor_in_dialog(e: &mut Engine) -> bool {
     let console = e.mem.u8(CONSOLE_OPEN_011DEA2E) != 0;
     if console || stewie_top_visible_menu_id(e) != DIALOG_MENU_ID {
         return console;
     }
-    let menu = e.global::<u32>(OPEN_MENU_011D9510);
-    let root = if menu == 0 { 0 } else { e.mem.u32(menu + 4) };
-    if root == 0 {
-        return false;
-    }
-    let showing = e.global::<u32>(SHOWING_TEXT_TRAIT_011D9500);
-    let talking = e.call(TILE_GET_FLOAT, &args![root, showing]).f32() != 0.0;
-    if !talking {
+    if e.stewie_cursor_only_speaking() && !stewie_speaker_talking(e) {
         return false;
     }
     let im = e.mem.u32(INTERFACE_MANAGER_011D8A80);
@@ -1702,6 +1707,32 @@ fn stewie_hide_cursor_in_dialog(e: &mut Engine) -> bool {
         );
     }
     false
+}
+
+/// xNVSE's `DialogMenu::IsNPCTalking` for Stewie S0377: the open dialogue menu's (`011d9510`) tile
+/// has its `"_ShowingText"` trait (the id at `011d9500`) set. Without the menu or its tile (Tweaks
+/// reads through both unguarded): no.
+fn stewie_speaker_talking(e: &mut Engine) -> bool {
+    let menu = e.global::<u32>(OPEN_MENU_011D9510);
+    let root = if menu == 0 { 0 } else { e.mem.u32(menu + 4) };
+    if root == 0 {
+        return false;
+    }
+    let showing = e.global::<u32>(SHOWING_TEXT_TRAIT_011D9500);
+    e.call(TILE_GET_FLOAT, &args![root, showing]).f32() != 0.0
+}
+
+/// xNVSE's `DialogMenu::IsNPCTalking` for Stewie S0377: the open dialogue menu's (`011d9510`) tile
+/// has its `"_ShowingText"` trait (the id at `011d9500`) set. Without the menu or its tile (Tweaks
+/// reads through both unguarded): no. Without a node only the trait is set (S0377 above).
+fn stewie_speaker_talking(e: &mut Engine) -> bool {
+    let menu = e.global::<u32>(OPEN_MENU_011D9510);
+    let root = if menu == 0 { 0 } else { e.mem.u32(menu + 4) };
+    if root == 0 {
+        return false;
+    }
+    let showing = e.global::<u32>(SHOWING_TEXT_TRAIT_011D9500);
+    e.call(TILE_GET_FLOAT, &args![root, showing]).f32() != 0.0
 }
 
 // Translated from 00762950 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4207,15 +4238,18 @@ mod dialog_menu_tests {
     /// speaker talks the cursor is hidden.
     #[test]
     fn stewie_s0377_the_cursor_hides_while_the_speaker_talks() {
-        // (row, console shown, top menu, talking, cursor hidden, the idle goes on)
-        for (on, console, top, talking, hidden, goes_on) in [
-            (false, 0u8, DIALOG_MENU_ID, true, false, true),
-            (true, 0, DIALOG_MENU_ID, true, true, true),
-            (true, 0, DIALOG_MENU_ID, false, false, true),
-            (true, 0, 0x3ea, true, false, true),
-            (true, 1, DIALOG_MENU_ID, true, false, false),
+        // (row, only while speaking, console shown, top menu, talking, cursor hidden, the idle
+        // goes on)
+        for (on, only, console, top, talking, hidden, goes_on) in [
+            (false, true, 0u8, DIALOG_MENU_ID, true, false, true),
+            (true, true, 0, DIALOG_MENU_ID, true, true, true),
+            (true, true, 0, DIALOG_MENU_ID, false, false, true),
+            (true, false, 0, DIALOG_MENU_ID, false, true, true),
+            (true, true, 0, 0x3ea, true, false, true),
+            (true, true, 1, DIALOG_MENU_ID, true, false, false),
         ] {
             let (mut e, this, _, _) = idle_engine();
+            e.set_stewie_cursor_only_speaking(only);
             stub(&mut e, &[TILE_SET_FLOAT]);
             e.set(this, DialogMenu::eDialogState, 3);
             e.set_global(COUNTDOWN_011D951C, 1.0f32);
@@ -4244,7 +4278,7 @@ mod dialog_menu_tests {
             e.set_stewie(engine_core::extend::stewie::DIALOG_HIDES_CURSOR, on);
             e.call_log = Some(vec![]);
             e.call(0x0076_2950, &args![this]);
-            let case = format!("{on} {console} {top:#x} {talking}");
+            let case = format!("{on} {only} {console} {top:#x} {talking}");
             assert_eq!(
                 calls_to(&e, INTERFACE_IS_CONSOLE_VISIBLE).len(),
                 usize::from(!on),
@@ -4287,6 +4321,7 @@ mod dialog_menu_tests {
         e.set_global(OPEN_MENU_011D9510, this.addr());
         e.register(TILE_GET_FLOAT, |_, _| st0(1.0));
         e.set_stewie(engine_core::extend::stewie::DIALOG_HIDES_CURSOR, true);
+        e.set_stewie_cursor_only_speaking(true);
         // No node: only the trait.
         e.call_log = Some(vec![]);
         e.call(0x0076_2950, &args![this]);
