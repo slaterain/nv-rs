@@ -3091,7 +3091,8 @@ impl Gpu {
     /// draw's own: a two-sided material none), in `layout`; with the pixel module `cutout` (an
     /// alpha-tested caster's own, which discards what its alpha test would) or none. With `coverage`
     /// (a ribbon cable's, its pixel module in `cutout`): no depth, its pixel shader's alpha added
-    /// into the coverage maps' alpha ([`THIN_FORMAT`]).
+    /// into the coverage maps' alpha ([`THIN_FORMAT`]). `ahead`: made on a thread of its own while play goes on (the hitch
+    /// log counts it apart: no wait of the render thread's).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn make_pipeline(
         device: &wgpu::Device,
@@ -3104,6 +3105,7 @@ impl Gpu {
         index32: bool,
         cull: Option<wgpu::Face>,
         coverage: bool,
+        ahead: bool,
     ) -> Result<wgpu::RenderPipeline, String> {
         let add = wgpu::BlendComponent {
             src_factor: wgpu::BlendFactor::One,
@@ -3194,9 +3196,16 @@ impl Gpu {
             Some(e) => Err(e.to_string()),
         };
         let took = started.elapsed();
-        d3d9_stream::hitch::add(d3d9_stream::hitch::Count::ShadowPipelines, 1);
-        d3d9_stream::hitch::add_time(d3d9_stream::hitch::Count::ShadowPipelineNs, took);
-        d3d9_stream::hitch::note(d3d9_stream::hitch::Call::ShadowPipeline, took);
+        // Made on a thread of its own while play goes on (`ahead`), or where the render thread waits for it.
+        use d3d9_stream::hitch::{self, Count};
+        let (n, ns) = if ahead {
+            (Count::ShadowPipelinesAhead, Count::ShadowPipelineAheadNs)
+        } else {
+            (Count::ShadowPipelines, Count::ShadowPipelineNs)
+        };
+        hitch::add(n, 1);
+        hitch::add_time(ns, took);
+        hitch::note(hitch::Call::ShadowPipeline, took);
         made
     }
 

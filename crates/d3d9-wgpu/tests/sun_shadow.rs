@@ -4068,3 +4068,167 @@ fn a_caster_kind_seen_before_on_this_machine_is_made_at_the_start() {
         );
     }
 }
+
+/// Vertex shaders drawing as [`VS`] does, each another kind of caster (another pipeline): `VS_KIND
+/// + k` has `k` instructions more that change nothing drawn ([`vs_kind`]).
+const VS_KIND: u32 = 0x1E00;
+
+/// [`VS`]'s tokens with `extra` instructions `mov r1, c0` before its position (nothing drawn
+/// changes; the shader is another, and so is its caster's pipeline).
+fn vs_kind(extra: u32) -> Vec<u32> {
+    let mut vs = vec![0xFFFE_0200];
+    vs.extend(constant_table());
+    vs.extend(ins(31, &[0x8000_0000, 0x900F_0000]));
+    for _ in 0..extra {
+        vs.extend(ins(1, &[0x800F_0001, 0xA0E4_0000]));
+    }
+    for k in 0..4u32 {
+        vs.extend(ins(
+            9,
+            &[0xC000_0000 | (0x1_0000 << k), 0x90E4_0000, 0xA0E4_0000 | k],
+        ));
+    }
+    vs.push(END);
+    vs
+}
+
+/// A backend with still casters' pipelines made ahead (the debug step on) and the kinds
+/// `VS_KIND + 1..=kinds` made; none without an adapter.
+fn ahead_backend(kinds: u32) -> Option<WgpuBackend> {
+    sun_shadow::enable_debug();
+    sun_shadow::casters_ahead_for_tests(Some(true));
+    let b = backend(1);
+    sun_shadow::enable(false);
+    sun_shadow::casters_ahead_for_tests(None);
+    let mut b = b?;
+    for k in 1..=kinds {
+        let t = words(&vs_kind(k));
+        run(
+            &mut b,
+            Cmd::CreateShader {
+                device: DEVICE,
+                shader: VS_KIND + k,
+                pixel: false,
+                tokens: Data::Bytes(&t),
+            },
+        );
+    }
+    Some(b)
+}
+
+/// The box's frame drawn through `VS_KIND + kind`.
+fn kind_frame(b: &mut WgpuBackend, kind: u32) -> Vec<[u8; 4]> {
+    run(
+        b,
+        Cmd::SetShader {
+            device: DEVICE,
+            pixel: false,
+            shader: VS_KIND + kind,
+        },
+    );
+    frame(b, true)
+}
+
+/// The three points in the box's shadow ([`on_the_box_casts_its_shadow_away_from_the_sun`]).
+const IN_SHADOW: [[f64; 3]; 3] = [
+    [-50.0, 150.0, 0.0],
+    [-60.0, 140.0, 0.0],
+    [-45.0, 165.0, 0.0],
+];
+
+/// Seven kinds of still caster with their pipelines made ahead and nothing waiting for them: six
+/// seen for one frame each and not again, then the seventh drawn on. Its pipeline is sent once
+/// one of the six's slots is free (each is kept at a present once made, whether or not its kind
+/// is drawn again), and the box casts with it.
+#[test]
+fn a_seventh_still_kind_casts_after_six_seen_once() {
+    let Some(at_once) = picture(1, true, true) else {
+        return;
+    };
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let mut b = ahead_backend(7).expect("the adapter");
+    let mut last = Vec::new();
+    for f in 1..=40u32 {
+        last = kind_frame(&mut b, f.min(7));
+        present(&mut b, f);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    for p in IN_SHADOW {
+        assert_eq!(at(&last, pixel(p)), at(&at_once, pixel(p)), "{p:?}");
+    }
+}
+
+/// A box casting through one kind whose draw moves to another kind, made ahead: its shadow stays
+/// in every frame while the new kind's pipeline is on its way and after.
+#[test]
+fn a_caster_switching_kind_keeps_its_shadow() {
+    let Some(at_once) = picture(1, true, true) else {
+        return;
+    };
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let mut b = ahead_backend(2).expect("the adapter");
+    let _ = kind_frame(&mut b, 1);
+    present(&mut b, 1);
+    if let Some(d) = b.device() {
+        d.wait_for_sun_variants();
+    }
+    for f in 2..=30u32 {
+        let px = kind_frame(&mut b, if f < 6 { 1 } else { 2 });
+        present(&mut b, f);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        if f >= 3 {
+            for p in IN_SHADOW {
+                assert_eq!(at(&px, pixel(p)), at(&at_once, pixel(p)), "frame {f} {p:?}");
+            }
+        }
+    }
+}
+
+/// With still casters' pipelines made ahead, a cut-out cable geometry's ribbon and list pipelines
+/// are made on threads of their own too: the render thread makes no caster pipeline, and once
+/// they are all there the shadows are the ones made at once.
+#[test]
+fn cables_pipelines_made_ahead_are_all_made_off_the_render_thread() {
+    use d3d9_stream::hitch::{snapshot, Count};
+    let frames = [Extra {
+        ribbon_round: true,
+        mixed: true,
+        mixed_cut: true,
+        ..Extra::default()
+    }; 6];
+    let Some(off) = lit_sequence_picture(1, true, &frames) else {
+        return;
+    };
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    sun_shadow::enable(true);
+    sun_shadow::casters_ahead_for_tests(Some(true));
+    let b = backend(1);
+    sun_shadow::enable(false);
+    sun_shadow::casters_ahead_for_tests(None);
+    let mut b = b.expect("the adapter");
+    let before = snapshot();
+    let on = lit_sequence(&mut b, &frames, true);
+    let now = snapshot();
+    let d = |c: Count| now[c as usize] - before[c as usize];
+    assert_eq!(
+        d(Count::ShadowPipelines),
+        0,
+        "no caster pipeline made on the render thread"
+    );
+    assert!(
+        d(Count::ShadowPipelinesAhead) >= 3,
+        "the casters', the ribbons' and the list's: {}",
+        d(Count::ShadowPipelinesAhead)
+    );
+    // The same shadows (coverage added in another order may round a last bit apart).
+    let worst = on[5]
+        .iter()
+        .zip(&off[5])
+        .flat_map(|(a, b)| a.iter().zip(b).map(|(x, y)| x.abs_diff(*y)))
+        .max()
+        .unwrap_or(0);
+    assert!(
+        worst <= 1,
+        "the shadows once all are there: {worst} apart at most"
+    );
+}
