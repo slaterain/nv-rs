@@ -62,6 +62,11 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         Row::at(WORLD_FIXES, 21),
     ),
     (
+        "S0022.44",
+        "bMenuFixesCustomSaveNameShown",
+        Row::at(WORLD_FIXES, 32),
+    ),
+    (
         "S0022.45",
         "bMenuFixesConsoleDpad",
         Row::at(WORLD_FIXES, 22),
@@ -114,6 +119,21 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         Row::at(WORLD_FIXES, 29),
     ),
     ("S0145", "bFixSunDirection", Row::at(WORLD_FIXES, 7)),
+    (
+        "S0151",
+        "bFixWeaponModHealthResetting",
+        Row::at(WORLD_FIXES, 35),
+    ),
+    (
+        "S0152",
+        "bFixNPCBackpackNotUpdating",
+        Row::at(WORLD_FIXES, 34),
+    ),
+    (
+        "S0156",
+        "bInventoryMinusOneOverflowFix",
+        Row::at(WORLD_FIXES, 33),
+    ),
     ("S0193", "bNavMeshTeleportDoorFix", Row::at(WORLD_FIXES, 4)),
     ("S0216", "bStairMaterialFix", Row::at(WORLD_FIXES, 8)),
     ("S0235", "bNavMeshInfoResolveFix", Row::at(WORLD_FIXES, 2)),
