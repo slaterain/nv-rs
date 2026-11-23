@@ -1992,7 +1992,7 @@ mod tests {
     /// device call, which it does not note), and a low share of processor time as blocked or off the processor.
     #[test]
     fn a_section_owner_in_no_locked_call_is_said_so() {
-        let h = LockHolder {
+        let h = engine_core::hitch::LockHolder {
             section: 0x0120_0010,
             thread: 4,
             start: 0,
