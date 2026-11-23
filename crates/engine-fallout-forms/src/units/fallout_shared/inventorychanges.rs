@@ -5020,6 +5020,23 @@ mod s0128_tests {
             .unwrap()
             .iter()
             .all(|c| c.0 != BIPED_IS_POWER_ARMOR));
+        // Off (the exe): a backpack (0x4) or heavy armor (0x20) alone does not refresh; power armor
+        // is asked (`00480d10`), then the biped's bit 7.
+        e.set_stewie(engine_core::extend::stewie::NPC_BACKPACK_UPDATE, false);
+        for (flags, refresh) in [(4u8, false), (0x24, false), (0x80, true)] {
+            e.call_log = Some(vec![]);
+            e.mem.set_u8(biped + 8, flags);
+            assert_eq!(unequip_refreshes_worn(&mut e, biped), refresh, "{flags:#x}");
+            assert_eq!(
+                e.call_log
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .filter(|c| c.0 == BIPED_IS_POWER_ARMOR)
+                    .count(),
+                1
+            );
+        }
     }
 
     /// lStewieAl's Tweaks' S0156: a total of exactly -1.0 is cached as 0 with the row, kept off;
@@ -9843,6 +9860,10 @@ fn heavy_weapon_adjusted(e: &mut Engine, weight: f32) -> f32 {
 /// form's (`TESHealthForm`, the value `GetFormHealth` answers).
 fn modded_max_health(e: &mut Engine, this: Ptr<ItemChange>, form: u32) -> i32 {
     const INCREASE_MAX_CONDITION: u32 = 10;
+    // Ours: an entry without a form, which the exe copes with (Tweaks would read through it).
+    if form == 0 {
+        return 0;
+    }
     let kind = e.mem.u8(form.wrapping_add(4));
     if kind != 0x28 && kind != 0x18 {
         return 0;
@@ -13027,6 +13048,40 @@ mod tests {
         );
         assert!(items(&e, entry_list).is_empty());
         assert_eq!(calls(&e, DESTRUCTOR), vec![vec![x, 1]]);
+    }
+
+    /// lStewieAl's Tweaks' S0151 in `SetItemHealth` (`0x4BD07F`): a weapon of health 100 whose
+    /// fitted first mod is "increase max condition" (+25), set to 100.0. Off: 100 is the full
+    /// health, so the health extra is removed; on: the full health is 125, so 100.0 is stored.
+    #[test]
+    fn s0151_set_item_health_counts_the_condition_mod() {
+        let run = |row: bool| {
+            let mut e = logged();
+            let weapon = form(&mut e, 0x28, 0, 100);
+            set(&mut e, weapon, 0x180, 10);
+            e.mem.set_f32(weapon + 0x18c, 25.0);
+            casts(&mut e, 0, 0, weapon);
+            let inventory = e.mem.alloc(0x10);
+            let x = extra(&mut e);
+            set(&mut e, x, 4, 1);
+            set(&mut e, x, X_HAS_MODS, 1);
+            set(&mut e, x, X_MOD_FLAGS, 1);
+            let head = list(&mut e, &[x]);
+            let this = change(&mut e, head, weapon);
+            e.set_stewie(engine_core::extend::stewie::WEAPON_MOD_HEALTH_KEPT, row);
+            e.call(0x004bd030, &args![this, 100.0f32, inventory, x, true]);
+            (
+                calls(&e, EXTRA_SET_HEALTH),
+                calls(&e, EXTRA_REMOVE_HEALTH),
+                x,
+            )
+        };
+        let (stored, removed, x) = run(false);
+        assert!(stored.is_empty());
+        assert_eq!(removed, vec![vec![x]]);
+        let (stored, removed, x) = run(true);
+        assert_eq!(stored, vec![vec![x, 100.0f32.to_bits()]]);
+        assert!(removed.is_empty());
     }
 
     #[test]
@@ -17726,6 +17781,31 @@ mod tests {
         set_float(&mut e, light, F_WEIGHT, 50.0);
         assert_eq!(e.call(0x004d0900, &args![this, 0u32]).f32(), 16.0);
         assert!(calls(&e, ACTOR_WEIGHT_CHANGED).is_empty());
+    }
+
+    /// lStewieAl's Tweaks' S0156 at the store `0x4D0EDA`: a container whose one item weighs -1.0
+    /// (a mod's negative weight) totals exactly -1.0, the "weigh again" mark. Off: -1.0 is stored
+    /// and answered; on: 0.0.
+    #[test]
+    fn s0156_an_inventory_weighing_minus_one_stores_zero() {
+        let run = |row: bool| {
+            let mut e = fx();
+            let owner = object(&mut e);
+            let this = inventory(&mut e, &[], owner);
+            e.set(this, InventoryChanges::fcontainerweight, -1.0f32);
+            let odd = weighted_form(&mut e, 0x20, -1.0);
+            give_container(&mut e, owner, &[(1, odd)]);
+            e.set_stewie(
+                engine_core::extend::stewie::INVENTORY_WEIGHT_NOT_MINUS_ONE,
+                row,
+            );
+            let answer = e.call(0x004d0900, &args![this, 0u32]).f32();
+            let stored = e.get(this, InventoryChanges::fcontainerweight);
+            (answer.to_bits(), stored.to_bits())
+        };
+        let minus_one = (-1.0f32).to_bits();
+        assert_eq!(run(false), (minus_one, minus_one));
+        assert_eq!(run(true), (0, 0));
     }
 
     #[test]
