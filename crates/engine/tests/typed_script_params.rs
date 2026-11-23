@@ -49,7 +49,9 @@ fn ret(eax: u32) -> Ret {
 
 /// The exe's data and the stand-ins.
 fn world(e: &mut Engine) {
-    for page in [TABLE_PAGE, SSE2_PAGE, LINE_PAGE] {
+    // The types' table runs past its first page for the high types.
+    e.map(TABLE_PAGE, 0x2000);
+    for page in [SSE2_PAGE, LINE_PAGE] {
         e.map(page, 0x1000);
     }
     e.map(CONFIG, 0x1000);

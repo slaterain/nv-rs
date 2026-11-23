@@ -137,13 +137,19 @@ fn exact_reference_type(parameter: u32) -> Option<(u32, u32)> {
     Some((exact, exact))
 }
 
-/// Stores `form` (or null) through the next output pointer when `accepts` says so, and answers
-/// whether a form was stored.
+/// Clears the next output pointer's word, then stores `form` there when `accepts` says so
+/// (asked after the clear, as the exe asks), and answers whether a form was stored.
 #[inline]
-fn store_if(e: &mut Engine, outputs: &[u32], used: &mut usize, form: u32, accepts: bool) -> bool {
+fn store_if(
+    e: &mut Engine,
+    outputs: &[u32],
+    used: &mut usize,
+    form: u32,
+    accepts: impl FnOnce(&mut Engine) -> bool,
+) -> bool {
     let target = next_output(outputs, used);
     e.mem.set_u32(target, 0);
-    if accepts {
+    if accepts(e) {
         e.mem.set_u32(target, form);
     }
     e.mem.u32(target) != 0
@@ -169,16 +175,18 @@ fn reference_parameter(
         3 => {
             let kind = form_type(e, form);
             if e.call(CONTAINER_CAN_HOLD_TYPE, &args![kind]).bool() {
-                let holds = form != 0 && e.vcall(form, 0xe8, &args![]).bool();
-                store_if(e, outputs, used, form, holds)
+                store_if(e, outputs, used, form, |e| {
+                    form != 0 && e.vcall(form, 0xe8, &args![]).bool()
+                })
             } else {
                 false
             }
         }
         4 | 0x18 | 0x1a => {
             if is_scripted_reference_type(form_type(e, form)) {
-                let again = form != 0 && is_scripted_reference_type(form_type(e, form));
-                store_if(e, outputs, used, form, again)
+                store_if(e, outputs, used, form, |e| {
+                    form != 0 && is_scripted_reference_type(form_type(e, form))
+                })
             } else {
                 false
             }
@@ -223,10 +231,9 @@ fn reference_parameter(
                 false
             }
         }
-        0x15 => {
-            let holds = form != 0 && e.vcall(form, 0xe8, &args![]).bool();
-            store_if(e, outputs, used, form, holds)
-        }
+        0x15 => store_if(e, outputs, used, form, |e| {
+            form != 0 && e.vcall(form, 0xe8, &args![]).bool()
+        }),
         0x19 => {
             let target = next_output(outputs, used);
             e.mem.set_u32(target, 0);
