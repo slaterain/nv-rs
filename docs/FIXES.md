@@ -100,7 +100,7 @@ applied, is split into the actors' Havok sync, the node updates and the cells' u
 the rest), the delayed script actions, the secondary task queue's end input, drain and begin input (the tasks run by
 kind, the time outside them and the turns spent waiting for another thread's input), the queued menu open and
 prints, the 256-step free-list sort (its pool and free list), and the rest, and how much of it main spent on the
-processor (its own clock: Windows on x86-64 and Linux) (a clock read at each part and two for each drained task). Main's time inside the guest heap and in each script run is timed only with `NV_HITCH_HEAP=1` (two
+processor (its own clock: Windows on x86-64, Linux and macOS) (a clock read at each part and two for each drained task). Main's time inside the guest heap and in each script run is timed only with `NV_HITCH_HEAP=1` (two
 clock reads a block or a run). An F12 report carries the session's last 1000 lines as `hitches.txt`. It changes nothing in the game.
 
 `NV_STAGE_TIME=1` with `NV_FRAME_LOG` adds columns to each line (`crates/engine-core/src/stage_time.rs`, a
