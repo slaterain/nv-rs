@@ -206,7 +206,6 @@ fn stand_ins_all(e: &mut Engine, render: bool, dispatch: bool, draw: bool) {
     e.register(0x00aa_3e40, |e, a| ret(e.mem.alloc(a[1].max(4))));
     e.register(0x00aa_13e0, |e, a| ret(e.mem.alloc(a[0].max(4))));
     e.register(0x00aa_4060, |_, _| ret(0));
-    e.register(0x00b6_4ec0, |_, _| ret(0));
     // The node pool's lock: taken once more.
     if !dispatch {
         e.register(0x0040_fbf0, |e, _| {
@@ -798,11 +797,18 @@ fn shared(d: Diff) -> Diff {
             0x00ee_6dce,
             0x00ee_6dc8,
         ])
+        // The draw family's list helpers (the active list clear, RemoveAll, the listed-pass test): by address, run in
+        // typed_draw.
+        .goes_by_address(DRAW_LISTS)
         // draw_f's helpers: off until its gate, so by address, as in play; run in typed_draw.
         .goes_by_address(DRAW_F_HELPERS)
         .max_calls(MAX_CALLS)
         .max_cases(160)
 }
+
+/// The draw family's list helpers: `00b64ec0` (a simple list cleared), `00b71300` (RemoveAll), `00b98970` (the
+/// listed-pass test).
+const DRAW_LISTS: &[u32] = &[0x00b6_4ec0, 0x00b7_1300, 0x00b9_8970];
 
 /// draw_f's helpers (`engine_typed::draw_f`): the float maximum and minimum, the class test, the list
 /// node pool's allocation.
@@ -4226,6 +4232,7 @@ impl Geometry for Diff {
             ])
             // The first active light's getters (the draw family's, their own tests).
             .goes_by_address(&[0x00b7_0590, 0x00b7_0600])
+            .goes_by_address(DRAW_LISTS)
             .goes_by_address(DRAW_F_HELPERS)
             .max_calls(MAX_CALLS)
             .max_cases(160)
@@ -5367,13 +5374,6 @@ fn draw_stand_ins(e: &mut Engine) {
     e.register(0x00b6_3420, |_, _| ret(0x0bad_7ee0));
     e.register(0x00b6_e110, |_, _| ret(0x00c0_c0a0));
     e.register(0x00b6_b260, |_, a| ret(a[0] ^ 0x5a5a));
-    // `RemoveAll`: the list emptied.
-    e.register(0x00b7_1300, |e, a| {
-        for k in 0..3 {
-            e.mem.set_u32(a[0] + 4 * k, 0);
-        }
-        ret(0)
-    });
     // The render mode table: mode 3's own draw; mode 5's entry empty (entry 0 then runs).
     e.register(0x00ff_2900, |_, _| ret(0));
     e.register(0x00ff_2904, |_, _| ret(0));

@@ -154,6 +154,9 @@ struct Packet {
     last_own: Cell<u32>,
     /// The own blocks' indices in the order of their addresses ([`Packet::own_at`]'s search).
     own_by_lo: Vec<u32>,
+    /// The world draw's per-frame list words handed to the drawing side at the cut ([`take_lists`]), by guest
+    /// address: guest memory holds zeros for them meanwhile, and the join puts them back ([`end`]).
+    lists: AddrMap<u32, u32>,
 }
 
 impl Packet {
@@ -267,6 +270,9 @@ thread_local! {
     /// lets the read accessors of a thread with no packet (main while the drawing side draws) go straight to
     /// guest memory, without the packet's borrow and look-ups on every read ([`held`]).
     static HOLDS: Cell<bool> = const { Cell::new(false) };
+    /// This thread's packet is paused between the world draw's halves ([`pause`]): what runs meanwhile (the VATS target's draw)
+    /// reads and writes guest memory, whose cached device state is the cut's, not what the first half left ([`beside`]).
+    static PAUSED: Cell<bool> = const { Cell::new(false) };
     /// The last write [`mark`] noted on this thread, with the packet generation it was noted in: the same
     /// write again in the same generation is not pushed twice.
     static LAST_MARK: Cell<(u64, usize, u32, u32)> = const { Cell::new((0, 0, 0, 0)) };
@@ -285,6 +291,57 @@ static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::
 #[inline(always)]
 fn held() -> bool {
     OPEN.load(Relaxed) != 0 && HOLDS.with(Cell::get)
+}
+
+/// Whether this thread runs beside a packet another thread draws from: a packet is open and this thread holds none
+/// (main while the drawing thread draws). Its cached device state (the render-state cache, the current shaders and
+/// declaration) then holds the values at the cut, while serially it would hold what the draw left; a setter must not
+/// skip its device call on such a value ([`main_must_send`]). One relaxed load while no packet is open.
+#[inline(always)]
+pub fn beside(e: &Engine) -> bool {
+    OPEN.load(Relaxed) != 0
+        && (!HOLDS.with(Cell::get) || PAUSED.with(Cell::get))
+        && open_for(run(e))
+}
+
+/// The runs with an open packet, one slot each (a run opens one packet at a time; 0 is a free slot): what
+/// [`beside`] asks after its cheap tests, so that one run's packet never makes another run's setters send (tests run
+/// many engines at once; play has one).
+static OPEN_RUNS: [AtomicUsize; 8] = [const { AtomicUsize::new(0) }; 8];
+
+/// Whether `run` has an open packet ([`OPEN_RUNS`]).
+#[cold]
+fn open_for(run: usize) -> bool {
+    OPEN_RUNS.iter().any(|r| r.load(Relaxed) == run)
+}
+
+/// `run`'s packet opened ([`begin`]): its run in a free slot (with every slot taken it is not noted, and its
+/// setters beside it skip as before).
+fn note_open(run: usize) {
+    for r in &OPEN_RUNS {
+        if r.compare_exchange(0, run, Relaxed, Relaxed).is_ok() {
+            return;
+        }
+    }
+}
+
+/// `run`'s packet closed ([`end`]).
+fn note_closed(run: usize) {
+    for r in &OPEN_RUNS {
+        if r.compare_exchange(run, 0, Relaxed, Relaxed).is_ok() {
+            return;
+        }
+    }
+}
+
+/// A typed setter's "already the cached value, skip" decision: `same` is what its cache says. Beside a packet
+/// ([`beside`]) the cache is main's value at the cut, not what the draw left (which serially comes first), so the
+/// setter sends and caches its value anyway: the device gets it after the draw's commands as serially, and the
+/// cache's write is noted as main's for the join (`set_own_at`), which then keeps main's value over the draw's. The
+/// one difference from the serial order: when the draw left the same value, the device gets it once more.
+#[inline(always)]
+pub fn main_must_send(e: &Engine, same: bool) -> bool {
+    !same || beside(e)
 }
 
 fn run(e: &Engine) -> usize {
@@ -326,6 +383,7 @@ pub fn begin(e: &Engine) -> bool {
             last_object: Cell::new((0, NONE)),
             last_own: Cell::new(0),
             own_by_lo: Vec::new(),
+            lists: AddrMap::default(),
         });
         HOLDS.with(|h| h.set(true));
         true
@@ -335,6 +393,7 @@ pub fn begin(e: &Engine) -> bool {
         // Main's writes noted before this cut belong to no packet.
         drop(take_marks(run(e)));
         OPEN.fetch_add(1, Relaxed);
+        note_open(run(e));
     }
     opened
 }
@@ -360,6 +419,7 @@ pub fn serve(e: &mut Engine) {
         v.objects = std::mem::take(&mut p.objects);
         v.ranges = std::mem::take(&mut p.ranges);
         v.bytes = std::mem::take(&mut p.bytes);
+        v.lists = std::mem::take(&mut p.lists);
         v.reads.set(0);
         v.misses.set(0);
         v.poison = p.scribble.is_some();
@@ -426,6 +486,7 @@ pub fn unserve(e: &mut Engine) {
         p.objects = std::mem::take(&mut v.objects);
         p.ranges = std::mem::take(&mut v.ranges);
         p.bytes = std::mem::take(&mut v.bytes);
+        p.lists = std::mem::take(&mut v.lists);
         p.reads.set(p.reads.get() + v.reads.get());
         p.misses.set(p.misses.get() + v.misses.get());
         p.last_object.set((0, NONE));
@@ -726,6 +787,7 @@ pub fn pause(e: &mut Engine) {
             return;
         }
         p.paused = true;
+        PAUSED.with(|f| f.set(true));
         if let Some(scribble) = p.scribble {
             p.written += unscribble_all(e, p, scribble);
         }
@@ -754,6 +816,7 @@ pub fn resume(e: &mut Engine) {
             return;
         }
         p.paused = false;
+        PAUSED.with(|f| f.set(false));
         if let Some(scribble) = p.scribble {
             scribble_all(e, p, scribble);
         }
@@ -838,8 +901,11 @@ pub fn end(e: &mut Engine) -> Report {
     let Some(packet) = packet else {
         return Report::default();
     };
+    PAUSED.with(|f| f.set(false));
     HOLDS.with(|h| h.set(false));
     OPEN.fetch_sub(1, Relaxed);
+    note_closed(packet.run);
+    give_lists_back(e, &packet.lists);
     let mut written = packet.written;
     if let Some(scribble) = packet.scribble {
         if !packet.paused {
@@ -924,6 +990,7 @@ pub fn detach(e: &Engine) -> Option<Detached> {
                 !p.as_ref().is_some_and(|p| p.served),
                 "NV_DRAW_THREAD: a packet detached while a half draws from it (unserve first)"
             );
+            PAUSED.with(|f| f.set(false));
             HOLDS.with(|h| h.set(false));
             p.take().map(|p| Detached(Box::new(p)))
         } else {
@@ -939,8 +1006,10 @@ pub fn attach(packet: Detached) -> Result<(), Detached> {
         if p.is_some() {
             return Err(packet);
         }
+        let paused = packet.0.paused;
         *p = Some(*packet.0);
         HOLDS.with(|h| h.set(true));
+        PAUSED.with(|f| f.set(paused));
         Ok(())
     })
 }
@@ -1514,6 +1583,173 @@ fn image_copy(e: &Engine, object: u32, from: u32, to: u32) -> Option<Vec<u8>> {
     })
 }
 
+// ---- The world draw's list words, handed to the drawing side at the cut (step 1 of `super::detach`, in play). ----
+//
+// The world pass fills its accumulator's lists (the active pass type lists, the pass groups' lists, the register group
+// holders', the alpha groups'); the draw walks them, draws and empties them. For the drawing thread the cut takes their
+// words into the packet and leaves zeros in guest memory, as a fresh frame's would be ([`take_lists`]); the draw's list
+// accessors (`super::detach::word` and the rest) answer from the packet, served on the drawing engine like the rest of
+// the copy; the join puts the words back ([`give_lists_back`]). Until the joins that guard the lists move, main does not
+// fill the world accumulator's lists between the cut and the join, so the frame ends with the memory of the serial order;
+// a list read that bypassed the packet would read a zero instead, which the stepped gate would show.
+
+/// Takes the words at `addrs` (4-byte aligned) into this thread's open packet for `e`'s run: each word's value is kept,
+/// the guest word zeroed. A word taken already, or of value 0, is left. Nothing without an open packet.
+pub fn take_lists(e: &mut Engine, addrs: &[u32]) {
+    let id = run(e);
+    let mut taken = Vec::new();
+    PACKET.with(|p| {
+        let mut p = p.borrow_mut();
+        let Some(p) = p.as_mut().filter(|p| p.run == id && !p.served) else {
+            return;
+        };
+        for &addr in addrs {
+            if p.lists.contains_key(&addr) {
+                continue;
+            }
+            let value = e.global::<u32>(addr);
+            if value != 0 {
+                p.lists.insert(addr, value);
+                taken.push(addr);
+            }
+        }
+    });
+    for addr in taken {
+        e.set_global(addr, 0u32);
+    }
+}
+
+/// The join: the list words go back to guest memory, in address order. A guest word main wrote meanwhile (not zero any
+/// more) keeps main's value: with the joins that guard the lists in place that does not happen; it is noted once.
+fn give_lists_back(e: &mut Engine, lists: &AddrMap<u32, u32>) {
+    if lists.is_empty() {
+        return;
+    }
+    let mut words: Vec<(u32, u32)> = lists.iter().map(|(a, v)| (*a, *v)).collect();
+    words.sort_unstable();
+    for (addr, value) in words {
+        if e.global::<u32>(addr) != 0 {
+            static NOTED: std::sync::Once = std::sync::Once::new();
+            NOTED.call_once(|| {
+                eprintln!(
+                    "nv-draw packet: main wrote a list word the drawing side held: {addr:#010x}"
+                );
+            });
+            continue;
+        }
+        e.set_global(addr, value);
+    }
+}
+
+/// Whether this thread draws from a packet that holds list words (the drawing side, served or not).
+pub fn lists_here(e: &Engine) -> bool {
+    if let Some(v) = served(&e.own_view) {
+        return !v.lists.is_empty();
+    }
+    held()
+        && PACKET.with(|p| {
+            p.borrow()
+                .as_ref()
+                .is_some_and(|p| p.serves(e) && !p.lists.is_empty())
+        })
+}
+
+/// The list word at `addr` as the drawing side holds it ([`take_lists`]): `None` when this thread's packet holds no such
+/// word (then guest memory has it).
+#[inline(always)]
+pub fn list_word(e: &Engine, addr: u32) -> Option<u32> {
+    if let Some(v) = served(&e.own_view) {
+        return v.lists.get(&addr).copied();
+    }
+    if !held() {
+        return None;
+    }
+    PACKET.with(|p| {
+        let p = p.borrow();
+        let p = p.as_ref()?;
+        if !p.serves(e) {
+            return None;
+        }
+        p.lists.get(&addr).copied()
+    })
+}
+
+/// Writes the list word at `addr` where the drawing side holds it; false (nothing done) where it does not.
+#[inline(always)]
+pub fn set_list_word(e: &mut Engine, addr: u32, value: u32) -> bool {
+    if let Some(v) = served_mut(&mut e.own_view) {
+        return v.lists.get_mut(&addr).map(|w| *w = value).is_some();
+    }
+    if !held() {
+        return false;
+    }
+    let id = run(e);
+    PACKET.with(|p| {
+        let mut p = p.borrow_mut();
+        let Some(p) = p.as_mut().filter(|p| p.run == id && !p.paused) else {
+            return false;
+        };
+        p.lists.get_mut(&addr).map(|w| *w = value).is_some()
+    })
+}
+
+/// For a callee that reads or writes the lists in place (a translation by address): the list words `addrs` names (all
+/// with `None`) back in guest memory for it, taken again after it (their values then). Answers what it put back.
+pub fn lists_out(e: &mut Engine, addrs: Option<&[u32]>) -> Vec<u32> {
+    if !lists_here(e) {
+        return Vec::new();
+    }
+    let mut out: Vec<(u32, u32)> = Vec::new();
+    let pick = |a: &u32| addrs.map_or(true, |s| s.contains(a));
+    if let Some(v) = served_mut(&mut e.own_view) {
+        out = v
+            .lists
+            .iter()
+            .filter(|(a, _)| pick(a))
+            .map(|(a, w)| (*a, *w))
+            .collect();
+        for (a, _) in &out {
+            v.lists.remove(a);
+        }
+    } else {
+        PACKET.with(|p| {
+            if let Some(p) = p.borrow_mut().as_mut() {
+                out = p
+                    .lists
+                    .iter()
+                    .filter(|(a, _)| pick(a))
+                    .map(|(a, w)| (*a, *w))
+                    .collect();
+                for (a, _) in &out {
+                    p.lists.remove(a);
+                }
+            }
+        });
+    }
+    out.sort_unstable();
+    for (a, w) in &out {
+        e.set_global(*a, *w);
+    }
+    out.into_iter().map(|(a, _)| a).collect()
+}
+
+/// [`lists_out`]'s words taken again: their values now into the drawing side's packet, zeros in guest memory.
+pub fn lists_in(e: &mut Engine, addrs: &[u32]) {
+    let words: Vec<(u32, u32)> = addrs.iter().map(|a| (*a, e.global::<u32>(*a))).collect();
+    if let Some(v) = served_mut(&mut e.own_view) {
+        v.lists.extend(words.iter().copied());
+    } else {
+        PACKET.with(|p| {
+            if let Some(p) = p.borrow_mut().as_mut() {
+                p.lists.extend(words.iter().copied());
+            }
+        });
+    }
+    for (a, _) in words {
+        e.set_global(a, 0u32);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1812,6 +2048,94 @@ mod tests {
         let back = detach(&e).expect("detached once the view is back");
         assert!(attach(back).is_ok());
         assert_eq!(end(&mut e).owned, 8);
+    }
+
+    /// The world draw's list words handed over at the cut: guest memory holds zeros (a zero word is not taken), the
+    /// drawing side reads and writes the packet's (served or not), main beside it reads guest memory, a callee by address
+    /// gets the words back in place and gives them back, and the join puts them back in guest memory.
+    #[test]
+    fn the_list_words_go_with_the_packet_and_come_back_at_the_join() {
+        use super::super::detach;
+        let mut e = Engine::new();
+        let at = block(&mut e, 4);
+        e.mem.set_u32(at + 12, 0);
+        assert!(begin(&e));
+        take_lists(&mut e, &[at, at + 4, at + 12]);
+        assert_eq!(
+            [e.mem.u32(at), e.mem.u32(at + 4), e.mem.u32(at + 8)],
+            [0, 0, 3]
+        );
+        assert!(lists_here(&e));
+        assert_eq!(list_word(&e, at + 12), None, "a zero word is not taken");
+        assert_eq!([detach::word(&e, at), detach::word(&e, at + 4)], [1, 2]);
+        detach::set_word(&mut e, at, 0x11);
+        detach::set_word(&mut e, at + 8, 0x33);
+        assert_eq!([e.mem.u32(at), e.mem.u32(at + 8)], [0, 0x33]);
+        serve(&mut e);
+        assert_eq!(detach::word(&e, at), 0x11, "served on the engine");
+        detach::set_word(&mut e, at + 4, 0x22);
+        // A callee by address: the named word in place for it, taken again after.
+        let seen = detach::suspended_for(
+            &mut e,
+            |_| vec![at + 4],
+            |e| {
+                let seen = e.mem.u32(at + 4);
+                e.mem.set_u32(at + 4, 0x44);
+                seen
+            },
+        );
+        assert_eq!((seen, e.mem.u32(at + 4)), (0x22, 0));
+        assert_eq!(detach::word(&e, at + 4), 0x44);
+        // A callee by address that reads every list word in place, with a nested one naming one word inside it: all
+        // words in guest memory for the outer (the nested one finds them there and takes nothing), all taken again
+        // after it with what the callees left.
+        let inner = detach::suspended(&mut e, |e| {
+            assert_eq!(
+                [e.mem.u32(at), e.mem.u32(at + 4), e.mem.u32(at + 8)],
+                [0x11, 0x44, 0x33]
+            );
+            assert!(!lists_here(e), "every word in place");
+            let seen = detach::suspended_for(
+                e,
+                |_| vec![at + 4],
+                |e| {
+                    let seen = e.mem.u32(at + 4);
+                    e.mem.set_u32(at + 4, 0x66);
+                    seen
+                },
+            );
+            assert_eq!(
+                e.mem.u32(at + 4),
+                0x66,
+                "the nested callee's word stays in place"
+            );
+            e.mem.set_u32(at, 0x77);
+            seen
+        });
+        assert_eq!(inner, 0x44);
+        assert_eq!(
+            [e.mem.u32(at), e.mem.u32(at + 4), e.mem.u32(at + 8)],
+            [0, 0, 0x33],
+            "taken again (the word never taken stays in guest memory)"
+        );
+        assert_eq!(
+            [detach::word(&e, at), detach::word(&e, at + 4)],
+            [0x77, 0x66]
+        );
+        unserve(&mut e);
+        // Main beside the drawing side's packet reads guest memory, and a word main writes meanwhile is main's.
+        let packet = detach(&e).expect("handed over");
+        assert_eq!(detach::word(&e, at), 0);
+        assert!(!lists_here(&e));
+        e.mem.set_u32(at + 4, 0x55);
+        assert!(attach(packet).is_ok());
+        let _ = end(&mut e);
+        assert_eq!(
+            [e.mem.u32(at), e.mem.u32(at + 4), e.mem.u32(at + 8)],
+            [0x77, 0x55, 0x33],
+            "the join puts the drawing side's words back where main wrote nothing"
+        );
+        assert_eq!(detach::word(&e, at), 0x77, "guest memory after the join");
     }
 
     #[test]

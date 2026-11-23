@@ -223,8 +223,7 @@ macro_rules! commands {
         #[repr(u8)]
         enum Tag { $( $name ),* }
 
-        /// Every command's name, in the list's order.
-        #[cfg(test)]
+        /// Every command's name, in the list's order (a command's number is its place here).
         pub(crate) const NAMES: &[&str] = &[ $( stringify!($name) ),* ];
 
         /// The command list as written (names, fields and their kinds, in order): what a

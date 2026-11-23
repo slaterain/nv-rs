@@ -37,7 +37,8 @@
 //! decoder would have answered that call (same bytes, same return values, errors and the end in
 //! the same place: [`Ahead::read`]). When nothing is decoded yet, a game thread gives up its turn
 //! (`Sleep(1)` through the thread host) until enough is, so the main thread goes on with its
-//! frames meanwhile; on the main thread the call waits. The game sees only time pass in the IO
+//! frames meanwhile; on the main thread the call waits, with the kernel lock given back when the
+//! game called it itself. The game sees only time pass in the IO
 //! thread's task, as on the original, whose IO thread decodes on its own core while the main
 //! thread runs. Without the real clock (the tests, replays on the platform clock) the decoder
 //! runs inside the call, as before.
@@ -251,13 +252,13 @@ impl Ahead {
             }
         }
     }
+}
 
-    /// On the main thread: waits until something is queued (or the worker is lost).
-    fn wait(&self) {
-        let mut q = lock(&self.shared);
-        while q.events.is_empty() && !q.lost {
-            q = self.shared.1.wait(q).unwrap_or_else(|p| p.into_inner());
-        }
+/// On the main thread: waits until the worker behind `shared` has queued something (or is lost).
+fn wait_queued(shared: &Shared) {
+    let mut q = lock(shared);
+    while q.events.is_empty() && !q.lost {
+        q = shared.1.wait(q).unwrap_or_else(|p| p.into_inner());
     }
 }
 
@@ -497,13 +498,17 @@ pub fn ov_read(
                 break n;
             }
             Read::Pending => {
-                // Nothing decoded yet: the main thread waits; a game thread gives up its turn
-                // (`Sleep(1)`) until a batch is decoded, so the main thread goes on meanwhile.
+                let shared = Arc::clone(&ahead.shared);
+                // Nothing decoded yet. The main thread waits for the worker with the kernel lock given back (when the
+                // game called this itself), so the other threads' platform calls go on meanwhile, and looks the file
+                // up again after; a game thread gives up its turn (`Sleep(1)`, which gives the lock back too) until a
+                // batch is decoded, so the main thread goes on meanwhile.
                 if on_main {
-                    ahead.wait();
+                    engine_core::real_threads::without_kernel_lock_mut_if_outermost(e, |_| {
+                        wait_queued(&shared)
+                    });
                     continue;
                 }
-                let shared = Arc::clone(&ahead.shared);
                 while !batch_ready(&shared) {
                     crate::thread_host::host_for(e).sleep(e, 1, crate::signalled);
                 }
@@ -1156,6 +1161,71 @@ mod tests {
             assert_eq!(answers(&mut e), want, "nested: {held}");
             assert_eq!(ov_clear(&mut e, Ptr::new(VF)), 0);
         }
+    }
+
+    /// `ov_read` at a platform function's address (behind the kernel lock with real threads).
+    const READ_AT: u32 = 0x7f00_0320;
+
+    /// With real threads, main's read that finds nothing decoded yet waits for the worker with the kernel lock given
+    /// back (another thread's platform calls go on meanwhile), then answers as the decoder does.
+    #[test]
+    fn main_waits_for_the_decoder_with_the_kernel_lock_given_back() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::time::{Duration, Instant};
+        let steps = [Step::Samples(100), Step::Samples(50)];
+        let mut e = Engine::new();
+        insert(&mut e, Decoder::Inline(Box::new(Script::new(1, &steps))));
+        let want = reads(&mut e, &[4096, 4096, 4096]);
+
+        let mut e = Engine::new();
+        let (go, hold) = std::sync::mpsc::channel();
+        let ahead = Ahead::start(Box::new(Script::new(1, &steps)), 2, Some(hold));
+        insert(&mut e, Decoder::Ahead(ahead));
+        e.register(
+            READ_AT,
+            crate::entry!(0, ov_read(Ptr, u32, i32, i32, i32, i32, Ptr) -> i32).1,
+        );
+        engine_core::real_threads::start(&mut e).expect("real threads on");
+        engine_core::real_threads::end_start_hold_for_tests(&e);
+        let free = engine_core::real_threads::kernel_lock_free_probe(&e);
+        // Once main is in its read (well past its start), a helper looks whether the lock is free, then lets the
+        // worker decode; if the lock stays held it lets it decode after two seconds, so the read ends either way.
+        let calling = Arc::new(AtomicBool::new(false));
+        let c = Arc::clone(&calling);
+        let watcher = std::thread::spawn(move || {
+            while !c.load(Ordering::SeqCst) {
+                std::thread::yield_now();
+            }
+            std::thread::sleep(Duration::from_millis(50));
+            let start = Instant::now();
+            let mut seen = false;
+            while start.elapsed() < Duration::from_secs(2) {
+                if free() {
+                    seen = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            go.send(()).expect("the worker waits");
+            seen
+        });
+        let buffer = e.mem.alloc(4096);
+        calling.store(true, Ordering::SeqCst);
+        let mut got = Vec::new();
+        for _ in 0..3 {
+            let n = e.call(READ_AT, &[VF, buffer, 4096, 0, 2, 1, 0]).u32() as i32;
+            let bytes = if n > 0 {
+                e.mem.bytes(buffer, n as u32).to_vec()
+            } else {
+                Vec::new()
+            };
+            got.push((n, bytes));
+        }
+        assert!(
+            watcher.join().expect("the helper"),
+            "the kernel lock was free while main waited"
+        );
+        assert_eq!(got, want);
     }
 
     /// The game's own files (`NV_VORBIS_TEST_DIR`: a folder of `.ogg` files taken from its

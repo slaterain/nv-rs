@@ -772,3 +772,32 @@ fn facegen_keyframe_merge_morph_data_from() {
     .run()
     .assert_same();
 }
+
+/// `UpdateToTarget` with a NaN target weight, which the Diff test leaves out (the exe's `fabs` of
+/// the NaN difference goes into the C runtime's `errno`, which these engines lack): the native
+/// version leaves that weight as it is (a NaN difference is neither reached, below nor above
+/// zero, as in the exe) and still moves the others.
+#[test]
+fn facegen_keyframe_update_to_target_leaves_a_nan_target_alone() {
+    let mut e = Engine::new();
+    keyframe_stand_ins(&mut e);
+    let first = keyframe_of(&mut e, OWN_VTABLE, 3, 2, 0, 0);
+    let second = keyframe_of(&mut e, OWN_VTABLE, 3, 2, 0, 0);
+    let (a, b) = (e.mem.u32(first + 0xc), e.mem.u32(second + 0xc));
+    e.mem.set_f32(a, 0.5);
+    e.mem.set_f32(a + 4, 0.2);
+    e.mem.set_f32(b, f32::NAN);
+    e.mem.set_f32(b + 4, 0.8);
+    e.mem.set_f32(0x011d_57c8, 0.2);
+    e.mem.set_f32(0x011d_5780, 1.0);
+    let ran = e.call(0x0064_f900, &args![first, 0.5f32, second]).u8();
+    assert_eq!(ran, 1);
+    assert_eq!(
+        e.mem.u32(a),
+        0.5f32.to_bits(),
+        "the NaN target's weight moved"
+    );
+    // The other moves up by the step: (strength 0.8 * scale 1 + offset 0.2) * time 0.5 = 0.5,
+    // short of the distance 0.6, so 0.2 + 0.5.
+    assert_eq!(e.mem.f32(a + 4), 0.2f32 + 0.5f32);
+}

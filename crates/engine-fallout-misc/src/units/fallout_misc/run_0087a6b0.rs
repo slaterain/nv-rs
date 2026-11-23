@@ -10,6 +10,7 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 use crate::units::fallout_misc::taskqueueinterface::TaskQueueInterface;
+use engine_core::stage_time;
 
 /// `0086c600` (the map's `BSPackedTaskQueue::ThreadBeginInput`) on a queue.
 const QUEUE_BEGIN_INPUT: u32 = 0x0086_c600;
@@ -110,6 +111,18 @@ pub fn fn_0087a730(e: &mut Engine, this: Ptr<TaskQueueInterface>) -> bool {
 /// Returns the last pop's result (`false`).
 // Translation incomplete: 0087a7d0 - the /GS stack security cookie check (00ec408c) is not modeled.
 pub fn fn_0087a7d0(e: &mut Engine, this: Ptr<BSPackedTaskQueue>) -> u8 {
+    drain(e, this, None)
+}
+
+/// [`fn_0087a7d0`]'s body. `timed`: main's drain in its frame tail, timed for the hitch log
+/// (`engine_core::stage_time::drain`: each task's tag and time, and the turns the loop takes on an empty queue while
+/// another thread's input is open); the game's calls and their order are the same either way.
+fn drain(
+    e: &mut Engine,
+    this: Ptr<BSPackedTaskQueue>,
+    timed: Option<stage_time::DrainQueue>,
+) -> u8 {
+    let mut timed = timed.map(stage_time::drain).filter(stage_time::Drain::on);
     e.set(this, BSPackedTaskQueue::bProcessing, true);
     let mut popped = 1;
     e.with_stack(PACKED_TASK_SIZE, |e, task| {
@@ -123,14 +136,34 @@ pub fn fn_0087a7d0(e: &mut Engine, this: Ptr<BSPackedTaskQueue>) -> u8 {
             .i32()
                 > 0
         {
+            if popped == 0 {
+                // The queue was empty and another thread's input is still open: the loop goes round again.
+                if let Some(d) = &mut timed {
+                    d.waited();
+                }
+            }
             popped = e.vcall(this.addr(), TRY_POP_SLOT, &args![task]).u8();
             if popped != 0 {
                 let unpack = e.get(this, BSPackedTaskQueue::pUnpackFunc);
-                e.call(unpack, &args![task]);
+                match &mut timed {
+                    Some(d) => {
+                        // The record's tag (its first word) before the unpack reads it.
+                        let tag = e.mem.u32(task.addr());
+                        let started = d.task_start();
+                        e.call(unpack, &args![task]);
+                        d.task_end(tag, started);
+                    }
+                    None => {
+                        e.call(unpack, &args![task]);
+                    }
+                }
             }
         }
     });
     e.set(this, BSPackedTaskQueue::bProcessing, false);
+    if let Some(d) = timed {
+        d.end();
+    }
     popped
 }
 
@@ -146,7 +179,7 @@ pub fn fn_0087a790(e: &mut Engine, this: Ptr<TaskQueueInterface>) {
     let queue = e
         .get(this, TaskQueueInterface::pQueue)
         .cast::<BSPackedTaskQueue>();
-    fn_0087a7d0(e, queue);
+    drain(e, queue, Some(stage_time::DrainQueue::First));
     e.set(this, TaskQueueInterface::iProcessingThread, 0);
 }
 
@@ -160,7 +193,7 @@ pub fn fn_0087a850(e: &mut Engine, this: Ptr<TaskQueueInterface>) {
     let queue = e
         .get(this, TaskQueueInterface::pSecondaryQueue)
         .cast::<BSPackedTaskQueue>();
-    fn_0087a7d0(e, queue);
+    drain(e, queue, Some(stage_time::DrainQueue::Secondary));
     e.set(this, TaskQueueInterface::iProcessingThread, 0);
     let first = e.get(this, TaskQueueInterface::pQueue);
     e.set(this, TaskQueueInterface::pActiveQueue, first);
@@ -322,6 +355,39 @@ mod tests {
         assert_eq!((log[1].0, log[1].1[0]), (0x0300_0100, queue.addr()));
         assert_eq!(log[2], (0x0055_9450, vec![queue.addr() + 0x14]));
         assert_eq!(log.len(), 3);
+    }
+
+    /// Main's drain in its frame tail is timed for the hitch log (each task's tag, the turns on an empty queue while
+    /// another thread's input is open) with the same calls in the same order as untimed.
+    #[test]
+    fn a_timed_drain_counts_tasks_by_tag_and_the_waits_with_the_same_calls() {
+        let untimed = {
+            let mut e = Engine::new();
+            let (queue, seen) = drain_setup(&mut e, vec![11, 22, 11], 2);
+            e.call_log = Some(vec![]);
+            drain(&mut e, queue, Some(stage_time::DrainQueue::Secondary));
+            let log = e.call_log.take().unwrap();
+            let seen = seen.borrow().clone();
+            (log, seen)
+        };
+        let _here = stage_time::on_here();
+        stage_time::point(stage_time::Point::Idle);
+        stage_time::point(stage_time::Point::WaitOut);
+        let mut e = Engine::new();
+        let (queue, seen) = drain_setup(&mut e, vec![11, 22, 11], 2);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            drain(&mut e, queue, Some(stage_time::DrainQueue::Secondary)),
+            0
+        );
+        assert_eq!((e.call_log.take().unwrap(), seen.borrow().clone()), untimed);
+        stage_time::point(stage_time::Point::Host);
+        let tail = stage_time::take_tail().expect("a tail");
+        let d = tail.drains[stage_time::DrainQueue::Secondary as usize].expect("the drain");
+        assert_eq!((d.tasks, d.waits), (3, 2), "{d:?}");
+        assert_eq!((d.kinds[0].0, d.kinds[0].1), (11, 2));
+        assert_eq!((d.kinds[1].0, d.kinds[1].1), (22, 1));
+        assert!(tail.drains[stage_time::DrainQueue::First as usize].is_none());
     }
 
     #[test]

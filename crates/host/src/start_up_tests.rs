@@ -3,7 +3,8 @@
 use super::*;
 
 /// The rows go in before xNVSE, xNVSE before JIP, JIP before UIO: `NV_JIP_INSTALLED` is a flag
-/// `jip::install` reads, and the extenders' wraps go over the rows. A textual check of
+/// `jip::install` reads, and the extenders' wraps go over the rows; the full-screen and launcher
+/// entries (every preset) are among the rows. A textual check of
 /// [`install_rows_and_extenders`] (running it needs FalloutNV.exe's tables), and
 /// `Host::start_with` calls it.
 #[test]
@@ -20,6 +21,11 @@ fn the_rows_go_in_before_the_extenders() {
     };
     let order = [
         at("fixes::install(engine, choice)"),
+        // In every preset, as statements of their own (a commented-out call is no call): full
+        // screen taken as the borderless window, and the launcher check that names the card
+        // (without it New Game hangs after the intro on another card, issue #935).
+        at("\n    full_screen::install(engine);\n"),
+        at("\n    launcher::install(engine);\n"),
         at("nvse::install(engine)"),
         at("jip::install(engine)"),
         at("johnnyguitar::install(engine)"),
