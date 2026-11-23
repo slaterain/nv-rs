@@ -521,11 +521,11 @@ impl KernelLock {
         // Main's waits for the kernel lock name their holder when they pass a millisecond.
         let named = started.is_some() && role() == 0 && !self.device && crate::hitch::on();
         let takes_before = self.takes.load(Ordering::Relaxed);
-        let seen = self.acquire_here(me, named);
+        let seen = self.acquire_here(me, named.then_some(w.run));
         if let (Some(t), Some(seen)) = (started, seen) {
             let cpu_ns = seen
                 .cpu_ns
-                .zip(crate::thread_cpu::cpu_ns(seen.thread))
+                .zip(crate::thread_cpu::cpu_ns(w.run, seen.thread))
                 .map(|(before, after)| after.saturating_sub(before));
             let call_name = call_words(w, seen.call);
             crate::hitch::lock_holder(
@@ -533,7 +533,7 @@ impl KernelLock {
                 crate::hitch::LockHolder {
                     section: 0,
                     thread: seen.thread,
-                    start: crate::thread_cpu::start_of(seen.thread),
+                    start: crate::thread_cpu::start_of(w.run, seen.thread),
                     call: seen.call,
                     call_name,
                     wait_ns: t.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
@@ -568,7 +568,7 @@ impl KernelLock {
     /// Spins, then parks until it takes the lock. With `named` (main's timed wait for the kernel lock), a wait
     /// still going after [`crate::hitch::HOLDER_WAIT_NS`] notes who holds the lock then and that thread's
     /// processor time ([`Seen`]); otherwise nothing is read.
-    fn acquire_here(&self, me: u64, named: bool) -> Option<Seen> {
+    fn acquire_here(&self, me: u64, named: Option<usize>) -> Option<Seen> {
         for _ in 0..64 {
             std::hint::spin_loop();
             if self.owner.load(Ordering::Relaxed) == 0
@@ -589,7 +589,7 @@ impl KernelLock {
             .compare_exchange(0, me, Ordering::SeqCst, Ordering::SeqCst)
             .is_err()
         {
-            if named && seen.is_none() {
+            if let Some(run) = named.filter(|_| seen.is_none()) {
                 let left = Duration::from_nanos(crate::hitch::HOLDER_WAIT_NS)
                     .saturating_sub(parked.elapsed());
                 if !left.is_zero() {
@@ -601,8 +601,8 @@ impl KernelLock {
                     thread,
                     call: self.holder_call.load(Ordering::Relaxed),
                     site: self.holder_site.load(Ordering::Relaxed),
-                    render_wait: crate::thread_cpu::render_wait_of(thread),
-                    cpu_ns: crate::thread_cpu::cpu_ns(thread),
+                    render_wait: crate::thread_cpu::render_wait_of(run, thread),
+                    cpu_ns: crate::thread_cpu::cpu_ns(run, thread),
                     at: std::time::Instant::now(),
                 });
             }
@@ -1525,7 +1525,7 @@ fn run_thread(engine: SendEngine, world: &'static World, i: usize, start: u32, p
     GAME_THREAD.with(|g| g.set(true));
     let id = e.real.as_ref().map_or(0, |r| r.id);
     GAME_ID.with(|g| g.set(id));
-    crate::thread_cpu::register(id, start);
+    crate::thread_cpu::register(world.run, id, start);
     // What was registered since the template was made, replacements included (a call finds only
     // a missing function by itself).
     sync_registered(&mut e);
@@ -2172,9 +2172,9 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
         let thread = owner.load(Ordering::Relaxed);
         (
             thread,
-            crate::thread_cpu::call_of(thread),
-            crate::thread_cpu::cpu_ns(thread),
-            crate::thread_cpu::render_wait_of(thread),
+            crate::thread_cpu::call_of(w.run, thread),
+            crate::thread_cpu::cpu_ns(w.run, thread),
+            crate::thread_cpu::render_wait_of(w.run, thread),
         )
     });
     // Counted, then listed, then the owner word tried: a leave that frees it after the count sees
@@ -2237,13 +2237,13 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
                     crate::hitch::LockHolder {
                         section: a,
                         thread,
-                        start: crate::thread_cpu::start_of(thread),
+                        start: crate::thread_cpu::start_of(w.run, thread),
                         call,
                         call_name: call_words(w, call),
                         wait_ns: ns,
                         measured_ns: ns,
                         cpu_ns: cpu_before
-                            .zip(crate::thread_cpu::cpu_ns(thread))
+                            .zip(crate::thread_cpu::cpu_ns(w.run, thread))
                             .map(|(b, after)| after.saturating_sub(b)),
                         site: String::new(),
                         handoffs: 0,

@@ -13,6 +13,9 @@ use std::sync::{Arc, Mutex};
 /// A game thread's entry: its start address, the platform function it is in now ([`enter_call`]) and its
 /// processor clock (`None` where the system does not tell it).
 struct Clock {
+    /// The run the thread is in (`crate::units::platform::KernelRef::id`): thread ids are a run's own, and a test
+    /// process runs several runs at once.
+    run: usize,
     thread: u32,
     start: u32,
     call: Arc<AtomicU32>,
@@ -39,9 +42,9 @@ thread_local! {
     static RENDER_WAIT: std::cell::OnceCell<Arc<AtomicU32>> = const { std::cell::OnceCell::new() };
 }
 
-/// The running OS thread is game thread `thread` (its start address `start`): its clock is kept for later reads
-/// from other threads. A thread registered again (a new run in the same process) replaces its old entry.
-pub fn register(thread: u32, start: u32) {
+/// The running OS thread is game thread `thread` of run `run` (its start address `start`): its clock is kept for
+/// later reads from other threads. A thread registered again replaces its old entry.
+pub fn register(run: usize, thread: u32, start: u32) {
     let call = Arc::new(AtomicU32::new(0));
     CALL.with(|c| {
         let _ = c.set(Arc::clone(&call));
@@ -51,8 +54,9 @@ pub fn register(thread: u32, start: u32) {
         let _ = c.set(Arc::clone(&render_wait));
     });
     if let Ok(mut c) = CLOCKS.lock() {
-        c.retain(|k| k.thread != thread);
+        c.retain(|k| (k.run, k.thread) != (run, thread));
         c.push(Clock {
+            run,
             thread,
             start,
             call,
@@ -90,44 +94,52 @@ pub fn note_render_wait(what: u32) {
 }
 
 /// What game thread `thread` is waiting for on the render thread now (0: nothing, or not registered).
-pub fn render_wait_of(thread: u32) -> u32 {
+pub fn render_wait_of(run: usize, thread: u32) -> u32 {
     CLOCKS
         .lock()
         .ok()
         .and_then(|c| {
             c.iter()
-                .find(|k| k.thread == thread)
+                .find(|k| (k.run, k.thread) == (run, thread))
                 .map(|k| k.render_wait.load(Relaxed))
         })
         .unwrap_or(0)
 }
 
 /// The platform function game thread `thread` is in now (0: none, or not registered).
-pub fn call_of(thread: u32) -> u32 {
+pub fn call_of(run: usize, thread: u32) -> u32 {
     CLOCKS
         .lock()
         .ok()
         .and_then(|c| {
             c.iter()
-                .find(|k| k.thread == thread)
+                .find(|k| (k.run, k.thread) == (run, thread))
                 .map(|k| k.call.load(Relaxed))
         })
         .unwrap_or(0)
 }
 
 /// Game thread `thread`'s start address (0 when not registered).
-pub fn start_of(thread: u32) -> u32 {
+pub fn start_of(run: usize, thread: u32) -> u32 {
     CLOCKS
         .lock()
         .ok()
-        .and_then(|c| c.iter().find(|k| k.thread == thread).map(|k| k.start))
+        .and_then(|c| {
+            c.iter()
+                .find(|k| (k.run, k.thread) == (run, thread))
+                .map(|k| k.start)
+        })
         .unwrap_or(0)
 }
 
 /// Game thread `thread`'s processor time so far (ns), when the system tells it.
-pub fn cpu_ns(thread: u32) -> Option<u64> {
+pub fn cpu_ns(run: usize, thread: u32) -> Option<u64> {
     let c = CLOCKS.lock().ok()?;
-    c.iter().find(|k| k.thread == thread)?.os.as_ref()?.read()
+    c.iter()
+        .find(|k| (k.run, k.thread) == (run, thread))?
+        .os
+        .as_ref()?
+        .read()
 }
 
 #[cfg(windows)]
@@ -213,7 +225,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         let (go_tx, go_rx) = std::sync::mpsc::channel::<bool>();
         let worker = std::thread::spawn(move || {
-            register(0x7fff_0001, 0x00aa_8430);
+            register(7, 0x7fff_0001, 0x00aa_8430);
             tx.send(()).unwrap();
             while let Ok(work) = go_rx.recv() {
                 let t = std::time::Instant::now();
@@ -231,13 +243,18 @@ mod tests {
             }
         });
         rx.recv().unwrap();
-        assert_eq!(start_of(0x7fff_0001), 0x00aa_8430);
-        assert_eq!(start_of(0x7fff_0002), 0);
+        assert_eq!(start_of(7, 0x7fff_0001), 0x00aa_8430);
+        assert_eq!(
+            start_of(8, 0x7fff_0001),
+            0,
+            "another run's thread of that id"
+        );
+        assert_eq!(start_of(7, 0x7fff_0002), 0);
         let measure = |work: bool| {
-            let before = cpu_ns(0x7fff_0001);
+            let before = cpu_ns(7, 0x7fff_0001);
             go_tx.send(work).unwrap();
             rx.recv().unwrap();
-            before.zip(cpu_ns(0x7fff_0001)).map(|(b, a)| a - b)
+            before.zip(cpu_ns(7, 0x7fff_0001)).map(|(b, a)| a - b)
         };
         let worked = measure(true);
         let slept = measure(false);
