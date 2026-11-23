@@ -33,9 +33,49 @@ fn s0206_obeys_tweaks_fix_creature_doubled_dr() {
     assert!(!rows::on(row, &off_by_key, &Settings::new(&[], false)));
 }
 
+/// S0660, S0664 and S0782 follow Tweaks' own `[Tweaks]` keys (code default 0, VNV's 1): on with
+/// no file (the port's defaults are VNV's), off when the player's Tweaks INI sets the key to 0, off
+/// with no file under `bMissingKeysAsTweaks` (Tweaks' code default), and off by their own keys.
+#[test]
+fn tweaks_keyed_rows_follow_their_tweaks_keys() {
+    for (plan, key) in [
+        ("S0660", "bExplosionKnockbackDirectionFix"),
+        ("S0664", "bFixKillChallengeSourceWeapon"),
+        ("S0782", "bHiddenFragsFix"),
+    ] {
+        let row = rows::all().find(|r| r.plan == plan).unwrap();
+        assert_eq!(row.tweaks, Some(("Tweaks", key)), "{plan}");
+        let keys = rows::Keys::default();
+        assert!(
+            rows::on(row, &keys, &Settings::new(&[], false)),
+            "{plan} VNV's 1"
+        );
+        assert!(
+            !rows::on(row, &keys, &Settings::new(&[], true)),
+            "{plan} code default"
+        );
+        let text = format!("[Tweaks]\n{key}=0\n");
+        let off = Settings::new(&[("p", text.as_bytes())], false);
+        assert!(!rows::on(row, &keys, &off), "{plan} the INI's 0");
+        let off_by_key = rows::Keys {
+            rows: vec![(row.key, false)],
+            ..Default::default()
+        };
+        assert!(
+            !rows::on(row, &off_by_key, &Settings::new(&[], false)),
+            "{plan}"
+        );
+    }
+}
+
 /// Share 2's rows' plan numbers, off keys and bits (`rows::ai::ROWS`), in the same order:
 /// `super::each_rows_plan_number_key_and_bit_are_pinned` checks them with every other share's.
 pub(super) const PINNED: &[(&str, &str, Row)] = &[
+    (
+        "S0019",
+        "bAllowAPRegenModifiersWithNoEquippedWeapon",
+        Row::at(AI_FIXES, 32),
+    ),
     (
         "S0024",
         "bPreventFollowerNoAmmoTopicIfUsingRechargerWeapon",
@@ -96,6 +136,12 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "bRememberAmmoCountOnLoadSwapSetsType",
         Row::at(AI_FIXES, 31),
     ),
+    ("S0094", "bFixDisintegrationsStat", Row::at(AI_FIXES, 33)),
+    (
+        "S0112",
+        "bFixBloodyMessPreventingExplosionGibbing",
+        Row::at(AI_FIXES, 34),
+    ),
     (
         "S0133",
         "bFixSpectatorThreatInfoUsingWrongWeaponType",
@@ -112,6 +158,7 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "bFixCrippledLimbAnimsNotUpdatingIfLimbsFixed",
         Row::at(AI_FIXES, 0),
     ),
+    ("S0149", "bVATSFatalCheckDifficulty", Row::at(AI_FIXES, 35)),
     (
         "S0159",
         "bFixInfiniteNPCLoopingReloads",
@@ -122,6 +169,11 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "S0180",
         "bMineDisarmedLightLoadingFix",
         Row::at(AI_FIXES, 8),
+    ),
+    (
+        "S0188",
+        "bShotProjectileResistanceFix",
+        Row::at(AI_FIXES, 36),
     ),
     (
         "S0189.01",
@@ -138,6 +190,11 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "bMiscCrashFixesDialogueNoPackage",
         Row::at(AI_FIXES, 10),
     ),
+    (
+        "S0204",
+        "bKillCommandDuplicateRewardXpFix",
+        Row::at(AI_FIXES, 37),
+    ),
     ("S0205", "bEnduranceHealthRestoreFix", Row::at(AI_FIXES, 2)),
     ("S0206", "bCreatureDRFix", Row::at(AI_FIXES, 3)),
     (
@@ -152,4 +209,16 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
     ("S0228", "bPatrolPackageFix", Row::at(AI_FIXES, 15)),
     ("S0229", "bArmorUpdateFix", Row::at(AI_FIXES, 7)),
     ("S0230", "bDoubleSoundFix", Row::at(AI_FIXES, 18)),
+    ("S0241", "bActorGetHeadingTargetFix", Row::at(AI_FIXES, 38)),
+    ("S0660", "bFixExplosionPushDirection", Row::at(AI_FIXES, 39)),
+    (
+        "S0664",
+        "bFixKillChallengeSourceWeapon",
+        Row::at(AI_FIXES, 40),
+    ),
+    (
+        "S0782",
+        "bShootableNonPlayableExplosives",
+        Row::at(AI_FIXES, 41),
+    ),
 ];
