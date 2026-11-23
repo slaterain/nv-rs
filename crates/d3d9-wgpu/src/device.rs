@@ -5856,7 +5856,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // Held to be drawn with the other draws of its key ([`Device::may_hold`]), or given to the
         // pass now, after the draws held before it.
         let holdable = up.is_none() && copies.iter().all(Option::is_none);
-        let hold = holdable && self.may_hold(depth.is_some(), ps.sig.colours);
+        let hold = holdable && self.may_hold(depth.is_some(), u32::from(ps.sig.colours));
         let after = holdable && !hold && self.may_hold_after(depth.is_some());
         if !hold && !after {
             self.emit_held();
