@@ -24,14 +24,20 @@
 //! the body, under the Havok lock, and the node never reads it back; and a subtree that must run on
 //! main: a head (`BSFaceGenNiNode::UpdateDownwardPass`, `00663a70`, whose face morphing reads the
 //! actor's process, the player pointer, the close-to-player list, menu mode, settings, the base
-//! NPC's face data and the world camera's position, none of which a bone pass writes) and an object
-//! without a world bound yet (its allocation then happens on main, in the serial order).
+//! NPC's face data and the world camera's position, none of which a bone pass writes) and a geometry
+//! without a world bound (its `UpdateWorldBound` allocates one, on main, in the serial order). A node
+//! without a bound is walked: a skeleton's nodes never take one, and deferring them left the skins
+//! walked after them reading last frame's bones. [`order_check`] works out, once per actor per pass
+//! before the walks, what the walk's order needs: a node whose children loop would allocate a bound,
+//! or a skin whose bones the replay would read in another state than the serial pass, makes the
+//! actor a barrier.
 //!
 //! **Barriers.** An actor with anything else in its tree (controllers or property controllers below
 //! the two detached roots, particle systems, lights and other classes, a collision object that reads
 //! its body into the node or changes its motion type, a parent chain through another listed actor)
 //! runs whole on main as the translation runs it, and the helpers walk only the actors listed before
-//! it: code not traced for other cores sees exactly the state the serial pass shows it.
+//! it: code not traced for other cores sees exactly the state the serial pass shows it. So does an
+//! actor [`order_check`] refuses (a node that would allocate its bound, a skin read out of order).
 //!
 //! **The replay**, per actor in list order: its log (a subtree's downward pass with the actor's
 //! update data, a Havok part as the serial pass makes it), the merged bounds of the logged
@@ -43,6 +49,9 @@
 //! serial pass runs (it is what the game goes on with) and its results and Havok parts are compared
 //! with the helpers'. The bounds of a node above a logged subtree are compared by doing the bound
 //! part again on the serial end state.
+//! It covers the walked objects only: what a deferred subtree (a head, a geometry without a bound)
+//! does is main's in both paths, and the inputs it reads from outside itself are kept exact by
+//! [`order_check`], not compared. Its first 200 differences are printed in detail.
 
 use crate::culling::layout::NiNode;
 use crate::{collision, culling, dispatch, scene, slot_target};
@@ -50,6 +59,7 @@ use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
 use engine_core::{args, typed_call, Engine};
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering::Relaxed};
 use std::sync::Mutex;
 
@@ -450,16 +460,24 @@ pub enum Barrier {
     /// The world camera the face morphing measures from is inside an actor's tree: the whole pass
     /// runs serially that frame.
     Camera = 5,
+    /// A node without a world bound whose children loop would allocate one, or a tree too big to
+    /// work out ([`order_check`]).
+    Bound = 6,
+    /// A skin whose bones the replay would read in another state than the serial pass
+    /// ([`order_check`]).
+    Skin = 7,
 }
 
 impl Barrier {
-    const ALL: [Barrier; 6] = [
+    const ALL: [Barrier; 8] = [
         Barrier::Controllers,
         Barrier::Class,
         Barrier::Collision,
         Barrier::Attached,
         Barrier::Untyped,
         Barrier::Camera,
+        Barrier::Bound,
+        Barrier::Skin,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -469,6 +487,8 @@ impl Barrier {
             Barrier::Attached => "attached",
             Barrier::Untyped => "untyped",
             Barrier::Camera => "camera",
+            Barrier::Bound => "bound",
+            Barrier::Skin => "skin",
         }
     }
 }
@@ -688,11 +708,170 @@ fn classify(e: &mut Engine, object: u32, detached: &[u32]) -> Class {
     if collision != 0 && !collision_ok(e, collision) {
         return Class::Barrier(Barrier::Collision);
     }
-    if head || e.mem.u32(object + 0x20) == 0 {
-        // A head's morphing, or an object that gets its world bound allocated now: on main.
+    if head || (e.mem.u32(object + 0x20) == 0 && downward == OBJECT_DOWNWARD) {
+        // A head's morphing, or a geometry whose `UpdateWorldBound` allocates its world bound now
+        // (it has none): on main. A node without a bound is walked: [`order_check`] made the actor a
+        // barrier before the walk if any node's children loop would allocate one.
         return Class::Defer;
     }
     Class::Walk
+}
+
+/// The flags that make a node take its bound from its children (`0x80000`, the children loop's
+/// bound part), and the one that makes it take a bound without looking at them (`0x2000`).
+const FLAG_BOUND_FROM_CHILDREN: u32 = 0x0008_0000;
+const FLAG_BOUND_WITHOUT_CHILDREN: u32 = 0x2000;
+/// A geometry's skin instance (+0xbc); the skin's root parent (+0x10), bone list (+0x14) and data
+/// (+8, the bone count at +0x44).
+const SKIN_INSTANCE: u32 = 0xbc;
+/// The objects of one actor's tree [`order_check`] reads at most; a bigger tree is a barrier.
+const ORDER_CHECK_MOST: usize = 4096;
+
+/// One object of an actor's tree in the walk's order.
+struct Walked {
+    object: u32,
+    /// Its subtree's end: the index after its last descendant.
+    end: usize,
+    /// A node the downward pass walks the children of.
+    node: bool,
+}
+
+/// What the walk's order needs that [`classify`] cannot see object by object, worked out once per
+/// actor per pass on main, before the walks (`None`: the actor may be walked on helpers):
+/// - `Barrier::Bound`: a node without a world bound whose children loop allocates one (the
+///   bound-from-children flag 0x80000, and either the flag 0x2000 or a child that ends its pass with
+///   a bound: one that has a bound, a geometry, which allocates its own, or a node that allocates),
+///   worked out bottom-up. The allocation must happen on main in the serial order, and deferring
+///   such a node would leave whatever is walked after it reading last frame's state of its subtree:
+///   the actor runs whole on main (in the game only on the first pass after a node's subtree got
+///   its first bound; a skeleton's nodes never take one and are walked). Nodes inside a deferred
+///   subtree (a head) are main's and left out.
+/// - `Barrier::Skin`: a skin whose inputs (its bones' and its root parent's world transforms) the
+///   replay would read in another state than the serial pass: a skin inside a deferred subtree (a
+///   head, a geometry without a bound) reading an object walked after that subtree; any skin
+///   reading an object under another listed actor's root (another helper may be walking it;
+///   anything outside every listed actor is not written by this pass); or a walked skin reading
+///   an object inside a deferred subtree.
+///
+/// A tree of more than [`ORDER_CHECK_MOST`] objects is a `Barrier::Bound` (not worked out).
+fn order_check(e: &Engine, root: u32, roots: &[u32]) -> Option<Barrier> {
+    let mut order: Vec<Walked> = Vec::new();
+    let mut stack = vec![(root, usize::MAX)];
+    let mut parents: Vec<usize> = Vec::new();
+    // Pre-order with each object's parent index, then the subtree ends.
+    while let Some((object, parent)) = stack.pop() {
+        if order.len() >= ORDER_CHECK_MOST {
+            return Some(Barrier::Bound);
+        }
+        let node = has_children(e, object);
+        let at = order.len();
+        order.push(Walked {
+            object,
+            end: at + 1,
+            node,
+        });
+        parents.push(parent);
+        if node {
+            let mut c = children(e, object);
+            c.reverse();
+            stack.extend(c.into_iter().map(|child| (child, at)));
+        }
+    }
+    for i in (1..order.len()).rev() {
+        let p = parents[i];
+        order[p].end = order[p].end.max(order[i].end);
+    }
+    let index: HashMap<u32, usize> = order
+        .iter()
+        .enumerate()
+        .map(|(i, w)| (w.object, i))
+        .collect();
+    // The deferred subtrees (a head, a geometry without a bound), as index ranges.
+    let mut deferred: Vec<(usize, usize)> = Vec::new();
+    let mut i = 0;
+    while i < order.len() {
+        let w = &order[i];
+        let downward = slot_target(e, w.object, SLOT_DOWNWARD);
+        if downward == HEAD_DOWNWARD
+            || (downward == OBJECT_DOWNWARD && e.mem.u32(w.object + 0x20) == 0)
+        {
+            deferred.push((i, w.end));
+            i = w.end;
+        } else {
+            i += 1;
+        }
+    }
+    let inside = |j: usize| {
+        deferred
+            .iter()
+            .find(|&&(d, end)| d <= j && j < end)
+            .copied()
+    };
+    // Bottom-up (every descendant comes after its node in the walk's order): whether each object
+    // ends its pass with a bound, handed to its parent; whether a walked node allocates.
+    let mut child_bound = vec![false; order.len()];
+    for i in (0..order.len()).rev() {
+        let w = &order[i];
+        let ends = if e.mem.u32(w.object + 0x20) != 0 || !w.node {
+            // It has one, or it is a geometry, which allocates its own (any other class is a
+            // barrier of `classify`).
+            true
+        } else {
+            let flags = e.mem.u32(w.object + 0x30);
+            let allocates = flags & FLAG_BOUND_FROM_CHILDREN != 0
+                && (flags & FLAG_BOUND_WITHOUT_CHILDREN != 0 || child_bound[i]);
+            if allocates && inside(i).is_none() {
+                return Some(Barrier::Bound);
+            }
+            allocates
+        };
+        if ends && parents[i] != usize::MAX {
+            child_bound[parents[i]] = true;
+        }
+    }
+    // The skins' inputs against the deferred subtrees.
+    for (i, w) in order.iter().enumerate() {
+        if w.node {
+            continue;
+        }
+        let skin = e.mem.u32(w.object + SKIN_INSTANCE);
+        if skin == 0 || slot_target(e, w.object, SLOT_DOWNWARD) != OBJECT_DOWNWARD {
+            continue;
+        }
+        let data = e.mem.u32(skin + 8);
+        let bones = e.mem.u32(skin + 0x14);
+        let count = if data != 0 { e.mem.u32(data + 0x44) } else { 0 };
+        if count > idx(ORDER_CHECK_MOST) || (count != 0 && bones == 0) {
+            return Some(Barrier::Skin);
+        }
+        let inputs = (0..count)
+            .map(|b| e.mem.u32(bones + 4 * b))
+            .chain(std::iter::once(e.mem.u32(skin + 0x10)));
+        let own = inside(i);
+        for input in inputs {
+            if input == 0 {
+                continue;
+            }
+            let Some(&j) = index.get(&input) else {
+                // Outside this tree: no walk of this actor writes it; another listed actor's may.
+                if roots.iter().any(|&r| r != root && below(e, input, r)) {
+                    return Some(Barrier::Skin);
+                }
+                continue;
+            };
+            let late = match own {
+                // A skin replayed with its subtree reads the input as the replay finds it: final
+                // when walked before the subtree, the serial pass's when inside it.
+                Some((_, end)) => j >= end,
+                // A walked skin must not read what main replays after the walk.
+                None => inside(j).is_some(),
+            };
+            if late {
+                return Some(Barrier::Skin);
+            }
+        }
+    }
+    None
 }
 
 /// `bhkBlendController::Update` and `bhkForceController::Update`, the controllers a helper may run
@@ -858,6 +1037,8 @@ fn parallel(e: &mut Engine, array: u32, first: u32, last: u32) -> bool {
             let parent = e.mem.u32(item.root + 0x18);
             if roots.iter().any(|&r| r != item.root && below(e, parent, r)) {
                 item.barrier = Some(Barrier::Attached);
+            } else {
+                item.barrier = order_check(e, item.root, &roots);
             }
         }
     }
@@ -1293,7 +1474,7 @@ fn check_stretch(
                 _ => None,
             })
             .collect();
-        for f in &walked[next] {
+        for (k, f) in walked[next].iter().enumerate() {
             if inside.contains(&f.object) {
                 continue;
             }
@@ -1305,6 +1486,7 @@ fn check_stretch(
             let bound_differs = !above.contains(&f.object) && now.bound != f.bound;
             if now.words != f.words || now.collision != expected || bound_differs {
                 DIFFERENCES.fetch_add(1, Relaxed);
+                detail(e, item, k, &saved[next][k], f, &now, bound_differs);
                 report(format_args!(
                     "NV_PAR_BONES=check: actor {:08x}, object {:08x}: transform, flags, bound or collision \
                      bytes differ from the serial pass",
@@ -1345,4 +1527,88 @@ const _: () = assert!(std::mem::size_of::<crate::culling::layout::NiAVObjectImag
 /// An index or count as a guest word (the lists are far below 2^32 entries).
 fn idx(i: usize) -> u32 {
     u32::try_from(i).unwrap_or(u32::MAX)
+}
+
+/// Check-mode detail lines printed so far (the first 200 are).
+static DETAILED: AtomicU32 = AtomicU32::new(0);
+
+/// One differing object of the check, in detail: its class (vtable and downward pass), name, depth,
+/// walk index, and per part (flags +0x30, local +0x34, world +0x68, bound, collision) the words that
+/// differ as they were before the walks, after the helper's walk and after the serial pass.
+#[cold]
+fn detail(
+    e: &Engine,
+    item: &Item,
+    k: usize,
+    before: &Fields,
+    helper: &Fields,
+    serial: &Fields,
+    bound_differs: bool,
+) {
+    if DETAILED.fetch_add(1, Relaxed) >= 200 {
+        return;
+    }
+    let object = helper.object;
+    let name = {
+        let p = e.mem.u32(object + 8);
+        let mut s = String::new();
+        if p != 0 {
+            for i in 0..48 {
+                let b = e.mem.u8(p + i);
+                if b == 0 {
+                    break;
+                }
+                s.push(char::from(b));
+            }
+        }
+        s
+    };
+    let mut depth = 0;
+    let mut n = object;
+    while n != 0 && n != item.root && depth < 64 {
+        n = e.mem.u32(n + 0x18);
+        depth += 1;
+    }
+    let part = |i: usize| match i {
+        0 => "flags",
+        1..=13 => "local",
+        _ => "world",
+    };
+    let mut words = String::new();
+    let mut shown = 0;
+    for i in 0..helper.words.len() {
+        if helper.words[i] != serial.words[i] && shown < 6 {
+            shown += 1;
+            words.push_str(&format!(
+                " {}[{}]: before {:08x} helper {:08x} serial {:08x};",
+                part(i),
+                i,
+                before.words[i],
+                helper.words[i],
+                serial.words[i]
+            ));
+        }
+    }
+    let differing = helper
+        .words
+        .iter()
+        .zip(&serial.words)
+        .filter(|(a, b)| a != b)
+        .count();
+    eprintln!(
+        "NV_PAR_BONES=check detail: actor {:08x} root {:08x} object {object:08x} '{name}' vtable {:08x} \
+         downward {:08x} depth {depth} walk index {k}: {differing} words differ{words} bound {} \
+         (before {:08x?} helper {:08x?} serial {:08x?}) collision before {:x?} helper {:x?} serial {:x?}",
+        item.actor,
+        item.root,
+        e.mem.u32(object),
+        slot_target(e, object, SLOT_DOWNWARD),
+        if bound_differs { "DIFFERS" } else { "same" },
+        before.bound,
+        helper.bound,
+        serial.bound,
+        before.collision,
+        helper.collision,
+        serial.collision,
+    );
 }

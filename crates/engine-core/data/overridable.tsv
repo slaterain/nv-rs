@@ -26,6 +26,7 @@
 004bf630	4	JIP
 004c6a10	0	fixes preset guard
 004ca200	1	JIP
+004da570	0	nv-rs a card the settings do not name is named
 004da670	0	nv-rs full screen taken as the borderless window
 004eec60	1	kNVSE
 004f0380	0	kNVSE
@@ -117,7 +118,7 @@
 009da7c0	0	ITR
 009f996e	0	JIP
 00a09330	0	ITR
-00a09410	2	ITR
+00a09410	0	ITR
 00a0a270	0	ITR
 00a0a300	0	ITR
 00a0df80	0	nv-rs thread races
@@ -189,6 +190,7 @@
 00c3d440	0	JG,nv-rs direct file access
 00c3dbf0	2	nv-rs loads finished in small steps
 00c3dfa0	0	nv-rs IO wait ends on completion
+00c43e90	0	nv-rs full screen written as read
 00c44280	0	nv-rs full screen taken as the borderless window
 00c65a80	1	nv-rs smooth physics drawing
 00c73170	1	nv-rs high-frame-rate landing

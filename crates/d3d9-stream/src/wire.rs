@@ -362,8 +362,8 @@ impl<R: std::io::Read> Records<R> {
     }
 }
 
-/// A record's command read back, with its encoding with handles renamed, and as it prints.
-fn renamed(record: &[u8], names: &mut Names, out: &mut Vec<u8>) -> Result<String, String> {
+/// A record's command read back (the whole record, or an error).
+fn read_cmd(record: &[u8]) -> Result<Cmd<Data<'_>>, String> {
     let mut r = Reader {
         bytes: record,
         at: 0,
@@ -373,9 +373,49 @@ fn renamed(record: &[u8], names: &mut Names, out: &mut Vec<u8>) -> Result<String
     if r.at != record.len() {
         return Err(WireError::Length { at: 0 }.to_string());
     }
+    Ok(cmd)
+}
+
+/// A record's command with its object handles renamed by first use ([`Names`]), read back from that encoding (kept
+/// in `out`): what the per-draw digests see, so a buffer the heap put at another address draws the same.
+fn rename<'a>(
+    record: &[u8],
+    names: &mut Names,
+    out: &'a mut Vec<u8>,
+) -> Result<Cmd<Data<'a>>, String> {
+    let cmd = read_cmd(record)?;
+    out.clear();
+    cmd.put_renamed(out, names);
+    read_cmd(out)
+}
+
+/// A record's command read back, with its encoding with handles renamed, and as it prints.
+fn renamed(record: &[u8], names: &mut Names, out: &mut Vec<u8>) -> Result<String, String> {
+    let cmd = read_cmd(record)?;
     out.clear();
     cmd.put_renamed(out, names);
     Ok(format!("{cmd:?}"))
+}
+
+/// How many of each command a file of commands holds and their bytes (each record's length word included), in the
+/// command list's order, commands the file never uses left out: what tells two runs' streams apart by size.
+pub fn command_counts(from: impl std::io::Read) -> Result<Vec<(&'static str, u64, u64)>, String> {
+    let mut records = Records::new(from)?;
+    let mut counts = vec![(0u64, 0u64); crate::cmd::NAMES.len()];
+    while let Some(record) = records.next()? {
+        let tag = *record.first().ok_or("an empty record")? as usize;
+        let at = counts
+            .get_mut(tag)
+            .ok_or_else(|| format!("command number {tag} is not in the list"))?;
+        at.0 += 1;
+        at.1 += record.len() as u64 + 4;
+    }
+    Ok(crate::cmd::NAMES
+        .iter()
+        .zip(counts)
+        .filter(|(_, (n, _))| *n > 0)
+        .map(|(name, (n, bytes))| (*name, n, bytes))
+        .collect())
 }
 
 /// Each draw's device-state digest ([`crate::StateDigest`]) of a file of commands, read one record at
@@ -383,18 +423,11 @@ fn renamed(record: &[u8], names: &mut Names, out: &mut Vec<u8>) -> Result<String
 /// layer leaving those out) give the same list, and any difference a draw could see gives another.
 pub fn draw_digests(from: impl std::io::Read) -> Result<Vec<u64>, String> {
     let mut records = Records::new(from)?;
+    let (mut names, mut buf) = (Names::default(), Vec::new());
     let (mut digest, list) = crate::StateDigest::new();
     while let Some(record) = records.next()? {
-        let mut r = Reader {
-            bytes: record,
-            at: 0,
-        };
-        let tag = u8::get(&mut r).map_err(|e| e.to_string())?;
-        let cmd = Cmd::get(tag, &mut r).map_err(|e| e.to_string())?;
-        if r.at != record.len() {
-            return Err(WireError::Length { at: 0 }.to_string());
-        }
-        digest.execute(cmd);
+        // Objects by their first use, not their handles: a run whose heap gave a buffer another address draws the same.
+        digest.execute(rename(record, &mut names, &mut buf)?);
     }
     drop(digest);
     let list = list
@@ -411,15 +444,10 @@ pub fn draw_snapshot(
     n: usize,
 ) -> Result<Option<crate::DrawSnapshot>, String> {
     let mut records = Records::new(from)?;
+    let (mut names, mut buf) = (Names::default(), Vec::new());
     let (mut digest, _list) = crate::StateDigest::stopping_at(n);
     while let Some(record) = records.next()? {
-        let mut r = Reader {
-            bytes: record,
-            at: 0,
-        };
-        let tag = u8::get(&mut r).map_err(|e| e.to_string())?;
-        let cmd = Cmd::get(tag, &mut r).map_err(|e| e.to_string())?;
-        digest.execute(cmd);
+        digest.execute(rename(record, &mut names, &mut buf)?);
         if let Some(s) = digest.snapshot() {
             return Ok(Some(s.clone()));
         }
