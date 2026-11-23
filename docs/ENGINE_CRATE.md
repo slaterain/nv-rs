@@ -65,9 +65,9 @@ each function belongs to.
   fields used so far (`e.get(p, Class::field)`, `e.set(...)`).
 - **Platform**: the allocator (`MemoryManager::Allocate`/`Deallocate`) is
   `Mem`'s heap, a good-fit allocator that splits and merges freed blocks
-  (`mem/heap.rs`). With `NV_THREAD_HEAP=1` the blocks of the exe's pools come from runs
-  of one pool each through a cache per thread instead (`mem/pools.rs`): no lock and no table
-  lookup on the common path. The game's threads run under the thread host
+  (`mem/heap.rs`). With the thread heap row (on in the fixes preset, `NV_THREAD_HEAP`) the blocks of
+  the exe's pools come from runs of one pool each through a cache per thread instead
+  (`mem/pools.rs`): no lock and no table lookup on the common path. The game's threads run under the thread host
   (`engine_core::thread_host`): each `CreateThread` gets an OS thread used
   strictly as a coroutine (it holds the engine, a baton, only while it runs;
   exactly one thread runs at a time), with its own TLS block and call stack

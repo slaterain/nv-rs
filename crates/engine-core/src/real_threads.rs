@@ -1712,6 +1712,22 @@ pub fn without_kernel_lock<R>(e: &Engine, f: impl FnOnce() -> R) -> R {
     released_kernel(e.real.as_ref().map(|r| r.world), f)
 }
 
+/// [`without_kernel_lock`] only when this thread holds the kernel lock once (a platform function the game called
+/// directly): inside a nested hold (a platform function that runs game code that calls this one) the outer
+/// function may be part way through changing platform state, so `f` then runs with the lock held, as before. The
+/// kernel table's last-error code is kept across the window ([`keeping_table_last_error`]), so another thread's
+/// platform call meanwhile does not leave its code for this thread's caller.
+pub fn without_kernel_lock_if_outermost<R>(e: &mut Engine, f: impl FnOnce() -> R) -> R {
+    keeping_table_last_error(e, |e| match e.real.as_ref().map(|r| r.world) {
+        Some(world)
+            if world.kernel.held_here() && world.kernel.depth.load(Ordering::Relaxed) > 1 =>
+        {
+            f()
+        }
+        world => released_kernel(world, f),
+    })
+}
+
 /// Tests: the hold of the kernel lock [`start`] takes for the start-up given back, as the host's first frame does,
 /// so this engine's platform calls are outermost ones (depth 1), as main's are in its frames.
 #[cfg(any(test, feature = "test-support"))]
@@ -4816,6 +4832,50 @@ mod tests {
             1,
             "kept when nested"
         );
+    }
+
+    /// What [`records_the_hold`] saw inside its work: 1 the kernel lock still held, 2 given back.
+    static HELD_IN_WORK: AtomicU32 = AtomicU32::new(0);
+
+    /// A platform function whose work runs through [`without_kernel_lock_if_outermost`] (as `ReadFile`'s disk read).
+    fn records_the_hold(e: &mut Engine, _: &[u32]) -> Ret {
+        let w = ctx(e).world;
+        let held = without_kernel_lock_if_outermost(e, || w.kernel.held_here());
+        HELD_IN_WORK.store(if held { 1 } else { 2 }, Ordering::SeqCst);
+        assert!(w.kernel.held_here(), "taken back after the work");
+        Ret::default()
+    }
+
+    /// A platform function that calls the one at `RECORDS_SLOT` inside its own hold.
+    fn calls_it_nested(e: &mut Engine, _: &[u32]) -> Ret {
+        let slot = RECORDS_SLOT.load(Ordering::SeqCst);
+        e.call(slot, &args![0u32]);
+        Ret::default()
+    }
+
+    static RECORDS_SLOT: AtomicU32 = AtomicU32::new(0);
+
+    /// A platform function the game called directly gives the kernel lock back for its work (other threads'
+    /// platform calls go on meanwhile) and has it again after; one called inside another platform function's hold
+    /// keeps it, since the outer one may be part way through changing platform state.
+    #[test]
+    fn work_outside_the_kernel_lock_only_in_an_outermost_call() {
+        let (mut e, slot) = engine_with_imports();
+        let records = slot("D3DPERF_SetOptions");
+        let nested = slot("GetDoubleClickTime");
+        RECORDS_SLOT.store(records, Ordering::SeqCst);
+        e.register(records, records_the_hold);
+        e.register(nested, calls_it_nested);
+        start(&mut e).expect("real threads on");
+        end_start_hold_for_tests(&e);
+        e.call(records, &args![0u32]);
+        assert_eq!(
+            HELD_IN_WORK.load(Ordering::SeqCst),
+            2,
+            "given back when outermost"
+        );
+        e.call(nested, &args![]);
+        assert_eq!(HELD_IN_WORK.load(Ordering::SeqCst), 1, "kept when nested");
     }
 
     /// The next test's other thread and platform functions: the slots, and the steps the threads hand over.

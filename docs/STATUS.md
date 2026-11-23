@@ -73,6 +73,10 @@ In so far:
   per half of the draw, repeated states not sent) and the per-actor loops after each frame.
 - On the drawing thread, a draw reuses what the draw before it resolved while nothing changed.
 - Finding what is on screen, the water's reflection included, is shared out over several cores.
+- The game's small blocks of memory (nearly every object and string it makes) come from each
+  thread's own cache, with no lock: the pause menu with mods opens faster (45-54 ms, from 65-67) and
+  the staged fight runs smoother (61 frames a second with no stutters, from 53 with 21). On with the
+  fixes preset; `bThreadHeap=0` in `Fallout.ini`'s `[nv-rs Fixes]` turns it off.
 
 ## xNVSE built in
 
