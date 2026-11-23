@@ -1040,3 +1040,53 @@ fn setup_world_parts() {
         .run()
         .assert_same();
 }
+
+/// Row S0028 (lStewieAl's Tweaks' `VATSHighlightDataShouldHideWeapon` at `0x870C92`) through
+/// `0x870bd0` with the setup family on, as it is by default (the translation's `00705100` call is
+/// never made: the typed frame reads the dialog byte itself). A body-part highlight (`00705910`'s
+/// data, its target node +8 set) that `005585e0` says hides the world: off, the first-person
+/// setup pass (`00874c10`) is skipped and the weapon and arms are not drawn; on, outside the VATS
+/// menu (`011db0d4` clear) it runs, and in the VATS menu it is skipped.
+#[test]
+fn setup_world_frame_s0028_vats_highlight() {
+    use engine_core::typed::diff::Value;
+    // Calls counted past the log: `00705100`, `005585e0`, `00874c10`.
+    const SEEN: u32 = LOG + 0x3900;
+    for (on, vats_menu, drawn) in [(false, 0u32, false), (true, 0, true), (true, 1, false)] {
+        let mut e = Engine::new();
+        let case = Case(vec![Value::Word(0); 7]);
+        let words = world_world(&mut e, &case);
+        if !e.mem.is_mapped(0x011d_b0d4) {
+            e.map(0x011d_b000, 0x1000);
+        }
+        e.mem.set_u32(0x011d_b0d4, vats_menu);
+        e.mem.set_u8(0x011d_9514, 0);
+        let data = e.mem.alloc(0x20);
+        e.mem.set_u32(data + 8, 1);
+        e.register_double(0x0070_5910, move |_, _| ret(data));
+        for (address, at, answer) in [
+            (0x0070_5100_u32, 0_u32, 0_u32),
+            (0x0055_85e0, 4, 1),
+            (0x0087_4c10, 8, 0),
+        ] {
+            e.register_double(address, move |e, _| {
+                let count = e.mem.u32(SEEN + at);
+                e.mem.set_u32(SEEN + at, count + 1);
+                ret(answer)
+            });
+        }
+        e.set_stewie(engine_core::extend::stewie::VATS_HIGHLIGHT_KEEPS_WEAPON, on);
+        e.call(0x0087_0bd0, &words);
+        assert_eq!(e.mem.u32(SEEN), 0, "the typed frame ran (row {on})");
+        assert_eq!(
+            e.mem.u32(SEEN + 4),
+            u32::from(!on),
+            "the exe's test is asked only with the row off (row {on})"
+        );
+        assert_eq!(
+            e.mem.u32(SEEN + 8),
+            u32::from(drawn),
+            "row {on}, VATS menu {vats_menu}"
+        );
+    }
+}

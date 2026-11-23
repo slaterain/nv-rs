@@ -244,6 +244,19 @@ pub const CONSOLE_QUICK_SAVE_AND_AMMO_TAB: Row = Row::share(MENUS_FIXES, MENUS_F
 /// `0x800F70`): a highlighted body part hides the first-person weapon only in the VATS menu, and
 /// the highlight is drawn for references and missiles that have a node and are not dying.
 pub const VATS_HIGHLIGHT_KEEPS_WEAPON: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 62);
+
+/// S0028's world-draw test (`VATSHighlightDataShouldHideWeapon` at `0x870AAA` and `0x870C92`), for
+/// both the translated frames (engine-fallout-misc `main_p2.rs`) and the typed setup family's
+/// (engine-typed `setup/world.rs`, which replaces `00870bd0`): `None` with the row off (the
+/// caller asks the exe's `005585e0` on the highlight data); on, the highlight's target node (+8)
+/// is set and the VATS menu (`011db0d4`) is open. No data: not hidden (Tweaks would read through a
+/// null pointer; our guard).
+pub fn vats_highlight_hides_world(e: &crate::Engine, data: u32) -> Option<bool> {
+    if !e.stewie(VATS_HIGHLIGHT_KEEPS_WEAPON) {
+        return None;
+    }
+    Some(data != 0 && e.mem.u32(data + 8) != 0 && e.mem.u32(0x011d_b0d4) != 0)
+}
 /// S0983 `PipboyMapStoreRefIDs` (`MapMenu::UpdateLocalMap` `0079d410` at `0x79DA81`,
 /// `MapMenu::AddCompanionMarkers` `0079ea30` at `0x79F000`): the Pip-Boy map's door and
 /// companion tiles carry their reference's id (`_RefID`, `_RefIDStr`) for menus that read them.

@@ -499,14 +499,11 @@ fn world_draw_enabled(e: &mut Engine, forced_off: bool, other: u8) -> bool {
 /// and the VATS menu (`011db0d4`) is open, so a body part highlighted outside the VATS menu no
 /// longer hides the first-person weapon.
 fn vats_highlight_hides_world(e: &mut Engine, data: u32) -> bool {
-    if !e.stewie(engine_core::extend::stewie::VATS_HIGHLIGHT_KEEPS_WEAPON) {
-        return e.call(0x0055_85e0, &args![data]).u32() != 0;
+    // The same test as the typed setup family's `00870bd0` (engine-core's shared helper).
+    match engine_core::extend::stewie::vats_highlight_hides_world(e, data) {
+        Some(hidden) => hidden,
+        None => e.call(0x0055_85e0, &args![data]).u32() != 0,
     }
-    if data == 0 {
-        // No highlight data: Tweaks would read through a null pointer (our guard).
-        return false;
-    }
-    e.mem.u32(data + 8) != 0 && e.mem.u32(0x011d_b0d4) != 0
 }
 
 // Translated from 00870a00 (decompiled, FalloutNV.exe 1.4.0.525)
