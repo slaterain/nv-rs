@@ -6189,10 +6189,24 @@ mod tests {
 
     /// Row S0240 (lStewieAl's Tweaks' `FontDimensionMismatchFix`, the six `PrepText` advances):
     /// with the row on each letter's leading edge (+0x2C) counts in the measured width (here
-    /// 10 + 2.5 + 0.6 cut to 13 a letter); off, only the width and the spacing (10).
+    /// 10 + 2.5 + 0.6 cut to 13 a letter); off, only the width and the spacing (10). Each advance
+    /// is pinned by the line widths (`xLineWidths`) and the widest (`iWidth`): the letter's own
+    /// ("ab"); a space's break width at a wrap (width 35); a `~`, which is not counted; and a word
+    /// too long for the line, broken with a dash (the dash taken off, the letter before the break
+    /// and the current one starting the next line).
     #[test]
     fn s0240_prep_text_counts_the_leading_edge() {
-        for (on, wanted) in [(false, 20), (true, 26)] {
+        // (row, text, wrap width, line widths, widest)
+        for (on, text, wrap, lines, wanted) in [
+            (false, &b"ab"[..], 0, vec![20], 20),
+            (true, &b"ab"[..], 0, vec![26], 26),
+            (false, &b"ab cd"[..], 35, vec![20, 20], 20),
+            (true, &b"ab cd"[..], 35, vec![26, 26], 26),
+            (false, &b"ab~cd"[..], 0, vec![40], 40),
+            (true, &b"ab~cd"[..], 0, vec![52], 52),
+            (false, &b"abcd"[..], 35, vec![30, 20], 30),
+            (true, &b"abcd"[..], 35, vec![26, 26, 26], 26),
+        ] {
             let (mut e, font, _) = text_setup();
             e.register(FIND_TEXT_REPLACEMENT_STRING, find_replacement_double);
             e.register(TEST_CONSTANT_FOR_GAME_SETTINGS, |_, _| ret(0));
@@ -6208,9 +6222,20 @@ mod tests {
             );
             let data: Ptr<TextData> = e.new_object();
             e.set(data, TextData::cLineSep, b'\n');
-            let text = cstr(&mut e, b"ab");
-            font_prep_text(&mut e, font, text, data);
-            assert_eq!(e.get(data, TextData::iWidth), wanted, "row {on}");
+            e.set(data, TextData::iWidth, wrap);
+            let at = cstr(&mut e, text);
+            font_prep_text(&mut e, font, at, data);
+            let case = format!("row {on} {:?}", String::from_utf8_lossy(text));
+            let mut widths = vec![];
+            let mut node = data.addr() + 0x20;
+            while node != 0 {
+                if e.mem.u32(node) != 0 {
+                    widths.push(e.mem.i32(node));
+                }
+                node = e.mem.u32(node + 4);
+            }
+            assert_eq!(widths, lines, "{case}");
+            assert_eq!(e.get(data, TextData::iWidth), wanted, "{case}");
         }
     }
 

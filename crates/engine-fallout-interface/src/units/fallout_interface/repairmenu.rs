@@ -2286,13 +2286,21 @@ mod n057_tests {
 
     /// Row S0034 (lStewieAl's Tweaks' `RepairMenuInit_ClearOldTiles`, `0x7B72F0`): with the row on
     /// the init frees the repair list's tiles once (the list +0x5C of the menu `011da75c`, its slot
-    /// +0x1C, no argument) before the list is rebuilt; off, no such call.
+    /// +0x1C, no argument, the list's own vtable with a stand-in only there) before the list is
+    /// rebuilt (`repair_menu_update`'s `GetRepairItemGroup`, then the `007314C0` fill); off, no such
+    /// call.
     #[test]
     fn s0034_init_frees_the_old_tiles() {
-        let mut counts = vec![];
+        const FREE_ALL_TILES: u32 = 0x0000_801c;
         for on in [false, true] {
             let mut e = engine();
             let menu = menu(&mut e);
+            let mut slots = [0x0000_8001_u32; 0x100];
+            slots[0x1c / 4] = FREE_ALL_TILES;
+            e.put_vtable(0x0e10_0000, &slots);
+            e.register(0x0000_8001, |_, _| Ret::default());
+            e.register(FREE_ALL_TILES, |_, _| Ret::default());
+            e.mem.set_u32(menu + REPAIR_LIST, 0x0e10_0000);
             let broken = item_change(&mut e, 0x3300, 0);
             st0(&mut e, GET_ITEM_HEALTH, 50.0);
             answer(&mut e, FORM_TYPE, 0x18);
@@ -2303,13 +2311,22 @@ mod n057_tests {
             );
             e.call_log = Some(vec![]);
             e.call(0x007b_7020, &args![broken]);
-            let alone = calls_to(&e, 0x0000_8000)
+            let log = e.call_log.take().unwrap();
+            let at = |address: u32| log.iter().position(|(a, _)| *a == address);
+            let freed: Vec<&Vec<u32>> = log
                 .iter()
-                .filter(|w| **w == vec![menu + REPAIR_LIST])
-                .count();
-            counts.push(alone);
+                .filter(|(a, _)| *a == FREE_ALL_TILES)
+                .map(|(_, words)| words)
+                .collect();
+            if on {
+                assert_eq!(freed, vec![&vec![menu + REPAIR_LIST]]);
+                let freed_at = at(FREE_ALL_TILES).unwrap();
+                assert!(freed_at < at(GET_REPAIR_ITEM_GROUP).unwrap());
+                assert!(freed_at < at(LIST_BOX_FOR_EACH).unwrap());
+            } else {
+                assert!(freed.is_empty());
+            }
         }
-        assert_eq!(counts[1], counts[0] + 1);
     }
 
     // ---- JIP LN NVSE's game patches, group GB-5 (O2, `bEnableFO3Repair`) ----

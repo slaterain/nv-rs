@@ -135,3 +135,34 @@ const fn bit(n: u16) -> Row {
 const fn tweak(n: u16) -> Row {
     Row::share(stewie::MENUS_TWEAKS, stewie::MENUS_TWEAKS_END, n)
 }
+
+/// Row S0351 (Tweaks' `bSkipIntroVideo`): Tweaks' settings turn it on with `bFasterTitleMenu` too
+/// (settings.h, after reading: `if (g_bFasterTitleMenu) g_bSkipIntroVideo = 1;`); the row's own
+/// key off still turns it off.
+#[test]
+fn s0351_the_faster_title_menu_skips_the_intro_too() {
+    use crate::rows;
+    use crate::settings::Settings;
+    let row = rows::all().find(|r| r.plan == "S0351").unwrap();
+    let keys = |text: &'static str| {
+        rows::Keys::read(move |key: &str| {
+            text.lines()
+                .filter_map(|l| l.split_once('='))
+                .find(|(k, _)| k.eq_ignore_ascii_case(key))
+                .map(|(_, v)| v.to_string())
+        })
+    };
+    let settings = |text: &'static str| Settings::new(&[("t.ini", text.as_bytes())], false);
+    for (file, on) in [
+        ("[Tweaks]\nbSkipIntroVideo=0\nbFasterTitleMenu=0\n", false),
+        ("[Tweaks]\nbSkipIntroVideo=0\nbFasterTitleMenu=1\n", true),
+        ("[Tweaks]\nbSkipIntroVideo=1\nbFasterTitleMenu=0\n", true),
+    ] {
+        let settings = settings(file);
+        assert_eq!(rows::on(row, &keys(""), &settings), on, "{file}");
+        assert!(
+            !rows::on(row, &keys("bAutoSkipLoadingTiles=0"), &settings),
+            "{file}"
+        );
+    }
+}

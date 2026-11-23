@@ -1278,12 +1278,19 @@ fn idle_enter_line(e: &mut Engine, this: Ptr<MenuConsole>, ebp: u32, length: i32
     menu_console_print_line(e, this, at(ebp, frame::LINE), &[]);
     // `0x71B510`: lStewieAl's Tweaks' S0348 (`[Tweaks] bConsoleHistoryNoStoreDuplicates`,
     // `ConsoleSendHook2`) asks first whether the line repeats the last one sent; the string is set
-    // either way, the history add (`0071df20`) only for a new line.
+    // either way (a repeated line around `0x71B516`'s call), the history add (`0071df20`) only
+    // for a new line.
     let repeated = e.stewie(engine_core::extend::stewie::CONSOLE_HISTORY_NO_REPEATS)
         && stewie_repeats_last_sent(e, at(ebp, frame::LINE));
     let entered = at(ebp, frame::ENTERED_LINE);
-    e.call(STRING_FROM_C_STRING, &args![entered, at(ebp, frame::LINE)]);
-    if !repeated {
+    if repeated {
+        // Tweaks' skip path sets the string itself and goes around the exe's call at `0x71B516`
+        // (where VNV's `bRememberConsoleHistory` hooks), so a row hooking that call later never
+        // sees a repeated line.
+        e.call(STRING_FROM_C_STRING, &args![entered, at(ebp, frame::LINE)]);
+    } else {
+        // `0x71B516`: the exe's string set, then the history add.
+        e.call(STRING_FROM_C_STRING, &args![entered, at(ebp, frame::LINE)]);
         e.call(0x0071_df20, &args![this.addr() + INPUTS_LIST, entered]);
     }
     e.set(this, MenuConsole::iInputsPos, 0);

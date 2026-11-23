@@ -203,8 +203,10 @@ pub const INVENTORY_STAT_ALPHAS: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 
 /// hotkeyed.
 pub const HOTKEY_GRX_AND_BOOKS: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 54);
 /// S0022.51 `MenuFixes` (`TESObjectREFR::GetTargetType` `00579280` at `0x57951C` and `0x579546`,
-/// `HUDMainMenu::SetInfoForRef` at `0x7775DB`): Pickpocket shows on the creatures that can be
-/// pickpocketed (sneaking), not on those that cannot, and a creature's prompt says Pickpocket,
+/// `HUDMainMenu::SetInfoForRef` at `0x7775DB`) with S0022.50, which Tweaks installs with it
+/// (`GetActivationIsCrimeHook`, `00579690` at `0x579A4A`): Pickpocket shows on the creatures that
+/// can be pickpocketed (sneaking), not on those that cannot, sneaking up to a creature is a crime
+/// when it can be pickpocketed rather than when it talks, and a creature's prompt says Pickpocket,
 /// not Steal.
 pub const CREATURE_PICKPOCKET_PROMPT: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 55);
 /// S0227 `TileTextureCacheFix` (`TileImage`'s path helper `00a1f7d0` at `0xA1F88B`): a menu
@@ -216,11 +218,14 @@ pub const TILE_TEXTURE_PATH_STANDARDIZED: Row = Row::share(MENUS_FIXES, MENUS_FI
 pub const HACKING_EASTER_EGG_WORDS: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 57);
 /// S0176.01 `ResolveIncludesLongStringFix` (`Tile::InsertIncludedFiles` `00a02d40` at
 /// `0xA02E58`, `0xA02F59`, `0xA03031`, `0xA03194`): the menu text with its includes is gathered in
-/// a string with a 32-bit length, grown geometrically.
+/// a string with a 32-bit length, grown geometrically, and read with S0176.02's 32-bit length
+/// reads (Tweaks' `InitHooks` makes both; its string is never read through the exe's 16-bit
+/// length, which would cut a menu over 64 KB).
 pub const INCLUDES_LONG_STRING: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 58);
 /// S0176.02 `ResolveIncludesLongStringFix` (`0xA03062`, `0xA030C1`, `0xA03122`): the gathered
 /// text's length is that string's 32-bit length, so a menu over 64 KB with its includes is no
-/// longer cut. Tweaks writes it with S0176.01, whose string it reads; alone it does nothing.
+/// longer cut. Tweaks writes it with S0176.01, whose string it reads: S0176.01 makes these reads
+/// itself, so this bit changes nothing on its own (the row keeps Tweaks' second patch named).
 pub const INCLUDES_LONG_STRING_LENGTH: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 59);
 /// S0022.06 `MenuFixes` (`PlayerCharacter::UpdateAutoAimActor` at `0x964CBB`; the VATS menu's
 /// part choice `007f3070` at `0x7F3847`, `0x7F3857`, `0x7F39CD`, `0x7F39DD`; `VATSMenu::DoIdle`
@@ -239,6 +244,19 @@ pub const CONSOLE_QUICK_SAVE_AND_AMMO_TAB: Row = Row::share(MENUS_FIXES, MENUS_F
 /// `0x800F70`): a highlighted body part hides the first-person weapon only in the VATS menu, and
 /// the highlight is drawn for references and missiles that have a node and are not dying.
 pub const VATS_HIGHLIGHT_KEEPS_WEAPON: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 62);
+
+/// S0028's world-draw test (`VATSHighlightDataShouldHideWeapon` at `0x870AAA` and `0x870C92`), for
+/// both the translated frames (engine-fallout-misc `main_p2.rs`) and the typed setup family's
+/// (engine-typed `setup/world.rs`, which replaces `00870bd0`): `None` with the row off (the
+/// caller asks the exe's `005585e0` on the highlight data); on, the highlight's target node (+8)
+/// is set and the VATS menu (`011db0d4`) is open. No data: not hidden (Tweaks would read through a
+/// null pointer; our guard).
+pub fn vats_highlight_hides_world(e: &crate::Engine, data: u32) -> Option<bool> {
+    if !e.stewie(VATS_HIGHLIGHT_KEEPS_WEAPON) {
+        return None;
+    }
+    Some(data != 0 && e.mem.u32(data + 8) != 0 && e.mem.u32(0x011d_b0d4) != 0)
+}
 /// S0983 `PipboyMapStoreRefIDs` (`MapMenu::UpdateLocalMap` `0079d410` at `0x79DA81`,
 /// `MapMenu::AddCompanionMarkers` `0079ea30` at `0x79F000`): the Pip-Boy map's door and
 /// companion tiles carry their reference's id (`_RefID`, `_RefIDStr`) for menus that read them.
