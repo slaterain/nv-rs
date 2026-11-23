@@ -29,6 +29,7 @@ pub mod game_file;
 pub mod game_ini;
 pub mod half_loaded_move;
 pub mod hitch_log;
+pub mod launcher;
 pub mod mod_files;
 pub mod mod_fit_worn;
 pub mod native_inflate;
@@ -97,6 +98,10 @@ pub(crate) fn install_rows_and_extenders(engine: &mut Engine, choice: &fixes::Ch
     // Full screen asked is drawn in the borderless window over the monitor, in every preset:
     // nv-rs offers no exclusive full-screen device yet ([`full_screen`]).
     full_screen::install(engine);
+    // A card other than the one `FalloutPrefs.ini` names is named there, as the game's launcher
+    // names it, in every preset: nv-rs starts no launcher, and `main` stopped its workers for
+    // good before asking for one ([`launcher`], issue #935).
+    launcher::install(engine);
     // xNVSE built in, in every preset (ADR-0016): after the rows, so its wraps wrap what is
     // registered. Vanilla content calls no extender opcode, and every change it makes to
     // vanilla commands is a row.

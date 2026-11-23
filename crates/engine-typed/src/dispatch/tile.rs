@@ -687,9 +687,10 @@ pub fn value_change_event(e: &mut Engine, value: Ptr) {
 
 // Typed from 00a09200
 /// `Tile::Value::ClearActions` (Xbox PDB): deletes the trait's actions one by one. An action that
-/// reads another trait (slot +4 answers it; asked each time, as the exe asks) is first taken out of
-/// that trait's reaction list: this trait's reactions leave the list, and the map's entry is erased
-/// when none are left or set when the head changed.
+/// reads another trait (slot +4 answers it; asked each time, as the exe asks, and read in place when
+/// the slot holds one of the action classes' own: [`action_ref_value`]) is first taken out of that
+/// trait's reaction list: this trait's reactions leave the list, and the map's entry is erased when
+/// none are left or set when the head changed.
 pub fn clear_actions(e: &mut Engine, this: Ptr) {
     let me = this.addr();
     let list_head = me + VALUE_ACTIONS;
@@ -698,11 +699,11 @@ pub fn clear_actions(e: &mut Engine, this: Ptr) {
         if action == 0 {
             break;
         }
-        if e.vcall(action, ACTION_SLOT_REFERENCED, &[]).u32() != 0 {
+        if action_ref_value(e, action) != 0 {
             e.with_stack(4, |e, reactions| {
                 let at = reactions.addr();
                 e.mem.set_u32(at, 0);
-                let referenced = e.vcall(action, ACTION_SLOT_REFERENCED, &[]).u32();
+                let referenced = action_ref_value(e, action);
                 if !reactions_of(e, referenced, at) {
                     return;
                 }
@@ -723,10 +724,10 @@ pub fn clear_actions(e: &mut Engine, this: Ptr) {
                 }
                 let first_after = e.mem.u32(at);
                 if first_after == 0 {
-                    let referenced = e.vcall(action, ACTION_SLOT_REFERENCED, &[]).u32();
+                    let referenced = action_ref_value(e, action);
                     e.call(MAP_REMOVE, &args![REACTION_MAP, referenced]);
                 } else if first_after != first_before {
-                    let referenced = e.vcall(action, ACTION_SLOT_REFERENCED, &[]).u32();
+                    let referenced = action_ref_value(e, action);
                     set_reactions(e, referenced, first_after);
                 }
             });
@@ -735,6 +736,47 @@ pub fn clear_actions(e: &mut Engine, this: Ptr) {
         e.mem.set_u32(list_head, next);
         deallocate(e, action);
     }
+}
+
+// Typed from 00a09330
+/// `Tile::Value::~Value` (Xbox PDB): the actions cleared ([`clear_actions`]); then, when the value
+/// has a reaction list in the reaction map, each reaction's owner has every action of its that reads
+/// this value blanked (its operand word +0xC zeroed), the reaction nodes are freed and the map's
+/// entry erased (by address). The string is freed, the float and the owning tile zeroed (the value
+/// itself is not freed). An action's `QRefValue` is read in place when its vtable slot holds one of
+/// the action classes' own ([`action_ref_value`]). Every value of every tile goes through here when a
+/// menu closes (`Tile::Release`, by address).
+pub fn value_destructor(e: &mut Engine, this: Ptr) {
+    let me = this.addr();
+    typed_call!(super::FAMILY, 0x00a0_9200, clear_actions(e, this));
+    e.with_stack(4, |e, reactions| {
+        let at = reactions.addr();
+        e.mem.set_u32(at, 0);
+        if !reactions_of(e, me, at) {
+            return;
+        }
+        let mut reaction = e.mem.u32(at);
+        while reaction != 0 {
+            let owner = e.mem.u32(reaction);
+            let mut action = e.mem.u32(owner + VALUE_ACTIONS);
+            while action != 0 {
+                if action_ref_value(e, action) == me {
+                    e.mem.set_u32(action + ACTION_OPERAND, 0);
+                }
+                action = e.mem.u32(action + ACTION_NEXT);
+            }
+            let node = reaction;
+            reaction = e.mem.u32(reaction + 4);
+            deallocate(e, node);
+        }
+        e.call(MAP_REMOVE, &args![REACTION_MAP, me]);
+    });
+    let text = e.mem.u32(me + VALUE_STRING);
+    if text != 0 {
+        deallocate(e, text);
+    }
+    e.mem.set_f32(me + VALUE_FLOAT, 0.0);
+    e.mem.set_u32(me + VALUE_PARENT, 0);
 }
 
 /// The C runtime's `_stricmp` (`00ec68e4`) and `strcmp` (`00ec6da0`) through the crt family, the

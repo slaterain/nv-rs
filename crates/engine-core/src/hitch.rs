@@ -111,10 +111,46 @@ pub enum Count {
     GridCellsMade,
     GridLandNs,
     GridWaterNs,
+    /// The rest of the grid array's load (`TES::GridArrayLoad`, `00452ff0`), main's time in each part (ns): the first
+    /// loop over the grid (each slot's `TES::LoadGridCell` with the exterior buffer and the load screen's refresh), the
+    /// Havok world's `+0x18` lock count dropped after each loop (`00c6b540`: only when it reaches zero are the bodies,
+    /// phantoms, actions and constraints queued while the world was locked added, the bodies' broad-phase inserts),
+    /// the save/load object's and the script context's pass between the loops (`008727b0`'s branch, `008492b0`), and
+    /// the second loop's two parts for each cell in load state 5: its references attached (`0054bcf0`: the cell's
+    /// scripts, each reference's model queued and its 3D attached) with the buffer entry, and its 3D's properties and
+    /// update (`NiAVObject::UpdateProperties`, `00a59c60`).
+    GridLoadCellsNs,
+    GridLoadHavokNs,
+    GridLoadPassNs,
+    GridLoadRefsNs,
+    GridLoad3dNs,
+    /// Main's batches of queued bodies added to the Havok world (`00c674d0`: `hkpWorld::addEntityBatch`, the
+    /// broad-phase inserts, then each body's island and activation): the bodies and the time (ns). A body is queued
+    /// while the world's lock count is up (`bhkWorld::Add`, `00c6b0a0`); the batches run when the count drops to
+    /// zero, at most 100 a frame with the drop's flag set, and from `bhkWorld::Update` (on the AI thread, not counted).
+    HavokBodiesAdded,
+    HavokBodiesAddNs,
+    /// Main's time inside the guest heap's allocate and free (ns; the heap's own lock wait included).
+    HeapNsMain,
+    /// Interface tiles made (`Tile::Init`, `009ff600`: every tile a menu or the HUD builds).
+    TilesMade,
+    /// Interface tiles destroyed (`Tile::~Tile`, `009ff340`).
+    TilesDeleted,
+    /// References given a 3D (`TESObjectREFR::Set3D`, `005702e0`, with a node other than none and other than the
+    /// one they had).
+    Refs3dAttached,
+    /// Main's time in the physics world's update (`bhkWorld::Update`, `00c6ae70`) (ns), and the Havok steps it took
+    /// (`hkpWorld::stepDeltaTime`, `00c91b10`, and `hkpWorld::stepMultithreaded`: one per sub-step).
+    HavokNsMain,
+    HavokSteps,
+    /// Main's time running scripts (`ScriptRunner::Run`, `005e0d20`, outermost only: a script a script runs is in
+    /// its caller's time) (ns), and the scripts run (every run, nested ones included).
+    ScriptNsMain,
+    ScriptRuns,
 }
 
 /// How many counts there are.
-pub const COUNTS: usize = Count::GridWaterNs as usize + 1;
+pub const COUNTS: usize = Count::ScriptRuns as usize + 1;
 
 /// Times main's work from [`Timed::main`] to its drop into a `...Ns` count: nothing on another game thread or with
 /// the log off. One clock read at each end, at places that run a few times a frame at most and do far more work.
@@ -256,6 +292,218 @@ pub fn heap(free: bool) {
     }
     let other = crate::real_threads::on_other_game_thread();
     HEAP[heap_index(free, other)].0.fetch_add(1, Relaxed);
+}
+
+/// Whether the running OS thread is main's side (not another game thread) and the counters are on: where the timed
+/// counts ([`span`], [`heap_timer`]) read the clock.
+#[inline]
+fn timed_here() -> bool {
+    on() && !crate::real_threads::on_other_game_thread()
+}
+
+/// A timed stretch of main's work: its time (ns) goes to its count when it ends. Two clock readings, so only for
+/// work that costs far more (a cell attached, the hand-over, the physics update, a script run). Nothing on another
+/// game thread or with the log off.
+#[must_use = "the time is counted when the span is dropped"]
+pub struct Span(Option<(Count, std::time::Instant)>);
+
+impl Drop for Span {
+    fn drop(&mut self) {
+        if let Some((c, t)) = self.0 {
+            add(c, t.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64);
+        }
+    }
+}
+
+/// Times main's work into `c` until the returned span is dropped.
+#[inline]
+pub fn span(c: Count) -> Span {
+    Span(timed_here().then(|| (c, std::time::Instant::now())))
+}
+
+thread_local! {
+    /// How deep this OS thread is in [`script_span`]s and [`heap_timer`]s (only the outermost is timed).
+    static SCRIPT_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    static IN_HEAP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A script run: counted ([`Count::ScriptRuns`], every run) and, with `NV_HITCH_HEAP=1` ([`heap_timed`]: two clock
+/// reads a run), timed into [`Count::ScriptNsMain`] when it is the outermost on this thread, so a script another
+/// script runs is not counted twice.
+pub struct ScriptSpan {
+    timed: Option<std::time::Instant>,
+}
+
+impl Drop for ScriptSpan {
+    fn drop(&mut self) {
+        SCRIPT_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+        if let Some(t) = self.timed {
+            add(
+                Count::ScriptNsMain,
+                t.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+            );
+        }
+    }
+}
+
+/// Starts a script run's span ([`ScriptSpan`]); the run count goes up on any thread.
+#[inline]
+pub fn script_span() -> ScriptSpan {
+    if on() {
+        one(Count::ScriptRuns);
+    }
+    let outermost = SCRIPT_DEPTH.with(|d| {
+        let n = d.get();
+        d.set(n + 1);
+        n == 0
+    });
+    ScriptSpan {
+        timed: (outermost && heap_timed() && timed_here()).then(std::time::Instant::now),
+    }
+}
+
+/// `NV_HITCH_HEAP=1` (a diagnostic switch, off by default): main's time in the guest heap ([`heap_timer`]) and in
+/// each script run ([`script_span`]) is timed. Two clock reads around every allocate and free on main cost about
+/// 4 ms on the pause menu's opening frame (80,000 blocks), and two more each script run, so a normal run counts
+/// the blocks and the runs only. 0: the variable not read yet; 1: off; 2: on.
+static HEAP_TIMED: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Whether main's heap time is timed (`NV_HITCH_HEAP=1`; read once).
+#[inline]
+pub fn heap_timed() -> bool {
+    match HEAP_TIMED.load(Relaxed) {
+        0 => read_heap_switch(),
+        2 => true,
+        _ => false,
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn read_heap_switch() -> bool {
+    let on = std::env::var("NV_HITCH_HEAP").is_ok_and(|v| v.trim() == "1");
+    let _ = HEAP_TIMED.compare_exchange(0, if on { 2 } else { 1 }, Relaxed, Relaxed);
+    HEAP_TIMED.load(Relaxed) == 2
+}
+
+/// Sets [`heap_timed`], whatever the variable says (tests).
+#[doc(hidden)]
+pub fn set_heap_timed(on: bool) {
+    HEAP_TIMED.store(if on { 2 } else { 1 }, Relaxed);
+}
+
+/// The heap's time on main ([`Count::HeapNsMain`]): the start of an allocate or free, `None` unless
+/// `NV_HITCH_HEAP=1` ([`heap_timed`]), on another game thread, with the log off, or inside an outer one (the shared
+/// heap's call reaches the plain heap's).
+#[inline]
+pub fn heap_timer() -> Option<std::time::Instant> {
+    if !heap_timed() || !timed_here() || IN_HEAP.with(std::cell::Cell::get) {
+        return None;
+    }
+    IN_HEAP.with(|h| h.set(true));
+    Some(std::time::Instant::now())
+}
+
+/// The end of a [`heap_timer`]'s allocate or free.
+#[inline]
+pub fn heap_timer_end(started: Option<std::time::Instant>) {
+    if let Some(t) = started {
+        IN_HEAP.with(|h| h.set(false));
+        add(
+            Count::HeapNsMain,
+            t.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+        );
+    }
+}
+
+/// Who held the kernel lock while main waited for it, for main's longest such wait of the frame (of 1 ms or more):
+/// the holder's game thread id and start address, the platform function it was in (0 and an empty name when it held
+/// the lock outside one: the kernel's own bookkeeping, the host between frames), main's wait, and the holder's
+/// processor time over the measured part of that wait (`None` where the system does not tell it: macOS). A holder with far less processor time
+/// than the wait was pushed off the processor (other programs); one with about as much was working under the lock.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LockHolder {
+    /// The game critical section main waited for (its address), 0 for the kernel lock.
+    pub section: u32,
+    pub thread: u32,
+    pub start: u32,
+    pub call: u32,
+    pub call_name: String,
+    pub wait_ns: u64,
+    /// The part of the wait the processor time covers (from the moment the wait passed 1 ms to its end).
+    pub measured_ns: u64,
+    pub cpu_ns: Option<u64>,
+    /// Where outside a platform call the holder took the lock (`file:line` of the port's own code; empty: none
+    /// known).
+    pub site: String,
+    /// How many times other threads took the lock while main waited: 0 is one long hold, more a lock that changed
+    /// hands (short holds re-taken before main woke).
+    pub handoffs: u32,
+    /// What the holder was waiting for on the render thread when it was seen (0 nothing, 1 a reply, 2 the frames in
+    /// flight at `Present`, 3 room in the queue).
+    pub render_wait: u32,
+}
+
+/// The waits main makes that are worth naming a holder for (1 ms).
+pub const HOLDER_WAIT_NS: u64 = 1_000_000;
+
+/// A run's longest named wait of the frame, by the run (`crate::units::platform::KernelRef::id`): a test process runs
+/// several runs at once, each with its own main.
+type Holders = std::sync::Mutex<Vec<(usize, LockHolder)>>;
+
+/// At most this many runs keep a record (a run that never takes its record: a test's).
+const HOLDER_RUNS: usize = 64;
+
+/// Keeps `holder` for `run` when it is that run's longest wait of the frame (1 ms or more).
+fn keep_longest(slots: &Holders, run: usize, holder: LockHolder) {
+    if holder.wait_ns < HOLDER_WAIT_NS {
+        return;
+    }
+    if let Ok(mut h) = slots.lock() {
+        match h.iter_mut().find(|(r, _)| *r == run) {
+            Some((_, k)) if holder.wait_ns > k.wait_ns => *k = holder,
+            Some(_) => {}
+            None => {
+                if h.len() >= HOLDER_RUNS {
+                    h.remove(0);
+                }
+                h.push((run, holder));
+            }
+        }
+    }
+}
+
+/// `run`'s record ([`keep_longest`]), then none.
+fn take_run(slots: &Holders, run: usize) -> Option<LockHolder> {
+    let mut h = slots.lock().ok()?;
+    let i = h.iter().position(|(r, _)| *r == run)?;
+    Some(h.swap_remove(i).1)
+}
+
+static HOLDER: Holders = std::sync::Mutex::new(Vec::new());
+
+/// Main of `run` waited `holder.wait_ns` for the kernel lock that `holder` held: kept when it is the frame's longest.
+pub fn lock_holder(run: usize, holder: LockHolder) {
+    keep_longest(&HOLDER, run, holder);
+}
+
+/// `run`'s longest named wait of the frame for the kernel lock ([`lock_holder`]), then none.
+pub fn take_lock_holder(run: usize) -> Option<LockHolder> {
+    take_run(&HOLDER, run)
+}
+
+static SECTION_HOLDER: Holders = std::sync::Mutex::new(Vec::new());
+
+/// Main of `run` waited `holder.wait_ns` for the game critical section `holder.section` that `holder.thread` owned
+/// (the platform function the owner was in then, its processor time over the whole wait): kept when it is the
+/// frame's longest of 1 ms or more.
+pub fn section_holder(run: usize, holder: LockHolder) {
+    keep_longest(&SECTION_HOLDER, run, holder);
+}
+
+/// `run`'s longest named wait of the frame for a game critical section ([`section_holder`]), then none.
+pub fn take_section_holder(run: usize) -> Option<LockHolder> {
+    take_run(&SECTION_HOLDER, run)
 }
 
 /// What main waited for.
@@ -505,6 +753,28 @@ mod tests {
         assert!(since(&snapshot(), &before)[Count::LoadFinishTasks as usize] >= 3);
         assert_eq!(take_longest_task(), (9, 0x0102_0000));
         assert_eq!(take_longest_task(), (0, 0));
+    }
+
+    /// Main's heap time reads the clock only behind `NV_HITCH_HEAP=1`: off (the default), an allocate or free
+    /// starts no timer; on, the outermost one on main does, and a nested one (the shared heap's call reaching the
+    /// plain heap's) does not.
+    #[test]
+    fn the_heap_is_timed_only_behind_its_switch() {
+        let _l = WAIT_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        set_heap_timed(false);
+        assert!(heap_timer().is_none(), "off: no clock read");
+        set_heap_timed(true);
+        if on() {
+            let outer = heap_timer();
+            assert!(outer.is_some(), "on: main's allocate is timed");
+            assert!(heap_timer().is_none(), "a nested one is not");
+            heap_timer_end(outer);
+            heap_timer_end(heap_timer());
+        }
+        set_heap_timed(false);
+        assert!(!heap_timed());
     }
 
     static WAIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

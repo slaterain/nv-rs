@@ -4452,4 +4452,49 @@ mod stewie_menus6_tests {
             assert_eq!(calls > 0, asked, "row {on} id {id:x}");
         }
     }
+
+    /// Row S0069 on, a form other than the GRX, with an extra data list (read raw at +0): the
+    /// exe's tests run on the list. Armour (type 0x18) whose health extra data (type 0x25, its
+    /// float at +0xC) is -1.0 is not usable, at 50.0 it is; an entry whose list cannot be worn
+    /// (`00418b10`) is not usable.
+    #[test]
+    fn s0069_on_with_an_extra_list_keeps_the_exe_tests() {
+        // (form type, the health extra data's value, the list cannot be worn, usable)
+        for (kind, health, can_not_wear, usable) in [
+            (0x18u32, -1.0f32, false, false),
+            (0x18, 50.0, false, true),
+            (0x1d, 50.0, true, false),
+            (0x1d, 50.0, false, true),
+        ] {
+            let (mut e, entry) = grx_engine(0x1234);
+            let extra = e.mem.alloc(0x20);
+            let list = e.mem.alloc(8);
+            e.mem.set_u32(list, extra);
+            e.mem.set_u32(entry, list);
+            let health_extra = e.mem.alloc(0x10);
+            e.mem.set_f32(health_extra + 0xc, health);
+            e.register_double(FORM_TYPE, move |_, _| Ret {
+                eax: kind,
+                ..Ret::default()
+            });
+            e.register_double(EXTRA_GET_CAN_NOT_WEAR, move |_, a| Ret {
+                eax: u32::from(a[0] == extra && can_not_wear),
+                ..Ret::default()
+            });
+            e.register_double(EXTRA_GET_BY_TYPE, move |_, a| Ret {
+                eax: if a[0] == extra && a[1] == 0x25 {
+                    health_extra
+                } else {
+                    0
+                },
+                ..Ret::default()
+            });
+            e.set_stewie(stewie::HOTKEY_GRX_AND_BOOKS, true);
+            assert_eq!(
+                fn_00967b70(&mut e, Ptr::new(0), Ptr::new(entry)),
+                usable,
+                "type {kind:x} health {health} can not wear {can_not_wear}"
+            );
+        }
+    }
 }

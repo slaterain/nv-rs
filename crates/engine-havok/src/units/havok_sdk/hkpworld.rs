@@ -905,6 +905,7 @@ pub fn fn_00c91a70(e: &mut Engine, this: Ptr<HkpWorld>, listener: u32) {
 /// `FLD`/`FSTP`); a kd-tree manager is told next (`00c91270(0, 0)` when `m_autoUpdateTree`,
 /// else `00c91250`), then the world unlocks (`00c91190`). Returns the simulation's result.
 pub fn hkp_world_step_delta_time(e: &mut Engine, this: Ptr<HkpWorld>, delta_time: f32) -> u32 {
+    engine_core::hitch::one(engine_core::hitch::Count::HavokSteps);
     fn_00c91180(e, this);
     e.call(WATCH_HEAP_MEMORY, &args![this]);
     let simulation = e.get(this, HkpWorld::m_simulation);
@@ -4597,6 +4598,7 @@ pub fn hkp_world_step_multithreaded(
     listener: u32,
     time: f32,
 ) -> u32 {
+    engine_core::hitch::one(engine_core::hitch::Count::HavokSteps);
     let started = hkp_world_init_mt_step(e, this, queue, x87_quiet(time));
     if started != 0 {
         return started;
