@@ -59,6 +59,15 @@ impl Pool {
     fn map(e: &mut Engine) -> Arc<Mutex<HashMap<u32, u32>>> {
         e.ext_free::<Pool>().0.clone()
     }
+
+    /// The pool's string for the text at `text`, if any, without making one or counting it.
+    #[cfg(test)]
+    pub(crate) fn lookup_for_test(e: &mut Engine, text: u32) -> Option<u32> {
+        let hash = crate::containers::str_hash_cs(&e.mem.cstr(text));
+        let pool = Self::map(e);
+        let map = pool.lock().unwrap_or_else(PoisonError::into_inner);
+        map.get(&hash).copied()
+    }
 }
 
 /// A string's block before its characters: the count (`-8`) and the length (`-4`).

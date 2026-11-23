@@ -22,8 +22,11 @@
 //! 128 values: a few microseconds. The counters cost one relaxed add at each counted event (heap blocks: a plain
 //! load and store under the heap's lock) and, for waits and reads, a clock read pair around a call that already
 //! blocks or reads the disk. The stage split costs about ten clock reads a frame (`engine_core::stage_time`'s
-//! points). A hitch frame adds one formatted line, one write to the log and, when the player's cell changed since
-//! the last line, one call of the cell's `GetEditorID`.
+//! points), the frame tail's split thirteen more and two for each task main drains from the task queues
+//! there. Main's time in the guest heap and in each script run is timed only with `NV_HITCH_HEAP=1` (two clock
+//! reads a block or a run: about 4 ms on the pause menu's 80,000-block opening frame). A hitch frame adds one
+//! formatted line, one write to the log and, when the player's cell changed since the last line, one call of the
+//! cell's `GetEditorID`.
 
 use engine::Engine;
 use engine_core::hitch::{Count, WaitKind, COUNTS};
@@ -53,6 +56,8 @@ pub const BURST_SECS: f64 = 10.0;
 
 /// `PlayerCharacter` and its parent cell (`008d6f30`).
 const PLAYER: u32 = 0x011d_ea3c;
+/// `Tile::iHibernatingTileCount` (Xbox PDB): the interface's hibernating tiles.
+const HIBERNATING_TILE_COUNT: u32 = 0x011f_32d8;
 const PARENT_CELL: u32 = 0x40;
 const POSITION: u32 = 0x30;
 
@@ -213,8 +218,17 @@ pub struct Frame {
     pub stream: Vec<u64>,
     pub longest_wait: (u64, WaitKind, u32),
     pub largest_read: (u64, String),
+    /// Who held the kernel lock in main's longest wait for it of 1 ms or more (`engine_core::hitch::LockHolder`).
+    pub lock_holder: Option<engine_core::hitch::LockHolder>,
+    /// Who owned the game critical section in main's longest wait for one of 1 ms or more.
+    pub section_holder: Option<engine_core::hitch::LockHolder>,
+    /// The interface's hibernating tiles at the frame's end (`Tile::iHibernatingTileCount`, `011f32d8`).
+    pub hibernating: u32,
     /// The longest completed load task main ran (ns, its vtable).
     pub longest_task: (u64, u32),
+    /// The game's frame tail split at its marks (`engine_core::stage_time::take_tail`): printed when the tail is
+    /// [`TAIL_SPLIT_MS`] or more.
+    pub tail: Option<engine_core::stage_time::Tail>,
     pub left_out: u64,
     /// The longest of those left out (ms).
     pub longest_left_out: f64,
@@ -232,6 +246,80 @@ const STAGE_NAMES: [&str; 10] = [
     "host between frames",
     "unmeasured",
 ];
+
+/// The index of the frame tail in [`STAGE_NAMES`].
+const TAIL_STAGE: usize = 7;
+/// A frame tail at least this long (ms) is split into its parts in the line.
+pub const TAIL_SPLIT_MS: f64 = 2.0;
+
+/// The frame tail's parts in words (`engine_core::stage_time::Tail`, the order main runs them): each part's time;
+/// for the two task queues' drains, what each ran; for the free-list sort, the pool and its
+/// free list's count.
+fn tail_words(t: &engine_core::stage_time::Tail) -> String {
+    use engine_core::stage_time::{DrainQueue, TailMark, TAIL_PART_NAMES};
+    let mut parts = Vec::new();
+    for (i, p) in t.parts.iter().enumerate() {
+        let Some(ns) = p else { continue };
+        let extra = if i == TailMark::AiQueue as usize {
+            t.drains[DrainQueue::First as usize].map(|d| format!(" ({})", drain_words(&d)))
+        } else if i == TailMark::QueueDrain as usize {
+            t.drains[DrainQueue::Secondary as usize].map(|d| format!(" ({})", drain_words(&d)))
+        } else if i == TailMark::TickOut as usize {
+            t.tick.map(|(pool, free)| match free {
+                Some(n) => format!(" (pool {pool}, {} in its free list)", thousands(n.into())),
+                None => format!(" (pool {pool}: none in the table)"),
+            })
+        } else {
+            None
+        };
+        parts.push(format!(
+            "{} {:.1}{}",
+            TAIL_PART_NAMES[i],
+            ms(*ns),
+            extra.unwrap_or_default()
+        ));
+    }
+    parts.join(", ")
+}
+
+/// One frame's drains of a packed task queue in words: the tasks, the three kinds (the record's tag) that took
+/// longest, the time outside the tasks (the pops, and the turns the loop took on an empty queue while another
+/// thread's input to it was still open: main spinning).
+fn drain_words(d: &engine_core::stage_time::DrainStats) -> String {
+    let mut kinds: Vec<(String, u32, u64)> = d
+        .kinds
+        .iter()
+        .filter(|k| k.1 != 0)
+        .map(|k| (format!("tag {:#04x}", k.0), k.1, k.2))
+        .collect();
+    if d.other.0 > 0 {
+        kinds.push(("other kinds".into(), d.other.0, d.other.1));
+    }
+    kinds.sort_by_key(|k| std::cmp::Reverse(k.2));
+    let shown: Vec<String> = kinds
+        .iter()
+        .take(3)
+        .map(|(name, n, ns)| format!("{name} x{n} {:.1} ms", ms(*ns)))
+        .collect();
+    let mut s = format!("{} tasks", d.tasks);
+    if !shown.is_empty() {
+        s += &format!(": {}", shown.join(", "));
+        if kinds.len() > 3 {
+            s += &format!(" and {} more kinds", kinds.len() - 3);
+        }
+    }
+    s += &format!(
+        "; {:.1} ms outside the tasks",
+        ms(d.ns.saturating_sub(d.task_ns()))
+    );
+    if d.waits > 0 {
+        s += &format!(
+            ", {} turns on an empty queue waiting for another thread's input",
+            thousands(d.waits.into())
+        );
+    }
+    s
+}
 
 /// The stages (ms) from the stage marks' take (µs per column).
 pub fn stages_of(v: &[(f64, u64)]) -> [f64; 9] {
@@ -344,6 +432,69 @@ fn wait_words(k: WaitKind) -> &'static str {
     }
 }
 
+/// The game thread that held the kernel lock, the platform function it held it for, and whether it was working or
+/// pushed off the processor meanwhile, in words.
+fn holder_words(h: &engine_core::hitch::LockHolder) -> String {
+    let who = match (h.thread, h.start) {
+        (0, _) => "the host or main".to_string(),
+        // OEI's IO thread: every file read and the queued loads go through it.
+        (_, 0x00aa_8430) => format!("the IO thread (game thread {})", h.thread),
+        (t, 0) => format!("game thread {t}"),
+        (t, s) => format!("game thread {t} (starts at {s:08x})"),
+    };
+    let what = match (h.call, h.call_name.as_str()) {
+        // A section's owner notes only its locked platform calls: in none, it may be running game code, in a sync
+        // import or a device call, or blocked.
+        (0, _) if h.section != 0 => "in no locked platform call".to_string(),
+        (0, _) if !h.site.is_empty() => format!("in {}", h.site),
+        (0, _) => "outside a platform call".to_string(),
+        (_, "") => format!("in the platform call at {:08x}", h.call),
+        (_, name) => format!("in {name}"),
+    };
+    let ran = match h.cpu_ns {
+        Some(cpu) if h.measured_ns > 0 => {
+            let share = cpu as f64 / h.measured_ns as f64;
+            format!(
+                "; it ran {:.1} of the last {:.1} ms waited ({})",
+                ms(cpu),
+                ms(h.measured_ns),
+                if share >= 0.5 {
+                    "working under the lock"
+                } else if h.section != 0 {
+                    "blocked or off the processor"
+                } else {
+                    "mostly off the processor"
+                }
+            )
+        }
+        _ => String::new(),
+    };
+    let section = if h.section != 0 {
+        format!("section {:08x} owned by ", h.section)
+    } else {
+        String::new()
+    };
+    let render = match h.render_wait {
+        1 => "; it was waiting for a reply from the render thread",
+        2 => "; it was waiting in Present for the frames in flight",
+        3 => "; it was waiting for room in the render queue",
+        _ => "",
+    };
+    let ran = format!("{ran}{render}");
+    let hands = if h.handoffs > 0 {
+        format!(
+            "; not one hold: the lock changed hands {} times while main waited",
+            h.handoffs
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        "{section}{who} {what}, main waited {:.1} ms{ran}{hands}",
+        ms(h.wait_ns)
+    )
+}
+
 /// A wait under this (ns) is left out of the line: too short to matter.
 const TENTH_MS: u64 = 100_000;
 
@@ -393,6 +544,28 @@ impl Frame {
         self.s(S::PresentWaitNs) + self.s(S::ReplyWaitNs) + self.s(S::QueueFullNs)
     }
 
+    /// What the render thread's presents of the frame waited on, the largest first, when one is 1 ms or more: the
+    /// queue thread's last frame (`sync`, its present call included) and the window's next frame (with the Fifo present
+    /// mode, the display's refresh).
+    fn render_reason(&self) -> String {
+        use engine_platform::stream_hitch::Count as S;
+        let mut parts = [
+            (self.s(S::AcquireNs), "the window's next frame"),
+            (self.s(S::RenderSyncNs), "the queue thread's last frame"),
+        ];
+        parts.sort_by_key(|a| std::cmp::Reverse(a.0));
+        let said: Vec<String> = parts
+            .iter()
+            .filter(|(ns, _)| *ns >= 1_000_000)
+            .map(|(ns, w)| format!("{w} {:.0} ms", ms(*ns)))
+            .collect();
+        if said.is_empty() {
+            String::new()
+        } else {
+            format!(" (it waited for {})", said.join(", "))
+        }
+    }
+
     /// The plain-word guess of the frame's main cause, by simple rules over its counts.
     pub fn cause(&self) -> String {
         use engine_platform::stream_hitch::Count as S;
@@ -427,26 +600,54 @@ impl Frame {
             } else {
                 String::new()
             };
+            let owner = self
+                .section_holder
+                .as_ref()
+                .map_or_else(String::new, |h| format!(" ({})", holder_words(h)));
             said.push((
                 ms(section),
                 format!(
-                    "waited {:.0} ms for a lock another game thread held{at}",
+                    "waited {:.0} ms for a lock another game thread held{at}{owner}",
                     ms(section)
                 ),
             ));
         }
         let locks = self.g(Count::KernelWaitNs) + self.g(Count::DeviceWaitNs);
         if locks > 0 {
+            let holder = self
+                .lock_holder
+                .as_ref()
+                .map_or_else(String::new, |h| format!(" ({})", holder_words(h)));
             said.push((
                 ms(locks),
-                format!("waited {:.0} ms for the platform's locks", ms(locks)),
+                format!(
+                    "waited {:.0} ms for the platform's locks{holder}",
+                    ms(locks)
+                ),
             ));
+        }
+        // Main's timed work: a stretch that explains the frame is named.
+        for (count, words) in [
+            (Count::CellAttachNs, "attaching cells"),
+            (Count::CellDetachNs, "detaching cells"),
+            (Count::LoadFinishNs, "finishing background loads on main"),
+            (Count::HavokNsMain, "in the physics update"),
+            (Count::ScriptNsMain, "running scripts"),
+        ] {
+            let ns = self.g(count);
+            if ns > 0 {
+                said.push((ms(ns), format!("{:.0} ms {words}", ms(ns))));
+            }
         }
         let render = self.render_wait();
         if render > 0 {
             said.push((
                 ms(render),
-                format!("waited {:.0} ms for the render thread", ms(render)),
+                format!(
+                    "waited {:.0} ms for the render thread{}",
+                    ms(render),
+                    self.render_reason()
+                ),
             ));
         }
         let made = self.s(S::PipelineNs) + self.s(S::ModuleNs);
@@ -504,8 +705,10 @@ impl Frame {
             ));
         }
         // About 0.4 µs a guest heap block on main (measure/smooth-200/HITCHES.md H-d1: 22,093 frees in 9.0 ms).
+        // The heap's own time on main when measured, else that estimate.
         let blocks = self.g(Count::FreesMain) + self.g(Count::AllocsMain);
-        if blocks >= 2_000 {
+        let heap = self.g(Count::HeapNsMain);
+        if blocks >= 2_000 || ms(heap) >= 5.0 {
             let freed = self.g(Count::FreesMain);
             let words = if freed * 2 >= blocks {
                 format!("freed {} memory blocks", thousands(freed))
@@ -515,7 +718,14 @@ impl Frame {
                     thousands(self.g(Count::AllocsMain))
                 )
             };
-            said.push((blocks as f64 * 0.0004, words));
+            if heap > 0 {
+                said.push((
+                    ms(heap),
+                    format!("{words} ({:.0} ms in the heap)", ms(heap)),
+                ));
+            } else {
+                said.push((blocks as f64 * 0.0004, words));
+            }
         }
         said.sort_by(|a, b| b.0.total_cmp(&a.0));
         let excess = self.ms - self.typical;
@@ -561,10 +771,19 @@ impl Frame {
                 } else {
                     ""
                 };
+                // The frame tail's longest part, when it was split.
+                let part = match (i, self.tail.as_ref().and_then(|t| t.longest())) {
+                    (TAIL_STAGE, Some((p, ns))) => format!(
+                        " (most in the {}, {:.1} ms)",
+                        engine_core::stage_time::TAIL_PART_NAMES[p],
+                        ms(ns)
+                    ),
+                    _ => String::new(),
+                };
                 out.push(if i == 9 {
                     format!("{m:.0} ms fell outside the measured stages{none}")
                 } else {
-                    format!("the {} took {m:.0} ms{none}", STAGE_NAMES[i])
+                    format!("the {} took {m:.0} ms{part}{none}", STAGE_NAMES[i])
                 });
             }
         }
@@ -599,6 +818,11 @@ impl Frame {
                 .map(|(n, m)| format!("{n} {m:.1}"))
                 .collect();
             l += &format!("; stages ms: {}", parts.join(", "));
+            if st[TAIL_STAGE] >= TAIL_SPLIT_MS {
+                if let Some(t) = &self.tail {
+                    l += &format!("; frame tail parts ms: {}", tail_words(t));
+                }
+            }
         }
         let mut work: Vec<String> = Vec::new();
         let mut put = |n: u64, w: String| {
@@ -697,6 +921,16 @@ impl Frame {
             format!("waited in Present {:.1} ms", ms(self.s(S::PresentWaitNs))),
         );
         put(
+            // The present call runs on the queue thread: its time is part of the render thread's wait for that thread.
+            (self.s(S::AcquireNs) + self.s(S::RenderSyncNs)) / TENTH_MS,
+            format!(
+                "the render thread waited {:.1} ms for the window's frame, {:.1} for the queue thread (whose present call took {:.1})",
+                ms(self.s(S::AcquireNs)),
+                ms(self.s(S::RenderSyncNs)),
+                ms(self.s(S::SwapNs))
+            ),
+        );
+        put(
             self.s(S::ReplyWaitNs) / TENTH_MS,
             format!(
                 "for render-thread replies {:.1} ms ({}x)",
@@ -734,6 +968,10 @@ impl Frame {
                 thousands(g(Count::AllocsMain)),
                 thousands(g(Count::FreesMain))
             ),
+        );
+        put(
+            g(Count::HeapNsMain) / TENTH_MS,
+            format!("main in the heap {:.1} ms", ms(g(Count::HeapNsMain))),
         );
         put(
             g(Count::AllocsOther) + g(Count::FreesOther),
@@ -819,23 +1057,60 @@ impl Frame {
             g(Count::GridUpdateNs) / TENTH_MS,
             format!("grid update {:.1} ms", ms(g(Count::GridUpdateNs))),
         );
-        // The grid shift's parts, in its order, as one entry when any is over a tenth of a millisecond.
-        let parts = [
-            ("cancel", Count::GridCancelNs),
-            ("textures", Count::GridTexturesNs),
-            ("shift", Count::GridShiftNs),
-            ("Havok", Count::GridHavokNs),
-            ("load", Count::GridLoadNs),
-            ("terrain", Count::GridTerrainNs),
-        ];
-        let shown: Vec<String> = parts
-            .iter()
-            .filter(|(_, c)| g(*c) >= TENTH_MS)
-            .map(|(name, c)| format!("{name} {:.1}", ms(g(*c))))
-            .collect();
+        // A set of timed parts, in their order, as one entry when any is over a tenth of a millisecond.
+        let mut parts = |title: &str, parts: &[(&str, Count)]| {
+            let shown: Vec<String> = parts
+                .iter()
+                .filter(|(_, c)| g(*c) >= TENTH_MS)
+                .map(|(name, c)| format!("{name} {:.1}", ms(g(*c))))
+                .collect();
+            put(
+                shown.len() as u64,
+                format!("{title} ms: {}", shown.join(", ")),
+            );
+        };
+        parts(
+            "grid shift parts",
+            &[
+                ("cancel", Count::GridCancelNs),
+                ("textures", Count::GridTexturesNs),
+                ("shift", Count::GridShiftNs),
+                ("Havok", Count::GridHavokNs),
+                ("load", Count::GridLoadNs),
+                ("terrain", Count::GridTerrainNs),
+            ],
+        );
+        // The grid array's load (`TES::GridArrayLoad`) and, inside its first loop, each grid cell's
+        // (`TES::LoadGridCell`): entries of their own, since both also run outside a grid shift.
+        parts(
+            "grid load parts",
+            &[
+                ("cells", Count::GridLoadCellsNs),
+                ("Havok drop", Count::GridLoadHavokNs),
+                ("pass", Count::GridLoadPassNs),
+                ("references", Count::GridLoadRefsNs),
+                ("3D update", Count::GridLoad3dNs),
+            ],
+        );
+        parts(
+            "grid cell parts",
+            &[
+                ("cell find", Count::GridCellFindNs),
+                ("land", Count::GridLandNs),
+                ("water", Count::GridWaterNs),
+            ],
+        );
         put(
-            shown.len() as u64,
-            format!("grid shift parts ms: {}", shown.join(", ")),
+            g(Count::GridCellsMade),
+            format!("{} grid cells made", g(Count::GridCellsMade)),
+        );
+        put(
+            g(Count::HavokBodiesAddNs) / TENTH_MS,
+            format!(
+                "{} queued Havok bodies added on main in {:.1} ms",
+                g(Count::HavokBodiesAdded),
+                ms(g(Count::HavokBodiesAddNs))
+            ),
         );
         put(
             g(Count::CellAttachNs) / TENTH_MS,
@@ -856,6 +1131,44 @@ impl Frame {
                 ms(g(Count::HandBackNs))
             ),
         );
+        put(
+            g(Count::Refs3dAttached),
+            format!("{} references given their 3D", g(Count::Refs3dAttached)),
+        );
+        put(
+            g(Count::HavokNsMain) / TENTH_MS,
+            format!(
+                "the physics update {:.1} ms ({} steps)",
+                ms(g(Count::HavokNsMain)),
+                g(Count::HavokSteps)
+            ),
+        );
+        put(
+            g(Count::ScriptNsMain) / TENTH_MS,
+            format!(
+                "scripts {:.1} ms ({} runs)",
+                ms(g(Count::ScriptNsMain)),
+                g(Count::ScriptRuns)
+            ),
+        );
+        put(
+            g(Count::TilesMade) + g(Count::TilesDeleted),
+            format!(
+                "interface tiles {} made, {} destroyed, {} hibernating",
+                g(Count::TilesMade),
+                g(Count::TilesDeleted),
+                self.hibernating
+            ),
+        );
+        if let Some(h) = &self.section_holder {
+            put(
+                1,
+                format!("the critical section's owner: {}", holder_words(h)),
+            );
+        }
+        if let Some(h) = &self.lock_holder {
+            put(1, format!("the kernel lock's holder: {}", holder_words(h)));
+        }
         put(g(Count::Saves), "a save".to_string());
         put(g(Count::Loads), "a load".to_string());
         put(
@@ -941,7 +1254,16 @@ impl HitchLog {
         self.stream = stream_now;
         let longest_wait = engine_core::hitch::take_longest_wait();
         let largest_read = engine_core::hitch::take_largest_read();
+        let lock_holder = engine_core::hitch::take_lock_holder(e.kernel.id());
+        let section_holder = engine_core::hitch::take_section_holder(e.kernel.id());
+        let hibernating = if e.mem.is_mapped(HIBERNATING_TILE_COUNT) {
+            e.mem.u32(HIBERNATING_TILE_COUNT)
+        } else {
+            0
+        };
         let longest_task = engine_core::hitch::take_longest_task();
+        // Taken every frame (its drains are the frame's), after `take_stages` passed the host's mark.
+        let tail = engine_core::stage_time::take_tail();
         let screen = crate::uncap::screen(e);
         let presents = engine_platform::d3d9real::present_count(e).unwrap_or(0);
         let shown = Shown {
@@ -999,7 +1321,11 @@ impl HitchLog {
             stream,
             longest_wait,
             largest_read,
+            lock_holder,
+            section_holder,
+            hibernating,
             longest_task,
+            tail,
             left_out,
             longest_left_out,
         };
@@ -1258,6 +1584,44 @@ mod tests {
             line.contains("grid shift parts ms: shift 3.8, load 5.1"),
             "{line}"
         );
+        assert!(!line.contains("grid cell parts"), "none counted: {line}");
+        f.game[Count::GridCellFindNs as usize] = 4_200_000;
+        f.game[Count::GridWaterNs as usize] = 300_000;
+        f.game[Count::GridCellsMade as usize] = 2;
+        let line = f.line();
+        // The per-cell parts are their own entry: LoadGridCell also runs outside a grid shift.
+        assert!(
+            line.contains(
+                "grid shift parts ms: shift 3.8, load 5.1, grid cell parts ms: cell find 4.2, water 0.3, "
+            ),
+            "{line}"
+        );
+        assert!(line.contains("2 grid cells made"), "{line}");
+        // The grid array load's parts come between the shift's and the cells', in the load's order.
+        assert!(!line.contains("grid load parts"), "none counted: {line}");
+        f.game[Count::GridLoadCellsNs as usize] = 600_000;
+        f.game[Count::GridLoadHavokNs as usize] = 1_700_000;
+        f.game[Count::GridLoadPassNs as usize] = 90_000;
+        f.game[Count::GridLoadRefsNs as usize] = 2_500_000;
+        f.game[Count::GridLoad3dNs as usize] = 400_000;
+        let line = f.line();
+        assert!(
+            line.contains(
+                "load 5.1, grid load parts ms: cells 0.6, Havok drop 1.7, references 2.5, 3D update 0.4, \
+                 grid cell parts ms: cell find 4.2"
+            ),
+            "{line}"
+        );
+        // The queued Havok bodies added on main: with their count, from a tenth of a millisecond.
+        f.game[Count::HavokBodiesAdded as usize] = 100;
+        f.game[Count::HavokBodiesAddNs as usize] = 90_000;
+        assert!(!f.line().contains("Havok bodies"), "{}", f.line());
+        f.game[Count::HavokBodiesAddNs as usize] = 1_300_000;
+        let line = f.line();
+        assert!(
+            line.contains("2 grid cells made, 100 queued Havok bodies added on main in 1.3 ms, "),
+            "{line}"
+        );
         assert!(
             !line.contains("grid update"),
             "under a tenth of a ms: {line}"
@@ -1336,6 +1700,200 @@ mod tests {
         );
     }
 
+    /// The new names: the kernel lock's holder (who, in which call, working or pushed off the processor), the heap's
+    /// measured time in place of the per-block estimate, and main's timed work (cells, the hand-over, the physics,
+    /// scripts) named in the cause when it explains the frame and listed in the work.
+    #[test]
+    fn the_line_names_the_lock_holder_the_heap_time_and_main_s_timed_work() {
+        use engine_core::hitch::LockHolder;
+        let holder = LockHolder {
+            section: 0,
+            thread: 3,
+            start: 0x00aa_8430,
+            call: 0x00fd_f080,
+            call_name: "ReadFile".into(),
+            wait_ns: 286_000_000,
+            measured_ns: 285_000_000,
+            cpu_ns: Some(280_000_000),
+            site: String::new(),
+            handoffs: 0,
+            render_wait: 0,
+        };
+        let mut f = frame();
+        f.stages = Some([2.8, 0.1, 4.7, 5.7, 1.3, 0.3, 405.1, 3.0, 0.0]);
+        f.ms = 423.1;
+        f.typical = 18.1;
+        f.game[Count::KernelWaitNs as usize] = 399_100_000;
+        f.game[Count::KernelWaits as usize] = 4;
+        f.lock_holder = Some(holder.clone());
+        assert_eq!(
+            f.cause(),
+            "waited 399 ms for the platform's locks (the IO thread (game thread 3) in ReadFile, main waited 286.0 ms; \
+             it ran 280.0 of the last 285.0 ms waited (working under the lock))"
+        );
+        assert!(
+            f.line().contains("the kernel lock's holder: the IO thread"),
+            "{}",
+            f.line()
+        );
+        let off_cpu = LockHolder {
+            thread: 5,
+            start: 0x0084_0000,
+            call: 0,
+            call_name: String::new(),
+            cpu_ns: Some(3_000_000),
+            ..holder.clone()
+        };
+        assert_eq!(
+            holder_words(&off_cpu),
+            "game thread 5 (starts at 00840000) outside a platform call, main waited 286.0 ms; it ran 3.0 of the last \
+             285.0 ms waited (mostly off the processor)"
+        );
+        let unknown = LockHolder {
+            cpu_ns: None,
+            thread: 0,
+            ..holder
+        };
+        assert_eq!(
+            holder_words(&unknown),
+            "the host or main in ReadFile, main waited 286.0 ms"
+        );
+
+        // Taken outside a platform call by the port's own code (a `kernel_guard` site), and many short holds.
+        let replying = LockHolder {
+            thread: 4,
+            start: 0x00aa_8430,
+            call: 0x00fd_f2a0,
+            call_name: "D3DXCreateTextureFromFileInMemory".into(),
+            wait_ns: 18_300_000,
+            render_wait: 1,
+            ..LockHolder::default()
+        };
+        assert_eq!(
+            holder_words(&replying),
+            "the IO thread (game thread 4) in D3DXCreateTextureFromFileInMemory, main waited 18.3 ms; it was waiting for \
+             a reply from the render thread"
+        );
+        let guarded = LockHolder {
+            site: "crates/engine-core/src/mod_files.rs:120".into(),
+            handoffs: 3,
+            wait_ns: 18_300_000,
+            ..LockHolder::default()
+        };
+        assert_eq!(
+            holder_words(&guarded),
+            "the host or main in crates/engine-core/src/mod_files.rs:120, main waited 18.3 ms; not one hold: the lock \
+             changed hands 3 times while main waited"
+        );
+
+        // A game critical section's owner, named in the section wait's cause.
+        let mut f = frame();
+        f.ms = 72.0;
+        f.typical = 16.7;
+        f.stages = Some([22.0, 0.0, 2.9, 44.7, 0.4, 0.3, 0.0, 0.0, 0.1]);
+        f.game[Count::SectionWaitNs as usize] = 35_200_000;
+        f.game[Count::SectionWaits as usize] = 48;
+        f.longest_wait = (3_600_000, WaitKind::Section, 0x00b6_6520);
+        f.section_holder = Some(LockHolder {
+            section: 0x0120_0010,
+            thread: 4,
+            start: 0x00aa_8430,
+            call: 0x00fd_f2a0,
+            call_name: "D3DXCreateTextureFromFileInMemory".into(),
+            wait_ns: 3_600_000,
+            measured_ns: 3_600_000,
+            cpu_ns: Some(3_400_000),
+            site: String::new(),
+            handoffs: 0,
+            render_wait: 0,
+        });
+        assert_eq!(
+            f.cause(),
+            "waited 35 ms for a lock another game thread held (at 00b66520) (section 01200010 owned by the IO thread \
+             (game thread 4) in D3DXCreateTextureFromFileInMemory, main waited 3.6 ms; it ran 3.4 of the last 3.6 ms \
+             waited (working under the lock))"
+        );
+        assert!(
+            f.line()
+                .contains("the critical section's owner: section 01200010"),
+            "{}",
+            f.line()
+        );
+
+        // A wait for the render thread named by what its present waited on.
+        let mut f = frame();
+        f.ms = 35.2;
+        f.typical = 16.4;
+        f.stages = Some([1.6, 0.1, 3.8, 4.3, 0.4, 19.9, 2.4, 2.7, 0.1]);
+        {
+            use engine_platform::stream_hitch::Count as S;
+            f.stream[S::PresentWaitNs as usize] = 19_700_000;
+            f.stream[S::AcquireNs as usize] = 16_200_000;
+            f.stream[S::RenderSyncNs as usize] = 2_100_000;
+            f.stream[S::SwapNs as usize] = 300_000;
+        }
+        assert_eq!(
+            f.cause(),
+            "waited 20 ms for the render thread (it waited for the window's next frame 16 ms, the queue thread's last \
+             frame 2 ms)"
+        );
+        assert!(
+            f.line().contains(
+                "the render thread waited 16.2 ms for the window's frame, 2.1 for the queue thread"
+            ),
+            "{}",
+            f.line()
+        );
+
+        // The pause menu's open: the heap's measured time instead of the estimate, and the tiles made.
+        let mut f = frame();
+        f.stages = Some([1.8, 0.1, 2.2, 3.2, 0.5, 0.2, 1.8, 104.3, 0.0]);
+        f.ms = 114.0;
+        f.typical = 13.8;
+        f.game[Count::AllocsMain as usize] = 80_640;
+        f.game[Count::FreesMain as usize] = 15_963;
+        f.game[Count::HeapNsMain as usize] = 61_000_000;
+        f.game[Count::TilesMade as usize] = 2_100;
+        assert_eq!(
+            f.cause(),
+            "allocated 80,640 memory blocks (61 ms in the heap)"
+        );
+        let l = f.line();
+        assert!(l.contains("main in the heap 61.0 ms"), "{l}");
+        assert!(
+            l.contains("interface tiles 2100 made, 0 destroyed, 0 hibernating"),
+            "{l}"
+        );
+
+        // Cells attached on a running route: their time, the hand-over and the references given their 3D.
+        let mut f = frame();
+        f.ms = 21.0;
+        f.typical = 10.0;
+        f.stages = Some([12.6, 0.1, 3.2, 2.8, 0.8, 0.3, 1.0, 0.2, 0.0]);
+        f.game[Count::CellsAttached as usize] = 9;
+        f.game[Count::CellAttachNs as usize] = 6_400_000;
+        f.game[Count::LoadFinishNs as usize] = 3_100_000;
+        f.game[Count::Refs3dAttached as usize] = 140;
+        f.game[Count::HavokNsMain as usize] = 1_200_000;
+        f.game[Count::HavokSteps as usize] = 2;
+        f.game[Count::ScriptNsMain as usize] = 900_000;
+        f.game[Count::ScriptRuns as usize] = 310;
+        assert_eq!(
+            f.cause(),
+            "6 ms attaching cells; 3 ms finishing background loads on main; attached 9 cells"
+        );
+        let l = f.line();
+        for part in [
+            "cell attach 6.4 ms",
+            "140 references given their 3D",
+            "background loads on main in 3.1 ms",
+            "the physics update 1.2 ms (2 steps)",
+            "scripts 0.9 ms (310 runs)",
+        ] {
+            assert!(l.contains(part), "{part}: {l}");
+        }
+    }
+
     /// The line: the frame against the typical one, big from 16 ms, the place, the stages, only the counts that are
     /// not zero, the cause, and the lines the cap left out.
     #[test]
@@ -1376,6 +1934,126 @@ mod tests {
             "{l}"
         );
         assert!(!l.contains("stages"), "{l}");
+    }
+
+    /// A long frame tail is split into its parts in the order main runs them, with what the two task queues' drains
+    /// ran (the three kinds that took longest, the time outside the tasks, the turns spent waiting for another
+    /// thread's input) and the free-list sort's pool; the cause names the longest part. A short tail is not split.
+    #[test]
+    fn a_long_frame_tail_is_split_into_its_parts() {
+        use engine_core::stage_time::{DrainStats, Tail};
+        let mut f = frame();
+        f.ms = 14.0;
+        f.typical = 5.7;
+        f.stages = Some([1.0, 0.0, 0.8, 2.5, 0.3, 0.1, 0.8, 8.1, 0.0]);
+        let first = Some(DrainStats {
+            ns: 100_000,
+            tasks: 2,
+            kinds: [
+                (0x14, 2, 60_000),
+                (0, 0, 0),
+                (0, 0, 0),
+                (0, 0, 0),
+                (0, 0, 0),
+                (0, 0, 0),
+            ],
+            ..DrainStats::default()
+        });
+        let secondary = Some(DrainStats {
+            ns: 7_590_000,
+            tasks: 12,
+            waits: 1_500,
+            kinds: [
+                (0x07, 3, 300_000),
+                (0x22, 2, 200_000),
+                (0x14, 4, 100_000),
+                (0x0e, 1, 7_000_000),
+                (0, 0, 0),
+                (0, 0, 0),
+            ],
+            other: (2, 50_000),
+        });
+        f.tail = Some(Tail {
+            parts: [
+                Some(200_000),
+                Some(10_000),
+                Some(90_000),
+                Some(0),
+                Some(0),
+                Some(20_000),
+                Some(10_000),
+                Some(7_600_000),
+                Some(10_000),
+                Some(100_000),
+                Some(10_000),
+                Some(40_000),
+                Some(0),
+                Some(10_000),
+            ],
+            drains: [first, secondary],
+            tick: Some((37, Some(1_203))),
+        });
+        let l = f.line();
+        assert!(
+            l.contains(
+                "; frame tail parts ms: AI tasks: process lists 0.2, AI tasks: Pip-Boy and child attaches 0.0, AI \
+                 tasks: first task queue 0.1 (2 tasks: tag 0x14 x2 0.1 ms; 0.0 ms outside the tasks), AI tasks: \
+                 queued node updates 0.0, AI tasks: the rest 0.0, delayed script actions 0.0, task queue end input 0.0, task queue drain 7.6 (12 \
+                 tasks: tag 0x0e x1 7.0 ms, tag 0x07 x3 0.3 ms, tag 0x22 x2 0.2 ms and 2 more kinds; 0.0 ms outside \
+                 the tasks, 1,500 turns on an empty queue waiting for another thread's input), task queue begin input \
+                 0.0, queued menu open, support menus and prints 0.1, other steps 0.0, free-list sort 0.0 (pool 37, \
+                 1,203 in its free list), the end of OnIdle 0.0, the game's loop to the host 0.0;"
+            ),
+            "{l}"
+        );
+        assert!(
+            l.contains(
+                "likely cause: the frame tail took 8 ms (most in the task queue drain, 7.6 ms) with no one-off work \
+                 counted"
+            ),
+            "{l}"
+        );
+        // A part not passed (one processor: no task queue) is left out; a pool not in the table is said so.
+        let t = f.tail.as_mut().unwrap();
+        t.parts[6..9].fill(None);
+        t.drains[1] = None;
+        t.tick = Some((5, None));
+        let l = f.line();
+        assert!(
+            l.contains("delayed script actions 0.0, queued menu open"),
+            "{l}"
+        );
+        assert!(
+            l.contains("free-list sort 0.0 (pool 5: none in the table)"),
+            "{l}"
+        );
+        // A short tail is not split.
+        f.stages = Some([1.0, 0.0, 0.8, 2.5, 0.3, 0.1, 0.8, 1.9, 0.0]);
+        assert!(!f.line().contains("frame tail parts"));
+    }
+
+    /// A section's owner in no locked platform call is said so (it may be running game code, in a sync import or a
+    /// device call, which it does not note), and a low share of processor time as blocked or off the processor.
+    #[test]
+    fn a_section_owner_in_no_locked_call_is_said_so() {
+        let h = engine_core::hitch::LockHolder {
+            section: 0x0120_0010,
+            thread: 4,
+            start: 0,
+            call: 0,
+            call_name: String::new(),
+            wait_ns: 5_000_000,
+            measured_ns: 5_000_000,
+            cpu_ns: Some(500_000),
+            site: String::new(),
+            handoffs: 0,
+            render_wait: 0,
+        };
+        assert_eq!(
+            holder_words(&h),
+            "section 01200010 owned by game thread 4 in no locked platform call, main waited 5.0 ms; it ran 0.5 of \
+             the last 5.0 ms waited (blocked or off the processor)"
+        );
     }
 
     #[test]

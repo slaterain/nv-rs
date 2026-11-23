@@ -1678,11 +1678,15 @@ pub fn tes_load_grid_cell(
     if e.call(GET_WORLD_SPACE, &args![this]).u32() == 0 {
         return;
     }
+    // The hitch log's timers (main only; no effect on the game).
+    use engine_core::hitch::{Count as Hitch, Timed};
+    let find = Timed::main(Hitch::GridCellFindNs);
     let world_space = e.call(GET_WORLD_SPACE, &args![this]).u32();
     let mut cell = e
         .call(0x0058_5b30, &args![world_space, cell_x, cell_y])
         .u32();
     if cell == 0 {
+        engine_core::hitch::one(Hitch::GridCellsMade);
         let world_space = e.call(GET_WORLD_SPACE, &args![this]).u32();
         let data_handler: u32 = e.global(DATA_HANDLER);
         cell = e
@@ -1695,6 +1699,7 @@ pub fn tes_load_grid_cell(
         e.call(0x0058_8150, &args![world_space, cell]);
         e.call(0x0055_1440, &args![cell, 1u32]);
     }
+    drop(find);
     let grid_cells = e.get(this, TES::pGridCellA);
     if e.call(0x004b_a5a0, &args![grid_cells, array_x, array_y])
         .bool()
@@ -1720,6 +1725,7 @@ pub fn tes_load_grid_cell(
         GRID_CELL_ARRAY_ATTACH_TO_WORLD,
         &args![grid_cells, root, array_x, array_y],
     );
+    let land_timed = Timed::main(Hitch::GridLandNs);
     let land = e.call(0x0054_6fb0, &args![cell]).u32();
     if !e.call(0x0053_5b90, &args![land, 1u32]).bool() {
         e.call(0x0053_a090, &args![land, 0u32, 0u32]);
@@ -1732,12 +1738,16 @@ pub fn tes_load_grid_cell(
         // `FCOMPP`: ordered and lowest land height below the water height.
         fn_00451250(e, Ptr::new(cell), (lowest < water_height) as u8);
     });
+    drop(land_timed);
+    let water_timed = Timed::main(Hitch::GridWaterNs);
     if setting_byte(e, SETTING_USE_WATER) != 0
         && fn_004518e0(e, Ptr::new(cell))
         && fn_00451cd0(e, Ptr::new(cell)) == 0
     {
         e.call(0x0049_c860, &args![cell]);
     }
+    drop(water_timed);
+    let _land_borders = Timed::main(Hitch::GridLandNs);
     let show_borders = e.mem.u8(this.addr() + TES::bShowLANDborders.off);
     e.call(0x0053_fa40, &args![land, show_borders]);
 }
@@ -2817,6 +2827,9 @@ pub fn tes_grid_array_load(e: &mut Engine, this: Ptr<TES>) {
             let world = fn_00451010(e);
             e.call(HAVOK_WORLD_ADD_COUNT_18, &args![world]);
         }
+        // The hitch log's timers (main only; no effect on the game).
+        use engine_core::hitch::{Count as Hitch, Timed};
+        let cells_timed = Timed::main(Hitch::GridLoadCellsNs);
         let mut x = 0u32;
         while x < grids_to_load(e) {
             let mut y = 0u32;
@@ -2872,10 +2885,14 @@ pub fn tes_grid_array_load(e: &mut Engine, this: Ptr<TES>) {
             }
             x += 1;
         }
+        drop(cells_timed);
+        let havok_timed = Timed::main(Hitch::GridLoadHavokNs);
         if fn_00451010(e) != 0 {
             let world = fn_00451010(e);
             e.call(HAVOK_WORLD_DROP_COUNT_18, &args![world, 0u32]);
         }
+        drop(havok_timed);
+        let pass_timed = Timed::main(Hitch::GridLoadPassNs);
         let save_load: u32 = e.global(SAVE_LOAD_GAME);
         fn_004534f0(e, save_load, 0);
         if e.call(0x0087_27b0, &args![save_load]).bool() {
@@ -2892,6 +2909,7 @@ pub fn tes_grid_array_load(e: &mut Engine, this: Ptr<TES>) {
         if !e.call(0x0042_ce10, &args![script_context]).bool() {
             e.call(0x0084_92b0, &args![script_context, 0u32]);
         }
+        drop(pass_timed);
         if fn_00451010(e) != 0 {
             let world = fn_00451010(e);
             e.call(HAVOK_WORLD_ADD_COUNT_18, &args![world]);
@@ -2917,11 +2935,14 @@ pub fn tes_grid_array_load(e: &mut Engine, this: Ptr<TES>) {
                         .u32();
                     if cell != 0 {
                         if fn_00450fd0(e, Ptr::new(cell)) == 5 {
+                            let refs_timed = Timed::main(Hitch::GridLoadRefsNs);
                             e.call(
                                 0x0054_bcf0,
                                 &args![cell, (loading_menu_visible == 0) as u32],
                             );
                             e.call(TES_ADD_TO_BUFFER, &args![this, cell]);
+                            drop(refs_timed);
+                            let _update_timed = Timed::main(Hitch::GridLoad3dNs);
                             let node = e.call(CELL_LOAD_3D, &args![cell]).u32();
                             e.call(NODE_UPDATE_PROPERTIES, &args![node]);
                             if fn_00453470(e, Ptr::new(node)) == 0 {
@@ -2942,10 +2963,12 @@ pub fn tes_grid_array_load(e: &mut Engine, this: Ptr<TES>) {
             }
             x += 1;
         }
+        let havok_timed = Timed::main(Hitch::GridLoadHavokNs);
         if fn_00451010(e) != 0 {
             let world = fn_00451010(e);
             e.call(HAVOK_WORLD_DROP_COUNT_18, &args![world, 0u32]);
         }
+        drop(havok_timed);
         fn_00451570(e, 0);
         fn_00451520(e, 1);
         e.call(SCOPE_GUARD_DTOR, &args![guard]);

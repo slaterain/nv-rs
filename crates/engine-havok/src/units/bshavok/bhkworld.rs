@@ -1142,6 +1142,15 @@ pub fn fn_00c674d0(e: &mut Engine, this: Ptr, entities: Ptr, count: u32) {
         leave_scope(e, scope);
         return;
     }
+    // The hitch log's timer and count (main only; no effect on the game): the queued bodies added to the world as
+    // one batch, their broad-phase inserts included.
+    let _timed = engine_core::hitch::Timed::main(engine_core::hitch::Count::HavokBodiesAddNs);
+    if !engine_core::real_threads::on_other_game_thread() {
+        engine_core::hitch::add(
+            engine_core::hitch::Count::HavokBodiesAdded,
+            u64::from(count),
+        );
+    }
     e.call(0x00c9_4bd0, &args![world, entities, count, 0u32]);
     let mut island_split = false;
     let tolerance = if count != 0 {
@@ -3521,6 +3530,7 @@ pub fn fn_00c6aca0(e: &mut Engine, this: Ptr<BhkWorld>) {
 /// stepped. Finally the remaining entity removals are flushed, a scheduled
 /// visual debugger is created (`012677cd`) and the updating byte is cleared.
 pub fn bhk_world_update(e: &mut Engine, this: Ptr<BhkWorld>) -> bool {
+    let _time = engine_core::hitch::span(engine_core::hitch::Count::HavokNsMain);
     e.set_global(GLOBAL_WORLD_FLOAT, 0.0f32);
     e.set_global(GLOBAL_UPDATING, 1u8);
     e.set_global(GLOBAL_WORLD_INTEGER, 0u32);
