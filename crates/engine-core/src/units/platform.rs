@@ -2494,15 +2494,16 @@ fn set_thread_priority(e: &mut Engine, handle: u32, _priority: i32) -> i32 {
 }
 
 // Platform: replaces KERNEL32.DLL SetThreadIdealProcessor (import)
-/// Accepts any ideal processor for a thread handle or the current thread and answers 0, the
-/// processor a plain machine's new thread has as its ideal one (the threads are not pinned here, so
-/// it has no effect); `(DWORD)-1`, Windows' failure, for another handle. Havok's worker threads
-/// (`hkCpuJobThreadPool`'s thread function `00d2cfb0`) set it by their thread number; the game never
-/// reads the answer.
+/// Accepts any ideal processor for a thread handle or the current thread and answers 0, not the
+/// previous ideal processor Windows would report (the threads are not pinned here, so it has no
+/// effect; the only caller discards the answer). Another handle fails as on Windows: `(DWORD)-1`
+/// with `ERROR_INVALID_HANDLE`. Havok's worker threads (`hkCpuJobThreadPool`'s thread function
+/// `00d2cfb0`) set it by their thread number.
 fn set_thread_ideal_processor(e: &mut Engine, handle: u32, _processor: u32) -> u32 {
     if set_thread_priority(e, handle, 0) != 0 {
         0
     } else {
+        e.kernel.last_error = ERROR_INVALID_HANDLE;
         u32::MAX
     }
 }
@@ -3194,10 +3195,12 @@ mod tests {
             call(&mut e, SET_THREAD_IDEAL_PROCESSOR, &[CURRENT_THREAD, 1]),
             0
         );
+        e.kernel.last_error = 0;
         assert_eq!(
             call(&mut e, SET_THREAD_IDEAL_PROCESSOR, &[0x99, 0]),
             u32::MAX
         );
+        assert_eq!(e.kernel.last_error, ERROR_INVALID_HANDLE);
         assert_eq!(call(&mut e, RESUME_THREAD, &[CURRENT_THREAD]), 0);
         assert_eq!(call(&mut e, RESUME_THREAD, &[0x99]), 0xffff_ffff);
         // A suspended thread does not run, so it is not signalled.

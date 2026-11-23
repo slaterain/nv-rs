@@ -74,10 +74,32 @@ const GRAVITY_GLOBAL: u32 = 0x011c_a158;
 const BROAD_PHASE_SIZE: f32 = 3250.0;
 
 /// A body's motion in `hkpRigidBody`: 0x120 bytes at +0xE0 (the transform, the swept transform,
-/// the velocities, the deactivation counters); the position at +0x120.
+/// the velocities, the deactivation counters): the rotation's three columns of four floats at
+/// +0xF0, the position at +0x120, the linear and angular velocities at +0x1B0 and +0x1C0.
 const MOTION: u32 = 0xe0;
 const MOTION_SIZE: u32 = 0x120;
+const ROTATION: u32 = 0xf0;
 const POSITION: u32 = 0x120;
+const LINEAR_VELOCITY: u32 = 0x1b0;
+const ANGULAR_VELOCITY: u32 = 0x1c0;
+/// An entity's simulation island (+0xCC) and the world's active islands (array +0x28, count +0x2C):
+/// a body whose island is not among them is deactivated (asleep).
+const ENTITY_ISLAND: u32 = 0xcc;
+const ACTIVE_ISLANDS: u32 = 0x28;
+
+/// `bhkWorld`'s update-mode setter (`00c661d0`, the `iSimType:HAVOK` setting) and the global it sets
+/// (the simulation type every new world gets).
+const SET_UPDATE_MODE: u32 = 0x00c6_61d0;
+const UPDATE_MODE: u32 = 0x011a_fe5c;
+
+/// Where the boxes come to rest: half extent 10 plus the convex radius 0.05 above the slab's top
+/// (0, plus its own radius 0.05) for the first layer (bodies 1 to 16), and a box higher again for
+/// the second (17 to 32); how far a resting box may be from that, and the speeds below which an
+/// awake box counts as resting (Havok units a second; radians a second).
+const LAYER_HEIGHTS: [f32; 2] = [10.1, 30.2];
+const HEIGHT_SLACK: f32 = 0.5;
+const REST_LINEAR: f32 = 0.5;
+const REST_ANGULAR: f32 = 0.05;
 
 /// The simulation types (`hkpWorldCinfo::SimulationType`): 2 is what the game ships
 /// (`iSimType:HAVOK` 1), 3 the multithreaded step.
@@ -278,6 +300,13 @@ fn scene(simulation: u8, workers: u32, n: u32, layers: u32) -> Scene {
     if e.mem.u32(NI_STREAM_LOADERS) == 0 {
         e.register(NI_STREAM_REGISTER_LOADER, |_, _| Ret::default());
     }
+    // A player's `iSimType` cannot reach the multithreaded step: the port keeps 4 continuous (the
+    // exe gives it type 3). The last setting leaves what the game ships (1: continuous); the worlds
+    // here set their type themselves.
+    for (setting, simulation_type) in [(4, CONTINUOUS), (0, 1), (1, CONTINUOUS)] {
+        e.call(SET_UPDATE_MODE, &[setting]);
+        assert_eq!(e.mem.u8(UPDATE_MODE), simulation_type, "iSimType {setting}");
+    }
     let world = world(&mut e, simulation);
     let system = e.mem.u32(MT_SYSTEM);
     assert_ne!(system, 0, "no multithreaded system");
@@ -318,12 +347,74 @@ fn step(e: &mut Engine, world: u32) {
     }
 }
 
-/// What a run leaves: every body's motion bytes after each round, and each step's contacts (the
-/// entities as body numbers, in the order they were added).
+/// What a run leaves: every body's motion bytes after each round, each step's contacts (the
+/// entities as body numbers, in the order they were added), and at its end every body's position
+/// and whether it is still awake.
 struct Run {
     motions: Vec<Vec<Vec<u8>>>,
     contacts: Vec<Vec<Contact>>,
     positions: Vec<[f32; 3]>,
+    awake: Vec<bool>,
+}
+
+/// Whether `body`'s simulation island is one of the world's active islands.
+fn is_awake(e: &Engine, world: u32, body: u32) -> bool {
+    let island = e.mem.u32(body + ENTITY_ISLAND);
+    let islands = e.mem.u32(world + ACTIVE_ISLANDS);
+    let count = e.mem.u32(world + ACTIVE_ISLANDS + 4);
+    (0..count).any(|i| e.mem.u32(islands + 4 * i) == island)
+}
+
+/// Four float lanes of a motion block (`at` a body offset), from the bytes a round kept.
+fn lanes(motion: &[u8], at: u32) -> [f32; 4] {
+    let start = (at - MOTION) as usize;
+    std::array::from_fn(|i| {
+        f32::from_le_bytes(motion[start + 4 * i..start + 4 * i + 4].try_into().unwrap())
+    })
+}
+
+/// The length of a vector's first three lanes.
+fn length(v: [f32; 4]) -> f32 {
+    (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+}
+
+/// A difference that a NaN cannot hide: NaN on either side is an infinite gap.
+fn gap(a: f32, b: f32) -> f32 {
+    let d = (a - b).abs();
+    if d.is_nan() {
+        f32::INFINITY
+    } else {
+        d
+    }
+}
+
+/// Holds what "at rest on the slab" means for a run's end: every box at its layer's height
+/// (within [`HEIGHT_SLACK`]), and every box asleep or slower than [`REST_LINEAR`] and
+/// [`REST_ANGULAR`] in the last round. Prints the heights and the awake boxes.
+fn assert_at_rest(name: &str, run: &Run) {
+    let last = run.motions.last().expect("a round");
+    let mut heights = [f32::MAX, f32::MIN, f32::MAX, f32::MIN];
+    for (i, p) in run.positions.iter().enumerate().skip(1) {
+        let layer = (i - 1) / 16;
+        let want = LAYER_HEIGHTS[layer];
+        heights[2 * layer] = heights[2 * layer].min(p[2]);
+        heights[2 * layer + 1] = heights[2 * layer + 1].max(p[2]);
+        assert!(
+            gap(p[2], want) <= HEIGHT_SLACK,
+            "{name}: box {i} rests at {p:?}, not at its layer's height {want}"
+        );
+        let linear = length(lanes(&last[i], LINEAR_VELOCITY));
+        let angular = length(lanes(&last[i], ANGULAR_VELOCITY));
+        assert!(
+            !run.awake[i] || (linear < REST_LINEAR && angular < REST_ANGULAR),
+            "{name}: box {i} is awake and moving ({linear} units/s, {angular} rad/s)"
+        );
+    }
+    let awake: Vec<usize> = (1..run.awake.len()).filter(|&i| run.awake[i]).collect();
+    println!(
+        "{name}: first layer at {:.3}..{:.3}, second at {:.3}..{:.3}; awake boxes at the end: {awake:?}",
+        heights[0], heights[1], heights[2], heights[3]
+    );
 }
 
 fn run(simulation: u8, workers: u32) -> Run {
@@ -361,17 +452,20 @@ fn run(simulation: u8, workers: u32) -> Run {
         .iter()
         .map(|&b| [0, 4, 8].map(|lane| e.mem.f32(b + POSITION + lane)))
         .collect();
+    let awake = bodies.iter().map(|&b| is_awake(&e, world, b)).collect();
     // The worker threads stay parked on the thread host; the engine is not torn down under them.
     std::mem::forget(e);
     Run {
         motions,
         contacts,
         positions,
+        awake,
     }
 }
 
-/// The largest difference of a position lane between two runs' bodies after each round.
-fn largest_position_gap(a: &Run, b: &Run) -> Vec<f32> {
+/// The largest difference of the first three lanes of the vectors at `offsets` between two runs'
+/// bodies after each round (NaN counts as an infinite gap).
+fn largest_gap(a: &Run, b: &Run, offsets: &[u32]) -> Vec<f32> {
     a.motions
         .iter()
         .zip(&b.motions)
@@ -379,10 +473,9 @@ fn largest_position_gap(a: &Run, b: &Run) -> Vec<f32> {
             x.iter()
                 .zip(y)
                 .flat_map(|(p, q)| {
-                    (0..3).map(move |lane| {
-                        let at = (POSITION - MOTION) as usize + 4 * lane;
-                        let f = |m: &[u8]| f32::from_le_bytes(m[at..at + 4].try_into().unwrap());
-                        (f(p) - f(q)).abs()
+                    offsets.iter().flat_map(move |&at| {
+                        let (p, q) = (lanes(p, at), lanes(q, at));
+                        (0..3).map(move |lane| gap(p[lane], q[lane]))
                     })
                 })
                 .fold(0.0, f32::max)
@@ -404,12 +497,7 @@ fn the_boxes_fall_and_come_to_rest_on_the_ground() {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let run = run(CONTINUOUS, 1);
-    for (i, p) in run.positions.iter().enumerate().skip(1) {
-        assert!(
-            (5.0..120.0).contains(&p[2]),
-            "box {i} at {p:?}: fell through or flew"
-        );
-    }
+    assert_at_rest("continuous", &run);
     let total: usize = run.contacts.iter().map(Vec::len).sum();
     println!(
         "continuous: {total} contact points added over {} steps",
@@ -426,7 +514,12 @@ fn the_multithreaded_step_leaves_the_bodies_within_a_centimetre_of_the_continuou
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let single = run(CONTINUOUS, 1);
     let multi = run(MULTITHREADED, 3);
-    let gaps = largest_position_gap(&single, &multi);
+    let gaps = largest_gap(&single, &multi, &[POSITION]);
+    let turns = largest_gap(
+        &single,
+        &multi,
+        &[ROTATION, ROTATION + 0x10, ROTATION + 0x20],
+    );
     let differing: Vec<usize> = single
         .motions
         .iter()
@@ -434,6 +527,7 @@ fn the_multithreaded_step_leaves_the_bodies_within_a_centimetre_of_the_continuou
         .map(|(x, y)| x.iter().zip(y).filter(|(p, q)| p != q).count())
         .collect();
     println!("largest position gap after each 20 steps: {gaps:?}");
+    println!("largest rotation-matrix entry gap after each 20 steps: {turns:?}");
     println!("bodies whose motion bytes differ after each 20 steps: {differing:?}");
     let mut threads: BTreeMap<u32, usize> = BTreeMap::new();
     for c in multi.contacts.iter().flatten() {
@@ -480,10 +574,19 @@ fn the_multithreaded_step_leaves_the_bodies_within_a_centimetre_of_the_continuou
         threads.len() > 1,
         "every contact point was added on the stepping thread: {threads:?}"
     );
-    for (i, p) in multi.positions.iter().enumerate().skip(1) {
+    // Both come to rest on the slab, the same boxes asleep, turned alike: a rotation-matrix entry
+    // within 0.02 (about a degree).
+    assert_at_rest("continuous", &single);
+    assert_at_rest("multithreaded", &multi);
+    assert_eq!(
+        single.awake, multi.awake,
+        "the two steps leave different boxes awake"
+    );
+    for (round, turn) in turns.iter().enumerate() {
         assert!(
-            (5.0..120.0).contains(&p[2]),
-            "box {i} at {p:?}: fell through or flew"
+            *turn < 0.02,
+            "after {} steps the boxes are turned {turn} apart",
+            (round + 1) * 20
         );
     }
 }
