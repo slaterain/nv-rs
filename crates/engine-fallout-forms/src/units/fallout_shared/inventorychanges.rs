@@ -4892,6 +4892,61 @@ fn remove_item_hotkey(e: &mut Engine, drop_flag: u8, extra: u32, target: u32, co
     }
 }
 
+/// `004c37d0`'s "can't remove worn item" message (`sCantRemoveWornItem`, `004c69f0` on
+/// `0x11D31F8`, then `QueueUIMessage` at `0x4C5640`); with lStewieAl's Tweaks' S0128
+/// (`OnRemoveWornItemMessageHook`) the message is queued only when `actor` is the player.
+fn no_unequip_message(e: &mut Engine, actor: u32) {
+    let text = fn_004c69f0(e, Ptr::new(NO_UNEQUIP_MESSAGE_OBJECT));
+    let duration = e.global::<f32>(MESSAGE_DURATION);
+    let shown = !e.stewie(engine_core::extend::stewie::NO_UNEQUIP_MESSAGE_PLAYER_ONLY)
+        || actor == e.global::<u32>(PLAYER_GLOBAL);
+    if shown {
+        e.call(
+            SHOW_MESSAGE,
+            &args![text, 0u32, MESSAGE_ICON, 0u32, duration, 0u32],
+        );
+    }
+}
+
+#[cfg(test)]
+mod s0128_tests {
+    use super::*;
+
+    /// lStewieAl's Tweaks' S0128: off, the message for anyone; on, only for the player.
+    #[test]
+    fn s0128_the_no_unequip_message_is_the_player_s_only() {
+        let run = |row: bool, actor: u32| {
+            let mut e = Engine::new();
+            e.map(0x0101_6000, 0x1000);
+            e.map(0x011d_e000, 0x1000);
+            e.set_global(PLAYER_GLOBAL, 0x7000u32);
+            e.set_global(MESSAGE_DURATION, 2.0f32);
+            e.register(STRING_OBJECT_TO_CHARS, |_, _| Ret {
+                eax: 0x5150,
+                ..Ret::default()
+            });
+            e.register(SHOW_MESSAGE, |_, _| Ret::default());
+            e.set_stewie(
+                engine_core::extend::stewie::NO_UNEQUIP_MESSAGE_PLAYER_ONLY,
+                row,
+            );
+            e.call_log = Some(vec![]);
+            no_unequip_message(&mut e, actor);
+            e.call_log
+                .take()
+                .unwrap()
+                .iter()
+                .filter(|c| c.0 == SHOW_MESSAGE)
+                .map(|c| c.1.clone())
+                .collect::<Vec<_>>()
+        };
+        let shown = vec![vec![0x5150, 0, MESSAGE_ICON, 0, 2.0f32.to_bits(), 0]];
+        assert_eq!(run(false, 0x8000), shown);
+        assert_eq!(run(true, 0x7000), shown);
+        assert!(run(true, 0x8000).is_empty());
+    }
+}
+
 // Translated from 004c37d0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Takes `count` of `form` out of the changes of `this` (the removal that
 /// drops, transfers or just discards items); returns the reference of the
@@ -5580,12 +5635,7 @@ pub fn fn_004c37d0(
                                         target, position, rotation, 1, 0, 0,
                                     );
                                 } else {
-                                    let text = fn_004c69f0(e, Ptr::new(NO_UNEQUIP_MESSAGE_OBJECT));
-                                    let duration = e.global::<f32>(MESSAGE_DURATION);
-                                    e.call(
-                                        SHOW_MESSAGE,
-                                        &args![text, 0u32, MESSAGE_ICON, 0u32, duration, 0u32],
-                                    );
+                                    no_unequip_message(e, actor);
                                 }
                                 delete_item_change(e, temp);
                                 return result;

@@ -151,6 +151,13 @@ impl FrameLog {
     /// One frame's line; `stages` the stage marks' take of the frame (the host takes them once a frame, for this
     /// log and the hitch log).
     pub fn record(&mut self, e: &mut Engine, stages: Option<&[(f64, u64)]>) {
+        self.record_frame(e, stages);
+        // Its time is a part of the host's time between two frames (the hitch log's split).
+        engine_core::stage_time::host_mark(engine_core::stage_time::HostMark::FrameLog);
+    }
+
+    /// [`FrameLog::record`]'s work.
+    fn record_frame(&mut self, e: &mut Engine, stages: Option<&[(f64, u64)]>) {
         let us = e.clock_now_us();
         let delta = e.mem.f32(MAIN_TIMER_DELTA);
         let count = e.mem.u32(STEP_COUNT);

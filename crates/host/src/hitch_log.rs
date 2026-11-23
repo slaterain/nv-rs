@@ -229,6 +229,9 @@ pub struct Frame {
     /// The game's frame tail split at its marks (`engine_core::stage_time::take_tail`): printed when the tail is
     /// [`TAIL_SPLIT_MS`] or more.
     pub tail: Option<engine_core::stage_time::Tail>,
+    /// The host's time between the last frame and this one split at its marks (`engine_core::stage_time::take_host_gap`):
+    /// printed when that time is [`TAIL_SPLIT_MS`] or more.
+    pub host_gap: Option<engine_core::stage_time::HostGap>,
     pub left_out: u64,
     /// The longest of those left out (ms).
     pub longest_left_out: f64,
@@ -249,6 +252,8 @@ const STAGE_NAMES: [&str; 10] = [
 
 /// The index of the frame tail in [`STAGE_NAMES`].
 const TAIL_STAGE: usize = 7;
+/// The index of the host's time between frames in [`STAGE_NAMES`].
+const HOST_STAGE: usize = 8;
 /// A frame tail at least this long (ms) is split into its parts in the line.
 pub const TAIL_SPLIT_MS: f64 = 2.0;
 
@@ -307,6 +312,40 @@ fn tail_words(t: &engine_core::stage_time::Tail) -> String {
         );
     }
     out
+}
+
+/// A window message of the game's by its id: the ones the platform layer posts (`engine_platform::window`) by name.
+fn message_name(id: u32) -> String {
+    match id {
+        0x0006 => "WM_ACTIVATE".into(),
+        0x0012 => "WM_QUIT".into(),
+        0x0200 => "WM_MOUSEMOVE".into(),
+        _ => format!("message {id:#06x}"),
+    }
+}
+
+/// The host's time between two of main's frames in words (`engine_core::stage_time::HostGap`, the order its parts
+/// come): each part's time; for the last, the game's window messages main ran in it and the longest of them.
+fn host_gap_words(g: &engine_core::stage_time::HostGap) -> String {
+    use engine_core::stage_time::{HOST_MARKS, HOST_PART_NAMES};
+    let mut parts = Vec::new();
+    for (i, p) in g.parts.iter().enumerate() {
+        let Some(ns) = p else { continue };
+        let extra = if i == HOST_MARKS && g.messages > 0 {
+            let longest = g.longest_message.map_or_else(String::new, |(id, ns)| {
+                format!(", the longest {} {:.1} ms", message_name(id), ms(ns))
+            });
+            format!(
+                " ({} messages run by the game's window procedure in {:.1} ms{longest})",
+                g.messages,
+                ms(g.messages_ns)
+            )
+        } else {
+            String::new()
+        };
+        parts.push(format!("{} {:.1}{extra}", HOST_PART_NAMES[i], ms(*ns)));
+    }
+    parts.join(", ")
 }
 
 /// One frame's drains of a packed task queue in words: the tasks, the three kinds (the record's tag) that took
@@ -816,6 +855,32 @@ impl Frame {
                             ms(ns)
                         )
                     }
+                    // The host's time between frames: its longest part, and for the game's window messages the
+                    // longest message.
+                    (HOST_STAGE, _) => match self
+                        .host_gap
+                        .as_ref()
+                        .and_then(|g| g.longest().map(|l| (g, l)))
+                    {
+                        Some((g, (p, ns))) => {
+                            let message = (p == engine_core::stage_time::HOST_MARKS)
+                                .then_some(g.longest_message)
+                                .flatten()
+                                .map_or_else(String::new, |(id, ns)| {
+                                    format!(
+                                        "; the longest message {} {:.1} ms",
+                                        message_name(id),
+                                        ms(ns)
+                                    )
+                                });
+                            format!(
+                                " (most in {}, {:.1} ms{message})",
+                                engine_core::stage_time::HOST_PART_NAMES[p],
+                                ms(ns)
+                            )
+                        }
+                        None => String::new(),
+                    },
                     _ => String::new(),
                 };
                 out.push(if i == 9 {
@@ -859,6 +924,11 @@ impl Frame {
             if st[TAIL_STAGE] >= TAIL_SPLIT_MS {
                 if let Some(t) = &self.tail {
                     l += &format!("; frame tail parts ms: {}", tail_words(t));
+                }
+            }
+            if st[HOST_STAGE] >= TAIL_SPLIT_MS {
+                if let Some(g) = &self.host_gap {
+                    l += &format!("; host between frames parts ms: {}", host_gap_words(g));
                 }
             }
         }
@@ -1275,6 +1345,13 @@ impl HitchLog {
     /// counters and guest memory only: no guest code runs here, so a recorded or repeatable run is the same with the
     /// log on or off.
     pub fn record(&mut self, e: &mut Engine, stages: Option<&[(f64, u64)]>) {
+        self.record_frame(e, stages);
+        // The record's own time (its line built and written) is the first part of the host's time to the next frame.
+        engine_core::stage_time::host_mark(engine_core::stage_time::HostMark::HitchLog);
+    }
+
+    /// [`HitchLog::record`]'s work.
+    fn record_frame(&mut self, e: &mut Engine, stages: Option<&[(f64, u64)]>) {
         let now = Instant::now();
         let frame_ms = self.last.map(|t| now.duration_since(t).as_secs_f64() * 1e3);
         self.last = Some(now);
@@ -1302,6 +1379,8 @@ impl HitchLog {
         let longest_task = engine_core::hitch::take_longest_task();
         // Taken every frame (its drains are the frame's), after `take_stages` passed the host's mark.
         let tail = engine_core::stage_time::take_tail();
+        // The host's time that ended at this frame's `OnIdle`, taken every frame too.
+        let host_gap = engine_core::stage_time::take_host_gap();
         let screen = crate::uncap::screen(e);
         let presents = engine_platform::d3d9real::present_count(e).unwrap_or(0);
         let shown = Shown {
@@ -1364,6 +1443,7 @@ impl HitchLog {
             hibernating,
             longest_task,
             tail,
+            host_gap,
             left_out,
             longest_left_out,
         };
@@ -1727,6 +1807,57 @@ mod tests {
             f.cause(),
             "the host between frames took 24 ms with no one-off work counted"
         );
+        // Split at its marks (the frame log and a report not passed): the longest part named, and for the game's
+        // window messages the longest message; the parts in the line.
+        let mut parts = [None; engine_core::stage_time::HOST_PARTS];
+        parts[0] = Some(300_000);
+        parts[3] = Some(100_000);
+        parts[4] = Some(200_000);
+        parts[5] = Some(10_000);
+        parts[6] = Some(23_540_000);
+        f.host_gap = Some(engine_core::stage_time::HostGap {
+            parts,
+            messages: 2,
+            messages_ns: 23_500_000,
+            longest_message: Some((6, 23_400_000)),
+        });
+        assert_eq!(
+            f.cause(),
+            "the host between frames took 24 ms (most in the game's window messages and its loop to OnIdle, 23.5 ms; \
+             the longest message WM_ACTIVATE 23.4 ms) with no one-off work counted"
+        );
+        let line = f.line();
+        assert!(
+            line.contains(
+                "; host between frames parts ms: the hitch log's line 0.3, the host's own steps and the hand-over \
+                 0.1, main's thread waking 0.2, main taking the platform lock back 0.0, the game's window messages \
+                 and its loop to OnIdle 23.5 (2 messages run by the game's window procedure in 23.5 ms, the longest \
+                 WM_ACTIVATE 23.4 ms)"
+            ),
+            "{line}"
+        );
+        // Main's thread waking the longest: named without a message.
+        parts[4] = Some(23_000_000);
+        parts[6] = Some(500_000);
+        f.host_gap = Some(engine_core::stage_time::HostGap {
+            parts,
+            messages: 0,
+            messages_ns: 0,
+            longest_message: None,
+        });
+        assert_eq!(
+            f.cause(),
+            "the host between frames took 24 ms (most in main's thread waking, 23.0 ms) with no one-off work counted"
+        );
+        assert!(
+            f.line()
+                .contains("the game's window messages and its loop to OnIdle 0.5"),
+            "{}",
+            f.line()
+        );
+        // Under the split's threshold: no parts in the line.
+        f.stages = Some([2.0, 0.0, 1.0, 1.0, 0.5, 0.2, 0.3, 0.5, 1.9]);
+        assert!(!f.line().contains("host between frames parts"));
 
         let mut f = frame();
         f.game[Count::ReadNsMain as usize] = 30_000_000;
