@@ -216,6 +216,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a0_c6c0, tile::map_set_at(Ptr, u32, u32)),
         entry!(0x00a0_a130, tile::add_reaction(Ptr, Ptr)),
         entry!(0x00a0_9200, tile::clear_actions(Ptr)),
+        entry!(0x00a0_9330, tile::value_destructor(Ptr)),
         // The tiles' trait getters and setters the menus and the HUD call on every update.
         entry!(0x00a0_44f0, tile::lock()),
         entry!(0x00a0_4500, tile::unlock()),

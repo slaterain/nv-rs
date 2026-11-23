@@ -312,11 +312,19 @@ pub fn fn_008705d0(e: &mut Engine, this: Ptr) {
 /// the object in `0x011d8a80`; `DebugText::Instance(1)` and its
 /// `HandleQueuedPrints` (Xbox PDB).
 pub fn fn_00870610(e: &mut Engine, _this: Ptr) {
+    use stage_time::{tail_mark, TailMark};
     e.call(0x005a_a720, &args![]);
+    // The hitch log's split of the frame tail: a clock read at each mark, none with the log off.
+    tail_mark(TailMark::DelayedScripts);
     if setting_dword(e, SETTING_THREADS) > 1 {
-        for method in [0x0087_a710, 0x0087_a850, 0x0087_a6f0] {
+        for (method, mark) in [
+            (0x0087_a710, TailMark::QueueEndInput),
+            (0x0087_a850, TailMark::QueueDrain),
+            (0x0087_a6f0, TailMark::QueueBeginInput),
+        ] {
             let object = e.call(GET_GLOBAL_011DF1A8, &args![]).u32();
             e.call(method, &args![object]);
+            tail_mark(mark);
         }
     }
     e.call(0x0070_94f0, &args![]);

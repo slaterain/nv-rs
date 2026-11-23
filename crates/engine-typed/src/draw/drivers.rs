@@ -13,9 +13,6 @@ use engine_core::{args, typed_call, Engine};
 
 /// The render mode's preparation (`00b4f450`, `cdecl(mode)`).
 const RENDER_MODE_PREPARE: u32 = 0x00b4_f450;
-/// Whether a batch renderer's active list holds a pass type in a range (`00b98970`,
-/// `thiscall(renderer, low, high)`).
-const HAS_LISTED_PASS: u32 = 0x00b9_8970;
 /// The accumulator's slots: the camera (0x8c), the draw (0xa8), the finish (0xac).
 const SLOT_SET_CAMERA: u32 = 0x8c;
 const SLOT_DRAW: u32 = 0xa8;
@@ -509,14 +506,11 @@ pub fn has_listed_pass(e: &mut Engine, acc: Ptr<BSShaderAccumulator>, low: u32, 
     let mut i = 0u32;
     while i < packet::renderer_count(e, acc) && !found {
         let renderer = packet::renderer(e, acc, i);
-        let words = |e: &Engine| {
-            let mut words = Vec::new();
-            super::detach::candidates(e, renderer.addr(), &mut words);
-            words
-        };
-        found = super::detach::suspended_for(e, words, |e| {
-            e.call(HAS_LISTED_PASS, &args![renderer, low, high]).u8()
-        }) != 0;
+        found = typed_call!(
+            FAMILY,
+            0x00b9_8970,
+            super::lists::lists_pass_in(e, renderer, low, high)
+        );
         i += 1;
     }
     found
