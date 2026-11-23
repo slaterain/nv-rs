@@ -3025,7 +3025,7 @@ fn count_beam_hit(e: &mut Engine, this: Ptr<Projectile>, data: Ptr<ImpactData>) 
         // takes no round here and counts no shot (on to `0x9BFD35`); the player's update does both
         // (S0130.05). Tweaks drops the exe's null test of the shooter; the port keeps it (a guard
         // against a crash only).
-        if !(impact_row && shooter == e.global::<u32>(PLAYER)) {
+        if !impact_row || shooter != e.global::<u32>(PLAYER) {
             if shooter != 0 {
                 e.vcall(shooter, 0x3F0, &args![1u32]);
             }
