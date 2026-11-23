@@ -6930,92 +6930,71 @@ fn sorted_draws_with_the_same_masked_channels_are_held() {
 }
 
 /// Sorted, a draw over the same vertices as a held draw of another key has the held draws drawn
-/// first; the draws held after it still keep to its colour channels. Each case makes the later
-/// draw's pipeline first (on another column), so a sort by pipeline would put it ahead:
-/// - colour A2 (another depth test than A1 over the same strip) at column 1, then depth-only D in
-///   front of it: A2's red must show;
-/// - depth-only D2 (another depth test than D1 over the same strip) at column 1, then colour A
-///   behind it: A must not show.
+/// first; the draws held after it still keep to its colour channels. Two cases in one run, so
+/// that whichever of the two pipelines a sort puts first, one of them would show a moved draw:
+/// - column 1: colour A1 (LESSEQUAL, at column 3) then A2 (LESS) over the same strip, then
+///   depth-only D in front of A2: A2's red must show;
+/// - column 5: depth-only D1 (LESSEQUAL) then D2 (LESS) over the same strip, then colour A behind
+///   them: A must not show.
 #[test]
 fn sorted_draws_keep_their_channels_after_a_draw_over_held_vertices() {
     const COLORWRITEENABLE: u32 = 168;
-    let colour_then_depth_only = |g: &mut Gpu, _: &StripDraw| {
-        // D's pipeline first: depth-only, LESS, the second strip, at column 5.
-        g.state(ZFUNC, 2);
-        g.state(COLORWRITEENABLE, 0);
-        strip_stream(g, 96);
-        strip_at(g, 4, -0.25, [0.0, 1.0, 0.0, 1.0]);
-        // A1 (LESSEQUAL) at column 3, then A2 (LESS) at column 1: the same strip, another key.
-        g.state(COLORWRITEENABLE, 0xF);
+    let script = |g: &mut Gpu, _: &StripDraw| {
         g.state(ZFUNC, 4);
-        strip_stream(g, 0);
         strip_at(g, 3, 0.0, [1.0, 0.0, 0.0, 1.0]);
         g.state(ZFUNC, 2);
         strip_at(g, 1, 0.0, [1.0, 0.0, 0.0, 1.0]);
-        // D in front of A2 at column 1.
         g.state(COLORWRITEENABLE, 0);
         strip_stream(g, 96);
         strip_at(g, 0, -0.25, [0.0, 1.0, 0.0, 1.0]);
-    };
-    let depth_only_then_colour = |g: &mut Gpu, _: &StripDraw| {
-        // A's pipeline first: colour, LESS, the first strip, at column 5.
-        g.state(ZFUNC, 2);
-        strip_at(g, 5, 0.0, [1.0, 0.0, 0.0, 1.0]);
-        // D1 (LESSEQUAL), then D2 (LESS): the second strip at column 1, in front.
-        g.state(COLORWRITEENABLE, 0);
         g.state(ZFUNC, 4);
-        strip_stream(g, 96);
-        strip_at(g, 0, -0.25, [0.0, 1.0, 0.0, 1.0]);
+        strip_at(g, 4, -0.25, [0.0, 1.0, 0.0, 1.0]);
         g.state(ZFUNC, 2);
-        strip_at(g, 0, -0.25, [0.0, 1.0, 0.0, 1.0]);
-        // A behind them at column 1.
+        strip_at(g, 4, -0.25, [0.0, 1.0, 0.0, 1.0]);
         g.state(COLORWRITEENABLE, 0xF);
         strip_stream(g, 0);
-        strip_at(g, 1, 0.0, [1.0, 0.0, 0.0, 1.0]);
+        strip_at(g, 5, 0.0, [1.0, 0.0, 0.0, 1.0]);
     };
-    for (name, script) in [
-        (
-            "colour, then depth-only in front",
-            &colour_then_depth_only as &HeldDraws,
-        ),
-        (
-            "depth-only, then colour behind",
-            &depth_only_then_colour as &HeldDraws,
-        ),
-    ] {
-        let Some((off, _, _)) = held_script(false, false, script) else {
-            return;
-        };
-        let (on, _, mismatches) = held_script(true, true, script).expect("the adapter, as above");
-        assert_eq!(on, off, "{name}: the pixels");
-        assert_eq!(
-            mismatches, 0,
-            "{name}: each held draw drawn with its own state"
-        );
-    }
+    let Some((off, _, _)) = held_script(false, false, &script) else {
+        return;
+    };
+    assert_eq!(off[1], [0, 0, 255, 255], "column 1: A2's red");
+    assert_eq!(off[5][2], 0, "column 5: no red (A behind D1 and D2)");
+    let (on, _, mismatches) = held_script(true, true, &script).expect("the adapter, as above");
+    assert_eq!(on, off, "the pixels");
+    assert_eq!(mismatches, 0, "each held draw drawn with its own state");
 }
 
 /// Sorted, a draw that writes alpha and one that leaves it alone are never moved past each other
-/// (an A8R8G8B8 target): X0 makes the RGB-only pipeline first (column 5); then Y, red, green,
-/// blue and alpha 0.25, at column 1; then X, red, green and blue only, in front of Y. The pixel
-/// keeps X's colour and Y's alpha, as in the game's order.
+/// (an A8R8G8B8 target). Two cases in one run, so that whichever of the two pipelines a sort puts
+/// first, one of them would show a moved draw:
+/// - column 1: Y (red, green, blue and alpha 0.25) behind, then X (red, green and blue only) in
+///   front: X's colour with Y's alpha;
+/// - column 3: X in front first, then Y behind it: X's colour, the alpha left as cleared.
 #[test]
 fn sorted_draws_keep_alpha_writes_apart() {
     const COLORWRITEENABLE: u32 = 168;
-    let script = |g: &mut Gpu, _: &StripDraw| {
-        g.state(COLORWRITEENABLE, 7);
-        strip_at(g, 5, 0.0, [1.0, 0.0, 0.0, 1.0]);
-        g.state(COLORWRITEENABLE, 0xF);
-        strip_stream(g, 96);
-        strip_at(g, 0, 0.0, [0.0, 1.0, 0.0, 0.25]);
+    let x = |g: &mut Gpu, column: u32| {
         g.state(COLORWRITEENABLE, 7);
         strip_stream(g, 0);
-        strip_at(g, 1, -0.25, [1.0, 0.0, 0.0, 1.0]);
+        strip_at(g, column, -0.25, [1.0, 0.0, 0.0, 1.0]);
+    };
+    let y = |g: &mut Gpu, column: u32| {
+        g.state(COLORWRITEENABLE, 0xF);
+        strip_stream(g, 96);
+        strip_at(g, column - 1, 0.0, [0.0, 1.0, 0.0, 0.25]);
+    };
+    let script = |g: &mut Gpu, _: &StripDraw| {
+        y(g, 1);
+        x(g, 1);
+        x(g, 3);
+        y(g, 3);
     };
     let Some((off, _, _)) = held_script(false, false, &script) else {
         return;
     };
     assert_eq!(off[1][3], 64, "column 1: Y's alpha (X wrote none)");
+    assert_eq!(off[3][3], 0, "column 3: the cleared alpha (Y behind X)");
     let (on, _, mismatches) = held_script(true, true, &script).expect("the adapter, as above");
     assert_eq!(on, off, "the pixels, alpha included");
     assert_eq!(mismatches, 0, "each held draw drawn with its own state");
