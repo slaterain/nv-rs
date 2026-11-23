@@ -5228,6 +5228,27 @@ mod tests {
         assert_eq!(calls_to(&log, API_CREATE_WINDOW).len(), 1);
     }
 
+    /// The launcher check answering "the same card" (what the host answers once it has named the
+    /// card, `crates/host/src/launcher.rs`, issue #935): up to its window `main` neither releases
+    /// its renderer nor asks for the tasklet manager (whose stop ended the workers the first
+    /// cell's load waits for), and starts no launcher.
+    #[test]
+    fn main_keeps_its_renderer_and_workers_for_the_same_card() {
+        let mut e = main_engine();
+        e.register(0x004d_a570, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        run_main_entry(&mut e);
+        let log = take_log(&mut e);
+        let before = &log[..position(&log, API_CREATE_WINDOW)];
+        assert_eq!(calls_to(before, 0x004d_a570).len(), 1);
+        for callee in [0x004d_a4d0, 0x00b0_0a00, API_SHELL_EXECUTE] {
+            assert!(
+                calls_to(before, callee).is_empty(),
+                "{callee:08x} before the window"
+            );
+        }
+    }
+
     /// A UTF-16 string in memory.
     fn wide(e: &mut Engine, text: &str) -> u32 {
         let units: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
