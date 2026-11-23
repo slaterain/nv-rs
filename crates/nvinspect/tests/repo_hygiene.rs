@@ -30,7 +30,12 @@
 //!   made from an address), a malformed marker, or a typed function with no marker;
 //! * a direct Rust call to an address in `crates/engine-core/data/overridable.tsv`: none in
 //!   typed code, and the translations' own stay at the count the table holds, so no new one
-//!   appears (`overridable_addresses_are_called_by_address`).
+//!   appears (`overridable_addresses_are_called_by_address`);
+//! * a function a default-on typed family replaces whose translation consults a seam (a Stewie
+//!   row, JIP LN's patch bits, a call site a fix or a built-in mod takes over, a caller's mark,
+//!   UIO's or the other controls' switch), itself or through a helper it calls plainly, that the
+//!   family's source never names: with the family on, that row or fix would be skipped
+//!   (`default_on_typed_functions_keep_their_translations_seams`).
 //!
 //! Which files: the list comes from `git ls-files`, the tracked files plus the
 //! untracked ones git does not ignore, so every ignore source git honours
@@ -2948,6 +2953,578 @@ fn typed_function_findings(
     found
 }
 
+/// What a translation consults that a mod's row or a fix stands behind.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum SeamToken {
+    /// A call site a fix or a built-in mod takes over, or a caller's mark, by its address.
+    Address(u32),
+    /// A Stewie row's or a patch bit's constant, a hook, a shared helper of the Stewie rows, or the
+    /// switch itself (`uio`, `controls_alt`, `expression_alt_buffer`).
+    Name(String),
+}
+
+impl std::fmt::Display for SeamToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SeamToken::Address(address) => write!(f, "{address:08x}"),
+            SeamToken::Name(name) => f.write_str(name),
+        }
+    }
+}
+
+/// The seam calls whose first argument names the row, the hook, the site or the mark.
+const ARGUMENT_SEAMS: &[&str] = &[
+    ".stewie(",
+    ".site(",
+    ".hook_users(",
+    ".caller_marked(",
+    ".take_caller_mark(",
+];
+
+/// The seam calls without an argument, with the word that stands for each.
+const SWITCH_SEAMS: &[(&str, &str)] = &[
+    (".uio()", "uio"),
+    (".controls_alt()", "controls_alt"),
+    ("expression_alt_buffer()", "expression_alt_buffer"),
+];
+
+/// What the first argument of a seam call (`args`, the text after its `(`) names: a literal
+/// address, or the last segment of a constant's path (`stewie::CONSOLE_NUMPAD`,
+/// `Hook::NoHealthReset`). `None` for anything else (a value the caller passes in).
+fn first_argument_token(args: &str) -> Option<SeamToken> {
+    let mut depth = 0i32;
+    let mut end = args.len();
+    for (i, c) in args.char_indices() {
+        match c {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' if depth == 0 => {
+                end = i;
+                break;
+            }
+            ')' | ']' | '}' => depth -= 1,
+            ',' if depth == 0 => {
+                end = i;
+                break;
+            }
+            _ => {}
+        }
+    }
+    let first = args[..end].trim().trim_start_matches('&').trim();
+    if first.starts_with("0x") {
+        return hex_literal(first).map(SeamToken::Address);
+    }
+    let last = first.rsplit("::").next()?.trim();
+    (last.starts_with(|c: char| c.is_ascii_uppercase()) && last.bytes().all(is_ident))
+        .then(|| SeamToken::Name(last.to_string()))
+}
+
+/// The seams `code` (from [`code_only`]) consults, as (byte offset, token): each seam call's row,
+/// site, hook or mark; JIP LN's patch bit a `.jip_patches()` is tested against; an extension's type;
+/// a shared helper of the Stewie rows (`extend::stewie::name(`), which keeps its `.stewie(` in
+/// engine-core where a translation and a typed copy can both call it.
+fn seam_tokens(code: &str) -> Vec<(usize, SeamToken)> {
+    let mut out = Vec::new();
+    for pattern in ARGUMENT_SEAMS {
+        let word = pattern.trim_matches(|c| c == '.' || c == '(');
+        for (at, _) in code.match_indices(pattern) {
+            let token = first_argument_token(&code[at + pattern.len()..])
+                .unwrap_or_else(|| SeamToken::Name(word.to_string()));
+            out.push((at, token));
+        }
+    }
+    for (pattern, word) in SWITCH_SEAMS {
+        for (at, _) in code.match_indices(pattern) {
+            out.push((at, SeamToken::Name(word.to_string())));
+        }
+    }
+    for (at, _) in code.match_indices(".jip_patches()") {
+        let rest = &code[at..];
+        let end = rest.find(|c| c == '{' || c == ';').unwrap_or(rest.len());
+        let bit = rest[..end].find("jip_patches::").map(|k| {
+            rest[k + "jip_patches::".len()..]
+                .bytes()
+                .take_while(|c| is_ident(*c))
+                .map(char::from)
+                .collect::<String>()
+        });
+        let bit = bit.filter(|b| !b.is_empty());
+        out.push((
+            at,
+            SeamToken::Name(bit.unwrap_or_else(|| "jip_patches".to_string())),
+        ));
+    }
+    for (at, _) in code.match_indices(".ext_get::<") {
+        let rest = &code[at + ".ext_get::<".len()..];
+        let ty = rest.split('>').next().unwrap_or("");
+        let name = ty.rsplit("::").next().unwrap_or("").trim();
+        if !name.is_empty() {
+            out.push((at, SeamToken::Name(name.to_string())));
+        }
+    }
+    let b = code.as_bytes();
+    for (at, _) in code.match_indices("stewie::") {
+        if at > 0 && is_ident(b[at - 1]) {
+            continue;
+        }
+        // `stewie::name(` or `stewie::module::name(`: modules and a function, not a type's.
+        let mut i = at + "stewie::".len();
+        let mut segments = Vec::new();
+        loop {
+            let start = i;
+            while i < b.len() && is_ident(b[i]) {
+                i += 1;
+            }
+            segments.push(&code[start..i]);
+            if !code[i..].starts_with("::") {
+                break;
+            }
+            i += 2;
+        }
+        let called = code[i..].trim_start().starts_with('(');
+        let lower = segments
+            .iter()
+            .all(|s| s.starts_with(|c: char| c.is_ascii_lowercase()));
+        if let (true, true, Some(last)) = (called, lower, segments.last()) {
+            out.push((at, SeamToken::Name(last.to_string())));
+        }
+    }
+    out.sort();
+    out
+}
+
+/// The identifiers of `code` and the values of its `0x` literals.
+fn words_and_numbers(code: &str) -> (BTreeSet<String>, BTreeSet<u32>) {
+    let b = code.as_bytes();
+    let (mut words, mut numbers) = (BTreeSet::new(), BTreeSet::new());
+    let mut i = 0;
+    while i < b.len() {
+        if !is_ident(b[i]) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < b.len() && is_ident(b[i]) {
+            i += 1;
+        }
+        let token = &code[start..i];
+        if b[start].is_ascii_digit() {
+            numbers.extend(hex_literal(token));
+        } else {
+            words.insert(token.to_string());
+        }
+    }
+    (words, numbers)
+}
+
+/// The functions `code` calls plainly: an identifier, on a path or not, followed by `(`; not a
+/// method, an associated function, a keyword, a tuple struct, a macro, the `fn` itself or the
+/// standard library's. As (byte offset, path segments).
+fn plain_calls(code: &str) -> Vec<(usize, Vec<&str>)> {
+    const KEYWORDS: &[&str] = &[
+        "if", "while", "match", "for", "return", "in", "loop", "as", "let", "mut", "move", "else",
+        "unsafe", "fn", "impl", "where", "break", "continue", "ref", "dyn", "await",
+    ];
+    let b = code.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        if !is_ident(b[i]) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < b.len() && is_ident(b[i]) {
+            i += 1;
+        }
+        let name = &code[start..i];
+        if b[start].is_ascii_digit()
+            || name.starts_with(|c: char| c.is_ascii_uppercase())
+            || KEYWORDS.contains(&name)
+        {
+            continue;
+        }
+        let mut next = i;
+        if code[next..].starts_with("::<") {
+            let mut depth = 0;
+            while next < b.len() {
+                match b[next] {
+                    b'<' => depth += 1,
+                    b'>' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            next += 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                next += 1;
+            }
+        }
+        while next < b.len() && b[next].is_ascii_whitespace() {
+            next += 1;
+        }
+        if b.get(next) != Some(&b'(') {
+            continue;
+        }
+        let mut chain = start;
+        let mut path = vec![name];
+        while chain >= 2 && &b[chain - 2..chain] == b"::" {
+            let (s, segment) = ident_before(code, chain - 2);
+            if segment.is_empty() {
+                break;
+            }
+            path.insert(0, segment);
+            chain = s;
+        }
+        let before = code[..chain].trim_end();
+        let (_, word_before) = ident_before(before, before.len());
+        if before.ends_with('.') || word_before == "fn" {
+            continue;
+        }
+        let modules = &path[..path.len() - 1];
+        if matches!(path[0], "std" | "core" | "alloc")
+            || modules
+                .iter()
+                .any(|m| m.starts_with(|c: char| c.is_ascii_uppercase()))
+            || (modules.len() == 1
+                && matches!(modules[0], "u8" | "u16" | "u32" | "i32" | "f32" | "f64"))
+        {
+            continue;
+        }
+        out.push((start, path));
+    }
+    out
+}
+
+/// One function a default-on typed family replaces whose translation consults a seam the family's
+/// source never names.
+#[derive(Debug)]
+struct SeamFinding {
+    /// Where the seam is: the translation's file and line, or its helper's.
+    rel: String,
+    line: usize,
+    family: String,
+    address: u32,
+    token: SeamToken,
+    /// The helpers the translation reaches the seam through, outermost first.
+    via: Vec<String>,
+}
+
+impl std::fmt::Display for SeamFinding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let via = if self.via.is_empty() {
+            String::new()
+        } else {
+            format!(" (through `{}`)", self.via.join("` -> `"))
+        };
+        write!(
+            f,
+            "{}:{}: the typed family `{}` replaces {:08x} by default, and its source never names \
+             `{}`, which the translation consults here{via}: with the family on, that row or fix \
+             is skipped (consult it in the typed copy too, through a helper both share)",
+            self.rel,
+            self.line + 1,
+            self.family,
+            self.address,
+            self.token
+        )
+    }
+}
+
+/// A source file's code ([`code_only`]), where its lines start, and which of them are in test
+/// modules, made once.
+struct SeamCode {
+    code: String,
+    starts: Vec<usize>,
+    tests: Vec<bool>,
+}
+
+impl SeamCode {
+    /// The function whose `fn` line is `line`, up to its closing brace; `None` for one without a
+    /// body or in a test module.
+    fn function(&self, line: usize) -> Option<&str> {
+        if self.tests.get(line).copied().unwrap_or(true) {
+            return None;
+        }
+        let from = *self.starts.get(line)?;
+        let open = from + self.code[from..].find(|c| c == '{' || c == ';')?;
+        if self.code.as_bytes()[open] == b';' {
+            return None;
+        }
+        let mut depth = 0i32;
+        for (i, c) in self.code[open..].bytes().enumerate() {
+            match c {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(&self.code[from..=open + i]);
+                    }
+                }
+                _ => {}
+            }
+        }
+        Some(&self.code[from..])
+    }
+}
+
+/// File `k`'s [`SeamCode`], from `cache` or made now.
+fn seam_code<'a>(
+    cache: &'a mut BTreeMap<usize, SeamCode>,
+    sources: &[(String, String)],
+    k: usize,
+) -> &'a SeamCode {
+    cache.entry(k).or_insert_with(|| {
+        let code = code_only(&sources[k].1);
+        let starts = std::iter::once(0)
+            .chain(code.match_indices('\n').map(|(i, _)| i + 1))
+            .collect();
+        let lines: Vec<&str> = code.lines().collect();
+        let tests = test_module_lines(&lines);
+        SeamCode {
+            code,
+            starts,
+            tests,
+        }
+    })
+}
+
+/// For every function a default-on typed family registers: the seams its translation consults,
+/// in its own body and in the helpers it calls plainly that the typed copy can't be calling (a
+/// translated crate's function without an exe address the family calls, or an engine-core one the
+/// family's source doesn't name), down to four levels, must each be named in the family's source
+/// (the family's folder, or its one file). Returns the findings and how many typed functions were
+/// checked against their translations.
+fn typed_seam_findings(sources: &[(String, String)]) -> (Vec<SeamFinding>, usize) {
+    struct SeamFamily {
+        name: String,
+        root: String,
+        words: BTreeSet<String>,
+        numbers: BTreeSet<u32>,
+    }
+    let in_root =
+        |rel: &str, root: &str| rel == root || (root.ends_with('/') && rel.starts_with(root));
+    // A file of tests (`tests.rs`, `x_tests.rs`, a `tests` folder): its families and its seams are tests'.
+    let test_file = |rel: &str| {
+        let file = rel.rsplit('/').next().unwrap_or(rel);
+        file == "tests.rs"
+            || file.ends_with("_tests.rs")
+            || file.ends_with("_test.rs")
+            || rel.contains("/tests/")
+    };
+    // The default-on families: a `Family` with `past_gate: true`, outside tests.
+    let mut families: Vec<SeamFamily> = Vec::new();
+    let mut typed_at: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
+    for (rel, text) in sources {
+        if test_file(rel) || !text.contains("= Family {") {
+            continue;
+        }
+        // Same length as `text`: the family's name is read from `text` at the same place.
+        let code = code_only(text);
+        let lines: Vec<&str> = code.lines().collect();
+        let tests = test_module_lines(&lines);
+        for (at, _) in code.match_indices("= Family {") {
+            let line = code[..at].bytes().filter(|c| *c == b'\n').count();
+            if tests.get(line).copied().unwrap_or(false) {
+                continue;
+            }
+            let open = at + "= Family ".len();
+            let mut depth = 0i32;
+            let mut close = code.len();
+            for (i, c) in code[open..].char_indices() {
+                match c {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            close = open + i;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if !code[open..close].contains("past_gate: true") {
+                continue;
+            }
+            let raw = text.get(open..close).unwrap_or("");
+            let name = raw
+                .split_once("name: \"")
+                .and_then(|(_, rest)| rest.split_once('"'))
+                .map_or(rel.as_str(), |(name, _)| name)
+                .to_string();
+            let root = match rel.strip_suffix("mod.rs") {
+                Some(dir) if dir.ends_with('/') => dir.to_string(),
+                _ => rel.clone(),
+            };
+            families.push(SeamFamily {
+                name,
+                root,
+                words: BTreeSet::new(),
+                numbers: BTreeSet::new(),
+            });
+        }
+    }
+    for (index, family) in families.iter_mut().enumerate() {
+        for (_, text) in sources
+            .iter()
+            .filter(|(rel, _)| in_root(rel, &family.root) && !test_file(rel))
+        {
+            let code = without_test_modules(&code_only(text));
+            let (words, numbers) = words_and_numbers(&code);
+            family.words.extend(words);
+            family.numbers.extend(numbers);
+            for (address, _, _) in registered_paths(&code) {
+                typed_at.entry(address).or_default().push(index);
+            }
+        }
+    }
+    // Every function definition outside typed code, by name; every translation, by its fn line.
+    let skip = |rel: &str| {
+        TYPED_DIRS.iter().any(|d| rel.starts_with(d))
+            || test_file(rel)
+            || families.iter().any(|f| in_root(rel, &f.root))
+    };
+    let mut defs: BTreeMap<&str, Vec<(usize, usize)>> = BTreeMap::new();
+    let mut address_of: BTreeMap<(usize, usize), u32> = BTreeMap::new();
+    let mut translations: Vec<(u32, usize, usize)> = Vec::new();
+    for (k, (rel, text)) in sources.iter().enumerate() {
+        if skip(rel) {
+            continue;
+        }
+        let lines: Vec<&str> = text.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            if starts_fn(line) {
+                let after = line.split("fn ").nth(1).unwrap_or("");
+                let end = after.bytes().take_while(|c| is_ident(*c)).count();
+                if end > 0 {
+                    defs.entry(&after[..end]).or_default().push((k, i));
+                }
+            }
+            let Some(rest) = line.trim_start().strip_prefix("// Translated from ") else {
+                continue;
+            };
+            let Some(address) = rest.get(..8).and_then(|h| u32::from_str_radix(h, 16).ok()) else {
+                continue;
+            };
+            let fn_line = lines.iter().enumerate().skip(i + 1).find_map(|(j, l)| {
+                let l = l.trim_start();
+                if l.is_empty() || l.starts_with("//") || l.starts_with("#[") {
+                    None
+                } else {
+                    Some(starts_fn(l).then_some(j))
+                }
+            });
+            if let Some(Some(j)) = fn_line {
+                address_of.insert((k, j), address);
+                if typed_at.contains_key(&address) {
+                    translations.push((address, k, j));
+                }
+            }
+        }
+    }
+    let mut codes: BTreeMap<usize, SeamCode> = BTreeMap::new();
+    // The function a plain call in file `k` names: a bare name defined in that same file; a path
+    // whose module (or crate) one definition's file matches.
+    let resolve = |k: usize, path: &[&str]| -> Option<(usize, usize)> {
+        let name = path[path.len() - 1];
+        let list = defs.get(name)?;
+        if path.len() == 1 || (path.len() == 2 && matches!(path[0], "self" | "super")) {
+            return list.iter().copied().find(|(file, _)| *file == k);
+        }
+        let module = path[path.len() - 2];
+        let crate_of = |rel: &str| rel.split('/').nth(1).unwrap_or("").replace('-', "_");
+        let here = crate_of(&sources[k].0);
+        let matching: Vec<(usize, usize)> = list
+            .iter()
+            .copied()
+            .filter(|(file, _)| {
+                let rel = &sources[*file].0;
+                let in_crate = match path[0] {
+                    "crate" | "self" | "super" => crate_of(rel) == here,
+                    first if first.starts_with("engine") => crate_of(rel) == first,
+                    _ => true,
+                };
+                let in_module = matches!(module, "crate" | "self" | "super")
+                    || rel.ends_with(&format!("/{module}.rs"))
+                    || rel.contains(&format!("/{module}/"));
+                in_crate && in_module
+            })
+            .collect();
+        match matching.as_slice() {
+            [one] => Some(*one),
+            _ => None,
+        }
+    };
+    let mut found = Vec::new();
+    let mut checked = 0;
+    for (address, k, fn_line) in translations {
+        checked += 1;
+        for &index in &typed_at[&address] {
+            let family = &families[index];
+            let mut reported: BTreeSet<SeamToken> = BTreeSet::new();
+            let mut seen: BTreeSet<(usize, usize)> = BTreeSet::new();
+            // (file, fn line, helpers so far)
+            let mut queue: Vec<(usize, usize, Vec<String>)> = vec![(k, fn_line, Vec::new())];
+            while let Some((file, start, via)) = queue.pop() {
+                if !seen.insert((file, start)) {
+                    continue;
+                }
+                let Some(body) = seam_code(&mut codes, sources, file).function(start) else {
+                    continue;
+                };
+                let line_at =
+                    |at: usize| start + body[..at].bytes().filter(|c| *c == b'\n').count();
+                for (at, token) in seam_tokens(body) {
+                    let named = match &token {
+                        SeamToken::Address(a) => family.numbers.contains(a),
+                        SeamToken::Name(n) => family.words.contains(n),
+                    };
+                    if !named && reported.insert(token.clone()) {
+                        found.push(SeamFinding {
+                            rel: sources[file].0.clone(),
+                            line: line_at(at),
+                            family: family.name.clone(),
+                            address,
+                            token,
+                            via: via.clone(),
+                        });
+                    }
+                }
+                if via.len() >= 4 {
+                    continue;
+                }
+                for (_, path) in plain_calls(body) {
+                    if path.contains(&"stewie") {
+                        continue;
+                    }
+                    let Some((def_file, def_line)) = resolve(file, &path) else {
+                        continue;
+                    };
+                    let name = path[path.len() - 1];
+                    if let Some(a) = address_of.get(&(def_file, def_line)) {
+                        // An exe function: the typed copy reaches it by address, or it is typed
+                        // itself and checked on its own.
+                        if typed_at.contains_key(a) || family.numbers.contains(a) {
+                            continue;
+                        }
+                    } else if sources[def_file].0.starts_with("crates/engine-core/")
+                        && family.words.contains(name)
+                    {
+                        // A shared helper the typed copy calls too.
+                        continue;
+                    }
+                    let mut deeper = via.clone();
+                    deeper.push(name.to_string());
+                    queue.push((def_file, def_line, deeper));
+                }
+            }
+        }
+    }
+    (found, checked)
+}
+
 /// The checkout this test checks: the one `cargo test` is run for. Cargo gives the crate's folder
 /// to the running test in `CARGO_MANIFEST_DIR`; the value compiled in is only the fallback (a
 /// run by hand). A test program built for another checkout has that other checkout's folder
@@ -4699,6 +5276,238 @@ fn overridable_addresses_are_called_by_address() {
             .collect::<Vec<_>>()
             .join("\n")
     );
+}
+
+/// Every function a default-on typed family replaces keeps its translation's seams: each Stewie row,
+/// JIP LN patch bit, fix or built-in call site the translation consults (itself or through a helper it
+/// calls plainly) is named in the family's source. A typed copy that drops one skips the mod's row
+/// or the fix whenever the family is on (the setup family's `00870bd0` and Stewie's S0028 were the
+/// case that started this test).
+#[test]
+fn default_on_typed_functions_keep_their_translations_seams() {
+    let root = repo_root();
+    let mut sources = Vec::new();
+    for file in list_files(&root).files {
+        if is_engine_source(&file.rel) {
+            let text = fs::read(&file.path).map(|b| String::from_utf8_lossy(&b).into_owned());
+            sources.push((file.rel, text.unwrap_or_default()));
+        }
+    }
+    assert!(
+        sources.len() > 1000,
+        "only {} engine sources",
+        sources.len()
+    );
+    let (found, checked) = typed_seam_findings(&sources);
+    assert!(
+        checked > 500,
+        "only {checked} typed functions were found with their translations"
+    );
+    assert!(
+        found.is_empty(),
+        "{} problem(s):\n{}",
+        found.len(),
+        found
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
+/// The seam rule on made-up sources: a family, its typed copy, and the translation it replaces.
+mod typed_seam_rules {
+    use super::*;
+
+    const FAMILY: &str = "crates/engine-typed/src/toy/mod.rs";
+    const COPY: &str = "crates/engine-typed/src/toy/frame.rs";
+    const UNIT: &str = "crates/engine-fallout-misc/src/units/x/y.rs";
+    const SHARED: &str = "crates/engine-core/src/extend/toy.rs";
+
+    fn family(past_gate: bool) -> String {
+        format!(
+            "pub static TOY: Family = Family {{\n    name: \"toy\",\n    id: FAMILY,\n    \
+             past_gate: {past_gate},\n    funcs,\n}};\n\nfn funcs() -> Vec<(u32, AbiFn)> {{\n    \
+             vec![entry!(0x0040_1000, frame::frame(Ptr))]\n}}\n"
+        )
+    }
+
+    fn translation(body: &str, rest: &str) -> String {
+        format!(
+            "// Translated from 00401000 (decompiled, FalloutNV.exe 1.4.0.525)\n/// The frame.\n\
+             pub fn fn_00401000(e: &mut Engine, this: Ptr) {{\n{body}\n}}\n{rest}"
+        )
+    }
+
+    fn copy(body: &str) -> String {
+        format!("// Typed from 00401000\npub fn frame(e: &mut Engine, this: Ptr) {{\n{body}\n}}\n")
+    }
+
+    /// (file, line from 1, token, helpers) of each finding, and how many were checked.
+    fn findings(
+        past_gate: bool,
+        translated: &str,
+        typed: &str,
+        shared: &str,
+    ) -> (Vec<(String, usize, String, String)>, usize) {
+        let sources = vec![
+            (FAMILY.to_string(), family(past_gate)),
+            (COPY.to_string(), typed.to_string()),
+            (UNIT.to_string(), translated.to_string()),
+            (SHARED.to_string(), shared.to_string()),
+        ];
+        let (found, checked) = typed_seam_findings(&sources);
+        let found = found
+            .into_iter()
+            .map(|f| (f.rel, f.line + 1, f.token.to_string(), f.via.join(">")))
+            .collect();
+        (found, checked)
+    }
+
+    const ROW: &str = "    if e.stewie(engine_core::extend::stewie::TOY_ROW) {\n        e.call(0x0040_2000, &args![this]);\n    }";
+
+    #[test]
+    fn a_row_the_copy_consults_passes() {
+        let typed = copy(
+            "    if e.stewie(stewie::TOY_ROW) {\n        e.call(0x0040_2000, &args![this]);\n    }",
+        );
+        let (found, checked) = findings(true, &translation(ROW, ""), &typed, "");
+        assert_eq!((found, checked), (vec![], 1));
+    }
+
+    #[test]
+    fn a_row_the_copy_drops_is_found() {
+        let typed = copy("    e.call(0x0040_2000, &args![this]);");
+        let (found, checked) = findings(true, &translation(ROW, ""), &typed, "");
+        let wanted = (UNIT.to_string(), 4, "TOY_ROW".to_string(), String::new());
+        assert_eq!((found, checked), (vec![wanted], 1));
+    }
+
+    #[test]
+    fn a_family_not_on_by_default_is_not_checked() {
+        let typed = copy("    e.call(0x0040_2000, &args![this]);");
+        let (found, checked) = findings(false, &translation(ROW, ""), &typed, "");
+        assert_eq!((found, checked), (vec![], 0));
+    }
+
+    #[test]
+    fn a_site_is_its_address_however_it_is_written() {
+        let site = "    e.site(0x0040_1abc, &[this.addr()]);";
+        let (found, _) = findings(
+            true,
+            &translation(site, ""),
+            &copy("    e.site(0x401ABC, &[this.addr()]);"),
+            "",
+        );
+        assert!(found.is_empty(), "{found:?}");
+        let (found, _) = findings(true, &translation(site, ""), &copy(""), "");
+        let tokens: Vec<&str> = found.iter().map(|f| f.2.as_str()).collect();
+        assert_eq!(tokens, ["00401abc"]);
+    }
+
+    #[test]
+    fn patch_bits_marks_and_switches_are_seams() {
+        let body =
+            "    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {\n        \
+                    return;\n    }\n    let alt = e.controls_alt();\n    let mark = \
+                    e.take_caller_mark(0x0040_1234);\n    if e.hook_users(\n        \
+                    engine_core::extend::Hook::MenuState,\n    ) != 0 {\n        return;\n    }";
+        let (found, _) = findings(true, &translation(body, ""), &copy(""), "");
+        let tokens: Vec<&str> = found.iter().map(|f| f.2.as_str()).collect();
+        // In the order the translation consults them.
+        assert_eq!(tokens, ["FIXES", "controls_alt", "00401234", "MenuState"]);
+        let all = copy(
+            "    let jip = e.jip_patches() & jip_patches::FIXES;\n    let alt = e.controls_alt();\n    \
+             let mark = e.take_caller_mark(0x0040_1234);\n    let menu = e.hook_users(Hook::MenuState);",
+        );
+        let (found, _) = findings(true, &translation(body, ""), &all, "");
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    /// The case of `00870bd0` and S0028: the row is two plain helpers down, and the typed copy has a
+    /// function of the first helper's name of its own.
+    #[test]
+    fn a_seam_in_a_helper_the_translation_calls_counts() {
+        let helpers = "\nfn world_enabled(e: &mut Engine, data: u32) -> bool {\n    \
+                       highlight_hides(e, data)\n}\n\nfn highlight_hides(e: &mut Engine, data: u32) \
+                       -> bool {\n    match engine_core::extend::stewie::highlight_hides(e, data) {\n        \
+                       Some(hidden) => hidden,\n        None => false,\n    }\n}\n";
+        let translated = translation(
+            "    if world_enabled(e, 5) {\n        return;\n    }",
+            helpers,
+        );
+        let own = "\nfn world_enabled(e: &mut Engine, data: u32) -> bool {\n    data != 0\n}\n";
+        let typed = copy("    if world_enabled(e, 5) {\n        return;\n    }") + own;
+        let (found, _) = findings(true, &translated, &typed, "");
+        let wanted = (
+            UNIT.to_string(),
+            14,
+            "highlight_hides".to_string(),
+            "world_enabled>highlight_hides".to_string(),
+        );
+        assert_eq!(found, vec![wanted]);
+        let shares = own.replace(
+            "data != 0",
+            "engine_core::extend::stewie::highlight_hides(e, data).unwrap_or(false)",
+        );
+        let typed = copy("    if world_enabled(e, 5) {\n        return;\n    }") + &shares;
+        let (found, _) = findings(true, &translated, &typed, "");
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    /// A helper with its own exe address that the copy calls by address keeps its seams; one the
+    /// copy no longer calls is entered.
+    #[test]
+    fn an_exe_function_called_by_address_is_not_entered() {
+        let callee = "\n// Translated from 00403000 (decompiled, FalloutNV.exe 1.4.0.525)\n\
+                      pub fn fn_00403000(e: &mut Engine) {\n    if e.stewie(stewie::OTHER_ROW) {\n        \
+                      return;\n    }\n}\n";
+        let translated = translation("    fn_00403000(e);", callee);
+        let typed = copy("    e.call(0x0040_3000, &args![]);");
+        let (found, _) = findings(true, &translated, &typed, "");
+        assert!(found.is_empty(), "{found:?}");
+        let (found, _) = findings(true, &translated, &copy(""), "");
+        let tokens: Vec<(&str, &str)> =
+            found.iter().map(|f| (f.2.as_str(), f.3.as_str())).collect();
+        assert_eq!(tokens, [("OTHER_ROW", "fn_00403000")]);
+    }
+
+    /// An engine-core helper the copy calls too is not entered; one it doesn't call is.
+    #[test]
+    fn a_shared_helper_the_copy_calls_is_not_entered() {
+        let shared =
+            "pub fn toy_test(e: &crate::Engine) -> bool {\n    e.stewie(stewie::SHARED_ROW)\n}\n";
+        let translated = translation("    let _ = engine_core::extend::toy::toy_test(e);", "");
+        let typed = copy("    let _ = engine_core::extend::toy::toy_test(e);");
+        let (found, _) = findings(true, &translated, &typed, shared);
+        assert!(found.is_empty(), "{found:?}");
+        let (found, _) = findings(true, &translated, &copy(""), shared);
+        let wanted = (
+            SHARED.to_string(),
+            2,
+            "SHARED_ROW".to_string(),
+            "toy_test".to_string(),
+        );
+        assert_eq!(found, vec![wanted]);
+    }
+
+    /// Seams in test modules and in a family inside a test module count for nothing.
+    #[test]
+    fn test_modules_count_for_nothing() {
+        let tests = "\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    fn helper(e: &mut Engine) {\n        \
+                     e.stewie(stewie::TEST_ROW);\n    }\n}\n";
+        let translated = translation("    helper(e);", tests);
+        let (found, checked) = findings(true, &translated, &copy(""), "");
+        assert_eq!((found, checked), (vec![], 1));
+        let family_in_tests = format!("#[cfg(test)]\nmod tests {{\n{}}}\n", family(true));
+        let sources = vec![
+            (FAMILY.to_string(), family_in_tests),
+            (UNIT.to_string(), translation(ROW, "")),
+        ];
+        let (found, checked) = typed_seam_findings(&sources);
+        assert!(found.is_empty());
+        assert_eq!(checked, 0);
+    }
 }
 
 mod typed_rules {
