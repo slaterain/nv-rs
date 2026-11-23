@@ -1694,4 +1694,71 @@ mod dead_lights {
         );
         dead::set_guard(&e, false);
     }
+
+    /// The translated `GetRenderPasses` of the decal property (vtable `010b9910`, `00bb4740`) and
+    /// of the `010bcb60` class (`00c058f0`), called by address as the accumulator calls them, with
+    /// the property's state at its key and its list not marked changed (so the exe keeps the
+    /// passes, whose lights hold the dead one) and a light destroyed while the property was
+    /// fenced: with the row's hooks the dead entry is taken out first, the lights resorted and the
+    /// passes rebuilt; with the row off the passes are kept and nothing is touched, as the exe.
+    #[test]
+    fn decal_and_other_lighting_passes_take_out_a_dead_light_and_rebuild() {
+        const HAS_FLAG: u32 = 0x004a_2020;
+        const RESORT_LIGHTS: u32 = 0x00b7_0390;
+        const CHECK_CREATE_RENDER_PASSES: u32 = 0x00ba_95e0;
+        /// Two words the stand-ins mark: resorted, rebuilt.
+        const MARKS: u32 = 0x0091_0000;
+        for (at, vtable) in [(0x00bb_4740u32, 0x010b_9910u32), (0x00c0_58f0, 0x010b_cb60)] {
+            for guard in [false, true] {
+                let (mut e, property, dying, live) = world(guard);
+                if guard {
+                    engine::dead_lights::install(&mut e);
+                }
+                e.map(MARKS, 8);
+                e.register(HAS_FLAG, |_, _| Ret::default());
+                e.register(RESORT_LIGHTS, |e, _| {
+                    e.set_global(MARKS, 1u32);
+                    Ret::default()
+                });
+                e.register(CHECK_CREATE_RENDER_PASSES, |e, _| {
+                    e.set_global(MARKS + 4, 1u32);
+                    Ret::default()
+                });
+                e.mem.set_u32(property, vtable);
+                // No fades or flags; the alpha 0, so a rebuild ends right after its pass list is
+                // made; the state at the key of pass kind 0x10 with render mode 3.
+                for offset in [0x20u32, 0x24, 0x28] {
+                    e.mem.set_u32(property + offset, 0);
+                }
+                let passes = e.mem.alloc(0x20);
+                e.mem.set_u32(property + 0x3c, passes);
+                e.mem.set_u32(property + 0x38, (0x10 << 8) | 3);
+                e.mem.set_u8(property + 0x74, 0);
+                let geometry = e.mem.alloc(0xc0);
+                e.call(at, &[property, geometry, 3, 0, 0x10, 0, 1]);
+                let (resorted, rebuilt) =
+                    (e.global::<u32>(MARKS) == 1, e.global::<u32>(MARKS + 4) == 1);
+                if guard {
+                    assert_eq!(
+                        elements(&e, property + 0x60),
+                        vec![live],
+                        "{at:08x}: the dead light taken out"
+                    );
+                    assert!(resorted && rebuilt, "{at:08x}: resorted and rebuilt");
+                    assert_eq!(e.mem.u8(property + 0x74), 0, "{at:08x}: rebuilt, unmarked");
+                } else {
+                    assert_eq!(
+                        elements(&e, property + 0x60),
+                        vec![dying, live],
+                        "{at:08x}: row off: kept"
+                    );
+                    assert!(
+                        !resorted && !rebuilt,
+                        "{at:08x}: row off: the passes kept, as the exe"
+                    );
+                }
+                dead::set_guard(&e, false);
+            }
+        }
+    }
 }

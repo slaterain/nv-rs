@@ -117,18 +117,19 @@ pub const LOAD_STEPS: Fix = Fix {
 /// through the light's cleared `spLight` in `ResortLights` (`00b70390`), the active-light walks and
 /// the pass staging: a stop seen in the staged fight with JIP's projectile lights (2026-11-22). JIP's
 /// game patches guard one of those walkers only (G01, `0xB707E0`). With the row such an entry is
-/// taken out and the object's passes rebuilt, the walks skip it, and the first few are printed
-/// (`engine_typed::lights::dead`).
+/// taken out and the object's passes rebuilt (at each lighting property's `GetRenderPasses`: the
+/// typed `00b67be0` and, hooked here, the translated `00bb4740` and `00c058f0`), the walks skip it,
+/// and the first few are printed (`engine_typed::lights::dead`, `engine::dead_lights`).
 pub const DEAD_LIGHTS: Fix = Fix {
     name: "dead lights in a light list",
     env: "NV_DEAD_LIGHT_GUARD",
-    addresses: &[],
+    addresses: &[0x00bb_4740, 0x00c0_58f0],
     summary: "a light destroyed while an object's light list still held it is taken out of the list instead of stopping the game (the original reads through it; seen in fights with JIP's projectile lights)",
     install: install_dead_lights,
 };
 
 fn install_dead_lights(e: &mut Engine) {
-    engine::engine_typed::lights::dead::set_guard(e, true);
+    engine::dead_lights::install(e);
 }
 
 /// The milliseconds a frame [`LOAD_STEPS`] gives each of the two in play.

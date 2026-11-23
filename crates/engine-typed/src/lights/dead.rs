@@ -25,6 +25,17 @@
 //! pass staging skip a light whose `spLight` is 0 ([`skips_null`]). With the row off nothing is
 //! unlinked or skipped: the exe's path (the sweep only reads).
 //!
+//! The sweep runs at every lighting property's `GetRenderPasses`: the typed one of
+//! `BSShaderPPLightingProperty` here (`00b67be0`), and the translated `00bb4740` and `00c058f0`
+//! through the row's hooks (`engine::dead_lights`).
+//!
+//! **What it cannot see.** A dead light's block taken again by a new `ShadowSceneLight` before the
+//! property's next sweep: the entry then names a live light (its vtable and `spLight` are the new
+//! light's), so it is neither taken out nor printed. Nothing reads freed memory then, so nothing
+//! stops; at most the object is lit by that new light (with its own place and radius) until the
+//! new light's own removal or the property's list is rebuilt. A block taken by any other class is
+//! caught by the vtable test.
+//!
 //! Run-wide: the row is kept by run (the kernel table's address, `KernelRef::id`), the same in every
 //! thread's engine context.
 
@@ -96,9 +107,13 @@ pub fn is_dead(e: &Engine, light: u32) -> bool {
 
 /// With the row on: every dead entry of `property`'s light list unlinked and its node freed (as
 /// `RemoveLight` does), the list marked changed and the passes' key cleared; `geometry` (0 when not
-/// known) only for the print. Answers whether anything was unlinked. With the row off, or no dead
-/// entry, nothing is written.
+/// known) only for the print. Answers whether anything was unlinked. With the row off in every run
+/// nothing is read; with it off in this run, or no dead entry, nothing is written.
 pub fn sweep(e: &mut Engine, property: u32, geometry: u32) -> bool {
+    // No run has the row on: nothing read, what the exe costs.
+    if !ANY.load(Relaxed) {
+        return false;
+    }
     let list = property.wrapping_add(LIGHT_LIST);
     let mut node = e.mem.u32(list);
     let mut any = false;
