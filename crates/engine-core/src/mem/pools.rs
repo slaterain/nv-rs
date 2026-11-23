@@ -1,6 +1,7 @@
-//! The thread heap (`NV_THREAD_HEAP=1`; off by default): blocks of the exe's memory pools (8 to
-//! 596 bytes, [`super::heap::pool_index`]) handed out from runs of one pool each, through a cache of
-//! free blocks per thread, so that an allocation or a free takes no lock in the common case.
+//! The thread heap (the host's row: on in the fixes preset, `bThreadHeap`, `NV_THREAD_HEAP`):
+//! blocks of the exe's memory pools (8 to 596 bytes, [`super::heap::pool_index`]) handed out from
+//! runs of one pool each, through a cache of free blocks per thread, so that an allocation or a
+//! free takes no lock in the common case.
 //!
 //! - A run is [`RUN_BYTES`] of the heap, page-aligned inside one live heap block taken for it
 //!   ([`super::Mem::alloc`]), cut into slots of its pool's block size (the pool's size rounded up to

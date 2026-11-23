@@ -1075,9 +1075,10 @@ mod tests {
         }
         // The 195 of the table before the layer moved out of `engine-core` (6 are Windows only),
         // `GlobalMemoryStatus(Ex)`, `MultiByteToWideChar` and `LCMapStringW`, and `DefWindowProcA`
-        // (the game's `WM_MOUSEMOVE`, `window::post_mouse_move`).
+        // (the game's `WM_MOUSEMOVE`, `window::post_mouse_move`), and `SetThreadIdealProcessor`
+        // (Havok's worker threads, `engine-core`'s table).
         // Off Windows also the two shader profile getters (`d3dx::profiles`).
-        assert_eq!(table.len(), if cfg!(windows) { 211 } else { 207 });
+        assert_eq!(table.len(), if cfg!(windows) { 212 } else { 208 });
     }
 
     /// The owned GOG executable's actual wrapper imports all resolve. No
