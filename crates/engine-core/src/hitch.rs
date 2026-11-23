@@ -103,6 +103,14 @@ pub enum Count {
     GridHavokNs,
     GridLoadNs,
     GridTerrainNs,
+    /// Inside the grid array's load, per grid cell (`TES::LoadGridCell`, `00451a50`), main's time in each part (ns):
+    /// finding the cell (`00585b30`, which reads it from the plugin when it is not in memory) or making a missing one
+    /// (`00461c20`, its persistent references and temporary data), the land (its mesh loaded or updated, the lowest
+    /// height for the water bit) and the placeable water. The cells made count in `GridCellsMade`.
+    GridCellFindNs,
+    GridCellsMade,
+    GridLandNs,
+    GridWaterNs,
     /// Main's time inside the guest heap's allocate and free (ns; the heap's own lock wait included).
     HeapNsMain,
     /// Interface tiles made (`Tile::Init`, `009ff600`: every tile a menu or the HUD builds).
