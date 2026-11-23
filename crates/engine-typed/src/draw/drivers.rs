@@ -363,87 +363,89 @@ pub fn draw_types(
             local[i as usize] = packet::renderer(e, acc, i).addr();
         }
     }
-    if count != 0 {
-        let mut i = 0u32;
-        loop {
-            let renderer = local[(i as usize).min(MAX_RENDERERS as usize + 1)];
-            own::clear_cursor_pass(e, acc, i);
-            if renderer != 0 {
-                own::set_pass_range(e, renderer, low, high);
-                let pass = own::cursor_pass_at(e, acc, i);
-                let bucket = own::cursor_bucket_at(e, acc, i);
-                let first = own::cursor_first_at(e, acc, i);
-                let active = typed_call!(
-                    shader::FAMILY,
-                    0x00b9_a090,
-                    batch::next_group(
-                        e,
-                        Ptr::<BSBatchRenderer>::new(renderer),
-                        pass,
-                        bucket,
-                        first
-                    )
-                );
-                own::set_cursor_active(e, acc, i, active);
-            } else {
-                own::set_cursor_active(e, acc, i, false);
+    own::with_cursors(e, acc, |e, c| {
+        if count != 0 {
+            let mut i = 0u32;
+            loop {
+                let renderer = local[(i as usize).min(MAX_RENDERERS as usize + 1)];
+                c.clear_pass(e, i);
+                if renderer != 0 {
+                    own::set_pass_range(e, renderer, low, high);
+                    let pass = c.pass_at(i);
+                    let bucket = c.bucket_at(i);
+                    let first = c.first_at(i);
+                    let active = typed_call!(
+                        shader::FAMILY,
+                        0x00b9_a090,
+                        batch::next_group(
+                            e,
+                            Ptr::<BSBatchRenderer>::new(renderer),
+                            pass,
+                            bucket,
+                            first
+                        )
+                    );
+                    c.set_active(e, i, active);
+                } else {
+                    c.set_active(e, i, false);
+                }
+                i += 1;
+                if i >= packet::renderer_count(e, acc) {
+                    break;
+                }
             }
-            i += 1;
-            if i >= packet::renderer_count(e, acc) {
+        }
+        loop {
+            let mut any = c.active(e, 0);
+            let mut best = 0u32;
+            let mut index = 1u32;
+            while index < packet::renderer_count(e, acc) {
+                let active = c.active(e, index);
+                let better = if !any && active {
+                    any = true;
+                    true
+                } else if active {
+                    let pass_of = |e: &Engine, k: u32| c.pass(e, k);
+                    let bucket_of = |e: &Engine, k: u32| c.bucket(e, k);
+                    let (p, q) = (pass_of(e, index), pass_of(e, best));
+                    p < q
+                        || (p == q
+                            && (bucket_of(e, index) < bucket_of(e, best)
+                                || (bucket_of(e, index) == bucket_of(e, best)
+                                    && c.first(e, index))))
+                } else {
+                    false
+                };
+                if better {
+                    best = index;
+                }
+                index += 1;
+            }
+            if !any {
                 break;
             }
-        }
-    }
-    loop {
-        let mut any = own::cursor_active(e, acc, 0);
-        let mut best = 0u32;
-        let mut index = 1u32;
-        while index < packet::renderer_count(e, acc) {
-            let active = own::cursor_active(e, acc, index);
-            let better = if !any && active {
-                any = true;
-                true
-            } else if active {
-                let pass_of = |e: &Engine, k: u32| own::cursor_pass(e, acc, k);
-                let bucket_of = |e: &Engine, k: u32| own::cursor_bucket(e, acc, k);
-                let (p, q) = (pass_of(e, index), pass_of(e, best));
-                p < q
-                    || (p == q
-                        && (bucket_of(e, index) < bucket_of(e, best)
-                            || (bucket_of(e, index) == bucket_of(e, best)
-                                && own::cursor_first(e, acc, index))))
+            let pass = c.pass_at(best);
+            let pass_type = c.pass(e, best);
+            let renderer =
+                Ptr::<BSBatchRenderer>::new(local[(best as usize).min(MAX_RENDERERS as usize + 1)]);
+            let bucket = c.bucket_at(best);
+            let first = c.first_at(best);
+            let active = if is_shadow_pass(pass_type) && packet::shadow_groups(e, acc) {
+                typed_call!(
+                    FAMILY,
+                    0x00b9_a3c0,
+                    alpha::draw_and_clear_type(e, renderer, pass, bucket, first, 0u32)
+                )
             } else {
-                false
+                typed_call!(
+                    shader::FAMILY,
+                    0x00b9_a120,
+                    batch::render_group(e, renderer, pass, bucket, first, second)
+                )
             };
-            if better {
-                best = index;
-            }
-            index += 1;
+            c.set_active(e, best, active);
         }
-        if !any {
-            break;
-        }
-        let pass = own::cursor_pass_at(e, acc, best);
-        let pass_type = own::cursor_pass(e, acc, best);
-        let renderer =
-            Ptr::<BSBatchRenderer>::new(local[(best as usize).min(MAX_RENDERERS as usize + 1)]);
-        let bucket = own::cursor_bucket_at(e, acc, best);
-        let first = own::cursor_first_at(e, acc, best);
-        let active = if is_shadow_pass(pass_type) && packet::shadow_groups(e, acc) {
-            typed_call!(
-                FAMILY,
-                0x00b9_a3c0,
-                alpha::draw_and_clear_type(e, renderer, pass, bucket, first, 0u32)
-            )
-        } else {
-            typed_call!(
-                shader::FAMILY,
-                0x00b9_a120,
-                batch::render_group(e, renderer, pass, bucket, first, second)
-            )
-        };
-        own::set_cursor_active(e, acc, best, active);
-    }
+    });
     let mut i = 0u32;
     while i < packet::renderer_count(e, acc) {
         let holder = local[(i as usize + 2).min(MAX_RENDERERS as usize + 1)];

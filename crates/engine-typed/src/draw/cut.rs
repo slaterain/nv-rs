@@ -55,8 +55,8 @@ pub(crate) const ACC_DEPTH_PASSES: (u32, u32) = (0x3a, 0x3b);
 /// and late-alpha bytes and the decal flag (+0x164 to +0x16c), the batch renderers, the cursor arrays' pointers and
 /// the renderer count (+0x174 to +0x18c), the shadow scene node (+0x194: the tall grass's light and the shadow projection's
 /// test read it), the render mode (+0x19c). The cursor arrays themselves (what +0x17c to
-/// +0x188 point to) are written and read by the world draw alone: they stay in guest memory (the depth-of-field
-/// re-render `00875e40`, their only other user, waits for the draw: piece 8).
+/// +0x188 point to) are written and read by each pass type range draw, main's after the cut too (the refraction
+/// normals, the depth-of-field re-render): the draw's own state (`super::statics::take_cursors`).
 pub(crate) const ACC_SETTINGS: [(u32, u32); 5] = [
     (0x31, 0x32),
     (0x164, 0x16d),

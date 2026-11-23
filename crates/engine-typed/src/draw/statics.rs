@@ -171,7 +171,7 @@ pub(crate) fn decide(e: &Engine, passes: &[u32]) -> Option<u32> {
 }
 
 /// Takes the own state into the open packet as own blocks: the global blocks, the render-state cache, the
-/// accumulator's camera.
+/// accumulator's camera and cursor arrays.
 pub fn take(e: &Engine, acc: Ptr<BSShaderAccumulator>) {
     for (lo, hi) in GLOBAL_BLOCKS {
         capture::own(e, lo, 0, hi - lo);
@@ -183,9 +183,20 @@ pub fn take(e: &Engine, acc: Ptr<BSShaderAccumulator>) {
     }
     take_renderers(e);
     capture::own(e, acc.addr(), ACC_CAMERA.0, ACC_CAMERA.1);
+    take_cursors(e, acc);
     // The held accumulator (`011f95f0`, in [`ACCUMULATORS`]) is a counted pointer: the drawing side's holds move its
     // objects' counts at the join (main's extra passes hold theirs meanwhile and let the same old one go).
     capture::own_counted(e, super::own::HELD_ACCUMULATOR);
+}
+
+/// The accumulator's cursor arrays as own blocks, an entry for each of its renderers (`super::own::with_cursors`):
+/// main's own pass type range draws after the cut write them while the drawing side draws.
+pub fn take_cursors(e: &Engine, acc: Ptr<BSShaderAccumulator>) {
+    let n = super::packet::renderer_count(e, acc);
+    for (at, size) in super::own::CURSOR_ARRAYS {
+        let array = e.global::<u32>(acc.addr().wrapping_add(at));
+        capture::own(e, array, 0, size.wrapping_mul(n));
+    }
 }
 
 /// The renderers' per-draw words ([`RENDERER_BLOCKS`]) as own blocks (one renderer held twice is taken once).

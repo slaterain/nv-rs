@@ -81,63 +81,107 @@ pub(crate) fn set_pass_range(e: &mut Engine, renderer: u32, low: u32, high: u32)
     e.set(renderer, BSBatchRenderer::uiLastPass, high);
 }
 
-/// The pass type range draw's cursors, the accumulator's arrays by renderer (+0x17c pass types, +0x180
-/// buckets, +0x184 first-pass bytes, +0x188 active bytes) (condition 1: the draw's cursor into the
-/// lists): the address of renderer `index`'s entry, each array read afresh as the exe reads it.
-#[inline(always)]
-pub(crate) fn cursor_pass_at(e: &Engine, acc: Ptr<BSShaderAccumulator>, index: u32) -> u32 {
-    capture::word(e, acc.addr(), BSShaderAccumulator::puicurrentPassA.off)
-        .wrapping_add(index.wrapping_mul(4))
-}
-#[inline(always)]
-pub(crate) fn cursor_bucket_at(e: &Engine, acc: Ptr<BSShaderAccumulator>, index: u32) -> u32 {
-    capture::word(e, acc.addr(), BSShaderAccumulator::picurrentBucketA.off)
-        .wrapping_add(index.wrapping_mul(4))
-}
-#[inline(always)]
-pub(crate) fn cursor_first_at(e: &Engine, acc: Ptr<BSShaderAccumulator>, index: u32) -> u32 {
-    capture::word(e, acc.addr(), BSShaderAccumulator::pbcurrentFirstPassA.off).wrapping_add(index)
-}
-#[inline(always)]
-fn cursor_active_at(e: &Engine, acc: Ptr<BSShaderAccumulator>, index: u32) -> u32 {
-    capture::word(e, acc.addr(), BSShaderAccumulator::pbcurrentActiveA.off).wrapping_add(index)
+/// The accumulator's cursor arrays, by renderer (condition 1: the draw's cursor into the lists): their pointer words
+/// (+0x17c pass types, +0x180 buckets, +0x184 first-pass bytes, +0x188 active bytes) and an entry's size.
+pub(crate) const CURSOR_ARRAYS: [(u32, u32); 4] = [
+    (BSShaderAccumulator::puicurrentPassA.off, 4),
+    (BSShaderAccumulator::picurrentBucketA.off, 4),
+    (BSShaderAccumulator::pbcurrentFirstPassA.off, 1),
+    (BSShaderAccumulator::pbcurrentActiveA.off, 1),
+];
+
+/// The four cursor arrays one pass type range draw uses ([`with_cursors`]): renderer `index`'s entries.
+#[derive(Clone, Copy)]
+pub(crate) struct Cursors {
+    pass: u32,
+    bucket: u32,
+    first: u32,
+    active: u32,
 }
 
-/// Renderer `index`'s cursor: its pass type, its bucket, its first-pass byte, its active byte.
-#[inline(always)]
-pub(crate) fn cursor_pass(e: &Engine, acc: Ptr<BSShaderAccumulator>, index: u32) -> u32 {
-    e.global::<u32>(cursor_pass_at(e, acc, index))
-}
-#[inline(always)]
-pub(crate) fn cursor_bucket(e: &Engine, acc: Ptr<BSShaderAccumulator>, index: u32) -> i32 {
-    e.global::<i32>(cursor_bucket_at(e, acc, index))
-}
-#[inline(always)]
-pub(crate) fn cursor_first(e: &Engine, acc: Ptr<BSShaderAccumulator>, index: u32) -> bool {
-    e.global::<u8>(cursor_first_at(e, acc, index)) != 0
-}
-#[inline(always)]
-pub(crate) fn cursor_active(e: &Engine, acc: Ptr<BSShaderAccumulator>, index: u32) -> bool {
-    e.global::<u8>(cursor_active_at(e, acc, index)) != 0
+impl Cursors {
+    /// The address of renderer `index`'s pass type, bucket and first-pass byte (handed to the list calls).
+    #[inline(always)]
+    pub(crate) fn pass_at(self, index: u32) -> u32 {
+        self.pass.wrapping_add(index.wrapping_mul(4))
+    }
+    #[inline(always)]
+    pub(crate) fn bucket_at(self, index: u32) -> u32 {
+        self.bucket.wrapping_add(index.wrapping_mul(4))
+    }
+    #[inline(always)]
+    pub(crate) fn first_at(self, index: u32) -> u32 {
+        self.first.wrapping_add(index)
+    }
+    #[inline(always)]
+    fn active_at(self, index: u32) -> u32 {
+        self.active.wrapping_add(index)
+    }
+
+    /// Renderer `index`'s pass type, bucket, first-pass byte and active byte.
+    #[inline(always)]
+    pub(crate) fn pass(self, e: &Engine, index: u32) -> u32 {
+        e.global::<u32>(self.pass_at(index))
+    }
+    #[inline(always)]
+    pub(crate) fn bucket(self, e: &Engine, index: u32) -> i32 {
+        e.global::<i32>(self.bucket_at(index))
+    }
+    #[inline(always)]
+    pub(crate) fn first(self, e: &Engine, index: u32) -> bool {
+        e.global::<u8>(self.first_at(index)) != 0
+    }
+    #[inline(always)]
+    pub(crate) fn active(self, e: &Engine, index: u32) -> bool {
+        e.global::<u8>(self.active_at(index)) != 0
+    }
+
+    /// Renderer `index`'s pass type cleared before its first list is made ready.
+    #[inline(always)]
+    pub(crate) fn clear_pass(self, e: &mut Engine, index: u32) {
+        e.set_global(self.pass_at(index), 0u32);
+    }
+
+    /// Renderer `index`'s active byte.
+    #[inline(always)]
+    pub(crate) fn set_active(self, e: &mut Engine, index: u32, active: bool) {
+        e.set_global(self.active_at(index), u8::from(active));
+    }
 }
 
-/// Renderer `index`'s cursor pass type cleared before its first list is made ready (condition 1).
-#[inline(always)]
-pub(crate) fn clear_cursor_pass(e: &mut Engine, acc: Ptr<BSShaderAccumulator>, index: u32) {
-    let at = cursor_pass_at(e, acc, index);
-    e.set_global(at, 0u32);
-}
-
-/// Renderer `index`'s active byte (condition 1).
-#[inline(always)]
-pub(crate) fn set_cursor_active(
+/// Runs `f` with accumulator `acc`'s cursor arrays (their pointer words read through the packet, which the cut copies),
+/// an entry for each of its renderers. Every pass type range draw writes them before it reads them, main's own passes
+/// after the cut too (the refraction normals, the depth-of-field pass, the rest of the frame's draws, which make such
+/// draws while the drawing side draws): so the cut takes the arrays as the draw's own state
+/// ([`super::statics::take`]), and while this thread draws from a packet that owns them, each array is a guest-stack
+/// image of the packet's copy for the call (`capture::own_image`, copied back after it), the list calls that get the
+/// entries' addresses writing it too. Main's writes into the arrays beside a packet are noted, so the join keeps them.
+/// Off: the arrays themselves.
+pub(crate) fn with_cursors<R>(
     e: &mut Engine,
     acc: Ptr<BSShaderAccumulator>,
-    index: u32,
-    active: bool,
-) {
-    let at = cursor_active_at(e, acc, index);
-    e.set_global(at, u8::from(active));
+    f: impl FnOnce(&mut Engine, Cursors) -> R,
+) -> R {
+    let n = super::packet::renderer_count(e, acc);
+    let [p, b, fi, a] = CURSOR_ARRAYS.map(|(at, _)| capture::word(e, acc.addr(), at));
+    let [lp, lb, lf, la] = CURSOR_ARRAYS.map(|(_, size)| size.wrapping_mul(n));
+    capture::own_image(e, p, lp, |e, pass| {
+        capture::own_image(e, b, lb, |e, bucket| {
+            capture::own_image(e, fi, lf, |e, first| {
+                capture::own_image(e, a, la, |e, active| {
+                    f(
+                        e,
+                        Cursors {
+                            pass,
+                            bucket,
+                            first,
+                            active,
+                        },
+                    )
+                })
+            })
+        })
+    })
 }
 
 /// Takes the first pass off a holder's list (+0xc: head +0x10, tail +0x14, spare chain +0x18, count
