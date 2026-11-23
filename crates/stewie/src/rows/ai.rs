@@ -536,6 +536,14 @@ pub const ROWS: &[Row] = &[
         summary: "changes what you see: an NPC with no target of its own turns its head toward its package's target when that is within fAIMaxHeadTrackDistance (the game's test never let it)",
     },
     Row {
+        bit: stewie::OPPOSITE_KEYS_CANCEL,
+        function: "patchLeftRightMovementCancelsOut",
+        plan: "S0329",
+        key: "bLeftRightMovementCancelsOut",
+        tweaks: Some(("Tweaks", "bLeftAndRightCancelEachOther")),
+        summary: "changes play: holding two opposite movement keys (left and right, forward and back) moves neither way",
+    },
+    Row {
         bit: stewie::GODMODE_NO_LEG_CRIPPLE_SOUND,
         function: "GodmodePreventsLegCrippleSound",
         plan: "S0410",

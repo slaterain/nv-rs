@@ -244,3 +244,6 @@ pub const GODMODE_NO_LEG_CRIPPLE_SOUND: Row = Row::share(AI_FIXES, AI_FIXES_END,
 /// `VATSMenu` `007ec810` (`0x7EDC3D`, `0x7EDCA3`, `0x7EDCE5`, `0x7EDD04`)): in god mode the player
 /// fires without ammunition or action points, in and out of VATS.
 pub const NO_AMMO_GODMODE: Row = Row::share(AI_FIXES, AI_FIXES_END, 71);
+/// S0329 `patchLeftRightMovementCancelsOut` (`PlayerCharacter::Update` `0093e860` (`0x941BBA`,
+/// `0x941C11`, `0x941C67`, `0x941CBD`)): holding two opposite movement keys moves neither way.
+pub const OPPOSITE_KEYS_CANCEL: Row = Row::share(AI_FIXES, AI_FIXES_END, 72);

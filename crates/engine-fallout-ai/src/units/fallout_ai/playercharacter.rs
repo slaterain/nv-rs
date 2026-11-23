@@ -4937,10 +4937,11 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
             e.call(0x0043_9180, &args![forward, step]);
             let step = (speed as f64 * move_speed as f64) as f32;
             e.call(0x0043_9180, &args![right, step]);
-            let key_pressed = |e: &mut Engine, key: u32| {
-                e.call(0x00a2_4660, &args![main_state, key, 1u32]).u32() != 0
-                    || e.call(0x00a2_4660, &args![main_state, key, 0u32]).u32() != 0
-            };
+            // lStewieAl's Tweaks' row S0329 (`patchLeftRightMovementCancelsOut`, the bytes at `0x941BBA`,
+            // `0x941C11`, `0x941C67` and `0x941CBD` with their jumps): a direction moves only while it
+            // is held and the opposite one (forward 0 and back 1, left 2 and right 3) is not.
+            let cancel = e.stewie(engine_core::extend::stewie::OPPOSITE_KEYS_CANCEL);
+            let key_pressed = |e: &mut Engine, key: u32| movement_key(e, main_state, key, cancel);
             if key_pressed(e, 0) {
                 e.call(0x0063_c8a0, &args![position_copy, right]);
                 if e.mem.u16(word_slot) & 0x200 == 0 {
@@ -9742,6 +9743,19 @@ fn levelup_held(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
 
 /// The god mode byte (`g_bIsGodmode`, `011e07ba`).
 const GODMODE_BYTE: u32 = 0x011e_07ba;
+
+/// A movement direction's test in `PlayerCharacter::Update` (`00a24660` on `input`: the control
+/// `key` pressed (1) or held (0)). With lStewieAl's Tweaks' row S0329 (`cancel`): the opposite
+/// control (`key ^ 1`) not held and `key` held.
+fn movement_key(e: &mut Engine, input: u32, key: u32, cancel: bool) -> bool {
+    if cancel {
+        e.call(0x00a2_4660, &args![input, key ^ 1, 0u32]).u32() == 0
+            && e.call(0x00a2_4660, &args![input, key, 0u32]).u32() != 0
+    } else {
+        e.call(0x00a2_4660, &args![input, key, 1u32]).u32() != 0
+            || e.call(0x00a2_4660, &args![input, key, 0u32]).u32() != 0
+    }
+}
 
 /// Whether the player's burst ends for want of ammunition (`00948310`, `0x94928F`: the magazine
 /// entry's count, +4 through `00726070`, is 0). lStewieAl's Tweaks' row S0082.01, written only
@@ -21209,6 +21223,35 @@ mod tests {
                 current_ammo_or_godmode(&mut e, 0x4400, 0x4500),
                 ammo,
                 "on {on}"
+            );
+        }
+    }
+
+    /// S0329 (`patchLeftRightMovementCancelsOut`): a direction moves when pressed or held; with
+    /// the row only while held and its opposite (left 2 against right 3) is not held.
+    #[test]
+    fn s0329_opposite_keys_cancel_out() {
+        // (row, left pressed, left held, right held, left moves)
+        for (on, pressed, held, right, moves) in [
+            (false, true, false, true, true),
+            (false, false, true, true, true),
+            (true, true, false, false, false),
+            (true, false, true, false, true),
+            (true, false, true, true, false),
+        ] {
+            let mut e = engine();
+            e.register(0x00a2_4660, move |_, a| {
+                int(u32::from(match (a[1], a[2]) {
+                    (2, 1) => pressed,
+                    (2, 0) => held,
+                    (3, 0) => right,
+                    _ => false,
+                }))
+            });
+            assert_eq!(
+                movement_key(&mut e, 0x1000, 2, on),
+                moves,
+                "on {on} pressed {pressed} held {held} right {right}"
             );
         }
     }
