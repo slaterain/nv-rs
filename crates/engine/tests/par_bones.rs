@@ -1143,6 +1143,10 @@ fn parallel_bones_end_in_the_serial_state() {
         assert_eq!(counts.barriers, 12, "{counts:?} {reasons:?}");
         assert_eq!(counts.subtrees, 22, "{counts:?}");
         assert_eq!(counts.splits, 1, "{counts:?}");
+        assert!(
+            counts.forks >= 1 && counts.by_main <= counts.walked,
+            "{counts:?}"
+        );
         let count_of = |name: &str| reasons.iter().find(|r| r.0 == name).map_or(0, |r| r.1);
         assert_eq!(count_of("bound"), 3, "{reasons:?}");
         assert_eq!(count_of("skin"), 4, "{reasons:?}");

@@ -229,6 +229,10 @@ pub struct Counts {
     pub mismatches: u64,
     /// Stretches ended early: an actor read Euler keys an earlier actor of the stretch read.
     pub splits: u64,
+    /// Hand-offs to the helpers (a stretch of two or more walkable actors), and of the walked actors
+    /// the ones main walked itself.
+    pub forks: u64,
+    pub by_main: u64,
 }
 
 static FRAMES: AtomicU64 = AtomicU64::new(0);
@@ -240,6 +244,8 @@ static CHECKED: AtomicU64 = AtomicU64::new(0);
 static DIFFERENCES: AtomicU64 = AtomicU64::new(0);
 static MISMATCHES: AtomicU64 = AtomicU64::new(0);
 static SPLITS: AtomicU64 = AtomicU64::new(0);
+static FORKS: AtomicU64 = AtomicU64::new(0);
+static BY_MAIN: AtomicU64 = AtomicU64::new(0);
 /// Barrier reasons, by [`Barrier`] as a number.
 static REASONS: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
 /// Differences printed so far (the first 20 are).
@@ -250,6 +256,8 @@ static PASS_NS: AtomicU64 = AtomicU64::new(0);
 static WALK_NS: AtomicU64 = AtomicU64::new(0);
 static REPLAY_NS: AtomicU64 = AtomicU64::new(0);
 static SERIAL_NS: AtomicU64 = AtomicU64::new(0);
+/// The pass's lists before any walk: the actors listed, each tree classified and order-checked.
+static LIST_NS: AtomicU64 = AtomicU64::new(0);
 /// Frames between two summary lines.
 const SUMMARY_EVERY: u64 = 1000;
 static SUMMARY_FRAMES: AtomicU64 = AtomicU64::new(0);
@@ -263,12 +271,23 @@ fn nanos(since: std::time::Instant) -> u64 {
 fn summary() {
     let ms = |a: &AtomicU64| a.swap(0, Relaxed) as f64 / 1e6 / SUMMARY_EVERY as f64;
     let (pass, walk, replay, serial) = (ms(&PASS_NS), ms(&WALK_NS), ms(&REPLAY_NS), ms(&SERIAL_NS));
+    let list = ms(&LIST_NS);
     let (c, reasons) = take_counts();
     println!(
-        "NV_PAR_BONES: {} frames: a frame {pass:.3} ms (walks {walk:.3}, replays {replay:.3}, whole on main \
-         {serial:.3}); actors walked {}, whole on main {} {reasons:?}, subtrees on main {}, Havok parts {}; \
-         checked {} actors, {} differences, {} mismatches; stretches cut at shared Euler keys {}",
-        c.frames, c.walked, c.barriers, c.subtrees, c.havok, c.checked_actors, c.differences, c.mismatches,
+        "NV_PAR_BONES: {} frames: a frame {pass:.3} ms (lists {list:.3}, walks {walk:.3}, replays {replay:.3}, \
+         whole on main {serial:.3}); hand-offs {} (actors main walked itself {}); actors walked {}, whole on \
+         main {} {reasons:?}, subtrees on main {}, Havok parts {}; checked {} actors, {} differences, {} \
+         mismatches; stretches cut at shared Euler keys {}",
+        c.frames,
+        c.forks,
+        c.by_main,
+        c.walked,
+        c.barriers,
+        c.subtrees,
+        c.havok,
+        c.checked_actors,
+        c.differences,
+        c.mismatches,
         c.splits
     );
     census_print();
@@ -350,6 +369,8 @@ pub fn take_counts() -> (Counts, Vec<(&'static str, u64)>) {
         differences: DIFFERENCES.swap(0, Relaxed),
         mismatches: MISMATCHES.swap(0, Relaxed),
         splits: SPLITS.swap(0, Relaxed),
+        forks: FORKS.swap(0, Relaxed),
+        by_main: BY_MAIN.swap(0, Relaxed),
     };
     let reasons = Barrier::ALL
         .iter()
@@ -1242,6 +1263,7 @@ fn parallel(e: &mut Engine, array: u32, first: u32, last: u32) -> bool {
             }
         }
     }
+    LIST_NS.fetch_add(nanos(started), Relaxed);
     FRAMES.fetch_add(1, Relaxed);
     let check = mode() == 3;
     // Stretches: the walkable actors up to the next barrier, then the barrier on its own.
@@ -1387,7 +1409,7 @@ fn walk_on_helpers(e: &mut Engine, items: &[Item], walk: &[usize], base: u32) ->
         let tls = e.tls();
         e.mem.u32(tls + TLS_UPDATE_STATE)
     };
-    let job = |w: &mut Engine, _number: usize| {
+    let job = |w: &mut Engine, number: usize| {
         let tls = w.tls();
         let own = w.mem.u32(tls + TLS_UPDATE_STATE);
         w.mem.set_u32(tls + TLS_UPDATE_STATE, state);
@@ -1399,6 +1421,9 @@ fn walk_on_helpers(e: &mut Engine, items: &[Item], walk: &[usize], base: u32) ->
             let i = walk[k];
             let item = &items[i];
             let data = base + ITEM_WORDS * idx(i);
+            if number == 0 {
+                BY_MAIN.fetch_add(1, Relaxed);
+            }
             ACTIVE.fetch_add(1, Relaxed);
             LOG.with(|l| *l.borrow_mut() = Some(Vec::new()));
             walk_actor(w, item.root, data);
@@ -1413,9 +1438,11 @@ fn walk_on_helpers(e: &mut Engine, items: &[Item], walk: &[usize], base: u32) ->
     // The pool is the parallel render's when it forked first, made with its own count: a pool with
     // fewer helpers than asked for refuses, so one helper is asked for next.
     let helpers = HELPERS.load(Relaxed);
-    if !engine_core::real_threads::fork_join_first(e, helpers, &job)
-        && (helpers == 1 || !engine_core::real_threads::fork_join_first(e, 1, &job))
+    if engine_core::real_threads::fork_join_first(e, helpers, &job)
+        || (helpers != 1 && engine_core::real_threads::fork_join_first(e, 1, &job))
     {
+        FORKS.fetch_add(1, Relaxed);
+    } else {
         // No helpers to be had: main walks them all, the same way.
         job(e, 0);
     }
