@@ -483,6 +483,50 @@ impl Table {
         t
     }
 
+    /// The captured answers no rule gives, against Windows' own (`windows`, [`FIXED_TABLE`]):
+    /// each effect's `SetFX` result, result code and `GetObjectInPath` result for the same
+    /// (effect, `DSBCAPS_CTRLFX`), and, with a device, the cooperative levels' and the listener's
+    /// results. Each one that differs is a difference ([`Table::differ`]): Wine accepts the I3DL2
+    /// reverb, which Windows 11 does not have (`REGDB_E_CLASSNOTREG`), and the layer provides no
+    /// reverb (#957's review).
+    fn differ_from_windows(&mut self, windows: &Table) {
+        let effects: Vec<_> = self.effects.iter().map(|(k, v)| (k.clone(), *v)).collect();
+        for ((name, fx), got) in effects {
+            if let Some(&want) = windows.effects.get(&(name.clone(), fx)) {
+                if got != want {
+                    self.differ(
+                        &format!(
+                            "DsFx {name} (CTRLFX {fx}) {:x} {:x} {:x}",
+                            got.0, got.1, got.2
+                        ),
+                        format!("SetFX answers {:x} {:x} {:x}", want.0, want.1, want.2),
+                    );
+                }
+            }
+        }
+        if self.create != DS_OK {
+            return;
+        }
+        let levels: Vec<_> = self.cooperative.iter().map(|(l, r)| (*l, *r)).collect();
+        for (level, got) in levels {
+            if let Some(&want) = windows.cooperative.get(&level) {
+                if got != want {
+                    self.differ(
+                        &format!("DsCooperativeLevel {level:x} {got:x}"),
+                        format!("SetCooperativeLevel answers {want:x}"),
+                    );
+                }
+            }
+        }
+        if self.listener.0 != windows.listener.0 {
+            let got = self.listener.0;
+            self.differ(
+                &format!("DsListener {got:x}"),
+                format!("the listener answers {:x}", windows.listener.0),
+            );
+        }
+    }
+
     /// A captured line whose answer is not the layer's rule's: counted, the first one kept for
     /// the log ([`load_table`]).
     fn differ(&mut self, line: &str, rule: impl std::fmt::Display) {
@@ -622,7 +666,8 @@ fn setting_rule(line: &str, f: &[&str]) -> Option<u32> {
 }
 
 /// Gives the layer the player's sound table (`scripts/dsound-capture`'s output). A table whose
-/// answers disagree with the layer's rules was answered by another DirectSound than Windows' own
+/// answers disagree with the layer's rules, or where no rule gives them (the effects, the cooperative
+/// level, the listener) with Windows' own, was answered by another DirectSound than Windows' own
 /// (a replacement `dsound.dll` or an audio tool's on the PC, Wine's): one line in the log says so
 /// (how many lines, the first one and its rule), and the game is answered by [`fixed_table`]
 /// instead, Windows' own DirectSound's answers (with the capture's sound device or none), as
@@ -635,7 +680,8 @@ pub fn load_table(e: &mut Engine, text: &str) {
 
 /// The table [`load_table`] answers the game with: `captured`, or, when it disagrees with the
 /// layer's rules, [`fixed_table`] with the capture's sound device or none (`say` gets the line).
-fn answering(captured: Table, say: impl FnOnce(String)) -> Table {
+fn answering(mut captured: Table, say: impl FnOnce(String)) -> Table {
+    captured.differ_from_windows(&Table::parse(&fixed_table(true)));
     let Some((rule, line)) = &captured.first_difference else {
         return captured;
     };
@@ -7124,6 +7170,47 @@ mod tests {
         let (t, said) = answered(&silent);
         assert!(said[0].contains("(no sound device)"), "{}", said[0]);
         assert_eq!(t.create, DSERR_NODRIVER);
+    }
+
+    /// #957's review: answers no rule gives are compared with Windows' own (the fixed table). A
+    /// capture whose only difference is the reverb (Wine accepts the I3DL2 reverb; Windows 11
+    /// answers `REGDB_E_CLASSNOTREG`) is answered by the fixed table, said in one line; so is one
+    /// whose cooperative level or listener answers otherwise.
+    #[test]
+    fn answers_no_rule_gives_are_compared_with_windows_own() {
+        let reverb = table_text()
+            .replace(
+                "DsFx\ti3dl2 2e0 1 5622 ac44\t80040154\t5\t88781161",
+                "DsFx\ti3dl2 2e0 1 5622 ac44\t0\t0\t0",
+            )
+            .replace(
+                "DsFx\ti3dl2 e0 1 5622 ac44\t8878001e\tffffffff\t8878001e",
+                "DsFx\ti3dl2 e0 1 5622 ac44\t0\t0\t0",
+            );
+        assert_ne!(reverb, table_text(), "both lines were found");
+        assert_eq!(Table::parse(&reverb).differing, 0, "no rule says it");
+        let (t, said) = answered(&reverb);
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].contains("2 line(s)"), "{}", said[0]);
+        assert!(said[0].contains("i3dl2"), "{}", said[0]);
+        assert_eq!(answers(&t), answers(&Table::parse(&fixed_table(true))));
+        assert_eq!(
+            t.effect("i3dl2", true).0,
+            0x8004_0154,
+            "Windows' own answer"
+        );
+        for changed in [
+            table_text().replace(
+                "DsCooperativeLevel\t2\t0\t",
+                "DsCooperativeLevel\t2\t88780046\t",
+            ),
+            table_text().replace("DsListener\t\t0 0\t", "DsListener\t\t88780032 0\t"),
+        ] {
+            assert_ne!(changed, table_text(), "the line was found");
+            let (t, said) = answered(&changed);
+            assert_eq!(said.len(), 1, "{said:?}");
+            assert_eq!(answers(&t), answers(&Table::parse(&fixed_table(true))));
+        }
     }
 
     /// `load_table` puts the answering table in the layer's state.
