@@ -259,6 +259,7 @@ None of these is for players.
 | **Frames, sound and logs** | | |
 | `NV_SHOT=DIR[,every_ms]`*, `NV_SHOT_FRAMES=FROM-TO`, `NV_SHOT_LIST`, `NV_SHOT_WGPU=DIR` | Screenshots of the game's frames to DIR; only those presents; a list of presents; the wgpu backend's own folder (on wgpu alone in a window, the frame the window got is captured too, as `wgpu-window-*.bmp`) | off |
 | `NV_HITCH_LOG=0` | Turns the hitch log off. On (the default), every frame of at least 8 ms (6 ms above 250 fps) and twice the typical frame writes one `hitch:` line to the log (where, the frame's stages, the one-off work counted in it, a likely cause) and an F12 report gets the session's lines as `hitches.txt` (`crates/host/src/hitch_log.rs`) | on |
+| `NV_HITCH_HEAP=1` | A diagnostic switch for the hitch log: main's time inside the guest heap and in its script runs is timed and each hitch line says it ("main in the heap N ms", "scripts N ms"). Off, the blocks and runs are only counted: timing them reads the clock twice for every block and every run, about 4 ms more on the pause menu's opening frame (80,000 blocks) | off |
 | `NV_LOADER_WALK_MS=n` | A measuring switch for the running stutters: the model loader's per-frame walk over its queued references (each one's loads started, in order; run by the IO manager before its own budget) gives up after n ms in play instead of the game's 5 ms, starting again from the start of the list next frame as the game does; outside play the game's own limit (`crates/host/src/fixes.rs`, `install_loader_walk_limit`) | off |
 | `NV_FRAME_LOG=FILE`* | One line per main frame (clock, step, player position), with no per-call cost | off |
 | `NV_STAGE_TIME=1`* | With `NV_FRAME_LOG`: each line also gives the frame's stages on main, the drawing steps after the world pass, the world draw's halves, and the drawing thread's job and waits by join (`crates/engine-core/src/stage_time.rs`) | off |
@@ -316,8 +317,9 @@ GitHub Releases; the packages there from before 2026-11-03 are of the removed vi
 - **The first settings:** the player's `Fallout.ini` and `FalloutPrefs.ini` copied once (read only); where
   the game's own launcher never ran, what it leaves behind: `Fallout_default.ini` and the `high.ini` preset,
   from the game's folder; nv-rs's own sections in that `Fallout.ini`, once (above). `sD3DDevice` is set to this PC's card at every start, because `main` asks for
-  `FalloutNVLauncher.exe` when it differs (`004da570`); `ShellExecuteA` answers for it that nothing started,
-  but after that the game's start-up still stops, in the renderer (a run without `sD3DDevice`): the name must match.
+  `FalloutNVLauncher.exe` when it differs (`004da570`), after stopping the workers its loads wait for. A run
+  started without Play.exe or play.sh (a stale or missing name) gets the card's name as the launcher writes it (only the name: the
+  size and the other settings stay the profile's) for that run, says both names in the log once, and goes on (`crates/host/src/launcher.rs`).
 - **The name:** the program is simply named `FalloutNV.exe` in the package, in `app\`: no link is needed,
   and NVIDIA's driver profile (the white orbs) and Windows' per-program sound go by the name.
 - **Mods:** the launcher's `> Play with mods` builds `userdata\modgame`: the game's folder as hard links (no copy,
