@@ -143,6 +143,7 @@ fn fill_reason(e: &mut Engine, camera: u32, acc: Ptr<BSShaderAccumulator>) -> Op
     super::statics::count(reason);
     if reason.is_none() {
         super::statics::take(e, acc);
+        super::statics::take_shader_values(e, &passes);
         for &pass in &passes {
             own_clip_plane_caches(e, pass);
         }
@@ -769,6 +770,12 @@ pub fn cut_for_thread(
         detach::drawn_list_words(e, packet::renderer(e, acc, i).addr(), &mut handed);
     }
     capture::take_handed(e, &handed);
+    // A draw that copies the water reflection borrows and returns through the texture manager's pool (`00b6e110`,
+    // `00b6da10`), as main's passes after the cut do, with no lock and no copy of its own: such a job keeps every join
+    // point (`engine_core::draw_thread::keep_joins`), so main's pool users wait for it as without the late joins.
+    if packet::copy_reflection(e, acc) {
+        engine_core::draw_thread::keep_joins(e);
+    }
     capture::detach(e)
 }
 

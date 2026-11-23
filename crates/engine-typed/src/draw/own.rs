@@ -73,12 +73,24 @@ pub(crate) fn empty_alpha_list(e: &mut Engine, renderer: Ptr<BSBatchRenderer>, g
 }
 
 /// The pass type range a batch renderer takes from its active list (+0x20, +0x24) (condition 1:
-/// the draw's cursor into the lists).
+/// the draw's cursor into the lists). Every pass type range draw sets it before its list walk reads it
+/// ([`pass_range`]), main's too: through main's later passes (the screens and the sun drawn through the world
+/// accumulator in `00875110`) the same renderers get main's range while the drawing side walks its own, so the cut takes
+/// the range as the draw's own state (`super::statics::take_pass_ranges`), and main's sets beside a packet are noted.
 #[inline(always)]
 pub(crate) fn set_pass_range(e: &mut Engine, renderer: u32, low: u32, high: u32) {
     let renderer = Ptr::<BSBatchRenderer>::new(renderer);
-    e.set(renderer, BSBatchRenderer::uiFirstPass, low);
-    e.set(renderer, BSBatchRenderer::uiLastPass, high);
+    capture::own_set(e, renderer, BSBatchRenderer::uiFirstPass, low);
+    capture::own_set(e, renderer, BSBatchRenderer::uiLastPass, high);
+}
+
+/// The pass type range [`set_pass_range`] set: the lowest and highest type the active list walk (`00b99900`) takes.
+#[inline(always)]
+pub(crate) fn pass_range(e: &Engine, renderer: Ptr<BSBatchRenderer>) -> (u32, u32) {
+    (
+        capture::own_get(e, renderer, BSBatchRenderer::uiFirstPass),
+        capture::own_get(e, renderer, BSBatchRenderer::uiLastPass),
+    )
 }
 
 /// The accumulator's cursor arrays, by renderer (condition 1: the draw's cursor into the lists): their pointer words

@@ -80,7 +80,7 @@ pub(crate) const SKIN_RTTI: u32 = 0x011f_49d8;
 /// test, the shadow light shader's per-geometry set-ups (the draw family's, compared by address), the
 /// renderer's skinned test, the geometry holder's draw, a shader's pass tail of kind 0x11, the node
 /// pool lock. The node pool's allocation is draw_f's (`0043a010`).
-const MAP_GET_AT: u32 = 0x0085_3130;
+pub(crate) const MAP_GET_AT: u32 = 0x0085_3130;
 const MAP_SET_AT: u32 = 0x0084_4700;
 const MEMORY_MANAGER: u32 = 0x011f_6238;
 const MEMORY_ALLOCATE: u32 = 0x00aa_3e40;
@@ -94,11 +94,11 @@ const SETUP_TYPE_CA: u32 = 0x00b7_ded0;
 const SETUP_TYPE_D1: u32 = 0x00b7_dfe0;
 const SETUP_TYPE_102: u32 = 0x00b7_e150;
 const TAIL_KIND_11: u32 = 0x00bb_96d0;
-const LOCK_ENTER: u32 = 0x0040_fbf0;
+pub(crate) const LOCK_ENTER: u32 = 0x0040_fbf0;
 /// The global node pool: its lock (owner `011c5f80`, count `011c5f84`) and free list (`011c5f58`).
 pub(crate) const POOL_LOCK: u32 = 0x011c_5f80;
-const POOL_LOCK_COUNT: u32 = 0x011c_5f84;
-const POOL_FREE: u32 = 0x011c_5f58;
+pub(crate) const POOL_LOCK_COUNT: u32 = 0x011c_5f84;
+pub(crate) const POOL_FREE: u32 = 0x011c_5f58;
 /// The pass-type comparison the active list is kept in order with (`00b988a0`).
 const PASS_TYPE_COMPARE: u32 = 0x00b9_88a0;
 /// The alpha sort's comparison (this file's [`compare_by_depth`]).
@@ -211,7 +211,8 @@ pub fn next_active(e: &mut Engine, this: Ptr<BSBatchRenderer>, pass_type: u32, o
     }
     let mut value = u32::from(vget16(e, node, ActivePass::usItem));
     e.set_global(pass_type, value);
-    while value < e.get(this, BSBatchRenderer::uiFirstPass) {
+    // The range is the draw's own state on the drawing thread (`draw::own::set_pass_range`).
+    while value < crate::draw::own::pass_range(e, this).0 {
         node = Ptr::new(vget(e, node, ActivePass::pNext));
         if node.is_null() {
             return false;
@@ -219,7 +220,7 @@ pub fn next_active(e: &mut Engine, this: Ptr<BSBatchRenderer>, pass_type: u32, o
         value = u32::from(vget16(e, node, ActivePass::usItem));
         e.set_global(pass_type, value);
     }
-    if value > e.get(this, BSBatchRenderer::uiLastPass) {
+    if value > crate::draw::own::pass_range(e, this).1 {
         return false;
     }
     typed_call!(FAMILY, 0x00b9_9730, pop_active(e, head));

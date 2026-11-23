@@ -290,12 +290,12 @@ pub const DRAWN_GROUPS: [u32; 6] = [0, 1, 2, 3, 9, 0xa];
 
 /// The holder slots of a batch renderer: the register groups' (+0x3c, four bytes each, groups 0 to 0xc) and the two
 /// alpha holders (+0x70, +0x74).
-const HOLDERS: std::ops::RangeInclusive<u32> = 0x3c..=0x74;
+pub(crate) const HOLDERS: std::ops::RangeInclusive<u32> = 0x3c..=0x74;
 const ALPHA_HOLDERS: u32 = 0x70;
 
 /// Whether the holder slot `slot` of a renderer the world draw draws is one the draw draws: a register group of
 /// [`DRAWN_GROUPS`] or an alpha holder.
-fn drawn_slot(slot: u32) -> bool {
+pub(crate) fn drawn_slot(slot: u32) -> bool {
     slot >= ALPHA_HOLDERS || DRAWN_GROUPS.contains(&((slot - 0x3c) / 4))
 }
 
@@ -307,22 +307,20 @@ pub struct Handed {
     pub spares: Vec<u32>,
 }
 
-/// The list words the cut hands to the drawing side for the world accumulator's renderer `renderer` (with a value:
-/// [`list_words`]'s rule), by [`Kind`]: as [`list_words`] with the lists' spare words, but of its holders only those the
-/// draw draws ([`drawn_slot`]), each with its own renderer's words whole. The other holders' words stay in guest
-/// memory, where main's passes after the draw read and draw them.
+/// The list words the cut hands to the drawing side for the world accumulator's renderer `renderer`, by [`Kind`]: every
+/// word [`candidates`] looks at, with the lists' spare words, zero or not, but of its holders only those the draw draws
+/// ([`drawn_slot`]), each with its own renderer's words whole. A word zero at the cut goes too: with the late joins
+/// main's passes fill and empty the same lists meanwhile (a spare chain empty at the cut above all), so the drawing
+/// side never falls back to guest memory for one. The other holders' words stay in guest memory, where main's passes
+/// after the draw read and draw them.
 pub fn drawn_list_words(e: &Engine, renderer: u32, out: &mut Handed) {
     candidates_of(
         e,
         renderer,
-        &mut |addr, kind| {
-            if e.global::<u32>(addr) != 0 {
-                match kind {
-                    Kind::Word => out.words.push(addr),
-                    Kind::Count => out.counts.push(addr),
-                    Kind::Spare => out.spares.push(addr),
-                }
-            }
+        &mut |addr, kind| match kind {
+            Kind::Word => out.words.push(addr),
+            Kind::Count => out.counts.push(addr),
+            Kind::Spare => out.spares.push(addr),
         },
         drawn_slot,
     );
@@ -516,8 +514,8 @@ mod tests {
 
     /// The words the cut hands over: a renderer with a holder in every slot (each holder with a renderer of its own,
     /// whose own holder 6 is there too): of the renderer's holders only the drawn groups' and the alpha holders', each
-    /// with its renderer whole; groups 4 to 8, 0xb and 0xc stay out. Every word holds 1 (a zero is not taken). A
-    /// holder's flags-and-count word goes as a count, its list's spare word as a spare.
+    /// with its renderer whole; groups 4 to 8, 0xb and 0xc stay out. Every word holds 1, but two that are zero and go
+    /// all the same. A holder's flags-and-count word goes as a count, its list's spare word as a spare.
     #[test]
     fn the_cut_takes_the_holders_the_draw_draws() {
         let mut e = Engine::new();
@@ -548,8 +546,15 @@ mod tests {
             e.mem.set_u32(top + slot, h);
             holders.push((slot, h, inner, nested));
         }
+        // Words zero at the cut go too: the renderer's +0x7c and group 0's holder's spare chain.
+        let (_, first, _, _) = holders[0];
+        for at in [top + 0x7c, first + 0x18] {
+            e.mem.set_u32(at, 0);
+        }
         let mut handed = Handed::default();
         drawn_list_words(&e, top, &mut handed);
+        assert!(handed.words.contains(&(top + 0x7c)), "a zero word");
+        assert!(handed.spares.contains(&(first + 0x18)), "a zero spare");
         let taken = &handed.words;
         let mut all = Vec::new();
         list_words(&e, top, &mut all);

@@ -16,10 +16,10 @@
 //! overlap counts every 600 posts. `NV_STAGE_TIME` (`crate::stage_time`) gives them per frame too, with the world
 //! draw's halves timed wherever they run.
 //!
-//! **Late joins** (`NV_DRAW_THREAD_LATE=1`, a check's switch like the thread's own; off): main passes the two early
-//! waits and the four entries that guard the world draw's lists ([`LATE_POINTS`]) without a join, so the job runs on
-//! beside the rest of the frame's draws until the frame's list reset or OnIdle; the counters say how often each was
-//! passed.
+//! **Late joins** (`NV_DRAW_THREAD_LATE=1`, a check's switch like the thread's own; off): main passes the world
+//! accumulator's check, the sun query and the rest of the frame's draws ([`LATE_POINTS`]) without a join, so the job
+//! runs on beside them until the next point that still joins (the water's and the refraction's passes, the frame's
+//! list reset, OnIdle); the counters say how often each was passed.
 //!
 //! **Off** (no run turned on): [`first_half`] and [`second_half`] are one relaxed load and the call they replace
 //! (plus `NV_STAGE_TIME`'s one load); every join point is one relaxed load. No lock, no allocation, nothing
@@ -164,6 +164,8 @@ struct Run {
     noted: Vec<&'static str>,
     /// The late joins ([`set_late`]): main passes [`LATE_POINTS`] with the job still posted.
     late: bool,
+    /// The job being cut or posted keeps every join ([`keep_joins`]): cleared at each cut.
+    keeps: bool,
     /// What happened, for the tests: posts, frames drawn on main with a handed-off packet, joins.
     counts: Counts,
 }
@@ -210,20 +212,25 @@ pub struct JoinWait {
 }
 
 /// The join points main passes with the job still posted when the run's late joins are on ([`set_late`]): the
-/// world accumulator's check (`00b63a90`) and the sun query (`006426a0`), the two early waits, and the entries of the
-/// first person's draw (`008746d0`), the refraction normals' (`00874920`), the rest of the frame's draws (`00875110`)
-/// and the depth-of-field re-render (`00875e40`), the four that guard the world draw's lists. What the drawing side
-/// reads of what main's passes there change goes with the packet: the lists the job draws (`take_lists` in the draw
-/// family's cut) and the values the cut copies. The frame's list reset (`00876850`), `Main::OnIdle` and the other join
-/// points still join.
-pub const LATE_POINTS: [u32; 6] = [
-    0x00b6_3a90,
-    0x0064_26a0,
-    0x0087_46d0,
-    0x0087_4920,
-    0x0087_5110,
-    0x0087_5e40,
-];
+/// world accumulator's check (`00b63a90`), the sun query (`006426a0`, inside the world pass and at the end of
+/// `00875110`) and the rest of the frame's draws (`00875110`: the first person, the screens and the sun through the
+/// world accumulator). What main's passes there change that the drawing side reads or writes goes with the packet: the
+/// lists the job draws, every word of them (`take_handed` in the draw family's cut), the batch renderers' pass type
+/// ranges, the cursor arrays and the sky shader's values (own blocks), and the values the cut copies.
+///
+/// Still joining with the late joins on: the water's first person draw (`008746d0`), the refraction normals
+/// (`00874920`) and the depth-of-field re-render (`00875e40`), whose passes draw the same skinned geometry as the job
+/// (a skin's bone-matrix cache and buffer are written in place by both sides) and borrow from the texture manager's
+/// pool; the frame's list reset (`00876850`), `Main::OnIdle` and the other join points. A job that copies the water
+/// reflection (the pool again) keeps every join ([`keep_joins`]).
+pub const LATE_POINTS: [u32; 3] = [0x00b6_3a90, 0x0064_26a0, 0x0087_5110];
+
+/// The job being cut keeps every join point, [`LATE_POINTS`] too (the draw family's cut, for a job that uses what main's
+/// passes there use with no copy of its own: the water reflection's borrow from the texture manager's pool). Cleared at
+/// each cut. Nothing for a run that is not on.
+pub fn keep_joins(e: &Engine) {
+    with_run(e.kernel.id(), |r| r.keeps = true);
+}
 
 /// `NV_DRAW_THREAD_LATE=1` (or `on`), read once: a run that turns the drawing thread on starts with the late joins on
 /// ([`set_late`]). The thread itself is a check's switch (play refuses it without `NV_DRAW_THREAD_CHECK=1`), so this one
@@ -279,6 +286,7 @@ pub fn turn_on(e: &Engine, hooks: Hooks) {
         closes: Times::default(),
         noted: Vec::new(),
         late: late_from_env(),
+        keeps: false,
         counts: Counts::default(),
     });
     ON.fetch_add(1, Relaxed);
@@ -435,7 +443,7 @@ fn finish_posted(e: &mut Engine, at: u32) {
     }
     let id = e.kernel.id();
     let Some((slot, hooks)) = with_run(id, |r| {
-        if r.late && r.pending.is_some() && LATE_POINTS.contains(&at) {
+        if r.late && !r.keeps && r.pending.is_some() && LATE_POINTS.contains(&at) {
             point(r, at).passed += 1;
             return None;
         }
@@ -599,6 +607,7 @@ fn first_half_on(e: &mut Engine, camera: u32, accumulator: u32, third: u32, over
         );
     }
     let stepped = e.real.is_none();
+    with_run(id, |r| r.keeps = false);
     let Some(packet) = (hooks.cut)(e, camera, accumulator, stepped) else {
         return serial(e, id, None, camera, accumulator, third);
     };
