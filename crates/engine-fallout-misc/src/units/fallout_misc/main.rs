@@ -2932,8 +2932,13 @@ pub fn fn_0086e650(e: &mut Engine, this: Ptr) {
             e.call(0x008c_a300, &args![0x011e_0fe0u32]);
         }
     }
+    // The hitch log's split of the frame tail (`engine_core::stage_time::TailMark`): a clock read at each mark, none
+    // with the log off; nothing in the game changes.
+    use engine_core::stage_time::{tail_mark, TailMark};
     main_update_non_render_safe_ai_tasks(e, this);
+    tail_mark(TailMark::AiTasks);
     e.call(0x0087_0610, &args![this]);
+    tail_mark(TailMark::PostThreads);
     if e.call(0x0070_ed10, &args![]).u8() != 0 {
         e.call(0x0070_ed20, &args![0u32]);
         e.call(0x0070_3e10, &args![]);
@@ -2949,13 +2954,29 @@ pub fn fn_0086e650(e: &mut Engine, this: Ptr) {
     let tick = e.call(IS_IN_MENU_MODE, &args![]).u8() != 0
         || (player != 0 && e.call(0x0095_0090, &args![player]).u8() != 0)
         || (accumulated as f64) >= e.global::<f64>(0x0103_57e8);
+    // The other steps end here every frame; the sort, when the tick runs, is its own part.
+    tail_mark(TailMark::TickIn);
     if tick {
         e.set_global(0x011d_eef8, 0.0f32);
         let step = e.global::<u8>(0x011d_eef5);
         e.set_global(0x011d_eef5, step.wrapping_add(1));
+        if engine_core::stage_time::points_on() {
+            // The pool the tick sorts (the memory manager's table, `011f67b8`) and its free list's count
+            // (`+0x54`, the count `00aa7260` tests) before the sort: read only, for the hitch log.
+            let entry = 0x011f_67b8 + 4 * u32::from(step);
+            let pool = if e.mem.is_mapped(entry) {
+                e.mem.u32(entry)
+            } else {
+                0
+            };
+            let free = (pool != 0 && e.mem.is_mapped(pool + 0x54)).then(|| e.mem.u32(pool + 0x54));
+            engine_core::stage_time::tail_tick(u32::from(step), free);
+        }
         e.call(0x00aa_7290, &args![step as u32]);
+        tail_mark(TailMark::TickOut);
         // The game also resets the counter when it reaches 0x100, which a byte never does.
     }
+    tail_mark(TailMark::IdleEnd);
 }
 
 // Translated from 0086ef30 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3269,17 +3290,24 @@ pub fn main_update_non_render_safe_ai_tasks(e: &mut Engine, this: Ptr) {
     e.call(0x0096_c710, &args![PROCESS_LISTS]);
     let seconds = timer_seconds(e);
     e.call(0x0097_81d0, &args![PROCESS_LISTS, seconds]);
+    // The hitch log's split of the frame tail (`engine_core::stage_time::TailMark`): a clock read at each mark,
+    // none with the log off; nothing in the game changes.
+    use engine_core::stage_time::{tail_mark, TailMark};
+    tail_mark(TailMark::AiLists);
     let pipboy = e.call(0x0070_5990, &args![]).u32();
     if fn_0086f840(e, Ptr::new(pipboy)) != 0 {
         e.call(0x007f_a990, &args![pipboy]);
     }
     if processor_count(e) > 1 {
         e.call(0x0054_ae30, &args![]);
+        tail_mark(TailMark::AiAttaches);
         let object = e.call(0x0045_37b0, &args![]).u32();
         e.call(0x0087_a6d0, &args![object]);
         let object = e.call(0x0045_37b0, &args![]).u32();
         e.call(0x0087_a790, &args![object]);
+        tail_mark(TailMark::AiQueue);
         e.call(0x0055_2570, &args![]);
+        tail_mark(TailMark::AiNodes);
         let value = e.global::<f32>(0x011c_3c08);
         fn_0086f830(e, value);
         let object = e.call(0x0045_37b0, &args![]).u32();
@@ -5226,6 +5254,27 @@ mod tests {
         assert_eq!(run_main_entry(&mut e), 0);
         let log = take_log(&mut e);
         assert_eq!(calls_to(&log, API_CREATE_WINDOW).len(), 1);
+    }
+
+    /// The launcher check answering "the same card" (what the host answers once it has named the
+    /// card, `crates/host/src/launcher.rs`, issue #935): up to its window `main` neither releases
+    /// its renderer nor asks for the tasklet manager (whose stop ended the workers the first
+    /// cell's load waits for), and starts no launcher.
+    #[test]
+    fn main_keeps_its_renderer_and_workers_for_the_same_card() {
+        let mut e = main_engine();
+        e.register(0x004d_a570, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        run_main_entry(&mut e);
+        let log = take_log(&mut e);
+        let before = &log[..position(&log, API_CREATE_WINDOW)];
+        assert_eq!(calls_to(before, 0x004d_a570).len(), 1);
+        for callee in [0x004d_a4d0, 0x00b0_0a00, API_SHELL_EXECUTE] {
+            assert!(
+                calls_to(before, callee).is_empty(),
+                "{callee:08x} before the window"
+            );
+        }
     }
 
     /// A UTF-16 string in memory.

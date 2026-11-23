@@ -775,13 +775,14 @@ fn logging(e: &mut Engine, a: &[u32]) -> Ret {
     Ret::default()
 }
 
-/// [`world`] with the log mapped and `Tile::Value::SetFloat` (`00a0a270`), `SetString`
-/// (`00a0a300`) and `CalculateValue` (`00a09410`) as logging stand-ins: what reaches them is what
-/// the setters and the change event decide; their own work has its own translations.
+/// [`world`] with the log mapped and `Tile::Value::SetFloat` (`00a0a270`) and `SetString`
+/// (`00a0a300`) as logging stand-ins: what reaches them is what the setters decide; their own work
+/// has its own translations. `CalculateValue` (`00a09410`) is typed (a member of the dispatch
+/// family), so no setup may stand in for it: the real one runs on both sides.
 fn setter_world(e: &mut Engine) {
     world(e);
     e.map(LOG, 0x4000);
-    for stub in [0x00a0_a270, 0x00a0_a300, 0x00a0_9410] {
+    for stub in [0x00a0_a270, 0x00a0_a300] {
         e.register(stub, logging);
     }
 }
@@ -1077,7 +1078,7 @@ fn tile_absolute_position_diff() {
     .assert_same();
 }
 
-/// What the `CalculateValue` stand-in of [`tile_value_change_event_diff`] does on its call number
+/// What the action stand-in of [`tile_value_change_event_diff`] does on its call number
 /// [`CALC_TRIGGER`] (0 nothing; 1 `AddReaction(value, extra)`, a node at the end of the walked list;
 /// 2 the current node taken out of the list and its next word cleared, as if freed and reused;
 /// 3 `ValueChangeEvent(other)`), the values it works on and its call count.
@@ -1088,8 +1089,10 @@ const CALC_EXTRA: u32 = LOG + 0x3f0c;
 const CALC_TRIGGER: u32 = LOG + 0x3f10;
 const CALC_CALLS: u32 = LOG + 0x3f14;
 
-/// The `CalculateValue` stand-in that changes the reaction lists while `ValueChangeEvent` walks
-/// them: logs its words, then on one call does what [`CALC_MODE`] says.
+/// The operand function (`QFloat`, action vtable slot 0) of each dependent's one action in
+/// [`tile_value_change_event_diff`], so it runs inside the real `CalculateValue` of that dependent
+/// and changes the reaction lists while `ValueChangeEvent` walks them: logs its words (the action,
+/// one per dependent), then on one call does what [`CALC_MODE`] says. It answers 0.0.
 fn calculating(e: &mut Engine, a: &[u32]) -> Ret {
     logging(e, a);
     let n = e.mem.u32(CALC_CALLS);
@@ -1133,10 +1136,13 @@ fn calculating(e: &mut Engine, a: &[u32]) -> Ret {
 }
 
 /// `Tile::ValueChangeEvent` (`00a0a220`): a value with no reaction list, and lists of one to three
-/// dependents (one named twice), each recalculated with `CalculateValue(false)` in order. On its
-/// first or second call the `CalculateValue` stand-in may add a reaction to the walked list, take
-/// the current node out of it, or run the event for another value: the walk reads the next node
-/// after the call, from the node it just handled, as the exe does (`00a0a258`).
+/// dependents (one named twice), each recalculated with `CalculateValue(false)` in order (the real
+/// one, typed on the typed side: it is a member of the dispatch family). Each dependent is a value
+/// of a plain tile with one action of an unknown type whose operand function is the stand-in
+/// [`calculating`], so its recalculation changes nothing but makes that one call. On its first or
+/// second call the stand-in may add a reaction to the walked list, take the current node out of
+/// it, or run the event for another value: the walk reads the next node after the call, from the
+/// node it just handled, as the exe does (`00a0a258`).
 #[test]
 fn tile_value_change_event_diff() {
     Diff::new(engine_core::entry!(
@@ -1153,13 +1159,29 @@ fn tile_value_change_event_diff() {
     ])
     .setup(|e, case| {
         setter_world(e);
-        e.register(0x00a0_9410, calculating);
+        // The action class: `QFloat` the stand-in, `QRefValue` answering none (both called
+        // through the vtable on both sides, as neither is one of the classes' own).
+        e.register(0x00fd_0700, calculating);
+        e.register(0x00fd_0704, |_, _| Ret::default());
+        let vtable = e.mem.alloc(8);
+        e.mem.set_u32(vtable, 0x00fd_0700);
+        e.mem.set_u32(vtable + 4, 0x00fd_0704);
+        let tile = e.mem.alloc(0x40);
+        let dependent = |e: &mut Engine| {
+            let value = e.mem.alloc(0x14);
+            e.mem.set_u32(value + 4, tile);
+            let action = e.mem.alloc(0x10);
+            e.mem.set_u32(action, vtable);
+            e.mem.set_u32(action + 4, 2099);
+            e.mem.set_u32(value + 0x10, action);
+            value
+        };
         let value = e.mem.alloc(0x14);
-        let (a, b, c) = (e.mem.alloc(0x14), e.mem.alloc(0x14), e.mem.alloc(0x14));
+        let (a, b, c) = (dependent(e), dependent(e), dependent(e));
         let lists: Vec<Vec<u32>> = vec![vec![], vec![a], vec![a, b], vec![c, a, b], vec![b, b]];
         let list = &lists[case.word(0) as usize];
         let other = e.mem.alloc(0x14);
-        let extra = e.mem.alloc(0x14);
+        let extra = dependent(e);
         let mut given = vec![(other, vec![c])];
         if !list.is_empty() {
             given.push((value, list.clone()));
@@ -1401,6 +1423,578 @@ fn find_by_path_diff() {
         Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]),
     ])
     .setup(search_words)
+    .run()
+    .assert_same();
+}
+
+// ---- Tile::Value::CalculateValue (every value of a menu's build) ----
+
+/// The value actions this test strings together: (type, operand, reads the other value).
+const PROGRAMS: &[&[(u32, f32, bool)]] = &[
+    &[],
+    &[(2000, 3.0, false), (2001, 0.0, true)],
+    &[(2000, 0.0, true), (2003, 2.5, false), (2012, 4.0, false)],
+    &[
+        (2000, 7.0, false),
+        (2004, 2.0, false),
+        (2004, 0.0, false),
+        (2005, 3.0, false),
+        (2006, -1.0, false),
+        (2007, 2.0, false),
+        (2008, 0.25, false),
+        (2009, 0.5, false),
+        (2010, -9.0, false),
+        (2011, 2.0, false),
+    ],
+    &[
+        (2000, 1.0, false),
+        (2013, 1.0, false),
+        (2014, 1.0, false),
+        (2015, 0.0, false),
+        (2016, 2.0, false),
+        (2017, 0.0, false),
+        (2018, 0.0, true),
+        (2019, 0.0, true),
+        (2020, 0.0, true),
+        (2021, 0.0, true),
+        (2022, 0.0, false),
+    ],
+    &[(2000, 0.0, true), (2002, 1.0, false), (2099, 5.0, false)],
+];
+
+/// The words of [`calculate_value_diff`]: a tile (flags from the case: none, loading, its menu
+/// deleting, released; vtable slot 0xC a rect's type, slot 0x18 a `PostParse` answering the case's
+/// word) holding the value (trait `x`, the class or a user trait; its float from the case) whose
+/// actions are a program of [`PROGRAMS`] (float actions and reference actions with the two action
+/// classes' vtables) reading another value (float 2.0; with a string or not); empty reaction and
+/// user-trait maps with the game's integer slots.
+fn calculate_words(e: &mut Engine, case: &engine_core::typed::diff::Case) -> Vec<u32> {
+    world(e);
+    for page in [0x0109_4000, 0x0101_1000] {
+        e.map(page, 0x1000);
+    }
+    e.mem.set_f64(0x0101_1588, 0.5);
+    e.mem.set_u32(0x0109_4c2c, 0x00a0_c000);
+    e.mem.set_u32(0x0109_4c30, 0x00ad_87c0);
+    e.mem.set_u32(0x0109_4c44, 0x00a0_c020);
+    e.mem.set_u32(0x0109_4c48, 0x00a0_c060);
+    int_map(e, 0x011f_3358, 37, 0, false);
+    int_map(e, 0x011f_3308, 37, 0, false);
+    let answer = case.word(3);
+    // `Tile::FinalPostParse` (a value that changed on a tile whose `PostParse` answers 0) queues
+    // its updates with `Tile::AddNeedsUpdate` (`00a07530`): a logging stand-in, so what it is
+    // given compares and the update list's node pool (its lock asks `GetCurrentThreadId`) is left
+    // to that function's own translation.
+    e.map(LOG, 0x4000);
+    e.register(0x00a0_7530, logging);
+    e.register(0x00fd_0500, |_, _| ret(0x385));
+    e.register_double(0x00fd_0504, move |_, _| ret(answer));
+    let vtable = e.mem.alloc(0x20);
+    e.mem.set_u32(vtable + 0xc, 0x00fd_0500);
+    e.mem.set_u32(vtable + 0x18, 0x00fd_0504);
+    let tile = e.mem.alloc(0x40);
+    e.mem.set_u32(tile, vtable);
+    let flags = [0, 0x10000, 0x4000, 0x2000][case.word(1) as usize];
+    e.mem.set_u32(tile + 0x30, flags);
+    let other = e.mem.alloc(0x14);
+    e.mem.set_u32(other, 0xfa2);
+    e.mem.set_u32(other + 4, tile);
+    e.mem.set_f32(other + 8, 2.0);
+    if case.word(4) != 0 {
+        let text = e.mem.alloc(4);
+        e.mem.write(text, b"ab\0");
+        e.mem.set_u32(other + 0xc, text);
+    }
+    let value = e.mem.alloc(0x14);
+    let id = [0xfa1, 0xfa4, 10_005][case.word(2) as usize];
+    e.mem.set_u32(value, id);
+    e.mem.set_u32(value + 4, tile);
+    e.mem
+        .set_f32(value + 8, [0.0f32, 1.5, -3.0][case.word(5) as usize]);
+    let mut link = value + 0x10;
+    for &(kind, operand, reads) in PROGRAMS[case.word(0) as usize] {
+        let action = e.mem.alloc(0x10);
+        if reads {
+            e.mem.set_u32(action, 0x0109_4c44);
+            e.mem.set_u32(action + 0xc, other);
+        } else {
+            e.mem.set_u32(action, 0x0109_4c2c);
+            e.mem.set_f32(action + 0xc, operand);
+        }
+        e.mem.set_u32(action + 4, kind);
+        e.mem.set_u32(link, action);
+        link = action + 8;
+    }
+    vec![value, case.word(6)]
+}
+
+/// `Tile::Value::CalculateValue` (`00a09410`) against its translation: every operation, a reference
+/// action's float and string, the tile's flags (loading, menu deleting, released), the class trait,
+/// `PostParse`'s answers (0 leads to `Tile::FinalPostParse`), with and without the flag. The two
+/// action classes' operand functions are read in place.
+#[test]
+fn calculate_value_diff() {
+    Diff::new(engine_core::entry!(
+        0x00a0_9410,
+        dispatch::tile::calculate_value(Ptr<_>, u8)
+    ))
+    .family(&dispatch::DISPATCH)
+    .family(&crt::CRT)
+    // `_ctrlfp` (`00ed5abb`), which `floor`'s x87 body reaches with `typed_call!`.
+    .family(&leaf::LEAVES)
+    .ignore_calls(&[0x00a0_c000, 0x00a0_c020, 0x00a0_c060, 0x00ad_87c0])
+    // `Tile::FinalPostParse`: the translation's plain call. And `floor`'s x87 body (`00ed4563`):
+    // both sides call `floor` (`00ec6940`) by address; its translation (the translation side) jumps
+    // to the body with a plain Rust call, its typed version (the C runtime family, on for the typed
+    // side) by address, as `typed_crt.rs`'s `floor` test declares. The body runs on both sides and
+    // its own calls (`_ctrlfp` loading and putting back the round-down control word) compare.
+    .translation_calls_plainly(&[0x00a0_37e0, 0x00ed_4563])
+    .inputs(&[
+        Input::Of(&[0, 1, 2, 3, 4, 5]),
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Of(&[0, 1, 2]),
+        Input::Of(&[0, 1]),
+        Input::Of(&[0, 1]),
+        Input::Of(&[0, 1, 2]),
+        Input::Of(&[0, 1]),
+    ])
+    .max_cases(600)
+    .setup(calculate_words)
+    .run()
+    .assert_same();
+}
+
+/// The scenes of [`calculate_value_scenes_diff`]: a program (type, operand, what it reads: 0 the
+/// operand, 1 a plain value (`y`, 2.0), 2 a user trait the user-trait map gives -1, 3 one it gives
+/// 5, 4 one not in the map, 5 a plain value with the string "ab") and the value's starting float.
+type Scene = (&'static [(u32, f32, u8)], f32);
+const SCENES: &[Scene] = &[
+    // Parentheses: one pair, a nested pair, and a right parenthesis on an emptied stack.
+    (
+        &[
+            (2000, 4.0, 0),
+            (0x7e8, 0.0, 0),
+            (2000, 3.0, 0),
+            (2001, 2.0, 0),
+            (0x7e9, 2001.0, 0),
+        ],
+        1.0,
+    ),
+    (
+        &[
+            (2000, 2.0, 0),
+            (0x7e8, 0.0, 0),
+            (2000, 3.0, 0),
+            (0x7e8, 0.0, 0),
+            (2000, 1.0, 0),
+            (0x7e9, 2003.0, 0),
+            (0x7e9, 2004.0, 0),
+        ],
+        0.0,
+    ),
+    (
+        &[
+            (2000, 6.0, 0),
+            (0x7e8, 0.0, 0),
+            (2000, 1.0, 0),
+            (0x7e9, 2001.0, 0),
+            (0x7e9, 2003.0, 0),
+        ],
+        0.0,
+    ),
+    // The integers an `eString` trait is rewritten as: 0, 9, 10, a negative, three digits, and
+    // no change.
+    (&[(2000, 0.0, 0)], 1.5),
+    (&[(2000, 9.0, 0)], 0.0),
+    (&[(2000, 10.0, 0)], 0.0),
+    (&[(2000, -12.0, 0)], 0.0),
+    (&[(2000, 123.0, 0)], 0.0),
+    (&[(2000, 7.0, 0)], 7.0),
+    // User traits: -1 in the map (`GetUnderscoreValue` answering a value for an even number, null
+    // for an odd one), 5 in the map, a found one then one not in the map, a string then a float.
+    (&[(2001, 0.0, 2)], 3.0),
+    (&[(2001, 0.0, 2)], 4.0),
+    (&[(2001, 0.0, 3)], 1.0),
+    (&[(2001, 0.0, 2), (2001, 0.0, 4)], 2.0),
+    (&[(2000, 0.0, 5), (2000, 0.0, 1)], 0.0),
+    // Floats: NaN operands, a NaN start, a division by zero then a comparison, ROUND by zero,
+    // infinities, a denormal and signed zeros.
+    (
+        &[
+            (2005, f32::NAN, 0),
+            (2006, f32::NAN, 0),
+            (2012, f32::NAN, 0),
+            (2014, f32::NAN, 0),
+        ],
+        1.0,
+    ),
+    (&[(2012, 1.0, 0), (2014, 1.0, 0)], f32::NAN),
+    (&[(2004, 0.0, 0), (2012, 0.5, 0)], 3.0),
+    (&[(2011, 0.0, 0)], 5.0),
+    (&[(2001, f32::INFINITY, 0), (2002, f32::INFINITY, 0)], 1.0),
+    (&[(2003, 1.0e-40, 0), (2001, -0.0, 0)], -0.0),
+    (&[(2005, -0.0, 0), (2006, 0.0, 0), (2015, -0.0, 0)], 0.0),
+];
+
+/// The scene indexes of [`SCENES`].
+const SCENE_INDEXES: &[u32] = &[
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+];
+
+/// A scene for `CalculateValue`: the tile and action classes of [`calculate_words`] (`PostParse`
+/// answering `answer`), the value (trait `trait_id`, starting float `start`, its own string none,
+/// "7" or "123") running `program` (an operand whose reads code is 8 is `a`, 9 is `b`), the values
+/// it reads, the user-trait map (10010 gives -1, 10011 gives 5), a `GetUnderscoreValue` stand-in, a
+/// `sprintf_s` stand-in writing the integer, and with `dependents` two values that react to it (one
+/// copying it, one adding 1.0). With `uio`, UI Organizer's operator (its patch at 00a0968c,
+/// `uio::operators::operate`) runs each operation, as in default play.
+#[allow(clippy::too_many_arguments)]
+fn calc_scene(
+    e: &mut Engine,
+    program: &[(u32, f32, u8)],
+    start: f32,
+    trait_id: u32,
+    answer: u32,
+    own_string: u32,
+    dependents: bool,
+    uio: bool,
+    (a, b): (f32, f32),
+) -> Vec<u32> {
+    world(e);
+    if uio {
+        e.set_uio(true);
+        e.on_site(uio::OPERATOR_SITE, uio::operators::operate);
+    }
+    for page in [0x0109_4000, 0x0101_1000] {
+        e.map(page, 0x1000);
+    }
+    e.mem.set_f64(0x0101_1588, 0.5);
+    e.mem.set_u32(0x0109_4c2c, 0x00a0_c000);
+    e.mem.set_u32(0x0109_4c30, 0x00ad_87c0);
+    e.mem.set_u32(0x0109_4c44, 0x00a0_c020);
+    e.mem.set_u32(0x0109_4c48, 0x00a0_c060);
+    e.map(LOG, 0x4000);
+    e.register(0x00a0_7530, logging);
+    // The parentheses' stack of floats (`BSSimpleArray<float>`, vtable `0106cc64`) grows through
+    // its vtable's allocate (+4), free (+8) and reallocate (+0xC): stand-ins as [`tile_with_ids`]'s.
+    e.map(0x0106_c000, 0x1000);
+    e.mem.set_u32(0x0106_cc68, 0x00fd_0104);
+    e.mem.set_u32(0x0106_cc6c, 0x00fd_0108);
+    e.mem.set_u32(0x0106_cc70, 0x00fd_010c);
+    e.register(0x00fd_0104, |e, a| ret(e.mem.alloc(a[1].max(1) * 4)));
+    e.register(0x00fd_0108, |_, _| Ret::default());
+    e.register(0x00fd_010c, |e, a| {
+        let moved = e.mem.alloc(a[2].max(1) * 4);
+        let bytes = e.mem.bytes(a[1], e.mem.u32(a[0] + 8) * 4);
+        e.mem.write(moved, &bytes);
+        ret(moved)
+    });
+    // `floor` and `ceil` of a NaN report it through `errno`: the static slot (no thread data:
+    // `__getptd_noexit` answers 0, as in the lookup tests above), compared with the rest of memory.
+    e.map(0x011c_1000, 0x1000);
+    e.register(0x00ed_1165, |_, _| ret(0));
+    reaction_map(e, 37, &[]);
+    int_map(e, 0x011f_3308, 37, 0, false);
+    e.call(0x00a0_c6c0, &args![0x011f_3308u32, 10_010u32, u32::MAX]);
+    e.call(0x00a0_c6c0, &args![0x011f_3308u32, 10_011u32, 5u32]);
+    e.register(0x00fd_0500, |_, _| ret(0x385));
+    e.register_double(0x00fd_0504, move |_, _| ret(answer));
+    let vtable = e.mem.alloc(0x20);
+    e.mem.set_u32(vtable + 0xc, 0x00fd_0500);
+    e.mem.set_u32(vtable + 0x18, 0x00fd_0504);
+    let tile = e.mem.alloc(0x40);
+    e.mem.set_u32(tile, vtable);
+    let make = |e: &mut Engine, id: u32, float: f32, text: &[u8]| {
+        let value = e.mem.alloc(0x14);
+        e.mem.set_u32(value, id);
+        e.mem.set_u32(value + 4, tile);
+        e.mem.set_f32(value + 8, float);
+        if !text.is_empty() {
+            let at = e.mem.alloc(text.len() as u32 + 1);
+            e.mem.write(at, text);
+            e.mem.set_u8(at + text.len() as u32, 0);
+            e.mem.set_u32(value + 0xc, at);
+        }
+        value
+    };
+    // `GetUnderscoreValue(tile, trait, number)`: a value for an even number, null for an odd one.
+    let found = make(e, 0xfa3, 8.0, b"uv");
+    e.register_double(0x00a0_a0b0, move |_, w| {
+        ret(if w[2] % 2 == 0 { found } else { 0 })
+    });
+    // `sprintf_s(buffer, size, "%d", n)`: the integer's digits.
+    e.register_double(0x0040_6d00, |e, w| {
+        let digits = (w[3] as i32).to_string();
+        e.mem.write(w[0], digits.as_bytes());
+        e.mem.set_u8(w[0] + digits.len() as u32, 0);
+        ret(digits.len() as u32)
+    });
+    let read = [
+        0,
+        make(e, 0xfa2, 2.0, b""),
+        make(e, 10_010, 2.5, b""),
+        make(e, 10_011, 3.0, b"cd"),
+        make(e, 10_012, 4.0, b""),
+        make(e, 0xfa2, 2.0, b"ab"),
+    ];
+    let own: &[u8] = match own_string {
+        0 => b"",
+        1 => b"7",
+        _ => b"123",
+    };
+    let value = make(e, trait_id, start, own);
+    let action = |e: &mut Engine, kind: u32, operand: f32, reads: u32, next: u32| {
+        let action = e.mem.alloc(0x10);
+        if reads != 0 {
+            e.mem.set_u32(action, 0x0109_4c44);
+            e.mem.set_u32(action + 0xc, reads);
+        } else {
+            e.mem.set_u32(action, 0x0109_4c2c);
+            e.mem.set_f32(action + 0xc, operand);
+        }
+        e.mem.set_u32(action + 4, kind);
+        e.mem.set_u32(action + 8, next);
+        action
+    };
+    let mut head = 0;
+    for &(kind, operand, reads) in program.iter().rev() {
+        let (operand, reads) = match reads {
+            8 => (a, 0),
+            9 => (b, 0),
+            r => (operand, read[r as usize]),
+        };
+        head = action(e, kind, operand, reads, head);
+    }
+    e.mem.set_u32(value + 0x10, head);
+    if dependents {
+        let copying = make(e, 0xfa1, 0.0, b"");
+        let copy = action(e, 2000, 0.0, value, 0);
+        e.mem.set_u32(copying + 0x10, copy);
+        let adding = make(e, 0xfa2, 1.0, b"");
+        let add = action(e, 2001, 1.0, 0, 0);
+        e.mem.set_u32(adding + 0x10, add);
+        e.call(0x00a0_a130, &args![value, copying]);
+        e.call(0x00a0_a130, &args![value, adding]);
+    }
+    vec![value, 0]
+}
+
+/// `Tile::Value::CalculateValue` (`00a09410`) on every scene of [`SCENES`] (parentheses, the
+/// `eString` rewrite, user traits through the user-trait map and `GetUnderscoreValue`, special
+/// floats) for the traits `x`, `string` and a user trait, `PostParse` answering 0 or 1, the value's
+/// own string none or of one or three characters, and with or without values that react to it
+/// (recalculated through `ValueChangeEvent`, by address, on both sides), with UI Organizer's
+/// operator or the game's own switch.
+#[test]
+fn calculate_value_scenes_diff() {
+    assert_eq!(SCENE_INDEXES.len(), SCENES.len());
+    Diff::new(engine_core::entry!(
+        0x00a0_9410,
+        dispatch::tile::calculate_value(Ptr<_>, u8)
+    ))
+    .family(&dispatch::DISPATCH)
+    .family(&crt::CRT)
+    .family(&leaf::LEAVES)
+    .ignore_calls(&[0x00a0_c000, 0x00a0_c020, 0x00a0_c060, 0x00ad_87c0])
+    .translation_calls_plainly(&[0x00a0_37e0, 0x00ed_4563])
+    .inputs(&[
+        Input::Of(SCENE_INDEXES),
+        Input::Of(&[0xfa1, 0xfc4, 10_005]),
+        Input::Of(&[0, 1]),
+        Input::Of(&[0, 1, 2]),
+        Input::Flag,
+        Input::Flag,
+    ])
+    .max_cases(1600)
+    .setup(|e, case| {
+        let (program, start) = SCENES[case.word(0) as usize];
+        calc_scene(
+            e,
+            program,
+            start,
+            case.word(1),
+            case.word(2),
+            case.word(3),
+            case.word(4) == 1,
+            case.word(5) == 1,
+            (0.0, 0.0),
+        )
+    })
+    .run()
+    .assert_same();
+}
+
+/// Mixed chains of operations on two swept floats (`float_sweep`: full-mantissa floats, now and then
+/// a special one), with UI Organizer's operator or the game's own switch, against the translation
+/// bit for bit.
+#[test]
+fn calculate_value_float_sweep_diff() {
+    const CHAINS: &[&[(u32, f32, u8)]] = &[
+        &[
+            (2000, 0.0, 8),
+            (2001, 0.0, 9),
+            (2003, 0.0, 8),
+            (2002, 0.0, 9),
+        ],
+        &[
+            (2000, 0.0, 8),
+            (0x7e8, 0.0, 0),
+            (2000, 0.0, 9),
+            (2004, 0.0, 8),
+            (0x7e9, 2003.0, 0),
+            (2011, 0.0, 9),
+        ],
+        &[
+            (2000, 0.0, 8),
+            (2005, 0.0, 9),
+            (2006, 0.0, 8),
+            (2012, 0.0, 9),
+            (2001, 0.0, 8),
+            (2008, 0.0, 9),
+            (2009, 0.0, 8),
+            (2010, 0.0, 9),
+            // MOD by a fixed operand: one that rounds to 0 divides by zero in the exe (`IDIV`),
+            // and in both versions here.
+            (2007, 3.0, 0),
+        ],
+    ];
+    Diff::new(engine_core::entry!(
+        0x00a0_9410,
+        dispatch::tile::calculate_value(Ptr<_>, u8)
+    ))
+    .family(&dispatch::DISPATCH)
+    .family(&crt::CRT)
+    .family(&leaf::LEAVES)
+    .ignore_calls(&[0x00a0_c000, 0x00a0_c020, 0x00a0_c060, 0x00ad_87c0])
+    .translation_calls_plainly(&[0x00a0_37e0, 0x00ed_4563])
+    .inputs(&[Input::Of(&[0, 1, 2]), Input::F32, Input::F32, Input::Flag])
+    .max_cases(300)
+    .float_sweep(96)
+    .setup(move |e, case| {
+        calc_scene(
+            e,
+            CHAINS[case.word(0) as usize],
+            0.0,
+            0xfa1,
+            1,
+            0,
+            false,
+            case.word(3) == 1,
+            (case.f32(1), case.f32(2)),
+        )
+    })
+    .run()
+    .assert_same();
+}
+
+// ---- Tile::Value::~Value (every value of a closing menu) ----
+
+/// The words of [`value_destructor_diff`] and [`clear_actions_in_place_diff`]: a value (a string or
+/// none) whose three actions are, by the case, of the float action class (`01094c2c`: `QFloat`
+/// `00a0c000`, `QRefValue` the plain action's `00ad87c0`), the reference action class (`01094c44`:
+/// `00a0c020`, `00a0c060`, the word at +0xC) or a stand-in class (`QRefValue` `00fd0404`, the word
+/// at +0xC), reading two other values and nothing; the reaction map holds lists for the other values
+/// (with this value first or alone) and, by the case, none, one or three reactions on this value
+/// from two owners whose actions of the three classes read this value, another value or nothing.
+fn destructor_words(e: &mut Engine, case: &engine_core::typed::diff::Case) -> Vec<u32> {
+    world(e);
+    e.map(0x0109_4000, 0x1000);
+    e.mem.set_u32(0x0109_4c2c, 0x00a0_c000);
+    e.mem.set_u32(0x0109_4c30, 0x00ad_87c0);
+    e.mem.set_u32(0x0109_4c44, 0x00a0_c020);
+    e.mem.set_u32(0x0109_4c48, 0x00a0_c060);
+    let stand_in = e.mem.alloc(0x10);
+    e.mem.set_u32(stand_in + 4, 0x00fd_0404);
+    e.register(0x00fd_0404, |e, a| ret(e.mem.u32(a[0] + 0xc)));
+    let classes = [0x0109_4c2c, 0x0109_4c44, stand_in];
+    // The class of an action: float actions read nothing (their word is the float 0.0).
+    let action = |e: &mut Engine, class: u32, reads: u32, next: u32| {
+        let action = e.mem.alloc(0x10);
+        e.mem.set_u32(action, class);
+        e.mem.set_u32(action + 8, next);
+        let reads = if class == 0x0109_4c2c { 0 } else { reads };
+        e.mem.set_u32(action + 0xc, reads);
+        action
+    };
+    let this = e.mem.alloc(0x14);
+    e.mem.set_u32(this + 4, 0x55);
+    e.mem.set_f32(this + 8, 1.5);
+    if case.word(2) == 1 {
+        let text = e.mem.alloc(4);
+        e.mem.write(text, b"ab\0");
+        e.mem.set_u32(this + 0xc, text);
+    }
+    let others = [e.mem.alloc(0x14), e.mem.alloc(0x14)];
+    let pattern = case.word(0);
+    let mut head = 0;
+    for k in (0..3u32).rev() {
+        let class = classes[((pattern >> (2 * k)) & 3) as usize % 3];
+        let reads = [others[0], others[1], 0][k as usize];
+        head = action(e, class, reads, head);
+    }
+    e.mem.set_u32(this + 0x10, head);
+    let owners: Vec<u32> = (0..2u32)
+        .map(|k| {
+            let owner = e.mem.alloc(0x14);
+            let mut head = 0;
+            for j in 0..3u32 {
+                let class = classes[((pattern + j + k) % 3) as usize];
+                let reads = [this, others[1], this][j as usize];
+                head = action(e, class, reads, head);
+            }
+            e.mem.set_u32(owner + 0x10, head);
+            owner
+        })
+        .collect();
+    let mut lists = vec![(others[0], vec![this, owners[0]]), (others[1], vec![this])];
+    match case.word(1) {
+        1 => lists.push((this, vec![owners[0]])),
+        2 => lists.push((this, vec![owners[0], owners[1], owners[0]])),
+        _ => {}
+    }
+    reaction_map(e, case.word(3), &lists);
+    vec![this]
+}
+
+/// The cases of [`destructor_words`]: the classes of the value's three actions (two bits each),
+/// the reactions on it, a string or none, the reaction map's bucket count.
+const DESTRUCTOR_INPUTS: &[Input] = &[
+    Input::Of(&[0, 1, 2, 5, 6, 9, 18, 21, 26, 36, 42]),
+    Input::Of(&[0, 1, 2]),
+    Input::Flag,
+    Input::Of(&[1, 37]),
+];
+
+/// `Tile::Value::~Value` (`00a09330`) against its translation: the actions cleared (each class's
+/// `QRefValue`, the two action classes' read in place), the owners' actions that read the value
+/// blanked and the others kept, the reactions freed and the map's entry erased, the string freed.
+#[test]
+fn value_destructor_diff() {
+    Diff::new(engine_core::entry!(
+        0x00a0_9330,
+        dispatch::tile::value_destructor(Ptr<_>)
+    ))
+    .family(&dispatch::DISPATCH)
+    .family(&leaf::LEAVES)
+    .ignore_calls(&[0x00a0_c060, 0x00ad_87c0])
+    .inputs(DESTRUCTOR_INPUTS)
+    .setup(destructor_words)
+    .run()
+    .assert_same();
+}
+
+/// `Tile::Value::ClearActions` (`00a09200`) on the action classes' own `QRefValue`s, read in place.
+#[test]
+fn clear_actions_in_place_diff() {
+    Diff::new(engine_core::entry!(
+        0x00a0_9200,
+        dispatch::tile::clear_actions(Ptr<_>)
+    ))
+    .family(&dispatch::DISPATCH)
+    .family(&leaf::LEAVES)
+    .ignore_calls(&[0x00a0_c060, 0x00ad_87c0])
+    .inputs(DESTRUCTOR_INPUTS)
+    .setup(destructor_words)
     .run()
     .assert_same();
 }

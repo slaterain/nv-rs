@@ -223,12 +223,281 @@ pub const NAMES: [&str; COLUMNS] = [
     "join_other",
 ];
 
+/// Marks inside the game's frame tail (from `WaitForThreads`' return, [`Point::WaitOut`], to the host's take,
+/// [`Point::Host`]), in the order main passes them in `Main::OnIdle` (`0086e650`). Each ends one part of the tail:
+/// the time since the last mark passed before it in the frame (or since `WaitForThreads` returned). The hitch log
+/// prints the parts when the tail is long ([`take_tail`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(usize)]
+pub enum TailMark {
+    /// In `Main::UpdateNonRenderSafeAITasks` (`0086f6a0`): the process lists' steps returned (the projectiles and
+    /// explosions `0096c240`, the actors' animation scene graphs `0096c970` or `0096c860`, the detection lists
+    /// `0096c710`, the actors' process and ragdoll step `009781d0`).
+    AiLists,
+    /// The Pip-Boy's step and, with more than one thread, `TESObjectCELL::PerformQueuedChildAttaches` (`0054ae30`)
+    /// returned.
+    AiAttaches,
+    /// The first packed task queue's end of main's input and its drain (`0087a6d0`, `0087a790`: the tasks the AI
+    /// threads queued for main) returned.
+    AiQueue,
+    /// The queued node updates (`00552570`: the queued nodes' geometry, their morphs) returned.
+    AiNodes,
+    /// `Main::UpdateNonRenderSafeAITasks` returned: the rest (main's input to the first queue begun again, the
+    /// interface's steps `007034c0` and `00703490`, the AI groups' clean-up `00991600`).
+    AiTasks,
+    /// `Script::RunDelayedScriptActionsOnReferences` (`005aa720`), first in `00870610`, returned.
+    DelayedScripts,
+    /// The secondary packed task queue's end of main's input (`0087a710`) returned.
+    QueueEndInput,
+    /// Its drain (`0087a850`: `0087a7d0` on the secondary queue) returned.
+    QueueDrain,
+    /// Main's input to it begun again (`0087a6f0`) returned.
+    QueueBeginInput,
+    /// `00870610` returned: the queued menu open (`Interface::HandleQueuedMenuOpen`, `007094f0`), the support menus
+    /// closed when flagged (`00870680`), Tweaks' and `DebugText`'s queued prints.
+    PostThreads,
+    /// Every frame, at the 256-step tick's test: the other steps done (`0070ed10`'s menu check, `00a29680`,
+    /// `005ae270`, `005a9d60`, the test itself).
+    TickIn,
+    /// The tick (`00aa7290`, when the test passed: in a menu, in the vanity camera, else once every 45 s) returned:
+    /// the memory manager's free-list sort of one pool, under the pool's spin lock.
+    TickOut,
+    /// `Main::OnIdle` returned (from the tick, or from the test on a frame with no tick).
+    IdleEnd,
+}
+
+/// How many tail marks there are.
+pub const TAIL_MARKS: usize = 13;
+/// The tail's parts: one ending at each mark, then the last to the host's take.
+pub const TAIL_PARTS: usize = TAIL_MARKS + 1;
+
+/// The tail's parts in words, in [`TailMark`]'s order, then the last mark to the host's take.
+pub const TAIL_PART_NAMES: [&str; TAIL_PARTS] = [
+    "AI tasks: process lists",
+    "AI tasks: Pip-Boy and child attaches",
+    "AI tasks: first task queue",
+    "AI tasks: queued node updates",
+    "AI tasks: the rest",
+    "delayed script actions",
+    "task queue end input",
+    "task queue drain",
+    "task queue begin input",
+    "queued menu open, support menus and prints",
+    "other steps",
+    "free-list sort",
+    "the end of OnIdle",
+    "the game's loop to the host",
+];
+
+/// The packed task queues main drains in its frame tail ([`drain`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(usize)]
+pub enum DrainQueue {
+    /// The first queue, drained in `Main::UpdateNonRenderSafeAITasks` (`0087a790`).
+    First,
+    /// The secondary queue, drained in `00870610` (`0087a850`).
+    Secondary,
+}
+
+/// How many kinds of task a drain keeps apart; the rest are counted together.
+pub const DRAIN_KINDS: usize = 6;
+
+/// One frame's drains of a packed task queue on main (`0087a7d0`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DrainStats {
+    /// The drains' whole time (ns).
+    pub ns: u64,
+    /// The tasks run.
+    pub tasks: u32,
+    /// The turns of the loop that found the queue empty while another thread's input to it was still open: the
+    /// drain goes round again until every input is closed (main spins, nothing blocks).
+    pub waits: u32,
+    /// The kinds of task (the record's first word, its tag) in the order first seen: (tag, tasks, ns in them); an
+    /// entry with no tasks is unused.
+    pub kinds: [(u32, u32, u64); DRAIN_KINDS],
+    /// The tasks of the kinds past [`DRAIN_KINDS`]: (tasks, ns).
+    pub other: (u32, u64),
+}
+
+impl DrainStats {
+    /// The time in the tasks themselves (ns): the rest of [`DrainStats::ns`] is the pops and the waits for input.
+    pub fn task_ns(&self) -> u64 {
+        self.kinds.iter().map(|k| k.2).sum::<u64>() + self.other.1
+    }
+
+    /// Adds `n` tasks of kind `tag` that ran `ns` in all.
+    fn add_tasks(&mut self, tag: u32, n: u32, ns: u64) {
+        self.tasks += n;
+        let slot = self
+            .kinds
+            .iter()
+            .position(|k| k.1 != 0 && k.0 == tag)
+            .or_else(|| self.kinds.iter().position(|k| k.1 == 0));
+        match slot {
+            Some(i) => {
+                let k = &mut self.kinds[i];
+                *k = (tag, k.1 + n, k.2 + ns);
+            }
+            None => self.other = (self.other.0 + n, self.other.1 + ns),
+        }
+    }
+
+    /// Adds another drain of the same queue in the frame.
+    fn merge(&mut self, other: &DrainStats) {
+        self.ns += other.ns;
+        self.waits += other.waits;
+        for &(tag, n, ns) in other.kinds.iter().filter(|k| k.1 != 0) {
+            self.add_tasks(tag, n, ns);
+        }
+        self.tasks += other.other.0;
+        self.other = (self.other.0 + other.other.0, self.other.1 + other.other.1);
+    }
+}
+
+/// A drain being timed ([`drain`]): kept on main's stack while the queue is drained.
+pub struct Drain {
+    queue: DrainQueue,
+    /// [`now_ns`] at the start; 0 while off.
+    start: u64,
+    stats: DrainStats,
+}
+
+/// Starts timing a drain of `queue` (main's, in the frame tail). Off: a recorder that reads no clock.
+#[inline]
+pub fn drain(queue: DrainQueue) -> Drain {
+    Drain {
+        queue,
+        start: if points_on() { now_ns() } else { 0 },
+        stats: DrainStats::default(),
+    }
+}
+
+impl Drain {
+    /// Whether the drain is timed (the points on).
+    #[inline]
+    pub fn on(&self) -> bool {
+        self.start != 0
+    }
+
+    /// A task's start (the clock; 0 while off).
+    #[inline]
+    pub fn task_start(&self) -> u64 {
+        if self.on() {
+            now_ns()
+        } else {
+            0
+        }
+    }
+
+    /// The task of kind `tag` started at `started` ([`Drain::task_start`]) ended.
+    #[inline]
+    pub fn task_end(&mut self, tag: u32, started: u64) {
+        if self.on() {
+            self.stats
+                .add_tasks(tag, 1, now_ns().saturating_sub(started));
+        }
+    }
+
+    /// The loop went round again on an empty queue (another thread's input still open).
+    #[inline]
+    pub fn waited(&mut self) {
+        if self.on() {
+            self.stats.waits += 1;
+        }
+    }
+
+    /// The drain ended: its time and tasks join the frame's for its queue.
+    pub fn end(mut self) {
+        if !self.on() {
+            return;
+        }
+        self.stats.ns = now_ns().saturating_sub(self.start);
+        let mut drains = DRAINS.lock().unwrap_or_else(PoisonError::into_inner);
+        match &mut drains[self.queue as usize] {
+            Some(d) => d.merge(&self.stats),
+            none => *none = Some(self.stats),
+        }
+    }
+}
+
+/// The frame's drains on main, by [`DrainQueue`].
+static DRAINS: Mutex<[Option<DrainStats>; 2]> = Mutex::new([None, None]);
+
+/// The 256-step tick of the frame: its pool index, whether the pool exists, and its free list's count (`+0x54`)
+/// before the sort, packed (bit 63 set when passed).
+static TICK: AtomicU64 = AtomicU64::new(0);
+
+/// The 256-step tick is about to sort pool `index` of the memory manager's table (`011f67b8`): `free` is its free
+/// list's count before the sort, `None` when the table has no pool there. Off: nothing.
+#[inline]
+pub fn tail_tick(index: u32, free: Option<u32>) {
+    if points_on() {
+        let present = u64::from(free.is_some()) << 62;
+        TICK.store(
+            (1 << 63) | present | (u64::from(index & 0xff) << 32) | u64::from(free.unwrap_or(0)),
+            Relaxed,
+        );
+    }
+}
+
+/// Main passed tail mark `m` (see [`TailMark`]). Off: nothing.
+#[inline]
+pub fn tail_mark(m: TailMark) {
+    if points_on() {
+        MARKS.tail[m as usize].store(now_ns(), Relaxed);
+    }
+}
+
+/// The game's frame tail of the frame just ended, split at its [`TailMark`]s.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Tail {
+    /// Each part's time (ns), [`TAIL_PART_NAMES`]' order; `None` where its mark was not passed this frame.
+    pub parts: [Option<u64>; TAIL_PARTS],
+    /// The drains of the two packed task queues ([`DrainQueue`]'s order).
+    pub drains: [Option<DrainStats>; 2],
+    /// The 256-step tick: the pool's index and its free list's count before the sort (`None`: no pool there).
+    pub tick: Option<(u32, Option<u32>)>,
+}
+
+impl Tail {
+    /// The longest part: (its index, ns).
+    pub fn longest(&self) -> Option<(usize, u64)> {
+        self.parts
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| p.map(|ns| (i, ns)))
+            .max_by_key(|p| p.1)
+    }
+}
+
+/// The tail split of the frame just ended (after the host's [`Point::Host`], before the next frame's
+/// [`Point::Idle`]): `None` when the points are off or the frame passed no `WaitForThreads` (a menu, one processor).
+/// The drains are taken: a second call in the frame has none.
+pub fn take_tail() -> Option<Tail> {
+    if !points_on() {
+        return None;
+    }
+    let drains = std::mem::take(&mut *DRAINS.lock().unwrap_or_else(PoisonError::into_inner));
+    let tick = TICK.swap(0, Relaxed);
+    let mut tail = MARKS.tail_parts()?;
+    tail.drains = drains;
+    tail.tick = (tick >> 63 != 0).then(|| {
+        (
+            ((tick >> 32) as u32) & 0xff,
+            ((tick >> 62) & 1 != 0).then_some(tick as u32),
+        )
+    });
+    Some(tail)
+}
+
 /// The values of one window: nanoseconds and calls per column.
 pub struct Marks {
     ns: [AtomicU64; COLUMNS],
     calls: [AtomicU64; COLUMNS],
     /// When each point was passed this frame (nanoseconds since the clock's start plus 1), 0 not yet.
     at: [AtomicU64; POINTS],
+    /// When each [`TailMark`] was passed this frame, 0 not yet.
+    tail: [AtomicU64; TAIL_MARKS],
     /// How deep main is in the frame's draw (`008706b0` calls open now).
     depth: AtomicU64,
 }
@@ -243,8 +512,31 @@ impl Marks {
             ns: [ZERO; COLUMNS],
             calls: [ZERO; COLUMNS],
             at: [ZERO; POINTS],
+            tail: [ZERO; TAIL_MARKS],
             depth: AtomicU64::new(0),
         }
+    }
+
+    /// The frame's tail split at the marks passed (see [`TailMark`]): `None` when `WaitForThreads` did not return
+    /// this frame or the host has not taken it. Read between [`Point::Host`] and the next [`Point::Idle`].
+    pub fn tail_parts(&self) -> Option<Tail> {
+        let from = self.at[Point::WaitOut as usize].load(Relaxed);
+        let to = self.at[Point::Host as usize].load(Relaxed);
+        if from == 0 || to == 0 {
+            return None;
+        }
+        let mut tail = Tail::default();
+        let mut last = from;
+        for (i, m) in self.tail.iter().enumerate() {
+            let at = m.load(Relaxed);
+            // A mark of this frame's tail only (passed after `WaitForThreads` returned).
+            if at >= last && at != 0 {
+                tail.parts[i] = Some(at - last);
+                last = at;
+            }
+        }
+        tail.parts[TAIL_MARKS] = Some(to.saturating_sub(last));
+        Some(tail)
     }
 
     /// Adds `ns` and one call to `column`.
@@ -284,7 +576,7 @@ impl Marks {
             }
         }
         if p == Point::Idle {
-            for a in &self.at {
+            for a in self.at.iter().chain(&self.tail) {
                 a.store(0, Relaxed);
             }
             self.depth.store(0, Relaxed);
@@ -305,7 +597,7 @@ impl Marks {
     /// No values and no points (a fresh window).
     pub fn clear(&self) {
         let _ = self.take();
-        for a in &self.at {
+        for a in self.at.iter().chain(&self.tail) {
             a.store(0, Relaxed);
         }
         self.depth.store(0, Relaxed);
@@ -394,6 +686,18 @@ thread_local! {
 /// Serialises the tests that switch the aid on for their own thread.
 static HERE_LOCK: Mutex<()> = Mutex::new(());
 
+/// The run's marks, the frame tail's drains and its tick forgotten.
+fn clear_all() {
+    MARKS.clear();
+    forget_tail_work();
+}
+
+/// The frame tail's drains and tick forgotten.
+fn forget_tail_work() {
+    *DRAINS.lock().unwrap_or_else(PoisonError::into_inner) = [None, None];
+    TICK.store(0, Relaxed);
+}
+
 /// The switch on for the calling thread only, until the guard drops (the engine crates' tests of the marks'
 /// places: other tests in the same process, on other threads, record nothing meanwhile). The values start empty.
 /// The thread's marks read a test clock that stands still until [`advance`] moves it, so the tests' times are
@@ -404,7 +708,7 @@ pub fn on_here() -> Here {
     HERE.with(|h| h.set(true));
     CLOCK.with(|c| c.set(Some(1)));
     STATE.store(3, Relaxed);
-    MARKS.clear();
+    clear_all();
     Here { _lock: lock }
 }
 
@@ -425,7 +729,7 @@ impl Drop for Here {
         HERE.with(|h| h.set(false));
         CLOCK.with(|c| c.set(None));
         STATE.store(1, Relaxed);
-        MARKS.clear();
+        clear_all();
     }
 }
 
@@ -445,6 +749,10 @@ fn now_ns() -> u64 {
 pub fn point(p: Point) {
     if points_on() {
         MARKS.point(p, now_ns());
+        if p == Point::Idle {
+            // A frame starts: the last frame's drains and tick are forgotten if nothing took them.
+            forget_tail_work();
+        }
     }
 }
 
@@ -702,5 +1010,147 @@ mod tests {
         let a = now_ns();
         std::thread::sleep(std::time::Duration::from_millis(1));
         assert!(now_ns() > a);
+    }
+
+    /// The frame tail splits at its marks in the order passed: each part runs from the mark passed before it (or
+    /// `WaitForThreads`' return), a mark not passed after that return gives no part, and the last part runs to the
+    /// host's take. The drains and the tick are taken with it; a frame with no `WaitForThreads` has no tail.
+    #[test]
+    fn the_frame_tail_splits_at_its_marks() {
+        let _here = on_here();
+        point(Point::Idle);
+        // Before `WaitForThreads` returned: not part of the tail.
+        tail_mark(TailMark::QueueDrain);
+        advance(1_000);
+        point(Point::WaitOut);
+        advance(2_000);
+        let mut d = drain(DrainQueue::First);
+        assert!(d.on());
+        let t = d.task_start();
+        advance(300);
+        d.task_end(0x07, t);
+        d.waited();
+        advance(100);
+        d.end();
+        tail_mark(TailMark::AiQueue);
+        tail_mark(TailMark::AiTasks);
+        advance(500);
+        tail_mark(TailMark::DelayedScripts);
+        // One processor: no task queue marks.
+        advance(4_000);
+        tail_mark(TailMark::PostThreads);
+        advance(100);
+        tail_tick(37, Some(1_203));
+        tail_mark(TailMark::TickIn);
+        advance(8_000);
+        tail_mark(TailMark::TickOut);
+        tail_mark(TailMark::IdleEnd);
+        advance(50);
+        point(Point::Host);
+        let tail = take_tail().expect("a tail");
+        assert_eq!(
+            tail.parts,
+            [
+                None,
+                None,
+                Some(2_400),
+                None,
+                Some(0),
+                Some(500),
+                None,
+                None,
+                None,
+                Some(4_000),
+                Some(100),
+                Some(8_000),
+                Some(0),
+                Some(50)
+            ]
+        );
+        assert_eq!(tail.longest(), Some((11, 8_000)));
+        assert_eq!(tail.tick, Some((37, Some(1_203))));
+        let first = tail.drains[DrainQueue::First as usize].expect("the first queue's drain");
+        assert_eq!(
+            (first.tasks, first.waits, first.ns, first.task_ns()),
+            (1, 1, 400, 300)
+        );
+        assert_eq!(first.kinds[0], (0x07, 1, 300));
+        assert!(tail.drains[DrainQueue::Secondary as usize].is_none());
+        let again = take_tail().expect("the marks stay until the next frame");
+        assert_eq!((again.drains, again.tick), ([None, None], None), "taken");
+        point(Point::Idle);
+        tail_mark(TailMark::AiTasks);
+        point(Point::Host);
+        assert!(take_tail().is_none(), "no WaitForThreads in this frame");
+        tail_tick(3, None);
+        point(Point::WaitOut);
+        point(Point::Host);
+        assert_eq!(
+            take_tail().expect("a tail").tick,
+            Some((3, None)),
+            "no pool at that index"
+        );
+        // A frame with no tick (the usual one: outside menus the tick runs once every 45 s): the other steps end at
+        // the tick's test, the sort is not passed, and OnIdle ends right after the test.
+        point(Point::Idle);
+        point(Point::WaitOut);
+        tail_mark(TailMark::PostThreads);
+        advance(300);
+        tail_mark(TailMark::TickIn);
+        advance(5);
+        tail_mark(TailMark::IdleEnd);
+        point(Point::Host);
+        let t = take_tail().expect("a tail");
+        assert_eq!(
+            (t.parts[10], t.parts[11], t.parts[12]),
+            (Some(300), None, Some(5))
+        );
+        assert_eq!(TAIL_PART_NAMES[10], "other steps");
+        assert_eq!(t.tick, None);
+    }
+
+    /// A drain keeps six kinds of task apart (the first seen) and counts the rest together; a second drain of the
+    /// same queue in the frame adds to the first.
+    #[test]
+    fn a_drain_keeps_six_kinds_apart_and_adds_a_second_drain() {
+        let mut s = DrainStats::default();
+        for tag in 1..=8u32 {
+            s.add_tasks(tag, 1, u64::from(tag) * 10);
+        }
+        s.add_tasks(3, 2, 5);
+        assert_eq!(s.tasks, 10);
+        assert_eq!(s.kinds[2], (3, 3, 35));
+        assert_eq!(s.other, (2, 150));
+        let mut t = DrainStats {
+            ns: 1_000,
+            waits: 4,
+            ..DrainStats::default()
+        };
+        t.add_tasks(3, 1, 1);
+        t.add_tasks(9, 1, 2);
+        s.ns = 500;
+        s.merge(&t);
+        assert_eq!((s.tasks, s.ns, s.waits), (12, 1_500, 4));
+        assert_eq!(s.kinds[2], (3, 4, 36));
+        assert_eq!(s.other, (3, 152));
+        assert_eq!(s.task_ns(), 10 + 20 + 36 + 40 + 50 + 60 + 152);
+    }
+
+    /// Off, a drain reads no clock and leaves nothing; no tail is taken.
+    #[test]
+    fn off_a_drain_records_nothing() {
+        let _lock = HERE_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+        set_on(false);
+        let mut d = drain(DrainQueue::Secondary);
+        assert!(!d.on());
+        assert_eq!(d.task_start(), 0);
+        d.task_end(1, 0);
+        d.waited();
+        d.end();
+        tail_mark(TailMark::AiTasks);
+        tail_tick(1, Some(2));
+        assert!(DRAINS.lock().unwrap().iter().all(Option::is_none));
+        assert_eq!(TICK.load(Relaxed), 0);
+        assert!(take_tail().is_none());
     }
 }

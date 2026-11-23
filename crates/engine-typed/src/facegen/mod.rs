@@ -9,6 +9,8 @@
 //!   strength, availability, the move toward a target and the merge (`0064f5b0`..`0064f900`, `0064eea0`).
 //! - [`morph`]: `BSFaceGenMorphDifferential::ApplyMorph` (`00660860`),
 //!   `BSFaceGenMorphStatistical::ApplyMorph` (`00660a90`) and the base copy (`00653340`).
+//! - [`apply`]: the head's morph pass (`00663050`) with its appliers, the morph data's apply and tables,
+//!   the animation data's weight getters, and the exact skip of a reshape that would change nothing.
 //!
 //! What stays by address (a call a morph, not a vertex): the geometry's data and vertex count
 //! getters, the locked array's start (`00a67410`), the morph extra data's getter, the data's
@@ -29,6 +31,7 @@ use engine_core::ptr::Ptr;
 use engine_core::typed::{Family, FamilyId, Threads};
 use engine_core::{entry, AbiFn};
 
+pub mod apply;
 pub mod keyframe;
 pub mod morph;
 
@@ -63,5 +66,20 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0064_f880, keyframe::is_target_available(Ptr) -> bool),
         entry!(0x0064_f900, keyframe::update_to_target(Ptr, f32, u32) -> bool),
         entry!(0x0064_eea0, keyframe::merge_morph_data_from(Ptr, u32, f32, u8, u8) -> bool),
+        entry!(0x0066_3050, apply::morph_pass(Ptr, u8)),
+        entry!(0x0066_2bc0, apply::apply_expressions(Ptr, u32)),
+        entry!(0x0066_2e90, apply::apply_phonemes(Ptr, u32)),
+        entry!(0x0066_2f70, apply::apply_custom(Ptr, u32)),
+        entry!(0x0066_2ca0, apply::apply_modifiers(Ptr, u32)),
+        entry!(0x0066_2030, apply::apply_one(Ptr, u32, i32, u32, u32, f32)),
+        entry!(0x0066_20d0, apply::expression_morph(Ptr, i32) -> u32),
+        entry!(0x0066_2110, apply::modifier_morph(Ptr, i32) -> u32),
+        entry!(0x0066_2150, apply::phoneme_morph(Ptr, i32) -> u32),
+        entry!(0x0066_2190, apply::custom_morph(Ptr, i32) -> u32),
+        entry!(0x0064_99e0, apply::expression_value(Ptr, i32) -> f32),
+        entry!(0x0064_9aa0, apply::phoneme_value(Ptr, i32) -> f32),
+        entry!(0x0064_9b10, apply::custom_value(Ptr, i32) -> f32),
+        entry!(0x005d_d4a0, apply::modifier_value(Ptr, i32) -> f32),
+        entry!(0x0065_3d70, apply::split_pair(f32, f32, u32, u32)),
     ]
 }

@@ -687,9 +687,10 @@ pub fn value_change_event(e: &mut Engine, value: Ptr) {
 
 // Typed from 00a09200
 /// `Tile::Value::ClearActions` (Xbox PDB): deletes the trait's actions one by one. An action that
-/// reads another trait (slot +4 answers it; asked each time, as the exe asks) is first taken out of
-/// that trait's reaction list: this trait's reactions leave the list, and the map's entry is erased
-/// when none are left or set when the head changed.
+/// reads another trait (slot +4 answers it; asked each time, as the exe asks, and read in place when
+/// the slot holds one of the action classes' own: [`action_ref_value`]) is first taken out of that
+/// trait's reaction list: this trait's reactions leave the list, and the map's entry is erased when
+/// none are left or set when the head changed.
 pub fn clear_actions(e: &mut Engine, this: Ptr) {
     let me = this.addr();
     let list_head = me + VALUE_ACTIONS;
@@ -698,11 +699,11 @@ pub fn clear_actions(e: &mut Engine, this: Ptr) {
         if action == 0 {
             break;
         }
-        if e.vcall(action, ACTION_SLOT_REFERENCED, &[]).u32() != 0 {
+        if action_ref_value(e, action) != 0 {
             e.with_stack(4, |e, reactions| {
                 let at = reactions.addr();
                 e.mem.set_u32(at, 0);
-                let referenced = e.vcall(action, ACTION_SLOT_REFERENCED, &[]).u32();
+                let referenced = action_ref_value(e, action);
                 if !reactions_of(e, referenced, at) {
                     return;
                 }
@@ -723,10 +724,10 @@ pub fn clear_actions(e: &mut Engine, this: Ptr) {
                 }
                 let first_after = e.mem.u32(at);
                 if first_after == 0 {
-                    let referenced = e.vcall(action, ACTION_SLOT_REFERENCED, &[]).u32();
+                    let referenced = action_ref_value(e, action);
                     e.call(MAP_REMOVE, &args![REACTION_MAP, referenced]);
                 } else if first_after != first_before {
-                    let referenced = e.vcall(action, ACTION_SLOT_REFERENCED, &[]).u32();
+                    let referenced = action_ref_value(e, action);
                     set_reactions(e, referenced, first_after);
                 }
             });
@@ -735,6 +736,47 @@ pub fn clear_actions(e: &mut Engine, this: Ptr) {
         e.mem.set_u32(list_head, next);
         deallocate(e, action);
     }
+}
+
+// Typed from 00a09330
+/// `Tile::Value::~Value` (Xbox PDB): the actions cleared ([`clear_actions`]); then, when the value
+/// has a reaction list in the reaction map, each reaction's owner has every action of its that reads
+/// this value blanked (its operand word +0xC zeroed), the reaction nodes are freed and the map's
+/// entry erased (by address). The string is freed, the float and the owning tile zeroed (the value
+/// itself is not freed). An action's `QRefValue` is read in place when its vtable slot holds one of
+/// the action classes' own ([`action_ref_value`]). Every value of every tile goes through here when a
+/// menu closes (`Tile::Release`, by address).
+pub fn value_destructor(e: &mut Engine, this: Ptr) {
+    let me = this.addr();
+    typed_call!(super::FAMILY, 0x00a0_9200, clear_actions(e, this));
+    e.with_stack(4, |e, reactions| {
+        let at = reactions.addr();
+        e.mem.set_u32(at, 0);
+        if !reactions_of(e, me, at) {
+            return;
+        }
+        let mut reaction = e.mem.u32(at);
+        while reaction != 0 {
+            let owner = e.mem.u32(reaction);
+            let mut action = e.mem.u32(owner + VALUE_ACTIONS);
+            while action != 0 {
+                if action_ref_value(e, action) == me {
+                    e.mem.set_u32(action + ACTION_OPERAND, 0);
+                }
+                action = e.mem.u32(action + ACTION_NEXT);
+            }
+            let node = reaction;
+            reaction = e.mem.u32(reaction + 4);
+            deallocate(e, node);
+        }
+        e.call(MAP_REMOVE, &args![REACTION_MAP, me]);
+    });
+    let text = e.mem.u32(me + VALUE_STRING);
+    if text != 0 {
+        deallocate(e, text);
+    }
+    e.mem.set_f32(me + VALUE_FLOAT, 0.0);
+    e.mem.set_u32(me + VALUE_PARENT, 0);
 }
 
 /// The C runtime's `_stricmp` (`00ec68e4`) and `strcmp` (`00ec6da0`) through the crt family, the
@@ -922,4 +964,405 @@ pub fn find_by_path(e: &mut Engine, tile: Ptr, path: Ptr) -> Ptr {
             }
         }
     })
+}
+
+/// What `Tile::Value::CalculateValue` reads and calls besides the tile values: the tile's flags
+/// (`+0x30`) and their bits, the thread block's current-line word (`+0x2b4`), an action's type
+/// (`+4`) and its operand slots (vtable `+0` `QFloat`, `+4` `QRefValue`), the stack of floats the
+/// parentheses use (its vtable, constructor, push and destructor), the user-trait map (`011f3308`),
+/// `Tile::GetUnderscoreValue`, UI Organizer's operator site, the C runtime's `floor`, `ceil`,
+/// `fabs`, `_ftol`, `strcpy_s` and `sprintf_s`, and `Tile::FinalPostParse`.
+const TILE_FLAGS: u32 = 0x30;
+const FLAG_TILE_LOADING: u32 = 0x10000;
+const FLAG_MENU_DELETING: u32 = 0x4000;
+const FLAG_RELEASED: u32 = 0x2000;
+const TRAIT_CLASS: i32 = 0xfa4;
+const TRAIT_STRING: i32 = 0xfc4;
+const TLS_CURRENT_LINE: u32 = 0x2b4;
+const ACTION_TYPE: u32 = 0x4;
+const ACTION_OPERAND: u32 = 0xc;
+const ACTION_SLOT_FLOAT: u32 = 0x0;
+const VTABLE_FLOAT_STACK: u32 = 0x0106_cc64;
+const FLOAT_STACK_CONSTRUCT: u32 = 0x006b_3eb0;
+const FLOAT_STACK_PUSH: u32 = 0x006d_c320;
+const FLOAT_STACK_DESTROY: u32 = 0x006d_b720;
+const USER_TRAIT_MAP: u32 = 0x011f_3308;
+const FIRST_USER_TEXT_ID: i32 = 10000;
+const GET_UNDERSCORE_VALUE: u32 = 0x00a0_a0b0;
+const UIO_OPERATOR_SITE: u32 = 0x00a0_968c;
+const FLOOR: u32 = 0x00ec_6940;
+const CEIL: u32 = 0x00ec_9e10;
+const FABS: u32 = 0x00ec_6cde;
+const FTOL: u32 = 0x00ec_62c0;
+const STRCPY_S: u32 = 0x00ec_65a6;
+const SPRINTF_S: u32 = 0x0040_6d00;
+const FORMAT_INTEGER: u32 = 0x0102_0764;
+const FINAL_POST_PARSE: u32 = 0x00a0_37e0;
+/// The doubles 0.0 and 0.5 in `.rdata`.
+const ZERO_DOUBLE: u32 = 0x0101_2060;
+const HALF_DOUBLE: u32 = 0x0101_1588;
+/// The action classes' operand functions: `Tile::FloatAction::QFloat` (its float at `+0xc`),
+/// `Tile::RefValueAction::QFloat` (the float of the value at `+0xc`, 0.0 without one), the
+/// reference action's `QRefValue` (the value at `+0xc`) and the plain action's (0).
+const FLOAT_ACTION_Q_FLOAT: u32 = 0x00a0_c000;
+const REF_ACTION_Q_FLOAT: u32 = 0x00a0_c020;
+const REF_ACTION_Q_REF_VALUE: u32 = 0x00a0_c060;
+const NO_REF_VALUE: u32 = 0x00ad_87c0;
+/// The value actions (`VALUE_ACTION`) and the parentheses.
+const VA_COPY: i32 = 2000;
+const VA_ADD: i32 = 2001;
+const VA_SUB: i32 = 2002;
+const VA_MULT: i32 = 2003;
+const VA_DIV: i32 = 2004;
+const VA_MIN: i32 = 2005;
+const VA_MAX: i32 = 2006;
+const VA_MOD: i32 = 2007;
+const VA_FLOOR: i32 = 2008;
+const VA_CEIL: i32 = 2009;
+const VA_ABS: i32 = 2010;
+const VA_ROUND: i32 = 2011;
+const VA_GT: i32 = 2012;
+const VA_GTE: i32 = 2013;
+const VA_EQ: i32 = 2014;
+const VA_NEQ: i32 = 2015;
+const VA_LT: i32 = 2016;
+const VA_LTE: i32 = 2017;
+const VA_AND: i32 = 2018;
+const VA_OR: i32 = 2019;
+const VA_NOT: i32 = 2020;
+const VA_ONLYIF: i32 = 2021;
+const VA_ONLYIFNOT: i32 = 2022;
+const ACTION_LEFT_PAREN: i32 = 0x7e8;
+const ACTION_RIGHT_PAREN: i32 = 0x7e9;
+
+/// An action's `QFloat` (vtable slot 0): read in place when the slot holds one of the two action
+/// classes' own, else called through the vtable. A float read in place comes back as the call
+/// answers it in `ST0`: loaded into the x87 register, so a signalling NaN comes back quiet (its
+/// quiet bit set, sign and payload kept).
+fn action_float(e: &mut Engine, action: u32) -> f32 {
+    let as_answered = |float: f32| {
+        if float.is_nan() {
+            f32::from_bits(float.to_bits() | 0x0040_0000)
+        } else {
+            float
+        }
+    };
+    match crate::slot_target(e, action, ACTION_SLOT_FLOAT) {
+        FLOAT_ACTION_Q_FLOAT => as_answered(e.mem.f32(action + ACTION_OPERAND)),
+        REF_ACTION_Q_FLOAT => match e.mem.u32(action + ACTION_OPERAND) {
+            0 => 0.0,
+            value => as_answered(e.mem.f32(value + VALUE_FLOAT)),
+        },
+        _ => e.vcall(action, ACTION_SLOT_FLOAT, &[]).f32(),
+    }
+}
+
+/// An action's `QRefValue` (vtable slot 4): read in place when the slot holds one of the two
+/// action classes' own, else called through the vtable.
+fn action_ref_value(e: &mut Engine, action: u32) -> u32 {
+    match crate::slot_target(e, action, ACTION_SLOT_REFERENCED) {
+        REF_ACTION_Q_REF_VALUE => e.mem.u32(action + ACTION_OPERAND),
+        NO_REF_VALUE => 0,
+        _ => e.vcall(action, ACTION_SLOT_REFERENCED, &[]).u32(),
+    }
+}
+
+/// `FISTP` of a float in the default rounding mode: to nearest, ties to even; out of range or not a
+/// number gives `0x80000000`.
+fn float_to_int_rounded(value: f32) -> i32 {
+    let value = f64::from(value);
+    let below = value.floor();
+    let rounded = if value - below > 0.5 || (value - below == 0.5 && below % 2.0 != 0.0) {
+        below + 1.0
+    } else {
+        below
+    };
+    // Already an integer: the store toward zero keeps it, and gives the integer indefinite for a
+    // NaN or a value out of range.
+    engine_core::x87::fistp_chop(rounded)
+}
+
+/// `_ftol` (by address) of a float.
+fn float_to_int(e: &mut Engine, value: f32) -> i32 {
+    e.call(FTOL, &args![f64::from(value)]).i32()
+}
+
+/// `!(a < b)`: true when `a >= b` and when the two are unordered.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+fn not_less(a: f64, b: f64) -> bool {
+    !(a < b)
+}
+
+// Typed from 00a09410
+/// `Tile::Value::CalculateValue` (Xbox PDB; `thiscall(this, flag)`): the value's actions run in
+/// order from its float (a reference action's operand is the other value's float, and its string;
+/// a user trait whose number in the user-trait map is -1 is looked up by `GetUnderscoreValue` for
+/// the current value rounded), the parentheses through a stack of floats; then the value counts as
+/// changed when it has no string and its float moved, an `eString` trait's string is rewritten as
+/// the rounded integer when the float moved, and when it changed (or `flag`) the values that read
+/// it are recalculated (`ValueChangeEvent`) and the tile, unless released, is asked about the trait
+/// (vtable `+0x18`, `PostParse`), an answer of 0 leading to `Tile::FinalPostParse` (by address).
+/// Nothing for a tile still loading (but its class) or one its menu is deleting; the tile is read
+/// without a null check first, as the exe reads it.
+///
+/// Every value a menu's build sets or links is calculated here, at least twice (when it is set and
+/// at its tile's end), and again whenever a value it reads changes: in the translation each action
+/// asked its operand through two or three calls through its vtable.
+pub fn calculate_value(e: &mut Engine, this: Ptr, flag: u8) {
+    let me = this.addr();
+    let tile = e.mem.u32(me + VALUE_PARENT);
+    let trait_id = e.mem.i32(me + VALUE_ID);
+    let tile_flags = e.mem.u32(tile.wrapping_add(TILE_FLAGS));
+    if !(tile_flags & FLAG_TILE_LOADING == 0 || trait_id == TRAIT_CLASS) {
+        return;
+    }
+    if tile == 0 || e.mem.u32(tile + TILE_FLAGS) & FLAG_MENU_DELETING != 0 {
+        return;
+    }
+    let line_word = e.tls() + TLS_CURRENT_LINE;
+    let saved_line = e.mem.u32(line_word);
+    e.mem.set_u32(line_word, 0xd);
+    let mut action = e.mem.u32(me + VALUE_ACTIONS);
+    let start = e.mem.f32(me + VALUE_FLOAT);
+    let mut changed = false;
+    e.with_stack(0x10, |e, stack| {
+        let s = stack.addr();
+        e.mem.set_u32(s, VTABLE_FLOAT_STACK);
+        e.call(FLOAT_STACK_CONSTRUCT, &args![s, 0u32, 0u32]);
+        while action != 0 {
+            run_action(e, me, action, s, &mut changed);
+            action = e.mem.u32(action + ACTION_NEXT);
+        }
+        if e.mem.u32(me + VALUE_STRING) == 0 {
+            changed = e.mem.f32(me + VALUE_FLOAT) != start;
+        }
+        let float = e.mem.f32(me + VALUE_FLOAT);
+        if float != start && trait_id == TRAIT_STRING {
+            let number = float_to_int_rounded(float);
+            let mut digits = u32::from(number == 0);
+            let mut rest = number;
+            while rest != 0 {
+                digits += 1;
+                rest /= 10;
+            }
+            if number < 0 {
+                digits += 1;
+            }
+            let text = e.mem.u32(me + VALUE_STRING);
+            if text == 0
+                || typed_call!(crt::FAMILY, 0x00ec_6130, crt::string::strlen(e, text)) != digits
+            {
+                let old = e.mem.u32(me + VALUE_STRING);
+                deallocate(e, old);
+                let new_text = allocate(e, digits + 1);
+                e.mem.set_u32(me + VALUE_STRING, new_text);
+            }
+            let text = e.mem.u32(me + VALUE_STRING);
+            e.call(SPRINTF_S, &args![text, digits + 1, FORMAT_INTEGER, number]);
+            changed = true;
+        }
+        if changed || flag != 0 {
+            typed_call!(super::FAMILY, 0x00a0_a220, value_change_event(e, this));
+            let tile = e.mem.u32(me + VALUE_PARENT);
+            if tile != 0 && e.mem.u32(tile + TILE_FLAGS) & FLAG_RELEASED == 0 {
+                let value = e.mem.f32(me + VALUE_FLOAT);
+                let text = e.mem.u32(me + VALUE_STRING);
+                let handled = e.vcall(tile, 0x18, &args![trait_id, value, text]);
+                if handled.u32() == 0 {
+                    e.call(FINAL_POST_PARSE, &args![tile, trait_id, value, text]);
+                }
+            }
+        }
+        e.call(FLOAT_STACK_DESTROY, &args![s]);
+    });
+    e.mem.set_u32(line_word, saved_line);
+}
+
+/// One action of [`calculate_value`] on the value at `me`, in the exe's order of reads and calls.
+// Each operation rounds its double result to the float the exe stores (`FSTP float`), as the
+// translation does.
+#[allow(clippy::cast_possible_truncation)]
+fn run_action(e: &mut Engine, me: u32, action: u32, stack: u32, changed: &mut bool) {
+    let mut operand = action_float(e, action);
+    let mut text = 0u32;
+    if action_ref_value(e, action) != 0 {
+        let referenced = action_ref_value(e, action);
+        let mut found_number: i32 = 0;
+        text = e.mem.u32(referenced + VALUE_STRING);
+        let referenced_trait = e.mem.i32(referenced);
+        if referenced_trait >= FIRST_USER_TEXT_ID {
+            e.with_stack(4, |e, out| {
+                // The exe zeroes its local first: the lookup leaves it alone when the trait is
+                // not in the map.
+                e.mem.set_u32(out.addr(), 0);
+                typed_call!(
+                    super::FAMILY,
+                    0x00a1_e380,
+                    refs::map_lookup(
+                        e,
+                        Ptr::new(USER_TRAIT_MAP),
+                        referenced_trait as u32,
+                        Ptr::new(out.addr())
+                    )
+                );
+                found_number = e.mem.i32(out.addr());
+            });
+        }
+        if found_number == -1 {
+            let rounded = float_to_int_rounded(e.mem.f32(me + VALUE_FLOAT));
+            let owner = e.mem.u32(referenced + VALUE_PARENT);
+            let found = e
+                .call(
+                    GET_UNDERSCORE_VALUE,
+                    &args![owner, referenced_trait, rounded],
+                )
+                .u32();
+            if found != 0 {
+                operand = e.mem.f32(found + VALUE_FLOAT);
+                text = e.mem.u32(found + VALUE_STRING);
+            }
+        }
+    }
+    let mut kind = e.mem.i32(action + ACTION_TYPE);
+    if kind == ACTION_LEFT_PAREN {
+        e.call(FLOAT_STACK_PUSH, &args![stack, me + VALUE_FLOAT]);
+        e.mem.set_f32(me + VALUE_FLOAT, 0.0);
+    } else if kind == ACTION_RIGHT_PAREN {
+        let size = e.mem.u32(stack + 8);
+        let top = e.mem.f32(
+            e.mem
+                .u32(stack + 4)
+                .wrapping_add(size.wrapping_mul(4))
+                .wrapping_sub(4),
+        );
+        let encoded = action_float(e, action);
+        kind = float_to_int_rounded(encoded);
+        operand = e.mem.f32(me + VALUE_FLOAT);
+        e.mem.set_f32(me + VALUE_FLOAT, top);
+        if size != 0 {
+            e.mem.set_u32(stack + 8, size - 1);
+        }
+    }
+    // UI Organizer's jump table (its patch at 00a0968c) runs the operation in place of the switch
+    // below; its answer is the "string changed" flag afterwards.
+    if e.uio() {
+        let at = [
+            me,
+            kind as u32,
+            operand.to_bits(),
+            text,
+            u32::from(*changed),
+        ];
+        if let Some(flag) = e.site(UIO_OPERATOR_SITE, &at) {
+            *changed = flag != 0;
+            return;
+        }
+    }
+    let current = e.mem.f32(me + VALUE_FLOAT);
+    let (current64, operand64) = (f64::from(current), f64::from(operand));
+    let zero = e.mem.f64(ZERO_DOUBLE);
+    let flag = |condition: bool| if condition { 1.0f32 } else { 0.0f32 };
+    let result: Option<f32> = match kind {
+        VA_COPY => {
+            if text == 0 {
+                Some(operand)
+            } else {
+                let length = typed_call!(crt::FAMILY, 0x00ec_6130, crt::string::strlen(e, text));
+                let old = e.mem.u32(me + VALUE_STRING);
+                *changed = old == 0
+                    || typed_call!(crt::FAMILY, 0x00ec_6da0, crt::string::strcmp(e, old, text))
+                        != 0;
+                if old != 0 {
+                    deallocate(e, old);
+                    e.mem.set_u32(me + VALUE_STRING, 0);
+                }
+                let copy = allocate(e, length + 1);
+                e.mem.set_u32(me + VALUE_STRING, copy);
+                e.call(STRCPY_S, &args![copy, length + 1, text]);
+                None
+            }
+        }
+        VA_ADD => Some((current64 + operand64) as f32),
+        VA_SUB => Some((current64 - operand64) as f32),
+        VA_MULT => Some((current64 * operand64) as f32),
+        VA_DIV => {
+            if operand64 != zero {
+                Some((current64 / operand64) as f32)
+            } else {
+                None
+            }
+        }
+        VA_MIN => Some(if current < operand { current } else { operand }),
+        VA_MAX => Some(if operand < current { current } else { operand }),
+        VA_MOD => {
+            if operand64 != zero {
+                let dividend = float_to_int_rounded(current);
+                let divisor = float_to_int_rounded(operand);
+                Some((dividend % divisor) as f32)
+            } else {
+                None
+            }
+        }
+        VA_FLOOR => {
+            let sum = (operand64 + current64) as f32;
+            Some(e.call(FLOOR, &args![f64::from(sum)]).f64() as f32)
+        }
+        VA_CEIL => {
+            let sum = (operand64 + current64) as f32;
+            Some(e.call(CEIL, &args![f64::from(sum)]).f64() as f32)
+        }
+        VA_ABS => {
+            let sum = (operand64 + current64) as f32;
+            Some(e.call(FABS, &args![f64::from(sum)]).f64() as f32)
+        }
+        VA_ROUND => {
+            let quotient = (current64 / operand64) as f32;
+            let truncated = float_to_int(e, quotient);
+            let round_up = i32::from(not_less(
+                f64::from(quotient) - f64::from(truncated),
+                e.mem.f64(HALF_DOUBLE),
+            ));
+            let multiple = float_to_int(e, quotient).wrapping_add(round_up);
+            Some((operand64 * f64::from(multiple)) as f32)
+        }
+        VA_GT => Some(flag(operand < current)),
+        VA_GTE => Some(flag(operand <= current)),
+        VA_EQ => Some(flag(operand == current)),
+        VA_NEQ => Some(flag(operand != current)),
+        VA_LT => Some(flag(current < operand)),
+        VA_LTE => Some(flag(current <= operand)),
+        VA_AND => Some(flag(if text == 0 {
+            current64 != zero && operand64 != zero
+        } else {
+            current64 != zero
+        })),
+        VA_OR => Some(flag(if text == 0 {
+            current64 != zero || operand64 != zero
+        } else {
+            current64 != zero || text != 0
+        })),
+        VA_NOT => Some(if text == 0 {
+            flag(operand64 == zero)
+        } else {
+            0.0
+        }),
+        VA_ONLYIF => {
+            if operand64 == zero && text == 0 {
+                Some(0.0)
+            } else {
+                None
+            }
+        }
+        VA_ONLYIFNOT => {
+            if operand64 != zero || text != 0 {
+                Some(0.0)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    if let Some(value) = result {
+        e.mem.set_f32(me + VALUE_FLOAT, value);
+    }
 }

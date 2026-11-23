@@ -8063,14 +8063,32 @@ fn int_setting(e: &mut Engine, setting: u32) -> u32 {
 /// the `VATS` counter.
 fn record_kill_statistics(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>, player: u32) {
     e.call(HANDLE_ENTRY_POINT, &args![0x15u32, player, this, this]);
-    let acquire = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, attacker));
-    let weapon_entry = e
-        .vcall(acquire, PROCESS_SLOT_CURRENT_WEAPON, &args![])
-        .u32();
-    let weapon_form = if weapon_entry != 0 {
-        typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, weapon_entry))
+    let weapon_form = if e.stewie(engine_core::extend::stewie::KILL_CHALLENGE_SOURCE_WEAPON) {
+        // lStewieAl's Tweaks' row S0664 (`patchFixKillChallengeSourceWeapon`, its
+        // `OnKillChallengeGetWeaponHook` jumped to at `0x89DB50`): the weapon of the killed
+        // actor's last hit (its process at +0x68, the hit data at +0x240, the weapon at +0x30),
+        // none without a process or a hit; the killer's equipped weapon is not asked.
+        let process = e.mem.u32(this.addr() + 0x68);
+        let hit = if process != 0 {
+            e.mem.u32(process + 0x240)
+        } else {
+            0
+        };
+        if hit != 0 {
+            e.mem.u32(hit + 0x30)
+        } else {
+            0
+        }
     } else {
-        0
+        let acquire = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, attacker));
+        let weapon_entry = e
+            .vcall(acquire, PROCESS_SLOT_CURRENT_WEAPON, &args![])
+            .u32();
+        if weapon_entry != 0 {
+            typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, weapon_entry))
+        } else {
+            0
+        }
     };
     let mut base = base_form(e, this.cast()).addr();
     if e.call(ACTOR_TEST_56AF40, &args![this]).bool() {
@@ -8448,7 +8466,25 @@ fn award_experience(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>, play
     {
         return;
     }
-    let tracked = if typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, this)) != 0 {
+    // lStewieAl's Tweaks' row S0204 (`KillCommandDuplicateRewardXpFix`, its
+    // `OnKillActorCheckHealthDamage` called at `0x89E5BC`): the actor the console's `kill` just
+    // killed for the player (`KillActor`, S0204's other half) answers no process here once, so its
+    // tracked damage counts 0 and this step gives no second experience award.
+    let first = if e.stewie(engine_core::extend::stewie::KILL_COMMAND_DUPLICATE_XP) {
+        let kept = e.stewie_kept(
+            engine_core::extend::stewie::kept::LAST_KILL_COMMAND_ACTOR,
+            4,
+        );
+        if e.mem.u32(kept) == this.addr() {
+            e.mem.set_u32(kept, 0);
+            0
+        } else {
+            e.mem.u32(this.addr() + 0x68)
+        }
+    } else {
+        typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, this))
+    };
+    let tracked = if first != 0 {
         let process = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, this));
         e.vcall(process, PROCESS_SLOT_730, &args![]).f32()
     } else {
@@ -10041,23 +10077,39 @@ pub fn actor_apply_critical_stage(e: &mut Engine, this: Ptr<Actor>) {
             &args![CRITICAL_STAGE_NOT_DEAD_FORMAT, stage, name, form_id],
         );
     }
+    // lStewieAl's Tweaks' row S0094 (`patchFixDisintegrationsStat`, the bytes at `0x8A1B1B`,
+    // `0x8A1B51` and `0x8A1B6E`): the statistic is counted at stages 1 (goo start) and 3
+    // (disintegration start, which has nothing else to do), and no longer at 2 and 4 (their ends).
+    let at_start = e.stewie(engine_core::extend::stewie::DISINTEGRATIONS_STAT);
     match e.get(this, Actor::eCriticalStage) {
         1 => {
             e.call(BHK_REPLACE_CONSTRAINTS, &args![body, 8u32]);
             e.call(BHK_DAMP_BODIES_VELOCITY, &args![body, 0.0f32]);
+            if at_start {
+                count_player_disintegration(e, this);
+            }
         }
         2 | 4 => {
             e.call(REFR_REMOVE_FROM_ALL_WATER, &args![this, 0u32]);
             e.call(BODY_FN_450F90, &args![body, 1u32]);
             e.vcall(this.addr(), ACTOR_SLOT_1C0, &args![]);
-            if !e.vcall(this.addr(), ACTOR_SLOT_360, &args![]).bool() {
-                let killer = e.get(this, Actor::pMyKiller).addr();
-                if killer != 0 && e.vcall(killer, ACTOR_SLOT_360, &args![]).bool() {
-                    e.call(MISC_STAT_INCREMENT, &args![0x1du32]);
-                }
+            if !at_start {
+                count_player_disintegration(e, this);
             }
         }
+        3 if at_start => count_player_disintegration(e, this),
         _ => {}
+    }
+}
+
+/// The statistic step of [`actor_apply_critical_stage`] (`0x8A1B78`): when the actor is not the
+/// player (slot `0x360`) and its killer (`pMyKiller`) is, the statistic `0x1d` goes up by one.
+fn count_player_disintegration(e: &mut Engine, this: Ptr<Actor>) {
+    if !e.vcall(this.addr(), ACTOR_SLOT_360, &args![]).bool() {
+        let killer = e.get(this, Actor::pMyKiller).addr();
+        if killer != 0 && e.vcall(killer, ACTOR_SLOT_360, &args![]).bool() {
+            e.call(MISC_STAT_INCREMENT, &args![0x1du32]);
+        }
     }
 }
 /// `TESTopic::CreateDialogueItem` (Xbox PDB): thiscall on the topic, taking
@@ -10719,11 +10771,22 @@ pub fn fn_008a2ed0(e: &mut Engine, this: Ptr<Actor>) -> u32 {
             if package_target != 0 {
                 // The distance is compared with the setting, but the
                 // result of the comparison is not used.
-                e.call(
-                    REFR_GET_DISTANCE_FROM_REFERENCE,
-                    &args![package_target, this, 0u32, 0u32],
-                );
-                setting_float(e, SETTING_11CD938);
+                let distance = e
+                    .call(
+                        REFR_GET_DISTANCE_FROM_REFERENCE,
+                        &args![package_target, this, 0u32, 0u32],
+                    )
+                    .f64();
+                let limit = setting_float(e, SETTING_11CD938);
+                // lStewieAl's Tweaks' row S0241 (`ActorGetHeadingTargetFix`, the bytes at
+                // `0x8A2F83`): the comparison's result is used. Unless `fAIMaxHeadTrackDistance` is
+                // below the distance (so also for a distance that is not a number, as Tweaks'
+                // `JNP`), the package target is the answer.
+                if e.stewie(engine_core::extend::stewie::HEADING_TARGET_DISTANCE)
+                    && (limit as f64).partial_cmp(&distance) != Some(std::cmp::Ordering::Less)
+                {
+                    return package_target;
+                }
             }
         }
     }
@@ -13712,6 +13775,18 @@ fn hit_me_reactions(e: &mut Engine, s: &mut HitMe) {
     }
 }
 
+/// The start point of the knockback in `HitMe` (`0x89C8E0`): the aggressor's position (slot
+/// `0x1f4`). lStewieAl's Tweaks' row S0660 (`patchFixExplosionPushDirection`, the bytes at
+/// `0x89C8E3`): the hit's source reference (the explosion) when it has one, else the aggressor,
+/// their position at +0x30 read directly.
+fn knockback_start(e: &mut Engine, source: u32, aggressor: u32) -> u32 {
+    if e.stewie(engine_core::extend::stewie::EXPLOSION_PUSH_DIRECTION) {
+        (if source != 0 { source } else { aggressor }).wrapping_add(0x30)
+    } else {
+        e.vcall(aggressor, ACTOR_SLOT_POSITION, &args![]).u32()
+    }
+}
+
 /// `0089c614`..`0089c7b7`: the hit was (partly) blocked: the block idle for
 /// the actor and the player's feedback.
 fn hit_me_blocked_reaction(e: &mut Engine, s: &mut HitMe) {
@@ -13800,7 +13875,7 @@ fn hit_me_unblocked_reaction(e: &mut Engine, s: &mut HitMe) {
             let owner = this.addr() + 0xa4;
             let amount = e.call(FTOL, &args![s.total as f64]).u32();
             let mut speed = e.call(GET_KNOCKBACK_SPEED, &args![owner, amount]).f32();
-            let aggressor_position = e.vcall(aggressor, ACTOR_SLOT_POSITION, &args![]).u32();
+            let aggressor_position = knockback_start(e, s.source(e), aggressor);
             let this_position = e.vcall(this.addr(), ACTOR_SLOT_POSITION, &args![]).u32();
             let difference = s.local(-0x410);
             let scaled = s.local(-0x428);
@@ -19781,6 +19856,103 @@ mod tests {
         assert_eq!(call_count(&e, GET_EXPERIENCE_POINTS), 0);
     }
 
+    /// S0204 (`KillCommandDuplicateRewardXpFix`, its `Actor::Kill` half): the actor the console's
+    /// `kill` remembered (the kept word) answers no process at the experience step once: no
+    /// tracked-damage test, no experience, and the word is cleared, so the next kill of it counts
+    /// again. Another remembered actor, or the row off, leaves the step as the exe's.
+    #[test]
+    fn s0204_the_kill_commands_actor_gets_no_second_experience() {
+        for (on, remember_victim, skipped) in [
+            (false, true, false),
+            (true, true, true),
+            (true, false, false),
+        ] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::KILL_COMMAND_DUPLICATE_XP, on);
+            let (victim, process, player, _) = kill_setup(&mut e);
+            let tracked = slot_target(&e, process, PROCESS_SLOT_730);
+            e.register_double(tracked, |_, _| float_ret(12.0));
+            stub(&mut e, TRACKED_DAMAGE_TEST, 1);
+            stub(&mut e, GET_EXPERIENCE_POINTS, 50);
+            stub_float(&mut e, SCALE_EXPERIENCE, 100.0);
+            stub_float(&mut e, FLOAT_ROUND, 100.0);
+            stub_with(&mut e, FTOL, |_, a| {
+                ret(f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32) as i32 as u32)
+            });
+            let player_488 = slot_target(&e, player.cast(), PLAYER_SLOT_488);
+            e.register_double(player_488, |_, _| ret(0));
+            let kept = e.stewie_kept(
+                engine_core::extend::stewie::kept::LAST_KILL_COMMAND_ACTOR,
+                4,
+            );
+            let remembered = if remember_victim {
+                victim.addr()
+            } else {
+                0x9999
+            };
+            e.mem.set_u32(kept, remembered);
+            actor_kill(&mut e, victim, player, 1.0);
+            let what = format!("on {on} victim remembered {remember_victim}");
+            assert_eq!(
+                call_count(&e, TRACKED_DAMAGE_TEST),
+                usize::from(!skipped),
+                "{what}"
+            );
+            assert_eq!(call_count(&e, player_488), usize::from(!skipped), "{what}");
+            assert_eq!(
+                e.mem.u32(kept),
+                if skipped { 0 } else { remembered },
+                "{what}"
+            );
+            // Once only: the next kill gives the experience.
+            e.call_log = Some(vec![]);
+            actor_kill(&mut e, victim, player, 1.0);
+            assert_eq!(call_count(&e, player_488), 1, "{what}, again");
+        }
+    }
+
+    /// S0664 (`patchFixKillChallengeSourceWeapon`): the player's kill statistics and challenges
+    /// (`005f5950`) get the weapon of the victim's last hit (its process +0x240, the weapon at
+    /// +0x30) with the row on, none when there is no hit; off, the killer's equipped weapon (here
+    /// none).
+    #[test]
+    fn s0664_kill_challenges_take_the_last_hits_weapon() {
+        for (on, with_hit, weapon) in [(false, true, 0), (true, true, 0x9700), (true, false, 0)] {
+            let mut e = engine();
+            e.set_stewie(
+                engine_core::extend::stewie::KILL_CHALLENGE_SOURCE_WEAPON,
+                on,
+            );
+            let (victim, process, player, _) = kill_setup(&mut e);
+            let player_360 = slot_target(&e, player.cast(), ACTOR_SLOT_360);
+            e.register_double(player_360, |_, _| ret(1));
+            stub(&mut e, REFR_BASE_FORM, 0x9300);
+            stub_with(&mut e, FTOL, |_, a| {
+                ret(f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32) as i32 as u32)
+            });
+            stub(&mut e, CREATURE_GETTER_59F3A0, 0);
+            stub(&mut e, RTTI_DYNAMIC_CAST, 0x9400);
+            stub(&mut e, WEAPON_TYPE, 3);
+            stub(&mut e, WEAPON_GETTER_8D85E0, 0x21);
+            if with_hit {
+                let hit = e.mem.alloc(0x60);
+                e.mem.set_u32(hit + 0x30, 0x9700);
+                e.mem.set_u32(process.addr() + 0x240, hit);
+            }
+            actor_kill(&mut e, victim, player, 1.0);
+            let stats = calls_to(&e, STATISTICS_WORKER_5F5950);
+            let what = format!("on {on} hit {with_hit}");
+            assert_eq!(stats.len(), 3, "{what}");
+            let (slot, number) = if weapon != 0 { (0x21, 4) } else { (0x2d, 1) };
+            assert_eq!(
+                stats[0],
+                vec![1, 1, 0x9300, weapon, 0, slot, number],
+                "{what}"
+            );
+            assert_eq!(stats[2][3], weapon, "{what}");
+        }
+    }
+
     #[test]
     fn actor_kill_of_an_essential_actor_at_a_low_process_level() {
         let mut e = engine();
@@ -21388,6 +21560,65 @@ mod tests {
         assert_eq!(call_count(&e, BHK_REPLACE_CONSTRAINTS), 0);
     }
 
+    /// S0094 (`patchFixDisintegrationsStat`): the player's kill counts the statistic 0x1d at the
+    /// stages that start the goo (1) and the ash (3) with the row on, at the ends (2, 4) with it
+    /// off; each stage's own work is the same both ways. Not counted when the killer is not the
+    /// player.
+    #[test]
+    fn s0094_disintegrations_count_at_the_start() {
+        for (on, stage, counted) in [
+            (false, 1, false),
+            (false, 2, true),
+            (false, 3, false),
+            (false, 4, true),
+            (true, 1, true),
+            (true, 2, false),
+            (true, 3, true),
+            (true, 4, false),
+        ] {
+            for killer_is_player in [true, false] {
+                let mut e = engine();
+                e.set_stewie(engine_core::extend::stewie::DISINTEGRATIONS_STAT, on);
+                let killer = actor_with(
+                    &mut e,
+                    &[(ACTOR_SLOT_360, ret(killer_is_player as u32))],
+                    None,
+                );
+                let actor = actor_with(
+                    &mut e,
+                    &[
+                        (ACTOR_SLOT_1D0, ret(0x7000)),
+                        (ACTOR_SLOT_22C, ret(1)),
+                        (ACTOR_SLOT_1C0, ret(0)),
+                        (ACTOR_SLOT_360, ret(0)),
+                    ],
+                    None,
+                );
+                e.set(actor, Actor::pMyKiller, killer.cast());
+                e.set(actor, Actor::eCriticalStage, stage);
+                actor_apply_critical_stage(&mut e, actor);
+                let what = format!("on {on} stage {stage} player {killer_is_player}");
+                let stat = calls_to(&e, MISC_STAT_INCREMENT);
+                assert_eq!(
+                    stat == vec![vec![0x1d]],
+                    counted && killer_is_player,
+                    "{what}"
+                );
+                assert!(stat.is_empty() || stat == vec![vec![0x1d]], "{what}");
+                assert_eq!(
+                    call_count(&e, BHK_REPLACE_CONSTRAINTS),
+                    (stage == 1) as usize,
+                    "{what}"
+                );
+                assert_eq!(
+                    call_count(&e, REFR_REMOVE_FROM_ALL_WATER),
+                    (stage == 2 || stage == 4) as usize,
+                    "{what}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn fn_008a1bd0_without_a_dialogue_item_only_copies_the_handle() {
         let mut e = engine();
@@ -21842,6 +22073,45 @@ mod tests {
             calls_to(&e, REFR_GET_DISTANCE_FROM_REFERENCE),
             vec![vec![0x6100, actor.addr(), 0, 0]]
         );
+    }
+
+    /// S0241 (`ActorGetHeadingTargetFix`): with no acquired target, the package target (0x6100)
+    /// is the answer when `fAIMaxHeadTrackDistance` (here 200) is not below its distance (also
+    /// when the distance is not a number); off, the answer stays 0 whatever the distance. The
+    /// player is never asked about its package target.
+    #[test]
+    fn s0241_the_package_target_within_the_head_track_distance() {
+        for (on, distance, answer) in [
+            (false, 150.0f64, 0),
+            (true, 150.0, 0x6100),
+            (true, 200.0, 0x6100),
+            (true, 200.5, 0),
+            (true, f64::NAN, 0x6100),
+            (false, f64::NAN, 0),
+        ] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::HEADING_TARGET_DISTANCE, on);
+            let player = actor_with(&mut e, &[], None);
+            set_player(&mut e, player);
+            e.map(SINGLETON_11DE45C, 4);
+            e.set_global(SINGLETON_11DE45C, 0x5000u32);
+            stub(&mut e, SINGLETON_TEST_47C850, 0);
+            let actor = actor_with(&mut e, &[], None);
+            shared_acquire(&mut e, &[(ACQUIRE_OBJECT_SLOT_678, ret(0))]);
+            stub(&mut e, MOBILE_OBJECT_GET_CURRENT_PACKAGE, 0x6000);
+            stub(&mut e, ACTOR_GET_CURRENT_PACKAGE_TARGET, 0x6100);
+            e.register_double(REFR_GET_DISTANCE_FROM_REFERENCE, move |_, _| Ret {
+                st0: distance,
+                ..Ret::default()
+            });
+            stub_float_settings(&mut e, &[(SETTING_11CD938, 200.0)]);
+            assert_eq!(
+                fn_008a2ed0(&mut e, actor),
+                answer,
+                "on {on} distance {distance}"
+            );
+            assert_eq!(fn_008a2ed0(&mut e, player), 0, "the player");
+        }
     }
 
     /// Makes `NiPoint3::operator+=` add the vector at the pointer to the
@@ -23097,6 +23367,30 @@ mod tests {
                 1.0f32.to_bits()
             ]
         );
+    }
+
+    /// S0660 (`patchFixExplosionPushDirection`): the knockback starts from the aggressor's slot
+    /// `0x1f4` position off, also for a hit with a source reference (an explosion); on, from the
+    /// source's position (+0x30) when the hit has one, else the aggressor's own (+0x30).
+    #[test]
+    fn s0660_an_explosion_pushes_away_from_itself() {
+        for (on, with_source) in [(false, true), (true, true), (true, false), (false, false)] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::EXPLOSION_PUSH_DIRECTION, on);
+            let slot_position = e.mem.alloc(12);
+            let aggressor = actor_with(&mut e, &[(ACTOR_SLOT_POSITION, ret(slot_position))], None);
+            let source = if with_source { e.mem.alloc(0x40) } else { 0 };
+            let start = match (on, with_source) {
+                (false, _) => slot_position,
+                (true, true) => source + 0x30,
+                (true, false) => aggressor.addr() + 0x30,
+            };
+            assert_eq!(
+                knockback_start(&mut e, source, aggressor.addr()),
+                start,
+                "on {on} source {with_source}"
+            );
+        }
     }
 
     #[test]
