@@ -869,6 +869,10 @@ fn stand_ins(e: &mut Engine) {
     e.mem.set_u32(0x0101_7d00, 0x3a83_126f);
     e.mem.set_u32(0x0101_3ea4, 0x3c23_d70a);
     e.mem.set_u32(TRANSFORM_HOOK, TRANSFORM_HOOK_FN);
+    // The scale Havok positions are multiplied by into the game's units (`011c3d18`, set at start-up).
+    e.mem.set_f32(0x011c_3d18, 7.0);
+    // The 2.0 `NiQuaternion::ToRotation` doubles with (`01011590`).
+    e.mem.set_u64(0x0101_1590, 2.0f64.to_bits());
     e.mem.set_u64(0x0102_31b0, f64::from(f32::MAX).to_bits());
     for (at, f) in KEY_TABLES {
         e.mem.set_u32(at, f);
