@@ -25,7 +25,10 @@
 //! main: a head (`BSFaceGenNiNode::UpdateDownwardPass`, `00663a70`, whose face morphing reads the
 //! actor's process, the player pointer, the close-to-player list, menu mode, settings, the base
 //! NPC's face data and the world camera's position, none of which a bone pass writes) and an object
-//! without a world bound yet (its allocation then happens on main, in the serial order).
+//! whose pass allocates its world bound now (a geometry without one, or a node without one that takes
+//! it from its children: [`allocates_bound`]; the allocation then happens on main, in the serial
+//! order). A node without a bound that never takes one (the bones of a skeleton) is walked: a
+//! deferred skeleton would leave the skins walked after it reading last frame's bones.
 //!
 //! **Barriers.** An actor with anything else in its tree (controllers or property controllers below
 //! the two detached roots, particle systems, lights and other classes, a collision object that reads
@@ -688,11 +691,66 @@ fn classify(e: &mut Engine, object: u32, detached: &[u32]) -> Class {
     if collision != 0 && !collision_ok(e, collision) {
         return Class::Barrier(Barrier::Collision);
     }
-    if head || e.mem.u32(object + 0x20) == 0 {
+    if head || allocates_bound(e, object, downward) {
         // A head's morphing, or an object that gets its world bound allocated now: on main.
         return Class::Defer;
     }
     Class::Walk
+}
+
+/// The flags that make a node take its bound from its children (`0x80000`, the children loop's
+/// bound part), and the one that makes it take a bound without looking at them (`0x2000`).
+const FLAG_BOUND_FROM_CHILDREN: u32 = 0x0008_0000;
+const FLAG_BOUND_WITHOUT_CHILDREN: u32 = 0x2000;
+/// Objects a look-ahead below one node reads at most before it answers "may allocate".
+const LOOK_AHEAD: usize = 512;
+
+/// Whether `object`'s downward pass (the class's `downward`) allocates its world bound now: an
+/// object without one (+0x20 null) whose pass makes one. A geometry's `UpdateWorldBound` always
+/// does; a node's children loop does only with the bound-from-children flag, and then when the
+/// other flag is set or a child ends its own pass with a bound ([`ends_with_bound`]). A node that
+/// never takes a bound (a bone of a skeleton: no flag, or no child with a bound) is walked on a
+/// helper; deferring it would leave every skin that reads its bones to read last frame's.
+fn allocates_bound(e: &Engine, object: u32, downward: u32) -> bool {
+    if e.mem.u32(object + 0x20) != 0 {
+        return false;
+    }
+    if downward == OBJECT_DOWNWARD {
+        return true;
+    }
+    let mut budget = LOOK_AHEAD;
+    node_allocates(e, object, &mut budget)
+}
+
+/// [`allocates_bound`] for a node without a bound: the children loop's rule.
+fn node_allocates(e: &Engine, node: u32, budget: &mut usize) -> bool {
+    let flags = e.mem.u32(node + 0x30);
+    if flags & FLAG_BOUND_FROM_CHILDREN == 0 {
+        return false;
+    }
+    if flags & FLAG_BOUND_WITHOUT_CHILDREN != 0 {
+        return true;
+    }
+    children(e, node)
+        .into_iter()
+        .any(|child| ends_with_bound(e, child, budget))
+}
+
+/// Whether `object` has a world bound after its own pass: it has one now, or its pass allocates
+/// one. Past the look-ahead's budget the answer is yes (the caller then defers: never wrong).
+fn ends_with_bound(e: &Engine, object: u32, budget: &mut usize) -> bool {
+    if *budget == 0 {
+        return true;
+    }
+    *budget -= 1;
+    if e.mem.u32(object + 0x20) != 0 {
+        return true;
+    }
+    match slot_target(e, object, SLOT_DOWNWARD) {
+        NODE_DOWNWARD | FADE_DOWNWARD | HEAD_DOWNWARD => node_allocates(e, object, budget),
+        // A geometry's pass allocates; any other class is a barrier before anything runs.
+        _ => true,
+    }
 }
 
 /// `bhkBlendController::Update` and `bhkForceController::Update`, the controllers a helper may run
@@ -1293,7 +1351,7 @@ fn check_stretch(
                 _ => None,
             })
             .collect();
-        for f in &walked[next] {
+        for (k, f) in walked[next].iter().enumerate() {
             if inside.contains(&f.object) {
                 continue;
             }
@@ -1305,6 +1363,7 @@ fn check_stretch(
             let bound_differs = !above.contains(&f.object) && now.bound != f.bound;
             if now.words != f.words || now.collision != expected || bound_differs {
                 DIFFERENCES.fetch_add(1, Relaxed);
+                detail(e, item, k, &saved[next][k], f, &now, bound_differs);
                 report(format_args!(
                     "NV_PAR_BONES=check: actor {:08x}, object {:08x}: transform, flags, bound or collision \
                      bytes differ from the serial pass",
@@ -1345,4 +1404,88 @@ const _: () = assert!(std::mem::size_of::<crate::culling::layout::NiAVObjectImag
 /// An index or count as a guest word (the lists are far below 2^32 entries).
 fn idx(i: usize) -> u32 {
     u32::try_from(i).unwrap_or(u32::MAX)
+}
+
+/// Check-mode detail lines printed so far (the first 200 are).
+static DETAILED: AtomicU32 = AtomicU32::new(0);
+
+/// One differing object of the check, in detail: its class (vtable and downward pass), name, depth,
+/// walk index, and per part (flags +0x30, local +0x34, world +0x68, bound, collision) the words that
+/// differ as they were before the walks, after the helper's walk and after the serial pass.
+#[cold]
+fn detail(
+    e: &Engine,
+    item: &Item,
+    k: usize,
+    before: &Fields,
+    helper: &Fields,
+    serial: &Fields,
+    bound_differs: bool,
+) {
+    if DETAILED.fetch_add(1, Relaxed) >= 200 {
+        return;
+    }
+    let object = helper.object;
+    let name = {
+        let p = e.mem.u32(object + 8);
+        let mut s = String::new();
+        if p != 0 {
+            for i in 0..48 {
+                let b = e.mem.u8(p + i);
+                if b == 0 {
+                    break;
+                }
+                s.push(char::from(b));
+            }
+        }
+        s
+    };
+    let mut depth = 0;
+    let mut n = object;
+    while n != 0 && n != item.root && depth < 64 {
+        n = e.mem.u32(n + 0x18);
+        depth += 1;
+    }
+    let part = |i: usize| match i {
+        0 => "flags",
+        1..=13 => "local",
+        _ => "world",
+    };
+    let mut words = String::new();
+    let mut shown = 0;
+    for i in 0..helper.words.len() {
+        if helper.words[i] != serial.words[i] && shown < 6 {
+            shown += 1;
+            words.push_str(&format!(
+                " {}[{}]: before {:08x} helper {:08x} serial {:08x};",
+                part(i),
+                i,
+                before.words[i],
+                helper.words[i],
+                serial.words[i]
+            ));
+        }
+    }
+    let differing = helper
+        .words
+        .iter()
+        .zip(&serial.words)
+        .filter(|(a, b)| a != b)
+        .count();
+    eprintln!(
+        "NV_PAR_BONES=check detail: actor {:08x} root {:08x} object {object:08x} '{name}' vtable {:08x} \
+         downward {:08x} depth {depth} walk index {k}: {differing} words differ{words} bound {} \
+         (before {:08x?} helper {:08x?} serial {:08x?}) collision before {:x?} helper {:x?} serial {:x?}",
+        item.actor,
+        item.root,
+        e.mem.u32(object),
+        slot_target(e, object, SLOT_DOWNWARD),
+        if bound_differs { "DIFFERS" } else { "same" },
+        before.bound,
+        helper.bound,
+        serial.bound,
+        before.collision,
+        helper.collision,
+        serial.collision,
+    );
 }

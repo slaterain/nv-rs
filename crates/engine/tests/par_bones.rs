@@ -54,6 +54,8 @@ const MOVE_BODY_FN: u32 = VT_FN + 0x20;
 /// `MemoryManager::Allocate` (the bound pool's block for an object without a world bound): the next
 /// block of a fixed area, the same each pass.
 const POOL_ALLOCATE: u32 = 0x00aa_3e40;
+/// What a node runs before it takes its first child's bound: a bound allocated when it has none.
+const NODE_BOUND_ALLOCATE: u32 = 0x0054_67e0;
 const POOL_AREA: u32 = 0x0300_0800;
 const SETTING_VALUE: u32 = 0x0040_8d60;
 const TASKLET_VALUE: u32 = 0x0300_0000;
@@ -202,6 +204,45 @@ fn geometry(
     g
 }
 
+/// A node without a world bound and without flags (it never takes a bound), room for one child.
+fn bare_node(w: &mut World, e: &mut Engine, vt: u32, parent: u32, local: [f32; 3]) -> u32 {
+    let n = node(w, e, vt, parent, local, 1);
+    e.mem.set_u32(n + 0x20, 0);
+    e.mem.set_u32(n + 0x30, 0);
+    n
+}
+
+/// A geometry under `parent` whose skin instance (+0xbc) has `bones` (each with a model bound in
+/// the skin data), the skin's root parent the geometry's parent; its bound flag set, so its world
+/// bound is the skin's each pass.
+fn skinned(w: &mut World, e: &mut Engine, k: &Kinds, parent: u32, bones: &[u32]) -> u32 {
+    let g = geometry(w, e, k, parent, 1.0, true);
+    e.mem.set_u32(g + 0x30, 0x0008_0000);
+    let count = bones.len() as u32;
+    let list = w.alloc(e, 4 * count);
+    for (i, &b) in bones.iter().enumerate() {
+        e.mem.set_u32(list + 4 * i as u32, b);
+    }
+    let data = w.alloc(e, 0x48);
+    identity(e, data + 0xc, [0.0, 0.0, 0.0]);
+    let bone_data = w.alloc(e, 0x4c * count);
+    for i in 0..count {
+        let bound = bone_data + 0x4c * i + 0x34;
+        for (axis, v) in [0.1f32, 0.2 * i as f32, 0.05].iter().enumerate() {
+            e.mem.set_f32(bound + 4 * axis as u32, *v);
+        }
+        e.mem.set_f32(bound + 0xc, 0.3 + 0.1 * i as f32);
+    }
+    e.mem.set_u32(data + 0x40, bone_data);
+    e.mem.set_u32(data + 0x44, count);
+    let skin = w.alloc(e, 0x20);
+    e.mem.set_u32(skin + 8, data);
+    e.mem.set_u32(skin + 0x10, parent);
+    e.mem.set_u32(skin + 0x14, list);
+    e.mem.set_u32(g + 0xbc, skin);
+    g
+}
+
 /// A blend collision object on `bone`: `keyframed` (fully, motion mode 4) or node-moved; `amount`
 /// the blend (1.0 keyframed; 0.0 a ragdoll's).
 fn blend(w: &mut World, e: &mut Engine, k: &Kinds, bone: u32, keyframed: bool, amount: f32) {
@@ -229,6 +270,12 @@ enum Extra {
     Ragdoll,
     NotPending,
     NoBound,
+    /// A skeleton of nodes without a world bound that never take one (as a creature's bones), and a
+    /// skin on them walked after it.
+    Skinned,
+    /// A node without a world bound that takes one from its children (a geometry with a bound under
+    /// it): its pass allocates the bound, on main.
+    NodeNoBound,
 }
 
 /// An actor at offset `x` with its animation and tree.
@@ -285,6 +332,26 @@ fn actor(w: &mut World, e: &mut Engine, k: &Kinds, x: f32, extra: Extra, lightin
         e.mem.set_u32(c + 0x2c, bone);
         e.mem.set_u32(bone + 0xc, c);
     }
+    if extra == Extra::Skinned {
+        // A skeleton under the accumulation root whose nodes have no world bound and no
+        // bound-from-children flag (they never take one), then a skinned geometry under the root,
+        // walked after the skeleton: its bound reads the bones' world transforms of this pass.
+        let skeleton = bare_node(w, e, k.node, accum, [0.0, 0.1, 0.0]);
+        let mut bone = skeleton;
+        let mut skin_bones = Vec::new();
+        for i in 0..3 {
+            bone = bare_node(w, e, k.node, bone, [0.2, 0.1 * i as f32, 0.05]);
+            skin_bones.push(bone);
+        }
+        skinned(w, e, k, root, &skin_bones);
+    }
+    if extra == Extra::NodeNoBound {
+        // A node without a bound that takes one from its children, with a bounded geometry under
+        // it: its children loop allocates the bound (`005467e0`), which must happen on main.
+        let n = bare_node(w, e, k.node, accum, [0.0, -0.1, 0.0]);
+        e.mem.set_u32(n + 0x30, 0x0008_0000);
+        geometry(w, e, k, n, 0.4, true);
+    }
     if extra == Extra::Controller {
         let cvt = w.vtable(e, &[(0x94, CONTROLLER_FN)]);
         let c = w.alloc(e, 0x40);
@@ -340,6 +407,17 @@ fn stand_ins(e: &mut Engine) {
         e.mem.set_u32(POOL_AREA - 4, n + 1);
         record("allocate", vec![n]);
         ret(POOL_AREA + 0x10 * n)
+    });
+    // What a node runs before it takes its first child's bound (`005467e0`): a bound from the same
+    // pool when it has none, recorded (it must run on main).
+    e.register(NODE_BOUND_ALLOCATE, |e, a| {
+        if e.mem.u32(a[0] + 0x20) == 0 {
+            let n = e.mem.u32(POOL_AREA - 4);
+            e.mem.set_u32(POOL_AREA - 4, n + 1);
+            record("allocate", vec![n]);
+            e.mem.set_u32(a[0] + 0x20, POOL_AREA + 0x10 * n);
+        }
+        ret(0)
     });
     // The Havok lock's imports: the interlocked compare-exchange and the thread id.
     e.register(0x00fd_f1bc, |e, a| {
@@ -482,6 +560,7 @@ fn world(e: &mut Engine) -> World {
     let plan = [
         (Extra::None, true),
         (Extra::None, false),
+        (Extra::Skinned, true),
         (Extra::None, true),
         (Extra::Controller, true),
         (Extra::None, true),
@@ -490,6 +569,7 @@ fn world(e: &mut Engine) -> World {
         (Extra::NotPending, true),
         (Extra::None, true),
         (Extra::NoBound, true),
+        (Extra::NodeNoBound, true),
         (Extra::None, true),
         (Extra::None, false),
     ];
