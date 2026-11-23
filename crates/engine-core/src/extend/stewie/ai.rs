@@ -144,3 +144,34 @@ pub const KILL_CHALLENGE_SOURCE_WEAPON: Row = Row::share(AI_FIXES, AI_FIXES_END,
 /// S0782 `ShootableNonPlayableExplosives` (`Actor::DamageEquipment` `00891360` (`0x891483`,
 /// `0x891759`)): an unplayable explosive an NPC carries can be shot off and set off.
 pub const HIDDEN_FRAGS: Row = Row::share(AI_FIXES, AI_FIXES_END, 41);
+/// S0022.21 `MenuFixes` (`PlayerCharacter::Update` `0093e860` (`0x94328E`)): activating a workbench
+/// or a reloading bench plays no "no activate" sound.
+pub const WORKBENCH_NO_ACTIVATE_SOUND: Row = Row::share(AI_FIXES, AI_FIXES_END, 42);
+/// S0052 `patchPreventAimingFOVDuringKillcams` (`0095de30` (`0x95E088`)): no aiming field of view
+/// during a cinematic kill camera.
+pub const NO_AIMING_FOV_IN_KILLCAMS: Row = Row::share(AI_FIXES, AI_FIXES_END, 43);
+/// S0153 `patchFixWeaponNifRoundNotCullingInFirstPerson` (`PlayerCharacter::DropObject` `00954610`
+/// (`0x954703`)): the dropped round's node is hidden on the first-person model too.
+pub const NIF_ROUND_FIRST_PERSON: Row = Row::share(AI_FIXES, AI_FIXES_END, 44);
+/// S0164 `patchPreventLevelupInTestAllCells` (`PlayerCharacter::Update` `0093e860` (`0x9439D4`)):
+/// no level-up during `TestAllCells`.
+pub const NO_LEVELUP_IN_TEST_ALL_CELLS: Row = Row::share(AI_FIXES, AI_FIXES_END, 45);
+/// S0209 `PreventAutoVanityModeIfSpecialIdlesArePlaying` (`PlayerCharacter::Update` `0093e860`
+/// (`0x943593`)): no automatic vanity camera during a first-person special idle.
+pub const NO_AUTO_VANITY_IN_SPECIAL_IDLE: Row = Row::share(AI_FIXES, AI_FIXES_END, 46);
+/// S0210 `FixSetIsFiringAutomaticWeaponNotClearing` (`00948310` (`0x949838`, `0x949862`)): the
+/// player's automatic-firing flag clears.
+pub const AUTOMATIC_FIRING_CLEARS: Row = Row::share(AI_FIXES, AI_FIXES_END, 47);
+/// S0212 `PlayerWaitDoubleHealingFix` (`PlayerCharacter::PlayerSleep` `0094df80` (`0x94E09E`)):
+/// waiting heals the player once.
+pub const WAIT_SINGLE_HEALING: Row = Row::share(AI_FIXES, AI_FIXES_END, 48);
+/// S0224 `PreventJumpingWhenFastTraveling` (`PlayerCharacter::Update` `0093e860` (`0x942148`)): no
+/// jump while the map has a marker selected.
+pub const NO_JUMP_WHEN_FAST_TRAVELING: Row = Row::share(AI_FIXES, AI_FIXES_END, 49);
+/// S0111 `patchFixLoopingReloadAmmoSwapInstantRefill` (`PlayerCharacter::Update` `0093e860`
+/// (`0x940B10`); `0095d450` (`0x95D714`)): swapping ammunition on a weapon that reloads round by
+/// round no longer refills its clip.
+pub const AMMO_SWAP_NO_INSTANT_REFILL: Row = Row::share(AI_FIXES, AI_FIXES_END, 50);
+/// S0121 `patchPreventReloadingIfClipIsOverfilled` (`0095d850` (`0x95DAE5`, `0x95DC01`),
+/// `0095d450` (`0x95D65D`)): a clip holding as many rounds as its size or more is not reloaded.
+pub const NO_RELOAD_OVERFILLED_CLIP: Row = Row::share(AI_FIXES, AI_FIXES_END, 51);

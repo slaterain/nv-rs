@@ -139,6 +139,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 mod heap;
+mod pools;
 mod touch;
 pub mod track;
 
@@ -500,6 +501,15 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// `NV_THREAD_HEAP`, read once: `1` or `on` turns the thread heap on in every memory made
+/// (`mem/pools.rs`); anything else, or unset, leaves it off.
+fn thread_heap_from_env() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("NV_THREAD_HEAP").is_ok_and(|v| matches!(v.trim(), "1" | "on"))
+    })
+}
+
 /// `m`'s value through `&mut` (no locking), as [`lock`] takes it.
 fn unlocked<T>(m: &mut Mutex<T>) -> &mut T {
     m.get_mut().unwrap_or_else(PoisonError::into_inner)
@@ -659,6 +669,13 @@ pub struct Mem {
     /// them for `_msize` ([`Mem::alloc_asked`]). Kept with the heap so one lock covers both
     /// with real threads.
     asked: HashMap<u32, u32>,
+    /// The thread heap's tables (`mem/pools.rs`, `NV_THREAD_HEAP`), shared by every view; `None`
+    /// with it off.
+    pools: Option<std::sync::Arc<pools::Tables>>,
+    /// The thread heap's stock of each pool: the shared memory's (with threads stepped, this one's).
+    pool_stocks: Option<Box<pools::Stocks>>,
+    /// The thread heap's free blocks of this thread (this view's; with threads stepped, everyone's).
+    pool_cache: pools::Cache,
     /// Real threads: this `Mem` is a view of the shared one ([`Mem::start_sharing`]): it reads and
     /// writes guest memory itself, through the same block, and does its heap and page-table
     /// changes on the shared one under its lock. `None` otherwise (stepped threads, the tests).
@@ -1045,13 +1062,23 @@ impl Mem {
     /// Calls `f` with every live heap block (the heap census, `crate::census`). The sizes asked
     /// for, running functions and paths come from the block check; without it a block's asked size
     /// is its held size and the rest is unknown.
+    /// The thread heap's blocks are listed one by one (with the sizes asked for), not its runs.
     pub fn for_each_census_block(&self, mut f: impl FnMut(CensusBlock<'_>)) {
         if let Some(s) = self.shared {
             return s.with(|m| m.for_each_census_block(f));
         }
         let c = self.check.as_deref();
+        let tables = self.pools.as_deref();
         for (&addr, &entry) in self.live.iter() {
             let size = entry & !ODD_POOL;
+            let run_start = (addr + PAGE as u32 - 1) & !(PAGE as u32 - 1);
+            if size == pools::RUN_BLOCK
+                && tables
+                    .and_then(|t| t.run_of(run_start))
+                    .is_some_and(|r| r.start == run_start)
+            {
+                continue;
+            }
             let info = c.and_then(|c| c.blocks.get(&addr)).copied();
             let (asked, running) = info.unwrap_or((size, 0));
             let held = if info.is_some() {
@@ -1069,6 +1096,17 @@ impl Mem {
                 running,
                 path,
             });
+        }
+        for run in tables.into_iter().flat_map(pools::Tables::runs) {
+            for (addr, asked) in run.live() {
+                f(CensusBlock {
+                    addr,
+                    held: run.stride,
+                    asked,
+                    running: 0,
+                    path: &[],
+                });
+            }
         }
     }
 
@@ -1205,6 +1243,18 @@ impl Default for Mem {
     }
 }
 
+/// A view going away (a real thread ending) gives the thread heap blocks waiting in its stacks back to
+/// the stock.
+impl Drop for Mem {
+    fn drop(&mut self) {
+        if self.shared.is_some() && self.pools.is_some() {
+            for (class, blocks) in self.pool_cache.take_all() {
+                self.pool_give_back(class, blocks);
+            }
+        }
+    }
+}
+
 impl Mem {
     pub fn new() -> Self {
         Mem {
@@ -1224,6 +1274,9 @@ impl Mem {
             track: None,
             touch: None,
             asked: HashMap::new(),
+            pools: thread_heap_from_env().then(|| std::sync::Arc::new(pools::Tables::new())),
+            pool_stocks: None,
+            pool_cache: Default::default(),
             shared: None,
             defer_hand_back: false,
             race: None,
@@ -1255,6 +1308,9 @@ impl Mem {
             track: None,
             touch: None,
             asked: HashMap::new(),
+            pools: None,
+            pool_stocks: None,
+            pool_cache: Default::default(),
             shared: Some(shared),
             defer_hand_back: false,
             race: None,
@@ -1293,6 +1349,7 @@ impl Mem {
         };
         let mut view = Mem::view_at(self.space.base, shared);
         view.view_check = checked;
+        view.pools = self.pools.clone();
         view.checking = checked;
         view.track = self.track.clone();
         view.store_diag = view.track.is_some();
@@ -1308,6 +1365,7 @@ impl Mem {
     pub fn view(&self) -> Mem {
         let shared = self.shared.expect("a view of memory that isn't shared");
         let mut view = Mem::view_at(self.space.base, shared);
+        view.pools = self.pools.clone();
         view.view_check = self.view_check;
         view.checking = self.view_check;
         view.track = self.track.clone();
@@ -1435,8 +1493,12 @@ impl Mem {
         Some(unsafe { std::sync::atomic::AtomicU32::from_ptr(self.host_at(a).cast()) })
     }
 
-    /// [`Mem::alloc`], keeping the size asked for (`n`, 1 for 0) for [`Mem::asked_size`].
+    /// [`Mem::alloc`], keeping the size asked for (`n`, 1 for 0) for [`Mem::asked_size`]. With the
+    /// thread heap on, a block of one of the exe's pools comes from it (`mem/pools.rs`).
     pub fn alloc_asked(&mut self, n: u32) -> u32 {
+        if let Some(class) = self.pooled(n) {
+            return self.pool_alloc(class, n);
+        }
         if let Some(s) = self.shared {
             return self.with_shared(s, |m| m.alloc_asked(n));
         }
@@ -1447,6 +1509,9 @@ impl Mem {
 
     /// [`Mem::free`] of a block of [`Mem::alloc_asked`], forgetting its asked size.
     pub fn free_asked(&mut self, addr: u32) {
+        if self.pool_free(addr) {
+            return;
+        }
         if let Some(s) = self.shared {
             return self.with_shared(s, |m| m.free_asked(addr));
         }
@@ -1456,6 +1521,9 @@ impl Mem {
 
     /// The size a block of [`Mem::alloc_asked`] was asked for.
     pub fn asked_size(&self, addr: u32) -> Option<u32> {
+        if let Some(asked) = self.pool_asked(addr) {
+            return asked;
+        }
         match self.shared {
             Some(s) => s.with(|m| m.asked_size(addr)),
             None => self.asked.get(&addr).copied(),
@@ -1464,18 +1532,148 @@ impl Mem {
 
     /// Keeps `size` as the asked size of `addr` ([`Mem::asked_size`]).
     pub fn set_asked(&mut self, addr: u32, size: u32) {
+        if let Some(run) = self.pools.as_deref().and_then(|t| t.run_of(addr)) {
+            return run.set_asked(addr, size);
+        }
         if let Some(s) = self.shared {
             return s.with(|m| m.set_asked(addr, size));
         }
         self.asked.insert(addr, size);
     }
 
-    /// Forgets the asked size of `addr`, answering it.
+    /// Forgets the asked size of `addr`, answering it. A thread heap block keeps it until it is
+    /// freed (the platform's `HeapReAlloc` and `HeapFree` forget, then free).
     pub fn forget_asked(&mut self, addr: u32) -> Option<u32> {
+        if let Some(asked) = self.pool_asked(addr) {
+            return asked;
+        }
         if let Some(s) = self.shared {
             return s.with(|m| m.forget_asked(addr));
         }
         self.asked.remove(&addr)
+    }
+
+    /// Turns the thread heap on (`mem/pools.rs`), as `NV_THREAD_HEAP=1` does when the memory is
+    /// made: blocks of the exe's pools asked for from now on come from it. Before
+    /// [`Mem::start_sharing`].
+    pub fn enable_thread_heap(&mut self) {
+        assert!(
+            self.shared.is_none(),
+            "the thread heap is turned on before the memory is shared"
+        );
+        if self.pools.is_none() {
+            self.pools = Some(std::sync::Arc::new(pools::Tables::new()));
+        }
+    }
+
+    /// Whether the thread heap is on.
+    pub fn thread_heap_on(&self) -> bool {
+        self.pools.is_some()
+    }
+
+    /// The pool a request of `n` bytes is served from by the thread heap: none with it off, outside
+    /// the exe's pools, or with a memory diagnostic on (they keep the heap's own path).
+    #[inline]
+    fn pooled(&self, n: u32) -> Option<usize> {
+        if self.pools.is_none()
+            || self.store_diag
+            || self.check.is_some()
+            || self.view_check
+            || self.touch.is_some()
+        {
+            return None;
+        }
+        heap::pool_index(n)
+    }
+
+    /// [`Mem::alloc_asked`] from the thread heap's pool `class`: the top of this thread's stack,
+    /// zero-filled.
+    fn pool_alloc(&mut self, class: usize, n: u32) -> u32 {
+        crate::hitch::heap(false);
+        let addr = match self.pool_cache.pop(class) {
+            Some(a) => a,
+            None => self.pool_restock(class),
+        };
+        let tables = self.pools.as_deref().expect("the thread heap is on");
+        let run = tables
+            .run_of(addr)
+            .expect("a thread heap block lies in a run");
+        run.take(addr, n);
+        let stride = run.stride;
+        self.zero_raw(addr, stride);
+        self.note_written(addr, stride);
+        addr
+    }
+
+    /// Fills this thread's empty stack of pool `class` from the stock (under the shared memory's
+    /// lock with real threads) and takes its top.
+    #[cold]
+    #[inline(never)]
+    fn pool_restock(&mut self, class: usize) -> u32 {
+        let mut stack = std::mem::take(self.pool_cache.stack(class));
+        match self.shared {
+            Some(s) => s.with(|m| m.pool_fill(class, &mut stack)),
+            None => self.pool_fill(class, &mut stack),
+        }
+        let top = stack.pop().expect("a restock gives at least one block");
+        *self.pool_cache.stack(class) = stack;
+        top
+    }
+
+    /// The stock's part of [`Mem::pool_restock`] (the shared memory's, or with threads stepped this
+    /// one's): given-back blocks, else fresh slots of the pool's newest run, else a new run, on a
+    /// page boundary inside a heap block of its own that stays live for good.
+    fn pool_fill(&mut self, class: usize, out: &mut Vec<u32>) {
+        let tables = std::sync::Arc::clone(self.pools.as_ref().expect("the thread heap is on"));
+        let mut stocks = self.pool_stocks.take().unwrap_or_default();
+        let stride = heap::class_bytes(heap::POOLS[class]);
+        stocks.restock(&tables, class, stride, out, || {
+            let block = self.alloc(pools::RUN_BLOCK);
+            (block + PAGE as u32 - 1) & !(PAGE as u32 - 1)
+        });
+        self.pool_stocks = Some(stocks);
+    }
+
+    /// Frees `addr` into this thread's stack when it is a thread heap block (answers whether it
+    /// was); a stack over its bound gives its oldest blocks back to the stock.
+    #[inline]
+    fn pool_free(&mut self, addr: u32) -> bool {
+        let Some(tables) = self.pools.as_deref() else {
+            return false;
+        };
+        let Some(run) = tables.run_of(addr) else {
+            return false;
+        };
+        crate::hitch::heap(true);
+        run.give(addr);
+        let class = run.class;
+        if let Some(back) = self.pool_cache.push(class, addr) {
+            self.pool_give_back(class, back);
+        }
+        true
+    }
+
+    /// Gives `blocks` of pool `class` back to the stock.
+    #[cold]
+    #[inline(never)]
+    fn pool_give_back(&mut self, class: usize, blocks: Vec<u32>) {
+        let give = |m: &mut Mem| {
+            m.pool_stocks
+                .get_or_insert_with(Default::default)
+                .give_back(class, blocks)
+        };
+        match self.shared {
+            Some(s) => s.with(give),
+            None => give(self),
+        }
+    }
+
+    /// For an address in a thread heap run, the size its block was asked for (`None` inside: not a
+    /// live block); `None` for any other address.
+    #[inline]
+    fn pool_asked(&self, addr: u32) -> Option<Option<u32>> {
+        let run = self.pools.as_deref()?.run_of(addr)?;
+        Some(run.asked_of(addr))
     }
 
     /// Diagnostic, not game behaviour: records events in `[start, start + len)` (stores
@@ -2491,6 +2689,14 @@ impl Mem {
     /// freed small block never comes back for another pool's request (a 12-byte object's block
     /// not for a 16-byte one), unless the quick stacks, over their bound, moved it on.
     pub fn alloc(&mut self, size: u32) -> u32 {
+        let timer = crate::hitch::heap_timer();
+        let addr = self.alloc_untimed(size);
+        crate::hitch::heap_timer_end(timer);
+        addr
+    }
+
+    /// [`Mem::alloc`] without the hitch log's timing.
+    fn alloc_untimed(&mut self, size: u32) -> u32 {
         if let Some(s) = self.shared {
             return self.with_shared(s, |m| m.alloc(size));
         }
@@ -2535,6 +2741,16 @@ impl Mem {
     /// panics.
     pub fn free(&mut self, addr: u32) {
         if addr == 0 {
+            return;
+        }
+        let timer = crate::hitch::heap_timer();
+        self.free_untimed(addr);
+        crate::hitch::heap_timer_end(timer);
+    }
+
+    /// [`Mem::free`] (a block that is not 0) without the hitch log's timing.
+    fn free_untimed(&mut self, addr: u32) {
+        if self.pool_free(addr) {
             return;
         }
         if let Some(s) = self.shared {
@@ -2631,6 +2847,9 @@ impl Mem {
 
     /// Size of a live heap block.
     pub fn block_size(&self, addr: u32) -> Option<u32> {
+        if let Some(run) = self.pools.as_deref().and_then(|t| t.run_of(addr)) {
+            return run.asked_of(addr).map(|_| run.stride);
+        }
         if let Some(s) = self.shared {
             return s.with(|m| m.block_size(addr));
         }

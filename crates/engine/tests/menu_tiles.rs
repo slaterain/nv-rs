@@ -1886,3 +1886,115 @@ fn calculate_value_float_sweep_diff() {
     .run()
     .assert_same();
 }
+
+// ---- Tile::Value::~Value (every value of a closing menu) ----
+
+/// The words of [`value_destructor_diff`] and [`clear_actions_in_place_diff`]: a value (a string or
+/// none) whose three actions are, by the case, of the float action class (`01094c2c`: `QFloat`
+/// `00a0c000`, `QRefValue` the plain action's `00ad87c0`), the reference action class (`01094c44`:
+/// `00a0c020`, `00a0c060`, the word at +0xC) or a stand-in class (`QRefValue` `00fd0404`, the word
+/// at +0xC), reading two other values and nothing; the reaction map holds lists for the other values
+/// (with this value first or alone) and, by the case, none, one or three reactions on this value
+/// from two owners whose actions of the three classes read this value, another value or nothing.
+fn destructor_words(e: &mut Engine, case: &engine_core::typed::diff::Case) -> Vec<u32> {
+    world(e);
+    e.map(0x0109_4000, 0x1000);
+    e.mem.set_u32(0x0109_4c2c, 0x00a0_c000);
+    e.mem.set_u32(0x0109_4c30, 0x00ad_87c0);
+    e.mem.set_u32(0x0109_4c44, 0x00a0_c020);
+    e.mem.set_u32(0x0109_4c48, 0x00a0_c060);
+    let stand_in = e.mem.alloc(0x10);
+    e.mem.set_u32(stand_in + 4, 0x00fd_0404);
+    e.register(0x00fd_0404, |e, a| ret(e.mem.u32(a[0] + 0xc)));
+    let classes = [0x0109_4c2c, 0x0109_4c44, stand_in];
+    // The class of an action: float actions read nothing (their word is the float 0.0).
+    let action = |e: &mut Engine, class: u32, reads: u32, next: u32| {
+        let action = e.mem.alloc(0x10);
+        e.mem.set_u32(action, class);
+        e.mem.set_u32(action + 8, next);
+        let reads = if class == 0x0109_4c2c { 0 } else { reads };
+        e.mem.set_u32(action + 0xc, reads);
+        action
+    };
+    let this = e.mem.alloc(0x14);
+    e.mem.set_u32(this + 4, 0x55);
+    e.mem.set_f32(this + 8, 1.5);
+    if case.word(2) == 1 {
+        let text = e.mem.alloc(4);
+        e.mem.write(text, b"ab\0");
+        e.mem.set_u32(this + 0xc, text);
+    }
+    let others = [e.mem.alloc(0x14), e.mem.alloc(0x14)];
+    let pattern = case.word(0);
+    let mut head = 0;
+    for k in (0..3u32).rev() {
+        let class = classes[((pattern >> (2 * k)) & 3) as usize % 3];
+        let reads = [others[0], others[1], 0][k as usize];
+        head = action(e, class, reads, head);
+    }
+    e.mem.set_u32(this + 0x10, head);
+    let owners: Vec<u32> = (0..2u32)
+        .map(|k| {
+            let owner = e.mem.alloc(0x14);
+            let mut head = 0;
+            for j in 0..3u32 {
+                let class = classes[((pattern + j + k) % 3) as usize];
+                let reads = [this, others[1], this][j as usize];
+                head = action(e, class, reads, head);
+            }
+            e.mem.set_u32(owner + 0x10, head);
+            owner
+        })
+        .collect();
+    let mut lists = vec![(others[0], vec![this, owners[0]]), (others[1], vec![this])];
+    match case.word(1) {
+        1 => lists.push((this, vec![owners[0]])),
+        2 => lists.push((this, vec![owners[0], owners[1], owners[0]])),
+        _ => {}
+    }
+    reaction_map(e, case.word(3), &lists);
+    vec![this]
+}
+
+/// The cases of [`destructor_words`]: the classes of the value's three actions (two bits each),
+/// the reactions on it, a string or none, the reaction map's bucket count.
+const DESTRUCTOR_INPUTS: &[Input] = &[
+    Input::Of(&[0, 1, 2, 5, 6, 9, 18, 21, 26, 36, 42]),
+    Input::Of(&[0, 1, 2]),
+    Input::Flag,
+    Input::Of(&[1, 37]),
+];
+
+/// `Tile::Value::~Value` (`00a09330`) against its translation: the actions cleared (each class's
+/// `QRefValue`, the two action classes' read in place), the owners' actions that read the value
+/// blanked and the others kept, the reactions freed and the map's entry erased, the string freed.
+#[test]
+fn value_destructor_diff() {
+    Diff::new(engine_core::entry!(
+        0x00a0_9330,
+        dispatch::tile::value_destructor(Ptr<_>)
+    ))
+    .family(&dispatch::DISPATCH)
+    .family(&leaf::LEAVES)
+    .ignore_calls(&[0x00a0_c060, 0x00ad_87c0])
+    .inputs(DESTRUCTOR_INPUTS)
+    .setup(destructor_words)
+    .run()
+    .assert_same();
+}
+
+/// `Tile::Value::ClearActions` (`00a09200`) on the action classes' own `QRefValue`s, read in place.
+#[test]
+fn clear_actions_in_place_diff() {
+    Diff::new(engine_core::entry!(
+        0x00a0_9200,
+        dispatch::tile::clear_actions(Ptr<_>)
+    ))
+    .family(&dispatch::DISPATCH)
+    .family(&leaf::LEAVES)
+    .ignore_calls(&[0x00a0_c060, 0x00ad_87c0])
+    .inputs(DESTRUCTOR_INPUTS)
+    .setup(destructor_words)
+    .run()
+    .assert_same();
+}
