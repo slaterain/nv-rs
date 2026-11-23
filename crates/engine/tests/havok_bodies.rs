@@ -258,6 +258,17 @@ fn scene(simulation: u8, workers: u32, n: u32, layers: u32) -> Scene {
     let exe = engine::exe::installed_exe(&data());
     engine::exe::verify(&exe).unwrap_or_else(|e| panic!("{e}"));
     let mut e = Engine::with_exe(&exe).expect("checked installation");
+    // The C runtime's start as the host runs it (`mainCRTStartup`): `_heap_init(1)`, `__mtinit` (the
+    // locks `atexit` takes), `_RTC_Initialize`, `_ioinit`, `_FPinit` and `_initp_misc_cfltcvt_tab`.
+    e.call(0x00ed_db6a, &[1]);
+    e.call(0x00ed_1327, &[]);
+    e.call(0x00ed_db1e, &[]);
+    e.call(0x00ed_7e18, &[]);
+    let fp_init = e.mem.u32(0x010f_1f1c);
+    if fp_init != 0 {
+        e.call(fp_init, &[1]);
+    }
+    e.call(0x00ed_248e, &[]);
     // The exe's static initializers as the host runs them (the settings, Havok's singletons and its
     // reference lock, the gravity global).
     engine::static_init::run(&mut e, &[(0x00fb_66a0, start_allocator)]);
