@@ -1974,6 +1974,24 @@ pub fn projectile_ctor(e: &mut Engine, this: Ptr<Projectile>, _unused_1: u32) ->
 }
 
 // Translation incomplete: 009bbef0 - C++ exception unwinding (FS:[0] frame) is not modelled.
+// Translated from lStewieAl's Tweaks 10.05 (Internal/tweaks_core.cpp): GetWeaponModFlags.
+/// The weapon mod flags of an inventory entry (`ContChangesEntry`): the flags (+0xC) of the
+/// `ExtraWeaponModFlags` (type 0x8D, `BaseExtraList::GetByType` `00410220`) of the first extra
+/// data list in the entry's list (+0); 0 without one.
+fn weapon_mod_flags(e: &mut Engine, item: u32) -> u8 {
+    let lists = e.mem.u32(item);
+    let first = if lists != 0 { e.mem.u32(lists) } else { 0 };
+    if first == 0 {
+        return 0;
+    }
+    let extra = e.call(0x0041_0220, &args![first, 0x8du32]).u32();
+    if extra == 0 {
+        0
+    } else {
+        e.mem.u8(extra + 0xc)
+    }
+}
+
 // Translated from 009bbef0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Projectile constructor from a base object, shooter, weapon, position and
 /// angles (z through `005757d0`, x through `00575770`; y is set to 0).
@@ -2030,6 +2048,12 @@ pub fn fn_009bbef0(
     e.set(this, Projectile::pSecondaryItemChange, 0);
     e.set(this, Projectile::fWeaponCondition, 1.0);
     e.set(this, Projectile::bSoundFired, false);
+    // lStewieAl's Tweaks' row S0192 (`StoreWeaponModFlagsOnProjectiles`, the words written at
+    // `0x9BC0D2` and `0x9BC0DA`): the store is a word, clearing +0x149 to +0x14B with it (Tweaks
+    // keeps the weapon's mod flags at +0x14B).
+    if e.stewie(engine_core::extend::stewie::PROJECTILE_WEAPON_MOD_FLAGS) {
+        e.mem.set_u32(this.addr() + 0x148, 0);
+    }
     let distance = float_global(e, INITIAL_SOUND_DISTANCE);
     e.set(this, Projectile::fSoundDist, distance);
     e.call(0x0057_5690, &args![this, base_object]);
@@ -2053,6 +2077,13 @@ pub fn fn_009bbef0(
                     if item != 0 {
                         let health = e.call(0x004b_cdb0, &args![item, 0u32]).f64();
                         let form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, item));
+                        // lStewieAl's Tweaks' row S0192 (its `OnCreateProjectileSetModFlags` called at
+                        // `0x9BC1D2`): the item's mod flags are kept on the projectile.
+                        if e.stewie(engine_core::extend::stewie::PROJECTILE_WEAPON_MOD_FLAGS) {
+                            let flags = weapon_mod_flags(e, item);
+                            let kept = e.mem.u8(this.addr() + 0x14b);
+                            e.mem.set_u8(this.addr() + 0x14b, kept | flags);
+                        }
                         let form_health = e.call(0x0048_73d0, &args![form]).u32();
                         e.set(
                             this,
@@ -3160,6 +3191,18 @@ fn set_speed(e: &mut Engine, projectile: u32, value: f64) {
 }
 
 // Translation incomplete: 009bca60 - C++ exception unwinding (FS:[0] frame) is not modelled.
+/// The player's Strength for a thrown weapon's speed (`009bca60`, `0x9BCEA7`: the actor value owner
+/// +0xA4, slot 8 with 5). lStewieAl's Tweaks' row S0165 (`patchThresholdThrowingVelocityStrength`,
+/// the bytes written there): through `ActorValueOwner::GetClampedActorValue` (`0066ef20`), held
+/// within the actor value's limits.
+fn thrower_strength(e: &mut Engine, player: u32) -> i32 {
+    if e.stewie(engine_core::extend::stewie::THROW_STRENGTH_CLAMPED) {
+        e.call(0x0066_ef20, &args![player + 0xA4, 5u32]).i32()
+    } else {
+        e.vcall(player + 0xA4, 8, &args![5u32]).i32()
+    }
+}
+
 // Translated from 009bca60 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Launches a projectile (cdecl): creates the subclass the base object's
 /// type (`004fd4f0`) names (0x10000: `009b7af0`, 0x160 bytes; 0x20000:
@@ -3246,7 +3289,7 @@ pub fn fn_009bca60(
         if e.call(0x0044_6390, &args![weapon]).u32() == 0xD {
             let required = e.call(0x0066_3b60, &args![weapon]).i32();
             let player: u32 = e.global(PLAYER);
-            let skill = e.vcall(player + 0xA4, 8, &args![5u32]).i32();
+            let skill = thrower_strength(e, player);
             let difference = skill.wrapping_sub(required) as f64;
             let per_point = setting_float(e, 0x011c_f9c8);
             let factor = (per_point as f64 * difference + 1.0) as f32;
@@ -6193,6 +6236,14 @@ fn squared_distance_to(e: &mut Engine, this: Ptr<Projectile>, other: u32) -> f32
     })
 }
 
+/// The console's `ToggleDetection` byte (`011f1221`): 0 while detection is turned off.
+const DETECTION_ON: u32 = 0x011f_1221;
+
+/// lStewieAl's Tweaks' row S0223 (`ToggleDetectCommandAffectsMines`): detection is turned off.
+fn mines_sleep(e: &mut Engine) -> bool {
+    e.stewie(engine_core::extend::stewie::DETECTION_OFF_MINES) && e.mem.u8(DETECTION_ON) == 0
+}
+
 // Translated from 009c39e0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Whether a mine is triggered: an actor of the high process list
 /// (`00717e50`, `005be5c0`, `00968670`) that is alive and active (no
@@ -6209,6 +6260,12 @@ fn squared_distance_to(e: &mut Engine, this: Ptr<Projectile>, other: u32) -> f32
 pub fn fn_009c39e0(e: &mut Engine, this: Ptr<Projectile>) -> bool {
     let base = e.call(GET_BASE_OBJECT, &args![this]).u32();
     let mut radius = e.call(0x0045_cd80, &args![base]).f64() as f32;
+    // lStewieAl's Tweaks' row S0223 (`ToggleDetectCommandAffectsMines`, its
+    // `OnCheckExplosionProximityHook` called at `0x9C39FF`): with detection turned off by the
+    // console (`ToggleDetection`, the byte `011f1221` 0) the function ends here, answering false.
+    if mines_sleep(e) {
+        return false;
+    }
     if e.call(0x008d_6f30, &args![this]).u32() != 0 {
         let cell = e.call(0x008d_6f30, &args![this]).u32();
         if !e.call(0x0042_5fd0, &args![cell]).bool() {
@@ -7476,6 +7533,83 @@ mod tests {
         assert_eq!(e.mem.u8(flag), 1);
     }
 
+    /// S0165 (`patchThresholdThrowingVelocityStrength`, `0x9BCEA7`): the thrower's Strength is the
+    /// actor value owner's (+0xA4) slot 8 with 5 (12 here, past the limit); with the row it is
+    /// `GetClampedActorValue` (`0066ef20`, answering 10).
+    #[test]
+    fn s0165_a_throw_uses_the_clamped_strength() {
+        for (on, strength) in [(false, 12), (true, 10)] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::THROW_STRENGTH_CLAMPED, on);
+            let player = e.mem.alloc(0x200);
+            let table = vtable(&mut e);
+            e.mem.set_u32(player + 0xA4, table);
+            stub(&mut e, SLOT_BASE + 8, 12);
+            stub(&mut e, 0x0066_ef20, 10);
+            assert_eq!(thrower_strength(&mut e, player), strength, "on {on}");
+            let asked = calls(&e, 0x0066_ef20);
+            let expected = if on {
+                vec![vec![player + 0xA4, 5]]
+            } else {
+                vec![]
+            };
+            assert_eq!(asked, expected, "on {on}");
+        }
+    }
+
+    /// S0192 (`GetWeaponModFlags`): the flags (+0xC) of the `ExtraWeaponModFlags` (0x8D,
+    /// `00410220`) of the item's first extra data list; 0 without a list or a first list.
+    #[test]
+    fn s0192_an_items_weapon_mod_flags() {
+        let mut e = engine();
+        let extra = e.mem.alloc(0x10);
+        e.mem.set_u8(extra + 0xc, 0x5);
+        let first = e.mem.alloc(0x20);
+        let lists = e.mem.alloc(8);
+        e.mem.set_u32(lists, first);
+        let item = e.mem.alloc(0xc);
+        e.register_double(0x0041_0220, move |_, a| {
+            if a[0] == first && a[1] == 0x8d {
+                extra
+            } else {
+                0
+            }
+            .into_ret()
+        });
+        assert_eq!(weapon_mod_flags(&mut e, item), 0, "no list");
+        e.mem.set_u32(item, lists);
+        assert_eq!(weapon_mod_flags(&mut e, item), 5);
+        e.mem.set_u32(lists, 0);
+        assert_eq!(weapon_mod_flags(&mut e, item), 0, "no first list");
+    }
+
+    /// S0192 (`0x9BC0D2`): a new projectile clears +0x148 as a byte; with the row the whole word
+    /// +0x148 to +0x14B (the mod flags at +0x14B among them).
+    #[test]
+    fn s0192_a_new_projectile_clears_the_mod_flags_word() {
+        for on in [false, true] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::PROJECTILE_WEAPON_MOD_FLAGS, on);
+            let this = projectile(&mut e);
+            e.mem.set_u32(this.addr() + 0x148, 0xffff_ffff);
+            fn_009bbef0(&mut e, this, Ptr::NULL, 0, 0, 0, 0, 0, 0.0, 0.0);
+            let expected = if on { 0 } else { 0xffff_ff00 };
+            assert_eq!(e.mem.u32(this.addr() + 0x148), expected, "on {on}");
+        }
+    }
+
+    /// S0223 (`ToggleDetectCommandAffectsMines`): mines sleep with the row while the console's
+    /// detection byte (`011f1221`) is 0.
+    #[test]
+    fn s0223_mines_sleep_while_detection_is_off() {
+        for (on, detection, sleeps) in [(true, 0u8, true), (true, 1, false), (false, 0, false)] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::DETECTION_OFF_MINES, on);
+            e.mem.set_u8(DETECTION_ON, detection);
+            assert_eq!(mines_sleep(&mut e), sleeps, "on {on} detection {detection}");
+        }
+    }
+
     /// S0130.05 with S0130.06 in all four on/off combinations: a due beam of the player (1 shot,
     /// rate 10, age 0.5) goes through the player's update's ammunition part and then hits an
     /// actor. One round is taken (slot `0x3F0` with 1: in the update with both rows on, at the
@@ -8448,6 +8582,20 @@ mod tests {
         stub_float(&mut e, 0x004a_7290, 200.0);
         e.set(this, Projectile::iFlags, 0x4000);
         assert!(!fn_009c39e0(&mut e, this));
+
+        // S0223 (`OnCheckExplosionProximityHook`, `0x9C39FF`): with the row and detection turned
+        // off (the byte `011f1221` 0) the same mine answers false before its cell is asked
+        // (`008d6f30`); with detection on it still triggers.
+        stub_float(&mut e, 0x004a_7290, 25.0);
+        e.set(this, Projectile::iFlags, 0);
+        e.set_stewie(engine_core::extend::stewie::DETECTION_OFF_MINES, true);
+        e.mem.set_u8(DETECTION_ON, 0);
+        e.call_log = Some(vec![]);
+        assert!(!fn_009c39e0(&mut e, this));
+        assert!(calls(&e, 0x008d_6f30).is_empty());
+        e.mem.set_u8(DETECTION_ON, 1);
+        assert!(fn_009c39e0(&mut e, this));
+        assert!(!calls(&e, 0x008d_6f30).is_empty());
     }
 
     thread_local! {
