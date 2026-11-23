@@ -1072,12 +1072,7 @@ impl Mem {
         let tables = self.pools.as_deref();
         for (&addr, &entry) in self.live.iter() {
             let size = entry & !ODD_POOL;
-            let run_start = (addr + PAGE as u32 - 1) & !(PAGE as u32 - 1);
-            if size == pools::RUN_BLOCK
-                && tables
-                    .and_then(|t| t.run_of(run_start))
-                    .is_some_and(|r| r.start == run_start)
-            {
+            if tables.is_some_and(|t| t.is_run_block(addr)) {
                 continue;
             }
             let info = c.and_then(|c| c.blocks.get(&addr)).copied();
