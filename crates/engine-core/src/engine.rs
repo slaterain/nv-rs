@@ -1031,9 +1031,9 @@ impl Engine {
                     .checked_sub(u64::from(self.slice_hook.is_some()));
                 match left {
                     Some(left) if self.call_stack.len() < self.call_stack.capacity() => {
-                        // Looked up by address as a call is: counted as one ([`Engine::dispatch`]).
+                        // Found by address, made directly: a direct row of `NV_CALL_COUNT`.
                         if crate::call_count::on() {
-                            crate::call_count::count(self, addr);
+                            crate::call_count::count_direct(self, addr);
                         }
                         self.slice_left = left;
                         self.call_stack.push(addr);
@@ -1043,7 +1043,7 @@ impl Engine {
                     }
                     None => {
                         if crate::call_count::on() {
-                            crate::call_count::count(self, addr);
+                            crate::call_count::count_direct(self, addr);
                         }
                         // As [`Engine::call_at_slice_end`].
                         if let Some(hook) = self.slice_hook {

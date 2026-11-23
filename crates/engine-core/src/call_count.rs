@@ -4,18 +4,21 @@
 //! leaves the typed families' direct calls direct. `NV_PROFILE` cannot tell these apart: it is a
 //! diagnostic, and while a diagnostic is on every typed call goes by address so that the
 //! diagnostic sees it. This counter is not a diagnostic: it changes nothing the game or the
-//! engine does, only adds to its own table.
+//! engine does, only adds to its own tables.
 //!
-//! Each call is counted by its target and by its edge (the nearest caller that was itself called
-//! by address, the top of the engine's call stack, and the target), on main and on the other game
-//! threads apart. Every `NV_CALL_COUNT_SECS` seconds (default 5) it prints the
-//! `NV_CALL_COUNT_ROWS` (default 60) targets and edges main calls most, in calls a frame (a frame
-//! being one of the host's main frames, [`frame_ended`]), and starts counting again. The counts are
-//! relaxed atomic adds in two tables every thread shares (65,536 slots each, open addressing; a key
-//! that finds no free slot in 64 steps is counted as "not counted by target").
+//! Each call by address is counted by its target and by its edge (the nearest caller that was
+//! itself called by address, the top of the engine's call stack, and the target), on main and on
+//! the other game threads apart. The calls made directly but found by their address
+//! ([`count_direct`]: `Engine::call_typed`, the drawing's direct device calls) are counted by
+//! target only, in rows of their own marked "direct". Every `NV_CALL_COUNT_SECS` seconds (default
+//! 5) it prints the `NV_CALL_COUNT_ROWS` (default 60) targets and edges main calls most, in calls a
+//! frame (a frame being one of the host's main frames, [`frame_ended`]), and starts counting again.
+//! The counts are relaxed atomic adds in two tables every thread shares (65,536 slots each, open
+//! addressing; a key that finds no free slot in 64 steps is counted in the header's "not counted"
+//! figures, by target and by edge).
 //!
-//! Off (the default) a call pays one relaxed load of a static and a branch not taken; the counting
-//! itself is out of line.
+//! Off (the default) a call pays one relaxed load of a flag on a cache line of its own and a branch
+//! not taken; the counting itself is out of line.
 
 use std::fmt::Write;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
@@ -24,7 +27,12 @@ use std::time::Duration;
 
 use crate::Engine;
 
-static ON: AtomicBool = AtomicBool::new(false);
+/// The switch, alone on its cache line: the call path reads it at every call, and nothing written
+/// often shares the line with it.
+#[repr(align(64))]
+struct Flag(AtomicBool);
+
+static ON: Flag = Flag(AtomicBool::new(false));
 /// The host's main frames ended since the last report ([`frame_ended`]).
 static FRAMES: AtomicU64 = AtomicU64::new(0);
 const SLOTS: usize = 1 << 16;
@@ -32,6 +40,8 @@ const PROBES: usize = 64;
 /// A slot no key holds yet (no edge or target is this: the top bit is a caller's, and no caller
 /// and target are both `ffffffff`).
 const EMPTY: u64 = u64::MAX;
+/// A target key's mark for a call made directly but found by its address ([`count_direct`]).
+const DIRECT: u64 = 1 << 32;
 
 struct Slot {
     key: AtomicU64,
@@ -39,7 +49,8 @@ struct Slot {
     other: AtomicU64,
 }
 
-/// One table of counts by key: targets (the exe address) or edges (caller << 32 | target).
+/// One table of counts by key: targets (the exe address, [`DIRECT`] for a direct call) or edges
+/// (caller << 32 | target).
 struct Table {
     slots: Box<[Slot]>,
     lost_main: AtomicU64,
@@ -130,7 +141,12 @@ fn edges() -> &'static Table {
 /// Whether the counter is on: one relaxed load.
 #[inline(always)]
 pub fn on() -> bool {
-    ON.load(Relaxed)
+    ON.0.load(Relaxed)
+}
+
+/// Whether `e`'s thread is the game's main thread.
+fn on_main(e: &Engine) -> bool {
+    crate::thread_host::current_id(e) == crate::thread_host::MAIN_THREAD_ID
 }
 
 /// Counts one call of `addr` by address on `e`'s thread (out of line: only reached with the
@@ -138,10 +154,19 @@ pub fn on() -> bool {
 #[cold]
 #[inline(never)]
 pub(crate) fn count(e: &Engine, addr: u32) {
-    let main = crate::thread_host::current_id(e) == crate::thread_host::MAIN_THREAD_ID;
+    let main = on_main(e);
     let caller = e.call_stack.last().copied().unwrap_or(0);
     targets().add(u64::from(addr), main);
     edges().add(u64::from(caller) << 32 | u64::from(addr), main);
+}
+
+/// Counts one call of `addr` made directly but found by its address on `e`'s thread: the call
+/// cache's look-up of [`Engine::call_typed`], the drawing's direct device calls
+/// (`crate::real_threads`). By target only, in a row of its own.
+#[cold]
+#[inline(never)]
+pub(crate) fn count_direct(e: &Engine, addr: u32) {
+    targets().add(u64::from(addr) | DIRECT, on_main(e));
 }
 
 /// The host has a main frame back ([`crate::thread_host::finish_main_frame`]): one frame more.
@@ -162,12 +187,18 @@ pub fn report(rows: usize) -> String {
 /// other threads', then the key), each with main's and the other threads' calls a frame.
 fn render(targets: Taken, edges: Taken, frames: u64, rows: usize) -> String {
     let per_frame = |calls: u64| calls as f64 / frames.max(1) as f64;
-    let sum = |t: &Taken| {
-        t.rows
-            .iter()
-            .fold(t.lost, |(m, o), &(_, main, other)| (m + main, o + other))
-    };
-    let (main, other) = sum(&targets);
+    // Main's and the other threads' calls by address (the lost ones too), then the direct ones.
+    let mut by_address = targets.lost;
+    let mut direct = (0, 0);
+    for &(key, main, other) in &targets.rows {
+        let sum = if key & DIRECT != 0 {
+            &mut direct
+        } else {
+            &mut by_address
+        };
+        *sum = (sum.0 + main, sum.1 + other);
+    }
+    let all_main = by_address.0 + direct.0;
     let sorted = |mut t: Vec<(u64, u64, u64)>| {
         t.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)).then(a.0.cmp(&b.0)));
         t
@@ -178,12 +209,16 @@ fn render(targets: Taken, edges: Taken, frames: u64, rows: usize) -> String {
     let _ = writeln!(
         out,
         "NV_CALL_COUNT: calls by address only (typed direct calls are not counted), {frames} frames: \
-         {:.0} a frame on main, {:.0} on the other threads, {} targets ({:.0} a frame not counted \
-         by target)",
-        per_frame(main),
-        per_frame(other),
+         {:.0} a frame on main, {:.0} on the other threads; found by address and made directly \
+         {:.0} on main, {:.0} on the other threads; {} targets ({:.0} a frame not counted by \
+         target, {:.0} by edge)",
+        per_frame(by_address.0),
+        per_frame(by_address.1),
+        per_frame(direct.0),
+        per_frame(direct.1),
         targets.rows.len(),
         per_frame(targets.lost.0 + targets.lost.1),
+        per_frame(edges.lost.0 + edges.lost.1),
     );
     let _ = writeln!(
         out,
@@ -194,10 +229,11 @@ fn render(targets: Taken, edges: Taken, frames: u64, rows: usize) -> String {
         let addr = key as u32;
         let _ = writeln!(
             out,
-            "  {:10.1} {:10.1} {:6.2}%  {addr:08x}{}",
+            "  {:10.1} {:10.1} {:6.2}%  {addr:08x}{}{}",
             per_frame(m),
             per_frame(o),
-            m as f64 * 100.0 / main.max(1) as f64,
+            m as f64 * 100.0 / all_main.max(1) as f64,
+            if key & DIRECT != 0 { "  direct" } else { "" },
             kind(addr),
         );
     }
@@ -238,7 +274,7 @@ pub fn init_from_env() {
         let secs = env_number("NV_CALL_COUNT_SECS", 5);
         let rows = env_number("NV_CALL_COUNT_ROWS", 60) as usize;
         let _ = (targets(), edges());
-        ON.store(true, Relaxed);
+        ON.0.store(true, Relaxed);
         let _ = std::thread::Builder::new()
             .name("nv-call-count".into())
             .spawn(move || loop {
@@ -252,16 +288,40 @@ pub fn init_from_env() {
 mod tests {
     use super::*;
     use crate::abi::Ret;
+    use std::sync::{Mutex, MutexGuard, PoisonError};
 
     /// Targets no other test calls.
     const A: u32 = 0x7ffe_0010;
     const B: u32 = 0x7ffe_0020;
+    const C: u32 = 0x7ffe_0030;
+    const D: u32 = 0x7ffe_0040;
 
-    fn target_calls(addr: u32) -> (u64, u64) {
+    /// The counter on for one test at a time (the switch and the frames are the whole program's),
+    /// its tables made first so that the other tests' calls counted meanwhile allocate nothing on
+    /// their threads; off again when dropped.
+    struct On(#[allow(dead_code)] MutexGuard<'static, ()>);
+
+    impl On {
+        fn new() -> On {
+            static ONE: Mutex<()> = Mutex::new(());
+            let guard = ONE.lock().unwrap_or_else(PoisonError::into_inner);
+            let _ = (targets(), edges());
+            ON.0.store(true, Relaxed);
+            On(guard)
+        }
+    }
+
+    impl Drop for On {
+        fn drop(&mut self) {
+            ON.0.store(false, Relaxed);
+        }
+    }
+
+    fn target_calls(key: u64) -> (u64, u64) {
         targets()
             .slots
             .iter()
-            .find(|s| s.key.load(Relaxed) == u64::from(addr))
+            .find(|s| s.key.load(Relaxed) == key)
             .map_or((0, 0), |s| (s.main.load(Relaxed), s.other.load(Relaxed)))
     }
 
@@ -272,6 +332,10 @@ mod tests {
             .iter()
             .find(|s| s.key.load(Relaxed) == key)
             .map_or(0, |s| s.main.load(Relaxed))
+    }
+
+    fn nothing(_: &mut Engine, _: &[u32]) -> Ret {
+        Ret::default()
     }
 
     /// B calls A by address twice.
@@ -286,29 +350,26 @@ mod tests {
     #[test]
     fn counts_calls_by_address_only_while_on() {
         let mut e = Engine::new();
-        e.register(A, |_, _| Ret::default());
+        e.register(A, nothing);
         e.register(B, b_calls_a);
         let object = e.mem.alloc(8);
         let vtable = e.mem.alloc(8);
         e.mem.set_u32(object, vtable);
         e.mem.set_u32(vtable + 4, A);
         e.call(A, &[]);
-        assert_eq!(target_calls(A), (0, 0), "off: nothing is counted");
-        // The tables made first: the other tests' calls counted while this one has the counter
-        // on allocate nothing on their threads.
-        let _ = (targets(), edges());
-        ON.store(true, Relaxed);
+        assert_eq!(target_calls(A.into()), (0, 0), "off: nothing is counted");
+        let on = On::new();
         e.call(A, &[]);
         e.call(B, &[]);
         e.vcall(object, 4, &[]);
-        ON.store(false, Relaxed);
+        drop(on);
         e.call(B, &[]);
         assert_eq!(
-            target_calls(A),
+            target_calls(A.into()),
             (4, 0),
             "one plain, two from B, one virtual"
         );
-        assert_eq!(target_calls(B), (1, 0));
+        assert_eq!(target_calls(B.into()), (1, 0));
         assert_eq!(edge_calls(B, A), 2, "B -> A");
         assert_eq!(
             edge_calls(0, A),
@@ -317,8 +378,74 @@ mod tests {
         );
     }
 
+    /// A game thread's calls count as the other threads', main's as main's.
+    #[test]
+    fn a_game_threads_calls_count_apart_from_mains() {
+        let mut e = Engine::new();
+        e.register(C, nothing);
+        crate::thread_host::create(&mut e, 0, 0, 0, true);
+        let on = On::new();
+        e.call(C, &[]);
+        e.kernel.threads.current = 1;
+        assert_ne!(
+            crate::thread_host::current_id(&e),
+            crate::thread_host::MAIN_THREAD_ID
+        );
+        for _ in 0..3 {
+            e.call(C, &[]);
+        }
+        e.kernel.threads.current = 0;
+        drop(on);
+        assert_eq!(target_calls(C.into()), (1, 3));
+    }
+
+    /// A call `Engine::call_typed` makes directly once the cache has its address counts in a
+    /// direct row of its own, by target only; its first call (not cached yet) goes by address and
+    /// counts as one.
+    #[test]
+    fn a_call_typed_call_counts_as_direct() {
+        let mut e = Engine::new();
+        e.register(D, nothing);
+        let on = On::new();
+        for _ in 0..3 {
+            e.call_typed(D, nothing, &[], |_| 0);
+        }
+        drop(on);
+        assert_eq!(target_calls(D.into()), (1, 0), "the first, by address");
+        assert_eq!(target_calls(u64::from(D) | DIRECT), (2, 0), "the rest");
+        assert_eq!(edge_calls(0, D), 1);
+    }
+
+    /// `frame_ended` counts frames only while on, and the report divides by them and starts again.
+    #[test]
+    fn frames_count_while_on_and_divide_the_report() {
+        frame_ended();
+        let on = On::new();
+        let _ = report(1);
+        for _ in 0..4 {
+            frame_ended();
+        }
+        targets().add(0x7ffe_0050, true);
+        targets().add(0x7ffe_0050, true);
+        let text = report(100_000);
+        ON.0.store(false, Relaxed);
+        frame_ended();
+        let again = report(1);
+        drop(on);
+        assert!(text.contains(" 4 frames: "), "{text}");
+        let row = text.lines().find(|l| l.contains("7ffe0050")).unwrap_or("");
+        assert!(
+            row.starts_with("         0.5        0.0"),
+            "two calls over 4 frames\n{text}"
+        );
+        assert!(
+            again.contains(" 0 frames: "),
+            "started again; off counts none\n{again}"
+        );
+    }
+
     /// The report reads calls a frame on main and elsewhere, sorted by main's calls, with every
-    /// call (those no slot took too) in the totals.
+    /// call (those no slot took too) in the totals, and the direct rows marked.
     #[test]
     fn the_report_is_calls_a_frame_sorted_by_mains() {
         let targets = Taken {
@@ -326,32 +453,41 @@ mod tests {
                 (0x0055_9450, 20, 4),
                 (0x00fd_f1c0, 60, 0),
                 (0x006c_3640, 0, 80),
+                (0x00fd_f1c4 | DIRECT, 40, 8),
             ],
             lost: (20, 0),
         };
         let edges = Taken {
             rows: vec![(0x0086_e650_0000_0000 | 0x0055_9450, 20, 4)],
-            lost: (0, 0),
+            lost: (8, 4),
         };
-        let text = render(targets, edges, 4, 2);
+        let text = render(targets, edges, 4, 3);
         let lines: Vec<&str> = text.lines().collect();
         assert!(
-            lines[0].contains("4 frames: 25 a frame on main, 21 on the other threads, 3 targets (5 a frame not counted"),
+            lines[0].contains(
+                "4 frames: 25 a frame on main, 21 on the other threads; found by address and \
+                 made directly 10 on main, 2 on the other threads; 4 targets (5 a frame not \
+                 counted by target, 3 by edge)"
+            ),
             "{text}"
         );
         assert!(
-            lines[2].contains("15.0        0.0  60.00%  00fdf1c0"),
+            lines[2].contains("15.0        0.0  42.86%  00fdf1c0"),
             "{text}"
         );
         assert!(
-            lines[3].contains("5.0        1.0  20.00%  00559450"),
+            lines[3].contains("10.0        2.0  28.57%  00fdf1c4  direct"),
             "{text}"
         );
-        assert!(lines[4].starts_with("  top 2 edges"), "{text}");
         assert!(
-            lines[5].contains("5.0        1.0  0086e650 -> 00559450"),
+            lines[4].contains("5.0        1.0  14.29%  00559450"),
             "{text}"
         );
-        assert_eq!(lines.len(), 6, "{text}");
+        assert!(lines[5].starts_with("  top 3 edges"), "{text}");
+        assert!(
+            lines[6].contains("5.0        1.0  0086e650 -> 00559450"),
+            "{text}"
+        );
+        assert_eq!(lines.len(), 7, "{text}");
     }
 }

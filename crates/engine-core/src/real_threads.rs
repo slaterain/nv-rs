@@ -6335,6 +6335,9 @@ fn device_vcall_direct(e: &mut Engine, this: u32, slot: u32, args: &[u32]) -> Re
         drop(_held);
         return e.vcall(this, slot, args);
     };
+    if crate::call_count::on() {
+        crate::call_count::count_direct(e, addr);
+    }
     e.call_stack.push(addr);
     let ret = f(e, &words[..=args.len()]);
     e.call_stack.pop();
@@ -6438,6 +6441,9 @@ fn device_typed(
         drop(_held);
         return e.vcall(this, slot, args);
     };
+    if crate::call_count::on() {
+        crate::call_count::count_direct(e, addr);
+    }
     e.call_stack.push(addr);
     let ret = if crate::abi::same_fn(f, expect) {
         crate::abi::RetVal::into_ret(typed(e, w))

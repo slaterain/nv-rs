@@ -77,7 +77,7 @@ progress three (Main::OnIdle's, `HUDMainMenu::DoIdle`'s, `MessageMenu::DoIdle`'s
   - **Calls by address in play (`NV_CALL_COUNT=1`, without the profiler).** Not a diagnostic:
     typed families keep their direct calls, so its table (by target and by caller-to-target edge,
     main and the other game threads apart, in calls a frame) shows only what still goes through
-    `Engine::call` and `Engine::vcall` in play. One table shared by every thread, relaxed adds.
+    `Engine::call` and `Engine::vcall` in play, and, in rows marked `direct`, the calls made directly but found by their address (the drawing writer's device calls). One table shared by every thread, relaxed adds; the switch sits alone on its cache line, and off it costs a call one load and a branch not taken.
   - **Symbols.** `dbghelp` looks for the program's PDB first in the folder `<exe stem>.sym` beside
     it (so a copied build keeps its own: `nv-viewer-TAG.exe` with
     `nv-viewer-TAG.sym\nv_viewer.pdb`), then beside the program, then in `NV_PROFILE_SYMBOLS`
