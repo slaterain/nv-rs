@@ -1252,6 +1252,21 @@ impl Frame {
             ),
         );
         put(
+            g(Count::HavokRefLocks),
+            format!(
+                "{} Havok reference changes on main took the global lock (waited {:.1} ms)",
+                g(Count::HavokRefLocks),
+                ms(g(Count::HavokRefWaitNs))
+            ),
+        );
+        put(
+            g(Count::HavokLockAllWaitNs) / TENTH_MS,
+            format!(
+                "main waited {:.1} ms for the Havok world lock",
+                ms(g(Count::HavokLockAllWaitNs))
+            ),
+        );
+        put(
             g(Count::ScriptNsMain) / TENTH_MS,
             format!(
                 "scripts {:.1} ms ({} runs)",
@@ -2061,6 +2076,31 @@ mod tests {
         ] {
             assert!(l.contains(part), "{part}: {l}");
         }
+    }
+
+    /// Main's reference changes that took Havok's global lock are named with their wait, and its wait for the
+    /// lock taken whole (the world's lock); with none of them (the lock-free row on) neither part is there.
+    #[test]
+    fn main_s_havok_lock_waits_are_named() {
+        let mut f = frame();
+        f.ms = 18.0;
+        f.typical = 5.4;
+        f.game[Count::HavokRefLocks as usize] = 412;
+        f.game[Count::HavokRefWaitNs as usize] = 7_000_000;
+        f.game[Count::HavokLockAllWaitNs as usize] = 1_300_000;
+        let l = f.line();
+        for part in [
+            "412 Havok reference changes on main took the global lock (waited 7.0 ms)",
+            "main waited 1.3 ms for the Havok world lock",
+        ] {
+            assert!(l.contains(part), "{part}: {l}");
+        }
+        let mut f = frame();
+        f.ms = 18.0;
+        f.typical = 5.4;
+        let l = f.line();
+        assert!(!l.contains("Havok reference changes"), "{l}");
+        assert!(!l.contains("Havok world lock"), "{l}");
     }
 
     /// The line: the frame against the typical one, big from 16 ms, the place, the stages, only the counts that are

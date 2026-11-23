@@ -163,6 +163,7 @@ Each also has a `[nv-rs Fixes]` key in `Fallout.ini` (`bUncap` ... `bNVSEListGua
 | `NV_IO_WAIT` | IO wait ends on completion | `host/fixes.rs` |
 | `NV_LOAD_STEPS` | Loads finished in small steps | `host/fixes.rs` |
 | `NV_DEAD_LIGHT_GUARD` | Dead lights in a light list | `host/fixes.rs`, `engine-typed/lights/dead.rs` |
+| `NV_HAVOK_REFS` | Havok reference counts without the global lock (off in every preset) | `host/fixes.rs` |
 | `NV_HALF_LOADED_MOVE` | Half-loaded actor's level change | `host/half_loaded_move.rs` |
 | `NV_THREAD_RACES` | Thread races | `host/thread_races.rs` |
 | `NV_TEXTURE_READ_FIRST` | Texture files read before the renderer's lock | `host/fixes.rs` |

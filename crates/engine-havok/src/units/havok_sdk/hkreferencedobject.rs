@@ -59,6 +59,15 @@ fn needs_lock(e: &mut Engine, lock: u32) -> bool {
     e.call(TLS_GET_VALUE, &args![index]).u32() != OWNER_MARK
 }
 
+/// Main is taking the global lock for a reference change: the hitch line's count of them
+/// (`engine_core::hitch::Count::HavokRefLocks`; the wait itself is counted where main waits, by
+/// the waiting function's address). Another game thread's are not counted.
+pub fn count_main_lock() {
+    if engine_core::hitch::on() && !engine_core::real_threads::on_other_game_thread() {
+        engine_core::hitch::one(engine_core::hitch::Count::HavokRefLocks);
+    }
+}
+
 /// Adds `delta` to the `u16` reference count at `this + 6`.
 fn adjust_count(e: &mut Engine, this: Ptr, delta: u16) {
     let count = e.mem.u16(this.addr() + 6);
@@ -113,6 +122,7 @@ pub fn fn_00c90510(e: &mut Engine, this: Ptr) {
     }
     let lock = e.mem.u32(LOCK_RECORD);
     if needs_lock(e, lock) {
+        count_main_lock();
         lock_enter(e, lock);
         adjust_count(e, this, 1);
         lock_leave(e, lock);
@@ -137,6 +147,7 @@ pub fn fn_00c905b0(e: &mut Engine, this: Ptr) {
     }
     let lock = e.mem.u32(LOCK_RECORD);
     if needs_lock(e, lock) {
+        count_main_lock();
         lock_enter(e, lock);
         adjust_count(e, this, 0xffff);
         lock_leave(e, lock);
@@ -198,6 +209,7 @@ pub fn add_references(e: &mut Engine, objects: Ptr, count: i32, stride: u32) {
         locked = e.call(TLS_GET_VALUE, &args![index]).u32() != OWNER_MARK;
     }
     if locked {
+        count_main_lock();
         lock_enter(e, lock);
     }
     let mut cursor = objects.addr();
@@ -229,6 +241,124 @@ pub fn fn_00c903e0(e: &mut Engine) -> u32 {
     let block = e.vcall(allocator, 4, &args![0x30u32]).u32();
     e.mem.set_u16(block + 4, 0x30);
     e.call(0x00c9_0830, &args![block]).u32()
+}
+
+// The "Havok reference counts without the global lock" row (`NV_HAVOK_REFS`, host `fixes.rs`; off in
+// every preset until checked). The exe guards every Havok object's reference count with one global
+// critical section whenever the lock mode is 1, and the lock record's constructor (`00c90830`) sets
+// 1: every add and remove of a reference on a thread that does not hold the lock enters it. The world's
+// lock (`00c91180`: `lockAll`, `00c90490`, and the world's own count) is the same section, and
+// `hkpWorld::stepDeltaTime` (`00c91b10`) holds it for its whole step. So a reference change on main
+// while the physics thread steps a world waits for the step's end (7.0 ms in the maintainer's play log
+// of 2026-11-22). With the row each count changes in one atomic operation on the object's word at
+// `+4` (the size in its low half, the count in its high half), and the six reference functions never
+// take the section: two threads' changes cannot lose one another, and a change never waits for the
+// lock's holder. `lockAll`, `unlockAll` and the world's lock keep the section, so world changes and
+// steps still exclude each other. The counts and the deletes are the exe's: an object is deleted
+// (its slot 0 with flag 1) by the remove that takes its count from 1 to 0, a count of 0 goes to
+// 0xFFFF without a delete, an object of size 0 is not counted. Where the exe's own unlocked test of
+// a count of 1 (`00c905b0`) can miss a delete (two threads removing the last two references at once
+// both see 2, both decrement, neither deletes), the atomic remove deletes exactly once.
+
+/// The functions the row replaces: `addReferenceLockUnchecked`, `removeReferenceLockUnchecked`,
+/// `addReference`, `removeReference`, `addReferences` and `removeReferences` (`00c90740`).
+pub const LOCK_FREE_ADDRESSES: [u32; 6] = [
+    0x00c9_03a0,
+    0x00c9_03b0,
+    0x00c9_0510,
+    0x00c9_05b0,
+    0x00c9_0670,
+    0x00c9_0740,
+];
+
+/// One reference in the count word's high half.
+const ONE_REFERENCE: u32 = 0x1_0000;
+
+/// Adds a reference to `this` in one atomic operation (a counted object only). An object whose
+/// count word is not 4-aligned (never one Havok allocates: its blocks are 16-aligned) is counted
+/// as the exe counts it without the lock.
+pub fn lock_free_add_reference(e: &mut Engine, this: Ptr) {
+    add_one(e, this);
+}
+
+/// [`lock_free_add_reference`]'s work (the batch below calls it, not the registered function).
+fn add_one(e: &mut Engine, this: Ptr) {
+    let me = this.addr();
+    if e.mem.u16(me + 4) == 0 {
+        return;
+    }
+    match e.mem.atomic_u32(me + 4) {
+        Some(word) => {
+            word.fetch_add(ONE_REFERENCE, std::sync::atomic::Ordering::Relaxed);
+        }
+        None => adjust_count(e, this, 1),
+    }
+}
+
+/// Removes a reference from `this` in one atomic operation (a counted object only); the remove
+/// that takes the count from 1 to 0 deletes the object (slot 0, flag 1), as both of the exe's
+/// removes do (`00c905b0`: a count of 1 is cleared, then deleted; `00c903b0`: decremented, then
+/// deleted at 0). A count of 0 goes to 0xFFFF without a delete in both.
+pub fn lock_free_remove_reference(e: &mut Engine, this: Ptr) {
+    remove_one(e, this);
+}
+
+/// [`lock_free_remove_reference`]'s work (the batch below calls it, not the registered function).
+fn remove_one(e: &mut Engine, this: Ptr) {
+    let me = this.addr();
+    if e.mem.u16(me + 4) == 0 {
+        return;
+    }
+    let before = match e.mem.atomic_u32(me + 4) {
+        Some(word) => {
+            (word.fetch_sub(ONE_REFERENCE, std::sync::atomic::Ordering::AcqRel) >> 16) as u16
+        }
+        None => {
+            let before = e.mem.u16(me + 6);
+            adjust_count(e, this, 0xffff);
+            before
+        }
+    };
+    if before == 1 {
+        e.vcall(me, 0, &args![1u32]);
+    }
+}
+
+/// `addReferences` (`00c90670`) without the lock: a reference added to each of `count` objects
+/// whose pointers are `stride` bytes apart, in order.
+pub fn lock_free_add_references(e: &mut Engine, objects: Ptr, count: i32, stride: u32) {
+    let mut cursor = objects.addr();
+    for _ in 0..count.max(0) {
+        let object = e.mem.u32(cursor);
+        add_one(e, Ptr::new(object));
+        cursor = cursor.wrapping_add(stride);
+    }
+}
+
+/// `removeReferences` (`00c90740`) without the lock: a reference removed from each of `count`
+/// objects whose pointers are `stride` bytes apart, in order.
+pub fn lock_free_remove_references(e: &mut Engine, objects: Ptr, count: i32, stride: u32) {
+    let mut cursor = objects.addr();
+    for _ in 0..count.max(0) {
+        let object = e.mem.u32(cursor);
+        remove_one(e, Ptr::new(object));
+        cursor = cursor.wrapping_add(stride);
+    }
+}
+
+/// Turns the row on in `e`'s run: the six reference functions ([`LOCK_FREE_ADDRESSES`]) are
+/// replaced by their lock-free forms. Every caller in the translation reaches them by address.
+pub fn lock_free_turn_on(e: &mut Engine) {
+    for (at, f) in [
+        entry!(0x00c9_03a0, lock_free_add_reference(Ptr)),
+        entry!(0x00c9_03b0, lock_free_remove_reference(Ptr)),
+        entry!(0x00c9_0510, lock_free_add_reference(Ptr)),
+        entry!(0x00c9_05b0, lock_free_remove_reference(Ptr)),
+        entry!(0x00c9_0670, lock_free_add_references(Ptr, i32, u32)),
+        entry!(0x00c9_0740, lock_free_remove_references(Ptr, i32, u32)),
+    ] {
+        e.register(at, f);
+    }
 }
 
 /// This unit's translated functions, by exe address.
