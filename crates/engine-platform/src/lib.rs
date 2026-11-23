@@ -363,6 +363,8 @@ fn layer_funcs() -> Vec<(u32, AbiFn)> {
 /// (DLL, name, platform version) of this layer's imports with a Rust stand-in; the core's
 /// `imports` answers them after its own.
 fn layer_imports() -> Vec<(&'static str, &'static str, AbiFn)> {
+    // A thread's waits for the render thread, noted for the hitch log's naming of a lock's holder.
+    d3d9_stream::hitch::set_wait_hook(engine_core::thread_cpu::note_render_wait);
     let k = "KERNEL32.dll";
     #[allow(unused_mut)]
     let mut imports = vec![

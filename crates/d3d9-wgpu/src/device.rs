@@ -898,6 +898,131 @@ fn register_ring(
     (ring, group)
 }
 
+/// What a held draw gives the pass besides its registers ([`Device::hold`]): the held draws of one
+/// key are drawn as one instanced draw, each instance reading its own draw's blocks through the
+/// draw table ([`wgsl::Link::storage`]). wgpu's objects compare by identity.
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+struct HeldKey {
+    pipeline: wgpu::RenderPipeline,
+    /// The pixel shader's sampler group (1) and the vertex shader's (2).
+    groups: [wgpu::BindGroup; 2],
+    /// The sun shadows' lookup group (3) at its offset, for a variant's draw.
+    light: Option<(u32, wgpu::BindGroup)>,
+    viewport: [u32; 6],
+    scissor: (u32, u32, u32, u32),
+    stencil: u32,
+    blend: u32,
+    geometry: Geometry,
+}
+
+/// What a held draw reads its vertices from, and which of them.
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+struct Geometry {
+    streams: [Option<(wgpu::Buffer, u64)>; 8],
+    /// The index buffer and whether its indices are 32-bit; none for a draw without indices.
+    index: Option<(wgpu::Buffer, bool)>,
+    start: u32,
+    n: u32,
+    base_vertex: i32,
+}
+
+/// The surface a held draw covers, for the guard of [`Device::hold`]: its first vertex stream, index
+/// buffer, index range and base vertex (another pass over a mesh may bind other streams beside it).
+type Surface = (
+    Option<(wgpu::Buffer, u64)>,
+    Option<(wgpu::Buffer, bool)>,
+    u32,
+    u32,
+    i32,
+);
+
+impl Geometry {
+    fn surface(&self) -> Surface {
+        (
+            self.streams[0].clone(),
+            self.index.clone(),
+            self.start,
+            self.n,
+            self.base_vertex,
+        )
+    }
+}
+
+/// The held draws of one key, in the order they came: each one's blocks ([`Device::blocks`])
+/// and, while digests are noted, its digest.
+struct Held {
+    key: HeldKey,
+    members: Vec<Member>,
+}
+
+/// One held draw ([`Held`]).
+struct Member {
+    /// Its blocks ([`Device::blocks`]): its draw table entry when its key is drawn.
+    blocks: [u32; 4],
+    /// Its digest, while digests are noted ([`Device::record_draw_digests`]).
+    digest: Option<u64>,
+    /// While digests are noted: what the pass must have for it, from the device's state when the
+    /// game gave it ([`Device::pass_state_hash`]), checked against what the pass has when its key
+    /// is drawn ([`Device::held_mismatches`]).
+    state: Option<u64>,
+    /// The vertex streams its declaration reads.
+    streams: Vec<bool>,
+    /// Whether it draws with the sun shadows' lookup.
+    sun: bool,
+}
+
+/// A hash of what a draw takes from the pass: pipeline, sampler groups, sun lookup offset, viewport,
+/// scissor, stencil reference and blend constant, the vertex streams it reads, its index buffer and
+/// range ([`Device::held_mismatches`]).
+#[allow(clippy::type_complexity)]
+fn pass_state_hash(
+    pipeline: Option<&wgpu::RenderPipeline>,
+    groups: [Option<&wgpu::BindGroup>; 2],
+    light: Option<u32>,
+    pass: (
+        Option<[u32; 6]>,
+        Option<(u32, u32, u32, u32)>,
+        Option<u32>,
+        Option<u32>,
+    ),
+    streams: impl Iterator<Item = Option<(wgpu::Buffer, u64)>>,
+    index: Option<&(wgpu::Buffer, bool)>,
+    range: (u32, u32, i32),
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (pipeline, groups, light, pass, index, range).hash(&mut h);
+    for s in streams {
+        s.hash(&mut h);
+    }
+    h.finish()
+}
+
+/// The index format of 32-bit (`true`) or 16-bit indices.
+fn index_format(index32: bool) -> wgpu::IndexFormat {
+    if index32 {
+        wgpu::IndexFormat::Uint32
+    } else {
+        wgpu::IndexFormat::Uint16
+    }
+}
+
+/// `D3DRS_BLENDFACTOR` (A8R8G8B8) as the pass's blend constant.
+fn blend_colour(bf: u32) -> wgpu::Color {
+    wgpu::Color {
+        r: f64::from((bf >> 16) & 0xFF) / 255.0,
+        g: f64::from((bf >> 8) & 0xFF) / 255.0,
+        b: f64::from(bf & 0xFF) / 255.0,
+        a: f64::from(bf >> 24) / 255.0,
+    }
+}
+
+/// Held draws at most before they are drawn ([`Device::hold`]): the encoder then goes to its
+/// finishing thread, as every [`SPLIT_DRAWS`] draws otherwise.
+const HOLD_MOST: u32 = 4 * SPLIT_DRAWS;
+/// [`Device::held_geometry`]'s place for vertices a held blended draw reads ([`Device::hold_after`]).
+const AFTER: usize = usize::MAX;
+
 /// The registers read from storage ([`wgsl::Link::storage`]): group 0's layout and group (the
 /// register ring whole, binding 0; the draw table, binding 1) and the draw table's buffer.
 struct StorageRegs {
@@ -1036,6 +1161,32 @@ pub struct Device {
     /// The open batch's draw table: one 16-byte entry a draw with [`Device::storage_regs`] (its
     /// blocks' places in 16-byte units, as [`Device::blocks`]).
     table: Vec<u8>,
+    /// `NV_WGPU_MERGE_DRAWS`: opaque draws with the same key held and drawn as one instanced draw
+    /// ([`Held`], [`Device::may_hold`]), in place: a draw joins only the key held last.
+    /// `NV_WGPU_SORT_DRAWS`: a draw joins its key wherever it is held, and the held keys are
+    /// sorted (two surfaces at exactly the same depth may swap which one shows). Off by default;
+    /// with the registers from storage only.
+    merge_draws: bool,
+    sort_draws: bool,
+    /// `NV_WGPU_SORT_DRAWS=pass`: blended draws (stencil off) tested against depth and writing none
+    /// are held too, after the opaque ones in their own order ([`Device::held_after`]); the next
+    /// opaque draw, a clear, an upload, a target change or another command ends the hold.
+    across: bool,
+    held_after: Vec<Held>,
+    /// The held keys in the order of their first draw, each key's place, the vertices they read
+    /// (one key each), and how many draws they hold.
+    held: Vec<Held>,
+    held_index: Map<HeldKey, usize>,
+    held_geometry: Map<Surface, usize>,
+    held_draws: u32,
+    /// Keys drawn from held draws and the draws they held ([`Device::held_counts`]).
+    held_drawn: (u64, u64),
+    /// Held draws whose pass state when drawn differed from what their state asked for
+    /// ([`Member::state`]; tests).
+    held_mismatches: u64,
+    /// Each draw's digest ([`Device::record_draw_digests`]) in the order the pass was given the
+    /// draws: a held draw's when its key is drawn ([`Device::take_emitted_digests`]).
+    emitted_digests: Option<Vec<u64>>,
     uniform_layout: wgpu::BindGroupLayout,
     up: Vec<u8>,
     up_buffer: wgpu::Buffer,
@@ -1834,6 +1985,20 @@ impl Device {
             storable,
             storage_regs_gpu,
             table: Vec::new(),
+            merge_draws: std::env::var("NV_WGPU_MERGE_DRAWS").is_ok_and(|v| v.trim() == "1")
+                || std::env::var("NV_WGPU_SORT_DRAWS")
+                    .is_ok_and(|v| v.trim() == "1" || v.trim() == "pass"),
+            sort_draws: std::env::var("NV_WGPU_SORT_DRAWS")
+                .is_ok_and(|v| v.trim() == "1" || v.trim() == "pass"),
+            across: std::env::var("NV_WGPU_SORT_DRAWS").is_ok_and(|v| v.trim() == "pass"),
+            held_after: Vec::new(),
+            held: Vec::new(),
+            held_index: Map::default(),
+            held_geometry: Map::default(),
+            held_draws: 0,
+            held_drawn: (0, 0),
+            held_mismatches: 0,
+            emitted_digests: None,
             uniform_layout,
             up: Vec::new(),
             up_buffer,
@@ -3224,6 +3389,7 @@ impl Device {
     /// the replay example: nothing is noted in play.
     pub fn record_draw_digests(&mut self, on: bool) {
         self.draw_digests = on.then(Vec::new);
+        self.emitted_digests = on.then(Vec::new);
     }
 
     /// The digests noted since the last call ([`Device::record_draw_digests`]).
@@ -3232,6 +3398,97 @@ impl Device {
             .as_mut()
             .map(std::mem::take)
             .unwrap_or_default()
+    }
+
+    /// The same digests in the order the draws were given to the pass: a held draw's when its key
+    /// was drawn ([`Held`]); the draws still held are not in it yet. With the draws merged, every
+    /// draw is in it once; without, it is [`Device::take_draw_digests`]'s list.
+    pub fn take_emitted_digests(&mut self) -> Vec<u64> {
+        self.emitted_digests
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
+    }
+
+    /// How many keys of held draws were drawn, and how many draws they held ([`Held`]): the
+    /// difference is the draws saved.
+    pub fn held_counts(&self) -> (u64, u64) {
+        self.held_drawn
+    }
+
+    /// Held draws drawn with another pipeline, sampler group, sun lookup, viewport, scissor,
+    /// stencil reference, blend constant, vertex stream, index buffer or range than the device's
+    /// state gave them, counted while digests are noted ([`Device::record_draw_digests`]): 0 unless
+    /// a key leaves out something a draw depends on, or a held key is drawn with the wrong state.
+    pub fn held_mismatches(&self) -> u64 {
+        self.held_mismatches
+    }
+
+    /// [`pass_state_hash`] of what the device's state asks of the pass for the draw about to be
+    /// given (as [`Device::held_key`] takes it).
+    #[allow(clippy::too_many_arguments)]
+    fn pass_state_hash(
+        &self,
+        attributes: &[Vec<wgpu::VertexAttribute>; 8],
+        use_sun: bool,
+        viewport: [u32; 6],
+        scissor: (u32, u32, u32, u32),
+        (stencil, blend): (u32, u32),
+        indexed: bool,
+        range: (u32, u32, i32),
+    ) -> u64 {
+        let pipeline = self
+            .last_pipeline
+            .as_ref()
+            .and_then(|(_, p, _)| p.as_ref())
+            .map(|p| &p.0);
+        let light = use_sun
+            .then(|| self.sun.as_ref().and_then(|s| s.light))
+            .flatten();
+        let streams = attributes.iter().enumerate().map(|(k, a)| {
+            (!a.is_empty())
+                .then(|| {
+                    self.st.streams[k]
+                        .buffer
+                        .as_ref()
+                        .map(|b| (b.buffer.clone(), u64::from(self.st.streams[k].offset)))
+                })
+                .flatten()
+        });
+        let index = indexed
+            .then(|| {
+                self.st
+                    .indices
+                    .as_ref()
+                    .map(|b| (b.buffer.clone(), b.index32))
+            })
+            .flatten();
+        pass_state_hash(
+            pipeline,
+            [
+                self.last_groups[0].1.as_ref(),
+                self.last_groups[1].1.as_ref(),
+            ],
+            light,
+            (Some(viewport), Some(scissor), Some(stencil), Some(blend)),
+            streams,
+            index.as_ref(),
+            range,
+        )
+    }
+
+    /// Turns the merging of held draws on or off, and their sorting ([`Device::merge_draws`],
+    /// `NV_WGPU_MERGE_DRAWS`, `NV_WGPU_SORT_DRAWS`; tests and the replay compare them). Any held
+    /// draws are drawn first. Merging needs the registers from storage
+    /// ([`Device::set_storage_regs`]): without them nothing is held.
+    /// `merge` alone joins a draw only to the key held last (in place); `sort` joins it wherever
+    /// its key is held and sorts the keys. `across` (`NV_WGPU_SORT_DRAWS=pass`): blended draws are
+    /// held as well, after the opaque ones ([`Device::may_hold_after`]), and the opaque ones sorted.
+    pub fn set_merge_draws(&mut self, merge: bool, sort: bool, across: bool) {
+        self.emit_held();
+        self.merge_draws = merge || sort || across;
+        self.sort_draws = sort || across;
+        self.across = across;
     }
 
     /// `Set*ShaderConstant*` (`kind`: vertex float, int, bool, then the same for the pixel stage)
@@ -3430,6 +3687,7 @@ impl Device {
     }
 
     fn end_pass(&mut self) {
+        self.emit_held();
         self.pass = None;
         self.pass_targets = None;
         if let (Some((i, true)), 0, Some(t)) =
@@ -4562,10 +4820,301 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
 
     /// Room in the register ring for a draw's two blocks: the batch is sent when there is not.
     fn make_ring_room(&mut self) {
-        if self.ring.len() as u64 + 2 * BLOCK > ring_room() || self.table.len() as u64 + 16 > TABLE
+        if self.ring.len() as u64 + 2 * BLOCK > ring_room()
+            || self.table.len() as u64 + 16 * (u64::from(self.held_draws) + 1) > TABLE
         {
             self.ring_sends += 1;
             self.flush();
+        }
+    }
+
+    /// The key of the draw about to be given ([`HeldKey`]): the last draw's pipeline and groups,
+    /// the sun shadows' lookup for a variant's draw, the pass's settings, and its vertices (the
+    /// streams its declaration reads, its indices, `range`: the first vertex or index, how many,
+    /// the base vertex).
+    #[allow(clippy::too_many_arguments)]
+    fn held_key(
+        &self,
+        attributes: &[Vec<wgpu::VertexAttribute>; 8],
+        indexed: bool,
+        range: (u32, u32, i32),
+        viewport: [u32; 6],
+        scissor: (u32, u32, u32, u32),
+        (stencil, blend): (u32, u32),
+        use_sun: bool,
+    ) -> HeldKey {
+        let pipeline = self
+            .last_pipeline
+            .as_ref()
+            .and_then(|(_, p, _)| p.as_ref())
+            .expect("the draw's pipeline, checked before")
+            .0
+            .clone();
+        let groups = [0, 1].map(|k| {
+            self.last_groups[k]
+                .1
+                .clone()
+                .expect("the draw's groups, set before")
+        });
+        let light = use_sun
+            .then(|| {
+                self.sun
+                    .as_ref()
+                    .and_then(|s| s.light.map(|o| (o, s.gpu.light_group().clone())))
+            })
+            .flatten();
+        let mut streams: [Option<(wgpu::Buffer, u64)>; 8] = Default::default();
+        for (k, a) in attributes.iter().enumerate() {
+            if !a.is_empty() {
+                streams[k] = self.st.streams[k]
+                    .buffer
+                    .as_ref()
+                    .map(|b| (b.buffer.clone(), u64::from(self.st.streams[k].offset)));
+            }
+        }
+        let index = indexed
+            .then(|| {
+                self.st
+                    .indices
+                    .as_ref()
+                    .map(|b| (b.buffer.clone(), b.index32))
+            })
+            .flatten();
+        HeldKey {
+            pipeline,
+            groups,
+            light,
+            viewport,
+            scissor,
+            stencil,
+            blend,
+            geometry: Geometry {
+                streams,
+                index,
+                start: range.0,
+                n: range.1,
+                base_vertex: range.2,
+            },
+        }
+    }
+
+    /// Whether the draw about to be given may be held and drawn later with others of its key
+    /// (`NV_WGPU_MERGE_DRAWS`, [`Held`]): an opaque draw into a depth surface, whose result does
+    /// not depend on the draws around it except where two surfaces meet at exactly the same depth:
+    /// the depth test LESS or LESSEQUAL with depth writes, no blending (so never a see-through,
+    /// fading or decal draw), no stencil, no occlusion count open. With the registers from
+    /// storage only.
+    fn may_hold(&self, depth: bool) -> bool {
+        let r = &self.st.rs;
+        self.merge_draws
+            && self.storage_regs
+            && self.storage_regs_gpu.is_some()
+            && depth
+            && r[rs::ZENABLE] != 0
+            && r[rs::ZWRITEENABLE] != 0
+            && matches!(r[rs::ZFUNC], 2 | 4)
+            && r[rs::ALPHABLENDENABLE] == 0
+            && r[rs::STENCILENABLE] == 0
+            && self.counting.is_none()
+    }
+
+    /// Holds a draw of `key` with its blocks: with the held draws of its key when they are the
+    /// last ones held (or, with [`Device::sort_draws`], wherever they are held; it is drawn with
+    /// the first of them), else as a new key after the others. When a held draw reads the same
+    /// vertices with another key (another pass over the same surface, which must stay after it),
+    /// or a blended draw is held ([`Device::held_after`]), the held draws are drawn first. The
+    /// key's place in [`Device::held`].
+    fn hold(&mut self, key: HeldKey, member: Member) -> usize {
+        // An opaque draw given after a held blended draw may lie behind it on screen: drawn ahead
+        // of it, the blended draw would be laid over it instead of being covered by it. So only
+        // the opaque draws between two blended ones are drawn together.
+        if !self.held_after.is_empty() {
+            self.emit_held();
+        }
+        // Checked before joining: a held key of these vertices drawn first could put this draw
+        // before the other key's draw of them.
+        if let Some(&g) = self.held_geometry.get(&key.geometry.surface()) {
+            if g == AFTER || self.held[g].key != key {
+                self.emit_held();
+            }
+        }
+        // In place unless sorted: a draw joins its key only when no draw of another key was held
+        // after it, so where two surfaces meet at exactly the same depth the one drawn last still
+        // shows. Sorted, keys are moved past each other anyway (the one picture change sorting
+        // may make, [`Device::sort_draws`]).
+        if let Some(&g) = self.held_index.get(&key) {
+            if self.sort_draws || g + 1 == self.held.len() {
+                self.held[g].members.push(member);
+                self.held_draws += 1;
+                return g;
+            }
+        }
+        let g = self.held.len();
+        self.held_geometry.insert(key.geometry.surface(), g);
+        self.held_index.insert(key.clone(), g);
+        self.held.push(Held {
+            key,
+            members: vec![member],
+        });
+        self.held_draws += 1;
+        g
+    }
+
+    /// Holds a blended draw of `key` with its blocks, to be drawn after the held opaque draws, in
+    /// the order of the blended draws ([`Device::may_hold_after`]). An opaque draw of the same
+    /// vertices after it has the held draws drawn first. Its place in [`Device::held_after`].
+    fn hold_after(&mut self, key: HeldKey, member: Member) -> usize {
+        self.held_geometry.insert(key.geometry.surface(), AFTER);
+        self.held_after.push(Held {
+            key,
+            members: vec![member],
+        });
+        self.held_draws += 1;
+        self.held_after.len() - 1
+    }
+
+    /// Whether the draw about to be given, which may not be held with the opaque draws, may be
+    /// held after them (`NV_WGPU_SORT_DRAWS=pass`): a blended draw without stencil, tested against
+    /// depth LESS or LESSEQUAL and writing none (a draw that ignores depth, such as a sky layer or a
+    /// glare, or one that writes it, such as a fading object, is given in order: moved after the
+    /// opaque draws it would cover them, or let them show through). The blended
+    /// draws keep their order among themselves; the opaque draws held before them are drawn
+    /// first, and an opaque draw given after them has all of them drawn first ([`Device::hold`]).
+    fn may_hold_after(&self, depth: bool) -> bool {
+        let r = &self.st.rs;
+        self.across
+            && self.merge_draws
+            && self.storage_regs
+            && self.storage_regs_gpu.is_some()
+            && depth
+            && r[rs::ZENABLE] != 0
+            && matches!(r[rs::ZFUNC], 2 | 4)
+            && r[rs::ZWRITEENABLE] == 0
+            && r[rs::ALPHABLENDENABLE] != 0
+            && r[rs::STENCILENABLE] == 0
+            && self.counting.is_none()
+    }
+
+    /// Draws the held draws ([`Held`]): each key once, at the place of its first draw among the
+    /// keys (or with `NV_WGPU_SORT_DRAWS` sorted by pipeline, textures and vertices, so that the
+    /// pass switches them less often), as one draw with an instance for each of its draws, whose
+    /// entries in the draw table follow one another.
+    pub(crate) fn emit_held(&mut self) {
+        if self.held.is_empty() && self.held_after.is_empty() {
+            return;
+        }
+        let mut held = std::mem::take(&mut self.held);
+        let after = std::mem::take(&mut self.held_after);
+        self.held_index.clear();
+        self.held_geometry.clear();
+        self.held_draws = 0;
+        if self.sort_draws {
+            held.sort_by(|a, b| {
+                (&a.key.pipeline, &a.key.groups, &a.key.geometry).cmp(&(
+                    &b.key.pipeline,
+                    &b.key.groups,
+                    &b.key.geometry,
+                ))
+            });
+        }
+        // Held only with a pass open and the registers from storage.
+        let (Some(pass), Some(s)) = (self.pass.as_mut(), self.storage_regs_gpu.as_ref()) else {
+            return;
+        };
+        let b = &mut self.binds;
+        for h in held.iter().chain(&after) {
+            let k = &h.key;
+            if b.pipeline.as_ref() != Some(&k.pipeline) {
+                pass.set_pipeline(&k.pipeline);
+                b.pipeline = Some(k.pipeline.clone());
+            }
+            if b.blocks != Some(STORAGE_BLOCKS) {
+                pass.set_bind_group(0, &s.group, &[]);
+                b.blocks = Some(STORAGE_BLOCKS);
+            }
+            for (i, group) in k.groups.iter().enumerate() {
+                if b.groups[i].as_ref() != Some(group) {
+                    pass.set_bind_group(1 + i as u32, group, &[]);
+                    b.groups[i] = Some(group.clone());
+                }
+            }
+            if let Some((offset, group)) = &k.light {
+                if b.light != Some(*offset) {
+                    pass.set_bind_group(3, group, &[*offset]);
+                    b.light = Some(*offset);
+                }
+            }
+            if b.viewport != Some(k.viewport) {
+                let f = k.viewport.map(f32::from_bits);
+                pass.set_viewport(f[0], f[1], f[2], f[3], f[4], f[5]);
+                b.viewport = Some(k.viewport);
+            }
+            if b.scissor != Some(k.scissor) {
+                let r = k.scissor;
+                pass.set_scissor_rect(r.0, r.1, r.2, r.3);
+                b.scissor = Some(r);
+            }
+            if b.stencil != Some(k.stencil) {
+                pass.set_stencil_reference(k.stencil);
+                b.stencil = Some(k.stencil);
+            }
+            if b.blend != Some(k.blend) {
+                pass.set_blend_constant(blend_colour(k.blend));
+                b.blend = Some(k.blend);
+            }
+            let geo = &k.geometry;
+            for (slot, st) in geo.streams.iter().enumerate() {
+                if st.is_none() || b.streams[slot] == *st {
+                    continue;
+                }
+                if let Some((buffer, offset)) = st {
+                    pass.set_vertex_buffer(slot as u32, buffer.slice(*offset..));
+                }
+                b.streams[slot] = st.clone();
+            }
+            if let Some(i) = &geo.index {
+                if b.index.as_ref() != Some(i) {
+                    pass.set_index_buffer(i.0.slice(..), index_format(i.1));
+                    b.index = Some(i.clone());
+                }
+            }
+            let first = (self.table.len() / 16) as u32;
+            for m in &h.members {
+                for o in m.blocks {
+                    self.table.extend_from_slice(&(o / 16).to_le_bytes());
+                }
+                if let (Some(d), Some(list)) = (m.digest, self.emitted_digests.as_mut()) {
+                    list.push(d);
+                }
+                // What the pass has for this instance, against what the device's state asked
+                // for when the game gave it (tests, while digests are noted).
+                if let Some(state) = m.state {
+                    let streams =
+                        m.streams
+                            .iter()
+                            .zip(&b.streams)
+                            .map(|(&on, s)| if on { s.clone() } else { None });
+                    let has = pass_state_hash(
+                        b.pipeline.as_ref(),
+                        [b.groups[0].as_ref(), b.groups[1].as_ref()],
+                        if m.sun { b.light } else { None },
+                        (b.viewport, b.scissor, b.stencil, b.blend),
+                        streams,
+                        geo.index.as_ref().and(b.index.as_ref()),
+                        (geo.start, geo.n, geo.base_vertex),
+                    );
+                    self.held_mismatches += u64::from(has != state);
+                }
+            }
+            let instances = first..first + h.members.len() as u32;
+            self.held_drawn.0 += 1;
+            self.held_drawn.1 += h.members.len() as u64;
+            let vertices = geo.start..geo.start + geo.n;
+            match &geo.index {
+                Some(_) => pass.draw_indexed(vertices, geo.base_vertex, instances),
+                None => pass.draw(vertices, instances),
+            }
+            self.encoder_draws += 1;
         }
     }
 
@@ -5272,6 +5821,14 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let blocks = self.blocks;
         let stencil_ref = self.st.rs[rs::STENCILREF] & 0xFF;
         let bf = self.st.rs[rs::BLENDFACTOR];
+        // Held to be drawn with the other draws of its key ([`Device::may_hold`]), or given to the
+        // pass now, after the draws held before it.
+        let holdable = up.is_none() && copies.iter().all(Option::is_none);
+        let hold = holdable && self.may_hold(depth.is_some());
+        let after = holdable && !hold && self.may_hold_after(depth.is_some());
+        if !hold && !after {
+            self.emit_held();
+        }
         let mut streams: [Option<(wgpu::Buffer, u64)>; 8] = Default::default();
         for (k, a) in attributes.iter().enumerate() {
             if a.is_empty() {
@@ -5360,109 +5917,135 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             depth_range[1],
         ]
         .map(f32::to_bits);
-        let b = &mut self.binds;
-        let pass = self.pass.as_mut().expect("a pass is open");
-        let pipeline = &self
-            .last_pipeline
-            .as_ref()
-            .and_then(|(_, p, _)| p.as_ref())
-            .expect("the draw's pipeline, checked above")
-            .0;
-        if b.pipeline.as_ref() != Some(pipeline) {
-            pass.set_pipeline(pipeline);
-            b.pipeline = Some(pipeline.clone());
-        }
-        // The registers: the draw's two blocks at their offsets, or from storage the ring and the
-        // draw table, set once a pass, and the draw's entry in the table ([`wgsl::Link::storage`]):
-        // its number is the draw's instance.
-        let instance = match self.storage_regs_gpu.as_ref().filter(|_| self.storage_regs) {
-            Some(s) => {
-                if b.blocks != Some(STORAGE_BLOCKS) {
-                    pass.set_bind_group(0, &s.group, &[]);
-                    b.blocks = Some(STORAGE_BLOCKS);
-                }
-                let at = (self.table.len() / 16) as u32;
-                for o in blocks {
-                    self.table.extend_from_slice(&(o / 16).to_le_bytes());
-                }
-                at
-            }
-            None => {
-                if b.blocks != Some(blocks) {
-                    pass.set_bind_group(0, &self.ring_group, &blocks);
-                    b.blocks = Some(blocks);
-                }
-                0
-            }
-        };
-        for (k, (_, group)) in self.last_groups.iter().enumerate() {
-            let group = group.as_ref().expect("the draw's groups, set above");
-            if b.groups[k].as_ref() != Some(group) {
-                pass.set_bind_group(1 + k as u32, group, &[]);
-                b.groups[k] = Some(group.clone());
-            }
-        }
-        // The sun shadows' lookup (group 3) for a variant's draw.
-        if use_sun {
-            if let Some((offset, group)) = self
-                .sun
-                .as_ref()
-                .and_then(|s| s.light.as_ref().map(|o| (*o, s.gpu.light_group().clone())))
-            {
-                if b.light != Some(offset) {
-                    pass.set_bind_group(3, &group, &[offset]);
-                    b.light = Some(offset);
-                }
-            }
-        }
-        if b.viewport != Some(viewport) {
-            let f = viewport.map(f32::from_bits);
-            pass.set_viewport(f[0], f[1], f[2], f[3], f[4], f[5]);
-            b.viewport = Some(viewport);
-        }
-        if b.scissor != Some(scissor) {
-            pass.set_scissor_rect(scissor.0, scissor.1, scissor.2, scissor.3);
-            b.scissor = Some(scissor);
-        }
-        if b.stencil != Some(stencil_ref) {
-            pass.set_stencil_reference(stencil_ref);
-            b.stencil = Some(stencil_ref);
-        }
-        if b.blend != Some(bf) {
-            pass.set_blend_constant(wgpu::Color {
-                r: f64::from((bf >> 16) & 0xFF) / 255.0,
-                g: f64::from((bf >> 8) & 0xFF) / 255.0,
-                b: f64::from(bf & 0xFF) / 255.0,
-                a: f64::from(bf >> 24) / 255.0,
+        // Held: its list and place; else given now: its instance (its draw table entry's number).
+        let (held, instance) = if hold || after {
+            let state = self.draw_digests.is_some().then(|| {
+                self.pass_state_hash(
+                    attributes,
+                    use_sun,
+                    viewport,
+                    scissor,
+                    (stencil_ref, bf),
+                    indexed,
+                    (start, n, base_vertex),
+                )
             });
-            b.blend = Some(bf);
-        }
-        for (slot, s) in streams.into_iter().enumerate() {
-            if s.is_none() || b.streams[slot] == s {
-                continue;
+            let key = self.held_key(
+                attributes,
+                indexed,
+                (start, n, base_vertex),
+                viewport,
+                scissor,
+                (stencil_ref, bf),
+                use_sun,
+            );
+            let member = Member {
+                blocks,
+                digest: None,
+                state,
+                streams: attributes.iter().map(|a| !a.is_empty()).collect(),
+                sun: use_sun,
+            };
+            let at = if after {
+                (true, self.hold_after(key, member))
+            } else {
+                (false, self.hold(key, member))
+            };
+            (Some(at), None)
+        } else {
+            let b = &mut self.binds;
+            let pass = self.pass.as_mut().expect("a pass is open");
+            let pipeline = &self
+                .last_pipeline
+                .as_ref()
+                .and_then(|(_, p, _)| p.as_ref())
+                .expect("the draw's pipeline, checked above")
+                .0;
+            if b.pipeline.as_ref() != Some(pipeline) {
+                pass.set_pipeline(pipeline);
+                b.pipeline = Some(pipeline.clone());
             }
-            if let Some((buffer, offset)) = &s {
-                pass.set_vertex_buffer(slot as u32, buffer.slice(*offset..));
-            }
-            b.streams[slot] = s;
-        }
-        match index {
-            Some(new) => {
-                if let Some(i) = new {
-                    pass.set_index_buffer(
-                        i.0.slice(..),
-                        if i.1 {
-                            wgpu::IndexFormat::Uint32
-                        } else {
-                            wgpu::IndexFormat::Uint16
-                        },
-                    );
-                    b.index = Some(i);
+            // The registers: the draw's two blocks at their offsets, or from storage the ring and the
+            // draw table, set once a pass, and the draw's entry in the table ([`wgsl::Link::storage`]):
+            // its number is the draw's instance.
+            let instance = match self.storage_regs_gpu.as_ref().filter(|_| self.storage_regs) {
+                Some(s) => {
+                    if b.blocks != Some(STORAGE_BLOCKS) {
+                        pass.set_bind_group(0, &s.group, &[]);
+                        b.blocks = Some(STORAGE_BLOCKS);
+                    }
+                    let at = (self.table.len() / 16) as u32;
+                    for o in blocks {
+                        self.table.extend_from_slice(&(o / 16).to_le_bytes());
+                    }
+                    at
                 }
-                pass.draw_indexed(start..start + n, base_vertex, instance..instance + 1);
+                None => {
+                    if b.blocks != Some(blocks) {
+                        pass.set_bind_group(0, &self.ring_group, &blocks);
+                        b.blocks = Some(blocks);
+                    }
+                    0
+                }
+            };
+            for (k, (_, group)) in self.last_groups.iter().enumerate() {
+                let group = group.as_ref().expect("the draw's groups, set above");
+                if b.groups[k].as_ref() != Some(group) {
+                    pass.set_bind_group(1 + k as u32, group, &[]);
+                    b.groups[k] = Some(group.clone());
+                }
             }
-            None => pass.draw(start..start + n, instance..instance + 1),
-        }
+            // The sun shadows' lookup (group 3) for a variant's draw.
+            if use_sun {
+                if let Some((offset, group)) = self
+                    .sun
+                    .as_ref()
+                    .and_then(|s| s.light.as_ref().map(|o| (*o, s.gpu.light_group().clone())))
+                {
+                    if b.light != Some(offset) {
+                        pass.set_bind_group(3, &group, &[offset]);
+                        b.light = Some(offset);
+                    }
+                }
+            }
+            if b.viewport != Some(viewport) {
+                let f = viewport.map(f32::from_bits);
+                pass.set_viewport(f[0], f[1], f[2], f[3], f[4], f[5]);
+                b.viewport = Some(viewport);
+            }
+            if b.scissor != Some(scissor) {
+                pass.set_scissor_rect(scissor.0, scissor.1, scissor.2, scissor.3);
+                b.scissor = Some(scissor);
+            }
+            if b.stencil != Some(stencil_ref) {
+                pass.set_stencil_reference(stencil_ref);
+                b.stencil = Some(stencil_ref);
+            }
+            if b.blend != Some(bf) {
+                pass.set_blend_constant(blend_colour(bf));
+                b.blend = Some(bf);
+            }
+            for (slot, s) in streams.into_iter().enumerate() {
+                if s.is_none() || b.streams[slot] == s {
+                    continue;
+                }
+                if let Some((buffer, offset)) = &s {
+                    pass.set_vertex_buffer(slot as u32, buffer.slice(*offset..));
+                }
+                b.streams[slot] = s;
+            }
+            match index {
+                Some(new) => {
+                    if let Some(i) = new {
+                        pass.set_index_buffer(i.0.slice(..), index_format(i.1));
+                        b.index = Some(i);
+                    }
+                    pass.draw_indexed(start..start + n, base_vertex, instance..instance + 1);
+                }
+                None => pass.draw(start..start + n, instance..instance + 1),
+            }
+            (None, Some(instance))
+        };
         // What this draw gave wgpu, for the tests' and the replay example's compares
         // ([`Device::record_draw_digests`]); one test of an option in play.
         if let Some(digests) = self.draw_digests.as_mut() {
@@ -5485,8 +6068,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             // its entry in the draw table names (the entry its instance number reads): each
             // header whole and the float constants up to the highest its shader reads.
             let places: [u32; 4] =
-                match self.storage_regs_gpu.as_ref().filter(|_| self.storage_regs) {
-                    Some(_) => {
+                match instance.filter(|_| self.storage_regs && self.storage_regs_gpu.is_some()) {
+                    Some(instance) => {
                         let at = 16 * instance as usize;
                         std::array::from_fn(|k| {
                             let w = self.table.get(at + 4 * k..at + 4 * k + 4);
@@ -5524,6 +6107,25 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             (stencil_ref, bf, scissor, viewport).hash(&mut h);
             digests.push(h.finish());
         }
+        // Its digest in the order the pass is given the draws ([`Device::take_emitted_digests`]).
+        let digest = self.draw_digests.as_ref().and_then(|d| d.last().copied());
+        match held {
+            Some((after, g)) => {
+                let list = if after {
+                    &mut self.held_after
+                } else {
+                    &mut self.held
+                };
+                if let Some(m) = list.get_mut(g).and_then(|h| h.members.last_mut()) {
+                    m.digest = digest;
+                }
+            }
+            None => {
+                if let (Some(d), Some(list)) = (digest, self.emitted_digests.as_mut()) {
+                    list.push(d);
+                }
+            }
+        }
         // The sun shadows' light list ([`sun_shadow`]): off (or no sun last frame), only this test.
         let caster = self
             .sun
@@ -5556,10 +6158,22 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // checking and the driver's recording when an encoder is finished, and those of different
         // encoders run side by side. The next draw opens a new pass (it loads what this one
         // stored) in a new encoder.
-        self.encoder_draws += 1;
+        // A held draw counts when its key is drawn ([`Device::emit_held`]); the held draws are drawn
+        // at the latest every [`HOLD_MOST`] draws.
         self.pass_draws += 1;
-        if self.encoder_draws >= SPLIT_DRAWS && self.finisher.is_some() {
-            self.send_encoder();
+        if held.is_some() {
+            if self.held_draws >= HOLD_MOST {
+                if self.finisher.is_some() {
+                    self.send_encoder();
+                } else {
+                    self.emit_held();
+                }
+            }
+        } else {
+            self.encoder_draws += 1;
+            if self.encoder_draws >= SPLIT_DRAWS && self.finisher.is_some() {
+                self.send_encoder();
+            }
         }
     }
 
@@ -9832,11 +10446,18 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // The last frame presented by the queue thread first (one frame is taken at a time, and
         // the swap chain is not configured again while a present runs). Offscreen too, so the
         // render thread is never more than a frame ahead of the queue thread.
+        let synced = std::time::Instant::now();
         self.sync();
+        let asked = std::time::Instant::now();
+        d3d9_stream::hitch::add_time(
+            d3d9_stream::hitch::Count::RenderSyncNs,
+            asked.duration_since(synced),
+        );
         let taken = match (&mut self.surface, &back) {
             (Some(w), Some(_)) => w.frame(&self.device).map(|t| (t, w.config.usage)),
             _ => None,
         };
+        d3d9_stream::hitch::add_time(d3d9_stream::hitch::Count::AcquireNs, asked.elapsed());
         // The counter on: no frame taken (minimised, no area, lost) or the window away since the last
         // (activated, display changed, woke) makes the next present only start its clock.
         if fps && (taken.is_none() || frame_rate::take_gap()) {
@@ -9931,7 +10552,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             let meter = fps.then(|| self.fps_meter.clone());
             self.on_queue(move |queue| {
                 let _dpi = hwnd.map(crate::window::DpiScope::of);
+                let swapped = std::time::Instant::now();
                 queue.present(t);
+                d3d9_stream::hitch::add_time(d3d9_stream::hitch::Count::SwapNs, swapped.elapsed());
                 if let Some(Ok(mut m)) = meter.as_ref().map(|m| m.lock()) {
                     m.presented(std::time::Instant::now());
                 }

@@ -179,3 +179,26 @@ pub const MESSAGE_MENU_TEXT_FONT: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END,
 /// S0022.37 `MenuFixes` (`StartMenu::ChooseHelp` `007d0770` at `0x7D08C6` and `0x7D08D3`): the
 /// pause menu's Help shows the caravan, roulette, blackjack and slots helps in those games.
 pub const MINIGAME_HELP_IN_PAUSE_MENU: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 48);
+/// S0107.05 `MemoryLeakFixes` (`FORenderedMenu::ClearMenuLight` `007fc6f0` at `0x7FC761`): the
+/// Pip-Boy's menu light is detached from its node when the menu goes, so opening the Pip-Boy no
+/// longer leaves a light behind each time.
+pub const PIPBOY_LIGHT_DETACHED: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 49);
+/// S0095 `fixConsoleMainMenuVisibility` (`DebugText::CreateDebugText` `00a0fe20` at `0xA10311`):
+/// the console's text nodes sit at depth -200, in front of the main menu.
+pub const CONSOLE_IN_FRONT_OF_MAIN_MENU: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 50);
+/// S0022.47 `MenuFixes` (`InterfaceManager::CheckMenuButton` `00717a40` at `0x717C6B`, `0x717C85`,
+/// `0x717CB0`, `0x717CC8`): the pad's B button honours the input's menu mode debounce, so B
+/// closing the console does not also close the menu under it.
+pub const PAD_B_MENU_DEBOUNCE: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 51);
+/// S0218 `WorldMapNoExteriorDoorFix` (`RaceSexMenu`'s deleting destructor `007ac530` at
+/// `0x7AC53A`): when the face menu closes a player without a last exterior door gets Doc
+/// Mitchell's (or TTW's Vault 101 cave door), so the world map has somewhere to show them.
+pub const NEW_GAME_LAST_EXTERIOR_DOOR: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 52);
+/// S0105 `patchFixDrDTArmorDisplayAlphas` (`fn_00719790` at `0x7197FB`; `InventoryMenu::DoIdle`
+/// at `0x7820BB`, `BarterMenu::DoIdle` at `0x7307A4`, `ContainerMenu::DoIdle` at `0x75EBF3`): armour
+/// without DT shows its DR line, and a lone stat line is shown at full alpha.
+pub const INVENTORY_STAT_ALPHAS: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 53);
+/// S0069 `patchAllowHotkeyGRXAndBooks` (`fn_00967b70` at `0x967B80`, `InventoryMenu::DoClick`
+/// at `0x78054D`, `InventoryMenu::DoIdle` at `0x781CD0`): the implant GRX and books can be
+/// hotkeyed.
+pub const HOTKEY_GRX_AND_BOOKS: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 54);

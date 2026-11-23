@@ -496,6 +496,12 @@ fn show_message(e: &mut Engine, setting: u32) {
     );
 }
 
+/// Whether a book (type 0x19) is refused a hotkey (`0x78054D`, `0x781CD0`): the exe's yes; with
+/// lStewieAl's Tweaks' S0069 (`patchAllowHotkeyGRXAndBooks`) the book test is jumped over.
+fn hotkey_refuses_books(e: &Engine) -> bool {
+    !e.stewie(engine_core::extend::stewie::HOTKEY_GRX_AND_BOOKS)
+}
+
 /// [`inventory_menu_do_idle`] with a gamepad and the hot-key wheel shown.
 fn gamepad_wheel_shown(e: &mut Engine, this: Ptr<InventoryMenu>) {
     let me_addr = this.addr();
@@ -519,8 +525,9 @@ fn gamepad_wheel_shown(e: &mut Engine, this: Ptr<InventoryMenu>) {
     } else {
         let keyring_trait = e.global::<u32>(TRAIT_FROM_NAME_01073974);
         let tile = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, this));
+        // `0x781CD0` (lStewieAl's Tweaks' S0069 makes the `JZ` a `JMP`): books are not refused.
         let refused = !e.call(TILE_IS_TRUE, &args![tile, keyring_trait]).bool()
-            || (current_item(e) != 0 && current_item_type(e) == 0x19);
+            || (hotkey_refuses_books(e) && current_item(e) != 0 && current_item_type(e) == 0x19);
         if refused {
             show_message(e, NO_HOTKEY_SETTING);
         } else {
@@ -626,22 +633,22 @@ fn finish_idle(e: &mut Engine, this: Ptr<InventoryMenu>) {
         let item = current_item(e);
         e.call(SET_ITEM_CARD, &args![first, second, third, item, 0u32]);
     } else if tab == 0x19 {
-        let second = if current_item(e) != 0 && {
+        let has_dt = current_item(e) != 0 && {
             let item = current_item(e);
             let object = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, item));
             let value = e.call(OBJECT_VALUE_004BE180, &args![object]).f64();
             value != e.global::<f64>(ZERO_DOUBLE)
-        } {
-            tile_at(e, me_addr, 0x70)
-        } else {
-            0
         };
-        let first = if current_item(e) != 0 && {
-            let item = current_item(e);
-            let object = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, item));
-            let value = e.call(OBJECT_VALUE_004BE060, &args![object]).f64();
-            value != e.global::<f64>(ZERO_DOUBLE)
-        } {
+        let second = if has_dt { tile_at(e, me_addr, 0x70) } else { 0 };
+        // `0x7820BB` (lStewieAl's Tweaks' S0105 writes `XOR EAX,EAX; MOV [EBP-0x1C],EAX; JMP` over
+        // the zero DT's store): without a DT the DR tile is passed without its own test.
+        let first = if (!has_dt && e.stewie(engine_core::extend::stewie::INVENTORY_STAT_ALPHAS))
+            || (current_item(e) != 0 && {
+                let item = current_item(e);
+                let object = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, item));
+                let value = e.call(OBJECT_VALUE_004BE060, &args![object]).f64();
+                value != e.global::<f64>(ZERO_DOUBLE)
+            }) {
             tile_at(e, me_addr, 0x6c)
         } else {
             0
@@ -2427,8 +2434,10 @@ fn click_use(e: &mut Engine, this: Ptr<InventoryMenu>) {
                 } else {
                     let keyring = e.global::<u32>(TRAIT_FROM_NAME_01073974);
                     let tile = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, this));
+                    // `0x78054D` (lStewieAl's Tweaks' S0069 writes `JMP 0x78058E` there): books are
+                    // not refused.
                     let refused = !e.call(TILE_IS_TRUE, &args![tile, keyring]).bool()
-                        || current_item_type(e) == 0x19;
+                        || (hotkey_refuses_books(e) && current_item_type(e) == 0x19);
                     if refused {
                         message_box(e, NO_HOTKEY_SETTING, [2, 0, MESSAGE_TEXT_TWO]);
                     } else {
@@ -3144,6 +3153,96 @@ mod tests {
         assert_eq!(cards[0], vec![0, 0x148, 0, 0x7000, 0]);
     }
 
+    /// Row S0105 (lStewieAl's Tweaks, `0x7820BB`): on the apparel tab, armour with DT 0 passes the
+    /// DR tile (+0x6C) with the row on, without asking the DR (`004be060`); off, the exe's DR test
+    /// (0 here: no tile). With a DT the exe's DR test stays.
+    #[test]
+    fn s0105_no_dt_passes_the_dr_tile() {
+        for (on, dt, wanted, dr_asked) in [
+            (false, 0.0f64, [0u32, 0], 1usize),
+            (true, 0.0, [0x144, 0], 0),
+            (true, 1.0, [0, 0x148], 1),
+        ] {
+            let mut e = Engine::new();
+            let this = idle_menu(&mut e);
+            e.set(this, InventoryMenu::iCurrTab, 1);
+            answer(&mut e, GAMEPAD_IN_USE, 0);
+            answer(&mut e, WORD_AT_FOUR, 0x900);
+            answer(&mut e, TILE_IS_TRUE, 0);
+            answer(&mut e, WHEEL_COUNT, 8);
+            answer(&mut e, INPUT_CONTROLS, 0x6000);
+            // The fixture of `do_idle_number_key_opens_the_wheel_on_its_slot`: key 0x11 + 2 held.
+            e.register(CONTROL_STATE, |_, a| Ret {
+                eax: u32::from(a[1] == 0x13 && a[2] == 0),
+                ..Ret::default()
+            });
+            answer(&mut e, WHEEL_GET_VISIBLE, 0);
+            answer(&mut e, ITEM_OBJECT, 0x7100);
+            answer_st0(&mut e, OBJECT_VALUE_004BE180, dt);
+            answer_st0(&mut e, OBJECT_VALUE_004BE060, 0.0);
+            e.set_global(CURRENT_ITEM, 0x7000u32);
+            answer(&mut e, FORM_TYPE, 0x1f);
+            stub(&mut e, &[WHEEL_SET_VISIBLE, WHEEL_MOVE_HIGHLIGHT]);
+            e.set_stewie(engine_core::extend::stewie::INVENTORY_STAT_ALPHAS, on);
+            e.call_log = Some(vec![]);
+            e.call(0x0078_1ba0, &args![this]);
+            let cards = calls_to(&e, SET_ITEM_CARD);
+            assert_eq!(
+                cards[0],
+                vec![wanted[0], wanted[1], 0, 0x7000, 0],
+                "row {on} dt {dt}"
+            );
+            assert_eq!(calls_to(&e, OBJECT_VALUE_004BE060).len(), dr_asked);
+        }
+    }
+
+    /// Row S0069 (lStewieAl's Tweaks, `0x781CD0`): a book (type 0x19) at the end of the pad's
+    /// wheel highlight is refused with the "can't hotkey" message with the row off; with it on it
+    /// is put on the wheel.
+    #[test]
+    fn s0069_the_wheel_takes_a_book() {
+        for on in [false, true] {
+            let mut e = Engine::new();
+            let this = idle_menu(&mut e);
+            e.set_global(CURRENT_ITEM, 0x7000u32);
+            e.set_global(WHEEL_HIGHLIGHTED, 1u8);
+            e.set_global(MESSAGE_TIME, 2.0f32.to_bits());
+            e.set(this, InventoryMenu::iCurrTab, 5);
+            answer(&mut e, GAMEPAD_IN_USE, 1);
+            answer(&mut e, WHEEL_GET_VISIBLE, 1);
+            answer(&mut e, WHEEL_MOVE_HIGHLIGHT, u32::MAX);
+            answer_st0(&mut e, ITEM_GET_HEALTH, 0.5);
+            answer(&mut e, WORD_AT_FOUR, 0x900);
+            answer(&mut e, TILE_IS_TRUE, 1);
+            answer(&mut e, ITEM_OBJECT, 0x7100);
+            answer(&mut e, FORM_TYPE, 0x19);
+            answer(&mut e, SETTING_STRING, 0x5100);
+            stub(
+                &mut e,
+                &[
+                    WHEEL_ASSIGN,
+                    UPDATE_INVENTORY_MENU,
+                    WHEEL_SET_VISIBLE,
+                    LIST_ADD_OBJECT,
+                    SHOW_MESSAGE,
+                ],
+            );
+            e.set_stewie(engine_core::extend::stewie::HOTKEY_GRX_AND_BOOKS, on);
+            e.call_log = Some(vec![]);
+            e.call(0x0078_1ba0, &args![this]);
+            assert_eq!(
+                calls_to(&e, WHEEL_ASSIGN).len(),
+                usize::from(on),
+                "row {on}"
+            );
+            assert_eq!(
+                calls_to(&e, SETTING_STRING).contains(&vec![NO_HOTKEY_SETTING]),
+                !on,
+                "row {on}"
+            );
+        }
+    }
+
     #[test]
     fn do_idle_closes_the_wheel_without_a_key_and_clicks_on_control_1() {
         let mut e = Engine::new();
@@ -3812,6 +3911,53 @@ mod n054_tests {
         }
     }
 
+    /// Row S0069 (lStewieAl's Tweaks, `0x78054D`): Use clicked on a book while the hot-key wheel
+    /// is open (no pad) is refused with the "can't hotkey" message with the row off; with it on
+    /// the book is put on the wheel.
+    #[test]
+    fn s0069_use_puts_a_book_on_the_wheel() {
+        for on in [false, true] {
+            let mut e = Engine::new();
+            let this = menu(&mut e);
+            pages(&mut e, &[TRAIT_FROM_NAME_01073974]);
+            e.set_global(CURRENT_ITEM, 0x7000u32);
+            e.set_global(MESSAGE_TIME, 2.0f32.to_bits());
+            e.set_global(TRAIT_FROM_NAME_01073974, 0x4e01u32);
+            e.set_global(TRAIT_FROM_NAME_01073984, 0x4e02u32);
+            answer(&mut e, ITEM_OBJECT, 0x7100);
+            answer(&mut e, FORM_TYPE, 0x19);
+            answer(&mut e, WORD_AT_FOUR, 0x4000);
+            // The hot-key trait true, the keyring's false.
+            e.register(TILE_IS_TRUE, |_, a| Ret {
+                eax: u32::from(a[1] == 0x4e01),
+                ..Ret::default()
+            });
+            answer(&mut e, WHEEL_GET_VISIBLE, 1);
+            answer(&mut e, GAMEPAD_IN_USE, 0);
+            answer_st0(&mut e, ITEM_GET_HEALTH, 0.5);
+            answer(&mut e, SETTING_STRING, 0x5100);
+            stub(&mut e, &[SHOW_MESSAGE, WHEEL_ASSIGN_ITEM, LIST_ADD_OBJECT]);
+            e.set_stewie(stewie::HOTKEY_GRX_AND_BOOKS, on);
+            e.call_log = Some(vec![]);
+            // With the row on the click goes on into the menu's update, which this fixture does
+            // not hold up: only the calls up to there are read.
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.call(0x0078_0140, &args![this, 0x1di32, 0u32]);
+            }));
+            e.call_stack.clear();
+            assert_eq!(
+                calls_to(&e, WHEEL_ASSIGN_ITEM).len(),
+                usize::from(on),
+                "row {on}"
+            );
+            assert_eq!(
+                calls_to(&e, SETTING_STRING).contains(&vec![NO_HOTKEY_SETTING]),
+                !on,
+                "row {on}"
+            );
+        }
+    }
+
     #[test]
     fn s0022_14_use_with_no_item() {
         inventory_action_with_no_item(stewie::INVENTORY_USE_NO_ITEM_JUMP, |e, this| {
@@ -4253,6 +4399,21 @@ mod n054_tests {
             e.call_log = Some(vec![]);
             assert_eq!(equip_type_for_hotkey_icon(&mut e, form), wanted);
             assert_eq!(calls_to(&e, GET_EQUIP_TYPE), [vec![form]]);
+        }
+    }
+}
+
+#[cfg(test)]
+mod stewie_menus6_tests {
+    use super::*;
+
+    /// Row S0069 (`0x78054D`, `0x781CD0`): books are refused a hotkey with the row off, not on.
+    #[test]
+    fn s0069_books_can_be_hotkeyed() {
+        for on in [false, true] {
+            let e = Engine::new();
+            e.set_stewie(engine_core::extend::stewie::HOTKEY_GRX_AND_BOOKS, on);
+            assert_eq!(hotkey_refuses_books(&e), !on);
         }
     }
 }
