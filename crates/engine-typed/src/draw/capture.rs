@@ -267,6 +267,9 @@ thread_local! {
     /// lets the read accessors of a thread with no packet (main while the drawing side draws) go straight to
     /// guest memory, without the packet's borrow and look-ups on every read ([`held`]).
     static HOLDS: Cell<bool> = const { Cell::new(false) };
+    /// This thread's packet is paused between the world draw's halves ([`pause`]): what runs meanwhile (the VATS target's draw)
+    /// reads and writes guest memory, whose cached device state is the cut's, not what the first half left ([`beside`]).
+    static PAUSED: Cell<bool> = const { Cell::new(false) };
     /// The last write [`mark`] noted on this thread, with the packet generation it was noted in: the same
     /// write again in the same generation is not pushed twice.
     static LAST_MARK: Cell<(u64, usize, u32, u32)> = const { Cell::new((0, 0, 0, 0)) };
@@ -285,6 +288,57 @@ static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::
 #[inline(always)]
 fn held() -> bool {
     OPEN.load(Relaxed) != 0 && HOLDS.with(Cell::get)
+}
+
+/// Whether this thread runs beside a packet another thread draws from: a packet is open and this thread holds none
+/// (main while the drawing thread draws). Its cached device state (the render-state cache, the current shaders and
+/// declaration) then holds the values at the cut, while serially it would hold what the draw left; a setter must not
+/// skip its device call on such a value ([`main_must_send`]). One relaxed load while no packet is open.
+#[inline(always)]
+pub fn beside(e: &Engine) -> bool {
+    OPEN.load(Relaxed) != 0
+        && (!HOLDS.with(Cell::get) || PAUSED.with(Cell::get))
+        && open_for(run(e))
+}
+
+/// The runs with an open packet, one slot each (a run opens one packet at a time; 0 is a free slot): what
+/// [`beside`] asks after its cheap tests, so that one run's packet never makes another run's setters send (tests run
+/// many engines at once; play has one).
+static OPEN_RUNS: [AtomicUsize; 8] = [const { AtomicUsize::new(0) }; 8];
+
+/// Whether `run` has an open packet ([`OPEN_RUNS`]).
+#[cold]
+fn open_for(run: usize) -> bool {
+    OPEN_RUNS.iter().any(|r| r.load(Relaxed) == run)
+}
+
+/// `run`'s packet opened ([`begin`]): its run in a free slot (with every slot taken it is not noted, and its
+/// setters beside it skip as before).
+fn note_open(run: usize) {
+    for r in &OPEN_RUNS {
+        if r.compare_exchange(0, run, Relaxed, Relaxed).is_ok() {
+            return;
+        }
+    }
+}
+
+/// `run`'s packet closed ([`end`]).
+fn note_closed(run: usize) {
+    for r in &OPEN_RUNS {
+        if r.compare_exchange(run, 0, Relaxed, Relaxed).is_ok() {
+            return;
+        }
+    }
+}
+
+/// A typed setter's "already the cached value, skip" decision: `same` is what its cache says. Beside a packet
+/// ([`beside`]) the cache is main's value at the cut, not what the draw left (which serially comes first), so the
+/// setter sends and caches its value anyway: the device gets it after the draw's commands as serially, and the
+/// cache's write is noted as main's for the join (`set_own_at`), which then keeps main's value over the draw's. The
+/// one difference from the serial order: when the draw left the same value, the device gets it once more.
+#[inline(always)]
+pub fn main_must_send(e: &Engine, same: bool) -> bool {
+    !same || beside(e)
 }
 
 fn run(e: &Engine) -> usize {
@@ -335,6 +389,7 @@ pub fn begin(e: &Engine) -> bool {
         // Main's writes noted before this cut belong to no packet.
         drop(take_marks(run(e)));
         OPEN.fetch_add(1, Relaxed);
+        note_open(run(e));
     }
     opened
 }
@@ -726,6 +781,7 @@ pub fn pause(e: &mut Engine) {
             return;
         }
         p.paused = true;
+        PAUSED.with(|f| f.set(true));
         if let Some(scribble) = p.scribble {
             p.written += unscribble_all(e, p, scribble);
         }
@@ -754,6 +810,7 @@ pub fn resume(e: &mut Engine) {
             return;
         }
         p.paused = false;
+        PAUSED.with(|f| f.set(false));
         if let Some(scribble) = p.scribble {
             scribble_all(e, p, scribble);
         }
@@ -838,8 +895,10 @@ pub fn end(e: &mut Engine) -> Report {
     let Some(packet) = packet else {
         return Report::default();
     };
+    PAUSED.with(|f| f.set(false));
     HOLDS.with(|h| h.set(false));
     OPEN.fetch_sub(1, Relaxed);
+    note_closed(packet.run);
     let mut written = packet.written;
     if let Some(scribble) = packet.scribble {
         if !packet.paused {
@@ -924,6 +983,7 @@ pub fn detach(e: &Engine) -> Option<Detached> {
                 !p.as_ref().is_some_and(|p| p.served),
                 "NV_DRAW_THREAD: a packet detached while a half draws from it (unserve first)"
             );
+            PAUSED.with(|f| f.set(false));
             HOLDS.with(|h| h.set(false));
             p.take().map(|p| Detached(Box::new(p)))
         } else {
@@ -939,8 +999,10 @@ pub fn attach(packet: Detached) -> Result<(), Detached> {
         if p.is_some() {
             return Err(packet);
         }
+        let paused = packet.0.paused;
         *p = Some(*packet.0);
         HOLDS.with(|h| h.set(true));
+        PAUSED.with(|f| f.set(paused));
         Ok(())
     })
 }
