@@ -3,6 +3,17 @@
 
 use super::Row;
 use engine_core::extend::stewie;
+use engine_core::extend::{Owner, SiteSlot};
+use engine_core::Engine;
+
+/// S0382's seam: the VATS target list's process type test at `0x7F5420` (Tweaks'
+/// `VATSCheckFriendlyAndShiftHeld` asks `IsShiftHeld`).
+pub const VATS_SHIFT_SITE: SiteSlot = SiteSlot::new(Owner::Stewie, 0x007f_5420);
+
+/// Share 3's seam handlers, put in at Tweaks' install (before the game's threads start).
+pub(crate) fn install(e: &mut Engine) {
+    e.on_site(VATS_SHIFT_SITE, super::world::shift_held);
+}
 
 /// Share 3's rows built.
 pub const ROWS: &[Row] = &[
@@ -589,6 +600,14 @@ pub const ROWS: &[Row] = &[
         key: "bHideCursorInDialog",
         tweaks: Some(("Tweaks", "bHideCursorInDialog")),
         summary: "the cursor is hidden while the speaker talks in a dialogue",
+    },
+    Row {
+        bit: stewie::VATS_SHIFT_SKIPS_FRIENDLIES,
+        function: "VATSIgnoreFriendlies",
+        plan: "S0382",
+        key: "bVATSIgnoreFriendlies",
+        tweaks: Some(("Tweaks", "bShiftIgnoresFriendlyVATS")),
+        summary: "holding shift on entering VATS leaves out the actors that are not hostile",
     },
     Row {
         bit: stewie::CONSOLE_PLAYER_NOT_SELECTABLE,

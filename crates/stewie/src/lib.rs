@@ -207,6 +207,7 @@ pub fn install(e: &mut Engine) {
     // Read by row S0382 (Tweaks' `g_bHideVATSFriendliesByDefault`, code default 0).
     e.set_stewie_vats_friendlies_hidden(settings.long("VATS", "bHideFriendliesByDefault", 0) != 0);
     rows::world::install(e);
+    rows::menus::install(e);
     rows::forms::write_data(e);
     let log = start_lines(ini.is_some(), &settings, &keys, on.len());
     for line in &log {

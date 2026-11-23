@@ -779,6 +779,13 @@ pub const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.5a",
     },
+    // VATSMenu's target list 007f52c0, an actor's process type: lStewieAl's Tweaks' S0382
+    // (`VATSCheckFriendlyAndShiftHeld`, xNVSE's raw key state of either shift key).
+    Entry {
+        addr: 0x007f_5420,
+        owners: STEWIE,
+        step: "stewie-K",
+    },
     // VATSMenu's target list 007f52c0: JIP LN NVSE's AddVATSTarget.
     Entry {
         addr: 0x007f_54b1,
@@ -3104,11 +3111,13 @@ mod tests {
         ] {
             assert!(find(SITES, Owner::Nvse, a).is_some(), "{a:08x}");
         }
-        assert_eq!(SITES.len(), 129);
-        // lStewieAl's Tweaks' (its seam in the text key event), Tweaks' alone.
-        let a = 0x0071_5563;
-        assert!(find(SITES, Owner::Stewie, a).is_some(), "{a:08x}");
-        assert!(find(SITES, Owner::Jip, a).is_none(), "{a:08x}");
+        assert_eq!(SITES.len(), 130);
+        // lStewieAl's Tweaks' (its seams in the text key event and the VATS target list), Tweaks'
+        // alone.
+        for a in [0x0071_5563, 0x007f_5420] {
+            assert!(find(SITES, Owner::Stewie, a).is_some(), "{a:08x}");
+            assert!(find(SITES, Owner::Jip, a).is_none(), "{a:08x}");
+        }
         // UI Organizer's ten (UIOLoad's place, ResolveXMLFileHook's, the five hardcore zooms,
         // FinalPostParse, the operators' dispatch, the text scale), its alone.
         for a in [

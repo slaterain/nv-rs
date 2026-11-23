@@ -322,3 +322,7 @@ pub const DIALOG_HIDES_CURSOR: Row = tweak(14);
 /// invisible or chameleon actor is not taken as the aimed actor unless the player has Improved
 /// Detection, so it gets no red crosshair or health bar.
 pub const NO_RED_CROSSHAIR_ON_INVISIBLE: Row = tweak(15);
+/// S0382 `VATSIgnoreFriendlies` (`[Tweaks] bShiftIgnoresFriendlyVATS`, with `[VATS]
+/// bHideFriendliesByDefault`; the VATS target list's process type test at `0x7F5420`): holding shift
+/// on entering VATS leaves out the actors that are not hostile.
+pub const VATS_SHIFT_SKIPS_FRIENDLIES: Row = tweak(16);

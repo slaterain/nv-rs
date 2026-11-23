@@ -18,7 +18,7 @@ pub(crate) fn install(e: &mut Engine) {
 /// Tweaks' `IsShiftHeld` (its copy of xNVSE's `DirectInputFuncs.cpp`): xNVSE's key record's raw
 /// state (`rawState`, the record's first byte: `[g_DIHook + 0x2A*7 + 4]`, `+ 0x36*7 + 4`) of the left
 /// or the right shift key, 1 or 0.
-fn shift_held(e: &mut Engine, _: &[u32]) -> Option<u32> {
+pub(super) fn shift_held(e: &mut Engine, _: &[u32]) -> Option<u32> {
     let raw = |e: &mut Engine, key: u32| nvse::input::key_states(e, key) & 2 != 0;
     Some(u32::from(raw(e, 0x2a) || raw(e, 0x36)))
 }

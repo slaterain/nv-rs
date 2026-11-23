@@ -6547,6 +6547,41 @@ fn vats_target_seam(e: &mut Engine, reference: u32, seen: bool) -> bool {
     }
 }
 
+/// The target list's process type test (`0x7F5420`, `00931850` on the actor: its process's level,
+/// -1 without one). With lStewieAl's Tweaks' S0382 (`[Tweaks] bShiftIgnoresFriendlyVATS`,
+/// `VATSCheckFriendlyAndShiftHeld`): when either shift key is held (the Stewie seam at `0x7F5420`,
+/// xNVSE's raw key states) other than `[VATS] bHideFriendliesByDefault`
+/// ([`Engine::stewie_vats_friendlies_hidden`]) says, an actor not hostile in the player's compass
+/// targets ([`stewie_compass_hostile`]) answers 1, so it is no target.
+fn stewie_process_type(e: &mut Engine, actor: u32) -> u32 {
+    if e.stewie(stewie::VATS_SHIFT_SKIPS_FRIENDLIES) {
+        let held = matches!(e.site(0x007f_5420, &[]), Some(n) if n != 0);
+        if held != e.stewie_vats_friendlies_hidden() && !stewie_compass_hostile(e, actor) {
+            return 1;
+        }
+    }
+    e.call(GET_CURRENT_PROCESS_TYPE, &args![actor]).u32()
+}
+
+/// Tweaks' `IsCompassTargetActorHostile`: the first of the player's compass targets (the list at
+/// +0xD48; each node's target at +0, the next node at +4) whose actor (+0) is `actor` answers its
+/// hostile byte (+4); none, or no list: no. No player (Tweaks reads it unguarded): no.
+fn stewie_compass_hostile(e: &mut Engine, actor: u32) -> bool {
+    let player = e.global::<u32>(PLAYER);
+    if player == 0 {
+        return false;
+    }
+    let mut node = e.mem.u32(player + 0xd48);
+    while node != 0 {
+        let target = e.mem.u32(node);
+        if target != 0 && e.mem.u32(target) == actor {
+            return e.mem.u8(target + 4) != 0;
+        }
+        node = e.mem.u32(node + 4);
+    }
+    false
+}
+
 // Translated from 007f52c0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// cdecl: builds the target list (`011db150`) when it is empty; answers
 /// true at once when it is not, else whether a target can be seen.
@@ -6619,7 +6654,7 @@ pub fn fn_007f52c0(e: &mut Engine) -> bool {
                 }
                 && {
                     let reference = e.mem.u32(entry);
-                    e.call(GET_CURRENT_PROCESS_TYPE, &args![reference]).u32() == 0
+                    stewie_process_type(e, reference) == 0
                 }
                 && {
                     let reference = e.mem.u32(entry);
@@ -10694,6 +10729,62 @@ mod tests {
             } else {
                 assert!(updates.is_empty());
             }
+        }
+    }
+
+    /// Row S0382 (Tweaks' `VATSCheckFriendlyAndShiftHeld`, `0x7F5420`): with the row on and shift
+    /// held (the Stewie seam), an actor that is not hostile in the player's compass targets
+    /// answers 1 (no target) without the exe's process type being asked; a hostile one, shift up,
+    /// or the row off: the exe's answer. `[VATS] bHideFriendliesByDefault` turns the shift test
+    /// around.
+    #[test]
+    fn s0382_shift_skips_friendly_actors_in_vats() {
+        use engine_core::extend::{Owner, SiteSlot};
+        fn held(_: &mut Engine, _: &[u32]) -> Option<u32> {
+            Some(1)
+        }
+        fn up(_: &mut Engine, _: &[u32]) -> Option<u32> {
+            Some(0)
+        }
+        // (row, shift held, hidden by default, the actor's compass target hostile, answer)
+        for (on, shift, by_default, hostile, wanted) in [
+            (false, true, false, Some(false), 0u32),
+            (true, true, false, Some(false), 1),
+            (true, true, false, None, 1),
+            (true, true, false, Some(true), 0),
+            (true, false, false, Some(false), 0),
+            (true, false, true, Some(false), 1),
+            (true, true, true, Some(false), 0),
+        ] {
+            let mut e = engine();
+            let player = e.mem.alloc(0xe00);
+            e.mem.set_u32(PLAYER, player);
+            let actor = e.mem.alloc(0x80);
+            // The compass targets: another actor (hostile) first, then the actor's when listed.
+            let other = e.mem.alloc(0x80);
+            let other_target = e.mem.alloc(8);
+            e.mem.set_u32(other_target, other);
+            e.mem.set_u8(other_target + 4, 1);
+            let second = e.mem.alloc(8);
+            let list = e.mem.alloc(8);
+            e.mem.set_u32(list, other_target);
+            e.mem.set_u32(list + 4, second);
+            if let Some(hostile) = hostile {
+                let target = e.mem.alloc(8);
+                e.mem.set_u32(target, actor);
+                e.mem.set_u8(target + 4, u8::from(hostile));
+                e.mem.set_u32(second, target);
+            }
+            e.mem.set_u32(player + 0xd48, list);
+            let handler: fn(&mut Engine, &[u32]) -> Option<u32> = if shift { held } else { up };
+            e.on_site(SiteSlot::new(Owner::Stewie, 0x007f_5420), handler);
+            e.set_stewie(stewie::VATS_SHIFT_SKIPS_FRIENDLIES, on);
+            e.set_stewie_vats_friendlies_hidden(by_default);
+            e.call_log = Some(vec![]);
+            let case = format!("{on} {shift} {by_default} {hostile:?}");
+            assert_eq!(stewie_process_type(&mut e, actor), wanted, "{case}");
+            let asked = calls(&e, GET_CURRENT_PROCESS_TYPE).len();
+            assert_eq!(asked, usize::from(wanted == 0), "{case}");
         }
     }
 }
