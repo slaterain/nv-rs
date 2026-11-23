@@ -36,7 +36,7 @@ fn runner_id() -> u32 {
 fn item(e: &mut Engine, a: &[u32]) -> Ret {
     let (data, i) = (a[0], a[1]);
     let mut v = i.wrapping_mul(0x9e37_79b9);
-    for _ in 0..1000 {
+    for _ in 0..20_000 {
         v = v.rotate_left(5) ^ v.wrapping_mul(31).wrapping_add(i);
     }
     e.mem.atomic_u32(data + 4 * i).unwrap().store(v, Relaxed);
