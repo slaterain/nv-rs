@@ -3059,6 +3059,13 @@ pub fn actor_start_attack(e: &mut Engine, this: Ptr<Actor>, anim_group: u32) -> 
                 e.call(ACTOR_SET_ANIM_ACTION, &args![this, 9u32, sequence]);
                 e.vcall(this.addr(), ACTOR_SLOT_4B0, &args![u32::from(group), 1u32]);
             }
+            // lStewieAl's Tweaks' row S0148 (`patchResetForceFireWeaponWhenReloadJamming`, the
+            // jump at `0x8940A5` sent to `0x893E07`): the process' forced firing is cleared
+            // (`HighProcess::SetForceFireWeapon`, slot `0x3f4` with 0) before the answer.
+            if e.stewie(engine_core::extend::stewie::JAM_CLEARS_FORCE_FIRE) {
+                let process = e.get(this, Actor::pCurrentProcess);
+                e.vcall(process.addr(), 0x3f4, &args![0u32]);
+            }
             return false;
         }
     }
@@ -15811,6 +15818,35 @@ mod tests {
         stub(&mut e, DRY_FIRE_ALLOWED, 0);
         assert!(!actor_start_attack(&mut e, actor, 0x30));
         assert_eq!(call_count(&e, SOUND_HANDLE_PLAY), 1);
+    }
+
+    /// S0148 (`patchResetForceFireWeaponWhenReloadJamming`, `0x8940A5`): a power attack group (the
+    /// same exit as a jam) clears the process' forced firing (slot `0x3f4` with 0) with the row.
+    #[test]
+    fn s0148_a_jam_or_power_group_clears_the_forced_firing() {
+        for on in [false, true] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::JAM_CLEARS_FORCE_FIRE, on);
+            let (actor, _, _) = attack_setup(&mut e);
+            let process = e.get(actor, Actor::pCurrentProcess);
+            set_slot(&mut e, process, 0x148, ret(0x6800));
+            set_slot(&mut e, process, 0x14c, ret(0x6900));
+            stub(&mut e, ENTRY_FORM, 0xf0f0);
+            stub(&mut e, WEAPON_GET_CURRENT_AMMO, 0xa1);
+            stub(&mut e, LIST_NEXT, 9);
+            stub(&mut e, ANIM_GROUP_GET_TYPE, 210);
+            assert!(!actor_start_attack(&mut e, actor, 210));
+            let cleared = if on {
+                vec![vec![process.addr(), 0]]
+            } else {
+                vec![]
+            };
+            assert_eq!(
+                calls_to(&e, slot_target(&e, process, 0x3f4)),
+                cleared,
+                "on {on}"
+            );
+        }
     }
 
     #[test]

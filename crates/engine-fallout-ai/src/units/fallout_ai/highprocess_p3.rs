@@ -16433,6 +16433,22 @@ fn update_dispatch(
     true
 }
 
+/// Whether `HighProcess::Update` keeps the process' wish to speak to the player (`0x8EF5A1`): the
+/// running package is a get-up package (type 0x1A, `0041ca90`). lStewieAl's Tweaks' row S0122
+/// (`patchSpeakingToSleepingGenericNPCsSkipsDialogueMenu`, the bytes written there): also a
+/// dialogue package (0x1C), both read from the package's type byte (+0x20).
+fn keeps_need_talk_player(e: &mut Engine, package: u32) -> bool {
+    if package == 0 {
+        return false;
+    }
+    if e.stewie(engine_core::extend::stewie::DIALOGUE_PACKAGE_KEEPS_TALK) {
+        let kind = e.mem.u8(package + 0x20);
+        kind == 0x1a || kind == 0x1c
+    } else {
+        e.call(PACKAGE_TYPE, &args![package]).i32() == 0x1a
+    }
+}
+
 // Translated from 008eeec0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `HighProcess::Update` (Xbox PDB): the per-frame update of the actor
 /// `actor`'s high process. C++ exception states are not translated.
@@ -16626,7 +16642,7 @@ pub fn high_process_update(e: &mut Engine, this: Ptr<HighProcess>, actor: Ptr) {
         e.call(ACTOR_CLEAR_IN_COMBAT, &args![mobile, 1u32]);
     }
     if e.vcall(process, SLOT_GET_NEED_TALK_PLAYER, &args![]).bool()
-        && (package == 0 || e.call(PACKAGE_TYPE, &args![package]).i32() != 0x1a)
+        && !keeps_need_talk_player(e, package)
     {
         e.vcall(process, SLOT_SET_NEED_TALK_PLAYER, &args![0u32]);
     }
@@ -17144,6 +17160,34 @@ mod tests {
         Ret {
             eax: value,
             ..Ret::default()
+        }
+    }
+
+    /// S0122 (`patchSpeakingToSleepingGenericNPCsSkipsDialogueMenu`, `0x8EF5A1`): the wish to talk
+    /// to the player is kept for a get-up package (0x1A, `0041ca90`); with the row also for a
+    /// dialogue package (0x1C), read from the type byte (+0x20); another type, or none, clears it.
+    #[test]
+    fn s0122_a_dialogue_package_keeps_the_wish_to_talk() {
+        for (on, kind, kept) in [
+            (false, 0x1au8, true),
+            (false, 0x1c, false),
+            (true, 0x1c, true),
+            (true, 0x1a, true),
+            (true, 0x12, false),
+        ] {
+            let mut e = Engine::new();
+            e.set_stewie(engine_core::extend::stewie::DIALOGUE_PACKAGE_KEEPS_TALK, on);
+            e.register_double(PACKAGE_TYPE, |e, a| {
+                ret(e.mem.u8(a[0] + 0x20) as i8 as i32 as u32)
+            });
+            let package = e.mem.alloc(0x40);
+            e.mem.set_u8(package + 0x20, kind);
+            assert_eq!(
+                keeps_need_talk_player(&mut e, package),
+                kept,
+                "on {on} {kind:#x}"
+            );
+            assert!(!keeps_need_talk_player(&mut e, 0), "on {on}");
         }
     }
 

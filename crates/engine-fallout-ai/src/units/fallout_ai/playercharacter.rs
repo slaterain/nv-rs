@@ -3712,7 +3712,7 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
             let duration: f32 = e.global(TWO_FLOAT);
             e.call(0x0096_3eb0, &args![this, 7u32, duration, item]);
         }
-        if e.call(0x0096_7a00, &args![this]).u32() != 0 {
+        if bumped_actor(e, this) != 0 {
             let actor_timer = e.get(this.cast::<Actor>(), Actor::fTimeronAction);
             if actor_timer as f64 <= zero {
                 let setting = e.call(0x0043_d4d0, &args![INT_SETTING_011CDDE0]).u32();
@@ -5168,7 +5168,7 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
                         } else {
                             let player = e.global::<u32>(PLAYER_SINGLETON);
                             let controller = e.call(0x0093_06d0, &args![player]).u32();
-                            e.call(0x005c_0880, &args![controller]).u32()
+                            wait_controller_state(e, controller)
                         };
                         if first == 1 || second == 2 {
                             show_text(e, MESSAGE_SETTING_011D3E20, icon);
@@ -9703,6 +9703,36 @@ fn levelup_held(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
 
 /// The god mode byte (`g_bIsGodmode`, `011e07ba`).
 const GODMODE_BYTE: u32 = 0x011e_07ba;
+
+/// The actor the player bumped into, from `PlayerCharacter::Update` (`0x93EF1D`, `00967a00`).
+/// lStewieAl's Tweaks' row S0132 (`patchBumpingCompanionsDoesntAlertEnemies`, its
+/// `PlayerCharacter_GetNonTeammateBumpedActor`): none when that actor is a teammate (+0x18D).
+fn bumped_actor(e: &mut Engine, this: Ptr<PlayerCharacter>) -> u32 {
+    let actor = e.call(0x0096_7a00, &args![this]).u32();
+    if actor != 0
+        && e.stewie(engine_core::extend::stewie::BUMPED_COMPANION_NO_ALERT)
+        && e.mem.u8(actor + 0x18d) != 0
+    {
+        return 0;
+    }
+    actor
+}
+
+/// The second character-controller state test of the wait menu's checks in
+/// `PlayerCharacter::Update` (`0x9424FD`, `005c0880`: the state at +0x3E0 +0x10; 2 is in the air).
+/// lStewieAl's Tweaks' row S0157 (`patchAllowWaitingOnMidairFurniture`, its
+/// `bhkCharacterController_GetContextHkState_ZeroIfSeated`): 0 (on the ground) while the player
+/// (`011dea3c`) is in a sit or sleep state (+0x1AC not 0); else the state, read directly.
+fn wait_controller_state(e: &mut Engine, controller: u32) -> u32 {
+    if !e.stewie(engine_core::extend::stewie::WAIT_ON_MIDAIR_FURNITURE) {
+        return e.call(0x005c_0880, &args![controller]).u32();
+    }
+    let player = e.global::<u32>(PLAYER_SINGLETON);
+    if e.mem.u32(player + 0x1ac) != 0 {
+        return 0;
+    }
+    e.mem.u32(controller + 0x3f0)
+}
 
 /// The clip test of the player's continuous beam in `PlayerCharacter::Update` (`0x9440BB` to
 /// `0x944115`, the byte at -0x425): false when the process has no ammunition entry (slot `0x14c`)
@@ -20863,6 +20893,53 @@ mod tests {
                 e.global::<f32>(ACCUMULATED_PITCH),
                 pitch,
                 "on {on} angle {angle}"
+            );
+        }
+    }
+
+    /// S0132 (`PlayerCharacter_GetNonTeammateBumpedActor`, `0x93EF1D`): the bumped actor
+    /// (`00967a00`) counts as none with the row when it is a teammate (+0x18D).
+    #[test]
+    fn s0132_a_bumped_companion_is_no_bumped_actor() {
+        for (on, teammate, none) in [
+            (false, true, false),
+            (true, true, true),
+            (true, false, false),
+        ] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::BUMPED_COMPANION_NO_ALERT, on);
+            let this = player(&mut e);
+            let actor = e.mem.alloc(0x200);
+            e.mem.set_u8(actor + 0x18d, u8::from(teammate));
+            e.register(0x0096_7a00, move |_, _| int(actor));
+            let expected = if none { 0 } else { actor };
+            assert_eq!(
+                bumped_actor(&mut e, this),
+                expected,
+                "on {on} teammate {teammate}"
+            );
+        }
+    }
+
+    /// S0157 (`bhkCharacterController_GetContextHkState_ZeroIfSeated`, `0x9424FD`): the wait
+    /// menu's second state test reads the controller's state (+0x3F0, 2: in the air); with the
+    /// row it is 0 while the player (`011dea3c`) sits or sleeps (+0x1AC).
+    #[test]
+    fn s0157_sitting_counts_as_on_the_ground_for_waiting() {
+        for (on, seated, state) in [(false, true, 2u32), (true, true, 0), (true, false, 2)] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::WAIT_ON_MIDAIR_FURNITURE, on);
+            e.map(0x011d_e000, 0x1000);
+            let this = player(&mut e);
+            e.set_global(PLAYER_SINGLETON, this.addr());
+            e.mem.set_u32(this.addr() + 0x1ac, u32::from(seated));
+            let controller = e.mem.alloc(0x400);
+            e.mem.set_u32(controller + 0x3f0, 2);
+            e.register(0x005c_0880, |e, a| int(e.mem.u32(a[0] + 0x3f0)));
+            assert_eq!(
+                wait_controller_state(&mut e, controller),
+                state,
+                "on {on} seated {seated}"
             );
         }
     }
