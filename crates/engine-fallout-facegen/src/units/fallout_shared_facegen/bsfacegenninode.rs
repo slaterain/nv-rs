@@ -724,7 +724,8 @@ pub fn bs_face_gen_ni_node_update_morphing(
             }
         }
         if in_view || e.get(this, BSFaceGenNiNode::bForceMorphUpdates) != 0 {
-            fn_00663050(e, this, changed);
+            // By address, as the exe calls it, so the typed morph pass (the facegen family) runs.
+            e.call(0x0066_3050, &args![this, u32::from(changed)]);
         } else {
             e.set(this, BSFaceGenNiNode::bForceBaseMorph, 1);
             e.set(this, BSFaceGenNiNode::bForceMorphUpdates, 1);
