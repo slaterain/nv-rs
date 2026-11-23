@@ -326,6 +326,8 @@ enum Extra {
     Animated,
     /// A transform controller whose interpolator is of a class a helper does not know.
     OddInterpolator,
+    /// A transform controller on a bone whose target `world` points at another actor's bone.
+    ForeignTarget,
 }
 
 /// An actor at offset `x` with its animation and tree.
@@ -507,6 +509,17 @@ fn actor(w: &mut World, e: &mut Engine, k: &Kinds, x: f32, extra: Extra, lightin
             e.mem.set_u32(v + 0x34, b);
             e.mem.set_u32(weapon + 0xc, v);
         }
+    }
+    if extra == Extra::ForeignTarget {
+        // An active transform controller without interpolator on the fourth bone; `world` points
+        // its target at the previous actor's first bone: a `controllers` barrier.
+        let cvt = w.vtable(e, &[(0x94, TRANSFORM_CONTROLLER_UPDATE)]);
+        let c = w.alloc(e, 0x38);
+        e.mem.set_u32(c, cvt);
+        e.mem.set_u32(c + 4, 5);
+        e.mem.set_u16(c + 8, 8);
+        e.mem.set_u32(c + 0x2c, bones[3]);
+        e.mem.set_u32(bones[3] + 0xc, c);
     }
     if extra == Extra::SkinOther {
         // A skin under the root whose bone the world points at another actor's (`world`): a `skin`
@@ -765,6 +778,9 @@ fn world(e: &mut Engine) -> World {
         (Extra::SkinOther, true),
         (Extra::None, true),
         (Extra::None, false),
+        (Extra::ForeignTarget, true),
+        (Extra::None, true),
+        (Extra::None, true),
     ];
     let mut made = Vec::new();
     for (i, &(extra, lighting)) in plan.iter().enumerate() {
@@ -794,6 +810,19 @@ fn world(e: &mut Engine) -> World {
     let skinned_geometry = e.mem.u32(e.mem.u32(root + 0xa0) + 4);
     let skin = e.mem.u32(skinned_geometry + 0xbc);
     e.mem.set_u32(e.mem.u32(skin + 0x14), other_bone);
+    // The foreign controller's target: the previous actor's first bone (bones[3] is three first
+    // children below the accumulation root's first child).
+    let foreign = plan
+        .iter()
+        .position(|p| p.0 == Extra::ForeignTarget)
+        .expect("planned");
+    let mut bone = first_bone(&*e, made[foreign]);
+    for _ in 0..3 {
+        bone = e.mem.u32(e.mem.u32(bone + 0xa0));
+    }
+    let controller = e.mem.u32(bone + 0xc);
+    e.mem
+        .set_u32(controller + 0x2c, first_bone(&*e, made[foreign - 1]));
     // The process array at the lists' +4: level 0 the first half, level 1 the rest, then an actor
     // of level 2 the pass does not walk.
     let split = actors.len() / 2;
@@ -886,19 +915,20 @@ fn parallel_bones_end_in_the_serial_state() {
             );
         }
         assert_eq!(counts.frames, 1, "{counts:?}");
-        // Exact: fifteen actors walked (the skinned one among them: its flagged bones without
+        // Exact: seventeen actors walked (the skinned one among them: its flagged bones without
         // bounds are walked, not deferred; the animated one: its transform and visibility
-        // controllers run on the helper; the two alone between two barriers run serially), ten
-        // whole on main (two controllers: an unknown controller, an unknown interpolator; a
-        // ragdoll; three nodes that allocate their bound; four skins read out of order), sixteen
-        // subtrees deferred (fifteen heads and the geometry without a bound).
-        assert_eq!(counts.walked, 15, "{counts:?}");
-        assert_eq!(counts.barriers, 10, "{counts:?} {reasons:?}");
-        assert_eq!(counts.subtrees, 16, "{counts:?}");
+        // controllers run on the helper; the two alone between two barriers run serially), eleven
+        // whole on main (three controllers: an unknown controller, an unknown interpolator, one
+        // driving another actor's bone; a ragdoll; three nodes that allocate their bound; four
+        // skins read out of order), eighteen subtrees deferred (seventeen heads and the geometry
+        // without a bound).
+        assert_eq!(counts.walked, 17, "{counts:?}");
+        assert_eq!(counts.barriers, 11, "{counts:?} {reasons:?}");
+        assert_eq!(counts.subtrees, 18, "{counts:?}");
         let count_of = |name: &str| reasons.iter().find(|r| r.0 == name).map_or(0, |r| r.1);
         assert_eq!(count_of("bound"), 3, "{reasons:?}");
         assert_eq!(count_of("skin"), 4, "{reasons:?}");
-        assert_eq!(count_of("controllers"), 2, "{reasons:?}");
+        assert_eq!(count_of("controllers"), 3, "{reasons:?}");
         assert!(counts.havok >= 20, "{counts:?}");
         assert_eq!(counts.mismatches, 0, "{counts:?}");
         let names: Vec<&str> = reasons.iter().map(|r| r.0).collect();
@@ -913,7 +943,7 @@ fn parallel_bones_end_in_the_serial_state() {
     let (got, state) = pass(&mut e, &w, "check", 3);
     let (counts, _) = bones::take_counts();
     assert_eq!(counts.differences, 0, "{counts:?}");
-    assert_eq!(counts.checked_actors, 15, "{counts:?}");
+    assert_eq!(counts.checked_actors, 17, "{counts:?}");
     assert_eq!(
         got, serial,
         "check: the outside calls are the serial pass's"
