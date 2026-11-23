@@ -21,7 +21,11 @@
 //!
 //! The file is read whole through the game's callbacks when it is opened (the seek test, then
 //! to the end and back to measure it, then reads of 64 KiB); the library's own pattern of
-//! reads and seeks, which only moves the game file's position, is not reproduced.
+//! reads and seeks, which only moves the game file's position, is not reproduced. With real
+//! threads that read, the decoder's open and the start of its worker run with the kernel lock
+//! given back when the game called `ov_open_callbacks` itself (its IO thread does, loading a
+//! sound), so other threads' platform calls go on meanwhile; the open file is recorded under the
+//! lock after.
 //!
 //! **Decoding ahead** (the running game): the game decodes a whole sound at
 //! once on its IO thread (`AudioLoadTask::Run` -> `00af2100`), which here is stepped on the
@@ -33,7 +37,8 @@
 //! decoder would have answered that call (same bytes, same return values, errors and the end in
 //! the same place: [`Ahead::read`]). When nothing is decoded yet, a game thread gives up its turn
 //! (`Sleep(1)` through the thread host) until enough is, so the main thread goes on with its
-//! frames meanwhile; on the main thread the call waits. The game sees only time pass in the IO
+//! frames meanwhile; on the main thread the call waits, with the kernel lock given back when the
+//! game called it itself. The game sees only time pass in the IO
 //! thread's task, as on the original, whose IO thread decodes on its own core while the main
 //! thread runs. Without the real clock (the tests, replays on the platform clock) the decoder
 //! runs inside the call, as before.
@@ -247,13 +252,13 @@ impl Ahead {
             }
         }
     }
+}
 
-    /// On the main thread: waits until something is queued (or the worker is lost).
-    fn wait(&self) {
-        let mut q = lock(&self.shared);
-        while q.events.is_empty() && !q.lost {
-            q = self.shared.1.wait(q).unwrap_or_else(|p| p.into_inner());
-        }
+/// On the main thread: waits until the worker behind `shared` has queued something (or is lost).
+fn wait_queued(shared: &Shared) {
+    let mut q = lock(shared);
+    while q.events.is_empty() && !q.lost {
+        q = shared.1.wait(q).unwrap_or_else(|p| p.into_inner());
     }
 }
 
@@ -341,28 +346,32 @@ pub fn ov_open_callbacks(
     let p = precision(e, "ov_open_callbacks");
     // The hitch log's count (`engine_core::hitch`): a sound opened for decoding.
     engine_core::hitch::one(engine_core::hitch::Count::SoundsOpened);
-    let seekable = seek != 0 && e.call(seek, &[source, 0, 0, SEEK_CUR]).u32() as i32 != -1;
-    assert!(
-        seekable && tell != 0,
-        "ov_open_callbacks on a stream that cannot seek is not provided"
-    );
-    e.call(seek, &[source, 0, 0, SEEK_END]);
-    let size = e.call(tell, &[source]).u32();
-    e.call(seek, &[source, 0, 0, SEEK_SET]);
-    let buffer = e.mem.alloc(CHUNK);
-    let mut data = Vec::with_capacity(size as usize);
-    loop {
-        let n = e.call(read, &[buffer, 1, CHUNK, source]).u32();
-        if n == 0 || n > CHUNK {
-            break;
+    // The file is read and its decoder opened with the kernel lock given back (when the game called this itself):
+    // the callbacks are game code reading the whole file out of the archive through the game's own file code, which
+    // runs without the lock whenever the game calls it, and the decoder is the port's own, on its own copy of the
+    // bytes; neither touches platform state (the open file is recorded below, under the lock). Under the lock a
+    // file's read and parse held every other thread's platform calls, main's included, for its whole length.
+    let opened = engine_core::real_threads::without_kernel_lock_mut_if_outermost(e, |e| {
+        let seekable = seek != 0 && e.call(seek, &[source, 0, 0, SEEK_CUR]).u32() as i32 != -1;
+        assert!(
+            seekable && tell != 0,
+            "ov_open_callbacks on a stream that cannot seek is not provided"
+        );
+        e.call(seek, &[source, 0, 0, SEEK_END]);
+        let size = e.call(tell, &[source]).u32();
+        e.call(seek, &[source, 0, 0, SEEK_SET]);
+        let buffer = e.mem.alloc(CHUNK);
+        let mut data = Vec::with_capacity(size as usize);
+        loop {
+            let n = e.call(read, &[buffer, 1, CHUNK, source]).u32();
+            if n == 0 || n > CHUNK {
+                break;
+            }
+            data.extend_from_slice(&e.mem.bytes(buffer, n));
         }
-        data.extend_from_slice(&e.mem.bytes(buffer, n));
-    }
-    e.mem.free(buffer);
-    match VorbisFile::open(data, p) {
-        Ok(file) => {
+        e.mem.free(buffer);
+        VorbisFile::open(data, p).map(|file| {
             let i = file.info();
-            let info = e.mem.alloc(INFO_SIZE);
             let words = [
                 i.version,
                 i.channels,
@@ -373,9 +382,6 @@ pub fn ov_open_callbacks(
                 0,
                 0,
             ];
-            for (k, w) in words.into_iter().enumerate() {
-                e.mem.set_i32(info + 4 * k as u32, w);
-            }
             let seekable = file.seekable();
             let total = [file.pcm_total(0), file.pcm_total(1)];
             let frame = 2 * words[1].max(1) as usize;
@@ -384,6 +390,19 @@ pub fn ov_open_callbacks(
             } else {
                 Decoder::Inline(Box::new(file))
             };
+            (size, words, seekable, total, decoder)
+        })
+    });
+    match opened {
+        Ok((size, words, seekable, total, decoder)) => {
+            let info = e.mem.alloc(INFO_SIZE);
+            for (k, w) in words.into_iter().enumerate() {
+                e.mem.set_i32(info + 4 * k as u32, w);
+            }
+            debug_assert!(
+                engine_core::real_threads::kernel_lock_held(e),
+                "ov_open_callbacks records the open file under the kernel lock"
+            );
             let sound = &mut state!(e).sound.vorbis;
             assert!(
                 !sound.open.contains_key(&vf.addr()),
@@ -479,13 +498,17 @@ pub fn ov_read(
                 break n;
             }
             Read::Pending => {
-                // Nothing decoded yet: the main thread waits; a game thread gives up its turn
-                // (`Sleep(1)`) until a batch is decoded, so the main thread goes on meanwhile.
+                let shared = Arc::clone(&ahead.shared);
+                // Nothing decoded yet. The main thread waits for the worker with the kernel lock given back (when the
+                // game called this itself), so the other threads' platform calls go on meanwhile, and looks the file
+                // up again after; a game thread gives up its turn (`Sleep(1)`, which gives the lock back too) until a
+                // batch is decoded, so the main thread goes on meanwhile.
                 if on_main {
-                    ahead.wait();
+                    engine_core::real_threads::without_kernel_lock_mut_if_outermost(e, |_| {
+                        wait_queued(&shared)
+                    });
                     continue;
                 }
-                let shared = Arc::clone(&ahead.shared);
                 while !batch_ready(&shared) {
                     crate::thread_host::host_for(e).sleep(e, 1, crate::signalled);
                 }
@@ -888,6 +911,321 @@ mod tests {
     #[test]
     fn without_the_real_clock_files_decode_inline() {
         assert!(!decode_ahead(&Engine::new()));
+    }
+
+    /// Bits packed as Vorbis reads them: least significant first.
+    #[derive(Default)]
+    struct Bits {
+        bytes: Vec<u8>,
+        at: u32,
+    }
+
+    impl Bits {
+        fn put(&mut self, value: u32, bits: u32) {
+            for k in 0..bits {
+                if self.at == 0 {
+                    self.bytes.push(0);
+                }
+                if value >> k & 1 != 0 {
+                    *self.bytes.last_mut().expect("a byte") |= 1 << self.at;
+                }
+                self.at = (self.at + 1) % 8;
+            }
+        }
+    }
+
+    /// One Ogg page (`flags`: 2 the first, 4 the last) holding `packets` (each under 255 bytes), its checksum filled
+    /// in (libogg's: CRC-32, polynomial 0x04c11db7, most significant bit first, from 0).
+    fn page(flags: u8, granule: i64, number: i32, packets: &[Vec<u8>]) -> Vec<u8> {
+        let mut p = b"OggS\0".to_vec();
+        p.push(flags);
+        p.extend_from_slice(&granule.to_le_bytes());
+        p.extend_from_slice(&0x0bad_5eedi32.to_le_bytes());
+        p.extend_from_slice(&number.to_le_bytes());
+        p.extend_from_slice(&[0; 4]);
+        p.push(packets.len() as u8);
+        for packet in packets {
+            assert!(packet.len() < 255);
+            p.push(packet.len() as u8);
+        }
+        for packet in packets {
+            p.extend_from_slice(packet);
+        }
+        let mut crc = 0u32;
+        for &b in &p {
+            crc ^= u32::from(b) << 24;
+            for _ in 0..8 {
+                crc = if crc & 0x8000_0000 != 0 {
+                    (crc << 1) ^ 0x04c1_1db7
+                } else {
+                    crc << 1
+                };
+            }
+        }
+        p[22..26].copy_from_slice(&crc.to_le_bytes());
+        p
+    }
+
+    /// An Ogg Vorbis file made here: mono, 22050 Hz, short and long blocks of 256 samples, one codebook, one floor
+    /// with no partitions, one residue with no books, then `audio` silent packets (each with its floor unused) on the
+    /// last page. The first packet gives no samples and each later one 128, so the file decodes to
+    /// `(audio - 1) * 128` zero samples.
+    fn tiny_ogg(audio: usize) -> Vec<u8> {
+        let mut id = b"\x01vorbis".to_vec();
+        id.extend_from_slice(&0u32.to_le_bytes());
+        id.push(1);
+        id.extend_from_slice(&22050u32.to_le_bytes());
+        id.extend_from_slice(&[0; 12]);
+        id.extend_from_slice(&[0x88, 1]);
+        let mut comment = b"\x03vorbis".to_vec();
+        comment.extend_from_slice(&[0; 8]);
+        comment.push(1);
+        let mut s = Bits::default();
+        for &c in b"\x05vorbis" {
+            s.put(c.into(), 8);
+        }
+        let fields: &[(u32, u32)] = &[
+            // One codebook: its sync word, one dimension, two entries, not ordered, not sparse, both 1 bit long,
+            // no lookup.
+            (0, 8),
+            (0x56_4342, 24),
+            (1, 16),
+            (2, 24),
+            (0, 1),
+            (0, 1),
+            (0, 5),
+            (0, 5),
+            (0, 4),
+            // One time transform (0).
+            (0, 6),
+            (0, 16),
+            // One floor of type 1: no partitions, multiplier 1, a range of 256.
+            (0, 6),
+            (1, 16),
+            (0, 5),
+            (0, 2),
+            (8, 4),
+            // One residue of type 0: begin and end 0, groups of 1, one partition, the group book 0, no cascade.
+            (0, 6),
+            (0, 16),
+            (0, 24),
+            (0, 24),
+            (0, 24),
+            (0, 6),
+            (0, 8),
+            (0, 3),
+            (0, 1),
+            // One mapping of type 0: one submap, no coupling, the submap's floor 0 and residue 0.
+            (0, 6),
+            (0, 16),
+            (0, 1),
+            (0, 1),
+            (0, 2),
+            (0, 8),
+            (0, 8),
+            (0, 8),
+            // One mode: short blocks, window 0, transform 0, mapping 0. Then the framing bit.
+            (0, 6),
+            (0, 1),
+            (0, 16),
+            (0, 16),
+            (0, 8),
+            (1, 1),
+        ];
+        for &(value, bits) in fields {
+            s.put(value, bits);
+        }
+        let mut data = page(2, 0, 0, &[id]);
+        data.extend(page(0, 0, 1, &[comment, s.bytes]));
+        data.extend(page(
+            4,
+            (audio as i64 - 1) * 128,
+            2,
+            &vec![vec![0u8]; audio],
+        ));
+        data
+    }
+
+    /// What an open file answers: `ov_info`'s channels and rate, `ov_pcm_total(-1)`, `ov_seekable`, and every
+    /// `ov_read` of 4096 bytes to the end.
+    fn answers(e: &mut Engine) -> (i32, i32, u64, i32, Vec<(i32, Vec<u8>)>) {
+        let vf = Ptr::new(VF);
+        let info = ov_info(e, vf, -1);
+        let (channels, rate) = (e.mem.i32(info + 4), e.mem.i32(info + 8));
+        let total = ov_pcm_total(e, vf, -1);
+        let seekable = ov_seekable(e, vf);
+        let mut got = Vec::new();
+        loop {
+            let read = reads(e, &[4096]).remove(0);
+            let end = read.0 <= 0;
+            got.push(read);
+            if end {
+                break;
+            }
+        }
+        (channels, rate, total, seekable, got)
+    }
+
+    #[test]
+    fn a_file_made_here_opens_and_decodes_to_silence() {
+        let mut e = Engine::new();
+        engine_core::units::crt::set_x87_control_word(&mut e, 0x027f);
+        assert_eq!(open(&mut e, &tiny_ogg(9)), 0);
+        let (channels, rate, total, seekable, got) = answers(&mut e);
+        assert_eq!((channels, rate, total, seekable), (1, 22050, 8 * 128, 1));
+        let bytes: Vec<u8> = got.iter().flat_map(|(_, b)| b.clone()).collect();
+        assert_eq!(bytes, vec![0; 8 * 128 * 2]);
+        assert_eq!(got.last().map(|r| r.0), Some(0));
+    }
+
+    thread_local! {
+        /// What the game's callbacks saw of the kernel lock on this thread: calls made with it held, calls made.
+        static SEEN: std::cell::Cell<(u32, u32)> = const { std::cell::Cell::new((0, 0)) };
+    }
+
+    fn note_lock(e: &Engine) {
+        let held = u32::from(engine_core::real_threads::kernel_lock_held(e));
+        SEEN.with(|s| {
+            let (h, n) = s.get();
+            s.set((h + held, n + 1));
+        });
+    }
+
+    /// The game's callbacks (`00af2180`, `00af2200`, `00af2290`), at game code addresses as the game's are, so they
+    /// do not take the kernel lock themselves; each notes whether it was held ([`SEEN`]).
+    const GAME_READ: u32 = 0x00af_2180;
+    const GAME_SEEK: u32 = 0x00af_2200;
+    const GAME_TELL: u32 = 0x00af_2290;
+    /// `ov_open_callbacks` at a platform function's address, and a platform function that calls it inside its own
+    /// hold of the kernel lock.
+    const OPEN_AT: u32 = 0x7f00_0300;
+    const NESTED_AT: u32 = 0x7f00_0310;
+
+    fn open_words() -> [u32; 8] {
+        [0x1234, VF, 0, 0, GAME_READ, GAME_SEEK, 0, GAME_TELL]
+    }
+
+    fn opens_nested(e: &mut Engine, _: &[u32]) -> crate::Ret {
+        e.call(OPEN_AT, &open_words())
+    }
+
+    fn game_callbacks(e: &mut Engine) {
+        use crate::abi::RetVal;
+        e.register_double(GAME_READ, |e, a| {
+            note_lock(e);
+            RetVal::into_ret(read(e, a[0], a[1], a[2], a[3]))
+        });
+        e.register_double(GAME_SEEK, |e, a| {
+            note_lock(e);
+            RetVal::into_ret(seek(e, a[0], a[1], a[2], a[3]))
+        });
+        e.register_double(GAME_TELL, |e, a| {
+            note_lock(e);
+            RetVal::into_ret(tell(e, a[0]))
+        });
+    }
+
+    /// With real threads, the game's callbacks read the file (and the decoder opens) with the kernel lock given back
+    /// when the game called `ov_open_callbacks` itself, so other threads' platform calls go on meanwhile; inside a
+    /// platform function's own hold they run with it held, as before. Either way the file opens and answers as
+    /// without real threads, and it is recorded under the lock (the function's own check).
+    #[test]
+    fn the_file_is_read_with_the_kernel_lock_given_back_only_when_outermost() {
+        let data = tiny_ogg(9);
+        let mut e = Engine::new();
+        engine_core::units::crt::set_x87_control_word(&mut e, 0x027f);
+        assert_eq!(open(&mut e, &data), 0);
+        let want = answers(&mut e);
+
+        let mut e = Engine::new();
+        engine_core::units::crt::set_x87_control_word(&mut e, 0x027f);
+        game_callbacks(&mut e);
+        e.register(
+            OPEN_AT,
+            crate::entry!(0, ov_open_callbacks(u32, Ptr, u32, i32, u32, u32, u32, u32) -> i32).1,
+        );
+        e.register(NESTED_AT, opens_nested);
+        engine_core::real_threads::start(&mut e).expect("real threads on");
+        engine_core::real_threads::end_start_hold_for_tests(&e);
+        for (at, words, held) in [(OPEN_AT, open_words(), false), (NESTED_AT, [0; 8], true)] {
+            FILE.with(|f| *f.borrow_mut() = (data.clone(), 0, Vec::new()));
+            SEEN.with(|s| s.set((0, 0)));
+            assert_eq!(e.call(at, &words).u32() as i32, 0);
+            let (with_lock, calls) = SEEN.with(std::cell::Cell::get);
+            assert!(calls >= 5, "the callbacks read the file ({calls} calls)");
+            let want_held = if held { calls } else { 0 };
+            assert_eq!(
+                with_lock, want_held,
+                "callbacks with the lock held (nested: {held})"
+            );
+            assert_eq!(answers(&mut e), want, "nested: {held}");
+            assert_eq!(ov_clear(&mut e, Ptr::new(VF)), 0);
+        }
+    }
+
+    /// `ov_read` at a platform function's address (behind the kernel lock with real threads).
+    const READ_AT: u32 = 0x7f00_0320;
+
+    /// With real threads, main's read that finds nothing decoded yet waits for the worker with the kernel lock given
+    /// back (another thread's platform calls go on meanwhile), then answers as the decoder does.
+    #[test]
+    fn main_waits_for_the_decoder_with_the_kernel_lock_given_back() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::time::{Duration, Instant};
+        let steps = [Step::Samples(100), Step::Samples(50)];
+        let mut e = Engine::new();
+        insert(&mut e, Decoder::Inline(Box::new(Script::new(1, &steps))));
+        let want = reads(&mut e, &[4096, 4096, 4096]);
+
+        let mut e = Engine::new();
+        let (go, hold) = std::sync::mpsc::channel();
+        let ahead = Ahead::start(Box::new(Script::new(1, &steps)), 2, Some(hold));
+        insert(&mut e, Decoder::Ahead(ahead));
+        e.register(
+            READ_AT,
+            crate::entry!(0, ov_read(Ptr, u32, i32, i32, i32, i32, Ptr) -> i32).1,
+        );
+        engine_core::real_threads::start(&mut e).expect("real threads on");
+        engine_core::real_threads::end_start_hold_for_tests(&e);
+        let free = engine_core::real_threads::kernel_lock_free_probe(&e);
+        // Once main is in its read (well past its start), a helper looks whether the lock is free, then lets the
+        // worker decode; if the lock stays held it lets it decode after two seconds, so the read ends either way.
+        let calling = Arc::new(AtomicBool::new(false));
+        let c = Arc::clone(&calling);
+        let watcher = std::thread::spawn(move || {
+            while !c.load(Ordering::SeqCst) {
+                std::thread::yield_now();
+            }
+            std::thread::sleep(Duration::from_millis(50));
+            let start = Instant::now();
+            let mut seen = false;
+            while start.elapsed() < Duration::from_secs(2) {
+                if free() {
+                    seen = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            go.send(()).expect("the worker waits");
+            seen
+        });
+        let buffer = e.mem.alloc(4096);
+        calling.store(true, Ordering::SeqCst);
+        let mut got = Vec::new();
+        for _ in 0..3 {
+            let n = e.call(READ_AT, &[VF, buffer, 4096, 0, 2, 1, 0]).u32() as i32;
+            let bytes = if n > 0 {
+                e.mem.bytes(buffer, n as u32).to_vec()
+            } else {
+                Vec::new()
+            };
+            got.push((n, bytes));
+        }
+        assert!(
+            watcher.join().expect("the helper"),
+            "the kernel lock was free while main waited"
+        );
+        assert_eq!(got, want);
     }
 
     /// The game's own files (`NV_VORBIS_TEST_DIR`: a folder of `.ogg` files taken from its

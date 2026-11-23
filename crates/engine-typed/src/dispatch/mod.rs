@@ -27,7 +27,12 @@
 //!   getters and setters (`GetFloat`, `GetString`, `IsTrue`, `SetFloat`, `SetString`, `SetInt`,
 //!   `Poke`, the absolute position sums, `Lock`/`Unlock`) and `ValueChangeEvent`, which the HUD's
 //!   update calls on every frame (its compass alone about 1,700 calls a frame on the street). The
-//!   value's own `SetFloat`, `SetString` and `CalculateValue` stay calls by address (overridable).
+//!   value's own `SetFloat` and `SetString` stay translated and are called by address
+//!   (overridable). `CalculateValue` (`00a09410`) is typed here too and is still always called by
+//!   address, its translated callers included, since it is overridable: a built-in or plugin that
+//!   registers over it is what runs. Such a registration over a member sends the whole family's
+//!   `typed_call!`s by address for the rest of the run (`State::replaced` in engine-core), so it
+//!   costs the family its direct calls, not only this function; no built-in replaces it today.
 //!
 //! Stage 1: the objects stay in guest memory where the game made them. Each function stays
 //! registered at its exe address; a call inside the family, or into another family, is a
@@ -224,6 +229,8 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a0_13d0, tile::absolute_x(Ptr) -> f32),
         entry!(0x00a0_1440, tile::absolute_y(Ptr) -> f32),
         entry!(0x00a0_a220, tile::value_change_event(Ptr)),
+        // The values' calculation every menu's build runs for each value (and its readers').
+        entry!(0x00a0_9410, tile::calculate_value(Ptr, u8)),
         // The action links' tile search a menu's build makes for every link (every menu's opening).
         entry!(0x00a0_8b20, tile::find_by_path(Ptr, Ptr) -> Ptr),
         entry!(0x00a0_8f20, tile::find_named_in_tree(Ptr, Ptr) -> Ptr),
