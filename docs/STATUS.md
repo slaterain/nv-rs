@@ -329,6 +329,10 @@ More in [FIXES.md, "UI Organizer"](FIXES.md#ui-organizer).
   while typing, menus' keyboard buttons answer number keys, Tab, Caps Lock, Alt and F-keys, and a
   terminal behind a trade menu leaves the mouse alone. All work with JIP's console key fix on or
   off.
+- More small fixes: Escape, the console key and Print Screen work with a pad connected;
+  backslash can be bound; NPCs' grenades no longer show the player a "can't remove" message; a
+  plugin's map marker shows its own faction's reputation; opening the map keeps forced
+  full-detail trees; the TestAllCells console command no longer re-reads settings per cell.
 - The remaining crash fixes and tweaks come next.
 
 More in [FIXES.md, "lStewieAl's Tweaks"](FIXES.md#lstewieals-tweaks).

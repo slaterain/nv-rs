@@ -143,6 +143,7 @@ mod pools;
 mod touch;
 pub mod track;
 
+pub use pools::ThreadHeapCensus;
 use touch::TOUCH;
 pub use touch::{allocating_function, TouchHit, TouchSpec, ALLOC_WRAPPERS};
 
@@ -1071,12 +1072,7 @@ impl Mem {
         let tables = self.pools.as_deref();
         for (&addr, &entry) in self.live.iter() {
             let size = entry & !ODD_POOL;
-            let run_start = (addr + PAGE as u32 - 1) & !(PAGE as u32 - 1);
-            if size == pools::RUN_BLOCK
-                && tables
-                    .and_then(|t| t.run_of(run_start))
-                    .is_some_and(|r| r.start == run_start)
-            {
+            if tables.is_some_and(|t| t.is_run_block(addr)) {
                 continue;
             }
             let info = c.and_then(|c| c.blocks.get(&addr)).copied();
@@ -1350,6 +1346,8 @@ impl Mem {
         let mut view = Mem::view_at(self.space.base, shared);
         view.view_check = checked;
         view.pools = self.pools.clone();
+        // The thread's free blocks go on with the thread (this memory becomes its view).
+        view.pool_cache = std::mem::take(&mut self.pool_cache);
         view.checking = checked;
         view.track = self.track.clone();
         view.store_diag = view.track.is_some();
@@ -1622,15 +1620,25 @@ impl Mem {
 
     /// The stock's part of [`Mem::pool_restock`] (the shared memory's, or with threads stepped this
     /// one's): given-back blocks, else fresh slots of the pool's newest run, else a new run, on a
-    /// page boundary inside a heap block of its own that stays live for good.
+    /// page boundary inside a heap block of its own, live while the run is held. Each 32 MB more
+    /// held in runs than at the last line, the census line ([`Mem::thread_heap_census`]).
     fn pool_fill(&mut self, class: usize, out: &mut Vec<u32>) {
         let tables = std::sync::Arc::clone(self.pools.as_ref().expect("the thread heap is on"));
         let mut stocks = self.pool_stocks.take().unwrap_or_default();
         let stride = heap::class_bytes(heap::POOLS[class]);
+        let mut made = false;
         stocks.restock(&tables, class, stride, out, || {
+            made = true;
             let block = self.alloc(pools::RUN_BLOCK);
-            (block + PAGE as u32 - 1) & !(PAGE as u32 - 1)
+            (block, pools::run_start(block))
         });
+        if made {
+            let census = ThreadHeapCensus::of(&tables, Some(&stocks));
+            if census.run_bytes >= stocks.next_line {
+                stocks.next_line = census.run_bytes + pools::REPORT_STEP;
+                eprintln!("{census}");
+            }
+        }
         self.pool_stocks = Some(stocks);
     }
 
@@ -1647,25 +1655,62 @@ impl Mem {
         crate::hitch::heap(true);
         run.give(addr);
         let class = run.class;
+        let stride = run.stride;
+        if self.store_diag {
+            self.pool_free_noted(addr, stride);
+        }
         if let Some(back) = self.pool_cache.push(class, addr) {
             self.pool_give_back(class, back);
         }
         true
     }
 
-    /// Gives `blocks` of pool `class` back to the stock.
+    /// A thread heap free seen by a diagnostic turned on after the block was handed out (the
+    /// write watch's free, the store track's written bytes): the blocks it hands out meanwhile
+    /// keep the heap's own path, but these come back here.
+    #[cold]
+    #[inline(never)]
+    fn pool_free_noted(&self, addr: u32, size: u32) {
+        if self.watched_page(addr, size) {
+            self.watch_note(addr, size, None, WatchKind::Free);
+        }
+        self.note_written(addr, size);
+    }
+
+    /// Gives `blocks` of pool `class` back to the stock; the runs that gave their memory back
+    /// meanwhile have their heap blocks freed (and, each 16 of them, the census line).
     #[cold]
     #[inline(never)]
     fn pool_give_back(&mut self, class: usize, blocks: Vec<u32>) {
         let give = |m: &mut Mem| {
-            m.pool_stocks
-                .get_or_insert_with(Default::default)
-                .give_back(class, blocks)
+            let tables = std::sync::Arc::clone(m.pools.as_ref().expect("the thread heap is on"));
+            let mut stocks = m.pool_stocks.take().unwrap_or_default();
+            let freed = stocks.give_back(&tables, class, blocks);
+            let report = !freed.is_empty() && stocks.runs_given_back % 16 == 0;
+            m.pool_stocks = Some(stocks);
+            for block in freed {
+                m.free(block);
+            }
+            if report {
+                if let Some(census) = m.thread_heap_census() {
+                    eprintln!("{census}");
+                }
+            }
         };
         match self.shared {
             Some(s) => s.with(give),
             None => give(self),
         }
+    }
+
+    /// The thread heap's census (`None` with it off): the runs held and their bytes, the blocks
+    /// live in them and their bytes, the runs that gave their memory back.
+    pub fn thread_heap_census(&self) -> Option<ThreadHeapCensus> {
+        if let Some(s) = self.shared {
+            return s.with(|m| m.thread_heap_census());
+        }
+        let tables = self.pools.as_deref()?;
+        Some(ThreadHeapCensus::of(tables, self.pool_stocks.as_deref()))
     }
 
     /// For an address in a thread heap run, the size its block was asked for (`None` inside: not a
@@ -2752,6 +2797,9 @@ impl Mem {
     fn free_untimed(&mut self, addr: u32) {
         if self.pool_free(addr) {
             return;
+        }
+        if self.pools.as_deref().is_some_and(|t| t.is_run_block(addr)) {
+            panic!("free of {addr:08x}, which is not a live heap block (a thread heap run's own)");
         }
         if let Some(s) = self.shared {
             return self.with_shared(s, |m| m.free(addr));
