@@ -4934,7 +4934,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// fewer channels (a depth-only draw, a draw with masked colour writes) would not: drawn ahead
     /// of a draw it lies in front of on another surface, it would hide that draw's colour, which
     /// the game's order let show. So the held draws all write the same channels
-    /// ([`Device::hold`]).
+    /// ([`Device::hold`]). None too for a draw whose pixel shader writes a target past the first:
+    /// such a draw is not held while sorting (no frame test binds two targets).
     fn colour_channels(&self, written: u32) -> Option<u32> {
         const MASKS: [usize; 4] = [
             rs::COLORWRITEENABLE,
@@ -4942,6 +4943,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             rs::COLORWRITEENABLE2,
             rs::COLORWRITEENABLE3,
         ];
+        if written & !1 != 0 {
+            return None;
+        }
         let (key, _, _) = self.last_pipeline.as_ref()?;
         let mut channels = 0u32;
         for (i, c) in key.colours.iter().enumerate().take(MASKS.len()) {

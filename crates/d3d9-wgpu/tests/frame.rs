@@ -6934,8 +6934,8 @@ fn sorted_draws_with_the_same_masked_channels_are_held() {
 /// that whichever of the two pipelines a sort puts first, one of them would show a moved draw:
 /// - column 1: colour A1 (LESSEQUAL, at column 3) then A2 (LESS) over the same strip, then
 ///   depth-only D in front of A2: A2's red must show;
-/// - column 5: depth-only D1 (LESSEQUAL) then D2 (LESS) over the same strip, then colour A behind
-///   them: A must not show.
+/// - column 5: depth-only D1 (LESSEQUAL, at column 7, so its early draw lays no depth there) then
+///   D2 (LESS) over the same strip, then colour A behind D2: A must not show.
 #[test]
 fn sorted_draws_keep_their_channels_after_a_draw_over_held_vertices() {
     const COLORWRITEENABLE: u32 = 168;
@@ -6948,7 +6948,7 @@ fn sorted_draws_keep_their_channels_after_a_draw_over_held_vertices() {
         strip_stream(g, 96);
         strip_at(g, 0, -0.25, [0.0, 1.0, 0.0, 1.0]);
         g.state(ZFUNC, 4);
-        strip_at(g, 4, -0.25, [0.0, 1.0, 0.0, 1.0]);
+        strip_at(g, 6, -0.25, [0.0, 1.0, 0.0, 1.0]);
         g.state(ZFUNC, 2);
         strip_at(g, 4, -0.25, [0.0, 1.0, 0.0, 1.0]);
         g.state(COLORWRITEENABLE, 0xF);
