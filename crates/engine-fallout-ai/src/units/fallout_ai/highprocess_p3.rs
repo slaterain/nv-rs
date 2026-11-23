@@ -17191,6 +17191,71 @@ mod tests {
         }
     }
 
+    /// S0122 at its call site in `HighProcess::Update` (`008eeec0`, `0x8EF5A1`): with the wish to
+    /// talk to the player set (slot `0x604` answers 1), the running package (slot `0x27c`) decides
+    /// whether it is dropped (slot `0x600` with 0): a get-up package (0x1A) keeps it with the row
+    /// off and on, a dialogue package (0x1C) keeps it only with the row, another type (5) or no
+    /// package drops it either way.
+    #[test]
+    fn s0122_high_process_update_drops_the_wish_to_talk_per_package() {
+        // (row, the package's type or none, dropped)
+        for (on, kind, dropped) in [
+            (false, Some(0x1au8), false),
+            (true, Some(0x1a), false),
+            (false, Some(0x1c), true),
+            (true, Some(0x1c), false),
+            (false, Some(0x05), true),
+            (true, Some(0x05), true),
+            (false, None, true),
+            (true, None, true),
+        ] {
+            let mut e = Engine::new();
+            let (p, actor, _player, package, _cell) = update_world(&mut e);
+            e.set_stewie(engine_core::extend::stewie::DIALOGUE_PACKAGE_KEEPS_TALK, on);
+            e.register_double(PACKAGE_TYPE, |e, a| {
+                ret(if a[0] == 0 {
+                    0
+                } else {
+                    e.mem.u8(a[0] + 0x20) as i8 as i32 as u32
+                })
+            });
+            let running = match kind {
+                Some(kind) => {
+                    e.mem.set_u8(package + 0x20, kind);
+                    package
+                }
+                None => 0,
+            };
+            give_vtable(
+                &mut e,
+                p.addr(),
+                PROCESS_TABLE,
+                &[
+                    (SLOT_GET_NEED_TALK_PLAYER, 1),
+                    (SLOT_GET_PACKAGE_THAT_IS_RUNNING, running),
+                ],
+            );
+            e.call_log = Some(vec![]);
+            e.call(0x008e_eec0, &args![p, actor]);
+            let label = format!("on {on} {kind:?}");
+            assert_eq!(
+                calls_to(&e, slot_target(PROCESS_TABLE, SLOT_GET_NEED_TALK_PLAYER)).len(),
+                1,
+                "{label}: the update reached the test"
+            );
+            let expected = if dropped {
+                vec![vec![p.addr(), 0]]
+            } else {
+                vec![]
+            };
+            assert_eq!(
+                calls_to(&e, slot_target(PROCESS_TABLE, SLOT_SET_NEED_TALK_PLAYER)),
+                expected,
+                "{label}"
+            );
+        }
+    }
+
     /// Registers a double that returns `value` in `eax`.
     fn returning(e: &mut Engine, addr: u32, value: u32) {
         e.register_double(addr, move |_, _| ret(value));

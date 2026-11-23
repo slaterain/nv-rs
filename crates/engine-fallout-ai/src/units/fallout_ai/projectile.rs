@@ -8582,6 +8582,20 @@ mod tests {
         stub_float(&mut e, 0x004a_7290, 200.0);
         e.set(this, Projectile::iFlags, 0x4000);
         assert!(!fn_009c39e0(&mut e, this));
+
+        // S0223 (`OnCheckExplosionProximityHook`, `0x9C39FF`): with the row and detection turned
+        // off (the byte `011f1221` 0) the same mine answers false before its cell is asked
+        // (`008d6f30`); with detection on it still triggers.
+        stub_float(&mut e, 0x004a_7290, 25.0);
+        e.set(this, Projectile::iFlags, 0);
+        e.set_stewie(engine_core::extend::stewie::DETECTION_OFF_MINES, true);
+        e.mem.set_u8(DETECTION_ON, 0);
+        e.call_log = Some(vec![]);
+        assert!(!fn_009c39e0(&mut e, this));
+        assert!(calls(&e, 0x008d_6f30).is_empty());
+        e.mem.set_u8(DETECTION_ON, 1);
+        assert!(fn_009c39e0(&mut e, this));
+        assert!(!calls(&e, 0x008d_6f30).is_empty());
     }
 
     thread_local! {
