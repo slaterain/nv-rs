@@ -20,14 +20,19 @@
 //! window is the borderless one (`d3d9real::want_borderless`): that read is in `main` before the
 //! game makes its window. `Renderer::Init`'s entry does the same for a start that read no file
 //! (the default 1); the window is already made then, so the game runs in it as it is. The
-//! player's file keeps its line: the platform's `WritePrivateProfileStringA` writes nothing.
+//! player's file keeps its line: when the game writes its settings (leaving its settings menu,
+//! `INISettingCollection::WriteSetting`, `00c43e90`), a setting this run turned off is written as
+//! it was read, 1 ([`write_setting`]).
 //!
-//! Both addresses are reached only by address, so the entries registered here run: `ReadSetting`
-//! through the INI collections' vtables (no translation calls it by name), `Renderer::Init` from
-//! `0086d500` by `e.call`. They are rows of `crates/engine-core/data/overridable.tsv`.
+//! The three addresses are reached only by address, so the entries registered here run:
+//! `ReadSetting` and `WriteSetting` through the INI collections' vtables (no translation calls
+//! them by name), `Renderer::Init` from `0086d500` by `e.call`. They are rows of
+//! `crates/engine-core/data/overridable.tsv`.
 
 use engine::prelude::*;
-use engine::units::bsmain::xinisetting_xenon::ini_setting_collection_read_setting;
+use engine::units::bsmain::xinisetting_xenon::{
+    ini_setting_collection_read_setting, ini_setting_collection_write_setting,
+};
 use engine::units::fallout_shared::renderer::renderer_init;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -39,13 +44,51 @@ const FLAG: u32 = 4;
 pub const READ_SETTING: u32 = 0x00c4_4280;
 /// `Renderer::Init` (Xbox PDB): `(window, instance)`.
 pub const RENDERER_INIT: u32 = 0x004d_a670;
+/// `INISettingCollection::WriteSetting` (Xbox PDB): `thiscall (collection, setting)`.
+pub const WRITE_SETTING: u32 = 0x00c4_3e90;
 
-/// Registers the two entries over their translations, in every preset.
+/// Set once this run took full screen as windowed ([`take_as_windowed`]).
+static TAKEN: AtomicBool = AtomicBool::new(false);
+
+/// Registers the three entries over their translations, in every preset.
 pub fn install(e: &mut Engine) {
     e.register(READ_SETTING, |e, a| {
         read_setting(e, a, ini_setting_collection_read_setting)
     });
     e.register(RENDERER_INIT, |e, a| renderer_entry(e, a, renderer_init));
+    e.register(WRITE_SETTING, |e, a| {
+        write_setting(
+            e,
+            a,
+            TAKEN.load(Ordering::Relaxed),
+            ini_setting_collection_write_setting,
+        )
+    });
+}
+
+/// `WriteSetting(collection, setting)` by `write` (the translation). When `taken` (this run
+/// turned full screen off, [`take_as_windowed`]) and it is the full-screen setting, still off, it
+/// is written as it was read: its flag 1 for the write and 0 again after, so the player's
+/// `bFull Screen=1` line stays (the platform's `WritePrivateProfileStringA` changes the run's
+/// copy of the file, which Play.exe and play.sh keep in the profile).
+fn write_setting(
+    e: &mut Engine,
+    a: &[u32],
+    taken: bool,
+    write: fn(&mut Engine, Ptr, Ptr) -> u8,
+) -> Ret {
+    let as_read = taken && a[1] == FULL_SCREEN && e.mem.u8(FULL_SCREEN + FLAG) == 0;
+    if as_read {
+        e.mem.set_u8(FULL_SCREEN + FLAG, 1);
+    }
+    let written = write(e, Ptr::new(a[0]), Ptr::new(a[1]));
+    if as_read {
+        e.mem.set_u8(FULL_SCREEN + FLAG, 0);
+    }
+    Ret {
+        eax: u32::from(written),
+        ..Ret::default()
+    }
 }
 
 /// `ReadSetting(collection, setting)` by `read` (the translation), then the full-screen flag
@@ -88,6 +131,7 @@ fn take_as_windowed(e: &mut Engine, before_window: bool, borderless: impl FnOnce
         return false;
     }
     e.mem.set_u8(FULL_SCREEN + FLAG, 0);
+    TAKEN.store(true, Ordering::Relaxed);
     if before_window {
         borderless();
     }
@@ -126,6 +170,10 @@ mod tests {
         assert!(take_as_windowed(&mut e, true, || chosen.set(chosen.get() + 1)));
         assert_eq!(e.mem.u8(FULL_SCREEN + FLAG), 0);
         assert_eq!(chosen.get(), 1);
+        assert!(
+            TAKEN.load(Ordering::Relaxed),
+            "a settings write keeps it as read"
+        );
         assert!(!take_as_windowed(&mut e, true, || chosen.set(chosen.get() + 1)));
         assert_eq!(chosen.get(), 1);
         let mut late = engine(1);
@@ -152,6 +200,31 @@ mod tests {
             0
         });
         assert_eq!(e.mem.u8(other + FLAG), 1);
+    }
+
+    /// The game's settings write (issue #370 made it reach the file): full screen this run took as
+    /// windowed is written as read, 1, and is off again after; not taken, or another setting, is
+    /// written as it is; the translation's answer is passed on.
+    #[test]
+    fn a_settings_write_keeps_the_players_full_screen_line() {
+        let mut e = engine(0);
+        let flag_at_write = |e: &mut Engine, collection: Ptr, setting: Ptr| {
+            assert_eq!(collection.addr(), 0x1234);
+            e.mem.u8(setting.addr() + FLAG) + 10
+        };
+        let ret = write_setting(&mut e, &[0x1234, FULL_SCREEN], true, flag_at_write);
+        assert_eq!(ret.eax, 11, "written as 1");
+        assert_eq!(e.mem.u8(FULL_SCREEN + FLAG), 0, "off again");
+        let ret = write_setting(&mut e, &[0x1234, FULL_SCREEN], false, flag_at_write);
+        assert_eq!(ret.eax, 10, "not taken: as it is");
+        let other = FULL_SCREEN + 0x40;
+        let ret = write_setting(&mut e, &[0x1234, other], true, flag_at_write);
+        assert_eq!(ret.eax, 10, "another setting: as it is");
+        assert_eq!(e.mem.u8(other + FLAG), 0);
+        // Taken, then set to 1 by something else: written as it is, left as it is.
+        e.mem.set_u8(FULL_SCREEN + FLAG, 1);
+        let ret = write_setting(&mut e, &[0x1234, FULL_SCREEN], true, flag_at_write);
+        assert_eq!((ret.eax, e.mem.u8(FULL_SCREEN + FLAG)), (11, 1));
     }
 
     /// `Renderer::Init` sees the flag off even when no file was read (the default 1), and its

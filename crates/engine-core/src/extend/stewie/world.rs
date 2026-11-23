@@ -102,6 +102,201 @@ pub const PIPBOY_LIGHT_FADE: Row = fix(15);
 /// path on a line of its own, with `[Extra Console Details] bMeshPath` or when its model is missing.
 pub const CONSOLE_MESH_PATH: Row = fix(16);
 
+// ---- Group L: the interface manager's `Idle` (the rows beside JIP LN NVSE's G58) ----
+
+/// S0022.02 (`IsShiftHeld` at `0x70E4DB` and `0x70E500` in `InterfaceManager::Idle` `0070c4a0`): a
+/// right or left arrow key becomes shift-right or shift-left by the keyboard's shift state now
+/// (xNVSE's raw key state), not the interface's remembered one.
+pub const MENU_SHIFT_HELD_NOW: Row = fix(17);
+/// S0022.10 (`BookMenuClose_DebounceMenumodeKey` at `0x73B4C4` in `BookMenu::Close` `0073b480`;
+/// `IsControllerConnectedAndNotMenumodeOverride` at `0x70E854` in `Idle`): closing a book with the
+/// menu-mode control held sets the input's menu-mode debounce, and while it is set the open Pip-Boy
+/// reads that control the keyboard's way, so the same press does not close the Pip-Boy too.
+pub const BOOK_CLOSE_DEBOUNCE: Row = fix(18);
+/// S0022.18 (`PipboyHotkeysCheckConsoleOpenOrKeyboardInputHandled`, its jump at `0x70E9B8` in
+/// `Idle`): the Pip-Boy hot keys (F1 to F3) do nothing while the frontmost menu took the call's key
+/// or the console is open.
+pub const PIPBOY_HOTKEYS_AFTER_TEXT: Row = fix(19);
+/// S0022.39 (bytes at `0x70CE6A`, `0x70CDC5`, `0x70CDD3`, `0x70CDE2`, `0x70CDF1` in `Idle`): with a
+/// pad, the activate button clicks like the mouse's left button.
+pub const PAD_ACTIVATE_CLICKS: Row = fix(20);
+/// S0022.40 (bytes at `0x70CE2C`; calls at `0x70CE44`, `0x70CE53`, `0x70CE62` in `Idle`): the
+/// console's pad activate reads the pad's RB alone, so keyboard keys (E) typed in the console with a
+/// pad connected no longer change the selected reference.
+pub const CONSOLE_PAD_ACTIVATE_RB: Row = fix(21);
+/// S0022.45 (`ConsoleManager_HandleControllerHotkeys` at `0x70E063` in `Idle`): the pad's D-pad up
+/// and down step through the console's command history, repeating while held.
+pub const CONSOLE_DPAD_HISTORY: Row = fix(22);
+/// S0062 `AllowNumbersInXMLButtons` (`0x70E1A3`, `0x70E25B`, `0x70E2CA`, `0x70E32D`, `0x70E360` in
+/// `Idle`): a menu's keyboard buttons (`_PCButton_` traits) answer the number keys, Caps Lock, Tab,
+/// Alt and F1 to F12 by scan code, also while held, and Tab clicking one debounces menu mode.
+pub const XML_BUTTONS_BY_SCANCODE: Row = fix(23);
+/// S0065 (`IsInPauseBarterContainerOrQuantityMenu` at `0x70D6DA` in `Idle`): a rendered menu (a
+/// terminal) behind the barter, container or quantity menu no longer takes the mouse.
+pub const RENDERED_MENU_BEHIND_TRADE: Row = fix(24);
+/// S0984 (`ToggleConsoleHook`, `DetourRelCall(0x70E5FE)` in Tweaks' deferred init): B on the pad
+/// closes the open console. Tweaks' hook asks what was at the call before it (JIP LN NVSE's G58
+/// when JIP's fix row is on, else the exe's key query) and adds its B test.
+pub const CONSOLE_PAD_B_CLOSES: Row = fix(25);
+
+/// `OSInputGlobals *` (xNVSE's `0x11F35CC`).
+pub const INPUT_GLOBALS: u32 = 0x011f_35cc;
+/// `OSInputGlobals::overrideFlags` (`UInt16` at `+0x1B92`); bit 3 is the menu-mode debounce.
+const INPUT_OVERRIDE_FLAGS: u32 = 0x1b92;
+
+/// The game's copies of the pad's state, this frame's and the last (xNVSE's `XINPUT_GAMEPAD_EX`:
+/// `GetCurrent` `0x11F35A8`, `GetPrevious` `0x11F35B8`; an event count, then `wButtons` at `+4`,
+/// the triggers, and the sticks `+8`..`+0xE`).
+const PAD_CURRENT: u32 = 0x011f_35a8;
+const PAD_PREVIOUS: u32 = 0x011f_35b8;
+/// `XINPUT_GAMEPAD_EX::wButtons`.
+const PAD_BUTTONS: u32 = 4;
+/// `XINPUT_GAMEPAD` button bits (Tweaks' `XboxButtonMask`).
+pub const PAD_DPAD_UP: u16 = 0x1;
+pub const PAD_DPAD_DOWN: u16 = 0x2;
+pub const PAD_RB: u16 = 0x200;
+pub const PAD_A: u16 = 0x1000;
+pub const PAD_B: u16 = 0x2000;
+
+fn pad_buttons(e: &mut Engine, pad: u32) -> u16 {
+    e.mem.u16(pad + PAD_BUTTONS)
+}
+
+/// Tweaks' `GetXIControlPressed`: the button down this frame and not the last.
+pub fn pad_pressed(e: &mut Engine, mask: u16) -> bool {
+    pad_buttons(e, PAD_CURRENT) & mask != 0 && pad_buttons(e, PAD_PREVIOUS) & mask == 0
+}
+
+/// Tweaks' `GetXIControlDepressed`: the button down the last frame and not this one.
+pub fn pad_depressed(e: &mut Engine, mask: u16) -> bool {
+    pad_buttons(e, PAD_PREVIOUS) & mask != 0 && pad_buttons(e, PAD_CURRENT) & mask == 0
+}
+
+/// Tweaks' `GetXIControlHeld`: the button down this frame.
+pub fn pad_held(e: &mut Engine, mask: u16) -> bool {
+    pad_buttons(e, PAD_CURRENT) & mask != 0
+}
+
+/// Whether any pad button is down this frame (Tweaks' `GetCurrent()->wButtons`).
+pub fn pad_any_button(e: &mut Engine) -> bool {
+    pad_buttons(e, PAD_CURRENT) != 0
+}
+
+/// `ConsoleManager::GetSingleton` (`0071b160`, cdecl, here with 1: made when missing).
+const CONSOLE_INSTANCE: u32 = 0x0071_b160;
+/// `ConsoleManager::HandleInput` (`0071b210`), `Scroll` (`0071d380`), `RefreshOutput` (`0071d410`).
+const CONSOLE_HANDLE_INPUT: u32 = 0x0071_b210;
+const CONSOLE_SCROLL: u32 = 0x0071_d380;
+const CONSOLE_REFRESH_OUTPUT: u32 = 0x0071_d410;
+/// The game clock's milliseconds (`timeGlobals->msPassed`, `0x11F6394 + 0x14`).
+const MS_PASSED: u32 = 0x011f_6394 + 0x14;
+/// The settings Tweaks reads the repeat times from (`Setting` values at `+4`): `fKeyRepeatInterval`
+/// (`0x11D8B88`) and `fKeyRepeatTime` (`0x11D8B38`).
+const KEY_REPEAT_INTERVAL: u32 = 0x011d_8b88 + 4;
+const KEY_REPEAT_TIME: u32 = 0x011d_8b38 + 4;
+
+/// S0022.45, Tweaks' `ConsoleManager_HandleControllerHotkeys` (called at `0x70E063` in place of
+/// `MenuConsole::Instance(0)`; it answers the console, made when missing). With the console open:
+/// while a pad button is down, D-pad up or down (the first held of the two) hands the console the
+/// arrow-up or arrow-down key on its press and, held, again each `fKeyRepeatInterval` after
+/// `fKeyRepeatTime`; with neither, A pressed hands it Enter. The right stick past 4,000 scrolls the
+/// output one line (up when pushed up) every 50, 20 or 10 ms by how far it is pushed. Tweaks'
+/// statics are shared by the game's threads here.
+pub fn console_pad_hotkeys(e: &mut Engine) -> u32 {
+    let console = e.call(CONSOLE_INSTANCE, &args![1u32]).u32();
+    if console == 0 || e.mem.u8(console.wrapping_add(0x38)) == 0 {
+        return console;
+    }
+    let bits = std::sync::Arc::clone(&e.extend.stewie);
+    let prints = &bits.3;
+    if pad_any_button(e) {
+        let held = if pad_held(e, PAD_DPAD_UP) {
+            1
+        } else if pad_held(e, PAD_DPAD_DOWN) {
+            2
+        } else {
+            0
+        };
+        if held != 0 {
+            let mask = if held == 1 {
+                PAD_DPAD_UP
+            } else {
+                PAD_DPAD_DOWN
+            };
+            let now = e.mem.u32(MS_PASSED);
+            let mut press = pad_pressed(e, mask);
+            if !press {
+                if prints.console_pad_last_held.load(Relaxed) == held {
+                    if now >= prints.console_pad_next_repeat.load(Relaxed) {
+                        let interval = e.mem.f32(KEY_REPEAT_INTERVAL);
+                        // Tweaks' `currentTime + fKeyRepeatInterval` into its `UInt32`: a float sum, truncated.
+                        let next = (now as f32 + interval) as u32;
+                        prints.console_pad_next_repeat.store(next, Relaxed);
+                        press = true;
+                    }
+                } else {
+                    prints.console_pad_last_held.store(held, Relaxed);
+                    let delay = e.mem.f32(KEY_REPEAT_TIME);
+                    let next = (now as f32 + delay) as u32;
+                    prints.console_pad_next_repeat.store(next, Relaxed);
+                }
+            }
+            if press {
+                let code = if held == 1 {
+                    0x8000_0003u32
+                } else {
+                    0x8000_0004
+                };
+                e.call(CONSOLE_HANDLE_INPUT, &args![console, code]);
+            }
+        } else {
+            if pad_pressed(e, PAD_A) {
+                e.call(CONSOLE_HANDLE_INPUT, &args![console, 0x8000_0008u32]);
+            }
+            prints.console_pad_last_held.store(0, Relaxed);
+        }
+    } else {
+        prints.console_pad_last_held.store(0, Relaxed);
+    }
+    let stick = e.mem.u16(PAD_CURRENT + 0xe) as i16;
+    let size = i32::from(stick).abs();
+    if size > 4000 {
+        let now = e.mem.u32(MS_PASSED);
+        if now >= prints.console_stick_next_repeat.load(Relaxed) {
+            let step = if size < 12000 {
+                50
+            } else if size < 24000 {
+                20
+            } else {
+                10
+            };
+            prints
+                .console_stick_next_repeat
+                .store(now.wrapping_add(step), Relaxed);
+            let amount = if stick > 0 { -1i32 } else { 1 };
+            e.call(CONSOLE_SCROLL, &args![console, amount as u32]);
+            e.call(CONSOLE_REFRESH_OUTPUT, &args![console]);
+        }
+    } else {
+        prints.console_stick_next_repeat.store(0, Relaxed);
+    }
+    console
+}
+
+/// xNVSE's `OSInputGlobals::IsDebounceMenuMode`: bit 3 of the input's override flags.
+pub fn debounce_menu_mode(e: &mut Engine) -> bool {
+    let input = e.global::<u32>(INPUT_GLOBALS);
+    e.mem.u16(input.wrapping_add(INPUT_OVERRIDE_FLAGS)) & 8 != 0
+}
+
+/// xNVSE's `OSInputGlobals::SetDebounceMenuMode(true)`: sets bit 3 of the input's override flags.
+pub fn set_debounce_menu_mode(e: &mut Engine) {
+    let input = e.global::<u32>(INPUT_GLOBALS);
+    let at = input.wrapping_add(INPUT_OVERRIDE_FLAGS);
+    let flags = e.mem.u16(at);
+    e.mem.set_u16(at, flags | 8);
+}
+
 /// The player (`PlayerCharacter *`).
 const PLAYER: u32 = 0x011d_ea3c;
 

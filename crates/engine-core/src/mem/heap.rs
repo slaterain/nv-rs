@@ -113,7 +113,7 @@ const NONE: u32 = u32::MAX;
 
 /// The block sizes of the exe's memory pools, as `MemoryManager::SpecifyPools` (00866770) makes
 /// them ("Pool 8" to "Pool 596").
-const POOLS: [u32; 37] = [
+pub(super) const POOLS: [u32; 37] = [
     8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 64, 72, 76, 80, 92, 96, 100, 104, 120, 128,
     160, 192, 200, 208, 240, 256, 272, 288, 400, 448, 480, 508, 576, 596,
 ];
@@ -172,6 +172,45 @@ const fn pool_table() -> [u16; (POOL_TABLE_END / 4 + 1) as usize] {
 
 /// The exe's pool for a request, by its size rounded up to 4 / 4 (see [`pool_table`]).
 static POOL_OF: [u16; (POOL_TABLE_END / 4 + 1) as usize] = pool_table();
+
+/// How many pools the exe makes ([`POOLS`]).
+pub(super) const POOL_COUNT: usize = POOLS.len();
+
+/// [`POOL_INDEX`]'s entries: [`pool_table`]'s pools as their index in [`POOLS`] plus 1 (0: none).
+const fn pool_index_table() -> [u8; (POOL_TABLE_END / 4 + 1) as usize] {
+    let pools = pool_table();
+    let mut table = [0u8; (POOL_TABLE_END / 4 + 1) as usize];
+    let mut i = 0;
+    while i < table.len() {
+        let mut p = 0;
+        while p < POOLS.len() {
+            if pools[i] as u32 == POOLS[p] {
+                table[i] = p as u8 + 1;
+            }
+            p += 1;
+        }
+        i += 1;
+    }
+    table
+}
+
+/// For each request size rounded up to 4 (/ 4), the index in [`POOLS`] of the pool it is served
+/// from, plus 1 (0: none).
+static POOL_INDEX: [u8; (POOL_TABLE_END / 4 + 1) as usize] = pool_index_table();
+
+/// The pool (its index in [`POOLS`]) the exe's `MemoryManager::Allocate` (00aa3e40) serves a
+/// request of `asked` bytes from ([`pool_size`]), or none (its general heap): the thread heap's
+/// pools (`mem/pools.rs`).
+#[inline]
+pub(super) fn pool_index(asked: u32) -> Option<usize> {
+    if asked > POOL_TABLE_END {
+        return None;
+    }
+    match POOL_INDEX[(asked.max(8) as usize + 3) >> 2] {
+        0 => None,
+        i => Some(usize::from(i) - 1),
+    }
+}
 
 /// A request of `asked` bytes in the exe's pools: the block size of the pool the exe's
 /// `MemoryManager::Allocate` (00aa3e40) serves it from (its size rounded up to 4, at least 8,
@@ -1031,6 +1070,16 @@ impl Heap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pool_index_names_the_pool_pool_size_answers() {
+        for asked in 0..=0x400u32 {
+            match pool_index(asked) {
+                Some(i) => assert_eq!(POOLS[i], pool_size(asked), "{asked}"),
+                None => assert!(!is_pool(pool_size(asked)), "{asked}"),
+            }
+        }
+    }
 
     /// The bins: one per size below 512, then 32 per power of two, in increasing order of size.
     #[test]
