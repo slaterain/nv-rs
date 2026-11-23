@@ -166,3 +166,26 @@ fn s0351_the_faster_title_menu_skips_the_intro_too() {
         );
     }
 }
+
+/// Rows S0382 and S0377 at the install: the VATS target list's new Stewie seam (`0x7F5420`) is
+/// answered once Tweaks is installed (xNVSE's raw shift states, here both clear: 0; the handler is
+/// S0022.03's text seam's), and the two sub-settings read there take VNV's values with no INI
+/// (`bOnlyWhenNPCSpeaks` 1, `bHideFriendliesByDefault` 0) and follow an INI that says otherwise.
+#[test]
+fn s0382_s0377_the_vats_seam_and_the_two_sub_settings() {
+    let mut e = super::engine(None);
+    assert_eq!(e.site(0x007f_5420, &[]), None, "not before the install");
+    crate::set_on(&mut e, true);
+    crate::install(&mut e);
+    assert_eq!(e.site(0x007f_5420, &[]), Some(0));
+    assert!(e.stewie_cursor_only_speaking());
+    assert!(!e.stewie_vats_friendlies_hidden());
+
+    let ini =
+        b"[Dialog Hide Mouse]\r\nbOnlyWhenNPCSpeaks=0\r\n[VATS]\r\nbHideFriendliesByDefault=1\r\n";
+    let mut e = super::engine(Some(&ini[..]));
+    crate::set_on(&mut e, true);
+    crate::install(&mut e);
+    assert!(!e.stewie_cursor_only_speaking());
+    assert!(e.stewie_vats_friendlies_hidden());
+}
