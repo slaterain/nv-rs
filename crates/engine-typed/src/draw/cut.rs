@@ -773,10 +773,22 @@ pub fn cut_for_thread(
     // A draw that copies the water reflection borrows and returns through the texture manager's pool (`00b6e110`,
     // `00b6da10`), as main's passes after the cut do, with no lock and no copy of its own: such a job keeps every join
     // point (`engine_core::draw_thread::keep_joins`), so main's pool users wait for it as without the late joins.
-    if packet::copy_reflection(e, acc) {
+    if uses_texture_pool(e, acc) {
         engine_core::draw_thread::keep_joins(e);
     }
     capture::detach(e)
+}
+
+/// Whether the cut's job will borrow from or give back to the texture manager's pool: render mode 0's finish
+/// (`00b65c60`, `super::drivers::second_half`) borrows the water reflection's copy when +0x38 is set and a pass of the
+/// types 0x288..0x2ce is listed, and gives the kept copy back whenever +0x38 is set (`00b6da10` does nothing with
+/// none). The world accumulator has +0x38 set in every frame of the short route, indoors too: a frame with no such
+/// pass listed and no copy kept touches no pool and passes the late joins. The first half draws no type of that range,
+/// so the lists answer at the cut as they will in the second half. Read on main with the packet still held.
+pub(crate) fn uses_texture_pool(e: &mut Engine, acc: Ptr<BSShaderAccumulator>) -> bool {
+    packet::copy_reflection(e, acc)
+        && (e.global::<u32>(super::own::REFLECTION_COPY) != 0
+            || super::drivers::has_listed_pass(e, acc, 0x288, 0x2ce))
 }
 
 // Export E2.
@@ -1096,5 +1108,45 @@ mod tests {
         take_geometry_values(&mut e, geometry);
         let _ = capture::word(&e, leaves, 0);
         assert_eq!(capture::end(&mut e).misses, 1);
+    }
+
+    /// Only a job that will borrow or give back the water reflection's copy keeps the late joins (#963, review finding
+    /// 5; the stepped gate of 2026-11-23 found +0x38 set in every frame, so keeping the joins on +0x38 alone passed no
+    /// late point all route long): +0x38 set with no pass of the types 0x288..0x2ce listed and no copy kept touches no
+    /// pool; a listed water pass or a kept copy does; with +0x38 clear neither is borrowed nor given back.
+    #[test]
+    fn only_a_job_that_borrows_or_gives_back_the_reflection_keeps_the_joins() {
+        use crate::shader::layout::BSBatchRenderer;
+        let mut e = Engine::new();
+        let acc = e.mem.alloc(0x1ac);
+        let renderer = e.mem.alloc(0x40);
+        e.mem
+            .set_u32(acc + BSShaderAccumulator::uiBatchRendererCount.off, 1);
+        e.mem
+            .set_u32(acc + BSShaderAccumulator::pBatchRenderer.off, renderer);
+        // The active list: its inline head (type 0x25c, outside the range) and one node.
+        let head = renderer + BSBatchRenderer::kActivePassIndexList.off;
+        let node = e.mem.alloc(8);
+        e.mem.set_u16(head, 0x25c);
+        e.mem.set_u32(head + 4, node);
+        e.mem.set_u16(node, 0x2cf);
+        let reflect = acc + BSShaderAccumulator::ucCopyReflection.off;
+        let acc = Ptr::new(acc);
+        e.mem.set_u8(reflect, 1);
+        e.mem.set_u32(super::super::own::REFLECTION_COPY, 0);
+        assert!(
+            !uses_texture_pool(&mut e, acc),
+            "+0x38 set, no water pass listed, no copy kept"
+        );
+        e.mem.set_u16(node, 0x28a);
+        assert!(uses_texture_pool(&mut e, acc), "a water pass listed");
+        e.mem.set_u8(reflect, 0);
+        assert!(!uses_texture_pool(&mut e, acc), "+0x38 clear");
+        e.mem.set_u16(node, 0x2cf);
+        e.mem.set_u8(reflect, 1);
+        e.mem
+            .set_u32(super::super::own::REFLECTION_COPY, 0x0040_0000);
+        assert!(uses_texture_pool(&mut e, acc), "a copy kept");
+        e.mem.set_u32(super::super::own::REFLECTION_COPY, 0);
     }
 }

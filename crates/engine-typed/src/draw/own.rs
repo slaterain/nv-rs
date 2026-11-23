@@ -492,7 +492,7 @@ const PASS_TREE_ASSIGN: u32 = 0x0066_b0d0;
 const CREATE_RENDER_PASS_TREE: u32 = 0x00b6_3420;
 /// The water reflection's copy (`011f943c`), the texture manager (`011f91a8`), the image-space
 /// manager (`011f91ac`).
-const REFLECTION_COPY: u32 = 0x011f_943c;
+pub(crate) const REFLECTION_COPY: u32 = 0x011f_943c;
 const TEXTURE_MANAGER: u32 = 0x011f_91a8;
 const IMAGE_SPACE_MANAGER: u32 = 0x011f_91ac;
 /// The renderer's clear (`00b6b790`), the texture manager's borrow (`00b6e110`, five words) and
