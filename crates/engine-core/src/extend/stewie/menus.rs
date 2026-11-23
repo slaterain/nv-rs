@@ -326,3 +326,8 @@ pub const NO_RED_CROSSHAIR_ON_INVISIBLE: Row = tweak(15);
 /// bHideFriendliesByDefault`; the VATS target list's process type test at `0x7F5420`): holding shift
 /// on entering VATS leaves out the actors that are not hostile.
 pub const VATS_SHIFT_SKIPS_FRIENDLIES: Row = tweak(16);
+/// S0539 `patchClickingShowsFullTerminalText` (`[Tweaks] bClickingShowsTerminalText`; `ComputersMenu::DoClick`
+/// at `0x757FDA` and the menu's left click press slot at `0x107200C`): pressing the mouse on a
+/// terminal's screen shows the rest of a note page, and a click only turns the page once it is all
+/// shown.
+pub const TERMINAL_CLICK_SHOWS_TEXT: Row = tweak(17);

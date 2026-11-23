@@ -110,6 +110,7 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
     ("S0407", "bNonSelectablePlayerInConsole", tweak(3)),
     ("S0467", "bSkipSkillMenuIfNoPointsToAssign", tweak(12)),
     ("S0482", "bDontAllowConsoleBeforeInitIsDone", tweak(4)),
+    ("S0539", "bClickingShowsFullTerminalText", tweak(17)),
     ("S0550", "bHideRedCrosshairOnDistantInvisibleTargets", tweak(15)),
     ("S0556", "bNoCharacterNameLimit", tweak(5)),
     ("S0592", "bFasterEnterLockPickMenu", tweak(6)),

@@ -2910,7 +2910,15 @@ fn idle_click(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut IdleState
         e.set(this, InterfaceManager::pDragOverTileTarget, tile);
         e.set(this, InterfaceManager::pDragOverTileMenu, menu);
         let id = tile_menu_id(e, tile);
-        e.vcall(menu, 8, &args![id, tile]);
+        if e.stewie(engine_core::extend::stewie::TERMINAL_CLICK_SHOWS_TEXT)
+            && super::computersmenu::is_computers_menu(e, menu)
+        {
+            // lStewieAl's Tweaks' S0539: its `ComputersMenuHandleLeftClickPress` in the terminal
+            // menu's slot +8 (`0x107200C`).
+            super::computersmenu::stewie_left_click_press(e, menu, id as u32);
+        } else {
+            e.vcall(menu, 8, &args![id, tile]);
+        }
         let tile = e.get(this, InterfaceManager::pOverTileTarget);
         if tile != 0 && e.call(TILE_IS_TRUE, &args![tile, 0xfe9u32]).bool() {
             idle_start_drag(e, this, tile);

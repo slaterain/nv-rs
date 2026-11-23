@@ -634,6 +634,14 @@ pub const ROWS: &[Row] = &[
         summary: "the console does not open during the game's first load",
     },
     Row {
+        bit: stewie::TERMINAL_CLICK_SHOWS_TEXT,
+        function: "patchClickingShowsFullTerminalText",
+        plan: "S0539",
+        key: "bClickingShowsFullTerminalText",
+        tweaks: Some(("Tweaks", "bClickingShowsTerminalText")),
+        summary: "pressing the mouse on a terminal shows the whole note page before it turns",
+    },
+    Row {
         bit: stewie::NO_RED_CROSSHAIR_ON_INVISIBLE,
         function: "patchHideRedCrosshairOnDistantInvisibleTargets",
         plan: "S0550",

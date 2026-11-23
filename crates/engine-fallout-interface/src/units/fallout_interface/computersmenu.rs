@@ -749,6 +749,106 @@ pub fn computers_menu_close(e: &mut Engine) {
     e.call(MENU_START_FADE_OUT, &args![me]);
 }
 
+/// `DoClick`'s screen (id 2) with no note pending: hides tile +0x30, shows tile +0x2c and either
+/// redraws the terminal (`007586e0`, after a note: `011d93c0` set) or, when the prompt (tile
+/// +0x44) is hidden, hides tile +0x64 and gives the prompt's string and visibility values to the
+/// text manager, then redisplays the items (`ForEach(Redisplay)`, flag +0xc1). Answers whether it
+/// redisplayed (Tweaks' S0539 clears the note flag there).
+fn back_to_the_terminal(e: &mut Engine, this: u32) -> bool {
+    let hidden = word(e, this, 0x30);
+    set_int(e, hidden, TRAIT_VISIBLE, 0);
+    let shown = word(e, this, 0x2c);
+    set_int(e, shown, TRAIT_VISIBLE, 1);
+    if e.global::<u8>(NOTE_SHOWN_011D93C0) != 0 {
+        fn_007586e0(e, Ptr::new(this), 0);
+        return false;
+    }
+    let prompt = word(e, this, 0x44);
+    if !is_visible(e, prompt) {
+        let cursor = word(e, this, 0x64);
+        set_int(e, cursor, TRAIT_VISIBLE, 0);
+        let prompt = word(e, this, 0x44);
+        let value = get_value(e, prompt, TRAIT_STRING);
+        let prompt = word(e, this, 0x44);
+        let visible = get_value_q(e, prompt, TRAIT_VISIBLE);
+        let text = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, value));
+        add_text(e, this, text, value, visible, -1);
+    }
+    e.call(
+        LIST_BOX_FOR_EACH,
+        &args![
+            this.wrapping_add(0x68),
+            0x0075_9560u32,
+            0u32,
+            0x7fff_ffffu32
+        ],
+    );
+    e.mem.set_u8(this.wrapping_add(0xc1), 1);
+    true
+}
+
+/// xNVSE's input globals (`OSInputGlobals::GetSingleton`) and `GetMouseState` (`00a23a50`; the
+/// button, then the state: 0 the left button, 2 `isDepressed`).
+const INPUT_GLOBALS_011F35CC: u32 = 0x011f_35cc;
+const MOUSE_STATE_00A23A50: u32 = 0x00a2_3a50;
+
+/// lStewieAl's Tweaks' S0539 `ComputerTryAdvancePage` (`[Tweaks] bClickingShowsTerminalText`, in
+/// `DoClick` at `0x757FDA`): yes, with nothing else done, when the left button was just let go
+/// (the press did the work, [`stewie_left_click_press`]) or the text manager's first text (+0xe8,
+/// its first node's data at +8) still has text to show (+0x29); else a pending note (+0xbc) shows
+/// its next page (`007590c0`) and yes; else no (back to the terminal). A text node without data
+/// (Tweaks reads through it unguarded) has nothing left to show.
+fn stewie_try_advance_page(e: &mut Engine, this: u32) -> bool {
+    let input = e.mem.u32(INPUT_GLOBALS_011F35CC);
+    if e.call(MOUSE_STATE_00A23A50, &args![input, 0u32, 2u32]).bool() {
+        return true;
+    }
+    let first = first_text_node(e, this);
+    if first != 0 {
+        let text = e.mem.u32(first + 8);
+        if text != 0 && e.mem.u8(text + 0x29) != 0 {
+            return true;
+        }
+    }
+    if word(e, this, 0xbc) != 0 {
+        fn_007590c0(e, Ptr::new(this), 0);
+        return true;
+    }
+    false
+}
+
+/// The text manager's (+0xe8) first node (Tweaks' `hackingTexts->Head()`); none without a manager.
+fn first_text_node(e: &Engine, this: u32) -> u32 {
+    let manager = word(e, this, 0xe8);
+    if manager == 0 {
+        0
+    } else {
+        e.mem.u32(manager)
+    }
+}
+
+/// lStewieAl's Tweaks' S0539 `ComputersMenuHandleLeftClickPress` (`[Tweaks]
+/// bClickingShowsTerminalText`, written into the menu's virtual slot +8 at `0x107200C`, which the
+/// exe leaves empty): pressing the left button on the screen (id 2) with no text being shown
+/// shows a pending note's next page (`007590c0`), or goes back to the terminal
+/// ([`back_to_the_terminal`]), clearing the note flag `011d93c0` when it redisplayed. Other ids:
+/// nothing.
+pub fn stewie_left_click_press(e: &mut Engine, this: u32, id: u32) {
+    if id != 2 || first_text_node(e, this) != 0 {
+        return;
+    }
+    if word(e, this, 0xbc) != 0 {
+        fn_007590c0(e, Ptr::new(this), 0);
+    } else if back_to_the_terminal(e, this) {
+        e.set_global(NOTE_SHOWN_011D93C0, 0u8);
+    }
+}
+
+/// Whether `menu` is a terminal menu (its vtable `01072004`), for S0539's virtual slot.
+pub fn is_computers_menu(e: &Engine, menu: u32) -> bool {
+    e.mem.u32(menu) == COMPUTERS_MENU_VTABLE
+}
+
 // Translated from 00757f70 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `ComputersMenu::DoClick` (Xbox PDB; `thiscall`, `RET 8`: id, tile). A tile of 0 with an
 /// id in 0..16 becomes that slot's tile. Id 2 (the screen) finishes the text, then shows the
@@ -771,39 +871,18 @@ pub fn computers_menu_do_click(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
     let mut note_shown = false;
     if id == 2 {
         computers_menu_animating_text_manager_force_finish(e, text_manager(e, this));
-        if word(e, this, 0xbc) != 0 {
+        if e.stewie(engine_core::extend::stewie::TERMINAL_CLICK_SHOWS_TEXT) {
+            // lStewieAl's Tweaks' S0539 (`ComputerClickShouldAdvancePageHook` at `0x757FDA`).
+            if stewie_try_advance_page(e, this) {
+                note_shown = true;
+            } else {
+                back_to_the_terminal(e, this);
+            }
+        } else if word(e, this, 0xbc) != 0 {
             fn_007590c0(e, Ptr::new(this), 0);
             note_shown = true;
         } else {
-            let hidden = word(e, this, 0x30);
-            set_int(e, hidden, TRAIT_VISIBLE, 0);
-            let shown = word(e, this, 0x2c);
-            set_int(e, shown, TRAIT_VISIBLE, 1);
-            if e.global::<u8>(NOTE_SHOWN_011D93C0) != 0 {
-                fn_007586e0(e, Ptr::new(this), 0);
-            } else {
-                let prompt = word(e, this, 0x44);
-                if !is_visible(e, prompt) {
-                    let cursor = word(e, this, 0x64);
-                    set_int(e, cursor, TRAIT_VISIBLE, 0);
-                    let prompt = word(e, this, 0x44);
-                    let value = get_value(e, prompt, TRAIT_STRING);
-                    let prompt = word(e, this, 0x44);
-                    let visible = get_value_q(e, prompt, TRAIT_VISIBLE);
-                    let text = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, value));
-                    add_text(e, this, text, value, visible, -1);
-                }
-                e.call(
-                    LIST_BOX_FOR_EACH,
-                    &args![
-                        this.wrapping_add(0x68),
-                        0x0075_9560u32,
-                        0u32,
-                        0x7fff_ffffu32
-                    ],
-                );
-                e.mem.set_u8(this.wrapping_add(0xc1), 1);
-            }
+            back_to_the_terminal(e, this);
         }
         e.call(SOUND_HANDLE_PLAY, &args![this.wrapping_add(0xdc), 0u32]);
     } else if id == 0xd && (word(e, this, 0xb0) as i32) < 2 {
@@ -3861,5 +3940,115 @@ mod n053_tests {
         assert_eq!(e.call(0x0075_b020, &args![this]).i32(), 5);
         assert_eq!(e.global::<u32>(NUM_FILTERED_TRAIT_011D93EC), 0x44);
         assert_eq!(calls(&e, TILE_GET_FLOAT), vec![vec![0x6100, 0x44]]);
+    }
+
+    /// S0539's set-up: the input globals, the left button's `isDepressed` answer (`00a23a50`
+    /// with 0, 2) and, with `remaining`, a first text in the text manager with text left (+0x29).
+    fn s0539_menu(e: &mut Engine, released: bool, remaining: Option<bool>) -> u32 {
+        let this = new_menu(e);
+        if !e.mem.is_mapped(INPUT_GLOBALS_011F35CC) {
+            e.map(INPUT_GLOBALS_011F35CC & !0xfff, 0x1000);
+        }
+        e.set_global(INPUT_GLOBALS_011F35CC, 0x7700u32);
+        e.register_double(MOUSE_STATE_00A23A50, move |_, a| {
+            u32::from(a[..3] == [0x7700, 0, 2] && released).into_ret()
+        });
+        if let Some(remaining) = remaining {
+            let text = e.mem.alloc(0x2c);
+            e.mem.set_u8(text + 0x29, u8::from(remaining));
+            let node = e.mem.alloc(0xc);
+            e.mem.set_u32(node + 8, text);
+            let manager = e.mem.u32(this + 0xe8);
+            e.mem.set_u32(manager, node);
+            // The force finish's iterator step (`TEXT_LIST_STEP`): the node's data slot, the
+            // iterator moved to the next node (+0).
+            e.register(TEXT_LIST_STEP, |e, a| {
+                let node = e.mem.u32(a[1]);
+                let next = e.mem.u32(node);
+                e.mem.set_u32(a[1], next);
+                (node + 8).into_ret()
+            });
+        }
+        e.register(TILE_IS_VISIBLE, |_, _| 1u32.into_ret());
+        this
+    }
+
+    /// Row S0539 (lStewieAl's Tweaks' `ComputerClickShouldAdvancePageHook`, `0x757FDA`): with the
+    /// row on, a click on the screen does nothing but its sound when the left button was just let
+    /// go or the first text still has text to show (and the note flag is kept); otherwise, and
+    /// with the row off, it goes back to the terminal's items.
+    #[test]
+    fn s0539_a_click_on_the_screen_waits_for_the_text() {
+        // (row, the left button just let go, the first text's remaining flag, back to the items)
+        for (on, released, remaining, back) in [
+            (false, true, Some(true), true),
+            (true, true, None, false),
+            (true, false, Some(true), false),
+            (true, false, Some(false), true),
+            (true, false, None, true),
+        ] {
+            let mut e = engine();
+            let this = s0539_menu(&mut e, released, remaining);
+            e.set_stewie(engine_core::extend::stewie::TERMINAL_CLICK_SHOWS_TEXT, on);
+            e.call_log = Some(vec![]);
+            e.call(0x0075_7f70, &args![this, 2u32, 0u32]);
+            let case = format!("{on} {released} {remaining:?}");
+            let shown: Vec<Vec<u32>> = if back {
+                vec![
+                    vec![0x6020, TRAIT_VISIBLE, 0],
+                    vec![0x6010, TRAIT_VISIBLE, 1],
+                ]
+            } else {
+                vec![]
+            };
+            assert_eq!(calls(&e, TILE_SET_INT), shown, "{case}");
+            assert_eq!(
+                calls(&e, LIST_BOX_FOR_EACH).len(),
+                usize::from(back),
+                "{case}"
+            );
+            assert_eq!(
+                calls(&e, MOUSE_STATE_00A23A50).len(),
+                usize::from(on),
+                "{case}"
+            );
+            assert_eq!(calls(&e, SOUND_HANDLE_PLAY), vec![vec![this + 0xdc, 0]], "{case}");
+        }
+        // Waiting keeps the note flag (a note counts as shown).
+        let mut e = engine();
+        let this = s0539_menu(&mut e, true, None);
+        e.set_stewie(engine_core::extend::stewie::TERMINAL_CLICK_SHOWS_TEXT, true);
+        e.set_global(NOTE_SHOWN_011D93C0, 1u8);
+        e.call(0x0075_7f70, &args![this, 2u32, 0u32]);
+        assert_eq!(e.global::<u8>(NOTE_SHOWN_011D93C0), 1);
+    }
+
+    /// Row S0539 (lStewieAl's Tweaks' `ComputersMenuHandleLeftClickPress`, slot +8 at
+    /// `0x107200C`): pressing the left button on the screen (id 2) with no text being shown goes
+    /// back to the terminal's items; with a text, or another id, nothing.
+    #[test]
+    fn s0539_pressing_on_the_screen_goes_back_to_the_items() {
+        for (id, remaining, back) in [(2u32, None, true), (2, Some(false), false), (3, None, false)] {
+            let mut e = engine();
+            let this = s0539_menu(&mut e, false, remaining);
+            e.call_log = Some(vec![]);
+            stewie_left_click_press(&mut e, this, id);
+            let case = format!("{id} {remaining:?}");
+            assert_eq!(
+                calls(&e, LIST_BOX_FOR_EACH).len(),
+                usize::from(back),
+                "{case}"
+            );
+            assert_eq!(e.mem.u8(this + 0xc1), u8::from(back), "{case}");
+            // The press makes no sound.
+            assert!(calls(&e, SOUND_HANDLE_PLAY).is_empty(), "{case}");
+        }
+        // The slot is the terminal menu's alone (its vtable).
+        let mut e = Engine::new();
+        let menu = e.mem.alloc(4);
+        e.mem.set_u32(menu, COMPUTERS_MENU_VTABLE);
+        assert!(is_computers_menu(&e, menu));
+        e.mem.set_u32(menu, LIST_BOX_VTABLE);
+        assert!(!is_computers_menu(&e, menu));
     }
 }
