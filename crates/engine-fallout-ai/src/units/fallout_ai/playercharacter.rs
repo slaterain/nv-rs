@@ -20912,7 +20912,7 @@ mod tests {
             let this = player(&mut e);
             let actor = e.mem.alloc(0x200);
             e.mem.set_u8(actor + 0x18d, u8::from(teammate));
-            e.register(0x0096_7a00, move |_, _| int(actor));
+            e.register_double(0x0096_7a00, move |_, _| int(actor));
             let expected = if none { 0 } else { actor };
             assert_eq!(
                 bumped_actor(&mut e, this),
