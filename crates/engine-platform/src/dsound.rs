@@ -8540,8 +8540,8 @@ mod tests {
         };
         let part = 8192..8704usize;
         let p = lock_at(&mut e, 8192, 512);
-        for (i, k) in part.clone().enumerate() {
-            want[k] = want[k].wrapping_add(1 + i as u8);
+        for k in part.clone() {
+            want[k] ^= 0x5a;
         }
         e.mem.write(p, &want[part.clone()]);
         let unlock_at = |e: &mut Engine| {
