@@ -122,6 +122,8 @@ struct Packet {
     /// The run that opened it (the kernel table's address): another run's engine on this thread reads guest
     /// memory.
     run: usize,
+    /// Its place in [`OPEN`] and [`OPEN_RUNS`], given back by [`end`] or when the packet is dropped without one.
+    opened: Opened,
     /// Each object's first range.
     objects: AddrMap<u32, u32>,
     ranges: Vec<Range>,
@@ -339,6 +341,30 @@ fn note_closed(run: usize) {
     }
 }
 
+/// A packet's place in [`OPEN`] and [`OPEN_RUNS`] ([`begin`]), given back once: by [`end`], or when the packet is
+/// dropped without it (a packet left open when its thread ends: tests that stop before the join). Without that a run
+/// would stay noted after its engine is gone, and a later engine made at the same address (the run is the kernel
+/// table's address) would be taken as beside a packet ([`beside`]).
+struct Opened {
+    run: usize,
+    armed: bool,
+}
+
+impl Opened {
+    fn close(&mut self) {
+        if std::mem::take(&mut self.armed) {
+            OPEN.fetch_sub(1, Relaxed);
+            note_closed(self.run);
+        }
+    }
+}
+
+impl Drop for Opened {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
 /// A typed setter's "already the cached value, skip" decision: `same` is what its cache says. Beside a packet
 /// ([`beside`]) the cache is main's value at the cut, not what the draw left (which serially comes first), so the
 /// setter sends and caches its value anyway: the device gets it after the draw's commands as serially, and the
@@ -369,6 +395,11 @@ pub fn begin(e: &Engine) -> bool {
             served: false,
             spare: None,
             run: run(e),
+            // Counted in OPEN and OPEN_RUNS below, before anything can drop it.
+            opened: Opened {
+                run: run(e),
+                armed: true,
+            },
             objects: AddrMap::default(),
             ranges: Vec::new(),
             order: Vec::new(),
@@ -905,13 +936,12 @@ pub fn end(e: &mut Engine) -> Report {
             None
         }
     });
-    let Some(packet) = packet else {
+    let Some(mut packet) = packet else {
         return Report::default();
     };
     PAUSED.with(|f| f.set(false));
     HOLDS.with(|h| h.set(false));
-    OPEN.fetch_sub(1, Relaxed);
-    note_closed(packet.run);
+    packet.opened.close();
     give_lists_back(e, &packet);
     let mut written = packet.written;
     if let Some(scribble) = packet.scribble {
@@ -1904,6 +1934,25 @@ mod tests {
             e.mem.set_u32(at + 4 * i, i + 1);
         }
         at
+    }
+
+    /// A packet dropped without its join gives its run back: a later engine made at the same address (the run is the
+    /// kernel table's address) is never taken as beside it. Tests that stop before the join leave their packets so,
+    /// and on GitHub one such run made another test's new engine "beside" a packet.
+    #[test]
+    fn a_packet_dropped_without_its_join_gives_its_run_back() {
+        let mut e = Engine::new();
+        let id = run(&e);
+        assert!(begin(&e));
+        let packet = detach(&e).expect("the packet handed over");
+        assert!(open_for(id));
+        drop(packet);
+        assert!(!open_for(id), "the run given back");
+        // Opened again and closed by its join, as before.
+        assert!(begin(&e));
+        assert!(open_for(id));
+        let _ = end(&mut e);
+        assert!(!open_for(id), "the join gives it back");
     }
 
     #[test]
