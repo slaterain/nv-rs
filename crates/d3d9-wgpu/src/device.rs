@@ -4903,8 +4903,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// not depend on the draws around it except where two surfaces meet at exactly the same depth:
     /// the depth test LESS or LESSEQUAL with depth writes, no blending (so never a see-through,
     /// fading or decal draw), no stencil, no occlusion count open. With the registers from
-    /// storage only.
-    fn may_hold(&self, depth: bool) -> bool {
+    /// storage only. Sorted ([`Device::sort_draws`]), also only a draw that writes every channel
+    /// of every bound colour target (`written`: the targets its pixel shader writes,
+    /// [`Device::writes_whole_colour`]).
+    fn may_hold(&self, depth: bool, written: u32) -> bool {
         let r = &self.st.rs;
         self.merge_draws
             && self.storage_regs
@@ -4916,6 +4918,36 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             && r[rs::ALPHABLENDENABLE] == 0
             && r[rs::STENCILENABLE] == 0
             && self.counting.is_none()
+            && (!self.sort_draws || self.writes_whole_colour(written))
+    }
+
+    /// Whether the draw about to be given writes every channel of every bound colour target
+    /// (`written`: the targets its pixel shader writes). A draw that writes depth but leaves some
+    /// colour (a depth-only draw, one whose colour writes are masked) may not be sorted past other
+    /// draws: drawn ahead of a draw it lies in front of on another surface, it would hide that
+    /// draw's colour, which the game's order let show. A pass with no colour target at all holds
+    /// only depth writes, whose order does not matter.
+    fn writes_whole_colour(&self, written: u32) -> bool {
+        const MASKS: [usize; 4] = [
+            rs::COLORWRITEENABLE,
+            rs::COLORWRITEENABLE1,
+            rs::COLORWRITEENABLE2,
+            rs::COLORWRITEENABLE3,
+        ];
+        let Some((key, _, _)) = self.last_pipeline.as_ref() else {
+            return false;
+        };
+        key.colours.iter().enumerate().all(|(i, c)| match c {
+            None => true,
+            Some((_, opaque)) => {
+                let whole = if *opaque {
+                    wgpu::ColorWrites::COLOR
+                } else {
+                    wgpu::ColorWrites::ALL
+                };
+                written & (1 << i) != 0 && state::write_mask(self.st.rs[MASKS[i]], *opaque) == whole
+            }
+        })
     }
 
     /// Holds a draw of `key` with its blocks: with the held draws of its key when they are the
@@ -5824,7 +5856,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // Held to be drawn with the other draws of its key ([`Device::may_hold`]), or given to the
         // pass now, after the draws held before it.
         let holdable = up.is_none() && copies.iter().all(Option::is_none);
-        let hold = holdable && self.may_hold(depth.is_some());
+        let hold = holdable && self.may_hold(depth.is_some(), ps.sig.colours);
         let after = holdable && !hold && self.may_hold_after(depth.is_some());
         if !hold && !after {
             self.emit_held();

@@ -6864,3 +6864,42 @@ fn merged_draws_in_place_keep_which_of_two_coplanar_surfaces_shows() {
         "the first three K1 draws as one, K2, the last K1 on its own"
     );
 }
+
+/// Sorted (`NV_WGPU_SORT_DRAWS`), a draw that writes depth but no colour is not held: moved past
+/// another surface's draw it would hide that draw's colour or let it show where the game's order
+/// did not. Of the pairs colour A then depth-only D in front of it (column 1) and depth-only D
+/// then colour A behind it (column 3), one would differ whichever of the two keys the sort put
+/// first; the pixels are those of one draw each.
+#[test]
+fn sorted_draws_keep_depth_only_draws_in_place() {
+    const COLORWRITEENABLE: u32 = 168;
+    let script = |g: &mut Gpu, _: &StripDraw| {
+        // Column 1: A (the first strip), then D (the second strip, no colour) in front of it.
+        strip_at(g, 1, 0.0, [1.0, 0.0, 0.0, 1.0]);
+        strip_stream(g, 96);
+        g.state(COLORWRITEENABLE, 0);
+        strip_at(g, 0, -0.25, [0.0, 1.0, 0.0, 1.0]);
+        // Column 3: D in front first, then A behind it.
+        strip_at(g, 2, -0.25, [0.0, 1.0, 0.0, 1.0]);
+        g.state(COLORWRITEENABLE, 0xF);
+        strip_stream(g, 0);
+        strip_at(g, 3, 0.0, [1.0, 0.0, 0.0, 1.0]);
+    };
+    let Some((off, _, _)) = held_script(false, false, &script) else {
+        return;
+    };
+    assert_eq!(
+        off[1],
+        [0, 0, 255, 255],
+        "column 1: A's red (D wrote no colour)"
+    );
+    assert_eq!(off[3][2], 0, "column 3: no red (A behind D's depth)");
+    let (on, held, mismatches) = held_script(true, true, &script).expect("the adapter, as above");
+    assert_eq!(on, off, "the pixels");
+    assert_eq!(mismatches, 0, "each held draw drawn with its own state");
+    assert_eq!(
+        held,
+        (2, 2),
+        "the two colour draws held, each on its own; the depth-only draws given in place"
+    );
+}
