@@ -407,6 +407,114 @@ fn the_same_size_copies_exactly_and_a_stretch_blends_only_at_the_seam() {
     }
 }
 
+/// The game's brightness ([`d3d9_wgpu::ramp`]), through the whole backend. With no ramp set the
+/// window's frame is the back buffer's copy. `SetGammaRamp` with the ramp the game sets at the
+/// slider's darkest step (`fGamma` 1.4) puts the next frame shown through it, each colour by its
+/// own entry, while the back buffer (its capture, what F12 reports read) stays the game's own
+/// picture. Direct3D 9's identity ramp (the game's at `fGamma` 1.0) gives the plain copy back
+/// byte for byte. Stretched into a wider window through the brightest step (0.6), each half is
+/// its colour through the ramp up to the seam. The brightness kept for the F12 report follows
+/// the ramps (none, 1.40, none).
+#[test]
+fn the_games_brightness_is_shown_in_the_window_and_an_identity_ramp_changes_nothing() {
+    use d3d9_wgpu::ramp::{games_ramp, level, menu_gammas, shown, Ramp};
+    let Some(mut g) = Rig::new((32, 24), (32, 24)) else {
+        return;
+    };
+    let (left, right) = (0xFF10_2030u32, 0xFFF0_D0B0u32);
+    let two = |g: &mut Rig, frame| {
+        g.clear(Some([0, 0, 16, 24]), left);
+        g.clear(Some([16, 0, 32, 24]), right);
+        g.present(frame);
+    };
+    let set = |g: &mut Rig, ramp: &Ramp| {
+        let bytes = ramp.to_bytes();
+        g.b.execute(Cmd::SetGammaRamp {
+            device: DEVICE,
+            swap_chain: 0,
+            flags: 1,
+            ramp: Data::Bytes(&bytes),
+        });
+    };
+    let rgb =
+        |p: &[u8]| -> Vec<[u8; 3]> { p.chunks_exact(4).map(|c| [c[0], c[1], c[2]]).collect() };
+    // Whether `seen` (B, G, R) is `colour` through `ramp`: each its own colour's entry's level.
+    let through = |ramp: &Ramp, colour: u32, seen: [u8; 3]| -> bool {
+        let [b, g, r, _] = bgra(colour);
+        let shown = |c: usize, at: u8| level(ramp.0[c][usize::from(at)]);
+        seen == [shown(2, b), shown(1, g), shown(0, r)]
+    };
+    two(&mut g, 1);
+    let back = g
+        .capture("wgpu-frame", 1)
+        .expect("the back buffer's capture");
+    let window = g.capture("wgpu-window", 1).expect("the window's frame");
+    assert_eq!(rgb(&window.2), rgb(&back.2), "no ramp: a copy");
+    assert_eq!(shown(), None, "no ramp: no brightness for the report");
+    // The darkest step.
+    let darkest = games_ramp(menu_gammas()[0]);
+    set(&mut g, &darkest);
+    assert!(
+        shown().is_some_and(|s| (s - 1.4).abs() < 0.001),
+        "the report's brightness: {:?}",
+        shown()
+    );
+    two(&mut g, 2);
+    let back2 = g
+        .capture("wgpu-frame", 2)
+        .expect("the back buffer's capture");
+    assert_eq!(
+        rgb(&back2.2),
+        rgb(&back.2),
+        "the back buffer is not changed"
+    );
+    let (w, _, px) = g.capture("wgpu-window", 2).expect("the window's frame");
+    for (n, p) in rgb(&px).into_iter().enumerate() {
+        let colour = if (n % w as usize) < 16 { left } else { right };
+        assert!(
+            through(&darkest, colour, p),
+            "pixel {n}: {p:?} for {colour:08x}"
+        );
+        assert_ne!(p[..], bgra(colour)[..3], "pixel {n}: darker");
+    }
+    // Direct3D 9's identity ramp: the plain copy again.
+    let identity = Ramp::from_bytes(
+        &(0..3 * 256)
+            .flat_map(|n: u32| ((n % 256) as u16 * 257).to_le_bytes())
+            .collect::<Vec<u8>>(),
+    )
+    .expect("a ramp");
+    set(&mut g, &identity);
+    assert_eq!(shown(), None, "the identity ramp: none for the report");
+    two(&mut g, 3);
+    let back3 = g
+        .capture("wgpu-frame", 3)
+        .expect("the back buffer's capture");
+    let window3 = g.capture("wgpu-window", 3).expect("the window's frame");
+    assert_eq!(rgb(&window3.2), rgb(&back3.2), "the identity ramp: a copy");
+    assert_eq!(rgb(&back3.2), rgb(&back.2));
+    // Stretched, through the brightest step: each half its colour through the ramp.
+    let brightest = games_ramp(menu_gammas()[15]);
+    set(&mut g, &brightest);
+    g.size(64, 24);
+    two(&mut g, 4);
+    let (w, h, px) = g.capture("wgpu-window", 4).expect("the stretched frame");
+    assert_eq!((w, h), (64, 24));
+    let px = rgb(&px);
+    for y in 0..h as usize {
+        let row = &px[y * w as usize..(y + 1) * w as usize];
+        for (x, p) in row.iter().enumerate() {
+            if x < 28 {
+                assert!(through(&brightest, left, *p), "row {y}, x {x}: {p:?}");
+            } else if x >= 36 {
+                assert!(through(&brightest, right, *p), "row {y}, x {x}: {p:?}");
+            }
+        }
+    }
+    let d = g.b.device().expect("the device");
+    assert_eq!(d.wgpu_errors(), 0, "wgpu reported no error");
+}
+
 /// A configuration wgpu refuses (a format the surface does not offer), also on a surface made
 /// anew and never configured (as after a lost one): no frame is asked of it (wgpu gives such a
 /// surface no error handler, and asking it stops the process), the game's `Present` goes on, and

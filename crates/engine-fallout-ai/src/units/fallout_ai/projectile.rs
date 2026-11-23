@@ -2980,24 +2980,70 @@ fn log_vats_hit(e: &mut Engine, this: Ptr<Projectile>, collidee: u32, collidable
 
 fn count_beam_hit(e: &mut Engine, this: Ptr<Projectile>, data: Ptr<ImpactData>) {
     let hits = fn_009c0070(e, this.cast()) as i32;
-    let limit = e.call(0x0088_5bd0, &args![this]).f64();
+    // S0130.06's two hit parts act only with S0130.05 on too (Tweaks installs them together).
+    let impact_row = super::playercharacter::beam_ammo_in_update(e);
+    let limit = if impact_row {
+        beam_age_for_damage(e, this)
+    } else {
+        e.call(0x0088_5bd0, &args![this]).f64()
+    };
     let weapon = e.call(GET_WEAPON, &args![this]).u32();
     let rate = e.call(0x0082_1640, &args![weapon]).f64();
     if hits as f64 / rate < limit {
         let shooter = e.call(GET_SHOOTER, &args![this]).u32();
-        if shooter != 0 {
-            e.vcall(shooter, 0x3F0, &args![1u32]);
+        // lStewieAl's Tweaks' row S0130.06 (the bytes written at `0x9BFD0E`): the player's beam
+        // takes no round here and counts no shot (on to `0x9BFD35`); the player's update does both
+        // (S0130.05). Tweaks drops the exe's null test of the shooter; the port keeps it (a guard
+        // against a crash only).
+        if !impact_row || shooter != e.global::<u32>(PLAYER) {
+            if shooter != 0 {
+                e.vcall(shooter, 0x3F0, &args![1u32]);
+            }
+            fn_009c0050(e, this.cast(), hits.wrapping_add(1) as u32);
         }
-        fn_009c0050(e, this.cast(), hits.wrapping_add(1) as u32);
         let collidee = e.get(data, ImpactData::pCollidee);
         let do_damage = collidee != 0 && is_actor(e, collidee);
         e.set(data, ImpactData::bDoDamage, do_damage);
-        if e.call(0x008a_88b0, &args![shooter]).i32() < 1 {
+        if beam_ammo_count(e, shooter) < 1 {
             e.call(0x009a_b9a0, &args![this, shooter]);
         }
     } else {
         e.set(data, ImpactData::bDoDamage, false);
     }
+}
+
+// Translated from lStewieAl's Tweaks 10.05 (Fixes/ContinuousBeamProjectileCrashFix.cpp):
+// OnGetProjectileAgeForDamage.
+/// lStewieAl's Tweaks' row S0130.06 (the call at `0x9BFCC1`, in place of `00885bd0`, the age
+/// +0xD8): the player's beam (shooter +0xFC the player) after the player's update took a round
+/// (the kept word `BEAM_DECREASED_PLAYER_AMMO`, cleared here) answers `FLT_MAX`, so this impact
+/// counts as a shot and does damage; any other answers its age.
+fn beam_age_for_damage(e: &mut Engine, this: Ptr<Projectile>) -> f64 {
+    let kept = e.stewie_kept(
+        engine_core::extend::stewie::kept::BEAM_DECREASED_PLAYER_AMMO,
+        4,
+    );
+    if e.mem.u32(this.addr() + 0xfc) == e.global::<u32>(PLAYER) && e.mem.u8(kept) != 0 {
+        e.mem.set_u8(kept, 0);
+        return f32::MAX as f64;
+    }
+    e.mem.f32(this.addr() + 0xd8) as f64
+}
+
+// Translated from lStewieAl's Tweaks 10.05 (Fixes/ContinuousBeamProjectileCrashFix.cpp):
+// GetAmmoCount.
+/// The shooter's loaded count after a beam's shot (`0x9BFD6B`, `Actor::GetAmmoCount` `008a88b0`).
+/// lStewieAl's Tweaks' row S0130.04: the player (`011dea3c`) in god mode (`011e07ba`) or demigod
+/// mode (`011e0898`) has 1, so the beam does not stop; any other count as the exe's (its process'
+/// ammunition entry, slot `0x14c`, +4; none: -1).
+fn beam_ammo_count(e: &mut Engine, shooter: u32) -> i32 {
+    if e.stewie(engine_core::extend::stewie::BEAM_GODMODE_FIRING)
+        && shooter == e.global::<u32>(PLAYER)
+        && (e.mem.u8(0x011e_07ba) != 0 || e.mem.u8(0x011e_0898) != 0)
+    {
+        return 1;
+    }
+    e.call(0x008a_88b0, &args![shooter]).i32()
 }
 
 fn draw_impact_debug(e: &mut Engine, data: Ptr<ImpactData>, vats_hit: bool) {
@@ -7339,6 +7385,168 @@ mod tests {
         stub_float(&mut e, 0x0088_5bd0, 2.0);
         fn_009bf190(&mut e, this);
         assert_eq!(calls(&e, 0x009a_52f0).len(), 1);
+    }
+
+    /// A continuous beam whose shooter is `shooter` (+0xFC) with `shots` (+0x154), an age of 0.5
+    /// (+0xD8, also `00885bd0`'s answer) and a fire rate of 10 (`00821640`).
+    fn beam_hit_world(
+        e: &mut Engine,
+        shooter: u32,
+        shots: u32,
+    ) -> (Ptr<Projectile>, Ptr<ImpactData>) {
+        let this = projectile(e);
+        e.mem.set_u32(this.addr() + 0xfc, shooter);
+        e.mem.set_u32(this.addr() + 0x154, shots);
+        e.mem.set_f32(this.addr() + 0xd8, 0.5);
+        stub_float(e, 0x0088_5bd0, 0.5);
+        stub_float(e, 0x0082_1640, 10.0);
+        stub(e, 0x008a_88b0, 5);
+        (this, Ptr::new(e.mem.alloc(0x30)))
+    }
+
+    /// Both halves of the beam's ammunition move (S0130.05 and S0130.06) on or off.
+    fn set_beam_ammo_rows(e: &mut Engine, on: bool) {
+        e.set_stewie(engine_core::extend::stewie::BEAM_PLAYER_AMMO_IN_UPDATE, on);
+        e.set_stewie(
+            engine_core::extend::stewie::BEAM_NO_PLAYER_AMMO_IN_IMPACT,
+            on,
+        );
+    }
+
+    /// S0130.06 (the bytes at `0x9BFD0E`): a due hit (1 shot, rate 10, age 0.5) of the player's
+    /// beam takes a round (slot `0x3F0` with 1) and counts a shot off; with the rows it does
+    /// neither for the player's beam and both for an NPC's.
+    #[test]
+    fn s0130_06_the_players_beam_takes_no_round_where_it_hits() {
+        // (rows, the player's beam, the rounds taken, the shots after)
+        for (on, is_player, rounds, shots) in [
+            (false, true, 1usize, 2u32),
+            (true, true, 0, 1),
+            (true, false, 1, 2),
+        ] {
+            let mut e = engine();
+            set_beam_ammo_rows(&mut e, on);
+            let shooter = actor(&mut e);
+            let other = actor(&mut e);
+            e.set_global(PLAYER, if is_player { shooter } else { other });
+            let (this, data) = beam_hit_world(&mut e, shooter, 1);
+            count_beam_hit(&mut e, this, data);
+            assert_eq!(calls(&e, SLOT_BASE + 0x3F0), vec![vec![shooter, 1]; rounds]);
+            assert_eq!(
+                e.mem.u32(this.addr() + 0x154),
+                shots,
+                "on {on} player {is_player}"
+            );
+            assert!(calls(&e, 0x009a_b9a0).is_empty());
+        }
+    }
+
+    /// S0130.06 (`OnGetProjectileAgeForDamage`, `0x9BFCC1`): a hit of the player's beam that is not
+    /// due (1 shot, rate 10, age 0.05: 0.1 is not below 0.05) does no damage; after the player's
+    /// update took a round (the kept word) it is due once: the flag is cleared and the hit counted.
+    #[test]
+    fn s0130_06_a_taken_round_makes_the_next_hit_count() {
+        let mut e = engine();
+        set_beam_ammo_rows(&mut e, true);
+        let player = actor(&mut e);
+        e.set_global(PLAYER, player);
+        let (this, data) = beam_hit_world(&mut e, player, 1);
+        e.mem.set_f32(this.addr() + 0xd8, 0.05);
+        let collidee = actor(&mut e);
+        e.set(data, ImpactData::pCollidee, collidee);
+        e.set(data, ImpactData::bDoDamage, true);
+        count_beam_hit(&mut e, this, data);
+        assert!(!e.get(data, ImpactData::bDoDamage), "not due");
+        let flag = e.stewie_kept(
+            engine_core::extend::stewie::kept::BEAM_DECREASED_PLAYER_AMMO,
+            4,
+        );
+        e.mem.set_u8(flag, 1);
+        count_beam_hit(&mut e, this, data);
+        assert!(e.get(data, ImpactData::bDoDamage), "due after the round");
+        assert_eq!(e.mem.u8(flag), 0);
+        assert_eq!(beam_age_for_damage(&mut e, this), 0.05f32 as f64);
+        e.mem.set_u8(flag, 1);
+        e.mem.set_u32(this.addr() + 0xfc, collidee);
+        assert_eq!(
+            beam_age_for_damage(&mut e, this),
+            0.05f32 as f64,
+            "an NPC's beam"
+        );
+        assert_eq!(e.mem.u8(flag), 1);
+    }
+
+    /// S0130.05 with S0130.06 in all four on/off combinations: a due beam of the player (1 shot,
+    /// rate 10, age 0.5) goes through the player's update's ammunition part and then hits an
+    /// actor. One round is taken (slot `0x3F0` with 1: in the update with both rows on, at the
+    /// hit otherwise), two shots are counted, the hit does damage and the beam does not fade.
+    /// With the halves on separate switches one alone took no round at all (S0130.06: unlimited
+    /// ammunition) or two (S0130.05).
+    #[test]
+    fn s0130_05_and_06_take_one_round_and_do_damage_in_every_combination() {
+        const TAKE: u32 = 0x7D00_03F0;
+        for (on05, on06) in [(false, false), (true, false), (false, true), (true, true)] {
+            let mut e = engine();
+            e.set_stewie(
+                engine_core::extend::stewie::BEAM_PLAYER_AMMO_IN_UPDATE,
+                on05,
+            );
+            e.set_stewie(
+                engine_core::extend::stewie::BEAM_NO_PLAYER_AMMO_IN_IMPACT,
+                on06,
+            );
+            e.register(TAKE, |_, _| 1u32.into_ret());
+            let player = actor(&mut e);
+            set_slot(&mut e, player, 0x3F0, TAKE);
+            e.set_global(PLAYER, player);
+            let (this, data) = beam_hit_world(&mut e, player, 1);
+            let weapon = e.mem.alloc(0x140);
+            e.mem.set_f32(weapon + 0x134, 10.0);
+            e.mem.set_u32(this.addr() + 0xf8, weapon);
+            e.mem.set_u32(player + 0x1a0, this.addr());
+            let collidee = actor(&mut e);
+            e.set(data, ImpactData::pCollidee, collidee);
+            super::super::playercharacter::player_beam_update_ammo(&mut e);
+            count_beam_hit(&mut e, this, data);
+            let label = format!("05 {on05} 06 {on06}");
+            assert_eq!(calls(&e, TAKE), vec![vec![player, 1]], "{label}");
+            assert_eq!(e.mem.u32(this.addr() + 0x154), 2, "{label}");
+            assert!(e.get(data, ImpactData::bDoDamage), "{label}");
+            assert_eq!(e.mem.u32(this.addr() + 0xc8) & 0x20, 0, "{label}");
+            assert!(calls(&e, 0x009a_b9a0).is_empty(), "{label}");
+        }
+    }
+
+    /// S0130.04 (`GetAmmoCount`, `0x9BFD6B`): after a beam's hit the player in god mode
+    /// (`011e07ba`) or demigod mode (`011e0898`) counts one round, so the beam does not stop
+    /// (`009ab9a0`); off, or another shooter, the count is `008a88b0`'s (-1 here: it stops).
+    #[test]
+    fn s0130_04_the_player_in_god_mode_keeps_the_beam_going() {
+        // (row, god, demigod, the player's beam, the count)
+        for (on, god, demigod, is_player, count) in [
+            (false, 1u8, 0u8, true, -1i32),
+            (true, 1, 0, true, 1),
+            (true, 0, 1, true, 1),
+            (true, 0, 0, true, -1),
+            (true, 1, 0, false, -1),
+        ] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::BEAM_GODMODE_FIRING, on);
+            let shooter = actor(&mut e);
+            let other = actor(&mut e);
+            e.set_global(PLAYER, if is_player { shooter } else { other });
+            e.mem.set_u8(0x011e_07ba, god);
+            e.mem.set_u8(0x011e_0898, demigod);
+            let (this, data) = beam_hit_world(&mut e, shooter, 1);
+            stub(&mut e, 0x008a_88b0, u32::MAX);
+            assert_eq!(
+                beam_ammo_count(&mut e, shooter),
+                count,
+                "on {on} {god} {demigod}"
+            );
+            count_beam_hit(&mut e, this, data);
+            assert_eq!(calls(&e, 0x009a_b9a0).len(), usize::from(count < 1));
+        }
     }
 
     #[test]
