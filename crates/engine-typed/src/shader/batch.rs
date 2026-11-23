@@ -76,14 +76,12 @@ const NULL_BOUND: u32 = 0x011f_4288;
 /// `BSSkinInstance`'s type (`011f49d8`), what the skin's slot 8 answers for a dismember skin.
 pub(crate) const SKIN_RTTI: u32 = 0x011f_49d8;
 
-/// Callees by address: the map's `GetAt` (`thiscall(map, key, out)`) and `SetAt`, the active list's
-/// clear, the memory manager and `operator new`, the batch renderer's constructor, the shadow-pass
+/// Callees by address: the map's `GetAt` (`thiscall(map, key, out)`) and `SetAt`, the memory manager and `operator new`, the batch renderer's constructor, the shadow-pass
 /// test, the shadow light shader's per-geometry set-ups (the draw family's, compared by address), the
 /// renderer's skinned test, the geometry holder's draw, a shader's pass tail of kind 0x11, the node
 /// pool lock. The node pool's allocation is draw_f's (`0043a010`).
 const MAP_GET_AT: u32 = 0x0085_3130;
 const MAP_SET_AT: u32 = 0x0084_4700;
-const ACTIVE_LIST_CLEAR: u32 = 0x00b6_4ec0;
 const MEMORY_MANAGER: u32 = 0x011f_6238;
 const MEMORY_ALLOCATE: u32 = 0x00aa_3e40;
 const MEMORY_FREE: u32 = 0x00aa_4060;
@@ -193,7 +191,11 @@ pub fn pop_active(e: &mut Engine, this: Ptr<ActivePass>) {
     let item = vget16(e, second, ActivePass::usItem);
     vset16(e, this, ActivePass::usItem, item);
     vset(e, second, ActivePass::pNext, 0);
-    e.call(ACTIVE_LIST_CLEAR, &args![second]);
+    typed_call!(
+        crate::draw::FAMILY,
+        0x00b6_4ec0,
+        crate::draw::lists::clear_simple_list(e, second.addr())
+    );
     e.call(MEMORY_FREE, &args![MEMORY_MANAGER, second]);
 }
 
@@ -1465,9 +1467,12 @@ pub fn clear_renderer(e: &mut Engine, this: Ptr<BSBatchRenderer>, _unused: u32) 
         vset(e, group, PassGroup::uiCount, 0);
         item = next;
     }
-    let active = this.at(BSBatchRenderer::kActivePassIndexList);
-    let words = |_: &Engine| vec![active.addr(), active.addr().wrapping_add(4)];
-    crate::draw::detach::suspended_for(e, words, |e| e.call(ACTIVE_LIST_CLEAR, &args![active]));
+    let active = this.at(BSBatchRenderer::kActivePassIndexList).addr();
+    typed_call!(
+        crate::draw::FAMILY,
+        0x00b6_4ec0,
+        crate::draw::lists::clear_simple_list(e, active)
+    );
 }
 
 // Typed from 00b63e90
