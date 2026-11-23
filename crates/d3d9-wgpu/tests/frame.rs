@@ -6865,13 +6865,16 @@ fn merged_draws_in_place_keep_which_of_two_coplanar_surfaces_shows() {
     );
 }
 
+/// What [`fuse_script`] gives: the pixels, and the groups drawn fused with the passes they held.
+type FuseScript = (Vec<[u8; 4]>, (u64, u64));
+
 /// A 4 by 4 target, the registers from storage, the held draws with the blended ones after them,
 /// and the light passes fused into their base or not ([`d3d9_wgpu::device::Device::set_fuse_lights`]):
 /// a base strip in column 0 (depth LESSEQUAL with writes) drawn in its own colour, then over the
 /// same vertices a light pass adding its colour (one, one) and a pass multiplying by its colour
 /// (destination colour, zero), both depth EQUAL without writes, colour only; then a strip in column
 /// 1 drawn alone. The pixels, and the groups drawn fused with the passes they held.
-fn fuse_script(fuse: bool) -> Option<(Vec<[u8; 4]>, (u64, u64))> {
+fn fuse_script(fuse: bool) -> Option<FuseScript> {
     const ALPHABLENDENABLE: u32 = 27;
     const SRCBLEND: u32 = 19;
     const DESTBLEND: u32 = 20;
