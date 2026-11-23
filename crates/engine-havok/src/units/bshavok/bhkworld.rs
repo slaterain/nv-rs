@@ -1142,6 +1142,15 @@ pub fn fn_00c674d0(e: &mut Engine, this: Ptr, entities: Ptr, count: u32) {
         leave_scope(e, scope);
         return;
     }
+    // The hitch log's timer and count (main only; no effect on the game): the queued bodies added to the world as
+    // one batch, their broad-phase inserts included.
+    let _timed = engine_core::hitch::Timed::main(engine_core::hitch::Count::HavokBodiesAddNs);
+    if !engine_core::real_threads::on_other_game_thread() {
+        engine_core::hitch::add(
+            engine_core::hitch::Count::HavokBodiesAdded,
+            u64::from(count),
+        );
+    }
     e.call(0x00c9_4bd0, &args![world, entities, count, 0u32]);
     let mut island_split = false;
     let tolerance = if count != 0 {

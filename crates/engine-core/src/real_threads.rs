@@ -1721,6 +1721,17 @@ pub fn end_start_hold_for_tests(e: &Engine) {
     }
 }
 
+/// Tests: a probe of whether any thread holds the kernel lock of `e`'s run, to ask from another OS thread while `e`'s
+/// thread waits inside a platform call (always free without real threads).
+#[cfg(any(test, feature = "test-support"))]
+pub fn kernel_lock_free_probe(e: &Engine) -> impl Fn() -> bool + Send + 'static {
+    let world = e.real.as_ref().map(|r| r.world);
+    move || match world {
+        Some(w) => w.kernel.owner.load(Ordering::SeqCst) == 0,
+        None => true,
+    }
+}
+
 /// [`without_kernel_lock_mut`] only when this thread holds the kernel lock once (a platform function the game called
 /// directly): inside a nested hold (a platform function that runs game code that calls this one) the outer function
 /// may be part way through changing platform state, so `f` then runs with the lock held, as before. For game code a
@@ -1736,15 +1747,32 @@ pub fn without_kernel_lock_mut_if_outermost<R>(
         {
             f(e)
         }
-        world => released_kernel(world, || f(e)),
+        _ => without_kernel_lock_mut(e, f),
     }
 }
 
-/// [`without_kernel_lock`] for work that needs the engine itself (a test that calls a seam's
-/// writes from a thread that does not hold the lock).
+/// [`without_kernel_lock`] for work that needs the engine itself (game code a platform function calls back, a test
+/// that calls a seam's writes from a thread that does not hold the lock). While this thread holds the lock, the kernel
+/// table's last-error code is the working copy of its own (`locked_call` puts it there and keeps it after): it is kept
+/// in this thread's context across the window (where this thread's own platform calls and `GetLastError` find it)
+/// and put back in the table once the lock is taken back, so a code another thread's platform call left in the table
+/// meanwhile is never the one this thread's caller reads.
 pub fn without_kernel_lock_mut<R>(e: &mut Engine, f: impl FnOnce(&mut Engine) -> R) -> R {
     let world = e.real.as_ref().map(|r| r.world);
-    released_kernel(world, || f(e))
+    let holds = world.is_some_and(|w| w.kernel.held_here());
+    if holds {
+        let own = e.kernel.last_error;
+        if let Some(r) = &mut e.real {
+            r.last_error = own;
+        }
+    }
+    let answer = released_kernel(world, || f(e));
+    if holds {
+        if let Some(r) = &e.real {
+            e.kernel.last_error = r.last_error;
+        }
+    }
+    answer
 }
 
 /// [`without_kernel_lock`]'s work on the run's lock world (`None`: stepped threads).
@@ -4743,6 +4771,76 @@ mod tests {
             HELD_IN_CALLBACK.load(Ordering::SeqCst),
             1,
             "kept when nested"
+        );
+    }
+
+    /// The next test's other thread and platform functions: the slots, and the steps the threads hand over.
+    static ERROR_99_SLOT: AtomicU32 = AtomicU32::new(0);
+    static GET_ERROR_SLOT: AtomicU32 = AtomicU32::new(0);
+    static OTHER_GO: AtomicU32 = AtomicU32::new(0);
+    static OTHER_DONE: AtomicU32 = AtomicU32::new(0);
+    static SEEN_IN_WINDOW: AtomicU32 = AtomicU32::new(0);
+
+    /// A platform function that leaves the last-error code 99 in the kernel table.
+    fn leaves_error_99(e: &mut Engine, _: &[u32]) -> Ret {
+        e.kernel.last_error = 99;
+        Ret::default()
+    }
+
+    /// The other game thread: once told, makes that platform call, then says so.
+    fn other_thread_errs(e: &mut Engine, _: &[u32]) -> Ret {
+        while OTHER_GO.load(Ordering::SeqCst) == 0 {
+            std::thread::yield_now();
+        }
+        e.call(ERROR_99_SLOT.load(Ordering::SeqCst), &args![]);
+        OTHER_DONE.store(1, Ordering::SeqCst);
+        Ret::default()
+    }
+
+    /// A platform function that sets its own last-error code (7), then runs game code with the kernel lock given
+    /// back: that code reads its thread's code (`GetLastError`), and lets the other thread leave 99 in the table.
+    fn errs_then_gives_back(e: &mut Engine, _: &[u32]) -> Ret {
+        e.kernel.last_error = 7;
+        without_kernel_lock_mut_if_outermost(e, |e| {
+            let seen = e.call(GET_ERROR_SLOT.load(Ordering::SeqCst), &args![]).eax;
+            SEEN_IN_WINDOW.store(seen, Ordering::SeqCst);
+            OTHER_GO.store(1, Ordering::SeqCst);
+            while OTHER_DONE.load(Ordering::SeqCst) == 0 {
+                std::thread::yield_now();
+            }
+        });
+        Ret::default()
+    }
+
+    /// While a platform function runs game code with the kernel lock given back, another thread's platform call
+    /// leaves its own last-error code in the kernel table; the first thread still reads its own afterwards (and its
+    /// game code in the window read it too), as on Windows, where the code is each thread's.
+    #[test]
+    fn a_thread_keeps_its_last_error_across_the_lock_given_back() {
+        let (mut e, slot) = engine_with_imports();
+        let outer = slot("D3DPERF_SetOptions");
+        ERROR_99_SLOT.store(slot("GetDoubleClickTime"), Ordering::SeqCst);
+        GET_ERROR_SLOT.store(slot("GetLastError"), Ordering::SeqCst);
+        e.register(outer, errs_then_gives_back);
+        e.register(slot("GetDoubleClickTime"), leaves_error_99);
+        e.register(0x0040_2000, other_thread_errs);
+        start(&mut e).expect("real threads on");
+        end_start_hold_for_tests(&e);
+        e.call(
+            slot("CreateThread"),
+            &args![0u32, 0u32, 0x0040_2000u32, 0u32, 0u32, 0u32],
+        );
+        e.call(outer, &args![0u32]);
+        assert_eq!(OTHER_DONE.load(Ordering::SeqCst), 1, "the other thread ran");
+        assert_eq!(
+            SEEN_IN_WINDOW.load(Ordering::SeqCst),
+            7,
+            "read in the window"
+        );
+        assert_eq!(
+            e.call(slot("GetLastError"), &args![]).eax,
+            7,
+            "its own code after"
         );
     }
 

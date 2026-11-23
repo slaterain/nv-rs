@@ -207,3 +207,93 @@ pub fn render_batches(
     );
     typed_call!(shader::FAMILY, 0x00b9_88e0, batch::end_pass(e));
 }
+
+/// The memory manager object its free takes as `this` (`011f6238`), and the free (`00aa4060`, `thiscall(manager,
+/// block)`, by address).
+const MEMORY_MANAGER: u32 = 0x011f_6238;
+const MEMORY_FREE: u32 = 0x00aa_4060;
+
+// Typed from 00b64ec0
+/// A `BSSimpleList<unsigned short>` cleared (`BSBatchRenderer::kActivePassIndexList`), `fastcall(list)`: while the
+/// list has a next node, the node is unlinked (its own next kept), its own list cleared (this again: its next is
+/// already cleared, so only its item) and freed through the memory manager; then the list's 16-bit item cleared. The
+/// words go through the drawing thread's view ([`detach`]), so the world draw's active lists need no words handed
+/// back around it.
+pub fn clear_simple_list(e: &mut Engine, list: u32) {
+    let next_at = list.wrapping_add(4);
+    if detach::word(e, next_at) != 0 {
+        loop {
+            let node = detach::word(e, next_at);
+            let after = detach::word(e, node.wrapping_add(4));
+            detach::set_word(e, node.wrapping_add(4), 0);
+            let node = detach::word(e, next_at);
+            if node != 0 {
+                clear_simple_list(e, node);
+                e.call(MEMORY_FREE, &args![MEMORY_MANAGER, node]);
+            }
+            detach::set_word(e, next_at, after);
+            if after == 0 {
+                break;
+            }
+        }
+    }
+    detach::set_half(e, list, 0);
+}
+
+/// The 33 pass types `00b98970` answers for (the immediates of its code), all within `0x28a..=0x2cd`.
+fn is_listed_pass(pass_type: u32) -> bool {
+    matches!(
+        pass_type,
+        0x28a
+            | 0x28d
+            | 0x28e
+            | 0x291
+            | 0x292
+            | 0x295
+            | 0x296
+            | 0x299
+            | 0x29b
+            | 0x29c
+            | 0x29f
+            | 0x2a0
+            | 0x2a3
+            | 0x2a4
+            | 0x2a7
+            | 0x2a8
+            | 0x2ac
+            | 0x2af
+            | 0x2b0
+            | 0x2b3
+            | 0x2b4
+            | 0x2b5
+            | 0x2b8
+            | 0x2bb
+            | 0x2bd
+            | 0x2be
+            | 0x2c1
+            | 0x2c2
+            | 0x2c5
+            | 0x2c6
+            | 0x2c7
+            | 0x2ca
+            | 0x2cd
+    )
+}
+
+// Typed from 00b98970
+/// `thiscall(renderer, low, high)`: whether the renderer's active pass type list (+0x2c: its item, then the next
+/// node at +4 of each) holds a type in `low..=high` that is one of [`is_listed_pass`]'s. The walk reads the list's
+/// words through the drawing thread's view ([`detach`]).
+pub fn lists_pass_in(e: &mut Engine, this: Ptr<BSBatchRenderer>, low: u32, high: u32) -> bool {
+    let mut node = this
+        .addr()
+        .wrapping_add(BSBatchRenderer::kActivePassIndexList.off);
+    while node != 0 {
+        let pass_type = u32::from(detach::half(e, node));
+        if pass_type <= high && pass_type >= low && is_listed_pass(pass_type) {
+            return true;
+        }
+        node = detach::word(e, node.wrapping_add(4));
+    }
+    false
+}
