@@ -1117,7 +1117,16 @@ mod tests {
             let carried = n > 0 && n < 4;
             assert_eq!(f.carried, carried, "build {n}: {}", f.note);
             assert!(!f.warm, "build {n}: {}", f.note);
-            make_and_save(&device, &mut f, n as u32);
+            // The first build's session makes ten pipelines, each later build one new one: what a
+            // later build adds stays well under its line's start, so the count rule ends the line.
+            let made = if n == 0 {
+                100..110
+            } else {
+                n as u32..n as u32 + 1
+            };
+            for k in made {
+                make_and_save(&device, &mut f, k);
+            }
             let lineage = lineage_of(&file(fp));
             let want = if carried { n as u32 } else { 0 };
             assert_eq!(lineage.carried, want, "build {n}");
