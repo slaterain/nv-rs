@@ -9737,7 +9737,7 @@ fn beam_attack_released(e: &mut Engine, main_state: u32) -> bool {
     }
     let player = e.global::<u32>(PLAYER_SINGLETON);
     let process = e.mem.u32(player + 0x68);
-    !(process != 0 && e.vcall(process, 0x454, &args![]).bool())
+    process == 0 || !e.vcall(process, 0x454, &args![]).bool()
 }
 
 // Translated from lStewieAl's Tweaks 10.05 (Fixes/ContinuousBeamProjectileCrashFix.cpp):
