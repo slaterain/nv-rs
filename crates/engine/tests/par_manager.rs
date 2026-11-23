@@ -365,6 +365,9 @@ fn engine() -> Engine {
 struct Outcome {
     nodes: Vec<Vec<u8>>,
     syncs: Vec<(u32, u32)>,
+    /// The nodes two items update at once (the child listed twice, the listed node inside a listed subtree) and the
+    /// listed node whose bound merges one of them: their indices in `nodes`.
+    raced: Vec<usize>,
 }
 
 /// The scene built, the manager made with `threads` threads, both item sets run through it `rounds` times, the
@@ -455,11 +458,23 @@ fn run(threads: u32, rounds: u32) -> (Outcome, usize) {
         })
         .collect();
     let runners = RUNNERS.lock().unwrap().len();
-    (Outcome { nodes, syncs }, runners)
+    let raced = [big_children[3], inner, outer]
+        .iter()
+        .map(|n| s.nodes.iter().position(|m| m == n).unwrap())
+        .collect();
+    (
+        Outcome {
+            nodes,
+            syncs,
+            raced,
+        },
+        runners,
+    )
 }
 
-/// Four and eight threads leave every node's world transform and bound, and the actors synchronized, as the exe's
-/// one thread does; each actor that passes the gates is synchronized once a round, with 2; more runners took items.
+/// Four and eight threads leave every node's world transform, every bound (but for the nodes two items update at once:
+/// there within the last bits, as with the exe's two runners) and the actors synchronized as the exe's one thread
+/// does; each actor that passes the gates is synchronized once a round, with 2; more runners took items.
 #[test]
 fn more_threads_leave_the_scene_as_the_exe_s_one() {
     let rounds = 3;
@@ -496,9 +511,31 @@ fn more_threads_leave_the_scene_as_the_exe_s_one() {
         assert_eq!(many.syncs, one.syncs, "{threads} threads: the same syncs");
         for (i, (a, b)) in many.nodes.iter().zip(&one.nodes).enumerate() {
             assert_eq!(
-                a, b,
-                "{threads} threads: node {i}'s world transform and bound"
+                a[..0x34],
+                b[..0x34],
+                "{threads} threads: node {i}'s world transform"
             );
+            if one.raced.contains(&i) {
+                // Two items update this node at once (or its bound merges such a node's): each resets its bound and
+                // merges its children's into it in place, so the interleaving can move the last bits (the exe's two
+                // runners race the same way). The bound is still the merge of the same children's.
+                let floats = |v: &[u8]| -> Vec<f32> {
+                    v[0x34..0x44]
+                        .chunks(4)
+                        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+                        .collect()
+                };
+                for (x, y) in floats(a).iter().zip(floats(b)) {
+                    assert!(
+                        (x - y).abs() <= 1e-5 * y.abs().max(1.0),
+                        "{threads} threads: node {i}'s bound {:?} against {:?}",
+                        floats(a),
+                        floats(b)
+                    );
+                }
+            } else {
+                assert_eq!(a, b, "{threads} threads: node {i}'s bound");
+            }
         }
         most = most.max(runners);
     }
