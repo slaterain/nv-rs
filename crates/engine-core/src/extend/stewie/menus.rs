@@ -243,3 +243,11 @@ pub const VATS_HIGHLIGHT_KEEPS_WEAPON: Row = Row::share(MENUS_FIXES, MENUS_FIXES
 /// `MapMenu::AddCompanionMarkers` `0079ea30` at `0x79F000`): the Pip-Boy map's door and
 /// companion tiles carry their reference's id (`_RefID`, `_RefIDStr`) for menus that read them.
 pub const MAP_TILES_STORE_REF_IDS: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 63);
+/// S0022.20 `MenuFixes` (`RecipeMenu::Create` `00726ff0` at `0x72701B`): the crafting menu's
+/// current category (`0119fbf4`) is reset when the menu is made, so it does not keep the last
+/// one.
+pub const RECIPE_CATEGORY_RESET_ON_OPEN: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 64);
+/// S0034 `patchFixRepairMenuDuplicateItemsExploit` (`RepairMenu::InitRepairMenu` `007b7020` at
+/// `0x7B72F0`): the repair list's old tiles are freed before the list is rebuilt, so an item
+/// cannot be listed twice.
+pub const REPAIR_LIST_TILES_FREED_ON_INIT: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 65);

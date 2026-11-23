@@ -95,6 +95,14 @@ pub const ROWS: &[Row] = &[
         summary: "dragging the local map over an undiscovered place no longer says you cannot fast travel there",
     },
     Row {
+        bit: stewie::RECIPE_CATEGORY_RESET_ON_OPEN,
+        function: "MenuFixes",
+        plan: "S0022.20",
+        key: "bMenuFixesRecipeCategoryReset",
+        tweaks: None,
+        summary: "a reopened crafting menu does not keep the last category",
+    },
+    Row {
         bit: stewie::HUD_CONDITION_FLASH_FRAME_RATE,
         function: "MenuFixes",
         plan: "S0022.22",
@@ -269,6 +277,14 @@ pub const ROWS: &[Row] = &[
         key: "bRepairServicesMenuRemembersScrollPosition",
         tweaks: None,
         summary: "a vendor's repair list stays where it was scrolled after Repair and Repair All",
+    },
+    Row {
+        bit: stewie::REPAIR_LIST_TILES_FREED_ON_INIT,
+        function: "patchFixRepairMenuDuplicateItemsExploit",
+        plan: "S0034",
+        key: "bFixRepairMenuDuplicateItemsExploit",
+        tweaks: None,
+        summary: "the repair menu frees its old list tiles before it rebuilds the list, so an item cannot be listed twice",
     },
     Row {
         bit: stewie::DIALOG_RADIO_VOLUME_RESET,

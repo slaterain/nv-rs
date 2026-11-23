@@ -20,6 +20,7 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
     ("S0022.12", "bMenuFixesRecipeConditionNotch", bit(12)),
     ("S0022.13", "bMenuFixesDebugLockPickHealth", bit(1)),
     ("S0022.19", "bMenuFixesMapDragUndiscovered", bit(2)),
+    ("S0022.20", "bMenuFixesRecipeCategoryReset", bit(64)),
     ("S0022.22", "bMenuFixesConditionFlashFrameRate", bit(32)),
     ("S0022.23", "bMenuFixesVatsConditionHealthMods", bit(40)),
     ("S0022.24", "bMenuFixesVatsConditionWithoutAmmo", bit(41)),
@@ -46,6 +47,7 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "bRepairServicesMenuRemembersScrollPosition",
         bit(15),
     ),
+    ("S0034", "bFixRepairMenuDuplicateItemsExploit", bit(65)),
     (
         "S0035",
         "bUnsetQuieterRadioWhenForceClosingDialogueMenu",

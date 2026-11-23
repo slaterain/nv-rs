@@ -1685,6 +1685,11 @@ pub fn recipe_menu_create(e: &mut Engine, crafter: u32, category: u32) -> u32 {
         e.call(PRINT_MESSAGE, &args![0x12u32, NULL_VENDOR_TEXT]);
         return 0;
     }
+    // `0x72701B`: lStewieAl's Tweaks' S0022.20 (`OnRecipeMenuOpen`) first sets the current recipe
+    // category (`0119fbf4`) to -1, so a reopened crafting menu does not keep the last category.
+    if e.stewie(engine_core::extend::stewie::RECIPE_CATEGORY_RESET_ON_OPEN) {
+        e.mem.set_u32(0x0119_fbf4, 0xffff_ffff);
+    }
     let class = fn_007273e0(e);
     let old = e.call(TILE_GET_MENU_BY_CLASS, &args![class]).u32();
     if old != 0 {
@@ -4347,6 +4352,40 @@ mod n057_tests {
         );
         assert_eq!(calls_to(&e, MENU_PREP_FOR_VISIBILITY), vec![vec![menu, 0]]);
         assert_eq!(calls_to(&e, RECIPE_LIST_HEAD_004077E0).len(), 1);
+    }
+
+    /// Row S0022.20 (lStewieAl's Tweaks' `OnRecipeMenuOpen`, `0x72701B`): with the row on,
+    /// creating the menu for a crafter first sets the current recipe category (`0119fbf4`) to -1;
+    /// off, or with no crafter (the menu is not made), it stays.
+    #[test]
+    fn s0022_20_create_resets_the_category() {
+        for (on, crafter, wanted) in [
+            (false, 0x7700u32, 5u32),
+            (true, 0x7700, u32::MAX),
+            (true, 0, 5),
+        ] {
+            let mut e = engine();
+            let menu = recipe_menu(&mut e);
+            answer(&mut e, 0x0000_8000, 0x3f0);
+            answer(&mut e, TILE_READ_FILE, 0x4444);
+            answer(&mut e, TILE_GET_MENU, menu);
+            e.mem.set_u32(menu + 4, 0x55);
+            if !e.mem.is_mapped(0x0119_fbf4) {
+                e.map(0x0119_f000, 0x1000);
+            }
+            e.mem.set_u32(0x0119_fbf4, 5);
+            e.set_stewie(
+                engine_core::extend::stewie::RECIPE_CATEGORY_RESET_ON_OPEN,
+                on,
+            );
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x0072_6ff0, &args![crafter, 0u32]).u32(), 0);
+            assert_eq!(
+                e.mem.u32(0x0119_fbf4),
+                wanted,
+                "row {on} crafter {crafter:x}"
+            );
+        }
     }
 
     #[test]

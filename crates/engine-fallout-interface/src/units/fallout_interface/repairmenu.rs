@@ -1523,6 +1523,15 @@ pub fn repair_menu_init_repair_menu(e: &mut Engine, item: u32) {
         let icon = e.call(GET_ICON_ONE, &args![broken, 0u32]).u32();
         let tile = menu_tile(e, 0x34);
         e.call(TILE_SET_STRING, &args![tile, 0xfccu32, icon, 1u32]);
+        // `0x7B72F0`: lStewieAl's Tweaks' S0034 (`RepairMenuInit_ClearOldTiles`) first frees the repair
+        // list's tiles (the menu `011da75c`'s list +0x5C, `FreeAllTiles`, slot +0x1C), so items
+        // cannot be listed twice.
+        if e.stewie(engine_core::extend::stewie::REPAIR_LIST_TILES_FREED_ON_INIT) {
+            let menu = e.mem.u32(0x011d_a75c);
+            if menu != 0 {
+                e.vcall(menu + 0x5c, 0x1c, &args![]);
+            }
+        }
         repair_menu_update(e);
     }
     let list = me(e) + REPAIR_LIST;
@@ -2273,6 +2282,34 @@ mod n057_tests {
             [6, 0x40b, 0x1f4]
         );
         assert_eq!(calls_to(&e, INTERFACE_007044C0), vec![vec![1, 0, 0]]);
+    }
+
+    /// Row S0034 (lStewieAl's Tweaks' `RepairMenuInit_ClearOldTiles`, `0x7B72F0`): with the row on
+    /// the init frees the repair list's tiles once (the list +0x5C of the menu `011da75c`, its slot
+    /// +0x1C, no argument) before the list is rebuilt; off, no such call.
+    #[test]
+    fn s0034_init_frees_the_old_tiles() {
+        let mut counts = vec![];
+        for on in [false, true] {
+            let mut e = engine();
+            let menu = menu(&mut e);
+            let broken = item_change(&mut e, 0x3300, 0);
+            st0(&mut e, GET_ITEM_HEALTH, 50.0);
+            answer(&mut e, FORM_TYPE, 0x18);
+            st0(&mut e, CALC_ARMOR_RATING, 0.0);
+            e.set_stewie(
+                engine_core::extend::stewie::REPAIR_LIST_TILES_FREED_ON_INIT,
+                on,
+            );
+            e.call_log = Some(vec![]);
+            e.call(0x007b_7020, &args![broken]);
+            let alone = calls_to(&e, 0x0000_8000)
+                .iter()
+                .filter(|w| **w == vec![menu + REPAIR_LIST])
+                .count();
+            counts.push(alone);
+        }
+        assert_eq!(counts[1], counts[0] + 1);
     }
 
     // ---- JIP LN NVSE's game patches, group GB-5 (O2, `bEnableFO3Repair`) ----
