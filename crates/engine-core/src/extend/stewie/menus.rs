@@ -295,3 +295,12 @@ pub const RECIPE_CATEGORIES_CAPITALIZED: Row = tweak(7);
 /// S0286 `ConsoleNumpadSupport` (`[Tweaks] bConsoleNumpadSupport`; the text entry's key
 /// `007154b0` at `0x7156EF`): the number pad types in the console and other text boxes.
 pub const CONSOLE_NUMPAD: Row = tweak(8);
+/// S0340 `decreaseDialogueClickingDelay` (`[Tweaks] bDecreasedDialogueClickDelay`;
+/// `DialogMenu::DoClick` at `0x762534`, `StartMenu::DoClick` at `0x7CECBA`,
+/// `StartMenu::DoGamepadUpEvent` at `0x7CF63B`): clicks count 256 ms after the dialogue and start
+/// menus show, not 500, and the pad's B goes back without waiting.
+pub const SHORTER_CLICK_DELAYS: Row = tweak(9);
+/// S0628 `patchAllowTakeAllInCompanionContainers` (`[Tweaks] bTakeAllInCompanionContainers`;
+/// `ContainerMenu::InitContainerMode` at `0x75BDA4`, `ContainerMenu::DoGamepadUpEvent` at
+/// `0x75D459`): a companion's inventory has the Take All button, and the pad's X takes all.
+pub const COMPANION_TAKE_ALL: Row = tweak(10);

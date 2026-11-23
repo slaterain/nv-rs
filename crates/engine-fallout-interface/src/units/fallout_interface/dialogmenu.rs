@@ -1454,6 +1454,17 @@ pub fn fn_007624d0(e: &mut Engine) -> u32 {
     e.call(WORD_AT_80_004FB070, &args![menu]).u32()
 }
 
+/// The wait after the menu shows before a click counts (`0x762533`'s `CMP EAX,0x1F4`): 500 ms. With
+/// lStewieAl's Tweaks' S0340 (`[Tweaks] bDecreasedDialogueClickDelay`, 0 written over the 500's
+/// high byte at `0x762534`) 256 ms.
+fn click_delay(e: &Engine) -> u32 {
+    if e.stewie(engine_core::extend::stewie::SHORTER_CLICK_DELAYS) {
+        0x100
+    } else {
+        500
+    }
+}
+
 // Translated from 007624f0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `DialogMenu::DoClick` (Xbox PDB; `RET 8`: the clicked id and tile). Nothing in dialogue
 /// states 0 and 4, nor within 500 ms of `uiIgnoreInputStartTime` (which is cleared once
@@ -1475,7 +1486,7 @@ pub fn dialog_menu_do_click(e: &mut Engine, this: Ptr<DialogMenu>, id: i32, tile
     }
     if e.get(this, DialogMenu::uiIgnoreInputStartTime) != 0 {
         let elapsed = now(e).wrapping_sub(e.get(this, DialogMenu::uiIgnoreInputStartTime));
-        if elapsed < 500 {
+        if elapsed < click_delay(e) {
             return;
         }
         e.set(this, DialogMenu::uiIgnoreInputStartTime, 0);
@@ -4585,5 +4596,16 @@ mod n087_tests {
         assert_eq!(calls(&e, FREE), vec![vec![list]]);
         e.call(0x0076_4e10, &args![list, 0u32]);
         assert_eq!(calls(&e, FREE).len(), 1);
+    }
+
+    /// Row S0340 (lStewieAl's Tweaks' `decreaseDialogueClickingDelay`, `0x762534`): a click counts
+    /// 500 ms after the menu shows, 256 ms with the row on.
+    #[test]
+    fn s0340_the_dialogue_click_delay() {
+        for (on, wanted) in [(false, 500u32), (true, 0x100)] {
+            let e = Engine::new();
+            e.set_stewie(engine_core::extend::stewie::SHORTER_CLICK_DELAYS, on);
+            assert_eq!(click_delay(&e), wanted);
+        }
     }
 }

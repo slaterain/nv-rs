@@ -1868,7 +1868,14 @@ pub fn start_menu_do_click(e: &mut Engine, this: Ptr<StartMenu>, code: i32, tile
         return;
     }
     let now = e.call(TICK_COUNT, &args![]).u32();
-    if now.wrapping_sub(e.global::<u32>(TICK_CREATED)) <= 500 {
+    // `0x7CECBA`: lStewieAl's Tweaks' S0340 (`[Tweaks] bDecreasedDialogueClickDelay`) writes 0 over
+    // the compare's 500's low byte: 256 ms.
+    let delay = if e.stewie(stewie::SHORTER_CLICK_DELAYS) {
+        0x100
+    } else {
+        500
+    };
+    if now.wrapping_sub(e.global::<u32>(TICK_CREATED)) <= delay {
         return;
     }
     let lists = [
@@ -2364,7 +2371,10 @@ pub fn start_menu_do_gamepad_up_event(
     let target = e.mem.u32(this.addr() + 0x3c);
     if e.call(TILE_IS_TRUE, &args![target, TRAIT_TARGET]).bool() {
         let now = e.call(TICK_COUNT, &args![]).u32();
-        if now.wrapping_sub(e.global::<u32>(TICK_CREATED)) > 500 {
+        // `0x7CF63B`: S0340 writes a NOP over the `JBE`: the pad's B backs out without the 500 ms wait.
+        if e.stewie(stewie::SHORTER_CLICK_DELAYS)
+            || now.wrapping_sub(e.global::<u32>(TICK_CREATED)) > 500
+        {
             e.call(INTERFACE_MANAGER_GETTER, &args![]);
             e.call(CLEAR_MENU_BUTTON, &args![10u32]);
             e.call(CHOOSE_BACK, &args![]);
@@ -8348,6 +8358,25 @@ mod tests {
         r.e.set_global(TICK_CREATED, 1700u32);
         assert!(!r.e.call(0x007c_f5e0, &args![menu, 10i32, 0u32]).bool());
         assert_eq!(r.calls_to(CHOOSE_BACK).len(), 1);
+    }
+
+    /// Row S0340 (lStewieAl's Tweaks' `decreaseDialogueClickingDelay`, `0x7CF63B`): with the row on the
+    /// pad's B goes back within 500 ticks too (the `JBE` is a NOP); the tick count is still read.
+    #[test]
+    fn s0340_the_pad_goes_back_at_once() {
+        for on in [false, true] {
+            let mut r = rig();
+            r.real_flags();
+            let menu = r.menu();
+            r.e.mem.set_u32(menu.addr() + 0x3c, 0x3c00);
+            r.stub(TICK_COUNT, 2000);
+            r.stub(TILE_IS_TRUE, 1);
+            r.e.set_global(TICK_CREATED, 1700u32);
+            r.e.set_stewie(stewie::SHORTER_CLICK_DELAYS, on);
+            assert_eq!(r.e.call(0x007c_f5e0, &args![menu, 10i32, 0u32]).bool(), on);
+            assert_eq!(r.calls_to(CHOOSE_BACK).len(), usize::from(on));
+            assert!(!r.calls_to(TICK_COUNT).is_empty());
+        }
     }
 
     #[test]

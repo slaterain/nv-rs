@@ -923,8 +923,11 @@ pub fn container_menu_init_container_mode(e: &mut Engine, this: Ptr<ContainerMen
                 e.call(DIALOG_SERVICE_START, &args![]);
                 play_bark(e, COMPANION_OPEN_TOPIC);
             }
+            // `0x75BDA4`: lStewieAl's Tweaks' S0628 (`[Tweaks] bTakeAllInCompanionContainers`) writes 1
+            // over the `PUSH 0`: the Take All button stays shown in a companion's inventory.
+            let shown = i32::from(e.stewie(stewie::COMPANION_TAKE_ALL));
             let tile = tile_at(e, this.addr(), 0x50);
-            set_trait_from_int(e, tile, TRAIT_VISIBLE, 0);
+            set_trait_from_int(e, tile, TRAIT_VISIBLE, shown);
         }
         4 => {
             let text = e.call(SETTING_STRING, &args![0x011d_3c40u32]).u32();
@@ -2514,7 +2517,13 @@ pub fn container_menu_do_gamepad_up_event(
     _unused_2: u32,
 ) -> bool {
     let mode = e.get(this, ContainerMenu::eContainerMode);
-    if button == 0xb && mode != 4 && mode != 3 && e.mem.u32(this.addr().wrapping_add(0x24)) == 1 {
+    // `0x75D459`: S0628 writes a NOP over the companion mode's `JZ`: the pad's X takes all there too.
+    let companion_shut = mode == 3 && !e.stewie(stewie::COMPANION_TAKE_ALL);
+    if button == 0xb
+        && mode != 4
+        && !companion_shut
+        && e.mem.u32(this.addr().wrapping_add(0x24)) == 1
+    {
         e.vcall(this.addr(), 0xc, &args![10u32, 0u32]);
         true
     } else if button == 10 {
@@ -4551,6 +4560,25 @@ mod n053_tests {
             &vec![this + ITEMS, 1]
         );
         assert!(!e.call(0x0075_d250, &args![this, 5u32, 0u32]).bool());
+    }
+
+    /// Row S0628 (lStewieAl's Tweaks' `patchAllowTakeAllInCompanionContainers`, `0x75D459`): with the
+    /// row on the pad's X takes all in a companion's inventory (mode 3) too; the trade mode (4)
+    /// still not.
+    #[test]
+    fn s0628_take_all_in_a_companion_inventory() {
+        for (on, mode, wanted) in [(false, 3u32, false), (true, 3, true), (true, 4, false)] {
+            let mut e = engine();
+            let this = new_menu(&mut e);
+            e.mem.set_u32(this + 0x24, 1);
+            e.mem.set_u32(this + 0x80, mode);
+            e.set_stewie(stewie::COMPANION_TAKE_ALL, on);
+            assert_eq!(
+                e.call(0x0075_d430, &args![this, 0xbu32, 0u32]).bool(),
+                wanted,
+                "row {on} mode {mode}"
+            );
+        }
     }
 
     #[test]

@@ -559,6 +559,14 @@ pub const ROWS: &[Row] = &[
         summary: "the number pad types in the console and other text boxes",
     },
     Row {
+        bit: stewie::SHORTER_CLICK_DELAYS,
+        function: "decreaseDialogueClickingDelay",
+        plan: "S0340",
+        key: "bDecreaseDialogueClickingDelay",
+        tweaks: Some(("Tweaks", "bDecreasedDialogueClickDelay")),
+        summary: "clicks count sooner after the dialogue and start menus show (256 ms, not 500), and the pad's B goes back at once",
+    },
+    Row {
         bit: stewie::INTRO_SKIPPED,
         function: "autoSkipLoadingTiles",
         plan: "S0351",
@@ -597,6 +605,14 @@ pub const ROWS: &[Row] = &[
         key: "bFasterEnterLockPickMenu",
         tweaks: Some(("Tweaks", "bFasterEnterLockpickMenu")),
         summary: "the lock pick menu opens without its entering animation",
+    },
+    Row {
+        bit: stewie::COMPANION_TAKE_ALL,
+        function: "patchAllowTakeAllInCompanionContainers",
+        plan: "S0628",
+        key: "bAllowTakeAllInCompanionContainers",
+        tweaks: Some(("Tweaks", "bTakeAllInCompanionContainers")),
+        summary: "a companion's inventory has the Take All button, and the pad's X takes all",
     },
     Row {
         bit: stewie::RECIPE_CATEGORIES_CAPITALIZED,
