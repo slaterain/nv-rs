@@ -54,8 +54,10 @@ const MOVE_BODY_FN: u32 = VT_FN + 0x20;
 /// `MemoryManager::Allocate` (the bound pool's block for an object without a world bound): the next
 /// block of a fixed area, the same each pass.
 const POOL_ALLOCATE: u32 = 0x00aa_3e40;
-/// What a node runs before it takes its first child's bound: a bound allocated when it has none.
-const NODE_BOUND_ALLOCATE: u32 = 0x0054_67e0;
+/// What a node's bound allocation (`005467e0`, the culling family's) calls: `operator new` and the
+/// bound block's set-up (`00546890`).
+const OPERATOR_NEW: u32 = 0x0040_1000;
+const BOUND_BLOCK_SETUP: u32 = 0x0054_6890;
 const POOL_AREA: u32 = 0x0300_0800;
 const SETTING_VALUE: u32 = 0x0040_8d60;
 const TASKLET_VALUE: u32 = 0x0300_0000;
@@ -349,9 +351,18 @@ fn actor(w: &mut World, e: &mut Engine, k: &Kinds, x: f32, extra: Extra, lightin
         // Two nested nodes without a bound that take theirs from their children, a bounded geometry
         // under the inner one: both children loops allocate a bound (`005467e0`), which must happen
         // on main (the look-ahead needs two steps to see it).
-        let outer = bare_node(w, e, k.node, accum, [0.0, -0.1, 0.0]);
+        // Their vtable has the bound setter (slot 0x78) the allocation uses.
+        let vt = w.vtable(
+            e,
+            &[
+                (0xa4, NODE_DOWNWARD),
+                (0xb8, WORLD_DATA),
+                (0x78, SET_BOUND_FN),
+            ],
+        );
+        let outer = bare_node(w, e, vt, accum, [0.0, -0.1, 0.0]);
         e.mem.set_u32(outer + 0x30, 0x0008_0000);
-        let inner = bare_node(w, e, k.node, outer, [0.0, 0.0, 0.1]);
+        let inner = bare_node(w, e, vt, outer, [0.0, 0.0, 0.1]);
         e.mem.set_u32(inner + 0x30, 0x0008_0000);
         geometry(w, e, k, inner, 0.4, true);
     }
@@ -411,17 +422,15 @@ fn stand_ins(e: &mut Engine) {
         record("allocate", vec![n]);
         ret(POOL_AREA + 0x10 * n)
     });
-    // What a node runs before it takes its first child's bound (`005467e0`): a bound from the same
-    // pool when it has none, recorded (it must run on main).
-    e.register(NODE_BOUND_ALLOCATE, |e, a| {
-        if e.mem.u32(a[0] + 0x20) == 0 {
-            let n = e.mem.u32(POOL_AREA - 4);
-            e.mem.set_u32(POOL_AREA - 4, n + 1);
-            record("allocate", vec![n]);
-            e.mem.set_u32(a[0] + 0x20, POOL_AREA + 0x10 * n);
-        }
-        ret(0)
+    // A node's bound allocation (`005467e0`): `operator new` gives the next block of the same pool,
+    // recorded (it must run on main); the block's set-up answers the block.
+    e.register(OPERATOR_NEW, |e, _| {
+        let n = e.mem.u32(POOL_AREA - 4);
+        e.mem.set_u32(POOL_AREA - 4, n + 1);
+        record("allocate", vec![n]);
+        ret(POOL_AREA + 0x10 * n)
     });
+    e.register(BOUND_BLOCK_SETUP, |_, a| ret(a[0]));
     // The Havok lock's imports: the interlocked compare-exchange and the thread id.
     e.register(0x00fd_f1bc, |e, a| {
         let old = e.mem.u32(a[0]);
