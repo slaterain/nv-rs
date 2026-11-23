@@ -25,14 +25,19 @@
 //! points), the frame tail's split sixteen more, main's own processor clock twice (about a microsecond each)
 //! and two for each task main drains from the task queues there. Main's time
 //! in the guest heap and in each script run is timed only with `NV_HITCH_HEAP=1` (two clock reads a block or a run:
-//! about 4 ms on the pause menu's 80,000-block opening frame). A hitch frame adds one formatted line, one write to
-//! the log and, when the player's cell changed since the last line, one call of the cell's `GetEditorID`.
+//! about 4 ms on the pause menu's 80,000-block opening frame). A hitch frame adds one formatted line, handed to the
+//! log's own thread, which writes it ([`Lines`]: a write that blocks never holds main), and, when the player's cell
+//! changed since the last line, one call of the cell's `GetEditorID`.
 
 use engine::Engine;
 use engine_core::hitch::{Count, WaitKind, COUNTS};
 use engine_core::stage_time::Column;
 use std::collections::VecDeque;
-use std::time::Instant;
+use std::io::Write;
+use std::sync::atomic::{AtomicU64, Ordering::SeqCst};
+use std::sync::mpsc::Sender;
+use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
+use std::time::{Duration, Instant};
 
 /// A frame shorter than this is never a hitch (ms).
 pub const FLOOR_MS: f64 = 8.0;
@@ -1252,6 +1257,21 @@ impl Frame {
             ),
         );
         put(
+            g(Count::HavokRefLocks),
+            format!(
+                "{} Havok reference changes on main took the global lock (waited {:.1} ms)",
+                g(Count::HavokRefLocks),
+                ms(g(Count::HavokRefWaitNs))
+            ),
+        );
+        put(
+            g(Count::HavokLockAllWaitNs) / TENTH_MS,
+            format!(
+                "main waited {:.1} ms for the Havok world lock",
+                ms(g(Count::HavokLockAllWaitNs))
+            ),
+        );
+        put(
             g(Count::ScriptNsMain) / TENTH_MS,
             format!(
                 "scripts {:.1} ms ({} runs)",
@@ -1294,6 +1314,111 @@ impl Frame {
             );
         }
         l
+    }
+}
+
+/// Where the log's lines leave main: main formats a line and hands it over ([`Lines::send`], a channel push that
+/// never waits); a thread of the log's own keeps it for the F12 report and then writes it. The write can block for as
+/// long as the file, pipe or console behind the standard error stream makes it wait (a pipe whose reader a busy
+/// machine starves, a disk flushing other writes): in the lead's route run with mods on 2026-11-23, while the
+/// Vulkan driver compiled a cold pipeline cache, main spent 360 ms writing one hitch line, a stutter of the log's own
+/// making. Every other input of the line is a counter or a record only main and the counting touch.
+pub struct Lines {
+    /// The writer thread's channel (none when the thread could not be started: main writes, as before).
+    tx: Option<Sender<String>>,
+    /// Lines handed over ([`Lines::send`]).
+    sent: AtomicU64,
+    /// Lines written, and the condition variable [`Lines::flush`] waits on.
+    written: Arc<(Mutex<u64>, Condvar)>,
+    /// What a line goes through (keeping it, writing it).
+    out: fn(&mut dyn Write, String),
+}
+
+impl Lines {
+    /// A writer thread over `sink`: each line goes through `out`, in the order sent.
+    pub fn new(mut sink: Box<dyn Write + Send>, out: fn(&mut dyn Write, String)) -> Lines {
+        let written = Arc::new((Mutex::new(0u64), Condvar::new()));
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        let done = written.clone();
+        let thread = std::thread::Builder::new()
+            .name("hitch log".into())
+            .spawn(move || {
+                for line in rx {
+                    out(&mut *sink, line);
+                    count_written(&done);
+                }
+            });
+        Lines {
+            tx: thread.is_ok().then_some(tx),
+            sent: AtomicU64::new(0),
+            written,
+            out,
+        }
+    }
+
+    /// Hands `line` to the writer thread; never waits for its write.
+    pub fn send(&self, line: String) {
+        self.sent.fetch_add(1, SeqCst);
+        let line = match &self.tx {
+            Some(tx) => match tx.send(line) {
+                Ok(()) => return,
+                Err(std::sync::mpsc::SendError(line)) => line,
+            },
+            None => line,
+        };
+        // No writer thread: written here, as before.
+        (self.out)(&mut std::io::stderr(), line);
+        count_written(&self.written);
+    }
+
+    /// Waits until every line sent so far is written, at most `limit`; whether they all were.
+    pub fn flush(&self, limit: Duration) -> bool {
+        let want = self.sent.load(SeqCst);
+        let deadline = Instant::now() + limit;
+        let (count, wake) = &*self.written;
+        let mut written = count.lock().unwrap_or_else(PoisonError::into_inner);
+        while *written < want {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return false;
+            }
+            written = wake
+                .wait_timeout(written, left)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+        true
+    }
+}
+
+/// One more line written: counted, and [`Lines::flush`] woken.
+fn count_written(written: &(Mutex<u64>, Condvar)) {
+    let (count, wake) = written;
+    *count.lock().unwrap_or_else(PoisonError::into_inner) += 1;
+    wake.notify_all();
+}
+
+/// A line of the run's log: kept for the F12 report's `hitches.txt` first (so a write that blocks does not keep it
+/// from the report), then written to the standard error stream.
+fn keep_and_write(sink: &mut dyn Write, line: String) {
+    engine_platform::d3d9real::note_report_hitch(line.clone());
+    let _ = writeln!(sink, "{line}");
+}
+
+static LINES: OnceLock<Lines> = OnceLock::new();
+
+/// The run's line writer, started at the first line; its lines are written out before the process ends.
+fn lines() -> &'static Lines {
+    LINES.get_or_init(|| {
+        engine_platform::on_exit(flush_lines);
+        Lines::new(Box::new(std::io::stderr()), keep_and_write)
+    })
+}
+
+/// Waits (at most a second) until every hitch line handed over is written: before the process ends.
+pub fn flush_lines() {
+    if let Some(lines) = LINES.get() {
+        lines.flush(Duration::from_secs(1));
     }
 }
 
@@ -1402,8 +1527,7 @@ impl HitchLog {
                     "hitch log: frames slowed at frame {frame} ({secs:.1} s): the typical frame went from {from:.1} to \
                      {to:.1} ms (a new scene, the window out of focus or a slow stretch), measured again from here"
                 );
-                eprintln!("{line}");
-                engine_platform::d3d9real::note_report_hitch(line);
+                lines().send(line);
                 return;
             }
             Verdict::Hitch(typical) => typical,
@@ -1447,9 +1571,7 @@ impl HitchLog {
             left_out,
             longest_left_out,
         };
-        let line = f.line();
-        eprintln!("{line}");
-        engine_platform::d3d9real::note_report_hitch(line);
+        lines().send(f.line());
     }
 }
 
@@ -2063,6 +2185,31 @@ mod tests {
         }
     }
 
+    /// Main's reference changes that took Havok's global lock are named with their wait, and its wait for the
+    /// lock taken whole (the world's lock); with none of them (the lock-free row on) neither part is there.
+    #[test]
+    fn main_s_havok_lock_waits_are_named() {
+        let mut f = frame();
+        f.ms = 18.0;
+        f.typical = 5.4;
+        f.game[Count::HavokRefLocks as usize] = 412;
+        f.game[Count::HavokRefWaitNs as usize] = 7_000_000;
+        f.game[Count::HavokLockAllWaitNs as usize] = 1_300_000;
+        let l = f.line();
+        for part in [
+            "412 Havok reference changes on main took the global lock (waited 7.0 ms)",
+            "main waited 1.3 ms for the Havok world lock",
+        ] {
+            assert!(l.contains(part), "{part}: {l}");
+        }
+        let mut f = frame();
+        f.ms = 18.0;
+        f.typical = 5.4;
+        let l = f.line();
+        assert!(!l.contains("Havok reference changes"), "{l}");
+        assert!(!l.contains("Havok world lock"), "{l}");
+    }
+
     /// The line: the frame against the typical one, big from 16 ms, the place, the stages, only the counts that are
     /// not zero, the cause, and the lines the cap left out.
     #[test]
@@ -2282,5 +2429,82 @@ mod tests {
             "{:.2} µs a frame",
             t.elapsed().as_secs_f64() * 1e6 / n as f64
         );
+    }
+
+    /// A stream whose writes wait until the test opens it (a pipe whose reader a busy machine starves, a console or
+    /// file that holds the write): what it took, in order.
+    struct HeldStream {
+        open: Arc<(Mutex<bool>, Condvar)>,
+        took: Arc<Mutex<String>>,
+    }
+
+    impl Write for HeldStream {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let (open, wake) = &*self.open;
+            let mut o = open.lock().unwrap();
+            while !*o {
+                o = wake.wait(o).unwrap();
+            }
+            self.took
+                .lock()
+                .unwrap()
+                .push_str(&String::from_utf8_lossy(bytes));
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn write_only(sink: &mut dyn Write, line: String) {
+        let _ = writeln!(sink, "{line}");
+    }
+
+    /// A write that blocks (one hitch line's write took 360 ms in a route run) does not hold up main: each line is
+    /// handed over at once while the stream holds every write, nothing is written meanwhile, and once the stream takes
+    /// writes again the lines are written whole and in order, and a flush waits for them.
+    #[test]
+    fn a_write_that_blocks_does_not_hold_up_main() {
+        let open = Arc::new((Mutex::new(false), Condvar::new()));
+        let took = Arc::new(Mutex::new(String::new()));
+        let lines = Lines::new(
+            Box::new(HeldStream {
+                open: open.clone(),
+                took: took.clone(),
+            }),
+            write_only,
+        );
+        // The stream opens by itself after 5 s, so a send that waited for the write would show as a slow send
+        // (not a test that never ends).
+        let (done, ended) = std::sync::mpsc::channel::<()>();
+        let opener = {
+            let open = open.clone();
+            std::thread::spawn(move || {
+                let _ = ended.recv_timeout(Duration::from_secs(5));
+                *open.0.lock().unwrap() = true;
+                open.1.notify_all();
+            })
+        };
+        let t = Instant::now();
+        for i in 0..3 {
+            lines.send(format!("hitch {i}"));
+        }
+        let sent_in = t.elapsed();
+        assert!(
+            sent_in < Duration::from_secs(2),
+            "the sends waited for the write: {sent_in:?}"
+        );
+        assert!(
+            !lines.flush(Duration::from_millis(100)),
+            "nothing written while the stream holds its writes"
+        );
+        assert_eq!(*took.lock().unwrap(), "");
+        *open.0.lock().unwrap() = true;
+        open.1.notify_all();
+        let _ = done.send(());
+        assert!(lines.flush(Duration::from_secs(30)), "all written");
+        assert_eq!(*took.lock().unwrap(), "hitch 0\nhitch 1\nhitch 2\n");
+        opener.join().unwrap();
     }
 }
