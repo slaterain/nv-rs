@@ -9,7 +9,11 @@
 //! bones with blend collision objects (fully keyframed: `hktoNiTransform` writes the body through
 //! `NitohkTransform`; and node-moved: `NitohkTransform`, then the bit cleared), an attached weapon
 //! (a node with a geometry under a hand bone), and a head (`BSFaceGenNiNode::UpdateDownwardPass`, a
-//! stand-in that records and goes on with the `NiNode` pass, so the helpers log it for main). Then
+//! stand-in that records and goes on with the `NiNode` pass, so the helpers log it for main). Two
+//! animated actors, each at its own animation time, carry controllers as the game loads them (the
+//! scaled-time flag, `ComputeScaledTime`): transform and visibility controllers whose interpolators
+//! read one shared transform data (Euler rotation keys, whose search hints each interpolation
+//! writes) and bool data, and a transform controller without an interpolator. Then
 //! the actors that must run whole on main: one with a controller on a bone, one ragdolled (its blend
 //! object reads the body into the node), one whose animation is not pending (a dead actor that asks
 //! for its lighting), and one whose geometry has no world bound yet (allocated on main).
@@ -51,6 +55,28 @@ const OTHER_FN: u32 = VT_FN + 0x14;
 const NOT_ACTOR_FN: u32 = VT_FN + 0x18;
 const SET_BOUND_FN: u32 = VT_FN + 0x1c;
 const MOVE_BODY_FN: u32 = VT_FN + 0x20;
+/// An interpolator update of a class a helper does not know (recorded).
+const ODD_INTERPOLATOR_FN: u32 = VT_FN + 0x24;
+/// The controllers and interpolators a helper may run: `NiTransformController::Update`,
+/// `NiVisController::Update`, `NiTransformInterpolator::Update`, `NiBoolInterpolator::Update`.
+const TRANSFORM_CONTROLLER_UPDATE: u32 = 0x00a3_6680;
+const VIS_CONTROLLER_UPDATE: u32 = 0x00a4_4e10;
+const TRANSFORM_INTERPOLATOR_UPDATE: u32 = 0x00a3_fdb0;
+const BOOL_INTERPOLATOR_UPDATE: u32 = 0x00a5_33c0;
+/// What the game's controller vtables hold at slot 0xa4 (`NiTimeController::ComputeScaledTime`, in
+/// `NiTransformController`'s `0109687c` and `NiVisController`'s `01097e8c`) and its interpolators'
+/// at slot 0xd4 (answering 0: not always updated; `NiTransformInterpolator`'s `01097314`,
+/// `NiBoolInterpolator`'s `0109a0b4`).
+const COMPUTE_SCALED_TIME: u32 = 0x00a6_cd60;
+const ALWAYS_UPDATE: u32 = 0x00ee_8990;
+/// The key interpolations the game's start-up puts in its tables by key type: linear float keys
+/// (`011f3c90` + 4: `00a2a560`), Euler rotation keys (`011f3cc0` + 0x10: `00a29b10`) and step bool
+/// keys (`011f3d08` + 0x14: `00a2cc40`).
+const KEY_TABLES: [(u32, u32); 3] = [
+    (0x011f_3c94, 0x00a2_a560),
+    (0x011f_3cd0, 0x00a2_9b10),
+    (0x011f_3d1c, 0x00a2_cc40),
+];
 /// `MemoryManager::Allocate` (the bound pool's block for an object without a world bound): the next
 /// block of a fixed area, the same each pass.
 const POOL_ALLOCATE: u32 = 0x00aa_3e40;
@@ -98,6 +124,8 @@ struct World {
     blocks: Vec<(u32, u32)>,
     reset: Vec<(u32, Vec<u8>)>,
     objects: Vec<u32>,
+    /// The transform data and bool data the animated actors share (`animation_data`).
+    animation: Option<(u32, u32)>,
 }
 
 impl World {
@@ -313,6 +341,98 @@ enum Extra {
     SkinNoBound,
     /// A skin reading another listed actor's bone (set by `world`).
     SkinOther,
+    /// A transform controller (a pose interpolator) on a bone and a visibility controller (a bool
+    /// interpolator) on the weapon, active, each driving its own node: walked on a helper.
+    Animated,
+    /// A transform controller whose interpolator is of a class a helper does not know.
+    OddInterpolator,
+    /// A transform controller on a bone whose target `world` points at another actor's bone.
+    ForeignTarget,
+}
+
+/// A controller as the game has one after loading it (`NiTimeController::LoadBinary`, `00a6d5e0`,
+/// sets the scaled-time flag 0x40; `Start` the active flag 8 and the last time `-FLT_MAX`): flags
+/// 0x4c (cycle type 2, clamped: a looped one's `fmod` needs the runtime library's tables, which
+/// this world does not have; both take the same scaled-time path and cache), frequency 1, phase 0,
+/// keys from 0 to 2 s, the start, last and scaled times unset, `ComputeScaledTime` at slot 0xa4;
+/// `update` at slot 0x94.
+fn loaded_controller(
+    w: &mut World,
+    e: &mut Engine,
+    update: u32,
+    target: u32,
+    interpolator: u32,
+) -> u32 {
+    let vt = w.vtable(e, &[(0x94, update), (0xa4, COMPUTE_SCALED_TIME)]);
+    let c = w.alloc(e, 0x38);
+    e.mem.set_u32(c, vt);
+    e.mem.set_u32(c + 4, 5);
+    e.mem.set_u16(c + 8, 0x4c);
+    e.mem.set_f32(c + 0xc, 1.0);
+    e.mem.set_f32(c + 0x18, 2.0);
+    for at in [0x1c, 0x20, 0x28] {
+        e.mem.set_f32(c + at, f32::MIN);
+    }
+    e.mem.set_u32(c + 0x2c, target);
+    e.mem.set_u32(c + 0x34, interpolator);
+    c
+}
+
+/// Linear float keys (type 1, 8 bytes: time, value).
+fn float_keys(w: &mut World, e: &mut Engine, keys: &[(f32, f32)]) -> u32 {
+    let at = w.alloc(e, 8 * keys.len() as u32);
+    for (i, (time, value)) in keys.iter().enumerate() {
+        e.mem.set_f32(at + 8 * i as u32, *time);
+        e.mem.set_f32(at + 8 * i as u32 + 4, *value);
+    }
+    at
+}
+
+/// The `NiTransformData` and `NiBoolData` every animated actor's interpolators share, as clones
+/// of one model share their data: one Euler rotation key (type 4, 0x48 bytes: X three linear keys,
+/// Y two, Z none; each axis's search hint at +0x3c, written by every interpolation), two linear
+/// scale keys, no translation keys; three step bool keys (type 5: false from 0 s, true from 0.5 s).
+fn animation_data(w: &mut World, e: &mut Engine) -> (u32, u32) {
+    if let Some(d) = w.animation {
+        return d;
+    }
+    let x = float_keys(w, e, &[(0.0, 0.0), (0.5, 0.4), (1.5, -0.2)]);
+    let y = float_keys(w, e, &[(0.0, 0.1), (2.0, 0.9)]);
+    let euler = w.alloc(e, 0x48);
+    e.mem.set_f32(euler + 4, 1.0);
+    for (axis, (count, keys)) in [(3u32, x), (2, y), (0, 0)].iter().enumerate() {
+        let axis = axis as u32;
+        e.mem.set_u32(euler + 0x14 + 4 * axis, *count);
+        if *count != 0 {
+            e.mem.set_u32(euler + 0x20 + 4 * axis, 1);
+            e.mem.set_u8(euler + 0x2c + axis, 8);
+            e.mem.set_u32(euler + 0x30 + 4 * axis, *keys);
+        }
+    }
+    let scale = float_keys(w, e, &[(0.0, 1.0), (2.0, 1.5)]);
+    let data = w.alloc(e, 0x30);
+    e.mem.set_u32(data + 4, 2);
+    e.mem.set_u16(data + 8, 1);
+    e.mem.set_u16(data + 0xc, 2);
+    e.mem.set_u32(data + 0x10, 4);
+    e.mem.set_u32(data + 0x18, 1);
+    e.mem.set_u8(data + 0x1c, 0x48);
+    e.mem.set_u8(data + 0x1e, 8);
+    e.mem.set_u32(data + 0x20, euler);
+    e.mem.set_u32(data + 0x28, scale);
+    let bool_keys = w.alloc(e, 8 * 3);
+    for (i, (time, value)) in [(0.0f32, 0u8), (0.5, 1), (2.0, 1)].iter().enumerate() {
+        e.mem.set_f32(bool_keys + 8 * i as u32, *time);
+        e.mem.set_u8(bool_keys + 8 * i as u32 + 4, *value);
+    }
+    let bool_data = w.alloc(e, 0x18);
+    e.mem.set_u32(bool_data + 4, 2);
+    e.mem.set_u32(bool_data + 8, 3);
+    e.mem.set_u32(bool_data + 0xc, bool_keys);
+    e.mem.set_u32(bool_data + 0x10, 5);
+    e.mem.set_u8(bool_data + 0x14, 8);
+    w.animation = Some((data, bool_data));
+    (data, bool_data)
 }
 
 /// An actor at offset `x` with its animation and tree.
@@ -443,6 +563,68 @@ fn actor(w: &mut World, e: &mut Engine, k: &Kinds, x: f32, extra: Extra, lightin
         let g = skinned(w, e, k, bones[3], &[weapon]);
         e.mem.set_u32(g + 0x20, 0);
     }
+    if matches!(extra, Extra::Animated | Extra::OddInterpolator) {
+        // The transform controller on the fourth bone, its interpolator keyed by the shared
+        // transform data (`animation_data`): its update interpolates the rotation (Euler keys) and
+        // the scale at the controller's scaled time and copies the value out (translation +0xc,
+        // rotation +0x18, scale +0x28), which the controller writes into the bone's local
+        // transform.
+        let odd = extra == Extra::OddInterpolator;
+        let (data, bool_data) = animation_data(w, e);
+        let ivt = w.vtable(
+            e,
+            &[
+                (
+                    0x8c,
+                    if odd {
+                        ODD_INTERPOLATOR_FN
+                    } else {
+                        TRANSFORM_INTERPOLATOR_UPDATE
+                    },
+                ),
+                (0xd4, ALWAYS_UPDATE),
+            ],
+        );
+        let interpolator = w.alloc(e, 0x48);
+        e.mem.set_u32(interpolator, ivt);
+        e.mem.set_u32(interpolator + 4, 1);
+        e.mem.set_f32(interpolator + 8, -1.0);
+        for (i, v) in [0.3f32, 0.1, 0.2, 1.0, 0.0, 0.0, 0.0, 1.25]
+            .iter()
+            .enumerate()
+        {
+            e.mem.set_f32(interpolator + 0xc + 4 * i as u32, *v);
+        }
+        e.mem.set_u32(interpolator + 0x2c, data);
+        let c = loaded_controller(w, e, TRANSFORM_CONTROLLER_UPDATE, bones[3], interpolator);
+        e.mem.set_u32(bones[3] + 0xc, c);
+        if !odd {
+            // The visibility controller on the weapon, its interpolator keyed by the shared bool
+            // data (hidden before 0.5 s, shown after).
+            let bvt = w.vtable(
+                e,
+                &[(0xa0, BOOL_INTERPOLATOR_UPDATE), (0xd4, ALWAYS_UPDATE)],
+            );
+            let b = w.alloc(e, 0x18);
+            e.mem.set_u32(b, bvt);
+            e.mem.set_u32(b + 4, 1);
+            e.mem.set_f32(b + 8, -1.0);
+            e.mem.set_u8(b + 0xc, 2);
+            e.mem.set_u32(b + 0x10, bool_data);
+            let v = loaded_controller(w, e, VIS_CONTROLLER_UPDATE, weapon, b);
+            e.mem.set_u32(weapon + 0xc, v);
+            // The census's commonest: a transform controller without an interpolator on the
+            // first bone (its update only keeps its own times).
+            let c = loaded_controller(w, e, TRANSFORM_CONTROLLER_UPDATE, bones[0], 0);
+            e.mem.set_u32(bones[0] + 0xc, c);
+        }
+    }
+    if extra == Extra::ForeignTarget {
+        // An active transform controller without interpolator on the fourth bone; `world` points
+        // its target at the previous actor's first bone: a `controllers` barrier.
+        let c = loaded_controller(w, e, TRANSFORM_CONTROLLER_UPDATE, bones[3], 0);
+        e.mem.set_u32(bones[3] + 0xc, c);
+    }
     if extra == Extra::SkinOther {
         // A skin under the root whose bone the world points at another actor's (`world`): a `skin`
         // barrier (a helper would read it while another helper walks that actor).
@@ -458,7 +640,8 @@ fn actor(w: &mut World, e: &mut Engine, k: &Kinds, x: f32, extra: Extra, lightin
     let animation = w.alloc(e, 0x100);
     e.mem.set_u32(animation + 0x8, root);
     e.mem.set_u32(animation + 0xc, accum);
-    e.mem.set_f32(animation + 0xd0, 0.25);
+    // Each actor its own time (the controllers' values differ by actor).
+    e.mem.set_f32(animation + 0xd0, 0.25 + x / 64.0);
     e.mem
         .set_u8(animation, if extra == Extra::NotPending { 0 } else { 2 });
     e.mem.set_u32(a + 0x10, animation);
@@ -479,6 +662,10 @@ fn stand_ins(e: &mut Engine) {
             e.mem.set_f32(a[1] + 4 * i as u32, *v);
         }
         ret(a[1])
+    });
+    e.register(ODD_INTERPOLATOR_FN, |_, a| {
+        record("odd interpolator", a.to_vec());
+        ret(0)
     });
     e.register(CONTROLLER_FN, |_, a| {
         record("controller", a.to_vec());
@@ -590,9 +777,30 @@ fn stand_ins(e: &mut Engine) {
         (0x011c_1000, 0x1000),
         (0x0101_6000, 0x1000),
         (0x010c_8000, 0x1000),
+        // The controllers' constants: the unset translation (011a8400), rotation (011f3704) and
+        // scale (01096b8c), -FLT_MAX in the exe, and the double they are compared with (010241b0).
+        (0x0109_6000, 0x1000),
+        (0x011a_8000, 0x1000),
+        (0x011f_3000, 0x1000),
+        (0x0102_4000, 0x1000),
+        // The unset bool (0109a914: 2 in the exe) the visibility controller starts its value with.
+        (0x0109_a000, 0x1000),
+        // The double FLT_MAX (010231b0) `ComputeScaledTime` tests the low key time against.
+        (0x0102_3000, 0x1000),
     ] {
         e.map(page, len);
     }
+    e.mem.set_u64(0x0102_31b0, f64::from(f32::MAX).to_bits());
+    for (at, f) in KEY_TABLES {
+        e.mem.set_u32(at, f);
+    }
+    for (at, words) in [(0x011a_8400u32, 3u32), (0x011f_3704, 4), (0x0109_6b8c, 1)] {
+        for i in 0..words {
+            e.mem.set_u32(at + 4 * i, f32::MIN.to_bits());
+        }
+    }
+    e.mem.set_u64(0x0102_41b0, f64::from(f32::MIN).to_bits());
+    e.mem.set_u8(0x0109_a914, 2);
     e.mem.set_u64(0x0101_1588, 0.5f64.to_bits());
     e.mem.set_u64(0x0101_2070, 1.0f64.to_bits());
     for (i, v) in [1u32, 2, 0].iter().enumerate() {
@@ -617,6 +825,7 @@ fn world(e: &mut Engine) -> World {
         blocks: Vec::new(),
         reset: Vec::new(),
         objects: Vec::new(),
+        animation: None,
     };
     let node_vt = w.vtable(e, &[(0xa4, NODE_DOWNWARD), (0xb8, WORLD_DATA)]);
     let geometry_vt = w.vtable(
@@ -656,6 +865,12 @@ fn world(e: &mut Engine) -> World {
         (Extra::None, false),
         (Extra::Skinned, true),
         (Extra::None, true),
+        (Extra::Animated, true),
+        (Extra::None, true),
+        // The same model's transform data again: the stretch ends before it.
+        (Extra::Animated, true),
+        (Extra::None, true),
+        (Extra::OddInterpolator, true),
         (Extra::Controller, true),
         (Extra::None, true),
         (Extra::None, false),
@@ -679,6 +894,9 @@ fn world(e: &mut Engine) -> World {
         (Extra::SkinOther, true),
         (Extra::None, true),
         (Extra::None, false),
+        (Extra::ForeignTarget, true),
+        (Extra::None, true),
+        (Extra::None, true),
     ];
     let mut made = Vec::new();
     for (i, &(extra, lighting)) in plan.iter().enumerate() {
@@ -708,6 +926,19 @@ fn world(e: &mut Engine) -> World {
     let skinned_geometry = e.mem.u32(e.mem.u32(root + 0xa0) + 4);
     let skin = e.mem.u32(skinned_geometry + 0xbc);
     e.mem.set_u32(e.mem.u32(skin + 0x14), other_bone);
+    // The foreign controller's target: the previous actor's first bone (bones[3] is three first
+    // children below the accumulation root's first child).
+    let foreign = plan
+        .iter()
+        .position(|p| p.0 == Extra::ForeignTarget)
+        .expect("planned");
+    let mut bone = first_bone(&*e, made[foreign]);
+    for _ in 0..3 {
+        bone = e.mem.u32(e.mem.u32(bone + 0xa0));
+    }
+    let controller = e.mem.u32(bone + 0xc);
+    e.mem
+        .set_u32(controller + 0x2c, first_bone(&*e, made[foreign - 1]));
     // The process array at the lists' +4: level 0 the first half, level 1 the rest, then an actor
     // of level 2 the pass does not walk.
     let split = actors.len() / 2;
@@ -776,6 +1007,11 @@ fn parallel_bones_end_in_the_serial_state() {
         "no other slot is called: {serial:?}"
     );
     assert!(serial.iter().all(|r| r.main));
+    // The animated actors' controllers took the game's path: the shared Euler key's X hint is the
+    // second animated actor's (its scaled time is past the second key), Y's at the first key.
+    let (data, _) = w.animation.expect("animated actors");
+    let euler = e.mem.u32(data + 0x20);
+    assert_eq!([e.mem.u32(euler + 0x3c), e.mem.u32(euler + 0x40)], [1, 0]);
     assert_ne!(
         serial_state,
         w.reset.iter().map(|(_, b)| b.clone()).collect::<Vec<_>>()
@@ -800,17 +1036,21 @@ fn parallel_bones_end_in_the_serial_state() {
             );
         }
         assert_eq!(counts.frames, 1, "{counts:?}");
-        // Exact: fourteen actors walked (the skinned one among them: its flagged bones without
-        // bounds are walked, not deferred; the two alone between two barriers run serially), nine
-        // whole on main (a controller, a ragdoll; three nodes that allocate their bound; four skins
-        // read out of order), fifteen subtrees deferred (fourteen heads and the geometry without a
-        // bound).
-        assert_eq!(counts.walked, 14, "{counts:?}");
-        assert_eq!(counts.barriers, 9, "{counts:?} {reasons:?}");
-        assert_eq!(counts.subtrees, 15, "{counts:?}");
+        // Exact: twenty actors walked (the skinned one among them: its flagged bones without
+        // bounds are walked, not deferred; the two animated ones: their transform and visibility
+        // controllers run on the helpers, in two stretches, as they share their Euler keys; the
+        // two alone between two barriers run serially), eleven whole on main (three controllers:
+        // an unknown controller, an unknown interpolator, one driving another actor's bone; a
+        // ragdoll; three nodes that allocate their bound; four skins read out of order),
+        // twenty-one subtrees deferred (twenty heads and the geometry without a bound).
+        assert_eq!(counts.walked, 20, "{counts:?}");
+        assert_eq!(counts.barriers, 11, "{counts:?} {reasons:?}");
+        assert_eq!(counts.subtrees, 21, "{counts:?}");
+        assert_eq!(counts.splits, 1, "{counts:?}");
         let count_of = |name: &str| reasons.iter().find(|r| r.0 == name).map_or(0, |r| r.1);
         assert_eq!(count_of("bound"), 3, "{reasons:?}");
         assert_eq!(count_of("skin"), 4, "{reasons:?}");
+        assert_eq!(count_of("controllers"), 3, "{reasons:?}");
         assert!(counts.havok >= 20, "{counts:?}");
         assert_eq!(counts.mismatches, 0, "{counts:?}");
         let names: Vec<&str> = reasons.iter().map(|r| r.0).collect();
@@ -824,8 +1064,13 @@ fn parallel_bones_end_in_the_serial_state() {
     // The check: no difference, every walked actor compared, the serial pass's end state kept.
     let (got, state) = pass(&mut e, &w, "check", 3);
     let (counts, _) = bones::take_counts();
-    assert_eq!(counts.differences, 0, "{counts:?}");
-    assert_eq!(counts.checked_actors, 14, "{counts:?}");
+    let end_state = state == serial_state;
+    assert_eq!(
+        counts.differences, 0,
+        "{counts:?}; the serial pass's end state kept: {end_state}"
+    );
+    assert_eq!(counts.checked_actors, 20, "{counts:?}");
+    assert_eq!(counts.splits, 1, "{counts:?}");
     assert_eq!(
         got, serial,
         "check: the outside calls are the serial pass's"
