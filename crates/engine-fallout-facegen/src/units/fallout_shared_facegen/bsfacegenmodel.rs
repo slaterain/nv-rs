@@ -805,7 +805,11 @@ pub fn fn_0065a910(e: &mut Engine, this: Ptr<BSFaceGenModel>, coordinates: u32, 
         return false;
     }
     let geometry = pointer_get(e, mesh);
-    if !fn_0065a970(e, this, coordinates, geometry, 1) {
+    // By address, so the face family's typed version runs when it is on.
+    if !e
+        .call(0x0065_a970, &args![this, coordinates, geometry, 1u32])
+        .bool()
+    {
         pointer_assign(e, mesh, 0);
         return false;
     }
