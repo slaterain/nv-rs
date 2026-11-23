@@ -20879,63 +20879,91 @@ mod tests {
     }
 
     /// The player's beam block of `PlayerCharacter::Update` (`0x9440A3` to `0x944174`), reached
-    /// through [`update_player_beam`]: the process has no ammunition entry, so the beam is stopped
-    /// (`009ab9a0`) and then fired on (slot `0x310` with 0.0). The update takes the due beam's
-    /// round (slot `0x3f0` with 1, one more shot at +0x154) between the two only with S0130.05
-    /// and S0130.06 both on; with either off it takes none and leaves the shots.
+    /// through [`update_player_beam`], with S0130.05 and S0130.06 in all four on/off combinations.
+    /// Stopped (the process has no ammunition entry): the beam is stopped (`009ab9a0`, which sets
+    /// it to fade, 0x20 at +0xC8, as `SetKill` does) and fired on (slot `0x310` with 0.0); a fading
+    /// beam gives no round. Held (the clip holds 5 of 1, the attack not released, `00a24660` with 4
+    /// and 2 answering 0, the weapon out, slot `0x454`, and the attack held, 4 and 0 answering 1):
+    /// no stop; with both rows on the due beam's round is taken once (slot `0x3f0` with the player
+    /// and 1), one more shot is counted (+0x154) and the kept word is set, before the fire; with
+    /// either off no round and no shot.
     #[test]
-    fn s0130_05_the_players_update_takes_the_round_between_stop_and_fire() {
+    fn s0130_05_the_players_update_block_with_the_beam_stopped_or_held() {
         const TAKE: u32 = 0x00c0_03f0;
         const FIRE: u32 = 0x00c0_0310;
-        for (on05, on06) in [(false, false), (true, false), (false, true), (true, true)] {
-            let mut e = engine();
-            e.set_stewie(
-                engine_core::extend::stewie::BEAM_PLAYER_AMMO_IN_UPDATE,
-                on05,
-            );
-            e.set_stewie(
-                engine_core::extend::stewie::BEAM_NO_PLAYER_AMMO_IN_IMPACT,
-                on06,
-            );
-            e.map(0x011d_e000, 0x1000);
-            e.register_double(0x009a_b9a0, |_, _| Ret::default());
-            e.register_double(TAKE, |_, _| int(1));
-            e.register_double(FIRE, |_, _| Ret::default());
-            let this = player(&mut e);
-            put_vtable(&mut e, this.addr(), 0x0268_0000, &[(0x3f0, TAKE)]);
-            e.set_global(PLAYER_SINGLETON, this.addr());
-            let process = answering_object(&mut e, 0x0269_0000, &[(0x14c, 0)]);
-            e.mem.set_u32(this.addr() + 0x68, process);
-            let weapon = e.mem.alloc(0x140);
-            e.mem.set_f32(weapon + 0x134, 10.0);
-            let beam = e.mem.alloc(0x160);
-            put_vtable(&mut e, beam, 0x026a_0000, &[(0x310, FIRE)]);
-            e.mem.set_u32(beam + 0x154, 2);
-            e.mem.set_u32(beam + 0xf8, weapon);
-            e.mem.set_f32(beam + 0xd8, 0.5);
-            e.mem.set_u32(this.addr() + 0x1a0, beam);
-            update_player_beam(&mut e, this, 0x4400, 0x1000);
-            let both = on05 && on06;
-            let order: Vec<u32> = call_addresses(&e)
-                .into_iter()
-                .filter(|a| [0x009a_b9a0, TAKE, FIRE].contains(a))
-                .collect();
-            let expected = if both {
-                vec![0x009a_b9a0, TAKE, FIRE]
-            } else {
-                vec![0x009a_b9a0, FIRE]
-            };
-            assert_eq!(order, expected, "05 {on05} 06 {on06}");
-            assert_eq!(called(&e, 0x009a_b9a0), vec![vec![beam, this.addr()]]);
-            assert_eq!(called(&e, FIRE), vec![vec![beam, 0]]);
-            if both {
-                assert_eq!(called(&e, TAKE), vec![vec![this.addr(), 1]]);
+        for held in [false, true] {
+            for (on05, on06) in [(false, false), (true, false), (false, true), (true, true)] {
+                let label = format!("held {held} 05 {on05} 06 {on06}");
+                let mut e = engine();
+                e.set_stewie(
+                    engine_core::extend::stewie::BEAM_PLAYER_AMMO_IN_UPDATE,
+                    on05,
+                );
+                e.set_stewie(
+                    engine_core::extend::stewie::BEAM_NO_PLAYER_AMMO_IN_IMPACT,
+                    on06,
+                );
+                e.map(0x011d_e000, 0x1000);
+                e.register_double(0x009a_b9a0, |e, a| {
+                    let flags = e.mem.u32(a[0] + 0xc8);
+                    e.mem.set_u32(a[0] + 0xc8, flags | 0x20);
+                    Ret::default()
+                });
+                e.register_double(0x00a2_4660, |_, a| int(u32::from(a[1] == 4 && a[2] == 0)));
+                e.register_double(0x0072_6070, |e, a| int(e.mem.u32(a[0] + 4)));
+                e.register_double(0x0052_4b60, |_, _| int(1));
+                e.register_double(TAKE, |_, _| int(1));
+                e.register_double(FIRE, |_, _| Ret::default());
+                let this = player(&mut e);
+                put_vtable(&mut e, this.addr(), 0x0268_0000, &[(0x3f0, TAKE)]);
+                e.set_global(PLAYER_SINGLETON, this.addr());
+                let list = e.mem.alloc(8);
+                e.mem.set_u32(list + 4, 5);
+                let entry = if held { list } else { 0 };
+                let process = answering_object(&mut e, 0x0269_0000, &[(0x14c, entry), (0x454, 1)]);
+                e.mem.set_u32(this.addr() + 0x68, process);
+                let weapon = e.mem.alloc(0x140);
+                e.mem.set_f32(weapon + 0x134, 10.0);
+                let beam = e.mem.alloc(0x160);
+                put_vtable(&mut e, beam, 0x026a_0000, &[(0x310, FIRE)]);
+                e.mem.set_u32(beam + 0x154, 2);
+                e.mem.set_u32(beam + 0xf8, weapon);
+                e.mem.set_f32(beam + 0xd8, 0.5);
+                e.mem.set_u32(this.addr() + 0x1a0, beam);
+                update_player_beam(&mut e, this, 0x4400, 0x1000);
+                let taken = held && on05 && on06;
+                let order: Vec<u32> = call_addresses(&e)
+                    .into_iter()
+                    .filter(|a| [0x009a_b9a0, TAKE, FIRE].contains(a))
+                    .collect();
+                let mut expected = Vec::new();
+                if !held {
+                    expected.push(0x009a_b9a0);
+                }
+                if taken {
+                    expected.push(TAKE);
+                }
+                expected.push(FIRE);
+                assert_eq!(order, expected, "{label}");
+                if !held {
+                    assert_eq!(called(&e, 0x009a_b9a0), vec![vec![beam, this.addr()]]);
+                }
+                assert_eq!(called(&e, FIRE), vec![vec![beam, 0]], "{label}");
+                if taken {
+                    assert_eq!(called(&e, TAKE), vec![vec![this.addr(), 1]], "{label}");
+                }
+                assert_eq!(
+                    e.mem.u32(beam + 0x154),
+                    if taken { 3 } else { 2 },
+                    "{label}"
+                );
+                let kept = e.stewie_kept(
+                    engine_core::extend::stewie::kept::BEAM_DECREASED_PLAYER_AMMO,
+                    4,
+                );
+                assert_eq!(e.mem.u8(kept), u8::from(taken), "{label}");
+                assert_eq!(e.mem.u32(beam + 0xc8) & 0x20, if held { 0 } else { 0x20 });
             }
-            assert_eq!(
-                e.mem.u32(beam + 0x154),
-                if both { 3 } else { 2 },
-                "05 {on05} 06 {on06}"
-            );
         }
     }
 
