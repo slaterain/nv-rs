@@ -190,6 +190,11 @@ pub fn combat_dialogue_manager_start_dialogue(
 /// callback `00967aa0`, `RunResult(0)`) and deletes the item, returning
 /// false; anyone else says it through slot 0x280 with the speaker (its
 /// result), or directly through the process object's slot 0x2A4 (true).
+///
+/// lStewieAl's Tweaks' row S0926 (`CombatSoundCooldownFix`): the time of the last line is not
+/// taken at the start (`0x983A37`, see [`combat_sound_allowed`]) but when a line was said
+/// (`0x9841CC`, see [`combat_sound_said`]).
+#[allow(clippy::too_many_arguments)]
 pub fn fn_009839b0(
     e: &mut Engine,
     _this: Ptr,
@@ -200,6 +205,35 @@ pub fn fn_009839b0(
     flag: u8,
     controller: u32,
 ) -> bool {
+    let mut now = 0u32; // -0x24
+    let said = start_dialogue(
+        e,
+        actor,
+        word,
+        dialogue_type,
+        subtype,
+        flag,
+        controller,
+        &mut now,
+    );
+    if said && e.stewie(engine_core::extend::stewie::COMBAT_SOUND_COOLDOWN) {
+        combat_sound_said(e, actor, word, now);
+    }
+    said
+}
+
+/// [`fn_009839b0`]'s body up to its answer; `now` gets the time it reads (the local at -0x24).
+#[allow(clippy::too_many_arguments)]
+fn start_dialogue(
+    e: &mut Engine,
+    actor: u32,
+    word: u32,
+    dialogue_type: u32,
+    subtype: u32,
+    flag: u8,
+    controller: u32,
+    now_out: &mut u32,
+) -> bool {
     let off = e.call(SETTING_VALUE, &args![DIALOGUE_OFF_SETTING]).u32();
     if e.mem.u8(off) != 0 {
         return false;
@@ -208,11 +242,18 @@ pub fn fn_009839b0(
         return false;
     }
     let now = e.call(CURRENT_TIME, &[]).u32();
+    *now_out = now;
     let last: u32 = e.global(LAST_LINE_TIME);
     if now.wrapping_sub(last) < LINE_GAP {
         return false;
     }
-    e.set_global(LAST_LINE_TIME, now);
+    if e.stewie(engine_core::extend::stewie::COMBAT_SOUND_COOLDOWN) {
+        if !combat_sound_allowed(e, actor, now) {
+            return false;
+        }
+    } else {
+        e.set_global(LAST_LINE_TIME, now);
+    }
     let mut controller = controller;
     if controller == 0 {
         controller = e.vcall(actor, 0x428, &[]).u32();
@@ -421,6 +462,68 @@ pub fn fn_009839b0(
         &args![speaker, 0u32, 0u32, 0u32, said, said, topic, said, 0u32],
     )
     .bool()
+}
+
+/// `fDialogHitSoundCooldownMax` (`011df70c`).
+const HIT_SOUND_COOLDOWN_MAX: u32 = 0x011d_f70c;
+/// The game's random number generator (`00476c00`, `stdcall`, no words) and its "below `n`"
+/// (`00aa5230`, `thiscall(n)`).
+const GAME_RANDOM: u32 = 0x0047_6c00;
+const RANDOM_BELOW: u32 = 0x00aa_5230;
+
+// Translated from lStewieAl's Tweaks 10.05 (Fixes/CombatSoundCooldownFix.cpp):
+// OnCheckTimerShouldAllowSound.
+/// lStewieAl's Tweaks' row S0926 at `0x983A37` (after the exe's 1500 test, in place of taking the
+/// time): for the actor the player last hit that said a line with the hit sound's cooldown at 0
+/// (the kept word `COMBAT_SOUND_PLAYER_TARGET`), an extra wait of 1000 to 2499 (drawn once with
+/// the game's random numbers, `00aa5230(1500)` + 1000, kept in `COMBAT_SOUND_TARGET_WAIT`) is taken
+/// off `now`; a line is allowed when more than 1500 have passed since the last line's time
+/// (`011f170c`, unsigned), which clears the drawn wait.
+pub fn combat_sound_allowed(e: &mut Engine, actor: u32, now: u32) -> bool {
+    let target = e.stewie_kept(
+        engine_core::extend::stewie::kept::COMBAT_SOUND_PLAYER_TARGET,
+        4,
+    );
+    let wait = e.stewie_kept(
+        engine_core::extend::stewie::kept::COMBAT_SOUND_TARGET_WAIT,
+        4,
+    );
+    let last: u32 = e.global(LAST_LINE_TIME);
+    let mut now = now;
+    if actor == e.mem.u32(target) {
+        if e.mem.u32(wait) == 0 {
+            let random = e.call(GAME_RANDOM, &[]).u32();
+            let drawn = e.call(RANDOM_BELOW, &args![random, 1500u32]).u32();
+            e.mem.set_u32(wait, drawn.wrapping_add(1000));
+        }
+        now = now.wrapping_sub(e.mem.u32(wait));
+    }
+    if now.wrapping_sub(last) > LINE_GAP {
+        e.mem.set_u32(wait, 0);
+        return true;
+    }
+    false
+}
+
+// Translated from lStewieAl's Tweaks 10.05 (Fixes/CombatSoundCooldownFix.cpp):
+// GetDialogHitCooldownTime.
+/// lStewieAl's Tweaks' row S0926 at `0x9841CC` (a line was said): the last line's time
+/// (`011f170c`) becomes `now`; with `fDialogHitSoundCooldownMax` at 0 (TTW's value) it is set
+/// 1490 earlier, so the next line may come 10 later, and when the `other` actor is the player the
+/// speaker becomes the kept `COMBAT_SOUND_PLAYER_TARGET`.
+pub fn combat_sound_said(e: &mut Engine, actor: u32, other: u32, now: u32) {
+    let mut time = now;
+    if e.mem.f32(HIT_SOUND_COOLDOWN_MAX + 4) == 0.0 {
+        time = now.wrapping_sub(1490);
+        if other == e.global::<u32>(PLAYER) {
+            let target = e.stewie_kept(
+                engine_core::extend::stewie::kept::COMBAT_SOUND_PLAYER_TARGET,
+                4,
+            );
+            e.mem.set_u32(target, actor);
+        }
+    }
+    e.set_global(LAST_LINE_TIME, time);
 }
 
 // Translated from 00984210 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -645,6 +748,76 @@ mod tests {
         e.call_log = Some(vec![]);
         assert!(say(&mut e, actor, (2, 3), 0, 0));
         assert_eq!(calls(&e, TIMER_ELAPSED), vec![vec![state + 0x13]]);
+    }
+
+    /// S0926 (`CombatSoundCooldownFix`, `0x983A37` and `0x9841CC`), last line at 3000, now 5000:
+    /// off, the time is taken at the start whether a line is said or not (the topic missing for
+    /// type 9). With the row it is taken only when a line was said; with
+    /// `fDialogHitSoundCooldownMax` at 0 it is set 1490 earlier and, the other actor (0x44) being
+    /// the player, the speaker becomes the player's last target.
+    #[test]
+    fn s0926_the_last_line_time_is_taken_when_a_line_was_said() {
+        // (row, the setting, kind, said, the time after)
+        for (on, max, kind, said, time) in [
+            (false, 1.0f32, (2u32, 2u32), true, 5000u32),
+            (false, 1.0, (9, 0), false, 5000),
+            (true, 1.0, (2, 2), true, 5000),
+            (true, 1.0, (9, 0), false, 3000),
+            (true, 0.0, (2, 2), true, 3510),
+        ] {
+            let (mut e, actor, controller, _) = world();
+            e.set_stewie(engine_core::extend::stewie::COMBAT_SOUND_COOLDOWN, on);
+            e.map(0x011d_f000, 0x1000);
+            e.mem.set_f32(HIT_SOUND_COOLDOWN_MAX + 4, max);
+            e.set_global(PLAYER, 0x44u32);
+            e.set_global(LAST_LINE_TIME, 3000u32);
+            assert_eq!(
+                say(&mut e, actor, kind, 0, controller),
+                said,
+                "on {on} {kind:?}"
+            );
+            assert_eq!(
+                e.global::<u32>(LAST_LINE_TIME),
+                time,
+                "on {on} {kind:?} {max}"
+            );
+            let target = e.stewie_kept(
+                engine_core::extend::stewie::kept::COMBAT_SOUND_PLAYER_TARGET,
+                4,
+            );
+            let expected = if on && max == 0.0 { actor } else { 0 };
+            assert_eq!(e.mem.u32(target), expected, "on {on} {max}");
+        }
+    }
+
+    /// S0926 (`OnCheckTimerShouldAllowSound`, `0x983A37`): more than 1500 since the last line
+    /// (3000) allows a line, exactly 1500 does not (the exe's own test passes it). For the
+    /// player's last target an extra wait (`00aa5230(1500)` + 1000: 1300 here) is drawn once and
+    /// taken off now: 5800 is held, 5801 allowed, which clears the drawn wait.
+    #[test]
+    fn s0926_the_players_last_target_waits_longer() {
+        let (mut e, actor, _, _) = world();
+        e.register(GAME_RANDOM, |_, _| 0x9900u32.into_ret());
+        e.register(RANDOM_BELOW, |_, _| 300u32.into_ret());
+        e.set_global(LAST_LINE_TIME, 3000u32);
+        assert!(!combat_sound_allowed(&mut e, actor, 4500));
+        assert!(combat_sound_allowed(&mut e, actor, 4501));
+        assert!(calls(&e, RANDOM_BELOW).is_empty());
+        let target = e.stewie_kept(
+            engine_core::extend::stewie::kept::COMBAT_SOUND_PLAYER_TARGET,
+            4,
+        );
+        let wait = e.stewie_kept(
+            engine_core::extend::stewie::kept::COMBAT_SOUND_TARGET_WAIT,
+            4,
+        );
+        e.mem.set_u32(target, actor);
+        assert!(!combat_sound_allowed(&mut e, actor, 5800));
+        assert_eq!(e.mem.u32(wait), 1300);
+        assert_eq!(calls(&e, RANDOM_BELOW), vec![vec![0x9900, 1500]]);
+        assert!(combat_sound_allowed(&mut e, actor, 5801));
+        assert_eq!(e.mem.u32(wait), 0);
+        assert_eq!(calls(&e, RANDOM_BELOW).len(), 1, "drawn once");
     }
 
     #[test]

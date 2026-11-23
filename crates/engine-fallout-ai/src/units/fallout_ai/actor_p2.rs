@@ -3573,21 +3573,61 @@ fn update_weapon_sound(e: &mut Engine, f: &UpdateFrame) {
     if e.call(ANIMATION_ENTRY_KIND, &args![entry]).u32() != 1 {
         return;
     }
-    if e.call(ANIMATION_FIELD_0X70F490, &args![animation, 4u32])
-        .i32()
-        >= 1
-    {
+    // lStewieAl's Tweaks' row S0489 (`patchSpinWeaponsAlwaysPlaySound`, `JGE` to `JG` at
+    // `0x8893F7`): with the row a count of exactly 1 goes on too.
+    let spin_row = e.stewie(engine_core::extend::stewie::SPIN_WEAPON_SOUND);
+    let count = e
+        .call(ANIMATION_FIELD_0X70F490, &args![animation, 4u32])
+        .i32();
+    let stop = if spin_row { count > 1 } else { count >= 1 };
+    if stop {
         return;
     }
     let lists = e.call(GET_EXTRA_DATA_LIST_ADDRESS, &args![this]).u32();
     e.call(EXTRA_GET_WEAPON_ATTACK_SOUND, &args![lists, sound]);
     if !e.call(SOUND_HANDLE_IS_VALID, &args![sound]).bool() {
         start_weapon_attack_sound(e, f);
+    } else if spin_row {
+        // S0489: the jump at `0x889420` lands on the play (`0x8895A3`, the byte at `0x889422`),
+        // skipping the playing test, and the play's call at `0x8895A8` is Tweaks'.
+        spin_weapon_play(e, sound, weapon);
     } else if !e.call(SOUND_HANDLE_IS_PLAYING, &args![sound]).bool() {
         e.call(SOUND_HANDLE_PLAY, &args![sound, 0u32]);
     }
     let lists = e.call(GET_EXTRA_DATA_LIST_ADDRESS, &args![this]).u32();
     e.call(EXTRA_SET_WEAPON_ATTACK_SOUND, &args![lists, sound]);
+}
+
+// Translated from lStewieAl's Tweaks 10.05 (main.h): PlaySoundSkipIsPlayingIfNotSprtlWood and
+// PlaySoundSkipIsPlaying.
+/// lStewieAl's Tweaks' row S0489's play of the weapon attack sound (`weapon` the actor's weapon,
+/// the exe's local at -0x3C): for any weapon but Sprtl Wood's unique gatling laser (form id
+/// `05000803` as Tweaks names it) a sound with a key (+0, not -1) is marked playing (+8 = 1) and a
+/// play message (1) with its key is queued on the audio manager (`011f6ef0`, `00adb1a0`) without
+/// asking whether it already plays; that weapon's sound plays as the exe's (`00ad8830` with 0).
+fn spin_weapon_play(e: &mut Engine, sound: u32, weapon: u32) {
+    if e.mem.u32(weapon + 0xc) == 0x0500_0803 {
+        e.call(SOUND_HANDLE_PLAY, &args![sound, 0u32]);
+        return;
+    }
+    let key = e.mem.u32(sound);
+    if key != u32::MAX {
+        e.mem.set_u32(sound + 8, 1);
+        e.call(
+            0x00ad_b1a0,
+            &args![
+                0x011f_6ef0u32,
+                1u32,
+                key,
+                0u32,
+                0u32,
+                0u32,
+                0.0f32,
+                0.0f32,
+                0.0f32
+            ],
+        );
+    }
 }
 
 /// Creates the sound handle for the weapon attack sound of `Actor::Update`
@@ -3713,6 +3753,39 @@ fn update_movement_mode(e: &mut Engine, f: &mut UpdateFrame) {
     }
 }
 
+// Translated from lStewieAl's Tweaks 10.05 (Fixes/ContinuousBeamProjectileCrashFix.cpp):
+// OnActorUpdate_UpdateBeam.
+/// lStewieAl's Tweaks' row S0130.02: an actor other than the player (`011dea3c`) holding a
+/// continuous beam (+0x1A0) keeps it firing (the beam's slot `0x310` with 0.0, as the player's
+/// update does) while its process' current animation action (slot `0x3e4`, a signed word) is an
+/// attack one (2 to 6: attack, follow-through, latency, throw attach, throw release); otherwise the
+/// beam is set to fade (flag 0x20 at +0xC8). No process counts as no attack. Tweaks installs it
+/// with S0130.01 (the shooter's beam pointer cleared when the beam is freed); here it acts only
+/// while that row is on too, so it never follows a stale pointer (a guard against a crash).
+fn update_npc_beam(e: &mut Engine, this: Ptr<Actor>) {
+    if !e.stewie(engine_core::extend::stewie::NPC_CONTINUOUS_BEAM)
+        || !e.stewie(engine_core::extend::stewie::BEAM_SHOOTER_POINTER)
+        || this.addr() == e.global::<u32>(PLAYER_CHARACTER)
+    {
+        return;
+    }
+    let beam = e.mem.u32(this.addr() + 0x1a0);
+    if beam == 0 {
+        return;
+    }
+    let process = e.mem.u32(this.addr() + 0x68);
+    let attacking = process != 0 && {
+        let action = e.vcall(process, 0x3e4, &args![]).u16() as i16;
+        (2..=6).contains(&action)
+    };
+    if attacking {
+        e.vcall(beam, 0x310, &args![0.0f32]);
+    } else {
+        let flags = e.mem.u32(beam + 0xc8);
+        e.mem.set_u32(beam + 0xc8, flags | 0x20);
+    }
+}
+
 /// The position part of `Actor::Update`: the player's 3D object is placed
 /// at the actor's position (`00440460`), any other actor goes through
 /// [`actor_update_actor_3d_position`] and the process virtual `+0x428`;
@@ -3729,6 +3802,9 @@ fn update_position(e: &mut Engine, f: &UpdateFrame) {
         let process = e.get(this, Actor::pCurrentProcess);
         e.vcall(process.addr(), PROCESS_VSLOT_0X428, &args![this]);
     }
+    // lStewieAl's Tweaks' row S0130.02 (`ContinuousBeamProjectileCrashFix`, its
+    // `OnActorUpdate_UpdateBeam` before the call at `0x889869`).
+    update_npc_beam(e, this);
     let link = e.call(GET_LINKED_OBJECT, &args![this]).u32();
     if link != 0 && typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, link)) != 0 {
         let word = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, link));
@@ -11791,6 +11867,202 @@ mod tests {
             handle_scratch >= item + 0x24,
             "{handle_scratch:08x} {item:08x}"
         );
+    }
+
+    /// S0130.02 (`ContinuousBeamProjectileCrashFix`, `OnActorUpdate_UpdateBeam`): an NPC's beam
+    /// (+0x1A0) is fired on (slot `0x310` with 0.0) while its process' animation action (slot
+    /// `0x3e4`) is 2 to 6 and set to fade (0x20 at +0xC8) for any other (-1 included); the
+    /// player's beam, the row off and S0130.01 (the beam pointer's guard) off are left alone.
+    #[test]
+    fn s0130_02_an_npcs_beam_follows_its_attack() {
+        // (row, S0130.01, the player, action, fired, fading)
+        for (on, pointer, is_player, action, fired, fading) in [
+            (false, true, false, 2u32, 0usize, false),
+            (true, true, false, 2, 1, false),
+            (true, true, false, 6, 1, false),
+            (true, true, false, 7, 0, true),
+            (true, true, false, 1, 0, true),
+            (true, true, false, 0xffff, 0, true),
+            (true, true, true, 7, 0, false),
+            (true, false, false, 2, 0, false),
+            (true, false, false, 7, 0, false),
+        ] {
+            let mut e = engine2();
+            e.set_stewie(engine_core::extend::stewie::NPC_CONTINUOUS_BEAM, on);
+            e.set_stewie(engine_core::extend::stewie::BEAM_SHOOTER_POINTER, pointer);
+            let actor = actor2(&mut e);
+            let other = actor2(&mut e);
+            set_player(&mut e, if is_player { actor } else { other });
+            with_process(&mut e, actor);
+            slot(&mut e, PROCESS_TABLE, 0x3e4, eax(0xabcd_0000 | action));
+            slot(&mut e, OTHER_TABLE, 0x310, eax(0));
+            let beam = e.mem.alloc(0x160);
+            e.mem.set_u32(beam, OTHER_TABLE);
+            e.mem.set_u32(beam + 0xc8, 0x4);
+            e.mem.set_u32(actor.addr() + 0x1a0, beam);
+            e.call_log = Some(vec![]);
+            update_npc_beam(&mut e, actor);
+            let fires: Vec<_> = logged(&e)
+                .into_iter()
+                .filter(|entry| entry.0 == slot_target(OTHER_TABLE, 0x310))
+                .collect();
+            assert_eq!(
+                fires.len(),
+                fired,
+                "on {on} player {is_player} action {action}"
+            );
+            if fired == 1 {
+                assert_eq!(fires[0].1, vec![beam, 0]);
+            }
+            let flags = if fading { 0x24 } else { 0x4 };
+            assert_eq!(e.mem.u32(beam + 0xc8), flags, "on {on} action {action}");
+        }
+    }
+
+    /// S0130.02 reached through `Actor::Update`'s position part ([`update_position`], before the
+    /// call at `0x889869`): an NPC's beam is fired on (slot `0x310` with 0.0) during its attack
+    /// (action 2) and set to fade after it (action 7) with the rows on; off, `Actor::Update`
+    /// leaves it alone.
+    #[test]
+    fn s0130_02_actor_update_moves_an_npcs_beam() {
+        // (rows, action, fired, fading)
+        for (on, action, fired, fading) in [
+            (false, 2u32, 0usize, false),
+            (false, 7, 0, false),
+            (true, 2, 1, false),
+            (true, 7, 0, true),
+        ] {
+            let mut e = engine2();
+            e.set_stewie(engine_core::extend::stewie::NPC_CONTINUOUS_BEAM, on);
+            e.set_stewie(engine_core::extend::stewie::BEAM_SHOOTER_POINTER, on);
+            let actor = actor2(&mut e);
+            let other = actor2(&mut e);
+            set_player(&mut e, other);
+            with_process(&mut e, actor);
+            slot(&mut e, PROCESS_TABLE, 0x3e4, eax(action));
+            slot(&mut e, OTHER_TABLE, 0x310, eax(0));
+            let beam = e.mem.alloc(0x160);
+            e.mem.set_u32(beam, OTHER_TABLE);
+            e.mem.set_u32(beam + 0xc8, 0x4);
+            e.mem.set_u32(actor.addr() + 0x1a0, beam);
+            e.mem.set_u8(GLOBAL_FLAG_011F3E60, 1);
+            e.call_log = Some(vec![]);
+            update_position(&mut e, &update_frame(actor, 0, 0, 0));
+            let fires: Vec<_> = logged(&e)
+                .into_iter()
+                .filter(|entry| entry.0 == slot_target(OTHER_TABLE, 0x310))
+                .collect();
+            assert_eq!(fires.len(), fired, "on {on} action {action}");
+            if fired == 1 {
+                assert_eq!(fires[0].1, vec![beam, 0]);
+            }
+            let flags = if fading { 0x24 } else { 0x4 };
+            assert_eq!(e.mem.u32(beam + 0xc8), flags, "on {on} action {action}");
+            assert_eq!(
+                e.mem.u8(GLOBAL_FLAG_011F3E60),
+                0,
+                "the position part ran to its end"
+            );
+        }
+    }
+
+    /// S0489 (`PlaySoundSkipIsPlayingIfNotSprtlWood`): a sound with a key (+0) is marked playing
+    /// (+8) and a play message (1, its key) goes to the audio manager without asking whether it
+    /// plays; no key (-1) does nothing; Sprtl Wood's Gatling laser (`05000803`) plays as the exe.
+    #[test]
+    fn s0489_the_spin_sound_is_started_without_the_playing_test() {
+        for (key, id, message, played) in [
+            (0x55u32, 0x0001_2345u32, true, false),
+            (u32::MAX, 0x0001_2345, false, false),
+            (0x55, 0x0500_0803, false, true),
+        ] {
+            let mut e = engine2();
+            double(&mut e, 0x00ad_b1a0, eax(0));
+            double(&mut e, SOUND_HANDLE_PLAY, eax(0));
+            let weapon = e.mem.alloc(0x40);
+            e.mem.set_u32(weapon + 0xc, id);
+            let sound = e.mem.alloc(0xc);
+            e.mem.set_u32(sound, key);
+            e.call_log = Some(vec![]);
+            spin_weapon_play(&mut e, sound, weapon);
+            assert_eq!(
+                was_called(&e, 0x00ad_b1a0),
+                message,
+                "key {key:#x} id {id:#x}"
+            );
+            assert_eq!(was_called(&e, SOUND_HANDLE_PLAY), played, "id {id:#x}");
+            if message {
+                assert_eq!(
+                    args_of(&e, 0x00ad_b1a0),
+                    vec![0x011f_6ef0, 1, 0x55, 0, 0, 0, 0, 0, 0]
+                );
+                assert_eq!(e.mem.u32(sound + 8), 1);
+            } else {
+                assert_eq!(e.mem.u32(sound + 8), 0);
+            }
+            if played {
+                assert_eq!(args_of(&e, SOUND_HANDLE_PLAY), vec![sound, 0]);
+            }
+        }
+    }
+
+    /// S0489 in `Actor::Update`'s weapon sound (`0x8893F7`, `0x889420`): a looping attack whose
+    /// count (`0070f490` with 4) is 1 gets its sound with the row (the exe needs 0), and a valid
+    /// sound that still plays is started again through Tweaks' play; a count of 2 stops both ways.
+    #[test]
+    fn s0489_a_looping_attack_sound_restarts_after_a_short_stop() {
+        // (row, count, the sound asked, the spin play)
+        for (on, count, asked, restarted) in [
+            (false, 1u32, false, false),
+            (true, 1, true, true),
+            (true, 2, false, false),
+            (false, 0, true, false),
+        ] {
+            let mut e = engine2();
+            e.set_stewie(engine_core::extend::stewie::SPIN_WEAPON_SOUND, on);
+            let actor = actor2(&mut e);
+            for (address, answer) in [
+                (WEAPON_OBJECT_OF, 0x4400),
+                (WEAPON_OBJECT_TEST, 1),
+                (ACTOR_RANGE_TEST, 1),
+                (ANIMATION_FIELD_0X70F490, count),
+                (ANIMATION_LOOKUP, 0x4500),
+                (IS_ATTACK_ACTION, 1),
+                (ANIMATION_ENTRY_KIND, 1),
+                (SOUND_HANDLE_IS_VALID, 1),
+                (SOUND_HANDLE_IS_PLAYING, 1),
+                (0x00ad_b1a0, 0),
+                (GET_LAST_BOUND_WEAPON, 0),
+                (ANIMATION_GROUP_FIELD, 0),
+                (GET_EXTRA_DATA_LIST_ADDRESS, 0),
+                (EXTRA_GET_WEAPON_ATTACK_SOUND, 0),
+                (EXTRA_SET_WEAPON_ATTACK_SOUND, 0),
+                (SOUND_HANDLE_STOP, 0),
+                (WEAPON_TEST_0X524B40, 0),
+                (SOUND_HANDLE_PLAY, 0),
+            ] {
+                double(&mut e, address, eax(answer));
+            }
+            let weapon = e.mem.alloc(0x40);
+            e.mem.set_u32(weapon + 0xc, 0x0001_2345);
+            let sound = e.mem.alloc(0xc);
+            e.mem.set_u32(sound, 0x77);
+            let mut frame = update_frame(actor, 0, weapon, sound);
+            frame.animation = 0x4600;
+            e.call_log = Some(vec![]);
+            update_weapon_sound(&mut e, &frame);
+            assert_eq!(
+                was_called(&e, SOUND_HANDLE_IS_VALID),
+                asked,
+                "on {on} count {count}"
+            );
+            assert_eq!(
+                was_called(&e, 0x00ad_b1a0),
+                restarted,
+                "on {on} count {count}"
+            );
+            assert!(!was_called(&e, SOUND_HANDLE_PLAY), "on {on} count {count}");
+        }
     }
 
     #[test]
