@@ -3847,7 +3847,20 @@ pub(crate) fn init_item_extra(
             {
                 e.call(MAP_MARKER_SET_TRAVEL_LOC, &args![marker, 0u32]);
             }
-            let reputation_id = e.call(MAP_MARKER_GET_REPUTATION, &args![marker]).u32();
+            // lStewieAl's Tweaks' S0131 (`OnGetMapMarkerReputationIDHook` at `0x416E17`): the
+            // stored reputation id (`+0x10`) goes through `AddCompileIndex` with the file first,
+            // so a plugin's marker names its own reputation, not the one at that id in the master.
+            let reputation_id =
+                if e.stewie(engine_core::extend::stewie::MAP_MARKER_REPUTATION_INDEX) {
+                    let stored = e.mem.u32(marker.wrapping_add(0x10));
+                    if stored != 0 {
+                        add_compile_index(e, stored, file)
+                    } else {
+                        0
+                    }
+                } else {
+                    e.call(MAP_MARKER_GET_REPUTATION, &args![marker]).u32()
+                };
             if reputation_id != 0 {
                 let data_handler = e.global::<u32>(DATA_HANDLER);
                 let reputation = e
@@ -10282,6 +10295,47 @@ mod tests {
         let log = run_init(&mut e, list, reference);
         assert!(chain_types(&e, list.cast()).is_empty());
         assert_eq!(deleted(&log).len(), 1);
+    }
+
+    /// lStewieAl's Tweaks' S0131: with the row the stored reputation id (`+0x10`) goes through
+    /// `AddCompileIndex` with the reference's file before the data handler is asked; 0 stays
+    /// unresolved; off, the exe's getter's answer is used as it is.
+    #[test]
+    fn s0131_the_map_marker_reputation_takes_the_plugin_s_index() {
+        let run = |row: bool, stored: u32| {
+            let (mut e, _state, reference) = init_engine();
+            e.set_global(DATA_HANDLER, 0x4444u32);
+            e.register(MAP_MARKER_GET_TRAVEL_LOC, |_, _| returns(0));
+            e.register(MAP_MARKER_GET_VISIBLE, |_, _| returns(1));
+            e.register(MAP_MARKER_GET_REPUTATION, |e, a| {
+                returns(e.mem.u32(a[0] + 0x10))
+            });
+            stub(&mut e, MAP_MARKER_SET_REPUTATION);
+            e.register(DATA_HANDLER_GET_REPUTATION, |_, a| returns(a[1] + 0x100));
+            e.register(ADD_COMPILE_INDEX, |e, a| {
+                let id = e.mem.u32(a[0]);
+                e.mem.set_u32(a[0], (id & 0x00ff_ffff) | 0x0700_0000);
+                Ret::default()
+            });
+            let marker = e.mem.alloc(0x20);
+            e.mem.set_u32(marker + 0x10, stored);
+            let (list, _) = list_with_payloads(&mut e, &[(0x2c, marker)]);
+            e.set_stewie(
+                engine_core::extend::stewie::MAP_MARKER_REPUTATION_INDEX,
+                row,
+            );
+            let log = run_init(&mut e, list, reference);
+            (
+                calls_to(&log, DATA_HANDLER_GET_REPUTATION)
+                    .iter()
+                    .map(|c| c[1])
+                    .collect::<Vec<_>>(),
+                calls_to(&log, ADD_COMPILE_INDEX).len(),
+            )
+        };
+        assert_eq!(run(false, 0x0100_1234), (vec![0x0100_1234], 0));
+        assert_eq!(run(true, 0x0100_1234), (vec![0x0700_1234], 1));
+        assert_eq!(run(true, 0), (vec![], 0));
     }
 
     #[test]
