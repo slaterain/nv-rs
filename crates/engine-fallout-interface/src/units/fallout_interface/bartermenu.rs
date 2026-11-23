@@ -4770,8 +4770,8 @@ mod n051_tests {
             e.set_global(BARTER_CURRENT_ITEM, it);
             e.set_global(ITEM_ENTERED_0119FDB0, 1u8);
             answer(&mut e, FORM_TYPE, 0x18);
-            e.register(STAT_004BE060, move |_, _| st0(dr));
-            e.register(STAT_004BE180, move |_, _| st0(dt));
+            e.register_double(STAT_004BE060, move |_, _| st0(dr));
+            e.register_double(STAT_004BE180, move |_, _| st0(dt));
             e.set_stewie(engine_core::extend::stewie::INVENTORY_STAT_ALPHAS, on);
             e.call_log = Some(vec![]);
             e.call(0x0073_06d0, &args![this]);
