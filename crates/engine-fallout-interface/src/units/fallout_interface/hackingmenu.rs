@@ -2260,6 +2260,17 @@ pub fn hacking_menu_prepare(e: &mut Engine, this: Ptr<HackingMenu>, count: u32) 
     });
 }
 
+/// The wait before the terminal opens after the right password (`0x76719C`'s `ADD EAX,0xBB8`):
+/// 3000 ms; with lStewieAl's Tweaks' S0278 (`[Tweaks] bFasterHackingTransition`, 500 written over
+/// the immediate at `0x76719D`) 500 ms.
+fn access_wait(e: &Engine) -> u32 {
+    if e.stewie(engine_core::extend::stewie::HACKING_FASTER_TRANSITION) {
+        500
+    } else {
+        0xbb8
+    }
+}
+
 /// The game heap (`011f6238`) and its allocate (`00aa3e40`: `this`, size): xNVSE's
 /// `GameHeapAlloc`.
 const GAME_HEAP: u32 = 0x011f_6238;
@@ -3239,7 +3250,8 @@ pub fn hacking_menu_do_click(e: &mut Engine, this: Ptr<HackingMenu>, id: i32, ti
                 &args![base + SOUNDS + 0xc, 0xfau32, 0u32],
             );
             let now = e.call(GAME_TIME, &args![]).u32();
-            e.set(this, HackingMenu::dwAccessTime, now.wrapping_add(0xbb8));
+            let wait = access_wait(e);
+            e.set(this, HackingMenu::dwAccessTime, now.wrapping_add(wait));
             e.set(this, HackingMenu::eStage, 4);
             if e.get(this, HackingMenu::pTerminal) != 0 {
                 let reference = e.get(this, HackingMenu::pTerminalRef);
@@ -5535,6 +5547,17 @@ mod n054_menu_tests {
             vec![vec![0x12, WORD_FILE_MESSAGE, 0x5000]]
         );
         assert_eq!(calls_to(&e, MENU_START_FADE_OUT).len(), 1);
+    }
+
+    /// Row S0278 (lStewieAl's Tweaks' `patchFasterHackingToComputerTransition`, `0x76719D`): the
+    /// wait before the terminal opens is 3000 ms, 500 with the row on.
+    #[test]
+    fn s0278_the_terminal_opens_sooner() {
+        for (on, wanted) in [(false, 3000u32), (true, 500)] {
+            let e = Engine::new();
+            e.set_stewie(engine_core::extend::stewie::HACKING_FASTER_TRANSITION, on);
+            assert_eq!(access_wait(&e), wanted);
+        }
     }
 
     /// Row S0015 (lStewieAl's Tweaks' `EasterEggs`, `0x7680BA`): with the row on `Prepare` empties

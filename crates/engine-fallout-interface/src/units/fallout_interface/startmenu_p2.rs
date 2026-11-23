@@ -2125,10 +2125,13 @@ pub fn fn_007d5830(e: &mut Engine, this: Ptr<StartMenu>) -> bool {
     }
     let loading_menu = e.global::<u32>(LOADING_MENU);
     if get_flag(e, this, FLAG_IIS_PREFADE) && loading_menu != 0 {
-        let controls_object = controls(e);
-        if e.call(MOUSE_BUTTON_STATE, &args![controls_object, 0u32, 2u32])
-            .bool()
-        {
+        // `0x7D586E`: lStewieAl's Tweaks' S0351 (`bSkipIntroVideo`, `autoSkipLoadingTiles`)
+        // jumps over the mouse button test (to `0x7D5888`): the intro is skipped as if clicked.
+        if e.stewie(engine_core::extend::stewie::INTRO_SKIPPED) || {
+            let controls_object = controls(e);
+            e.call(MOUSE_BUTTON_STATE, &args![controls_object, 0u32, 2u32])
+                .bool()
+        } {
             let loading_menu = e.global::<u32>(LOADING_MENU);
             e.call(LOADING_MENU_FN_078AA90, &args![loading_menu]);
         }
@@ -2251,7 +2254,14 @@ pub fn start_menu_save_load_idle(e: &mut Engine, this: Ptr<StartMenu>) -> bool {
     }
     if get_flag(e, this, FLAG_SAVE_WAIT_MESSAGE) {
         let now = e.call(TICK_COUNT, &[]).u32();
-        e.set_global(SAVE_WAIT_DEADLINE, now.wrapping_add(0xbb8));
+        // `0x7D5B2C`: lStewieAl's Tweaks' S0276 (`bFasterSaveMenuClose`, `patchSaveDelay`) writes
+        // 0 over the 3000 ms wait after a save.
+        let wait = if e.stewie(engine_core::extend::stewie::SAVE_MENU_CLOSES_AT_ONCE) {
+            0
+        } else {
+            0xbb8
+        };
+        e.set_global(SAVE_WAIT_DEADLINE, now.wrapping_add(wait));
         set_flag(e, this, FLAG_SAVE_WAIT_MESSAGE, false);
         set_flag(e, this, FLAG_SAVE_WAIT_SAVING, true);
         return true;
@@ -6553,6 +6563,46 @@ mod tests {
         assert!(start_menu_save_load_idle(&mut e, menu));
         assert_eq!(e.global::<u32>(SAVE_WAIT_DEADLINE), 1000 + 0xbb8);
         assert_eq!(flags(&e, menu), FLAG_SAVE_WAIT_SAVING);
+    }
+
+    /// Row S0276 (lStewieAl's Tweaks' `patchSaveDelay`, `[Tweaks] bFasterSaveMenuClose`,
+    /// `0x7D5B2C`): with the row on the wait after a save is 0 ms, not 3000.
+    #[test]
+    fn s0276_no_wait_after_a_save() {
+        for (on, wanted) in [(false, 1000 + 0xbb8), (true, 1000)] {
+            let mut e = engine();
+            let menu = new_menu(&mut e);
+            set_flags(&mut e, menu, FLAG_SAVE_WAIT_MESSAGE);
+            stub(&mut e, LIST_CONTAINER_VALID, 1);
+            stub(&mut e, TICK_COUNT, 1000);
+            e.set_stewie(engine_core::extend::stewie::SAVE_MENU_CLOSES_AT_ONCE, on);
+            assert!(start_menu_save_load_idle(&mut e, menu));
+            assert_eq!(e.global::<u32>(SAVE_WAIT_DEADLINE), wanted, "row {on}");
+        }
+    }
+
+    /// Row S0351 (lStewieAl's Tweaks' `autoSkipLoadingTiles`, `[Tweaks] bSkipIntroVideo`,
+    /// `0x7D586E`): with the row on the intro is skipped (`0078aa90`) without the mouse button
+    /// being asked; off, only when the button is down.
+    #[test]
+    fn s0351_the_intro_is_skipped() {
+        for (on, button, skipped) in [(false, 0u32, false), (false, 1, true), (true, 0, true)] {
+            let mut e = engine();
+            let menu = new_menu(&mut e);
+            e.set_global(LOADING_MENU, 0x4321u32);
+            set_flags(&mut e, menu, FLAG_IIS_PREFADE);
+            e.register_double(MOUSE_BUTTON_STATE, move |_, _| ret(button));
+            stub(&mut e, CONTROLS_GET, 0x2222);
+            e.set_stewie(engine_core::extend::stewie::INTRO_SKIPPED, on);
+            e.call_log = Some(Vec::new());
+            fn_007d5830(&mut e, menu);
+            assert_eq!(
+                calls(&e, LOADING_MENU_FN_078AA90).len(),
+                usize::from(skipped),
+                "row {on} button {button}"
+            );
+            assert_eq!(calls(&e, MOUSE_BUTTON_STATE).len(), usize::from(!on));
+        }
     }
 
     #[test]

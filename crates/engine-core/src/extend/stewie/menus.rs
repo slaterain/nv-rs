@@ -259,3 +259,33 @@ pub const CHARGEN_QUEST_MISSING_ALERT: Row = Row::share(MENUS_FIXES, MENUS_FIXES
 /// `0xA1398D`, `0xA13AAC`, `0xA13B59`, `0xA13B96`): measured text counts each letter's leading
 /// edge, as it is drawn, so monospace fonts are measured as wide as they show.
 pub const FONT_WIDTH_COUNTS_LEADING_EDGE: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 67);
+
+// ---- Share 3's tweaks (Tweaks' own switches; VNV turns these on) ----
+
+const fn tweak(n: u16) -> Row {
+    Row::share(MENUS_TWEAKS, MENUS_TWEAKS_END, n)
+}
+
+/// S0276 `patchSaveDelay` (`[Tweaks] bFasterSaveMenuClose`; `StartMenu::SaveLoadIdle` `007d5af0`
+/// at `0x7D5B2C`): no 3000 ms wait after a save.
+pub const SAVE_MENU_CLOSES_AT_ONCE: Row = tweak(0);
+/// S0278 `patchFasterHackingToComputerTransition` (`[Tweaks] bFasterHackingTransition`;
+/// `HackingMenu::DoClick` `00766b80` at `0x76719D`): the terminal opens 500 ms after the password,
+/// not 3000.
+pub const HACKING_FASTER_TRANSITION: Row = tweak(1);
+/// S0351 `autoSkipLoadingTiles` (`[Tweaks] bSkipIntroVideo`; `007d5830` at `0x7D586E`): the intro
+/// is skipped as if clicked.
+pub const INTRO_SKIPPED: Row = tweak(2);
+/// S0407 `patchNonSelectablePlayerInConsole` (`[Tweaks] bNonSelectablePlayerInConsole`; the
+/// console's pick `00710880` at `0x7109D2`): clicking in the console never picks the player.
+pub const CONSOLE_PLAYER_NOT_SELECTABLE: Row = tweak(3);
+/// S0482 `patchDontAllowConsoleBeforeInitIsDone` (`[Tweaks] bDontAllowConsoleTillLoadingIsDone`;
+/// `InterfaceManager::Idle` at `0x70E627`): the console does not open during the game's first load.
+pub const CONSOLE_NOT_DURING_FIRST_LOAD: Row = tweak(4);
+/// S0556 `patchNoCharacterNameLimit` (`[Tweaks] bNoPlayerNameLimit`; the name entry `007e6320` at
+/// `0x7E6480`): the player's name is not cut at the box's width.
+pub const NO_PLAYER_NAME_LIMIT: Row = tweak(5);
+/// S0592 `patchFasterEnterLockPickMenu` (`[Tweaks] bFasterEnterLockpickMenu`;
+/// `LockPickMenu::DoIdle` `0078eb50` at `0x78EC4D`): the lock pick menu's entering animation ends
+/// at once.
+pub const LOCKPICK_ENTER_AT_ONCE: Row = tweak(6);

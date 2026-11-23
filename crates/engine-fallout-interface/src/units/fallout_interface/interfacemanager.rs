@@ -649,6 +649,8 @@ const MESSAGE_ICON_PATH: u32 = 0x0102_08a0;
 const CONSOLE_KEY_FLAG_GET: u32 = 0x0070_ed10;
 const CONSOLE_KEY_FLAG_SET: u32 = 0x0070_ed20;
 const MENU_CONSOLE_TOGGLE_VISIBLE: u32 = 0x0071_d580;
+/// xNVSE's `isInInitialLoading` (`011a0294`): set while the game's first load runs.
+const INITIAL_LOADING: u32 = 0x011a_0294;
 const ADD_TO_ENTER_STACK: u32 = 0x0071_4d90;
 const POP_FROM_ENTER_STACK: u32 = 0x0071_4fd0;
 const MENU_MANAGER_IS_MENU_OPEN: u32 = 0x0072_0f90;
@@ -3140,6 +3142,32 @@ fn idle_gamepad_events(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut 
     }
 }
 
+/// The console key's toggle in `Idle` (`0x70E627`, `0071d580` on the console): whether the console
+/// is now open. With lStewieAl's Tweaks' S0482 (`[Tweaks] bDontAllowConsoleTillLoadingIsDone`,
+/// `OpenConsoleCheckInitDoneHook`) during the game's first load (xNVSE's `isInInitialLoading`,
+/// `011a0294`) it is not toggled and counts as closed.
+fn console_toggled(e: &mut Engine, console: u32) -> bool {
+    if e.stewie(stewie::CONSOLE_NOT_DURING_FIRST_LOAD) && e.mem.u8(INITIAL_LOADING) != 0 {
+        return false;
+    }
+    e.call(MENU_CONSOLE_TOGGLE_VISIBLE, &args![console]).bool()
+}
+
+/// The console click pick's test whether a reference is listed already (`0x7109D2`, `005f65d0` on
+/// the list with the slot holding the reference). With lStewieAl's Tweaks' S0407
+/// (`[Tweaks] bNonSelectablePlayerInConsole`, `InterfaceManagerShouldNotAppendToSelectableRefs`)
+/// no reference and the player (form id 0x14) count as listed, so the click never picks the
+/// player.
+fn pick_listed(e: &mut Engine, list: u32, slot: u32) -> bool {
+    if e.stewie(stewie::CONSOLE_PLAYER_NOT_SELECTABLE) {
+        let reference = e.mem.u32(slot);
+        if reference == 0 || e.mem.u32(reference + 0xc) == 0x14 {
+            return true;
+        }
+    }
+    e.call(LIST_CONTAINS, &args![list, slot]).bool()
+}
+
 /// The quick save and quick load buttons' test (`0x70E549`, `0x70E58D`): the exe's
 /// `XUserInterface::XUIIsUp` (`0070edf0`: the start menu `011daac0` is there and bit 0 of its
 /// flags, +0x1A8, is clear). With lStewieAl's Tweaks' S0022.33 its `InMainMenuOrConsoleOpen` in
@@ -3302,9 +3330,7 @@ fn idle_console_and_hot_keys(e: &mut Engine, this: Ptr<InterfaceManager>, state:
     if key != 0 || console_wanted {
         state.console = e.call(MENU_CONSOLE_INSTANCE, &args![1u32]).u32();
         e.call(CLEAR_KEYSTROKES, &args![state.controls]);
-        if e.call(MENU_CONSOLE_TOGGLE_VISIBLE, &args![state.console])
-            .bool()
-        {
+        if console_toggled(e, state.console) {
             e.call(ADD_TO_ENTER_STACK, &args![this, 3u32]);
         } else {
             e.call(POP_FROM_ENTER_STACK, &args![this, 3u32, 0u32]);
@@ -4534,7 +4560,7 @@ pub fn fn_00710880(e: &mut Engine, this: Ptr<InterfaceManager>) {
                             let reference = e.call(FIND_REFERENCE_FOR_3D, &args![object]).u32();
                             let seen = e.with_stack(4, |e, slot| {
                                 e.mem.set_u32(slot.addr(), reference);
-                                let seen = e.call(LIST_CONTAINS, &args![list, slot]).bool();
+                                let seen = pick_listed(e, list.addr(), slot.addr());
                                 if !seen {
                                     e.call(LIST_ADD, &args![list, slot]);
                                 }
@@ -15043,6 +15069,73 @@ mod tests {
                 .any(|(a, _)| *a == XUI_IS_UP);
             assert_eq!(asked, !on);
         }
+    }
+    /// Row S0482 (lStewieAl's Tweaks' `OpenConsoleCheckInitDoneHook`, `0x70E627`): with the row on, during
+    /// the first load (`011a0294` set) the console is not toggled and counts as closed; after it,
+    /// or off, the toggle's answer.
+    #[test]
+    fn s0482_no_console_during_the_first_load() {
+        for (on, loading, wanted, asked) in [
+            (false, 1u8, true, true),
+            (true, 1, false, false),
+            (true, 0, true, true),
+        ] {
+            let mut e = Engine::new();
+            if !e.mem.is_mapped(INITIAL_LOADING) {
+                e.map(INITIAL_LOADING & !0xfff, 0x1000);
+            }
+            e.mem.set_u8(INITIAL_LOADING, loading);
+            returns(&mut e, MENU_CONSOLE_TOGGLE_VISIBLE, 1);
+            e.set_stewie(stewie::CONSOLE_NOT_DURING_FIRST_LOAD, on);
+            e.call_log = Some(vec![]);
+            assert_eq!(console_toggled(&mut e, 0x700), wanted, "row {on} {loading}");
+            let toggled = e
+                .call_log
+                .as_ref()
+                .unwrap()
+                .iter()
+                .any(|(a, _)| *a == MENU_CONSOLE_TOGGLE_VISIBLE);
+            assert_eq!(toggled, asked);
+        }
+    }
+
+    /// Row S0407 (lStewieAl's Tweaks' `InterfaceManagerShouldNotAppendToSelectableRefs`,
+    /// `0x7109D2`): with the row on the player (form id 0x14) and no reference count as listed
+    /// without the list being asked; another reference, or the row off, the list's answer.
+    #[test]
+    fn s0407_the_console_never_picks_the_player() {
+        for (on, id, listed, wanted, asked) in [
+            (false, 0x14u32, 0u32, false, true),
+            (true, 0x14, 0, true, false),
+            (true, 0x1234, 0, false, true),
+            (true, 0x1234, 1, true, true),
+        ] {
+            let mut e = Engine::new();
+            let reference = e.mem.alloc(0x20);
+            e.mem.set_u32(reference + 0xc, id);
+            let slot = e.mem.alloc(4);
+            e.mem.set_u32(slot, reference);
+            returns(&mut e, LIST_CONTAINS, listed);
+            e.set_stewie(stewie::CONSOLE_PLAYER_NOT_SELECTABLE, on);
+            e.call_log = Some(vec![]);
+            assert_eq!(pick_listed(&mut e, 0x900, slot), wanted, "row {on} {id:x}");
+            let calls: Vec<Vec<u32>> = e
+                .call_log
+                .as_ref()
+                .unwrap()
+                .iter()
+                .filter(|(a, _)| *a == LIST_CONTAINS)
+                .map(|(_, w)| w[..2].to_vec())
+                .collect();
+            assert_eq!(calls.len(), usize::from(asked));
+            if asked {
+                assert_eq!(calls[0], vec![0x900, slot]);
+            }
+        }
+        let mut e = Engine::new();
+        let slot = e.mem.alloc(4);
+        e.set_stewie(stewie::CONSOLE_PLAYER_NOT_SELECTABLE, true);
+        assert!(pick_listed(&mut e, 0x900, slot));
     }
     // @@TESTS-END@@
 }

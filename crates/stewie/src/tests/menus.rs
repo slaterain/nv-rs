@@ -99,6 +99,13 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
     ("S0218", "bWorldMapNoExteriorDoorFix", bit(52)),
     ("S0227", "bTileTextureCacheFix", bit(56)),
     ("S0240", "bFontDimensionMismatchFix", bit(67)),
+    ("S0276", "bSaveDelay", tweak(0)),
+    ("S0278", "bFasterHackingToComputerTransition", tweak(1)),
+    ("S0351", "bAutoSkipLoadingTiles", tweak(2)),
+    ("S0407", "bNonSelectablePlayerInConsole", tweak(3)),
+    ("S0482", "bDontAllowConsoleBeforeInitIsDone", tweak(4)),
+    ("S0556", "bNoCharacterNameLimit", tweak(5)),
+    ("S0592", "bFasterEnterLockPickMenu", tweak(6)),
     ("S0883", "bMoreDescriptiveSettingsSaveError", bit(30)),
     ("S0983", "bPipboyMapStoreRefIDs", bit(63)),
 ];
@@ -106,4 +113,9 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
 /// Share 3's fix bit `n` (`Row::share` over its range).
 const fn bit(n: u16) -> Row {
     Row::share(stewie::MENUS_FIXES, stewie::MENUS_FIXES_END, n)
+}
+
+/// Share 3's tweak bit `n`.
+const fn tweak(n: u16) -> Row {
+    Row::share(stewie::MENUS_TWEAKS, stewie::MENUS_TWEAKS_END, n)
 }

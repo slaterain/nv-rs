@@ -227,12 +227,16 @@ pub fn fn_007e6320(e: &mut Engine, prompt: u32, start_text: u32, text_check: u32
                 SET_STRING_TRAIT,
                 &args![text_tile, TRAIT_STRING, start_text, true],
             );
-            let limit = e
-                .call(GET_FLOAT_TRAIT, &args![text_tile, TRAIT_WRAP_WIDTH])
-                .f32();
-            let limit = e.call(FLOAT_TO_INT, &args![limit as f64]).i32();
-            let editor = singleton(e).addr() + EDITOR;
-            e.call(EDITOR_STORE_MINUS_FIVE, &args![editor, limit]);
+            // `0x7E6480`: lStewieAl's Tweaks' S0556 (`bNoPlayerNameLimit`) jumps over the
+            // editor's width limit (to `0x7E64A7`), so a name is not cut at the box's width.
+            if !e.stewie(engine_core::extend::stewie::NO_PLAYER_NAME_LIMIT) {
+                let limit = e
+                    .call(GET_FLOAT_TRAIT, &args![text_tile, TRAIT_WRAP_WIDTH])
+                    .f32();
+                let limit = e.call(FLOAT_TO_INT, &args![limit as f64]).i32();
+                let editor = singleton(e).addr() + EDITOR;
+                e.call(EDITOR_STORE_MINUS_FIVE, &args![editor, limit]);
+            }
             let text = e
                 .call(GET_STRING_TRAIT, &args![text_tile, TRAIT_STRING])
                 .u32();
@@ -806,6 +810,35 @@ mod tests {
         });
         e.call_log = Some(vec![]);
         World { e, menu }
+    }
+
+    /// Row S0556 (lStewieAl's Tweaks' `patchNoCharacterNameLimit`, `[Tweaks] bNoPlayerNameLimit`,
+    /// `0x7E6480`): with the row on the box's width limit (trait `0xFBA`) is neither read nor
+    /// given to the editor; the editor still gets its text.
+    #[test]
+    fn s0556_no_name_width_limit() {
+        for on in [false, true] {
+            let mut w = world();
+            w.e.set_stewie(engine_core::extend::stewie::NO_PLAYER_NAME_LIMIT, on);
+            assert!(w
+                .e
+                .call(0x007e_6320, &args![0x1111u32, 0x2222u32, TEXT_CHECK])
+                .bool());
+            let e = &mut w.e;
+            let editor = w.menu.addr() + 0x34;
+            let limited = calls(e, EDITOR_STORE_MINUS_FIVE);
+            let width_read = calls(e, GET_FLOAT_TRAIT)
+                .iter()
+                .any(|c| c[1] == TRAIT_WRAP_WIDTH as u32);
+            if on {
+                assert!(limited.is_empty());
+                assert!(!width_read);
+            } else {
+                assert_eq!(limited, vec![vec![editor, 12]]);
+                assert!(width_read);
+            }
+            assert_eq!(calls(e, EDITOR_SET_TEXT), vec![vec![editor, 0x8888]]);
+        }
     }
 
     #[test]

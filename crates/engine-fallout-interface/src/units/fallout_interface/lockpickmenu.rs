@@ -1184,6 +1184,21 @@ fn seconds_reached(e: &mut Engine, sequence: u32) -> bool {
     seconds >= end
 }
 
+/// The lock pick menu's seconds for this frame (`0x78EC4A`..`0x78EC53`: the ticks over the 1000.0 at
+/// `01017b70`). With lStewieAl's Tweaks' S0592 (`[Tweaks] bFasterEnterLockpickMenu`,
+/// `LockPickMenuAnimTimerHook` in place of the `FDIV` at `0x78EC4D`) the ticks are multiplied by it
+/// instead while the menu is in its first state (+0x28 is 0, the entering animation), so that
+/// animation's time is reached at once.
+fn state_elapsed(e: &Engine, base: u32, ticks: i32, per_second: f64) -> f64 {
+    if e.stewie(engine_core::extend::stewie::LOCKPICK_ENTER_AT_ONCE)
+        && e.mem.u32(base + LOCK_STATE) == 0
+    {
+        x87_mul(f64::from(ticks), per_second)
+    } else {
+        x87_div(f64::from(ticks), per_second)
+    }
+}
+
 // Translated from 0078eb50 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 0078eb50 - the C++ exception-unwinding frames (FS:[0]) of the sound handles and the static sound's construction, and the /GS stack cookie check (00ec408c), are not translated
 /// `LockPickMenu::DoIdle` (Xbox PDB): constructs the looping sound static
@@ -1220,10 +1235,8 @@ pub fn lock_pick_menu_do_idle(e: &mut Engine, this: Ptr) {
             e.set_global(STATE_SECONDS, 0.0f32.to_bits());
         } else {
             let per_second: f64 = e.global(TICKS_PER_SECOND);
-            let seconds = x87_add(
-                x87_div(f64::from(ticks), per_second),
-                x87_m32(e.global::<u32>(STATE_SECONDS)),
-            );
+            let elapsed = state_elapsed(e, base, ticks, per_second);
+            let seconds = x87_add(elapsed, x87_m32(e.global::<u32>(STATE_SECONDS)));
             e.set_global(STATE_SECONDS, x87_store32(seconds));
         }
     }
@@ -3983,6 +3996,24 @@ mod tests {
                     assert_eq!(text, wanted, "{health}");
                 }
             }
+        }
+    }
+
+    /// Row S0592 (lStewieAl's Tweaks' `LockPickMenuAnimTimerHook`, `0x78EC4D`): the frame's ticks
+    /// over 1000.0; with the row on and the menu in its first state (+0x28 is 0) times 1000.0
+    /// instead; in a later state as the exe.
+    #[test]
+    fn s0592_the_entering_animation_ends_at_once() {
+        for (on, state, wanted) in [(false, 0u32, 0.5), (true, 0, 500_000.0), (true, 2, 0.5)] {
+            let e = Engine::new();
+            let base = e.mem.alloc(0x100);
+            e.mem.set_u32(base + LOCK_STATE, state);
+            e.set_stewie(engine_core::extend::stewie::LOCKPICK_ENTER_AT_ONCE, on);
+            assert_eq!(
+                state_elapsed(&e, base, 500, 1000.0),
+                wanted,
+                "row {on} state {state}"
+            );
         }
     }
 }
