@@ -437,19 +437,11 @@ fn the_games_brightness_is_shown_in_the_window_and_an_identity_ramp_changes_noth
     };
     let rgb =
         |p: &[u8]| -> Vec<[u8; 3]> { p.chunks_exact(4).map(|c| [c[0], c[1], c[2]]).collect() };
-    // B, G, R of `colour` through `ramp` (red's entries for red, ...): each its entry's level, or
-    // the other nearest level where the entry lies within a hundredth of a step of half way.
+    // Whether `seen` (B, G, R) is `colour` through `ramp`: each its own colour's entry's level.
     let through = |ramp: &Ramp, colour: u32, seen: [u8; 3]| -> bool {
         let [b, g, r, _] = bgra(colour);
-        [(2, b, seen[0]), (1, g, seen[1]), (0, r, seen[2])]
-            .into_iter()
-            .all(|(c, at, shown)| {
-                let entry = ramp.0[c][usize::from(at)];
-                let exact = f64::from(entry) * 255.0 / 65535.0;
-                let half = (exact.fract() - 0.5).abs() < 0.01;
-                shown == level(entry)
-                    || (half && [exact.floor(), exact.ceil()].contains(&f64::from(shown)))
-            })
+        let shown = |c: usize, at: u8| level(ramp.0[c][usize::from(at)]);
+        seen == [shown(2, b), shown(1, g), shown(0, r)]
     };
     two(&mut g, 1);
     let back = g

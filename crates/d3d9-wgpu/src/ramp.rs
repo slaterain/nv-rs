@@ -11,12 +11,12 @@
 //!
 //! **What this does.** The frame shown in the window goes through the game's last ramp, as the
 //! display hardware applies it in exclusive full screen: each colour's 8-bit level picks its
-//! entry, shown as entry / 65535 ([`level`] in an 8-bit frame). It is done in the copy of the back
-//! buffer into the window's frame (`Present`), not in a pass of its own. With no ramp set, or a
-//! ramp that gives every level back ([`Ramp::is_identity`]: the game's at `fGamma` 1.0), the copy
-//! is the plain one, so the picture is the same bit for bit. The back buffer itself is never
-//! changed: its captures (`NV_SHOT`'s `wgpu-frame-N.bmp`, F12 reports) stay the game's picture;
-//! the window's capture (`wgpu-window-N.bmp`) has the ramp.
+//! entry, shown as the 8-bit level nearest entry / 65535 ([`level`]). It is done in the copy of
+//! the back buffer into the window's frame (`Present`), not in a pass of its own. With no ramp
+//! set, or a ramp that gives every level back ([`Ramp::is_identity`]: the game's at `fGamma`
+//! 1.0), the copy is the plain one, so the picture is the same bit for bit. The back buffer is
+//! never changed: its captures (`NV_SHOT`'s `wgpu-frame-N.bmp`, F12 reports) stay the game's
+//! picture; the window's capture (`wgpu-window-N.bmp`) has the ramp.
 
 /// Entries per colour.
 pub const ENTRIES: usize = 256;
@@ -73,8 +73,10 @@ impl Ramp {
     }
 }
 
-/// The 8-bit level an entry is shown as: entry / 65535, to the nearest of 255 steps (what the
-/// pass's float output becomes in an 8-bit frame; a frame of more bits keeps more of it).
+/// The 8-bit level an entry is shown as: entry / 65535, to the nearest of 255 steps. [`SHADER`]
+/// works it out in integers and writes it as level / 255, which every GPU stores in an 8-bit frame
+/// as that level (as the plain copy stores a level it read); a float written as entry / 65535 may
+/// be stored as either of the two nearest levels (a GPU here stored 3.53 as 3).
 pub fn level(entry: u16) -> u8 {
     ((u32::from(entry) * 255 + 32767) / 65535) as u8
 }
@@ -100,8 +102,9 @@ struct V { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> }
 @fragment fn fs(v: V) -> @location(0) vec4<f32> {
     let c = textureSample(t, s, v.uv);
     let k = min(vec3<u32>(round(saturate(c.rgb) * 255.0)), vec3<u32>(255u));
-    let w = vec3<f32>(f32(ramp[k.r].x), f32(ramp[k.g].y), f32(ramp[k.b].z));
-    return vec4<f32>(w / 65535.0, c.a);
+    let w = vec3<u32>(ramp[k.r].x, ramp[k.g].y, ramp[k.b].z);
+    let l = (w * 255u + vec3<u32>(32767u)) / vec3<u32>(65535u);
+    return vec4<f32>(vec3<f32>(l) / 255.0, c.a);
 }
 ";
 
@@ -390,17 +393,6 @@ mod tests {
             .collect()
     }
 
-    /// Whether `shown` is how `entry` shows in an 8-bit frame: its [`level`], or the other of the
-    /// two nearest levels where entry / 65535 lies within a hundredth of a step of half way (the
-    /// GPU's float to 8-bit conversion need only round to one of the two nearest).
-    fn shows_as(entry: u16, shown: u8) -> bool {
-        let exact = f64::from(entry) * 255.0 / 65535.0;
-        let near_half = (exact.fract() - 0.5).abs() < 0.01;
-        let shown = f64::from(shown);
-        shown == f64::from(level(entry))
-            || (near_half && (shown == exact.floor() || shown == exact.ceil()))
-    }
-
     /// The bytes of a ramp whose red, green and blue entries are `f(colour, i)`.
     fn bytes(f: impl Fn(usize, usize) -> u16) -> Vec<u8> {
         (0..3)
@@ -469,7 +461,8 @@ mod tests {
     /// The pass on the GPU, on every system with an adapter: Direct3D 9's identity ramp gives
     /// every pixel back unchanged (alpha too); a ramp with a different curve per colour (red
     /// inverted, green a step at 128, blue a fixed level) maps each colour by its own; and the
-    /// ramp the game sets for each of the slider's 16 steps maps every level as its entry shows.
+    /// ramp the game sets for each of the slider's 16 steps maps every level to its entry's
+    /// [`level`] exactly (level 12 at the darkest step: entry 908, 3.53 levels, shown as 4).
     #[test]
     fn the_pass_maps_every_level_through_its_colours_entry() {
         let Some(gpu) = device() else {
@@ -500,11 +493,11 @@ mod tests {
             for (x, (seen, want)) in out.iter().zip(picture()).enumerate() {
                 for c in 0..3 {
                     let entry = ramp.0[c][usize::from(want[c])];
-                    assert!(
-                        shows_as(entry, seen[c]),
-                        "step {step} ({gamma}), pixel {x}, colour {c}: level {} entry {entry} shown as {}",
-                        want[c],
-                        seen[c]
+                    assert_eq!(
+                        seen[c],
+                        level(entry),
+                        "step {step} ({gamma}), pixel {x}, colour {c}: level {} entry {entry}",
+                        want[c]
                     );
                 }
                 assert_eq!(seen[3], want[3], "step {step}, pixel {x}: alpha kept");
