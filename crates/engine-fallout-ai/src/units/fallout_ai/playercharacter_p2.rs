@@ -1678,8 +1678,12 @@ pub fn fn_0094df80(e: &mut Engine, this: Ptr<PlayerCharacter>) {
         } else {
             e.call(0x0082_3c40, &args![player + MAGIC_TARGET, step]);
         }
-        let global_player = e.global::<u32>(PLAYER_POINTER);
-        e.call(0x0088_b510, &args![global_player, step]);
+        // lStewieAl's Tweaks' row S0212 (`PlayerWaitDoubleHealingFix`, `EB 10` at `0x94E09E`): the
+        // player's `Actor::RestoreHealth` is not called here; the magic update heals for the hour.
+        if !e.stewie(engine_core::extend::stewie::WAIT_SINGLE_HEALING) {
+            let global_player = e.global::<u32>(PLAYER_POINTER);
+            e.call(0x0088_b510, &args![global_player, step]);
+        }
         if e.call(0x004d_1360, &args![player]).bool() {
             let global_player = e.global::<u32>(PLAYER_POINTER);
             if e.call(0x005a_1e50, &args![global_player]).bool() {
@@ -5171,8 +5175,11 @@ pub fn fn_00954610(
             if !(entry == 0 && e.stewie(engine_core::extend::stewie::DROP_AMMO_NULL_ENTRY)) {
                 e.call(0x006e_cd40, &args![entry, 0u32]);
             }
-            for _ in 0..2 {
-                let biped = e.call(0x0095_0bb0, &args![this, 0u32]).u32();
+            // lStewieAl's Tweaks' row S0153 (`patchFixWeaponNifRoundNotCullingInFirstPerson`, the
+            // byte at `0x954703`): the first lookup asks the first-person model (1).
+            let first = u32::from(e.stewie(engine_core::extend::stewie::NIF_ROUND_FIRST_PERSON));
+            for person in [first, 0u32] {
+                let biped = e.call(0x0095_0bb0, &args![this, person]).u32();
                 let node = e.call(0x004a_ae30, &args![biped, ROUND_NODE_NAME]).u32();
                 if node != 0 {
                     e.call(0x0045_0f90, &args![node, 1u32]);
@@ -9749,6 +9756,25 @@ mod tests {
         assert_eq!(calls_to(&e, 0x0088_b510).len(), 1);
     }
 
+    /// S0212 (`PlayerWaitDoubleHealingFix`): each waited hour the exe also restores the player's
+    /// health itself (`Actor::RestoreHealth`, `0088b510`) after the process lists' update (whose
+    /// magic update heals already); with the row on that call is skipped, the rest unchanged.
+    #[test]
+    fn s0212_waiting_heals_once() {
+        for on in [false, true] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::WAIT_SINGLE_HEALING, on);
+            let (player, _) = waiting_player(&mut e, 80.0);
+            e.set_global(WAIT_STEP_ACTIVE, 1u8);
+            e.set_global(PROCESS_LOCK_ENABLED, 1u8);
+            e.set(player, PlayerCharacter::iSleepTime, 3);
+            start_log(&mut e);
+            fn_0094df80(&mut e, player);
+            assert_eq!(calls_to(&e, 0x0088_b510).len(), usize::from(!on), "on {on}");
+            assert_eq!(calls_to(&e, 0x0096_bcd0).len(), 1, "on {on}");
+        }
+    }
+
     #[test]
     fn an_active_wait_with_a_magic_target_updates_it() {
         let mut e = engine();
@@ -13150,6 +13176,37 @@ mod tests {
                     vec![vec![0x4343, 1], vec![0x4343, 1]]
                 );
             }
+        }
+    }
+
+    /// S0153 (`patchFixWeaponNifRoundNotCullingInFirstPerson`): dropping the loaded ammunition
+    /// looks up the round node on the player's model `0095_0bb0(player, person)` twice: the
+    /// exe asks the third-person model (0) both times, the row asks first person (1), then third.
+    #[test]
+    fn s0153_the_dropped_round_is_hidden_in_first_person_too() {
+        for (on, people) in [(false, [0u32, 0]), (true, [1, 0])] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::NIF_ROUND_FIRST_PERSON, on);
+            list_helpers(&mut e);
+            let player = new_player(&mut e);
+            let p = player.addr();
+            e.set_global(PLAYER_POINTER, 0x0600_5000u32);
+            process_with_items(&mut e, player, 0x300);
+            let item = e.mem.alloc(8);
+            slot(&mut e, item, 0xe4, eax(1));
+            double(&mut e, FORM_TYPE_OF, eax(0x29));
+            double(&mut e, 0x008a_1710, eax(0x31));
+            double(&mut e, 0x0052_5980, eax(item));
+            double(&mut e, 0x0095_0bb0, eax(0x4242));
+            double(&mut e, 0x004a_ae30, eax(0x4343));
+            let reference = e.mem.alloc(0x20);
+            slot(&mut e, reference, 0x1d0, eax(0));
+            recording_slot(&mut e, p, 0x17c, eax(reference));
+            record_appends(&mut e);
+            start_log(&mut e);
+            fn_00954610(&mut e, player, item, 0x22, 0x33, 0x44, 0x55);
+            let asked: Vec<u32> = calls_to(&e, 0x0095_0bb0).iter().map(|c| c[1]).collect();
+            assert_eq!(asked, people.to_vec(), "on {on}");
         }
     }
 

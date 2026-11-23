@@ -242,6 +242,8 @@ const VALUE_ADD_ACTION: u32 = 0x00a0_9080;
 const VALUE_ADD_ACTION_OV2: u32 = 0x00a0_9130;
 /// `Tile::Value::CalculateValue(bool)` (Xbox PDB).
 const VALUE_CALCULATE_VALUE: u32 = 0x00a0_9410;
+/// `Tile::Value::ClearActions` (Xbox PDB), `thiscall`.
+const VALUE_CLEAR_ACTIONS: u32 = 0x00a0_9200;
 /// `BSSimpleArray<Tile::Value *, 8>::SortedFind(&key, compare)` (Xbox PDB)
 /// and its insert counterpart `(&value, compare)`; both are given
 /// [`fn_00a01160`] as the comparison.
@@ -1344,6 +1346,7 @@ fn remove_from_list(e: &mut Engine, list: u32, tile: Ptr<Tile>) -> bool {
 /// The code the compiler folded away (setting `FLAG_DIRTY`, `FLAG_HIBERNATED`
 /// and `FLAG_PROMOTED` instead of clearing them) is not translated.
 pub fn tile_destructor(e: &mut Engine, this: Ptr<Tile>) {
+    engine_core::hitch::one(engine_core::hitch::Count::TilesDeleted);
     e.mem.set_u32(this.addr(), VTABLE_TILE);
     enter_critical_section(e, TILE_CRITICAL_SECTION);
     e.call(INTERFACE_TILE_IS_BEING_DELETED, &args![this]);
@@ -1387,6 +1390,7 @@ pub fn tile_init(
     name: Ptr,
     set_parent_arg: u32,
 ) {
+    engine_core::hitch::one(engine_core::hitch::Count::TilesMade);
     e.set(this, Tile::pParent, Ptr::NULL);
     e.call(NI_POINTER_ASSIGN, &args![this.byte_add(0x2c), 0u32]);
     e.call(STRING_SET, &args![this.at(Tile::xName), EMPTY_NAME, 0u32]);
@@ -5247,7 +5251,8 @@ pub fn value_clear_actions(e: &mut Engine, this: Ptr<TileValue>) {
 /// the reaction nodes and erases the map entry. Frees the string and zeroes
 /// the float and the owning tile. (The value itself is not freed.)
 pub fn value_destructor(e: &mut Engine, this: Ptr<TileValue>) {
-    value_clear_actions(e, this);
+    // By address, as the exe calls it: `ClearActions` is typed.
+    e.call(VALUE_CLEAR_ACTIONS, &args![this]);
     e.with_stack(4, |e, reactions| {
         e.mem.set_u32(reactions.addr(), 0);
         let found = e
@@ -5660,7 +5665,8 @@ pub fn value_set_float(e: &mut Engine, this: Ptr<TileValue>, value: f32, flag: b
         e.set(this, TileValue::strValue, Ptr::NULL);
     }
     if flag {
-        value_clear_actions(e, this);
+        // By address, as the exe calls it: `ClearActions` is typed.
+        e.call(VALUE_CLEAR_ACTIONS, &args![this]);
     }
     // By address, as the exe calls it: `CalculateValue` is overridable (and typed).
     e.call(VALUE_CALCULATE_VALUE, &args![this, u32::from(changed)]);
@@ -5692,7 +5698,8 @@ pub fn value_set_string(e: &mut Engine, this: Ptr<TileValue>, text: Ptr, flag: b
     }
     e.set(this, TileValue::fValue, 0.0);
     if flag {
-        value_clear_actions(e, this);
+        // By address, as the exe calls it: `ClearActions` is typed.
+        e.call(VALUE_CLEAR_ACTIONS, &args![this]);
     }
     // By address, as the exe calls it: `CalculateValue` is overridable (and typed).
     e.call(VALUE_CALCULATE_VALUE, &args![this, u32::from(changed)]);
@@ -8048,6 +8055,11 @@ mod tests {
         for &addr in OUTSIDE_CALLEES {
             e.register(addr, |_, _| Ret::default());
         }
+        // `~Value`, `SetFloat` and `SetString` call `ClearActions` by address: the real one.
+        e.register(VALUE_CLEAR_ACTIONS, |e, a| {
+            value_clear_actions(e, Ptr::new(a[0]));
+            Ret::default()
+        });
         for addr in [
             TILE_BASE_CONSTRUCT,
             TILE_IMAGE_CONSTRUCT,

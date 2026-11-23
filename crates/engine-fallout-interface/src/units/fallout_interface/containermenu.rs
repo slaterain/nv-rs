@@ -2298,26 +2298,26 @@ pub fn container_menu_do_idle(e: &mut Engine, this: Ptr<ContainerMenu>) {
         e.call(SET_ITEM_CARD, &args![first, second, third, item, 0u32]);
     } else if current_item(e) != 0 && item_type(e, current_item(e)) == 0x18 {
         let zero = e.global::<f64>(ZERO_DOUBLE);
-        let second = if current_item(e) != 0 && {
+        let has_dt = current_item(e) != 0 && {
             let object = typed_call!(
                 leaf::FAMILY,
                 0x0044_ddc0,
                 leaf::word_at_8(e, current_item(e))
             );
             e.call(OBJECT_VALUE_004BE180, &args![object]).f64() != zero
-        } {
-            tile_at(e, me_addr, 0x70)
-        } else {
-            0
         };
-        let first = if current_item(e) != 0 && {
-            let object = typed_call!(
-                leaf::FAMILY,
-                0x0044_ddc0,
-                leaf::word_at_8(e, current_item(e))
-            );
-            e.call(OBJECT_VALUE_004BE060, &args![object]).f64() != zero
-        } {
+        let second = if has_dt { tile_at(e, me_addr, 0x70) } else { 0 };
+        // `0x75EBF3` (lStewieAl's Tweaks' S0105 writes `XOR EAX,EAX; MOV [EBP-0xC],EAX; JMP` over
+        // the zero DT's store): without a DT the DR tile is passed without its own test.
+        let first = if (!has_dt && e.stewie(engine_core::extend::stewie::INVENTORY_STAT_ALPHAS))
+            || (current_item(e) != 0 && {
+                let object = typed_call!(
+                    leaf::FAMILY,
+                    0x0044_ddc0,
+                    leaf::word_at_8(e, current_item(e))
+                );
+                e.call(OBJECT_VALUE_004BE060, &args![object]).f64() != zero
+            }) {
             tile_at(e, me_addr, 0x6c)
         } else {
             0
@@ -4266,6 +4266,42 @@ mod tests {
             calls_to(&e, SET_ITEM_CARD),
             vec![vec![0, tile(0x70), 0, 0x7000, 0]]
         );
+    }
+
+    /// Row S0105 (lStewieAl's Tweaks, `0x75EBF3`): armour with DT 0 passes the DR tile (+0x6C)
+    /// with the row on, without asking the DR (`004be060`); off, the exe's DR test (0 here: no
+    /// tile). With a DT the exe's DR test stays.
+    #[test]
+    fn s0105_no_dt_passes_the_dr_tile() {
+        for (on, dt, wanted, dr_asked) in [
+            (false, 0.0f64, [0u32, 0], 1usize),
+            (true, 0.0, [tile(0x6c), 0], 0),
+            (true, 1.0, [0, tile(0x70)], 1),
+        ] {
+            let mut e = Engine::new();
+            let this = container(&mut e);
+            e.set(this, ContainerMenu::m_nTimeToClearSubtitle, 100);
+            e.set_global(ITEM_ENTERED, 1u8);
+            e.set_global(CURRENT_ITEM, 0x7000u32);
+            answer(&mut e, CURRENT_TIME, 101);
+            answer(&mut e, WORD_AT_FOUR, 0x900);
+            answer(&mut e, TILE_FIND_CHILD, 0x950);
+            answer(&mut e, LIST_COUNT, 2);
+            item_form(&mut e, 0x7000, 0x7100);
+            answer(&mut e, FORM_TYPE, 0x18);
+            answer_st0(&mut e, OBJECT_VALUE_004BE180, dt);
+            answer_st0(&mut e, OBJECT_VALUE_004BE060, 0.0);
+            stub(&mut e, &[SET_STRING_TRAIT, SET_ITEM_CARD]);
+            e.set_stewie(stewie::INVENTORY_STAT_ALPHAS, on);
+            e.call_log = Some(vec![]);
+            e.call(0x0075_eac0, &args![this]);
+            assert_eq!(
+                calls_to(&e, SET_ITEM_CARD),
+                vec![vec![wanted[0], wanted[1], 0, 0x7000, 0]],
+                "row {on} dt {dt}"
+            );
+            assert_eq!(calls_to(&e, OBJECT_VALUE_004BE060).len(), dr_asked);
+        }
     }
 
     thread_local! {

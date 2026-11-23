@@ -10478,11 +10478,18 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // The last frame presented by the queue thread first (one frame is taken at a time, and
         // the swap chain is not configured again while a present runs). Offscreen too, so the
         // render thread is never more than a frame ahead of the queue thread.
+        let synced = std::time::Instant::now();
         self.sync();
+        let asked = std::time::Instant::now();
+        d3d9_stream::hitch::add_time(
+            d3d9_stream::hitch::Count::RenderSyncNs,
+            asked.duration_since(synced),
+        );
         let taken = match (&mut self.surface, &back) {
             (Some(w), Some(_)) => w.frame(&self.device).map(|t| (t, w.config.usage)),
             _ => None,
         };
+        d3d9_stream::hitch::add_time(d3d9_stream::hitch::Count::AcquireNs, asked.elapsed());
         // The counter on: no frame taken (minimised, no area, lost) or the window away since the last
         // (activated, display changed, woke) makes the next present only start its clock.
         if fps && (taken.is_none() || frame_rate::take_gap()) {
@@ -10577,7 +10584,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             let meter = fps.then(|| self.fps_meter.clone());
             self.on_queue(move |queue| {
                 let _dpi = hwnd.map(crate::window::DpiScope::of);
+                let swapped = std::time::Instant::now();
                 queue.present(t);
+                d3d9_stream::hitch::add_time(d3d9_stream::hitch::Count::SwapNs, swapped.elapsed());
                 if let Some(Ok(mut m)) = meter.as_ref().map(|m| m.lock()) {
                     m.presented(std::time::Instant::now());
                 }

@@ -72,9 +72,17 @@ pub const BUFFER_SIZE: u32 = 8192;
 const RIFF: u32 = u32::from_le_bytes(*b"RIFF");
 const LIST: u32 = u32::from_le_bytes(*b"LIST");
 
+/// The game's I/O procedure for `msg`. With real threads it runs with the kernel lock given back when the game called
+/// this mmio function itself (its IO thread does, loading a WAV sound): the procedure is game code reading the
+/// archive through the game's own file code, which runs without the lock whenever the game calls it, and the handle's
+/// state is its own block of engine memory, used by the one thread that opened it, so nothing here is platform state.
+/// Under the lock the open, each 8 KB refill, each seek and the close read the archive while every other thread's
+/// platform calls, main's included, waited.
 fn io(e: &mut Engine, h: u32, msg: u32, p1: u32, p2: u32) -> u32 {
     let procedure = e.mem.u32(h + P_IO_PROC);
-    e.call(procedure, &[h, msg, p1, p2]).u32()
+    engine_core::real_threads::without_kernel_lock_mut_if_outermost(e, |e| {
+        e.call(procedure, &[h, msg, p1, p2]).u32()
+    })
 }
 
 /// The read position (`lBufOffset` plus where `pchNext` is).
@@ -321,6 +329,7 @@ mod tests {
     fn procedure(e: &mut Engine, served: &Rc<RefCell<Served>>) {
         let s = served.clone();
         e.register_double(PROCEDURE, move |e, a| {
+            note_lock(e);
             let (info, msg, p1, p2) = (a[0], a[1], a[2], a[3]);
             let mut s = s.borrow_mut();
             let buffer = e.mem.u32(info + PCH_BUFFER);
@@ -677,5 +686,151 @@ mod tests {
         let mut e = Engine::new();
         let c = e.mem.alloc(20);
         mmio_descend(&mut e, 0, Ptr::new(c), Ptr::new(0), 0x20);
+    }
+
+    thread_local! {
+        /// What the procedure saw of the kernel lock on this thread: calls made with it held, calls made.
+        static SEEN: std::cell::Cell<(u32, u32)> = const { std::cell::Cell::new((0, 0)) };
+        /// Where [`loads_nested`] leaves the bytes it read.
+        static NESTED: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn note_lock(e: &Engine) {
+        let held = u32::from(engine_core::real_threads::kernel_lock_held(e));
+        SEEN.with(|s| {
+            let (h, n) = s.get();
+            s.set((h + held, n + 1));
+        });
+    }
+
+    /// The mmio functions at platform functions' addresses (behind the kernel lock with real threads, as the imports
+    /// are), and one that loads the sound inside its own hold.
+    const OPEN_AT: u32 = 0x7f00_0400;
+    const READ_AT: u32 = 0x7f00_0410;
+    const DESCEND_AT: u32 = 0x7f00_0420;
+    const ASCEND_AT: u32 = 0x7f00_0430;
+    const GET_INFO_AT: u32 = 0x7f00_0440;
+    const ADVANCE_AT: u32 = 0x7f00_0450;
+    const CLOSE_AT: u32 = 0x7f00_0460;
+    const NESTED_AT: u32 = 0x7f00_0470;
+
+    fn register_imports(e: &mut Engine) {
+        e.register(
+            OPEN_AT,
+            crate::entry!(0, mmio_open_a(Ptr, Ptr, u32) -> u32).1,
+        );
+        e.register(READ_AT, crate::entry!(0, mmio_read(u32, Ptr, i32) -> i32).1);
+        e.register(
+            DESCEND_AT,
+            crate::entry!(0, mmio_descend(u32, Ptr, Ptr, u32) -> u32).1,
+        );
+        e.register(
+            ASCEND_AT,
+            crate::entry!(0, mmio_ascend(u32, Ptr, u32) -> u32).1,
+        );
+        e.register(
+            GET_INFO_AT,
+            crate::entry!(0, mmio_get_info(u32, Ptr, u32) -> u32).1,
+        );
+        e.register(
+            ADVANCE_AT,
+            crate::entry!(0, mmio_advance(u32, Ptr, u32) -> u32).1,
+        );
+        e.register(CLOSE_AT, crate::entry!(0, mmio_close(u32, u32) -> u32).1);
+        e.register(NESTED_AT, loads_nested);
+    }
+
+    /// The game's WAV load (`00aeb270`) through the imports' addresses: open, the RIFF and `fmt ` chunks, the format
+    /// read, the `data` chunk, every byte through `mmioGetInfo`/`mmioAdvance`, close. Answers the format and the bytes.
+    fn load(e: &mut Engine) -> Vec<u8> {
+        let name = e.mem.alloc(32);
+        e.mem.set_cstr(name, b"Data\\Sound\\test.wav");
+        let info = e.mem.alloc(MMIOINFO_SIZE);
+        e.mem.set_u32(info + FCC_IO_PROC, 0x0056_4157);
+        e.mem.set_u32(info + P_IO_PROC, PROCEDURE);
+        let h = e.call(OPEN_AT, &[name, info, MMIO_ALLOCBUF]).u32();
+        assert_ne!(h, 0);
+        let (parent, c) = (e.mem.alloc(20), e.mem.alloc(20));
+        assert_eq!(e.call(DESCEND_AT, &[h, parent, 0, 0]).u32(), 0);
+        e.mem.set_u32(c, u32::from_le_bytes(*b"fmt "));
+        assert_eq!(e.call(DESCEND_AT, &[h, c, parent, MMIO_FINDCHUNK]).u32(), 0);
+        let format = e.mem.alloc(16);
+        assert_eq!(e.call(READ_AT, &[h, format, 16]).u32(), 16);
+        assert_eq!(e.call(ASCEND_AT, &[h, c, 0]).u32(), 0);
+        e.mem.set_u32(c, u32::from_le_bytes(*b"data"));
+        assert_eq!(e.call(DESCEND_AT, &[h, c, parent, MMIO_FINDCHUNK]).u32(), 0);
+        let i = e.mem.alloc(MMIOINFO_SIZE);
+        assert_eq!(e.call(GET_INFO_AT, &[h, i, 0]).u32(), 0);
+        let mut got = e.mem.bytes(format, 16);
+        for _ in 0..e.mem.u32(c + 4) {
+            if e.mem.u32(i + PCH_NEXT) == e.mem.u32(i + PCH_END_READ) {
+                assert_eq!(e.call(ADVANCE_AT, &[h, i, 0]).u32(), 0);
+            }
+            let next = e.mem.u32(i + PCH_NEXT);
+            got.push(e.mem.u8(next));
+            e.mem.set_u32(i + PCH_NEXT, next + 1);
+        }
+        assert_eq!(e.call(CLOSE_AT, &[h, 0]).u32(), 0);
+        got
+    }
+
+    /// A platform function that loads the sound inside its own hold of the kernel lock.
+    fn loads_nested(e: &mut Engine, _: &[u32]) -> crate::Ret {
+        let got = load(e);
+        NESTED.with(|n| *n.borrow_mut() = got);
+        crate::abi::RetVal::into_ret(0u32)
+    }
+
+    /// With real threads, the game's I/O procedure reads the WAV (opens, refills, seeks, closes) with the kernel lock
+    /// given back when the game called the mmio function itself, so other threads' platform calls go on meanwhile;
+    /// inside a platform function's own hold it runs with it held, as before. Either way the procedure gets the same
+    /// messages and the game the same bytes as without real threads.
+    #[test]
+    fn the_procedure_reads_with_the_kernel_lock_given_back_only_when_outermost() {
+        let image = riff(&[fmt(1, 1, 22050, 16, &[]), data(20000)]);
+        let served = || {
+            Rc::new(RefCell::new(Served {
+                image: image.clone(),
+                ..Default::default()
+            }))
+        };
+        let mut e = Engine::new();
+        let want_served = served();
+        procedure(&mut e, &want_served);
+        register_imports(&mut e);
+        let want = load(&mut e);
+        assert_eq!(want.len(), 16 + 20000);
+
+        let mut e = Engine::new();
+        let s = served();
+        procedure(&mut e, &s);
+        register_imports(&mut e);
+        engine_core::real_threads::start(&mut e).expect("real threads on");
+        engine_core::real_threads::end_start_hold_for_tests(&e);
+        SEEN.with(|n| n.set((0, 0)));
+        assert_eq!(load(&mut e), want, "the bytes, outermost");
+        let (held, calls) = SEEN.with(std::cell::Cell::get);
+        assert!(calls >= 4, "the procedure read the file ({calls} calls)");
+        assert_eq!(held, 0, "the procedure ran without the lock");
+        assert_eq!(
+            s.borrow().log,
+            want_served.borrow().log,
+            "its messages, outermost"
+        );
+        s.borrow_mut().log.clear();
+        SEEN.with(|n| n.set((0, 0)));
+        e.call(NESTED_AT, &[]);
+        assert_eq!(
+            NESTED.with(|n| n.borrow().clone()),
+            want,
+            "the bytes, nested"
+        );
+        let (held, calls) = SEEN.with(std::cell::Cell::get);
+        assert_eq!(held, calls, "the procedure ran with the lock, nested");
+        assert_eq!(
+            s.borrow().log,
+            want_served.borrow().log,
+            "its messages, nested"
+        );
     }
 }
