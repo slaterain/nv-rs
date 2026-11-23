@@ -21,6 +21,8 @@
 //!   own opaque draws, shown by a full-screen step.
 //! - `bright`: the HDR watch (a diagnostic, read only): the game's float targets checked for
 //!   pixels that are not finite, lone bright dots and jumps of the luminance targets.
+//! - `ramp`: the game's brightness (its gamma ramp) on the frames shown in the window (port-added:
+//!   Direct3D 9 shows a ramp only in exclusive full screen).
 
 mod ahead;
 mod answers;
@@ -39,6 +41,7 @@ mod fxhash;
 pub mod gpu_times;
 pub mod loading;
 mod prepare;
+pub mod ramp;
 pub mod scene_light;
 pub mod shot;
 pub mod sm;
@@ -445,12 +448,15 @@ impl Backend for WgpuBackend {
             Cmd::SetTransform { state, matrix, .. } if state == sun_shadow::BEGIN_STATE => {
                 d.sun_lookup(&matrix.to_words());
             }
+            // The game's brightness: kept for the frames shown in the window ([`ramp`]).
+            Cmd::SetGammaRamp {
+                swap_chain, ramp, ..
+            } => d.set_gamma_ramp(swap_chain, &ramp.bytes()),
             // The fixed-function vertex pipeline's state (transforms, materials, lights): no draw
             // of the game uses it (the fixed-function draws, `ffp`, are pre-transformed), and a
             // draw of untransformed vertices without a vertex shader is skipped and printed by
-            // the device. (`SetGammaRamp` changes nothing in a window, which is how the game runs.)
+            // the device.
             Cmd::SetTransform { .. }
-            | Cmd::SetGammaRamp { .. }
             | Cmd::SetMaterial { .. }
             | Cmd::SetLight { .. }
             | Cmd::LightEnable { .. }

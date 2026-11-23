@@ -1271,6 +1271,12 @@ pub struct Device {
     groups: Map<GroupKey, wgpu::BindGroup>,
     blit: Map<(wgpu::TextureFormat, bool), wgpu::RenderPipeline>,
     blit_layout: Option<wgpu::BindGroupLayout>,
+    /// The game's brightness ([`crate::ramp`]): its last gamma ramp as the copy into the window's
+    /// frame reads it, `None` while none was set or the last changes no level; that copy's
+    /// pipelines and layout, made at its first use.
+    ramp: Option<wgpu::Buffer>,
+    ramp_blit: Map<wgpu::TextureFormat, wgpu::RenderPipeline>,
+    ramp_layout: Option<wgpu::BindGroupLayout>,
     #[allow(clippy::type_complexity)]
     gamma_resolves:
         Map<(wgpu::TextureFormat, u32, bool), (wgpu::RenderPipeline, wgpu::BindGroupLayout)>,
@@ -2056,6 +2062,9 @@ impl Device {
             groups: Map::default(),
             blit: Map::default(),
             blit_layout: None,
+            ramp: None,
+            ramp_blit: Map::default(),
+            ramp_layout: None,
             gamma_resolves: Map::default(),
             depth_parts: Map::default(),
             clears: Map::default(),
@@ -2196,6 +2205,27 @@ impl Device {
         if self.warned.insert(what.clone()) {
             eprintln!("NV_D3D9 wgpu: {what}");
         }
+    }
+
+    /// `SetGammaRamp` of the swap chain 0, the game's only one: its brightness, applied to the
+    /// frames shown in the window from the next `Present` on ([`crate::ramp`]); a ramp that
+    /// changes no level ([`crate::ramp::Ramp::is_identity`]) leaves the plain copy. Another swap
+    /// chain or a ramp of another size is not provided.
+    pub(crate) fn set_gamma_ramp(&mut self, swap_chain: u32, bytes: &[u8]) {
+        let ramp = crate::ramp::Ramp::from_bytes(bytes);
+        let Some(ramp) = ramp.filter(|_| swap_chain == 0) else {
+            self.not_provided(&format!(
+                "SetGammaRamp of swap chain {swap_chain} with {} bytes is not provided",
+                bytes.len()
+            ));
+            return;
+        };
+        if ramp.is_identity() {
+            self.ramp = None;
+            return;
+        }
+        self.warn("the game's brightness (its gamma ramp) is applied to the frames in the window");
+        self.ramp = Some(crate::ramp::buffer(&self.device, &ramp));
     }
 
     fn make_back_buffers(
@@ -7373,7 +7403,25 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         (p, layout)
     }
 
-    /// Draws `source` (its rectangle in texels) into `target`'s rectangle, filtered or not.
+    /// The copy pipeline through the game's gamma ramp into `format` ([`crate::ramp`]).
+    fn ramp_pipeline(
+        &mut self,
+        format: wgpu::TextureFormat,
+    ) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout) {
+        let layout = self
+            .ramp_layout
+            .get_or_insert_with(|| crate::ramp::layout(&self.device))
+            .clone();
+        let p = self
+            .ramp_blit
+            .entry(format)
+            .or_insert_with(|| crate::ramp::pipeline(&self.device, &layout, format))
+            .clone();
+        (p, layout)
+    }
+
+    /// Draws `source` (its rectangle in texels) into `target`'s rectangle, filtered or not, and
+    /// through `ramp` (the game's brightness, [`crate::ramp`]) when given.
     #[allow(clippy::too_many_arguments)]
     fn blit_into(
         &mut self,
@@ -7384,9 +7432,13 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         format: (wgpu::TextureFormat, bool),
         target_rect: [f32; 4],
         linear: bool,
+        ramp: Option<&wgpu::Buffer>,
     ) {
         self.end_pass();
-        let (pipeline, layout) = self.blit_pipeline(format);
+        let (pipeline, layout) = match ramp {
+            Some(_) => self.ramp_pipeline(format.0),
+            None => self.blit_pipeline(format),
+        };
         let sampler = self.sampler(SamplerKey {
             address: [3, 3, 3],
             mag: if linear { 2 } else { 1 },
@@ -7415,23 +7467,28 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             mapped.copy_from_slice(&bytes);
         }
         ub.unmap();
+        let entries = [
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(source),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: ub.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: ramp.unwrap_or(&ub).as_entire_binding(),
+            },
+        ];
         let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(source),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: ub.as_entire_binding(),
-                },
-            ],
+            entries: &entries[..if ramp.is_some() { 4 } else { 3 }],
         });
         let span = self.pass_span(Kind::Copies);
         let encoder = self.encoder();
@@ -7567,6 +7624,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             (dst.format.wgpu, dst.format.opaque),
             f(dr),
             filter >= 2,
+            None,
         );
         for s in [&src, &dst] {
             if let Some(t) = &s.tex {
@@ -10473,7 +10531,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             let sv = b.view.clone().expect("the back buffer's view");
             let size = (b.width, b.height);
             // Over the whole client area, as Direct3D 9's windowed Present without
-            // rectangles: a copy at the same size, filtered when the window's differs.
+            // rectangles: a copy at the same size, filtered when the window's differs; through
+            // the game's gamma ramp when it set one that changes the picture ([`crate::ramp`]:
+            // not the original's, which shows a ramp only in exclusive full screen).
+            let ramp = self.ramp.clone();
             self.blit_into(
                 &sv,
                 size,
@@ -10482,6 +10543,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 (format, false),
                 [0.0, 0.0, cw as f32, ch as f32],
                 size != (cw, ch),
+                ramp.as_ref(),
             );
             // The start: the loading screen over the frame while the game has drawn nothing.
             if self.start.is_some() {

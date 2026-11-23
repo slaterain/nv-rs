@@ -393,6 +393,11 @@ original's Direct3D 9 instead, which also draws by itself where Vulkan and Direc
   NVIDIA.
 - F11 in the game shows a frame-rate counter (frames a second and the slowest recent frame) in the
   corner.
+- The brightness slider (Settings > Display) changes the picture, on every system. This differs
+  from the original, at the maintainer's request: the original shows its brightness only in
+  exclusive full screen, which nv-rs does not have (its full screen is the borderless window), so
+  in a window the slider did nothing. At the default brightness the picture is unchanged. The
+  Direct3D 9 renderer still shows no brightness in a window.
 
 ## Game pads
 
