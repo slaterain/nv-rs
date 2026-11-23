@@ -375,7 +375,7 @@ pub fn fused_vertex(
         "    @location({DRAW_SLOT}) @interpolate(flat) draw: u32,"
     );
     s.push_str("}\n@vertex\nfn main(input: In) -> Out {\n    var out: Out;\n");
-    for (k, t) in texts.iter().enumerate() {
+    for k in 0..texts.len() {
         let _ = writeln!(s, "    var i{k}: p{k}_In;");
         for (pass, from, to) in &feeds {
             if *pass != k {
@@ -624,7 +624,11 @@ mod tests {
         let fed = [vec![(0, 0)], vec![(0, 1)], vec![(0, 0)]];
         let v = fused_vertex(&[(&vp, &vl), (&vp, &vl), (&vp, &vl)], &fed).unwrap();
         validate(&v.source).unwrap_or_else(|e| panic!("{e}\n{}", v.source));
-        for line in ["i0.v0 = input.a0;", "i1.v0 = input.a1;", "i2.v0 = input.a0;"] {
+        for line in [
+            "i0.v0 = input.a0;",
+            "i1.v0 = input.a1;",
+            "i2.v0 = input.a0;",
+        ] {
             assert!(v.source.contains(line), "{line}\n{}", v.source);
         }
         assert_eq!(
