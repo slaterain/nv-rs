@@ -753,22 +753,32 @@ struct Settings {
     depth: usize,
 }
 
+/// The platform area's kind of code at `addr` and where that kind's range starts (`None` outside the platform's
+/// named ranges): what [`kind_of`] says, and the base an address's offset is told from (the hitch log's "in
+/// DirectShow platform object +0x30").
+pub fn platform_kind(addr: u32) -> Option<(&'static str, u32)> {
+    Some(match addr {
+        0x7e02_0000..=0x7e03_ffff => ("D3D9/D3DX platform object", 0x7e02_0000),
+        0x7e00_0000..=0x7e00_03ff => ("DirectInput platform object", 0x7e00_0000),
+        0x7e00_0400..=0x7e00_07ff => ("DirectSound platform object", 0x7e00_0400),
+        0x7e00_0800..=0x7e00_ffff => ("DirectShow platform object", 0x7e00_0800),
+        0x7e01_0000..=0x7e01_ffff => ("loader platform procedure", 0x7e01_0000),
+        0x7e04_0000..=0x7e04_ffff => ("NVAPI platform object", 0x7e04_0000),
+        // The built-in extenders' code (ADR-0016 §3): before the platform's catch-all, which
+        // ends where their range starts (`mem::EXTENDER_CODE`).
+        0x7e80_0000..=0x7efe_ffff => ("built-in extender command", 0x7e80_0000),
+        0x7eff_0000..=0x7eff_ffff => ("built-in extender routine", 0x7eff_0000),
+        0x7e05_0000..=0x7e7f_ffff => ("other platform object", 0x7e05_0000),
+        _ => return None,
+    })
+}
+
 /// What the platform address `addr` is, by the ranges the platform layer puts its objects' code
 /// at (`units::platform`), or `None` for the exe's own code.
 pub fn kind_of(addr: u32) -> Option<String> {
-    let kind = match addr {
-        0x7e02_0000..=0x7e03_ffff => "D3D9/D3DX platform object",
-        0x7e00_0000..=0x7e00_03ff => "DirectInput platform object",
-        0x7e00_0400..=0x7e00_07ff => "DirectSound platform object",
-        0x7e00_0800..=0x7e00_ffff => "DirectShow platform object",
-        0x7e01_0000..=0x7e01_ffff => "loader platform procedure",
-        0x7e04_0000..=0x7e04_ffff => "NVAPI platform object",
-        // The built-in extenders' code (ADR-0016 §3): before the platform's catch-all, which
-        // ends where their range starts (`mem::EXTENDER_CODE`).
-        0x7e80_0000..=0x7efe_ffff => "built-in extender command",
-        0x7eff_0000..=0x7eff_ffff => "built-in extender routine",
-        0x7e05_0000..=0x7e7f_ffff => "other platform object",
-        _ => {
+    let kind = match platform_kind(addr) {
+        Some((kind, _)) => kind,
+        None => {
             return import_names()
                 .lock()
                 .ok()
@@ -4104,6 +4114,12 @@ mod tests {
             Some("DirectSound platform object")
         );
         assert_eq!(kind_of(0x0086_e650), None);
+        // The kind and its range's start, for the hitch log's "DirectShow platform object +0x30".
+        assert_eq!(
+            platform_kind(0x7e00_0830),
+            Some(("DirectShow platform object", 0x7e00_0800))
+        );
+        assert_eq!(platform_kind(0x0086_e650), None);
         // The platform's other objects, below the extenders' range.
         assert_eq!(
             kind_of(crate::units::platform::loader::KERNEL32_MODULE).as_deref(),

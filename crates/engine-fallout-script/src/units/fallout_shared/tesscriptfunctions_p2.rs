@@ -1588,6 +1588,16 @@ pub fn fn_005be2a0(e: &mut Engine, a: ScriptArgs) -> bool {
     }
     let queued = e.call(KILLS_ARE_QUEUED, &args![]).u8();
     if killer == e.global::<u32>(PLAYER) {
+        // lStewieAl's Tweaks' row S0204 (`KillCommandDuplicateRewardXpFix`, its
+        // `OnKillCommandPlayerKiller` called at `0x5BE37C` in place of the level's): the actor is
+        // remembered, so `Actor::Kill`'s experience step (`0x89E5BC`) skips it once.
+        if e.stewie(engine_core::extend::stewie::KILL_COMMAND_DUPLICATE_XP) {
+            let kept = e.stewie_kept(
+                engine_core::extend::stewie::kept::LAST_KILL_COMMAND_ACTOR,
+                4,
+            );
+            e.mem.set_u32(kept, actor);
+        }
         let level = e.call(ACTOR_LEVEL, &args![actor]).u16() as u32;
         let creature = e.vcall(actor, 0x21c, &args![]).bool();
         let points = e
@@ -7496,6 +7506,38 @@ mod tests {
         assert_eq!(calls(&e, GET_EXPERIENCE_POINTS), vec![vec![0, 12]]);
         // Part -1: no dismember.
         assert!(calls(&e, ACTOR_SCRIPT_DISMEMBER).is_empty());
+    }
+
+    /// S0204 (`KillCommandDuplicateRewardXpFix`, its `KillActor` half): with the row on, a kill by
+    /// the player remembers the actor (Tweaks' `pLastKilledActor`, the kept word) before the
+    /// experience is given; a kill by someone else leaves it as it was; off, it is never written.
+    #[test]
+    fn s0204_the_players_kill_command_remembers_the_actor() {
+        let kept_word = |e: &mut Engine| {
+            let kept = e.stewie_kept(
+                engine_core::extend::stewie::kept::LAST_KILL_COMMAND_ACTOR,
+                4,
+            );
+            e.mem.u32(kept)
+        };
+        for on in [false, true] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::KILL_COMMAND_DUPLICATE_XP, on);
+            let (actor, player) = kill_engine(&mut e, false);
+            parse_gives(&mut e, true, &[player, -1i32 as u32, -1i32 as u32]);
+            start_log(&mut e);
+            assert!(run(&mut e, 0x005b_e2a0, script(actor)));
+            assert_eq!(kept_word(&mut e), if on { actor } else { 0 }, "on {on}");
+            assert_eq!(calls(&e, V_RECORD), vec![vec![player, 250]], "on {on}");
+
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::KILL_COMMAND_DUPLICATE_XP, on);
+            let (actor, _) = kill_engine(&mut e, false);
+            let other = actor_with(&mut e, &[]);
+            parse_gives(&mut e, true, &[other, -1i32 as u32, -1i32 as u32]);
+            assert!(run(&mut e, 0x005b_e2a0, script(actor)));
+            assert_eq!(kept_word(&mut e), 0, "someone else, on {on}");
+        }
     }
 
     #[test]
