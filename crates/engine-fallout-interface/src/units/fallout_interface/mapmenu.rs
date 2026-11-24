@@ -3010,7 +3010,6 @@ pub fn map_menu_do_controller_switch(e: &mut Engine, this: Ptr<MapMenu>, on: u8)
     e.call(TILE_SET_FLOAT, &args![tile, 0xfa2u32, y, 1u32]);
 }
 
-
 // Translated from 0079b430 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map (cdecl): clears the open map menu's
 /// `pSelectedNote` when it is `note`.

@@ -5215,6 +5215,4 @@ mod n057_tests {
         assert!(calls_to(&e, FORM_004C0BF0).is_empty());
         assert_eq!(asked(), [(0x0072_880d, vec![0x7500])]);
     }
-
-
 }

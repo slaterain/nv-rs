@@ -17959,5 +17959,4 @@ mod tests {
             &[(0x0084_54f0, vec![object, 1]), (0x0040_1030, vec![object]),]
         );
     }
-
 }

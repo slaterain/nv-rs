@@ -1619,5 +1619,4 @@ mod n057_tests {
         assert_eq!(formats[2][2..], [0, 0]);
         assert_eq!(calls_to(&e, TILE_SET_INT), vec![vec![0x2038, 0xfaf, 0]]);
     }
-
 }

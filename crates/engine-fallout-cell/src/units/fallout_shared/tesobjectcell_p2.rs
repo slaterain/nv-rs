@@ -5911,10 +5911,6 @@ fn restore_tree_full_lod(e: &mut Engine) {
     fn_0054f4d0(e, 0);
 }
 
-#[cfg(test)]
-mod s0103_tests {
-}
-
 // Translated from 0054f4d0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Writes the byte at `+0x1B` of the object `00664840(1)` returns.
 pub fn fn_0054f4d0(e: &mut Engine, flag: u8) {
