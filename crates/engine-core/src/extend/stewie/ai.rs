@@ -231,3 +231,25 @@ pub const PROJECTILE_WEAPON_MOD_FLAGS: Row = Row::share(AI_FIXES, AI_FIXES_END, 
 /// S0223 `ToggleDetectCommandAffectsMines` (`009c39e0` (`0x9C39FF`)): with detection turned off
 /// by the console, mines are not set off.
 pub const DETECTION_OFF_MINES: Row = Row::share(AI_FIXES, AI_FIXES_END, 67);
+/// S0096 `patchTCLMovement` (`PlayerMover::Update` `009e9e50` (`0x9EA1CE`);
+/// `PlayerCharacter::Update` `0093e860` (`0x942793`, `0x9427AA`)): with collision off, keyboard
+/// flying moves along the view and the jump control rises.
+pub const TCL_MOVEMENT: Row = Row::share(AI_FIXES, AI_FIXES_END, 68);
+/// S0097 `patchRunAndGunDontLetAPBeNegative` (`PlayerCharacter`'s vtable slot `0108AD7C`
+/// (`0093ab30`); `0095d850` (`0x95DD7C`)): action points spent for an action never go below 0,
+/// and a reload charges them only as a reload.
+pub const RUN_AND_GUN_AP: Row = Row::share(AI_FIXES, AI_FIXES_END, 69);
+/// S0410 `GodmodePreventsLegCrippleSound` (`Actor::Move` `008a62b0` (`0x8A655C`, `0x8A6607`)): a
+/// fall plays no landing sound or pain for the player in god mode.
+pub const GODMODE_NO_LEG_CRIPPLE_SOUND: Row = Row::share(AI_FIXES, AI_FIXES_END, 70);
+/// S0082.01 `NoAmmoGodmode` (`Actor::StartAttack` `00893a40` (`0x893C37`, `0x893B44`);
+/// `PlayerCharacter::Update` `0093e860` (`0x941DD4`); `00948310` (`0x9492B5`, `0x94928F`);
+/// `VATSMenu` `007ec810` (`0x7EDC3D`, `0x7EDCA3`, `0x7EDCE5`, `0x7EDD04`)): in god mode the player
+/// fires without ammunition or action points, in and out of VATS.
+pub const NO_AMMO_GODMODE: Row = Row::share(AI_FIXES, AI_FIXES_END, 71);
+/// S0329 `patchLeftRightMovementCancelsOut` (`PlayerCharacter::Update` `0093e860` (`0x941BBA`,
+/// `0x941C11`, `0x941C67`, `0x941CBD`)): holding two opposite movement keys moves neither way.
+pub const OPPOSITE_KEYS_CANCEL: Row = Row::share(AI_FIXES, AI_FIXES_END, 72);
+/// S0404 `patchDelayLevelupAfterCombat` (`PlayerCharacter::Update` `0093e860` (`0x943990`)): the
+/// level-up menu waits 3 seconds after combat ends.
+pub const DELAY_LEVELUP_AFTER_COMBAT: Row = Row::share(AI_FIXES, AI_FIXES_END, 73);

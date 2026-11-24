@@ -29,6 +29,7 @@
 pub mod cosave;
 pub mod ini;
 pub mod rows;
+pub mod run_and_gun;
 pub mod settings;
 
 // The unit tests' own program: no other crate's functions are linked in.
@@ -200,7 +201,14 @@ pub fn install(e: &mut Engine) {
     e.set_stewie_fade_node_prints(settings.long("Tweaks", "bInvalidBSFadeNodePrints", 1) != 0);
     // Read by row S0059 (Tweaks' `g_bExtraConsoleDetailsMeshPath`, code default 0, VNV's 1).
     e.set_stewie_mesh_path(settings.long("Extra Console Details", "bMeshPath", 0) != 0);
+    // Read by row S0082.01 (Tweaks' `g_bVATSStopBurstIfTargetDead`, code default 0, VNV's 0).
+    e.set_stewie_vats_stop_burst(settings.long("Tweaks", "bVATSStopBurstIfTargetDead", 0) != 0);
+    // Read by row S0097 (Tweaks' `g_bRunAndGunAPInCombatOnly`, code default 0, VNV's 0).
+    e.set_stewie_run_and_gun_combat_only(
+        settings.long("Tweaks", "bRunAndGunAPInCombatOnly", 0) != 0,
+    );
     rows::world::install(e);
+    run_and_gun::install(e);
     rows::forms::write_data(e);
     let log = start_lines(ini.is_some(), &settings, &keys, on.len());
     for line in &log {
