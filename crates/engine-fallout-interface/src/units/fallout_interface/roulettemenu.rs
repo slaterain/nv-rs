@@ -2230,13 +2230,11 @@ fn finish_bet_change(e: &mut Engine, this: Ptr<RouletteMenu>, previous: i32, rai
 
 /// The magnitude test of the stick values: `00408820` of the value as a `float` compared
 /// with the dead zone (`FCOMP; TEST AH,0x41; JP`): kept when above it (or unordered),
-/// cleared otherwise. `site`: the `FCOMP`'s operand, JIP LN NVSE's D04 seam (step 3.9), which
-/// answers the double to compare with (the exe's `STICK_DEAD_ZONE_010718F0`).
-fn stick_dead_zone(e: &mut Engine, value: i32, site: u32) -> i32 {
+/// cleared otherwise. The dead zone: the double at `STICK_DEAD_ZONE_010718F0`.
+fn stick_dead_zone(e: &mut Engine, value: i32) -> i32 {
     let magnitude = x87_store32(f64::from(value));
     let magnitude = e.call(ABS_00408820, &args![magnitude]).f64();
-    let at = super::caravanmenu::left_stick_dead_zone(e, site, STICK_DEAD_ZONE_010718F0);
-    let dead_zone: f64 = e.global(at);
+    let dead_zone: f64 = e.global(STICK_DEAD_ZONE_010718F0);
     if magnitude <= dead_zone {
         0
     } else {
@@ -2324,11 +2322,11 @@ pub fn roulette_menu_do_idle(e: &mut Engine, this: Ptr<RouletteMenu>) {
         let stick_x = e.call(STICK_00A23390, &args![object, 0u32, 7u32]).i32();
         let object = input(e);
         let stick_y = e.call(STICK_00A23390, &args![object, 0u32, 8u32]).i32();
-        let stick_x = stick_dead_zone(e, stick_x, 0x007b_d47d);
-        other = stick_dead_zone(e, other, 0x007b_d4a0);
+        let stick_x = stick_dead_zone(e, stick_x);
+        other = stick_dead_zone(e, other);
         let scale: f64 = e.global(STICK_SCALE_01029790);
         let x = x87_store32(x87_div(f64::from(stick_x.wrapping_neg()), scale));
-        let stick_y = stick_dead_zone(e, stick_y, 0x007b_d4dd);
+        let stick_y = stick_dead_zone(e, stick_y);
         let scale: f64 = e.global(STICK_SCALE_01029790);
         let y = x87_store32(x87_div(f64::from(stick_y.wrapping_neg()), scale));
         (x, y)
@@ -4194,36 +4192,26 @@ mod n058_tests {
         assert_eq!(calls_to(&e, IDLE_STATIC_CONSTRUCT_0041A250).len(), 1);
     }
 
-    /// JIP's D04 seams (`0x7BD47D` x, `0x7BD4A0` the unused third value, `0x7BD4DD` y), asked in
-    /// that order only with JIP installed; the answered double (1e9) puts the stick's 20000 inside
-    /// the dead zone, so the cursor does not move (with the exe's double it moves 4.0).
+    /// The stick's 20000 is past the exe's dead zone (7849), so the cursor moves 4.0.
     #[test]
-    fn do_idle_asks_jips_three_dead_zone_seams() {
-        use crate::units::fallout_interface::caravanmenu::d04_test::{handlers, seen};
-        use engine_core::extend::jip_patches::INSTALLED;
-        let sites = [0x007b_d47d, 0x007b_d4a0, 0x007b_d4dd];
-        for (word, expected, cursor) in [(0, &[][..], 4.0f32.to_bits()), (INSTALLED, &sites[..], 0)]
-        {
-            let mut e = engine();
-            let menu = world(&mut e);
-            handlers(&mut e, word, &sites);
-            set(&mut e, menu, RouletteMenu::eRouletteState, 4);
-            set(&mut e, menu, RouletteMenu::iChipCount, 100);
-            set(&mut e, menu, RouletteMenu::iCurrentBet, 5);
-            set(&mut e, menu, RouletteMenu::iMinBet, 5);
-            e.register(FLAG_004B71D0, |_, _| 1u32.into_ret());
-            e.register(STICK_00A23390, |_, a| {
-                (if a[2] == 7 { 20000u32 } else { 0 }).into_ret()
-            });
-            e.register(ABS_00408820, |_, a| {
-                st0(f64::from(f32::from_bits(a[0]).abs()))
-            });
-            e.register(POINT_LENGTH_00457990, |_, _| st0(100.0));
-            e.call_log = Some(vec![]);
-            e.call(0x007b_d2a0, &args![menu]);
-            assert_eq!(seen(), expected, "word {word:x}");
-            assert_eq!(e.mem.u32(menu + 0x3fd4), cursor, "word {word:x}");
-        }
+    fn do_idle_stick_past_the_dead_zone_moves_the_cursor() {
+        let mut e = engine();
+        let menu = world(&mut e);
+        set(&mut e, menu, RouletteMenu::eRouletteState, 4);
+        set(&mut e, menu, RouletteMenu::iChipCount, 100);
+        set(&mut e, menu, RouletteMenu::iCurrentBet, 5);
+        set(&mut e, menu, RouletteMenu::iMinBet, 5);
+        e.register(FLAG_004B71D0, |_, _| 1u32.into_ret());
+        e.register(STICK_00A23390, |_, a| {
+            (if a[2] == 7 { 20000u32 } else { 0 }).into_ret()
+        });
+        e.register(ABS_00408820, |_, a| {
+            st0(f64::from(f32::from_bits(a[0]).abs()))
+        });
+        e.register(POINT_LENGTH_00457990, |_, _| st0(100.0));
+        e.call_log = Some(vec![]);
+        e.call(0x007b_d2a0, &args![menu]);
+        assert_eq!(e.mem.u32(menu + 0x3fd4), 4.0f32.to_bits());
     }
 
     #[test]

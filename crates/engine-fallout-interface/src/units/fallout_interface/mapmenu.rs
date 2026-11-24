@@ -1457,24 +1457,6 @@ fn play_note(e: &mut Engine, this: Ptr<MapMenu>, note: u32, handle: u32) {
     }
 }
 
-/// The sound flags of a conversation note's voice line: the exe's `PUSH 0x105` (`0x7974C9`).
-/// JIP's `bVoiceModulationFix` (group GE's row O13: `SafeWrite8(0x7974CC, 8)`, the flags'
-/// third byte, so 0x80105) is asked only with that switch's bit; no answer keeps 0x105.
-fn note_voice_flags(e: &mut Engine) -> u32 {
-    let flags = 0x105u32;
-    if e.jip_patches() & engine_core::extend::jip_patches::VOICE_MODULATION_FIX != 0 {
-        e.site(JIP_NOTE_VOICE_FLAGS, &[flags]).unwrap_or(flags)
-    } else {
-        flags
-    }
-}
-
-/// JIP's O13 seam in the note's voice line (the `PUSH 0x105` operand's third byte).
-const JIP_NOTE_VOICE_FLAGS: u32 = 0x0079_74cc;
-/// JIP's G87 seam (`RefreshMapMenuHook`, a jump at `0x79DF73`) in
-/// [`map_menu_add_map_icons`]: before the map tile is centred.
-const JIP_MAP_SKIP_CENTRING: u32 = 0x0079_df73;
-
 /// A conversation note: a temporary `Character` (0x1c8 bytes) of the note's
 /// speaker, a `Conversation` (0xc bytes) with the player and the note's
 /// topic, and for each response its subtitle, its result script (before and
@@ -1522,7 +1504,8 @@ fn run_note_conversation(e: &mut Engine, this: Ptr<MapMenu>, note: u32, handle: 
             let file_name = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, file));
             e.with_stack(0xc, |e, temp| {
                 let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
-                let flags = note_voice_flags(e);
+                // The sound flags of the voice line: the exe's `PUSH 0x105` (`0x7974C9`).
+                let flags = 0x105u32;
                 let found = e
                     .call(
                         AUDIO_SOUND_BY_FILENAME,
@@ -5022,10 +5005,7 @@ fn gamepad_sticks(e: &mut Engine, this: Ptr<MapMenu>) -> bool {
     e.call(OBJECT_00877720, &args![owner]);
     if e.get(this, MapMenu::iCurrentPage) == 0x20 || e.get(this, MapMenu::iCurrentPage) == 0x21 {
         let mut zoom = input_axis(e, 8);
-        // JIP LN NVSE's D04 seam (step 3.9): the operand's double.
-        let dead_zone =
-            super::caravanmenu::left_stick_dead_zone(e, 0x0079_9861, ZOOM_DEAD_ZONE_DOUBLE);
-        if !axis_beyond(e, zoom, dead_zone) {
+        if !axis_beyond(e, zoom, ZOOM_DEAD_ZONE_DOUBLE) {
             zoom = 0;
         }
         if zoom != 0 {
@@ -7497,15 +7477,8 @@ pub fn map_menu_add_map_icons(e: &mut Engine, this: Ptr<MapMenu>) {
             &args![icon, 0xff5u32, low, high, 1.0f32.to_bits(), 1u32],
         );
     }
-    // JIP's G87 (`0x79DF73`): an answer other than 0 skips the centring (to `0x79E053`); JIP's
-    // other path is the exe's (its `fmul 0.5` for the exe's `fdiv 2.0` gives the same float).
-    let skip = e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
-        && e.site(JIP_MAP_SKIP_CENTRING, &[]).unwrap_or(0) != 0;
     let two: f64 = e.global(TWO_DOUBLE);
     for (size_id, along, target) in [(0xfb1u32, point[0], 0xfa1u32), (0xfb0, point[1], 0xfa2)] {
-        if skip {
-            break;
-        }
         let map = e.get(this, MapMenu::pMapTile);
         let owner = typed_call!(leaf::FAMILY, 0x0045_cd60, leaf::word_at_28(e, map));
         let size = e.call(TILE_GET_FLOAT, &args![owner, size_id]).f64();
@@ -10415,39 +10388,13 @@ mod map_menu_tests {
         assert!(called(&e, AUDIO_ENTER_DIALOGUE));
     }
 
-    thread_local! {
-        /// The words JIP's seams were asked with in a test (a test handler's notes).
-        static JIP_ASKED: std::cell::RefCell<Vec<Vec<u32>>> =
-            const { std::cell::RefCell::new(Vec::new()) };
-        /// What the test handlers answer.
-        pub(super) static JIP_ANSWER: std::cell::Cell<Option<u32>> =
-            const { std::cell::Cell::new(None) };
-    }
-
-    /// A test handler: notes its words, answers [`JIP_ANSWER`].
-    pub(super) fn jip_noted(_: &mut Engine, words: &[u32]) -> Option<u32> {
-        JIP_ASKED.with(|s| s.borrow_mut().push(words.to_vec()));
-        JIP_ANSWER.with(|a| a.get())
-    }
-
-    /// The words asked since the last call (cleared).
-    pub(super) fn jip_asked() -> Vec<Vec<u32>> {
-        JIP_ASKED.with(|s| std::mem::take(&mut *s.borrow_mut()))
-    }
-
-    /// O13's seam at `0x7974CC` (group GE's row; JIP's byte 8 in `PUSH 0x105`): asked with the
-    /// exe's flags only with the switch's bit, once per response line, and its answer is the
-    /// flags the voice is made with; no answer keeps the exe's 0x105.
+    /// A conversation note's voice lines are made with the exe's flags 0x105, once per response
+    /// line.
     #[test]
-    fn a_conversation_note_asks_jips_voice_flags_seam() {
-        use engine_core::extend::jip_patches::{FIXES, INSTALLED, VOICE_MODULATION_FIX};
-        let flags = |word: u32, answer: Option<u32>| {
+    fn a_conversation_note_voice_flags() {
+        let flags = || {
             let mut e = engine();
             let (menu, _) = conversation_note(&mut e);
-            e.on_site_for_test(JIP_NOTE_VOICE_FLAGS, jip_noted);
-            JIP_ANSWER.with(|a| a.set(answer));
-            jip_asked();
-            e.set_jip_patches(word);
             e.call_log = Some(vec![]);
             e.call(0x0079_6fd0, &args![menu, 0x18i32, 0x7400u32]);
             let made: Vec<u32> = calls_to(&e, AUDIO_SOUND_BY_FILENAME)
@@ -10461,29 +10408,9 @@ mod map_menu_tests {
             assert_eq!(calls_to(&e, SOUND_SET_VOLUME).len(), 2);
             assert_eq!(calls_to(&e, SOUND_LIST_ADD_TAIL).len(), 2);
             assert!(called(&e, AUDIO_ENTER_DIALOGUE));
-            (made, jip_asked())
+            made
         };
-        // Not installed, and installed with the fixes but not the switch: never asked.
-        for word in [0, INSTALLED, INSTALLED | FIXES] {
-            assert_eq!(
-                flags(word, Some(0x80105)),
-                (vec![0x105, 0x105], vec![]),
-                "word {word:x}"
-            );
-        }
-        // The switch: asked with the exe's flags for each line, the answer used.
-        let on = INSTALLED | FIXES | VOICE_MODULATION_FIX;
-        assert_eq!(
-            flags(on, Some(0x80105)),
-            (vec![0x80105, 0x80105], vec![vec![0x105], vec![0x105]])
-        );
-        assert_eq!(flags(on, Some(0x0123_4567)).0, vec![0x0123_4567; 2]);
-        // No answer: the exe's flags.
-        assert_eq!(
-            flags(on, None),
-            (vec![0x105, 0x105], vec![vec![0x105], vec![0x105]])
-        );
-        assert_eq!(JIP_NOTE_VOICE_FLAGS, 0x0079_74cc);
+        assert_eq!(flags(), vec![0x105, 0x105]);
     }
 
     /// The map menu with a conversation note of two responses selected (`DoClick` id 0x18 runs
@@ -13135,42 +13062,34 @@ mod n056_tests {
         assert!(!calls_to(&e, TILE_GET_FLOAT).is_empty());
     }
 
-    /// JIP's D04 seam (`0x799861`, the zoom axis), asked only with JIP installed, and its answer
-    /// used: a zoom axis of 20000 (above the exe's 7849) zooms (its 20000 / 32767 measured for the
-    /// zoom amount) with the exe's double; with the answered 1e9 it is inside the dead zone and
-    /// nothing zooms. (No map tile: the zoom itself returns at once.)
+    /// The zoom axis's dead zone: an axis of 20000 (above the exe's 7849) zooms (its 20000 / 32767
+    /// measured for the zoom amount). (No map tile: the zoom itself returns at once.)
     #[test]
-    fn do_gamepad_asks_jips_zoom_dead_zone_seam() {
-        use crate::units::fallout_interface::caravanmenu::d04_test::{handlers, seen};
-        use engine_core::extend::jip_patches::INSTALLED;
-        for (word, expected) in [(0, &[][..]), (INSTALLED, &[0x0079_9861][..])] {
-            let mut e = engine();
-            let menu = open_menu(&mut e, 0x100);
-            handlers(&mut e, word, &[0x0079_9861]);
-            gamepad_ready(&mut e);
-            returns(&mut e, FLAG_00709D40, 1);
-            e.set(menu, MapMenu::iCurrentPage, 0x21);
-            e.set(menu, MapMenu::pMapTile, 0);
-            e.set_global::<f64>(ZOOM_DEAD_ZONE_DOUBLE, 7849.0);
-            e.set_global::<f64>(PAN_DEAD_ZONE_DOUBLE, 8689.0);
-            e.set_global::<f64>(AXIS_RANGE_DOUBLE, 32767.0);
-            e.register(INPUT_AXIS_00A23390, |_, a| Ret {
-                eax: if a[2] == 8 { 20000 } else { 0 },
-                ..Ret::default()
-            });
-            e.register(MAGNITUDE_00408820, |_, a| Ret {
-                st0: f64::from(f32::from_bits(a[0])).abs(),
-                ..Ret::default()
-            });
-            e.call_log = Some(vec![]);
-            e.call(0x0079_9790, &args![menu, 0i32, 0u32]);
-            assert_eq!(seen(), expected, "word {word:x}");
-            let scaled = ((20000.0f64 / 32767.0) as f32).to_bits();
-            let zoomed = calls_to(&e, MAGNITUDE_00408820)
-                .iter()
-                .any(|c| c[0] == scaled);
-            assert_eq!(zoomed, word == 0, "word {word:x}");
-        }
+    fn do_gamepad_zoom_axis_past_the_dead_zone_zooms() {
+        let mut e = engine();
+        let menu = open_menu(&mut e, 0x100);
+        gamepad_ready(&mut e);
+        returns(&mut e, FLAG_00709D40, 1);
+        e.set(menu, MapMenu::iCurrentPage, 0x21);
+        e.set(menu, MapMenu::pMapTile, 0);
+        e.set_global::<f64>(ZOOM_DEAD_ZONE_DOUBLE, 7849.0);
+        e.set_global::<f64>(PAN_DEAD_ZONE_DOUBLE, 8689.0);
+        e.set_global::<f64>(AXIS_RANGE_DOUBLE, 32767.0);
+        e.register(INPUT_AXIS_00A23390, |_, a| Ret {
+            eax: if a[2] == 8 { 20000 } else { 0 },
+            ..Ret::default()
+        });
+        e.register(MAGNITUDE_00408820, |_, a| Ret {
+            st0: f64::from(f32::from_bits(a[0])).abs(),
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0079_9790, &args![menu, 0i32, 0u32]);
+        let scaled = ((20000.0f64 / 32767.0) as f32).to_bits();
+        let zoomed = calls_to(&e, MAGNITUDE_00408820)
+            .iter()
+            .any(|c| c[0] == scaled);
+        assert!(zoomed);
     }
 
     #[test]
@@ -13872,15 +13791,11 @@ mod n056_tests {
         );
     }
 
-    /// G87's seam (`0x79DF73`, JIP's `RefreshMapMenuHook`): asked with no words, only with JIP
-    /// installed; an answer other than 0 skips both centring sets of the map tile (to
-    /// `0x79E053`) and the rest still runs (the quest and companion markers, the player
-    /// marker); 0 or no answer centres as the exe.
+    /// `AddMapIcons` centres the map tile (both sets) and the rest runs (the quest and
+    /// companion markers, the player marker).
     #[test]
-    fn add_map_icons_asks_jips_skip_centring_seam() {
-        use super::map_menu_tests::{jip_asked, jip_noted, JIP_ANSWER};
-        use engine_core::extend::jip_patches::{FIXES, INSTALLED};
-        let run = |word: u32, answer: Option<u32>| {
+    fn add_map_icons_centres_the_map_tile() {
+        let run = || {
             let mut e = engine();
             let menu = menu_with_rectangle(&mut e);
             e.set(menu, MapMenu::pMapTile, 0x104);
@@ -13891,10 +13806,6 @@ mod n056_tests {
             returns_float(&mut e, 0x0010_02bc, 1.0);
             e.mem.set_u32(TRAIT_X, 0x2001);
             e.mem.set_u32(TRAIT_Y, 0x2002);
-            e.on_site_for_test(JIP_MAP_SKIP_CENTRING, jip_noted);
-            JIP_ANSWER.with(|a| a.set(answer));
-            jip_asked();
-            e.set_jip_patches(word);
             e.call_log = Some(vec![]);
             e.call(0x0079_dbb0, &args![menu]);
             let centred: Vec<u32> = calls_to(&e, TILE_SET_FLOAT)
@@ -13914,18 +13825,9 @@ mod n056_tests {
                 3,
                 "the player icon is placed first"
             );
-            (centred, jip_asked())
+            centred
         };
-        let centred = vec![0xfa1, 0xfa2];
-        for word in [0, FIXES] {
-            assert_eq!(run(word, Some(1)), (centred.clone(), vec![]), "{word:x}");
-        }
-        let asked = vec![Vec::<u32>::new()];
-        assert_eq!(run(INSTALLED, Some(1)), (vec![], asked.clone()));
-        assert_eq!(run(INSTALLED, Some(0x100)), (vec![], asked.clone()));
-        assert_eq!(run(INSTALLED, Some(0)), (centred.clone(), asked.clone()));
-        assert_eq!(run(INSTALLED, None), (centred, asked));
-        assert_eq!(JIP_MAP_SKIP_CENTRING, 0x0079_df73);
+        assert_eq!(run(), vec![0xfa1, 0xfa2]);
     }
 
     #[test]
