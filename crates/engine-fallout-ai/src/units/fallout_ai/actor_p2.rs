@@ -3573,13 +3573,10 @@ fn update_weapon_sound(e: &mut Engine, f: &UpdateFrame) {
     if e.call(ANIMATION_ENTRY_KIND, &args![entry]).u32() != 1 {
         return;
     }
-    // lStewieAl's Tweaks' row S0489 (`patchSpinWeaponsAlwaysPlaySound`, `JGE` to `JG` at
-    // `0x8893F7`): with the row a count of exactly 1 goes on too.
-    let spin_row = e.stewie(engine_core::extend::stewie::SPIN_WEAPON_SOUND);
     let count = e
         .call(ANIMATION_FIELD_0X70F490, &args![animation, 4u32])
         .i32();
-    let stop = if spin_row { count > 1 } else { count >= 1 };
+    let stop = count >= 1 ;
     if stop {
         return;
     }
@@ -3587,10 +3584,6 @@ fn update_weapon_sound(e: &mut Engine, f: &UpdateFrame) {
     e.call(EXTRA_GET_WEAPON_ATTACK_SOUND, &args![lists, sound]);
     if !e.call(SOUND_HANDLE_IS_VALID, &args![sound]).bool() {
         start_weapon_attack_sound(e, f);
-    } else if spin_row {
-        // S0489: the jump at `0x889420` lands on the play (`0x8895A3`, the byte at `0x889422`),
-        // skipping the playing test, and the play's call at `0x8895A8` is Tweaks'.
-        spin_weapon_play(e, sound, weapon);
     } else if !e.call(SOUND_HANDLE_IS_PLAYING, &args![sound]).bool() {
         e.call(SOUND_HANDLE_PLAY, &args![sound, 0u32]);
     }
@@ -3763,12 +3756,7 @@ fn update_movement_mode(e: &mut Engine, f: &mut UpdateFrame) {
 /// with S0130.01 (the shooter's beam pointer cleared when the beam is freed); here it acts only
 /// while that row is on too, so it never follows a stale pointer (a guard against a crash).
 fn update_npc_beam(e: &mut Engine, this: Ptr<Actor>) {
-    if !e.stewie(engine_core::extend::stewie::NPC_CONTINUOUS_BEAM)
-        || !e.stewie(engine_core::extend::stewie::BEAM_SHOOTER_POINTER)
-        || this.addr() == e.global::<u32>(PLAYER_CHARACTER)
-    {
-        return;
-    }
+    return;
     let beam = e.mem.u32(this.addr() + 0x1a0);
     if beam == 0 {
         return;
@@ -4839,14 +4827,7 @@ pub fn actor_restore_action_points(e: &mut Engine, this: Ptr<Actor>, amount: f32
     }
     let rate = e.call(ACTION_POINT_REGENERATION_FORMULA, &args![]).f32();
     let scaled = (rate as f64 * amount as f64) as f32;
-    // lStewieAl's Tweaks' row S0019 (`patchAllowAPRegenModifiersWithNoEquippedWeapon`, the bytes
-    // at `0x88B6A1`): the weapon starts as the fists (`011ca278`) instead of none, so with no weapon
-    // equipped the entry point is asked with the fists.
-    let mut item = if e.stewie(engine_core::extend::stewie::AP_REGEN_NO_WEAPON_FISTS) {
-        e.global::<u32>(FISTS_WEAPON)
-    } else {
-        0u32
-    };
+    let mut item = 0u32;
     let process = e.get(this, Actor::pCurrentProcess);
     if !process.is_null() && e.vcall(process.addr(), PROCESS_VSLOT_ITEM, &args![]).u32() != 0 {
         let held = e.vcall(process.addr(), PROCESS_VSLOT_ITEM, &args![]).u32();
@@ -6105,9 +6086,6 @@ pub fn actor_equip_object(
             let process = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, this));
             // lStewieAl's Tweaks' row S0202 (`patchEquipAmmoOnNullBaseProcessCrashFix` at
             // `0x88CDE7`): an actor with no process equips no ammunition (the switch's end).
-            if process == 0 && e.stewie(engine_core::extend::stewie::EQUIP_AMMO_NULL_PROCESS) {
-                break 'ammo;
-            }
             let held = e.vcall(process, PROCESS_VSLOT_ITEM, &args![]).u32();
             let held_form = if held == 0 {
                 0
@@ -6236,15 +6214,7 @@ pub fn actor_equip_object(
                 {
                     let pipboy = e.call(GET_PIPBOY, &args![]).u32();
                     if pipboy != 0 {
-                        if e.stewie(engine_core::extend::stewie::PIPBOY_EQUIP_CRASH) {
-                            // lStewieAl's Tweaks' row S0027 (`SetPipboyManagerShouldReset` at
-                            // `0x88CDA3`): not now, inside the equip; the reset byte asks for it,
-                            // and the main loop's AI tasks (`0086f77f`) or the Pip-Boy's opening
-                            // (`FOPipboyManager::OnMenuOpen`) reset it, whichever comes first.
-                            e.mem.set_u8(pipboy + PIPBOY_RESET_PENDING, 1);
-                        } else {
-                            e.call(PIPBOY_REFRESH, &args![pipboy]);
-                        }
+                        e.call(PIPBOY_REFRESH, &args![pipboy]);
                     }
                 }
             }
@@ -6285,9 +6255,7 @@ pub fn actor_equip_object(
 /// `PlayerHasPowerArmorTrainingOrGodmode`): also true in god mode (`011e07ba`) or demigod mode
 /// (`011e0898`).
 fn power_armor_training(e: &mut Engine, player: u32) -> bool {
-    if !e.stewie(engine_core::extend::stewie::GODMODE_POWER_ARMOR) {
-        return fn_0088d2d0(e, Ptr::new(player)) != 0;
-    }
+    return fn_0088d2d0(e, Ptr::new(player)) != 0;
     e.mem.u8(player + 0x7c7) != 0 || e.mem.u8(0x011e_07ba) != 0 || e.mem.u8(0x011e_0898) != 0
 }
 
@@ -7443,14 +7411,7 @@ pub fn actor_damage_equipment(
             return 0;
         }
     }
-    // lStewieAl's Tweaks' row S0782 (`ShootableNonPlayableExplosives`, its
-    // `WeaponIsPlayableOrValidExplosion` called at `0x891483`): an unplayable weapon is also
-    // damaged when it is an explosive ([`hidden_frag_explosive`]).
-    let hidden_frags = e.stewie(engine_core::extend::stewie::HIDDEN_FRAGS);
-    if weapon != 0
-        && !e.call(WEAPON_FLAG_NOT_80, &args![weapon]).bool()
-        && !(hidden_frags && hidden_frag_explosive(e, weapon))
-    {
+    if weapon != 0 && !e.call(WEAPON_FLAG_NOT_80, &args![weapon]).bool() {
         return 0;
     }
     let mut damage = e.with_stack(4, |e, local| {
@@ -7550,7 +7511,7 @@ pub fn actor_damage_equipment(
         // can't-drop (embedded) weapon that is an explosive is not removed at once, so it is
         // dropped and, being an explosive, set off.
         || (fn_00891b70(e, Ptr::new(weapon))
-            && !(hidden_frags && hidden_frag_explosive(e, weapon)))
+            && !(STEWIE_FALSE && hidden_frag_explosive(e, weapon)))
         || {
             let form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, entry));
             e.vcall(form, FORM_VSLOT_0X94, &args![]).bool()
@@ -7685,9 +7646,6 @@ fn drop_destroyed_weapon(e: &mut Engine, this: Ptr<Actor>, entry: Ptr, weapon: u
             // `OnCreateDamagedWeaponExplosionHook` jumped to at `0x891951`): the projectile made
             // names the destroyed weapon as its source (+0xE0), so the damage it does is resisted
             // as that weapon's.
-            if launched != 0 && e.stewie(engine_core::extend::stewie::SHOT_PROJECTILE_RESISTANCE) {
-                e.mem.set_u32(launched + 0xe0, weapon);
-            }
         } else if e.call(ACTOR_IS_WEAPON_DRAWN, &args![this]).bool() {
             typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, euler));
             e.call(

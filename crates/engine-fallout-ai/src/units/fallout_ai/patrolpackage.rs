@@ -123,13 +123,7 @@ pub fn fn_009f2a70(e: &mut Engine, this: Ptr<PatrolActorPackageData>) {
     e.mem.set_u32(this.addr(), 0x0109_3418);
     let data_handler = e.mem.u32(0x011c_3f2c);
     if !e.call(0x0042_26e0, &args![data_handler]).bool() {
-        // lStewieAl's Tweaks' row S0228 (`PatrolPackageFix`, the call at `0x9F2ABB`): Tweaks'
-        // `ClearReservedPatrolRef` releases the reference only when `pActor` is set.
-        if !e.stewie(engine_core::extend::stewie::PATROL_PACKAGE)
-            || e.get(this, PatrolActorPackageData::pActor) != 0
-        {
-            fn_009f2b30(e, this);
-        }
+        fn_009f2b30(e, this);
     }
     e.call(ARRAY_SET_SIZE, &args![references(this), 0u32, 1u32]);
     e.set(this, PatrolActorPackageData::eState, 4);

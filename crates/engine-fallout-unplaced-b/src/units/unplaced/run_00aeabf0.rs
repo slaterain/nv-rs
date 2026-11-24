@@ -1685,9 +1685,6 @@ fn prepare_effect(e: &mut Engine, this: Ptr) {
     let base = this.addr();
     // lStewieAl's Tweaks' S0155 (`patchNullAudioCrash`, its bytes at `0xAECF39` and `0xAED074`): with no
     // buffer (+0x19C) the effect is passed over and `Prepare` goes on to `BSGameSound::Prepare`.
-    if field(e, this, BUFFER) == 0 && e.stewie(engine_core::extend::stewie::NULL_AUDIO) {
-        return;
-    }
     e.with_stack(0x28, |e, locals| {
         let description = locals.addr();
         let results = description + 0x20;

@@ -1763,18 +1763,9 @@ pub fn fn_009993c0(e: &mut Engine, this: Ptr<CombatState>) {
 
         if target != 0 && e.get(this, CombatState::pCombatWeapons) != 0 {
             let weapon = e.get(this, CombatState::pCombatWeapons);
-            // lStewieAl's Tweaks' row S0126 (`patchFixNullProjectileInCombatStateUpdateInventory`):
-            // the weapon's projectile asked without the owner (`0x99A1C8`), as
-            // `TESObjectWEAP::GetCombatWeaponType` asks it, and no explosion for no projectile
-            // (`ProjectileGetExplosionNullCheck` at `0x99A1DC`).
-            let fixed = e.stewie(engine_core::extend::stewie::COMBAT_STATE_NULL_PROJECTILE);
-            let owner = if fixed { 0 } else { attacker };
+            let owner = attacker ;
             let ammo = e.call(0x0052_5a90, &args![weapon, owner]).u32();
-            let projectile = if fixed && ammo == 0 {
-                0
-            } else {
-                e.call(0x004f_d3c0, &args![ammo]).u32()
-            };
+            let projectile = e.call(0x004f_d3c0, &args![ammo]).u32();
             let radius = constant_bits(e, TWO);
             let location = e.vcall(target, 0x1f4, &args![]).u32();
             let manager: u32 = e.global(COMBAT_MANAGER);

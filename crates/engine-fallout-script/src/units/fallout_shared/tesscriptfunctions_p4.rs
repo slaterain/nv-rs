@@ -2252,11 +2252,8 @@ pub fn script_lock_function(e: &mut Engine, a: ScriptArgs) -> bool {
             lock = e.call(ADD_LOCK, &args![this]).u32();
         }
     }
-    // lStewieAl's Tweaks' row S0213 (`LockCommandFixes`): `0x5CC08B`'s jump past the store nopped,
-    // so `Lock 0` stores level 0; `0x5CC10A`'s print names the level.
-    let lock_fixes = e.stewie(engine_core::extend::stewie::LOCK_COMMAND);
     if lock != 0 {
-        if level != 0 || lock_fixes {
+        if level != 0 {
             e.mem.set_u8(lock, level as u8);
         }
         e.call(LOCK_SET_LOCKED, &args![lock, 1u32]);
@@ -2271,11 +2268,7 @@ pub fn script_lock_function(e: &mut Engine, a: ScriptArgs) -> bool {
     }
     if echo_enabled(e) {
         let name = e.call(REFERENCE_GET_NAME, &args![this]).u32();
-        if lock_fixes {
-            lock_command_console_print(e, name, level);
-        } else {
-            console_print(e, &[FORMAT_LOCKED, name, level]);
-        }
+        console_print(e, &[FORMAT_LOCKED, name, level]);
     }
     true
 }

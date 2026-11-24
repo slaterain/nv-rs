@@ -807,14 +807,7 @@ pub fn bgs_save_load_initial_data_save_initial_data(
 fn save_created_reference(e: &mut Engine, buffer: u32, reference: u32, flags: u32, record: u32) {
     let world_space = reference_world_or_cell(e, reference);
     fn_0084eb20(e, Ptr::new(record));
-    // 0084ee1b: lStewieAl's Tweaks' row S0881 (`patchFixSavingNullCellCrash`,
-    // `GetRefIDNullChecked`): a created reference with neither worldspace nor cell is saved with
-    // the id 0, where the exe reads the null form's id.
-    let world_id = if e.stewie(stewie::SAVING_NULL_CELL) && world_space == 0 {
-        0
-    } else {
-        word_at_0c(e, world_space)
-    };
+    let world_id = word_at_0c(e, world_space);
     e.call(SET_NUMERIC_ID, &args![record, world_id]);
     let location = e.vcall(reference, 0x1f4, &args![]).u32();
     copy_point(e, location, record + LOCATION_DATA_LOCATION);

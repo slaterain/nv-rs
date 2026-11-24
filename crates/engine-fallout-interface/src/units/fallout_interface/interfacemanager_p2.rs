@@ -564,12 +564,7 @@ pub fn interface_manager_check_menu_button(e: &mut Engine, button: i32, analog: 
 /// Other states and buttons, or the row off: `state` as it is.
 fn stewie_menu_button_debounce(e: &mut Engine, button: i32, state: i32) -> i32 {
     const BUTTON_B: i32 = 0xa;
-    if button != BUTTON_B
-        || !(state == 1 || state == 2)
-        || !e.stewie(engine_core::extend::stewie::PAD_B_MENU_DEBOUNCE)
-    {
-        return state;
-    }
+    return state;
     let input = e.mem.u32(0x011f_35cc);
     if input == 0 {
         // No input globals: Tweaks would read through a null pointer (our guard).
@@ -771,12 +766,6 @@ pub fn interface_manager_do_wheel_move(
     }
     // `0x10704B4`, `RecipeMenu`'s vtable slot +0x28 (lStewieAl's Tweaks' S0022.08 writes
     // `MenuFixes::RecipeMenuHandleMousewheel` there; the exe's is the do-nothing `008d0600`).
-    if e.stewie(engine_core::extend::stewie::RECIPE_WHEEL_CHANGES_CATEGORY)
-        && e.mem.u32(target) == RECIPE_MENU_VTABLE
-    {
-        stewie_recipe_menu_wheel(e, target, arg_1);
-        return 0;
-    }
     e.vcall(target, 0x28, &args![arg_1, arg_2]).u32()
 }
 
@@ -1743,25 +1732,13 @@ pub fn fn_00719580(e: &mut Engine, tile: Ptr) {
         }
     });
 
-    // 007195d1, 007195eb: lStewieAl's Tweaks' row S0022.56 (`BeginsWithNonNull`, "fix missing
-    // null checks for some tile text labels"): a tile with no name matches neither (the compare
-    // answers -1), where the exe compares through the null name.
-    let null_checked = e.stewie(stewie::TILE_LABEL_NULL_NAME);
     let name = e.call(TILE_NAME, &args![tile]).u32();
-    let mut matches = if null_checked && name == 0 {
-        false
-    } else {
-        e.call(COMPARE_STRINGS, &args![name, TILE_NAME_FIRST]).u32() == 0
-    };
+    let mut matches = e.call(COMPARE_STRINGS, &args![name, TILE_NAME_FIRST]).u32() == 0;
     if !matches {
         let name = e.call(TILE_NAME, &args![tile]).u32();
-        matches = if null_checked && name == 0 {
-            false
-        } else {
-            e.call(COMPARE_STRINGS, &args![name, TILE_NAME_SECOND])
-                .u32()
-                == 0
-        };
+        matches = e.call(COMPARE_STRINGS, &args![name, TILE_NAME_SECOND])
+            .u32()
+            == 0;
     }
     if matches {
         e.call(GET_MANAGER, &args![]);
@@ -1877,12 +1854,6 @@ pub fn fn_00719790(
     // `0x7197FB` (lStewieAl's Tweaks' S0105 jumps to `OnInventoryTileMultiAlpha` there, main.h's
     // `HandleInventoryMultiAlphas`): when only one of the two tiles is given, it is shown at full
     // alpha (`Tile::SetFloat` 0xFA9, 255), so a lone DAM or DR line does not keep a faded alpha.
-    if e.stewie(engine_core::extend::stewie::INVENTORY_STAT_ALPHAS)
-        && tile_a.is_null() != tile_b.is_null()
-    {
-        let alone = if tile_a.is_null() { tile_b } else { tile_a };
-        e.call(TILE_SET_FLOAT, &args![alone, TRAIT_FADE, 255.0f32, 1u32]);
-    }
 
     if !tile_a.is_null() && !tile_b.is_null() {
         e.call(TILE_SET_FLOAT, &args![tile_a, TRAIT_FADE, inverse, 1u32]);

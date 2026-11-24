@@ -705,10 +705,6 @@ pub fn fn_00c80090(e: &mut Engine, object: Ptr) -> bool {
         };
         // lStewieAl's Tweaks' S0023 (`patchPrintBSXCrash`, `BSFadeNodeNullCheckHook` at `0xC800D5`): no
         // first child answers false, with Tweaks' console line for the node (`BSXCrashPrint`).
-        if first == 0 && e.stewie(engine_core::extend::stewie::INVALID_FADE_NODE) {
-            engine_core::extend::stewie::invalid_fade_node_print(e, me);
-            return false;
-        }
         let inner = e.mem.u32(first + 0x1c);
         if inner == 0 {
             return false;

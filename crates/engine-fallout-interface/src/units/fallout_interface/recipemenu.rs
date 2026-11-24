@@ -1929,18 +1929,8 @@ const COMPARE_00728CD0: u32 = 0x0072_8cd0;
 /// `fn_00728c10` (vtable +0x20) and sorts the category array with `fn_007278c0`.
 pub fn fn_00727680(e: &mut Engine, this: Ptr, _unused_1: u32, category: u32) {
     let owner = e.global::<u32>(OWNER_011C3F2C);
-    // `0x7276A6` (lStewieAl's Tweaks' S0200 calls `OnPreRefreshRecipeMenu` there).
-    let refresh_fix = e.stewie(engine_core::extend::stewie::RECIPE_REFRESH_KEEPS_CATEGORY);
-    let previous_category = if refresh_fix {
-        stewie_pre_refresh(e)
-    } else {
-        0
-    };
-    let mut node = if refresh_fix {
-        owner.wrapping_add(DATA_HANDLER_RECIPES)
-    } else {
-        e.call(RECIPE_LIST_HEAD_004077E0, &args![owner]).u32()
-    };
+    let previous_category = 0;
+    let mut node = e.call(RECIPE_LIST_HEAD_004077E0, &args![owner]).u32();
     while node != 0 && !typed_call!(leaf::FAMILY, 0x0082_56d0, leaf::both_words_zero(e, node)) {
         let recipe = node_item(e, node);
         node = node_next(e, node);
@@ -2007,9 +1997,6 @@ pub fn fn_00727680(e: &mut Engine, this: Ptr, _unused_1: u32, category: u32) {
     e.vcall(list, 0x20, &args![COMPARE_00728C10]);
     fn_00729970(e, Ptr::new(CATEGORY_ARRAY), COMPARE_007278C0);
     // `0x7278A9` (S0200's `OnPostRefreshRecipeMenu`, after the exe's sort).
-    if refresh_fix {
-        stewie_post_refresh(e, previous_category);
-    }
 }
 
 /// `DataHandler::recipeList`'s offset (`004077e0` answers the handler plus it).
@@ -2279,10 +2266,6 @@ fn show_selected(e: &mut Engine, this: Ptr) {
     let form = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, selected));
     let second = dynamic_cast(e, form, RTTI_01183A34);
     // `0x728378` (lStewieAl's Tweaks' S0044 jumps to `RecipeMenuArmorIconHook` there).
-    if second != 0 && e.stewie(engine_core::extend::stewie::RECIPE_ARMOUR_ICONS) {
-        stewie_armour_icon(e, base, second);
-        return;
-    }
     let player = e.global::<u32>(PLAYER);
     if second != 0 && e.call(FORM_00480F80, &args![second, player]).u32() != 0 {
         let player = e.global::<u32>(PLAYER);
@@ -2384,13 +2367,6 @@ fn show_recipe(e: &mut Engine, this: Ptr, crafter: u32, selected: &mut u32) {
                     // raw, 0 when below 0.
                     let have = if entry == 0 {
                         0
-                    } else if e.stewie(engine_core::extend::stewie::RECIPE_NO_NEGATIVE_COUNT) {
-                        let count = e.mem.u32(entry + 4);
-                        if (count as i32) < 0 {
-                            0
-                        } else {
-                            count
-                        }
                     } else {
                         typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, entry))
                     };
@@ -2591,9 +2567,6 @@ fn jip_disposable_weapon(e: &mut Engine, weapon: u32) -> bool {
 fn clear_crafter_ammo_count(e: &mut Engine, crafter: u32) {
     let process = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, crafter));
     let target = e.vcall(process, 0x14c, &args![]).u32();
-    if target == 0 && e.stewie(engine_core::extend::stewie::RECIPE_MENU_NULL_AMMO_INFO) {
-        return;
-    }
     e.call(NODE_SET_NEXT, &args![target, 0u32]);
 }
 
@@ -2803,13 +2776,7 @@ pub fn fn_00728a30(e: &mut Engine, now: u8) {
     if now != 0 {
         if me(e) != 0 {
             let menu = me(e);
-            // `0x728A4E` (lStewieAl's Tweaks' S0200 detours the call: `OnRecipeMenuRefresh`
-            // passes the menu's category, +0x64, for the 0).
-            let category = if e.stewie(engine_core::extend::stewie::RECIPE_REFRESH_KEEPS_CATEGORY) {
-                e.mem.u32(menu + CATEGORY)
-            } else {
-                0
-            };
+            let category = 0;
             fn_00727680(e, Ptr::new(menu), 0, category);
         }
         e.set_global(REFRESH_011D8EA4, 0u8);
@@ -3209,10 +3176,6 @@ pub fn fn_00728da0(e: &mut Engine, _this: Ptr, form: u32, holder: u32) {
     for (tile, setting) in ITEM_TITLE_SETTINGS {
         let text = e.call(SETTING_STRING, &args![setting]).u32();
         // `0x7296E0`, tile 4's title (lStewieAl's Tweaks' S0022.12 calls its own in place).
-        if tile == 4 && e.stewie(engine_core::extend::stewie::RECIPE_CONDITION_NOTCH) {
-            stewie_condition_tile(e, tiles[tile], form, title_trait, text);
-            continue;
-        }
         e.call(
             TILE_SET_STRING,
             &args![tiles[tile], title_trait, text, 1u32],

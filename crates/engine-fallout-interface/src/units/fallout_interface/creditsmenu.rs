@@ -648,14 +648,7 @@ pub fn credits_menu_close(e: &mut Engine) {
     {
         let saves = e.global::<u32>(SAVE_LOAD_MANAGER);
         let name = first_word(e, saves.wrapping_add(0x30));
-        // 0075f78e: lStewieAl's Tweaks' row S0139 (`patchFixCreditsCrashIfNoLoadedSave`): with
-        // no player name (no save loaded) the name counts as empty, where the exe measures the
-        // null text.
-        let has_name = if e.stewie(stewie::CREDITS_NO_LOADED_SAVE) && name == 0 {
-            false
-        } else {
-            e.call(TEXT_LENGTH, &args![name]).u32() != 0
-        };
+        let has_name = e.call(TEXT_LENGTH, &args![name]).u32() != 0;
         if has_name {
             let saves = e.global::<u32>(SAVE_LOAD_MANAGER);
             e.call(SAVES_REFRESH, &args![saves]);

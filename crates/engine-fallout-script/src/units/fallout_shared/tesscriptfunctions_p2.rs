@@ -768,15 +768,7 @@ pub fn script_toggle_nav_mesh_function(e: &mut Engine, a: ScriptArgs) -> bool {
     if mode > 6 {
         mode = 4;
     }
-    // lStewieAl's Tweaks' row S0161 (`ToggleNavMeshFix`, its `OnToggleNavMesh` at `0x5BD030`):
-    // the display's root node made when missing, then the render singleton read as the exe's
-    // getter reads it.
-    let render = if e.stewie(engine_core::extend::stewie::NAV_MESH_ROOT_NODE) {
-        nav_mesh_set_root_draw_node(e);
-        e.global::<u32>(NAV_MESH_RENDER_SINGLETON)
-    } else {
-        nav_mesh_render(e)
-    };
+    let render = nav_mesh_render(e);
     let mut drawing = e.call(NAV_MESH_RENDER_IS_DRAWING, &args![render]).u8();
     if mode == 4 {
         mode = (drawing == 0) as u32;
@@ -959,24 +951,20 @@ pub fn script_pick_ref_by_id_function(e: &mut Engine, a: ScriptArgs) -> bool {
     let colour: f32 = e.global(FLOAT_MINUS_ONE);
     let text = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, string));
     let debug_text = e.call(DEBUG_TEXT_INSTANCE, &args![1u32]).u32();
-    // lStewieAl's Tweaks' row S0017 (`patchPridDontDuplicateLine`, `0x5BD546`): the print's call
-    // becomes `add esp, 0x20`, so no debug text is drawn.
-    if !e.stewie(engine_core::extend::stewie::PRID_NO_DEBUG_TEXT) {
-        e.call(
-            DEBUG_TEXT_PRINT,
-            &args![
-                debug_text,
-                text,
-                column,
-                row,
-                2u32,
-                0xffff_ffffu32,
-                colour,
-                0u32,
-                0u32
-            ],
-        );
-    }
+    e.call(
+        DEBUG_TEXT_PRINT,
+        &args![
+            debug_text,
+            text,
+            column,
+            row,
+            2u32,
+            0xffff_ffffu32,
+            colour,
+            0u32,
+            0u32
+        ],
+    );
     e.call(PICK_REFERENCE, &args![reference]);
     e.call(BS_STRING_DESTRUCT, &args![string]);
     e.mem.free(string);
@@ -1018,13 +1006,7 @@ pub fn script_center_on_cell_function(e: &mut Engine, a: ScriptArgs) -> bool {
     if ok {
         e.call(CLOSE_CONSOLE, &args![]);
         let player = e.global::<u32>(PLAYER);
-        // lStewieAl's Tweaks' row S0101 (`patchCenterOnCellAcceptFormIDs`, its `CenterOnCellHook`
-        // at `0x5BD63D`): the cell by its editor id, else the name read as a hex form id.
-        let cell = if e.stewie(engine_core::extend::stewie::CENTER_ON_CELL_FORM_ID) {
-            center_on_cell_hook_cell(e, name)
-        } else {
-            0
-        };
+        let cell = 0;
         e.call(CENTER_ON_CELL, &args![player, name, cell]);
     }
     e.mem.free(name);
@@ -1591,13 +1573,6 @@ pub fn fn_005be2a0(e: &mut Engine, a: ScriptArgs) -> bool {
         // lStewieAl's Tweaks' row S0204 (`KillCommandDuplicateRewardXpFix`, its
         // `OnKillCommandPlayerKiller` called at `0x5BE37C` in place of the level's): the actor is
         // remembered, so `Actor::Kill`'s experience step (`0x89E5BC`) skips it once.
-        if e.stewie(engine_core::extend::stewie::KILL_COMMAND_DUPLICATE_XP) {
-            let kept = e.stewie_kept(
-                engine_core::extend::stewie::kept::LAST_KILL_COMMAND_ACTOR,
-                4,
-            );
-            e.mem.set_u32(kept, actor);
-        }
         let level = e.call(ACTOR_LEVEL, &args![actor]).u16() as u32;
         let creature = e.vcall(actor, 0x21c, &args![]).bool();
         let points = e

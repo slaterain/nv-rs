@@ -860,17 +860,7 @@ fn add_door_connection(
         mesh_point(e, base, info, START_MESH, START_LOCATION, from);
         mesh_point(e, base, other, GOAL_MESH, GOAL_LOCATION, to);
         let teleport = e.call(DOOR_TELEPORT, &args![destination]).u32();
-        // lStewieAl's Tweaks' S0193 (its jump at `0x6B8AF2`, in place of the call of `00717e50`): a
-        // destination with no teleport of its own passes the door over (the loop's next door,
-        // `0x6B8890`); else its point (`+4`) as the call answers it.
-        let there = if e.stewie(engine_core::extend::stewie::NAV_MESH_TELEPORT_DOOR) {
-            if teleport == 0 {
-                return None;
-            }
-            teleport.wrapping_add(4)
-        } else {
-            e.call(PLUS_4, &args![teleport]).u32()
-        };
+        let there = e.call(PLUS_4, &args![teleport]).u32();
         let first = distance(e, there, from);
         let teleport = e.call(DOOR_TELEPORT, &args![door]).u32();
         let here = e.call(PLUS_4, &args![teleport]).u32();

@@ -2172,11 +2172,7 @@ pub fn fn_007d5830(e: &mut Engine, this: Ptr<StartMenu>) -> bool {
     // `0x7D59C7` (lStewieAl's Tweaks' S0154 writes `JMP 0x7D5A21` there): no message box and no
     // wait for the DLC enumeration; the flag is cleared and the content loaded at once.
     let dlc_wait = get_flag(e, this, FLAG_DLC_WAIT_MESSAGE);
-    if dlc_wait && e.stewie(stewie::NO_LOADING_DLC_POPUP) {
-        set_flag(e, this, FLAG_DLC_WAIT_MESSAGE, false);
-        e.call(DLC_FINISH, &[]);
-        fn_007d69f0(e);
-    } else if dlc_wait {
+    if dlc_wait {
         let menu = e.call(TILE_GET_MENU_BY_CLASS, &args![0x3e9u32]).u32();
         if menu == 0 {
             let text = e.call(SETTING_STRING_ALT, &args![SETTING_011D3E2C]).u32();
@@ -2951,11 +2947,8 @@ pub fn fn_007d69f0(e: &mut Engine) {
     }
     let idle_manager = e.global::<u32>(IDLE_MANAGER_OBJECT);
     e.call(IDLE_MANAGER_FN_6003C0, &args![idle_manager]);
-    // `0x7D6AA3`, `0x7D6AA8` (lStewieAl's Tweaks' S0154 writes 5-byte NOPs over both calls).
-    if !e.stewie(stewie::NO_LOADING_DLC_POPUP) {
-        e.call(MESSAGE_MENU_CLOSE_007AA480, &[]);
-        e.call(CLOSE_MESSAGE_MENU, &[]);
-    }
+    e.call(MESSAGE_MENU_CLOSE_007AA480, &[]);
+    e.call(CLOSE_MESSAGE_MENU, &[]);
     let utility = e.call(SYSTEM_UTILITY_INSTANCE, &[]).u32();
     let dlc = e.call(DLC_UTILITY_FROM_SYSTEM, &args![utility]).u32();
     let content_list = fn_007d6bb0(e, Ptr::new(dlc));
@@ -3103,12 +3096,7 @@ pub fn fn_007d6d70(e: &mut Engine) {
         let icon = e
             .call(SETTING_STRING_ALT, &args![MESSAGE_ICON_SETTING])
             .u32();
-        // `0x7D6E50` (lStewieAl's Tweaks' S0883 calls `OnFailSaveSettings` there).
-        let text = if e.stewie(stewie::SETTINGS_SAVE_ERROR_NAMES_FILE) {
-            stewie_save_settings_error(e)
-        } else {
-            e.call(SETTING_STRING_ALT, &args![SETTING_011D3138]).u32()
-        };
+        let text = e.call(SETTING_STRING_ALT, &args![SETTING_011D3138]).u32();
         e.call(
             SHOW_MESSAGE,
             &args![text, 0u32, 0u32, 0u32, 0u32, 0x12u32, 0.0f32, 0.0f32, icon, 0u32],
@@ -3120,9 +3108,7 @@ pub fn fn_007d6d70(e: &mut Engine) {
 /// on, `MenuFixes::StartMenuIsActionMappingOptionSelected`: while the remap waits, false the
 /// first time (its `static bool debounce` set) and true after; not waiting clears the debounce.
 fn remap_waiting(e: &mut Engine, this: Ptr<StartMenu>) -> bool {
-    if !e.stewie(stewie::START_MENU_REMAP_DEBOUNCE) {
-        return e.call(WAITING_FOR_REMAP_PRESS, &args![this]).bool();
-    }
+    return e.call(WAITING_FOR_REMAP_PRESS, &args![this]).bool();
     let waiting = e.call(WAITING_FOR_REMAP_PRESS, &args![this]).bool();
     let debounce = e.stewie_kept(stewie::kept::REMAP_DEBOUNCE, 1);
     if waiting {

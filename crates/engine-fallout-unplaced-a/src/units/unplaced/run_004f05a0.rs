@@ -104,13 +104,6 @@ pub fn fn_004f05c0(e: &mut Engine, this: Ptr, value: u32) {
     }
 }
 
-/// lStewieAl's Tweaks' row S0181 (`NullAnimRemoveRecurseFix`: the jumps at `0x4F064E` and
-/// `0x4F06E4` aimed at the functions' ends): the two visitors return at once for a null object,
-/// which the exe would ask for its node (vtable +0xC).
-fn null_object_skipped(e: &Engine, object: u32) -> bool {
-    e.stewie(engine_core::extend::stewie::NULL_ANIM_REMOVE_RECURSE) && object == 0
-}
-
 /// The "no index" 16-bit value (`01096320`).
 const INVALID_INDEX: u32 = 0x0109_6320;
 
@@ -122,9 +115,6 @@ const INVALID_INDEX: u32 = 0x0109_6320;
 /// even for a null object, as the exe does) answers the node; each of its
 /// children (`0043b480` the count, `0043b4a0` the child) is visited.
 pub fn fn_004f0640(e: &mut Engine, this: Ptr, object: u32) {
-    if null_object_skipped(e, object) {
-        return;
-    }
     if object != 0 {
         let index = e.call(0x0043_b3b0, &args![this, object]).u16();
         if index != e.global::<u16>(INVALID_INDEX) {
@@ -186,9 +176,6 @@ pub fn fn_004f08c0(e: &mut Engine, this: Ptr) {
 /// `00a35fc0(index, 0)` for the hand-over, then the children of the node vtable slot +0xc
 /// answers (asked even for a null object, as the exe does), each visited recursively.
 pub fn fn_004f06d0(e: &mut Engine, this: Ptr, object: u32) {
-    if null_object_skipped(e, object) {
-        return;
-    }
     if object != 0 {
         let index = e.call(0x00a3_5910, &args![this, object]).u16();
         if index != e.global::<u16>(INVALID_INDEX) {

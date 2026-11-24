@@ -81,10 +81,6 @@ pub fn tes_race_form_init_item(e: &mut Engine, this: Ptr, owner: Ptr) {
     }
     // lStewieAl's Tweaks' row S0049 (`patchFixUnresolvedRaceCrash`, `0x48B9D9`, `0x48B9E8`,
     // `0x48B9F1`): after the warning the race is CaucasianVanilla (`0x19`, looked up, not cast).
-    if e.stewie(engine_core::extend::stewie::UNRESOLVED_RACE) {
-        let race = e.call(0x0048_39c0, &args![RACE_CAUCASIAN_VANILLA]).u32();
-        e.mem.set_u32(base + 4, race);
-    }
 }
 
 // Translated from 0048b8c0 (decompiled, FalloutNV.exe 1.4.0.525)

@@ -85,9 +85,6 @@ pub fn fn_00978f70(e: &mut Engine, this: Ptr) {
     // lStewieAl's Tweaks' row S0130.01 (`ContinuousBeamProjectileCrashFix`, the call at `0x978FB5`):
     // a beam going away is taken from its shooter's continuous beam (+0x1A0) when it is that beam;
     // the exe leaves the actor pointing at the freed beam.
-    if e.stewie(engine_core::extend::stewie::BEAM_SHOOTER_POINTER) {
-        forget_shooters_beam(e, this.addr());
-    }
     e.call(0x009b_c470, &args![this]);
 }
 

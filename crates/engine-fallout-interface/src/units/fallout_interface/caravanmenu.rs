@@ -3634,14 +3634,7 @@ pub fn fn_0074cc70(e: &mut Engine, this: Ptr<CaravanMenu>, won: u8) {
                 e.call(ENTRY_INIT, &args![entry]);
                 e.call(ENTRY_FILL, &args![entry, form, count, 0u32]);
                 let player = e.global::<u32>(PLAYER);
-                // 0x74CDB2: lStewieAl's Tweaks' row S0092 (`CaravanDoublePayoutFix`, "only print
-                // the ui message for moving them, since the items are transferred in a later
-                // call") shows the message in place of moving the items to the player.
-                if e.stewie(stewie_menus::CARAVAN_SINGLE_PAYOUT) {
-                    stewie_container_message(e, entry.addr());
-                } else {
-                    e.call(ENTRY_SET_ACTOR, &args![entry, player, 0u32]);
-                }
+                e.call(ENTRY_SET_ACTOR, &args![entry, player, 0u32]);
                 let challenger = word_at(e, menu, CHALLENGER);
                 let owner = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, challenger));
                 let data = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, node));
@@ -3651,10 +3644,7 @@ pub fn fn_0074cc70(e: &mut Engine, this: Ptr<CaravanMenu>, won: u8) {
                 e.call(ENTRY_DESTROY, &args![entry]);
             });
         });
-        if remaining != 0 && e.stewie(stewie_menus::CARAVAN_SINGLE_PAYOUT) {
-            // 0x74CE21: lStewieAl's Tweaks' row S0092 pays the rest in caps its own way (once).
-            stewie_award_caps(e, this, remaining);
-        } else if remaining != 0 {
+        if remaining != 0 {
             e.with_stack(0x18, |e, frame| {
                 let entry = frame.addr();
                 let change = frame.addr() + 0xc;
@@ -7117,16 +7107,7 @@ fn do_idle_frame(e: &mut Engine, this: Ptr<CaravanMenu>, ebp: u32) {
         y_bits: 0,
     };
     e.call(INTERFACE_SINGLETON, &args![]);
-    // 0x741683: lStewieAl's Tweaks' row S0022.46 (`MenuFixes`, "prevent controller moving caravan
-    // selection while console is open") calls its `IsControllerModeAndNotConsoleOpen` in place of
-    // `004b71d0`: the stick is not read while the console is open. JIP LN NVSE's D04 dead zone
-    // seams (`0x7416D6`, `0x741705`) sit inside this test, so with both rows on JIP's dead zone is
-    // asked only while the console is closed.
-    let pad = if e.stewie(stewie_menus::CARAVAN_PAD_NOT_WITH_CONSOLE) {
-        stewie_menus::controller_and_no_console(e)
-    } else {
-        e.call(KEYS_BLOCKED_004B71D0, &args![]).bool()
-    };
+    let pad = e.call(KEYS_BLOCKED_004B71D0, &args![]).bool();
     if pad {
         let owner = e.global::<u32>(CONTROLS_OWNER);
         let controls = e.call(CONTROLS_INSTANCE, &args![owner]).u32();

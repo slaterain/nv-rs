@@ -646,10 +646,6 @@ pub fn actor_mobility_condition_modified_callback(
     // lStewieAl's Tweaks' row S0147 (`patchFixCrippledLimbAnimsNotUpdatingIfLimbsFixed`, the call
     // at `0x8B9950`): Tweaks' `OnLimbConditionChangeUpdateAnims` in place of
     // `Actor::QueueReplacementLocomotion`.
-    if e.stewie(engine_core::extend::stewie::CRIPPLED_LIMB_ANIMS) {
-        on_limb_condition_change_update_anims(e, actor, flag, current, other);
-        return;
-    }
     actor_queue_replacement_locomotion(e, Ptr::new(actor), flag, current, other);
 }
 
@@ -853,9 +849,6 @@ pub fn actor_endurance_modified_callback(
     // lStewieAl's Tweaks' row S0205 (`EnduranceHealthRestoreFix`, `WriteRelJump(0x8B9EFC,
     // 0x8B9FEA)`): the jump to the end at `0x8B9EFC`, after the cached values: an Endurance drop no
     // longer restores health.
-    if e.stewie(engine_core::extend::stewie::ENDURANCE_HEALTH_RESTORE) {
-        return;
-    }
     if change >= 0.0 || change.is_nan() {
         return;
     }
@@ -1268,9 +1261,6 @@ pub fn fn_008ba600(e: &mut Engine, this: Ptr<Actor>) {
         // `PlayGroup_Fixed` clears the animation's movement group first (`Animation::ClearGroup`
         // `00496080` with 1 and 0.0), so the death animation plays even while a movement sequence
         // is easing out; then the exe's call.
-        if e.stewie(engine_core::extend::stewie::DEATH_ANIM) {
-            e.call(ANIMATION_CLEAR_GROUP, &args![animation, 1u32, 0.0f32]);
-        }
         e.call(
             PLAY_GROUP,
             &args![
@@ -1513,14 +1503,7 @@ fn equip_or_reload(e: &mut Engine, this: Ptr<Actor>, animation: u32, equipped_fo
             &args![actor, ammo_form, ammo_index, 0u32, 1u32, 0u32, 0u32],
         );
     }
-    // lStewieAl's Tweaks' row S0159 (`patchFixInfiniteNPCLoopingReloads`, `SafeWrite8(0x8BAB65,
-    // 0x7E)`): the `JZ` after `ammo_count - ammo_index` becomes `JLE`, so a reload that would load
-    // more rounds than the actor carries (ammo_index past ammo_count) is not played again.
-    let more_to_load = if e.stewie(engine_core::extend::stewie::INFINITE_NPC_RELOADS) {
-        ammo_count > ammo_index
-    } else {
-        ammo_count != ammo_index
-    };
+    let more_to_load = ammo_count != ammo_index;
     if ammo_index < clip_rounds && more_to_load && ammo_count != 0 {
         // Reload: the group of the weapon's own animation type.
         let weapon_form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, weapon_entry));
@@ -1565,11 +1548,7 @@ fn equip_or_reload(e: &mut Engine, this: Ptr<Actor>, animation: u32, equipped_fo
         PLAY_GROUP,
         &args![current_animation, picked as u32, 1u32, 1u32, 4u32],
     );
-    // lStewieAl's Tweaks' row S0043 (`OnQueuedIdleFlagsCheckWeapNull` at `0x8BAC12`): an actor with
-    // no weapon form skips the weapon's group, as at the block's end, instead of reading it.
-    let no_weapon =
-        e.stewie(engine_core::extend::stewie::RELOAD_LOOP_NULL_WEAPON) && equipped_form == 0;
-    if actor != player && !no_weapon {
+    if actor != player {
         let weapon_type = e.call(WEAPON_ANIM_TYPE, &args![equipped_form, 0u32]).u32();
         let group = e
             .call(GET_ANIM_GROUP, &args![actor, weapon_type, 0u32, 0u32, 0u32])
@@ -3296,9 +3275,6 @@ pub fn fn_008bcdf0(e: &mut Engine, this: Ptr<Actor>, update: u8, _unused_1: u32)
     // lStewieAl's Tweaks' row S0217 (`RagdollControllerUpdateFix`, `PatchMemoryNop(0x8BCED5, 3)`):
     // the store of that answer is gone, so the flag keeps the 1 written at `0x8BCE95` (the test
     // above still runs): the player's leg IK is no longer reset in first person.
-    if e.stewie(engine_core::extend::stewie::RAGDOLL_CONTROLLER_UPDATE) {
-        wanted = true;
-    }
     e.set(this, Actor::bFootIKInRange, false);
     if scene != 0 {
         let in_range = e.with_stack(0x60, |e, frame| {

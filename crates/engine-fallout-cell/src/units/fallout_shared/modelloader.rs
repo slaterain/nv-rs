@@ -1656,12 +1656,7 @@ pub(crate) fn queued_texture_run_in_context(e: &mut Engine, this: Ptr<QueuedText
     if !ni_pointer_get(e, slot).is_null() {
         e.call(QUEUED_TEXTURE_SET_FLAG_1, &args![this, 1u32]);
         let texture = ni_pointer_get(e, slot);
-        // lStewieAl's Tweaks' S0136 (its call at `0x43C20A`): the state read guarded as Tweaks' `__try` does.
-        let state = if e.stewie(engine_core::extend::stewie::QUEUED_TEXTURE_LOAD) {
-            engine_core::extend::stewie::queued_texture_state(e, texture.addr())
-        } else {
-            fn_0043c430(e, texture)
-        };
+        let state = fn_0043c430(e, texture);
         if state == 3 && !fn_0043c3d0(e, this) {
             let texture = ni_pointer_get(e, slot);
             e.vcall(texture.addr(), 0x8c, &args![]);
@@ -4905,13 +4900,7 @@ fn helmet_slot_has_no_item(
     clone: Ptr,
     index: u32,
 ) -> bool {
-    if !e.stewie(engine_core::extend::stewie::BIPED_ANIM_NULL_ITEM)
-        || face_model.is_null()
-        || clone.is_null()
-        || e.mem.u32(biped.addr() + BIPED_SLOT_ITEMS + 0x10 * index) != 0
-    {
-        return false;
-    }
+    return false;
     let slot = e.mem.u32(BIPED_SLOT_NAMES + 4 * index);
     let character = e.mem.u32(biped.addr() + BIPED_CHARACTER);
     let actor = if character != 0 {

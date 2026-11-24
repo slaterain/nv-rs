@@ -368,11 +368,7 @@ pub fn fn_00739970(e: &mut Engine, this: Ptr, flag: u8) {
 /// (the count then names the last card's index).
 fn shoe_count(e: &Engine, decks: u32) -> u32 {
     let count = decks.wrapping_mul(0x34);
-    if e.stewie(engine_core::extend::stewie::BLACKJACK_SHOE_COUNT) {
-        count.wrapping_sub(1)
-    } else {
-        count
-    }
+    count
 }
 
 // Translated from 007399d0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2141,9 +2137,6 @@ pub fn black_jack_menu_create(
         let player = e.global::<u32>(PLAYER);
         let mut node = e.call(CASINO_RECORDS_005A6260, &args![player]).u32();
         // lStewieAl's Tweaks' row S0036 (its hook on this call, `0x73369E`).
-        if e.stewie(engine_core::extend::stewie::CASINO_INVALID_CHIPS) {
-            remove_invalid_casino_records(e, node);
-        }
         while node != 0 {
             let slot = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, node));
             if e.mem.u32(slot) == 0 {

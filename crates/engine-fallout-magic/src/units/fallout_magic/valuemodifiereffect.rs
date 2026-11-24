@@ -447,14 +447,7 @@ pub fn value_modifier_effect_start(e: &mut Engine, this: Ptr<ActiveEffect>) {
             });
         }
         if which(e, this) == 7 && x87_m32(magnitude_bits(e, this)) < e.global::<f64>(ZERO) {
-            // lStewieAl's Tweaks' row S0205 (`EnduranceHealthRestoreFix`, `SafeWrite8(0x82C221,
-            // 0x60)`): the compare at `0x82C21F` reads the `double` 0.0 (`0x01012060`) in place of
-            // 1.0, so an Endurance drop kills only a target with no health left.
-            let limit = if e.stewie(engine_core::extend::stewie::ENDURANCE_HEALTH_RESTORE) {
-                ZERO
-            } else {
-                ONE
-            };
+            let limit = ONE;
             kill_when_spent(e, this, target, limit);
         }
         let magnitude = x87_quiet_bits(magnitude_bits(e, this));

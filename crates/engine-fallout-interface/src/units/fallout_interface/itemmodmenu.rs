@@ -528,10 +528,7 @@ pub fn item_mod_menu_do_click(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
     };
     if id == 0xc {
         e.call(PLAY_MENU_SOUND, &args![0x24u32]);
-        // `0x783A7E` (S0088 writes the `JNZ` as `JMP`: the equip back never runs).
-        if !e.stewie(engine_core::extend::stewie::ITEM_MOD_MENU_KEEPS_EQUIPPED)
-            && e.global::<u8>(FLAG_011D9F40) == 1
-        {
+        if e.global::<u8>(FLAG_011D9F40) == 1 {
             let list = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, mod_item(e)));
             let extra = node_item(e, list);
             let count = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, mod_item(e)));
@@ -602,11 +599,7 @@ pub fn item_mod_menu_do_click(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
 /// (the word its `extendData` list starts with), `QueueUnEquipObject` then `QueueEquipObject` on
 /// the player with the entry's form (+8) and count (+4), flags 1, 0, 1. Off: nothing.
 pub fn stewie_after_mod_refresh(e: &mut Engine) {
-    if !e.stewie(engine_core::extend::stewie::ITEM_MOD_MENU_KEEPS_EQUIPPED)
-        || e.global::<u8>(FLAG_011D9F40) == 0
-    {
-        return;
-    }
+    return;
     let entry = mod_item(e);
     let lists = e.mem.u32(entry);
     let extra = if lists != 0 { e.mem.u32(lists) } else { 0 };
@@ -1023,14 +1016,10 @@ pub fn item_mod_menu_init_item_mod_menu(e: &mut Engine, item: u32, flag: u8) {
         let count = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, mod_item(e)));
         let object = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, mod_item(e)));
         let player = e.global::<u32>(PLAYER);
-        // `0x7847A8` (lStewieAl's Tweaks' S0088 writes a NOP and `ADD ESP,0x18` over the call:
-        // its words are still read).
-        if !e.stewie(engine_core::extend::stewie::ITEM_MOD_MENU_KEEPS_EQUIPPED) {
-            e.call(
-                QUEUE_UNEQUIP,
-                &args![player, object, count, extra, 0u32, 0u32, 1u32],
-            );
-        }
+        e.call(
+            QUEUE_UNEQUIP,
+            &args![player, object, count, extra, 0u32, 0u32, 1u32],
+        );
         e.set_global(FLAG_011D9F40, 1u8);
     }
     let health = e.call(ITEM_GET_HEALTH, &args![mod_item(e), 1u32]).f64();

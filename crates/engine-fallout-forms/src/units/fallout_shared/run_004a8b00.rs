@@ -255,9 +255,7 @@ fn queue_cell(
 /// The report's call of `004a8fe0` at `0x4A8BE6`; lStewieAl's Tweaks' S0080
 /// (`patchTestAllCellsNeedlessINIChecks`, `SafeNopCall`) takes it out.
 fn report_reads_budgets(e: &mut Engine) {
-    if !e.stewie(engine_core::extend::stewie::TEST_ALL_CELLS_NO_INI_REREAD) {
-        fn_004a8fe0(e);
-    }
+    fn_004a8fe0(e);
 }
 
 // Translated from 004a8bb0 (decompiled, FalloutNV.exe 1.4.0.525)

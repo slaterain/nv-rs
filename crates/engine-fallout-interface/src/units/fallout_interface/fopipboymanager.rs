@@ -1714,15 +1714,6 @@ pub fn fo_pipboy_manager_on_menu_open(e: &mut Engine, this: Ptr<FOPipboyManager>
         return;
     }
     e.call(MENU_STATE_007FA8D0, &args![this, 0u32]);
-    if e.stewie(engine_core::extend::stewie::PIPBOY_EQUIP_CRASH) {
-        // lStewieAl's Tweaks' row S0027 (`PipboyManagerOnMenuOpenCheckReset` at `0x7F8059`): a
-        // reset an equip asked for (the byte at +0x16C) is done now, before the colours.
-        let pending = this.addr() + PIPBOY_RESET_PENDING;
-        if e.mem.u8(pending) != 0 {
-            e.call(PIPBOY_RESET, &args![this]);
-            e.mem.set_u8(pending, 0);
-        }
-    }
     fo_pipboy_manager_reset_colors(e, this);
     e.set_global(MENU_OPEN_BYTE_011D890A, 1u8);
     e.set_global(PIPBOY_OPEN_011DB378, 1u8);

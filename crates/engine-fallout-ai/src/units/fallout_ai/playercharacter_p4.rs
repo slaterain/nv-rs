@@ -617,17 +617,7 @@ pub fn player_character_is_pipboy_active(e: &mut Engine, this: Ptr<PlayerCharact
 /// float or the form's own health.
 pub fn fn_00967b70(e: &mut Engine, this: Ptr<PlayerCharacter>, entry: Ptr<ItemChange>) -> bool {
     let mut usable = true;
-    // `0x967B80` (lStewieAl's Tweaks' S0069, `patchAllowHotkeyGRXAndBooks`, rewrites 16 bytes and
-    // calls `IsContChangeEquippableHook`): the form (+8) and the extra list (+0) read raw, and
-    // the implant GRX (form 0x03009D4A) is usable at once.
-    // No form: Tweaks would read its id through a null pointer (our guard: no GRX test).
-    let (form, list) = if e.stewie(engine_core::extend::stewie::HOTKEY_GRX_AND_BOOKS) {
-        let form = e.mem.u32(entry.addr() + 8);
-        if form != 0 && e.mem.u32(form + 0xc) == 0x0300_9d4a {
-            return true;
-        }
-        (form, e.mem.u32(entry.addr()))
-    } else {
+    let (form, list) = {
         let form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, entry));
         let list = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, entry));
         (form, list)

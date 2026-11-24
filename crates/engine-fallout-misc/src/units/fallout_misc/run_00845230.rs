@@ -190,9 +190,6 @@ pub fn fn_008453a0(e: &mut Engine, this: Ptr, capacity: u32, count: u32) {
 /// both the row's 10,037 wins.
 #[inline]
 fn bucket_count(e: &mut Engine) -> u32 {
-    if e.stewie(engine_core::extend::stewie::CHANGES_MAP_BUCKETS) {
-        return 0x2735;
-    }
     if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
         if let Some(count) = e.site(0x0084_5558, &[]) {
             return count;

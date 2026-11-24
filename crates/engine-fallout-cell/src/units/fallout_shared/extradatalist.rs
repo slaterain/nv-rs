@@ -3847,20 +3847,8 @@ pub(crate) fn init_item_extra(
             {
                 e.call(MAP_MARKER_SET_TRAVEL_LOC, &args![marker, 0u32]);
             }
-            // lStewieAl's Tweaks' S0131 (`OnGetMapMarkerReputationIDHook` at `0x416E17`): the
-            // stored reputation id (`+0x10`) goes through `AddCompileIndex` with the file first,
-            // so a plugin's marker names its own reputation, not the one at that id in the master.
             let reputation_id =
-                if e.stewie(engine_core::extend::stewie::MAP_MARKER_REPUTATION_INDEX) {
-                    let stored = e.mem.u32(marker.wrapping_add(0x10));
-                    if stored != 0 {
-                        add_compile_index(e, stored, file)
-                    } else {
-                        0
-                    }
-                } else {
-                    e.call(MAP_MARKER_GET_REPUTATION, &args![marker]).u32()
-                };
+                e.call(MAP_MARKER_GET_REPUTATION, &args![marker]).u32();
             if reputation_id != 0 {
                 let data_handler = e.global::<u32>(DATA_HANDLER);
                 let reputation = e

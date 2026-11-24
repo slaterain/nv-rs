@@ -63,11 +63,7 @@ const STICK_VALUE_SOURCE: u32 = 0x011c_fc8c;
 /// `0x9BA8AC`): the read takes `fCombatMissileStickDepth`'s own value (the setting at `011cfc8c`,
 /// value at +4) instead, so a change of the setting after the first projectile counts.
 fn stick_depth(e: &mut Engine) -> f32 {
-    if e.stewie(engine_core::extend::stewie::COMBAT_MISSILE_DEPTH_SETTINGS) {
-        e.mem.f32(STICK_VALUE_SOURCE + 4)
-    } else {
-        e.global::<f32>(STICK_VALUE)
-    }
+    e.global::<f32>(STICK_VALUE)
 }
 /// Float global stored in `fStickTime`.
 const STICK_TIME: u32 = 0x0101_7b78;

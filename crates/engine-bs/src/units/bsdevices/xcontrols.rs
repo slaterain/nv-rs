@@ -273,16 +273,7 @@ pub fn controls_rumble(
             return;
         }
     }
-    // lStewieAl's Tweaks' S0107.01 (`MemoryLeakFixes`, the call at `0xA25603`): the effect is Tweaks'
-    // one static block for the whole run, not a new block each time that is never freed. The queue
-    // keeps the block's pointer in both motor slots and every vibration replaces both and resets the
-    // counters, so the old contents are never read again: one kept block behaves as a fresh one. The
-    // memset still runs on it.
-    let block = if e.stewie(engine_core::extend::stewie::RUMBLE_STATES_LEAK) {
-        e.stewie_kept(engine_core::extend::stewie::kept::RUMBLE_STATES, 0x24)
-    } else {
-        e.call(ALLOCATE, &args![MEMORY_MANAGER, 0x24u32]).u32()
-    };
+    let block = e.call(ALLOCATE, &args![MEMORY_MANAGER, 0x24u32]).u32();
     let effect = if block != 0 {
         e.call(MEMSET, &args![block, 0u32, 0x24u32]);
         block

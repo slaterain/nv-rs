@@ -564,11 +564,7 @@ pub fn virtual_actor_path_handler_use_door_at_node(
                 .u32();
             let distance = x87_store32(e.call(POINT_LENGTH_2, &args![delta]).f64());
             if x87_load32(distance) > e.global::<f64>(DOOR_ARRIVAL_TOLERANCE) {
-                // lStewieAl's Tweaks' row S0199.10 (`MiscCrashFixes`, `0x9EAF04`): with no door at the node
-                // the warning naming the door's cell is not made.
-                if e.call(POINTS_DIFFER, &args![point, position]).bool()
-                    && !(door == 0 && e.stewie(engine_core::extend::stewie::USE_DOOR_NULL_DOOR))
-                {
+                if e.call(POINTS_DIFFER, &args![point, position]).bool() {
                     let cell = e.call(PARENT_CELL, &args![door]).u32();
                     let cell_name = if cell != 0 {
                         let cell = e.call(PARENT_CELL, &args![door]).u32();

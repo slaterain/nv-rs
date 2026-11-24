@@ -1678,9 +1678,7 @@ pub fn fn_0094df80(e: &mut Engine, this: Ptr<PlayerCharacter>) {
         } else {
             e.call(0x0082_3c40, &args![player + MAGIC_TARGET, step]);
         }
-        // lStewieAl's Tweaks' row S0212 (`PlayerWaitDoubleHealingFix`, `EB 10` at `0x94E09E`): the
-        // player's `Actor::RestoreHealth` is not called here; the magic update heals for the hour.
-        if !e.stewie(engine_core::extend::stewie::WAIT_SINGLE_HEALING) {
+        {
             let global_player = e.global::<u32>(PLAYER_POINTER);
             e.call(0x0088_b510, &args![global_player, step]);
         }
@@ -4491,14 +4489,7 @@ pub fn player_character_focus_on_actor(
                 let looked_up = e.call(0x004a_de00, &args![target, head_name]).u32();
                 found = e.call(0x0065_3270, &args![0x011f_4428u32, looked_up]).u32();
             }
-            // lStewieAl's Tweaks' S0107.04 (`MemoryLeakFixes`): the 4-byte name made here each time and
-            // never freed is not made (the jump `0x953253` to `0x953282`: the name word is 0), and the
-            // lookup at `0x9532B0` is handed Tweaks' one static `NiFixedString` "Bip01 Speaker",
-            // made the first time (`NiGlobalStringTable::AddString`, `00a5b690`).
-            let kept_name = e.stewie(engine_core::extend::stewie::FOCUS_SPEAKER_NAME_LEAK);
-            let speaker_name = if kept_name {
-                0
-            } else {
+            let speaker_name = {
                 let block = e.call(OPERATOR_NEW, &args![4u32]).u32();
                 if block == 0 {
                     0
@@ -4507,11 +4498,7 @@ pub fn player_character_focus_on_actor(
                 }
             };
             if found == 0 {
-                let name = if kept_name {
-                    kept_speaker_name(e)
-                } else {
-                    speaker_name
-                };
+                let name = speaker_name;
                 let looked_up = e.call(0x004a_de00, &args![target, name]).u32();
                 found = e.call(0x0065_3270, &args![0x011f_4428u32, looked_up]).u32();
             }
@@ -5170,11 +5157,7 @@ pub fn fn_00954610(
         if e.call(0x0052_5980, &args![weapon, player_pointer]).u32() == item {
             let process = process_of(e, this);
             let entry = e.vcall(process, 0x14c, &args![]).u32();
-            // lStewieAl's Tweaks' row S0089.05 (`RememberAmmoCountOnLoad` at `0x9546EE`): no
-            // ammunition entry, no count to empty.
-            if !(entry == 0 && e.stewie(engine_core::extend::stewie::DROP_AMMO_NULL_ENTRY)) {
-                e.call(0x006e_cd40, &args![entry, 0u32]);
-            }
+            e.call(0x006e_cd40, &args![entry, 0u32]);
             // lStewieAl's Tweaks' row S0153 (`patchFixWeaponNifRoundNotCullingInFirstPerson`, the
             // byte at `0x954703`): the first lookup asks the first-person model (1).
             let first = u32::from(e.stewie(engine_core::extend::stewie::NIF_ROUND_FIRST_PERSON));
@@ -7698,13 +7681,7 @@ pub fn fn_0095a3b0(e: &mut Engine, this: Ptr<PlayerCharacter>, buffer: u32) {
             e.call(0x004b_fb70, &args![this, index, form]);
         }
         let holder = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, this));
-        // lStewieAl's Tweaks' row S0089.02 (`RememberAmmoCountOnLoad`, the jump at `0x95BF7F` to
-        // `0x95C05A`): the weapon is not reloaded here (`+0x3EC`), so the loaded rounds stay. Tweaks ships
-        // it only with S0089.06, which sets up the player's ammunition entry on the first load: without
-        // that row this reload is the entry's only set-up there, so it stays.
-        let no_reload = e.stewie(engine_core::extend::stewie::LOAD_GAME_NO_RELOAD)
-            && e.stewie(engine_core::extend::stewie::LOAD_GAME_PLAYER_WEAPON_WITHOUT_3D);
-        if holder != 0 && !no_reload {
+        if holder != 0 {
             let holder = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, this));
             if e.vcall(holder, 0x148, &args![]).u32() != 0 {
                 let holder = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, this));
@@ -7722,9 +7699,6 @@ pub fn fn_0095a3b0(e: &mut Engine, this: Ptr<PlayerCharacter>, buffer: u32) {
     e.call(0x0094_62c0, &args![this, 0u32, 1u32]);
     // lStewieAl's Tweaks' row S0089.07 (`RememberAmmoCountOnLoad`, the call at `0x95C064`): after
     // `SelectDefaultAmmo(false, true)` (`009462c0`), Tweaks' `PlayerCharacterLoad_SetupAmmoHook`.
-    if e.stewie(engine_core::extend::stewie::LOAD_GAME_AMMO_COUNT) {
-        super::playercharacter_p3::load_game_setup_ammo(e, player);
-    }
     if buffer_version(e, buffer) >= 0x1b {
         e.call(0x005a_aaf0, &args![buffer]);
     }

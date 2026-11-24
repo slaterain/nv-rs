@@ -216,9 +216,6 @@ pub fn fn_009839b0(
         controller,
         &mut now,
     );
-    if said && e.stewie(engine_core::extend::stewie::COMBAT_SOUND_COOLDOWN) {
-        combat_sound_said(e, actor, word, now);
-    }
     said
 }
 
@@ -247,13 +244,7 @@ fn start_dialogue(
     if now.wrapping_sub(last) < LINE_GAP {
         return false;
     }
-    if e.stewie(engine_core::extend::stewie::COMBAT_SOUND_COOLDOWN) {
-        if !combat_sound_allowed(e, actor, now) {
-            return false;
-        }
-    } else {
-        e.set_global(LAST_LINE_TIME, now);
-    }
+    e.set_global(LAST_LINE_TIME, now);
     let mut controller = controller;
     if controller == 0 {
         controller = e.vcall(actor, 0x428, &[]).u32();

@@ -579,9 +579,6 @@ pub fn slot_machine_menu_create(
     let mut node = e.call(CASINO_DATA_LIST_005A6260, &args![player]).u32();
     // lStewieAl's Tweaks' row S0036 (its hook on this call, `0x7C0AAE`): a record of a casino that is gone
     // is taken out before the walk, which would refuse the menu on it.
-    if e.stewie(engine_core::extend::stewie::CASINO_INVALID_CHIPS) {
-        super::blackjackmenu::remove_invalid_casino_records(e, node);
-    }
     while node != 0 && node_item(e, node) != 0 {
         let data = node_item(e, node);
         let valid = e.mem.u32(data) != 0 && {

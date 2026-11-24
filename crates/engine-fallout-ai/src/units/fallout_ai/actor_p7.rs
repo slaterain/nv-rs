@@ -917,14 +917,7 @@ pub fn actor_steal_alarm(
     if stolen_from_actor != 0 && e.vcall(stolen_from_actor, 0x218, &args![]).bool() {
         witness = stolen_from_actor;
     } else {
-        // 008bfbc1: lStewieAl's Tweaks' row S0068 (`fixHandleStealingCrash`): no owner is not a
-        // faction (the branch below then does nothing for it), where the exe reads the null form's
-        // type.
-        let owner_type = if e.stewie(stewie::HANDLE_STEALING_CRASH) && owner == 0 {
-            0
-        } else {
-            e.call(FORM_TYPE, &args![owner]).u32()
-        };
+        let owner_type = e.call(FORM_TYPE, &args![owner]).u32();
         if owner_type == 8 {
             if !e.call(BASE_FORM_FLAG_BIT_1, &args![owner]).bool() {
                 karma_penalty = true;

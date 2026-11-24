@@ -3898,11 +3898,6 @@ pub fn fn_00a34f20(
 /// S0108 (`patchFixNullNifOwnerCrash`, its `SequenceActivateNullCheck`): a sequence with no owner (the
 /// set's address then 0x44) is not added; the exe adds it to a set at 0x44.
 fn activation_add_to_active_set(e: &mut Engine, this: Ptr<NiControllerSequence>) {
-    if e.get(this, NiControllerSequence::m_pkOwner).addr() == 0
-        && e.stewie(engine_core::extend::stewie::SEQUENCE_NULL_OWNER)
-    {
-        return;
-    }
     add_to_active_set(e, this);
 }
 

@@ -432,14 +432,7 @@ fn equip_hot_key_replacement(e: &mut Engine, inventory: u32, item: Ptr, current:
     if hot_key >= 0 {
         let hot_key = e.call(ITEM_CHANGE_GET_HOT_KEY, &args![item_change]).u32();
         let table = e.global::<u32>(HOT_KEY_TABLE);
-        // lStewieAl's Tweaks' row S0089.08 (`RememberAmmoCountOnLoad`, the calls at `0x95D539` and
-        // `0x95D94F`, both through this helper): Tweaks' `GetAmmoForHotkeySlotHook` in place of
-        // `004bfb30`.
-        let replacement = if e.stewie(engine_core::extend::stewie::HOTKEY_AMMO_NEEDS_ROUNDS) {
-            ammo_for_hot_key_slot(e, table, hot_key)
-        } else {
-            e.call(HOT_KEY_TO_OBJECT, &args![table, hot_key]).u32()
-        };
+        let replacement = e.call(HOT_KEY_TO_OBJECT, &args![table, hot_key]).u32();
         if replacement != 0 {
             current = replacement;
         }
@@ -673,12 +666,7 @@ pub fn fn_0095d450(
         let clip = e
             .call(WEAPON_GET_CLIP_ROUNDS, &args![item, u32::from(has_mod)])
             .u32();
-        // lStewieAl's Tweaks' row S0121 (`patchPreventReloadingIfClipIsOverfilled`, `JNZ` to `JL` at
-        // `0x95D65D`): a clip holding its size or more (signed) is not reloaded either.
-        if have == clip
-            || (e.stewie(engine_core::extend::stewie::NO_RELOAD_OVERFILLED_CLIP)
-                && have as i32 >= clip as i32)
-        {
+        if have == clip {
             return false;
         }
         if count
@@ -708,16 +696,7 @@ pub fn fn_0095d450(
                 equip_count = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, again))
                     .wrapping_add(1);
             }
-            // lStewieAl's Tweaks' row S0111 (`patchFixLoopingReloadAmmoSwapInstantRefill`, its
-            // `OnLoopingReloadChangeAmmoTypesHook` jumped to at `0x95D714`): during the player's
-            // ammunition swap the count stays the clip's plus one; otherwise it is the carried
-            // count whatever `use_count` says (Tweaks' jump replaces the `use_count` test too).
-            if e.stewie(engine_core::extend::stewie::AMMO_SWAP_NO_INSTANT_REFILL) {
-                let swap = e.stewie_kept(engine_core::extend::stewie::kept::PLAYER_AMMO_SWAP, 4);
-                if e.mem.u32(swap) == 0 {
-                    equip_count = count;
-                }
-            } else if use_count != 0 {
+            if use_count != 0 {
                 equip_count = count;
             }
             e.call(
@@ -818,17 +797,12 @@ pub fn fn_0095d850(
         .u32();
 
     let equipped_change = process_slot(e, this, 0x14c, &args![]);
-    // lStewieAl's Tweaks' row S0089.03 (`RememberAmmoCountOnLoad`, the jump at `0x95D9D6` to
-    // `0x95DA5A`): no new ammunition entry is installed here (its S0089.04 then guards the missing
-    // one).
     if (equipped_change == 0
         || typed_call!(
             leaf::FAMILY,
             0x0044_ddc0,
             leaf::word_at_8(e, equipped_change)
-        ) != current)
-        && !e.stewie(engine_core::extend::stewie::RELOAD_NO_NEW_AMMO_ENTRY)
-    {
+        ) != current) {
         install_item_change(e, this, current, count);
     }
     if item.addr() != 0 && current != item.addr() {
@@ -847,9 +821,7 @@ pub fn fn_0095d850(
             .u32();
         let change = process_slot(e, this, 0x14c, &args![]);
         let equipped_count = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, change));
-        // S0121 (`JZ` to `JLE` at `0x95DAE5`): with the row, only a clip below its size (signed).
-        let overfill_row = e.stewie(engine_core::extend::stewie::NO_RELOAD_OVERFILLED_CLIP);
-        if clip != equipped_count && !(overfill_row && clip as i32 <= equipped_count as i32) {
+        if clip != equipped_count {
             let change = process_slot(e, this, 0x14c, &args![]);
             if count != typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, change)) {
                 let index = e
@@ -876,14 +848,7 @@ pub fn fn_0095d850(
         return false;
     }
     let change = process_slot(e, this, 0x14c, &args![]);
-    // lStewieAl's Tweaks' row S0089.04 (`RememberAmmoCountOnLoad` at `0x95DBB4`): no equipped
-    // ammunition entry counts as an empty one instead of being read.
-    // With S0089.03 (no entry installed just before) a missing entry is just as possible: either row
-    // counts it as empty.
-    let no_entry = change == 0
-        && (e.stewie(engine_core::extend::stewie::RELOAD_NULL_AMMO_ENTRY)
-            || e.stewie(engine_core::extend::stewie::RELOAD_NO_NEW_AMMO_ENTRY));
-    if !no_entry && typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, change)) != 0 {
+    if typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, change)) != 0 {
         if equipped_before == 0 {
             return false;
         }
@@ -895,12 +860,7 @@ pub fn fn_0095d850(
             .u32();
         let change = process_slot(e, this, 0x14c, &args![]);
         let loaded = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, change));
-        // S0121 (`JZ` to `JLE` at `0x95DC01`): a clip at or above its size (signed) is not
-        // reloaded.
-        if clip == loaded
-            || (e.stewie(engine_core::extend::stewie::NO_RELOAD_OVERFILLED_CLIP)
-                && clip as i32 <= loaded as i32)
-        {
+        if clip == loaded {
             return false;
         }
         let change = process_slot(e, this, 0x14c, &args![]);
@@ -966,13 +926,7 @@ pub fn fn_0095d850(
             }
         }
     }
-    // lStewieAl's Tweaks' row S0097 (its `ReloadDamageAPHook` called at `0x95DD7C`): the action
-    // points are also kept when the animation is not a reload (`mode`, the second word, not 2).
-    let skip = if e.stewie(engine_core::extend::stewie::RUN_AND_GUN_AP) {
-        e.mem.u32(OBJECT_011F2250 + 8) != 0 || mode != 2
-    } else {
-        e.call(TEST_DWORD_AT_8, &args![OBJECT_011F2250]).bool()
-    };
+    let skip = e.call(TEST_DWORD_AT_8, &args![OBJECT_011F2250]).bool();
     if !skip {
         e.vcall(this.addr(), 0x340, &args![9u32]);
     }
@@ -1127,13 +1081,7 @@ pub fn fn_0095de30(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32) {
             .into_ret()
             .i32()
                 == 4;
-        // lStewieAl's Tweaks' row S0052 (`patchPreventAimingFOVDuringKillcams`, its
-        // `OnWeaponFOVHook` jumped to at `0x95E088`): no aiming field of view while a kill camera
-        // runs (+0xE18 not 0) unless it is the player-view kind (+0x7C0 is 1).
-        let killcam = e.stewie(engine_core::extend::stewie::NO_AIMING_FOV_IN_KILLCAMS)
-            && e.mem.u32(this.addr() + 0xe18) != 0
-            && e.mem.u32(this.addr() + 0x7c0) != 1;
-        if (!(state_is_9 || state_is_x11) || camera_state_4) && !killcam {
+        if (!(state_is_9 || state_is_x11) || camera_state_4) {
             world_target = zoom;
             first_person_target =
                 ((zoom as f64 / default_world as f64) * default_first_person as f64) as f32;

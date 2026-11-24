@@ -934,24 +934,9 @@ pub fn combat_formulas_calc_weapon_damage(
     let mut ammo_bonus = 0.0f32;
     if !flag_1c && !weapon.is_null() {
         let holder = if owner_is_actor { owner } else { Ptr::NULL };
-        // lStewieAl's Tweaks' row S0189.02 (`InventoryCalcWeaponDamageUseAmmoFix`, the calls at
-        // `0x644EF3` and `0x644F79` and the jump at `0x644F00`): Tweaks' `OnCalcDamageGetProjectile`
-        // takes the projectile from the word at +0x18 (the ammunition S0189.01 passes) in place of
-        // `00525ae0`, and the second lookup reuses the first's answer.
-        // The callers that pass no ammunition (a hit through `GetModifiedAttackDamage`,
-        // `GetDesirability`) then get the weapon's own projectile first, as with Tweaks.
-        let from_ammo = e.stewie(engine_core::extend::stewie::WEAPON_DAMAGE_AMMO_PROJECTILE);
-        let first = if from_ammo {
-            calc_damage_projectile(e, weapon, ammo_word, holder)
-        } else {
-            combat_formulas_get_arm_condition(e, weapon, holder)
-        };
+        let first = combat_formulas_get_arm_condition(e, weapon, holder);
         if !first.is_null() {
-            let second = if from_ammo {
-                first
-            } else {
-                combat_formulas_get_arm_condition(e, weapon, holder)
-            };
+            let second = combat_formulas_get_arm_condition(e, weapon, holder);
             let second_value = e.call(AMMO_GET_VALUE_FROM_OBJECT, &args![second]).u32();
             if second_value != 0 {
                 let actor = if owner_is_actor {
@@ -968,11 +953,7 @@ pub fn combat_formulas_calc_weapon_damage(
                     )
                     .u8()
                 };
-                let third = if from_ammo {
-                    calc_damage_projectile(e, weapon, ammo_word, holder)
-                } else {
-                    combat_formulas_get_arm_condition(e, weapon, holder)
-                };
+                let third = combat_formulas_get_arm_condition(e, weapon, holder);
                 let third_value = e.call(AMMO_GET_VALUE_FROM_OBJECT, &args![third]).u32();
                 let factor = e.call(FUNCTION_006479E0, &args![third_value]).f64();
                 let projectiles = e
@@ -1061,14 +1042,7 @@ pub fn combat_formulas_calc_weapon_damage_for_display(
 ) -> f32 {
     let holder = actor_value_owner(player(e));
     let condition_copy = x87_quiet(condition);
-    // lStewieAl's Tweaks' row S0189.01 (`InventoryCalcWeaponDamageUseAmmoFix`, the pushes at
-    // `0x6451B6` and `0x645216`): Tweaks' `OnGetWeaponDamagePushAmmoHook` passes the ammunition as
-    // `CalcWeaponDamage`'s unused word at +0x18, where the exe pushes 0.
-    let ammo_word = if e.stewie(engine_core::extend::stewie::WEAPON_DAMAGE_DISPLAY_AMMO) {
-        ammo.addr()
-    } else {
-        0
-    };
+    let ammo_word = 0;
     // The damage figure's own result is overwritten below; only its call matters.
     e.call(
         WEAPON_DAMAGE_FIGURE,
@@ -1136,16 +1110,7 @@ pub fn combat_formulas_calc_weapon_damage_for_display(
         ammo_form = e.call(WEAPON_GET_CURRENT_AMMO, &args![weapon, 0u32]).ptr();
     }
     if !ammo_form.is_null() && !weapon.is_null() && ammo_form != weapon {
-        // The exe tests `ammo_form` once more before this call; it is non-null here.
-        // lStewieAl's Tweaks' row S0067 (`fixGetWeaponDamageCrashOnThrowingWeapons`, the call at
-        // `0x64529D`): a throwing weapon's "ammunition" is a weapon, with no effect list.
-        let effect = if e.stewie(engine_core::extend::stewie::THROWING_WEAPON_AMMO_EFFECTS)
-            && e.mem.u8(ammo_form.addr() + 4) != FORM_TYPE_AMMO
-        {
-            0
-        } else {
-            e.call(FUNCTION_00923000, &args![ammo_form]).u32()
-        };
+        let effect = e.call(FUNCTION_00923000, &args![ammo_form]).u32();
         result = e
             .call(
                 APPLY_PERK_ENTRY_FLOAT,
@@ -2228,16 +2193,7 @@ pub fn combat_formulas_get_vats_chance_to_hit(
                     target_area = (target_area as f64 * destructible_mult as f64) as f32;
                 }
             }
-            // lStewieAl's Tweaks' row S0055 (`patchFixZeroSpreadZeroVATSChance`, the call at
-            // `0x64747B`): Tweaks' `VATSInitSpreadChanceHook` starts the range spread at
-            // `fVATSRangeSpreadMax` (its value at `011cfe54`) instead of 0.0, so a weapon with no
-            // spread (no circle to compare) keeps a chance instead of 0.
-            let mut range_spread = if e.stewie(engine_core::extend::stewie::ZERO_SPREAD_VATS_CHANCE)
-            {
-                x87_quiet(e.mem.f32(SETTING_VATS_RANGE_SPREAD_MAX + 4))
-            } else {
-                0.0f32
-            };
+            let mut range_spread = 0.0f32;
             if x87_compare(area as f64, zero) & 0x41 == 0 {
                 let spread_max = setting(e, SETTING_VATS_RANGE_SPREAD_MAX);
                 let ratio = (target_area as f64 / area as f64) as f32;

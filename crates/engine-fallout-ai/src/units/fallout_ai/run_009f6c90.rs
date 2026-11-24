@@ -96,14 +96,7 @@ pub fn fn_009f6d50(e: &mut Engine, this: Ptr) {
     };
     let mut level = 0u32;
     if record != 0 {
-        // lStewieAl's Tweaks' row S0133 (`patchFixSpectatorThreatInfoUsingWrongWeaponType`,
-        // `WriteRelCall(0x9F6E76, 0x522C80)`): the weapon's combat type
-        // (`TESObjectWEAP::GetCombatWeaponType`, `00522c80`) in place of its plain type.
-        let kind = if e.stewie(engine_core::extend::stewie::SPECTATOR_THREAT_WEAPON_TYPE) {
-            e.call(COMBAT_WEAPON_TYPE_00522C80, &args![record]).u32()
-        } else {
-            e.call(KIND_00446390, &args![record]).u32()
-        };
+        let kind = e.call(KIND_00446390, &args![record]).u32();
         let pick = match kind {
             0 => Some((3, DISTANCE_512)),
             1 => Some((2, DISTANCE_256)),

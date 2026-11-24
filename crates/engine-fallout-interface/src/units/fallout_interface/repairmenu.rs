@@ -1151,13 +1151,7 @@ pub fn repair_menu_do_enter(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
         let tile50 = e.mem.u32(base + 0x50);
         e.call(TILE_SET_INT, &args![tile50, value_trait, damage]);
     } else {
-        // `0x7B6514` (lStewieAl's Tweaks' S0022.52 writes `MOV ECX,[0x11DA760]; MOV ECX,[ECX+8]`
-        // there): the broken item's form, read raw, in place of the current item's.
-        let form = if e.stewie(engine_core::extend::stewie::REPAIR_MENU_BROKEN_ITEM_TYPE) {
-            e.mem.u32(e.global::<u32>(BROKEN_ITEM) + 8)
-        } else {
-            typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, current))
-        };
+        let form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, current));
         if e.call(FORM_TYPE, &args![form]).u32() == 0x18 {
             let broken = broken_item(e);
             let form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, broken));

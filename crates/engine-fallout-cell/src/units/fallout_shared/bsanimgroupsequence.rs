@@ -434,12 +434,6 @@ const PLAY_SOUNDS_FRAME: u32 = 0x1c0;
 /// still -FLT_MAX, the value before its first update, so text-key sounds near 0.0 are not played
 /// before the animation really runs and then again once it does.
 fn play_sounds_state(e: &mut Engine, sequence: Ptr) -> u32 {
-    if e.stewie(engine_core::extend::stewie::DOUBLE_SOUND) {
-        if e.mem.f32(sequence.addr() + 0x34) == -f32::MAX {
-            return 0;
-        }
-        return e.mem.u32(sequence.addr() + 0x44);
-    }
     e.call(0x0080_41a0, &args![sequence]).u32()
 }
 

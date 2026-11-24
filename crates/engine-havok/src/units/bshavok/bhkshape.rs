@@ -427,9 +427,6 @@ pub fn bhk_shape_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
 /// replaces it whole: with the row the answer is [`stair_sub_material_var_type`]'s, 0 or 1 (only
 /// `AL` is read by the exe's callers).
 pub fn fn_00c84f50(e: &mut Engine, this: u32, selector: u32, mask: u32) -> u32 {
-    if e.stewie(engine_core::extend::stewie::STAIR_MATERIAL) {
-        return u32::from(stair_sub_material_var_type(e, this, selector, mask));
-    }
     let mut object = this;
     if selector != 0xffff_ffff {
         loop {

@@ -3937,9 +3937,6 @@ pub fn fn_00609220(e: &mut Engine, this: Ptr<TESNPC>, buffer: Ptr) {
         // race the save names that is not found is CaucasianVanilla (`0x19`), then cast as before.
         let id = e.call(0x0086_48a0, &args![buffer]).u32();
         let mut form = e.call(LOOKUP_FORM, &args![id]).u32();
-        if form == 0 && e.stewie(engine_core::extend::stewie::UNRESOLVED_RACE) {
-            form = e.call(LOOKUP_FORM, &args![0x19u32]).u32();
-        }
         let race = e
             .call(
                 RT_DYNAMIC_CAST,
@@ -4887,19 +4884,8 @@ pub fn tesnpc_activate(
         if e.vcall(target_process, 0x610, &args![]).u32() != 0 {
             return false;
         }
-        // lStewieAl's Tweaks' row S0199.05 (`MiscCrashFixes`, the call at `0x607A7D`): no activating
-        // actor, or one with no process, has state 0.
-        let guarded = e.stewie(engine_core::extend::stewie::NPC_ACTIVATE_NULL_PROCESS);
-        let activator_process = if guarded && activator == 0 {
-            0
-        } else {
-            process_of(e, activator)
-        };
-        let activator_state = if guarded && activator_process == 0 {
-            0
-        } else {
-            e.vcall(activator_process, 0x27c, &args![]).u32()
-        };
+        let activator_process = process_of(e, activator);
+        let activator_state = e.vcall(activator_process, 0x27c, &args![]).u32();
         let target_state = e.vcall(target_process, 0x27c, &args![]).u32();
         let activation = Activation {
             this,

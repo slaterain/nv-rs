@@ -1348,9 +1348,6 @@ fn effect_duration(e: &mut Engine, effect: u32) -> u32 {
     // lStewieAl's Tweaks' S0066 writes the same call only while the exe's bytes are still there
     // (`*(UInt32*)0x7E0C20 == 0xFFC238AC`): JIP LN NVSE loads first, so with G107 answering above
     // Tweaks' patch is not made.
-    if e.stewie(engine_core::extend::stewie::PIPBOY_CHEM_DURATION_PERKS) {
-        return stewie_modified_duration(e, effect);
-    }
     e.call(EFFECT_GET_DURATION, &args![effect]).u32()
 }
 

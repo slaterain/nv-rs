@@ -589,17 +589,7 @@ pub fn fn_004d66d0(e: &mut Engine, this: Ptr, parent: u32, object: Ptr) {
                 let properties = e.call(0x0043_0830, &args![object]).u32();
                 let node = e.call(LIST_NEXT, &args![properties, position]).u32();
                 let property = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, node));
-                // lStewieAl's Tweaks' row S0199.09 (`MiscCrashFixes`, `0x4D6AA5`): an empty entry of
-                // the property list has no controllers. Tweaks guards this test only: the walks below
-                // (the controllers listed, the "Properties" list) still read an empty entry, as with
-                // Tweaks.
-                let controllers = if property == 0
-                    && e.stewie(engine_core::extend::stewie::SHOW_SCENE_GRAPH_NULL)
-                {
-                    0
-                } else {
-                    e.call(0x0043_b230, &args![property]).u32()
-                };
+                let controllers = e.call(0x0043_b230, &args![property]).u32();
                 if controllers != 0 {
                     entry_has_controllers = true;
                     break;

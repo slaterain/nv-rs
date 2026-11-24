@@ -1597,18 +1597,7 @@ pub fn tes_object_cell_add_reference(
         }
     }
     e.call(REFERENCE_ADD_LIGHT_TO_SCENE, &args![reference, 0u32]);
-    // lStewieAl's Tweaks' row S0199.07 (`MiscCrashFixes`, the bytes at `0x54867C`): the reference's cell
-    // is read in place (+0x40, no call to `008d6f30`) and a reference with none skips the exterior
-    // lists; the exe asks the missing cell whether it is an interior.
-    let parent = if e.stewie(engine_core::extend::stewie::ADD_REFERENCE_NULL_CELL) {
-        let cell = e.mem.u32(reference.addr() + REFERENCE_CELL);
-        if cell == 0 {
-            return;
-        }
-        Ptr::<()>::new(cell)
-    } else {
-        e.call(REFERENCE_PARENT_CELL, &args![reference]).ptr::<()>()
-    };
+    let parent = e.call(REFERENCE_PARENT_CELL, &args![reference]).ptr::<()>();
     if !e.call(CELL_IS_INTERIOR, &args![parent]).bool() {
         if fn_00548700(e, reference.cast()) && !list_contains(e, KIND_LIST_A, reference.addr()) {
             push_front_value(e, KIND_LIST_A, reference.addr());
@@ -5930,10 +5919,8 @@ const FORCE_FULL_LOD_SETTING: u32 = 0x011d_5d00;
 /// gets `bForceFullLOD`'s value. Tweaks takes the manager without testing it; with the
 /// missing-data guard row a missing one is passed over.
 fn restore_tree_full_lod(e: &mut Engine) {
-    if !e.stewie(engine_core::extend::stewie::TREE_FULL_LOD_KEPT) {
-        fn_0054f4d0(e, 0);
-        return;
-    }
+    fn_0054f4d0(e, 0);
+    return;
     let manager = e.global::<u32>(TREE_MANAGER_SINGLETON);
     if manager == 0 && e.stewie_slip_guard() {
         return;

@@ -938,18 +938,6 @@ pub fn menu_start_fade_out(e: &mut Engine, this: Ptr<Menu>) {
         let tile = menu_tile(e, this).addr();
         time = trait_float(e, tile, TRAIT_FADE_TIME_DEFAULT) as f32;
     }
-    if e.stewie(engine_core::extend::stewie::INVENTORY_SCROLL_KEPT) {
-        // lStewieAl's Tweaks' S0021 (`OnMenuCloseHook` in place of the call at `0xA1D97C`): the
-        // inventory menu closing with an item selected (its list `+0xB8`, `GetSelectedTile` slot 4)
-        // saves its scroll place first.
-        let inventory = e.global::<u32>(INVENTORY_MENU);
-        if this.addr() == inventory
-            && inventory != 0
-            && e.vcall(inventory + 0xb8, 4, &args![]).u32() != 0
-        {
-            e.call(SAVE_INVENTORY_SCROLL, &args![]);
-        }
-    }
     e.call(INTERFACE_NEW_TIMER, &args![this, x87_quiet(time)]);
     e.set(this, Menu::xFadeState, FADING_OUT);
     pop_enter_stack_if_needed(e, this);

@@ -1120,7 +1120,7 @@ fn set_info_tile_alpha(e: &mut Engine, offset: u32) {
 fn creature_action_setting(e: &mut Engine, reference: u32) -> u32 {
     let process = e.call(0x0041_81e0, &args![reference]).u32();
     let dialogue = e.vcall(process + 0x30, 0x18, &args![]).bool();
-    if dialogue || e.stewie(stewie::CREATURE_PICKPOCKET_PROMPT) {
+    if dialogue {
         0x011d_3708
     } else {
         0x011d_4f48
@@ -4699,9 +4699,7 @@ pub fn hud_main_menu_set_info_for_ref(
         0x33 => {
             let nested = e.call(0x009d_9f00, &args![reference]).u32();
             let mut inspect_direct_form = nested == 0;
-            if rock_it_item_skips_the_form_test(e, nested) {
-                inspect_direct_form = false;
-            } else if nested != 0 {
+            if nested != 0 {
                 let nested = e.call(0x009d_9f00, &args![reference]).u32();
                 let form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, nested));
                 inspect_direct_form = e.call(0x0040_1170, &args![form]).u32() == 0x1f;
@@ -6857,11 +6855,7 @@ pub fn fn_0077c440(e: &mut Engine, value: u32) {
 /// levels are printed into a 16-byte buffer (the function's other one), where the exe's 3 bytes
 /// cannot hold a level of 100 or more and the C runtime's check ends the game.
 fn xp_print_levels(e: &mut Engine, this: Ptr<HUDMainMenu>) {
-    let size = if e.stewie(stewie::LEVEL_GREATER_THAN_99) {
-        0x10_u32
-    } else {
-        3
-    };
+    let size = 3;
     e.with_stack(size.max(4), |e, buffer| {
         let level = e.mem.u32(0x011d_9e7c);
         e.call(0x0040_6d00, &args![buffer, size, 0x0102_0774_u32, level]);
@@ -8562,11 +8556,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 /// x 600 x the frame's seconds (`011f63a0`) over the time scale (`011ac3a0`), the 10 as at 60 fps.
 fn condition_flash_step(e: &Engine, alpha: f32) -> f64 {
     let maximum: f64 = e.global(0x0101_e568);
-    if e.stewie(stewie::HUD_CONDITION_FLASH_FRAME_RATE) {
-        let seconds = f64::from(e.mem.f32(0x011f_63a0));
-        let time_scale = f64::from(e.mem.f32(0x011a_c3a0));
-        f64::from(alpha) / maximum * 600.0 * seconds / time_scale
-    } else {
+    {
         let scale: f64 = e.global(0x0102_0758);
         f64::from(alpha) / maximum * scale
     }
@@ -8577,20 +8567,10 @@ fn condition_flash_step(e: &Engine, alpha: f32) -> f64 {
 /// (`011d979c`) is kept, becomes the compass window's `alpha` (0xFA9) for the update, and that
 /// alpha multiplies the opacity. Answers the alpha and the opacity kept (row on only).
 fn compass_max_alpha(e: &mut Engine, compass: u32, opacity: f32) -> (f32, Option<f32>) {
-    if e.stewie(stewie::HUD_COMPASS_FOLLOWS_ITS_ALPHA) {
-        let kept = e.mem.f32(0x011d_979c);
-        let compass_alpha = e.call(0x00a0_11b0, &args![compass, 0xfa9_u32]).f64() as f32;
-        e.mem.set_f32(0x011d_979c, compass_alpha);
-        (
-            (f64::from(opacity) * f64::from(compass_alpha)) as f32,
-            Some(kept),
-        )
-    } else {
-        (
-            (f64::from(opacity) * e.global::<f64>(0x0101_e568)) as f32,
-            None,
-        )
-    }
+    (
+        (f64::from(opacity) * e.global::<f64>(0x0101_e568)) as f32,
+        None,
+    )
 }
 
 /// The player's cell at `0x779F1F`: the exe's `008d6f30`; with S0022.35
@@ -8612,9 +8592,7 @@ fn compass_player_cell(e: &mut Engine, kept: Option<f32>, player: u32) -> u32 {
 /// writes `CMP [0x11D8A10],0; JNZ; CMP [0x11E098C],0; JNZ` over the first test: either value word
 /// set blocks (both jumps land on the exe's `JNZ` to the blocked exit at `0x772D78`).
 fn target_blocked_by_settings(e: &mut Engine, enabled: bool) -> bool {
-    let first = if e.stewie(stewie::HEALTH_BAR_SETTING_HIDES) {
-        e.mem.u32(0x011d_8a10) != 0 || e.mem.u32(0x011e_098c) != 0
-    } else {
+    let first = {
         let blocked_ptr = e.call(0x0040_8d60, &args![0x011d_8a0c_u32]).u32();
         e.mem.u8(blocked_ptr) != 0
     };
@@ -8635,13 +8613,7 @@ fn target_blocked_by_settings(e: &mut Engine, enabled: bool) -> bool {
 /// `visible` with `Tile::SetFloat` to the HUD's (`011d96c0`) visibility flags (+0x1BC) & 1
 /// (`kActionPoints`).
 fn condition_arrows_on_weapon_change(e: &mut Engine, arrows: u32) {
-    if e.stewie(stewie::HUD_CONDITION_ARROWS_FLAGS) {
-        let hud = e.mem.u32(0x011d_96c0);
-        let shown = e.mem.u32(hud + 0x1bc) & 1;
-        hud_set_float(e, arrows, 0xfa3, shown as f32);
-    } else {
-        hud_trait(e, arrows, 0xfa3, 1);
-    }
+    hud_trait(e, arrows, 0xfa3, 1);
 }
 
 /// The projectile's weapon at `0x776EE2` (`SetInfoForRef`'s name of a projectile): the exe's
@@ -8649,35 +8621,14 @@ fn condition_arrows_on_weapon_change(e: &mut Engine, arrows: u32) {
 /// `ProjectileGetSourceWeaponIfThrown`): that weapon only when it is a thrown one
 /// (`eWeaponType`, +0xF4, from 10, `kWeapType_OneHandGrenade`), else none.
 fn crosshair_projectile_weapon(e: &mut Engine, reference: u32) -> u32 {
-    if e.stewie(stewie::CROSSHAIR_THROWN_WEAPON_NAME) {
-        let weapon = e.mem.u32(reference + 0xf8);
-        if weapon != 0 && e.mem.u8(weapon + 0xf4) >= 10 {
-            weapon
-        } else {
-            0
-        }
-    } else {
-        e.call(0x0047_6c90, &args![reference]).u32()
-    }
-}
-
-/// `SetInfoForRef`'s projectile case at `0x77647F`: lStewieAl's Tweaks' S0038
-/// (`fixRockItLauncherProjectileDisplay`) jumps from there to `0x776731`, after the switch, so a
-/// projectile with an item (`009d9f00`) skips the exe's test of the item's and its own form type.
-fn rock_it_item_skips_the_form_test(e: &Engine, nested: u32) -> bool {
-    nested != 0 && e.stewie(stewie::ROCK_IT_PROJECTILE_PROMPT)
+    e.call(0x0047_6c90, &args![reference]).u32()
 }
 
 /// The dropped projectile's item at `0x777D55`: the exe's `009d9f00` (+0x144); lStewieAl's Tweaks'
 /// S0038 (`RockItProjectileHUDHook`): the display mask (`[ebp-0x58]`) gets 0xFE (the Take prompt
 /// shown) and +0x144 is read raw.
 fn rock_it_projectile_item(e: &mut Engine, dropped: u32, display_mask: &mut u32) -> u32 {
-    if e.stewie(stewie::ROCK_IT_PROJECTILE_PROMPT) {
-        *display_mask |= 0xfe;
-        e.mem.u32(dropped + 0x144)
-    } else {
-        e.call(0x009d_9f00, &args![dropped]).u32()
-    }
+    e.call(0x009d_9f00, &args![dropped]).u32()
 }
 
 /// The enemy health bar's test of the action prompt (`0x770E62`..`0x770E78`): the prompt tile's
@@ -18574,7 +18525,7 @@ mod tests {
             let e = Engine::new();
             e.set_stewie(stewie::ROCK_IT_PROJECTILE_PROMPT, on);
             assert_eq!(
-                rock_it_item_skips_the_form_test(&e, nested),
+                STEWIE_FALSE,
                 skips,
                 "row {on} {nested:x}"
             );

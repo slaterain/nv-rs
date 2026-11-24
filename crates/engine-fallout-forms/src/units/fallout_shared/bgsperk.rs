@@ -1111,14 +1111,6 @@ pub fn bgs_perk_build_description_string(e: &mut Engine, this: Ptr, buffer: Ptr,
     use engine_core::extend::stewie;
     let base = this.addr();
     let buffer = buffer.addr();
-    // lStewieAl's Tweaks' `PerkMenuDescriptionTypoFix` text rows (S0093.01 to .06), each at its own
-    // patched instructions below.
-    let no_dashes = e.stewie(stewie::PERK_TEXT_NO_DASHES);
-    let no_empty_comma = e.stewie(stewie::PERK_TEXT_NO_EMPTY_COMMA);
-    let by_one = e.stewie(stewie::PERK_TEXT_INDEX_BY_ONE);
-    let skip_other = e.stewie(stewie::PERK_TEXT_SKIP_OTHER);
-    let commas = e.stewie(stewie::PERK_TEXT_COMMAS);
-    let perk_not_or = e.stewie(stewie::PERK_TEXT_PERK_NOT_OR);
     e.with_stack(0x84 + TWEAKS_TEXT, |e, work| {
         let work = work.addr();
         // The row S0093.06's formats (Tweaks' own strings), after the exe's 0x80-byte work buffer.
@@ -1129,12 +1121,7 @@ pub fn bgs_perk_build_description_string(e: &mut Engine, this: Ptr, buffer: Ptr,
         if ranks > 1 {
             let ranks_label = e.call(SETTING_STRING, &args![0x011d_3b2cu32]).u32();
             let perk_label = e.call(SETTING_STRING, &args![0x011d_4678u32]).u32();
-            // S0093.06 (`0x5EBB27`): "%s: %s %d, ", the ranks followed by a comma.
-            let heading = if perk_not_or {
-                put_text(e, tweaks_text, b"%s: %s %d, ")
-            } else {
-                0x0104_7040
-            };
+            let heading = 0x0104_7040;
             e.call(
                 STRING_FORMAT,
                 &args![buffer, size, heading, perk_label, ranks_label, ranks],
@@ -1151,25 +1138,17 @@ pub fn bgs_perk_build_description_string(e: &mut Engine, this: Ptr, buffer: Ptr,
         // not end with ", " already (Tweaks' `AddCommaIfMissing`).
         let first_separator = |e: &mut Engine, index: u32| {
             if index == 0 && !short_heading {
-                if commas {
-                    add_comma_if_missing(e, buffer, size, 0x0101_2630);
-                } else {
-                    e.call(STRING_APPEND, &args![buffer, size, 0x0101_2630u32]);
-                }
+                e.call(STRING_APPEND, &args![buffer, size, 0x0101_2630u32]);
             }
         };
         // The item after `index` (`index + 1`) as the actor-value branch asks for it; with S0093.05
         // (`0x5EBCFB`, `0x5EBD6E`) only when a shown condition is left from there on.
         let next_item = |e: &mut Engine, index: u32| {
-            if commas {
-                nth_condition_if_one_shown_follows(e, base + 0x40, index.wrapping_add(1))
-            } else {
-                e.call(
-                    GET_CONDITION_ITEM,
-                    &args![base + 0x40, index.wrapping_add(1)],
-                )
-                .u32()
-            }
+            e.call(
+                GET_CONDITION_ITEM,
+                &args![base + 0x40, index.wrapping_add(1)],
+            )
+            .u32()
         };
         // The step to the next item (`0x5EBC77`, `0x5EBF55`, then `0x5EBB77`): the exe's index goes
         // up twice a step (it reads the item at the first); with S0093.03 once.
@@ -1180,7 +1159,7 @@ pub fn bgs_perk_build_description_string(e: &mut Engine, this: Ptr, buffer: Ptr,
                     &args![base + 0x40, index.wrapping_add(1)],
                 )
                 .u32();
-            *index = index.wrapping_add(if by_one { 1 } else { 2 });
+            *index = index.wrapping_add(2 );
             item
         };
         let mut listed = false;
@@ -1214,13 +1193,7 @@ pub fn bgs_perk_build_description_string(e: &mut Engine, this: Ptr, buffer: Ptr,
                         let joiner = e.call(SETTING_STRING, &args![0x011d_324cu32]).u32();
                         let value = condition_value_as_int(e, item).wrapping_add(adjustment);
                         let label = e.call(0x0066_eb00, &args![actor_value]).u32();
-                        // S0093.06 (`0x5EBD3E`): the format one byte on, "%s%s%d %s " without the
-                        // leading space (no double space before the "OR").
-                        let format = if perk_not_or {
-                            0x0104_7029u32
-                        } else {
-                            0x0104_7028
-                        };
+                        let format = 0x0104_7028;
                         e.call(
                             STRING_FORMAT,
                             &args![
@@ -1253,59 +1226,28 @@ pub fn bgs_perk_build_description_string(e: &mut Engine, this: Ptr, buffer: Ptr,
                 let number = e.mem.u32(data + 8);
                 if location != 0 && number > 0 {
                     let name = e.call(0x0040_8da0, &args![location + 0x18]).u32();
-                    // S0093.06 (`0x5EBEC1`, `0x5EBED1`): "%s %d, " through Tweaks'
-                    // `OnFormatPerkHandleConditions`.
-                    if perk_not_or {
-                        let format = put_text(e, tweaks_text, b"%s %d, ");
-                        format_perk_condition(
-                            e,
-                            [item, base, index],
-                            [work, 0x80, format, name, number],
-                            tweaks_text + 0x10,
-                        );
-                    } else {
-                        e.call(
-                            STRING_FORMAT,
-                            &args![work, 0x80u32, 0x0104_700cu32, name, number],
-                        );
-                    }
+                    e.call(
+                        STRING_FORMAT,
+                        &args![work, 0x80u32, 0x0104_700cu32, name, number],
+                    );
                 } else if location != 0 {
                     let name = e.call(0x0040_8da0, &args![location + 0x18]).u32();
-                    // S0093.06 (`0x5EBEF4`, `0x5EBF04`): "%s, " the same way. The hook passes the
-                    // word above the name as the rank; "%s, " does not read it.
-                    if perk_not_or {
-                        let format = put_text(e, tweaks_text, b"%s, ");
-                        format_perk_condition(
-                            e,
-                            [item, base, index],
-                            [work, 0x80, format, name, 0],
-                            tweaks_text + 0x10,
-                        );
-                    } else {
-                        e.call(STRING_FORMAT, &args![work, 0x80u32, 0x0101_9f08u32, name]);
-                    }
+                    e.call(STRING_FORMAT, &args![work, 0x80u32, 0x0101_9f08u32, name]);
                 }
                 e.call(STRING_APPEND, &args![buffer, size, work]);
-            } else if !skip_other {
+            } else {
                 // S0093.04 (`0x5EBE35`): with the row such a condition goes straight to the step
                 // (`0x5EBF55`), neither listed nor separated.
                 listed = true;
-                // S0093.02 (`0x5EBF3E`): with the row no separator here.
-                if !no_empty_comma {
-                    first_separator(e, index);
-                }
+                first_separator(e, index);
             }
             item = step(e, &mut index);
         }
-        // S0093.01 (`0x5EBF8D`): with the row no "--" for an empty list.
-        if !listed && !no_dashes {
+        if !listed {
             e.call(STRING_APPEND, &args![buffer, size, 0x0104_7008u32]);
         }
         // S0093.05 (`0x5EBFB1`): a ", " or "," left at the end goes before the "\n\n" (Tweaks'
         // `StripTrailingCommasHook`).
-        if commas {
-            strip_trailing_commas(e, buffer);
-        }
         e.call(STRING_APPEND, &args![buffer, size, 0x0101_2648u32]);
         let level_label = e.call(SETTING_STRING, &args![0x011d_40e4u32]).u32();
         let level = u32::from(e.mem.u8(base + 0x3a));
@@ -1317,14 +1259,7 @@ pub fn bgs_perk_build_description_string(e: &mut Engine, this: Ptr, buffer: Ptr,
         let text = e
             .vcall(base + 0x24, 0x10, &args![0u32, 0x4353_4544u32])
             .u32();
-        // lStewieAl's Tweaks' row S0093.07 (`PerkMenuDescriptionTypoFix`, the call at `0x5EC026`):
-        // `snprintf(buffer, size, "%s%s", buffer, text)` in place of `strcat_s`, so a description too
-        // long for the buffer is cut to fit instead of stopping the game.
-        if e.stewie(stewie::PERK_DESCRIPTION_TOO_LONG) {
-            append_cut_to_fit(e, buffer, size, text);
-        } else {
-            e.call(STRING_APPEND, &args![buffer, size, text]);
-        }
+        e.call(STRING_APPEND, &args![buffer, size, text]);
     });
 }
 

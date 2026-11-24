@@ -1646,9 +1646,6 @@ fn do_click_marker(e: &mut Engine, this: Ptr<MapMenu>, id: i32, tile: u32) {
         // location") points both drag tests' `JP` at DoClick's end (00798348) instead of the
         // message's test (0079819e): a dragged map ends the click. With no map tile the exe's jump
         // to the message stays.
-        if dragged && e.stewie(stewie_menus::MAP_DRAG_NO_UNDISCOVERED_MESSAGE) {
-            return;
-        }
         if not_dragged {
             let tile_11 = map_tile(e, base, 11);
             if e.call(TILE_IS_TRUE, &args![tile_11, 0xfafu32]).bool() {
@@ -3073,24 +3070,12 @@ pub fn map_menu_do_controller_switch(e: &mut Engine, this: Ptr<MapMenu>, on: u8)
     if on == 0 {
         return;
     }
-    // 0x79A636, 0x79A652: lStewieAl's Tweaks' row S0022.31 (`MenuFixes`, "center map marker
-    // selection rectangle position") calls its `OnReconnectControllerSetMapSelectionPos` in place
-    // of both `Tile::SetFloat` calls (the floats are pushed and left unread).
-    let centred = e.stewie(stewie_menus::MAP_PAD_SELECTION_CENTRED);
     let x = float_constant(e, CONTROLLER_X_FLOAT);
     let tile = map_tile(e, this.addr(), 6);
-    if centred {
-        stewie_centre_in_parent(e, tile, 0xfa1);
-    } else {
-        e.call(TILE_SET_FLOAT, &args![tile, 0xfa1u32, x, 1u32]);
-    }
+    e.call(TILE_SET_FLOAT, &args![tile, 0xfa1u32, x, 1u32]);
     let y = float_constant(e, CONTROLLER_Y_FLOAT);
     let tile = map_tile(e, this.addr(), 6);
-    if centred {
-        stewie_centre_in_parent(e, tile, 0xfa2);
-    } else {
-        e.call(TILE_SET_FLOAT, &args![tile, 0xfa2u32, y, 1u32]);
-    }
+    e.call(TILE_SET_FLOAT, &args![tile, 0xfa2u32, y, 1u32]);
 }
 
 /// The trait ids Tweaks' centring uses: `width` (0xFB1), `height` (0xFB0), and the value actions
@@ -5211,9 +5196,6 @@ fn gamepad_sticks(e: &mut Engine, this: Ptr<MapMenu>) -> bool {
                     // placing map markers while moving around on the map") jumps to its
                     // `OnMapMove` after the handled flag is set: the pad's X pressed this frame
                     // clicks the X button (DoClick id 0xC) and plays its click sound.
-                    if e.stewie(stewie_menus::MAP_PAD_MARKER_WHILE_MOVING) {
-                        stewie_map_move(e, this);
-                    }
                 } else {
                     for id in [0xfeau32, 0xfeb] {
                         let still = float_constant(e, MINUS_ONE_FLOAT);
@@ -5552,9 +5534,6 @@ fn show_note_subtitle(e: &mut Engine, this: Ptr<MapMenu>, flag: u32) {
     // subtitle left (a holotape with sound but no subtitles) nothing is removed, where the exe
     // removes an element from the empty array.
     let subtitles = Ptr::<BSSimpleArray>::new(base + 0xa8);
-    if e.stewie(stewie::HOLOTAPE_EMPTY_SUBTITLE) && e.get(subtitles, BSSimpleArray::iSize) == 0 {
-        return;
-    }
     fn_007a1b10(e, subtitles, 0, 1);
 }
 
@@ -5614,8 +5593,7 @@ pub fn map_menu_update_playing_sounds(e: &mut Engine, this: Ptr<MapMenu>) {
         }
         if none_valid {
             map_menu_stop_note_sound(e, this);
-            // `0x79A750` (lStewieAl's Tweaks' S0208 jumps over the radio volume's set there).
-            if !e.stewie(engine_core::extend::stewie::MAP_KEEPS_RADIO_VOLUME) {
+            {
                 let volume = x87_quiet_bits(e.mem.u32(base + 0xc8));
                 let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
                 e.call(AUDIO_SET_RADIO_VOLUME, &args![audio, volume]);
@@ -6277,15 +6255,7 @@ pub fn map_menu_update_quests(e: &mut Engine, this: Ptr<MapMenu>) {
             .u32()
     });
     e.vcall(base, 0x10, &args![0x17u32, tile]);
-    // 0079bbd0: lStewieAl's Tweaks' row S0022.09 (`MenuFixes`, "don't reset the scroll position
-    // when selecting a quest") calls `IsControllerConnectedOrMouseNotMoved` here in place of
-    // `004b71d0`: the quest is focused (and its list scrolled to it) only with the pad or a mouse
-    // that has not moved since the keys were used.
-    let focus = if e.stewie(stewie_menus::MAP_QUEST_KEEPS_SCROLL) {
-        stewie_menus::controller_or_mouse_still(e)
-    } else {
-        e.call(FLAG_004B71D0, &args![]).bool()
-    };
+    let focus = e.call(FLAG_004B71D0, &args![]).bool();
     if focus {
         let interface = e.call(INTERFACE_MANAGER, &args![]).u32();
         e.call(
@@ -7990,22 +7960,7 @@ fn set_label_traits(e: &mut Engine, label: u32, x: u32, y: u32, companion: u32, 
     e.call(TILE_SET_INT, &args![label, 0xfaau32, 0x26u32]);
     let depth = float_constant(e, TWO_FLOAT);
     e.call(TILE_SET_FLOAT, &args![label, 0xfadu32, depth, 1u32]);
-    if !refresh && e.stewie(stewie_menus::MAP_COMPANION_LABEL_CLIPS) {
-        // 0x79F1D7 (AddCompanionMarkers' label): lStewieAl's Tweaks' row S0022.26 (`MenuFixes`,
-        // "set the 'clips' tilevalue for companion names on the world map") calls its
-        // `OnInitCompanionTile` in place of the int setter: `visible` set to 1.0, then `clips`
-        // (0xFAE) to 1.0, which the game sets only when the map is zoomed.
-        e.call(
-            TILE_SET_FLOAT,
-            &args![label, 0xfa3u32, 1.0f32.to_bits(), 1u32],
-        );
-        e.call(
-            TILE_SET_FLOAT,
-            &args![label, 0xfaeu32, 1.0f32.to_bits(), 1u32],
-        );
-    } else {
-        e.call(TILE_SET_INT, &args![label, 0xfa3u32, 1u32]);
-    }
+    e.call(TILE_SET_INT, &args![label, 0xfa3u32, 1u32]);
     if refresh {
         e.call(TILE_SET_INT, &args![label, 0xfaeu32, 1u32]);
     }
@@ -8114,9 +8069,6 @@ pub fn map_menu_add_companion_markers(e: &mut Engine, this: Ptr<MapMenu>) {
     // tiles get reset when refreshing the map menu") calls its `OnResetCompanionTiles` in place of
     // the first child lookup of the loop below: the companions' marker tiles go first, then the
     // lookup is made as the exe makes it (the loop's later lookups, `0x79EAF3`, are the exe's).
-    if e.stewie(stewie_menus::MAP_COMPANION_MARKERS_RESET) {
-        stewie_remove_companion_markers(e, this);
-    }
     remove_map_children(e, this, 0x25);
     remove_map_children(e, this, 0x26);
     let player = e.mem.u32(PLAYER_011DEA3C);

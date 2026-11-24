@@ -378,30 +378,6 @@ pub fn ni_switch_node_on_visible(e: &mut Engine, this: Ptr<NiSwitchNode>, cullin
 /// child has none); with no selected child the bound's radius is set to 0.
 pub fn ni_switch_node_update_world_bound(e: &mut Engine, this: Ptr<NiSwitchNode>) {
     // lStewieAl's Tweaks' S0237 (its jump at the entry, `0xA93F90`): `NiSwitchNode__UpdateWorldBound`.
-    if e.stewie(engine_core::extend::stewie::SWITCH_NODE_BOUNDS) {
-        let flags = e.get(this, NiSwitchNode::m_uFlagsAV);
-        if flags & FIXED_BOUND != 0 || flags & ORPHANED_BOUND == 0 {
-            return;
-        }
-        if e.get(this, NiSwitchNode::m_uFlags) & 1 == 0 {
-            e.call(NI_NODE_UPDATE_WORLD_BOUND, &args![this]);
-            return;
-        }
-        e.call(CREATE_BOUND_IF_NONE, &args![this]);
-        // Tweaks' `GetAt(m_iIndex)`: no test of the index, so with no shown child (-1, the
-        // constructor's) it reads the word before the children and past them a stale slot. A
-        // Tweaks slip not copied with the missing-data guard: such an index is no child.
-        let index = e.get(this, NiSwitchNode::m_iIndex);
-        let child = if e.stewie_slip_guard() && !index_in_children(e, this, index) {
-            0
-        } else {
-            child_at(e, this, index)
-        };
-        if child != 0 && is_visual_object(e, child) {
-            copy_child_bound(e, this, child);
-        }
-        return;
-    }
     if e.get(this, NiSwitchNode::m_uFlags) & 1 == 0 {
         e.call(NI_NODE_UPDATE_WORLD_BOUND, &args![this]);
         return;
@@ -437,12 +413,7 @@ pub fn ni_switch_node_is_equal(
 /// child's bound.
 fn after_child_update(e: &mut Engine, this: Ptr<NiSwitchNode>, index: i32, child: u32) {
     record_revision(e, this, index);
-    // lStewieAl's Tweaks' S0237 (its jumps at `0xA940DE`, `0xA941D8`, `0xA942B7`).
-    if e.stewie(engine_core::extend::stewie::SWITCH_NODE_BOUNDS) {
-        switch_world_bound(e, this, child);
-    } else {
-        take_bound_from(e, this, child);
-    }
+    take_bound_from(e, this, child);
 }
 
 // Translated from 00a94040 (decompiled, FalloutNV.exe 1.4.0.525)

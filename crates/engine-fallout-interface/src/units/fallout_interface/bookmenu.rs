@@ -464,20 +464,6 @@ pub fn book_menu_close(e: &mut Engine, this: Ptr<BookMenu>) {
     }
     e.call(TILE_SET_INT, &args![tile, 0x1772u32, 1u32]);
     let menu = e.call(TILE_GET_MENU, &args![tile]).u32();
-    if e.stewie(engine_core::extend::stewie::BOOK_CLOSE_DEBOUNCE) {
-        // lStewieAl's Tweaks' S0022.10 (`BookMenuClose_DebounceMenumodeKey` in place of the call
-        // at `0x73B4C4`): the menu-mode control held (`GetControlState(MenuMode, isHeld)`) while
-        // the Pip-Boy state is not 0 sets the input's menu-mode debounce, so the same press does not
-        // close the Pip-Boy behind the book.
-        let input = e.global::<u32>(engine_core::extend::stewie::INPUT_GLOBALS);
-        let manager = e.global::<u32>(INTERFACE_MANAGER_SINGLETON);
-        if e.call(GET_CONTROL_STATE, &args![input, 0xeu32, 0u32])
-            .bool()
-            && e.mem.u32(manager.wrapping_add(0x4bc)) != 0
-        {
-            engine_core::extend::stewie::set_debounce_menu_mode(e);
-        }
-    }
     e.call(MENU_START_FADE_OUT, &args![menu]);
     let book = e.get(this, BookMenu::pBook);
     let sound = if e.call(BOOK_TEST_00409700, &args![book]).bool() {

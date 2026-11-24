@@ -2020,13 +2020,6 @@ const ACTIVE_TILE_ALT: u32 = 0xbc;
 /// the mouse not moved since the keys were used (the interface manager's +0xED), the tile the
 /// child is looked up on becomes the interface manager's `activeTileAlt` (+0xBC) first.
 pub fn stewie_arrow_selects(e: &mut Engine, tile: u32) {
-    if e.stewie(engine_core::extend::stewie::LEVEL_UP_ARROWS_SELECT) {
-        use super::mapmenu::stewie_menus::{HAS_MOUSE_MOVED, INTERFACE_MANAGER};
-        let manager = e.mem.u32(INTERFACE_MANAGER);
-        if e.mem.u8(manager.wrapping_add(HAS_MOUSE_MOVED)) == 0 {
-            e.mem.set_u32(manager.wrapping_add(ACTIVE_TILE_ALT), tile);
-        }
-    }
 }
 
 /// [`level_up_menu_do_gamepad`]'s arrow buttons on the skills page: with a

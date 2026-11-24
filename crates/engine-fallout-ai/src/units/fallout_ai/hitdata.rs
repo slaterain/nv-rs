@@ -1063,15 +1063,6 @@ pub fn hit_data_determine_outcome(e: &mut Engine, this: Ptr<HitData>) {
     // called at `0x9B754A`): the multiplier is also scaled by the player's difficulty's
     // `fDiffMultHPByPC` (the setting pointers at `0119b324` indexed by the player's difficulty at
     // +0x7B8, the value at +4), so the kill test sees the damage the hit will really do.
-    if e.stewie(engine_core::extend::stewie::VATS_FATAL_CHECK_DIFFICULTY) {
-        let player = e.global::<u32>(0x011d_ea3c);
-        let difficulty = e.mem.u32(player + 0x7b8);
-        let setting = e
-            .mem
-            .u32(0x0119_b324u32.wrapping_add(difficulty.wrapping_mul(4)));
-        let multiplier = e.mem.u32(setting + 4);
-        shots = x87_store32(x87_mul(x87_load32(multiplier), x87_m32(shots)));
-    }
     let mut chance = 0u32;
     let mut sure = false;
     let mut explodes = 0u8;

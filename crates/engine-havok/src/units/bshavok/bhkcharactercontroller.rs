@@ -1343,12 +1343,6 @@ pub fn fn_00c6d7e0(e: &mut Engine, shape: u32, check: u8, fallback: u8, layer: i
     if hk == 0 {
         return check;
     }
-    if e.stewie(engine_core::extend::stewie::STAIR_MATERIAL) {
-        // lStewieAl's Tweaks' S0216 (its bytes at `0xC6D80B`): the stair bit of the touched part
-        // (`GetSubMaterialVarType(key, 0x40)`, or the shape's own word for key -1) in place of the
-        // material number and the callback; a stair-marked shape does not block.
-        return u8::from(!stair_bit(e, hk, layer));
-    }
     let number = if layer == -1 {
         e.mem.u32(hk + 0x10) & 0x1f
     } else {
@@ -2131,10 +2125,6 @@ pub fn fn_00c6e980(e: &mut Engine, this: Ptr<Ctl>, info: u32) {
         }
     }
     copy_words(e, this.addr() + Ctl::hkSupportVelocity.off, velocity, 4);
-    // lStewieAl's Tweaks' S0216 replaces the function whole (`WriteRelJumpEx(0xC6E980,
-    // SetSupportMaterial)`): the same reads and stores, and flag 0x1000000 (`kOnStairs`) follows
-    // the touched part's stair bit instead of the callback.
-    let stairs_row = e.stewie(engine_core::extend::stewie::STAIR_MATERIAL);
     let mut on_stairs = false;
     let key = e.mem.i32(info + 0x4c);
     if key == -1 {
@@ -2150,10 +2140,6 @@ pub fn fn_00c6e980(e: &mut Engine, this: Ptr<Ctl>, info: u32) {
         let source = e.call(BODY_MATERIAL_SOURCE, &args![body]).u32();
         if source != 0 {
             material = e.vcall(source, 0xe0, &args![key as u32]).u32();
-            if stairs_row {
-                on_stairs =
-                    super::bhkshape::stair_sub_material_var_type(e, source, key as u32, STAIR_FLAG);
-            }
         }
     }
     if e.get(this, Ctl::eSupportMaterial) != 0x24 && material != 0xf {
@@ -2161,9 +2147,7 @@ pub fn fn_00c6e980(e: &mut Engine, this: Ptr<Ctl>, info: u32) {
     }
     e.set(this, Ctl::eSupportMaterial, material);
     let callback: u32 = e.global(LAYER_CALLBACK);
-    let blocked = if stairs_row {
-        u8::from(on_stairs)
-    } else if callback != 0 {
+    let blocked = if callback != 0 {
         e.call(callback, &args![material]).u8()
     } else {
         0
@@ -2262,12 +2246,7 @@ fn is_step(e: &mut Engine, this: Ptr<Ctl>, point: u32, f: u32) -> bool {
         let terrain_shape = e.mem.u32(collidable_b);
         let terrain = fn_00c6ead0(e, terrain_shape);
         let hk = hk_of(e, terrain);
-        if hk != 0 && e.stewie(engine_core::extend::stewie::STAIR_MATERIAL) {
-            // lStewieAl's Tweaks' S0216 (its bytes at `0xC6EBAB`): a stair-marked part of the
-            // terrain shape is a step at once; the callback is not asked.
-            let key = e.mem.i32(point + 0x4c);
-            result = stair_bit(e, hk, key);
-        } else if hk != 0 {
+        if hk != 0 {
             let key = e.mem.i32(point + 0x4c);
             let layer = if key == -1 {
                 e.mem.u32(hk + 0x10) & 0x1f

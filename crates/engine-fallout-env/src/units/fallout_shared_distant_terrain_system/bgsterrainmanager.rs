@@ -394,10 +394,6 @@ pub fn bgs_terrain_manager_hide_tree(
 ) {
     // lStewieAl's Tweaks' S0050 (its jump at the entry, `0x6FCFA0`): no manager (the reference's LOD
     // disabled by a plugin) prints Tweaks' line and does nothing.
-    if this.is_null() && e.stewie(engine_core::extend::stewie::LOD_DATA_MISSING_WARNING) {
-        engine_core::extend::stewie::lod_warning(e, tree);
-        return;
-    }
     let tree_key = e.call(REFERENCE_FORM_KEY, &args![tree]).u32();
     let block_key = e.vcall(tree, 0x1f4, &[]).u32();
     let block = fn_006fcef0(e, this, block_key);

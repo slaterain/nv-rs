@@ -350,11 +350,7 @@ const STATIC_GUARD: u32 = 0x011f_201c;
 /// `fCombatMissileImpaleDepth`'s own value (the setting at `011ce1e8`, value at +4) instead, so a
 /// change of the setting after the first projectile counts.
 fn impale_depth_word(e: &mut Engine) -> u32 {
-    if e.stewie(engine_core::extend::stewie::COMBAT_MISSILE_DEPTH_SETTINGS) {
-        e.mem.u32(SETTING_011CE1E8 + 4)
-    } else {
-        e.mem.u32(STATIC_FLOAT)
-    }
+    e.mem.u32(STATIC_FLOAT)
 }
 /// `0042ce10` (unnamed, `extradatalist.cpp`): `thiscall` on the object at `0x011ddf38`; a
 /// `bool`.
@@ -929,10 +925,6 @@ fn fn_009b90b0_cut(e: &mut Engine, this: Ptr, in_vats: bool) -> CutEnd {
         // 009b9387: lStewieAl's Tweaks' row S0106 (`patchFixNullHitLocationNodeExplosionCrash`):
         // with no limb node the scale is not asked (the exe asks the null node's scale first, then
         // takes this branch).
-        if e.stewie(stewie::NULL_HIT_LOCATION_NODE_EXPLOSION) && limb == 0 {
-            e.mem.set_u8(p + 0x90, 0);
-            return CutEnd::Done;
-        }
         let scale = x87_store32(e.call(NODE_SCALE, &args![limb]).f64());
         if limb == 0 {
             e.mem.set_u8(p + 0x90, 0);

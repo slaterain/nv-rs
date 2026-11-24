@@ -121,14 +121,7 @@ pub fn combat_procedure_use_combat_item_update(e: &mut Engine, this: Ptr) {
         }
     }
     let item = e.mem.u32(me + USE_ITEM);
-    // lStewieAl's Tweaks' row S0214 (`CombatItemCooldownFix`, the call at `0x9DAB61`): Tweaks'
-    // routine restarts a restore item's timer with `fCombatItemRestoreTimer`, where the exe's
-    // `0099a840` gives it `fCombatItemBuffTimer`.
-    if e.stewie(engine_core::extend::stewie::COMBAT_ITEM_COOLDOWN) {
-        super::combatstate::combat_state_set_restore_and_buff_item_timers(e, Ptr::new(state), item);
-    } else {
-        e.call(0x0099_a840, &args![state, item]);
-    }
+    e.call(0x0099_a840, &args![state, item]);
     let item = e.mem.u32(me + USE_ITEM);
     if e.call(0x0040_1170, &args![item]).u32() == 0x2f {
         let item = e.mem.u32(me + USE_ITEM);

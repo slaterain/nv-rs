@@ -383,12 +383,6 @@ fn update_moving(e: &mut Engine, this: Ptr, time_bits: u32, zero: f64) {
     // `Projectile__Sync3DWithReference` drops the arc reorientation for a projectile whose base
     // (`baseForm`, +0x20) has the rotation flag (`BGSProjectile` flags +0x60, 0x800).
     let mut reorient = !stopped;
-    if e.stewie(engine_core::extend::stewie::THROWABLE_ROTATION) {
-        let base_form = e.mem.u32(this.addr() + 0x20);
-        if e.mem.u16(base_form + 0x60) & 0x800 != 0 {
-            reorient = false;
-        }
-    }
     e.call(
         SYNC_3D_WITH_REFERENCE,
         &args![this, u32::from(far_from_target), u32::from(reorient)],

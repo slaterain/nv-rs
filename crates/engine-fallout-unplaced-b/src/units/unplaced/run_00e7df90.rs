@@ -799,13 +799,7 @@ pub fn fn_00e7ea00(e: &mut Engine, this: Ptr<NiD3DTextureStage>) {
 pub fn fn_00e7eb00(e: &mut Engine, this: Ptr<NiD3DTextureStage>, force: u8) -> bool {
     let stage = e.get(this, NiD3DTextureStage::m_uiStage);
     let texture = e.get(this, NiD3DTextureStage::m_spTexture).addr();
-    // lStewieAl's Tweaks' S0225 (`SamplerStateLeakFix`, `ConfigureStage`): the early answer also needs
-    // the stage's wrap and clamp to be the device's already.
-    if force == 0
-        && texture == e.mem.u32(SHADOWED_TEXTURES + stage.wrapping_mul(4))
-        && !(e.stewie(engine_core::extend::stewie::SAMPLER_STATE_LEAK)
-            && engine_core::extend::stewie::sampler_state_changed(e, this.addr()))
-    {
+    if force == 0 && texture == e.mem.u32(SHADOWED_TEXTURES + stage.wrapping_mul(4)) {
         return true;
     }
     e.mem

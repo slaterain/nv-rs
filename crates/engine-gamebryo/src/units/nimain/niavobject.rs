@@ -1381,9 +1381,6 @@ pub fn ni_av_object_get_viewer_strings(
                 node = e.mem.u32(node);
                 // lStewieAl's Tweaks' row S0199.09 (`MiscCrashFixes`, the jump at `0xA5B0C8`): an empty
                 // entry of the property list is passed over.
-                if property == 0 && e.stewie(engine_core::extend::stewie::SHOW_SCENE_GRAPH_NULL) {
-                    continue;
-                }
                 let rtti = e.vcall(property, SLOT_GET_RTTI, &args![]).u32();
                 let name = e.mem.u32(rtti);
                 let text = e.call(VIEWER_STRING_POINTER, &args![name, property]).u32();

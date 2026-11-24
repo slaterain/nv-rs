@@ -1289,14 +1289,7 @@ pub fn companion_wheel_menu_do_use_stim(e: &mut Engine, this: Ptr<CompanionWheel
                 )
                 .u32();
             let companion = e.mem.u32(base + 0x68);
-            // lStewieAl's Tweaks' row S0199.08 (`MiscCrashFixes`, the call at `0x756771`): the stimpak's
-            // effect is cast without `DrinkPotion`'s removal of the item from the companion (the
-            // player's is removed below).
-            if e.stewie(engine_core::extend::stewie::COMPANION_STIMPAK_REMOVED_TWICE) {
-                companion_use_stimpak(e, companion, potion);
-            } else {
-                e.call(ACTOR_DRINK_POTION, &args![companion, potion, extra, 1u32]);
-            }
+            e.call(ACTOR_DRINK_POTION, &args![companion, potion, extra, 1u32]);
         }
         let extra = entry_extra(e, entry);
         let form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, entry));

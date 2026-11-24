@@ -401,10 +401,6 @@ pub fn fn_00683900(
     e.set(this, BSTempEffectGeometryDecal::pTextureSet, texture_set);
     // lStewieAl's Tweaks' S0238 (its jump at `0x683A3D`): the creation data's subtexture index
     // (`+0x70`) kept in the decal's spare byte `+0x29`.
-    if e.stewie(engine_core::extend::stewie::SKINNED_DECAL_SUBTEXTURE) {
-        let subtexture = e.mem.u8(creation_data.wrapping_add(0x70));
-        e.mem.set_u8(base + DECAL_SUBTEXTURE, subtexture);
-    }
     this
 }
 
@@ -1136,11 +1132,6 @@ pub fn fn_00687d90(
             };
             // lStewieAl's Tweaks' S0238 (its jump at `0x687E9B`): the decal's subtexture index to
             // the new shader property.
-            if e.stewie(engine_core::extend::stewie::SKINNED_DECAL_SUBTEXTURE) {
-                let subtexture = e.mem.u8(base + DECAL_SUBTEXTURE);
-                e.mem
-                    .set_u8(property.wrapping_add(PROPERTY_SUBTEXTURE), subtexture);
-            }
             e.call(ATTACH_PROPERTY_00439410, &args![shape, property]);
             e.call(
                 PROPERTY_SET_FLOAT_004EE4B0,

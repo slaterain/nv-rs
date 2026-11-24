@@ -270,9 +270,6 @@ pub fn get_screenshot(e: &mut Engine, this: Ptr<BGSSaveLoadFileEntry>) -> u32 {
         e.call(0x0084dab0, &args![file, this]);
         mark_bad_header(e, this);
         e.set(this, BGSSaveLoadFileEntry::bLoaded, 1);
-        if e.stewie(engine_core::extend::stewie::CUSTOM_SAVE_NAME_SHOWN) {
-            custom_name_as_location(e, this);
-        }
     }
     let mut result = 0;
     if e.get(this, BGSSaveLoadFileEntry::iScreenshotWidth) != 0

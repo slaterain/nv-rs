@@ -14,10 +14,6 @@ const MINUS_ONE: u32 = 0x0101_2054;
 pub fn fn_008d4e80(e: &mut Engine, this: Ptr) {
     // lStewieAl's Tweaks' row S0229 (`ArmorUpdateFix`, `WriteRelJump(0x8D4E80,
     // ResetArmorRating)`): Tweaks' function in place of the whole of this one.
-    if e.stewie(engine_core::extend::stewie::ARMOR_UPDATE) {
-        reset_armor_rating(e, this.addr());
-        return;
-    }
     let minus_one: f32 = e.global(MINUS_ONE);
     e.mem.set_f32(this.addr() + 0x1b8, minus_one);
     e.mem.set_f32(this.addr() + 0x1bc, minus_one);
@@ -99,9 +95,6 @@ pub fn fn_008d4cc0(e: &mut Engine, this: u32) -> f32 {
     // Creature__GetTotalArmorDR)`): Tweaks puts its routine in `Creature`'s vtable slot at
     // `010874E8`, the one reference the exe has to this function (Ghidra's references to
     // `008d4cc0`: that data word only), so taking the routine here is the same change.
-    if e.stewie(engine_core::extend::stewie::CREATURE_DR) {
-        return creature_get_total_armor_dr(e, this);
-    }
     let stored = e.mem.u32(this + 0x1b8);
     // FCOMP; TEST AH,0x1; JNZ: below or unordered recomputes.
     if x87_load32(stored) >= e.mem.f64(ZERO_DOUBLE) {

@@ -2654,9 +2654,6 @@ fn update_root_with_time(e: &mut Engine, this: Ptr<Animation>, time: f32, first_
 /// (+0x384). The exe asks it even with no weapon. lStewieAl's Tweaks' row S0172
 /// (`IsReloadLoopNullCheck`) answers false for no weapon.
 fn reload_loop_flag(e: &mut Engine, weapon: u32) -> bool {
-    if e.stewie(engine_core::extend::stewie::ANIM_DATA_RELOAD_LOOP_NULL) && weapon == 0 {
-        return false;
-    }
     e.call(PROCESS_FLAG_BYTE, &args![weapon]).bool()
 }
 
@@ -2673,32 +2670,6 @@ const SEQUENCE_NAME: u32 = 0x08;
 /// Tweaks' `snprintf` does, then printed as `%s`).
 fn movement_interpolator(e: &mut Engine, sequence: u32) -> u32 {
     use engine_core::extend::stewie;
-    if e.stewie(stewie::ANIM_DATA_MOVEMENT_SEQUENCE)
-        && e.mem.u32(sequence + SEQUENCE_BLOCK_COUNT) == 0
-    {
-        if e.stewie_once(stewie::once::MOVEMENT_SEQUENCE) {
-            let text = |e: &Engine, at: u32| {
-                if at == 0 {
-                    b"(null)".to_vec()
-                } else {
-                    e.mem.cstr(at)
-                }
-            };
-            let mut line = b"Failed to resolve movement sequence for: ".to_vec();
-            line.extend(text(e, e.mem.u32(sequence + SEQUENCE_ACCUM_ROOT_NAME)));
-            line.extend_from_slice(b" - ");
-            line.extend(text(e, e.mem.u32(sequence + SEQUENCE_NAME)));
-            line.truncate(0x7f);
-            e.with_stack(0x80, |e, buffer| {
-                for (i, b) in line.iter().enumerate() {
-                    e.mem.set_u8(buffer.addr() + i as u32, *b);
-                }
-                e.mem.set_u8(buffer.addr() + line.len() as u32, 0);
-                stewie::console_print(e, b"%s", &[buffer.addr()]);
-            });
-        }
-        return 0;
-    }
     e.call(SEQUENCE_INTERPOLATOR_AT, &args![sequence, 0u32])
         .u32()
 }
@@ -5501,12 +5472,7 @@ pub fn fn_00496a50(e: &mut Engine, idle: Ptr<AnimIdle>) {
             let animation = e.vcall(actor.addr(), SLOT_ACTOR_ANIMATION, &args![]).u32();
             if animation != 0 {
                 let add_on = ni_pointer_get(e, slot);
-                // lStewieAl's Tweaks' row S0181 (`OnAnimDataRemoveNode`, `0x496B6C`): an add-on
-                // that is already gone is not removed from the animation's controllers.
-                if !(e.stewie(engine_core::extend::stewie::NULL_ANIM_REMOVE_RECURSE) && add_on == 0)
-                {
-                    e.call(ANIMATION_ADD_ON_REMOVED, &args![animation, add_on]);
-                }
+                e.call(ANIMATION_ADD_ON_REMOVED, &args![animation, add_on]);
             }
         }
         if e.call(TASK_QUEUE_ACTIVE, &args![]).bool() {

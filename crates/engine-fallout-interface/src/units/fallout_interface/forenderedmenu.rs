@@ -1205,21 +1205,7 @@ pub fn fo_rendered_menu_clear_menu_light(e: &mut Engine, this: Ptr<FORenderedMen
         let light = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, base + 0x1c));
         e.vcall(parent, 0xe8, &args![light]);
     }
-    // `0x7FC761` (lStewieAl's Tweaks' S0107.05 calls `MemoryLeakFixes::DetachMenuLight` there):
-    // the light, detached first from the node it still hangs on (its `m_parent` +0x18,
-    // `NiNode::DetachChild`, slot +0xE8), so the menu's next light is not added beside it.
-    let light = if e.stewie(engine_core::extend::stewie::PIPBOY_LIGHT_DETACHED) {
-        let light = e.mem.u32(base + 0x1c);
-        if light != 0 {
-            let parent = e.mem.u32(light + 0x18);
-            if parent != 0 {
-                e.vcall(parent, 0xe8, &args![light]);
-            }
-        }
-        light
-    } else {
-        typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, base + 0x1c))
-    };
+    let light = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, base + 0x1c));
     let node = e.get(this, FORenderedMenu::pLightShadowSceneNode);
     e.call(SHADOW_SCENE_NODE_REMOVE_LIGHT, &args![node, light]);
     e.call(POINTER_SET, &args![base + 0x1c, 0u32]);

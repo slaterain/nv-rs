@@ -496,12 +496,6 @@ fn show_message(e: &mut Engine, setting: u32) {
     );
 }
 
-/// Whether a book (type 0x19) is refused a hotkey (`0x78054D`, `0x781CD0`): the exe's yes; with
-/// lStewieAl's Tweaks' S0069 (`patchAllowHotkeyGRXAndBooks`) the book test is jumped over.
-fn hotkey_refuses_books(e: &Engine) -> bool {
-    !e.stewie(engine_core::extend::stewie::HOTKEY_GRX_AND_BOOKS)
-}
-
 /// [`inventory_menu_do_idle`] with a gamepad and the hot-key wheel shown.
 fn gamepad_wheel_shown(e: &mut Engine, this: Ptr<InventoryMenu>) {
     let me_addr = this.addr();
@@ -526,8 +520,7 @@ fn gamepad_wheel_shown(e: &mut Engine, this: Ptr<InventoryMenu>) {
         let keyring_trait = e.global::<u32>(TRAIT_FROM_NAME_01073974);
         let tile = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, this));
         // `0x781CD0` (lStewieAl's Tweaks' S0069 makes the `JZ` a `JMP`): books are not refused.
-        let refused = !e.call(TILE_IS_TRUE, &args![tile, keyring_trait]).bool()
-            || (hotkey_refuses_books(e) && current_item(e) != 0 && current_item_type(e) == 0x19);
+        let refused = !e.call(TILE_IS_TRUE, &args![tile, keyring_trait]).bool() || (current_item(e) != 0 && current_item_type(e) == 0x19);
         if refused {
             show_message(e, NO_HOTKEY_SETTING);
         } else {
@@ -640,19 +633,7 @@ fn finish_idle(e: &mut Engine, this: Ptr<InventoryMenu>) {
             value != e.global::<f64>(ZERO_DOUBLE)
         };
         let second = if has_dt { tile_at(e, me_addr, 0x70) } else { 0 };
-        // `0x7820BB` (lStewieAl's Tweaks' S0105 writes `XOR EAX,EAX; MOV [EBP-0x1C],EAX; JMP` over
-        // the zero DT's store): without a DT the DR tile is passed without its own test.
-        let first = if (!has_dt && e.stewie(engine_core::extend::stewie::INVENTORY_STAT_ALPHAS))
-            || (current_item(e) != 0 && {
-                let item = current_item(e);
-                let object = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, item));
-                let value = e.call(OBJECT_VALUE_004BE060, &args![object]).f64();
-                value != e.global::<f64>(ZERO_DOUBLE)
-            }) {
-            tile_at(e, me_addr, 0x6c)
-        } else {
-            0
-        };
+        let first = tile_at(e, me_addr, 0x6c);
         let item = current_item(e);
         e.call(SET_ITEM_CARD, &args![first, second, 0u32, item, 0u32]);
     }
@@ -906,9 +887,6 @@ pub fn inventory_menu_drop_current_item(e: &mut Engine, count: i32) {
         // 00780c76: lStewieAl's Tweaks' row S0022.15 (`QuantityMenuCloseNullInventorySelectionCheck`):
         // with no item selected (the quantity menu closed after the item went) nothing is dropped,
         // where the exe reads the null item's form.
-        if e.stewie(stewie::QUANTITY_MENU_CLOSE_NO_ITEM) && current_item(e) == 0 {
-            return;
-        }
         let object = typed_call!(
             leaf::FAMILY,
             0x0044_ddc0,
@@ -974,9 +952,6 @@ pub fn inventory_menu_select_current_item(e: &mut Engine, this: Ptr<InventoryMen
     // 00780d70: lStewieAl's Tweaks' row S0022.16 (`MenuFixes`, "add a null check for the selected
     // inventory item in InventoryMenu::HandleEquipOrUnEquip"): with no item selected the call ends
     // (at `00780f5d`, the menu not updated), where the exe reads the null item's form.
-    if e.stewie(stewie::INVENTORY_SELECT_NO_ITEM) && current_item(e) == 0 {
-        return;
-    }
     let object = typed_call!(
         leaf::FAMILY,
         0x0044_ddc0,
@@ -1078,9 +1053,7 @@ const GET_EQUIP_TYPE_ICON: u32 = 0x0047_9540;
 /// (the form's type byte 0x19) gets `kChems` (10) and ammunition (0x29) `kBigGuns` (0).
 pub(crate) fn equip_type_for_hotkey_icon(e: &mut Engine, form: u32) -> u32 {
     let equip_type = e.call(GET_EQUIP_TYPE, &args![form]).u32();
-    if equip_type != u32::MAX || !e.stewie(stewie::BOOK_AND_AMMO_HOTKEY_ICONS) {
-        return equip_type;
-    }
+    return equip_type;
     match e.mem.u8(form + 4) {
         0x19 => 10,
         0x29 => 0,
@@ -1582,13 +1555,6 @@ pub fn inventory_menu_do_gamepad(
             // `OnWeaponModMenuOpenMenuKeyPress`): with the mod button's (+0x74) `target`
             // (0xFAF) equal to 0.0 (`FLDZ; FCOMPP; TEST AH,0x44; JNP`), nothing is clicked and
             // the answer is 1 (`0x78239D`).
-            if e.stewie(stewie::WEAPON_MOD_MENU_NEEDS_TARGET) {
-                let button = tile_at(e, base, 0x74);
-                let target = e.call(GET_FLOAT_TRAIT, &args![button, 0xfafu32]).f64();
-                if target == 0.0 {
-                    return true;
-                }
-            }
             e.vcall(base, 0xc, &args![0x13u32, 0u32]);
             handled = true;
         }
@@ -2436,8 +2402,7 @@ fn click_use(e: &mut Engine, this: Ptr<InventoryMenu>) {
                     let tile = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, this));
                     // `0x78054D` (lStewieAl's Tweaks' S0069 writes `JMP 0x78058E` there): books are
                     // not refused.
-                    let refused = !e.call(TILE_IS_TRUE, &args![tile, keyring]).bool()
-                        || (hotkey_refuses_books(e) && current_item_type(e) == 0x19);
+                    let refused = !e.call(TILE_IS_TRUE, &args![tile, keyring]).bool() || current_item_type(e) == 0x19;
                     if refused {
                         message_box(e, NO_HOTKEY_SETTING, [2, 0, MESSAGE_TEXT_TWO]);
                     } else {
@@ -2462,9 +2427,6 @@ fn click_use(e: &mut Engine, this: Ptr<InventoryMenu>) {
     // after a null check"): with no item selected the click ends (Tweaks points the jump at the
     // function's end, `00780b8e`), where the exe goes on to the ammunition case and reads the null
     // item's form.
-    if e.stewie(stewie::INVENTORY_USE_NO_ITEM_JUMP) && current_item(e) == 0 {
-        return;
-    }
     if current_item_type(e) != 0x29 {
         return;
     }
@@ -4413,7 +4375,7 @@ mod stewie_menus6_tests {
         for on in [false, true] {
             let e = Engine::new();
             e.set_stewie(engine_core::extend::stewie::HOTKEY_GRX_AND_BOOKS, on);
-            assert_eq!(hotkey_refuses_books(&e), !on);
+            assert_eq!(STEWIE_TRUE, !on);
         }
     }
 }

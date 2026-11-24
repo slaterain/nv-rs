@@ -1034,12 +1034,6 @@ pub fn path_location_resolve_nav_mesh_info(
         e.set(this, PathingLocation::usTriangle, NO_TRIANGLE);
         path_location_set_chosen_by_position(e, this, 1);
         true
-    } else if without_bounds == NOT_FOUND
-        && e.stewie(engine_core::extend::stewie::NAV_MESH_INFO_RESOLVE)
-    {
-        // lStewieAl's Tweaks' S0235 (its jump at `0x6DDB91`): no candidate without bounds either;
-        // the resolve fails (false) instead of reading the list at -1.
-        false
     } else {
         let chosen = array_pointer(e, list, without_bounds);
         set_word(e, this, NAV_MESH, chosen);

@@ -1835,14 +1835,10 @@ pub fn tes_object_refr_get_target_type(e: &mut Engine, this: Ptr) -> u32 {
                 return 2;
             }
             let process = e.call(0x0041_81e0, &args![actor]).u32();
-            let pickpocket_row = e.stewie(engine_core::extend::stewie::CREATURE_PICKPOCKET_PROMPT);
             if !e.vcall(process + 0x30, 0x18, &args![]).bool() {
                 // `0x57951C` (lStewieAl's Tweaks' S0022.51 calls `HUDGetTargetTypeHook` there): a
                 // creature without dialogue that can be pickpocketed answers Tweaks'
                 // `GetCreaturePickpocketPrompt` from the function's exit.
-                if pickpocket_row && e.vcall(process + 0x30, 0x1c, &args![]).bool() {
-                    return stewie_creature_pickpocket_prompt(e, process + 0x30, player);
-                }
                 return 0;
             }
             if e.call(0x0087_f3d0, &args![actor]).bool() {
@@ -1851,7 +1847,7 @@ pub fn tes_object_refr_get_target_type(e: &mut Engine, this: Ptr) -> u32 {
             // `0x579546` (S0022.51's `HUDGetTargetTypeHook2`): sneaking shows Pickpocket only for
             // a creature that can be pickpocketed (`GetAllowPickpocket`, slot +0x1C).
             if e.call(0x0049_97b0, &args![player]).bool()
-                && (!pickpocket_row || e.vcall(process + 0x30, 0x1c, &args![]).bool())
+                && (!STEWIE_FALSE || e.vcall(process + 0x30, 0x1c, &args![]).bool())
             {
                 1
             } else {
@@ -2033,9 +2029,6 @@ pub fn fn_00579690(e: &mut Engine, this: Ptr) -> bool {
 /// (`[EBP-0x44]`): a creature at an address whose low byte is 0 answers no without the call, as
 /// in Tweaks.
 fn creature_activation_question(e: &mut Engine, creature: u32) -> bool {
-    if e.stewie(engine_core::extend::stewie::CREATURE_PICKPOCKET_PROMPT) {
-        return creature & 0xff != 0 && e.vcall(creature + 0x30, 0x1c, &args![]).bool();
-    }
     e.vcall(creature + 0x30, 0x18, &args![]).bool()
 }
 
@@ -2595,9 +2588,6 @@ pub fn fn_0057ab70(e: &mut Engine) {
         // is an uninitialised word of the caller's frame (this function takes no arguments), so in
         // a frame where it happens to be 0 a game running Tweaks skips the whole queued multibound
         // batch. The port does not copy that; the exe's value check is kept above.)
-        if e.stewie(stewie::HANDLE_MULTIBOUNDS_NULL_CELL) && e.mem.u32(reference + 0x40) == 0 {
-            continue;
-        }
         let same_cell = model_of(e, reference) != 0 && {
             let cell = parent_cell_of(e, reference);
             let from_cell = e.call(0x0054_97a0, &args![cell]).u32();

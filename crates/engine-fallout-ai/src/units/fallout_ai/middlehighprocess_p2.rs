@@ -1500,18 +1500,7 @@ pub fn middle_high_process_load_game_ov2(
             // the "Lily" creature; otherwise (and for a missing item
             // change or model) look at the "Lily" case below.
             let mut equipped = false;
-            // lStewieAl's Tweaks' row S0089.06 (`RememberAmmoCountOnLoad`, the call at `0x927591` and
-            // the jump at `0x927596`): Tweaks' `Get3D_OrIsPlayer` answers 1 for the player, whose 3D
-            // is not there yet on the first load, so its weapon is equipped (the 3D slot `+0x1D0`
-            // is not asked).
-            let has_3d = if item != 0
-                && e.stewie(engine_core::extend::stewie::LOAD_GAME_PLAYER_WEAPON_WITHOUT_3D)
-                && actor == e.global::<u32>(PLAYER)
-            {
-                true
-            } else {
-                item != 0 && e.vcall(actor, 0x1d0, &[]).u32() != 0
-            };
+            let has_3d = item != 0 && e.vcall(actor, 0x1d0, &[]).u32() != 0;
             if has_3d {
                 let skip = e.vcall(actor, 0x21c, &[]).bool() && name_has_lily(e, actor);
                 if !skip {
@@ -1520,13 +1509,6 @@ pub fn middle_high_process_load_game_ov2(
                     // lStewieAl's Tweaks' row S0089.01 (the call at `0x9275EA`): Tweaks'
                     // `InitActorAmmoCountFromSaveHook` keeps the player's saved count of loaded
                     // rounds for S0089.07 (the count plus one; 0 is Tweaks' -1, none).
-                    if e.stewie(engine_core::extend::stewie::AMMO_COUNT_FROM_SAVE)
-                        && actor == e.global::<u32>(PLAYER)
-                    {
-                        let kept =
-                            e.stewie_kept(engine_core::extend::stewie::kept::SAVED_AMMO_COUNT, 4);
-                        e.mem.set_u32(kept, remembered.wrapping_add(1));
-                    }
                     let process =
                         typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, actor));
                     e.vcall(process, 0x168, &args![0u32]);
@@ -3863,9 +3845,6 @@ pub fn middle_high_process_process_patrol_traveling_to_next_ref(
     // 0092b074: lStewieAl's Tweaks' row S0140 (`patchFixPatrolMissingNullCheck`): with no patrol
     // reference the call ends (Tweaks moves the jump's target to the function's end, `0092b430`),
     // where the exe goes on to measure the offset to the null reference.
-    if e.stewie(stewie::PATROL_MISSING_NULL_CHECK) && reference == 0 {
-        return;
-    }
     if reference != 0 {
         let mut mode = 0x101u32;
         let package = e.vcall(p, 0x27c, &[]).u32();

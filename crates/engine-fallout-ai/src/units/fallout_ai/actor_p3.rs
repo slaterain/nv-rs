@@ -2855,21 +2855,10 @@ pub(crate) fn godmode_not_demigod(e: &Engine) -> bool {
     e.mem.u8(0x011e_07ba) != 0 && !(e.mem.u8(0x011e_07bb) != 0 || e.mem.u8(0x011e_0898) != 0)
 }
 
-/// lStewieAl's Tweaks' row S0082.01 (`NoAmmoGodmode`, its `ammoCheckGodMode` at `0x893C37`): the
-/// actor is the player (`011dea3c`) in god mode (not demigod), who attacks without ammunition.
-fn godmode_fires_without_ammo(e: &mut Engine, this: Ptr<Actor>, player: Ptr<Actor>) -> bool {
-    e.stewie(engine_core::extend::stewie::NO_AMMO_GODMODE)
-        && this == player
-        && godmode_not_demigod(e)
-}
-
 /// The player's Rock-It Launcher ammunition count in `Actor::StartAttack` (`0x893B44`, `00969040`).
 /// lStewieAl's Tweaks' row S0082.01 (`NoAmmoGodmode`, its `GetRockItAmmoOrGodmode`): 1 in god mode
 /// (not demigod).
 fn rock_it_ammo_or_godmode(e: &mut Engine, player: Ptr<Actor>) -> u32 {
-    if e.stewie(engine_core::extend::stewie::NO_AMMO_GODMODE) && godmode_not_demigod(e) {
-        return 1;
-    }
     e.call(PLAYER_GET_NUM_ROCK_IT_AMMO, &args![player]).u32()
 }
 
@@ -2980,9 +2969,6 @@ pub fn actor_start_attack(e: &mut Engine, this: Ptr<Actor>, anim_group: u32) -> 
         }
         // lStewieAl's Tweaks' row S0082.01 (`NoAmmoGodmode`, its `ammoCheckGodMode` jumped to at
         // `0x893C37`): the player in god mode (not demigod) attacks without ammunition.
-        if out_of_ammo && godmode_fires_without_ammo(e, this, player) {
-            out_of_ammo = false;
-        }
 
         if out_of_ammo {
             let object = e.global::<u32>(OBJECT_POINTER_011DEA0C);
@@ -3091,10 +3077,6 @@ pub fn actor_start_attack(e: &mut Engine, this: Ptr<Actor>, anim_group: u32) -> 
             // lStewieAl's Tweaks' row S0148 (`patchResetForceFireWeaponWhenReloadJamming`, the
             // jump at `0x8940A5` sent to `0x893E07`): the process' forced firing is cleared
             // (`HighProcess::SetForceFireWeapon`, slot `0x3f4` with 0) before the answer.
-            if e.stewie(engine_core::extend::stewie::JAM_CLEARS_FORCE_FIRE) {
-                let process = e.get(this, Actor::pCurrentProcess);
-                e.vcall(process.addr(), 0x3f4, &args![0u32]);
-            }
             return false;
         }
     }
@@ -3629,9 +3611,6 @@ fn blend_out_mismatched_attack(
     let sequence = e
         .call(ANIMATION_GET_SEQUENCE, &args![animation, 4u32])
         .ptr::<()>();
-    if sequence.is_null() && e.stewie(engine_core::extend::stewie::MISSING_ANIM_NULL_CHECK) {
-        return;
-    }
     let mut check_looping_group = true;
     if !sequence.is_null() {
         let transform = e
@@ -8099,23 +8078,7 @@ fn int_setting(e: &mut Engine, setting: u32) -> u32 {
 /// the `VATS` counter.
 fn record_kill_statistics(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>, player: u32) {
     e.call(HANDLE_ENTRY_POINT, &args![0x15u32, player, this, this]);
-    let weapon_form = if e.stewie(engine_core::extend::stewie::KILL_CHALLENGE_SOURCE_WEAPON) {
-        // lStewieAl's Tweaks' row S0664 (`patchFixKillChallengeSourceWeapon`, its
-        // `OnKillChallengeGetWeaponHook` jumped to at `0x89DB50`): the weapon of the killed
-        // actor's last hit (its process at +0x68, the hit data at +0x240, the weapon at +0x30),
-        // none without a process or a hit; the killer's equipped weapon is not asked.
-        let process = e.mem.u32(this.addr() + 0x68);
-        let hit = if process != 0 {
-            e.mem.u32(process + 0x240)
-        } else {
-            0
-        };
-        if hit != 0 {
-            e.mem.u32(hit + 0x30)
-        } else {
-            0
-        }
-    } else {
+    let weapon_form = {
         let acquire = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, attacker));
         let weapon_entry = e
             .vcall(acquire, PROCESS_SLOT_CURRENT_WEAPON, &args![])
@@ -8502,24 +8465,7 @@ fn award_experience(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>, play
     {
         return;
     }
-    // lStewieAl's Tweaks' row S0204 (`KillCommandDuplicateRewardXpFix`, its
-    // `OnKillActorCheckHealthDamage` called at `0x89E5BC`): the actor the console's `kill` just
-    // killed for the player (`KillActor`, S0204's other half) answers no process here once, so its
-    // tracked damage counts 0 and this step gives no second experience award.
-    let first = if e.stewie(engine_core::extend::stewie::KILL_COMMAND_DUPLICATE_XP) {
-        let kept = e.stewie_kept(
-            engine_core::extend::stewie::kept::LAST_KILL_COMMAND_ACTOR,
-            4,
-        );
-        if e.mem.u32(kept) == this.addr() {
-            e.mem.set_u32(kept, 0);
-            0
-        } else {
-            e.mem.u32(this.addr() + 0x68)
-        }
-    } else {
-        typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, this))
-    };
+    let first = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, this));
     let tracked = if first != 0 {
         let process = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, this));
         e.vcall(process, PROCESS_SLOT_730, &args![]).f32()
@@ -10113,27 +10059,18 @@ pub fn actor_apply_critical_stage(e: &mut Engine, this: Ptr<Actor>) {
             &args![CRITICAL_STAGE_NOT_DEAD_FORMAT, stage, name, form_id],
         );
     }
-    // lStewieAl's Tweaks' row S0094 (`patchFixDisintegrationsStat`, the bytes at `0x8A1B1B`,
-    // `0x8A1B51` and `0x8A1B6E`): the statistic is counted at stages 1 (goo start) and 3
-    // (disintegration start, which has nothing else to do), and no longer at 2 and 4 (their ends).
-    let at_start = e.stewie(engine_core::extend::stewie::DISINTEGRATIONS_STAT);
     match e.get(this, Actor::eCriticalStage) {
         1 => {
             e.call(BHK_REPLACE_CONSTRAINTS, &args![body, 8u32]);
             e.call(BHK_DAMP_BODIES_VELOCITY, &args![body, 0.0f32]);
-            if at_start {
-                count_player_disintegration(e, this);
-            }
         }
         2 | 4 => {
             e.call(REFR_REMOVE_FROM_ALL_WATER, &args![this, 0u32]);
             e.call(BODY_FN_450F90, &args![body, 1u32]);
             e.vcall(this.addr(), ACTOR_SLOT_1C0, &args![]);
-            if !at_start {
-                count_player_disintegration(e, this);
-            }
+            count_player_disintegration(e, this);
         }
-        3 if at_start => count_player_disintegration(e, this),
+        3 if STEWIE_FALSE => count_player_disintegration(e, this),
         _ => {}
     }
 }
@@ -10818,11 +10755,6 @@ pub fn fn_008a2ed0(e: &mut Engine, this: Ptr<Actor>) -> u32 {
                 // `0x8A2F83`): the comparison's result is used. Unless `fAIMaxHeadTrackDistance` is
                 // below the distance (so also for a distance that is not a number, as Tweaks'
                 // `JNP`), the package target is the answer.
-                if e.stewie(engine_core::extend::stewie::HEADING_TARGET_DISTANCE)
-                    && (limit as f64).partial_cmp(&distance) != Some(std::cmp::Ordering::Less)
-                {
-                    return package_target;
-                }
             }
         }
     }
@@ -13816,11 +13748,7 @@ fn hit_me_reactions(e: &mut Engine, s: &mut HitMe) {
 /// `0x89C8E3`): the hit's source reference (the explosion) when it has one, else the aggressor,
 /// their position at +0x30 read directly.
 fn knockback_start(e: &mut Engine, source: u32, aggressor: u32) -> u32 {
-    if e.stewie(engine_core::extend::stewie::EXPLOSION_PUSH_DIRECTION) {
-        (if source != 0 { source } else { aggressor }).wrapping_add(0x30)
-    } else {
-        e.vcall(aggressor, ACTOR_SLOT_POSITION, &args![]).u32()
-    }
+    e.vcall(aggressor, ACTOR_SLOT_POSITION, &args![]).u32()
 }
 
 /// `0089c614`..`0089c7b7`: the hit was (partly) blocked: the block idle for
@@ -14235,9 +14163,6 @@ fn start_hit_line(e: &mut Engine, this: u32, aggressor: u32, controller: u32) {
             &args![manager, this, aggressor, 2u32, 2u32, 1u32, controller],
         )
         .bool();
-    if said && e.stewie(engine_core::extend::stewie::COMBAT_SOUND_COOLDOWN) {
-        hit_sound_cooldown_after_line(e);
-    }
 }
 
 /// `HitMe`'s cooldown test of the hit's combat line (`0x89D425`): the deadline (`011df684`) is
@@ -14245,7 +14170,6 @@ fn start_hit_line(e: &mut Engine, this: u32, aggressor: u32, controller: u32) {
 /// `0x89D42B`): never; the cooldown no longer stops the line here.
 fn hit_bark_cooling_down(e: &mut Engine, now: u32) -> bool {
     e.global::<u32>(HIT_BARK_DEADLINE) > now
-        && !e.stewie(engine_core::extend::stewie::COMBAT_SOUND_COOLDOWN)
 }
 
 // Translated from lStewieAl's Tweaks 10.05 (Fixes/CombatSoundCooldownFix.cpp):
@@ -23527,7 +23451,7 @@ mod tests {
             let this = if is_player { player } else { Ptr::new(0x6100) };
             let godlike = on && god == 1 && demigod == 0 && setting == 0;
             assert_eq!(
-                godmode_fires_without_ammo(&mut e, this, player),
+                STEWIE_FALSE,
                 godlike && is_player,
                 "on {on} {god} {demigod} {setting} {is_player}"
             );

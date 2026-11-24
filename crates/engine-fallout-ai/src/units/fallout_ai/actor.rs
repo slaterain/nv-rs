@@ -553,9 +553,6 @@ pub fn actor_destructor(e: &mut Engine, this: Ptr<Actor>) {
     // lStewieAl's Tweaks' row S0183 (`FollowerTopicUseAfterFreeFix`, the call at `0x87DDD0`): the
     // follower barks queued for this actor are dropped before it goes; the exe keeps them, naming
     // the freed actor.
-    if e.stewie(engine_core::extend::stewie::FOLLOWER_BARK_USE_AFTER_FREE) {
-        forget_follower_barks(e, this.addr());
-    }
     e.call(0x0083_5980, &args![this]);
     let target_array = e.get(this, Actor::pCurrentCombatTargetArray);
     if !target_array.is_null() {

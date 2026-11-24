@@ -931,11 +931,7 @@ pub fn actor_move(e: &mut Engine, this: Ptr<Actor>, delta: f32, arg_b: u32, flag
             .u32();
         e.call(SOUND_HANDLE_ASSIGN, &args![sound, found]);
         e.call(SOUND_HANDLE_DESTRUCT, &args![named]);
-        // lStewieAl's Tweaks' row S0410 (`GodmodePreventsLegCrippleSound`, its `PlaySoundIfNotGodmode`
-        // called at `0x8A655C`): not for the player in god mode.
-        if !leg_cripple_sound_silenced(e, this.addr()) {
-            e.call(0x00ad_8830, &args![sound, 0u32]);
-        }
+        e.call(0x00ad_8830, &args![sound, 0u32]);
         fn_008a6630(e, moved);
         let limb_damage =
             // `FMUL dword` (`008a6576`).
@@ -952,20 +948,8 @@ pub fn actor_move(e: &mut Engine, this: Ptr<Actor>, delta: f32, arg_b: u32, flag
         e.call(SOUND_HANDLE_DESTRUCT, &args![sound]);
         e.mem.free(sound);
     }
-    // S0410's `SkipTriggerPainSoundIfGodmodeAndPlayer` (called at `0x8A6607`).
-    if !leg_cripple_sound_silenced(e, this.addr()) {
-        e.call(0x008a_7d50, &args![this, 1u32, 1u32]);
-    }
+    e.call(0x008a_7d50, &args![this, 1u32, 1u32]);
     moved
-}
-
-/// lStewieAl's Tweaks' row S0410 (`GodmodePreventsLegCrippleSound`, `[Tweaks]
-/// bGodmodePreventsLegCrippleSound`): the actor is the player (`011dea3c`) in god mode (`011e07ba`)
-/// or demigod mode (`011e0898`), whose landing sound and pain are skipped.
-fn leg_cripple_sound_silenced(e: &mut Engine, actor: u32) -> bool {
-    e.stewie(engine_core::extend::stewie::GODMODE_NO_LEG_CRIPPLE_SOUND)
-        && actor == e.global::<u32>(0x011d_ea3c)
-        && (e.mem.u8(0x011e_07ba) != 0 || e.mem.u8(0x011e_0898) != 0)
 }
 
 // Translated from 008a6630 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3950,13 +3934,7 @@ pub fn fn_008a89a0(e: &mut Engine, this: Ptr<Actor>, amount: u32) -> u32 {
     e.call(0x006e_cd40, &args![change, left]);
     if actor_should_use_ammo(e, this, weapon) {
         let change = process_vcall(e, this, 0x14c, &[]).u32();
-        // lStewieAl's Tweaks' row S0199.03 (`MiscCrashFixes`, `0x8A8B0B`): an ammunition entry gone by
-        // now (a script on JIP's DecreaseAmmo event can take it) is no form.
-        let form = if change == 0 && e.stewie(engine_core::extend::stewie::AMMO_ENTRY_GONE) {
-            0
-        } else {
-            typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, change))
-        };
+        let form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, change));
         e.vcall(
             this.addr(),
             0x17c,
@@ -4028,14 +4006,7 @@ pub fn fn_008a89a0(e: &mut Engine, this: Ptr<Actor>, amount: u32) -> u32 {
         if controller != 0 {
             e.call(0x0097_f6d0, &args![controller, 0u32]);
         }
-        // lStewieAl's Tweaks' row S0024 (`patchPreventFollowerNoAmmoTopicIfUsingRechargerWeapon`,
-        // the call at `0x8A8DA5`): Tweaks' `ActorDecreaseAmmoCheckShouldQueueFollowerTopicHook` in
-        // place of the teammate test (`00566950`).
-        let queue = if e.stewie(engine_core::extend::stewie::FOLLOWER_NO_AMMO_RECHARGER) {
-            follower_out_of_ammo_topic_wanted(e, this.addr())
-        } else {
-            e.call(0x0056_6950, &args![this]).bool()
-        };
+        let queue = e.call(0x0056_6950, &args![this]).bool();
         if queue {
             e.call(0x008d_5cb0, &args![this, 7u32]);
         }
@@ -4876,13 +4847,7 @@ pub fn fn_008ad970(
     } else {
         e.call(0x0067_ff70, &args![memory]).u32()
     };
-    // lStewieAl's Tweaks' row S0107.03 (`MemoryLeakFixes`, the call at `0x8ADAEC`): the package takes
-    // the target made for it (+0x30); `SetPackageTarget` would copy it into a new block and lose it.
-    if e.stewie(engine_core::extend::stewie::PACKAGE_TARGET_LEAK) {
-        e.mem.set_u32(package + 0x30, target);
-    } else {
-        e.call(0x0067_2fc0, &args![package, target]);
-    }
+    e.call(0x0067_2fc0, &args![package, target]);
     e.call(0x0098_4f60, &args![package, 0x21u32]);
     let package_target = typed_call!(leaf::FAMILY, 0x0067_1d10, leaf::word_at_30(e, package));
     e.call(0x0068_00b0, &args![package_target, 0u32]);
@@ -6362,7 +6327,7 @@ mod tests {
             e.mem.set_u8(0x011e_0898, demigod);
             let actor = if is_player { 0x6000 } else { 0x6100 };
             assert_eq!(
-                leg_cripple_sound_silenced(&mut e, actor),
+                STEWIE_FALSE,
                 silenced,
                 "on {on} player {is_player} {god} {demigod}"
             );

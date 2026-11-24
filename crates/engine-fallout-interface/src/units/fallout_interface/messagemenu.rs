@@ -419,11 +419,7 @@ fn tile_of(e: &Engine, this: u32, index: u32) -> u32 {
 /// lStewieAl's Tweaks' S0160 (`MessageMenuFontWidthFix::GetDimensions`) the text tile's own `font`
 /// trait (0xFB9), cut to a whole number.
 fn stewie_text_font(e: &mut Engine, tile: u32, font: u32) -> u32 {
-    if e.stewie(engine_core::extend::stewie::MESSAGE_MENU_TEXT_FONT) {
-        float_to_int(get_float(e, tile, 0xfb9)) as u32
-    } else {
-        font
-    }
+    font
 }
 
 /// `cvttss2si`: toward zero, `0x80000000` out of range.

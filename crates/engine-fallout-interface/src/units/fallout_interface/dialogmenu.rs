@@ -105,9 +105,6 @@ const RADIO_QUIETER_011DCFA4: u32 = 0x011d_cfa4;
 /// lStewieAl's Tweaks' S0035 (`patchUnsetQuieterRadioWhenForceClosingDialogueMenu`): with the
 /// row on, `SetInDialogueOrHolotapePlaying(quieter)`; off, nothing.
 fn set_radio_quieter(e: &mut Engine, quieter: bool) {
-    if e.stewie(engine_core::extend::stewie::DIALOG_RADIO_VOLUME_RESET) {
-        e.set_global(RADIO_QUIETER_011DCFA4, u8::from(quieter));
-    }
 }
 /// `00483710` (`thiscall`): the `BSSoundHandle` destructor.
 const SOUND_HANDLE_DESTROY: u32 = 0x0048_3710;

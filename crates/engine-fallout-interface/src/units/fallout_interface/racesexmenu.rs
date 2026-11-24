@@ -1136,9 +1136,6 @@ pub fn race_sex_menu_scalar_deleting_destructor(
 
 /// After the destructor (`0x7AC53A`): lStewieAl's Tweaks' S0218 sets the last exterior door.
 fn stewie_after_free(e: &mut Engine) {
-    if e.stewie(engine_core::extend::stewie::NEW_GAME_LAST_EXTERIOR_DOOR) {
-        stewie_set_last_exterior_door(e);
-    }
 }
 
 /// lStewieAl's Tweaks' `WorldMapNoExteriorDoorFix::SetLastExteriorDoor` (row S0218): a new

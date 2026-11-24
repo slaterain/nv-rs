@@ -458,13 +458,7 @@ pub fn fn_007b9020(e: &mut Engine, this: Ptr<RouletteMenu>) {
     e.call(NI_POINTER_ASSIGN, &args![base + WHEEL_TEXTURE, 0u32]);
     let list = e.get(this, RouletteMenu::pBetList);
     if list != 0 && !typed_call!(leaf::FAMILY, 0x0082_56d0, leaf::both_words_zero(e, list)) {
-        // lStewieAl's Tweaks' row S0196.02 (`RouletteMenuFixes`, the call at `0x7B92D6`): the placed
-        // bets are freed with their nodes (the list's delete-all, `0076b2a0`, in place of `00470470`).
-        if e.stewie(stewie::ROULETTE_BETS_FREED_ON_CLOSE) {
-            e.call(LIST_DELETE_ALL_0076B2A0, &args![list]);
-        } else {
-            e.call(LIST_FREE_NODES, &args![list]);
-        }
+        e.call(LIST_FREE_NODES, &args![list]);
     }
     let list = e.get(this, RouletteMenu::pBetList);
     if list != 0 {
@@ -478,9 +472,7 @@ pub fn fn_007b9020(e: &mut Engine, this: Ptr<RouletteMenu>) {
         e.mem.set_u32(base + BET_GEOMETRY + 4 * index, 0);
         e.mem.set_u32(base + BET_SHADOW_GEOMETRY + 4 * index, 0);
     }
-    // lStewieAl's Tweaks' row S0196.01 (`RouletteMenuFixes`, the jump written at `0x7B93C2` to
-    // `0x7B93EB`): the list deleted above is not tested and emptied again.
-    if !e.stewie(stewie::ROULETTE_BET_LIST_DOUBLE_FREE) {
+    {
         let list = e.get(this, RouletteMenu::pBetList);
         if !typed_call!(leaf::FAMILY, 0x0082_56d0, leaf::both_words_zero(e, list)) {
             e.call(LIST_FREE_NODES, &args![list]);
@@ -840,17 +832,8 @@ pub fn roulette_menu_prepare_bet_tiles(e: &mut Engine, this: Ptr<RouletteMenu>) 
                 } else {
                     let number = (i / 0x18 + 1) / 2 + ((i + 1) % 0x18 / 2) * 3;
                     let (first, last) = description_settings(e);
-                    // 0x7BA10F, 0x7BA208, 0x7BA2CB: lStewieAl's Tweaks' row S0022.27 (`MenuFixes`,
-                    // "fix roulette bet payout/odds display") swaps the two pushes before each of
-                    // these three descriptions (`"%s: %s,%i \n%s: 11:1"` and `17:1`): the bet's
-                    // caption first, then the text of its 0 or 00.
-                    let swap = e.stewie(stewie_menus::ROULETTE_ZERO_BET_TEXT);
                     let words = |text: u32| {
-                        if swap {
-                            [first, text, number as u32, last]
-                        } else {
-                            [text, first, number as u32, last]
-                        }
+                        [text, first, number as u32, last]
                     };
                     if row == b'D' {
                         describe(e, record, 0x0107_6194, &words(0x0107_61a8));
@@ -1850,9 +1833,6 @@ pub fn roulette_menu_create(
     let player = e.global::<u32>(PLAYER_011DEA3C);
     let mut node = e.call(CASINO_DATA_LIST_005A6260, &args![player]).u32();
     // lStewieAl's Tweaks' row S0036 (its hook on this call, `0x7BBE72`).
-    if e.stewie(stewie::CASINO_INVALID_CHIPS) {
-        super::blackjackmenu::remove_invalid_casino_records(e, node);
-    }
     while node != 0 && node_item(e, node) != 0 {
         let casino = e.global::<u32>(CASINO_011DA880);
         let key = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, casino));
@@ -2674,12 +2654,6 @@ fn idle_payout(e: &mut Engine, this: Ptr<RouletteMenu>, other: i32) {
             // counting on the bet tiles that include it"): with the ball on 0, a bet on a tile
             // that holds 0 among others (the bet's index's low byte 0, 24, 48, 72, 145 or 146)
             // wins before the numbers are walked; the walk then runs as in the exe.
-            if e.stewie(stewie_menus::ROULETTE_ZERO_WINS)
-                && e.get(this, RouletteMenu::iResultValue) == 0
-                && matches!(index as u8, 0 | 24 | 48 | 72 | 145 | 146)
-            {
-                won = true;
-            }
             let mut node = record;
             while node != 0 {
                 let slot = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, node));
@@ -2701,13 +2675,7 @@ fn idle_payout(e: &mut Engine, this: Ptr<RouletteMenu>, other: i32) {
             winnings = (payout.wrapping_mul(amount) as i32).wrapping_add(winnings);
         }
         let list = e.get(this, RouletteMenu::pBetList);
-        // lStewieAl's Tweaks' row S0196.03 (`RouletteMenuFixes`, the call at `0x7BE034`): the settled bet
-        // is freed with its node (Tweaks' `tList::DeleteHead`), where `0063f7b0` only takes the node.
-        if e.stewie(stewie::ROULETTE_BET_FREED_ON_USE) {
-            delete_head(e, list);
-        } else {
-            e.call(LIST_REMOVE_FIRST_0063F7B0, &args![list]);
-        }
+        e.call(LIST_REMOVE_FIRST_0063F7B0, &args![list]);
     }
     winnings = winnings.wrapping_sub(e.get(this, RouletteMenu::iTotalBet));
     let chips = e.get(this, RouletteMenu::iChipCount).wrapping_add(winnings);
@@ -2988,14 +2956,7 @@ fn idle_betting(e: &mut Engine, this: Ptr<RouletteMenu>, x: u32, y: u32) {
             .get(this, RouletteMenu::iChipCount)
             .wrapping_sub(e.get(this, RouletteMenu::iTotalBet));
         e.set(this, RouletteMenu::iCurrentBet, bet);
-        // 0x7BEB9B, 0x7BEBBD: lStewieAl's Tweaks' row S0196.05 (`RouletteMenuFixes`, "fix the
-        // sCurrentBet string getting overwritten instead of the bet value") makes both trait reads
-        // `011da86c` (the bet's value, `_X`) instead of `011da870` (its caption, `_Value`).
-        let bet_trait = if e.stewie(stewie_menus::ROULETTE_CUT_BET_VALUE) {
-            TRAIT_011DA86C
-        } else {
-            TRAIT_011DA870
-        };
+        let bet_trait = TRAIT_011DA870;
         let trait_id = e.global::<u32>(bet_trait);
         let tile = e.mem.u32(roulette_menu(e) + TILES);
         e.call(TILE_POKE, &args![tile, trait_id, 1.0f32.to_bits()]);

@@ -1460,15 +1460,7 @@ pub fn tes_load_game(e: &mut Engine, this: Ptr<TES>, buffer: Ptr) {
         while y < grids {
             let grid_cells = e.get(this, TES::pGridCellA);
             let slot = e.call(GRID_CELL_ARRAY_GET, &args![grid_cells, x, y]).u32();
-            // lStewieAl's Tweaks' row S0018 (`fixUGridsCrashAndAllow3AsMinimum`, the read at
-            // `0x4596D3`): a save made with more grids than the game has now gives cells past the
-            // grid: their slot is null, read as no cell (the id is still read, to stay in step).
-            let cell = if slot == 0 && e.stewie(engine_core::extend::stewie::UGRIDS_LOAD_NULL_CELL)
-            {
-                0
-            } else {
-                e.mem.u32(slot)
-            };
+            let cell = e.mem.u32(slot);
             let id = e.with_stack(4, |e, id_cell| {
                 e.mem.set_u32(id_cell.addr(), 0);
                 e.call(LOAD_BUFFER_FORM_ID_OUT, &args![buffer, id_cell]);

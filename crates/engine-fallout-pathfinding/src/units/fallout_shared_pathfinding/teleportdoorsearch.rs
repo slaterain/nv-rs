@@ -751,9 +751,6 @@ pub fn teleport_door_search_get_node_connections(
             // test over the exe's disabled test, which it judges never true here; the port keeps
             // that test after the null check. The list builder already removes disabled doors, so
             // the kept test matters only if another thread disables a door in between.)
-            if e.stewie(stewie::RARE_NULL_TELEPORT_DOOR) && door == 0 {
-                continue;
-            }
             if typed_call!(leaf::FAMILY, 0x0044_0da0, leaf::form_flag_800(e, door)) {
                 continue;
             }

@@ -2421,19 +2421,7 @@ pub fn middle_high_process_process_activate(
         e.vcall(p, 0x294, &args![actor]);
     }
     let current = e.vcall(p, 0x22c, &[]).u32();
-    // 009164d9: lStewieAl's Tweaks' row S0124 (`patchProcessActivateAddNullCheckForPackage`): no
-    // current package is not a dialogue package (0x1C), where the exe reads the null package's
-    // type. (Tweaks' 10 bytes also cover the exe's `jnz` after the type test, so with Tweaks every
-    // non-null package takes the dialogue branch: an actor whose path failed (`00915ef0`, the actor
-    // mover's byte at +0x70) has its dialogue stopped (slot 0x288) and the step answers false at
-    // once, whatever its package, skipping the clean-up below (the target's script, the acquired
-    // object, slot 0x12C). The port keeps the exe's type test, the intent of the fix; a test locks
-    // that the row changes nothing for a non-null package.)
-    let is_dialogue = if e.stewie(stewie::PROCESS_ACTIVATE_NULL_PACKAGE) && current == 0 {
-        false
-    } else {
-        e.call(PACKAGE_TYPE, &args![current]).u32() == 0x1c
-    };
+    let is_dialogue = e.call(PACKAGE_TYPE, &args![current]).u32() == 0x1c;
     if is_dialogue && fn_00915ef0(e, this, actor) != 0 {
         e.vcall(actor, 0x288, &[]);
         return false;
@@ -8970,10 +8958,6 @@ fn knock_state_idle_playing(e: &mut Engine, p: u32, actor: u32, animation: u32) 
     // lStewieAl's Tweaks' row S0171 (`KnockDownHandGripFix`, the call at `0x920A91`): after it,
     // Tweaks' `OnGetUpPlayHandGrip` queues the hand-grip idle (`kIdleFlag_HandGrip`, 0x100) on
     // the actor's process (+0x68, `SetQueuedIdleFlags`, slot +0x614).
-    if e.stewie(engine_core::extend::stewie::KNOCKDOWN_HAND_GRIP) {
-        let process = word(e, actor, 0x68);
-        e.vcall(process, 0x614, &args![0x100u32]);
-    }
     release_weapon_nodes(e, p, actor);
 }
 
@@ -10771,11 +10755,7 @@ fn weapon_idle_sound(e: &mut Engine, draw: u8, weapon: u32, actor: u32) {
             } else {
                 0x0024_0000
             };
-            // lStewieAl's Tweaks' row S0039 (`fixWeaponIdleSoundsHavingInfiniteRange`,
-            // `SafeWrite16(0x923820, 0x1CEB)`): a jump over this test, so the 0x40000 flag is
-            // never flipped: an NPC's sound no longer gets it while the player is in third person
-            // (`00524d10`, the player's byte +0x64B), and the player's own sound keeps it there.
-            if !e.stewie(engine_core::extend::stewie::WEAPON_IDLE_SOUND_RANGE) {
+            {
                 let player = e.global::<u32>(PLAYER);
                 if e.call(PLAYER_IS_THIRD_PERSON, &args![player]).bool() {
                     flags ^= 0x0004_0000;

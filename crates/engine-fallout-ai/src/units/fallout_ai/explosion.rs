@@ -1901,11 +1901,7 @@ pub fn fn_009b0e00(e: &mut Engine, this: Ptr, reference: Ptr, first: u8, second:
 /// (`patchThresholdExplosivesWeaponDamage`, the call written there): through
 /// `ActorValueOwner::GetClampedActorFloatValue` (`0066ef50`), held within the actor value's limits.
 fn explosion_skill(e: &mut Engine, owner: u32, value: u32) -> f32 {
-    if e.stewie(engine_core::extend::stewie::EXPLOSIVES_SKILL_CLAMPED) {
-        e.call(0x0066_ef50, &args![owner + 0xa4, value]).f32()
-    } else {
-        e.vcall(owner + 0xa4, 0xc, &args![value]).f32()
-    }
+    e.vcall(owner + 0xa4, 0xc, &args![value]).f32()
 }
 
 // Translated from 009b0f80 (decompiled, FalloutNV.exe 1.4.0.525)

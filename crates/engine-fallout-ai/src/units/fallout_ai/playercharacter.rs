@@ -3470,9 +3470,7 @@ fn add_regenerated_round(e: &mut Engine, weapon_form: u32) {
         e.call(0x0048_1610, &args![object]);
         let player = e.global::<u32>(PLAYER_SINGLETON);
         let first = e.call(0x0052_5980, &args![weapon_form, player]).u32();
-        // lStewieAl's Tweaks' row S0199.11 (`MiscCrashFixes`, `0x943DE1`): no equipped
-        // ammunition type, nothing to add (the jump to `0x943E25`).
-        if !(first == 0 && e.stewie(engine_core::extend::stewie::REGEN_AMMO_NO_TYPE)) {
+        {
             e.call(0x0048_18e0, &args![object, first, 1u32, 0u32]);
             let player = e.global::<u32>(PLAYER_SINGLETON);
             e.call(0x0048_21a0, &args![object, player, 1u32]);
@@ -7375,14 +7373,6 @@ pub fn player_character_ammo_swap_helper(
         // Tweaks' `OnSkipReloadDefaultAmmo` makes the current ammunition the type of the player's
         // ammunition entry (its process's slot `+0x14C`, the entry's form at `+8`) before the
         // stack's entry is freed, so the type kept is really the one equipped.
-        if e.stewie(engine_core::extend::stewie::SWAP_SKIP_SETS_AMMO_TYPE) {
-            let player = e.global::<u32>(0x011d_ea3c);
-            let process = e.mem.u32(player + 0x68);
-            let ammo_info = e.vcall(process, 0x14c, &args![]).u32();
-            if ammo_info != 0 {
-                e.mem.set_u32(ammo_info + 8, current);
-            }
-        }
         e.call(0x0044_59e0, &args![item, 1u32]);
         return;
     }
@@ -9555,12 +9545,6 @@ fn alt_blocked(e: &Engine, flag: u32) -> bool {
 /// the map menu (`011da368`) has a marker selected (+0x118). Tweaks reads the menu without a null
 /// test; a missing menu counts as no marker here (a guard against a crash only).
 fn jump_blocked(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
-    if e.stewie(engine_core::extend::stewie::NO_JUMP_WHEN_FAST_TRAVELING) {
-        let map = e.global::<u32>(MAP_MENU);
-        if map != 0 && e.mem.u32(map + 0x118) != 0 {
-            return true;
-        }
-    }
     e.call(0x005a_03f0, &args![this, 1u32]).bool()
 }
 /// `MapMenu`'s singleton (`011da368`).
@@ -9572,9 +9556,7 @@ const MAP_MENU: u32 = 0x011d_a368;
 /// setting clear, also only when the player (`011dea3c`) is in third person (+0x64B) or its
 /// animation data (slot `0x1e4`) plays no special idle (sequence 7, +0xFC).
 fn auto_vanity_allowed(e: &mut Engine) -> bool {
-    if !e.stewie(engine_core::extend::stewie::NO_AUTO_VANITY_IN_SPECIAL_IDLE) {
-        return e.call(0x004b_9930, &args![IDLE_OBJECT_011E09E0]).bool();
-    }
+    return e.call(0x004b_9930, &args![IDLE_OBJECT_011E09E0]).bool();
     if e.mem.u32(IDLE_OBJECT_011E09E0 + 4) != 0 {
         return false;
     }
@@ -9643,9 +9625,7 @@ fn activate_or_workbench(
 /// `PlayerInCharGenOrTestAllCells`): also while the console's `TestAllCells` runs (TES +0x51 or
 /// +0x52).
 fn levelup_held(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
-    if !e.stewie(engine_core::extend::stewie::NO_LEVELUP_IN_TEST_ALL_CELLS) {
-        return e.call(0x005c_7870, &args![this]).bool();
-    }
+    return e.call(0x005c_7870, &args![this]).bool();
     if e.mem.u8(this.addr() + 0x75c) != 0 {
         return true;
     }
@@ -9682,9 +9662,7 @@ fn update_levelup(e: &mut Engine, this: Ptr<PlayerCharacter>, status_slot: u32) 
 /// (`LAST_COMBAT_TIME`); out of combat, true until 3000 have passed since (unsigned); `out` is not
 /// written.
 fn levelup_combat_test(e: &mut Engine, this: Ptr<PlayerCharacter>, out: u32) -> bool {
-    if !e.stewie(engine_core::extend::stewie::DELAY_LEVELUP_AFTER_COMBAT) {
-        return e.call(0x0095_3c50, &args![this, out]).bool();
-    }
+    return e.call(0x0095_3c50, &args![this, out]).bool();
     let kept = e.stewie_kept(engine_core::extend::stewie::kept::LAST_COMBAT_TIME, 4);
     let now = e.mem.u32(0x011f_6394 + 0x14);
     if e.mem.u8(this.addr() + 0xdf0) != 0 {
@@ -9697,8 +9675,7 @@ fn levelup_combat_test(e: &mut Engine, this: Ptr<PlayerCharacter>, out: u32) -> 
 /// The movement directions' test of `PlayerCharacter::Update` (forward 0, back 1, left 2, right 3):
 /// [`movement_key`] with lStewieAl's Tweaks' row S0329 (`patchLeftRightMovementCancelsOut`).
 fn movement_direction(e: &mut Engine, input: u32, key: u32) -> bool {
-    let cancel = e.stewie(engine_core::extend::stewie::OPPOSITE_KEYS_CANCEL);
-    movement_key(e, input, key, cancel)
+    movement_key(e, input, key, STEWIE_FALSE)
 }
 
 /// A movement direction's test in `PlayerCharacter::Update` (`00a24660` on `input`: the control
@@ -9718,21 +9695,12 @@ fn movement_key(e: &mut Engine, input: u32, key: u32, cancel: bool) -> bool {
 /// entry's count, +4 through `00726070`, is 0). lStewieAl's Tweaks' row S0082.01, written only
 /// without `[Tweaks] bVATSStopBurstIfTargetDead`: a missing entry also ends it.
 fn burst_magazine_empty(e: &mut Engine, magazine: u32) -> bool {
-    if e.stewie(engine_core::extend::stewie::NO_AMMO_GODMODE) && !e.stewie_vats_stop_burst() {
-        magazine == 0 || e.mem.u32(magazine + 4) == 0
-    } else {
-        typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, magazine)) == 0
-    }
+    typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, magazine)) == 0
 }
 
 /// The weapon's current ammunition for the player's attack (`00948310`, `0x9492B5`, `00525980`).
 /// lStewieAl's Tweaks' row S0082.01 (its `WeaponHasAmmoOrGodmode`): none in god mode (not demigod).
 fn current_ammo_or_godmode(e: &mut Engine, weapon: u32, player: u32) -> u32 {
-    if e.stewie(engine_core::extend::stewie::NO_AMMO_GODMODE)
-        && super::actor_p3::godmode_not_demigod(e)
-    {
-        return 0;
-    }
     e.call(0x0052_5980, &args![weapon, player]).u32()
 }
 
@@ -9756,11 +9724,7 @@ fn has_ammo_or_godmode_automatic(e: &mut Engine, this: Ptr<PlayerCharacter>, pro
     if e.vcall(process, 0x14c, &args![]).u32() != 0 {
         return true;
     }
-    if !e.stewie(engine_core::extend::stewie::NO_AMMO_GODMODE)
-        || !super::actor_p3::godmode_not_demigod(e)
-    {
-        return false;
-    }
+    return false;
     let process = e.mem.u32(this.addr() + 0x68);
     let entry = if process != 0 {
         e.vcall(process, 0x148, &args![]).u32()
@@ -9788,16 +9752,9 @@ fn free_flight_push(
     word_slot: u32,
 ) {
     let moved_by = local(frame, -0x2f0);
-    let tcl_row = e.stewie(engine_core::extend::stewie::TCL_MOVEMENT);
-    if tcl_row {
-        tcl_set_movement(e, position, moved_by, second);
-    } else {
-        e.call(0x0043_9ef0, &args![position, moved_by, second]);
-    }
+    e.call(0x0043_9ef0, &args![position, moved_by, second]);
     e.call(0x0043_9180, &args![moved_by, delta]);
-    let pushed = if tcl_row && e.mem.u8(word_slot) & 0x40 != 0 {
-        moved_by
-    } else {
+    let pushed = {
         let lift = e.mem.f32(moved_by + 8);
         typed_call!(
             leaf::FAMILY,
@@ -9836,12 +9793,6 @@ fn tcl_set_movement(e: &mut Engine, delta: u32, out: u32, position: u32) {
 /// `PlayerCharacter_GetNonTeammateBumpedActor`): none when that actor is a teammate (+0x18D).
 fn bumped_actor(e: &mut Engine, this: Ptr<PlayerCharacter>) -> u32 {
     let actor = e.call(0x0096_7a00, &args![this]).u32();
-    if actor != 0
-        && e.stewie(engine_core::extend::stewie::BUMPED_COMPANION_NO_ALERT)
-        && e.mem.u8(actor + 0x18d) != 0
-    {
-        return 0;
-    }
     actor
 }
 
@@ -9851,9 +9802,7 @@ fn bumped_actor(e: &mut Engine, this: Ptr<PlayerCharacter>) -> u32 {
 /// `bhkCharacterController_GetContextHkState_ZeroIfSeated`): 0 (on the ground) while the player
 /// (`011dea3c`) is in a sit or sleep state (+0x1AC not 0); else the state, read directly.
 fn wait_controller_state(e: &mut Engine, controller: u32) -> u32 {
-    if !e.stewie(engine_core::extend::stewie::WAIT_ON_MIDAIR_FURNITURE) {
-        return e.call(0x005c_0880, &args![controller]).u32();
-    }
+    return e.call(0x005c_0880, &args![controller]).u32();
     let player = e.global::<u32>(PLAYER_SINGLETON);
     if e.mem.u32(player + 0x1ac) != 0 {
         return 0;
@@ -9867,9 +9816,6 @@ fn wait_controller_state(e: &mut Engine, controller: u32) -> u32 {
 /// (`ContinuousBeamProjectileCrashFix`, its `OnFireAmmoCheckHook` jumped to at `0x9440C2`): in god
 /// mode (`011e07ba`) true without the test (on to `0x944120`).
 fn beam_clip_holds(e: &mut Engine, this: Ptr<PlayerCharacter>, weapon_form: u32) -> bool {
-    if e.stewie(engine_core::extend::stewie::BEAM_GODMODE_FIRING) && e.mem.u8(GODMODE_BYTE) != 0 {
-        return true;
-    }
     let process = process_of(e, this);
     let list = e.vcall(process, 0x14c, &args![]).u32();
     if list == 0 {
@@ -9889,9 +9835,7 @@ fn beam_clip_holds(e: &mut Engine, this: Ptr<PlayerCharacter>, weapon_form: u32)
 /// +0x68, slot `0x454`; no process counts as no weapon out).
 fn beam_attack_released(e: &mut Engine, main_state: u32) -> bool {
     let released = e.call(0x00a2_4660, &args![main_state, 4u32, 2u32]).u32() != 0;
-    if released || !e.stewie(engine_core::extend::stewie::BEAM_NO_PLAYER_AMMO_IN_IMPACT) {
-        return released;
-    }
+    return released;
     let player = e.global::<u32>(PLAYER_SINGLETON);
     let process = e.mem.u32(player + 0x68);
     process == 0 || !e.vcall(process, 0x454, &args![]).bool()
@@ -9930,23 +9874,9 @@ fn update_player_beam(
     e.vcall(beam, 0x310, &args![0.0f32]);
 }
 
-/// lStewieAl's Tweaks installs the three ammunition parts of `ContinuousBeamProjectileCrashFix`
-/// together, with no key of their own: the player's update takes the beam's round (S0130.05,
-/// `0x944152`), the hit takes none and counts no shot (S0130.06, `0x9BFD0E`) and the hit after a
-/// taken round counts as due (S0130.06, `0x9BFCC1`). Alone, either half would leave the player's
-/// beam with unlimited ammunition or with rounds taken twice, so here they act only while both rows
-/// are on (the weapon-out test at `0x944127` follows S0130.06's row alone).
-pub(crate) fn beam_ammo_in_update(e: &Engine) -> bool {
-    e.stewie(engine_core::extend::stewie::BEAM_PLAYER_AMMO_IN_UPDATE)
-        && e.stewie(engine_core::extend::stewie::BEAM_NO_PLAYER_AMMO_IN_IMPACT)
-}
-
 /// The player's update's part of the beam's ammunition (S0130.05): [`player_beam_reduce_ammo`]
 /// while [`beam_ammo_in_update`].
 pub(crate) fn player_beam_update_ammo(e: &mut Engine) {
-    if beam_ammo_in_update(e) {
-        player_beam_reduce_ammo(e);
-    }
 }
 
 // Translated from lStewieAl's Tweaks 10.05 (Fixes/ContinuousBeamProjectileCrashFix.cpp):
@@ -9994,9 +9924,7 @@ fn player_beam_reduce_ammo(e: &mut Engine) {
 /// toward 0; then Tweaks' own `IsControllerConnected`: the controller is not disabled (the byte
 /// `011d8c50` is not 1) and is connected (`011d8a84`).
 fn vanity_turn_gamepad_test(e: &mut Engine) -> bool {
-    if !e.stewie(engine_core::extend::stewie::VANITY_CAM_ROTATION) {
-        return e.call(0x004b_71d0, &args![]).u8() != 0;
-    }
+    return e.call(0x004b_71d0, &args![]).u8() != 0;
     // Tweaks' `kDblPI` and `kDblPIx2` (utility.h), the `double`s of pi and 2 pi.
     const PI: f64 = std::f64::consts::PI;
     const TWO_PI: f64 = std::f64::consts::TAU;
@@ -10027,22 +9955,6 @@ const CONTROLLER_CONNECTED: u32 = 0x011d_8a84;
 fn vanity_pitch_rotation(e: &mut Engine, matrix: u32, angle: f32) {
     const LIMIT: f64 = 1.553_343_1;
     let mut angle = angle;
-    if e.stewie(engine_core::extend::stewie::VANITY_CAM_ROTATION) {
-        let player_pitch = e.global::<f32>(LAST_PITCH);
-        if angle as f64 > LIMIT {
-            angle = LIMIT as f32;
-            e.set_global(
-                ACCUMULATED_PITCH,
-                (angle as f64 - player_pitch as f64) as f32,
-            );
-        } else if (angle as f64) < -LIMIT {
-            angle = -LIMIT as f32;
-            e.set_global(
-                ACCUMULATED_PITCH,
-                (angle as f64 - player_pitch as f64) as f32,
-            );
-        }
-    }
     e.call(0x0052_4ac0, &args![matrix, angle]);
 }
 
@@ -10627,21 +10539,9 @@ fn released_attack(
         return;
     }
     let group = animation_group(e, anim0, 4);
-    // lStewieAl's Tweaks' row S0210 (`FixSetIsFiringAutomaticWeaponNotClearing`, its
-    // `AnimGroup__IsAttack` at `0x949838` and `OnCheckAttackHeldClearIsFiringWeapon` at `0x949862`):
-    // the player's process (`011dea3c` +0x68) is told it is not firing an automatic weapon (slot
-    // `0x6e0` with 0) when the group is none (0xFF) and when the attack is still held at the second
-    // test.
-    let clears = e.stewie(engine_core::extend::stewie::AUTOMATIC_FIRING_CLEARS);
-    if clears && group == 0xff {
-        clear_automatic_firing(e);
-    }
     if e.call(0x005f_2540, &args![group]).u8() != 0
         && (button_state(e, input, 4, 2) || {
             let held = button_state(e, input, 4, 0);
-            if clears && held {
-                clear_automatic_firing(e);
-            }
             !held
         })
     {

@@ -340,11 +340,7 @@ pub fn bs_master_particle_system_child_has_active_particles(
         let child = e.mem.u32(elements.wrapping_add(index.wrapping_mul(4)));
         if child != 0 {
             let data = e.mem.u32(child + 0xb8);
-            // lStewieAl's Tweaks' row S0037 (`fixNullParticleSystemsCrash`, the bytes at `0xC5EBD9`): a
-            // child with no +0xB8 object is passed over; the exe calls through the missing object.
-            let skip =
-                data == 0 && e.stewie(engine_core::extend::stewie::PARTICLE_SYSTEM_NULL_DATA);
-            if !skip && e.vcall(data, 0x90, &args![]).u16() > 0 {
+            if e.vcall(data, 0x90, &args![]).u16() > 0 {
                 return true;
             }
         }

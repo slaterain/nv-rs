@@ -2666,14 +2666,7 @@ pub fn fn_008b43a0(
     {
         let part = e.call(0x005e_50f0, &args![body_parts, hit_part]).u32();
         e.vcall(magic_target, 8, &args![0x1au32]);
-        // lStewieAl's Tweaks' row S0112 (`patchFixBloodyMessPreventingExplosionGibbing`, the jump
-        // at `0x8B457E` retargeted to `0x8B4973`): with no body part, the parts are taken as for
-        // an attacker without it (the source's explosion list, else the hit's body part).
-        if part == 0 && e.stewie(engine_core::extend::stewie::BLOODY_MESS_EXPLOSION_GIBBING) {
-            None
-        } else {
-            Some(part)
-        }
+        Some(part)
     } else {
         None
     };
@@ -3312,12 +3305,8 @@ fn limb_piece(
     if parent == 0 {
         parent = limb;
     }
-    // lStewieAl's Tweaks' S0199.02 (`MiscCrashFixes`, `OnDismemberHook` at `0x8B558C`): with no limb node
-    // the part's transform, the clone and its effects are passed over (the jump to `0x8B5A82`):
-    // the piece is a plain node.
-    let null_limb = limb == 0 && e.stewie(engine_core::extend::stewie::DISMEMBER_NULL_LIMB);
     let mut clone: u32 = 0;
-    if !null_limb {
+    {
         e.call(0x0047_6a80, &args![transform_b]);
         e.call(0x0047_6a80, &args![transform_a]);
         // The part's offset and rotation (degrees) from the body part data.
@@ -3455,13 +3444,7 @@ fn limb_piece(
         let process = e.get(this, Actor::pCurrentProcess).addr();
         e.vcall(process, 0x6cc, &args![part_index, handle]);
     }
-    // S0199.02 at `0x8B5B13` (Tweaks' `GetCollisionObjectNullChecked`): no limb has no collision object.
-    let limb_collision = if limb == 0 && e.stewie(engine_core::extend::stewie::DISMEMBER_NULL_LIMB)
-    {
-        0
-    } else {
-        e.call(0x0068_38b0, &args![limb]).u32()
-    };
+    let limb_collision = e.call(0x0068_38b0, &args![limb]).u32();
     if limb_collision != 0 && e.call(0x0045_3470, &args![limb]).u32() != 0 {
         let mut child_index = 0;
         while child_index < e.call(0x0043_b480, &args![limb]).u32() {
@@ -3557,10 +3540,7 @@ fn limb_piece(
             }
         }
     }
-    // S0199.02 at `0x8B606B` (Tweaks' `SetAppCulledNullChecked`): no limb is not hidden.
-    if !(limb == 0 && e.stewie(engine_core::extend::stewie::DISMEMBER_NULL_LIMB)) {
-        e.call(0x0045_0f90, &args![limb, 1u32]);
-    }
+    e.call(0x0045_0f90, &args![limb, 1u32]);
     let process = e.get(this, Actor::pCurrentProcess).addr();
     if hide_only != 0 && process != 0 && flag_1c == 0 {
         e.vcall(

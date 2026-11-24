@@ -2054,9 +2054,7 @@ fn queued_shot_fails(
     let thrown = weapon != 0
         && (e.call(WEAPON_KIND, &args![weapon]).u32() == 0xa
             || e.call(WEAPON_KIND, &args![weapon]).u32() == 0xd);
-    let no_ammo_godmode = e.stewie(engine_core::extend::stewie::NO_AMMO_GODMODE);
-    let godmode = no_ammo_godmode && e.mem.u8(GODMODE_BYTE) != 0;
-    let mut fail = thrown && !enough && !godmode;
+    let mut fail = thrown && !enough;
     // `TEST AH,0x41; JNZ`: fails when the queued ammo is not above 0.0.
     if !fail && rock_it && !above(queued_ammo(e, m), double_zero(e)) {
         fail = true;
@@ -2066,7 +2064,7 @@ fn queued_shot_fails(
     }
     // `FCOMPP; TEST AH,0x41; JP`: fails when the cost is above the points
     // or unordered.
-    if !fail && !at_most(cost as f64, load_f32(e, m + 0xe0) as f64) && !godmode {
+    if !fail && !at_most(cost as f64, load_f32(e, m + 0xe0) as f64) {
         fail = true;
     }
     if !fail
@@ -2076,7 +2074,7 @@ fn queued_shot_fails(
             e.call(GET_CURRENT_AMMO, &args![weapon, player]).u32() != 0
         }
         && !above(queued_ammo(e, m), double_zero(e))
-        && !godmode
+        && !STEWIE_FALSE
     {
         fail = true;
     }
@@ -2086,7 +2084,7 @@ fn queued_shot_fails(
             let player = e.global::<u32>(PLAYER);
             e.call(GET_CURRENT_AMMO, &args![weapon, player]).u32() != 0
         }
-        && vats_out_of_ammo(e, no_ammo_godmode, ammo_list, m)
+        && vats_out_of_ammo(e, STEWIE_FALSE, ammo_list, m)
     {
         fail = true;
     }
@@ -5112,20 +5110,12 @@ pub fn vats_menu_update_ammo(e: &mut Engine, this: Ptr<VatsMenu>) -> bool {
             node = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, node));
         }
         let player = e.global::<u32>(PLAYER);
-        // `0x7F2DCE` (lStewieAl's Tweaks' S0022.24 writes `JMP 0x7F2DE5` there): the current ammo
-        // is not asked and the condition and ammo labels are always shown.
-        if e.stewie(stewie::VATS_CONDITION_WITHOUT_AMMO)
-            || e.call(GET_CURRENT_AMMO, &args![weapon, player]).u32() != 0
-        {
+        if e.call(GET_CURRENT_AMMO, &args![weapon, player]).u32() != 0 {
             set_tile_int(e, m, 0x60, 0xfa3, 1);
             set_tile_int(e, m, 0x64, 0xfc4, 1);
             set_tile_int(e, m, 0x68, 0xfc4, 1);
             set_tile_int(e, m, 0x68, 0xfa3, 1);
-            // `0x7F2E30` (lStewieAl's Tweaks' S0022.23 jumps to `GetContChangeMaxWeaponHealthHook`
-            // there, which goes on at `0x7F2E53`): the entry's largest health with its mods.
-            let maximum = if e.stewie(stewie::VATS_CONDITION_WITH_HEALTH_MODS) {
-                stewie_entry_max_health(e, equipped)
-            } else {
+            let maximum = {
                 let form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, equipped));
                 if e.call(GET_FORM_HEALTH, &args![form]).u32() != 0 {
                     let form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, equipped));
@@ -6253,18 +6243,6 @@ fn float_to_int_trunc(value: f32) -> i32 {
 /// `g_bIsGodmode`, or `011e0898`, `bSetDemigodMode`), so no reload's points are charged.
 fn stewie_reload_ammo(e: &mut Engine, weapon: u32, player: u32) -> u32 {
     let ammo = e.call(GET_CURRENT_AMMO, &args![weapon, player]).u32();
-    if ammo != 0 && e.stewie(stewie::VATS_NO_RELOAD_COST_WITHOUT_AMMO) {
-        let menu = e.global::<u32>(VATS_MENU);
-        if menu == 0 {
-            // No menu: Tweaks would read through a null pointer (our guard).
-            return ammo;
-        }
-        let reserve = e.mem.f32(menu + 0xf4);
-        let god = e.mem.u8(0x011e_07ba) != 0 || e.mem.u8(0x011e_0898) != 0;
-        if reserve <= 0.0 || god {
-            return 0;
-        }
-    }
     ammo
 }
 
@@ -6313,9 +6291,6 @@ pub fn vats_menu_get_shot_burst_count(e: &mut Engine, action: u32, long_burst: u
     // `MOV ECX,[EBP-0x10]; MUL BYTE [ECX+0x102]; TEST AL,AL; JNZ; MOV AL,1` there): the shots'
     // low byte times the weapon's ammo use (+0x102, read raw), its low byte, 1 when that is 0.
     // No weapon: Tweaks would read through a null pointer; the exe's count stays (our guard).
-    if weapon != 0 && e.stewie(stewie::VATS_BURST_TIMES_AMMO_USE) {
-        shots = shots.wrapping_mul(e.mem.u8(weapon + 0x102));
-    }
     if shots == 0 {
         1
     } else {

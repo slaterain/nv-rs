@@ -1549,9 +1549,6 @@ fn is_ordinary_door(e: &mut Engine, reference: u32) -> Option<bool> {
     if e.call(FORM_TYPE, &args![form]).u32() == DOOR_FORM_TYPE {
         return Some(!e.call(IS_SLIDING_DOOR, &args![form]).bool());
     }
-    if e.stewie(engine_core::extend::stewie::NAV_MESH_OBSTACLE_DOORS_ONLY) {
-        return None;
-    }
     Some(false)
 }
 

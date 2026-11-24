@@ -2679,11 +2679,7 @@ pub fn script_set_actor_ref_essential(e: &mut Engine, a: ScriptArgs) -> bool {
     let Some([value]) = parse_params(e, a, [0]) else {
         return false;
     };
-    // 005dfd6a: lStewieAl's Tweaks' row S0174 (`patchFixSetActorRefEssentialNullCheck`): a call
-    // with no reference takes the "invalid actor" branch, where the exe calls the null
-    // reference's slot.
-    let no_reference = e.stewie(stewie::SET_ACTOR_REF_ESSENTIAL_NULL_CHECK) && a.this_obj.is_null();
-    if !no_reference && e.vcall(a.this_obj.addr(), VSLOT_IS_ACTOR, &args![]).bool() {
+    if e.vcall(a.this_obj.addr(), VSLOT_IS_ACTOR, &args![]).bool() {
         let actor = e
             .call(
                 DYNAMIC_CAST,

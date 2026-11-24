@@ -579,17 +579,7 @@ fn load_tri(e: &mut Engine, this: Ptr<BSFaceGenModel>, path: u32, kind: i32) {
     let mesh = |e: &Engine| e.get(this, BSFaceGenModel::pMeshData);
     let matches = read && {
         let data = mesh(e);
-        // lStewieAl's Tweaks' row S0048 (`patchFixNullFaceGenCrash`, the bytes at `0x65A125`): the
-        // geometry is read in place (no call to `00559450`) and a missing one has 0 vertices; the
-        // exe asks the missing geometry for its count.
-        let vertices = if e.stewie(engine_core::extend::stewie::FACE_GEN_NULL_GEOMETRY) {
-            let geometry = e.mem.u32(data + 0x10);
-            if geometry == 0 {
-                0
-            } else {
-                e.call(GEOMETRY_VERTEX_COUNT, &args![geometry]).u16() as u32
-            }
-        } else {
+        let vertices = {
             let geometry = pointer_get(e, data + 0x10);
             e.call(GEOMETRY_VERTEX_COUNT, &args![geometry]).u16() as u32
         };

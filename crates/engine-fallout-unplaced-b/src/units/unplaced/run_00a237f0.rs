@@ -606,11 +606,7 @@ pub fn fn_00a24560(e: &mut Engine, this: Ptr<Controls>, device: i32, key: u8, mo
 /// key 0x29, 0x1e is key 0xb7, each asked in mode 1.
 pub fn fn_00a24660(e: &mut Engine, this: Ptr<Controls>, control: i32, mode: u32) -> i32 {
     if control >= 0x1c {
-        // lStewieAl's Tweaks' S0016 (`patchAllowKeyboardPauseAndScreenshotWhileControllerConnected`,
-        // the JNZ at `0xA2479B` taken out): the fixed keys are read with a gamepad active too.
-        if e.mem.u8(GAMEPAD_ACTIVE) == 0
-            || e.stewie(engine_core::extend::stewie::FIXED_KEYS_WITH_PAD)
-        {
+        if e.mem.u8(GAMEPAD_ACTIVE) == 0 {
             match control {
                 0x1c => {
                     if fn_00a24180(e, this, 1, 1) || fn_00a23e10(e, this, 6, 1) {
@@ -892,12 +888,7 @@ pub fn fn_00a24f60(e: &mut Engine, this: Ptr<Controls>, control: i32, packed: u3
 /// 0x3e, 0xb7, 0xc7) and any gamepad code outside 7 to 0x11. True when
 /// bound.
 pub fn fn_00a24fc0(e: &mut Engine, this: Ptr<Controls>, slot: i32, device: i32, key: u8) -> bool {
-    // lStewieAl's Tweaks' S0022.54 (its JMP at `0xA2507C`): backslash (0x2B) is not refused.
-    let backslash_reserved = !e.stewie(engine_core::extend::stewie::BIND_BACKSLASH);
-    if device == 0
-        && (matches!(key, 1..=9 | 0x29 | 0xb7 | 0x3b..=0x3e | 0xc7)
-            || (key == 0x2b && backslash_reserved))
-    {
+    if device == 0 && (matches!(key, 1..=9 | 0x29 | 0xb7 | 0x3b..=0x3e | 0xc7) || key == 0x2b) {
         return false;
     }
     if device == 3 && !matches!(key, 7..=0x11) {

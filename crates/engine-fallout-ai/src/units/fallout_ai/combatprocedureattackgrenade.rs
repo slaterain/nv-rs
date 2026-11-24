@@ -533,14 +533,7 @@ pub fn combat_procedure_attack_grenade_update(e: &mut Engine, this: Ptr) {
         }
         let process = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, attacker));
         e.vcall(process, 0x43c, &args![1u32]);
-        // lStewieAl's Tweaks' row S0146 (`NPCThrowingAnimFix`, the call at `0x9CB337`): Tweaks'
-        // `OnCombatAttackGrenadeSetAnimGroup` queues the weapon's own attack animation (the byte at
-        // `+0x11D`, `TESObjectWEAP::attackAnim`) where the exe queues AttackThrow (0x72).
-        let group = if e.stewie(engine_core::extend::stewie::NPC_THROWING_ANIM) {
-            u32::from(e.mem.u8(weapon.wrapping_add(0x11d)))
-        } else {
-            0x72
-        };
+        let group = 0x72;
         e.call(0x0089_35f0, &args![attacker, group]);
         e.mem.set_u32(attacking, 1);
         if explosion != 0 && e.call(0x009a_9720, &args![explosion]).bool() {

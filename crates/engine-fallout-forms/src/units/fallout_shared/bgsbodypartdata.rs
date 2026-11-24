@@ -656,9 +656,6 @@ fn for_parts_below(
             node = e.call(NODE_PARENT, &args![node]).u32();
             // lStewieAl's Tweaks' row S0077 (`patchBodyPartDataNullChecks`, the jumps at `0x5E5733`
             // and `0x5E58C5`): a walk that runs out of parents goes on to the next part.
-            if node == 0 && e.stewie(engine_core::extend::stewie::BODY_PART_NULL_PARENT) {
-                break;
-            }
         }
     }
 }

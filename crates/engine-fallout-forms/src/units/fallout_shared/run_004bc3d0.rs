@@ -156,13 +156,7 @@ pub fn fn_004bc4c0(e: &mut Engine) {
         set_grids_to_load(e, 3);
         return;
     }
-    // lStewieAl's Tweaks' row S0018 (`fixUGridsCrashAndAllow3AsMinimum`, the bytes at `0x4BC501`
-    // and `0x4BC505`): the least uGridsToLoad is 3, not 5.
-    let least = if e.stewie(engine_core::extend::stewie::UGRIDS_LOAD_NULL_CELL) {
-        3
-    } else {
-        5
-    };
+    let least = 5;
     if !flag && grids_to_load(e) < least {
         set_grids_to_load(e, least);
         return;

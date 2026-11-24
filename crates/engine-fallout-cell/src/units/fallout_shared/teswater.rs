@@ -6339,13 +6339,7 @@ fn setup_group_reflections(
                 .call(LIST_ITEM_SLOT, &args![EXPLOSIONS_LIST, position])
                 .u32();
             let explosion = e.mem.u32(slot);
-            // 004ea743: lStewieAl's Tweaks' row S0042 (`fixExplosionWaterNullCall`): an explosion
-            // whose `Get3D` slot (vtable +0x1d0) is null is passed over, where the exe calls it.
-            let null_call = e.stewie(stewie::EXPLOSION_WATER_NULL_CALL) && {
-                let vtable = e.mem.u32(explosion);
-                e.mem.u32(vtable + REFERENCE_GET_3D) == 0
-            };
-            if !null_call && reference_node(e, explosion) != 0 {
+            if reference_node(e, explosion) != 0 {
                 let found = e.with_stack(4, |e, out| {
                     e.mem.set_u32(out.addr(), explosion);
                     e.call(WADING_MAP_GET, &args![reflected_refs_map, explosion, out])

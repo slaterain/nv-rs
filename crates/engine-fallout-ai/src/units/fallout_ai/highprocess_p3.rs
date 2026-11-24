@@ -10242,18 +10242,7 @@ fn dialogue_created_conversation(
                 let run_once = e
                     .vcall(target_process, SLOT_GET_RUN_ONCE_PACKAGE, &args![])
                     .u32();
-                // lStewieAl's Tweaks' row S0199.01 (`MiscCrashFixes`, the call at `0x8E941C`):
-                // Tweaks' `TESPackage_GetTypeNullChecked` answers 0 for no package, where the
-                // exe reads the type through the null package.
-                let kind = if e.stewie(engine_core::extend::stewie::DIALOGUE_ACTIVATE_NO_PACKAGE) {
-                    if run_once == 0 {
-                        0
-                    } else {
-                        e.mem.u32(run_once + 0x18)
-                    }
-                } else {
-                    e.call(PACKAGE_PROCEDURE_TYPE, &args![run_once]).u32()
-                };
+                let kind = e.call(PACKAGE_PROCEDURE_TYPE, &args![run_once]).u32();
                 if kind == 0xa {
                     e.vcall(
                         target_process,
@@ -16100,11 +16089,7 @@ fn update_weapon_state(
         // lStewieAl's Tweaks' row S0137 (`patchPreventAgroRadiusBreachedNPCsHolsteringWeapons`,
         // the call at `0x8F037C`): Tweaks' `ActorInCombatOrPatrolRadiusBreached` in place of
         // `0049_3bb0` (the in-combat byte).
-        && !(if e.stewie(engine_core::extend::stewie::AGRO_RADIUS_HOLSTER) {
-            actor_in_combat_or_guard_radius_breached(e, mobile)
-        } else {
-            e.call(ACTOR_CREATURE_LIKE, &args![mobile]).bool()
-        })
+        && !(e.call(ACTOR_CREATURE_LIKE, &args![mobile]).bool())
         && e.vcall(process, SLOT_GET_WEAPON_DRAWN, &args![]).bool()
         && e.vcall(process, SLOT_GET_WANT_WEAPON_DRAWN, &args![])
             .bool()
@@ -16441,12 +16426,7 @@ fn keeps_need_talk_player(e: &mut Engine, package: u32) -> bool {
     if package == 0 {
         return false;
     }
-    if e.stewie(engine_core::extend::stewie::DIALOGUE_PACKAGE_KEEPS_TALK) {
-        let kind = e.mem.u8(package + 0x20);
-        kind == 0x1a || kind == 0x1c
-    } else {
-        e.call(PACKAGE_TYPE, &args![package]).i32() == 0x1a
-    }
+    e.call(PACKAGE_TYPE, &args![package]).i32() == 0x1a
 }
 
 // Translated from 008eeec0 (decompiled, FalloutNV.exe 1.4.0.525)

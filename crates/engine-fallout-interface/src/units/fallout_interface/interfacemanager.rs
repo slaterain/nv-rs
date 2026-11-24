@@ -2546,33 +2546,14 @@ fn idle_read_mouse(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut Idle
     state.input_2 = 0;
     state.input_0 = 0;
     use engine_core::extend::stewie as tweaks;
-    // lStewieAl's Tweaks' S0022.39 (`0x70CDC5` JZ made JMP, `0x70CDD3`/`E2`/`F1` MOV made OR, the
-    // block at `0x70CE6A`): with a pad the pad branch is taken even with the pointer shown, a held
-    // pad button adds the frame time and then the mouse's three states are ORed in. S0022.40 (the
-    // block at `0x70CE2C`, calls at `0x70CE44`/`53`/`62`): the pad branch tests the console's open
-    // byte, goes to the mouse with no pad button down, and reads RB alone.
-    let activate_clicks = e.stewie(tweaks::PAD_ACTIVATE_CLICKS);
-    let console_rb = e.stewie(tweaks::CONSOLE_PAD_ACTIVATE_RB);
     let controller = e.call(HAS_360_CONTROLLER_GETTER, &args![]).bool();
     let pad_branch =
-        controller && (activate_clicks || e.get(this, InterfaceManager::bShowMouse) == 0);
+        controller && e.get(this, InterfaceManager::bShowMouse) == 0;
     if !pad_branch {
-        read_mouse_buttons(e, this, state, activate_clicks);
+        read_mouse_buttons(e, this, state, STEWIE_FALSE);
     } else {
         let console = e.call(MENU_CONSOLE_INSTANCE, &args![1u32]).u32();
-        let pad_read = if console_rb {
-            if e.mem.u8(console.wrapping_add(0x38)) == 0 {
-                false
-            } else if !tweaks::pad_any_button(e) {
-                read_mouse_buttons(e, this, state, activate_clicks);
-                false
-            } else {
-                state.input_1 = u32::from(tweaks::pad_pressed(e, tweaks::PAD_RB));
-                state.input_2 = u32::from(tweaks::pad_depressed(e, tweaks::PAD_RB));
-                state.input_0 = u32::from(tweaks::pad_held(e, tweaks::PAD_RB));
-                true
-            }
-        } else if e.call(CONSOLE_PRIMARY_DOWN, &args![console]).bool() {
+        let pad_read = if e.call(CONSOLE_PRIMARY_DOWN, &args![console]).bool() {
             state.input_1 = e
                 .call(CONTROLS_QUERY_00A24660, &args![state.controls, 5u32, 1u32])
                 .u32();
@@ -2587,17 +2568,7 @@ fn idle_read_mouse(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut Idle
             false
         };
         if pad_read {
-            if activate_clicks {
-                if state.input_0 != 0 {
-                    // FLD [0x11F63A0] (the clock's frame time), FADD and FSTP `fMouseHeldTime`.
-                    let frame_time = e.mem.f32(FRAME_TIME_FLOAT);
-                    let held = e.get(this, InterfaceManager::fMouseHeldTime);
-                    e.set(this, InterfaceManager::fMouseHeldTime, held + frame_time);
-                }
-                read_mouse_buttons(e, this, state, true);
-            } else {
-                accumulate_held_time(e, this, state.input_0);
-            }
+            accumulate_held_time(e, this, state.input_0);
         }
     }
     let wheel = e
@@ -2798,11 +2769,6 @@ fn idle_release(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut IdleSta
 /// under the pointer (`pOverTileTarget`), where the exe reads the state of a menu that may already
 /// be gone.
 fn over_menu_active(e: &mut Engine, this: Ptr<InterfaceManager>, menu: u32) -> bool {
-    if e.stewie(stewie::CONSOLE_WHILE_MENUS_LOAD)
-        && e.get(this, InterfaceManager::pOverTileTarget) == 0
-    {
-        return false;
-    }
     menu_is_active(e, menu)
 }
 
@@ -3146,14 +3112,7 @@ fn idle_gamepad_events(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut 
             key = e.call(KEY_REPEAT_00716730, &args![this, 1.0f32]).u32();
         }
         let mut consumed = false;
-        // lStewieAl's Tweaks' S0022.45 (`ConsoleManager_HandleControllerHotkeys` called at
-        // `0x70E063`): the pad's D-pad, A and right stick work the open console; the console is
-        // made when missing.
-        state.console = if e.stewie(engine_core::extend::stewie::CONSOLE_DPAD_HISTORY) {
-            engine_core::extend::stewie::console_pad_hotkeys(e)
-        } else {
-            e.call(MENU_CONSOLE_INSTANCE, &args![0u32]).u32()
-        };
+        state.console = e.call(MENU_CONSOLE_INSTANCE, &args![0u32]).u32();
         if key != 0 && state.console != 0 {
             loop {
                 let code = e.mem.u32(slot.addr());
@@ -3187,16 +3146,7 @@ fn idle_gamepad_events(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut 
         // character, a scan code whose key was pressed this frame (`GetKeyState(code, isPressed)`)
         // still goes to the menus.
         let code = e.mem.u32(slot.addr());
-        let by_scancode = key == 0
-            && e.stewie(engine_core::extend::stewie::XML_BUTTONS_BY_SCANCODE)
-            && code != 0
-            && {
-                let input = e.global::<u32>(engine_core::extend::stewie::INPUT_GLOBALS);
-                e.call(CONTROLS_QUERY_00A24180, &args![input, code, 1u32])
-                    .u32()
-                    != 0
-            };
-        if (key != 0 || by_scancode) && !consumed {
+        if key != 0 && !consumed {
             idle_dispatch_key(e, this, state, key, code);
         }
     });
@@ -3256,10 +3206,7 @@ fn idle_dispatch_key(
         }
     }
     state.keyboard_handled = false;
-    // lStewieAl's Tweaks' S0062 (its bytes at `0x70E25B`): no key (a scan code alone) is not
-    // offered to the menu's slot `0x30`.
-    let offered = key != 0 || !e.stewie(engine_core::extend::stewie::XML_BUTTONS_BY_SCANCODE);
-    if frontmost != 0 && !pipboy_key && offered {
+    if frontmost != 0 && !pipboy_key {
         taken = e.vcall(frontmost, 0x30, &args![key]).bool();
         state.keyboard_handled = taken;
     }
@@ -3307,9 +3254,7 @@ fn idle_dispatch_key(
 /// visible menu (xNVSE's `GetTopVisibleMenuID`) is the barter (`0x41D`), container (`0x3F0`) or
 /// quantity (`0x3F8`) menu, so a rendered menu (a terminal) behind them no longer takes the mouse.
 fn paused_or_trading(e: &mut Engine, this: Ptr<InterfaceManager>) -> bool {
-    if !e.stewie(engine_core::extend::stewie::RENDERED_MENU_BEHIND_TRADE) {
-        return e.call(MENU_FLAG_QUERY_004A4040, &args![]).bool();
-    }
+    return e.call(MENU_FLAG_QUERY_004A4040, &args![]).bool();
     let start_menu = e.global::<u32>(START_MENU_SINGLETON);
     if start_menu != 0 && e.mem.u32(start_menu + 0x1a8) & 1 != 0 {
         return true;
@@ -3404,8 +3349,6 @@ fn scancode_button_name(code: u32) -> &'static str {
 /// menu-mode debounce is set (then the keyboard's menu-mode release is read).
 fn open_pipboy_reads_the_pad(e: &mut Engine) -> bool {
     e.call(HAS_360_CONTROLLER_GETTER, &args![]).bool()
-        && !(e.stewie(engine_core::extend::stewie::BOOK_CLOSE_DEBOUNCE)
-            && engine_core::extend::stewie::debounce_menu_mode(e))
 }
 
 /// The console's open byte (xNVSE's `g_isConsoleOpen`, `0x11DEA2E`).
@@ -3415,11 +3358,6 @@ const CONSOLE_IS_OPEN: u32 = 0x011d_ea2e;
 /// `site` (`0x70E4DB`, `0x70E500`); with lStewieAl's Tweaks' S0022.02 its `IsShiftHeld` there:
 /// either shift key's raw state now, through the Stewie seam.
 fn idle_shift_held(e: &mut Engine, this: Ptr<InterfaceManager>, site: u32) -> bool {
-    if e.stewie(engine_core::extend::stewie::MENU_SHIFT_HELD_NOW) {
-        if let Some(held) = e.site(site, &[]) {
-            return held != 0;
-        }
-    }
     e.call(MODIFIER_FOUR_DOWN, &args![this]).bool()
 }
 
@@ -3427,13 +3365,7 @@ fn idle_shift_held(e: &mut Engine, this: Ptr<InterfaceManager>, site: u32) -> bo
 /// enabled (`0xfa3`) it is clicked (`0xfaf` set: sound, click pulse and the
 /// menu's slot `0xc`), else the "not allowed" menu sound plays.
 fn idle_click_key_tile(e: &mut Engine, frontmost: u32, code: u32) {
-    // lStewieAl's Tweaks' S0062: the controls from its hook at `0x70E2CA` (the input globals, the
-    // same object), a second lookup by scan code at `0x70E32D` when the first finds no tile, and
-    // Tab debouncing menu mode at `0x70E360`.
-    let by_scancode = e.stewie(engine_core::extend::stewie::XML_BUTTONS_BY_SCANCODE);
-    let controls = if by_scancode {
-        e.global::<u32>(engine_core::extend::stewie::INPUT_GLOBALS)
-    } else {
+    let controls = {
         let controls_owner = e.global::<u32>(CONTROLS_OWNER);
         e.call(CONTROLS_GET, &args![controls_owner]).u32()
     };
@@ -3459,24 +3391,10 @@ fn idle_click_key_tile(e: &mut Engine, frontmost: u32, code: u32) {
             e.call(TILE_GET_CHILD_BY_NAME, &args![root, string]).u32()
         };
         let mut found = lookup(e);
-        if found == 0 && by_scancode {
-            let name = format!("_PCButton_{}", scancode_button_name(code));
-            for (i, byte) in name.bytes().chain(std::iter::once(0)).enumerate() {
-                e.mem.set_u8(buffer.addr() + i as u32, byte);
-            }
-            found = lookup(e);
-        }
         found
     });
     if name != 0 && e.call(TILE_IS_TRUE, &args![name, 0xfa3u32]).bool() {
-        let clickable = if by_scancode {
-            if code == 0x0f {
-                engine_core::extend::stewie::set_debounce_menu_mode(e);
-            }
-            tile_get_float(e, name, 0xfaf) != 0.0
-        } else {
-            e.call(TILE_IS_TRUE, &args![name, 0xfafu32]).bool()
-        };
+        let clickable = e.call(TILE_IS_TRUE, &args![name, 0xfafu32]).bool();
         if clickable {
             e.call(TILE_PLAY_TILE_SOUND, &args![name, 0xfcbu32]);
             tile_set_int(e, name, 0xfc7, 1);
@@ -3519,15 +3437,7 @@ fn idle_console_and_hot_keys(e: &mut Engine, this: Ptr<InterfaceManager>, state:
             )
             .u32(),
     };
-    // lStewieAl's Tweaks' S0984 (`ToggleConsoleHook`, detoured over the call at `0x70E5FE` in its
-    // deferred init, so after JIP's G58): what was there answers first (JIP's console key, else the
-    // exe's query, above); when that says no, the open console and B pressed on the pad answer yes
-    // and set the menu-mode debounce.
-    let key = if e.stewie(engine_core::extend::stewie::CONSOLE_PAD_B_CLOSES) {
-        stewie_console_pad_b(e, key)
-    } else {
-        key
-    };
+    let key = key;
     if key != 0 || console_wanted {
         state.console = e.call(MENU_CONSOLE_INSTANCE, &args![1u32]).u32();
         e.call(CLEAR_KEYSTROKES, &args![state.controls]);
@@ -3664,11 +3574,6 @@ fn idle_pipboy_hot_keys(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut
     // lStewieAl's Tweaks' S0022.18 (`PipboyHotkeysCheckConsoleOpenOrKeyboardInputHandled`, its
     // jump at `0x70E9B8`): no hot key while the frontmost menu took this call's key or the
     // console is open (`0x11DEA2E`); it goes on at `0x70EAE3`, after the hot keys.
-    if e.stewie(engine_core::extend::stewie::PIPBOY_HOTKEYS_AFTER_TEXT)
-        && (state.keyboard_handled || e.global::<u8>(CONSOLE_IS_OPEN) != 0)
-    {
-        return;
-    }
     let mut menu = 0u32;
     let mut pressed = false;
     for (key, id) in [(0x3bu32, 0x3ebu32), (0x3c, 0x3ea), (0x3d, 0x3ff)] {
@@ -3869,12 +3774,7 @@ fn pipboy_raise(e: &mut Engine, this: Ptr<InterfaceManager>, player: u32) {
         &args![animation, 0xe2u32, 1u32, -1i32, -1i32],
     );
     let pipboy = e.call(GET_PIPBOY_STATIC, &args![]).u32();
-    if e.stewie(engine_core::extend::stewie::PIPBOY_LIGHT_FADE) {
-        // lStewieAl's Tweaks' S0046 (its call at `0x70EFCD`).
-        super::fopipboymanager::stewie_set_light_effect(e, Ptr::new(pipboy));
-    } else {
-        e.call(PIPBOY_FADE_LIGHT_EFFECT, &args![pipboy, 1u32]);
-    }
+    e.call(PIPBOY_FADE_LIGHT_EFFECT, &args![pipboy, 1u32]);
     e.with_stack(12, |e, found| {
         let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
         let handle = e
@@ -4085,11 +3985,6 @@ pub fn fn_0070f690(e: &mut Engine, this: Ptr<InterfaceManager>, callback: u32) {
     // lStewieAl's Tweaks' S0021 (`OnPipboyClose` called at `0x70F6D3`, the common end): with the
     // inventory menu shown (`g_menuVisibility[1002]`) its scroll place is saved. Tweaks' menu search
     // and sort button parts there belong to features the port does not build.
-    if e.stewie(engine_core::extend::stewie::INVENTORY_SCROLL_KEPT)
-        && e.mem.u8(MENU_VISIBILITY + 1002) != 0
-    {
-        e.call(SAVE_INVENTORY_SCROLL, &args![]);
-    }
 }
 
 /// `g_menuVisibility` (one byte per menu type, xNVSE's `0x11F308F`).
@@ -4173,11 +4068,6 @@ pub fn interface_manager_do_gamepad_event(e: &mut Engine, this: Ptr<InterfaceMan
     if frontmost != 0 && !released && {
         // lStewieAl's Tweaks' S0022.05 (`InterfaceManager__HandleKeyPressHook` at `0x70F8BB`): the
         // arrows and shift-left/right (codes 1 to 4, 0xD, 0xE) clear `bMouseInMotion` first.
-        if e.stewie(engine_core::extend::stewie::ARROW_KEYS_OVER_MOUSE)
-            && matches!(event, 1..=4 | 0xd | 0xe)
-        {
-            e.set(this, InterfaceManager::bMouseInMotion, 0);
-        }
         e.call(DO_GAMEPAD, &args![this, frontmost, event, 1.0f32])
             .bool()
     } {
@@ -4691,9 +4581,7 @@ const START_MENU_IS_IN_ACTION_MAPPING: u32 = 0x007c_e8f0;
 /// for a key (then 0), so `DoGamepadEvent` hands the button to the frontmost menu's
 /// `HandleControllerInput` (slot 0x3c). Off: `*released` is not written there.
 fn stewie_l3_r3_released(e: &mut Engine, released: Ptr) {
-    if !e.stewie(engine_core::extend::stewie::MENU_L3_R3) {
-        return;
-    }
+    return;
     let start_menu = e.global::<u32>(START_MENU_SINGLETON);
     let mapping = start_menu != 0
         && e.call(START_MENU_IS_IN_ACTION_MAPPING, &args![start_menu])
@@ -4705,11 +4593,7 @@ fn stewie_l3_r3_released(e: &mut Engine, released: Ptr) {
 /// `uGamepadRepeatStartTime` = twice the tick count (`0x710624`, `0x71085F`); with lStewieAl's
 /// Tweaks' S0022.32 (its `mov eax, -1` over the tick's call and the shift) -1.
 fn cleared_repeat_time(e: &mut Engine, this: Ptr<InterfaceManager>) {
-    let time = if e.stewie(engine_core::extend::stewie::GAMEPAD_REPEAT_CLEARED) {
-        u32::MAX
-    } else {
-        e.call(FADE_CLOCK_READ, &args![FADE_CLOCK]).u32() << 1
-    };
+    let time = e.call(FADE_CLOCK_READ, &args![FADE_CLOCK]).u32() << 1;
     e.set(this, InterfaceManager::uGamepadRepeatStartTime, time);
 }
 
@@ -4878,16 +4762,6 @@ pub fn interface_manager_display_current_pick_ref(e: &mut Engine, this: Ptr<Inte
                 FORMAT_INTO_STRING,
                 &args![text, FORMAT_NAME_AND_ID, name, form_id],
             );
-            if e.stewie(engine_core::extend::stewie::CONSOLE_MESH_PATH) {
-                // lStewieAl's Tweaks' S0059 (its hook on the debug text's instance call at
-                // `0x710C41`, before the name line is printed): the model path at the next line's
-                // row (`EBP-0x1C`), which moves down a line (`EBP-0x24`).
-                let path = engine_core::extend::stewie::mesh_path_line(e, pick);
-                if path != 0 {
-                    debug_text_print_literal(e, path, y);
-                    y += line_height;
-                }
-            }
             debug_text_print(e, text, start_y);
             if e.get(this, InterfaceManager::bFullHelp) != 0 {
                 pick_ref_full_help(e, this, text, pick, &mut y, line_height);
@@ -5257,15 +5131,9 @@ pub fn fn_007118d0(e: &mut Engine, this: Ptr<InterfaceManager>) {
         let cursor = e.get(this, InterfaceManager::pCursor);
         tile_set_int(e, cursor, 0xfa3, 1);
         let (mut mouse_x, mut mouse_y);
-        // lStewieAl's Tweaks' S0022.38: the cursor-shown test at `0x7119CF` and the jump over the
-        // mouse axes at `0x711A2B` are taken out, the stick axes go through its deadzone getter
-        // (`0x7119D8`, `0x7119E7`) and the mouse axes are added (`0x711A37`, `0x711A44`).
-        let thumbstick = e.stewie(engine_core::extend::stewie::CONSOLE_THUMBSTICK_CURSOR);
-        if e.call(HAS_360_CONTROLLER_GETTER, &args![]).bool()
-            && (thumbstick || e.get(this, InterfaceManager::bShowMouse) == 0)
-        {
-            mouse_x = stick_axis(e, controls, 7, thumbstick);
-            mouse_y = stick_axis(e, controls, 8, thumbstick);
+        if e.call(HAS_360_CONTROLLER_GETTER, &args![]).bool() && e.get(this, InterfaceManager::bShowMouse) == 0 {
+            mouse_x = stick_axis(e, controls, 7, STEWIE_FALSE);
+            mouse_y = stick_axis(e, controls, 8, STEWIE_FALSE);
             // 00711a01, 00711a20: FLD float, FMUL double, then `_ftol2`. Here and below each
             // step rounds with the running thread's control word.
             let stick_scale = float_holder_value(e, STICK_SCALE_HOLDER);
@@ -5274,16 +5142,6 @@ pub fn fn_007118d0(e: &mut Engine, this: Ptr<InterfaceManager>) {
             let stick_scale = float_holder_value(e, STICK_SCALE_HOLDER);
             let scaled = x87_mul(stick_scale, -(mouse_y as f64));
             mouse_y = e.call(FTOL, &args![scaled]).i32();
-            if thumbstick {
-                let x = e
-                    .call(CONTROLS_QUERY_00A239E0, &args![controls, 1u32])
-                    .i32();
-                mouse_x = mouse_x.wrapping_add(x);
-                let y = e
-                    .call(CONTROLS_QUERY_00A239E0, &args![controls, 2u32])
-                    .i32();
-                mouse_y = mouse_y.wrapping_add(y);
-            }
         } else {
             mouse_x = e
                 .call(CONTROLS_QUERY_00A239E0, &args![controls, 1u32])
@@ -7226,14 +7084,6 @@ pub fn fn_007154b0(e: &mut Engine, this: Ptr<InterfaceManager>, event: i32, key:
         return 0;
     }
     let mut shift = e.get(this, InterfaceManager::bShiftDown) as u32;
-    if e.stewie(engine_core::extend::stewie::TEXT_SHIFT_HELD_NOW) {
-        // lStewieAl's Tweaks' S0022.03 (`IsShiftHeld` called at `0x715563`, `push eax`): either
-        // shift key's raw state now (xNVSE's key bytes), through the Stewie seam. The upper bytes of
-        // the pushed `EAX` are the caller's event or key code's, 0 on the event-1 paths that get here.
-        if let Some(held) = e.site(0x0071_5563, &[]) {
-            shift = u32::from(held != 0);
-        }
-    }
     let controls_owner = e.global::<u32>(CONTROLS_OWNER);
     let controls = e.call(CONTROLS_GET, &args![controls_owner]).u32();
     let character = e
@@ -7566,10 +7416,6 @@ pub fn fn_00716010(e: &mut Engine, this: Ptr<InterfaceManager>, reference: u32) 
     // lStewieAl's Tweaks' S0022.49 (`MenuFixes`, `OnFreeRefRemoveFromSelectableList` at `0x7160A2`): the
     // HUD forgets it as above, and the manager's list of the references the console can pick
     // (`selectableRefs`, +0x70 of the manager `011d8a80`) loses it too (xNVSE's `tList::Remove`).
-    if e.stewie(engine_core::extend::stewie::SELECTABLE_REF_FREED) {
-        let manager = e.global::<u32>(0x011d_8a80);
-        remove_from_list(e, manager.wrapping_add(0x70), reference);
-    }
 }
 
 /// xNVSE's `tList::Remove(item)` (`GameTypes.h`) on the list whose first node (`[item, next]`) is at

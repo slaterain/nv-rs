@@ -699,10 +699,8 @@ const LIST_BOX_RESTORE_POSITION: u32 = 0x0073_1360;
 /// `RepairServicesInitSaveRestorePosition`) the item list's scroll position is saved before and
 /// restored after (`RestorePosition(false)`).
 fn update_keeping_scroll(e: &mut Engine, this: Ptr) {
-    if !e.stewie(engine_core::extend::stewie::REPAIR_SERVICES_KEEPS_SCROLL) {
-        repair_services_menu_update(e, this);
-        return;
-    }
+    repair_services_menu_update(e, this);
+    return;
     e.call(LIST_BOX_SAVE_POSITION, &args![this.addr() + REPAIR_LIST]);
     repair_services_menu_update(e, this);
     e.call(
@@ -774,9 +772,6 @@ pub fn repair_services_menu_repair_item(e: &mut Engine, this: Ptr, item: u32) {
     let player = e.global::<u32>(PLAYER);
     // `0x7B8083` (lStewieAl's Tweaks' S0051, `patchUpdateDRDTWhenUsingVendorRepair`, calls
     // `VendorRepairItemResetDRDT` there): the player's `ResetActorDTDR` (vtable +0x3C4) first.
-    if e.stewie(engine_core::extend::stewie::VENDOR_REPAIR_RESETS_DR_DT) {
-        e.vcall(player, RESET_ACTOR_DT_DR, &args![]);
-    }
     let changes = e.call(GET_INVENTORY_CHANGES, &args![player]).u32();
     let entry = e
         .call(GET_OBJECT_IN_LIST, &args![changes, form, 1u32, 0u32])

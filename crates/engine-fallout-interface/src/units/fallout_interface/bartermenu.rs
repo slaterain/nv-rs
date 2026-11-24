@@ -237,10 +237,7 @@ fn delete_item(
     if e.call(LIST_BOX_HAS_FLAG, &args![this, 1u32]).bool() {
         let entry = item(e);
         let data = e.mem.u32(entry + 4);
-        let repair_target = in_loop
-            && e.stewie(engine_core::extend::stewie::REPAIR_TARGET_KEPT)
-            && data == e.global::<u32>(REPAIR_MENU_SELECTION);
-        if data != 0 && !repair_target {
+        if data != 0 {
             e.call(ITEM_DATA_DELETE, &args![data, 1u32]);
         }
     }
@@ -2858,15 +2855,7 @@ pub fn barter_menu_do_idle(e: &mut Engine, this: Ptr<BarterMenu>) {
     };
     let has_dt = stat_shown(e, STAT_004BE180);
     let second = if has_dt { e.mem.u32(base + 0x70) } else { 0 };
-    // `0x7307A4` (lStewieAl's Tweaks' S0105 writes `XOR EAX,EAX; MOV [EBP-8],EAX; JMP` over the
-    // zero DT's store): without a DT the DR tile is passed without its own test.
-    let first = if (!has_dt && e.stewie(engine_core::extend::stewie::INVENTORY_STAT_ALPHAS))
-        || stat_shown(e, STAT_004BE060)
-    {
-        e.mem.u32(base + 0x6c)
-    } else {
-        0
-    };
+    let first = e.mem.u32(base + 0x6c);
     let item = e.global::<u32>(BARTER_CURRENT_ITEM);
     e.call(
         SHOW_ITEM_STATS_00719790,

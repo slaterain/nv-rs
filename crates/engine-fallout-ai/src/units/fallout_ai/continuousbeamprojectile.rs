@@ -182,12 +182,7 @@ pub fn fn_009ab390(e: &mut Engine, this: Ptr, time: f32) {
                 e.mem.set_u32(angle_x, x87_store32(-pitch));
             } else {
                 let matrix = e.call(TRANSFORM, &args![node]).u32();
-                // lStewieAl's Tweaks' row S0130.03 (`ContinuousBeamProjectileCrashFix`, the call at
-                // `0x9AB55F`): an NPC's beam whose node is not there yet (a save just loaded) reads no
-                // rotation (the node's at +0x68 is then 0x68).
-                if !(matrix == 0x68 && e.stewie(engine_core::extend::stewie::BEAM_NPC_NULL_NODE)) {
-                    e.call(0x00a5_9400, &args![matrix, angle_z, angle_x, ebp - 0x30]);
-                }
+                e.call(0x00a5_9400, &args![matrix, angle_z, angle_x, ebp - 0x30]);
             }
             let mut skip_spread = false;
             let package = if shooter != 0 {

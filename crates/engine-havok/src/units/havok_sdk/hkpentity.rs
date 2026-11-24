@@ -356,9 +356,6 @@ pub fn hkp_entity_activate(e: &mut Engine, this: Ptr) {
     // lStewieAl's Tweaks' row S0199.04 (`MiscCrashFixes`, the jump at `0xC9C1DC` retargeted to the
     // return): an entity with no simulation island is not activated; the exe goes on to activate the
     // missing island.
-    if island == 0 && e.stewie(engine_core::extend::stewie::HKP_ENTITY_NULL_ISLAND) {
-        return;
-    }
     if island != 0 && (e.mem.u8(island + 0x26) >> 2) & 3 != 0 {
         return;
     }

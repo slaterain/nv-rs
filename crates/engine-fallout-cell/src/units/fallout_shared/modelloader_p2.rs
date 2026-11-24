@@ -2904,13 +2904,7 @@ fn queue_loaded_texture(e: &mut Engine, texture: Ptr, priority: i32, parent: Ptr
 /// `0043c130` is clear.
 fn texture_is_loaded_for_this_thread(e: &mut Engine, this: Ptr, texture: Ptr) -> bool {
     let task = ni_pointer_value(e, texture);
-    // lStewieAl's Tweaks' S0136 (its calls at `0x44373F` and `0x443B57`, the two `QueueTexture`s): the state
-    // read guarded as Tweaks' `__try` does.
-    let state = if e.stewie(engine_core::extend::stewie::QUEUED_TEXTURE_LOAD) {
-        engine_core::extend::stewie::queued_texture_state(e, task)
-    } else {
-        e.call(QUEUED_TEXTURE_STATE, &args![task]).u32()
-    };
+    let state = e.call(QUEUED_TEXTURE_STATE, &args![task]).u32();
     state == 3 && !e.call(THREAD_QUEUED_FLAG_TEST, &args![this]).bool()
 }
 

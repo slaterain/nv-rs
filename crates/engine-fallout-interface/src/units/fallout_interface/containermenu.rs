@@ -2280,16 +2280,6 @@ pub fn container_menu_do_idle(e: &mut Engine, this: Ptr<ContainerMenu>) {
     // keys in the Container menu"): an entry with no form ends the call (at `0075ec4e`), where the
     // exe reads the null form's type. With the row on an entry's form is read once more, for this test
     // (`0044ddc0`, a getter; the type test below reads it again, as the exe does).
-    if e.stewie(stewie::CONTAINER_MOUSEOVER_NO_FORM)
-        && current_item(e) != 0
-        && typed_call!(
-            leaf::FAMILY,
-            0x0044_ddc0,
-            leaf::word_at_8(e, current_item(e))
-        ) == 0
-    {
-        return;
-    }
     if current_item(e) != 0 && item_type(e, current_item(e)) == 0x28 {
         let first = tile_at(e, me_addr, 0x60);
         let second = tile_at(e, me_addr, 0x64);
@@ -2307,21 +2297,7 @@ pub fn container_menu_do_idle(e: &mut Engine, this: Ptr<ContainerMenu>) {
             e.call(OBJECT_VALUE_004BE180, &args![object]).f64() != zero
         };
         let second = if has_dt { tile_at(e, me_addr, 0x70) } else { 0 };
-        // `0x75EBF3` (lStewieAl's Tweaks' S0105 writes `XOR EAX,EAX; MOV [EBP-0xC],EAX; JMP` over
-        // the zero DT's store): without a DT the DR tile is passed without its own test.
-        let first = if (!has_dt && e.stewie(engine_core::extend::stewie::INVENTORY_STAT_ALPHAS))
-            || (current_item(e) != 0 && {
-                let object = typed_call!(
-                    leaf::FAMILY,
-                    0x0044_ddc0,
-                    leaf::word_at_8(e, current_item(e))
-                );
-                e.call(OBJECT_VALUE_004BE060, &args![object]).f64() != zero
-            }) {
-            tile_at(e, me_addr, 0x6c)
-        } else {
-            0
-        };
+        let first = tile_at(e, me_addr, 0x6c);
         let item = current_item(e);
         e.call(SET_ITEM_CARD, &args![first, second, 0u32, item, 0u32]);
     }

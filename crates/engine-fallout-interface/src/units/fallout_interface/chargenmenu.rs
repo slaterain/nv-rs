@@ -531,9 +531,6 @@ fn finish_create(
         e.call(INIT_ATTRIBUTE_LIST, &args![me(e)]);
         // `0x7535FD` (lStewieAl's Tweaks' S0110 calls `CharGenMenu_SetupSPECIALHook` there: the
         // call, then the points capped).
-        if e.stewie(engine_core::extend::stewie::CHARGEN_SPECIAL_POINTS_CAPPED) {
-            stewie_cap_special_points(e, me(e));
-        }
     } else {
         char_gen_menu_init_skill_list(e, Ptr::new(me(e)));
     }

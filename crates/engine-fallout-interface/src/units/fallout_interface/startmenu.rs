@@ -375,10 +375,6 @@ pub fn list_box_get_at(e: &mut Engine, this: Ptr<ListBox>, index: u32, by_positi
             // 007a7025: lStewieAl's Tweaks' row S0022.36 (`MenuFixes`, "null check tile in
             // ListBox::GetTileByIndex"): a node with no item is passed over, where the exe reads
             // the null item's tile.
-            if e.stewie(stewie::LIST_BOX_GET_AT_NULL_ITEM) && item == 0 {
-                node = node_next(e, node);
-                continue;
-            }
             let tile = e.mem.u32(item);
             let value = tile_value(e, Ptr::new(tile), TRAIT_LIST_INDEX);
             if f64::from(index) == f64::from(value) {
@@ -580,18 +576,7 @@ pub fn start_menu_scalar_deleting_destructor(
     this: Ptr<StartMenu>,
     flags: u32,
 ) -> Ptr<StartMenu> {
-    // `0x7CB51A` (lStewieAl's Tweaks' S0020 calls `StartMenuDestructorSaveIniChanges` there, main.h):
-    // with changed settings (`flags` +0x1A8 bit 2) the settings are saved (`007d6d70`) first,
-    // and after the destructor the HUD's visibility is set for state 6 (`00771700`, `kDialog`),
-    // which shows the XP bar, the quest and the messages again.
-    let stewie_save = e.stewie(stewie::START_MENU_CLOSE_SAVES_SETTINGS);
-    if stewie_save && e.get(this, StartMenu::uiFlags) & 2 != 0 {
-        e.call(SAVE_INI_SETTINGS_007D6D70, &args![]);
-    }
     fn_007cb5b0(e, this);
-    if stewie_save {
-        e.call(HUD_UPDATE_VISIBILITY_STATE_00771700, &args![6u32]);
-    }
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
     }
@@ -2464,9 +2449,7 @@ pub fn start_menu_do_enter(e: &mut Engine, this: Ptr<StartMenu>, _unused_1: u32,
         .bool()
     {
         let gamepad = e.call(GAMEPAD_ACTIVE, &args![]).bool();
-        // `0x7CF85B` (lStewieAl's Tweaks' S0022.04 writes `JMP` over the `JNZ`): the pad is still
-        // asked, and the save's picture is shown whether or not the mouse is over the list.
-        let update = if gamepad || e.stewie(stewie::SAVE_PICTURE_WITHOUT_HOVER) {
+        let update = if gamepad {
             true
         } else {
             let manager = e.call(INTERFACE_MANAGER_GETTER, &args![]).u32();
@@ -3042,13 +3025,7 @@ pub fn start_menu_choose_help(e: &mut Engine) {
             // `0x7D08C6` (lStewieAl's Tweaks' S0022.37 calls `GetHelpMessageIdForMenu` there).
             index = stewie_help_index(e, Ptr::new(manager + HELP_TABLE_OFFSET), entry);
         }
-        // `0x7D08D3` (S0022.37 makes the `JGE` a `JE`): any index but 0x29 (none) is looked up, so
-        // the minigames' helps (forms 0x172094..0x172096) are shown too.
-        let looked_up = if e.stewie(stewie::MINIGAME_HELP_IN_PAUSE_MENU) {
-            index != 0x29
-        } else {
-            (index as i32) < 0x29
-        };
+        let looked_up = (index as i32) < 0x29;
         if looked_up {
             let form = e.call(LOOKUP_FORM, &args![index + 0x168]).u32();
             let candidate = e
@@ -3115,32 +3092,6 @@ pub fn start_menu_choose_help(e: &mut Engine) {
 /// that the looked-up form is 0x172094), roulette and slots the two after it.
 fn stewie_help_index(e: &mut Engine, table: Ptr, class: u32) -> u32 {
     const BLACKJACK: u32 = 0x0017_2094 - 0x168;
-    if e.stewie(stewie::MINIGAME_HELP_IN_PAUSE_MENU) {
-        let caravan = e.global::<u32>(0x011d_917c);
-        if caravan != 0 {
-            match e.mem.u32(caravan + 0x28) {
-                0 => return 0x1e,
-                1 => return 0x1f,
-                2 => {
-                    return if e.mem.u32(caravan + 0xe74) & 0x800 != 0 {
-                        0x20
-                    } else {
-                        0x21
-                    }
-                }
-                _ => {}
-            }
-        }
-        if e.global::<u32>(0x011d_a878) != 0 {
-            return BLACKJACK + 1;
-        }
-        if e.global::<u32>(0x011d_9050) != 0 {
-            return BLACKJACK;
-        }
-        if e.global::<u32>(0x011d_a9a4) != 0 {
-            return BLACKJACK + 2;
-        }
-    }
     fn_007d09c0(e, table, class)
 }
 

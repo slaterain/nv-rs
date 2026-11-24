@@ -758,11 +758,7 @@ fn create_contents(e: &mut Engine, root: u32, target: u32, level: u32, flag: u32
     e.call(TILE_SET_STRING, &args![tile, value_trait, level_name, 1u32]);
     let menu = me(e);
     let tile = tile_at(e, menu, 12);
-    if e.stewie(stewie_menus::LOCKPICK_DEBUG_HEALTH) {
-        stewie_debug_pick_health(e, tile);
-    } else {
-        e.call(TILE_SET_STRING, &args![tile, 0xfc4u32, TEXT_74418, 1u32]);
-    }
+    e.call(TILE_SET_STRING, &args![tile, 0xfc4u32, TEXT_74418, 1u32]);
     let value_trait: u32 = e.global(USER_TRAIT_VALUE);
     let menu = me(e);
     let tile = tile_at(e, menu, 1);

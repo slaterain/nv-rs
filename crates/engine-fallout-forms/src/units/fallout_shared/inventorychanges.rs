@@ -1282,13 +1282,7 @@ pub fn item_change_set_item_health(
             ],
         )
         .u32();
-    let form_health = if e.stewie(engine_core::extend::stewie::WEAPON_MOD_HEALTH_KEPT) {
-        // lStewieAl's Tweaks' S0151 (bytes at `0x4BD07C`, `GetContChangeMaxHealth` called at
-        // `0x4BD07F` with the entry in place of `GetFormHealth(form)`).
-        modded_max_health(e, this, form)
-    } else {
-        e.call(GET_FORM_HEALTH, &args![form]).i32()
-    };
+    let form_health = e.call(GET_FORM_HEALTH, &args![form]).i32();
     let current = item_change_get_item_health(e, this, false);
     let current = float_to_int(e, current as f64);
     // InventoryChanges::pRef (Xbox PDB) +4.
@@ -1421,23 +1415,13 @@ pub fn item_change_get_item_value(e: &mut Engine, this: Ptr<ItemChange>) -> f32 
             for bit in [1u32, 2, 4] {
                 if slots & bit != 0 {
                     let mod_object = fn_004bd570(e, Ptr::new(weapon), bit);
-                    // TESObjectIMOD value word.
-                    // lStewieAl's Tweaks' row S0045 (`patchFixGetItemValueCrashForModdedWeapons`, at
-                    // `0x4BD48D`, `0x4BD4B5`, `0x4BD4DD`): a mod flag whose mod the weapon no longer has
-                    // adds 0.
-                    let word = if mod_object == 0
-                        && e.stewie(engine_core::extend::stewie::ITEM_VALUE_NULL_WEAPON_MOD)
-                    {
-                        0
-                    } else {
-                        typed_call!(
-                            leaf::FAMILY,
-                            0x0072_6070,
-                            leaf::word_at_4(e, mod_object + MOD_OBJECT_VALUE)
-                        )
-                        .into_ret()
-                        .i32()
-                    };
+                    let word = typed_call!(
+                        leaf::FAMILY,
+                        0x0072_6070,
+                        leaf::word_at_4(e, mod_object + MOD_OBJECT_VALUE)
+                    )
+                    .into_ret()
+                    .i32();
                     price = (word as f64 + price as f64) as f32;
                 }
             }
@@ -3430,12 +3414,7 @@ pub fn fn_004c0cf0(
             continue;
         }
         e.call(GET_FORM_AS_BIPED_MODEL, &args![form]);
-        // lStewieAl's Tweaks' row S0199.06 (`MiscCrashFixes`, `0x4C0DD4`): with no actor the
-        // actor's answer is not asked and the removal goes on.
-        if e.call(EXTRA_GET_CAN_NOT_WEAR, &args![worn_extra]).bool()
-            && !(actor == 0 && e.stewie(engine_core::extend::stewie::REMOVE_WORN_NULL_ACTOR))
-            && !e.vcall(actor, 0x22c, &args![0u32]).bool()
-        {
+        if e.call(EXTRA_GET_CAN_NOT_WEAR, &args![worn_extra]).bool() && !e.vcall(actor, 0x22c, &args![0u32]).bool() {
             e.mem.set_u8(removed, 0);
             return result;
         }
@@ -4902,14 +4881,10 @@ fn remove_item_hotkey(e: &mut Engine, drop_flag: u8, extra: u32, target: u32, co
 fn no_unequip_message(e: &mut Engine, actor: u32) {
     let text = fn_004c69f0(e, Ptr::new(NO_UNEQUIP_MESSAGE_OBJECT));
     let duration = e.global::<f32>(MESSAGE_DURATION);
-    let shown = !e.stewie(engine_core::extend::stewie::NO_UNEQUIP_MESSAGE_PLAYER_ONLY)
-        || actor == e.global::<u32>(PLAYER_GLOBAL);
-    if shown {
-        e.call(
-            SHOW_MESSAGE,
-            &args![text, 0u32, MESSAGE_ICON, 0u32, duration, 0u32],
-        );
-    }
+    e.call(
+        SHOW_MESSAGE,
+        &args![text, 0u32, MESSAGE_ICON, 0u32, duration, 0u32],
+    );
 }
 
 #[cfg(test)]
@@ -9898,9 +9873,6 @@ fn modded_max_health(e: &mut Engine, this: Ptr<ItemChange>, form: u32) -> i32 {
 /// wearing (`0x4C0FF1`: power armor `00480d10` or heavy armor `004c0bd0`); with lStewieAl's Tweaks'
 /// S0152 the biped flags' backpack, heavy and power armor bits (`test byte [ecx+8], 0xA4`).
 fn unequip_refreshes_worn(e: &mut Engine, biped: u32) -> bool {
-    if e.stewie(engine_core::extend::stewie::NPC_BACKPACK_UPDATE) {
-        return e.mem.u8(biped + 8) & 0xa4 != 0;
-    }
     e.call(BIPED_IS_POWER_ARMOR, &args![biped]).bool() || fn_004c0bd0(e, Ptr::new(biped))
 }
 
@@ -9908,13 +9880,7 @@ fn unequip_refreshes_worn(e: &mut Engine, biped: u32) -> bool {
 /// (`OnUpdateInventoryWeightHook`) a total of exactly -1.0 (the "recompute" mark) is cached as 0
 /// (its bits compared, `0xBF800000`).
 fn stored_weight(e: &mut Engine, total: f32) -> f32 {
-    if e.stewie(engine_core::extend::stewie::INVENTORY_WEIGHT_NOT_MINUS_ONE)
-        && total.to_bits() == 0xbf80_0000
-    {
-        0.0
-    } else {
-        total
-    }
+    total
 }
 
 // Translated from 004d0900 (decompiled, FalloutNV.exe 1.4.0.525)

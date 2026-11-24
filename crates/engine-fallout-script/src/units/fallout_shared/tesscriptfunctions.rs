@@ -663,9 +663,7 @@ const TLS_CONSOLE_LINE: u32 = 0x268;
 /// Whether a print Tweaks' row S0056 gates goes out: always without the row; with it only in
 /// console mode (the console open and the running thread's console-line byte set).
 pub(crate) fn stewie_print_allowed(e: &mut Engine) -> bool {
-    if !e.stewie(engine_core::extend::stewie::PRINTS_ONLY_FROM_CONSOLE) {
-        return true;
-    }
+    return true;
     if e.mem.u8(CONSOLE_OPEN) == 0 {
         return false;
     }
@@ -2646,9 +2644,6 @@ pub fn script_test_all_cells_function(e: &mut Engine, a: ScriptArgs) -> bool {
     let tes = e.global::<u32>(GLOBAL_0011DEA10);
     // lStewieAl's Tweaks' row S0194 (`TestAllCellsEnablesGodmode`, its `OnTestAllCells` at
     // `0x5B7212`): god mode on, then the test's state asked as the exe asks it.
-    if e.stewie(engine_core::extend::stewie::TEST_ALL_CELLS_GODMODE) {
-        e.set_global(GOD_MODE, 1u8);
-    }
     let state = if e.call(TES_IS_RUNNING_CELL_TESTS, &args![tes]).bool() {
         TEXT_RUNNING
     } else {
@@ -5412,12 +5407,6 @@ pub fn fn_005bb9e0(e: &mut Engine, a: ScriptArgs) -> bool {
                 // `0x5BBBA6`, `0x5BBBB5`, `0x5BBBE4`): no `NiPointer`; the new plane (the word
                 // pushed for the pointer's constructor) goes into the list as it is, and nothing
                 // releases it.
-                if e.stewie(engine_core::extend::stewie::OCCLUSION_PLANE_KEPT) {
-                    let owner = e.call(FN_00450B80, &args![0u32]).u32();
-                    let list = e.call(FN_00454B30, &args![owner]).u32();
-                    e.call(FN_00C5AE70, &args![list, created]);
-                    return;
-                }
                 e.with_stack(4, |e, held| {
                     e.call(NI_POINTER_INIT, &args![held, created]);
                     let object = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, held));
