@@ -2872,61 +2872,6 @@ mod n087_tests {
         assert_eq!(calls(&r.e, ENTRY_DELETE_004459E0), vec![vec![entry, 1]]);
     }
 
-    /// lStewieAl's Tweaks' row S0199.08: a stimpak given to a hurt companion. Row off: `DrinkPotion`
-    /// (which also removes the item from the companion); row on: the companion's magic caster (+0x88)
-    /// takes the potion's magic item (+0x30) as its spell and releases the cast, nothing removed from
-    /// the companion. The player's stimpak is removed and the companion healed either way.
-    #[test]
-    fn s0199_08_the_stimpak_is_removed_once() {
-        for on in [false, true] {
-            let mut r = rig();
-            let menu = r.menu;
-            let companion = r.companion;
-            let player = r.player;
-            let entry = r.e.mem.alloc(0x10);
-            r.e.mem.set_u32(entry + 8, 0x0c70_0000);
-            r.e.mem.set_u32(companion + ACTOR_MAGIC_CASTER, VTABLE);
-            r.e.register(RT_DYNAMIC_CAST, |_, a| a[0].into_ret());
-            r.e.register(CASTER_RELEASE_CAST_00815870, |_, _| Ret::default());
-            answer(&mut r.e, GET_DEFAULT_OBJECT, 0x0c71_0000);
-            answer(&mut r.e, GET_INVENTORY_ITEM, entry);
-            answer(&mut r.e, WORD_AT_8_0044DDC0, 0x0c70_0000);
-            answer_f64(&mut r.e, ACTOR_GET_HEALTH_PERCENTAGE, 0.5);
-            answer_f64(&mut r.e, GET_BODY_PART_CONDITION, 1.0);
-            r.e.set_global(RESTORE_AMOUNT, 1000.0f32);
-            r.e.set_stewie(
-                engine_core::extend::stewie::COMPANION_STIMPAK_REMOVED_TWICE,
-                on,
-            );
-            r.e.call(0x0075_6490, &args![menu]);
-            let caster = companion + ACTOR_MAGIC_CASTER;
-            let cast: Vec<Vec<u32>> = calls(&r.e, SLOT + CASTER_SET_CURRENT_SPELL)
-                .into_iter()
-                .filter(|w| w[0] == caster)
-                .collect();
-            if on {
-                assert!(calls(&r.e, ACTOR_DRINK_POTION).is_empty());
-                assert_eq!(cast, vec![vec![caster, 0x0c70_0030]]);
-                assert_eq!(
-                    calls(&r.e, CASTER_RELEASE_CAST_00815870),
-                    vec![vec![caster, 0]]
-                );
-            } else {
-                assert_eq!(
-                    calls(&r.e, ACTOR_DRINK_POTION),
-                    vec![vec![companion, 0x0c70_0000, 0, 1]]
-                );
-                assert!(cast.is_empty());
-                assert!(calls(&r.e, CASTER_RELEASE_CAST_00815870).is_empty());
-            }
-            assert_eq!(
-                calls(&r.e, SLOT + 0x17c),
-                vec![vec![player, 0x0c70_0000, 0, 1, 0, 0, 0, 0, 0, 1, 0]]
-            );
-            assert_eq!(calls(&r.e, ACTOR_RESTORE_ACTOR_VALUE).len(), 7);
-        }
-    }
-
     #[test]
     fn use_stim_on_a_healthy_companion_only_deletes_the_entry() {
         let mut r = rig();

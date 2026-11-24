@@ -5665,53 +5665,6 @@ mod tests {
         assert!(calls(&e, SET_CONNECTED_CELLS_PUBLIC).is_empty());
     }
 
-    /// lStewieAl's Tweaks' row S0213: with the row `Lock 0` stores level 0 in the lock (the exe
-    /// keeps the old `0xff`), and the console line is Tweaks' "Locked %s with lock level %d (%s)"
-    /// with the level's setting text; a level given is stored either way.
-    #[test]
-    fn s0213_lock_zero_stores_zero_and_the_line_names_the_level() {
-        for (on, level) in [(false, 0u32), (true, 0), (true, 3)] {
-            let mut e = lock_engine();
-            let reference = lockable(&mut e, 0x10, true, 0);
-            let lock = e.mem.u32(reference + 0xd0);
-            if !e.mem.is_mapped(LOCK_LEVEL_SETTINGS) {
-                e.map(LOCK_LEVEL_SETTINGS & !0xfff, 0x1000);
-            }
-            let setting = e.mem.alloc(0x10);
-            e.mem.set_u32(setting + 4, 0x7777);
-            e.mem.set_u32(LOCK_LEVEL_SETTINGS + 2 * 4, setting);
-            e.register(LOCK_LEVEL_TO_ENUM, |_, _| 2u32.into_ret());
-            let format = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-            let slot = format.clone();
-            e.register_double(CONSOLE_PRINT, move |e, a| {
-                if a[0] != FORMAT_LOCKED {
-                    *slot.borrow_mut() = e.mem.cstr(a[0]);
-                }
-                Ret::default()
-            });
-            e.set_stewie(engine_core::extend::stewie::LOCK_COMMAND, on);
-            parse_gives(&mut e, true, &[level, 0]);
-            set_echo(&mut e, true);
-            let a = script(&mut e, reference);
-            start_log(&mut e);
-            assert!(run(&mut e, 0x005c_bf80, a));
-            let want = if on || level != 0 { level as u8 } else { 0xff };
-            assert_eq!(e.mem.u8(lock), want, "row {on}, level {level}");
-            let printed = calls(&e, CONSOLE_PRINT);
-            assert_eq!(printed.len(), 1);
-            if on {
-                assert_eq!(&printed[0][1..], &[0x5eed, level, 0x7777]);
-                assert_eq!(
-                    format.borrow().as_slice(),
-                    b"Locked %s with lock level %d (%s)"
-                );
-                assert_eq!(calls(&e, LOCK_LEVEL_TO_ENUM), vec![vec![level]]);
-            } else {
-                assert_eq!(printed[0], vec![FORMAT_LOCKED, 0x5eed, level]);
-            }
-        }
-    }
-
     #[test]
     fn lock_hands_a_terminal_its_clamped_level() {
         let mut e = lock_engine();

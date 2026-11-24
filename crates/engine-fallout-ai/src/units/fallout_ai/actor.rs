@@ -5126,57 +5126,6 @@ mod tests {
         out
     }
 
-    /// lStewieAl's Tweaks' row S0183 (`FollowerTopicUseAfterFreeFix`, `0x87DDD0`): an actor going away
-    /// with follower barks queued for it (first, middle and last of the list): off, the list keeps
-    /// them, naming the freed actor; on, they are freed and taken out (before the radio call), the
-    /// others' order kept.
-    #[test]
-    fn s0183_an_actor_going_away_takes_its_follower_barks() {
-        for on in [false, true] {
-            let (mut e, actor, _, _) = destructor_setup();
-            let other = e.mem.alloc(0x10);
-            let items = follower_barks(
-                &mut e,
-                &[actor.addr(), other, actor.addr(), other, actor.addr()],
-            );
-            e.set_stewie(
-                engine_core::extend::stewie::FOLLOWER_BARK_USE_AFTER_FREE,
-                on,
-            );
-            e.call_log = Some(vec![]);
-            e.call(0x0087_dcb0, &args![actor]);
-            if on {
-                assert_eq!(barks_left(&e), vec![items[1], items[3]]);
-                let calls = called(&e);
-                let freed = calls.iter().position(|a| *a == 0x00aa_4060).unwrap();
-                assert!(freed < calls.iter().position(|a| *a == 0x0083_5980).unwrap());
-            } else {
-                assert_eq!(barks_left(&e), items);
-            }
-        }
-    }
-
-    /// Row S0183 with no bark naming the actor (ordinary input): the list and the calls are the same
-    /// with the row off and on.
-    #[test]
-    fn s0183_row_on_without_its_barks_changes_nothing() {
-        let mut runs = vec![];
-        for on in [false, true] {
-            let (mut e, actor, _, _) = destructor_setup();
-            let other = e.mem.alloc(0x10);
-            let items = follower_barks(&mut e, &[other, other]);
-            e.set_stewie(
-                engine_core::extend::stewie::FOLLOWER_BARK_USE_AFTER_FREE,
-                on,
-            );
-            e.call_log = Some(vec![]);
-            e.call(0x0087_dcb0, &args![actor]);
-            assert_eq!(barks_left(&e), items);
-            runs.push(called(&e));
-        }
-        assert_eq!(runs[0], runs[1]);
-    }
-
     #[test]
     fn destructor_deletes_the_two_combat_arrays_between_00835980_and_the_shutdown_check() {
         // 0087dcb0: +0x12c at ddd8..ddfc and +0x130 at de0a..de2e, each through

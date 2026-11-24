@@ -732,25 +732,6 @@ mod tests {
         assert!(calls(&on, 0x00a5_9400).is_empty());
     }
 
-    /// Row S0130.03 with the node there (ordinary input): the same calls with the row off and on.
-    #[test]
-    fn s0130_03_row_on_with_a_node_changes_nothing() {
-        let world = || Beam {
-            dead: false,
-            player: false,
-            counts: true,
-            package: 0x0e10_0000,
-            flag_1000: false,
-            iron_sights: true,
-        };
-        let (_, _, off) = update_with(world(), |_| {});
-        let (_, _, on) = update_with(world(), |e| {
-            e.set_stewie(engine_core::extend::stewie::BEAM_NPC_NULL_NODE, true);
-        });
-        assert_eq!(off, on);
-        assert_eq!(calls(&on, 0x00a5_9400)[0][0], 0x0c00_0010);
-    }
-
     #[test]
     fn update_aims_another_shooter_from_its_node() {
         let (_, e, log) = update(Beam {

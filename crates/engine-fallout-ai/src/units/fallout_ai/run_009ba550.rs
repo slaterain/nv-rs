@@ -1282,43 +1282,6 @@ mod tests {
         assert_eq!(order(&e, &steps), steps);
     }
 
-    /// S0074 (`patchFixCombatMissileDepthGamesettings`): `fCombatMissileStickDepth` is 3.5 at the
-    /// first impact and 7.0 by the second (a mod or script changed it). Off, the second impact
-    /// still uses the copy cached at the first, 3.5; on, the setting's own value, 7.0. With the
-    /// game's own data the setting never changes, so both read the same.
-    #[test]
-    fn s0074_the_stick_depth_follows_the_setting() {
-        for (on, second_depth) in [(false, 3.5f32), (true, 7.0)] {
-            let mut e = engine();
-            let s = impact_scene(&mut e);
-            e.set_stewie(
-                engine_core::extend::stewie::COMBAT_MISSILE_DEPTH_SETTINGS,
-                on,
-            );
-            if !e.mem.is_mapped(STICK_VALUE_SOURCE) {
-                e.map(STICK_VALUE_SOURCE & !0xfff, 0x1000);
-            }
-            let value = STICK_VALUE_SOURCE + 4;
-            e.mem.set_f32(value, 3.5);
-            e.register_double(0x0040_3e20, move |_, _| ret(value));
-            e.call(0x009b_a660, &args![s.this]);
-            assert_eq!(calls_to(&e, 0x0045_bb20)[0][2], 3.5f32.to_bits());
-            e.mem.set_f32(value, 7.0);
-            e.call_log = Some(vec![]);
-            e.call(0x009b_a660, &args![s.this]);
-            assert_eq!(
-                calls_to(&e, 0x0045_bb20)[0][2],
-                second_depth.to_bits(),
-                "on {on}"
-            );
-            assert_eq!(
-                e.global::<f32>(STICK_VALUE),
-                3.5,
-                "the cache is kept either way"
-            );
-        }
-    }
-
     #[test]
     fn a_nonzero_query_skips_the_repositioning_and_the_follow_offset() {
         let mut e = engine();

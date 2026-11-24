@@ -309,28 +309,6 @@ mod tests {
         }
     }
 
-    /// lStewieAl's Tweaks' row S0018 (`fixUGridsCrashAndAllow3AsMinimum`, `0x4BC501`, `0x4BC505`): with
-    /// the row the least uGridsToLoad is 3 (below it, 3); 4 is still made odd; off, as the exe (5).
-    #[test]
-    fn s0018_row_on_keeps_three_grids() {
-        for (start, on, off) in [
-            (0u32, vec![3u32], vec![5u32]),
-            (2, vec![3], vec![5]),
-            (3, vec![], vec![5]),
-            (4, vec![5], vec![5]),
-            (5, vec![], vec![]),
-            (6, vec![7], vec![7]),
-        ] {
-            for (row, expected) in [(true, &on), (false, &off)] {
-                let mut e = engine();
-                e.set_stewie(engine_core::extend::stewie::UGRIDS_LOAD_NULL_CELL, row);
-                let sets = grids_setting(&mut e, start);
-                e.call(0x004b_c4c0, &args![]);
-                assert_eq!(*sets.borrow(), *expected, "start {start}, row {row}");
-            }
-        }
-    }
-
     #[test]
     fn even_grids_become_odd_and_odd_grids_stay() {
         let mut e = engine();

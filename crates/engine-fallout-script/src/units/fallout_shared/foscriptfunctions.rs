@@ -423,32 +423,6 @@ mod tests {
             ]]
         );
     }
-
-    /// lStewieAl's Tweaks' row S0056: with the console visible, the line prints without the row,
-    /// and with it only while a console line runs (the console's open byte and the thread's
-    /// console-line byte).
-    #[test]
-    fn s0056_the_line_prints_only_from_the_console_with_the_row() {
-        for (on, line, want) in [(false, false, 1), (true, false, 0), (true, true, 1)] {
-            let (mut e, action, _) = engine(4, true);
-            e.mem.set_u8(action + 4, 1);
-            let open = 0x011d_ea2e;
-            if !e.mem.is_mapped(open) {
-                e.map(open & !0xfff, 0x1000);
-            }
-            e.mem.set_u8(open, 1);
-            let tls = e.tls();
-            e.mem.set_u8(tls + 0x268, u8::from(line));
-            e.set_stewie(engine_core::extend::stewie::PRINTS_ONLY_FROM_CONSOLE, on);
-            e.call_log = Some(vec![]);
-            assert_eq!(run(&mut e, 7, 0x33), (true, 1.0));
-            assert_eq!(
-                calls_to(&e, CONSOLE_PRINT).len(),
-                want,
-                "row {on}, line {line}"
-            );
-        }
-    }
 }
 
 #[cfg(test)]

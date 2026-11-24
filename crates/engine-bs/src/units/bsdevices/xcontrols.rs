@@ -616,43 +616,6 @@ mod tests_actions_rumble {
         assert_eq!(calls(&e, ALLOCATE).len(), 1);
     }
 
-    /// lStewieAl's Tweaks' row S0107.01: row off, each vibration allocates its 0x24-byte effect
-    /// (never freed: the leak); row on, none is allocated and every vibration hands the queue the
-    /// same kept block, zeroed by the memset each time and filled as before.
-    #[test]
-    fn s0107_01_the_rumble_effect_is_one_kept_block() {
-        for on in [false, true] {
-            let (mut e, this, levels) = rumble_engine();
-            e.set_stewie(engine_core::extend::stewie::RUMBLE_STATES_LEAK, on);
-            let left = 0.5f32.to_bits();
-            let right = 0.25f32.to_bits();
-            controls_rumble(&mut e, Ptr::new(this), left, right, 8, 0xc, 4, 0x1ff, 1);
-            let kept = e.stewie_kept(engine_core::extend::stewie::kept::RUMBLE_STATES, 0x24);
-            e.mem.write(kept + 0x14, &[0xcc; 0x10]);
-            controls_rumble(&mut e, Ptr::new(this), left, right, 8, 0xc, 4, 0x1ff, 1);
-            let effect = if on { kept } else { 0x0a00_0000 };
-            let adds: Vec<u32> = calls(&e, QUEUE_ADD).iter().map(|c| c.1[2]).collect();
-            assert_eq!(adds, vec![effect; 4], "row {on}");
-            assert_eq!(calls(&e, ALLOCATE).len(), if on { 0 } else { 2 });
-            assert_eq!(calls(&e, MEMSET).len(), 2, "the memset runs either way");
-            assert_eq!(*levels.borrow(), vec![16383, 32767, 16383, 32767]);
-            assert_eq!(
-                (
-                    e.mem.u32(effect + 4),
-                    e.mem.u32(effect + 8),
-                    e.mem.u32(effect + 0xc)
-                ),
-                (4, 8, 0xc)
-            );
-            assert_eq!(e.mem.u8(effect + 0x10), 0xff);
-            assert_eq!(
-                (e.mem.u32(effect + 0x14), e.mem.u32(effect + 0x18)),
-                (0, 0),
-                "zeroed again"
-            );
-        }
-    }
-
     #[test]
     fn fistp32_chop_truncates_and_flags_out_of_range() {
         assert_eq!(fistp32_chop(X87Ext::load64(2.9)), 2);

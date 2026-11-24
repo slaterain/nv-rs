@@ -1421,63 +1421,6 @@ mod b035_tests {
         e.register_double(0x004e_75d0, move |_, _| data.into_ret());
     }
 
-    /// S0230 (`DoubleSoundFix`): a footstep key at 0.5 in the window 0.2 to 0.8. Off, the state
-    /// comes from `008041a0` (here 1, active) and the key plays even while the sequence's last
-    /// time is still -FLT_MAX (not yet updated: the sound plays now and again when it runs). On,
-    /// Tweaks reads the sequence itself: -FLT_MAX answers inactive and nothing plays; a real last
-    /// time gives the state word (+0x44): 1 plays, 2 does not.
-    #[test]
-    fn s0230_a_sequence_not_yet_updated_plays_no_sounds() {
-        for (on, last, state, played) in [
-            (false, -f32::MAX, 2u32, true),
-            (true, -f32::MAX, 1, false),
-            (true, 0.3, 1, true),
-            (true, 0.3, 2, false),
-            (true, f32::MAX, 1, true),
-        ] {
-            let mut e = Engine::new();
-            let keys = Keys {
-                texts: vec![(0.5, "Sound: NPCHumanFootstep LFoot\r\n")],
-            };
-            let sequence = play_world(&mut e, &keys, 0.2, 0.8);
-            e.set_stewie(engine_core::extend::stewie::DOUBLE_SOUND, on);
-            e.mem.set_f32(sequence + 0x34, last);
-            e.mem.set_u32(sequence + 0x44, state);
-            let names = record_sounds(&mut e, 0xe00);
-            sound_data(&mut e);
-            e.register(0x005e_39b0, |_, _| 0x10u32.into_ret());
-            e.mem.set_u32(PLAYER_011DEA3C, 0x1000);
-            e.register(0x0084_e3a0, |_, _| 0x1234u32.into_ret());
-            e.register(0x0045_3a70, |_, _| 0xa00u32.into_ret());
-            e.register(0x00ad_73b0, |_, a| a[1].into_ret());
-            quiet(
-                &mut e,
-                &[
-                    0x0041_a250,
-                    0x0041_8900,
-                    SOUND_HANDLE_DESTROY,
-                    0x00ad_8f20,
-                    0x00ad_8b60,
-                    0x00ad_8830,
-                ],
-            );
-            e.call_log = Some(vec![]);
-            e.call(0x004e_ef00, &args![sequence, 0u32]);
-            let log = e.call_log.take().unwrap();
-            let expected: Vec<&str> = if played {
-                vec!["NPCHumanFootstep"]
-            } else {
-                vec![]
-            };
-            assert_eq!(
-                *names.borrow(),
-                expected,
-                "on {on} last {last} state {state}"
-            );
-            assert_eq!(calls(&log, 0x0080_41a0).len(), usize::from(!on));
-        }
-    }
-
     #[test]
     fn play_sounds_plays_the_keys_in_the_window_without_an_actor() {
         let mut e = Engine::new();

@@ -540,35 +540,6 @@ mod tests {
         );
     }
 
-    /// lStewieAl's Tweaks' S0080: off, the report walks the budget table (`004a8fe0`, 32
-    /// receiver calls); on, not at all.
-    #[test]
-    fn s0080_the_report_no_longer_rereads_the_budgets() {
-        let calls = |row: bool| {
-            let mut e = engine_with_memory();
-            fill_table(&mut e);
-            let receiver = e.mem.alloc(8);
-            e.mem.set_u32(receiver, FAKE_RECEIVER_VTABLE);
-            e.register_double(TABLE_WORDS_RECEIVER, move |_, _| Ret {
-                eax: receiver,
-                ..Ret::default()
-            });
-            e.register(FAKE_RECEIVER_METHOD, |_, _| Ret::default());
-            e.set_stewie(
-                engine_core::extend::stewie::TEST_ALL_CELLS_NO_INI_REREAD,
-                row,
-            );
-            e.call_log = Some(vec![]);
-            report_reads_budgets(&mut e);
-            let log = e.call_log.take().unwrap();
-            log.iter()
-                .filter(|(addr, _)| *addr == FAKE_RECEIVER_METHOD)
-                .count()
-        };
-        assert_eq!(calls(false), 32);
-        assert_eq!(calls(true), 0);
-    }
-
     #[test]
     fn table_walk_calls_the_receiver_twice_per_entry() {
         let mut e = engine_with_memory();

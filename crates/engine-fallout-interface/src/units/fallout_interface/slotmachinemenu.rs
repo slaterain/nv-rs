@@ -2809,64 +2809,6 @@ mod n058_tests {
         assert_ne!(e.global::<u32>(CAMERA_011DA9D0), 0);
     }
 
-    /// lStewieAl's Tweaks' row S0036 in the slot machine menu's `Create`: a first record of a casino that
-    /// is gone. Row off: the exe refuses the menu on it (the "no data" message); row on: it is taken out
-    /// (freed, with its node's next) and the walk finds this casino's record (the player barred, so it
-    /// stops there).
-    #[test]
-    fn s0036_slot_machine_create_takes_out_a_casino_that_is_gone() {
-        for on in [false, true] {
-            let mut e = engine();
-            world(&mut e);
-            let casino = e.global::<u32>(CASINO_011DA9AC);
-            let gone = e.mem.alloc(0xc);
-            e.mem.set_u32(gone, 0x0a00_0001);
-            let record = e.mem.alloc(0xc);
-            e.mem.set_u32(record, 0x77);
-            let second = e.mem.alloc(8);
-            e.mem.set_u32(second, record);
-            let first = e.mem.alloc(8);
-            e.mem.set_u32(first, gone);
-            e.mem.set_u32(first + 4, second);
-            e.register_double(CASINO_DATA_LIST_005A6260, move |_, _| first.into_ret());
-            e.register(DATA_VALID_004839C0, |_, a| {
-                u32::from(a[0] != 0x0a00_0001).into_ret()
-            });
-            e.register(KEY_0084E3A0, |_, _| 0x77u32.into_ret());
-            e.register(PLAYER_00969B80, |_, _| 1u32.into_ret());
-            e.register(PLAYER_00969B40, |_, _| 3u32.into_ret());
-            e.register(0x00aa_4060, |_, _| Ret::default());
-            e.register(0x0071_b160, |_, _| Ret::default());
-            e.set_stewie(engine_core::extend::stewie::CASINO_INVALID_CHIPS, on);
-            e.call_log = Some(vec![]);
-            assert_eq!(
-                e.call(0x007c_0a40, &args![casino, 5u32, 50u32, 0u32]).u32(),
-                0
-            );
-            let left = (e.mem.u32(first), e.mem.u32(first + 4));
-            if on {
-                assert_eq!(e.global::<u32>(CASINO_DATA_011DA9A8), record);
-                assert!(calls_to(&e, SHOW_MESSAGE_007052F0)
-                    .iter()
-                    .all(|w| w[0] != NO_DATA_MESSAGE_01076694));
-                assert_eq!(
-                    calls_to(&e, SPRINTF_S)[0][2..],
-                    [BANNED_FORMAT_01070C58, 0x011d_2ac0, 3]
-                );
-                assert_eq!(left, (record, 0));
-                assert_eq!(calls_to(&e, 0x00aa_4060).len(), 2);
-            } else {
-                assert_eq!(e.global::<u32>(CASINO_DATA_011DA9A8), 0);
-                assert_eq!(
-                    calls_to(&e, SHOW_MESSAGE_007052F0)[0][0],
-                    NO_DATA_MESSAGE_01076694
-                );
-                assert_eq!(left, (gone, second));
-                assert!(calls_to(&e, 0x00aa_4060).is_empty());
-            }
-        }
-    }
-
     #[test]
     fn create_refuses_or_builds_the_menu() {
         let mut e = engine();

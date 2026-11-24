@@ -921,41 +921,6 @@ mod b035_tests {
         assert_eq!(calls(&log, 0x0067_d970), vec![vec![this.addr()]]);
     }
 
-    /// S0228 (`PatrolPackageFix`): a patrol package's data with no actor (an invalidated package
-    /// on load). Off, the destructor still releases the reference, as the exe; on, Tweaks'
-    /// `ClearReservedPatrolRef` skips it; with an actor both release it. The rest runs either way.
-    #[test]
-    fn s0228_no_reference_released_without_an_actor() {
-        for (on, actor, released) in [
-            (false, 0u32, 1usize),
-            (true, 0, 0),
-            (true, 0x50, 1),
-            (false, 0x50, 1),
-        ] {
-            let mut e = Engine::new();
-            array_doubles(&mut e);
-            extra_doubles(&mut e, vec![]);
-            e.map(0x011c_3000, 0x1000);
-            e.mem.set_u32(0x011c_3f2c, 0x900);
-            e.register(0x0042_26e0, |_, _| false.into_ret());
-            quiet(&mut e, &[0x005e_04f0, 0x0067_d970]);
-            e.set_stewie(engine_core::extend::stewie::PATROL_PACKAGE, on);
-            let this = patrol(&mut e, &[0x100]);
-            e.set(this, PatrolActorPackageData::pActor, actor);
-            e.call_log = Some(vec![]);
-            e.call(0x009f_2a70, &args![this]);
-            let log = e.call_log.take().unwrap();
-            assert_eq!(
-                calls(&log, SET_PATROL_REF_USER).len(),
-                released,
-                "on {on} actor {actor:#x}"
-            );
-            assert_eq!(e.get(this, PatrolActorPackageData::eState), 4);
-            assert_eq!(e.mem.u32(this.addr() + REFERENCES + 8), 0);
-            assert_eq!(calls(&log, 0x0067_d970), vec![vec![this.addr()]]);
-        }
-    }
-
     #[test]
     fn fn_009f2b30_needs_an_index_inside_the_array() {
         let mut e = Engine::new();

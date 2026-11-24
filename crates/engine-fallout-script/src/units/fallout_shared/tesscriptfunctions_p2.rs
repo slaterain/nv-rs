@@ -6698,51 +6698,6 @@ mod tests {
         assert!(calls(&e, CENTER_ON_CELL).is_empty());
     }
 
-    /// lStewieAl's Tweaks' row S0101: the cell `CenterOnCell` hands on, by the name typed: the
-    /// exe's 0 with the row off; with it the cell of that editor id, else the hex form id's form
-    /// when it is a cell (type `0x39`), else 0.
-    #[test]
-    fn s0101_center_on_cell_takes_a_hex_form_id() {
-        let run_with = |on: bool, typed: &'static str, by_name: u32, form_type: u8| {
-            let mut e = engine();
-            accept(&mut e, &[CLOSE_CONSOLE, CENTER_ON_CELL]);
-            e.set_global(PLAYER, 0x3333u32);
-            e.set_global(DATA_HANDLER, 0x4000u32);
-            e.set_stewie(engine_core::extend::stewie::CENTER_ON_CELL_FORM_ID, on);
-            let cell = e.mem.alloc(0x40);
-            e.mem.set_u8(cell + 4, form_type);
-            e.register_double(DATA_HANDLER_CELL_BY_NAME, move |e, a| {
-                assert_eq!(a[0], 0x4000);
-                assert_eq!(e.mem.cstr(a[1]), typed.as_bytes());
-                by_name.into_ret()
-            });
-            e.register_double(LOOKUP_FORM_BY_ID, move |_, a| {
-                if a[0] == 0x0001_2a3b {
-                    cell.into_ret()
-                } else {
-                    0u32.into_ret()
-                }
-            });
-            parse_with(&mut e, true, move |e, a| {
-                e.mem.set_cstr(a[7], typed.as_bytes())
-            });
-            start_log(&mut e);
-            assert!(run(&mut e, 0x005b_d5e0, script(0)));
-            let given = calls(&e, CENTER_ON_CELL)[0][2];
-            let looked_up = calls(&e, LOOKUP_FORM_BY_ID).len();
-            (given, cell, looked_up)
-        };
-        assert_eq!(run_with(false, "12A3B", 0, 0x39).0, 0);
-        assert_eq!(run_with(true, "GoodspringsExt", 0x7777, 0x39).0, 0x7777);
-        let (given, cell, _) = run_with(true, "12A3B", 0, 0x39);
-        assert_eq!(given, cell);
-        let (given, cell, _) = run_with(true, " 0x12a3b", 0, 0x39);
-        assert_eq!(given, cell);
-        assert_eq!(run_with(true, "12A3B", 0, 0x3a).0, 0, "not a cell");
-        let (given, _, looked_up) = run_with(true, "Nowhere", 0, 0x39);
-        assert_eq!((given, looked_up), (0, 0), "no hex digits: no lookup");
-    }
-
     /// `strtoul(text, nullptr, 16)` as the C runtime reads it.
     #[test]
     fn s0101_strtoul_hex_reads_as_the_c_runtime() {
@@ -6759,85 +6714,6 @@ mod tests {
         assert_eq!(strtoul_hex(b"-11111111111111111"), u32::MAX);
         assert_eq!(strtoul_hex(b"g1"), 0);
         assert_eq!(strtoul_hex(b""), 0);
-    }
-
-    /// lStewieAl's Tweaks' row S0017: `prid` draws its debug text with the row off, not with it; the
-    /// reference is picked either way.
-    #[test]
-    fn s0017_prid_draws_no_debug_text_with_the_row() {
-        for on in [false, true] {
-            let mut e = engine();
-            let form = pick_engine(&mut e, 0x3a);
-            e.set_stewie(engine_core::extend::stewie::PRID_NO_DEBUG_TEXT, on);
-            parse_gives(&mut e, true, &[form]);
-            start_log(&mut e);
-            assert!(run(&mut e, 0x005b_d410, script(0)));
-            assert_eq!(
-                calls(&e, DEBUG_TEXT_PRINT).len(),
-                usize::from(!on),
-                "row {on}"
-            );
-            assert_eq!(calls(&e, PICK_REFERENCE), vec![vec![form]], "row {on}");
-            assert_eq!(calls(&e, BS_STRING_DESTRUCT).len(), 1, "row {on}");
-        }
-    }
-
-    /// lStewieAl's Tweaks' row S0161: with the row and no root node, `ToggleNavMesh` makes one
-    /// named "NavMeshRootNode", keeps a reference to it and attaches it to the scene graph (once);
-    /// the render singleton is read from `0x11D6E2C`. With the row off nothing is made.
-    #[test]
-    fn s0161_toggle_nav_mesh_makes_its_root_node() {
-        for on in [false, true] {
-            let mut e = engine();
-            let node = e.mem.alloc(0x100);
-            let render = e.mem.alloc(0x40);
-            e.set_global(NAV_MESH_RENDER_SINGLETON, render);
-            e.set_global(NAV_MESH_ROOT_NODE, 0u32);
-            const ATTACH: u32 = 0x0900_0200;
-            let attached = Rc::new(RefCell::new(Vec::new()));
-            let seen = attached.clone();
-            e.register_double(ATTACH, move |_, a| {
-                seen.borrow_mut().push((a[0], a[1], a[2]));
-                Ret::default()
-            });
-            let scene_graph = object_with(&mut e, &[(VSLOT_ATTACH_CHILD, ATTACH)]);
-            e.set_global(SCENE_GRAPH, scene_graph);
-            e.register_double(NI_NODE_CREATE, move |_, _| node.into_ret());
-            e.register(STRING_TABLE_ADD, |e, a| {
-                assert_eq!(e.mem.cstr(a[0]), b"NavMeshRootNode");
-                0x7100u32.into_ret()
-            });
-            accept(&mut e, &[STRING_TABLE_RELEASE]);
-            // The exe's getter answers the word at `0x11D6E2C`, as the row reads it.
-            e.register(NAV_MESH_RENDER, |e, _| {
-                e.global::<u32>(NAV_MESH_RENDER_SINGLETON).into_ret()
-            });
-            e.register(NAV_MESH_RENDER_IS_DRAWING, |_, _| 1u32.into_ret());
-            accept(&mut e, &[NAV_MESH_RENDER_SET_DRAW]);
-            e.set_stewie(engine_core::extend::stewie::NAV_MESH_ROOT_NODE, on);
-            for _ in 0..2 {
-                // No mode: 4, drawing on, so the display is turned off (mode 0).
-                parse_gives(&mut e, true, &[]);
-                start_log(&mut e);
-                assert!(run(&mut e, 0x005b_cfe0, script(0)), "row {on}");
-                assert_eq!(calls(&e, NAV_MESH_RENDER_IS_DRAWING), vec![vec![render]]);
-                assert_eq!(calls(&e, NAV_MESH_RENDER_SET_DRAW), vec![vec![render, 0]]);
-                assert_eq!(calls(&e, NAV_MESH_RENDER).len(), usize::from(!on) + 1);
-            }
-            if on {
-                assert_eq!(e.global::<u32>(NAV_MESH_ROOT_NODE), node);
-                assert_eq!(e.mem.u32(node + 8), 0x7100, "the name");
-                assert_eq!(e.mem.u32(node + 4), 1, "one reference kept");
-                assert_eq!(
-                    *attached.borrow(),
-                    vec![(scene_graph, node, 1)],
-                    "attached once"
-                );
-            } else {
-                assert_eq!(e.global::<u32>(NAV_MESH_ROOT_NODE), 0);
-                assert!(attached.borrow().is_empty());
-            }
-        }
     }
 
     /// Doubles for the world space and cell functions the exterior commands
@@ -7481,38 +7357,6 @@ mod tests {
         assert_eq!(calls(&e, GET_EXPERIENCE_POINTS), vec![vec![0, 12]]);
         // Part -1: no dismember.
         assert!(calls(&e, ACTOR_SCRIPT_DISMEMBER).is_empty());
-    }
-
-    /// S0204 (`KillCommandDuplicateRewardXpFix`, its `KillActor` half): with the row on, a kill by
-    /// the player remembers the actor (Tweaks' `pLastKilledActor`, the kept word) before the
-    /// experience is given; a kill by someone else leaves it as it was; off, it is never written.
-    #[test]
-    fn s0204_the_players_kill_command_remembers_the_actor() {
-        let kept_word = |e: &mut Engine| {
-            let kept = e.stewie_kept(
-                engine_core::extend::stewie::kept::LAST_KILL_COMMAND_ACTOR,
-                4,
-            );
-            e.mem.u32(kept)
-        };
-        for on in [false, true] {
-            let mut e = engine();
-            e.set_stewie(engine_core::extend::stewie::KILL_COMMAND_DUPLICATE_XP, on);
-            let (actor, player) = kill_engine(&mut e, false);
-            parse_gives(&mut e, true, &[player, -1i32 as u32, -1i32 as u32]);
-            start_log(&mut e);
-            assert!(run(&mut e, 0x005b_e2a0, script(actor)));
-            assert_eq!(kept_word(&mut e), if on { actor } else { 0 }, "on {on}");
-            assert_eq!(calls(&e, V_RECORD), vec![vec![player, 250]], "on {on}");
-
-            let mut e = engine();
-            e.set_stewie(engine_core::extend::stewie::KILL_COMMAND_DUPLICATE_XP, on);
-            let (actor, _) = kill_engine(&mut e, false);
-            let other = actor_with(&mut e, &[]);
-            parse_gives(&mut e, true, &[other, -1i32 as u32, -1i32 as u32]);
-            assert!(run(&mut e, 0x005b_e2a0, script(actor)));
-            assert_eq!(kept_word(&mut e), 0, "someone else, on {on}");
-        }
     }
 
     #[test]

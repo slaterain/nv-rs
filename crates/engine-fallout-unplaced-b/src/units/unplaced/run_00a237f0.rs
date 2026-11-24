@@ -1622,26 +1622,6 @@ mod tests {
         assert_eq!(tests.borrow().len(), 1);
     }
 
-    /// lStewieAl's Tweaks' S0016: with a gamepad active, off: the console key (control 0x1D, key
-    /// 0x29) and Print Screen (0x1E, key 0xB7) answer 0; on: the keyboard is read as without a
-    /// gamepad.
-    #[test]
-    fn s0016_fixed_keys_with_a_gamepad() {
-        let run = |row: bool, control: i32, key: u32| {
-            let mut e = engine();
-            let this = unbound(&mut e);
-            gamepad(&mut e);
-            e.mem.set_u8(this.addr() + KEYBOARD_STATE + key, 0x80);
-            e.set_stewie(engine_core::extend::stewie::FIXED_KEYS_WITH_PAD, row);
-            fn_00a24660(&mut e, this, control, 1)
-        };
-        assert_eq!(run(false, 0x1d, 0x29), 0);
-        assert_eq!(run(true, 0x1d, 0x29), 1);
-        assert_eq!(run(false, 0x1e, 0xb7), 0);
-        assert_eq!(run(true, 0x1e, 0xb7), 1);
-        assert_eq!(run(true, 0x1e, 0x29), 0);
-    }
-
     #[test]
     fn control_state_sums_the_bindings() {
         let mut e = engine();
@@ -1932,22 +1912,6 @@ mod tests {
         // The high byte of the word is dropped.
         fn_00a24f60(&mut e, this, 5, 0xaa44_5566);
         assert_eq!(fn_00a24f10(&mut e, this, 5), 0x0044_5566);
-    }
-
-    /// lStewieAl's Tweaks' S0022.54: backslash (0x2B) can be bound with the row; the other
-    /// reserved keys stay refused.
-    #[test]
-    fn s0022_54_backslash_can_be_bound() {
-        let mut e = engine();
-        let this = unbound(&mut e);
-        e.set_stewie(engine_core::extend::stewie::BIND_BACKSLASH, true);
-        assert!(fn_00a24fc0(&mut e, this, 0, 0, 0x2b));
-        assert_eq!(binding(&e, this, 0, 0), 0x2b);
-        for key in [1u8, 9, 0x29, 0x3b, 0xb7, 0xc7] {
-            assert!(!fn_00a24fc0(&mut e, this, 1, 0, key), "key {key:#x}");
-        }
-        e.set_stewie(engine_core::extend::stewie::BIND_BACKSLASH, false);
-        assert!(!fn_00a24fc0(&mut e, this, 2, 0, 0x2b));
     }
 
     #[test]

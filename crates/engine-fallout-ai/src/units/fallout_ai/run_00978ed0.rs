@@ -389,40 +389,6 @@ mod n028_tests {
         (beam, shooter)
     }
 
-    /// lStewieAl's Tweaks' row S0130.01 (`ContinuousBeamProjectileCrashFix`, `0x978FB5`): a beam going
-    /// away while its shooter, an actor, holds it as its continuous beam: off, the actor keeps the freed
-    /// beam (the exe's use after free); on, it holds none.
-    #[test]
-    fn s0130_01_the_shooter_lets_go_of_a_beam_that_goes_away() {
-        for on in [false, true] {
-            let mut e = Engine::new();
-            stub_all(&mut e, &[POINTER_RELEASE, 0x009b_c470]);
-            let (beam, shooter) = beam_and_shooter(&mut e, 0x008d_0360);
-            e.mem.set_u32(shooter + 0x1a0, beam);
-            e.set_stewie(engine_core::extend::stewie::BEAM_SHOOTER_POINTER, on);
-            e.call(0x0097_8f70, &[beam]);
-            assert_eq!(e.mem.u32(shooter + 0x1a0), if on { 0 } else { beam });
-        }
-    }
-
-    /// Row S0130.01 with ordinary input: a shooter holding another beam, and one that is no actor
-    /// (its +0x100 is another function), keep their word with the row off and on.
-    #[test]
-    fn s0130_01_row_on_with_another_beam_or_no_actor_changes_nothing() {
-        for (is_actor, other_beam) in [(0x008d_0360u32, true), (0x0012_3450, false)] {
-            for on in [false, true] {
-                let mut e = Engine::new();
-                stub_all(&mut e, &[POINTER_RELEASE, 0x009b_c470]);
-                let (beam, shooter) = beam_and_shooter(&mut e, is_actor);
-                let held = if other_beam { e.mem.alloc(0x160) } else { beam };
-                e.mem.set_u32(shooter + 0x1a0, held);
-                e.set_stewie(engine_core::extend::stewie::BEAM_SHOOTER_POINTER, on);
-                e.call(0x0097_8f70, &[beam]);
-                assert_eq!(e.mem.u32(shooter + 0x1a0), held, "row {on}");
-            }
-        }
-    }
-
     #[test]
     fn the_constructors_build_the_beam() {
         let mut e = Engine::new();

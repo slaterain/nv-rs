@@ -7686,39 +7686,4 @@ mod tests {
         assert!(!e.call(0x005d_2130, &args![a]).bool());
         assert!(calls(&e, CONSOLE_PRINT).is_empty());
     }
-
-    /// lStewieAl's Tweaks' row S0056: both of `StopMagicShaderVisuals`' lines print only while a
-    /// console line runs with the row; the shader is removed either way.
-    #[test]
-    fn s0056_stop_magic_shader_prints_only_from_the_console() {
-        for named in [true, false] {
-            for (on, line, want) in [(false, false, 1), (true, false, 0), (true, true, 1)] {
-                let mut e = engine3();
-                magic_scene(&mut e, true);
-                e.register(PROCESS_LISTS_FINISH_MAGIC_SHADER, |_, _| Ret::default());
-                if !named {
-                    e.register(GET_REFERENCE_NAME, |_, _| Ret::default());
-                }
-                let reference = object(&mut e);
-                let a = command(&mut e, reference);
-                parse_gives(&mut e, true, &[0x3131]);
-                let open = 0x011d_ea2e;
-                if !e.mem.is_mapped(open) {
-                    e.map(open & !0xfff, 0x1000);
-                }
-                e.mem.set_u8(open, 1);
-                let tls = e.tls();
-                e.mem.set_u8(tls + 0x268, u8::from(line));
-                e.set_stewie(engine_core::extend::stewie::PRINTS_ONLY_FROM_CONSOLE, on);
-                start_log(&mut e);
-                assert!(e.call(0x005d_2130, &args![a]).bool());
-                assert_eq!(calls(&e, PROCESS_LISTS_FINISH_MAGIC_SHADER).len(), 1);
-                assert_eq!(
-                    calls(&e, CONSOLE_PRINT).len(),
-                    want,
-                    "named {named}, row {on}, line {line}"
-                );
-            }
-        }
-    }
 }

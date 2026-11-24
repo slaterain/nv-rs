@@ -6761,33 +6761,6 @@ mod tests {
         }
     }
 
-    /// lStewieAl's Tweaks' print queue (its call at `0x870662`): a line queued before the console
-    /// exists is printed by the idle step, before `DebugText::Instance(1)`, once.
-    #[test]
-    fn the_idle_step_prints_tweaks_queued_lines() {
-        let mut r = Rig::new();
-        let this = r.object(0x10);
-        let interface = r.object(0x600);
-        r.set(GET_GLOBAL_011D8A80, &[interface]);
-        r.e.mem.set_u32(0x011d_8ce8, 0);
-        engine_core::extend::stewie::console_queue_or_print(&mut r.e, b"queued");
-        r.e.register_double(0x0071_b160, |_, _| Ret {
-            eax: 0x4000,
-            ..Ret::default()
-        });
-        r.e.register_double(0x0071_d0a0, |_, _| Ret::default());
-        let (_, log) = r.run(0x00870610, &args![this]);
-        let prints = calls_to(&log, 0x0071_d0a0);
-        assert_eq!(prints.len(), 1);
-        assert_eq!(
-            only(&log, &[0x0071_d0a0, 0x00a0_d9e0]),
-            vec![0x0071_d0a0, 0x00a0_d9e0],
-            "before DebugText::Instance(1)"
-        );
-        let (_, log) = r.run(0x00870610, &args![this]);
-        assert!(calls_to(&log, 0x0071_d0a0).is_empty(), "printed once");
-    }
-
     /// `Main::RenderMenuBackground` (`00871dc0`): nothing without the player's cell and
     /// 3D; else the world drawn once under the menus' modifier.
     #[test]

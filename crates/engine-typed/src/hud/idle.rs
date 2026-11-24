@@ -169,7 +169,7 @@ fn visible(e: &mut Engine, offset: u32) -> bool {
 /// (`HUD_HEALTH_BAR_NOT_TIED_TO_PROMPT`, a NOP over the `JNZ`) is on.
 fn prompt_hides_health_bar(e: &mut Engine) -> bool {
     let shown = visible(e, 0x9c);
-    shown && !e.stewie(engine_core::extend::stewie::HUD_HEALTH_BAR_NOT_TIED_TO_PROMPT)
+    shown
 }
 
 fn alpha_of(e: &mut Engine, offset: u32) -> f32 {

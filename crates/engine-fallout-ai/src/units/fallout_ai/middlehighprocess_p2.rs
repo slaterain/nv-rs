@@ -7642,49 +7642,6 @@ mod tests {
         });
     }
 
-    /// lStewieAl's Tweaks' row S0140: with no current patrol reference and the path complete, the
-    /// exe measures the offset to the null reference (its position slot) and stops; with the row on
-    /// the step ends there and nothing is called.
-    #[test]
-    fn s0140_patrol_without_a_reference() {
-        for on in [false, true] {
-            let mut e = engine();
-            let (p, target, _, _, data) = patrol_scene(&mut e);
-            e.register_double(PATROL_GET_CURRENT_REFERENCE, |_, _| ret(0));
-            e.register(ACTOR_IS_PATHING_COMPLETE, |_, _| ret(1));
-            e.set_stewie(stewie::PATROL_MISSING_NULL_CHECK, on);
-            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                middle_high_process_process_patrol_traveling_to_next_ref(&mut e, p, target, data);
-            }));
-            e.call_stack.clear();
-            assert_eq!(run.is_ok(), on, "row {on}");
-            if on {
-                assert!(calls(&e, PROCESS_SLOTS + 0x858).is_empty());
-                assert!(calls(&e, PROCESS_SLOTS + 0x860).is_empty());
-                assert!(calls(&e, PROCESS_SLOTS + 0x350).is_empty());
-            }
-        }
-    }
-
-    /// lStewieAl's Tweaks' row S0140 with a patrol reference (ordinary input): the row changes
-    /// nothing, the same calls as with it off (the move mode set, then the arrival).
-    #[test]
-    fn s0140_row_on_with_a_reference_changes_nothing() {
-        let run = |on: bool| {
-            let mut e = engine();
-            let (p, target, _, _, data) = patrol_scene(&mut e);
-            e.register(ACTOR_IS_PATHING_COMPLETE, |_, _| ret(1));
-            patrol_offset_is(&mut e, 100.0, 0.0);
-            e.set_stewie(stewie::PATROL_MISSING_NULL_CHECK, on);
-            middle_high_process_process_patrol_traveling_to_next_ref(&mut e, p, target, data);
-            e
-        };
-        let (off, on) = (run(false), run(true));
-        assert_eq!(on.call_log, off.call_log);
-        assert_eq!(calls(&on, PROCESS_SLOTS + 0x350).len(), 1);
-        assert_eq!(calls(&on, PROCESS_SLOTS + 0x860).len(), 1);
-    }
-
     #[test]
     fn patrol_traveling_waiting_on_the_path_keeps_going() {
         let mut e = engine();

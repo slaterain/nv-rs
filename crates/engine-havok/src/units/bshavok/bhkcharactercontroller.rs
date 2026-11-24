@@ -6487,82 +6487,6 @@ mod tests {
         with_vtable(e, &[(0x8, 0x0900_1008), (0xcc, 0x0900_10cc)])
     }
 
-    /// S0216: with the row a stair-marked shape does not block the step's ray (0) and any other
-    /// does (1); the callback is not asked. Off: the material number and the callback, as above.
-    #[test]
-    fn s0216_layer_filter_reads_the_stair_bit() {
-        let mut e = engine();
-        e.register(0x0900_0100, |_, _| ret(1));
-        e.set_global(LAYER_CALLBACK, 0x0900_0100u32);
-        let shape = e.mem.alloc(0x10);
-        let hk = packed_stair_shape(&mut e);
-        e.mem.set_u32(hk + 0x10, 0x45);
-        e.mem.set_u32(shape + 8, hk);
-        assert_eq!(fn_00c6d7e0(&mut e, shape, 1, 0, -1), 0);
-        e.set_stewie(engine_core::extend::stewie::STAIR_MATERIAL, true);
-        assert_eq!(fn_00c6d7e0(&mut e, shape, 1, 0, -1), 0);
-        e.mem.set_u32(hk + 0x10, 0x05);
-        assert_eq!(fn_00c6d7e0(&mut e, shape, 1, 0, -1), 1);
-        assert_eq!(calls(&e, 0x0900_0100).len(), 1);
-        // A shape key: the packed sub-shape's word decides, not the shape's own.
-        assert_eq!(fn_00c6d7e0(&mut e, shape, 1, 0, 7), 0);
-        assert_eq!(fn_00c6d7e0(&mut e, shape, 1, 0, 8), 1);
-        // `check` 0 and a missing shape are as the exe's.
-        assert_eq!(fn_00c6d7e0(&mut e, shape, 0, 5, -1), 1);
-        assert_eq!(fn_00c6d7e0(&mut e, 0, 3, 0, -1), 3);
-    }
-
-    /// S0216: with the row the on-stairs flag (0x1000000) follows the touched part's stair bit
-    /// (the shape's own word for key -1, the collection's sub-shape for a key); the material, layer
-    /// and velocity are stored as the exe does. Off, the callback sets the flag.
-    #[test]
-    fn s0216_support_sets_the_on_stairs_flag() {
-        let mut e = engine();
-        e.set_stewie(engine_core::extend::stewie::STAIR_MATERIAL, true);
-        let c = controller(&mut e);
-        e.set(c, Ctl::eSupportMaterial, 0x24);
-        let root = e.mem.alloc(0x200);
-        e.mem.set_u32(root + 0x1c, 0x83);
-        let body = e.mem.alloc(0x20);
-        e.mem.set_u32(body + 0xc, root);
-        let hk = e.mem.alloc(0x20);
-        e.mem.set_u32(hk + 0x10, 0x45);
-        let shape = e.mem.alloc(0x10);
-        e.mem.set_u32(shape + 8, hk);
-        e.mem.set_u32(body, shape);
-        let info = e.mem.alloc(0x50);
-        e.mem.set_u32(info + 0x48, body);
-        e.mem.set_u32(info + 0x4c, u32::MAX);
-        e.register(0x0900_0bc8, |_, _| ret(0));
-        e.set_global(LAYER_CALLBACK, 0x0900_0bc8u32);
-        fn_00c6e980(&mut e, c, info);
-        assert_eq!(e.get(c, Ctl::eSupportMaterial), 5);
-        assert_eq!(e.get(c, Ctl::eSupportLayer), 3);
-        assert_eq!(e.get(c, Ctl::iFlags), 0x0100_0000);
-        assert!(calls(&e, 0x0900_0bc8).is_empty());
-        // A key: the material from slot 0xE0, the stair bit from the sub-shape.
-        e.set(c, Ctl::eSupportMaterial, 0x24);
-        e.mem.set_u32(info + 0x4c, 8);
-        let source = packed_stair_shape(&mut e);
-        let vtable = e.mem.u32(source);
-        e.mem.set_u32(vtable + 0xe0, 0x0900_00e0);
-        e.register(0x0900_00e0, |_, _| ret(9));
-        returns(&mut e, BODY_MATERIAL_SOURCE, source);
-        fn_00c6e980(&mut e, c, info);
-        assert_eq!(e.get(c, Ctl::eSupportMaterial), 9);
-        assert_eq!(e.get(c, Ctl::iFlags), 0);
-        e.set(c, Ctl::eSupportMaterial, 0x24);
-        e.mem.set_u32(info + 0x4c, 7);
-        fn_00c6e980(&mut e, c, info);
-        assert_eq!(e.get(c, Ctl::iFlags), 0x0100_0000);
-        // Off: the callback answers (0 here), whatever the bit.
-        e.set_stewie(engine_core::extend::stewie::STAIR_MATERIAL, false);
-        e.set(c, Ctl::eSupportMaterial, 0x24);
-        fn_00c6e980(&mut e, c, info);
-        assert_eq!(e.get(c, Ctl::iFlags), 0);
-        assert_eq!(calls(&e, 0x0900_0bc8), vec![vec![9]]);
-    }
-
     type PropertyEntry = (u32, u32, u32);
 
     fn property_object(e: &mut Engine, entries: &[PropertyEntry]) -> u32 {
@@ -8722,41 +8646,6 @@ mod tests {
             vec![vec![c.addr() + 0x410, 0, 0.35f32.to_bits()]]
         );
         assert!(calls(&e, 0x0900_0020).is_empty());
-    }
-
-    /// S0216: a contact whose terrain shape is stair-marked is a step at once with the row (no
-    /// rise test, no cast), even with a rise too high for the generic test; off, that riser is
-    /// refused (no callback is set, so the stair bit is never seen).
-    #[test]
-    fn s0216_a_stair_marked_riser_is_a_step() {
-        let mut e = engine();
-        let (c, point, shape) = step_scene(&mut e);
-        let hk = e.mem.alloc(0x20);
-        e.mem.set_u32(hk + 0x10, 0x45);
-        e.mem.set_u32(shape + 0xc, 0x17);
-        e.mem.set_u32(shape + 8, hk);
-        e.mem.set_f32(point + 8, 1.0);
-        assert!(!bhk_character_controller_is_step(
-            &mut e,
-            c,
-            Ptr::new(point)
-        ));
-        e.set_stewie(engine_core::extend::stewie::STAIR_MATERIAL, true);
-        assert!(bhk_character_controller_is_step(&mut e, c, Ptr::new(point)));
-        assert!(calls(&e, 0x0900_0020).is_empty());
-        // Not stair-marked: the generic test refuses the riser as before.
-        e.mem.set_u32(hk + 0x10, 0x05);
-        assert!(!bhk_character_controller_is_step(
-            &mut e,
-            c,
-            Ptr::new(point)
-        ));
-        // A shape key: the packed sub-shape's word decides.
-        let packed = packed_stair_shape(&mut e);
-        e.mem.set_u32(packed + 0x10, 0x05);
-        e.mem.set_u32(shape + 8, packed);
-        e.mem.set_u32(point + 0x4c, 7);
-        assert!(bhk_character_controller_is_step(&mut e, c, Ptr::new(point)));
     }
 
     #[test]

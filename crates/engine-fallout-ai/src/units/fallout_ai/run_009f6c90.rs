@@ -240,38 +240,4 @@ mod tests {
         assert_eq!(e.mem.f32(this + 0x14), 1.0);
         assert_eq!(e.mem.u32(this + 8), 0x105);
     }
-
-    /// S0133 (`patchFixSpectatorThreatInfoUsingWrongWeaponType`): a weapon whose plain type is 1
-    /// (level 2, 256.0) and whose combat type is 2 (level 1, 128.0). Off, the exe reads the plain
-    /// type; on, the combat type (`00522c80`), and the plain one is not asked.
-    #[test]
-    fn s0133_the_threat_reads_the_combat_weapon_type() {
-        for (on, level, distance) in [(false, 2u32, 256.0f32), (true, 1, 128.0)] {
-            let mut e = Engine::new();
-            doubles(&mut e);
-            e.register(COMBAT_WEAPON_TYPE_00522C80, |e, a| ret(e.mem.u32(a[0]) + 1));
-            e.set_stewie(
-                engine_core::extend::stewie::SPECTATOR_THREAT_WEAPON_TYPE,
-                on,
-            );
-            let first = actor(&mut e, [1.0, 2.0, 3.0]);
-            let second = actor(&mut e, [4.0, 5.0, 6.0]);
-            let record = e.mem.alloc(4);
-            e.mem.set_u32(record, 1);
-            e.mem.set_u32(first + 0x50, record);
-            let this = e.mem.alloc(0x2c);
-            e.mem.set_u32(this, first);
-            e.mem.set_u32(this + 4, second);
-            e.mem.set_u32(this + 8, 0x100);
-            e.call_log = Some(vec![]);
-            e.call(0x009f_6d50, &args![this]);
-            assert_eq!(e.mem.u32(this + 8), 0x100 + level, "on {on}");
-            assert_eq!(e.mem.f32(this + 0x10), distance);
-            let asked = |at| calls(&e, at) == vec![vec![record]];
-            assert_eq!(
-                (asked(KIND_00446390), asked(COMBAT_WEAPON_TYPE_00522C80)),
-                (!on, on)
-            );
-        }
-    }
 }

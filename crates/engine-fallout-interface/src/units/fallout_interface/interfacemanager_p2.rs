@@ -2664,42 +2664,6 @@ mod tests {
         assert_eq!(e.call(0x0071_7a40, &args![1u32, 0u32]).i32(), -1);
     }
 
-    /// Row S0022.47 (lStewieAl's Tweaks, `0x717CB0`, `0x717CC8`): for B (10) a press clears the
-    /// input globals' (`[011f35cc]`) debounce bit 3 at +0x1B92 and still answers 2; a release
-    /// answers -1 while that bit is set, 1 once it is clear. Other buttons, the held states, or
-    /// the row off: the exe's answers, the word untouched.
-    #[test]
-    fn s0022_47_the_pad_b_button_is_debounced() {
-        // (row, button, new, old, word before, answer, word after)
-        for (on, button, new, old, before, answer, after) in [
-            (true, 10u32, 0x2000u16, 0u16, 0x0fu32, 2i32, 0x07u32),
-            (true, 10, 0, 0x2000, 0x08, -1, 0x08),
-            (true, 10, 0, 0x2000, 0x07, 1, 0x07),
-            (true, 10, 0x2000, 0x2000, 0x08, 0, 0x08),
-            (false, 10, 0x2000, 0, 0x0f, 2, 0x0f),
-            (false, 10, 0, 0x2000, 0x08, 1, 0x08),
-            (true, 9, 0, 0x1000, 0x08, 1, 0x08),
-            (true, 9, 0x1000, 0, 0x0f, 2, 0x0f),
-        ] {
-            let mut e = button_engine(false);
-            if !e.mem.is_mapped(0x011f_35cc) {
-                e.map(0x011f_3000, 0x1000);
-            }
-            let input = e.mem.alloc(0x2000);
-            e.mem.set_u32(0x011f_35cc, input);
-            e.mem.set_u32(input + 0x1b92, before);
-            e.mem.set_u16(PAD_BUTTONS_NEW, new);
-            e.mem.set_u16(PAD_BUTTONS_OLD, old);
-            e.set_stewie(engine_core::extend::stewie::PAD_B_MENU_DEBOUNCE, on);
-            assert_eq!(
-                e.call(0x0071_7a40, &args![button, 0u32]).i32(),
-                answer,
-                "row {on} button {button} new {new:x} old {old:x}"
-            );
-            assert_eq!(e.mem.u32(input + 0x1b92), after);
-        }
-    }
-
     #[test]
     fn check_menu_button_compares_old_and_new_button_masks() {
         let mut e = button_engine(false);
@@ -3070,56 +3034,6 @@ mod tests {
         e.call(0x0071_8080, &args![this, target, 0u32, 0u32]);
         assert!(logged(&e, 0x7000_0000).is_empty());
         assert_eq!(logged(&e, 0x7300_0028).len(), 1);
-    }
-
-    /// Row S0022.08 (lStewieAl's Tweaks' `RecipeMenuHandleMousewheel` in `RecipeMenu`'s vtable
-    /// slot +0x28): for a recipe menu the wheel over tile id 1 clicks (+0xC) id 2 when the
-    /// manager's `mouseWheel` (+0x44) is above 0 and id 0 otherwise, any other id nothing; the
-    /// exe's slot is never called and the answer is 0. Off, or another menu: the slot, as before.
-    #[test]
-    fn s0022_08_the_wheel_changes_the_recipe_category() {
-        for (on, recipe, id, wheel, click) in [
-            (true, true, 1u32, 120.0f32, Some(2u32)),
-            (true, true, 1, -120.0, Some(0)),
-            (true, true, 3, 120.0, None),
-            (false, true, 1, 120.0, None),
-            (true, false, 1, 120.0, None),
-        ] {
-            let (mut e, this, _, target) = wheel_engine([0.0, 4.0], [1.0, 2.0], false);
-            e.set_stewie(
-                engine_core::extend::stewie::RECIPE_WHEEL_CHANGES_CATEGORY,
-                on,
-            );
-            if !e.mem.is_mapped(0x011d_8a80) {
-                e.map(0x011d_8000, 0x1000);
-            }
-            e.mem.set_u32(0x011d_8a80, this);
-            e.mem.set_f32(this + 0x44, wheel);
-            if recipe {
-                if !e.mem.is_mapped(RECIPE_MENU_VTABLE) {
-                    e.map(RECIPE_MENU_VTABLE & !0xfff, 0x1000);
-                }
-                e.mem.set_u32(RECIPE_MENU_VTABLE + 0xc, 0x7400_000c);
-                e.mem.set_u32(RECIPE_MENU_VTABLE + 0x28, 0x7300_0028);
-                e.mem.set_u32(target, RECIPE_MENU_VTABLE);
-            }
-            nothing(&mut e, &[0x7400_000c]);
-            let result = e.call(0x0071_8080, &args![this, target, id, 12u32]).u32();
-            let slot = logged(&e, 0x7300_0028);
-            let clicks = logged(&e, 0x7400_000c);
-            if on && recipe {
-                assert!(slot.is_empty(), "the exe's slot is not called");
-                assert_eq!(result, 0);
-                match click {
-                    Some(clicked) => assert_eq!(clicks, vec![vec![target, clicked, 0]]),
-                    None => assert!(clicks.is_empty()),
-                }
-            } else {
-                assert_eq!(slot, vec![vec![target, id, 12]]);
-                assert_eq!(result, 0x99);
-                assert!(clicks.is_empty());
-            }
-        }
     }
 
     #[test]
@@ -4205,38 +4119,6 @@ mod tests {
         assert_eq!(words, vec![0x11, 0x22, 0x33, 0x44]);
     }
 
-    /// lStewieAl's Tweaks' row S0022.56: a tile with no name. The exe compares through the null
-    /// name (`_stricmp` reads it, as the stand-in here does) and stops; with the row on it matches
-    /// neither name and is left alone.
-    #[test]
-    fn s0022_56_a_tile_without_a_name() {
-        for on in [false, true] {
-            let mut e = base_engine();
-            e.mem.unmap(0, 0x1000);
-            e.register(0x0055_9450, |e, a| ret(e.mem.u32(a[0])));
-            e.register(TILE_NAME, |e, a| ret(e.mem.u32(a[0] + 0x20)));
-            e.register(COMPARE_STRINGS, |e, a| {
-                ret(u32::from(e.mem.u8(a[0]) != e.mem.u8(a[1])))
-            });
-            nothing(
-                &mut e,
-                &[TILE_SET_VALUE, TILE_SET_NEEDS_UPDATE, GET_MANAGER],
-            );
-            let tile = e.mem.alloc(0x30);
-            e.set_stewie(stewie::TILE_LABEL_NULL_NAME, on);
-            e.call_log = Some(vec![]);
-            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                e.call(0x0071_9580, &args![tile]);
-            }));
-            e.call_stack.clear();
-            assert_eq!(run.is_ok(), on, "row {on}");
-            if on {
-                assert!(logged(&e, TILE_SET_VALUE).is_empty());
-                assert!(logged(&e, COMPARE_STRINGS).is_empty());
-            }
-        }
-    }
-
     /// lStewieAl's Tweaks' row S0022.56 with ordinary input: run with the row off, then on; the row
     /// changes nothing (the same calls and answers).
     #[test]
@@ -4469,43 +4351,6 @@ mod tests {
         assert_eq!(e.global::<f32>(FADE_LEVEL), 350.0);
         assert_eq!(e.global::<u32>(FADE_LAST_TIME), 5000);
         assert_eq!(e.global::<u8>(FADE_FALLING), 0);
-    }
-
-    /// Row S0105 (lStewieAl's Tweaks' `HandleInventoryMultiAlphas`, `0x7197FB`): a lone first or
-    /// second tile gets alpha 255 with the row on; both, neither, or the row off: no such set.
-    #[test]
-    fn s0105_a_lone_stat_tile_is_fully_shown() {
-        for (on, first, second, wanted) in [
-            (true, true, false, Some(0)),
-            (true, false, true, Some(1)),
-            (true, false, false, None),
-            (false, true, false, None),
-        ] {
-            let (mut e, _) = fade_engine(100.0, false, 5000, 4000);
-            let (a, b, _, _) = fade_tiles(&mut e);
-            let a = if first { a } else { 0 };
-            let b = if second { b } else { 0 };
-            e.set_stewie(engine_core::extend::stewie::INVENTORY_STAT_ALPHAS, on);
-            e.call(0x0071_9790, &args![a, b, 0u32, 0u32, 0u32]);
-            let sets = logged(&e, TILE_SET_FLOAT);
-            let full: Vec<_> = sets
-                .iter()
-                .filter(|w| w[2] == 255.0f32.to_bits())
-                .cloned()
-                .collect();
-            let lone = match wanted {
-                Some(0) => vec![vec![a, TRAIT_FADE, 255.0f32.to_bits(), 1]],
-                Some(_) => vec![vec![b, TRAIT_FADE, 255.0f32.to_bits(), 1]],
-                None => vec![],
-            };
-            assert_eq!(full, lone, "row {on} {first} {second}");
-        }
-        // Both tiles: the exe's fade only.
-        let (mut e, _) = fade_engine(100.0, false, 5000, 4000);
-        let (a, b, _, _) = fade_tiles(&mut e);
-        e.set_stewie(engine_core::extend::stewie::INVENTORY_STAT_ALPHAS, true);
-        e.call(0x0071_9790, &args![a, b, 0u32, 0u32, 0u32]);
-        assert_eq!(logged(&e, TILE_SET_FLOAT).len(), 2);
     }
 
     #[test]

@@ -2146,28 +2146,6 @@ mod tests {
         assert_eq!(seen, vec![vec![console]]);
     }
 
-    /// lStewieAl's Tweaks' S0031 warning prints while the loading menu is up: with
-    /// `Engine::stewie_print_ungated` set (its byte at `0x71D0DC`) the line is printed, without it
-    /// dropped (JIP's fixes off).
-    #[test]
-    fn format_line_prints_tweaks_warning_while_loading() {
-        for ungated in [false, true] {
-            let (mut e, _) = console_engine();
-            put_string(&mut e, 0x0106_fcb4, "ab");
-            e.register(0x0070_5ea0, |_, _| ret(1));
-            e.register(0x0070_edf0, |_, _| ret(0));
-            let console = new_console(&mut e);
-            e.set_stewie_print_ungated(ungated);
-            e.call(0x0071_d0a0, &args![console, 0x0106_fcb4u32, 0u32]);
-            let lines = lines_of(&e, console);
-            if ungated {
-                assert_eq!(lines, ["ab"]);
-            } else {
-                assert!(lines.is_empty());
-            }
-        }
-    }
-
     #[test]
     fn format_line_wraps_into_lines_and_follows_the_last_one() {
         let (mut e, prints) = console_engine();

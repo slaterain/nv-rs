@@ -1231,35 +1231,6 @@ mod n023_tests {
         assert!(calls(&e, SET_LOOK_AT_TARGET).is_empty());
     }
 
-    /// S0146 (`NPCThrowingAnimFix`): off, the throw queues AttackThrow (0x72) whatever the weapon;
-    /// on, it queues the weapon's own attack animation (`+0x11D`), here 0x8c (and 0xff whole).
-    #[test]
-    fn s0146_a_throw_queues_the_weapons_own_attack_animation() {
-        for (on, anim, queued) in [
-            (false, 0x8cu8, 0x72u32),
-            (true, 0x8c, 0x8c),
-            (true, 0xff, 0xff),
-        ] {
-            let mut e = Engine::new();
-            let t = throw(&mut e, false, 0x5500);
-            attack_doubles(&mut e);
-            e.register(0x0097_ae90, |_, _| 0x8800u32.into_ret());
-            e.register(EXPLOSION_ALLOWED, |_, _| 1u32.into_ret());
-            e.mem.set_u8(t.weapon + 0x11d, anim);
-            e.mem.set_u8(t.weapon + 0x11c, 0xee);
-            e.mem.set_u8(t.weapon + 0x11e, 0xdd);
-            e.set_stewie(engine_core::extend::stewie::NPC_THROWING_ANIM, on);
-            e.call_log = Some(vec![]);
-            e.call(0x009c_afe0, &args![t.procedure]);
-            assert_eq!(
-                calls(&e, 0x0089_35f0),
-                vec![vec![t.attacker, queued]],
-                "on {on}"
-            );
-            assert_eq!(e.mem.u32(t.procedure + 0x10), 1);
-        }
-    }
-
     #[test]
     fn update_throws_at_the_targeted_point() {
         let mut e = Engine::new();

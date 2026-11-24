@@ -2447,43 +2447,6 @@ mod tests {
         assert!(calls(&e, INTERFACE_NEW_TIMER).is_empty());
     }
 
-    /// lStewieAl's Tweaks' S0021 at `0xA1D97C`: with the row, the inventory menu fading out with
-    /// an item selected (its list's slot 4 not null) saves its scroll place before the timer; not
-    /// the inventory menu, no selection, or the row off: no save.
-    #[test]
-    fn s0021_closing_the_inventory_saves_its_scroll() {
-        let saves = |row: bool, is_inventory: bool, selected: u32| {
-            let mut e = engine();
-            e.map(INVENTORY_MENU & !0xfff, 0x1000);
-            // A menu big enough for the inventory menu's list at `+0xB8`.
-            let menu: Ptr<Menu> = Ptr::new(e.mem.alloc(0x200));
-            let tile = e.mem.alloc(0x40);
-            let model = e.mem.alloc(0x70);
-            e.mem.set_u32(tile + 0x2c, model);
-            e.set(menu, Menu::pMenu, Ptr::new(tile));
-            tile_traits(&mut e, &[TRAIT_VISIBLE], &[(TRAIT_FADE_TIME, 0.5)]);
-            let list_vtable = e.mem.alloc(0x10);
-            e.mem.set_u32(menu.addr() + 0xb8, list_vtable);
-            e.mem.set_u32(list_vtable + 4, 0x0900_00b8);
-            e.register_double(0x0900_00b8, move |_, _| Ret {
-                eax: selected,
-                ..Ret::default()
-            });
-            e.register(SAVE_INVENTORY_SCROLL, |_, _| Ret::default());
-            let inventory = if is_inventory { menu.addr() } else { 0x7700 };
-            e.set_global(INVENTORY_MENU, inventory);
-            e.set_stewie(engine_core::extend::stewie::INVENTORY_SCROLL_KEPT, row);
-            e.call_log = Some(vec![]);
-            e.call(0x00a1_d910, &args![menu]);
-            assert_eq!(calls(&e, INTERFACE_NEW_TIMER).len(), 1);
-            calls(&e, SAVE_INVENTORY_SCROLL).len()
-        };
-        assert_eq!(saves(true, true, 0x5000), 1);
-        assert_eq!(saves(true, true, 0), 0);
-        assert_eq!(saves(true, false, 0x5000), 0);
-        assert_eq!(saves(false, true, 0x5000), 0);
-    }
-
     #[test]
     fn instant_fade_out_hides_the_tile() {
         let mut e = engine();

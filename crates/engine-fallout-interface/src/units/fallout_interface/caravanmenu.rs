@@ -11918,50 +11918,6 @@ mod n052_tests {
         )
     }
 
-    /// Row S0022.46: off, `004b71d0` decides whether the stick is read; on, the pad must be
-    /// connected and the console closed (the exe's test is not asked).
-    #[test]
-    fn s0022_46_the_stick_is_not_read_with_the_console_open() {
-        for (on, keys, connected, console, read) in [
-            (false, 1, 1, 1, true),
-            (false, 0, 1, 0, false),
-            (true, 0, 1, 0, true),
-            (true, 1, 1, 1, false),
-            (true, 1, 0, 0, false),
-        ] {
-            let (mut e, this) = idle_engine();
-            e.set_stewie(stewie_menus::CARAVAN_PAD_NOT_WITH_CONSOLE, on);
-            stewie_controls(&mut e, connected, console);
-            e.register_double(KEYS_BLOCKED_004B71D0, move |_, _| ret(keys));
-            let case = (on, keys, connected, console);
-            let (stick, asked) = caravan_stick_read(&mut e, this);
-            assert_eq!(stick, read, "{case:?}");
-            // (`004b71d0` is asked elsewhere in DoIdle too, so only the row-off run is checked.)
-            if !on {
-                assert!(asked, "{case:?}");
-            }
-        }
-    }
-
-    /// Row S0022.46 with JIP's D04 seams (`0x7416D6`, `0x741705`), which sit inside the test the
-    /// row replaces, both on: with the console closed JIP's two dead zones are asked as without
-    /// the row; with it open the stick is not read and JIP is not asked.
-    #[test]
-    fn s0022_46_with_jips_d04_seams() {
-        use super::d04_test::{handlers, seen};
-        use engine_core::extend::jip_patches::INSTALLED;
-        let sites = [0x0074_16d6, 0x0074_1705];
-        for (console, expected) in [(0, &sites[..]), (1, &[][..])] {
-            let (mut e, this) = idle_engine();
-            handlers(&mut e, INSTALLED, &sites);
-            e.set_stewie(stewie_menus::CARAVAN_PAD_NOT_WITH_CONSOLE, true);
-            stewie_controls(&mut e, 1, console);
-            let (stick, _) = caravan_stick_read(&mut e, this);
-            assert_eq!(stick, console == 0, "console {console}");
-            assert_eq!(seen(), expected, "console {console}");
-        }
-    }
-
     /// An inventory form of type `kind` named `name` for Tweaks' message: vtable +0xF0
     /// (`GetIsReference`) answers 0; the dynamic cast to `TESFullName` answers a name struct
     /// (text at +4, length at +8) registered in `names`.

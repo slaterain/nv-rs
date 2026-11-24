@@ -15019,53 +15019,6 @@ mod tests {
             assert!(r.dynamic_objects().is_empty());
         }
 
-        /// lStewieAl's Tweaks' row S0042 with an explosion that has 3D (ordinary input): the row
-        /// changes nothing, the same calls and the same reflected explosion as with it off.
-        #[test]
-        fn s0042_row_on_with_an_explosion_that_has_3d_changes_nothing() {
-            let run = |on: bool| {
-                let mut r = reflection();
-                r.set_flags(0);
-                let explosion = reflected_reference(&mut r.w.e);
-                fill_list(&mut r.w.e, EXPLOSIONS_LIST, &[explosion]);
-                set_setting(&mut r.w.e, SETTING_REFLECT_EXPLOSIONS, true);
-                r.w.e.set_stewie(stewie::EXPLOSION_WATER_NULL_CALL, on);
-                r.run(false);
-                let node = r.w.e.mem.u32(explosion + REF_NODE);
-                let listed = r.w.map.borrow().contains_key(&explosion);
-                (r.dynamic_objects(), node, listed, r.w.e.call_log.clone())
-            };
-            let (off, on) = (run(false), run(true));
-            assert_eq!(on, off);
-            assert_eq!(on.0, vec![on.1]);
-            assert!(on.2);
-        }
-
-        /// lStewieAl's Tweaks' row S0042: the first explosion's `Get3D` slot (vtable `+0x1d0`) is
-        /// null (an explosion being taken apart). The exe calls it and stops; with the row on the
-        /// explosion is passed over and the reflection set-up finishes.
-        #[test]
-        fn s0042_an_explosion_with_a_null_get_3d_slot() {
-            for on in [false, true] {
-                let mut r = reflection();
-                r.set_flags(0);
-                let vtable = r.w.e.mem.alloc(0x400);
-                let explosion = r.w.e.mem.alloc(0x100);
-                r.w.e.mem.set_u32(explosion, vtable);
-                fill_list(&mut r.w.e, EXPLOSIONS_LIST, &[explosion]);
-                set_setting(&mut r.w.e, SETTING_REFLECT_EXPLOSIONS, true);
-                r.w.e.set_stewie(stewie::EXPLOSION_WATER_NULL_CALL, on);
-                let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| r.run(false)));
-                r.w.e.call_stack.clear();
-                assert_eq!(run.is_ok(), on, "row {on}");
-                if on {
-                    assert!(r.dynamic_objects().is_empty());
-                    assert!(!r.w.map.borrow().contains_key(&explosion));
-                    assert_eq!(calls(&r.w.e, MT_ADD_ACCUM_TASK).len(), 1);
-                }
-            }
-        }
-
         #[test]
         fn nothing_is_set_up_without_the_water_shader_or_a_viewer() {
             let mut r = reflection();

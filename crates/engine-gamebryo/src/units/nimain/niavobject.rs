@@ -2707,58 +2707,6 @@ mod tests {
         assert!(calls(&e, STRING_ARRAY_SET_SIZE).is_empty());
     }
 
-    /// lStewieAl's Tweaks' row S0199.09 (`MiscCrashFixes`, the jump at `0xA5B0C8`): an object whose
-    /// property list holds an empty entry before a property: the exe asks the missing property for its
-    /// type and stops; with the row the entry is passed over and the property is listed.
-    #[test]
-    fn s0199_09_an_empty_property_entry_is_passed_over() {
-        for on in [false, true] {
-            let mut e = engine();
-            e.register(STRING_ARRAY_SET_AT, |e, a| {
-                e.mem.set_u16(a[0] + 0x0a, a[1] as u16 + 1);
-                Ret::default()
-            });
-            e.register(STRING_ARRAY_SET_SIZE, |e, a| {
-                e.mem.set_u16(a[0] + 0x08, a[1] as u16);
-                Ret::default()
-            });
-            for addr in [
-                VIEWER_STRING_NAME,
-                VIEWER_STRING_BOOL,
-                VIEWER_STRING_FLOAT,
-                POINT_VIEWER_STRING,
-                MATRIX_VIEWER_STRING,
-                BOUND_VIEWER_STRING,
-            ] {
-                e.register(addr, |_, _| ret(0));
-            }
-            e.register(VIEWER_STRING_POINTER, |_, a| ret(a[1]));
-            let rtti = e.mem.alloc(8);
-            e.mem.set_u32(rtti, 0x5555);
-            let rtti_double = 0x7200_0003;
-            e.register(rtti_double, |e, a| ret(e.mem.u32(a[0] + 0x10)));
-            let this = av(&mut e, &[]);
-            let p = object(&mut e, 0x20, &[(SLOT_GET_RTTI, rtti_double)]);
-            e.mem.set_u32(p + 0x10, rtti);
-            set_properties(&mut e, this, &[0, p]);
-            e.set_stewie(engine_core::extend::stewie::SHOW_SCENE_GRAPH_NULL, on);
-            let strings: Ptr<NiTArray> = e.new_object();
-            let base = e.mem.alloc(0x100);
-            e.set(strings, NiTArray::m_pBase, base);
-            e.set(strings, NiTArray::m_usMaxSize, 32);
-            e.set(strings, NiTArray::m_usGrowBy, 8);
-            e.call_log = Some(vec![]);
-            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                e.call(0x00a5_ad00, &args![this, strings]);
-            }));
-            e.call_stack.clear();
-            assert_eq!(run.is_ok(), on, "row {on}");
-            if on {
-                assert_eq!(calls(&e, VIEWER_STRING_POINTER), vec![vec![0x5555, p]]);
-            }
-        }
-    }
-
     #[test]
     fn get_viewer_strings_grows_a_full_array() {
         let mut e = engine();

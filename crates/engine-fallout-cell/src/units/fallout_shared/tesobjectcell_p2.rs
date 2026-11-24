@@ -5932,33 +5932,6 @@ fn restore_tree_full_lod(e: &mut Engine) {
 #[cfg(test)]
 mod s0103_tests {
     use super::*;
-
-    /// lStewieAl's Tweaks' S0103: off, the flag is cleared through `0054f4d0`; on, the tree
-    /// manager's flag gets the setting's value; with no manager and the guard, nothing.
-    #[test]
-    fn s0103_the_trees_keep_the_full_lod_setting() {
-        let world = |row: bool, setting: u32| {
-            let mut e = Engine::new();
-            e.map(0x011d_5000, 0x1000);
-            let manager = e.mem.alloc(0x20);
-            e.mem.set_u8(manager + 0x1b, 1);
-            e.set_global(TREE_MANAGER_SINGLETON, manager);
-            e.mem.set_u32(FORCE_FULL_LOD_SETTING + 4, setting);
-            e.register(0x0054_f4d0, |_, _| Ret::default());
-            e.set_stewie(engine_core::extend::stewie::TREE_FULL_LOD_KEPT, row);
-            (e, manager)
-        };
-        let (mut e, manager) = world(true, 1);
-        restore_tree_full_lod(&mut e);
-        assert_eq!(e.mem.u8(manager + 0x1b), 1);
-        let (mut e, manager) = world(true, 0);
-        restore_tree_full_lod(&mut e);
-        assert_eq!(e.mem.u8(manager + 0x1b), 0);
-        let (mut e, _) = world(true, 1);
-        e.set_global(TREE_MANAGER_SINGLETON, 0u32);
-        e.set_stewie_slip_guard(true);
-        restore_tree_full_lod(&mut e);
-    }
 }
 
 // Translated from 0054f4d0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -9111,49 +9084,6 @@ mod tests {
         w.e.mem.set_u8(w.handler + 0x61a, 1);
         w.e.call(0x0054_8230, &args![w.cell, r, 0u32]);
         assert_eq!(vcalls.borrow().len(), 1);
-    }
-
-    /// lStewieAl's Tweaks' row S0199.07: a reference whose cell is gone by the end (the light's stand-in
-    /// clears it). Row off: the exe asks the missing cell whether it is an interior (`00425fd0`'s
-    /// stand-in reads its +0x24) and stops; row on: the exterior lists are skipped. With the cell
-    /// there, the same calls row off and on but for `008d6f30`, which the row reads in place.
-    #[test]
-    fn s0199_07_a_reference_whose_cell_is_gone() {
-        let mut ordinary = vec![];
-        for on in [false, true] {
-            let mut w = world();
-            w.e.set_stewie(engine_core::extend::stewie::ADD_REFERENCE_NULL_CELL, on);
-            w.e.register(CELL_IS_INTERIOR, |e, a| {
-                u32::from(e.mem.u8(a[0] + 0x24) & 1).into_ret()
-            });
-            let (r, _, _) = placed_reference(&mut w, 0x15, false, true);
-            start_log(&mut w.e);
-            w.e.call(0x0054_8230, &args![w.cell, r, 0u32]);
-            let log = take_log(&mut w.e);
-            assert_eq!(calls_to(&log, CELL_IS_INTERIOR).len(), 1, "row {on}");
-            ordinary.push(
-                log.into_iter()
-                    .filter(|(a, _)| *a != REFERENCE_PARENT_CELL)
-                    .collect::<Vec<_>>(),
-            );
-            let (r, _, _) = placed_reference(&mut w, 0x15, false, true);
-            w.e.register(REFERENCE_ADD_LIGHT_TO_SCENE, |e, a| {
-                e.mem.set_u32(a[0] + 0x40, 0);
-                Ret::default()
-            });
-            w.e.mem.unmap(0, 0x1000);
-            start_log(&mut w.e);
-            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                w.e.call(0x0054_8230, &args![w.cell, r, 0u32]);
-            }));
-            w.e.call_stack.clear();
-            assert_eq!(run.is_ok(), on, "row {on}");
-            if on {
-                let log = take_log(&mut w.e);
-                assert!(calls_to(&log, CELL_IS_INTERIOR).is_empty());
-            }
-        }
-        assert_eq!(ordinary[0], ordinary[1], "row on: the calls of the row off");
     }
 
     #[test]

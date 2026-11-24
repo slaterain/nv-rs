@@ -3585,25 +3585,6 @@ mod tests {
         assert_eq!(e.mem.u32(tls + 0x2b4), 5);
     }
 
-    /// lStewieAl's Tweaks' S0095 (`0xA10311`): with the row on the node's depth (+0x5C) is
-    /// Tweaks' -200.0, in front of the main menu; off, the exe's float at `0104f7c4` (-50.0).
-    #[test]
-    fn s0095_the_console_text_is_in_front_of_the_main_menu() {
-        for (on, depth) in [(false, -50.0f32), (true, -200.0)] {
-            let (mut e, _made) = builder_world();
-            let this = new_debug_text(&mut e);
-            let text = put_text(&mut e, "hi");
-            e.set_stewie(
-                engine_core::extend::stewie::CONSOLE_IN_FRONT_OF_MAIN_MENU,
-                on,
-            );
-            let node =
-                debug_text_create_debug_text(&mut e, this, text, 700.0, 100.0, 3, 0, Ptr::NULL);
-            assert!(!node.is_null());
-            assert_eq!(e.mem.f32(node.addr() + 0x5c), depth, "row {on}");
-        }
-    }
-
     #[test]
     fn create_debug_text_uses_the_given_color_font_and_wide_scale() {
         let (mut e, made) = builder_world();

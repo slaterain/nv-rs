@@ -1707,39 +1707,4 @@ mod tests {
         w.e.call(0x0070_17b0, &args![this]);
         assert_eq!(calls(&w.e, STRING_CONSTRUCT), vec![vec![frame + 0x2c]]);
     }
-
-    /// Row S0070: the list asks `GetEquipType` of each hotkeyed item's form; with no equip type
-    /// (-1) the row on gives a book (type 0x19) `kChems` (10) and ammunition (0x29) `kBigGuns`
-    /// (0) for the icon's file name, anything else keeps -1; off, -1 for all three. An item with
-    /// an equip type keeps it, row on or off.
-    #[test]
-    fn s0070_hotkeyed_books_and_ammo_get_icons() {
-        for (equip_type, on, wanted) in [
-            (u32::MAX, false, [u32::MAX; 3]),
-            (u32::MAX, true, [10, 0, u32::MAX]),
-            (7, false, [7; 3]),
-            (7, true, [7; 3]),
-        ] {
-            let mut w = world();
-            let this = wheel(&mut w.e);
-            w.e.set_stewie(engine_core::extend::stewie::BOOK_AND_AMMO_HOTKEY_ICONS, on);
-            w.e.register_double(GET_EQUIP_TYPE, move |_, _| word(equip_type));
-            set_inventory(&mut w.e, 0x8000);
-            let array = w.e.mem.alloc(32);
-            // Hotkey 1 is the one the list skips.
-            for (kind, at) in [(0x19u8, 0u32), (0x29, 2), (0x1f, 3)] {
-                let object = form(&mut w.e, kind, 0, 0);
-                let item = entry(&mut w.e, b"Item", 1, object, 0);
-                w.e.mem.set_u32(array + 4 * at, item);
-            }
-            w.e.mem.set_u32(CFG_ENTRIES, array);
-            w.e.call_log = Some(vec![]);
-            w.e.call(0x0070_17b0, &args![this]);
-            let asked: Vec<u32> = calls(&w.e, GET_EQUIP_TYPE_ICON_FILENAME)
-                .iter()
-                .map(|c| c[0])
-                .collect();
-            assert_eq!(asked, wanted, "type {equip_type:#x} row {on}");
-        }
-    }
 }

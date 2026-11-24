@@ -1403,33 +1403,6 @@ mod tests {
         assert_eq!(far_from_a_node_with_no_door(true), (true, -2, 0));
     }
 
-    /// Row S0199.10 with a door at the node (ordinary input): the same warning and calls with the row
-    /// off and on.
-    #[test]
-    fn s0199_10_row_on_with_a_door_changes_nothing() {
-        let mut logs = vec![];
-        for on in [false, true] {
-            let (mut e, this, actor) = engine(3);
-            e.register(DOORS_TELEPORT, |_, _| word(0));
-            e.register(SET_LOCATION, nothing);
-            e.register_double(NODE_DOOR, move |_, _| word(actor));
-            e.register(ACTIVATE, |_, _| word(1));
-            e.register(PARENT_CELL, |_, _| word(0));
-            e.register(POINTS_DIFFER, |_, _| word(1));
-            e.register(NAME_TEST, |_, _| word(0));
-            e.register(REFERENCE_NAME, |_, _| word(0x5555));
-            e.register(DEBUG_PRINT, nothing);
-            e.set_global(DOOR_ARRIVAL_TOLERANCE, 5.0f64);
-            e.set_stewie(engine_core::extend::stewie::USE_DOOR_NULL_DOOR, on);
-            let point = e.mem.alloc(0xc);
-            e.call_log = Some(vec![]);
-            assert_eq!(e.call(0x009e_ad90, &args![this, point]).i32(), -2);
-            assert_eq!(calls_to(&e, DEBUG_PRINT).len(), 1);
-            logs.push(e.call_log.take().unwrap());
-        }
-        assert_eq!(logs[0], logs[1]);
-    }
-
     #[test]
     fn use_door_takes_the_actors_position_and_moves_on() {
         let (mut e, this, actor) = engine(3);

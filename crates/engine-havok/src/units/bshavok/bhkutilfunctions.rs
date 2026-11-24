@@ -2518,42 +2518,6 @@ mod movement_tests {
         assert!(!e.call(0x00c8_0090, &args![target]).bool());
     }
 
-    /// lStewieAl's Tweaks' row S0023: a node with no tracker, a marked record and no children.
-    /// Row off, the exe reads the missing first child's tracker (a fault here); row on, the node
-    /// is not active and Tweaks' line names it once ("<unknown mesh>", no linked reference).
-    #[test]
-    fn s0023_a_node_with_no_first_child() {
-        use std::sync::Mutex;
-        static LINES: Mutex<Vec<u32>> = Mutex::new(Vec::new());
-        for on in [false, true] {
-            let mut e = engine();
-            e.set_stewie(engine_core::extend::stewie::INVALID_FADE_NODE, on);
-            e.register(0x0071_b160, |_, _| ret(0x4000));
-            e.register(0x0071_d0a0, |e, a| {
-                LINES.lock().unwrap().push(e.mem.u32(a[2]));
-                Ret::default()
-            });
-            let record = e.mem.alloc(0x20);
-            e.mem.set_u32(record + 0xc, 2);
-            answer(&mut e, TRACKER_QUERY, record);
-            let target = e.mem.alloc(0x200);
-            e.mem.unmap(0, 0x1000);
-            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                e.call(0x00c8_0090, &args![target]).bool()
-            }));
-            e.call_stack.clear();
-            assert_eq!(run.ok(), on.then_some(false), "row {on}");
-            if on {
-                assert!(!e.call(0x00c8_0090, &args![target]).bool());
-                assert_eq!(
-                    *LINES.lock().unwrap(),
-                    vec![0xffff_ffff],
-                    "once for the node"
-                );
-            }
-        }
-    }
-
     #[test]
     fn thread_setup_builds_the_router_once() {
         let mut e = engine();

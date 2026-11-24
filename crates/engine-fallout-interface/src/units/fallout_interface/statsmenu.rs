@@ -6668,38 +6668,4 @@ mod stewie_menus5_tests {
             .filter(|(a, _)| *a == 0x005e_58f0)
             .count()
     }
-
-    /// Row S0066 (`0x7E0C1F`): with the row on a non-hostile effect's duration is the player's
-    /// `ModifyPositiveChemDuration` perks' (entry point 0x19) result cut to a whole number (45);
-    /// a hostile one (flag 1) keeps 30 and the perks are not asked; off, the exe's
-    /// `EffectItem::GetDuration`. JIP's G107 site answers first when its fixes are on.
-    #[test]
-    fn s0066_chem_durations_count_the_perks() {
-        for (on, flags, wanted, asked) in [
-            (false, 0u32, 30u32, 0usize),
-            (true, 0, 45, 1),
-            (true, 1, 30, 0),
-            (true, 2, 45, 1),
-        ] {
-            let mut e = Engine::new();
-            let item = effect(&mut e, flags);
-            e.set_stewie(stewie::PIPBOY_CHEM_DURATION_PERKS, on);
-            assert_eq!(
-                effect_duration(&mut e, item),
-                wanted,
-                "row {on} flags {flags}"
-            );
-            assert_eq!(perks_asked(&e), asked);
-        }
-        fn jip(_: &mut Engine, _: &[u32]) -> Option<u32> {
-            Some(77)
-        }
-        let mut e = Engine::new();
-        let item = effect(&mut e, 0);
-        e.set_stewie(stewie::PIPBOY_CHEM_DURATION_PERKS, true);
-        e.set_jip_patches(jip_patches::INSTALLED | jip_patches::FIXES);
-        e.on_site_for_test(0x007e_0c1f, jip);
-        assert_eq!(effect_duration(&mut e, item), 77);
-        assert_eq!(perks_asked(&e), 0);
-    }
 }

@@ -4090,46 +4090,6 @@ mod tests {
     use std::cell::Cell;
     use std::rc::Rc;
 
-    /// S0166 (`patchThresholdExplosivesWeaponDamage`, `0x9B1033`): the explosion's skill is the owner's
-    /// actor value owner (+0xA4) slot 0xC with the skill (55.0 here); with the row it is
-    /// `GetClampedActorFloatValue` (`0066ef50`, answering 50.0).
-    #[test]
-    fn s0166_an_explosion_uses_the_clamped_skill() {
-        for (on, skill) in [(false, 55.0f32), (true, 50.0)] {
-            let mut e = Engine::new();
-            e.call_log = Some(vec![]);
-            e.set_stewie(engine_core::extend::stewie::EXPLOSIVES_SKILL_CLAMPED, on);
-            let owner = e.mem.alloc(0x200);
-            let table = e.mem.alloc(0x40);
-            let slot = e.mem.alloc(8);
-            e.mem.set_u32(table + 0xc, slot);
-            e.mem.set_u32(owner + 0xa4, table);
-            e.register_double(slot, |_, _| Ret {
-                st0: 55.0,
-                ..Ret::default()
-            });
-            e.register_double(0x0066_ef50, |_, _| Ret {
-                st0: 50.0,
-                ..Ret::default()
-            });
-            assert_eq!(explosion_skill(&mut e, owner, 0x2c), skill, "on {on}");
-            let clamped = e
-                .call_log
-                .as_ref()
-                .unwrap()
-                .iter()
-                .filter(|(a, _)| *a == 0x0066_ef50)
-                .map(|(_, w)| w.clone())
-                .collect::<Vec<_>>();
-            let expected = if on {
-                vec![vec![owner + 0xa4, 0x2c]]
-            } else {
-                vec![]
-            };
-            assert_eq!(clamped, expected, "on {on}");
-        }
-    }
-
     #[test]
     fn los_pick_handles_flag_null_target_and_empty_ray() {
         let mut e = Engine::new();

@@ -5158,10 +5158,7 @@ pub fn fn_00954610(
             let process = process_of(e, this);
             let entry = e.vcall(process, 0x14c, &args![]).u32();
             e.call(0x006e_cd40, &args![entry, 0u32]);
-            // lStewieAl's Tweaks' row S0153 (`patchFixWeaponNifRoundNotCullingInFirstPerson`, the
-            // byte at `0x954703`): the first lookup asks the first-person model (1).
-            let first = u32::from(e.stewie(engine_core::extend::stewie::NIF_ROUND_FIRST_PERSON));
-            for person in [first, 0u32] {
+            for person in [0u32, 0u32] {
                 let biped = e.call(0x0095_0bb0, &args![this, person]).u32();
                 let node = e.call(0x004a_ae30, &args![biped, ROUND_NODE_NAME]).u32();
                 if node != 0 {
@@ -9730,25 +9727,6 @@ mod tests {
         assert_eq!(calls_to(&e, 0x0088_b510).len(), 1);
     }
 
-    /// S0212 (`PlayerWaitDoubleHealingFix`): each waited hour the exe also restores the player's
-    /// health itself (`Actor::RestoreHealth`, `0088b510`) after the process lists' update (whose
-    /// magic update heals already); with the row on that call is skipped, the rest unchanged.
-    #[test]
-    fn s0212_waiting_heals_once() {
-        for on in [false, true] {
-            let mut e = engine();
-            e.set_stewie(engine_core::extend::stewie::WAIT_SINGLE_HEALING, on);
-            let (player, _) = waiting_player(&mut e, 80.0);
-            e.set_global(WAIT_STEP_ACTIVE, 1u8);
-            e.set_global(PROCESS_LOCK_ENABLED, 1u8);
-            e.set(player, PlayerCharacter::iSleepTime, 3);
-            start_log(&mut e);
-            fn_0094df80(&mut e, player);
-            assert_eq!(calls_to(&e, 0x0088_b510).len(), usize::from(!on), "on {on}");
-            assert_eq!(calls_to(&e, 0x0096_bcd0).len(), 1, "on {on}");
-        }
-    }
-
     #[test]
     fn an_active_wait_with_a_magic_target_updates_it() {
         let mut e = engine();
@@ -12654,60 +12632,6 @@ mod tests {
         assert_eq!(calls_to(&e, 0x0045_7990).len(), 2);
     }
 
-    /// lStewieAl's Tweaks' row S0107.04: row off, each focus makes a 4-byte "Bip01 Speaker" name
-    /// (`OPERATOR_NEW(4)`, `00438170`) that is never freed and looks the speaker node up with it;
-    /// row on, none is made: the lookup gets Tweaks' one kept name, whose handle is made once
-    /// (`00a5b690` on the exe's text) and kept for every later focus.
-    #[test]
-    fn s0107_04_the_speaker_name_is_one_kept_name() {
-        for on in [false, true] {
-            let mut e = engine();
-            let (player, actor) = focus_world(&mut e);
-            e.set_stewie(engine_core::extend::stewie::FOCUS_SPEAKER_NAME_LEAK, on);
-            slot(&mut e, actor, 0x1d0, eax(0x77));
-            slot(&mut e, actor, 0x1b0, eax(0));
-            double(&mut e, 0x008a_30f0, eax(0x0333));
-            e.register_double(OPERATOR_NEW, |_, a| {
-                eax(if a[0] == 4 { 0x0600_0100 } else { 0 })
-            });
-            e.register_double(0x0043_8170, |_, a| eax(a[0]));
-            e.register_double(0x00a5_b690, |_, a| {
-                assert_eq!(a[0], SPEAKER_NODE_NAME);
-                eax(0x5150)
-            });
-            start_log(&mut e);
-            player_character_focus_on_actor(&mut e, player, actor, 1.0, 0);
-            player_character_focus_on_actor(&mut e, player, actor, 1.0, 0);
-            let kept = e.stewie_kept(engine_core::extend::stewie::kept::SPEAKER_NAME, 4);
-            let names: Vec<u32> = calls_to(&e, 0x004a_de00)
-                .iter()
-                .filter(|a| a[0] == 0x77 && a[1] != 0x0333)
-                .map(|a| a[1])
-                .collect();
-            let fours = calls_to(&e, OPERATOR_NEW)
-                .iter()
-                .filter(|a| a[0] == 4)
-                .count();
-            if on {
-                assert_eq!(names, vec![kept, kept]);
-                assert_eq!(e.mem.u32(kept), 0x5150);
-                assert_eq!(fours, 0);
-                assert!(calls_to(&e, 0x0043_8170).is_empty());
-                assert_eq!(calls_to(&e, 0x00a5_b690).len(), 1, "made once");
-            } else {
-                assert_eq!(names, vec![0x0600_0100, 0x0600_0100]);
-                assert_eq!(fours, 2);
-                assert_eq!(
-                    calls_to(&e, 0x0043_8170),
-                    vec![vec![0x0600_0100, SPEAKER_NODE_NAME]; 2]
-                );
-                assert!(calls_to(&e, 0x00a5_b690).is_empty());
-            }
-            // Either way the head is still missing and logged once.
-            assert_eq!(calls_to(&e, LOG_MESSAGE).len(), 1);
-        }
-    }
-
     #[test]
     fn the_head_bound_sets_the_angle_limit_and_eases_the_view() {
         let mut e = engine();
@@ -13104,83 +13028,6 @@ mod tests {
     fn dropping_the_current_ammunition_empties_it_and_places_the_reference() {
         for on in [false, true] {
             dropping_the_current_ammunition_empties_it_and_places_the_reference_row(on);
-        }
-    }
-
-    /// lStewieAl's Tweaks' row S0089.05 (`0x9546EE`): dropping the weapon's current ammunition
-    /// while the process has no ammunition entry (slot 0x14c answers 0): the exe empties the count
-    /// of nothing (`006ecd40` writes +4, as its stand-in here does) and stops; with the row on
-    /// nothing is emptied and the drop goes on (the round nodes hidden, the reference placed).
-    #[test]
-    fn s0089_05_dropping_ammunition_with_no_ammunition_entry() {
-        for on in [false, true] {
-            let mut e = engine();
-            list_helpers(&mut e);
-            let player = new_player(&mut e);
-            let p = player.addr();
-            e.set_global(PLAYER_POINTER, 0x0600_5000u32);
-            process_with_items(&mut e, player, 0);
-            let item = e.mem.alloc(8);
-            slot(&mut e, item, 0xe4, eax(1));
-            double(&mut e, FORM_TYPE_OF, eax(0x29));
-            double(&mut e, 0x008a_1710, eax(0x31));
-            double(&mut e, 0x0052_5980, eax(item));
-            double(&mut e, 0x0095_0bb0, eax(0x4242));
-            double(&mut e, 0x004a_ae30, eax(0x4343));
-            e.register_double(0x006e_cd40, |e, a| {
-                e.mem.set_u32(a[0] + 4, a[1]);
-                Ret::default()
-            });
-            let reference = e.mem.alloc(0x20);
-            slot(&mut e, reference, 0x1d0, eax(0));
-            recording_slot(&mut e, p, 0x17c, eax(reference));
-            record_appends(&mut e);
-            e.set_stewie(engine_core::extend::stewie::DROP_AMMO_NULL_ENTRY, on);
-            start_log(&mut e);
-            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                fn_00954610(&mut e, player, item, 0x22, 0x33, 0x44, 0x55)
-            }));
-            e.call_stack.clear();
-            assert_eq!(run.is_ok(), on, "row {on}");
-            if on {
-                assert_eq!(run.unwrap(), reference);
-                assert!(calls_to(&e, 0x006e_cd40).is_empty());
-                assert_eq!(
-                    calls_to(&e, 0x0045_0f90),
-                    vec![vec![0x4343, 1], vec![0x4343, 1]]
-                );
-            }
-        }
-    }
-
-    /// S0153 (`patchFixWeaponNifRoundNotCullingInFirstPerson`): dropping the loaded ammunition
-    /// looks up the round node on the player's model `0095_0bb0(player, person)` twice: the
-    /// exe asks the third-person model (0) both times, the row asks first person (1), then third.
-    #[test]
-    fn s0153_the_dropped_round_is_hidden_in_first_person_too() {
-        for (on, people) in [(false, [0u32, 0]), (true, [1, 0])] {
-            let mut e = engine();
-            e.set_stewie(engine_core::extend::stewie::NIF_ROUND_FIRST_PERSON, on);
-            list_helpers(&mut e);
-            let player = new_player(&mut e);
-            let p = player.addr();
-            e.set_global(PLAYER_POINTER, 0x0600_5000u32);
-            process_with_items(&mut e, player, 0x300);
-            let item = e.mem.alloc(8);
-            slot(&mut e, item, 0xe4, eax(1));
-            double(&mut e, FORM_TYPE_OF, eax(0x29));
-            double(&mut e, 0x008a_1710, eax(0x31));
-            double(&mut e, 0x0052_5980, eax(item));
-            double(&mut e, 0x0095_0bb0, eax(0x4242));
-            double(&mut e, 0x004a_ae30, eax(0x4343));
-            let reference = e.mem.alloc(0x20);
-            slot(&mut e, reference, 0x1d0, eax(0));
-            recording_slot(&mut e, p, 0x17c, eax(reference));
-            record_appends(&mut e);
-            start_log(&mut e);
-            fn_00954610(&mut e, player, item, 0x22, 0x33, 0x44, 0x55);
-            let asked: Vec<u32> = calls_to(&e, 0x0095_0bb0).iter().map(|c| c[1]).collect();
-            assert_eq!(asked, people.to_vec(), "on {on}");
         }
     }
 
@@ -13904,80 +13751,6 @@ mod tests {
         // The versions after 0x1a close with the pending references.
         assert_eq!(calls_to(&e, 0x005a_aaf0), vec![vec![buffer]]);
         assert_eq!(calls_to(&e, 0x0094_62c0), vec![vec![p, 0, 1]]);
-    }
-
-    /// lStewieAl's Tweaks' row S0089.02 (`RememberAmmoCountOnLoad`, the jump at `0x95BF7F`): a load
-    /// (buffer version 0x1b) of a player whose process has a weapon entry (slot `+0x148`). Off, the
-    /// exe reloads the weapon (the player's slot `+0x3EC` with the weapon's form); on, it does not.
-    /// With S0089.06 off the row does nothing (the reload is then the first load's only set-up of the
-    /// ammunition entry).    /// The default ammunition (`009462c0`) is chosen either way.
-    #[test]
-    fn s0089_02_the_load_does_not_reload_the_weapon() {
-        for (on, with_06) in [(false, true), (true, true), (true, false)] {
-            let mut e = engine();
-            list_helpers(&mut e);
-            let player = new_player(&mut e);
-            let p = player.addr();
-            let buffer = load_buffer(&mut e, 0x1b);
-            e.register(0x0048_39c0, |_, a| eax(a[0] + 0x1000));
-            e.register(DYNAMIC_CAST, |_, a| eax(a[0]));
-            let weapon_entry = e.mem.alloc(0x10);
-            e.mem.set_u32(weapon_entry + 8, 0x6600);
-            let process = e.mem.alloc(0x200);
-            slot(&mut e, process, 0x148, eax(weapon_entry));
-            slot(&mut e, process, 0x168, eax(0));
-            e.mem.set_u32(p + 0x68, process);
-            let reload = slot(&mut e, p, 0x3ec, eax(0));
-            // `GetBaseProcess` (`008d8520`): the process at +0x68.
-            e.register(0x008d_8520, |e, a| eax(e.mem.u32(a[0] + 0x68)));
-            e.register(0x0044_ddc0, |e, a| eax(e.mem.u32(a[0] + 8)));
-            e.set_stewie(engine_core::extend::stewie::LOAD_GAME_NO_RELOAD, on);
-            e.set_stewie(
-                engine_core::extend::stewie::LOAD_GAME_PLAYER_WEAPON_WITHOUT_3D,
-                with_06,
-            );
-            start_log(&mut e);
-            fn_0095a3b0(&mut e, player, buffer);
-            let reloads = calls_to(&e, reload);
-            if on && with_06 {
-                assert!(reloads.is_empty());
-            } else {
-                assert_eq!(reloads.len(), 1);
-                assert_eq!(reloads[0][..2], [p, 0x6600]);
-            }
-            assert_eq!(calls_to(&e, 0x0094_62c0), vec![vec![p, 0, 1]]);
-        }
-    }
-
-    /// lStewieAl's Tweaks' row S0089.07 (`0x95C064`) through the load: a player whose ammunition
-    /// entry (`MiddleHighProcess` +0x118) holds 30 rounds of an ammunition it no longer carries
-    /// (no container changes: 0 rounds) and no saved count. Off, the entry keeps 30 after the load;
-    /// on, Tweaks' setup limits it to the 0 rounds carried.
-    #[test]
-    fn s0089_07_the_load_sets_up_the_ammunition_entry() {
-        for (on, rounds) in [(false, 30u32), (true, 0)] {
-            let mut e = engine();
-            list_helpers(&mut e);
-            let player = new_player(&mut e);
-            let p = player.addr();
-            e.set_global(0x011d_ea3c, p);
-            let buffer = load_buffer(&mut e, 5);
-            e.register(0x0048_39c0, |_, a| eax(a[0]));
-            e.register(DYNAMIC_CAST, |_, a| eax(a[0]));
-            let process = e.mem.alloc(0x200);
-            e.mem.set_u32(p + 0x68, process);
-            let ammo_info = e.mem.alloc(0x10);
-            e.mem.set_u32(ammo_info + 4, 30);
-            e.mem.set_u32(ammo_info + 8, 0x0101_0000);
-            e.mem.set_u32(process + 0x118, ammo_info);
-            // No hotkey on the weapon entry (`004bd7a0`: -1), no container changes (`00410220`).
-            e.register(0x004b_d7a0, |_, _| eax(u32::MAX));
-            e.register(0x0041_0220, |_, _| eax(0));
-            e.set_stewie(engine_core::extend::stewie::LOAD_GAME_AMMO_COUNT, on);
-            start_log(&mut e);
-            fn_0095a3b0(&mut e, player, buffer);
-            assert_eq!(e.mem.u32(ammo_info + 4), rounds, "on {on}");
-        }
     }
 
     #[test]

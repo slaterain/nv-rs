@@ -3315,56 +3315,6 @@ mod tests {
         assert_eq!(calls_to(&e, FREE), vec![vec![first]]);
     }
 
-    /// lStewieAl's Tweaks' row S0022.48: the list holds the repair menu's target entry (`011da760`)
-    /// in its second node and another entry first. Row off, both entries are deleted; row on, the
-    /// loop's delete passes over the target and the first entry is still deleted (Tweaks patches
-    /// the loop's call only), even when the first is the target.
-    #[test]
-    fn s0022_48_the_repair_target_is_not_deleted_while_repairing() {
-        for (on, first_is_target) in [(false, false), (true, false), (true, true)] {
-            let mut e = engine();
-            e.set_stewie(engine_core::extend::stewie::REPAIR_TARGET_KEPT, on);
-            stub(
-                &mut e,
-                &[
-                    FREE,
-                    NODE_SET_NEXT,
-                    NODE_DELETE,
-                    ITEM_DATA_DELETE,
-                    TILE_SET_FLOAT,
-                ],
-            );
-            e.register(LIST_BOX_HAS_FLAG, |_, a| u32::from(a[1] == 1).into_ret());
-            e.register(TEXT_TO_TRAIT, |_, _| 0x55u32.into_ret());
-            e.map(REPAIR_MENU_SELECTION & !0xfff, 0x1000);
-            e.set_global(REPAIR_MENU_SELECTION, 0x9000u32);
-            let this = list_box(&mut e);
-            let first = item(&mut e, 0, if first_is_target { 0x9000 } else { 0x8000 }, 0);
-            let second = item(&mut e, 0, 0x9000, 0);
-            let node = e.mem.alloc(8);
-            e.mem.set_u32(node, second);
-            e.mem.set_u32(this.addr() + 4, first);
-            e.mem.set_u32(this.addr() + 8, node);
-            e.call_log = Some(vec![]);
-            e.call(0x0073_0950, &args![this]);
-            let deleted: Vec<u32> = calls_to(&e, ITEM_DATA_DELETE)
-                .iter()
-                .map(|a| a[0])
-                .collect();
-            let expected = match (on, first_is_target) {
-                (false, _) => vec![0x9000, 0x8000],
-                (true, false) => vec![0x8000],
-                (true, true) => vec![0x9000],
-            };
-            assert_eq!(deleted, expected, "row {on}");
-            assert_eq!(
-                calls_to(&e, FREE),
-                vec![vec![second], vec![first]],
-                "the items still go"
-            );
-        }
-    }
-
     #[test]
     fn sort_sorts_the_list_then_synchronizes() {
         let mut e = engine();
@@ -4734,43 +4684,6 @@ mod n051_tests {
         e.call_log = Some(vec![]);
         e.call(0x0073_06d0, &args![this]);
         assert!(calls_to(&e, SHOW_ITEM_STATS_00719790).is_empty());
-    }
-
-    /// Row S0105 (lStewieAl's Tweaks, `0x7307A4`): armour with DT 0 and DR 0 passes the DR tile
-    /// (+0x6C) with the row on, without asking the DR (`004be060`); off, neither tile. With a DT
-    /// the exe's DR test stays, even when the DT tile (+0x70) itself is 0 (the patch is on the
-    /// DT test's path, not on the tile's value).
-    #[test]
-    fn s0105_no_dt_passes_the_dr_tile() {
-        for (on, dt, dr, dt_tile, wanted, dr_asked) in [
-            (false, 0.0f64, 0.0f64, 0x70u32, [0u32, 0], 1usize),
-            (true, 0.0, 0.0, 0x70, [0x6c, 0], 0),
-            (true, 3.0, 0.0, 0x70, [0, 0x70], 1),
-            (true, 3.0, 2.0, 0x70, [0x6c, 0x70], 1),
-            (true, 3.0, 0.0, 0, [0, 0], 1),
-        ] {
-            let mut e = engine();
-            let this = menu(&mut e);
-            for offset in [0x60u32, 0x64, 0x68, 0x6c] {
-                e.mem.set_u32(this.addr() + offset, offset);
-            }
-            e.mem.set_u32(this.addr() + 0x70, dt_tile);
-            let it = item(&mut e, 0, 1, 0x8000);
-            e.set_global(BARTER_CURRENT_ITEM, it);
-            e.set_global(ITEM_ENTERED_0119FDB0, 1u8);
-            answer(&mut e, FORM_TYPE, 0x18);
-            e.register_double(STAT_004BE060, move |_, _| st0(dr));
-            e.register_double(STAT_004BE180, move |_, _| st0(dt));
-            e.set_stewie(engine_core::extend::stewie::INVENTORY_STAT_ALPHAS, on);
-            e.call_log = Some(vec![]);
-            e.call(0x0073_06d0, &args![this]);
-            assert_eq!(
-                calls_to(&e, SHOW_ITEM_STATS_00719790),
-                vec![vec![wanted[0], wanted[1], 0, it, 0]],
-                "row {on} dt {dt} dr {dr}"
-            );
-            assert_eq!(calls_to(&e, STAT_004BE060).len(), dr_asked);
-        }
     }
 
     #[test]

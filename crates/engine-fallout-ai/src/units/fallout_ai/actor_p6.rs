@@ -5183,33 +5183,6 @@ mod tests {
         assert!(leg_change(true, 0.0, -1.0, 4.0).is_empty());
     }
 
-    /// lStewieAl's Tweaks' row S0205 (`0x8B9EFC`): the case `endurance_loss_restores_the_missing_health`
-    /// restores 21 health with the row off; with it on, only the cache flag is forwarded and no
-    /// health is restored (no adjustment asked either).
-    #[test]
-    fn s0205_an_endurance_loss_restores_no_health() {
-        for (on, restored) in [
-            (false, vec![vec![0, 0x10, 21.0f32.to_bits()]]),
-            (true, vec![]),
-        ] {
-            let (mut e, actor) = endurance_setup(-2.0, 4.0, 1.0, (-20i32) as u32);
-            let masks = cached_helpers(&mut e);
-            e.set_stewie(engine_core::extend::stewie::ENDURANCE_HEALTH_RESTORE, on);
-            e.call_log = Some(vec![]);
-            actor_endurance_modified_callback(&mut e, owner(actor), 0, 10.0, -5.0);
-            let restored: Vec<Vec<u32>> = restored
-                .into_iter()
-                .map(|mut c| {
-                    c[0] = actor.addr();
-                    c
-                })
-                .collect();
-            assert_eq!(calls_to(&e, RESTORE_ACTOR_VALUE), restored, "on {on}");
-            assert_eq!(calls_to(&e, ENDURANCE_ADJUSTMENT).is_empty(), on);
-            assert_eq!(*masks.borrow(), [0x80]);
-        }
-    }
-
     fn limb_flag_setup(current: f32) -> (Engine, Ptr<Actor>) {
         let mut e = engine();
         let actor = new_actor(&mut e);
@@ -6091,92 +6064,6 @@ mod tests {
             calls_to(&e, slot_target(ACTOR_TABLE, 0x4b0)),
             [vec![actor.addr(), 0x77, 1]]
         );
-    }
-
-    /// lStewieAl's Tweaks' row S0159 (`0x8BAB65`): clip 10, 3 rounds carried and an ammunition
-    /// entry count of 4 (+1 = 5, past the 3 carried): off, the exe reloads again (the weapon's
-    /// reload group, action 0x11), the loop Tweaks fixes; on, the reload is not played and the best
-    /// equip animation is picked instead. With 5 carried and an entry count of 3 (+1 = 4) both
-    /// reload; with 4 carried and the same count (+1 = 4, all of them) neither does.
-    #[test]
-    fn s0159_no_reload_past_the_rounds_carried() {
-        for (on, carried, minus_one, reloads) in [
-            (false, 3, 4, true),
-            (true, 3, 4, false),
-            (false, 5, 3, true),
-            (true, 5, 3, true),
-            (false, 4, 3, false),
-            (true, 4, 3, false),
-        ] {
-            let (mut e, actor, _) = reload_setup(0, 10, carried, minus_one);
-            e.set_stewie(engine_core::extend::stewie::INFINITE_NPC_RELOADS, on);
-            e.call_log = Some(vec![]);
-            fn_008ba600(&mut e, actor);
-            let reloaded = calls_to(&e, SET_ANIM_ACTION).first().map(|c| c[1]) == Some(0x11);
-            assert_eq!(reloaded, reloads, "on {on}, carried {carried}");
-            assert_eq!(calls_to(&e, PACK_ANIM_GROUP).is_empty(), reloads);
-        }
-    }
-
-    /// lStewieAl's Tweaks' row S0221 (`0x8BA6EA`): flag 0x20's group 0xe0: on, the animation's
-    /// group 1 is cleared (`ClearGroup(1, 0.0)`) just before the group is played; off, it is
-    /// played alone.
-    #[test]
-    fn s0221_the_death_group_clears_the_movement_group_first() {
-        for on in [false, true] {
-            let (mut e, actor, _) = handler_setup(0x20);
-            slot(&mut e, ACTOR_TABLE, 0x22c, eax(1));
-            double(&mut e, ANIMATION_CLEAR_GROUP, Ret::default());
-            e.set_stewie(engine_core::extend::stewie::DEATH_ANIM, on);
-            e.call_log = Some(vec![]);
-            fn_008ba600(&mut e, actor);
-            let cleared = calls_to(&e, ANIMATION_CLEAR_GROUP);
-            if on {
-                assert_eq!(cleared, [vec![ANIMATION_OBJECT, 1, 0.0f32.to_bits()]]);
-                let order: Vec<u32> = logged_addresses(&e)
-                    .into_iter()
-                    .filter(|a| [ANIMATION_CLEAR_GROUP, PLAY_GROUP, GET_ANIM_GROUP].contains(a))
-                    .collect();
-                assert_eq!(order, [GET_ANIM_GROUP, ANIMATION_CLEAR_GROUP, PLAY_GROUP]);
-            } else {
-                assert!(cleared.is_empty());
-            }
-            assert_eq!(
-                calls_to(&e, PLAY_GROUP),
-                [vec![ANIMATION_OBJECT, 0x77, 1, 0xffff_ffff, 0xffff_ffff]]
-            );
-        }
-    }
-
-    /// lStewieAl's Tweaks' row S0043 (`0x8BAC12`): an NPC's queued equip or reload with nothing to
-    /// reload while its weapon entry has no form: the exe asks the missing weapon for its
-    /// animation type (`0051e2a0` reads +0x103, as its stand-in here does) and stops; with the row
-    /// on the weapon's group is skipped, as at the block's end.
-    #[test]
-    fn s0043_an_npcs_queued_reload_with_no_weapon_form() {
-        for on in [false, true] {
-            let (mut e, actor, _) = reload_setup(0x800 | 0x200 | 0x2, 4, 4, 3);
-            let entry = e.mem.alloc(0x20);
-            slot(&mut e, PROCESS_TABLE, 0x148, eax(entry));
-            e.register_double(WEAPON_ANIM_TYPE, |e, a| {
-                eax(u32::from(e.mem.u8(a[0] + 0x103)) + 0xb1)
-            });
-            e.set_stewie(engine_core::extend::stewie::RELOAD_LOOP_NULL_WEAPON, on);
-            e.call_log = Some(vec![]);
-            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                fn_008ba600(&mut e, actor);
-            }));
-            e.call_stack.clear();
-            assert_eq!(run.is_ok(), on, "row {on}");
-            if on {
-                assert!(calls_to(&e, WEAPON_ANIM_TYPE).is_empty());
-                assert_eq!(
-                    calls_to(&e, PLAY_GROUP),
-                    [[ANIMATION_OBJECT, 0x44, 1, 1, 4]]
-                );
-                assert!(calls_to(&e, SET_ANIM_ACTION).is_empty());
-            }
-        }
     }
 
     #[test]
@@ -8697,50 +8584,6 @@ mod tests {
         rig.e.call_log = Some(vec![]);
         assert!(!update(&mut rig, 1));
         assert!(argument_of(&rig, RAGDOLL_SET_00C747D0).is_empty());
-    }
-
-    /// lStewieAl's Tweaks' row S0217 (`0x8BCED5`): the player in first person (the test at
-    /// `00524d10` fails), in range: off, the player is not wanted and the update stops before the
-    /// controller's flags (leg IK reset); on, the store is gone, the flag keeps its 1 and the
-    /// update goes on as for any actor. The test is asked either way.
-    #[test]
-    fn s0217_the_players_leg_ik_is_kept_in_first_person() {
-        for on in [false, true] {
-            let mut rig = ragdoll_rig();
-            near(&mut rig);
-            let actor = rig.actor.addr();
-            rig.e.set_global(PLAYER_POINTER, actor);
-            rig.e.register(PLAYER_TEST_004EAF60, |_, _| eax(1));
-            rig.e.register(PLAYER_TEST_00524D10, |_, _| eax(0));
-            rig.e
-                .set_stewie(engine_core::extend::stewie::RAGDOLL_CONTROLLER_UPDATE, on);
-            rig.e.call_log = Some(vec![]);
-            assert_eq!(update(&mut rig, 1), on);
-            assert_eq!(argument_of(&rig, PLAYER_TEST_00524D10)[0], [actor]);
-            let ragdoll = rig.ragdoll;
-            let flags = argument_of(&rig, RAGDOLL_SET_00C747D0);
-            if on {
-                assert_eq!(flags, [vec![ragdoll, 1]]);
-            } else {
-                assert!(flags.is_empty());
-            }
-        }
-    }
-
-    /// Row S0217 for an NPC (ordinary input): the same calls and answer with the row off and on.
-    #[test]
-    fn s0217_row_on_for_an_npc_changes_nothing() {
-        let mut logs = vec![];
-        for on in [false, true] {
-            let mut rig = ragdoll_rig();
-            near(&mut rig);
-            rig.e
-                .set_stewie(engine_core::extend::stewie::RAGDOLL_CONTROLLER_UPDATE, on);
-            rig.e.call_log = Some(vec![]);
-            assert!(update(&mut rig, 1));
-            logs.push(rig.e.call_log.take().unwrap());
-        }
-        assert_eq!(logs[0], logs[1]);
     }
 
     #[test]

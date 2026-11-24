@@ -11638,16 +11638,4 @@ mod stewie_menus6_tests {
         assert_eq!(e.mem.u32(player + 0x604), 0);
         assert!(e.call_log.as_ref().unwrap().is_empty());
     }
-
-    /// The row's place (`0x7AC53A`, after the destructor): the door is set only with the row on.
-    #[test]
-    fn s0218_only_with_the_row() {
-        for on in [false, true] {
-            let (mut e, player, door) = door_engine(0x0010_3df9, 0x0010_3e69, 0xff);
-            e.set_stewie(stewie::NEW_GAME_LAST_EXTERIOR_DOOR, on);
-            stewie_after_free(&mut e);
-            let wanted = if on { door } else { 0 };
-            assert_eq!(e.mem.u32(player + 0x604), wanted);
-        }
-    }
 }

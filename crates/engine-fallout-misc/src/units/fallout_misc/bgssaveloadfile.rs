@@ -866,40 +866,6 @@ mod tests {
         }
     }
 
-    /// lStewieAl's Tweaks' S0022.44: after the header is read for the picture, a player-named save
-    /// (`00851aa0` says yes) gets a game-heap copy of its name as its location, the old one freed;
-    /// a numbered save, or the row off, keeps its location.
-    #[test]
-    fn s0022_44_a_custom_save_name_is_the_location() {
-        let run = |row: bool, custom: u32| {
-            let mut e = setup();
-            let this = entry(&mut e);
-            e.map(0x8000, 0x1000);
-            e.mem.write(0x8000, b"MySave\0");
-            e.register_double(0x00851aa0, move |_, a| {
-                assert_eq!(a, &[0x6000, 0x8000]);
-                custom.into_ret()
-            });
-            e.register(0x0084dda0, |_, _| 0u32.into_ret());
-            e.set_stewie(engine_core::extend::stewie::CUSTOM_SAVE_NAME_SHOWN, row);
-            get_screenshot(&mut e, this);
-            let location = e.get(this, BGSSaveLoadFileEntry::pLocation);
-            let mut text = vec![];
-            if location != 0x9000 {
-                for i in 0..8 {
-                    text.push(e.mem.u8(location + i));
-                }
-            }
-            (location == 0x9000, text, calls(&e, 0x00401030))
-        };
-        assert_eq!(run(false, 1), (true, vec![], vec![]));
-        assert_eq!(run(true, 0), (true, vec![], vec![]));
-        let (kept, text, freed) = run(true, 1);
-        assert!(!kept);
-        assert_eq!(&text[..7], b"MySave\0");
-        assert_eq!(freed, vec![vec![0x9000]]);
-    }
-
     #[test]
     fn load_data_handles_shortcuts_and_open_failure() {
         for (loaded, corrupt, opens) in [(1, 0, true), (0, 0x80, true), (0, 0, false), (0, 0, true)]

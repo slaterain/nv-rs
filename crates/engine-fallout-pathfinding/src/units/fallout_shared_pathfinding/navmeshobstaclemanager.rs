@@ -6898,43 +6898,6 @@ mod tests {
         assert!(s.added.borrow().is_empty());
     }
 
-    /// lStewieAl's Tweaks' row S0242 (`0x6C0DFE`, `0x6C0F4E`, `0x6C107F`):
-    /// with the row a reference that is not a door leaves each door handler
-    /// at once (no queue or map touched); a sliding door still goes through
-    /// the queues as before. Row off, the non-door goes through them (the
-    /// tests above).
-    #[test]
-    fn s0242_the_door_handlers_pass_over_references_that_are_not_doors() {
-        type Handler = fn(&mut Engine, Ptr<NavMeshObstacleManager>, u32);
-        let handlers: [(Handler, &[u32]); 3] = [
-            (fn_006c0dc0, &[0xf0]),
-            (nav_mesh_obstacle_manager_on_door_close, &[0xf8]),
-            (fn_006c1060, &[0xf0]),
-        ];
-        for (handler, queued) in handlers {
-            for on in [false, true] {
-                let mut s = door_scene(0x1b, false, false, false, queued);
-                s.e.set_stewie(
-                    engine_core::extend::stewie::NAV_MESH_OBSTACLE_DOORS_ONLY,
-                    on,
-                );
-                handler(&mut s.e, s.this, s.reference);
-                assert!(s.setting_reads.borrow().is_empty());
-                let touched = !s.removed.borrow().is_empty() || !s.added.borrow().is_empty();
-                assert_eq!(touched, !on, "row {on}");
-            }
-            // A sliding door is a door: the queues change with the row too.
-            let mut s = door_scene(0x1c, true, false, false, queued);
-            s.e.set_stewie(
-                engine_core::extend::stewie::NAV_MESH_OBSTACLE_DOORS_ONLY,
-                true,
-            );
-            handler(&mut s.e, s.this, s.reference);
-            assert!(s.setting_reads.borrow().is_empty());
-            assert!(!s.removed.borrow().is_empty() || !s.added.borrow().is_empty());
-        }
-    }
-
     /// A manager with every callee of the obstacle (re)registration
     /// functions replaced by a recording double.
     struct Scene {

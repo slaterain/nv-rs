@@ -629,26 +629,4 @@ mod n075_tests {
         e.call(0x004f_0a40, &args![0x9000u32]);
         assert!(calls(&e.call_log.take().unwrap(), 0x0048_5910).is_empty());
     }
-
-    /// lStewieAl's Tweaks' row S0181: both controller walks handed a null object (an idle's add-on
-    /// already gone) ask it for its node and stop with the row off (the null page holds no
-    /// vtable); with it on they return at once, calling nothing.
-    #[test]
-    fn s0181_the_walks_return_for_a_null_object() {
-        for walk in [0x004f_0640u32, 0x004f_06d0] {
-            for on in [false, true] {
-                let mut e = Engine::new();
-                e.set_stewie(engine_core::extend::stewie::NULL_ANIM_REMOVE_RECURSE, on);
-                e.call_log = Some(vec![]);
-                let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    e.call(walk, &args![0x9000u32, 0u32]);
-                }));
-                e.call_stack.clear();
-                assert_eq!(run.is_ok(), on, "{walk:08x} row {on}");
-                if on {
-                    assert_eq!(e.call_log.take().unwrap(), vec![(walk, vec![0x9000, 0])]);
-                }
-            }
-        }
-    }
 }

@@ -13067,89 +13067,6 @@ mod tests {
         assert_eq!(calls(&e, PROCESS_SLOTS + 0x12c), vec![vec![p.addr(), 0]]);
     }
 
-    /// lStewieAl's Tweaks' row S0124: activating a close target while the process has no current
-    /// package (slot 0x22C) reads the null package's type (`0041ca90` reads the byte at `+0x20`,
-    /// as its stand-in here does) and stops with the row off; with it on the package is no
-    /// dialogue package and the step goes on.
-    #[test]
-    fn s0124_process_activate_without_a_current_package() {
-        for on in [false, true] {
-            let mut e = engine();
-            // This harness maps page 0 for its other tests; the game faults there.
-            e.mem.unmap(0, 0x1000);
-            let p = process(&mut e);
-            let a = actor(&mut e);
-            let package = thing(&mut e);
-            e.register_double(PROCESS_SLOTS + 0x27c, move |_, _| ret(package));
-            e.register_double(PROCESS_SLOTS + 0x22c, |_, _| ret(0));
-            e.register(
-                PACKAGE_TYPE,
-                |e, a| ret(e.mem.i8(a[0] + 0x20) as i32 as u32),
-            );
-            let target = thing(&mut e);
-            e.mem.set_u32(p.addr() + 0x40, target);
-            e.mem.set_u32(p.addr() + 0x64, 0);
-            e.register(OBJECT_SLOTS + 0x144, |_, _| ret(1));
-            e.set_stewie(stewie::PROCESS_ACTIVATE_NULL_PACKAGE, on);
-            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                middle_high_process_process_activate(&mut e, p, a, 0)
-            }));
-            e.call_stack.clear();
-            assert_eq!(run.is_ok(), on, "row {on}");
-            if on {
-                assert!(run.unwrap());
-                assert_eq!(calls(&e, REFERENCE_ACTIVATE).len(), 1);
-            }
-        }
-    }
-
-    /// lStewieAl's Tweaks' row S0124 with a current package (ordinary input): the row changes
-    /// nothing, the same calls and the same answer as with it off. A package that is not a dialogue
-    /// package goes past the dialogue test whether or not the actor's path failed (`00915ef0`, the
-    /// actor mover's byte at `+0x70`), as in the exe: with the path failed the object is not
-    /// activated but the step's clean-up runs and the actor's dialogue is not stopped. (Tweaks'
-    /// bytes, which also cover the exe's `jnz`, stop the dialogue and return at once there for every
-    /// package; the port keeps the exe's type test: docs/FIXES.md.) A dialogue package (0x1C) with
-    /// the path failed stops the dialogue and answers false, row on or off.
-    #[test]
-    fn s0124_row_on_with_a_current_package_changes_nothing() {
-        for (kind, failed) in [(0u8, 0u32), (0, 1), (0x1c, 0), (0x1c, 1)] {
-            let run = |on: bool| {
-                let mut e = engine();
-                let p = process(&mut e);
-                let a = actor(&mut e);
-                let package = with_package(&mut e);
-                e.mem.set_u8(package + 0x20, kind);
-                e.register(
-                    PACKAGE_TYPE,
-                    |e, a| ret(e.mem.i8(a[0] + 0x20) as i32 as u32),
-                );
-                e.register_double(ACTOR_BYTE_70, move |_, _| ret(failed));
-                let target = thing(&mut e);
-                e.mem.set_u32(p.addr() + 0x40, target);
-                e.mem.set_u32(p.addr() + 0x64, 0);
-                e.register(OBJECT_SLOTS + 0x144, |_, _| ret(1));
-                e.set_stewie(stewie::PROCESS_ACTIVATE_NULL_PACKAGE, on);
-                let result = middle_high_process_process_activate(&mut e, p, a, 0);
-                (result, e, package)
-            };
-            let (off, e_off, _) = run(false);
-            let (on, e, package) = run(true);
-            let case = format!("package type {kind:#x}, path failed {failed}");
-            assert_eq!(on, off, "{case}");
-            assert_eq!(e.call_log, e_off.call_log, "{case}");
-            assert!(calls(&e, PACKAGE_TYPE).contains(&vec![package]), "{case}");
-            let stopped = calls(&e, ACTOR_SLOTS + 0x288).len();
-            let activated = calls(&e, REFERENCE_ACTIVATE).len();
-            let cleaned = calls(&e, REFERENCE_RUN_SCRIPT).len();
-            match (kind, failed) {
-                (0x1c, 1) => assert_eq!((on, stopped, activated, cleaned), (false, 1, 0, 0)),
-                (_, 1) => assert_eq!((on, stopped, activated, cleaned), (false, 0, 0, 1)),
-                _ => assert_eq!((on, stopped, activated, cleaned), (true, 0, 1, 1)),
-            }
-        }
-    }
-
     #[test]
     fn enter_combat_starts_combat_with_the_target() {
         let mut e = engine();
@@ -15094,41 +15011,6 @@ mod tests {
         assert_eq!(calls(&e, ACTOR_SET_CHASE_BIP), vec![vec![a, 0]]);
     }
 
-    /// S0171 (`KnockDownHandGripFix`): the get-up idle of a knockdown is done. Off, the Havok
-    /// weapon is set and nothing is queued, as the exe; on, right after it the actor's process
-    /// (+0x68) queues the hand-grip idle (slot +0x614 with 0x100). An idle still playing does
-    /// neither.
-    #[test]
-    fn s0171_getting_up_queues_the_hand_grip_idle() {
-        for (on, done) in [(false, true), (true, true), (true, false)] {
-            let mut e = engine();
-            e.set_stewie(engine_core::extend::stewie::KNOCKDOWN_HAND_GRIP, on);
-            let p = process(&mut e);
-            let a = actor(&mut e);
-            e.mem.set_u32(a + 0x68, p.addr());
-            e.mem.set_u8(p.addr() + 0x13c, 7);
-            e.register_double(SPECIAL_IDLE_DONE_PLAYING, move |_, _| ret(u32::from(done)));
-            knock_state_idle_playing(&mut e, p.addr(), a, 0x4400);
-            let queued = calls(&e, PROCESS_SLOTS + 0x614);
-            if on && done {
-                assert_eq!(queued, vec![vec![p.addr(), 0x100]]);
-                let order: Vec<u32> = e
-                    .call_log
-                    .as_ref()
-                    .unwrap()
-                    .iter()
-                    .map(|c| c.0)
-                    .filter(|&c| c == ACTOR_SET_HAVOK_WEAPON || c == PROCESS_SLOTS + 0x614)
-                    .collect();
-                assert_eq!(order, [ACTOR_SET_HAVOK_WEAPON, PROCESS_SLOTS + 0x614]);
-            } else {
-                assert!(queued.is_empty(), "on {on} done {done}");
-            }
-            assert_eq!(count(&e, ACTOR_SET_HAVOK_WEAPON), usize::from(done));
-            assert_eq!(e.mem.u8(p.addr() + 0x13c), if done { 0 } else { 7 });
-        }
-    }
-
     #[test]
     fn process_get_up_without_animation_is_false() {
         let mut e = engine();
@@ -15594,46 +15476,6 @@ mod tests {
         assert_eq!(count(&e, SOUND_HANDLE_PLAY), 1);
         assert_eq!(count(&e, SOUND_HANDLE_STOP), 0);
         assert_eq!(count(&e, EXTRA_SET_WEAPON_IDLE_SOUND), 1);
-    }
-
-    /// S0039 (`fixWeaponIdleSoundsHavingInfiniteRange`): the flags a new weapon idle sound is
-    /// made with (the sound's own 0x10, 2, and 0x240000 for the player), while the player is in
-    /// third person (`00524d10`, its byte +0x64B). Off, 0x40000 is flipped: an NPC's sound gets it
-    /// (heard at any distance) and the player's own loses it (placed in the world); on, it is never
-    /// flipped (the player's own sound plays as in first person) and the test is not asked.
-    #[test]
-    fn s0039_an_npcs_weapon_idle_sound_keeps_its_range() {
-        for (on, is_player, player_flag, flags) in [
-            (false, false, true, 0x0004_0012u32),
-            (true, false, true, 0x12),
-            (false, true, true, 0x0020_0012),
-            (true, true, true, 0x0024_0012),
-            (false, false, false, 0x12),
-            (false, true, false, 0x0024_0012),
-        ] {
-            let mut e = engine();
-            e.set_stewie(engine_core::extend::stewie::WEAPON_IDLE_SOUND_RANGE, on);
-            // An actor (its vtable 0x05010000 is made here) and the player sharing that vtable.
-            let other = actor(&mut e);
-            e.mem.set_u32(TEST_PLAYER, 0x0501_0000);
-            let a = if is_player { TEST_PLAYER } else { other };
-            e.register(WEAPON_SOUND_FORM, |_, _| ret(0x5600));
-            e.register(AUDIO_MAP_00511840, |_, _| ret(0x5700));
-            e.register(SOUND_BASE_FLAGS, |_, _| ret(0x10));
-            e.register_double(PLAYER_IS_THIRD_PERSON, move |_, _| {
-                ret(u32::from(player_flag))
-            });
-            weapon_idle_sound(&mut e, 1, 0x7000, a);
-            let made = calls(&e, AUDIO_GET_SOUND_HANDLE_BY_FILENAME);
-            assert_eq!(made.len(), 1);
-            assert_eq!(
-                made[0][3], flags,
-                "on {on} player {is_player} flag {player_flag}"
-            );
-            let asked = calls(&e, PLAYER_IS_THIRD_PERSON);
-            assert_eq!(asked.len(), usize::from(!on));
-            assert_eq!(count(&e, SOUND_HANDLE_PLAY), 1);
-        }
     }
 
     #[test]

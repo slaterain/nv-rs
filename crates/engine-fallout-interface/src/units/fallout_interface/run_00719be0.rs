@@ -463,57 +463,6 @@ mod list_box_tests {
         assert!(called(&e, LIST_SYNCHRONIZE).is_empty());
     }
 
-    /// lStewieAl's Tweaks' row S0199.12: the second item's form has no name part (the cast gives 0).
-    /// Row off: the name getter reads the missing part (its stand-in reads +4 of a null one, as
-    /// `00408da0` does) and stops; row on: that item is named "" (`01011584`) and both are added.
-    #[test]
-    fn s0199_12_an_item_with_no_name_part() {
-        for on in [false, true] {
-            let (mut e, this) = engine(false);
-            e.mem.unmap(0, 0x1000);
-            e.register(DYNAMIC_CAST, |_, a| {
-                if a[0] == 0x208 { 0 } else { a[0] + 0x1000 }.into_ret()
-            });
-            e.register(FORM_NAME_00408DA0, |e, a| {
-                if a[0] == 0 {
-                    e.mem.u32(4);
-                }
-                (a[0] + 0x10).into_ret()
-            });
-            e.set_stewie(engine_core::extend::stewie::LIST_BOX_NULL_NAME, on);
-            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                e.call(0x0071_9ef0, &[this, 0x5000, 0, 0x77, 0, 0, 4]);
-            }));
-            e.call_stack.clear();
-            assert_eq!(run.is_ok(), on, "row {on}");
-            if on {
-                let items: Vec<u32> = called(&e, LIST_ADD_ITEM).iter().map(|w| w[1]).collect();
-                assert_eq!(items, vec![0x100, 0x200]);
-                assert_eq!(
-                    called(&e, STRING_LENGTH_0044A670)[1],
-                    vec![EMPTY_STRING_01011584]
-                );
-                assert_eq!(
-                    called(&e, STRING_COPY_00406D30)[1][1..],
-                    [6, EMPTY_STRING_01011584]
-                );
-            }
-        }
-    }
-
-    /// Row S0199.12 with ordinary input (both forms with a name part): the same calls row off and on.
-    #[test]
-    fn s0199_12_ordinary_input_the_same_calls() {
-        let mut logs = vec![];
-        for on in [false, true] {
-            let (mut e, this) = engine(false);
-            e.set_stewie(engine_core::extend::stewie::LIST_BOX_NULL_NAME, on);
-            e.call(0x0071_9ef0, &[this, 0x5000, FILTER, 0x77, CALLBACK, 0, 4]);
-            logs.push(e.call_log.take().unwrap_or_default());
-        }
-        assert_eq!(logs[0], logs[1]);
-    }
-
     #[test]
     fn needs_the_reference_and_the_list() {
         let (mut e, this) = engine(false);

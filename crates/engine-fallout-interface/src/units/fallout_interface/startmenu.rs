@@ -5838,30 +5838,6 @@ mod tests {
         assert_eq!(r.calls_to(LIST_IS_EMPTY)[0], vec![list.addr() + 4]);
     }
 
-    /// lStewieAl's Tweaks' row S0022.36: a list whose first node has no item, looked up by list
-    /// index. The exe reads the null item's tile and stops; with the row on the node is passed
-    /// over and the second item is found.
-    #[test]
-    fn s0022_36_get_at_with_an_empty_node() {
-        for on in [false, true] {
-            let mut r = rig();
-            r.e.mem.unmap(0, 0x1000);
-            let b = r.item(0xc2, 0);
-            let list = r.list_box(&[0, b]);
-            r.stub(LIST_IS_EMPTY, 0);
-            r.set_tile(0xc2, TRAIT_LIST_INDEX, 9.0);
-            r.e.set_stewie(stewie::LIST_BOX_GET_AT_NULL_ITEM, on);
-            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                r.e.call(0x007a_6fa0, &args![list, 9u32, 0u32]).u32()
-            }));
-            r.e.call_stack.clear();
-            assert_eq!(run.is_ok(), on, "row {on}");
-            if on {
-                assert_eq!(run.unwrap(), b);
-            }
-        }
-    }
-
     #[test]
     fn get_tile_at_returns_the_first_word_of_the_item() {
         let mut r = rig();
@@ -7864,41 +7840,6 @@ mod tests {
         assert!(click < sound);
     }
 
-    /// Row S0022.11 (lStewieAl's Tweaks, `0x7CF387`): buttons 3 and 4 make the highlighted
-    /// option's tile (0x4040) the interface manager's `activeTileAlt` (+0xBC) before its arrow is
-    /// looked up, unless the mouse has moved (+0xED); off, never. The arrow is clicked either way.
-    #[test]
-    fn s0022_11_the_arrow_keys_set_the_selection() {
-        use super::super::mapmenu::stewie_menus::INTERFACE_MANAGER;
-        for (on, moved, set) in [(false, 0u8, false), (true, 0, true), (true, 1, false)] {
-            for button in [3i32, 4] {
-                let mut r = rig();
-                let menu = gamepad_scene(&mut r);
-                let handler = click_handler(menu, &r);
-                r.stub(LIST_BOX_IS_ENABLED, 1);
-                r.with(TILE_GET_CHILD_BY_ID, |_, a| eax(0x4100 + a[1]));
-                r.stub(TILE_IS_VISIBLE, 1);
-                r.stub(TILE_IS_TRUE, 1);
-                if !r.e.mem.is_mapped(INTERFACE_MANAGER) {
-                    r.e.map(INTERFACE_MANAGER & !0xfff, 0x1000);
-                }
-                let manager = r.alloc(0x100);
-                r.e.mem.set_u32(INTERFACE_MANAGER, manager);
-                r.e.mem.set_u8(manager + 0xed, moved);
-                r.e.mem.set_u32(manager + 0xbc, 0x5555);
-                r.e.set_stewie(stewie::LEVEL_UP_ARROWS_SELECT, on);
-                assert!(r.e.call(0x007c_efc0, &args![menu, button, 0u32]).bool());
-                let wanted = if set { 0x4040 } else { 0x5555 };
-                assert_eq!(
-                    r.e.mem.u32(manager + 0xbc),
-                    wanted,
-                    "row {on} moved {moved}"
-                );
-                assert_eq!(r.calls_to(handler).len(), 1);
-            }
-        }
-    }
-
     #[test]
     fn gamepad_right_on_the_back_option_clicks_it_with_minus_one() {
         let mut r = rig();
@@ -8288,71 +8229,6 @@ mod tests {
         r.stub(GAMEPAD_ACTIVE, 1);
         r.e.call(0x007c_f7e0, &args![menu, 0u32, 0x9000u32]);
         assert_eq!(r.calls_to(UPDATE_HIGHLIGHTED_SAVE_GAME_INFO).len(), 2);
-    }
-
-    /// Row S0022.04 (lStewieAl's Tweaks, `0x7CF85B`): with the row on a save tile's picture is
-    /// shown with the mouse outside the list's rows too; the pad is still asked and the rows are
-    /// not measured. Off: the exe's test (outside the rows, nothing).
-    #[test]
-    fn s0022_04_the_save_picture_without_hover() {
-        for on in [false, true] {
-            let mut r = rig();
-            r.real_flags();
-            let menu = r.menu();
-            r.list_vtable(menu, 0x114, 0x4040);
-            let saves = menu.addr() + 0x174;
-            r.with(LIST_BOX_HAS_TILE, move |_, a| eax(u32::from(a[0] == saves)));
-            r.e.mem.set_u32(menu.addr() + 0x40, 0x4500);
-            r.stub(MANAGER_ROW_COUNT, 10);
-            r.stub_float(TILE_POSITION_B, 10.5);
-            r.e.set_stewie(stewie::SAVE_PICTURE_WITHOUT_HOVER, on);
-            r.e.call(0x007c_f7e0, &args![menu, 0u32, 0x9000u32]);
-            assert_eq!(
-                r.calls_to(UPDATE_HIGHLIGHTED_SAVE_GAME_INFO).len(),
-                usize::from(on),
-                "row {on}"
-            );
-            assert_eq!(r.calls_to(GAMEPAD_ACTIVE).len(), 1);
-            assert_eq!(r.calls_to(TILE_POSITION_B).len(), usize::from(!on));
-        }
-    }
-
-    /// Row S0020 (lStewieAl's Tweaks' `StartMenuDestructorSaveIniChanges`, `0x7CB51A`): with the
-    /// row on the settings are saved (`007d6d70`) before the destructor when `uiFlags` has bit 2,
-    /// and the HUD's visibility is set for state 6 (`00771700`) after it; off, neither.
-    #[test]
-    fn s0020_closing_the_start_menu_saves_the_settings() {
-        for (on, changed) in [(false, true), (true, false), (true, true)] {
-            let mut r = rig();
-            let menu = r.menu();
-            r.real_flags();
-            r.stub(SAVE_INI_SETTINGS_007D6D70, 0);
-            r.stub(HUD_UPDATE_VISIBILITY_STATE_00771700, 0);
-            r.e.set(menu, StartMenu::uiFlags, if changed { 2 } else { 0 });
-            r.e.set_stewie(stewie::START_MENU_CLOSE_SAVES_SETTINGS, on);
-            r.e.call(0x007c_b510, &args![menu, 0u32]);
-            assert_eq!(
-                r.calls_to(SAVE_INI_SETTINGS_007D6D70).len(),
-                usize::from(on && changed),
-                "row {on} changed {changed}"
-            );
-            let hud = r.calls_to(HUD_UPDATE_VISIBILITY_STATE_00771700);
-            assert_eq!(hud, if on { vec![vec![6]] } else { vec![] });
-            if on {
-                let order = r.order();
-                let hud_at = order
-                    .iter()
-                    .position(|a| *a == HUD_UPDATE_VISIBILITY_STATE_00771700)
-                    .unwrap();
-                if changed {
-                    let save_at = order
-                        .iter()
-                        .position(|a| *a == SAVE_INI_SETTINGS_007D6D70)
-                        .unwrap();
-                    assert!(save_at < hud_at);
-                }
-            }
-        }
     }
 
     #[test]
@@ -9142,63 +9018,6 @@ mod tests {
         assert_eq!(r.calls_to(LOOKUP_FORM)[1], vec![0x163]);
         assert_eq!(r.calls_to(FORM_LIST_HEAD), vec![vec![0xbeef]]);
         let _ = menu;
-    }
-
-    /// Row S0022.37 (lStewieAl's Tweaks, `0x7D08C6`, `0x7D08D3`): with blackjack open
-    /// (`011d9050`) the help looked up is form 0x172094 with the row on, the menu's own table
-    /// entry (index 5) off; a caravan game in its starting caravans (`flags` 0x800) gives index
-    /// 0x20; roulette and slots the forms after blackjack's.
-    #[test]
-    fn s0022_37_the_pause_menu_help_knows_the_minigames() {
-        let caravan = |r: &mut Rig, page: u32, flags: u32| {
-            let menu = r.alloc(0x1000);
-            r.e.mem.set_u32(menu + 0x28, page);
-            r.e.mem.set_u32(menu + 0xe74, flags);
-            r.e.mem.set_u32(0x011d_917c, menu);
-        };
-        for (on, game, wanted) in [
-            (false, 0x011d_9050u32, 0x168 + 5),
-            (true, 0x011d_9050, 0x0017_2094),
-            (true, 0x011d_a878, 0x0017_2095),
-            (true, 0x011d_a9a4, 0x0017_2096),
-            (true, 0, 0x168 + 5),
-        ] {
-            let mut r = rig();
-            let _ = help_scene(&mut r, vec![0x3ee], &[0xc005]);
-            if game != 0 {
-                if !r.e.mem.is_mapped(game) {
-                    r.e.map(game & !0xfff, 0x1000);
-                }
-                r.e.mem.set_u32(game, 0x7700);
-            }
-            r.e.set_stewie(stewie::MINIGAME_HELP_IN_PAUSE_MENU, on);
-            r.e.call(0x007d_0770, &args![]);
-            assert_eq!(
-                r.calls_to(LOOKUP_FORM)[0],
-                vec![wanted],
-                "row {on} game {game:x}"
-            );
-        }
-        for (page, flags, wanted) in [
-            (0u32, 0u32, 0x1e),
-            (1, 0, 0x1f),
-            (2, 0x800, 0x20),
-            (2, 0, 0x21),
-        ] {
-            let mut r = rig();
-            let _ = help_scene(&mut r, vec![0x3ee], &[0xc005]);
-            if !r.e.mem.is_mapped(0x011d_917c) {
-                r.e.map(0x011d_9000, 0x1000);
-            }
-            caravan(&mut r, page, flags);
-            r.e.set_stewie(stewie::MINIGAME_HELP_IN_PAUSE_MENU, true);
-            r.e.call(0x007d_0770, &args![]);
-            assert_eq!(
-                r.calls_to(LOOKUP_FORM)[0],
-                vec![0x168 + wanted],
-                "page {page}"
-            );
-        }
     }
 
     #[test]

@@ -1634,84 +1634,6 @@ mod tests {
         assert!(calls_to(&e, INIT_ATTRIBUTE_LIST).is_empty());
     }
 
-    /// Row S0110 through `CharGenMenu::Create` (`0x7535FD`): a SPECIAL menu (item type 0) with
-    /// "only add values" and 200 points to give, one stat whose tile's `_MaxValue` is 103 and whose
-    /// value is 4: with the row on the points are capped to 99 right after the attribute list is
-    /// filled (`0x7539A0`); off they stay 200 and the cap's trait name is never asked.
-    #[test]
-    fn s0110_create_caps_the_special_points() {
-        for on in [false, true] {
-            let mut e = Engine::new();
-            let this = special_menu(&mut e, &[(0x100, 0)], &[4]);
-            let vtable = e.mem.alloc(0x40);
-            e.mem.set_u32(this.addr(), vtable);
-            e.mem.set_u32(vtable + 0x34, 0x0075_3340);
-            for i in 0..7 {
-                e.mem.set_u32(this.addr() + 0x2c + 4 * i, 0x100 + i);
-            }
-            e.map(0x0107_0000, 0x1000);
-            e.map(0x0102_2000, 0x1000);
-            e.set_global(STACKING_TYPE_ONE, 102.0f64);
-            e.set_global(STACKING_TYPE_TWO, 103.0f64);
-            e.map(TRAIT_CURRENT_POINTS & !0xfff, 0x1000);
-            e.set_global(TRAIT_CURRENT_POINTS, 0x55u32);
-            e.set_global(TRAIT_MAXIMUM_POINTS, 0x66u32);
-            answer(&mut e, TILE_GET_MENU_BY_CLASS, 0);
-            answer(&mut e, TILE_READ_FILE, 0x4444);
-            answer(&mut e, TILE_GET_MENU, this.addr());
-            answer(&mut e, WORD_AT_FOUR, 0x900);
-            answer_st0(&mut e, GET_FLOAT_TRAIT, 103.0);
-            answer_st0(&mut e, TILE_GET_MAXIMUM_DEPTH, 7.0);
-            answer(&mut e, TILE_TEXT_TO_TRAIT, 0x1234);
-            stub(
-                &mut e,
-                &[
-                    INTERFACE_SINGLETON,
-                    TILE_READER,
-                    MENU_SET_MENU_TILE,
-                    SET_FLOAT_TRAIT,
-                    SET_TRAIT_FROM_INT,
-                    SET_STRING_TRAIT,
-                    SETTING_STRING,
-                    LIST_BOX_HIGHLIGHTED,
-                    LIST_BOX_VALUE_OF,
-                    ACTOR_VALUE_ICON,
-                    ACTOR_VALUE_DESCRIPTION,
-                    MENU_PREP_FOR_VISIBILITY,
-                    LIST_BOX_INITIALIZE,
-                    SHOW_TUTORIAL,
-                    ACTOR_VALUE_SECTION_COUNT,
-                    PRINT_BOUNDED,
-                    APPEND_BOUNDED,
-                    INIT_ATTRIBUTE_LIST,
-                ],
-            );
-            e.set_stewie(
-                engine_core::extend::stewie::CHARGEN_SPECIAL_POINTS_CAPPED,
-                on,
-            );
-            e.call_log = Some(vec![]);
-            e.call(0x0075_3420, &args![0i32, 200i32, 1u32, 0u32]);
-            assert_eq!(calls_to(&e, INIT_ATTRIBUTE_LIST).len(), 1);
-            assert_eq!(
-                e.get(this, CharGenMenu::iMaxPoints),
-                if on { 99 } else { 200 }
-            );
-            let log = e.call_log.as_ref().unwrap();
-            let asked = log
-                .iter()
-                .position(|(a, w)| *a == TILE_TEXT_TO_TRAIT && w[0] == MAX_VALUE_TRAIT_NAME);
-            assert_eq!(asked.is_some(), on, "row {on}");
-            if let Some(asked) = asked {
-                let filled = log
-                    .iter()
-                    .position(|(a, _)| *a == INIT_ATTRIBUTE_LIST)
-                    .unwrap();
-                assert!(filled < asked, "the cap comes after the list is filled");
-            }
-        }
-    }
-
     /// A menu whose list (+0x58) holds `stats` (tile, actor value) and a player whose actor
     /// value owner (+0xA4) answers each value's normalized permanent value from `current`.
     fn special_menu(
@@ -2639,48 +2561,6 @@ mod n052_tests {
         assert!(!e.call(0x0075_4150, &args![this, 5i32, one]).bool());
         assert!(!e.call(0x0075_4150, &args![this, 2i32, one]).bool());
         assert!(!e.call(0x0075_4150, &args![this, 11i32, one]).bool());
-    }
-
-    /// Row S0022.11 (lStewieAl's Tweaks, `0x7541C8`): buttons 3 and 4 on the SPECIAL page make
-    /// the highlighted attribute's tile the interface manager's `activeTileAlt` (+0xBC) before
-    /// its arrow is looked up, unless the mouse has moved (+0xED); off, never. The arrow is
-    /// clicked either way.
-    #[test]
-    fn s0022_11_the_arrow_keys_set_the_selection() {
-        use super::super::mapmenu::stewie_menus::INTERFACE_MANAGER;
-        for (on, moved, set) in [(false, 0u8, false), (true, 0, true), (true, 1, false)] {
-            for button in [3i32, 4] {
-                let mut e = Engine::new();
-                let (this, _, _) = setup(&mut e);
-                let vtable = e.mem.alloc(0x40);
-                e.mem.set_u32(this.addr(), vtable);
-                e.mem.set_u32(vtable + 0xc, 0x00c0_000c);
-                let list_vtable = e.mem.alloc(0x40);
-                e.mem.set_u32(this.addr() + 0x58, list_vtable);
-                e.mem.set_u32(list_vtable + 4, 0x00c0_0004);
-                answer(&mut e, 0x00c0_0004, 0x900);
-                e.register(TILE_GET_CHILD_BY_ID, |_, a| Ret {
-                    eax: 0x1000 + a[1],
-                    ..Ret::default()
-                });
-                answer(&mut e, TILE_IS_TRUE, 1);
-                stub(&mut e, &[TILE_PLAY_TILE_SOUND, 0x00c0_000c]);
-                if !e.mem.is_mapped(INTERFACE_MANAGER) {
-                    e.map(INTERFACE_MANAGER & !0xfff, 0x1000);
-                }
-                let manager = e.mem.alloc(0x100);
-                e.mem.set_u32(INTERFACE_MANAGER, manager);
-                e.mem.set_u8(manager + 0xed, moved);
-                e.mem.set_u32(manager + 0xbc, 0x5555);
-                e.set_stewie(engine_core::extend::stewie::LEVEL_UP_ARROWS_SELECT, on);
-                e.call_log = Some(vec![]);
-                let one = 1.0f32.to_bits();
-                assert!(e.call(0x0075_4150, &args![this, button, one]).bool());
-                let wanted = if set { 0x900 } else { 0x5555 };
-                assert_eq!(e.mem.u32(manager + 0xbc), wanted, "row {on} moved {moved}");
-                assert_eq!(calls_to(&e, 0x00c0_000c).len(), 1);
-            }
-        }
     }
 
     #[test]

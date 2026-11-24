@@ -6303,37 +6303,6 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 mod tests {
     use super::*;
 
-    /// S0410 (`GodmodePreventsLegCrippleSound`): the landing sound and pain are skipped with the row
-    /// for the player (`011dea3c`) in god mode (`011e07ba`) or demigod mode (`011e0898`) only.
-    #[test]
-    fn s0410_god_mode_silences_the_players_hard_landing() {
-        // (row, the player, god, demigod, silenced)
-        for (on, is_player, god, demigod, silenced) in [
-            (false, true, 1u8, 0u8, false),
-            (true, true, 1, 0, true),
-            (true, true, 0, 1, true),
-            (true, true, 0, 0, false),
-            (true, false, 1, 0, false),
-        ] {
-            let mut e = Engine::new();
-            e.set_stewie(
-                engine_core::extend::stewie::GODMODE_NO_LEG_CRIPPLE_SOUND,
-                on,
-            );
-            e.map(0x011d_e000, 0x1000);
-            e.map(0x011e_0000, 0x1000);
-            e.set_global(0x011d_ea3c, 0x6000u32);
-            e.mem.set_u8(0x011e_07ba, god);
-            e.mem.set_u8(0x011e_0898, demigod);
-            let actor = if is_player { 0x6000 } else { 0x6100 };
-            assert_eq!(
-                STEWIE_FALSE,
-                silenced,
-                "on {on} player {is_player} {god} {demigod}"
-            );
-        }
-    }
-
     /// Vtables of the fake actor, process and other objects. Slot `s` of
     /// the table at `at` points at the fake function [`target`]`(at, s)`.
     const ACTOR_VT: u32 = 0x0900_0000;
@@ -7182,38 +7151,6 @@ mod tests {
         );
         // The hurt call also runs in the loaded state.
         assert_eq!(called(&log, target(ACTOR_VT, 0x338)).len(), 1);
-    }
-
-    /// S0410 at its call sites in `Actor::Move` (`0x8A655C`, `0x8A6607`): the player's hard landing
-    /// in the loaded state plays its sound (`00ad8830`) and pain (`008a7d50`); with the row, in god
-    /// mode (`011e07ba`) neither; another actor in god mode still gets both.
-    #[test]
-    fn s0410_god_mode_silences_the_players_landing_through_move() {
-        // (row, the player, silenced)
-        for (on, is_player, silenced) in [
-            (false, true, false),
-            (true, true, true),
-            (true, false, false),
-        ] {
-            let (mut e, actor, _) = move_engine();
-            e.set_stewie(
-                engine_core::extend::stewie::GODMODE_NO_LEG_CRIPPLE_SOUND,
-                on,
-            );
-            answer(&mut e, ACTOR_VT, 0x360, 1);
-            e.map(0x011d_e000, 0x1000);
-            e.map(0x011e_0000, 0x1000);
-            e.set_global(0x011d_ea3c, if is_player { actor.addr() } else { 0x6100 });
-            e.mem.set_u8(0x011e_07ba, 1);
-            e.call_log = Some(vec![]);
-            e.call(0x008a_62b0, &args![actor, 0.5f32, 7u32, 1u32]);
-            let log = calls(&mut e);
-            let label = format!("on {on} player {is_player}");
-            assert_eq!(called(&log, 0x00ad_8830).is_empty(), silenced, "{label}");
-            assert_eq!(called(&log, 0x008a_7d50).is_empty(), silenced, "{label}");
-            // The landing's leg damage is not Tweaks' to skip.
-            assert_eq!(called(&log, target(ACTOR_VT, 0x3ac)).len(), 2, "{label}");
-        }
     }
 
     #[test]
@@ -10108,38 +10045,6 @@ mod tests {
         w.e.call(0x008a_89a0, &args![w.actor, 2u32]);
         let log = calls(&mut w.e);
         assert_eq!(called(&log, 0x004a_b5b0), vec![vec![0x5001], vec![0x5000]]);
-    }
-
-    /// S0024 (`patchPreventFollowerNoAmmoTopicIfUsingRechargerWeapon`): a companion fires its
-    /// last shot. Off, the teammate test (`00566950`, here yes) queues the out-of-ammo topic (7)
-    /// whatever the weapon; on, Tweaks' test asks the teammate byte (+0x18D) and the weapon's
-    /// recharge rate (+0x1A4): a recharging weapon (rate 2.5) says nothing, one without (0.0)
-    /// still complains, and a non-teammate never does.
-    #[test]
-    fn s0024_a_companion_with_a_recharger_says_no_out_of_ammo_line() {
-        for (on, teammate, rate, queued) in [
-            (false, 0u8, 2.5f32, true),
-            (true, 1, 2.5, false),
-            (true, 1, 0.0, true),
-            (true, 1, -0.0, true),
-            (true, 0, 0.0, false),
-        ] {
-            let mut w = ammo_world(2, 1);
-            w.e.set_stewie(engine_core::extend::stewie::FOLLOWER_NO_AMMO_RECHARGER, on);
-            w.e.register(0x0056_6950, |_, _| 1.into_ret());
-            w.e.mem.set_u8(w.actor.addr() + 0x18d, teammate);
-            w.e.mem.set_f32(w.weapon.addr() + 0x1a4, rate);
-            w.e.call_log = Some(vec![]);
-            assert_eq!(w.e.call(0x008a_89a0, &args![w.actor, 2u32]).u32(), 0);
-            let log = calls(&mut w.e);
-            let topics = called(&log, 0x008d_5cb0);
-            assert_eq!(
-                topics == vec![vec![w.actor.addr(), 7]],
-                queued,
-                "on {on} teammate {teammate} rate {rate}"
-            );
-            assert_eq!(called(&log, 0x0056_6950).is_empty(), on);
-        }
     }
 
     #[test]
@@ -13178,55 +13083,6 @@ mod tests {
         assert_eq!(e.mem.u32(package + 0x30), target);
         // The rest goes on as before: the type set after it.
         assert_eq!(called(&on, 0x0098_4f60), vec![vec![package, 0x21]]);
-    }
-
-    /// lStewieAl's Tweaks' row S0199.03 (`MiscCrashFixes`, `0x8A8B0B`): the player's ammunition entry
-    /// is gone by the time the shot's ammunition is removed (a script on JIP's DecreaseAmmo event, run
-    /// by the count's store, takes it): off, the exe reads the missing entry's form and stops; on, the
-    /// removal is asked with no form.
-    #[test]
-    fn s0199_03_an_ammunition_entry_gone_by_the_removal() {
-        for on in [false, true] {
-            let mut w = ammo_world(10, 2);
-            w.e.set_global(PLAYER_CHARACTER, w.actor.addr());
-            let change = w.change.addr();
-            let gone = std::rc::Rc::new(std::cell::Cell::new(false));
-            let set = gone.clone();
-            w.e.register_double(0x006e_cd40, move |_, _| {
-                set.set(true);
-                Ret::default()
-            });
-            w.e.register_double(target(PROCESS2_VT, 0x14c), move |_, _| {
-                (if gone.get() { 0 } else { change }).into_ret()
-            });
-            w.e.set_stewie(engine_core::extend::stewie::AMMO_ENTRY_GONE, on);
-            w.e.call_log = Some(vec![]);
-            let actor = w.actor;
-            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                w.e.call(0x008a_89a0, &args![actor, 3u32]).u32()
-            }));
-            w.e.call_stack.clear();
-            assert_eq!(run.is_ok(), on, "row {on}");
-            if on {
-                let log = calls(&mut w.e);
-                assert_eq!(called(&log, target(ACTOR2_VT, 0x17c))[0][1], 0);
-            }
-        }
-    }
-
-    /// Row S0199.03 with the entry there (ordinary input): the same calls with the row off and on.
-    #[test]
-    fn s0199_03_row_on_with_the_entry_changes_nothing() {
-        let mut logs = vec![];
-        for on in [false, true] {
-            let mut w = ammo_world(10, 2);
-            w.e.set_global(PLAYER_CHARACTER, w.actor.addr());
-            w.e.set_stewie(engine_core::extend::stewie::AMMO_ENTRY_GONE, on);
-            w.e.call_log = Some(vec![]);
-            assert_eq!(w.e.call(0x008a_89a0, &args![w.actor, 3u32]).u32(), 4);
-            logs.push(calls(&mut w.e));
-        }
-        assert_eq!(logs[0], logs[1]);
     }
 
     /// Doubles for the small getters `Actor::GetPickUpSoundName` calls.

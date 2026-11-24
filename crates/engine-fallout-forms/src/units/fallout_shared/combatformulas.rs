@@ -3144,61 +3144,6 @@ mod tests {
         assert_eq!(asked, vec![0x6000, 0x6000]);
     }
 
-    /// S0189.02 for `CalcWeaponDamage`'s other callers (`GetModifiedAttackDamage` `004bdf71`,
-    /// `GetDesirability`): the word at +0x18 is 0, the owner an actor's, the weapon has its own
-    /// projectile (0x7000, explosion value 5) and the equipped ammunition another (0x5000, value 3,
-    /// through `00525a90`). Off, the hit's damage counts the equipped ammunition's explosion; with the
-    /// row, the weapon's own, as with Tweaks (its lookup takes the weapon's projectile first when no
-    /// ammunition is passed).
-    #[test]
-    fn s0189_02_a_hit_counts_the_weapons_own_projectile() {
-        let mut damages = vec![];
-        for (two, projectile) in [(false, 0x5000u32), (true, 0x7000)] {
-            let (mut e, owner) = damage_world();
-            e.set_global(SETTING_DAMAGE_SKILL_BASE, 0.25f32);
-            e.set_global(SETTING_DAMAGE_SKILL_MULT, 0.5f32);
-            let weapon = object_with_vtable(&mut e, 0x1000);
-            e.mem.set_u8(weapon.addr() + 0xf4, 3);
-            e.mem.set_u32(weapon.addr() + 0x118, 0x7000);
-            e.mem.set_u32(weapon.addr() + 0x9c, FAKE_TABLE + 0x1000);
-            returns_u32(&mut e, FAKE_SLOT_10, 1);
-            returns_u32(&mut e, WEAPON_GET_TYPE, 3);
-            returns_u32(&mut e, WEAPON_GET_SKILL, 0x20);
-            returns_u32(&mut e, WEAPON_GET_AMMO_OBJECT, 0x5000);
-            e.register(AMMO_GET_VALUE_FROM_OBJECT, |_, a| {
-                u32::from(match a[0] {
-                    0x5000 => 3u8,
-                    0x7000 => 5,
-                    _ => 9,
-                })
-                .into_ret()
-            });
-            e.register(FUNCTION_006479E0, |_, a| (a[0] as f32).into_ret());
-            returns_u32(&mut e, WEAPON_GET_NUM_PROJECTILES, 1);
-            returns_u32(&mut e, WEAPON_FLAG_TEST, 0);
-            e.set_stewie(
-                engine_core::extend::stewie::WEAPON_DAMAGE_AMMO_PROJECTILE,
-                two,
-            );
-            e.call_log = Some(vec![]);
-            let damage = e
-                .call(
-                    0x0064_4ce0,
-                    &args![owner, weapon, 1.0f32, 1.0f32, 0u32, false, 0u32, true],
-                )
-                .f32();
-            let log = e.call_log.take().unwrap();
-            let asked: Vec<u32> = log
-                .iter()
-                .filter(|c| c.0 == AMMO_GET_VALUE_FROM_OBJECT)
-                .map(|c| c.1[0])
-                .collect();
-            assert_eq!(asked, vec![projectile, projectile], "row {two}");
-            damages.push(damage);
-        }
-        assert!(damages[1] > damages[0], "{damages:?}");
-    }
-
     /// S0189.01 and S0189.02 (`InventoryCalcWeaponDamageUseAmmoFix`): off, the shown damage takes
     /// the explosion of the equipped ammunition's projectile (asked three times through
     /// `00525a90`); with both rows, that of the entry's own ammunition, asked once and reused, so
@@ -4078,36 +4023,6 @@ mod tests {
             formats,
             vec![LOG_BOUND_SIZE, LOG_SPREAD_FACTOR, LOG_TARGET_AREA]
         );
-    }
-
-    /// S0055 (`patchFixZeroSpreadZeroVATSChance`): a gun with no spread at all (its spread 0.0, so
-    /// no circle to compare with the target). Off, the range spread stays 0.0 and the chance is
-    /// 0; on, it starts at `fVATSRangeSpreadMax` (2.0, the exe's default, read from the
-    /// setting's value at +4) and the chance is 2.0 x the other factors (1 here): 2 percent.
-    /// A gun with a spread is unchanged.
-    #[test]
-    fn s0055_a_gun_with_no_spread_keeps_a_vats_chance() {
-        for (on, spread, expected) in [(false, 0.0f32, 0.0f32), (true, 0.0, 0.02)] {
-            let mut v = vats();
-            v.e.set_stewie(engine_core::extend::stewie::ZERO_SPREAD_VATS_CHANCE, on);
-            v.e.set_global(SETTING_VATS_RANGE_SPREAD_MAX + 4, 2.0f32);
-            v.e.mem.set_u8(v.weapon.addr() + 0xf4, 3);
-            returns_f32(&mut v.e, WEAPON_GET_SPREAD, spread);
-            v.e.register(FUNCTION_0057DD70, |_, a| f32::from_bits(a[0]).into_ret());
-            assert_eq!(vats_call(&mut v, false, 100.0, 60.0), expected, "on {on}");
-        }
-        let mut chances = vec![];
-        for on in [false, true] {
-            let mut v = vats();
-            v.e.set_stewie(engine_core::extend::stewie::ZERO_SPREAD_VATS_CHANCE, on);
-            v.e.set_global(SETTING_VATS_RANGE_SPREAD_MAX + 4, 2.0f32);
-            v.e.mem.set_u8(v.weapon.addr() + 0xf4, 3);
-            returns_f32(&mut v.e, WEAPON_GET_SPREAD, 10.0);
-            v.e.register(FUNCTION_0057DD70, |_, a| f32::from_bits(a[0]).into_ret());
-            chances.push(vats_call(&mut v, false, 100.0, 60.0));
-        }
-        assert_eq!(chances[0], chances[1]);
-        assert!(chances[0] > 0.0);
     }
 
     #[test]

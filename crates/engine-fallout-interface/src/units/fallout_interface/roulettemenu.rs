@@ -3868,59 +3868,6 @@ mod n058_tests {
         assert_eq!(calls_to(&e, RENDER_004A0FD0).len(), 2);
     }
 
-    /// lStewieAl's Tweaks' row S0036 in the roulette menu's `Create` (the player barred, so it stops after
-    /// the walk): a first record of a casino that is gone stays with the row off and is taken out (freed,
-    /// with its node's next) with it on; the walk finds this casino's record either way.
-    #[test]
-    fn s0036_roulette_create_takes_out_a_casino_that_is_gone() {
-        for on in [false, true] {
-            let mut e = engine();
-            world(&mut e);
-            three_d_doubles(&mut e);
-            e.set_global(CASINO_DATA_011DA87C, 0u32);
-            e.register(PLAYER_00969B80, |_, _| 1u32.into_ret());
-            e.register(KEY_0084E3A0, |_, _| 0x77u32.into_ret());
-            let empty = e.mem.alloc(4);
-            e.register_double(NAME_CHARS_00408DA0, move |_, _| empty.into_ret());
-            let gone = e.mem.alloc(0xc);
-            e.mem.set_u32(gone, 0x0a00_0001);
-            let record = e.mem.alloc(0xc);
-            e.mem.set_u32(record, 0x77);
-            let second = e.mem.alloc(8);
-            e.mem.set_u32(second, record);
-            let first = e.mem.alloc(8);
-            e.mem.set_u32(first, gone);
-            e.mem.set_u32(first + 4, second);
-            e.register_double(CASINO_DATA_LIST_005A6260, move |_, _| first.into_ret());
-            e.register(0x0048_39c0, |_, a| {
-                u32::from(a[0] != 0x0a00_0001).into_ret()
-            });
-            e.register(MEMORY_FREE_00AA4060, |_, _| Ret::default());
-            e.register(0x0071_b160, |_, _| Ret::default());
-            e.set_stewie(stewie::CASINO_INVALID_CHIPS, on);
-            let casino = e.global::<u32>(CASINO_011DA880);
-            e.call_log = Some(vec![]);
-            assert_eq!(
-                e.call(0x007b_be20, &args![casino, 5u32, 50u32, 0u32]).u32(),
-                0
-            );
-            assert_eq!(e.global::<u32>(CASINO_DATA_011DA87C), record, "row {on}");
-            let left = (e.mem.u32(first), e.mem.u32(first + 4));
-            assert_eq!(left, if on { (record, 0) } else { (gone, second) });
-            assert_eq!(
-                calls_to(&e, MEMORY_FREE_00AA4060),
-                if on {
-                    vec![
-                        vec![MEMORY_MANAGER_011F6238, gone],
-                        vec![MEMORY_MANAGER_011F6238, second],
-                    ]
-                } else {
-                    vec![]
-                }
-            );
-        }
-    }
-
     #[test]
     fn create_refuses_or_builds_the_menu() {
         let mut e = engine();
@@ -4349,106 +4296,6 @@ mod n058_tests {
         assert_eq!(get(&e, menu, RouletteMenu::iChipCount), 100);
     }
 
-    /// lStewieAl's Tweaks' rows S0196.01 and S0196.02 when the roulette menu goes, each alone and both:
-    /// with S0196.02 the first emptying of the placed bets is the list's delete-all (`0076b2a0`, the
-    /// bets freed too), with S0196.01 the deleted list is not emptied a second time; the list is
-    /// deleted once and the menu's pointer cleared either way.
-    #[test]
-    fn s0196_01_02_the_bet_list_when_the_menu_goes() {
-        for (double_free, on_close) in [(false, false), (true, false), (false, true), (true, true)]
-        {
-            let mut e = engine();
-            let menu = world(&mut e);
-            casino_models(&mut e);
-            e.set_global(MODEL_LOADER_011C3B3C, 0x00ab_0000u32);
-            e.mem.set_u32(menu + 0x3e78, 0x00ab_1000);
-            e.register(MODEL_LOADER_0045A5E0, |_, _| Ret::default());
-            e.register(LIST_DELETE_ALL_0076B2A0, |_, _| Ret::default());
-            e.set_stewie(stewie::ROULETTE_BET_LIST_DOUBLE_FREE, double_free);
-            e.set_stewie(stewie::ROULETTE_BETS_FREED_ON_CLOSE, on_close);
-            e.call_log = Some(vec![]);
-            e.call(0x007b_8f70, &args![menu, 0u32]);
-            let rows = format!("S0196.01 {double_free}, S0196.02 {on_close}");
-            assert_eq!(
-                calls_to(&e, LIST_FREE_NODES).len(),
-                usize::from(!double_free) + usize::from(!on_close),
-                "{rows}"
-            );
-            assert_eq!(
-                calls_to(&e, LIST_DELETE_ALL_0076B2A0),
-                if on_close {
-                    vec![vec![0x00ab_1000]]
-                } else {
-                    vec![]
-                },
-                "{rows}"
-            );
-            assert_eq!(calls_to(&e, LIST_DELETE), vec![vec![0x00ab_1000, 1]]);
-            assert_eq!(e.mem.u32(menu + 0x3e78), 0);
-        }
-    }
-
-    /// lStewieAl's Tweaks' row S0196.03: two winning bets settled. Row off: each node taken
-    /// (`0063f7b0`, here as the exe's: the next node's bet and link copied in), no bet freed; row on:
-    /// each bet freed and the second node freed after its bet is copied in (Tweaks' `DeleteHead`). The
-    /// payout and the emptied list the same.
-    #[test]
-    fn s0196_03_settled_bets_are_freed() {
-        for on in [false, true] {
-            let mut e = engine();
-            let menu = world(&mut e);
-            set(&mut e, menu, RouletteMenu::eRouletteState, 3);
-            set(&mut e, menu, RouletteMenu::iChipCount, 100);
-            set(&mut e, menu, RouletteMenu::iTotalBet, 20);
-            set(&mut e, menu, RouletteMenu::iMinBet, 5);
-            set(&mut e, menu, RouletteMenu::iResultValue, 4);
-            let record = menu + 0x5c + 0x64 * 0x95;
-            e.mem.set_u32(record + 0xc, 1);
-            let first = bet_list(&mut e, menu, 10, 0x95, 3);
-            let list = e.mem.u32(menu + 0x3e78);
-            let second = e.mem.alloc(0xc);
-            e.mem.set_u32(second, 10);
-            e.mem.set_u32(second + 4, 0x95);
-            e.mem.set_u32(second + 8, 4);
-            let node = e.mem.alloc(8);
-            e.mem.set_u32(node, second);
-            e.mem.set_u32(list + 4, node);
-            e.register(LIST_REMOVE_FIRST_0063F7B0, |e, a| {
-                let next = e.mem.u32(a[0] + 4);
-                if next == 0 {
-                    e.mem.set_u32(a[0], 0);
-                } else {
-                    e.mem.set_u32(a[0], e.mem.u32(next));
-                    e.mem.set_u32(a[0] + 4, e.mem.u32(next + 4));
-                }
-                Ret::default()
-            });
-            e.register(MEMORY_FREE_00AA4060, |_, _| Ret::default());
-            let limits = e.mem.alloc(0x40);
-            e.mem.set_u32(limits + 0x28, 1000);
-            e.register_double(CASINO_LIMITS_00504E60, move |_, _| limits.into_ret());
-            e.set_stewie(stewie::ROULETTE_BET_FREED_ON_USE, on);
-            e.call_log = Some(vec![]);
-            e.call(0x007b_d2a0, &args![menu]);
-            assert_eq!(get(&e, menu, RouletteMenu::iChipCount), 120, "row {on}");
-            assert_eq!((e.mem.u32(list), e.mem.u32(list + 4)), (0, 0));
-            if on {
-                assert!(calls_to(&e, LIST_REMOVE_FIRST_0063F7B0).is_empty());
-                assert_eq!(
-                    calls_to(&e, MEMORY_FREE_00AA4060),
-                    vec![
-                        vec![MEMORY_MANAGER_011F6238, first],
-                        vec![MEMORY_MANAGER_011F6238, node],
-                        vec![MEMORY_MANAGER_011F6238, second]
-                    ]
-                );
-            } else {
-                assert_eq!(calls_to(&e, LIST_REMOVE_FIRST_0063F7B0).len(), 2);
-                assert!(calls_to(&e, MEMORY_FREE_00AA4060).is_empty());
-            }
-        }
-    }
-
     #[test]
     fn do_idle_spins_then_closes() {
         let mut e = engine();
@@ -4502,54 +4349,6 @@ mod n058_tests {
 
     // lStewieAl's Tweaks' rows of this file (share 3's first group, `stewie_menus`).
 
-    /// Row S0022.27: the three bets that hold 0 or 00 among a street's numbers (formats
-    /// `"%s: %s,%i \n%s: 11:1"` and `17:1`) get the bet's caption first and the text of its 0 or
-    /// 00 second with the row on; off, the exe's order (the text first).
-    #[test]
-    fn s0022_27_zero_bets_show_their_caption_first() {
-        for on in [false, true] {
-            let mut e = engine();
-            e.set_stewie(stewie_menus::ROULETTE_ZERO_BET_TEXT, on);
-            let menu = world(&mut e);
-            let grid = fake_object(&mut e, 7);
-            e.mem.set_u32(menu + 0x3f18, grid);
-            bet_tile_doubles(&mut e);
-            e.mem.set_u8(menu + 0x400f, 1);
-            e.call_log = Some(vec![]);
-            e.call(0x007b_9c40, &args![menu]);
-            let mut texts = vec![];
-            for words in calls_to(&e, SPRINTF_S) {
-                if words[2] != 0x0107_6194 && words[2] != 0x0107_617c {
-                    continue;
-                }
-                let (caption, text) = if on {
-                    (words[3], words[4])
-                } else {
-                    (words[4], words[3])
-                };
-                assert_eq!(caption, SETTING_011D4DBC, "row {on}: {words:x?}");
-                assert_eq!(words[6], SETTING_011D3F4C, "row {on}: {words:x?}");
-                texts.push((words[2], text));
-            }
-            for wanted in [
-                (0x0107_6194, 0x0107_61a8),
-                (0x0107_617c, 0x0107_6190),
-                (0x0107_617c, 0x0102_0760),
-            ] {
-                assert!(
-                    texts.contains(&wanted),
-                    "row {on}: {wanted:x?} in {texts:x?}"
-                );
-            }
-            // The other descriptions keep their order (the caption first already).
-            let first = calls_to(&e, SPRINTF_S)
-                .into_iter()
-                .find(|w| w[2] == 0x0107_612c)
-                .unwrap();
-            assert_eq!(first[3..], [SETTING_011D4DBC, SETTING_011D3F4C], "row {on}");
-        }
-    }
-
     /// The payout (state 3) of one bet of 10 on bet tile `index`, whose number list holds only 1
     /// and whose odds are 17:1, with the ball on `result` and 100 chips (10 on the table):
     /// the chips after.
@@ -4571,36 +4370,6 @@ mod n058_tests {
         e.call_log = Some(vec![]);
         e.call(0x007b_d2a0, &args![menu]);
         get(e, menu, RouletteMenu::iChipCount)
-    }
-
-    /// Row S0196.04: with the ball on 0, a bet on a tile holding 0 among others (indexes 0, 24,
-    /// 48, 72, 145, 146) wins with the row on (18 times the bet back) and loses with it off; a
-    /// tile without 0 loses either way, and the ball elsewhere changes nothing.
-    #[test]
-    fn s0196_04_zero_counts_on_the_tiles_that_hold_it() {
-        for (on, index, result, chips) in [
-            (false, 24, 0, 90),
-            (true, 24, 0, 270),
-            (true, 0, 0, 270),
-            (true, 48, 0, 270),
-            (true, 72, 0, 270),
-            (true, 145, 0, 270),
-            (true, 146, 0, 270),
-            (true, 25, 0, 90),
-            (true, 23, 0, 90),
-            (true, 147 - 3, 0, 90),
-            (true, 24, 2, 90),
-            (true, 24, 1, 270),
-            (false, 24, 1, 270),
-        ] {
-            let mut e = engine();
-            e.set_stewie(stewie_menus::ROULETTE_ZERO_WINS, on);
-            assert_eq!(
-                pay_one_bet(&mut e, index, result),
-                chips,
-                "row {on}, index {index}, ball {result}"
-            );
-        }
     }
 
     /// The betting state (4) with a bet of 95 and 10 on the table but 100 chips: the bet is cut
@@ -4632,51 +4401,5 @@ mod n058_tests {
             .filter(|c| c[0] == tile)
             .collect();
         (tile, pokes, ints)
-    }
-
-    /// Row S0196.05: the cut bet goes to the bet tile's value trait (`011da86c`, `_X`) with the
-    /// row on; off, the exe writes it over the caption trait (`011da870`, `_Value`).
-    #[test]
-    fn s0196_05_the_cut_bet_goes_to_the_value() {
-        for (on, trait_id) in [(false, 0x77u32), (true, 0x66)] {
-            let mut e = engine();
-            e.set_stewie(stewie_menus::ROULETTE_CUT_BET_VALUE, on);
-            let (tile, pokes, ints) = cut_bet(&mut e);
-            assert_eq!(
-                pokes,
-                vec![vec![tile, trait_id, 1.0f32.to_bits()]],
-                "row {on}"
-            );
-            assert_eq!(ints, vec![vec![tile, trait_id, 90]], "row {on}");
-        }
-    }
-
-    /// Rows S0196.04 and S0196.05 with JIP's D04 seams (the stick's dead zones, `0x7BD47D`,
-    /// `0x7BD4A0`, `0x7BD4DD`) in the same `DoIdle`, all on: JIP's seams are asked in their order
-    /// at the stick's read, before the state's step, and Tweaks' rows act in the payout and the
-    /// betting step after them; neither changes the other.
-    #[test]
-    fn s0196_rows_with_jips_d04_seams() {
-        use crate::units::fallout_interface::caravanmenu::d04_test::{handlers, seen};
-        use engine_core::extend::jip_patches::INSTALLED;
-        let sites = [0x007b_d47d, 0x007b_d4a0, 0x007b_d4dd];
-        let mut e = engine();
-        handlers(&mut e, INSTALLED, &sites);
-        e.set_stewie(stewie_menus::ROULETTE_ZERO_WINS, true);
-        e.set_stewie(stewie_menus::ROULETTE_CUT_BET_VALUE, true);
-        e.register(FLAG_004B71D0, |_, _| 1u32.into_ret());
-        e.register(STICK_00A23390, |_, _| 0u32.into_ret());
-        e.register(ABS_00408820, |_, a| {
-            st0(f64::from(f32::from_bits(a[0]).abs()))
-        });
-        assert_eq!(pay_one_bet(&mut e, 24, 0), 270);
-        assert_eq!(seen(), &sites[..]);
-        let mut e = engine();
-        handlers(&mut e, INSTALLED, &sites);
-        e.set_stewie(stewie_menus::ROULETTE_ZERO_WINS, true);
-        e.set_stewie(stewie_menus::ROULETTE_CUT_BET_VALUE, true);
-        let (tile, _, ints) = cut_bet(&mut e);
-        assert_eq!(ints, vec![vec![tile, 0x66, 90]]);
-        assert_eq!(seen(), &sites[..]);
     }
 }

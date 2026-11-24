@@ -1846,9 +1846,7 @@ pub fn tes_object_refr_get_target_type(e: &mut Engine, this: Ptr) -> u32 {
             }
             // `0x579546` (S0022.51's `HUDGetTargetTypeHook2`): sneaking shows Pickpocket only for
             // a creature that can be pickpocketed (`GetAllowPickpocket`, slot +0x1C).
-            if e.call(0x0049_97b0, &args![player]).bool()
-                && (!STEWIE_FALSE || e.vcall(process + 0x30, 0x1c, &args![]).bool())
-            {
+            if e.call(0x0049_97b0, &args![player]).bool() {
                 1
             } else {
                 7
@@ -6692,60 +6690,6 @@ mod tests {
         assert_eq!(target_type(&mut e, thing), 0);
     }
 
-    /// Row S0022.51 (lStewieAl's Tweaks, `0x57951C`, `0x579546`): a creature without dialogue
-    /// (slot +0x18) that can be pickpocketed (slot +0x1C) answers 1 while the player's mover
-    /// (+0x190, slot +0x20) is sneaking (0x400) and not swimming (0x800), else 0; with dialogue,
-    /// sneaking shows 1 only when it can be pickpocketed (else 7). Off: 0 without dialogue, 1
-    /// when sneaking.
-    #[test]
-    fn s0022_51_creature_pickpocket_prompt() {
-        // (row, dialogue, pickpocket, sneaking, mover flags, wanted)
-        for (on, dialogue, pickpocket, sneaking, flags, wanted) in [
-            (false, 0u32, 1u32, 1u32, 0x400u32, 0u32),
-            (true, 0, 1, 0, 0x400, 1),
-            (true, 0, 1, 0, 0xc00, 0),
-            (true, 0, 1, 0, 0, 0),
-            (true, 0, 0, 1, 0x400, 0),
-            (false, 1, 0, 1, 0, 1),
-            (true, 1, 0, 1, 0, 7),
-            (true, 1, 1, 1, 0, 1),
-            (true, 1, 0, 0, 0, 7),
-        ] {
-            let mut e = engine2();
-            returns(&mut e, 0x0047_7ba0, 0);
-            let player = refr(
-                &mut e,
-                0x2a,
-                &[(0x100, RETURNS_TRUE), (0x22c, RETURNS_FALSE)],
-            );
-            e.set_global(GLOBAL_PLAYER, player);
-            let mover_slot = 0x00ff_0120;
-            returns(&mut e, mover_slot, flags);
-            let mover = object_with(&mut e, 0x10, &[(0x20, mover_slot)]);
-            e.mem.set_u32(player + 0x190, mover);
-            let creature = refr(
-                &mut e,
-                0x2b,
-                &[(0x100, RETURNS_TRUE), (0x22c, RETURNS_FALSE)],
-            );
-            let (slot18, slot1c) = (0x00ff_0112, 0x00ff_0113);
-            returns(&mut e, slot18, dialogue);
-            returns(&mut e, slot1c, pickpocket);
-            let process = e.mem.alloc(0x40);
-            let inner = object_with(&mut e, 0x10, &[(0x18, slot18), (0x1c, slot1c)]);
-            e.mem.set_u32(process + 0x30, e.mem.u32(inner));
-            returns(&mut e, 0x0041_81e0, process);
-            returns(&mut e, 0x0087_f3d0, 0);
-            returns(&mut e, 0x0049_97b0, sneaking);
-            e.set_stewie(engine_core::extend::stewie::CREATURE_PICKPOCKET_PROMPT, on);
-            assert_eq!(
-                target_type(&mut e, creature),
-                wanted,
-                "row {on} dialogue {dialogue} pickpocket {pickpocket} sneaking {sneaking} {flags:x}"
-            );
-        }
-    }
-
     // ---- 00579620, 00579670 ---------------------------------------------
 
     #[test]
@@ -6858,59 +6802,6 @@ mod tests {
         assert!(e.call(0x0057_9690, &args![creature]).bool());
         returns(&mut e, slot18, 0);
         assert!(!e.call(0x0057_9690, &args![creature]).bool());
-    }
-
-    /// Row S0022.50 (lStewieAl's Tweaks' `GetActivationIsCrimeHook` at `0x579A4A`, on with
-    /// S0022.51's bit): sneaking up to a creature is a crime when its base data allows
-    /// pickpocketing (slot +0x1C), not dialogue (slot +0x18); a creature whose address has a low
-    /// byte of 0 is no crime and is not asked (the hook tests `AL`); the "not dying" test (+0x22C)
-    /// still decides after it. Off: dialogue decides, as in the exe.
-    #[test]
-    fn s0022_50_a_creature_is_a_crime_when_it_can_be_pickpocketed() {
-        let (slot18, slot1c, dying) = (0x00ff_0124, 0x00ff_0125, 0x00ff_0126);
-        // (row, dialogue, pickpocket, dying, low byte 0, wanted, slot asked)
-        for (on, dialogue, pickpocket, dies, zero, wanted, asked) in [
-            (false, 1u32, 0u32, 0u32, false, true, slot18),
-            (false, 0, 1, 0, false, false, slot18),
-            (true, 1, 0, 0, false, false, slot1c),
-            (true, 0, 1, 0, false, true, slot1c),
-            (true, 0, 1, 1, false, false, slot1c),
-            (true, 1, 1, 0, true, false, 0),
-            (false, 1, 1, 0, true, true, slot18),
-        ] {
-            let mut e = engine2();
-            let owner = form(&mut e, 0x2a, 0);
-            stealing_world(&mut e, owner);
-            returns(&mut e, 0x0049_97b0, 1);
-            returns(&mut e, slot18, dialogue);
-            returns(&mut e, slot1c, pickpocket);
-            returns(&mut e, dying, dies);
-            let creature = refr(&mut e, 0x2b, &[(0x22c, dying)]);
-            // The cast's answer: the creature's base, at an address with a low byte of 0 or not.
-            let block = e.mem.alloc(0x300);
-            let base = if zero {
-                (block + 0xff) & !0xff
-            } else {
-                ((block + 0xff) & !0xff) + 0x14
-            };
-            let data = object_with(&mut e, 0x10, &[(0x18, slot18), (0x1c, slot1c)]);
-            e.mem.set_u32(base + 0x30, e.mem.u32(data));
-            returns(&mut e, DYNAMIC_CAST, base);
-            e.set_stewie(engine_core::extend::stewie::CREATURE_PICKPOCKET_PROMPT, on);
-            start_log(&mut e);
-            assert_eq!(
-                e.call(0x0057_9690, &args![creature]).bool(),
-                wanted,
-                "row {on} dialogue {dialogue} pickpocket {pickpocket} dying {dies} zero {zero}"
-            );
-            let log = take_log(&mut e);
-            let slots: Vec<u32> = [slot18, slot1c]
-                .into_iter()
-                .filter(|slot| !calls_to(&log, *slot).is_empty())
-                .collect();
-            let expected: Vec<u32> = if asked == 0 { vec![] } else { vec![asked] };
-            assert_eq!(slots, expected, "row {on} zero {zero}");
-        }
     }
 
     /// `00567790` returns `owner` for its first `calls` calls and 0 after,
@@ -7773,83 +7664,6 @@ mod tests {
             calls_to(&log, 0x0043_8af0),
             vec![vec![OBJECT_REFERENCE_MAP]]
         );
-    }
-
-    /// lStewieAl's Tweaks' row S0064: a multibound entry whose reference has 3D but no parent
-    /// cell. The exe asks the null cell for its 3D node (`005497a0`, through `00545cb0`'s read of
-    /// the cell's `+0xc4`, as its stand-in here reads it) and stops; with the row on the entry is
-    /// passed over and the map is still emptied.
-    #[test]
-    fn s0064_multibound_reference_without_a_cell() {
-        for on in [false, true] {
-            let mut e = engine2();
-            let reference = refr(&mut e, 0x30, &[(0x1d0, SPARE_SLOT)]);
-            e.mem.set_u32(reference + 0x40, 0);
-            returns(&mut e, SPARE_SLOT, 0x9000);
-            returns(&mut e, 0x004b_9ba0, 1);
-            e.register_double(0x006b_7f20, move |e, a| {
-                e.mem.set_u32(a[1], 0);
-                e.mem.set_u32(a[2], reference);
-                e.mem.set_u32(a[3], 0x4444);
-                Ret::default()
-            });
-            e.register_double(GET_PARENT_CELL, |e, a| e.mem.u32(a[0] + 0x40).into_ret());
-            e.register_double(0x0054_97a0, |e, a| e.mem.u32(a[0] + 0xc4).into_ret());
-            stub(
-                &mut e,
-                &[0x0054_5960, 0x0056_9ae0, 0x0043_8af0, 0x0096_11e0],
-            );
-            e.set_stewie(stewie::HANDLE_MULTIBOUNDS_NULL_CELL, on);
-            start_log(&mut e);
-            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                e.call(0x0057_ab70, &args![]);
-            }));
-            e.call_stack.clear();
-            assert_eq!(run.is_ok(), on, "row {on}");
-            if on {
-                let log = take_log(&mut e);
-                assert!(calls_to(&log, 0x0054_5960).is_empty());
-                assert!(calls_to(&log, 0x0056_9ae0).is_empty());
-                assert_eq!(calls_to(&log, 0x0043_8af0).len(), 1);
-            }
-        }
-    }
-
-    /// lStewieAl's Tweaks' row S0064 with a parent cell (ordinary input): the row changes nothing,
-    /// the same calls as with it off (the owner and the cell's object told, the map emptied; the
-    /// reference's parent cell at `+0x40`, the word Tweaks tests).
-    #[test]
-    fn s0064_row_on_with_a_cell_changes_nothing() {
-        let run = |on: bool| {
-            let mut e = engine2();
-            let slot_e8 = 0x00ff_0160;
-            let slot_dc = 0x00ff_0161;
-            stub(&mut e, &[slot_e8, slot_dc]);
-            let owner_object = object_with(&mut e, 0x40, &[(0xe8, slot_e8)]);
-            let target = object_with(&mut e, 0x40, &[(0xdc, slot_dc)]);
-            let reference = refr(&mut e, 0x30, &[(0x1d0, SPARE_SLOT)]);
-            let cell = e.mem.alloc(0x100);
-            e.mem.set_u32(reference + 0x40, cell);
-            returns(&mut e, SPARE_SLOT, 0x9000);
-            returns(&mut e, 0x004b_9ba0, 1);
-            e.register_double(0x006b_7f20, move |e, a| {
-                e.mem.set_u32(a[1], 0);
-                e.mem.set_u32(a[2], reference);
-                e.mem.set_u32(a[3], 0x4444);
-                Ret::default()
-            });
-            returns(&mut e, 0x0054_97a0, 1);
-            returns(&mut e, 0x0096_11e0, owner_object);
-            returns(&mut e, 0x0054_5960, target);
-            stub(&mut e, &[0x0056_9ae0, 0x0043_8af0]);
-            e.set_stewie(stewie::HANDLE_MULTIBOUNDS_NULL_CELL, on);
-            start_log(&mut e);
-            e.call(0x0057_ab70, &args![]);
-            (take_log(&mut e), reference)
-        };
-        let ((off, _), (on, reference)) = (run(false), run(true));
-        assert_eq!(on, off);
-        assert_eq!(calls_to(&on, 0x0056_9ae0), vec![vec![reference, 0x4444]]);
     }
 
     #[test]

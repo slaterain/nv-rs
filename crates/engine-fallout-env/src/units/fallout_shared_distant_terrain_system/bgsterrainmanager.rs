@@ -650,57 +650,6 @@ mod tests {
         assert!(calls_to(&e, ARRAY_APPEND).is_empty());
     }
 
-    /// lStewieAl's Tweaks' row S0050 at the entry (`0x6FCFA0`): a tree handed to no manager. Row
-    /// off, the exe reads through the missing manager (a fault, here on unmapped memory); row on,
-    /// nothing is read or queued and Tweaks' line names the reference (queued, the console not made
-    /// yet), once in a row.
-    #[test]
-    fn s0050_hide_tree_with_no_manager() {
-        use std::sync::Mutex;
-        static LINES: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
-        for on in [false, true] {
-            let mut e = manager_engine();
-            e.set_stewie(engine_core::extend::stewie::LOD_DATA_MISSING_WARNING, on);
-            e.register(REFERENCE_FORM_KEY, |_, a| ret(a[0] + 1));
-            e.register(NODE_CALL_006FED30, |_, _| ret(0));
-            e.register(ARRAY_APPEND, |_, _| Ret::default());
-            e.register(0x0048_4e60, |_, _| ret(0));
-            e.register(0x0071_b160, |_, _| ret(0x4000));
-            e.register(0x0071_d0a0, |e, a| {
-                let mut line = vec![];
-                let mut at = e.mem.u32(a[2]);
-                while e.mem.u8(at) != 0 {
-                    line.push(e.mem.u8(at));
-                    at += 1;
-                }
-                LINES.lock().unwrap().push(line);
-                Ret::default()
-            });
-            let tree = tree_reference(&mut e, 0x11);
-            e.mem.set_u32(tree + 0xc, 0x0001_2345);
-            e.mem.unmap(0, 0x1000);
-            e.call_log = Some(vec![]);
-            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                e.call(0x006f_cfa0, &args![0u32, tree, 1u32]);
-            }));
-            e.call_stack.clear();
-            assert_eq!(run.is_ok(), on, "row {on}");
-            if on {
-                assert!(calls_to(&e, REFERENCE_FORM_KEY).is_empty());
-                assert!(calls_to(&e, ARRAY_APPEND).is_empty());
-                e.call(0x006f_cfa0, &args![0u32, tree, 1u32]);
-                assert!(LINES.lock().unwrap().is_empty(), "queued");
-                engine_core::extend::stewie::print_queued(&mut e);
-                assert_eq!(
-                    *LINES.lock().unwrap(),
-                    vec![
-                        b"Warning: reference 00012345 has LOD but is disabled by plugin ".to_vec()
-                    ]
-                );
-            }
-        }
-    }
-
     #[test]
     fn hide_tree_queues_a_tree_nobody_owns_when_asked() {
         let mut e = manager_engine();

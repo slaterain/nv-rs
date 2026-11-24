@@ -846,9 +846,7 @@ pub fn fn_00739090(e: &mut Engine, this: Ptr, hand: u32, luck: u8, dealer: u8) -
             && ((dealer != 0 && skill(e) <= 4) || (dealer == 0 && skill(e) >= 6));
         if !lucky {
             let remaining = e.mem.u32(base + 0xda0);
-            // `0x739135` (lStewieAl's Tweaks' S0022.28 writes the `SUB EAX,1`'s 1 as 0).
-            let step = u32::from(!e.stewie(engine_core::extend::stewie::BLACKJACK_ONE_CARD_A_DEAL));
-            e.mem.set_u32(base + 0xda0, remaining.wrapping_sub(step));
+            e.mem.set_u32(base + 0xda0, remaining.wrapping_sub(1));
             let index = e.call(RANDOM_INDEX_00944460, &args![0u32, remaining]).u32();
             e.mem.set_u32(chosen, index);
         } else {
@@ -4351,40 +4349,6 @@ mod n051_tests {
         assert_eq!(e.mem.u8(this.addr() + 0x78), 0);
     }
 
-    /// Rows S0022.28 and S0022.29 (lStewieAl's Tweaks), with 4 decks: a shuffle (`007399d0`) sets
-    /// the shoe's count to 208 (off) or 207 (S0022.29); a neutral-luck draw takes 2 off it (off)
-    /// or 1 (S0022.28); the cards dealt before a draw would reshuffle (count under 5): 102 with
-    /// both off, 203 with both on (the PR's numbers), 204 and 102 with one each.
-    #[test]
-    fn s0022_28_29_the_blackjack_shoe() {
-        use engine_core::extend::stewie;
-        for (one_card, shoe, start, dealt) in [
-            (false, false, 208u32, 102u32),
-            (true, false, 208, 204),
-            (false, true, 207, 102),
-            (true, true, 207, 203),
-        ] {
-            let mut e = engine();
-            let this = menu(&mut e);
-            e.set_stewie(stewie::BLACKJACK_ONE_CARD_A_DEAL, one_card);
-            e.set_stewie(stewie::BLACKJACK_SHOE_COUNT, shoe);
-            e.register(RANDOM_INDEX_00944460, |_, a| (a[1] / 2).into_ret());
-            e.register(NI_POINTER_COPY_006E5CC0, |_, _| Ret::default());
-            e.mem.set_u32(this.addr() + 0xd9c, 4);
-            e.call(0x0073_99d0, &args![this]);
-            assert_eq!(e.mem.u32(this.addr() + 0xda0), start);
-            let mut deals = 0;
-            while e.mem.i32(this.addr() + 0xda0) >= 5 {
-                let before = e.mem.u32(this.addr() + 0xda0);
-                e.call(0x0073_9090, &args![this, 0u32, 0u32, 0u32]);
-                let taken = before - e.mem.u32(this.addr() + 0xda0);
-                assert_eq!(taken, if one_card { 1 } else { 2 });
-                deals += 1;
-            }
-            assert_eq!(deals, dealt, "S0022.28 {one_card} S0022.29 {shoe}");
-        }
-    }
-
     #[test]
     fn the_deal_gives_two_cards_each() {
         let mut e = engine();
@@ -4446,71 +4410,6 @@ mod n051_tests {
         e.call_log = Some(vec![]);
         e.call(0x0073_96e0, &args![this, 0i32, 8i32, card]);
         assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn casino_data_builds_the_decks() {
-        let mut e = engine();
-        e.map(0x0101_2000, 0x1000);
-        e.map(0x0101_6000, 0x1000);
-        e.set_global(DEFAULT_WIN_RATIO, 1.5f32);
-        e.set_global(DEFAULT_SHUFFLE, 0.25f32);
-        let this = menu(&mut e);
-        assert!(!e.call(0x0073_1d70, &args![this]).bool());
-        let casino = e.mem.alloc(0x40);
-        e.set_global(CASINO_011D9058, casino);
-        let data = e.mem.alloc(0x40);
-        e.mem.set_f32(data + 4, 2.0);
-        e.mem.set_u32(data + 0x24, 0);
-        e.mem.set_u8(data + 0x34, 1);
-        answer(&mut e, CASINO_DATA_00504E60, data);
-        let entry = e.mem.alloc(4);
-        e.mem.set_u32(entry, VTABLE);
-        answer(&mut e, CASINO_ENTRY_00504E00, entry);
-        answer(&mut e, MODEL_LOAD_FILE, 0x6600);
-        // The deck's path: "a\b\folder\card_x".
-        e.register(COPY_TEXT, |e, a| {
-            if a[1] == 0x104 {
-                e.mem.write(a[0], b"a\\b\\folder\\card_x\0");
-            }
-            Ret::default()
-        });
-        e.register(FIND_CHARACTERS_004812F0, |e, a| {
-            let mut p = a[0];
-            while e.mem.u8(p) != b'\\' {
-                p += 1;
-            }
-            p.into_ret()
-        });
-        e.call_log = Some(vec![]);
-        assert!(e.call(0x0073_1d70, &args![this]).bool());
-        assert_eq!(e.mem.f32(this.addr() + 0x60), 2.0);
-        assert_eq!(e.mem.f32(this.addr() + 0x64), 0.25);
-        assert_eq!(e.mem.u32(this.addr() + 0xd9c), 1);
-        assert_eq!(e.mem.u8(this.addr() + 0xdac), 1);
-        assert_eq!(e.mem.u32(this.addr() + 0xdb4), 0x6600);
-        assert_eq!(e.mem.u32(this.addr() + 0xda0), 0x34);
-        let formats = calls_to(&e, FORMAT_TEXT);
-        assert_eq!(formats.len(), 2 + 0x34);
-        let folder = formats[0][4];
-        assert_eq!(e.mem.u8(folder), b'f');
-        assert_eq!(e.mem.u8(folder + 6), b'\\');
-        let name = formats[1][4];
-        assert_eq!(e.mem.u8(name), b'c');
-        assert_eq!(e.mem.u8(name + 4), 0);
-        // The last face: spades 13.
-        assert_eq!(
-            formats[0x35][5..],
-            [u32::from(b's'), u32::from(b'1'), u32::from(b'3')]
-        );
-        // Card 0 is the ace (rank 12) of suit 0.
-        assert_eq!(e.mem.u32(this.addr() + 0x90), 12);
-        assert_eq!(e.mem.u32(this.addr() + 0x90 + 0x10 * 0x33 + 4), 3);
-        assert_eq!(calls_to(&e, CREATE_TEXTURE_IMAGE).len(), 0x35);
-        // lStewieAl's Tweaks' S0022.29 (`0x732456`): the count is one less.
-        e.set_stewie(engine_core::extend::stewie::BLACKJACK_SHOE_COUNT, true);
-        assert!(e.call(0x0073_1d70, &args![this]).bool());
-        assert_eq!(e.mem.u32(this.addr() + 0xda0), 0x33);
     }
 
     #[test]
@@ -5008,77 +4907,6 @@ mod n059_tests {
         assert_eq!(lines, [0x500, 0x600, 0x700, 0x800]);
         assert_eq!(frees.len(), 8);
         assert!(frees.iter().all(|w| w[0] == MEMORY_MANAGER_011F6238));
-    }
-
-    /// Row S0036 in the blackjack menu's `Create` (the player barred, so it stops after the walk): a
-    /// first record of a casino that is gone stays with the row off; with it on it is taken out
-    /// (freed, with its node's next) and the walk finds this casino's record either way. With only
-    /// records of casinos still there, the row adds only its lookups.
-    #[test]
-    fn s0036_blackjack_create_takes_out_a_casino_that_is_gone() {
-        let mut ordinary = vec![];
-        for (on, gone) in [(false, true), (true, true), (false, false), (true, false)] {
-            let mut e = engine();
-            e.set_stewie(engine_core::extend::stewie::CASINO_INVALID_CHIPS, on);
-            let player = e.mem.alloc(0x700);
-            e.set_global(PLAYER, player);
-            let casino = object(&mut e, 0x220);
-            e.mem.set_u32(casino + 0xc, 0x1234);
-            answer(&mut e, FORM_ID_0084E3A0, 0x1234);
-            let first_record = e.mem.alloc(0xc);
-            e.mem
-                .set_u32(first_record, if gone { 0x0a00_0001 } else { 0x99 });
-            let record = e.mem.alloc(0xc);
-            e.mem.set_u32(record, 0x1234);
-            let second = e.mem.alloc(8);
-            e.mem.set_u32(second, record);
-            let first = e.mem.alloc(8);
-            e.mem.set_u32(first, first_record);
-            e.mem.set_u32(first + 4, second);
-            answer(&mut e, CASINO_RECORDS_005A6260, first);
-            e.register(LOOKUP_FORM_BY_ID_004839C0, |_, a| {
-                u32::from(a[0] != 0x0a00_0001).into_ret()
-            });
-            e.register(MEMORY_FREE_00AA4060, |_, _| Ret::default());
-            e.register(0x0071_b160, |_, _| Ret::default());
-            answer(&mut e, PLAYER_BARRED_00969B80, 1);
-            answer(&mut e, PLAYER_BAR_TIME_00969B40, 42);
-            answer(&mut e, SETTING_STRING, 0x3300);
-            e.call_log = Some(vec![]);
-            let got = e
-                .call(0x0073_3630, &args![casino, 5u32, 500u32, 0u32])
-                .u32();
-            assert_eq!(got, 0);
-            assert_eq!(e.global::<u32>(BET_DATA_011D9054), record);
-            let frees = calls_to(&e, MEMORY_FREE_00AA4060);
-            if on && gone {
-                assert_eq!(
-                    frees,
-                    vec![
-                        vec![MEMORY_MANAGER_011F6238, first_record],
-                        vec![MEMORY_MANAGER_011F6238, second]
-                    ]
-                );
-                assert_eq!((e.mem.u32(first), e.mem.u32(first + 4)), (record, 0));
-            } else {
-                assert!(frees.is_empty());
-                assert_eq!(
-                    (e.mem.u32(first), e.mem.u32(first + 4)),
-                    (first_record, second)
-                );
-            }
-            if !gone {
-                let log: Vec<(u32, Vec<u32>)> = e
-                    .call_log
-                    .clone()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|(a, _)| !(on && *a == LOOKUP_FORM_BY_ID_004839C0))
-                    .collect();
-                ordinary.push(log);
-            }
-        }
-        assert_eq!(ordinary[0], ordinary[1], "row on: the calls of the row off");
     }
 
     #[test]

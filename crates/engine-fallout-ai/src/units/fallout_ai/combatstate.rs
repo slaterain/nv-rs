@@ -9077,62 +9077,6 @@ mod tests {
         f
     }
 
-    /// lStewieAl's Tweaks' row S0126: the combat weapon's projectile is null: the exe asks it for
-    /// its explosion (+0x84 of the null page) and stops; with the row on there is no explosion
-    /// (none asked), and the projectile is asked without the owner (`0x99A1C8`).
-    #[test]
-    fn s0126_a_combat_weapon_with_no_projectile() {
-        for on in [false, true] {
-            let mut e = engine();
-            let f = projectile_fixture(&mut e, 0);
-            e.set_stewie(
-                engine_core::extend::stewie::COMBAT_STATE_NULL_PROJECTILE,
-                on,
-            );
-            e.call_log = Some(vec![]);
-            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                fn_009993c0(&mut e, f.state);
-            }));
-            e.call_stack.clear();
-            assert_eq!(run.is_ok(), on, "row {on}");
-            let asked = calls(e.call_log.as_ref().unwrap(), 0x0052_5a90);
-            assert_eq!(asked, vec![vec![0x900, if on { 0 } else { f.attacker }]]);
-            if on {
-                let log = e.call_log.take().unwrap();
-                assert!(calls(&log, 0x004f_d3c0).is_empty());
-                assert_eq!(calls(&log, 0x0099_2720)[0][2], 0, "no explosion");
-            }
-        }
-    }
-
-    /// Row S0126 with a projectile (ordinary input): the same explosion weighed, with the row off
-    /// and on; the one difference is the owner the projectile is asked with (none with the row).
-    #[test]
-    fn s0126_row_on_with_a_projectile_asks_without_the_owner() {
-        let mut logs = vec![];
-        for on in [false, true] {
-            let mut e = engine();
-            let projectile = e.mem.alloc(0x100);
-            e.mem.set_u32(projectile + 0x84, 0x4444);
-            let f = projectile_fixture(&mut e, projectile);
-            e.set_stewie(
-                engine_core::extend::stewie::COMBAT_STATE_NULL_PROJECTILE,
-                on,
-            );
-            let log = logged(&mut e, |e| fn_009993c0(e, f.state));
-            assert_eq!(calls(&log, 0x004f_d3c0), vec![vec![projectile]]);
-            assert_eq!(calls(&log, 0x0099_2720)[0][2], 0x4444);
-            let asked = calls(&log, 0x0052_5a90);
-            assert_eq!(asked, vec![vec![0x900, if on { 0 } else { f.attacker }]]);
-            logs.push(
-                log.into_iter()
-                    .filter(|(a, _)| *a != 0x0052_5a90)
-                    .collect::<Vec<_>>(),
-            );
-        }
-        assert_eq!(logs[0], logs[1]);
-    }
-
     #[test]
     fn clearing_weapons_fills_and_empties() {
         let mut e = engine();

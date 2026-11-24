@@ -4252,23 +4252,6 @@ mod la1_tests {
         assert_eq!(calls(&log, MENU_START_FADE_IN), vec![vec![menu.addr()]]);
     }
 
-    /// Row S0035 (lStewieAl's Tweaks) at `0x7641E5`: ending a service menu sets the radio's
-    /// quieter byte (`011dcfa4`) to 1 before the fade in with the row on; off, it is untouched.
-    #[test]
-    fn s0035_service_end_makes_the_radio_quieter_again() {
-        for on in [false, true] {
-            let (mut e, menu, _) = service_rig(0);
-            e.map(0x011d_c000, 0x1000);
-            e.set_global(0x011d_cfa4u32, 0u8);
-            e.set_stewie(engine_core::extend::stewie::DIALOG_RADIO_VOLUME_RESET, on);
-            e.call_log = Some(vec![]);
-            e.call(0x0076_40a0, &args![0u32]);
-            let log = e.call_log.take().unwrap();
-            assert_eq!(calls(&log, MENU_START_FADE_IN), vec![vec![menu.addr()]]);
-            assert_eq!(e.global::<u8>(0x011d_cfa4u32), u8::from(on));
-        }
-    }
-
     #[test]
     fn service_end_without_an_open_menu_does_nothing() {
         let (mut e, _, _) = service_rig(0);
@@ -4441,36 +4424,6 @@ mod n087_tests {
         e.mem.set_u32(menu + 0x2c, 1);
         e.call(0x0076_3ff0, &args![]);
         assert_eq!(calls(&e, MENU_START_FADE_OUT).len(), 1);
-    }
-
-    /// Row S0035 (lStewieAl's Tweaks): opening a service menu from dialogue (`0x764090`, before
-    /// the fade out) and freeing the dialogue menu (`0x7619CB`, after the topics' release) clear
-    /// the radio's quieter byte (`011dcfa4`) with the row on; off, it stays set. A goodbye state
-    /// (no fade out) leaves it.
-    #[test]
-    fn s0035_dialogue_closing_restores_the_radio() {
-        for on in [false, true] {
-            let mut e = rig();
-            e.set_stewie(engine_core::extend::stewie::DIALOG_RADIO_VOLUME_RESET, on);
-            let menu = e.mem.alloc(0x13c);
-            let speaker = object(&mut e, 0x100);
-            e.mem.set_u32(menu + 0x70, 0x0c00_0000);
-            e.mem.set_u32(menu + 0x80, speaker);
-            e.set_global(OPEN_MENU_011D9510, menu);
-            e.set_global(0x011d_cfa4u32, 1u8);
-            e.mem.set_u32(menu + 0x2c, 1);
-            e.call(0x0076_3ff0, &args![]);
-            assert_eq!(e.global::<u8>(0x011d_cfa4u32), 1, "goodbye, row {on}");
-            e.mem.set_u32(menu + 0x2c, 0);
-            e.call(0x0076_3ff0, &args![]);
-            assert_eq!(e.global::<u8>(0x011d_cfa4u32), u8::from(!on), "service");
-            e.set_global(0x011d_cfa4u32, 1u8);
-            // The menu's base destructor (`Menu::~Menu`) is not this row's.
-            e.register(MENU_DESTROY, |_, _| Ret::default());
-            e.call(0x0076_1960, &args![menu]);
-            assert_eq!(e.global::<u8>(0x011d_cfa4u32), u8::from(!on), "free");
-            assert_eq!(e.global::<u32>(OPEN_MENU_011D9510), 0);
-        }
     }
 
     #[test]

@@ -1503,58 +1503,6 @@ mod tests {
         assert_eq!(calls_to(&s.log, 0x0070_00dc).len(), 1);
     }
 
-    /// lStewieAl's Tweaks' row S0225: the texture already bound, the stage group's ADDRESSU (its
-    /// current value valid) 3 while the render state cache answers 1 for the stage. Row off, the
-    /// stage is skipped as the exe does; row on, it is set up again (the owner told, the stage
-    /// applied). With the cache answering 3, row on skips it too.
-    #[test]
-    fn s0225_an_unchanged_texture_with_other_addressing_is_set_up_again() {
-        const GETTER: u32 = 0x0070_0e00;
-        for (on, current, applied) in [(false, 1u32, 0usize), (true, 1, 1), (true, 3, 0)] {
-            let mut s = stage_scene();
-            s.e.set_stewie(engine_core::extend::stewie::SAMPLER_STATE_LEAK, on);
-            mock(&mut s.e, &s.log, OWNER_SET, |_, _| ret(0));
-            mock(&mut s.e, &s.log, OWNER_QUERY, |_, _| ret(0));
-            mock(&mut s.e, &s.log, 0x0070_00dc, |_, _| Ret::default());
-            s.e.set(s.this, NiD3DTextureStage::m_spTexture, Ptr::new(0x5550));
-            s.e.mem.set_u32(SHADOWED_TEXTURES + 4, 0x5550);
-            // ADDRESSU (1) and ADDRESSV (2) map to the group's slots 0 and 1.
-            for (at, len) in [
-                (0x0126_f918u32, 8u32),
-                (0x0126_f92c, 8),
-                (0x0126_f99c, 4),
-                (0x010f_095c, 4),
-            ] {
-                s.e.map(at, len);
-            }
-            s.e.mem.set_u32(0x0126_f918, 1);
-            s.e.mem.set_u32(0x0126_f91c, 2);
-            s.e.mem.set_u16(0x0126_f92c + 2, 0);
-            s.e.mem.set_u16(0x0126_f92c + 4, 1);
-            let group = s.e.mem.alloc(0xb8);
-            s.e.mem.set_u32(s.this.addr() + 0x10, group);
-            s.e.mem.set_u8(group + 0xa4, 1);
-            s.e.mem.set_u32(group + 0x90, 3);
-            let cache = s.e.mem.alloc(0x10);
-            s.e.mem.set_u32(0x0126_f99c, cache);
-            s.e.mem.set_u32(0x010f_095c, GETTER);
-            mock(&mut s.e, &s.log, GETTER, move |_, a| {
-                ret(if a[1] == 1 && a[2] == 1 { current } else { 0 })
-            });
-            assert!(fn_00e7eb00(&mut s.e, s.this, 0));
-            assert_eq!(
-                calls_to(&s.log, OWNER_SET).len(),
-                applied,
-                "row {on}, cache {current}"
-            );
-            assert_eq!(
-                calls_to(&s.log, GETTER).is_empty(),
-                !on,
-                "asked only with the row"
-            );
-        }
-    }
-
     #[test]
     fn binding_a_new_texture_updates_the_shadow_and_applies_the_stage() {
         let mut s = stage_scene();

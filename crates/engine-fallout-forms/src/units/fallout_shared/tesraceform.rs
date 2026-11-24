@@ -236,52 +236,6 @@ mod tests {
             assert_eq!(e.mem.u32(component + 4), 0);
         }
     }
-    /// lStewieAl's Tweaks' row S0049 (`patchFixUnresolvedRaceCrash`, `0x48B9D9`, `0x48B9E8`,
-    /// `0x48B9F1`): after each of the three warnings the race is CaucasianVanilla (`0x19`, looked up and
-    /// stored as it is); off, none (the exe's, which crashes later). A race found is left alone.
-    #[test]
-    fn s0049_a_missing_race_becomes_caucasian_vanilla() {
-        for (named, with_owner) in [(0u32, false), (1, true), (0, true)] {
-            for on in [false, true] {
-                let mut e = Engine::new();
-                let owner = race_case(&mut e, named);
-                let owner = if with_owner { owner } else { 0 };
-                let component = e.mem.alloc(8);
-                e.mem.set_u32(component + 4, 0x3000);
-                e.set_stewie(engine_core::extend::stewie::UNRESOLVED_RACE, on);
-                e.call_log = Some(vec![]);
-                e.call(0x0048_b920, &args![component, owner]);
-                let log = e.call_log.take().unwrap();
-                assert_eq!(
-                    calls_to(&log, 0x005b_5e40).len(),
-                    1,
-                    "the warning, row {on}"
-                );
-                assert_eq!(e.mem.u32(component + 4), if on { 0x19 } else { 0 });
-                if on {
-                    assert_eq!(calls_to(&log, 0x0048_39c0).last(), Some(&vec![0x19]));
-                }
-            }
-        }
-    }
-
-    /// Row S0049 with the race found (ordinary input): the same calls and race with the row off and on.
-    #[test]
-    fn s0049_row_on_with_the_race_found_changes_nothing() {
-        let mut runs = vec![];
-        for on in [false, true] {
-            let mut e = Engine::new();
-            let owner = race_case(&mut e, 0);
-            let component = e.mem.alloc(8);
-            e.mem.set_u32(component + 4, 0x10);
-            e.set_stewie(engine_core::extend::stewie::UNRESOLVED_RACE, on);
-            e.call_log = Some(vec![]);
-            e.call(0x0048_b920, &args![component, owner]);
-            runs.push((e.call_log.take().unwrap(), e.mem.u32(component + 4)));
-        }
-        assert_eq!(runs[0], runs[1]);
-        assert_eq!(runs[0].1, 0x111);
-    }
 }
 
 #[cfg(test)]

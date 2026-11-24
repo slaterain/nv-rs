@@ -888,37 +888,6 @@ mod n051_tests {
         assert_eq!(calls_to(&e, PLAY_MENU_SOUND), vec![vec![0x19]]);
     }
 
-    /// lStewieAl's Tweaks' S0022.10 at `0x73B4C4`: with the row, the menu-mode control held
-    /// (`GetControlState(0xE, 0)`) and the Pip-Boy state not 0 set the input's menu-mode debounce
-    /// (bit 3 of `+0x1B92`) before the fade out; either missing, or the row off, it stays clear.
-    #[test]
-    fn s0022_10_closing_a_book_debounces_menu_mode() {
-        let run = |row: bool, held: u32, pipboy_state: u32| {
-            let mut e = engine();
-            e.map(0x011d_8000, 0x1000);
-            e.map(0x011f_3000, 0x1000);
-            let this = menu(&mut e);
-            answer(&mut e, TILE_GET_MENU_BY_CLASS, 0x5400);
-            answer(&mut e, TILE_GET_MENU, 0x5500);
-            answer(&mut e, BOOK_TEST_00409700, 1);
-            answer(&mut e, GET_CONTROL_STATE, held);
-            let input = e.mem.alloc(0x2000);
-            e.set_global(engine_core::extend::stewie::INPUT_GLOBALS, input);
-            let manager = e.mem.alloc(0x600);
-            e.mem.set_u32(manager + 0x4bc, pipboy_state);
-            e.set_global(INTERFACE_MANAGER_SINGLETON, manager);
-            e.set_stewie(engine_core::extend::stewie::BOOK_CLOSE_DEBOUNCE, row);
-            e.call_log = Some(vec![]);
-            e.call(0x0073_b480, &args![this]);
-            assert_eq!(calls_to(&e, MENU_START_FADE_OUT), vec![vec![0x5500]]);
-            e.mem.u16(input + 0x1b92)
-        };
-        assert_eq!(run(true, 1, 3), 8);
-        assert_eq!(run(true, 0, 3), 0);
-        assert_eq!(run(true, 1, 0), 0);
-        assert_eq!(run(false, 1, 3), 0);
-    }
-
     #[test]
     fn the_wheel_scrolls_or_turns_pages() {
         let mut e = engine();
