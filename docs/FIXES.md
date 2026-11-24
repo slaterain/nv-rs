@@ -696,7 +696,7 @@ for another world space or another record type).
 
 Not a row; in every preset (2026-11-16):
 
-- **Mods' own files** (JIP LN's INI and file commands, under `Data\Config\`) are
+- **Mods' own files** (JIP LN's INI and file commands) are
   kept in a folder of nv-rs's own beside the saves (`NV_MOD_FILES_OUT`, else `nv-rs mod files`
   beside `NV_SAVE_OUT`'s folder; docs/PLAYTESTING.md), never in the game's folder. The extenders'
   commands read a mod's own copy there first, then the game's Data. Without either variable there
