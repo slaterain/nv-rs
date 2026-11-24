@@ -6,6 +6,14 @@ status in [LEDGER.md](LEDGER.md), and the full list of systems in
 [SYSTEMS.md](SYSTEMS.md). The log up to 2026-10-14 is in
 [history/milestones-2026-10-14.md](history/milestones-2026-10-14.md).
 
+Enhanced Movement animation support: the built-in kNVSE subset provides
+`IsAnimPlayingAlt`, `ActivateAnim`, `DeactivateAnim` and
+`SetActorAnimationPath`, along with the selected JSON conditions and animation
+timing keys. Playback and overrides follow kNVSE revision `4640f0f`.
+`IsAnimPlayingAlt` follows revision `9efea36`. Native KF loading uses a
+thread-scoped map, and the built-in remains unlisted in plugin/version queries.
+Next: verify Enhanced Movement transitions and save/reload in gameplay.
+
 Local ARM crash investigation (2026-11-21): a recursive-lock publication failure
 and duplicate scrap-buffer ownership were reproduced and corrected in focused
 real-thread tests (including the pool's inlined unlock). Gameplay validation

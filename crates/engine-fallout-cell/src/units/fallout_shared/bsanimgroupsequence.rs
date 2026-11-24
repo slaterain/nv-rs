@@ -109,6 +109,9 @@ pub fn bs_anim_group_sequence_destructor(e: &mut Engine, this: Ptr) {
         POINTER_RELEASE,
         &args![this.addr().wrapping_add(SEQUENCE_ANIM_GROUP)],
     );
+    // kNVSE24 hooks this destructor call to forget cached raw contexts before
+    // the sequence memory is released; the group is already released here.
+    e.site(0x004e_eb4b, &[this.addr()]);
     e.call(0x00a3_5640, &args![this]);
 }
 

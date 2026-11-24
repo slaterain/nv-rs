@@ -1,0 +1,15 @@
+[package]
+name = "knvse"
+version = "0.1.0"
+description = "Selected kNVSE animation commands built into the engine"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+engine-core = { path = "../engine-core" }
+nvse = { path = "../nvse" }
+serde_json = "1"
+
+[dev-dependencies]
+nvse = { path = "../nvse", features = ["test-support"] }

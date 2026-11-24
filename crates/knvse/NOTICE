@@ -1,0 +1,16 @@
+Selected kNVSE commands rebuilt in Rust from korri123/kNVSE,
+https://github.com/korri123/kNVSE, revision
+9efea363ca2a209241e45e8b1fb518c3eff88b3f (source version 40).
+ActivateAnim, DeactivateAnim, SetActorAnimationPath, target folder/JSON overrides
+and the respectEndKey/noBlend timing subset follow the original version24 commit
+4640f0f0a8636669126408eecf866ea0e263cf24. IsAnimPlayingAlt follows version40.
+The selected family is bounded to the supplied Enhanced Movement assets; other
+custom text-key/ordered/partial-reload variants produce explicit diagnostics.
+
+Credits: korri123 (Kormakur), jazzisparis and the upstream contributors.
+
+The maintainer recorded permission from the extender authors to translate their
+code, credited with their notices retained (2026-11-03,
+docs/adr/0016-script-extenders-built-in.md). No original C++, DLLs or game assets
+are included. This is an incomplete built-in implementation and does not
+advertise an installed kNVSE plugin or version.

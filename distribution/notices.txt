@@ -20,3 +20,4 @@ crates/mcm/NOTICE	NOTICE-mcm
 crates/stewie/NOTICE	NOTICE-stewie
 crates/johnnyguitar/NOTICE	NOTICE-johnnyguitar
 crates/engine-platform/data/LICENSE-SDL_GameControllerDB	LICENSE-SDL_GameControllerDB
+crates/knvse/NOTICE	NOTICE-knvse

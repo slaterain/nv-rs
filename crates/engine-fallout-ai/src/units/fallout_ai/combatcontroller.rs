@@ -177,6 +177,7 @@ const ACTOR_SET_IRON_SIGHTS: u32 = 0x008b_b650;
 const ANIM_MAP_OF: u32 = 0x0049_7280;
 /// `NiTMapBase<..,unsigned short, AnimSequenceBase *>::GetAt` (Xbox PDB;
 /// `this`, key, pointer to the value).
+#[cfg(test)]
 const ANIM_MAP_GET_AT: u32 = 0x0049_c390;
 /// `TESAnimGroup::IsPowerAttackAction` (Xbox PDB, cdecl, one word).
 const IS_POWER_ATTACK_ACTION: u32 = 0x005f_2670;
@@ -901,8 +902,7 @@ pub fn combat_controller_check_has_equip(e: &mut Engine, actor: Ptr, item: u32) 
     }
     e.with_stack(4, |e, sequence| {
         let map = e.call(ANIM_MAP_OF, &args![owner]).u32();
-        e.call(ANIM_MAP_GET_AT, &args![map, group as u32, sequence])
-            .bool()
+        engine_core::animation_maps::lookup(e, 0x0097_f36d, owner, map, group, sequence.addr())
     })
 }
 
@@ -1371,10 +1371,14 @@ pub fn fn_0097fd80(e: &mut Engine, actor: Ptr, action: u32, out: Ptr<NiPoint3>) 
         let scaled = locals.byte_add(0x10);
         let result = locals.byte_add(0x1c);
         let map = e.call(ANIM_MAP_OF, &args![owner]).u32();
-        if !e
-            .call(ANIM_MAP_GET_AT, &args![map, group as u32, sequence_slot])
-            .bool()
-        {
+        if !engine_core::animation_maps::lookup(
+            e,
+            0x0097_fe09,
+            owner,
+            map,
+            group,
+            sequence_slot.addr(),
+        ) {
             return false;
         }
         let sequence = e.mem.u32(sequence_slot.addr());
@@ -1411,10 +1415,14 @@ pub fn fn_0097feb0(e: &mut Engine, actor: Ptr, action: u32) -> f32 {
         let owner = e.vcall(actor.addr(), 0x1e4, &[]).u32();
         let time = e.with_stack(4, |e, sequence_slot| {
             let map = e.call(ANIM_MAP_OF, &args![owner]).u32();
-            if !e
-                .call(ANIM_MAP_GET_AT, &args![map, group as u32, sequence_slot])
-                .bool()
-            {
+            if !engine_core::animation_maps::lookup(
+                e,
+                0x0097_ff06,
+                owner,
+                map,
+                group,
+                sequence_slot.addr(),
+            ) {
                 return None;
             }
             let sequence = e.mem.u32(sequence_slot.addr());

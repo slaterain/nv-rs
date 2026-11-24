@@ -1087,7 +1087,10 @@ fn current_sequence_at(this: Ptr<Animation>, slot: u32) -> u32 {
 /// `pAnimSequenceMap->GetAt(key, &entry)`: the `AnimSequenceBase*` stored
 /// for animation group `key`, or `None` when the map has no such key.
 fn sequence_map_get(e: &mut Engine, this: Ptr<Animation>, key: u16) -> Option<u32> {
-    let map = e.get(this, Animation::pAnimSequenceMap).addr();
+    let map = engine_core::animation_maps::selected(
+        this.addr(),
+        e.get(this, Animation::pAnimSequenceMap).addr(),
+    );
     e.with_stack(4, |e, cell| {
         e.mem.set_u32(cell.addr(), 0);
         if e.call(MAP_GET_AT, &args![map, key, cell]).bool() {
@@ -1095,6 +1098,20 @@ fn sequence_map_get(e: &mut Engine, this: Ptr<Animation>, key: u16) -> Option<u3
         } else {
             None
         }
+    })
+}
+
+/// One of kNVSE24's original map-call replacements. Save/load and loader
+/// bookkeeping continue to use `sequence_map_get` without a script callback.
+fn sequence_map_get_at(e: &mut Engine, this: Ptr<Animation>, key: u16, site: u32) -> Option<u32> {
+    let map = engine_core::animation_maps::selected(
+        this.addr(),
+        e.get(this, Animation::pAnimSequenceMap).addr(),
+    );
+    e.with_stack(4, |e, out| {
+        e.mem.set_u32(out.addr(), 0);
+        engine_core::animation_maps::lookup(e, site, this.addr(), map, key, out.addr())
+            .then(|| e.mem.u32(out.addr()))
     })
 }
 
@@ -1639,6 +1656,8 @@ pub fn fn_0048fb20(e: &mut Engine, this: Ptr<Animation>, value: u8, mask: u8, sh
 /// exception-unwinding frame is not translated.
 pub fn fn_0048fb50(e: &mut Engine, this: Ptr<Animation>) {
     let a = this.addr();
+    // kNVSE24 hooks this call: release custom animation bases before idles.
+    e.site(0x0048_fb82, &[a, 0]);
     animation_shutdown_all_anim_idles(e, this);
     let loader = model_loader(e);
     e.call(
@@ -2050,7 +2069,8 @@ fn add_animation_body(
     key: u16,
 ) -> bool {
     let a = this.addr();
-    let map = e.get(this, Animation::pAnimSequenceMap).addr();
+    let map =
+        engine_core::animation_maps::selected(a, e.get(this, Animation::pAnimSequenceMap).addr());
     let (found, mut entry) = e.with_stack(4, |e, cell| {
         e.mem.set_u32(cell.addr(), 0);
         let found = e.call(MAP_GET_AT, &args![map, key, cell]).bool();
@@ -3320,7 +3340,9 @@ fn update_movement_and_notes(
                             .u16();
                         let found_type = group_type(e, found_group);
                         if found_type != 0 {
-                            if let Some(entry) = sequence_map_get(e, this, found_group) {
+                            if let Some(entry) =
+                                sequence_map_get_at(e, this, found_group, 0x0049_3115)
+                            {
                                 let sequence = e.vcall(entry, 0x10, &args![0xffff_ffffu32]).u32();
                                 if sequence != 0 {
                                     let group = fn_0048f7f0(e, Ptr::new(sequence));
@@ -3719,7 +3741,7 @@ pub fn animation_init_group_speed(e: &mut Engine, this: Ptr<Animation>, group: P
     if ni_pointer_get(e, a + Animation::spManager.off) == 0 {
         return;
     }
-    let Some(entry) = sequence_map_get(e, this, group_id) else {
+    let Some(entry) = sequence_map_get_at(e, this, group_id, 0x0049_3dc0) else {
         return;
     };
     if kind == 1 || kind == 2 {
@@ -3896,7 +3918,7 @@ pub fn fn_004942c0(e: &mut Engine, this: Ptr) -> bool {
 /// `_ftol2`), 0 when the map has no entry, the entry keeps several
 /// sequences or holds no sequence; the map has no name for it.
 pub fn fn_00494300(e: &mut Engine, this: Ptr<Animation>, group: u16) -> i32 {
-    let Some(entry) = sequence_map_get(e, this, group) else {
+    let Some(entry) = sequence_map_get_at(e, this, group, 0x0049_431b) else {
         return 0;
     };
     if !e.vcall(entry, 0xc, &args![]).bool() {
@@ -4057,7 +4079,7 @@ pub fn animation_add_group(e: &mut Engine, this: Ptr<Animation>, group: Ptr) {
 /// `Animation::GroupLoaded` (Xbox PDB): whether the animation sequence map
 /// has an entry for group `group`.
 pub fn animation_group_loaded(e: &mut Engine, this: Ptr<Animation>, group: u16) -> bool {
-    sequence_map_get(e, this, group).is_some()
+    sequence_map_get_at(e, this, group, 0x0049_472b).is_some()
 }
 
 // Translated from 00494740 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4125,7 +4147,7 @@ pub fn animation_start_group(e: &mut Engine, this: Ptr<Animation>, group: u16, s
     if group == 0xff {
         return Ptr::NULL;
     }
-    let Some(entry) = sequence_map_get(e, this, group) else {
+    let Some(entry) = sequence_map_get_at(e, this, group, 0x0049_48e6) else {
         return Ptr::NULL;
     };
     let wanted = if slot == -1 {
@@ -4187,10 +4209,19 @@ pub fn animation_start_group_ov2(
     slot_arg: i32,
 ) -> Ptr {
     let a = this.addr();
-    let sequence = sequence.addr();
-    if e.call(SPECIAL_IDLE_WORKING, &args![this, sequence]).bool() {
+    let original_sequence = sequence.addr();
+    // Source24 changes the stack's toMorph argument, then calls the original
+    // IsSpecialIdleWorking with its original, already-evaluated argument.
+    let replacement = e.site(
+        0x0049_49d0,
+        &[a, original_sequence, u32::from(group), slot_arg as u32],
+    );
+    if e.call(SPECIAL_IDLE_WORKING, &args![this, original_sequence])
+        .bool()
+    {
         return Ptr::NULL;
     }
+    let sequence = replacement.unwrap_or(original_sequence);
     let kind = group_type(e, group);
     let reference = e.get(this, Animation::pActorRef).addr();
     let mut slot = slot_arg;
@@ -4631,7 +4662,7 @@ pub fn animation_force_section(
     if action == -1 {
         e.call(CLEAR_GROUP, &args![this, slot, 0.0f32]);
         if group != 0xff {
-            if let Some(entry) = sequence_map_get(e, this, group) {
+            if let Some(entry) = sequence_map_get_at(e, this, group, 0x0049_5630) {
                 if e.vcall(entry, 0x10, &args![selector]).u32() != 0 {
                     let sequence = e.vcall(entry, 0x10, &args![selector]).u32();
                     e.mem.set_u32(current_sequence_at(this, index), sequence);
@@ -4645,7 +4676,7 @@ pub fn animation_force_section(
             }
         }
     } else if animation_group_loaded(e, this, group) {
-        if let Some(entry) = sequence_map_get(e, this, group) {
+        if let Some(entry) = sequence_map_get_at(e, this, group, 0x0049_56ce) {
             let sequence = e.vcall(entry, 0x10, &args![selector]).u32();
             animation_start_group_ov2(e, this, Ptr::new(sequence), group, slot);
         }
@@ -4674,8 +4705,8 @@ pub fn animation_pick_best_animation(
     flag: u8,
 ) -> u16 {
     // Whether the map holds a sequence for `candidate`.
-    fn playable(e: &mut Engine, this: Ptr<Animation>, candidate: u16) -> bool {
-        match sequence_map_get(e, this, candidate) {
+    fn playable(e: &mut Engine, this: Ptr<Animation>, candidate: u16, site: u32) -> bool {
+        match sequence_map_get_at(e, this, candidate, site) {
             Some(entry) => e.vcall(entry, 0x10, &args![0xffff_ffffu32]).u32() != 0,
             None => false,
         }
@@ -4685,7 +4716,7 @@ pub fn animation_pick_best_animation(
         answer & 0xff == group & 0xff
     }
 
-    if playable(e, this, group) {
+    if playable(e, this, group, 0x0049_575b) {
         return group;
     }
     if group & 0x8000 != 0 {
@@ -4732,18 +4763,18 @@ pub fn animation_pick_best_animation(
         if weapon != 2 {
             if weapon == 3 {
                 let candidate = group & 0xf0ff | 0x200;
-                if playable(e, this, candidate) {
+                if playable(e, this, candidate, 0x0049_5965) {
                     return candidate;
                 }
             } else if weapon != 4 {
                 let candidate = group & 0xf0ff | 0x400;
-                if playable(e, this, candidate) {
+                if playable(e, this, candidate, 0x0049_59b9) {
                     return candidate;
                 }
             }
         }
         let candidate = group & 0xf0ff;
-        if playable(e, this, candidate) {
+        if playable(e, this, candidate, 0x0049_5a03) {
             return candidate;
         }
     }
@@ -4886,7 +4917,7 @@ pub fn animation_sync_sequences(
     if group == 0xff {
         return Ptr::NULL;
     }
-    let Some(entry) = sequence_map_get(e, this, group) else {
+    let Some(entry) = sequence_map_get_at(e, this, group, 0x0049_5dc6) else {
         return Ptr::NULL;
     };
     let mut multiple = 0u32;
@@ -5213,7 +5244,7 @@ pub fn fn_00496280(e: &mut Engine, this: Ptr<Animation>) {
 /// sequence the map entry for `key` currently offers (virtual slot 0x10 with
 /// -1), or null when the animation has no entry for `key`.
 pub fn animation_get_tes_anim_group(e: &mut Engine, this: Ptr<Animation>, key: u16) -> Ptr {
-    let Some(entry) = sequence_map_get(e, this, key) else {
+    let Some(entry) = sequence_map_get_at(e, this, key, 0x0049_651b) else {
         return Ptr::NULL;
     };
     let sequence = e.vcall(entry, 0x10, &args![0xffff_ffffu32]).u32();
@@ -10509,6 +10540,58 @@ mod tests {
         assert_eq!(
             arguments_of(&log, MANAGER_ADD_SEQUENCE)[0][1],
             wrapped[0][0]
+        );
+    }
+
+    #[test]
+    fn knvse24_private_map_keeps_original_add_animation_calls_and_guest_map() {
+        let mut original = add_fixture(5);
+        start_log(&mut original.e);
+        assert!(original.add(false));
+        let original_log = end_log(&mut original.e);
+        let original_refs = original.e.mem.u32(original.sequence + 4);
+        let original_manager_calls = arguments_of(&original_log, MANAGER_ADD_SEQUENCE);
+
+        let mut scoped = add_fixture(5);
+        let private = scoped.e.mem.alloc(8);
+        let (animation, kf) = (scoped.this, scoped.kf);
+        start_log(&mut scoped.e);
+        let ok = engine_core::animation_maps::with_private_map(
+            &mut scoped.e,
+            animation.addr(),
+            private,
+            |e| e.call(0x0049_0500, &args![animation, kf, 0u32]).bool(),
+        );
+        assert!(ok);
+        let log = end_log(&mut scoped.e);
+        assert_eq!(
+            scoped.e.get(animation, Animation::pAnimSequenceMap).addr(),
+            scoped.map
+        );
+        assert_eq!(scoped.e.mem.u32(scoped.map + 4), 0);
+        let private_base = scoped.e.mem.u32(private + 4);
+        assert_ne!(private_base, 0);
+        assert_eq!(scoped.e.mem.u32(private_base + 4), scoped.sequence);
+        assert_eq!(scoped.e.mem.u32(scoped.sequence + 4), original_refs);
+        assert_eq!(
+            arguments_of(&log, MANAGER_ADD_SEQUENCE),
+            original_manager_calls
+        );
+        // Both AddAnimation's initial lookup and InitGroupSpeed's lookup
+        // reach the selected map. No other map reads are used on this path.
+        let gets = arguments_of(&log, MAP_GET_AT);
+        assert!(gets.len() >= 2);
+        assert!(gets.iter().all(|a| a[0] == private));
+        assert!(arguments_of(&log, MAP_SET_AT)
+            .iter()
+            .all(|a| a[0] == private));
+        assert_eq!(
+            engine_core::animation_maps::selected(animation.addr(), scoped.map),
+            scoped.map
+        );
+        assert_eq!(
+            original_log.iter().map(|c| c.0).collect::<Vec<_>>(),
+            log.iter().map(|c| c.0).collect::<Vec<_>>()
         );
     }
 

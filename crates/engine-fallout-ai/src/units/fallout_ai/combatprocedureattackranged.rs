@@ -158,6 +158,7 @@ const ANIM_GROUP_OF: u32 = 0x0043_01b0;
 const ANIM_STATE_OF: u32 = 0x0070_f490;
 const ANIM_DIRECTION: u32 = 0x0049_5e40;
 const ANIM_SEQUENCE_MAP: u32 = 0x0049_7280;
+#[cfg(test)]
 const SEQUENCE_MAP_GET: u32 = 0x0049_c390;
 const SLOT_SEQUENCE_ANIMATION: u32 = 0x10;
 const SEQUENCE_GROUP: u32 = 0x0048_f7f0;
@@ -434,9 +435,14 @@ pub fn update(e: &mut Engine, this: Ptr<CombatProcedureAttackRanged>) {
                                 {
                                     let out = ebp - 0x9c;
                                     let map = e.call(ANIM_SEQUENCE_MAP, &args![animation]).u32();
-                                    if e.call(SEQUENCE_MAP_GET, &args![map, u32::from(group), out])
-                                        .bool()
-                                    {
+                                    if engine_core::animation_maps::lookup(
+                                        e,
+                                        0x009d_0e80,
+                                        animation,
+                                        map,
+                                        group,
+                                        out,
+                                    ) {
                                         let sequence = e.mem.u32(out);
                                         let inner = e
                                             .vcall(

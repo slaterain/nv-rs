@@ -4414,9 +4414,14 @@ pub fn fn_008b78c0(e: &mut Engine, this: Ptr<Actor>, force: u8) {
         let found = e.with_stack(4, |e, slot| {
             e.mem.set_u32(slot.addr(), 0);
             let sequences = e.call(0x0049_7280, &args![animation]).u32();
-            let present = e
-                .call(0x0049_c390, &args![sequences, 3u32, slot.addr()])
-                .bool();
+            let present = engine_core::animation_maps::lookup(
+                e,
+                0x008b_7985,
+                animation,
+                sequences,
+                3,
+                slot.addr(),
+            );
             (present, e.mem.u32(slot.addr()))
         });
         if !found.0 || found.1 == 0 {

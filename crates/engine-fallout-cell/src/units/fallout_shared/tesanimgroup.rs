@@ -915,7 +915,7 @@ fn anim_timing_note(
     group: &mut Ptr,
     cached_type: &mut u32,
     section: &mut u32,
-) -> (bool, bool) {
+) -> (bool, bool, bool) {
     let mut ty = 0u32;
     while ty < 0xf5 {
         if *cached_type != 0xff {
@@ -923,12 +923,19 @@ fn anim_timing_note(
         }
         let type_name = e.mem.u32(ANIM_NAME_TABLE + ty * 0x24);
         let name = e.call(0x0041_3f40, &args![sequence]).u32();
+        // kNVSE24 KeyStringCrashFixHook5F444F preserves this getter, then
+        // skips the remaining lines of a recognized custom text key.
+        if e.site(0x005f_444f, &[note, sequence.addr()])
+            .is_some_and(|skip| skip != 0)
+        {
+            return (false, false, true);
+        }
         let text = e.call(0x0043_b1b0, &args![name]).u32();
         if e.call(0x0040_4dc0, &args![type_name, text]).i32() == 0 {
             *cached_type = ty;
             let mut section_id = anim_time_section(e, ty, *section);
             if section_id == u32::MAX {
-                return (false, false);
+                return (false, false, false);
             }
             let category = e.mem.u32(ANIM_CATEGORY_TABLE + ty * 0x24);
             if (ty == 2 && *section == 1) || (category == 5 && *section == 2) {
@@ -961,22 +968,22 @@ fn anim_timing_note(
                     if e.mem.u32(ANIM_LOOP_TABLE + ty * 0x24) != 1 {
                         e.call(INVALID_ACTION_LOG, &args![0x0104_8718u32, filename]);
                         *section += 1;
-                        return (false, true);
+                        return (false, true, false);
                     }
                 } else if category != 1 && !looping {
                     e.call(INVALID_ACTION_LOG, &args![0x0104_86e4u32, filename]);
                     *section += 1;
-                    return (false, true);
+                    return (false, true, false);
                 }
                 *section += 1;
-                return (false, false);
+                return (false, false, false);
             }
             let next = anim_time_section(e, ty, *section);
             if *section == 5 || next == u32::MAX {
                 anim_bad_note(e, note, time, filename);
-                return (false, true);
+                return (false, true, false);
             }
-            return (false, false);
+            return (false, false, false);
         }
         if ty == *cached_type {
             break;
@@ -987,9 +994,9 @@ fn anim_timing_note(
         let name = e.call(0x0041_3f40, &args![sequence]).u32();
         let text = e.call(0x0043_b1b0, &args![name]).u32();
         e.call(INVALID_ACTION_LOG, &args![0x0104_86a0u32, text, filename]);
-        return (true, true);
+        return (true, true, false);
     }
-    (false, false)
+    (false, false, false)
 }
 
 fn anim_validate(e: &mut Engine, group: Ptr, sequence: Ptr, filename: Ptr) -> bool {
@@ -1177,7 +1184,7 @@ pub fn fn_005f3a20(e: &mut Engine, sequence: Ptr, filename: Ptr) -> Ptr {
                                         frame.addr(),
                                     );
                                 } else {
-                                    let (stop, note_bad) = anim_timing_note(
+                                    let (stop, note_bad, skip_key) = anim_timing_note(
                                         e,
                                         sequence,
                                         filename,
@@ -1191,6 +1198,9 @@ pub fn fn_005f3a20(e: &mut Engine, sequence: Ptr, filename: Ptr) -> Ptr {
                                         &mut section,
                                     );
                                     bad |= note_bad;
+                                    if skip_key {
+                                        break;
+                                    }
                                     if stop {
                                         stop_notes = true;
                                         break;
@@ -1793,6 +1803,52 @@ mod tests {
     }
 
     #[test]
+    fn knvse24_custom_key_skip_preserves_original_name_getter_and_group_fields() {
+        let mut e = Engine::new();
+        e.map(ANIM_NAME_TABLE, 0x24);
+        e.map(0x7000, 0x100);
+        e.mem.set_u32(ANIM_NAME_TABLE, 0x7777);
+        e.register_double(0x0041_3f40, |e, a| {
+            assert_eq!(a, [0x5000]);
+            e.mem.set_u32(0x7000, e.mem.u32(0x7000) + 1);
+            0x5008u32.into_ret()
+        });
+        e.on_site(
+            engine_core::extend::SiteSlot::new(engine_core::extend::Owner::Knvse, 0x005f_444f),
+            |e, a| {
+                assert_eq!(a, [0x6000, 0x5000]);
+                assert_eq!(
+                    e.mem.u32(0x7000),
+                    1,
+                    "original getter precedes custom parser"
+                );
+                Some(1)
+            },
+        );
+        let mut group = Ptr::new(0x2000);
+        let mut cached = 0xff;
+        let mut section = 2;
+        assert_eq!(
+            anim_timing_note(
+                &mut e,
+                Ptr::new(0x5000),
+                Ptr::new(0x7100),
+                0x6000,
+                2.5,
+                0,
+                0,
+                0,
+                &mut group,
+                &mut cached,
+                &mut section
+            ),
+            (false, false, true)
+        );
+        assert_eq!((group.addr(), cached, section), (0x2000, 0xff, 2));
+        assert_eq!(e.mem.u32(0x7000), 1);
+    }
+
+    #[test]
     fn timing_note_stores_time_and_advances_section_after_a_name_match() {
         let mut e = Engine::new();
         e.map(0x2000, 0x3c);
@@ -1870,7 +1926,7 @@ mod tests {
                 &mut cached,
                 &mut section,
             ),
-            (false, false)
+            (false, false, false)
         );
         assert_eq!(group.addr(), 0x2000);
         assert_eq!(cached, 0);
