@@ -3794,13 +3794,7 @@ pub fn actor_pick_animations(e: &mut Engine, this: Ptr<Actor>, arg_2: f32, arg_3
                                 .ptr::<()>();
                             let time =
                                 e.call(ANIM_GROUP_GET_TIME, &args![transform, 1u32]).f32() as f64;
-                            // lStewieAl's Tweaks' row S0043 (`OnReloadLoopAnimationHook` at
-                            // `0x8956EB`): with no weapon or no weapon entry the step ends here,
-                            // as at the switch's end, instead of reading them.
-                            let missing = e
-                                .stewie(engine_core::extend::stewie::RELOAD_LOOP_NULL_WEAPON)
-                                && (weapon_form.is_null() || weapon_item.is_null());
-                            if time <= loop_time && !missing {
+                            if time <= loop_time {
                                 let mod_active = e
                                     .call(
                                         ITEM_CHANGE_HAS_MOD_EFFECT_ACTIVE,

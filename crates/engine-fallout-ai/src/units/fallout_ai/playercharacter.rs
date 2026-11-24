@@ -9560,20 +9560,8 @@ fn auto_vanity_allowed(e: &mut Engine) -> bool {
 }
 
 /// The swap control's ammunition swap of `PlayerCharacter::Update` (`0x940B10`, `009462c0`).
-/// lStewieAl's Tweaks' row S0111 (`patchFixLoopingReloadAmmoSwapInstantRefill`, its
-/// `OnPlayerSelectAmmoHook`): its flag (the kept word `PLAYER_AMMO_SWAP`) is set while the swap
-/// runs, for `0095d450`.
 fn swap_ammo(e: &mut Engine, this: Ptr<PlayerCharacter>, long_enough: bool) {
-    let flag = e
-        .stewie(engine_core::extend::stewie::AMMO_SWAP_NO_INSTANT_REFILL)
-        .then(|| e.stewie_kept(engine_core::extend::stewie::kept::PLAYER_AMMO_SWAP, 4));
-    if let Some(flag) = flag {
-        e.mem.set_u32(flag, 1);
-    }
     e.call(0x0094_62c0, &args![this, long_enough, 0u32]);
-    if let Some(flag) = flag {
-        e.mem.set_u32(flag, 0);
-    }
 }
 
 /// S0210's `SetIsUsingAutomaticWeapon(false)` on the player's process (Tweaks'
@@ -9585,28 +9573,16 @@ fn clear_automatic_firing(e: &mut Engine) {
 }
 
 /// The activation of `PlayerCharacter::Update` (`0x94328E`, `TESObjectREFR::Activate` `00573170`);
-/// its answer true means activated (no "no activate" sound). lStewieAl's Tweaks' row S0022.21
-/// (`MenuFixes`, its `OnActivateRefShouldSkipNoActivateSound`): the activation runs as the exe's,
-/// and a reference whose base form (+0x20) is the workbench (`00075005`) or the reloading bench
-/// (`0015361F`, form id at +0xC) counts as activated too. As in Tweaks, the base form is read
-/// before the activation runs.
+/// its answer true means activated (no "no activate" sound).
 fn activate_or_workbench(
     e: &mut Engine,
     reference: u32,
     this: Ptr<PlayerCharacter>,
     activator: u32,
 ) -> bool {
-    let workbench = e
-        .stewie(engine_core::extend::stewie::WORKBENCH_NO_ACTIVATE_SOUND)
-        .then(|| {
-            let base = e.mem.u32(reference + 0x20);
-            let id = if base != 0 { e.mem.u32(base + 0xc) } else { 0 };
-            id == 0x0007_5005 || id == 0x0015_361f
-        });
-    let activated = e
+    e
         .call(0x0057_3170, &args![reference, this, 0u32, 0u32, activator])
-        .bool();
-    activated || workbench == Some(true)
+        .bool()
 }
 
 /// The level-up test of `PlayerCharacter::Update` (`0x9439D4`, `005c7870`: the player in character
