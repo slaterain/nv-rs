@@ -28,6 +28,7 @@ fn the_rows_go_in_before_the_extenders() {
         at("\n    launcher::install(engine);\n"),
         at("nvse::install(engine)"),
         at("jip::install(engine)"),
+        at("johnnyguitar::install(engine)"),
     ];
     assert!(order.windows(2).all(|w| w[0] < w[1]), "{order:?}");
     let start_with = text

@@ -131,7 +131,7 @@ fn every_area_row_has_an_area() {
         .flat_map(|a| a.fix_wraps.iter().chain(a.jip_wraps))
         .copied()
         .collect();
-    // JIP's rows only.
+    // JIP's rows only: the tables also hold JohnnyGuitar's (`patch_rows/jg.rs`).
     let jips = |row: &&engine_core::extend::Entry| row.owners.contains(&Owner::Jip);
     for table in engine_core::extend::PATCH_SITES {
         for row in table.iter().filter(jips) {

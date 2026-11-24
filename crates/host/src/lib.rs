@@ -109,6 +109,10 @@ pub(crate) fn install_rows_and_extenders(engine: &mut Engine, choice: &fixes::Ch
     // installed" unless the row `NV_JIP_INSTALLED` (on in the fixes preset, set by
     // `fixes::install` above) switched it on (`crates/jip`).
     jip::install(engine);
+    // JohnnyGuitar NVSE's editor ids, when their row is on (the fixes preset): xNVSE loads
+    // johnnyguitarnvse.dll after jip_nvse.dll and before MCM.dll (`crates/johnnyguitar`); after
+    // JIP, so its light slots stay JIP's.
+    johnnyguitar::install(engine);
 }
 
 /// The start-up log's lines on JIP's state, after it installed (`row_on`: its row asked for it;

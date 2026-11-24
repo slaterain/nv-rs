@@ -116,22 +116,29 @@ pub enum Owner {
     Nvse,
     /// JIP LN NVSE built in (`crates/jip`); it runs after xNVSE, as JIP is xNVSE's plugin.
     Jip,
+    /// JohnnyGuitar NVSE built in (`crates/johnnyguitar`): xNVSE loads its plugins by DLL name, so
+    /// `johnnyguitarnvse.dll` after `jip_nvse.dll`.
+    JohnnyGuitar,
 }
 
 impl Owner {
-    /// Its place in the order: rows, then `nvse`, then `jip`.
+    /// Its place in the order: rows, then `nvse`, then `jip` and `johnnyguitar`
+    /// (the plugins' DLL names in order).
     const fn rank(self) -> u8 {
         match self {
             Owner::Row(_) => 0,
             Owner::Nvse => 1,
             Owner::Jip => 2,
+            Owner::JohnnyGuitar => 3,
         }
     }
 
     const fn same(self, other: Owner) -> bool {
         match (self, other) {
             (Owner::Row(a), Owner::Row(b)) => same_str(a, b),
-            (Owner::Nvse, Owner::Nvse) | (Owner::Jip, Owner::Jip) => true,
+            (Owner::Nvse, Owner::Nvse)
+            | (Owner::Jip, Owner::Jip)
+            | (Owner::JohnnyGuitar, Owner::JohnnyGuitar) => true,
             _ => false,
         }
     }
@@ -1071,8 +1078,9 @@ const fn check_areas(main: &[Entry], areas: &[&[Entry]]) {
         while i < area.len() {
             let row = area[i];
             assert!(
-                row.owners.len() == 1 && row.owners[0].same(Owner::Jip),
-                "an area row has one owner (JIP); a seam shared with another owner is a main row"
+                row.owners.len() == 1
+                    && (row.owners[0].same(Owner::Jip) || row.owners[0].same(Owner::JohnnyGuitar)),
+                "an area row has one owner (JIP or JohnnyGuitar); a seam shared with another owner is a main row"
             );
             let mut j = 0;
             while j < main.len() {

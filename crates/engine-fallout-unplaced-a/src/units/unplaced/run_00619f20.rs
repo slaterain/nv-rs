@@ -132,10 +132,14 @@ pub fn fn_0061a040(e: &mut Engine) {
                     let topic = e.mem.u32(entry);
                     let handler = e.mem.u32(0x011c_3f2c);
                     e.call(0x0046_1780, &args![handler, topic]);
-                    let topic = e.mem.u32(entry);
-                    let name = e.mem.u32(entry + 8);
-                    let map = e.mem.u32(0x011c_54c8);
-                    e.call(0x0047_0200, &args![map, name, topic]);
+                    // JohnnyGuitar NVSE's seam at the call `0x61A243` (its no-op there, its setter
+                    // having registered the name, while its row is on).
+                    if e.site(0x0061_a243, &[]).is_none() {
+                        let topic = e.mem.u32(entry);
+                        let name = e.mem.u32(entry + 8);
+                        let map = e.mem.u32(0x011c_54c8);
+                        e.call(0x0047_0200, &args![map, name, topic]);
+                    }
                 }
                 index += 1;
             }
@@ -374,9 +378,11 @@ mod b020_tests {
         assert_eq!(calls_to(&e, 0x0040_4ee0), vec![vec![timer[0][0]]]);
     }
 
-    /// The new topics are named through their setter and put in the game's map by hand.
+    /// JohnnyGuitar NVSE's seam at the call `0x61A243`: with its skip there, the new topics are
+    /// still named through their setter but not put in the game's map by hand.
     #[test]
-    fn b020_0061a040_names_the_topics_and_puts_them_in_the_map() {
+    fn b020_0061a040_leaves_the_map_to_the_jg_seam() {
+        use engine_core::extend::{Owner, SiteSlot};
         let mut e = Engine::new();
         let (_, kind3) = tables(&mut e);
         e.mem.set_u32(kind3 + 8, 0x0000_7100);
@@ -397,16 +403,16 @@ mod b020_tests {
             0x0046_4f30,
             0x0048_9100,
             0x0046_1780,
-            0x0047_0200,
         ] {
             e.register(a, |_, _| Ret::default());
         }
+        e.register(0x0047_0200, |_, _| panic!("JG's seam skips the insertion"));
+        e.on_site(SiteSlot::new(Owner::JohnnyGuitar, 0x0061_a243), |_, a| {
+            a.is_empty().then_some(0)
+        });
         e.call_log = Some(vec![]);
         e.call(0x0061_a040, &[]);
         assert!(calls_to(&e, 0x0000_1134).iter().any(|c| c[1] == 0x7100));
-        assert!(calls_to(&e, 0x0047_0200)
-            .iter()
-            .any(|c| c[0] == 0x54c8 && c[1] == 0x7100));
     }
 }
 

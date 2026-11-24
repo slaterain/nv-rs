@@ -909,6 +909,8 @@ pub fn fn_00484150(e: &mut Engine, this: Ptr<TESForm>, group: Ptr) -> bool {
 /// and the save/load change tables, then sets the temporary flag (0x4000).
 pub fn tes_form_set_temporary(e: &mut Engine, this: Ptr<TESForm>) {
     tes_form_remove_from_data_structures(e, this);
+    // JohnnyGuitar NVSE's seam after the call `0x48449A`: its names of the form leave the map.
+    e.site(0x0048_449a, &[this.addr()]);
     let save_load = e.global::<u32>(SAVE_LOAD_GAME);
     if save_load != 0 {
         e.call(SAVE_LOAD_REMOVE_CHANGES, &args![save_load, this, 0u32]);
@@ -2279,7 +2281,11 @@ pub fn tes_form_get_form_type_from_form_string(e: &mut Engine, packed: u32) -> u
 /// table's string and the name what `00401280` returns.
 pub fn tes_form_get_form_detailed_string(e: &mut Engine, this: Ptr<TESForm>, buffer: Ptr) {
     let id = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, this));
-    let name = e.call(FORM_NAME_GETTER, &args![this]).u32();
+    // JohnnyGuitar NVSE's getter seam at the call `0x486903`.
+    let name = match e.site(0x0048_6903, &[this.addr()]) {
+        Some(name) => name,
+        None => e.call(FORM_NAME_GETTER, &args![this]).u32(),
+    };
     let type_name = e.call(FORM_TYPE_NAME, &args![this]).u32();
     e.call(
         FORMAT_STRING,

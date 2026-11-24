@@ -455,6 +455,11 @@ fn cell_refs_loaded(e: &mut Engine, a: &[u32]) -> Option<u32> {
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), FormExtraData.cpp:
 // RemoveFromAllFormsMapHook (kFormDeletion, kTrashedReference).
 fn form_gone(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    // JohnnyGuitar's editor ids (`JohnnyExtraData::OnRemoval`, on xNVSE's removal): the form's
+    // names leave the map and the store.
+    if engine_core::editor_ids::on(e) {
+        engine_core::editor_ids::form_gone(e, a[0]);
+    }
     // Only cells are kept here: any other form goes by without the set's lock.
     if e.mem.u8(a[0] + 4) == FORM_TYPE_CELL {
         e.ext_free::<CellLoads>().forget(a[0]);
