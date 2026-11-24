@@ -47,8 +47,8 @@ Its repository grants no licence.
 
   - a name, type or layout taken from it gets `(fnv_decomp)` where it first appears in a file;
     `(Xbox PDB)` instead when the name is the Xbox prototype's.
-- Scope: only the fnvdecomp contributors' own work is used. Not `third_party/` (zlib,
-  under its own licence), and nothing from it gives rights in the game or in the
+- Scope: only the fnvdecomp contributors' own work is used, not `third_party/` (zlib,
+  under its own licence). Nothing from it gives rights in the game or in the
   libraries linked into it (Gamebryo, Havok, SpeedTree, FaceGen, the C runtime). Material from
   it is treated like ADR-0003 material: nv-rs's GPL covers only original work, as
   [LEGAL.md](../../LEGAL.md) says.

@@ -53,7 +53,8 @@ Since 2026-11-02 the project may also use
 community's C++ reconstruction of the same program
 ([ADR-0009](docs/adr/0009-fnv-decomp.md)). Its repository grants no licence.
 Only its contributors' own work is used, not its `third_party/` folder (zlib,
-under its own licence) and not the game or the libraries linked into it. Rust
+under its own licence), and nothing from it gives rights in the game or in the
+libraries linked into it. Rust
 translated from it, and names, types and layouts taken from it, are marked
 where they are used (`fnv_decomp`), like the sources above; no C++ from it is
 committed. Material from it is not covered by the project's licence, like
