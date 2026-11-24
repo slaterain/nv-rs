@@ -10070,6 +10070,8 @@ mod tests {
         assert_eq!(calls_to(&log, CELL_DETACH), vec![vec![0x6200, 1]]);
         let handler: u32 = e.global(DATA_HANDLER);
         assert_eq!(calls_to(&log, 0x0046_2290), vec![vec![handler, 0x6200]]);
+        // The interior cell is cleared (`008d7dc0(this, 0)` at `0x454576`).
+        assert_eq!(calls_to(&log, 0x008d_7dc0), vec![vec![tes.addr(), 0]]);
         assert_eq!(e.get(tes, TES::iSaveGridX), 0x7fff_ffff);
         assert_eq!(e.get(tes, TES::iSaveGridY), 0x7fff_ffff);
         // Culling ran with the restored grid position.

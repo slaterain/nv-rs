@@ -2039,6 +2039,13 @@ mod tests {
         e.register(FILE_EXISTS, |_, _| ret(1));
         construct(&mut e, 1, 0, 0);
         assert!(calls(&e, PRINT_FORMATTED).is_empty());
+        // A high-priority block with the flag: the high-priority name, no PA name.
+        construct(&mut e, 1, 1, 0);
+        assert!(calls(&e, BUILD_BLOCK_FILE_NAME_PA).is_empty());
+        assert_eq!(
+            calls(&e, PRINT_FORMATTED)[0][2],
+            BLOCK_FILE_HIGH_PRIORITY_FORMAT
+        );
         // The stinger version.
         construct(&mut e, 0, 1, 2);
         assert_eq!(e.mem.u8(task + TASK_STINGER_VERSION), 2);

@@ -127,12 +127,15 @@ mod tests {
         let clone = e.mem.alloc(0xb0);
         e.mem.set_u32(this + 0xa4, 7);
         e.mem.set_u32(this + 0xa8, 8);
-        e.mem.set_u8(this + 0x9c, 9);
+        e.mem.set_u32(this + 0x9c, 0x8102_0209);
+        // The clone's +0x9D..+0x9F (its type byte, set by its constructor, and the two after it).
+        e.mem.set_u32(clone + 0x9c, 0x5555_0200);
         e.call_log = Some(vec![]);
         e.call(0x00a6_8d40, &args![this, clone, 0x33u32]);
         assert_eq!(e.mem.u32(clone + 0xa4), 7);
         assert_eq!(e.mem.u32(clone + 0xa8), 8);
-        assert_eq!(e.mem.u8(clone + 0x9c), 9);
+        // Only the byte +0x9C is copied; +0x9D..+0x9F stay as they were.
+        assert_eq!(e.mem.u32(clone + 0x9c), 0x5555_0209);
         let log = e.call_log.take().unwrap();
         assert!(log.contains(&(GEOMETRY_COPY_MEMBERS, vec![this, clone, 0x33])));
     }
