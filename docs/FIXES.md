@@ -911,7 +911,7 @@ With the switch on:
   (`NV_JIP_VANILLA_CMDS`).
 - 174 of JIP's 183 game patches (below; three more are folded into others and six do nothing on this port): JIP's own always-on ones go in, its fixes follow the row
   `NV_JIP_GAME_PATCHES`. JIP's co-save section is read and applied (its script variables, linked
-  references and the rest), as JIP does.
+  references and the rest), as JIP does. Saves made by nv-rs before JohnnyGuitar NVSE was taken out (its co-save correction was on in the fixes preset) hold JIP's section in the newer form: it is carried to the next save unchanged while the same files are loaded, but not read back, so JIP's data in those saves (script variables, linked references and the rest) starts empty.
 - JIP MiniMap's start (`InitMiniMap`, from that mod's script only) and the seven code patches JIP writes
   for it then: the small cell extent for `uGridsToLoad` up to 5, JIP's own update of the cells' seen
   bits (the fog of war) in place of the game's, the found location's name with the minimap's markers of
