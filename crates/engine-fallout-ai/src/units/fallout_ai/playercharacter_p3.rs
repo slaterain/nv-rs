@@ -956,7 +956,7 @@ pub fn fn_0095de30(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32) {
             .into_ret()
             .i32()
                 == 4;
-        if (!(state_is_9 || state_is_x11) || camera_state_4) {
+        if !(state_is_9 || state_is_x11) || camera_state_4 {
             world_target = zoom;
             first_person_target =
                 ((zoom as f64 / default_world as f64) * default_first_person as f64) as f32;
