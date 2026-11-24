@@ -62,13 +62,9 @@ pub static FIXES: &[Fix] = &[
     DEAD_LIGHTS,
     THREAD_HEAP,
     crate::half_loaded_move::FIX,
-    crate::thread_races::FIX,
     TEXTURE_READ_FIRST,
     crate::cell_entry_wait::FIX,
     crate::cell_offsets::FIX,
-    VATS_LAG,
-    ACTOR_CAUSE_WITNESSES,
-    RADIO_LENGTHS,
     FACIAL_HAIR_BY_RACE_FOLDER,
     crate::patch_data::STRIP_LOD_WATER,
     crate::direct_files::FIX,
@@ -210,84 +206,6 @@ fn install_texture_read_first(e: &mut Engine) {
     let (at, f) = engine::entry!(0x00e6_dc40, fn_00e6dc40_reading_first(Ptr, Ptr) -> bool);
     e.register(at, f);
     let (at, f) = engine::entry!(0x00a5_fe30, fn_00a5fe30_reading_first(u32, Ptr, Ptr, u8) -> Ptr);
-    e.register(at, f);
-}
-
-/// V.A.T.S. shows a target's chances once the camera has turned to it: the menu's scan
-/// (`007f3e00`) gave the parts it has not measured the average of the measured ones only after a
-/// fixed 2000 ms (`007f4058`); with the row also once the camera's heading is reached
-/// (`bHeadingReached`), as lStewieAl's VATS Lag Fix does, and a part has been measured (the
-/// plugin's average would be 0/0 before). Vanilla keeps the wait.
-pub const VATS_LAG: Fix = Fix {
-    name: "V.A.T.S. waits only for the camera",
-    env: "NV_VATS_LAG",
-    addresses: &[0x007f_3e00],
-    summary: "V.A.T.S. shows a target's chances as soon as the camera reaches it, not after a fixed 2 seconds",
-    install: install_vats_lag,
-};
-
-fn install_vats_lag(e: &mut Engine) {
-    use engine::units::fallout_interface::vatsmenu::{fn_007f3e00_heading_ends_wait, VatsMenu};
-    let (at, f) = engine::entry!(
-        0x007f_3e00,
-        fn_007f3e00_heading_ends_wait(Ptr<VatsMenu>) -> bool
-    );
-    e.register(at, f);
-}
-
-/// An `ActorCause` (made for each projectile and explosion an actor causes) copied the actor's
-/// whole detection list, and every saved cause wrote it, one record per actor detected: with the
-/// row the constructor (`0066e010`) copies nothing and the load (`0066e440`) reads the records
-/// and keeps none, as lStewieAl's ActorCause Save Bloat Fix does. Nothing reads the list but the
-/// cause's own functions. Vanilla copies, saves and loads it.
-pub const ACTOR_CAUSE_WITNESSES: Fix = Fix {
-    name: "causes keep no witness lists",
-    env: "NV_ACTOR_CAUSE",
-    addresses: &[0x0066_e010, 0x0066_e440],
-    summary: "projectiles and explosions no longer copy their actor's detection list, which every save wrote out (save bloat)",
-    install: install_actor_cause_witnesses,
-};
-
-fn install_actor_cause_witnesses(e: &mut Engine) {
-    use engine::units::fallout_shared::actorcause::{
-        actor_cause_load_game_without_witnesses, ActorCause,
-    };
-    use engine::units::fallout_shared::run_0066e010::fn_0066e010_without_witnesses;
-    let (at, f) = engine::entry!(0x0066_e010, fn_0066e010_without_witnesses(Ptr, u32) -> Ptr);
-    e.register(at, f);
-    let (at, f) = engine::entry!(
-        0x0066_e440,
-        actor_cause_load_game_without_witnesses(Ptr<ActorCause>, u32)
-    );
-    e.register(at, f);
-}
-
-/// The radio's two music bugs, from Psycho: a channel's duration cleared when a file opens on it
-/// (`008300c0`) and written by the music thread (`00830b30`) only while the channel is still its
-/// file's, so a station never takes the length of the song that channel played before (its
-/// thread, still fading out, wrote it back once more); and the music thread's sync (the loop at
-/// `00831790`) bounded, so a length of 0 no longer spins the thread for good. Vanilla keeps both.
-pub const RADIO_LENGTHS: Fix = Fix {
-    name: "radio song lengths",
-    env: "NV_RADIO_LENGTHS",
-    addresses: &[0x0083_00c0, 0x0083_0b30],
-    summary: "a radio song never takes the length of the song before last, and a song with no length no longer hangs the music thread",
-    install: install_radio_lengths,
-};
-
-fn install_radio_lengths(e: &mut Engine) {
-    use engine::units::fallout_audio::falloutaudiomedia::{
-        fallout_audio_media_thread_proc_radio_row, fn_008300c0_clearing_duration,
-    };
-    let (at, f) = engine::entry!(
-        0x0083_00c0,
-        fn_008300c0_clearing_duration(i32, Ptr, u32, u8, u8, f32, u32)
-    );
-    e.register(at, f);
-    let (at, f) = engine::entry!(
-        0x0083_0b30,
-        fallout_audio_media_thread_proc_radio_row(Ptr) -> u32
-    );
     e.register(at, f);
 }
 
