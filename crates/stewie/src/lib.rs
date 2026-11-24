@@ -207,6 +207,12 @@ pub fn install(e: &mut Engine) {
     e.set_stewie_run_and_gun_combat_only(
         settings.long("Tweaks", "bRunAndGunAPInCombatOnly", 0) != 0,
     );
+    // Only the fade-quad portion of 10.05's 10086fa2 installer is built here.
+    // The original nonzero gate has no resolution/aspect condition.
+    e.set_stewie(
+        engine_core::extend::stewie::ULTRAWIDE_FADERS,
+        settings.long("Tweaks", "bUltrawideSupport", 0) != 0,
+    );
     rows::world::install(e);
     run_and_gun::install(e);
     rows::forms::write_data(e);

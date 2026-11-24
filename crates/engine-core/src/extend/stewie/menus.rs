@@ -14,6 +14,11 @@ pub const MENUS_TWEAKS_END: u16 = super::OTHER_TWEAKS;
 
 use super::Row;
 
+/// Fade-quad portion of Tweaks 10.05 `bUltrawideSupport`: installer 10086fa2
+/// removes the half-size multiplications at game 00700ab2 and 00700acc.
+/// Separate menu/scope FOV patches belonging to that setting are not implied.
+pub const ULTRAWIDE_FADERS: Row = Row::share(MENUS_TWEAKS, MENUS_TWEAKS_END, 1);
+
 /// S0022.09 `MenuFixes` (`MapMenu::UpdateQuests` `0079b8e0` at `0x79BBD0`): selecting a quest
 /// keeps the list's scroll position while the mouse moved.
 pub const MAP_QUEST_KEEPS_SCROLL: Row = Row::share(MENUS_FIXES, MENUS_FIXES_END, 0);

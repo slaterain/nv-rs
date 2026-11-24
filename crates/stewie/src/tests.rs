@@ -535,6 +535,38 @@ fn the_install_reads_the_players_ini() {
 /// Row S0023's line obeys `[Tweaks] bInvalidBSFadeNodePrints` (on in Tweaks' code; VNV's INI does
 /// not list it): on without a file, off when the player's file sets it to 0.
 #[test]
+fn ultrawide_faders_obey_original_setting_and_parent_switch() {
+    for (on, ini, expected) in [
+        (true, None, false),
+        (
+            true,
+            Some(b"[Tweaks]\nbUltrawideSupport=0\n".as_slice()),
+            false,
+        ),
+        (
+            true,
+            Some(b"[Tweaks]\nbUltrawideSupport=1\n".as_slice()),
+            true,
+        ),
+        (
+            true,
+            Some(b"[Tweaks]\nbUltrawideSupport=-1\n".as_slice()),
+            true,
+        ),
+        (
+            false,
+            Some(b"[Tweaks]\nbUltrawideSupport=1\n".as_slice()),
+            false,
+        ),
+    ] {
+        let mut e = engine(ini);
+        set_on(&mut e, on);
+        install(&mut e);
+        assert_eq!(e.stewie(bits::ULTRAWIDE_FADERS), expected);
+    }
+}
+
+#[test]
 fn the_fade_node_line_obeys_its_tweaks_key() {
     let mut e = engine(None);
     set_on(&mut e, true);

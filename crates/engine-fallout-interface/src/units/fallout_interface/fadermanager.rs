@@ -373,9 +373,21 @@ pub fn fader_manager_create_fader(
         let vertices = new_element_array(e, 0xc);
         let texture_coordinates = new_element_array(e, 8);
         let triangles = e.call(BYTES_ALLOC, &args![0xcu32]).u32();
-        let half: f64 = e.global(HALF);
-        let half_width = (e.call(SCREEN_WIDTH, &args![]).i32() as f64 * half) as f32;
-        let half_height = (e.call(SCREEN_HEIGHT, &args![]).i32() as f64 * half) as f32;
+        // Tweaks 10.05 installer 10086fa2 removes the FMUL(0.5) at both
+        // 00700ab2 and 00700acc when bUltrawideSupport is nonzero. This is
+        // its fade-quad portion only; root scale, UVs and timing are unchanged.
+        let (half_width, half_height) = if e.stewie(engine_core::extend::stewie::ULTRAWIDE_FADERS) {
+            (
+                e.call(SCREEN_WIDTH, &args![]).i32() as f32,
+                e.call(SCREEN_HEIGHT, &args![]).i32() as f32,
+            )
+        } else {
+            let half: f64 = e.global(HALF);
+            (
+                (e.call(SCREEN_WIDTH, &args![]).i32() as f64 * half) as f32,
+                (e.call(SCREEN_HEIGHT, &args![]).i32() as f64 * half) as f32,
+            )
+        };
         store_point3(e, local(0xb0), vertices, -half_width, 0.0, half_height);
         store_point3(
             e,
@@ -1314,6 +1326,38 @@ mod tests {
         w.e.set(w.manager, FaderManager::pRootBelowMenus, Ptr::new(below));
         w.e.set(w.manager, FaderManager::pRootAboveMenus, Ptr::new(above));
         (below, above)
+    }
+
+    /// The owned DLL removes the two FMUL(0.5) instructions for every fader,
+    /// with no aspect-ratio gate. Off, all original vertex/UV behavior remains.
+    #[test]
+    fn ultrawide_faders_double_both_extents_only_when_enabled() {
+        for (width, height) in [(1280, 960), (1920, 1080), (5120, 1440)] {
+            for on in [false, true] {
+                for index in 0..3 {
+                    let mut w = world();
+                    roots(&mut w);
+                    named_slot(&mut w, index, false);
+                    w.e.set_stewie(engine_core::extend::stewie::ULTRAWIDE_FADERS, on);
+                    w.e.register_double(SCREEN_WIDTH, move |_, _| word(width));
+                    w.e.register_double(SCREEN_HEIGHT, move |_, _| word(height));
+                    w.e.call_log = Some(vec![]);
+                    w.e.call(0x0070_0960, &args![w.manager, index, 2.0f32, false]);
+                    let shape = &calls(&w.e, TRI_SHAPE_CONSTRUCT)[0];
+                    let vertices = shape[2];
+                    let (x, z) = if on {
+                        (width as f32, height as f32)
+                    } else {
+                        (width as f32 * 0.5, height as f32 * 0.5)
+                    };
+                    let actual: Vec<_> = (0..12).map(|i| w.e.mem.f32(vertices + i * 4)).collect();
+                    assert_eq!(actual, [-x, 0.0, z, -x, 0.0, -z, x, 0.0, z, x, 0.0, -z]);
+                    let uv: Vec<_> = (0..8).map(|i| w.e.mem.f32(shape[5] + i * 4)).collect();
+                    assert_eq!(uv, [0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0]);
+                    assert_eq!(w.e.get(slot_of(index), FaderData::fDuration), 2.0);
+                }
+            }
+        }
     }
 
     #[test]
