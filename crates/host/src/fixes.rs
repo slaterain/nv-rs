@@ -40,8 +40,11 @@ pub static FIXES: &[Fix] = &[
     crate::topic_index::FIX,
     KEEP_COSAVE_PLUGINS,
     JIP_INSTALLED,
+    JIP_COSAVE_FIXES,
     JIP_VANILLA_COMMANDS,
     JIP_GAME_PATCHES,
+    JG_EDITOR_IDS,
+    UIO,
     SCRIPT_ERROR_GUARD,
     IMOD_EVENT_FORM_CHECK,
     INVENTORY_REFERENCE_CHECKS,
@@ -260,10 +263,10 @@ fn install_keep_cosave_plugins(e: &mut Engine) {
     nvse::saveload::set_keep_other_plugins(e, true);
 }
 
-/// JIP LN NVSE answers "installed" (step 3.10's switch; on in the fixes preset with
+/// JIP LN NVSE answers "installed" (step 3.10's switch; on in the fixes preset with [`UIO`] and
 /// [`KEEP_COSAVE_PLUGINS`], off in vanilla): its identity, its place in xNVSE's list of
 /// plugins, its built commands' names and handlers, its hooks and its own always-on patches;
-/// the JIP rows ([`JIP_VANILLA_COMMANDS`], [`JIP_GAME_PATCHES`]) then follow
+/// the JIP rows ([`JIP_VANILLA_COMMANDS`], [`JIP_GAME_PATCHES`], [`JIP_COSAVE_FIXES`]) then follow
 /// their own switches. The row sets a flag; `jip::install` (after xNVSE, in
 /// [`crate::install_rows_and_extenders`]) reads it. Off, JIP answers "not installed", as on main before the
 /// row: the same records, the same registrations.
@@ -277,6 +280,22 @@ pub const JIP_INSTALLED: Fix = Fix {
 
 fn install_jip_installed(e: &mut Engine) {
     jip::set_answers_installed(e, true);
+}
+
+/// JohnnyGuitar NVSE's corrections of JIP LN NVSE's co-save (`SerializationFixes`), a flag
+/// `crates/jip` reads: JIP's extra data written with the right sizes as version 2, JIP's own
+/// version 1 not read, an unloaded owner's script variables skipped whole.
+pub const JIP_COSAVE_FIXES: Fix = Fix {
+    name: "JIP co-save fixes",
+    env: "NV_JIP_COSAVE_FIX",
+    addresses: &[],
+    summary:
+        "JIP LN NVSE's co-save as JohnnyGuitar NVSE corrects it: extra data with the right sizes (version 2), the damaged version 1 not read",
+    install: install_jip_cosave_fixes,
+};
+
+fn install_jip_cosave_fixes(e: &mut Engine) {
+    jip::cosave::set_johnny_guitar_fixes(e, true);
 }
 
 /// JIP LN NVSE's versions of seven of the game's own commands (`InitCmdPatches`: `MenuMode`,
@@ -491,6 +510,40 @@ fn install_havok_ref_counts(e: &mut Engine) {
     engine::units::havok_sdk::hkreferencedobject::lock_free_turn_on(e);
 }
 
+/// UI Organizer built in (`crates/uio`, parts 1 and 2): its lists (`Data\uio\supported.txt` and
+/// `Data\uio\public\*.txt`) put UI mods' additions into the menus, in memory, and every menu file
+/// is read through UIO's reader and parsed by its own XML parser. It changes how every menu file
+/// is read, so it is a row; on in `fixes` (with JIP, which UI mods need), off in vanilla. The row
+/// sets a flag; `uio::install` (after JIP, in [`crate::Host::start_with`]) puts its seams in.
+pub const UIO: Fix = Fix {
+    name: "UI Organizer built in",
+    env: "NV_UIO",
+    addresses: &[],
+    summary: "UI Organizer built in: UI mods' HUD and menu additions (their Data\\uio lists) are put into the menus, as with the UIO plugin",
+    install: install_uio,
+};
+
+fn install_uio(e: &mut Engine) {
+    uio::set_on(e, true);
+}
+
+/// JohnnyGuitar NVSE's editor-id restoration built in (`crates/johnnyguitar`), a flag the crate
+/// reads at its install: every loaded form keeps the editor id its record gives it, so text
+/// compiled while the game runs (the console, script runner files, `CompileScript`, lambdas from
+/// text) finds `PlayerRef` or `Caps001` by name, as with JohnnyGuitar installed (VNV installs it).
+/// Off (vanilla): the game's own few names, as without JohnnyGuitar.
+pub const JG_EDITOR_IDS: Fix = Fix {
+    name: "JohnnyGuitar's editor ids",
+    env: "NV_JG_EDITOR_IDS",
+    addresses: &[],
+    summary: "JohnnyGuitar NVSE's editor ids built in: every form keeps its editor id, so the console, script runner files and scripts compiled from text find forms such as PlayerRef by name, as on a VNV setup",
+    install: install_jg_editor_ids,
+};
+
+fn install_jg_editor_ids(e: &mut Engine) {
+    johnnyguitar::set_on(e, true);
+}
+
 /// A row whose binding [`install`] makes itself, with the choice.
 fn install_nothing(_: &mut Engine) {}
 
@@ -505,8 +558,11 @@ const NO_ADDRESS: &[&str] = &[
     crate::uncap::MENU_FIX.name,
     KEEP_COSAVE_PLUGINS.name,
     JIP_INSTALLED.name,
+    JIP_COSAVE_FIXES.name,
     JIP_VANILLA_COMMANDS.name,
     JIP_GAME_PATCHES.name,
+    JG_EDITOR_IDS.name,
+    UIO.name,
     SCRIPT_ERROR_GUARD.name,
     IMOD_EVENT_FORM_CHECK.name,
     INVENTORY_REFERENCE_CHECKS.name,
@@ -1187,7 +1243,7 @@ pub fn is_play_run(env: impl Fn(&str) -> Option<String>) -> bool {
 /// (`crate::full_screen`). A fix's variable is set for play by its `[nv-rs Fixes]` line instead; a
 /// test's variable has no line and is unset for play. `None` for any other run, and for a run only
 /// its command line marks as a test (the viewer's `--movement-missing` and `--movement-probe`),
-/// which is no play. (2026-11-16: a fix's variable handed over from the play folder's settings.ini did
+/// which is no play. (2026-11-16: `NV_UIO=1` handed over from the play folder's settings.ini did
 /// this, and the framed window, sized in scaled pixels, spilled onto the next monitor.)
 pub fn play_run_taken_as_test(
     choice: &Choice,
@@ -1983,7 +2039,7 @@ mod tests {
     }
 
     /// A launcher's play run that a test's or a fix's variable makes a test says so at start-up
-    /// (2026-11-16: a fix's variable from the play folder took play's preset, threads and borderless
+    /// (2026-11-16: `NV_UIO=1` from the play folder took play's preset, threads and borderless
     /// window away, and that line would have named it), saying what this run got, from its own
     /// choice: Play.exe passes the file's choices on as variables for a test, and those still
     /// decide. A fix's variable is pointed at its `[nv-rs Fixes]` line, a test's at being unset.
@@ -1997,19 +2053,19 @@ mod tests {
             (play_run_taken_as_test(&choice, env_of(pairs)), choice)
         };
         let note = |pairs: &'static [(&'static str, &'static str)]| run(pairs).0;
-        // The play folder's script with one fix's variable and nothing else.
-        let one = note(&[("NV_SETTINGS", "x"), ("NV_LOAD_STEPS", "1")]).unwrap();
+        // Tonight's run: the play folder's script, NV_UIO=1 and nothing else.
+        let uio = note(&[("NV_SETTINGS", "x"), ("NV_UIO", "1")]).unwrap();
         assert_eq!(
-            one,
-            "A launcher's play run that runs as a test because of NV_LOAD_STEPS: Fallout.ini's [nv-rs ...] keys are not read. \
+            uio,
+            "A launcher's play run that runs as a test because of NV_UIO: Fallout.ini's [nv-rs ...] keys are not read. \
              This run: preset vanilla, threads stepped, render thread off, the window as the game makes it \
-             (borderless only if the game asks for full screen). For play, set bLoadSteps=1 in Fallout.ini's \
+             (borderless only if the game asks for full screen). For play, set bUIO=1 in Fallout.ini's \
              [nv-rs Fixes] instead of the variable."
         );
         // Play.exe's test run: the file's choices passed on as variables decide, and the line says so.
         let passed = note(&[
             ("NV_SETTINGS", "x"),
-            ("NV_LOAD_STEPS", "1"),
+            ("NV_UIO", "1"),
             ("NV_BORDERLESS", "1"),
             ("NV_THREADS", "real"),
             ("NV_RENDER_THREAD", "1"),
@@ -2025,7 +2081,7 @@ mod tests {
         assert!(!passed.contains("stepped") && !passed.contains("as the game makes it"));
         let off = note(&[
             ("NV_SETTINGS", "x"),
-            ("NV_LOAD_STEPS", "1"),
+            ("NV_UIO", "1"),
             ("NV_BORDERLESS", "0"),
         ])
         .unwrap();
@@ -2082,7 +2138,7 @@ mod tests {
             ]),
             None
         );
-        assert_eq!(note(&[("NV_LOAD_STEPS", "1")]), None);
+        assert_eq!(note(&[("NV_UIO", "1")]), None);
         assert_eq!(note(&[]), None);
     }
 
@@ -2787,13 +2843,13 @@ bSunShadowsCharacters=0
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// Step 3.10's switch (JIP LN NVSE answering "installed") follows the preset with the co-save
-    /// keep row: on in `fixes`, off in vanilla, however the preset is
+    /// Step 3.10's switch (JIP LN NVSE answering "installed") follows the preset with UI Organizer
+    /// and the co-save keep row: on in `fixes`, off in vanilla, however the preset is
     /// chosen: the default, the settings file, `NV_PRESET`, Fallout.ini's `sPreset`.
     #[test]
-    fn jip_and_the_cosave_keep_follow_the_preset() {
+    fn jip_and_uio_follow_the_preset() {
         assert_eq!(JIP_INSTALLED.env, "NV_JIP_INSTALLED");
-        for row in [&JIP_INSTALLED, &KEEP_COSAVE_PLUGINS] {
+        for row in [&JIP_INSTALLED, &UIO, &KEEP_COSAVE_PLUGINS] {
             assert!(!OFF_IN_EVERY_PRESET.contains(&row.env), "{}", row.name);
         }
         let choices = [
@@ -2808,7 +2864,7 @@ bSunShadowsCharacters=0
         ];
         for choice in &choices {
             let fixes = choice.preset == Preset::Fixes;
-            for row in [&JIP_INSTALLED, &KEEP_COSAVE_PLUGINS] {
+            for row in [&JIP_INSTALLED, &UIO, &KEEP_COSAVE_PLUGINS] {
                 assert_eq!(choice.is_on(row), fixes, "{} {choice:?}", row.name);
             }
         }
@@ -2854,6 +2910,40 @@ bThreadHeap=0
         }
     }
 
+    /// JohnnyGuitar's editor ids: on in the fixes preset, off in vanilla, its own key or variable over
+    /// both; installed, the built-in is on exactly when the row is.
+    #[test]
+    fn jg_editor_ids_follow_the_preset() {
+        assert!(!Choice::vanilla().is_on(&JG_EDITOR_IDS));
+        assert!(Choice::from_parts(None, no_env)
+            .unwrap()
+            .is_on(&JG_EDITOR_IDS));
+        let off = with_ini(
+            None,
+            "[nv-rs Fixes]
+bJGEditorIDs=0
+",
+            &[],
+        );
+        assert!(!off.is_on(&JG_EDITOR_IDS));
+        let on = Choice::from_parts(
+            None,
+            env_of(&[("NV_JG_EDITOR_IDS", "1"), ("NV_PRESET", "vanilla")]),
+        )
+        .unwrap();
+        assert!(on.is_on(&JG_EDITOR_IDS));
+        for choice in [
+            Choice::from_parts(None, no_env).unwrap(),
+            off,
+            Choice::vanilla(),
+        ] {
+            let mut e = Engine::new();
+            install(&mut e, &choice);
+            johnnyguitar::install(&mut e);
+            assert_eq!(johnnyguitar::on(&e), choice.is_on(&JG_EDITOR_IDS));
+        }
+    }
+
     /// The switch from its variable: `1` on, `0` off, anything else a stop. Alone it makes the run
     /// a test (vanilla, so the other JIP rows are off); with `NV_PRESET=fixes` the fixes preset's
     /// JIP rows are on with it, and the threads stepped, as a test's are.
@@ -2871,6 +2961,8 @@ bThreadHeap=0
         assert!(fixes.is_on(&JIP_INSTALLED));
         assert!(fixes.is_on(&JIP_GAME_PATCHES));
         assert!(fixes.is_on(&JIP_VANILLA_COMMANDS));
+        assert!(fixes.is_on(&JIP_COSAVE_FIXES));
+        assert!(fixes.is_on(&UIO), "UIO with the fixes preset");
         assert_eq!(fixes.threads, "stepped");
         assert!(fixes.describe().contains(JIP_INSTALLED.name));
         let off = Choice::from_parts(
@@ -2895,6 +2987,12 @@ bThreadHeap=0
         let off = with_ini(None, "[nv-rs Fixes]\nbJIPInstalled=0\n", &[]);
         assert!(!off.is_on(&JIP_INSTALLED));
         assert_eq!(off.preset, Preset::Fixes);
+        assert!(off.is_on(&UIO), "its own switch");
+        // UI Organizer turns off by its own key; JIP and the preset stay.
+        let c = with_ini(None, "[nv-rs Fixes]\nbUIO=0\n", &[]);
+        assert!(!c.is_on(&UIO));
+        assert!(c.is_on(&JIP_INSTALLED));
+        assert_eq!(c.preset, Preset::Fixes);
         for text in [
             "[nv-rs Fixes]\n;bJIPInstalled=0\n",
             "[nv-rs Fixes]\nbJIPInstall=1\n",

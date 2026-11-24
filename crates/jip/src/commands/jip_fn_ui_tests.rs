@@ -1429,8 +1429,13 @@ const XML_HASH: u32 = 0x011f_34e0;
 const XML_SET_AT_FN: u32 = 0x00a0_c900;
 const XML_REMOVE_AT_FN: u32 = 0x00a1_e240;
 
+thread_local! {
+    /// The text the built-in UIO handed to each `Tile::ReadFile` of `jip_temp.xml`.
+    static INJECTED: std::cell::RefCell<Vec<Vec<u8>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 #[test]
-fn inject_component_reads_the_text_without_a_file() {
+fn inject_component_with_the_uio_row_on_or_off() {
     let mut e = setup();
     tree(&mut e);
     let inject = |e: &mut Engine, path: &[u8], xml: &[u8]| call(e, 0x260a, &[s(path), s(xml)]).1;
@@ -1451,9 +1456,11 @@ fn inject_component_reads_the_text_without_a_file() {
         if path != b"jip_temp.xml" {
             return eax(0);
         }
+        let text = e.ext::<uio::Uio>().extern_text.clone().unwrap_or_default();
+        INJECTED.with(|i| i.borrow_mut().push(text));
         eax(t(62))
     });
-    // JIP writes `jip_temp.xml` and reads it with `Tile::ReadFile`; here the text is
+    // UIO off: JIP writes `jip_temp.xml` and reads it with `Tile::ReadFile`; here the text is
     // cleaned by the game's `CompressAndStoreXML`, entered in `Menu::XMLHash` under that name for
     // the one `ReadFile` (whose `GetXML` finds it there), then taken out; no file.
     e.register(XML_SET_AT_FN, |_, w| {
@@ -1481,10 +1488,26 @@ fn inject_component_reads_the_text_without_a_file() {
     assert_eq!(order[2], (READ_FILE_FN, vec![t(2), name]));
     assert_eq!(order[3], (XML_REMOVE_AT_FN, vec![XML_HASH, name]));
     assert!(freed().contains(&text), "the text's block given back");
-    // A path ending at a trait or an unknown tile: nothing read.
+    INJECTED.with(|i| i.borrow_mut().clear());
+    CALLS.with(|c| c.borrow_mut().clear());
+    // On: the text read into the tile through UIO, under `jip_temp.xml`.
+    uio::set_on(&mut e, true);
+    uio::install(&mut e);
+    assert_eq!(
+        inject(&mut e, b"InventoryMenu/Box", br#"<rect name="x"/>"#),
+        1.0
+    );
+    assert_eq!(calls_to(READ_FILE_FN)[0][0], t(2));
+    assert_eq!(
+        INJECTED.with(|i| i.borrow().clone()),
+        vec![br#"<rect name="x"/>"#.to_vec()]
+    );
+    assert!(e.ext::<uio::Uio>().extern_text.is_none());
+    // A path ending at a trait, an unknown tile, an empty text: nothing read.
     CALLS.with(|c| c.borrow_mut().clear());
     assert_eq!(inject(&mut e, b"InventoryMenu/Box/id", b"<rect/>"), 0.0);
     assert_eq!(inject(&mut e, b"InventoryMenu/No", b"<rect/>"), 0.0);
+    assert_eq!(inject(&mut e, b"InventoryMenu/Box", b""), 0.0);
     assert!(calls_to(READ_FILE_FN).is_empty());
 }
 
@@ -1921,15 +1944,15 @@ fn message_ex_alt_queues() {
         vec![vec![b'm'; 0x103], vec![b'i'; 0x103], vec![b's'; 0x103]]
     );
 
-    // JIP's fixes in and G10's seam answering 0x204: the queue no longer asks it, so its
-    // buffer stays the game's 0x104 and the message is still cut to 0x103, as are the icon
-    // path and the sound.
+    // JIP's G10 on (its fixes in, the queue's seam answering 0x204): a message of 0x203 bytes
+    // reaches the queue whole, one of 0x204 is cut to 0x203; the icon path and the sound stay
+    // at 0x103.
     fn g10_on(_: &mut Engine, _: &[u32]) -> Option<u32> {
         Some(0x204)
     }
     e.on_site(crate::game_patches::ga::CORNER_MESSAGE[1], g10_on);
     e.set_jip_patches(e.jip_patches() | engine_core::extend::jip_patches::FIXES);
-    for (n, fit) in [(0x203usize, 0x103usize), (0x204, 0x103)] {
+    for (n, fit) in [(0x203usize, 0x203usize), (0x204, 0x203)] {
         let mut text = vec![b'i'; 0x104];
         text.extend(b"|$");
         text.extend(vec![b's'; 0x104]);

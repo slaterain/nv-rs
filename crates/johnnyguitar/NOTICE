@@ -1,0 +1,12 @@
+This crate builds JohnnyGuitar NVSE (JohnnyGuitarNVSE.dll), the NVSE plugin, into nv-rs. Source: JohnnyGuitar
+NVSE, https://github.com/carxt/JohnnyGuitarNVSE, commit c87905e (VNV pins its release 5.28);
+read: internal/JG/EditorIDRestoration.cpp, JohnnyExtraData and internal/JIP/JIPFixes.cpp's
+InitLights. Its changes are rebuilt here from that source and the game's own code; no C++ is
+included.
+
+Credits: JohnnyGuitar NVSE is written by carxt and its contributors.
+
+JohnnyGuitar NVSE is licensed under the GNU Lesser General Public License, version 2.1. nv-rs uses
+it under section 3 of that licence, which lets a work be distributed under the GNU General Public
+License instead; nv-rs is licensed under the GNU General Public License, version 3, whose text is
+this repository's LICENSE.

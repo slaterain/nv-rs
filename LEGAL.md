@@ -121,6 +121,11 @@ terms, whose notice must be kept:
   that DLL does (Microsoft Corporation, Apache-2.0 WITH LLVM-exception). The copyright line,
   licence and changes are in [crates/jip/LICENSE-msvc-stl](crates/jip/LICENSE-msvc-stl), and
   the module says so in its first lines.
+- `crates/uio` translates UI Organizer 2.30 (Copyright (c) 2020 Jef, MIT licence); the notice is
+  in [crates/uio/NOTICE](crates/uio/NOTICE).
+- `crates/johnnyguitar` builds JohnnyGuitar NVSE 5.28 (carxt and its contributors) in,
+  piece by piece; JohnnyGuitar NVSE is under the LGPL-2.1, used here
+  under the GPL-3.0 (this repository's LICENSE) as its section 3 allows; see [crates/johnnyguitar/NOTICE](crates/johnnyguitar/NOTICE).
 - These notices, and those above, are in every package's licenses folder, Windows', Linux's and
   macOS' (distribution/notices.txt lists them, every package script copies that list, and the
   package is refused when one is missing).

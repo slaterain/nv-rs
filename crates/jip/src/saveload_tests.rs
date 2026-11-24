@@ -3,7 +3,7 @@
 //! JIP's section through a whole co-save, beside xNVSE's own and another plugin's, in both
 //! presets.
 
-use crate::cosave::kind;
+use crate::cosave::{kind, set_johnny_guitar_fixes};
 use crate::test_support::{unhex, REAL_COSAVES};
 use engine_core::prelude::*;
 use nvse::cosave::{self, tag, Chunk, Plugin, Reader};
@@ -157,9 +157,9 @@ fn set_files(e: &mut Engine, names: &[&str]) {
     }
 }
 
-/// xNVSE's table and co-save passes, JIP built in (not answering "installed"), the keep row as
-/// given, the files `nvsecos4` lists loaded.
-fn engine(keep_row: bool) -> Engine {
+/// xNVSE's table and co-save passes, JIP built in (not answering "installed"), the presets'
+/// two rows as given, the files `nvsecos4` lists loaded.
+fn engine(keep_row: bool, jg_row: bool) -> Engine {
     FILES.with(|f| f.borrow_mut().clear());
     HANDLES.with(|h| h.borrow_mut().clear());
     let mut e = crate::test_support::engine();
@@ -178,6 +178,7 @@ fn engine(keep_row: bool) -> Engine {
     saveload::install(&mut e);
     crate::install_as(&mut e, false);
     saveload::set_keep_other_plugins(&mut e, keep_row);
+    set_johnny_guitar_fixes(&mut e, jg_row);
     e.mem.write(NAME, b"Save 7.fos\0");
     // The player (`PlayerCharacter`, 0x011DEA3C), which JIP's pre-load and save read.
     e.mem.set_u32(0x011d_ea3c, AREA + 0x9000);
@@ -271,7 +272,7 @@ fn test_file() -> (Vec<u8>, Vec<Chunk>, Plugin) {
     (file, jip, other)
 }
 
-/// The fixes preset (keep row on) and vanilla (off): JIP's section,
+/// The fixes preset (keep row and JohnnyGuitar row on) and vanilla (both off): JIP's section,
 /// `JPNP` and the unknown record included, comes back byte for byte in both; xNVSE's own section
 /// is written; the other plugin's section comes back with the keep row and goes without it, as
 /// with xNVSE.
@@ -280,11 +281,11 @@ fn jips_section_through_a_whole_co_save_in_both_presets() {
     let (file, _, _) = test_file();
     let jip_in = section_of(&file, 0x2200).unwrap();
     let other_in = section_of(&file, 0x3100).unwrap();
-    for keep_row in [true, false] {
-        let mut e = engine(keep_row);
+    for (keep_row, jg_row) in [(true, true), (false, false), (true, false), (false, true)] {
+        let mut e = engine(keep_row, jg_row);
         load_game(&mut e, &file);
         let out = save_game(&mut e);
-        let what = format!("keep {keep_row}");
+        let what = format!("keep {keep_row} jg {jg_row}");
         assert_eq!(section_of(&out, 0x2200), Some(jip_in.clone()), "{what}");
         assert!(section_of(&out, 0x1400).is_some(), "{what}");
         assert_eq!(
@@ -300,7 +301,7 @@ fn jips_section_through_a_whole_co_save_in_both_presets() {
 #[test]
 fn carried_records_go_when_the_files_change() {
     let (file, jip, _) = test_file();
-    let mut e = engine(true);
+    let mut e = engine(true, true);
     load_game(&mut e, &file);
     let mut moved = FILES_SAVED.to_vec();
     moved.insert(1, "New.esp");
@@ -343,7 +344,7 @@ fn a_damaged_jip_section_does_not_stop_the_load() {
     cut.extend_from_slice(&2u32.to_le_bytes());
     cut.extend_from_slice(&(body.len() as u32 + 995).to_le_bytes());
     cut.extend_from_slice(&body);
-    let mut e = engine(true);
+    let mut e = engine(true, true);
     load_game(&mut e, &cut);
     let out = save_game(&mut e);
     let core_out = section_of(&out, 0x1400).unwrap();

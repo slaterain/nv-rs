@@ -68,7 +68,8 @@ shows what's left.
 | ✅ | **Windows preview** | [Released](https://github.com/slaterain/nv-rs/releases); run on one PC so far. |
 | 🔨 | **Native 64-bit code** | Started: threads on their own cores, textures and sounds kept outside the 32-bit memory, and the first hot paths as native code (the script evaluator, the world draw's device calls, the actors' per-frame loops). |
 | 🔨 | **Built-in script extender: xNVSE** | All 654 of its script commands and both its script languages, with nothing to install. |
-| 🔨 | **Built-in script extender: JIP LN:** | All its script commands (JIP LN: 1,116 and its two version commands) and its game patches, which are being taken out with it; on in the default fixes preset, off in vanilla (`bJIPInstalled=0` turns it off). |
+| 🔨 | **Built-in script extender: JIP LN:** | All its script commands (JIP LN: 1,116 and its two version commands) and all of its game patches that do something on this port (174 of 183; three more are folded into others, six do nothing here); on in the default fixes preset, off in vanilla (`bJIPInstalled=0` turns it off). |
+| 🔨 | **UI Organizer (UIO)** | UI mods' HUD and menu additions; on in the default fixes preset (`bUIO=0` turns it off). |
 | 🔨 | **lStewieAl's Tweaks** | lStewieAl's Tweaks is no longer built in; its fixes are being rebuilt as nv-rs's own. |
 | 🔨 | **Mod installers (FOMOD)** | Mods with an installer, from .zip or .7z, installed into nv-rs's own folder, never the game's. |
 | 🔨 | **One launcher** | `Play.exe` opens a window like the game's terminals to play, install mods, import saves and change settings. |
