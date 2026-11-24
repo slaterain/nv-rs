@@ -40,10 +40,8 @@ pub static FIXES: &[Fix] = &[
     crate::topic_index::FIX,
     KEEP_COSAVE_PLUGINS,
     JIP_INSTALLED,
-    JIP_COSAVE_FIXES,
     JIP_VANILLA_COMMANDS,
     JIP_GAME_PATCHES,
-    JG_EDITOR_IDS,
     SCRIPT_ERROR_GUARD,
     IMOD_EVENT_FORM_CHECK,
     INVENTORY_REFERENCE_CHECKS,
@@ -265,7 +263,7 @@ fn install_keep_cosave_plugins(e: &mut Engine) {
 /// JIP LN NVSE answers "installed" (step 3.10's switch; on in the fixes preset with
 /// [`KEEP_COSAVE_PLUGINS`], off in vanilla): its identity, its place in xNVSE's list of
 /// plugins, its built commands' names and handlers, its hooks and its own always-on patches;
-/// the JIP rows ([`JIP_VANILLA_COMMANDS`], [`JIP_GAME_PATCHES`], [`JIP_COSAVE_FIXES`]) then follow
+/// the JIP rows ([`JIP_VANILLA_COMMANDS`], [`JIP_GAME_PATCHES`]) then follow
 /// their own switches. The row sets a flag; `jip::install` (after xNVSE, in
 /// [`crate::install_rows_and_extenders`]) reads it. Off, JIP answers "not installed", as on main before the
 /// row: the same records, the same registrations.
@@ -279,22 +277,6 @@ pub const JIP_INSTALLED: Fix = Fix {
 
 fn install_jip_installed(e: &mut Engine) {
     jip::set_answers_installed(e, true);
-}
-
-/// JohnnyGuitar NVSE's corrections of JIP LN NVSE's co-save (`SerializationFixes`), a flag
-/// `crates/jip` reads: JIP's extra data written with the right sizes as version 2, JIP's own
-/// version 1 not read, an unloaded owner's script variables skipped whole.
-pub const JIP_COSAVE_FIXES: Fix = Fix {
-    name: "JIP co-save fixes",
-    env: "NV_JIP_COSAVE_FIX",
-    addresses: &[],
-    summary:
-        "JIP LN NVSE's co-save as JohnnyGuitar NVSE corrects it: extra data with the right sizes (version 2), the damaged version 1 not read",
-    install: install_jip_cosave_fixes,
-};
-
-fn install_jip_cosave_fixes(e: &mut Engine) {
-    jip::cosave::set_johnny_guitar_fixes(e, true);
 }
 
 /// JIP LN NVSE's versions of seven of the game's own commands (`InitCmdPatches`: `MenuMode`,
@@ -509,23 +491,6 @@ fn install_havok_ref_counts(e: &mut Engine) {
     engine::units::havok_sdk::hkreferencedobject::lock_free_turn_on(e);
 }
 
-/// JohnnyGuitar NVSE's editor-id restoration built in (`crates/johnnyguitar`), a flag the crate
-/// reads at its install: every loaded form keeps the editor id its record gives it, so text
-/// compiled while the game runs (the console, script runner files, `CompileScript`, lambdas from
-/// text) finds `PlayerRef` or `Caps001` by name, as with JohnnyGuitar installed (VNV installs it).
-/// Off (vanilla): the game's own few names, as without JohnnyGuitar.
-pub const JG_EDITOR_IDS: Fix = Fix {
-    name: "JohnnyGuitar's editor ids",
-    env: "NV_JG_EDITOR_IDS",
-    addresses: &[],
-    summary: "JohnnyGuitar NVSE's editor ids built in: every form keeps its editor id, so the console, script runner files and scripts compiled from text find forms such as PlayerRef by name, as on a VNV setup",
-    install: install_jg_editor_ids,
-};
-
-fn install_jg_editor_ids(e: &mut Engine) {
-    johnnyguitar::set_on(e, true);
-}
-
 /// A row whose binding [`install`] makes itself, with the choice.
 fn install_nothing(_: &mut Engine) {}
 
@@ -540,10 +505,8 @@ const NO_ADDRESS: &[&str] = &[
     crate::uncap::MENU_FIX.name,
     KEEP_COSAVE_PLUGINS.name,
     JIP_INSTALLED.name,
-    JIP_COSAVE_FIXES.name,
     JIP_VANILLA_COMMANDS.name,
     JIP_GAME_PATCHES.name,
-    JG_EDITOR_IDS.name,
     SCRIPT_ERROR_GUARD.name,
     IMOD_EVENT_FORM_CHECK.name,
     INVENTORY_REFERENCE_CHECKS.name,
@@ -2891,40 +2854,6 @@ bThreadHeap=0
         }
     }
 
-    /// JohnnyGuitar's editor ids: on in the fixes preset, off in vanilla, its own key or variable over
-    /// both; installed, the built-in is on exactly when the row is.
-    #[test]
-    fn jg_editor_ids_follow_the_preset() {
-        assert!(!Choice::vanilla().is_on(&JG_EDITOR_IDS));
-        assert!(Choice::from_parts(None, no_env)
-            .unwrap()
-            .is_on(&JG_EDITOR_IDS));
-        let off = with_ini(
-            None,
-            "[nv-rs Fixes]
-bJGEditorIDs=0
-",
-            &[],
-        );
-        assert!(!off.is_on(&JG_EDITOR_IDS));
-        let on = Choice::from_parts(
-            None,
-            env_of(&[("NV_JG_EDITOR_IDS", "1"), ("NV_PRESET", "vanilla")]),
-        )
-        .unwrap();
-        assert!(on.is_on(&JG_EDITOR_IDS));
-        for choice in [
-            Choice::from_parts(None, no_env).unwrap(),
-            off,
-            Choice::vanilla(),
-        ] {
-            let mut e = Engine::new();
-            install(&mut e, &choice);
-            johnnyguitar::install(&mut e);
-            assert_eq!(johnnyguitar::on(&e), choice.is_on(&JG_EDITOR_IDS));
-        }
-    }
-
     /// The switch from its variable: `1` on, `0` off, anything else a stop. Alone it makes the run
     /// a test (vanilla, so the other JIP rows are off); with `NV_PRESET=fixes` the fixes preset's
     /// JIP rows are on with it, and the threads stepped, as a test's are.
@@ -2942,7 +2871,6 @@ bJGEditorIDs=0
         assert!(fixes.is_on(&JIP_INSTALLED));
         assert!(fixes.is_on(&JIP_GAME_PATCHES));
         assert!(fixes.is_on(&JIP_VANILLA_COMMANDS));
-        assert!(fixes.is_on(&JIP_COSAVE_FIXES));
         assert_eq!(fixes.threads, "stepped");
         assert!(fixes.describe().contains(JIP_INSTALLED.name));
         let off = Choice::from_parts(

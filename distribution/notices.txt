@@ -15,5 +15,4 @@ crates/nvse/NOTICE	NOTICE-nvse
 crates/jip/NOTICE	NOTICE-jip
 vendor/wgpu-hal/LICENSE.APACHE	LICENSE-wgpu-hal.APACHE
 vendor/wgpu-hal/LICENSE.MIT	LICENSE-wgpu-hal.MIT
-crates/johnnyguitar/NOTICE	NOTICE-johnnyguitar
 crates/engine-platform/data/LICENSE-SDL_GameControllerDB	LICENSE-SDL_GameControllerDB

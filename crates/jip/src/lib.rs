@@ -13,8 +13,8 @@
 //!   versions of `IsPluginInstalled` and `GetPluginVersion`), behind one run-time
 //!   switch, the host's row `NV_JIP_INSTALLED` ([`set_answers_installed`], on in the fixes
 //!   preset, off in vanilla: step 3.10), that keeps JIP "not installed" unless a run turns it on.
-//! - [`cosave`]: JIP's co-save section (its eight records, in JIP's format and in JohnnyGuitar
-//!   NVSE's corrected one) and its listener for xNVSE's messages, registered with xNVSE as a
+//! - [`cosave`]: JIP's co-save section (its eight records, in JIP's format) and its listener
+//!   for xNVSE's messages, registered with xNVSE as a
 //!   plugin (`nvse::plugins`); [`containers`]: JIP's hash maps, whose walking order decides the
 //!   order of the records it writes.
 //! - [`overrides`]: JIP's versions of xNVSE's and the game's commands (`InitCmdPatches`), also
