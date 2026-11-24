@@ -407,7 +407,7 @@ fn reference(e: &mut Engine, base: u32, position: [f32; 3], flags: u32) -> u32 {
 /// tiles (0, 1, 2 or 6 each); [3] JIP (0 off, 1 the discover event with a user, 2 JIP's name);
 /// [4] the menu shown, the opacity fixed, the HUD 200 wide (bits 0, 1, 2); [5] the VATS actors'
 /// pattern (0x40: the first two out of range); [6] the actor mode; [7] the player's heading (bits);
-/// [9] lStewieAl's Tweaks' S0022.35 on. `f` ([8]): the player's x.
+/// [9] unused. `f` ([8]): the player's x.
 fn compass_world(e: &mut Engine, case: &Case) -> Vec<u32> {
     world(e);
     heading_of(e);
@@ -445,12 +445,11 @@ fn compass_world(e: &mut Engine, case: &Case) -> Vec<u32> {
     e.mem.set_i32(menu + 0x218, 70);
     e.mem.set_u32(0x011f_2250 + 8, (w(4) >> 1) & 1);
     // The compass tile: its strip (slot +0x20) a block, or none.
-    // A real tile (its traits for lStewieAl's Tweaks' S0022.35, which reads its `alpha`), its
-    // vtable at +0.
+    // A real tile, its vtable at +0.
     let compass = tile(e);
     let cvt = vtable(e, 0xa00);
     e.mem.set_u32(compass, cvt);
-    // [9]: S0022.35 (`HUD_COMPASS_FOLLOWS_ITS_ALPHA`) on; the HUD's alpha (`011d979c`) 200.
+    // The HUD's alpha (`011d979c`) 200.
     e.mem.set_f32(0x011d_979c, 200.0);
     let strip = if w(1) & 1 == 0 { e.mem.alloc(0x90) } else { 0 };
     e.register_double(VT_FN + 0xa00 + 0x20, move |_, _| ret(strip));

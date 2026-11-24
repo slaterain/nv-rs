@@ -1,5 +1,5 @@
 //! Every call a built-in extender (xNVSE `crates/nvse`, JIP LN `crates/jip`, UI Organizer
-//! `crates/uio`, MCM `crates/mcm`, lStewieAl's Tweaks `crates/stewie`) makes to one of the game's
+//! `crates/uio`, MCM `crates/mcm`) makes to one of the game's
 //! functions by a constant address passes as many argument words as that function's translation
 //! takes: a call with too few stops the game ("call has N argument words, needs more"), one with
 //! too many hands a later argument to nobody. Here because this crate registers every translation.
@@ -47,7 +47,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
 /// The extender crates the test reads.
-const CRATES: [&str; 6] = ["jip", "nvse", "uio", "mcm", "stewie", "johnnyguitar"];
+const CRATES: [&str; 5] = ["jip", "nvse", "uio", "mcm", "johnnyguitar"];
 
 /// One direct call in a crate's source.
 #[derive(Debug)]
@@ -1743,13 +1743,6 @@ fn uio_passes_each_game_function_the_words_it_takes() {
 #[test]
 fn mcm_passes_each_game_function_the_words_it_takes() {
     check("mcm");
-}
-
-/// lStewieAl's Tweaks calls no game function by address yet (its rows run inside the
-/// translations): the check runs, so a call added later is read.
-#[test]
-fn stewie_passes_each_game_function_the_words_it_takes() {
-    check("stewie");
 }
 
 /// JohnnyGuitar NVSE (its editor ids): each game function it calls by address gets the words it takes.
