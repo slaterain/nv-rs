@@ -790,7 +790,9 @@ fn a_percent_in_a_failing_files_name_is_printed() {
 fn the_expression_buffer_is_made_at_install() {
     let mut e = engine();
     assert_eq!(e.expression_alt_buffer(), 0);
+    assert!(!e.script_reference_cache_fix());
     crate::compile_hooks::install(&mut e);
+    assert!(e.script_reference_cache_fix());
     let buffer = e.expression_alt_buffer();
     assert_ne!(buffer, 0);
     assert!(e.mem.bytes(buffer, 0x500).iter().all(|&b| b == 0));

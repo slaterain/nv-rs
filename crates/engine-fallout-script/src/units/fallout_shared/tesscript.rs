@@ -2810,7 +2810,9 @@ pub fn script_get_referenced_object(
         return 0;
     }
     let tls = tls_block(e);
-    if e.mem.u32(tls + TLS_LAST_REF_SEARCH_SCRIPT) == this.addr()
+    // xNVSE 6.4.9, Hooks_Script.cpp (005AC530): always take the cache-miss path.
+    if !e.script_reference_cache_fix()
+        && e.mem.u32(tls + TLS_LAST_REF_SEARCH_SCRIPT) == this.addr()
         && e.mem.u32(tls + TLS_LAST_REF_INDEX) == index
         && e.mem.u32(tls + TLS_LAST_REF_LOCALS) == locals
     {

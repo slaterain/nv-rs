@@ -91,6 +91,8 @@ pub fn install(e: &mut Engine) {
     }
     // `PatchGameCommandParser`: the line reader, the parameters in parentheses, the type keywords.
     crate::line_reader::install(e);
+    // xNVSE's "apple bug" fix (005AC530 JNZ -> JMP): skip the stale ref-variable cache hit.
+    e.enable_script_reference_cache_fix();
     // `s_ExpressionParserAltBuffer` (`char[0x500]`, zeroed) and the hooks that use it.
     if e.expression_alt_buffer() == 0 {
         let buffer = crate::table::alloc(e, EXPRESSION_ALT_BUFFER_SIZE);

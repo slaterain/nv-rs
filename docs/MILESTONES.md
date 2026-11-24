@@ -12,6 +12,12 @@ real-thread tests (including the pool's inlined unlock). Gameplay validation
 of the reported stops remains open; next, repeat those routes with the corrected
 build ([evidence and limits](ARM_RECURSIVE_LOCK.md)).
 
+xNVSE reference reassignment (2026-11-24): a rejected pickpocket transfer could
+persist when the rollback loop skipped a different weapon first. The mod's
+unmodified function reproduced the stale reference lookup in a headless fixture.
+Ported xNVSE's cache bypass at `005AC530` in both execution paths. Next, retest the
+same multi-weapon rejection in live play and verify both inventories.
+
 ## Direction (maintainer, 2026-11-04; [ADR-0012](adr/0012-modern-64-bit-engine.md))
 
 The game looks and plays exactly like the original; what players do not see or

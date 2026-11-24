@@ -19,7 +19,7 @@ use engine_core::extend::jip_patches;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::leaf;
-use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
+use engine_core::typed::{Mode, MAIN_THREAD, OTHER_THREADS};
 use engine_typed::crt;
 use engine_typed::scripts::{self, expression, numbers, value};
 
@@ -1171,6 +1171,58 @@ fn scripts_referenced_object() {
     })
     .run()
     .assert_same();
+}
+
+// A loop compares each form to its target through the same ref local, skipping
+// the first form. Vanilla sees its cached answer again. xNVSE's 005AC530
+// patch makes the second comparison see the second form.
+#[test]
+fn script_iteration_reloads_reassigned_reference_with_xnvse() {
+    for typed in [false, true] {
+        for xnvse in [false, true] {
+            let mut e = Engine::new_untyped_for_test();
+            if typed {
+                e.typed_apply_for_test(&[&scripts::SCRIPTS], "scripts");
+            }
+            assert_eq!(
+                e.typed_mode(scripts::FAMILY),
+                if typed { Mode::On } else { Mode::Off }
+            );
+            world(&mut e);
+            if xnvse {
+                nvse::compile_hooks::install(&mut e);
+            }
+            let first = form(&mut e, 0x3a, 0);
+            let second = form(&mut e, 0x3a, 0);
+            let first_id = 0xff00_0001u32;
+            let second_id = 0xff00_0002u32;
+            e.register_double(LOOKUP_FORM_BY_ID, move |_, a| {
+                ret(match a[0] {
+                    0xff00_0001 => first,
+                    0xff00_0002 => second,
+                    _ => 0,
+                })
+            });
+            let object = referenced(&mut e, 0, 1);
+            let script = script(&mut e, &[object], 0);
+            let local = variable(&mut e, 1, 0.0);
+            let list = list(&mut e, &[local]);
+            let locals = e.mem.alloc(0x14);
+            e.mem.set_u32(locals + 0xc, list);
+
+            let matched = [first_id, second_id].into_iter().find(|&id| {
+                e.mem.set_u64(local + 8, u64::from(id));
+                let resolved = e.call(0x005a_c4f0, &[script, 1, locals]).u32();
+                assert_eq!(resolved, object);
+                e.mem.u32(resolved + 8) == second
+            });
+            assert_eq!(
+                matched,
+                xnvse.then_some(second_id),
+                "typed={typed}, xNVSE={xnvse}",
+            );
+        }
+    }
 }
 
 #[test]

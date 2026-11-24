@@ -151,7 +151,9 @@ pub fn referenced_object(e: &mut Engine, this: Ptr, index: u32, locals: u32) -> 
         return 0;
     }
     let tls = e.tls();
-    if e.mem.u32(tls + TLS_LAST_REF_SCRIPT) == this.addr()
+    // xNVSE 6.4.9, Hooks_Script.cpp (005AC530): always take the cache-miss path.
+    if !e.script_reference_cache_fix()
+        && e.mem.u32(tls + TLS_LAST_REF_SCRIPT) == this.addr()
         && e.mem.u32(tls + TLS_LAST_REF_INDEX) == index
         && e.mem.u32(tls + TLS_LAST_REF_LOCALS) == locals
     {

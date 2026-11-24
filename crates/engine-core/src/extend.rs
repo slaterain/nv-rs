@@ -1518,6 +1518,8 @@ pub(crate) struct ExtendState {
     /// 0 without it ([`Engine::expression_alt_buffer`]). Set before the threads start, copied to
     /// each thread's engine.
     pub(crate) expression_alt_buffer: u32,
+    /// xNVSE's reference-cache fix (005AC530); set before thread engines are copied.
+    pub(crate) script_reference_cache_fix: bool,
     /// UI Organizer built in and switched on ([`Engine::uio`]). Set before the threads start,
     /// copied to each thread's engine.
     pub(crate) uio: bool,
@@ -1837,6 +1839,7 @@ impl ExtendState {
             words: Default::default(),
             pad_dead_zones: Default::default(),
             expression_alt_buffer: 0,
+            script_reference_cache_fix: false,
             uio: false,
         }
     }
@@ -1870,6 +1873,7 @@ impl ExtendState {
             words: self.words.clone(),
             pad_dead_zones: self.pad_dead_zones.clone(),
             expression_alt_buffer: self.expression_alt_buffer,
+            script_reference_cache_fix: self.script_reference_cache_fix,
             uio: self.uio,
         }
     }
@@ -2451,6 +2455,18 @@ impl Engine {
     /// start).
     pub fn set_expression_alt_buffer(&mut self, buffer: u32) {
         self.extend.expression_alt_buffer = buffer;
+    }
+
+    /// Whether xNVSE installed its stale reference fix (005AC530, `Hook_Script_Init`).
+    /// The game's reference lookup reloads the form from the local even on repeated lookups.
+    #[inline]
+    pub fn script_reference_cache_fix(&self) -> bool {
+        self.extend.script_reference_cache_fix
+    }
+
+    /// Enables [`Engine::script_reference_cache_fix`] before the game starts its threads.
+    pub fn enable_script_reference_cache_fix(&mut self) {
+        self.extend.script_reference_cache_fix = true;
     }
 
     /// Whether UI Organizer is built in and switched on (`crates/uio`, its row): its seams (the
