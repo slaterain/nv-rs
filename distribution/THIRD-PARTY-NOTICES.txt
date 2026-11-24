@@ -1,6 +1,6 @@
 THIRD-PARTY NOTICES — nv-rs (nv-viewer: the Windows build, and the Linux and macOS builds)
 
-This file indexes the license texts of the 280 external packages in the repository's root Cargo.lock, which nv-viewer and the launcher (nv-rs, Play.exe) are built from (the launcher's clipboard library arboard with what it uses on each system, the build-time macro crates, every platform variant of windows-targets, the sound library cpal and the window library winit with what they use on Linux, macOS and other systems included; each program links only its own system's). Package names, versions and license expressions come from each package's Cargo.toml in the local Cargo registry; the files were copied from that exact version there. A package that ships no license file gets the standard text of its license expression (MIT with its authors as the copyright line), marked in its entry. It ends with the notices of source code the translation followed that is not a package.
+This file indexes the license texts of the 282 external packages in the repository's root Cargo.lock, which nv-viewer and the launcher (nv-rs, Play.exe) are built from (the launcher's clipboard library arboard with what it uses on each system, the build-time macro crates, every platform variant of windows-targets, the sound library cpal and the window library winit with what they use on Linux, macOS and other systems included; each program links only its own system's). Package names, versions and license expressions come from each package's Cargo.toml in the local Cargo registry; the files were copied from that exact version there. A package that ships no license file gets the standard text of its license expression (MIT with its authors as the copyright line), marked in its entry. It ends with the notices of source code the translation followed that is not a package.
 
 Files are bundled under licenses/<package>-<version>/ in release ZIPs (distribution/licenses/ in the source tree). No crate source or game assets are included.
 
@@ -2068,3 +2068,23 @@ UI Organizer 2.30 (jazzisparis, Jef)
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
     SOFTWARE.
   Modified: the code translated to Rust; the list unchanged.
+
+itoa 1.0.19
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/dtolnay/itoa
+  Bundled license files:
+    itoa-1.0.19/LICENSE-APACHE
+    itoa-1.0.19/LICENSE-MIT
+
+serde_json 1.0.154
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/serde-rs/json
+  Bundled license files:
+    serde_json-1.0.154/LICENSE-APACHE
+    serde_json-1.0.154/LICENSE-MIT
+
+zmij 1.0.23
+  License expression: MIT
+  Repository: https://github.com/dtolnay/zmij
+  Bundled license files:
+    zmij-1.0.23/LICENSE-MIT

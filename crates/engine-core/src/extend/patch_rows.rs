@@ -38,6 +38,7 @@ mod gt;
 mod gw;
 mod gx;
 mod jg;
+mod showoff;
 
 /// Every file's seams: step 3.9a's, then the groups', then the commands'.
 pub(super) const SITES: &[&[Entry]] = &[
@@ -59,6 +60,7 @@ pub(super) const SITES: &[&[Entry]] = &[
     gx::SITES,
     cmds::SITES,
     jg::SITES,
+    showoff::SITES,
 ];
 
 /// Every file's wraps.

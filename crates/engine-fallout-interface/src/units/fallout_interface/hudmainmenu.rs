@@ -3607,6 +3607,15 @@ pub fn fn_00775380(
         e.mem.set_u32(record_pointer.addr(), record);
         let list = this.addr() + 0x18c;
         if typed_call!(leaf::FAMILY, 0x0082_56d0, leaf::both_words_zero(e, list)) {
+            e.site(
+                0x0077_54fa,
+                &[
+                    record,
+                    record + layout.icon(),
+                    record + layout.sound(),
+                    e.mem.u32(record + layout.time()),
+                ],
+            );
             e.call(0x0090_5820, &args![list, record_pointer]);
             let first_node = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, list));
             let first_record = e.mem.u32(first_node);
@@ -3652,11 +3661,29 @@ pub fn fn_00775380(
             if duplicate {
                 e.call(0x0040_1030, &args![record]);
             } else if urgent == 0 {
+                e.site(
+                    0x0077_5624,
+                    &[
+                        record,
+                        record + layout.icon(),
+                        record + layout.sound(),
+                        e.mem.u32(record + layout.time()),
+                    ],
+                );
                 e.call(0x0090_5820, &args![list, record_pointer]);
             } else {
                 let first_node = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, list));
                 let first_record = e.mem.u32(first_node);
                 e.mem.set_f32(first_record + layout.time(), 0.0);
+                e.site(
+                    0x0077_5610,
+                    &[
+                        record,
+                        record + layout.icon(),
+                        record + layout.sound(),
+                        e.mem.u32(record + layout.time()),
+                    ],
+                );
                 e.call(0x005a_e3d0, &args![list, record_pointer]);
             }
         }
@@ -12238,6 +12265,206 @@ mod tests {
         assert_eq!(run(0, Some(g10_never)), (0.0, 9.0, 0.0));
         let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
         assert_eq!(run(fixes, Some(g10_jip)), (9.0, 0.0, 4.0));
+    }
+
+    #[derive(Default)]
+    struct QueueEventTrace {
+        current: u32,
+        list: u32,
+        text_len: u32,
+        // Original site/callee, its payload, old selected duration bits and
+        // list head at that instant. Sites must precede the list mutation.
+        calls: Vec<(u32, Vec<u32>, u32, u32)>,
+    }
+
+    fn queue_event_trace(e: &mut Engine, site: u32, words: &[u32]) {
+        let state = e.ext::<QueueEventTrace>();
+        let (current, list, text_len) = (state.current, state.list, state.text_len);
+        let time = e.mem.u32(current + text_len + 0x208);
+        let head = e.mem.u32(list);
+        e.ext::<QueueEventTrace>()
+            .calls
+            .push((site, words.to_vec(), time, head));
+    }
+
+    /// ShowOff f45d069 ShowOffEvents.h:1149-1194: all three queue notifications
+    /// precede their original list operation, urgent after ending the old timer;
+    /// the duplicate branch frees its record without dispatch. Exercise the
+    /// whole 00775380 producer for both the exe and JIP G10 record layouts.
+    #[test]
+    fn queue_corner_message_showoff_producer_sites_preserve_all_four_original_paths() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        for text_len in [0x104, 0x204] {
+            for path in 0..4 {
+                let mut e = Engine::new();
+                e.map(0x011d_9000, 0x1000);
+                let menu = e.new_object::<HUDMainMenu>();
+                e.mem.set_u32(0x011d_96c0, menu.addr());
+                e.mem.set_u32(menu.addr() + 0x90, 0x9000);
+                e.mem.set_u32(menu.addr() + 0x8c, 0x9100);
+                let list = menu.addr() + 0x18c;
+                let current = e.mem.alloc(0x410);
+                let incoming = e.mem.alloc(0x450);
+                e.mem.write(incoming, &vec![0xee; 0x450]);
+                let text = e.mem.alloc(0x40);
+                let icon = e.mem.alloc(0x40);
+                let sound = e.mem.alloc(0x40);
+                e.mem.write(text, b"&sUActnVats new\0");
+                e.mem.write(icon, b"icons\\corner.dds\0");
+                e.mem.write(sound, b"UIPickpocketFail\0");
+                e.mem.write(
+                    current,
+                    if path == 3 {
+                        b"&sUActnVats new\0"
+                    } else {
+                        b"old\0"
+                    },
+                );
+                e.mem.set_f32(current + 0x30c, 9.0);
+                e.mem.set_f32(current + 0x40c, 9.0);
+                if path != 0 {
+                    e.mem.set_u32(list, current);
+                }
+                e.ext::<QueueEventTrace>().current = current;
+                e.ext::<QueueEventTrace>().list = list;
+                e.ext::<QueueEventTrace>().text_len = text_len;
+                for site in [0x0077_54fa, 0x0077_5624, 0x0077_5610] {
+                    let callback: engine_core::extend::SiteFn = match site {
+                        0x0077_54fa => |e, a| {
+                            queue_event_trace(e, 0x0077_54fa, a);
+                            None
+                        },
+                        0x0077_5624 => |e, a| {
+                            queue_event_trace(e, 0x0077_5624, a);
+                            None
+                        },
+                        _ => |e, a| {
+                            queue_event_trace(e, 0x0077_5610, a);
+                            None
+                        },
+                    };
+                    e.on_site(SiteSlot::new(Owner::ShowOff, site), callback);
+                }
+                e.register_double(0x0040_1000, move |_, _| incoming.into_ret());
+                g10_strcpy_s(&mut e);
+                e.register_double(0x0082_56d0, |e, a| {
+                    u32::from(e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0).into_ret()
+                });
+                e.register_double(0x0072_6070, |e, a| e.mem.u32(a[0] + 4).into_ret());
+                e.register_double(0x0068_15c0, |_, a| a[0].into_ret());
+                e.register_double(0x0040_8b20, |e, a| {
+                    i32::from(e.mem.cstr(a[0]) != e.mem.cstr(a[1])).into_ret()
+                });
+                for callee in [0x0090_5820, 0x005a_e3d0] {
+                    e.register_double(callee, move |e, a| {
+                        let new_record = e.mem.u32(a[1]);
+                        queue_event_trace(e, callee, &[a[0], new_record]);
+                        let old_head = e.mem.u32(a[0]);
+                        if old_head == 0 {
+                            e.mem.set_u32(a[0], new_record);
+                        } else {
+                            let node = e.mem.alloc(8);
+                            if callee == 0x005a_e3d0 {
+                                e.mem.set_u32(node, old_head);
+                                e.mem.set_u32(node + 4, e.mem.u32(a[0] + 4));
+                                e.mem.set_u32(a[0], new_record);
+                            } else {
+                                e.mem.set_u32(node, new_record);
+                            }
+                            e.mem.set_u32(a[0] + 4, node);
+                        }
+                        Ret::default()
+                    });
+                }
+                e.register_double(0x0040_1030, |e, a| {
+                    queue_event_trace(e, 0x0040_1030, a);
+                    Ret::default()
+                });
+                for address in [
+                    0x00a0_1350,
+                    0x0045_3a70,
+                    0x00ad_7550,
+                    0x00ad_8830,
+                    0x0048_3710,
+                ] {
+                    e.register_double(address, |_, _| Ret::default());
+                }
+                if text_len == 0x204 {
+                    e.on_site_for_test(0x0077_53b8, g10_jip);
+                    e.set_jip_patches(jip_patches::INSTALLED | jip_patches::FIXES);
+                }
+                e.call_log = Some(vec![]);
+                assert!(fn_00775380(
+                    &mut e,
+                    menu,
+                    Ptr::new(text),
+                    0,
+                    Ptr::new(icon),
+                    Ptr::new(sound),
+                    4.0,
+                    u8::from(path == 2)
+                ));
+                let trace = &e.ext::<QueueEventTrace>().calls;
+                let prior = if path == 0 { 0 } else { current };
+                if path == 3 {
+                    assert_eq!(
+                        trace,
+                        &[(0x0040_1030, vec![incoming], 9.0f32.to_bits(), current)]
+                    );
+                } else {
+                    let site = [0x0077_54fa, 0x0077_5624, 0x0077_5610][path];
+                    let callee = if path == 2 { 0x005a_e3d0 } else { 0x0090_5820 };
+                    let old_time = if path == 2 { 0.0f32 } else { 9.0 };
+                    assert_eq!(
+                        trace,
+                        &[
+                            (
+                                site,
+                                vec![
+                                    incoming,
+                                    incoming + text_len,
+                                    incoming + text_len + 0x104,
+                                    4.0f32.to_bits()
+                                ],
+                                old_time.to_bits(),
+                                prior
+                            ),
+                            (callee, vec![list, incoming], old_time.to_bits(), prior),
+                        ],
+                        "layout {text_len:x} path {path}"
+                    );
+                }
+                assert_eq!(
+                    e.mem.u32(list),
+                    if path == 1 || path == 3 {
+                        current
+                    } else {
+                        incoming
+                    }
+                );
+                if path == 1 || path == 2 {
+                    let next = e.mem.u32(list + 4);
+                    assert_eq!(e.mem.u32(next), if path == 1 { incoming } else { current });
+                    assert_eq!(e.mem.u32(next + 4), 0);
+                } else {
+                    assert_eq!(e.mem.u32(list + 4), 0);
+                }
+                assert_eq!(
+                    e.mem
+                        .f32(current + if text_len == 0x104 { 0x40c } else { 0x30c }),
+                    9.0
+                );
+                assert_eq!(g10_calls(&e, 0x0040_1000), [vec![text_len + 0x20c]]);
+                let list_calls = g10_calls(&e, if path == 2 { 0x005a_e3d0 } else { 0x0090_5820 });
+                assert_eq!(list_calls.len(), usize::from(path != 3));
+                if let Some(a) = list_calls.first() {
+                    assert_eq!(a[0], list);
+                }
+                for at in text_len + 0x20c..0x450 {
+                    assert_eq!(e.mem.u8(incoming + at), 0xee);
+                }
+            }
+        }
     }
 
     /// The invariant: with `FIXES` set, a G10 seam with no handler is a broken setup (JIP puts

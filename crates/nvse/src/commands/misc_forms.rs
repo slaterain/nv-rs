@@ -211,7 +211,9 @@ fn insert(e: &mut Engine, node: u32, item: u32) {
 /// `item` put at `index` (0 the head, -2 the end, else before the node there); the index answered
 /// is the one given, or for the end the index of the node it went after (or into, when the list
 /// was empty); -1 for no item or no such node.
-pub(super) fn add_at(e: &mut Engine, head: u32, item: u32, index: i32) -> i32 {
+/// Public for extender commands using this same xNVSE tList primitive; callers own any
+/// enclosing form's added-object count and modification policy.
+pub fn add_at(e: &mut Engine, head: u32, item: u32, index: i32) -> i32 {
     if item == 0 {
         return LIST_INVALID;
     }

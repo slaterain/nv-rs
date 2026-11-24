@@ -120,6 +120,9 @@ pub fn bhk_character_state_jumping_update(e: &mut Engine, _unused_0: Ptr, contro
     let height = e.with_stack(0x50, |e, frame| {
         let x = frame.addr();
         set_lanes(e, x + 0x20, velocity);
+        // ShowOff f45d069 OnPlayerJump wraps this original GetPosition
+        // call at CD4454; it notifies before the call and preserves its args.
+        e.site(0x00cd_4454, &[controller.addr()]);
         e.call(GET_POSITION, &args![controller, x + 0x30]);
         e.call(EXTRACT_ANGLES, &args![x + 0x20, x + 0x30]);
         e.mem.u32(x + 0x28)
@@ -258,7 +261,13 @@ mod movement_tests {
     /// handler at `0xCD4468` answering `answer` (it logs its words, sets the wanted state 0xB and
     /// `fFallStartHeight` 77.0 when it answers): the wanted state, `fFallStartHeight`, the flags,
     /// whether the state was updated, what the seam was asked and the extracted height's bits.
-    fn jump_with_jip(word: u32, answer: Option<u32>) -> (u32, f32, u32, bool, Vec<Vec<u32>>, u32) {
+    type JumpOutcome = (u32, f32, u32, bool, Vec<Vec<u32>>, u32);
+    #[derive(Default)]
+    struct ShowOffJumpLog(Option<Log>);
+    fn jump_with_jip(word: u32, answer: Option<u32>) -> JumpOutcome {
+        jump_with_observer(word, answer, 1).0
+    }
+    fn jump_with_observer(word: u32, answer: Option<u32>, wanted: u32) -> (JumpOutcome, Log) {
         use engine_core::extend::{Owner, SiteSlot};
         thread_local! {
             static ASKED: RefCell<Vec<Vec<u32>>> = const { RefCell::new(Vec::new()) };
@@ -309,8 +318,14 @@ mod movement_tests {
         e.mem.set_u32(c, vtable);
         e.mem.set_u32(c + 8, proxy);
         e.mem.set_u32(c + 0x3ec, manager);
-        e.mem.set_u32(c + 0x520, 1);
+        e.mem.set_u32(c + 0x520, wanted);
         e.mem.set_u32(c + 0x414, 0xffff_ffff);
+        e.ext::<ShowOffJumpLog>().0 = Some(log.clone());
+        e.on_site(SiteSlot::new(Owner::ShowOff, 0x00cd_4454), |e, a| {
+            let log = e.ext::<ShowOffJumpLog>().0.clone().unwrap();
+            log.borrow_mut().push((0x00cd_4454, a.to_vec()));
+            Some(0)
+        });
         e.on_site(SiteSlot::new(Owner::Jip, 0x00cd_4468), handler);
         e.set_jip_patches(word);
         ASKED.with(|s| s.borrow_mut().clear());
@@ -318,13 +333,44 @@ mod movement_tests {
         e.call(0x00cd_4280, &args![0u32, c]);
         let updated = log.borrow().contains(&(UPDATE_STATE, vec![c]));
         (
-            e.mem.u32(c + 0x520),
-            e.mem.f32(c + 0x544),
-            e.mem.u32(c + 0x414),
-            updated,
-            ASKED.with(|s| s.take()),
-            c,
+            (
+                e.mem.u32(c + 0x520),
+                e.mem.f32(c + 0x544),
+                e.mem.u32(c + 0x414),
+                updated,
+                ASKED.with(|s| s.take()),
+                c,
+            ),
+            log,
         )
+    }
+
+    #[test]
+    fn showoff_jump_observer_precedes_original_position_call_and_keeps_jip_height_path() {
+        use engine_core::extend::jip_patches;
+        for word in [0, jip_patches::FIXES] {
+            let ((state, height, _, updated, _, c), log) = jump_with_observer(word, Some(0), 1);
+            let log = log.borrow();
+            let i = log.iter().position(|(at, _)| *at == 0x00cd_4454).unwrap();
+            assert_eq!(log[i].1, [c]);
+            assert_eq!(log[i + 1].0, GET_POSITION);
+            assert_eq!(log[i + 1].1[0], c);
+            assert_eq!(log[i + 1].1.len(), 2);
+            assert_ne!(log[i + 1].1[1], 0);
+            assert_eq!(log.iter().filter(|(at, _)| *at == GET_POSITION).count(), 1);
+            if word == 0 {
+                assert_eq!((state, height, updated), (2, 52.25, true));
+            } else {
+                assert_eq!((state, height, updated), (0xb, 77.0, false));
+            }
+        }
+        for wanted in [0, 3] {
+            let (_, log) = jump_with_observer(0, None, wanted);
+            assert!(log
+                .borrow()
+                .iter()
+                .all(|(at, _)| *at != 0x00cd_4454 && *at != GET_POSITION));
+        }
     }
 
     /// JIP LN NVSE's G65 seam at `0xCD4468`: not asked with the word 0 or `INSTALLED` (the exe's

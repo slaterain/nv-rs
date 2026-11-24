@@ -4,3 +4,10 @@ SO_fn_Files.h, NVSEParamInfoList.h, and SimpleINILibrary/SimpleIni.h.
 Rebuilt in Rust with the mod authors' permission recorded by the maintainer
 (2026-11-03, docs/adr/0016-script-extenders-built-in.md). No C++, DLL or mod assets
 are included. The source's credits and license apply; see the upstream repository.
+
+Temporary ownership and inventory-event behavior additionally read
+SO_fn_Gameplay.cpp and Events/ShowOffEvents.h at that same source revision.
+
+Auxiliary string maps, cached INI writes and form helpers additionally read
+SO_fn_AuxVars.cpp, SO_fn_Files.cpp, SO_fn_Array.cpp, SO_fn_Debug.cpp,
+internal/jip_nvse.h and internal/serialization.h at that same revision.

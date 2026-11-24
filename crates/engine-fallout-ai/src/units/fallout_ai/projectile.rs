@@ -5149,6 +5149,9 @@ pub fn projectile_process_impacts(e: &mut Engine, this: Ptr<Projectile>) -> bool
             leaf::both_words_zero(e, this.byte_add(IMPACT_LIST))
         )
     {
+        // Both original early branches join the 009c20c9 epilogue with
+        // detectedNewImpact=false. ShowOff observes the same false payload.
+        e.site(0x009c_20c9, &[this.addr(), 0]);
         return processed;
     }
     let mut node = this.addr() + IMPACT_LIST;
@@ -5223,6 +5226,8 @@ pub fn projectile_process_impacts(e: &mut Engine, this: Ptr<Projectile>) -> bool
     if e.hook_users(engine_core::extend::Hook::ProjectileImpact) != 0 {
         e.site(0x009c_20bf, &[this.addr()]);
     }
+    // ShowOff f45d069, ProjectileImpactHook: after the original/JIP impact path.
+    e.site(0x009c_20c9, &[this.addr(), u32::from(processed)]);
     processed
 }
 
@@ -8339,6 +8344,92 @@ mod tests {
         assert_eq!(IMPACT_SEEN.with(|s| s.take()), [vec![this.addr(), 1]]);
         assert!(!projectile_process_impacts(&mut e, this));
         assert!(IMPACT_SEEN.with(|s| s.borrow().is_empty()), "processed");
+    }
+
+    #[derive(Default)]
+    struct ImpactEventOrder(Vec<(u32, Vec<u32>, u8)>);
+
+    /// ShowOff's 009c20c9 epilogue comes after JIP's 009c20bf store hook;
+    /// its payload is the local detected-new-impact byte, not hasImpacted.
+    #[test]
+    fn process_impacts_showoff_epilogue_order_payload_and_original_calls() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let setup = || {
+            let mut e = engine();
+            let this = projectile(&mut e);
+            let impact = e.mem.alloc(0x30);
+            let item = e.mem.alloc(4);
+            e.mem.set_u32(item, impact);
+            stub(&mut e, 0x0068_15c0, item);
+            stub(&mut e, 0x0052_5420, 1);
+            let vector = e.mem.alloc(0xC);
+            stub(&mut e, 0x009b_7010, vector);
+            e.add_hook_user(Hook::ProjectileImpact, true);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x009c_20bf), |e, w| {
+                let processed = e.mem.u8(w[0] + 0x90);
+                e.ext::<ImpactEventOrder>()
+                    .0
+                    .push((0x009c_20bf, w.to_vec(), processed));
+                Some(0)
+            });
+            (e, this)
+        };
+        let (mut vanilla, original) = setup();
+        assert!(projectile_process_impacts(&mut vanilla, original));
+        let original_calls = vanilla.call_log.take().unwrap();
+        let (mut e, this) = setup();
+        assert_eq!(this, original);
+        e.on_site(SiteSlot::new(Owner::ShowOff, 0x009c_20c9), |e, w| {
+            let processed = e.mem.u8(w[0] + 0x90);
+            e.ext::<ImpactEventOrder>()
+                .0
+                .push((0x009c_20c9, w.to_vec(), processed));
+            Some(0) // Observer return must not replace detectedNewImpact.
+        });
+        let result = projectile_process_impacts(&mut e, this);
+        e.ext::<ImpactEventOrder>()
+            .0
+            .push((0, vec![u32::from(result)], 0));
+        assert_eq!(
+            e.ext::<ImpactEventOrder>().0,
+            [
+                (0x009c_20bf, vec![this.addr()], 1),
+                (0x009c_20c9, vec![this.addr(), 1], 1),
+                (0, vec![1], 0),
+            ]
+        );
+        assert_eq!(
+            e.call_log.take().unwrap(),
+            original_calls,
+            "all original calls retained"
+        );
+        e.ext::<ImpactEventOrder>().0.clear();
+        assert!(!projectile_process_impacts(&mut e, this));
+        assert_eq!(
+            e.ext::<ImpactEventOrder>().0,
+            [(0x009c_20c9, vec![this.addr(), 0], 1),],
+            "already processed joins epilogue, skips JIP and does not imply a new impact"
+        );
+        e.ext::<ImpactEventOrder>().0.clear();
+        e.set(this, Projectile::bImpactProcessed, false);
+        stub(&mut e, 0x0082_56d0, 1);
+        assert!(!projectile_process_impacts(&mut e, this));
+        assert_eq!(
+            e.ext::<ImpactEventOrder>().0,
+            [(0x009c_20c9, vec![this.addr(), 0], 0),],
+            "initially empty list also joins false epilogue without setting hasImpacted"
+        );
+        e.ext::<ImpactEventOrder>().0.clear();
+        sequence(&mut e, 0x0082_56d0, vec![0, 1]);
+        assert!(!projectile_process_impacts(&mut e, this));
+        assert_eq!(
+            e.ext::<ImpactEventOrder>().0,
+            [
+                (0x009c_20bf, vec![this.addr()], 1),
+                (0x009c_20c9, vec![this.addr(), 0], 1),
+            ],
+            "loop found no new data but original still sets hasImpacted before epilogue"
+        );
     }
 
     #[test]

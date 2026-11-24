@@ -1433,13 +1433,21 @@ fn level_up_menu_create_body(e: &mut Engine, tile: u32) {
     let level = player_level(e);
     let every = e.call(SETTING_INT, &args![PERK_EVERY_LEVELS_SETTING]).u32();
     let every = e.mem.i32(every);
-    if level % every == 0 {
+    let perk_level = level % every == 0;
+    // ShowOfff45d069 ShowPerkMenu temporarily changes this exact branch.
+    // The original level/setting/modulo evaluation remains in either mode.
+    if e.site(0x0078_4f26, &[])
+        .map_or(perk_level, |force| force != 0)
+    {
         collect_available_perks(e);
     }
     let me = level_up_me(e);
     e.mem.set_u32(me + CURR_POINTS + 4, 0);
+    // ShowOff MenuHooks::IsPlayerAtPerkLevel replaces the immediate max-perk
+    // value, with the singleton fetched after its callback just as patched code.
+    let perks = e.site(0x0078_5087, &[]).unwrap_or(1);
     let me = level_up_me(e);
-    e.mem.set_u32(me + MAX_POINTS + 4, 1);
+    e.mem.set_u32(me + MAX_POINTS + 4, perks);
     let me = level_up_me(e);
     if e.call(LIST_COUNT_005AE380, &args![me + AVAILABLE_PERKS])
         .u32()
@@ -1914,16 +1922,30 @@ pub fn level_up_menu_do_click(e: &mut Engine, this: Ptr, id: u32, tile: u32) {
             set_float(e, target, 0xfc3, 0.0f32.to_bits());
         }
         0xc => {
+            // ShowOff LevelUpMenuClickPerkHook: browser with no points cannot
+            // change selection; assigned perks still allow deselection.
+            if e.site(0x0078_5acc, &[base]).is_some_and(|allow| allow == 0) {
+                return;
+            }
             let perks = Ptr::new(base + PERKS_LIST);
             if fn_007877a0(e, perks, tile) {
                 fn_00787780(e, perks, tile);
                 level_up_menu_apply_perk_effects(e, this, tile);
             } else {
                 let alpha_trait = e.mem.u32(UT_TEXT_ALPHA);
-                let alpha = get_float(e, tile, alpha_trait);
+                let allow = e.site(0x0078_5b0f, &[base, tile, alpha_trait]);
+                let alpha = if allow == Some(0) {
+                    0.0
+                } else {
+                    get_float(e, tile, alpha_trait)
+                };
                 let full: f64 = e.global(FULL_ALPHA_DOUBLE);
                 if alpha == full {
-                    fn_00787850(e, perks, 1);
+                    // ShowOff removes this call after moving the one-point
+                    // reset before the original alpha read in its previous hook.
+                    if e.site(0x0078_5b2c, &[base]).is_none() {
+                        fn_00787850(e, perks, 1);
+                    }
                     fn_00787760(e, perks, tile);
                     level_up_menu_apply_perk_effects(e, this, tile);
                 }
@@ -4066,6 +4088,51 @@ mod level_up_menu_tests {
     }
 
     #[test]
+    fn showoff_perk_browser_create_forces_only_collect_branch_and_initial_perk_count() {
+        let mut e = engine();
+        e.map(0x011d_6000, 0x1000);
+        e.register(ACTOR_VALUE_SECTION_COUNT, |_, _| eax(0));
+        let this = menu(&mut e);
+        e.register(FOCUS_OWNER_004B7210, |_, _| eax(0x7000));
+        e.register(INTERFACE_TILE_00586150, |_, _| eax(0x7100));
+        e.register(TILE_READ_FILE, |_, _| eax(0x7200));
+        e.register_double(TILE_GET_MENU, move |_, _| eax(this));
+        e.register(0x0000_9034, |_, _| eax(0x403));
+        e.register(PLAYER_LEVEL, |_, _| eax(3));
+        let every = e.mem.alloc(4);
+        e.mem.set_u32(every, 2);
+        e.register_double(SETTING_INT, move |_, _| eax(every));
+        e.call_log = Some(vec![]);
+        assert_eq!(level_up_menu_create(&mut e), 0x7200);
+        assert!(calls_to(&e, PERK_LIST_FIRST_00460FB0).is_empty());
+        assert_eq!(e.mem.u32(this + MAX_POINTS + 4), 1);
+        assert_eq!(e.mem.u32(this + CURRENT_PAGE), 0);
+        let vanilla_tiles = calls_to(&e, MENU_SET_MENU_TILE);
+        e.on_site(
+            engine_core::extend::SiteSlot::new(engine_core::extend::Owner::ShowOff, 0x0078_4f26),
+            |_, _| Some(1),
+        );
+        e.on_site(
+            engine_core::extend::SiteSlot::new(engine_core::extend::Owner::ShowOff, 0x0078_5087),
+            |_, _| Some(0),
+        );
+        e.call_log = Some(vec![]);
+        assert_eq!(level_up_menu_create(&mut e), 0x7200);
+        assert_eq!(calls_to(&e, PERK_LIST_FIRST_00460FB0).len(), 1);
+        assert_eq!(e.mem.u32(this + MAX_POINTS + 4), 0);
+        assert_eq!(e.mem.u32(this + CURRENT_PAGE), 0);
+        assert_eq!(calls_to(&e, MENU_SET_MENU_TILE), vanilla_tiles);
+        assert_eq!(
+            calls_to(&e, TILE_READ_FILE),
+            vec![vec![0x7100, LEVEL_UP_MENU_FILE]]
+        );
+        assert!(
+            !calls_to(&e, LIST_BOX_INITIALIZE).is_empty(),
+            "create postlude still initializes both native lists"
+        );
+    }
+
+    #[test]
     fn has_all_tiles_needs_the_ten() {
         let mut e = engine();
         let this = menu(&mut e);
@@ -4351,6 +4418,70 @@ mod level_up_menu_tests {
         );
         assert_eq!(e.mem.u32(this + CURR_POINTS + 4), 0);
         assert!(calls_to(&e, TILE_SET_INT).contains(&vec![ROOT, 0x102, 0]));
+    }
+
+    #[test]
+    fn showoff_perk_click_gates_run_at_native_boundaries_and_skip_only_old_reset() {
+        let mut e = engine();
+        let this = menu(&mut e);
+        e.mem.set_u32(LEVEL_UP_MENU_ME, this);
+        e.mem.set_u32(this + CURRENT_PAGE, 1);
+        e.on_site(
+            engine_core::extend::SiteSlot::new(engine_core::extend::Owner::ShowOff, 0x0078_5acc),
+            |e, a| {
+                Some(u32::from(
+                    e.mem.u32(a[0] + MAX_POINTS + 4) != 0 || e.mem.u32(a[0] + CURR_POINTS + 4) != 0,
+                ))
+            },
+        );
+        e.call_log = Some(vec![]);
+        level_up_menu_do_click(&mut e, Ptr::new(this), 0xc, 0x40);
+        assert!(
+            e.call_log.as_ref().unwrap().is_empty(),
+            "zero-point browser does not select or apply perks"
+        );
+        e.mem.set_u32(this + MAX_POINTS + 4, 2);
+        e.register(TILE_GET_FLOAT, |_, _| st0(255.0));
+        e.on_site(
+            engine_core::extend::SiteSlot::new(engine_core::extend::Owner::ShowOff, 0x0078_5b0f),
+            |e, a| {
+                assert_eq!(a[1], 0x40);
+                assert_eq!(a[2], e.mem.u32(UT_TEXT_ALPHA));
+                Some(0)
+            },
+        );
+        e.call_log = Some(vec![]);
+        level_up_menu_do_click(&mut e, Ptr::new(this), 0xc, 0x40);
+        assert!(
+            !calls_to(&e, TILE_SET_INT).is_empty(),
+            "native point-counter postlude remains active"
+        );
+        assert!(
+            calls_to(&e, LIST_BOX_ITEM_DATA_007E1110).is_empty(),
+            "blocked alpha does not apply perk effects"
+        );
+        // Rebind the independent fixture for the allowed case: a one-point
+        // reset belongs before the original alpha getter, never at old785B2C.
+        let mut e = engine();
+        let this = menu(&mut e);
+        e.mem.set_u32(LEVEL_UP_MENU_ME, this);
+        e.mem.set_u32(this + CURRENT_PAGE, 1);
+        e.on_site(
+            engine_core::extend::SiteSlot::new(engine_core::extend::Owner::ShowOff, 0x0078_5b0f),
+            |_, _| Some(1),
+        );
+        e.on_site(
+            engine_core::extend::SiteSlot::new(engine_core::extend::Owner::ShowOff, 0x0078_5b2c),
+            |_, _| Some(1),
+        );
+        e.register(TILE_GET_FLOAT, |_, _| st0(255.0));
+        e.call_log = Some(vec![]);
+        level_up_menu_do_click(&mut e, Ptr::new(this), 0xc, 0x40);
+        assert_eq!(
+            calls_to(&e, LIST_BOX_ITEM_DATA_007E1110),
+            vec![vec![this + PERKS_LIST, 0x40]]
+        );
+        assert_eq!(e.mem.u32(this + CURR_POINTS + 4), 0);
     }
 
     #[test]

@@ -2707,7 +2707,7 @@ pub fn player_character_set_first_person(
             e.mem.set_u32(CAMERA_POSITION_COPY + 4 * word, value);
         }
         let hide = u8::from(e.get(this, PlayerCharacter::bWant3rdPerson) == 0);
-        fn_00951a10(e, this, hide);
+        fn_00951a10(e, this, u32::from(hide));
         applied = true;
     }
     if !applied && e.global::<u8>(VANITY_ACTIVE) == 0 && pointer_target(e, player + 0x694) != 0 {
@@ -3518,7 +3518,16 @@ pub fn fn_00951940(e: &mut Engine, _this: Ptr, node: u32) {
 /// animation controllers' sequences when `008c4560` says so, lets the
 /// lighting follow (`008b0bd0`) and refreshes the process (slot `0x580`).
 /// C++ exception unwinding is not translated.
-pub fn fn_00951a10(e: &mut Engine, this: Ptr<PlayerCharacter>, hide_first_person: u8) {
+pub fn fn_00951a10(e: &mut Engine, this: Ptr<PlayerCharacter>, hide_first_person: u32) {
+    switch_pov_models(e, this, hide_first_person as u8);
+    // The original's single normal epilogue at9520E1 is also reached by
+    // every early return (jumps to9520D5). ShowOff forwards the full stack
+    // argument there, although the original body reads only its low byte.
+    // An unwind out of the body never fabricates a normal-return event.
+    e.site(0x0095_20e1, &[hide_first_person]);
+}
+
+fn switch_pov_models(e: &mut Engine, this: Ptr<PlayerCharacter>, hide_first_person: u8) {
     let player = this.addr();
     let flag = hide_first_person;
     if fn_00950bb0(e, this, 1) == 0 || fn_00950bb0(e, this, 0) == 0 {
@@ -4438,7 +4447,7 @@ pub fn player_character_focus_on_actor(
     if e.global::<u8>(VANITY_ACTIVE) != 0 {
         player_character_stop_vanity_mode(e, this.cast());
         let hide = u8::from(!e.get(this, PlayerCharacter::b3rdPerson));
-        fn_00951a10(e, this, hide);
+        fn_00951a10(e, this, u32::from(hide));
     }
     let cell = e.call(PARENT_CELL_OF, &args![player]).u32();
     let mut interior = false;
@@ -7941,7 +7950,7 @@ pub fn fn_0095c730(e: &mut Engine, this: Ptr<PlayerCharacter>, buffer: u32) {
             player_character_force_temp_3rd_person(e, this, 1);
         }
         let hide = u8::from(e.mem.u8(player + 0x64a) == 0);
-        fn_00951a10(e, this, hide);
+        fn_00951a10(e, this, u32::from(hide));
     }
     if e.global::<f32>(INVENTORY_ALPHA) < 1.0 {
         e.set_global(INVENTORY_ALPHA, 1.0f32);
@@ -8310,7 +8319,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00951920, fn_00951920() -> u32),
         entry!(0x00951930, fn_00951930() -> u32),
         entry!(0x00951940, fn_00951940(Ptr, u32)),
-        entry!(0x00951a10, fn_00951a10(Ptr<PlayerCharacter>, u8)),
+        entry!(0x00951a10, fn_00951a10(Ptr<PlayerCharacter>, u32)),
         entry!(0x009520f0, fn_009520f0(Ptr<PlayerCharacter>, u16, u32)),
         entry!(0x00952290, fn_00952290(Ptr<PlayerCharacter>)),
         entry!(0x009526a0, player_character_set_god_mode(u8)),
@@ -11772,6 +11781,77 @@ mod tests {
         slot(e, process, 0x580, eax(0));
         double(e, 0x008d_8520, eax(process));
         player
+    }
+
+    #[derive(Default)]
+    struct ShowOffPovSeen(Vec<(u32, Option<u32>)>);
+    fn observe_pov(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        let last = e.call_log.as_ref().and_then(|l| l.last()).map(|x| x.0);
+        e.ext::<ShowOffPovSeen>().0.push((a[0], last));
+        Some(0)
+    }
+    #[test]
+    fn showoff_pov_common_epilogue_keeps_raw_word_and_every_normal_return() {
+        use engine_core::extend::{Owner, SiteSlot};
+        for mode in 0..4 {
+            let mut e = engine();
+            let player = switch_scenario(&mut e);
+            let process = e.call(0x008d_8520, &args![player]).u32();
+            let refresh = e.mem.u32(e.mem.u32(process) + 0x580);
+            e.on_site(SiteSlot::new(Owner::ShowOff, 0x0095_20e1), observe_pov);
+            let raw = if mode == 0 { 0x1234_0000 } else { 1 };
+            if mode == 1 {
+                e.mem.set_u32(player.addr() + 0x694, 0);
+            }
+            if mode == 2 {
+                e.mem.set_u8(player.addr() + 0x64d, 1);
+            }
+            if mode == 3 {
+                e.register(0x0045_6610, |_, a| eax(u32::from(a[0] == OWN_3D)));
+            }
+            start_log(&mut e);
+            e.call(0x0095_1a10, &args![player, raw]);
+            assert_eq!(e.ext::<ShowOffPovSeen>().0.len(), 1, "mode{mode}");
+            assert_eq!(
+                e.ext::<ShowOffPovSeen>().0[0].0,
+                raw,
+                "original full argument, not lowbyte/bool/invertedPOV"
+            );
+            if mode == 0 {
+                assert_eq!(
+                    e.mem.u8(player.addr() + 0x64b),
+                    1,
+                    "body still receives lowbyte0"
+                );
+                assert_eq!(
+                    calls_to(&e, 0x008b_0bd0),
+                    [vec![player.addr(), 0x0600_3300]]
+                );
+                let final_call = e.ext::<ShowOffPovSeen>().0[0].1.unwrap();
+                assert_eq!(
+                    final_call, refresh,
+                    "process refresh happens after lighting and before event"
+                );
+            } else {
+                assert!(
+                    calls_to(&e, 0x0045_0f90).is_empty(),
+                    "earlyguardstillbypassesmodelmutation"
+                );
+            }
+        }
+    }
+    #[test]
+    fn showoff_pov_does_not_fabricate_a_normal_exit_while_unwinding() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = engine();
+        let player = switch_scenario(&mut e);
+        e.on_site(SiteSlot::new(Owner::ShowOff, 0x0095_20e1), observe_pov);
+        e.register(0x0045_6610, |_, _| panic!("boundedPOVbodyfailure"));
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            fn_00951a10(&mut e, player, 0)
+        }));
+        assert!(stopped.is_err());
+        assert!(e.ext::<ShowOffPovSeen>().0.is_empty());
     }
 
     #[test]

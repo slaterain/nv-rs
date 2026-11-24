@@ -9,3 +9,9 @@ rust-version.workspace = true
 [dependencies]
 engine-core = { path = "../engine-core" }
 nvse = { path = "../nvse" }
+serde = "1.0"
+serde_json = { version = "1.0", features = ["float_roundtrip", "unbounded_depth"] }
+
+[dev-dependencies]
+engine-core = { path = "../engine-core", features = ["test-support"] }
+nvse = { path = "../nvse", features = ["test-support"] }

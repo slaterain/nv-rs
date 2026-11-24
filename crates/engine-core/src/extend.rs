@@ -122,6 +122,8 @@ pub enum Owner {
     /// lStewieAl's Tweaks built in (`crates/stewie`): xNVSE loads its plugins by DLL name, so
     /// `nvse_stewie_tweaks.dll` after `jip_nvse.dll` (and `MCM.dll`) and before `ui_organizer.dll`.
     Stewie,
+    /// ShowOff NVSE built in (`crates/showoff`), after Stewie and before UI Organizer.
+    ShowOff,
     /// UI Organizer built in (`crates/uio`): xNVSE loads its plugins by DLL name, so
     /// `ui_organizer.dll` after `jip_nvse.dll`.
     Uio,
@@ -137,7 +139,8 @@ impl Owner {
             Owner::Jip => 2,
             Owner::JohnnyGuitar => 3,
             Owner::Stewie => 4,
-            Owner::Uio => 5,
+            Owner::ShowOff => 6,
+            Owner::Uio => 7,
         }
     }
 
@@ -148,6 +151,7 @@ impl Owner {
             | (Owner::Jip, Owner::Jip)
             | (Owner::JohnnyGuitar, Owner::JohnnyGuitar)
             | (Owner::Stewie, Owner::Stewie)
+            | (Owner::ShowOff, Owner::ShowOff)
             | (Owner::Uio, Owner::Uio) => true,
             _ => false,
         }
@@ -1173,8 +1177,10 @@ const fn check_areas(main: &[Entry], areas: &[&[Entry]]) {
             let row = area[i];
             assert!(
                 row.owners.len() == 1
-                    && (row.owners[0].same(Owner::Jip) || row.owners[0].same(Owner::JohnnyGuitar)),
-                "an area row has one owner (JIP or JohnnyGuitar); a seam shared with another owner is a main row"
+                    && (row.owners[0].same(Owner::Jip)
+                        || row.owners[0].same(Owner::JohnnyGuitar)
+                        || row.owners[0].same(Owner::ShowOff)),
+                "an area row has one owner (JIP, JohnnyGuitar or ShowOff); a seam shared with another owner is a main row"
             );
             let mut j = 0;
             while j < main.len() {
@@ -1580,11 +1586,13 @@ pub enum Hook {
     PlayerMinHealth,
     ApplyActorVelocity,
     GetModelPath,
+    /// ShowOff activation caller exclusions, consumed at the activation entry.
+    PreActivate,
 }
 
 impl Hook {
     /// How many hooks [`Hook`] lists.
-    pub const COUNT: usize = Hook::GetModelPath as usize + 1;
+    pub const COUNT: usize = Hook::PreActivate as usize + 1;
 }
 
 /// The hooks' user counts: one word each, shared by every engine of a game (a real thread's
@@ -2971,7 +2979,7 @@ mod tests {
     #[test]
     fn hook_users_count_and_are_shared() {
         let e = engine();
-        assert_eq!(Hook::COUNT, 44);
+        assert_eq!(Hook::COUNT, 45);
         assert_eq!(e.hook_users(Hook::MenuState), 0);
         assert_eq!(e.add_hook_user(Hook::MenuState, false), 0, "never below 0");
         assert_eq!(e.add_hook_user(Hook::MenuState, true), 1);

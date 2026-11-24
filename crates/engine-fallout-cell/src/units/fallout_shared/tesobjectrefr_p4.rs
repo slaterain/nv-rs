@@ -2916,6 +2916,28 @@ pub fn tes_object_refr_activate(
     arg_10: u32,
     arg_14: u32,
 ) -> bool {
+    // ShowOff f45d069: immediate caller return exclusions are consumed once;
+    // an ash-pile sub-activation is a new call and must not inherit the mark.
+    let excluded = e.hook_users(engine_core::extend::Hook::PreActivate) != 0
+        && [
+            0x005b_5b1d,
+            0x005b_5b4d,
+            0x008f_eeb9,
+            0x0078_f95b,
+            0x005c_8961,
+            0x005c_8a01,
+            0x005c_ed9b,
+            0x005c_edcb,
+        ]
+        .into_iter()
+        .any(|at| e.take_caller_mark(at));
+    if !excluded {
+        match e.site(0x0057_3184, &[this.addr(), activator]) {
+            Some(0) => return false,
+            Some(2) => return true,
+            _ => {}
+        }
+    }
     // The seam at `0x0057318E` (ADR-0016): the script extender's OnActivate, first thing.
     e.site(0x0057_318e, &[this.addr(), activator]);
     let me = this.addr();
@@ -8511,6 +8533,81 @@ mod tests {
         let refr = s.refr;
         s.e.call(0x0057_3170, &args![refr, activator, 3u8, 0x44u32, 0x55u32])
             .bool()
+    }
+
+    #[test]
+    fn showoff_pre_activate_veto_precedes_nvse_and_original_activation() {
+        use engine_core::extend::{Owner, SiteSlot};
+        for (answer, expected) in [(0, false), (2, true), (1, true)] {
+            let mut s = activate_setup();
+            let (refr, activator) = (s.refr, s.activator);
+            *s.e.ext::<(u32, u32, u32)>() = (refr, activator, answer);
+            s.e.on_site(SiteSlot::new(Owner::ShowOff, 0x0057_3184), |e, w| {
+                let (refr, activator, answer) = *e.ext::<(u32, u32, u32)>();
+                assert_eq!(w, &[refr, activator]);
+                assert!(!*e.ext::<bool>(), "ShowOff must precede NVSE");
+                Some(answer)
+            });
+            s.e.on_site(SiteSlot::new(Owner::Nvse, 0x0057_318e), |e, _| {
+                *e.ext::<bool>() = true;
+                None
+            });
+            s.e.call_log = Some(vec![]);
+            assert_eq!(activate(&mut s, activator), expected);
+            assert_eq!(*s.e.ext::<bool>(), answer == 1);
+            let log = s.e.call_log.as_ref().unwrap();
+            assert_eq!(calls_to(log, 0x0056_a290).len(), usize::from(answer == 1));
+        }
+    }
+
+    #[test]
+    fn showoff_pre_activate_caller_exclusions_are_consumed_once() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        for at in [
+            0x005b_5b1d,
+            0x005b_5b4d,
+            0x008f_eeb9,
+            0x0078_f95b,
+            0x005c_8961,
+            0x005c_8a01,
+            0x005c_ed9b,
+            0x005c_edcb,
+        ] {
+            let mut s = activate_setup();
+            s.e.add_hook_user(Hook::PreActivate, true);
+            s.e.on_site(SiteSlot::new(Owner::ShowOff, 0x0057_3184), |_, _| Some(0));
+            let activator = s.activator;
+            let mark = s.e.mark_caller(Hook::PreActivate, at);
+            assert!(activate(&mut s, activator), "excluded return {at:08x}");
+            assert!(!activate(&mut s, activator), "must consume return {at:08x}");
+            drop(mark);
+        }
+    }
+
+    #[test]
+    fn showoff_pre_activate_ash_recursion_does_not_inherit_caller_exclusion() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut s = activate_setup();
+        s.e.add_hook_user(Hook::PreActivate, true);
+        s.e.set_global(0x011c_a280, s.base);
+        let ash_base = object(&mut s.e, 0x100, &[(0x124, 1)]);
+        s.e.mem.set_u8(ash_base + 4, 0x10);
+        let ash = reference(&mut s.e, false, &[]);
+        s.e.mem.set_u32(ash + 0x20, ash_base);
+        returns(&mut s.e, 0x0041_e310, ash);
+        *s.e.ext::<u32>() = ash;
+        s.e.on_site(SiteSlot::new(Owner::ShowOff, 0x0057_3184), |e, w| {
+            assert_eq!(w[0], *e.ext::<u32>());
+            *e.ext::<bool>() = true;
+            Some(0)
+        });
+        let mark = s.e.mark_caller(Hook::PreActivate, 0x005b_5b1d);
+        let activator = s.activator;
+        s.e.call_log = Some(vec![]);
+        assert!(!activate(&mut s, activator));
+        assert!(*s.e.ext::<bool>());
+        assert!(calls_to(s.e.call_log.as_ref().unwrap(), 0x0056_a290).is_empty());
+        drop(mark);
     }
 
     #[test]

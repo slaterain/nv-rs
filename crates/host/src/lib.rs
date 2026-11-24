@@ -121,7 +121,7 @@ pub(crate) fn install_rows_and_extenders(engine: &mut Engine, choice: &fixes::Ch
     // nvse_stewie_tweaks.dll after MCM.dll and before ui_organizer.dll (`crates/stewie`): its
     // settings read, its rows' bits set (each row off by its own `[nv-rs Stewie]` key).
     stewie::install(engine);
-    // ShowOff: individual cached INI commands; the incomplete plugin stays unlisted.
+    // ShowOff registers selected commands and optionally installs engine event hooks.
     showoff::install(engine);
     // UI Organizer, when its row is on: after JIP, as xNVSE loads ui_organizer.dll after
     // jip_nvse.dll (`crates/uio`).

@@ -2833,10 +2833,16 @@ fn apply_ammo_effect(e: &mut Engine, this: Ptr<TesObjectWeap>, ammo: u32, player
 
 /// The body of the firing function.
 fn fire(e: &mut Engine, this: Ptr<TesObjectWeap>, reference: Ptr, frame: u32) {
-    let player: u32 = e.global(PLAYER_CHARACTER);
     let is_actor = e
         .vcall(reference.addr(), REFERENCE_IS_ACTOR_SLOT, &[])
         .bool();
+    // ShowOff f45d069 OnFireWeapon's 00523191 hook saves this IsActor
+    // result, dispatches the raw reference, then restores it before the
+    // ammo/perk and blocked-actor branches. A notification cannot replace it.
+    e.site(0x0052_3191, &[reference.addr(), this.addr()]);
+    // The exe first reads the player singleton at5231A9, after that
+    // dispatch; do not retain a pre-callback singleton snapshot.
+    let player: u32 = e.global(PLAYER_CHARACTER);
     let actor = if is_actor { reference } else { Ptr::NULL };
     if actor.addr() == player {
         let ammo = current_ammo(e, this, Ptr::new(player));
@@ -6092,6 +6098,86 @@ mod tests {
             }
         });
         (w, reference, created, effects)
+    }
+
+    #[derive(Default)]
+    struct ShowOffFireSeen(Vec<Vec<u32>>);
+
+    #[test]
+    fn showoff_fire_does_not_notify_for_the_separate_muzzle_position_query() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = Engine::new();
+        let w = weapon(&mut e);
+        let (_, _, result) = muzzle_doubles(&mut e);
+        let reference = e.mem.alloc(0x40);
+        give_vtable(
+            &mut e,
+            reference,
+            &[
+                (REFERENCE_IS_ACTOR_SLOT, 0x00dd_0100),
+                (REFERENCE_GET_3D_SLOT, 0x00dd_01d0),
+            ],
+        );
+        returning(&mut e, 0x00dd_0100, 0);
+        returning(&mut e, 0x00dd_01d0, 0x5000);
+        returning(&mut e, WEAPON_FLAG_20_TEST, 0);
+        returning(&mut e, FIND_NODE_BY_NAME, 0x6000);
+        e.on_site(SiteSlot::new(Owner::ShowOff, 0x0052_3191), |e, a| {
+            e.ext::<ShowOffFireSeen>().0.push(a.to_vec());
+            None
+        });
+        assert_eq!(
+            e.call(0x0052_57a0, &args![w, result, reference]).u32(),
+            result
+        );
+        assert!(e.ext::<ShowOffFireSeen>().0.is_empty());
+    }
+
+    #[test]
+    fn showoff_fire_seam_precedes_ammo_and_keeps_original_is_actor_result() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = Engine::new();
+        let w = weapon(&mut e);
+        map_pages(&mut e, &[PLAYER_CHARACTER]);
+        let actor = e.mem.alloc(0x200);
+        e.set_global(PLAYER_CHARACTER, 0x9999u32);
+        e.mem.set_u32(actor + 0x1a0, 1);
+        give_vtable(&mut e, actor, &[(REFERENCE_IS_ACTOR_SLOT, 0x00dd_0100)]);
+        returning(&mut e, 0x00dd_0100, 1);
+        e.on_site(SiteSlot::new(Owner::ShowOff, 0x0052_3191), |e, a| {
+            assert_eq!(e.call_log.as_ref().unwrap().last().unwrap().0, 0x00dd_0100);
+            e.ext::<ShowOffFireSeen>().0.push(a.to_vec());
+            e.set_global(PLAYER_CHARACTER, a[0]);
+            Some(0)
+        });
+        e.register_double(0x0052_5980, |e, a| {
+            assert_eq!(e.ext::<ShowOffFireSeen>().0.as_slice(), &[vec![a[1], a[0]]]);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0052_3150, &args![w, actor]);
+        assert_eq!(e.ext::<ShowOffFireSeen>().0, [vec![actor, w.addr()]]);
+        assert_eq!(
+            addresses(&logged(&mut e)),
+            [0x0052_3150, 0x00dd_0100, 0x0052_5980]
+        );
+        e.ext::<ShowOffFireSeen>().0.clear();
+        e.call(0x0052_3150, &args![w, 0u32]);
+        assert!(e.ext::<ShowOffFireSeen>().0.is_empty());
+    }
+
+    #[test]
+    fn showoff_fire_seam_notifies_even_non_actor_references_without_changing_the_shot() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = Engine::new();
+        let (w, reference, created, _) = fire_scene(&mut e);
+        e.on_site(SiteSlot::new(Owner::ShowOff, 0x0052_3191), |e, a| {
+            e.ext::<ShowOffFireSeen>().0.push(a.to_vec());
+            Some(1)
+        });
+        e.call(0x0052_3150, &args![w, reference]);
+        assert_eq!(e.ext::<ShowOffFireSeen>().0, [vec![reference, w.addr()]]);
+        assert_eq!(created.borrow().len(), 2);
     }
 
     #[test]

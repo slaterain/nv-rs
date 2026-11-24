@@ -46,6 +46,7 @@ pub static FIXES: &[Fix] = &[
     JG_EDITOR_IDS,
     MCM,
     STEWIE,
+    SHOWOFF_EVENTS,
     UIO,
     SCRIPT_ERROR_GUARD,
     IMOD_EVENT_FORM_CHECK,
@@ -666,12 +667,24 @@ fn install_mcm(e: &mut Engine) {
     mcm::set_on(e, true);
 }
 
+/// Selected ShowOff engine event hooks, optional and off in every preset.
+/// Original activation vetoes and projectile corrections are opt-in together;
+/// command helpers do not turn these game changes on implicitly.
+pub const SHOWOFF_EVENTS: Fix = Fix {
+    name: "ShowOff native engine events",
+    env: "NV_SHOWOFF_EVENTS",
+    addresses: &[],
+    summary: "optional source-derived ShowOff inventory, projectile and activation hooks; no complete plugin identity is advertised",
+    install: |e| showoff::set_events_on(e, true),
+};
+
 /// A row whose binding [`install`] makes itself, with the choice.
 fn install_nothing(_: &mut Engine) {}
 
 /// Rows that are off in every preset until the maintainer turns them on: only their own variable or `Fallout.ini`
 /// line turns them on.
-pub const OFF_IN_EVERY_PRESET: &[&str] = &[DRAW_THREAD.env, HAVOK_REF_COUNTS.env];
+pub const OFF_IN_EVERY_PRESET: &[&str] =
+    &[DRAW_THREAD.env, HAVOK_REF_COUNTS.env, SHOWOFF_EVENTS.env];
 
 /// The rows that register nothing at an exe address: the menu limit paces the uncapped step;
 /// the extender's rows set flags `crates/nvse` reads.
@@ -686,6 +699,7 @@ const NO_ADDRESS: &[&str] = &[
     JG_EDITOR_IDS.name,
     MCM.name,
     STEWIE.name,
+    SHOWOFF_EVENTS.name,
     UIO.name,
     SCRIPT_ERROR_GUARD.name,
     IMOD_EVENT_FORM_CHECK.name,
@@ -3158,6 +3172,25 @@ bJGEditorIDs=0
             // Not reported as installed in any preset while its script commands are not built:
             // IsPluginInstalled "lStewieAl's Tweaks" answers 0.
             assert!(nvse::commands::extender::plugin_info(&e, stewie::NAME.as_bytes()).is_none());
+        }
+    }
+
+    #[test]
+    fn showoff_events_are_opt_in_through_profile_or_environment() {
+        let fixes = Choice::from_parts(None, no_env).unwrap();
+        let vanilla = Choice::vanilla();
+        let profile = with_ini(None, "[nv-rs Fixes]\nbShowOffEvents=1\n", &[]);
+        let env = Choice::from_parts(None, env_of(&[("NV_SHOWOFF_EVENTS", "1")])).unwrap();
+        for (choice, expected) in [
+            (fixes, false),
+            (vanilla, false),
+            (profile, true),
+            (env, true),
+        ] {
+            let mut e = Engine::new();
+            assert_eq!(choice.is_on(&SHOWOFF_EVENTS), expected);
+            install(&mut e, &choice);
+            assert_eq!(showoff::events_on(&e), expected);
         }
     }
 

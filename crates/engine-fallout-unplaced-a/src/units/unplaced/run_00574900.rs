@@ -230,6 +230,8 @@ pub fn fn_00574b30(
         let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, item.addr());
         e.call(SET_ACTION_FLAG, &args![this, item_list, 1u32]);
     }
+    // ShowOff: world pickup retains the actual item reference for the callback.
+    e.site(0x0057_4c28, &[this.addr(), item.addr()]);
     let changes = e.call(GET_INVENTORY_CHANGES, &args![this]).u32();
     let mut plain = true;
     if e.vcall(item.addr(), 0x224, &[]).bool() {
@@ -259,6 +261,16 @@ pub fn fn_00574b30(
                         );
                         e.call(SET_ACTION_FLAG, &args![this, first, 1u32]);
                     }
+                    // RockIt inventory entry: item/count come from the entry, not the weapon.
+                    e.site(
+                        0x0057_4d00,
+                        &[
+                            this.addr(),
+                            e.mem.u32(change + 8),
+                            first,
+                            e.mem.u32(change + 4),
+                        ],
+                    );
                 }
             }
             e.call(0x004c_3380, &args![changes, change, 1u32]);
@@ -316,6 +328,8 @@ pub fn fn_00574b30(
                         );
                         e.call(SET_ACTION_FLAG, &args![this, list, 1u32]);
                     }
+                    // ShowOff: the authored projectile callback count is exactly one.
+                    e.site(0x0057_4f03, &[this.addr(), ammo, list, 1]);
                     e.call(CHANGES_4C29A0, &args![changes, ammo, list, 1u32]);
                 } else {
                     e.call(CHANGES_4C29A0, &args![changes, ammo, 0u32, 1u32]);
@@ -374,6 +388,8 @@ pub fn fn_00574fa0(e: &mut Engine, this: Ptr, item: Ptr, list: u32, count: u32) 
         e.call(SET_ACTION_FLAG, &args![this, list, 1u32]);
     }
     let changes = e.call(GET_INVENTORY_CHANGES, &args![this]).u32();
+    // ShowOff f45d069: HandleAddItem, before the original inventory mutation.
+    e.site(0x0057_5091, &[this.addr(), item.addr(), list, count]);
     e.call(CHANGES_4C29A0, &args![changes, item, list, count]);
 }
 
@@ -593,6 +609,8 @@ pub fn fn_00574a80(
         let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, first);
         e.call(SET_ACTION_FLAG, &args![this, third, 1u32]);
     }
+    // ShowOff f45d069: EquipForRef, after action marking, before insertion.
+    e.site(0x0057_4b19, &[this.addr(), first, third, second]);
     e.call(
         CHANGES_4BFFE0,
         &args![changes, first, second, this, third, 0u32, 0u32],
@@ -945,6 +963,176 @@ mod b027_tests {
         e.register(GET_INVENTORY_CHANGES, |_, _| ret(0x9000));
         e.register(EXTRA_LIST, |_, a| ret(a[0] + 0x1000));
         (e, this, item)
+    }
+
+    /// ShowOff f45d069 Events/ShowOffEvents.h:1520-1608. Record the real,
+    /// owner-checked seams in the same log as the original calls, proving their
+    /// position inside each whole function rather than manually raising events.
+    fn showoff_sites(e: &mut Engine) {
+        use engine_core::extend::{Owner, SiteSlot};
+        fn trace<const AT: u32>(e: &mut Engine, words: &[u32]) -> Option<u32> {
+            assert_eq!(e.caller_word(), None, "MarkScriptEvent's call has ended");
+            e.call_log.as_mut().unwrap().push((AT, words.to_vec()));
+            None
+        }
+        e.on_site(
+            SiteSlot::new(Owner::ShowOff, 0x0057_5091),
+            trace::<0x0057_5091>,
+        );
+        e.on_site(
+            SiteSlot::new(Owner::ShowOff, 0x0057_4b19),
+            trace::<0x0057_4b19>,
+        );
+        e.on_site(
+            SiteSlot::new(Owner::ShowOff, 0x0057_4c28),
+            trace::<0x0057_4c28>,
+        );
+        e.on_site(
+            SiteSlot::new(Owner::ShowOff, 0x0057_4d00),
+            trace::<0x0057_4d00>,
+        );
+        e.on_site(
+            SiteSlot::new(Owner::ShowOff, 0x0057_4f03),
+            trace::<0x0057_4f03>,
+        );
+        e.set_hook_users(engine_core::extend::Hook::MarkScriptEvent, 1);
+    }
+
+    fn add_sequence(log: &Log) -> Log {
+        log.iter()
+            .filter(|(at, _)| {
+                matches!(
+                    *at,
+                    SET_ACTION_FLAG
+                        | CHANGES_4C29A0
+                        | CHANGES_4BFFE0
+                        | 0x004c_3380
+                        | 0x004c_1c90
+                        | 0x0057_5091
+                        | 0x0057_4b19
+                        | 0x0057_4c28
+                        | 0x0057_4d00
+                        | 0x0057_4f03
+                )
+            })
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn showoff_added_entry_and_equip_sites_follow_marking_and_precede_original_mutation() {
+        let (mut e, this, item) = add_setup();
+        showoff_sites(&mut e);
+        let count = (-6i32) as u32;
+        let (_, log) = run(&mut e, 0x0057_4fa0, &[this, item, 0x5100, count]);
+        assert_eq!(
+            add_sequence(&log),
+            vec![
+                (SET_ACTION_FLAG, vec![this, 0x5100, 1]),
+                (0x0057_5091, vec![this, item, 0x5100, count]),
+                (CHANGES_4C29A0, vec![0x9000, item, 0x5100, count]),
+            ]
+        );
+
+        let (mut e, this, item) = add_setup();
+        showoff_sites(&mut e);
+        e.register(CHANGES_4BFFE0, |_, _| ret(0));
+        let count = 0x8000_0007;
+        let (answer, log) = run(&mut e, 0x0057_4a80, &[this, item, count, 0x6100, 0]);
+        assert!(answer.bool());
+        assert_eq!(
+            add_sequence(&log),
+            vec![
+                (SET_ACTION_FLAG, vec![this, 0x6100, 1]),
+                (0x0057_4b19, vec![this, item, 0x6100, count]),
+                (
+                    CHANGES_4BFFE0,
+                    vec![0x9000, item, count, this, 0x6100, 0, 0]
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn showoff_world_pickup_keeps_the_reference_and_original_add_call() {
+        let (mut e, this, item) = add_setup();
+        showoff_sites(&mut e);
+        let (_, log) = run(&mut e, 0x0057_4b30, &[this, item, 3, 1, 2]);
+        assert_eq!(
+            add_sequence(&log),
+            vec![
+                (SET_ACTION_FLAG, vec![this, item + 0x1000, 1]),
+                (0x0057_4c28, vec![this, item]),
+                (0x004c_1c90, vec![0x9000, item, 3, 1, 2]),
+            ]
+        );
+    }
+
+    #[test]
+    fn showoff_rockit_site_passes_entry_type_count_delta_and_actual_extra_list() {
+        let (mut e, this, item) = add_setup();
+        showoff_sites(&mut e);
+        e.register(slot(0x0f20_0000, 0x224), |_, _| ret(1));
+        e.register(0x009d_9f00, |_, _| ret(0x5100));
+        e.register(ALLOCATE, |e, a| ret(e.mem.alloc(a[0])));
+        let extra_slot = e.mem.alloc(4);
+        let node = e.mem.alloc(4);
+        e.mem.set_u32(extra_slot, 0x5300);
+        e.mem.set_u32(node, extra_slot);
+        let count = (-9i32) as u32;
+        e.register_double(0x004b_c650, move |e, a| {
+            e.mem.set_u32(a[0], node);
+            e.mem.set_u32(a[0] + 4, count);
+            e.mem.set_u32(a[0] + 8, 0x5500);
+            ret(a[0])
+        });
+        e.register(0x0055_9450, |e, a| ret(e.mem.u32(a[0])));
+        e.register(NODE_ITEM, |e, a| ret(e.mem.u32(a[0])));
+        let (_, log) = run(&mut e, 0x0057_4b30, &[this, item, 3, 1, 2]);
+        let change = calls(&log, 0x004b_c650)[0][0];
+        assert_eq!(
+            add_sequence(&log),
+            vec![
+                (SET_ACTION_FLAG, vec![this, item + 0x1000, 1]),
+                (0x0057_4c28, vec![this, item]),
+                (SET_ACTION_FLAG, vec![this, 0x5300, 1]),
+                (0x0057_4d00, vec![this, 0x5500, 0x5300, count]),
+                (0x004c_3380, vec![0x9000, change, 1]),
+            ]
+        );
+    }
+
+    #[test]
+    fn showoff_projectile_site_uses_resolved_ammo_script_extra_and_literal_one() {
+        let (mut e, this, item) = add_setup();
+        showoff_sites(&mut e);
+        e.register(slot(0x0f20_0000, 0x224), |_, _| ret(1));
+        e.register(0x0047_6c90, |_, _| ret(0x5400));
+        e.register(0x004c_0bf0, |_, _| ret(1));
+        e.register(GET_FORM_SCRIPT, |_, _| ret(0x5800));
+        e.register(ALLOCATE, |e, a| ret(e.mem.alloc(a[0])));
+        e.register(0x0041_0360, |_, a| ret(a[0]));
+        e.register(0x0041_8800, |_, _| ret(1));
+        let (_, log) = run(&mut e, 0x0057_4b30, &[this, item, 3, 1, 2]);
+        let list = calls(&log, 0x0041_0360)[0][0];
+        assert_eq!(
+            add_sequence(&log),
+            vec![
+                (SET_ACTION_FLAG, vec![this, item + 0x1000, 1]),
+                (0x0057_4c28, vec![this, item]),
+                (SET_ACTION_FLAG, vec![this, list, 1]),
+                (0x0057_4f03, vec![this, 0x5400, list, 1]),
+                (CHANGES_4C29A0, vec![0x9000, 0x5400, list, 1]),
+            ]
+        );
+        // The source has no 574f03 callback in the unscripted-ammo branch.
+        e.register(GET_FORM_SCRIPT, |_, _| ret(0));
+        let (_, log) = run(&mut e, 0x0057_4b30, &[this, item, 3, 1, 2]);
+        assert!(calls(&log, 0x0057_4f03).is_empty());
+        assert_eq!(
+            calls(&log, CHANGES_4C29A0),
+            vec![vec![0x9000, 0x5400, 0, 1]]
+        );
     }
 
     #[test]
