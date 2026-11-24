@@ -4775,7 +4775,6 @@ mod n059_tests {
         );
     }
 
-
     #[test]
     fn create_stops_while_barred_and_sets_up_the_labels() {
         let mut e = engine();

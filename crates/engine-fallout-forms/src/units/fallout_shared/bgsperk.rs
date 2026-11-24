@@ -1147,7 +1147,7 @@ pub fn bgs_perk_build_description_string(e: &mut Engine, this: Ptr, buffer: Ptr,
                     &args![base + 0x40, index.wrapping_add(1)],
                 )
                 .u32();
-            *index = index.wrapping_add(2 );
+            *index = index.wrapping_add(2);
             item
         };
         let mut listed = false;

@@ -590,7 +590,6 @@ pub fn item_mod_menu_do_click(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
     }
 }
 
-
 // Translated from 00783af0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `ItemModMenu::ItemModItem` (Xbox PDB): fits the mod `item` to one free
 /// mod slot of the weapon being modified: splits one weapon off its extra

@@ -518,7 +518,8 @@ fn gamepad_wheel_shown(e: &mut Engine, this: Ptr<InventoryMenu>) {
     } else {
         let keyring_trait = e.global::<u32>(TRAIT_FROM_NAME_01073974);
         let tile = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, this));
-        let refused = !e.call(TILE_IS_TRUE, &args![tile, keyring_trait]).bool() || (current_item(e) != 0 && current_item_type(e) == 0x19);
+        let refused = !e.call(TILE_IS_TRUE, &args![tile, keyring_trait]).bool()
+            || (current_item(e) != 0 && current_item_type(e) == 0x19);
         if refused {
             show_message(e, NO_HOTKEY_SETTING);
         } else {
@@ -2378,7 +2379,8 @@ fn click_use(e: &mut Engine, this: Ptr<InventoryMenu>) {
                 } else {
                     let keyring = e.global::<u32>(TRAIT_FROM_NAME_01073974);
                     let tile = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, this));
-                    let refused = !e.call(TILE_IS_TRUE, &args![tile, keyring]).bool() || current_item_type(e) == 0x19;
+                    let refused = !e.call(TILE_IS_TRUE, &args![tile, keyring]).bool()
+                        || current_item_type(e) == 0x19;
                     if refused {
                         message_box(e, NO_HOTKEY_SETTING, [2, 0, MESSAGE_TEXT_TWO]);
                     } else {
@@ -3931,4 +3933,3 @@ mod n054_tests {
         assert!(ok, "the exe's further tests: below 100, a stack of 2");
     }
 }
-

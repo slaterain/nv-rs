@@ -2543,8 +2543,7 @@ fn idle_read_mouse(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut Idle
     state.input_2 = 0;
     state.input_0 = 0;
     let controller = e.call(HAS_360_CONTROLLER_GETTER, &args![]).bool();
-    let pad_branch =
-        controller && e.get(this, InterfaceManager::bShowMouse) == 0;
+    let pad_branch = controller && e.get(this, InterfaceManager::bShowMouse) == 0;
     if !pad_branch {
         read_mouse_buttons(e, this, state);
     } else {
@@ -2575,11 +2574,7 @@ fn idle_read_mouse(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut Idle
 
 const FRAME_TIME_FLOAT: u32 = 0x011f_63a0;
 
-fn read_mouse_buttons(
-    e: &mut Engine,
-    this: Ptr<InterfaceManager>,
-    state: &mut IdleState,
-) {
+fn read_mouse_buttons(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut IdleState) {
     let controls = state.controls;
     let query = move |e: &mut Engine, which: u32| {
         e.call(CONTROLS_QUERY_00A23A50, &args![controls, 0u32, which])
@@ -3267,7 +3262,6 @@ fn open_pipboy_reads_the_pad(e: &mut Engine) -> bool {
 
 /// The console's open byte (xNVSE's `g_isConsoleOpen`, `0x11DEA2E`).
 const CONSOLE_IS_OPEN: u32 = 0x011d_ea2e;
-
 
 /// The `_PCButton_<key>` child tile of the frontmost menu: when it is
 /// enabled (`0xfa3`) it is clicked (`0xfaf` set: sound, click pulse and the
@@ -4453,8 +4447,7 @@ fn finish_top_gamepad_button(
 /// One stick axis of the cursor (`OSInputGlobals::GetControllerValue` `00a23390` with 0 and
 /// `axis`).
 fn stick_axis(e: &mut Engine, controls: u32, axis: u32) -> i32 {
-    e
-        .call(CONTROLS_AXIS_00A23390, &args![controls, 0u32, axis])
+    e.call(CONTROLS_AXIS_00A23390, &args![controls, 0u32, axis])
         .i32()
 }
 
@@ -5002,7 +4995,9 @@ pub fn fn_007118d0(e: &mut Engine, this: Ptr<InterfaceManager>) {
         let cursor = e.get(this, InterfaceManager::pCursor);
         tile_set_int(e, cursor, 0xfa3, 1);
         let (mut mouse_x, mut mouse_y);
-        if e.call(HAS_360_CONTROLLER_GETTER, &args![]).bool() && e.get(this, InterfaceManager::bShowMouse) == 0 {
+        if e.call(HAS_360_CONTROLLER_GETTER, &args![]).bool()
+            && e.get(this, InterfaceManager::bShowMouse) == 0
+        {
             mouse_x = stick_axis(e, controls, 7);
             mouse_y = stick_axis(e, controls, 8);
             // 00711a01, 00711a20: FLD float, FMUL double, then `_ftol2`. Here and below each

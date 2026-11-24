@@ -4389,4 +4389,3 @@ mod tests {
         assert_eq!(calls(&e, POINT_LENGTH_SQUARED), vec![vec![frame + 0x10]]);
     }
 }
-

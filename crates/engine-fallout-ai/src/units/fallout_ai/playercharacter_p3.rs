@@ -676,7 +676,8 @@ pub fn fn_0095d850(
             leaf::FAMILY,
             0x0044_ddc0,
             leaf::word_at_8(e, equipped_change)
-        ) != current) {
+        ) != current)
+    {
         install_item_change(e, this, current, count);
     }
     if item.addr() != 0 && current != item.addr() {
@@ -9387,7 +9388,6 @@ mod tests {
             vec![held, hotkeyed]
         );
     }
-
 
     #[test]
     fn equip_with_a_slot_for_the_item_only_handles_kinds_ten_to_thirteen() {

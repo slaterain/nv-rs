@@ -1763,7 +1763,7 @@ pub fn fn_009993c0(e: &mut Engine, this: Ptr<CombatState>) {
 
         if target != 0 && e.get(this, CombatState::pCombatWeapons) != 0 {
             let weapon = e.get(this, CombatState::pCombatWeapons);
-            let owner = attacker ;
+            let owner = attacker;
             let ammo = e.call(0x0052_5a90, &args![weapon, owner]).u32();
             let projectile = e.call(0x004f_d3c0, &args![ammo]).u32();
             let radius = constant_bits(e, TWO);

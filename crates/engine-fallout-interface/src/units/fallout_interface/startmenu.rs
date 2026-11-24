@@ -3074,7 +3074,6 @@ pub fn start_menu_choose_help(e: &mut Engine) {
     e.call(TUTORIAL_MENU_CREATE, &args![found, 1u32]);
 }
 
-
 // Translated from 007d09c0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// The index (0..=0x29) of the help table entry (`table[i] >> 2 & 0x3f` plus
 /// `0x3e9` is the menu class) for menu class `class`; 0x29 when none.

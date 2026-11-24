@@ -3847,8 +3847,7 @@ pub(crate) fn init_item_extra(
             {
                 e.call(MAP_MARKER_SET_TRAVEL_LOC, &args![marker, 0u32]);
             }
-            let reputation_id =
-                e.call(MAP_MARKER_GET_REPUTATION, &args![marker]).u32();
+            let reputation_id = e.call(MAP_MARKER_GET_REPUTATION, &args![marker]).u32();
             if reputation_id != 0 {
                 let data_handler = e.global::<u32>(DATA_HANDLER);
                 let reputation = e

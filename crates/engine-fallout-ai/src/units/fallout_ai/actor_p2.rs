@@ -3576,7 +3576,7 @@ fn update_weapon_sound(e: &mut Engine, f: &UpdateFrame) {
     let count = e
         .call(ANIMATION_FIELD_0X70F490, &args![animation, 4u32])
         .i32();
-    let stop = count >= 1 ;
+    let stop = count >= 1;
     if stop {
         return;
     }

@@ -7319,8 +7319,7 @@ mod tests {
         (this, Ptr::new(e.mem.alloc(0x30)))
     }
 
-    fn set_beam_ammo_rows(e: &mut Engine, on: bool) {
-    }
+    fn set_beam_ammo_rows(e: &mut Engine, on: bool) {}
 
     #[test]
     fn s0130_06_the_players_beam_takes_no_round_where_it_hits() {

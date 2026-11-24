@@ -2014,7 +2014,6 @@ pub fn level_up_menu_do_idle(e: &mut Engine, this: Ptr) {
 /// The interface manager's `activeTileAlt` (+0xBC, xNVSE's `InterfaceManager`).
 const ACTIVE_TILE_ALT: u32 = 0xbc;
 
-
 /// [`level_up_menu_do_gamepad`]'s arrow buttons on the skills page: with a
 /// highlighted skill (list vtable +4), its arrow child `id` is clicked
 /// (tile sound `0xfcb`, vtable +0xc) when shown. Answers whether it was

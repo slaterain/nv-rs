@@ -410,7 +410,6 @@ mod tests {
         }
     }
 
-
     /// The other clicks are the translation's: the close button without a weapon to re-equip
     /// returns to the inventory.
     #[test]

@@ -6608,4 +6608,3 @@ mod n058_tests {
         assert!(calls_to(&e, REPUTATION_SYNCHRONIZE).is_empty());
     }
 }
-

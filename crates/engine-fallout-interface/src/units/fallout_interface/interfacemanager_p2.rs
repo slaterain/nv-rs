@@ -552,7 +552,6 @@ pub fn interface_manager_check_menu_button(e: &mut Engine, button: i32, analog: 
     button_state(down_now, down_before)
 }
 
-
 // Translated from 00717de0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `InterfaceManager::ClearMenuButton` (Xbox PDB), static: when the manager
 /// is ready and `bShowMouse` is clear, calls `00a25560` on the object
@@ -1691,7 +1690,8 @@ pub fn fn_00719580(e: &mut Engine, tile: Ptr) {
     let mut matches = e.call(COMPARE_STRINGS, &args![name, TILE_NAME_FIRST]).u32() == 0;
     if !matches {
         let name = e.call(TILE_NAME, &args![tile]).u32();
-        matches = e.call(COMPARE_STRINGS, &args![name, TILE_NAME_SECOND])
+        matches = e
+            .call(COMPARE_STRINGS, &args![name, TILE_NAME_SECOND])
             .u32()
             == 0;
     }
@@ -1805,7 +1805,6 @@ pub fn fn_00719790(
     let level = clamp_float(e, stored, 0.0, maximum);
     let inverse = (e.global::<f64>(COLOR_CHANNEL_SCALE) - level as f64) as f32;
     let inverse = clamp_float(e, inverse, 0.0, maximum);
-
 
     if !tile_a.is_null() && !tile_b.is_null() {
         e.call(TILE_SET_FLOAT, &args![tile_a, TRAIT_FADE, inverse, 1u32]);

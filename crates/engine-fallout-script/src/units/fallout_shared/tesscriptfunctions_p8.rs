@@ -6451,7 +6451,6 @@ mod tests {
         check_actor_flag_command(0x005d_fd30, ACTOR_SET_ESSENTIAL, MSG_SET_ESSENTIAL_INVALID);
     }
 
-
     #[test]
     fn always_show_actor_subtitles_sets_the_flag_of_the_cast_actor() {
         check_actor_flag_command(

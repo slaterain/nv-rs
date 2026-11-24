@@ -5234,8 +5234,6 @@ mod n057_tests {
         assert_eq!(asked(), [(0x0072_880d, vec![0x7500])]);
     }
 
-
-
     /// Tile 4 of `info_engine`'s twelve.
     const CONDITION_TILE: u32 = 0x2100 + 4 * 4;
 

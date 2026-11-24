@@ -6129,7 +6129,6 @@ mod tests {
         assert_eq!(calls(&e, REFERENCE_INIT_ANIMATION), vec![vec![reference]]);
     }
 
-
     #[test]
     fn init_load_game_ov2_resolves_ids_and_the_furniture() {
         let mut e = engine();

@@ -9041,6 +9041,4 @@ mod tests {
         bs_simple_array_user_option_ptr_scalar_deleting_destructor(&mut e, array, 1);
         assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![array.addr()]]);
     }
-
-
 }

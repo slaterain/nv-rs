@@ -9557,8 +9557,7 @@ fn activate_or_workbench(
     this: Ptr<PlayerCharacter>,
     activator: u32,
 ) -> bool {
-    e
-        .call(0x0057_3170, &args![reference, this, 0u32, 0u32, activator])
+    e.call(0x0057_3170, &args![reference, this, 0u32, 0u32, activator])
         .bool()
 }
 
@@ -9600,8 +9599,8 @@ fn levelup_combat_test(e: &mut Engine, this: Ptr<PlayerCharacter>, out: u32) -> 
 /// A movement direction's test in `PlayerCharacter::Update` (`00a24660` on `input`: the control
 /// `key` pressed (1) or held (0)).
 fn movement_key(e: &mut Engine, input: u32, key: u32) -> bool {
-        e.call(0x00a2_4660, &args![input, key, 1u32]).u32() != 0
-            || e.call(0x00a2_4660, &args![input, key, 0u32]).u32() != 0
+    e.call(0x00a2_4660, &args![input, key, 1u32]).u32() != 0
+        || e.call(0x00a2_4660, &args![input, key, 0u32]).u32() != 0
 }
 
 /// Whether the player's burst ends for want of ammunition (`00948310`, `0x94928F`: the magazine

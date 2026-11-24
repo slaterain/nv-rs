@@ -2012,10 +2012,10 @@ const GODMODE_BYTE: u32 = 0x011e_07ba;
 /// `0x14c`), or its count (+4) not above 0.
 fn vats_out_of_ammo(e: &mut Engine, ammo_list: u32) -> bool {
     ammo_list == 0
-            || typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, ammo_list))
-                .into_ret()
-                .i32()
-                <= 0
+        || typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, ammo_list))
+            .into_ret()
+            .i32()
+            <= 0
 }
 
 /// The queued shot's tests in `DoIdle` (`0x7EDC3D` to `0x7EDD04`), true when the shot fails: a
@@ -2050,10 +2050,14 @@ fn queued_shot_fails(
     if !fail && !at_most(cost as f64, load_f32(e, m + 0xe0) as f64) {
         fail = true;
     }
-    if !fail && weapon != 0 && {
+    if !fail
+        && weapon != 0
+        && {
             let player = e.global::<u32>(PLAYER);
             e.call(GET_CURRENT_AMMO, &args![weapon, player]).u32() != 0
-        } && !above(queued_ammo(e, m), double_zero(e)) {
+        }
+        && !above(queued_ammo(e, m), double_zero(e))
+    {
         fail = true;
     }
     if !fail
@@ -2295,10 +2299,7 @@ pub fn vats_menu_do_idle(e: &mut Engine, this: Ptr<VatsMenu>) {
         ratio = (health as f64 / ratio as f64) as f32;
     }
     let meter = e.mem.u32(m + 0x70);
-    e.call(
-        HUD_UPDATE_METER,
-        &args![meter, ratio, 0u32, 0u32, 0u32],
-    );
+    e.call(HUD_UPDATE_METER, &args![meter, ratio, 0u32, 0u32, 0u32]);
     let (compass, general, markers, npcs) = (
         e.mem.u32(m + 0x84),
         e.mem.u32(m + 0x78),
@@ -6169,7 +6170,6 @@ fn float_to_int_trunc(value: f32) -> i32 {
         i32::MIN
     }
 }
-
 
 // Translated from 007f5050 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `VATSMenu::GetShotBurstCount` (Xbox PDB), cdecl (action, long burst):
@@ -10303,7 +10303,6 @@ mod tests {
             ]
         );
     }
-
 
     /// The shot_bursts weapon (ammo use `+0x102` = `use`) equipped, an attack action whose
     /// truncated product is 5 shots.

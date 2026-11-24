@@ -828,9 +828,7 @@ pub fn roulette_menu_prepare_bet_tiles(e: &mut Engine, this: Ptr<RouletteMenu>) 
                 } else {
                     let number = (i / 0x18 + 1) / 2 + ((i + 1) % 0x18 / 2) * 3;
                     let (first, last) = description_settings(e);
-                    let words = |text: u32| {
-                        [text, first, number as u32, last]
-                    };
+                    let words = |text: u32| [text, first, number as u32, last];
                     if row == b'D' {
                         describe(e, record, 0x0107_6194, &words(0x0107_61a8));
                         add_number(e, record, 0x25);
@@ -4319,7 +4317,6 @@ mod n058_tests {
         assert_eq!(calls_to(&e, CONTAINER_GIVE)[0][1..], [player, 0]);
         assert!(calls_to(&e, SHOW_MESSAGE_007052F0).is_empty());
     }
-
 
     /// The payout (state 3) of one bet of 10 on bet tile `index`, whose number list holds only 1
     /// and whose odds are 17:1, with the ball on `result` and 100 chips (10 on the table):

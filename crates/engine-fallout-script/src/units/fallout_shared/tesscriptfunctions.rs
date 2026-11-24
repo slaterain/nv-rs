@@ -11925,7 +11925,6 @@ mod tests {
         assert!(e.call(0x005b_c310, &args![script(0)]).bool());
         assert!(calls(&e, HEAD_TRACK_TARGET_EXTRA).is_empty());
     }
-
 }
 
 #[cfg(test)]

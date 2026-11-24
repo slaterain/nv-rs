@@ -414,7 +414,6 @@ fn tile_of(e: &Engine, this: u32, index: u32) -> u32 {
     e.mem.u32(this + 0x28 + 4 * index)
 }
 
-
 /// `cvttss2si`: toward zero, `0x80000000` out of range.
 fn float_to_int(value: f32) -> i32 {
     if (-2_147_483_648.0..2_147_483_648.0).contains(&value) {
@@ -3859,4 +3858,3 @@ mod tests {
         assert_eq!(calls(&e, STD_STRING_FROM_C_STRING)[0][0], frame + 0x10);
     }
 }
-

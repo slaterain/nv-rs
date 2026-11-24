@@ -466,7 +466,6 @@ const CONVEX_LIST_SIZE: u32 = 0x48;
 /// `hkpShape::m_userData`: the shape's `bhkShape`.
 const SHAPE_USER_DATA: u32 = 0x8;
 
-
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1140,8 +1139,7 @@ mod tests_a01 {
         shape
     }
 
-    fn stairs_on(e: &mut Engine, on: bool) {
-    }
+    fn stairs_on(e: &mut Engine, on: bool) {}
 
     #[test]
     fn s0216_the_stair_bit_both_ways() {

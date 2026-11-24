@@ -3414,7 +3414,9 @@ pub fn fn_004c0cf0(
             continue;
         }
         e.call(GET_FORM_AS_BIPED_MODEL, &args![form]);
-        if e.call(EXTRA_GET_CAN_NOT_WEAR, &args![worn_extra]).bool() && !e.vcall(actor, 0x22c, &args![0u32]).bool() {
+        if e.call(EXTRA_GET_CAN_NOT_WEAR, &args![worn_extra]).bool()
+            && !e.vcall(actor, 0x22c, &args![0u32]).bool()
+        {
             e.mem.set_u8(removed, 0);
             return result;
         }

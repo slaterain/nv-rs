@@ -4,7 +4,6 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
-
 /// The vtable of the `BSSimpleArray` instance with RTTI name `.?AV?$BSSimpleArray@V?$BSStringT@D@@$0EAA@@` (read at the word before the vtable: its complete object locator, then the type descriptor).
 const ARRAY_VTABLE_01075530: u32 = 0x0107_5530;
 /// `007a1c30` (unnamed in the engine map): `thiscall`, `this` plus one stack word (`RET 4`). When the
@@ -14403,8 +14402,6 @@ mod n056_tests {
             }
         });
     }
-
-
 
     fn controls(e: &mut Engine, disabled: u8, connected: u8, mouse_moved: u8, console: u8) {
         let manager = e.mem.alloc(0x100);
