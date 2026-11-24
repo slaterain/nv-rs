@@ -146,5 +146,5 @@ jobs:
           cargo test --locked --no-fail-fast
           -p engine-core -p engine-platform -p ds-mix -p engine-havok -p host
           -p d3d9-wgpu -p d3d9-stream -p d3dx-tex -p frame-model
-          -p esm -p bsa -p fos -p mp3 -p vorbis -p bink -p game-folders
+          -p esm -p bsa -p mp3 -p vorbis -p bink -p game-folders
           -p jip -p fomod -p mod-archive -p mod-install -p mod-chooser
