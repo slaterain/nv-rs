@@ -2060,21 +2060,7 @@ pub fn fn_00567490(e: &mut Engine, this: Ptr<TESObjectREFR>, value: f32) {
             return;
         }
     }
-    // JIP LN's G78 (a fix row, `WriteRelJump(0x5674D5, SetScaleHook)` and `0x567709 EB 15`): the
-    // handler answers the clamped scale's bits; the text block, its rounding and the exe's clamps
-    // are passed over, and so is the block's release at the end. Words: the value's bits.
-    let jip_scale = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
-        e.site(0x0056_74d5, &[value.to_bits()])
-    } else {
-        None
-    };
-    let (text, value) = match jip_scale {
-        Some(bits) => (None, f32::from_bits(bits)),
-        None => {
-            let (text, value) = scale_text_rounded(e, value);
-            (Some(text), value)
-        }
-    };
+    let (text, value) = scale_text_rounded(e, value);
     e.set(this, TESObjectREFR::fRefScale, value);
     e.vcall(me, 0x48, &args![0x10u32]);
     let scale = tes_object_refr_get_scale(e, this);
@@ -2120,11 +2106,9 @@ pub fn fn_00567490(e: &mut Engine, this: Ptr<TESObjectREFR>, value: f32) {
             }
         }
     }
-    if let Some(text) = text {
-        let manager = e.call(MEMORY_MANAGER_GET, &args![]).u32();
-        let heap = e.call(SCRAP_HEAP_OF_THREAD, &args![manager]).u32();
-        e.call(SCRAP_HEAP_DEALLOCATE, &args![heap, text]);
-    }
+    let manager = e.call(MEMORY_MANAGER_GET, &args![]).u32();
+    let heap = e.call(SCRAP_HEAP_OF_THREAD, &args![manager]).u32();
+    e.call(SCRAP_HEAP_DEALLOCATE, &args![heap, text]);
 }
 
 /// The exe's rounding of `fn_00567490` (`0x5674D5` .. `0x567554`): a 0x20-byte scrap-heap block
@@ -4267,16 +4251,12 @@ pub fn fn_0056a290(e: &mut Engine, this: Ptr<TESObjectREFR>, activator: Ptr<TESO
         let timer = f64::from(e.mem.f32(record + 4));
         let zero: f64 = e.global(ZERO_DOUBLE);
         if timer <= zero {
-            // JIP's ash pile test replaces the two compares (`0x56A30A`, step 3.9 G06).
-            let by_activator = match jip_ash_pile_test(e, 0x0056_a30a, me) {
-                Some(ash_pile) => ash_pile,
-                None => {
-                    let first = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, me));
-                    first == e.global::<u32>(GLOBAL_ACTIVATOR_FORM_A) || {
-                        let second =
-                            typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, me));
-                        second == e.global::<u32>(GLOBAL_ACTIVATOR_FORM_B)
-                    }
+            // The two compares with the ash pile forms (`0x56A30A`).
+            let by_activator = {
+                let first = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, me));
+                first == e.global::<u32>(GLOBAL_ACTIVATOR_FORM_A) || {
+                    let second = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, me));
+                    second == e.global::<u32>(GLOBAL_ACTIVATOR_FORM_B)
                 }
             };
             let who = if by_activator { activator.addr() } else { me };
@@ -7837,46 +7817,6 @@ mod tests {
         }
     }
 
-    /// JIP LN's G78 seam at `0x5674D5` (a fix row): its answer is the scale, with no text block
-    /// (neither taken nor released) and none of the exe's rounding or clamps; only with the fix
-    /// row's bit; no answer is the exe's way.
-    #[test]
-    fn set_scale_jip_g78_seam_answers_the_scale() {
-        use engine_core::extend::jip_patches;
-        let (mut e, refr) = scale_fixture();
-        super::jip_seam::put(&mut e, 0x0056_74d5, Some(50.0f32.to_bits()));
-        let set = |e: &mut Engine, input: f32| {
-            logged(e, |e| {
-                e.call(0x0056_7490, &args![refr, input]);
-            })
-        };
-        e.set_jip_patches(jip_patches::INSTALLED);
-        set(&mut e, 1.2345);
-        assert_eq!(e.get(refr, TESObjectREFR::fRefScale), 1.23, "the exe");
-        assert!(super::jip_seam::seen().is_empty(), "only FIXES asks");
-        e.set_jip_patches(jip_patches::FIXES);
-        let log = set(&mut e, 1.2345);
-        assert_eq!(super::jip_seam::seen(), vec![vec![1.2345f32.to_bits()]]);
-        assert_eq!(
-            e.get(refr, TESObjectREFR::fRefScale),
-            50.0,
-            "the answer, unclamped"
-        );
-        assert!(calls_to(&log, SCRAP_HEAP_ALLOCATE).is_empty());
-        assert!(calls_to(&log, FORMAT_TO_BUFFER).is_empty());
-        assert!(calls_to(&log, SCRAP_HEAP_DEALLOCATE).is_empty());
-        let scale = calls_to(&log, SET_NODE_SCALE);
-        assert_eq!(scale.len(), 1);
-        assert_eq!(f32::from_bits(scale[0][1]), 50.0, "the node gets it too");
-        // No answer: the exe's rounding, block and release.
-        super::jip_seam::answer_with(None);
-        let log = set(&mut e, 1.2345);
-        assert_eq!(e.get(refr, TESObjectREFR::fRefScale), 1.23);
-        assert_eq!(calls_to(&log, SCRAP_HEAP_ALLOCATE).len(), 1);
-        assert_eq!(calls_to(&log, SCRAP_HEAP_DEALLOCATE).len(), 1);
-        super::jip_seam::seen();
-    }
-
     #[test]
     fn set_scale_stops_early_for_other_base_forms_when_the_gate_holds() {
         let (mut e, refr) = scale_fixture();
@@ -10333,13 +10273,10 @@ mod tests {
         assert!(calls_to(&log, CELL_ADD_ACTIVATING_REF).is_empty());
     }
 
-    /// JIP's ash pile test at `0x56A30A` (step 3.9 G06): with the word clear (or only `FIXES`)
-    /// not asked and the exe's compares decide; with `INSTALLED` asked with this reference, its
-    /// low byte deciding who activates the child (1: the activator, 0x100: this reference), no
-    /// answer leaving the compares.
+    /// The two compares at `0x56A30A`: a reference whose base is the second activator form has
+    /// the activator activate the child; another base, the reference itself.
     #[test]
-    fn jip_ash_pile_seam_chooses_the_activator() {
-        use engine_core::extend::jip_patches;
+    fn the_ash_pile_compares_choose_the_activator() {
         let mut e = activate_engine();
         stub(&mut e, &[ACTIVATE_REFERENCE, CELL_ADD_ACTIVATING_REF]);
         let refr = third_refr(&mut e, 0x40);
@@ -10352,8 +10289,6 @@ mod tests {
         });
         let special = form(&mut e, 0x40, 9, 0);
         e.set_global(GLOBAL_ACTIVATOR_FORM_B, special);
-        super::jip_seam::put(&mut e, 0x0056_a30a, Some(1));
-        let plain = e.mem.u32(refr.addr() + 0x20);
         let who = |e: &mut Engine| {
             let children = list_of(e, &records);
             set_list(e, refr, L_ACTIVATE_CHILDREN, children);
@@ -10364,21 +10299,7 @@ mod tests {
         };
         assert_eq!(who(&mut e), refr.addr());
         e.mem.set_u32(refr.addr() + 0x20, special);
-        assert_eq!(who(&mut e), activator.addr(), "the exe's compares");
-        e.set_jip_patches(jip_patches::FIXES);
         assert_eq!(who(&mut e), activator.addr());
-        assert!(super::jip_seam::seen().is_empty(), "only INSTALLED asks");
-        e.set_jip_patches(jip_patches::INSTALLED);
-        super::jip_seam::answer_with(Some(0x100));
-        assert_eq!(who(&mut e), refr.addr(), "JIP: not an ash pile");
-        assert_eq!(super::jip_seam::seen(), vec![vec![refr.addr()]]);
-        e.mem.set_u32(refr.addr() + 0x20, 0);
-        super::jip_seam::answer_with(Some(1));
-        assert_eq!(who(&mut e), activator.addr(), "JIP: an ash pile");
-        e.mem.set_u32(refr.addr() + 0x20, plain);
-        super::jip_seam::answer_with(None);
-        assert_eq!(who(&mut e), refr.addr(), "no answer: the compares");
-        super::jip_seam::seen();
     }
 
     #[test]

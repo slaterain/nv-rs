@@ -57,17 +57,6 @@ fn inverse_length(sum: f32, zero: f32, half: f32, three: f32) -> f32 {
     }
 }
 
-/// The fall start height's store at `0xCD4468` to the state update at `0xCD4481` (`fFallStartHeight`
-/// from the angle extraction, the wanted state 2, `00c6cba0`). JIP LN NVSE's G65 (a fix, the row
-/// `NV_JIP_GAME_PATCHES`; `JumpHeightFixHook`) replaces that span: the seam is asked with the
-/// controller and the extracted height's bits, and an answer means JIP's ran. With the word's
-/// `FIXES` bit clear: one load, false (the exe's span).
-#[inline]
-fn jump_height_seam(e: &mut Engine, controller: Ptr, height: u32) -> bool {
-    e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
-        && e.site(0x00cd_4468, &[controller.addr(), height]).is_some()
-}
-
 // Translated from 00cd4280 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 00cd4280 - the /GS cookie check 00ec408c is not modeled
 /// `bhkCharacterStateJumping::Update` (Xbox PDB), virtual `(this, controller)`; `this` (ECX)
@@ -124,11 +113,10 @@ pub fn bhk_character_state_jumping_update(e: &mut Engine, _unused_0: Ptr, contro
         e.call(EXTRACT_ANGLES, &args![x + 0x20, x + 0x30]);
         e.mem.u32(x + 0x28)
     });
-    if !jump_height_seam(e, controller, height) {
-        e.mem.set_f32(c + 0x544, x87_quiet(f32::from_bits(height)));
-        e.mem.set_u32(c + 0x520, 2);
-        e.call(UPDATE_STATE, &args![controller]);
-    }
+    // The fall start height's store at `0xCD4468` to the state update at `0xCD4481`.
+    e.mem.set_f32(c + 0x544, x87_quiet(f32::from_bits(height)));
+    e.mem.set_u32(c + 0x520, 2);
+    e.call(UPDATE_STATE, &args![controller]);
     let flags = e.mem.u32(c + 0x414);
     e.mem.set_u32(c + 0x414, flags & 0xfffd_feff);
     let current = e.mem.u32(c + 0x3f0);
@@ -254,25 +242,10 @@ mod movement_tests {
         assert!(calls.contains(&(0x0900_0020, vec![state, c])));
     }
 
-    /// The jump of [`the_jump_launches_the_character_upwards`] with JIP LN NVSE's word `word` and a
-    /// handler at `0xCD4468` answering `answer` (it logs its words, sets the wanted state 0xB and
-    /// `fFallStartHeight` 77.0 when it answers): the wanted state, `fFallStartHeight`, the flags,
-    /// whether the state was updated, what the seam was asked and the extracted height's bits.
-    fn jump_with_jip(word: u32, answer: Option<u32>) -> (u32, f32, u32, bool, Vec<Vec<u32>>, u32) {
-        use engine_core::extend::{Owner, SiteSlot};
-        thread_local! {
-            static ASKED: RefCell<Vec<Vec<u32>>> = const { RefCell::new(Vec::new()) };
-            static ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
-        }
-        fn handler(e: &mut Engine, a: &[u32]) -> Option<u32> {
-            ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
-            let answer = ANSWER.with(std::cell::Cell::get);
-            if answer.is_some() {
-                e.mem.set_u32(a[0] + 0x520, 0xb);
-                e.mem.set_f32(a[0] + 0x544, 77.0);
-            }
-            answer
-        }
+    /// The jump of [`the_jump_launches_the_character_upwards`] with the angle extraction giving the
+    /// height 52.25: the wanted state, `fFallStartHeight`, the flags and whether the state was
+    /// updated.
+    fn jump() -> (u32, f32, u32, bool) {
         let mut e = test_engine();
         e.mem.set_f32(ZERO, 0.0);
         e.mem.set_f32(THREE, 3.0);
@@ -311,10 +284,6 @@ mod movement_tests {
         e.mem.set_u32(c + 0x3ec, manager);
         e.mem.set_u32(c + 0x520, 1);
         e.mem.set_u32(c + 0x414, 0xffff_ffff);
-        e.on_site(SiteSlot::new(Owner::Jip, 0x00cd_4468), handler);
-        e.set_jip_patches(word);
-        ASKED.with(|s| s.borrow_mut().clear());
-        ANSWER.with(|a| a.set(answer));
         e.call(0x00cd_4280, &args![0u32, c]);
         let updated = log.borrow().contains(&(UPDATE_STATE, vec![c]));
         (
@@ -322,33 +291,13 @@ mod movement_tests {
             e.mem.f32(c + 0x544),
             e.mem.u32(c + 0x414),
             updated,
-            ASKED.with(|s| s.take()),
-            c,
         )
     }
 
-    /// JIP LN NVSE's G65 seam at `0xCD4468`: not asked with the word 0 or `INSTALLED` (the exe's
-    /// store of the extracted height, state 2, the state update); with `FIXES` asked with the
-    /// controller and the extracted height's bits, an answer skipping that span (no update; the
-    /// flags still cleared after it), no answer keeping it.
+    /// The span from `0xCD4468` to `0xCD4481`: the extracted height stored in `fFallStartHeight`,
+    /// the wanted state 2, the state updated (the flags cleared after it).
     #[test]
-    fn g65_seam_takes_the_jump_height_span() {
-        use engine_core::extend::jip_patches;
-        for word in [0, jip_patches::INSTALLED] {
-            let (state, height, flags, updated, asked, _) = jump_with_jip(word, Some(0));
-            assert_eq!(
-                (state, height, flags, updated),
-                (2, 52.25, 0xfffd_feff, true)
-            );
-            assert!(asked.is_empty(), "{word:08x}");
-        }
-        let (state, height, flags, updated, asked, c) = jump_with_jip(jip_patches::FIXES, Some(0));
-        assert_eq!(
-            (state, height, flags, updated),
-            (0xb, 77.0, 0xfffd_feff, false)
-        );
-        assert_eq!(asked, vec![vec![c, 52.25f32.to_bits()]]);
-        let (state, height, _, updated, _, _) = jump_with_jip(jip_patches::FIXES, None);
-        assert_eq!((state, height, updated), (2, 52.25, true), "no answer");
+    fn the_jump_records_the_extracted_height() {
+        assert_eq!(jump(), (2, 52.25, 0xfffd_feff, true));
     }
 }

@@ -321,15 +321,12 @@ fn handle_loaded_model(e: &mut Engine, this: Ptr<TESObjectREFR>, model: u32) {
     }
     e.vcall(world, 0xd4, &args![target, model]);
 
-    // JIP's ash pile test replaces the two compares (`0x576AF0`, step 3.9 G06).
-    let set_dynamic = match jip_ash_pile_test(e, 0x0057_6af0, this.addr()) {
-        Some(ash_pile) => ash_pile,
-        None => {
-            let base = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, this));
-            base == global_word(e, GLOBAL_BASE_FORM_B)
-                || typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, this))
-                    == global_word(e, GLOBAL_BASE_FORM_C)
-        }
+    // The two compares with the ash pile forms (`0x576AF0`).
+    let set_dynamic = {
+        let base = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, this));
+        base == global_word(e, GLOBAL_BASE_FORM_B)
+            || typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, this))
+                == global_word(e, GLOBAL_BASE_FORM_C)
     };
     if set_dynamic {
         let body = body_of(e, collision);
@@ -1943,14 +1940,6 @@ pub fn fn_00579690(e: &mut Engine, this: Ptr) -> bool {
         } else {
             result = teleport_owner_test(e, me, true);
         }
-        // JIP LN's G31 (a fix row, `WriteRelJump(0x579942, 0x579AB7)`): the door's answer is the
-        // answer; the general owner test below is passed over. Words: the reference and the
-        // door's answer; any answer of the handler takes the jump.
-        if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
-            && e.site(0x0057_9942, &[me, u32::from(result)]).is_some()
-        {
-            return result;
-        }
     } else if base_form_type(e, me) == 0x27 {
         let furniture = base_form_of(e, me);
         let player = e.global::<u32>(GLOBAL_PLAYER);
@@ -2059,17 +2048,8 @@ fn say_play_sound(
         (false, false) => base_flags | 0x105,
         (true, true) => base_flags | 0x102,
         (true, false) => {
-            // JIP LN NVSE's `bVoiceModulationFix` (step 3.9 O13, group GE's row: a byte at
-            // `0x578E16`, `or edx, 0x106` becomes `or edx, 0x80106`): the seam answers the
-            // flags. One load while the switch is off.
-            let flags = base_flags | 0x106;
-            let jip =
-                if e.jip_patches() & engine_core::extend::jip_patches::VOICE_MODULATION_FIX != 0 {
-                    e.site(0x0057_8e16, &[flags])
-                } else {
-                    None
-                };
-            jip.unwrap_or(flags)
+            // The flags `or edx, 0x106` at `0x578E16`.
+            base_flags | 0x106
         }
     };
     assign_handle_by_filename(e, handle, buffer, flags);
@@ -4610,47 +4590,6 @@ mod tests {
         assert!(calls_to(&log, 0x0056_d7e0).is_empty());
     }
 
-    /// JIP's ash pile test at `0x576AF0` (step 3.9 G06): not asked with the word clear or only
-    /// `FIXES`; with `INSTALLED` asked with the reference, 1 sets the motion of any base, 0x100
-    /// not even for an ash pile form, no answer leaves the compares.
-    #[test]
-    fn fn_005768b0_jip_ash_pile_seam() {
-        use engine_core::extend::jip_patches;
-        let mut e = engine();
-        loaded_model_world(&mut e);
-        let model = node(&mut e, &[]);
-        let special = form(&mut e, 0x30, 0);
-        let other = form(&mut e, 0x30, 0);
-        e.set_global(GLOBAL_BASE_FORM_B, special);
-        let refr = loaded_reference(&mut e, other, model, true);
-        let cell = e.mem.alloc(0x40);
-        e.mem.set_u32(refr + 0x40, cell);
-        returns(&mut e, 0x0045_0ff0, 1);
-        e.register(0x00ff_0021, |_, _| Ret::default());
-        let world = object_with(&mut e, 0x20, &[(0xd4, 0x00ff_0021), (0x94, 0x00ff_0021)]);
-        returns(&mut e, 0x0045_43c0, world);
-        super::jip_seam::put(&mut e, 0x0057_6af0, Some(1));
-        let moved = |e: &mut Engine| {
-            start_log(e);
-            e.call(0x0057_68b0, &args![refr]);
-            let log = take_log(e);
-            !calls_to(&log, 0x00c6_a350).is_empty()
-        };
-        assert!(!moved(&mut e));
-        e.set_jip_patches(jip_patches::FIXES);
-        assert!(!moved(&mut e));
-        assert!(super::jip_seam::seen().is_empty(), "only INSTALLED asks");
-        e.set_jip_patches(jip_patches::INSTALLED);
-        assert!(moved(&mut e), "JIP: an ash pile");
-        assert_eq!(super::jip_seam::seen(), vec![vec![refr]]);
-        e.mem.set_u32(refr + 0x20, special);
-        super::jip_seam::answer_with(Some(0x100));
-        assert!(!moved(&mut e), "JIP: not one");
-        super::jip_seam::answer_with(None);
-        assert!(moved(&mut e), "no answer: the compares");
-        super::jip_seam::seen();
-    }
-
     #[test]
     fn fn_005768b0_sets_the_motion_of_special_bases() {
         let mut e = engine();
@@ -6858,11 +6797,10 @@ mod tests {
         );
     }
 
-    /// JIP LN's G31 seam at `0x579942` (a fix row): the door's own answer is the answer, the
-    /// general owner test after it passed over; only with the fix row's bit, and only for doors.
+    /// An owned, unlocked door with no teleport: the door says no, and the general owner test
+    /// after it (from `0x579942` on: an owned object the player does not own) says yes.
     #[test]
-    fn fn_00579690_jip_g31_door_answer_stands() {
-        use engine_core::extend::jip_patches;
+    fn fn_00579690_takes_the_general_owner_test_after_a_door() {
         let mut e = engine2();
         let owner = form(&mut e, 0x2a, 0);
         stealing_world(&mut e, owner);
@@ -6871,40 +6809,7 @@ mod tests {
         // (an owned object the player does not own) says yes.
         returns(&mut e, 0x0051_8f00, 0);
         returns(&mut e, GET_TELEPORT_DATA, 0);
-        super::jip_seam::put(&mut e, 0x0057_9942, Some(1));
-        assert!(e.call(0x0057_9690, &args![door]).bool(), "the exe");
-        e.set_jip_patches(jip_patches::INSTALLED);
         assert!(e.call(0x0057_9690, &args![door]).bool());
-        assert!(super::jip_seam::seen().is_empty(), "only FIXES asks");
-        e.set_jip_patches(jip_patches::FIXES);
-        assert!(
-            !e.call(0x0057_9690, &args![door]).bool(),
-            "JIP: the door's no"
-        );
-        assert_eq!(super::jip_seam::seen(), vec![vec![door, 0]]);
-        // Any answer takes the jump (JIP's is unconditional).
-        super::jip_seam::answer_with(Some(0));
-        assert!(!e.call(0x0057_9690, &args![door]).bool());
-        super::jip_seam::answer_with(None);
-        assert!(
-            e.call(0x0057_9690, &args![door]).bool(),
-            "no answer: the exe"
-        );
-        super::jip_seam::answer_with(Some(1));
-        super::jip_seam::seen();
-        // A locked door the player may not open: the door's yes is asked with 1 and stands.
-        returns(&mut e, 0x0056_9160, 0x6000);
-        returns(&mut e, 0x0050_21a0, 1);
-        assert!(e.call(0x0057_9690, &args![door]).bool());
-        assert_eq!(super::jip_seam::seen(), vec![vec![door, 1]]);
-        // The early no (0x518f00) returns before the seam, as the exe's `jmp 0x579aba`.
-        returns(&mut e, 0x0051_8f00, 1);
-        assert!(!e.call(0x0057_9690, &args![door]).bool());
-        assert!(super::jip_seam::seen().is_empty());
-        // Not a door: never asked, the general test as the exe.
-        let thing = refr(&mut e, 0x30, &[]);
-        assert!(e.call(0x0057_9690, &args![thing]).bool());
-        assert!(super::jip_seam::seen().is_empty());
     }
 
     // ---- 00579ac0 -------------------------------------------------------
@@ -7831,53 +7736,6 @@ mod tests {
         assert!(calls_to(&log, 0x0070_5210).is_empty());
         // the handle is copied to the caller's slot
         assert_eq!(calls_to(&log, HANDLE_ASSIGN).last().unwrap()[0], world.out);
-    }
-
-    /// JIP's `bVoiceModulationFix` seam at `0x578E16` (step 3.9 O13, group GE's row; here with a
-    /// test handler): with the switch bit clear not asked and the flags are the exe's 0x106; with
-    /// it asked with 0x106 and its answer taken (JIP's 0x80106), no answer keeps 0x106; the other
-    /// three flag cases never ask.
-    #[test]
-    fn fn_00578a80_jip_voice_modulation_seam() {
-        use engine_core::extend::jip_patches;
-        let mut e = engine2();
-        let world = speech_world(&mut e, b"line.wav");
-        let this = world.this;
-        returns(&mut e, SPARE_SLOT, 0x6000);
-        stub(
-            &mut e,
-            &[HANDLE_SET_POSITION, HANDLE_SET_MIN_MAX, HANDLE_SET_FOLLOW],
-        );
-        let position = e.mem.alloc(16);
-        returns(&mut e, 0x0045_bb80, position);
-        e.register(0x0040_3e20, |e, _| e.mem.alloc(4).into_ret());
-        super::jip_seam::put_unlisted(&mut e, 0x0057_8e16, Some(0x80106));
-        let flags = |e: &mut Engine, ignore_3d: u8, variant: u8| {
-            start_log(e);
-            e.call(
-                0x0057_8a80,
-                &args![this, world.out, 1u32, 2u32, ignore_3d, variant, 0u8, 0u32, 0u8],
-            );
-            let log = take_log(e);
-            calls_to(&log, AUDIO_HANDLE_BY_FILENAME)[0][3]
-        };
-        assert_eq!(flags(&mut e, 0, 0), 0x106);
-        e.set_jip_patches(jip_patches::FIXES | jip_patches::INSTALLED);
-        assert_eq!(flags(&mut e, 0, 0), 0x106);
-        assert!(super::jip_seam::seen().is_empty(), "only the switch asks");
-        e.set_jip_patches(jip_patches::FIXES | jip_patches::VOICE_MODULATION_FIX);
-        assert_eq!(flags(&mut e, 0, 0), 0x80106);
-        assert_eq!(super::jip_seam::seen(), vec![vec![0x106]]);
-        for (ignore_3d, variant, exe) in [(0u8, 1u8, 0x102u32), (1, 1, 0x101), (1, 0, 0x105)] {
-            assert_eq!(flags(&mut e, ignore_3d, variant), exe);
-        }
-        assert!(
-            super::jip_seam::seen().is_empty(),
-            "the other cases never ask"
-        );
-        super::jip_seam::answer_with(None);
-        assert_eq!(flags(&mut e, 0, 0), 0x106, "no answer");
-        super::jip_seam::seen();
     }
 
     #[test]
